@@ -42,6 +42,9 @@ fs.mkdirSync(DOWNLOADS, { recursive: true });
 
 // python-build-standalone 发布版本（astral-sh 接管后的仓库；可被环境变量覆盖）
 const REL = process.env.FF_PBS_REL || '20250409';
+// CI（GitHub Actions）自带 GITHUB_TOKEN：带上它避免未认证 GitHub API 被限流（HTTP 403）。
+// 本地无该变量时不带认证头，行为不变。
+const GH_AUTH = process.env.GITHUB_TOKEN ? { Authorization: `token ${process.env.GITHUB_TOKEN}` } : {};
 // 下载镜像链：国内直连 github.com 常不通，自动探测可用的加速镜像。
 // FF_PBS_MIRROR 可强制指定（此时跳过探测）。
 const MIRROR_LIST = [
@@ -68,7 +71,7 @@ async function resolvePyFullVer() {
   try {
     const api = `https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/${REL}`;
     const body = await new Promise((res, rej) => {
-      https.get(api, { headers: { 'User-Agent': 'FuFumidi-bundle/1.0' } }, r => {
+      https.get(api, { headers: { 'User-Agent': 'FuFumidi-bundle/1.0', ...GH_AUTH } }, r => {
         if (r.statusCode !== 200) return rej(new Error(`HTTP ${r.statusCode}`));
         let d = ''; r.on('data', c => d += c); r.on('end', () => res(d));
       }).on('error', rej);
@@ -93,11 +96,18 @@ const fail = m => { console.error('\x1b[31m✗ ' + m + '\x1b[0m'); process.exit(
 function download(url, dest) {
   return new Promise((resolve, reject) => {
     const doGet = (u, hops) => {
-      const req = https.get(u, { headers: { 'User-Agent': 'FuFumidi-bundle/1.0' }, timeout: 60000 }, res => {
+      let req;
+      try {
+        req = https.get(u, { headers: { 'User-Agent': 'FuFumidi-bundle/1.0' }, timeout: 60000 }, res => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && hops < 6) {
           res.resume();
-          info(`跳转 → ${res.headers.location.split('?')[0]}`);
-          return doGet(res.headers.location, hops + 1);
+          // 镜像站常返回相对 Location（如 /xxx），必须 new URL(loc, u) 解析成绝对地址；
+          // 直接把相对路径丢给 https.get 会在异步回调里抛 TypeError: Invalid URL → 进程崩溃。
+          let next;
+          try { next = new URL(res.headers.location, u).toString(); }
+          catch { return reject(new Error(`跳转地址解析失败: ${res.headers.location}`)); }
+          info(`跳转 → ${next.split('?')[0]}`);
+          return doGet(next, hops + 1);
         }
         if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode} ${u}`));
         const expected = parseInt(res.headers['content-length'] || '0', 10);
@@ -121,7 +131,8 @@ function download(url, dest) {
           process.stdout.write('\n');
           done(null);
         });
-      });
+        });
+      } catch (e) { reject(e); return; }
       req.on('timeout', () => { req.destroy(new Error('下载超时')); });
       req.on('error', reject);
     };
@@ -137,7 +148,7 @@ async function downloadViaApi(fullVer) {
   try {
     const api = `https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/${REL}`;
     const body = await new Promise((res, rej) => {
-      https.get(api, { headers: { 'User-Agent': 'FuFumidi-bundle/1.0' }, timeout: 20000 }, r => {
+      https.get(api, { headers: { 'User-Agent': 'FuFumidi-bundle/1.0', ...GH_AUTH }, timeout: 20000 }, r => {
         if (r.statusCode !== 200) return rej(new Error(`HTTP ${r.statusCode}`));
         let d = ''; r.on('data', c => d += c); r.on('end', () => res(d));
       }).on('error', rej);
