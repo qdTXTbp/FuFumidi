@@ -36,6 +36,9 @@ const APP_DIR = path.resolve(__dirname, '..');
 const PY_DEST = path.join(APP_DIR, 'python');
 const REQ = path.join(APP_DIR, 'engine', 'requirements-bundle.txt');
 const DOWNLOADS = path.join(os.tmpdir(), 'fufumidi-python');
+// 全新机器 / CI runner 的 %TEMP% 里没有历史 fufumidi-python 目录，createWriteStream
+// 会以 ENOENT 失败（本地能跑只是因为 temp 里残留了上次构建的目录）。必须先建目录。
+fs.mkdirSync(DOWNLOADS, { recursive: true });
 
 // python-build-standalone 发布版本（astral-sh 接管后的仓库；可被环境变量覆盖）
 const REL = process.env.FF_PBS_REL || '20250409';
