@@ -1,0 +1,66 @@
+name: build-installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: dist:win
+          - os: macos-latest
+            script: dist:mac
+          - os: ubuntu-latest
+            script: dist:linux
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci || npm install
+
+      # 先恢复内置运行时缓存；命中时 app/python 已存在，
+      # bundle-python.js 检测到解释器存在会直接退出，跳过重新下载。
+      # 未命中时该步骤在作业成功后自动回写缓存（key 相同，下一轮命中）。
+      - name: 缓存内置运行时 + 离线模型（跨作业）
+        uses: actions/cache@v4
+        with:
+          path: |
+            app/python
+            app/models
+          key: fufumidi-runtime-${{ runner.os }}-v1-20250409
+          restore-keys: fufumidi-runtime-${{ runner.os }}-
+
+      - name: 内置 Python 运行时
+        env:
+          FF_PBS_REL: "20250409"
+        run: node scripts/bundle-python.js
+
+      - name: 构建安装包
+        run: npm run ${{ matrix.script }}
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: |
+            app/dist/*.exe
+            app/dist/*.dmg
+            app/dist/*.zip
+            app/dist/*.AppImage
+            app/dist/*.deb
+          if-no-files-found: error

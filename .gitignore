@@ -1,0 +1,51 @@
+# ============================================================
+# FuFumidi .gitignore
+# ============================================================
+
+# ---- 依赖与构建产物 ----
+node_modules/
+dist/
+release/
+
+# ---- Python ----
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 内置 Python 运行时（体积大、构建期生成）。
+# 若确需把 app/python/ 纳入版本库（例如内网离线环境），注释掉下面一行即可。
+app/python/
+
+# 大体积二进制模型（~172MB 超 GitHub 单文件 100MB 上限）：随 Release 资产分发
+app/models/
+
+# ---- 安装包 / 打包素材 ----
+# build/ 下只忽略安装包产物，保留图标与 NSIS 素材（用 ! 白名单恢复）
+build/*
+!build/icon.png
+!build/icon.ico
+!build/icon.icns
+!build/installer.nsh
+!build/installer-finish.bmp
+!build/installer-header.bmp
+!build/installer-welcome.bmp
+!build/gen-bitmaps.js
+!build/_old_icon/
+!build/_old_icon/**
+
+# ---- 日志与临时文件 ----
+*.log
+*.tmp
+*.bak
+*~
+app_tmp_main.js
+
+# ---- 引擎测试残留 ----
+engine/tests/__pycache__/
+
+# ---- 编辑器 / 系统 ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,45 @@
+# FuFumidi 转录引擎 —— 内置运行时依赖清单（Electron CLI 路径专用）
+#
+# 与 requirements.txt 的区别：
+#   - 不含 PySide6 / gui（那是原 AudioMuse 桌面界面的依赖；Electron 只调用
+#     music2midi.py 的 convert / refine / probe 命令行，永远不走 run_gui()）
+#   - 明确收录人声分离 demucs（“人声分离”模式必需，原版默认不装）
+#   - 含 onnxruntime（basic-pitch 通用模型的推理后端，DirectML/CUDA GPU 加速）
+#
+# 由 scripts/bundle-python.js 安装到 app/python/ 内建的独立运行时中，
+# 使应用“开箱即用”，不依赖用户机器上的任何 Python / pip 包。
+#
+# 注意：torch 的安装来源由 bundle-python.js 控制——
+#   CPU 版（默认，体积小）：默认 PyPI 索引
+#   CUDA 版（--torch cuda）：走 PyTorch 官方 cu121 索引
+
+# ---- 通用转录引擎（任意歌曲/人声/乐器）----
+basic-pitch>=0.4.0
+onnxruntime>=1.16
+
+# ---- 钢琴专用转录引擎 ----
+piano-transcription-inference>=0.0.6
+
+# ---- 人声/乐器分离（可选增强，原版 install.bat 也询问安装）----
+demucs>=4.0.1
+
+# ---- 音频解码（任意格式）----
+librosa>=0.10.0
+soundfile>=0.12.0
+imageio-ffmpeg>=0.4.8
+
+# ---- MIDI 处理 ----
+pretty_midi>=0.2.10
+
+# ---- 数值与信号（通用依赖，随上面包自动解析，这里显式钉住）----
+numpy>=1.24
+scipy>=1.10
+tqdm>=4.60
+
+# ---- 引擎计算后端：CPU 版即可（自动调用全部 CPU 核 / GPU 可选）----
+# torch 由 bundle-python.js 按 --torch 参数选择 CPU 或 CUDA 版本安装，
+# 因此这里不写版本，避免与脚本的索引冲突。
+
+# ---- 兼容性兜底 ----
+# resampy 等旧库 import pkg_resources；setuptools>=81 已移除该模块，须钉 <81
+setuptools<81
