@@ -239,10 +239,16 @@ function registerPlugins() {
   ipcMain.handle('plugins:rescan', () => { pluginHost.loadAll(); return pluginHost.list(); });
   // 打开开发者文档（浏览器查看 HTML）
   ipcMain.handle('plugins:openDocs', () => {
-    const docsPath = path.join(__dirname, 'plugins', 'plugin-dev.html');
     try {
-      if (fs.existsSync(docsPath)) shell.openPath(docsPath);
-      return { ok: fs.existsSync(docsPath), path: docsPath };
+      const srcPath = path.join(__dirname, 'plugins', 'plugin-dev.html');
+      if (!fs.existsSync(srcPath)) return { ok: false, path: srcPath };
+      // asar 归档内的文件无法用 shell.openPath 直接打开：先解出到系统临时目录再打开
+      const docDir = path.join(app.getPath('temp'), 'FuFumidi-dev-doc');
+      fs.mkdirSync(docDir, { recursive: true });
+      const outPath = path.join(docDir, 'plugin-dev.html');
+      fs.writeFileSync(outPath, fs.readFileSync(srcPath));
+      shell.openPath(outPath);
+      return { ok: true, path: outPath };
     } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   });
   // 渲染层应用事件 → 插件事件钩子（song-loaded / view-changed / transcribe-done / refine-done …）
