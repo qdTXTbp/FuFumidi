@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
   // 读取本地文件（转录结果回载）
   readBinary: (p) => ipcRenderer.invoke('file:readBinary', p),
+  // 保存二进制（WAV / MIDI 导出）：原生保存对话框 → fs 写盘
+  saveBinary: (opts) => ipcRenderer.invoke('file:saveBinary', opts),
   // 打开输出位置（资源管理器/访达定位文件或目录）
   openOutput: (p) => ipcRenderer.invoke('shell:openOutput', p),
   // 转录参数预设

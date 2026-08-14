@@ -2821,7 +2821,7 @@ const App = { song: null, player: null, synth: null, view: 'play', editor: null,
   scoreTrack: 0, scoreFollow: true, scoreLocate: true,
   scoreOpts: { simple: true, grid: true, beam: false } };
 // 版本号：与 package.json 保持一致，所有版本文案引用此处
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.0.2';
 
 const ICONS = {
   logo: '<path d="M10 18V5l9-2v11" fill="none" stroke="currentColor" stroke-width="2.4"/><ellipse cx="10" cy="18" rx="2.7" ry="3.3" fill="currentColor" stroke="none"/><ellipse cx="19" cy="14" rx="2.7" ry="3.3" fill="currentColor" stroke="none"/>',
@@ -4878,10 +4878,20 @@ function bindEditor() {
 function exportMidi() {
   if (!App.song) return;
   const bytes = encodeMidi(App.song.tracks.map(t => ({ name: t.name, program: t.program, ch: t.ch, notes: t.notes })));
+  const name = (App.song.fileName || 'edit').replace(/\.midi?$/i, '') + '.mid';
+  // 桌面版：走 fuBridge.saveBinary（IPC → 原生保存对话框 → fs 写盘），
+  // 绕开 Electron 33 下失效的 <a download> 锚点下载（preventDefault+resume 后 0 字节取消）。
+  if (window.fuBridge && fuBridge.saveBinary) {
+    fuBridge.saveBinary({ name, data: bytes }).then(r => {
+      if (r && r.ok) toast(t('已导出 MIDI 文件：') + r.path, 'ok');
+      else if (r && !r.canceled) toast(t('导出 MIDI 失败'), 'err');
+    }).catch(() => toast(t('导出 MIDI 失败'), 'err'));
+    return;
+  }
   const blob = new Blob([bytes], { type: 'audio/midi' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = (App.song.fileName || 'edit').replace(/\.midi?$/i, '') + '.mid';
+  a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   toast(t('已导出 MIDI 文件'), 'ok');
@@ -5101,7 +5111,7 @@ function bindConvert() {
     btnTxt.innerHTML = on ? t('渲染中') + '… <i class="spin-btn"></i>' : t('开始渲染');
   };
   // 试听 / 删除本次结果
-  let convAudio = null, convSrc = null, convBuf = null, convUrl = null;
+  let convAudio = null, convSrc = null, convBuf = null, convUrl = null, convBlob = null, convSavedPath = null;
   const stopPreview = () => { if (convSrc) { try { convSrc.stop(); } catch (e) {} convSrc = null; } $('#convPreview').classList.remove('playing'); };
   $('#convPreview').addEventListener('click', () => {
     if (!convBuf) return;
@@ -5117,15 +5127,15 @@ function bindConvert() {
     $('#convPreview').classList.add('playing');
   });
   $('#convDelete').addEventListener('click', () => {
-    stopPreview(); convBuf = null;
+    stopPreview(); convBuf = null; convBlob = null; convSavedPath = null;
     if (convUrl) { URL.revokeObjectURL(convUrl); convUrl = null; }
     $('#convDoneC').classList.add('hidden');
     $('#convProgressC').classList.add('hidden');
     setLoading(false);
   });
-  // 转换输出走保存对话框，默认位置为下载目录 → 打开该目录
+  // 转换输出走保存对话框：保存后记住实际路径，"打开输出文件夹"直接定位到该文件
   $('#convOpenFolder').addEventListener('click', () => {
-    if (window.fuBridge && fuBridge.openOutput) fuBridge.openOutput('');
+    if (window.fuBridge && fuBridge.openOutput) fuBridge.openOutput(convSavedPath || '');
     else toast(t('请使用桌面版打开输出文件夹'), 'err');
   });
   $('#btnRender').addEventListener('click', async () => {
@@ -5152,10 +5162,32 @@ function bindConvert() {
       fill.style.width = '100%'; pct.textContent = t('完成');
       const blob = bufferToWav(buf);
       if (convUrl) { URL.revokeObjectURL(convUrl); convUrl = null; }   // 释放上一个结果，避免 WAV 泄漏
-      const url = URL.createObjectURL(blob);
-      convUrl = url;
-      const a = $('#convDownload');
-      a.onclick = () => { a.href = url; a.download = (App.song.fileName || 'song').replace(/\.midi?$/i, '') + '.wav'; };
+      convBlob = blob;
+      convUrl = URL.createObjectURL(blob);
+      const dl = $('#convDownload');
+      // 桌面版：走 fuBridge.saveBinary（IPC → 原生保存对话框 → fs 写盘）。
+      // 注意：Electron 33 的 <a download> 经 will-download 的 preventDefault+resume 后下载会
+      // 以 0 字节取消（blob/data/http 均如此），锚点下载不可用，故绕开下载子系统。
+      dl.onclick = async () => {
+        if (!convBlob) return;
+        const name = (App.song.fileName || 'song').replace(/\.midi?$/i, '') + '.wav';
+        if (window.fuBridge && fuBridge.saveBinary) {
+          try {
+            const data = new Uint8Array(await convBlob.arrayBuffer());
+            const r = await fuBridge.saveBinary({ name, data });
+            if (r && r.ok) { convSavedPath = r.path; toast(t('已保存：') + r.path, 'ok'); }
+            else if (r && !r.canceled) toast(t('保存失败'), 'err');
+          } catch (e) { toast(t('保存失败：') + e.message, 'err'); }
+          return;
+        }
+        // 网页版兜底：锚点下载
+        const a = document.createElement('a');
+        a.href = convUrl;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      };
       $('#convInfoC').textContent = `WAV · ${buf.sampleRate / 1000} kHz · ${buf.numberOfChannels}${t(' 声道')} · ${fmtTime(buf.duration)} · ${fmtSize(blob.size)} · ${t('渲染耗时 ')}${((Date.now() - start) / 1000).toFixed(1)}s`;
       convBuf = buf;
       setTimeout(() => { prog.classList.add('hidden'); $('#convDoneC').classList.remove('hidden'); setLoading(false); convBusy = false; }, 400);

@@ -452,6 +452,30 @@ function registerIpc() {
     } catch { return null; }
   });
 
+  // 保存二进制（WAV / MIDI 导出）：原生保存对话框 → fs 写盘。
+  // 绕开 Electron 33 失效的下载子系统：<a download> 经 will-download 的
+  // preventDefault+setSavePath+resume 后下载会被 0 字节取消（blob/data/http 均如此）。
+  ipcMain.handle('file:saveBinary', async (_e, opts) => {
+    try {
+      const name = (opts && opts.name) || 'download.bin';
+      const ext = path.extname(name).toLowerCase() || '';
+      const filters = ext === '.wav'
+        ? [{ name: 'WAV 音频', extensions: ['wav'] }]
+        : ext === '.mid' || ext === '.midi'
+          ? [{ name: 'MIDI 音频', extensions: ['mid', 'midi'] }]
+          : [{ name: '文件', extensions: ['*'] }];
+      const r = await dialog.showSaveDialog({
+        title: '保存文件',
+        defaultPath: path.join(app.getPath('downloads'), name),
+        filters,
+      });
+      if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+      const buf = (opts && opts.data != null) ? Buffer.from(opts.data) : Buffer.alloc(0);
+      await fs.promises.writeFile(r.filePath, buf);
+      return { ok: true, path: r.filePath };
+    } catch (e) { return { ok: false, canceled: false, error: String((e && e.message) || e) }; }
+  });
+
   // 转录参数预设：列表（内置 + 用户合并）/ 保存 / 删除 / 记住上次使用
   ipcMain.handle('presets:list', async () => {
     const r = await runEngineInline(
