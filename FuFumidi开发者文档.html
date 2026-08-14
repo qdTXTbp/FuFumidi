@@ -922,6 +922,15 @@ if (res.ok) { /* res.result */ } else { /* res.error */ }</code></pre>
     <p><strong>版本号规范</strong>：大功能更新 → 版本号 <strong>+0.1</strong>（如 1.0.1 → 1.1.0）；缺陷修补 / 小功能更新 → 版本号 <strong>+0.0.1</strong>（如 1.0.1 → 1.0.2）。改版本号必须同步两处：<code>app/package.json</code> 的 <code>version</code> 与 <code>app/renderer/FuFumidi.html</code> 的 <code>APP_VERSION</code>。发布流程见 <a href="#version-rule">更新规范</a>。</p>
   </blockquote>
 
+  <h3>1.0.2 — 2026-08-14 <span class="badge">缺陷修补</span></h3>
+
+  <h4>修复</h4>
+  <ul>
+    <li><strong>MIDI 转换后无法导出保存 WAV 音频文件</strong>：根因是 Electron 33（Chromium 130）下 <code>&lt;a download&gt;</code> 锚点下载经 <code>will-download</code> 的 <code>preventDefault + setSavePath + resume</code> 处理后 0 字节取消（blob/data/http 均复现）。改为 IPC <code>file:saveBinary</code>：渲染进程把字节交给主进程，走原生「保存文件」对话框并写盘，彻底绕开失效的下载子系统。</li>
+    <li><strong>编辑视图「导出 MIDI」同样失效</strong>：同一锚点下载机制，一并切换。</li>
+    <li><strong>「打开输出文件夹」定位错误</strong>：保存后记住实际路径（<code>convSavedPath</code>），按钮直接定位到刚保存的文件。</li>
+  </ul>
+
   <h3>1.0.1 — 2026-08-13 <span class="badge">修补 + 小功能</span></h3>
 
   <h4>优化</h4>
