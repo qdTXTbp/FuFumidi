@@ -1,11 +1,10 @@
 {
   "name": "fufumidi",
   "productName": "FuFumidi",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "离线 MIDI 播放 / 编辑 / 可视化 / 分析 / 乐谱 / 转录（音频转 MIDI）一体工具",
   "main": "main.js",
   "author": "FuFumidi",
-  "homepage": "https://github.com/qdTXTbp/FuFumidi",
   "license": "MIT",
   "private": true,
   "scripts": {

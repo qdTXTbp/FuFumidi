@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   },
   // 转录引擎
   convert: (cfg) => ipcRenderer.invoke('engine:convert', cfg),
+  cancel: (id) => ipcRenderer.invoke('engine:cancel', id),
   onEngineLog: (cb) => {
     const w = (_e, p) => cb(p);
     ipcRenderer.on('engine:log', w);

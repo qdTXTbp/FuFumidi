@@ -1,4 +1,4 @@
-﻿; ==========================================================================
+; ==========================================================================
 ; 显式引入 NSIS 扩展库（自带 include guard，重复包含无害）
 ; LogicLib：${If}/${Else}/${EndIf} 条件指令
 ; nsDialogs：${NSD_CreateLabel}/${NSD_CreateCheckBox}/${NSD_SetState}/${NSD_GetState}
@@ -19,10 +19,10 @@
 ; ==========================================================================
 
 ; ---- 全局 MUI2 主题定义（在首个 MUI 页面插入前生效）----
-; 全局字体：汉仪文黑 85W（内嵌 TTF，安装/卸载 init 时 AddFontResource 加载后生效，
-; 加载失败则自动回退系统默认字体）。字体族名以 TTF 内部 nameID1 为准 = "HYWenHei-85W"
+; 全局字体：微软雅黑 UI（Windows 10+ 自带，专为界面优化、小字号下清晰锐利）。
+; 弃用汉仪文黑 85W 重字重显示字体：其在安装器 8~9pt 小字号下会显得拥挤、笔画发糊。
 !ifndef MUI_FONTNAME
-  !define MUI_FONTNAME "HYWenHei-85W"
+  !define MUI_FONTNAME "Microsoft YaHei UI"
 !endif
 !ifndef MUI_BGCOLOR
   !define MUI_BGCOLOR "0c1320"

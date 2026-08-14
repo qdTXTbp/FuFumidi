@@ -63,6 +63,15 @@ writeBMP('installer-header.bmp', 150, 57, (x, y) => {
   const gx = x - 118, gy = y - 20;
   const d = Math.sqrt(gx * gx + gy * gy);
   if (d < 46) c = lerp3(c, teal, 0.30 * (1 - d / 46));
+  // 左侧品牌「F」徽标（扁平圆角方块 + 负空间 F，与应用内 logo 同源）
+  if (inRoundRect(x, y, 12, 14, 30, 30, 8)) {
+    c = lerp3(teal, teal2, 0.5);
+    if ((x >= 21 && x < 28 && y >= 21 && y < 37) ||      // F 竖
+        (x >= 21 && x < 33 && y >= 21 && y < 26) ||      // F 上横
+        (x >= 21 && x < 31 && y >= 29 && y < 33)) {      // F 中横
+      c = bg0;
+    }
+  }
   // 底部强调条
   if (y >= 53) c = lerp3(teal, teal2, x / 149);
   return c;

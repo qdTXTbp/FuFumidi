@@ -112,6 +112,7 @@ function resolvePython() {
 
 // ---------- 引擎子进程（通用：music2midi.py / smart_midi.py） ----------
 const activeChildren = new Set();
+const convertChildren = new Map();  // jobId -> 子进程句柄（转录/修正取消用）
 // engine 目录：打包后 engine/**/* 被 asarUnpack 到 resources/app.asar.unpacked/engine。
 // Python 子进程读不了 asar 归档内的文件，必须指向真实文件系统路径。
 function engineDir() {
@@ -334,17 +335,19 @@ function registerIpc() {
       if (win && !win.isDestroyed()) win.webContents.send('engine:log', { id: cfg.id, line });
     };
     try {
-      spawnEngine(args, {
+      const child = spawnEngine(args, {
         onLog: send,
         onDone: (code, r) => {
+          convertChildren.delete(cfg.id);
           if (r.result) {
             pluginHost.emit('transcribe-done', { ok: !!r.result.ok, out: r.result.out, note_count: r.result.note_count, mode: cfg.mode, perf: cfg.perf });
             return resolve(r.result);
           }
           resolve({ ok: code === 0, code, out: cfg.out, error: (r.err || r.out || '').slice(-400) });
         },
-        onError: (e) => reject(new Error(e)),
+        onError: (e) => { convertChildren.delete(cfg.id); reject(new Error(e)); },
       });
+      convertChildren.set(cfg.id, child);
     } catch (e) { reject(new Error(String(e))); }
   }));
 
@@ -364,20 +367,29 @@ function registerIpc() {
       if (win && !win.isDestroyed()) win.webContents.send('engine:refine:log', { id: cfg.id, line });
     };
     try {
-      spawnEngine(args, {
+      const child = spawnEngine(args, {
         script: 'smart_midi.py',
         onLog: send,
         onDone: (code, r) => {
+          convertChildren.delete(cfg.id);
           if (r.result) {
             pluginHost.emit('refine-done', { ok: !!r.result.ok, out: r.result.out, stats: r.result.stats, mode: cfg.mode });
             return resolve(r.result);
           }
           resolve({ ok: code === 0, code, out: cfg.out, error: (r.err || r.out || '').slice(-400) });
         },
-        onError: (e) => reject(new Error(e)),
+        onError: (e) => { convertChildren.delete(cfg.id); reject(new Error(e)); },
       });
+      convertChildren.set(cfg.id, child);
     } catch (e) { reject(new Error(String(e))); }
   }));
+
+  // 取消转录 / 修正（终止对应 jobId 的引擎子进程）
+  ipcMain.handle('engine:cancel', (_e, id) => {
+    const c = convertChildren.get(id);
+    if (c) { try { c.kill(); } catch {} convertChildren.delete(id); return { ok: true }; }
+    return { ok: false };
+  });
 
   // 设置（深合并嵌套键 + 原子写入）
   ipcMain.handle('settings:load', () => readSettings());
