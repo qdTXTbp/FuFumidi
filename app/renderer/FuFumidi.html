@@ -6919,6 +6919,13 @@ const VE = { running: false, cancel: false, rec: null, timer: null };
 async function startBackgroundVideo() {
   if (!App.song || VE.running) return;
   VE.running = true; VE.cancel = false;
+  // 导出按钮是用户手势：此处初始化音频引擎，保证首次未播放也能录制原可视化
+  if (!App.player || !App.synth) { try { initAudio(); } catch (e) {} }
+  if (!App.synth) {
+    const fakeAN = [];
+    App.synth = { activeNotes: fakeAN, analyser: { frequencyBinCount: 1024, getByteFrequencyData: a => a.fill(0), getByteTimeDomainData: a => a.fill(128) }, activeNow: () => App.synth.activeNotes || [] };
+  }
+  if (!App.player) App.player = { currentTick: () => 0, currentSec: () => 0, playing: false, loop: false };
   const fps = parseInt($('#veFps').value, 10) || 30;
   const [W, H] = ($('#veRes').value || '1280x720').split('x').map(Number);
   const durSel = parseInt($('#veDur').value, 10);
@@ -6926,55 +6933,131 @@ async function startBackgroundVideo() {
   const prog = $('#veProgress'), fill = $('#veFill'), pct = $('#vePct'), st = $('#veStatus');
   prog.classList.remove('hidden'); $('#btnVeCancel').classList.remove('hidden');
   const setP = p => { fill.style.width = p + '%'; pct.textContent = Math.round(p) + '%'; };
-  try {
-    // 1) 离线渲染整曲音频（不播放）
-    st.textContent = t('准备音频（离线渲染）…'); setP(2);
+  // 1) 离线渲染整曲音频（不播放）
+  st.textContent = t('准备音频（离线渲染）…'); setP(2);
     const audioBuf = await renderOffline(App.song, { rate: 44100, scale: 1, gain: 1, mode: 'auto' });
     const wavBytes = new Uint8Array(await bufferToWav(audioBuf).arrayBuffer());
-    // 2) 离屏画布后台录制
+    // 2) 离屏画布后台录制：直接复用原可视化渲染器（音符瀑布 + 琴键 + 粒子）
     st.textContent = t('后台录制中（可继续使用应用）…');
-    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
-    const g = cv.getContext('2d');
-    const mime = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find(m => { try { return MediaRecorder.isTypeSupported(m); } catch (e) { return false; } });
-    if (!mime) throw new Error('no supported mime');
-    const stream = cv.captureStream(fps);
-    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 12e6 });
-    VE.rec = rec; const chunks = [];
-    rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
-    const stopped = new Promise(res => { rec.onstop = res; });
-    rec.start(500);
-    const start = performance.now();
-    await new Promise(resolve => {
-      const step = () => {
-        if (VE.cancel) { if (rec.state !== 'inactive') rec.stop(); resolve(); return; }
-        const el = (performance.now() - start) / 1000;
-        if (el >= sec) { if (rec.state !== 'inactive') rec.stop(); resolve(); return; }
-        const tick = App.song.secToTick(el);
-        drawVideoFrame(cv, g, tick, W, H);
-        setP(Math.min(95, 5 + el / sec * 55));
-        requestAnimationFrame(step);
+    const host = document.createElement('div');
+    host.style.cssText = 'position:fixed;left:-9999px;top:0;pointer-events:none;';
+    const mk = (ww, hh) => { const cv = document.createElement('canvas'); cv.width = ww; cv.height = hh; cv.style.width = ww + 'px'; cv.style.height = hh + 'px'; host.appendChild(cv); return cv; };
+    // 输出画面按原可视化布局合成：顶部音符瀑布 + 底部频谱/示波器/琴键三卡片
+    const dpr = window.devicePixelRatio || 1;
+    const pad = 12, heroHead = 34, gridHead = 26, panelH = 185;
+    const rollH = Math.max(120, H - panelH - pad);
+    const rollBodyH = Math.max(80, rollH - heroHead);
+    const panelBodyH = Math.max(80, panelH - gridHead);
+    const cardW = Math.max(60, Math.floor((W - pad * 3) / 3));
+    const cvMain = mk(W, H), cvRoll = mk(W, rollBodyH), cvSpec = mk(cardW, panelBodyH), cvScope = mk(cardW, panelBodyH), cvKeys = mk(cardW, panelBodyH);
+    cvMain.width = Math.max(2, Math.round(W * dpr)); cvMain.height = Math.max(2, Math.round(H * dpr));
+    VE.cvMain = cvMain;
+    document.body.appendChild(host);
+    const oldCvs = viz._cvs, oldSpec = viz.spec, oldParts = viz._parts, oldKeys = viz._keys, oldLastD = viz._lastD, oldBlocks = viz._blocks, oldRef = viz._songRef;
+    const oldPlayer = App.player;
+    const oldCurrentTick = App.player ? App.player.currentTick.bind(App.player) : null;
+    let vtick = 0;
+    const oldSynth = App.synth;
+    const oldActiveNotes = oldSynth ? oldSynth.activeNotes : null;
+    viz._cvs = [cvSpec, cvScope, cvKeys, cvRoll];
+    viz.spec = []; viz._parts = []; viz._keys = new Set(); viz._lastD = 0; viz._blocks = null; viz._songRef = null;
+    try {
+      const mime = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find(m => { try { return MediaRecorder.isTypeSupported(m); } catch (e) { return false; } });
+      if (!mime) throw new Error('no supported mime');
+      const stream = cvMain.captureStream(fps);
+      const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 16e6 });
+      VE.rec = rec; const chunks = [];
+      rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+      const stopped = new Promise(res => { rec.onstop = res; });
+      rec.start(500);
+      const start = performance.now();
+      const stopRec = () => {
+        try { if (rec.state !== 'inactive') rec.stop(); } catch (e) {}
+        setTimeout(() => { try { stream.getTracks().forEach(t => t.stop()); } catch (e) {} }, 300);
       };
-      requestAnimationFrame(step);
-    });
-    await stopped;
-    if (VE.cancel) { st.textContent = t('已取消'); return; }
-    const blob = new Blob(chunks, { type: 'video/webm' });
-    if (!blob.size) throw new Error('recorded empty');
-    // 3) 合成 MP4（视频 + 离线音频）
-    st.textContent = t('转码中…'); setP(96);
-    const videoBytes = new Uint8Array(await blob.arrayBuffer());
-    const r = await fuBridge.transcodeVideo(videoBytes, wavBytes);
-    if (r && r.ok) { setP(100); st.textContent = t('导出完成：') + r.path; toast(t('视频导出完成：') + r.path, 'ok'); }
-    else if (r && r.canceled) st.textContent = t('已取消');
-    else throw new Error((r && r.error) || 'transcode failed');
-  } catch (e) {
-    st.textContent = t('导出失败：') + (e && e.message || e);
-    toast(t('视频导出失败：') + (e && e.message || e), 'err');
-  } finally {
-    VE.running = false; VE.rec = null;
-    $('#btnVeCancel').classList.add('hidden');
+      const ivMs = Math.max(16, Math.round(1000 / fps));
+      await new Promise(resolve => {
+        const step = () => {
+          if (VE.cancel || (performance.now() - start) / 1000 >= sec) { stopRec(); resolve(); return; }
+          const el = (performance.now() - start) / 1000;
+          const tick = App.song.secToTick(Math.min(el, Math.max(0.001, App.song.totalSec - 0.001)));
+          vtick = tick;
+          if (oldCurrentTick || !oldPlayer) App.player.currentTick = () => tick;   // 虚拟播放头 → 与原可视化同步
+          App.synth.activeNotes = App.song.tracks.reduce((arr, tr) => {
+            for (const n of tr.notes) if (n.start <= tick && n.end >= tick) arr.push({ midi: n.midi, trk: tr.index, endTime: 99999 });
+            return arr;
+          }, []);
+          try { viz.draw(); } catch (e) {}
+          try {
+            const ctx = cvMain.getContext('2d');
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.fillStyle = cssVar('--bg0', '#0a0f18'); ctx.fillRect(0, 0, W, H);
+            const card = (x, y, w2, h2) => {
+              ctx.fillStyle = cssVar('--bg1', '#0c1320');
+              ctx.beginPath(); ctx.roundRect(x, y, w2, h2, 12); ctx.fill();
+              ctx.strokeStyle = 'rgba(255,255,255,.08)'; ctx.lineWidth = 1; ctx.stroke();
+            };
+            const header = (x, y, w2, dotColor, title, sub) => {
+              ctx.fillStyle = cssVar('--border', 'rgba(255,255,255,.08)');
+              ctx.fillRect(x + 1, y + 28, w2 - 2, 1);
+              ctx.fillStyle = dotColor; ctx.beginPath(); ctx.arc(x + 17, y + 15, 3.5, 0, Math.PI * 2); ctx.fill();
+              ctx.fillStyle = cssVar('--text', '#e8eef7'); ctx.font = '600 12px "Segoe UI", "Microsoft YaHei", sans-serif';
+              ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(title, x + 27, y + 15);
+              ctx.fillStyle = cssVar('--text3', '#5d6b82'); ctx.font = '11px "Segoe UI", "Microsoft YaHei", sans-serif';
+              ctx.textAlign = 'right'; ctx.fillText(sub, x + w2 - 12, y + 15);
+            };
+            card(0, 0, W, rollH);
+            header(0, 0, W, cssVar('--green', '#34d399'), t('音符瀑布'), 'Synthesia · ' + t('播放同步'));
+            ctx.drawImage(cvRoll, 0, heroHead, W, rollBodyH);
+            const gy = rollH + pad;
+            const cards = [
+              { cv: cvSpec, dot: cssVar('--accent', '#4f9dff'), title: t('频谱瀑布'), sub: t('竖直下落') },
+              { cv: cvScope, dot: cssVar('--blue', '#5ac8fa'), title: t('波形示波器'), sub: t('时域') },
+              { cv: cvKeys, dot: cssVar('--purple', '#b48ef0'), title: t('垂直琴键'), sub: '低 → 高' },
+            ];
+            cards.forEach((c, i) => {
+              const x = pad + i * (cardW + pad);
+              card(x, gy, cardW, panelH);
+              header(x, gy, cardW, c.dot, c.title, c.sub);
+              ctx.drawImage(c.cv, x, gy + gridHead, cardW, panelBodyH);
+            });
+          } catch (e) {}
+          if (oldCurrentTick) App.player.currentTick = oldCurrentTick;
+          App.synth.activeNotes = oldActiveNotes;
+          setP(Math.min(95, 5 + el / sec * 55));
+        };
+        const timer = setInterval(step, ivMs);
+        VE.timer = timer;
+        step();
+      });
+      await stopped;
+      if (VE.timer) { clearInterval(VE.timer); VE.timer = null; }
+      if (VE.cancel) { st.textContent = t('已取消'); return; }
+      const blob = new Blob(chunks, { type: 'video/webm' });
+      if (!blob.size) throw new Error('recorded empty');
+      // 3) 合成 MP4（视频 + 离线音频）
+      st.textContent = t('转码中…'); setP(96);
+      const videoBytes = new Uint8Array(await blob.arrayBuffer());
+      const r = await fuBridge.transcodeVideo(videoBytes, wavBytes);
+      if (r && r.ok) { setP(100); st.textContent = t('导出完成：') + r.path; toast(t('视频导出完成：') + r.path, 'ok'); }
+      else if (r && r.canceled) st.textContent = t('已取消');
+      else throw new Error((r && r.error) || 'transcode failed');
+    } catch (e) {
+      st.textContent = t('导出失败：') + (e && e.message || e);
+      toast(t('视频导出失败：') + (e && e.message || e), 'err');
+    } finally {
+      viz._cvs = oldCvs; viz.spec = oldSpec; viz._parts = oldParts; viz._keys = oldKeys; viz._lastD = oldLastD; viz._blocks = oldBlocks; viz._songRef = oldRef;
+      try {
+        if (oldPlayer) { if (oldCurrentTick) App.player.currentTick = oldCurrentTick; }
+        else App.player = null;
+        if (oldSynth) App.synth.activeNotes = oldActiveNotes; else App.synth = null;
+      } catch (e) {}
+      document.body.removeChild(host);
+      VE.cvMain = null;
+      VE.running = false; VE.rec = null;
+      $('#btnVeCancel').classList.add('hidden');
+    }
   }
-}
 function bindVideoExport() {
   $('#btnVeStart').addEventListener('click', startBackgroundVideo);
   $('#btnVeCancel').addEventListener('click', () => { VE.cancel = true; });
