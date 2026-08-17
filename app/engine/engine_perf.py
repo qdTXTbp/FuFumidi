@@ -154,9 +154,20 @@ def _resolve_basic_pitch_model():
     模型在同目录的 nmp.onnx（或任意 .onnx）里，这里自动解析。
 
     返回能直接传给 onnxruntime.InferenceSession 的文件路径字符串。
+
+    优先返回内置量化模型 basic_pitch_quant.onnx（体积更小、CPU 更快）。
     """
     from basic_pitch import ICASSP_2022_MODEL_PATH
     p = Path(ICASSP_2022_MODEL_PATH)
+    quant_candidates = []
+    models_dir = os.environ.get("FUFUMIDI_MODELS_DIR")
+    if models_dir:
+        quant_candidates.append(Path(models_dir) / "basic_pitch_quant.onnx")
+    if p.parent.is_dir():
+        quant_candidates.append(p.parent / "nmp.quant.onnx")
+    for q in quant_candidates:
+        if q.is_file():
+            return str(q)
     if not p.is_file():
         parent = p.parent
         for name in (p.name + ".onnx", "nmp.onnx"):

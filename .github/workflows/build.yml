@@ -50,6 +50,14 @@ jobs:
           FF_PBS_REL: "20250409"
         run: node scripts/bundle-python.js
 
+      - name: 量化 basic-pitch 模型（压缩体积 + CPU 提速）
+        shell: bash
+        env:
+          FUFUMIDI_MODELS_DIR: app/models
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then PY=app/python/python.exe; else PY=app/python/bin/python3; fi
+          "$PY" scripts/quantize-basic-pitch.py
+
       - name: 构建安装包
         run: npm run ${{ matrix.script }}
 

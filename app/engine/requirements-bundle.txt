@@ -16,6 +16,7 @@
 # ---- 通用转录引擎（任意歌曲/人声/乐器）----
 basic-pitch>=0.4.0
 onnxruntime>=1.16
+onnx>=1.16
 
 # ---- 钢琴专用转录引擎 ----
 piano-transcription-inference>=0.0.6
