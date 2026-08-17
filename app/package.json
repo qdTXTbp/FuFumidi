@@ -6,6 +6,7 @@
   "main": "main.js",
   "author": "FuFumidi",
   "license": "MIT",
+  "homepage": "https://github.com/qdTXTbp/FuFumidi",
   "private": true,
   "scripts": {
     "start": "electron .",

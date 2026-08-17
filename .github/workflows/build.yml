@@ -54,6 +54,7 @@ jobs:
         shell: bash
         env:
           FUFUMIDI_MODELS_DIR: ${{ github.workspace }}/app/models
+          PYTHONUTF8: "1"
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then PY=python/python.exe; else PY=python/bin/python3; fi
           "$PY" scripts/quantize-basic-pitch.py
