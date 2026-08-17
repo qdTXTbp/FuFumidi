@@ -5211,7 +5211,7 @@ function renderJianpuHTML(song, trkIdx) {
     const tr = song.tracks[trkIdx];
     if (!tr || !tr.notes.length) return '<div class="score-empty">' + t('该轨道没有音符') + '</div>';
     if (tr.isDrum) return '<div class="score-empty">' + t('鼓组轨道不适合简谱显示，请切换其它轨道') + '</div>';
-    const MAX = 2000;
+    const MAX = 20000;   // 简谱容量上限（复杂曲目也能完整显示，超出才降级）
     const shown = tr.notes.slice(0, MAX);
     const notice = tr.notes.length > MAX
       ? `<div class="score-empty" style="padding:8px">${t('该轨道音符过多')}（${tr.notes.length}），${t('简谱仅显示前')} ${MAX} ${t('个音符')}</div>` : '';
@@ -5321,10 +5321,10 @@ function renderScore() {
   const cw = vpW - 56;
   // 高密度防重叠：按每小节平均音符数分档收窄行宽 + 加大音符间距，自动折成多行系统
   const density = tr.notes.length / Math.max(1, s.bars);
-  const compact = density > 80, mid = density > 40;
-  const minSpacing = compact ? 1.0 : mid ? 0.75 : 0.5;
-  const maxSpacing = compact ? 1.5 : mid ? 1.2 : 0.9;
-  let staffwidth = compact ? Math.max(300, Math.round(cw * 0.5)) : mid ? Math.max(320, Math.round(cw * 0.7)) : Math.max(360, Math.round(cw));
+  const compact = density > 60, mid = density > 25;
+  const minSpacing = compact ? 1.25 : mid ? 1.0 : 0.65;
+  const maxSpacing = compact ? 1.7 : mid ? 1.35 : 1.0;
+  let staffwidth = compact ? Math.max(280, Math.round(cw * 0.52)) : mid ? Math.max(320, Math.round(cw * 0.72)) : Math.max(360, Math.round(cw));
   let tunes = null;
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -5359,20 +5359,31 @@ function renderScore() {
         _w = _svgEl ? (parseFloat(_svgEl.getAttribute('width')) || _svgEl.getBoundingClientRect().width || 0) : 0;
       }
     }
-    // 铺满容器：abcjs 会给 SVG 加 transform:scale 做自适配，这里用同源 transform
-    // 精确缩放到父容器宽度（每行谱表随之等比例铺满，不再前面空一块）
+    // 铺满容器：逐行 scaleX。abcjs 每行宽度略有差异（920~943），整图统一缩放
+    // 必然有行留白；对每个 staff-wrapper 单独水平缩放到容器宽度，每行都铺满。
     el.style.width = '100%'; el.style.margin = '0';
     const _svgFill = el.querySelector('svg');
     if (_svgFill) {
-      const _attrW = parseFloat(_svgFill.getAttribute('width')) || 0;
-      const _targetW = el.clientWidth || vpW || _attrW;
-      if (_attrW > 0 && _targetW > 0) {
-        _svgFill.style.transform = 'scale(' + (_targetW / _attrW) + ')';
-        _svgFill.style.transformOrigin = '0 0';
-        _svgFill.style.width = _attrW + 'px';
-        _svgFill.style.height = 'auto';
-        _svgFill.style.maxWidth = 'none';
-      }
+      _svgFill.style.transform = 'none';
+      _svgFill.style.transformOrigin = '0 0';
+      _svgFill.style.width = (_svgFill.getAttribute('width') || '100%');
+      _svgFill.style.height = 'auto';
+      _svgFill.style.maxWidth = 'none';
+      const _targetW = el.clientWidth || vpW || 900;
+      const _wrappers = el.querySelectorAll('.abcjs-staff-wrapper');
+      const _items = _wrappers.length ? _wrappers : el.querySelectorAll('.abcjs-staff');
+      _items.forEach(_st => {
+        try {
+          const _b = _st.getBBox();
+          if (_b.width > 10 && _targetW > 10) {
+            const _ratio = _targetW / _b.width;
+            if (isFinite(_ratio) && _ratio > 0.6 && _ratio < 1.8) {
+              _st.style.transform = 'scaleX(' + _ratio + ')';
+              _st.style.transformOrigin = '0 0';
+            }
+          }
+        } catch (e) {}
+      });
     }
     setStatus(t('渲染完成'));
   } catch (e) { el.innerHTML = '<div class="score-empty">' + t('乐谱解析失败：') + esc(String(e.message || e)) + '</div>'; scoreTune = null; setStatus(t('生成失败')); }
