@@ -5342,12 +5342,14 @@ function renderScore() {
   const minSpacing = compact ? 1.25 : mid ? 1.0 : 0.65;
   const maxSpacing = compact ? 1.7 : mid ? 1.35 : 1.0;
   let staffwidth = compact ? Math.max(280, Math.round(cw * 0.52)) : mid ? Math.max(320, Math.round(cw * 0.72)) : Math.max(360, Math.round(cw));
+  // 每行小节数：低密度多放小节铺满行宽；中/高密度限制小节数避免过密
+  const measuresPerLine = compact ? 2 : mid ? 4 : 6;
   let tunes = null;
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
       tunes = ABCJS.renderAbc(el, abc, {
         staffwidth,
-        wrap: { minSpacing, maxSpacing },
+        wrap: { minSpacing, maxSpacing, preferredMeasuresPerLine: measuresPerLine },
         scale: zoom,
         foregroundColor: 'currentColor',
         add_classes: true,
@@ -5367,7 +5369,7 @@ function renderScore() {
       const fitScale = Math.max(0.6, zoom * (vpW / _w) * 0.97);
       if (fitScale < zoom) {
         tunes = ABCJS.renderAbc(el, abc, {
-          staffwidth, wrap: { minSpacing, maxSpacing }, scale: fitScale,
+          staffwidth, wrap: { minSpacing, maxSpacing, preferredMeasuresPerLine: measuresPerLine }, scale: fitScale,
           foregroundColor: 'currentColor', add_classes: true, selectTypes: false,
           paddingtop: 14, paddingbottom: 14, paddingleft: 8, paddingright: 8,
         });
