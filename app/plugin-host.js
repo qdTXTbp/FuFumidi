@@ -40,7 +40,10 @@ class PluginHost {
    */
   constructor(deps) {
     this._get = deps.getSettings;
-    this._save = deps.saveSettings;
+    // 重要：插件设置保存必须“读当前完整设置 → 合并 → 写回”，
+    // 否则启动时插件激活会把 {plugins:...} 当成整份设置写盘，
+    // 抹掉 guide_done / theme / lang 等所有应用设置（导致新手引导每次出现）。
+    this._save = (s) => deps.saveSettings({ ...(deps.getSettings()), ...(s || {}) });
     this._spawnEngine = deps.spawnEngine;
     this._broadcast = deps.broadcast;
     this._dirs = [];            // 扫描根目录（用户目录优先）

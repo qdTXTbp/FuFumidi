@@ -716,6 +716,7 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
   #abcScore { position: absolute; left: 0; top: 0; width: 100%; background: #fff !important; color: #000 !important; }
 }
 /* ---- 简谱 / 吉他谱 ---- */
+.score-empty{color:var(--text3);font-size:13px;padding:18px 12px;line-height:1.8;text-align:center}
 .jianpu{display:flex;flex-wrap:wrap;gap:10px 14px;padding:18px 10px;font-size:22px;line-height:1.6;color:var(--text)}
 .jp-note{font-weight:700;color:var(--accent2)}
 .jp-long::after{content:' —';color:var(--text3)}
@@ -2149,6 +2150,24 @@ const I18N_MAP = {
   'PNG 导出失败：': 'PNG export failed: ',
   '已导出乐谱 PDF：': 'Exported score PDF: ',
   'PDF 导出失败': 'PDF export failed',
+  '正在生成…': 'Rendering…',
+  '暂无数据': 'No data',
+  '简谱已生成': 'Jianpu rendered',
+  '吉他谱已生成': 'Guitar tab rendered',
+  '贝斯谱已生成': 'Bass tab rendered',
+  '渲染完成': 'Render complete',
+  '生成失败': 'Generation failed',
+  '乐谱解析失败：': 'Score parse failed: ',
+  '该轨道音符过多': 'Too many notes on this track',
+  '简谱仅显示前': 'Jianpu shows first',
+  '个音符': ' notes',
+  '鼓组轨道不适合简谱显示，请切换其它轨道': 'Drum track is not suitable for jianpu; switch track',
+  '鼓组轨道不适合弦乐 TAB，请切换其它轨道': 'Drum track is not suitable for TAB; switch track',
+  '自动把位（按音高就近排布，可编辑视图调整音高）': 'Auto-fingering by pitch (edit view to adjust)',
+  '音': ' notes',
+  '该轨道音高超出当前乐器范围，无法自动编配把位': 'Pitch out of range for auto-fingering',
+  'TAB 生成失败：': 'TAB failed: ',
+  '简谱生成失败：': 'Jianpu failed: ',
   '按名称': 'By name',
   '按时间': 'By time',
   /* 新增编辑能力 */
@@ -5185,46 +5204,78 @@ function jianpuNoteInfo(midi, sf) {
   return { num: idx + 1, acc, dots };
 }
 function renderJianpuHTML(song, trkIdx) {
-  const tr = song.tracks[trkIdx]; if (!tr || !tr.notes.length) return '<div class="muted" style="padding:20px">该轨道没有音符</div>';
-  const sf = (song.keySig && song.keySig.sf) || 0;
-  const beats = song.tpb;
-  return '<div class="jianpu">' + tr.notes.map(n => {
-    const info = jianpuNoteInfo(n.midi, sf);
-    const b = (n.end - n.start) / beats;
-    const cls = b >= 4 ? 'jp-long' : b >= 2 ? 'jp-half' : b <= 0.25 ? 'jp-16' : b <= 0.5 ? 'jp-8' : '';
-    const dash = b >= 4 ? '— — —' : b >= 2 ? '—' : '';
-    return `<span class="jp-cell"><span class="jp-note ${cls}">${esc(info.acc)}${info.num}${info.dots}</span>${dash ? '<span class="jp-dash">' + dash + '</span>' : ''}</span>`;
-  }).join('') + '</div>';
+  try {
+    const tr = song.tracks[trkIdx];
+    if (!tr || !tr.notes.length) return '<div class="score-empty">' + t('该轨道没有音符') + '</div>';
+    if (tr.isDrum) return '<div class="score-empty">' + t('鼓组轨道不适合简谱显示，请切换其它轨道') + '</div>';
+    const MAX = 2000;
+    const shown = tr.notes.slice(0, MAX);
+    const notice = tr.notes.length > MAX
+      ? `<div class="score-empty" style="padding:8px">${t('该轨道音符过多')}（${tr.notes.length}），${t('简谱仅显示前')} ${MAX} ${t('个音符')}</div>` : '';
+    const sf = (song.keySig && song.keySig.sf) || 0;
+    const beats = song.tpb;
+    return notice + '<div class="jianpu">' + shown.map(n => {
+      const info = jianpuNoteInfo(n.midi, sf);
+      const b = (n.end - n.start) / beats;
+      const cls = b >= 4 ? 'jp-long' : b >= 2 ? 'jp-half' : b <= 0.25 ? 'jp-16' : b <= 0.5 ? 'jp-8' : '';
+      const dash = b >= 4 ? '— — —' : b >= 2 ? '—' : '';
+      return `<span class="jp-cell"><span class="jp-note ${cls}">${esc(info.acc)}${info.num}${info.dots}</span>${dash ? '<span class="jp-dash">' + dash + '</span>' : ''}</span>`;
+    }).join('') + '</div>';
+  } catch (e) {
+    return '<div class="score-empty">' + t('简谱生成失败：') + (e && e.message || e) + '</div>';
+  }
 }
 function renderTabHTML(song, trkIdx, strings) {
-  const tr = song.tracks[trkIdx]; if (!tr || !tr.notes.length) return '<div class="muted" style="padding:20px">该轨道没有音符</div>';
-  const tpb = song.tpb;
-  const cols = [];
-  const step = tpb / 2;   // 每列 = 八分音符
-  const total = Math.ceil(song.totalTicks / step);
-  const grid = Array.from({ length: total }, () => Array(strings.length).fill(null));
-  for (const n of tr.notes) {
-    const c = Math.floor(n.start / step);
-    let bestS = 0, bestF = 99;
-    strings.forEach((s, i) => { const f = n.midi - s; if (f >= 0 && f <= 24 && Math.abs(f - 7) < Math.abs(bestF - 7)) { bestF = f; bestS = i; } });
-    if (bestF >= 0 && bestF <= 24) grid[Math.min(total - 1, c)][bestS] = bestF;
+  try {
+    const tr = song.tracks[trkIdx];
+    if (!tr || !tr.notes.length) return '<div class="score-empty">' + t('该轨道没有音符') + '</div>';
+    if (tr.isDrum) return '<div class="score-empty">' + t('鼓组轨道不适合弦乐 TAB，请切换其它轨道') + '</div>';
+    const tpb = song.tpb;
+    const step = tpb / 2;   // 每列 = 八分音符
+    const total = Math.ceil(song.totalTicks / step);
+    const grid = Array.from({ length: total }, () => Array(strings.length).fill(null));
+    const minOpen = Math.min(...strings), maxOpen = Math.max(...strings);
+    let placed = 0;
+    for (const n of tr.notes) {
+      // 自动把位：在 ±2 个八度内寻找 0~24 品、尽量靠近中间把位（第 5~9 品）的弦
+      let best = null, bestPen = Infinity;
+      for (const delta of [-24, -12, 0, 12, 24]) {
+        const p = n.midi + delta;
+        strings.forEach((s, i) => {
+          const f = p - s;
+          if (f < 0 || f > 24) return;
+          const pen = Math.abs(f - 7) + Math.abs(delta);
+          if (pen < bestPen) { bestPen = pen; best = { i, f }; }
+        });
+      }
+      if (best) {
+        const c = Math.floor(n.start / step);
+        if (c < total) { grid[c][best.i] = best.f; placed++; }
+      }
+    }
+    if (!placed) return '<div class="score-empty">' + t('该轨道音高超出当前乐器范围，无法自动编配把位') + '</div>';
+    const hint = `<div class="score-empty" style="padding:6px">${t('自动把位（按音高就近排布，可编辑视图调整音高）')} · ${placed} ${t('音')}</div>`;
+    return hint + '<pre class="tab-lines">' + grid.map(col => col.map(f => (f == null ? '--' : String(f).padStart(2, ' '))).join(' ')).join(' | ') + '</pre>';
+  } catch (e) {
+    return '<div class="score-empty">' + t('TAB 生成失败：') + (e && e.message || e) + '</div>';
   }
-  return '<pre class="tab-lines">' + grid.map(col => col.map(f => (f == null ? '-' : String(f)).padStart(2)).join('-')).join(' | ') + '</pre>';
 }
 function renderScore() {
   const el = $('#abcScore');
   const s = App.song;
   const tr = s && App.scoreTrack != null ? s.tracks[App.scoreTrack] : null;
+  const setStatus = (txt) => { const st = $('#scoreStatusTxt'); if (st) st.textContent = txt; };
+  setStatus(t('正在生成…'));
   scoreTune = null; scoreNoteEvents = null; scoreCurEvent = -1; scoreMsPerBeat = 0; scoreRealOnsets = []; scoreLineTops = []; scoreLineBottoms = [];
   scoreFlow = null;
   if (!el) return;
   el.innerHTML = '';
   const mode = $('#scoreMode') ? $('#scoreMode').value : 'staff';
   const jpWrap = $('#jianpuWrap'); if (jpWrap) jpWrap.innerHTML = '';
-  if (mode === 'jianpu') { scoreTune = null; scoreNoteEvents = null; scoreCurEvent = -1; scoreMsPerBeat = 0; scoreRealOnsets = []; scoreFlow = null; if (!s || !tr) return; if (jpWrap) jpWrap.innerHTML = renderJianpuHTML(s, App.scoreTrack); scoreMetaTxt = (tr.name || '') + ' · ' + t('简谱'); return; }
-  if (mode === 'guitar' || mode === 'bass') { scoreTune = null; scoreNoteEvents = null; scoreCurEvent = -1; scoreMsPerBeat = 0; scoreRealOnsets = []; scoreFlow = null; if (!s || !tr) return; el.innerHTML = renderTabHTML(s, App.scoreTrack, mode === 'guitar' ? [64, 59, 55, 50, 45, 40] : [43, 38, 33, 28]); scoreMetaTxt = (tr.name || '') + ' · ' + (mode === 'guitar' ? t('吉他六线谱') : t('贝斯四线谱')); return; }
+  if (mode === 'jianpu') { scoreTune = null; scoreNoteEvents = null; scoreCurEvent = -1; scoreMsPerBeat = 0; scoreRealOnsets = []; scoreFlow = null; if (!s || !tr) { setStatus(t('暂无数据')); return; } if (jpWrap) jpWrap.innerHTML = renderJianpuHTML(s, App.scoreTrack); scoreMetaTxt = (tr.name || '') + ' · ' + t('简谱'); setStatus(t('简谱已生成')); return; }
+  if (mode === 'guitar' || mode === 'bass') { scoreTune = null; scoreNoteEvents = null; scoreCurEvent = -1; scoreMsPerBeat = 0; scoreRealOnsets = []; scoreFlow = null; if (!s || !tr) { setStatus(t('暂无数据')); return; } el.innerHTML = renderTabHTML(s, App.scoreTrack, mode === 'guitar' ? [64, 59, 55, 50, 45, 40] : [43, 38, 33, 28]); scoreMetaTxt = (tr.name || '') + ' · ' + (mode === 'guitar' ? t('吉他六线谱') : t('贝斯四线谱')); setStatus(mode === 'guitar' ? t('吉他谱已生成') : t('贝斯谱已生成')); return; }
   if (mode === 'dual' && jpWrap && s && tr) jpWrap.innerHTML = renderJianpuHTML(s, App.scoreTrack);
-  if (!s || !tr || !tr.notes.length) { scoreMetaTxt = ''; el.innerHTML = '<div style="color:var(--text3);padding:20px">' + esc(t('该轨道没有音符')) + '</div>'; return; }
+  if (!s || !tr || !tr.notes.length) { scoreMetaTxt = ''; el.innerHTML = '<div class="score-empty">' + esc(t('该轨道没有音符')) + '</div>'; setStatus(t('暂无数据')); return; }
   scoreRealOnsets = tr.notes.map(n => n.start).sort((a, b) => a - b);
   const zoom = parseFloat($('#scoreZoom').value) || 1;
   // 渲染缓存：歌曲版本/轨道/缩放/显示选项/音符数未变且已有 SVG 时跳过（避免切视图/缩放反复重渲染造成卡顿）
@@ -5240,13 +5291,17 @@ function renderScore() {
   scorePadTop = scEl ? (parseFloat(getComputedStyle(scEl).paddingTop) || 0) : 0;
   const vpW = scEl ? scEl.clientWidth : 986;
   const cw = vpW - 56;
-  let staffwidth = Math.max(360, Math.round(cw));
+  // 高密度防重叠：每小节平均音符很多时，收窄每行宽度（更早折行）+ 加大音符间距，避免符干重叠
+  const density = tr.notes.length / Math.max(1, s.bars);
+  const compact = density > 80;
+  const minSpacing = compact ? 0.95 : 0.42, maxSpacing = compact ? 1.45 : 0.8;
+  let staffwidth = compact ? Math.max(300, Math.round(cw * 0.55)) : Math.max(360, Math.round(cw));
   let tunes = null;
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
       tunes = ABCJS.renderAbc(el, abc, {
         staffwidth,
-        wrap: { minSpacing: 0.42, maxSpacing: 0.8 },
+        wrap: { minSpacing, maxSpacing },
         scale: zoom,
         foregroundColor: 'currentColor',
         add_classes: true,
@@ -5255,11 +5310,12 @@ function renderScore() {
       });
       const _svgEl = el.querySelector('svg');
       const w = _svgEl ? (parseFloat(_svgEl.getAttribute('width')) || _svgEl.getBoundingClientRect().width || 0) : 0;
-      if (!w || w <= vpW || attempt >= 2 || staffwidth <= 360) break;
-      staffwidth = Math.max(360, Math.round(staffwidth * (vpW / w) * 0.97));
+      if (!w || w <= vpW || attempt >= 2 || staffwidth <= 300) break;
+      staffwidth = Math.max(300, Math.round(staffwidth * (vpW / w) * 0.97));
     }
     scoreTune = tunes && tunes[0] ? tunes[0] : null;
-  } catch (e) { el.innerHTML = '<div style="color:var(--text3);padding:20px">乐谱解析失败：' + esc(String(e.message || e)) + '</div>'; scoreTune = null; }
+    setStatus(t('渲染完成'));
+  } catch (e) { el.innerHTML = '<div class="score-empty">' + t('乐谱解析失败：') + esc(String(e.message || e)) + '</div>'; scoreTune = null; setStatus(t('生成失败')); }
   // 播放定位映射（setTiming 必须在绘制后调用）
   if (scoreTune) {
     try {
