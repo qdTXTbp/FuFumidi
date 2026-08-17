@@ -59,6 +59,13 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then PY=python/python.exe; else PY=python/bin/python3; fi
           "$PY" scripts/quantize-basic-pitch.py
 
+      - name: 精简运行时（卸载仅构建期依赖，压缩包体）
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then PY=python/python.exe; else PY=python/bin/python3; fi
+          "$PY" -m pip uninstall -y --disable-pip-version-check tensorflow tensorflow-cpu tensorflow-macos tensorflow-intel keras tensorboard tensorboard-data-server tensorflow-estimator tensorflow-io tensorflow-io-gcs-filesystem coremltools onnx ml-dtypes mir-eval || true
+          "$PY" -m pip cache purge || true
+
       - name: 构建安装包
         run: npm run ${{ matrix.script }}
 
