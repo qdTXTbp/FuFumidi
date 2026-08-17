@@ -8472,14 +8472,52 @@ function bindSettings() {
     }
     btn.disabled = false; btn.textContent = t('自动检测');
   });
-  // 内置模型清单：显示量化/钢琴模型的体积与状态
+  // 内置模型清单：显示量化/钢琴模型的体积与状态，缺失模型可一键下载（带进度/取消）
+  window.__modelDownloads = {};
   async function refreshModelList() {
     const el = $('#modelList'); if (!el) return;
     if (!(window.fuBridge && fuBridge.modelList)) { el.textContent = t('模型清单不可用'); return; }
     try {
       const items = await fuBridge.modelList();
-      el.innerHTML = (items || []).map(i => `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed var(--border)"><span>${esc(i.name)}</span><span style="color:${i.exists ? 'var(--green)' : '#ff5c6c'};font-family:var(--mono)">${i.exists ? fmtSize(i.size) : t('缺失')}</span></div>`).join('') || t('无内置模型');
+      el.innerHTML = (items || []).map(i => {
+        const act = window.__modelDownloads[i.id];
+        let right = '';
+        if (i.exists) right = `<span style="color:var(--green);font-family:var(--mono)">${fmtSize(i.size)}</span>`;
+        else if (i.downloadable) {
+          if (act) right = `<button class="ov-btn" data-model-cancel="${esc(i.id)}" style="padding:2px 8px;font-size:11px">${t('取消')}</button><span id="mprog-${esc(i.id)}" style="color:var(--accent);font-family:var(--mono);margin-left:6px">${act.pct}%</span>`;
+          else right = `<button class="ov-btn" data-model-dl="${esc(i.id)}" style="padding:2px 10px;font-size:11px">${t('下载')}</button>`;
+        } else right = `<span style="color:#e8b54a;font-family:var(--mono)">${t('按需下载')}</span>`;
+        const hint = i.note ? `<div style="color:var(--text3);font-size:10px;margin-top:1px">${esc(i.note)}</div>` : '';
+        return `<div style="padding:4px 0;border-bottom:1px dashed var(--border)"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><span>${esc(i.name)}</span>${right}</div>${hint}</div>`;
+      }).join('') || t('无内置模型');
+      el.querySelectorAll('[data-model-dl]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = btn.getAttribute('data-model-dl');
+          if (window.__modelDownloads[id] || !window.fuBridge.modelDownload) return;
+          window.__modelDownloads[id] = { pct: 0 };
+          btn.disabled = true;
+          const r = await fuBridge.modelDownload(id);
+          delete window.__modelDownloads[id];
+          if (r && r.ok) { toast(t('模型下载完成'), 'ok'); refreshModelList(); }
+          else if (r && r.canceled) { toast(t('已取消下载'), 'ok'); refreshModelList(); }
+          else { toast(t('模型下载失败：') + ((r && r.error) || 'unknown'), 'err'); refreshModelList(); }
+        });
+      });
+      el.querySelectorAll('[data-model-cancel]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.getAttribute('data-model-cancel');
+          if (window.fuBridge && fuBridge.modelCancel) fuBridge.modelCancel(id);
+        });
+      });
     } catch (e) { el.textContent = t('模型清单加载失败'); }
+  }
+  if (window.fuBridge && fuBridge.onModelProgress) {
+    fuBridge.onModelProgress(ev => {
+      const act = window.__modelDownloads[ev.id];
+      if (!act) return;
+      act.pct = ev.done ? 100 : (ev.percent != null ? ev.percent : (ev.total ? Math.min(99, Math.round(ev.received / ev.total * 100)) : act.pct));
+      const el = $('#mprog-' + ev.id); if (el) el.textContent = act.pct + '%';
+    });
   }
   $('#btnModelRefresh').addEventListener('click', refreshModelList);
   refreshModelList();

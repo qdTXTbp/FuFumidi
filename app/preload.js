@@ -44,6 +44,9 @@ contextBridge.exposeInMainWorld('fuBridge', {
   exportScorePdf: () => ipcRenderer.invoke('score:exportPdf'),
   transcodeVideo: (data, audio) => ipcRenderer.invoke('video:transcode', { data, audio }),
   modelList: () => ipcRenderer.invoke('model:list'),
+  modelDownload: (id) => ipcRenderer.invoke('model:download', id),
+  modelCancel: (id) => ipcRenderer.invoke('model:cancel', id),
+  onModelProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('model:progress', w); return () => ipcRenderer.removeListener('model:progress', w); },
   // 歌单“导入文件夹”：返回目录下所有 .mid/.midi/.kar/.rmi 文件路径
   listMidiFiles: (dir) => ipcRenderer.invoke('dir:listMidiFiles', dir),
   // 读取本地文件（转录结果回载）

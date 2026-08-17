@@ -2,7 +2,7 @@
 // FuFumidi —— Electron 主进程
 // 纯离线本地应用：加载内置 renderer 界面 + 本地 Python 转录引擎子进程
 // ============================================================
-const { app, BrowserWindow, session, dialog, shell, Menu, ipcMain } = require('electron');
+const { app, BrowserWindow, session, dialog, shell, Menu, ipcMain, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -519,19 +519,98 @@ function registerIpc() {
     });
     return r.canceled ? null : r.filePaths[0];
   });
-  // 内置模型清单（转录/分离模型状态）
+  // 内置模型注册表：本地模型清单 + 缺失模型官方源一键下载（带进度/取消）
+  const MODEL_REGISTRY = {
+    piano_transcription: {
+      id: 'piano_transcription',
+      name: '钢琴转录模型',
+      note: 'piano-transcription CRNN（含踏板检测）· 约 166 MB',
+      dest: path.join('piano_transcription', 'note_F1=0.9677_pedal_F1=0.9186.pth'),
+      url: 'https://zenodo.org/record/4034264/files/CRNN_note_F1%3D0.9677_pedal_F1%3D0.9186.pth?download=1',
+      minSize: 1.6e8,
+      downloadable: true,
+    },
+  };
+  const _modelCancels = new Set();
+  const _modelAborts = new Map();
   ipcMain.handle('model:list', async () => {
     const dir = modelsDir();
     const items = [];
-    const push = (name, p, note) => {
+    const push = (name, p, note, extra) => {
       try {
         const st = fs.statSync(p);
-        items.push({ name, path: p, size: st.size, exists: true, note: note || '' });
-      } catch (e) { items.push({ name, path: p, size: 0, exists: false, note: note || '' }); }
+        items.push(Object.assign({ name, path: p, size: st.size, exists: true, note: note || '' }, extra || {}));
+      } catch (e) { items.push(Object.assign({ name, path: p, size: 0, exists: false, note: note || '' }, extra || {})); }
     };
-    push('通用转录（int8 量化）', path.join(dir, 'basic_pitch_quant.onnx'), 'basic-pitch');
-    push('钢琴转录模型', path.join(dir, 'piano_transcription', 'note_F1=0.9677_pedal_F1=0.9186.pth'), 'piano-transcription');
+    push('通用转录（int8 量化）', path.join(dir, 'basic_pitch_quant.onnx'), 'basic-pitch ONNX int8 量化模型（CPU 加速）');
+    const pt = MODEL_REGISTRY.piano_transcription;
+    push(pt.name, path.join(dir, pt.dest), pt.note, { id: pt.id, downloadable: true });
+    items.push({ id: 'demucs_htdemucs', name: '人声分离模型', path: '', size: 0, exists: false, downloadable: false, note: 'demucs htdemucs（首次使用人声分离时自动下载到本地缓存）' });
     return items;
+  });
+  ipcMain.handle('model:cancel', async (_e, id) => {
+    if (id) { _modelCancels.add(id); try { const c = _modelAborts.get(id); if (c) c.abort(); } catch (e) {} }
+    return { ok: true };
+  });
+  ipcMain.handle('model:download', async (evt, id) => {
+    const spec = MODEL_REGISTRY[id];
+    if (!spec || !spec.url) return { ok: false, error: 'unknown model: ' + id };
+    const win = BrowserWindow.fromWebContents(evt.sender);
+    const dest = path.join(modelsDir(), spec.dest);
+    if (fs.existsSync(dest) && fs.statSync(dest).size >= spec.minSize) {
+      if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: fs.statSync(dest).size, total: fs.statSync(dest).size, percent: 100, done: true });
+      return { ok: true, path: dest, size: fs.statSync(dest).size, existed: true };
+    }
+    _modelCancels.delete(id);
+    const tmp = dest + '.part';
+    const ctrl = new AbortController();
+    _modelAborts.set(id, ctrl);
+    const timeout = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 120000);
+    let out = null;
+    try {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      const res = await net.fetch(spec.url, { headers: { 'user-agent': 'FuFumidi/1.2.0' }, signal: ctrl.signal });
+      if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+      const total = parseInt(res.headers.get('content-length') || '0', 10) || 0;
+      out = fs.createWriteStream(tmp);
+      const reader = res.body.getReader();
+      let received = 0, lastSend = 0;
+      const sendP = (done) => {
+        const now = Date.now();
+        if (!done && now - lastSend < 300) return;
+        lastSend = now;
+        const pct = total ? Math.min(99, Math.round(received / total * 100)) : 0;
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received, total, percent: pct, done: !!done });
+      };
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (_modelCancels.has(id)) { try { reader.cancel(); } catch (e) {} throw new Error('canceled'); }
+        received += value.length;
+        sendP(false);
+        await new Promise((res2, rej2) => out.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
+      }
+      await new Promise((res2, rej2) => out.end(err => (err ? rej2(err) : res2())));
+      sendP(true);
+      if (_modelCancels.has(id)) throw new Error('canceled');
+      fs.renameSync(tmp, dest);
+      const size = fs.statSync(dest).size;
+      if (size < spec.minSize) throw new Error('下载文件不完整：' + size + ' bytes');
+      if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: size, total: size, percent: 100, done: true });
+      return { ok: true, path: dest, size };
+    } catch (e) {
+      if (out) { try { out.destroy(); } catch (_) {} }
+      await new Promise(r => setTimeout(r, 150));
+      try { fs.unlinkSync(tmp); } catch (_) {}
+      const msg = String((e && e.message) || e);
+      if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, error: msg, canceled: _modelCancels.has(id) });
+      return { ok: false, error: msg, canceled: _modelCancels.has(id) };
+    } finally {
+      clearTimeout(timeout);
+      _modelCancels.delete(id);
+      _modelAborts.delete(id);
+      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (_) {}
+    }
   });
   ipcMain.handle('score:exportPdf', async (evt) => {
     try {
