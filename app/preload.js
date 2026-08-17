@@ -42,7 +42,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   soundfonts: { list: () => ipcRenderer.invoke('soundfont:list') },
   pickMusicXML: () => ipcRenderer.invoke('dialog:pickMusicXML'),
   exportScorePdf: () => ipcRenderer.invoke('score:exportPdf'),
-  transcodeVideo: (data) => ipcRenderer.invoke('video:transcode', { data }),
+  transcodeVideo: (data, audio) => ipcRenderer.invoke('video:transcode', { data, audio }),
   modelList: () => ipcRenderer.invoke('model:list'),
   // 歌单“导入文件夹”：返回目录下所有 .mid/.midi/.kar/.rmi 文件路径
   listMidiFiles: (dir) => ipcRenderer.invoke('dir:listMidiFiles', dir),

@@ -1582,6 +1582,25 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
 </div>
 
 <!-- ==================== 预设管理对话框 ==================== -->
+<div class="overlay hidden" id="videoExportOverlay">
+  <div class="overlay-card" style="width:560px">
+    <button class="ov-close" data-close="videoExportOverlay" title="关闭"><span class="ic" data-ic="plus" style="transform:rotate(45deg);display:inline-flex"></span></button>
+    <h3>导出视频（后台录制）</h3>
+    <p class="ov-note">离屏渲染 · 不切视图 · 不播放声音 · 可继续使用应用</p>
+    <div class="form-grid">
+      <div class="field-row"><label>帧率</label><select id="veFps" class="sel"><option value="24">24 fps</option><option value="30" selected>30 fps</option><option value="60">60 fps</option></select></div>
+      <div class="field-row"><label>分辨率</label><select id="veRes" class="sel"><option value="1280x720" selected>1280×720 HD</option><option value="1920x1080">1920×1080 FHD</option></select></div>
+      <div class="field-row"><label>时长</label><select id="veDur" class="sel"><option value="15">15 秒</option><option value="30" selected>30 秒</option><option value="60">60 秒</option><option value="0">整首</option></select></div>
+    </div>
+    <div class="progress hidden" id="veProgress"><div class="pfill" id="veFill"></div><span id="vePct">0%</span></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn-primary big" id="btnVeStart" style="flex:1"><span class="ic" data-ic="play2"></span>开始后台导出</button>
+      <button class="btn-ghost big hidden" id="btnVeCancel">取消</button>
+    </div>
+    <div id="veStatus" class="muted" style="font-size:12px;margin-top:8px"></div>
+  </div>
+</div>
+
 <div class="overlay hidden" id="presetOverlay">
   <div class="overlay-card" style="width:560px">
     <button class="ov-close" data-close="presetOverlay" title="关闭"><span class="ic" data-ic="plus" style="transform:rotate(45deg);display:inline-flex"></span></button>
@@ -6859,6 +6878,107 @@ async function exportMp4(opts = {}) {
   }
 }
 
+/* ---- 后台视频导出：离屏 canvas + 离线音频，不切视图、不播声音 ---- */
+function drawVideoFrame(cv, g, tick, W, H) {
+  const s = App.song; if (!s) return;
+  const nowSec = s.baseSec(tick);
+  g.fillStyle = '#0a0f18'; g.fillRect(0, 0, W, H);
+  const keysW = Math.round(W * 0.09);
+  // 键盘底
+  g.fillStyle = '#0d1522'; g.fillRect(0, 0, keysW, H);
+  const white = [0, 2, 4, 5, 7, 9, 11];
+  for (let m = 0; m <= 127; m++) {
+    const pc = ((m % 12) + 12) % 12;
+    const y = H - (m / 127) * H;
+    const h = H / 127;
+    if (white.includes(pc)) { g.fillStyle = '#eef3fb'; g.fillRect(2, y, keysW - 4, h); }
+  }
+  // 音符（当前窗口 ±1.4s 内）
+  const win0 = nowSec - 0.2, win1 = nowSec + 1.2, span = win1 - win0;
+  for (let ti = 0; ti < s.tracks.length; ti++) {
+    const tr = s.tracks[ti];
+    if (tr.isDrum) continue;
+    g.fillStyle = colorForTrack(ti);
+    for (const n of tr.notes) {
+      const t0 = s.baseSec(n.start), t1 = s.baseSec(n.end);
+      if (t1 < win0 || t0 > win1) continue;
+      const x = keysW + (t0 - win0) / span * (W - keysW);
+      const w = Math.max(2, (t1 - t0) / span * (W - keysW));
+      const y = H - (n.midi / 127) * H;
+      g.globalAlpha = 0.85;
+      g.fillRect(x, y, w, Math.max(2, H / 127));
+    }
+  }
+  g.globalAlpha = 1;
+  // 播放头
+  const px = keysW + (nowSec - win0) / span * (W - keysW);
+  g.fillStyle = 'rgba(255,92,108,.9)'; g.fillRect(px, 0, 2, H);
+  g.fillStyle = '#d6dee9'; g.font = '14px Consolas'; g.fillText(new Date(tick).toISOString ? '' : '', 8, 20);
+}
+const VE = { running: false, cancel: false, rec: null, timer: null };
+async function startBackgroundVideo() {
+  if (!App.song || VE.running) return;
+  VE.running = true; VE.cancel = false;
+  const fps = parseInt($('#veFps').value, 10) || 30;
+  const [W, H] = ($('#veRes').value || '1280x720').split('x').map(Number);
+  const durSel = parseInt($('#veDur').value, 10);
+  const sec = durSel === 0 ? Math.min(App.song.totalSec, 120) : durSel;
+  const prog = $('#veProgress'), fill = $('#veFill'), pct = $('#vePct'), st = $('#veStatus');
+  prog.classList.remove('hidden'); $('#btnVeCancel').classList.remove('hidden');
+  const setP = p => { fill.style.width = p + '%'; pct.textContent = Math.round(p) + '%'; };
+  try {
+    // 1) 离线渲染整曲音频（不播放）
+    st.textContent = t('准备音频（离线渲染）…'); setP(2);
+    const audioBuf = await renderOffline(App.song, { rate: 44100, scale: 1, gain: 1, mode: 'auto' });
+    const wavBytes = new Uint8Array(await bufferToWav(audioBuf).arrayBuffer());
+    // 2) 离屏画布后台录制
+    st.textContent = t('后台录制中（可继续使用应用）…');
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const g = cv.getContext('2d');
+    const mime = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find(m => { try { return MediaRecorder.isTypeSupported(m); } catch (e) { return false; } });
+    if (!mime) throw new Error('no supported mime');
+    const stream = cv.captureStream(fps);
+    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 12e6 });
+    VE.rec = rec; const chunks = [];
+    rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+    const stopped = new Promise(res => { rec.onstop = res; });
+    rec.start(500);
+    const start = performance.now();
+    await new Promise(resolve => {
+      const step = () => {
+        if (VE.cancel) { if (rec.state !== 'inactive') rec.stop(); resolve(); return; }
+        const el = (performance.now() - start) / 1000;
+        if (el >= sec) { if (rec.state !== 'inactive') rec.stop(); resolve(); return; }
+        const tick = App.song.secToTick(el);
+        drawVideoFrame(cv, g, tick, W, H);
+        setP(Math.min(95, 5 + el / sec * 55));
+        requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    });
+    await stopped;
+    if (VE.cancel) { st.textContent = t('已取消'); return; }
+    const blob = new Blob(chunks, { type: 'video/webm' });
+    if (!blob.size) throw new Error('recorded empty');
+    // 3) 合成 MP4（视频 + 离线音频）
+    st.textContent = t('转码中…'); setP(96);
+    const videoBytes = new Uint8Array(await blob.arrayBuffer());
+    const r = await fuBridge.transcodeVideo(videoBytes, wavBytes);
+    if (r && r.ok) { setP(100); st.textContent = t('导出完成：') + r.path; toast(t('视频导出完成：') + r.path, 'ok'); }
+    else if (r && r.canceled) st.textContent = t('已取消');
+    else throw new Error((r && r.error) || 'transcode failed');
+  } catch (e) {
+    st.textContent = t('导出失败：') + (e && e.message || e);
+    toast(t('视频导出失败：') + (e && e.message || e), 'err');
+  } finally {
+    VE.running = false; VE.rec = null;
+    $('#btnVeCancel').classList.add('hidden');
+  }
+}
+function bindVideoExport() {
+  $('#btnVeStart').addEventListener('click', startBackgroundVideo);
+  $('#btnVeCancel').addEventListener('click', () => { VE.cancel = true; });
+}
 function bindConvert() {
   // SoundFont：内置音源列表（随应用分发），用户直接选择；空选项=内置合成器兜底
   window.__sfList = [];
@@ -6883,7 +7003,7 @@ function bindConvert() {
       if (window.fuBridge && fuBridge.saveSettings) { try { await fuBridge.saveSettings({ soundfont_id: id, soundfont_path: font.path }); } catch (e) {} }
     } else { populateSfSel(FU_SETTINGS.soundfont_id || ''); }
   });
-  $('#btnExportVideo').addEventListener('click', exportMp4);
+  $('#btnExportVideo').addEventListener('click', () => { $('#videoExportOverlay').classList.remove('hidden'); });
   ['#convPreset', '#convTempo', '#convRate', '#convRange'].forEach(id => customSelect($(id)));
   const gain = $('#convGain');
   customSlider(gain);
@@ -8929,7 +9049,7 @@ function init() {
   App.roll = new RollView($('#rollCanvas'), $('#rollHud'));
   App.editor = new Editor($('#editCanvas'));
   bindZoomFabs();
-  bindBar(); bindEditor(); bindScore(); bindConvert(); bindTranscribe(); bindRefine(); bindLogPanels(); bindKeys(); bindChrome(); bindMixer();
+  bindBar(); bindEditor(); bindScore(); bindConvert(); bindVideoExport(); bindTranscribe(); bindRefine(); bindLogPanels(); bindKeys(); bindChrome(); bindMixer();
   bindSettings(); bindPlugins(); bindGuide(); bindPresets();
   // 歌单（IndexedDB 异步载入；含 v1.0 localStorage 资料库迁移）
   plInit();
