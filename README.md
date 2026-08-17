@@ -2,73 +2,76 @@
 
 **离线音频转 MIDI 一条龙工具** —— 转录、修正、编辑、演奏、可视化、分析、乐谱，全程本地运行，无需联网。
 
+> 当前版本：**v1.2.0**（Windows / macOS / Linux 安装包，内置 Python 运行时与转录模型）
+
 ## 项目简介
 
-FuFumidi 是一款基于 Electron 的**纯离线**音频转 MIDI 桌面应用。内置 Python 运行时，音频文件全部在本地处理，**不上传任何数据**。
+FuFumidi 是一款基于 Electron 的**纯离线**音频转 MIDI 桌面应用。音频文件全部在本地处理，**不上传任何数据**。
 
 内置三套完全离线的转录引擎：
 
-- **通用模式**（basic-pitch，ONNX）：适用于人声 / 乐器等通用场景（兼人声分离）；
+- **通用模式**（basic-pitch，ONNX，int8 量化）：适用于人声 / 乐器等通用场景；
 - **钢琴模式**（piano-transcription，PyTorch）：钢琴专用，还原力度与踏板；
 - **分离模式**（demucs，PyTorch）：先做人声 / 乐器分离，再对分离后的音轨转录。
 
-引擎支持 **GPU 自动检测**（NVIDIA CUDA / AMD·Intel DirectML / CPU 兜底），并提供三档性能模式（quality / balanced / fast），按你的 CPU 核数与显卡自动推荐档位，低配置机器也能流畅转录。
+引擎支持 **GPU 自动检测**（NVIDIA CUDA / AMD·Intel DirectML / CPU 兜底），并提供三档性能模式（quality / balanced / fast），按 CPU 核数与显卡自动推荐档位。
+
+## v1.2.0 新功能
+
+- **MIDI 歌单**：文件 / 文件夹批量导入、收藏、多歌单、拖拽排序，数据存 IndexedDB；
+- **编辑器增强**：响度调整、踏板事件、BPM 修改、按轨 / 全局音色、智能配器、原音频波形轨与起音吸附；
+- **完整 GM 音色库**：128 个 GM 音色 + 内置 GeneralUser SoundFont（无需外部 SF2/SF3）；
+- **乐谱多格式**：五线谱 / 简谱 / 吉他六线谱 / 贝斯四线谱 / 对照；MusicXML 导入；PNG / PDF 导出；
+- **批量转录队列**：多文件 / 整个文件夹顺序转录，暂停、继续、重试；
+- **插件系统**：自定义视图 / 脚本命令 / 日志；
+- **Web MIDI 输出**、**分轨导出**、**智能伴奏**；
+- **后台 MP4 导出**：不打断使用、最小化也能继续录制；复用原可视化布局（音符瀑布 + 频谱 / 示波器 / 琴键），H.264 + AAC 音画同步；
+- **模型管理**：模型注册表清单，钢琴转录模型官方源一键下载（进度 / 取消 / 失败清理）。
 
 ## 功能特性
 
-- **七个视图一体**：演奏 / 编辑 / 可视化 / 分析 / 乐谱 / 转录 / 转换，一次导入、全程无缝衔接；
-- **三引擎离线转录**：通用、钢琴、人声分离三种模式随切随用，支持**拖放或对话框导入**音频；
-- **智能修正（refine）**：转录完成后一键精修 —— 对齐起音、还原力度、声部平衡、清理杂音；
-- **内置预设**：内置「人声：最优」「钢琴：最优」两个推荐预设并设为默认，可排序、删除、一键恢复，切换引擎模式自动套用对应预设；
-- **高级转录参数**：最短音符、起音判定、音符合并间隔、输出鼓组节奏轨等可调；
-- **中英双语界面**：一键切换语言；
-- **主题库**：内置深色主题，可切换更多外观；
-- **插件系统**：内置插件宿主与示例插件，可扩展功能；
-- **新手引导**：首次启动的引导流程，快速上手；
-- **完整性一键修复**：启动时后台校验设置、预设、插件清单，误删可一键修复；
-- **内置 Python 运行时**：安装包自带免安装 CPython 与全部依赖，开箱即用，无需另装 Python 环境；
-- **MIDI 关联**：`.mid` / `.midi` 文件可直接双击打开。
-
-## 界面预览
-
-FuFumidi 采用统一的深色扁平设计语言（窗口底色 `#0a0f18`），以 teal 青绿色 `#00C9B1` 作为强调色贯穿全局。顶栏七个视图标签切换流畅，编辑 / 可视化与播放界面同源一体，离线状态下渲染器零依赖运行。
+- **七个视图一体**：演奏 / 编辑 / 可视化 / 分析 / 乐谱 / 转录 / 转换；
+- **三引擎离线转录** + **智能修正（refine）**：对齐起音、还原力度、声部平衡、清理杂音；
+- **内置预设**：推荐预设可排序、删除、一键恢复，切换引擎自动套用；
+- **中英双语界面**、**主题库**、**新手引导**、**完整性一键修复**；
+- **内置 Python 运行时**：开箱即用，无需另装 Python / Node / ffmpeg；
+- **MIDI 关联**：`.mid` / `.midi` 双击直接打开。
 
 ## 安装
 
-- 支持 **Windows 10 及以上**系统；Linux及Macos
-- 到 **GitHub Releases** 页面下载安装包（`FuFumidi-Setup-&lt;版本&gt;.exe`）；
-- 安装包**自带内置 Python 运行时与转录模型**，无需安装 Python、Node 或任何依赖环境，装完即用；
-- 注意：v1.0.1 安装包体积约 **556MB**（内置运行时已做瘦身，由 853MB 缩减而来）。
+支持 **Windows 10+ / macOS / Linux**。到 [GitHub Releases](https://github.com/qdTXTbp/FuFumidi/releases) 下载：
+
+| 平台 | 文件 |
+| --- | --- |
+| Windows x64 | `FuFumidi-Setup-1.2.0.exe` |
+| macOS Intel | `FuFumidi-1.2.0.dmg` / `FuFumidi-1.2.0-mac.zip` |
+| macOS Apple Silicon | `FuFumidi-1.2.0-arm64.dmg` / `FuFumidi-1.2.0-arm64-mac.zip` |
+| Linux x64 | `FuFumidi-1.2.0.AppImage` / `fufumidi_1.2.0_amd64.deb` |
+
+安装包自带内置 Python 运行时与转录模型（basic-pitch int8 量化、piano-transcription、demucs htdemucs）。
 
 ## 使用流程
 
-1. **转录**：导入音频（拖放或选择文件），选择引擎模式（通用 / 钢琴 / 分离），点击转录；
-2. **智能修正**（可选）：转录后点「开始智能修正」，得到对齐起音、还原力度的精修 MIDI；
-3. **编辑**：载入编辑器逐音符精修；
-4. **演奏 / 可视化 / 乐谱 / 分析**：在其余视图查看结果。
+1. **转录**：导入音频，选择引擎模式（通用 / 钢琴 / 分离），加入批量队列或直接转录；
+2. **智能修正**（可选）：对齐起音、还原力度、精修 MIDI；
+3. **编辑**：钢琴卷帘逐音符精修（响度 / 踏板 / BPM / 音色 / 波形吸附）；
+4. **演奏 / 可视化 / 乐谱 / 分析**：查看结果、导出 WAV / MP4 / MIDI / MusicXML / PNG / PDF。
 
-也支持直接**导入已有 MIDI**（资料库按文件名去重），并可通过**预设管理**快速切换引擎参数组合。
-
-## 版本记录
-
-完整的更新日志见 [CHANGELOG.md](CHANGELOG.md)。
-
-当前稳定版：**v1.0.1**（内置 Python 运行时瘦身至 556MB，新增两个推荐预设与预设排序 / 恢复管理）。
+也支持直接导入已有 MIDI 到歌单管理。
 
 ## 从源码构建
 
-需要本机安装 **Node.js 与 npm**：
+需要 Node.js 与 npm：
 
 ```bash
 cd app
 npm install
-npm run dist:win     # 生成 Windows 安装包（electron-builder + NSIS）
+npm run dist:win      # Windows NSIS Setup x64
+npm run dist:mac      # macOS DMG + ZIP（x64 / arm64）
+npm run dist:linux    # Linux AppImage + deb
 ```
 
-构建说明：
-
-- 内置 Python 运行时由 `scripts/bundle-python.js` 下载 python-build-standalone 自包含 CPython 并安装依赖，随后自动调用 `scripts/prune-python.js` 瘦身；
-- 转录模型等大体积文件（如 `app/models/`，约 172MB）**不纳入本仓库**，已随安装包 / 源码包在 **Releases** 中分发。
+CI（`.github/workflows/build.yml`）：推送 `v*` 标签自动构建三平台安装包、量化 basic-pitch、精简运行时并发布到 GitHub Releases。
 
 ## 开源协议
 
@@ -78,12 +81,11 @@ npm run dist:win     # 生成 Windows 安装包（electron-builder + NSIS）
 
 ## English
 
-**FuFumidi** — an offline audio-to-MIDI transcription desktop app (Electron + bundled Python runtime).
+**FuFumidi** — an offline audio-to-MIDI transcription desktop app (Electron + bundled Python runtime), v1.2.0.
 
 - **100% local**: audio never leaves your machine.
-- **Three offline engines**: Universal (basic-pitch / ONNX), Piano (piano-transcription / PyTorch), and Separate (demucs voice separation).
-- **Auto GPU detection**: CUDA, DirectML, or CPU fallback, with three performance tiers.
-- **All-in-one views**: Play / Edit / Visualize / Analyze / Score / Transcribe / Convert, plus smart refine, built-in presets, theme library, plugin system, onboarding, integrity self-check, and a bundled Python runtime — no environment setup needed.
-- **Install**: Windows 10+, download `FuFumidi-Setup-&lt;version&gt;.exe` from GitHub Releases (v1.0.1 ≈ 556MB, runtime & models included).
-- **Build from source**: `cd app && npm install && npm run dist:win` (requires Node.js + npm).
+- **Three offline engines**: Universal (basic-pitch / ONNX int8), Piano (piano-transcription / PyTorch), and Separate (demucs voice separation).
+- **v1.2.0 highlights**: MIDI playlists, editor enhancements (loudness / pedal / BPM / timbre / waveform), 128 GM instruments + built-in GeneralUser SoundFont, staff / jianpu / guitar & bass TAB scores with PNG/PDF export, batch transcription queue, plugin views, Web MIDI, stem export, background MP4 export, model manager.
+- **Install**: Windows 10+ / macOS / Linux installers on [GitHub Releases](https://github.com/qdTXTbp/FuFumidi/releases).
+- **Build**: `cd app && npm install`, then `npm run dist:win` / `dist:mac` / `dist:linux`.
 - **License**: MIT.
