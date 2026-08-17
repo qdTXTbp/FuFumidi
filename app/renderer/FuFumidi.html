@@ -1286,6 +1286,12 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
                 <option value="full">整首歌曲</option>
                 <option value="loop">选区循环</option>
               </select></div>
+              <div class="field-row"><label>视频导出</label>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <button class="ov-btn" id="btnExportVideo">导出 MP4（可视化 + 音频）</button>
+                  <span class="muted" id="videoStat" style="font-size:11px">录制当前歌曲前 30 秒</span>
+                </div>
+              </div>
             </div>
             <div class="conv-est hidden" id="convEst">
               <span class="ce-lbl">文件预估</span>
@@ -2186,6 +2192,15 @@ const I18N_MAP = {
   '人声 / 贝斯 / 其它乐器 / 鼓 四个 WAV 文件': '4 WAV files: vocals / bass / other / drums',
   ' · 分轨音频 ': ' · stem audio: ',
   ' 个（与 MIDI 同目录）': ' file(s), same folder as MIDI',
+  '视频导出不可用（当前内核不支持）': 'Video export unavailable',
+  '录制中…': 'Recording…',
+  '转码中…': 'Transcoding…',
+  '导出完成': 'Export complete',
+  '已取消': 'Canceled',
+  '导出失败': 'Export failed',
+  '视频导出完成：': 'Video exported: ',
+  '视频导出失败：': 'Video export failed: ',
+  '录制当前歌曲前 30 秒': 'Records first 30s of current song',
   '按名称': 'By name',
   '按时间': 'By time',
   /* 新增编辑能力 */
@@ -6769,6 +6784,54 @@ function updateConvEstimate() {
   val.textContent = `约 ${fmtSize(size)}`;
   $('#convEstSub').textContent = `· ${fmtTime(dur)} · ${(rate / 1000).toFixed(1)} kHz`;
 }
+/* 导出 MP4：录制可视化画布 + 内置合成音频 → 主进程用内置 ffmpeg 转码 H.264/AAC */
+async function exportMp4() {
+  if (!App.song || !App.synth || !App.player) { toast(t('请先载入 MIDI'), 'err'); return; }
+  if (typeof MediaRecorder === 'undefined' || !HTMLCanvasElement.prototype.captureStream) { toast(t('视频导出不可用（当前内核不支持）'), 'err'); return; }
+  initAudio();
+  const btn = $('#btnExportVideo'), stat = $('#videoStat');
+  if (btn) { btn.disabled = true; btn.style.opacity = .6; }
+  const setStat = (txt) => { if (stat) stat.textContent = txt; };
+  try {
+    setActiveView('viz');
+    await new Promise(r => setTimeout(r, 120));
+    const canvas = $('#vizRoll');
+    if (!canvas) throw new Error('canvas');
+    if (!App.synth.streamDest) {
+      App.synth.streamDest = App.synth.ctx.createMediaStreamDestination();
+      App.synth.analyser.connect(App.synth.streamDest);
+    }
+    const vstream = canvas.captureStream(12);
+    const astream = App.synth.streamDest.stream;
+    const tracks = vstream.getVideoTracks().concat(astream.getAudioTracks());
+    const rec = new MediaRecorder(new MediaStream(tracks), { mimeType: 'video/webm;codecs=vp8,opus' });
+    const chunks = [];
+    rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+    const stopped = new Promise(res => { rec.onstop = res; });
+    const player = App.player;
+    player.stop(); player.seekTick(0);
+    rec.start(); player.play();
+    const drawTimer = setInterval(() => { if (App.view === 'viz') viz.draw(); }, 40);
+    const sec = Math.min(App.song.totalSec, 30);
+    setStat(t('录制中…'));
+    await new Promise(r => setTimeout(r, sec * 1000 + 120));
+    player.stop(); clearInterval(drawTimer); rec.stop();
+    await stopped;
+    setStat(t('转码中…'));
+    const blob = new Blob(chunks, { type: 'video/webm' });
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    if (!window.fuBridge || !fuBridge.transcodeVideo) throw new Error('bridge');
+    const r = await fuBridge.transcodeVideo(bytes);
+    if (r && r.ok) { setStat(t('导出完成')); toast(t('视频导出完成：') + r.path, 'ok'); }
+    else if (r && r.canceled) setStat(t('已取消'));
+    else { setStat(t('导出失败')); toast(t('视频导出失败：') + (r && r.error || ''), 'err'); }
+  } catch (e) {
+    setStat(t('导出失败'));
+    toast(t('视频导出失败：') + (e && e.message || e), 'err');
+  }
+  if (btn) { btn.disabled = false; btn.style.opacity = 1; }
+}
+
 function bindConvert() {
   // SoundFont：内置音源列表（随应用分发），用户直接选择；空选项=内置合成器兜底
   window.__sfList = [];
@@ -6793,6 +6856,7 @@ function bindConvert() {
       if (window.fuBridge && fuBridge.saveSettings) { try { await fuBridge.saveSettings({ soundfont_id: id, soundfont_path: font.path }); } catch (e) {} }
     } else { populateSfSel(FU_SETTINGS.soundfont_id || ''); }
   });
+  $('#btnExportVideo').addEventListener('click', exportMp4);
   ['#convPreset', '#convTempo', '#convRate', '#convRange'].forEach(id => customSelect($(id)));
   const gain = $('#convGain');
   customSlider(gain);
