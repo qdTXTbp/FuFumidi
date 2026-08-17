@@ -717,13 +717,16 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
 }
 /* ---- 简谱 / 吉他谱 ---- */
 .score-empty{color:var(--text3);font-size:13px;padding:18px 12px;line-height:1.8;text-align:center}
-.jianpu{display:flex;flex-wrap:wrap;gap:10px 14px;padding:18px 10px;font-size:22px;line-height:1.6;color:var(--text)}
+.jianpu{display:block;padding:18px 10px;font-size:22px;line-height:2;color:var(--text)}
+.jp-cell{display:inline-block;margin:2px 8px;white-space:nowrap}
 .jp-note{font-weight:700;color:var(--accent2)}
 .jp-long::after{content:' —';color:var(--text3)}
 .jp-half::after{content:' -';color:var(--text3)}
 .jp-8{text-decoration:underline}
 .jp-16{text-decoration:underline double}
 .jp-dash{color:var(--text3);font-size:15px;margin-left:4px}
+.tab-sys{display:flex;flex-direction:column;gap:16px;padding:12px 8px}
+.tab-sys-block .tab-line{font-family:var(--mono);font-size:13px;line-height:1.55;white-space:pre;overflow-x:auto;color:var(--text2);padding:1px 0}
 .tab-lines{font-family:var(--mono);font-size:13px;line-height:1.9;color:var(--text2);padding:14px 10px;overflow-x:auto;white-space:pre}
 /* 动效红线：尊重系统“减少动态效果”；装饰层一律不拦截点击 */
 @media (prefers-reduced-motion: reduce){
@@ -5255,7 +5258,28 @@ function renderTabHTML(song, trkIdx, strings) {
     }
     if (!placed) return '<div class="score-empty">' + t('该轨道音高超出当前乐器范围，无法自动编配把位') + '</div>';
     const hint = `<div class="score-empty" style="padding:6px">${t('自动把位（按音高就近排布，可编辑视图调整音高）')} · ${placed} ${t('音')}</div>`;
-    return hint + '<pre class="tab-lines">' + grid.map(col => col.map(f => (f == null ? '--' : String(f).padStart(2, ' '))).join(' ')).join(' | ') + '</pre>';
+    // 平铺排版：每行 4 小节 × 每小节 8 列（八分音符步进），多行自动换行，像五线谱系统一样纵向堆叠
+    const colsPerBar = 8, barsPerLine = 4;
+    const totalBars = Math.ceil(total / colsPerBar);
+    const names = strings.length === 6 ? ['e', 'B', 'G', 'D', 'A', 'E'] : ['G', 'D', 'A', 'E'];
+    const systems = [];
+    for (let start = 0; start < totalBars; start += barsPerLine) {
+      const end = Math.min(totalBars, start + barsPerLine);
+      const lines = strings.map((_, si) => {
+        const cells = [];
+        for (let b = start; b < end; b++) {
+          const barCells = [];
+          for (let c = 0; c < colsPerBar; c++) {
+            const g = grid[b * colsPerBar + c] || [];
+            barCells.push(g[si] == null ? '--' : String(g[si]).padStart(2, ' '));
+          }
+          cells.push(barCells.join(' '));
+        }
+        return names[si] + '|' + cells.join(' | ') + '|';
+      });
+      systems.push(lines);
+    }
+    return hint + '<div class="tab-sys">' + systems.map(sys => '<div class="tab-sys-block">' + sys.map(l => '<div class="tab-line">' + esc(l) + '</div>').join('') + '</div>').join('') + '</div>';
   } catch (e) {
     return '<div class="score-empty">' + t('TAB 生成失败：') + (e && e.message || e) + '</div>';
   }
@@ -5270,6 +5294,7 @@ function renderScore() {
   scoreFlow = null;
   if (!el) return;
   el.innerHTML = '';
+  el.style.width = ''; el.style.maxWidth = ''; el.style.margin = '';
   const mode = $('#scoreMode') ? $('#scoreMode').value : 'staff';
   const jpWrap = $('#jianpuWrap'); if (jpWrap) jpWrap.innerHTML = '';
   if (mode === 'jianpu') { scoreTune = null; scoreNoteEvents = null; scoreCurEvent = -1; scoreMsPerBeat = 0; scoreRealOnsets = []; scoreFlow = null; if (!s || !tr) { setStatus(t('暂无数据')); return; } if (jpWrap) jpWrap.innerHTML = renderJianpuHTML(s, App.scoreTrack); scoreMetaTxt = (tr.name || '') + ' · ' + t('简谱'); setStatus(t('简谱已生成')); return; }
@@ -5290,12 +5315,14 @@ function renderScore() {
   const scEl = $('#scoreScroll');
   scorePadTop = scEl ? (parseFloat(getComputedStyle(scEl).paddingTop) || 0) : 0;
   const vpW = scEl ? scEl.clientWidth : 986;
+  if (scEl) scEl.scrollLeft = 0;   // 切换谱面/重渲染时回到最左，避免残留横向滚动造成“右侧空一大块”
   const cw = vpW - 56;
-  // 高密度防重叠：每小节平均音符很多时，收窄每行宽度（更早折行）+ 加大音符间距，避免符干重叠
+  // 高密度防重叠：按每小节平均音符数分档收窄行宽 + 加大音符间距，自动折成多行系统
   const density = tr.notes.length / Math.max(1, s.bars);
-  const compact = density > 80;
-  const minSpacing = compact ? 0.95 : 0.42, maxSpacing = compact ? 1.45 : 0.8;
-  let staffwidth = compact ? Math.max(300, Math.round(cw * 0.55)) : Math.max(360, Math.round(cw));
+  const compact = density > 80, mid = density > 40;
+  const minSpacing = compact ? 1.0 : mid ? 0.75 : 0.5;
+  const maxSpacing = compact ? 1.5 : mid ? 1.2 : 0.9;
+  let staffwidth = compact ? Math.max(300, Math.round(cw * 0.5)) : mid ? Math.max(320, Math.round(cw * 0.7)) : Math.max(360, Math.round(cw));
   let tunes = null;
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -5314,6 +5341,24 @@ function renderScore() {
       staffwidth = Math.max(300, Math.round(staffwidth * (vpW / w) * 0.97));
     }
     scoreTune = tunes && tunes[0] ? tunes[0] : null;
+    // 内容最窄宽度仍超过视口时（密集小节无法再折行）：自动整体缩小一档适配宽度，不留横向空白
+    let _svgEl = el.querySelector('svg');
+    let _w = _svgEl ? (parseFloat(_svgEl.getAttribute('width')) || _svgEl.getBoundingClientRect().width || 0) : 0;
+    if (_w > vpW && vpW > 0) {
+      const fitScale = Math.max(0.6, zoom * (vpW / _w) * 0.97);
+      if (fitScale < zoom) {
+        tunes = ABCJS.renderAbc(el, abc, {
+          staffwidth, wrap: { minSpacing, maxSpacing }, scale: fitScale,
+          foregroundColor: 'currentColor', add_classes: true, selectTypes: false,
+          paddingtop: 14, paddingbottom: 14, paddingleft: 8, paddingright: 8,
+        });
+        scoreTune = tunes && tunes[0] ? tunes[0] : null;
+        _svgEl = el.querySelector('svg');
+        _w = _svgEl ? (parseFloat(_svgEl.getAttribute('width')) || _svgEl.getBoundingClientRect().width || 0) : 0;
+      }
+    }
+    // 居中谱面内容：内容比视口窄时不再贴左留一大块右侧空白
+    el.style.width = 'fit-content'; el.style.maxWidth = '100%'; el.style.margin = '0 auto';
     setStatus(t('渲染完成'));
   } catch (e) { el.innerHTML = '<div class="score-empty">' + t('乐谱解析失败：') + esc(String(e.message || e)) + '</div>'; scoreTune = null; setStatus(t('生成失败')); }
   // 播放定位映射（setTiming 必须在绘制后调用）
