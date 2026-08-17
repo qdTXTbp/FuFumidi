@@ -65,16 +65,26 @@ const DEFAULT_SETTINGS = {
 function readSettings() {
   try {
     return { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(SETTINGS_PATH(), 'utf8')) };
-  } catch { return { ...DEFAULT_SETTINGS }; }
+  } catch (e) {
+    // 设置文件损坏（曾因并发写截断）→ 备份并修复，绝不反复退回默认值导致引导每次弹出
+    const p = SETTINGS_PATH();
+    try { if (fs.existsSync(p)) fs.renameSync(p, p + '.corrupt-' + Date.now()); } catch (e2) {}
+    const repaired = { ...DEFAULT_SETTINGS, guide_done: true };   // 已使用过的用户：引导不再重复
+    try { writeSettings(repaired); } catch (e3) {}
+    return repaired;
+  }
 }
 
+let _settingsWrites = Promise.resolve();
 function writeSettings(s) {
-  const p = SETTINGS_PATH();
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  // 原子写入：先写临时文件再 rename，避免中途崩溃损坏 settings.json
-  const tmp = p + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(s, null, 2), 'utf8');
-  fs.renameSync(tmp, p);
+  // 串行化原子写入：避免插件设置与应用设置并发写同一 tmp 文件导致 JSON 截断
+  _settingsWrites = _settingsWrites.then(() => {
+    const p = SETTINGS_PATH();
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    const tmp = p + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(s, null, 2), 'utf8');
+    fs.renameSync(tmp, p);
+  }).catch(() => {});
 }
 
 // ---------- Python 路径解析（跨平台 + 内置运行时优先） ----------
