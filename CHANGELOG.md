@@ -11,6 +11,10 @@
 ### 修复
 - **智能修正 NoBackendError**：`smart_midi.py` 原先直接 `librosa.load()` → `audioread`，在未安装 ffmpeg 的机器上抛 `NoBackendError`。改为统一走 `audio_io.load_audio_float32()`（soundfile 快速通道 + 内置 imageio-ffmpeg 静态 ffmpeg），打包环境无需系统 ffmpeg 即可解码 MP3/M4A 等格式；`audio_io` 自身也不再依赖 audioread。
 
+### 修复
+
+- **设置页排版修复**：引擎页「内置模型」行右侧控件 `width:100%` 会把左侧标签挤压成竖排单字列；改为 `flex:1;min-width:0` 且标签列不收缩，模型清单与刷新按钮正常横排。
+
 ### 移除
 - **移除“风格歌单 · 点击生成”**：删除 6 个程序化生成风格曲目的全部代码与侧边栏入口。
 
