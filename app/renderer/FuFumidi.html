@@ -5108,7 +5108,8 @@ function abcVoiceBars(notes, tpb, quartersPerBar, beam) {
 }
 
 // 整个 MIDI 轨道 → ABC 文本。大谱表（高/低音两行）或单谱表自动判断。
-function songToAbc(s, trkIdx) {
+// groupN：每行 ABC 放多少小节（供布局循环控制；不再逐小节硬换行导致无法铺满）
+function songToAbc(s, trkIdx, groupN = 4) {
   const tr = s.tracks[trkIdx];
   if (!tr || !tr.notes.length) return '';
   const tpb = s.tpb;
@@ -5123,19 +5124,25 @@ function songToAbc(s, trkIdx) {
   const name = String(tr.name || ('轨道 ' + (trkIdx + 1))).replace(/[\r\n|%]/g, ' ').replace(/\s+/g, ' ').trim() || ('Track ' + (trkIdx + 1));
   const beam = !!App.scoreOpts.beam;
   let h = 'X:1\nT:' + name + '\nM:' + sig.num + '/' + sig.den + '\nL:1/4\nQ:1/4=' + bpm + '\nK:' + (ABC_KEY_NAMES[sf] || 'C') + '\n';
+  const group = Math.max(1, Math.round(groupN) || 4);
   if (twoStaff) {
     h += 'V:1 clef=treble\nV:2 clef=bass\n';
     const hiBars = abcVoiceBars(high, tpb, quartersPerBar, beam);
     const loBars = abcVoiceBars(low, tpb, quartersPerBar, beam);
     const nBars = Math.max(hiBars.length, loBars.length);
     const empty = 'z' + abcDuration(quartersPerBar);
-    for (let b = 0; b < nBars; b++) {
-      h += '[V:1] ' + (hiBars[b] || empty) + ' |\n';
-      h += '[V:2] ' + (loBars[b] || empty) + ' |\n';
+    for (let start = 0; start < nBars; start += group) {
+      const end = Math.min(nBars, start + group);
+      const hiLine = [], loLine = [];
+      for (let b = start; b < end; b++) { hiLine.push(hiBars[b] || empty); loLine.push(loBars[b] || empty); }
+      h += '[V:1] ' + hiLine.join(' | ') + ' |\n';
+      h += '[V:2] ' + loLine.join(' | ') + ' |\n';
     }
   } else {
     const bars = abcVoiceBars(tr.notes, tpb, quartersPerBar, beam);
-    for (const bar of bars) h += bar + ' |\n';
+    for (let start = 0; start < bars.length; start += group) {
+      h += bars.slice(start, start + group).join(' | ') + ' |\n';
+    }
   }
   return h;
 }
@@ -5323,90 +5330,58 @@ function renderScore() {
   scoreRealOnsets = tr.notes.map(n => n.start).sort((a, b) => a - b);
   const zoom = parseFloat($('#scoreZoom').value) || 1;
   // 渲染缓存：歌曲版本/轨道/缩放/显示选项/音符数未变且已有 SVG 时跳过（避免切视图/缩放反复重渲染造成卡顿）
-  const _key = [App.songVersion || 0, App.scoreTrack, zoom, App.scoreOpts.simple ? 1 : 0, App.scoreOpts.grid ? 1 : 0, App.scoreOpts.beam ? 1 : 0, tr.notes.length].join('|');
+  const _key = [App.songVersion || 0, App.scoreTrack, zoom, App.scoreOpts.simple ? 1 : 0, App.scoreOpts.grid ? 1 : 0, App.scoreOpts.beam ? 1 : 0, tr.notes.length, $('#scoreScroll') ? $('#scoreScroll').clientWidth : 0].join('|');
   if (_scoreCacheKey === _key && el.querySelector('svg')) return;
   _scoreCacheKey = _key;
   if (typeof ABCJS === 'undefined') { el.textContent = 'ABCJS 组件未加载（离线资源缺失）'; return; }
-  const abc = songToAbc(s, App.scoreTrack);
-  // 多行折行：staffwidth = 可视宽度，乐谱按行流动（完整显示 + 渲染轻量，避免巨型单行 SVG 卡顿）。
-  // 自适应收窄 staffwidth 直到渲染出的 SVG 宽度 ≤ 视口宽：消除横向溢出/裁剪，播放跟随时每行都完整可见
-  // （abcjs 对密排乐曲会在 staffwidth 基础上外扩，故按实测 SVG 宽迭代收缩，最多 3 次）
+  const abc = null;   // ABC 文本按 groupN 小节/行生成，在布局循环内构造
   const scEl = $('#scoreScroll');
   scorePadTop = scEl ? (parseFloat(getComputedStyle(scEl).paddingTop) || 0) : 0;
   const vpW = scEl ? scEl.clientWidth : 986;
-  if (scEl) scEl.scrollLeft = 0;   // 切换谱面/重渲染时回到最左，避免残留横向滚动造成“右侧空一大块”
+  if (scEl) scEl.scrollLeft = 0;
   const cw = vpW - 56;
-  // 高密度防重叠：按每小节平均音符数分档收窄行宽 + 加大音符间距，自动折成多行系统
+  // 高密度防重叠：按每小节平均音符数分档收窄行宽 + 加大音符间距
   const density = tr.notes.length / Math.max(1, s.bars);
   const compact = density > 60, mid = density > 25;
   const minSpacing = compact ? 1.25 : mid ? 1.0 : 0.65;
   const maxSpacing = compact ? 1.7 : mid ? 1.35 : 1.0;
-  let staffwidth = compact ? Math.max(280, Math.round(cw * 0.52)) : mid ? Math.max(320, Math.round(cw * 0.72)) : Math.max(360, Math.round(cw));
-  // 每行小节数：低密度多放小节铺满行宽；中/高密度限制小节数避免过密
-  const measuresPerLine = compact ? 2 : mid ? 4 : 6;
+  // staffwidth 固定为内容宽度：行宽只由“每行小节数”决定，不因密度收窄造成短行
+  const staffwidth = Math.max(360, Math.round(cw));
   let tunes = null;
   try {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      tunes = ABCJS.renderAbc(el, abc, {
-        staffwidth,
-        wrap: { minSpacing, maxSpacing, preferredMeasuresPerLine: measuresPerLine },
-        scale: zoom,
-        foregroundColor: 'currentColor',
-        add_classes: true,
-        selectTypes: false,
-        paddingtop: 14, paddingbottom: 14, paddingleft: 8, paddingright: 8,
-      });
-      const _svgEl = el.querySelector('svg');
-      const w = _svgEl ? (parseFloat(_svgEl.getAttribute('width')) || _svgEl.getBoundingClientRect().width || 0) : 0;
-      if (!w || w <= vpW || attempt >= 2 || staffwidth <= 300) break;
-      staffwidth = Math.max(300, Math.round(staffwidth * (vpW / w) * 0.97));
+    const renderOpts = (groupN, scale) => ({
+      staffwidth,
+      wrap: { minSpacing, maxSpacing, preferredMeasuresPerLine: groupN },
+      scale,
+      foregroundColor: 'currentColor',
+      add_classes: true,
+      selectTypes: false,
+      paddingtop: 14, paddingbottom: 14, paddingleft: 8, paddingright: 8,
+    });
+    // 自适应每行小节数（不拉伸）：groupN 大→行更满；行超宽→减小 groupN；行太窄→增大 groupN
+    let groupN = compact ? 2 : mid ? 3 : 4;
+    let useScale = zoom;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const abcText = songToAbc(s, App.scoreTrack, groupN);
+      tunes = ABCJS.renderAbc(el, abcText, renderOpts(groupN, useScale));
+      let maxW = 0;
+      for (const _w of el.querySelectorAll('.abcjs-staff-wrapper')) {
+        try { maxW = Math.max(maxW, _w.getBoundingClientRect().width); } catch (e) {}
+      }
+      if (!maxW) break;
+      if (maxW > vpW * 1.02 && groupN > 1) { groupN = Math.max(1, Math.floor(groupN * 0.7)); continue; }
+      if (maxW < vpW * 0.93 && groupN < 24) { groupN = Math.min(24, Math.ceil(groupN * 1.4)); continue; }
+      if (maxW > vpW * 1.02 && groupN === 1) {
+        // 单小节本身也超宽：等比缩小（缩小不是拉伸），保持音符间距比例
+        const fitScale = Math.max(0.5, useScale * (vpW / maxW) * 0.98);
+        if (fitScale < useScale) { useScale = fitScale; continue; }
+      }
+      break;
     }
     scoreTune = tunes && tunes[0] ? tunes[0] : null;
-    // 内容最窄宽度仍超过视口时（密集小节无法再折行）：自动整体缩小一档适配宽度，不留横向空白
-    let _svgEl = el.querySelector('svg');
-    let _w = _svgEl ? (parseFloat(_svgEl.getAttribute('width')) || _svgEl.getBoundingClientRect().width || 0) : 0;
-    if (_w > vpW && vpW > 0) {
-      const fitScale = Math.max(0.6, zoom * (vpW / _w) * 0.97);
-      if (fitScale < zoom) {
-        tunes = ABCJS.renderAbc(el, abc, {
-          staffwidth, wrap: { minSpacing, maxSpacing, preferredMeasuresPerLine: measuresPerLine }, scale: fitScale,
-          foregroundColor: 'currentColor', add_classes: true, selectTypes: false,
-          paddingtop: 14, paddingbottom: 14, paddingleft: 8, paddingright: 8,
-        });
-        scoreTune = tunes && tunes[0] ? tunes[0] : null;
-        _svgEl = el.querySelector('svg');
-        _w = _svgEl ? (parseFloat(_svgEl.getAttribute('width')) || _svgEl.getBoundingClientRect().width || 0) : 0;
-      }
-    }
-    // 铺满容器：逐行 scaleX。abcjs 每行宽度略有差异（920~943），整图统一缩放
-    // 必然有行留白；对每个 staff-wrapper 单独水平缩放到容器宽度，每行都铺满。
     el.style.width = '100%'; el.style.margin = '0';
-    const _svgFill = el.querySelector('svg');
-    if (_svgFill) {
-      _svgFill.style.transform = 'none';
-      _svgFill.style.transformOrigin = '0 0';
-      _svgFill.style.width = (_svgFill.getAttribute('width') || '100%');
-      _svgFill.style.height = 'auto';
-      _svgFill.style.maxWidth = 'none';
-      const _targetW = el.clientWidth || vpW || 900;
-      const _wrappers = el.querySelectorAll('.abcjs-staff-wrapper');
-      const _staffs = el.querySelectorAll('.abcjs-staff');
-      const _items = [];
-      _wrappers.forEach(_w => _items.push(_w));
-      _staffs.forEach(_st => { if (!_st.closest('.abcjs-staff-wrapper')) _items.push(_st); });   // 首行可能是裸 staff
-      _items.forEach(_st => {
-        try {
-          const _b = _st.getBBox();
-          if (_b.width > 10 && _targetW > 10) {
-            const _ratio = _targetW / _b.width;
-            if (isFinite(_ratio) && _ratio > 0.6 && _ratio < 2.5) {
-              _st.style.transform = 'scaleX(' + _ratio + ')';
-              _st.style.transformOrigin = '0 0';
-            }
-          }
-        } catch (e) {}
-      });
-    }
+    const _svgEl = el.querySelector('svg');
+    if (_svgEl) { _svgEl.style.maxWidth = '100%'; _svgEl.style.margin = '0 auto'; }
     setStatus(t('渲染完成'));
   } catch (e) { el.innerHTML = '<div class="score-empty">' + t('乐谱解析失败：') + esc(String(e.message || e)) + '</div>'; scoreTune = null; setStatus(t('生成失败')); }
   // 播放定位映射（setTiming 必须在绘制后调用）
