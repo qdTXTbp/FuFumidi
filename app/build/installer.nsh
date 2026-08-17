@@ -1,3 +1,8 @@
+; 安装包体积优化：LZMA 固实压缩 + 数据块优化（在 electron-builder 生成的脚本之上生效）
+SetCompressor /SOLID lzma
+SetCompressorDictSize 32
+SetDatablockOptimize on
+
 ; ==========================================================================
 ; 显式引入 NSIS 扩展库（自带 include guard，重复包含无害）
 ; LogicLib：${If}/${Else}/${EndIf} 条件指令
