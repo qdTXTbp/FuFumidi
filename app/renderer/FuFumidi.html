@@ -1481,6 +1481,13 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
           </select>
         </div>
       </div>
+      <div class="field-row" style="align-items:flex-start">
+        <div><div class="fr-label">内置模型</div><div class="fr-hint">转录/分离模型清单；量化模型缺失时自动回退原始模型</div></div>
+        <div class="fr-ctl" style="width:100%;align-items:stretch;gap:6px">
+          <div id="modelList" style="width:100%;font-size:11px;color:var(--text2);min-height:24px"></div>
+          <button class="ov-btn" id="btnModelRefresh">刷新模型清单</button>
+        </div>
+      </div>
       <div class="field-row">
         <div><div class="fr-label">默认性能模式</div><div class="fr-hint">质量越高耗时越长</div></div>
         <div class="fr-ctl">
@@ -2201,6 +2208,12 @@ const I18N_MAP = {
   '视频导出完成：': 'Video exported: ',
   '视频导出失败：': 'Video export failed: ',
   '录制当前歌曲前 30 秒': 'Records first 30s of current song',
+  '模型清单不可用': 'Model list unavailable',
+  '模型清单加载失败': 'Failed to load model list',
+  '缺失': 'missing',
+  '通用转录（int8 量化）': 'Universal transcription (int8 quantized)',
+  '钢琴转录模型': 'Piano transcription model',
+  '无内置模型': 'No built-in models',
   '按名称': 'By name',
   '按时间': 'By time',
   /* 新增编辑能力 */
@@ -8242,8 +8255,18 @@ function bindSettings() {
     }
     btn.disabled = false; btn.textContent = t('自动检测');
   });
-  $('#btnTestPy').addEventListener('click', async () => {
-    const btn = $('#btnTestPy'); btn.disabled = true; btn.textContent = t('测试中…');
+  // 内置模型清单：显示量化/钢琴模型的体积与状态
+  async function refreshModelList() {
+    const el = $('#modelList'); if (!el) return;
+    if (!(window.fuBridge && fuBridge.modelList)) { el.textContent = t('模型清单不可用'); return; }
+    try {
+      const items = await fuBridge.modelList();
+      el.innerHTML = (items || []).map(i => `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed var(--border)"><span>${esc(i.name)}</span><span style="color:${i.exists ? 'var(--green)' : '#ff5c6c'};font-family:var(--mono)">${i.exists ? fmtSize(i.size) : t('缺失')}</span></div>`).join('') || t('无内置模型');
+    } catch (e) { el.textContent = t('模型清单加载失败'); }
+  }
+  $('#btnModelRefresh').addEventListener('click', refreshModelList);
+  refreshModelList();
+  $('#btnTestPy').addEventListener('click', async () => {    const btn = $('#btnTestPy'); btn.disabled = true; btn.textContent = t('测试中…');
     const state = $('#pyState'); state.className = 'probe-state'; state.textContent = t('正在调用引擎…');
     try {
       const p = await fuBridge.probe();

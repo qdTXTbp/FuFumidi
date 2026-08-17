@@ -519,7 +519,20 @@ function registerIpc() {
     });
     return r.canceled ? null : r.filePaths[0];
   });
-  // 乐谱导出 PDF：渲染当前乐谱视图为 A4 PDF（本地打印排版）
+  // 内置模型清单（转录/分离模型状态）
+  ipcMain.handle('model:list', async () => {
+    const dir = modelsDir();
+    const items = [];
+    const push = (name, p, note) => {
+      try {
+        const st = fs.statSync(p);
+        items.push({ name, path: p, size: st.size, exists: true, note: note || '' });
+      } catch (e) { items.push({ name, path: p, size: 0, exists: false, note: note || '' }); }
+    };
+    push('通用转录（int8 量化）', path.join(dir, 'basic_pitch_quant.onnx'), 'basic-pitch');
+    push('钢琴转录模型', path.join(dir, 'piano_transcription', 'note_F1=0.9677_pedal_F1=0.9186.pth'), 'piano-transcription');
+    return items;
+  });
   ipcMain.handle('score:exportPdf', async (evt) => {
     try {
       const win = BrowserWindow.fromWebContents(evt.sender);

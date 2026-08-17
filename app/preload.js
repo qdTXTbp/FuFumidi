@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   pickMusicXML: () => ipcRenderer.invoke('dialog:pickMusicXML'),
   exportScorePdf: () => ipcRenderer.invoke('score:exportPdf'),
   transcodeVideo: (data) => ipcRenderer.invoke('video:transcode', { data }),
+  modelList: () => ipcRenderer.invoke('model:list'),
   // 歌单“导入文件夹”：返回目录下所有 .mid/.midi/.kar/.rmi 文件路径
   listMidiFiles: (dir) => ipcRenderer.invoke('dir:listMidiFiles', dir),
   // 读取本地文件（转录结果回载）
