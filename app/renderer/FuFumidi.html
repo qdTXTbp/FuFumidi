@@ -45,7 +45,7 @@ input,select{font-family:inherit;color:inherit;outline:none}
 .hidden{display:none !important}
 
 /* ============================ 整体布局 ============================ */
-#app{display:grid;height:100vh;grid-template-columns:236px 1fr;grid-template-rows:1fr 96px}
+#app{display:grid;height:100vh;grid-template-columns:262px 1fr;grid-template-rows:1fr 96px}
 #sidebar{grid-area:1/1/3/2;display:flex;flex-direction:column;background:var(--bg1);border-right:1px solid var(--border)}
 #main{grid-area:1/2;display:flex;flex-direction:column;min-width:0}
 #bar{grid-area:2/1/3/3;display:flex;align-items:center;gap:18px;padding:10px 18px;background:rgba(13,19,32,.92);border-top:1px solid var(--border);backdrop-filter:blur(12px);z-index:40}
@@ -80,22 +80,38 @@ input,select{font-family:inherit;color:inherit;outline:none}
 .nav-item .ic{width:16px;height:16px;flex:none}
 .nav-item .badge{margin-left:auto;font-size:11px;color:var(--text3);font-family:var(--mono)}
 .sidebar-foot{margin-top:auto;padding:12px 16px;font-size:11px;color:var(--text3);border-top:1px solid var(--border);display:flex;justify-content:space-between}
-/* ---- MIDI 歌单 ---- */
-#playlistSel{margin:0 8px 6px;width:calc(100% - 16px)}
-.pl-toolbar{display:flex;gap:3px;padding:0 8px 5px}
-.pl-toolbar .tb-btn{flex:1;justify-content:center;font-size:11px;padding:4px 2px;border:1px solid var(--border);background:var(--bg2)}
-.pl-toolbar .tb-btn.active{background:var(--accent-dim);color:var(--accent2);border-color:var(--accent)}
-.pl-toolbar .tb-btn.danger:hover{color:#ff5c6c}
-.pl-foot{display:flex;justify-content:space-between;padding:5px 10px 0;font-size:11px;color:var(--text3)}
-.nav-item .pl-star{flex:none;width:16px;text-align:center;color:var(--text3);font-size:13px;line-height:1}
-.nav-item .pl-star.on{color:#ffd866}
-.nav-item .pl-acts{display:none;margin-left:auto;gap:1px}
-.nav-item:hover .pl-acts{display:inline-flex}
-.pl-btn{width:18px;height:18px;border-radius:5px;color:var(--text3);font-size:10px;display:grid;place-items:center;border:1px solid var(--border);background:var(--bg2);padding:0}
-.pl-btn:hover{color:var(--text);border-color:var(--border2)}
-.pl-btn.danger:hover{color:#ff5c6c}
-#plNameWrap{display:none;padding:0 8px 5px;gap:4px}
-#plNameWrap input{flex:1;min-width:0}
+/* ---- MIDI 歌单（可折叠面板 · 常驻操作区 · 歌曲列表可滚动） ---- */
+.pl-group{flex:1;display:flex;flex-direction:column;min-height:0}
+.pl-title{cursor:pointer;user-select:none;-webkit-user-select:none;padding:4px 8px 6px}
+.pl-title:hover{color:var(--text2)}
+.pl-chev{display:inline-block;font-size:10px;color:var(--accent);transition:transform .15s ease;width:12px;text-align:center}
+.pl-group.collapsed .pl-chev{transform:rotate(-90deg)}
+.pl-group.collapsed #plBody{display:none}
+.pl-head-btn{font-size:12px;padding:5px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg2);color:var(--text2);cursor:pointer;transition:.12s}
+.pl-head-btn:hover{color:var(--text);border-color:var(--border2);background:var(--card)}
+.pl-head-btn.accent{color:var(--accent2);border-color:var(--accent)}
+.pl-head-btn.accent:hover{background:var(--accent-dim)}
+#plBody{display:flex;flex-direction:column;min-height:0;flex:1}
+#playlistSel{margin:0 10px 8px;width:calc(100% - 20px);padding:8px 9px;font-size:12.5px}
+.pl-toolbar{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:0 10px 8px}
+.pl-toolbar .pl-btn2{display:flex;align-items:center;justify-content:center;gap:4px;padding:8px 4px;border-radius:9px;font-size:12px;color:var(--text2);border:1px solid var(--border);background:var(--bg2);cursor:pointer;transition:.12s}
+.pl-toolbar .pl-btn2:hover{color:var(--text);border-color:var(--border2);background:var(--card)}
+.pl-toolbar .pl-btn2.active{background:var(--accent-dim);color:var(--accent2);border-color:var(--accent);font-weight:700}
+.pl-toolbar .pl-btn2.danger:hover{color:#ff5c6c;border-color:#ff5c6c}
+#libList{overflow-y:auto;flex:1;min-height:42px;padding:0 2px;scrollbar-width:thin}
+.pl-empty{display:flex;flex-direction:column;gap:4px;align-items:center;justify-content:center;text-align:center;color:var(--text3);font-size:12px;padding:18px 12px;line-height:1.7}
+.pl-song{gap:8px;padding:9px 8px;border-radius:10px;font-size:13px}
+.pl-song .pl-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.pl-song .pl-star{flex:none;width:20px;height:22px;display:grid;place-items:center;color:var(--text3);font-size:15px;border:none;background:none;cursor:pointer;padding:0}
+.pl-song .pl-star.on{color:#ffd866;text-shadow:0 0 8px rgba(255,216,102,.45)}
+.pl-song .pl-acts{display:inline-flex;margin-left:auto;gap:3px}
+.pl-btn{width:24px;height:24px;border-radius:7px;color:var(--text3);font-size:11px;display:grid;place-items:center;border:1px solid var(--border);background:var(--bg2);padding:0;cursor:pointer;transition:.12s}
+.pl-btn:hover{color:var(--text);border-color:var(--border2);background:var(--card)}
+.pl-btn.danger:hover{color:#ff5c6c;border-color:#ff5c6c}
+.pl-foot{display:flex;justify-content:space-between;padding:7px 10px 2px;font-size:11.5px;color:var(--text3);border-top:1px solid var(--border);margin-top:6px}
+#plNameWrap{display:none;padding:0 10px 8px;gap:6px}
+#plNameWrap input{flex:1;min-width:0;padding:8px 9px;font-size:12.5px}
+#plNameWrap .tb-btn{padding:7px 10px;font-size:12px;border:1px solid var(--border);background:var(--bg2);border-radius:8px}
 
 /* ============================ 顶栏 / 视图标签 ============================ */
 #topbar{display:flex;align-items:center;justify-content:space-between;padding:10px 18px 0;flex:none}
@@ -685,18 +701,23 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
       <button id="btnImport" class="btn-primary"><span data-ic="import"></span>导入 MIDI</button>
       <input type="file" id="fileInput" accept=".mid,.midi,.kar,.rmi,audio/midi,audio/x-midi" hidden multiple>
     </div>
-    <div class="nav-group">
-      <div class="nav-group-title"><span>MIDI 歌单</span><span style="display:flex;gap:4px"><button id="btnNewPlaylist" class="tb-btn" style="font-size:11px;padding:2px 6px">+ 歌单</button><button id="btnImportFolder" class="tb-btn" style="font-size:11px;padding:2px 6px">+ 文件夹</button></span></div>
-      <div id="plNameWrap"><input id="plNameInput" class="num" placeholder="新歌单名称，回车确认"><button class="tb-btn" id="btnPlNameOk">确定</button><button class="tb-btn" id="btnPlNameCancel">取消</button></div>
-      <select id="playlistSel" class="sel"></select>
-      <div class="pl-toolbar">
-        <button class="tb-btn" id="btnPlSortName" title="按名称排序">名称</button>
-        <button class="tb-btn" id="btnPlSortDate" title="按导入时间排序">时间</button>
-        <button class="tb-btn" id="btnPlFavOnly" title="只看收藏">★ 收藏</button>
-        <button class="tb-btn danger" id="btnPlDelete" title="删除当前歌单">删歌单</button>
+    <div class="nav-group pl-group" id="plGroup">
+      <div class="nav-group-title pl-title" id="plTitle" title="点击展开 / 收起 MIDI 歌单">
+        <span style="display:flex;align-items:center;gap:5px"><span class="pl-chev" id="plChev">▼</span><span>MIDI 歌单</span></span>
+        <span style="display:flex;gap:5px"><button id="btnNewPlaylist" class="pl-head-btn" title="新建一个歌单">＋ 歌单</button><button id="btnImportFolder" class="pl-head-btn accent" title="导入整个文件夹的 MIDI 文件">＋ 文件夹</button></span>
       </div>
-      <div class="nav-list" id="libList"></div>
-      <div class="pl-foot"><span id="plCount">0 首</span><span id="plSortState">按导入时间</span></div>
+      <div id="plBody">
+        <div id="plNameWrap"><input id="plNameInput" class="num" placeholder="新歌单名称，回车确认"><button class="tb-btn" id="btnPlNameOk">确定</button><button class="tb-btn" id="btnPlNameCancel">取消</button></div>
+        <select id="playlistSel" class="sel"></select>
+        <div class="pl-toolbar">
+          <button class="pl-btn2" id="btnPlSortName" title="按歌曲名称排序（再次点击切换回导入顺序）">按名称</button>
+          <button class="pl-btn2" id="btnPlSortDate" title="按导入时间排序">按时间</button>
+          <button class="pl-btn2" id="btnPlFavOnly" title="只显示收藏的曲目">★ 收藏</button>
+          <button class="pl-btn2 danger" id="btnPlDelete" title="删除当前歌单（只剩一个歌单时改为清空）">删歌单</button>
+        </div>
+        <div class="nav-list" id="libList"></div>
+        <div class="pl-foot"><span id="plCount">0 首</span><span id="plSortState">按导入时间</span></div>
+      </div>
     </div>
     <div class="nav-group">
       <div class="nav-group-title"><span>工具</span></div>
@@ -2023,6 +2044,11 @@ const I18N_MAP = {
   '从歌单移除': 'Remove from playlist',
   '已从歌单移除': 'Removed from playlist',
   '浏览器存储不可用，无法保存歌单': 'Local storage unavailable',
+  '歌单还是空的': 'Playlist is empty',
+  '点上方「导入 MIDI」或「＋ 文件夹」': 'Click "Import MIDI" or "+ Folder" above',
+  '点击展开 / 收起 MIDI 歌单': 'Expand / collapse MIDI playlist',
+  '按名称': 'By name',
+  '按时间': 'By time',
   /* 新增编辑能力 */
   '响度 +10%': 'Loudness +10%',
   '响度 -10%': 'Loudness -10%',
@@ -5053,6 +5079,17 @@ function plIdbDelete(store, id) {
 }
 function plLoadMeta() { try { PL_STATE = Object.assign(PL_STATE, JSON.parse(localStorage.getItem(PL_KEY)) || {}); } catch (e) {} }
 function plSaveMeta() { try { localStorage.setItem(PL_KEY, JSON.stringify(PL_STATE)); } catch (e) {} }
+/* 歌单面板展开/收起：状态持久化，重渲染后不会丢 */
+function plApplyOpenState() {
+  const grp = $('#plGroup'); if (!grp) return;
+  const open = PL_STATE.groupOpen !== false;
+  grp.classList.toggle('collapsed', !open);
+  $('#plChev').textContent = open ? '▼' : '▶';
+}
+function plSetOpen(open) {
+  PL_STATE.groupOpen = !!open; plSaveMeta(); plApplyOpenState();
+}
+function plToggleOpen() { plSetOpen(PL_STATE.groupOpen === false); }
 function plActiveList() { return PL_LISTS.find(l => l.id === PL_STATE.activeId) || PL_LISTS[0]; }
 function plVisibleSongs() {
   const list = plActiveList();
@@ -5067,9 +5104,14 @@ function renderLib() {
   const songs = plVisibleSongs();
   const cnt = $('#plCount'); if (cnt) cnt.textContent = songs.length + t(' 首');
   const st = $('#plSortState'); if (st) st.textContent = PL_STATE.sortBy === 'name' ? t('按名称排序') : t('按导入时间排序');
+  if (!songs.length) {
+    el.innerHTML = `<div class="pl-empty"><span class="ic" data-ic="music" style="width:26px;height:26px;color:var(--text3)"></span><div>${esc(t('歌单还是空的'))}<br>${esc(t('点上方「导入 MIDI」或「＋ 文件夹」'))}</div></div>`;
+    injectIcons(el);
+    return;
+  }
   el.innerHTML = songs.map((s, i) => {
     const on = App.song && App.song.fileName === s.name;
-    return `<div class="nav-item ${on ? 'active' : ''}" data-song="${esc(s.id)}"><span class="pl-star ${s.fav ? 'on' : ''}" data-act="fav" title="${t('收藏/取消收藏')}">${s.fav ? '★' : '☆'}</span><span class="ic" data-ic="music" style="color:${colorForTrack(i)}"></span><span style="flex:1;overflow:hidden;text-overflow:ellipsis">${esc(s.name)}</span><span class="pl-acts"><button class="pl-btn" data-act="up" title="${t('上移')}">▲</button><button class="pl-btn" data-act="down" title="${t('下移')}">▼</button><button class="pl-btn danger" data-act="del" title="${t('从歌单移除')}">×</button></span></div>`;
+    return `<div class="nav-item pl-song ${on ? 'active' : ''}" data-song="${esc(s.id)}" title="${esc(s.name)}"><button class="pl-star ${s.fav ? 'on' : ''}" data-act="fav" title="${t('收藏/取消收藏')}">${s.fav ? '★' : '☆'}</button><span class="ic" data-ic="music" style="color:${colorForTrack(i)}"></span><span class="pl-name">${esc(s.name)}</span><span class="pl-acts"><button class="pl-btn" data-act="up" title="${t('上移')}">▲</button><button class="pl-btn" data-act="down" title="${t('下移')}">▼</button><button class="pl-btn danger" data-act="del" title="${t('从歌单移除')}">✕</button></span></div>`;
   }).join('');
   injectIcons(el);
 }
@@ -5114,16 +5156,22 @@ async function plMigrateLegacy() {
 }
 async function plInit() {
   plLoadMeta();
+  plApplyOpenState();
   await plReloadCache();
   await plMigrateLegacy();
   if (plVisibleSongs().length && !App.song) loadQueue(0);
 }
-async function plAddBytes(name, bytes) {
+async function plAddBytes(name, bytes, opts = {}) {
+  const silent = !!opts.silent;
   const db = await plDb(); if (!db) { toast(t('浏览器存储不可用，无法保存歌单'), 'err'); return null; }
   const list = plActiveList(); if (!list) return null;
   const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   const dup = (list.songs || []).find(id => PL_SONG_CACHE.get(id) && PL_SONG_CACHE.get(id).name === name);
-  if (dup) { queueIdx = plVisibleSongs().findIndex(s => s.id === dup); renderLib(); buildQueue(); return dup; }
+  if (dup) {
+    queueIdx = plVisibleSongs().findIndex(s => s.id === dup);
+    if (!silent) { renderLib(); renderPlaylistSel(); buildQueue(); }
+    return dup;
+  }
   const id = 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const rec = { id, name, size: u8.length, fav: 0, addedAt: Date.now(), bytes: u8 };
   if (!(await plIdbPut('songs', rec))) return null;
@@ -5132,7 +5180,10 @@ async function plAddBytes(name, bytes) {
   list.songs.push(id);
   await plIdbPut('lists', list);
   queueIdx = plVisibleSongs().findIndex(s => s.id === id);
-  renderLib(); renderPlaylistSel(); buildQueue();
+  if (!silent) {
+    if (PL_STATE.groupOpen === false) plSetOpen(true);   // 导入后自动展开面板，避免“收起来看不到导入结果”
+    renderLib(); renderPlaylistSel(); buildQueue();
+  }
   return id;
 }
 function addToLib(name, bytes) { plAddBytes(name, bytes); }
@@ -7421,7 +7472,16 @@ function bindChrome() {
   /* ---- MIDI 歌单（导入文件夹 / 文件、排序、收藏、新建歌单） ---- */
   const plNameWrap = $('#plNameWrap'), plNameInput = $('#plNameInput');
   const hidePlName = () => { plNameWrap.style.display = 'none'; plNameInput.value = ''; };
-  $('#btnNewPlaylist').addEventListener('click', () => { plNameWrap.style.display = 'flex'; plNameInput.focus(); });
+  // 面板折叠：点击标题栏（非按钮区域）展开 / 收起，状态持久化
+  $('#plTitle').addEventListener('click', e => {
+    if (e.target.closest('button')) return;   // 点「+ 歌单 / + 文件夹」不触发折叠
+    plToggleOpen();
+  });
+  $('#btnPlFavOnly').classList.toggle('active', PL_STATE.favOnly);
+  $('#btnNewPlaylist').addEventListener('click', () => {
+    if (PL_STATE.groupOpen === false) plSetOpen(true);
+    plNameWrap.style.display = 'flex'; plNameInput.focus();
+  });
   $('#btnPlNameCancel').addEventListener('click', hidePlName);
   const confirmNewList = async () => {
     const name = plNameInput.value.trim();
@@ -7483,11 +7543,12 @@ function bindChrome() {
       const bytes = new Uint8Array(buf);
       try { parseMidi(bytes); } catch (e) { bad++; continue; }
       const name = f.replace(/^.*[\\/]/, '');
-      await plAddBytes(name, bytes);
+      await plAddBytes(name, bytes, { silent: true });   // 静默写入：避免每导入一首就重建下拉框
       ok++;
       if (ok % 10 === 0) toast(t('已导入 ') + ok + ' / ' + files.length, 'ok');
     }
-    renderLib(); buildQueue();
+    plSetOpen(true);   // 导入完成自动展开面板，展示导入结果
+    renderPlaylistSel(); renderLib(); buildQueue();
     if (!App.song && App.queue.length) loadQueue(0);
     toast(t('文件夹导入完成：成功 ') + ok + t(' 首，失败 ') + bad + t(' 首'), ok ? 'ok' : 'err');
   });
