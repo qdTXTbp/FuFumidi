@@ -359,8 +359,14 @@ function tarExe() {
       'torch', '--index-url', 'https://download.pytorch.org/whl/cu121'], APP_DIR);
   } else if (TORCH === 'directml') {
     run(exe, ['-m', 'pip', 'install', '--disable-pip-version-check', '-q', 'torch-directml'], APP_DIR);
+  } else if (process.platform === 'linux') {
+    // Linux 的 PyPI 默认 torch 轮子包含 CUDA 运行库（安装后多出 2GB+），
+    // 用官方 CPU 索引安装 CPU-only 版，显著缩小 AppImage / deb 包体。
+    info('安装 Linux CPU 版 torch（download.pytorch.org/whl/cpu）…');
+    run(exe, ['-m', 'pip', 'install', '--disable-pip-version-check', '-q', 'torch',
+      '--index-url', 'https://download.pytorch.org/whl/cpu'], APP_DIR);
   }
-  // CPU 版 torch 由 requirements-bundle.txt 统一安装
+  // 其余平台 CPU 版 torch 由 requirements-bundle.txt 统一安装
 
   info('安装其余依赖（requirements-bundle.txt）…');
   run(exe, ['-m', 'pip', 'install', '--disable-pip-version-check', '-q', '-r', REQ], APP_DIR);
