@@ -236,8 +236,9 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
 
 /* ============================ 乐谱视图（ABCJS 五线谱） ============================ */
 #scoreWrap{flex:1;min-height:0;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--bg1);position:relative}
-#scoreScroll{flex:1;overflow:auto;padding:22px 26px;min-height:0;display:flex}
-#abcScore{flex:none;position:relative;color:var(--text);background:transparent;line-height:0}
+#scoreScroll{flex:1;overflow:auto;padding:22px 26px;min-height:0}
+#abcScore{position:relative;color:var(--text);background:transparent;line-height:0;width:100%}
+#jianpuWrap{position:relative;color:var(--text);min-height:40px;width:100%}
 #abcScore svg{display:block;max-width:none;margin:auto}
 /* 跟随播放高亮：金色发光 + 加粗，让正在演奏的音符一眼可辨 */
 #abcScore .fu-play *{fill:#ffb224 !important}
@@ -3887,25 +3888,32 @@ class Editor {
     const drawNote = (n, trk, isTarget) => {
       const x0 = this.xOf(n.start), x1 = this.xOf(n.end);
       if (x1 < this.keysW || x0 > w) return;
-      const y = this.yOf(n.midi) + 1.5, nw = Math.max(2.5, x1 - x0), nh = Math.max(3, this.pxPerMidi - 2);
+      // 短音符最小可见宽度 4px：缩到很小时仍可见、可选中；实际时值仍按真实 tick 编辑
+      const visW = Math.max(4, x1 - x0), tiny = (x1 - x0) < 4;
+      const y = this.yOf(n.midi) + 1.5, nh = Math.max(4, this.pxPerMidi - 2);
       const c = colorForTrack(trk);
       const dim = !isTarget || (syn && ((soloOn && !syn.solo[trk]) || syn.mute[trk]));
       ctx.globalAlpha = dim ? 0.12 : 0.85;
       ctx.fillStyle = c;
-      rrect(ctx, x0, y, nw, nh, Math.min(2.5, nh / 2)); ctx.fill();
+      rrect(ctx, x0, y, visW, nh, Math.min(2.5, nh / 2)); ctx.fill();
+      if (!dim && tiny) {   // 极短音符加亮边，避免缩小时“看不见”
+        ctx.globalAlpha = 0.9;
+        ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = 1;
+        rrect(ctx, x0 - 0.5, y - 0.5, visW + 1, nh + 1, 3); ctx.stroke();
+      }
       if (isTarget && selSet.has(n)) {
         ctx.globalAlpha = 1;
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.8;
-        rrect(ctx, x0 - 1, y - 1, nw + 2, nh + 2, 3); ctx.stroke();
+        rrect(ctx, x0 - 1, y - 1, visW + 2, nh + 2, 3); ctx.stroke();
         ctx.fillStyle = 'rgba(255,255,255,.16)';
-        rrect(ctx, x0, y, nw, nh, 2.5); ctx.fill();
+        rrect(ctx, x0, y, visW, nh, 2.5); ctx.fill();
       }
       // 力度条
       if (isTarget) {
-        const bh = (n.vel / 127) * (this.velH - 16);
+        const bh = Math.max(2, (n.vel / 127) * (this.velH - 16));
         ctx.globalAlpha = selSet.has(n) ? 1 : 0.55;
         ctx.fillStyle = c;
-        rrect(ctx, x0, noteBot + 8 + (this.velH - 14 - bh), nw, bh, 1.5); ctx.fill();
+        rrect(ctx, x0, noteBot + 8 + (this.velH - 14 - bh), Math.max(3, visW), bh, 1.5); ctx.fill();
       }
       ctx.globalAlpha = 1;
     };
@@ -3977,11 +3985,11 @@ class Editor {
   hitTest(x, y, onlyTarget) {
     const trg = this.target;
     for (const n of trg.notes) {
-      const x0 = this.xOf(n.start), x1 = this.xOf(n.end);
+      const x0 = this.xOf(n.start), x1 = Math.max(this.xOf(n.end), x0 + 4);   // 命中区按最小可见宽度
       const y0 = this.yOf(n.midi) - 2, y1 = y0 + this.pxPerMidi + 4;
       if (y >= y0 && y <= y1 && x >= x0 - 3 && x <= x1 + 3) {
         let edge = null;
-        if (Math.abs(x - x1) < 5) edge = 'end';
+        if (Math.abs(x - this.xOf(n.end)) < 5) edge = 'end';
         else if (Math.abs(x - x0) < 5) edge = 'start';
         return { n, edge, track: trg };
       }
@@ -3991,7 +3999,7 @@ class Editor {
       for (const tr of this.song.tracks) {
         if (tr === trg) continue;
         for (const n of tr.notes) {
-          const x0 = this.xOf(n.start), x1 = this.xOf(n.end);
+          const x0 = this.xOf(n.start), x1 = Math.max(this.xOf(n.end), x0 + 4);
           const y0 = this.yOf(n.midi) - 2, y1 = y0 + this.pxPerMidi + 4;
           if (y >= y0 && y <= y1 && x >= x0 - 3 && x <= x1 + 3) return { n, edge: null, track: tr };
         }
@@ -4003,7 +4011,7 @@ class Editor {
     const noteBot = this.cv.clientHeight - this.velH - this.audioLaneH();
     if (y < noteBot + 8 || y > this.cv.clientHeight - 6) return null;
     for (const n of this.target.notes) {
-      const x0 = this.xOf(n.start), x1 = this.xOf(n.end);
+      const x0 = this.xOf(n.start), x1 = Math.max(this.xOf(n.end), x0 + 4);
       if (x >= x0 && x <= x1 && this.yOf(n.midi) >= this.rulerH) return n;
     }
     return null;
@@ -7738,9 +7746,12 @@ async function loadSettings() {
       if (window.refreshSfSel) window.refreshSfSel(FU_SETTINGS.soundfont_id || '');
     })();
   }
-  // 新手引导：仅在“首次启动且设置确认未完成”时自动弹一次；菜单里可随时重新打开
+  // 新手引导：仅首次启动自动弹一次。弹出瞬间即持久化 done（无论用户用何种方式关闭，
+  // 都不会在下次启动重复出现）；菜单入口仍可随时手动打开。
   if (!FU_SETTINGS.guide_done && !window.__guideShown) {
     window.__guideShown = true;
+    FU_SETTINGS.guide_done = true;
+    if (window.fuBridge && fuBridge.saveSettings) { try { fuBridge.saveSettings({ guide_done: true }).catch(() => {}); } catch (e) {} }
     setTimeout(() => openGuide(), 300);
   }
 }
