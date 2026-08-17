@@ -135,6 +135,31 @@ function modelsDir() {
   const packaged = path.join(process.resourcesPath, 'models');
   return fs.existsSync(packaged) ? packaged : path.join(__dirname, 'models');
 }
+function demucsModelFile() {
+  // 内置 python 的 site-packages/demucs/remote 下已随包分发 htdemucs 权重（约 80 MB）
+  const name = '955717e8-8726e21a.th';
+  const roots = [];
+  try { roots.push(path.dirname(resolvePython())); } catch (e) {}
+  roots.push(path.join(process.resourcesPath, 'python'));
+  for (const root of roots) {
+    if (!root) continue;
+    const cands = [
+      path.join(root, 'Lib', 'site-packages', 'demucs', 'remote', name),
+      path.join(root, 'lib', 'python3.11', 'site-packages', 'demucs', 'remote', name),
+      path.join(root, 'lib', 'python3.12', 'site-packages', 'demucs', 'remote', name),
+      path.join(root, 'lib', 'python3.10', 'site-packages', 'demucs', 'remote', name),
+    ];
+    for (const c of cands) if (fs.existsSync(c)) return c;
+    try {
+      const lib = path.join(root, 'lib');
+      for (const d of fs.readdirSync(lib)) {
+        const c = path.join(lib, d, 'site-packages', 'demucs', 'remote', name);
+        if (fs.existsSync(c)) return c;
+      }
+    } catch (e) {}
+  }
+  return null;
+}
 function spawnEngine(pyArgs, opts = {}) {
   const { script = 'music2midi.py', onLog, onDone, onError, timeoutMs = 30 * 60 * 1000 } = opts;
   const py = resolvePython();
@@ -545,7 +570,8 @@ function registerIpc() {
     push('通用转录（int8 量化）', path.join(dir, 'basic_pitch_quant.onnx'), 'basic-pitch ONNX int8 量化模型（CPU 加速）');
     const pt = MODEL_REGISTRY.piano_transcription;
     push(pt.name, path.join(dir, pt.dest), pt.note, { id: pt.id, downloadable: true });
-    items.push({ id: 'demucs_htdemucs', name: '人声分离模型', path: '', size: 0, exists: false, downloadable: false, note: 'demucs htdemucs（首次使用人声分离时自动下载到本地缓存）' });
+    const dm = demucsModelFile();
+    items.push({ id: 'demucs_htdemucs', name: '人声分离模型', path: dm || '', size: dm ? (() => { try { return fs.statSync(dm).size; } catch (e) { return 0; } })() : 0, exists: !!dm, downloadable: false, note: dm ? 'demucs htdemucs 已内置（约 80 MB）' : 'demucs htdemucs（首次使用人声分离时自动下载到本地缓存）' });
     return items;
   });
   ipcMain.handle('model:cancel', async (_e, id) => {
