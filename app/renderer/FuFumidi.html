@@ -5294,7 +5294,9 @@ function renderScore() {
   scoreFlow = null;
   if (!el) return;
   el.innerHTML = '';
-  el.style.width = ''; el.style.maxWidth = ''; el.style.margin = '';
+  el.style.cssText = '';   // abcjs 会写入 height/overflow 等内联样式，切模式必须全部清除，否则新内容被顶到下方
+  // 切换谱面/重渲染时归零滚动：否则上一模式滚到下方/右侧，新内容会“看起来不显示或不在顶部”
+  const _sc0 = $('#scoreScroll'); if (_sc0) { _sc0.scrollTop = 0; _sc0.scrollLeft = 0; }
   const mode = $('#scoreMode') ? $('#scoreMode').value : 'staff';
   const jpWrap = $('#jianpuWrap'); if (jpWrap) jpWrap.innerHTML = '';
   if (mode === 'jianpu') { scoreTune = null; scoreNoteEvents = null; scoreCurEvent = -1; scoreMsPerBeat = 0; scoreRealOnsets = []; scoreFlow = null; if (!s || !tr) { setStatus(t('暂无数据')); return; } if (jpWrap) jpWrap.innerHTML = renderJianpuHTML(s, App.scoreTrack); scoreMetaTxt = (tr.name || '') + ' · ' + t('简谱'); setStatus(t('简谱已生成')); return; }
@@ -5357,8 +5359,21 @@ function renderScore() {
         _w = _svgEl ? (parseFloat(_svgEl.getAttribute('width')) || _svgEl.getBoundingClientRect().width || 0) : 0;
       }
     }
-    // 居中谱面内容：内容比视口窄时不再贴左留一大块右侧空白
-    el.style.width = 'fit-content'; el.style.maxWidth = '100%'; el.style.margin = '0 auto';
+    // 铺满容器：abcjs 会给 SVG 加 transform:scale 做自适配，这里用同源 transform
+    // 精确缩放到父容器宽度（每行谱表随之等比例铺满，不再前面空一块）
+    el.style.width = '100%'; el.style.margin = '0';
+    const _svgFill = el.querySelector('svg');
+    if (_svgFill) {
+      const _attrW = parseFloat(_svgFill.getAttribute('width')) || 0;
+      const _targetW = el.clientWidth || vpW || _attrW;
+      if (_attrW > 0 && _targetW > 0) {
+        _svgFill.style.transform = 'scale(' + (_targetW / _attrW) + ')';
+        _svgFill.style.transformOrigin = '0 0';
+        _svgFill.style.width = _attrW + 'px';
+        _svgFill.style.height = 'auto';
+        _svgFill.style.maxWidth = 'none';
+      }
+    }
     setStatus(t('渲染完成'));
   } catch (e) { el.innerHTML = '<div class="score-empty">' + t('乐谱解析失败：') + esc(String(e.message || e)) + '</div>'; scoreTune = null; setStatus(t('生成失败')); }
   // 播放定位映射（setTiming 必须在绘制后调用）
