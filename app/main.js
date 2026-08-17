@@ -338,7 +338,7 @@ function registerIpc() {
     for (const [k, flag] of Object.entries(map)) {
       if (cfg[k] !== undefined && cfg[k] !== null) args.push(flag, String(cfg[k]));
     }
-    for (const [k, flag] of Object.entries({ denoise: '--denoise', normalize: '--normalize', auto_bpm: '--auto-bpm', no_merge: '--no-merge', no_velnorm: '--no-velnorm', with_drums: '--with-drums', no_pedal: '--no-pedal' })) {
+    for (const [k, flag] of Object.entries({ denoise: '--denoise', normalize: '--normalize', auto_bpm: '--auto-bpm', no_merge: '--no-merge', no_velnorm: '--no-velnorm', with_drums: '--with-drums', no_pedal: '--no-pedal', export_stems: '--export-stems' })) {
       if (cfg[k]) args.push(flag);
     }
     const send = (line) => {

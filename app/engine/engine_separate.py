@@ -118,6 +118,24 @@ def transcribe_separate(audio_path, output_midi, params=None, log_cb=None,
         if not stems:
             raise RuntimeError("demucs 分离完成，但没有找到声部文件。")
 
+        # 导出分离后的音频分轨（人声/贝斯/其它/鼓 4 个 WAV）
+        stem_exports = []
+        if params.get("export_stems"):
+            out_base = os.path.splitext(os.path.abspath(output_midi))[0]
+            os.makedirs(os.path.dirname(out_base), exist_ok=True)
+            for key, label in STEM_ORDER:
+                src = stems.get(key)
+                if not src:
+                    continue
+                dst = f"{out_base}.{key}.wav"
+                shutil.copyfile(src, dst)
+                stem_exports.append(dst)
+                _log(log_cb, f"· 导出分轨「{label}」→ {os.path.basename(dst)}")
+        try:
+            transcribe_separate.last_stem_exports = stem_exports
+        except Exception:
+            pass
+
         _log(log_cb, "对每个声部分别转录（basic-pitch）…")
         midi = _assemble_stem_midi(stems, params, log_cb, num_threads=num_threads)
         out_dir = os.path.dirname(os.path.abspath(output_midi))

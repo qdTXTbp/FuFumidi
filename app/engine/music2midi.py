@@ -133,6 +133,7 @@ def _resolve_params(args, mode):
         if args.frame_threshold is not None: p["frame_threshold"] = args.frame_threshold
         if args.min_note_length is not None: p["minimum_note_length"] = args.min_note_length
         if args.with_drums: p["include_drums"] = True
+        if args.export_stems: p["export_stems"] = True
         if args.tempo is not None: p["midi_tempo"] = args.tempo
     # 智能预处理 / 后处理开关（各模式通用，Electron 端传入）
     if getattr(args, "denoise", False): p["denoise"] = True
@@ -168,13 +169,25 @@ def cmd_convert(args):
 
         note_count = transcribe(src, out, mode=mode, params=params, log_cb=log,
                                 perf_mode=args.perf)
+        stems = []
+        if mode == "separate" and params.get("export_stems"):
+            try:
+                import engine_separate
+                stems = list(getattr(engine_separate, "last_stem_exports", []) or [])
+            except Exception:
+                pass
     except Exception as e:
         print(f"[错误] 转录失败: {e}")
         return 1
 
     print(f"[2/2] 完成！识别出 {note_count} 个音符")
     print(f"      输出: {out}")
-    print(f"###RESULT {json.dumps({'ok': True, 'note_count': note_count, 'out': out}, ensure_ascii=False)}")
+    res = {'ok': True, 'note_count': note_count, 'out': out}
+    if stems:
+        res['stems'] = stems
+        for s in stems:
+            print(f"      分轨: {s}")
+    print(f"###RESULT {json.dumps(res, ensure_ascii=False)}")
     return 0
 
 
@@ -332,6 +345,8 @@ def build_parser():
     g.add_argument("--tempo", type=int, default=None, help="MIDI 速度 BPM（默认 120）")
     g.add_argument("--with-drums", action="store_true",
                    help="[separate] 同时输出鼓组节奏轨")
+    g.add_argument("--export-stems", action="store_true",
+                   help="[separate] 导出分离后的音频分轨 WAV（vocals/bass/other/drums）")
 
     g = parser.add_argument_group("钢琴（piano-transcription）参数")
     g.add_argument("--min-note-ms", type=int, default=None, help="最小音符时长(ms)")

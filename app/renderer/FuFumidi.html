@@ -1104,6 +1104,7 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
               <div class="row-slider" id="rowMerge" style="display:none"><label>音符合并间隔<b id="mergeTxt">30ms</b></label><input type="range" id="mergeRange" min="0" max="200" value="30" step="1"><span class="num-ms"><input class="num" id="mergeNum" type="number" min="0" max="200" step="1" value="30"><em>ms</em></span></div>
               <div class="switch-line" id="rowPedal"><label class="switch-row sl-w"><span><b>包含踏板事件</b><small>还原延音踏板</small></span><input type="checkbox" id="chkPedal" checked></label></div>
               <div class="switch-line" id="rowDrums" style="display:none"><label class="switch-row sl-w"><span><b>输出鼓组节奏轨</b><small>同时转录鼓点 / 打击乐节奏</small></span><input type="checkbox" id="chkDrums"></label></div>
+              <div class="switch-line" id="rowStemExport" style="display:none"><label class="switch-row sl-w"><span><b>导出分离音频分轨</b><small>人声 / 贝斯 / 其它乐器 / 鼓 四个 WAV 文件</small></span><input type="checkbox" id="chkStemExport"></label></div>
               <div class="switch-line"><label class="switch-row sl-w"><span><b>智能降噪</b><small>降噪模式：谱减法</small></span><input type="checkbox" id="chkDenoise"></label></div>
               <div class="switch-line"><label class="switch-row sl-w"><span><b>响度平衡</b><small>响度标准化（RMS）</small></span><input type="checkbox" id="chkNormalize"></label></div>
               <div class="switch-line"><label class="switch-row sl-w"><span><b>自动检测 BPM</b><small>作为导出速度</small></span><input type="checkbox" id="chkAutoBpm"></label></div>
@@ -2181,6 +2182,10 @@ const I18N_MAP = {
   'MIDI 硬件输出已关闭': 'MIDI output off',
   '未检测到 MIDI 输出设备': 'No MIDI output device detected',
   'MIDI 硬件输出已开启：': 'MIDI output on: ',
+  '导出分离音频分轨': 'Export separated stem audio',
+  '人声 / 贝斯 / 其它乐器 / 鼓 四个 WAV 文件': '4 WAV files: vocals / bass / other / drums',
+  ' · 分轨音频 ': ' · stem audio: ',
+  ' 个（与 MIDI 同目录）': ' file(s), same folder as MIDI',
   '按名称': 'By name',
   '按时间': 'By time',
   /* 新增编辑能力 */
@@ -7019,6 +7024,7 @@ function collectTranscribeParams() {
   }
   if (TR_STATE.mode === 'separate') {
     cfg.with_drums = $('#chkDrums').checked;
+    cfg.export_stems = $('#chkStemExport').checked;
   }
   return cfg;
 }
@@ -7711,6 +7717,7 @@ function bindTranscribe() {
     $('#rowPedal').style.display = isPiano ? '' : 'none';
     $('#rowMerge').style.display = isPiano ? '' : 'none';
     $('#rowDrums').style.display = isSep ? '' : 'none';
+    $('#rowStemExport').style.display = isSep ? '' : 'none';
     $('#chkPedal').disabled = !isPiano;
     $('#chkDrums').disabled = !isSep;
     $('#minNoteTxt').textContent = $('#minNoteRange').value + 'ms';
@@ -7803,6 +7810,7 @@ function bindTranscribe() {
       }
       if (TR_STATE.mode === 'separate') {
         cfg.with_drums = $('#chkDrums').checked;
+        cfg.export_stems = $('#chkStemExport').checked;
       }
       const res = await fuBridge.convert(cfg);
       clearInterval(trProgressTimer);
@@ -7824,7 +7832,7 @@ function bindTranscribe() {
             } else { toast(t('输出文件不存在或已被删除'), 'err'); }
           } catch (err) { toast(t('载入失败：') + err.message, 'err'); }
         };
-        $('#convInfo').textContent = t('输出 ') + res.out.replace(/^.*[\\/]/, '');
+        $('#convInfo').textContent = t('输出 ') + res.out.replace(/^.*[\\/]/, '') + (res.stems && res.stems.length ? t(' · 分轨音频 ') + res.stems.length + t(' 个（与 MIDI 同目录）') : '');
         // 供「智能修正」使用同一份音频 + 本转录输出
         RF_STATE.audio = TR_STATE.audio; RF_STATE.midi = res.out;
         syncRefineInputs();
