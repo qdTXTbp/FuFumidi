@@ -6798,13 +6798,14 @@ function updateConvEstimate() {
   $('#convEstSub').textContent = `· ${fmtTime(dur)} · ${(rate / 1000).toFixed(1)} kHz`;
 }
 /* 导出 MP4：录制可视化画布 + 内置合成音频 → 主进程用内置 ffmpeg 转码 H.264/AAC */
-async function exportMp4() {
-  if (!App.song || !App.synth || !App.player) { toast(t('请先载入 MIDI'), 'err'); return; }
-  if (typeof MediaRecorder === 'undefined' || !HTMLCanvasElement.prototype.captureStream) { toast(t('视频导出不可用（当前内核不支持）'), 'err'); return; }
+async function exportMp4(opts = {}) {
+  if (!App.song || !App.synth || !App.player) { toast(t('请先载入 MIDI'), 'err'); return { ok: false, err: 'no song' }; }
+  if (typeof MediaRecorder === 'undefined' || !HTMLCanvasElement.prototype.captureStream) { toast(t('视频导出不可用（当前内核不支持）'), 'err'); return { ok: false, err: 'unsupported' }; }
   initAudio();
   const btn = $('#btnExportVideo'), stat = $('#videoStat');
   if (btn) { btn.disabled = true; btn.style.opacity = .6; }
   const setStat = (txt) => { if (stat) stat.textContent = txt; };
+  window.__mp4LastError = null; window.__mp4LastBlobSize = 0;
   try {
     setActiveView('viz');
     await new Promise(r => setTimeout(r, 120));
@@ -6814,35 +6815,48 @@ async function exportMp4() {
       App.synth.streamDest = App.synth.ctx.createMediaStreamDestination();
       App.synth.analyser.connect(App.synth.streamDest);
     }
-    const vstream = canvas.captureStream(12);
+    const vstream = canvas.captureStream(15);
     const astream = App.synth.streamDest.stream;
     const tracks = vstream.getVideoTracks().concat(astream.getAudioTracks());
-    const rec = new MediaRecorder(new MediaStream(tracks), { mimeType: 'video/webm;codecs=vp8,opus' });
+    const mime = ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm'].find(m => { try { return MediaRecorder.isTypeSupported(m); } catch (e) { return false; } });
+    if (!mime) throw new Error('no supported mime');
+    let recErr = null;
+    const rec = new MediaRecorder(new MediaStream(tracks), { mimeType: mime });
     const chunks = [];
     rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+    rec.onerror = e => { recErr = (e.error && e.error.message) || 'recorder error'; };
     const stopped = new Promise(res => { rec.onstop = res; });
     const player = App.player;
     player.stop(); player.seekTick(0);
-    rec.start(); player.play();
+    rec.start(500); player.play();
     const drawTimer = setInterval(() => { if (App.view === 'viz') viz.draw(); }, 40);
     const sec = Math.min(App.song.totalSec, 30);
     setStat(t('录制中…'));
-    await new Promise(r => setTimeout(r, sec * 1000 + 120));
-    player.stop(); clearInterval(drawTimer); rec.stop();
+    await new Promise(r => setTimeout(r, sec * 1000 + 150));
+    player.stop(); clearInterval(drawTimer);
+    if (rec.state !== 'inactive') rec.stop();
     await stopped;
-    setStat(t('转码中…'));
+    if (recErr) throw new Error(recErr);
     const blob = new Blob(chunks, { type: 'video/webm' });
+    window.__mp4LastBlobSize = blob.size;
+    if (!blob.size) throw new Error('recorded empty');
+    if (opts.testOnly) return { ok: true, size: blob.size };
+    setStat(t('转码中…'));
     const bytes = new Uint8Array(await blob.arrayBuffer());
     if (!window.fuBridge || !fuBridge.transcodeVideo) throw new Error('bridge');
     const r = await fuBridge.transcodeVideo(bytes);
-    if (r && r.ok) { setStat(t('导出完成')); toast(t('视频导出完成：') + r.path, 'ok'); }
-    else if (r && r.canceled) setStat(t('已取消'));
-    else { setStat(t('导出失败')); toast(t('视频导出失败：') + (r && r.error || ''), 'err'); }
+    if (r && r.ok) { setStat(t('导出完成')); toast(t('视频导出完成：') + r.path, 'ok'); return { ok: true, path: r.path }; }
+    if (r && r.canceled) { setStat(t('已取消')); return { ok: false, canceled: true }; }
+    throw new Error((r && r.error) || 'transcode failed');
   } catch (e) {
+    window.__mp4LastError = (e && e.message) || String(e);
     setStat(t('导出失败'));
-    toast(t('视频导出失败：') + (e && e.message || e), 'err');
+    toast(t('视频导出失败：') + window.__mp4LastError, 'err');
+    if (opts.testOnly) return { ok: false, err: window.__mp4LastError };
+    return { ok: false, err: window.__mp4LastError };
+  } finally {
+    if (btn) { btn.disabled = false; btn.style.opacity = 1; }
   }
-  if (btn) { btn.disabled = false; btn.style.opacity = 1; }
 }
 
 function bindConvert() {
