@@ -80,8 +80,8 @@ input,select{font-family:inherit;color:inherit;outline:none}
 .nav-item .ic{width:16px;height:16px;flex:none}
 .nav-item .badge{margin-left:auto;font-size:11px;color:var(--text3);font-family:var(--mono)}
 .sidebar-foot{margin-top:auto;padding:12px 16px;font-size:11px;color:var(--text3);border-top:1px solid var(--border);display:flex;justify-content:space-between}
-/* ---- MIDI 歌单（可折叠面板 · 常驻操作区 · 歌曲列表可滚动） ---- */
-.pl-group{flex:1;display:flex;flex-direction:column;min-height:0}
+/* ---- MIDI 歌单（可折叠面板 · 拖动排序 · 列表内滚动，不挤压下方工具区） ---- */
+.pl-group{flex:0 1 auto;display:flex;flex-direction:column;min-height:60px;max-height:56%}
 .pl-title{cursor:pointer;user-select:none;-webkit-user-select:none;padding:4px 8px 6px}
 .pl-title:hover{color:var(--text2)}
 .pl-chev{display:inline-block;font-size:10px;color:var(--accent);transition:transform .15s ease;width:12px;text-align:center}
@@ -100,12 +100,18 @@ input,select{font-family:inherit;color:inherit;outline:none}
 .pl-toolbar .pl-btn2.danger:hover{color:#ff5c6c;border-color:#ff5c6c}
 #libList{overflow-y:auto;flex:1;min-height:42px;padding:0 2px;scrollbar-width:thin}
 .pl-empty{display:flex;flex-direction:column;gap:4px;align-items:center;justify-content:center;text-align:center;color:var(--text3);font-size:12px;padding:18px 12px;line-height:1.7}
-.pl-song{gap:8px;padding:9px 8px;border-radius:10px;font-size:13px}
+.pl-song{gap:7px;padding:9px 8px;border-radius:10px;font-size:13px;cursor:pointer}
+.pl-song.dragging{opacity:.38}
+.pl-song.drag-before{box-shadow:0 -2px 0 0 var(--accent)}
+.pl-song.drag-after{box-shadow:0 2px 0 0 var(--accent)}
+.pl-drag{flex:none;width:14px;display:grid;place-items:center;color:var(--text3);font-size:13px;letter-spacing:-1px;cursor:grab;user-select:none;-webkit-user-select:none;padding:0;background:none;border:none}
+.pl-drag:hover{color:var(--accent2)}
+.pl-drag:active{cursor:grabbing}
 .pl-song .pl-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .pl-song .pl-star{flex:none;width:20px;height:22px;display:grid;place-items:center;color:var(--text3);font-size:15px;border:none;background:none;cursor:pointer;padding:0}
 .pl-song .pl-star.on{color:#ffd866;text-shadow:0 0 8px rgba(255,216,102,.45)}
 .pl-song .pl-acts{display:inline-flex;margin-left:auto;gap:3px}
-.pl-btn{width:24px;height:24px;border-radius:7px;color:var(--text3);font-size:11px;display:grid;place-items:center;border:1px solid var(--border);background:var(--bg2);padding:0;cursor:pointer;transition:.12s}
+.pl-btn{width:24px;height:24px;border-radius:7px;color:var(--text3);font-size:12px;display:grid;place-items:center;border:1px solid var(--border);background:var(--bg2);padding:0;cursor:pointer;transition:.12s}
 .pl-btn:hover{color:var(--text);border-color:var(--border2);background:var(--card)}
 .pl-btn.danger:hover{color:#ff5c6c;border-color:#ff5c6c}
 .pl-foot{display:flex;justify-content:space-between;padding:7px 10px 2px;font-size:11.5px;color:var(--text3);border-top:1px solid var(--border);margin-top:6px}
@@ -622,9 +628,15 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
 .ov-foot{display:flex;justify-content:flex-end;gap:10px;margin-top:18px;padding-top:14px;border-top:1px solid var(--border)}
 /* 预设管理 */
 .pm-list{display:flex;flex-direction:column;gap:8px;max-height:46vh;overflow-y:auto;margin-top:8px;padding-right:2px}
-.pm-row{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:11px;background:var(--bg2);transition:.12s}
+.pm-row{display:flex;align-items:center;gap:8px;padding:9px 10px;border:1px solid var(--border);border-radius:11px;background:var(--bg2);transition:.12s}
 .pm-row:hover{border-color:var(--border2);background:var(--card)}
 .pm-row.sel{border-color:var(--accent)}
+.pm-row.dragging{opacity:.38}
+.pm-row.drag-before{box-shadow:0 -2px 0 0 var(--accent)}
+.pm-row.drag-after{box-shadow:0 2px 0 0 var(--accent)}
+.pm-handle{flex:none;width:18px;color:var(--text3);cursor:grab;font-size:13px;letter-spacing:-1px;user-select:none;-webkit-user-select:none;display:grid;place-items:center}
+.pm-handle:hover{color:var(--accent2)}
+.pm-handle:active{cursor:grabbing}
 .pm-btn{width:26px;height:26px;flex:none;border-radius:8px;background:var(--bg1);border:1px solid var(--border);color:var(--text3);display:grid;place-items:center;cursor:pointer;transition:.12s;font-size:12px;line-height:1}
 .pm-btn:hover{color:var(--accent);border-color:var(--accent)}
 .pm-btn:disabled{opacity:.3;cursor:default}
@@ -710,8 +722,6 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
         <div id="plNameWrap"><input id="plNameInput" class="num" placeholder="新歌单名称，回车确认"><button class="tb-btn" id="btnPlNameOk">确定</button><button class="tb-btn" id="btnPlNameCancel">取消</button></div>
         <select id="playlistSel" class="sel"></select>
         <div class="pl-toolbar">
-          <button class="pl-btn2" id="btnPlSortName" title="按歌曲名称排序（再次点击切换回导入顺序）">按名称</button>
-          <button class="pl-btn2" id="btnPlSortDate" title="按导入时间排序">按时间</button>
           <button class="pl-btn2" id="btnPlFavOnly" title="只显示收藏的曲目">★ 收藏</button>
           <button class="pl-btn2 danger" id="btnPlDelete" title="删除当前歌单（只剩一个歌单时改为清空）">删歌单</button>
         </div>
@@ -1482,7 +1492,7 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
   <div class="overlay-card" style="width:560px">
     <button class="ov-close" data-close="presetOverlay" title="关闭"><span class="ic" data-ic="plus" style="transform:rotate(45deg);display:inline-flex"></span></button>
     <h3>参数预设管理</h3>
-    <p class="ov-note">↑/↓ 调整顺序 · 点击名称立即应用 · 内置预设可删除（删除后可一键恢复）</p>
+    <p class="ov-note">拖动 ⋮⋮ 调整顺序 · 点击名称立即应用 · 内置预设可删除（删除后可一键恢复）</p>
     <div class="pm-list" id="presetMgrList"></div>
     <div class="pm-foot">
       <button class="ov-btn" id="btnPresetRestore" title="恢复被隐藏的全部内置预设">恢复全部内置预设</button>
@@ -2047,6 +2057,9 @@ const I18N_MAP = {
   '歌单还是空的': 'Playlist is empty',
   '点上方「导入 MIDI」或「＋ 文件夹」': 'Click "Import MIDI" or "+ Folder" above',
   '点击展开 / 收起 MIDI 歌单': 'Expand / collapse MIDI playlist',
+  '拖动排序': 'Drag to reorder',
+  '拖动排序 · 点击播放': 'Drag to reorder · click to play',
+  '拖动 ⋮⋮ 调整顺序 · 点击名称立即应用 · 内置预设可删除（删除后可一键恢复）': 'Drag ⋮⋮ to reorder · click a name to apply · built-ins can be removed (restorable)',
   '按名称': 'By name',
   '按时间': 'By time',
   /* 新增编辑能力 */
@@ -5103,7 +5116,7 @@ function renderLib() {
   const el = $('#libList'); if (!el) return;
   const songs = plVisibleSongs();
   const cnt = $('#plCount'); if (cnt) cnt.textContent = songs.length + t(' 首');
-  const st = $('#plSortState'); if (st) st.textContent = PL_STATE.sortBy === 'name' ? t('按名称排序') : t('按导入时间排序');
+  const st = $('#plSortState'); if (st) st.textContent = t('拖动排序 · 点击播放');
   if (!songs.length) {
     el.innerHTML = `<div class="pl-empty"><span class="ic" data-ic="music" style="width:26px;height:26px;color:var(--text3)"></span><div>${esc(t('歌单还是空的'))}<br>${esc(t('点上方「导入 MIDI」或「＋ 文件夹」'))}</div></div>`;
     injectIcons(el);
@@ -5111,7 +5124,7 @@ function renderLib() {
   }
   el.innerHTML = songs.map((s, i) => {
     const on = App.song && App.song.fileName === s.name;
-    return `<div class="nav-item pl-song ${on ? 'active' : ''}" data-song="${esc(s.id)}" title="${esc(s.name)}"><button class="pl-star ${s.fav ? 'on' : ''}" data-act="fav" title="${t('收藏/取消收藏')}">${s.fav ? '★' : '☆'}</button><span class="ic" data-ic="music" style="color:${colorForTrack(i)}"></span><span class="pl-name">${esc(s.name)}</span><span class="pl-acts"><button class="pl-btn" data-act="up" title="${t('上移')}">▲</button><button class="pl-btn" data-act="down" title="${t('下移')}">▼</button><button class="pl-btn danger" data-act="del" title="${t('从歌单移除')}">✕</button></span></div>`;
+    return `<div class="nav-item pl-song ${on ? 'active' : ''}" data-song="${esc(s.id)}" draggable="true" title="${esc(s.name)}"><span class="pl-drag" data-act="handle" title="${t('拖动排序')}">⋮⋮</span><button class="pl-star ${s.fav ? 'on' : ''}" data-act="fav" title="${t('收藏/取消收藏')}">${s.fav ? '★' : '☆'}</button><span class="ic" data-ic="music" style="color:${colorForTrack(i)}"></span><span class="pl-name">${esc(s.name)}</span><span class="pl-acts"><button class="pl-btn danger" data-act="del" title="${t('从歌单移除')}">✕</button></span></div>`;
   }).join('');
   injectIcons(el);
 }
@@ -5187,6 +5200,19 @@ async function plAddBytes(name, bytes, opts = {}) {
   return id;
 }
 function addToLib(name, bytes) { plAddBytes(name, bytes); }
+/* 拖动排序：把 id 移到 targetId 之前（before=true）或之后，写入 IndexedDB 并刷新 */
+async function plMoveSong(id, targetId, before) {
+  const list = plActiveList(); if (!list) return false;
+  const arr = list.songs || [];
+  const i = arr.indexOf(id), t = arr.indexOf(targetId);
+  if (i < 0 || t < 0 || i === t) return false;
+  arr.splice(i, 1);
+  const j = arr.indexOf(targetId);
+  arr.splice(before ? j : j + 1, 0, id);
+  const ok = await plIdbPut('lists', list);
+  if (ok) { renderLib(); buildQueue(); }
+  return ok;
+}
 function buildQueue() {
   App.queue = plVisibleSongs().map((s, i) => ({ i, id: s.id, name: s.name }));
 }
@@ -6207,39 +6233,58 @@ function armDel(btn, armedText, onConfirm) {
   }, 3000);
 }
 
-// 预设管理弹层：排序 / 删除（含内置） / 恢复内置 / 点击应用
+// 预设管理弹层：拖动排序 / 删除（含内置） / 恢复内置 / 点击应用
 function renderPresetMgr() {
   const list = $('#presetMgrList');
   if (!list) return;
   const selName = $('#presetSel').value;
   const names = Object.keys(PRESETS);
   list.innerHTML = '';
-  names.forEach((n, idx) => {
+  names.forEach((n) => {
     const p = PRESETS[n];
     const builtin = PRESET_BUILTINS.indexOf(n) !== -1;
     const row = document.createElement('div');
     row.className = 'pm-row' + (n === selName ? ' sel' : '');
     row.dataset.name = n;
-    const mk = (tag, cls, txt, pm, dis) => {
-      const b = document.createElement(tag);
-      b.className = cls; b.dataset.pm = pm; b.title = t(txt);
-      if (dis !== undefined) b.disabled = dis;
-      return b;
-    };
-    const up = mk('button', 'pm-btn', '上移', 'up', idx === 0); up.textContent = '↑';
-    const dn = mk('button', 'pm-btn', '下移', 'down', idx === names.length - 1); dn.textContent = '↓';
-    const nm = mk('span', 'pm-name', '点击应用', 'apply');
+    row.draggable = true;
+    const hd = document.createElement('span');
+    hd.className = 'pm-handle';
+    hd.textContent = '⋮⋮';
+    hd.title = t('拖动排序');
+    const nm = document.createElement('span');
+    nm.className = 'pm-name';
+    nm.dataset.pm = 'apply';
+    nm.title = t('点击应用');
     nm.textContent = n;
     const tag = document.createElement('em');
     tag.className = 'pm-tag' + (builtin ? '' : ' user');
     tag.textContent = builtin ? t('内置') : '✎ ' + t('自定义');
     nm.appendChild(tag);
-    const md = mk('span', 'pm-mode', '', ''); md.textContent = MODE_SHORT[p.mode] || p.mode;
-    const del = mk('button', 'pm-del', '删除', 'del');
+    const md = document.createElement('span');
+    md.className = 'pm-mode';
+    md.textContent = MODE_SHORT[p.mode] || p.mode;
+    const del = document.createElement('button');
+    del.className = 'pm-del';
+    del.dataset.pm = 'del';
+    del.title = t('删除');
     del.innerHTML = '<span class="ic" data-ic="trash" style="width:13px;height:13px;display:inline-flex"></span>';
-    row.appendChild(up); row.appendChild(dn); row.appendChild(nm); row.appendChild(md); row.appendChild(del);
+    row.appendChild(hd); row.appendChild(nm); row.appendChild(md); row.appendChild(del);
     list.appendChild(row);
   });
+}
+
+/* 预设拖拽排序：把 name 拖到 targetName 前（before）或后，经引擎一次性落盘 */
+async function presetDragTo(name, targetName, before) {
+  const names = Object.keys(PRESETS);
+  const i = names.indexOf(name), t = names.indexOf(targetName);
+  if (i < 0 || t < 0 || i === t) return false;
+  names.splice(i, 1);
+  const j = names.indexOf(targetName);
+  const idx = before ? j : j + 1;
+  if (!(window.fuBridge && fuBridge.presets && fuBridge.presets.reorderTo)) return false;
+  const r = await fuBridge.presets.reorderTo(name, idx);
+  if (r && r.ok) { await loadPresets(false); renderPresetMgr(); return true; }
+  return false;
 }
 
 function bindPresetMgr() {
@@ -6262,13 +6307,6 @@ function bindPresetMgr() {
       }
       return;
     }
-    if (act === 'up' || act === 'down') {
-      if (!(window.fuBridge && fuBridge.presets)) return;
-      const r = await fuBridge.presets.reorder(name, act === 'up' ? -1 : 1);
-      if (r && r.ok) { await loadPresets(false); renderPresetMgr(); }
-      else toast(t('排序失败：') + (r && r.error || ''), 'err');
-      return;
-    }
     if (act === 'del') {
       if (!(window.fuBridge && fuBridge.presets)) return;
       armDel(btn, t('确认删除？'), async () => {
@@ -6281,6 +6319,42 @@ function bindPresetMgr() {
       return;
     }
   });
+  // 预设拖拽排序：拖 ⋮⋮ 或整行，上半部插入目标前、下半部插入目标后
+  let pmDragName = null;
+  const pmClearDrag = () => {
+    $$('#presetMgrList .pm-row').forEach(r => r.classList.remove('dragging', 'drag-before', 'drag-after'));
+    pmDragName = null;
+  };
+  list.addEventListener('dragstart', e => {
+    const row = e.target.closest('.pm-row');
+    if (!row) return;
+    pmDragName = row.dataset.name;
+    row.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', pmDragName); } catch (err) {}
+  });
+  list.addEventListener('dragover', e => {
+    if (!pmDragName) return;
+    const row = e.target.closest('.pm-row');
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    $$('#presetMgrList .pm-row').forEach(r => r.classList.remove('drag-before', 'drag-after'));
+    if (row && row.dataset.name !== pmDragName) {
+      const r = row.getBoundingClientRect();
+      row.classList.add((e.clientY - r.top) < r.height / 2 ? 'drag-before' : 'drag-after');
+    }
+  });
+  list.addEventListener('drop', async e => {
+    if (!pmDragName) return;
+    e.preventDefault();
+    const row = e.target.closest('.pm-row');
+    if (row && row.dataset.name !== pmDragName) {
+      const r = row.getBoundingClientRect();
+      await presetDragTo(pmDragName, row.dataset.name, (e.clientY - r.top) < r.height / 2);
+    }
+    pmClearDrag();
+  });
+  list.addEventListener('dragend', pmClearDrag);
   $('#btnPresetRestore').addEventListener('click', async () => {
     if (!(window.fuBridge && fuBridge.presets)) return;
     const r = await fuBridge.presets.restore();
@@ -7502,13 +7576,6 @@ function bindChrome() {
     PL_STATE.activeId = e.target.value; plSaveMeta();
     renderLib(); buildQueue();
   });
-  $('#btnPlSortName').addEventListener('click', () => {
-    PL_STATE.sortBy = PL_STATE.sortBy === 'name' ? 'added' : 'name'; plSaveMeta();
-    renderLib(); buildQueue(); toast(t('歌单已按') + (PL_STATE.sortBy === 'name' ? t('名称') : t('导入时间')) + t('排序'), 'ok');
-  });
-  $('#btnPlSortDate').addEventListener('click', () => {
-    PL_STATE.sortBy = 'added'; plSaveMeta(); renderLib(); buildQueue(); toast(t('歌单已按导入时间排序'), 'ok');
-  });
   $('#btnPlFavOnly').addEventListener('click', () => {
     PL_STATE.favOnly = !PL_STATE.favOnly; plSaveMeta();
     $('#btnPlFavOnly').classList.toggle('active', PL_STATE.favOnly);
@@ -7565,11 +7632,6 @@ function bindChrome() {
         const rec = await plIdbGet('songs', id);
         if (rec) { rec.fav = rec.fav ? 0 : 1; await plIdbPut('songs', rec); meta.fav = !!rec.fav; }
         renderLib(); toast(meta.fav ? t('已收藏 ') + (meta.name || '') : t('已取消收藏 '), 'ok');
-      } else if (act.dataset.act === 'up' || act.dataset.act === 'down') {
-        const arr = list.songs || [], i = arr.indexOf(id);
-        const j = act.dataset.act === 'up' ? i - 1 : i + 1;
-        if (i >= 0 && j >= 0 && j < arr.length) { [arr[i], arr[j]] = [arr[j], arr[i]]; await plIdbPut('lists', list); }
-        renderLib(); buildQueue();
       } else if (act.dataset.act === 'del') {
         list.songs = (list.songs || []).filter(x => x !== id);
         await plIdbPut('lists', list);
@@ -7581,6 +7643,42 @@ function bindChrome() {
     const idx = plVisibleSongs().findIndex(s => s.id === id);
     if (idx >= 0) loadQueue(idx);
   });
+  // 歌单拖动排序：拖 ⋮⋮ 或整行，放到目标行上半部=插到其前，下半部=插到其后
+  let plDragId = null;
+  const plClearDrag = () => {
+    $$('#libList .pl-song').forEach(r => r.classList.remove('dragging', 'drag-before', 'drag-after'));
+    plDragId = null;
+  };
+  $('#libList').addEventListener('dragstart', e => {
+    const row = e.target.closest('.pl-song');
+    if (!row) return;
+    plDragId = row.dataset.song;
+    row.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', plDragId); } catch (err) {}
+  });
+  $('#libList').addEventListener('dragover', e => {
+    if (!plDragId) return;
+    const row = e.target.closest('.pl-song');
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    $$('#libList .pl-song').forEach(r => r.classList.remove('drag-before', 'drag-after'));
+    if (row && row.dataset.song !== plDragId) {
+      const r = row.getBoundingClientRect();
+      row.classList.add((e.clientY - r.top) < r.height / 2 ? 'drag-before' : 'drag-after');
+    }
+  });
+  $('#libList').addEventListener('drop', async e => {
+    if (!plDragId) return;
+    e.preventDefault();
+    const row = e.target.closest('.pl-song');
+    if (row && row.dataset.song !== plDragId) {
+      const r = row.getBoundingClientRect();
+      await plMoveSong(plDragId, row.dataset.song, (e.clientY - r.top) < r.height / 2);
+    }
+    plClearDrag();
+  });
+  $('#libList').addEventListener('dragend', plClearDrag);
   document.getElementById('rollLegend').addEventListener('click', e => {
     const rg = e.target.closest('.rg'); if (!rg || !App.synth) return;
     const i = parseInt(rg.dataset.trk, 10);

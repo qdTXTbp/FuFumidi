@@ -50,6 +50,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
     delete: (name) => ipcRenderer.invoke('presets:delete', name),
     lastUsed: (name) => ipcRenderer.invoke('presets:lastUsed', name),
     reorder: (name, delta) => ipcRenderer.invoke('presets:reorder', name, delta),
+    reorderTo: (name, index) => ipcRenderer.invoke('presets:reorderTo', name, index),
     restore: () => ipcRenderer.invoke('presets:restore'),
   },
   // 插件系统

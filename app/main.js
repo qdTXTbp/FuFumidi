@@ -568,6 +568,17 @@ function registerIpc() {
     if (d && d.ok) return { ok: true, order: d.order || [] };
     return { ok: false, error: (r.error || r.out || 'presets:reorder failed').slice(-400) };
   });
+  // 拖拽排序：直接把预设移到展示顺序的目标下标（前端拖放一次性定位）
+  ipcMain.handle('presets:reorderTo', async (_e, name, index) => {
+    const code =
+      'import json, presets\n' +
+      'order = presets.reorder_preset_to(' + JSON.stringify((name || '').trim()) + ', ' + pyLit(index) + ')\n' +
+      "print(json.dumps({'ok': True, 'order': order}, ensure_ascii=False))";
+    const r = await runEngineInline(code);
+    const d = parsePyJson(r.out);
+    if (d && d.ok) return { ok: true, order: d.order || [] };
+    return { ok: false, error: (r.error || r.out || 'presets:reorderTo failed').slice(-400) };
+  });
   ipcMain.handle('presets:restore', async () => {
     const code =
       'import json, presets\n' +

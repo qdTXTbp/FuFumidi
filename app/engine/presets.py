@@ -192,6 +192,24 @@ def reorder_preset(name, delta):
     return names
 
 
+def reorder_preset_to(name, index):
+    """把预设 name 拖到展示顺序的 index 位置（0 起），并持久化。返回新顺序。
+
+    供界面拖拽排序使用：一次定位，不需要反复 ±1。
+    """
+    presets, _ = load_presets()
+    names = list(presets.keys())
+    if name not in names:
+        return names
+    names.remove(name)
+    index = max(0, min(len(names), int(index or 0)))
+    names.insert(index, name)
+    data = _read_file()
+    data["order"] = names
+    _write_file(data)
+    return names
+
+
 def save_last_used(name):
     data = _read_file()
     data["last_used"] = name
