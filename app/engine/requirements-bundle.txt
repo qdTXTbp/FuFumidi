@@ -16,7 +16,7 @@
 # ---- 通用转录引擎（任意歌曲/人声/乐器）----
 basic-pitch>=0.4.0
 onnxruntime>=1.16
-onnx>=1.16
+onnx>=1.16,<1.17  # <1.17：避免与 tensorflow<2.15 的 ml-dtypes~=0.4 冲突（量化步骤 ImportError: float4_e2m1fn）
 
 # ---- 钢琴专用转录引擎 ----
 piano-transcription-inference>=0.0.6
