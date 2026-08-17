@@ -491,13 +491,43 @@ function registerIpc() {
     const r = await dialog.showOpenDialog({ properties: ['openDirectory'] });
     return r.canceled ? null : r.filePaths[0];
   });
-  // SoundFont 音色库选择（SF2 / SF3）
-  ipcMain.handle('dialog:pickSoundFont', async () => {
+  // 内置 SoundFont 列表（随应用分发，用户直接选择，无需加载外部文件）
+  ipcMain.handle('soundfont:list', async () => {
+    try {
+      const dir = path.join(__dirname, 'renderer', 'vendor', 'soundfonts');
+      if (!fs.existsSync(dir)) return [];
+      return fs.readdirSync(dir)
+        .filter(f => /\.(sf2|sf3)$/i.test(f))
+        .map(f => ({ id: f, name: f.replace(/\.[^.]+$/, ''), path: path.join(dir, f) }));
+    } catch (e) { return []; }
+  });
+  // MusicXML 导入
+  ipcMain.handle('dialog:pickMusicXML', async () => {
     const r = await dialog.showOpenDialog({
       properties: ['openFile'],
-      filters: [{ name: 'SoundFont 音色库', extensions: ['sf2', 'sf3'] }],
+      filters: [{ name: 'MusicXML', extensions: ['xml', 'musicxml', 'mxl'] }],
     });
     return r.canceled ? null : r.filePaths[0];
+  });
+  // 乐谱导出 PDF：渲染当前乐谱视图为 A4 PDF（本地打印排版）
+  ipcMain.handle('score:exportPdf', async (evt) => {
+    try {
+      const win = BrowserWindow.fromWebContents(evt.sender);
+      const r = await dialog.showSaveDialog({
+        title: '导出乐谱 PDF',
+        defaultPath: path.join(app.getPath('downloads'), 'score.pdf'),
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      });
+      if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+      const data = await win.webContents.printToPDF({
+        printBackground: true,
+        pageSize: 'A4',
+        landscape: false,
+        margins: { marginType: 'default' },
+      });
+      await fs.promises.writeFile(r.filePath, data);
+      return { ok: true, path: r.filePath };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
   // 歌单“导入文件夹”：递归列出目录下的 MIDI 文件（上限 2000 / 8 层，避免误选整盘卡死）
   ipcMain.handle('dir:listMidiFiles', async (_e, dir) => {
