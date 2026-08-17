@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="dark">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'">
 <title>FuFumidi · 播放器 / 编辑器 / 转录 / 乐谱</title>
 <style>
 /* ============================ 基础与变量 ============================ */
@@ -693,6 +693,21 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
 @keyframes dragPulse{0%,100%{box-shadow:inset 0 0 26px rgba(0,201,177,.05)}50%{box-shadow:inset 0 0 84px rgba(0,201,177,.26)}}
 .empty-tip{position:absolute;inset:0;display:grid;place-items:center;flex-direction:column;gap:12px;color:var(--text3);pointer-events:none;text-align:center;z-index:2}
 .empty-tip .big-ic{width:52px;height:52px;color:var(--text3)}
+/* ---- 批量转录队列 ---- */
+.batch-list{display:flex;flex-direction:column;gap:6px;margin-top:10px;max-height:260px;overflow-y:auto;padding-right:2px}
+.batch-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:10px;background:var(--bg2);font-size:12px}
+.batch-item .b-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.batch-item .b-bar{width:90px;height:5px;border-radius:4px;background:var(--border);overflow:hidden;flex:none}
+.batch-item .b-bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+.b-badge{flex:none;font-size:10px;padding:2px 7px;border-radius:6px;border:1px solid var(--border);color:var(--text3);white-space:nowrap}
+.b-badge.pending{color:var(--text3)}
+.b-badge.running{color:var(--accent2);border-color:var(--accent)}
+.b-badge.done{color:var(--green);border-color:var(--green)}
+.b-badge.error{color:#ff5c6c;border-color:#ff5c6c}
+.b-badge.canceled{color:var(--text3);opacity:.6}
+.batch-item .b-btn{flex:none;font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg1);color:var(--text2);cursor:pointer}
+.batch-item .b-btn:hover{color:var(--accent);border-color:var(--accent)}
+.batch-item .b-btn.danger:hover{color:#ff5c6c;border-color:#ff5c6c}
 /* 动效红线：尊重系统“减少动态效果”；装饰层一律不拦截点击 */
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important;scroll-behavior:auto !important}
@@ -877,6 +892,13 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
             <span class="tb-label">BPM</span>
             <input type="number" id="editBpmInput" class="num" min="20" max="400" step="1" value="120" style="width:62px">
             <button class="tb-btn" id="btnApplyBpm" title="应用为歌曲速度（改写 tempo 事件，不影响音符 tick）">应用</button>
+          </div>
+          <div class="sep"></div>
+          <div class="tb-group">
+            <span class="tb-label">音频</span>
+            <button class="tb-btn" id="btnLoadAudio" title="载入原音频，在卷帘底部显示波形与起音">载入</button>
+            <button class="tb-btn" id="btnSnapAudio" title="选区/整轨音符吸附到最近的波形起音（±80ms）">吸附起音</button>
+            <button class="tb-btn" id="btnAudioSync" title="播放 MIDI 时同步试听原音频，检查对齐效果">试听</button>
           </div>
           <div class="sep"></div>
           <div class="tb-group">
@@ -1132,6 +1154,25 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
               <span id="refineInfo"></span>
             </div>
           </div>
+          <!-- 批量转录队列：多文件 / 文件夹 → 顺序转录 → 自动进歌单 -->
+          <div id="batchWrap" style="margin-top:18px;padding-top:16px;border-top:1px dashed var(--border)">
+            <div class="field-row"><label style="font-weight:600;color:var(--text)">批量转录队列</label><span class="muted" style="font-size:11px">拖入多个音频 / 选择整个文件夹 · 顺序转录 · 完成后自动加入歌单</span></div>
+            <div class="drop-zone" id="batchDrop" style="margin-top:10px">
+              <div class="dz-icon"><span class="ic" data-ic="transcribe"></span></div>
+              <div class="dz-txt"><b>拖入多个音频文件</b><span>或点击添加 · 支持暂停 / 继续 / 取消 / 失败重试</span></div>
+              <input type="file" id="batchFile" accept="audio/*,video/*" hidden multiple>
+            </div>
+            <div class="batch-actions" style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <button class="ov-btn" id="btnBatchAddFiles">＋ 文件</button>
+              <button class="ov-btn" id="btnBatchAddFolder">＋ 文件夹</button>
+              <button class="ov-btn primary" id="btnBatchStart">开始队列</button>
+              <button class="ov-btn" id="btnBatchPause">暂停</button>
+              <button class="ov-btn" id="btnBatchResume">继续</button>
+              <button class="ov-btn danger" id="btnBatchCancel">取消全部</button>
+              <span class="muted" id="batchStat" style="margin-left:auto;font-size:11px"></span>
+            </div>
+            <div class="batch-list" id="batchList"></div>
+          </div>
         </div>
       </section>
 
@@ -1159,6 +1200,13 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
           </div>
           <div class="conv-card conv-form">
             <div class="form-grid">
+              <div class="field-row" style="grid-column:1/-1"><label>SoundFont 音色库</label>
+                <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                  <button class="ov-btn" id="btnSfLoad">加载 SF2 / SF3</button>
+                  <button class="ov-btn" id="btnSfClear">恢复内置音色</button>
+                  <span class="muted" id="sfName" style="font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">未加载 · 使用内置音色</span>
+                </div>
+              </div>
               <div class="field-row"><label>音色风格</label><select id="convPreset">
                 <option value="auto">自动（按音色号）</option>
                 <option value="piano">钢琴</option>
@@ -1504,6 +1552,9 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
 
 <!-- ABCJS 五线谱渲染引擎（本地内置，离线可用） -->
 <script src="vendor/abcjs-min.js"></script>
+<!-- SoundFont 合成内核（FluidSynth WASM，本地内置，支持 SF2/SF3） -->
+<script src="vendor/jssynth/libfluidsynth-2.4.6-with-libsndfile.js"></script>
+<script src="vendor/jssynth/js-synthesizer.min.js"></script>
 <script>
 'use strict';
 /* =====================================================================
@@ -2133,6 +2184,25 @@ const I18N_MAP = {
   '手风琴': 'Accordion',
   '班卓琴': 'Banjo',
   '音色': 'Timbre',
+  '音频': 'Audio',
+  '载入': 'Load',
+  '吸附起音': 'Snap',
+  '试听': 'Audition',
+  '请先载入原音频（编辑工具栏「音频」按钮）': 'Load the source audio first (Audio button in the editor toolbar)',
+  '已对齐 ': 'Aligned ',
+  ' 个音符到波形起音（±80ms）': ' note(s) to waveform onsets (±80ms)',
+  '无法读取音频文件（可能超过 64MB 或文件不存在）': 'Cannot read audio (over 64MB or missing)',
+  '音频解码失败': 'Audio decode failed',
+  '音频波形已载入（编辑视图底部），可「吸附起音」或「试听」对齐': 'Waveform loaded at the bottom of the editor; use Snap or Audition to align',
+  '原音频试听已开启（随 MIDI 播放同步）': 'Audio audition on (synced with MIDI playback)',
+  '原音频试听已关闭': 'Audio audition off',
+  'SoundFont 内核未就绪': 'SoundFont engine not ready',
+  '正在加载 SoundFont…': 'Loading SoundFont…',
+  '无法读取 SoundFont 文件（超过 512MB 或不存在）': 'Cannot read SoundFont (over 512MB or missing)',
+  'SoundFont 初始化失败：': 'SoundFont init failed: ',
+  '已启用 SoundFont：': 'SoundFont enabled: ',
+  '已恢复内置合成音色': 'Restored built-in synth voices',
+  '未加载 · 使用内置音色': 'Not loaded · built-in voices',
   '全部': 'All',
   '智能': 'Smart',
   'BPM': 'BPM',
@@ -2802,6 +2872,103 @@ class Synth {
 }
 
 /* =====================================================================
+ * SoundFont 合成器（FluidSynth WASM 内核，支持 SF2/SF3）
+ * ===================================================================== */
+class SfSynth {
+  constructor(ctx) {
+    this.ctx = ctx;
+    this.usesSF = true;
+    this.master = ctx.createGain(); this.master.gain.value = 0.85;
+    this.analyser = ctx.createAnalyser();
+    this.analyser.fftSize = 2048; this.analyser.smoothingTimeConstant = 0.82;
+    this.master.connect(this.analyser); this.analyser.connect(ctx.destination);
+    this.vol = []; this.mute = []; this.solo = []; this.pan = [];
+    this.engine = null; this.node = null;
+    this.pending = new Set();
+    this.activeNotes = []; this.live = [];
+  }
+  ensure(n) { for (let i = this.vol.length; i < n; i++) { this.vol[i] = 1; this.mute[i] = false; this.solo[i] = false; this.pan[i] = 0; } }
+  effective(i) { if (this.mute[i]) return 0; if (this.solo.some(s => s) && !this.solo[i]) return 0; return this.vol[i] != null ? this.vol[i] : 1; }
+  async load(bytes, song) {
+    if (!window.JSSynth) throw new Error('SoundFont 内核未加载');
+    await JSSynth.waitForReady();
+    this.closeEngine();
+    this.engine = new JSSynth.Synthesizer();
+    this.engine.init(this.ctx.sampleRate);
+    await this.engine.loadSFont(bytes.slice(0));
+    this.node = this.engine.createAudioNode(this.ctx, 4096);
+    this.node.connect(this.master);
+    if (song) this.applySong(song);
+    this.applyRouting();
+  }
+  applySong(song) {
+    if (!this.engine || !song) return;
+    for (const tr of song.tracks) {
+      const ch = clamp(tr.ch || 0, 0, 15);
+      this.engine.midiSetChannelType(ch, !!tr.isDrum);
+      if (!tr.isDrum) this.engine.midiProgramSelect(ch, 0, 0, clamp(tr.program || 0, 0, 127));
+    }
+  }
+  setTrackProgram(ch, prog, isDrum) {
+    if (!this.engine) return;
+    ch = clamp(ch || 0, 0, 15);
+    this.engine.midiSetChannelType(ch, !!isDrum);
+    if (!isDrum) this.engine.midiProgramSelect(ch, 0, 0, clamp(prog || 0, 0, 127));
+  }
+  applyRouting() {
+    if (!this.engine) return;
+    this.ensure(this.vol.length);
+    const trs = (App.song && App.song.tracks) || [];
+    for (let i = 0; i < this.vol.length; i++) {
+      const ch = trs[i] ? clamp(trs[i].ch || 0, 0, 15) : i;
+      const v = this.effective(i);
+      const att = v <= 0 ? 960 : clamp(Math.round(-200 * Math.log10(v)), 0, 960);
+      this.engine.setGenerator(ch, 48, att);                       // InitialAttenuation → 每轨音量
+      this.engine.setGenerator(ch, 17, clamp(Math.round(500 + (this.pan[i] || 0) * 500), 0, 1000));  // Pan
+    }
+  }
+  setVolume(v) { this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.03); }
+  setTrackVol(i, v) { this.ensure(i + 1); this.vol[i] = clamp(v, 0, 1); this.applyRouting(); }
+  setTrackMute(i, b) { this.ensure(i + 1); this.mute[i] = b; this.applyRouting(); }
+  setTrackSolo(i, b) { this.ensure(i + 1); this.solo[i] = b; this.applyRouting(); }
+  setTrackPan(i, v) { this.ensure(i + 1); this.pan[i] = clamp(v, -1, 1); this.applyRouting(); }
+  noteOn(time, note, endTime) {
+    if (!this.engine) return;
+    const tr = (App.song && App.song.tracks && App.song.tracks[note.trk]) || {};
+    const ch = clamp(note.ch != null ? note.ch : (tr.ch != null ? tr.ch : 0), 0, 15);
+    const key = clamp(note.midi, 0, 127), vel = clamp(note.vel || 100, 1, 127);
+    const onDelay = Math.max(0, (time - this.ctx.currentTime) * 1000);
+    const offDelay = Math.max(onDelay + 8, (endTime - this.ctx.currentTime) * 1000);
+    const h = { t1: 0, t2: 0 };
+    h.t1 = setTimeout(() => { try { this.engine.midiNoteOn(ch, key, vel); } catch (e) {} }, onDelay);
+    h.t2 = setTimeout(() => { try { this.engine.midiNoteOff(ch, key); } catch (e) {} }, offDelay);
+    this.pending.add(h);
+    this.activeNotes.push({ midi: key, trk: note.trk || 0, vel, endTime });
+    if (this.activeNotes.length > 3000) this.activeNotes = this.activeNotes.filter(a => a.endTime > this.ctx.currentTime);
+  }
+  preview(midi, prog = 0, vel = 100, dur = 0.7) {
+    if (!this.engine) return;
+    const ch = 0, t = this.ctx.currentTime + 0.02;
+    this.engine.midiSetChannelType(ch, false);
+    this.engine.midiProgramSelect(ch, 0, 0, clamp(prog || 0, 0, 127));
+    this.noteOn(t, { midi, vel, trk: 0, ch }, t + dur);
+  }
+  allStop() {
+    for (const h of this.pending) { clearTimeout(h.t1); clearTimeout(h.t2); }
+    this.pending.clear();
+    this.activeNotes = [];
+    if (this.engine) { try { this.engine.midiAllSoundsOff(); } catch (e) {} }
+  }
+  activeNow() { const t = this.ctx.currentTime; return this.activeNotes.filter(a => a.endTime > t); }
+  pruneLive() {}
+  closeEngine() {
+    this.allStop();
+    if (this.node) { try { this.node.disconnect(); } catch (e) {} this.node = null; }
+    if (this.engine) { try { this.engine.close(); } catch (e) {} this.engine = null; }
+  }
+}
+
+/* =====================================================================
  * 播放器（lookahead 调度 + 变速 / 循环 / 跳转）
  * ===================================================================== */
 // 节拍器咔哒声：重拍用高音、普通拍用低音，短促衰减
@@ -2827,7 +2994,7 @@ class Player {
   load(song) { this.song = song; this.pausedTick = 0; this.loop = false; this.loopStart = 0; this.loopEnd = 0; this.prepare(); }
   prepare() {
     const arr = [];
-    for (const tr of this.song.tracks) for (const n of tr.notes) arr.push({ start: n.start, end: n.end, midi: n.midi, vel: n.vel, trk: tr.index, prog: tr.program, isDrum: tr.isDrum });
+    for (const tr of this.song.tracks) for (const n of tr.notes) arr.push({ start: n.start, end: n.end, midi: n.midi, vel: n.vel, trk: tr.index, prog: tr.program, isDrum: tr.isDrum, ch: tr.ch != null ? tr.ch : 0 });
     arr.sort((a, b) => a.start - b.start || a.midi - b.midi);
     this.events = arr;
   }
@@ -2942,7 +3109,70 @@ class Player {
 /* =====================================================================
  * 离线渲染（MIDI → AudioBuffer）与 WAV 编码
  * ===================================================================== */
+/* SoundFont 离线渲染：FluidSynth WASM 逐帧渲染，音质与实时播放一致 */
+async function renderOfflineSF(song, opts) {
+  if (!window.JSSynth || !(App.soundFont && App.soundFont.bytes)) throw new Error('SoundFont 未加载');
+  await JSSynth.waitForReady();
+  const rate = opts.rate || 44100, scale = opts.scale || 1, gain = opts.gain != null ? opts.gain : 1;
+  const synth = new JSSynth.Synthesizer(); synth.init(rate);
+  try {
+    await synth.loadSFont(App.soundFont.bytes.slice(0));
+    const mix = App.synth || null;
+    for (const tr of song.tracks) {
+      const ch = clamp(tr.ch || 0, 0, 15);
+      synth.midiSetChannelType(ch, !!tr.isDrum);
+      if (!tr.isDrum) synth.midiProgramSelect(ch, 0, 0, clamp(tr.program || 0, 0, 127));
+      if (mix && mix.vol) {
+        const v = mix.effective ? mix.effective(tr.index) : (mix.vol[tr.index] != null ? mix.vol[tr.index] : 1);
+        synth.setGenerator(ch, 48, v <= 0 ? 960 : clamp(Math.round(-200 * Math.log10(v)), 0, 960));
+        synth.setGenerator(ch, 17, clamp(Math.round(500 + (mix.pan && mix.pan[tr.index] || 0) * 500), 0, 1000));
+      }
+    }
+    let startTick = 0, endTick = song.totalTicks;
+    if (opts.range === 'loop' && opts.loopEnd > opts.loopStart) { startTick = opts.loopStart; endTick = opts.loopEnd; }
+    const base = song.baseSec, startBase = base(startTick);
+    const totalSec = Math.max(0, (base(endTick) - startBase) * scale);
+    const TAIL = 1.2;
+    const totalLen = Math.max(1, Math.ceil((totalSec + TAIL) * rate));
+    const evs = [];
+    for (const tr of song.tracks) {
+      const ch = clamp(tr.ch || 0, 0, 15);
+      for (const n of tr.notes) {
+        if (n.end <= startTick || n.start >= endTick) continue;
+        const t = (base(n.start) - startBase) * scale, e = (base(n.end) - startBase) * scale;
+        if (e <= t) continue;
+        evs.push({ t, on: true, ch, key: clamp(n.midi, 0, 127), vel: clamp(n.vel || 100, 1, 127) });
+        evs.push({ t: e, on: false, ch, key: clamp(n.midi, 0, 127), vel: 0 });
+      }
+    }
+    evs.sort((a, b) => a.t - b.t || (a.on === b.on ? 0 : (a.on ? -1 : 1)));
+    const L = new Float32Array(totalLen), R = new Float32Array(totalLen);
+    let cur = 0;
+    for (const ev of evs) {
+      const f = Math.max(cur, Math.min(totalLen, Math.round(ev.t * rate)));
+      if (f > cur) {
+        const cl = new Float32Array(f - cur), cr = new Float32Array(f - cur);
+        synth.render([cl, cr]);
+        L.set(cl, cur); R.set(cr, cur); cur = f;
+      }
+      if (cur >= totalLen) break;
+      if (ev.on) synth.midiNoteOn(ev.ch, ev.key, ev.vel);
+      else synth.midiNoteOff(ev.ch, ev.key);
+    }
+    if (cur < totalLen) {
+      const cl = new Float32Array(totalLen - cur), cr = new Float32Array(totalLen - cur);
+      synth.render([cl, cr]);
+      L.set(cl, cur); R.set(cr, cur);
+    }
+    const tmp = new OfflineAudioContext(2, 1, rate);
+    const buf = tmp.createBuffer(2, totalLen, rate);
+    const dl = buf.getChannelData(0), dr = buf.getChannelData(1);
+    for (let i = 0; i < totalLen; i++) { dl[i] = clamp(L[i] * gain, -1, 1); dr[i] = clamp(R[i] * gain, -1, 1); }
+    return buf;
+  } finally { try { synth.close(); } catch (e) {} }
+}
 async function renderOffline(song, opts) {
+  if (App.soundFont && App.soundFont.bytes && App.soundFontActive) return renderOfflineSF(song, opts);
   const rate = opts.rate || 44100;
   const scale = opts.scale || 1;
   const mode = opts.mode || 'auto';
@@ -3418,6 +3648,7 @@ function finalizeSong() {
   s.bars = Math.ceil(totalTicks / (s.tpb * 4));
   App.songVersion = (App.songVersion || 0) + 1;   // 编辑后递增，使乐谱渲染缓存失效
   if (App.player) { App.player.prepare(); if (App.player.pausedTick > totalTicks) App.player.pausedTick = 0; }
+  if (App.synth && App.synth.usesSF) { try { App.synth.applySong(App.song); } catch (e) {} }   // 音色/轨道变更同步到 SoundFont
 }
 /* BPM 变化后：原地重算 tempoMap 的累计秒（baseSec 闭包持有同一数组），并刷新总时长 */
 function recalcSongTiming() {
@@ -3492,6 +3723,72 @@ class Editor {
   yOf(m) { return this.rulerH + (this.viewLow - m) * this.pxPerMidi; }
   midiAtY(y) { return Math.round(this.viewLow - (y - this.rulerH) / this.pxPerMidi); }
   whiteIdx(m) { return [0, 2, 4, 5, 7, 9, 11].includes(((m % 12) + 12) % 12); }
+  audioLaneH() { return this.song && this.song.audio ? 78 : 0; }
+  /* 原音频波形轨：波形峰值 + 起音标记，与钢琴卷帘共用时间轴，用于音频/MIDI 对齐 */
+  drawAudioLane(ctx, x0, y0, w, h) {
+    const a = this.song.audio; if (!a) return;
+    ctx.fillStyle = cssVar('--bg0', '#0a0f18'); ctx.fillRect(0, y0, this.keysW, h);
+    ctx.fillStyle = 'rgba(0,201,177,.10)'; ctx.fillRect(x0, y0, w - x0, h);
+    ctx.strokeStyle = 'rgba(255,255,255,.12)';
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(w, y0); ctx.moveTo(x0, y0 + h); ctx.lineTo(w, y0 + h); ctx.stroke();
+    ctx.fillStyle = '#5d6d86'; ctx.font = '9.5px Consolas'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText('音频', 8, y0 + 10);
+    const mid = y0 + h / 2;
+    ctx.strokeStyle = 'rgba(255,255,255,.18)';
+    ctx.beginPath(); ctx.moveTo(x0, mid); ctx.lineTo(w, mid); ctx.stroke();
+    // 峰值波形（按可视 tick 范围映射到秒）
+    const t0 = Math.max(0, this.song.baseSec(this.viewStart));
+    const t1 = Math.max(t0 + 0.001, this.song.baseSec(this.viewStart + this.viewTicks));
+    const N = Math.max(2, Math.min(1600, Math.floor(w - x0)));
+    const pk = a.peaks || [], np = pk.length;
+    ctx.fillStyle = 'rgba(0,201,177,.55)';
+    for (let i = 0; i < N; i++) {
+      const secA = t0 + (t1 - t0) * i / N, secB = t0 + (t1 - t0) * (i + 1) / N;
+      const iA = Math.min(np - 1, Math.max(0, Math.floor(secA / a.peakStep))), iB = Math.min(np - 1, Math.max(iA, Math.floor(secB / a.peakStep)));
+      let mn = 1, mx = -1;
+      for (let k = iA; k <= iB; k++) { if (pk[k * 2] < mn) mn = pk[k * 2]; if (pk[k * 2 + 1] > mx) mx = pk[k * 2 + 1]; }
+      const y1 = mid - mx * (h / 2 - 6), y2 = mid - mn * (h / 2 - 6);
+      const px = x0 + Math.floor(i * (w - x0) / N);
+      ctx.fillRect(px, Math.min(y1, y2), Math.max(1, Math.floor((w - x0) / N)), Math.max(1, Math.abs(y2 - y1)));
+    }
+    // 起音标记（能量峰）
+    ctx.fillStyle = 'rgba(255,216,102,.85)';
+    for (const ot of (a.onsets || [])) {
+      if (ot < t0 || ot > t1) continue;
+      const px = this.xOf(this.song.secToTick(ot));
+      if (px < x0 || px > w) continue;
+      ctx.fillRect(px, y0 + 2, 1.5, h - 4);
+    }
+    ctx.fillStyle = '#8b99b0'; ctx.font = '9px Consolas'; ctx.textAlign = 'right';
+    ctx.fillText('▲ 波形起音', w - 4, y0 + 10);
+  }
+  /* 把选区/整轨音符起音吸附到最近的波形起音（±80ms），做音频对齐预览 */
+  snapSelToAudio() {
+    const a = this.song && this.song.audio;
+    if (!a || !(a.onsets && a.onsets.length)) { toast(t('请先载入原音频（编辑工具栏「音频」按钮）'), 'err'); return; }
+    const notes = this.sel.length ? this.sel : this.target.notes;
+    if (!notes.length) { toast(t('当前轨道没有音符'), 'err'); return; }
+    this.pushUndo(); this.changed = true;
+    const WIN = 0.08;
+    let moved = 0;
+    for (const n of notes) {
+      const sec = this.song.baseSec(n.start);
+      let lo = 0, hi = a.onsets.length - 1, best = -1, bestD = WIN;
+      while (lo <= hi) {
+        const m = (lo + hi) >> 1, d = a.onsets[m] - sec;
+        if (Math.abs(d) < bestD) { bestD = Math.abs(d); best = m; }
+        if (d < 0) lo = m + 1; else hi = m - 1;
+      }
+      if (best >= 0) {
+        const dur = n.end - n.start;
+        n.start = Math.max(0, this.song.secToTick(a.onsets[best]));
+        n.end = n.start + dur;
+        moved++;
+      }
+    }
+    this.commit();
+    toast(t('已对齐 ') + moved + t(' 个音符到波形起音（±80ms）'), moved ? 'ok' : 'err');
+  }
 
   draw() {
     const s = this.song; if (!s) return;
@@ -3500,12 +3797,14 @@ class Editor {
     if (!w || !h) return;
     this.layout();
     const tpb = s.tpb, trg = this.target;
-    const noteTop = this.rulerH, noteBot = h - this.velH;
+    const audioH = this.audioLaneH();
+    const noteTop = this.rulerH, noteBot = h - this.velH - audioH;
+    const laneBot = noteBot + this.velH + audioH;
     const syn = App.synth;
     const soloOn = !!(syn && syn.solo.some(x => x));
 
     ctx.fillStyle = cssVar('--bg1', '#0c1320'); ctx.fillRect(0, 0, w, h);
-    // 垂直网格
+    // 垂直网格（贯穿音符区 / 力度区 / 音频波形轨，便于对齐）
     const startBeat = Math.max(0, Math.floor(this.viewStart / tpb));
     const endBeat = Math.ceil((this.viewStart + this.viewTicks) / tpb);
     let lastStrong = -9999;
@@ -3518,7 +3817,7 @@ class Editor {
         lastStrong = x;
       }
       ctx.strokeStyle = (b % sig.num === 0) ? 'rgba(255,255,255,.13)' : 'rgba(255,255,255,.045)';
-      ctx.beginPath(); ctx.moveTo(x, noteTop); ctx.lineTo(x, noteBot); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x, noteTop); ctx.lineTo(x, laneBot); ctx.stroke();
     }
     // 水平音高线
     const topMidi = this.viewLow + 1, botMidi = Math.max(0, this.midiAtY(noteBot));
@@ -3541,6 +3840,8 @@ class Editor {
     ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.beginPath(); ctx.moveTo(this.keysW, noteBot); ctx.lineTo(w, noteBot); ctx.stroke();
     ctx.fillStyle = '#5d6d86'; ctx.font = '9.5px Consolas'; ctx.textAlign = 'right';
     for (const lv of [0, 64, 127]) { ctx.fillText(String(lv), w - 6, noteBot + this.velH - 5 - (lv / 127) * (this.velH - 16)); }
+    // 原音频波形轨（对齐参考：波形 + 起音竖线）
+    if (audioH > 0) this.drawAudioLane(ctx, this.keysW, noteBot + this.velH, w, audioH);
 
     const selSet = new Set(this.sel);
     // 音符（非目标轨道淡显）
@@ -3604,12 +3905,12 @@ class Editor {
       ctx.fillStyle = 'rgba(255,255,255,.5)';
       rrect(ctx, this.xOf(p.start), this.yOf(p.midi) + 1.5, Math.max(3, this.xOf(p.end) - this.xOf(p.start)), Math.max(3, this.pxPerMidi - 2), 2.5); ctx.fill();
     }
-    // 播放头
+    // 播放头（贯穿音符区 / 力度区 / 音频轨）
     if (App.player) {
       const px = this.xOf(App.player.currentTick());
       if (px >= this.keysW && px <= w) {
         ctx.strokeStyle = 'rgba(255,92,108,.95)'; ctx.lineWidth = 1.6;
-        ctx.beginPath(); ctx.moveTo(px, this.rulerH); ctx.lineTo(px, noteBot); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(px, this.rulerH); ctx.lineTo(px, laneBot); ctx.stroke();
         ctx.fillStyle = 'rgba(255,92,108,.2)'; ctx.fillRect(this.keysW, 0, px - this.keysW, this.rulerH);
       }
     }
@@ -3660,7 +3961,7 @@ class Editor {
     return null;
   }
   hitVelocity(x, y) {
-    const noteBot = this.cv.clientHeight - this.velH;
+    const noteBot = this.cv.clientHeight - this.velH - this.audioLaneH();
     if (y < noteBot + 8 || y > this.cv.clientHeight - 6) return null;
     for (const n of this.target.notes) {
       const x0 = this.xOf(n.start), x1 = this.xOf(n.end);
@@ -3973,7 +4274,7 @@ class Editor {
       const r = this.cv.getBoundingClientRect();
       const x = e.clientX - r.left, y = e.clientY - r.top;
       if (!this.song) return;
-      const noteBot = this.cv.clientHeight - this.velH;
+      const noteBot = this.cv.clientHeight - this.velH - this.audioLaneH();
       // 琴键预览
       if (x < this.keysW && y > this.rulerH) {
         const m = this.midiAtY(y);
@@ -4123,7 +4424,7 @@ class Editor {
       if (this.drag && this.drag.mode === 'vel') {
         const d = this.drag, r = this.cv.getBoundingClientRect();
         const y = e.clientY - r.top;
-        const noteBot = this.cv.clientHeight - this.velH;
+        const noteBot = this.cv.clientHeight - this.velH - this.audioLaneH();
         const frac = clamp((this.velH - 14 - (y - noteBot)) / (this.velH - 16), 0, 1);
         d.n.vel = clamp(Math.round(frac * 127), 1, 127);
         this.changed = true;
@@ -5278,6 +5579,9 @@ function melodyTrack(song) {
 function loadSong(song) {
   App.song = song;
   App.songVersion = (App.songVersion || 0) + 1;   // 歌曲变更时递增，使乐谱渲染缓存失效
+  App.audioSyncOn = false;
+  if (App.audioEl) { try { App.audioEl.pause(); App.audioEl.currentTime = 0; } catch (e) {} }
+  const abtn = $('#btnAudioSync'); if (abtn) abtn.classList.remove('active');
   App.targetTrack = 0;
   App.scoreTrack = melodyTrack(song);
   if (App.player) { App.player.load(song); App.player.setScale(App.speedScale || 1); App.player.pausedTick = 0; }
@@ -5393,6 +5697,17 @@ function frame() {
   const p = App.player;
   if (App.song && p) {
     const playing = p.playing;
+    // 原音频同步试听：播放时对齐到 MIDI 当前时刻（漂移 >120ms 校正），暂停时同步暂停
+    if (App.audioSyncOn && App.song.audio && App.audioEl) {
+      const el = App.audioEl, target = App.song.baseSec(p.currentTick());
+      try {
+        if (el.playbackRate !== (p.scale || 1)) el.playbackRate = p.scale || 1;
+        if (playing) {
+          if (el.paused) { el.currentTime = Math.max(0, target); el.play().catch(() => {}); }
+          else if (Math.abs(el.currentTime - target) > 0.12) el.currentTime = target;
+        } else if (!el.paused) el.pause();
+      } catch (err) {}
+    }
     // 播放中或正在拖动进度条时才刷新进度显示（值未变则跳过 DOM 写入）
     if (playing || scrubbing) {
       const sec = p.currentSec(), total = App.song.totalSec * p.scale;
@@ -5556,6 +5871,69 @@ function bindBar() {
 }
 
 /* ---------------- 编辑工具栏 ---------------- */
+/* 载入原音频：解码为波形峰值 + 起音点，附到当前歌曲供“音频/MIDI 对齐” */
+async function attachAudioToSong(path) {
+  if (!App.song) { toast(t('请先载入 MIDI'), 'err'); return false; }
+  if (!window.fuBridge || !fuBridge.readBinary) { toast(t('无法读取音频文件'), 'err'); return false; }
+  let buf = null;
+  try { buf = await fuBridge.readBinary(path); } catch (e) { buf = null; }
+  if (!buf) { toast(t('无法读取音频文件（可能超过 64MB 或文件不存在）'), 'err'); return false; }
+  return new Promise(resolve => {
+    let ctx = null;
+    try { ctx = (App.synth && App.synth.ctx) || new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+    if (!ctx) { toast(t('音频解码失败'), 'err'); resolve(false); return; }
+    ctx.decodeAudioData(buf.slice(0), ab => {
+      try {
+        const nch = ab.numberOfChannels, len = ab.length;
+        let data = ab.getChannelData(0);
+        if (nch > 1) {
+          data = new Float32Array(len);
+          for (let c = 0; c < nch; c++) { const d = ab.getChannelData(c); for (let i = 0; i < len; i++) data[i] += d[i] / nch; }
+        }
+        const step = 512, np = Math.max(1, Math.ceil(len / step));
+        const peaks = new Float32Array(np * 2);
+        for (let i = 0; i < len; i += step) {
+          let mn = 1, mx = -1;
+          for (let j = i; j < Math.min(len, i + step); j++) { const v = data[j]; if (v < mn) mn = v; if (v > mx) mx = v; }
+          const k = (i / step) | 0; peaks[k * 2] = mn; peaks[k * 2 + 1] = mx;
+        }
+        // 起音检测：RMS 帧 + 自适应阈值（中位数 × 1.9），局部峰 + 80ms 最小间隔
+        const hop = 512, fr = 1024, sr = ab.sampleRate || 44100;
+        const rms = [];
+        for (let i = 0; i + fr <= len; i += hop) {
+          let e = 0; for (let j = i; j < i + fr; j += 8) { const v = data[j]; e += v * v; }
+          rms.push(Math.sqrt(e / (fr / 8)));
+        }
+        if (rms.length) {
+          const sorted = rms.slice().sort((a, b) => a - b);
+          const med = sorted[(sorted.length / 2) | 0] || 0.01;
+          const thr = Math.max(0.02, med * 1.9);
+          const onsets = []; let last = -1;
+          for (let i = 2; i < rms.length - 1; i++) {
+            if (rms[i] < thr || rms[i] < rms[i - 1] || rms[i] < rms[i + 1]) continue;
+            const t = (i * hop + fr / 2) / sr;
+            if (last >= 0 && t - last < 0.08) continue;
+            onsets.push(t); last = t;
+            if (onsets.length > 4000) break;
+          }
+          App.song.audio = { path, duration: ab.duration || (len / sr), sampleRate: sr, peaks, peakStep: step / sr, onsets };
+        } else {
+          App.song.audio = { path, duration: ab.duration || (len / sr), sampleRate: sr, peaks, peakStep: step / sr, onsets: [] };
+        }
+        // 原音频播放元素（试听对齐：与 MIDI 播放同步）
+        if (App.audioEl) { try { App.audioEl.pause(); } catch (e) {} }
+        if (App.audioUrl) { try { URL.revokeObjectURL(App.audioUrl); } catch (e) {} }
+        const type = /\.mp3$/i.test(path || '') ? 'audio/mpeg' : /\.(m4a|mp4|aac)$/i.test(path || '') ? 'audio/mp4' : /\.(ogg|oga)$/i.test(path || '') ? 'audio/ogg' : 'audio/wav';
+        App.audioUrl = URL.createObjectURL(new Blob([buf], { type }));
+        App.audioEl = new Audio(App.audioUrl);
+        App.audioEl.preload = 'auto';
+        if (App.editor) App.editor.draw();
+        toast(t('音频波形已载入（编辑视图底部），可「吸附起音」或「试听」对齐'), 'ok');
+        resolve(true);
+      } catch (e) { toast(t('音频解码失败'), 'err'); resolve(false); }
+    }, () => { toast(t('音频解码失败'), 'err'); resolve(false); });
+  });
+}
 function refreshTimbreUI() {
   const sel = $('#timbreSel'); if (!sel) return;
   const tr = App.song && App.song.tracks[App.targetTrack || 0];
@@ -5610,6 +5988,20 @@ function bindEditor() {
   // 新增编辑：响度 / 踏板 / BPM / 音色（按轨或全局）+ 智能配器
   $('#btnLoudDown').addEventListener('click', () => App.editor && App.editor.loudnessSel(-1));
   $('#btnLoudUp').addEventListener('click', () => App.editor && App.editor.loudnessSel(1));
+  // 音频波形轨：载入 → 吸附起音 → 同步试听（音频/MIDI 对齐）
+  $('#btnLoadAudio').addEventListener('click', async () => {
+    if (!App.song) { toast(t('请先载入 MIDI'), 'err'); return; }
+    if (!window.fuBridge || !fuBridge.pickAudio) return;
+    const p = await fuBridge.pickAudio();
+    if (p) await attachAudioToSong(p);
+  });
+  $('#btnSnapAudio').addEventListener('click', () => App.editor && App.editor.snapSelToAudio());
+  $('#btnAudioSync').addEventListener('click', () => {
+    if (!App.song || !App.song.audio) { toast(t('请先载入原音频（编辑工具栏「音频」按钮）'), 'err'); return; }
+    App.audioSyncOn = !App.audioSyncOn;
+    $('#btnAudioSync').classList.toggle('active', App.audioSyncOn);
+    toast(App.audioSyncOn ? t('原音频试听已开启（随 MIDI 播放同步）') : t('原音频试听已关闭'), 'ok');
+  });
   $('#btnPedalAdd').addEventListener('click', () => App.editor && App.editor.pedalAdd());
   $('#btnPedalDel').addEventListener('click', () => App.editor && App.editor.pedalDel());
   $('#btnApplyBpm').addEventListener('click', () => App.editor && App.editor.applyBpm($('#editBpmInput').value));
@@ -5859,6 +6251,59 @@ function customSlider(input) {
   paint();
 }
 let convBusy = false;   // 渲染进行中标志，防止并发渲染
+/* ---- SoundFont（SF2/SF3）：本地 FluidSynth 内核，播放/离线渲染/导出 WAV 全链路生效 ---- */
+async function loadSoundFontPath(p, quiet = false) {
+  if (!window.fuBridge || !fuBridge.readSoundFont || !window.JSSynth) { if (!quiet) toast(t('SoundFont 内核未就绪'), 'err'); return false; }
+  if (!quiet) toast(t('正在加载 SoundFont…'), 'ok');
+  let buf = null;
+  try { buf = await fuBridge.readSoundFont(p); } catch (e) { buf = null; }
+  if (!buf) { if (!quiet) toast(t('无法读取 SoundFont 文件（超过 512MB 或不存在）'), 'err'); return false; }
+  const name = p.replace(/^.*[\\/]/, '');
+  App.soundFont = { name, path: p, bytes: buf };
+  try {
+    await initSfSynth();
+  } catch (e) {
+    App.soundFont = null;
+    if (!quiet) toast(t('SoundFont 初始化失败：') + (e && e.message || e), 'err');
+    return false;
+  }
+  FU_SETTINGS.soundfont_path = p;
+  if (fuBridge.saveSettings) { try { await fuBridge.saveSettings({ soundfont_path: p }); } catch (e) {} }
+  const nm = $('#sfName'); if (nm) nm.textContent = name + ' ✓';
+  if (!quiet) toast(t('已启用 SoundFont：') + name, 'ok');
+  return true;
+}
+async function initSfSynth() {
+  if (!App.soundFont || !App.soundFont.bytes) return;
+  if (!App.synth || !App.synth.ctx) { initAudio(); }
+  const ctx = (App.synth && App.synth.ctx) || new (window.AudioContext || window.webkitAudioContext)();
+  const sf = new SfSynth(ctx);
+  await sf.load(App.soundFont.bytes, App.song);
+  if (App.synth && !App.synth.usesSF) App.nativeSynth = App.synth;
+  if (App.synth) { sf.vol = (App.synth.vol || []).slice(); sf.mute = (App.synth.mute || []).slice(); sf.solo = (App.synth.solo || []).slice(); sf.pan = (App.synth.pan || []).slice(); }
+  sf.setVolume(parseInt($('#volBar').value || 85, 10) / 100);
+  App.synth = sf;
+  if (App.player) App.player.syn = sf;
+  App.soundFontActive = true;
+  sf.applyRouting();
+  const nm = $('#sfName'); if (nm) nm.textContent = (App.soundFont.name || '') + ' ✓';
+}
+async function clearSoundFont() {
+  const ctx = (App.synth && App.synth.ctx) || new (window.AudioContext || window.webkitAudioContext)();
+  const ns = App.nativeSynth || new Synth(ctx);
+  if (App.synth && App.synth.vol) { ns.vol = App.synth.vol.slice(); ns.mute = App.synth.mute.slice(); ns.solo = App.synth.solo.slice(); ns.pan = App.synth.pan.slice(); }
+  ns.ensure(App.song ? App.song.tracks.length : 0);
+  ns.setVolume(parseInt($('#volBar').value || 85, 10) / 100);
+  if (App.synth && App.synth.usesSF && App.synth.closeEngine) App.synth.closeEngine();
+  App.synth = ns;
+  if (App.player) App.player.syn = ns;
+  App.soundFont = null; App.soundFontActive = false;
+  FU_SETTINGS.soundfont_path = '';
+  if (window.fuBridge && fuBridge.saveSettings) { try { await fuBridge.saveSettings({ soundfont_path: '' }); } catch (e) {} }
+  ns.applyRouting();
+  const nm = $('#sfName'); if (nm) nm.textContent = t('未加载 · 使用内置音色');
+  toast(t('已恢复内置合成音色'), 'ok');
+}
 function updateConvEstimate() {
   const est = $('#convEst'), val = $('#convEstVal');
   if (!App.song) { est.classList.add('hidden'); $('#btnRender').disabled = true; return; }
@@ -5872,6 +6317,13 @@ function updateConvEstimate() {
   $('#convEstSub').textContent = `· ${fmtTime(dur)} · ${(rate / 1000).toFixed(1)} kHz`;
 }
 function bindConvert() {
+  // SoundFont：加载 SF2/SF3 → 播放 / 离线渲染 / WAV 导出全链路生效；可随时恢复内置音色
+  $('#btnSfLoad').addEventListener('click', async () => {
+    if (!window.fuBridge || !fuBridge.pickSoundFont) return;
+    const p = await fuBridge.pickSoundFont();
+    if (p) await loadSoundFontPath(p);
+  });
+  $('#btnSfClear').addEventListener('click', clearSoundFont);
   ['#convPreset', '#convTempo', '#convRate', '#convRange'].forEach(id => customSelect($(id)));
   const gain = $('#convGain');
   customSlider(gain);
@@ -6526,6 +6978,7 @@ function bindRefine() {
               const song = buildSong(mid, { fileName: res.out.replace(/^.*[\\/]/, ''), fileSize: bytes.length });
               await plAddBytes(song.fileName, bytes);
               loadSong(song); setActiveView('edit');
+              if (RF_STATE.audio) attachAudioToSong(RF_STATE.audio);
             } else { toast(t('修正输出文件不存在或已被删除'), 'err'); }
           } catch (err) { toast(t('载入失败：') + err.message, 'err'); }
         };
@@ -6541,6 +6994,147 @@ function bindRefine() {
     }
   });
 }
+/* ---------------- 批量转录队列（多音频 → 顺序转录 → 自动进歌单） ---------------- */
+const BT_STATE = { items: [], running: false, paused: false, cancelAll: false, nextId: 1, currentJobId: null };
+function btStatusTxt(s) {
+  return { pending: t('等待'), running: t('转录中'), done: t('完成'), error: t('失败'), canceled: t('已取消') }[s] || s;
+}
+function btRender() {
+  const list = $('#batchList'); if (!list) return;
+  list.innerHTML = BT_STATE.items.map(it => {
+    const btns = it.status === 'error'
+      ? `<button class="b-btn" data-bt="retry" data-id="${it.id}">${t('重试')}</button>`
+      : (it.status === 'pending' || it.status === 'done' || it.status === 'canceled')
+        ? `<button class="b-btn danger" data-bt="remove" data-id="${it.id}">${t('移除')}</button>` : '';
+    return `<div class="batch-item"><span class="b-name" title="${esc(it.path)}">${esc(it.name)}</span><span class="b-bar"><i style="width:${Math.round(it.progress || 0)}%"></i></span><span class="b-badge ${it.status}">${btStatusTxt(it.status)}${it.status === 'done' && it.note_count ? ' · ' + it.note_count : ''}</span>${btns}</div>`;
+  }).join('');
+  const n = BT_STATE.items.length, d = BT_STATE.items.filter(i => i.status === 'done').length, e = BT_STATE.items.filter(i => i.status === 'error').length;
+  const st = $('#batchStat');
+  if (st) st.textContent = BT_STATE.paused ? t('已暂停') : BT_STATE.running ? t('队列运行中') : (n ? (t('共 ') + n + t(' 首 · 完成 ') + d + (e ? t(' · 失败 ') + e : '')) : t('队列为空'));
+}
+function btAddPaths(paths) {
+  for (const p of (paths || [])) {
+    if (!p) continue;
+    if (BT_STATE.items.some(i => i.path === p)) continue;
+    BT_STATE.items.push({ id: BT_STATE.nextId++, path: p, name: p.replace(/^.*[\\/]/, ''), status: 'pending', progress: 0, duration: 0, out: '', note_count: 0, error: '' });
+  }
+  btRender();
+}
+async function btDecodeDuration(it) {
+  if (it.duration || !window.fuBridge || !fuBridge.readBinary) return;
+  try {
+    const buf = await fuBridge.readBinary(it.path);
+    if (!buf) return;
+    const ctx = (App.synth && App.synth.ctx) || new (window.AudioContext || window.webkitAudioContext)();
+    await new Promise(res => {
+      try {
+        ctx.decodeAudioData(buf.slice(0), ab => { it.duration = ab.duration || 0; res(); }, () => res());
+      } catch (e) { res(); }
+    });
+    if (ctx.close && ctx !== (App.synth && App.synth.ctx)) ctx.close();
+  } catch (e) {}
+}
+async function btRun() {
+  if (BT_STATE.running) return;
+  BT_STATE.running = true; BT_STATE.paused = false; BT_STATE.cancelAll = false;
+  btRender();
+  while (true) {
+    if (BT_STATE.paused || BT_STATE.cancelAll) break;
+    const it = BT_STATE.items.find(i => i.status === 'pending');
+    if (!it) break;
+    it.status = 'running'; it.progress = 1; it.error = ''; it.startedAt = Date.now();
+    await btDecodeDuration(it);
+    it.estMs = Math.max(5000, estimateTranscribeSec(TR_STATE.mode, TR_STATE.perf, it.duration || 60) * 1000);
+    const jobId = 'batch' + it.id;
+    BT_STATE.currentJobId = jobId;
+    btRender();
+    try {
+      const cfg = collectTranscribeParams();
+      cfg.audio = it.path; cfg.id = jobId; cfg.out = null;
+      const convert = BT_STATE.convertFn || (fuBridge && fuBridge.convert);
+      const readOut = BT_STATE.readFn || (fuBridge && fuBridge.readBinary);
+      const res = await convert(cfg);
+      if (BT_STATE.cancelAll) { it.status = 'canceled'; it.progress = 0; }
+      else if (res && res.ok && res.out) {
+        it.status = 'done'; it.progress = 100; it.out = res.out; it.note_count = res.note_count || 0;
+        try {
+          const bytes = await readOut(res.out);
+          if (bytes) { parseMidi(bytes); const name = res.out.replace(/^.*[\\/]/, ''); await plAddBytes(name, bytes, { silent: true }); }
+        } catch (e) {}
+      } else {
+        it.status = 'error'; it.error = (res && res.error) || (res ? ('code ' + res.code) : '');
+      }
+    } catch (e) {
+      if (BT_STATE.cancelAll) it.status = 'canceled';
+      else { it.status = 'error'; it.error = (e && e.message) || String(e); }
+    }
+    BT_STATE.currentJobId = null;
+    btRender();
+  }
+  BT_STATE.running = false;
+  btRender();
+  if (!BT_STATE.paused && !BT_STATE.cancelAll) {
+    const d = BT_STATE.items.filter(i => i.status === 'done').length, e = BT_STATE.items.filter(i => i.status === 'error').length;
+    if (d || e) {
+      renderPlaylistSel(); renderLib(); buildQueue();
+      toast(t('批量转录完成：成功 ') + d + t(' 首，失败 ') + e + t(' 首（已完成曲目已加入歌单）'), e ? 'err' : 'ok');
+    }
+  }
+}
+function bindBatch() {
+  const dz = $('#batchDrop'), fi = $('#batchFile');
+  dz.addEventListener('click', async () => {
+    if (!window.fuBridge || !fuBridge.pickAudioFiles) return;
+    const paths = await fuBridge.pickAudioFiles();
+    if (paths && paths.length) { btAddPaths(paths); toast(t('已添加 ') + paths.length + t(' 个音频到队列'), 'ok'); }
+  });
+  fi.addEventListener('change', () => { btAddPaths(Array.from(fi.files || []).map(f => f.path || f.name)); fi.value = ''; });
+  ['dragover', 'dragenter'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); e.stopPropagation(); dz.classList.add('dragover'); }));
+  ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); e.stopPropagation(); dz.classList.remove('dragover'); }));
+  dz.addEventListener('drop', e => {
+    e.stopPropagation();
+    const files = Array.from(e.dataTransfer && e.dataTransfer.files || []);
+    if (!files.length) { toast(t('请拖入音频文件'), 'err'); return; }
+    btAddPaths(files.map(f => f.path || f.name));
+    toast(t('已添加 ') + files.length + t(' 个音频到队列'), 'ok');
+  });
+  $('#btnBatchAddFiles').addEventListener('click', () => dz.click());
+  $('#btnBatchAddFolder').addEventListener('click', async () => {
+    if (!window.fuBridge || !fuBridge.pickDirectory || !fuBridge.listAudioFiles) return;
+    const dir = await fuBridge.pickDirectory();
+    if (!dir) return;
+    const files = await fuBridge.listAudioFiles(dir);
+    if (!files || !files.length) { toast(t('文件夹里没有找到音频文件'), 'err'); return; }
+    btAddPaths(files);
+    toast(t('已添加 ') + files.length + t(' 个音频到队列'), 'ok');
+  });
+  $('#btnBatchStart').addEventListener('click', () => { if (!BT_STATE.items.some(i => i.status === 'pending')) { toast(t('没有待转录的任务'), 'err'); return; } btRun(); });
+  $('#btnBatchPause').addEventListener('click', () => { if (!BT_STATE.running) { toast(t('队列未运行'), 'err'); return; } BT_STATE.paused = true; btRender(); toast(t('已暂停：当前任务完成后停止'), 'ok'); });
+  $('#btnBatchResume').addEventListener('click', () => { if (!BT_STATE.paused) { toast(t('队列未暂停'), 'err'); return; } btRun(); });
+  $('#btnBatchCancel').addEventListener('click', () => {
+    BT_STATE.cancelAll = true;
+    if (BT_STATE.currentJobId && window.fuBridge && fuBridge.cancel) fuBridge.cancel(BT_STATE.currentJobId);
+    for (const it of BT_STATE.items) if (it.status === 'pending') it.status = 'canceled';
+    btRender();
+    toast(t('已取消队列'), 'ok');
+  });
+  $('#batchList').addEventListener('click', async e => {
+    const b = e.target.closest('[data-bt]');
+    if (!b) return;
+    const it = BT_STATE.items.find(i => i.id === parseInt(b.dataset.id, 10));
+    if (!it) return;
+    if (b.dataset.bt === 'retry') { it.status = 'pending'; it.progress = 0; it.error = ''; btRender(); if (!BT_STATE.running) btRun(); }
+    else if (b.dataset.bt === 'remove') { BT_STATE.items = BT_STATE.items.filter(i => i !== it); btRender(); }
+  });
+  setInterval(() => {
+    const it = BT_STATE.items.find(i => i.status === 'running');
+    if (it && it.startedAt && it.estMs) {
+      const p = Math.min(95, Math.round((Date.now() - it.startedAt) / it.estMs * 100));
+      if (p !== Math.round(it.progress)) { it.progress = p; btRender(); }
+    }
+  }, 400);
+}
+
 function bindTranscribe() {
   const dz = $('#audioDrop'), fi = $('#audioFile');
   const log = $('#convLog'), prog = $('#convProgress'), fill = $('#convFill'), pct = $('#convPct');
@@ -6760,6 +7354,7 @@ function bindTranscribe() {
               await plAddBytes(song.fileName, bytes);
               loadSong(song); setActiveView('play');
               smartAssignSong();   // 转录完成后自动智能配器（可 Ctrl+Z 撤销）
+              if (TR_STATE.audio) attachAudioToSong(TR_STATE.audio);   // 挂原音频 → 编辑视图波形对齐
             } else { toast(t('输出文件不存在或已被删除'), 'err'); }
           } catch (err) { toast(t('载入失败：') + err.message, 'err'); }
         };
@@ -6922,6 +7517,8 @@ async function loadSettings() {
   const pill = document.querySelector('.perf-pills .pill[data-perf="' + TR_STATE.perf + '"]');
   if (pill) $$('.perf-pills .pill').forEach(x => x.classList.toggle('active', x === pill));
   autoRecommendPerf();
+  // 上次启用的 SoundFont：启动时自动加载（文件缺失则静默回退内置音色）
+  if (s.soundfont_path) { loadSoundFontPath(s.soundfont_path, true).catch(() => {}); }
 }
 
 function fillSettingsUI() {

@@ -442,6 +442,37 @@ function registerIpc() {
     });
     return r.canceled ? null : r.filePaths[0];
   });
+  // 批量转录：一次选择多个音频 / 视频
+  ipcMain.handle('dialog:pickAudioFiles', async () => {
+    const r = await dialog.showOpenDialog({
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '音频 / 视频', extensions: ['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wma', 'mp4', 'mkv', 'avi', 'mov', 'webm'] }],
+    });
+    return r.canceled ? [] : r.filePaths;
+  });
+  // 批量转录：递归列出文件夹内音频/视频（上限 2000 / 8 层）
+  ipcMain.handle('dir:listAudioFiles', async (_e, dir) => {
+    try {
+      if (!dir || !fs.existsSync(dir)) return [];
+      const exts = new Set(['.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.oga', '.opus', '.wma', '.mp4', '.mkv', '.avi', '.mov', '.webm', '.aiff', '.aif', '.au', '.snd', '.caf', '.m4v', '.m4s', '.ts', '.mpg', '.mpeg', '.flv', '.3gp', '.amr', '.mka']);
+      const out = [];
+      const walk = (d, depth) => {
+        if (out.length >= 2000 || depth > 8) return;
+        let items;
+        try { items = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+        for (const it of items) {
+          if (out.length >= 2000) return;
+          try {
+            if (it.isDirectory()) walk(path.join(d, it.name), depth + 1);
+            else if (it.isFile() && exts.has(path.extname(it.name).toLowerCase())) out.push(path.join(d, it.name));
+          } catch {}
+        }
+      };
+      walk(dir, 0);
+      out.sort((a, b) => a.localeCompare(b, 'zh'));
+      return out;
+    } catch (e) { return []; }
+  });
   ipcMain.handle('dialog:pickImage', async () => {
     const r = await dialog.showOpenDialog({
       properties: ['openFile'],
@@ -458,6 +489,14 @@ function registerIpc() {
   });
   ipcMain.handle('dialog:pickDirectory', async () => {
     const r = await dialog.showOpenDialog({ properties: ['openDirectory'] });
+    return r.canceled ? null : r.filePaths[0];
+  });
+  // SoundFont 音色库选择（SF2 / SF3）
+  ipcMain.handle('dialog:pickSoundFont', async () => {
+    const r = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      filters: [{ name: 'SoundFont 音色库', extensions: ['sf2', 'sf3'] }],
+    });
     return r.canceled ? null : r.filePaths[0];
   });
   // 歌单“导入文件夹”：递归列出目录下的 MIDI 文件（上限 2000 / 8 层，避免误选整盘卡死）
@@ -488,6 +527,15 @@ function registerIpc() {
     try {
       const st = await fs.promises.stat(p);
       if (!st.isFile() || st.size > 64 * 1024 * 1024) return null;
+      const buf = await fs.promises.readFile(p);
+      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    } catch { return null; }
+  });
+  // 读取 SoundFont（SF2/SF3 通常数十 MB 到数百 MB，单独放宽上限）
+  ipcMain.handle('file:readSoundFont', async (_e, p) => {
+    try {
+      const st = await fs.promises.stat(p);
+      if (!st.isFile() || st.size > 512 * 1024 * 1024) return null;
       const buf = await fs.promises.readFile(p);
       return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
     } catch { return null; }

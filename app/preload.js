@@ -32,9 +32,13 @@ contextBridge.exposeInMainWorld('fuBridge', {
   repairIntegrity: (ids) => ipcRenderer.invoke('integrity:repair', ids),
   // 原生对话框
   pickAudio: () => ipcRenderer.invoke('dialog:pickAudio'),
+  pickAudioFiles: () => ipcRenderer.invoke('dialog:pickAudioFiles'),
+  listAudioFiles: (dir) => ipcRenderer.invoke('dir:listAudioFiles', dir),
   pickImage: () => ipcRenderer.invoke('dialog:pickImage'),
   pickFile: (opts) => ipcRenderer.invoke('dialog:pickFile', opts),
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
+  pickSoundFont: () => ipcRenderer.invoke('dialog:pickSoundFont'),
+  readSoundFont: (p) => ipcRenderer.invoke('file:readSoundFont', p),
   // 歌单“导入文件夹”：返回目录下所有 .mid/.midi/.kar/.rmi 文件路径
   listMidiFiles: (dir) => ipcRenderer.invoke('dir:listMidiFiles', dir),
   // 读取本地文件（转录结果回载）
