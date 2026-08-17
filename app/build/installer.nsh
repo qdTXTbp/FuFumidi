@@ -1,6 +1,7 @@
 ; 安装包体积优化：LZMA 固实压缩 + 数据块优化（在 electron-builder 生成的脚本之上生效）
-SetCompressor /SOLID lzma
-SetCompressorDictSize 32
+; 非固实 LZMA：electron-builder 内嵌宏会调用 SetCompress off，固实模式下该调用
+; 触发 NSIS 8021 警告并被 -WX 当成错误；普通 LZMA 模式无此警告且压缩率仍明显优于默认 zlib。
+SetCompressor lzma
 SetDatablockOptimize on
 
 ; ==========================================================================
