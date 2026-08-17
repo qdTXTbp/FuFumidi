@@ -926,6 +926,7 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
             <select class="sel" id="timbreSel" title="当前编辑轨道的音色"></select>
             <button class="tb-btn" id="btnTimbreAll" title="把当前音色应用到全部非鼓轨">全部</button>
             <button class="tb-btn" id="btnSmartTimbre" title="按轨道音域/密度/名称智能选择音色">智能</button>
+            <button class="tb-btn" id="btnAccomp" title="基于当前旋律/和弦自动生成 贝斯+分解和弦+铺底（可撤销）">智能伴奏</button>
           </div>
           <div class="sep"></div>
           <button class="tb-btn" id="btnLoopSel" title="将选区设为循环"><span class="ic" data-ic="loop"></span>选区循环</button>
@@ -1334,6 +1335,7 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
         <span class="time-txt" id="timeDur">0:00</span>
         <button class="tr-btn" id="btnLoop" title="循环 (L)" style="width:30px;height:30px"><span class="ic" data-ic="loop"></span></button>
         <button class="tr-btn" id="btnMetro" title="节拍器" style="width:30px;height:30px"><span class="ic" data-ic="clock"></span></button>
+        <button class="tr-btn" id="btnMidi" title="MIDI 硬件输出（发送到系统 MIDI 设备 / LoopMIDI / DAW）" style="width:30px;height:30px">MIDI</button>
       </div>
     </div>
     <div id="barRight">
@@ -2171,6 +2173,14 @@ const I18N_MAP = {
   '该轨道音高超出当前乐器范围，无法自动编配把位': 'Pitch out of range for auto-fingering',
   'TAB 生成失败：': 'TAB failed: ',
   '简谱生成失败：': 'Jianpu failed: ',
+  '智能贝斯': 'Smart Bass',
+  '智能分解和弦': 'Smart Arpeggio',
+  '智能铺底': 'Smart Pad',
+  '已生成智能伴奏：贝斯 / 分解和弦 / 铺底 3 轨（Ctrl+Z 可撤销）': 'Accompaniment generated: bass / arpeggio / pad (Ctrl+Z to undo)',
+  '插件视图渲染失败：': 'Plugin view render failed: ',
+  'MIDI 硬件输出已关闭': 'MIDI output off',
+  '未检测到 MIDI 输出设备': 'No MIDI output device detected',
+  'MIDI 硬件输出已开启：': 'MIDI output on: ',
   '按名称': 'By name',
   '按时间': 'By time',
   /* 新增编辑能力 */
@@ -2901,6 +2911,8 @@ class Synth {
     const preset = presetFromMode('auto', note.prog, note.isDrum);
     this.ensure(note.trk + 1);
     const out = this.trackGains[note.trk];
+    hwMidiOn(note.trk, note.midi, note.vel, time);            // MIDI 硬件输出（若启用）
+    hwMidiOff(note.trk, note.midi, endTime);
     playVoice(this.ctx, time, note.midi, note.vel, preset, out, endTime, this.live);
     this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, endTime });
     if (this.activeNotes.length > 3000) this.activeNotes = this.activeNotes.filter(a => a.endTime > this.ctx.currentTime);
@@ -2910,6 +2922,7 @@ class Synth {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     this.ensure(1);
+    hwMidiOn(0, midi, vel, t); hwMidiOff(0, midi, t + dur);
     playVoice(this.ctx, t, midi, vel, presetForProgram(prog), this.trackGains[0], t + dur, this.live);
     this.activeNotes.push({ midi, trk: 0, endTime: t + dur });
   }
@@ -2998,6 +3011,7 @@ class SfSynth {
     if (!this.engine) return;
     const tr = (App.song && App.song.tracks && App.song.tracks[note.trk]) || {};
     const ch = clamp(note.ch != null ? note.ch : (tr.ch != null ? tr.ch : 0), 0, 15);
+    hwMidiOn(ch, note.midi, note.vel, time); hwMidiOff(ch, note.midi, endTime);   // MIDI 硬件输出（若启用）
     const key = clamp(note.midi, 0, 127), vel = clamp(note.vel || 100, 1, 127);
     const onDelay = Math.max(0, (time - this.ctx.currentTime) * 1000);
     const offDelay = Math.max(onDelay + 8, (endTime - this.ctx.currentTime) * 1000);
@@ -3011,6 +3025,7 @@ class SfSynth {
   preview(midi, prog = 0, vel = 100, dur = 0.7) {
     if (!this.engine) return;
     const ch = 0, t = this.ctx.currentTime + 0.02;
+    hwMidiOn(ch, midi, vel, t); hwMidiOff(ch, midi, t + dur);
     this.engine.midiSetChannelType(ch, false);
     this.engine.midiProgramSelect(ch, 0, 0, clamp(prog || 0, 0, 127));
     this.noteOn(t, { midi, vel, trk: 0, ch }, t + dur);
@@ -3344,6 +3359,7 @@ function bufferToWav(buf) {
  * 全局应用状态 + 图标
  * ===================================================================== */
 const App = { song: null, player: null, synth: null, view: 'play', editor: null, lib: [], loopOn: false,
+  pluginViews: new Map(), midiOut: null, midiOutEnabled: false,
   scoreTrack: 0, scoreFollow: true, scoreLocate: true,
   scoreOpts: { simple: true, grid: true, beam: false } };
 // 版本号：与 package.json 保持一致，所有版本文案引用此处
@@ -3699,6 +3715,7 @@ function restoreTracks(song, clone) {
     t.ccs = (clone[i].ccs || []).map(c => ({ ...c }));
     t.notes = clone[i].notes.map(n => ({ ...n })).sort((a, b) => a.start - b.start);
   });
+  if (song.tracks.length > clone.length) song.tracks.length = clone.length;   // 撤销“新增轨道”类操作（如智能伴奏）
   finalizeSong();
 }
 function finalizeSong() {
@@ -5917,6 +5934,14 @@ function loadBytes(name, bytes) {
 /* ---------------- 视图切换 ---------------- */
 function setActiveView(v) {
   App.view = v;
+  // 插件自定义视图：每次切入都调用插件的 render 函数（传入当前歌曲上下文）
+  if (v.startsWith('pv:')) {
+    const id = v.slice(3), pv = App.pluginViews.get(id), sec = document.getElementById('view-' + v);
+    if (pv && sec) {
+      try { pv.render(sec.firstElementChild, { song: App.song, songVersion: App.songVersion, getSong: () => window.fufuPlugins.getSong() }); }
+      catch (e) { sec.innerHTML = '<div style="color:var(--text3);padding:20px">' + esc(t('插件视图渲染失败：') + (e && e.message || e)) + '</div>'; }
+    }
+  }
   $$('#viewTabs .tab').forEach(b => b.classList.toggle('active', b.dataset.view === v));
   $$('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
   $('#menuPop').classList.add('hidden');
@@ -6084,6 +6109,14 @@ function bindBar() {
     if (App.player) App.player.setScale(next);
     $('#speedBtn').textContent = next.toFixed(2) + '×';
   });
+  // MIDI 硬件输出：Web MIDI → 系统首个输出设备（LoopMIDI/DAW 均可收到）
+  $('#btnMidi').addEventListener('click', async () => {
+    if (App.midiOutEnabled) { App.midiOutEnabled = false; $('#btnMidi').classList.remove('active'); toast(t('MIDI 硬件输出已关闭'), 'ok'); return; }
+    if (!App.midiOut) { if (!(await initMidiOutput())) { toast(t('未检测到 MIDI 输出设备'), 'err'); return; } }
+    App.midiOutEnabled = true;
+    $('#btnMidi').classList.add('active');
+    toast(t('MIDI 硬件输出已开启：') + (App.midiOut.name || ''), 'ok');
+  });
   $('#bpmInput').addEventListener('change', e => {
     if (!App.song || !App.player) return;
     const v = clamp(parseInt(e.target.value, 10) || App.song.initialBpm, 10, 400);
@@ -6238,6 +6271,114 @@ function smartAssignSong(quiet = false) {
   } else if (!quiet) toast(t('当前音色已比较合适，无需调整'), 'ok');
   return reasons.length;
 }
+
+/* ---------------- 智能伴奏生成（基于已有旋律/和弦：自动贝斯 + 分解和弦 + 和弦织体） ---------------- */
+function analyzeBarsForChords(song) {
+  const tpb = song.tpb, bars = song.bars;
+  const chordBars = [];
+  for (let b = 0; b < bars; b++) {
+    const t0 = b * tpb * 4, t1 = t0 + tpb * 4;
+    const hist = new Array(12).fill(0);
+    for (const tr of song.tracks) {
+      if (tr.isDrum) continue;
+      for (const n of tr.notes) {
+        if (n.end > t0 && n.start < t1) hist[((n.midi % 12) + 12) % 12]++;
+      }
+    }
+    let root = 0, max = 0;
+    for (let i = 0; i < 12; i++) if (hist[i] > max) { max = hist[i]; root = i; }
+    const minor = hist[(root + 3) % 12] >= hist[(root + 4) % 12];
+    chordBars.push({ root, minor, strong: max > 0 });
+  }
+  return chordBars;
+}
+function addAccompaniment() {
+  const s = App.song; if (!s) { toast(t('请先载入 MIDI'), 'err'); return; }
+  const tpb = s.tpb, bars = Math.max(1, s.bars);
+  const chords = analyzeBarsForChords(s);
+  const bass = [], arp = [], pad = [];
+  for (let b = 0; b < bars; b++) {
+    const c = chords[b];
+    const barT = b * tpb * 4;
+    const third = c.minor ? 3 : 4;
+    const tones = [c.root, c.root + third, c.root + 7];
+    const rootMidi = clamp(36 + c.root, 28, 55);
+    for (let q = 0; q < 4; q++) {
+      const t = barT + q * tpb;
+      bass.push({ start: t, end: t + tpb * 0.9, midi: rootMidi, vel: c.strong ? 92 : 70 });
+    }
+    for (let e = 0; e < 8; e++) {
+      const t = barT + e * tpb / 2;
+      const deg = [0, 1, 2, 1][e % 4];
+      const m = clamp(48 + c.root + (tones[deg % 3] - c.root) + (deg >= 2 ? 12 : 0), 48, 88);
+      arp.push({ start: t, end: t + tpb * 0.45, midi: m, vel: c.strong ? 72 : 58 });
+    }
+    for (let i = 0; i < 3; i++) {
+      const m = clamp(52 + tones[i], 40, 84);
+      pad.push({ start: barT, end: barT + tpb * 4, midi: m, vel: 55 });
+    }
+  }
+  const nextIdx = s.tracks.length;
+  App.editor.pushUndo(); App.editor.changed = true;
+  s.tracks.push({ index: nextIdx, name: t('智能贝斯'), ch: 2, program: 33, isDrum: false, notes: bass, events: [], ccs: [] });
+  s.tracks.push({ index: nextIdx + 1, name: t('智能分解和弦'), ch: 1, program: 26, isDrum: false, notes: arp, events: [], ccs: [] });
+  s.tracks.push({ index: nextIdx + 2, name: t('智能铺底'), ch: 3, program: 49, isDrum: false, notes: pad, events: [], ccs: [] });
+  App.editor.commit();
+  if (App.player) App.player.prepare();
+  if (App.synth && App.synth.usesSF) App.synth.applySong(s);
+  toast(t('已生成智能伴奏：贝斯 / 分解和弦 / 铺底 3 轨（Ctrl+Z 可撤销）'), 'ok');
+  if (App.view === 'edit' && App.editor) App.editor.draw();
+}
+
+/* ---------------- 插件自定义视图（插件 renderer 脚本调用 registerView 注册 Tab） ---------------- */
+function renderPluginViewTabs() {
+  $$('#viewTabs .pv-tab').forEach(el => el.remove());
+  $$('#views .pv-view').forEach(el => el.remove());
+  for (const [id, pv] of App.pluginViews) {
+    const tab = document.createElement('button');
+    tab.className = 'tab pv-tab'; tab.dataset.view = 'pv:' + id;
+    tab.innerHTML = `<span class="ic" data-ic="zap"></span>${esc(pv.title)}`;
+    tab.addEventListener('click', () => setActiveView('pv:' + id));
+    $('#viewTabs').appendChild(tab);
+    const sec = document.createElement('section');
+    sec.id = 'view-pv:' + id; sec.className = 'view pv-view';
+    sec.innerHTML = '<div style="padding:18px;overflow:auto;height:100%"></div>';
+    $('#views').appendChild(sec);
+    injectIcons(tab);
+  }
+}
+window.fufuPlugins = {
+  registerView(id, opts) {
+    if (!id || !opts || typeof opts.render !== 'function') return false;
+    App.pluginViews.set(id, { id, title: opts.title || id, render: opts.render });
+    renderPluginViewTabs();
+    return true;
+  },
+  unregisterView(id) { const ok = App.pluginViews.delete(id); if (ok) renderPluginViewTabs(); return ok; },
+  getSong() { return App.song ? { name: App.song.fileName || '', trackCount: App.song.tracks.length, totalTicks: App.song.totalTicks, bpm: App.song.initialBpm, version: App.songVersion } : null; },
+};
+
+/* ---------------- Web MIDI 硬件输出（基础版：系统首个 MIDI 输出设备） ---------------- */
+async function initMidiOutput() {
+  if (!navigator.requestMIDIAccess) return false;
+  try {
+    const acc = await navigator.requestMIDIAccess();
+    const out = Array.from(acc.outputs.values()).find(o => o);
+    if (!out) return false;
+    App.midiOut = out;
+    return true;
+  } catch (e) { return false; }
+}
+function hwMidiOn(ch, key, vel, time) {
+  if (!App.midiOutEnabled || !App.midiOut) return;
+  const delay = App.synth && App.synth.ctx ? Math.max(0, (time - App.synth.ctx.currentTime) * 1000) : 0;
+  try { App.midiOut.send([0x90 | (ch & 15), key & 0x7f, vel & 0x7f], performance.now() + delay); } catch (e) {}
+}
+function hwMidiOff(ch, key, time) {
+  if (!App.midiOutEnabled || !App.midiOut) return;
+  const delay = App.synth && App.synth.ctx ? Math.max(0, (time - App.synth.ctx.currentTime) * 1000) : 0;
+  try { App.midiOut.send([0x80 | (ch & 15), key & 0x7f, 64], performance.now() + delay); } catch (e) {}
+}
 function bindEditor() {
   $$('#editTools .tb-btn').forEach(b => b.addEventListener('click', () => { if (App.editor) App.editor.setTool(b.dataset.tool); }));
   $('#snapSel').addEventListener('change', e => { if (App.editor) App.editor.snapBeats = parseFloat(e.target.value); });
@@ -6288,6 +6429,7 @@ function bindEditor() {
   $('#timbreSel').addEventListener('click', () => { if (initAudio()) { const p = parseInt($('#timbreSel').value, 10) || 0; App.synth && App.synth.preview(72, p, 90, 0.45); } });
   $('#btnTimbreAll').addEventListener('click', () => App.editor && App.editor.setAllPrograms(parseInt($('#timbreSel').value, 10) || 0));
   $('#btnSmartTimbre').addEventListener('click', e => App.editor && App.editor.smartTimbre(App.targetTrack, e.shiftKey));
+  $('#btnAccomp').addEventListener('click', addAccompaniment);
   $('#btnLoopSel').addEventListener('click', () => { if (initAudio() && App.editor) App.editor.loopFromSel(); });
   $('#btnClearLoop').addEventListener('click', () => { if (App.player) { App.player.setLoop(false, 0, App.song.totalTicks); App.loopOn = false; $('#btnLoop').classList.remove('active'); } });
   $('#btnExportMidi').addEventListener('click', exportMidi);
