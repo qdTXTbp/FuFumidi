@@ -88,6 +88,8 @@ const ok = m => console.log('\x1b[32m✓ ' + m + '\x1b[0m');
 const fail = m => { console.error('\x1b[31m✗ ' + m + '\x1b[0m'); process.exit(1); };
 
 function download(url, dest) {
+  // 首次运行时 /tmp/fufumidi-python 可能不存在（CI 全新 runner 必现），先建目录
+  try { fs.mkdirSync(path.dirname(dest), { recursive: true }); } catch {}
   return new Promise((resolve, reject) => {
     const doGet = (u, hops) => {
       const req = https.get(u, { headers: { 'User-Agent': 'FuFumidi-bundle/1.0' }, timeout: 60000 }, res => {
