@@ -35,7 +35,7 @@ FuFumidi 采用统一的深色扁平设计语言（窗口底色 `#0a0f18`），�
 
 ## 安装
 
-- 支持 **Windows 10 及以上**系统；
+- 支持 **Windows 10 及以上**系统；Linux及Macos
 - 到 **GitHub Releases** 页面下载安装包（`FuFumidi-Setup-&lt;版本&gt;.exe`）；
 - 安装包**自带内置 Python 运行时与转录模型**，无需安装 Python、Node 或任何依赖环境，装完即用；
 - 注意：v1.0.1 安装包体积约 **556MB**（内置运行时已做瘦身，由 853MB 缩减而来）。
