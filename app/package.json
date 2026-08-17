@@ -1,0 +1,106 @@
+{
+  "name": "fufumidi",
+  "productName": "FuFumidi",
+  "version": "1.2.0",
+  "description": "离线 MIDI 播放 / 编辑 / 可视化 / 分析 / 乐谱 / 转录（音频转 MIDI）一体工具",
+  "main": "main.js",
+  "author": "FuFumidi",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --x64",
+    "bundle:python": "node scripts/bundle-python.js",
+    "dist:win": "electron-builder --win nsis --x64 --publish never",
+    "dist:mac": "electron-builder --mac --x64 --arm64 --publish never",
+    "dist:linux": "electron-builder --linux --publish never"
+  },
+  "build": {
+    "appId": "com.fufumidi.app",
+    "productName": "FuFumidi",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "plugin-host.js",
+      "integrity.js",
+      "renderer/**/*",
+      "engine/**/*",
+      "plugins/**/*",
+      "build/icon.ico",
+      "build/icon.png"
+    ],
+    "asarUnpack": [
+      "engine/**/*"
+    ],
+    "extraResources": [
+      { "from": "build/uninstall-1.bmp", "to": "uninstall-1.bmp" },
+      { "from": "build/uninstall-2.bmp", "to": "uninstall-2.bmp" },
+      { "from": "build/uninstall-3.bmp", "to": "uninstall-3.bmp" },
+      { "from": "build/HYWenHei.ttf", "to": "HYWenHei.ttf" },
+      { "from": "python", "to": "python", "filter": ["**/*"] },
+      { "from": "models", "to": "models", "filter": ["**/*"] }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "${productName}-Setup-${version}.exe"
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] },
+        { "target": "zip", "arch": ["x64", "arm64"] }
+      ],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.music",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "build/icon.png",
+      "category": "Audio;AudioVideo;Music",
+      "synopsis": "FuFumidi 离线音频转 MIDI 一体工具",
+      "maintainer": "fufumidi <fufumidi@example.com>"
+    },
+    "fileAssociations": [
+      {
+        "ext": "mid",
+        "name": "MIDI 音频文件",
+        "description": "MIDI 音频文件"
+      },
+      {
+        "ext": "midi",
+        "name": "MIDI 音频文件",
+        "description": "MIDI 音频文件"
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "FuFumidi",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "installerLanguages": [
+        "zh_CN",
+        "en_US"
+      ],
+      "language": "2052",
+      "include": "build/installer.nsh"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  }
+}

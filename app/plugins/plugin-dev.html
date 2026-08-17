@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FuFumidi 插件开发文档 / Plugin Developer Docs</title>
+<style>
+  :root{
+    --bg0:#0a0f18; --bg1:#0c1320; --bg2:#0d1522; --card:#101a2a;
+    --border:#1b2a40; --border2:#24364f; --text:#e8f1fa; --text2:#a7b6c8; --text3:#6b7d94;
+    --accent:#00c9b1; --accent2:#00e6ca; --accent-dim:rgba(0,201,177,.14);
+    --red:#ff5d5d; --amber:#ffb84d; --green:#3ddc84; --mono:"Consolas","JetBrains Mono","Courier New",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg0); color:var(--text);
+    font:14px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",Roboto,Helvetica,Arial,sans-serif;
+    padding-bottom:80px;
+  }
+  .wrap{max-width:920px;margin:0 auto;padding:0 24px}
+  header{
+    background:linear-gradient(180deg, rgba(0,201,177,.10), transparent);
+    border-bottom:1px solid var(--border); padding:36px 0 26px; margin-bottom:8px;
+  }
+  header .wrap{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  h1{font-size:26px;margin:0 0 6px;letter-spacing:.3px}
+  h1 .sub{font-size:13px;color:var(--text3);font-weight:400;margin-left:8px}
+  .tagline{color:var(--text2);font-size:13px;max-width:60ch}
+  .lang{display:flex;gap:6px;align-items:center;flex:0 0 auto}
+  .lang button{
+    background:var(--bg2);border:1px solid var(--border2);color:var(--text2);
+    border-radius:999px;padding:5px 14px;font-size:12px;cursor:pointer;transition:all .15s;
+  }
+  .lang button.on{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
+  .lang button:hover{border-color:var(--accent)}
+  /* 双语隐藏逻辑：默认中文，body.en 切英文 */
+  .en{display:none}
+  body.en .en{display:inline}
+  body.en .zh{display:none}
+  h2, h3{color:var(--text)}
+  h2{
+    font-size:19px;margin:34px 0 12px;padding-left:12px;border-left:3px solid var(--accent);
+  }
+  h3{font-size:15px;margin:22px 0 8px}
+  h2 .num{color:var(--accent);margin-right:8px;font-family:var(--mono)}
+  p{margin:8px 0}
+  a{color:var(--accent2);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{
+    font-family:var(--mono);font-size:12.5px;background:#111d2e;border:1px solid var(--border);
+    border-radius:5px;padding:1px 6px;color:var(--accent2);
+  }
+  pre{
+    background:#0d1726;border:1px solid var(--border);border-radius:10px;padding:14px 16px;
+    overflow:auto;font-family:var(--mono);font-size:12.5px;line-height:1.6;color:#cfe3f5;
+  }
+  pre code{background:none;border:none;padding:0;color:inherit}
+  pre .c{color:#5f7188}      /* 注释 */
+  pre .k{color:#7dd3fc}      /* 关键字 */
+  pre .s{color:#86efac}      /* 字符串 */
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13px}
+  th,td{border:1px solid var(--border);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--bg2);color:var(--accent);font-weight:600;white-space:nowrap}
+  td code{font-size:12px;padding:0 5px}
+  .note{
+    background:var(--accent-dim);border:1px solid rgba(0,201,177,.35);border-radius:10px;
+    padding:10px 14px;font-size:13px;color:var(--text2);margin:14px 0;
+  }
+  .warn{
+    background:rgba(255,184,77,.08);border:1px solid rgba(255,184,77,.35);border-radius:10px;
+    padding:10px 14px;font-size:13px;color:var(--text2);margin:14px 0;
+  }
+  .api-item{
+    background:var(--card);border:1px solid var(--border);border-radius:12px;
+    padding:14px 16px;margin:12px 0;
+  }
+  .api-item .sig{font-family:var(--mono);font-size:13px;color:var(--accent2)}
+  .api-item .desc{color:var(--text2);font-size:13px;margin-top:6px}
+  .api-item .ret{font-size:12px;color:var(--text3);margin-top:6px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+  ul,ol{margin:8px 0;padding-left:22px}
+  li{margin:4px 0}
+  .muted{color:var(--text3);font-size:12.5px}
+  .foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--border);color:var(--text3);font-size:12.5px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div>
+      <h1>FuFumidi 插件开发文档 <span class="sub" id="hSub">Plugin Developer Documentation</span></h1>
+      <div class="tagline" id="hTag">为第三方开发者准备的完整指南：从最小插件到事件、引擎与渲染层接口。插件系统不改动主程序，即可扩展 FuFumidi 的能力。</div>
+    </div>
+    <div class="lang">
+      <button id="btnZh" class="on">中文</button>
+      <button id="btnEn">English</button>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ==================== 1. 总览 ==================== -->
+  <h2><span class="num">01</span><span class="zh">总览与概念</span><span class="en">Overview</span></h2>
+  <p>
+    <span class="zh">插件是放在插件目录中的一个文件夹，包含 <code>plugin.json</code> 清单和入口脚本。插件由用户主动安装，等同于本地可信代码：它能调用引擎、读写自己的设置、向界面发送消息。</span>
+    <span class="en">A plugin is a folder placed under the plugin directory, containing a <code>plugin.json</code> manifest and an entry script. Plugins are installed deliberately by the user and run as locally trusted code: they can run the engine, read and write their own settings, and send messages to the UI.</span>
+  </p>
+  <div class="grid2">
+    <div>
+      <h3><span class="zh">插件能做什么</span><span class="en">What a plugin can do</span></h3>
+      <ul>
+        <li><span class="zh">注册命令，供界面「设置 → 插件」页调用</span><span class="en">Register commands callable from the Settings → Plugins page</span></li>
+        <li><span class="zh">订阅应用事件（载入歌曲、切换视图、转录完成等）</span><span class="en">Subscribe to app events (song loaded, view changed, transcribe done, …)</span></li>
+        <li><span class="zh">调用引擎 Python 脚本，复用自己的转录/后处理能力</span><span class="en">Run engine Python scripts, reusing transcribe / post-process capabilities</span></li>
+        <li><span class="zh">读写插件私有设置</span><span class="en">Read and write plugin-private settings</span></li>
+        <li><span class="zh">通过渲染层脚本操作界面、显示提示</span><span class="en">Manipulate the UI and show toasts via a renderer script</span></li>
+      </ul>
+    </div>
+    <div>
+      <h3><span class="zh">插件不能做什么</span><span class="en">What a plugin cannot do</span></h3>
+      <ul>
+        <li><span class="zh">不能修改主程序文件或其它插件</span><span class="en">Cannot modify the host app or other plugins</span></li>
+        <li><span class="zh">单点异常只记日志，不影响主程序运行</span><span class="en">A single failure is logged only, without affecting the host</span></li>
+        <li><span class="zh">引擎调用带 30 分钟超时，死循环会被终止</span><span class="en">Engine calls carry a 30-minute timeout; infinite loops are killed</span></li>
+      </ul>
+    </div>
+  </div>
+  <div class="note">
+    <span class="zh">建议：所有引擎调用、文件操作都放在主进程插件里；渲染层脚本只负责界面反馈。</span>
+    <span class="en">Tip: keep engine calls and file operations in the main-process plugin; the renderer script only handles UI feedback.</span>
+  </div>
+
+  <!-- ==================== 2. 安装 ==================== -->
+  <h2><span class="num">02</span><span class="zh">安装插件</span><span class="en">Installing a plugin</span></h2>
+  <p><span class="zh">把插件文件夹放到下列任一目录，然后在「设置 → 插件」点「重新扫描」，打开启用开关即可。</span>
+  <span class="en">Place the plugin folder in one of the directories below, then click “重新扫描 / Rescan” in Settings → Plugins and enable it.</span></p>
+  <table>
+    <tr><th><span class="zh">位置</span><span class="en">Location</span></th><th><span class="zh">说明</span><span class="en">Notes</span></th></tr>
+    <tr>
+      <td><code>用户目录/fufumidi/plugins/&lt;插件名&gt;/</code></td>
+      <td><span class="zh">用户插件，推荐。Windows 通常在 <code>C:\Users\&lt;你&gt;\AppData\Roaming\fufumidi\fufumidi\plugins</code></span>
+      <span class="en">User plugins, recommended. On Windows usually <code>C:\Users\&lt;you&gt;\AppData\Roaming\fufumidi\fufumidi\plugins</code></span></td>
+    </tr>
+    <tr>
+      <td><code>安装目录/resources/app/plugins/&lt;插件名&gt;/</code></td>
+      <td><span class="zh">随应用内置</span><span class="en">Bundled with the app</span></td>
+    </tr>
+  </table>
+
+  <!-- ==================== 3. 清单 ==================== -->
+  <h2><span class="num">03</span><span class="zh">插件清单 plugin.json</span><span class="en">The plugin.json manifest</span></h2>
+  <pre><code>{
+  <span class="s">"id"</span>: <span class="s">"my-plugin"</span>,      <span class="c">// 唯一 ID：小写字母/数字/-/_，必填</span>
+  <span class="s">"name"</span>: <span class="s">"我的插件"</span>,      <span class="c">// 展示名</span>
+  <span class="s">"version"</span>: <span class="s">"1.0.0"</span>,
+  <span class="s">"author"</span>: <span class="s">"作者"</span>,
+  <span class="s">"description"</span>: <span class="s">"一句话说明"</span>,
+  <span class="s">"entry"</span>: <span class="s">"index.js"</span>,    <span class="c">// 主进程入口，必填（CommonJS）</span>
+  <span class="s">"renderer"</span>: <span class="s">"ui.js"</span>,     <span class="c">// 可选：注入到界面环境的脚本</span>
+  <span class="s">"commands"</span>: [<span class="s">"hello"</span>]   <span class="c">// 可选：声明命令，设置页会列出按钮</span>
+}</code></pre>
+  <table>
+    <tr><th><span class="zh">字段</span><span class="en">Field</span></th><th><span class="zh">必填</span><span class="en">Required</span></th><th><span class="zh">说明</span><span class="en">Notes</span></th></tr>
+    <tr><td><code>id</code></td><td><span class="zh">是</span><span class="en">yes</span></td><td><span class="zh">全局唯一，用于启用状态与消息路由。只能含小写/大写字母、数字、<code>-</code>、<code>_</code></span><span class="en">Globally unique; used for enable state and message routing. Letters, digits, <code>-</code>, <code>_</code> only</span></td></tr>
+    <tr><td><code>name</code></td><td><span class="zh">否</span><span class="en">no</span></td><td><span class="zh">展示名，缺省用 id</span><span class="en">Display name, defaults to id</span></td></tr>
+    <tr><td><code>entry</code></td><td><span class="zh">是</span><span class="en">yes</span></td><td><span class="zh">主进程入口，相对本目录</span><span class="en">Main-process entry, relative to this folder</span></td></tr>
+    <tr><td><code>renderer</code></td><td><span class="zh">否</span><span class="en">no</span></td><td><span class="zh">渲染层脚本，随启用注入一次</span><span class="en">Renderer script, injected once when enabled</span></td></tr>
+    <tr><td><code>commands</code></td><td><span class="zh">否</span><span class="en">no</span></td><td><span class="zh">声明命令名，设置页据此列出按钮（实际仍须在 activate 中 register）</span><span class="en">Declared command names shown as buttons (still must be register()ed in activate)</span></td></tr>
+  </table>
+
+  <!-- ==================== 4. 入口 ==================== -->
+  <h2><span class="num">04</span><span class="zh">入口脚本</span><span class="en">Entry script</span></h2>
+  <p><span class="zh">入口导出 <code>activate(ctx)</code>（必选）与 <code>deactivate()</code>（可选）。启用时调用 <code>activate</code>，停用或退出时调用 <code>deactivate</code>。</span>
+  <span class="en">The entry exports <code>activate(ctx)</code> (required) and optionally <code>deactivate()</code>. <code>activate</code> is called on enable, <code>deactivate</code> on disable or quit.</span></p>
+  <pre><code><span class="k">module.exports</span> = {
+  <span class="k">activate</span>(ctx) {
+    <span class="c">// 注册命令、订阅事件、读取设置……</span>
+    ctx.commands.register(<span class="s">'hello'</span>, <span class="k">async</span> () =&gt; <span class="s">'你好'</span>);
+  },
+  <span class="k">deactivate</span>() {
+    <span class="c">// 释放资源、取消订阅（可选）</span>
+  }
+};</code></pre>
+  <div class="warn">
+    <span class="zh">deactivate 只在应用退出与插件停用时调用。若你订阅了事件或持有句柄，建议在这里清理。</span>
+    <span class="en">deactivate is called on app quit and plugin disable. Clean up listeners or handles you hold.</span>
+  </div>
+
+  <!-- ==================== 5. ctx API ==================== -->
+  <h2><span class="num">05</span><span class="zh">上下文 ctx API</span><span class="en">The ctx API</span></h2>
+
+  <div class="api-item">
+    <div class="sig">ctx.commands.register(name, fn)</div>
+    <div class="desc">
+      <span class="zh">注册一个命令。<code>fn</code> 返回 Promise 或值；渲染层点击「设置 → 插件」页对应按钮时调用，返回值会以 toast 展示（对象会被 JSON 序列化）。注册前建议先 <code>unregister</code> 旧的同名命令，避免重复注册。</span>
+      <span class="en">Register a command. <code>fn</code> returns a Promise or value; it is invoked when the user clicks the matching button on the Settings → Plugins page, and the return value is shown as a toast (objects are JSON-serialized). Unregister any previous same-name command first to avoid duplicates.</span>
+    </div>
+    <div class="ret"><span class="zh">注意：重复 activate 不会覆盖，请自行 unregister。</span><span class="en">Note: repeated activate does not overwrite; unregister yourself.</span></div>
+  </div>
+
+  <div class="api-item">
+    <div class="sig">ctx.events.on(name, cb) → unsubscribe</div>
+    <div class="desc">
+      <span class="zh">订阅应用事件，<code>cb(payload)</code>。返回一个取消订阅函数。见第 08 节事件一览。</span>
+      <span class="en">Subscribe to an app event, <code>cb(payload)</code>. Returns an unsubscribe function. See section 08 for the event list.</span>
+    </div>
+  </div>
+
+  <div class="api-item">
+    <div class="sig">ctx.events.emit(name, payload)</div>
+    <div class="desc">
+      <span class="zh">向所有已启用插件广播事件（包括其它插件的同名监听）。可用于插件间协作。</span>
+      <span class="en">Broadcast an event to all enabled plugins (including same-name listeners in other plugins). Useful for inter-plugin collaboration.</span>
+    </div>
+  </div>
+
+  <div class="api-item">
+    <div class="sig">await ctx.engine.run(args, { script, timeoutMs }) → { code, result, out, err }</div>
+    <div class="desc">
+      <span class="zh">运行引擎 Python 脚本。<code>script</code> 为绝对路径或引擎目录内的文件名（如 <code>'smart_midi.py'</code>），<code>args</code> 为传给脚本的命令行参数数组。复用主程序的 Python 环境解析、UTF-8 中文路径适配与超时机制。</span>
+      <span class="en">Run an engine Python script. <code>script</code> is an absolute path or a file name inside the engine directory (e.g. <code>'smart_midi.py'</code>); <code>args</code> is the CLI argument array. Reuses the host's Python resolution, UTF-8 path handling and timeout.</span>
+    </div>
+    <div class="ret">
+      <span class="zh">约定：脚本在 stdout 输出一行 <code>###RESULT {json}</code>，解析结果放入 <code>result</code>。超时（默认 30 分钟）时进程会被强制终止。</span>
+      <span class="en">Convention: the script prints a line <code>###RESULT {json}</code> on stdout; the parsed JSON lands in <code>result</code>. On timeout (default 30 min) the process is force-killed.</span>
+    </div>
+  </div>
+
+  <div class="api-item">
+    <div class="sig">ctx.settings.get(key) / ctx.settings.set(key, value)</div>
+    <div class="desc">
+      <span class="zh">读写插件私有设置，持久化到应用的 settings.json（命名空间自动按插件 id 隔离）。值可以是任意 JSON 可序列化数据。</span>
+      <span class="en">Read and write plugin-private settings, persisted in the app's settings.json (namespaced by plugin id). Any JSON-serializable value works.</span>
+    </div>
+  </div>
+
+  <div class="api-item">
+    <div class="sig">ctx.ui.broadcast(name, payload)</div>
+    <div class="desc">
+      <span class="zh">向本插件的渲染层脚本发送消息，脚本以 <code>window.addEventListener('fuplugin:&lt;id&gt;:&lt;name&gt;', ev =&gt; ev.detail)</code> 接收。见第 07 节。</span>
+      <span class="en">Send a message to this plugin's renderer script, received via <code>window.addEventListener('fuplugin:&lt;id&gt;:&lt;name&gt;', ev =&gt; ev.detail)</code>. See section 07.</span>
+    </div>
+  </div>
+
+  <div class="api-item">
+    <div class="sig">ctx.ui.notify(text, type)</div>
+    <div class="desc">
+      <span class="zh">在界面顶部弹出 toast 提示。<code>type</code> 可为 <code>'info' | 'ok' | 'err'</code>。</span>
+      <span class="en">Show a toast at the top of the UI. <code>type</code> can be <code>'info' | 'ok' | 'err'</code>.</span>
+    </div>
+  </div>
+
+  <div class="api-item">
+    <div class="sig">ctx.log(...args)</div>
+    <div class="desc">
+      <span class="zh">输出到「设置 → 插件」日志区与主进程控制台，自动带插件名前缀。</span>
+      <span class="en">Log to the plugin log panel and the main-process console, prefixed with the plugin id.</span>
+    </div>
+  </div>
+
+  <div class="api-item">
+    <div class="sig">ctx.app.getSongMeta() → { fileName, trackCount, totalTicks, totalSec, bpm } | null</div>
+    <div class="desc">
+      <span class="zh">读取当前载入歌曲的轻量信息。未载入歌曲时返回 null。</span>
+      <span class="en">Read light metadata of the currently loaded song. Returns null when no song is loaded.</span>
+    </div>
+  </div>
+
+  <div class="api-item">
+    <div class="sig">ctx.manifest</div>
+    <div class="desc">
+      <span class="zh">本插件的 plugin.json 原对象（含 name / version / author / description）。</span>
+      <span class="en">This plugin's raw plugin.json object (name / version / author / description).</span>
+    </div>
+  </div>
+
+  <!-- ==================== 6. 引擎 ==================== -->
+  <h2><span class="num">06</span><span class="zh">运行引擎脚本</span><span class="en">Running engine scripts</span></h2>
+  <p>
+    <span class="zh">把需要 AI 能力的 Python 脚本放在任意位置，用 <code>ctx.engine.run</code> 调用。脚本与主程序共用 Python 环境与依赖，可直接 import 引擎模块（如 <code>music2midi</code> 的辅助函数）。</span>
+    <span class="en">Place your Python script anywhere and call it with <code>ctx.engine.run</code>. It shares the host's Python environment and dependencies, and can import engine modules directly.</span>
+  </p>
+  <pre><code><span class="k">const</span> fs = <span class="k">require</span>(<span class="s">'fs'</span>), path = <span class="k">require</span>(<span class="s">'path'</span>);
+<span class="c">// 先落地一个脚本，再运行它</span>
+<span class="k">const</span> script = path.join(ctx.manifest.<span class="k">id</span>, <span class="s">'scripts'</span>, <span class="s">'enhance.py'</span>);
+<span class="k">const</span> r = <span class="k">await</span> ctx.engine.run([<span class="s">'enhance'</span>, inMidi], { script, timeoutMs: 5 * 60 * 1000 });
+<span class="k">if</span> (r.code === 0) {
+  ctx.log(<span class="s">'处理完成：'</span> + JSON.stringify(r.result));
+} <span class="k">else</span> {
+  ctx.log(<span class="s">'失败：'</span> + (r.err || r.out), <span class="s">'err'</span>);
+}</code></pre>
+  <div class="note">
+    <span class="zh">脚本必须以 <code>###RESULT {json}</code> 单行形式输出结构化结果，否则 <code>r.result</code> 为 null，但 <code>r.out</code> 仍包含全部输出。</span>
+    <span class="en">Your script should print a single <code>###RESULT {json}</code> line for structured results; otherwise <code>r.result</code> is null while <code>r.out</code> still holds all output.</span>
+  </div>
+
+  <!-- ==================== 7. 渲染层 ==================== -->
+  <h2><span class="num">07</span><span class="zh">渲染层脚本 renderer</span><span class="en">Renderer scripts</span></h2>
+  <p>
+    <span class="zh"><code>renderer</code> 指向的脚本会被注入界面环境，可操作 DOM、调用 <code>window.fuBridge</code> 与 <code>toast()</code>。主进程插件用 <code>ctx.ui.broadcast</code> 发消息：</span>
+    <span class="en">The <code>renderer</code> script is injected into the UI and can manipulate the DOM, call <code>window.fuBridge</code> and <code>toast()</code>. The main-process plugin sends messages with <code>ctx.ui.broadcast</code>:</span>
+  </p>
+  <pre><code><span class="c">// ui.js —— 界面环境</span>
+(<span class="k">function</span> () {
+  <span class="k">const</span> id = <span class="s">'my-plugin'</span>;
+  window.addEventListener(<span class="s">'fuplugin:'</span> + id + <span class="s">':my-event'</span>, <span class="k">function</span> (ev) {
+    <span class="c">// ev.detail 即主进程广播的 payload</span>
+    toast(<span class="s">'收到：'</span> + (ev.detail &amp;&amp; ev.detail.text || <span class="s">''</span>), <span class="s">'ok'</span>);
+  });
+})();</code></pre>
+  <div class="warn">
+    <span class="zh">渲染层脚本一旦注入，跨插件重载不会再次注入（按插件 id 去重）。渲染层异常不会影响主进程，但请自行 try/catch。</span>
+    <span class="en">A renderer script is injected once per plugin id across rescans. Renderer errors do not affect the main process, but do wrap your code in try/catch.</span>
+  </div>
+
+  <!-- ==================== 8. 事件 ==================== -->
+  <h2><span class="num">08</span><span class="zh">可订阅的事件</span><span class="en">Subscribable events</span></h2>
+  <table>
+    <tr><th><span class="zh">事件</span><span class="en">Event</span></th><th><span class="zh">payload</span><span class="en">payload</span></th><th><span class="zh">时机</span><span class="en">When</span></th></tr>
+    <tr><td><code>song-loaded</code></td><td><code>{ fileName, trackCount, totalTicks, totalSec, bpm }</code></td><td><span class="zh">载入歌曲</span><span class="en">A song is loaded</span></td></tr>
+    <tr><td><code>view-changed</code></td><td><code>'play' | 'edit' | 'transcribe' | 'analyze' | 'score' | 'viz'</code></td><td><span class="zh">切换视图</span><span class="en">View changed</span></td></tr>
+    <tr><td><code>transcribe-done</code></td><td><code>{ ok, out, note_count, mode, perf }</code></td><td><span class="zh">转录完成</span><span class="en">Transcription finished</span></td></tr>
+    <tr><td><code>refine-done</code></td><td><code>{ ok, out, stats, mode }</code></td><td><span class="zh">智能修正完成</span><span class="en">Smart refine finished</span></td></tr>
+  </table>
+
+  <!-- ==================== 9. 完整示例 ==================== -->
+  <h2><span class="num">09</span><span class="zh">完整示例</span><span class="en">Full example</span></h2>
+  <p><span class="zh">一个「歌曲信息卡片」插件：命令读取当前歌曲信息，监听载入事件，渲染层显示一条欢迎提示。</span>
+  <span class="en">A “song info card” plugin: a command reads current song info, a listener tracks song loads, and the renderer shows a welcome toast.</span></p>
+  <pre><code><span class="c">// plugin.json</span>
+{
+  <span class="s">"id"</span>: <span class="s">"song-info"</span>,
+  <span class="s">"name"</span>: <span class="s">"歌曲信息"</span>,
+  <span class="s">"version"</span>: <span class="s">"1.0.0"</span>,
+  <span class="s">"author"</span>: <span class="s">"你"</span>,
+  <span class="s">"description"</span>: <span class="s">"展示当前歌曲信息"</span>,
+  <span class="s">"entry"</span>: <span class="s">"index.js"</span>,
+  <span class="s">"renderer"</span>: <span class="s">"ui.js"</span>,
+  <span class="s">"commands"</span>: [<span class="s">"showInfo"</span>]
+}</code></pre>
+  <pre><code><span class="c">// index.js</span>
+<span class="k">module.exports</span> = {
+  <span class="k">activate</span>(ctx) {
+    ctx.commands.register(<span class="s">'showInfo'</span>, <span class="k">async</span> () =&gt; {
+      <span class="k">const</span> m = ctx.app.getSongMeta();
+      <span class="k">if</span> (!m || !m.fileName) <span class="k">return</span> <span class="s">'尚未载入歌曲'</span>;
+      <span class="k">return</span> m.fileName + <span class="s">' · '</span> + m.trackCount + <span class="s">' 轨 · '</span> +
+             Math.round(m.totalSec) + <span class="s">' 秒 · '</span> + (m.bpm || <span class="s">'-'</span>) + <span class="s">' BPM'</span>;
+    });
+    ctx.events.on(<span class="s">'song-loaded'</span>, (m) =&gt; {
+      ctx.ui.broadcast(<span class="s">'song'</span>, { text: m &amp;&amp; m.fileName });
+    });
+  },
+  <span class="k">deactivate</span>() {}
+};</code></pre>
+  <pre><code><span class="c">// ui.js</span>
+(<span class="k">function</span> () {
+  <span class="k">const</span> id = <span class="s">'song-info'</span>;
+  window.addEventListener(<span class="s">'fuplugin:'</span> + id + <span class="s">':song'</span>, <span class="k">function</span> (ev) {
+    toast(<span class="s">'已载入歌曲：'</span> + (ev.detail &amp;&amp; ev.detail.text || <span class="s">'未知'</span>), <span class="s">'ok'</span>);
+  });
+})();</code></pre>
+
+  <!-- ==================== 10. 建议 ==================== -->
+  <h2><span class="num">10</span><span class="zh">开发建议与常见陷阱</span><span class="en">Tips and common pitfalls</span></h2>
+  <ul>
+    <li><span class="zh">命令与事件回调保持异步安全：返回 Promise，或使用 try/catch，勿让异常抛出到主程序。</span><span class="en">Keep command and event callbacks async-safe: return Promises or use try/catch; never let exceptions escape to the host.</span></li>
+    <li><span class="zh">勿在 <code>activate</code> 中做长时间同步阻塞（如同步读大文件）；如需耗时工作，用 <code>ctx.engine.run</code> 或异步接口。</span><span class="en">Do not block synchronously in <code>activate</code>; move heavy work into <code>ctx.engine.run</code> or async APIs.</span></li>
+    <li><span class="zh">重复注册同名命令不会覆盖——先 <code>unregister</code>。</span><span class="en">Re-registering the same command does not overwrite — <code>unregister</code> first.</span></li>
+    <li><span class="zh">插件之间通过 <code>ctx.events.emit</code> 协作时，注意避免互相触发形成死循环。</span><span class="en">When collaborating via <code>ctx.events.emit</code>, guard against mutual triggering loops.</span></li>
+    <li><span class="zh">依赖其它模块请本地打包进插件目录，应用不保证全局 Node 模块存在。</span><span class="en">Bundle third-party Node dependencies inside your plugin folder; global modules are not guaranteed.</span></li>
+    <li><span class="zh">设置的值会长期保留；改名或升级时做好迁移，避免读到旧结构。</span><span class="en">Settings persist; handle migrations on upgrade so stale structures don't break reads.</span></li>
+  </ul>
+
+  <div class="foot">
+    <span class="zh">FuFumidi 插件开发文档 · 版本 1.0 · 随应用内置。示例插件见同目录 <code>example-hello/</code>。</span>
+    <span class="en">FuFumidi Plugin Developer Docs · v1.0 · Bundled with the app. See <code>example-hello/</code> in the same directory.</span>
+  </div>
+</div>
+
+<script>
+  var body = document.body;
+  var btnZh = document.getElementById('btnZh');
+  var btnEn = document.getElementById('btnEn');
+  btnZh.addEventListener('click', function () { body.classList.remove('en'); btnZh.classList.add('on'); btnEn.classList.remove('on'); document.title = 'FuFumidi 插件开发文档'; });
+  btnEn.addEventListener('click', function () { body.classList.add('en'); btnEn.classList.add('on'); btnZh.classList.remove('on'); document.title = 'FuFumidi Plugin Developer Docs'; });
+</script>
+</body>
+</html>

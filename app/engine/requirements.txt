@@ -1,0 +1,37 @@
+# AudioMuse v2.2 - Python 依赖
+#
+# 界面:    PySide6 (Qt6, 原生 Windows 11 Fluent 风格)
+# 通用:    basic-pitch (Spotify, 任意歌曲/人声/乐器, ONNX 无需 TensorFlow)
+# 钢琴:    piano-transcription-inference (ByteDance, 纯钢琴高精度)
+# 解码:    soundfile + librosa + imageio-ffmpeg (支持所有格式)
+# 播放:    系统自带 winmm MCI (无需额外依赖)
+#
+# 安装命令(等价于 install.bat 内部逻辑):
+#   pip install torch
+#   pip install -r requirements.txt
+
+# ---- 图形界面 (Windows 11 风格) ----
+PySide6>=6.7
+
+# ---- 通用转录引擎 (任意歌曲/人声/乐器) ----
+basic-pitch>=0.4.0
+onnxruntime>=1.16
+
+# ---- 钢琴专用转录引擎 ----
+piano-transcription-inference>=0.0.6
+
+# ---- 引擎计算后端 (CPU 版即可, 已自动调用全部CPU核) ----
+torch
+
+# ---- 音频解码 (任意格式) ----
+librosa>=0.10.0
+soundfile>=0.12.0
+# 内置静态 ffmpeg, 用于解码 AAC/M4S/M4A/MP4/视频 等格式
+imageio-ffmpeg>=0.4.8
+
+# ---- MIDI 处理 ----
+pretty_midi>=0.2.10
+
+# ---- 可选: 人声分离增强包 (install.bat 会询问是否安装) ----
+# 安装后可把歌曲分离成人声/贝斯/乐器/鼓, 分别转录为独立音轨:
+#   pip install demucs

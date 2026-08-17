@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FuFumidi 开发者文档</title>
+<style>
+  :root {
+    --bg: #0a0f18;
+    --bg-panel: #0f1622;
+    --bg-elev: #141d2c;
+    --border: #1f2b3f;
+    --text: #d6dee9;
+    --text-dim: #8a97a8;
+    --accent: #00C9B1;
+    --accent2: #2ee6cd;
+    --accent-dim: rgba(0,201,177,.14);
+    --warn: #f2c14e;
+    --danger: #f26b6b;
+    --mono: "Cascadia Code", Consolas, "JetBrains Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    line-height: 1.75;
+    font-size: 15px;
+  }
+
+  /* 侧边导航 */
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0;
+    width: 260px; height: 100vh;
+    background: var(--bg-panel);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 20px 0 40px;
+    z-index: 10;
+  }
+  .sidebar .brand {
+    padding: 0 20px 16px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+  }
+  .sidebar .brand .logo {
+    font-size: 18px; font-weight: 700;
+    color: var(--accent2);
+    letter-spacing: .5px;
+  }
+  .sidebar .brand .tag {
+    font-size: 12px; color: var(--text-dim); margin-top: 2px;
+  }
+  .sidebar a {
+    display: block;
+    padding: 8px 20px;
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 13.5px;
+    border-left: 3px solid transparent;
+    transition: all .15s ease;
+  }
+  .sidebar a:hover { color: var(--text); background: rgba(0,201,177,.05); }
+  .sidebar a.active { color: var(--accent2); border-left-color: var(--accent); background: var(--accent-dim); }
+  .sidebar .group {
+    padding: 14px 20px 4px;
+    font-size: 11px; letter-spacing: 1.2px;
+    text-transform: uppercase; color: #55627a;
+    font-weight: 600;
+  }
+
+  /* 主内容 */
+  .content {
+    margin-left: 260px;
+    padding: 40px 56px 80px;
+    max-width: 920px;
+  }
+  h1, h2, h3, h4 { color: var(--text); line-height: 1.4; }
+  h1 { font-size: 28px; border-bottom: 2px solid var(--accent-dim); padding-bottom: 12px; margin-bottom: 24px; }
+  h2 {
+    font-size: 21px; margin-top: 48px;
+    padding-left: 10px; border-left: 4px solid var(--accent);
+    scroll-margin-top: 20px;
+  }
+  h3 { font-size: 17px; margin-top: 28px; color: var(--accent2); }
+  h4 { font-size: 15px; margin-top: 20px; }
+
+  p { margin: 12px 0; }
+  strong { color: #eef2f8; }
+  a { color: var(--accent2); }
+  a:hover { text-decoration: none; }
+
+  ul, ol { padding-left: 24px; }
+  li { margin: 5px 0; }
+
+  /* 代码块 */
+  pre {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  code {
+    font-family: var(--mono);
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 13px;
+    color: var(--accent2);
+  }
+  pre code { background: none; border: none; padding: 0; color: var(--text); }
+
+  /* 引用块 */
+  blockquote {
+    margin: 16px 0;
+    padding: 10px 16px;
+    background: var(--accent-dim);
+    border-left: 4px solid var(--accent);
+    border-radius: 0 8px 8px 0;
+    color: var(--text-dim);
+  }
+  blockquote p { margin: 4px 0; }
+
+  /* 表格 */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 14px;
+  }
+  th, td {
+    text-align: left;
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+  }
+  th { background: var(--bg-elev); color: var(--accent2); font-weight: 600; }
+  tr:nth-child(even) td { background: rgba(255,255,255,.02); }
+
+  /* 章节卡片 / 标签 */
+  .badge {
+    display: inline-block;
+    background: var(--accent-dim);
+    color: var(--accent2);
+    border: 1px solid var(--accent);
+    border-radius: 20px;
+    padding: 1px 10px;
+    font-size: 12px;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .warn { color: var(--warn); }
+  .danger { color: var(--danger); }
+
+  .toc-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 24px 0;
+  }
+  .toc-card a { display: block; padding: 4px 0; font-size: 14px; }
+
+  hr { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+
+  /* 顶部小面包屑 */
+  .crumb { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+  .crumb span { color: var(--accent); }
+
+  @media (max-width: 900px) {
+    .sidebar { position: static; width: 100%; height: auto; border-right: none; border-bottom: 1px solid var(--border); }
+    .content { margin-left: 0; padding: 24px; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="sidebar">
+  <div class="brand">
+    <div class="logo">FuFumidi 开发者文档</div>
+    <div class="tag">离线音频 → MIDI 一条龙 · 开发者手册</div>
+  </div>
+  <div class="group">总览</div>
+  <a href="#overview">项目简介</a>
+  <a href="#features">功能特性</a>
+  <a href="#workflow">使用流程</a>
+  <div class="group">架构 · AGENTS.md</div>
+  <a href="#positioning">项目定位</a>
+  <a href="#architecture">架构决策与理由</a>
+  <a href="#coding">编码规范</a>
+  <a href="#rejected">已否决方案</a>
+  <a href="#workflow-guide">工作流</a>
+  <a href="#structure">目录速览</a>
+  <div class="group">发布 · UPDATE.md</div>
+  <a href="#version-rule">版本号规则</a>
+  <a href="#version-locations">版本号改哪里</a>
+  <a href="#update-checklist">更新必做清单</a>
+  <a href="#testing">测试流程与规范</a>
+  <a href="#preset-notes">预设 / 参数修改</a>
+  <a href="#i18n-notes">i18n 提醒</a>
+  <div class="group">插件系统 · plugin-dev</div>
+  <a href="#plugin-overview">架构概览</a>
+  <a href="#plugin-install">安装位置与启用</a>
+  <a href="#plugin-minimal">最小可运行插件</a>
+  <a href="#plugin-manifest">清单 plugin.json</a>
+  <a href="#plugin-entry">主进程入口 entry</a>
+  <a href="#plugin-ctx">上下文 ctx API</a>
+  <a href="#plugin-engine">引擎子进程 engine.run</a>
+  <a href="#plugin-events">应用事件</a>
+  <a href="#plugin-renderer">渲染层脚本 renderer</a>
+  <a href="#plugin-lifecycle">生命周期与状态</a>
+  <a href="#plugin-ipc">IPC 通道一览</a>
+  <a href="#plugin-security">安全模型与健壮性</a>
+  <a href="#plugin-debug">调试与排障</a>
+  <a href="#plugin-examples">进阶示例</a>
+  <div class="group">记录 · CHANGELOG.md</div>
+  <a href="#changelog">更新日志</a>
+  <div class="group">协议</div>
+  <a href="#license">开源协议 · MIT</a>
+</nav>
+
+<main class="content">
+
+  <div class="crumb">FuFumidi <span>/</span> 开发者文档</div>
+  <h1>FuFumidi 开发者文档</h1>
+
+  <p>本页整合了 <code>AGENTS.md</code>、<code>CHANGELOG.md</code>、<code>LICENSE.txt</code>、<code>README.md</code> 与 <code>UPDATE.md</code> 五份源文件，作为「离线音频 → MIDI 转录 + 播放 / 编辑 / 可视化」桌面应用的统一开发者手册。</p>
+
+  <div class="toc-card">
+    <strong>文档目录</strong>
+    <a href="#overview">① README —— 项目简介 / 特性 / 安装 / 使用流程 / 构建</a>
+    <a href="#positioning">② AGENTS.md —— 项目宪法：架构决策 / 编码规范 / 目录</a>
+    <a href="#version-rule">③ UPDATE.md —— 版本发布与测试规范</a>
+    <a href="#changelog">④ CHANGELOG.md —— 更新日志</a>
+    <a href="#license">⑤ LICENSE.txt —— MIT 开源协议</a>
+  </div>
+
+  <!-- ===================== README ===================== -->
+  <h2 id="overview">项目简介</h2>
+  <p><strong>离线音频转 MIDI 一条龙工具</strong> —— 转录、修正、编辑、演奏、可视化、分析、乐谱，全程本地运行，无需联网。</p>
+
+  <p>FuFumidi 是一款基于 Electron 的<strong>纯离线</strong>音频转 MIDI 桌面应用。内置 Python 运行时，音频文件全部在本地处理，<strong>不上传任何数据</strong>。</p>
+
+  <p>内置三套完全离线的转录引擎：</p>
+  <ul>
+    <li><strong>通用模式</strong>（basic-pitch，ONNX）：适用于人声 / 乐器等通用场景（兼人声分离）；</li>
+    <li><strong>钢琴模式</strong>（piano-transcription，PyTorch）：钢琴专用，还原力度与踏板；</li>
+    <li><strong>分离模式</strong>（demucs，PyTorch）：先做人声 / 乐器分离，再对分离后的音轨转录。</li>
+  </ul>
+
+  <p>引擎支持 <strong>GPU 自动检测</strong>（NVIDIA CUDA / AMD·Intel DirectML / CPU 兜底），并提供三档性能模式（quality / balanced / fast），按你的 CPU 核数与显卡自动推荐档位，低配置机器也能流畅转录。</p>
+
+  <h3 id="features">功能特性</h3>
+  <ul>
+    <li><strong>七个视图一体</strong>：演奏 / 编辑 / 可视化 / 分析 / 乐谱 / 转录 / 转换，一次导入、全程无缝衔接；</li>
+    <li><strong>三引擎离线转录</strong>：通用、钢琴、人声分离三种模式随切随用，支持<strong>拖放或对话框导入</strong>音频；</li>
+    <li><strong>智能修正（refine）</strong>：转录完成后一键精修 —— 对齐起音、还原力度、声部平衡、清理杂音；</li>
+    <li><strong>内置预设</strong>：内置「人声：最优」「钢琴：最优」两个推荐预设并设为默认，可排序、删除、一键恢复，切换引擎模式自动套用对应预设；</li>
+    <li><strong>高级转录参数</strong>：最短音符、起音判定、音符合并间隔、输出鼓组节奏轨等可调；</li>
+    <li><strong>中英双语界面</strong>：一键切换语言；</li>
+    <li><strong>主题库</strong>：内置深色主题，可切换更多外观；</li>
+    <li><strong>插件系统</strong>：内置插件宿主与示例插件，可扩展功能；</li>
+    <li><strong>新手引导</strong>：首次启动的引导流程，快速上手；</li>
+    <li><strong>完整性一键修复</strong>：启动时后台校验设置、预设、插件清单，误删可一键修复；</li>
+    <li><strong>内置 Python 运行时</strong>：安装包自带免安装 CPython 与全部依赖，开箱即用，无需另装 Python 环境；</li>
+    <li><strong>MIDI 关联</strong>：<code>.mid</code> / <code>.midi</code> 文件可直接双击打开；</li>
+    <li><strong>编辑器精修</strong>：选区量化、移调（±半音 / ±八度）、复制 / 粘贴 / 克隆、力度渐强 / 渐弱、音阶吸附；</li>
+    <li><strong>导出 MusicXML</strong>：把当前曲目导出为标准 MusicXML，可导入 MuseScore / Sibelius 继续编排；</li>
+    <li><strong>混音台</strong>：每轨音量 / 声像（pan）/ 静音 / 独奏，实时生效；</li>
+    <li><strong>节拍器</strong>：播放时按节拍打点（重拍高音、普通拍低音）；</li>
+    <li><strong>工程文件（.fufu）</strong>：保存 / 恢复编辑状态、混音参数、循环区间、播放速度与目标轨道；</li>
+    <li><strong>离线渲染提速</strong>：MIDI → WAV 按起始时间分桶渲染 + overlap-add 合成，大文件不再卡顿。</li>
+  </ul>
+
+  <h3>界面预览</h3>
+  <p>FuFumidi 采用统一的深色扁平设计语言（窗口底色 <code>#0a0f18</code>），以 teal 青绿色 <code>#00C9B1</code> 作为强调色贯穿全局。顶栏七个视图标签切换流畅，编辑 / 可视化与播放界面同源一体，离线状态下渲染器零依赖运行。</p>
+
+  <h3>安装</h3>
+  <ul>
+    <li>支持 <strong>Windows 10 及以上</strong>系统；</li>
+    <li>到 <strong>GitHub Releases</strong> 页面下载安装包（<code>FuFumidi-Setup-&lt;版本&gt;.exe</code>）；</li>
+    <li>安装包<strong>自带内置 Python 运行时与转录模型</strong>，无需安装 Python、Node 或任何依赖环境，装完即用；</li>
+    <li>注意：v1.0.1 安装包体积约 <strong>556MB</strong>（内置运行时已做瘦身，由 853MB 缩减而来）。</li>
+  </ul>
+
+  <h3 id="workflow">使用流程</h3>
+  <ol>
+    <li><strong>转录</strong>：导入音频（拖放或选择文件），选择引擎模式（通用 / 钢琴 / 分离），点击转录；</li>
+    <li><strong>智能修正</strong>（可选）：转录后点「开始智能修正」，得到对齐起音、还原力度的精修 MIDI；</li>
+    <li><strong>编辑</strong>：载入编辑器逐音符精修；</li>
+    <li><strong>演奏 / 可视化 / 乐谱 / 分析</strong>：在其余视图查看结果。</li>
+  </ol>
+  <p>也支持直接<strong>导入已有 MIDI</strong>（资料库按文件名去重），并可通过<strong>预设管理</strong>快速切换引擎参数组合。</p>
+
+  <h3>版本记录</h3>
+  <p>完整的更新日志见 <a href="#changelog">更新日志</a> 一节。当前稳定版：<strong>v1.1.0</strong>（编辑器精修 / 混音台 / 节拍器 / 工程文件 / 离线渲染提速）。</p>
+
+  <h3>从源码构建</h3>
+  <p>需要本机安装 <strong>Node.js 与 npm</strong>：</p>
+  <pre><code>cd app
+npm install
+npm run dist:win     # 生成 Windows 安装包（electron-builder + NSIS）</code></pre>
+  <p>构建说明：</p>
+  <ul>
+    <li>内置 Python 运行时由 <code>scripts/bundle-python.js</code> 下载 python-build-standalone 自包含 CPython 并安装依赖，随后自动调用 <code>scripts/prune-python.js</code> 瘦身；</li>
+    <li>转录模型等大体积文件（如 <code>app/models/</code>，约 172MB）<strong>不纳入本仓库</strong>，已随安装包 / 源码包在 <strong>Releases</strong> 中分发。</li>
+  </ul>
+
+  <hr>
+
+  <!-- ===================== AGENTS ===================== -->
+  <h2 id="positioning">AGENTS.md —— 项目宪法</h2>
+
+  <blockquote>
+    <p>本文件是给 AI（与人类）的项目背景文档。动手改代码前请先读它。未列出的文件约定，以代码中的既有注释与实际实现为准，不要臆造。</p>
+  </blockquote>
+
+  <h3>项目一句话定位</h3>
+  <p><strong>FuFumidi = 音频 → MIDI 转录 + 播放 / 编辑 / 可视化 一条龙桌面应用。</strong></p>
+  <ul>
+    <li>Electron 壳：<code>app/main.js</code>（主进程）+ <code>app/preload.js</code>（<code>fuBridge</code> 桥）+ <code>app/renderer/FuFumidi.html</code>（单文件渲染界面）。</li>
+    <li>Python 子进程引擎：<code>app/engine/</code>（音乐转 MIDI 转录引擎，源自 AudioMuse 工具内核）。</li>
+    <li>架构基调：<strong>纯离线本地应用</strong>。不依赖网络服务，音频不上传，模型本地加载。</li>
+  </ul>
+
+  <h3 id="architecture">架构决策与理由</h3>
+
+  <h4>1. 转录用 Python 子进程，Electron 只做壳</h4>
+  <ul>
+    <li>转录引擎是 Python：<code>basic-pitch</code>（ONNX，通用/人声分离）/ <code>piano-transcription-inference</code>（torch，钢琴专用）/ <code>demucs</code>（torch，人声/乐器分离）。</li>
+    <li>Electron 主进程通过 <code>child_process.spawn</code> 调用 <code>music2midi.py</code> 的 <strong>convert / refine / probe</strong> 命令行（<code>app/main.js</code> 的 <code>spawnEngine()</code>）。</li>
+    <li>智能修正是独立脚本 <code>smart_midi.py</code> 的 <code>refine</code> 子命令（spawnEngine 的 <code>script</code> 参数可换脚本）。</li>
+    <li><strong>进度协议</strong>：引擎把结果输出为一行 <code>###RESULT {json}</code>，主进程按行解析；其余 stdout 逐行转发为进度日志（<code>engine:log</code> / <code>engine:refine:log</code>），stderr 独立缓冲，防止串入 RESULT 行。</li>
+    <li><strong>编码约定</strong>：spawn 时注入 <code>PYTHONIOENCODING=utf-8</code>、<code>PYTHONUTF8=1</code>，避免 Windows 默认 GBK 乱码污染 JSON 解析、保证中文路径无乱码。</li>
+    <li>子进程优先级：Windows 下提到「高于标准」（<code>os.setPriority(pid, -1)</code>），避免转录拖慢 UI。</li>
+  </ul>
+
+  <h4>2. GPU 自动检测与性能档位</h4>
+  <ul>
+    <li><code>app/engine/engine_gpu.py</code>：<strong>懒加载</strong>探测（首次调用才 import torch/onnxruntime），带超时与异常保护，任何探测失败只影响加速、绝不阻断转录。
+      <ul>
+        <li>NVIDIA → CUDA（<code>torch.cuda</code> / onnxruntime <code>CUDAExecutionProvider</code>）</li>
+        <li>AMD / Intel → DirectML（<code>torch-directml</code> / onnxruntime <code>DmlExecutionProvider</code>）</li>
+        <li>其余 → CPU 兜底（行为与纯 CPU 一致）</li>
+      </ul>
+    </li>
+    <li><code>app/engine/engine_perf.py</code>：三档性能 <code>quality / balanced / fast</code>，分别映射不限线程 / ≤4 核 / ≤2 核。
+      <ul>
+        <li>通过 <code>OMP_NUM_THREADS</code> 等环境变量 + <code>torch.set_num_threads()</code> + onnxruntime <code>SessionOptions</code> 限制线程。</li>
+        <li><code>detect_recommended()</code> 按 CPU 核数 / 内存 / GPU 自动<strong>推荐</strong>档位，随 probe 返回给 UI 默认选中。</li>
+      </ul>
+    </li>
+  </ul>
+
+  <h4>3. 设计语言：深色扁平 + teal 强调色</h4>
+  <ul>
+    <li>主题基底为深色扁平风，强调色 <strong>teal <code>#00C9B1</code></strong>，渲染器里统一定义为 CSS 变量 <code>--accent</code>（<code>--accent2:#2ee6cd</code>、<code>--accent-dim:rgba(0,201,177,.14)</code>）。</li>
+    <li>窗口底色 <code>#0a0f18</code>（<code>main.js</code> 的 <code>BrowserWindow.backgroundColor</code>）。</li>
+    <li>与旧「MIDI播放器.html」界面同源（Synthesia 式瀑布可视化等），属同一设计语言家族。</li>
+  </ul>
+
+  <h4>4. 内置 Python 运行时：开箱即用</h4>
+  <ul>
+    <li><code>app/scripts/bundle-python.js</code> + <code>app/engine/requirements-bundle.txt</code>：
+      <ul>
+        <li>下载 <strong>python-build-standalone</strong> 自包含 CPython（免安装、含 pip）→ 解压到 <code>app/python/</code> → 用内置 pip 装 <code>requirements-bundle.txt</code>。</li>
+        <li>torch 按 <code>--torch</code> 参数选择：<code>cpu</code>（默认，最小体积）/ <code>cuda</code>（PyTorch cu121 索引）/ <code>directml</code>。</li>
+        <li>完成后清理测试套件与 <code>__pycache__</code> 瘦身，并跑 <code>probe</code> 自检。</li>
+      </ul>
+    </li>
+    <li>运行时发现顺序（<code>main.js</code> <code>resolvePython()</code>）：用户显式 <code>engine_path</code> → 内置 <code>app/python</code> → <code>FUFUMIDI_PYTHON</code> 环境变量 → 开发机已知路径 → <code>python</code>/<code>python3</code>。</li>
+    <li>注意：bundle 脚本注释声明打包时随 <code>files:"python/**/*"</code> 分发，动手改 <code>package.json</code> 的 <code>build.files</code> 前请核对这一条。</li>
+  </ul>
+
+  <h4>5. 设置持久化与 i18n</h4>
+  <ul>
+    <li>设置持久化：<code>userData/fufumidi/settings.json</code>（<code>main.js</code> 的 <code>readSettings</code> / <code>writeSettings</code>，原子写入：临时文件 + rename）。</li>
+    <li>插件用户目录：<code>userData/fufumidi/plugins</code>。</li>
+    <li>i18n：渲染器内 <code>LANG</code>（'zh'/'en'，来自设置）+ <code>I18N_MAP</code>（中文为源文案）。静态 DOM 用 <code>applyLang()</code> 整体替换（长串优先），动态字符串用 <code>t('中文')</code> 即时翻译，反向 en→zh 用整词匹配避免误翻。</li>
+    <li>默认设置 <code>perf_mode: 'quality'</code>、<code>lang: 'zh'</code>、<code>theme: 'deep'</code>。</li>
+  </ul>
+
+  <h4>6. 渲染器功能面</h4>
+  <p>七个视图（<code>FuFumidi.html</code> 顶栏 tab）：<strong>演奏 / 编辑 / 可视化 / 分析 / 乐谱 / 转录 / 转换</strong>。</p>
+  <ul>
+    <li>转录视图内嵌「智能修正」（转录 MIDI + 原音频 → 精修 MIDI）为一条龙第二步。</li>
+    <li>播放/编辑/可视化完全离线；渲染器 JS 零依赖单文件。</li>
+  </ul>
+
+  <h3 id="coding">编码规范</h3>
+  <ul>
+    <li><strong>Python</strong>：文件首行 <code># -*- coding: utf-8 -*-</code> + 模块级 docstring（说明用途与依赖）。见 <code>app/engine/*.py</code>。</li>
+    <li><strong>渲染器 / 主进程 JS</strong>：注释用中文；主题一律走 CSS 变量（不要硬编码颜色）；<code>main.js</code> / <code>preload.js</code> 文件头有 banner 注释。</li>
+    <li>行宽与命名沿用各文件既有风格（PEP 8 风格 Python、camelCase JS），不做强制格式化工具约定。</li>
+  </ul>
+
+  <h3 id="rejected">已否决方案（重要：避免反复提出）</h3>
+  <ol>
+    <li><strong>不用 PySide6 / Qt 界面</strong>。原 AudioMuse 有 PySide6 GUI，但 Electron 已是主界面；<code>engine/requirements-bundle.txt</code> 已刻意排除 gui 依赖（只注释提及 PySide6），Electron 只走 <code>convert / refine / probe</code> CLI，永不调用 <code>run_gui()</code>。</li>
+    <li><strong>不把 ~700MB torch 运行时直接打进安装包本体</strong>。用 python-build-standalone 瘦身内置（<code>app/python/</code>），且 torch 默认 CPU 版最小体积。</li>
+    <li><strong>性能档位"推荐但不锁定"</strong>。<code>detect_recommended()</code> 只推荐不强制；低配置用户也可手动挑战最高质量（quality 档）。</li>
+    <li><strong>主题不照搬 AudioMuse 浅色底</strong>。统一深色基底 + teal accent 传达精神，不复刻浅色皮肤。</li>
+    <li><strong>打包门禁</strong>：最终一键安装包必须在用户测试工具可用并回复「可以」之后才进行；不要把未经用户验证的包发出去。</li>
+  </ol>
+
+  <h3 id="workflow-guide">工作流</h3>
+  <p><strong>一条龙：转录 → 修正 → 编辑 → 播放。</strong>用户导入音频 → <code>convert</code> 转录为 MIDI →（可选）<code>refine</code> 智能修正（对齐起音 / 还原力度 / 声部平衡 / 清理杂音）→ 载入编辑器精修 → 演奏 / 可视化 / 乐谱 / 分析。全部离线本地完成。</p>
+
+  <h3 id="structure">目录速览</h3>
+  <pre><code>F:\NEW\工具测试\Fu\
+├── AGENTS.md                      # 本文件
+├── .gitignore
+└── app\
+    ├── main.js                    # Electron 主进程（引擎 spawn、设置、插件宿主、IPC）
+    ├── preload.js                 # fuBridge 上下文桥
+    ├── plugin-host.js             # 插件系统宿主
+    ├── package.json               # electron-builder 打包配置
+    ├── build\                     # 图标 / NSIS 安装器素材
+    ├── engine\                    # Python 转录引擎
+    │   ├── music2midi.py          # CLI 入口：convert / batch / probe / gui
+    │   ├── smart_midi.py          # refine 修正 CLI
+    │   ├── engine.py / engine_basic.py / engine_pt.py / engine_separate.py
+    │   ├── engine_gpu.py          # GPU 自动检测
+    │   ├── engine_perf.py         # 性能档位
+    │   ├── requirements.txt       # 原 AudioMuse（含 PySide6）依赖
+    │   ├── requirements-bundle.txt# 内置运行时依赖（无 GUI）
+    │   └── tests\data\            # 引擎测试样例（_test_melody.wav / _test_out.mid）
+    ├── renderer\FuFumidi.html     # 单文件渲染界面（播放/编辑/可视化/分析/乐谱/转录/转换）
+    ├── scripts\bundle-python.js   # 内置 Python 运行时捆绑
+    ├── plugins\                   # 内置插件示例 + 开发文档
+    └── python\                    # （构建期生成）内置运行时，不入库</code></pre>
+
+  <hr>
+
+  <!-- ===================== UPDATE ===================== -->
+  <h2 id="version-rule">UPDATE.md —— 版本发布与测试规范</h2>
+
+  <blockquote>面向 FuFumidi 的后续维护与版本发布，AI 与开发者共用。发布前请先读 <code>AGENTS.md</code> 与 <code>CHANGELOG.md</code>。</blockquote>
+
+  <h3>一、版本号规则</h3>
+  <table>
+    <thead><tr><th>变更类型</th><th>规则</th><th>示例（当前 1.0.1）</th></tr></thead>
+    <tbody>
+      <tr><td>大功能更新</td><td>版本号 <strong>+0.1</strong></td><td>1.0.1 → 1.1.0</td></tr>
+      <tr><td>缺陷修补 / 小功能更新</td><td>版本号 <strong>+0.0.1</strong></td><td>1.0.1 → 1.0.2</td></tr>
+    </tbody>
+  </table>
+  <ul>
+    <li><strong>大功能更新</strong>：新增 / 重构显著功能面（如新引擎、新主视图、架构调整）。</li>
+    <li><strong>修补和小更新</strong>：bug 修复、预设 / 参数调整、界面细节、打包优化等。</li>
+    <li>每次只做一种加法，不要在同一版本里既 +0.1 又 +0.0.1。</li>
+  </ul>
+
+  <h3 id="version-locations">二、版本号改哪里（必须同步改）</h3>
+  <ol>
+    <li><code>app/package.json</code> → <code>"version": "x.y.z"</code>：决定安装包文件名（<code>FuFumidi-Setup-&lt;version&gt;.exe</code>）与系统版本信息。</li>
+    <li><code>app/renderer/FuFumidi.html</code> → <code>const APP_VERSION = 'x.y.z';</code>：界面显示版本。</li>
+  </ol>
+  <blockquote><p>注意：<code>app/engine/music2midi.py</code> 里的 <code>VERSION</code> 是转录引擎 CLI 自身的版本号，独立维护，<strong>不随应用版本号改动</strong>。</p></blockquote>
+
+  <h3 id="update-checklist">三、每次更新必做清单</h3>
+  <ol>
+    <li>按规则改版本号（上面两处）。</li>
+    <li>在 <code>CHANGELOG.md</code> 顶部追加本次条目（新增 / 修复 / 备注），记录版本号与日期。</li>
+    <li>全流程回归测试（详见 <a href="#testing">测试流程与规范</a>）：
+      <ul>
+        <li>安装 → 使用 → 卸载；</li>
+        <li>转录至少一次真实文件（通用 / 钢琴 / 分离三种模式各至少一次）→ 智能修正 → 载入播放 / 编辑 / 乐谱。</li>
+      </ul>
+    </li>
+    <li>重建发布产物：
+      <ul>
+        <li>内置运行时瘦身（可选，大幅减小安装包）：<code>node app/scripts/prune-python.js --commit</code>（只删 <code>__pycache__</code> / <code>Lib/test</code> / <code>torch bin|share|include</code>；绝不碰依赖包）。<code>scripts/bundle-python.js</code> 构建后会自动调用它。</li>
+        <li>安装包：在 <code>app/</code> 目录 <code>npm run dist:win</code>，产物 <code>FuFumidi-Setup-&lt;version&gt;.exe</code>。</li>
+        <li>源码包：<strong>必须用内置 python 跑 <code>scripts/pack-source-zip.py</code> 生成真 zip</strong>（GNU tar <code>-a</code> 对 <code>.zip</code> 只会产出 ustar tar，Explorer 无法解压）。脚本会自动收录 <code>AGENTS.md</code> / <code>CHANGELOG.md</code> / <code>UPDATE.md</code> / <code>.gitignore</code> / <code>.github/</code> 与 <code>app/</code>（排除 python / node_modules / dist）。</li>
+        <li>两份产物放桌面，替换旧版本；有问题的旧包不要留在桌面。</li>
+      </ul>
+    </li>
+    <li>用户确认「可以」之后才把新安装包对外发布（<code>AGENTS.md</code> 四.5「打包门禁」）。</li>
+  </ol>
+
+  <h3 id="testing">四、测试流程与测试规范</h3>
+  <blockquote>目标：模拟真实用户交互，覆盖全部功能与选项；任一流程出问题就重新走一遍，直到完全通过。以下流程在 1.0.1 实测建立并验证，后续开发与更新沿用。</blockquote>
+
+  <h4>4.1 三阶段总流程</h4>
+  <p><strong>阶段 A · 安装</strong></p>
+  <ol>
+    <li>卸载旧版后，静默安装新包到固定测试路径：
+      <pre><code>cmd //c "dist\FuFumidi-Setup-&lt;ver&gt;.exe /S /D=C:\Users\qdTXTbp\_fufuinst\FuFumidi"</code></pre>
+      （Git Bash 直传 <code>\</code> 会被吃成路径分隔符，必须走 <code>cmd //c</code> 转交。）</li>
+    <li>验证安装完整：<code>resources\python</code> + <code>models\piano_transcription</code> 就位、桌面 / 开始菜单快捷方式存在、注册表卸载项版本号正确。</li>
+  </ol>
+  <p><strong>阶段 B · 使用（核心回归）</strong></p>
+  <p>用 CDP 驱动真实 UI 交互（应用加 <code>--remote-debugging-port=9223</code> 启动），逐项执行：</p>
+  <ol>
+    <li>版本号与 <code>package.json</code> 一致。</li>
+    <li><strong>三引擎转录</strong>：通用 / 钢琴 / 分离各至少一次真实音频 → 严格校验<strong>临时目录出现带新时间戳的 <code>transcribe_*.mid</code> 文件</strong>（不能只看 <code>TR_STATE.lastOut</code>，否则会读到上次残留的陈旧值）。</li>
+    <li><strong>智能修正</strong>：转录后点「开始智能修正」，校验输出 <code>*_refined_*.mid</code> 新文件 + 统计日志（起音吸附 / 尾音修正 / 主奏轨道）。</li>
+    <li><strong>导入</strong>：真实 MIDI（<code>E:\Midi\midi\*.mid</code>）→ 资料库计数 +1、当前歌曲加载正确；再验证播放 / 暂停（<code>App.player.playing</code> 为 true 且 <code>currentTick()</code> 递增）。</li>
+    <li><strong>预设系统</strong>：内置预设切换自动套用参数（「钢琴：最优」→ mode=piano、最短音符 20ms）；排序 / 删除内置 / 恢复默认。</li>
+    <li>七个视图逐一切换（演奏 / 编辑 / 可视化 / 分析 / 乐谱 / 转录 / 转换），每视图都能正确渲染当前歌曲。</li>
+    <li>设置 / 主题库对话框打开与关闭正常。</li>
+  </ol>
+  <p><strong>阶段 C · 卸载</strong></p>
+  <p>关闭应用 → 运行 <code>Uninstall FuFumidi.exe</code> → 验证安装目录删除、快捷方式移除、注册表卸载项清除。</p>
+
+  <h4>4.2 CDP 实测要点（踩过的坑，务必遵守）</h4>
+  <ol>
+    <li><strong>文件选择</strong>：CDP <code>DOM.setFileInputFiles</code> 注入的 File 没有 Electron 的 <code>.path</code> 属性，<code>fi.files[0].path || f.name</code> 会回退成纯文件名，引擎按相对路径解析必然报「找不到文件」。<strong>正解</strong>：模拟原生对话框，直接 <code>TR_STATE.audio = '&lt;绝对路径&gt;'</code> 并放行 <code>$('#btnTranscribe').disabled = false</code> 再点真实按钮。（真实用户走 <code>fuBridge.pickAudio()</code> 原生对话框或拖放，均返回绝对路径，不受影响。）</li>
+    <li><strong>校验任务真实执行</strong>：点按钮后先等 <code>TR_STATE.jobId</code> 递增（证明事件到达），再等 <code>busy === false</code>，最后用临时目录快照对比确认新文件。只等 <code>busy===false &amp;&amp; lastOut</code> 会在瞬时失败时读到残留旧值（假阳性）。</li>
+    <li><strong>音符数</strong>从 <code>#convLog</code> 文本取（正则 <code>识别出 (\d+) 个音符</code>）；<code>#convInfo</code> 只显示「输出 …」，不含计数。</li>
+    <li><strong>导入去重</strong>：<code>addToLib</code> 按 <code>name</code> 去重，重复导入同一文件不会新增条目——测导入要换不同文件或先清空资料库。</li>
+    <li><strong>后台进程</strong>：用 Bash <code>run_in_background</code> 启动应用；普通 <code>&amp;</code> 后台进程会随调用 shell 回收而退出。</li>
+    <li><strong>测试真实文件</strong>：音频用 <code>C:\Users\qdTXTbp\Music\钢琴曲\*.mp3</code>（及裁剪的 <code>_fufutest\t20.wav</code>），MIDI 用 <code>E:\Midi\midi\*.mid</code>。</li>
+    <li>测试残留脚本（<code>_apptest.js</code> / <code>_trtest.js</code> / <code>_diag.js</code> 等 CDP 驱动器）与临时 MIDI 输出用完即清，不进交付包。</li>
+  </ol>
+
+  <h4>4.3 通过标准</h4>
+  <ul>
+    <li>全部用例 PASS，且转录 / 修正产物为<strong>新生成文件</strong>（非历史残留）。</li>
+    <li>三引擎 + 修正 + 导入 + 播放 + 预设全绿；卸载后系统无残留。</li>
+    <li>任一环节失败 → 修复后<strong>从该环节起重走完整流程</strong>，直到完全通过；出问题的安装包 / 源码包不留桌面。</li>
+  </ul>
+
+  <h3 id="preset-notes">五、预设 / 参数修改注意</h3>
+  <ul>
+    <li>内置预设写在 <code>app/engine/presets.py</code> 的 <code>_builtin_presets()</code>；用户数据在 <code>engine/presets.json</code>（内置可隐藏 / 排序，勿直接手改该文件）。</li>
+    <li>新增预设参数键名必须与 <code>music2midi.py</code> 的 CLI 参数对应（<code>app/main.js</code> 里 <code>engine:convert</code> 的映射表）。</li>
+    <li>引擎模式默认预设映射在渲染器 <code>MODE_DEFAULT_PRESET</code>（<code>FuFumidi.html</code>）。</li>
+  </ul>
+
+  <h3 id="i18n-notes">六、i18n 提醒</h3>
+  <ul>
+    <li>新增界面文案：中文为源文案写入 HTML；英文翻译加入渲染器 <code>I18N_MAP</code>；动态字符串用 <code>t('中文')</code>，静态文本由 <code>applyLang()</code> 自动替换。</li>
+  </ul>
+
+  <hr>
+
+  <!-- ===================== PLUGIN DEV ===================== -->
+  <h2 id="plugin-overview">插件系统开发者文档</h2>
+
+  <blockquote>
+    <p><strong>版本：</strong>v1.1.0 ｜ <strong>适用代码：</strong><code>app/plugin-host.js</code>、<code>app/main.js</code>、<code>app/preload.js</code>、<code>app/plugins/</code></p>
+    <p>本文面向想要为 FuFumidi 编写第三方插件的开发者。插件由你主动安装，<strong>等同本地可信代码</strong>，主进程入口拥有完整 Node.js 权限——请只安装信任来源的插件。</p>
+  </blockquote>
+
+  <h3>架构概览</h3>
+  <p>FuFumidi 的插件系统分两层：</p>
+  <pre><code>┌─────────────────────────────────────────────────────────┐
+│  主进程（Node.js / Electron main）                       │
+│  ┌─────────────────────────────────────────────────────┐│
+│  │ PluginHost（app/plugin-host.js）                    ││
+│  │  · 扫描目录、加载插件、调用 activate/deactivate      ││
+│  │  · ctx 受控 API（commands/events/engine/settings/…）││
+│  │  · 单插件 try/catch 隔离 + 引擎超时兜底              ││
+│  └─────────────────────────────────────────────────────┘│
+│  通过 IPC 与渲染层通信（plugins:* / app:event）          │
+├─────────────────────────────────────────────────────────┤
+│  渲染进程（浏览器环境，contextIsolation + sandbox）      │
+│  · window.fuBridge（preload.js 暴露）                   │
+│  · 插件渲染脚本（可选 renderer）注入到页面               │
+│  · 收到 ui.broadcast → CustomEvent 'fuplugin:&lt;id&gt;:&lt;n&gt;' │
+└─────────────────────────────────────────────────────────┘</code></pre>
+  <ul>
+    <li><strong>主进程插件</strong>：一个 CommonJS 模块，导出 <code>activate(ctx)</code>。可以注册命令、监听事件、调用引擎、读写自己的设置、向界面广播消息。</li>
+    <li><strong>渲染层脚本</strong>（可选）：一段注入到界面的 JavaScript，能操作 DOM、调用 <code>window.fuBridge</code>、接收主进程插件发来的广播。</li>
+    <li>应用内置了同结构的示例插件：<code>app/plugins/example-hello/</code>。</li>
+  </ul>
+
+  <h3>插件是什么</h3>
+  <p>一个插件就是一个<strong>目录</strong>，里面至少包含 <code>plugin.json</code> 清单和入口脚本：</p>
+  <pre><code>my-plugin/
+  plugin.json        # 清单（必填）
+  index.js           # 主进程入口（必填，路径由 entry 指定）
+  ui.js              # 渲染层脚本（可选，路径由 renderer 指定）</code></pre>
+  <p>目录名不限；扫描时以 <code>plugin.json</code> 里的 <code>id</code> 为准。<strong>同目录层级下，用户插件目录优先级高于内置插件目录</strong>；同 <code>id</code> 只会加载优先级最高的那份，其余跳过。</p>
+
+  <h3 id="plugin-install">安装位置</h3>
+  <table>
+    <thead><tr><th>类型</th><th>路径</th><th>优先级</th></tr></thead>
+    <tbody>
+      <tr><td>用户插件（推荐）</td><td><code>用户数据目录/fufumidi/plugins/&lt;插件名&gt;/</code></td><td>高（先扫描，同 id 覆盖内置）</td></tr>
+      <tr><td>随应用内置</td><td><code>安装目录/resources/app/plugins/&lt;插件名&gt;/</code></td><td>低</td></tr>
+    </tbody>
+  </table>
+  <ul>
+    <li>Windows 用户插件一般位于：<code>%APPDATA%\fufumidi\fufumidi\plugins\</code></li>
+    <li>也可以直接在应用内「设置 → 插件」查看实际路径。</li>
+  </ul>
+  <p>安装后：</p>
+  <ol>
+    <li>进入 <strong>设置 → 插件</strong>；</li>
+    <li>点 <strong>重新扫描</strong>；</li>
+    <li>打开插件的<strong>启用开关</strong>。</li>
+  </ol>
+  <blockquote><p>未启用的插件不会接收事件、不能调用命令。</p></blockquote>
+
+  <h3 id="plugin-minimal">最小可运行插件</h3>
+  <p><code>plugin.json</code>：</p>
+  <pre><code>{
+  "id": "my-plugin",
+  "name": "我的插件",
+  "version": "1.0.0",
+  "author": "你",
+  "description": "一句话说明",
+  "entry": "index.js",
+  "commands": ["hello"]
+}</code></pre>
+  <p><code>index.js</code>（CommonJS）：</p>
+  <pre><code>module.exports = {
+  activate(ctx) {
+    ctx.commands.register('hello', async () => '你好，来自插件！');
+  },
+  deactivate() {
+    // 可选：清理资源
+  },
+};</code></pre>
+  <p>放好后重新扫描并启用，「设置 → 插件」里会出现插件卡片，以及一个 <code>hello</code> 命令按钮，点击即调用并显示返回值。</p>
+
+  <h3 id="plugin-manifest">清单 plugin.json</h3>
+  <table>
+    <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>id</code></td><td>string</td><td>✅</td><td>唯一 ID，正则 <code>^[a-z0-9][a-z0-9_-]*$</code>（小写字母/数字/<code>-</code>/<code>_</code> 开头不能是 <code>-</code>）</td></tr>
+      <tr><td><code>name</code></td><td>string</td><td></td><td>展示名</td></tr>
+      <tr><td><code>version</code></td><td>string</td><td></td><td>版本号，如 <code>1.0.0</code></td></tr>
+      <tr><td><code>author</code></td><td>string</td><td></td><td>作者</td></tr>
+      <tr><td><code>description</code></td><td>string</td><td></td><td>一句话说明</td></tr>
+      <tr><td><code>entry</code></td><td>string</td><td>✅</td><td>主进程入口文件路径（相对插件目录，CommonJS），必须存在，否则加载失败</td></tr>
+      <tr><td><code>renderer</code></td><td>string</td><td></td><td>渲染层脚本路径（相对插件目录），注入到界面执行</td></tr>
+      <tr><td><code>commands</code></td><td>string[]</td><td></td><td>声明命令名；设置页会自动为每个命令渲染一个可点击按钮</td></tr>
+    </tbody>
+  </table>
+  <blockquote><p>缺少合法 <code>id</code> 或 <code>entry</code> 不存在都会导致加载失败，错误记入插件日志。</p></blockquote>
+
+  <h3 id="plugin-entry">主进程入口 entry</h3>
+  <p>入口文件是 CommonJS 模块。两种写法都支持：</p>
+  <pre><code>// 写法 A：导出对象
+module.exports = {
+  activate(ctx) { /* ... */ },
+  deactivate() { /* 可选 */ },
+};
+
+// 写法 B：直接导出函数
+module.exports = function (ctx) {
+  /* activate 逻辑 */
+};</code></pre>
+  <ul>
+    <li><code>activate(ctx)</code>：插件激活时同步调用，应在这里注册命令、订阅事件。</li>
+    <li><code>deactivate()</code>（可选）：停用/卸载时调用，用于清理（定时器、监听等）。</li>
+    <li>入口抛出的异常会被捕获并记日志，<strong>不会拖垮主进程</strong>。</li>
+  </ul>
+
+  <h3 id="plugin-ctx">上下文 ctx API</h3>
+  <p><code>ctx</code> 在 <code>activate</code> 时注入，包含 <code>id</code>、<code>manifest</code>（你的 <code>plugin.json</code> 原文）以及下列受控 API：</p>
+
+  <h4>7.1 commands —— 命令注册</h4>
+  <pre><code>ctx.commands.register(name, fn)
+ctx.commands.list()   // -&gt; ['hello', ...]</code></pre>
+  <ul>
+    <li><code>fn(payload)</code> 可以是同步函数或返回 Promise。</li>
+    <li>渲染层/设置页调用命令时，payload 会被透传。</li>
+    <li>调用结果：成功返回 <code>{ ok: true, result }</code>；抛错返回 <code>{ ok: false, error }</code>。</li>
+  </ul>
+  <pre><code>ctx.commands.register('convert', async (payload) =&gt; {
+  // payload = { audio: 'C:/.../song.mp3', ... }
+  return { received: !!payload };
+});</code></pre>
+
+  <h4>7.2 events —— 事件订阅与广播</h4>
+  <pre><code>const off = ctx.events.on('song-loaded', (m) =&gt; { /* ... */ });
+// 不再需要时：off();
+
+ctx.events.emit('my-custom-event', { any: 'payload' });</code></pre>
+  <ul>
+    <li><code>on</code> 返回<strong>取消订阅函数</strong>。</li>
+    <li><code>emit</code> 会广播给<strong>所有已启用插件</strong>的同名监听器；每个监听器独立 try/catch，一个出错不影响其余。</li>
+  </ul>
+
+  <h4>7.3 settings —— 插件私有持久化设置</h4>
+  <pre><code>ctx.settings.get()            // 整个插件设置对象
+ctx.settings.get('greet')     // 单键
+ctx.settings.set('greet', 'hi')
+ctx.settings.set({ a: 1, b: 2 })  // 传对象批量合并</code></pre>
+  <ul>
+    <li>数据存于 <code>settings.json</code> 的 <code>plugins.&lt;id&gt;</code> 段，<strong>不与其他插件/主设置冲突</strong>。</li>
+    <li>内置示例 <code>example-hello</code> 用 <code>ctx.settings.get('greet')</code> 演示了读写。</li>
+  </ul>
+
+  <h4>7.4 ui —— 界面广播与提示</h4>
+  <pre><code>ctx.ui.broadcast('my-event', { text: 'hello' });   // 通知渲染层脚本
+ctx.ui.notify('操作完成', 'ok');                    // 顶部 toast（type: info|ok|err 等）</code></pre>
+  <ul>
+    <li>渲染层脚本通过 <code>window.addEventListener('fuplugin:&lt;id&gt;:&lt;name&gt;', fn)</code> 接收，<code>fn</code> 的参数 <code>ev.detail</code> 即 payload（见渲染层脚本一节）。</li>
+    <li><code>notify</code> 本质是广播名为 <code>__toast</code> 的特殊事件，由界面转成 toast。</li>
+  </ul>
+
+  <h4>7.5 log —— 日志</h4>
+  <pre><code>ctx.log('任意', '参数', { 对象: true });</code></pre>
+  <ul>
+    <li>输出到「设置 → 插件」日志区与主进程控制台，带 <code>[plugins]</code> / <code>[&lt;id&gt;]</code> 前缀。</li>
+    <li>引擎子进程的 stdout 也会以 <code>plugins:log</code> 流进同一区域。</li>
+  </ul>
+
+  <h4>7.6 app —— 应用信息</h4>
+  <pre><code>const meta = ctx.app.getSongMeta();
+// -&gt; { fileName, trackCount, totalTicks, totalSec, bpm } 或 null</code></pre>
+  <ul>
+    <li>返回<strong>当前已载入歌曲</strong>的轻量信息（<code>song-loaded</code> 时刷新）；未载入返回 <code>null</code>。</li>
+  </ul>
+
+  <h4>7.7 engine —— 引擎调用</h4>
+  <pre><code>const r = await ctx.engine.run(['mycmd', '/path/input.mid'], {
+  script: 'smart_midi.py',   // 默认 'music2midi.py'；可为绝对路径
+  timeoutMs: 60000,          // 默认 30 分钟
+});
+// r = { code, result, out, err }</code></pre>
+  <p>详见下一节。</p>
+
+  <h3 id="plugin-engine">引擎子进程 engine.run</h3>
+  <p>复用主程序的 Python 引擎，开箱支持：</p>
+  <ul>
+    <li>内置 Python 运行时解析（打包内置 → 用户指定 → 环境变量 → 系统 Python）</li>
+    <li>UTF-8 中文路径适配（<code>PYTHONIOENCODING=utf-8</code>、<code>PYTHONUTF8=1</code>）</li>
+    <li>离线模型目录自动注入（<code>FUFUMIDI_MODELS_DIR</code>）</li>
+    <li>超时强制终止（默认 30 分钟，防止死循环）</li>
+    <li><code>###RESULT {json}</code> 结果解析</li>
+  </ul>
+  <p><strong>脚本约定</strong>：</p>
+  <ul>
+    <li><code>script</code> 默认 <code>music2midi.py</code>（引擎主脚本）；传入绝对路径可运行你自己的 <code>.py</code>。</li>
+    <li>子进程 cwd 为引擎目录 <code>engine/</code>，引擎内的模块（如 <code>presets</code>）可直接 <code>import</code>。</li>
+    <li>脚本在 stdout 输出一行 <code>###RESULT {json}</code>，<code>engine.run</code> 会把解析出的 JSON 放进 <code>result</code>；其余 stdout 逐行进入插件日志。</li>
+  </ul>
+  <pre><code>// 示例：对已转录 MIDI 再做一遍自研处理
+const r = await ctx.engine.run(['mycmd', midiPath, '-o', outPath], {
+  script: 'C:/my-plugins/scripts/post.py',
+  timeoutMs: 5 * 60 * 1000,
+});
+if (r.result &amp;&amp; r.result.ok) {
+  ctx.ui.notify('处理完成', 'ok');
+}</code></pre>
+  <p>返回结构：</p>
+  <table>
+    <thead><tr><th>字段</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>code</code></td><td>进程退出码；异常/超时可能为 <code>-1</code></td></tr>
+      <tr><td><code>result</code></td><td><code>###RESULT {json}</code> 解析对象；无则 <code>null</code></td></tr>
+      <tr><td><code>out</code></td><td>全部 stdout</td></tr>
+      <tr><td><code>err</code></td><td>全部 stderr</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="plugin-events">应用事件</h3>
+  <p>插件通过 <code>ctx.events.on(name, cb)</code> 订阅以下应用级事件（由界面通过 <code>fuBridge.notify</code> 上报）：</p>
+  <table>
+    <thead><tr><th>事件</th><th>payload</th><th>触发时机</th></tr></thead>
+    <tbody>
+      <tr><td><code>song-loaded</code></td><td><code>{ fileName, trackCount, totalTicks, totalSec, bpm }</code></td><td>载入歌曲</td></tr>
+      <tr><td><code>view-changed</code></td><td>视图名字符串：<code>play / edit / transcribe / analyze / score / viz</code></td><td>切换主视图</td></tr>
+      <tr><td><code>transcribe-done</code></td><td><code>{ ok, out, note_count, mode, perf }</code></td><td>转录完成</td></tr>
+      <tr><td><code>refine-done</code></td><td><code>{ ok, out, stats, mode }</code></td><td>智能修正完成</td></tr>
+    </tbody>
+  </table>
+  <p>也可以订阅<strong>其它插件 emit 的自定义事件</strong>（<code>events.emit</code> 全局广播）。</p>
+
+  <h3 id="plugin-renderer">渲染层脚本 renderer</h3>
+  <p><code>plugin.json</code> 声明 <code>"renderer": "ui.js"</code> 后，该脚本会被注入到界面环境执行：</p>
+  <ul>
+    <li><strong>运行在页面主世界</strong>：可访问 <code>document</code>、<code>window</code>、<code>toast()</code>、<code>window.fuBridge</code>。</li>
+    <li><strong>没有 Node 权限</strong>：主窗口 <code>sandbox: true</code>、<code>contextIsolation: true</code>、<code>nodeIntegration: false</code>。</li>
+    <li>每个插件脚本只注入一次（重复广播会被去重）。</li>
+  </ul>
+  <p><strong>接收主进程插件的广播</strong>：</p>
+  <pre><code>window.addEventListener('fuplugin:my-plugin:my-event', function (ev) {
+  console.log(ev.detail);   // 即 ctx.ui.broadcast('my-event', payload) 的 payload
+  toast('收到：' + ev.detail.text, 'ok');
+});</code></pre>
+  <p>事件名规则：<code>fuplugin:&lt;插件id&gt;:&lt;广播名&gt;</code>。</p>
+  <p><strong>调用主进程插件的命令</strong>（<code>window.fuBridge.plugins</code>）：</p>
+  <pre><code>const res = await fuBridge.plugins.invoke('my-plugin', 'convert', { audio: '...' });
+if (res.ok) { /* res.result */ } else { /* res.error */ }</code></pre>
+  <p><strong>上报应用事件给插件</strong>：</p>
+  <pre><code>fuBridge.notify('view-changed', 'analyze');</code></pre>
+  <p><code>window.fuBridge</code> 暴露的插件相关接口：</p>
+  <table>
+    <thead><tr><th>方法</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>plugins.list()</code></td><td>插件列表</td></tr>
+      <tr><td><code>plugins.setEnabled(id, enabled)</code></td><td>启用/停用</td></tr>
+      <tr><td><code>plugins.invoke(id, cmd, payload)</code></td><td>调用命令</td></tr>
+      <tr><td><code>plugins.rescan()</code></td><td>重新扫描</td></tr>
+      <tr><td><code>plugins.openDocs()</code></td><td>打开开发者文档（HTML）</td></tr>
+      <tr><td><code>plugins.onUi(cb)</code></td><td>订阅 <code>plugins:ui</code>（广播/toast）</td></tr>
+      <tr><td><code>plugins.onLog(cb)</code></td><td>订阅日志流</td></tr>
+      <tr><td><code>plugins.onScript(cb)</code></td><td>订阅渲染脚本注入</td></tr>
+      <tr><td><code>notify(ev, payload)</code></td><td>上报应用事件</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="plugin-lifecycle">生命周期与状态</h3>
+  <table>
+    <thead><tr><th>时机</th><th>行为</th></tr></thead>
+    <tbody>
+      <tr><td>启动 <code>loadAll()</code></td><td>依序扫描用户目录 → 内置目录，逐目录加载；同 id 只留优先级高的一份</td></tr>
+      <tr><td>目录消失</td><td><code>loadAll()</code> 会把已加载但目录已不存在的插件 <code>deactivate</code> 并移除</td></tr>
+      <tr><td>窗口 <code>did-finish-load</code></td><td><code>broadcastScripts()</code> 重播所有已启用插件的渲染脚本，避免启动时序丢失</td></tr>
+      <tr><td>启用/停用</td><td><code>setEnabled(id, enabled)</code>，状态持久化到 <code>settings.plugins_enabled</code>；停用即调用 <code>deactivate</code></td></tr>
+      <tr><td>重新扫描</td><td>设置页按钮 → <code>plugins:rescan</code> → 重新 <code>loadAll()</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="plugin-ipc">IPC 通道一览</h3>
+  <p><strong>渲染层 → 主进程</strong>（<code>ipcMain.handle</code> / <code>ipcMain.on</code>）：</p>
+  <table>
+    <thead><tr><th>通道</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td><code>plugins:list</code></td><td>获取插件列表</td></tr>
+      <tr><td><code>plugins:setEnabled</code></td><td>启用/停用</td></tr>
+      <tr><td><code>plugins:invoke</code></td><td>调用插件命令</td></tr>
+      <tr><td><code>plugins:rescan</code></td><td>重新扫描加载</td></tr>
+      <tr><td><code>plugins:openDocs</code></td><td>打开开发者文档 HTML</td></tr>
+      <tr><td><code>app:event</code></td><td>界面事件上报 → 广播给插件（<code>song-loaded</code> 等）</td></tr>
+    </tbody>
+  </table>
+  <p><strong>主进程 → 渲染层</strong>（<code>webContents.send</code>）：</p>
+  <table>
+    <thead><tr><th>通道</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td><code>plugins:script</code></td><td>注入插件渲染脚本</td></tr>
+      <tr><td><code>plugins:ui</code></td><td>插件广播（含 <code>__toast</code>）</td></tr>
+      <tr><td><code>plugins:log</code></td><td>插件日志流</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="plugin-security">安全模型与健壮性</h3>
+  <ul>
+    <li><strong>隔离</strong>：单插件激活、命令调用、事件处理全部 try/catch，任何异常只记日志，不影响主程序。</li>
+    <li><strong>超时</strong>：<code>engine.run</code> 默认 30 分钟超时，插件内 Python 死循环会被强制终止。</li>
+    <li><strong>命令/事件受控</strong>：未启用的插件不接收事件、不可调用命令；<code>ctx</code> 不暴露任意文件/进程 API。</li>
+    <li><strong>渲染层受限</strong>：渲染脚本无 Node 权限；主窗口 <code>sandbox + contextIsolation + nodeIntegration:false</code>。</li>
+    <li><strong>信任模型</strong>：主进程入口拥有完整 Node 权限，插件等同本地可信代码——只安装你信任来源的插件。</li>
+    <li><strong>完整性检验</strong>：应用内置完整性模块会检测 <code>plugin.json</code> 清单缺失等异常并在设置页提示。</li>
+  </ul>
+
+  <h3 id="plugin-debug">调试与排障</h3>
+  <ol>
+    <li><strong>看日志</strong>：设置 → 插件 → 日志区（保留最近 300 行），主进程控制台亦有 <code>[plugins]</code> 前缀输出。</li>
+    <li><strong>常见错误</strong>：
+      <table>
+        <thead><tr><th>现象</th><th>原因</th></tr></thead>
+        <tbody>
+          <tr><td>插件卡片没出现</td><td>目录/<code>plugin.json</code> 放错位置；未点「重新扫描」</td></tr>
+          <tr><td>加载失败：缺少合法 id</td><td><code>plugin.json</code> 的 <code>id</code> 为空或不符正则</td></tr>
+          <tr><td>加载失败：entry 不存在</td><td><code>entry</code> 相对路径写错或文件缺失</td></tr>
+          <tr><td>激活失败</td><td>入口未导出 <code>activate(ctx)</code> 或激活抛异常（看日志区）</td></tr>
+          <tr><td>命令不存在</td><td>命令未注册，或插件未启用</td></tr>
+          <tr><td>引擎返回 <code>code: -1</code></td><td><code>engine.run</code> 异常/超时，看 <code>err</code> 字段</td></tr>
+        </tbody>
+      </table>
+    </li>
+    <li><strong>渲染脚本不生效</strong>：确认 <code>renderer</code> 字段存在、文件可读；脚本只注入一次，改后需<strong>重新扫描</strong>。</li>
+    <li><strong>检查清单</strong>：用 JSON 校验器检查 <code>plugin.json</code>（不允许注释/尾逗号）。</li>
+  </ol>
+
+  <h3 id="plugin-examples">进阶示例</h3>
+  <p><strong>示例 A：转录完成后自动改输出目录</strong></p>
+  <pre><code>module.exports = {
+  activate(ctx) {
+    ctx.events.on('transcribe-done', (r) =&gt; {
+      ctx.log('转录完成：' + (r &amp;&amp; r.out));
+      ctx.ui.notify('转录完成：' + (r &amp;&amp; r.note_count) + ' 个音符', 'ok');
+    });
+  },
+};</code></pre>
+  <p><strong>示例 B：带设置 + 引擎调用的插件</strong></p>
+  <pre><code>module.exports = {
+  activate(ctx) {
+    ctx.commands.register('post', async ({ midi, audio }) =&gt; {
+      if (!midi || !audio) return { ok: false, error: '需要 midi 与 audio' };
+      const r = await ctx.engine.run(['refine', '--audio', audio, '--midi', midi, '-o', ctx.settings.get('outDir') || ''], {
+        script: 'smart_midi.py',
+        timeoutMs: 10 * 60 * 1000,
+      });
+      return r.result || { ok: r.code === 0, error: r.err.slice(-200) };
+    });
+  },
+};</code></pre>
+  <p><strong>示例 C：渲染层脚本驱动界面</strong></p>
+  <p><code>plugin.json</code>：</p>
+  <pre><code>{ "id": "ui-demo", "entry": "index.js", "renderer": "ui.js", "commands": ["ping"] }</code></pre>
+  <p><code>index.js</code>：</p>
+  <pre><code>module.exports = {
+  activate(ctx) {
+    ctx.commands.register('ping', async () =&gt; {
+      ctx.ui.broadcast('ping', { text: 'pong', at: Date.now() });
+      return 'ok';
+    });
+  },
+};</code></pre>
+  <p><code>ui.js</code>：</p>
+  <pre><code>window.addEventListener('fuplugin:ui-demo:ping', (ev) =&gt; {
+  toast('[插件] ' + ev.detail.text, 'ok');
+});</code></pre>
+
+  <h3>附：与内置示例对照</h3>
+  <p>完整可运行的示例见 <code>app/plugins/example-hello/</code>：</p>
+  <ul>
+    <li><code>plugin.json</code> —— 清单（含 <code>commands: ["hello", "songInfo"]</code>）</li>
+    <li><code>index.js</code> —— 命令注册、事件订阅、设置读写、<code>app.getSongMeta()</code></li>
+    <li><code>ui.js</code> —— 渲染层脚本，监听 <code>fuplugin:example-hello:greet</code> 广播</li>
+  </ul>
+  <p>内置开发者文档（应用内「设置 → 插件 → 开发者文档」打开）：<code>app/plugins/plugin-dev.html</code>。</p>
+
+  <hr>
+
+  <!-- ===================== CHANGELOG ===================== -->
+  <h2 id="changelog">更新日志（Changelog）</h2>
+
+  <blockquote>
+    <p><strong>版本号规范</strong>：大功能更新 → 版本号 <strong>+0.1</strong>（如 1.0.1 → 1.1.0）；缺陷修补 / 小功能更新 → 版本号 <strong>+0.0.1</strong>（如 1.0.1 → 1.0.2）。改版本号必须同步两处：<code>app/package.json</code> 的 <code>version</code> 与 <code>app/renderer/FuFumidi.html</code> 的 <code>APP_VERSION</code>。发布流程见 <a href="#version-rule">更新规范</a>。</p>
+  </blockquote>
+
+  <h3>1.1.0 — 2026-08-14 <span class="badge">大功能更新</span></h3>
+
+  <h4>修复</h4>
+  <ul>
+    <li><strong>点击资料库 MIDI 却播放内置示例曲</strong>：导入 MIDI 后歌曲队列未随资料库同步重建导致索引错位；现在每次导入后重建队列并同步游标。</li>
+    <li><strong>删除内置示例曲</strong>：移除「夜色列车」演示曲及侧边栏入口、启动自动载入逻辑，无文件时停留在空状态。</li>
+  </ul>
+
+  <h4>优化</h4>
+  <ul>
+    <li><strong>MIDI → WAV 离线渲染提速</strong>：整曲单图渲染改为按起始时间分桶 + overlap-add 合成，峰值节点 / 内存大幅下降，渲染进度条显示实时百分比。</li>
+    <li><strong>乐谱播放 / 显示优化</strong>：移除昂贵滤镜消除卡顿、增加渲染缓存、改用精确 BPM 消除错位。</li>
+    <li><strong>转录显示优化</strong>：预计耗时 + 实时进度条 + 剩余时间 + 中途取消。</li>
+  </ul>
+
+  <h4>新增</h4>
+  <ul>
+    <li><strong>编辑器精修</strong>：选区量化、移调（±半音 / ±八度）、复制 / 粘贴 / 克隆、力度渐强 / 渐弱、音阶吸附。</li>
+    <li><strong>混音台</strong>：每轨音量 / 声像 / 静音 / 独奏，实时生效。</li>
+    <li><strong>节拍器</strong>：播放时按节拍打点。</li>
+    <li><strong>工程文件（.fufu）</strong>：保存 / 恢复编辑状态、混音、循环、速度与目标轨道。</li>
+    <li><strong>导出 MusicXML</strong>：把当前曲目导出为标准 MusicXML，可导入 MuseScore / Sibelius 继续编排。</li>
+    <li><strong>实时和弦识别</strong>：演奏视图实时显示当前和弦名。</li>
+    <li><strong>循环点拖拽</strong>：演奏视图 Shift+拖拽设置循环区间，并高亮循环区域。</li>
+    <li><strong>歌词显示</strong>：解析 MIDI 歌词轨道，播放时逐行高亮（卡拉 OK 式）。</li>
+  </ul>
+
+  <h4>界面</h4>
+  <ul>
+    <li><strong>安装 / 卸载界面</strong>：字体换用微软雅黑 UI（小字号清晰锐利），顶部横幅加入 F 徽标。</li>
+  </ul>
+
+  <h3>1.0.2 — 2026-08-14 <span class="badge">缺陷修补</span></h3>
+
+  <h4>修复</h4>
+  <ul>
+    <li><strong>MIDI 转换后无法导出保存 WAV 音频文件</strong>：根因是 Electron 33（Chromium 130）下 <code>&lt;a download&gt;</code> 锚点下载经 <code>will-download</code> 的 <code>preventDefault + setSavePath + resume</code> 处理后 0 字节取消（blob/data/http 均复现）。改为 IPC <code>file:saveBinary</code>：渲染进程把字节交给主进程，走原生「保存文件」对话框并写盘，彻底绕开失效的下载子系统。</li>
+    <li><strong>编辑视图「导出 MIDI」同样失效</strong>：同一锚点下载机制，一并切换。</li>
+    <li><strong>「打开输出文件夹」定位错误</strong>：保存后记住实际路径（<code>convSavedPath</code>），按钮直接定位到刚保存的文件。</li>
+  </ul>
+
+  <h3>1.0.1 — 2026-08-13 <span class="badge">修补 + 小功能</span></h3>
+
+  <h4>优化</h4>
+  <ul>
+    <li>内置 Python 运行时瘦身：新增 <code>scripts/prune-python.js</code>，删除全部 <code>__pycache__</code>、标准库测试套件、torch 构建工具目录；<code>bundle-python.js</code> 构建后自动调用。安装包由 <strong>853MB → 556MB</strong>（-35%）。</li>
+  </ul>
+
+  <h4>新增</h4>
+  <ul>
+    <li><strong>内置两个推荐预设并设为默认</strong>：
+      <ul>
+        <li>「人声：最优」（人声分离模式）：起音 0.05 / 判定 0.25 / 最短音符 100ms / 输出鼓组节奏轨 / 智能降噪 / 响度平衡 / 自动 BPM。</li>
+        <li>「钢琴：最优」（钢琴专用模式）：起音 0.05 / 判定 0.06 / 最短音符 20ms / 合并间隔 0ms / 含踏板 / 智能降噪 / 响度平衡。</li>
+      </ul>
+    </li>
+    <li>新装默认应用「人声：最优」；手动切换引擎模式时自动套用该模式的默认预设。</li>
+    <li>转录高级参数新增两项：
+      <ul>
+        <li>钢琴模式「音符合并间隔」滑杆（0–200ms，对应引擎 <code>merge_gap_ms</code>）。</li>
+        <li>人声分离模式「输出鼓组节奏轨」开关（对应引擎 <code>with_drums</code>）。</li>
+      </ul>
+    </li>
+    <li>「最短音符」滑杆范围放宽至 10–300ms（配合钢琴预设的 20ms）。</li>
+    <li><strong>预设管理</strong>：可对预设列表 ↑/↓ 排序（持久化到 <code>presets.json</code> 的 <code>order</code>）、删除内置预设（隐藏机制 + 「恢复全部内置预设」一键还原）、点击名称立即应用；删除操作改为二次确认防误删。</li>
+  </ul>
+
+  <h4>修复</h4>
+  <ul>
+    <li>设置 / 主题库对话框右上角「×」关闭按钮失效：<code>data-close</code> 存的 id 缺 <code>#</code> 前缀，<code>querySelector</code> 取到 null 抛 TypeError。</li>
+    <li>卸载后残留空安装目录：卸载器 CWD 位于 <code>$INSTDIR</code> 时 Windows 锁定当前目录，<code>RMDir</code> 删不掉目录本身；<code>customRemoveFiles</code> 先 <code>SetOutPath "$TEMP"</code> 再删。</li>
+  </ul>
+
+  <h3>1.0.0 — 2026-08 <span class="badge">大版本</span></h3>
+  <ul>
+    <li>七个视图一体：演奏 / 编辑 / 可视化 / 分析 / 乐谱 / 转录 / 转换。</li>
+    <li>三引擎离线转录（basic-pitch / piano-transcription / demucs）+ 智能修正（refine）。</li>
+    <li>内置 Python 运行时开箱即用；GPU 自动检测与三档性能模式。</li>
+    <li>主题库 / 插件系统 / 新手引导 / 完整性一键修复 / 中英双语界面。</li>
+  </ul>
+
+  <hr>
+
+  <!-- ===================== LICENSE ===================== -->
+  <h2 id="license">开源协议 · MIT</h2>
+  <p>MIT License</p>
+  <p>Copyright (c) 2026 FuFumidi</p>
+
+  <p>Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:</p>
+
+  <p>The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.</p>
+
+  <p>THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.</p>
+
+  <hr>
+  <p style="text-align:center; color:var(--text-dim); font-size:13px;">
+    FuFumidi 开发者文档 · 整合自 AGENTS.md / CHANGELOG.md / LICENSE.txt / README.md / UPDATE.md
+  </p>
+
+</main>
+
+<script>
+  // 侧边导航滚动高亮
+  const links = document.querySelectorAll('.sidebar a');
+  const sections = [];
+  links.forEach(a => {
+    const id = a.getAttribute('href').slice(1);
+    const el = document.getElementById(id);
+    if (el) sections.push({ id, el, link: a });
+  });
+
+  const onScroll = () => {
+    const pos = window.scrollY + 80;
+    let current = null;
+    for (const s of sections) {
+      if (s.el.offsetTop <= pos) current = s;
+    }
+    links.forEach(a => a.classList.remove('active'));
+    if (current) current.link.classList.add('active');
+  };
+  window.addEventListener('scroll', onScroll);
+  onScroll();
+</script>
+
+</body>
+</html>

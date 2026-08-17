@@ -1,0 +1,10 @@
+{
+  "id": "example-hello",
+  "name": "示例插件：你好，FuFumidi",
+  "version": "1.0.0",
+  "author": "FuFumidi",
+  "description": "演示插件接口：命令注册、事件监听、插件广播与轻量歌曲信息读取。",
+  "entry": "index.js",
+  "renderer": "ui.js",
+  "commands": ["hello", "songInfo"]
+}
