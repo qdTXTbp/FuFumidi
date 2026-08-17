@@ -95,8 +95,11 @@ function download(url, dest) {
       const req = https.get(u, { headers: { 'User-Agent': 'FuFumidi-bundle/1.0' }, timeout: 60000 }, res => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && hops < 6) {
           res.resume();
-          info(`跳转 → ${res.headers.location.split('?')[0]}`);
-          return doGet(res.headers.location, hops + 1);
+          // Zenodo 等站点会返回相对路径 Location（如 /records/...），必须按当前 URL 解析
+          let next = res.headers.location;
+          try { next = new URL(next, u).toString(); } catch (e) {}
+          info(`跳转 → ${next.split('?')[0]}`);
+          return doGet(next, hops + 1);
         }
         if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode} ${u}`));
         const expected = parseInt(res.headers['content-length'] || '0', 10);
