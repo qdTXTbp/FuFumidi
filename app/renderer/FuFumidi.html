@@ -5390,13 +5390,16 @@ function renderScore() {
       _svgFill.style.maxWidth = 'none';
       const _targetW = el.clientWidth || vpW || 900;
       const _wrappers = el.querySelectorAll('.abcjs-staff-wrapper');
-      const _items = _wrappers.length ? _wrappers : el.querySelectorAll('.abcjs-staff');
+      const _staffs = el.querySelectorAll('.abcjs-staff');
+      const _items = [];
+      _wrappers.forEach(_w => _items.push(_w));
+      _staffs.forEach(_st => { if (!_st.closest('.abcjs-staff-wrapper')) _items.push(_st); });   // 首行可能是裸 staff
       _items.forEach(_st => {
         try {
           const _b = _st.getBBox();
           if (_b.width > 10 && _targetW > 10) {
             const _ratio = _targetW / _b.width;
-            if (isFinite(_ratio) && _ratio > 0.6 && _ratio < 1.8) {
+            if (isFinite(_ratio) && _ratio > 0.6 && _ratio < 2.5) {
               _st.style.transform = 'scaleX(' + _ratio + ')';
               _st.style.transformOrigin = '0 0';
             }
