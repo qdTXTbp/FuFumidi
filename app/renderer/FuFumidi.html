@@ -7848,6 +7848,7 @@ async function btRun() {
   }
 }
 function bindBatch() {
+  window.__batchBound = true;
   const dz = $('#batchDrop'), fi = $('#batchFile');
   dz.addEventListener('click', async () => {
     if (!window.fuBridge || !fuBridge.pickAudioFiles) return;
@@ -9170,7 +9171,7 @@ function init() {
   App.roll = new RollView($('#rollCanvas'), $('#rollHud'));
   App.editor = new Editor($('#editCanvas'));
   bindZoomFabs();
-  bindBar(); bindEditor(); bindScore(); bindConvert(); bindVideoExport(); bindTranscribe(); bindRefine(); bindLogPanels(); bindKeys(); bindChrome(); bindMixer();
+  bindBar(); bindEditor(); bindScore(); bindConvert(); bindBatch(); bindVideoExport(); bindTranscribe(); bindRefine(); bindLogPanels(); bindKeys(); bindChrome(); bindMixer();
   bindSettings(); bindPlugins(); bindGuide(); bindPresets();
   // 歌单（IndexedDB 异步载入；含 v1.0 localStorage 资料库迁移）
   plInit();
