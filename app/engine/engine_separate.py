@@ -111,6 +111,14 @@ def transcribe_separate(audio_path, output_midi, params=None, log_cb=None,
                 _extra = ["--device", "cuda"]
         except Exception:
             pass
+        # 速度优化：demucs 默认 shifts=1 / overlap=0.25；统一关闭 shift 并按性能档降低 overlap
+        perf_mode = params.get("perf_mode", "quality") if params else "quality"
+        if perf_mode == "fast":
+            _extra += ["--shifts", "0", "--overlap", "0.1"]
+        elif perf_mode == "balanced":
+            _extra += ["--shifts", "0", "--overlap", "0.15"]
+        else:
+            _extra += ["--shifts", "0", "--overlap", "0.2"]
         demucs_separate.main(["-n", MODEL_NAME, "-o", tmp_root, src] + _extra)
 
         # 定位分离出的声部文件：tmp_root/<model>/<track_name>/*.wav
