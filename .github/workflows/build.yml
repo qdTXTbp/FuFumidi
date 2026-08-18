@@ -53,6 +53,12 @@ jobs:
           FF_PBS_REL: "20250409"
         run: node scripts/bundle-python.js
 
+      - name: 准备量化依赖（缓存命中时可能已被上轮瘦身卸载）
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then PY=python/python.exe; else PY=python/bin/python3; fi
+          "$PY" -m pip install -q --disable-pip-version-check "onnx>=1.16,<1.17" "ml_dtypes>=0.5.4"
+
       - name: 量化 basic-pitch 模型（压缩体积 + CPU 提速）
         shell: bash
         env:
