@@ -1075,11 +1075,24 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
           </div>
           <div class="drop-zone" id="audioDrop">
             <div class="dz-icon"><span class="ic" data-ic="transcribe"></span></div>
-            <div class="dz-txt"><b>拖入音频文件</b><span>或点击选择 · MP3 / WAV / FLAC / M4A / 视频</span></div>
-            <input type="file" id="audioFile" accept="audio/*,video/*" hidden>
+            <div class="dz-txt"><b>拖入一个或多个音频文件 / 整个文件夹</b><span>支持单个 · 多个 · 文件夹 · MP3 / WAV / FLAC / M4A / 视频</span></div>
+            <input type="file" id="audioFile" accept="audio/*,video/*" hidden multiple>
           </div>
           <div class="audio-info hidden" id="audioInfo">
             <span class="ic" data-ic="music"></span><span id="audioInfoTxt"></span>
+          </div>
+          <!-- 转录队列：与上方单个转录一体，单个 / 多个 / 文件夹统一处理 -->
+          <div id="batchWrap" style="margin-top:10px">
+            <div class="field-row" style="align-items:center">
+              <div><div class="fr-label" style="font-size:12px">转录队列</div><div class="fr-hint">单个 · 多个 · 整个文件夹 · 顺序转录 · 完成后自动加入歌单</div></div>
+              <div class="fr-ctl">
+                <button class="ov-btn" id="btnBatchAddFiles" style="padding:3px 10px;font-size:12px">＋ 文件</button>
+                <button class="ov-btn" id="btnBatchAddFolder" style="padding:3px 10px;font-size:12px">＋ 文件夹</button>
+                <button class="ov-btn danger" id="btnBatchClear" style="padding:3px 10px;font-size:12px">清空</button>
+              </div>
+            </div>
+            <div class="batch-list" id="batchList" style="margin-top:6px"></div>
+            <div style="display:flex;align-items:center;margin-top:4px"><span class="muted" id="batchStat" style="font-size:11px"></span></div>
           </div>
           <div class="wave-prev hidden" id="wavePrev"><canvas id="waveCanvas" width="700" height="64"></canvas></div>
           <div class="field-row sect"><label>引擎模式</label></div>
@@ -1187,25 +1200,7 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.22)}
               <span id="refineInfo"></span>
             </div>
           </div>
-          <!-- 批量转录队列：多文件 / 文件夹 → 顺序转录 → 自动进歌单 -->
-          <div id="batchWrap" style="margin-top:18px;padding-top:16px;border-top:1px dashed var(--border)">
-            <div class="field-row"><label style="font-weight:600;color:var(--text)">批量转录队列</label><span class="muted" style="font-size:11px">拖入多个音频 / 选择整个文件夹 · 顺序转录 · 完成后自动加入歌单</span></div>
-            <div class="drop-zone" id="batchDrop" style="margin-top:10px">
-              <div class="dz-icon"><span class="ic" data-ic="transcribe"></span></div>
-              <div class="dz-txt"><b>拖入多个音频文件</b><span>或点击添加 · 支持暂停 / 继续 / 取消 / 失败重试</span></div>
-              <input type="file" id="batchFile" accept="audio/*,video/*" hidden multiple>
-            </div>
-            <div class="batch-actions" style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <button class="ov-btn" id="btnBatchAddFiles">＋ 文件</button>
-              <button class="ov-btn" id="btnBatchAddFolder">＋ 文件夹</button>
-              <button class="ov-btn primary" id="btnBatchStart">开始队列</button>
-              <button class="ov-btn" id="btnBatchPause">暂停</button>
-              <button class="ov-btn" id="btnBatchResume">继续</button>
-              <button class="ov-btn danger" id="btnBatchCancel">取消全部</button>
-              <span class="muted" id="batchStat" style="margin-left:auto;font-size:11px"></span>
-            </div>
-            <div class="batch-list" id="batchList"></div>
-          </div>
+
         </div>
       </section>
 
@@ -7306,14 +7301,14 @@ function collectTranscribeParams() {
   const cfg = {
     onset_threshold: parseFloat(($('#onsetRange').value / 100).toFixed(2)),
     frame_threshold: parseFloat(($('#frameRange').value / 100).toFixed(2)),
-    minimum_note_length: parseInt($('#minNoteRange').value, 10),
+    min_note_length: parseInt($('#minNoteRange').value, 10),
     denoise: $('#chkDenoise').checked,
     normalize: $('#chkNormalize').checked,
     auto_bpm: $('#chkAutoBpm').checked,
   };
   if (TR_STATE.mode === 'piano') {
     cfg.min_note_ms = parseInt($('#minNoteRange').value, 10);
-    cfg.include_pedal = $('#chkPedal').checked;
+    cfg.no_pedal = !$('#chkPedal').checked;
     cfg.merge_gap_ms = parseInt($('#mergeRange').value, 10);
   }
   if (TR_STATE.mode === 'separate') {
@@ -7816,7 +7811,7 @@ async function btRun() {
     btRender();
     try {
       const cfg = collectTranscribeParams();
-      cfg.audio = it.path; cfg.id = jobId; cfg.out = null;
+      cfg.audio = it.path; cfg.id = jobId; cfg.out = null; cfg.mode = TR_STATE.mode; cfg.perf = TR_STATE.perf;
       const convert = BT_STATE.convertFn || (fuBridge && fuBridge.convert);
       const readOut = BT_STATE.readFn || (fuBridge && fuBridge.readBinary);
       const res = await convert(cfg);
@@ -7849,23 +7844,17 @@ async function btRun() {
 }
 function bindBatch() {
   window.__batchBound = true;
-  const dz = $('#batchDrop'), fi = $('#batchFile');
-  dz.addEventListener('click', async () => {
+  const list = $('#batchList');
+  $('#btnBatchAddFiles').addEventListener('click', async () => {
     if (!window.fuBridge || !fuBridge.pickAudioFiles) return;
     const paths = await fuBridge.pickAudioFiles();
-    if (paths && paths.length) { btAddPaths(paths); toast(t('已添加 ') + paths.length + t(' 个音频到队列'), 'ok'); }
+    if (paths && paths.length) {
+      btAddPaths(paths);
+      if (!TR_STATE.audio) TR_STATE.audio = paths[0];
+      if (window.__updateAudioInfo) window.__updateAudioInfo();
+      toast(t('已添加 ') + paths.length + t(' 个音频到队列'), 'ok');
+    }
   });
-  fi.addEventListener('change', () => { btAddPaths(Array.from(fi.files || []).map(f => f.path || f.name)); fi.value = ''; });
-  ['dragover', 'dragenter'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); e.stopPropagation(); dz.classList.add('dragover'); }));
-  ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); e.stopPropagation(); dz.classList.remove('dragover'); }));
-  dz.addEventListener('drop', e => {
-    e.stopPropagation();
-    const files = Array.from(e.dataTransfer && e.dataTransfer.files || []);
-    if (!files.length) { toast(t('请拖入音频文件'), 'err'); return; }
-    btAddPaths(files.map(f => f.path || f.name));
-    toast(t('已添加 ') + files.length + t(' 个音频到队列'), 'ok');
-  });
-  $('#btnBatchAddFiles').addEventListener('click', () => dz.click());
   $('#btnBatchAddFolder').addEventListener('click', async () => {
     if (!window.fuBridge || !fuBridge.pickDirectory || !fuBridge.listAudioFiles) return;
     const dir = await fuBridge.pickDirectory();
@@ -7873,25 +7862,24 @@ function bindBatch() {
     const files = await fuBridge.listAudioFiles(dir);
     if (!files || !files.length) { toast(t('文件夹里没有找到音频文件'), 'err'); return; }
     btAddPaths(files);
+    if (!TR_STATE.audio) TR_STATE.audio = files[0];
+    if (window.__updateAudioInfo) window.__updateAudioInfo();
     toast(t('已添加 ') + files.length + t(' 个音频到队列'), 'ok');
   });
-  $('#btnBatchStart').addEventListener('click', () => { if (!BT_STATE.items.some(i => i.status === 'pending')) { toast(t('没有待转录的任务'), 'err'); return; } btRun(); });
-  $('#btnBatchPause').addEventListener('click', () => { if (!BT_STATE.running) { toast(t('队列未运行'), 'err'); return; } BT_STATE.paused = true; btRender(); toast(t('已暂停：当前任务完成后停止'), 'ok'); });
-  $('#btnBatchResume').addEventListener('click', () => { if (!BT_STATE.paused) { toast(t('队列未暂停'), 'err'); return; } btRun(); });
-  $('#btnBatchCancel').addEventListener('click', () => {
-    BT_STATE.cancelAll = true;
-    if (BT_STATE.currentJobId && window.fuBridge && fuBridge.cancel) fuBridge.cancel(BT_STATE.currentJobId);
-    for (const it of BT_STATE.items) if (it.status === 'pending') it.status = 'canceled';
+  $('#btnBatchClear').addEventListener('click', () => {
+    if (BT_STATE.running) { toast(t('队列运行中，请先取消'), 'err'); return; }
+    BT_STATE.items = [];
     btRender();
-    toast(t('已取消队列'), 'ok');
+    if (window.__updateAudioInfo) window.__updateAudioInfo();
+    toast(t('已清空转录队列'), 'ok');
   });
-  $('#batchList').addEventListener('click', async e => {
+  list.addEventListener('click', async e => {
     const b = e.target.closest('[data-bt]');
     if (!b) return;
     const it = BT_STATE.items.find(i => i.id === parseInt(b.dataset.id, 10));
     if (!it) return;
     if (b.dataset.bt === 'retry') { it.status = 'pending'; it.progress = 0; it.error = ''; btRender(); if (!BT_STATE.running) btRun(); }
-    else if (b.dataset.bt === 'remove') { BT_STATE.items = BT_STATE.items.filter(i => i !== it); btRender(); }
+    else if (b.dataset.bt === 'remove') { BT_STATE.items = BT_STATE.items.filter(i => i !== it); btRender(); if (window.__updateAudioInfo) window.__updateAudioInfo(); }
   });
   setInterval(() => {
     const it = BT_STATE.items.find(i => i.status === 'running');
@@ -7901,16 +7889,15 @@ function bindBatch() {
     }
   }, 400);
 }
-
 function bindTranscribe() {
   const dz = $('#audioDrop'), fi = $('#audioFile');
   const log = $('#convLog'), prog = $('#convProgress'), fill = $('#convFill'), pct = $('#convPct');
   // 音频选择：点击 / 拖入 / 原生对话框
   dz.addEventListener('click', async () => {
-    if (window.fuBridge && fuBridge.pickAudio) {
+    if (window.fuBridge && fuBridge.pickAudioFiles) {
       try {
-        const p = await fuBridge.pickAudio();
-        if (p) TR_STATE.audio = p;
+        const paths = await fuBridge.pickAudioFiles();
+        if (paths && paths.length) { btAddPaths(paths); TR_STATE.audio = paths[0]; TR_STATE.fileObj = null; }
       } catch (err) { toast(t('选择音频失败：') + (err && err.message || err), 'err'); }
     } else {
       fi.click();
@@ -7919,19 +7906,29 @@ function bindTranscribe() {
   });
   const dzTxt = dz.querySelector('.dz-txt b');
   fi.addEventListener('change', () => {
-    if (fi.files && fi.files[0]) { TR_STATE.audio = fi.files[0].path || fi.files[0].name; TR_STATE.fileObj = fi.files[0]; updateAudioInfo(); }
+    const files = Array.from(fi.files || []);
+    if (files.length) {
+      btAddPaths(files.map(x => x.path || x.name));
+      TR_STATE.audio = files[0].path || files[0].name; TR_STATE.fileObj = files[0];
+      updateAudioInfo();
+    }
+    fi.value = '';
   });
   ['dragover', 'dragenter'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('dragover'); if (dzTxt) dzTxt.textContent = '释放以上传'; }));
   ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('dragover'); if (dzTxt) dzTxt.textContent = '拖入音频文件'; }));
   dz.addEventListener('drop', e => {
-    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f) { TR_STATE.audio = f.path || f.name; TR_STATE.fileObj = f; updateAudioInfo(); }
+    const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+    if (!files.length) { toast(t('请拖入音频文件'), 'err'); return; }
+    btAddPaths(files.map(x => x.path || x.name));
+    TR_STATE.audio = files[0].path || files[0].name; TR_STATE.fileObj = files[0];
+    updateAudioInfo();
+    toast(t('已添加 ') + files.length + t(' 个音频到队列'), 'ok');
   });
   function updateAudioInfo() {
     const box = $('#audioInfo');
     if (!TR_STATE.audio) { box.classList.add('hidden'); return; }
     box.classList.remove('hidden'); box.classList.add('ok');
-    $('#audioInfoTxt').textContent = TR_STATE.audio.replace(/^.*[\\/]/, '') + t('（点击可更换）');
+    $('#audioInfoTxt').textContent = TR_STATE.audio.replace(/^.*[\\/]/, '') + (BT_STATE.items.length > 1 ? ('  + ' + (BT_STATE.items.length - 1) + t(' 个待转录')) : '') + t('（点击可添加 / 更换）');
     previewWave(TR_STATE.fileObj);
     updateSummary();
   }
@@ -8047,103 +8044,92 @@ function bindTranscribe() {
   // 引擎日志流
   if (window.fuBridge && fuBridge.onEngineLog) {
     fuBridge.onEngineLog(p => {
-      if (!p || p.id !== TR_STATE.jobId) return;
+      if (!p || (p.id !== TR_STATE.jobId && String(p.id).indexOf('batch') !== 0)) return;
       appendLogLine(log, p.line);
     });
   }
   // 取消转录（终止引擎子进程）
   function cancelTranscribe() {
     if (!TR_STATE.busy) return;
-    if (window.fuBridge && fuBridge.cancel) fuBridge.cancel(TR_STATE.jobId);
-    logLine(t('已请求取消转录…'), true);
+    BT_STATE.cancelAll = true;
+    if (BT_STATE.currentJobId && window.fuBridge && fuBridge.cancel) fuBridge.cancel(BT_STATE.currentJobId);
+    logLine(t('已请求取消转录队列…'), true);
   }
   $('#btnCancelTranscribe').addEventListener('click', cancelTranscribe);
   // 开始转录
   $('#btnTranscribe').addEventListener('click', async () => {
     if (TR_STATE.busy) return;
-    if (!TR_STATE.audio) { toast(t('请先选择音频文件'), 'err'); return; }
+    if (TR_STATE.audio && !BT_STATE.items.some(i => i.path === TR_STATE.audio)) btAddPaths([TR_STATE.audio]);
+    for (const it of BT_STATE.items) if (it.status === 'error') it.status = 'pending';
+    const pending = BT_STATE.items.filter(i => i.status === 'pending');
+    if (!pending.length) {
+      const done = BT_STATE.items.filter(i => i.status === 'done').length;
+      toast(done ? t('队列已完成，可清空后继续添加音频') : t('请先选择音频文件'), done ? 'ok' : 'err');
+      return;
+    }
     if (!window.fuBridge || !fuBridge.convert) { toast(t('请使用桌面版 FuFumidi 进行转录'), 'err'); return; }
     setStep(3);
-    TR_STATE.busy = true; TR_STATE.jobId++;
+    TR_STATE.busy = true;
     const btn = $('#btnTranscribe'); btn.disabled = true; btn.style.opacity = .5;
     $('#convDone').classList.add('hidden'); $('#refineWrap').classList.add('hidden');
     log.classList.remove('hidden'); clearLog(log); setLogRunning(log, true);
-    prog.classList.remove('hidden'); $('#btnCancelTranscribe').classList.remove('hidden'); fill.style.width = '4%'; pct.textContent = '…';
-    const estSec = estimateTranscribeSec(TR_STATE.mode, TR_STATE.perf, TR_STATE.duration);
+    prog.classList.remove('hidden'); $('#btnCancelTranscribe').classList.remove('hidden');
+    fill.style.width = '3%'; pct.textContent = '0 / ' + BT_STATE.items.length;
+    logLine(t('转录队列：共 ') + pending.length + t(' 首，顺序处理…'));
+    BT_STATE.cancelAll = false; BT_STATE.paused = false;
     const trT0 = Date.now();
     clearInterval(trProgressTimer);
     trProgressTimer = setInterval(() => {
       const el = (Date.now() - trT0) / 1000;
-      if (estSec) {
-        const p = Math.min(95, Math.round(el / estSec * 100));
-        fill.style.width = Math.max(4, p) + '%';
-        pct.textContent = t('剩余约 ') + fmtTime(Math.max(0, estSec - el));
-      } else {
-        fill.style.width = Math.min(95, 4 + Math.round(el * 8)) + '%';
-        pct.textContent = fmtTime(el);
-      }
+      const done = BT_STATE.items.filter(i => i.status === 'done').length;
+      const err = BT_STATE.items.filter(i => i.status === 'error').length;
+      fill.style.width = Math.max(3, Math.min(95, Math.round((done + err) / Math.max(1, BT_STATE.items.length) * 100))) + '%';
+      pct.textContent = t('完成 ') + done + ' / ' + BT_STATE.items.length + (err ? (' · ' + t('失败 ') + err) : '') + ' · ' + fmtTime(el);
     }, 500);
-    logLine(t('加载引擎并转录中…'));
     try {
-      const cfg = {
-        id: TR_STATE.jobId,
-        audio: TR_STATE.audio,
-        out: '',
-        mode: TR_STATE.mode,
-        perf: TR_STATE.perf,
-        onset_threshold: $('#onsetRange').value / 100,
-        frame_threshold: $('#frameRange').value / 100,
-        min_note_length: parseInt($('#minNoteRange').value, 10),
-        denoise: $('#chkDenoise').checked,
-        normalize: $('#chkNormalize').checked,
-        auto_bpm: $('#chkAutoBpm').checked,
-      };
-      if (TR_STATE.mode === 'piano') {
-        cfg.min_note_ms = parseInt($('#minNoteRange').value, 10);
-        cfg.no_pedal = !$('#chkPedal').checked;
-        cfg.merge_gap_ms = parseInt($('#mergeRange').value, 10);
-      }
-      if (TR_STATE.mode === 'separate') {
-        cfg.with_drums = $('#chkDrums').checked;
-        cfg.export_stems = $('#chkStemExport').checked;
-      }
-      const res = await fuBridge.convert(cfg);
+      await btRun();
       clearInterval(trProgressTimer);
-      fill.style.width = '100%'; pct.textContent = res.ok ? t('完成') : t('失败');
-      if (res.ok && res.out) {
-        logLine(t('完成！识别出 ') + (res.note_count != null ? res.note_count + t(' 个音符') : '') + t(' → ') + res.out);
-        TR_STATE.lastOut = res.out;
-        const open = $('#transDoneOpen');
-        open.onclick = async () => {
+      const done = BT_STATE.items.filter(i => i.status === 'done');
+      const errs = BT_STATE.items.filter(i => i.status === 'error');
+      fill.style.width = (done.length && !errs.length) ? '100%' : Math.round((done.length / Math.max(1, BT_STATE.items.length)) * 100) + '%';
+      pct.textContent = errs.length ? (t('完成 ') + done.length + ' / ' + t('失败 ') + errs.length) : t('完成');
+      if (done.length) {
+        const last = done[done.length - 1];
+        TR_STATE.lastOut = last.out;
+        const info = t('成功 ') + done.length + t(' 首') + (last.note_count != null ? (' · ' + last.note_count + t(' 个音符')) : '');
+        logLine(info);
+        $('#convInfo').textContent = info;
+        RF_STATE.audio = last.path; RF_STATE.midi = last.out; syncRefineInputs();
+        if (done.length === 1) {
           try {
-            const bytes = await fuBridge.readBinary(res.out);
+            const bytes = await fuBridge.readBinary(last.out);
             if (bytes) {
               const mid = parseMidi(bytes);
-              const song = buildSong(mid, { fileName: res.out.replace(/^.*[\\/]/, ''), fileSize: bytes.length });
-              await plAddBytes(song.fileName, bytes);
-              loadSong(song); setActiveView('play');
-              smartAssignSong();   // 转录完成后自动智能配器（可 Ctrl+Z 撤销）
-              if (TR_STATE.audio) attachAudioToSong(TR_STATE.audio);   // 挂原音频 → 编辑视图波形对齐
-            } else { toast(t('输出文件不存在或已被删除'), 'err'); }
-          } catch (err) { toast(t('载入失败：') + err.message, 'err'); }
-        };
-        $('#convInfo').textContent = t('输出 ') + res.out.replace(/^.*[\\/]/, '') + (res.stems && res.stems.length ? t(' · 分轨音频 ') + res.stems.length + t(' 个（与 MIDI 同目录）') : '');
-        // 供「智能修正」使用同一份音频 + 本转录输出
-        RF_STATE.audio = TR_STATE.audio; RF_STATE.midi = res.out;
-        syncRefineInputs();
-      } else {
-        logLine(t('[失败] 转录未成功，请查看上方日志。'), true);
+              const song = buildSong(mid, { fileName: last.name.replace(/\.[^.]+$/, '') + '.mid', fileSize: bytes.length });
+              loadSong(song); setActiveView('play'); smartAssignSong();
+              if (last.path) attachAudioToSong(last.path);
+            }
+          } catch (e) {}
+        }
       }
-      setTimeout(() => {
-        prog.classList.add('hidden'); $('#btnCancelTranscribe').classList.add('hidden'); $('#convDone').classList.remove('hidden'); btn.disabled = false; btn.style.opacity = 1; TR_STATE.busy = false; setLogRunning(log, false);
-        if (RF_STATE.midi && RF_STATE.audio) $('#refineWrap').classList.remove('hidden');
-      }, 500);
+      if (errs.length) {
+        logLine(t('[失败] ') + errs.length + t(' 首失败，可在队列中点击「重试」。'), true);
+        for (const it of errs) if (it.error) logLine(it.name + '：' + it.error, true);
+      } else if (done.length) {
+        logLine(t('全部完成，已加入歌单。'));
+      }
     } catch (e) {
       clearInterval(trProgressTimer);
       logLine(t('[错误] ') + (e.message || String(e)), true);
-      prog.classList.add('hidden'); $('#btnCancelTranscribe').classList.add('hidden'); btn.disabled = false; btn.style.opacity = 1; TR_STATE.busy = false; setLogRunning(log, false);
       toast(t('转录失败'), 'err');
     }
+    setTimeout(() => {
+      prog.classList.add('hidden'); $('#btnCancelTranscribe').classList.add('hidden');
+      $('#convDone').classList.remove('hidden'); btn.disabled = false; btn.style.opacity = 1;
+      TR_STATE.busy = false; setLogRunning(log, false);
+      if (RF_STATE.midi && RF_STATE.audio) $('#refineWrap').classList.remove('hidden');
+      if (window.__updateSummary) window.__updateSummary();
+    }, 500);
   });
   function logLine(txt, isErr) {
     appendLogLine(log, txt, isErr);
@@ -9171,7 +9157,7 @@ function init() {
   App.roll = new RollView($('#rollCanvas'), $('#rollHud'));
   App.editor = new Editor($('#editCanvas'));
   bindZoomFabs();
-  bindBar(); bindEditor(); bindScore(); bindConvert(); bindBatch(); bindVideoExport(); bindTranscribe(); bindRefine(); bindLogPanels(); bindKeys(); bindChrome(); bindMixer();
+  bindBar(); bindEditor(); bindScore(); bindConvert(); bindVideoExport(); bindTranscribe(); bindBatch(); bindRefine(); bindLogPanels(); bindKeys(); bindChrome(); bindMixer();
   bindSettings(); bindPlugins(); bindGuide(); bindPresets();
   // 歌单（IndexedDB 异步载入；含 v1.0 localStorage 资料库迁移）
   plInit();
