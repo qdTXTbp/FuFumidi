@@ -111,6 +111,7 @@ def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
 
     if mode == "separate":
         import engine_separate
+        params["perf_mode"] = perf_mode
         return engine_separate.transcribe_separate(
             audio_path, output_midi, params=params, log_cb=log_cb,
             num_threads=num_threads)
