@@ -8083,8 +8083,12 @@ function bindTranscribe() {
       const el = (Date.now() - trT0) / 1000;
       const done = BT_STATE.items.filter(i => i.status === 'done').length;
       const err = BT_STATE.items.filter(i => i.status === 'error').length;
-      fill.style.width = Math.max(3, Math.min(95, Math.round((done + err) / Math.max(1, BT_STATE.items.length) * 100))) + '%';
-      pct.textContent = t('完成 ') + done + ' / ' + BT_STATE.items.length + (err ? (' · ' + t('失败 ') + err) : '') + ' · ' + fmtTime(el);
+      const total = Math.max(1, BT_STATE.items.length);
+      const cur = BT_STATE.items.find(i => i.status === 'running');
+      const curP = cur ? (cur.progress || (cur.startedAt && cur.estMs ? Math.min(95, Math.round((Date.now() - cur.startedAt) / cur.estMs * 100)) : 0)) : 0;
+      const p = Math.max(3, Math.min(95, Math.round(((done + err) + curP / 100) / total * 100)));
+      fill.style.width = p + '%';
+      pct.textContent = (cur ? (cur.name + ' · ' + p + '% · ' + fmtTime(el)) : (t('完成 ') + done + ' / ' + total + (err ? (' · ' + t('失败 ') + err) : '') + ' · ' + fmtTime(el)));
     }, 500);
     try {
       await btRun();
