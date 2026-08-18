@@ -2,7 +2,7 @@
 
 **离线音频转 MIDI 一条龙工具** —— 转录、修正、编辑、演奏、可视化、分析、乐谱，全程本地运行，无需联网。
 
-> 当前版本：**v1.2.0**（Windows / macOS / Linux 安装包，内置 Python 运行时与转录模型）
+> 当前版本：**v1.2.1**（Windows / macOS / Linux 安装包，内置 Python 运行时与转录模型）
 
 ## 项目简介
 
@@ -16,7 +16,7 @@ FuFumidi 是一款基于 Electron 的**纯离线**音频转 MIDI 桌面应用。
 
 引擎支持 **GPU 自动检测**（NVIDIA CUDA / AMD·Intel DirectML / CPU 兜底），并提供三档性能模式（quality / balanced / fast），按 CPU 核数与显卡自动推荐档位。
 
-## v1.2.0 新功能
+## v1.2.1 新功能
 
 - **MIDI 歌单**：文件 / 文件夹批量导入、收藏、多歌单、拖拽排序，数据存 IndexedDB；
 - **编辑器增强**：响度调整、踏板事件、BPM 修改、按轨 / 全局音色、智能配器、原音频波形轨与起音吸附；
@@ -43,10 +43,10 @@ FuFumidi 是一款基于 Electron 的**纯离线**音频转 MIDI 桌面应用。
 
 | 平台 | 文件 |
 | --- | --- |
-| Windows x64 | `FuFumidi-Setup-1.2.0.exe` |
-| macOS Intel | `FuFumidi-1.2.0.dmg` / `FuFumidi-1.2.0-mac.zip` |
-| macOS Apple Silicon | `FuFumidi-1.2.0-arm64.dmg` / `FuFumidi-1.2.0-arm64-mac.zip` |
-| Linux x64 | `FuFumidi-1.2.0.AppImage` / `fufumidi_1.2.0_amd64.deb` |
+| Windows x64 | `FuFumidi-Setup-1.2.1.exe` |
+| macOS Intel | `FuFumidi-1.2.1.dmg` / `FuFumidi-1.2.1-mac.zip` |
+| macOS Apple Silicon | `FuFumidi-1.2.1-arm64.dmg` / `FuFumidi-1.2.1-arm64-mac.zip` |
+| Linux x64 | `FuFumidi-1.2.1.AppImage` / `fufumidi_1.2.1_amd64.deb` |
 
 安装包自带内置 Python 运行时与转录模型（basic-pitch int8 量化、piano-transcription、demucs htdemucs）。
 
@@ -81,11 +81,11 @@ CI（`.github/workflows/build.yml`）：推送 `v*` 标签自动构建三平台�
 
 ## English
 
-**FuFumidi** — an offline audio-to-MIDI transcription desktop app (Electron + bundled Python runtime), v1.2.0.
+**FuFumidi** — an offline audio-to-MIDI transcription desktop app (Electron + bundled Python runtime), v1.2.1.
 
 - **100% local**: audio never leaves your machine.
 - **Three offline engines**: Universal (basic-pitch / ONNX int8), Piano (piano-transcription / PyTorch), and Separate (demucs voice separation).
-- **v1.2.0 highlights**: MIDI playlists, editor enhancements (loudness / pedal / BPM / timbre / waveform), 128 GM instruments + built-in GeneralUser SoundFont, staff / jianpu / guitar & bass TAB scores with PNG/PDF export, batch transcription queue, plugin views, Web MIDI, stem export, background MP4 export, model manager.
+- **v1.2.1 highlights**: MIDI playlists, editor enhancements (loudness / pedal / BPM / timbre / waveform), 128 GM instruments + built-in GeneralUser SoundFont, staff / jianpu / guitar & bass TAB scores with PNG/PDF export, batch transcription queue, plugin views, Web MIDI, stem export, background MP4 export, model manager.
 - **Install**: Windows 10+ / macOS / Linux installers on [GitHub Releases](https://github.com/qdTXTbp/FuFumidi/releases).
 - **Build**: `cd app && npm install`, then `npm run dist:win` / `dist:mac` / `dist:linux`.
 - **License**: MIT.
