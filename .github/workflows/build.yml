@@ -88,7 +88,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          name: FuFumidi v1.2.0
+          name: FuFumidi ${{ github.ref_name }}
           body: |
             三平台安装包（随附内置 Python 运行时与转录模型）：
             - Windows：NSIS Setup x64
