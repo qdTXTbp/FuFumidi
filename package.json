@@ -1,16 +1,17 @@
-﻿{
-    "name":  "fufumidi",
-    "productName":  "FuFumidi",
-    "version":  "2.0.0",
-    "description":  "离线 MIDI 播放 / 编辑 / 可视化 / 分析 / 乐谱 / 转录（音频转 MIDI）一体工具",
-    "main":  "main.js",
-    "author":  "FuFumidi",
-    "license":  "MIT",
-    "homepage":  "https://github.com/qdTXTbp/FuFumidi",
-    "private":  true,
-    "scripts":  {
-                    "pack:source":  "node build.js source",
-                    "pack:full":  "node build.js full",
-                    "pack:base":  "node build.js base"
-                }
+{
+  "name": "fufumidi",
+  "productName": "FuFumidi",
+  "version": "2.0.0",
+  "description": "离线 MIDI 播放 / 编辑 / 可视化 / 分析 / 乐谱 / 转录（音频转 MIDI）一体工具",
+  "main": "main.js",
+  "author": "FuFumidi",
+  "license": "MIT",
+  "homepage": "https://github.com/qdTXTbp/FuFumidi",
+  "private": true,
+  "scripts": {
+    "pack:source": "node build.js source",
+    "pack:full": "node build.js full",
+    "pack:base": "node build.js base",
+    "dist:win": "electron-builder --win nsis --x64"
+  }
 }

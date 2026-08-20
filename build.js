@@ -33,7 +33,7 @@ if (mode === 'full') {
   const out = path.join(dist, 'FuFumidi-source.7z');
   if (fs.existsSync(dist)) fs.rmSync(dist, { recursive: true, force: true });
   fs.mkdirSync(dist, { recursive: true });
-  const excludes = ['.git', 'node_modules', 'dist', '.github'].map(x => '-xr!' + x).join(' ');
+  const excludes = ['.git', 'node_modules', 'dist', 'release', 'release-base', '.github', 'build.log', 'build.err.log', 'build-base.log', 'build-base.err.log'].map(x => '-xr!' + x).join(' ');
   console.log('[source] compressing with 7z -mx9 ...');
   execSync('"' + sevenZip + '" a -t7z -mx9 "' + out + '" "' + path.join(root, '*') + '" ' + excludes, { stdio: 'inherit', cwd: root });
   console.log('[ok] ' + out + ' (' + fs.statSync(out).size + ' bytes)');

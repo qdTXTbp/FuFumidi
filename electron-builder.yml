@@ -1,0 +1,34 @@
+appId: com.fufumidi.app
+electronVersion: 33.4.11
+productName: FuFumidi
+directories:
+  output: release
+asarUnpack:
+  - "engine/**"
+  - "**/*.node"
+files:
+  - "**/*"
+  - "!dist/**"
+  - "!.git/**"
+  - "!release/**"
+  - "!build.js"
+  - "!electron-builder.yml"
+extraResources:
+  - from: "E:/Midi/FuFumidi/resources/python"
+    to: python
+  - from: "E:/Midi/FuFumidi/resources/models"
+    to: models
+  - from: "E:/Midi/FuFumidi/resources/elevate.exe"
+    to: elevate.exe
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+nsis:
+  oneClick: true
+  perMachine: false
+  allowToChangeInstallationDirectory: false
+  createDesktopShortcut: true
+  shortcutName: FuFumidi
