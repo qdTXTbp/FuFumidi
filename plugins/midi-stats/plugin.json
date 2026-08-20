@@ -1,0 +1,9 @@
+{
+  "id": "midi-stats",
+  "name": "MIDI 统计工具",
+  "version": "1.0.0",
+  "author": "FuFumidi",
+  "description": "示例插件：统计当前曲目的轨道/音符/音域。",
+  "entry": "index.js",
+  "commands": ["midiStats"]
+}

@@ -1,0 +1,9 @@
+{
+  "id": "batch-rename",
+  "name": "批量重命名工具",
+  "version": "1.0.0",
+  "author": "FuFumidi",
+  "description": "示例插件：批量重命名歌单/导出文件。",
+  "entry": "index.js",
+  "commands": ["batchRenameHelp"]
+}

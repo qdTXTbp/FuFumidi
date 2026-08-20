@@ -1,0 +1,9 @@
+{
+  "id": "beat-detect",
+  "name": "节拍检测工具",
+  "version": "1.0.0",
+  "author": "FuFumidi",
+  "description": "示例插件：演示 BPM 检测接口调用。",
+  "entry": "index.js",
+  "commands": ["beatDetectHelp"]
+}
