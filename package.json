@@ -4,7 +4,10 @@
   "version": "2.0.0",
   "description": "离线 MIDI 播放 / 编辑 / 可视化 / 分析 / 乐谱 / 转录（音频转 MIDI）一体工具",
   "main": "main.js",
-  "author": "FuFumidi",
+  "author": {
+    "name": "FuFumidi",
+    "email": "dev@fufumidi.local"
+  },
   "license": "MIT",
   "homepage": "https://github.com/qdTXTbp/FuFumidi",
   "private": true,
