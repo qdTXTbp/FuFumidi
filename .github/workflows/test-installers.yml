@@ -40,7 +40,7 @@ jobs:
           sudo dpkg -i fufumidi_2.0.0_amd64.deb || sudo apt-get -f install -y
           echo "--- package files ---"
           dpkg -L fufumidi | sed -n '1,120p'
-          BIN="$(dpkg -L fufumidi | grep -E '/(FuFumidi|fufumidi)$' | head -n1)"
+          BIN="$(find /opt/FuFumidi -maxdepth 1 -type f \( -name 'fufumidi' -o -name 'FuFumidi' \) -perm -111 | head -n1)"
           if [ -z "$BIN" ]; then BIN="$(command -v fufumidi || true)"; fi
           if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then echo "Cannot find installed binary"; exit 1; fi
           echo "BIN=$BIN"
@@ -95,6 +95,6 @@ jobs:
         run: |
           set -euxo pipefail
           hdiutil detach /tmp/fufu_mnt || true
-          rm -rf /Applications/FuFumidi.app
+          sudo rm -rf /Applications/FuFumidi.app
           if [ -d /Applications/FuFumidi.app ]; then echo "Uninstall failed"; exit 1; fi
           echo "macOS uninstall OK"
