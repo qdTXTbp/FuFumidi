@@ -22,35 +22,42 @@ jobs:
           set -euxo pipefail
           chmod +x FuFumidi-2.0.0.AppImage
           ./FuFumidi-2.0.0.AppImage --appimage-extract >/dev/null
-          ls -la squashfs-root
           APP_BIN="$(find squashfs-root -maxdepth 2 -type f \( -name 'AppRun' -o -name 'fufumidi' -o -name 'FuFumidi' \) | head -n1)"
           echo "APP_BIN=$APP_BIN"
-          xvfb-run -a "$APP_BIN" --no-sandbox >/tmp/appimage.log 2>&1 &
+          Xvfb :99 -screen 0 1280x800x24 >/tmp/xvfb-appimage.log 2>&1 &
+          XVFB_PID=$!
+          export DISPLAY=:99
+          sleep 2
+          "$APP_BIN" --no-sandbox >/tmp/appimage.log 2>&1 &
           PID=$!
           sleep 12
           if ! kill -0 $PID 2>/dev/null; then
             echo "AppImage process exited early"; cat /tmp/appimage.log; exit 1
           fi
           kill $PID || true
+          kill $XVFB_PID || true
           wait $PID || true
           echo "AppImage OK"
       - name: Test deb install/start/uninstall
         run: |
           set -euxo pipefail
           sudo dpkg -i fufumidi_2.0.0_amd64.deb || sudo apt-get -f install -y
-          echo "--- package files ---"
-          dpkg -L fufumidi | sed -n '1,120p'
           BIN="$(find /opt/FuFumidi -maxdepth 1 -type f \( -name 'fufumidi' -o -name 'FuFumidi' \) -perm -111 | head -n1)"
           if [ -z "$BIN" ]; then BIN="$(command -v fufumidi || true)"; fi
           if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then echo "Cannot find installed binary"; exit 1; fi
           echo "BIN=$BIN"
-          xvfb-run -a "$BIN" --no-sandbox >/tmp/deb.log 2>&1 &
+          Xvfb :99 -screen 0 1280x800x24 >/tmp/xvfb-deb.log 2>&1 &
+          XVFB_PID=$!
+          export DISPLAY=:99
+          sleep 2
+          "$BIN" --no-sandbox >/tmp/deb.log 2>&1 &
           PID=$!
           sleep 12
           if ! kill -0 $PID 2>/dev/null; then
             echo "deb app process exited early"; cat /tmp/deb.log; exit 1
           fi
           kill $PID || true
+          kill $XVFB_PID || true
           wait $PID || true
           sudo dpkg -r fufumidi
           if dpkg -s fufumidi 2>/dev/null | grep -q 'Status: install ok installed'; then
