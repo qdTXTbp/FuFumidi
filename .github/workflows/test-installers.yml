@@ -1,0 +1,100 @@
+name: Test Linux & macOS Installers
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Linux installers
+        run: |
+          gh release download v2.0.0 -R qdTXTbp/FuFumidi -p 'FuFumidi-2.0.0.AppImage' -p 'fufumidi_2.0.0_amd64.deb' --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Install xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+      - name: Test AppImage
+        run: |
+          set -euxo pipefail
+          chmod +x FuFumidi-2.0.0.AppImage
+          ./FuFumidi-2.0.0.AppImage --appimage-extract >/dev/null
+          ls -la squashfs-root
+          APP_BIN="$(find squashfs-root -maxdepth 2 -type f \( -name 'AppRun' -o -name 'fufumidi' -o -name 'FuFumidi' \) | head -n1)"
+          echo "APP_BIN=$APP_BIN"
+          xvfb-run -a "$APP_BIN" --no-sandbox >/tmp/appimage.log 2>&1 &
+          PID=$!
+          sleep 12
+          if ! kill -0 $PID 2>/dev/null; then
+            echo "AppImage process exited early"; cat /tmp/appimage.log; exit 1
+          fi
+          kill $PID || true
+          wait $PID || true
+          echo "AppImage OK"
+      - name: Test deb install/start/uninstall
+        run: |
+          set -euxo pipefail
+          sudo dpkg -i fufumidi_2.0.0_amd64.deb || sudo apt-get -f install -y
+          echo "--- package files ---"
+          dpkg -L fufumidi | sed -n '1,120p'
+          BIN="$(dpkg -L fufumidi | grep -E '/(FuFumidi|fufumidi)$' | head -n1)"
+          if [ -z "$BIN" ]; then BIN="$(command -v fufumidi || true)"; fi
+          if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then echo "Cannot find installed binary"; exit 1; fi
+          echo "BIN=$BIN"
+          xvfb-run -a "$BIN" --no-sandbox >/tmp/deb.log 2>&1 &
+          PID=$!
+          sleep 12
+          if ! kill -0 $PID 2>/dev/null; then
+            echo "deb app process exited early"; cat /tmp/deb.log; exit 1
+          fi
+          kill $PID || true
+          wait $PID || true
+          sudo dpkg -r fufumidi
+          if dpkg -s fufumidi 2>/dev/null | grep -q 'Status: install ok installed'; then
+            echo "Uninstall failed"; exit 1
+          fi
+          echo "deb OK"
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Download macOS dmg
+        run: gh release download v2.0.0 -R qdTXTbp/FuFumidi -p 'FuFumidi-2.0.0.dmg' --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Mount and install app
+        run: |
+          set -euxo pipefail
+          hdiutil attach FuFumidi-2.0.0.dmg -nobrowse -mountpoint /tmp/fufu_mnt
+          ls -la /tmp/fufu_mnt
+          APP_PATH="$(find /tmp/fufu_mnt -maxdepth 1 -name '*.app' | head -n1)"
+          echo "APP_PATH=$APP_PATH"
+          sudo cp -R "$APP_PATH" /Applications/
+          sudo xattr -dr com.apple.quarantine "/Applications/$(basename "$APP_PATH")" 2>/dev/null || true
+      - name: Launch app
+        run: |
+          set -euxo pipefail
+          APP="/Applications/FuFumidi.app"
+          BIN="$APP/Contents/MacOS/FuFumidi"
+          if [ ! -x "$BIN" ]; then
+            BIN="$(find "$APP/Contents/MacOS" -maxdepth 1 -type f | head -n1)"
+          fi
+          echo "BIN=$BIN"
+          "$BIN" >/tmp/macos.log 2>&1 &
+          PID=$!
+          sleep 15
+          if ! kill -0 $PID 2>/dev/null; then
+            echo "macOS app process exited early"; cat /tmp/macos.log; exit 1
+          fi
+          kill $PID || true
+          wait $PID || true
+          echo "macOS launch OK"
+      - name: Uninstall
+        run: |
+          set -euxo pipefail
+          hdiutil detach /tmp/fufu_mnt || true
+          rm -rf /Applications/FuFumidi.app
+          if [ -d /Applications/FuFumidi.app ]; then echo "Uninstall failed"; exit 1; fi
+          echo "macOS uninstall OK"
