@@ -42,8 +42,8 @@ win:
         - x64
   icon: build/icon.ico
 nsis:
-  oneClick: true
+  oneClick: false
   perMachine: false
-  allowToChangeInstallationDirectory: false
+  allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   shortcutName: FuFumidi
