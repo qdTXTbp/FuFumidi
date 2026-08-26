@@ -103,7 +103,17 @@ class PluginHost {
     if (this._plugins.has(manifest.id)) {
       return; // 同 ID 插件已加载（更高优先级目录），跳过
     }
-    const entryPath = manifest.entry ? path.join(dir, manifest.entry) : null;
+    // 沙箱边界：插件目录必须在允许的根目录内，entry 不允许越界
+    const pluginRoot = path.resolve(dir);
+    const rootOk = this._dirs.some(root => {
+      const r = path.resolve(root);
+      return pluginRoot === r || pluginRoot.startsWith(r + path.sep);
+    });
+    if (!rootOk) throw new Error('插件目录不在允许的根目录内：' + dir);
+    const entryPath = manifest.entry ? path.resolve(dir, manifest.entry) : null;
+    if (entryPath && entryPath !== pluginRoot && !entryPath.startsWith(pluginRoot + path.sep)) {
+      throw new Error('entry 路径越界：' + manifest.entry);
+    }
     if (!entryPath || !fs.existsSync(entryPath)) throw new Error('entry 不存在：' + (manifest.entry || ''));
     const pl = {
       id: manifest.id,

@@ -18,8 +18,6 @@ export const VIEWS = [
   { id: 'convert', label: '转换', ic: 'convert' },
 ];
 
-export const MIGRATED_VIEWS = ['home', 'play', 'analyze', 'viz', 'score', 'lyrics', 'convert', 'transcribe', 'edit'];
-
 const DB_NAME = 'fufumidi-db', DB_VER = 1, STORE_SONGS = 'songs';
 let _dbP: Promise<any> | null = null;
 let _toastTimer: any = null;
