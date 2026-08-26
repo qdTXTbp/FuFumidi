@@ -5,6 +5,7 @@ import { ensureAudio } from '../audio';
 import { parseMidi, buildSong } from '../core/midi';
 import { TRACK_COLORS, fmtTime } from '../core/util';
 import { usePlaylistStore } from './playlist';
+import { bridge } from '../api';
 
 export const VIEWS = [
   { id: 'home', label: '首页', ic: 'home' },
@@ -81,6 +82,24 @@ async function idbDelete(store: string, id: string): Promise<boolean> {
   });
 }
 
+/* ---------------- SQLite 持久化（桌面版优先，回退 IndexedDB） ---------------- */
+async function dbSongsAll(): Promise<any[]> {
+  if (bridge && typeof bridge.dbSongsList === 'function') {
+    try { const arr = await bridge.dbSongsList(); if (Array.isArray(arr)) return arr; } catch (e) {}
+  }
+  return [];
+}
+async function dbSongPut(rec: any): Promise<void> {
+  if (bridge && typeof bridge.dbSongsPut === 'function') {
+    try { await bridge.dbSongsPut(rec); } catch (e) {}
+  }
+}
+async function dbSongDelete(id: string): Promise<void> {
+  if (bridge && typeof bridge.dbSongsDelete === 'function') {
+    try { await bridge.dbSongsDelete(id); } catch (e) {}
+  }
+}
+
 function cryptoId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
@@ -153,6 +172,7 @@ export const useAppStore = defineStore('app', {
           plStore.addSongs([item.id]);
         } catch (e) {}
         await idbPut(STORE_SONGS, { id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, bytes: it.bytes });
+        await dbSongPut({ id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, bytes: Array.from(it.bytes as any) });
         ok++;
       }
       if (ok > 0) {
@@ -164,7 +184,15 @@ export const useAppStore = defineStore('app', {
       }
     },
     async restoreSongs() {
-      const recs = await idbAll(STORE_SONGS);
+      const sqliteRecs = await dbSongsAll();
+      let recs = sqliteRecs;
+      if (!recs.length) {
+        recs = await idbAll(STORE_SONGS);
+        // 首次从 IndexedDB 迁移到 SQLite（桌面版）
+        if (recs.length) {
+          for (const r of recs) await dbSongPut({ id: r.id, name: r.name, size: r.size || 0, time: r.time || 0, bytes: Array.from(r.bytes || []) });
+        }
+      }
       for (const r of recs) {
         if (!r || !r.id || this.songs.some((s: any) => s.id === r.id)) continue;
         this.songs.push({
@@ -172,6 +200,7 @@ export const useAppStore = defineStore('app', {
           name: String(r.name || '未命名').replace(/\.(mid|midi|kar|rmi)$/i, ''),
           song: null,
           meta: { size: r.size || 0, time: r.time || 0 },
+          __bytes: r.bytes || null,
         });
       }
       if (!this.songs.length) return;
@@ -188,6 +217,7 @@ export const useAppStore = defineStore('app', {
       if (wasCurrent) { player.stop(); this.playing = false; this.currentId = null; this.tracks = []; }
       this.songs.splice(i, 1);
       await idbDelete(STORE_SONGS, id);
+      await dbSongDelete(id);
       if (wasCurrent) { try { localStorage.removeItem('fufumidi_active'); } catch (e) {} }
       if (this.songs.length) await this.selectSong(this.songs[0].id);
     },
@@ -195,10 +225,16 @@ export const useAppStore = defineStore('app', {
       const item = this.songs.find((s: any) => s.id === id);
       if (!item) return;
       if (!item.song) {
-        const rec = await idbGet(STORE_SONGS, id);
+        let rec = null;
+        if (item.__bytes) rec = { bytes: item.__bytes };
+        else rec = await idbGet(STORE_SONGS, id);
+        if (!rec) {
+          const all = await dbSongsAll();
+          rec = all.find((x: any) => x.id === id) || null;
+        }
         if (rec && rec.bytes) {
           try {
-            const mid = parseMidi(rec.bytes);
+            const mid = parseMidi(Array.isArray(rec.bytes) ? new Uint8Array(rec.bytes) : rec.bytes);
             item.song = buildSong(mid, { name: item.name });
             item.meta.tracks = item.song.tracks.length;
           } catch (e: any) {
