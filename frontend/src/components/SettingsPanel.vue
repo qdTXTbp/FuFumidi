@@ -70,6 +70,7 @@ const pyState = reactive({ busy: false, text: '' });
 const models = ref([]);
 const depState = reactive({ busy: false, text: '' });
 const depBusy = ref(false);
+const rustInfo = ref({ available: false, version: '', binary: null });
 
 /* ---------------- 插件 ---------------- */
 const plugins = ref([]);
@@ -125,6 +126,7 @@ async function load() {
   if (state.integrity === null) runIntegrity();
   refreshModels();
   loadPlugins();
+  loadRust();
   initGpu();
   initUpdate();
 }
@@ -412,6 +414,16 @@ function resetGuide() {
 
 /* ---------------- 快捷键 ---------------- */
 function resetKeys() { toast(t('恢复默认快捷键')); }
+
+/* ---------------- 可选 Rust 核心 ---------------- */
+async function loadRust() {
+  if (bridge && typeof bridge.rustStatus === 'function') {
+    try {
+      const r = await bridge.rustStatus();
+      rustInfo.value = { available: !!(r && r.available), version: (r && r.version) || '', binary: (r && r.binary) || null };
+    } catch (e) {}
+  }
+}
 
 /* ---------------- 插件 ---------------- */
 async function loadPlugins() {
@@ -791,6 +803,15 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
             </div>
             <div class="fr-ctl">
               <button class="btn sm danger" @click="resetGuide">{{ t('重置引导') }}</button>
+            </div>
+          </div>
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('可选 Rust 核心') }}</div>
+              <div class="fr-hint">{{ rustInfo.available ? ('v' + rustInfo.version + ' · ' + (rustInfo.binary || '')) : t('未编译/未安装，自动使用 Python + Electron 模式') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <span :class="['plg-tag', rustInfo.available ? 'on' : 'off']">{{ rustInfo.available ? t('已启用') : t('未启用') }}</span>
             </div>
           </div>
           <div class="field-row">
