@@ -625,6 +625,7 @@ onBeforeUnmount(() => {
         <div class="page-sub">音频转 MIDI · 本地 Python 引擎 · 离线完成</div>
       </div>
       <span v-if="gpuInfo" class="tag accent">{{ gpuInfo }}</span>
+      <button class="btn sm ghost" @click="state.ui.settingsTab = 'gpu'; state.ui.settingsOpen = true">GPU 加速</button>
       <span class="tag" :class="isDesktop ? '' : 'warn-tag'">{{ isDesktop ? '桌面引擎就绪' : '请使用桌面版' }}</span>
     </div>
 

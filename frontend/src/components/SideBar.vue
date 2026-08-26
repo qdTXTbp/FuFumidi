@@ -25,6 +25,27 @@ async function onPick() {
   fileInput.value && fileInput.value.click();
 }
 
+async function onPickFolder() {
+  if (!bridge || !bridge.pickDirectory || !bridge.listMidiFiles || !bridge.readBinary) { toast('请使用桌面版选择文件夹', 'warn'); return; }
+  try {
+    const dir = await bridge.pickDirectory();
+    if (!dir) return;
+    const files = await bridge.listMidiFiles(dir);
+    if (!files || !files.length) { toast('文件夹里没有 MIDI 文件', 'warn'); return; }
+    const items = [];
+    for (const p of files.slice(0, 100)) {
+      try {
+        const ab = await bridge.readBinary(p);
+        if (ab) items.push({ name: baseName(p), bytes: new Uint8Array(ab) });
+      } catch (e) {}
+    }
+    if (items.length) {
+      await importFiles(items);
+      toast('已导入文件夹 ' + items.length + ' 个 MIDI', 'ok');
+    }
+  } catch (e) { /* ignore */ }
+}
+
 function onFileChange(e) {
   const files = Array.from(e.target.files || []);
   const items = files.map(f => ({ name: f.name, bytes: null }));
@@ -57,6 +78,9 @@ function onDrop(e) {
     <div class="sidebar-body">
       <button class="btn primary" style="width:100%;justify-content:center" @click="onPick">
         <Icon name="import" :size="15" /> 导入 MIDI
+      </button>
+      <button class="btn sm" style="width:100%;justify-content:center;margin-top:6px" @click="onPickFolder">
+        <Icon name="folder" :size="14" /> 导入文件夹
       </button>
       <input ref="fileInput" id="midi-file-input" name="midi-file" type="file" accept=".mid,.midi,.kar,.rmi" hidden multiple @change="onFileChange">
 

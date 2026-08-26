@@ -239,6 +239,13 @@ export const I18N_MAP = {
   '分屏查看乐谱并点击定位': 'Split score view and click to locate',
   '已导出乐谱 PNG 分页包：': 'Score PNG pages exported: ',
   '乐谱过长，请使用 PDF 导出完整版': 'Score too long; use PDF for full export',
+  '导出 SRT': 'Export SRT',
+  '导出 TXT': 'Export TXT',
+  '逐字拆分': 'Split into characters',
+  '已导出 SRT': 'SRT exported',
+  '已导出 TXT': 'TXT exported',
+  '已逐字拆分 ': 'Split into chars: ',
+  ' 个字符': ' chars',
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */

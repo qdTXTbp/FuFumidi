@@ -170,6 +170,55 @@ function exportLrc() {
   toast(t('已导出 LRC'), 'ok');
 }
 
+function exportSrt() {
+  const s = song.value;
+  if (!s || !lyrics.value.length) { toast(t('暂无歌词'), 'warn'); return; }
+  const lines = lyrics.value.map((l, i) => {
+    const t0 = Math.round(s.baseSec(l.tick) * 1000);
+    const t1 = i + 1 < lyrics.value.length ? Math.round(s.baseSec(lyrics.value[i + 1].tick) * 1000) : Math.min(s.totalSec * 1000, t0 + 3000);
+    const fmt = ms => {
+      const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000), ss = Math.floor((ms % 60000) / 1000), f = ms % 1000;
+      return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(ss).padStart(2, '0') + ',' + String(f).padStart(3, '0');
+    };
+    return (i + 1) + '\n' + fmt(t0) + ' --> ' + fmt(t1) + '\n' + l.text + '\n';
+  });
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.download = s.name + '.srt'; a.href = URL.createObjectURL(blob); a.click();
+  URL.revokeObjectURL(a.href);
+  toast(t('已导出 SRT'), 'ok');
+}
+function exportTxt() {
+  const s = song.value;
+  if (!s || !lyrics.value.length) { toast(t('暂无歌词'), 'warn'); return; }
+  const lines = lyrics.value.map(l => l.text);
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.download = s.name + '.txt'; a.href = URL.createObjectURL(blob); a.click();
+  URL.revokeObjectURL(a.href);
+  toast(t('已导出 TXT'), 'ok');
+}
+function splitWords() {
+  const s = song.value;
+  if (!s || !lyrics.value.length) { toast(t('暂无歌词'), 'warn'); return; }
+  let count = 0;
+  for (const lyr of lyrics.value) {
+    const ev = lyr.ev;
+    if (!ev) continue;
+    const parts = String(lyr.text).split('');
+    if (parts.length <= 1) continue;
+    const tickSize = Math.max(1, Math.round((s.tpb || 480) / 8));
+    parts.forEach((ch, i) => {
+      if (!ch.trim()) return;
+      s.tracks[0].events.push({ tick: lyr.tick + i * tickSize, type: 'lyric', text: ch });
+      count++;
+    });
+    const idx = s.tracks[0].events.indexOf(ev);
+    if (idx >= 0) s.tracks[0].events.splice(idx, 1);
+  }
+  toast(t('已逐字拆分 ') + count + t(' 个字符'), count ? 'ok' : 'warn');
+}
+
 /* ---------------- 批量替换 ---------------- */
 function openReplace() {
   repFrom.value = '';
@@ -281,6 +330,9 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
       <button class="btn sm" @click="noteSelHint" :disabled="!song" title="在编辑视图中选中音符后可为其添加歌词"><Icon name="cursor" :size="14" />{{ t('添加到所选音符') }}</button>
       <button class="btn sm" @click="importText" :disabled="!song"><Icon name="import" :size="14" />{{ t('导入文本') }}</button>
       <button class="btn sm" @click="exportLrc" :disabled="!lyrics.length"><Icon name="save" :size="14" />{{ t('导出 LRC') }}</button>
+      <button class="btn sm" @click="exportSrt" :disabled="!lyrics.length"><Icon name="save" :size="14" />{{ t('导出 SRT') }}</button>
+      <button class="btn sm" @click="exportTxt" :disabled="!lyrics.length"><Icon name="save" :size="14" />{{ t('导出 TXT') }}</button>
+      <button class="btn sm" @click="splitWords" :disabled="!lyrics.length" title="逐字拆分"><Icon name="edit" :size="14" />{{ t('逐字拆分') }}</button>
       <span class="sep"></span>
       <label class="lyr-ctl">{{ t('字号') }}<input type="number" min="12" max="40" v-model.number="fontSz" class="num-input" style="width:56px" /></label>
       <label class="lyr-ctl"><input type="checkbox" v-model="karaoke" /> {{ t('卡拉OK高亮') }}</label>
