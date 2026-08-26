@@ -50,6 +50,7 @@ const { registerVideoIpc } = require('./main/video');
 const { registerPresetsIpc } = require('./main/presets');
 const { registerDialogsIpc } = require('./main/dialogs');
 const { registerModelsIpc } = require('./main/models');
+const { registerSettingsIpc } = require('./main/settings-ipc');
 
 const APP_ID = 'com.fufumidi.app';
 app.setAppUserModelId(APP_ID);
@@ -74,6 +75,7 @@ if (!gotLock) {
     registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, parsePyJson });
     registerPresetsIpc({ ipcMain, runEngineInline, parsePyJson, pyLit });
     registerDialogsIpc({ ipcMain, dialog, path, fs, app });
+    registerSettingsIpc({ ipcMain, readSettings, writeSettings });
     ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, demucsModelFile, sha256File });
     registerPluginsIpc();
     registerGpuIpc();
@@ -496,49 +498,6 @@ function registerIpc() {
   // 一键修复：按问题 id 数组执行修复，返回逐项结果
   ipcMain.handle('integrity:repair', (_e, ids) => {
     try { return integrity.repair(ids); } catch (e) { return { ok: false, results: [], error: String(e && e.message || e) }; }
-  });
-
-  // 设置（深合并嵌套键 + 原子写入）
-  ipcMain.handle('settings:load', () => readSettings());
-  ipcMain.handle('settings:save', (_e, s) => {
-    const cur = readSettings();
-    const merged = { ...cur, ...(s || {}) };
-    for (const k of ['transcribe_params']) {   // 嵌套对象白名单：深合并，避免部分更新丢失兄弟键
-      if (s && s[k] && typeof s[k] === 'object' && !Array.isArray(s[k])) {
-        merged[k] = { ...(cur[k] || {}), ...s[k] };
-      }
-    }
-    writeSettings(merged);
-    return readSettings();
-  });
-
-  // MIDI 文件关联开关（默认开）：通过 HKCU 注册表覆盖 .mid/.midi 的默认打开程序。
-  // 开启 → 指向 FuFumidi（新建 FuFumidi.MIDI ProgID + 关联）；关闭 → 移除 HKCU 覆盖，
-  // 回落到系统默认程序。仅在 Windows 生效，其它平台返回 {ok:false, reason:'unsupported'}。
-  ipcMain.handle('settings:fileAssoc', async (_e, enabled) => {
-    if (process.platform !== 'win32') return { ok: false, reason: 'unsupported' };
-    const { execFile } = require('child_process');
-    const exe = process.execPath;
-    const progID = 'FuFumidi.MIDI';
-    const run = (args) => new Promise((res) => {
-      execFile('reg.exe', args, { windowsHide: true }, (err) => res(!err));
-    });
-    const hkcu = 'HKCU\\Software\\Classes';
-    try {
-      if (enabled) {
-        // ProgID 定义（打开命令） + 扩展名默认值指向 ProgID
-        await run(['add', `${hkcu}\\${progID}\\shell\\open\\command`, '/ve', '/d', `"${exe}" "%1"`, '/f']);
-        await run(['add', `${hkcu}\\${progID}\\DefaultIcon`, '/ve', '/d', `"${exe}",0`, '/f']);
-        await run(['add', `${hkcu}\\.mid`, '/ve', '/d', progID, '/f']);
-        await run(['add', `${hkcu}\\.midi`, '/ve', '/d', progID, '/f']);
-      } else {
-        // 删除 HKCU 覆盖（NSIS 安装时注册的 HKCR 关联由系统回退）
-        await run(['delete', `${hkcu}\\.mid`, '/f']);
-        await run(['delete', `${hkcu}\\.midi`, '/f']);
-        await run(['delete', `${hkcu}\\${progID}`, '/f']);
-      }
-      return { ok: true };
-    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   });
 
   // 运行期依赖检测 / 自动补全（基础包缺依赖时一键修复；国内镜像优先）
