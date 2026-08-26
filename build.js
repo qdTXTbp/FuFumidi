@@ -32,6 +32,22 @@ function packAsar(outName) {
     if (fs.existsSync(feNodeBak)) fs.rmSync(feNodeBak, { recursive: true, force: true });
     fs.renameSync(feNodeModules, feNodeBak);
   }
+  // 外部 Rust 二进制由安装器/脚本放到 resources/rust-core，不进 asar
+  const rustCore = path.join(root, 'resources', 'rust-core');
+  const rustBak = path.join(path.dirname(root), 'rust-core.packbak');
+  const hadRust = fs.existsSync(rustCore);
+  if (hadRust) {
+    if (fs.existsSync(rustBak)) fs.rmSync(rustBak, { recursive: true, force: true });
+    fs.renameSync(rustCore, rustBak);
+  }
+  // Rust 构建中间产物（target）也绝不能进 asar
+  const rustTarget = path.join(root, 'rust-core', 'target');
+  const rustTargetBak = path.join(path.dirname(root), 'rust-target.packbak');
+  const hadRustTarget = fs.existsSync(rustTarget);
+  if (hadRustTarget) {
+    if (fs.existsSync(rustTargetBak)) fs.rmSync(rustTargetBak, { recursive: true, force: true });
+    fs.renameSync(rustTarget, rustTargetBak);
+  }
   try {
     if (fs.existsSync(out)) fs.unlinkSync(out);
     console.log('[pack] ' + out);
@@ -40,11 +56,15 @@ function packAsar(outName) {
   } catch (e) {
     if (hadGpu && fs.existsSync(gpuBackup)) { try { fs.renameSync(gpuBackup, stagingGpu); } catch (_) {} }
     if (hadFeNode && fs.existsSync(feNodeBak)) { try { fs.renameSync(feNodeBak, feNodeModules); } catch (_) {} }
+    if (hadRust && fs.existsSync(rustBak)) { try { fs.renameSync(rustBak, rustCore); } catch (_) {} }
+    if (hadRustTarget && fs.existsSync(rustTargetBak)) { try { fs.renameSync(rustTargetBak, rustTarget); } catch (_) {} }
     console.error(e.message);
     process.exit(1);
   }
   if (hadGpu && fs.existsSync(gpuBackup)) { try { fs.renameSync(gpuBackup, stagingGpu); } catch (_) {} }
   if (hadFeNode && fs.existsSync(feNodeBak)) { try { fs.renameSync(feNodeBak, feNodeModules); } catch (_) {} }
+  if (hadRust && fs.existsSync(rustBak)) { try { fs.renameSync(rustBak, rustCore); } catch (_) {} }
+  if (hadRustTarget && fs.existsSync(rustTargetBak)) { try { fs.renameSync(rustTargetBak, rustTarget); } catch (_) {} }
 }
 
 if (mode === 'full') {
