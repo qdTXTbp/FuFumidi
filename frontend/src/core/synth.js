@@ -109,8 +109,14 @@ export function playVoice(ctx, time, midi, vel, preset, out, endTime, live) {
 
   /* ---- 旋律类乐器 ---- */
   if (preset === 'piano') {
-    const g = voiceEnv(ctx, time, out, { a: .004, d: clamp(.3 + 60 / freq, .1, 1.2), s: .04, r: .16, peak, end: endTime });
-    for (const [m, amp] of [[1, 1], [2, .5], [3, .24]]) { const o = mkOsc('sine', freq * m); const og = ctx.createGain(); og.gain.value = amp; o.connect(og); og.connect(g); }
+    // 改进的三角钢琴：非谐波泛音 + 低频衰减 + 低通柔化 + 自然延音
+    const g = voiceEnv(ctx, time, out, { a: .0018, d: clamp(.4 + 70 / freq, .12, 1.6), s: .025, r: .38, peak, end: endTime });
+    const lp = mkFilter('lowpass', Math.min(6800, 900 + freq * 3.2), 0.5, g);
+    for (const [m, amp] of [[1, 1], [1.98, .52], [3.01, .3], [4.02, .18], [5.0, .12], [6.02, .08], [8.01, .05]]) {
+      const o = mkOsc('sine', freq * m);
+      const og = ctx.createGain(); og.gain.value = amp;
+      o.connect(og); og.connect(lp);
+    }
   } else if (preset === 'ep') {
     const g = voiceEnv(ctx, time, out, { a: .003, d: .85, s: .03, r: .2, peak, end: endTime });
     for (const [m, amp] of [[1, 1], [2.004, .35], [4.9, .16]]) { const o = mkOsc('sine', freq * m); const og = ctx.createGain(); og.gain.value = amp; o.connect(og); og.connect(g); }
@@ -255,7 +261,13 @@ export class Synth {
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 2048; this.analyser.smoothingTimeConstant = 0.82;
     this.kill = ctx.createGain(); this.kill.gain.value = 1;
-    this.master.connect(this.analyser); this.analyser.connect(this.kill); this.kill.connect(ctx.destination);
+    this.compressor = ctx.createDynamicsCompressor();
+    this.compressor.threshold.value = -18;
+    this.compressor.knee.value = 20;
+    this.compressor.ratio.value = 6;
+    this.compressor.attack.value = 0.003;
+    this.compressor.release.value = 0.25;
+    this.master.connect(this.analyser); this.analyser.connect(this.kill); this.kill.connect(this.compressor); this.compressor.connect(ctx.destination);
     this.trackGains = []; this.vol = []; this.mute = []; this.solo = [];
     this.panners = []; this.pan = [];
     this.live = []; this.activeNotes = [];

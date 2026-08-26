@@ -917,7 +917,7 @@ onBeforeUnmount(() => {
 .tr-pills { display: flex; gap: 6px; flex-wrap: wrap; }
 .tr-pill { padding: 5px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); font-size: 12px; color: var(--slate); cursor: pointer; }
 .tr-pill:hover { border-color: var(--border-strong); }
-.tr-pill.active { background: var(--btn-bg); border-color: var(--btn-bg); color: var(--btn-fg); }
+.tr-pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .tr-perf-hint { font-size: 11.5px; color: var(--success-text); }
 .tr-adv { border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); }
 .tr-adv summary { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-size: 12.5px; font-weight: 600; color: var(--ink); cursor: pointer; user-select: none; }
