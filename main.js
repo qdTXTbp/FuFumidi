@@ -42,6 +42,7 @@ const {
   combineSplitParts,
 } = GpuService;
 const { createEngineService } = require('./main/engine');
+const { DEFAULT_SETTINGS, SETTINGS_PATH, readSettings, writeSettings } = require('./main/settings');
 
 const APP_ID = 'com.fufumidi.app';
 app.setAppUserModelId(APP_ID);
@@ -75,50 +76,8 @@ if (!gotLock) {
   });
 }
 
-// ---------- 设置持久化（userData/fufumidi/settings.json） ----------
-const SETTINGS_PATH = () => path.join(app.getPath('userData'), 'fufumidi', 'settings.json');
+// ---------- 插件用户目录 ----------
 const PLUGINS_USER_DIR = () => path.join(app.getPath('userData'), 'fufumidi', 'plugins');
-const DEFAULT_SETTINGS = {
-  theme: 'fufu',
-  accent: '',
-  font_size: 'standard',
-  density: 'comfortable',
-  perf_mode: 'quality',
-  engine_path: '',
-  engine_mode: 'universal',
-  output_dir: '',
-  guide_done: false,
-  advanced_mode: false,
-  custom_wallpaper: '',
-  transcribe_params: {},
-  plugins_enabled: [],        // 已启用的插件 ID 列表
-  lang: 'zh',                 // 界面语言：zh=中文，en=English
-};
-
-function readSettings() {
-  try {
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(SETTINGS_PATH(), 'utf8')) };
-  } catch (e) {
-    // 设置文件损坏（曾因并发写截断）→ 备份并修复，绝不反复退回默认值导致引导每次弹出
-    const p = SETTINGS_PATH();
-    try { if (fs.existsSync(p)) fs.renameSync(p, p + '.corrupt-' + Date.now()); } catch (e2) {}
-    const repaired = { ...DEFAULT_SETTINGS, guide_done: true };   // 已使用过的用户：引导不再重复
-    try { writeSettings(repaired); } catch (e3) {}
-    return repaired;
-  }
-}
-
-let _settingsWrites = Promise.resolve();
-function writeSettings(s) {
-  // 串行化原子写入：避免插件设置与应用设置并发写同一 tmp 文件导致 JSON 截断
-  _settingsWrites = _settingsWrites.then(() => {
-    const p = SETTINGS_PATH();
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    const tmp = p + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(s, null, 2), 'utf8');
-    fs.renameSync(tmp, p);
-  }).catch(() => {});
-}
 
 // ---------- Python 路径解析（跨平台 + 内置运行时优先） ----------
 // 内置运行时：打包时用 python-build-standalone 分发自包含 CPython + 预装依赖，
