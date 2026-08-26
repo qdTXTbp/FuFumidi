@@ -33,6 +33,10 @@
   --error: #d45656;
   --footer-bg: #0a0a0a;
 
+  /* 主按钮 / 激活态（主题系统可覆盖为白底深字） */
+  --btn-bg: #0a0a0a;
+  --btn-fg: #ffffff;
+
   /* 兼容旧组件引用 */
   --accent: var(--brand-blue);
   --accent2: var(--brand-purple);
@@ -209,8 +213,8 @@ body {
 }
 .tab:hover { background: var(--surface-soft); color: var(--ink); }
 .tab.active {
-  background: var(--ink);
-  color: #fff;
+  background: var(--btn-bg);
+  color: var(--btn-fg);
   font-weight: 600;
 }
 .topbar-spacer { flex: 1; }
@@ -235,12 +239,12 @@ body {
 .btn:hover { border-color: var(--ink); background: var(--surface); }
 .btn:active { transform: translateY(1px); }
 .btn.primary {
-  border: 1px solid var(--ink);
-  background: var(--ink);
-  color: #fff;
+  border: 1px solid var(--btn-bg);
+  background: var(--btn-bg);
+  color: var(--btn-fg);
   font-weight: 600;
 }
-.btn.primary:hover { background: var(--charcoal); border-color: var(--charcoal); box-shadow: 0 6px 20px rgba(10, 10, 10, 0.18); }
+.btn.primary:hover { background: var(--btn-bg); border-color: var(--btn-bg); box-shadow: 0 6px 20px rgba(10, 10, 10, 0.18); filter: brightness(0.92); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--steel); }
 .btn.ghost:hover { background: var(--surface-soft); color: var(--ink); }
 .btn.danger { color: var(--error); border-color: rgba(212, 86, 86, 0.4); }
@@ -292,10 +296,10 @@ body {
 .page-ic {
   width: 44px; height: 44px;
   border-radius: 12px;
-  background: var(--ink);
+  background: var(--btn-bg);
   display: grid; place-items: center;
   font-size: 20px;
-  color: #fff;
+  color: var(--btn-fg);
   box-shadow: var(--shadow-sm);
   flex: none;
 }
@@ -558,11 +562,11 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .toast {
   padding: 10px 18px;
   border-radius: 999px;
-  background: var(--ink);
-  border: 1px solid var(--ink);
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-bg);
   box-shadow: var(--shadow);
   font-size: 13px;
-  color: #fff;
+  color: var(--btn-fg);
   animation: toast-in 0.22s ease;
   display: flex;
   align-items: center;
@@ -583,10 +587,10 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
   width: 72px; height: 72px;
   margin: 0 auto 18px;
   border-radius: 20px;
-  background: var(--ink);
+  background: var(--btn-bg);
   display: grid; place-items: center;
   font-size: 32px;
-  color: #fff;
+  color: var(--btn-fg);
   box-shadow: var(--shadow-sm);
 }
 .migrate-card h2 { margin: 0 0 8px; font-size: 18px; font-weight: 700; letter-spacing: -0.3px; color: var(--ink); }
@@ -667,7 +671,7 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
   transition: all 0.15s;
 }
 .ov-tab:hover { background: var(--surface-soft); color: var(--ink); }
-.ov-tab.active { background: var(--ink); color: #fff; font-weight: 600; }
+.ov-tab.active { background: var(--btn-bg); color: var(--btn-fg); font-weight: 600; }
 .settings-body { flex: 1; overflow: auto; min-height: 0; }
 .settings-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--hairline); }
 
@@ -722,7 +726,7 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .radio-pill { display: inline-flex; background: var(--surface); border: 1px solid var(--hairline); border-radius: 999px; padding: 2px; gap: 2px; }
 .radio-pill span { padding: 4px 12px; border-radius: 999px; font-size: 12px; color: var(--steel); cursor: pointer; transition: all 0.15s; user-select: none; }
 .radio-pill span:hover { color: var(--ink); }
-.radio-pill span.on { background: var(--ink); color: #fff; font-weight: 600; }
+.radio-pill span.on { background: var(--btn-bg); color: var(--btn-fg); font-weight: 600; }
 
 /* 开关 */
 .switch-row { display: inline-flex; align-items: center; cursor: pointer; }
@@ -746,7 +750,7 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
   box-shadow: 0 1px 3px rgba(16, 24, 40, 0.3);
   transition: transform 0.18s;
 }
-.switch-row input:checked + span { background: var(--ink); border-color: var(--ink); }
+.switch-row input:checked + span { background: var(--btn-bg); border-color: var(--btn-bg); }
 .switch-row input:checked + span::after { transform: translateX(16px); }
 
 /* 状态输出框 */
@@ -907,7 +911,7 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 }
 .guide-btn small { font-size: 11px; color: var(--stone); font-weight: 400; }
 .guide-btn:hover { border-color: var(--ink); box-shadow: var(--shadow-sm); transform: translateY(-1px); }
-.guide-btn.primary { background: var(--ink); color: #fff; }
+.guide-btn.primary { background: var(--btn-bg); color: var(--btn-fg); }
 .guide-btn.primary small { color: rgba(255, 255, 255, 0.62); }
 .guide-btn.primary:hover { background: var(--charcoal); border-color: var(--charcoal); }
 .guide-foot { display: flex; justify-content: flex-end; margin-top: 6px; }

@@ -366,7 +366,7 @@ onBeforeUnmount(() => {
 .vc-head b { letter-spacing: -0.2px; }
 .vc-head .vc-zoom { font-size: 11px; min-width: 44px; text-align: center; font-weight: 500; }
 .vc-body canvas { width: 100%; height: 100%; display: block; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fff; }
-.chip-btn.active { background: var(--ink); color: #fff; }
+.chip-btn.active { background: var(--btn-bg); color: var(--btn-fg); }
 .viz-page.waterfall .viz-grid { display: none; }
 .viz-page.waterfall .viz-hero { flex: 1; }
 .viz-page.waterfall .viz-hero .vc-body { height: calc(100vh - 220px); min-height: 300px; }

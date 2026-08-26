@@ -1,6 +1,6 @@
 <script setup>
 // 设置面板（全局系统功能）：外观 / 引擎 / 功能 / 快捷键 / 插件 + 完整性检验警告条
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import Icon from './Icon.vue';
 import { state, toast } from '../store.js';
 import { t, setLang, getLang } from '../core/i18n.js';
@@ -181,6 +181,33 @@ async function exportDiag() {
     else if (r && r.ok) toast(t('诊断包已导出'));
     else toast(t('导出失败：') + String((r && r.error) || 'unknown'), 'error');
   } catch (e) { toast(t('导出失败：') + String(e.message || e), 'error'); }
+}
+
+/* ---------------- 配置导入 / 导出 ---------------- */
+async function exportConfig() {
+  if (!bridge || !bridge.saveBinary || !bridge.getSettings) { toast(t('当前环境不支持导出配置'), 'warn'); return; }
+  try {
+    const s = await bridge.getSettings() || {};
+    const data = new TextEncoder().encode(JSON.stringify(s, null, 2));
+    const r = await bridge.saveBinary({ name: 'FuFumidi-配置.json', data: Array.from(data) });
+    if (r && r.ok) toast(t('配置已导出：') + r.path, 'ok');
+    else if (r && !r.canceled) toast(t('配置导出失败'), 'warn');
+  } catch (e) { toast(t('配置导出失败：') + (e.message || e), 'warn'); }
+}
+async function importConfig() {
+  if (!bridge || !bridge.pickFile || !bridge.readBinary || !bridge.saveSettings) { toast(t('当前环境不支持导入配置'), 'warn'); return; }
+  try {
+    const p = await bridge.pickFile({ filters: [{ name: 'FuFumidi 配置', extensions: ['json'] }] });
+    if (!p) return;
+    const bytes = await bridge.readBinary(p);
+    const cfg = JSON.parse(new TextDecoder('utf-8').decode(new Uint8Array(bytes)));
+    if (!cfg || typeof cfg !== 'object') throw new Error('bad config');
+    const cur = await bridge.getSettings() || {};
+    const merged = Object.assign({}, cur, cfg);
+    await bridge.saveSettings(merged);
+    toast(t('配置已导入'), 'ok');
+    load();
+  } catch (e) { toast(t('配置导入失败：') + (e.message || e), 'warn'); }
 }
 
 /* ---------------- 更新 ---------------- */
@@ -377,6 +404,7 @@ async function rescanPlugins() {
   try { plugins.value = await bridge.plugins.rescan() || []; } catch (e) {}
 }
 function openDocs() { if (bridge && bridge.plugins && bridge.plugins.openDocs) bridge.plugins.openDocs(); }
+function openPluginDir() { if (bridge && bridge.plugins && bridge.plugins.openDir) bridge.plugins.openDir(); }
 function onPluginLog(p) {
   const line = p && p.line != null ? String(p.line) : JSON.stringify(p || '');
   pluginLog.value = line + '\n' + pluginLog.value;
@@ -444,6 +472,9 @@ function apply() {
 function cancel() { state.ui.settingsOpen = false; }
 
 /* ---------------- 生命周期 ---------------- */
+watch(() => state.ui.settingsTab, v => {
+  if (TABS.some(t => t.id === v)) tab.value = v;
+});
 let offWatch = null, offPlgLog = null;
 onMounted(() => {
   load();
@@ -618,6 +649,8 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
                 <button class="btn sm" @click="checkDeps" :disabled="depBusy">{{ t('检查依赖') }}</button>
                 <button class="btn sm primary" @click="installDeps" :disabled="depBusy">{{ t('一键补全缺失依赖') }}</button>
                 <button class="btn sm" @click="exportDiag">{{ t('导出诊断包') }}</button>
+                <button class="btn sm" @click="exportConfig">{{ t('导出配置') }}</button>
+                <button class="btn sm" @click="importConfig">{{ t('导入配置') }}</button>
               </div>
             </div>
           </div>
@@ -791,7 +824,10 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
           </div>
           <div class="plg-head">{{ t('插件日志') }}</div>
           <div class="plg-log">{{ pluginLog || t('无') }}</div>
-          <a class="plg-docs" @click="openDocs">{{ t('开发者文档') }} ↗</a>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn sm" @click="openPluginDir">{{ t('打开插件目录') }}</button>
+            <a class="plg-docs" @click="openDocs">{{ t('开发者文档') }} ↗</a>
+          </div>
         </div>
 
         <!-- ============ 更新 ============ -->

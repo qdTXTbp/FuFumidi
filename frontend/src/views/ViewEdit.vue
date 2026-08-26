@@ -43,6 +43,16 @@ const SNAPS = [
 
 const song = computed(() => (currentSong.value && currentSong.value.song) || null);
 
+const smpteText = computed(() => {
+  const sec = Math.max(0, state.curSec || 0);
+  const fps = 25;
+  const hh = Math.floor(sec / 3600);
+  const mm = Math.floor((sec % 3600) / 60);
+  const ss = Math.floor(sec % 60);
+  const ff = Math.floor((sec % 1) * fps);
+  return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0') + ':' + String(ss).padStart(2, '0') + ':' + String(ff).padStart(2, '0');
+});
+
 function refreshSel() {
   const info = editor.value ? editor.value.selInfo() : null;
   sel.count = info ? info.count : 0;
@@ -184,6 +194,24 @@ function delPedal() {
   const n = editor.value?.delPedal() || 0;
   if (n) toast('已删除 ' + n + ' 个踏板事件', 'ok');
   else toast('区间内没有踏板事件', 'warn');
+}
+function setLoopFromSel() {
+  const sel = editor.value?.selRef();
+  if (!sel || !sel.length) { toast('请先选择音符，再设置为选区循环', 'warn'); return; }
+  let a = Infinity, b = 0;
+  for (const n of sel) { a = Math.min(a, n.start); b = Math.max(b, n.end); }
+  const { player } = ensureAudio();
+  player.setLoop(true, a, b);
+  state.loop = true;
+  toast('已设置选区循环（' + a + ' - ' + b + '）', 'ok');
+}
+function clearLoopSel() {
+  const s = song.value;
+  if (!s) return;
+  const { player } = ensureAudio();
+  player.setLoop(false, 0, s.totalTicks);
+  state.loop = false;
+  toast('已清除循环', 'ok');
 }
 
 // 鼓组编辑器弹窗
@@ -909,6 +937,10 @@ onBeforeUnmount(() => {
         <span class="et-label">踏板</span>
         <button class="et-btn" title="在选区/整轨起止处添加延音踏板（CC64）" @click="addPedal">+ 踏板</button>
         <button class="et-btn" title="删除选区/整轨内的踏板事件" @click="delPedal">- 踏板</button>
+        <span class="et-sep"></span>
+        <span class="et-label">循环</span>
+        <button class="et-btn" :class="{ active: state.loop }" title="将选区设为循环" @click="setLoopFromSel">选区循环</button>
+        <button class="et-btn" title="清除循环" @click="clearLoopSel">清循环</button>
         <button class="et-btn et-more" :class="{ active: advOpen }" @click="advOpen = !advOpen">
           <Icon name="chevron" :size="13" :style="{ transform: advOpen ? 'rotate(180deg)' : '' }" /> 高级
         </button>
@@ -1005,6 +1037,7 @@ onBeforeUnmount(() => {
                  @change="e => editor?.setSelStart(+e.target.value)" style="width:78px" /></span>
         <span class="ins-item">长度 <input type="number" class="num-input" :value="sel.len ?? 0" step="1" min="1" :disabled="!sel.len"
                  @change="e => editor?.setSelLen(+e.target.value)" style="width:78px" /></span>
+        <span class="ins-item">SMPTE <b style="font-family:var(--mono)">{{ smpteText }}</b></span>
         <span class="ins-item et-tip">单位：tick · Ctrl+滚轮 缩放 · Shift+滚轮 平移 · 滚轮 上下滚动</span>
       </div>
     </template>
@@ -1246,7 +1279,7 @@ onBeforeUnmount(() => {
 .et-group { display: flex; align-items: center; gap: 4px; }
 .et-btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; font-size: 12px; color: var(--slate); cursor: pointer; }
 .et-btn:hover { background: var(--surface-soft); color: var(--ink); }
-.et-btn.active { background: var(--ink); border-color: var(--ink); color: #fff; }
+.et-btn.active { background: var(--btn-bg); border-color: var(--btn-bg); color: var(--btn-fg); }
 .et-btn.danger { color: var(--error); }
 .et-btn.et-more { margin-left: auto; }
 .et-btn.et-more.active { background: var(--surface-soft); color: var(--ink); }

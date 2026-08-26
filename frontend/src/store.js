@@ -47,6 +47,7 @@ export const state = reactive({
   // 全局系统功能（设置面板 / 主题库 / 命令面板 / 新手引导）
   ui: {
     settingsOpen: false,
+    settingsTab: 'appearance',
     themesOpen: false,
     guideOpen: false,
     paletteOpen: false,

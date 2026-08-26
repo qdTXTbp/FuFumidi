@@ -9,7 +9,7 @@ const LS_ACCENT = 'fufumidi_accent';
 
 export const THEMES = [
   { id: 'fufu',    name: '芙芙蓝', desc: '芙宁娜 · 蔚蓝深海',   accent: '#4f94e0', accent2: '#8fc0f0', hue: 213 },
-  { id: 'deep',    name: '青绿',   desc: 'FuFumidi 经典 · 青绿主色', accent: '#00c9b1', accent2: '#2ee6cd', hue: 174 },
+  { id: 'deep',    name: '深空青', desc: 'FuFumidi 默认 · 青绿主色', accent: '#4f94e0', accent2: '#8fc0f0', hue: 174 },
   { id: 'night',   name: '极夜蓝', desc: '冷冽深海蓝',         accent: '#3b82f6', accent2: '#60a5fa', hue: 217 },
   { id: 'aurora',  name: '极光紫', desc: '紫色霓虹',           accent: '#a78bfa', accent2: '#c4b5fd', hue: 258 },
   { id: 'sunrise', name: '晨曦橙', desc: '温暖日出橙',         accent: '#fb923c', accent2: '#fdba74', hue: 24 },
@@ -17,23 +17,37 @@ export const THEMES = [
   { id: 'moss',    name: '苔藓绿', desc: '森林沉稳绿',         accent: '#4ade80', accent2: '#86efac', hue: 142 },
   { id: 'ember',   name: '余烬红', desc: '炽热炭红',           accent: '#f87171', accent2: '#fca5a5', hue: 0 },
   { id: 'gold',    name: '鎏金',   desc: '暖金奢华',           accent: '#fbbf24', accent2: '#fcd34d', hue: 45 },
-  { id: 'light',   name: '浅色',   desc: '明亮浅色 · 适合白天', accent: '#00a88f', accent2: '#00c9b1', hue: 174 },
+  { id: 'light',   name: '浅色',   desc: '明亮浅色 · 适合白天', accent: '#3a7ad9', accent2: '#4f94e0', hue: 174 },
+  { id: 'hc',      name: '高对比', desc: '深底高对比 · 无障碍', accent: '#00ffcc', accent2: '#66ffdd', hue: 170 },
 ];
 
 export function themeById(id) { return THEMES.find(t => t.id === id) || THEMES[0]; }
 
-// 由 hue 生成同色系辅助色（饱和度/明度参数化，保证深浅层次）
+// 由 hue 生成同色系辅助色 + 深色画布（饱和度/明度参数化，保证深浅层次）
 function hsl(h, s, l, a) { return a != null ? `hsla(${h},${s}%,${l}%,${a})` : `hsl(${h},${s}%,${l}%)`; }
 
 export function paletteFromAccent(accentHex, hue) {
+  const h = hue;
   return {
     accent: accentHex,
-    accent2: hsl(hue, 85, 62),
-    'accent-dim': `hsla(${hue}, 60%, 55%, 0.14)`,
-    'brand-blue-mid': hsl(hue, 78, 58),
-    'brand-blue-deep': hsl(hue, 80, 42),
-    'brand-blue-700': hsl(hue, 70, 34),
-    'brand-blue-200': hsl(hue, 85, 84),
+    accent2: hsl(h, 85, 74),
+    'accent-dim': `hsla(${h}, 60%, 60%, 0.15)`,
+    bg0: hsl(h, 52, 8),
+    bg1: hsl(h, 50, 11),
+    bg2: hsl(h, 48, 14),
+    panel: hsl(h, 46, 18),
+    panel2: hsl(h, 50, 12),
+    card: hsl(h, 44, 21),
+    card2: hsl(h, 42, 26),
+    border: hsl(h, 40, 34),
+    border2: hsl(h, 38, 44),
+    text: hsl(h, 30, 96),
+    text2: hsl(h, 26, 84),
+    text3: hsl(h, 28, 76),
+    'brand-blue-mid': hsl(h, 78, 58),
+    'brand-blue-deep': hsl(h, 80, 42),
+    'brand-blue-700': hsl(h, 70, 34),
+    'brand-blue-200': hsl(h, 85, 84),
   };
 }
 
@@ -43,11 +57,63 @@ export function applyTheme(name, accent) {
   const t = themeById(name);
   const R = document.documentElement.style;
   const a = accent || t.accent;
-  const pal = paletteFromAccent(a, t.hue);
-  R.setProperty('--accent', a);
+  let pal;
+  if (name === 'light') {
+    pal = {
+      accent: a, accent2: '#4f94e0', 'accent-dim': 'rgba(58,122,217,.15)',
+      bg0: '#f4f7fb', bg1: '#ffffff', bg2: '#eef2f7', panel: '#ffffff', panel2: '#eef2f7',
+      card: '#ffffff', card2: '#e8edf4', border: '#cfd9e6', border2: '#b8c4d4',
+      text: '#0f172a', text2: '#334155', text3: '#64748b',
+      'brand-blue-mid': '#3b82f6', 'brand-blue-deep': '#1d4ed8', 'brand-blue-700': '#17437d', 'brand-blue-200': '#bfdbfe',
+    };
+  } else if (name === 'hc') {
+    pal = {
+      accent: a, accent2: '#66ffdd', 'accent-dim': 'rgba(0,255,204,.2)',
+      bg0: '#000000', bg1: '#0a0a0a', bg2: '#111111', panel: '#151515', panel2: '#111111',
+      card: '#1c1c1c', card2: '#262626', border: '#4a4a4a', border2: '#6b6b6b',
+      text: '#ffffff', text2: '#f1f5f9', text3: '#cbd5e1',
+      'brand-blue-mid': '#3b82f6', 'brand-blue-deep': '#1d4ed8', 'brand-blue-700': '#17437d', 'brand-blue-200': '#bfdbfe',
+    };
+  } else {
+    pal = paletteFromAccent(a, t.hue);
+    if (accent) { pal.accent = accent; pal['accent-dim'] = accent + '24'; }
+  }
+
+  // 旧令牌（保持 canvas 引擎/旧组件兼容）
+  const legacy = {
+    '--bg0': pal.bg0, '--bg1': pal.bg1, '--bg2': pal.bg2,
+    '--panel': pal.panel, '--panel2': pal.panel2,
+    '--card': pal.card, '--card2': pal.card2,
+    '--border': pal.border, '--border2': pal.border2,
+    '--text': pal.text, '--text2': pal.text2, '--text3': pal.text3,
+  };
+  for (const k in legacy) R.setProperty(k, legacy[k]);
+
+  // Vue 新版设计令牌映射
+  R.setProperty('--canvas', pal.bg0);
+  R.setProperty('--surface', pal.card);
+  R.setProperty('--surface-soft', pal.bg2);
+  R.setProperty('--hairline', pal.border);
+  R.setProperty('--border-strong', pal.border2);
+  R.setProperty('--ink', pal.text);
+  R.setProperty('--ink-strong', name === 'light' ? '#000000' : '#ffffff');
+  R.setProperty('--charcoal', pal.text);
+  R.setProperty('--slate', pal.text2);
+  R.setProperty('--steel', pal.text2);
+  R.setProperty('--stone', pal.text3);
+  R.setProperty('--muted', pal.text3);
+  R.setProperty('--footer-bg', pal.bg1);
+
+  // 按钮/激活态专用：在浅色主题用黑色底白字，在深色主题用白色底深字
+  const dark = name !== 'light';
+  R.setProperty('--btn-bg', dark ? '#ffffff' : '#0a0a0a');
+  R.setProperty('--btn-fg', dark ? '#0a0a0a' : '#ffffff');
+
+  // 强调色族
+  R.setProperty('--accent', pal.accent);
   R.setProperty('--accent2', pal.accent2);
   R.setProperty('--accent-dim', pal['accent-dim']);
-  R.setProperty('--brand-blue', a);
+  R.setProperty('--brand-blue', pal.accent);
   R.setProperty('--brand-blue-mid', pal['brand-blue-mid']);
   R.setProperty('--brand-blue-deep', pal['brand-blue-deep']);
   R.setProperty('--brand-blue-700', pal['brand-blue-700']);
@@ -76,8 +142,10 @@ export function loadTheme() {
 
 // 内置主题预览条色块
 export function themeSwatches(t) {
-  const pal = paletteFromAccent(t.accent, t.hue);
-  return [pal.accent, pal.accent2, pal['accent-dim'], '#e5e7eb', '#ffffff'];
+  const pal = t.id === 'light' ? { bg0: '#f4f7fb', card: '#ffffff', border2: '#b8c4d4', accent: t.accent, accent2: t.accent2 }
+    : t.id === 'hc' ? { bg0: '#000000', card: '#1c1c1c', border2: '#6b6b6b', accent: t.accent, accent2: t.accent2 }
+    : paletteFromAccent(t.accent, t.hue);
+  return [pal.bg0, pal.card, pal.border2, pal.accent, pal.accent2];
 }
 
 // 图片提取主色：canvas 缩到 8×8，收集较饱和像素取平均色 → 提升饱和度与亮度 → 主色

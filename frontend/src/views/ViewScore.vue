@@ -26,6 +26,8 @@ const midiBusy = ref(false);
 const previewOpen = ref(false);
 const previewBusy = ref(false);
 const previewPages = ref([]);
+const splitOpen = ref(false);
+const splitContent = ref(null);
 
 let scoreVerovio = null;
 let abcjsLoaded = false;
@@ -284,40 +286,75 @@ function findFlowIdx(ms) {
   return hi;
 }
 
-/* ---------------- 导出 PNG（五线谱） ---------------- */
-function exportStaffPng() {
+/* ---------------- 导出 PNG（五线谱，多页自动打包 ZIP） ---------------- */
+function dataUrlToBytes(dataUrl) {
+  const b64 = String(dataUrl).split(',')[1] || '';
+  return Array.from(atob(b64), c => c.charCodeAt(0));
+}
+async function rasterizeSvg(svg, scale, tileH) {
+  const w = svg.clientWidth || svg.getBoundingClientRect().width || parseFloat(svg.getAttribute('width')) || 986;
+  const h = svg.clientHeight || svg.getBoundingClientRect().height || parseFloat(svg.getAttribute('height')) || 600;
+  if (!w || !h) return [];
+  const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml' }));
+  const img = new Image();
+  await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+  URL.revokeObjectURL(url);
+  const out = [];
+  let off = 0;
+  while (off < h) {
+    const th = Math.min(tileH, h - off);
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(w * scale));
+    cv.height = Math.max(1, Math.round(th * scale));
+    const g = cv.getContext('2d');
+    g.setTransform(scale, 0, 0, scale, 0, 0);
+    g.fillStyle = '#ffffff'; g.fillRect(0, 0, w, th);
+    g.drawImage(img, 0, off, w, th, 0, 0, w, th);
+    out.push(cv.toDataURL('image/png'));
+    off += th;
+  }
+  return out;
+}
+async function exportStaffPng() {
   const el = scoreEl.value;
   if (!el) return;
-  const svg = el.querySelector('svg');
-  if (!svg) { toast(t('当前没有可导出的五线谱'), 'warn'); return; }
+  const svgs = el ? Array.from(el.querySelectorAll('svg')) : [];
+  if (!svgs.length) { toast(t('当前没有可导出的五线谱'), 'warn'); return; }
   exporting.value = true;
+  const bridge2 = window.fuBridge;
+  const base = (song.value ? song.value.name : 'score').replace(/\.[^.]+$/, '');
   try {
-    const xml = new XMLSerializer().serializeToString(svg);
-    const blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const img = new Image();
-    img.onload = () => {
-      const pad = 24;
-      const w = Math.max(200, svg.viewBox.baseVal.width || img.width);
-      const h = Math.max(200, svg.viewBox.baseVal.height || img.height);
-      const cv = document.createElement('canvas');
-      cv.width = w + pad * 2; cv.height = h + pad * 2;
-      const ctx = cv.getContext('2d');
-      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, cv.width, cv.height);
-      ctx.drawImage(img, pad, pad, w, h);
-      URL.revokeObjectURL(url);
-      const a = document.createElement('a');
-      a.download = (song.value ? song.value.name : 'score') + '_score.png';
-      a.href = cv.toDataURL('image/png');
-      a.click();
-      toast(t('已导出 PNG'));
-      exporting.value = false;
-    };
-    img.onerror = () => { exporting.value = false; toast(t('导出失败'), 'warn'); URL.revokeObjectURL(url); };
-    img.src = url;
+    const scale = 2, tileH = 9000;
+    const tiles = [];
+    for (let i = 0; i < svgs.length; i++) {
+      const pages = await rasterizeSvg(svgs[i], scale, tileH);
+      for (const dataUrl of pages) {
+        tiles.push({ name: base + '-p' + String(tiles.length + 1).padStart(3, '0') + '.png', data: dataUrlToBytes(dataUrl) });
+      }
+    }
+    if (!tiles.length) { toast(t('没有可导出的乐谱'), 'warn'); return; }
+    if (tiles.length === 1) {
+      if (bridge2 && bridge2.saveBinary) {
+        const r = await bridge2.saveBinary({ name: tiles[0].name, data: new Uint8Array(tiles[0].data) });
+        if (r && r.ok) toast(t('已导出乐谱 PNG：') + r.path, 'ok');
+        else if (r && !r.canceled) toast(t('PNG 导出失败'), 'warn');
+      } else {
+        const blob = new Blob([new Uint8Array(tiles[0].data)], { type: 'image/png' });
+        const a = document.createElement('a'); a.download = tiles[0].name; a.href = URL.createObjectURL(blob); a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+        toast(t('已导出 PNG'));
+      }
+    } else if (bridge2 && bridge2.exportScorePngZip) {
+      const r = await bridge2.exportScorePngZip({ name: base, tiles });
+      if (r && r.ok) toast(t('已导出乐谱 PNG 分页包：') + r.path, 'ok');
+      else if (!(r && r.canceled)) toast(t('PNG 导出失败'), 'warn');
+    } else {
+      toast(t('乐谱过长，请使用 PDF 导出完整版'), 'warn');
+    }
   } catch (e) {
+    toast(t('PNG 导出失败：') + String(e.message || e), 'warn');
+  } finally {
     exporting.value = false;
-    toast(t('导出失败：') + String(e.message || e), 'warn');
   }
 }
 
@@ -380,6 +417,30 @@ async function exportPdf() {
   } catch (e) {
     toast(t('PDF 导出失败：') + String(e.message || e), 'warn');
   }
+}
+
+/* ---------------- 乐谱分屏（点击音符定位） ---------------- */
+function openScoreSplit() {
+  if (!song.value || !scoreEl.value) { toast(t('请先载入并渲染五线谱'), 'warn'); return; }
+  if (mode.value !== 'staff') { toast(t('请先切换至五线谱模式'), 'warn'); return; }
+  splitOpen.value = true;
+  nextTick(() => {
+    const dst = splitContent.value;
+    if (!dst || !scoreEl.value) return;
+    dst.innerHTML = scoreEl.value.innerHTML;
+    if (scoreEl.value.style.width) dst.style.width = scoreEl.value.style.width;
+    dst.querySelectorAll('.note').forEach(n => {
+      n.style.cursor = 'pointer';
+      n.addEventListener('click', () => {
+        const tick = parseInt(n.getAttribute('data-tick'), 10);
+        if (!isFinite(tick)) return;
+        const p = getPlayer();
+        if (p) p.seekTick(tick);
+        toast(t('已定位到音符 @ ') + tick, 'ok');
+        splitOpen.value = false;
+      });
+    });
+  });
 }
 
 /* ---------------- 分页预览（SVG 栅格化为 PNG 图集弹窗） ---------------- */
@@ -513,6 +574,9 @@ onBeforeUnmount(() => {
       <button class="btn sm" @click="exportPdf" :disabled="mode !== 'staff'" :title="t('导出 PDF（打印当前页面）')">
         <Icon name="save" :size="14" />{{ t('PDF') }}
       </button>
+      <button class="btn sm" @click="openScoreSplit" :disabled="mode !== 'staff' || !song" :title="t('分屏查看乐谱并点击定位')">
+        <Icon name="viz" :size="14" />{{ t('分屏') }}
+      </button>
 
       <span style="flex:1"></span>
       <span class="tb-status">
@@ -585,6 +649,17 @@ onBeforeUnmount(() => {
             </div>
           </template>
         </div>
+      </div>
+    </div>
+
+    <!-- 乐谱分屏预览弹窗 -->
+    <div v-if="splitOpen" class="pv-overlay" @click.self="splitOpen = false">
+      <div class="pv-card">
+        <div class="pv-head">
+          <b>{{ t('乐谱分屏') }}</b>
+          <button class="icon-btn" @click="splitOpen = false" title="关闭"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
+        </div>
+        <div ref="splitContent" class="split-body"></div>
       </div>
     </div>
   </div>
@@ -672,4 +747,6 @@ onBeforeUnmount(() => {
 .pv-page { border: 1px solid var(--hairline); border-radius: 12px; overflow: hidden; }
 .pv-page-name { font-size: 11px; color: var(--stone); padding: 5px 10px; border-bottom: 1px solid var(--hairline); }
 .pv-page img { width: 100%; display: block; background: #fff; }
+.split-body { flex: 1; overflow: auto; padding: 14px 16px; }
+.split-body svg { max-width: 100%; display: block; margin: 0 auto; background: #fff; }
 </style>

@@ -55,6 +55,7 @@ const waveBox = ref(null);
 // 参数预设
 const presets = reactive({ list: [], builtins: [] });
 const presetSel = ref('');
+const presetMgrOpen = ref(false);
 
 // 任务模板
 const taskTemplates = reactive([]);
@@ -329,6 +330,42 @@ async function delPreset() {
   try {
     const r = await bridge.presets.delete(presetSel.value);
     if (r && r.ok) { toast('预设已删除', 'ok'); loadPresets(); }
+  } catch (e) {}
+}
+async function openPresetMgr() {
+  presetMgrOpen.value = true;
+  await loadPresets();
+}
+async function mgrApply(name) {
+  if (applyPreset(name) && bridge && bridge.presets && bridge.presets.lastUsed) {
+    try { await bridge.presets.lastUsed(name); } catch (e) {}
+  }
+  presetMgrOpen.value = false;
+  toast('已应用预设：' + name, 'ok');
+}
+async function mgrDelete(name) {
+  if (!bridge || !bridge.presets) return;
+  if (!window.confirm('删除预设「' + name + '」？')) return;
+  try {
+    const r = await bridge.presets.delete(name);
+    if (r && r.ok) { toast('预设已删除', 'ok'); await loadPresets(); }
+    else toast('删除失败：' + ((r && r.error) || ''), 'warn');
+  } catch (e) {}
+}
+async function mgrMove(name, delta) {
+  if (!bridge || !bridge.presets) return;
+  try {
+    const r = await bridge.presets.reorder(name, delta);
+    if (r && r.ok) await loadPresets();
+    else toast('排序失败', 'warn');
+  } catch (e) {}
+}
+async function mgrRestore() {
+  if (!bridge || !bridge.presets || !bridge.presets.restore) return;
+  try {
+    const r = await bridge.presets.restore();
+    if (r && r.ok) { toast('已恢复全部内置预设', 'ok'); await loadPresets(); }
+    else toast('恢复失败', 'warn');
   } catch (e) {}
 }
 
@@ -703,6 +740,7 @@ onBeforeUnmount(() => {
               <button class="btn sm" @click="presetSel && applyPreset(presetSel)">应用</button>
               <button class="btn sm" @click="savePreset"><Icon name="plus" :size="13" /> 保存</button>
               <button class="btn sm ghost danger" @click="delPreset"><Icon name="trash" :size="13" /> 删除</button>
+              <button class="btn sm ghost" @click="openPresetMgr"><Icon name="menu" :size="13" /> 管理</button>
             </div>
           </div>
         </div>
@@ -799,6 +837,31 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+
+    <!-- 预设管理 -->
+    <div v-if="presetMgrOpen" class="preset-mgr-overlay" @click.self="presetMgrOpen = false">
+      <div class="preset-mgr-card">
+        <div class="preset-mgr-head">
+          <b>参数预设管理</b>
+          <button class="icon-btn" @click="presetMgrOpen = false" title="关闭"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
+        </div>
+        <div class="preset-mgr-list">
+          <div v-if="!presets.list.length" class="muted small" style="padding:16px">暂无预设</div>
+          <div v-for="p in presets.list" :key="p.name" class="preset-mgr-row">
+            <span class="pm-name" @click="mgrApply(p.name)" title="点击应用">{{ p.name }}</span>
+            <span class="pm-mode">{{ p.mode }}</span>
+            <button class="btn sm ghost" title="上移" @click="mgrMove(p.name, -1)">↑</button>
+            <button class="btn sm ghost" title="下移" @click="mgrMove(p.name, 1)">↓</button>
+            <button class="btn sm ghost danger" title="删除" @click="mgrDelete(p.name)">删除</button>
+          </div>
+        </div>
+        <div class="preset-mgr-foot">
+          <button class="btn sm" @click="mgrRestore">恢复全部内置</button>
+          <span style="flex:1"></span>
+          <button class="btn sm primary" @click="presetMgrOpen = false">完成</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -841,7 +904,7 @@ onBeforeUnmount(() => {
 .tr-pills { display: flex; gap: 6px; flex-wrap: wrap; }
 .tr-pill { padding: 5px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); font-size: 12px; color: var(--slate); cursor: pointer; }
 .tr-pill:hover { border-color: var(--border-strong); }
-.tr-pill.active { background: var(--ink); border-color: var(--ink); color: #fff; }
+.tr-pill.active { background: var(--btn-bg); border-color: var(--btn-bg); color: var(--btn-fg); }
 .tr-perf-hint { font-size: 11.5px; color: var(--success-text); }
 .tr-adv { border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); }
 .tr-adv summary { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-size: 12.5px; font-weight: 600; color: var(--ink); cursor: pointer; user-select: none; }
@@ -872,4 +935,12 @@ onBeforeUnmount(() => {
 .tr-log-scroll .err { color: var(--error); }
 .tr-rf-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .rf-path { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
+.preset-mgr-overlay { position: fixed; inset: 0; z-index: 120; background: rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.preset-mgr-card { width: 560px; max-width: 94vw; max-height: 82vh; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 16px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden; }
+.preset-mgr-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--hairline); color: var(--ink); font-size: 14px; }
+.preset-mgr-list { flex: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
+.preset-mgr-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); }
+.pm-name { flex: 1; cursor: pointer; color: var(--ink); font-weight: 600; }
+.pm-mode { font-size: 11px; color: var(--stone); background: var(--surface-soft); padding: 2px 8px; border-radius: 99px; }
+.preset-mgr-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--hairline); }
 </style>

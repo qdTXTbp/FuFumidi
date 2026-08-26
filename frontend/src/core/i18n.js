@@ -225,6 +225,20 @@ export const I18N_MAP = {
   '安装包': 'Installer',
   'Windows 安装程序 / Asar 包等': 'Windows installer / Asar archives',
   '打开下载': 'Open download',
+  '导出配置': 'Export config',
+  '导入配置': 'Import config',
+  '配置已导出：': 'Config exported: ',
+  '配置导出失败': 'Config export failed',
+  '配置导入失败：': 'Config import failed: ',
+  '配置已导入': 'Config imported',
+  '当前环境不支持导出配置': 'Export config is not supported in this environment',
+  '当前环境不支持导入配置': 'Import config is not supported in this environment',
+  '打开插件目录': 'Open plugin folder',
+  '分屏': 'Split',
+  '乐谱分屏': 'Score split',
+  '分屏查看乐谱并点击定位': 'Split score view and click to locate',
+  '已导出乐谱 PNG 分页包：': 'Score PNG pages exported: ',
+  '乐谱过长，请使用 PDF 导出完整版': 'Score too long; use PDF for full export',
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */

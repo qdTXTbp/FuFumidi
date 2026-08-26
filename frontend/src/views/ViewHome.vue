@@ -12,6 +12,10 @@ const QUICK = [
 ];
 
 function go(v) { setView(v); }
+function openUpdate() {
+  state.ui.settingsTab = 'update';
+  state.ui.settingsOpen = true;
+}
 </script>
 
 <template>
@@ -28,6 +32,10 @@ function go(v) { setView(v); }
       <button class="home-card" v-for="q in QUICK" :key="q.title" @click="go(q.view)">
         <span class="hc-ic"><Icon :name="q.ic" :size="18" /></span>
         <div><b>{{ q.title }}</b><small>{{ q.sub }}{{ q.soon ? ' · 即将上线' : '' }}</small></div>
+      </button>
+      <button class="home-card" @click="openUpdate">
+        <span class="hc-ic"><Icon name="import" :size="18" /></span>
+        <div><b>检查更新</b><small>GitHub 新版本 · 国内镜像</small></div>
       </button>
     </div>
 
