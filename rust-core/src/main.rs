@@ -253,3 +253,27 @@ fn json_str(s: &str) -> String {
     out.push('"');
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fnv_is_stable() {
+        assert_eq!(fnv1a(b""), 0xcbf29ce484222325);
+        assert_eq!(fnv1a(b"a"), 0xaf63dc4c8601ec8c);
+    }
+
+    #[test]
+    fn parses_single_note_midi() {
+        let data = b"MThd\x00\x00\x00\x06\x00\x00\x00\x01\x01\xe0MTrk\x00\x00\x00\x09\x00\x90\x3c\x64\x83\x60\x80\x3c\x00";
+        let s = stat_smf(data).expect("should parse");
+        assert_eq!(s.format, 0);
+        assert_eq!(s.tracks, 1);
+        assert_eq!(s.notes, 1);
+        assert_eq!(s.min_midi, 60);
+        assert_eq!(s.max_midi, 60);
+        assert_eq!(s.avg_vel, 100.0);
+        assert_eq!(s.avg_dur_ticks, 480.0);
+    }
+}
