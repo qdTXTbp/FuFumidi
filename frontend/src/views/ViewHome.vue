@@ -113,9 +113,13 @@ async function openProject() {
     </div>
 
     <div class="grid grid-3">
-      <button class="home-card" v-for="q in QUICK" :key="q.title" @click="go(q.view)">
+      <button class="home-card" v-for="q in QUICK" :key="q.title" :data-guide="'quick-' + q.view" @click="go(q.view)">
         <span class="hc-ic"><Icon :name="q.ic" :size="18" /></span>
         <div><b>{{ q.title }}</b><small>{{ q.sub }}{{ q.soon ? ' · 即将上线' : '' }}</small></div>
+      </button>
+      <button class="home-card" data-guide="quick-settings" @click="state.ui.settingsOpen = true">
+        <span class="hc-ic"><Icon name="gear" :size="18" /></span>
+        <div><b>应用设置</b><small>主题 · 引擎 · 快捷键 · 插件</small></div>
       </button>
       <button class="home-card" @click="openUpdate">
         <span class="hc-ic"><Icon name="import" :size="18" /></span>

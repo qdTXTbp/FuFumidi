@@ -39,7 +39,7 @@ function about() {
     <button class="icon-btn" title="折叠 / 展开侧边栏" @click="toggleSidebar">
       <Icon name="menu" :size="17" />
     </button>
-    <div class="tab" v-for="v in VIEWS" :key="v.id" :class="{ active: state.view === v.id }" @click="setView(v.id)">
+    <div class="tab" v-for="v in VIEWS" :key="v.id" :class="{ active: state.view === v.id }" :data-view="v.id" @click="setView(v.id)">
       <Icon :name="ICONS[v.id]" :size="14" />
       {{ t(v.label) }}
     </div>

@@ -90,6 +90,15 @@ function onKey(e) {
       return;
     }
   }
+  // F1 帮助 / 新手引导（即使焦点在输入框也优先响应）
+  if (e.key === 'F1') { e.preventDefault(); state.ui.guideOpen = true; return; }
+  // Ctrl+1..9 快速切换视图
+  if (e.ctrlKey && /^[1-9]$/.test(e.key)) {
+    e.preventDefault();
+    const v = VIEWS[parseInt(e.key, 10) - 1];
+    if (v) app.setView(v.id);
+    return;
+  }
   // 忽略输入框内的快捷键
   if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
   if (e.code === 'Space') { e.preventDefault(); togglePlay(); }

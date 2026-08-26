@@ -923,7 +923,7 @@ onBeforeUnmount(() => { if (raf) cancelAnimationFrame(raf); });
 </script>
 
 <template>
-  <div class="ed-canvas-wrap" ref="wrap" @wheel.prevent="onWheel">
+  <div class="ed-canvas-wrap" ref="wrap" data-guide="edit-canvas" @wheel.prevent="onWheel">
     <canvas ref="canvas" :style="{ height: H + 'px' }" @pointerdown="onDown" @pointermove="onMove" @pointerup="onUp" @pointerleave="onUp"></canvas>
     <div v-if="ccEnabled" class="cc-lane" :style="{ height: CC_LANE_H + 'px' }">
       <canvas ref="ccCanvas" class="cc-lane-canvas" @pointerdown="ccDown" @pointermove="ccMove" @pointerup="ccUp" @pointerleave="ccUp"></canvas>

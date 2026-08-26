@@ -83,6 +83,23 @@ const KEYMAP = [
   { keys: ['M'], label: t('切换节拍器') },
   { keys: ['+', '−'], label: t('加速 / 减速') },
   { keys: ['Ctrl', 'K'], label: t('打开命令面板') },
+  { keys: ['F1'], label: t('打开新手引导 / 帮助') },
+  { keys: ['Ctrl', '1-9'], label: t('切换首页/演奏/歌词/编辑等视图') },
+  { keys: ['Ctrl', 'Z'], label: t('撤销（编辑器）') },
+  { keys: ['Ctrl', 'Y'], label: t('重做（编辑器）') },
+  { keys: ['Ctrl', 'A'], label: t('全选音符（编辑器）') },
+  { keys: ['Ctrl', 'C'], label: t('复制选中音符（编辑器）') },
+  { keys: ['Ctrl', 'V'], label: t('粘贴到播放头（编辑器）') },
+  { keys: ['Ctrl', 'S'], label: t('导出当前 MIDI（编辑器）') },
+  { keys: ['Delete', 'Backspace'], label: t('删除选中音符') },
+  { keys: ['V'], label: t('选择工具（编辑器）') },
+  { keys: ['B'], label: t('画笔工具（编辑器）') },
+  { keys: ['E'], label: t('橡皮工具（编辑器）') },
+  { keys: ['Ctrl', '滚轮'], label: t('编辑器缩放') },
+  { keys: ['Shift', '滚轮'], label: t('编辑器横向平移') },
+  { keys: ['Alt', '拖拽'], label: t('编辑器调整力度') },
+  { keys: ['Shift', '拖拽'], label: t('吸附到音符（歌词/编辑器）') },
+  { keys: ['Ctrl', '拖拽'], label: t('吸附到网格') },
 ];
 
 /* ---------------- 初始化 ---------------- */

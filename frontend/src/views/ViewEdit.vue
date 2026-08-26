@@ -1061,7 +1061,7 @@ onBeforeUnmount(() => {
         <span class="ins-item">音高 <b>{{ sel.midi ?? '—' }}</b></span>
         <span class="ins-item">音名 <b>{{ sel.name || '—' }}</b></span>
         <span class="ins-item">力度
-          <input type="range" min="1" max="127" :value="sel.vel ?? 80" style="width:90px" :disabled="!sel.vel"
+          <input type="range" min="1" max="127" :value="sel.vel ?? 80" style="width:90px" data-guide="velocity-slider" :disabled="!sel.vel"
                  @input="e => editor?.setSelVel(+e.target.value)" />
         </span>
         <span class="ins-item">起点 <input type="number" class="num-input" :value="sel.start ?? 0" step="1" min="0" :disabled="!sel.start"

@@ -643,7 +643,7 @@ onBeforeUnmount(() => {
 
     <!-- 音频选择 -->
     <div class="card tr-drop-card">
-      <div class="tr-drop" :class="{ over: dropOver }"
+      <div class="tr-drop" :class="{ over: dropOver }" data-guide="audio-drop"
            @dragover.prevent="dropOver = true" @dragleave="dropOver = false" @drop.prevent="onDrop"
            @click="pickAudio">
         <div class="td-ic"><Icon name="transcribe" :size="26" /></div>
@@ -688,13 +688,13 @@ onBeforeUnmount(() => {
     <div class="card tr-card">
       <div class="fb-label">引擎模式</div>
       <div class="tr-modes">
-        <button class="tr-mode" :class="{ active: mode === 'universal' }" @click="onModeChange('universal')">
+        <button class="tr-mode" :class="{ active: mode === 'universal' }" data-guide="mode-universal" @click="onModeChange('universal')">
           <b>通用识别</b><span>任意歌曲 · 人声 · 多乐器</span>
         </button>
-        <button class="tr-mode" :class="{ active: mode === 'piano' }" @click="onModeChange('piano')">
+        <button class="tr-mode" :class="{ active: mode === 'piano' }" data-guide="mode-piano" @click="onModeChange('piano')">
           <b>钢琴专用</b><span>纯钢琴高精度 · 含踏板</span>
         </button>
-        <button class="tr-mode" :class="{ active: mode === 'separate' }" @click="onModeChange('separate')">
+        <button class="tr-mode" :class="{ active: mode === 'separate' }" data-guide="mode-separate" @click="onModeChange('separate')">
           <b>人声分离</b><span>分声部转录 · 需 Demucs</span>
         </button>
       </div>
@@ -707,7 +707,7 @@ onBeforeUnmount(() => {
       </div>
       <div v-if="perfHint" class="tr-perf-hint">{{ perfHint }}</div>
 
-      <details class="tr-adv">
+      <details class="tr-adv" data-guide="adv-panel">
         <summary>高级参数<span class="adv-cnt">阈值 · 踏板 · 降噪</span><span class="adv-arr">▾</span></summary>
         <div class="tr-params">
           <div class="tr-slider">
@@ -781,7 +781,7 @@ onBeforeUnmount(() => {
       <div v-if="queue.some(i => i.status === 'pending' || i.status === 'error')" class="tr-sum">
         即将转录：<b>{{ queue.find(i => i.status === 'pending' || i.status === 'error')?.name || '—' }}</b> · 引擎：<b>{{ MODE_NAMES[mode] }}</b> · 预计耗时：<b>{{ sumTime || '—' }}</b>
       </div>
-      <button class="btn primary big" style="width:100%;justify-content:center;margin-top:14px" @click="startTranscribe" :disabled="busy || !isDesktop || !queue.length">
+      <button class="btn primary big" style="width:100%;justify-content:center;margin-top:14px" data-guide="start-transcribe" @click="startTranscribe" :disabled="busy || !isDesktop || !queue.length">
         <Icon name="transcribe" :size="16" />{{ busy ? '转录中…' : '开始转录' }}
       </button>
       <button v-if="busy" class="btn ghost" style="width:100%;justify-content:center;margin-top:8px" @click="cancelTranscribe"><Icon name="stop" :size="14" /> 取消转录</button>
