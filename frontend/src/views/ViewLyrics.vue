@@ -47,6 +47,9 @@ const song = computed(() => (currentSong.value && currentSong.value.song) || nul
 const lyrics = computed(() => (song.value ? collectLyrics(song.value) : []));
 const fontSz = ref(18);
 const karaoke = ref(true);
+const lyrColor = ref('');
+const lyrOutline = ref(false);
+const lyrShadow = ref(false);
 const newText = ref('');
 const tlEl = ref(null);
 const replaceOpen = ref(false);
@@ -342,6 +345,9 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
       <button class="btn sm" @click="splitWords" :disabled="!lyrics.length" title="逐字拆分"><Icon name="edit" :size="14" />{{ t('逐字拆分') }}</button>
       <span class="sep"></span>
       <label class="lyr-ctl">{{ t('字号') }}<input type="number" min="12" max="40" v-model.number="fontSz" class="num-input" style="width:56px" /></label>
+      <label class="lyr-ctl">{{ t('颜色') }}<input type="color" v-model="lyrColor" style="width:36px;height:26px;padding:1px;border:1px solid var(--hairline);background:var(--canvas)" /></label>
+      <label class="lyr-ctl"><input type="checkbox" v-model="lyrOutline" /> {{ t('描边') }}</label>
+      <label class="lyr-ctl"><input type="checkbox" v-model="lyrShadow" /> {{ t('阴影') }}</label>
       <label class="lyr-ctl"><input type="checkbox" v-model="karaoke" /> {{ t('卡拉OK高亮') }}</label>
       <span style="flex:1"></span>
       <span class="lyr-status">{{ song ? (t('共 ') + lyrics.length + t(' 句')) : '' }}</span>
@@ -359,7 +365,8 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
       <div v-else-if="!lyrics.length" class="lyr-empty">{{ t('暂无歌词，点击上方按钮添加或导入') }}</div>
       <div v-else v-for="(l, i) in lyrics" :key="i" class="lyr-row" :class="{ cur: karaoke && state.playing && i === curIdx }" :data-idx="i">
         <input class="ly-time" :value="fmtTickTime(l.tick, song)" @keydown.enter="saveLyric(i)" />
-        <input class="ly-text" :value="l.text" @keydown.enter="saveLyric(i)" />
+        <input class="ly-text" :value="l.text" @keydown.enter="saveLyric(i)"
+               :style="{ color: lyrColor || 'var(--ink)', textShadow: lyrShadow ? '0 1px 4px rgba(0,0,0,.55)' : 'none', WebkitTextStroke: lyrOutline ? '0.5px var(--ink)' : 'none' }" />
         <button class="btn sm ghost" @click="saveLyric(i)">{{ t('保存') }}</button>
         <button class="btn sm ghost danger" @click="delLyric(i)">{{ t('删除') }}</button>
       </div>

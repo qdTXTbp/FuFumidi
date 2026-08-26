@@ -20,6 +20,7 @@ function cssVar(name, fb) {
 const tool = ref('pencil');
 const snapRatio = ref(0.0625);
 const trackIndex = ref(0);
+const timbre = ref(0);
 const zoomPct = ref(100);
 const editor = ref(null);
 const miniEl = ref(null);
@@ -723,6 +724,18 @@ const GM_NAMES = {
   103:'FX 7 Echoes',104:'Sitar',105:'Banjo',106:'Shamisen',107:'Koto',108:'Kalimba',109:'Bagpipe',110:'Fiddle',111:'Shanai',
   112:'Tinkle Bell',113:'Agogo',114:'Steel Drums',115:'Woodblock',116:'Taiko Drum',117:'Melodic Tom',118:'Synth Drum',119:'Reverse Cymbal',
 };
+function loadTimbreFavs() {
+  try { return new Set(JSON.parse(localStorage.getItem('fufumidi_timbre_favs') || '[]')); } catch (e) { return new Set(); }
+}
+const timbreFavs = ref(loadTimbreFavs());
+function toggleTimbreFav() {
+  const p = Number(timbre.value);
+  const s = new Set(timbreFavs.value);
+  if (s.has(p)) s.delete(p); else s.add(p);
+  timbreFavs.value = s;
+  try { localStorage.setItem('fufumidi_timbre_favs', JSON.stringify([...s])); } catch (e) {}
+  toast(s.has(p) ? '已收藏音色：' + (GM_NAMES[p] || p) : '已取消收藏音色', 'ok');
+}
 function timbreChange() {
   const tr = song.value?.tracks[trackIndex.value]; if (!tr) return;
   tr.program = timbre.value;
@@ -1004,6 +1017,7 @@ onBeforeUnmount(() => {
           <select v-model.number="timbre" class="select-input" style="width:auto;max-width:230px;padding:4px 8px" @change="timbreChange">
             <option v-for="(nm, p) in GM_NAMES" :key="p" :value="Number(p)">{{ p }} {{ nm }}</option>
           </select>
+          <button class="et-btn" :class="{ active: timbreFavs.has(Number(timbre)) }" title="收藏/取消收藏当前音色" @click="toggleTimbreFav">♡</button>
           <button class="et-btn" title="把当前音色应用到全部非鼓轨" @click="timbreAll">全部</button>
           <button class="et-btn" title="按轨道音域/密度/名称智能选择音色" @click="smartTimbre">智能</button>
           <span class="et-sep"></span>

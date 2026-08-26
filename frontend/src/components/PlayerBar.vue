@@ -10,6 +10,7 @@ import { initMidiOutput, setMidiOutEnabled, midiOutOn, midiOutOff, midiAllOff, g
 const dragging = ref(false);
 const dragRatio = ref(0);
 const displayProgress = computed(() => (dragging.value ? dragRatio.value : state.progress));
+const compact = ref(false);
 
 const pbStyle = computed(() => ({ '--fill': (displayProgress.value * 100) + '%' }));
 const volStyle = computed(() => ({ '--fill': (state.volume * 100) + '%' }));
@@ -89,7 +90,7 @@ function next() {
 </script>
 
 <template>
-  <footer class="playerbar">
+  <footer class="playerbar" :class="{ compact }">
     <div class="pb-main">
       <div class="pb-transport">
         <button class="tp-btn" title="上一首" @click="prev" :disabled="!currentSong"><Icon name="prev" :size="17" /></button>
@@ -117,6 +118,7 @@ function next() {
       <button class="tp-btn" :class="{ 'toggle-on': state.loop }" title="循环播放" @click="toggleLoop"><Icon name="loop" :size="16" /></button>
       <button class="tp-btn" :class="{ 'toggle-on': state.metro }" title="节拍器" @click="toggleMetro"><Icon name="metro" :size="16" /></button>
       <button class="tp-btn" :class="{ 'toggle-on': mixerOpen }" title="混音台" @click="mixerOpen = !mixerOpen"><Icon name="cclane" :size="16" /></button>
+      <button class="tp-btn" :class="{ 'toggle-on': compact }" title="紧凑/完整播放栏" @click="compact = !compact"><Icon name="menu" :size="16" /></button>
 
       <div class="row" style="gap:4px">
         <button class="chip-btn" @click="stepTempo(-0.05)" title="减速">−</button>
@@ -194,4 +196,10 @@ function next() {
   background: linear-gradient(90deg, var(--ink) 0%, var(--ink) var(--fill, 0%), var(--hairline) var(--fill, 0%));
 }
 .mx-card input[type="range"]::-webkit-slider-thumb { background: #fff; border-color: var(--ink); }
+
+/* 紧凑播放栏 */
+.playerbar.compact .pb-title { display: none; }
+.playerbar.compact .pb-progress { max-width: 180px; }
+.playerbar.compact .bpm-wrap { display: none; }
+.playerbar.compact .pb-right .vol-wrap { width: 90px; }
 </style>

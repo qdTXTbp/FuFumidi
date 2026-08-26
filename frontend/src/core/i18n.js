@@ -246,6 +246,9 @@ export const I18N_MAP = {
   '已导出 TXT': 'TXT exported',
   '已逐字拆分 ': 'Split into chars: ',
   ' 个字符': ' chars',
+  '颜色': 'Color',
+  '描边': 'Outline',
+  '阴影': 'Shadow',
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */
