@@ -502,6 +502,16 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
   font-size: 12.5px;
   outline: none;
 }
+.text-input {
+  background: var(--canvas);
+  border: 1px solid var(--hairline);
+  color: var(--ink);
+  border-radius: var(--radius-sm);
+  padding: 5px 9px;
+  font-size: 12.5px;
+  outline: none;
+}
+.text-input:focus, .select-input:focus { border-color: var(--accent); }
 
 /* ---------- 混音面板 ---------- */
 .mix-track {
@@ -591,11 +601,11 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .toast {
   padding: 10px 18px;
   border-radius: 999px;
-  background: var(--btn-bg);
-  border: 1px solid var(--btn-bg);
+  background: var(--accent);
+  border: 1px solid var(--accent);
   box-shadow: var(--shadow);
   font-size: 13px;
-  color: var(--btn-fg);
+  color: #fff;
   animation: toast-in 0.22s ease;
   display: flex;
   align-items: center;
