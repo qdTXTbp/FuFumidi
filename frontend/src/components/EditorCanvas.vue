@@ -11,12 +11,19 @@ const props = defineProps({
   trackIndex: { type: Number, default: 0 },
   ccEnabled: { type: Boolean, default: false },   // 是否显示 CC 泳道
   ccNumber: { type: Number, default: 11 },        // CC 控制器编号
+  scaleSnap: { type: Boolean, default: false },   // 新音符吸附到调式音阶
+  ksMap: { type: Object, default: () => ({}) },   // Key Switch 映射 { midi: 技法名 }
+  audio: { type: Object, default: null },         // 音频波形 { data: Float32Array, rate: number }
+  cc2Enabled: { type: Boolean, default: false },  // 第二条 CC 泳道
+  cc2Number: { type: Number, default: 1 },
+  ccMode: { type: String, default: 'free' },      // free | line | curve
 });
 const emit = defineEmits(['select', 'modify', 'zoom']);
 
 const wrap = ref(null);
 const canvas = ref(null);
 const ccCanvas = ref(null);
+const ccCanvas2 = ref(null);
 let ctx2d = null;
 const CC_LANE_H = 96;
 const CC_NAMES = { 1: 'Modulation', 7: 'Volume', 10: 'Pan', 11: 'Expression', 64: 'Sustain' };
@@ -63,6 +70,33 @@ function snapTick(t) {
   const st = s.tpb * props.snapRatio;
   return Math.max(0, Math.round(t / st) * st);
 }
+/* 音阶吸附：把 midi 吸附到当前调式音阶内最近音（主音由音符直方图估计） */
+const MAJOR = [0, 2, 4, 5, 7, 9, 11], MINOR = [0, 2, 3, 5, 7, 8, 10];
+let _scaleCache = null;
+function scaleSnapPitch(midi) {
+  if (!props.scaleSnap) return midi;
+  const s = song();
+  if (!_scaleCache) {
+    const hist = new Array(12).fill(0);
+    for (const tr of s.tracks) for (const n of tr.notes) hist[((n.midi % 12) + 12) % 12]++;
+    let root = 0, max = 0;
+    for (let i = 0; i < 12; i++) if (hist[i] > max) { max = hist[i]; root = i; }
+    const minor = hist[(root + 3) % 12] >= hist[(root + 4) % 12];
+    const deg = minor ? MINOR : MAJOR;
+    _scaleCache = { root: root % 12, deg };
+  }
+  const { root, deg } = _scaleCache;
+  const oct = Math.floor(midi / 12), pc = ((midi % 12) + 12) % 12;
+  const best = { d: 99, m: midi };
+  for (const d of deg) {
+    const m = oct * 12 + root + d;
+    for (const cand of [m - 12, m, m + 12]) {
+      const dd = Math.abs(cand - midi);
+      if (dd < best.d) best = { d: dd, m: cand };
+    }
+  }
+  return clamp(best.m, 0, 127);
+}
 
 /* ---------------- 撤销 / 重做 ---------------- */
 const undoStack = [];
@@ -104,6 +138,18 @@ function clearGhostSelection() {
 }
 function undo() {
   const st = undoStack.pop(); if (!st) return;
+  if (st.ti < 0) {
+    // 全量快照：恢复所有轨道（智能伴奏等新增/删除轨道场景）
+    const s = song(); if (!s) return;
+    redoStack.push({ ti: -1, all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
+    for (let i = 0; i < s.tracks.length; i++) {
+      if (st.all && st.all[i]) { s.tracks[i].notes = st.all[i].notes; s.tracks[i].ccs = st.all[i].ccs || []; }
+      else { s.tracks[i].notes = []; s.tracks[i].ccs = []; }
+    }
+    selection.clear();
+    afterEdit();
+    return;
+  }
   const tr = song()?.tracks[st.ti]; if (!tr) return;
   redoStack.push({ ti: st.ti, notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
   tr.notes = st.notes;
@@ -113,6 +159,17 @@ function undo() {
 }
 function redo() {
   const st = redoStack.pop(); if (!st) return;
+  if (st.ti < 0) {
+    const s = song(); if (!s) return;
+    undoStack.push({ ti: -1, all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
+    for (let i = 0; i < s.tracks.length; i++) {
+      if (st.all && st.all[i]) { s.tracks[i].notes = st.all[i].notes; s.tracks[i].ccs = st.all[i].ccs || []; }
+      else { s.tracks[i].notes = []; s.tracks[i].ccs = []; }
+    }
+    selection.clear();
+    afterEdit();
+    return;
+  }
   const tr = song()?.tracks[st.ti]; if (!tr) return;
   undoStack.push({ ti: st.ti, notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
   tr.notes = st.notes;
@@ -125,7 +182,7 @@ function redo() {
 function addNote(tick, midi, len) {
   const tr = curTrack(); if (!tr) return;
   pushState();
-  tr.notes.push({ start: Math.round(tick), end: Math.round(tick + len), midi: clamp(Math.round(midi), 0, 127), vel: 80 });
+  tr.notes.push({ start: Math.round(tick), end: Math.round(tick + len), midi: clamp(scaleSnapPitch(Math.round(midi)), 0, 127), vel: 80 });
   afterEdit();
 }
 function deleteNotes(arr) {
@@ -271,6 +328,19 @@ function draw() {
     ctx2d.fillStyle = 'rgba(10,10,10,0.4)';
     ctx2d.fillText(noteName(m), 4, y + rowH.value - 3);
   }
+  // Key Switch 高亮：C-2 ~ C0（MIDI 0-24）技法名区域
+  const ksKeys = Object.keys(props.ksMap || {}).map(Number).filter(m => m >= 0 && m <= 24);
+  if (ksKeys.length) {
+    ctx2d.font = '9px monospace'; ctx2d.textAlign = 'left';
+    for (const m of ksKeys) {
+      if (m < lo || m > hi) continue;
+      const y = (hi - m) * rowH.value;
+      ctx2d.fillStyle = 'rgba(255,140,0,0.18)';
+      ctx2d.fillRect(0, y, W, rowH.value);
+      ctx2d.fillStyle = '#b45309';
+      ctx2d.fillText((props.ksMap[m] || '').slice(0, 10), 52, y + rowH.value - 3);
+    }
+  }
   // 音符
   for (const tr of s.tracks) {
     const col = noteColor(tr.index);
@@ -290,6 +360,37 @@ function draw() {
     }
   }
   ctx2d.globalAlpha = 1;
+  // 音频波形（卷帘底部）：按 tick 对齐显示原始音频包络
+  const a = props.audio;
+  if (a && a.data && a.rate) {
+    const WAVE_H = 42;
+    const yBase = H - WAVE_H;
+    ctx2d.fillStyle = 'rgba(20,86,240,0.05)'; ctx2d.fillRect(0, yBase, W, WAVE_H);
+    ctx2d.strokeStyle = 'rgba(20,86,240,0.7)'; ctx2d.lineWidth = 1;
+    const secPerTick = s.totalSec > 0 ? s.totalSec / s.totalTicks : 60 / 120 / s.tpb;
+    const t0 = Math.max(0, xToTick(0)), t1 = Math.max(t0 + 1, xToTick(W));
+    const s0 = t0 * secPerTick * a.rate, s1 = t1 * secPerTick * a.rate;
+    const n = a.data.length;
+    if (s1 > s0) {
+      const pxW = Math.max(1, Math.round(W / 2)); // 按 2px 一柱采样，控制绘制量
+      for (let i = 0; i <= pxW; i++) {
+        const x = i / pxW * W;
+        const t = t0 + (t1 - t0) * i / pxW;
+        const ia = Math.max(0, Math.floor(t * secPerTick * a.rate));
+        const ib = Math.max(ia + 1, Math.floor((t + (t1 - t0) / pxW) * secPerTick * a.rate));
+        if (ia >= n) break;
+        let mn = 0, mx = 0;
+        for (let j = ia; j < Math.min(ib, n); j++) { const v = a.data[j]; if (v < mn) mn = v; if (v > mx) mx = v; }
+        const y1 = yBase + (1 - mx) * WAVE_H / 2;
+        const y2 = yBase + (1 - mn) * WAVE_H / 2;
+        ctx2d.beginPath(); ctx2d.moveTo(x, y1); ctx2d.lineTo(x, y2); ctx2d.stroke();
+      }
+    }
+    ctx2d.strokeStyle = 'rgba(20,86,240,0.35)';
+    ctx2d.beginPath(); ctx2d.moveTo(0, yBase); ctx2d.lineTo(W, yBase); ctx2d.stroke();
+    ctx2d.fillStyle = 'rgba(20,86,240,0.6)'; ctx2d.font = '9px monospace'; ctx2d.textAlign = 'right';
+    ctx2d.fillText('音频', W - 4, yBase + 11);
+  }
   // 播放头
   const curTick = s.secToTick(state.curSec / state.tempo);
   const px = tickToX(curTick);
@@ -311,28 +412,21 @@ const dragState = ref(null);
 
 /* ---------------- CC 泳道 ---------------- */
 const ccDrawing = ref(false);
-const ccLast = ref(null);   // {tick}
-function ccDrawLane() {
-  const cv = ccCanvas.value;
-  if (!cv) return;
+const ccLast = ref(null);   // {tick, val}
+function drawCC(g, W, H2, ccNum) {
   const s = song();
-  const dpr = window.devicePixelRatio || 1;
-  const W = cv.clientWidth || 600, H2 = CC_LANE_H;
-  if (cv.width !== Math.floor(W * dpr) || cv.height !== Math.floor(H2 * dpr)) { cv.width = Math.floor(W * dpr); cv.height = Math.floor(H2 * dpr); }
-  const g = cv.getContext('2d');
-  g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, W, H2);
   g.fillStyle = 'rgba(10,10,10,0.03)'; g.fillRect(0, 0, W, H2);
-  const name = CC_NAMES[props.ccNumber] || ('CC' + props.ccNumber);
+  const name = CC_NAMES[ccNum] || ('CC' + ccNum);
   g.fillStyle = 'rgba(10,10,10,0.5)'; g.font = '9.5px monospace'; g.textAlign = 'left'; g.textBaseline = 'middle';
-  g.fillText(name + ' ' + props.ccNumber, 6, 10);
+  g.fillText(name + ' ' + ccNum, 6, 10);
   for (const v of [0, 64, 127]) {
     const y = H2 - 4 - (v / 127) * (H2 - 12);
     g.strokeStyle = 'rgba(10,10,10,0.08)'; g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
     g.fillStyle = 'rgba(10,10,10,0.35)'; g.fillText(String(v), 6, y);
   }
   const tr = curTrack();
-  const ccs = (tr && (tr.ccs || []).filter(c => c.cc === props.ccNumber).sort((a, b) => a.tick - b.tick)) || [];
+  const ccs = (tr && (tr.ccs || []).filter(c => c.cc === ccNum).sort((a, b) => a.tick - b.tick)) || [];
   if (!s || !ccs.length) return;
   g.strokeStyle = '#d4a017'; g.lineWidth = 1.4; g.beginPath();
   for (let i = 0; i < ccs.length; i++) {
@@ -348,33 +442,81 @@ function ccDrawLane() {
     g.beginPath(); g.arc(x, y, 2.5, 0, Math.PI * 2); g.fill();
   }
 }
+function ccDrawLane() {
+  const cv = ccCanvas.value;
+  const s = song();
+  if (!cv) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth || 600, H2 = CC_LANE_H;
+  if (cv.width !== Math.floor(W * dpr) || cv.height !== Math.floor(H2 * dpr)) { cv.width = Math.floor(W * dpr); cv.height = Math.floor(H2 * dpr); }
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawCC(g, W, H2, props.ccNumber);
+  // 第二条泳道
+  if (props.cc2Enabled) {
+    const cv2 = ccCanvas2.value;
+    if (cv2) {
+      if (cv2.width !== Math.floor(W * dpr) || cv2.height !== Math.floor(H2 * dpr)) { cv2.width = Math.floor(W * dpr); cv2.height = Math.floor(H2 * dpr); }
+      const g2 = cv2.getContext('2d');
+      g2.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawCC(g2, W, H2, props.cc2Number);
+    }
+  }
+}
 function ccYToVal(y) {
   const H2 = CC_LANE_H;
   return clamp(Math.round((H2 - 4 - y) / (H2 - 12) * 127), 0, 127);
 }
 function ccDown(e) {
   const tr = curTrack(); if (!tr) return;
+  const target = e.target === ccCanvas2.value ? props.cc2Number : props.ccNumber;
   pushState();
   ccDrawing.value = true;
   ccLast.value = null;
+  ccTarget.value = target;
   ccPaint(e);
 }
 function ccMove(e) { if (ccDrawing.value) ccPaint(e); }
 function ccUp() { ccDrawing.value = false; ccLast.value = null; }
+const ccTarget = ref(props.ccNumber);
 function ccPaint(e) {
-  const cv = ccCanvas.value; if (!cv) return;
+  const cv = e.target && e.target.tagName === 'CANVAS' ? e.target : ccCanvas.value;
+  if (!cv) return;
+  const ccNum = ccTarget.value;
   const rect = cv.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const tick = Math.max(0, Math.round(xToTick(x)));
-  if (ccLast.value != null && Math.abs(tick - ccLast.value) < 2) return; // 同点去重
   const val = ccYToVal(e.clientY - rect.top);
   const tr = curTrack(); if (!tr) return;
   const arr = tr.ccs = tr.ccs || [];
-  const idx = arr.findIndex(c => c.cc === props.ccNumber && Math.abs(c.tick - tick) < 2);
-  if (idx >= 0) arr[idx] = { tick, cc: props.ccNumber, cv: val };
-  else arr.push({ tick, cc: props.ccNumber, cv: val });
+  const put = (t, v) => {
+    const idx = arr.findIndex(c => c.cc === ccNum && Math.abs(c.tick - t) < 2);
+    if (idx >= 0) arr[idx] = { tick: t, cc: ccNum, cv: v };
+    else arr.push({ tick: t, cc: ccNum, cv: v });
+  };
+  if (props.ccMode === 'line' && ccLast.value) {
+    // 直线：从上一采样点到当前点线性插值
+    const from = ccLast.value, to = { tick, val };
+    const span = Math.abs(to.tick - from.tick);
+    if (span > 0) {
+      for (let i = 1; i <= span; i++) {
+        const t = Math.round(from.tick + (to.tick - from.tick) * i / span);
+        const v = Math.round(from.val + (to.val - from.val) * i / span);
+        put(t, clamp(v, 0, 127));
+      }
+    }
+  } else if (props.ccMode === 'curve' && ccLast.value) {
+    // 曲线：两段中点平滑（二次贝塞尔近似 → 简化：前半段取平均值过渡）
+    const from = ccLast.value;
+    const midT = Math.round((from.tick + tick) / 2);
+    const midV = Math.round((from.val + val) / 2);
+    put(midT, clamp(midV, 0, 127));
+  } else {
+    if (ccLast.value != null && Math.abs(tick - ccLast.value.tick) < 2) return;
+    put(tick, val);
+  }
   arr.sort((a, b) => a.tick - b.tick);
-  ccLast.value = tick;
+  ccLast.value = { tick, val };
   ccDrawLane();
 }
 
@@ -481,7 +623,7 @@ function onUp() {
   } else if (d.type === 'create' && tr) {
     pushState();
     const len = Math.max(d.len, 60);
-    tr.notes.push({ start: Math.round(d.startTick), end: Math.round(d.startTick + len), midi: clamp(Math.round(d.startMidi), 0, 127), vel: 80 });
+    tr.notes.push({ start: Math.round(d.startTick), end: Math.round(d.startTick + len), midi: clamp(scaleSnapPitch(Math.round(d.startMidi)), 0, 127), vel: 80 });
     afterEdit();
   } else if (d.type === 'marquee' && d.box) {
     emit('select');
@@ -593,6 +735,17 @@ function replaceNotes(arr) {
 function selNotes() {
   return [...selection].sort((a, b) => a.start - b.start).map(n => ({ start: n.start, end: n.end, midi: n.midi, vel: n.vel }));
 }
+/* 选中音符的原始引用数组（供批量编辑直接修改） */
+function selRef() {
+  return [...selection].sort((a, b) => a.start - b.start);
+}
+/* 按数组替换当前选中集合 */
+function selectNotes(arr) {
+  selection.clear();
+  const tr = curTrack();
+  if (tr && Array.isArray(arr)) for (const n of arr) if (tr.notes.includes(n)) selection.add(n);
+  draw(); emit('select');
+}
 /* 列表编辑器保存：按选中顺序写回草稿值 */
 function applyDraft(arr) {
   const tr = curTrack(); if (!tr || !selection.size || !arr) return;
@@ -645,9 +798,69 @@ function delPedal() {
 function canUndo() { return undoStack.length > 0; }
 function canRedo() { return redoStack.length > 0; }
 function clearHistory() { undoStack.length = 0; redoStack.length = 0; }
-/* 外部编辑（鼓组编辑器等）：按指定轨道做快照并同步刷新 */
+function historySnapshots() {
+  return undoStack.map(s => ({ ti: s.ti, notes: s.notes.length, at: Date.now() }));
+}
+/* 音频起音检测（短时 RMS 能量突增） */
+let _onsetsCache = null;
+function audioOnsets() {
+  const a = props.audio;
+  if (!a || !a.data || !a.rate) return [];
+  if (_onsetsCache) return _onsetsCache;
+  const frame = Math.max(1, Math.floor(a.rate * 0.01));
+  const n = a.data.length, rms = [];
+  for (let i = 0; i < n; i += frame) {
+    let sum = 0; const end = Math.min(i + frame, n);
+    for (let j = i; j < end; j++) sum += a.data[j] * a.data[j];
+    rms.push(Math.sqrt(sum / (end - i)));
+  }
+  const avg = rms.length ? rms.reduce((a2, b) => a2 + b, 0) / rms.length : 0;
+  const onsets = [];
+  for (let i = 1; i < rms.length; i++) {
+    if (rms[i] > avg * 0.6 && rms[i] > rms[i - 1] * 1.8) onsets.push(i * frame / a.rate);
+  }
+  _onsetsCache = onsets;
+  return onsets;
+}
+/* 选区/整轨音符吸附到最近的波形起音（±80ms） */
+function snapSelToAudio() {
+  const s = song(), tr = curTrack();
+  if (!s || !tr) return 0;
+  const onsets = audioOnsets();
+  if (!onsets.length) return 0;
+  const secPerTick = s.totalSec > 0 ? s.totalSec / s.totalTicks : 60 / 120 / s.tpb;
+  const winSec = 0.08;
+  const arr = selection.size ? [...selection] : tr.notes.slice();
+  pushState();
+  let moved = 0;
+  for (const n of arr) {
+    const sec = n.start * secPerTick;
+    let best = null;
+    for (const o of onsets) {
+      if (o < sec - winSec) continue;
+      if (o > sec + winSec) break;
+      if (!best || Math.abs(o - sec) < Math.abs(best - sec)) best = o;
+    }
+    if (best != null) {
+      const nt = Math.max(0, Math.round(best / secPerTick));
+      n.end = n.end - n.start + nt;
+      n.start = nt;
+      moved++;
+    }
+  }
+  if (moved) afterEdit();
+  return moved;
+}
+/* 外部编辑（鼓组编辑器等）：按指定轨道做快照并同步刷新；ti < 0 时做全量快照（智能伴奏等） */
 function pushStateForTrack(ti) {
-  const s = song(); if (!s || !s.tracks[ti]) return;
+  const s = song(); if (!s) return;
+  if (ti < 0) {
+    undoStack.push({ ti: -1, all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
+    if (undoStack.length > 80) undoStack.shift();
+    redoStack.length = 0;
+    return;
+  }
+  if (!s.tracks[ti]) return;
   undoStack.push({ ti, notes: JSON.parse(JSON.stringify(s.tracks[ti].notes)), ccs: JSON.parse(JSON.stringify(s.tracks[ti].ccs || [])) });
   if (undoStack.length > 80) undoStack.shift();
   redoStack.length = 0;
@@ -660,9 +873,10 @@ defineExpose({
   deleteSelected, quantizeSelected, transposeSelected, velRampSelected,
   copySelected, pasteAt, duplicateSelected, selectSamePitch,
   selectAll, selectNone, selCount, selInfo,
-  setSelVel, setSelMidi, setSelStart, setSelLen, applyVelCurve, replaceNotes, selNotes, applyDraft,
+  setSelVel, setSelMidi, setSelStart, setSelLen, applyVelCurve, replaceNotes, selNotes, selRef, selectNotes, applyDraft,
   addPedal, delPedal, selSpan, addNote, deleteNotes, pushStateForTrack, notifyExternalEdit,
-  undo, redo, canUndo, canRedo, clearHistory,
+  undo, redo, canUndo, canRedo, clearHistory, historySnapshots,
+  snapSelToAudio,
 });
 
 /* ---------------- 生命周期 ---------------- */
@@ -672,7 +886,13 @@ watch(() => currentSong.value, () => { selection.clear(); resetView(); draw(); }
 watch(() => props.trackIndex, () => { selection.clear(); draw(); ccDrawLane(); });
 watch(() => props.tool, () => { dragState.value = null; draw(); });
 watch(() => props.ccNumber, () => ccDrawLane());
+watch(() => props.cc2Number, () => ccDrawLane());
+watch(() => props.cc2Enabled, (v) => { if (!v) ccDrawing.value = false; ccDrawLane(); });
+watch(() => props.ccMode, () => ccDrawLane());
 watch(() => props.ccEnabled, (v) => { if (!v) ccDrawing.value = false; ccDrawLane(); });
+watch(() => props.scaleSnap, () => { _scaleCache = null; });
+watch(() => props.audio, () => { _onsetsCache = null; draw(); });
+watch(() => props.ksMap, () => draw(), { deep: true });
 
 onMounted(async () => {
   await nextTick();
@@ -688,6 +908,9 @@ onBeforeUnmount(() => { if (raf) cancelAnimationFrame(raf); });
     <canvas ref="canvas" :style="{ height: H + 'px' }" @pointerdown="onDown" @pointermove="onMove" @pointerup="onUp" @pointerleave="onUp"></canvas>
     <div v-if="ccEnabled" class="cc-lane" :style="{ height: CC_LANE_H + 'px' }">
       <canvas ref="ccCanvas" class="cc-lane-canvas" @pointerdown="ccDown" @pointermove="ccMove" @pointerup="ccUp" @pointerleave="ccUp"></canvas>
+    </div>
+    <div v-if="ccEnabled && cc2Enabled" class="cc-lane" :style="{ height: CC_LANE_H + 'px' }">
+      <canvas ref="ccCanvas2" class="cc-lane-canvas" @pointerdown="ccDown" @pointermove="ccMove" @pointerup="ccUp" @pointerleave="ccUp"></canvas>
     </div>
   </div>
 </template>

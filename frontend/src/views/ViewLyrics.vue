@@ -49,6 +49,9 @@ const fontSz = ref(18);
 const karaoke = ref(true);
 const newText = ref('');
 const tlEl = ref(null);
+const replaceOpen = ref(false);
+const repFrom = ref('');
+const repTo = ref('');
 
 /* ---------------- 卡拉OK高亮 ---------------- */
 const curIdx = ref(-1);
@@ -167,6 +170,30 @@ function exportLrc() {
   toast(t('已导出 LRC'), 'ok');
 }
 
+/* ---------------- 批量替换 ---------------- */
+function openReplace() {
+  repFrom.value = '';
+  repTo.value = '';
+  replaceOpen.value = true;
+}
+function doBatchReplace() {
+  const from = repFrom.value;
+  if (!from) { toast(t('请输入查找内容'), 'warn'); return; }
+  const s = song.value;
+  if (!s) return;
+  const to = repTo.value || '';
+  let count = 0;
+  for (const tr of s.tracks) for (const e of tr.events || []) {
+    if (e.type === 'lyric' && e.text) { const n = e.text.split(from).join(to); if (n !== e.text) { e.text = n; count++; } }
+  }
+  replaceOpen.value = false;
+  toast(count ? t('已替换 ') + count + t(' 处') : t('未找到匹配内容'), count ? 'ok' : 'warn');
+}
+/* 「添加到所选音符」入口提示：歌词挂音符的操作在编辑视图内完成 */
+function noteSelHint() {
+  toast(t('请先在「编辑」视图选中音符，再用上方输入框在此处添加歌词'), 'info');
+}
+
 /* ---------------- 时间轴 ---------------- */
 function drawTimeline() {
   const cv = tlEl.value, s = song.value;
@@ -250,6 +277,8 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
         <Icon :name="state.playing ? 'pause' : 'play'" :size="14" />{{ state.playing ? t('暂停') : t('播放') }}
       </button>
       <button class="btn sm" @click="addLyric" :disabled="!song"><Icon name="plus" :size="14" />{{ t('添加歌词') }}</button>
+      <button class="btn sm" @click="openReplace" :disabled="!lyrics.length"><Icon name="edit" :size="14" />{{ t('批量替换') }}</button>
+      <button class="btn sm" @click="noteSelHint" :disabled="!song" title="在编辑视图中选中音符后可为其添加歌词"><Icon name="cursor" :size="14" />{{ t('添加到所选音符') }}</button>
       <button class="btn sm" @click="importText" :disabled="!song"><Icon name="import" :size="14" />{{ t('导入文本') }}</button>
       <button class="btn sm" @click="exportLrc" :disabled="!lyrics.length"><Icon name="save" :size="14" />{{ t('导出 LRC') }}</button>
       <span class="sep"></span>
@@ -276,6 +305,22 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
         <button class="btn sm ghost danger" @click="delLyric(i)">{{ t('删除') }}</button>
       </div>
     </div>
+
+    <!-- 批量替换弹窗 -->
+    <div v-if="replaceOpen" class="rep-overlay" @click.self="replaceOpen = false">
+      <div class="rep-card">
+        <div class="rep-head">
+          <b>{{ t('批量替换歌词') }}</b>
+          <button class="icon-btn" @click="replaceOpen = false" title="关闭"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
+        </div>
+        <input v-model="repFrom" class="text-input" :placeholder="t('查找')" @keydown.enter="doBatchReplace" />
+        <input v-model="repTo" class="text-input" :placeholder="t('替换为')" @keydown.enter="doBatchReplace" />
+        <div class="rep-actions">
+          <button class="btn sm ghost" @click="replaceOpen = false">{{ t('取消') }}</button>
+          <button class="btn sm primary" @click="doBatchReplace">{{ t('替换') }}</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -298,4 +343,19 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
 .ly-time { width: 92px; padding: 4px 6px; font-size: 11px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 6px; color: var(--ink); font-family: var(--mono); outline: none; }
 .ly-text { flex: 1; min-width: 80px; padding: 4px 8px; font-size: 12.5px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 6px; color: var(--ink); outline: none; }
 .ly-time:focus, .ly-text:focus { border-color: var(--ink); }
+
+/* 批量替换弹窗 */
+.rep-overlay {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(10, 10, 10, 0.28);
+  display: flex; align-items: center; justify-content: center;
+}
+.rep-card {
+  width: 380px; max-width: calc(100vw - 40px);
+  background: var(--canvas); border: 1px solid var(--hairline);
+  border-radius: 16px; box-shadow: var(--shadow-lg);
+  padding: 16px; display: flex; flex-direction: column; gap: 10px;
+}
+.rep-head { display: flex; align-items: center; justify-content: space-between; font-size: 14px; font-weight: 700; color: var(--ink); }
+.rep-actions { display: flex; gap: 8px; justify-content: flex-end; }
 </style>

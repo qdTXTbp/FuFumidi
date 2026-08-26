@@ -44,6 +44,15 @@ export const state = reactive({
   toast: '',
   confirm: null,
   fileBusy: false,
+  // 全局系统功能（设置面板 / 主题库 / 命令面板 / 新手引导）
+  ui: {
+    settingsOpen: false,
+    themesOpen: false,
+    guideOpen: false,
+    paletteOpen: false,
+  },
+  // 完整性检验结果（App 挂载时后台检查；设置面板展示警告条）
+  integrity: null, // { ok, issues: [], error } | null
 });
 
 export const currentSong = computed(() =>

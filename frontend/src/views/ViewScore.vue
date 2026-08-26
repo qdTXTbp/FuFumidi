@@ -1,10 +1,12 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
-import { currentSong, state, toast } from '../store.js';
+import { currentSong, state, toast, importFiles, setView } from '../store.js';
 import { getPlayer } from '../audio.js';
 import { t } from '../core/i18n.js';
 import { esc, clamp, TRACK_COLORS } from '../core/util.js';
+import { encodeMidi } from '../core/midi.js';
+import { parseMusicXMLToSong } from '../core/musicxml.js';
 import { songToAbc, jianpuData, tabData, detectSf, ABC_KEY_NAMES } from '../core/score.js';
 
 const mode = ref('staff');       // staff | jianpu | guitar | bass
@@ -19,6 +21,10 @@ const scoreEl = ref(null);
 const scrollEl = ref(null);
 const showOpts = ref(false);
 const exporting = ref(false);
+const midiBusy = ref(false);
+const previewOpen = ref(false);
+const previewBusy = ref(false);
+const previewPages = ref([]);
 
 let abcjsLoaded = false;
 let abcjsLoading = null;
@@ -301,6 +307,102 @@ function exportStaffPng() {
   }
 }
 
+/* ---------------- MusicXML 导入 ---------------- */
+async function importMusicXML() {
+  const b = window.fuBridge;
+  if (!b || !b.pickMusicXML || !b.readBinary) { toast(t('当前环境不支持 MusicXML 导入'), 'warn'); return; }
+  midiBusy.value = true;
+  try {
+    const p = await b.pickMusicXML();
+    if (!p) return;
+    const buf = await b.readBinary(p);
+    if (!buf) { toast(t('无法读取 MusicXML 文件'), 'warn'); return; }
+    const text = new TextDecoder('utf-8').decode(new Uint8Array(buf));
+    const base = p.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '');
+    const song = parseMusicXMLToSong(text, base + '.mid');
+    const bytes = encodeMidi(song.tracks.map(tr => ({ name: tr.name, program: tr.program, ch: tr.ch, notes: tr.notes, ccs: tr.ccs || [] })),
+      { division: song.tpb, tempoMap: song.tempoMap, sigMap: song.sigMap });
+    await importFiles([{ name: base + '.mid', bytes }]);
+    setView('score');
+    toast(t('已导入 MusicXML：') + base, 'ok');
+  } catch (e) {
+    toast(t('MusicXML 导入失败：') + String(e.message || e), 'warn');
+  } finally { midiBusy.value = false; }
+}
+
+/* ---------------- PDF 导出（IPC printToPDF） ---------------- */
+async function exportPdf() {
+  const b = window.fuBridge;
+  if (!b || !b.exportScorePdf) { toast(t('当前环境不支持 PDF 导出'), 'warn'); return; }
+  try {
+    const r = await b.exportScorePdf();
+    if (r && r.ok) toast(t('已导出乐谱 PDF：') + r.path, 'ok');
+    else if (r && !r.canceled) toast(t('PDF 导出失败'), 'warn');
+  } catch (e) {
+    toast(t('PDF 导出失败：') + String(e.message || e), 'warn');
+  }
+}
+
+/* ---------------- 分页预览（SVG 栅格化为 PNG 图集弹窗） ---------------- */
+async function previewScore() {
+  if (mode.value !== 'staff') { toast(t('请先切换至五线谱模式'), 'warn'); return; }
+  const svgs = scoreEl.value ? Array.from(scoreEl.value.querySelectorAll('svg')) : [];
+  if (!svgs.length) { toast(t('请先渲染五线谱'), 'warn'); return; }
+  previewOpen.value = true;
+  previewBusy.value = true;
+  previewPages.value = [];
+  try {
+    const scale = 1.5, tileH = 9000;
+    const pages = [];
+    for (const svg of svgs) {
+      const w = svg.clientWidth || svg.getBoundingClientRect().width || parseFloat(svg.getAttribute('width')) || 986;
+      const h = svg.clientHeight || svg.getBoundingClientRect().height || parseFloat(svg.getAttribute('height')) || 600;
+      if (!w || !h) continue;
+      const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml' }));
+      const img = new Image();
+      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+      URL.revokeObjectURL(url);
+      let off = 0;
+      while (off < h) {
+        const th = Math.min(tileH, h - off);
+        const cv = document.createElement('canvas');
+        cv.width = Math.max(1, Math.round(w * scale)); cv.height = Math.max(1, Math.round(th * scale));
+        const g = cv.getContext('2d');
+        g.setTransform(scale, 0, 0, scale, 0, 0);
+        g.fillStyle = '#ffffff'; g.fillRect(0, 0, w, th);
+        g.drawImage(img, 0, off, w, th, 0, 0, w, th);
+        pages.push(cv.toDataURL('image/png'));
+        off += th;
+      }
+    }
+    if (!pages.length) throw new Error('empty');
+    previewPages.value = pages;
+  } catch (e) {
+    toast(t('预览失败：') + String(e.message || e), 'warn');
+  } finally { previewBusy.value = false; }
+}
+
+/* ---------------- 点击定位播放头 ---------------- */
+function onScoreClick(e) {
+  const el = e.target && e.target.closest ? e.target.closest('[data-tick]') : null;
+  if (!el) return;
+  const tick = parseInt(el.getAttribute('data-tick'), 10);
+  if (!isFinite(tick)) return;
+  const p = getPlayer();
+  if (!p) return;
+  const s = song.value, tr = selTrack.value;
+  // 从量化 tick 反查最近的真实音符起点（避免量化误差）
+  let real = tick;
+  if (s && tr && tr.notes.length) {
+    const onsets = tr.notes;
+    let lo = 0, hi = onsets.length - 1, best = onsets[0].start;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (onsets[mid].start <= tick) { best = onsets[mid].start; lo = mid + 1; } else hi = mid - 1; }
+    real = best;
+  }
+  p.seekTick(real);
+  toast(t('已定位到音符 @ ') + real, 'ok');
+}
+
 /* ---------------- 生命周期 ---------------- */
 let followRaf = 0;
 function loop() {
@@ -357,8 +459,17 @@ onBeforeUnmount(() => {
       </div>
 
       <span class="sep"></span>
+      <button class="btn sm" @click="importMusicXML" :disabled="midiBusy" :title="t('导入 MusicXML 文件')">
+        <Icon name="import" :size="14" />{{ t('MusicXML') }}
+      </button>
+      <button class="btn sm" @click="previewScore" :disabled="mode !== 'staff' || previewBusy" :title="t('分页预览')">
+        <Icon name="eye" :size="14" />{{ t('预览') }}
+      </button>
       <button class="btn sm" @click="exportStaffPng" :disabled="mode !== 'staff' || exporting">
         <Icon name="save" :size="14" />{{ t('PNG') }}
+      </button>
+      <button class="btn sm" @click="exportPdf" :disabled="mode !== 'staff'" :title="t('导出 PDF（打印当前页面）')">
+        <Icon name="save" :size="14" />{{ t('PDF') }}
       </button>
 
       <span style="flex:1"></span>
@@ -377,7 +488,7 @@ onBeforeUnmount(() => {
 
     <div class="score-scroll" ref="scrollEl">
       <!-- 五线谱：abcjs 渲染容器 -->
-      <div ref="scoreEl" id="abcScore" v-show="mode === 'staff'"></div>
+      <div ref="scoreEl" id="abcScore" v-show="mode === 'staff'" @click="onScoreClick"></div>
       <!-- 简谱 -->
       <div v-if="mode === 'jianpu'">
         <div v-for="b in jianpuBlocks" :key="b.ti" class="score-block">
@@ -414,6 +525,25 @@ onBeforeUnmount(() => {
     <div class="score-legend">
       <span class="lg-item"><span class="dot" style="background:#ffd866"></span>{{ t('正在播放音符') }}</span>
       <span class="lg-item"><span class="dot" style="background:#1456f0"></span>{{ t('升降号自动按调号判定') }}</span>
+    </div>
+
+    <!-- 乐谱分页预览弹窗 -->
+    <div v-if="previewOpen" class="pv-overlay" @click.self="previewOpen = false">
+      <div class="pv-card">
+        <div class="pv-head">
+          <b>{{ t('乐谱分页预览') }}</b>
+          <button class="icon-btn" @click="previewOpen = false" title="关闭"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
+        </div>
+        <div class="pv-body">
+          <div v-if="previewBusy" class="score-empty">{{ t('正在生成预览…') }}</div>
+          <template v-else>
+            <div v-for="(p, i) in previewPages" :key="i" class="pv-page">
+              <div class="pv-page-name">{{ t('第 ') }}{{ i + 1 }}{{ t(' 页') }}</div>
+              <img :src="p" alt="score page" />
+            </div>
+          </template>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -476,4 +606,28 @@ onBeforeUnmount(() => {
 :deep(#abcScore .abcjs-note) { cursor: pointer; }
 :deep(#abcScore svg .abcjs-ending) { display: none; }
 :deep(#abcScore.fu-grid) { background-image: repeating-linear-gradient(to right, var(--hairline) 0 1px, transparent 1px var(--fu-beatw, 56px)); }
+
+/* 分页预览弹窗 */
+.pv-overlay {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(10, 10, 10, 0.28);
+  display: flex; align-items: center; justify-content: center;
+  padding: 30px;
+}
+.pv-card {
+  width: 780px; max-width: 96vw; max-height: 88vh;
+  background: var(--canvas); border: 1px solid var(--hairline);
+  border-radius: 16px; box-shadow: var(--shadow-lg);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.pv-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid var(--hairline);
+  font-size: 14px; font-weight: 700; color: var(--ink);
+  flex: none;
+}
+.pv-body { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
+.pv-page { border: 1px solid var(--hairline); border-radius: 12px; overflow: hidden; }
+.pv-page-name { font-size: 11px; color: var(--stone); padding: 5px 10px; border-bottom: 1px solid var(--hairline); }
+.pv-page img { width: 100%; display: block; background: #fff; }
 </style>

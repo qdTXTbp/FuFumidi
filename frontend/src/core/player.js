@@ -22,6 +22,8 @@ export class Player {
     this.scale = 1; this.loop = false; this.loopStart = 0; this.loopEnd = 0;
     this.metro = false; this.metroBeat = 0;
     this.onEnd = null; this._timer = null;
+    // 硬件 MIDI 输出等外部旁听回调：onNote(n, noteTime, noteEndTime) / onStop()
+    this.onNote = null; this.onStop = null;
   }
   load(song) { this.song = song; this.pausedTick = 0; this.loop = false; this.loopStart = 0; this.loopEnd = 0; this.prepare(); }
   prepare() {
@@ -56,6 +58,7 @@ export class Player {
     this.pausedTick = tick;
     clearInterval(this._timer); this._timer = null;
     this.syn.allStop();
+    if (this.onStop) this.onStop();
   }
   stop() { this.pause(); this.pausedTick = 0; }
   seekTick(tick) {
@@ -106,6 +109,7 @@ export class Player {
       const e = this.noteEndTime(n);
       if (e < this.ctx.currentTime - 0.03) { this.cursor++; continue; }
       this.syn.noteOn(t, n, e);
+      if (this.onNote) this.onNote(n, t, e);
       this.cursor++;
     }
     if (this.metro && this.song) {

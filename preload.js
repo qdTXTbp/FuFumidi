@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
   // 设置
   getSettings: () => ipcRenderer.invoke('settings:load'),
   saveSettings: (s) => ipcRenderer.invoke('settings:save', s),
+  // MIDI 文件关联（Windows 注册表覆盖 .mid/.midi 默认打开程序）
+  fileAssoc: (enabled) => ipcRenderer.invoke('settings:fileAssoc', !!enabled),
   // 完整性检验（误删检测 + 一键修复）
   checkIntegrity: () => ipcRenderer.invoke('integrity:check'),
   repairIntegrity: (ids) => ipcRenderer.invoke('integrity:repair', ids),

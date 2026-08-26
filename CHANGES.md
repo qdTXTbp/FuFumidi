@@ -131,3 +131,51 @@ npm start
 # 打包 Windows 安装包（需先准备 resources/：python 运行时、models、elevate.exe）
 npm run dist:win
 ```
+
+---
+
+## 8. 与原仓库功能对齐（缺失功能全部补齐）
+
+对原仓库 `FuFumidi.html` 逐功能盘点后，将新版尚未覆盖的功能全部补齐（后端 IPC 在 preload.js / main.js 中已预先就绪，本次完成前端 UI 接入）：
+
+### 8.1 编辑器高级功能（ViewEdit / EditorCanvas）
+- **智能伴奏**：按小节和弦分析自动生成「智能贝斯 + 智能分解和弦 + 智能铺底」3 轨（全量快照可撤销）
+- **智能量化 + Groove**：网格（1/4~1/32）+ Funk/Jazz/Rock/Latin/自定义 Groove 模板 + 强度调节 +「提取选中为 Groove」
+- **逻辑编辑器**：目标（全部/选中/当前轨）× 条件（力度/时值/音高）× 操作（力度±/固定/量化/移调/删除）批量规则
+- **宏系统**：内置宏（清理工程/批量移调/力度标准化）+ 自定义命令宏（transpose/quantize/normalize/vel_*，localStorage 持久化）
+- **Key Switch 映射**：C-2~C0（MIDI 0-24）技法命名 + Spitfire/VSL/EastWest 预设，卷帘橙色高亮显示
+- **音频对齐工具**：载入原音频 → 卷帘底部波形绘制；选区/整轨「吸附起音」（±80ms 波形起音检测）；「试听」同步播放原音频
+- **音色工具**：GM 音色下拉切换、应用到全部非鼓轨、按音域/名称智能选音色
+- **批量操作**：和弦批量选择、删除短音（<80ms）、响度 ±10%
+- **BPM 修改应用**：改写 tempo 事件（不影响音符 tick），重算时间映射
+- **CC 进阶**：双 CC 泳道、手绘/直线/曲线三种绘制模式、CC 事件列表查看/删除
+- **其他**：音阶吸附（新音符吸附调式）、撤销历史面板、编辑器内歌词添加（到选中音符）、全屏编辑、编辑功能说明弹窗、视频轨道嵌入（影视配乐对齐，右上角同步播放）
+- **撤销快照升级**：`pushStateForTrack(-1)` 全量快照，智能伴奏/逻辑编辑器/宏等跨轨道操作可完整撤销
+
+### 8.2 转换视图视频导出（ViewConvert）
+- **视频 / 可视化导出**：canvas.captureStream + MediaRecorder 后台录制 → `video:transcode`（内置 ffmpeg）合成 MP4 + 音频
+- 参数：画面比例（横屏/竖屏/字幕留白）、分辨率（720P~4K）、帧率（24/30/60）、质量/自定义码率、时长（15/30/60/整首）、自定义区间、背景色/背景图片、水印+透明度、歌词字幕、进度条/时间码开关
+- 可视化内容：Synthesia 风格音符瀑布 + 频谱瀑布 + 波形示波器 + 实时和弦识别
+- 音频渲染重构：提取 `renderAudioBuffer()` 供音频导出与视频导出复用
+
+### 8.3 乐谱视图（ViewScore）
+- **MusicXML 导入**：新增 `core/musicxml.js` 解析器（多 part/节拍/调号/装饰音）→ 编码为 MIDI 载入
+- **PDF 导出**：`score:exportPdf`（printToPDF）；**分页预览**：SVG 栅格化 PNG 逐页展示
+- **点击定位**：点击乐谱音符定位播放头并高亮对应钢琴卷帘音符
+
+### 8.4 播放器（PlayerBar）
+- **MIDI 硬件输出**：`navigator.requestMIDIAccess` 选首个输出设备，播放时同步发送 NoteOn/NoteOff（新增 `core/midiout.js`，`player.onNote/onStop` 旁听回调），停止时 All Notes Off 防卡音
+- **BPM 输入**：与速度倍率双向联动（BPM = 原速 × tempo）
+- **混音台弹窗**：轨道音量/声像/独奏/静音（复用 `state.tracks` + store 方法）
+
+### 8.5 歌词视图（ViewLyrics）
+- **批量替换**：查找/替换遍历全部 lyric 事件
+- **编辑器内添加歌词**：编辑视图「添加歌词」为选中音符写入 lyric 事件（本视图提供入口提示）
+
+### 8.6 全局系统（App / TopBar / 新组件）
+- **设置面板**（`SettingsPanel.vue`）：外观（主题/强调色/字号/密度/语言）、引擎（Python 路径/默认模式/模型清单/依赖检查补全/诊断导出）、功能（输出目录/命名规则/监视文件夹/引导重置/MIDI 文件关联）、快捷键、插件（启用开关/重扫描/日志）
+- **完整性检验**：启动后台检查 + 设置面板警告条 + 一键修复（`integrity:check/repair`）
+- **主题库**（`ThemeLibrary.vue`）：10 个内置主题 + 图片提取主色生成自定义主题，即时换肤持久化（`core/theme.js`）
+- **命令面板**（`CommandPalette.vue`）：Ctrl+K 搜索执行视图/导入/设置等命令
+- **新手引导**（`GuideOverlay.vue`）：首次启动弹 3 场景实操引导（转录/编辑/乐谱），可跳过/重置
+- **i18n 响应式**：语言切换即时刷新外壳文案
