@@ -83,11 +83,11 @@ function onZoom(z) { zoomPct.value = Math.round(z * 100); }
 function undo() { editor.value?.undo(); refreshSel(); }
 function redo() { editor.value?.redo(); refreshSel(); }
 function del() { editor.value?.deleteSelected(); refreshSel(); }
-function quantize() { editor.value?.quantizeSelected(); refreshSel(); }
-function trUp() { editor.value?.transposeSelected(1); refreshSel(); }
-function trDown() { editor.value?.transposeSelected(-1); refreshSel(); }
-function octUp() { editor.value?.transposeSelected(12); refreshSel(); }
-function octDown() { editor.value?.transposeSelected(-12); refreshSel(); }
+function quantize() { recordCmd('quantize 8'); editor.value?.quantizeSelected(); refreshSel(); }
+function trUp() { recordCmd('transpose 1'); editor.value?.transposeSelected(1); refreshSel(); }
+function trDown() { recordCmd('transpose -1'); editor.value?.transposeSelected(-1); refreshSel(); }
+function octUp() { recordCmd('transpose 12'); editor.value?.transposeSelected(12); refreshSel(); }
+function octDown() { recordCmd('transpose -12'); editor.value?.transposeSelected(-12); refreshSel(); }
 function copy() { const n = editor.value?.copySelected() || 0; toast('已复制 ' + n + ' 个音符', 'ok'); }
 function paste() {
   const s = song.value; if (!s) return;
@@ -96,8 +96,8 @@ function paste() {
   if (n) toast('已粘贴 ' + n + ' 个音符', 'ok');
 }
 function dup() { const n = editor.value?.duplicateSelected() || 0; if (n) toast('已克隆 ' + n + ' 个音符', 'ok'); }
-function velUp() { editor.value?.velRampSelected(3); refreshSel(); }
-function velDown() { editor.value?.velRampSelected(-3); refreshSel(); }
+function velUp() { recordCmd('vel_inc 3'); editor.value?.velRampSelected(3); refreshSel(); }
+function velDown() { recordCmd('vel_dec 3'); editor.value?.velRampSelected(-3); refreshSel(); }
 function samePitch() { editor.value?.selectSamePitch(); refreshSel(); }
 function selectAll() { editor.value?.selectAll(); refreshSel(); }
 
@@ -358,6 +358,8 @@ const macroOpen = ref(false);
 const customMacros = ref([]);
 const macroName = ref('');
 const macroCmd = ref('');
+const recording = ref(false);
+const recordLines = ref([]);
 
 // CC 事件列表 / 撤销历史 / 歌词编辑 / 帮助
 const ccListOpen = ref(false);
@@ -572,6 +574,35 @@ function applyLogic() {
 }
 
 /* ---- 宏系统 ---- */
+const MACRO_DOC = [
+  { cmd: 'transpose N', desc: '将所有/选中音符移调 N 个半音（N 可为负）' },
+  { cmd: 'quantize N', desc: '按 N 分音符量化起点和时值（如 8 = 八分音符）' },
+  { cmd: 'normalize', desc: '力度归一化到 80-127（有选区时只处理选区）' },
+  { cmd: 'vel_inc N', desc: '力度增加 N（1-127 之间截断）' },
+  { cmd: 'vel_dec N', desc: '力度减少 N（1-127 之间截断）' },
+  { cmd: 'vel_fix N', desc: '将力度固定为 N' },
+  { cmd: 'clean', desc: '删除力度为 0 的音符，并量化所有音符' },
+];
+function recordCmd(cmd) {
+  if (recording.value && cmd) recordLines.value.push(cmd);
+}
+function macroToCmd(name) {
+  if (name === 'clean') return 'clean';
+  if (name === 'transpose_up') return 'transpose 12';
+  if (name === 'normalize_vel') return 'normalize';
+  return name;
+}
+function toggleRecording() {
+  recording.value = !recording.value;
+  if (!recording.value && recordLines.value.length) {
+    macroCmd.value = recordLines.value.join('\n');
+    toast('已停止录制，共捕获 ' + recordLines.value.length + ' 条操作', 'ok');
+  } else if (recording.value) {
+    recordLines.value = [];
+    toast('开始录制宏操作', 'ok');
+  }
+}
+function clearRecorded() { recordLines.value = []; }
 function loadCustomMacros() { try { return JSON.parse(localStorage.getItem('fufumidi_custom_macros') || '[]') || []; } catch (e) { return []; } }
 function saveCustomMacros(arr) { localStorage.setItem('fufumidi_custom_macros', JSON.stringify(arr)); }
 function openMacroPanel() { customMacros.value = loadCustomMacros(); macroOpen.value = true; }
@@ -594,6 +625,7 @@ function runMacro(name) {
     const range = Math.max(1, max - min);
     for (const n of src) { n.vel = Math.round(80 + (n.vel - min) / range * 47); count++; }
   }
+  recordCmd(macroToCmd(name));
   editor.value.pushStateForTrack(name === 'normalize_vel' && editor.value?.selCount() ? trackIndex.value : -1);
   editor.value.notifyExternalEdit();
   macroOpen.value = false;
@@ -612,9 +644,18 @@ function runCustomMacro(cmd) {
   const notes = s.tracks.reduce((a, t) => a.concat(t.notes), []);
   let count = 0;
   for (const line of cmd.split(/[\n;]+/).map(x => x.trim()).filter(Boolean)) {
+    if (recording.value) recordCmd(line);
     const parts = line.split(/\s+/);
     const op = parts[0], arg = parseFloat(parts[1]) || 0;
-    if (op === 'transpose') { for (const n of notes) { n.midi = clamp(n.midi + arg, 0, 127); count++; } }
+    if (op === 'clean') {
+      for (const tr of s.tracks) {
+        const before = tr.notes.length;
+        tr.notes = tr.notes.filter(n => n.vel > 0);
+        count += before - tr.notes.length;
+        for (const n of tr.notes) { const st = Math.round(n.start / tpb) * tpb; n.end = n.end - n.start + st; n.start = st; count++; }
+      }
+    }
+    else if (op === 'transpose') { for (const n of notes) { n.midi = clamp(n.midi + arg, 0, 127); count++; } }
     else if (op === 'quantize') { const gridTicks = tpb * 4 / (arg || 8); for (const n of notes) { const st = Math.round(n.start / gridTicks) * gridTicks; n.end = n.end - n.start + st; n.start = st; count++; } }
     else if (op === 'normalize') { const src = editor.value?.selCount() ? editor.value.selRef() : notes; if (src.length) { const min = Math.min(...src.map(n => n.vel)), max = Math.max(...src.map(n => n.vel)); const range = Math.max(1, max - min); for (const n of src) { n.vel = Math.round(80 + (n.vel - min) / range * 47); count++; } } }
     else if (op === 'vel_inc') { for (const n of notes) { n.vel = clamp(n.vel + arg, 1, 127); count++; } }
@@ -1198,6 +1239,16 @@ onBeforeUnmount(() => {
           <button class="btn sm" style="justify-content:flex-start" @click="runMacro('transpose_up')">批量移调<span class="muted small">所有音符升高一个八度</span></button>
           <button class="btn sm" style="justify-content:flex-start" @click="runMacro('normalize_vel')">力度标准化<span class="muted small">选中/全部音符力度归一化到 80-127</span></button>
         </div>
+        <div class="macro-record-row">
+          <button :class="['btn sm', recording ? 'danger' : '']" @click="toggleRecording">
+            {{ recording ? '停止并生成命令' : '开始录制操作' }}
+          </button>
+          <span v-if="recording" class="muted small">正在录制 {{ recordLines.length }} 条</span>
+          <button v-if="recordLines.length" class="btn sm ghost" @click="clearRecorded">清空录制</button>
+        </div>
+        <div v-if="recordLines.length" class="macro-record-list">
+          <div v-for="(r, i) in recordLines" :key="i" class="macro-record-line"><code>{{ r }}</code></div>
+        </div>
         <div class="adv-form-sec">
           <div class="adv-form-sec-title">自定义宏</div>
           <div v-for="(m, i) in customMacros" :key="i" class="macro-item">
@@ -1212,7 +1263,14 @@ onBeforeUnmount(() => {
             <input v-model="macroCmd" class="num-input" placeholder="命令：transpose 12 / quantize 8 / normalize" style="flex:2" />
             <button class="btn sm primary" @click="addCustomMacro">添加</button>
           </div>
-          <div class="muted small" style="margin-top:4px">支持命令：transpose N、quantize N、normalize、vel_inc N、vel_dec N、vel_fix N</div>
+          <div class="adv-form-sec-title">宏指令说明</div>
+          <div class="macro-doc">
+            <div v-for="d in MACRO_DOC" :key="d.cmd" class="macro-doc-row">
+              <code>{{ d.cmd }}</code>
+              <span>{{ d.desc }}</span>
+            </div>
+          </div>
+          <div class="muted small" style="margin-top:4px">操作录制：打开录制后点击内置宏或工具栏移调/量化/力度按钮，会自动生成命令；停止后填入名称即可保存为自定义宏。</div>
         </div>
       </div>
     </div>
@@ -1352,6 +1410,12 @@ onBeforeUnmount(() => {
 .macro-name { flex: 0 0 auto; font-size: 12px; font-weight: 600; }
 .macro-cmd { font-family: var(--mono); font-size: 10.5px; color: var(--stone); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .macro-add { display: flex; gap: 6px; }
+.macro-record-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.macro-record-list { display: flex; flex-wrap: wrap; gap: 4px; border: 1px dashed var(--hairline); border-radius: 8px; padding: 6px; background: var(--surface-soft); }
+.macro-record-line code { font-family: var(--mono); font-size: 11px; color: var(--accent); }
+.macro-doc { display: flex; flex-direction: column; gap: 4px; }
+.macro-doc-row { display: flex; align-items: baseline; gap: 10px; font-size: 11.5px; color: var(--slate); }
+.macro-doc-row code { font-family: var(--mono); color: var(--accent); flex: 0 0 96px; }
 .ks-list { max-height: 50vh; overflow: auto; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--hairline); border-radius: 10px; padding: 6px; }
 .ks-row { display: flex; align-items: center; gap: 8px; padding: 2px 6px; border-radius: 6px; }
 .ks-row:nth-child(odd) { background: var(--surface-soft); }
