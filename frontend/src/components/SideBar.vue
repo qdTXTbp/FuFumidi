@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue';
 import Icon from './Icon.vue';
-import { useAppStore, VIEWS } from '../stores/app';
+import { useAppStore } from '../stores/app';
 import { usePlaylistStore } from '../stores/playlist';
 import logoUrl from '../assets/logo.png';
 
@@ -11,7 +11,6 @@ const importFiles = (items) => app.importFiles(items);
 const selectSong = (id) => app.selectSong(id);
 const removeSong = (id) => app.removeSong(id);
 const toast = (m, t) => app.toast(m, t);
-const setView = (v) => app.setView(v);
 
 const fileInput = ref(null);
 const dragOver = ref(false);
@@ -368,13 +367,6 @@ function onDrop(e) {
         </div>
       </div>
 
-      <div class="nav-sep" v-if="state.songs.length"></div>
-      <div class="nav-group-title">导航</div>
-      <button class="nav-item" v-for="v in VIEWS" :key="v.id"
-              :class="{ active: state.view === v.id }" @click="setView(v.id)">
-        <span class="nav-ic"><Icon :name="v.ic" :size="15" /></span>
-        {{ v.label }}
-      </button>
     </div>
 
     <div style="padding:10px 14px;border-top:1px solid var(--border)" class="small muted row">
