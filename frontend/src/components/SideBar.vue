@@ -123,26 +123,20 @@ function dragStart(s, e) {
 function dragOverRow(e, s) {
   if (!dragId.value || !canReorder.value) return;
   dragOverId.value = s.id;
-  const r = e.currentTarget.getBoundingClientRect();
-  const before = (e.clientY - r.top) < r.height / 2;
-  const row = e.currentTarget;
-  row.classList.toggle('drag-before', before);
-  row.classList.toggle('drag-after', !before);
 }
 function dragLeaveRow(e) {
   e.currentTarget.classList.remove('drag-before', 'drag-after');
 }
 function dragOverList() {
   if (dragId.value && canReorder.value) {
-    document.querySelectorAll('.song-item').forEach(x => x.classList.remove('drag-after', 'drag-before'));
+    dragOverId.value = null;
   }
 }
 function dropOn(e, target) {
   e.stopPropagation();
-  const r = e.currentTarget.getBoundingClientRect();
-  const before = (e.clientY - r.top) < r.height / 2;
   if (dragId.value && target && dragId.value !== target.id) {
-    playlist.moveSong(dragId.value, target.id, before);
+    const to = visibleSongs.value.findIndex(x => x.id === target.id);
+    if (to >= 0) playlist.moveSongToIndex(dragId.value, to);
   }
   resetDrag();
 }
@@ -384,9 +378,7 @@ function onDrop(e) {
 .si-drag { display: inline-flex; align-items: center; color: var(--stone); cursor: grab; opacity: .35; margin-right: 2px; transition: opacity .12s; user-select: none; }
 .song-item:hover .si-drag, .song-item.dragging .si-drag { opacity: 1; }
 .song-item.dragging { opacity: .45; }
-.song-item.dragTarget { background: var(--surface-soft); }
-.song-item.drag-before { box-shadow: 0 -2px 0 0 var(--accent) !important; }
-.song-item.drag-after { box-shadow: 0 2px 0 0 var(--accent) !important; }
+.song-item.dragTarget { background: var(--surface-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 .pl-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
 .pl-head-title { font-size: 11px; font-weight: 700; color: var(--stone); letter-spacing: .4px; text-transform: uppercase; }
 .pl-list { display: flex; flex-direction: column; gap: 3px; padding: 2px; margin-bottom: 6px; border: 1px solid transparent; border-radius: 10px; transition: box-shadow .12s, background .12s; }

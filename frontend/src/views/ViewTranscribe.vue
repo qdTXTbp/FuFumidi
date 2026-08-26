@@ -357,14 +357,6 @@ async function mgrDelete(name) {
     else toast('删除失败：' + ((r && r.error) || ''), 'warn');
   } catch (e) {}
 }
-async function mgrMove(name, delta) {
-  if (!bridge || !bridge.presets) return;
-  try {
-    const r = await bridge.presets.reorder(name, delta);
-    if (r && r.ok) await loadPresets();
-    else toast('排序失败', 'warn');
-  } catch (e) {}
-}
 async function mgrRestore() {
   if (!bridge || !bridge.presets || !bridge.presets.restore) return;
   try {
@@ -873,8 +865,6 @@ onBeforeUnmount(() => {
             <span class="pm-handle" title="拖动排序">⋮⋮</span>
             <span class="pm-name" @click="mgrApply(p.name)" title="点击应用">{{ p.name }}</span>
             <span class="pm-mode">{{ p.mode }}</span>
-            <button class="btn sm ghost" title="上移" @click="mgrMove(p.name, -1)">↑</button>
-            <button class="btn sm ghost" title="下移" @click="mgrMove(p.name, 1)">↓</button>
             <button class="btn sm ghost danger" title="删除" @click="mgrDelete(p.name)">删除</button>
           </div>
         </div>
