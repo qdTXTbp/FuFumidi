@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onBeforeUnmount } from 'vue';
+import { ref, onMounted, onBeforeUnmount } from 'vue';
 import SideBar from './components/SideBar.vue';
 import TopBar from './components/TopBar.vue';
 import PlayerBar from './components/PlayerBar.vue';
@@ -24,6 +24,15 @@ import { setLang, t } from './core/i18n.js';
 import { applyTheme, loadTheme } from './core/theme.js';
 
 const bridge = window.fuBridge;
+
+// 动态壁纸无缝循环：原生 loop 在循环切换时有黑屏/卡顿，
+// 改为临近结尾时提前 seek 到开头偏后位置（跳过首帧解码延迟与开头黑帧）
+const bgVideo = ref(null);
+function onBgTime() {
+  const v = bgVideo.value;
+  if (!v || !v.duration || !isFinite(v.duration)) return;
+  if (v.currentTime > v.duration - 0.4) v.currentTime = 0.35;
+}
 
 // 字号 / 密度即时应用
 function applyDisplayPrefs(s) {
@@ -113,8 +122,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app-shell" :class="{ 'side-collapsed': !state.sidebarOpen }">
-    <!-- 动态壁纸：全屏背景视频（静音循环，毛玻璃组件透出其画面） -->
-    <video v-if="wallpaperSrc" class="app-wallpaper" :src="wallpaperSrc" autoplay muted loop playsinline preload="auto"></video>
+    <!-- 动态壁纸：全屏背景视频（静音无缝循环，毛玻璃组件透出其画面） -->
+    <video v-if="wallpaperSrc" ref="bgVideo" class="app-wallpaper" :src="wallpaperSrc"
+           autoplay muted playsinline preload="auto" @timeupdate="onBgTime"></video>
     <SideBar />
     <TopBar />
     <main class="app-main">

@@ -1292,3 +1292,29 @@ input[type="checkbox"]:active, input[type="radio"]:active { transform: scale(0.8
 .playerbar select,
 .playerbar .tp-btn.toggle-on { background: rgba(255, 255, 255, 0.14); }
 .playerbar .num-input { background: rgba(255, 255, 255, 0.14); color: #fff; border-color: rgba(255, 255, 255, 0.18); }
+
+/* 其余面板/卡片补玻璃：主题卡 / 命令面板 / 设置胶囊 / 状态框 / 插件日志 / 引导按钮 / 混音行 */
+.thm-card,
+.cmd-foot,
+.guide-btn,
+.radio-pill,
+.state-box,
+.plg-log,
+.kbd-key {
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+.cmd-item,
+.cmd-item.on {
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+.cmd-item:hover,
+.mix-track:hover,
+.song-item.batching:hover {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
