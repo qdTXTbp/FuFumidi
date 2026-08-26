@@ -1034,7 +1034,7 @@ onBeforeUnmount(() => {
           <button class="icon-btn" title="缩小" @click="editor?.zoomBy(0.85)"><Icon name="minus" :size="13" /></button>
           <span class="ez-pct">{{ zoomPct }}%</span>
           <button class="icon-btn" title="放大" @click="editor?.zoomBy(1.18)"><Icon name="plus" :size="13" /></button>
-          <button class="btn sm ghost" @click="editor?.fit()">适应</button>
+          <button class="btn sm ghost" @click="editor?.fit()"><Icon name="expand" :size="13" />适应</button>
         </div>
       </div>
 
