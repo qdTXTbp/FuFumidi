@@ -2,7 +2,8 @@
 import { ref, computed } from 'vue';
 import Icon from './Icon.vue';
 import { state, importFiles, selectSong, removeSong, toast, setView, VIEWS,
-         createPlaylist, selectPlaylist, deletePlaylist, removeSongsFromActivePlaylist, removeSongsFromLibrary } from '../store.js';
+         createPlaylist, selectPlaylist, deletePlaylist, removeSongsFromActivePlaylist, removeSongsFromLibrary,
+         moveActivePlaylistSong } from '../store.js';
 import logoUrl from '../assets/logo.png';
 
 const fileInput = ref(null);
@@ -80,6 +81,13 @@ function batchDeleteLibrary() {
   removeSongsFromLibrary(ids);
   batchSel.value = new Set();
   toast('已删除 ' + ids.length + ' 首', 'ok');
+}
+
+const dragId = ref(null);
+function dragStart(s) { dragId.value = s.id; }
+function dropOn(target) {
+  if (dragId.value && target && dragId.value !== target.id) moveActivePlaylistSong(dragId.value, target.id, true);
+  dragId.value = null;
 }
 
 function baseName(p) { return String(p).split(/[\\/]/).pop() || '未命名.mid'; }
@@ -217,6 +225,11 @@ function onDrop(e) {
            v-for="(s, i) in visibleSongs"
            :key="s.id"
            :class="{ active: s.id === state.currentId }"
+           :draggable="!batchOn"
+           @dragstart="dragStart(s)"
+           @dragover.prevent
+           @drop.prevent="dropOn(s)"
+           @dragend="dragId = null"
            @click="selectSongOrBatch(s)">
         <input v-if="batchOn" type="checkbox" class="song-check" :checked="isSel(s.id)" @click.stop="toggleSel(s.id)" />
         <span class="si-num" v-if="!batchOn && (!state.playing || s.id !== state.currentId)">{{ i + 1 }}</span>

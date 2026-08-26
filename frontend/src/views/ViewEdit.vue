@@ -934,10 +934,10 @@ onBeforeUnmount(() => {
         <button class="et-btn danger" title="删除 Del" @click="del"><Icon name="trash" :size="14" />删除</button>
         <span class="et-sep"></span>
         <button class="et-btn" title="量化到吸附网格" @click="quantize"><Icon name="quantize" :size="14" />量化</button>
-        <button class="et-btn" title="降半音" @click="trDown">-1</button>
-        <button class="et-btn" title="升半音" @click="trUp">+1</button>
-        <button class="et-btn" title="降八度" @click="octDown">-8</button>
-        <button class="et-btn" title="升八度" @click="octUp">+8</button>
+        <button class="et-btn" title="降半音" @click="trDown"><Icon name="minus" :size="14" />-1</button>
+        <button class="et-btn" title="升半音" @click="trUp"><Icon name="plus" :size="14" />+1</button>
+        <button class="et-btn" title="降八度" @click="octDown"><Icon name="minus" :size="14" />-8</button>
+        <button class="et-btn" title="升八度" @click="octUp"><Icon name="plus" :size="14" />+8</button>
         <span class="et-sep"></span>
         <button class="et-btn" title="复制 Ctrl+C" @click="copy"><Icon name="copy" :size="14" />复制</button>
         <button class="et-btn" title="粘贴到播放头 Ctrl+V" @click="paste"><Icon name="paste" :size="14" />粘贴</button>
@@ -957,12 +957,12 @@ onBeforeUnmount(() => {
         <button class="et-btn" :class="{ active: ccEnabled }" title="切换 CC 自动化泳道" @click="ccEnabled = !ccEnabled"><Icon name="cclane" :size="14" />{{ ccEnabled ? '关闭泳道' : '显示泳道' }}</button>
         <span class="et-sep"></span>
         <span class="et-label">踏板</span>
-        <button class="et-btn" title="在选区/整轨起止处添加延音踏板（CC64）" @click="addPedal">+ 踏板</button>
-        <button class="et-btn" title="删除选区/整轨内的踏板事件" @click="delPedal">- 踏板</button>
+        <button class="et-btn" title="在选区/整轨起止处添加延音踏板（CC64）" @click="addPedal"><Icon name="cclane" :size="14" />+ 踏板</button>
+        <button class="et-btn" title="删除选区/整轨内的踏板事件" @click="delPedal"><Icon name="cclane" :size="14" />- 踏板</button>
         <span class="et-sep"></span>
         <span class="et-label">循环</span>
-        <button class="et-btn" :class="{ active: state.loop }" title="将选区设为循环" @click="setLoopFromSel">选区循环</button>
-        <button class="et-btn" title="清除循环" @click="clearLoopSel">清循环</button>
+        <button class="et-btn" :class="{ active: state.loop }" title="将选区设为循环" @click="setLoopFromSel"><Icon name="loop" :size="14" />选区循环</button>
+        <button class="et-btn" title="清除循环" @click="clearLoopSel"><Icon name="minus" :size="14" />清循环</button>
         <button class="et-btn et-more" :class="{ active: advOpen }" @click="advOpen = !advOpen">
           <Icon name="chevron" :size="13" :style="{ transform: advOpen ? 'rotate(180deg)' : '' }" /> 高级
         </button>
@@ -972,45 +972,45 @@ onBeforeUnmount(() => {
       <div v-if="advOpen" class="card ed-adv">
         <div class="adv-row">
           <span class="et-label">音阶</span>
-          <button class="et-btn" :class="{ active: scaleSnap }" title="新音符吸附到当前调式音阶" @click="scaleSnap = !scaleSnap">音阶吸附</button>
+          <button class="et-btn" :class="{ active: scaleSnap }" title="新音符吸附到当前调式音阶" @click="scaleSnap = !scaleSnap"><Icon name="target" :size="14" />音阶吸附</button>
           <span class="et-sep"></span>
           <span class="et-label">批量</span>
-          <button class="et-btn" title="选中与当前音符同时发声的音符" @click="selectChordBatch">和弦</button>
-          <button class="et-btn" title="删除当前轨道短于 80ms 的音符" @click="deleteShortNotes">删短音</button>
-          <button class="et-btn" title="选区/整轨响度降低 10%" @click="loudScale(0.9)">-10%</button>
-          <button class="et-btn" title="选区/整轨响度提高 10%" @click="loudScale(1.1)">+10%</button>
+          <button class="et-btn" title="选中与当前音符同时发声的音符" @click="selectChordBatch"><Icon name="music" :size="14" />和弦</button>
+          <button class="et-btn" title="删除当前轨道短于 80ms 的音符" @click="deleteShortNotes"><Icon name="trash" :size="14" />删短音</button>
+          <button class="et-btn" title="选区/整轨响度降低 10%" @click="loudScale(0.9)"><Icon name="minus" :size="14" />-10%</button>
+          <button class="et-btn" title="选区/整轨响度提高 10%" @click="loudScale(1.1)"><Icon name="plus" :size="14" />+10%</button>
           <span class="et-sep"></span>
           <span class="et-label">BPM</span>
           <input v-model.number="bpmInput" class="num-input" type="number" min="20" max="400" step="1" style="width:62px" />
-          <button class="et-btn" title="应用为歌曲速度（改写 tempo 事件）" @click="applyBpm">应用</button>
+          <button class="et-btn" title="应用为歌曲速度（改写 tempo 事件）" @click="applyBpm"><Icon name="zap" :size="14" />应用</button>
           <span class="et-sep"></span>
-          <button class="et-btn" title="基于当前旋律/和弦自动生成 贝斯+分解和弦+铺底" @click="addAccompaniment">智能伴奏</button>
-          <button class="et-btn" title="智能量化：网格 + Groove 模板" @click="openSmartQuantize">智能量化</button>
-          <button class="et-btn" title="逻辑编辑器：批量规则处理音符" @click="openLogicEditor">逻辑</button>
-          <button class="et-btn" title="宏面板：一键执行常用批量处理" @click="openMacroPanel">宏</button>
-          <button class="et-btn" title="Key Switch 映射配置" @click="openKSMap">键位</button>
-          <button class="et-btn" title="撤销历史" @click="openHistory">历史</button>
+          <button class="et-btn" title="基于当前旋律/和弦自动生成 贝斯+分解和弦+铺底" @click="addAccompaniment"><Icon name="spark" :size="14" />智能伴奏</button>
+          <button class="et-btn" title="智能量化：网格 + Groove 模板" @click="openSmartQuantize"><Icon name="quantize" :size="14" />智能量化</button>
+          <button class="et-btn" title="逻辑编辑器：批量规则处理音符" @click="openLogicEditor"><Icon name="edit" :size="14" />逻辑</button>
+          <button class="et-btn" title="宏面板：一键执行常用批量处理" @click="openMacroPanel"><Icon name="zap" :size="14" />宏</button>
+          <button class="et-btn" title="Key Switch 映射配置" @click="openKSMap"><Icon name="kbd" :size="14" />键位</button>
+          <button class="et-btn" title="撤销历史" @click="openHistory"><Icon name="clock" :size="14" />历史</button>
         </div>
         <div class="adv-row">
           <span class="et-label">CC 绘制</span>
           <select v-model="ccMode" class="select-input" style="width:auto;padding:4px 8px">
             <option value="free">手绘</option><option value="line">直线</option><option value="curve">曲线</option>
           </select>
-          <button class="et-btn" title="查看当前轨道 CC 控制器事件" @click="openCCList">CC 列表</button>
-          <button class="et-btn" :class="{ active: cc2Enabled }" title="切换第二条 CC 泳道" @click="cc2Enabled = !cc2Enabled">CC2</button>
+          <button class="et-btn" title="查看当前轨道 CC 控制器事件" @click="openCCList"><Icon name="list" :size="14" />CC 列表</button>
+          <button class="et-btn" :class="{ active: cc2Enabled }" title="切换第二条 CC 泳道" @click="cc2Enabled = !cc2Enabled"><Icon name="cclane" :size="14" />CC2</button>
           <select v-model="cc2Number" class="select-input" style="width:auto;padding:4px 8px">
             <option v-for="c in CC_OPTIONS" :key="c[0]" :value="c[0]">{{ c[1] }}</option>
           </select>
           <span class="et-sep"></span>
           <span class="et-label">歌词</span>
-          <button class="et-btn" title="为选中的音符添加歌词" @click="openLyricEditor">添加歌词</button>
+          <button class="et-btn" title="为选中的音符添加歌词" @click="openLyricEditor"><Icon name="music" :size="14" />添加歌词</button>
           <span class="et-sep"></span>
           <span class="et-label">音频</span>
-          <button class="et-btn" title="载入原音频，在卷帘底部显示波形与起音" @click="loadAudio">载入</button>
-          <button class="et-btn" title="选区/整轨音符吸附到最近的波形起音（±80ms）" @click="snapAudio">吸附起音</button>
-          <button class="et-btn" :class="{ active: audioSyncOn }" title="播放 MIDI 时同步试听原音频" @click="toggleAudioSync">试听</button>
-           <button class="et-btn" title="嵌入视频轨道（影视配乐对齐）" @click="loadVideo">视频</button>
-           <button v-if="videoUrl" class="et-btn" title="移除视频轨道" @click="removeVideo">移除视频</button>
+          <button class="et-btn" title="载入原音频，在卷帘底部显示波形与起音" @click="loadAudio"><Icon name="import" :size="14" />载入</button>
+          <button class="et-btn" title="选区/整轨音符吸附到最近的波形起音（±80ms）" @click="snapAudio"><Icon name="target" :size="14" />吸附起音</button>
+          <button class="et-btn" :class="{ active: audioSyncOn }" title="播放 MIDI 时同步试听原音频" @click="toggleAudioSync"><Icon name="play" :size="14" />试听</button>
+           <button class="et-btn" title="嵌入视频轨道（影视配乐对齐）" @click="loadVideo"><Icon name="play2" :size="14" />视频</button>
+           <button v-if="videoUrl" class="et-btn" title="移除视频轨道" @click="removeVideo"><Icon name="trash" :size="14" />移除视频</button>
         </div>
         <div class="adv-row">
           <span class="et-label">音色</span>
@@ -1018,12 +1018,12 @@ onBeforeUnmount(() => {
             <option v-for="(nm, p) in GM_NAMES" :key="p" :value="Number(p)">{{ p }} {{ nm }}</option>
           </select>
           <button class="et-btn" :class="{ active: timbreFavs.has(Number(timbre)) }" title="收藏/取消收藏当前音色" @click="toggleTimbreFav">♡</button>
-          <button class="et-btn" title="把当前音色应用到全部非鼓轨" @click="timbreAll">全部</button>
-          <button class="et-btn" title="按轨道音域/密度/名称智能选择音色" @click="smartTimbre">智能</button>
+          <button class="et-btn" title="把当前音色应用到全部非鼓轨" @click="timbreAll"><Icon name="plus" :size="14" />全部</button>
+          <button class="et-btn" title="按轨道音域/密度/名称智能选择音色" @click="smartTimbre"><Icon name="spark" :size="14" />智能</button>
           <span class="et-sep"></span>
-          <button class="et-btn" title="同步到乐谱：在五线谱查看当前编辑结果" @click="setView('score')">乐谱同步</button>
-          <button class="et-btn" title="全屏编辑，最大化钢琴卷帘" @click="toggleFullscreen">全屏</button>
-          <button class="et-btn" title="编辑功能介绍" @click="helpOpen = true">说明</button>
+          <button class="et-btn" title="同步到乐谱：在五线谱查看当前编辑结果" @click="setView('score')"><Icon name="score" :size="14" />乐谱同步</button>
+          <button class="et-btn" title="全屏编辑，最大化钢琴卷帘" @click="toggleFullscreen"><Icon name="expand" :size="14" />全屏</button>
+          <button class="et-btn" title="编辑功能介绍" @click="helpOpen = true"><Icon name="info" :size="14" />说明</button>
         </div>
       </div>
 
@@ -1351,8 +1351,12 @@ onBeforeUnmount(() => {
 .ks-label { width: 64px; font-size: 11px; color: var(--stone); flex: none; }
 .help-scroll { max-height: 60vh; overflow: auto; display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--slate); line-height: 1.7; }
 .help-sec b { display: block; color: var(--ink); }
+.ed-fullscreen .page-head { display: none; }
 .ed-fullscreen .ed-wrap-rel { flex: 1; }
-.ed-fullscreen .ed-toolbar, .ed-fullscreen .ed-nav, .ed-fullscreen .ed-inspector, .ed-fullscreen .ed-adv { display: none; }
+.ed-fullscreen .ed-toolbar,
+.ed-fullscreen .ed-nav,
+.ed-fullscreen .ed-inspector,
+.ed-fullscreen .ed-adv { display: flex; }
 .ed-wrap-rel { position: relative; flex: 1; min-height: 0; }
 .ed-video-overlay { position: absolute; top: 4px; right: 4px; width: 300px; max-width: 34%; border-radius: 8px; z-index: 20; background: #000; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
 </style>

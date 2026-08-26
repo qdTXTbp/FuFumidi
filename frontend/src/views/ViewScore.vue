@@ -40,13 +40,18 @@ let renderCacheKey = '';
 let playingSet = new Set(); // 当前高亮的 SVG 元素
 
 const song = computed(() => (currentSong.value && currentSong.value.song) || null);
-const tracks = computed(() => (song.value ? song.value.tracks : []));
+const allTracks = computed(() => (song.value ? song.value.tracks : []));
+// 乐谱只显示有音符的轨道，空轨道（如轨道1）自动隐藏
+const tracks = computed(() => allTracks.value
+  .map((tr, idx) => ({ tr, idx, name: tr.name, notes: tr.notes, noteCount: tr.notes.length }))
+  .filter(x => x.notes && x.notes.length));
 
 const trackSel = computed({
   get: () => clamp(track.value, 0, Math.max(0, tracks.value.length - 1)),
   set: v => { track.value = parseInt(v, 10) || 0; },
 });
-const selTrack = computed(() => tracks.value[trackSel.value] || null);
+const selTrack = computed(() => tracks.value[trackSel.value]?.tr || null);
+const selTrackIdx = computed(() => tracks.value[trackSel.value]?.idx ?? 0);
 
 /* ---------------- abcjs 动态加载（本地 vendor，离线可用） ---------------- */
 function loadAbcjs() {
@@ -127,7 +132,7 @@ async function renderStaff() {
     const padL = sc ? (parseFloat(getComputedStyle(sc).paddingLeft) || 0) : 0;
     const padR = sc ? (parseFloat(getComputedStyle(sc).paddingRight) || 0) : 0;
     const pageW = Math.max(300, vpW - padL - padR - 8);
-    const xml = songToMusicXMLTrack(s, trackSel.value);
+    const xml = songToMusicXMLTrack(s, selTrackIdx.value);
 
     if (scoreVerovio && scoreVerovio.destroy) { try { scoreVerovio.destroy(); } catch (e) {} }
     scoreVerovio = new vrv.toolkit();
@@ -232,7 +237,7 @@ function setBeatWidth(el, s) {
 /* ---------------- 简谱 / TAB（HTML 渲染） ---------------- */
 function trackBlocks(multi, fn) {
   if (!song.value) return [];
-  const idxs = multi ? song.value.tracks.map((_, i) => i).filter(i => song.value.tracks[i].notes.length) : [trackSel.value];
+  const idxs = multi ? song.value.tracks.map((_, i) => i).filter(i => song.value.tracks[i].notes.length) : [selTrackIdx.value];
   return idxs.map(ti => {
     const r = fn(song.value, ti);
     return { ti, name: song.value.tracks[ti].name || (t('音轨 ') + (ti + 1)), ...r };

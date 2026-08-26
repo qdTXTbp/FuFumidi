@@ -368,6 +368,21 @@ async function mgrRestore() {
     else toast('恢复失败', 'warn');
   } catch (e) {}
 }
+const presetDragName = ref('');
+function presetDragStart(p) { presetDragName.value = p.name; }
+async function presetDrop(p) {
+  const drag = presetDragName.value;
+  presetDragName.value = '';
+  if (!drag || drag === p.name || !bridge || !bridge.presets) return;
+  try {
+    const from = presets.list.findIndex(x => x.name === drag);
+    const to = presets.list.findIndex(x => x.name === p.name);
+    if (from < 0 || to < 0) return;
+    const r = await bridge.presets.reorderTo(drag, to);
+    if (r && r.ok) await loadPresets();
+    else toast('排序失败', 'warn');
+  } catch (e) {}
+}
 
 /* ---------------- 任务模板 ---------------- */
 function loadTaskTemplates() {
@@ -848,7 +863,9 @@ onBeforeUnmount(() => {
         </div>
         <div class="preset-mgr-list">
           <div v-if="!presets.list.length" class="muted small" style="padding:16px">暂无预设</div>
-          <div v-for="p in presets.list" :key="p.name" class="preset-mgr-row">
+          <div v-for="p in presets.list" :key="p.name" class="preset-mgr-row"
+               draggable="true" @dragstart="presetDragStart(p)" @dragover.prevent @drop.prevent="presetDrop(p)" @dragend="presetDragName = ''">
+            <span class="pm-handle" title="拖动排序">⋮⋮</span>
             <span class="pm-name" @click="mgrApply(p.name)" title="点击应用">{{ p.name }}</span>
             <span class="pm-mode">{{ p.mode }}</span>
             <button class="btn sm ghost" title="上移" @click="mgrMove(p.name, -1)">↑</button>
@@ -941,6 +958,7 @@ onBeforeUnmount(() => {
 .preset-mgr-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--hairline); color: var(--ink); font-size: 14px; }
 .preset-mgr-list { flex: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
 .preset-mgr-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); }
+.pm-handle { color: var(--stone); cursor: grab; user-select: none; flex: none; }
 .pm-name { flex: 1; cursor: pointer; color: var(--ink); font-weight: 600; }
 .pm-mode { font-size: 11px; color: var(--stone); background: var(--surface-soft); padding: 2px 8px; border-radius: 99px; }
 .preset-mgr-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--hairline); }

@@ -136,6 +136,17 @@ export function removeSongsFromActivePlaylist(ids) {
     persistPlaylists();
   }
 }
+export function moveActivePlaylistSong(dragId, targetId, before) {
+  const list = state.playlists.find(p => p.id === state.activePlaylistId);
+  if (!list) return;
+  const ids = list.songIds;
+  const fi = ids.indexOf(dragId), ti = ids.indexOf(targetId);
+  if (fi < 0 || ti < 0 || fi === ti) return;
+  ids.splice(fi, 1);
+  const t = ids.indexOf(targetId);
+  ids.splice(before ? t : t + 1, 0, dragId);
+  persistPlaylists();
+}
 export function removeSongsFromLibrary(ids) {
   for (const id of ids || []) removeSong(id);
   removeSongsFromPlaylist(ids);
