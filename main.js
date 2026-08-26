@@ -43,6 +43,7 @@ const { registerSettingsIpc } = require('./main/settings-ipc');
 const { registerDiagnosticsIpc } = require('./main/diagnostics');
 const { registerSystemIpc } = require('./main/system-ipc');
 const { registerGpuIpc } = require('./main/gpu-ipc');
+const { createRustService } = require('./main/rust');
 const { pyLit, parsePyJson } = require('./main/py-util');
 
 const APP_ID = 'com.fufumidi.app';
@@ -73,6 +74,8 @@ if (!gotLock) {
     registerSettingsIpc({ ipcMain, readSettings, writeSettings });
     registerDiagnosticsIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine });
     ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, demucsModelFile, sha256File });
+    const RustService = createRustService({ app, path, fs });
+    RustService.registerRustIpc({ ipcMain });
     registerPluginsIpc();
     registerGpuIpc({
       ipcMain, dialog, BrowserWindow, app, path, fs, net, spawn,
