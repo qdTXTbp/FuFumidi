@@ -1,0 +1,47 @@
+﻿name: Build & Verify
+
+on:
+  push:
+    tags:
+      - 'v2.0.0*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r engine/requirements.txt
+
+      - name: Dependency check (universal / piano / separate)
+        run: python engine/deps.py check
+
+      - name: Engine probe
+        run: python -c "import sys; sys.path.insert(0,'engine'); import engine_basic; print('probe ok')"
+
+      - name: Pack asar
+        run: npx --yes @electron/asar pack . app.asar --unpack-dir=engine --unpack='*.node'
+
+      - name: Upload asar artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fufumidi-${{ matrix.os }}-asar
+          path: app.asar

@@ -1,0 +1,49 @@
+appId: com.fufumidi.app
+electronVersion: 33.4.11
+productName: FuFumidi
+directories:
+  output: release-base
+asarUnpack:
+  - "engine/**"
+  - "**/*.node"
+files:
+  - "**/*"
+  - "!dist/**"
+  - "!release/**"
+  - "!release-base/**"
+  - "!.git/**"
+  - "!build.js"
+  - "!electron-builder.yml"
+  - "!electron-builder.base.yml"
+extraResources:
+  - from: "E:/Midi/FuFumidi/resources/python"
+    to: python
+    filter:
+      - "**/*"
+      - "!**/torch/**"
+      - "!**/demucs/**"
+      - "!**/piano_transcription_inference/**"
+      - "!**/torchvision/**"
+      - "!**/torchaudio/**"
+      - "!**/Scripts/torchrun.exe"
+      - "!**/Scripts/demucs.exe"
+      - "!**/Scripts/f2py.exe"
+      - "!**/Scripts/torchfrtrace.exe"
+  - from: "E:/Midi/FuFumidi/resources/models"
+    to: models
+    filter:
+      - "basic_pitch_quant.onnx"
+  - from: "E:/Midi/FuFumidi/resources/elevate.exe"
+    to: elevate.exe
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: FuFumidi

@@ -1,0 +1,16 @@
+# 开发期专用依赖 —— 仅供本目录 tests/ 运行与静态检查使用。
+#
+# 【注意】这组依赖【不进打包】：
+#   - bundle-python.js / install.bat 安装的是 requirements.txt / requirements-bundle.txt，
+#     与这里的开发期工具无关；
+#   - 用完可直接删除本文件（或整份 requirements-dev.txt 移除），
+#     不影响引擎运行、打包、Electron CLI 调用。
+#
+# 安装：python -m pip install -r requirements-dev.txt
+
+pytest
+pytest-cov
+hypothesis
+ruff
+mypy
+coverage

@@ -1,0 +1,34 @@
+appId: com.fufumidi.app
+electronVersion: 33.4.11
+productName: FuFumidi
+directories:
+  output: release-ci
+asarUnpack:
+  - "engine/**"
+  - "**/*.node"
+files:
+  - "**/*"
+  - "!dist/**"
+  - "!release/**"
+  - "!release-base/**"
+  - "!release-ci/**"
+  - "!.git/**"
+  - "!build.js"
+  - "!electron-builder*.yml"
+  - "!ci-resources/**"
+extraResources:
+  - from: "ci-resources/python"
+    to: python
+  - from: "ci-resources/models"
+    to: models
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Audio
+  icon: build/icon.png
+mac:
+  target:
+    - dmg
+  category: public.app-category.music
+  icon: build/icon.png
