@@ -64,6 +64,13 @@
   --topbar-h: 52px;
   --playerbar-h: 76px;
 
+  /* 毛玻璃（玻璃拟态）：半透明底 + 背景模糊 */
+  --glass-bg: rgba(255, 255, 255, 0.62);
+  --glass-bg-strong: rgba(255, 255, 255, 0.78);
+  --glass-bg-soft: rgba(255, 255, 255, 0.45);
+  --glass-dark: rgba(14, 16, 22, 0.68);
+  --glass-blur: blur(18px) saturate(1.6);
+
   /* DM Sans 首选，回退 Inter / 系统字体（离线环境） */
   --font: "DM Sans", "Inter", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "Cascadia Code", Consolas, "Courier New", monospace;
@@ -73,7 +80,8 @@
 html, body, #app { height: 100%; margin: 0; }
 body {
   font-family: var(--font);
-  background: var(--canvas);
+  /* 占位浅色渐变背景：组件毛玻璃透出此层；未来可替换为全屏背景图 */
+  background: linear-gradient(135deg, #eef4ff 0%, #f7f3ff 42%, #fff6f4 72%, #ffffff 100%);
   color: var(--ink);
   font-size: 14px;
   line-height: 1.5;
@@ -104,9 +112,10 @@ body {
 
 .app-main {
   grid-area: main;
+  position: relative;
   overflow-y: auto;
   overflow-x: hidden;
-  background: var(--canvas);
+  background: transparent; /* 透出 body 背景，组件毛玻璃才能显效 */
   scroll-behavior: smooth;
 }
 
@@ -130,7 +139,7 @@ body {
 .brand-logo {
   width: 38px; height: 38px;
   border-radius: 11px;
-  background: linear-gradient(135deg, var(--brand-blue), #0a8f7e);
+  background: linear-gradient(135deg, var(--brand-blue), var(--brand-blue-deep));
   display: grid; place-items: center;
   box-shadow: 0 6px 18px rgba(43, 109, 243, 0.35);
   overflow: hidden;
@@ -162,12 +171,12 @@ body {
 .nav-item:hover { background: var(--surface-soft); color: var(--ink); }
 .nav-item:active { transform: scale(0.985); }
 .nav-item.active {
-  background: var(--surface);
-  color: var(--ink);
+  background: var(--brand-blue-200);
+  color: var(--brand-blue-deep);
   font-weight: 500;
 }
 .nav-item .nav-ic { width: 18px; text-align: center; flex: none; font-size: 15px; color: var(--steel); }
-.nav-item.active .nav-ic { color: var(--ink); }
+.nav-item.active .nav-ic { color: var(--brand-blue); }
 .nav-item .nav-badge { margin-left: auto; font-size: 10px; color: var(--stone); }
 
 .nav-sep { height: 1px; background: var(--hairline-soft); margin: 6px 4px; }
@@ -179,6 +188,37 @@ body {
   padding: 10px 12px 4px;
   text-transform: uppercase;
 }
+
+/* ---------- 歌单（playlist） ---------- */
+.pl-head { display: flex; align-items: center; justify-content: space-between; padding-right: 6px; }
+.pl-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--charcoal);
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s;
+}
+.pl-item:hover { background: var(--surface-soft); color: var(--ink); }
+.pl-item.on { background: var(--brand-blue-200); color: var(--brand-blue-deep); font-weight: 600; }
+.pl-item .pl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-item em { font-style: normal; font-size: 11px; color: var(--stone); font-variant-numeric: tabular-nums; }
+.pl-item.on em { color: var(--brand-blue-deep); }
+.pl-item .pl-tools { display: flex; gap: 2px; opacity: 0; transition: opacity 0.14s; }
+.pl-item:hover .pl-tools { opacity: 1; }
+.pl-new { display: flex; align-items: center; gap: 6px; padding: 4px 12px; }
+
+/* 批量管理 */
+.batch-bar { display: flex; align-items: center; gap: 6px; padding: 6px 2px; flex-wrap: wrap; border-top: 1px dashed var(--hairline); margin-top: 4px; }
+.batch-bar .select-input { padding: 4px 6px; font-size: 12px; }
+.batch-check { width: 15px; height: 15px; accent-color: var(--brand-blue); flex: none; cursor: pointer; }
+.song-item.batching { cursor: pointer; }
+.song-item.batching:hover { background: var(--surface-soft); }
+.icon-btn.heart { color: var(--stone); }
+.icon-btn.heart.on { color: var(--brand-coral); }
 
 /* ---------- 顶栏（segmented-tab） ---------- */
 .topbar {
@@ -209,7 +249,7 @@ body {
 }
 .tab:hover { background: var(--surface-soft); color: var(--ink); }
 .tab.active {
-  background: var(--ink);
+  background: var(--brand-blue);
   color: #fff;
   font-weight: 600;
 }
@@ -235,12 +275,12 @@ body {
 .btn:hover { border-color: var(--ink); background: var(--surface); }
 .btn:active { transform: translateY(1px); }
 .btn.primary {
-  border: 1px solid var(--ink);
-  background: var(--ink);
+  border: 1px solid var(--brand-blue);
+  background: var(--brand-blue);
   color: #fff;
   font-weight: 600;
 }
-.btn.primary:hover { background: var(--charcoal); border-color: var(--charcoal); box-shadow: 0 6px 20px rgba(10, 10, 10, 0.18); }
+.btn.primary:hover { background: var(--brand-blue-deep); border-color: var(--brand-blue-deep); box-shadow: 0 6px 20px rgba(20, 86, 240, 0.28); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--steel); }
 .btn.ghost:hover { background: var(--surface-soft); color: var(--ink); }
 .btn.danger { color: var(--error); border-color: rgba(212, 86, 86, 0.4); }
@@ -292,7 +332,7 @@ body {
 .page-ic {
   width: 44px; height: 44px;
   border-radius: 12px;
-  background: var(--ink);
+  background: var(--brand-blue);
   display: grid; place-items: center;
   font-size: 20px;
   color: #fff;
@@ -358,7 +398,8 @@ body {
   transition: background 0.14s, border-color 0.14s;
 }
 .song-item:hover { background: var(--surface-soft); }
-.song-item.active { background: var(--surface); border-color: var(--hairline); }
+.song-item.active { background: var(--brand-blue-200); border-color: var(--brand-blue-200); }
+.song-item.active .si-name b { color: var(--brand-blue-deep); }
 .song-item .si-num { color: var(--stone); font-size: 11px; width: 22px; text-align: right; font-variant-numeric: tabular-nums; }
 .song-item .si-name { flex: 1; min-width: 0; font-size: 13px; }
 .song-item .si-name b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--ink); }
@@ -543,6 +584,9 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 }
 .pianoroll-wrap canvas { display: block; width: 100%; }
 
+/* 分析/可视化图表 canvas：铺满容器，避免默认 300×150 内联尺寸导致错位 */
+.chart-wrap canvas { display: block; width: 100%; height: 100%; }
+
 /* ---------- Toast（白卡） ---------- */
 .toast-wrap {
   position: fixed;
@@ -667,7 +711,7 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
   transition: all 0.15s;
 }
 .ov-tab:hover { background: var(--surface-soft); color: var(--ink); }
-.ov-tab.active { background: var(--ink); color: #fff; font-weight: 600; }
+.ov-tab.active { background: var(--brand-blue); color: #fff; font-weight: 600; }
 .settings-body { flex: 1; overflow: auto; min-height: 0; }
 .settings-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--hairline); }
 
@@ -1035,7 +1079,7 @@ input[type="checkbox"]:active, input[type="radio"]:active { transform: scale(0.8
   left: 0; top: 20%; bottom: 20%;
   width: 3px;
   border-radius: 3px;
-  background: var(--ink);
+  background: var(--brand-blue);
   animation: ind-in 0.2s ease;
 }
 @keyframes ind-in { from { opacity: 0; transform: scaleY(0.4); } to { opacity: 1; transform: scaleY(1); } }
@@ -1109,3 +1153,92 @@ input[type="checkbox"]:active, input[type="radio"]:active { transform: scale(0.8
     scroll-behavior: auto !important;
   }
 }
+
+/* ============================================================
+   毛玻璃系统（玻璃拟态）
+   半透明底 + backdrop-filter 背景模糊，未来全屏背景图直接透出。
+   ============================================================ */
+/* 固定框架：侧边栏 / 顶栏 / 播放条 */
+.sidebar {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+.topbar {
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+.playerbar {
+  background: var(--glass-dark);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+
+/* 卡片 / 面板（白玻璃） */
+.card,
+.home-card,
+.mix-track,
+.plg-item,
+.az-summary,
+.stat-card,
+.az-card,
+.overlay-card,
+.cmd-palette,
+.guide-card,
+.rep-card,
+.conv-info-bar,
+.tr-sum,
+.tr-drop {
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+
+/* 列表项（浅玻璃） */
+.song-item,
+.pl-item,
+.nav-item,
+.tag,
+.chip,
+.chip-btn {
+  background: var(--glass-bg-soft);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+.song-item:hover,
+.pl-item:hover,
+.nav-item:hover {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+/* 激活 / 高亮态：主题色半透明玻璃（color-mix 让主题色透出模糊背景） */
+.song-item.active,
+.pl-item.on {
+  background: color-mix(in srgb, var(--brand-blue-200) 58%, transparent);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+.nav-item.active {
+  background: color-mix(in srgb, var(--brand-blue-200) 70%, transparent);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+/* 表单控件玻璃底 */
+.text-input,
+.select-input,
+.num-input,
+.ov-input,
+.cm-input {
+  background: var(--glass-bg-soft);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
+/* 播放条内的控件：深色玻璃上保持深色半透明输入 */
+.playerbar input,
+.playerbar select,
+.playerbar .tp-btn.toggle-on { background: rgba(255, 255, 255, 0.14); }

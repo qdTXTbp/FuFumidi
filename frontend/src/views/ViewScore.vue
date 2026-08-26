@@ -549,10 +549,11 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.score-view { display: flex; flex-direction: column; height: 100%; background: var(--canvas); }
+.score-view { display: flex; flex-direction: column; height: 100%; background: transparent; }
 .score-toolbar {
   display: flex; align-items: center; gap: 8px;
   padding: 10px 14px; border-bottom: 1px solid var(--hairline);
+  background: var(--glass-bg-strong); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
   flex-wrap: wrap; flex: none;
 }
 .tb-label { font-size: 12px; color: var(--stone); font-weight: 600; }
@@ -567,7 +568,8 @@ onBeforeUnmount(() => {
 .zf-pct { font-size: 11px; color: var(--stone); min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
 .score-pop {
   position: absolute; top: 46px; right: 130px; z-index: 40;
-  background: var(--canvas); border: 1px solid var(--hairline);
+  background: var(--glass-bg-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--hairline);
   border-radius: 12px; box-shadow: var(--shadow);
   padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
   font-size: 12.5px; color: var(--ink); min-width: 140px;
@@ -616,7 +618,8 @@ onBeforeUnmount(() => {
 }
 .pv-card {
   width: 780px; max-width: 96vw; max-height: 88vh;
-  background: var(--canvas); border: 1px solid var(--hairline);
+  background: var(--glass-bg-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--hairline);
   border-radius: 16px; box-shadow: var(--shadow-lg);
   display: flex; flex-direction: column; overflow: hidden;
 }

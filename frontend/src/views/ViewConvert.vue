@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, shallowReactive } from 'vue';
 import Icon from '../components/Icon.vue';
 import { currentSong, toast } from '../store.js';
 import { t } from '../core/i18n.js';
@@ -173,13 +173,26 @@ function downloadWav(buf, name, g) {
 }
 
 /* ==================== 视频 / 可视化导出 ==================== */
-const VE = {
+// 用 reactive 包裹：模板中 v-if="VE.veBusy / VE.previewUrl" 等才能响应变化
+const VE = shallowReactive({
   format: 'mp4', template: 'landscape', res: '1280x720', fps: 30, quality: 'medium',
   dur: 30, visual: 'mix', track: 'all', range: 'all', start: 0, end: 30,
   bitrate: 8, bgColor: '#0a0e15', showProgress: true, showChord: true, showTimecode: false,
   showLyrics: true, showWatermark: false, watermarkOpacity: 50, bgImage: null, watermark: null,
   veBusy: false, veProgress: 0, veStage: '', veCancel: false,
-};
+  // 导出预览（录制完成后可回放）
+  previewUrl: '', previewName: '',
+});
+function veDownloadPreview() {
+  if (!VE.previewUrl) return;
+  const a = document.createElement('a');
+  a.download = VE.previewName || 'fufumidi_video.webm';
+  a.href = VE.previewUrl; a.click();
+}
+function veClosePreview() {
+  if (VE.previewUrl) { try { URL.revokeObjectURL(VE.previewUrl); } catch (e) {} }
+  VE.previewUrl = ''; VE.previewName = '';
+}
 const veResCustom = ref(false);
 function vePickBgImage() { vePickImage((d) => { VE.bgImage = d; }); }
 function vePickWatermark() { vePickImage((d) => { VE.watermark = d; }); }
@@ -424,6 +437,11 @@ async function renderVideo() {
       step();
     });
     const webm = new Blob(chunks, { type: 'video/webm' });
+    // 生成本地预览（WebM 可直接回放）
+    if (VE.previewUrl) { try { URL.revokeObjectURL(VE.previewUrl); } catch (e) {} }
+    VE.previewUrl = URL.createObjectURL(webm);
+    VE.previewName = (s.name || 'video') + '.webm';
+    VE.veStage = t('预览已生成，正在转码 MP4…');
     const data = new Uint8Array(await webm.arrayBuffer());
     VE.veStage = t('转码为 MP4…');
     if (bridge && bridge.transcodeVideo) {
@@ -595,13 +613,26 @@ async function renderVideo() {
         <span>{{ Math.round(VE.veProgress) }}%</span>
       </div>
       <button v-if="VE.veBusy" class="btn sm danger" @click="VE.veCancel = true">取消导出</button>
+
+      <!-- 导出预览播放器（录制完成 / 转码完成后可回放） -->
+      <div v-if="VE.previewUrl" class="ve-preview">
+        <div class="ve-preview-head">
+          <b><Icon name="play2" :size="13" /> {{ t('导出预览') }}</b>
+          <button class="icon-btn" style="width:26px;height:26px" :title="t('关闭')" @click="veClosePreview"><Icon name="close" :size="13" /></button>
+        </div>
+        <video :src="VE.previewUrl" controls muted playsinline loop></video>
+        <div class="ve-preview-actions">
+          <button class="btn sm" @click="veDownloadPreview"><Icon name="download" :size="13" /> {{ t('下载 WebM') }}</button>
+          <span class="muted small">{{ t('桌面版可一键转码为 MP4（H.264 + AAC）') }}</span>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
 .convert-view { max-width: 820px; padding: 18px 26px 40px; }
-.conv-info-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 12px; padding: 8px 14px; margin-bottom: 12px; font-size: 12.5px; color: var(--steel); }
+.conv-info-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: var(--glass-bg-strong); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); border: 1px solid var(--hairline); border-radius: 12px; padding: 8px 14px; margin-bottom: 12px; font-size: 12.5px; color: var(--steel); }
 .conv-song { color: var(--stone); }
 .conv-form { display: flex; flex-direction: column; gap: 16px; }
 .form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px 20px; }
@@ -610,12 +641,12 @@ async function renderVideo() {
 .field-row label { font-size: 12px; color: var(--steel); font-weight: 600; display: flex; align-items: center; gap: 8px; }
 .gain-row { flex-direction: row; align-items: center; justify-content: space-between; }
 .range { flex: 1; accent-color: var(--ink); }
-.conv-est { display: flex; align-items: center; gap: 10px; background: var(--surface-soft); border-radius: 10px; padding: 8px 14px; font-size: 12px; color: var(--steel); }
+.conv-est { display: flex; align-items: center; gap: 10px; background: var(--glass-bg-soft); border-radius: 10px; padding: 8px 14px; font-size: 12px; color: var(--steel); }
 .conv-est b { color: var(--ink); font-size: 15px; margin-right: 8px; font-variant-numeric: tabular-nums; }
 .conv-est em { font-style: normal; color: var(--stone); }
 .btn.big { width: 100%; padding: 12px 18px; font-size: 14px; }
 .conv-progress { display: flex; align-items: center; gap: 10px; height: 20px; background: var(--surface-soft); border-radius: 999px; overflow: hidden; padding: 0 12px; font-size: 11px; color: var(--steel); font-variant-numeric: tabular-nums; }
-.conv-progress .pfill { height: 100%; background: var(--ink); border-radius: 999px; transition: width 0.2s; }
+.conv-progress .pfill { height: 100%; background: var(--brand-blue); border-radius: 999px; transition: width 0.2s; }
 .conv-done-tip { color: var(--success-text); font-size: 12.5px; font-weight: 600; text-align: center; }
 .ve-card { margin-top: 18px; padding: 18px; }
 .ve-head { display: flex; flex-direction: column; gap: 4px; }
@@ -623,5 +654,11 @@ async function renderVideo() {
 .ve-opts { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--slate); }
 .ve-opts label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .ve-opts input[type=checkbox] { accent-color: var(--ink); }
-.num-input { width: 100%; padding: 6px 8px; font-size: 12px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 8px; color: var(--ink); outline: none; box-sizing: border-box; }
+.num-input { width: 100%; padding: 6px 8px; font-size: 12px; background: var(--glass-bg-soft); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border: 1px solid var(--hairline); border-radius: 8px; color: var(--ink); outline: none; box-sizing: border-box; }
+.ve-preview { margin-top: 14px; border: 1px solid var(--hairline); border-radius: var(--radius-lg); overflow: hidden; }
+.ve-preview-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--hairline); background: var(--glass-bg-soft); }
+.ve-preview-head b { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink); }
+.ve-preview video { display: block; width: 100%; max-height: 420px; background: #000; }
+.ve-preview-actions { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--hairline); }
+.ve-preview-actions .muted { margin-left: auto; }
 </style>

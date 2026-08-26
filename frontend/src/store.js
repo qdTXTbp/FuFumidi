@@ -26,6 +26,13 @@ export const state = reactive({
   // 歌单
   songs: [],
   currentId: null,
+  // 多歌单：playlists 为 [{ id, name, fav, items: [songId] }]；'all' 是虚拟歌单（全部曲目）
+  playlists: [],
+  activePl: 'all',
+  favs: [],
+  // 批量管理模式（勾选歌曲做批量操作）
+  batchMode: false,
+  batchSel: [],
 
   // 播放状态
   playing: false,
@@ -184,10 +191,132 @@ export async function removeSong(id) {
   const { player } = ensureAudio();
   if (wasCurrent) { player.stop(); state.playing = false; state.currentId = null; state.tracks = []; }
   state.songs.splice(i, 1);
+  // 从所有歌单中移除引用
+  for (const pl of state.playlists) pl.items = pl.items.filter(x => x !== id);
+  state.favs = state.favs.filter(x => x !== id);
+  savePlaylists();
   await idbDelete(STORE_SONGS, id);
   if (wasCurrent) { try { localStorage.removeItem('fufumidi_active'); } catch (e) {} }
   if (state.songs.length) await selectSong(state.songs[0].id);
 }
+
+/* ---------------- 多歌单（新建 / 重命名 / 删除 / 收藏 / 批量管理） ---------------- */
+const LS_PLAYLISTS = 'fufumidi_playlists';
+const LS_ACTIVE_PL = 'fufumidi_active_pl';
+const LS_FAVS = 'fufumidi_favs';
+
+export function loadPlaylists() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(LS_PLAYLISTS) || '[]');
+    if (Array.isArray(arr)) {
+      state.playlists.splice(0, state.playlists.length,
+        ...arr.filter(p => p && typeof p.id === 'string').map(p => ({ id: p.id, name: p.name || '未命名歌单', fav: !!p.fav, items: Array.isArray(p.items) ? p.items.filter(x => typeof x === 'string') : [] })));
+    }
+  } catch (e) {}
+  try {
+    const f = JSON.parse(localStorage.getItem(LS_FAVS) || '[]');
+    if (Array.isArray(f)) state.favs.splice(0, state.favs.length, ...f.filter(x => typeof x === 'string'));
+  } catch (e) {}
+  try {
+    const ap = localStorage.getItem(LS_ACTIVE_PL);
+    if (ap && (ap === 'all' || state.playlists.some(p => p.id === ap))) state.activePl = ap;
+  } catch (e) {}
+}
+export function savePlaylists() {
+  try {
+    localStorage.setItem(LS_PLAYLISTS, JSON.stringify(state.playlists.map(p => ({ id: p.id, name: p.name, fav: !!p.fav, items: p.items }))));
+    localStorage.setItem(LS_FAVS, JSON.stringify(state.favs));
+    localStorage.setItem(LS_ACTIVE_PL, state.activePl);
+  } catch (e) {}
+}
+export function createPlaylist(name) {
+  const n = String(name || '').trim();
+  if (!n) { toast('请输入歌单名', 'warn'); return null; }
+  if (state.playlists.some(p => p.name === n)) { toast('已存在同名歌单', 'warn'); return null; }
+  const pl = { id: cryptoId(), name: n, fav: false, items: [] };
+  state.playlists.push(pl);
+  savePlaylists();
+  state.activePl = pl.id;
+  toast('已创建歌单「' + n + '」', 'ok');
+  return pl;
+}
+export function renamePlaylist(id, name) {
+  const pl = state.playlists.find(p => p.id === id);
+  if (!pl) return;
+  const n = String(name || '').trim();
+  if (!n) return;
+  pl.name = n;
+  savePlaylists();
+}
+export function deletePlaylist(id) {
+  const i = state.playlists.findIndex(p => p.id === id);
+  if (i < 0) return;
+  const pl = state.playlists[i];
+  if (!window.confirm('删除歌单「' + pl.name + '」？歌曲不会被删除。')) return;
+  state.playlists.splice(i, 1);
+  if (state.activePl === id) state.activePl = 'all';
+  savePlaylists();
+  toast('歌单已删除', 'ok');
+}
+export function addSongToPl(plId, songId) {
+  const pl = state.playlists.find(p => p.id === plId);
+  if (!pl) return;
+  if (!pl.items.includes(songId)) pl.items.push(songId);
+  savePlaylists();
+}
+export function removeSongFromPl(plId, songId) {
+  const pl = state.playlists.find(p => p.id === plId);
+  if (!pl) return;
+  pl.items = pl.items.filter(x => x !== songId);
+  savePlaylists();
+}
+export function isFav(songId) { return state.favs.includes(songId); }
+export function toggleFav(songId) {
+  const i = state.favs.indexOf(songId);
+  if (i >= 0) state.favs.splice(i, 1);
+  else state.favs.push(songId);
+  savePlaylists();
+  toast(i >= 0 ? '已取消收藏' : '已加入收藏', 'ok');
+}
+// 批量操作
+export function setBatchMode(on) {
+  state.batchMode = !!on;
+  if (!on) state.batchSel = [];
+}
+export function toggleBatchSel(songId) {
+  const i = state.batchSel.indexOf(songId);
+  if (i >= 0) state.batchSel.splice(i, 1);
+  else state.batchSel.push(songId);
+}
+export async function batchRemoveSongs() {
+  if (!state.batchSel.length) { toast('请先勾选歌曲', 'warn'); return; }
+  const n = state.batchSel.length;
+  if (!window.confirm('删除选中的 ' + n + ' 首歌曲？')) return;
+  const ids = state.batchSel.slice();
+  for (const id of ids) await removeSong(id);
+  setBatchMode(false);
+  toast('已删除 ' + n + ' 首歌曲', 'ok');
+}
+export function batchMoveToPl(plId) {
+  if (!state.batchSel.length) { toast('请先勾选歌曲', 'warn'); return; }
+  const pl = state.playlists.find(p => p.id === plId);
+  if (!pl) return;
+  const n = state.batchSel.length;
+  for (const id of state.batchSel) if (!pl.items.includes(id)) pl.items.push(id);
+  savePlaylists();
+  state.activePl = pl.id;
+  setBatchMode(false);
+  toast('已添加 ' + n + ' 首到「' + pl.name + '」', 'ok');
+}
+
+// 当前歌单的歌曲（响应式过滤：all / 收藏 / 指定歌单）
+export const plSongs = computed(() => {
+  if (state.activePl === 'all') return state.songs;
+  if (state.activePl === 'fav') return state.songs.filter(s => state.favs.includes(s.id));
+  const pl = state.playlists.find(p => p.id === state.activePl);
+  if (!pl) return state.songs;
+  return pl.items.map(id => state.songs.find(s => s.id === id)).filter(Boolean);
+});
 
 /* ---------------- 播放控制 ---------------- */
 export async function selectSong(id) {

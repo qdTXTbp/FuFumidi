@@ -7,6 +7,7 @@ import { state, currentSong, toast, importFiles } from '../store.js';
 import { ensureAudio } from '../audio.js';
 import { encodeMidi } from '../core/midi.js';
 import { noteName, clamp } from '../core/util.js';
+import { t } from '../core/i18n.js';
 
 const bridge = window.fuBridge;
 
@@ -162,19 +163,43 @@ function applyVelCurve() {
   toast('力度曲线已应用', 'ok');
 }
 
-/* ---------------- 列表编辑器 ---------------- */
+/* ---------------- 列表编辑器（当前轨道全部音符 · 支持添加/删除/排序） ---------------- */
+const listTrack = ref(0);
 function openList() {
-  const notes = editor.value?.selNotes();
-  if (!notes || !notes.length) { toast('请先在钢琴卷帘中选择音符', 'warn'); return; }
-  listDraft.value = notes.map(n => ({ start: n.start, end: n.end, midi: n.midi, vel: n.vel }));
+  const s = song.value, tr = s?.tracks[trackIndex.value];
+  if (!tr) { toast('请先载入 MIDI', 'warn'); return; }
+  listTrack.value = trackIndex.value;
+  listDraft.value = tr.notes.map(n => ({ start: n.start, end: n.end, midi: n.midi, vel: n.vel }));
   listOpen.value = true;
 }
+function loadListTrack() {
+  const tr = song.value?.tracks[listTrack.value];
+  if (!tr) return;
+  listDraft.value = tr.notes.map(n => ({ start: n.start, end: n.end, midi: n.midi, vel: n.vel }));
+}
 function saveList() {
-  editor.value?.applyDraft(listDraft.value);
+  const s = song.value, ti = listTrack.value;
+  const tr = s?.tracks[ti];
+  if (!tr) { toast('目标轨道不存在', 'warn'); return; }
+  const arr = listDraft.value.map(d => ({
+    start: Math.max(0, Math.round(d.start)),
+    end: Math.max(1, Math.round(d.end)),
+    midi: clamp(Math.round(d.midi), 0, 127),
+    vel: clamp(Math.round(d.vel), 1, 127),
+  })).sort((a, b) => a.start - b.start);
+  editor.value.pushStateForTrack(ti);
+  tr.notes = arr;
+  editor.value.notifyExternalEdit();
   listOpen.value = false;
   refreshSel();
-  toast('列表修改已应用', 'ok');
+  toast('列表修改已应用（' + arr.length + ' 个音符）', 'ok');
 }
+function listAddRow() {
+  const last = listDraft.value[listDraft.value.length - 1];
+  listDraft.value.push({ start: last ? last.end : 0, end: last ? last.end + 240 : 240, midi: 60, vel: 80 });
+}
+function listDelRow(i) { listDraft.value.splice(i, 1); }
+function listSortRows() { listDraft.value.sort((a, b) => a.start - b.start); }
 function addPedal() {
   const n = editor.value?.addPedal() || 0;
   if (n) toast('已添加踏板（CC64 起止）', 'ok');
@@ -846,8 +871,8 @@ onBeforeUnmount(() => {
     <div class="page-head">
       <div class="page-ic"><Icon name="edit" :size="20" /></div>
       <div class="grow">
-        <div class="page-title">编辑器</div>
-        <div class="page-sub">钢琴卷帘 · 画笔点击添加 · 拖拽移动 · 边缘拉伸</div>
+        <div class="page-title">{{ t('编辑器') }}</div>
+        <div class="page-sub">{{ t('钢琴卷帘 · 画笔点击添加 · 拖拽移动 · 边缘拉伸') }}</div>
       </div>
       <button class="btn sm" @click="selectAll">全选</button>
       <button class="btn sm" @click="newMidi"><Icon name="plus" :size="13" /> 新建</button>
@@ -856,8 +881,8 @@ onBeforeUnmount(() => {
 
     <div v-if="!currentSong" class="empty card">
       <div class="empty-ic"><Icon name="edit" :size="34" /></div>
-      <b>还没有载入曲目</b>
-      <p>导入 MIDI 文件后即可在钢琴卷帘中逐音符精修：添加、移动、拉伸、量化、移调。</p>
+      <b>{{ t('还没有载入曲目') }}</b>
+      <p>{{ t('导入 MIDI 文件后即可在钢琴卷帘中逐音符精修：添加、移动、拉伸、量化、移调。') }}</p>
     </div>
 
     <template v-else>
@@ -1027,14 +1052,23 @@ onBeforeUnmount(() => {
 
     <!-- 列表编辑器弹窗 -->
     <div v-if="listOpen" class="ed-modal-mask" @click.self="listOpen = false">
-      <div class="ed-modal">
+      <div class="ed-modal" style="width:min(760px,94vw)">
         <div class="ed-modal-head">
-          <b>列表编辑器</b><span class="muted small">精确修改选中 {{ listDraft.length }} 个音符（单位：tick）</span>
+          <b>列表编辑器</b><span class="muted small">轨道全部 {{ listDraft.length }} 个音符（单位：tick）</span>
           <button class="icon-btn" style="margin-left:auto" @click="listOpen = false"><Icon name="minus" :size="14" /></button>
+        </div>
+        <div class="adv-row">
+          <span class="et-label">编辑轨道</span>
+          <select v-model.number="listTrack" class="select-input" style="max-width:220px" @change="loadListTrack">
+            <option v-for="(tr, i) in song.tracks" :key="i" :value="i">{{ tr.name }}（{{ tr.notes.length }}）</option>
+          </select>
+          <button class="btn sm" @click="listAddRow"><Icon name="plus" :size="13" /> 添加音符</button>
+          <button class="btn sm" @click="listSortRows">排序</button>
+          <span class="et-label" style="margin-left:auto">时长 = 终点 − 起点</span>
         </div>
         <div class="ed-list-scroll">
           <table class="ed-list-table">
-            <thead><tr><th>#</th><th>起点</th><th>终点</th><th>音高</th><th>力度</th><th>时长</th></tr></thead>
+            <thead><tr><th>#</th><th>起点</th><th>终点</th><th>音高</th><th>力度</th><th>时长</th><th></th></tr></thead>
             <tbody>
               <tr v-for="(r, i) in listDraft" :key="i">
                 <td>{{ i + 1 }}</td>
@@ -1043,6 +1077,7 @@ onBeforeUnmount(() => {
                 <td><input type="number" class="num-input" v-model.number="r.midi" step="1" min="0" max="127" /></td>
                 <td><input type="number" class="num-input" v-model.number="r.vel" step="1" min="1" max="127" /></td>
                 <td class="muted small">{{ r.end - r.start }}</td>
+                <td><button class="btn sm danger" @click="listDelRow(i)"><Icon name="trash" :size="12" /></button></td>
               </tr>
             </tbody>
           </table>
@@ -1260,18 +1295,18 @@ onBeforeUnmount(() => {
 .ins-item { display: inline-flex; align-items: center; gap: 5px; }
 .ins-item b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .ins-item input[type=range] { accent-color: var(--ink); }
-.num-input { width: 60px; padding: 3px 5px; font-size: 11px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 6px; color: var(--ink); font-family: var(--mono); outline: none; }
+.num-input { width: 60px; padding: 3px 5px; font-size: 11px; background: var(--glass-bg-soft); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); border: 1px solid var(--hairline); border-radius: 6px; color: var(--ink); font-family: var(--mono); outline: none; }
 .num-input:focus { border-color: var(--ink); }
 .et-tip { margin-left: auto; color: var(--stone); font-size: 10.5px; }
 .ed-modal-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.35); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.ed-modal { width: min(560px, 92vw); background: #fff; border-radius: 14px; box-shadow: 0 24px 64px rgba(16,24,40,0.2); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.ed-modal { width: min(560px, 92vw); background: var(--glass-bg-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border-radius: 14px; box-shadow: 0 24px 64px rgba(16,24,40,0.2); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .ed-modal-head { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink); }
 .ed-modal-head b { font-size: 15px; }
 .vc-canvas { width: 100%; display: block; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; cursor: crosshair; touch-action: none; }
 .ed-modal-foot { display: flex; justify-content: flex-end; gap: 8px; }
 .ed-list-scroll { max-height: 40vh; overflow: auto; border: 1px solid var(--hairline); border-radius: 10px; }
 .ed-list-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.ed-list-table th { position: sticky; top: 0; background: var(--surface); text-align: left; padding: 6px 8px; font-weight: 600; color: var(--slate); border-bottom: 1px solid var(--hairline); font-size: 11px; }
+.ed-list-table th { position: sticky; top: 0; background: var(--glass-bg-soft); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); text-align: left; padding: 6px 8px; font-weight: 600; color: var(--slate); border-bottom: 1px solid var(--hairline); font-size: 11px; }
 .ed-list-table td { padding: 3px 6px; border-bottom: 1px solid var(--hairline-soft); color: var(--ink); }
 .ed-list-table td .num-input { width: 70px; }
 .drum-canvas { width: 100%; display: block; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; cursor: crosshair; touch-action: none; }
@@ -1284,13 +1319,13 @@ onBeforeUnmount(() => {
 .adv-form-sec-title { font-size: 12px; font-weight: 700; color: var(--ink); }
 .macro-list { display: flex; flex-direction: column; gap: 6px; }
 .macro-list .btn { width: 100%; flex-direction: column; align-items: flex-start; gap: 2px; }
-.macro-item { display: flex; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--hairline); border-radius: 8px; padding: 4px 8px; }
+.macro-item { display: flex; align-items: center; gap: 8px; background: var(--glass-bg); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border: 1px solid var(--hairline); border-radius: 8px; padding: 4px 8px; }
 .macro-name { flex: 0 0 auto; font-size: 12px; font-weight: 600; }
 .macro-cmd { font-family: var(--mono); font-size: 10.5px; color: var(--stone); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .macro-add { display: flex; gap: 6px; }
 .ks-list { max-height: 50vh; overflow: auto; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--hairline); border-radius: 10px; padding: 6px; }
 .ks-row { display: flex; align-items: center; gap: 8px; padding: 2px 6px; border-radius: 6px; }
-.ks-row:nth-child(odd) { background: var(--surface-soft); }
+.ks-row:nth-child(odd) { background: var(--glass-bg-soft); }
 .ks-label { width: 64px; font-size: 11px; color: var(--stone); flex: none; }
 .help-scroll { max-height: 60vh; overflow: auto; display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--slate); line-height: 1.7; }
 .help-sec b { display: block; color: var(--ink); }

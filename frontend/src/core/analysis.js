@@ -1,6 +1,7 @@
 // 音乐分析辅助（从 legacy FuFumidi.html 抽取，行为一致，图表适配 MiniMax 浅色主题）
 import { t } from './i18n.js';
 import { KEY_NAME, noteName, clamp } from './util.js';
+import { accentRgb } from './theme.js';
 
 export function detectKey(notes) {
   const h = new Array(12).fill(0);
@@ -77,7 +78,7 @@ export function barChart(cv, values, opts = {}) {
   for (let i = 0; i < n; i++) {
     const v = values[i];
     const bh = Math.max(1, v / max * (h - pad * 2 - 14));
-    ctx.fillStyle = opts.hotAt && opts.hotAt(i) ? 'rgba(255,85,48,0.95)' : 'rgba(20,86,240,0.85)';
+    ctx.fillStyle = opts.hotAt && opts.hotAt(i) ? 'rgba(255,85,48,0.95)' : 'rgba(' + accentRgb() + ',0.85)';
     ctx.fillRect(pad + i * bw + bw * 0.15, h - pad - bh, bw * 0.7, bh);
   }
   if (opts.labels) {

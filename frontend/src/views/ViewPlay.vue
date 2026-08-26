@@ -4,6 +4,7 @@ import Icon from '../components/Icon.vue';
 import PianoRoll from '../components/PianoRoll.vue';
 import { state, currentSong, toggleTrackMute, toggleTrackSolo, setTrackVol, setTrackPan } from '../store.js';
 import { fmtTime } from '../core/util.js';
+import { t } from '../core/i18n.js';
 
 const stats = computed(() => {
   const song = currentSong.value && currentSong.value.song;
@@ -30,8 +31,8 @@ function panStyle(i) {
     <div class="page-head">
       <div class="page-ic"><Icon name="play2" :size="20" /></div>
       <div class="grow">
-        <div class="page-title">{{ currentSong?.name || '演奏工作区' }}</div>
-        <div class="page-sub">{{ currentSong ? '钢琴卷帘预览 · 轨道混音 · 实时播放' : '导入 MIDI 文件即可开始演奏与混音' }}</div>
+        <div class="page-title">{{ currentSong?.name || t('演奏工作区') }}</div>
+        <div class="page-sub">{{ currentSong ? t('钢琴卷帘预览 · 轨道混音 · 实时播放') : t('导入 MIDI 文件即可开始演奏与混音') }}</div>
       </div>
       <div v-if="stats" class="row" style="gap:8px;flex-wrap:wrap">
         <span class="tag accent">♩ {{ stats.bpm }} BPM</span>
@@ -46,7 +47,7 @@ function panStyle(i) {
     <div v-if="!currentSong" class="empty card">
       <div class="empty-ic"><Icon name="music" :size="34" /></div>
       <b>还没有载入曲目</b>
-      <p>点击左侧「导入 MIDI」按钮，或直接把 .mid / .midi 文件拖进窗口，即可在此查看钢琴卷帘并实时播放。</p>
+      <p>{{ t('点击左侧「导入 MIDI」按钮，或直接把 .mid / .midi 文件拖进窗口，即可在此查看钢琴卷帘并实时播放。') }}</p>
     </div>
 
     <template v-else>

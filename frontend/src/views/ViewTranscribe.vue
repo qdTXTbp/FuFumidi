@@ -4,6 +4,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { toast, importFiles, setView } from '../store.js';
 import { clamp, esc, fmtTime } from '../core/util.js';
+import { t } from '../core/i18n.js';
 
 const bridge = window.fuBridge;
 const isDesktop = !!(bridge && bridge.convert);
@@ -55,6 +56,7 @@ const waveBox = ref(null);
 // 参数预设
 const presets = reactive({ list: [], builtins: [] });
 const presetSel = ref('');
+const presetMgrOpen = ref(false);
 
 // 任务模板
 const taskTemplates = reactive([]);
@@ -312,14 +314,43 @@ async function savePreset() {
     else toast('保存预设失败：' + ((r && r.error) || ''), 'warn');
   } catch (e) {}
 }
-async function delPreset() {
-  if (!bridge || !bridge.presets || !presetSel.value) return;
-  if (!window.confirm('删除预设「' + presetSel.value + '」？')) return;
+async function delPreset(name) {
+  const target = name || presetSel.value;
+  if (!bridge || !bridge.presets || !target) return;
+  const isBuiltin = presets.builtins.includes(target);
+  if (!window.confirm(isBuiltin
+    ? '删除内置预设「' + target + '」？将隐藏该预设，可在预设管理中一键恢复。'
+    : '删除预设「' + target + '」？')) return;
   try {
-    const r = await bridge.presets.delete(presetSel.value);
-    if (r && r.ok) { toast('预设已删除', 'ok'); loadPresets(); }
+    const r = await bridge.presets.delete(target);
+    if (r && r.ok) {
+      toast(isBuiltin ? '内置预设已隐藏' : '预设已删除', 'ok');
+      loadPresets();
+    }
   } catch (e) {}
 }
+async function movePreset(name, delta) {
+  if (!bridge || !bridge.presets) return;
+  try {
+    const r = await bridge.presets.reorder(name, delta);
+    if (r && r.ok && Array.isArray(r.order)) {
+      presets.list.splice(0, presets.list.length, ...r.order.map(nm => {
+        const cur = presets.list.find(x => x.name === nm);
+        return cur ? { ...cur, name: nm } : { name: nm };
+      }));
+    } else loadPresets();
+  } catch (e) { loadPresets(); }
+}
+async function restorePresets() {
+  if (!bridge || !bridge.presets) return;
+  if (!window.confirm('一键恢复全部内置预设？用户自定义预设不受影响。')) return;
+  try {
+    const r = await bridge.presets.restore();
+    if (r && r.ok) { toast('已恢复全部内置预设', 'ok'); loadPresets(); }
+    else toast('恢复失败：' + ((r && r.error) || ''), 'warn');
+  } catch (e) {}
+}
+function isBuiltinPreset(name) { return presets.builtins.includes(name); }
 
 /* ---------------- 任务模板 ---------------- */
 function loadTaskTemplates() {
@@ -572,11 +603,11 @@ onBeforeUnmount(() => {
     <div class="page-head">
       <div class="page-ic"><Icon name="transcribe" :size="20" /></div>
       <div class="grow">
-        <div class="page-title">转录</div>
-        <div class="page-sub">音频转 MIDI · 本地 Python 引擎 · 离线完成</div>
+        <div class="page-title">{{ t('转录') }}</div>
+        <div class="page-sub">{{ t('音频转 MIDI · 本地 Python 引擎 · 离线完成') }}</div>
       </div>
       <span v-if="gpuInfo" class="tag accent">{{ gpuInfo }}</span>
-      <span class="tag" :class="isDesktop ? '' : 'warn-tag'">{{ isDesktop ? '桌面引擎就绪' : '请使用桌面版' }}</span>
+      <span class="tag" :class="isDesktop ? '' : 'warn-tag'">{{ isDesktop ? t('桌面引擎就绪') : t('请使用桌面版') }}</span>
     </div>
 
     <!-- 音频选择 -->
@@ -685,12 +716,36 @@ onBeforeUnmount(() => {
           <div class="tr-preset-row">
             <label class="fb-label" style="margin:0">参数预设</label>
             <div class="row" style="gap:6px">
-              <select class="select-input" v-model="presetSel" title="选择预设并应用" style="min-width:138px">
+              <select class="select-input" v-model="presetSel" title="选择预设并应用" style="min-width:138px" @change="presetSel && applyPreset(presetSel)">
                 <option v-for="p in presets.list" :key="p.name" :value="p.name">{{ p.name }}{{ presets.builtins.includes(p.name) ? '' : ' ✎' }}</option>
               </select>
               <button class="btn sm" @click="presetSel && applyPreset(presetSel)">应用</button>
               <button class="btn sm" @click="savePreset"><Icon name="plus" :size="13" /> 保存</button>
-              <button class="btn sm ghost danger" @click="delPreset"><Icon name="trash" :size="13" /> 删除</button>
+              <button class="btn sm ghost" @click="presetMgrOpen = true"><Icon name="gear" :size="13" /> 管理</button>
+              <button class="btn sm ghost danger" @click="delPreset()"><Icon name="trash" :size="13" /> 删除</button>
+            </div>
+          </div>
+
+          <!-- 预设管理器：排序 / 隐藏内置 / 一键恢复 -->
+          <div v-if="presetMgrOpen" class="preset-mgr">
+            <div class="pm-head">
+              <b><Icon name="gear" :size="13" /> 预设管理</b>
+              <button class="icon-btn" style="width:26px;height:26px" :title="t('关闭')" @click="presetMgrOpen = false"><Icon name="close" :size="13" /></button>
+            </div>
+            <div class="pm-list">
+              <div class="pm-item" v-for="(p, i) in presets.list" :key="p.name" :class="{ builtin: isBuiltinPreset(p.name) }">
+                <button class="icon-btn" style="width:24px;height:24px" :disabled="i === 0" title="上移" @click="movePreset(p.name, -1)">↑</button>
+                <button class="icon-btn" style="width:24px;height:24px" :disabled="i === presets.list.length - 1" title="下移" @click="movePreset(p.name, 1)">↓</button>
+                <span class="pm-name" :title="p.name">{{ p.name }}</span>
+                <span class="tag" :class="isBuiltinPreset(p.name) ? '' : 'accent'">{{ isBuiltinPreset(p.name) ? '内置' : '自定义' }}</span>
+                <span class="muted small pm-mode">{{ (MODE_NAMES[p.mode] || p.mode || '') }}</span>
+                <button class="icon-btn" style="width:24px;height:24px" title="删除/隐藏" @click="delPreset(p.name)"><Icon name="trash" :size="12" /></button>
+              </div>
+              <div v-if="!presets.list.length" class="muted small" style="padding:10px;text-align:center">暂无预设</div>
+            </div>
+            <div class="pm-foot">
+              <button class="btn sm ghost" @click="restorePresets"><Icon name="undo" :size="13" /> 一键恢复全部内置</button>
+              <span class="muted small" style="margin-left:auto">{{ t('内置预设删除后隐藏，可一键恢复') }}</span>
             </div>
           </div>
         </div>
@@ -794,8 +849,8 @@ onBeforeUnmount(() => {
 .tr-view { max-width: 900px; padding: 18px 26px 40px; }
 .warn-tag { color: var(--amber); border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.1); }
 .tr-drop-card { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
-.tr-drop { display: flex; align-items: center; gap: 14px; padding: 22px; border: 1.5px dashed var(--border-strong); border-radius: 14px; background: var(--canvas); cursor: pointer; transition: border-color .15s, background .15s; }
-.tr-drop:hover, .tr-drop.over { border-color: var(--brand-blue); background: var(--surface-soft); }
+.tr-drop { display: flex; align-items: center; gap: 14px; padding: 22px; border: 1.5px dashed var(--border-strong); border-radius: 14px; background: var(--glass-bg); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); cursor: pointer; transition: border-color .15s, background .15s; }
+.tr-drop:hover, .tr-drop.over { border-color: var(--brand-blue); background: var(--glass-bg-strong); }
 .td-ic { width: 46px; height: 46px; border-radius: 12px; background: var(--surface); display: flex; align-items: center; justify-content: center; color: var(--brand-blue); flex: none; }
 .td-txt b { display: block; font-size: 13.5px; color: var(--ink); }
 .td-txt span { font-size: 11.5px; color: var(--stone); }
@@ -806,7 +861,7 @@ onBeforeUnmount(() => {
 .fb-label { font-size: 12.5px; font-weight: 600; color: var(--ink); }
 .fb-hint { font-size: 11px; color: var(--stone); margin-top: 1px; }
 .tr-batch-ctls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.tr-batch-list { border: 1px solid var(--hairline); border-radius: 10px; background: var(--canvas); overflow: hidden; }
+.tr-batch-list { border: 1px solid var(--hairline); border-radius: 10px; background: var(--glass-bg-strong); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); overflow: hidden; }
 .tr-batch-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--hairline-soft); font-size: 12px; }
 .tr-batch-item:last-child { border-bottom: none; }
 .tb-name { flex: 1; min-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
@@ -820,18 +875,18 @@ onBeforeUnmount(() => {
 .tr-batch-stat { margin-top: 6px; }
 .tr-card { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
 .tr-modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-.tr-mode { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--surface); text-align: left; cursor: pointer; transition: all .15s; }
+.tr-mode { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--glass-bg); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); text-align: left; cursor: pointer; transition: all .15s; }
 .tr-mode b { display: block; font-size: 13px; color: var(--ink); margin-bottom: 2px; }
 .tr-mode span { font-size: 11px; color: var(--stone); line-height: 1.4; }
 .tr-mode:hover { border-color: var(--border-strong); }
-.tr-mode.active { border-color: var(--ink); background: var(--canvas); box-shadow: 0 0 0 1px var(--ink); }
+.tr-mode.active { border-color: var(--ink); background: var(--glass-bg-strong); box-shadow: 0 0 0 1px var(--ink); }
 .tr-mode.active b { color: var(--brand-coral); }
 .tr-pills { display: flex; gap: 6px; flex-wrap: wrap; }
-.tr-pill { padding: 5px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); font-size: 12px; color: var(--slate); cursor: pointer; }
+.tr-pill { padding: 5px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--glass-bg); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); font-size: 12px; color: var(--slate); cursor: pointer; }
 .tr-pill:hover { border-color: var(--border-strong); }
 .tr-pill.active { background: var(--ink); border-color: var(--ink); color: #fff; }
 .tr-perf-hint { font-size: 11.5px; color: var(--success-text); }
-.tr-adv { border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); }
+.tr-adv { border: 1px solid var(--hairline); border-radius: 10px; background: var(--glass-bg); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
 .tr-adv summary { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-size: 12.5px; font-weight: 600; color: var(--ink); cursor: pointer; user-select: none; }
 .tr-adv summary .adv-cnt { font-weight: 400; color: var(--stone); font-size: 11px; }
 .tr-adv summary .adv-arr { margin-left: auto; color: var(--stone); }
@@ -844,15 +899,26 @@ onBeforeUnmount(() => {
 .tr-switch small { color: var(--stone); font-size: 10.5px; }
 .tr-switch input[type=checkbox] { accent-color: var(--ink); }
 .tr-preset-row { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--hairline); }
+.preset-mgr { border: 1px solid var(--hairline); border-radius: 10px; overflow: hidden; margin-top: 6px; }
+.pm-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; background: var(--glass-bg-soft); border-bottom: 1px solid var(--hairline); }
+.pm-head b { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink); }
+.pm-list { max-height: 240px; overflow-y: auto; }
+.pm-item { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--hairline-soft); }
+.pm-item:last-child { border-bottom: none; }
+.pm-item.builtin { background: var(--glass-bg-soft); }
+.pm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--ink); font-weight: 500; }
+.pm-mode { flex: none; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-foot { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--hairline); background: var(--glass-bg-soft); }
+.pm-foot .muted { font-size: 10.5px; }
 .tr-tpl-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
 .tr-tpl-preview { margin-top: 4px; }
-.tr-sum { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: var(--surface-soft); border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--slate); }
+.tr-sum { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: var(--glass-bg); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--slate); }
 .tr-sum b { color: var(--ink); font-weight: 600; }
 .tr-progress { display: flex; align-items: center; gap: 10px; height: 20px; background: var(--surface-soft); border-radius: 999px; overflow: hidden; padding: 0 12px; font-size: 11px; color: var(--steel); margin-top: 8px; }
-.tr-progress .pfill { height: 100%; background: var(--ink); border-radius: 999px; transition: width .2s; }
+.tr-progress .pfill { height: 100%; background: var(--brand-blue); border-radius: 999px; transition: width .2s; }
 .tr-stage { margin-top: 4px; text-align: center; }
 .tr-done { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
-.tr-log { border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); margin-top: 10px; overflow: hidden; }
+.tr-log { border: 1px solid var(--hairline); border-radius: 10px; background: var(--glass-bg); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); margin-top: 10px; overflow: hidden; }
 .tr-log-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 11px; color: var(--slate); border-bottom: 1px solid var(--hairline-soft); }
 .log-count { color: var(--stone); }
 .tr-log-scroll { max-height: 220px; overflow-y: auto; padding: 8px 12px; font-family: var(--mono); font-size: 11px; color: var(--slate); line-height: 1.6; }

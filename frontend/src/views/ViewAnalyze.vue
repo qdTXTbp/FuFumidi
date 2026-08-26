@@ -4,7 +4,9 @@ import Icon from '../components/Icon.vue';
 import { currentSong, setView, toast } from '../store.js';
 import { analyzeSong, barChart, hBarChart, DUR_LABELS } from '../core/analysis.js';
 import { TRACK_COLORS, KEY_NAME, noteName, fmtTime } from '../core/util.js';
+import { accentRgb } from '../core/theme.js';
 import { getPlayer } from '../audio.js';
+import { t } from '../core/i18n.js';
 
 const densityZoom = ref(1);
 const data = ref(null);
@@ -61,7 +63,7 @@ function draw() {
     ctx.fillStyle = 'rgba(10,10,10,0.03)'; ctx.fillRect(0, 0, w, h);
     const audio = song.audio;
     if (audio && audio.peaks && audio.peaks.length) {
-      ctx.fillStyle = 'rgba(20,86,240,0.28)';
+      ctx.fillStyle = 'rgba(' + accentRgb() + ',0.28)';
       const step = audio.peaks.length / w;
       for (let x = 0; x < w; x++) {
         const idx = Math.floor(x * step); const v = (audio.peaks[idx] || 0);
@@ -90,7 +92,7 @@ function draw() {
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = 'rgba(10,10,10,0.03)'; ctx.fillRect(0, 0, w, h);
     const seg = a.velCurve.length;
-    ctx.strokeStyle = 'rgba(20,86,240,0.85)'; ctx.lineWidth = 1.5; ctx.beginPath();
+    ctx.strokeStyle = 'rgba(' + accentRgb() + ',0.85)'; ctx.lineWidth = 1.5; ctx.beginPath();
     for (let i = 0; i < seg; i++) {
       const v = a.velCurve[i];
       const x = i / (seg - 1) * w, y = h - 4 - (h - 12) * v;
@@ -187,18 +189,18 @@ onBeforeUnmount(() => {
     <div class="page-head">
       <div class="page-ic"><Icon name="chart" :size="20" /></div>
       <div class="grow">
-        <div class="page-title">分析</div>
-        <div class="page-sub">调性 · 音高 / 力度 / 时值分布 · 音符密度 · 错音检测</div>
+        <div class="page-title">{{ t('分析') }}</div>
+        <div class="page-sub">{{ t('调性 · 音高 / 力度 / 时值分布 · 音符密度 · 错音检测') }}</div>
       </div>
     </div>
 
     <div v-if="!currentSong" class="empty card">
       <div class="empty-ic"><Icon name="chart" :size="34" /></div>
       <b>还没有载入曲目</b>
-      <p>导入 MIDI 文件后即可在此查看音符密度、音域、调性与各类分布统计。</p>
+      <p>{{ t('导入 MIDI 文件后即可在此查看音符密度、音域、调性与各类分布统计。') }}</p>
     </div>
 
-    <template v-else>
+    <template v-else-if="data">
       <div class="az-summary card">{{ summaryText() }}</div>
 
       <div class="stat-grid">
@@ -265,13 +267,20 @@ onBeforeUnmount(() => {
         <div class="az-card card az-wide"><h4><Icon name="chart" :size="14" /> 力度动态曲线</h4><div class="chart-wrap" style="height:130px"><canvas id="azVelCurve"></canvas></div></div>
       </div>
     </template>
+
+    <template v-else>
+      <div class="empty card">
+        <div class="empty-ic"><Icon name="chart" :size="34" /></div>
+        <b>正在分析曲目…</b>
+      </div>
+    </template>
   </div>
 </template>
 
 <style scoped>
 .stat-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 14px; }
 @media (max-width: 1100px) { .stat-grid { grid-template-columns: repeat(3, 1fr); } }
-.stat-card { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 12px 14px; background: var(--surface); }
+.stat-card { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 12px 14px; background: var(--glass-bg-strong); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
 .stat-card .sc-label { font-size: 11px; color: var(--stone); margin-bottom: 4px; }
 .stat-card .sc-value { font-size: 17px; font-weight: 700; color: var(--ink); letter-spacing: -0.3px; }
 .stat-card .sc-value.alt { color: var(--brand-coral); }
@@ -286,7 +295,7 @@ onBeforeUnmount(() => {
 .chart-wrap { height: 140px; }
 .az-txt { font-size: 12.5px; color: var(--slate); line-height: 1.8; min-height: 40px; }
 .chord-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.chord-chips .chip { display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-full); background: var(--surface); font-size: 12px; color: var(--ink); cursor: pointer; }
+.chord-chips .chip { display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-full); background: var(--glass-bg-strong); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); font-size: 12px; color: var(--ink); cursor: pointer; }
 .chord-chips .chip:hover { border-color: var(--brand-coral); color: var(--brand-coral); }
 .chord-chips .chip b { color: var(--brand-coral); font-weight: 600; }
 .chord-chips .chip span { color: var(--stone); font-size: 10.5px; }

@@ -52,6 +52,20 @@ export function applyTheme(name, accent) {
   R.setProperty('--brand-blue-deep', pal['brand-blue-deep']);
   R.setProperty('--brand-blue-700', pal['brand-blue-700']);
   R.setProperty('--brand-blue-200', pal['brand-blue-200']);
+  R.setProperty('--accent-rgb', hexToRgb(a));
+}
+
+// 主题强调色的 rgb 三元组（canvas 不能用 CSS 变量，需读成 "r,g,b" 字符串）
+export function accentRgb() {
+  if (typeof document === 'undefined') return '20,86,240';
+  const v = document.documentElement.style.getPropertyValue('--accent') || getComputedStyle(document.documentElement).getPropertyValue('--accent');
+  return hexToRgb(String(v).trim()) || '20,86,240';
+}
+function hexToRgb(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return (n >> 16 & 255) + ',' + (n >> 8 & 255) + ',' + (n & 255);
 }
 
 // 应用 + 持久化（localStorage 优先 + Electron settings 兜底）

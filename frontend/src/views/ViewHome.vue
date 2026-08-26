@@ -1,6 +1,7 @@
 <script setup>
 import Icon from '../components/Icon.vue';
 import { state, setView, selectSong, currentSong } from '../store.js';
+import { t } from '../core/i18n.js';
 
 const QUICK = [
   { ic: 'transcribe', title: '开始转录', sub: '音频转 MIDI · 本地引擎', view: 'transcribe', soon: false },
@@ -19,8 +20,8 @@ function go(v) { setView(v); }
     <div class="page-head">
       <div class="page-ic"><Icon name="home" :size="20" /></div>
       <div>
-        <div class="page-title">首页工作区</div>
-        <div class="page-sub">快速开始 · 最近曲目 · 播放状态</div>
+        <div class="page-title">{{ t('首页工作区') }}</div>
+        <div class="page-sub">{{ t('快速开始 · 最近曲目 · 播放状态') }}</div>
       </div>
     </div>
 

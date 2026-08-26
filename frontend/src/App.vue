@@ -17,7 +17,7 @@ import ViewLyrics from './views/ViewLyrics.vue';
 import ViewConvert from './views/ViewConvert.vue';
 import ViewTranscribe from './views/ViewTranscribe.vue';
 import ViewPlaceholder from './views/ViewPlaceholder.vue';
-import { state, MIGRATED_VIEWS, startTickLoop, stopTickLoop, restoreSongs, togglePlay, seekRatio, setTempo, toggleLoop, toggleMetro } from './store.js';
+import { state, MIGRATED_VIEWS, startTickLoop, stopTickLoop, restoreSongs, loadPlaylists, togglePlay, seekRatio, setTempo, toggleLoop, toggleMetro } from './store.js';
 import { setLang } from './core/i18n.js';
 import { applyTheme, loadTheme } from './core/theme.js';
 
@@ -96,6 +96,7 @@ function onKey(e) {
 onMounted(() => {
   startTickLoop();
   restoreSongs();
+  loadPlaylists();
   initGlobal();
   window.addEventListener('keydown', onKey);
 });

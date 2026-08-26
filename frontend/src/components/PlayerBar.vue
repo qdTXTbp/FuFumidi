@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue';
 import Icon from './Icon.vue';
 import { state, currentSong, totalStr, curStr, togglePlay, stopPlay, seekRatio, setTempo, toggleLoop, toggleMetro, setVolume, selectSong, toast, toggleTrackMute, toggleTrackSolo, setTrackVol, setTrackPan } from '../store.js';
+import { t } from '../core/i18n.js';
 import { getPlayer, getCtx } from '../audio.js';
 import { initMidiOutput, setMidiOutEnabled, midiOutOn, midiOutOff, midiAllOff, getMidiOutDeviceName } from '../core/midiout.js';
 
@@ -92,16 +93,16 @@ function next() {
   <footer class="playerbar">
     <div class="pb-main">
       <div class="pb-transport">
-        <button class="tp-btn" title="上一首" @click="prev" :disabled="!currentSong"><Icon name="prev" :size="17" /></button>
-        <button class="tp-play" :class="{ playing: state.playing }" :title="state.playing ? '暂停' : '播放'" @click="togglePlay">
+        <button class="tp-btn" :title="t('上一首')" @click="prev" :disabled="!currentSong"><Icon name="prev" :size="17" /></button>
+        <button class="tp-play" :class="{ playing: state.playing }" :title="state.playing ? t('暂停') : t('播放')" @click="togglePlay">
           <Icon :name="state.playing ? 'pause' : 'play'" :size="20" />
         </button>
-        <button class="tp-btn" title="停止" @click="stopPlay" :disabled="!currentSong"><Icon name="stop" :size="16" /></button>
-        <button class="tp-btn" title="下一首" @click="next" :disabled="!currentSong"><Icon name="next" :size="17" /></button>
+        <button class="tp-btn" :title="t('停止')" @click="stopPlay" :disabled="!currentSong"><Icon name="stop" :size="16" /></button>
+        <button class="tp-btn" :title="t('下一首')" @click="next" :disabled="!currentSong"><Icon name="next" :size="17" /></button>
       </div>
       <div class="pb-title">
-        <b>{{ currentSong?.name || '未选择曲目' }}</b>
-        <small>{{ currentSong ? (currentSong.song ? currentSong.song.tracks.length + ' 轨 · ' : '') + curStr + ' / ' + totalStr : '导入 MIDI 开始播放' }}</small>
+        <b>{{ currentSong?.name || t('未选择曲目') }}</b>
+        <small>{{ currentSong ? (currentSong.song ? currentSong.song.tracks.length + ' ' + t('轨') + ' · ' : '') + curStr + ' / ' + totalStr : t('导入 MIDI 开始播放') }}</small>
       </div>
     </div>
 
@@ -113,15 +114,15 @@ function next() {
     </div>
 
     <div class="pb-right">
-      <button class="tp-btn" :class="{ 'toggle-on': midiOn }" title="MIDI 硬件输出" @click="toggleMidiOut"><Icon name="music" :size="16" /></button>
-      <button class="tp-btn" :class="{ 'toggle-on': state.loop }" title="循环播放" @click="toggleLoop"><Icon name="loop" :size="16" /></button>
-      <button class="tp-btn" :class="{ 'toggle-on': state.metro }" title="节拍器" @click="toggleMetro"><Icon name="metro" :size="16" /></button>
-      <button class="tp-btn" :class="{ 'toggle-on': mixerOpen }" title="混音台" @click="mixerOpen = !mixerOpen"><Icon name="cclane" :size="16" /></button>
+      <button class="tp-btn" :class="{ 'toggle-on': midiOn }" :title="t('MIDI 硬件输出')" @click="toggleMidiOut"><Icon name="music" :size="16" /></button>
+      <button class="tp-btn" :class="{ 'toggle-on': state.loop }" :title="t('循环播放')" @click="toggleLoop"><Icon name="loop" :size="16" /></button>
+      <button class="tp-btn" :class="{ 'toggle-on': state.metro }" :title="t('节拍器')" @click="toggleMetro"><Icon name="metro" :size="16" /></button>
+      <button class="tp-btn" :class="{ 'toggle-on': mixerOpen }" :title="t('混音台')" @click="mixerOpen = !mixerOpen"><Icon name="cclane" :size="16" /></button>
 
       <div class="row" style="gap:4px">
-        <button class="chip-btn" @click="stepTempo(-0.05)" title="减速">−</button>
-        <input id="pb-tempo" name="pb-tempo" class="num-input" type="number" min="0.25" max="4" step="0.05" v-model.number="state.tempo" style="width:52px;text-align:center" title="速度倍率">
-        <button class="chip-btn" @click="stepTempo(0.05)" title="加速">＋</button>
+        <button class="chip-btn" @click="stepTempo(-0.05)" :title="t('减速')">−</button>
+        <input id="pb-tempo" name="pb-tempo" class="num-input" type="number" min="0.25" max="4" step="0.05" v-model.number="state.tempo" style="width:52px;text-align:center" :title="t('速度倍率')">
+        <button class="chip-btn" @click="stepTempo(0.05)" :title="t('加速')">＋</button>
       </div>
 
       <div class="bpm-wrap">
@@ -180,7 +181,8 @@ function next() {
 }
 .mx-card {
   width: 480px; max-width: calc(100vw - 28px); max-height: 58vh; overflow-y: auto;
-  background: var(--canvas); color: var(--ink);
+  background: var(--glass-bg-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+  color: var(--ink);
   border: 1px solid var(--hairline); border-radius: 16px;
   box-shadow: var(--shadow-lg); padding: 14px;
 }
