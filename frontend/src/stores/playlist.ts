@@ -1,4 +1,4 @@
-// Pinia：歌单（后续替换 store.js 中的 playlists 状态）
+// Pinia：歌单状态与持久化
 import { defineStore } from 'pinia';
 
 export interface Playlist {

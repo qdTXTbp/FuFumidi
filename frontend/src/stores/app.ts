@@ -1,5 +1,5 @@
 // Pinia 应用主 Store：播放 / 歌单 / 混音 / UI / 导入恢复
-// 旧 store.js 将变成兼容层，组件 import 路径无需修改
+// 所有组件直接使用 Pinia store，store.js 兼容层已移除
 import { defineStore } from 'pinia';
 import { ensureAudio } from '../audio';
 import { parseMidi, buildSong } from '../core/midi';
@@ -314,13 +314,8 @@ export const useAppStore = defineStore('app', {
       if (typeof location === 'undefined') return;
       const target = '#/' + this.view;
       if (location.hash !== target) {
-        try { history.replaceState(null, '', target); } catch (e) { location.hash = target; }
+        try { location.hash = target; } catch (e) {}
       }
-    },
-    applyHash() {
-      if (typeof location === 'undefined') return;
-      const h = (location.hash || '').replace(/^#\/?/, '');
-      if (h && VIEWS.some(x => x.id === h) && this.view !== h) this.view = h;
     },
     startTickLoop() {
       if (_raf) return;

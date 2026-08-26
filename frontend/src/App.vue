@@ -1,5 +1,6 @@
 <script setup>
-import { onMounted, onBeforeUnmount, defineAsyncComponent } from 'vue';
+import { onMounted, onBeforeUnmount, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import SideBar from './components/SideBar.vue';
 import TopBar from './components/TopBar.vue';
 import PlayerBar from './components/PlayerBar.vue';
@@ -7,23 +8,18 @@ import SettingsPanel from './components/SettingsPanel.vue';
 import ThemeLibrary from './components/ThemeLibrary.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import GuideOverlay from './components/GuideOverlay.vue';
-// 视图按需加载：降低首屏体积，乐谱/可视化/转换等重模块延迟初始化
-const ViewHome = defineAsyncComponent(() => import('./views/ViewHome.vue'));
-const ViewPlay = defineAsyncComponent(() => import('./views/ViewPlay.vue'));
-const ViewEdit = defineAsyncComponent(() => import('./views/ViewEdit.vue'));
-const ViewAnalyze = defineAsyncComponent(() => import('./views/ViewAnalyze.vue'));
-const ViewViz = defineAsyncComponent(() => import('./views/ViewViz.vue'));
-const ViewScore = defineAsyncComponent(() => import('./views/ViewScore.vue'));
-const ViewLyrics = defineAsyncComponent(() => import('./views/ViewLyrics.vue'));
-const ViewConvert = defineAsyncComponent(() => import('./views/ViewConvert.vue'));
-const ViewTranscribe = defineAsyncComponent(() => import('./views/ViewTranscribe.vue'));
-const ViewPlaceholder = defineAsyncComponent(() => import('./views/ViewPlaceholder.vue'));
-import { useAppStore } from './stores/app';
+import { useAppStore, VIEWS } from './stores/app';
 import { setLang } from './core/i18n.js';
 import { applyTheme, loadTheme } from './core/theme.js';
+import { viewFromPath } from './router';
 
 const app = useAppStore();
 const state = app;
+const route = useRoute();
+watch(() => route.path, (p) => {
+  const v = viewFromPath(p);
+  if (VIEWS.some(x => x.id === v)) state.view = v;
+}, { immediate: true });
 const startTickLoop = () => app.startTickLoop();
 const stopTickLoop = () => app.stopTickLoop();
 const restoreSongs = () => app.restoreSongs();
@@ -122,18 +118,11 @@ onBeforeUnmount(() => {
     <SideBar />
     <TopBar />
     <main class="app-main">
-      <Transition name="view" mode="out-in">
-        <ViewHome v-if="state.view === 'home'" key="home" />
-        <ViewPlay v-else-if="state.view === 'play'" key="play" />
-        <ViewEdit v-else-if="state.view === 'edit'" key="edit" />
-        <ViewAnalyze v-else-if="state.view === 'analyze'" key="analyze" />
-        <ViewViz v-else-if="state.view === 'viz'" key="viz" />
-        <ViewScore v-else-if="state.view === 'score'" key="score" />
-        <ViewLyrics v-else-if="state.view === 'lyrics'" key="lyrics" />
-        <ViewConvert v-else-if="state.view === 'convert'" key="convert" />
-        <ViewTranscribe v-else-if="state.view === 'transcribe'" key="transcribe" />
-        <ViewPlaceholder v-else :view-id="state.view" :key="state.view" />
-      </Transition>
+      <router-view v-slot="{ Component }">
+        <Transition name="view" mode="out-in">
+          <component :is="Component" :key="state.view" />
+        </Transition>
+      </router-view>
     </main>
     <PlayerBar v-if="state.playerbarOpen" />
     <div class="toast-wrap" v-if="state.toast">
