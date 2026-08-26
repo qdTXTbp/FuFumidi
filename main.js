@@ -981,8 +981,12 @@ function registerIpc() {
   });
 
   ipcMain.handle('guide:openEdit', () => {
-    const win = new BrowserWindow({ width: 900, height: 700, title: 'FuFumidi 编辑功能说明', backgroundColor: '#0a0f18', autoHideMenuBar: true });
-    win.loadFile(path.join(__dirname, 'renderer', 'edit-guide.html'));
+    // 旧版编辑引导页已移除；打开主窗口并切到编辑视图
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('app:event', 'view-changed', { view: 'edit' });
+      win.focus();
+    }
     return { ok: true };
   });
 
@@ -1035,10 +1039,12 @@ function createWindow() {
     if (/^https?:/i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
-  // 渐进式重构：优先加载新版 Vue 构建（renderer/dist），缺失时回退旧版单文件界面
+  // 加载新版 Vue 构建（renderer/dist）；旧版单文件界面已移除
   const vueDist = path.join(__dirname, 'renderer', 'dist', 'index.html');
-  if (fs.existsSync(vueDist)) win.loadFile(vueDist);
-  else win.loadFile(path.join(__dirname, 'renderer', 'FuFumidi.html'));
+  if (!fs.existsSync(vueDist)) {
+    console.error('[FuFumidi] renderer/dist 缺失：请先执行 cd frontend && npm run build');
+  }
+  win.loadFile(vueDist);
   return win;
 }
 

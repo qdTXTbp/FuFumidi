@@ -6,7 +6,7 @@
 
 ## 1. 前端整体重构（Vue 3 + Vite，渐进式）
 
-原仓库为单文件 `renderer/FuFumidi.html`（约 800KB 内联 JS/CSS），维护成本高。现采用**渐进式重构**：核心音频/MIDI 逻辑保留模块化，UI 层拆分为 Vue 3 组件，构建产物输出到 `renderer/dist`；`main.js` 优先加载新版 Vue 界面，缺失时回退原版单文件（`renderer/FuFumidi.html`）。
+原仓库为单文件 `renderer/FuFumidi.html`（约 800KB 内联 JS/CSS），维护成本高。现采用**渐进式重构**：核心音频/MIDI 逻辑保留模块化，UI 层拆分为 Vue 3 组件，构建产物输出到 `renderer/dist`；`main.js` 加载新版 Vue 界面。旧版单文件界面已彻底移除（删除 `renderer/FuFumidi.html` 与 `edit-guide.html`），构建前需先执行 `cd frontend && npm run build` 生成界面。
 
 ### 新增前端目录结构
 ```

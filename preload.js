@@ -69,7 +69,6 @@ contextBridge.exposeInMainWorld('fuBridge', {
   saveBinary: (opts) => ipcRenderer.invoke('file:saveBinary', opts),
   // 打开输出位置（资源管理器/访达定位文件或目录）
   openOutput: (p) => ipcRenderer.invoke('shell:openOutput', p),
-  openEditGuide: () => ipcRenderer.invoke('guide:openEdit'),
   // 转录参数预设
   presets: {
     list: () => ipcRenderer.invoke('presets:list'),
