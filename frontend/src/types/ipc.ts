@@ -197,6 +197,22 @@ export interface SoundFontItem {
   size?: number;
 }
 
+export interface RustStatusResult {
+  ok?: boolean;
+  available: boolean;
+  binary?: string | null;
+  version?: string;
+}
+
+export interface RustInvokeResult {
+  ok: boolean;
+  version?: string;
+  service?: string;
+  error?: string;
+  raw?: string;
+  stderr?: string;
+}
+
 /**
  * 由 preload 注入到 renderer 的完整桥接口。
  * 后续 preload 端应严格按此类型实现。
@@ -296,6 +312,10 @@ export interface FuBridge {
     onLog(cb: (p: any) => void): () => void;
     onScript(cb: (p: any) => void): () => void;
   };
+
+  // optional rust core
+  rustStatus(): Promise<RustStatusResult>;
+  rustInvoke(cmd: string, args?: string[]): Promise<RustInvokeResult>;
 
   // app events
   notify(ev: string, payload: any): void;

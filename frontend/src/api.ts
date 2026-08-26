@@ -24,4 +24,6 @@ export type {
   PresetItem,
   PluginInfo,
   Settings,
+  RustStatusResult,
+  RustInvokeResult,
 } from './types/ipc';
