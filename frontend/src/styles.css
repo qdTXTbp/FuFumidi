@@ -217,8 +217,8 @@ body {
 }
 .tab:hover { background: var(--surface-soft); color: var(--ink); }
 .tab.active {
-  background: var(--btn-bg);
-  color: var(--btn-fg);
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  color: var(--ink);
   font-weight: 600;
 }
 .topbar-spacer { flex: 1; }
