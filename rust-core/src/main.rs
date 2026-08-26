@@ -1,6 +1,37 @@
 use std::env;
 use std::fs;
 use std::io::{self, Write};
+use std::path::PathBuf;
+
+fn walk_files(dir: &str, exts: &[&str]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![PathBuf::from(dir)];
+    while let Some(d) = stack.pop() {
+        if let Ok(entries) = fs::read_dir(&d) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if let Some(ext) = p.extension().and_then(|x| x.to_str()) {
+                    if exts.iter().any(|x2| x2.eq_ignore_ascii_case(ext)) {
+                        out.push(p.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    out
+}
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
 
 struct MidiStats {
     format: u16,
@@ -170,6 +201,34 @@ fn main() {
                 },
                 Err(e) => format!(r#"{{"ok":false,"error":{}}}"#, json_str(&e.to_string())),
             }
+        }
+        Some("batch-stats") => {
+            let dir = args.get(1).cloned().unwrap_or_default();
+            let files = walk_files(&dir, &["mid", "midi"]);
+            let mut arr = Vec::new();
+            for f in &files {
+                if let Ok(bytes) = fs::read(f) {
+                    match stat_smf(&bytes) {
+                        Ok(s) => arr.push(format!(
+                            r#"{{"file":{},"format":{},"tracks":{},"notes":{},"bpm":{:.2},"min_midi":{},"max_midi":{},"avg_vel":{:.1}}}"#,
+                            json_str(f), s.format, s.tracks, s.notes, s.bpm, s.min_midi, s.max_midi, s.avg_vel
+                        )),
+                        Err(e) => arr.push(format!(r#"{{"file":{},"ok":false,"error":{}}}"#, json_str(f), json_str(&e))),
+                    }
+                }
+            }
+            format!(r#"{{"ok":true,"count":{},"files":[{}]}}"#, arr.len(), arr.join(","))
+        }
+        Some("hash-batch") => {
+            let dir = args.get(1).cloned().unwrap_or_default();
+            let files = walk_files(&dir, &["mid", "midi", "sf2", "sf3", "wav", "mp3", "flac"]);
+            let mut arr = Vec::new();
+            for f in &files {
+                if let Ok(bytes) = fs::read(f) {
+                    arr.push(format!(r#"{{"file":{},"hash":{:016x},"size":{}}}"#, json_str(f), fnv1a(&bytes), bytes.len()));
+                }
+            }
+            format!(r#"{{"ok":true,"count":{},"files":[{}]}}"#, arr.len(), arr.join(","))
         }
         _ => r#"{"ok":false,"error":"unknown command"}"#.to_string(),
     };
