@@ -24,6 +24,13 @@ export const state = reactive({
   sidebarOpen: true,
   playerbarOpen: true,
 
+  // 歌单（多个播放列表 / 批量管理）
+  playlists: [],
+  activePlaylistId: 'default',
+  playlistSearch: '',
+  playlistSort: 'added',
+  playlistFavOnly: false,
+
   // 歌单
   songs: [],
   currentId: null,
@@ -56,6 +63,83 @@ export const state = reactive({
   // 完整性检验结果（App 挂载时后台检查；设置面板展示警告条）
   integrity: null, // { ok, issues: [], error } | null
 });
+
+/* ---------------- 歌单持久化初始化 ---------------- */
+const PL_LS = 'fufumidi_playlists_v1';
+const PL_ACTIVE_LS = 'fufumidi_active_playlist';
+function _loadPlaylists() {
+  try {
+    const raw = localStorage.getItem(PL_LS);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr) && arr.length) { state.playlists = arr; return; }
+    }
+  } catch (e) {}
+  state.playlists = [{ id: 'default', name: '默认歌单', songIds: [] }];
+}
+_loadPlaylists();
+try {
+  const a = localStorage.getItem(PL_ACTIVE_LS);
+  if (a && state.playlists.some(p => p.id === a)) state.activePlaylistId = a;
+} catch (e) {}
+
+function persistPlaylists() {
+  try { localStorage.setItem(PL_LS, JSON.stringify(state.playlists)); } catch (e) {}
+  try { localStorage.setItem(PL_ACTIVE_LS, state.activePlaylistId); } catch (e) {}
+}
+export function createPlaylist(name) {
+  const id = 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  state.playlists.push({ id, name: name || '未命名歌单', songIds: [] });
+  state.activePlaylistId = id;
+  persistPlaylists();
+  return id;
+}
+export function selectPlaylist(id) {
+  if (id === 'favorites') { state.activePlaylistId = 'favorites'; persistPlaylists(); return; }
+  if (state.playlists.some(p => p.id === id)) { state.activePlaylistId = id; persistPlaylists(); }
+}
+export function deletePlaylist(id) {
+  if (id === 'favorites') return { ok: false, error: '收藏不能删除' };
+  if (state.playlists.length <= 1) {
+    const def = state.playlists[0];
+    def.songIds = [];
+    state.activePlaylistId = def.id;
+    persistPlaylists();
+    return { ok: true, cleared: true };
+  }
+  const i = state.playlists.findIndex(p => p.id === id);
+  if (i < 0) return { ok: false };
+  state.playlists.splice(i, 1);
+  if (state.activePlaylistId === id) state.activePlaylistId = state.playlists[0].id;
+  persistPlaylists();
+  return { ok: true };
+}
+export function addSongsToActivePlaylist(ids) {
+  const pid = state.activePlaylistId;
+  const list = state.playlists.find(p => p.id === pid);
+  if (!list) return;
+  for (const id of ids) {
+    if (id && !list.songIds.includes(id)) list.songIds.push(id);
+  }
+  persistPlaylists();
+}
+export function removeSongsFromPlaylist(ids) {
+  const idSet = new Set(ids || []);
+  for (const p of state.playlists) p.songIds = p.songIds.filter(id => !idSet.has(id));
+  persistPlaylists();
+}
+export function removeSongsFromActivePlaylist(ids) {
+  const idSet = new Set(ids || []);
+  const list = state.playlists.find(p => p.id === state.activePlaylistId);
+  if (list) {
+    list.songIds = list.songIds.filter(id => !idSet.has(id));
+    persistPlaylists();
+  }
+}
+export function removeSongsFromLibrary(ids) {
+  for (const id of ids || []) removeSong(id);
+  removeSongsFromPlaylist(ids);
+}
 
 export const currentSong = computed(() =>
   state.songs.find(s => s.id === state.currentId) || null
@@ -147,6 +231,11 @@ export async function importFiles(items) {
       meta: { size: it.bytes.byteLength, time: Date.now(), tracks: song.tracks.length },
     };
     state.songs.push(item);
+    // 加入当前歌单（收藏视图时加入默认歌单）
+    const pid = state.activePlaylistId === 'favorites' ? 'default' : state.activePlaylistId;
+    const pl = state.playlists.find(p => p.id === pid);
+    if (pl && !pl.songIds.includes(item.id)) pl.songIds.push(item.id);
+    persistPlaylists();
     // 原始字节写入 IndexedDB，刷新后仍可恢复
     await idbPut(STORE_SONGS, { id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, bytes: it.bytes });
     ok++;
