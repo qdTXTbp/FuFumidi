@@ -1,7 +1,10 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue';
-import { currentSong } from '../store.js';
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { useAppStore } from '../stores/app';
 import { getSynth, ensureAudio, getPlayer } from '../audio.js';
+
+const app = useAppStore();
+const currentSong = computed(() => app.currentSong);
 import { TRACK_COLORS } from '../core/util.js';
 import { t } from '../core/i18n.js';
 

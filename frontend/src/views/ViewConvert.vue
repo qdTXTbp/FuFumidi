@@ -1,8 +1,12 @@
 <script setup>
 import { ref, computed } from 'vue';
 import Icon from '../components/Icon.vue';
-import { currentSong, toast } from '../store.js';
+import { useAppStore } from '../stores/app';
 import { t } from '../core/i18n.js';
+
+const app = useAppStore();
+const currentSong = computed(() => app.currentSong);
+const toast = (m, t) => app.toast(m, t);
 import { clamp } from '../core/util.js';
 import { playVoice, presetFromMode } from '../core/synth.js';
 

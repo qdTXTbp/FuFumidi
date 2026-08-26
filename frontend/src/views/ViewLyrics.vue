@@ -1,8 +1,14 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
-import { currentSong, state, togglePlay, toast } from '../store.js';
+import { useAppStore } from '../stores/app';
 import { getPlayer, ensureAudio } from '../audio.js';
+
+const app = useAppStore();
+const state = app;
+const currentSong = computed(() => app.currentSong);
+const togglePlay = () => app.togglePlay();
+const toast = (m, t) => app.toast(m, t);
 import { t } from '../core/i18n.js';
 import { esc } from '../core/util.js';
 

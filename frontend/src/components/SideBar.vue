@@ -1,9 +1,17 @@
 <script setup>
 import { ref, computed } from 'vue';
 import Icon from './Icon.vue';
-import { state, importFiles, selectSong, removeSong, toast, setView, VIEWS } from '../store.js';
+import { useAppStore, VIEWS } from '../stores/app';
 import { usePlaylistStore } from '../stores/playlist';
 import logoUrl from '../assets/logo.png';
+
+const app = useAppStore();
+const state = app;
+const importFiles = (items) => app.importFiles(items);
+const selectSong = (id) => app.selectSong(id);
+const removeSong = (id) => app.removeSong(id);
+const toast = (m, t) => app.toast(m, t);
+const setView = (v) => app.setView(v);
 
 const fileInput = ref(null);
 const dragOver = ref(false);

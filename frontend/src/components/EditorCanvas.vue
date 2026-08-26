@@ -1,8 +1,12 @@
 <script setup>
 // 可编辑钢琴卷帘：选择 / 画笔 / 橡皮 · 拖拽移动 · 缩放平移 · 撤销重做
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
-import { state, currentSong } from '../store.js';
+import { useAppStore } from '../stores/app';
 import { ensureAudio } from '../audio.js';
+
+const app = useAppStore();
+const state = app;
+const currentSong = computed(() => app.currentSong);
 import { KEY_NAME, noteName, clamp } from '../core/util.js';
 
 const props = defineProps({

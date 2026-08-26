@@ -3,8 +3,15 @@
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
 import EditorCanvas from '../components/EditorCanvas.vue';
-import { state, currentSong, toast, importFiles, setView } from '../store.js';
+import { useAppStore } from '../stores/app';
 import { ensureAudio } from '../audio.js';
+
+const app = useAppStore();
+const state = app;
+const currentSong = computed(() => app.currentSong);
+const toast = (m, t) => app.toast(m, t);
+const importFiles = (items) => app.importFiles(items);
+const setView = (v) => app.setView(v);
 import { encodeMidi } from '../core/midi.js';
 import { noteName, clamp } from '../core/util.js';
 

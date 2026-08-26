@@ -2,8 +2,16 @@
 import { computed } from 'vue';
 import Icon from '../components/Icon.vue';
 import PianoRoll from '../components/PianoRoll.vue';
-import { state, currentSong, toggleTrackMute, toggleTrackSolo, setTrackVol, setTrackPan } from '../store.js';
+import { useAppStore } from '../stores/app';
 import { fmtTime } from '../core/util.js';
+
+const app = useAppStore();
+const state = app;
+const currentSong = computed(() => app.currentSong);
+const toggleTrackMute = (i) => app.toggleTrackMute(i);
+const toggleTrackSolo = (i) => app.toggleTrackSolo(i);
+const setTrackVol = (i, v) => app.setTrackVol(i, v);
+const setTrackPan = (i, v) => app.setTrackPan(i, v);
 
 const stats = computed(() => {
   const song = currentSong.value && currentSong.value.song;

@@ -2,9 +2,13 @@
 // 设置面板（全局系统功能）：外观 / 引擎 / 功能 / 快捷键 / 插件 + 完整性检验警告条
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import Icon from './Icon.vue';
-import { state, toast } from '../store.js';
+import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
 import { t, setLang, getLang } from '../core/i18n.js';
+
+const app = useAppStore();
+const state = app;
+const toast = (m, t) => app.toast(m, t);
 import { THEMES, themeById, applyTheme, saveTheme } from '../core/theme.js';
 
 const bridge = window.fuBridge;

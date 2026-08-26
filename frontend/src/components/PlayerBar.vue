@@ -1,9 +1,28 @@
 <script setup>
 import { computed, ref } from 'vue';
 import Icon from './Icon.vue';
-import { state, currentSong, totalStr, curStr, togglePlay, stopPlay, seekRatio, setTempo, toggleLoop, toggleMetro, setVolume, selectSong, toast, toggleTrackMute, toggleTrackSolo, setTrackVol, setTrackPan } from '../store.js';
+import { useAppStore } from '../stores/app';
 import { getPlayer, getCtx } from '../audio.js';
 import { initMidiOutput, setMidiOutEnabled, midiOutOn, midiOutOff, midiAllOff, getMidiOutDeviceName } from '../core/midiout.js';
+
+const app = useAppStore();
+const state = app;
+const currentSong = computed(() => app.currentSong);
+const totalStr = computed(() => app.totalStr);
+const curStr = computed(() => app.curStr);
+const togglePlay = () => app.togglePlay();
+const stopPlay = () => app.stopPlay();
+const seekRatio = (r) => app.seekRatio(r);
+const setTempo = (v) => app.setTempo(v);
+const toggleLoop = () => app.toggleLoop();
+const toggleMetro = () => app.toggleMetro();
+const setVolume = (v) => app.setVolume(v);
+const selectSong = (id) => app.selectSong(id);
+const toast = (m, t) => app.toast(m, t);
+const toggleTrackMute = (i) => app.toggleTrackMute(i);
+const toggleTrackSolo = (i) => app.toggleTrackSolo(i);
+const setTrackVol = (i, v) => app.setTrackVol(i, v);
+const setTrackPan = (i, v) => app.setTrackPan(i, v);
 
 // 播放中 rAF 会逐帧改写 state.progress；若用户在拖动进度条，则改为显示本地拖动值，
 // 避免手指/鼠标拖到哪又被拉回播放头位置（表现为“进度条拖不动”）。

@@ -1,6 +1,6 @@
 <script setup>
 import Icon from '../components/Icon.vue';
-import { VIEWS } from '../store.js';
+import { VIEWS } from '../stores/app';
 
 const props = defineProps({ viewId: { type: String, required: true } });
 const v = VIEWS.find(x => x.id === props.viewId) || { label: props.viewId, ic: 'spark' };

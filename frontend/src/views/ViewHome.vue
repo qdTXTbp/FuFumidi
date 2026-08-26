@@ -1,8 +1,21 @@
 <script setup>
+import { computed } from 'vue';
 import Icon from '../components/Icon.vue';
-import { state, setView, selectSong, currentSong, importFiles, setTempo, setTrackVol, setTrackPan, toggleTrackMute, toggleTrackSolo } from '../store.js';
+import { useAppStore } from '../stores/app';
 import { ensureAudio } from '../audio.js';
 import { encodeMidi } from '../core/midi.js';
+
+const app = useAppStore();
+const state = app;
+const setView = (v) => app.setView(v);
+const selectSong = (id) => app.selectSong(id);
+const currentSong = computed(() => app.currentSong);
+const importFiles = (items) => app.importFiles(items);
+const setTempo = (v) => app.setTempo(v);
+const setTrackVol = (i, v) => app.setTrackVol(i, v);
+const setTrackPan = (i, v) => app.setTrackPan(i, v);
+const toggleTrackMute = (i) => app.toggleTrackMute(i);
+const toggleTrackSolo = (i) => app.toggleTrackSolo(i);
 
 const QUICK = [
   { ic: 'transcribe', title: '开始转录', sub: '音频转 MIDI · 本地引擎', view: 'transcribe', soon: false },

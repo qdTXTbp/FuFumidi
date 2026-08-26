@@ -1,8 +1,12 @@
 <script setup>
 // 新手引导：首次启动展示；3 个实操场景跳转对应视图；localStorage 记录完成状态
 import Icon from './Icon.vue';
-import { state, setView } from '../store.js';
+import { useAppStore } from '../stores/app';
 import { t } from '../core/i18n.js';
+
+const app = useAppStore();
+const state = app;
+const setView = (v) => app.setView(v);
 
 const bridge = window.fuBridge;
 

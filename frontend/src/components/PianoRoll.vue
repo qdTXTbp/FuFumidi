@@ -1,7 +1,11 @@
 <script setup>
-import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
-import { state, currentSong } from '../store.js';
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { useAppStore } from '../stores/app';
 import { KEY_NAME, noteName } from '../core/util.js';
+
+const app = useAppStore();
+const state = app;
+const currentSong = computed(() => app.currentSong);
 
 const wrap = ref(null);
 const canvas = ref(null);

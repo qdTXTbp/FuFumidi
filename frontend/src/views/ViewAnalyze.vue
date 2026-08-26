@@ -1,8 +1,13 @@
 <script setup>
-import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
-import { currentSong, setView, toast } from '../store.js';
+import { useAppStore } from '../stores/app';
 import { analyzeSong, barChart, hBarChart, DUR_LABELS } from '../core/analysis.js';
+
+const app = useAppStore();
+const currentSong = computed(() => app.currentSong);
+const setView = (v) => app.setView(v);
+const toast = (m, t) => app.toast(m, t);
 import { TRACK_COLORS, KEY_NAME, noteName, fmtTime } from '../core/util.js';
 import { getPlayer } from '../audio.js';
 

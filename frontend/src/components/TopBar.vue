@@ -1,9 +1,12 @@
 <script setup>
 import { ref } from 'vue';
 import Icon from './Icon.vue';
-import { state, VIEWS, setView } from '../store.js';
+import { useAppStore, VIEWS } from '../stores/app';
 import { t } from '../core/i18n.js';
 
+const app = useAppStore();
+const state = app;
+const setView = (v) => app.setView(v);
 const ICONS = { home: 'home', play: 'play2', lyrics: 'music', edit: 'edit', viz: 'viz', analyze: 'chart', score: 'score', transcribe: 'transcribe', convert: 'convert' };
 const menuOpen = ref(false);
 

@@ -1,8 +1,15 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
-import { currentSong, state, toast, importFiles, setView } from '../store.js';
+import { useAppStore } from '../stores/app';
 import { getPlayer } from '../audio.js';
+
+const app = useAppStore();
+const state = app;
+const currentSong = computed(() => app.currentSong);
+const toast = (m, t) => app.toast(m, t);
+const importFiles = (items) => app.importFiles(items);
+const setView = (v) => app.setView(v);
 import { t } from '../core/i18n.js';
 import { esc, clamp, TRACK_COLORS } from '../core/util.js';
 import { encodeMidi } from '../core/midi.js';

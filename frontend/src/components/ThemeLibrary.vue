@@ -2,8 +2,12 @@
 // 主题库：点击卡片立即换肤；上传图片提取主色生成自定义主题
 import { ref, computed, onMounted } from 'vue';
 import Icon from './Icon.vue';
-import { state, toast } from '../store.js';
+import { useAppStore } from '../stores/app';
 import { t } from '../core/i18n.js';
+
+const app = useAppStore();
+const state = app;
+const toast = (m, t) => app.toast(m, t);
 import { THEMES, themeSwatches, saveTheme, extractAccentFromImage } from '../core/theme.js';
 
 const bridge = window.fuBridge;

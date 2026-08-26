@@ -2,8 +2,13 @@
 // 转录视图：音频 → MIDI（本地 Python 引擎，桌面端通过 fuBridge 桥接）
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
-import { toast, importFiles, setView } from '../store.js';
+import { useAppStore } from '../stores/app';
 import { clamp, esc, fmtTime } from '../core/util.js';
+
+const app = useAppStore();
+const toast = (m, t) => app.toast(m, t);
+const importFiles = (items) => app.importFiles(items);
+const setView = (v) => app.setView(v);
 
 const bridge = window.fuBridge;
 const isDesktop = !!(bridge && bridge.convert);
