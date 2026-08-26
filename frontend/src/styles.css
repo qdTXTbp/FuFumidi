@@ -360,6 +360,7 @@ body {
 
 /* ---------- 歌曲列表 ---------- */
 .song-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -372,10 +373,23 @@ body {
 .song-item:hover { background: var(--surface-soft); }
 .song-item.active { background: var(--surface); border-color: var(--hairline); }
 .song-item .si-num { color: var(--stone); font-size: 11px; width: 22px; text-align: right; font-variant-numeric: tabular-nums; }
-.song-item .si-name { flex: 1; min-width: 0; font-size: 13px; }
+.song-item .si-name { flex: 1; min-width: 0; font-size: 13px; padding-right: 4px; }
 .song-item .si-name b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--ink); }
 .song-item .si-name small { color: var(--stone); font-size: 11px; }
-.song-item .si-tools { display: flex; gap: 2px; opacity: 0; transition: opacity 0.14s; }
+.song-item .si-tools {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--surface-soft);
+  opacity: 0;
+  transition: opacity 0.14s;
+  z-index: 2;
+}
 .song-item:hover .si-tools { opacity: 1; }
 .song-item .playing-ic { color: var(--success-text); }
 

@@ -153,6 +153,46 @@ function dropOnList() {
   resetDrag();
 }
 
+/* ---------------- 歌单拖动重排 ---------------- */
+const plDragId = ref(null);
+const plOverId = ref(null);
+const canReorderPlaylists = computed(() => playlist.playlists.length > 1);
+function plDragStart(p) {
+  plDragId.value = p.id;
+  plOverId.value = p.id;
+}
+function plDragOver(e, targetId) {
+  if (!plDragId.value || plDragId.value === targetId) return;
+  plOverId.value = targetId;
+  const r = e.currentTarget.getBoundingClientRect();
+  const before = (e.clientY - r.top) < r.height / 2;
+  const row = e.currentTarget;
+  row.classList.toggle('pl-drag-before', before);
+  row.classList.toggle('pl-drag-after', !before);
+}
+function plDragLeave(e) {
+  e.currentTarget.classList.remove('pl-drag-before', 'pl-drag-after');
+}
+function plDrop(e, targetId) {
+  e.stopPropagation();
+  const r = e.currentTarget.getBoundingClientRect();
+  const before = (e.clientY - r.top) < r.height / 2;
+  if (plDragId.value && targetId && plDragId.value !== targetId) {
+    playlist.movePlaylist(plDragId.value, targetId, before);
+  }
+  resetPlDrag();
+}
+function plDropEnd() {
+  if (!plDragId.value || !canReorderPlaylists.value) return;
+  playlist.movePlaylistToEnd(plDragId.value);
+  resetPlDrag();
+}
+function resetPlDrag() {
+  plDragId.value = null;
+  plOverId.value = null;
+  document.querySelectorAll('.pl-item').forEach(x => x.classList.remove('pl-drag-before', 'pl-drag-after'));
+}
+
 function baseName(p) { return String(p).split(/[\\/]/).pop() || '未命名.mid'; }
 
 function newPlaylist() {
@@ -252,12 +292,30 @@ function onDrop(e) {
       <div class="nav-sep"></div>
       <div class="nav-group-title">MIDI 歌单 <span class="muted" style="float:right;text-transform:none;letter-spacing:0">{{ visibleSongs.length }}</span></div>
 
-      <div class="pl-toolbar">
-        <select class="select-input" :value="playlist.activePlaylistId" @change="playlist.select($event.target.value)" style="flex:1;min-width:0;padding:5px 8px;font-size:12px">
-          <option value="favorites">★ 收藏（{{ favs.size }}）</option>
-          <option v-for="p in playlist.playlists" :key="p.id" :value="p.id">{{ p.name }}（{{ p.songIds.length }}）</option>
-        </select>
+      <div class="pl-toolbar pl-head">
+        <span class="pl-head-title">歌单</span>
         <button class="icon-btn" title="新建歌单" @click="newPlaylist" style="width:28px;height:28px"><Icon name="plus" :size="14" /></button>
+      </div>
+
+      <div class="pl-list" @dragover.prevent @drop.prevent.stop="plDropEnd">
+        <div class="pl-item" :class="{ active: isFavView }" @click="playlist.select('favorites')">
+          <span class="pl-star">★</span>
+          <span class="pl-name">收藏</span>
+          <span class="pl-count">{{ favs.size }}</span>
+        </div>
+        <div v-for="p in playlist.playlists" :key="p.id" class="pl-item"
+             :class="{ active: playlist.activePlaylistId === p.id, dragging: plDragId === p.id, dragTarget: plOverId === p.id, dragable: canReorderPlaylists }"
+             :draggable="canReorderPlaylists"
+             @dragstart="plDragStart(p)"
+             @dragover.prevent="plDragOver($event, p.id)"
+             @dragleave="plDragLeave($event)"
+             @drop.stop.prevent="plDrop($event, p.id)"
+             @dragend="resetPlDrag()"
+             @click="playlist.select(p.id)">
+          <span v-if="canReorderPlaylists" class="pl-drag"><Icon name="drag" :size="12" /></span>
+          <span class="pl-name">{{ p.name }}</span>
+          <span class="pl-count">{{ p.songIds.length }}</span>
+        </div>
       </div>
 
       <div class="pl-toolbar">
@@ -337,6 +395,23 @@ function onDrop(e) {
 .song-item.dragTarget { background: var(--surface-soft); }
 .song-item.drag-before { box-shadow: 0 -2px 0 0 var(--accent) !important; }
 .song-item.drag-after { box-shadow: 0 2px 0 0 var(--accent) !important; }
+.pl-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.pl-head-title { font-size: 11px; font-weight: 700; color: var(--stone); letter-spacing: .4px; text-transform: uppercase; }
+.pl-list { display: flex; flex-direction: column; gap: 3px; padding: 2px; margin-bottom: 6px; border: 1px solid transparent; border-radius: 10px; transition: box-shadow .12s, background .12s; }
+.pl-list:has(.pl-item.dragging) { box-shadow: inset 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.pl-item { display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-radius: 9px; border: 1px solid transparent; cursor: pointer; color: var(--ink); font-size: 12.5px; transition: background .12s, border-color .12s, box-shadow .12s; }
+.pl-item:hover { background: var(--surface-soft); }
+.pl-item.active { background: var(--surface); border-color: var(--hairline); }
+.pl-item.dragging { opacity: .45; }
+.pl-item.dragTarget { background: var(--surface-soft); }
+.pl-item.drag-before { box-shadow: 0 -2px 0 0 var(--accent) !important; }
+.pl-item.drag-after { box-shadow: 0 2px 0 0 var(--accent) !important; }
+.pl-item.pl-dragable { cursor: grab; }
+.pl-drag { display: inline-flex; align-items: center; color: var(--stone); opacity: .35; transition: opacity .12s; user-select: none; }
+.pl-item:hover .pl-drag, .pl-item.dragging .pl-drag { opacity: 1; }
+.pl-star { color: var(--amber); }
+.pl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-count { color: var(--stone); font-size: 11px; font-variant-numeric: tabular-nums; }
 .pl-toolbar { display: flex; align-items: center; gap: 5px; margin-bottom: 5px; }
 .pl-batch { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 5px 8px; margin-bottom: 5px; border: 1px dashed var(--hairline); border-radius: 10px; background: var(--surface-soft); }
 .song-check { width: 14px; height: 14px; accent-color: var(--ink); }
