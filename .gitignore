@@ -1,4 +1,4 @@
-﻿node_modules/
+node_modules/
 dist/
 release/
 release-base/
@@ -15,4 +15,7 @@ build.err.log
 build-base.log
 build-base.err.log
 package-lock.json
+__pycache__/
+*.pyc
+*.pyo
 .DS_Store
