@@ -167,6 +167,20 @@ export const I18N_MAP = {
   '下载 WebM': 'Download WebM',
   '桌面版可一键转码为 MP4（H.264 + AAC）': 'Desktop app can transcode to MP4 (H.264 + AAC)',
   '预览已生成，正在转码 MP4…': 'Preview ready, transcoding MP4…',
+  /* 动态壁纸 */
+  '动态壁纸': 'Live Wallpaper',
+  '动态壁纸（点击切换）': 'Live Wallpaper (click to switch)',
+  '动态壁纸：': 'Wallpaper: ',
+  '桌面视频作为背景，毛玻璃组件透出其画面': 'Desktop video as background, glass panels show through',
+  '启用': 'Enable',
+  '播放中': 'Playing',
+  '播放': 'Play',
+  '更换': 'Change',
+  '未设置': 'Not set',
+  '壁纸源已更新': 'Wallpaper source updated',
+  '壁纸源已更新（当前会话）': 'Wallpaper source updated (this session)',
+  '已关闭动态壁纸': 'Live wallpaper off',
+  '未找到壁纸视频，请在设置中选择': 'No wallpaper video found, pick one in Settings',
 
   /* 设置面板 */
   '应用设置': 'Settings',

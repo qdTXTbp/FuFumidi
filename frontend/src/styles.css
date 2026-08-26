@@ -1,8 +1,3 @@
-/* ============================================================
-   FuFumidi · MiniMax 设计系统（Vue 3 重构版）
-   极简黑白画布 · DM Sans · 黑色胶囊 CTA · 品牌色编码
-   ============================================================ */
-
 :root {
   /* MiniMax 品牌色 */
   --brand-coral: #ff5530;
@@ -109,6 +104,20 @@ body {
   transition: grid-template-columns 0.25s ease;
 }
 .app-shell.side-collapsed { grid-template-columns: 0 1fr; }
+
+/* ---------- 动态壁纸（全屏背景视频） ---------- */
+.app-wallpaper {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+  pointer-events: none;
+  background: #0a0f18;
+}
+/* 内容层提升到壁纸之上（壁纸始终作为背景衬底） */
+.sidebar, .topbar, .app-main, .playerbar { position: relative; z-index: 1; }
 
 .app-main {
   grid-area: main;
@@ -301,6 +310,7 @@ body {
 }
 .icon-btn:hover { background: var(--surface-soft); color: var(--ink); }
 .icon-btn.active { background: var(--surface); color: var(--ink); }
+.topbar .icon-btn.toggle-on { background: var(--brand-blue); color: #fff; }
 
 /* ---------- 卡片（card-base：白底 16px 圆角 hairline 边框） ---------- */
 .card {
@@ -763,6 +773,8 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .fr-ctl { display: flex; align-items: center; gap: 8px; flex: none; }
 .fr-ctl.col { flex-direction: column; align-items: flex-end; gap: 6px; }
 .fr-ctl.stretch { flex: 1; min-width: 0; align-items: stretch; }
+.fr-sw { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--slate); cursor: pointer; user-select: none; }
+.fr-sw input[type="checkbox"] { accent-color: var(--brand-blue); width: 14px; height: 14px; }
 .ov-input {
   appearance: none;
   -webkit-appearance: none;

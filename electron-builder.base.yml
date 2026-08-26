@@ -6,6 +6,7 @@ directories:
 asarUnpack:
   - "engine/**"
   - "**/*.node"
+  - "renderer/dist/wallpapers/**"
 files:
   - "**/*"
   - "!dist/**"

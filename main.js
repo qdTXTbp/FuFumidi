@@ -890,6 +890,22 @@ function registerIpc() {
       return out;
     } catch (e) { return []; }
   });
+  // 动态壁纸：发现桌面上的视频文件（mp4/webm/mov），供渲染进程作为壁纸源
+  ipcMain.handle('wallpaper:defaults', async () => {
+    try {
+      const desktop = app.getPath('desktop');
+      const exts = new Set(['.mp4', '.webm', '.mov']);
+      const out = [];
+      if (fs.existsSync(desktop)) {
+        for (const f of fs.readdirSync(desktop)) {
+          const ext = path.extname(f).toLowerCase();
+          if (exts.has(ext)) out.push(path.join(desktop, f));
+        }
+      }
+      out.sort((a, b) => a.localeCompare(b, 'zh'));
+      return { ok: true, files: out.slice(0, 4) };
+    } catch (e) { return { ok: false, files: [] }; }
+  });
   // 读取本地文件（转录结果回载）——异步 + 大小上限，避免阻塞主进程
   ipcMain.handle('file:readBinary', async (_e, p) => {
     try {
@@ -1023,6 +1039,8 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       backgroundThrottling: false,
+      // 允许 file:// 页面加载本地视频（动态壁纸）
+      allowFileAccessFromFileUrls: true,
     },
   });
 

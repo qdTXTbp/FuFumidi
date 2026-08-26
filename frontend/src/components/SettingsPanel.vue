@@ -2,7 +2,7 @@
 // 设置面板（全局系统功能）：外观 / 引擎 / 功能 / 快捷键 / 插件 + 完整性检验警告条
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import Icon from './Icon.vue';
-import { state, toast } from '../store.js';
+import { state, toast, setWallpaperEnabled, setWallpaperIndex, setWallpaperSource } from '../store.js';
 import { t, setLang, getLang } from '../core/i18n.js';
 import { THEMES, themeById, applyTheme, saveTheme } from '../core/theme.js';
 
@@ -93,6 +93,23 @@ function onDensity() { applyDisplay(form.font_size, form.density); }
 function onLang() {
   setLang(form.lang);
   try { localStorage.setItem('fufumidi_lang', form.lang); } catch (e) {}
+}
+
+/* ---------------- 动态壁纸 ---------------- */
+function wpBase(p) { return String(p || '').split(/[\\/]/).pop() || t('未设置'); }
+function pickWallpaper(i) {
+  if (bridge && bridge.pickFile) {
+    bridge.pickFile({ filters: [{ name: '视频', extensions: ['mp4', 'webm', 'mov'] }] })
+      .then(p => { if (p) { setWallpaperSource(i, p); toast(t('壁纸源已更新'), 'ok'); } })
+      .catch(() => {});
+    return;
+  }
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'video/*';
+  inp.onchange = () => {
+    const f = inp.files && inp.files[0];
+    if (f) { setWallpaperSource(i, URL.createObjectURL(f)); toast(t('壁纸源已更新（当前会话）'), 'ok'); }
+  };
+  inp.click();
 }
 
 /* ---------------- 引擎 ---------------- */
@@ -301,6 +318,26 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
                 <option v-for="th in themeOpts" :key="th.id" :value="th.id">{{ t(th.name) }}</option>
               </select>
               <button class="btn sm" @click="state.ui.themesOpen = true">🎨 {{ t('主题库') }}</button>
+            </div>
+          </div>
+          <!-- 动态壁纸（背景视频，两个源可切换） -->
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('动态壁纸') }}</div>
+              <div class="fr-hint">{{ t('桌面视频作为背景，毛玻璃组件透出其画面') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <label class="fr-sw"><input type="checkbox" :checked="!!state.wallpaper.enabled" @change="e => setWallpaperEnabled(e.target.checked)" /> {{ t('启用') }}</label>
+            </div>
+          </div>
+          <div class="field-row" v-for="(src, i) in state.wallpaper.sources" :key="i">
+            <div>
+              <div class="fr-label">壁纸 {{ i + 1 }}<span v-if="state.wallpaper.enabled && i === state.wallpaper.index" class="tag accent" style="margin-left:8px;font-size:10px">{{ t('播放中') }}</span></div>
+              <div class="fr-hint" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ wpBase(src) }}</div>
+            </div>
+            <div class="fr-ctl">
+              <button class="btn sm" @click="setWallpaperEnabled(true); setWallpaperIndex(i)">{{ t('播放') }}</button>
+              <button class="btn sm ghost" @click="pickWallpaper(i)">{{ t('更换') }}</button>
             </div>
           </div>
           <div class="field-row">

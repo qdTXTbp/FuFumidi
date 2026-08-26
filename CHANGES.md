@@ -217,3 +217,9 @@ npm run dist:win
 - 全组件毛玻璃：侧边栏/顶栏（白玻璃）、播放条（深色玻璃）、卡片/面板/弹窗/列表项/表单控件统一 backdrop-filter blur + 半透明底；激活态用 color-mix 主题色半透明玻璃。
 - hover 态保持玻璃，不还原为不透明。
 - 编辑器/乐谱画布等需清晰白底的区域保持不透明。
+
+### 9.8 内置动态壁纸（背景视频）
+- 桌面两个视频（芙宁娜.mp4 / studio_video_1716732543213.mp4）复制到 frontend/public/wallpapers/ 作为项目内置资源（不入 git，超 GitHub 100MB）。
+- 全屏背景视频层（.app-wallpaper）：静音循环、object-fit cover，毛玻璃组件透出其画面；main.js 开启 allowFileAccessFromFileUrls。
+- 切换：顶栏壁纸按钮循环 关→视频1→视频2→关；设置面板外观区可启用/播放/更换源（存 localStorage）。
+- electron-builder asarUnpack 排除 renderer/dist/wallpapers 避免 asar 内播放问题。

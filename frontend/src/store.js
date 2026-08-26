@@ -34,6 +34,9 @@ export const state = reactive({
   batchMode: false,
   batchSel: [],
 
+  // 动态壁纸（背景视频，两个源可切换）
+  wallpaper: { enabled: false, index: 0, sources: [] },
+
   // 播放状态
   playing: false,
   curSec: 0,
@@ -317,6 +320,67 @@ export const plSongs = computed(() => {
   if (!pl) return state.songs;
   return pl.items.map(id => state.songs.find(s => s.id === id)).filter(Boolean);
 });
+
+/* ---------------- 动态壁纸（背景视频，两个源可切换） ---------------- */
+const LS_WALLPAPER = 'fufumidi_wallpaper';
+// 内置壁纸（frontend/public/wallpapers，随项目构建/打包分发）
+const BUILTIN_WALLPAPERS = ['wallpapers/studio_video_1716732543213.mp4', 'wallpapers/芙宁娜.mp4'];
+
+export async function loadWallpaper() {
+  try {
+    const w = JSON.parse(localStorage.getItem(LS_WALLPAPER) || 'null');
+    if (w && Array.isArray(w.sources)) {
+      state.wallpaper.enabled = !!w.enabled;
+      state.wallpaper.index = Math.max(0, Number(w.index) || 0);
+      state.wallpaper.sources = w.sources.filter(s => typeof s === 'string');
+      if (state.wallpaper.sources.length) return;
+    }
+  } catch (e) {}
+  // 未配置：使用项目内置壁纸（frontend/public/wallpapers，随构建/打包分发）
+  state.wallpaper.sources = BUILTIN_WALLPAPERS.slice();
+  state.wallpaper.index = 0;
+  saveWallpaper();
+}
+export function saveWallpaper() {
+  try { localStorage.setItem(LS_WALLPAPER, JSON.stringify({ enabled: state.wallpaper.enabled, index: state.wallpaper.index, sources: state.wallpaper.sources })); } catch (e) {}
+}
+// 当前壁纸源（未启用或无源返回 ''）
+export const wallpaperSrc = computed(() => {
+  const w = state.wallpaper;
+  if (!w.enabled || !w.sources.length) return '';
+  return w.sources[w.index % w.sources.length] || '';
+});
+// 循环切换：关闭 → 视频1 → 视频2 → 关闭
+export function cycleWallpaper() {
+  const w = state.wallpaper;
+  if (!w.sources.length) { toast('未找到壁纸视频，请在设置中选择', 'warn'); return; }
+  if (!w.enabled) { w.enabled = true; w.index = 0; }
+  else if (w.index < w.sources.length - 1) w.index++;
+  else w.enabled = false;
+  saveWallpaper();
+  if (w.enabled) toast('壁纸：' + baseName(w.sources[w.index]), 'ok');
+  else toast('已关闭动态壁纸', 'ok');
+}
+function baseName(p) { return String(p).split(/[\\/]/).pop(); }
+export function setWallpaperEnabled(on) {
+  state.wallpaper.enabled = !!on;
+  if (on && !state.wallpaper.sources.length && window.fuBridge) loadWallpaper();
+  saveWallpaper();
+}
+export function setWallpaperIndex(i) {
+  const w = state.wallpaper;
+  if (!w.sources.length) return;
+  w.index = Math.max(0, Math.min(w.sources.length - 1, Number(i) || 0));
+  saveWallpaper();
+}
+export function setWallpaperSource(i, path) {
+  const w = state.wallpaper;
+  const idx = Math.max(0, Number(i) || 0);
+  if (!path || !String(path).trim()) return;
+  if (w.sources[idx] === String(path).trim()) return;
+  w.sources[idx] = String(path).trim();
+  saveWallpaper();
+}
 
 /* ---------------- 播放控制 ---------------- */
 export async function selectSong(id) {

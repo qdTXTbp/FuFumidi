@@ -17,7 +17,7 @@ import ViewLyrics from './views/ViewLyrics.vue';
 import ViewConvert from './views/ViewConvert.vue';
 import ViewTranscribe from './views/ViewTranscribe.vue';
 import ViewPlaceholder from './views/ViewPlaceholder.vue';
-import { state, MIGRATED_VIEWS, startTickLoop, stopTickLoop, restoreSongs, loadPlaylists, togglePlay, seekRatio, setTempo, toggleLoop, toggleMetro } from './store.js';
+import { state, MIGRATED_VIEWS, startTickLoop, stopTickLoop, restoreSongs, loadPlaylists, loadWallpaper, wallpaperSrc, togglePlay, seekRatio, setTempo, toggleLoop, toggleMetro } from './store.js';
 import { setLang } from './core/i18n.js';
 import { applyTheme, loadTheme } from './core/theme.js';
 
@@ -97,6 +97,7 @@ onMounted(() => {
   startTickLoop();
   restoreSongs();
   loadPlaylists();
+  loadWallpaper();
   initGlobal();
   window.addEventListener('keydown', onKey);
 });
@@ -108,6 +109,8 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app-shell" :class="{ 'side-collapsed': !state.sidebarOpen }">
+    <!-- 动态壁纸：全屏背景视频（静音循环，毛玻璃组件透出其画面） -->
+    <video v-if="wallpaperSrc" class="app-wallpaper" :src="wallpaperSrc" autoplay muted loop playsinline preload="auto"></video>
     <SideBar />
     <TopBar />
     <main class="app-main">

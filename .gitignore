@@ -20,3 +20,6 @@ resources/
 models/
 engine/__pycache__/
 renderer/dist/
+
+# 动态壁纸视频（单文件超 GitHub 100MB 限制，不纳入版本库，本地保留即可）
+frontend/public/wallpapers/
