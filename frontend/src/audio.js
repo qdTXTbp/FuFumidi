@@ -11,7 +11,7 @@ export function ensureAudio() {
   if (!ctx) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) throw new Error('当前环境不支持 Web Audio API');
-    ctx = new AC();
+    try { ctx = new AC({ latencyHint: 'interactive' }); } catch (e) { ctx = new AC(); }
     synth = new Synth(ctx);
     synth.loadSf2();
     player = new Player(synth);

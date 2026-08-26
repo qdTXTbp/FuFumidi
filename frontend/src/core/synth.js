@@ -369,13 +369,17 @@ export class Synth {
     playVoice(this.ctx, t, midi, vel, presetForProgram(prog), this.trackGains[0], t + dur, this.live);
     this.activeNotes.push({ midi, trk: 0, endTime: t + dur });
   }
-  pruneLive() {
+  pruneLive(limit = 256) {
     const t = this.ctx.currentTime;
-    this.live = this.live.filter(x => {
-      if (x.tStop > t) return true;
-      try { x.o.stop(); } catch (e) {}
-      return false;
-    });
+    const expires = this.live.filter(x => x.tStop <= t);
+    for (const x of expires) { try { x.o.stop(); } catch (e) {} }
+    this.live = this.live.filter(x => x.tStop > t);
+    if (this.live.length > limit) {
+      const sorted = this.live.slice().sort((a, b) => a.tStop - b.tStop);
+      const remove = sorted.slice(0, this.live.length - limit);
+      for (const x of remove) { try { x.o.stop(); } catch (e) {} }
+      this.live = this.live.filter(x => !remove.includes(x));
+    }
   }
   allStop() {
     const t = this.ctx.currentTime;

@@ -433,8 +433,6 @@ async function renderVideo() {
     cv.width = W; cv.height = H;
     const ctx = cv.getContext('2d');
     const fps = VE.fps || 30;
-    const mime = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find(m => { try { return MediaRecorder.isTypeSupported(m); } catch (e) { return false; } });
-    if (!mime) throw new Error('no supported mime');
     let sec = VE.dur || 30;
     if (sec === 0) sec = Math.min(s.totalSec, 120);
     if (VE.range === 'custom') sec = Math.max(1, VE.end - VE.start);
@@ -442,9 +440,24 @@ async function renderVideo() {
     let startSec = VE.range === 'custom' ? (VE.start || 0) : 0;
     const stream = cv.captureStream(fps);
     const bitrate = VE.quality === 'low' ? 4e6 : VE.quality === 'high' ? 16e6 : (VE.quality === 'custom' ? (VE.bitrate * 1e6) : 8e6);
-    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: bitrate });
+    // 自动尝试多种编码/码率，避免单一种类不支持导致导出失败
+    const mimeCandidates = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+    let rec = null, usedMime = null;
+    for (const m of mimeCandidates) {
+      if (!MediaRecorder.isTypeSupported(m)) continue;
+      for (const br of [bitrate, Math.max(1e6, Math.floor(bitrate * 0.6)), 2e6]) {
+        try {
+          rec = new MediaRecorder(stream, { mimeType: m, videoBitsPerSecond: br });
+          usedMime = m;
+          break;
+        } catch (e) {}
+      }
+      if (rec) break;
+    }
+    if (!rec) throw new Error('no supported mime');
     const chunks = [];
     rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    rec.onerror = (e) => { console.warn('[video] MediaRecorder error', e); };
     const stopped = new Promise((res) => { rec.onstop = res; });
     rec.start(500);
     const start = performance.now();
