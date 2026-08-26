@@ -15,6 +15,7 @@ const TABS = [
   { id: 'feature', label: '功能', icon: 'folder' },
   { id: 'keys', label: '快捷键', icon: 'kbd' },
   { id: 'plugins', label: '插件', icon: 'spark' },
+  { id: 'update', label: '更新', icon: 'download' },
 ];
 const tab = ref('appearance');
 
@@ -24,6 +25,16 @@ const form = reactive({
   font_size: 'standard', density: 'comfortable', lang: 'zh',
   engine_path: '', engine_mode: 'universal', perf_mode: 'quality', batch_concurrency: 'auto',
   output_dir: '', name_rule: '', watch_dir: '', watch_enabled: false, file_assoc: true,
+});
+
+/* ---------------- 更新 ---------------- */
+const upd = reactive({
+  mirror: 'ghfast',
+  releases: [],
+  version: -1,
+  asset: -1,
+  status: '',
+  loading: false,
 });
 
 /* ---------------- GPU 加速 ---------------- */
@@ -92,6 +103,7 @@ async function load() {
   refreshModels();
   loadPlugins();
   initGpu();
+  initUpdate();
 }
 
 /* ---------------- 外观 ---------------- */
@@ -169,6 +181,54 @@ async function exportDiag() {
     else if (r && r.ok) toast(t('诊断包已导出'));
     else toast(t('导出失败：') + String((r && r.error) || 'unknown'), 'error');
   } catch (e) { toast(t('导出失败：') + String(e.message || e), 'error'); }
+}
+
+/* ---------------- 更新 ---------------- */
+const updSelectedRelease = computed(() => upd.releases[upd.version] || null);
+const updSelectedAsset = computed(() => {
+  const rel = updSelectedRelease.value;
+  if (!rel || !Array.isArray(rel.assets)) return null;
+  return rel.assets[upd.asset] || null;
+});
+function updMirrorUrl(u) {
+  if (upd.mirror === 'github') return u;
+  return 'https://' + upd.mirror + '.top/https://github.com/' + String(u).replace(/^https:\/\/github.com\//, '');
+}
+async function updLoadReleases() {
+  if (!bridge || !bridge.update || !bridge.update.list) return;
+  upd.loading = true;
+  upd.status = '刷新中…';
+  try {
+    const r = await bridge.update.list();
+    if (!Array.isArray(r)) { upd.status = (r && r.error) || '获取失败'; return; }
+    upd.releases = r;
+    upd.version = upd.releases.length ? 0 : -1;
+    upd.asset = updSelectedRelease.value && updSelectedRelease.value.assets && updSelectedRelease.value.assets.length ? 0 : -1;
+    upd.status = '';
+  } catch (e) {
+    upd.status = '获取失败：' + ((e && e.message) || e);
+  } finally {
+    upd.loading = false;
+  }
+}
+async function updOpenDownload() {
+  if (!bridge || !bridge.update || !bridge.update.openExternal) { upd.status = '当前环境不支持打开下载'; return; }
+  const asset = updSelectedAsset.value;
+  if (!asset) { upd.status = '请选择安装包'; return; }
+  const url = updMirrorUrl(asset.url);
+  upd.status = '正在打开下载…';
+  try {
+    const r = await bridge.update.openExternal(url);
+    upd.status = (r && r.ok) ? '已打开下载页面' : '打开失败';
+  } catch (e) {
+    upd.status = '打开失败：' + ((e && e.message) || e);
+  }
+}
+function initUpdate() {
+  if (!bridge || !bridge.update || !bridge.update.list) return;
+  if (upd._init) return;
+  upd._init = true;
+  updLoadReleases();
 }
 
 /* ---------------- GPU 加速 ---------------- */
@@ -360,6 +420,7 @@ function apply() {
     font_size: form.font_size, density: form.density, lang: form.lang,
     engine_path: form.engine_path, engine_mode: form.engine_mode,
     perf_mode: form.perf_mode, batch_concurrency: form.batch_concurrency,
+    batch_concurrency_manual: form.batch_concurrency !== 'auto',
     output_dir: form.output_dir, name_rule: form.name_rule,
     watch_dir: form.watch_dir, watch_enabled: form.watch_enabled,
     file_assoc: form.file_assoc,
@@ -731,6 +792,52 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
           <div class="plg-head">{{ t('插件日志') }}</div>
           <div class="plg-log">{{ pluginLog || t('无') }}</div>
           <a class="plg-docs" @click="openDocs">{{ t('开发者文档') }} ↗</a>
+        </div>
+
+        <!-- ============ 更新 ============ -->
+        <div v-else-if="tab === 'update'">
+          <p class="ov-note">{{ t('检查 GitHub 更新，可选择源（国内镜像）和版本，打开浏览器下载安装包。') }}</p>
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('下载源') }}</div>
+              <div class="fr-hint">{{ t('国内推荐 ghfast / ghproxy') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <select v-model="upd.mirror" class="ov-input" style="min-width:180px">
+                <option value="ghfast">ghfast</option>
+                <option value="ghproxy">ghproxy</option>
+                <option value="github">GitHub 官方</option>
+              </select>
+            </div>
+          </div>
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('版本') }}</div>
+              <div class="fr-hint">{{ t('点击刷新获取发布版本') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <select v-model.number="upd.version" class="ov-input" style="min-width:220px" :disabled="!upd.releases.length" @change="upd.asset = updSelectedRelease && updSelectedRelease.assets && updSelectedRelease.assets.length ? 0 : -1">
+                <option v-for="(r, i) in upd.releases" :key="i" :value="i">{{ r.tag }} · {{ r.name }}</option>
+                <option v-if="!upd.releases.length" value="-1">{{ t('暂无可用更新') }}</option>
+              </select>
+              <button class="btn sm" @click="updLoadReleases" :disabled="upd.loading">{{ t('刷新') }}</button>
+            </div>
+          </div>
+          <div v-if="updSelectedRelease && updSelectedRelease.assets && updSelectedRelease.assets.length" class="field-row">
+            <div>
+              <div class="fr-label">{{ t('安装包') }}</div>
+              <div class="fr-hint">{{ t('Windows 安装程序 / Asar 包等') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <select v-model.number="upd.asset" class="ov-input" style="min-width:240px">
+                <option v-for="(a, j) in updSelectedRelease.assets" :key="j" :value="j">{{ a.name }} · {{ (a.size/1048576).toFixed(1) }} MB</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
+            <button class="btn sm primary" @click="updOpenDownload" :disabled="!updSelectedAsset">{{ t('打开下载') }}</button>
+            <span style="font-size:12px;color:var(--stone)">{{ upd.status }}</span>
+          </div>
         </div>
       </div>
 

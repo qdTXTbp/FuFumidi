@@ -214,6 +214,17 @@ export const I18N_MAP = {
   '本地导入 ZIP': 'Import local ZIP',
   '已安装：': 'Installed: ',
   '卸载': 'Uninstall',
+  '导出 XML': 'Export XML',
+  '导出 MusicXML 文件': 'Export MusicXML file',
+  '已导出 MusicXML：': 'MusicXML exported: ',
+  'MusicXML 导出失败': 'MusicXML export failed',
+  'MusicXML 导出失败：': 'MusicXML export failed: ',
+  '更新': 'Updates',
+  '检查 GitHub 更新，可选择源（国内镜像）和版本，打开浏览器下载安装包。': 'Check GitHub releases. Choose a mirror/version, then open the installer download in your browser.',
+  '暂无可用更新': 'No updates available',
+  '安装包': 'Installer',
+  'Windows 安装程序 / Asar 包等': 'Windows installer / Asar archives',
+  '打开下载': 'Open download',
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */

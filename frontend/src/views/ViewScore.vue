@@ -8,6 +8,7 @@ import { esc, clamp, TRACK_COLORS } from '../core/util.js';
 import { encodeMidi } from '../core/midi.js';
 import { parseMusicXMLToSong } from '../core/musicxml.js';
 import { songToAbc, jianpuData, tabData, detectSf, ABC_KEY_NAMES } from '../core/score.js';
+import { songToMusicXMLTrack, songToMusicXML } from '../core/musicxml_out.js';
 
 const mode = ref('staff');       // staff | jianpu | guitar | bass
 const track = ref(0);
@@ -26,9 +27,10 @@ const previewOpen = ref(false);
 const previewBusy = ref(false);
 const previewPages = ref([]);
 
+let scoreVerovio = null;
 let abcjsLoaded = false;
 let abcjsLoading = null;
-let tune = null;        // abcjs TuneObject
+let tune = null;        // 渲染完成标记（Verovio 不使用 abcjs TuneObject）
 let noteEvents = [];    // [{ ms, tick, elements: [...] }]
 let flow = [];          // 视觉流向（按行阅读顺序）
 let lineTops = [], lineBottoms = [];
@@ -66,7 +68,21 @@ function midiToSec(s, tick) {
   return s.baseSec ? s.baseSec(tick) : (tick / Math.max(1, s.tpb)) * (60000 / (s.initialBpm || 120)) / 1000;
 }
 
-/* ---------------- 五线谱（abcjs） ---------------- */
+/* ---------------- 五线谱（Verovio / v2.1 乐谱引擎） ---------------- */
+let verovioLoading = null;
+async function loadVerovio() {
+  if (window.verovio && window.verovio.toolkit) return true;
+  if (verovioLoading) return verovioLoading;
+  verovioLoading = new Promise((resolve, reject) => {
+    const sc = document.createElement('script');
+    sc.src = './vendor/verovio-toolkit-wasm.js';
+    sc.onload = () => resolve(true);
+    sc.onerror = () => reject(new Error('Verovio 组件加载失败'));
+    document.head.appendChild(sc);
+  });
+  return verovioLoading;
+}
+
 async function renderStaff() {
   const el = scoreEl.value, s = song.value;
   const tr = selTrack.value;
@@ -78,83 +94,81 @@ async function renderStaff() {
   if (sc) { sc.scrollTop = 0; sc.scrollLeft = 0; }
   if (!s || !tr || !tr.notes.length) { el.innerHTML = '<div class="score-empty">' + esc(t('该轨道没有音符')) + '</div>'; setStatus(t('暂无数据')); return; }
   setStatus(t('正在生成…'));
-  try { await loadAbcjs(); } catch (e) { el.innerHTML = '<div class="score-empty">' + esc(String(e.message || e)) + '</div>'; setStatus(t('生成失败')); return; }
-  const ABCJS = window.ABCJS;
-  const vpW = sc ? sc.clientWidth : 900;
-  const cw = Math.max(360, vpW - 24);
-  const density = tr.notes.length / Math.max(1, s.bars || 1);
-  const compact = density > 60, mid = density > 25;
-  const minSpacing = compact ? 1.25 : mid ? 1.0 : 0.65;
-  const maxSpacing = compact ? 1.7 : mid ? 1.35 : 1.0;
-  const staffwidth = Math.max(360, Math.round(cw));
-  let groupN = compact ? 2 : mid ? 3 : 4;
-  let useScale = zoom.value;
+  try { await loadVerovio(); } catch (e) { el.innerHTML = '<div class="score-empty">' + esc(String(e.message || e)) + '</div>'; setStatus(t('生成失败')); return; }
+  const vrv = window.verovio;
+  if (!vrv || !vrv.toolkit) { el.innerHTML = '<div class="score-empty">Verovio 组件未加载（离线资源缺失）</div>'; setStatus(t('生成失败')); return; }
+
   try {
-    for (let attempt = 0; attempt < 10; attempt++) {
-      const abc = songToAbc(s, trackSel.value, groupN, { beam: opts.beam, simple: opts.simple });
-      tune = ABCJS.renderAbc(el, abc, {
-        staffwidth,
-        wrap: { minSpacing, maxSpacing, preferredMeasuresPerLine: groupN },
-        scale: useScale,
-        foregroundColor: 'currentColor',
-        add_classes: true,
-        selectTypes: false,
-        paddingtop: 14, paddingbottom: 14, paddingleft: 2, paddingright: 2,
-      })[0];
-      let maxW = 0;
-      for (const w of el.querySelectorAll('.abcjs-staff-wrapper')) {
-        try { maxW = Math.max(maxW, w.getBoundingClientRect().width); } catch (e) {}
+    const vpW = sc ? sc.clientWidth : 900;
+    const padL = sc ? (parseFloat(getComputedStyle(sc).paddingLeft) || 0) : 0;
+    const padR = sc ? (parseFloat(getComputedStyle(sc).paddingRight) || 0) : 0;
+    const pageW = Math.max(300, vpW - padL - padR - 8);
+    const xml = songToMusicXMLTrack(s, trackSel.value);
+
+    if (scoreVerovio && scoreVerovio.destroy) { try { scoreVerovio.destroy(); } catch (e) {} }
+    scoreVerovio = new vrv.toolkit();
+    scoreVerovio.setOptions({
+      pageWidth: Math.round(pageW),
+      pageHeight: 100000,
+      scale: Math.max(100, Math.round(100 * zoom.value)),
+      adjustPageHeight: true,
+      pageMarginLeft: 30, pageMarginRight: 10, pageMarginTop: 0, pageMarginBottom: 0,
+      footer: 'none', header: 'none',
+      spacingLinear: 0.45, spacingNonLinear: 0.8, spacingStaff: 5,
+    });
+    const loadRes = scoreVerovio.loadData(xml);
+    if (loadRes === false || loadRes < 0) { el.innerHTML = '<div class="score-empty">MusicXML 加载失败</div>'; setStatus(t('生成失败')); return; }
+    const pages = scoreVerovio.getPageCount();
+    let html = '';
+    for (let p = 1; p <= pages; p++) { try { html += scoreVerovio.renderToSVG(p, {}) || ''; } catch (e) {} }
+    el.innerHTML = html;
+    el.style.width = pageW + 'px';
+    el.classList.toggle('fu-grid', !!opts.grid);
+
+    // 建立 timemap：优先用歌曲真实 tick 时间（支持变速 MIDI）
+    const songNotes = tr.notes.slice().sort((a, b) => a.start - b.start || a.midi - b.midi);
+    const systems = Array.from(el.querySelectorAll('.system'));
+    const events = [];
+    const seen = new Set();
+    let ni = 0;
+    for (const node of el.querySelectorAll('.note')) {
+      const id = node.id || '';
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const n = songNotes[ni++];
+      let ms = 0, tick = null;
+      if (n) {
+        tick = n.start;
+        ms = midiToSec(s, n.start) * 1000;
+      } else {
+        try { const t2 = scoreVerovio.getTimeForElement(id); if (t2 != null && t2 >= 0) ms = t2; } catch (e) {}
       }
-      if (!maxW) break;
-      if (maxW > vpW * 1.02 && groupN > 1) { groupN = Math.max(1, Math.floor(groupN * 0.7)); continue; }
-      if (maxW < vpW * 0.93 && groupN < 24) { groupN = Math.min(24, Math.ceil(groupN * 1.4)); continue; }
-      if (maxW > vpW * 1.02 && groupN === 1) {
-        const fitScale = Math.max(0.5, useScale * (vpW / maxW) * 0.98);
-        if (fitScale < useScale) { useScale = fitScale; continue; }
-      }
-      break;
+      const sys = node.closest ? node.closest('.system') : null;
+      const line = Math.max(0, systems.indexOf(sys));
+      if (tick != null) node.setAttribute('data-tick', String(tick));
+      events.push({ ms, tick, ev: { el: node, left: null, line, elements: [[node]] } });
     }
-    el.style.width = '100%'; el.style.margin = '0';
+    events.sort((a, b) => a.ms - b.ms);
+    noteEvents = events;
+    flow = events.slice();
+    let fmax = -1;
+    for (const it of flow) { if (it.ms > fmax) fmax = it.ms; it.flowMs = fmax; }
+
+    // 谱线行范围（按 system 的 y 分组）
+    lineTops = []; lineBottoms = [];
+    const ar = el.getBoundingClientRect();
+    for (const node of systems) {
+      try {
+        const r = node.getBoundingClientRect();
+        const y0 = r.top - ar.top + (sc ? sc.scrollTop : 0);
+        const y1 = r.bottom - ar.top + (sc ? sc.scrollTop : 0);
+        lineTops.push(y0); lineBottoms.push(y1);
+      } catch (e) {}
+    }
+
     const svg = el.querySelector('svg');
     if (svg) { svg.style.maxWidth = '100%'; svg.style.margin = '0 auto'; }
-    if (opts.grid) el.classList.add('fu-grid');
-    setBeatWidth(el, s);
-    // 时间轴映射（setTiming 需在绘制后调用）
-    if (tune) {
-      const bpm = Math.round(((s.tempoMap && s.tempoMap[0]) ? 60000000 / s.tempoMap[0].us : (s.initialBpm || 120)) * 10) / 10;
-      const beatMs = 60000 / bpm;
-      const timings = tune.setTiming(bpm);
-      const arr = [];
-      for (const ev of timings) if (ev.type === 'event') {
-        const tick = Math.round((ev.milliseconds / beatMs) * s.tpb);
-        arr.push({ ms: midiToSec(s, tick) * 1000, tick, ev });
-      }
-      arr.sort((a, b) => a.ms - b.ms);
-      noteEvents = arr;
-      flow = arr.slice().sort((a, b) => (a.ev.line - b.ev.line) || (a.ms - b.ms));
-      let fmax = -1;
-      for (const it of flow) { if (it.ms > fmax) fmax = it.ms; it.flowMs = fmax; }
-      for (const it of arr) {
-        if (it.ev.elements) for (const es of it.ev.elements) if (es) for (const node of es) {
-          if (node && node.setAttribute) node.setAttribute('data-tick', it.tick);
-        }
-      }
-      // 每行谱线 y 上下界（跟随滚动用）
-      if (sc) {
-        const scRect = sc.getBoundingClientRect();
-        for (const it of arr) {
-          const l = it.ev.line;
-          if (l == null) continue;
-          const node = it.ev.elements && it.ev.elements[0] && it.ev.elements[0][0];
-          if (!node) continue;
-          const r = node.getBoundingClientRect();
-          const y0 = r.top - scRect.top + sc.scrollTop;
-          const y1 = r.bottom - scRect.top + sc.scrollTop;
-          if (lineTops[l] === undefined) { lineTops[l] = y0; lineBottoms[l] = y1; }
-          else { if (y0 < lineTops[l]) lineTops[l] = y0; if (y1 > lineBottoms[l]) lineBottoms[l] = y1; }
-        }
-      }
-    }
+    tune = {}; // 标记已渲染（供跟随代码使用）
     setStatus(t('渲染完成'));
   } catch (e) {
     el.innerHTML = '<div class="score-empty">' + t('乐谱解析失败：') + esc(String(e.message || e)) + '</div>';
@@ -330,6 +344,31 @@ async function importMusicXML() {
   } finally { midiBusy.value = false; }
 }
 
+/* ---------------- MusicXML 导出 ---------------- */
+async function exportMusicXML() {
+  const s = song.value;
+  if (!s) { toast(t('请先载入 MIDI 文件'), 'warn'); return; }
+  const b = window.fuBridge;
+  try {
+    const xml = songToMusicXML(s);
+    const bytes = new TextEncoder().encode(xml);
+    const name = (s.name || 'score').replace(/\.midi?$/i, '') + '.musicxml';
+    if (b && b.saveBinary) {
+      const r = await b.saveBinary({ name, data: Array.from(bytes) });
+      if (r && r.ok) toast(t('已导出 MusicXML：') + r.path, 'ok');
+      else if (r && !r.canceled) toast(t('MusicXML 导出失败'), 'warn');
+    } else {
+      const blob = new Blob([bytes], { type: 'application/vnd.recordare.musicxml+xml' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = name; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      toast(t('已导出 MusicXML'), 'ok');
+    }
+  } catch (e) {
+    toast(t('MusicXML 导出失败：') + (e.message || e), 'warn');
+  }
+}
+
 /* ---------------- PDF 导出（IPC printToPDF） ---------------- */
 async function exportPdf() {
   const b = window.fuBridge;
@@ -461,6 +500,9 @@ onBeforeUnmount(() => {
       <span class="sep"></span>
       <button class="btn sm" @click="importMusicXML" :disabled="midiBusy" :title="t('导入 MusicXML 文件')">
         <Icon name="import" :size="14" />{{ t('MusicXML') }}
+      </button>
+      <button class="btn sm" @click="exportMusicXML" :disabled="!song" :title="t('导出 MusicXML 文件')">
+        <Icon name="save" :size="14" />{{ t('导出 XML') }}
       </button>
       <button class="btn sm" @click="previewScore" :disabled="mode !== 'staff' || previewBusy" :title="t('分页预览')">
         <Icon name="eye" :size="14" />{{ t('预览') }}
