@@ -161,6 +161,7 @@ const cards = [
 ];
 
 function cardValue(a, k) {
+  if (!a) return '—';
   switch (k) {
     case 'key': return a.key;
     case 'bpm': return String(currentSong.value.song.initialBpm);
@@ -205,7 +206,7 @@ onBeforeUnmount(() => {
       <p>导入 MIDI 文件后即可在此查看音符密度、音域、调性与各类分布统计。</p>
     </div>
 
-    <template v-else>
+    <template v-else-if="data">
       <div class="az-summary card">{{ summaryText() }}</div>
 
       <div class="stat-grid">
@@ -271,6 +272,9 @@ onBeforeUnmount(() => {
       <div class="az-row">
         <div class="az-card card az-wide"><h4><Icon name="chart" :size="14" /> 力度动态曲线</h4><div class="chart-wrap" style="height:130px"><canvas id="azVelCurve"></canvas></div></div>
       </div>
+    </template>
+    <template v-else>
+      <div class="empty card"><b>正在分析…</b><p>正在读取当前曲目并计算统计。</p></div>
     </template>
   </div>
 </template>

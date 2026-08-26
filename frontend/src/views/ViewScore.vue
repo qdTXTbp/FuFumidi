@@ -133,7 +133,7 @@ async function renderStaff() {
     scoreVerovio = new vrv.toolkit();
     scoreVerovio.setOptions({
       pageWidth: Math.round(pageW),
-      pageHeight: 100000,
+      pageHeight: 60000,
       scale: Math.max(100, Math.round(100 * zoom.value)),
       adjustPageHeight: true,
       pageMarginLeft: 30, pageMarginRight: 10, pageMarginTop: 0, pageMarginBottom: 0,
