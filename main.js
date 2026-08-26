@@ -43,6 +43,7 @@ const { registerSettingsIpc } = require('./main/settings-ipc');
 const { registerDiagnosticsIpc } = require('./main/diagnostics');
 const { registerSystemIpc } = require('./main/system-ipc');
 const { registerGpuIpc } = require('./main/gpu-ipc');
+const { pyLit, parsePyJson } = require('./main/py-util');
 
 const APP_ID = 'com.fufumidi.app';
 app.setAppUserModelId(APP_ID);
@@ -228,22 +229,6 @@ app.on('before-quit', () => {
   killAll();
   if (ModelsService) ModelsService.closeAll();
 });
-
-// JS 值 → Python 字面量（安全内嵌到 -c 代码；JSON 的 true/false/null 不是合法 Python）
-function pyLit(v) {
-  if (v === null || v === undefined) return 'None';
-  if (typeof v === 'boolean') return v ? 'True' : 'False';
-  if (typeof v === 'number') return String(v);
-  if (typeof v === 'string') return JSON.stringify(v);
-  if (Array.isArray(v)) return '[' + v.map(pyLit).join(', ') + ']';
-  if (typeof v === 'object') return '{' + Object.keys(v).map(k => pyLit(k) + ': ' + pyLit(v[k])).join(', ') + '}';
-  return 'None';
-}
-function parsePyJson(out) {
-  const m = (out || '').match(/\{[\s\S]*\}/);
-  if (!m) return null;
-  try { return JSON.parse(m[0]); } catch { return null; }
-}
 
 // ---------- 完整性检验（settings / presets / 插件清单 误删检测与修复） ----------
 const integrity = createIntegrity({
