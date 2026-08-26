@@ -65,6 +65,12 @@ function loadAbcjs() {
 
 /* ---------------- 状态 ---------------- */
 function setStatus(x) { status.value = x; }
+function cssVar(name, fb) {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fb;
+  } catch (e) { return fb; }
+}
 
 function midiToSec(s, tick) {
   return s.baseSec ? s.baseSec(tick) : (tick / Math.max(1, s.tpb)) * (60000 / (s.initialBpm || 120)) / 1000;
@@ -308,7 +314,7 @@ async function rasterizeSvg(svg, scale, tileH) {
     cv.height = Math.max(1, Math.round(th * scale));
     const g = cv.getContext('2d');
     g.setTransform(scale, 0, 0, scale, 0, 0);
-    g.fillStyle = '#ffffff'; g.fillRect(0, 0, w, th);
+    g.fillStyle = cssVar('--canvas', '#ffffff'); g.fillRect(0, 0, w, th);
     g.drawImage(img, 0, off, w, th, 0, 0, w, th);
     out.push(cv.toDataURL('image/png'));
     off += th;
@@ -469,7 +475,7 @@ async function previewScore() {
         cv.width = Math.max(1, Math.round(w * scale)); cv.height = Math.max(1, Math.round(th * scale));
         const g = cv.getContext('2d');
         g.setTransform(scale, 0, 0, scale, 0, 0);
-        g.fillStyle = '#ffffff'; g.fillRect(0, 0, w, th);
+        g.fillStyle = cssVar('--canvas', '#ffffff'); g.fillRect(0, 0, w, th);
         g.drawImage(img, 0, off, w, th, 0, 0, w, th);
         pages.push(cv.toDataURL('image/png'));
         off += th;
@@ -746,7 +752,7 @@ onBeforeUnmount(() => {
 .pv-body { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
 .pv-page { border: 1px solid var(--hairline); border-radius: 12px; overflow: hidden; }
 .pv-page-name { font-size: 11px; color: var(--stone); padding: 5px 10px; border-bottom: 1px solid var(--hairline); }
-.pv-page img { width: 100%; display: block; background: #fff; }
+.pv-page img { width: 100%; display: block; background: var(--canvas); }
 .split-body { flex: 1; overflow: auto; padding: 14px 16px; }
-.split-body svg { max-width: 100%; display: block; margin: 0 auto; background: #fff; }
+.split-body svg { max-width: 100%; display: block; margin: 0 auto; background: var(--canvas); }
 </style>

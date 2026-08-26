@@ -59,6 +59,12 @@ function noteColor(i) {
   const C = ['#ff5530', '#ea5ec1', '#1456f0', '#a855f7', '#3daeff', '#1ba673', '#3b82f6', '#f59e0b', '#d45656', '#17437d'];
   return C[i % C.length];
 }
+function cssVar(name, fb) {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fb;
+  } catch (e) { return fb; }
+}
 
 /* ---------------- 坐标换算 ---------------- */
 function xToTick(x) { return viewTick.value + x / pxPerTick.value; }
@@ -279,8 +285,14 @@ function draw() {
   }
   ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx2d.clearRect(0, 0, W, H);
+  const bgTop = cssVar('--canvas', '#ffffff');
+  const bgBottom = cssVar('--surface', '#f7f8fa');
+  const hair = cssVar('--hairline', 'rgba(10,10,10,.1)');
+  const border2 = cssVar('--border-strong', 'rgba(10,10,10,.18)');
+  const stone = cssVar('--stone', 'rgba(10,10,10,.4)');
+  const steel = cssVar('--steel', '#c9ccd2');
   const g = ctx2d.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, '#ffffff'); g.addColorStop(1, '#f7f8fa');
+  g.addColorStop(0, bgTop); g.addColorStop(1, bgBottom);
   ctx2d.fillStyle = g; ctx2d.fillRect(0, 0, W, H);
   if (!s) return;
 
@@ -311,13 +323,13 @@ function draw() {
       if (x - lastStrongX < 9) continue;   // 小节线过密时跳过，避免糊成一片
       lastStrongX = x;
     }
-    ctx2d.strokeStyle = isBar ? 'rgba(10,10,10,0.14)' : 'rgba(10,10,10,0.06)';
+    ctx2d.strokeStyle = isBar ? border2 : hair;
     ctx2d.beginPath(); ctx2d.moveTo(x, 0); ctx2d.lineTo(x, H); ctx2d.stroke();
   }
   // 水平音高轨道线（每个音高一行，C 音位稍强）
   for (let m = lo; m <= hi; m++) {
     const y = (hi - m) * rowH.value;
-    ctx2d.strokeStyle = (m % 12 === 0) ? 'rgba(10,10,10,0.10)' : 'rgba(10,10,10,0.035)';
+    ctx2d.strokeStyle = (m % 12 === 0) ? border2 : hair;
     ctx2d.beginPath(); ctx2d.moveTo(0, y); ctx2d.lineTo(W, y); ctx2d.stroke();
   }
   // 音名标签
@@ -325,7 +337,7 @@ function draw() {
   for (let m = lo; m <= hi; m++) {
     if (((m % 12) + 12) % 12 !== 0) continue;
     const y = (hi - m) * rowH.value;
-    ctx2d.fillStyle = 'rgba(10,10,10,0.4)';
+    ctx2d.fillStyle = stone;
     ctx2d.fillText(noteName(m), 4, y + rowH.value - 3);
   }
   // Key Switch 高亮：C-2 ~ C0（MIDI 0-24）技法名区域
@@ -350,7 +362,7 @@ function draw() {
       if (x > W || x + w2 < 0) continue;
       const sel = tr === curTrack() && selection.has(n);
       ctx2d.globalAlpha = 0.85;
-      ctx2d.fillStyle = tr === curTrack() ? col : '#c9ccd2';
+      ctx2d.fillStyle = tr === curTrack() ? col : steel;
       ctx2d.fillRect(x, y + 1, w2, rowH.value - 2);
       ctx2d.globalAlpha = 1;
       if (sel) {

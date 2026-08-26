@@ -1298,7 +1298,7 @@ onBeforeUnmount(() => {
 .num-input:focus { border-color: var(--ink); }
 .et-tip { margin-left: auto; color: var(--stone); font-size: 10.5px; }
 .ed-modal-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.35); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.ed-modal { width: min(560px, 92vw); background: #fff; border-radius: 14px; box-shadow: 0 24px 64px rgba(16,24,40,0.2); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.ed-modal { width: min(560px, 92vw); background: var(--canvas); border-radius: 14px; box-shadow: 0 24px 64px rgba(16,24,40,0.2); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .ed-modal-head { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink); }
 .ed-modal-head b { font-size: 15px; }
 .vc-canvas { width: 100%; display: block; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; cursor: crosshair; touch-action: none; }

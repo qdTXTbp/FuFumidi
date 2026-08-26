@@ -9,6 +9,13 @@ const mode = ref('dash'); // 'dash' | 'waterfall'
 const wfZoom = ref(1);
 const colorScheme = ref(0);
 
+function cssVar(name, fb) {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fb;
+  } catch (e) { return fb; }
+}
+
 let raf = null;
 let cvs = null; // { roll, spec, scope, chord }
 let pm = null;  // 音高几何表
@@ -90,7 +97,7 @@ function drawSpectrum(cv, syn) {
       ctx2d.fillRect(i * bw, y, bw, rowH);
     }
   }
-  ctx2d.fillStyle = 'rgba(10,10,10,0.4)'; ctx2d.font = '10px Consolas, monospace'; ctx2d.textAlign = 'right';
+  ctx2d.fillStyle = cssVar('--stone', 'rgba(10,10,10,0.4)'); ctx2d.font = '10px Consolas, monospace'; ctx2d.textAlign = 'right';
   ctx2d.fillText('20k', w - 6, h - 6); ctx2d.fillText('40', w - 6, h - 6 - Math.min(40, h / 3));
 }
 
@@ -126,27 +133,30 @@ function drawChord(cv, syn) {
     }
     if (best && best.sc >= 3) chord = { name: KEY_NAME[best.r] + (best.mi ? 'm' : ''), pcs };
   }
-  ctx2d.fillStyle = '#ffffff'; ctx2d.fillRect(0, 0, w, h);
+  const bgc = cssVar('--canvas', '#ffffff');
+  const stone = cssVar('--stone', 'rgba(10,10,10,.55)');
+  const slate = cssVar('--slate', 'rgba(10,10,10,.75)');
+  ctx2d.fillStyle = bgc; ctx2d.fillRect(0, 0, w, h);
   ctx2d.textAlign = 'center'; ctx2d.textBaseline = 'middle';
   if (chord) {
     ctx2d.fillStyle = '#ff5530';
     ctx2d.font = '700 ' + Math.max(18, Math.round(h * 0.3)) + 'px "Segoe UI", "Microsoft YaHei", sans-serif';
     ctx2d.fillText(chord.name, w / 2, h * 0.34);
-    ctx2d.fillStyle = 'rgba(10,10,10,0.55)';
+    ctx2d.fillStyle = stone;
     ctx2d.font = '10px Consolas, "Microsoft YaHei", sans-serif';
     ctx2d.fillText(chord.pcs.map(p => KEY_NAME[p]).join(' · '), w / 2, h * 0.62);
-    ctx2d.fillStyle = 'rgba(10,10,10,0.3)';
+    ctx2d.fillStyle = stone;
     ctx2d.font = '10px "Microsoft YaHei", sans-serif';
     ctx2d.fillText(t('播放中'), w / 2, h * 0.8);
   } else if (pcs.length) {
-    ctx2d.fillStyle = 'rgba(10,10,10,0.75)';
+    ctx2d.fillStyle = slate;
     ctx2d.font = '600 ' + Math.max(14, Math.round(h * 0.16)) + 'px "Segoe UI", "Microsoft YaHei", sans-serif';
     ctx2d.fillText(pcs.map(p => KEY_NAME[p]).join(' · '), w / 2, h * 0.4);
-    ctx2d.fillStyle = 'rgba(10,10,10,0.35)';
+    ctx2d.fillStyle = stone;
     ctx2d.font = '10px "Microsoft YaHei", sans-serif';
     ctx2d.fillText(t('未形成完整三和弦'), w / 2, h * 0.68);
   } else {
-    ctx2d.fillStyle = 'rgba(10,10,10,0.3)';
+    ctx2d.fillStyle = stone;
     ctx2d.font = '12px "Microsoft YaHei", sans-serif';
     ctx2d.fillText(t('播放时显示实时和弦'), w / 2, h * 0.45);
   }
@@ -171,11 +181,16 @@ function drawRoll(ctx2d, c, u, syn, song, player) {
   const g = c / 52 * (wfZoom.value || 1);
   const x = Math.min(120, Math.round(0.2 * u)); // 键盘高度
   const wN = Math.floor(u - x); // 音符区高度
-  // 背景（浅色）
+  // 背景（跟随主题）
   const bg = ctx2d.createLinearGradient(0, 0, 0, u);
-  bg.addColorStop(0, '#ffffff'); bg.addColorStop(1, '#f7f8fa');
+  bg.addColorStop(0, cssVar('--canvas', '#ffffff'));
+  bg.addColorStop(1, cssVar('--surface', '#f7f8fa'));
   ctx2d.fillStyle = bg; ctx2d.fillRect(0, 0, c, u);
-  const grid = 'rgba(10,10,10,0.10)', text = '#0a0a0a';
+  const grid = cssVar('--hairline', 'rgba(10,10,10,0.10)');
+  const gridStrong = cssVar('--border-strong', 'rgba(10,10,10,0.18)');
+  const text = cssVar('--ink', '#0a0a0a');
+  const soft = cssVar('--surface-soft', '#f2f3f5');
+  const hair2 = cssVar('--hairline', '#e2e4e8');
 
   // 时间源（秒）
   let d = 0, curTempo = (song && song.initialBpm) || 120, curSig = { num: 4 };
@@ -252,12 +267,13 @@ function drawRoll(ctx2d, c, u, syn, song, player) {
     while (i2 < e) { const ni = o[++l]; if (!(ni && ni.isBlack)) i2++; }
     const act = B.get(l), isAct = act !== undefined, isLive = live.has(l), on = isAct || isLive;
     const gr = ctx2d.createLinearGradient(tt, wN, tt, wN + x);
-    gr.addColorStop(0, '#f2f3f5'); gr.addColorStop(1, '#e2e4e8');
-    if (on) { ctx2d.fillStyle = isAct ? act : '#0a0a0a'; ctx2d.shadowBlur = 20; ctx2d.shadowColor = ctx2d.fillStyle; }
+    gr.addColorStop(0, soft);
+    gr.addColorStop(1, hair2);
+    if (on) { ctx2d.fillStyle = isAct ? act : cssVar('--ink', '#0a0a0a'); ctx2d.shadowBlur = 20; ctx2d.shadowColor = ctx2d.fillStyle; }
     else ctx2d.fillStyle = gr;
     ctx2d.beginPath(); ctx2d.roundRect(tt, wN, aa, x, [0, 0, 4, 4]); ctx2d.fill(); ctx2d.shadowBlur = 0;
     ctx2d.beginPath(); ctx2d.moveTo(tt + aa, wN); ctx2d.lineTo(tt + aa, wN + x - 4);
-    ctx2d.strokeStyle = 'rgba(10,10,10,0.12)'; ctx2d.stroke();
+    ctx2d.strokeStyle = grid; ctx2d.stroke();
     if (l % 12 === 0) { ctx2d.fillStyle = text; ctx2d.font = '10px system-ui, sans-serif'; ctx2d.fillText('C' + (l / 12 - 1), tt + 4, u - 5); }
   }
   for (let e = 0; e < 51; e++) {
@@ -365,7 +381,7 @@ onBeforeUnmount(() => {
 .vc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; font-weight: 600; color: var(--ink); }
 .vc-head b { letter-spacing: -0.2px; }
 .vc-head .vc-zoom { font-size: 11px; min-width: 44px; text-align: center; font-weight: 500; }
-.vc-body canvas { width: 100%; height: 100%; display: block; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fff; }
+.vc-body canvas { width: 100%; height: 100%; display: block; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--canvas); }
 .chip-btn.active { background: var(--btn-bg); color: var(--btn-fg); }
 .viz-page.waterfall .viz-grid { display: none; }
 .viz-page.waterfall .viz-hero { flex: 1; }

@@ -19,6 +19,12 @@ function computeRange() {
   loNote = Math.max(0, lo - 3);
   hiNote = Math.min(127, hi + 3);
 }
+function cssVar(name, fb) {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fb;
+  } catch (e) { return fb; }
+}
 
 function draw() {
   const cv = canvas.value, w = wrap.value;
@@ -31,9 +37,13 @@ function draw() {
   ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx2d.clearRect(0, 0, W, H);
 
-  // 背景（MiniMax 白底画布）
+  // 背景（跟随主题）
+  const bgTop = cssVar('--canvas', '#ffffff');
+  const bgBottom = cssVar('--surface', '#f7f8fa');
+  const hair = cssVar('--hairline', 'rgba(10,10,10,.1)');
+  const border2 = cssVar('--border-strong', 'rgba(10,10,10,.18)');
   const g = ctx2d.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, '#ffffff'); g.addColorStop(1, '#f7f8fa');
+  g.addColorStop(0, bgTop); g.addColorStop(1, bgBottom);
   ctx2d.fillStyle = g; ctx2d.fillRect(0, 0, W, H);
 
   const song = currentSong.value && currentSong.value.song;
@@ -50,14 +60,14 @@ function draw() {
     ctx2d.fillStyle = 'rgba(10,10,10,0.028)';
     ctx2d.fillRect(0, y, W, rowH);
   }
-  // 网格线（浅色）
-  ctx2d.strokeStyle = 'rgba(10,10,10,0.05)';
+  // 网格线（随主题）
+  ctx2d.strokeStyle = hair;
   ctx2d.lineWidth = 1;
   const tpb = song.tpb, beatPx = tW / song.totalTicks * tpb;
   for (let b = 0; b * beatPx < W; b++) {
     const x = b * beatPx;
     ctx2d.beginPath(); ctx2d.moveTo(x, 0); ctx2d.lineTo(x, H);
-    ctx2d.strokeStyle = b % 4 === 0 ? 'rgba(10,10,10,0.10)' : 'rgba(10,10,10,0.045)';
+    ctx2d.strokeStyle = b % 4 === 0 ? border2 : hair;
     ctx2d.stroke();
   }
 
