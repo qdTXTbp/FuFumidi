@@ -74,11 +74,11 @@ if (!gotLock) {
     registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, parsePyJson });
     registerPresetsIpc({ ipcMain, runEngineInline, parsePyJson, pyLit });
     registerDialogsIpc({ ipcMain, dialog, path, fs, app });
-    registerSettingsIpc({ ipcMain, readSettings, writeSettings });
     registerDiagnosticsIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine });
     ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, demucsModelFile, sha256File });
     DbService = createDbService({ app, path, fs });
     DbService.registerDbIpc({ ipcMain });
+    registerSettingsIpc({ ipcMain, readSettings, writeSettings, db: DbService });
     registerWallpaperIpc({ ipcMain, app, fs, net });
     const RustService = createRustService({ app, path, fs });
     RustService.registerRustIpc({ ipcMain });

@@ -1,12 +1,26 @@
-﻿// ============================================================
+// ============================================================
 // 主进程设置服务：设置读写深合并、MIDI 文件关联注册表开关
 // ============================================================
 'use strict';
 
-function registerSettingsIpc({ ipcMain, readSettings, writeSettings }) {
+function registerSettingsIpc({ ipcMain, readSettings, writeSettings, db }) {
   // 设置（深合并嵌套键 + 原子写入）
-  ipcMain.handle('settings:load', () => readSettings());
-  ipcMain.handle('settings:save', (_e, s) => {
+  ipcMain.handle('settings:load', async () => {
+    const fileSettings = readSettings();
+    if (db && typeof db.kvGet === 'function') {
+      try {
+        const sqliteSettings = await db.kvGet('settings');
+        if (sqliteSettings && typeof sqliteSettings === 'object') {
+          // 以 SQLite 为准（settings.json 作为旧备份/降级）
+          return sqliteSettings;
+        }
+      } catch (e) {}
+      // 首次迁移：把 settings.json 写入 SQLite
+      try { await db.kvSet('settings', fileSettings); } catch (e) {}
+    }
+    return fileSettings;
+  });
+  ipcMain.handle('settings:save', async (_e, s) => {
     const cur = readSettings();
     const merged = { ...cur, ...(s || {}) };
     for (const k of ['transcribe_params']) {   // 嵌套对象白名单：深合并，避免部分更新丢失兄弟键
@@ -15,6 +29,9 @@ function registerSettingsIpc({ ipcMain, readSettings, writeSettings }) {
       }
     }
     writeSettings(merged);
+    if (db && typeof db.kvSet === 'function') {
+      try { await db.kvSet('settings', merged); } catch (e) {}
+    }
     return readSettings();
   });
 
