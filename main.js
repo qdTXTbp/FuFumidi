@@ -41,6 +41,7 @@ const {
   splitPartNumber,
   combineSplitParts,
 } = GpuService;
+const { createEngineService } = require('./main/engine');
 
 const APP_ID = 'com.fufumidi.app';
 app.setAppUserModelId(APP_ID);
@@ -153,7 +154,6 @@ function resolvePython() {
 }
 
 // ---------- 引擎子进程（通用：music2midi.py / smart_midi.py） ----------
-const activeChildren = new Set();
 const convertChildren = new Map();  // jobId -> 子进程句柄（转录/修正取消用）
 const _folderWatchers = new Map();
 // engine 目录：打包后 engine/**/* 被 asarUnpack 到 resources/app.asar.unpacked/engine。
@@ -206,20 +206,10 @@ function engineEnv(extra) {
   if (extra) Object.assign(env, extra);
   return env;
 }
-function stopEngineWorker() {
-  const old = _engineWorker;
-  _engineWorker = null;
-  if (old && !old.killed) { try { old.kill(); } catch (e) {} }
-  const err = new Error('engine worker restarted');
-  for (const p of _engineWorkerPending.values()) { try { p.reject(err); } catch (e) {} }
-  _engineWorkerPending.clear();
-  return new Promise((resolve) => {
-    if (!old || old.exitCode !== null) { resolve(); return; }
-    const timer = setTimeout(() => resolve(), 5000);
-    old.once('close', () => { clearTimeout(timer); resolve(); });
-  });
-}
 
+// ---------- 引擎服务（main/engine.js） ----------
+const EngineService = createEngineService({ resolvePython, engineDir, engineEnv });
+const { spawnEngine, stopEngineWorker, runEngineInline, engineWorkerConvert, killAll } = EngineService;
 
 function cpuFallbackWheels() {
   const dir = path.join(process.resourcesPath, 'cpu-fallback');
@@ -254,158 +244,12 @@ async function resetBaseToCpu() {
   } catch (e) { return false; }
 }
 
-function spawnEngine(pyArgs, opts = {}) {
-  const { script = 'music2midi.py', onLog, onDone, onError, timeoutMs = 30 * 60 * 1000 } = opts;
-  const py = resolvePython();
-  const eng = engineDir();
-  // 支持插件传入绝对路径脚本：若非绝对路径则视为 engine/ 目录下的文件
-  const scriptPath = path.isAbsolute(script) ? script : path.join(eng, script);
-  const child = spawn(py, [scriptPath, ...pyArgs], {
-    cwd: eng,
-    windowsHide: true,
-    // 强制引擎子进程以 UTF-8 输出 stdout/stderr + UTF-8 文件 I/O：
-    // 1) 避免 Windows 默认 GBK 乱码污染 `###RESULT {json}` 解析
-    // 2) 保证中文路径（音频/MIDI/输出）全程无乱码
-    env: engineEnv(),
-  });
-  activeChildren.add(child);
-  // 转录/修正是 CPU 密集任务：Windows 下将子进程优先级提到「高于标准」以加速完成，
-  // 主进程（界面）保持标准优先级，避免拖慢 UI。设置失败不影响运行。
-  try { if (process.platform === 'win32') os.setPriority(child.pid, -1); } catch (e) {}
-  // stdout 与 stderr 分缓冲，逐行解析，防止 stderr 片段串入 RESULT 行
-  let outBuf = '', errBuf = '';
-  let result = null;                 // 逐行捕获的 ###RESULT 对象
-  let settled = false;
-  const finish = (fn) => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timer);
-    try { child.kill(); } catch {}
-    try { fn(); } catch {}
-  };
-  const pumpOut = (d) => {
-    outBuf += d.toString('utf8');
-    const lines = outBuf.split(/\r?\n/);
-    outBuf = lines.pop();
-    for (const l of lines) {
-      const t = l.trim();
-      if (!t) continue;
-      const m = t.match(/^###RESULT\s+(\{.*\})\s*$/);
-      if (m) { try { result = JSON.parse(m[1]); } catch {} continue; }
-      try { onLog && onLog(t); } catch {}
-    }
-  };
-  const pumpErr = (d) => { errBuf += d.toString('utf8'); };
-  child.stdout.on('data', pumpOut);
-  child.stderr.on('data', pumpErr);
-  child.on('error', (e) => finish(() => onError && onError(String(e))));
-  child.on('close', (code) => {
-    activeChildren.delete(child);
-    finish(() => onDone && onDone(code, { result, out: outBuf, err: errBuf }));
-  });
-  const timer = setTimeout(() => finish(() => onError && onError('引擎执行超时，已强制终止')), timeoutMs);
-  return child;
-}
-
-// ---------- 引擎常驻 worker（复用 torch/demucs/ONNX 会话） ----------
-let _engineWorker = null;
-let _engineWorkerSeq = 0;
-const _engineWorkerPending = new Map();
-
-function _ensureEngineWorker() {
-  if (_engineWorker && !_engineWorker.killed) return _engineWorker;
-  const py = resolvePython();
-  const eng = engineDir();
-  const child = spawn(py, [path.join(eng, 'music2midi.py'), 'worker'], {
-    cwd: eng,
-    windowsHide: true,
-    env: engineEnv(),
-  });
-  let buf = '';
-  child.stdout.on('data', d => {
-    buf += d.toString('utf8');
-    const lines = buf.split(/\r?\n/); buf = lines.pop();
-    for (const l of lines) {
-      const t = l.trim(); if (!t) continue;
-      if (t.startsWith('###LOG ')) {
-        try {
-          const lg = JSON.parse(t.slice(6));
-          const logId = lg && lg._id;
-          const ent = logId ? _engineWorkerPending.get(logId) : null;
-          if (ent && ent.win && !ent.win.isDestroyed() && ent.logId) {
-            ent.win.webContents.send('engine:log', { id: ent.logId, line: lg.line || '' });
-          }
-        } catch (e) {}
-        continue;
-      }
-      if (t.startsWith('###RESULT ')) {
-        try {
-          const r = JSON.parse(t.slice(10));
-          const id = r && r._id;
-          if (id && _engineWorkerPending.has(id)) {
-            const p = _engineWorkerPending.get(id);
-            _engineWorkerPending.delete(id);
-            p.resolve(r);
-          }
-        } catch (e) {}
-      }
-    }
-  });
-  child.stderr.on('data', () => {});
-  const failAll = (err) => {
-    if (_engineWorker !== child) return;
-    _engineWorker = null;
-    for (const p of _engineWorkerPending.values()) p.reject(err);
-    _engineWorkerPending.clear();
-  };
-  child.on('error', e => failAll(new Error('engine worker error: ' + e)));
-  child.on('close', () => failAll(new Error('engine worker exited')));
-  _engineWorker = child;
-  return child;
-}
-
-function engineWorkerConvert(cfg) {
-  const child = _ensureEngineWorker();
-  const id = 'w' + (++_engineWorkerSeq);
-  const req = {
-    _id: id,
-    audio: cfg.audio,
-    out: cfg.out,
-    mode: cfg.mode || 'universal',
-    perf: cfg.perf || 'quality',
-  };
-  const map = { onset_threshold:'onset_threshold', frame_threshold:'frame_threshold', min_note_length:'min_note_length', min_note_ms:'min_note_ms', merge_gap_ms:'merge_gap_ms', tempo:'tempo', stem_format:'stem_format' };
-  for (const [k, rk] of Object.entries(map)) if (cfg[k] != null) req[rk] = cfg[k];
-  for (const k of ['denoise','normalize','auto_bpm','no_merge','no_velnorm','with_drums','export_stems','no_pedal']) if (cfg[k]) req[k] = true;
-  const p = new Promise((resolve, reject) => { _engineWorkerPending.set(id, { resolve, reject, win: cfg.__win, logId: cfg.__logId || cfg.id }); });
-  child.stdin.write(JSON.stringify(req) + '\n');
-  return p;
-}
-
+// ---------- 退出时清理引擎子进程 ----------
 app.on('before-quit', () => {
-  for (const c of activeChildren) { try { c.kill(); } catch {} }
+  killAll();
   for (const w of _folderWatchers.values()) { try { w.close(); } catch {} }
 });
 
-// ---------- 内联 Python（预设等轻量调用，不走 spawnEngine 的脚本注入） ----------
-// spawnEngine 永远把脚本路径插到 argv[0]，无法用于 `python -c`；这里单独复刻
-// env/cwd（PYTHONUTF8 + cwd=engineDir），供 presets.py 等引擎目录模块直接 import。
-function runEngineInline(code) {
-  const py = resolvePython();
-  const eng = engineDir();
-  return new Promise((resolve) => {
-    const child = spawn(py, ['-c', code], {
-      cwd: eng,
-      windowsHide: true,
-      env: engineEnv(),
-    });
-    let out = '';
-    child.stdout.on('data', (d) => { out += d.toString('utf8'); });
-    child.stderr.on('data', (d) => { out += d.toString('utf8'); });
-    child.on('error', (e) => resolve({ ok: false, code: -1, out, error: String(e) }));
-    child.on('close', (code) => resolve({ ok: code === 0, code, out }));
-  });
-}
 // JS 值 → Python 字面量（安全内嵌到 -c 代码；JSON 的 true/false/null 不是合法 Python）
 function pyLit(v) {
   if (v === null || v === undefined) return 'None';
