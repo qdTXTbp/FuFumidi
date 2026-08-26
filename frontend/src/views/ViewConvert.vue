@@ -64,7 +64,7 @@ async function renderAudioBuffer(s, opts) {
     const ctx = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(2, totalLen, sr);
     return await ctx.startRendering();
   }
-  const BUCKET = 10, RELEASE = 0.6;
+  const BUCKET = 20, RELEASE = 0.6;
   const buckets = new Map();
   for (const n of notes) {
     const bi = Math.floor(n.t / BUCKET);
@@ -112,6 +112,36 @@ function audioBufferToWavBytes(buf) {
   return new Uint8Array(ab);
 }
 
+// 异步分块 WAV 编码：避免整段音频转换阻塞主线程导致界面卡死
+async function audioBufferToWavBytesAsync(buf, onProgress, gain = 1) {
+  const chs = buf.numberOfChannels, len = buf.length, sampleRate = buf.sampleRate;
+  const out = new Float32Array(len * chs);
+  const CHUNK = 262144;
+  for (let start = 0; start < len; start += CHUNK) {
+    const end = Math.min(len, start + CHUNK);
+    for (let c = 0; c < chs; c++) {
+      const d = buf.getChannelData(c);
+      const o = c * len;
+      for (let i = start; i < end; i++) out[o + i] = d[i] * gain;
+    }
+    if (onProgress) onProgress(end / len);
+    await new Promise(r => setTimeout(r, 0));
+  }
+  const ab = new ArrayBuffer(44 + out.length * 2);
+  const v = new DataView(ab);
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, 'RIFF'); v.setUint32(4, 36 + out.length * 2, true); ws(8, 'WAVE');
+  ws(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, chs, true);
+  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * chs * 2, true);
+  v.setUint16(32, chs * 2, true); v.setUint16(34, 16, true);
+  ws(36, 'data'); v.setUint32(40, out.length * 2, true);
+  for (let p = 44, i = 0; i < out.length; i++, p += 2) {
+    const s = Math.max(-1, Math.min(1, out[i]));
+    v.setInt16(p, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Uint8Array(ab);
+}
+
 async function renderAudio() {
   const s = song.value;
   if (!s) { toast(t('请先载入 MIDI 文件'), 'warn'); return; }
@@ -120,7 +150,7 @@ async function renderAudio() {
   try {
     const buf = await renderAudioBuffer(s, { rate: rate.value, scale: tempo.value, mode: preset.value });
     const g = clamp(gain.value / 100, 0, 2);
-    downloadWav(buf, s.name, g);
+    await downloadWav(buf, s.name, g);
     progress.value = 100; done.value = true;
     toast(t('音频已导出'));
   } catch (e) {
@@ -144,31 +174,9 @@ function mixRendered(rendered, sr, totalLen) {
   return out;
 }
 
-function downloadWav(buf, name, g) {
-  const chs = buf.numberOfChannels;
-  const len = buf.length;
-  const sampleRate = buf.sampleRate;
-  const out = new Float32Array(len * chs);
-  for (let c = 0; c < chs; c++) {
-    const d = buf.getChannelData(c);
-    const o = c * len;
-    for (let i = 0; i < len; i++) out[o + i] = d[i] * g;
-  }
-  const ab = new ArrayBuffer(44 + out.length * 2);
-  const v = new DataView(ab);
-  const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
-  ws(0, 'RIFF'); v.setUint32(4, 36 + out.length * 2, true); ws(8, 'WAVE');
-  ws(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, chs, true);
-  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * chs * 2, true);
-  v.setUint16(32, chs * 2, true); v.setUint16(34, 16, true);
-  ws(36, 'data'); v.setUint32(40, out.length * 2, true);
-  let p = 44;
-  for (let i = 0; i < out.length; i++) {
-    const s = Math.max(-1, Math.min(1, out[i]));
-    v.setInt16(p, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-    p += 2;
-  }
-  const blob = new Blob([ab], { type: 'audio/wav' });
+async function downloadWav(buf, name, g) {
+  const bytes = await audioBufferToWavBytesAsync(buf, (p) => { progress.value = Math.max(progress.value, Math.round(p * 100)); }, g);
+  const blob = new Blob([bytes], { type: 'audio/wav' });
   const a = document.createElement('a');
   a.download = name + '_render.wav';
   a.href = URL.createObjectURL(blob);
@@ -417,7 +425,7 @@ async function renderVideo() {
     // 1) 离线渲染音频
     const buf = await renderAudioBuffer(s, { rate: 44100, scale: 1, mode: 'auto' });
     VE.veProgress = 10;
-    const wavBytes = audioBufferToWavBytes(buf);
+    const wavBytes = await audioBufferToWavBytesAsync(buf, (p) => { VE.veProgress = Math.min(100, 10 + Math.round(p * 10)); });
     VE.veStage = t('后台录制中（可继续使用应用）…');
     // 2) 离屏画布录制
     const cv = document.createElement('canvas');
@@ -445,14 +453,19 @@ async function renderVideo() {
     const melodyTrack = s.tracks.findIndex((tr) => tr.isDrum === false && !/bass|贝斯|低音/.test(tr.name || ''));
     const ivMs = Math.max(16, Math.round(1000 / fps));
     await new Promise((resolve) => {
+      let lastDraw = 0;
       const step = () => {
-        if (VE.veCancel || (performance.now() - start) / 1000 >= sec) { stopRec(); resolve(); return; }
-        const el = (performance.now() - start) / 1000;
-        const tick = s.secToTick(Math.min(startSec + el, Math.max(0.001, s.totalSec - 0.001)));
-        const vf = { winSec: 8, melodyTrack, lyricAt: lyricAtTick(s, tick), pct: (el / sec) };
-        drawVideoFrame(ctx, W, H, tick, s, buf, vf, el);
-        VE.veProgress = Math.min(97, 10 + (el / sec) * 87);
-        setTimeout(step, ivMs);
+        const nowMs = performance.now();
+        if (VE.veCancel || (nowMs - start) / 1000 >= sec) { stopRec(); resolve(); return; }
+        if (nowMs - lastDraw >= ivMs) {
+          lastDraw = nowMs;
+          const el = (nowMs - start) / 1000;
+          const tick = s.secToTick(Math.min(startSec + el, Math.max(0.001, s.totalSec - 0.001)));
+          const vf = { winSec: 8, melodyTrack, lyricAt: lyricAtTick(s, tick), pct: (el / sec) };
+          drawVideoFrame(ctx, W, H, tick, s, buf, vf, el);
+          VE.veProgress = Math.min(97, 10 + (el / sec) * 87);
+        }
+        requestAnimationFrame(step);
       };
       step();
     });
