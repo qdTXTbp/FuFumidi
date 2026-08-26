@@ -899,7 +899,7 @@ onBeforeUnmount(() => {
         <div class="page-title">编辑器</div>
         <div class="page-sub">钢琴卷帘 · 画笔点击添加 · 拖拽移动 · 边缘拉伸</div>
       </div>
-      <button class="btn sm" @click="selectAll">全选</button>
+      <button class="btn sm" @click="selectAll"><Icon name="target" :size="13" /> 全选</button>
       <button class="btn sm" @click="newMidi"><Icon name="plus" :size="13" /> 新建</button>
       <button class="btn sm primary" @click="exportMidi"><Icon name="save" :size="13" /> 导出 MIDI</button>
     </div>

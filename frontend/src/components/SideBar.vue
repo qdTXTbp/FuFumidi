@@ -36,6 +36,15 @@ const visibleSongs = computed(() => {
     arr = state.songs.filter(s => favs.value.has(s.id));
   } else {
     arr = state.songs.filter(s => activePlaylist.value?.songIds?.includes(s.id));
+    // 按歌单 songIds 顺序显示，拖动排序才会真正改变列表顺序
+    if (activePlaylist.value) {
+      const order = new Map(activePlaylist.value.songIds.map((id, idx) => [id, idx]));
+      arr = arr.slice().sort((a, b) => {
+        const ia = order.has(a.id) ? order.get(a.id) : Number.MAX_SAFE_INTEGER;
+        const ib = order.has(b.id) ? order.get(b.id) : Number.MAX_SAFE_INTEGER;
+        return ia - ib;
+      });
+    }
   }
   if (state.playlistFavOnly) arr = arr.filter(s => favs.value.has(s.id));
   if (q) arr = arr.filter(s => (s.name || '').toLowerCase().includes(q));
@@ -223,18 +232,18 @@ function onDrop(e) {
       <div class="pl-toolbar">
         <input class="text-input" style="flex:1;min-width:0;padding:5px 8px;font-size:12px" placeholder="搜索曲目" v-model="state.playlistSearch" />
         <button class="chip-btn" :class="{ active: state.playlistFavOnly }" title="只显示收藏" @click="state.playlistFavOnly = !state.playlistFavOnly">★</button>
-        <button class="chip-btn" :class="{ active: batchOn }" title="批量管理" @click="toggleBatch">批量</button>
-        <button class="chip-btn" title="删除当前歌单" @click="removeCurrentPlaylist" :disabled="state.activePlaylistId === 'favorites'">删</button>
+        <button class="chip-btn" :class="{ active: batchOn }" title="批量管理" @click="toggleBatch"><Icon name="menu" :size="13" />批量</button>
+        <button class="chip-btn" title="删除当前歌单" @click="removeCurrentPlaylist" :disabled="state.activePlaylistId === 'favorites'"><Icon name="trash" :size="13" />删</button>
       </div>
 
       <!-- 批量操作条 -->
       <div v-if="batchOn" class="pl-batch">
-        <button class="chip-btn" @click="batchAll">全选</button>
-        <button class="chip-btn" @click="batchFav">收藏</button>
-        <button class="chip-btn" @click="batchUnfav">取消收藏</button>
-        <button class="chip-btn danger" @click="batchRemove">移除歌单</button>
-        <button class="chip-btn danger" @click="batchDeleteLibrary">删除库</button>
-        <button class="chip-btn" @click="toggleBatch">退出</button>
+        <button class="chip-btn" @click="batchAll"><Icon name="target" :size="13" />全选</button>
+        <button class="chip-btn" @click="batchFav">★ 收藏</button>
+        <button class="chip-btn" @click="batchUnfav">☆ 取消收藏</button>
+        <button class="chip-btn danger" @click="batchRemove"><Icon name="trash" :size="13" />移除歌单</button>
+        <button class="chip-btn danger" @click="batchDeleteLibrary"><Icon name="trash" :size="13" />删除库</button>
+        <button class="chip-btn" @click="toggleBatch"><Icon name="minus" :size="13" />退出</button>
         <span class="muted small">已选 {{ batchSel.size }}</span>
       </div>
 
