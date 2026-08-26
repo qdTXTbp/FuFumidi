@@ -2,7 +2,7 @@
 // 设置面板（全局系统功能）：外观 / 引擎 / 功能 / 快捷键 / 插件 + 完整性检验警告条
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import Icon from './Icon.vue';
-import { state, toast, setWallpaperEnabled, setWallpaperIndex, setWallpaperSource } from '../store.js';
+import { state, toast, setWallpaperEnabled, setWallpaperIndex, setWallpaperSource, openWallpaperGallery } from '../store.js';
 import { t, setLang, getLang } from '../core/i18n.js';
 import { THEMES, themeById, applyTheme, saveTheme } from '../core/theme.js';
 
@@ -328,6 +328,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
             </div>
             <div class="fr-ctl">
               <label class="fr-sw"><input type="checkbox" :checked="!!state.wallpaper.enabled" @change="e => setWallpaperEnabled(e.target.checked)" /> {{ t('启用') }}</label>
+              <button class="btn sm" @click="openWallpaperGallery"><Icon name="wallpaper" :size="13" /> {{ t('壁纸库') }}</button>
             </div>
           </div>
           <div class="field-row" v-for="(src, i) in state.wallpaper.sources" :key="i">

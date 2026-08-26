@@ -7,6 +7,7 @@ import SettingsPanel from './components/SettingsPanel.vue';
 import ThemeLibrary from './components/ThemeLibrary.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import GuideOverlay from './components/GuideOverlay.vue';
+import WallpaperGallery from './components/WallpaperGallery.vue';
 import ViewHome from './views/ViewHome.vue';
 import ViewPlay from './views/ViewPlay.vue';
 import ViewEdit from './views/ViewEdit.vue';
@@ -17,8 +18,9 @@ import ViewLyrics from './views/ViewLyrics.vue';
 import ViewConvert from './views/ViewConvert.vue';
 import ViewTranscribe from './views/ViewTranscribe.vue';
 import ViewPlaceholder from './views/ViewPlaceholder.vue';
-import { state, MIGRATED_VIEWS, startTickLoop, stopTickLoop, restoreSongs, loadPlaylists, loadWallpaper, wallpaperSrc, togglePlay, seekRatio, setTempo, toggleLoop, toggleMetro } from './store.js';
-import { setLang } from './core/i18n.js';
+import Icon from './components/Icon.vue';
+import { state, MIGRATED_VIEWS, startTickLoop, stopTickLoop, restoreSongs, loadPlaylists, loadWallpaper, wallpaperSrc, maybePromptWallpaper, markWallpaperPrompted, goDownloadWallpaper, togglePlay, seekRatio, setTempo, toggleLoop, toggleMetro } from './store.js';
+import { setLang, t } from './core/i18n.js';
 import { applyTheme, loadTheme } from './core/theme.js';
 
 const bridge = window.fuBridge;
@@ -99,6 +101,8 @@ onMounted(() => {
   loadPlaylists();
   loadWallpaper();
   initGlobal();
+  // 首次启动：稍后询问是否从 GitHub 下载一张壁纸（只弹一次）
+  setTimeout(maybePromptWallpaper, 1200);
   window.addEventListener('keydown', onKey);
 });
 onBeforeUnmount(() => {
@@ -137,5 +141,19 @@ onBeforeUnmount(() => {
     <ThemeLibrary v-if="state.ui.themesOpen" />
     <CommandPalette v-if="state.ui.paletteOpen" />
     <GuideOverlay v-if="state.ui.guideOpen" />
+    <WallpaperGallery v-if="state.ui.wallpaperGalleryOpen" />
+
+    <!-- 首次启动：询问是否从 GitHub 下载一张壁纸 -->
+    <div v-if="state.ui.wallpaperPrompt" class="overlay">
+      <div class="overlay-card wp-prompt">
+        <div class="wp-prompt-ic"><Icon name="wallpaper" :size="30" /></div>
+        <b class="wp-prompt-title">{{ t('发现动态壁纸') }}</b>
+        <p class="wp-prompt-desc">{{ t('首次使用：是否从 GitHub 下载一张壁纸？下载后可在顶栏按钮切换，需要更多可再次从壁纸库选择或自行导入。') }}</p>
+        <div class="wp-prompt-actions">
+          <button class="btn primary" @click="goDownloadWallpaper">{{ t('去下载壁纸') }}</button>
+          <button class="btn ghost" @click="markWallpaperPrompted()">{{ t('暂不需要') }}</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>

@@ -54,12 +54,14 @@ export const state = reactive({
   toast: '',
   confirm: null,
   fileBusy: false,
-  // 全局系统功能（设置面板 / 主题库 / 命令面板 / 新手引导）
+  // 全局系统功能（设置面板 / 主题库 / 命令面板 / 新手引导 / 壁纸库）
   ui: {
     settingsOpen: false,
     themesOpen: false,
     guideOpen: false,
     paletteOpen: false,
+    wallpaperGalleryOpen: false,
+    wallpaperPrompt: false,
   },
   // 完整性检验结果（App 挂载时后台检查；设置面板展示警告条）
   integrity: null, // { ok, issues: [], error } | null
@@ -379,6 +381,37 @@ export function setWallpaperSource(i, path) {
   if (!path || !String(path).trim()) return;
   if (w.sources[idx] === String(path).trim()) return;
   w.sources[idx] = String(path).trim();
+  saveWallpaper();
+}
+export function openWallpaperGallery() { state.ui.wallpaperGalleryOpen = true; }
+export function closeWallpaperGallery() { state.ui.wallpaperGalleryOpen = false; }
+// 首次启动：询问是否从 GitHub 下载一张壁纸（只弹一次）
+const LS_WALLPAPER_PROMPT = 'fufumidi_wallpaper_prompted';
+export function maybePromptWallpaper() {
+  if (state.ui.wallpaperPrompt) return;
+  let prompted = false;
+  try { prompted = !!localStorage.getItem(LS_WALLPAPER_PROMPT); } catch (e) {}
+  if (prompted) return;
+  state.ui.wallpaperPrompt = true;
+}
+export function markWallpaperPrompted() {
+  state.ui.wallpaperPrompt = false;
+  try { localStorage.setItem(LS_WALLPAPER_PROMPT, '1'); } catch (e) {}
+}
+// 首次询问：前往壁纸库下载
+export function goDownloadWallpaper() {
+  markWallpaperPrompted();
+  state.ui.wallpaperGalleryOpen = true;
+}
+// 添加一个壁纸源（下载/导入后）：去重加入列表并设为当前启用
+export function addWallpaperSource(path, autoPlay = true) {
+  const w = state.wallpaper;
+  if (!path || !String(path).trim()) return;
+  const p = String(path).trim();
+  const i = w.sources.indexOf(p);
+  if (i >= 0) w.index = i;
+  else { w.sources.push(p); w.index = w.sources.length - 1; }
+  if (autoPlay) w.enabled = true;
   saveWallpaper();
 }
 

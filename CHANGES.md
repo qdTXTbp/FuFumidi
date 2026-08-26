@@ -223,3 +223,9 @@ npm run dist:win
 - 全屏背景视频层（.app-wallpaper）：静音循环、object-fit cover，毛玻璃组件透出其画面；main.js 开启 allowFileAccessFromFileUrls。
 - 切换：顶栏壁纸按钮循环 关→视频1→视频2→关；设置面板外观区可启用/播放/更换源（存 localStorage）。
 - electron-builder asarUnpack 排除 renderer/dist/wallpapers 避免 asar 内播放问题。
+
+### 9.9 GitHub 壁纸库（缩略图选择下载）
+- 壁纸上传至独立仓库 monologue82/Media（wallpapers/，视频走 Git LFS + 同名 jpg 缩略图）。
+- 新增 WallpaperGallery.vue：从 GitHub API 拉取壁纸列表，仅显示缩略图（不显示名称），点击即下载并应用（流式下载到 userData/wallpapers）。
+- 首次启动询问：只弹一次「是否从 GitHub 下载一张壁纸」，入口在顶栏/设置面板壁纸库。
+- main.js 新增 wallpaper:list / wallpaper:download IPC（net.fetch，支持代理）；后续需要更多壁纸可再次进入壁纸库或自行导入。

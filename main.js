@@ -906,6 +906,52 @@ function registerIpc() {
       return { ok: true, files: out.slice(0, 4) };
     } catch (e) { return { ok: false, files: [] }; }
   });
+  // 动态壁纸库：从 GitHub Media 仓库列出壁纸（视频 + 同名缩略图），供用户选择下载
+  const WALLPAPER_REPO = 'monologue82/Media';
+  const WALLPAPER_DIR = 'wallpapers';
+  const WALLPAPER_RAW = `https://raw.githubusercontent.com/${WALLPAPER_REPO}/main/${WALLPAPER_DIR}`;
+  ipcMain.handle('wallpaper:list', async () => {
+    try {
+      const res = await net.fetch(`https://api.github.com/repos/${WALLPAPER_REPO}/contents/${WALLPAPER_DIR}`, {
+        headers: { 'User-Agent': 'FuFumidi', Accept: 'application/vnd.github+json' },
+      });
+      if (!res.ok) return { ok: false, error: 'GitHub API ' + res.status };
+      const items = await res.json();
+      const vids = items.filter(x => x.type === 'file' && /\.(mp4|webm|mov)$/i.test(x.name));
+      const thumbs = items.filter(x => x.type === 'file' && /\.(jpg|jpeg|png)$/i.test(x.name));
+      const list = vids.map(f => {
+        const base = f.name.replace(/\.(mp4|webm|mov)$/i, '');
+        const th = thumbs.find(t => t.name.replace(/\.(jpg|jpeg|png)$/i, '') === base);
+        return {
+          name: f.name,
+          video: `${WALLPAPER_RAW}/${encodeURIComponent(f.name)}`,
+          thumb: th ? `${WALLPAPER_RAW}/${encodeURIComponent(th.name)}` : '',
+        };
+      });
+      return { ok: true, list };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
+  // 动态壁纸下载：流式下载视频到 userData/wallpapers，返回本地路径
+  ipcMain.handle('wallpaper:download', async (_e, url, name) => {
+    try {
+      if (!url || !/^https?:\/\//i.test(url)) return { ok: false, error: '无效 URL' };
+      const dir = path.join(app.getPath('userData'), 'wallpapers');
+      fs.mkdirSync(dir, { recursive: true });
+      const safe = String(name || 'wallpaper').replace(/[\\/:*?"<>|]/g, '_');
+      const dest = path.join(dir, safe);
+      const res = await net.fetch(url, { headers: { 'User-Agent': 'FuFumidi' } });
+      if (!res.ok || !res.body) return { ok: false, error: '下载失败 HTTP ' + res.status };
+      const ws = fs.createWriteStream(dest);
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value && value.byteLength) ws.write(Buffer.from(value));
+      }
+      await new Promise((r) => ws.end(r));
+      return { ok: true, path: dest, name: safe };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
   // 读取本地文件（转录结果回载）——异步 + 大小上限，避免阻塞主进程
   ipcMain.handle('file:readBinary', async (_e, p) => {
     try {

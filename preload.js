@@ -92,8 +92,12 @@ contextBridge.exposeInMainWorld('fuBridge', {
     onLog: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('plugins:log', w); return () => ipcRenderer.removeListener('plugins:log', w); },
     onScript: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('plugins:script', w); return () => ipcRenderer.removeListener('plugins:script', w); },
   },
-  // 动态壁纸：发现桌面视频文件（mp4/webm/mov）
-  wallpaper: { defaults: () => ipcRenderer.invoke('wallpaper:defaults') },
+  // 动态壁纸：内置/桌面发现 + GitHub 壁纸库（列表/下载）
+  wallpaper: {
+    defaults: () => ipcRenderer.invoke('wallpaper:defaults'),
+    list: () => ipcRenderer.invoke('wallpaper:list'),
+    download: (url, name) => ipcRenderer.invoke('wallpaper:download', url, name),
+  },
   // 应用事件通知（song-loaded / view-changed 等 → 插件事件钩子）
   notify: (ev, payload) => ipcRenderer.send('app:event', ev, payload),
 });

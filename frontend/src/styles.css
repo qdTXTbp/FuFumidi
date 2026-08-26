@@ -312,6 +312,18 @@ body {
 .icon-btn.active { background: var(--surface); color: var(--ink); }
 .topbar .icon-btn.toggle-on { background: var(--brand-blue); color: #fff; }
 
+/* 首次启动壁纸询问卡 */
+.wp-prompt { width: 440px; max-width: 92vw; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 28px 26px 24px; }
+.wp-prompt-ic {
+  width: 64px; height: 64px; border-radius: 20px;
+  background: linear-gradient(135deg, var(--brand-blue), var(--brand-blue-deep));
+  color: #fff; display: grid; place-items: center;
+  box-shadow: 0 12px 28px rgba(20, 86, 240, 0.3);
+}
+.wp-prompt-title { font-size: 17px; font-weight: 700; color: var(--ink); }
+.wp-prompt-desc { font-size: 12.5px; color: var(--slate); line-height: 1.7; }
+.wp-prompt-actions { display: flex; gap: 10px; margin-top: 8px; }
+
 /* ---------- 卡片（card-base：白底 16px 圆角 hairline 边框） ---------- */
 .card {
   background: var(--canvas);
