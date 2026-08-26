@@ -271,6 +271,42 @@ export class Synth {
     this.trackGains = []; this.vol = []; this.mute = []; this.solo = [];
     this.panners = []; this.pan = [];
     this.live = []; this.activeNotes = [];
+    this.sf2 = null;
+    this.sf2Ready = false;
+    this.sf2Loading = null;
+  }
+  async loadSf2() {
+    if (this.sf2Ready) return true;
+    if (this.sf2Loading) return this.sf2Loading;
+    this.sf2Loading = (async () => {
+      try {
+        const JSSynth = (window || {}).JSSynth;
+        if (!JSSynth) return false;
+        await JSSynth.waitForReady();
+        const syn = new JSSynth.Synthesizer();
+        syn.init(this.ctx.sampleRate);
+        const node = syn.createAudioNode(this.ctx, 4096);
+        node.connect(this.master);
+        let res = null;
+        for (const p of ['../vendor/soundfonts/GeneralUser.sf2', './vendor/soundfonts/GeneralUser.sf2']) {
+          try { res = await fetch(p); if (res.ok) break; } catch (e) { res = null; }
+        }
+        if (!res) throw new Error('SF2 fetch failed');
+        const buf = await res.arrayBuffer();
+        await syn.loadSFont(buf);
+        this.sf2 = syn;
+        this.sf2Ready = true;
+        return true;
+      } catch (e) {
+        console.warn('[synth] GeneralUser.sf2 加载失败，使用内置合成器：', e && e.message || e);
+        this.sf2 = null;
+        this.sf2Ready = false;
+        return false;
+      } finally {
+        this.sf2Loading = null;
+      }
+    })();
+    return this.sf2Loading;
   }
   ensure(n) {
     for (let i = this.trackGains.length; i < n; i++) {
@@ -297,8 +333,20 @@ export class Synth {
   setTrackSolo(i, b) { this.ensure(i + 1); this.solo[i] = b; this.applyRouting(); }
   setTrackPan(i, v) { this.ensure(i + 1); this.pan[i] = clamp(v, -1, 1); if (this.panners[i]) this.panners[i].pan.setTargetAtTime(this.pan[i], this.ctx.currentTime, 0.02); }
   noteOn(time, note, endTime) {
-    const preset = presetFromMode('auto', note.prog, note.isDrum);
     this.ensure(note.trk + 1);
+    if (this.sf2Ready && this.sf2) {
+      const ch = Math.min(15, note.trk || 0);
+      try {
+        if (note.isDrum) this.sf2.midiSetChannelType(ch, true);
+        else if (note.prog != null) this.sf2.midiProgramChange(ch, note.prog);
+        this.sf2.midiNoteOn(ch, note.midi, note.vel);
+      } catch (e) {}
+      const delay = Math.max(0, (endTime - this.ctx.currentTime) * 1000);
+      const timer = setTimeout(() => { try { this.sf2 && this.sf2.midiNoteOff(ch, note.midi); } catch (e) {} }, delay);
+      this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, endTime, timer, sf2: true, ch });
+      return;
+    }
+    const preset = presetFromMode('auto', note.prog, note.isDrum);
     const out = this.trackGains[note.trk];
     playVoice(this.ctx, time, note.midi, note.vel, preset, out, endTime, this.live);
     this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, endTime });
@@ -309,6 +357,15 @@ export class Synth {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     this.ensure(1);
+    if (this.sf2Ready && this.sf2) {
+      try {
+        this.sf2.midiProgramChange(0, prog);
+        this.sf2.midiNoteOn(0, midi, vel);
+        const timer = setTimeout(() => { try { this.sf2 && this.sf2.midiNoteOff(0, midi); } catch (e) {} }, dur * 1000);
+        this.activeNotes.push({ midi, trk: 0, endTime: t + dur, timer, sf2: true, ch: 0 });
+      } catch (e) {}
+      return;
+    }
     playVoice(this.ctx, t, midi, vel, presetForProgram(prog), this.trackGains[0], t + dur, this.live);
     this.activeNotes.push({ midi, trk: 0, endTime: t + dur });
   }
@@ -323,6 +380,7 @@ export class Synth {
   allStop() {
     const t = this.ctx.currentTime;
     for (const x of this.live) { if (x.tStop > t) { try { x.o.stop(); } catch (e) {} } }
+    for (const a of this.activeNotes) { if (a.timer) { try { clearTimeout(a.timer); } catch (e) {} } if (a.sf2 && a.ch != null) { try { this.sf2 && this.sf2.midiNoteOff(a.ch, a.midi); } catch (e) {} } }
     this.live = [];
     this.activeNotes = [];
   }

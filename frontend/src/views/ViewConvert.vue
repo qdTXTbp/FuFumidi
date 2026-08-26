@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, reactive, watch, nextTick, onMounted } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { t } from '../core/i18n.js';
@@ -177,14 +177,33 @@ function downloadWav(buf, name, g) {
 }
 
 /* ==================== 视频 / 可视化导出 ==================== */
-const VE = {
+const VE = reactive({
   format: 'mp4', template: 'landscape', res: '1280x720', fps: 30, quality: 'medium',
   dur: 30, visual: 'mix', track: 'all', range: 'all', start: 0, end: 30,
   bitrate: 8, bgColor: '#0a0e15', showProgress: true, showChord: true, showTimecode: false,
   showLyrics: true, showWatermark: false, watermarkOpacity: 50, bgImage: null, watermark: null,
   veBusy: false, veProgress: 0, veStage: '', veCancel: false,
-};
+});
 const veResCustom = ref(false);
+const vePreviewEl = ref(null);
+function previewWH() {
+  if (VE.template === 'portrait') return { w: 360, h: 640 };
+  if (VE.template === 'subtitle') return { w: 640, h: 400 };
+  return { w: 640, h: 360 };
+}
+function drawVideoPreview() {
+  const canvas = vePreviewEl.value;
+  if (!canvas) return;
+  const s = song.value;
+  if (!s) { const ctx = canvas.getContext('2d'); ctx.clearRect(0, 0, canvas.width, canvas.height); return; }
+  const { w, h } = previewWH();
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  const vf = { winSec: 8, melodyTrack: 0, lyricAt: '', pct: 0 };
+  try { drawVideoFrame(ctx, w, h, s.secToTick ? s.secToTick(0) : 0, s, null, vf, 0); } catch (e) {}
+}
+watch(() => [VE.template, VE.bgColor, VE.visual, VE.showProgress, VE.showChord, VE.showTimecode, VE.showLyrics, VE.showWatermark, VE.res, VE.fps, VE.quality, VE.track], () => nextTick(drawVideoPreview), { deep: true });
+onMounted(() => nextTick(drawVideoPreview));
 function vePickBgImage() { vePickImage((d) => { VE.bgImage = d; }); }
 function vePickWatermark() { vePickImage((d) => { VE.watermark = d; }); }
 function vePickImage(cb) {
@@ -281,11 +300,10 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
     ctx.restore();
   };
   const activeNotes = drawRoll();
-  // 三卡片
   const gy = rollH + pad + 4;
+  const mode = VE.visual || 'mix';
   const cardW = Math.max(60, Math.floor((W - pad * 3) / 3));
-  // 频谱瀑布（包络近似）
-  drawPanel(pad, gy, cardW, panelH, '频谱瀑布', (bx, by, bw, bh) => {
+  const drawSpectrumBody = (bx, by, bw, bh) => {
     if (audioBuf) {
       const data = audioBuf.getChannelData(0), sr = audioBuf.sampleRate;
       const i0 = Math.max(0, Math.floor(nowSec2 * sr));
@@ -303,9 +321,8 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
         ctx.fillRect(bx + i * (bw / nBars), by + bh - bh2, Math.max(1, bw / nBars - 1), bh2);
       }
     }
-  });
-  // 波形示波器
-  drawPanel(pad + cardW + pad, gy, cardW, panelH, '波形示波器', (bx, by, bw, bh) => {
+  };
+  const drawScopeBody = (bx, by, bw, bh) => {
     if (audioBuf) {
       const data = audioBuf.getChannelData(0), sr = audioBuf.sampleRate;
       const win = Math.floor(sr * 0.05);
@@ -319,15 +336,27 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
       }
       ctx.stroke();
     }
-  });
-  // 实时和弦
+  };
   const chord = detectLiveChord(activeNotes);
-  drawPanel(pad + (cardW + pad) * 2, gy, cardW, panelH, '实时和弦', (bx, by, bw, bh) => {
+  const drawChordBody = (bx, by, bw, bh) => {
     ctx.fillStyle = C.text; ctx.font = '700 26px "Segoe UI", "Microsoft YaHei", sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(chord.name || '—', bx + bw / 2, by + bh / 2);
     ctx.fillStyle = C.sub; ctx.font = '11px "Segoe UI", "Microsoft YaHei", sans-serif';
     ctx.fillText(activeNotes.length ? activeNotes.length + ' 个发声音符' : '播放时显示实时和弦', bx + bw / 2, by + bh / 2 + 24);
-  });
+  };
+  if (mode === 'waterfall') {
+    // 只保留音符瀑布
+  } else if (mode === 'spectrum') {
+    drawPanel(pad, gy, W - pad * 2, Math.max(150, H - gy - 36), '频谱瀑布', drawSpectrumBody);
+  } else if (mode === 'scope') {
+    drawPanel(pad, gy, W - pad * 2, Math.max(150, H - gy - 36), '波形示波器', drawScopeBody);
+  } else if (mode === 'chord') {
+    drawPanel(pad, gy, W - pad * 2, Math.max(150, H - gy - 36), '实时和弦', drawChordBody);
+  } else {
+    drawPanel(pad, gy, cardW, panelH, '频谱瀑布', drawSpectrumBody);
+    drawPanel(pad + cardW + pad, gy, cardW, panelH, '波形示波器', drawScopeBody);
+    drawPanel(pad + (cardW + pad) * 2, gy, cardW, panelH, '实时和弦', drawChordBody);
+  }
   // 歌词字幕
   if (VE.showLyrics) {
     const lyr = vf.lyricAt;
@@ -520,7 +549,17 @@ async function renderVideo() {
         <b>视频 / 可视化导出</b>
         <span class="muted small">把钢琴卷帘动画 + 频谱/波形/和弦渲染为 MP4 视频（本地 ffmpeg 合成）</span>
       </div>
+      <div class="ve-preview-wrap" :class="'ve-tpl-' + VE.template">
+        <canvas ref="vePreviewEl" class="ve-preview-canvas"></canvas>
+        <div v-if="!song" class="ve-preview-empty">{{ t('加载曲目后显示实时预览') }}</div>
+      </div>
       <div class="form-grid" style="grid-template-columns:repeat(3,1fr)">
+        <div class="field-row">
+          <label>{{ t('可视化模板') }}</label>
+          <select class="select-input" v-model="VE.visual">
+            <option value="mix">混合布局</option><option value="waterfall">音符瀑布</option><option value="spectrum">频谱</option><option value="scope">波形</option><option value="chord">实时和弦</option>
+          </select>
+        </div>
         <div class="field-row">
           <label>{{ t('画面比例') }}</label>
           <select class="select-input" v-model="VE.template">
@@ -624,6 +663,12 @@ async function renderVideo() {
 .ve-card { margin-top: 18px; padding: 18px; }
 .ve-head { display: flex; flex-direction: column; gap: 4px; }
 .ve-head b { font-size: 15px; color: var(--ink); }
+.ve-preview-wrap { position: relative; width: 100%; background: var(--surface-soft); border: 1px solid var(--hairline); border-radius: 12px; overflow: hidden; }
+.ve-preview-wrap.ve-tpl-landscape { aspect-ratio: 16 / 9; }
+.ve-preview-wrap.ve-tpl-portrait { aspect-ratio: 9 / 16; max-width: 320px; }
+.ve-preview-wrap.ve-tpl-subtitle { aspect-ratio: 16 / 10; }
+.ve-preview-canvas { width: 100%; height: 100%; display: block; }
+.ve-preview-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--stone); font-size: 12px; pointer-events: none; }
 .ve-opts { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--slate); }
 .ve-opts label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .ve-opts input[type=checkbox] { accent-color: var(--ink); }

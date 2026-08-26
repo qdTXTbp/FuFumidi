@@ -13,6 +13,7 @@ export function ensureAudio() {
     if (!AC) throw new Error('当前环境不支持 Web Audio API');
     ctx = new AC();
     synth = new Synth(ctx);
+    synth.loadSf2();
     player = new Player(synth);
     player.onEnd = () => {
       // 播完自动复位（由 store 监听处理 UI 状态）
