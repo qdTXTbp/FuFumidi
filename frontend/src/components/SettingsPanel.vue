@@ -3,10 +3,12 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import Icon from './Icon.vue';
 import { state, toast } from '../store.js';
+import { useSettingsStore } from '../stores/settings';
 import { t, setLang, getLang } from '../core/i18n.js';
 import { THEMES, themeById, applyTheme, saveTheme } from '../core/theme.js';
 
 const bridge = window.fuBridge;
+const settingsStore = useSettingsStore();
 
 const TABS = [
   { id: 'appearance', label: '外观', icon: 'palette' },
@@ -82,7 +84,7 @@ const KEYMAP = [
 /* ---------------- 初始化 ---------------- */
 async function load() {
   let s = {};
-  if (bridge && bridge.getSettings) { try { s = await bridge.getSettings() || {}; } catch (e) {} }
+  try { s = await settingsStore.load() || {}; } catch (e) {}
   let lsTheme = null, lsAccent = null;
   try { lsTheme = localStorage.getItem('fufumidi_theme'); lsAccent = localStorage.getItem('fufumidi_accent'); } catch (e) {}
   form.theme = lsTheme || s.theme || 'fufu';
@@ -185,9 +187,9 @@ async function exportDiag() {
 
 /* ---------------- 配置导入 / 导出 ---------------- */
 async function exportConfig() {
-  if (!bridge || !bridge.saveBinary || !bridge.getSettings) { toast(t('当前环境不支持导出配置'), 'warn'); return; }
+  if (!bridge || !bridge.saveBinary) { toast(t('当前环境不支持导出配置'), 'warn'); return; }
   try {
-    const s = await bridge.getSettings() || {};
+    const s = await settingsStore.load() || {};
     const data = new TextEncoder().encode(JSON.stringify(s, null, 2));
     const r = await bridge.saveBinary({ name: 'FuFumidi-配置.json', data: Array.from(data) });
     if (r && r.ok) toast(t('配置已导出：') + r.path, 'ok');
@@ -195,16 +197,16 @@ async function exportConfig() {
   } catch (e) { toast(t('配置导出失败：') + (e.message || e), 'warn'); }
 }
 async function importConfig() {
-  if (!bridge || !bridge.pickFile || !bridge.readBinary || !bridge.saveSettings) { toast(t('当前环境不支持导入配置'), 'warn'); return; }
+  if (!bridge || !bridge.pickFile || !bridge.readBinary) { toast(t('当前环境不支持导入配置'), 'warn'); return; }
   try {
     const p = await bridge.pickFile({ filters: [{ name: 'FuFumidi 配置', extensions: ['json'] }] });
     if (!p) return;
     const bytes = await bridge.readBinary(p);
     const cfg = JSON.parse(new TextDecoder('utf-8').decode(new Uint8Array(bytes)));
     if (!cfg || typeof cfg !== 'object') throw new Error('bad config');
-    const cur = await bridge.getSettings() || {};
+    const cur = await settingsStore.load() || {};
     const merged = Object.assign({}, cur, cfg);
-    await bridge.saveSettings(merged);
+    await settingsStore.save(merged);
     toast(t('配置已导入'), 'ok');
     load();
   } catch (e) { toast(t('配置导入失败：') + (e.message || e), 'warn'); }
@@ -454,10 +456,8 @@ function apply() {
     file_assoc: form.file_assoc,
   };
   let saved = false;
-  if (bridge && bridge.saveSettings) {
-    bridge.saveSettings(payload).then(() => { if (!saved) toast(t('设置已保存')); }).catch(() => toast(t('设置保存失败'), 'error'));
-    saved = true;
-  }
+  settingsStore.save(payload).then(() => { if (!saved) toast(t('设置已保存')); }).catch(() => toast(t('设置保存失败'), 'error'));
+  saved = true;
   // 监视文件夹（立即应用）
   if (bridge && bridge.setFolderWatch) {
     bridge.setFolderWatch(form.watch_dir, form.watch_enabled).catch(() => {});

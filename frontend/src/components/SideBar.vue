@@ -1,15 +1,15 @@
 <script setup>
 import { ref, computed } from 'vue';
 import Icon from './Icon.vue';
-import { state, importFiles, selectSong, removeSong, toast, setView, VIEWS,
-         createPlaylist, selectPlaylist, deletePlaylist, removeSongsFromActivePlaylist, removeSongsFromLibrary,
-         moveActivePlaylistSong } from '../store.js';
+import { state, importFiles, selectSong, removeSong, toast, setView, VIEWS } from '../store.js';
+import { usePlaylistStore } from '../stores/playlist';
 import logoUrl from '../assets/logo.png';
 
 const fileInput = ref(null);
 const dragOver = ref(false);
 
 const bridge = window.fuBridge;
+const playlist = usePlaylistStore();
 
 function loadFavs() {
   try { return new Set(JSON.parse(localStorage.getItem('fufumidi_favs') || '[]')); } catch (e) { return new Set(); }
@@ -26,27 +26,25 @@ function toggleFav(id) {
 const batchOn = ref(false);
 const batchSel = ref(new Set());
 
-const activePlaylist = computed(() => state.playlists.find(p => p.id === state.activePlaylistId) || null);
-const isFavView = computed(() => state.activePlaylistId === 'favorites');
+const activePlaylist = computed(() => playlist.activePlaylist);
+const isFavView = computed(() => playlist.activePlaylistId === 'favorites');
 
 const visibleSongs = computed(() => {
-  const q = (state.playlistSearch || '').trim().toLowerCase();
+  const q = (playlist.search || '').trim().toLowerCase();
   let arr;
   if (isFavView.value) {
     arr = state.songs.filter(s => favs.value.has(s.id));
   } else {
-    arr = state.songs.filter(s => activePlaylist.value?.songIds?.includes(s.id));
-    // 按歌单 songIds 顺序显示，拖动排序才会真正改变列表顺序
-    if (activePlaylist.value) {
-      const order = new Map(activePlaylist.value.songIds.map((id, idx) => [id, idx]));
-      arr = arr.slice().sort((a, b) => {
-        const ia = order.has(a.id) ? order.get(a.id) : Number.MAX_SAFE_INTEGER;
-        const ib = order.has(b.id) ? order.get(b.id) : Number.MAX_SAFE_INTEGER;
-        return ia - ib;
-      });
-    }
+    const ids = playlist.songIds;
+    arr = state.songs.filter(s => ids.includes(s.id));
+    const order = new Map(ids.map((id, idx) => [id, idx]));
+    arr = arr.slice().sort((a, b) => {
+      const ia = order.has(a.id) ? order.get(a.id) : Number.MAX_SAFE_INTEGER;
+      const ib = order.has(b.id) ? order.get(b.id) : Number.MAX_SAFE_INTEGER;
+      return ia - ib;
+    });
   }
-  if (state.playlistFavOnly) arr = arr.filter(s => favs.value.has(s.id));
+  if (playlist.favOnly) arr = arr.filter(s => favs.value.has(s.id));
   if (q) arr = arr.filter(s => (s.name || '').toLowerCase().includes(q));
   return arr;
 });
@@ -79,15 +77,16 @@ function batchUnfav() {
 function batchRemove() {
   if (!batchSel.value.size) { toast('请先勾选曲目', 'warn'); return; }
   const n = batchSel.value.size;
-  removeSongsFromActivePlaylist([...batchSel.value]);
+  playlist.removeSongs([...batchSel.value]);
   batchSel.value = new Set();
   toast('已从当前歌单移除 ' + n + ' 首', 'ok');
 }
-function batchDeleteLibrary() {
+async function batchDeleteLibrary() {
   if (!batchSel.value.size) { toast('请先勾选曲目', 'warn'); return; }
   if (!window.confirm('确定从资料库删除 ' + batchSel.value.size + ' 首曲目？')) return;
   const ids = [...batchSel.value];
-  removeSongsFromLibrary(ids);
+  for (const id of ids) await removeSong(id);
+  playlist.removeFromAllPlaylists(ids);
   batchSel.value = new Set();
   toast('已删除 ' + ids.length + ' 首', 'ok');
 }
@@ -113,7 +112,7 @@ function dropOn(e, target) {
   const r = e.currentTarget.getBoundingClientRect();
   const before = (e.clientY - r.top) < r.height / 2;
   if (dragId.value && target && dragId.value !== target.id) {
-    moveActivePlaylistSong(dragId.value, target.id, before);
+    playlist.moveSong(dragId.value, target.id, before);
   }
   dragId.value = null;
   dragOverId.value = null;
@@ -125,17 +124,17 @@ function baseName(p) { return String(p).split(/[\\/]/).pop() || '未命名.mid';
 function newPlaylist() {
   const name = window.prompt('歌单名称', '');
   if (!name || !name.trim()) return;
-  createPlaylist(name.trim());
+  playlist.create(name.trim());
   toast('已创建歌单「' + name.trim() + '」', 'ok');
 }
 function removeCurrentPlaylist() {
-  const pid = state.activePlaylistId;
+  const pid = playlist.activePlaylistId;
   if (pid === 'favorites') { toast('收藏视图不能删除', 'warn'); return; }
   const pl = activePlaylist.value;
   if (!pl) return;
-  if (!window.confirm(state.playlists.length <= 1 ? '清空当前默认歌单？' : '删除歌单「' + pl.name + '」？')) return;
-  const r = deletePlaylist(pid);
-  if (r && r.ok) toast(r.cleared ? '歌单已清空' : '歌单已删除', 'ok');
+  if (!window.confirm(playlist.playlists.length <= 1 ? '清空当前默认歌单？' : '删除歌单「' + pl.name + '」？')) return;
+  playlist.remove(pid);
+  toast('歌单已处理', 'ok');
 }
 
 function selectSongOrBatch(s) {
@@ -219,24 +218,21 @@ function onDrop(e) {
       <div class="nav-sep"></div>
       <div class="nav-group-title">MIDI 歌单 <span class="muted" style="float:right;text-transform:none;letter-spacing:0">{{ visibleSongs.length }}</span></div>
 
-      <!-- 歌单选择 + 新建 -->
       <div class="pl-toolbar">
-        <select class="select-input" :value="state.activePlaylistId" @change="selectPlaylist($event.target.value)" style="flex:1;min-width:0;padding:5px 8px;font-size:12px">
+        <select class="select-input" :value="playlist.activePlaylistId" @change="playlist.select($event.target.value)" style="flex:1;min-width:0;padding:5px 8px;font-size:12px">
           <option value="favorites">★ 收藏（{{ favs.size }}）</option>
-          <option v-for="p in state.playlists" :key="p.id" :value="p.id">{{ p.name }}（{{ p.songIds.length }}）</option>
+          <option v-for="p in playlist.playlists" :key="p.id" :value="p.id">{{ p.name }}（{{ p.songIds.length }}）</option>
         </select>
         <button class="icon-btn" title="新建歌单" @click="newPlaylist" style="width:28px;height:28px"><Icon name="plus" :size="14" /></button>
       </div>
 
-      <!-- 搜索/收藏/批量 -->
       <div class="pl-toolbar">
-        <input class="text-input" style="flex:1;min-width:0;padding:5px 8px;font-size:12px" placeholder="搜索曲目" v-model="state.playlistSearch" />
-        <button class="chip-btn" :class="{ active: state.playlistFavOnly }" title="只显示收藏" @click="state.playlistFavOnly = !state.playlistFavOnly">★</button>
+        <input class="text-input" style="flex:1;min-width:0;padding:5px 8px;font-size:12px" placeholder="搜索曲目" v-model="playlist.search" />
+        <button class="chip-btn" :class="{ active: playlist.favOnly }" title="只显示收藏" @click="playlist.favOnly = !playlist.favOnly">★</button>
         <button class="chip-btn" :class="{ active: batchOn }" title="批量管理" @click="toggleBatch"><Icon name="menu" :size="13" />批量</button>
-        <button class="chip-btn" title="删除当前歌单" @click="removeCurrentPlaylist" :disabled="state.activePlaylistId === 'favorites'"><Icon name="trash" :size="13" />删</button>
+        <button class="chip-btn" title="删除当前歌单" @click="removeCurrentPlaylist" :disabled="playlist.activePlaylistId === 'favorites'"><Icon name="trash" :size="13" />删</button>
       </div>
 
-      <!-- 批量操作条 -->
       <div v-if="batchOn" class="pl-batch">
         <button class="chip-btn" @click="batchAll"><Icon name="target" :size="13" />全选</button>
         <button class="chip-btn" @click="batchFav">★ 收藏</button>
@@ -248,7 +244,7 @@ function onDrop(e) {
       </div>
 
       <div v-if="!visibleSongs.length" class="muted small" style="padding:8px 12px;line-height:1.6">
-        {{ state.playlists.length ? '当前歌单为空' : '暂无曲目' }}。<br>点击上方「导入 MIDI」或「导入文件夹」。
+        {{ playlist.playlists.length ? '当前歌单为空' : '暂无曲目' }}。<br>点击上方「导入 MIDI」或「导入文件夹」。
       </div>
 
       <div class="song-item"
@@ -271,7 +267,7 @@ function onDrop(e) {
         </div>
         <div class="si-tools">
           <button class="icon-btn si-fav" :class="{ on: favs.has(s.id) }" style="width:26px;height:26px;font-size:13px" title="收藏" @click.stop="toggleFav(s.id)">★</button>
-          <button class="icon-btn" style="width:26px;height:26px;font-size:13px" title="从当前歌单移除" @click.stop="removeSongsFromActivePlaylist([s.id])">
+          <button class="icon-btn" style="width:26px;height:26px;font-size:13px" title="从当前歌单移除" @click.stop="playlist.removeSongs([s.id])">
             <Icon name="trash" :size="14" />
           </button>
         </div>

@@ -3,6 +3,7 @@ import { reactive, computed } from 'vue';
 import { ensureAudio } from './audio.js';
 import { parseMidi, buildSong } from './core/midi.js';
 import { TRACK_COLORS, fmtTime } from './core/util.js';
+import { usePlaylistStore } from './stores/playlist';
 
 export const VIEWS = [
   { id: 'home', label: '首页', ic: 'home' },
@@ -242,11 +243,11 @@ export async function importFiles(items) {
       meta: { size: it.bytes.byteLength, time: Date.now(), tracks: song.tracks.length },
     };
     state.songs.push(item);
-    // 加入当前歌单（收藏视图时加入默认歌单）
-    const pid = state.activePlaylistId === 'favorites' ? 'default' : state.activePlaylistId;
-    const pl = state.playlists.find(p => p.id === pid);
-    if (pl && !pl.songIds.includes(item.id)) pl.songIds.push(item.id);
-    persistPlaylists();
+    // 加入当前歌单（通过 Pinia 歌单 store，收藏视图时加入默认歌单）
+    try {
+      const plStore = usePlaylistStore();
+      plStore.addSongs([item.id]);
+    } catch (e) {}
     // 原始字节写入 IndexedDB，刷新后仍可恢复
     await idbPut(STORE_SONGS, { id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, bytes: it.bytes });
     ok++;

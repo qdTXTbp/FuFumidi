@@ -72,7 +72,7 @@ export const usePlaylistStore = defineStore('playlist', {
       this.persist();
     },
     addSongs(ids: string[]) {
-      const list = this.activePlaylist;
+      const list = this.activePlaylist || this.playlists.find(p => p.id === 'default') || this.playlists[0];
       if (!list) return;
       for (const id of ids) if (id && !list.songIds.includes(id)) list.songIds.push(id);
       this.persist();
@@ -84,6 +84,11 @@ export const usePlaylistStore = defineStore('playlist', {
         list.songIds = list.songIds.filter(id => !set.has(id));
         this.persist();
       }
+    },
+    removeFromAllPlaylists(ids: string[]) {
+      const set = new Set(ids);
+      for (const p of this.playlists) p.songIds = p.songIds.filter(id => !set.has(id));
+      this.persist();
     },
     moveSong(dragId: string, targetId: string, before: boolean) {
       const list = this.activePlaylist;
