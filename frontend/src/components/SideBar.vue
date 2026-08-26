@@ -274,7 +274,7 @@ function onDrop(e) {
     </div>
 
     <div class="sidebar-body">
-      <button class="btn primary" style="width:100%;justify-content:center" @click="onPick">
+      <button class="btn sidebar-primary" style="width:100%;justify-content:center" @click="onPick">
         <Icon name="import" :size="15" /> 导入 MIDI
       </button>
       <button class="btn sm" style="width:100%;justify-content:center;margin-top:6px" @click="onPickFolder">
@@ -371,6 +371,16 @@ function onDrop(e) {
 </template>
 
 <style scoped>
+.btn.sidebar-primary {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.btn.sidebar-primary:hover {
+  background: color-mix(in srgb, var(--accent) 86%, #000);
+  border-color: var(--accent);
+}
 .si-fav { color: var(--stone); font-size: 13px; }
 .si-fav.on { color: var(--amber); }
 .song-list { min-height: 18px; border-radius: 10px; transition: box-shadow .12s, background .12s; }
