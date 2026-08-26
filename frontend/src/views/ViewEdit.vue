@@ -3,7 +3,7 @@
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
 import EditorCanvas from '../components/EditorCanvas.vue';
-import { state, currentSong, toast, importFiles } from '../store.js';
+import { state, currentSong, toast, importFiles, setView } from '../store.js';
 import { ensureAudio } from '../audio.js';
 import { encodeMidi } from '../core/midi.js';
 import { noteName, clamp } from '../core/util.js';
@@ -998,6 +998,7 @@ onBeforeUnmount(() => {
           <button class="et-btn" title="把当前音色应用到全部非鼓轨" @click="timbreAll">全部</button>
           <button class="et-btn" title="按轨道音域/密度/名称智能选择音色" @click="smartTimbre">智能</button>
           <span class="et-sep"></span>
+          <button class="et-btn" title="同步到乐谱：在五线谱查看当前编辑结果" @click="setView('score')">乐谱同步</button>
           <button class="et-btn" title="全屏编辑，最大化钢琴卷帘" @click="toggleFullscreen">全屏</button>
           <button class="et-btn" title="编辑功能介绍" @click="helpOpen = true">说明</button>
         </div>
