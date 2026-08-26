@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onBeforeUnmount } from 'vue';
+import { onMounted, onBeforeUnmount, defineAsyncComponent } from 'vue';
 import SideBar from './components/SideBar.vue';
 import TopBar from './components/TopBar.vue';
 import PlayerBar from './components/PlayerBar.vue';
@@ -7,16 +7,17 @@ import SettingsPanel from './components/SettingsPanel.vue';
 import ThemeLibrary from './components/ThemeLibrary.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import GuideOverlay from './components/GuideOverlay.vue';
-import ViewHome from './views/ViewHome.vue';
-import ViewPlay from './views/ViewPlay.vue';
-import ViewEdit from './views/ViewEdit.vue';
-import ViewAnalyze from './views/ViewAnalyze.vue';
-import ViewViz from './views/ViewViz.vue';
-import ViewScore from './views/ViewScore.vue';
-import ViewLyrics from './views/ViewLyrics.vue';
-import ViewConvert from './views/ViewConvert.vue';
-import ViewTranscribe from './views/ViewTranscribe.vue';
-import ViewPlaceholder from './views/ViewPlaceholder.vue';
+// 视图按需加载：降低首屏体积，乐谱/可视化/转换等重模块延迟初始化
+const ViewHome = defineAsyncComponent(() => import('./views/ViewHome.vue'));
+const ViewPlay = defineAsyncComponent(() => import('./views/ViewPlay.vue'));
+const ViewEdit = defineAsyncComponent(() => import('./views/ViewEdit.vue'));
+const ViewAnalyze = defineAsyncComponent(() => import('./views/ViewAnalyze.vue'));
+const ViewViz = defineAsyncComponent(() => import('./views/ViewViz.vue'));
+const ViewScore = defineAsyncComponent(() => import('./views/ViewScore.vue'));
+const ViewLyrics = defineAsyncComponent(() => import('./views/ViewLyrics.vue'));
+const ViewConvert = defineAsyncComponent(() => import('./views/ViewConvert.vue'));
+const ViewTranscribe = defineAsyncComponent(() => import('./views/ViewTranscribe.vue'));
+const ViewPlaceholder = defineAsyncComponent(() => import('./views/ViewPlaceholder.vue'));
 import { state, MIGRATED_VIEWS, startTickLoop, stopTickLoop, restoreSongs, togglePlay, seekRatio, setTempo, toggleLoop, toggleMetro } from './store.js';
 import { setLang } from './core/i18n.js';
 import { applyTheme, loadTheme } from './core/theme.js';
