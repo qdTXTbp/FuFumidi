@@ -1238,7 +1238,8 @@ input[type="checkbox"]:active, input[type="radio"]:active { transform: scale(0.8
   backdrop-filter: blur(10px);
 }
 
-/* 播放条内的控件：深色玻璃上保持深色半透明输入 */
-.playerbar input,
+/* 播放条内的控件：深色玻璃上保持深色半透明输入（range 进度条除外，保持白色渐变填充） */
+.playerbar input:not([type="range"]),
 .playerbar select,
 .playerbar .tp-btn.toggle-on { background: rgba(255, 255, 255, 0.14); }
+.playerbar .num-input { background: rgba(255, 255, 255, 0.14); color: #fff; border-color: rgba(255, 255, 255, 0.18); }
