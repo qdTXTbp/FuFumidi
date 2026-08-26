@@ -172,11 +172,11 @@ def transcribe_pt(audio_path, output_midi, onset_threshold=0.3, frame_threshold=
     import torch
     with _redirect_stdout():
         if _dev == "cuda":
-            # GPU 推理：关闭梯度 + 混合精度，显著提速、省显存；失败则普通推理
+            # GPU 推理：关闭梯度提速；不使用 autocast 混合精度——
+            # RTX 50 系（Blackwell）等架构上 autocast 推理会导致输出全 0。
             try:
                 with torch.inference_mode():
-                    with torch.autocast(device_type="cuda"):
-                        result = engine.transcribe(audio, None)
+                    result = engine.transcribe(audio, None)
             except Exception:
                 result = engine.transcribe(audio, None)
         else:

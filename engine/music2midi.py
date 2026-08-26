@@ -25,7 +25,7 @@ import os
 import sys
 import warnings
 
-VERSION = "2.2.0"
+VERSION = "2.0.1"   # 与应用 package.json 版本保持一致（发布时同步修改）
 
 
 def _setup_utf8_console():
@@ -276,19 +276,10 @@ def cmd_probe():
 # 图形界面
 # ---------------------------------------------------------------------------
 def run_gui():
-    from engine import transcribe, engine_available, MODES
-    import gui
-
-    # 至少需要一种引擎
-    ok_modes = [m for m in MODES if engine_available(m)]
-    if not ok_modes:
-        from PySide6.QtWidgets import QApplication, QMessageBox
-        app = QApplication([])
-        QMessageBox.critical(None, "缺少依赖",
-            "检测到缺少必要的转录引擎（basic-pitch / piano-transcription）。\n\n"
-            "请先双击运行 install.bat 一键安装。")
-        return 1
-    return gui.run_gui(transcribe, DEFAULT_OUTPUT_DIR, VERSION)
+    # 图形界面已并入 FuFumidi 桌面应用（Electron 渲染层）。
+    # engine 目录不再分发 gui.py，CLI 的 GUI 模式因此移除，避免运行时 ImportError。
+    print("图形界面已并入 FuFumidi 桌面应用，请使用 FuFumidi 打开（命令行仅提供 convert / batch 转录）。")
+    return 0
 
 
 # ---------------------------------------------------------------------------

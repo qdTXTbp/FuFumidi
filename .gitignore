@@ -14,3 +14,9 @@ build-base.log
 build-base.err.log
 package-lock.json
 .DS_Store
+
+# 大型构建资源（不进版本库：Python 运行时 / 模型 / 提权工具，构建前按 README 准备）
+resources/
+models/
+engine/__pycache__/
+renderer/dist/

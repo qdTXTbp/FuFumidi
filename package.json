@@ -12,9 +12,18 @@
   "homepage": "https://github.com/qdTXTbp/FuFumidi",
   "private": true,
   "scripts": {
+    "test": "python -m pytest engine/tests -q",
     "pack:source": "node build.js source",
     "pack:full": "node build.js full",
     "pack:base": "node build.js base",
     "dist:win": "electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^26.15.3"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true,
+    "electron-winstaller@5.4.0": true
   }
 }

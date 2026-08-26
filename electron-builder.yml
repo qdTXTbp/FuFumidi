@@ -13,19 +13,21 @@ files:
   - "!release/**"
   - "!build.js"
   - "!electron-builder.yml"
+# 打包附带的外部大体积资源（Python 运行时、模型、提权工具）。
+# 这些文件不在 git 仓库中，构建前需按 README 准备到 resources/ 目录（相对本仓库根）。
 extraResources:
-  - from: "E:/Midi/FuFumidi/resources/python"
+  - from: "resources/python"
     to: python
-  - from: "E:/Midi/FuFumidi/resources/models"
+  - from: "resources/models"
     to: models
-  - from: "E:/Midi/FuFumidi/resources/elevate.exe"
+  - from: "resources/elevate.exe"
     to: elevate.exe
 win:
   target:
     - target: nsis
       arch:
         - x64
-  icon: build/icon.ico
+  icon: build/icon.png
 nsis:
   oneClick: false
   perMachine: false

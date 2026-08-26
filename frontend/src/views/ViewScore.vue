@@ -1,0 +1,479 @@
+<script setup>
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import Icon from '../components/Icon.vue';
+import { currentSong, state, toast } from '../store.js';
+import { getPlayer } from '../audio.js';
+import { t } from '../core/i18n.js';
+import { esc, clamp, TRACK_COLORS } from '../core/util.js';
+import { songToAbc, jianpuData, tabData, detectSf, ABC_KEY_NAMES } from '../core/score.js';
+
+const mode = ref('staff');       // staff | jianpu | guitar | bass
+const track = ref(0);
+const fontSz = ref(22);
+const follow = ref(true);
+const zoom = ref(1);
+const opts = reactive({ simple: true, grid: true, beam: false, multi: false });
+const status = ref('');
+
+const scoreEl = ref(null);
+const scrollEl = ref(null);
+const showOpts = ref(false);
+const exporting = ref(false);
+
+let abcjsLoaded = false;
+let abcjsLoading = null;
+let tune = null;        // abcjs TuneObject
+let noteEvents = [];    // [{ ms, tick, elements: [...] }]
+let flow = [];          // 视觉流向（按行阅读顺序）
+let lineTops = [], lineBottoms = [];
+let renderCacheKey = '';
+let playingSet = new Set(); // 当前高亮的 SVG 元素
+
+const song = computed(() => (currentSong.value && currentSong.value.song) || null);
+const tracks = computed(() => (song.value ? song.value.tracks : []));
+
+const trackSel = computed({
+  get: () => clamp(track.value, 0, Math.max(0, tracks.value.length - 1)),
+  set: v => { track.value = parseInt(v, 10) || 0; },
+});
+const selTrack = computed(() => tracks.value[trackSel.value] || null);
+
+/* ---------------- abcjs 动态加载（本地 vendor，离线可用） ---------------- */
+function loadAbcjs() {
+  if (abcjsLoaded) return Promise.resolve();
+  if (abcjsLoading) return abcjsLoading;
+  abcjsLoading = new Promise((resolve, reject) => {
+    if (typeof window.ABCJS !== 'undefined') { abcjsLoaded = true; resolve(); return; }
+    const s = document.createElement('script');
+    s.src = '/vendor/abcjs-min.js';
+    s.onload = () => { abcjsLoaded = true; resolve(); };
+    s.onerror = () => { reject(new Error('abcjs 组件加载失败')); };
+    document.head.appendChild(s);
+  });
+  return abcjsLoading;
+}
+
+/* ---------------- 状态 ---------------- */
+function setStatus(x) { status.value = x; }
+
+function midiToSec(s, tick) {
+  return s.baseSec ? s.baseSec(tick) : (tick / Math.max(1, s.tpb)) * (60000 / (s.initialBpm || 120)) / 1000;
+}
+
+/* ---------------- 五线谱（abcjs） ---------------- */
+async function renderStaff() {
+  const el = scoreEl.value, s = song.value;
+  const tr = selTrack.value;
+  const sc = scrollEl.value;
+  if (!el) return;
+  el.innerHTML = '';
+  el.style.cssText = '';
+  tune = null; noteEvents = []; flow = []; lineTops = []; lineBottoms = []; playingSet.clear();
+  if (sc) { sc.scrollTop = 0; sc.scrollLeft = 0; }
+  if (!s || !tr || !tr.notes.length) { el.innerHTML = '<div class="score-empty">' + esc(t('该轨道没有音符')) + '</div>'; setStatus(t('暂无数据')); return; }
+  setStatus(t('正在生成…'));
+  try { await loadAbcjs(); } catch (e) { el.innerHTML = '<div class="score-empty">' + esc(String(e.message || e)) + '</div>'; setStatus(t('生成失败')); return; }
+  const ABCJS = window.ABCJS;
+  const vpW = sc ? sc.clientWidth : 900;
+  const cw = Math.max(360, vpW - 24);
+  const density = tr.notes.length / Math.max(1, s.bars || 1);
+  const compact = density > 60, mid = density > 25;
+  const minSpacing = compact ? 1.25 : mid ? 1.0 : 0.65;
+  const maxSpacing = compact ? 1.7 : mid ? 1.35 : 1.0;
+  const staffwidth = Math.max(360, Math.round(cw));
+  let groupN = compact ? 2 : mid ? 3 : 4;
+  let useScale = zoom.value;
+  try {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const abc = songToAbc(s, trackSel.value, groupN, { beam: opts.beam, simple: opts.simple });
+      tune = ABCJS.renderAbc(el, abc, {
+        staffwidth,
+        wrap: { minSpacing, maxSpacing, preferredMeasuresPerLine: groupN },
+        scale: useScale,
+        foregroundColor: 'currentColor',
+        add_classes: true,
+        selectTypes: false,
+        paddingtop: 14, paddingbottom: 14, paddingleft: 2, paddingright: 2,
+      })[0];
+      let maxW = 0;
+      for (const w of el.querySelectorAll('.abcjs-staff-wrapper')) {
+        try { maxW = Math.max(maxW, w.getBoundingClientRect().width); } catch (e) {}
+      }
+      if (!maxW) break;
+      if (maxW > vpW * 1.02 && groupN > 1) { groupN = Math.max(1, Math.floor(groupN * 0.7)); continue; }
+      if (maxW < vpW * 0.93 && groupN < 24) { groupN = Math.min(24, Math.ceil(groupN * 1.4)); continue; }
+      if (maxW > vpW * 1.02 && groupN === 1) {
+        const fitScale = Math.max(0.5, useScale * (vpW / maxW) * 0.98);
+        if (fitScale < useScale) { useScale = fitScale; continue; }
+      }
+      break;
+    }
+    el.style.width = '100%'; el.style.margin = '0';
+    const svg = el.querySelector('svg');
+    if (svg) { svg.style.maxWidth = '100%'; svg.style.margin = '0 auto'; }
+    if (opts.grid) el.classList.add('fu-grid');
+    setBeatWidth(el, s);
+    // 时间轴映射（setTiming 需在绘制后调用）
+    if (tune) {
+      const bpm = Math.round(((s.tempoMap && s.tempoMap[0]) ? 60000000 / s.tempoMap[0].us : (s.initialBpm || 120)) * 10) / 10;
+      const beatMs = 60000 / bpm;
+      const timings = tune.setTiming(bpm);
+      const arr = [];
+      for (const ev of timings) if (ev.type === 'event') {
+        const tick = Math.round((ev.milliseconds / beatMs) * s.tpb);
+        arr.push({ ms: midiToSec(s, tick) * 1000, tick, ev });
+      }
+      arr.sort((a, b) => a.ms - b.ms);
+      noteEvents = arr;
+      flow = arr.slice().sort((a, b) => (a.ev.line - b.ev.line) || (a.ms - b.ms));
+      let fmax = -1;
+      for (const it of flow) { if (it.ms > fmax) fmax = it.ms; it.flowMs = fmax; }
+      for (const it of arr) {
+        if (it.ev.elements) for (const es of it.ev.elements) if (es) for (const node of es) {
+          if (node && node.setAttribute) node.setAttribute('data-tick', it.tick);
+        }
+      }
+      // 每行谱线 y 上下界（跟随滚动用）
+      if (sc) {
+        const scRect = sc.getBoundingClientRect();
+        for (const it of arr) {
+          const l = it.ev.line;
+          if (l == null) continue;
+          const node = it.ev.elements && it.ev.elements[0] && it.ev.elements[0][0];
+          if (!node) continue;
+          const r = node.getBoundingClientRect();
+          const y0 = r.top - scRect.top + sc.scrollTop;
+          const y1 = r.bottom - scRect.top + sc.scrollTop;
+          if (lineTops[l] === undefined) { lineTops[l] = y0; lineBottoms[l] = y1; }
+          else { if (y0 < lineTops[l]) lineTops[l] = y0; if (y1 > lineBottoms[l]) lineBottoms[l] = y1; }
+        }
+      }
+    }
+    setStatus(t('渲染完成'));
+  } catch (e) {
+    el.innerHTML = '<div class="score-empty">' + t('乐谱解析失败：') + esc(String(e.message || e)) + '</div>';
+    tune = null; setStatus(t('生成失败'));
+  }
+}
+
+// 网格节拍宽：用「相隔正好一拍的音符对」求一拍实际横向宽度
+function setBeatWidth(el, s) {
+  el.classList.toggle('fu-grid', !!opts.grid);
+  let bw = Math.round(56 * zoom.value);
+  if (noteEvents.length > 1) {
+    const beatMs = 60000 / (s.initialBpm || 120);
+    const byLine = new Map();
+    for (const it of noteEvents) {
+      if (it.ev.left == null) continue;
+      let a = byLine.get(it.ev.line); if (!a) { a = []; byLine.set(it.ev.line, a); }
+      a.push(it);
+    }
+    const deltas = [];
+    for (const a of byLine.values()) {
+      a.sort((x, y) => x.ms - y.ms);
+      for (let i = 0; i < a.length; i++) for (let j = i + 1; j < a.length; j++) {
+        const beats = (a[j].ms - a[i].ms) / beatMs;
+        if (Math.abs(beats - 1) < 0.15) {
+          const dl = a[j].ev.left - a[i].ev.left;
+          if (dl > 10 && dl < 500) { deltas.push(dl); }
+          break;
+        } else if (beats > 1.2) break;
+      }
+    }
+    if (deltas.length >= 3) { deltas.sort((a, b) => a - b); bw = Math.round(deltas[Math.floor(deltas.length / 2)] * zoom.value); }
+  }
+  el.style.setProperty('--fu-beatw', Math.max(12, bw) + 'px');
+}
+
+/* ---------------- 简谱 / TAB（HTML 渲染） ---------------- */
+function trackBlocks(multi, fn) {
+  if (!song.value) return [];
+  const idxs = multi ? song.value.tracks.map((_, i) => i).filter(i => song.value.tracks[i].notes.length) : [trackSel.value];
+  return idxs.map(ti => {
+    const r = fn(song.value, ti);
+    return { ti, name: song.value.tracks[ti].name || (t('音轨 ') + (ti + 1)), ...r };
+  });
+}
+
+const jianpuBlocks = computed(() => trackBlocks(opts.multi, jianpuData));
+const tabBlocks = computed(() => trackBlocks(opts.multi, (s, ti) =>
+  tabData(s, ti, mode.value === 'guitar' ? [64, 59, 55, 50, 45, 40] : [43, 38, 33, 28])
+));
+const tabPlaced = computed(() => tabBlocks.value.reduce((a, b) => a + (b.placed || 0), 0));
+
+/* ---------------- 渲染调度 ---------------- */
+let renderRaf = 0;
+function scheduleRender() {
+  if (renderRaf) return;
+  renderRaf = requestAnimationFrame(() => { renderRaf = 0; doRender(); });
+}
+function doRender() {
+  if (mode.value === 'staff') renderStaff();
+  else setStatus('');
+  // 非五线谱模式由响应式数据自动渲染
+}
+
+function changeMode() { renderCacheKey = ''; scheduleRender(); }
+function changeTrack() { renderCacheKey = ''; scheduleRender(); }
+function setZoom(v) {
+  zoom.value = clamp(parseFloat(v) || 1, 0.6, 1.8);
+  scheduleRender();
+}
+
+watch([song, () => state.view], () => { renderCacheKey = ''; nextTick(scheduleRender); });
+watch([mode, trackSel, () => opts.simple, () => opts.grid, () => opts.beam, zoom], () => { renderCacheKey = ''; scheduleRender(); });
+
+// 跟随播放
+function tickFollow() {
+  if (!follow.value || !state.playing) return;
+  const s = song.value;
+  if (!s || !tune) return;
+  const p = getPlayer();
+  if (!p || !p.song) return;
+  const curMs = midiToSec(s, p.currentTick()) * 1000;
+  // 高亮当前音符
+  const playing = new Set();
+  const curSet = new Set();
+  for (const it of noteEvents) {
+    if (it.ms <= curMs && curMs < it.ms + 500) {
+      if (it.ev.elements) for (const es of it.ev.elements) if (es) for (const node of es) {
+        if (node && node.classList) { playing.add(node); curSet.add(node); }
+      }
+    }
+  }
+  for (const n of playingSet) if (!curSet.has(n)) n.classList.remove('fu-play');
+  for (const n of curSet) n.classList.add('fu-play');
+  playingSet = curSet;
+  // 自动滚动到当前行
+  const fi = findFlowIdx(curMs);
+  const it = flow[fi];
+  if (it && it.ev.line != null && scrollEl.value) {
+    const l = it.ev.line;
+    const top = lineTops[l];
+    if (top != null) {
+      const sc = scrollEl.value;
+      const c = sc.clientHeight / 2;
+      const target = Math.max(0, top - c + 20);
+      if (Math.abs(sc.scrollTop - target) > 40) sc.scrollTo({ top: target, behavior: 'smooth' });
+    }
+  }
+}
+function findFlowIdx(ms) {
+  let lo = 0, hi = flow.length - 1;
+  while (lo <= hi) { const mid = (lo + hi) >> 1; if (flow[mid].flowMs <= ms) lo = mid + 1; else hi = mid - 1; }
+  return hi;
+}
+
+/* ---------------- 导出 PNG（五线谱） ---------------- */
+function exportStaffPng() {
+  const el = scoreEl.value;
+  if (!el) return;
+  const svg = el.querySelector('svg');
+  if (!svg) { toast(t('当前没有可导出的五线谱'), 'warn'); return; }
+  exporting.value = true;
+  try {
+    const xml = new XMLSerializer().serializeToString(svg);
+    const blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const pad = 24;
+      const w = Math.max(200, svg.viewBox.baseVal.width || img.width);
+      const h = Math.max(200, svg.viewBox.baseVal.height || img.height);
+      const cv = document.createElement('canvas');
+      cv.width = w + pad * 2; cv.height = h + pad * 2;
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.drawImage(img, pad, pad, w, h);
+      URL.revokeObjectURL(url);
+      const a = document.createElement('a');
+      a.download = (song.value ? song.value.name : 'score') + '_score.png';
+      a.href = cv.toDataURL('image/png');
+      a.click();
+      toast(t('已导出 PNG'));
+      exporting.value = false;
+    };
+    img.onerror = () => { exporting.value = false; toast(t('导出失败'), 'warn'); URL.revokeObjectURL(url); };
+    img.src = url;
+  } catch (e) {
+    exporting.value = false;
+    toast(t('导出失败：') + String(e.message || e), 'warn');
+  }
+}
+
+/* ---------------- 生命周期 ---------------- */
+let followRaf = 0;
+function loop() {
+  tickFollow();
+  followRaf = requestAnimationFrame(loop);
+}
+onMounted(() => {
+  nextTick(scheduleRender);
+  followRaf = requestAnimationFrame(loop);
+});
+onBeforeUnmount(() => {
+  cancelAnimationFrame(followRaf);
+  if (renderRaf) cancelAnimationFrame(renderRaf);
+});
+</script>
+
+<template>
+  <div class="score-view">
+    <div class="score-toolbar">
+      <span class="tb-label">{{ t('乐谱轨道') }}</span>
+      <span class="trk-sel">
+        <span class="trk-dot" :style="{ background: (selTrack ? (TRACK_COLORS[trackSel % TRACK_COLORS.length]) : 'var(--stone)') }"></span>
+        <select class="select-input" :value="trackSel" @change="trackSel = $event.target.value" :disabled="!tracks.length">
+          <option v-for="(tr, i) in tracks" :key="i" :value="i">{{ tr.name || (t('音轨 ') + (i + 1)) }}</option>
+        </select>
+      </span>
+      <span class="sep"></span>
+
+      <select class="select-input" :value="mode" @change="mode = $event.target.value; changeMode()">
+        <option value="staff">{{ t('五线谱') }}</option>
+        <option value="jianpu">{{ t('简谱') }}</option>
+        <option value="guitar">{{ t('吉他六线谱') }}</option>
+        <option value="bass">{{ t('贝斯四线谱') }}</option>
+      </select>
+      <select v-if="mode === 'jianpu'" class="select-input" :value="fontSz" @change="fontSz = parseInt($event.target.value, 10) || 22" style="width:78px">
+        <option :value="18">{{ t('简谱小') }}</option>
+        <option :value="22">{{ t('简谱中') }}</option>
+        <option :value="28">{{ t('简谱大') }}</option>
+      </select>
+
+      <span class="sep"></span>
+
+      <button class="btn sm" :class="{ active: follow }" @click="follow = !follow" :title="t('跟随播放')">
+        <Icon name="play2" :size="14" />{{ t('跟随播放') }}
+      </button>
+      <button class="btn sm" @click="showOpts = !showOpts" :title="t('显示选项')">
+        <Icon name="eye" :size="14" />{{ t('显示') }}
+      </button>
+      <div v-if="showOpts" class="score-pop" @mouseleave="showOpts = false">
+        <label><input type="checkbox" v-model="opts.simple" @change="changeMode()" />{{ t('简化记谱') }}</label>
+        <label><input type="checkbox" v-model="opts.grid" @change="changeMode()" />{{ t('四分音符网格') }}</label>
+        <label><input type="checkbox" v-model="opts.beam" @change="changeMode()" />{{ t('自动连线') }}</label>
+        <label><input type="checkbox" v-model="opts.multi" @change="changeMode()" />{{ t('多轨显示') }}</label>
+      </div>
+
+      <span class="sep"></span>
+      <button class="btn sm" @click="exportStaffPng" :disabled="mode !== 'staff' || exporting">
+        <Icon name="save" :size="14" />{{ t('PNG') }}
+      </button>
+
+      <span style="flex:1"></span>
+      <span class="tb-status">
+        <span class="pulse" :class="{ on: state.playing }"></span>
+        <span>{{ status || (song ? (selTrack ? selTrack.name || t('音轨 ') + (trackSel + 1) : '') + ' · ' + ((song.sigMap && song.sigMap[0]) ? song.sigMap[0].num + '/' + song.sigMap[0].den : '4/4') + ' · ' + (ABC_KEY_NAMES[clamp((song.keySig && song.keySig.sf != null) ? song.keySig.sf : detectSf(selTrack ? selTrack.notes : []), -7, 7)] || 'C') + ' · ' + (selTrack ? selTrack.notes.length : 0) + ' 音符' : t('未加载')) }}</span>
+      </span>
+
+      <span class="sep"></span>
+      <div class="zoom-fab">
+        <button class="icon-btn" @click="setZoom(zoom - 0.1)" :title="t('缩小')"><Icon name="minus" :size="14" /></button>
+        <span class="zf-pct">{{ Math.round(zoom * 100) }}%</span>
+        <button class="icon-btn" @click="setZoom(zoom + 0.1)" :title="t('放大')"><Icon name="plus" :size="14" /></button>
+      </div>
+    </div>
+
+    <div class="score-scroll" ref="scrollEl">
+      <!-- 五线谱：abcjs 渲染容器 -->
+      <div ref="scoreEl" id="abcScore" v-show="mode === 'staff'"></div>
+      <!-- 简谱 -->
+      <div v-if="mode === 'jianpu'">
+        <div v-for="b in jianpuBlocks" :key="b.ti" class="score-block">
+          <div class="score-block-name">{{ b.name }}</div>
+          <div v-if="b.error" class="score-empty">{{ b.error }}</div>
+          <template v-else>
+            <div v-if="b.truncated" class="score-empty" style="padding:8px">{{ t('该轨道音符过多') }}（{{ b.total }}），{{ t('简谱仅显示前') }} {{ b.max }} {{ t('个音符') }}</div>
+            <div class="jianpu" :style="{ fontSize: fontSz + 'px' }">
+              <span v-for="(c, i) in b.cells" :key="i" class="jp-cell">
+                <span class="jp-note" :class="c.cls">{{ c.acc }}{{ c.num }}{{ c.dots }}</span>
+                <span v-if="c.dash" class="jp-dash">{{ c.dash }}</span>
+              </span>
+            </div>
+          </template>
+        </div>
+      </div>
+      <!-- 吉他 / 贝斯 TAB -->
+      <div v-if="mode === 'guitar' || mode === 'bass'">
+        <div v-for="b in tabBlocks" :key="b.ti" class="score-block">
+          <div class="score-block-name">{{ b.name }}</div>
+          <div v-if="b.error" class="score-empty">{{ b.error }}</div>
+          <template v-else>
+            <div class="score-empty" style="padding:6px">{{ t('自动把位（按音高就近排布，可编辑视图调整音高）') }} · {{ b.placed }} {{ t('音') }}</div>
+            <div class="tab-sys">
+              <div v-for="(sys, si) in b.systems" :key="si" class="tab-sys-block">
+                <div v-for="(l, li) in sys" :key="li" class="tab-line">{{ l }}</div>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <div class="score-legend">
+      <span class="lg-item"><span class="dot" style="background:#ffd866"></span>{{ t('正在播放音符') }}</span>
+      <span class="lg-item"><span class="dot" style="background:#1456f0"></span>{{ t('升降号自动按调号判定') }}</span>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.score-view { display: flex; flex-direction: column; height: 100%; background: var(--canvas); }
+.score-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border-bottom: 1px solid var(--hairline);
+  flex-wrap: wrap; flex: none;
+}
+.tb-label { font-size: 12px; color: var(--stone); font-weight: 600; }
+.trk-sel { display: inline-flex; align-items: center; gap: 6px; }
+.trk-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.sep { width: 1px; height: 20px; background: var(--hairline); margin: 0 2px; }
+.tb-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--steel); min-width: 0; }
+.tb-status .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--stone); flex: none; }
+.tb-status .pulse.on { background: var(--success-text); box-shadow: 0 0 0 0 rgba(27,166,115,.5); animation: pulse 1.4s infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(27,166,115,.5); } 70% { box-shadow: 0 0 0 6px rgba(27,166,115,0); } 100% { box-shadow: 0 0 0 0 rgba(27,166,115,0); } }
+.zoom-fab { display: inline-flex; align-items: center; gap: 2px; }
+.zf-pct { font-size: 11px; color: var(--stone); min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
+.score-pop {
+  position: absolute; top: 46px; right: 130px; z-index: 40;
+  background: var(--canvas); border: 1px solid var(--hairline);
+  border-radius: 12px; box-shadow: var(--shadow);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
+  font-size: 12.5px; color: var(--ink); min-width: 140px;
+}
+.score-pop label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.score-pop input { accent-color: var(--ink); }
+
+.score-scroll { flex: 1; overflow: auto; padding: 6px 10px 20px; }
+.score-block { margin-bottom: 14px; border-bottom: 1px dashed var(--hairline); padding-bottom: 8px; }
+.score-block-name { font-size: 12px; color: var(--stone); margin-bottom: 4px; }
+
+.score-empty { color: var(--stone); font-size: 13px; padding: 18px 12px; line-height: 1.8; text-align: center; }
+.jianpu { display: block; padding: 14px 8px; line-height: 2; color: var(--ink); }
+.jp-cell { display: inline-block; margin: 2px 8px; white-space: nowrap; }
+.jp-note { font-weight: 700; color: #d45656; }
+.jp-long::after { content: ' —'; color: var(--stone); }
+.jp-half::after { content: ' -'; color: var(--stone); }
+.jp-8 { text-decoration: underline; }
+.jp-16 { text-decoration: underline double; }
+.jp-dash { color: var(--stone); font-size: 15px; margin-left: 4px; }
+.tab-sys { display: flex; flex-direction: column; gap: 16px; padding: 12px 8px; }
+.tab-line { font-family: var(--mono); font-size: 13px; line-height: 1.55; white-space: pre; overflow-x: auto; color: var(--steel); padding: 1px 0; }
+
+.score-legend {
+  display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
+  padding: 8px 14px; border-top: 1px solid var(--hairline);
+  font-size: 11px; color: var(--stone); flex: none;
+}
+.lg-item { display: inline-flex; align-items: center; gap: 6px; }
+.lg-item .dot { width: 7px; height: 7px; border-radius: 50%; }
+
+/* abcjs 五线谱（deep：SVG 由引擎注入） */
+:deep(#abcScore) { color: var(--ink); }
+:deep(#abcScore .fu-play .abcjs-notehead) { stroke: #6b3200 !important; stroke-width: 2 !important; }
+:deep(#abcScore .fu-play .abcjs-stem) { stroke: #ffbe3c !important; stroke-width: 2.2 !important; }
+:deep(#abcScore .abcjs-note) { cursor: pointer; }
+:deep(#abcScore svg .abcjs-ending) { display: none; }
+:deep(#abcScore.fu-grid) { background-image: repeating-linear-gradient(to right, var(--hairline) 0 1px, transparent 1px var(--fu-beatw, 56px)); }
+</style>
