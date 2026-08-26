@@ -13,6 +13,7 @@
   "private": true,
   "scripts": {
     "build:ui": "npm --prefix frontend run build",
+    "build:rust": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-rust.ps1",
     "pack:source": "node build.js source",
     "pack:full": "node build.js full",
     "pack:base": "node build.js base",

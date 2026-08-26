@@ -19,3 +19,4 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+rust-core/target/
