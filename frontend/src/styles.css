@@ -76,6 +76,7 @@
 * { box-sizing: border-box; }
 button, input, select, textarea { font-family: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 html, body, #app { height: 100%; margin: 0; }
 body {
   font-family: var(--font);
@@ -669,17 +670,19 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 @keyframes ov-pop { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
 
 /* ---------- 设置面板 ---------- */
-.settings-card { width: 700px; display: flex; flex-direction: column; overflow: hidden; }
+.settings-card { width: 720px; max-height: 92vh; display: flex; flex-direction: column; overflow: hidden; }
 .settings-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .settings-title { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; color: var(--ink); }
-.settings-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--hairline); margin-bottom: 4px; overflow-x: auto; }
+.settings-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--hairline); margin-bottom: 4px; overflow-x: auto; position: sticky; top: 0; background: var(--canvas); z-index: 5; padding-bottom: 4px; }
 .ov-tab {
+  min-height: 28px;
   padding: 6px 14px;
   border: none;
   background: transparent;
   color: var(--steel);
   border-radius: 999px;
   font-size: 13px;
+  line-height: 1.2;
   cursor: pointer;
   white-space: nowrap;
   transition: all 0.15s;
