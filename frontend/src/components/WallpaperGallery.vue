@@ -1,4 +1,4 @@
-﻿<script setup>
+<script setup>
 // 壁纸库：从 GitHub Media 仓库获取壁纸缩略图列表，点击缩略图下载并应用
 import { ref, onMounted } from 'vue';
 import Icon from './Icon.vue';
@@ -42,17 +42,18 @@ async function pick(item, i) {
   if (busyIdx.value >= 0) return;
   busyIdx.value = i; progress.value = 0;
   try {
-    toast(t('正在下载壁纸…'));
-    const r = await bridge.wallpaper.download(item.video, item.name);
-    if (r && r.ok && r.path) {
-      await setWallpaperPath(r.path);
-      toast(t('壁纸已下载并应用'), 'ok');
-      closeWallpaperGallery();
-    } else {
-      toast(t('下载失败：') + ((r && r.error) || ''), 'error');
-    }
+    toast(t('正在应用壁纸…'));
+    let finalPath = item.video;
+    try {
+      const r = await bridge.wallpaper.download(item.video, item.name);
+      if (r && r.ok && r.path) finalPath = r.path;
+    } catch (e) {}
+    // 本地下载失败时仍可用远端视频流作为动态壁纸
+    await setWallpaperPath(finalPath);
+    toast(t('壁纸已应用'), 'ok');
+    closeWallpaperGallery();
   } catch (e) {
-    toast(t('下载失败：') + String((e && e.message) || e), 'error');
+    toast(t('应用失败：') + String((e && e.message) || e), 'error');
   } finally { busyIdx.value = -1; }
 }
 

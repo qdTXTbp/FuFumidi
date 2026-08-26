@@ -5,6 +5,29 @@
 
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const https = require('https');
+
+function streamDownload(url, dest, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith('https') ? https : http;
+    const req = lib.get(url, { headers: { 'User-Agent': 'FuFumidi' } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 5) {
+        res.resume();
+        const next = new URL(res.headers.location, url).toString();
+        resolve(streamDownload(next, dest, redirects + 1));
+        return;
+      }
+      if (res.statusCode !== 200) { res.resume(); reject(new Error('HTTP ' + res.statusCode)); return; }
+      const ws = fs.createWriteStream(dest);
+      res.pipe(ws);
+      ws.on('finish', () => resolve());
+      ws.on('error', reject);
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+  });
+}
 
 async function fetchThumbData(net, url) {
   try {
@@ -38,6 +61,8 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net }) {
   const WALLPAPER_REPO = 'monologue82/Media';
   const WALLPAPER_DIR = 'wallpapers';
   const WALLPAPER_RAW = `https://raw.githubusercontent.com/${WALLPAPER_REPO}/main/${WALLPAPER_DIR}`;
+  // Git LFS 视频需通过 media.githubusercontent.com 获取真实文件
+  const WALLPAPER_MEDIA = `https://media.githubusercontent.com/media/${WALLPAPER_REPO}/main/${WALLPAPER_DIR}`;
   ipcMain.handle('wallpaper:list', async () => {
     try {
       const res = await net.fetch(`https://api.github.com/repos/${WALLPAPER_REPO}/contents/${WALLPAPER_DIR}`, {
@@ -53,7 +78,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net }) {
         const th = thumbs.find(t => t.name.replace(/\.(jpg|jpeg|png)$/i, '') === base);
         let thumb = th ? `${WALLPAPER_RAW}/${encodeURIComponent(th.name)}` : '';
         if (thumb) thumb = await fetchThumbData(net, thumb);
-        list.push({ name: f.name, video: `${WALLPAPER_RAW}/${encodeURIComponent(f.name)}`, thumb });
+        list.push({ name: f.name, video: `${WALLPAPER_MEDIA}/${encodeURIComponent(f.name)}`, thumb });
       }
       return { ok: true, list };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
@@ -67,16 +92,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net }) {
       f.mkdirSync(dir, { recursive: true });
       const safe = String(name || 'wallpaper').replace(/[\\/:*?"<>|]/g, '_');
       const dest = path.join(dir, safe);
-      const res = await net.fetch(url, { headers: { 'User-Agent': 'FuFumidi' } });
-      if (!res.ok || !res.body) return { ok: false, error: '下载失败 HTTP ' + res.status };
-      const ws = f.createWriteStream(dest);
-      const reader = res.body.getReader();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value && value.byteLength) ws.write(Buffer.from(value));
-      }
-      await new Promise((r) => ws.end(r));
+      await streamDownload(url, dest);
       return { ok: true, path: dest, name: safe };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });

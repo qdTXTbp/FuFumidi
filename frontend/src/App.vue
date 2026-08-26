@@ -9,8 +9,10 @@ import ThemeLibrary from './components/ThemeLibrary.vue';
 import WallpaperGallery from './components/WallpaperGallery.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import GuideOverlay from './components/GuideOverlay.vue';
+import { ref } from 'vue';
 import { useAppStore, VIEWS } from './stores/app';
 import { usePlaylistStore } from './stores/playlist';
+import { useSettingsStore } from './stores/settings';
 import { setLang } from './core/i18n.js';
 import { applyTheme, loadTheme } from './core/theme.js';
 import { viewFromPath } from './router';
@@ -18,7 +20,29 @@ import { viewFromPath } from './router';
 const app = useAppStore();
 const state = app;
 const playlistStore = usePlaylistStore();
+const settingsStore = useSettingsStore();
 const route = useRoute();
+
+const wpUrl = ref('');
+const wpEnabled = ref(false);
+function wpFileUrl(p) {
+  if (!p) return '';
+  if (/^(https?:|file:|data:)/i.test(p)) return p;
+  const norm = String(p).replace(/\\/g, '/');
+  return 'file:///' + norm.replace(/^([A-Za-z]):/, '$1:');
+}
+async function loadWallpaper() {
+  try {
+    const s = await settingsStore.load();
+    wpUrl.value = wpFileUrl(s.custom_wallpaper || '');
+    wpEnabled.value = !!(s.wallpaper_enabled && s.custom_wallpaper);
+  } catch (e) {}
+}
+watch(() => settingsStore.settings, () => {
+  const s = settingsStore.settings;
+  wpUrl.value = wpFileUrl(s.custom_wallpaper || '');
+  wpEnabled.value = !!(s.wallpaper_enabled && s.custom_wallpaper);
+}, { deep: true });
 watch(() => route.path, (p) => {
   const v = viewFromPath(p);
   if (VIEWS.some(x => x.id === v)) state.view = v;
@@ -118,6 +142,7 @@ onMounted(() => {
   restoreSongs();
   playlistStore.hydrateFromDb();
   initGlobal();
+  loadWallpaper();
   window.addEventListener('keydown', onKey);
 });
 onBeforeUnmount(() => {
@@ -127,7 +152,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'side-collapsed': !state.sidebarOpen, 'no-player': !state.playerbarOpen }">
+  <video v-if="wpEnabled && wpUrl" class="app-wallpaper" :src="wpUrl" autoplay muted loop playsinline></video>
+  <div class="app-shell" :class="{ 'side-collapsed': !state.sidebarOpen, 'no-player': !state.playerbarOpen, 'wallpaper-on': wpEnabled && wpUrl }">
     <SideBar />
     <TopBar />
     <main class="app-main">

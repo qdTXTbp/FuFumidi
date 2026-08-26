@@ -97,6 +97,8 @@ body {
 
 /* ---------- 布局骨架 ---------- */
 .app-shell {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
   grid-template-rows: var(--topbar-h) 1fr var(--playerbar-h);
@@ -109,6 +111,19 @@ body {
 }
 .app-shell.side-collapsed { grid-template-columns: 0 1fr; }
 .app-shell.no-player { grid-template-rows: var(--topbar-h) 1fr 0; }
+.app-wallpaper {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background: #000;
+}
+.app-shell.wallpaper-on .app-main { background: transparent; }
+.app-shell.wallpaper-on { background: transparent; }
 
 .app-main {
   grid-area: main;
