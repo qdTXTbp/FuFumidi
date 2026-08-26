@@ -9,6 +9,17 @@ const dragOver = ref(false);
 
 const bridge = window.fuBridge;
 
+function loadFavs() {
+  try { return new Set(JSON.parse(localStorage.getItem('fufumidi_favs') || '[]')); } catch (e) { return new Set(); }
+}
+const favs = ref(loadFavs());
+function toggleFav(id) {
+  const s = new Set(favs.value);
+  if (s.has(id)) s.delete(id); else s.add(id);
+  favs.value = s;
+  try { localStorage.setItem('fufumidi_favs', JSON.stringify([...s])); } catch (e) {}
+}
+
 function baseName(p) { return String(p).split(/[\\/]/).pop() || '未命名.mid'; }
 
 async function onPick() {
@@ -103,6 +114,7 @@ function onDrop(e) {
           <small>{{ s.song ? s.song.tracks.length : (s.meta.tracks || '—') }} 轨 · {{ (s.meta.size / 1024).toFixed(0) }} KB</small>
         </div>
         <div class="si-tools">
+          <button class="icon-btn si-fav" :class="{ on: favs.has(s.id) }" style="width:26px;height:26px;font-size:13px" title="收藏" @click.stop="toggleFav(s.id)">★</button>
           <button class="icon-btn" style="width:26px;height:26px;font-size:13px" title="移除" @click.stop="removeSong(s.id)">
             <Icon name="trash" :size="14" />
           </button>
@@ -124,3 +136,8 @@ function onDrop(e) {
     </div>
   </aside>
 </template>
+
+<style scoped>
+.si-fav { color: var(--stone); font-size: 13px; }
+.si-fav.on { color: var(--amber); }
+</style>
