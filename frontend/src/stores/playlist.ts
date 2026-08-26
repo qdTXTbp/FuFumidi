@@ -101,6 +101,29 @@ export const usePlaylistStore = defineStore('playlist', {
       ids.splice(before ? t : t + 1, 0, dragId);
       this.persist();
     },
+    moveSongToEnd(dragId: string) {
+      const list = this.activePlaylist;
+      if (!list) return;
+      const ids = list.songIds;
+      const fi = ids.indexOf(dragId);
+      if (fi < 0) return;
+      ids.splice(fi, 1);
+      ids.push(dragId);
+      this.persist();
+    },
+    moveSongToIndex(dragId: string, index: number) {
+      const list = this.activePlaylist;
+      if (!list) return;
+      const ids = list.songIds;
+      const fi = ids.indexOf(dragId);
+      if (fi < 0) return;
+      const max = ids.length - 1;
+      const to = Math.max(0, Math.min(max, Math.round(index) || 0));
+      if (fi === to) return;
+      ids.splice(fi, 1);
+      ids.splice(to, 0, dragId);
+      this.persist();
+    },
     toggleBatch() {
       this.batchOn = !this.batchOn;
       if (!this.batchOn) this.batchSelection = [];

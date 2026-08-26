@@ -101,11 +101,28 @@ async function batchDeleteLibrary() {
 
 const dragId = ref(null);
 const dragOverId = ref(null);
-function dragStart(s) {
+const canReorder = computed(() =>
+  !batchOn.value &&
+  !isFavView.value &&
+  !playlist.search &&
+  !playlist.favOnly &&
+  playlist.songIds.length > 0
+);
+function resetDrag() {
+  dragId.value = null;
+  dragOverId.value = null;
+  document.querySelectorAll('.song-item').forEach(x => x.classList.remove('drag-before', 'drag-after'));
+}
+function dragStart(s, e) {
   dragId.value = s.id;
   dragOverId.value = s.id;
+  if (e && e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', s.id); } catch (err) {}
+  }
 }
 function dragOverRow(e, s) {
+  if (!dragId.value || !canReorder.value) return;
   dragOverId.value = s.id;
   const r = e.currentTarget.getBoundingClientRect();
   const before = (e.clientY - r.top) < r.height / 2;
@@ -116,15 +133,24 @@ function dragOverRow(e, s) {
 function dragLeaveRow(e) {
   e.currentTarget.classList.remove('drag-before', 'drag-after');
 }
+function dragOverList() {
+  if (dragId.value && canReorder.value) {
+    document.querySelectorAll('.song-item').forEach(x => x.classList.remove('drag-after', 'drag-before'));
+  }
+}
 function dropOn(e, target) {
+  e.stopPropagation();
   const r = e.currentTarget.getBoundingClientRect();
   const before = (e.clientY - r.top) < r.height / 2;
   if (dragId.value && target && dragId.value !== target.id) {
     playlist.moveSong(dragId.value, target.id, before);
   }
-  dragId.value = null;
-  dragOverId.value = null;
-  document.querySelectorAll('.song-item').forEach(x => x.classList.remove('drag-before', 'drag-after'));
+  resetDrag();
+}
+function dropOnList() {
+  if (!dragId.value || !canReorder.value) return;
+  playlist.moveSongToEnd(dragId.value);
+  resetDrag();
 }
 
 function baseName(p) { return String(p).split(/[\\/]/).pop() || '未命名.mid'; }
@@ -251,33 +277,36 @@ function onDrop(e) {
         <span class="muted small">已选 {{ batchSel.size }}</span>
       </div>
 
-      <div v-if="!visibleSongs.length" class="muted small" style="padding:8px 12px;line-height:1.6">
-        {{ playlist.playlists.length ? '当前歌单为空' : '暂无曲目' }}。<br>点击上方「导入 MIDI」或「导入文件夹」。
-      </div>
-
-      <div class="song-item"
-           v-for="(s, i) in visibleSongs"
-           :key="s.id"
-           :class="{ active: s.id === state.currentId, dragging: dragId === s.id }"
-           :draggable="!batchOn"
-           @dragstart="dragStart(s)"
-           @dragover.prevent="dragOverRow($event, s)"
-           @dragleave="dragLeaveRow($event)"
-           @drop.prevent="dropOn($event, s)"
-           @dragend="dragId = null; document.querySelectorAll('.song-item').forEach(x => x.classList.remove('drag-before','drag-after'))"
-           @click="selectSongOrBatch(s)">
-        <input v-if="batchOn" type="checkbox" class="song-check" :checked="isSel(s.id)" @click.stop="toggleSel(s.id)" />
-        <span class="si-num" v-if="!batchOn && (!state.playing || s.id !== state.currentId)">{{ i + 1 }}</span>
-        <span class="si-num playing-ic" v-else-if="!batchOn">▶</span>
-        <div class="si-name">
-          <b>{{ s.name }}</b>
-          <small>{{ s.song ? s.song.tracks.length : (s.meta.tracks || '—') }} 轨 · {{ (s.meta.size / 1024).toFixed(0) }} KB</small>
+      <div class="song-list" :class="{ 'drag-active': dragId && canReorder }" @dragover.prevent="dragOverList" @drop.prevent.stop="dropOnList">
+        <div v-if="!visibleSongs.length" class="muted small" style="padding:8px 12px;line-height:1.6">
+          {{ playlist.playlists.length ? '当前歌单为空' : '暂无曲目' }}。<br>点击上方「导入 MIDI」或「导入文件夹」。
         </div>
-        <div class="si-tools">
-          <button class="icon-btn si-fav" :class="{ on: favs.has(s.id) }" style="width:26px;height:26px;font-size:13px" title="收藏" @click.stop="toggleFav(s.id)">★</button>
-          <button class="icon-btn" style="width:26px;height:26px;font-size:13px" title="从当前歌单移除" @click.stop="playlist.removeSongs([s.id])">
-            <Icon name="trash" :size="14" />
-          </button>
+
+        <div class="song-item"
+             v-for="(s, i) in visibleSongs"
+             :key="s.id"
+             :class="{ active: s.id === state.currentId, dragging: dragId === s.id, dragTarget: dragOverId === s.id }"
+             :draggable="canReorder"
+             @dragstart="dragStart(s, $event)"
+             @dragover.prevent="dragOverRow($event, s)"
+             @dragleave="dragLeaveRow($event)"
+             @drop.stop.prevent="dropOn($event, s)"
+             @dragend="resetDrag()"
+             @click="selectSongOrBatch(s)">
+          <input v-if="batchOn" type="checkbox" class="song-check" :checked="isSel(s.id)" @click.stop="toggleSel(s.id)" />
+          <span v-if="!batchOn && canReorder" class="si-drag" title="拖动排序"><Icon name="drag" :size="13" /></span>
+          <span class="si-num" v-if="!batchOn && (!state.playing || s.id !== state.currentId)">{{ i + 1 }}</span>
+          <span class="si-num playing-ic" v-else-if="!batchOn">▶</span>
+          <div class="si-name">
+            <b>{{ s.name }}</b>
+            <small>{{ s.song ? s.song.tracks.length : (s.meta.tracks || '—') }} 轨 · {{ (s.meta.size / 1024).toFixed(0) }} KB</small>
+          </div>
+          <div class="si-tools">
+            <button class="icon-btn si-fav" :class="{ on: favs.has(s.id) }" style="width:26px;height:26px;font-size:13px" title="收藏" @click.stop="toggleFav(s.id)">★</button>
+            <button class="icon-btn" style="width:26px;height:26px;font-size:13px" title="从当前歌单移除" @click.stop="playlist.removeSongs([s.id])">
+              <Icon name="trash" :size="14" />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -300,7 +329,12 @@ function onDrop(e) {
 <style scoped>
 .si-fav { color: var(--stone); font-size: 13px; }
 .si-fav.on { color: var(--amber); }
+.song-list { min-height: 18px; border-radius: 10px; transition: box-shadow .12s, background .12s; }
+.song-list.drag-active { box-shadow: inset 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.si-drag { display: inline-flex; align-items: center; color: var(--stone); cursor: grab; opacity: .35; margin-right: 2px; transition: opacity .12s; user-select: none; }
+.song-item:hover .si-drag, .song-item.dragging .si-drag { opacity: 1; }
 .song-item.dragging { opacity: .45; }
+.song-item.dragTarget { background: var(--surface-soft); }
 .song-item.drag-before { box-shadow: 0 -2px 0 0 var(--accent) !important; }
 .song-item.drag-after { box-shadow: 0 2px 0 0 var(--accent) !important; }
 .pl-toolbar { display: flex; align-items: center; gap: 5px; margin-bottom: 5px; }

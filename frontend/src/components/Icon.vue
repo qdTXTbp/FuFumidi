@@ -50,6 +50,7 @@ const P = {
   quantize: '<path d="M4 6h16M4 12h16M4 18h16"/><rect x="8" y="4" width="2" height="4"/><rect x="14" y="10" width="2" height="4"/><rect x="8" y="16" width="2" height="4"/>',
   cclane: '<path d="M3 12h4l2-6 4 12 2-6h6"/>',
   drum: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/>',
+  drag: '<circle cx="9" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.2" fill="currentColor" stroke="none"/>',
 };
 </script>
 
