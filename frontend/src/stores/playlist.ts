@@ -10,6 +10,23 @@ export interface Playlist {
 const LS_PLAYLISTS = 'fufumidi_playlists_v1';
 const LS_ACTIVE = 'fufumidi_active_playlist';
 
+async function dbPlaylistsAll(): Promise<Playlist[]> {
+  const b = (window as any).fuBridge;
+  if (b && typeof b.dbPlaylistsList === 'function') {
+    try {
+      const arr = await b.dbPlaylistsList();
+      if (Array.isArray(arr) && arr.length) return arr as Playlist[];
+    } catch (e) {}
+  }
+  return [];
+}
+function dbPlaylistPut(pl: Playlist) {
+  const b = (window as any).fuBridge;
+  if (b && typeof b.dbPlaylistsPut === 'function') {
+    try { b.dbPlaylistsPut(pl); } catch (e) {}
+  }
+}
+
 function loadPlaylists(): Playlist[] {
   try {
     const raw = localStorage.getItem(LS_PLAYLISTS);
@@ -44,6 +61,22 @@ export const usePlaylistStore = defineStore('playlist', {
     persist() {
       try { localStorage.setItem(LS_PLAYLISTS, JSON.stringify(this.playlists)); } catch (e) {}
       try { localStorage.setItem(LS_ACTIVE, this.activePlaylistId); } catch (e) {}
+      for (const p of this.playlists) dbPlaylistPut(p);
+    },
+    async hydrateFromDb() {
+      const db = await dbPlaylistsAll();
+      if (!db.length) {
+        // 首次从 localStorage 迁移到 SQLite
+        for (const p of this.playlists) dbPlaylistPut(p);
+        return false;
+      }
+      this.playlists = db;
+      if (!db.some(p => p.id === this.activePlaylistId)) {
+        this.activePlaylistId = db.some(p => p.id === 'default') ? 'default' : db[0].id;
+        try { localStorage.setItem(LS_ACTIVE, this.activePlaylistId); } catch (e) {}
+      }
+      this.persist();
+      return true;
     },
     create(name: string) {
       const id = 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);

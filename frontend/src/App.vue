@@ -9,12 +9,14 @@ import ThemeLibrary from './components/ThemeLibrary.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import GuideOverlay from './components/GuideOverlay.vue';
 import { useAppStore, VIEWS } from './stores/app';
+import { usePlaylistStore } from './stores/playlist';
 import { setLang } from './core/i18n.js';
 import { applyTheme, loadTheme } from './core/theme.js';
 import { viewFromPath } from './router';
 
 const app = useAppStore();
 const state = app;
+const playlistStore = usePlaylistStore();
 const route = useRoute();
 watch(() => route.path, (p) => {
   const v = viewFromPath(p);
@@ -113,6 +115,7 @@ function onKey(e) {
 onMounted(() => {
   startTickLoop();
   restoreSongs();
+  playlistStore.hydrateFromDb();
   initGlobal();
   window.addEventListener('keydown', onKey);
 });
