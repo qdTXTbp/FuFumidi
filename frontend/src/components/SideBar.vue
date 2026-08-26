@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
 import { usePlaylistStore } from '../stores/playlist';
@@ -22,11 +22,30 @@ function loadFavs() {
   try { return new Set(JSON.parse(localStorage.getItem('fufumidi_favs') || '[]')); } catch (e) { return new Set(); }
 }
 const favs = ref(loadFavs());
+function persistFavs() {
+  try { localStorage.setItem('fufumidi_favs', JSON.stringify([...favs.value])); } catch (e) {}
+  const b = window.fuBridge;
+  if (b && b.dbKvSet) { try { b.dbKvSet('favorites', [...favs.value]); } catch (e) {} }
+}
+async function hydrateFavs() {
+  const b = window.fuBridge;
+  if (b && b.dbKvGet) {
+    try {
+      const v = await b.dbKvGet('favorites');
+      if (Array.isArray(v)) {
+        favs.value = new Set(v);
+        try { localStorage.setItem('fufumidi_favs', JSON.stringify([...favs.value])); } catch (e) {}
+      } else {
+        persistFavs(); // 迁移旧 localStorage 收藏到 SQLite
+      }
+    } catch (e) {}
+  }
+}
 function toggleFav(id) {
   const s = new Set(favs.value);
   if (s.has(id)) s.delete(id); else s.add(id);
   favs.value = s;
-  try { localStorage.setItem('fufumidi_favs', JSON.stringify([...s])); } catch (e) {}
+  persistFavs();
 }
 
 /* ---------------- 歌单数据 ---------------- */
@@ -73,12 +92,12 @@ function batchAll() {
 }
 function batchFav() {
   for (const id of batchSel.value) if (!favs.value.has(id)) { const s = new Set(favs.value); s.add(id); favs.value = s; }
-  try { localStorage.setItem('fufumidi_favs', JSON.stringify([...favs.value])); } catch (e) {}
+  persistFavs();
   toast('已收藏 ' + batchSel.value.size + ' 首', 'ok');
 }
 function batchUnfav() {
   for (const id of batchSel.value) if (favs.value.has(id)) { const s = new Set(favs.value); s.delete(id); favs.value = s; }
-  try { localStorage.setItem('fufumidi_favs', JSON.stringify([...favs.value])); } catch (e) {}
+  persistFavs();
   toast('已取消收藏 ' + batchSel.value.size + ' 首', 'ok');
 }
 function batchRemove() {
@@ -261,6 +280,8 @@ function onDrop(e) {
     importFiles(files.map((f, i) => ({ name: f.name, bytes: new Uint8Array(bufs[i]) })));
   });
 }
+
+onMounted(hydrateFavs);
 </script>
 
 <template>
