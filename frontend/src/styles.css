@@ -509,13 +509,29 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 }
 .num-input:focus { border-color: rgba(255, 255, 255, 0.6); }
 .select-input {
-  background: var(--canvas);
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: var(--canvas);
+  /* 自定义下拉箭头（深色 chevron），替代浏览器默认图标 */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238e8e93' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 13px;
   border: 1px solid var(--hairline);
   color: var(--ink);
   border-radius: var(--radius-sm);
-  padding: 5px 9px;
+  padding: 5px 28px 5px 9px;
   font-size: 12.5px;
   outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.select-input:hover { border-color: var(--border-strong); }
+.select-input:disabled { opacity: 0.5; cursor: not-allowed; }
+.select-input option, .ov-input option {
+  background: #fff;
+  color: var(--ink);
+  font-size: 12.5px;
 }
 
 /* ---------- 混音面板 ---------- */
@@ -748,16 +764,25 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .fr-ctl.col { flex-direction: column; align-items: flex-end; gap: 6px; }
 .fr-ctl.stretch { flex: 1; min-width: 0; align-items: stretch; }
 .ov-input {
-  background: var(--canvas);
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: var(--canvas);
+  /* 自定义下拉箭头（深色 chevron），替代浏览器默认图标 */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238e8e93' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 13px;
   border: 1px solid var(--hairline);
   color: var(--ink);
   border-radius: var(--radius-sm);
-  padding: 7px 10px;
+  padding: 7px 28px 7px 10px;
   font-size: 12.5px;
   outline: none;
   min-width: 0;
+  cursor: pointer;
   transition: border-color 0.15s;
 }
+.ov-input:hover { border-color: var(--border-strong); }
 .ov-input:focus { border-color: var(--ink); }
 .ov-input.mono { font-family: var(--mono); }
 .ov-input[type="color"] { width: 36px; height: 30px; padding: 2px; border-radius: 8px; cursor: pointer; }
@@ -1227,13 +1252,13 @@ input[type="checkbox"]:active, input[type="radio"]:active { transform: scale(0.8
   backdrop-filter: blur(12px);
 }
 
-/* 表单控件玻璃底 */
+/* 表单控件玻璃底（background-color 而非 background，避免覆盖下拉箭头背景图） */
 .text-input,
 .select-input,
 .num-input,
 .ov-input,
 .cm-input {
-  background: var(--glass-bg-soft);
+  background-color: var(--glass-bg-soft);
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
 }
