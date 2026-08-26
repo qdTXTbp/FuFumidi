@@ -51,6 +51,7 @@ const { registerPresetsIpc } = require('./main/presets');
 const { registerDialogsIpc } = require('./main/dialogs');
 const { registerModelsIpc } = require('./main/models');
 const { registerSettingsIpc } = require('./main/settings-ipc');
+const { registerDiagnosticsIpc } = require('./main/diagnostics');
 
 const APP_ID = 'com.fufumidi.app';
 app.setAppUserModelId(APP_ID);
@@ -76,6 +77,7 @@ if (!gotLock) {
     registerPresetsIpc({ ipcMain, runEngineInline, parsePyJson, pyLit });
     registerDialogsIpc({ ipcMain, dialog, path, fs, app });
     registerSettingsIpc({ ipcMain, readSettings, writeSettings });
+    registerDiagnosticsIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine });
     ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, demucsModelFile, sha256File });
     registerPluginsIpc();
     registerGpuIpc();
@@ -500,45 +502,12 @@ function registerIpc() {
     try { return integrity.repair(ids); } catch (e) { return { ok: false, results: [], error: String(e && e.message || e) }; }
   });
 
-  // 运行期依赖检测 / 自动补全（基础包缺依赖时一键修复；国内镜像优先）
-  ipcMain.handle('dep:check', () => new Promise((resolve) => {
-    spawnEngine(['check'], {
-      script: 'deps.py',
-      onDone: (code, r) => resolve({ ok: code === 0, result: r.result, raw: r.out || r.err }),
-      onError: (e) => resolve({ ok: false, error: String(e) }),
-    });
-  }));
-  ipcMain.handle('dep:install', (_e, group) => new Promise((resolve) => {
-    spawnEngine(['install', '--group', group || 'all'], {
-      script: 'deps.py',
-      onDone: (code, r) => resolve({ ok: code === 0, result: r.result, raw: r.out || r.err }),
-      onError: (e) => resolve({ ok: false, error: String(e) }),
-    });
-  }));
-
   // ---------- 自动更新（已抽到 main/update.js） ----------
   registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net });
 
   // ---------- 乐谱服务（已抽到 main/score.js） ----------
   registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline });
 
-  // 诊断包导出
-  ipcMain.handle('diag:export', async (evt) => {
-    const win = BrowserWindow.fromWebContents(evt.sender);
-    const r = await dialog.showSaveDialog({
-      title: '导出诊断包',
-      defaultPath: path.join(app.getPath('downloads'), 'fufumidi-diagnostic.zip'),
-      filters: [{ name: 'ZIP', extensions: ['zip'] }],
-    });
-    if (r.canceled || !r.filePath) return { ok: false, canceled: true };
-    return new Promise((resolve) => {
-      spawnEngine(['-o', r.filePath], {
-        script: 'diag.py',
-        onDone: (code, rr) => resolve({ ok: code === 0, path: r.filePath, error: rr.err || rr.out }),
-        onError: (e) => resolve({ ok: false, error: String(e) }),
-      });
-    });
-  });
   ipcMain.handle('guide:openEdit', () => {
     const win = new BrowserWindow({ width: 900, height: 700, title: 'FuFumidi 编辑功能说明', backgroundColor: '#0a0f18', autoHideMenuBar: true });
     win.loadFile(path.join(__dirname, 'renderer', 'edit-guide.html'));
