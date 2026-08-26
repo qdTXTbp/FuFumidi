@@ -246,12 +246,12 @@ body {
 .btn:hover { border-color: var(--ink); background: var(--surface); }
 .btn:active { transform: translateY(1px); }
 .btn.primary {
-  border: 1px solid var(--btn-bg);
-  background: var(--btn-bg);
-  color: var(--btn-fg);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
   font-weight: 600;
 }
-.btn.primary:hover { background: var(--btn-bg); border-color: var(--btn-bg); box-shadow: 0 6px 20px rgba(10, 10, 10, 0.18); filter: brightness(0.92); }
+.btn.primary:hover { background: color-mix(in srgb, var(--accent) 86%, #000); border-color: var(--accent); box-shadow: 0 6px 20px rgba(10, 10, 10, 0.18); filter: brightness(0.92); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--steel); }
 .btn.ghost:hover { background: var(--surface-soft); color: var(--ink); }
 .btn.danger { color: var(--error); border-color: rgba(212, 86, 86, 0.4); }
@@ -626,10 +626,10 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
   width: 72px; height: 72px;
   margin: 0 auto 18px;
   border-radius: 20px;
-  background: var(--btn-bg);
+  background: var(--accent);
   display: grid; place-items: center;
   font-size: 32px;
-  color: var(--btn-fg);
+  color: #fff;
   box-shadow: var(--shadow-sm);
 }
 .migrate-card h2 { margin: 0 0 8px; font-size: 18px; font-weight: 700; letter-spacing: -0.3px; color: var(--ink); }

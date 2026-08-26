@@ -1368,7 +1368,7 @@ onBeforeUnmount(() => {
 .et-group { display: flex; align-items: center; gap: 5px; }
 .et-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 26px; padding: 5px 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; font-size: 12px; line-height: 1.2; white-space: nowrap; color: var(--slate); cursor: pointer; transition: background .13s, color .13s, border-color .13s; }
 .et-btn:hover { background: var(--surface-soft); color: var(--ink); }
-.et-btn.active { background: var(--btn-bg); border-color: var(--btn-bg); color: var(--btn-fg); }
+.et-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .et-btn.danger { color: var(--error); }
 .et-btn.et-more { margin-left: auto; }
 .et-btn.et-more.active { background: var(--surface-soft); color: var(--ink); }
