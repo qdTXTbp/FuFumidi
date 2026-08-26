@@ -4,6 +4,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { clamp, esc, fmtTime } from '../core/util.js';
+import { t } from '../core/i18n.js';
 
 const app = useAppStore();
 const toast = (m, t) => app.toast(m, t);
@@ -70,9 +71,9 @@ const tplIdx = ref(-1);
 // 智能修正
 const rf = reactive({ audio: '', midi: '', mode: 'auto', stem: true, busy: false, jobId: 0, progress: 0, logs: [], info: '' });
 
-const MODE_NAMES = { universal: '通用识别', piano: '钢琴专用', separate: '人声分离' };
-const PERF_NAMES = { quality: '最高质量', balanced: '均衡', fast: '高性能' };
-const MODE_DEFAULT_PRESET = { universal: '通用·标准', piano: '钢琴：最优', separate: '人声：最优' };
+const MODE_NAMES = { universal: t('通用识别'), piano: t('钢琴专用'), separate: t('人声分离') };
+const PERF_NAMES = { quality: t('最高质量'), balanced: t('均衡'), fast: t('高性能') };
+const MODE_DEFAULT_PRESET = { universal: t('通用·标准'), piano: t('钢琴：最优'), separate: t('人声：最优') };
 
 const fileInput = ref(null);
 
@@ -86,7 +87,7 @@ function estSec() {
 const sumTime = computed(() => {
   if (!queue.some(i => i.status === 'pending' || i.status === 'running')) return null;
   const e = estSec();
-  return e ? '约 ' + fmtTime(e) : '依引擎与性能档位而定';
+  return e ? t('约 ') + fmtTime(e) : t('依引擎与性能档位而定');
 });
 const pendingCount = computed(() => queue.filter(i => i.status === 'pending' || i.status === 'error' || i.status === 'canceled').length);
 
@@ -100,7 +101,7 @@ function addPaths(paths) {
   saveQueue();
 }
 function statusTxt(s) {
-  return { pending: '等待', running: '转录中', done: '完成', error: '失败', canceled: '已取消' }[s] || s;
+  return { pending: t('等待'), running: t('转录中'), done: t('完成'), error: t('失败'), canceled: t('已取消') }[s] || s;
 }
 function saveQueue() {
   try {
@@ -114,7 +115,7 @@ function loadQueue() {
     const arr = JSON.parse(raw);
     if (Array.isArray(arr) && arr.length && !queue.length) {
       addPaths(arr);
-      toast('已恢复上次未完成的转录队列，共 ' + arr.length + ' 个', 'ok');
+      toast('已恢复上次未完成的转录队列，共 ' + arr.length + t(' 个'), 'ok');
     }
     localStorage.removeItem('fufumidi_batch_queue');
   } catch (e) {}
@@ -154,10 +155,10 @@ const sortedQueue = computed(() => {
 });
 const queueStat = computed(() => {
   const n = queue.length, d = queue.filter(i => i.status === 'done').length, e = queue.filter(i => i.status === 'error').length;
-  if (paused.value) return '已暂停';
-  if (running.value) return '队列运行中';
-  if (!n) return '队列为空';
-  return '共 ' + n + ' 首 · 完成 ' + d + (e ? ' · 失败 ' + e : '');
+  if (paused.value) return t('已暂停');
+  if (running.value) return t('队列运行中');
+  if (!n) return t('队列为空');
+  return t('共 ') + n + t(' 首 · 完成 ') + d + (e ? t(' · 失败 ') + e : '');
 });
 
 /* ---------------- 音频选择 / 波形 ---------------- */
@@ -165,7 +166,7 @@ async function pickAudio() {
   if (isDesktop && bridge.pickAudioFiles) {
     try {
       const paths = await bridge.pickAudioFiles();
-      if (paths && paths.length) { addPaths(paths); setPrimary(paths[0]); toast('已添加 ' + paths.length + ' 个音频到队列', 'ok'); }
+      if (paths && paths.length) { addPaths(paths); setPrimary(paths[0]); toast('已添加 ' + paths.length + t(' 个音频到队列'), 'ok'); }
     } catch (err) { toast('选择音频失败：' + (err && err.message || err), 'warn'); }
   } else {
     fileInput.value && fileInput.value.click();
@@ -177,7 +178,7 @@ function onFileChange(e) {
     addPaths(files.map(f => f.path || f.name));
     files.forEach((f, i) => { const q = queue.find(x => x.path === (f.path || f.name)); if (q) q._file = f; });
     setPrimary(files[0].path || files[0].name);
-    toast('已添加 ' + files.length + ' 个音频到队列', 'ok');
+    toast('已添加 ' + files.length + t(' 个音频到队列'), 'ok');
   }
   e.target.value = '';
 }
@@ -190,7 +191,7 @@ async function pickFolder() {
     if (!files || !files.length) { toast('文件夹里没有找到音频文件', 'warn'); return; }
     addPaths(files);
     setPrimary(files[0]);
-    toast('已添加 ' + files.length + ' 个音频到队列', 'ok');
+    toast('已添加 ' + files.length + t(' 个音频到队列'), 'ok');
   } catch (e) { /* ignore */ }
 }
 const dropOver = ref(false);
@@ -201,7 +202,7 @@ function onDrop(e) {
   addPaths(files.map(f => f.path || f.name));
   files.forEach((f, i) => { const q = queue.find(x => x.path === (f.path || f.name)); if (q) q._file = f; });
   setPrimary(files[0].path || files[0].name);
-  toast('已添加 ' + files.length + ' 个音频到队列', 'ok');
+  toast('已添加 ' + files.length + t(' 个音频到队列'), 'ok');
 }
 function updateAudioInfo() {
   if (!audioPath.value) { audioInfo.value = ''; return; }
@@ -266,7 +267,7 @@ async function probeEngine() {
     const p = await bridge.probe();
     if (!perfUserSet && p && p.perf && p.perf.recommended) {
       perf.value = p.perf.recommended;
-      perfHint.value = '自动推荐：' + (PERF_NAMES[p.perf.recommended] || p.perf.recommended);
+      perfHint.value = t('自动推荐：') + (PERF_NAMES[p.perf.recommended] || p.perf.recommended);
     }
     if (p && p.gpu) {
       const g = p.gpu;
@@ -331,7 +332,7 @@ async function savePreset() {
 }
 async function delPreset() {
   if (!bridge || !bridge.presets || !presetSel.value) return;
-  if (!window.confirm('删除预设「' + presetSel.value + '」？')) return;
+  if (!window.confirm(t('删除预设「') + presetSel.value + '」？')) return;
   try {
     const r = await bridge.presets.delete(presetSel.value);
     if (r && r.ok) { toast('预设已删除', 'ok'); loadPresets(); }
@@ -350,7 +351,7 @@ async function mgrApply(name) {
 }
 async function mgrDelete(name) {
   if (!bridge || !bridge.presets) return;
-  if (!window.confirm('删除预设「' + name + '」？')) return;
+  if (!window.confirm(t('删除预设「') + name + '」？')) return;
   try {
     const r = await bridge.presets.delete(name);
     if (r && r.ok) { toast('预设已删除', 'ok'); await loadPresets(); }
@@ -405,7 +406,7 @@ function delTemplate(idx) {
   taskTemplates.splice(idx, 1); saveTaskTemplates();
   toast('模板已删除', 'ok');
 }
-const tplPreview = (t) => t ? (MODE_NAMES[t.mode] || '') + ' · ' + (PERF_NAMES[t.perf] || '') + ' · ' + (t.refine ? '修正' : '无修正') + ' · ' + (t.exportStems ? '分轨' : '不分轨') : '';
+const tplPreview = (t) => t ? (MODE_NAMES[t.mode] || '') + ' · ' + (PERF_NAMES[t.perf] || '') + ' · ' + (t.refine ? t('修正') : t('无修正')) + ' · ' + (t.exportStems ? t('分轨') : t('不分轨')) : '';
 
 /* ---------------- 参数收集 ---------------- */
 function collectParams() {
@@ -457,11 +458,11 @@ async function runBatch() {
   if (!isDesktop) { toast('请使用桌面版 FuFumidi 进行转录', 'warn'); return; }
   if (!queue.some(i => i.status === 'pending')) {
     const d = queue.filter(i => i.status === 'done').length;
-    toast(d ? '队列已完成，可清空后继续添加音频' : '请先选择音频文件', d ? 'ok' : 'warn');
+    toast(d ? t('队列已完成，可清空后继续添加音频') : t('请先选择音频文件'), d ? 'ok' : 'warn');
     return;
   }
   running.value = true; paused.value = false; cancelAll.value = false; busy.value = true; done.value = false; progress.value = 3; stage.value = '';
-  logLine('转录队列：共 ' + pendingCount.value + ' 首，顺序处理…');
+  logLine(t('转录队列：共 ') + pendingCount.value + ' 首，顺序处理…');
   const t0 = Date.now();
   clearInterval(trTimer);
   trTimer = setInterval(() => {
@@ -472,7 +473,7 @@ async function runBatch() {
     const cur = queue.find(i => i.status === 'running');
     const curP = cur ? (cur.progress || (cur.startedAt && cur.estMs ? Math.min(95, Math.round((Date.now() - cur.startedAt) / cur.estMs * 100)) : 0)) : 0;
     progress.value = Math.max(3, Math.min(95, Math.round(((doneN + errN) + curP / 100) / total * 100)));
-    if (!cur) stage.value = '完成 ' + doneN + ' / ' + total + (errN ? ' · 失败 ' + errN : '') + ' · ' + fmtTime(el);
+    if (!cur) stage.value = t('完成 ') + doneN + ' / ' + total + (errN ? t(' · 失败 ') + errN : '') + ' · ' + fmtTime(el);
   }, 500);
 
   while (true) {
@@ -515,22 +516,22 @@ async function runBatch() {
   progress.value = dN && !eN ? 100 : (dN ? Math.round(dN / Math.max(1, queue.length) * 100) : progress.value);
   if (dN && !eN) {
     const last = queue.filter(i => i.status === 'done').pop();
-    if (last) { lastOut.value = last.out; doneInfo.value = '成功 ' + dN + ' 首' + (last.note_count != null ? ' · ' + last.note_count + ' 个音符' : ''); logLine(doneInfo.value); }
+    if (last) { lastOut.value = last.out; doneInfo.value = t('成功 ') + dN + t(' 首') + (last.note_count != null ? ' · ' + last.note_count + t(' 个音符') : ''); logLine(doneInfo.value); }
     done.value = true;
-    toast('批量转录完成：成功 ' + dN + ' 首（已完成曲目已加入歌单）', 'ok');
+    toast('批量转录完成：成功 ' + dN + t(' 首（已完成曲目已加入歌单）'), 'ok');
   } else if (dN) {
-    logLine('[失败] ' + eN + ' 首失败，可在队列中点击「重试」。', true);
-    toast('批量转录完成：成功 ' + dN + ' 首，失败 ' + eN + ' 首', 'warn');
+    logLine(t('[失败] ') + eN + t(' 首失败，可在队列中点击「重试」。'), true);
+    toast('批量转录完成：成功 ' + dN + t(' 首，失败 ') + eN + t(' 首'), 'warn');
   } else if (eN) {
-    logLine('[失败] ' + eN + ' 首失败，可在队列中点击「重试」。', true);
+    logLine(t('[失败] ') + eN + t(' 首失败，可在队列中点击「重试」。'), true);
     toast('转录失败', 'warn');
   }
-  if (cancelAll.value && !paused.value) logLine('已取消转录队列…', true);
+  if (cancelAll.value && !paused.value) logLine(t('已取消转录队列…'), true);
 }
 function startTranscribe() {
   if (busy.value) return;
   const est = estSec();
-  const msg = '确认开始转录？\n文件：' + queue.find(i => i.status === 'pending')?.name + '\n模式：' + (MODE_NAMES[mode.value] || mode.value) + '\n质量：' + (PERF_NAMES[perf.value] || perf.value) + (est ? '\n预计耗时：约 ' + fmtTime(est) : '');
+  const msg = t('确认开始转录？\\n文件：') + queue.find(i => i.status === 'pending')?.name + t('\\n模式：') + (MODE_NAMES[mode.value] || mode.value) + t('\\n质量：') + (PERF_NAMES[perf.value] || perf.value) + (est ? t('\\n预计耗时：约 ') + fmtTime(est) : '');
   if (!window.confirm(msg)) return;
   runBatch();
 }
@@ -538,7 +539,7 @@ function cancelTranscribe() {
   if (!busy.value) return;
   cancelAll.value = true;
   if (currentJobId.value && bridge && bridge.cancel) bridge.cancel(currentJobId.value);
-  logLine('已请求取消转录队列…', true);
+  logLine(t('已请求取消转录队列…'), true);
 }
 function openOutput() {
   if (!lastOut.value) return;
@@ -565,27 +566,27 @@ async function startRefine() {
   if (!rf.midi || !rf.audio) { toast('请先导入原音频与 MIDI 文件', 'warn'); return; }
   if (!bridge || !bridge.refine) { toast('请使用桌面版 FuFumidi 进行修正', 'warn'); return; }
   rf.busy = true; rf.jobId++; rf.progress = 0; rf.logs = [];
-  rl('开始智能修正…（对齐起音 / 还原力度 / ' + (rf.mode === 'vocal' ? '声部平衡' : '清理杂音') + '）');
+  rl(t('开始智能修正…（对齐起音 / 还原力度 / ') + (rf.mode === 'vocal' ? t('声部平衡') : t('清理杂音')) + '）');
   try {
     const res = await bridge.refine({ id: rf.jobId, audio: rf.audio, midi: rf.midi, mode: rf.mode, stemBalance: rf.stem });
     rf.progress = res.ok ? 100 : 0;
     if (res.ok && res.out) {
       const s = res.stats || {};
-      rl('完成！起音吸附 ' + (s.onset_moved || 0) + ' 个 · 尾音修正 ' + (s.offset_moved || 0) + ' · ' +
-        (s.pitch_fixed ? '音高修正 ' + s.pitch_fixed + ' · ' : '') +
-        (s.micro_removed ? '清理微音符 ' + s.micro_removed + ' · ' : '') +
-        (s.lead_track ? '主奏=[' + s.lead_track + '] · ' : '') +
-        (s.vel_balanced ? '力度调整 ' + s.vel_balanced + ' 个音符 · ' : '') +
-        '输出 ' + (s.notes_out || '') + ' 音符');
+      rl(t('完成！起音吸附 ') + (s.onset_moved || 0) + t(' 个 · 尾音修正 ') + (s.offset_moved || 0) + ' · ' +
+        (s.pitch_fixed ? t('音高修正 ') + s.pitch_fixed + ' · ' : '') +
+        (s.micro_removed ? t('清理微音符 ') + s.micro_removed + ' · ' : '') +
+        (s.lead_track ? t('主奏=[') + s.lead_track + '] · ' : '') +
+        (s.vel_balanced ? t('力度调整 ') + s.vel_balanced + t(' 个音符 · ') : '') +
+        t('输出 ') + (s.notes_out || '') + t(' 音符'));
       rf.midi = res.out;
-      rf.info = '输出 ' + String(res.out).replace(/^.*[\\/]/, '') + ' · 耗时 ' + (s.elapsed_s != null ? s.elapsed_s + 's' : '');
+      rf.info = t('输出 ') + String(res.out).replace(/^.*[\\/]/, '') + t(' · 耗时 ') + (s.elapsed_s != null ? s.elapsed_s + 's' : '');
       toast('智能修正完成', 'ok');
     } else {
-      rl('[失败] 修正未成功：' + (res.error || '请查看上方日志。'), true);
+      rl(t('[失败] 修正未成功：') + (res.error || t('请查看上方日志。')), true);
       toast('修正失败', 'warn');
     }
   } catch (e) {
-    rl('[错误] ' + (e.message || String(e)), true);
+    rl(t('[错误] ') + (e.message || String(e)), true);
     toast('修正失败', 'warn');
   } finally {
     rf.busy = false;
@@ -633,12 +634,12 @@ onBeforeUnmount(() => {
     <div class="page-head">
       <div class="page-ic"><Icon name="transcribe" :size="20" /></div>
       <div class="grow">
-        <div class="page-title">转录</div>
+        <div class="page-title">{{ t('转录') }}</div>
         <div class="page-sub">音频转 MIDI · 本地 Python 引擎 · 离线完成</div>
       </div>
       <span v-if="gpuInfo" class="tag accent">{{ gpuInfo }}</span>
       <button class="btn sm ghost" @click="state.ui.settingsTab = 'gpu'; state.ui.settingsOpen = true">GPU 加速</button>
-      <span class="tag" :class="isDesktop ? '' : 'warn-tag'">{{ isDesktop ? '桌面引擎就绪' : '请使用桌面版' }}</span>
+      <span class="tag" :class="isDesktop ? '' : 'warn-tag'">{{ isDesktop ? t('桌面引擎就绪') : t('请使用桌面版') }}</span>
     </div>
 
     <!-- 音频选择 -->
@@ -648,7 +649,7 @@ onBeforeUnmount(() => {
            @click="pickAudio">
         <div class="td-ic"><Icon name="transcribe" :size="26" /></div>
         <div class="td-txt">
-          <b>{{ dropOver ? '释放以上传' : '拖入音频 / 点击选择' }}</b>
+          <b>{{ dropOver ? t('释放以上传') : t('拖入音频 / 点击选择') }}</b>
           <span>支持多选 · MP3 / WAV / FLAC / M4A / 视频</span>
         </div>
         <input ref="fileInput" type="file" accept="audio/*,video/*" hidden multiple @change="onFileChange">
@@ -661,15 +662,15 @@ onBeforeUnmount(() => {
           <div class="fb-hint">支持多选 / 文件夹 / 顺序转录 / 完成后加入歌单</div>
         </div>
         <div class="tr-batch-ctls">
-          <button class="btn sm" @click="pickAudio"><Icon name="plus" :size="13" /> 文件</button>
+          <button class="btn sm" @click="pickAudio"><Icon name="plus" :size="13" />{{ t('文件') }}</button>
           <button class="btn sm" @click="pickFolder"><Icon name="folder" :size="13" /> 文件夹</button>
           <button class="btn sm ghost" @click="retryAll">重试全部</button>
           <button class="btn sm ghost" @click="clearDone">清空完成</button>
           <select class="select-input" v-model="sort" style="width:auto;padding:4px 8px;font-size:11px">
-            <option value="default">默认顺序</option><option value="name">按名称</option>
-            <option value="type">按类型</option><option value="duration">按时长</option>
+            <option value="default">{{ t('默认顺序') }}</option><option value="name">{{ t('按名称') }}</option>
+            <option value="type">{{ t('按类型') }}</option><option value="duration">{{ t('按时长') }}</option>
           </select>
-          <button class="btn sm danger" @click="clearQueue">清空</button>
+          <button class="btn sm danger" @click="clearQueue">{{ t('清空') }}</button>
         </div>
       </div>
       <div v-if="queue.length" class="tr-batch-list">
@@ -677,8 +678,8 @@ onBeforeUnmount(() => {
           <span class="tb-name" :title="it.path">{{ it.name }}</span>
           <span class="tb-bar"><i :style="{ width: Math.round(it.progress || 0) + '%' }"></i></span>
           <span class="tb-badge" :class="it.status">{{ statusTxt(it.status) }}{{ it.status === 'done' && it.note_count ? ' · ' + it.note_count : '' }}</span>
-          <button v-if="it.status === 'error'" class="btn sm ghost" @click="retryItem(it)">重试</button>
-          <button v-else-if="it.status === 'pending' || it.status === 'done' || it.status === 'canceled'" class="btn sm ghost danger" @click="removeItem(it)">移除</button>
+          <button v-if="it.status === 'error'" class="btn sm ghost" @click="retryItem(it)">{{ t('重试') }}</button>
+          <button v-else-if="it.status === 'pending' || it.status === 'done' || it.status === 'canceled'" class="btn sm ghost danger" @click="removeItem(it)">{{ t('移除') }}</button>
         </div>
       </div>
       <div class="tr-batch-stat muted small">{{ queueStat }}</div>
@@ -689,26 +690,26 @@ onBeforeUnmount(() => {
       <div class="fb-label">引擎模式</div>
       <div class="tr-modes">
         <button class="tr-mode" :class="{ active: mode === 'universal' }" data-guide="mode-universal" @click="onModeChange('universal')">
-          <b>通用识别</b><span>任意歌曲 · 人声 · 多乐器</span>
+          <b>{{ t('通用识别') }}</b><span>任意歌曲 · 人声 · 多乐器</span>
         </button>
         <button class="tr-mode" :class="{ active: mode === 'piano' }" data-guide="mode-piano" @click="onModeChange('piano')">
-          <b>钢琴专用</b><span>纯钢琴高精度 · 含踏板</span>
+          <b>{{ t('钢琴专用') }}</b><span>纯钢琴高精度 · 含踏板</span>
         </button>
         <button class="tr-mode" :class="{ active: mode === 'separate' }" data-guide="mode-separate" @click="onModeChange('separate')">
-          <b>人声分离</b><span>分声部转录 · 需 Demucs</span>
+          <b>{{ t('人声分离') }}</b><span>分声部转录 · 需 Demucs</span>
         </button>
       </div>
 
       <div class="fb-label">性能模式</div>
       <div class="tr-pills">
-        <button class="tr-pill" :class="{ active: perf === 'quality' }" @click="selectPerf('quality')">最高质量</button>
-        <button class="tr-pill" :class="{ active: perf === 'balanced' }" @click="selectPerf('balanced')">均衡</button>
-        <button class="tr-pill" :class="{ active: perf === 'fast' }" @click="selectPerf('fast')">高性能</button>
+        <button class="tr-pill" :class="{ active: perf === 'quality' }" @click="selectPerf('quality')">{{ t('最高质量') }}</button>
+        <button class="tr-pill" :class="{ active: perf === 'balanced' }" @click="selectPerf('balanced')">{{ t('均衡') }}</button>
+        <button class="tr-pill" :class="{ active: perf === 'fast' }" @click="selectPerf('fast')">{{ t('高性能') }}</button>
       </div>
       <div v-if="perfHint" class="tr-perf-hint">{{ perfHint }}</div>
 
       <details class="tr-adv" data-guide="adv-panel">
-        <summary>高级参数<span class="adv-cnt">阈值 · 踏板 · 降噪</span><span class="adv-arr">▾</span></summary>
+        <summary>高级参数<span class="adv-cnt">{{ t('阈值 · 踏板 · 降噪') }}</span><span class="adv-arr">▾</span></summary>
         <div class="tr-params">
           <div class="tr-slider">
             <label>起音阈值<b>{{ onset.toFixed(2) }}</b></label>
@@ -740,19 +741,19 @@ onBeforeUnmount(() => {
               </select></span>
             </label>
           </div>
-          <div class="tr-switch"><label><span><b>智能降噪</b><small>降噪模式：谱减法</small></span><input type="checkbox" v-model="denoise"></label></div>
-          <div class="tr-switch"><label><span><b>响度平衡</b><small>响度标准化（RMS）</small></span><input type="checkbox" v-model="normalize"></label></div>
-          <div class="tr-switch"><label><span><b>自动检测 BPM</b><small>作为导出速度</small></span><input type="checkbox" v-model="autoBpm"></label></div>
+          <div class="tr-switch"><label><span><b>{{ t('智能降噪') }}</b><small>{{ t('降噪模式：谱减法') }}</small></span><input type="checkbox" v-model="denoise"></label></div>
+          <div class="tr-switch"><label><span><b>{{ t('响度平衡') }}</b><small>{{ t('响度标准化（RMS）') }}</small></span><input type="checkbox" v-model="normalize"></label></div>
+          <div class="tr-switch"><label><span><b>{{ t('自动检测 BPM') }}</b><small>{{ t('作为导出速度') }}</small></span><input type="checkbox" v-model="autoBpm"></label></div>
 
           <div class="tr-preset-row">
             <label class="fb-label" style="margin:0">参数预设</label>
             <div class="row" style="gap:6px">
-              <select class="select-input" v-model="presetSel" title="选择预设并应用" style="min-width:138px">
+              <select class="select-input" v-model="presetSel" :title="t('选择预设并应用')" style="min-width:138px">
                 <option v-for="p in presets.list" :key="p.name" :value="p.name">{{ p.name }}{{ presets.builtins.includes(p.name) ? '' : ' ✎' }}</option>
               </select>
               <button class="btn sm" @click="presetSel && applyPreset(presetSel)">应用</button>
-              <button class="btn sm" @click="savePreset"><Icon name="plus" :size="13" /> 保存</button>
-              <button class="btn sm ghost danger" @click="delPreset"><Icon name="trash" :size="13" /> 删除</button>
+              <button class="btn sm" @click="savePreset"><Icon name="plus" :size="13" />{{ t('保存') }}</button>
+              <button class="btn sm ghost danger" @click="delPreset"><Icon name="trash" :size="13" />{{ t('删除') }}</button>
               <button class="btn sm ghost" @click="openPresetMgr"><Icon name="menu" :size="13" /> 管理</button>
             </div>
           </div>
@@ -766,13 +767,13 @@ onBeforeUnmount(() => {
           <div class="fb-hint">保存当前转录+修正+导出流程</div>
         </div>
         <div class="row" style="gap:6px;flex-wrap:wrap">
-          <input v-model="tplName" class="text-input" placeholder="模板名" style="width:110px;padding:5px 8px" />
+          <input v-model="tplName" class="text-input" :placeholder="t('模板名')" style="width:110px;padding:5px 8px" />
           <button class="btn sm" @click="saveTemplate">保存模板</button>
           <select v-model="tplIdx" class="select-input" style="min-width:120px" @change="tplIdx >= 0 && applyTemplate(taskTemplates[tplIdx])">
             <option disabled :value="-1">选择模板</option>
             <option v-for="(t, i) in taskTemplates" :key="t.name" :value="i">{{ t.name }}</option>
           </select>
-          <button class="btn sm ghost" @click="taskTemplates.length && delTemplate(taskTemplates.length - 1)">删除</button>
+          <button class="btn sm ghost" @click="taskTemplates.length && delTemplate(taskTemplates.length - 1)">{{ t('删除') }}</button>
         </div>
       </div>
       <div v-if="taskTemplates.length" class="tr-tpl-preview muted small">{{ tplPreview(taskTemplates[taskTemplates.length - 1]) }}</div>
@@ -782,7 +783,7 @@ onBeforeUnmount(() => {
         即将转录：<b>{{ queue.find(i => i.status === 'pending' || i.status === 'error')?.name || '—' }}</b> · 引擎：<b>{{ MODE_NAMES[mode] }}</b> · 预计耗时：<b>{{ sumTime || '—' }}</b>
       </div>
       <button class="btn primary big" style="width:100%;justify-content:center;margin-top:14px" data-guide="start-transcribe" @click="startTranscribe" :disabled="busy || !isDesktop || !queue.length">
-        <Icon name="transcribe" :size="16" />{{ busy ? '转录中…' : '开始转录' }}
+        <Icon name="transcribe" :size="16" />{{ busy ? t('转录中…') : t('开始转录') }}
       </button>
       <button v-if="busy" class="btn ghost" style="width:100%;justify-content:center;margin-top:8px" @click="cancelTranscribe"><Icon name="stop" :size="14" /> 取消转录</button>
 
@@ -799,10 +800,10 @@ onBeforeUnmount(() => {
       <!-- 运行日志 -->
       <div v-if="logs.length" class="tr-log">
         <div class="tr-log-head">
-          <span class="log-title">运行日志</span><span class="log-count">{{ logs.length }} 行</span>
+          <span class="log-title">{{ t('运行日志') }}</span><span class="log-count">{{ logs.length }} 行</span>
           <span style="flex:1"></span>
-          <button class="icon-btn" title="清空" @click="clearLog"><Icon name="trash" :size="13" /></button>
-          <button class="icon-btn" title="展开/收起" @click="logExpanded = !logExpanded"><Icon name="chevron" :size="13" /></button>
+          <button class="icon-btn" :title="t('清空')" @click="clearLog"><Icon name="trash" :size="13" /></button>
+          <button class="icon-btn" :title="t('展开/收起')" @click="logExpanded = !logExpanded"><Icon name="chevron" :size="13" /></button>
         </div>
         <div class="tr-log-scroll" :class="{ collapsed: !logExpanded }">
           <div v-for="(l, i) in logs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div>
@@ -831,20 +832,20 @@ onBeforeUnmount(() => {
         <button class="tr-pill" :class="{ active: rf.mode === 'vocal' }" @click="rf.mode = 'vocal'">人声</button>
       </div>
       <div class="tr-switch" style="margin-top:8px">
-        <label><span><b>声部平衡</b><small>抬主奏/人声 · 压配乐</small></span><input type="checkbox" v-model="rf.stem"></label>
+        <label><span><b>{{ t('声部平衡') }}</b><small>抬主奏/人声 · 压配乐</small></span><input type="checkbox" v-model="rf.stem"></label>
       </div>
       <button class="btn primary big" style="width:100%;justify-content:center;margin-top:12px" @click="startRefine" :disabled="rf.busy || !rf.midi || !rf.audio">
-        <Icon name="spark" :size="15" />{{ rf.busy ? '修正中…' : '开始智能修正' }}
+        <Icon name="spark" :size="15" />{{ rf.busy ? t('修正中…') : t('开始智能修正') }}
       </button>
       <div v-if="rf.busy || rf.info" class="tr-progress">
-        <div class="pfill" :style="{ width: (rf.busy ? 60 : 100) + '%' }"></div><span>{{ rf.busy ? '…' : '完成' }}</span>
+        <div class="pfill" :style="{ width: (rf.busy ? 60 : 100) + '%' }"></div><span>{{ rf.busy ? '…' : t('完成') }}</span>
       </div>
       <div v-if="rf.info" class="tr-done">
         <button class="btn sm" @click="openRefineResult"><Icon name="play2" :size="13" /> 打开修正结果</button>
         <span class="muted small">{{ rf.info }}</span>
       </div>
       <div v-if="rf.logs.length" class="tr-log">
-        <div class="tr-log-head"><span class="log-title">修正日志</span><span class="log-count">{{ rf.logs.length }} 行</span><span style="flex:1"></span><button class="icon-btn" @click="rf.logs = []"><Icon name="trash" :size="13" /></button></div>
+        <div class="tr-log-head"><span class="log-title">{{ t('修正日志') }}</span><span class="log-count">{{ rf.logs.length }} 行</span><span style="flex:1"></span><button class="icon-btn" @click="rf.logs = []"><Icon name="trash" :size="13" /></button></div>
         <div class="tr-log-scroll">
           <div v-for="(l, i) in rf.logs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div>
         </div>
@@ -856,22 +857,22 @@ onBeforeUnmount(() => {
       <div class="preset-mgr-card">
         <div class="preset-mgr-head">
           <b>参数预设管理</b>
-          <button class="icon-btn" @click="presetMgrOpen = false" title="关闭"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
+          <button class="icon-btn" @click="presetMgrOpen = false" :title="t('关闭')"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
         </div>
         <div class="preset-mgr-list">
           <div v-if="!presets.list.length" class="muted small" style="padding:16px">暂无预设</div>
           <div v-for="p in presets.list" :key="p.name" class="preset-mgr-row"
                draggable="true" @dragstart="presetDragStart(p)" @dragover.prevent @drop.prevent="presetDrop(p)" @dragend="presetDragName = ''">
-            <span class="pm-handle" title="拖动排序">⋮⋮</span>
-            <span class="pm-name" @click="mgrApply(p.name)" title="点击应用">{{ p.name }}</span>
+            <span class="pm-handle" :title="t('拖动排序')">⋮⋮</span>
+            <span class="pm-name" @click="mgrApply(p.name)" :title="t('点击应用')">{{ p.name }}</span>
             <span class="pm-mode">{{ p.mode }}</span>
-            <button class="btn sm ghost danger" title="删除" @click="mgrDelete(p.name)">删除</button>
+            <button class="btn sm ghost danger" :title="t('删除')" @click="mgrDelete(p.name)">{{ t('删除') }}</button>
           </div>
         </div>
         <div class="preset-mgr-foot">
           <button class="btn sm" @click="mgrRestore">恢复全部内置</button>
           <span style="flex:1"></span>
-          <button class="btn sm primary" @click="presetMgrOpen = false">完成</button>
+          <button class="btn sm primary" @click="presetMgrOpen = false">{{ t('完成') }}</button>
         </div>
       </div>
     </div>

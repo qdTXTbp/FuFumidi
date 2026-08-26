@@ -111,6 +111,13 @@ contextBridge.exposeInMainWorld('fuBridge', {
     defaults: () => ipcRenderer.invoke('wallpaper:defaults'),
     list: () => ipcRenderer.invoke('wallpaper:list'),
     download: (url, name) => ipcRenderer.invoke('wallpaper:download', url, name),
+    addLocal: (path) => ipcRenderer.invoke('wallpaper:addLocal', path),
+    onAddLocalProgress: (cb) => {
+      const listener = (_e, p) => cb(p);
+      ipcRenderer.on('wallpaper:addLocalProgress', listener);
+      return () => ipcRenderer.removeListener('wallpaper:addLocalProgress', listener);
+    },
+    removeLocal: (name) => ipcRenderer.invoke('wallpaper:removeLocal', name),
   },
   // 可选 Rust 核心
   rustStatus: () => ipcRenderer.invoke('rust:status'),

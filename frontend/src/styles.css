@@ -47,6 +47,11 @@
   --border: var(--hairline);
   --border-strong: #d0d3d9;
   --glass: rgba(10, 10, 10, 0.04);
+  --glass-bg: rgba(255, 255, 255, 0.62);
+  --glass-bg-strong: rgba(255, 255, 255, 0.78);
+  --glass-bg-soft: rgba(255, 255, 255, 0.45);
+  --glass-dark: rgba(14, 16, 22, 0.68);
+  --glass-blur: blur(18px) saturate(1.6);
   --text: var(--ink);
   --text2: var(--slate);
   --text3: var(--stone);
@@ -1169,3 +1174,119 @@ input[type="checkbox"]:active, input[type="radio"]:active { transform: scale(0.8
     scroll-behavior: auto !important;
   }
 }
+
+/* ---------- PR 前端效果：毛玻璃系统（玻璃拟态） ---------- */
+.sidebar {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+.topbar {
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+.playerbar {
+  background: var(--glass-dark);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+
+/* 卡片 / 面板（白玻璃） */
+.card,
+.home-card,
+.mix-track,
+.plg-item,
+.az-summary,
+.stat-card,
+.az-card,
+.overlay-card,
+.cmd-palette,
+.guide-card,
+.rep-card,
+.conv-info-bar,
+.tr-sum,
+.tr-drop {
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+
+/* 列表项（浅玻璃） */
+.song-item,
+.pl-item,
+.nav-item,
+.tag,
+.chip,
+.chip-btn {
+  background: var(--glass-bg-soft);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+.song-item:hover,
+.pl-item:hover,
+.nav-item:hover {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+.song-item.active,
+.pl-item.on {
+  background: color-mix(in srgb, var(--brand-blue-200) 58%, transparent);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+.nav-item.active {
+  background: color-mix(in srgb, var(--brand-blue-200) 70%, transparent);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+/* 表单控件玻璃底（background-color 而非 background，避免覆盖下拉箭头背景图） */
+.text-input,
+.select-input,
+.num-input,
+.ov-input,
+.cm-input {
+  background-color: var(--glass-bg-soft);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+.playerbar input:not([type="range"]),
+.playerbar select,
+.playerbar .tp-btn.toggle-on { background: rgba(255, 255, 255, 0.14); }
+
+/* ---------- PR 前端效果：自定义下拉箭头 ---------- */
+.select-input {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: var(--canvas);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238e8e93' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 13px;
+  padding: 5px 28px 5px 9px;
+  cursor: pointer;
+}
+.select-input:hover { border-color: var(--border-strong); }
+.select-input:disabled { opacity: 0.5; cursor: not-allowed; }
+.select-input option, .ov-input option {
+  background: var(--canvas);
+  color: var(--ink);
+  font-size: 12.5px;
+}
+
+/* ---------- PR 前端效果：图表 canvas 铺满容器 ---------- */
+.chart-wrap canvas { display: block; width: 100%; height: 100%; }
+
+/* ---------- PR 前端效果：首次启动壁纸询问卡 ---------- */
+.wp-prompt { width: 440px; max-width: 92vw; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 28px 26px 24px; }
+.wp-prompt-ic {
+  width: 64px; height: 64px; border-radius: 20px;
+  background: linear-gradient(135deg, var(--brand-blue), var(--brand-blue-deep));
+  color: #fff; display: grid; place-items: center;
+  box-shadow: 0 12px 28px rgba(20, 86, 240, 0.3);
+}
+.wp-prompt-title { font-size: 17px; font-weight: 700; color: var(--ink); }
+.wp-prompt-desc { font-size: 12.5px; color: var(--slate); line-height: 1.7; }
+.wp-prompt-actions { display: flex; gap: 10px; margin-top: 8px; }

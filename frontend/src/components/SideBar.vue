@@ -4,6 +4,7 @@ import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
 import { usePlaylistStore } from '../stores/playlist';
 import logoUrl from '../assets/logo.png';
+import { t } from '../core/i18n.js';
 
 const app = useAppStore();
 const state = app;
@@ -93,28 +94,28 @@ function batchAll() {
 function batchFav() {
   for (const id of batchSel.value) if (!favs.value.has(id)) { const s = new Set(favs.value); s.add(id); favs.value = s; }
   persistFavs();
-  toast('已收藏 ' + batchSel.value.size + ' 首', 'ok');
+  toast(t('已收藏 ') + batchSel.value.size + t(' 首'), 'ok');
 }
 function batchUnfav() {
   for (const id of batchSel.value) if (favs.value.has(id)) { const s = new Set(favs.value); s.delete(id); favs.value = s; }
   persistFavs();
-  toast('已取消收藏 ' + batchSel.value.size + ' 首', 'ok');
+  toast(t('已取消收藏 ') + batchSel.value.size + t(' 首'), 'ok');
 }
 function batchRemove() {
-  if (!batchSel.value.size) { toast('请先勾选曲目', 'warn'); return; }
+  if (!batchSel.value.size) { toast(t('请先勾选曲目'), 'warn'); return; }
   const n = batchSel.value.size;
   playlist.removeSongs([...batchSel.value]);
   batchSel.value = new Set();
-  toast('已从当前歌单移除 ' + n + ' 首', 'ok');
+  toast(t('已从当前歌单移除 ') + n + t(' 首'), 'ok');
 }
 async function batchDeleteLibrary() {
   if (!batchSel.value.size) { toast('请先勾选曲目', 'warn'); return; }
-  if (!window.confirm('确定从资料库删除 ' + batchSel.value.size + ' 首曲目？')) return;
+  if (!window.confirm(t('确定从资料库删除 ') + batchSel.value.size + t(' 首曲目？'))) return;
   const ids = [...batchSel.value];
   for (const id of ids) await removeSong(id);
   playlist.removeFromAllPlaylists(ids);
   batchSel.value = new Set();
-  toast('已删除 ' + ids.length + ' 首', 'ok');
+  toast(t('已删除 ') + ids.length + t(' 首'), 'ok');
 }
 
 const dragId = ref(null);
@@ -205,22 +206,31 @@ function resetPlDrag() {
   document.querySelectorAll('.pl-item').forEach(x => x.classList.remove('pl-drag-before', 'pl-drag-after'));
 }
 
-function baseName(p) { return String(p).split(/[\\/]/).pop() || '未命名.mid'; }
+function baseName(p) { return String(p).split(/[\\/]/).pop() || t('未命名.mid'); }
 
-function newPlaylist() {
-  const name = window.prompt('歌单名称', '');
-  if (!name || !name.trim()) return;
-  playlist.create(name.trim());
-  toast('已创建歌单「' + name.trim() + '」', 'ok');
+const playlistName = ref('');
+const playlistNameOpen = ref(false);
+const plCollapsed = ref(false);
+function openNewPlaylist() {
+  playlistName.value = '';
+  playlistNameOpen.value = true;
+}
+function confirmNewPlaylist() {
+  const name = playlistName.value.trim();
+  if (!name) return;
+  playlist.create(name);
+  playlistNameOpen.value = false;
+  playlistName.value = '';
+  toast(t('已创建歌单「') + name + '」', 'ok');
 }
 function removeCurrentPlaylist() {
   const pid = playlist.activePlaylistId;
-  if (pid === 'favorites') { toast('收藏视图不能删除', 'warn'); return; }
+  if (pid === 'favorites') { toast(t('收藏视图不能删除'), 'warn'); return; }
   const pl = activePlaylist.value;
   if (!pl) return;
   if (!window.confirm(playlist.playlists.length <= 1 ? '清空当前默认歌单？' : '删除歌单「' + pl.name + '」？')) return;
   playlist.remove(pid);
-  toast('歌单已处理', 'ok');
+  toast(t('歌单已处理'), 'ok');
 }
 
 function selectSongOrBatch(s) {
@@ -248,7 +258,7 @@ async function onPickFolder() {
     const dir = await bridge.pickDirectory();
     if (!dir) return;
     const files = await bridge.listMidiFiles(dir);
-    if (!files || !files.length) { toast('文件夹里没有 MIDI 文件', 'warn'); return; }
+    if (!files || !files.length) { toast(t('文件夹里没有 MIDI 文件'), 'warn'); return; }
     const items = [];
     for (const p of files.slice(0, 100)) {
       try {
@@ -285,7 +295,7 @@ onMounted(hydrateFavs);
 </script>
 
 <template>
-  <aside class="sidebar" @dragover.prevent="dragOver = true" @dragleave="dragOver = false" @drop.prevent="onDrop">
+  <aside class="sidebar" role="navigation" aria-label="t('侧边导航')" @dragover.prevent="dragOver = true" @dragleave="dragOver = false" @drop.prevent="onDrop">
     <div class="sidebar-brand">
       <div class="brand-logo"><img :src="logoUrl" alt="FuFumidi" /></div>
       <div>
@@ -304,17 +314,23 @@ onMounted(hydrateFavs);
       <input ref="fileInput" id="midi-file-input" name="midi-file" type="file" accept=".mid,.midi,.kar,.rmi" hidden multiple @change="onFileChange">
 
       <div class="nav-sep"></div>
-      <div class="nav-group-title">MIDI 歌单 <span class="muted" style="float:right;text-transform:none;letter-spacing:0">{{ visibleSongs.length }}</span></div>
-
-      <div class="pl-toolbar pl-head">
-        <span class="pl-head-title">歌单</span>
-        <button class="icon-btn" title="新建歌单" @click="newPlaylist" style="width:28px;height:28px"><Icon name="plus" :size="14" /></button>
+      <div class="nav-group-title">
+        <button class="pl-collapse" :title="plCollapsed ? t('展开歌单') : t('折叠歌单')" :aria-label="plCollapsed ? t('展开歌单') : t('折叠歌单')" @click="plCollapsed = !plCollapsed">
+          {{ plCollapsed ? '▸' : '▾' }}
+        </button>
+        {{ t('MIDI 歌单') }} <span class="muted" style="float:right;text-transform:none;letter-spacing:0">{{ visibleSongs.length }}</span>
       </div>
 
-      <div class="pl-list" @dragover.prevent @drop.prevent.stop="plDropEnd">
-        <div class="pl-item" :class="{ active: isFavView }" @click="playlist.select('favorites')">
+      <template v-if="!plCollapsed">
+<div class="pl-toolbar pl-head">
+        <span class="pl-head-title">{{ t('歌单') }}</span>
+        <button class="icon-btn" :title="t('新建歌单')" aria-label="t('新建歌单')" @click="openNewPlaylist" style="width:28px;height:28px"><Icon name="plus" :size="14" /></button>
+      </div>
+
+      <div class="pl-list" role="list" @dragover.prevent @drop.prevent.stop="plDropEnd">
+        <div class="pl-item" role="listitem" :class="{ active: isFavView }" @click="playlist.select('favorites')">
           <span class="pl-star">★</span>
-          <span class="pl-name">收藏</span>
+          <span class="pl-name">{{ t('收藏') }}</span>
           <span class="pl-count">{{ favs.size }}</span>
         </div>
         <div v-for="p in playlist.playlists" :key="p.id" class="pl-item"
@@ -332,29 +348,30 @@ onMounted(hydrateFavs);
         </div>
       </div>
 
+      </template>
       <div class="pl-toolbar">
-        <input class="text-input" style="flex:1;min-width:0;padding:5px 8px;font-size:12px" placeholder="搜索曲目" v-model="playlist.search" />
-        <button class="chip-btn" :class="{ active: playlist.favOnly }" title="只显示收藏" @click="playlist.favOnly = !playlist.favOnly">★</button>
-        <button class="chip-btn" :class="{ active: batchOn }" title="批量管理" @click="toggleBatch"><Icon name="menu" :size="13" />批量</button>
-        <button class="chip-btn" title="删除当前歌单" @click="removeCurrentPlaylist" :disabled="playlist.activePlaylistId === 'favorites'"><Icon name="trash" :size="13" />删</button>
+        <input class="text-input" style="flex:1;min-width:0;padding:5px 8px;font-size:12px" :placeholder="t('搜索曲目')" aria-label="t('搜索曲目')" v-model="playlist.search" />
+        <button class="chip-btn" :class="{ active: playlist.favOnly }" :title="t('只显示收藏')" @click="playlist.favOnly = !playlist.favOnly">★</button>
+        <button class="chip-btn" :class="{ active: batchOn }" :title="t('批量管理')" @click="toggleBatch"><Icon name="menu" :size="13" />批量</button>
+        <button class="chip-btn" :title="t('删除当前歌单')" @click="removeCurrentPlaylist" :disabled="playlist.activePlaylistId === 'favorites'"><Icon name="trash" :size="13" />删</button>
       </div>
 
       <div v-if="batchOn" class="pl-batch">
-        <button class="chip-btn" @click="batchAll"><Icon name="target" :size="13" />全选</button>
-        <button class="chip-btn" @click="batchFav">★ 收藏</button>
-        <button class="chip-btn" @click="batchUnfav">☆ 取消收藏</button>
-        <button class="chip-btn danger" @click="batchRemove"><Icon name="trash" :size="13" />移除歌单</button>
-        <button class="chip-btn danger" @click="batchDeleteLibrary"><Icon name="trash" :size="13" />删除库</button>
-        <button class="chip-btn" @click="toggleBatch"><Icon name="minus" :size="13" />退出</button>
-        <span class="muted small">已选 {{ batchSel.size }}</span>
+        <button class="chip-btn" @click="batchAll"><Icon name="target" :size="13" />{{ t('全选') }}</button>
+        <button class="chip-btn" @click="batchFav">★ {{ t('收藏') }}</button>
+        <button class="chip-btn" @click="batchUnfav">☆ {{ t('取消收藏') }}</button>
+        <button class="chip-btn danger" @click="batchRemove"><Icon name="trash" :size="13" />{{ t('移除歌单') }}</button>
+        <button class="chip-btn danger" @click="batchDeleteLibrary"><Icon name="trash" :size="13" />{{ t('删除库') }}</button>
+        <button class="chip-btn" @click="toggleBatch"><Icon name="minus" :size="13" />{{ t('退出') }}</button>
+        <span class="muted small">{{ t('已选 ') }}{{ batchSel.size }}</span>
       </div>
 
-      <div class="song-list" :class="{ 'drag-active': dragId && canReorder }" @dragover.prevent="dragOverList" @drop.prevent.stop="dropOnList">
+      <div class="song-list" role="list" :class="{ 'drag-active': dragId && canReorder }" @dragover.prevent="dragOverList" @drop.prevent.stop="dropOnList">
         <div v-if="!visibleSongs.length" class="muted small" style="padding:8px 12px;line-height:1.6">
-          {{ playlist.playlists.length ? '当前歌单为空' : '暂无曲目' }}。<br>点击上方「导入 MIDI」或「导入文件夹」。
+          {{ playlist.playlists.length ? t('当前歌单为空') : t('暂无曲目') }}。<br>{{ t('点击上方「导入 MIDI」或「导入文件夹」。') }}
         </div>
 
-        <div class="song-item"
+        <div class="song-item" role="listitem"
              v-for="(s, i) in visibleSongs"
              :key="s.id"
              :class="{ active: s.id === state.currentId, dragging: dragId === s.id, dragTarget: dragOverId === s.id }"
@@ -366,16 +383,16 @@ onMounted(hydrateFavs);
              @dragend="resetDrag()"
              @click="selectSongOrBatch(s)">
           <input v-if="batchOn" type="checkbox" class="song-check" :checked="isSel(s.id)" @click.stop="toggleSel(s.id)" />
-          <span v-if="!batchOn && canReorder" class="si-drag" title="拖动排序"><Icon name="drag" :size="13" /></span>
+          <span v-if="!batchOn && canReorder" class="si-drag" :title="t('拖动排序')" aria-label="t('拖动排序')"><Icon name="drag" :size="13" /></span>
           <span class="si-num" v-if="!batchOn && (!state.playing || s.id !== state.currentId)">{{ i + 1 }}</span>
           <span class="si-num playing-ic" v-else-if="!batchOn">▶</span>
           <div class="si-name">
             <b>{{ s.name }}</b>
-            <small>{{ s.song ? s.song.tracks.length : (s.meta.tracks || '—') }} 轨 · {{ (s.meta.size / 1024).toFixed(0) }} KB</small>
+            <small>{{ s.song ? s.song.tracks.length : (s.meta.tracks || '—') }} {{ t(' 轨 · ') }} {{ (s.meta.size / 1024).toFixed(0) }} KB</small>
           </div>
           <div class="si-tools">
-            <button class="icon-btn si-fav" :class="{ on: favs.has(s.id) }" style="width:26px;height:26px;font-size:13px" title="收藏" @click.stop="toggleFav(s.id)">★</button>
-            <button class="icon-btn" style="width:26px;height:26px;font-size:13px" title="从当前歌单移除" @click.stop="playlist.removeSongs([s.id])">
+            <button class="icon-btn si-fav" :class="{ on: favs.has(s.id) }" style="width:26px;height:26px;font-size:13px" :title="t('收藏')" aria-label="t('收藏')" @click.stop="toggleFav(s.id)">★</button>
+            <button class="icon-btn" style="width:26px;height:26px;font-size:13px" :title="t('从当前歌单移除')" aria-label="t('从当前歌单移除')" @click.stop="playlist.removeSongs([s.id])">
               <Icon name="trash" :size="14" />
             </button>
           </div>
@@ -384,9 +401,19 @@ onMounted(hydrateFavs);
 
     </div>
 
+    <div v-if="playlistNameOpen" class="side-modal-mask" @click.self="playlistNameOpen = false">
+      <div class="side-modal">
+        <b>{{ t('新建歌单') }}</b>
+        <input v-model="playlistName" class="text-input" :placeholder="t('歌单名称')" @keydown.enter="confirmNewPlaylist" autofocus />
+        <div class="row" style="gap:8px;justify-content:flex-end">
+          <button class="btn sm ghost" @click="playlistNameOpen = false">{{ t('取消') }}</button>
+          <button class="btn sm primary" @click="confirmNewPlaylist">{{ t('确定') }}</button>
+        </div>
+      </div>
+    </div>
     <div style="padding:10px 14px;border-top:1px solid var(--border)" class="small muted row">
-      <span class="tag">v2.2.0</span>
-      <span style="margin-left:auto">离线 · Vue 3</span>
+      <span class="tag">v3.0.0</span>
+      <span style="margin-left:auto">{{ t('离线 · Vue 3') }}</span>
     </div>
   </aside>
 </template>
@@ -412,6 +439,8 @@ onMounted(hydrateFavs);
 .song-item.dragTarget { background: var(--surface-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 .pl-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
 .pl-head-title { font-size: 11px; font-weight: 700; color: var(--stone); letter-spacing: .4px; text-transform: uppercase; }
+.pl-collapse { background: transparent; border:none; cursor:pointer; color: var(--slate); font-size:11px; padding:2px 4px; border-radius:4px; }
+.pl-collapse:hover { background: var(--surface-soft); color: var(--ink); }
 .pl-list { display: flex; flex-direction: column; gap: 3px; padding: 2px; margin-bottom: 6px; border: 1px solid transparent; border-radius: 10px; transition: box-shadow .12s, background .12s; }
 .pl-list:has(.pl-item.dragging) { box-shadow: inset 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 5%, transparent); }
 .pl-item { display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-radius: 9px; border: 1px solid transparent; cursor: pointer; color: var(--ink); font-size: 12.5px; transition: background .12s, border-color .12s, box-shadow .12s; }
@@ -430,4 +459,8 @@ onMounted(hydrateFavs);
 .pl-toolbar { display: flex; align-items: center; gap: 5px; margin-bottom: 5px; }
 .pl-batch { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 5px 8px; margin-bottom: 5px; border: 1px dashed var(--hairline); border-radius: 10px; background: var(--surface-soft); }
 .song-check { width: 14px; height: 14px; accent-color: var(--ink); }
+.side-modal-mask { position: fixed; inset:0; background: rgba(0,0,0,.35); display:grid; place-items:center; z-index: 500; }
+.side-modal { background: var(--canvas); border:1px solid var(--hairline); border-radius:12px; padding:14px; width:280px; display:flex; flex-direction:column; gap:10px; box-shadow: var(--shadow-lg); }
+.side-modal input { width:100%; }
+
 </style>

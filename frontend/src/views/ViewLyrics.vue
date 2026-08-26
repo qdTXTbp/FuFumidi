@@ -343,12 +343,12 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
       </button>
       <button class="btn sm" @click="addLyric" :disabled="!song"><Icon name="plus" :size="14" />{{ t('添加歌词') }}</button>
       <button class="btn sm" @click="openReplace" :disabled="!lyrics.length"><Icon name="edit" :size="14" />{{ t('批量替换') }}</button>
-      <button class="btn sm" @click="noteSelHint" :disabled="!song" title="在编辑视图中选中音符后可为其添加歌词"><Icon name="cursor" :size="14" />{{ t('添加到所选音符') }}</button>
+      <button class="btn sm" @click="noteSelHint" :disabled="!song" :title="t('在编辑视图中选中音符后可为其添加歌词')"><Icon name="cursor" :size="14" />{{ t('添加到所选音符') }}</button>
       <button class="btn sm" @click="importText" :disabled="!song"><Icon name="import" :size="14" />{{ t('导入文本') }}</button>
       <button class="btn sm" @click="exportLrc" :disabled="!lyrics.length"><Icon name="save" :size="14" />{{ t('导出 LRC') }}</button>
       <button class="btn sm" @click="exportSrt" :disabled="!lyrics.length"><Icon name="save" :size="14" />{{ t('导出 SRT') }}</button>
       <button class="btn sm" @click="exportTxt" :disabled="!lyrics.length"><Icon name="save" :size="14" />{{ t('导出 TXT') }}</button>
-      <button class="btn sm" @click="splitWords" :disabled="!lyrics.length" title="逐字拆分"><Icon name="edit" :size="14" />{{ t('逐字拆分') }}</button>
+      <button class="btn sm" @click="splitWords" :disabled="!lyrics.length" :title="t('逐字拆分')"><Icon name="edit" :size="14" />{{ t('逐字拆分') }}</button>
       <span class="sep"></span>
       <label class="lyr-ctl">{{ t('字号') }}<input type="number" min="12" max="40" v-model.number="fontSz" class="num-input" style="width:56px" /></label>
       <label class="lyr-ctl">{{ t('颜色') }}<input type="color" v-model="lyrColor" style="width:36px;height:26px;padding:1px;border:1px solid var(--hairline);background:var(--canvas)" /></label>

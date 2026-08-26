@@ -1,5 +1,6 @@
 import { createApp } from 'vue';
 import App from './App.vue';
+import { vFocusTrap } from './directives/focusTrap.js';
 import { pinia } from './stores/pinia';
 import { router } from './router';
 import './styles.css';
@@ -9,4 +10,5 @@ import './styles.css';
 const app = createApp(App);
 app.use(pinia);
 app.use(router);
+app.directive('focus-trap', vFocusTrap);
 app.mount('#app');

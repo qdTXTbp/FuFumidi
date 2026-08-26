@@ -1,5 +1,6 @@
 // Pinia：歌单状态与持久化
 import { defineStore } from 'pinia';
+import { t } from '../core/i18n';
 
 export interface Playlist {
   id: string;
@@ -35,7 +36,7 @@ function loadPlaylists(): Playlist[] {
       if (Array.isArray(arr) && arr.length) return arr;
     }
   } catch (e) {}
-  return [{ id: 'default', name: '默认歌单', songIds: [] }];
+  return [{ id: 'default', name: t('默认歌单'), songIds: [] }];
 }
 
 export const usePlaylistStore = defineStore('playlist', {
@@ -72,7 +73,8 @@ export const usePlaylistStore = defineStore('playlist', {
       }
       this.playlists = db;
       if (!db.some(p => p.id === this.activePlaylistId)) {
-        this.activePlaylistId = db.some(p => p.id === 'default') ? 'default' : db[0].id;
+        const def = db.find(p => p.id === 'default');
+        this.activePlaylistId = def ? def.id : (db[0]?.id || 'default');
         try { localStorage.setItem(LS_ACTIVE, this.activePlaylistId); } catch (e) {}
       }
       this.persist();
@@ -80,7 +82,7 @@ export const usePlaylistStore = defineStore('playlist', {
     },
     create(name: string) {
       const id = 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      this.playlists.push({ id, name: name || '未命名歌单', songIds: [] });
+      this.playlists.push({ id, name: name || t('未命名歌单'), songIds: [] });
       this.activePlaylistId = id;
       this.persist();
       return id;
@@ -95,12 +97,14 @@ export const usePlaylistStore = defineStore('playlist', {
       if (id === 'favorites') return;
       if (this.playlists.length <= 1) {
         const def = this.playlists[0];
-        def.songIds = [];
-        this.activePlaylistId = def.id;
+        if (def) { def.songIds = []; this.activePlaylistId = def.id; }
       } else {
         const i = this.playlists.findIndex(p => p.id === id);
         if (i >= 0) this.playlists.splice(i, 1);
-        if (this.activePlaylistId === id) this.activePlaylistId = this.playlists[0].id;
+        if (this.activePlaylistId === id) {
+          const first = this.playlists[0];
+          if (first) this.activePlaylistId = first.id;
+        }
       }
       this.persist();
     },
@@ -162,7 +166,8 @@ export const usePlaylistStore = defineStore('playlist', {
       const ti = this.playlists.findIndex(p => p.id === targetId);
       if (fi < 0 || ti < 0 || fi === ti) return;
       const arr = this.playlists.slice();
-      const [item] = arr.splice(fi, 1);
+      const item = arr.splice(fi, 1)[0];
+      if (!item) return;
       const t = arr.findIndex(p => p.id === targetId);
       arr.splice(before ? t : t + 1, 0, item);
       this.playlists = arr;
@@ -172,7 +177,8 @@ export const usePlaylistStore = defineStore('playlist', {
       const fi = this.playlists.findIndex(p => p.id === dragId);
       if (fi < 0) return;
       const arr = this.playlists.slice();
-      const [item] = arr.splice(fi, 1);
+      const item = arr.splice(fi, 1)[0];
+      if (!item) return;
       arr.push(item);
       this.playlists = arr;
       this.persist();

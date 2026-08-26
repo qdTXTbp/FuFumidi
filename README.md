@@ -75,6 +75,14 @@ FuFumidi 是一款完全离线的桌面应用，面向音乐人、编曲者和�
 
 ---
 
+## 特别鸣谢 / Special Thanks
+
+- **monologue82（B站用户：骄傲的狼W0R）**
+  - 前端设计
+  - Vue 3 前端代码重构
+
+---
+
 ## Packaging / 打包
 
 | Package | Command | Description |

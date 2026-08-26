@@ -20,7 +20,7 @@ function registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
       const webm = path.join(tmpDir, Date.now() + '.webm');
       fs.writeFileSync(webm, Buffer.from(opts.data));
       let wav = null;
-      if (opts.audio && opts.audio.byteLength) {
+      if (opts.audio && Buffer.from(opts.audio).length) {
         wav = path.join(tmpDir, Date.now() + '.wav');
         fs.writeFileSync(wav, Buffer.from(opts.audio));
       }

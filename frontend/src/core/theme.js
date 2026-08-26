@@ -106,6 +106,13 @@ export function applyTheme(name, accent) {
 
   // 按钮/激活态专用：在浅色主题用黑色底白字，在深色主题用白色底深字
   const dark = name !== 'light';
+
+  // 毛玻璃令牌：跟随明暗主题（深色用暗色玻璃，浅色用白色玻璃）
+  R.setProperty('--glass-bg', dark ? 'rgba(20,22,28,0.55)' : 'rgba(255,255,255,0.62)');
+  R.setProperty('--glass-bg-strong', dark ? 'rgba(18,20,26,0.72)' : 'rgba(255,255,255,0.78)');
+  R.setProperty('--glass-bg-soft', dark ? 'rgba(30,32,38,0.42)' : 'rgba(255,255,255,0.45)');
+  R.setProperty('--glass-dark', dark ? 'rgba(0,0,0,0.55)' : 'rgba(14,16,22,0.68)');
+  R.setProperty('--glass-blur', 'blur(18px) saturate(1.6)');
   R.setProperty('--btn-bg', dark ? '#ffffff' : '#0a0a0a');
   R.setProperty('--btn-fg', dark ? '#0a0a0a' : '#ffffff');
 

@@ -7,6 +7,9 @@ $useGnu = ($env:FUFUMIDI_RUST_GNU -ne '0')
 try {
   if ($useGnu) {
     Write-Output '[rust] building with x86_64-pc-windows-gnu ...'
+    if (Get-Command gcc -ErrorAction SilentlyContinue) {
+      $env:CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = 'gcc'
+    }
     cargo build --release --target x86_64-pc-windows-gnu --manifest-path "$root\rust-core\Cargo.toml"
     $exe = "$root\rust-core\target\x86_64-pc-windows-gnu\release\fufumidi-core.exe"
   } else {

@@ -184,6 +184,227 @@ fn stat_smf(bytes: &[u8]) -> Result<MidiStats, String> {
     })
 }
 
+
+#[derive(Clone)]
+struct SmfEvent {
+    tick: u32,
+    raw: Vec<u8>,
+}
+
+struct Smf {
+    format: u16,
+    tpb: u16,
+    tracks: Vec<Vec<SmfEvent>>,
+}
+
+fn write_vlq(out: &mut Vec<u8>, mut v: u32) {
+    let mut buf = [0u8; 5];
+    let mut i = 4usize;
+    buf[i] = (v & 0x7f) as u8;
+    loop {
+        v >>= 7;
+        if v == 0 { break; }
+        i -= 1;
+        buf[i] = ((v & 0x7f) as u8) | 0x80;
+    }
+    out.extend_from_slice(&buf[i..]);
+}
+
+fn push_vlq(out: &mut Vec<u8>, v: u32) {
+    write_vlq(out, v);
+}
+
+fn parse_smf(bytes: &[u8]) -> Result<Smf, String> {
+    if bytes.len() < 14 || &bytes[0..4] != b"MThd" {
+        return Err("not a MIDI file".into());
+    }
+    let head_len = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
+    if head_len < 6 {
+        return Err("MThd too short".into());
+    }
+    let format = u16::from_be_bytes([bytes[8], bytes[9]]);
+    let ntrks = u16::from_be_bytes([bytes[10], bytes[11]]) as usize;
+    let division_raw = u16::from_be_bytes([bytes[12], bytes[13]]);
+    if division_raw & 0x8000 != 0 {
+        return Err("SMPTE MIDI files not supported".into());
+    }
+    let tpb = division_raw & 0x7fff;
+    if tpb == 0 {
+        return Err("invalid division".into());
+    }
+
+    let mut pos = 14 + head_len.saturating_sub(6);
+    let mut tracks = Vec::with_capacity(ntrks);
+    for _ in 0..ntrks {
+        if pos + 8 > bytes.len() { break; }
+        if &bytes[pos..pos + 4] != b"MTrk" { break; }
+        let len = u32::from_be_bytes([bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]]) as usize;
+        pos += 8;
+        let end = (pos + len).min(bytes.len());
+        let mut tick: u32 = 0;
+        let mut last_status: Option<u8> = None;
+        let mut events = Vec::new();
+        while pos < end {
+            let delta = read_vlq(bytes, &mut pos);
+            tick = tick.saturating_add(delta);
+            if pos >= end { break; }
+            let first = bytes[pos];
+            if first & 0x80 == 0 {
+                let status = last_status.ok_or("running status without prior status")?;
+                let kind = status & 0xF0;
+                if (0x80..=0xE0).contains(&kind) {
+                    pos += 1;
+                    let data_len = if kind == 0xC0 || kind == 0xD0 { 1 } else { 2 };
+                    let mut raw = vec![status, first];
+                    for _ in 1..data_len {
+                        if pos < end { raw.push(bytes[pos]); pos += 1; }
+                    }
+                    last_status = Some(status);
+                    events.push(SmfEvent { tick, raw });
+                } else {
+                    pos += 1;
+                }
+                continue;
+            }
+
+            let status = first;
+            pos += 1;
+            if status == 0xFF {
+                let mtype = bytes.get(pos).copied().unwrap_or(0);
+                pos += 1;
+                let mlen = read_vlq(bytes, &mut pos) as usize;
+                let mdata_end = (pos + mlen).min(end);
+                let mut raw = vec![0xFF, mtype];
+                push_vlq(&mut raw, mlen as u32);
+                raw.extend_from_slice(&bytes[pos..mdata_end]);
+                pos = mdata_end;
+                events.push(SmfEvent { tick, raw });
+                continue;
+            }
+            if status == 0xF0 || status == 0xF7 {
+                let slen = read_vlq(bytes, &mut pos) as usize;
+                let sdata_end = (pos + slen).min(end);
+                let mut raw = vec![status];
+                push_vlq(&mut raw, slen as u32);
+                raw.extend_from_slice(&bytes[pos..sdata_end]);
+                pos = sdata_end;
+                events.push(SmfEvent { tick, raw });
+                continue;
+            }
+            let kind = status & 0xF0;
+            if !(0x80..=0xE0).contains(&kind) {
+                return Err("unexpected status".into());
+            }
+            let data_len = if kind == 0xC0 || kind == 0xD0 { 1 } else { 2 };
+            let mut raw = vec![status];
+            for _ in 0..data_len {
+                if pos < end { raw.push(bytes[pos]); pos += 1; }
+            }
+            last_status = Some(status);
+            events.push(SmfEvent { tick, raw });
+        }
+        pos = end;
+        tracks.push(events);
+    }
+    if tracks.is_empty() {
+        return Err("no tracks found".into());
+    }
+    Ok(Smf { format, tpb, tracks })
+}
+
+fn quantize_tick(tick: u32, grid: u32) -> u32 {
+    let grid = if grid == 0 { 1 } else { grid };
+    ((tick as f64 / grid as f64).round() as u32).wrapping_mul(grid)
+}
+
+fn transform_smf(bytes: &[u8], mode: &str, arg: i32) -> Result<Vec<u8>, String> {
+    let mut smf = parse_smf(bytes)?;
+    let grid = if mode == "quantize" {
+        let divisions = arg.max(1) as u32;
+        (smf.tpb as u32).saturating_mul(4).max(1) / divisions
+    } else {
+        0
+    };
+
+    for track in &mut smf.tracks {
+        let mut active: Vec<(i32, i32, u32, u32)> = Vec::new(); // (channel, note, orig_start, quant_start)
+        for ev in track.iter_mut() {
+            if ev.raw.len() < 3 { continue; }
+            let status = ev.raw[0];
+            let kind = status & 0xF0;
+            if kind != 0x90 && kind != 0x80 { continue; }
+            let channel = (status & 0x0F) as i32;
+            let mut note = ev.raw[1] as i32;
+            let vel = ev.raw[2] as i32;
+            if mode == "transpose" {
+                note = (note + arg).clamp(0, 127);
+                ev.raw[1] = note as u8;
+            }
+            if kind == 0x90 && vel > 0 {
+                let orig_start = ev.tick;
+                let qstart = if mode == "quantize" {
+                    quantize_tick(orig_start, grid)
+                } else {
+                    orig_start
+                };
+                ev.tick = qstart;
+                active.push((channel, note, orig_start, qstart));
+            } else {
+                if let Some(idx) = active.iter().position(|a| a.0 == channel && a.1 == note) {
+                    let (_, _, orig_start, qstart) = active.remove(idx);
+                    if mode == "quantize" {
+                        ev.tick = qstart.saturating_add(ev.tick.saturating_sub(orig_start));
+                    }
+                }
+            }
+        }
+        track.sort_by_key(|e| e.tick);
+    }
+
+    let mut out = Vec::new();
+    out.extend_from_slice(b"MThd");
+    out.extend_from_slice(&6u32.to_be_bytes());
+    out.extend_from_slice(&smf.format.to_be_bytes());
+    out.extend_from_slice(&(smf.tracks.len() as u16).to_be_bytes());
+    out.extend_from_slice(&smf.tpb.to_be_bytes());
+    for track in &smf.tracks {
+        let mut data = Vec::new();
+        let mut prev = 0u32;
+        for ev in track {
+            push_vlq(&mut data, ev.tick.saturating_sub(prev));
+            data.extend_from_slice(&ev.raw);
+            prev = ev.tick;
+        }
+        out.extend_from_slice(b"MTrk");
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(&data);
+    }
+    Ok(out)
+}
+
+fn run_batch_transform(input_dir: &str, output_dir: &str, mode: &str, arg: i32) -> String {
+    let files = walk_files(input_dir, &["mid", "midi"]);
+    if let Err(e) = fs::create_dir_all(output_dir) {
+        return format!(r#"{{"ok":false,"error":{}}}"#, json_str(&e.to_string()));
+    }
+    let mut arr = Vec::new();
+    for f in &files {
+        let name = std::path::Path::new(f).file_name().and_then(|x| x.to_str()).unwrap_or("out.mid");
+        let out_path = std::path::Path::new(output_dir).join(name);
+        let entry = match fs::read(f) {
+            Ok(bytes) => match transform_smf(&bytes, mode, arg) {
+                Ok(transformed) => match fs::write(&out_path, &transformed) {
+                    Ok(()) => format!(r#"{{"file":{},"out":{},"ok":true}}"#, json_str(f), json_str(&out_path.to_string_lossy())),
+                    Err(e) => format!(r#"{{"file":{},"ok":false,"error":{}}}"#, json_str(f), json_str(&e.to_string())),
+                },
+                Err(e) => format!(r#"{{"file":{},"ok":false,"error":{}}}"#, json_str(f), json_str(&e)),
+            },
+            Err(e) => format!(r#"{{"file":{},"ok":false,"error":{}}}"#, json_str(f), json_str(&e.to_string())),
+        };
+        arr.push(entry);
+    }
+    format!(r#"{{"ok":true,"mode":{},"arg":{},"count":{},"files":[{}]}}"#, json_str(mode), arg, arr.len(), arr.join(","))
+}
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let out = match args.first().map(|s| s.as_str()) {
@@ -230,6 +451,18 @@ fn main() {
             }
             format!(r#"{{"ok":true,"count":{},"files":[{}]}}"#, arr.len(), arr.join(","))
         }
+        Some("quantize-batch") => {
+            let dir = args.get(1).cloned().unwrap_or_default();
+            let out_dir = args.get(2).cloned().unwrap_or_default();
+            let divisions = args.get(3).and_then(|s| s.parse::<i32>().ok()).unwrap_or(8);
+            run_batch_transform(&dir, &out_dir, "quantize", divisions)
+        }
+        Some("transpose-batch") => {
+            let dir = args.get(1).cloned().unwrap_or_default();
+            let out_dir = args.get(2).cloned().unwrap_or_default();
+            let semitones = args.get(3).and_then(|s| s.parse::<i32>().ok()).unwrap_or(12);
+            run_batch_transform(&dir, &out_dir, "transpose", semitones)
+        }
         _ => r#"{"ok":false,"error":"unknown command"}"#.to_string(),
     };
     let stdout = io::stdout();
@@ -258,6 +491,23 @@ fn json_str(s: &str) -> String {
 mod tests {
     use super::*;
 
+
+    #[test]
+    fn transposes_single_note_midi() {
+        let data = b"MThd\x00\x00\x00\x06\x00\x00\x00\x01\x01\xe0MTrk\x00\x00\x00\x0d\x64\x90\x3c\x64\x83\x60\x80\x3c\x00\x00\xff\x2f\x00";
+        let out = transform_smf(data, "transpose", 12).expect("transform");
+        assert!(out.windows(3).any(|w| w == [0x90, 0x48, 0x64]));
+        assert!(out.windows(3).any(|w| w == [0x80, 0x48, 0x00]));
+    }
+
+    #[test]
+    fn quantizes_single_note_midi() {
+        let data = b"MThd\x00\x00\x00\x06\x00\x00\x00\x01\x01\xe0MTrk\x00\x00\x00\x0d\x64\x90\x3c\x64\x83\x60\x80\x3c\x00\x00\xff\x2f\x00";
+        let out = transform_smf(data, "quantize", 8).expect("transform");
+        let smf = parse_smf(&out).expect("parse");
+        assert_eq!(smf.tracks[0][0].tick, 0); // note-on quantized to 0
+        assert_eq!(smf.tracks[0][1].tick, 480); // original 100+480 = 580 -> 0+480 = 480
+    }
     #[test]
     fn fnv_is_stable() {
         assert_eq!(fnv1a(b""), 0xcbf29ce484222325);

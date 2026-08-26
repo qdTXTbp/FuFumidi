@@ -6,6 +6,7 @@ import { parseMidi, buildSong } from '../core/midi';
 import { TRACK_COLORS, fmtTime } from '../core/util';
 import { usePlaylistStore } from './playlist';
 import { bridge } from '../api';
+import { t } from '../core/i18n';
 
 export const VIEWS = [
   { id: 'home', label: '首页', ic: 'home' },
@@ -159,7 +160,7 @@ export const useAppStore = defineStore('app', {
       let ok = 0;
       for (const it of items) {
         let mid: any;
-        try { mid = parseMidi(it.bytes); } catch (e: any) { this.toast('无法解析 ' + it.name + '：' + e.message, 'warn'); continue; }
+        try { mid = parseMidi(it.bytes); } catch (e: any) { this.toast(t('无法解析 ') + it.name + '：' + e.message, 'warn'); continue; }
         const song: any = buildSong(mid, { name: it.name.replace(/\.(mid|midi|kar|rmi)$/i, '') });
         const item = {
           id: cryptoId(),
@@ -179,9 +180,9 @@ export const useAppStore = defineStore('app', {
       if (ok > 0) {
         const last = this.songs[this.songs.length - 1];
         await this.selectSong(last.id);
-        this.toast(`已导入 ${ok} 首 MIDI`);
+        this.toast(t('已导入 ') + ok + t(' 首 MIDI'));
       } else if (items.length) {
-        this.toast('没有可导入的 MIDI 文件', 'warn');
+        this.toast(t('没有可导入的 MIDI 文件'), 'warn');
       }
     },
     async restoreSongs() {
@@ -198,7 +199,7 @@ export const useAppStore = defineStore('app', {
         if (!r || !r.id || this.songs.some((s: any) => s.id === r.id)) continue;
         this.songs.push({
           id: r.id,
-          name: String(r.name || '未命名').replace(/\.(mid|midi|kar|rmi)$/i, ''),
+          name: String(r.name || t('未命名')).replace(/\.(mid|midi|kar|rmi)$/i, ''),
           song: null,
           meta: { size: r.size || 0, time: r.time || 0 },
           __bytes: r.bytes || null,
@@ -239,7 +240,7 @@ export const useAppStore = defineStore('app', {
             item.song = buildSong(mid, { name: item.name });
             item.meta.tracks = item.song.tracks.length;
           } catch (e: any) {
-            this.toast('无法解析已保存的 MIDI：' + e.message, 'warn');
+            this.toast(t('无法解析已保存的 MIDI：') + e.message, 'warn');
           }
         }
       }
@@ -271,7 +272,7 @@ export const useAppStore = defineStore('app', {
     },
     togglePlay() {
       const { player } = ensureAudio();
-      if (!this.currentSong) { this.toast('请先导入一首 MIDI', 'warn'); return; }
+      if (!this.currentSong) { this.toast(t('请先导入一首 MIDI'), 'warn'); return; }
       if (this.playing) {
         player.pause();
         this.playing = false;

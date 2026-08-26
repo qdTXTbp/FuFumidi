@@ -158,12 +158,12 @@ onBeforeUnmount(cleanupIg);
 </script>
 
 <template>
-  <div class="overlay guide-overlay" @click.self="skip">
+  <div class="overlay guide-overlay" v-focus-trap role="dialog" aria-modal="true" :aria-label="t('新手引导')" @click.self="skip" @keydown.esc="skip">
     <!-- 欢迎导览 -->
     <div v-if="mode === 'welcome'" class="guide-card">
       <div class="guide-head">
         <span class="guide-count">{{ t('新手引导') }}</span>
-        <button class="icon-btn" title="关闭" @click="skip"><Icon name="plus" :size="16" style="transform:rotate(45deg)" /></button>
+        <button class="icon-btn" :title="t('关闭')" aria-label="t('关闭')" @click="skip"><Icon name="plus" :size="16" style="transform:rotate(45deg)" /></button>
       </div>
       <div class="guide-art">
         <span class="g-step">{{ welcomeIdx + 1 }} / {{ WELCOME_STEPS.length }}</span>

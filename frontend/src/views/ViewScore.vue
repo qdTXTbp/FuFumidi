@@ -615,7 +615,7 @@ onBeforeUnmount(() => {
       <span style="flex:1"></span>
       <span class="tb-status">
         <span class="pulse" :class="{ on: state.playing }"></span>
-        <span>{{ status || (song ? (selTrack ? selTrack.name || t('音轨 ') + (trackSel + 1) : '') + ' · ' + ((song.sigMap && song.sigMap[0]) ? song.sigMap[0].num + '/' + song.sigMap[0].den : '4/4') + ' · ' + (ABC_KEY_NAMES[clamp((song.keySig && song.keySig.sf != null) ? song.keySig.sf : detectSf(selTrack ? selTrack.notes : []), -7, 7)] || 'C') + ' · ' + (selTrack ? selTrack.notes.length : 0) + ' 音符' : t('未加载')) }}</span>
+        <span>{{ status || (song ? (selTrack ? selTrack.name || t('音轨 ') + (trackSel + 1) : '') + ' · ' + ((song.sigMap && song.sigMap[0]) ? song.sigMap[0].num + '/' + song.sigMap[0].den : '4/4') + ' · ' + (ABC_KEY_NAMES[clamp((song.keySig && song.keySig.sf != null) ? song.keySig.sf : detectSf(selTrack ? selTrack.notes : []), -7, 7)] || 'C') + ' · ' + (selTrack ? selTrack.notes.length : 0) + t(' 音符') : t('未加载')) }}</span>
       </span>
 
       <span class="sep"></span>
@@ -672,7 +672,7 @@ onBeforeUnmount(() => {
       <div class="pv-card">
         <div class="pv-head">
           <b>{{ t('乐谱分页预览') }}</b>
-          <button class="icon-btn" @click="previewOpen = false" title="关闭"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
+          <button class="icon-btn" @click="previewOpen = false" :title="t('关闭')"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
         </div>
         <div class="pv-body">
           <div v-if="previewBusy" class="score-empty">{{ t('正在生成预览…') }}</div>

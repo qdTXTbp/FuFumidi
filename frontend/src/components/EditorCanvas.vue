@@ -407,6 +407,16 @@ function draw() {
     ctx2d.fillStyle = 'rgba(20,86,240,0.6)'; ctx2d.font = '9px monospace'; ctx2d.textAlign = 'right';
     ctx2d.fillText('音频', W - 4, yBase + 11);
   }
+  // 画笔预览
+  if (dragState.value && dragState.value.type === 'create') {
+    const d = dragState.value;
+    const x = tickToX(d.startTick), w2 = Math.max(2, tickToX(d.startTick + d.len) - x);
+    const y = (hi - d.startMidi) * rowH.value;
+    ctx2d.fillStyle = 'rgba(20,86,240,0.45)';
+    ctx2d.fillRect(x, y + 1, w2, rowH.value - 2);
+    ctx2d.strokeStyle = 'rgba(20,86,240,0.9)'; ctx2d.lineWidth = 1.2;
+    ctx2d.strokeRect(x - 1, y, w2 + 2, rowH.value);
+  }
   // 播放头
   const curTick = s.secToTick(state.curSec / state.tempo);
   const px = tickToX(curTick);
@@ -562,8 +572,9 @@ function onDown(e) {
   if (props.tool === 'pencil') {
     const tick = snapTick(xToTick(x)), midi = yToMidi(y);
     if (tick < 0 || midi < 0 || midi > 127) return;
-    const len = Math.max(s.tpb * (props.snapRatio || 0.25), 120);
-    dragState.value = { type: 'create', startTick: tick, startMidi: midi, len, note: null };
+    const len = Math.max(s.tpb, 120);
+    dragState.value = { type: 'create', startTick: tick, startMidi: midi, len, note: null, rawEnd: tick + len };
+    try { canvas.value.setPointerCapture(e.pointerId); } catch (err) {}
   } else if (props.tool === 'erase') {
     const n = hitTest(x, y);
     if (n) deleteNotes([n]);
@@ -626,9 +637,10 @@ function onMove(e) {
     }
     draw();
   } else if (d.type === 'create') {
-    const tick = Math.max(d.startTick, snapTick(xToTick(x)));
-    const end = Math.max(tick + 60, snapTick(xToTick(x)));
-    d.len = end - tick;
+    const raw = xToTick(x);
+    const end = Math.max(d.startTick + 60, raw);
+    d.rawEnd = end;
+    d.len = end - d.startTick;
     draw();
   }
 }
@@ -641,8 +653,10 @@ function onUp() {
     afterEdit();
   } else if (d.type === 'create' && tr) {
     pushState();
-    const len = Math.max(d.len, 60);
-    tr.notes.push({ start: Math.round(d.startTick), end: Math.round(d.startTick + len), midi: clamp(scaleSnapPitch(Math.round(d.startMidi)), 0, 127), vel: 80 });
+    const len = Math.max(d.len || Math.max(song()?.tpb || 480, 120), 60);
+    const st = Math.round(d.startTick);
+    const en = Math.round(st + len);
+    tr.notes.push({ start: st, end: en, midi: clamp(scaleSnapPitch(Math.round(d.startMidi)), 0, 127), vel: 80 });
     afterEdit();
   } else if (d.type === 'marquee' && d.box) {
     emit('select');

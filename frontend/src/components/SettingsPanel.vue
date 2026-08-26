@@ -518,7 +518,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
 </script>
 
 <template>
-  <div class="overlay" @click.self="cancel">
+  <div class="overlay" v-focus-trap role="dialog" aria-modal="true" :aria-label="t('设置')" @click.self="cancel" @keydown.esc="cancel">
     <div class="overlay-card settings-card">
       <div class="settings-head">
         <Icon name="gear" :size="17" />

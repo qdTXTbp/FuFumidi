@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRoute } from 'vue-router';
+import Icon from './components/Icon.vue';
 import SideBar from './components/SideBar.vue';
 import TopBar from './components/TopBar.vue';
 import PlayerBar from './components/PlayerBar.vue';
@@ -13,7 +14,7 @@ import { ref } from 'vue';
 import { useAppStore, VIEWS } from './stores/app';
 import { usePlaylistStore } from './stores/playlist';
 import { useSettingsStore } from './stores/settings';
-import { setLang } from './core/i18n.js';
+import { setLang, t } from './core/i18n.js';
 import { applyTheme, loadTheme } from './core/theme.js';
 import { viewFromPath } from './router';
 
@@ -21,6 +22,7 @@ const app = useAppStore();
 const state = app;
 const playlistStore = usePlaylistStore();
 const settingsStore = useSettingsStore();
+const wallpaperPromptOpen = ref(false);
 const route = useRoute();
 
 const wpUrl = ref('');
@@ -99,6 +101,23 @@ async function initGlobal() {
   let guideDone = false;
   try { guideDone = !!localStorage.getItem('fufumidi_guide_done'); } catch (e) {}
   if (!guideDone && !s.guide_done) state.ui.guideOpen = true;
+
+  // 5) 首次启动壁纸询问（仅一次，未设置壁纸时）
+  if (!s.wallpaper_prompt_done && !s.custom_wallpaper) {
+    setTimeout(() => {
+      if (!settingsStore.settings.custom_wallpaper && !state.ui.wallpaperOpen) wallpaperPromptOpen.value = true;
+    }, 1200);
+  }
+}
+
+function goDownloadWallpaper() {
+  wallpaperPromptOpen.value = false;
+  state.ui.wallpaperOpen = true;
+  settingsStore.save({ wallpaper_prompt_done: true }).catch(() => {});
+}
+function dismissWallpaperPrompt() {
+  wallpaperPromptOpen.value = false;
+  settingsStore.save({ wallpaper_prompt_done: true }).catch(() => {});
 }
 
 function onKey(e) {
@@ -152,23 +171,37 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <video v-if="wpEnabled && wpUrl" class="app-wallpaper" :src="wpUrl" autoplay muted loop playsinline></video>
+  <video v-if="wpEnabled && wpUrl" :key="wpUrl" class="app-wallpaper" :src="wpUrl" autoplay muted loop playsinline preload="auto"></video>
   <div class="app-shell" :class="{ 'side-collapsed': !state.sidebarOpen, 'no-player': !state.playerbarOpen, 'wallpaper-on': wpEnabled && wpUrl }">
     <SideBar />
     <TopBar />
     <main class="app-main">
       <router-view v-slot="{ Component }">
         <Transition name="view" mode="out-in">
-          <component :is="Component" :key="state.view" />
+          <KeepAlive>
+            <component :is="Component" />
+          </KeepAlive>
         </Transition>
       </router-view>
     </main>
     <PlayerBar v-if="state.playerbarOpen" />
-    <div class="toast-wrap" v-if="state.toast && state.toast.msg">
+    <div class="toast-wrap" v-if="state.toast && state.toast.msg" role="status" aria-live="polite">
       <div class="toast" :class="state.toast.type">{{ state.toast.msg }}</div>
     </div>
 
     <!-- 全局系统功能浮层 -->
+    <div v-if="wallpaperPromptOpen" class="overlay" role="dialog" aria-modal="true" :aria-label="t('发现动态壁纸')" @click.self="dismissWallpaperPrompt">
+      <div class="overlay-card wp-prompt">
+        <div class="wp-prompt-ic"><Icon name="wallpaper" :size="30" /></div>
+        <b class="wp-prompt-title">{{ t('发现动态壁纸') }}</b>
+        <p class="wp-prompt-desc">{{ t('首次使用：是否从 GitHub 下载一张壁纸？下载后可在顶栏按钮切换，需要更多可再次从壁纸库选择或自行导入。') }}</p>
+        <div class="wp-prompt-actions">
+          <button class="btn primary" @click="goDownloadWallpaper">{{ t('去下载壁纸') }}</button>
+          <button class="btn ghost" @click="dismissWallpaperPrompt">{{ t('暂不') }}</button>
+        </div>
+      </div>
+    </div>
+
     <SettingsPanel v-if="state.ui.settingsOpen" />
     <ThemeLibrary v-if="state.ui.themesOpen" />
     <WallpaperGallery v-if="state.ui.wallpaperOpen" />

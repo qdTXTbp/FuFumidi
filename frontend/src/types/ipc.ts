@@ -202,6 +202,7 @@ export interface WallpaperItem {
   name: string;
   video: string;
   thumb?: string;
+  local?: boolean;
 }
 
 export interface WallpaperListResult {
@@ -351,6 +352,9 @@ export interface FuBridge {
     defaults(): Promise<{ ok: boolean; files: string[] }>;
     list(): Promise<WallpaperListResult>;
     download(url: string, name: string): Promise<WallpaperDownloadResult>;
+    addLocal(path: string): Promise<WallpaperDownloadResult>;
+    onAddLocalProgress(cb: (p: { progress: number; path?: string }) => void): () => void;
+    removeLocal(name: string): Promise<{ ok: boolean; error?: string }>;
   };
 
   // optional rust core

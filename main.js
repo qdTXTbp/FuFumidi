@@ -79,7 +79,7 @@ if (!gotLock) {
     DbService = createDbService({ app, path, fs });
     DbService.registerDbIpc({ ipcMain });
     registerSettingsIpc({ ipcMain, readSettings, writeSettings, db: DbService });
-    registerWallpaperIpc({ ipcMain, app, fs, net });
+    registerWallpaperIpc({ ipcMain, app, fs, net, runEngineInline, parsePyJson });
     const RustService = createRustService({ app, path, fs });
     RustService.registerRustIpc({ ipcMain });
     registerPluginsIpc();
