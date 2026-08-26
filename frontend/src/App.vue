@@ -18,9 +18,20 @@ const ViewLyrics = defineAsyncComponent(() => import('./views/ViewLyrics.vue'));
 const ViewConvert = defineAsyncComponent(() => import('./views/ViewConvert.vue'));
 const ViewTranscribe = defineAsyncComponent(() => import('./views/ViewTranscribe.vue'));
 const ViewPlaceholder = defineAsyncComponent(() => import('./views/ViewPlaceholder.vue'));
-import { state, MIGRATED_VIEWS, startTickLoop, stopTickLoop, restoreSongs, togglePlay, seekRatio, setTempo, toggleLoop, toggleMetro } from './store.js';
+import { useAppStore } from './stores/app';
 import { setLang } from './core/i18n.js';
 import { applyTheme, loadTheme } from './core/theme.js';
+
+const app = useAppStore();
+const state = app;
+const startTickLoop = () => app.startTickLoop();
+const stopTickLoop = () => app.stopTickLoop();
+const restoreSongs = () => app.restoreSongs();
+const togglePlay = () => app.togglePlay();
+const seekRatio = (r) => app.seekRatio(r);
+const setTempo = (v) => app.setTempo(v);
+const toggleLoop = () => app.toggleLoop();
+const toggleMetro = () => app.toggleMetro();
 
 const bridge = window.fuBridge;
 
