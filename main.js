@@ -46,6 +46,7 @@ const { registerUpdateIpc } = require('./main/update');
 const { registerScoreIpc } = require('./main/score');
 const { createPluginService } = require('./main/plugins');
 const { registerTaskQueueIpc } = require('./main/task-queue');
+const { registerVideoIpc } = require('./main/video');
 
 const APP_ID = 'com.fufumidi.app';
 app.setAppUserModelId(APP_ID);
@@ -67,6 +68,7 @@ if (!gotLock) {
     configureSession();
     registerIpc();
     registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, pluginHost });
+    registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, parsePyJson });
     registerPluginsIpc();
     registerGpuIpc();
     createWindow();
@@ -794,44 +796,6 @@ function registerIpc() {
         onError: (e) => resolve({ ok: false, error: String(e) }),
       });
     });
-  });
-  // 视频导出：接收渲染器录制的 WebM（可视化 + 可选离线渲染的 WAV 音频）→ 内置 ffmpeg 合成 MP4
-  ipcMain.handle('video:transcode', async (evt, opts) => {
-    try {
-      if (!opts || !opts.data) return { ok: false, error: 'empty' };
-      const win = BrowserWindow.fromWebContents(evt.sender);
-      const save = await dialog.showSaveDialog({
-        title: '导出视频 MP4',
-        defaultPath: path.join(app.getPath('downloads'), 'FuFumidi-video.mp4'),
-        filters: [{ name: 'MP4 视频', extensions: ['mp4'] }],
-      });
-      if (save.canceled || !save.filePath) return { ok: false, canceled: true };
-      const tmpDir = path.join(app.getPath('temp'), 'fufumidi-video');
-      fs.mkdirSync(tmpDir, { recursive: true });
-      const webm = path.join(tmpDir, Date.now() + '.webm');
-      fs.writeFileSync(webm, Buffer.from(opts.data));
-      let wav = null;
-      if (opts.audio && opts.audio.byteLength) {
-        wav = path.join(tmpDir, Date.now() + '.wav');
-        fs.writeFileSync(wav, Buffer.from(opts.audio));
-      }
-      const out = save.filePath;
-      const args = ['-y', '-hide_banner', '-loglevel', 'error', '-i', webm];
-      if (wav) args.push('-i', wav, '-map', '0:v:0', '-map', '1:a:0');
-      args.push('-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '-movflags', '+faststart', out);
-      const code =
-        'import json, subprocess\n' +
-        'import imageio_ffmpeg\n' +
-        'ff = imageio_ffmpeg.get_ffmpeg_exe()\n' +
-        'r = subprocess.run([ff] + ' + JSON.stringify(args) +
-        ', capture_output=True)\n' +
-        "print(json.dumps({'ok': r.returncode == 0, 'err': (r.stderr or b'').decode('utf-8', 'replace')[-300:]}))";
-      const rr = await runEngineInline(code);
-      try { fs.unlinkSync(webm); if (wav) fs.unlinkSync(wav); } catch (e) {}
-      const d = parsePyJson(rr.out);
-      if (d && d.ok) return { ok: true, path: out };
-      return { ok: false, error: (d && d.err) || (rr.out || 'ffmpeg failed').slice(-300) };
-    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
   // 歌单“导入文件夹”：递归列出目录下的 MIDI 文件（上限 2000 / 8 层，避免误选整盘卡死）
   ipcMain.handle('dir:listMidiFiles', async (_e, dir) => {
