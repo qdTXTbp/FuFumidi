@@ -132,6 +132,7 @@ export const useAppStore = defineStore('app', {
       settingsOpen: false,
       settingsTab: 'appearance',
       themesOpen: false,
+      wallpaperOpen: false,
       guideOpen: false,
       paletteOpen: false,
     },

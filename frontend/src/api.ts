@@ -28,4 +28,7 @@ export type {
   RustInvokeResult,
   DbStatusResult,
   DbSongItem,
+  WallpaperItem,
+  WallpaperListResult,
+  WallpaperDownloadResult,
 } from './types/ipc';

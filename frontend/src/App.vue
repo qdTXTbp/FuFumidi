@@ -6,6 +6,7 @@ import TopBar from './components/TopBar.vue';
 import PlayerBar from './components/PlayerBar.vue';
 import SettingsPanel from './components/SettingsPanel.vue';
 import ThemeLibrary from './components/ThemeLibrary.vue';
+import WallpaperGallery from './components/WallpaperGallery.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import GuideOverlay from './components/GuideOverlay.vue';
 import { useAppStore, VIEWS } from './stores/app';
@@ -144,6 +145,7 @@ onBeforeUnmount(() => {
     <!-- 全局系统功能浮层 -->
     <SettingsPanel v-if="state.ui.settingsOpen" />
     <ThemeLibrary v-if="state.ui.themesOpen" />
+    <WallpaperGallery v-if="state.ui.wallpaperOpen" />
     <CommandPalette v-if="state.ui.paletteOpen" />
     <GuideOverlay v-if="state.ui.guideOpen" />
   </div>

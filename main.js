@@ -45,6 +45,7 @@ const { registerSystemIpc } = require('./main/system-ipc');
 const { registerGpuIpc } = require('./main/gpu-ipc');
 const { createRustService } = require('./main/rust');
 const { createDbService } = require('./main/db');
+const { registerWallpaperIpc } = require('./main/wallpaper');
 const { createWindow, configureSession, openFileFromArgv, openPath } = require('./main/window');
 const { pyLit, parsePyJson } = require('./main/py-util');
 
@@ -78,6 +79,7 @@ if (!gotLock) {
     ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, demucsModelFile, sha256File });
     DbService = createDbService({ app, path, fs });
     DbService.registerDbIpc({ ipcMain });
+    registerWallpaperIpc({ ipcMain, app, fs, net });
     const RustService = createRustService({ app, path, fs });
     RustService.registerRustIpc({ ipcMain });
     registerPluginsIpc();

@@ -383,6 +383,20 @@ export const I18N_MAP = {
   '请使用桌面版选择文件夹': 'Use the desktop app to pick a folder',
   '已收藏 ': 'Favorited ',
   '已取消收藏 ': 'Unfavorited ',
+
+  /* ---- 壁纸库 ---- */
+  '壁纸库': 'Wallpaper gallery',
+  '从 GitHub 下载壁纸，点击缩略图即可下载并应用；每次下载一张，需要更多可再次进入。': 'Download wallpapers from GitHub; click a thumbnail to download and apply. One per visit.',
+  '壁纸库为空': 'Wallpaper gallery is empty',
+  '获取壁纸列表失败': 'Failed to fetch wallpaper list',
+  '正在下载壁纸…': 'Downloading wallpaper…',
+  '下载失败：': 'Download failed: ',
+  '壁纸已下载并应用': 'Wallpaper downloaded and applied',
+  '已导入本地壁纸': 'Local wallpaper imported',
+  '导入本地视频': 'Import local video',
+  '缩略图来自 GitHub Media 仓库': 'Thumbnails from GitHub Media repo',
+  '视频动态壁纸': 'Video wallpaper',
+  '正在加载壁纸列表…': 'Loading wallpaper list…',
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */

@@ -106,6 +106,12 @@ contextBridge.exposeInMainWorld('fuBridge', {
     onLog: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('plugins:log', w); return () => ipcRenderer.removeListener('plugins:log', w); },
     onScript: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('plugins:script', w); return () => ipcRenderer.removeListener('plugins:script', w); },
   },
+  // 动态壁纸
+  wallpaper: {
+    defaults: () => ipcRenderer.invoke('wallpaper:defaults'),
+    list: () => ipcRenderer.invoke('wallpaper:list'),
+    download: (url, name) => ipcRenderer.invoke('wallpaper:download', url, name),
+  },
   // 可选 Rust 核心
   rustStatus: () => ipcRenderer.invoke('rust:status'),
   rustInvoke: (cmd, args) => ipcRenderer.invoke('rust:invoke', cmd, args),

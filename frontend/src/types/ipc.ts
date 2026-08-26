@@ -178,6 +178,7 @@ export interface Settings {
   guide_done?: boolean;
   advanced_mode?: boolean;
   custom_wallpaper?: string;
+  wallpaper_enabled?: boolean;
   watch_dir?: string;
   watch_enabled?: boolean;
   file_assoc?: boolean;
@@ -195,6 +196,25 @@ export interface SoundFontItem {
   name?: string;
   path?: string;
   size?: number;
+}
+
+export interface WallpaperItem {
+  name: string;
+  video: string;
+  thumb?: string;
+}
+
+export interface WallpaperListResult {
+  ok: boolean;
+  list?: WallpaperItem[];
+  error?: string;
+}
+
+export interface WallpaperDownloadResult {
+  ok: boolean;
+  path?: string;
+  name?: string;
+  error?: string;
 }
 
 export interface RustStatusResult {
@@ -324,6 +344,13 @@ export interface FuBridge {
     onUi(cb: (p: any) => void): () => void;
     onLog(cb: (p: any) => void): () => void;
     onScript(cb: (p: any) => void): () => void;
+  };
+
+  // dynamic wallpaper
+  wallpaper: {
+    defaults(): Promise<{ ok: boolean; files: string[] }>;
+    list(): Promise<WallpaperListResult>;
+    download(url: string, name: string): Promise<WallpaperDownloadResult>;
   };
 
   // optional rust core

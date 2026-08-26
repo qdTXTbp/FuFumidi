@@ -79,6 +79,10 @@ async function onImage(e) {
         <button class="btn sm" @click="fileInput && fileInput.click()">📁 {{ t('选择图片生成主题') }}</button>
         <input ref="fileInput" type="file" accept="image/*" hidden @change="onImage" />
       </div>
+      <div class="thm-custom" style="margin-top:10px">
+        <span>{{ t('视频动态壁纸') }}</span>
+        <button class="btn sm" @click="state.ui.wallpaperOpen = true; state.ui.themesOpen = false">🎬 {{ t('壁纸库') }}</button>
+      </div>
     </div>
   </div>
 </template>
