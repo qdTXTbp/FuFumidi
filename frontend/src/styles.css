@@ -105,6 +105,7 @@ body {
   transition: grid-template-columns 0.25s ease;
 }
 .app-shell.side-collapsed { grid-template-columns: 0 1fr; }
+.app-shell.no-player { grid-template-rows: var(--topbar-h) 1fr 0; }
 
 .app-main {
   grid-area: main;

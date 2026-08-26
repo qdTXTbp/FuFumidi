@@ -22,6 +22,7 @@ export const MIGRATED_VIEWS = ['home', 'play', 'analyze', 'viz', 'score', 'lyric
 export const state = reactive({
   view: 'play',
   sidebarOpen: true,
+  playerbarOpen: true,
 
   // 歌单
   songs: [],

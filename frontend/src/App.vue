@@ -106,7 +106,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'side-collapsed': !state.sidebarOpen }">
+  <div class="app-shell" :class="{ 'side-collapsed': !state.sidebarOpen, 'no-player': !state.playerbarOpen }">
     <SideBar />
     <TopBar />
     <main class="app-main">
@@ -123,7 +123,7 @@ onBeforeUnmount(() => {
         <ViewPlaceholder v-else :view-id="state.view" :key="state.view" />
       </Transition>
     </main>
-    <PlayerBar />
+    <PlayerBar v-if="state.playerbarOpen" />
     <div class="toast-wrap" v-if="state.toast">
       <div class="toast" :class="state.toast.type">{{ state.toast.msg }}</div>
     </div>
