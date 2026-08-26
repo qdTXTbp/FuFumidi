@@ -11,11 +11,7 @@ declare module '*.png' {
   export default src;
 }
 
-interface FuBridge {
-  [key: string]: any;
-}
-
 interface Window {
-  fuBridge?: FuBridge;
+  fuBridge?: import('./types/ipc').FuBridge;
   ABCJS?: any;
 }
