@@ -82,9 +82,25 @@ async function loadVerovio() {
   if (window.verovio && window.verovio.toolkit) return true;
   if (verovioLoading) return verovioLoading;
   verovioLoading = new Promise((resolve, reject) => {
+    // Emscripten Module 全局污染会破坏 Verovio 的 Toolkit 初始化
+    try { window.Module = undefined; } catch (e) {}
     const sc = document.createElement('script');
     sc.src = './vendor/verovio-toolkit-wasm.js';
-    sc.onload = () => resolve(true);
+    sc.onload = () => {
+      const start = Date.now();
+      const wait = () => {
+        try {
+          const v = window.verovio;
+          if (v && v.toolkit && v.module && typeof v.module.cwrap === 'function') {
+            const ctor = v.module.cwrap('vrvToolkit_constructor', 'number', []);
+            if (typeof ctor === 'function') { resolve(true); return; }
+          }
+        } catch (e) {}
+        if (Date.now() - start > 15000) { reject(new Error('Verovio 组件初始化超时')); return; }
+        setTimeout(wait, 80);
+      };
+      wait();
+    };
     sc.onerror = () => reject(new Error('Verovio 组件加载失败'));
     document.head.appendChild(sc);
   });

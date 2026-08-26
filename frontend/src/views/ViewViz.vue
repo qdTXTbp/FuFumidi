@@ -189,8 +189,8 @@ function drawRoll(ctx2d, c, u, syn, song, player) {
   const grid = cssVar('--hairline', 'rgba(10,10,10,0.10)');
   const gridStrong = cssVar('--border-strong', 'rgba(10,10,10,0.18)');
   const text = cssVar('--ink', '#0a0a0a');
-  const soft = cssVar('--surface-soft', '#f2f3f5');
-  const hair2 = cssVar('--hairline', '#e2e4e8');
+  const soft = '#f2f3f5';       // 琴键保持标准浅色，不随主题变色
+  const hair2 = '#e2e4e8';
 
   // 时间源（秒）
   let d = 0, curTempo = (song && song.initialBpm) || 120, curSig = { num: 4 };
@@ -273,7 +273,7 @@ function drawRoll(ctx2d, c, u, syn, song, player) {
     else ctx2d.fillStyle = gr;
     ctx2d.beginPath(); ctx2d.roundRect(tt, wN, aa, x, [0, 0, 4, 4]); ctx2d.fill(); ctx2d.shadowBlur = 0;
     ctx2d.beginPath(); ctx2d.moveTo(tt + aa, wN); ctx2d.lineTo(tt + aa, wN + x - 4);
-    ctx2d.strokeStyle = grid; ctx2d.stroke();
+    ctx2d.strokeStyle = 'rgba(10,10,10,0.12)'; ctx2d.stroke();
     if (l % 12 === 0) { ctx2d.fillStyle = text; ctx2d.font = '10px system-ui, sans-serif'; ctx2d.fillText('C' + (l / 12 - 1), tt + 4, u - 5); }
   }
   for (let e = 0; e < 51; e++) {

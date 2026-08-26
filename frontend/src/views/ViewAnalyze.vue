@@ -284,6 +284,7 @@ onBeforeUnmount(() => {
 .az-card h4 .az-zoom { margin-left: auto; display: flex; align-items: center; gap: 6px; font-weight: 500; }
 .az-card h4 .az-zoom-txt { font-size: 11px; min-width: 40px; text-align: center; }
 .chart-wrap { height: 140px; }
+.chart-wrap canvas { width: 100%; height: 100%; display: block; }
 .az-txt { font-size: 12.5px; color: var(--slate); line-height: 1.8; min-height: 40px; }
 .chord-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chord-chips .chip { display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-full); background: var(--surface); font-size: 12px; color: var(--ink); cursor: pointer; }
