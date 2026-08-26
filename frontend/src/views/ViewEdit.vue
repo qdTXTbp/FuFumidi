@@ -1299,9 +1299,9 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .edit-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; padding: 16px 22px 0; }
-.ed-toolbar { padding: 8px 12px; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-bottom: 8px; }
-.et-group { display: flex; align-items: center; gap: 4px; }
-.et-btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; font-size: 12px; color: var(--slate); cursor: pointer; }
+.ed-toolbar { padding: 10px 14px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 10px; border-radius: 14px; }
+.et-group { display: flex; align-items: center; gap: 5px; }
+.et-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 26px; padding: 5px 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; font-size: 12px; line-height: 1.2; white-space: nowrap; color: var(--slate); cursor: pointer; transition: background .13s, color .13s, border-color .13s; }
 .et-btn:hover { background: var(--surface-soft); color: var(--ink); }
 .et-btn.active { background: var(--btn-bg); border-color: var(--btn-bg); color: var(--btn-fg); }
 .et-btn.danger { color: var(--error); }
@@ -1333,7 +1333,7 @@ onBeforeUnmount(() => {
 .ed-list-table td .num-input { width: 70px; }
 .drum-canvas { width: 100%; display: block; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; cursor: crosshair; touch-action: none; }
 .ed-adv { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; margin-bottom: 8px; }
-.adv-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.adv-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .adv-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .adv-form-grid label { font-size: 12px; color: var(--slate); display: flex; flex-direction: column; gap: 5px; }
 .adv-form-grid .span2 { grid-column: 1 / -1; }

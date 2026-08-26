@@ -74,6 +74,8 @@
 }
 
 * { box-sizing: border-box; }
+button, input, select, textarea { font-family: inherit; }
+button { -webkit-tap-highlight-color: transparent; }
 html, body, #app { height: 100%; margin: 0; }
 body {
   font-family: var(--font);
@@ -230,8 +232,11 @@ body {
   background: var(--canvas);
   color: var(--ink);
   padding: 9px 18px;
+  min-height: 34px;
   border-radius: 999px;
   font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
   cursor: pointer;
   transition: all 0.15s;
   user-select: none;
@@ -250,11 +255,12 @@ body {
 .btn.ghost:hover { background: var(--surface-soft); color: var(--ink); }
 .btn.danger { color: var(--error); border-color: rgba(212, 86, 86, 0.4); }
 .btn.danger:hover { background: rgba(212, 86, 86, 0.08); border-color: var(--error); }
-.btn.sm { padding: 5px 12px; font-size: 12px; }
+.btn.sm { padding: 5px 12px; font-size: 12px; min-height: 28px; }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .icon-btn {
   width: 34px; height: 34px;
+  flex: none;
   display: grid; place-items: center;
   border: none;
   background: transparent;
@@ -499,17 +505,24 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .mix-track .mt-name small { color: var(--stone); font-size: 11px; }
 .mt-ctl { display: flex; align-items: center; gap: 4px; flex: none; }
 .chip-btn {
-  min-width: 30px; height: 26px;
+  min-width: 30px; min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   border: 1px solid var(--hairline);
   background: var(--canvas);
   color: var(--steel);
   border-radius: 999px;
   font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
   cursor: pointer;
   transition: all 0.13s;
   padding: 0 10px;
   font-weight: 600;
 }
+.chip-btn:disabled { opacity: .4; cursor: not-allowed; }
 .chip-btn:hover { color: var(--ink); border-color: var(--border-strong); }
 .chip-btn.on-solo { background: rgba(245, 158, 11, 0.12); color: var(--amber); border-color: rgba(245, 158, 11, 0.4); }
 .chip-btn.on-mute { background: rgba(212, 86, 86, 0.1); color: var(--error); border-color: rgba(212, 86, 86, 0.4); }
