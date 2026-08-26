@@ -60,7 +60,7 @@ fn stat_smf(bytes: &[u8]) -> Result<MidiStats, String> {
             while pos < end {
                 tick += read_vlq(bytes, &mut pos);
                 if pos >= end { break; }
-                let mut status = bytes[pos];
+                let status = bytes[pos];
                 if status & 0x80 == 0 {
                     // running status not handled fully; skip byte
                     pos += 1;

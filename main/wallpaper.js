@@ -1,10 +1,20 @@
-﻿// ============================================================
+// ============================================================
 // 主进程动态壁纸服务：桌面视频发现、GitHub 壁纸库列取与下载
 // ============================================================
 'use strict';
 
 const path = require('path');
 const fs = require('fs');
+
+async function fetchThumbData(net, url) {
+  try {
+    const res = await net.fetch(url, { headers: { 'User-Agent': 'FuFumidi' } });
+    if (!res.ok || !res.body) return '';
+    const buf = Buffer.from(await res.arrayBuffer());
+    const mime = /\.png$/i.test(url) ? 'image/png' : 'image/jpeg';
+    return 'data:' + mime + ';base64,' + buf.toString('base64');
+  } catch (e) { return ''; }
+}
 
 function registerWallpaperIpc({ ipcMain, app, fs: f, net }) {
   // 动态壁纸：发现桌面上的视频文件（mp4/webm/mov），供渲染进程作为壁纸源
@@ -37,15 +47,14 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net }) {
       const items = await res.json();
       const vids = items.filter(x => x.type === 'file' && /\.(mp4|webm|mov)$/i.test(x.name));
       const thumbs = items.filter(x => x.type === 'file' && /\.(jpg|jpeg|png)$/i.test(x.name));
-      const list = vids.map(f => {
+      const list = [];
+      for (const f of vids) {
         const base = f.name.replace(/\.(mp4|webm|mov)$/i, '');
         const th = thumbs.find(t => t.name.replace(/\.(jpg|jpeg|png)$/i, '') === base);
-        return {
-          name: f.name,
-          video: `${WALLPAPER_RAW}/${encodeURIComponent(f.name)}`,
-          thumb: th ? `${WALLPAPER_RAW}/${encodeURIComponent(th.name)}` : '',
-        };
-      });
+        let thumb = th ? `${WALLPAPER_RAW}/${encodeURIComponent(th.name)}` : '';
+        if (thumb) thumb = await fetchThumbData(net, thumb);
+        list.push({ name: f.name, video: `${WALLPAPER_RAW}/${encodeURIComponent(f.name)}`, thumb });
+      }
       return { ok: true, list };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
