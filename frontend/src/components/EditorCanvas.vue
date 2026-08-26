@@ -428,14 +428,17 @@ const ccLast = ref(null);   // {tick, val}
 function drawCC(g, W, H2, ccNum) {
   const s = song();
   g.clearRect(0, 0, W, H2);
-  g.fillStyle = 'rgba(10,10,10,0.03)'; g.fillRect(0, 0, W, H2);
+  g.fillStyle = cssVar('--surface-soft', 'rgba(10,10,10,0.03)'); g.fillRect(0, 0, W, H2);
   const name = CC_NAMES[ccNum] || ('CC' + ccNum);
-  g.fillStyle = 'rgba(10,10,10,0.5)'; g.font = '9.5px monospace'; g.textAlign = 'left'; g.textBaseline = 'middle';
+  const hair = cssVar('--hairline', 'rgba(10,10,10,0.08)');
+  const stone = cssVar('--stone', 'rgba(10,10,10,0.35)');
+  const slate = cssVar('--slate', 'rgba(10,10,10,0.5)');
+  g.fillStyle = slate; g.font = '9.5px monospace'; g.textAlign = 'left'; g.textBaseline = 'middle';
   g.fillText(name + ' ' + ccNum, 6, 10);
   for (const v of [0, 64, 127]) {
     const y = H2 - 4 - (v / 127) * (H2 - 12);
-    g.strokeStyle = 'rgba(10,10,10,0.08)'; g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
-    g.fillStyle = 'rgba(10,10,10,0.35)'; g.fillText(String(v), 6, y);
+    g.strokeStyle = hair; g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
+    g.fillStyle = stone; g.fillText(String(v), 6, y);
   }
   const tr = curTrack();
   const ccs = (tr && (tr.ccs || []).filter(c => c.cc === ccNum).sort((a, b) => a.tick - b.tick)) || [];

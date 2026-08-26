@@ -738,8 +738,15 @@ onBeforeUnmount(() => {
 .lg-item { display: inline-flex; align-items: center; gap: 6px; }
 .lg-item .dot { width: 7px; height: 7px; border-radius: 50%; }
 
-/* abcjs 五线谱（deep：SVG 由引擎注入） */
-:deep(#abcScore) { color: var(--ink); }
+/* Verovio 五线谱：强制使用主题文字色，避免深色主题下黑音符融入背景 */
+:deep(#abcScore) { color: var(--ink) !important; background: transparent; }
+:deep(#abcScore svg) { color: var(--ink) !important; }
+:deep(#abcScore svg svg) { color: var(--ink) !important; }
+:deep(#abcScore svg *) {
+  stroke: currentColor !important;
+  fill: currentColor !important;
+}
+:deep(#abcScore .fu-play *) { fill: #ffb224 !important; stroke: #ffb224 !important; }
 :deep(#abcScore .fu-play .abcjs-notehead) { stroke: #6b3200 !important; stroke-width: 2 !important; }
 :deep(#abcScore .fu-play .abcjs-stem) { stroke: #ffbe3c !important; stroke-width: 2.2 !important; }
 :deep(#abcScore .abcjs-note) { cursor: pointer; }

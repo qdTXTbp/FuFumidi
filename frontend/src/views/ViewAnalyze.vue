@@ -10,6 +10,13 @@ const densityZoom = ref(1);
 const data = ref(null);
 let resizeHandler = null;
 
+function cssVar(name, fb) {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fb;
+  } catch (e) { return fb; }
+}
+
 function collect() {
   const song = currentSong.value && currentSong.value.song;
   data.value = song ? analyzeSong(song) : null;
@@ -58,7 +65,7 @@ function draw() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     const total = song.totalSec || 1;
-    ctx.fillStyle = 'rgba(10,10,10,0.03)'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = cssVar('--surface-soft', 'rgba(10,10,10,0.03)'); ctx.fillRect(0, 0, w, h);
     const audio = song.audio;
     if (audio && audio.peaks && audio.peaks.length) {
       ctx.fillStyle = 'rgba(20,86,240,0.28)';
@@ -74,7 +81,7 @@ function draw() {
       const x = Math.round(song.baseSec(n.start) / total * w);
       ctx.fillRect(x, 4, 1, h - 8);
     }
-    ctx.fillStyle = 'rgba(10,10,10,0.55)'; ctx.font = '10px system-ui'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillStyle = cssVar('--slate', 'rgba(10,10,10,0.55)'); ctx.font = '10px system-ui'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
     ctx.fillText('蓝：音频波形 · 橙：MIDI 起音', 4, 2);
   }
 
@@ -88,7 +95,7 @@ function draw() {
     const ctx = velCv.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = 'rgba(10,10,10,0.03)'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = cssVar('--surface-soft', 'rgba(10,10,10,0.03)'); ctx.fillRect(0, 0, w, h);
     const seg = a.velCurve.length;
     ctx.strokeStyle = 'rgba(20,86,240,0.85)'; ctx.lineWidth = 1.5; ctx.beginPath();
     for (let i = 0; i < seg; i++) {

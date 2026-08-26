@@ -1,6 +1,13 @@
-// 音乐分析辅助（从 legacy FuFumidi.html 抽取，行为一致，图表适配 MiniMax 浅色主题）
+// 音乐分析辅助（从 legacy FuFumidi.html 抽取，行为一致，图表适配主题）
 import { t } from './i18n.js';
 import { KEY_NAME, noteName, clamp } from './util.js';
+
+function cssVar(name, fb) {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fb;
+  } catch (e) { return fb; }
+}
 
 export function detectKey(notes) {
   const h = new Array(12).fill(0);
@@ -71,8 +78,8 @@ export function barChart(cv, values, opts = {}) {
   const n = values.length;
   const pad = 6;
   const max = opts.max || Math.max(1, ...values);
-  ctx.fillStyle = 'rgba(10,10,10,0.03)'; ctx.fillRect(0, 0, w, h);
-  ctx.strokeStyle = 'rgba(10,10,10,0.12)'; ctx.beginPath(); ctx.moveTo(0, h - pad); ctx.lineTo(w, h - pad); ctx.stroke();
+  ctx.fillStyle = cssVar('--surface-soft', 'rgba(10,10,10,0.03)'); ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = cssVar('--hairline', 'rgba(10,10,10,0.12)'); ctx.beginPath(); ctx.moveTo(0, h - pad); ctx.lineTo(w, h - pad); ctx.stroke();
   const bw = (w - pad * 2) / n;
   for (let i = 0; i < n; i++) {
     const v = values[i];
@@ -81,7 +88,7 @@ export function barChart(cv, values, opts = {}) {
     ctx.fillRect(pad + i * bw + bw * 0.15, h - pad - bh, bw * 0.7, bh);
   }
   if (opts.labels) {
-    ctx.fillStyle = 'rgba(10,10,10,0.45)'; ctx.font = '9px Consolas, monospace'; ctx.textAlign = 'center';
+    ctx.fillStyle = cssVar('--stone', 'rgba(10,10,10,0.45)'); ctx.font = '9px Consolas, monospace'; ctx.textAlign = 'center';
     const step = Math.ceil(n / opts.labels.length);
     opts.labels.forEach((lb, li) => {
       const i = Math.min(n - 1, li * step);
@@ -101,9 +108,9 @@ export function hBarChart(cv, items) {
     const bw = Math.max(2, it.val / max * (w - 90));
     ctx.fillStyle = it.color;
     ctx.fillRect(78, y + 3, bw, Math.max(4, rh - 10));
-    ctx.fillStyle = '#4a4a4a'; ctx.font = '10px "Microsoft YaHei", system-ui'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = cssVar('--slate', '#4a4a4a'); ctx.font = '10px "Microsoft YaHei", system-ui'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.fillText(it.label, 4, y + rh / 2);
-    ctx.fillStyle = '#8a8a8a'; ctx.textAlign = 'right';
+    ctx.fillStyle = cssVar('--stone', '#8a8a8a'); ctx.textAlign = 'right';
     ctx.fillText(String(it.val), w - 4, y + rh / 2);
   }
 }

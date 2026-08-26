@@ -112,7 +112,7 @@ function drawScope(cv, syn) {
     i ? ctx2d.lineTo(x, y) : ctx2d.moveTo(x, y);
   }
   ctx2d.stroke();
-  ctx2d.strokeStyle = 'rgba(10,10,10,0.08)';
+  ctx2d.strokeStyle = cssVar('--hairline', 'rgba(10,10,10,0.08)');
   ctx2d.beginPath(); ctx2d.moveTo(0, h / 2); ctx2d.lineTo(w, h / 2); ctx2d.stroke();
 }
 

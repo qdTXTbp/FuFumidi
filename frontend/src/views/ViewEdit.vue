@@ -10,6 +10,13 @@ import { noteName, clamp } from '../core/util.js';
 
 const bridge = window.fuBridge;
 
+function cssVar(name, fb) {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fb;
+  } catch (e) { return fb; }
+}
+
 const tool = ref('pencil');
 const snapRatio = ref(0.0625);
 const trackIndex = ref(0);
@@ -107,14 +114,14 @@ function drawVelCurve() {
   const g = cv.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, W, H);
-  g.fillStyle = 'rgba(10,10,10,0.04)'; g.fillRect(0, 0, W, H);
+  g.fillStyle = cssVar('--surface-soft', 'rgba(10,10,10,0.04)'); g.fillRect(0, 0, W, H);
   // 力度参考网格
-  g.strokeStyle = 'rgba(10,10,10,0.08)'; g.lineWidth = 1;
+  g.strokeStyle = cssVar('--hairline', 'rgba(10,10,10,0.08)'); g.lineWidth = 1;
   for (let v = 0; v <= 127; v += 32) {
     const y = H - v / 127 * (H - 10) - 5;
     g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
   }
-  g.fillStyle = 'rgba(10,10,10,0.45)'; g.font = '9px monospace';
+  g.fillStyle = cssVar('--stone', 'rgba(10,10,10,0.45)'); g.font = '9px monospace';
   g.fillText('127', 3, 10); g.fillText('1', 3, H - 5);
   // 曲线
   const n = vcVals.value.length;
@@ -239,20 +246,22 @@ function drawDrum() {
   const g = cv.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, w, h);
-  g.fillStyle = 'rgba(10,10,10,0.03)'; g.fillRect(0, 0, w, h);
+  g.fillStyle = cssVar('--surface-soft', 'rgba(10,10,10,0.03)'); g.fillRect(0, 0, w, h);
   const rows = DRUM_PITCHES.length;
   const tr = s.tracks[drumTrack.value]; if (!tr) return;
   const tpb = s.tpb || 480, bars = Math.min(8, s.bars || 4), beats = bars * 4;
   const rowH = h / rows, colW = w / beats;
+  const hair = cssVar('--hairline', 'rgba(10,10,10,0.07)');
+  const border2 = cssVar('--border-strong', 'rgba(10,10,10,0.16)');
   for (let i = 0; i < rows; i++) {
     const y = i * rowH;
-    g.strokeStyle = 'rgba(10,10,10,0.07)'; g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke();
-    g.fillStyle = 'rgba(10,10,10,0.5)'; g.font = '9px monospace'; g.textAlign = 'left'; g.textBaseline = 'middle';
+    g.strokeStyle = hair; g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke();
+    g.fillStyle = cssVar('--slate', 'rgba(10,10,10,0.5)'); g.font = '9px monospace'; g.textAlign = 'left'; g.textBaseline = 'middle';
     g.fillText(String(DRUM_NAMES[DRUM_PITCHES[i]] || DRUM_PITCHES[i]).slice(0, 14), 4, y + rowH / 2);
   }
   for (let b = 0; b < beats; b++) {
     const x = b * colW;
-    g.strokeStyle = b % 4 === 0 ? 'rgba(10,10,10,0.16)' : 'rgba(10,10,10,0.05)';
+    g.strokeStyle = b % 4 === 0 ? border2 : hair;
     g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke();
   }
   g.fillStyle = '#ff5530';
@@ -807,7 +816,7 @@ function drawMini() {
   const g = cv.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, W, H);
-  g.fillStyle = 'rgba(10,10,10,0.04)'; g.fillRect(0, 0, W, H);
+  g.fillStyle = cssVar('--surface-soft', 'rgba(10,10,10,0.04)'); g.fillRect(0, 0, W, H);
   const C = ['#ff5530', '#ea5ec1', '#1456f0', '#a855f7', '#3daeff', '#1ba673', '#3b82f6', '#f59e0b', '#d45656', '#17437d'];
   const scale = W / s.totalTicks;
   for (const tr of s.tracks) {

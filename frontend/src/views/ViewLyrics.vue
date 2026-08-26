@@ -53,6 +53,13 @@ const replaceOpen = ref(false);
 const repFrom = ref('');
 const repTo = ref('');
 
+function cssVar(name, fb) {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fb;
+  } catch (e) { return fb; }
+}
+
 /* ---------------- 卡拉OK高亮 ---------------- */
 const curIdx = ref(-1);
 function updateHighlight() {
@@ -254,10 +261,10 @@ function drawTimeline() {
   const ctx = cv.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = 'rgba(10,10,10,0.03)'; ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = cssVar('--surface-soft', 'rgba(10,10,10,0.03)'); ctx.fillRect(0, 0, w, h);
   const total = s.totalTicks || 1, tpb = s.tpb || 480;
   // 小节线
-  ctx.strokeStyle = 'rgba(10,10,10,0.06)'; ctx.lineWidth = 1;
+  ctx.strokeStyle = cssVar('--hairline', 'rgba(10,10,10,0.06)'); ctx.lineWidth = 1;
   for (let tk = 0; tk <= total; tk += tpb) {
     const x = Math.round(tk / total * w);
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
@@ -291,11 +298,11 @@ function drawTimeline() {
     const p = getPlayer();
     if (p && p.song) {
       const x = Math.round(p.currentTick() / total * w);
-      ctx.fillStyle = 'rgba(10,10,10,0.75)'; ctx.fillRect(x - 0.5, 0, 1.5, h);
+      ctx.fillStyle = cssVar('--ink', 'rgba(10,10,10,0.75)'); ctx.fillRect(x - 0.5, 0, 1.5, h);
     }
   }
   // 图例
-  ctx.fillStyle = 'rgba(10,10,10,0.55)'; ctx.font = '10px system-ui'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillStyle = cssVar('--slate', 'rgba(10,10,10,0.55)'); ctx.font = '10px system-ui'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   ctx.fillText(t('蓝：音符 · 橙：歌词 · 竖线：播放位置'), 6, h - 16);
 }
 
