@@ -71,12 +71,13 @@ function goWelcomeNext() {
 }
 
 /* ---------------- 交互式实操引擎 ---------------- */
+let targetTimer = null;
 function cleanupIg() {
+  if (targetTimer) { clearTimeout(targetTimer); targetTimer = null; }
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   if (scrollHandler) { window.removeEventListener('scroll', scrollHandler, true); window.removeEventListener('resize', scrollHandler); scrollHandler = null; }
   if (actionOff) { actionOff(); actionOff = null; }
-  igEl.value = null;
-  if (igEl.value) return;
+  if (igEl.value) { try { igEl.value.classList.remove('ig-target'); } catch (e) {} igEl.value = null; }
 }
 
 function updateHighlight() {
@@ -97,35 +98,49 @@ function startIg() {
   nextTick(renderIg);
 }
 
+function attachIg(el, st) {
+  igEl.value = el;
+  el.classList.add('ig-target');
+  scrollHandler = () => updateHighlight();
+  window.addEventListener('scroll', scrollHandler, true);
+  window.addEventListener('resize', scrollHandler);
+  try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' }); } catch (e) {}
+  // 等平滑滚动稳定后再计算高亮位置
+  setTimeout(updateHighlight, 250);
+  updateHighlight();
+  if (st.action) {
+    const handler = () => {
+      if (st.validate ? st.validate(el) : true) igNext();
+    };
+    el.addEventListener('click', handler);
+    actionOff = () => el.removeEventListener('click', handler);
+  } else if (st.waitFor) {
+    pollTimer = setInterval(() => { if (st.waitFor()) igNext(); }, 300);
+  }
+}
+
 function renderIg() {
   cleanupIg();
   const st = igStep.value;
   if (!st) { closeGuide(); return; }
   if (st.view && state.view !== st.view) {
     setView(st.view);
-    nextTick(() => setTimeout(renderIg, 120));
+    targetTimer = setTimeout(renderIg, 80);
     return;
   }
-  nextTick(() => {
+  const started = Date.now();
+  const tryFind = () => {
     const el = typeof st.selector === 'string' ? document.querySelector(st.selector) : null;
-    if (!el) { console.warn('[guide] target missing:', st.selector); igNext(); return; }
-    igEl.value = el;
-    el.classList.add('ig-target');
-    updateHighlight();
-    scrollHandler = () => updateHighlight();
-    window.addEventListener('scroll', scrollHandler, true);
-    window.addEventListener('resize', scrollHandler);
-    if (st.manual) return;
-    if (st.action) {
-      actionOff = () => el.removeEventListener('click', handler);
-      const handler = () => {
-        if (st.validate ? st.validate(el) : true) igNext();
-      };
-      el.addEventListener('click', handler);
-    } else if (st.waitFor) {
-      pollTimer = setInterval(() => { if (st.waitFor()) igNext(); }, 300);
+    if (el) { attachIg(el, st); return; }
+    // 懒加载视图/组件尚未挂载时等待，避免误跳过
+    if (Date.now() - started < 3000) {
+      targetTimer = setTimeout(tryFind, 100);
+      return;
     }
-  });
+    console.warn('[guide] target missing:', st.selector);
+    igNext();
+  };
+  targetTimer = setTimeout(tryFind, 60);
 }
 
 function igNext() {
