@@ -204,6 +204,19 @@ export interface RustStatusResult {
   version?: string;
 }
 
+export interface DbStatusResult {
+  ok?: boolean;
+  mode: 'none' | 'json' | 'sqlite' | string;
+  dbPath?: string;
+  jsonPath?: string;
+}
+
+export interface DbSongItem {
+  id: string;
+  name?: string;
+  [key: string]: any;
+}
+
 export interface RustInvokeResult {
   ok: boolean;
   version?: string;
@@ -316,6 +329,16 @@ export interface FuBridge {
   // optional rust core
   rustStatus(): Promise<RustStatusResult>;
   rustInvoke(cmd: string, args?: string[]): Promise<RustInvokeResult>;
+
+  // sqlite persistence service
+  dbStatus(): Promise<DbStatusResult>;
+  dbKvGet(key: string): Promise<any>;
+  dbKvSet(key: string, value: any): Promise<boolean>;
+  dbSongsList(): Promise<DbSongItem[]>;
+  dbSongsPut(item: DbSongItem): Promise<boolean>;
+  dbSongsDelete(id: string): Promise<boolean>;
+  dbPlaylistsList(): Promise<any[]>;
+  dbPlaylistsPut(item: any): Promise<boolean>;
 
   // app events
   notify(ev: string, payload: any): void;

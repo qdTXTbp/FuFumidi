@@ -17,6 +17,8 @@
     "pack:full": "node build.js full",
     "pack:base": "node build.js base",
     "dist:win": "electron-builder --win nsis --x64"
+  },
+  "dependencies": {
+    "sql.js": "^1.13.0"
   }
 }
-

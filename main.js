@@ -44,6 +44,7 @@ const { registerDiagnosticsIpc } = require('./main/diagnostics');
 const { registerSystemIpc } = require('./main/system-ipc');
 const { registerGpuIpc } = require('./main/gpu-ipc');
 const { createRustService } = require('./main/rust');
+const { createDbService } = require('./main/db');
 const { createWindow, configureSession, openFileFromArgv, openPath } = require('./main/window');
 const { pyLit, parsePyJson } = require('./main/py-util');
 
@@ -75,6 +76,8 @@ if (!gotLock) {
     registerSettingsIpc({ ipcMain, readSettings, writeSettings });
     registerDiagnosticsIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine });
     ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, demucsModelFile, sha256File });
+    DbService = createDbService({ app, path, fs });
+    DbService.registerDbIpc({ ipcMain });
     const RustService = createRustService({ app, path, fs });
     RustService.registerRustIpc({ ipcMain });
     registerPluginsIpc();
@@ -227,11 +230,13 @@ async function resetBaseToCpu() {
 
 // ---------- 模型/目录监听服务（在 whenReady 时注册 IPC） ----------
 let ModelsService = null;
+let DbService = null;
 
 // ---------- 退出时清理引擎子进程 ----------
 app.on('before-quit', () => {
   killAll();
   if (ModelsService) ModelsService.closeAll();
+  if (DbService) DbService.close();
 });
 
 // ---------- 完整性检验（settings / presets / 插件清单 误删检测与修复） ----------

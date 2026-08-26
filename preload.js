@@ -109,6 +109,15 @@ contextBridge.exposeInMainWorld('fuBridge', {
   // 可选 Rust 核心
   rustStatus: () => ipcRenderer.invoke('rust:status'),
   rustInvoke: (cmd, args) => ipcRenderer.invoke('rust:invoke', cmd, args),
+  // SQLite persistence service
+  dbStatus: () => ipcRenderer.invoke('db:status'),
+  dbKvGet: (key) => ipcRenderer.invoke('db:kv:get', key),
+  dbKvSet: (key, value) => ipcRenderer.invoke('db:kv:set', key, value),
+  dbSongsList: () => ipcRenderer.invoke('db:songs:list'),
+  dbSongsPut: (item) => ipcRenderer.invoke('db:songs:put', item),
+  dbSongsDelete: (id) => ipcRenderer.invoke('db:songs:delete', id),
+  dbPlaylistsList: () => ipcRenderer.invoke('db:playlists:list'),
+  dbPlaylistsPut: (item) => ipcRenderer.invoke('db:playlists:put', item),
   // 应用事件通知（song-loaded / view-changed 等 → 插件事件钩子）
   notify: (ev, payload) => ipcRenderer.send('app:event', ev, payload),
 });

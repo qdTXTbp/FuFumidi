@@ -26,4 +26,6 @@ export type {
   Settings,
   RustStatusResult,
   RustInvokeResult,
+  DbStatusResult,
+  DbSongItem,
 } from './types/ipc';
