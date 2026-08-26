@@ -84,10 +84,31 @@ function batchDeleteLibrary() {
 }
 
 const dragId = ref(null);
-function dragStart(s) { dragId.value = s.id; }
-function dropOn(target) {
-  if (dragId.value && target && dragId.value !== target.id) moveActivePlaylistSong(dragId.value, target.id, true);
+const dragOverId = ref(null);
+function dragStart(s) {
+  dragId.value = s.id;
+  dragOverId.value = s.id;
+}
+function dragOverRow(e, s) {
+  dragOverId.value = s.id;
+  const r = e.currentTarget.getBoundingClientRect();
+  const before = (e.clientY - r.top) < r.height / 2;
+  const row = e.currentTarget;
+  row.classList.toggle('drag-before', before);
+  row.classList.toggle('drag-after', !before);
+}
+function dragLeaveRow(e) {
+  e.currentTarget.classList.remove('drag-before', 'drag-after');
+}
+function dropOn(e, target) {
+  const r = e.currentTarget.getBoundingClientRect();
+  const before = (e.clientY - r.top) < r.height / 2;
+  if (dragId.value && target && dragId.value !== target.id) {
+    moveActivePlaylistSong(dragId.value, target.id, before);
+  }
   dragId.value = null;
+  dragOverId.value = null;
+  document.querySelectorAll('.song-item').forEach(x => x.classList.remove('drag-before', 'drag-after'));
 }
 
 function baseName(p) { return String(p).split(/[\\/]/).pop() || '未命名.mid'; }
@@ -224,12 +245,13 @@ function onDrop(e) {
       <div class="song-item"
            v-for="(s, i) in visibleSongs"
            :key="s.id"
-           :class="{ active: s.id === state.currentId }"
+           :class="{ active: s.id === state.currentId, dragging: dragId === s.id }"
            :draggable="!batchOn"
            @dragstart="dragStart(s)"
-           @dragover.prevent
-           @drop.prevent="dropOn(s)"
-           @dragend="dragId = null"
+           @dragover.prevent="dragOverRow($event, s)"
+           @dragleave="dragLeaveRow($event)"
+           @drop.prevent="dropOn($event, s)"
+           @dragend="dragId = null; document.querySelectorAll('.song-item').forEach(x => x.classList.remove('drag-before','drag-after'))"
            @click="selectSongOrBatch(s)">
         <input v-if="batchOn" type="checkbox" class="song-check" :checked="isSel(s.id)" @click.stop="toggleSel(s.id)" />
         <span class="si-num" v-if="!batchOn && (!state.playing || s.id !== state.currentId)">{{ i + 1 }}</span>
@@ -265,6 +287,9 @@ function onDrop(e) {
 <style scoped>
 .si-fav { color: var(--stone); font-size: 13px; }
 .si-fav.on { color: var(--amber); }
+.song-item.dragging { opacity: .45; }
+.song-item.drag-before { box-shadow: 0 -2px 0 0 var(--accent) !important; }
+.song-item.drag-after { box-shadow: 0 2px 0 0 var(--accent) !important; }
 .pl-toolbar { display: flex; align-items: center; gap: 5px; margin-bottom: 5px; }
 .pl-batch { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 5px 8px; margin-bottom: 5px; border: 1px dashed var(--hairline); border-radius: 10px; background: var(--surface-soft); }
 .song-check { width: 14px; height: 14px; accent-color: var(--ink); }
