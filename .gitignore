@@ -20,3 +20,7 @@ __pycache__/
 *.pyo
 .DS_Store
 rust-core/target/
+# 本地大体积资源（不在 git 仓库中，构建前按 README 准备）
+resources/
+models/
+frontend/public/wallpapers/
