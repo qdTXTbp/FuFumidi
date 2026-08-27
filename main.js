@@ -75,7 +75,7 @@ if (!gotLock) {
     registerPresetsIpc({ ipcMain, runEngineInline, parsePyJson, pyLit });
     registerDialogsIpc({ ipcMain, dialog, path, fs, app });
     registerDiagnosticsIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine });
-    ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, demucsModelFile, sha256File });
+    ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, demucsModelFile, sha256File, readSettings });
     DbService = createDbService({ app, path, fs });
     DbService.registerDbIpc({ ipcMain });
     registerSettingsIpc({ ipcMain, readSettings, writeSettings, db: DbService });

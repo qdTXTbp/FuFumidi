@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // 主进程 GPU 增强包 IPC：状态、安装、卸载、下载与自动检测
 // ============================================================
 'use strict';
@@ -206,32 +206,63 @@ function registerGpuIpc({
     }
   });
 
-  ipcMain.handle('gpu:installAuto', async () => {
+  ipcMain.handle('gpu:installAuto', async (evt) => {
+    const win = BrowserWindow.fromWebContents(evt.sender);
+    const send = (p) => { if (win && !win.isDestroyed()) win.webContents.send('gpu:progress', p); };
     try {
       const py = resolvePython();
       const code = 'from engine_gpu import detect; import json; print(\'###RESULT \' + json.dumps(detect()))';
       const rr = await runEngineInline(code);
-      const d = parsePyJson(rr.out);
-      const vendor = (d && d.vendor) || 'unknown';
-      const kind = vendor === 'nvidia' ? 'cuda' : 'directml';
+      const d = parsePyJson(rr.out) || {};
+      const gpuDetect = {
+        vendor: d.vendor || null,
+        name: d.name || '',
+        blackwell: !!(d.blackwell),
+        needCu128: !!(d.need_cu128),
+        available: !!d.available,
+        backend: d.backend || '',
+      };
+      // 已安装增强包 → 直接提示
+      const installed = installedGpuKinds();
+      if (installed.length) {
+        return { ok: true, already: true, kind: installed[0], kinds: installed, gpu: gpuDetect };
+      }
+      if (!d.vendor) {
+        return { ok: false, error: '未检测到可用的独立显卡（NVIDIA / AMD / Intel），无法安装 GPU 加速；可在下方「本地导入 ZIP」手动安装增强包', gpu: gpuDetect };
+      }
+      const kind = d.vendor === 'nvidia' ? 'cuda' : 'directml';
       const req = kind === 'cuda' ? 'requirements-gpu-cuda.txt' : 'requirements-gpu-directml.txt';
       const reqPath = path.join(engineDir(), req);
-      if (!fs.existsSync(reqPath)) return { ok: false, error: 'GPU requirement file missing: ' + reqPath };
+      if (!fs.existsSync(reqPath)) return { ok: false, error: 'GPU requirement file missing: ' + reqPath, kind, gpu: gpuDetect };
       const targetSite = gpuEnhanceSite(kind);
       await stopEngineWorker();
       fs.mkdirSync(targetSite, { recursive: true });
+      send({ percent: 1, text: '检测到 ' + (d.name || d.vendor) + '，开始安装 ' + (kind === 'cuda' ? 'CUDA（cu128）' : 'DirectML') + ' 加速…', installing: true });
       const result = await new Promise((res) => {
         const c = spawn(py, ['-m', 'pip', 'install', '--target', targetSite, '-r', reqPath, '--no-input', '--disable-pip-version-check'], { env: engineEnv() });
         let out = '', err = '';
-        c.stdout.on('data', d => out += d);
-        c.stderr.on('data', d => err += d);
-        c.on('close', code => res({ code, out: out.slice(-600), err: err.slice(-600) }));
-        c.on('error', e => res({ code: -1, err: String(e) }));
+        const push = (s) => {
+          out += s;
+          const lines = s.split(/\r?\n/);
+          for (const l of lines) {
+            const t = l.trim();
+            if (!t) continue;
+            if (/^(Collecting|Downloading|Installing|Successfully|Requirement already|Using cached)/.test(t)) {
+              send({ percent: -1, text: t.slice(0, 120), installing: true });
+            }
+          }
+        };
+        c.stdout.on('data', (x) => push(x.toString('utf8')));
+        c.stderr.on('data', (x) => { err += x.toString('utf8'); push(x.toString('utf8')); });
+        c.on('close', (code) => res({ code, out: out.slice(-800), err: err.slice(-800) }));
+        c.on('error', (e) => res({ code: -1, err: String(e) }));
       });
       if (result.code === 0) {
         writeGpuManifest(kind, { source: 'auto' });
+        send({ percent: 100, done: true });
+        return { ok: true, kind, gpu: gpuDetect, out: result.out, err: result.err };
       }
-      return { ok: result.code === 0, kind, out: result.out, err: result.err };
+      return { ok: false, kind, error: (result.err || result.out || '安装失败').slice(-300), out: result.out, err: result.err, gpu: gpuDetect };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 }

@@ -183,6 +183,15 @@ async function importConfig() {
 const models = ref([]);
 const modelChannel = ref('huggingface');
 const modelProg = reactive({});
+const hfToken = ref('');
+const hfTokenVisible = ref(false);
+async function loadHfToken() {
+  try { const s = await settingsStore.load() || {}; hfToken.value = s.hf_token || ''; } catch (e) {}
+}
+function saveHfToken() {
+  settingsStore.save({ hf_token: hfToken.value.trim() }).catch(() => {});
+  toast(t('HF Token 已保存'), 'ok');
+}
 async function refreshModels() {
   if (bridge && bridge.modelList) { try { models.value = await bridge.modelList() || []; } catch (e) { models.value = []; } }
 }
@@ -228,6 +237,7 @@ onMounted(() => {
   refreshModels();
   loadRust();
   loadGpu();
+  loadHfToken();
   if (bridge && bridge.onModelProgress) {
     bridge.onModelProgress((p) => {
       if (p && p.id) {
@@ -305,6 +315,20 @@ onMounted(() => {
     <!-- ============ 模型文件 ============ -->
     <div class="card res-sec">
       <div class="res-sec-head"><Icon name="folder" :size="15" /> {{ t('模型文件') }}</div>
+      <div class="field-row top">
+        <div>
+          <div class="fr-label">HuggingFace Token</div>
+          <div class="fr-hint">{{ t('下载需授权的模型（MuScriptor 等）时必填') }}</div>
+        </div>
+        <div class="fr-ctl col">
+          <div style="display:flex;gap:6px;width:100%">
+            <input :type="hfTokenVisible ? 'text' : 'password'" v-model="hfToken" class="ov-input mono" style="flex:1;min-width:200px" placeholder="hf_xxxx（huggingface.co/settings/tokens 创建）" @change="saveHfToken" />
+            <button class="btn sm" @click="hfTokenVisible = !hfTokenVisible">{{ hfTokenVisible ? t('隐藏') : t('显示') }}</button>
+            <button class="btn sm" @click="saveHfToken">{{ t('保存') }}</button>
+          </div>
+          <div class="fr-hint" style="margin-top:4px">{{ t('使用前需先在 huggingface.co 对应模型页接受许可协议，否则返回 401') }}</div>
+        </div>
+      </div>
       <div class="field-row">
         <div>
           <div class="fr-label">{{ t('下载渠道') }}</div>
@@ -328,6 +352,7 @@ onMounted(() => {
               <span class="mi-name">{{ m.name }}</span>
               <span class="mi-note">{{ m.note }}</span>
               <span class="mi-size">{{ fmtSize(m.size) }}</span>
+              <span v-if="m.gated" class="mi-gated" :title="t('需在 HuggingFace 接受协议并填写 Token')">{{ t('需授权') }}</span>
               <span :class="m.exists ? 'mi-ok' : 'mi-missing'">{{ m.exists ? t('已就绪') : t('缺失') }}</span>
               <template v-if="m.downloadable && !m.exists">
                 <button class="btn sm" @click="downloadModel(m)" :disabled="modelProg[m.id] && modelProg[m.id].active" style="margin-left:auto;flex:none">

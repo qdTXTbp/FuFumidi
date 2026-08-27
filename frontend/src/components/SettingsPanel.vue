@@ -1,6 +1,6 @@
 <script setup>
 // 设置面板（全局系统功能）：外观 / 引擎 / 功能 / 快捷键 / 插件 + 完整性检验警告条
-import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
@@ -24,6 +24,21 @@ const TABS = [
 ];
 const tab = ref('appearance');
 
+/* ---------------- 设置导航胶囊指示器 ---------------- */
+const tabsRef = ref(null);
+const ind = reactive({ x: 0, w: 0 });
+function moveInd() {
+  nextTick(() => {
+    const el = tabsRef.value;
+    if (!el) return;
+    const btn = el.querySelector('.ov-tab.active');
+    if (!btn) return;
+    ind.x = btn.offsetLeft;
+    ind.w = btn.offsetWidth;
+  });
+}
+watch(tab, moveInd);
+
 /* ---------------- 表单 ---------------- */
 const form = reactive({
   theme: 'fufu', accent: '', mode: 'light',
@@ -43,19 +58,6 @@ const upd = reactive({
 });
 
 /* ---------------- GPU 加速 ---------------- */
-const gpu = reactive({
-  kind: 'directml',
-  mirror: 'ghfast',
-  packages: [],
-  version: -1,
-  status: '',
-  progress: null,
-  progressText: '',
-  installed: '未安装',
-  installedKind: null,
-  busy: false,
-  listBusy: false,
-});
 
 const isCustomTheme = computed(() => !THEMES.some(x => x.id === form.theme));
 const themeOpts = computed(() => {
@@ -198,118 +200,130 @@ function initUpdate() {
 }
 
 /* ---------------- GPU 加速 ---------------- */
-const gpuFiltered = computed(() => gpu.packages.filter(p => p.kind === gpu.kind));
-const selectedGpuPkg = computed(() => gpuFiltered.value[gpu.version] || null);
+const gpu = reactive({
+  detect: null,        // {vendor,name,blackwell,needCu128,available,backend}
+  installed: '检测中…',
+  installedKind: null,
+  busy: false,
+  status: '',
+  progress: null,
+  progressText: '',
+});
+const gpuInstalled = computed(() => !!gpu.installedKind);
+const gpuCard = computed(() => {
+  const d = gpu.detect;
+  if (!d) return t('检测中…');
+  if (d.name) return d.name;
+  if (d.vendor) return d.vendor.toUpperCase();
+  return t('未检测到独立显卡');
+});
+const gpuRecommended = computed(() => {
+  const d = gpu.detect;
+  if (!d || !d.vendor) return t('不可用（CPU）');
+  if (d.vendor === 'nvidia') return 'CUDA' + (d.needCu128 ? '（cu128 · RTX 50 系）' : '');
+  if (d.vendor === 'amd' || d.vendor === 'intel') return 'DirectML';
+  return t('不可用');
+});
 
-function gpuMirrorUrl(u) {
-  if (gpu.mirror === 'github') return u;
-  return 'https://' + gpu.mirror + '.top/https://github.com/' + String(u).replace(/^https:\/\/github.com\//, '');
-}
 function gpuSetProgress(p, txt) {
   gpu.progress = p;
   gpu.progressText = txt || '';
 }
 async function gpuRefreshInstalled() {
-  if (!bridge || !bridge.gpuStatus) return;
+  if (!bridge || !bridge.gpuStatus) { gpu.installed = t('未知'); return; }
   try {
     const r = await bridge.gpuStatus();
-    const has = r && r.ok && (r.directml || r.cuda);
     if (r && r.ok) {
-      if (r.directml) gpu.installed = 'DirectML 已安装';
+      if (r.cuda && r.directml) gpu.installed = 'CUDA + DirectML 已安装';
       else if (r.cuda) gpu.installed = 'CUDA 已安装';
-      else gpu.installed = '未安装';
-      gpu.installedKind = r.cuda ? 'cuda' : r.directml ? 'directml' : null;
-    } else {
-      gpu.installed = '未安装';
-      gpu.installedKind = null;
-    }
-  } catch (e) {
-    gpu.installed = '未知';
-    gpu.installedKind = null;
-  }
+      else if (r.directml) gpu.installed = 'DirectML 已安装';
+      else gpu.installed = t('未安装');
+      gpu.installedKind = r.cuda ? 'cuda' : (r.directml ? 'directml' : null);
+    } else { gpu.installed = t('未安装'); gpu.installedKind = null; }
+  } catch (e) { gpu.installed = t('未知'); gpu.installedKind = null; }
 }
-async function gpuRefresh() {
-  if (!bridge || !bridge.gpuListPackages) return;
-  gpu.listBusy = true;
-  gpu.status = '刷新中…';
+async function gpuLoadDetect() {
+  if (!bridge || !bridge.probe) { gpu.detect = null; return; }
   try {
-    const r = await bridge.gpuListPackages();
-    if (!r || !r.ok) { gpu.status = (r && r.error) || '获取失败'; return; }
-    gpu.packages = r.packages || [];
-    gpu.version = gpuFiltered.value.length ? 0 : -1;
-    gpu.status = '';
-    await gpuRefreshInstalled();
-  } catch (e) {
-    gpu.status = '获取失败：' + ((e && e.message) || e);
-  } finally {
-    gpu.listBusy = false;
-  }
+    const r = await bridge.probe();
+    const g = (r && r.gpu) || {};
+    gpu.detect = { vendor: g.vendor || null, name: g.name || '', blackwell: !!g.blackwell, needCu128: !!g.need_cu128, available: !!g.available, backend: g.backend || '' };
+  } catch (e) { gpu.detect = null; }
 }
-async function gpuDownload() {
-  if (!bridge || !bridge.gpuDownloadPackage) { gpu.status = '当前环境不支持 GPU 下载'; return; }
-  const pkg = selectedGpuPkg.value;
-  if (!pkg) { gpu.status = '请选择可用的增强包'; return; }
+async function gpuAutoInstall() {
+  if (!bridge || !bridge.gpuInstallAuto) { gpu.status = t('当前环境不支持安装 GPU 加速'); return; }
   gpu.busy = true;
-  gpu.status = '下载中…';
-  gpuSetProgress(1, '开始下载…');
-  const un = bridge.onGpuProgress ? bridge.onGpuProgress(p => {
+  gpu.status = '';
+  gpuSetProgress(0, t('正在检测显卡…'));
+  const un = bridge.onGpuProgress ? bridge.onGpuProgress((p) => {
     if (!p) return;
-    gpuSetProgress(p.percent || 0, (p.percent || 0) + '%');
-    if (p.done) gpuSetProgress(100, '安装完成');
+    if (p.done) gpuSetProgress(100, t('安装完成'));
+    else if (p.text) gpuSetProgress(gpu.progress || 2, p.text);
+    else if (p.percent != null && p.percent >= 0) gpuSetProgress(p.percent, (p.percent) + '%');
   }) : null;
   try {
-    const files = pkg.files ? pkg.files.map(f => ({ name: f.name, url: gpuMirrorUrl(f.url), size: f.size })) : undefined;
-    const r = await bridge.gpuDownloadPackage({ url: gpuMirrorUrl(pkg.url), name: pkg.name, kind: pkg.kind, files });
-    gpu.status = (r && r.ok) ? '已安装到隔离环境（不影响内置功能）' : ('安装失败：' + ((r && r.error) || '未知'));
+    const r = await bridge.gpuInstallAuto();
+    if (r && r.ok) {
+      gpu.status = r.already ? t('GPU 加速已安装（无需重复安装）') : t('GPU 加速安装完成');
+      if (r.gpu) gpu.detect = r.gpu;
+      if (r.already) gpuSetProgress(100, '');
+    } else {
+      gpu.status = t('安装失败：') + ((r && r.error) || t('未知'));
+      if (r && r.gpu) gpu.detect = r.gpu;
+      gpuSetProgress(null, '');
+    }
     await gpuRefreshInstalled();
   } catch (e) {
-    gpu.status = '下载失败：' + ((e && e.message) || e);
+    gpu.status = t('安装失败：') + String((e && e.message) || e);
+    gpuSetProgress(null, '');
   } finally {
     if (un) un();
     gpu.busy = false;
-    gpuSetProgress(null, '');
   }
 }
 async function gpuImportLocal() {
-  if (!bridge || !bridge.pickZip || !bridge.gpuImportLocal) { gpu.status = '当前环境不支持本地导入'; return; }
+  if (!bridge || !bridge.pickZip || !bridge.gpuImportLocal) { gpu.status = t('当前环境不支持本地导入'); return; }
   gpu.busy = true;
   try {
     const p = await bridge.pickZip();
     if (!p) return;
-    gpu.status = '正在导入本地包…';
-    gpuSetProgress(1, '正在导入…');
-    const r = await bridge.gpuImportLocal(p, gpu.kind);
-    gpu.status = (r && r.ok) ? '本地包已导入隔离环境' : ('导入失败：' + ((r && r.error) || '未知'));
+    gpu.status = t('正在导入本地包…');
+    gpuSetProgress(1, t('正在导入…'));
+    const r = await bridge.gpuImportLocal(p);
+    gpu.status = (r && r.ok) ? t('本地包已导入隔离环境') : (t('导入失败：') + ((r && r.error) || t('未知')));
+    gpuSetProgress(null, '');
     await gpuRefreshInstalled();
+    await gpuLoadDetect();
   } catch (e) {
-    gpu.status = '导入失败：' + ((e && e.message) || e);
+    gpu.status = t('导入失败：') + String((e && e.message) || e);
+    gpuSetProgress(null, '');
   } finally {
     gpu.busy = false;
-    gpuSetProgress(null, '');
   }
 }
 async function gpuUninstall() {
-  if (!bridge || !bridge.gpuUninstall) { gpu.status = '当前环境不支持卸载'; return; }
+  if (!bridge || !bridge.gpuUninstall) { gpu.status = t('当前环境不支持卸载'); return; }
   const kind = gpu.installedKind || 'directml';
   gpu.busy = true;
-  gpu.status = '正在卸载…';
-  gpuSetProgress(10, '正在卸载…');
+  gpu.status = t('正在卸载…');
+  gpuSetProgress(10, t('正在卸载…'));
   try {
     const r = await bridge.gpuUninstall(kind);
-    gpu.status = (r && r.ok) ? '已卸载（不影响内置功能）' : ('卸载失败：' + ((r && r.error) || '未知'));
+    gpu.status = (r && r.ok) ? t('已卸载（不影响内置功能）') : (t('卸载失败：') + ((r && r.error) || t('未知')));
+    gpuSetProgress(null, '');
     await gpuRefreshInstalled();
   } catch (e) {
-    gpu.status = '卸载失败：' + ((e && e.message) || e);
+    gpu.status = t('卸载失败：') + String((e && e.message) || e);
+    gpuSetProgress(null, '');
   } finally {
     gpu.busy = false;
-    gpuSetProgress(null, '');
   }
 }
 function initGpu() {
-  if (!bridge || !bridge.gpuListPackages) return;
   if (gpu._init) return;
   gpu._init = true;
-  gpuRefresh();
+  gpuRefreshInstalled();
+  gpuLoadDetect();
 }
 
 /* ---------------- 功能 ---------------- */
@@ -425,6 +439,7 @@ watch(() => state.ui.settingsTab, v => {
 let offWatch = null, offPlgLog = null;
 onMounted(() => {
   load();
+  moveInd();
   if (bridge && bridge.onFolderWatch) offWatch = bridge.onFolderWatch(onFolderWatch);
   if (bridge && bridge.plugins && bridge.plugins.onLog) offPlgLog = bridge.plugins.onLog(onPluginLog);
 });
@@ -439,7 +454,8 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
         <span class="settings-title">{{ t('应用设置') }}</span>
       </div>
 
-      <div class="settings-tabs">
+      <div class="settings-tabs" ref="tabsRef">
+        <span class="settings-ind" :style="{ transform: `translateX(${ind.x}px)`, width: ind.w + 'px' }"></span>
         <button class="ov-tab" v-for="tb in TABS" :key="tb.id" :class="{ active: tab === tb.id }" @click="tab = tb.id">
           {{ t(tb.label) }}
         </button>
@@ -540,59 +556,28 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
 
         <!-- ============ GPU 加速 ============ -->
         <div v-else-if="tab === 'gpu'">
-          <p class="ov-note">{{ t('选择 GPU 增强包版本下载，或导入本地 ZIP 合并到工具。NVIDIA 建议 CUDA，其他显卡建议 DirectML。') }}</p>
-          <div class="field-row">
-            <div>
-              <div class="fr-label">{{ t('包类型') }}</div>
-              <div class="fr-hint">{{ t('NVIDIA 建议 CUDA，其他显卡建议 DirectML') }}</div>
+          <p class="ov-note">{{ t('一键自动检测显卡并安装对应的 GPU 加速（NVIDIA → CUDA，AMD/Intel → DirectML）。安装后转录与分离任务将明显提速。') }}</p>
+          <div class="gpu-panel">
+            <div class="gpu-detect">
+              <div class="gpu-row"><span class="gpu-k">{{ t('显卡') }}</span><span class="gpu-v">{{ gpuCard }}</span></div>
+              <div class="gpu-row"><span class="gpu-k">{{ t('推荐加速') }}</span><span class="gpu-v">{{ gpuRecommended }}</span></div>
+              <div class="gpu-row"><span class="gpu-k">{{ t('安装状态') }}</span><span class="gpu-v">{{ gpu.installed }}</span></div>
+              <div v-if="gpu.detect && gpu.detect.needCu128" class="gpu-warn">{{ t('检测到 RTX 50 系（Blackwell）显卡，将自动安装 CUDA 12.8（cu128）加速包') }}</div>
             </div>
-            <div class="fr-ctl">
-              <select v-model="gpu.kind" class="ov-input" style="min-width:180px" @change="gpu.version = gpuFiltered.length ? 0 : -1">
-                <option value="directml">DirectML</option>
-                <option value="cuda">CUDA</option>
-              </select>
+            <button class="btn primary gpu-install" @click="gpuAutoInstall" :disabled="gpu.busy">
+              {{ gpu.busy ? t('正在安装…') : (gpuInstalled ? t('GPU 加速已安装 · 点击重装/升级') : t('安装 GPU 加速')) }}
+            </button>
+            <div v-if="gpu.status" class="gpu-status">{{ gpu.status }}</div>
+            <div v-if="gpu.progress != null" class="gpu-prog">
+              <div style="height:8px;background:var(--surface-soft);border-radius:999px;overflow:hidden;border:1px solid var(--hairline)">
+                <div style="height:100%;width:0%;background:linear-gradient(90deg,#4f94e0,#8fc0f0);transition:width .2s" :style="{ width: Math.min(100, (gpu.progress || 0)) + '%' }"></div>
+              </div>
+              <div class="gpu-prog-text">{{ gpu.progressText }}</div>
             </div>
-          </div>
-          <div class="field-row">
-            <div>
-              <div class="fr-label">{{ t('版本') }}</div>
-              <div class="fr-hint">{{ t('点击刷新获取可用增强包') }}</div>
+            <div class="gpu-extra">
+              <button class="btn sm" @click="gpuImportLocal" :disabled="gpu.busy">{{ t('本地导入 ZIP') }}</button>
+              <button v-if="gpuInstalled" class="btn sm danger" @click="gpuUninstall" :disabled="gpu.busy">{{ t('卸载') }}</button>
             </div>
-            <div class="fr-ctl">
-              <select v-model.number="gpu.version" class="ov-input" style="min-width:220px" :disabled="!gpuFiltered.length">
-                <option v-for="(p, i) in gpuFiltered" :key="i" :value="i">{{ p.tag }} · {{ p.name }}</option>
-                <option v-if="!gpuFiltered.length" value="-1">{{ t('暂无可用增强包') }}</option>
-              </select>
-              <button class="btn sm" @click="gpuRefresh" :disabled="gpu.listBusy">{{ t('刷新') }}</button>
-            </div>
-          </div>
-          <div class="field-row">
-            <div>
-              <div class="fr-label">{{ t('下载源') }}</div>
-              <div class="fr-hint">{{ t('国内推荐 ghfast / ghproxy') }}</div>
-            </div>
-            <div class="fr-ctl">
-              <select v-model="gpu.mirror" class="ov-input" style="min-width:180px">
-                <option value="ghfast">ghfast</option>
-                <option value="ghproxy">ghproxy</option>
-                <option value="github">GitHub 官方</option>
-              </select>
-            </div>
-          </div>
-          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-            <button class="btn sm primary" @click="gpuDownload" :disabled="gpu.busy || !selectedGpuPkg">{{ t('下载安装') }}</button>
-            <button class="btn sm" @click="gpuImportLocal" :disabled="gpu.busy">{{ t('本地导入 ZIP') }}</button>
-            <span style="font-size:12px;color:var(--stone);align-self:center">{{ gpu.status }}</span>
-          </div>
-          <div v-if="gpu.progress != null" style="margin-top:10px">
-            <div style="height:8px;background:var(--surface-soft);border-radius:999px;overflow:hidden;border:1px solid var(--hairline)">
-              <div style="height:100%;width:0%;background:linear-gradient(90deg,#4f94e0,#8fc0f0);transition:width .2s" :style="{ width: (gpu.progress || 0) + '%' }"></div>
-            </div>
-            <div style="font-size:12px;color:var(--stone);margin-top:4px">{{ gpu.progressText }}</div>
-          </div>
-          <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--hairline);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            <span style="font-size:12px;color:var(--slate)">{{ t('已安装：') }}</span><b style="font-size:12px;color:var(--stone)">{{ gpu.installed }}</b>
-            <button v-if="gpu.installedKind" class="btn sm danger" @click="gpuUninstall" :disabled="gpu.busy">{{ t('卸载') }}</button>
           </div>
         </div>
 

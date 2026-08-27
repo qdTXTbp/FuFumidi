@@ -23,6 +23,7 @@ const DEFAULT_SETTINGS = {
   transcribe_params: {},
   plugins_enabled: [],
   lang: 'zh',
+  hf_token: '',   // HuggingFace 访问令牌（用于下载 gated 模型，如 MuScriptor 需授权）
 };
 
 function settingsPath() {

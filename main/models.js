@@ -3,7 +3,7 @@
 // ============================================================
 'use strict';
 
-function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, demucsModelFile, sha256File }) {
+function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, demucsModelFile, sha256File, readSettings }) {
   const _folderWatchers = new Map();
 
   // 内置模型注册表：本地模型清单 + 缺失模型官方源一键下载（带进度/取消）
@@ -22,35 +22,40 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       downloadable: true,
     },
     // 通用多乐器转录（Kyutai MuScriptor，默认不随 Release 分发，需到资源中心下载）
+    // 注意：MuScriptor 为 gated 模型（CC BY-NC 4.0），须先在 HuggingFace 接受协议，
+    // 并在资源中心填写 HF Token 后方可下载（否则 HF 返回 401）。
     muscriptor_small: {
       id: 'muscriptor_small',
       name: 'MuScriptor Small',
-      note: '多乐器转录 · 103M 参数 · 约 400 MB',
+      note: '多乐器转录 · 103M 参数 · 约 400 MB · 需 HF 授权',
       type: 'hf',
       repo: 'MuScriptor/muscriptor-small',
       dest: path.join('muscriptor', 'small'),
       minSize: 5e7,
       downloadable: true,
+      gated: true,
     },
     muscriptor_medium: {
       id: 'muscriptor_medium',
       name: 'MuScriptor Medium',
-      note: '多乐器转录 · 307M 参数（推荐）· 约 1.2 GB',
+      note: '多乐器转录 · 307M 参数（推荐）· 约 1.2 GB · 需 HF 授权',
       type: 'hf',
       repo: 'MuScriptor/muscriptor-medium',
       dest: path.join('muscriptor', 'medium'),
       minSize: 2e8,
       downloadable: true,
+      gated: true,
     },
     muscriptor_large: {
       id: 'muscriptor_large',
       name: 'MuScriptor Large',
-      note: '多乐器转录 · 1.4B 参数 · 约 2.8 GB',
+      note: '多乐器转录 · 1.4B 参数 · 约 2.8 GB · 需 HF 授权',
       type: 'hf',
       repo: 'MuScriptor/muscriptor-large',
       dest: path.join('muscriptor', 'large'),
       minSize: 9e8,
       downloadable: true,
+      gated: true,
     },
     // 钢琴转录（EleutherAI Aria-AMT）
     aria_amt: {
@@ -93,7 +98,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       const size = exists ? (() => { try { let s = 0; const walk = (p) => { const st = fs.statSync(p); if (st.isFile()) s += st.size; else for (const f of fs.readdirSync(p)) walk(path.join(p, f)); }; walk(dest); return s; } catch (e) { return 0; } })() : 0;
       items.push({
         id: m.id, name: m.name, path: dest, size, exists: exists && size >= m.minSize,
-        downloadable: true, note: m.note, type: m.type, repo: m.repo,
+        downloadable: true, note: m.note, type: m.type, repo: m.repo, gated: !!m.gated,
       });
     }
     return items;
@@ -137,13 +142,18 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     return { ok: true };
   });
   // HuggingFace 整仓下载（HF 官方 / hf-mirror 双渠道；MuScriptor / Aria-AMT）
-  async function downloadHfRepo(spec, channel, win, ctrl) {
+  async function downloadHfRepo(spec, channel, win, ctrl, token) {
     const host = HF_HOSTS[channel] || HF_HOSTS.huggingface;
     const destDir = path.join(modelsDir(), spec.dest);
     fs.mkdirSync(destDir, { recursive: true });
+    const auth = {};
+    if (token) auth.Authorization = 'Bearer ' + token;
+    const headers = { 'user-agent': 'FuFumidi', ...auth };
+    // gated 模型未带 Token 时直接给出明确指引，避免下载到一半才 401
+    if (spec.gated && !token) throw new Error('该模型需要 HuggingFace 授权：请先在 huggingface.co/' + spec.repo + ' 页面接受许可协议，并在上方填写 HF Token（huggingface.co/settings/tokens 创建）');
     const api = `https://${host}/api/models/${spec.repo}/tree/main?recursive=true`;
-    const res = await net.fetch(api, { headers: { 'user-agent': 'FuFumidi' }, signal: ctrl.signal });
-    if (!res.ok) throw new Error('HF API HTTP ' + res.status);
+    const res = await net.fetch(api, { headers, signal: ctrl.signal });
+    if (!res.ok) throw new Error('HF API HTTP ' + res.status + (res.status === 401 || res.status === 403 ? '（需授权：请检查 HF Token 是否有效且已接受模型协议）' : ''));
     const tree = await res.json();
     const files = (tree || []).filter(f => f.type === 'file' && !/^\./.test(path.basename(f.path)));
     if (!files.length) throw new Error('仓库文件列表为空');
@@ -154,8 +164,8 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       const out = path.join(destDir, rel);
       fs.mkdirSync(path.dirname(out), { recursive: true });
       const url = `https://${host}/${spec.repo}/resolve/main/${rel.split('/').map(encodeURIComponent).join('/')}`;
-      const r = await net.fetch(url, { headers: { 'user-agent': 'FuFumidi' }, signal: ctrl.signal });
-      if (!r.ok || !r.body) throw new Error('下载失败 HTTP ' + r.status + ' · ' + rel);
+      const r = await net.fetch(url, { headers, signal: ctrl.signal });
+      if (!r.ok || !r.body) throw new Error('下载失败 HTTP ' + r.status + ' · ' + rel + (r.status === 401 || r.status === 403 ? '（该模型需授权：请填写有效 HF Token 并先在 HF 页面接受协议）' : ''));
       const ws = fs.createWriteStream(out);
       const reader = r.body.getReader();
       for (;;) {
@@ -191,8 +201,9 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       }
       _modelCancels.delete(id); _modelPause.delete(id);
       const ctrl = new AbortController(); _modelAborts.set(id, ctrl);
+      const hfToken = (readSettings && readSettings().hf_token) || '';
       try {
-        return await downloadHfRepo(spec, channel || 'huggingface', win, ctrl);
+        return await downloadHfRepo(spec, channel || 'huggingface', win, ctrl, hfToken);
       } catch (e) {
         const msg = String((e && e.message) || e);
         if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, error: msg, canceled: _modelCancels.has(id), paused: _modelPause.has(id) });
