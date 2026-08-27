@@ -677,7 +677,7 @@ export const I18N_MAP = {
   '离线 · Vue 3': 'Offline · Vue 3',
 
   /* TopBar i18n */
-  'FuFumidi v3.0.0\n离线 MIDI 播放 / 编辑 / 转录 / 乐谱 / 分析工作站\n本地 Vue3 + Vite + TypeScript 重构版': 'FuFumidi v3.0.0\nOffline MIDI player / editor / transcription / score / analysis workstation\nLocal Vue3 + Vite + TypeScript refactor',
+  'FuFumidi v3.1.0\n离线 MIDI 播放 / 编辑 / 转录 / 乐谱 / 分析工作站\n本地 Vue3 + Vite + TypeScript 重构版': 'FuFumidi v3.1.0\nOffline MIDI player / editor / transcription / score / analysis workstation\nLocal Vue3 + Vite + TypeScript refactor',
   '折叠 / 展开侧边栏': 'Collapse / expand sidebar',
   '隐藏 / 显示底部播放栏': 'Hide / show bottom player bar',
   '更多': 'More',
