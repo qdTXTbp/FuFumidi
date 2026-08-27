@@ -27,6 +27,13 @@ const route = useRoute();
 
 const wpUrl = ref('');
 const wpEnabled = ref(false);
+const bgVideo = ref(null);
+// 动态壁纸无缝循环：原生 loop 在循环切换时有黑屏/卡顿，改为临近结尾提前 seek 到开头偏后位置（跳过首帧解码延迟与黑帧）
+function onBgTime() {
+  const v = bgVideo.value;
+  if (!v || !v.duration || !isFinite(v.duration)) return;
+  if (v.currentTime > v.duration - 0.4) v.currentTime = 0.35;
+}
 function wpFileUrl(p) {
   if (!p) return '';
   if (/^(https?:|file:|data:)/i.test(p)) return p;
@@ -171,7 +178,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <video v-if="wpEnabled && wpUrl" :key="wpUrl" class="app-wallpaper" :src="wpUrl" autoplay muted loop playsinline preload="auto"></video>
+  <video v-if="wpEnabled && wpUrl" :key="wpUrl" ref="bgVideo" class="app-wallpaper" :src="wpUrl" autoplay muted playsinline preload="auto" @timeupdate="onBgTime"></video>
   <div class="app-shell" :class="{ 'side-collapsed': !state.sidebarOpen, 'no-player': !state.playerbarOpen, 'wallpaper-on': wpEnabled && wpUrl }">
     <SideBar />
     <TopBar />
