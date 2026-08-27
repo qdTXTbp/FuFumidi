@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
   // 设置
   getSettings: () => ipcRenderer.invoke('settings:load'),
   saveSettings: (s) => ipcRenderer.invoke('settings:save', s),
+  // MIDI 文件关联（Windows 注册表覆盖 .mid/.midi 默认打开程序）
+  fileAssoc: (enabled) => ipcRenderer.invoke('settings:fileAssoc', !!enabled),
   // 完整性检验（误删检测 + 一键修复）
   checkIntegrity: () => ipcRenderer.invoke('integrity:check'),
   repairIntegrity: (ids) => ipcRenderer.invoke('integrity:repair', ids),
@@ -37,7 +39,6 @@ contextBridge.exposeInMainWorld('fuBridge', {
   pickImage: () => ipcRenderer.invoke('dialog:pickImage'),
   pickFile: (opts) => ipcRenderer.invoke('dialog:pickFile', opts),
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
-  pickSoundFont: null,   // 已移除外部 SF2/SF3 加载：使用内置音源列表 soundfonts.list()
   readSoundFont: (p) => ipcRenderer.invoke('file:readSoundFont', p),
   soundfonts: { list: () => ipcRenderer.invoke('soundfont:list') },
   pickMusicXML: () => ipcRenderer.invoke('dialog:pickMusicXML'),
@@ -70,7 +71,6 @@ contextBridge.exposeInMainWorld('fuBridge', {
   saveBinary: (opts) => ipcRenderer.invoke('file:saveBinary', opts),
   // 打开输出位置（资源管理器/访达定位文件或目录）
   openOutput: (p) => ipcRenderer.invoke('shell:openOutput', p),
-  openEditGuide: () => ipcRenderer.invoke('guide:openEdit'),
   // 转录参数预设
   presets: {
     list: () => ipcRenderer.invoke('presets:list'),
@@ -91,6 +91,12 @@ contextBridge.exposeInMainWorld('fuBridge', {
     onUi: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('plugins:ui', w); return () => ipcRenderer.removeListener('plugins:ui', w); },
     onLog: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('plugins:log', w); return () => ipcRenderer.removeListener('plugins:log', w); },
     onScript: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('plugins:script', w); return () => ipcRenderer.removeListener('plugins:script', w); },
+  },
+  // 动态壁纸：内置/桌面发现 + GitHub 壁纸库（列表/下载）
+  wallpaper: {
+    defaults: () => ipcRenderer.invoke('wallpaper:defaults'),
+    list: () => ipcRenderer.invoke('wallpaper:list'),
+    download: (url, name) => ipcRenderer.invoke('wallpaper:download', url, name),
   },
   // 应用事件通知（song-loaded / view-changed 等 → 插件事件钩子）
   notify: (ev, payload) => ipcRenderer.send('app:event', ev, payload),

@@ -17,15 +17,6 @@ function sha256File(filePath) {
     s.on('end', () => resolve(h.digest('hex')));
   });
 }
-function sha256File(filePath) {
-  return new Promise((resolve, reject) => {
-    const h = crypto.createHash('sha256');
-    const s = fs.createReadStream(filePath);
-    s.on('error', reject);
-    s.on('data', d => h.update(d));
-    s.on('end', () => resolve(h.digest('hex')));
-  });
-}
 const PluginHost = require('./plugin-host');
 const { createIntegrity } = require('./integrity');
 
@@ -132,8 +123,6 @@ function resolvePython() {
   if (b) return b;                                                            // 内置运行时其次
   if (process.env.FUFUMIDI_PYTHON && fs.existsSync(process.env.FUFUMIDI_PYTHON)) return process.env.FUFUMIDI_PYTHON;
   if (process.platform === 'win32') {
-    // 开发机已知的完整环境（含 torch/demucs，供钢琴/人声分离模式）
-    if (fs.existsSync('D:/manga-image-translator/Miniconda3/python.exe')) return 'D:/manga-image-translator/Miniconda3/python.exe';
     return 'python';
   }
   return 'python3';
@@ -237,40 +226,8 @@ app.on('before-quit', () => {
   for (const w of _folderWatchers.values()) { try { w.close(); } catch {} }
 });
 
-// ---------- 内联 Python（预设等轻量调用，不走 spawnEngine 的脚本注入） ----------
-// spawnEngine 永远把脚本路径插到 argv[0]，无法用于 `python -c`；这里单独复刻
-// env/cwd（PYTHONUTF8 + cwd=engineDir），供 presets.py 等引擎目录模块直接 import。
-function runEngineInline(code) {
-  const py = resolvePython();
-  const eng = engineDir();
-  return new Promise((resolve) => {
-    const child = spawn(py, ['-c', code], {
-      cwd: eng,
-      windowsHide: true,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
-    });
-    let out = '';
-    child.stdout.on('data', (d) => { out += d.toString('utf8'); });
-    child.stderr.on('data', (d) => { out += d.toString('utf8'); });
-    child.on('error', (e) => resolve({ ok: false, code: -1, out, error: String(e) }));
-    child.on('close', (code) => resolve({ ok: code === 0, code, out }));
-  });
-}
-// JS 值 → Python 字面量（安全内嵌到 -c 代码；JSON 的 true/false/null 不是合法 Python）
-function pyLit(v) {
-  if (v === null || v === undefined) return 'None';
-  if (typeof v === 'boolean') return v ? 'True' : 'False';
-  if (typeof v === 'number') return String(v);
-  if (typeof v === 'string') return JSON.stringify(v);
-  if (Array.isArray(v)) return '[' + v.map(pyLit).join(', ') + ']';
-  if (typeof v === 'object') return '{' + Object.keys(v).map(k => pyLit(k) + ': ' + pyLit(v[k])).join(', ') + '}';
-  return 'None';
-}
-function parsePyJson(out) {
-  const m = (out || '').match(/\{[\s\S]*\}/);
-  if (!m) return null;
-  try { return JSON.parse(m[0]); } catch { return null; }
-}
+// ---------- 引擎子进程结果解析 ----------
+// 所有引擎交互统一走 spawnEngine（argv 传参），不再使用 `python -c` 代码拼接。
 
 // ---------- 插件系统（主进程宿主） ----------
 let currentSongMeta = null;
@@ -820,15 +777,16 @@ function registerIpc() {
       for (let i = 0; i < opts.tiles.length; i++) {
         fs.writeFileSync(path.join(tmpDir, 'score-' + String(i + 1).padStart(3, '0') + '.png'), Buffer.from(opts.tiles[i].data));
       }
-      const code = 'import zipfile, glob, os\n' +
-        'out = r' + JSON.stringify(save.filePath) + '\n' +
-        'd = r' + JSON.stringify(tmpDir) + '\n' +
-        'z = zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED)\n' +
-        'for f in glob.glob(os.path.join(d, "*.png")):\n' +
-        '    z.write(f, os.path.basename(f))\n' +
-        'z.close()\n' +
-        'print("###RESULT " + str({"ok": True, "out": out}))';
-      const rr = await runEngineInline(code);
+      // 用 zip_pngs.py（argv 传参）打包，避免 `python -c` 拼接路径注入
+      const rr = await new Promise((resolve) => {
+        try {
+          spawnEngine([save.filePath, tmpDir], {
+            script: 'zip_pngs.py',
+            onDone: (code, r) => resolve({ ok: code === 0, out: r.out || r.err }),
+            onError: (e) => resolve({ ok: false, out: String(e) }),
+          });
+        } catch (e) { resolve({ ok: false, out: String(e) }); }
+      });
       try { for (const f of fs.readdirSync(tmpDir)) fs.unlinkSync(path.join(tmpDir, f)); } catch {}
       return rr && rr.ok ? { ok: true, path: save.filePath } : { ok: false, error: rr.out.slice(-300) };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
@@ -893,17 +851,19 @@ function registerIpc() {
       const args = ['-y', '-hide_banner', '-loglevel', 'error', '-i', webm];
       if (wav) args.push('-i', wav, '-map', '0:v:0', '-map', '1:a:0');
       args.push('-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '-movflags', '+faststart', out);
-      const code =
-        'import json, subprocess\n' +
-        'import imageio_ffmpeg\n' +
-        'ff = imageio_ffmpeg.get_ffmpeg_exe()\n' +
-        'r = subprocess.run([ff] + ' + JSON.stringify(args) +
-        ', capture_output=True)\n' +
-        "print(json.dumps({'ok': r.returncode == 0, 'err': (r.stderr or b'').decode('utf-8', 'replace')[-300:]}))";
-      const rr = await runEngineInline(code);
+      // 用 ffmpeg_wrap.py（argv 传 JSON 参数）转码，避免 `python -c` 拼接注入
+      const rr = await new Promise((resolve) => {
+        try {
+          spawnEngine([JSON.stringify(args)], {
+            script: 'ffmpeg_wrap.py',
+            onDone: (code, r) => resolve({ ok: code === 0, result: r.result, out: r.out || r.err }),
+            onError: (e) => resolve({ ok: false, result: null, out: String(e) }),
+          });
+        } catch (e) { resolve({ ok: false, result: null, out: String(e) }); }
+      });
       try { fs.unlinkSync(webm); if (wav) fs.unlinkSync(wav); } catch (e) {}
-      const d = parsePyJson(rr.out);
-      if (d && d.ok) return { ok: true, path: out };
+      const d = rr.result;
+      if (rr.ok && d && d.ok) return { ok: true, path: out };
       return { ok: false, error: (d && d.err) || (rr.out || 'ffmpeg failed').slice(-300) };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
@@ -929,6 +889,68 @@ function registerIpc() {
       out.sort((a, b) => a.localeCompare(b, 'zh'));
       return out;
     } catch (e) { return []; }
+  });
+  // 动态壁纸：发现桌面上的视频文件（mp4/webm/mov），供渲染进程作为壁纸源
+  ipcMain.handle('wallpaper:defaults', async () => {
+    try {
+      const desktop = app.getPath('desktop');
+      const exts = new Set(['.mp4', '.webm', '.mov']);
+      const out = [];
+      if (fs.existsSync(desktop)) {
+        for (const f of fs.readdirSync(desktop)) {
+          const ext = path.extname(f).toLowerCase();
+          if (exts.has(ext)) out.push(path.join(desktop, f));
+        }
+      }
+      out.sort((a, b) => a.localeCompare(b, 'zh'));
+      return { ok: true, files: out.slice(0, 4) };
+    } catch (e) { return { ok: false, files: [] }; }
+  });
+  // 动态壁纸库：从 GitHub Media 仓库列出壁纸（视频 + 同名缩略图），供用户选择下载
+  const WALLPAPER_REPO = 'monologue82/Media';
+  const WALLPAPER_DIR = 'wallpapers';
+  const WALLPAPER_RAW = `https://raw.githubusercontent.com/${WALLPAPER_REPO}/main/${WALLPAPER_DIR}`;
+  ipcMain.handle('wallpaper:list', async () => {
+    try {
+      const res = await net.fetch(`https://api.github.com/repos/${WALLPAPER_REPO}/contents/${WALLPAPER_DIR}`, {
+        headers: { 'User-Agent': 'FuFumidi', Accept: 'application/vnd.github+json' },
+      });
+      if (!res.ok) return { ok: false, error: 'GitHub API ' + res.status };
+      const items = await res.json();
+      const vids = items.filter(x => x.type === 'file' && /\.(mp4|webm|mov)$/i.test(x.name));
+      const thumbs = items.filter(x => x.type === 'file' && /\.(jpg|jpeg|png)$/i.test(x.name));
+      const list = vids.map(f => {
+        const base = f.name.replace(/\.(mp4|webm|mov)$/i, '');
+        const th = thumbs.find(t => t.name.replace(/\.(jpg|jpeg|png)$/i, '') === base);
+        return {
+          name: f.name,
+          video: `${WALLPAPER_RAW}/${encodeURIComponent(f.name)}`,
+          thumb: th ? `${WALLPAPER_RAW}/${encodeURIComponent(th.name)}` : '',
+        };
+      });
+      return { ok: true, list };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
+  // 动态壁纸下载：流式下载视频到 userData/wallpapers，返回本地路径
+  ipcMain.handle('wallpaper:download', async (_e, url, name) => {
+    try {
+      if (!url || !/^https?:\/\//i.test(url)) return { ok: false, error: '无效 URL' };
+      const dir = path.join(app.getPath('userData'), 'wallpapers');
+      fs.mkdirSync(dir, { recursive: true });
+      const safe = String(name || 'wallpaper').replace(/[\\/:*?"<>|]/g, '_');
+      const dest = path.join(dir, safe);
+      const res = await net.fetch(url, { headers: { 'User-Agent': 'FuFumidi' } });
+      if (!res.ok || !res.body) return { ok: false, error: '下载失败 HTTP ' + res.status };
+      const ws = fs.createWriteStream(dest);
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value && value.byteLength) ws.write(Buffer.from(value));
+      }
+      await new Promise((r) => ws.end(r));
+      return { ok: true, path: dest, name: safe };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
   // 读取本地文件（转录结果回载）——异步 + 大小上限，避免阻塞主进程
   ipcMain.handle('file:readBinary', async (_e, p) => {
@@ -973,82 +995,60 @@ function registerIpc() {
     } catch (e) { return { ok: false, canceled: false, error: String((e && e.message) || e) }; }
   });
 
-  // 转录参数预设：列表（内置 + 用户合并）/ 保存 / 删除 / 记住上次使用
+  // 转录参数预设：列表（内置 + 用户合并）/ 保存 / 删除 / 记住上次使用。
+  // 通过 presets_cli.py 子进程调用（argv 传参），不再用 `python -c` 拼接代码，消除注入面。
+  const runPresetsCli = (args) => new Promise((resolve) => {
+    try {
+      spawnEngine(args, {
+        script: 'presets_cli.py',
+        onDone: (code, r) => resolve({ ok: code === 0, code, result: r.result, raw: r.out || r.err }),
+        onError: (e) => resolve({ ok: false, code: -1, result: null, error: String(e) }),
+      });
+    } catch (e) { resolve({ ok: false, code: -1, result: null, error: String(e) }); }
+  });
   ipcMain.handle('presets:list', async () => {
-    const r = await runEngineInline(
-      'import json, presets\n' +
-      'p, last = presets.load_presets()\n' +
-      "print(json.dumps({'ok': True, 'presets': p, 'last_used': last, " +
-      "'builtins': list(presets._builtin_presets().keys())}, ensure_ascii=False))"
-    );
-    const d = parsePyJson(r.out);
-    if (d && d.ok) return { ok: true, presets: d.presets || {}, last_used: d.last_used || '', builtins: d.builtins || [] };
-    return { ok: false, error: (r.error || r.out || 'presets:list failed').slice(-400) };
+    const r = await runPresetsCli(['list']);
+    if (r.ok && r.result && r.result.ok) return { ok: true, presets: r.result.presets || {}, last_used: r.result.last_used || '', builtins: r.result.builtins || [] };
+    return { ok: false, error: (r.result && r.result.error) || r.error || r.raw || 'presets:list failed' };
   });
   ipcMain.handle('presets:save', async (_e, name, mode, params) => {
-    const code =
-      'import json, presets\n' +
-      'ok = presets.save_preset(' + JSON.stringify((name || '').trim()) + ', ' + pyLit(mode) + ', ' + pyLit(params || {}) + ')\n' +
-      'if ok: presets.save_last_used(' + JSON.stringify((name || '').trim()) + ')\n' +
-      "print(json.dumps({'ok': True, 'saved': bool(ok)}, ensure_ascii=False))";
-    const r = await runEngineInline(code);
-    const d = parsePyJson(r.out);
-    if (d && d.ok) return { ok: true, saved: !!d.saved };
-    return { ok: false, error: (r.error || r.out || 'presets:save failed').slice(-400) };
+    const r = await runPresetsCli(['save', String(name || '').trim(), JSON.stringify(mode), JSON.stringify(params || {})]);
+    if (r.ok && r.result && r.result.ok) return { ok: true, saved: !!r.result.saved };
+    return { ok: false, error: (r.result && r.result.error) || r.error || r.raw || 'presets:save failed' };
   });
   ipcMain.handle('presets:delete', async (_e, name) => {
-    const code =
-      'import json, presets\n' +
-      'ok = presets.delete_preset(' + JSON.stringify((name || '').trim()) + ')\n' +
-      "print(json.dumps({'ok': True, 'deleted': bool(ok)}, ensure_ascii=False))";
-    const r = await runEngineInline(code);
-    const d = parsePyJson(r.out);
-    if (d && d.ok) return { ok: true, deleted: !!d.deleted };
-    return { ok: false, error: (r.error || r.out || 'presets:delete failed').slice(-400) };
+    const r = await runPresetsCli(['delete', String(name || '').trim()]);
+    if (r.ok && r.result && r.result.ok) return { ok: true, deleted: !!r.result.deleted };
+    return { ok: false, error: (r.result && r.result.error) || r.error || r.raw || 'presets:delete failed' };
   });
   ipcMain.handle('presets:lastUsed', async (_e, name) => {
-    const code =
-      'import presets\n' +
-      'presets.save_last_used(' + JSON.stringify((name || '').trim()) + ')\n' +
-      "print(json.dumps({'ok': True}, ensure_ascii=False))";
-    await runEngineInline(code);
-    return { ok: true };
+    const r = await runPresetsCli(['last-used', String(name || '').trim()]);
+    return { ok: !!(r.ok && r.result && r.result.ok), error: (r.result && r.result.error) || r.error };
   });
   ipcMain.handle('presets:reorder', async (_e, name, delta) => {
-    const code =
-      'import json, presets\n' +
-      'order = presets.reorder_preset(' + JSON.stringify((name || '').trim()) + ', ' + pyLit(delta) + ')\n' +
-      "print(json.dumps({'ok': True, 'order': order}, ensure_ascii=False))";
-    const r = await runEngineInline(code);
-    const d = parsePyJson(r.out);
-    if (d && d.ok) return { ok: true, order: d.order || [] };
-    return { ok: false, error: (r.error || r.out || 'presets:reorder failed').slice(-400) };
+    const r = await runPresetsCli(['reorder', String(name || '').trim(), String(Number(delta) || 0)]);
+    if (r.ok && r.result && r.result.ok) return { ok: true, order: r.result.order || [] };
+    return { ok: false, error: (r.result && r.result.error) || r.error || r.raw || 'presets:reorder failed' };
   });
   // 拖拽排序：直接把预设移到展示顺序的目标下标（前端拖放一次性定位）
   ipcMain.handle('presets:reorderTo', async (_e, name, index) => {
-    const code =
-      'import json, presets\n' +
-      'order = presets.reorder_preset_to(' + JSON.stringify((name || '').trim()) + ', ' + pyLit(index) + ')\n' +
-      "print(json.dumps({'ok': True, 'order': order}, ensure_ascii=False))";
-    const r = await runEngineInline(code);
-    const d = parsePyJson(r.out);
-    if (d && d.ok) return { ok: true, order: d.order || [] };
-    return { ok: false, error: (r.error || r.out || 'presets:reorderTo failed').slice(-400) };
+    const r = await runPresetsCli(['reorder-to', String(name || '').trim(), String(Number(index) || 0)]);
+    if (r.ok && r.result && r.result.ok) return { ok: true, order: r.result.order || [] };
+    return { ok: false, error: (r.result && r.result.error) || r.error || r.raw || 'presets:reorderTo failed' };
   });
   ipcMain.handle('presets:restore', async () => {
-    const code =
-      'import json, presets\n' +
-      'ok = presets.restore_all_builtins()\n' +
-      "print(json.dumps({'ok': True, 'restored': bool(ok)}, ensure_ascii=False))";
-    const r = await runEngineInline(code);
-    const d = parsePyJson(r.out);
-    if (d && d.ok) return { ok: true, restored: !!d.restored };
-    return { ok: false, error: (r.error || r.out || 'presets:restore failed').slice(-400) };
+    const r = await runPresetsCli(['restore']);
+    if (r.ok && r.result && r.result.ok) return { ok: true, restored: !!r.result.restored };
+    return { ok: false, error: (r.result && r.result.error) || r.error || r.raw || 'presets:restore failed' };
   });
 
   ipcMain.handle('guide:openEdit', () => {
-    const win = new BrowserWindow({ width: 900, height: 700, title: 'FuFumidi 编辑功能说明', backgroundColor: '#0a0f18', autoHideMenuBar: true });
-    win.loadFile(path.join(__dirname, 'renderer', 'edit-guide.html'));
+    // 旧版编辑引导页已移除；打开主窗口并切到编辑视图
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('app:event', 'view-changed', { view: 'edit' });
+      win.focus();
+    }
     return { ok: true };
   });
 
@@ -1085,6 +1085,8 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       backgroundThrottling: false,
+      // 允许 file:// 页面加载本地视频（动态壁纸）
+      allowFileAccessFromFileUrls: true,
     },
   });
 
@@ -1101,7 +1103,12 @@ function createWindow() {
     if (/^https?:/i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
-  win.loadFile(path.join(__dirname, 'renderer', 'FuFumidi.html'));
+  // 加载新版 Vue 构建（renderer/dist）；旧版单文件界面已移除
+  const vueDist = path.join(__dirname, 'renderer', 'dist', 'index.html');
+  if (!fs.existsSync(vueDist)) {
+    console.error('[FuFumidi] renderer/dist 缺失：请先执行 cd frontend && npm run build');
+  }
+  win.loadFile(vueDist);
   return win;
 }
 

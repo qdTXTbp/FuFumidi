@@ -60,6 +60,27 @@ def _neutralize_tqdm():
         def __exit__(self, *exc):
             return False
 
+        def update(self, *a, **k):
+            pass
+
+        def close(self):
+            pass
+
+        def set_description(self, *a, **k):
+            pass
+
+        def set_postfix(self, *a, **k):
+            pass
+
+        @staticmethod
+        def format_interval(*a, **k):
+            """兼容旧版 tqdm API：部分下载器（huggingface_hub 等）会按类方法调用。"""
+            return '?'
+
+        @staticmethod
+        def format_sizeof(*a, **k):
+            return '?'
+
     tqdm.tqdm = _PassThrough
     try:
         import tqdm.std
@@ -79,6 +100,11 @@ def transcribe_separate(audio_path, output_midi, params=None, log_cb=None,
         )
 
     _neutralize_tqdm()
+
+    # 强制 HuggingFace 离线：demucs 4.1.0 优先从 HF hub 拉模型，
+    # 离线失败后自动回退到本地 demucs/remote/ 权重（避免联网下载 + tqdm 兼容问题）。
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
     from demucs import separate as demucs_separate
 
