@@ -6,6 +6,7 @@ directories:
 asarUnpack:
   - "engine/**"
   - "**/*.node"
+  - "renderer/dist/wallpapers/**"
 files:
   - "**/*"
   - "!dist/**"
@@ -14,11 +15,11 @@ files:
   - "!build.js"
   - "!electron-builder.yml"
 extraResources:
-  - from: "E:/Midi/FuFumidi/resources/python"
+  - from: "resources/python"
     to: python
-  - from: "E:/Midi/FuFumidi/resources/models"
+  - from: "resources/models"
     to: models
-  - from: "E:/Midi/FuFumidi/resources/elevate.exe"
+  - from: "resources/elevate.exe"
     to: elevate.exe
 win:
   target:

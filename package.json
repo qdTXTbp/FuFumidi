@@ -1,30 +1,34 @@
 {
-    "name":  "fufumidi",
-    "productName":  "FuFumidi",
+    "name": "fufumidi",
+    "productName": "FuFumidi",
     "version": "3.0.0",
-    "description":  "离线 MIDI 播放 / 编辑 / 可视化 / 分析 / 乐谱 / 转录（音频转 MIDI）一体工具",
-    "main":  "main.js",
-    "author":  {
-                   "name":  "FuFumidi",
-                   "email":  "dev@fufumidi.local"
-               },
-    "license":  "MIT",
-    "homepage":  "https://github.com/qdTXTbp/FuFumidi",
-    "private":  true,
-    "scripts":  {
-                    "build:ui":  "npm --prefix frontend run build",
-                    "build:rust":  "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-rust.ps1",
-                    "test:rust":  "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-rust.ps1",
-                    "pack:source":  "node build.js source",
-                    "pack:full":  "node build.js full",
-                    "pack:base":  "node build.js base",
-                    "dist:win":  "electron-builder --win nsis --x64",
-                    "typecheck":  "npm --prefix frontend run typecheck",
-                    "test:ui":  "node --test frontend/tests/*.test.js",
-                    "test":  "npm run test:rust \u0026\u0026 npm run test:ui \u0026\u0026 npm run test:plugin",
-                    "test:plugin":  "node --test scripts/test-plugin-sandbox.mjs"
-                },
-    "dependencies":  {
-                         "sql.js":  "^1.13.0"
-                     }
+    "description": "离线 MIDI 播放 / 编辑 / 可视化 / 分析 / 乐谱 / 转录（音频转 MIDI）一体工具",
+    "main": "main.js",
+    "author": {
+        "name": "FuFumidi",
+        "email": "dev@fufumidi.local"
+    },
+    "license": "MIT",
+    "homepage": "https://github.com/qdTXTbp/FuFumidi",
+    "private": true,
+    "scripts": {
+        "build:ui": "npm --prefix frontend run build",
+        "build:rust": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-rust.ps1",
+        "test:rust": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-rust.ps1",
+        "pack:source": "node build.js source",
+        "pack:full": "node build.js full",
+        "pack:base": "node build.js base",
+        "dist:win": "electron-builder --win nsis --x64",
+        "typecheck": "npm --prefix frontend run typecheck",
+        "test:ui": "node --test frontend/tests/*.test.js",
+        "test": "npm run test:rust && npm run test:ui && npm run test:plugin",
+        "test:plugin": "node --test scripts/test-plugin-sandbox.mjs"
+    },
+    "dependencies": {
+        "sql.js": "^1.14.2"
+    },
+    "devDependencies": {
+        "electron": "33.4.11",
+        "electron-builder": "^26.15.3"
+    }
 }
