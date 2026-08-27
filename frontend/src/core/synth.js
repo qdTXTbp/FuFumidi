@@ -109,8 +109,14 @@ export function playVoice(ctx, time, midi, vel, preset, out, endTime, live) {
 
   /* ---- 旋律类乐器 ---- */
   if (preset === 'piano') {
-    const g = voiceEnv(ctx, time, out, { a: .004, d: clamp(.3 + 60 / freq, .1, 1.2), s: .04, r: .16, peak, end: endTime });
-    for (const [m, amp] of [[1, 1], [2, .5], [3, .24]]) { const o = mkOsc('sine', freq * m); const og = ctx.createGain(); og.gain.value = amp; o.connect(og); og.connect(g); }
+    // 改进的三角钢琴：非谐波泛音 + 低频衰减 + 低通柔化 + 自然延音
+    const g = voiceEnv(ctx, time, out, { a: .0018, d: clamp(.4 + 70 / freq, .12, 1.6), s: .025, r: .38, peak, end: endTime });
+    const lp = mkFilter('lowpass', Math.min(6800, 900 + freq * 3.2), 0.5, g);
+    for (const [m, amp] of [[1, 1], [1.98, .52], [3.01, .3], [4.02, .18], [5.0, .12], [6.02, .08], [8.01, .05]]) {
+      const o = mkOsc('sine', freq * m);
+      const og = ctx.createGain(); og.gain.value = amp;
+      o.connect(og); og.connect(lp);
+    }
   } else if (preset === 'ep') {
     const g = voiceEnv(ctx, time, out, { a: .003, d: .85, s: .03, r: .2, peak, end: endTime });
     for (const [m, amp] of [[1, 1], [2.004, .35], [4.9, .16]]) { const o = mkOsc('sine', freq * m); const og = ctx.createGain(); og.gain.value = amp; o.connect(og); og.connect(g); }
@@ -255,10 +261,52 @@ export class Synth {
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 2048; this.analyser.smoothingTimeConstant = 0.82;
     this.kill = ctx.createGain(); this.kill.gain.value = 1;
-    this.master.connect(this.analyser); this.analyser.connect(this.kill); this.kill.connect(ctx.destination);
+    this.compressor = ctx.createDynamicsCompressor();
+    this.compressor.threshold.value = -18;
+    this.compressor.knee.value = 20;
+    this.compressor.ratio.value = 6;
+    this.compressor.attack.value = 0.003;
+    this.compressor.release.value = 0.25;
+    this.master.connect(this.analyser); this.analyser.connect(this.kill); this.kill.connect(this.compressor); this.compressor.connect(ctx.destination);
     this.trackGains = []; this.vol = []; this.mute = []; this.solo = [];
     this.panners = []; this.pan = [];
     this.live = []; this.activeNotes = [];
+    this.sf2 = null;
+    this.sf2Ready = false;
+    this.sf2Loading = null;
+  }
+  async loadSf2() {
+    if (this.sf2Ready) return true;
+    if (this.sf2Loading) return this.sf2Loading;
+    this.sf2Loading = (async () => {
+      try {
+        const JSSynth = (window || {}).JSSynth;
+        if (!JSSynth) return false;
+        await JSSynth.waitForReady();
+        const syn = new JSSynth.Synthesizer();
+        syn.init(this.ctx.sampleRate);
+        const node = syn.createAudioNode(this.ctx, 4096);
+        node.connect(this.master);
+        let res = null;
+        for (const p of ['../vendor/soundfonts/GeneralUser.sf2', './vendor/soundfonts/GeneralUser.sf2']) {
+          try { res = await fetch(p); if (res.ok) break; } catch (e) { res = null; }
+        }
+        if (!res) throw new Error('SF2 fetch failed');
+        const buf = await res.arrayBuffer();
+        await syn.loadSFont(buf);
+        this.sf2 = syn;
+        this.sf2Ready = true;
+        return true;
+      } catch (e) {
+        console.warn('[synth] GeneralUser.sf2 加载失败，使用内置合成器：', e && e.message || e);
+        this.sf2 = null;
+        this.sf2Ready = false;
+        return false;
+      } finally {
+        this.sf2Loading = null;
+      }
+    })();
+    return this.sf2Loading;
   }
   ensure(n) {
     for (let i = this.trackGains.length; i < n; i++) {
@@ -285,8 +333,20 @@ export class Synth {
   setTrackSolo(i, b) { this.ensure(i + 1); this.solo[i] = b; this.applyRouting(); }
   setTrackPan(i, v) { this.ensure(i + 1); this.pan[i] = clamp(v, -1, 1); if (this.panners[i]) this.panners[i].pan.setTargetAtTime(this.pan[i], this.ctx.currentTime, 0.02); }
   noteOn(time, note, endTime) {
-    const preset = presetFromMode('auto', note.prog, note.isDrum);
     this.ensure(note.trk + 1);
+    if (this.sf2Ready && this.sf2) {
+      const ch = Math.min(15, note.trk || 0);
+      try {
+        if (note.isDrum) this.sf2.midiSetChannelType(ch, true);
+        else if (note.prog != null) this.sf2.midiProgramChange(ch, note.prog);
+        this.sf2.midiNoteOn(ch, note.midi, note.vel);
+      } catch (e) {}
+      const delay = Math.max(0, (endTime - this.ctx.currentTime) * 1000);
+      const timer = setTimeout(() => { try { this.sf2 && this.sf2.midiNoteOff(ch, note.midi); } catch (e) {} }, delay);
+      this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, endTime, timer, sf2: true, ch });
+      return;
+    }
+    const preset = presetFromMode('auto', note.prog, note.isDrum);
     const out = this.trackGains[note.trk];
     playVoice(this.ctx, time, note.midi, note.vel, preset, out, endTime, this.live);
     this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, endTime });
@@ -297,20 +357,34 @@ export class Synth {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     this.ensure(1);
+    if (this.sf2Ready && this.sf2) {
+      try {
+        this.sf2.midiProgramChange(0, prog);
+        this.sf2.midiNoteOn(0, midi, vel);
+        const timer = setTimeout(() => { try { this.sf2 && this.sf2.midiNoteOff(0, midi); } catch (e) {} }, dur * 1000);
+        this.activeNotes.push({ midi, trk: 0, endTime: t + dur, timer, sf2: true, ch: 0 });
+      } catch (e) {}
+      return;
+    }
     playVoice(this.ctx, t, midi, vel, presetForProgram(prog), this.trackGains[0], t + dur, this.live);
     this.activeNotes.push({ midi, trk: 0, endTime: t + dur });
   }
-  pruneLive() {
+  pruneLive(limit = 256) {
     const t = this.ctx.currentTime;
-    this.live = this.live.filter(x => {
-      if (x.tStop > t) return true;
-      try { x.o.stop(); } catch (e) {}
-      return false;
-    });
+    const expires = this.live.filter(x => x.tStop <= t);
+    for (const x of expires) { try { x.o.stop(); } catch (e) {} }
+    this.live = this.live.filter(x => x.tStop > t);
+    if (this.live.length > limit) {
+      const sorted = this.live.slice().sort((a, b) => a.tStop - b.tStop);
+      const remove = sorted.slice(0, this.live.length - limit);
+      for (const x of remove) { try { x.o.stop(); } catch (e) {} }
+      this.live = this.live.filter(x => !remove.includes(x));
+    }
   }
   allStop() {
     const t = this.ctx.currentTime;
     for (const x of this.live) { if (x.tStop > t) { try { x.o.stop(); } catch (e) {} } }
+    for (const a of this.activeNotes) { if (a.timer) { try { clearTimeout(a.timer); } catch (e) {} } if (a.sf2 && a.ch != null) { try { this.sf2 && this.sf2.midiNoteOff(a.ch, a.midi); } catch (e) {} } }
     this.live = [];
     this.activeNotes = [];
   }

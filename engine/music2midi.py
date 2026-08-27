@@ -25,7 +25,22 @@ import os
 import sys
 import warnings
 
-VERSION = "2.0.1"   # 与应用 package.json 版本保持一致（发布时同步修改）
+VERSION = "2.2.0"
+
+def _patch_tqdm_compat():
+    """兼容新版 tqdm 缺少 set_lock/get_lock 导致 huggingface_hub 导入失败的问题。"""
+    try:
+        from tqdm.auto import tqdm as _tqdm_cls
+        import threading
+        if not hasattr(_tqdm_cls, "set_lock"):
+            _tqdm_cls.set_lock = lambda lock: None
+        if not hasattr(_tqdm_cls, "get_lock"):
+            _tqdm_cls.get_lock = lambda: threading.RLock()
+    except Exception:
+        pass
+
+_patch_tqdm_compat()
+
 
 
 def _setup_utf8_console():
@@ -142,6 +157,9 @@ def _resolve_params(args, mode):
     if getattr(args, "auto_bpm", False): p["auto_bpm"] = True
     if getattr(args, "no_merge", False): p["merge_overlap"] = False
     if getattr(args, "no_velnorm", False): p["normalize_vel"] = False
+    # 子模型选择：universal → basic / muscriptor；piano → piano_pt / aria / transkun
+    if getattr(args, "model", None): p["model"] = args.model
+    if getattr(args, "model_size", None): p["model_size"] = args.model_size
     return p, mode
 
 
@@ -276,10 +294,19 @@ def cmd_probe():
 # 图形界面
 # ---------------------------------------------------------------------------
 def run_gui():
-    # 图形界面已并入 FuFumidi 桌面应用（Electron 渲染层）。
-    # engine 目录不再分发 gui.py，CLI 的 GUI 模式因此移除，避免运行时 ImportError。
-    print("图形界面已并入 FuFumidi 桌面应用，请使用 FuFumidi 打开（命令行仅提供 convert / batch 转录）。")
-    return 0
+    from engine import transcribe, engine_available, MODES
+    import gui
+
+    # 至少需要一种引擎
+    ok_modes = [m for m in MODES if engine_available(m)]
+    if not ok_modes:
+        from PySide6.QtWidgets import QApplication, QMessageBox
+        app = QApplication([])
+        QMessageBox.critical(None, "缺少依赖",
+            "检测到缺少必要的转录引擎（basic-pitch / piano-transcription）。\n\n"
+            "请先双击运行 install.bat 一键安装。")
+        return 1
+    return gui.run_gui(transcribe, DEFAULT_OUTPUT_DIR, VERSION)
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +324,7 @@ def build_parser():
                "  python music2midi.py batch                    # 批量转换 input/ 文件夹",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("mode", nargs="?", choices=["convert", "batch", "probe", "gui"],
+    parser.add_argument("mode", nargs="?", choices=["convert", "batch", "probe", "gui", "worker"],
                         default="gui", help="运行模式（默认 gui）")
     parser.add_argument("input", nargs="?", help="[convert] 输入音频文件")
     parser.add_argument("-o", "--output", help="[convert] 输出 MIDI 路径（默认与输入同名同目录）")
@@ -314,6 +341,10 @@ def build_parser():
                         choices=["quality", "balanced", "fast"],
                         help="性能模式: quality=最高质量(默认,全部核心) / "
                              "balanced=均衡 / fast=高性能(低配省内存)")
+    parser.add_argument("--model", default=None,
+                        help="子模型: universal→basic/muscriptor；piano→piano_pt/aria/transkun")
+    parser.add_argument("--model-size", default=None,
+                        help="MuScriptor 规格: small / medium / large")
 
     g = parser.add_argument_group("转录参数（通用/钢琴/分离共用）")
     g.add_argument("--onset-threshold", type=float, default=None,
@@ -350,6 +381,77 @@ def build_parser():
     return parser
 
 
+def cmd_worker():
+    """常驻 worker：从 stdin 读 JSON 请求，逐条执行 convert，保持模型/会话常驻。"""
+    import argparse as _ap
+    import contextlib
+    import io
+    import json as _json
+    import sys as _sys
+
+    _patch_tqdm_compat()
+    for line in _sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = _json.loads(line)
+            job = req.get('_id')
+            ns = _ap.Namespace(
+                input=req.get('audio'),
+                output=req.get('out'),
+                engine_mode=req.get('mode', 'universal'),
+                perf=req.get('perf', 'quality'),
+                preset=req.get('preset'),
+                onset_threshold=req.get('onset_threshold'),
+                frame_threshold=req.get('frame_threshold'),
+                min_note_length=req.get('min_note_length'),
+                min_note_ms=req.get('min_note_ms'),
+                merge_gap_ms=req.get('merge_gap_ms'),
+                denoise=bool(req.get('denoise')),
+                normalize=bool(req.get('normalize')),
+                auto_bpm=bool(req.get('auto_bpm')),
+                no_merge=bool(req.get('no_merge')),
+                no_velnorm=bool(req.get('no_velnorm')),
+                with_drums=bool(req.get('with_drums')),
+                stem_format=req.get('stem_format'),
+                export_stems=bool(req.get('export_stems')),
+                no_pedal=bool(req.get('no_pedal')),
+                minimum_frequency=req.get('min_freq'),
+                maximum_frequency=req.get('max_freq'),
+                no_melodia=bool(req.get('no_melodia')),
+                tempo=req.get('tempo'),
+                model=req.get('model'),
+                model_size=req.get('model_size'),
+            )
+            buf = io.StringIO()
+            code = 1
+            res = None
+            try:
+                with contextlib.redirect_stdout(buf):
+                    code = cmd_convert(ns)
+            except Exception as e:
+                buf.write('\n[worker] convert error: ' + str(e))
+            out = buf.getvalue()
+            for l in out.splitlines():
+                if l.startswith('###RESULT '):
+                    try:
+                        res = _json.loads(l[len('###RESULT '):])
+                    except Exception:
+                        res = None
+                    break
+            if res is None:
+                res = {'ok': code == 0, 'error': out[-600:]}
+            if job is not None:
+                res['_id'] = job
+            _sys.stdout.write('###RESULT ' + _json.dumps(res, ensure_ascii=False) + '\n')
+            _sys.stdout.flush()
+        except Exception as e:
+            _sys.stdout.write('###RESULT ' + _json.dumps({'_id': None, 'ok': False, 'error': str(e)}) + '\n')
+            _sys.stdout.flush()
+    return 0
+
+
 def main():
     args = build_parser().parse_args()
 
@@ -358,6 +460,9 @@ def main():
 
     if args.mode == "probe":
         return cmd_probe()
+
+    if args.mode == "worker":
+        return cmd_worker()
 
     if args.mode == "convert" and not args.input:
         print("[错误] convert 模式需要指定音频文件，例如:")

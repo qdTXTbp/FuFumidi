@@ -4,13 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="light">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' http://localhost:5173 ws://localhost:5173; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:5173 http://localhost:5173; object-src 'none'; base-uri 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' http://localhost:5173 ws://localhost:5173; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://raw.githubusercontent.com; media-src 'self' data: blob: file: https://media.githubusercontent.com; font-src 'self' data:; connect-src 'self' ws://localhost:5173 http://localhost:5173; object-src 'none'; base-uri 'self'">
 <title>FuFumidi · 播放器 / 编辑 / 转录 / 乐谱</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 
 </head>
 <body>
 <div id="app"></div>
-<script type="module" src="/src/main.js"></script>
+<script src="./vendor/js-synth/libfluidsynth-2.4.6.js"></script>
+<script src="./vendor/js-synth/js-synthesizer.min.js"></script>
+<script type="module" src="/src/main.ts"></script>
 </body>
 </html>

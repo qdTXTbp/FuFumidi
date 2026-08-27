@@ -2,9 +2,17 @@
 import { computed } from 'vue';
 import Icon from '../components/Icon.vue';
 import PianoRoll from '../components/PianoRoll.vue';
-import { state, currentSong, toggleTrackMute, toggleTrackSolo, setTrackVol, setTrackPan } from '../store.js';
+import { useAppStore } from '../stores/app';
 import { fmtTime } from '../core/util.js';
 import { t } from '../core/i18n.js';
+
+const app = useAppStore();
+const state = app;
+const currentSong = computed(() => app.currentSong);
+const toggleTrackMute = (i) => app.toggleTrackMute(i);
+const toggleTrackSolo = (i) => app.toggleTrackSolo(i);
+const setTrackVol = (i, v) => app.setTrackVol(i, v);
+const setTrackPan = (i, v) => app.setTrackPan(i, v);
 
 const stats = computed(() => {
   const song = currentSong.value && currentSong.value.song;
@@ -37,8 +45,8 @@ function panStyle(i) {
       <div v-if="stats" class="row" style="gap:8px;flex-wrap:wrap">
         <span class="tag accent">♩ {{ stats.bpm }} BPM</span>
         <span class="tag">{{ stats.sig }}</span>
-        <span class="tag">{{ stats.bars }} 小节</span>
-        <span class="tag">{{ stats.notes }} 音符</span>
+        <span class="tag">{{ stats.bars }}{{ t(' 小节') }}</span>
+        <span class="tag">{{ stats.notes }}{{ t(' 音符') }}</span>
         <span class="tag">{{ stats.dur }}</span>
       </div>
     </div>
@@ -46,7 +54,7 @@ function panStyle(i) {
     <!-- 空状态 -->
     <div v-if="!currentSong" class="empty card">
       <div class="empty-ic"><Icon name="music" :size="34" /></div>
-      <b>还没有载入曲目</b>
+      <b>{{ t('还没有载入曲目') }}</b>
       <p>{{ t('点击左侧「导入 MIDI」按钮，或直接把 .mid / .midi 文件拖进窗口，即可在此查看钢琴卷帘并实时播放。') }}</p>
     </div>
 
@@ -56,44 +64,44 @@ function panStyle(i) {
       <div class="grid" style="margin-top:16px;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr)">
         <!-- 轨道混音 -->
         <div class="card">
-          <div class="card-title"><span class="dot"></span>轨道混音器</div>
+          <div class="card-title"><span class="dot"></span>{{ t('轨道混音器') }}</div>
           <div class="mix-track" v-for="(tr, i) in state.tracks" :key="i">
             <span class="mt-color" :style="{ background: tr.color }"></span>
             <div class="mt-name">
               <b>{{ tr.name }}</b>
-              <small>音色 #{{ tr.program }}{{ tr.isDrum ? ' · 打击乐' : '' }} · {{ tr.noteCount }} 音符</small>
+              <small>音色 #{{ tr.program }}{{ tr.isDrum ? t(' · 打击乐') : '' }} · {{ tr.noteCount }}{{ t(' 音符') }}</small>
             </div>
             <div class="mt-ctl">
-              <button class="chip-btn" :class="{ 'on-solo': tr.solo }" title="独奏" @click="toggleTrackSolo(i)">S</button>
-              <button class="chip-btn" :class="{ 'on-mute': tr.mute }" title="静音" @click="toggleTrackMute(i)">M</button>
+              <button class="chip-btn" :class="{ 'on-solo': tr.solo }" :title="t('独奏')" @click="toggleTrackSolo(i)">S</button>
+              <button class="chip-btn" :class="{ 'on-mute': tr.mute }" :title="t('静音')" @click="toggleTrackMute(i)">M</button>
             </div>
-            <div class="mt-vol" :title="'音量 ' + Math.round(tr.vol * 100) + '%'">
+            <div class="mt-vol" :title="t('音量 ') + Math.round(tr.vol * 100) + '%'">
               <input :id="'mt-vol-' + i" :name="'mt-vol-' + i" type="range" min="0" max="1" step="0.01"
                      :style="{ '--fill': tr.vol * 100 + '%' }"
                      :value="tr.vol" @input="setTrackVol(i, parseFloat($event.target.value))">
             </div>
-            <div style="width:70px;display:flex;align-items:center;gap:6px" :title="'声像 ' + (tr.pan > 0 ? 'R' + Math.round(tr.pan * 100) : tr.pan < 0 ? 'L' + Math.round(-tr.pan * 100) : '中')">
+            <div style="width:70px;display:flex;align-items:center;gap:6px" :title="t('声像 ') + (tr.pan > 0 ? 'R' + Math.round(tr.pan * 100) : tr.pan < 0 ? 'L' + Math.round(-tr.pan * 100) : t('中'))">
               <span class="muted small">L</span>
               <input :id="'mt-pan-' + i" :name="'mt-pan-' + i" type="range" min="-1" max="1" step="0.01" :style="panStyle(i)"
                      :value="tr.pan" @input="setTrackPan(i, parseFloat($event.target.value))">
               <span class="muted small">R</span>
             </div>
           </div>
-          <div v-if="!state.tracks.length" class="muted small">该曲目没有可混音的轨道</div>
+          <div v-if="!state.tracks.length" class="muted small">{{ t('该曲目没有可混音的轨道') }}</div>
         </div>
 
         <!-- 曲目信息 -->
         <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--accent2)"></span>曲目概览</div>
+          <div class="card-title"><span class="dot" style="background:var(--accent2)"></span>{{ t('曲目概览') }}</div>
           <div style="display:flex;flex-direction:column;gap:10px">
             <div class="spread" v-for="(row, i) in [
-              { k: '曲名', v: currentSong?.name },
-              { k: '速度', v: stats?.bpm + ' BPM' },
-              { k: '拍号', v: stats?.sig },
-              { k: '小节数', v: stats?.bars },
-              { k: '音符数', v: stats?.notes },
-              { k: '时长', v: stats?.dur },
-              { k: '轨道数', v: state.tracks.length },
+              { k: t('曲名'), v: currentSong?.name },
+              { k: t('速度'), v: stats?.bpm + ' BPM' },
+              { k: t('拍号'), v: stats?.sig },
+              { k: t('小节数'), v: stats?.bars },
+              { k: t('音符数'), v: stats?.notes },
+              { k: t('时长'), v: stats?.dur },
+              { k: t('轨道数'), v: state.tracks.length },
             ]" :key="i">
               <span class="muted small">{{ row.k }}</span>
               <span class="small" style="font-weight:600">{{ row.v }}</span>

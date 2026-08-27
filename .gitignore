@@ -3,6 +3,8 @@ dist/
 release/
 release-base/
 release-ci/
+gpu-package/
+gpu-package.packbak/
 *.asar
 *.7z
 *.log
@@ -13,13 +15,12 @@ build.err.log
 build-base.log
 build-base.err.log
 package-lock.json
+__pycache__/
+*.pyc
+*.pyo
 .DS_Store
-
-# 大型构建资源（不进版本库：Python 运行时 / 模型 / 提权工具，构建前按 README 准备）
+rust-core/target/
+# 本地大体积资源（不在 git 仓库中，构建前按 README 准备）
 resources/
 models/
-engine/__pycache__/
-renderer/dist/
-
-# 动态壁纸视频（单文件超 GitHub 100MB 限制，不纳入版本库，本地保留即可）
 frontend/public/wallpapers/

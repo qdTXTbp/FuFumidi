@@ -2,8 +2,17 @@
 // 命令面板（Ctrl+K）：搜索过滤命令列表，回车执行
 import { ref, computed, watch, nextTick, onMounted } from 'vue';
 import Icon from './Icon.vue';
-import { state, VIEWS, setView, importFiles, togglePlay, toggleLoop, toggleMetro, toast } from '../store.js';
+import { useAppStore, VIEWS } from '../stores/app';
 import { t } from '../core/i18n.js';
+
+const app = useAppStore();
+const state = app;
+const setView = (v) => app.setView(v);
+const importFiles = (items) => app.importFiles(items);
+const togglePlay = () => app.togglePlay();
+const toggleLoop = () => app.toggleLoop();
+const toggleMetro = () => app.toggleMetro();
+const toast = (m, t) => app.toast(m, t);
 
 const query = ref('');
 const idx = ref(0);
@@ -111,7 +120,7 @@ function onFileChange(e) {
 </script>
 
 <template>
-  <div class="overlay top-aligned" @click.self="close">
+  <div class="overlay top-aligned" v-focus-trap role="dialog" aria-modal="true" :aria-label="t('命令面板')" @click.self="close" @keydown.esc="close">
     <div class="cmd-palette" role="dialog" aria-label="命令面板">
       <input ref="inputEl" v-model="query" class="cmd-input" :placeholder="t('输入命令或搜索…')" @keydown="onKey" />
       <div class="cmd-list">

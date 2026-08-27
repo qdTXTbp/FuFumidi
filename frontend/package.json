@@ -1,18 +1,23 @@
 {
   "name": "fufumidi-frontend",
   "private": true,
-  "version": "2.0.1",
+  "version": "3.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "typecheck": "tsc --noEmit",
     "preview": "vite preview"
   },
   "dependencies": {
-    "vue": "^3.5.13"
+    "js-synthesizer": "^1.13.0",
+    "pinia": "^4.0.3",
+    "vue": "^3.5.13",
+    "vue-router": "^4.6.4"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "^7.0.2",
     "vite": "^6.0.7"
   }
 }

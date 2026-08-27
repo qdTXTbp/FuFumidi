@@ -17,6 +17,19 @@ import os
 import shutil
 import tempfile
 
+def _patch_tqdm_compat():
+    try:
+        from tqdm.auto import tqdm as _tqdm_cls
+        import threading
+        if not hasattr(_tqdm_cls, "set_lock"):
+            _tqdm_cls.set_lock = lambda lock: None
+        if not hasattr(_tqdm_cls, "get_lock"):
+            _tqdm_cls.get_lock = lambda: threading.RLock()
+    except Exception:
+        pass
+
+_patch_tqdm_compat()
+
 MODEL_NAME = "htdemucs"
 STEM_ORDER = [("vocals", "人声"), ("bass", "贝斯"), ("other", "其它乐器"), ("drums", "鼓组")]
 
@@ -60,27 +73,6 @@ def _neutralize_tqdm():
         def __exit__(self, *exc):
             return False
 
-        def update(self, *a, **k):
-            pass
-
-        def close(self):
-            pass
-
-        def set_description(self, *a, **k):
-            pass
-
-        def set_postfix(self, *a, **k):
-            pass
-
-        @staticmethod
-        def format_interval(*a, **k):
-            """兼容旧版 tqdm API：部分下载器（huggingface_hub 等）会按类方法调用。"""
-            return '?'
-
-        @staticmethod
-        def format_sizeof(*a, **k):
-            return '?'
-
     tqdm.tqdm = _PassThrough
     try:
         import tqdm.std
@@ -100,11 +92,6 @@ def transcribe_separate(audio_path, output_midi, params=None, log_cb=None,
         )
 
     _neutralize_tqdm()
-
-    # 强制 HuggingFace 离线：demucs 4.1.0 优先从 HF hub 拉模型，
-    # 离线失败后自动回退到本地 demucs/remote/ 权重（避免联网下载 + tqdm 兼容问题）。
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
     from demucs import separate as demucs_separate
 
@@ -230,7 +217,8 @@ def _stem_predict_kwargs(key, onset, frame, min_len):
 
 
 def _assemble_stem_midi(stems, params, log_cb=None, num_threads=None):
-    """把各声部 WAV 转录后合并为一个多音轨 PrettyMIDI（可独立测试）。"""
+    """把各声部 WAV 转录后合并为一个多音轨 PrettyMIDI（并行转录各声部，复用同一 ONNX 会话）。"""
+    import concurrent.futures
     import pretty_midi
     from basic_pitch.inference import predict
 
@@ -243,35 +231,68 @@ def _assemble_stem_midi(stems, params, log_cb=None, num_threads=None):
     include_drums = bool(params.get("include_drums", False))
     tempo = float(params.get("midi_tempo", 120.0))
 
-    pm = pretty_midi.PrettyMIDI(initial_tempo=tempo)
-    total = 0
-    temp_wavs = []
-
+    # 只加载一次 ONNX 会话，所有声部复用
+    _dml = False
+    try:
+        from engine_gpu import detect as _gpu_detect
+        _dml = bool(_gpu_detect().get("directml"))
+    except Exception:
+        pass
+    model = make_basic_model(num_threads)
+    tasks = []
     for key, label in STEM_ORDER:
         stem = stems.get(key)
         if not stem:
             continue
         if key == "drums" and not include_drums:
-            _log(log_cb, f"· 鼓组：跳过（未勾选输出鼓轨）")
+            _log(log_cb, "· 鼓组：跳过（未勾选输出鼓轨）")
             continue
-        _log(log_cb, f"· 转录「{label}」…")
+        tasks.append((key, label, stem))
+
+    results = []
+    def _run(key, label, stem):
+        wav = None
         try:
             wav = decode_to_wav(stem, 22050)
-            temp_wavs.append(wav)
             _model_output, midi_data, notes = predict(
-                wav, make_basic_model(num_threads),
+                wav, model,
                 **_stem_predict_kwargs(key, onset, frame, min_len),
             )
+            return key, label, wav, midi_data, notes, None
         except Exception as e:
-            _log(log_cb, f"· 「{label}」转录失败：{e}")
-            continue
+            return key, label, wav, None, None, e
 
+    _log(log_cb, "· 并行转录各声部（复用基本音模型）…")
+    # 并发数保守：最多 4，避免低配机器内存/CPU 过载
+    if _dml:
+        # DirectML 并发推理会崩溃，改为按声部串行、仍使用 DML GPU
+        for task in tasks:
+            results.append(_run(*task))
+    else:
+        workers = max(1, min(4, len(tasks)))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = [ex.submit(_run, k, l, st) for k, l, st in tasks]
+            for f in concurrent.futures.as_completed(futs):
+                results.append(f.result())
+
+    # 按 STEM_ORDER 顺序整理
+    order = {k: i for i, (k, _l) in enumerate(STEM_ORDER)}
+    results.sort(key=lambda r: order.get(r[0], 99))
+
+    pm = pretty_midi.PrettyMIDI(initial_tempo=tempo)
+    total = 0
+    temp_wavs = []
+    for key, label, wav, midi_data, notes, err in results:
+        if wav:
+            temp_wavs.append(wav)
+        if err:
+            _log(log_cb, f"· 「{label}」转录失败：{err}")
+            continue
+        _log(log_cb, f"· 转录「{label}」完成")
         if key == "drums":
-            # 鼓声部没有音高，转成 GM 打击乐节奏轨
             _add_drum_track(pm, notes)
             total += len(notes)
             continue
-
         for inst in midi_data.instruments:
             inst.name = f"{_TRACK_NAMES.get(key, key)} · {inst.name}".strip(" ·")
             pm.instruments.append(inst)
@@ -279,19 +300,22 @@ def _assemble_stem_midi(stems, params, log_cb=None, num_threads=None):
 
     for w in temp_wavs:
         remove_temp(w)
+    failed = [r for r in results if r[5]]
+    if not pm.instruments and failed:
+        detail = "; ".join(f"{r[1]}: {r[5]}" for r in failed[:3])
+        raise RuntimeError("所有声部分轨转录均失败: " + detail)
     if not pm.instruments:
-        # 保证至少有一条音轨，避免空文件
         empty = pretty_midi.Instrument(program=0)
         empty.name = "empty"
         pm.instruments.append(empty)
 
-    # 整体后处理：合并同音高碎片 / 力度归一化
     try:
         from midi_post import apply_post
         apply_post(pm, params, log_cb=log_cb)
     except Exception:
         pass
     return pm
+
 
 
 def _add_drum_track(pm, note_events):

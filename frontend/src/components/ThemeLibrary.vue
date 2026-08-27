@@ -2,9 +2,13 @@
 // 主题库：点击卡片立即换肤；上传图片提取主色生成自定义主题
 import { ref, computed, onMounted } from 'vue';
 import Icon from './Icon.vue';
-import { state, toast } from '../store.js';
+import { useAppStore } from '../stores/app';
 import { t } from '../core/i18n.js';
-import { THEMES, themeSwatches, saveTheme, extractAccentFromImage } from '../core/theme.js';
+
+const app = useAppStore();
+const state = app;
+const toast = (m, t) => app.toast(m, t);
+import { THEMES, themeSwatches, saveTheme, extractAccentFromImage, loadMode } from '../core/theme.js';
 
 const bridge = window.fuBridge;
 
@@ -32,7 +36,7 @@ onMounted(async () => {
 
 function pickTheme(th) {
   current.value = th.id;
-  saveTheme(th.id, '');
+  saveTheme(th.id, '', loadMode());
   toast(t('已应用主题：') + t(th.name));
 }
 
@@ -43,7 +47,7 @@ async function onImage(e) {
   try {
     const { accentHex } = await extractAccentFromImage(f);
     current.value = 'custom';
-    saveTheme('custom', accentHex);
+    saveTheme('custom', accentHex, loadMode());
     toast(t('已生成自定义主题'));
   } catch (err) {
     toast(t('生成失败：') + String(err.message || err), 'error');
@@ -74,6 +78,10 @@ async function onImage(e) {
         <span>{{ t('上传一张图片，自动提取特征色生成专属主题') }}</span>
         <button class="btn sm" @click="fileInput && fileInput.click()">📁 {{ t('选择图片生成主题') }}</button>
         <input ref="fileInput" type="file" accept="image/*" hidden @change="onImage" />
+      </div>
+      <div class="thm-custom" style="margin-top:10px">
+        <span>{{ t('视频动态壁纸') }}</span>
+        <button class="btn sm" @click="state.ui.wallpaperOpen = true; state.ui.themesOpen = false">🎬 {{ t('壁纸库') }}</button>
       </div>
     </div>
   </div>

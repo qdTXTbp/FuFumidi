@@ -2,15 +2,23 @@
 // 转录视图：音频 → MIDI（本地 Python 引擎，桌面端通过 fuBridge 桥接）
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
-import { toast, importFiles, setView } from '../store.js';
+import { useAppStore } from '../stores/app';
 import { clamp, esc, fmtTime } from '../core/util.js';
 import { t } from '../core/i18n.js';
+
+const app = useAppStore();
+const toast = (m, t) => app.toast(m, t);
+const importFiles = (items) => app.importFiles(items);
+const setView = (v) => app.setView(v);
 
 const bridge = window.fuBridge;
 const isDesktop = !!(bridge && bridge.convert);
 
 /* ---------------- 状态 ---------------- */
 const mode = ref('universal');           // universal | piano | separate
+const umodel = ref('basic');             // 通用子模型：basic | muscriptor
+const msSize = ref('medium');            // MuScriptor 规格：small | medium | large
+const pmodel = ref('piano_pt');          // 钢琴子模型：piano_pt | aria | transkun
 const perf = ref('quality');             // quality | balanced | fast
 const perfHint = ref('');
 const busy = ref(false);
@@ -66,9 +74,9 @@ const tplIdx = ref(-1);
 // 智能修正
 const rf = reactive({ audio: '', midi: '', mode: 'auto', stem: true, busy: false, jobId: 0, progress: 0, logs: [], info: '' });
 
-const MODE_NAMES = { universal: '通用识别', piano: '钢琴专用', separate: '人声分离' };
-const PERF_NAMES = { quality: '最高质量', balanced: '均衡', fast: '高性能' };
-const MODE_DEFAULT_PRESET = { universal: '通用·标准', piano: '钢琴：最优', separate: '人声：最优' };
+const MODE_NAMES = { universal: t('通用识别'), piano: t('钢琴专用'), separate: t('人声分离') };
+const PERF_NAMES = { quality: t('最高质量'), balanced: t('均衡'), fast: t('高性能') };
+const MODE_DEFAULT_PRESET = { universal: t('通用·标准'), piano: t('钢琴：最优'), separate: t('人声：最优') };
 
 const fileInput = ref(null);
 
@@ -82,7 +90,7 @@ function estSec() {
 const sumTime = computed(() => {
   if (!queue.some(i => i.status === 'pending' || i.status === 'running')) return null;
   const e = estSec();
-  return e ? '约 ' + fmtTime(e) : '依引擎与性能档位而定';
+  return e ? t('约 ') + fmtTime(e) : t('依引擎与性能档位而定');
 });
 const pendingCount = computed(() => queue.filter(i => i.status === 'pending' || i.status === 'error' || i.status === 'canceled').length);
 
@@ -96,7 +104,7 @@ function addPaths(paths) {
   saveQueue();
 }
 function statusTxt(s) {
-  return { pending: '等待', running: '转录中', done: '完成', error: '失败', canceled: '已取消' }[s] || s;
+  return { pending: t('等待'), running: t('转录中'), done: t('完成'), error: t('失败'), canceled: t('已取消') }[s] || s;
 }
 function saveQueue() {
   try {
@@ -110,7 +118,7 @@ function loadQueue() {
     const arr = JSON.parse(raw);
     if (Array.isArray(arr) && arr.length && !queue.length) {
       addPaths(arr);
-      toast('已恢复上次未完成的转录队列，共 ' + arr.length + ' 个', 'ok');
+      toast('已恢复上次未完成的转录队列，共 ' + arr.length + t(' 个'), 'ok');
     }
     localStorage.removeItem('fufumidi_batch_queue');
   } catch (e) {}
@@ -150,10 +158,10 @@ const sortedQueue = computed(() => {
 });
 const queueStat = computed(() => {
   const n = queue.length, d = queue.filter(i => i.status === 'done').length, e = queue.filter(i => i.status === 'error').length;
-  if (paused.value) return '已暂停';
-  if (running.value) return '队列运行中';
-  if (!n) return '队列为空';
-  return '共 ' + n + ' 首 · 完成 ' + d + (e ? ' · 失败 ' + e : '');
+  if (paused.value) return t('已暂停');
+  if (running.value) return t('队列运行中');
+  if (!n) return t('队列为空');
+  return t('共 ') + n + t(' 首 · 完成 ') + d + (e ? t(' · 失败 ') + e : '');
 });
 
 /* ---------------- 音频选择 / 波形 ---------------- */
@@ -161,7 +169,7 @@ async function pickAudio() {
   if (isDesktop && bridge.pickAudioFiles) {
     try {
       const paths = await bridge.pickAudioFiles();
-      if (paths && paths.length) { addPaths(paths); setPrimary(paths[0]); toast('已添加 ' + paths.length + ' 个音频到队列', 'ok'); }
+      if (paths && paths.length) { addPaths(paths); setPrimary(paths[0]); toast('已添加 ' + paths.length + t(' 个音频到队列'), 'ok'); }
     } catch (err) { toast('选择音频失败：' + (err && err.message || err), 'warn'); }
   } else {
     fileInput.value && fileInput.value.click();
@@ -173,7 +181,7 @@ function onFileChange(e) {
     addPaths(files.map(f => f.path || f.name));
     files.forEach((f, i) => { const q = queue.find(x => x.path === (f.path || f.name)); if (q) q._file = f; });
     setPrimary(files[0].path || files[0].name);
-    toast('已添加 ' + files.length + ' 个音频到队列', 'ok');
+    toast('已添加 ' + files.length + t(' 个音频到队列'), 'ok');
   }
   e.target.value = '';
 }
@@ -186,7 +194,7 @@ async function pickFolder() {
     if (!files || !files.length) { toast('文件夹里没有找到音频文件', 'warn'); return; }
     addPaths(files);
     setPrimary(files[0]);
-    toast('已添加 ' + files.length + ' 个音频到队列', 'ok');
+    toast('已添加 ' + files.length + t(' 个音频到队列'), 'ok');
   } catch (e) { /* ignore */ }
 }
 const dropOver = ref(false);
@@ -197,7 +205,7 @@ function onDrop(e) {
   addPaths(files.map(f => f.path || f.name));
   files.forEach((f, i) => { const q = queue.find(x => x.path === (f.path || f.name)); if (q) q._file = f; });
   setPrimary(files[0].path || files[0].name);
-  toast('已添加 ' + files.length + ' 个音频到队列', 'ok');
+  toast('已添加 ' + files.length + t(' 个音频到队列'), 'ok');
 }
 function updateAudioInfo() {
   if (!audioPath.value) { audioInfo.value = ''; return; }
@@ -245,13 +253,24 @@ async function previewWave(pathOrName) {
 }
 
 /* ---------------- 引擎探测 / 性能推荐 ---------------- */
+let perfUserSet = false;
+async function loadPerfDefault() {
+  if (perfUserSet || !bridge || !bridge.getSettings) return;
+  try {
+    const s = await bridge.getSettings() || {};
+    if (s.perf_mode) {
+      perf.value = s.perf_mode;
+      perfHint.value = '';
+    }
+  } catch (e) {}
+}
 async function probeEngine() {
   if (!bridge || !bridge.probe) return;
   try {
     const p = await bridge.probe();
-    if (p && p.perf && p.perf.recommended) {
+    if (!perfUserSet && p && p.perf && p.perf.recommended) {
       perf.value = p.perf.recommended;
-      perfHint.value = '自动推荐：' + (PERF_NAMES[p.perf.recommended] || p.perf.recommended);
+      perfHint.value = t('自动推荐：') + (PERF_NAMES[p.perf.recommended] || p.perf.recommended);
     }
     if (p && p.gpu) {
       const g = p.gpu;
@@ -261,7 +280,7 @@ async function probeEngine() {
     }
   } catch (e) {}
 }
-function selectPerf(p) { perf.value = p; }
+function selectPerf(p) { perfUserSet = true; perf.value = p; }
 
 /* ---------------- 参数预设 ---------------- */
 async function loadPresets() {
@@ -314,43 +333,57 @@ async function savePreset() {
     else toast('保存预设失败：' + ((r && r.error) || ''), 'warn');
   } catch (e) {}
 }
-async function delPreset(name) {
-  const target = name || presetSel.value;
-  if (!bridge || !bridge.presets || !target) return;
-  const isBuiltin = presets.builtins.includes(target);
-  if (!window.confirm(isBuiltin
-    ? '删除内置预设「' + target + '」？将隐藏该预设，可在预设管理中一键恢复。'
-    : '删除预设「' + target + '」？')) return;
+async function delPreset() {
+  if (!bridge || !bridge.presets || !presetSel.value) return;
+  if (!window.confirm(t('删除预设「') + presetSel.value + '」？')) return;
   try {
-    const r = await bridge.presets.delete(target);
-    if (r && r.ok) {
-      toast(isBuiltin ? '内置预设已隐藏' : '预设已删除', 'ok');
-      loadPresets();
-    }
+    const r = await bridge.presets.delete(presetSel.value);
+    if (r && r.ok) { toast('预设已删除', 'ok'); loadPresets(); }
   } catch (e) {}
 }
-async function movePreset(name, delta) {
-  if (!bridge || !bridge.presets) return;
-  try {
-    const r = await bridge.presets.reorder(name, delta);
-    if (r && r.ok && Array.isArray(r.order)) {
-      presets.list.splice(0, presets.list.length, ...r.order.map(nm => {
-        const cur = presets.list.find(x => x.name === nm);
-        return cur ? { ...cur, name: nm } : { name: nm };
-      }));
-    } else loadPresets();
-  } catch (e) { loadPresets(); }
+async function openPresetMgr() {
+  presetMgrOpen.value = true;
+  await loadPresets();
 }
-async function restorePresets() {
+async function mgrApply(name) {
+  if (applyPreset(name) && bridge && bridge.presets && bridge.presets.lastUsed) {
+    try { await bridge.presets.lastUsed(name); } catch (e) {}
+  }
+  presetMgrOpen.value = false;
+  toast('已应用预设：' + name, 'ok');
+}
+async function mgrDelete(name) {
   if (!bridge || !bridge.presets) return;
-  if (!window.confirm('一键恢复全部内置预设？用户自定义预设不受影响。')) return;
+  if (!window.confirm(t('删除预设「') + name + '」？')) return;
+  try {
+    const r = await bridge.presets.delete(name);
+    if (r && r.ok) { toast('预设已删除', 'ok'); await loadPresets(); }
+    else toast('删除失败：' + ((r && r.error) || ''), 'warn');
+  } catch (e) {}
+}
+async function mgrRestore() {
+  if (!bridge || !bridge.presets || !bridge.presets.restore) return;
   try {
     const r = await bridge.presets.restore();
-    if (r && r.ok) { toast('已恢复全部内置预设', 'ok'); loadPresets(); }
-    else toast('恢复失败：' + ((r && r.error) || ''), 'warn');
+    if (r && r.ok) { toast('已恢复全部内置预设', 'ok'); await loadPresets(); }
+    else toast('恢复失败', 'warn');
   } catch (e) {}
 }
-function isBuiltinPreset(name) { return presets.builtins.includes(name); }
+const presetDragName = ref('');
+function presetDragStart(p) { presetDragName.value = p.name; }
+async function presetDrop(p) {
+  const drag = presetDragName.value;
+  presetDragName.value = '';
+  if (!drag || drag === p.name || !bridge || !bridge.presets) return;
+  try {
+    const from = presets.list.findIndex(x => x.name === drag);
+    const to = presets.list.findIndex(x => x.name === p.name);
+    if (from < 0 || to < 0) return;
+    const r = await bridge.presets.reorderTo(drag, to);
+    if (r && r.ok) await loadPresets();
+    else toast('排序失败', 'warn');
+  } catch (e) {}
+}
 
 /* ---------------- 任务模板 ---------------- */
 function loadTaskTemplates() {
@@ -376,7 +409,7 @@ function delTemplate(idx) {
   taskTemplates.splice(idx, 1); saveTaskTemplates();
   toast('模板已删除', 'ok');
 }
-const tplPreview = (t) => t ? (MODE_NAMES[t.mode] || '') + ' · ' + (PERF_NAMES[t.perf] || '') + ' · ' + (t.refine ? '修正' : '无修正') + ' · ' + (t.exportStems ? '分轨' : '不分轨') : '';
+const tplPreview = (t) => t ? (MODE_NAMES[t.mode] || '') + ' · ' + (PERF_NAMES[t.perf] || '') + ' · ' + (t.refine ? t('修正') : t('无修正')) + ' · ' + (t.exportStems ? t('分轨') : t('不分轨')) : '';
 
 /* ---------------- 参数收集 ---------------- */
 function collectParams() {
@@ -392,6 +425,11 @@ function collectParams() {
     cfg.min_note_ms = parseInt(minNote.value, 10);
     cfg.no_pedal = !pedal.value;
     cfg.merge_gap_ms = parseInt(mergeGap.value, 10);
+    cfg.model = pmodel.value;
+  }
+  if (mode.value === 'universal') {
+    cfg.model = umodel.value;
+    if (umodel.value === 'muscriptor') cfg.model_size = msSize.value;
   }
   if (mode.value === 'separate') {
     cfg.with_drums = drums.value;
@@ -428,11 +466,11 @@ async function runBatch() {
   if (!isDesktop) { toast('请使用桌面版 FuFumidi 进行转录', 'warn'); return; }
   if (!queue.some(i => i.status === 'pending')) {
     const d = queue.filter(i => i.status === 'done').length;
-    toast(d ? '队列已完成，可清空后继续添加音频' : '请先选择音频文件', d ? 'ok' : 'warn');
+    toast(d ? t('队列已完成，可清空后继续添加音频') : t('请先选择音频文件'), d ? 'ok' : 'warn');
     return;
   }
   running.value = true; paused.value = false; cancelAll.value = false; busy.value = true; done.value = false; progress.value = 3; stage.value = '';
-  logLine('转录队列：共 ' + pendingCount.value + ' 首，顺序处理…');
+  logLine(t('转录队列：共 ') + pendingCount.value + ' 首，顺序处理…');
   const t0 = Date.now();
   clearInterval(trTimer);
   trTimer = setInterval(() => {
@@ -443,7 +481,7 @@ async function runBatch() {
     const cur = queue.find(i => i.status === 'running');
     const curP = cur ? (cur.progress || (cur.startedAt && cur.estMs ? Math.min(95, Math.round((Date.now() - cur.startedAt) / cur.estMs * 100)) : 0)) : 0;
     progress.value = Math.max(3, Math.min(95, Math.round(((doneN + errN) + curP / 100) / total * 100)));
-    if (!cur) stage.value = '完成 ' + doneN + ' / ' + total + (errN ? ' · 失败 ' + errN : '') + ' · ' + fmtTime(el);
+    if (!cur) stage.value = t('完成 ') + doneN + ' / ' + total + (errN ? t(' · 失败 ') + errN : '') + ' · ' + fmtTime(el);
   }, 500);
 
   while (true) {
@@ -486,22 +524,22 @@ async function runBatch() {
   progress.value = dN && !eN ? 100 : (dN ? Math.round(dN / Math.max(1, queue.length) * 100) : progress.value);
   if (dN && !eN) {
     const last = queue.filter(i => i.status === 'done').pop();
-    if (last) { lastOut.value = last.out; doneInfo.value = '成功 ' + dN + ' 首' + (last.note_count != null ? ' · ' + last.note_count + ' 个音符' : ''); logLine(doneInfo.value); }
+    if (last) { lastOut.value = last.out; doneInfo.value = t('成功 ') + dN + t(' 首') + (last.note_count != null ? ' · ' + last.note_count + t(' 个音符') : ''); logLine(doneInfo.value); }
     done.value = true;
-    toast('批量转录完成：成功 ' + dN + ' 首（已完成曲目已加入歌单）', 'ok');
+    toast('批量转录完成：成功 ' + dN + t(' 首（已完成曲目已加入歌单）'), 'ok');
   } else if (dN) {
-    logLine('[失败] ' + eN + ' 首失败，可在队列中点击「重试」。', true);
-    toast('批量转录完成：成功 ' + dN + ' 首，失败 ' + eN + ' 首', 'warn');
+    logLine(t('[失败] ') + eN + t(' 首失败，可在队列中点击「重试」。'), true);
+    toast('批量转录完成：成功 ' + dN + t(' 首，失败 ') + eN + t(' 首'), 'warn');
   } else if (eN) {
-    logLine('[失败] ' + eN + ' 首失败，可在队列中点击「重试」。', true);
+    logLine(t('[失败] ') + eN + t(' 首失败，可在队列中点击「重试」。'), true);
     toast('转录失败', 'warn');
   }
-  if (cancelAll.value && !paused.value) logLine('已取消转录队列…', true);
+  if (cancelAll.value && !paused.value) logLine(t('已取消转录队列…'), true);
 }
 function startTranscribe() {
   if (busy.value) return;
   const est = estSec();
-  const msg = '确认开始转录？\n文件：' + queue.find(i => i.status === 'pending')?.name + '\n模式：' + (MODE_NAMES[mode.value] || mode.value) + '\n质量：' + (PERF_NAMES[perf.value] || perf.value) + (est ? '\n预计耗时：约 ' + fmtTime(est) : '');
+  const msg = t('确认开始转录？\\n文件：') + queue.find(i => i.status === 'pending')?.name + t('\\n模式：') + (MODE_NAMES[mode.value] || mode.value) + t('\\n质量：') + (PERF_NAMES[perf.value] || perf.value) + (est ? t('\\n预计耗时：约 ') + fmtTime(est) : '');
   if (!window.confirm(msg)) return;
   runBatch();
 }
@@ -509,7 +547,7 @@ function cancelTranscribe() {
   if (!busy.value) return;
   cancelAll.value = true;
   if (currentJobId.value && bridge && bridge.cancel) bridge.cancel(currentJobId.value);
-  logLine('已请求取消转录队列…', true);
+  logLine(t('已请求取消转录队列…'), true);
 }
 function openOutput() {
   if (!lastOut.value) return;
@@ -536,27 +574,27 @@ async function startRefine() {
   if (!rf.midi || !rf.audio) { toast('请先导入原音频与 MIDI 文件', 'warn'); return; }
   if (!bridge || !bridge.refine) { toast('请使用桌面版 FuFumidi 进行修正', 'warn'); return; }
   rf.busy = true; rf.jobId++; rf.progress = 0; rf.logs = [];
-  rl('开始智能修正…（对齐起音 / 还原力度 / ' + (rf.mode === 'vocal' ? '声部平衡' : '清理杂音') + '）');
+  rl(t('开始智能修正…（对齐起音 / 还原力度 / ') + (rf.mode === 'vocal' ? t('声部平衡') : t('清理杂音')) + '）');
   try {
     const res = await bridge.refine({ id: rf.jobId, audio: rf.audio, midi: rf.midi, mode: rf.mode, stemBalance: rf.stem });
     rf.progress = res.ok ? 100 : 0;
     if (res.ok && res.out) {
       const s = res.stats || {};
-      rl('完成！起音吸附 ' + (s.onset_moved || 0) + ' 个 · 尾音修正 ' + (s.offset_moved || 0) + ' · ' +
-        (s.pitch_fixed ? '音高修正 ' + s.pitch_fixed + ' · ' : '') +
-        (s.micro_removed ? '清理微音符 ' + s.micro_removed + ' · ' : '') +
-        (s.lead_track ? '主奏=[' + s.lead_track + '] · ' : '') +
-        (s.vel_balanced ? '力度调整 ' + s.vel_balanced + ' 个音符 · ' : '') +
-        '输出 ' + (s.notes_out || '') + ' 音符');
+      rl(t('完成！起音吸附 ') + (s.onset_moved || 0) + t(' 个 · 尾音修正 ') + (s.offset_moved || 0) + ' · ' +
+        (s.pitch_fixed ? t('音高修正 ') + s.pitch_fixed + ' · ' : '') +
+        (s.micro_removed ? t('清理微音符 ') + s.micro_removed + ' · ' : '') +
+        (s.lead_track ? t('主奏=[') + s.lead_track + '] · ' : '') +
+        (s.vel_balanced ? t('力度调整 ') + s.vel_balanced + t(' 个音符 · ') : '') +
+        t('输出 ') + (s.notes_out || '') + t(' 音符'));
       rf.midi = res.out;
-      rf.info = '输出 ' + String(res.out).replace(/^.*[\\/]/, '') + ' · 耗时 ' + (s.elapsed_s != null ? s.elapsed_s + 's' : '');
+      rf.info = t('输出 ') + String(res.out).replace(/^.*[\\/]/, '') + t(' · 耗时 ') + (s.elapsed_s != null ? s.elapsed_s + 's' : '');
       toast('智能修正完成', 'ok');
     } else {
-      rl('[失败] 修正未成功：' + (res.error || '请查看上方日志。'), true);
+      rl(t('[失败] 修正未成功：') + (res.error || t('请查看上方日志。')), true);
       toast('修正失败', 'warn');
     }
   } catch (e) {
-    rl('[错误] ' + (e.message || String(e)), true);
+    rl(t('[错误] ') + (e.message || String(e)), true);
     toast('修正失败', 'warn');
   } finally {
     rf.busy = false;
@@ -578,6 +616,7 @@ onMounted(() => {
   loadQueue();
   loadPresets();
   loadTaskTemplates();
+  loadPerfDefault();
   probeEngine();
   if (bridge && bridge.onEngineLog) {
     offLog = bridge.onEngineLog(p => {
@@ -604,20 +643,21 @@ onBeforeUnmount(() => {
       <div class="page-ic"><Icon name="transcribe" :size="20" /></div>
       <div class="grow">
         <div class="page-title">{{ t('转录') }}</div>
-        <div class="page-sub">{{ t('音频转 MIDI · 本地 Python 引擎 · 离线完成') }}</div>
+        <div class="page-sub">音频转 MIDI · 本地 Python 引擎 · 离线完成</div>
       </div>
       <span v-if="gpuInfo" class="tag accent">{{ gpuInfo }}</span>
+      <button class="btn sm ghost" @click="state.ui.settingsTab = 'gpu'; state.ui.settingsOpen = true">GPU 加速</button>
       <span class="tag" :class="isDesktop ? '' : 'warn-tag'">{{ isDesktop ? t('桌面引擎就绪') : t('请使用桌面版') }}</span>
     </div>
 
     <!-- 音频选择 -->
     <div class="card tr-drop-card">
-      <div class="tr-drop" :class="{ over: dropOver }"
+      <div class="tr-drop" :class="{ over: dropOver }" data-guide="audio-drop"
            @dragover.prevent="dropOver = true" @dragleave="dropOver = false" @drop.prevent="onDrop"
            @click="pickAudio">
         <div class="td-ic"><Icon name="transcribe" :size="26" /></div>
         <div class="td-txt">
-          <b>{{ dropOver ? '释放以上传' : '拖入音频 / 点击选择' }}</b>
+          <b>{{ dropOver ? t('释放以上传') : t('拖入音频 / 点击选择') }}</b>
           <span>支持多选 · MP3 / WAV / FLAC / M4A / 视频</span>
         </div>
         <input ref="fileInput" type="file" accept="audio/*,video/*" hidden multiple @change="onFileChange">
@@ -630,15 +670,15 @@ onBeforeUnmount(() => {
           <div class="fb-hint">支持多选 / 文件夹 / 顺序转录 / 完成后加入歌单</div>
         </div>
         <div class="tr-batch-ctls">
-          <button class="btn sm" @click="pickAudio"><Icon name="plus" :size="13" /> 文件</button>
+          <button class="btn sm" @click="pickAudio"><Icon name="plus" :size="13" />{{ t('文件') }}</button>
           <button class="btn sm" @click="pickFolder"><Icon name="folder" :size="13" /> 文件夹</button>
           <button class="btn sm ghost" @click="retryAll">重试全部</button>
           <button class="btn sm ghost" @click="clearDone">清空完成</button>
           <select class="select-input" v-model="sort" style="width:auto;padding:4px 8px;font-size:11px">
-            <option value="default">默认顺序</option><option value="name">按名称</option>
-            <option value="type">按类型</option><option value="duration">按时长</option>
+            <option value="default">{{ t('默认顺序') }}</option><option value="name">{{ t('按名称') }}</option>
+            <option value="type">{{ t('按类型') }}</option><option value="duration">{{ t('按时长') }}</option>
           </select>
-          <button class="btn sm danger" @click="clearQueue">清空</button>
+          <button class="btn sm danger" @click="clearQueue">{{ t('清空') }}</button>
         </div>
       </div>
       <div v-if="queue.length" class="tr-batch-list">
@@ -646,8 +686,8 @@ onBeforeUnmount(() => {
           <span class="tb-name" :title="it.path">{{ it.name }}</span>
           <span class="tb-bar"><i :style="{ width: Math.round(it.progress || 0) + '%' }"></i></span>
           <span class="tb-badge" :class="it.status">{{ statusTxt(it.status) }}{{ it.status === 'done' && it.note_count ? ' · ' + it.note_count : '' }}</span>
-          <button v-if="it.status === 'error'" class="btn sm ghost" @click="retryItem(it)">重试</button>
-          <button v-else-if="it.status === 'pending' || it.status === 'done' || it.status === 'canceled'" class="btn sm ghost danger" @click="removeItem(it)">移除</button>
+          <button v-if="it.status === 'error'" class="btn sm ghost" @click="retryItem(it)">{{ t('重试') }}</button>
+          <button v-else-if="it.status === 'pending' || it.status === 'done' || it.status === 'canceled'" class="btn sm ghost danger" @click="removeItem(it)">{{ t('移除') }}</button>
         </div>
       </div>
       <div class="tr-batch-stat muted small">{{ queueStat }}</div>
@@ -657,27 +697,53 @@ onBeforeUnmount(() => {
     <div class="card tr-card">
       <div class="fb-label">引擎模式</div>
       <div class="tr-modes">
-        <button class="tr-mode" :class="{ active: mode === 'universal' }" @click="onModeChange('universal')">
-          <b>通用识别</b><span>任意歌曲 · 人声 · 多乐器</span>
+        <button class="tr-mode" :class="{ active: mode === 'universal' }" data-guide="mode-universal" @click="onModeChange('universal')">
+          <b>{{ t('通用识别') }}</b><span>任意歌曲 · 人声 · 多乐器</span>
         </button>
-        <button class="tr-mode" :class="{ active: mode === 'piano' }" @click="onModeChange('piano')">
-          <b>钢琴专用</b><span>纯钢琴高精度 · 含踏板</span>
+        <button class="tr-mode" :class="{ active: mode === 'piano' }" data-guide="mode-piano" @click="onModeChange('piano')">
+          <b>{{ t('钢琴专用') }}</b><span>纯钢琴高精度 · 含踏板</span>
         </button>
-        <button class="tr-mode" :class="{ active: mode === 'separate' }" @click="onModeChange('separate')">
-          <b>人声分离</b><span>分声部转录 · 需 Demucs</span>
+        <button class="tr-mode" :class="{ active: mode === 'separate' }" data-guide="mode-separate" @click="onModeChange('separate')">
+          <b>{{ t('人声分离') }}</b><span>分声部转录 · 需 Demucs</span>
         </button>
+      </div>
+
+      <!-- 通用子模型：Basic Pitch（兜底）/ MuScriptor（可选，三档规格） -->
+      <div v-if="mode === 'universal'" class="tr-submodels">
+        <div class="fb-label">{{ t('通用模型') }}</div>
+        <div class="tr-pills">
+          <button class="tr-pill" :class="{ active: umodel === 'basic' }" @click="umodel = 'basic'">{{ t('Basic Pitch · 内置兜底') }}</button>
+          <button class="tr-pill" :class="{ active: umodel === 'muscriptor' }" @click="umodel = 'muscriptor'">{{ t('MuScriptor · 需下载') }}</button>
+        </div>
+        <div v-if="umodel === 'muscriptor'" class="tr-pills">
+          <button class="tr-pill" :class="{ active: msSize === 'small' }" @click="msSize = 'small'">Small · 100M</button>
+          <button class="tr-pill" :class="{ active: msSize === 'medium' }" @click="msSize = 'medium'">{{ t('Medium · 300M（推荐）') }}</button>
+          <button class="tr-pill" :class="{ active: msSize === 'large' }" @click="msSize = 'large'">Large · 1.3B</button>
+        </div>
+        <div class="tr-perf-hint" v-if="umodel === 'muscriptor'">{{ t('未下载时请到资源中心 → 模型文件 按规格下载') }}</div>
+      </div>
+
+      <!-- 钢琴子模型：piano-transcription / Aria-AMT / Transkun -->
+      <div v-if="mode === 'piano'" class="tr-submodels">
+        <div class="fb-label">{{ t('钢琴模型') }}</div>
+        <div class="tr-pills">
+          <button class="tr-pill" :class="{ active: pmodel === 'piano_pt' }" @click="pmodel = 'piano_pt'">{{ t('piano-transcription · 内置') }}</button>
+          <button class="tr-pill" :class="{ active: pmodel === 'aria' }" @click="pmodel = 'aria'">Aria-AMT</button>
+          <button class="tr-pill" :class="{ active: pmodel === 'transkun' }" @click="pmodel = 'transkun'">Transkun</button>
+        </div>
+        <div class="tr-perf-hint" v-if="pmodel !== 'piano_pt'">{{ t('Aria-AMT / Transkun 需先到资源中心安装对应模型') }}</div>
       </div>
 
       <div class="fb-label">性能模式</div>
       <div class="tr-pills">
-        <button class="tr-pill" :class="{ active: perf === 'quality' }" @click="selectPerf('quality')">最高质量</button>
-        <button class="tr-pill" :class="{ active: perf === 'balanced' }" @click="selectPerf('balanced')">均衡</button>
-        <button class="tr-pill" :class="{ active: perf === 'fast' }" @click="selectPerf('fast')">高性能</button>
+        <button class="tr-pill" :class="{ active: perf === 'quality' }" @click="selectPerf('quality')">{{ t('最高质量') }}</button>
+        <button class="tr-pill" :class="{ active: perf === 'balanced' }" @click="selectPerf('balanced')">{{ t('均衡') }}</button>
+        <button class="tr-pill" :class="{ active: perf === 'fast' }" @click="selectPerf('fast')">{{ t('高性能') }}</button>
       </div>
       <div v-if="perfHint" class="tr-perf-hint">{{ perfHint }}</div>
 
-      <details class="tr-adv">
-        <summary>高级参数<span class="adv-cnt">阈值 · 踏板 · 降噪</span><span class="adv-arr">▾</span></summary>
+      <details class="tr-adv" data-guide="adv-panel">
+        <summary>高级参数<span class="adv-cnt">{{ t('阈值 · 踏板 · 降噪') }}</span><span class="adv-arr">▾</span></summary>
         <div class="tr-params">
           <div class="tr-slider">
             <label>起音阈值<b>{{ onset.toFixed(2) }}</b></label>
@@ -709,43 +775,20 @@ onBeforeUnmount(() => {
               </select></span>
             </label>
           </div>
-          <div class="tr-switch"><label><span><b>智能降噪</b><small>降噪模式：谱减法</small></span><input type="checkbox" v-model="denoise"></label></div>
-          <div class="tr-switch"><label><span><b>响度平衡</b><small>响度标准化（RMS）</small></span><input type="checkbox" v-model="normalize"></label></div>
-          <div class="tr-switch"><label><span><b>自动检测 BPM</b><small>作为导出速度</small></span><input type="checkbox" v-model="autoBpm"></label></div>
+          <div class="tr-switch"><label><span><b>{{ t('智能降噪') }}</b><small>{{ t('降噪模式：谱减法') }}</small></span><input type="checkbox" v-model="denoise"></label></div>
+          <div class="tr-switch"><label><span><b>{{ t('响度平衡') }}</b><small>{{ t('响度标准化（RMS）') }}</small></span><input type="checkbox" v-model="normalize"></label></div>
+          <div class="tr-switch"><label><span><b>{{ t('自动检测 BPM') }}</b><small>{{ t('作为导出速度') }}</small></span><input type="checkbox" v-model="autoBpm"></label></div>
 
           <div class="tr-preset-row">
             <label class="fb-label" style="margin:0">参数预设</label>
             <div class="row" style="gap:6px">
-              <select class="select-input" v-model="presetSel" title="选择预设并应用" style="min-width:138px" @change="presetSel && applyPreset(presetSel)">
+              <select class="select-input" v-model="presetSel" :title="t('选择预设并应用')" style="min-width:138px">
                 <option v-for="p in presets.list" :key="p.name" :value="p.name">{{ p.name }}{{ presets.builtins.includes(p.name) ? '' : ' ✎' }}</option>
               </select>
               <button class="btn sm" @click="presetSel && applyPreset(presetSel)">应用</button>
-              <button class="btn sm" @click="savePreset"><Icon name="plus" :size="13" /> 保存</button>
-              <button class="btn sm ghost" @click="presetMgrOpen = true"><Icon name="gear" :size="13" /> 管理</button>
-              <button class="btn sm ghost danger" @click="delPreset()"><Icon name="trash" :size="13" /> 删除</button>
-            </div>
-          </div>
-
-          <!-- 预设管理器：排序 / 隐藏内置 / 一键恢复 -->
-          <div v-if="presetMgrOpen" class="preset-mgr">
-            <div class="pm-head">
-              <b><Icon name="gear" :size="13" /> 预设管理</b>
-              <button class="icon-btn" style="width:26px;height:26px" :title="t('关闭')" @click="presetMgrOpen = false"><Icon name="close" :size="13" /></button>
-            </div>
-            <div class="pm-list">
-              <div class="pm-item" v-for="(p, i) in presets.list" :key="p.name" :class="{ builtin: isBuiltinPreset(p.name) }">
-                <button class="icon-btn" style="width:24px;height:24px" :disabled="i === 0" title="上移" @click="movePreset(p.name, -1)">↑</button>
-                <button class="icon-btn" style="width:24px;height:24px" :disabled="i === presets.list.length - 1" title="下移" @click="movePreset(p.name, 1)">↓</button>
-                <span class="pm-name" :title="p.name">{{ p.name }}</span>
-                <span class="tag" :class="isBuiltinPreset(p.name) ? '' : 'accent'">{{ isBuiltinPreset(p.name) ? '内置' : '自定义' }}</span>
-                <span class="muted small pm-mode">{{ (MODE_NAMES[p.mode] || p.mode || '') }}</span>
-                <button class="icon-btn" style="width:24px;height:24px" title="删除/隐藏" @click="delPreset(p.name)"><Icon name="trash" :size="12" /></button>
-              </div>
-              <div v-if="!presets.list.length" class="muted small" style="padding:10px;text-align:center">暂无预设</div>
-            </div>
-            <div class="pm-foot">
-              <button class="btn sm ghost" @click="restorePresets"><Icon name="undo" :size="13" /> 一键恢复全部内置</button>
-              <span class="muted small" style="margin-left:auto">{{ t('内置预设删除后隐藏，可一键恢复') }}</span>
+              <button class="btn sm" @click="savePreset"><Icon name="plus" :size="13" />{{ t('保存') }}</button>
+              <button class="btn sm ghost danger" @click="delPreset"><Icon name="trash" :size="13" />{{ t('删除') }}</button>
+              <button class="btn sm ghost" @click="openPresetMgr"><Icon name="menu" :size="13" /> 管理</button>
             </div>
           </div>
         </div>
@@ -758,13 +801,13 @@ onBeforeUnmount(() => {
           <div class="fb-hint">保存当前转录+修正+导出流程</div>
         </div>
         <div class="row" style="gap:6px;flex-wrap:wrap">
-          <input v-model="tplName" class="text-input" placeholder="模板名" style="width:110px;padding:5px 8px" />
+          <input v-model="tplName" class="text-input" :placeholder="t('模板名')" style="width:110px;padding:5px 8px" />
           <button class="btn sm" @click="saveTemplate">保存模板</button>
           <select v-model="tplIdx" class="select-input" style="min-width:120px" @change="tplIdx >= 0 && applyTemplate(taskTemplates[tplIdx])">
             <option disabled :value="-1">选择模板</option>
             <option v-for="(t, i) in taskTemplates" :key="t.name" :value="i">{{ t.name }}</option>
           </select>
-          <button class="btn sm ghost" @click="taskTemplates.length && delTemplate(taskTemplates.length - 1)">删除</button>
+          <button class="btn sm ghost" @click="taskTemplates.length && delTemplate(taskTemplates.length - 1)">{{ t('删除') }}</button>
         </div>
       </div>
       <div v-if="taskTemplates.length" class="tr-tpl-preview muted small">{{ tplPreview(taskTemplates[taskTemplates.length - 1]) }}</div>
@@ -773,8 +816,8 @@ onBeforeUnmount(() => {
       <div v-if="queue.some(i => i.status === 'pending' || i.status === 'error')" class="tr-sum">
         即将转录：<b>{{ queue.find(i => i.status === 'pending' || i.status === 'error')?.name || '—' }}</b> · 引擎：<b>{{ MODE_NAMES[mode] }}</b> · 预计耗时：<b>{{ sumTime || '—' }}</b>
       </div>
-      <button class="btn primary big" style="width:100%;justify-content:center;margin-top:14px" @click="startTranscribe" :disabled="busy || !isDesktop || !queue.length">
-        <Icon name="transcribe" :size="16" />{{ busy ? '转录中…' : '开始转录' }}
+      <button class="btn primary big" style="width:100%;justify-content:center;margin-top:14px" data-guide="start-transcribe" @click="startTranscribe" :disabled="busy || !isDesktop || !queue.length">
+        <Icon name="transcribe" :size="16" />{{ busy ? t('转录中…') : t('开始转录') }}
       </button>
       <button v-if="busy" class="btn ghost" style="width:100%;justify-content:center;margin-top:8px" @click="cancelTranscribe"><Icon name="stop" :size="14" /> 取消转录</button>
 
@@ -791,10 +834,10 @@ onBeforeUnmount(() => {
       <!-- 运行日志 -->
       <div v-if="logs.length" class="tr-log">
         <div class="tr-log-head">
-          <span class="log-title">运行日志</span><span class="log-count">{{ logs.length }} 行</span>
+          <span class="log-title">{{ t('运行日志') }}</span><span class="log-count">{{ logs.length }} 行</span>
           <span style="flex:1"></span>
-          <button class="icon-btn" title="清空" @click="clearLog"><Icon name="trash" :size="13" /></button>
-          <button class="icon-btn" title="展开/收起" @click="logExpanded = !logExpanded"><Icon name="chevron" :size="13" /></button>
+          <button class="icon-btn" :title="t('清空')" @click="clearLog"><Icon name="trash" :size="13" /></button>
+          <button class="icon-btn" :title="t('展开/收起')" @click="logExpanded = !logExpanded"><Icon name="chevron" :size="13" /></button>
         </div>
         <div class="tr-log-scroll" :class="{ collapsed: !logExpanded }">
           <div v-for="(l, i) in logs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div>
@@ -823,22 +866,47 @@ onBeforeUnmount(() => {
         <button class="tr-pill" :class="{ active: rf.mode === 'vocal' }" @click="rf.mode = 'vocal'">人声</button>
       </div>
       <div class="tr-switch" style="margin-top:8px">
-        <label><span><b>声部平衡</b><small>抬主奏/人声 · 压配乐</small></span><input type="checkbox" v-model="rf.stem"></label>
+        <label><span><b>{{ t('声部平衡') }}</b><small>抬主奏/人声 · 压配乐</small></span><input type="checkbox" v-model="rf.stem"></label>
       </div>
       <button class="btn primary big" style="width:100%;justify-content:center;margin-top:12px" @click="startRefine" :disabled="rf.busy || !rf.midi || !rf.audio">
-        <Icon name="spark" :size="15" />{{ rf.busy ? '修正中…' : '开始智能修正' }}
+        <Icon name="spark" :size="15" />{{ rf.busy ? t('修正中…') : t('开始智能修正') }}
       </button>
       <div v-if="rf.busy || rf.info" class="tr-progress">
-        <div class="pfill" :style="{ width: (rf.busy ? 60 : 100) + '%' }"></div><span>{{ rf.busy ? '…' : '完成' }}</span>
+        <div class="pfill" :style="{ width: (rf.busy ? 60 : 100) + '%' }"></div><span>{{ rf.busy ? '…' : t('完成') }}</span>
       </div>
       <div v-if="rf.info" class="tr-done">
         <button class="btn sm" @click="openRefineResult"><Icon name="play2" :size="13" /> 打开修正结果</button>
         <span class="muted small">{{ rf.info }}</span>
       </div>
       <div v-if="rf.logs.length" class="tr-log">
-        <div class="tr-log-head"><span class="log-title">修正日志</span><span class="log-count">{{ rf.logs.length }} 行</span><span style="flex:1"></span><button class="icon-btn" @click="rf.logs = []"><Icon name="trash" :size="13" /></button></div>
+        <div class="tr-log-head"><span class="log-title">{{ t('修正日志') }}</span><span class="log-count">{{ rf.logs.length }} 行</span><span style="flex:1"></span><button class="icon-btn" @click="rf.logs = []"><Icon name="trash" :size="13" /></button></div>
         <div class="tr-log-scroll">
           <div v-for="(l, i) in rf.logs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 预设管理 -->
+    <div v-if="presetMgrOpen" class="preset-mgr-overlay" @click.self="presetMgrOpen = false">
+      <div class="preset-mgr-card">
+        <div class="preset-mgr-head">
+          <b>参数预设管理</b>
+          <button class="icon-btn" @click="presetMgrOpen = false" :title="t('关闭')"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
+        </div>
+        <div class="preset-mgr-list">
+          <div v-if="!presets.list.length" class="muted small" style="padding:16px">暂无预设</div>
+          <div v-for="p in presets.list" :key="p.name" class="preset-mgr-row"
+               draggable="true" @dragstart="presetDragStart(p)" @dragover.prevent @drop.prevent="presetDrop(p)" @dragend="presetDragName = ''">
+            <span class="pm-handle" :title="t('拖动排序')">⋮⋮</span>
+            <span class="pm-name" @click="mgrApply(p.name)" :title="t('点击应用')">{{ p.name }}</span>
+            <span class="pm-mode">{{ p.mode }}</span>
+            <button class="btn sm ghost danger" :title="t('删除')" @click="mgrDelete(p.name)">{{ t('删除') }}</button>
+          </div>
+        </div>
+        <div class="preset-mgr-foot">
+          <button class="btn sm" @click="mgrRestore">恢复全部内置</button>
+          <span style="flex:1"></span>
+          <button class="btn sm primary" @click="presetMgrOpen = false">{{ t('完成') }}</button>
         </div>
       </div>
     </div>
@@ -849,8 +917,8 @@ onBeforeUnmount(() => {
 .tr-view { max-width: 900px; padding: 18px 26px 40px; }
 .warn-tag { color: var(--amber); border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.1); }
 .tr-drop-card { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
-.tr-drop { display: flex; align-items: center; gap: 14px; padding: 22px; border: 1.5px dashed var(--border-strong); border-radius: 14px; background: var(--glass-bg); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); cursor: pointer; transition: border-color .15s, background .15s; }
-.tr-drop:hover, .tr-drop.over { border-color: var(--brand-blue); background: var(--glass-bg-strong); }
+.tr-drop { display: flex; align-items: center; gap: 14px; padding: 22px; border: 1.5px dashed var(--border-strong); border-radius: 14px; background: var(--canvas); cursor: pointer; transition: border-color .15s, background .15s; }
+.tr-drop:hover, .tr-drop.over { border-color: var(--brand-blue); background: var(--surface-soft); }
 .td-ic { width: 46px; height: 46px; border-radius: 12px; background: var(--surface); display: flex; align-items: center; justify-content: center; color: var(--brand-blue); flex: none; }
 .td-txt b { display: block; font-size: 13.5px; color: var(--ink); }
 .td-txt span { font-size: 11.5px; color: var(--stone); }
@@ -861,7 +929,7 @@ onBeforeUnmount(() => {
 .fb-label { font-size: 12.5px; font-weight: 600; color: var(--ink); }
 .fb-hint { font-size: 11px; color: var(--stone); margin-top: 1px; }
 .tr-batch-ctls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.tr-batch-list { border: 1px solid var(--hairline); border-radius: 10px; background: var(--glass-bg-strong); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); overflow: hidden; }
+.tr-batch-list { border: 1px solid var(--hairline); border-radius: 10px; background: var(--canvas); overflow: hidden; }
 .tr-batch-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--hairline-soft); font-size: 12px; }
 .tr-batch-item:last-child { border-bottom: none; }
 .tb-name { flex: 1; min-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
@@ -875,18 +943,20 @@ onBeforeUnmount(() => {
 .tr-batch-stat { margin-top: 6px; }
 .tr-card { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
 .tr-modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-.tr-mode { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--glass-bg); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); text-align: left; cursor: pointer; transition: all .15s; }
+.tr-mode { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--surface); text-align: left; cursor: pointer; transition: all .15s; }
 .tr-mode b { display: block; font-size: 13px; color: var(--ink); margin-bottom: 2px; }
 .tr-mode span { font-size: 11px; color: var(--stone); line-height: 1.4; }
 .tr-mode:hover { border-color: var(--border-strong); }
-.tr-mode.active { border-color: var(--ink); background: var(--glass-bg-strong); box-shadow: 0 0 0 1px var(--ink); }
+.tr-mode.active { border-color: var(--ink); background: var(--canvas); box-shadow: 0 0 0 1px var(--ink); }
 .tr-mode.active b { color: var(--brand-coral); }
 .tr-pills { display: flex; gap: 6px; flex-wrap: wrap; }
-.tr-pill { padding: 5px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--glass-bg); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); font-size: 12px; color: var(--slate); cursor: pointer; }
+.tr-pill { padding: 5px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); font-size: 12px; color: var(--slate); cursor: pointer; }
 .tr-pill:hover { border-color: var(--border-strong); }
-.tr-pill.active { background: var(--ink); border-color: var(--ink); color: #fff; }
+.tr-pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tr-submodels { margin-top: 10px; padding: 10px 12px; border: 1px dashed var(--hairline); border-radius: 10px; background: var(--surface-soft); }
+.tr-submodels .fb-label { margin-bottom: 8px; }
 .tr-perf-hint { font-size: 11.5px; color: var(--success-text); }
-.tr-adv { border: 1px solid var(--hairline); border-radius: 10px; background: var(--glass-bg); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+.tr-adv { border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); }
 .tr-adv summary { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-size: 12.5px; font-weight: 600; color: var(--ink); cursor: pointer; user-select: none; }
 .tr-adv summary .adv-cnt { font-weight: 400; color: var(--stone); font-size: 11px; }
 .tr-adv summary .adv-arr { margin-left: auto; color: var(--stone); }
@@ -899,26 +969,15 @@ onBeforeUnmount(() => {
 .tr-switch small { color: var(--stone); font-size: 10.5px; }
 .tr-switch input[type=checkbox] { accent-color: var(--ink); }
 .tr-preset-row { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--hairline); }
-.preset-mgr { border: 1px solid var(--hairline); border-radius: 10px; overflow: hidden; margin-top: 6px; }
-.pm-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; background: var(--glass-bg-soft); border-bottom: 1px solid var(--hairline); }
-.pm-head b { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink); }
-.pm-list { max-height: 240px; overflow-y: auto; }
-.pm-item { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--hairline-soft); }
-.pm-item:last-child { border-bottom: none; }
-.pm-item.builtin { background: var(--glass-bg-soft); }
-.pm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--ink); font-weight: 500; }
-.pm-mode { flex: none; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pm-foot { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--hairline); background: var(--glass-bg-soft); }
-.pm-foot .muted { font-size: 10.5px; }
 .tr-tpl-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
 .tr-tpl-preview { margin-top: 4px; }
-.tr-sum { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: var(--glass-bg); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--slate); }
+.tr-sum { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: var(--surface-soft); border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--slate); }
 .tr-sum b { color: var(--ink); font-weight: 600; }
 .tr-progress { display: flex; align-items: center; gap: 10px; height: 20px; background: var(--surface-soft); border-radius: 999px; overflow: hidden; padding: 0 12px; font-size: 11px; color: var(--steel); margin-top: 8px; }
-.tr-progress .pfill { height: 100%; background: var(--brand-blue); border-radius: 999px; transition: width .2s; }
+.tr-progress .pfill { height: 100%; background: var(--ink); border-radius: 999px; transition: width .2s; }
 .tr-stage { margin-top: 4px; text-align: center; }
 .tr-done { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
-.tr-log { border: 1px solid var(--hairline); border-radius: 10px; background: var(--glass-bg); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); margin-top: 10px; overflow: hidden; }
+.tr-log { border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); margin-top: 10px; overflow: hidden; }
 .tr-log-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 11px; color: var(--slate); border-bottom: 1px solid var(--hairline-soft); }
 .log-count { color: var(--stone); }
 .tr-log-scroll { max-height: 220px; overflow-y: auto; padding: 8px 12px; font-family: var(--mono); font-size: 11px; color: var(--slate); line-height: 1.6; }
@@ -926,4 +985,13 @@ onBeforeUnmount(() => {
 .tr-log-scroll .err { color: var(--error); }
 .tr-rf-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .rf-path { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
+.preset-mgr-overlay { position: fixed; inset: 0; z-index: 120; background: rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.preset-mgr-card { width: 560px; max-width: 94vw; max-height: 82vh; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 16px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden; }
+.preset-mgr-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--hairline); color: var(--ink); font-size: 14px; }
+.preset-mgr-list { flex: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
+.preset-mgr-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); }
+.pm-handle { color: var(--stone); cursor: grab; user-select: none; flex: none; }
+.pm-name { flex: 1; cursor: pointer; color: var(--ink); font-weight: 600; }
+.pm-mode { font-size: 11px; color: var(--stone); background: var(--surface-soft); padding: 2px 8px; border-radius: 99px; }
+.preset-mgr-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--hairline); }
 </style>

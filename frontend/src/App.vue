@@ -1,38 +1,71 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { onMounted, onBeforeUnmount, watch } from 'vue';
+import { useRoute } from 'vue-router';
+import Icon from './components/Icon.vue';
 import SideBar from './components/SideBar.vue';
 import TopBar from './components/TopBar.vue';
 import PlayerBar from './components/PlayerBar.vue';
 import SettingsPanel from './components/SettingsPanel.vue';
 import ThemeLibrary from './components/ThemeLibrary.vue';
+import WallpaperGallery from './components/WallpaperGallery.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import GuideOverlay from './components/GuideOverlay.vue';
-import WallpaperGallery from './components/WallpaperGallery.vue';
-import ViewHome from './views/ViewHome.vue';
-import ViewPlay from './views/ViewPlay.vue';
-import ViewEdit from './views/ViewEdit.vue';
-import ViewAnalyze from './views/ViewAnalyze.vue';
-import ViewViz from './views/ViewViz.vue';
-import ViewScore from './views/ViewScore.vue';
-import ViewLyrics from './views/ViewLyrics.vue';
-import ViewConvert from './views/ViewConvert.vue';
-import ViewTranscribe from './views/ViewTranscribe.vue';
-import ViewPlaceholder from './views/ViewPlaceholder.vue';
-import Icon from './components/Icon.vue';
-import { state, MIGRATED_VIEWS, startTickLoop, stopTickLoop, restoreSongs, loadPlaylists, loadWallpaper, wallpaperSrc, maybePromptWallpaper, markWallpaperPrompted, goDownloadWallpaper, togglePlay, seekRatio, setTempo, toggleLoop, toggleMetro } from './store.js';
+import { ref } from 'vue';
+import { useAppStore, VIEWS } from './stores/app';
+import { usePlaylistStore } from './stores/playlist';
+import { useSettingsStore } from './stores/settings';
 import { setLang, t } from './core/i18n.js';
 import { applyTheme, loadTheme } from './core/theme.js';
+import { viewFromPath } from './router';
 
-const bridge = window.fuBridge;
+const app = useAppStore();
+const state = app;
+const playlistStore = usePlaylistStore();
+const settingsStore = useSettingsStore();
+const wallpaperPromptOpen = ref(false);
+const route = useRoute();
 
-// 动态壁纸无缝循环：原生 loop 在循环切换时有黑屏/卡顿，
-// 改为临近结尾时提前 seek 到开头偏后位置（跳过首帧解码延迟与开头黑帧）
+const wpUrl = ref('');
+const wpEnabled = ref(false);
 const bgVideo = ref(null);
+// 动态壁纸无缝循环：原生 loop 在循环切换时有黑屏/卡顿，改为临近结尾提前 seek 到开头偏后位置（跳过首帧解码延迟与黑帧）
 function onBgTime() {
   const v = bgVideo.value;
   if (!v || !v.duration || !isFinite(v.duration)) return;
   if (v.currentTime > v.duration - 0.4) v.currentTime = 0.35;
 }
+function wpFileUrl(p) {
+  if (!p) return '';
+  if (/^(https?:|file:|data:)/i.test(p)) return p;
+  const norm = String(p).replace(/\\/g, '/');
+  return 'file:///' + norm.replace(/^([A-Za-z]):/, '$1:');
+}
+async function loadWallpaper() {
+  try {
+    const s = await settingsStore.load();
+    wpUrl.value = wpFileUrl(s.custom_wallpaper || '');
+    wpEnabled.value = !!(s.wallpaper_enabled && s.custom_wallpaper);
+  } catch (e) {}
+}
+watch(() => settingsStore.settings, () => {
+  const s = settingsStore.settings;
+  wpUrl.value = wpFileUrl(s.custom_wallpaper || '');
+  wpEnabled.value = !!(s.wallpaper_enabled && s.custom_wallpaper);
+}, { deep: true });
+watch(() => route.path, (p) => {
+  const v = viewFromPath(p);
+  if (VIEWS.some(x => x.id === v)) state.view = v;
+}, { immediate: true });
+const startTickLoop = () => app.startTickLoop();
+const stopTickLoop = () => app.stopTickLoop();
+const restoreSongs = () => app.restoreSongs();
+const togglePlay = () => app.togglePlay();
+const seekRatio = (r) => app.seekRatio(r);
+const setTempo = (v) => app.setTempo(v);
+const toggleLoop = () => app.toggleLoop();
+const toggleMetro = () => app.toggleMetro();
+
+const bridge = window.fuBridge;
 
 // 字号 / 密度即时应用
 function applyDisplayPrefs(s) {
@@ -45,14 +78,14 @@ function applyDisplayPrefs(s) {
 async function initGlobal() {
   // 1) 主题：localStorage 同步读取先应用（防闪烁），settings 仅兜底
   const lt = loadTheme();
-  applyTheme(lt.name, lt.accent);
+  applyTheme(lt.name, lt.accent, lt.mode);
   let s = {};
   if (bridge && bridge.getSettings) {
     try { s = await bridge.getSettings() || {}; } catch (e) {}
   }
   let hasLsTheme = false;
   try { hasLsTheme = localStorage.getItem('fufumidi_theme') != null; } catch (e) {}
-  if (!hasLsTheme && s.theme) applyTheme(s.theme, s.accent || '');
+  if (!hasLsTheme && s.theme) applyTheme(s.theme, s.accent || '', lt.mode);
 
   // 2) 语言 / 字号 / 密度（localStorage 优先，settings 兜底）
   let lang = 'zh', font = null, density = null;
@@ -75,6 +108,23 @@ async function initGlobal() {
   let guideDone = false;
   try { guideDone = !!localStorage.getItem('fufumidi_guide_done'); } catch (e) {}
   if (!guideDone && !s.guide_done) state.ui.guideOpen = true;
+
+  // 5) 首次启动壁纸询问（仅一次，未设置壁纸时）
+  if (!s.wallpaper_prompt_done && !s.custom_wallpaper) {
+    setTimeout(() => {
+      if (!settingsStore.settings.custom_wallpaper && !state.ui.wallpaperOpen) wallpaperPromptOpen.value = true;
+    }, 1200);
+  }
+}
+
+function goDownloadWallpaper() {
+  wallpaperPromptOpen.value = false;
+  state.ui.wallpaperOpen = true;
+  settingsStore.save({ wallpaper_prompt_done: true }).catch(() => {});
+}
+function dismissWallpaperPrompt() {
+  wallpaperPromptOpen.value = false;
+  settingsStore.save({ wallpaper_prompt_done: true }).catch(() => {});
 }
 
 function onKey(e) {
@@ -93,6 +143,15 @@ function onKey(e) {
       return;
     }
   }
+  // F1 帮助 / 新手引导（即使焦点在输入框也优先响应）
+  if (e.key === 'F1') { e.preventDefault(); state.ui.guideOpen = true; return; }
+  // Ctrl+1..9 快速切换视图
+  if (e.ctrlKey && /^[1-9]$/.test(e.key)) {
+    e.preventDefault();
+    const v = VIEWS[parseInt(e.key, 10) - 1];
+    if (v) app.setView(v.id);
+    return;
+  }
   // 忽略输入框内的快捷键
   if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
   if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
@@ -107,11 +166,9 @@ function onKey(e) {
 onMounted(() => {
   startTickLoop();
   restoreSongs();
-  loadPlaylists();
-  loadWallpaper();
+  playlistStore.hydrateFromDb();
   initGlobal();
-  // 首次启动：稍后询问是否从 GitHub 下载一张壁纸（只弹一次）
-  setTimeout(maybePromptWallpaper, 1200);
+  loadWallpaper();
   window.addEventListener('keydown', onKey);
 });
 onBeforeUnmount(() => {
@@ -121,49 +178,41 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'side-collapsed': !state.sidebarOpen }">
-    <!-- 动态壁纸：全屏背景视频（静音无缝循环，毛玻璃组件透出其画面） -->
-    <video v-if="wallpaperSrc" ref="bgVideo" class="app-wallpaper" :src="wallpaperSrc"
-           autoplay muted playsinline preload="auto" @timeupdate="onBgTime"></video>
+  <video v-if="wpEnabled && wpUrl" :key="wpUrl" ref="bgVideo" class="app-wallpaper" :src="wpUrl" autoplay muted playsinline preload="auto" @timeupdate="onBgTime"></video>
+  <div class="app-shell" :class="{ 'side-collapsed': !state.sidebarOpen, 'no-player': !state.playerbarOpen, 'wallpaper-on': wpEnabled && wpUrl }">
     <SideBar />
     <TopBar />
     <main class="app-main">
-      <Transition name="view" mode="out-in">
-        <ViewHome v-if="state.view === 'home'" key="home" />
-        <ViewPlay v-else-if="state.view === 'play'" key="play" />
-        <ViewEdit v-else-if="state.view === 'edit'" key="edit" />
-        <ViewAnalyze v-else-if="state.view === 'analyze'" key="analyze" />
-        <ViewViz v-else-if="state.view === 'viz'" key="viz" />
-        <ViewScore v-else-if="state.view === 'score'" key="score" />
-        <ViewLyrics v-else-if="state.view === 'lyrics'" key="lyrics" />
-        <ViewConvert v-else-if="state.view === 'convert'" key="convert" />
-        <ViewTranscribe v-else-if="state.view === 'transcribe'" key="transcribe" />
-        <ViewPlaceholder v-else :view-id="state.view" :key="state.view" />
-      </Transition>
+      <router-view v-slot="{ Component }">
+        <Transition name="view" mode="out-in">
+          <KeepAlive>
+            <component :is="Component" />
+          </KeepAlive>
+        </Transition>
+      </router-view>
     </main>
-    <PlayerBar />
-    <div class="toast-wrap" v-if="state.toast">
+    <PlayerBar v-if="state.playerbarOpen" />
+    <div class="toast-wrap" v-if="state.toast && state.toast.msg" role="status" aria-live="polite">
       <div class="toast" :class="state.toast.type">{{ state.toast.msg }}</div>
     </div>
 
     <!-- 全局系统功能浮层 -->
-    <SettingsPanel v-if="state.ui.settingsOpen" />
-    <ThemeLibrary v-if="state.ui.themesOpen" />
-    <CommandPalette v-if="state.ui.paletteOpen" />
-    <GuideOverlay v-if="state.ui.guideOpen" />
-    <WallpaperGallery v-if="state.ui.wallpaperGalleryOpen" />
-
-    <!-- 首次启动：询问是否从 GitHub 下载一张壁纸 -->
-    <div v-if="state.ui.wallpaperPrompt" class="overlay">
+    <div v-if="wallpaperPromptOpen" class="overlay" role="dialog" aria-modal="true" :aria-label="t('发现动态壁纸')" @click.self="dismissWallpaperPrompt">
       <div class="overlay-card wp-prompt">
         <div class="wp-prompt-ic"><Icon name="wallpaper" :size="30" /></div>
         <b class="wp-prompt-title">{{ t('发现动态壁纸') }}</b>
         <p class="wp-prompt-desc">{{ t('首次使用：是否从 GitHub 下载一张壁纸？下载后可在顶栏按钮切换，需要更多可再次从壁纸库选择或自行导入。') }}</p>
         <div class="wp-prompt-actions">
           <button class="btn primary" @click="goDownloadWallpaper">{{ t('去下载壁纸') }}</button>
-          <button class="btn ghost" @click="markWallpaperPrompted()">{{ t('暂不需要') }}</button>
+          <button class="btn ghost" @click="dismissWallpaperPrompt">{{ t('暂不') }}</button>
         </div>
       </div>
     </div>
+
+    <SettingsPanel v-if="state.ui.settingsOpen" />
+    <ThemeLibrary v-if="state.ui.themesOpen" />
+    <WallpaperGallery v-if="state.ui.wallpaperOpen" />
+    <CommandPalette v-if="state.ui.paletteOpen" />
+    <GuideOverlay v-if="state.ui.guideOpen" />
   </div>
 </template>

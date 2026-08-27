@@ -1,8 +1,14 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
-import { currentSong, state, togglePlay, toast } from '../store.js';
+import { useAppStore } from '../stores/app';
 import { getPlayer, ensureAudio } from '../audio.js';
+
+const app = useAppStore();
+const state = app;
+const currentSong = computed(() => app.currentSong);
+const togglePlay = () => app.togglePlay();
+const toast = (m, t) => app.toast(m, t);
 import { t } from '../core/i18n.js';
 import { esc } from '../core/util.js';
 
@@ -47,11 +53,21 @@ const song = computed(() => (currentSong.value && currentSong.value.song) || nul
 const lyrics = computed(() => (song.value ? collectLyrics(song.value) : []));
 const fontSz = ref(18);
 const karaoke = ref(true);
+const lyrColor = ref('');
+const lyrOutline = ref(false);
+const lyrShadow = ref(false);
 const newText = ref('');
 const tlEl = ref(null);
 const replaceOpen = ref(false);
 const repFrom = ref('');
 const repTo = ref('');
+
+function cssVar(name, fb) {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fb;
+  } catch (e) { return fb; }
+}
 
 /* ---------------- 卡拉OK高亮 ---------------- */
 const curIdx = ref(-1);
@@ -170,6 +186,55 @@ function exportLrc() {
   toast(t('已导出 LRC'), 'ok');
 }
 
+function exportSrt() {
+  const s = song.value;
+  if (!s || !lyrics.value.length) { toast(t('暂无歌词'), 'warn'); return; }
+  const lines = lyrics.value.map((l, i) => {
+    const t0 = Math.round(s.baseSec(l.tick) * 1000);
+    const t1 = i + 1 < lyrics.value.length ? Math.round(s.baseSec(lyrics.value[i + 1].tick) * 1000) : Math.min(s.totalSec * 1000, t0 + 3000);
+    const fmt = ms => {
+      const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000), ss = Math.floor((ms % 60000) / 1000), f = ms % 1000;
+      return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(ss).padStart(2, '0') + ',' + String(f).padStart(3, '0');
+    };
+    return (i + 1) + '\n' + fmt(t0) + ' --> ' + fmt(t1) + '\n' + l.text + '\n';
+  });
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.download = s.name + '.srt'; a.href = URL.createObjectURL(blob); a.click();
+  URL.revokeObjectURL(a.href);
+  toast(t('已导出 SRT'), 'ok');
+}
+function exportTxt() {
+  const s = song.value;
+  if (!s || !lyrics.value.length) { toast(t('暂无歌词'), 'warn'); return; }
+  const lines = lyrics.value.map(l => l.text);
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.download = s.name + '.txt'; a.href = URL.createObjectURL(blob); a.click();
+  URL.revokeObjectURL(a.href);
+  toast(t('已导出 TXT'), 'ok');
+}
+function splitWords() {
+  const s = song.value;
+  if (!s || !lyrics.value.length) { toast(t('暂无歌词'), 'warn'); return; }
+  let count = 0;
+  for (const lyr of lyrics.value) {
+    const ev = lyr.ev;
+    if (!ev) continue;
+    const parts = String(lyr.text).split('');
+    if (parts.length <= 1) continue;
+    const tickSize = Math.max(1, Math.round((s.tpb || 480) / 8));
+    parts.forEach((ch, i) => {
+      if (!ch.trim()) return;
+      s.tracks[0].events.push({ tick: lyr.tick + i * tickSize, type: 'lyric', text: ch });
+      count++;
+    });
+    const idx = s.tracks[0].events.indexOf(ev);
+    if (idx >= 0) s.tracks[0].events.splice(idx, 1);
+  }
+  toast(t('已逐字拆分 ') + count + t(' 个字符'), count ? 'ok' : 'warn');
+}
+
 /* ---------------- 批量替换 ---------------- */
 function openReplace() {
   repFrom.value = '';
@@ -205,10 +270,10 @@ function drawTimeline() {
   const ctx = cv.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = 'rgba(10,10,10,0.03)'; ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = cssVar('--surface-soft', 'rgba(10,10,10,0.03)'); ctx.fillRect(0, 0, w, h);
   const total = s.totalTicks || 1, tpb = s.tpb || 480;
   // 小节线
-  ctx.strokeStyle = 'rgba(10,10,10,0.06)'; ctx.lineWidth = 1;
+  ctx.strokeStyle = cssVar('--hairline', 'rgba(10,10,10,0.06)'); ctx.lineWidth = 1;
   for (let tk = 0; tk <= total; tk += tpb) {
     const x = Math.round(tk / total * w);
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
@@ -242,11 +307,11 @@ function drawTimeline() {
     const p = getPlayer();
     if (p && p.song) {
       const x = Math.round(p.currentTick() / total * w);
-      ctx.fillStyle = 'rgba(10,10,10,0.75)'; ctx.fillRect(x - 0.5, 0, 1.5, h);
+      ctx.fillStyle = cssVar('--ink', 'rgba(10,10,10,0.75)'); ctx.fillRect(x - 0.5, 0, 1.5, h);
     }
   }
   // 图例
-  ctx.fillStyle = 'rgba(10,10,10,0.55)'; ctx.font = '10px system-ui'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillStyle = cssVar('--slate', 'rgba(10,10,10,0.55)'); ctx.font = '10px system-ui'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   ctx.fillText(t('蓝：音符 · 橙：歌词 · 竖线：播放位置'), 6, h - 16);
 }
 
@@ -278,11 +343,17 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
       </button>
       <button class="btn sm" @click="addLyric" :disabled="!song"><Icon name="plus" :size="14" />{{ t('添加歌词') }}</button>
       <button class="btn sm" @click="openReplace" :disabled="!lyrics.length"><Icon name="edit" :size="14" />{{ t('批量替换') }}</button>
-      <button class="btn sm" @click="noteSelHint" :disabled="!song" title="在编辑视图中选中音符后可为其添加歌词"><Icon name="cursor" :size="14" />{{ t('添加到所选音符') }}</button>
+      <button class="btn sm" @click="noteSelHint" :disabled="!song" :title="t('在编辑视图中选中音符后可为其添加歌词')"><Icon name="cursor" :size="14" />{{ t('添加到所选音符') }}</button>
       <button class="btn sm" @click="importText" :disabled="!song"><Icon name="import" :size="14" />{{ t('导入文本') }}</button>
       <button class="btn sm" @click="exportLrc" :disabled="!lyrics.length"><Icon name="save" :size="14" />{{ t('导出 LRC') }}</button>
+      <button class="btn sm" @click="exportSrt" :disabled="!lyrics.length"><Icon name="save" :size="14" />{{ t('导出 SRT') }}</button>
+      <button class="btn sm" @click="exportTxt" :disabled="!lyrics.length"><Icon name="save" :size="14" />{{ t('导出 TXT') }}</button>
+      <button class="btn sm" @click="splitWords" :disabled="!lyrics.length" :title="t('逐字拆分')"><Icon name="edit" :size="14" />{{ t('逐字拆分') }}</button>
       <span class="sep"></span>
       <label class="lyr-ctl">{{ t('字号') }}<input type="number" min="12" max="40" v-model.number="fontSz" class="num-input" style="width:56px" /></label>
+      <label class="lyr-ctl">{{ t('颜色') }}<input type="color" v-model="lyrColor" style="width:36px;height:26px;padding:1px;border:1px solid var(--hairline);background:var(--canvas)" /></label>
+      <label class="lyr-ctl"><input type="checkbox" v-model="lyrOutline" /> {{ t('描边') }}</label>
+      <label class="lyr-ctl"><input type="checkbox" v-model="lyrShadow" /> {{ t('阴影') }}</label>
       <label class="lyr-ctl"><input type="checkbox" v-model="karaoke" /> {{ t('卡拉OK高亮') }}</label>
       <span style="flex:1"></span>
       <span class="lyr-status">{{ song ? (t('共 ') + lyrics.length + t(' 句')) : '' }}</span>
@@ -300,7 +371,8 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
       <div v-else-if="!lyrics.length" class="lyr-empty">{{ t('暂无歌词，点击上方按钮添加或导入') }}</div>
       <div v-else v-for="(l, i) in lyrics" :key="i" class="lyr-row" :class="{ cur: karaoke && state.playing && i === curIdx }" :data-idx="i">
         <input class="ly-time" :value="fmtTickTime(l.tick, song)" @keydown.enter="saveLyric(i)" />
-        <input class="ly-text" :value="l.text" @keydown.enter="saveLyric(i)" />
+        <input class="ly-text" :value="l.text" @keydown.enter="saveLyric(i)"
+               :style="{ color: lyrColor || 'var(--ink)', textShadow: lyrShadow ? '0 1px 4px rgba(0,0,0,.55)' : 'none', WebkitTextStroke: lyrOutline ? '0.5px var(--ink)' : 'none' }" />
         <button class="btn sm ghost" @click="saveLyric(i)">{{ t('保存') }}</button>
         <button class="btn sm ghost danger" @click="delLyric(i)">{{ t('删除') }}</button>
       </div>
@@ -332,16 +404,16 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
 .lyr-ctl input[type=checkbox] { accent-color: var(--ink); }
 .lyr-status { font-size: 11px; color: var(--stone); }
 .lyr-add { display: flex; gap: 8px; margin-bottom: 10px; }
-.text-input { flex: 1; padding: 8px 12px; font-size: 12.5px; background: var(--glass-bg-soft); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border: 1px solid var(--hairline); border-radius: 10px; color: var(--ink); outline: none; }
+.text-input { flex: 1; padding: 8px 12px; font-size: 12.5px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; color: var(--ink); outline: none; }
 .text-input:focus { border-color: var(--ink); }
 .lyr-timeline { width: 100%; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 12px; margin-bottom: 10px; display: block; cursor: pointer; }
-.lyr-list { flex: 1; overflow-y: auto; border: 1px solid var(--hairline); border-radius: 12px; background: var(--glass-bg-strong); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+.lyr-list { flex: 1; overflow-y: auto; border: 1px solid var(--hairline); border-radius: 12px; background: var(--canvas); }
 .lyr-empty { color: var(--stone); font-size: 13px; padding: 24px 16px; text-align: center; }
 .lyr-row { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--hairline); transition: background 0.15s; }
-.lyr-row.cur { background: var(--glass-bg); }
+.lyr-row.cur { background: var(--surface-soft); }
 .lyr-row.cur .ly-text { font-weight: 700; color: var(--brand-coral); }
-.ly-time { width: 92px; padding: 4px 6px; font-size: 11px; background: var(--glass-bg-soft); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); border: 1px solid var(--hairline); border-radius: 6px; color: var(--ink); font-family: var(--mono); outline: none; }
-.ly-text { flex: 1; min-width: 80px; padding: 4px 8px; font-size: 12.5px; background: var(--glass-bg-soft); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); border: 1px solid var(--hairline); border-radius: 6px; color: var(--ink); outline: none; }
+.ly-time { width: 92px; padding: 4px 6px; font-size: 11px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 6px; color: var(--ink); font-family: var(--mono); outline: none; }
+.ly-text { flex: 1; min-width: 80px; padding: 4px 8px; font-size: 12.5px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 6px; color: var(--ink); outline: none; }
 .ly-time:focus, .ly-text:focus { border-color: var(--ink); }
 
 /* 批量替换弹窗 */
@@ -352,8 +424,7 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
 }
 .rep-card {
   width: 380px; max-width: calc(100vw - 40px);
-  background: var(--glass-bg-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--hairline);
+  background: var(--canvas); border: 1px solid var(--hairline);
   border-radius: 16px; box-shadow: var(--shadow-lg);
   padding: 16px; display: flex; flex-direction: column; gap: 10px;
 }

@@ -12,6 +12,19 @@ import os
 import subprocess
 import sys
 
+def _patch_tqdm_compat():
+    try:
+        from tqdm.auto import tqdm as _tqdm_cls
+        import threading
+        if not hasattr(_tqdm_cls, "set_lock"):
+            _tqdm_cls.set_lock = lambda lock: None
+        if not hasattr(_tqdm_cls, "get_lock"):
+            _tqdm_cls.get_lock = lambda: threading.RLock()
+    except Exception:
+        pass
+
+_patch_tqdm_compat()
+
 REQUIRED = {
     "universal": [
         "numpy", "scipy", "librosa", "soundfile", "pretty_midi", "tqdm",

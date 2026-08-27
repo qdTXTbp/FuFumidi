@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 性能模式：为不同配置的电脑控制引擎计算强度
 ==========================================
@@ -145,64 +145,81 @@ def detect_recommended():
     return res
 
 
-def _resolve_basic_pitch_model():
-    """把 basic_pitch.ICASSP_2022_MODEL_PATH 规整为 onnxruntime 能直接读取的模型文件。
-
-    新版 basic_pitch wheel 把 ICASSP_2022_MODEL_PATH 指向 Apple CoreML 打包目录
-    （saved_models/icassp_2022/nmp，.mlpackage）——macOS 上可作为 CoreML 模型加载，
-    但 Windows / Linux 上 onnxruntime 无法读取目录（报 errno 13）。真正的 ONNX
-    模型在同目录的 nmp.onnx（或任意 .onnx）里，这里自动解析。
-
-    返回能直接传给 onnxruntime.InferenceSession 的文件路径字符串。
-
-    优先返回内置量化模型 basic_pitch_quant.onnx（体积更小、CPU 更快）。
-    """
+def _basic_pitch_model_candidates():
+    """Returns candidate basic-pitch ONNX model paths in preference order."""
     from basic_pitch import ICASSP_2022_MODEL_PATH
     p = Path(ICASSP_2022_MODEL_PATH)
-    quant_candidates = []
+    cands = []
     models_dir = os.environ.get("FUFUMIDI_MODELS_DIR")
     if models_dir:
-        quant_candidates.append(Path(models_dir) / "basic_pitch_quant.onnx")
+        cands.append(Path(models_dir) / "basic_pitch_quant.onnx")
     if p.parent.is_dir():
-        quant_candidates.append(p.parent / "nmp.quant.onnx")
-    for q in quant_candidates:
-        if q.is_file():
-            return str(q)
+        cands.append(p.parent / "nmp.quant.onnx")
     if not p.is_file():
         parent = p.parent
         for name in (p.name + ".onnx", "nmp.onnx"):
             cand = parent / name
             if cand.is_file():
-                return str(cand)
-        onnx_files = sorted(parent.glob("*.onnx")) if parent.is_dir() else []
-        if onnx_files:
-            return str(onnx_files[0])
-    return str(p)
+                cands.append(cand)
+        if parent.is_dir():
+            for f in sorted(parent.glob("*.onnx")):
+                if f not in cands:
+                    cands.append(f)
+    if p.is_file():
+        cands.append(p)
+    out = []
+    for c in cands:
+        try:
+            if c.is_file() and str(c) not in out:
+                out.append(str(c))
+        except Exception:
+            pass
+    if not out and p.exists():
+        return [str(p)]
+    return out
 
 
-def make_basic_model(num_threads):
-    """构造 basic-pitch 可用的模型：
-    - 自动选择最优 onnxruntime 推理后端：DirectML / CUDA GPU → CPU（见 engine_gpu）；
-    - num_threads 有值时，限制 ONNX 内部线程数（均衡/高性能档）；
-    - 任一环节失败则回退解析后的模型文件路径（兼容 .mlpackage 目录，见
-      _resolve_basic_pitch_model），行为与之前完全一致。
-    返回值可直接传给 basic_pitch.inference.predict 的 model_or_model_path。
-    """
+def _resolve_basic_pitch_model():
+    """Compatibility wrapper returning the first candidate path."""
+    cands = _basic_pitch_model_candidates()
+    return cands[0] if cands else ""
+
+
+_basic_model_cache = {}
+
+def make_basic_model(num_threads, force_cpu=False):
+    """Construct a basic-pitch model with automatic ONNX fallback."""
+    _key = (int(num_threads or 0), bool(force_cpu))
+    if _key in _basic_model_cache:
+        return _basic_model_cache[_key]
     try:
         import onnxruntime as ort
         from basic_pitch import inference as inf
         from engine_gpu import onnx_provider
-        model_path = _resolve_basic_pitch_model()
-        so = ort.SessionOptions()
-        if num_threads:
-            so.intra_op_num_threads = int(num_threads)
-            so.inter_op_num_threads = 1
-        sess = ort.InferenceSession(
-            model_path, sess_options=so,
-            providers=[onnx_provider(), "CPUExecutionProvider"])
-        m = inf.Model.__new__(inf.Model)
-        m.model_type = inf.Model.MODEL_TYPES.ONNX
-        m.model = sess
-        return m
+        if force_cpu:
+            providers = ["CPUExecutionProvider"]
+        else:
+            providers = [onnx_provider(), "CPUExecutionProvider"]
+        candidates = _basic_pitch_model_candidates()
+        for model_path in candidates:
+            try:
+                so = ort.SessionOptions()
+                if num_threads:
+                    so.intra_op_num_threads = int(num_threads)
+                    so.inter_op_num_threads = 1
+                sess = ort.InferenceSession(
+                    model_path, sess_options=so,
+                    providers=providers)
+                m = inf.Model.__new__(inf.Model)
+                m.model_type = inf.Model.MODEL_TYPES.ONNX
+                m.model = sess
+                _basic_model_cache[_key] = m
+                return m
+            except Exception:
+                continue
+        if candidates:
+            return candidates[0]
+        return _resolve_basic_pitch_model()
     except Exception:
         return _resolve_basic_pitch_model()
+

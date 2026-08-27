@@ -26,8 +26,89 @@
 // ============================================================
 const path = require('path');
 const fs = require('fs');
+const vm = require('vm');
+const { Worker } = require('worker_threads');
 
 const ID_RE = /^[a-z0-9][a-z0-9_-]*$/i;
+
+
+const SANDBOX_ALLOWED_BUILTINS = new Set([
+  'path', 'util', 'events', 'url', 'querystring', 'assert', 'os', 'crypto', 'buffer',
+]);
+const SANDBOX_DENIED_BUILTINS = new Set([
+  'fs', 'child_process', 'net', 'http', 'https', 'dns', 'tls', 'worker_threads', 'cluster', 'repl', 'v8',
+]);
+
+/**
+ * 在受限 vm 上下文中加载插件 CommonJS 入口，并给插件一个白名单 require。
+ * 相对路径只能访问插件目录内文件；内置模块白名单仅允许安全模块；
+ * fs/net/child_process 等高风险内置模块一律拒绝。
+ */
+function loadPluginModule(entryPath, pluginRoot) {
+  const sandboxContext = vm.createContext({
+    console,
+    setTimeout, clearTimeout, setInterval, clearInterval,
+    setImmediate, clearImmediate,
+    queueMicrotask,
+    Buffer,
+    TextEncoder, TextDecoder,
+    URL, URLSearchParams,
+    structuredClone,
+    JSON,
+    Math,
+    Date,
+    process: {
+      platform: process.platform,
+      arch: process.arch,
+      env: {},
+      versions: {},
+      version: 'sandbox',
+      pid: 0,
+    },
+  });
+  const cache = new Map();
+
+  function load(request, parentFile) {
+    if (request.startsWith('.') || path.isAbsolute(request)) {
+      const base = path.resolve(parentFile ? path.dirname(parentFile) : path.dirname(entryPath), request);
+      let resolved = base;
+      if (!path.extname(base)) {
+        if (fs.existsSync(base + '.js')) resolved = base + '.js';
+        else if (fs.existsSync(base + '.json')) resolved = base + '.json';
+        else resolved = base;
+      }
+      const r = path.resolve(resolved);
+      if (r !== pluginRoot && !r.startsWith(pluginRoot + path.sep)) {
+        throw new Error('插件 require 越界：' + request);
+      }
+      if (cache.has(r)) return cache.get(r).exports;
+      const mod = { exports: {} };
+      cache.set(r, mod);
+      const code = fs.readFileSync(r, 'utf8');
+      const fn = vm.runInContext(
+        '(function(require,module,exports,__filename,__dirname){' + code + '\n})',
+        sandboxContext,
+        { filename: r }
+      );
+      fn(
+        (req) => load(req, r),
+        mod,
+        mod.exports,
+        r,
+        path.dirname(r)
+      );
+      return mod.exports;
+    }
+
+    if (SANDBOX_ALLOWED_BUILTINS.has(request)) return require(request);
+    if (SANDBOX_DENIED_BUILTINS.has(request)) {
+      throw new Error('插件 require 被沙箱拒绝：' + request);
+    }
+    throw new Error('插件 require 未在白名单中：' + request);
+  }
+
+  return load(entryPath, null);
+}
 
 class PluginHost {
   /**
@@ -51,6 +132,8 @@ class PluginHost {
     this._listeners = new Map();// 预留
     this._songMeta = deps.getSongMeta || null;
     this._curId = null;         // _settingsObj 上下文辅助
+    this._workerRequests = new Map();
+    this._workerRequestId = 0;
   }
 
   /** 设置扫描根目录（先扫描的目录优先级更高） */
@@ -93,6 +176,90 @@ class PluginHost {
     return m.id;
   }
 
+  _loadWorkerPlugin(dir, manifest) {
+    const pluginRoot = path.resolve(dir);
+    const worker = new Worker(path.join(__dirname, 'plugin-worker.js'), {
+      workerData: {
+        pluginDir: pluginRoot,
+        manifest,
+        songMeta: this._songMeta ? this._songMeta() : null,
+        settings: this._get() || {},
+      },
+    });
+    worker.postMessage({ type: 'load', pluginDir: pluginRoot, manifest, songMeta: this._songMeta ? this._songMeta() : null, settings: this._get() || {} });
+    const pl = {
+      id: manifest.id,
+      dir: pluginRoot,
+      manifest,
+      enabled: this._enabledSet().has(manifest.id),
+      commands: new Map(),
+      listeners: [],
+      ctx: null,
+      worker,
+    };
+    this._plugins.set(manifest.id, pl);
+    worker.on('message', (msg) => this._handleWorkerMessage(pl, msg));
+    worker.on('error', (err) => this._log(`插件 ${manifest.id} Worker 出错：${err.message}`));
+    worker.on('exit', () => { if (this._plugins.get(manifest.id) === pl) this._plugins.delete(manifest.id); });
+    if (manifest.renderer) {
+      const rp = path.join(dir, manifest.renderer);
+      if (fs.existsSync(rp)) {
+        try { this._broadcast('plugins:script', { id: manifest.id, code: fs.readFileSync(rp, 'utf8') }); }
+        catch (e) { this._log(`插件 ${manifest.id} 渲染脚本读取失败：${e.message}`); }
+      }
+    }
+    this._log(`已加载插件（Worker）：${manifest.name}（${manifest.id}）`);
+    return pl;
+  }
+
+  _handleWorkerMessage(pl, msg) {
+    if (!msg || !msg.type) return;
+    if (msg.type === 'ready') {
+      for (const c of (msg.commands || [])) pl.commands.set(String(c), async () => {});
+      return;
+    }
+    if (msg.type === 'load:error') {
+      this._log(`插件 ${pl.id} Worker 加载失败：${msg.error}`);
+      return;
+    }
+    if (msg.type === 'invoke:result') {
+      const resolve = this._workerRequests.get(msg.requestId);
+      if (resolve) { this._workerRequests.delete(msg.requestId); resolve({ ok: !!msg.ok, result: msg.result, error: msg.error }); }
+      return;
+    }
+    if (msg.type === 'ctx:engine:run') {
+      const self = this;
+      self._spawnEngine(msg.args, {
+        script: msg.opts?.script || 'music2midi.py',
+        onLog: (line) => self._broadcast('plugins:log', { id: pl.id, line }),
+        timeoutMs: msg.opts?.timeoutMs || 30 * 60 * 1000,
+        onDone: (code, r) => pl.worker.postMessage({ type: 'engine:result', result: { code, result: r.result, out: r.out, err: r.err } }),
+        onError: (e) => pl.worker.postMessage({ type: 'engine:result', result: { code: -1, result: null, out: '', err: String(e) } }),
+      });
+      return;
+    }
+    if (msg.type === 'ctx:settings:set') {
+      const s = this._get() || {};
+      const base = (s.plugins && s.plugins[pl.id]) || {};
+      if (typeof msg.key === 'object' && msg.key !== null) Object.assign(base, msg.key);
+      else if (msg.key != null) base[msg.key] = msg.val;
+      this._save({ plugins: { ...(s.plugins || {}), [pl.id]: base } });
+      return;
+    }
+    if (msg.type === 'ctx:log') {
+      this._broadcast('plugins:log', { id: pl.id, line: msg.line });
+      return;
+    }
+    if (msg.type === 'ctx:ui') {
+      this._broadcast('plugins:ui', { id: pl.id, name: msg.name, payload: msg.payload });
+      return;
+    }
+    if (msg.type === 'ctx:event:emit') {
+      this.emit(msg.name, msg.payload);
+      return;
+    }
+  }
+
   _loadPlugin(dir) {
     const mfPath = path.join(dir, 'plugin.json');
     if (!fs.existsSync(mfPath)) return;
@@ -103,8 +270,19 @@ class PluginHost {
     if (this._plugins.has(manifest.id)) {
       return; // 同 ID 插件已加载（更高优先级目录），跳过
     }
-    const entryPath = manifest.entry ? path.join(dir, manifest.entry) : null;
+    // 沙箱边界：插件目录必须在允许的根目录内，entry 不允许越界
+    const pluginRoot = path.resolve(dir);
+    const rootOk = this._dirs.some(root => {
+      const r = path.resolve(root);
+      return pluginRoot === r || pluginRoot.startsWith(r + path.sep);
+    });
+    if (!rootOk) throw new Error('插件目录不在允许的根目录内：' + dir);
+    const entryPath = manifest.entry ? path.resolve(dir, manifest.entry) : null;
+    if (entryPath && entryPath !== pluginRoot && !entryPath.startsWith(pluginRoot + path.sep)) {
+      throw new Error('entry 路径越界：' + manifest.entry);
+    }
     if (!entryPath || !fs.existsSync(entryPath)) throw new Error('entry 不存在：' + (manifest.entry || ''));
+    if (manifest.sandbox === 'worker') return this._loadWorkerPlugin(dir, manifest);
     const pl = {
       id: manifest.id,
       dir,
@@ -116,7 +294,7 @@ class PluginHost {
     };
     pl.ctx = this._makeCtx(pl);
     try {
-      const mod = require(entryPath);
+      const mod = loadPluginModule(entryPath, pluginRoot);
       if (mod && typeof mod.activate === 'function') mod.activate(pl.ctx);
       else if (typeof mod === 'function') mod(pl.ctx);
       else throw new Error('entry 需导出 activate(ctx) 或导出函数');
@@ -133,6 +311,11 @@ class PluginHost {
       }
     }
     this._log(`已加载插件：${manifest.name}（${manifest.id}）`);
+  }
+
+  _can(pl, cap) {
+    if (!Array.isArray(pl.manifest.permissions)) return true; // 未声明 permissions 保持向后兼容
+    return pl.manifest.permissions.includes(cap);
   }
 
   _makeCtx(pl) {
@@ -158,7 +341,7 @@ class PluginHost {
         },
         emit(name, payload) { self.emit(name, payload); },
       },
-      engine: {
+      engine: this._can(pl, 'engine') ? {
         /**
          * 运行引擎 Python 脚本。script 可为 engine/ 下文件名或绝对路径。
          * 返回 Promise<{ code, result, out, err }>（result 为 ###RESULT 解析对象）
@@ -176,7 +359,7 @@ class PluginHost {
             } catch (e) { resolve({ code: -1, result: null, out: '', err: String(e) }); }
           });
         },
-      },
+      } : null,
       settings: {
         get(key) {
           const base = pluginSettings();
@@ -208,6 +391,8 @@ class PluginHost {
   /** 应用级事件广播到所有已启用插件 */
   emit(name, payload) {
     for (const pl of this._plugins.values()) {
+      if (pl.worker) { try { pl.worker.postMessage({ type: 'event', name, payload }); } catch (e) {} continue; }
+
       if (!pl.enabled) continue;
       for (const l of pl.listeners) {
         if (l.name !== name) continue;
@@ -217,9 +402,14 @@ class PluginHost {
   }
 
   _deactivate(pl) {
+    if (pl.worker) {
+      try { pl.worker.postMessage({ type: 'deactivate' }); } catch (e) {}
+      setImmediate(() => { try { pl.worker.terminate(); } catch (e) {} });
+      return;
+    }
     try {
       if (pl.ctx && pl.manifest.entry) {
-        const mod = require(require.resolve(path.join(pl.dir, pl.manifest.entry)));
+        const mod = loadPluginModule(path.join(pl.dir, pl.manifest.entry), pl.dir);
         if (mod && typeof mod.deactivate === 'function') mod.deactivate();
       }
     } catch (e) { this._log(`插件 ${pl.id} 卸载出错：${e.message}`); }
@@ -245,13 +435,35 @@ class PluginHost {
   // ---- 命令调用（来自渲染层） ----
   async invoke(id, command, payload) {
     const pl = this._plugins.get(id);
+    if (pl && pl.worker) {
+      if (!pl.enabled) return { ok: false, error: '插件未启用：' + id };
+      const requestId = ++this._workerRequestId;
+      return new Promise((resolve) => {
+        this._workerRequests.set(requestId, resolve);
+        pl.worker.postMessage({ type: 'invoke', requestId, command, payload });
+      });
+    }
+
     if (!pl) return { ok: false, error: '插件不存在：' + id };
     if (!pl.enabled) return { ok: false, error: '插件未启用：' + id };
     const fn = pl.commands.get(String(command));
     if (typeof fn !== 'function') return { ok: false, error: '命令不存在：' + command };
+    // 沙箱加固：限制命令负载大小与执行时长，避免恶意/失控插件占满主进程。
+    const PAYLOAD_LIMIT = 1024 * 1024;
+    const COMMAND_TIMEOUT_MS = 30_000;
     try {
-      const r = await fn(payload);
-      return { ok: true, result: r === undefined ? null : r };
+      const size = payload == null ? 0 : JSON.stringify(payload).length;
+      if (size > PAYLOAD_LIMIT) return { ok: false, error: '命令参数过大：' + size };
+      let timer = null;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('命令执行超时（30s）')), COMMAND_TIMEOUT_MS);
+      });
+      try {
+        const r = await Promise.race([Promise.resolve(fn(payload)), timeout]);
+        return { ok: true, result: r === undefined ? null : r };
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     } catch (e) {
       this._log(`插件 ${id} 命令 ${command} 出错：${e.message}`);
       return { ok: false, error: String((e && e.message) || e) };

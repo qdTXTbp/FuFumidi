@@ -148,6 +148,7 @@ def transcribe_pt(audio_path, output_midi, onset_threshold=0.3, frame_threshold=
     audio = load_audio_float32(audio_path, 16000)
 
     # 可选智能预处理：降噪 / 响度平衡
+    # 可选智能预处理：降噪 / 响度平衡
     if kwargs.get("denoise") or kwargs.get("normalize"):
         from preprocess import denoise as _dn, normalize_loudness as _nl
         if kwargs.get("denoise"):
@@ -171,17 +172,8 @@ def transcribe_pt(audio_path, output_midi, onset_threshold=0.3, frame_threshold=
     _log(log_cb, "推理识别中（钢琴专用模型）…")
     import torch
     with _redirect_stdout():
-        if _dev == "cuda":
-            # GPU 推理：关闭梯度提速；不使用 autocast 混合精度——
-            # RTX 50 系（Blackwell）等架构上 autocast 推理会导致输出全 0。
-            try:
-                with torch.inference_mode():
-                    result = engine.transcribe(audio, None)
-            except Exception:
-                result = engine.transcribe(audio, None)
-        else:
-            with torch.inference_mode():
-                result = engine.transcribe(audio, None)
+        # inference_mode + autocast 会让钢琴模型漏掉大量音符，改用普通推理
+        result = engine.transcribe(audio, None)
 
     # 4. 后处理: 合并同音高近邻短音符 + 过滤过短音符
     notes = clean_notes(result['est_note_events'], min_note_ms, merge_gap_ms)

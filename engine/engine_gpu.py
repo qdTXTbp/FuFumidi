@@ -69,11 +69,25 @@ def _gpu_vendor():
     return None
 
 
+def _torch_is_cu128():
+    """当前 torch 是否 CUDA 12.8（cu128）构建——Blackwell（sm_120）需要。"""
+    try:
+        import torch
+        c = getattr(torch.version, "cuda", None)
+        return bool(c) and float(c) >= 12.8
+    except Exception:
+        return False
+
+
 def _probe():
     gpu = {"available": False, "backend": None, "device": "cpu", "name": None,
            "vendor": None, "recommended_backend": "cpu",
            "cuda": False, "mps": False, "directml": False, "onnx_gpu": False,
            "onnx_provider": "CPUExecutionProvider"}
+    if os.environ.get("FUFUMIDI_DISABLE_GPU") == "1":
+        gpu["disabled"] = True
+        gpu["note"] = "GPU 增强包未安装，已禁用 GPU 加速"
+        return gpu
     # ---- torch 后端（钢琴 / 分离引擎）----
     try:
         import torch
@@ -87,6 +101,16 @@ def _probe():
                 gpu["name"] = torch.cuda.get_device_name(0)
             except Exception:
                 gpu["name"] = "NVIDIA GPU"
+            # 计算能力 → 判断是否 Blackwell（RTX 50 系 sm_120 需 CUDA 12.8 / cu128 torch）
+            try:
+                cap = tuple(torch.cuda.get_device_capability(0))
+                gpu["capability"] = "%d.%d" % cap
+                gpu["blackwell"] = cap[0] >= 9
+                gpu["need_cu128"] = gpu["blackwell"] and not _torch_is_cu128()
+            except Exception:
+                gpu["capability"] = None
+                gpu["blackwell"] = False
+                gpu["need_cu128"] = False
         else:
             try:
                 if torch.backends.mps.is_available():

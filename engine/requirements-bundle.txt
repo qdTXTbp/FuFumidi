@@ -1,4 +1,4 @@
-# FuFumidi 转录引擎 —— 内置运行时依赖清单（Electron CLI 路径专用）
+﻿# FuFumidi 转录引擎 —— 内置运行时依赖清单（Electron CLI 路径专用）
 #
 # 与 requirements.txt 的区别：
 #   - 不含 PySide6 / gui（那是原 AudioMuse 桌面界面的依赖；Electron 只调用
@@ -15,6 +15,7 @@
 
 # ---- 通用转录引擎（任意歌曲/人声/乐器）----
 basic-pitch>=0.4.0
+mir-eval>=0.6
 onnxruntime>=1.16
 onnx>=1.16,<1.17  # <1.17：避免与 tensorflow<2.15 的 ml-dtypes~=0.4 冲突（量化步骤 ImportError: float4_e2m1fn）
 ml_dtypes>=0.5.4; platform_system == "Darwin"  # macOS 不装 tensorflow，onnxruntime.quantization 需要 ml_dtypes
@@ -36,7 +37,7 @@ pretty_midi>=0.2.10
 # ---- 数值与信号（通用依赖，随上面包自动解析，这里显式钉住）----
 numpy>=1.24
 scipy>=1.10
-tqdm>=4.60
+tqdm>=4.59.0,<4.60
 
 # ---- 引擎计算后端：CPU 版即可（自动调用全部 CPU 核 / GPU 可选）----
 # torch 由 bundle-python.js 按 --torch 参数选择 CPU 或 CUDA 版本安装，
@@ -45,3 +46,6 @@ tqdm>=4.60
 # ---- 兼容性兜底 ----
 # resampy 等旧库 import pkg_resources；setuptools>=81 已移除该模块，须钉 <81
 setuptools<81
+
+
+

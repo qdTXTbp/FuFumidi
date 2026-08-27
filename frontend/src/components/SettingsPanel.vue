@@ -1,28 +1,60 @@
 <script setup>
 // 设置面板（全局系统功能）：外观 / 引擎 / 功能 / 快捷键 / 插件 + 完整性检验警告条
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import Icon from './Icon.vue';
-import { state, toast, setWallpaperEnabled, setWallpaperIndex, setWallpaperSource, openWallpaperGallery } from '../store.js';
+import { useAppStore } from '../stores/app';
+import { useSettingsStore } from '../stores/settings';
 import { t, setLang, getLang } from '../core/i18n.js';
-import { THEMES, themeById, applyTheme, saveTheme } from '../core/theme.js';
+
+const app = useAppStore();
+const state = app;
+const toast = (m, t) => app.toast(m, t);
+import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';
 
 const bridge = window.fuBridge;
+const settingsStore = useSettingsStore();
 
 const TABS = [
   { id: 'appearance', label: '外观', icon: 'palette' },
-  { id: 'engine', label: '引擎', icon: 'zap' },
+  { id: 'gpu', label: 'GPU', icon: 'zap' },
   { id: 'feature', label: '功能', icon: 'folder' },
   { id: 'keys', label: '快捷键', icon: 'kbd' },
   { id: 'plugins', label: '插件', icon: 'spark' },
+  { id: 'update', label: '更新', icon: 'download' },
 ];
 const tab = ref('appearance');
 
 /* ---------------- 表单 ---------------- */
 const form = reactive({
-  theme: 'fufu', accent: '',
+  theme: 'fufu', accent: '', mode: 'light',
   font_size: 'standard', density: 'comfortable', lang: 'zh',
-  engine_path: '', engine_mode: 'universal',
+  engine_path: '', engine_mode: 'universal', perf_mode: 'quality', batch_concurrency: 'auto',
   output_dir: '', name_rule: '', watch_dir: '', watch_enabled: false, file_assoc: true,
+});
+
+/* ---------------- 更新 ---------------- */
+const upd = reactive({
+  mirror: 'ghfast',
+  releases: [],
+  version: -1,
+  asset: -1,
+  status: '',
+  loading: false,
+});
+
+/* ---------------- GPU 加速 ---------------- */
+const gpu = reactive({
+  kind: 'directml',
+  mirror: 'ghfast',
+  packages: [],
+  version: -1,
+  status: '',
+  progress: null,
+  progressText: '',
+  installed: '未安装',
+  installedKind: null,
+  busy: false,
+  listBusy: false,
 });
 
 const isCustomTheme = computed(() => !THEMES.some(x => x.id === form.theme));
@@ -32,11 +64,7 @@ const themeOpts = computed(() => {
   return list;
 });
 
-/* ---------------- 引擎状态 ---------------- */
-const pyState = reactive({ busy: false, text: '' });
-const models = ref([]);
-const depState = reactive({ busy: false, text: '' });
-const depBusy = ref(false);
+const rustInfo = ref({ available: false, version: '', binary: null });
 
 /* ---------------- 插件 ---------------- */
 const plugins = ref([]);
@@ -50,29 +78,51 @@ const KEYMAP = [
   { keys: ['M'], label: t('切换节拍器') },
   { keys: ['+', '−'], label: t('加速 / 减速') },
   { keys: ['Ctrl', 'K'], label: t('打开命令面板') },
+  { keys: ['F1'], label: t('打开新手引导 / 帮助') },
+  { keys: ['Ctrl', '1-9'], label: t('切换首页/演奏/歌词/编辑等视图') },
+  { keys: ['Ctrl', 'Z'], label: t('撤销（编辑器）') },
+  { keys: ['Ctrl', 'Y'], label: t('重做（编辑器）') },
+  { keys: ['Ctrl', 'A'], label: t('全选音符（编辑器）') },
+  { keys: ['Ctrl', 'C'], label: t('复制选中音符（编辑器）') },
+  { keys: ['Ctrl', 'V'], label: t('粘贴到播放头（编辑器）') },
+  { keys: ['Ctrl', 'S'], label: t('导出当前 MIDI（编辑器）') },
+  { keys: ['Delete', 'Backspace'], label: t('删除选中音符') },
+  { keys: ['V'], label: t('选择工具（编辑器）') },
+  { keys: ['B'], label: t('画笔工具（编辑器）') },
+  { keys: ['E'], label: t('橡皮工具（编辑器）') },
+  { keys: ['Ctrl', '滚轮'], label: t('编辑器缩放') },
+  { keys: ['Shift', '滚轮'], label: t('编辑器横向平移') },
+  { keys: ['Alt', '拖拽'], label: t('编辑器调整力度') },
+  { keys: ['Shift', '拖拽'], label: t('吸附到音符（歌词/编辑器）') },
+  { keys: ['Ctrl', '拖拽'], label: t('吸附到网格') },
 ];
 
 /* ---------------- 初始化 ---------------- */
 async function load() {
   let s = {};
-  if (bridge && bridge.getSettings) { try { s = await bridge.getSettings() || {}; } catch (e) {} }
+  try { s = await settingsStore.load() || {}; } catch (e) {}
   let lsTheme = null, lsAccent = null;
   try { lsTheme = localStorage.getItem('fufumidi_theme'); lsAccent = localStorage.getItem('fufumidi_accent'); } catch (e) {}
   form.theme = lsTheme || s.theme || 'fufu';
   form.accent = lsAccent || s.accent || '';
+  form.mode = loadMode();
   form.font_size = s.font_size || 'standard';
   form.density = s.density || 'comfortable';
   form.lang = getLang();
   form.engine_path = s.engine_path || '';
   form.engine_mode = s.engine_mode || 'universal';
+  form.perf_mode = s.perf_mode || 'quality';
+  form.batch_concurrency = s.batch_concurrency || 'auto';
   form.output_dir = s.output_dir || '';
   form.name_rule = s.name_rule || '{name}_{engine}_{date}';
   form.watch_dir = s.watch_dir || '';
   form.watch_enabled = !!s.watch_enabled;
   form.file_assoc = s.file_assoc !== false;
   if (state.integrity === null) runIntegrity();
-  refreshModels();
   loadPlugins();
+  loadRust();
+  initGpu();
+  initUpdate();
 }
 
 /* ---------------- 外观 ---------------- */
@@ -83,11 +133,15 @@ function applyDisplay(font, density) {
   document.body.dataset.density = density === 'compact' ? 'compact' : 'comfortable';
 }
 function onThemeChange() {
-  applyTheme(form.theme, form.accent);
+  applyTheme(form.theme, form.accent, form.mode);
   toast(t('已应用主题：') + t(themeById(form.theme).name));
 }
-function onAccentInput(e) { applyTheme(form.theme, e.target.value); }
-function resetAccent() { form.accent = ''; applyTheme(form.theme, ''); }
+function onModeChange() {
+  setMode(form.mode);
+  toast(t('已切换为') + (form.mode === 'dark' ? t('深色模式') : t('浅色模式')), 'ok');
+}
+function onAccentInput(e) { applyTheme(form.theme, e.target.value, form.mode); }
+function resetAccent() { form.accent = ''; applyTheme(form.theme, '', form.mode); }
 function onFontSize() { applyDisplay(form.font_size, form.density); }
 function onDensity() { applyDisplay(form.font_size, form.density); }
 function onLang() {
@@ -95,78 +149,167 @@ function onLang() {
   try { localStorage.setItem('fufumidi_lang', form.lang); } catch (e) {}
 }
 
-/* ---------------- 动态壁纸 ---------------- */
-function wpBase(p) { return String(p || '').split(/[\\/]/).pop() || t('未设置'); }
-function pickWallpaper(i) {
-  if (bridge && bridge.pickFile) {
-    bridge.pickFile({ filters: [{ name: '视频', extensions: ['mp4', 'webm', 'mov'] }] })
-      .then(p => { if (p) { setWallpaperSource(i, p); toast(t('壁纸源已更新'), 'ok'); } })
-      .catch(() => {});
-    return;
+/* ---------------- 更新 ---------------- */
+const updSelectedRelease = computed(() => upd.releases[upd.version] || null);
+const updSelectedAsset = computed(() => {
+  const rel = updSelectedRelease.value;
+  if (!rel || !Array.isArray(rel.assets)) return null;
+  return rel.assets[upd.asset] || null;
+});
+function updMirrorUrl(u) {
+  if (upd.mirror === 'github') return u;
+  return 'https://' + upd.mirror + '.top/https://github.com/' + String(u).replace(/^https:\/\/github.com\//, '');
+}
+async function updLoadReleases() {
+  if (!bridge || !bridge.update || !bridge.update.list) return;
+  upd.loading = true;
+  upd.status = '刷新中…';
+  try {
+    const r = await bridge.update.list();
+    if (!Array.isArray(r)) { upd.status = (r && r.error) || '获取失败'; return; }
+    upd.releases = r;
+    upd.version = upd.releases.length ? 0 : -1;
+    upd.asset = updSelectedRelease.value && updSelectedRelease.value.assets && updSelectedRelease.value.assets.length ? 0 : -1;
+    upd.status = '';
+  } catch (e) {
+    upd.status = '获取失败：' + ((e && e.message) || e);
+  } finally {
+    upd.loading = false;
   }
-  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'video/*';
-  inp.onchange = () => {
-    const f = inp.files && inp.files[0];
-    if (f) { setWallpaperSource(i, URL.createObjectURL(f)); toast(t('壁纸源已更新（当前会话）'), 'ok'); }
-  };
-  inp.click();
+}
+async function updOpenDownload() {
+  if (!bridge || !bridge.update || !bridge.update.openExternal) { upd.status = '当前环境不支持打开下载'; return; }
+  const asset = updSelectedAsset.value;
+  if (!asset) { upd.status = '请选择安装包'; return; }
+  const url = updMirrorUrl(asset.url);
+  upd.status = '正在打开下载…';
+  try {
+    const r = await bridge.update.openExternal(url);
+    upd.status = (r && r.ok) ? '已打开下载页面' : '打开失败';
+  } catch (e) {
+    upd.status = '打开失败：' + ((e && e.message) || e);
+  }
+}
+function initUpdate() {
+  if (!bridge || !bridge.update || !bridge.update.list) return;
+  if (upd._init) return;
+  upd._init = true;
+  updLoadReleases();
 }
 
-/* ---------------- 引擎 ---------------- */
-function autoPy() {
-  form.engine_path = '';
-  pyState.text = t('已清空路径，将使用自动检测 / 内置运行时');
+/* ---------------- GPU 加速 ---------------- */
+const gpuFiltered = computed(() => gpu.packages.filter(p => p.kind === gpu.kind));
+const selectedGpuPkg = computed(() => gpuFiltered.value[gpu.version] || null);
+
+function gpuMirrorUrl(u) {
+  if (gpu.mirror === 'github') return u;
+  return 'https://' + gpu.mirror + '.top/https://github.com/' + String(u).replace(/^https:\/\/github.com\//, '');
 }
-async function testEngine() {
-  if (!bridge || !bridge.probe) { pyState.text = t('引擎异常：') + 'no bridge'; return; }
-  pyState.busy = true;
-  pyState.text = t('正在检查…');
+function gpuSetProgress(p, txt) {
+  gpu.progress = p;
+  gpu.progressText = txt || '';
+}
+async function gpuRefreshInstalled() {
+  if (!bridge || !bridge.gpuStatus) return;
   try {
-    const r = await bridge.probe();
-    if (r && r.ok) pyState.text = t('引擎正常：') + (r.python || r.version || '');
-    else pyState.text = t('引擎异常：') + (r && (r.error || r.raw || JSON.stringify(r)) || 'unknown');
-  } catch (e) { pyState.text = t('引擎异常：') + String(e.message || e); }
-  pyState.busy = false;
+    const r = await bridge.gpuStatus();
+    const has = r && r.ok && (r.directml || r.cuda);
+    if (r && r.ok) {
+      if (r.directml) gpu.installed = 'DirectML 已安装';
+      else if (r.cuda) gpu.installed = 'CUDA 已安装';
+      else gpu.installed = '未安装';
+      gpu.installedKind = r.cuda ? 'cuda' : r.directml ? 'directml' : null;
+    } else {
+      gpu.installed = '未安装';
+      gpu.installedKind = null;
+    }
+  } catch (e) {
+    gpu.installed = '未知';
+    gpu.installedKind = null;
+  }
 }
-async function refreshModels() {
-  if (bridge && bridge.modelList) { try { models.value = await bridge.modelList() || []; } catch (e) { models.value = []; } }
-}
-function fmtSize(b) {
-  if (!b) return '—';
-  if (b > 1 << 30) return (b / (1 << 30)).toFixed(1) + ' GB';
-  if (b > 1 << 20) return (b / (1 << 20)).toFixed(1) + ' MB';
-  return (b / 1024).toFixed(0) + ' KB';
-}
-async function checkDeps() {
-  if (!bridge || !bridge.depCheck) return;
-  depBusy.value = true;
-  depState.text = t('正在检查…');
+async function gpuRefresh() {
+  if (!bridge || !bridge.gpuListPackages) return;
+  gpu.listBusy = true;
+  gpu.status = '刷新中…';
   try {
-    const r = await bridge.depCheck();
-    if (r && r.ok) depState.text = t('依赖检查通过');
-    else depState.text = t('依赖检查异常：') + String((r && (r.error || r.raw)) || 'unknown').slice(-400);
-  } catch (e) { depState.text = t('依赖检查异常：') + String(e.message || e); }
-  depBusy.value = false;
+    const r = await bridge.gpuListPackages();
+    if (!r || !r.ok) { gpu.status = (r && r.error) || '获取失败'; return; }
+    gpu.packages = r.packages || [];
+    gpu.version = gpuFiltered.value.length ? 0 : -1;
+    gpu.status = '';
+    await gpuRefreshInstalled();
+  } catch (e) {
+    gpu.status = '获取失败：' + ((e && e.message) || e);
+  } finally {
+    gpu.listBusy = false;
+  }
 }
-async function installDeps() {
-  if (!bridge || !bridge.depInstall) return;
-  depBusy.value = true;
-  depState.text = t('正在安装（国内镜像优先）…');
+async function gpuDownload() {
+  if (!bridge || !bridge.gpuDownloadPackage) { gpu.status = '当前环境不支持 GPU 下载'; return; }
+  const pkg = selectedGpuPkg.value;
+  if (!pkg) { gpu.status = '请选择可用的增强包'; return; }
+  gpu.busy = true;
+  gpu.status = '下载中…';
+  gpuSetProgress(1, '开始下载…');
+  const un = bridge.onGpuProgress ? bridge.onGpuProgress(p => {
+    if (!p) return;
+    gpuSetProgress(p.percent || 0, (p.percent || 0) + '%');
+    if (p.done) gpuSetProgress(100, '安装完成');
+  }) : null;
   try {
-    const r = await bridge.depInstall('all');
-    if (r && r.ok) depState.text = t('依赖安装完成');
-    else depState.text = t('依赖安装失败：') + String((r && (r.error || r.raw)) || 'unknown').slice(-400);
-  } catch (e) { depState.text = t('依赖安装失败：') + String(e.message || e); }
-  depBusy.value = false;
+    const files = pkg.files ? pkg.files.map(f => ({ name: f.name, url: gpuMirrorUrl(f.url), size: f.size })) : undefined;
+    const r = await bridge.gpuDownloadPackage({ url: gpuMirrorUrl(pkg.url), name: pkg.name, kind: pkg.kind, files });
+    gpu.status = (r && r.ok) ? '已安装到隔离环境（不影响内置功能）' : ('安装失败：' + ((r && r.error) || '未知'));
+    await gpuRefreshInstalled();
+  } catch (e) {
+    gpu.status = '下载失败：' + ((e && e.message) || e);
+  } finally {
+    if (un) un();
+    gpu.busy = false;
+    gpuSetProgress(null, '');
+  }
 }
-async function exportDiag() {
-  if (!bridge || !bridge.diagExport) return;
+async function gpuImportLocal() {
+  if (!bridge || !bridge.pickZip || !bridge.gpuImportLocal) { gpu.status = '当前环境不支持本地导入'; return; }
+  gpu.busy = true;
   try {
-    const r = await bridge.diagExport();
-    if (r && r.canceled) toast(t('导出已取消'));
-    else if (r && r.ok) toast(t('诊断包已导出'));
-    else toast(t('导出失败：') + String((r && r.error) || 'unknown'), 'error');
-  } catch (e) { toast(t('导出失败：') + String(e.message || e), 'error'); }
+    const p = await bridge.pickZip();
+    if (!p) return;
+    gpu.status = '正在导入本地包…';
+    gpuSetProgress(1, '正在导入…');
+    const r = await bridge.gpuImportLocal(p, gpu.kind);
+    gpu.status = (r && r.ok) ? '本地包已导入隔离环境' : ('导入失败：' + ((r && r.error) || '未知'));
+    await gpuRefreshInstalled();
+  } catch (e) {
+    gpu.status = '导入失败：' + ((e && e.message) || e);
+  } finally {
+    gpu.busy = false;
+    gpuSetProgress(null, '');
+  }
+}
+async function gpuUninstall() {
+  if (!bridge || !bridge.gpuUninstall) { gpu.status = '当前环境不支持卸载'; return; }
+  const kind = gpu.installedKind || 'directml';
+  gpu.busy = true;
+  gpu.status = '正在卸载…';
+  gpuSetProgress(10, '正在卸载…');
+  try {
+    const r = await bridge.gpuUninstall(kind);
+    gpu.status = (r && r.ok) ? '已卸载（不影响内置功能）' : ('卸载失败：' + ((r && r.error) || '未知'));
+    await gpuRefreshInstalled();
+  } catch (e) {
+    gpu.status = '卸载失败：' + ((e && e.message) || e);
+  } finally {
+    gpu.busy = false;
+    gpuSetProgress(null, '');
+  }
+}
+function initGpu() {
+  if (!bridge || !bridge.gpuListPackages) return;
+  if (gpu._init) return;
+  gpu._init = true;
+  gpuRefresh();
 }
 
 /* ---------------- 功能 ---------------- */
@@ -186,6 +329,16 @@ function resetGuide() {
 /* ---------------- 快捷键 ---------------- */
 function resetKeys() { toast(t('恢复默认快捷键')); }
 
+/* ---------------- 可选 Rust 核心 ---------------- */
+async function loadRust() {
+  if (bridge && typeof bridge.rustStatus === 'function') {
+    try {
+      const r = await bridge.rustStatus();
+      rustInfo.value = { available: !!(r && r.available), version: (r && r.version) || '', binary: (r && r.binary) || null };
+    } catch (e) {}
+  }
+}
+
 /* ---------------- 插件 ---------------- */
 async function loadPlugins() {
   if (!bridge || !bridge.plugins) return;
@@ -200,6 +353,7 @@ async function rescanPlugins() {
   try { plugins.value = await bridge.plugins.rescan() || []; } catch (e) {}
 }
 function openDocs() { if (bridge && bridge.plugins && bridge.plugins.openDocs) bridge.plugins.openDocs(); }
+function openPluginDir() { if (bridge && bridge.plugins && bridge.plugins.openDir) bridge.plugins.openDir(); }
 function onPluginLog(p) {
   const line = p && p.line != null ? String(p.line) : JSON.stringify(p || '');
   pluginLog.value = line + '\n' + pluginLog.value;
@@ -230,7 +384,7 @@ const integrityOk = computed(() => !!(state.integrity && state.integrity.ok));
 
 /* ---------------- 保存 / 取消 ---------------- */
 function apply() {
-  saveTheme(form.theme, form.accent);
+  saveTheme(form.theme, form.accent, form.mode);
   applyDisplay(form.font_size, form.density);
   setLang(form.lang);
   try {
@@ -239,18 +393,18 @@ function apply() {
     localStorage.setItem('fufumidi_density', form.density);
   } catch (e) {}
   const payload = {
-    theme: form.theme, accent: form.accent,
+    theme: form.theme, accent: form.accent, ui_mode: form.mode,
     font_size: form.font_size, density: form.density, lang: form.lang,
     engine_path: form.engine_path, engine_mode: form.engine_mode,
+    perf_mode: form.perf_mode, batch_concurrency: form.batch_concurrency,
+    batch_concurrency_manual: form.batch_concurrency !== 'auto',
     output_dir: form.output_dir, name_rule: form.name_rule,
     watch_dir: form.watch_dir, watch_enabled: form.watch_enabled,
     file_assoc: form.file_assoc,
   };
   let saved = false;
-  if (bridge && bridge.saveSettings) {
-    bridge.saveSettings(payload).then(() => { if (!saved) toast(t('设置已保存')); }).catch(() => toast(t('设置保存失败'), 'error'));
-    saved = true;
-  }
+  settingsStore.save(payload).then(() => { if (!saved) toast(t('设置已保存')); }).catch(() => toast(t('设置保存失败'), 'error'));
+  saved = true;
   // 监视文件夹（立即应用）
   if (bridge && bridge.setFolderWatch) {
     bridge.setFolderWatch(form.watch_dir, form.watch_enabled).catch(() => {});
@@ -265,6 +419,9 @@ function apply() {
 function cancel() { state.ui.settingsOpen = false; }
 
 /* ---------------- 生命周期 ---------------- */
+watch(() => state.ui.settingsTab, v => {
+  if (TABS.some(t => t.id === v)) tab.value = v;
+});
 let offWatch = null, offPlgLog = null;
 onMounted(() => {
   load();
@@ -275,7 +432,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
 </script>
 
 <template>
-  <div class="overlay" @click.self="cancel">
+  <div class="overlay" v-focus-trap role="dialog" aria-modal="true" :aria-label="t('设置')" @click.self="cancel" @keydown.esc="cancel">
     <div class="overlay-card settings-card">
       <div class="settings-head">
         <Icon name="gear" :size="17" />
@@ -310,6 +467,18 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
         <div v-if="tab === 'appearance'">
           <div class="field-row">
             <div>
+              <div class="fr-label">{{ t('界面模式') }}</div>
+              <div class="fr-hint">{{ t('浅色明亮 · 深色护眼') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <div class="radio-pill">
+                <span :class="{ on: form.mode === 'light' }" @click="form.mode = 'light'; onModeChange()">{{ t('浅色') }}</span>
+                <span :class="{ on: form.mode === 'dark' }" @click="form.mode = 'dark'; onModeChange()">{{ t('深色') }}</span>
+              </div>
+            </div>
+          </div>
+          <div class="field-row">
+            <div>
               <div class="fr-label">{{ t('界面主题') }}</div>
               <div class="fr-hint">{{ t('从主题库选择，或在此切换') }}</div>
             </div>
@@ -318,27 +487,6 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
                 <option v-for="th in themeOpts" :key="th.id" :value="th.id">{{ t(th.name) }}</option>
               </select>
               <button class="btn sm" @click="state.ui.themesOpen = true">🎨 {{ t('主题库') }}</button>
-            </div>
-          </div>
-          <!-- 动态壁纸（背景视频，两个源可切换） -->
-          <div class="field-row">
-            <div>
-              <div class="fr-label">{{ t('动态壁纸') }}</div>
-              <div class="fr-hint">{{ t('桌面视频作为背景，毛玻璃组件透出其画面') }}</div>
-            </div>
-            <div class="fr-ctl">
-              <label class="fr-sw"><input type="checkbox" :checked="!!state.wallpaper.enabled" @change="e => setWallpaperEnabled(e.target.checked)" /> {{ t('启用') }}</label>
-              <button class="btn sm" @click="openWallpaperGallery"><Icon name="wallpaper" :size="13" /> {{ t('壁纸库') }}</button>
-            </div>
-          </div>
-          <div class="field-row" v-for="(src, i) in state.wallpaper.sources" :key="i">
-            <div>
-              <div class="fr-label">壁纸 {{ i + 1 }}<span v-if="state.wallpaper.enabled && i === state.wallpaper.index" class="tag accent" style="margin-left:8px;font-size:10px">{{ t('播放中') }}</span></div>
-              <div class="fr-hint" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ wpBase(src) }}</div>
-            </div>
-            <div class="fr-ctl">
-              <button class="btn sm" @click="setWallpaperEnabled(true); setWallpaperIndex(i)">{{ t('播放') }}</button>
-              <button class="btn sm ghost" @click="pickWallpaper(i)">{{ t('更换') }}</button>
             </div>
           </div>
           <div class="field-row">
@@ -390,22 +538,66 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
           </div>
         </div>
 
-        <!-- ============ 引擎 ============ -->
-        <div v-else-if="tab === 'engine'">
-          <div class="field-row top">
+        <!-- ============ GPU 加速 ============ -->
+        <div v-else-if="tab === 'gpu'">
+          <p class="ov-note">{{ t('选择 GPU 增强包版本下载，或导入本地 ZIP 合并到工具。NVIDIA 建议 CUDA，其他显卡建议 DirectML。') }}</p>
+          <div class="field-row">
             <div>
-              <div class="fr-label">{{ t('Python 解释器路径') }}</div>
-              <div class="fr-hint">{{ t('依赖本地 Python（librosa / torch / demucs）') }}</div>
+              <div class="fr-label">{{ t('包类型') }}</div>
+              <div class="fr-hint">{{ t('NVIDIA 建议 CUDA，其他显卡建议 DirectML') }}</div>
             </div>
-            <div class="fr-ctl col">
-              <input v-model="form.engine_path" class="ov-input mono" style="width:300px" :placeholder="t('留空 = 自动检测')" />
-              <div style="display:flex;gap:6px">
-                <button class="btn sm" @click="autoPy">{{ t('自动检测') }}</button>
-                <button class="btn sm" @click="testEngine" :disabled="pyState.busy">{{ t('测试引擎') }}</button>
-              </div>
-              <div class="state-box" v-if="pyState.text">{{ pyState.text }}</div>
+            <div class="fr-ctl">
+              <select v-model="gpu.kind" class="ov-input" style="min-width:180px" @change="gpu.version = gpuFiltered.length ? 0 : -1">
+                <option value="directml">DirectML</option>
+                <option value="cuda">CUDA</option>
+              </select>
             </div>
           </div>
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('版本') }}</div>
+              <div class="fr-hint">{{ t('点击刷新获取可用增强包') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <select v-model.number="gpu.version" class="ov-input" style="min-width:220px" :disabled="!gpuFiltered.length">
+                <option v-for="(p, i) in gpuFiltered" :key="i" :value="i">{{ p.tag }} · {{ p.name }}</option>
+                <option v-if="!gpuFiltered.length" value="-1">{{ t('暂无可用增强包') }}</option>
+              </select>
+              <button class="btn sm" @click="gpuRefresh" :disabled="gpu.listBusy">{{ t('刷新') }}</button>
+            </div>
+          </div>
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('下载源') }}</div>
+              <div class="fr-hint">{{ t('国内推荐 ghfast / ghproxy') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <select v-model="gpu.mirror" class="ov-input" style="min-width:180px">
+                <option value="ghfast">ghfast</option>
+                <option value="ghproxy">ghproxy</option>
+                <option value="github">GitHub 官方</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+            <button class="btn sm primary" @click="gpuDownload" :disabled="gpu.busy || !selectedGpuPkg">{{ t('下载安装') }}</button>
+            <button class="btn sm" @click="gpuImportLocal" :disabled="gpu.busy">{{ t('本地导入 ZIP') }}</button>
+            <span style="font-size:12px;color:var(--stone);align-self:center">{{ gpu.status }}</span>
+          </div>
+          <div v-if="gpu.progress != null" style="margin-top:10px">
+            <div style="height:8px;background:var(--surface-soft);border-radius:999px;overflow:hidden;border:1px solid var(--hairline)">
+              <div style="height:100%;width:0%;background:linear-gradient(90deg,#4f94e0,#8fc0f0);transition:width .2s" :style="{ width: (gpu.progress || 0) + '%' }"></div>
+            </div>
+            <div style="font-size:12px;color:var(--stone);margin-top:4px">{{ gpu.progressText }}</div>
+          </div>
+          <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--hairline);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-size:12px;color:var(--slate)">{{ t('已安装：') }}</span><b style="font-size:12px;color:var(--stone)">{{ gpu.installed }}</b>
+            <button v-if="gpu.installedKind" class="btn sm danger" @click="gpuUninstall" :disabled="gpu.busy">{{ t('卸载') }}</button>
+          </div>
+        </div>
+
+        <!-- ============ 功能 ============ -->
+        <div v-else-if="tab === 'feature'">
           <div class="field-row">
             <div>
               <div class="fr-label">{{ t('默认引擎模式') }}</div>
@@ -419,41 +611,19 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
               </select>
             </div>
           </div>
-          <div class="field-row top">
-            <div style="flex:none">
-              <div class="fr-label">{{ t('内置模型') }}</div>
-              <div class="fr-hint">{{ t('模型清单；量化缺失自动回退原始模型') }}</div>
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('默认性能模式') }}</div>
+              <div class="fr-hint">{{ t('质量越高耗时越长') }}</div>
             </div>
-            <div class="fr-ctl col stretch">
-              <div class="state-box" v-if="models.length">
-                <div class="model-item" v-for="m in models" :key="m.name">
-                  <span class="mi-name">{{ m.name }}</span>
-                  <span class="mi-note">{{ m.note }}</span>
-                  <span class="mi-size">{{ fmtSize(m.size) }}</span>
-                  <span :class="m.exists ? 'mi-ok' : 'mi-missing'">{{ m.exists ? t('已就绪') : t('缺失') }}</span>
-                </div>
-              </div>
-              <button class="btn sm" @click="refreshModels">{{ t('刷新模型清单') }}</button>
+            <div class="fr-ctl">
+              <select v-model="form.perf_mode" class="ov-input" style="width:200px">
+                <option value="quality">{{ t('最高质量') }}</option>
+                <option value="balanced">{{ t('均衡') }}</option>
+                <option value="fast">{{ t('高性能') }}</option>
+              </select>
             </div>
           </div>
-          <div class="field-row top">
-            <div style="flex:none">
-              <div class="fr-label">{{ t('运行期依赖') }}</div>
-              <div class="fr-hint">{{ t('缺失时自动检测并一键补全（国内镜像优先）') }}</div>
-            </div>
-            <div class="fr-ctl col stretch">
-              <div class="state-box" v-if="depState.text">{{ depState.text }}</div>
-              <div style="display:flex;gap:6px;flex-wrap:wrap">
-                <button class="btn sm" @click="checkDeps" :disabled="depBusy">{{ t('检查依赖') }}</button>
-                <button class="btn sm primary" @click="installDeps" :disabled="depBusy">{{ t('一键补全缺失依赖') }}</button>
-                <button class="btn sm" @click="exportDiag">{{ t('导出诊断包') }}</button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- ============ 功能 ============ -->
-        <div v-else-if="tab === 'feature'">
           <div class="field-row">
             <div>
               <div class="fr-label">{{ t('默认输出目录') }}</div>
@@ -471,6 +641,20 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
             </div>
             <div class="fr-ctl">
               <input v-model="form.name_rule" class="ov-input mono" style="width:240px" placeholder="{name}_{engine}_{date}" />
+            </div>
+          </div>
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('批量并发转录') }}</div>
+              <div class="fr-hint">{{ t('同时处理的任务数，低配建议 1') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <select v-model="form.batch_concurrency" class="ov-input" style="width:160px">
+                <option value="auto">{{ t('自动（推荐）') }}</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="4">4</option>
+              </select>
             </div>
           </div>
           <div class="field-row">
@@ -494,6 +678,15 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
             </div>
             <div class="fr-ctl">
               <button class="btn sm danger" @click="resetGuide">{{ t('重置引导') }}</button>
+            </div>
+          </div>
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('可选 Rust 核心') }}</div>
+              <div class="fr-hint">{{ rustInfo.available ? ('v' + rustInfo.version + ' · ' + (rustInfo.binary || '')) : t('未编译/未安装，自动使用 Python + Electron 模式') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <span :class="['plg-tag', rustInfo.available ? 'on' : 'off']">{{ rustInfo.available ? t('已启用') : t('未启用') }}</span>
             </div>
           </div>
           <div class="field-row">
@@ -548,7 +741,56 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
           </div>
           <div class="plg-head">{{ t('插件日志') }}</div>
           <div class="plg-log">{{ pluginLog || t('无') }}</div>
-          <a class="plg-docs" @click="openDocs">{{ t('开发者文档') }} ↗</a>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn sm" @click="openPluginDir">{{ t('打开插件目录') }}</button>
+            <a class="plg-docs" @click="openDocs">{{ t('开发者文档') }} ↗</a>
+          </div>
+        </div>
+
+        <!-- ============ 更新 ============ -->
+        <div v-else-if="tab === 'update'">
+          <p class="ov-note">{{ t('检查 GitHub 更新，可选择源（国内镜像）和版本，打开浏览器下载安装包。') }}</p>
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('下载源') }}</div>
+              <div class="fr-hint">{{ t('国内推荐 ghfast / ghproxy') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <select v-model="upd.mirror" class="ov-input" style="min-width:180px">
+                <option value="ghfast">ghfast</option>
+                <option value="ghproxy">ghproxy</option>
+                <option value="github">GitHub 官方</option>
+              </select>
+            </div>
+          </div>
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('版本') }}</div>
+              <div class="fr-hint">{{ t('点击刷新获取发布版本') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <select v-model.number="upd.version" class="ov-input" style="min-width:220px" :disabled="!upd.releases.length" @change="upd.asset = updSelectedRelease && updSelectedRelease.assets && updSelectedRelease.assets.length ? 0 : -1">
+                <option v-for="(r, i) in upd.releases" :key="i" :value="i">{{ r.tag }} · {{ r.name }}</option>
+                <option v-if="!upd.releases.length" value="-1">{{ t('暂无可用更新') }}</option>
+              </select>
+              <button class="btn sm" @click="updLoadReleases" :disabled="upd.loading">{{ t('刷新') }}</button>
+            </div>
+          </div>
+          <div v-if="updSelectedRelease && updSelectedRelease.assets && updSelectedRelease.assets.length" class="field-row">
+            <div>
+              <div class="fr-label">{{ t('安装包') }}</div>
+              <div class="fr-hint">{{ t('Windows 安装程序 / Asar 包等') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <select v-model.number="upd.asset" class="ov-input" style="min-width:240px">
+                <option v-for="(a, j) in updSelectedRelease.assets" :key="j" :value="j">{{ a.name }} · {{ (a.size/1048576).toFixed(1) }} MB</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
+            <button class="btn sm primary" @click="updOpenDownload" :disabled="!updSelectedAsset">{{ t('打开下载') }}</button>
+            <span style="font-size:12px;color:var(--stone)">{{ upd.status }}</span>
+          </div>
         </div>
       </div>
 
