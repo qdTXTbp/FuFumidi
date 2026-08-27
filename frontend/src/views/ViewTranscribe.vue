@@ -16,6 +16,9 @@ const isDesktop = !!(bridge && bridge.convert);
 
 /* ---------------- 状态 ---------------- */
 const mode = ref('universal');           // universal | piano | separate
+const umodel = ref('basic');             // 通用子模型：basic | muscriptor
+const msSize = ref('medium');            // MuScriptor 规格：small | medium | large
+const pmodel = ref('piano_pt');          // 钢琴子模型：piano_pt | aria | transkun
 const perf = ref('quality');             // quality | balanced | fast
 const perfHint = ref('');
 const busy = ref(false);
@@ -422,6 +425,11 @@ function collectParams() {
     cfg.min_note_ms = parseInt(minNote.value, 10);
     cfg.no_pedal = !pedal.value;
     cfg.merge_gap_ms = parseInt(mergeGap.value, 10);
+    cfg.model = pmodel.value;
+  }
+  if (mode.value === 'universal') {
+    cfg.model = umodel.value;
+    if (umodel.value === 'muscriptor') cfg.model_size = msSize.value;
   }
   if (mode.value === 'separate') {
     cfg.with_drums = drums.value;
@@ -700,6 +708,32 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
+      <!-- 通用子模型：Basic Pitch（兜底）/ MuScriptor（可选，三档规格） -->
+      <div v-if="mode === 'universal'" class="tr-submodels">
+        <div class="fb-label">{{ t('通用模型') }}</div>
+        <div class="tr-pills">
+          <button class="tr-pill" :class="{ active: umodel === 'basic' }" @click="umodel = 'basic'">{{ t('Basic Pitch · 内置兜底') }}</button>
+          <button class="tr-pill" :class="{ active: umodel === 'muscriptor' }" @click="umodel = 'muscriptor'">{{ t('MuScriptor · 需下载') }}</button>
+        </div>
+        <div v-if="umodel === 'muscriptor'" class="tr-pills">
+          <button class="tr-pill" :class="{ active: msSize === 'small' }" @click="msSize = 'small'">Small · 100M</button>
+          <button class="tr-pill" :class="{ active: msSize === 'medium' }" @click="msSize = 'medium'">{{ t('Medium · 300M（推荐）') }}</button>
+          <button class="tr-pill" :class="{ active: msSize === 'large' }" @click="msSize = 'large'">Large · 1.3B</button>
+        </div>
+        <div class="tr-perf-hint" v-if="umodel === 'muscriptor'">{{ t('未下载时请到资源中心 → 模型文件 按规格下载') }}</div>
+      </div>
+
+      <!-- 钢琴子模型：piano-transcription / Aria-AMT / Transkun -->
+      <div v-if="mode === 'piano'" class="tr-submodels">
+        <div class="fb-label">{{ t('钢琴模型') }}</div>
+        <div class="tr-pills">
+          <button class="tr-pill" :class="{ active: pmodel === 'piano_pt' }" @click="pmodel = 'piano_pt'">{{ t('piano-transcription · 内置') }}</button>
+          <button class="tr-pill" :class="{ active: pmodel === 'aria' }" @click="pmodel = 'aria'">Aria-AMT</button>
+          <button class="tr-pill" :class="{ active: pmodel === 'transkun' }" @click="pmodel = 'transkun'">Transkun</button>
+        </div>
+        <div class="tr-perf-hint" v-if="pmodel !== 'piano_pt'">{{ t('Aria-AMT / Transkun 需先到资源中心安装对应模型') }}</div>
+      </div>
+
       <div class="fb-label">性能模式</div>
       <div class="tr-pills">
         <button class="tr-pill" :class="{ active: perf === 'quality' }" @click="selectPerf('quality')">{{ t('最高质量') }}</button>
@@ -919,6 +953,8 @@ onBeforeUnmount(() => {
 .tr-pill { padding: 5px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); font-size: 12px; color: var(--slate); cursor: pointer; }
 .tr-pill:hover { border-color: var(--border-strong); }
 .tr-pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tr-submodels { margin-top: 10px; padding: 10px 12px; border: 1px dashed var(--hairline); border-radius: 10px; background: var(--surface-soft); }
+.tr-submodels .fb-label { margin-bottom: 8px; }
 .tr-perf-hint { font-size: 11.5px; color: var(--success-text); }
 .tr-adv { border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); }
 .tr-adv summary { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-size: 12.5px; font-weight: 600; color: var(--ink); cursor: pointer; user-select: none; }

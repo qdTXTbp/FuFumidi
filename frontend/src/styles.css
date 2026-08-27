@@ -717,7 +717,9 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .settings-card { width: 720px; max-height: 92vh; display: flex; flex-direction: column; overflow: hidden; }
 .settings-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .settings-title { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; color: var(--ink); }
-.settings-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--hairline); margin-bottom: 4px; overflow-x: auto; position: sticky; top: 0; background: var(--canvas); z-index: 5; padding-bottom: 4px; }
+.settings-tabs { display: flex; gap: 4px; border-bottom: 1px solid transparent; margin-bottom: 4px; overflow-x: auto; position: sticky; top: 0; background: transparent; -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); z-index: 5; padding: 3px 0 4px; min-height: 38px; align-items: center; flex-wrap: nowrap; }
+.settings-tabs::-webkit-scrollbar { height: 4px; }
+.settings-tabs::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: 999px; }
 .ov-tab {
   min-height: 28px;
   padding: 6px 14px;
@@ -734,6 +736,14 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .ov-tab:hover { background: var(--surface-soft); color: var(--ink); }
 .ov-tab.active { background: var(--accent); color: #fff; font-weight: 600; }
 .settings-body { flex: 1; overflow: auto; min-height: 0; }
+/* 设置标签页切换动画：内容淡入上移，避免硬切 */
+.settings-body > div { animation: tab-in 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.05); }
+@keyframes tab-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* 设置行 / 交互元素通用过渡：hover 微反馈 + 出场动画 */
+.field-row { transition: background 0.16s ease; }
+.field-row:hover { background: color-mix(in srgb, var(--surface-soft) 50%, transparent); border-radius: 10px; }
+.settings-body .field-row { margin: 0 -8px; padding: 0 8px; border-radius: 10px; animation: field-in 0.22s ease both; }
+@keyframes field-in { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }
 .settings-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--hairline); }
 
 /* 完整性检验警告条 */

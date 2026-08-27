@@ -13,12 +13,26 @@ import os
 
 # 模式定义：显示名 + 描述（GUI 用）
 MODES = {
-    "universal": ("通用识别", "任意歌曲 · 人声 · 多乐器（basic-pitch）"),
-    "piano":     ("钢琴专用", "纯钢琴高精度 · 含踏板（piano-transcription）"),
+    "universal": ("通用识别", "任意歌曲 · 人声 · 多乐器（basic-pitch 兜底 / MuScriptor 可选）"),
+    "piano":     ("钢琴专用", "纯钢琴高精度（piano-transcription / Aria-AMT / Transkun）"),
     "separate":  ("人声分离", "分声部转录：人声/贝斯/乐器/鼓（需 demucs）"),
 }
 
 DEFAULT_MODE = "universal"
+
+# 通用转录子模型（universal 模式下的候选模型）
+UNIVERSAL_MODELS = {
+    "basic":    ("Basic Pitch", "Release 内置兜底模型"),
+    "muscriptor": ("MuScriptor", "Kyutai 多乐器转录 · 资源中心下载 · Small/Medium/Large"),
+}
+MUSCRIPTOR_SIZES = ["small", "medium", "large"]
+
+# 钢琴引擎子模型（piano 模式下的候选模型）
+PIANO_MODELS = {
+    "piano_pt": ("piano-transcription（ByteDance）", "内置模型"),
+    "aria":     ("Aria-AMT（EleutherAI）", "资源中心下载"),
+    "transkun": ("Transkun（Neural Semi-CRF）", "pip 安装含权重"),
+}
 
 # 各模式默认参数（GUI 滑块与 CLI 共用基准）
 DEFAULTS = {
@@ -30,6 +44,9 @@ DEFAULTS = {
         "maximum_frequency": None,
         "melodia_trick": True,
         "midi_tempo": 120.0,
+        # 通用子模型：basic（默认 / Basic Pitch）| muscriptor（可选）
+        "model": "basic",
+        "model_size": "medium",
         # 后处理（midi_post）：
         "merge_overlap": True,
         "merge_gap_ms": 30.0,
@@ -66,8 +83,8 @@ DEFAULTS = {
 def engine_available(mode):
     """该模式的引擎是否可用。"""
     if mode == "universal":
-        from engine_basic import available
-        return available()
+        # 任一子模型可用即可（basic 兜底 / muscriptor 可选）
+        return _basic_ok() or _muscriptor_ok()
     if mode == "piano":
         from engine_pt import available
         return available()
@@ -75,6 +92,33 @@ def engine_available(mode):
         import engine_separate
         return engine_separate.available() and _basic_ok()
     return False
+
+
+def _muscriptor_ok():
+    try:
+        import engine_muscriptor
+        return engine_muscriptor.available()
+    except Exception:
+        return False
+
+
+def piano_model_available(model):
+    """钢琴子模型是否可用（piano_pt / aria / transkun）。"""
+    if model == "aria":
+        try:
+            import engine_aria
+            return engine_aria.available()
+        except Exception:
+            return False
+    if model == "transkun":
+        try:
+            import engine_transkun
+            return engine_transkun.available()
+        except Exception:
+            return False
+    # 默认 piano_pt
+    from engine_pt import available
+    return available()
 
 
 def _basic_ok():
@@ -104,6 +148,16 @@ def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
     params = {**(DEFAULTS.get(mode, {})), **(params or {})}
 
     if mode == "piano":
+        # 钢琴子模型：piano_pt（默认 / ByteDance）/ aria / transkun
+        pmodel = (params or {}).get("model") or "piano_pt"
+        if pmodel == "aria":
+            import engine_aria
+            return engine_aria.transcribe_aria(audio_path, output_midi, params=params,
+                                               log_cb=log_cb, num_threads=num_threads)
+        if pmodel == "transkun":
+            import engine_transkun
+            return engine_transkun.transcribe_transkun(audio_path, output_midi, params=params,
+                                                       log_cb=log_cb, num_threads=num_threads)
         import engine_pt
         params["perf_mode"] = perf_mode   # 性能档 → engine_pt 批量前向上限（自适应）
         return engine_pt.transcribe_pt(audio_path, output_midi, log_cb=log_cb,
@@ -115,7 +169,12 @@ def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
             audio_path, output_midi, params=params, log_cb=log_cb,
             num_threads=num_threads)
 
-    # 默认 universal
+    # 默认 universal：子模型 basic（Basic Pitch 兜底）| muscriptor（可选）
+    umodel = (params or {}).get("model") or "basic"
+    if umodel == "muscriptor":
+        import engine_muscriptor
+        return engine_muscriptor.transcribe_muscriptor(audio_path, output_midi, params=params,
+                                                       log_cb=log_cb, num_threads=num_threads)
     import engine_basic
     return engine_basic.transcribe_basic(audio_path, output_midi, log_cb=log_cb,
                                          num_threads=num_threads, **params)

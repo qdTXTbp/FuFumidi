@@ -97,7 +97,7 @@ function scaleSnapPitch(midi) {
   }
   const { root, deg } = _scaleCache;
   const oct = Math.floor(midi / 12), pc = ((midi % 12) + 12) % 12;
-  const best = { d: 99, m: midi };
+  let best = { d: 99, m: midi };
   for (const d of deg) {
     const m = oct * 12 + root + d;
     for (const cand of [m - 12, m, m + 12]) {

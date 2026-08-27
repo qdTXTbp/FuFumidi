@@ -9,14 +9,13 @@ import { t, setLang, getLang } from '../core/i18n.js';
 const app = useAppStore();
 const state = app;
 const toast = (m, t) => app.toast(m, t);
-import { THEMES, themeById, applyTheme, saveTheme } from '../core/theme.js';
+import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';
 
 const bridge = window.fuBridge;
 const settingsStore = useSettingsStore();
 
 const TABS = [
   { id: 'appearance', label: '外观', icon: 'palette' },
-  { id: 'engine', label: '引擎', icon: 'zap' },
   { id: 'gpu', label: 'GPU', icon: 'zap' },
   { id: 'feature', label: '功能', icon: 'folder' },
   { id: 'keys', label: '快捷键', icon: 'kbd' },
@@ -27,7 +26,7 @@ const tab = ref('appearance');
 
 /* ---------------- 表单 ---------------- */
 const form = reactive({
-  theme: 'fufu', accent: '',
+  theme: 'fufu', accent: '', mode: 'light',
   font_size: 'standard', density: 'comfortable', lang: 'zh',
   engine_path: '', engine_mode: 'universal', perf_mode: 'quality', batch_concurrency: 'auto',
   output_dir: '', name_rule: '', watch_dir: '', watch_enabled: false, file_assoc: true,
@@ -65,11 +64,6 @@ const themeOpts = computed(() => {
   return list;
 });
 
-/* ---------------- 引擎状态 ---------------- */
-const pyState = reactive({ busy: false, text: '' });
-const models = ref([]);
-const depState = reactive({ busy: false, text: '' });
-const depBusy = ref(false);
 const rustInfo = ref({ available: false, version: '', binary: null });
 
 /* ---------------- 插件 ---------------- */
@@ -111,6 +105,7 @@ async function load() {
   try { lsTheme = localStorage.getItem('fufumidi_theme'); lsAccent = localStorage.getItem('fufumidi_accent'); } catch (e) {}
   form.theme = lsTheme || s.theme || 'fufu';
   form.accent = lsAccent || s.accent || '';
+  form.mode = loadMode();
   form.font_size = s.font_size || 'standard';
   form.density = s.density || 'comfortable';
   form.lang = getLang();
@@ -124,7 +119,6 @@ async function load() {
   form.watch_enabled = !!s.watch_enabled;
   form.file_assoc = s.file_assoc !== false;
   if (state.integrity === null) runIntegrity();
-  refreshModels();
   loadPlugins();
   loadRust();
   initGpu();
@@ -139,100 +133,20 @@ function applyDisplay(font, density) {
   document.body.dataset.density = density === 'compact' ? 'compact' : 'comfortable';
 }
 function onThemeChange() {
-  applyTheme(form.theme, form.accent);
+  applyTheme(form.theme, form.accent, form.mode);
   toast(t('已应用主题：') + t(themeById(form.theme).name));
 }
-function onAccentInput(e) { applyTheme(form.theme, e.target.value); }
-function resetAccent() { form.accent = ''; applyTheme(form.theme, ''); }
+function onModeChange() {
+  setMode(form.mode);
+  toast(t('已切换为') + (form.mode === 'dark' ? t('深色模式') : t('浅色模式')), 'ok');
+}
+function onAccentInput(e) { applyTheme(form.theme, e.target.value, form.mode); }
+function resetAccent() { form.accent = ''; applyTheme(form.theme, '', form.mode); }
 function onFontSize() { applyDisplay(form.font_size, form.density); }
 function onDensity() { applyDisplay(form.font_size, form.density); }
 function onLang() {
   setLang(form.lang);
   try { localStorage.setItem('fufumidi_lang', form.lang); } catch (e) {}
-}
-
-/* ---------------- 引擎 ---------------- */
-function autoPy() {
-  form.engine_path = '';
-  pyState.text = t('已清空路径，将使用自动检测 / 内置运行时');
-}
-async function testEngine() {
-  if (!bridge || !bridge.probe) { pyState.text = t('引擎异常：') + 'no bridge'; return; }
-  pyState.busy = true;
-  pyState.text = t('正在检查…');
-  try {
-    const r = await bridge.probe();
-    if (r && r.ok) pyState.text = t('引擎正常：') + (r.python || r.version || '');
-    else pyState.text = t('引擎异常：') + (r && (r.error || r.raw || JSON.stringify(r)) || 'unknown');
-  } catch (e) { pyState.text = t('引擎异常：') + String(e.message || e); }
-  pyState.busy = false;
-}
-async function refreshModels() {
-  if (bridge && bridge.modelList) { try { models.value = await bridge.modelList() || []; } catch (e) { models.value = []; } }
-}
-function fmtSize(b) {
-  if (!b) return '—';
-  if (b > 1 << 30) return (b / (1 << 30)).toFixed(1) + ' GB';
-  if (b > 1 << 20) return (b / (1 << 20)).toFixed(1) + ' MB';
-  return (b / 1024).toFixed(0) + ' KB';
-}
-async function checkDeps() {
-  if (!bridge || !bridge.depCheck) return;
-  depBusy.value = true;
-  depState.text = t('正在检查…');
-  try {
-    const r = await bridge.depCheck();
-    if (r && r.ok) depState.text = t('依赖检查通过');
-    else depState.text = t('依赖检查异常：') + String((r && (r.error || r.raw)) || 'unknown').slice(-400);
-  } catch (e) { depState.text = t('依赖检查异常：') + String(e.message || e); }
-  depBusy.value = false;
-}
-async function installDeps() {
-  if (!bridge || !bridge.depInstall) return;
-  depBusy.value = true;
-  depState.text = t('正在安装（国内镜像优先）…');
-  try {
-    const r = await bridge.depInstall('all');
-    if (r && r.ok) depState.text = t('依赖安装完成');
-    else depState.text = t('依赖安装失败：') + String((r && (r.error || r.raw)) || 'unknown').slice(-400);
-  } catch (e) { depState.text = t('依赖安装失败：') + String(e.message || e); }
-  depBusy.value = false;
-}
-async function exportDiag() {
-  if (!bridge || !bridge.diagExport) return;
-  try {
-    const r = await bridge.diagExport();
-    if (r && r.canceled) toast(t('导出已取消'));
-    else if (r && r.ok) toast(t('诊断包已导出'));
-    else toast(t('导出失败：') + String((r && r.error) || 'unknown'), 'error');
-  } catch (e) { toast(t('导出失败：') + String(e.message || e), 'error'); }
-}
-
-/* ---------------- 配置导入 / 导出 ---------------- */
-async function exportConfig() {
-  if (!bridge || !bridge.saveBinary) { toast(t('当前环境不支持导出配置'), 'warn'); return; }
-  try {
-    const s = await settingsStore.load() || {};
-    const data = new TextEncoder().encode(JSON.stringify(s, null, 2));
-    const r = await bridge.saveBinary({ name: 'FuFumidi-配置.json', data: Array.from(data) });
-    if (r && r.ok) toast(t('配置已导出：') + r.path, 'ok');
-    else if (r && !r.canceled) toast(t('配置导出失败'), 'warn');
-  } catch (e) { toast(t('配置导出失败：') + (e.message || e), 'warn'); }
-}
-async function importConfig() {
-  if (!bridge || !bridge.pickFile || !bridge.readBinary) { toast(t('当前环境不支持导入配置'), 'warn'); return; }
-  try {
-    const p = await bridge.pickFile({ filters: [{ name: 'FuFumidi 配置', extensions: ['json'] }] });
-    if (!p) return;
-    const bytes = await bridge.readBinary(p);
-    const cfg = JSON.parse(new TextDecoder('utf-8').decode(new Uint8Array(bytes)));
-    if (!cfg || typeof cfg !== 'object') throw new Error('bad config');
-    const cur = await settingsStore.load() || {};
-    const merged = Object.assign({}, cur, cfg);
-    await settingsStore.save(merged);
-    toast(t('配置已导入'), 'ok');
-    load();
-  } catch (e) { toast(t('配置导入失败：') + (e.message || e), 'warn'); }
 }
 
 /* ---------------- 更新 ---------------- */
@@ -470,7 +384,7 @@ const integrityOk = computed(() => !!(state.integrity && state.integrity.ok));
 
 /* ---------------- 保存 / 取消 ---------------- */
 function apply() {
-  saveTheme(form.theme, form.accent);
+  saveTheme(form.theme, form.accent, form.mode);
   applyDisplay(form.font_size, form.density);
   setLang(form.lang);
   try {
@@ -479,7 +393,7 @@ function apply() {
     localStorage.setItem('fufumidi_density', form.density);
   } catch (e) {}
   const payload = {
-    theme: form.theme, accent: form.accent,
+    theme: form.theme, accent: form.accent, ui_mode: form.mode,
     font_size: form.font_size, density: form.density, lang: form.lang,
     engine_path: form.engine_path, engine_mode: form.engine_mode,
     perf_mode: form.perf_mode, batch_concurrency: form.batch_concurrency,
@@ -553,6 +467,18 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
         <div v-if="tab === 'appearance'">
           <div class="field-row">
             <div>
+              <div class="fr-label">{{ t('界面模式') }}</div>
+              <div class="fr-hint">{{ t('浅色明亮 · 深色护眼') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <div class="radio-pill">
+                <span :class="{ on: form.mode === 'light' }" @click="form.mode = 'light'; onModeChange()">{{ t('浅色') }}</span>
+                <span :class="{ on: form.mode === 'dark' }" @click="form.mode = 'dark'; onModeChange()">{{ t('深色') }}</span>
+              </div>
+            </div>
+          </div>
+          <div class="field-row">
+            <div>
               <div class="fr-label">{{ t('界面主题') }}</div>
               <div class="fr-hint">{{ t('从主题库选择，或在此切换') }}</div>
             </div>
@@ -607,83 +533,6 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
               <div class="radio-pill">
                 <span :class="{ on: form.lang === 'zh' }" @click="form.lang = 'zh'; onLang()">{{ t('中文') }}</span>
                 <span :class="{ on: form.lang === 'en' }" @click="form.lang = 'en'; onLang()">English</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- ============ 引擎 ============ -->
-        <div v-else-if="tab === 'engine'">
-          <div class="field-row top">
-            <div>
-              <div class="fr-label">{{ t('Python 解释器路径') }}</div>
-              <div class="fr-hint">{{ t('依赖本地 Python（librosa / torch / demucs）') }}</div>
-            </div>
-            <div class="fr-ctl col">
-              <input v-model="form.engine_path" class="ov-input mono" style="width:300px" :placeholder="t('留空 = 自动检测')" />
-              <div style="display:flex;gap:6px">
-                <button class="btn sm" @click="autoPy">{{ t('自动检测') }}</button>
-                <button class="btn sm" @click="testEngine" :disabled="pyState.busy">{{ t('测试引擎') }}</button>
-              </div>
-              <div class="state-box" v-if="pyState.text">{{ pyState.text }}</div>
-            </div>
-          </div>
-          <div class="field-row">
-            <div>
-              <div class="fr-label">{{ t('默认引擎模式') }}</div>
-              <div class="fr-hint">{{ t('转录新音频时默认使用的识别引擎') }}</div>
-            </div>
-            <div class="fr-ctl">
-              <select v-model="form.engine_mode" class="ov-input" style="width:200px">
-                <option value="universal">{{ t('通用识别（basic_pitch）') }}</option>
-                <option value="piano">{{ t('钢琴专用（piano_transcription）') }}</option>
-                <option value="separate">{{ t('人声分离（demucs）') }}</option>
-              </select>
-            </div>
-          </div>
-          <div class="field-row">
-            <div>
-              <div class="fr-label">{{ t('默认性能模式') }}</div>
-              <div class="fr-hint">{{ t('质量越高耗时越长') }}</div>
-            </div>
-            <div class="fr-ctl">
-              <select v-model="form.perf_mode" class="ov-input" style="width:200px">
-                <option value="quality">{{ t('最高质量') }}</option>
-                <option value="balanced">{{ t('均衡') }}</option>
-                <option value="fast">{{ t('高性能') }}</option>
-              </select>
-            </div>
-          </div>
-          <div class="field-row top">
-            <div style="flex:none">
-              <div class="fr-label">{{ t('内置模型') }}</div>
-              <div class="fr-hint">{{ t('模型清单；量化缺失自动回退原始模型') }}</div>
-            </div>
-            <div class="fr-ctl col stretch">
-              <div class="state-box" v-if="models.length">
-                <div class="model-item" v-for="m in models" :key="m.name">
-                  <span class="mi-name">{{ m.name }}</span>
-                  <span class="mi-note">{{ m.note }}</span>
-                  <span class="mi-size">{{ fmtSize(m.size) }}</span>
-                  <span :class="m.exists ? 'mi-ok' : 'mi-missing'">{{ m.exists ? t('已就绪') : t('缺失') }}</span>
-                </div>
-              </div>
-              <button class="btn sm" @click="refreshModels">{{ t('刷新模型清单') }}</button>
-            </div>
-          </div>
-          <div class="field-row top">
-            <div style="flex:none">
-              <div class="fr-label">{{ t('运行期依赖') }}</div>
-              <div class="fr-hint">{{ t('缺失时自动检测并一键补全（国内镜像优先）') }}</div>
-            </div>
-            <div class="fr-ctl col stretch">
-              <div class="state-box" v-if="depState.text">{{ depState.text }}</div>
-              <div style="display:flex;gap:6px;flex-wrap:wrap">
-                <button class="btn sm" @click="checkDeps" :disabled="depBusy">{{ t('检查依赖') }}</button>
-                <button class="btn sm primary" @click="installDeps" :disabled="depBusy">{{ t('一键补全缺失依赖') }}</button>
-                <button class="btn sm" @click="exportDiag">{{ t('导出诊断包') }}</button>
-                <button class="btn sm" @click="exportConfig">{{ t('导出配置') }}</button>
-                <button class="btn sm" @click="importConfig">{{ t('导入配置') }}</button>
               </div>
             </div>
           </div>
@@ -749,6 +598,32 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
 
         <!-- ============ 功能 ============ -->
         <div v-else-if="tab === 'feature'">
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('默认引擎模式') }}</div>
+              <div class="fr-hint">{{ t('转录新音频时默认使用的识别引擎') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <select v-model="form.engine_mode" class="ov-input" style="width:200px">
+                <option value="universal">{{ t('通用识别（basic_pitch）') }}</option>
+                <option value="piano">{{ t('钢琴专用（piano_transcription）') }}</option>
+                <option value="separate">{{ t('人声分离（demucs）') }}</option>
+              </select>
+            </div>
+          </div>
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('默认性能模式') }}</div>
+              <div class="fr-hint">{{ t('质量越高耗时越长') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <select v-model="form.perf_mode" class="ov-input" style="width:200px">
+                <option value="quality">{{ t('最高质量') }}</option>
+                <option value="balanced">{{ t('均衡') }}</option>
+                <option value="fast">{{ t('高性能') }}</option>
+              </select>
+            </div>
+          </div>
           <div class="field-row">
             <div>
               <div class="fr-label">{{ t('默认输出目录') }}</div>

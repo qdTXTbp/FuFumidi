@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // 主进程任务队列服务：音频转录、智能修正与任务取消
 // ============================================================
 'use strict';
@@ -35,6 +35,8 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
       for (const [k, flag] of Object.entries({ denoise: '--denoise', normalize: '--normalize', auto_bpm: '--auto-bpm', no_merge: '--no-merge', no_velnorm: '--no-velnorm', with_drums: '--with-drums', no_pedal: '--no-pedal', export_stems: '--export-stems' })) {
         if (cfg[k]) args.push(flag);
       }
+      if (cfg.model) args.push('--model', cfg.model);
+      if (cfg.model_size) args.push('--model-size', cfg.model_size);
       const send = (line) => {
         if (win && !win.isDestroyed()) win.webContents.send('engine:log', { id: cfg.id, line });
       };

@@ -157,6 +157,9 @@ def _resolve_params(args, mode):
     if getattr(args, "auto_bpm", False): p["auto_bpm"] = True
     if getattr(args, "no_merge", False): p["merge_overlap"] = False
     if getattr(args, "no_velnorm", False): p["normalize_vel"] = False
+    # 子模型选择：universal → basic / muscriptor；piano → piano_pt / aria / transkun
+    if getattr(args, "model", None): p["model"] = args.model
+    if getattr(args, "model_size", None): p["model_size"] = args.model_size
     return p, mode
 
 
@@ -338,6 +341,10 @@ def build_parser():
                         choices=["quality", "balanced", "fast"],
                         help="性能模式: quality=最高质量(默认,全部核心) / "
                              "balanced=均衡 / fast=高性能(低配省内存)")
+    parser.add_argument("--model", default=None,
+                        help="子模型: universal→basic/muscriptor；piano→piano_pt/aria/transkun")
+    parser.add_argument("--model-size", default=None,
+                        help="MuScriptor 规格: small / medium / large")
 
     g = parser.add_argument_group("转录参数（通用/钢琴/分离共用）")
     g.add_argument("--onset-threshold", type=float, default=None,
@@ -414,6 +421,8 @@ def cmd_worker():
                 maximum_frequency=req.get('max_freq'),
                 no_melodia=bool(req.get('no_melodia')),
                 tempo=req.get('tempo'),
+                model=req.get('model'),
+                model_size=req.get('model_size'),
             )
             buf = io.StringIO()
             code = 1

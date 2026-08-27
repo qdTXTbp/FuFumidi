@@ -8,7 +8,7 @@ import { t } from '../core/i18n.js';
 const app = useAppStore();
 const state = app;
 const toast = (m, t) => app.toast(m, t);
-import { THEMES, themeSwatches, saveTheme, extractAccentFromImage } from '../core/theme.js';
+import { THEMES, themeSwatches, saveTheme, extractAccentFromImage, loadMode } from '../core/theme.js';
 
 const bridge = window.fuBridge;
 
@@ -36,7 +36,7 @@ onMounted(async () => {
 
 function pickTheme(th) {
   current.value = th.id;
-  saveTheme(th.id, '');
+  saveTheme(th.id, '', loadMode());
   toast(t('已应用主题：') + t(th.name));
 }
 
@@ -47,7 +47,7 @@ async function onImage(e) {
   try {
     const { accentHex } = await extractAccentFromImage(f);
     current.value = 'custom';
-    saveTheme('custom', accentHex);
+    saveTheme('custom', accentHex, loadMode());
     toast(t('已生成自定义主题'));
   } catch (err) {
     toast(t('生成失败：') + String(err.message || err), 'error');

@@ -18,6 +18,7 @@ export const VIEWS = [
   { id: 'score', label: '乐谱', ic: 'score' },
   { id: 'transcribe', label: '转录', ic: 'transcribe' },
   { id: 'convert', label: '转换', ic: 'convert' },
+  { id: 'resources', label: '资源中心', ic: 'box' },
 ];
 
 const DB_NAME = 'fufumidi-db', DB_VER = 1, STORE_SONGS = 'songs';

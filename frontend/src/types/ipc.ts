@@ -169,6 +169,7 @@ export interface UpdateRelease {
 export interface Settings {
   theme?: string;
   accent?: string;
+  ui_mode?: 'light' | 'dark';
   font_size?: string;
   density?: string;
   perf_mode?: PerfMode;

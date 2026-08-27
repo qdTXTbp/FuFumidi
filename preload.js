@@ -55,7 +55,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
 
   depInstall: (group) => ipcRenderer.invoke('dep:install', group),
 
-  modelDownload: (id) => ipcRenderer.invoke('model:download', id),
+  modelDownload: (id, channel) => ipcRenderer.invoke('model:download', id, channel),
   modelCancel: (id) => ipcRenderer.invoke('model:cancel', id),
   modelPause: (id) => ipcRenderer.invoke('model:pause', id),
   modelDelete: (id) => ipcRenderer.invoke('model:delete', id),

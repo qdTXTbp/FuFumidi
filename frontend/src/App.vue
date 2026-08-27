@@ -78,14 +78,14 @@ function applyDisplayPrefs(s) {
 async function initGlobal() {
   // 1) 主题：localStorage 同步读取先应用（防闪烁），settings 仅兜底
   const lt = loadTheme();
-  applyTheme(lt.name, lt.accent);
+  applyTheme(lt.name, lt.accent, lt.mode);
   let s = {};
   if (bridge && bridge.getSettings) {
     try { s = await bridge.getSettings() || {}; } catch (e) {}
   }
   let hasLsTheme = false;
   try { hasLsTheme = localStorage.getItem('fufumidi_theme') != null; } catch (e) {}
-  if (!hasLsTheme && s.theme) applyTheme(s.theme, s.accent || '');
+  if (!hasLsTheme && s.theme) applyTheme(s.theme, s.accent || '', lt.mode);
 
   // 2) 语言 / 字号 / 密度（localStorage 优先，settings 兜底）
   let lang = 'zh', font = null, density = null;

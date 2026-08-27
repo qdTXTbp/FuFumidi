@@ -10,6 +10,7 @@ const fs = require('fs');
 const DEFAULT_SETTINGS = {
   theme: 'fufu',
   accent: '',
+  ui_mode: 'light',
   font_size: 'standard',
   density: 'comfortable',
   perf_mode: 'quality',

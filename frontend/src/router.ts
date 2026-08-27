@@ -1,4 +1,4 @@
-﻿// Vue Router：视图哈希路由（Electron file:// 下使用 hash 历史）
+// Vue Router：视图哈希路由（Electron file:// 下使用 hash 历史）
 import { createRouter, createWebHashHistory, RouteRecordRaw } from 'vue-router';
 
 const routes: RouteRecordRaw[] = [
@@ -12,6 +12,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/score', name: 'score', component: () => import('./views/ViewScore.vue') },
   { path: '/transcribe', name: 'transcribe', component: () => import('./views/ViewTranscribe.vue') },
   { path: '/convert', name: 'convert', component: () => import('./views/ViewConvert.vue') },
+  { path: '/resources', name: 'resources', component: () => import('./views/ViewResources.vue') },
   { path: '/:pathMatch(.*)*', redirect: '/home' },
 ];
 

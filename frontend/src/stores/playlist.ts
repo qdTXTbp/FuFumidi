@@ -88,10 +88,16 @@ export const usePlaylistStore = defineStore('playlist', {
       return id;
     },
     select(id: string) {
-      if (id === 'favorites' || this.playlists.some(p => p.id === id)) {
+      if (id === 'all' || id === 'favorites' || this.playlists.some(p => p.id === id)) {
         this.activePlaylistId = id;
         this.persist();
       }
+    },
+    rename(id: string, name: string) {
+      const p = this.playlists.find(x => x.id === id);
+      if (!p) return;
+      p.name = name || p.name;
+      this.persist();
     },
     remove(id: string) {
       if (id === 'favorites') return;
@@ -112,6 +118,12 @@ export const usePlaylistStore = defineStore('playlist', {
       const list = this.activePlaylist || this.playlists.find(p => p.id === 'default') || this.playlists[0];
       if (!list) return;
       for (const id of ids) if (id && !list.songIds.includes(id)) list.songIds.push(id);
+      this.persist();
+    },
+    addToPlaylist(plId: string, ids: string[]) {
+      const p = this.playlists.find(x => x.id === plId);
+      if (!p) return;
+      for (const id of ids) if (id && !p.songIds.includes(id)) p.songIds.push(id);
       this.persist();
     },
     removeSongs(ids: string[]) {
