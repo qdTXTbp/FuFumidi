@@ -357,16 +357,6 @@ Each plugin runs in its own worker with a scoped `ctx` object that exposes `comm
 
 Coding conventions are documented in `.github/CODING_GUIDELINES.md`.
 
----
-
-## Credits
-
-- **monologue82** (Bilibili: **骄傲的狼W0R**) - frontend design and the Vue 3 rewrite of the renderer.
-- Third-party components used by the app (verovio, abcjs, js-synthesizer, FluidSynth, GeneralUser soundfont, MuScriptor, basic-pitch, Demucs, piano transcribers) are referenced with their original licenses under `renderer/vendor/` and `engine/`.
-
-For a detailed changelog against the upstream repository, see `CHANGES.md`.
-
----
 
 ## License
 
