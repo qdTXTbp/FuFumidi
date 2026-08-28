@@ -507,6 +507,15 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
           </div>
           <div class="field-row">
             <div>
+              <div class="fr-label">{{ t('动态壁纸') }}</div>
+              <div class="fr-hint">{{ t('从壁纸库下载视频作为背景，或导入本地视频') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <button class="btn sm" @click="state.ui.wallpaperOpen = true">🖼 {{ t('壁纸库') }}</button>
+            </div>
+          </div>
+          <div class="field-row">
+            <div>
               <div class="fr-label">{{ t('强调色') }}</div>
               <div class="fr-hint">{{ t('自定义主题的主色调') }}</div>
             </div>

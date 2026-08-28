@@ -52,7 +52,7 @@ async function saveProject() {
     { division: song.tpb, tempoMap: song.tempoMap, sigMap: song.sigMap });
   const { player } = ensureAudio();
   const proj = {
-    app: 'FuFumidi', version: '3.0.0',
+    app: 'FuFumidi', version: '3.1.0',
     fileName: song.name || 'project',
     midi: bufToB64(midiBytes),
     speed: state.tempo || 1,

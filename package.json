@@ -10,6 +10,10 @@
     },
     "license": "MIT",
     "homepage": "https://github.com/qdTXTbp/FuFumidi",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/qdTXTbp/FuFumidi.git"
+    },
     "private": true,
     "scripts": {
         "build:ui": "npm --prefix frontend run build",

@@ -18,6 +18,7 @@ function openSettingsTab(tab) {
   menuOpen.value = false;
 }
 function openThemes() { state.ui.themesOpen = true; menuOpen.value = false; }
+function openWallpapers() { state.ui.wallpaperOpen = true; menuOpen.value = false; }
 function openPalette() { state.ui.paletteOpen = true; menuOpen.value = false; }
 function togglePlayerbar() {
   state.playerbarOpen = !state.playerbarOpen;
@@ -29,7 +30,7 @@ function toggleSidebar() {
 }
 function go(v) { setView(v); menuOpen.value = false; }
 function about() {
-  window.alert(t('FuFumidi v3.0.0\n离线 MIDI 播放 / 编辑 / 转录 / 乐谱 / 分析工作站\n本地 Vue3 + Vite + TypeScript 重构版'));
+  window.alert(t('FuFumidi v3.1.0\n离线 MIDI 播放 / 编辑 / 转录 / 乐谱 / 分析工作站\n本地 Vue3 + Vite + TypeScript 重构版'));
   menuOpen.value = false;
 }
 </script>
@@ -49,6 +50,9 @@ function about() {
     </span>
     <button class="icon-btn" :class="{ active: state.playerbarOpen }" :title="t('隐藏 / 显示底部播放栏')" aria-label="t('隐藏 / 显示底部播放栏')" @click="togglePlayerbar">
       <Icon name="player" :size="16" />
+    </button>
+    <button class="icon-btn" :title="t('动态壁纸')" aria-label="t('动态壁纸')" @click="openWallpapers">
+      <Icon name="wallpaper" :size="16" />
     </button>
     <button class="icon-btn" :title="t('帮助')" aria-label="t('帮助')" @click="openHelp">
       <Icon name="info" :size="17" />
@@ -76,6 +80,7 @@ function about() {
       <div class="menu-pop-title">设置</div>
       <button class="menu-pop-item" @click="openSettingsTab('appearance')"><Icon name="gear" :size="14" /> {{ t('应用设置') }}</button>
       <button class="menu-pop-item" @click="openThemes"><Icon name="palette" :size="14" /> {{ t('主题库') }}</button>
+      <button class="menu-pop-item" @click="openWallpapers"><Icon name="wallpaper" :size="14" /> {{ t('动态壁纸') }}</button>
       <button class="menu-pop-item" @click="openPalette"><Icon name="kbd" :size="14" /> {{ t('命令面板') }}</button>
       <button class="menu-pop-item" @click="openSettingsTab('keys')"><Icon name="kbd" :size="14" /> {{ t('快捷键') }}</button>
       <div class="menu-pop-div"></div>

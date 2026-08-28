@@ -45,26 +45,40 @@ async function load() {
 async function pick(item, i) {
   if (busyIdx.value >= 0) return;
   busyIdx.value = i; progress.value = 0;
+  let unP = null;
   try {
-    toast(t('正在应用壁纸…'));
-    // 远程壁纸直接使用远程视频流，不再阻塞等待完整下载
-    let finalPath = item.video;
     if (!item.local && item.video && /^https?:/.test(item.video)) {
-      // 后台尝试缓存副本；不阻塞 UI，失败也不影响应用远程流
-      try {
-        bridge.wallpaper.download(item.video, item.name).then((r) => {
-          if (r && r.ok && r.path) {
-            toast(t('壁纸已缓存到本地'), 'ok');
-          }
-        }).catch(() => {});
-      } catch (e) {}
+      // 远程壁纸：下载到本地再应用（有真实进度）；下载失败则回退在线流
+      toast(t('正在下载并应用壁纸…'));
+      if (bridge.wallpaper && bridge.wallpaper.onDownloadProgress) {
+        unP = bridge.wallpaper.onDownloadProgress((p) => {
+          if (p && typeof p.progress === 'number') progress.value = Math.round(p.progress * 100);
+        });
+      }
+      const r = await bridge.wallpaper.download(item.video, item.name);
+      if (r && r.ok && r.path) {
+        // 下载完成：该项状态变为已下载（local），不新增单独条目
+        item.local = true;
+        item.video = r.path;
+        await setWallpaperPath(r.path);
+        toast(t('壁纸已下载并应用'), 'ok');
+      } else {
+        // 网络受限/被拦截 → 直接应用在线流
+        await setWallpaperPath(item.video);
+        toast((r && r.error) ? t('下载受限，已应用在线壁纸') : t('壁纸已应用'), 'warn');
+      }
+    } else {
+      toast(t('正在应用壁纸…'));
+      await setWallpaperPath(item.video);
+      toast(t('壁纸已应用'), 'ok');
     }
-    await setWallpaperPath(finalPath);
-    toast(t('壁纸已应用'), 'ok');
     closeWallpaperGallery();
   } catch (e) {
     toast(t('应用失败：') + String((e && e.message) || e), 'error');
-  } finally { busyIdx.value = -1; }
+  } finally {
+    if (unP) unP();
+    busyIdx.value = -1;
+  }
 }
 
 async function addLocalWallpaper(p) {
@@ -156,6 +170,7 @@ onMounted(load);
             <span class="spinner"></span>
             <b>{{ Math.round(progress) }}%</b>
           </div>
+          <div class="wp-card-dl" v-else-if="item.local" :title="t('已下载')"><Icon name="check" :size="15" /></div>
           <div class="wp-card-dl" v-else><Icon name="download" :size="16" /></div>
           <button v-if="item.local" class="wp-card-del" :title="t('删除壁纸')" aria-label="t('删除壁纸')" @click.stop="removeLocalItem(item, i)">
             <Icon name="trash" :size="13" />

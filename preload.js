@@ -117,6 +117,11 @@ contextBridge.exposeInMainWorld('fuBridge', {
       ipcRenderer.on('wallpaper:addLocalProgress', listener);
       return () => ipcRenderer.removeListener('wallpaper:addLocalProgress', listener);
     },
+    onDownloadProgress: (cb) => {
+      const listener = (_e, p) => cb(p);
+      ipcRenderer.on('wallpaper:downloadProgress', listener);
+      return () => ipcRenderer.removeListener('wallpaper:downloadProgress', listener);
+    },
     removeLocal: (name) => ipcRenderer.invoke('wallpaper:removeLocal', name),
   },
   // 可选 Rust 核心

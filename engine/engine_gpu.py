@@ -84,9 +84,23 @@ def _probe():
            "vendor": None, "recommended_backend": "cpu",
            "cuda": False, "mps": False, "directml": False, "onnx_gpu": False,
            "onnx_provider": "CPUExecutionProvider"}
-    if os.environ.get("FUFUMIDI_DISABLE_GPU") == "1":
+    disabled = os.environ.get("FUFUMIDI_DISABLE_GPU") == "1"
+    if disabled:
         gpu["disabled"] = True
         gpu["note"] = "GPU 增强包未安装，已禁用 GPU 加速"
+    # 即使未装增强包也检测显卡厂商：用于界面展示与「安装 GPU 加速」推荐
+    vendor = _gpu_vendor()
+    if vendor:
+        gpu["vendor"] = vendor
+        if vendor == "nvidia":
+            gpu["name"] = gpu.get("name") or "NVIDIA GPU"
+            gpu["recommended_backend"] = "cuda"
+        elif vendor in ("amd", "intel"):
+            gpu["name"] = gpu.get("name") or vendor.upper() + " GPU"
+            gpu["recommended_backend"] = "directml"
+    if disabled:
+        if vendor:
+            gpu["note"] = "检测到 " + (gpu["name"] or vendor.upper()) + "，但未安装 GPU 增强包，可在「设置 → GPU」中一键安装"
         return gpu
     # ---- torch 后端（钢琴 / 分离引擎）----
     try:

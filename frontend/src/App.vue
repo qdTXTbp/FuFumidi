@@ -192,8 +192,8 @@ onBeforeUnmount(() => {
       </router-view>
     </main>
     <PlayerBar v-if="state.playerbarOpen" />
-    <div class="toast-wrap" v-if="state.toast && state.toast.msg" role="status" aria-live="polite">
-      <div class="toast" :class="state.toast.type">{{ state.toast.msg }}</div>
+    <div class="toast-wrap" v-if="state.toastMsg && state.toastMsg.msg" role="status" aria-live="polite">
+      <div class="toast" :class="state.toastMsg.type">{{ state.toastMsg.msg }}</div>
     </div>
 
     <!-- 全局系统功能浮层 -->

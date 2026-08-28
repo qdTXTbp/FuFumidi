@@ -8,20 +8,28 @@ const fs = require('fs');
 const http = require('http');
 const https = require('https');
 
-function streamDownload(url, dest, redirects = 0) {
+function streamDownload(url, dest, onProgress, redirects = 0) {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith('https') ? https : http;
     const req = lib.get(url, { headers: { 'User-Agent': 'FuFumidi' } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 5) {
         res.resume();
         const next = new URL(res.headers.location, url).toString();
-        resolve(streamDownload(next, dest, redirects + 1));
+        resolve(streamDownload(next, dest, onProgress, redirects + 1));
         return;
       }
       if (res.statusCode !== 200) { res.resume(); reject(new Error('HTTP ' + res.statusCode)); return; }
+      const total = parseInt(res.headers['content-length'] || '0', 10) || 0;
+      let received = 0;
       const ws = fs.createWriteStream(dest);
+      res.on('data', (chunk) => {
+        received += chunk.length;
+        if (onProgress && total > 0) {
+          try { onProgress(Math.max(0, Math.min(1, received / total))); } catch (e) {}
+        }
+      });
       res.pipe(ws);
-      ws.on('finish', () => resolve());
+      ws.on('finish', () => { try { if (onProgress) onProgress(1); } catch (e) {} resolve(); });
       ws.on('error', reject);
       res.on('error', reject);
     });
@@ -105,7 +113,11 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       const candidates = [];
       for (const file of f.readdirSync(dir)) {
         const ext = path.extname(file).toLowerCase();
-        if (exts.has(ext)) candidates.push(path.join(dir, file));
+        if (!exts.has(ext)) continue;
+        const full = path.join(dir, file);
+        // 过滤损坏/未完成的空文件（0 字节），避免列出假壁纸导致应用后黑屏
+        try { if (f.statSync(full).size <= 0) continue; } catch (e) { continue; }
+        candidates.push(full);
       }
       const thumbs = await Promise.all(candidates.map(videoPath => ensureLocalThumb(videoPath, dir)));
       const out = candidates.map((videoPath, i) => ({ name: path.basename(videoPath), video: videoPath, thumb: thumbs[i], local: true }));
@@ -157,8 +169,20 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
         }
         return { name: f.name, video: `${WALLPAPER_MEDIA}/${encodeURIComponent(f.name)}`, thumb };
       }));
-      const list = remoteThumbs;
-      return { ok: true, list: (await listLocalWallpapers()).concat(list) };
+      // 合并本地壁纸：远程项若本地已有同名文件 → 标记为已下载（local），不重复新增项
+      const locals = await listLocalWallpapers();
+      const localByBase = new Map();
+      for (const l of locals) localByBase.set(l.name.replace(/\.(mp4|webm|mov)$/i, '').toLowerCase(), l);
+      const list = remoteThumbs.map((r) => {
+        const base = r.name.replace(/\.(mp4|webm|mov)$/i, '').toLowerCase();
+        const loc = localByBase.get(base);
+        if (loc) return { ...r, local: true, video: loc.video, thumb: loc.thumb || r.thumb };
+        return r;
+      });
+      // 仅本地存在的壁纸（用户自行导入）也展示
+      const seen = new Set(list.map(r => r.name.replace(/\.(mp4|webm|mov)$/i, '').toLowerCase()));
+      const extra = locals.filter(l => !seen.has(l.name.replace(/\.(mp4|webm|mov)$/i, '').toLowerCase()));
+      return { ok: true, list: list.concat(extra) };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
@@ -218,17 +242,33 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
-  // 动态壁纸下载：流式下载视频到 userData/wallpapers，返回本地路径
-  ipcMain.handle('wallpaper:download', async (_e, url, name) => {
+  // 动态壁纸下载：流式下载视频到 userData/wallpapers，返回本地路径（带进度 + 完整性校验）
+  ipcMain.handle('wallpaper:download', async (evt, url, name) => {
+    const dir = path.join(app.getPath('userData'), 'wallpapers');
     try {
       if (!url || !/^https?:\/\//i.test(url)) return { ok: false, error: '无效 URL' };
-      const dir = path.join(app.getPath('userData'), 'wallpapers');
       f.mkdirSync(dir, { recursive: true });
       const safe = String(name || 'wallpaper').replace(/[\\/:*?"<>|]/g, '_');
       const dest = path.join(dir, safe);
-      await streamDownload(url, dest);
-      return { ok: true, path: dest, name: safe };
-    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+      const sendP = (p) => {
+        try { if (evt && !evt.sender.isDestroyed()) evt.sender.send('wallpaper:downloadProgress', { name: safe, progress: p }); } catch (e) {}
+      };
+      sendP(0);
+      await streamDownload(url, dest, (p) => sendP(p));
+      // 完整性校验：0 字节 = 下载失败/被拦截，删除残留避免假壁纸
+      let size = 0;
+      try { size = f.statSync(dest).size; } catch (e) {}
+      if (size <= 0) {
+        try { f.unlinkSync(dest); } catch (e) {}
+        return { ok: false, error: '下载文件为空（网络受限或文件被拦截），已回退在线壁纸' };
+      }
+      sendP(1);
+      return { ok: true, path: dest, name: safe, size };
+    } catch (e) {
+      const dest = path.join(dir, String(name || 'wallpaper').replace(/[\\/:*?"<>|]/g, '_'));
+      try { if (f.existsSync(dest) && f.statSync(dest).size <= 0) f.unlinkSync(dest); } catch (e2) {}
+      return { ok: false, error: String((e && e.message) || e) };
+    }
   });
 }
 

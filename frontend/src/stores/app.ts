@@ -127,7 +127,7 @@ export const useAppStore = defineStore('app', {
     metro: false,
     volume: 0.85,
     tracks: [] as any[],
-    toast: '' as any,
+    toastMsg: '' as any,
     confirm: null as any,
     fileBusy: false,
     ui: {
@@ -153,9 +153,9 @@ export const useAppStore = defineStore('app', {
   },
   actions: {
     toast(msg: string, type = 'info') {
-      this.toast = { msg, type };
+      this.toastMsg = { msg, type };
       clearTimeout(_toastTimer);
-      _toastTimer = setTimeout(() => (this.toast = ''), 2800);
+      _toastTimer = setTimeout(() => (this.toastMsg = ''), 2800);
     },
     async importFiles(items: any[]) {
       let ok = 0;
