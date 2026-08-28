@@ -55,7 +55,7 @@ async function saveProject() {
   const { player } = ensureAudio();
   const ver = (await getAppVersion()).replace(/^v/i, '');
   const proj = {
-    app: 'FuFumidi', version: ver || '3.1.3',
+    app: 'FuFumidi', version: ver || '3.1.4',
     fileName: song.name || 'project',
     midi: bufToB64(midiBytes),
     speed: state.tempo || 1,
