@@ -10,6 +10,23 @@ MuScriptor 通用多乐器转录引擎（Kyutai + Mirelo）
 import os
 
 
+def _find_local_model(size):
+    """从本地模型目录查找已下载的 MuScriptor 权重（资源中心下载后合并得到）。
+
+    优先使用 FUFUMIDI_MODELS_DIR/muscriptor/{size}/model.safetensors（离线可用），
+    找不到再回退 HuggingFace Hub 下载。
+    """
+    models_dir = os.environ.get("FUFUMIDI_MODELS_DIR", "") or ""
+    if not models_dir:
+        return None
+    base = os.path.join(models_dir, "muscriptor", size.lower())
+    for name in ("model.safetensors", "pytorch_model.bin"):
+        p = os.path.join(base, name)
+        if os.path.exists(p) and os.path.getsize(p) > 0:
+            return p
+    return None
+
+
 def available():
     """muscriptor 包是否安装。"""
     try:
@@ -25,13 +42,27 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
 
     params = params or {}
     size = str(params.get("model_size") or "medium").lower()
-    device = str(params.get("device") or "cuda")
+    device = str(params.get("device") or "auto")
     tempo = float(params.get("midi_tempo") or 120.0)
 
-    _log(log_cb, f"加载 MuScriptor-{size} …")
-    model = TranscriptionModel.load_model(size)
+    # 优先本地权重（离线），缺失才回退 HF Hub
+    local = _find_local_model(size)
+    if local:
+        _log(log_cb, f"加载 MuScriptor-{size}（本地权重）…")
+        load_arg = local
+    else:
+        _log(log_cb, f"加载 MuScriptor-{size}（HuggingFace，需授权）…")
+        load_arg = size
 
-    if device.startswith("cuda"):
+    if device and device != "auto":
+        try:
+            model = TranscriptionModel.load_model(load_arg, device=device)
+        except Exception:
+            model = TranscriptionModel.load_model(load_arg)
+    else:
+        model = TranscriptionModel.load_model(load_arg)
+
+    if model._device and model._device.type == "cuda":
         _log(log_cb, "使用 GPU（CUDA）推理")
     else:
         _log(log_cb, "使用 CPU 推理（较慢）")
@@ -39,7 +70,10 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     _log(log_cb, "推理中（多乐器转录）…")
     out_dir = os.path.dirname(os.path.abspath(output_midi))
     os.makedirs(out_dir, exist_ok=True)
-    model.transcribe_to_midi(audio_path, output_midi)
+    # muscriptor 0.3+ 的 transcribe_to_midi 返回 MIDI 字节（非写文件）
+    data = model.transcribe_to_midi(audio_path)
+    with open(output_midi, "wb") as f:
+        f.write(data)
 
     # 音符数统计（pretty_midi）
     n = _count_notes(output_midi)

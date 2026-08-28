@@ -190,8 +190,10 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received: size, total: size, percent: 100, done: true });
     return { ok: true, path: destDir, size };
   }
-  // GitHub Models 仓库分卷下载（MuScriptor：100MB part → 合并 + SHA256 校验）
+  // GitHub Models 仓库分卷下载（MuScriptor：分卷 → 并行下载 → 合并 + SHA256 校验）
+  // 特性：① 下载前对多源自动测速选最快 ② 分卷最多 4 路并行 ③ 按序合并 ④ SHA256 校验
   // 访问走 gh.jasonzeng.dev 加速，raw 直连 / ghfast / gh-proxy 作回退
+  const SPLIT_CONCURRENCY = 4;
   async function downloadSplitRepo(spec, win, ctrl) {
     const repo = spec.repo || 'monologue82/Models';
     const base = 'main/muscriptor/' + spec.sizeKey;
@@ -212,41 +214,112 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     }
     const meta = manifest && manifest.muscriptor && manifest.muscriptor[spec.sizeKey];
     if (!meta || !meta.parts) throw new Error('分卷清单获取失败：请确认 Models 仓库已发布 ' + spec.sizeKey + ' 分卷（manifest.json）');
+    const parts = parseInt(meta.parts, 10) || 0;
+    if (!parts) throw new Error('分卷清单缺少 parts');
     const destDir = path.join(modelsDir(), spec.dest);
     fs.mkdirSync(destDir, { recursive: true });
     const outFile = path.join(destDir, meta.model || 'model.safetensors');
     const total = meta.size || 0;
-    let received = 0;
-    let out = null;
-    try {
-      out = fs.createWriteStream(outFile);
-      for (let i = 1; i <= meta.parts; i++) {
-        const partName = (meta.model || 'model.safetensors') + '.part' + String(i).padStart(2, '0');
-        let ok = false;
-        for (const h of hosts) {
-          try {
-            const r = await net.fetch(`${h}/${repo}/${base}/${partName}`, { headers, signal: ctrl.signal });
-            if (!r.ok || !r.body) throw new Error('HTTP ' + r.status + ' · ' + partName);
-            const reader = r.body.getReader();
-            for (;;) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              if (_modelCancels.has(spec.id)) { try { reader.cancel(); } catch (e) {} throw new Error('canceled'); }
-              if (_modelPause.has(spec.id)) { try { reader.cancel(); } catch (e) {} throw new Error('paused'); }
-              received += value.length;
-              const pct = total ? Math.min(99, Math.round(received / total * 100)) : 0;
-              if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received, total, percent: pct, done: false });
-              await new Promise((res2, rej2) => out.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
-            }
-            ok = true;
-            break;
-          } catch (e) { lastErr = e; }
-        }
-        if (!ok) throw lastErr || new Error('下载分卷失败：' + partName);
+    // 已存在且完整 → 直接返回（避免重复下载）
+    if (fs.existsSync(outFile)) {
+      const sz = fs.statSync(outFile).size;
+      if (sz >= (spec.minSize || 0)) {
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received: sz, total: sz, percent: 100, done: true });
+        return { ok: true, path: destDir, size: sz, existed: true };
       }
-      await new Promise((res2, rej2) => out.end(err => (err ? rej2(err) : res2())));
+    }
+    const partsDir = path.join(destDir, '.parts');
+    fs.mkdirSync(partsDir, { recursive: true });
+
+    // 2) 测速：对每个源下载 part01 前 256KB，取最快
+    const probe = async (host, bytes = 256 * 1024) => {
+      const t0 = Date.now();
+      try {
+        const u = `${host}/${repo}/${base}/${partName(meta, 1)}`;
+        const r = await net.fetch(u, { headers, signal: ctrl.signal });
+        if (!r.ok || !r.body) return { host, mbps: 0 };
+        const reader = r.body.getReader();
+        let got = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          got += value.length;
+          if (got >= bytes) { try { await reader.cancel(); } catch (e) {} break; }
+        }
+        const ms = Math.max(1, Date.now() - t0);
+        return { host, mbps: got / 1024 / 1024 / (ms / 1000) };
+      } catch (e) { return { host, mbps: 0 }; }
+    };
+    const speeds = await Promise.all(hosts.map(h => probe(h)));
+    speeds.sort((a, b) => b.mbps - a.mbps);
+    const primaryHost = speeds[0].mbps > 0 ? speeds[0].host : hosts[0];
+    if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, text: `测速完成，选用 ${primaryHost.replace('https://', '')}（${speeds[0].mbps.toFixed(1)} MB/s）`, received: 0, total, percent: 0, done: false });
+
+    // 3) 并行下载分卷（并发 SPLIT_CONCURRENCY，全部写入 .parts/）
+    function partName(meta, i) { return (meta.model || 'model.safetensors') + '.part' + String(i).padStart(2, '0'); }
+    const downloadPart = async (i) => {
+      const name = partName(meta, i);
+      const dest = path.join(partsDir, name);
+      // 已完整下载的卷直接复用（断点续传）
+      if (fs.existsSync(dest)) {
+        const sz = fs.statSync(dest).size;
+        if (sz >= (i < parts ? 25 * 1024 * 1024 : 0) && sz > 0) { received += sz; return; }
+      }
+      const tmp = dest + '.part';
+      let ok = false;
+      for (const h of [primaryHost, ...hosts.filter(x => x !== primaryHost)]) {
+        if (_modelCancels.has(spec.id)) throw new Error('canceled');
+        if (_modelPause.has(spec.id)) throw new Error('paused');
+        try {
+          const r = await net.fetch(`${h}/${repo}/${base}/${name}`, { headers, signal: ctrl.signal });
+          if (!r.ok || !r.body) throw new Error('HTTP ' + r.status + ' · ' + name);
+          const ws = fs.createWriteStream(tmp);
+          const reader = r.body.getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (_modelCancels.has(spec.id)) { try { reader.cancel(); } catch (e) {} throw new Error('canceled'); }
+            if (_modelPause.has(spec.id)) { try { reader.cancel(); } catch (e) {} throw new Error('paused'); }
+            received += value.length;
+            const pct = total ? Math.min(99, Math.round(received / total * 100)) : 0;
+            if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received, total, percent: pct, done: false });
+            await new Promise((res2, rej2) => ws.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
+          }
+          await new Promise((res2, rej2) => ws.end(err => (err ? rej2(err) : res2())));
+          fs.renameSync(tmp, dest);
+          ok = true;
+          break;
+        } catch (e) { lastErr = e; try { fs.unlinkSync(tmp); } catch (_) {} }
+      }
+      if (!ok) throw lastErr || new Error('下载分卷失败：' + name);
+    };
+
+    let received = 0;
+    const partsList = Array.from({ length: parts }, (_, i) => i + 1);
+    let cursor = 0;
+    try {
+      const workers = Array.from({ length: Math.min(SPLIT_CONCURRENCY, parts) }, async () => {
+        while (cursor < partsList.length) {
+          const i = partsList[cursor++];
+          await downloadPart(i);
+        }
+      });
+      await Promise.all(workers);
+      // 4) 按序合并
+      const ws = fs.createWriteStream(outFile);
+      for (let i = 1; i <= parts; i++) {
+        const p = path.join(partsDir, partName(meta, i));
+        if (!fs.existsSync(p)) throw new Error('分卷缺失：' + partName(meta, i));
+        await new Promise((resolve, reject) => {
+          const rs = fs.createReadStream(p);
+          rs.on('error', reject);
+          rs.pipe(ws, { end: false });
+          rs.on('end', resolve);
+        });
+      }
+      await new Promise((res2, rej2) => ws.end(err => (err ? rej2(err) : res2())));
+      // 5) 校验
       const size = fs.statSync(outFile).size;
-      // SHA256 校验（与 manifest 一致）
       if (meta.sha256) {
         const hash = await sha256File(outFile);
         if (hash !== meta.sha256) { try { fs.unlinkSync(outFile); } catch (e) {} throw new Error('SHA256 校验失败：' + hash.slice(0, 12) + '（分卷可能不完整）'); }
@@ -255,10 +328,10 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received: size, total: size, percent: 100, done: true });
       return { ok: true, path: destDir, size };
     } catch (e) {
-      if (out) { try { out.destroy(); } catch (_) {} }
-      await new Promise(r => setTimeout(r, 150));
       if (!_modelPause.has(spec.id) && !_modelCancels.has(spec.id)) { try { fs.unlinkSync(outFile); } catch (_) {} }
       throw e;
+    } finally {
+      try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) {}
     }
   }
 
@@ -324,7 +397,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     try {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       if (fs.existsSync(tmp)) start = fs.statSync(tmp).size;
-      const headers = { 'user-agent': 'FuFumidi/3.1.1' };
+      const headers = { 'user-agent': 'FuFumidi/3.1.2' };
       if (start > 0) headers['Range'] = 'bytes=' + start + '-';
       const urls = [spec.url, 'https://ghfast.top/' + spec.url, 'https://gh-proxy.com/' + spec.url, 'https://ghproxy.net/' + spec.url];
       let res = null;

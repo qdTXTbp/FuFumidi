@@ -408,7 +408,7 @@ onMounted(hydrateFavs);
     </div>
 
     <div style="padding:10px 14px;border-top:1px solid var(--border)" class="small muted row">
-      <span class="tag">v3.1.1</span>
+      <span class="tag">v3.1.2</span>
       <span style="margin-left:auto">{{ t('离线 · Vue 3') }}</span>
     </div>
   </aside>

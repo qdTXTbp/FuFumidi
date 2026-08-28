@@ -10,7 +10,7 @@ const app = useAppStore();
 const state = app;
 const toast = (m, t) => app.toast(m, t);
 // 当前版本号（与 SideBar 左下角一致）
-const appVersion = 'v3.1.1';
+const appVersion = 'v3.1.2';
 import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';
 
 const bridge = window.fuBridge;
