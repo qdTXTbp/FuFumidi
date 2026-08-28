@@ -357,16 +357,6 @@ FuFumidi 支持以插件形式扩展第三方能力，无需改动主程序。�
 
 编码规范见 `.github/CODING_GUIDELINES.md`。
 
----
-
-## 致谢
-
-- **monologue82**（B 站用户：**骄傲的狼W0R**）：前端设计、Vue 3 渲染层重构。
-- 应用使用的第三方组件（verovio、abcjs、js-synthesizer、FluidSynth、GeneralUser 音色库、MuScriptor、basic-pitch、Demucs、钢琴转录器）均保留原许可，见 `renderer/vendor/` 与 `engine/` 内的 LICENSE 文件。
-
-相对上游仓库的详细改动记录见 `CHANGES.md`。
-
----
 
 ## 许可
 
