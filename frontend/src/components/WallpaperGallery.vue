@@ -130,12 +130,14 @@ async function removeLocalItem(item, i) {
       toast(t('删除失败：') + String((r && r.error) || 'unknown'), 'error');
       return;
     }
-    list.value.splice(i, 1);
+    // 删除本地文件后：该项恢复为「未下载」状态（可重新下载），不删除卡片
+    item.local = false;
+    item.video = item.remote || item.video;
     const cfg = await settingsStore.load();
-    if (cfg.custom_wallpaper === item.video) {
+    if (cfg.custom_wallpaper === item.video || (item.path && cfg.custom_wallpaper === item.path)) {
       await settingsStore.save({ wallpaper_enabled: false, custom_wallpaper: '' });
     }
-    toast(t('已删除壁纸'), 'ok');
+    toast(t('已移除本地壁纸，可重新下载'), 'ok');
   } catch (e) {
     toast(t('删除失败：') + String((e && e.message) || e), 'error');
   }

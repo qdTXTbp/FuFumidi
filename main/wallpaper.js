@@ -114,9 +114,12 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       for (const file of f.readdirSync(dir)) {
         const ext = path.extname(file).toLowerCase();
         if (!exts.has(ext)) continue;
+        if (file.endsWith('.part')) continue;   // 下载中的临时文件，不算已下载
         const full = path.join(dir, file);
         // 过滤损坏/未完成的空文件（0 字节），避免列出假壁纸导致应用后黑屏
         try { if (f.statSync(full).size <= 0) continue; } catch (e) { continue; }
+        // 只把「完整下载」的壁纸视为已下载（下载完成会写 .ok 标记）
+        if (!f.existsSync(full + '.ok')) continue;
         candidates.push(full);
       }
       const thumbs = await Promise.all(candidates.map(videoPath => ensureLocalThumb(videoPath, dir)));
@@ -167,7 +170,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
           const safeName = (th.name || f.name).replace(/[\\/:*?"<>|]/g, '_');
           thumb = await fetchThumbDataCached(net, thumb, path.join(thumbCacheDir, safeName));
         }
-        return { name: f.name, video: `${WALLPAPER_MEDIA}/${encodeURIComponent(f.name)}`, thumb };
+        return { name: f.name, video: `${WALLPAPER_MEDIA}/${encodeURIComponent(f.name)}`, remote: `${WALLPAPER_MEDIA}/${encodeURIComponent(f.name)}`, thumb };
       }));
       // 合并本地壁纸：远程项若本地已有同名文件 → 标记为已下载（local），不重复新增项
       const locals = await listLocalWallpapers();
@@ -196,6 +199,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       if (!video.startsWith(path.resolve(dir) + path.sep)) return { ok: false, error: 'path outside wallpaper dir' };
       if (!f.existsSync(video)) return { ok: false, error: 'not found' };
       f.unlinkSync(video);
+      try { f.unlinkSync(video + '.ok'); } catch (e) {}   // 完成标记一并删除
       const thumb = path.join(dir, name.replace(/\.(mp4|webm|mov)$/i, '') + '.jpg');
       if (f.existsSync(thumb)) f.unlinkSync(thumb);
       return { ok: true };
@@ -243,6 +247,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
   });
 
   // 动态壁纸下载：流式下载视频到 userData/wallpapers，返回本地路径（带进度 + 完整性校验）
+  // 先写 .part 临时文件，下载完整后再改名，避免中途退出残留被当作"已下载"
   ipcMain.handle('wallpaper:download', async (evt, url, name) => {
     const dir = path.join(app.getPath('userData'), 'wallpapers');
     try {
@@ -250,23 +255,29 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       f.mkdirSync(dir, { recursive: true });
       const safe = String(name || 'wallpaper').replace(/[\\/:*?"<>|]/g, '_');
       const dest = path.join(dir, safe);
+      const tmp = dest + '.part';
       const sendP = (p) => {
         try { if (evt && !evt.sender.isDestroyed()) evt.sender.send('wallpaper:downloadProgress', { name: safe, progress: p }); } catch (e) {}
       };
       sendP(0);
-      await streamDownload(url, dest, (p) => sendP(p));
+      await streamDownload(url, tmp, (p) => sendP(p));
       // 完整性校验：0 字节 = 下载失败/被拦截，删除残留避免假壁纸
       let size = 0;
-      try { size = f.statSync(dest).size; } catch (e) {}
+      try { size = f.statSync(tmp).size; } catch (e) {}
       if (size <= 0) {
-        try { f.unlinkSync(dest); } catch (e) {}
+        try { f.unlinkSync(tmp); } catch (e) {}
         return { ok: false, error: '下载文件为空（网络受限或文件被拦截），已回退在线壁纸' };
       }
+      // 改名到正式文件名（原子替换：先删旧再改名），并写完成标记 .ok
+      if (f.existsSync(dest)) { try { f.unlinkSync(dest); } catch (e) {} }
+      f.renameSync(tmp, dest);
+      try { f.writeFileSync(dest + '.ok', '1', 'utf8'); } catch (e) {}
       sendP(1);
       return { ok: true, path: dest, name: safe, size };
     } catch (e) {
-      const dest = path.join(dir, String(name || 'wallpaper').replace(/[\\/:*?"<>|]/g, '_'));
-      try { if (f.existsSync(dest) && f.statSync(dest).size <= 0) f.unlinkSync(dest); } catch (e2) {}
+      const safe = String(name || 'wallpaper').replace(/[\\/:*?"<>|]/g, '_');
+      const tmp = path.join(dir, safe + '.part');
+      try { if (f.existsSync(tmp)) f.unlinkSync(tmp); } catch (e2) {}
       return { ok: false, error: String((e && e.message) || e) };
     }
   });
