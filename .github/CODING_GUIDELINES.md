@@ -201,5 +201,36 @@ git push origin v<主>.<次>.<补丁>
 
 ---
 
+## 12. CI 自动化测试与主分支合并
+
+**强制规则：所有更改（Pull Request）和安装包必须先通过 CI 自动化测试，才能合并到主分支。**
+
+### 12.1 CI 检查内容
+- 前端构建：`npm --prefix frontend run build`
+- Python 语法检查：`python -m py_compile engine/*.py`
+- 预设模块加载：`python -c "import presets"`
+- UI 测试：`npm run test:ui`
+- 插件沙箱测试：`npm run test:plugin`
+- 全量 asar 打包：`node build.js full`，并检查关键文件存在。
+
+### 12.2 安装包 CI
+- 推送 **v 版本标签** 时触发 `package` 任务。
+- 构建 NSIS 安装包并上传为 Actions artifact。
+- 安装包必须与本地 `FuFumidi-Setup-<版本>.exe` 一致，并且通过 CI 后才能用于 Release。
+
+### 12.3 分支保护
+- `master` / `main` 已启用分支保护：
+  - 必须通过 Pull Request 合并
+  - 至少 1 个批准
+  - 必须通过 **`CI / test`** 状态检查
+  - 禁止强制推送、禁止删除分支
+- 管理员可绕过保护（`enforce_admins: false`），但应遵守“先 CI 后合并”原则。
+
+### 12.4 禁止事项
+- **禁止**在 CI 未通过时合并到主分支。
+- **禁止**跳过 CI 直接推送安装包到 GitHub Release。
+
+---
+
 本规范自发布之日起执行，如有疑问请及时与项目负责人沟通。  
 （建议将本文件存放于仓库根目录 `.github/CODING_GUIDELINES.md` 或 `docs/` 下）
