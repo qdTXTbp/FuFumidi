@@ -335,7 +335,7 @@ onMounted(() => {
       <div class="field-row top">
         <div>
           <div class="fr-label">HuggingFace Token</div>
-          <div class="fr-hint">{{ t('下载需授权的模型（MuScriptor 等）时必填') }}</div>
+          <div class="fr-hint">{{ t('仅 Aria-AMT 等 HuggingFace 模型下载需要，MuScriptor 走 GitHub 镜像无需 Token') }}</div>
         </div>
         <div class="fr-ctl col">
           <div style="display:flex;gap:6px;width:100%">
@@ -343,13 +343,13 @@ onMounted(() => {
             <button class="btn sm" @click="hfTokenVisible = !hfTokenVisible">{{ hfTokenVisible ? t('隐藏') : t('显示') }}</button>
             <button class="btn sm" @click="saveHfToken">{{ t('保存') }}</button>
           </div>
-          <div class="fr-hint" style="margin-top:4px">{{ t('使用前需先在 huggingface.co 对应模型页接受许可协议，否则返回 401') }}</div>
+          <div class="fr-hint" style="margin-top:4px">{{ t('MuScriptor（Small/Medium/Large）已改为 GitHub 镜像分卷下载，无需 HuggingFace 授权；HF Token 仅 Aria-AMT 等模型需要') }}</div>
         </div>
       </div>
       <div class="field-row">
         <div>
           <div class="fr-label">{{ t('下载渠道') }}</div>
-          <div class="fr-hint">{{ t('MuScriptor / Aria-AMT 权重：HuggingFace 官方或 hf-mirror 镜像') }}</div>
+          <div class="fr-hint">{{ t('MuScriptor 走 GitHub 镜像分卷下载（自动测速选源）；Aria-AMT 走 HuggingFace 官方或 hf-mirror') }}</div>
         </div>
         <div class="fr-ctl">
           <div class="radio-pill">

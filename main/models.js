@@ -25,43 +25,40 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       downloadable: true,
     },
     // 通用多乐器转录（Kyutai MuScriptor，默认不随 Release 分发，需到资源中心下载）
-    // 注意：MuScriptor 为 gated 模型（CC BY-NC 4.0），须先在 HuggingFace 接受协议，
-    // 并经 monologue82/Models 仓库分卷分发（gh.jasonzeng.dev 加速，100MB part 合并）。
+    // 注意：MuScriptor 权重经 monologue82/Models 仓库分卷分发（gh.jasonzeng.dev 加速 + 多镜像回退，
+    // 25MB part 并行下载 → 合并 → SHA256 校验），无需 HuggingFace 授权。
     muscriptor_small: {
       id: 'muscriptor_small',
       name: 'MuScriptor Small',
-      note: '多乐器转录 · 103M 参数 · 约 400 MB · 需 HF 授权',
+      note: '多乐器转录 · 103M 参数 · 约 400 MB · GitHub 镜像分卷下载',
       type: 'ghsplit',
       sizeKey: 'small',
       repo: 'monologue82/Models',
       dest: path.join('muscriptor', 'small'),
       minSize: 5e7,
       downloadable: true,
-      gated: true,
     },
     muscriptor_medium: {
       id: 'muscriptor_medium',
       name: 'MuScriptor Medium',
-      note: '多乐器转录 · 307M 参数（推荐）· 约 1.2 GB · 需 HF 授权',
+      note: '多乐器转录 · 307M 参数（推荐）· 约 1.2 GB · GitHub 镜像分卷下载',
       type: 'ghsplit',
       sizeKey: 'medium',
       repo: 'monologue82/Models',
       dest: path.join('muscriptor', 'medium'),
       minSize: 2e8,
       downloadable: true,
-      gated: true,
     },
     muscriptor_large: {
       id: 'muscriptor_large',
       name: 'MuScriptor Large',
-      note: '多乐器转录 · 1.4B 参数 · 约 5.2 GB · 需 HF 授权',
+      note: '多乐器转录 · 1.4B 参数 · 约 5.2 GB · GitHub 镜像分卷下载',
       type: 'ghsplit',
       sizeKey: 'large',
       repo: 'monologue82/Models',
       dest: path.join('muscriptor', 'large'),
       minSize: 9e8,
       downloadable: true,
-      gated: true,
     },
     // 钢琴转录（EleutherAI Aria-AMT）
     aria_amt: {
