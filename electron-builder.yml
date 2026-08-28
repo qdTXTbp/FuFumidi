@@ -31,6 +31,10 @@ extraResources:
     to: models
   - from: "resources/elevate.exe"
     to: elevate.exe
+# kachina 增量更新器需与主程序 exe 同级（launchUpdater 在 process.execPath 目录查找）
+extraFiles:
+  - from: "release/update/FuFumidi.update.exe"
+    to: "FuFumidi.update.exe"
 win:
   target:
     - target: nsis

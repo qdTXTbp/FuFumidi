@@ -1,15 +1,9 @@
 {
   "source": [
     {
-      "id": "local",
-      "name": "本地更新源",
-      "uri": "http://127.0.0.1:37779/FuFumidi.Install.exe",
-      "icon": "<svg viewBox=\"0 0 24 24\"><path d=\"M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"/></svg>"
-    },
-    {
       "id": "ghfast",
       "name": "国内镜像",
-      "uri": "https://ghfast.top/https://github.com/qdTXTbp/FuFumidi/releases/download/${version}/FuFumidi.Install.${version}.exe",
+      "uri": "https://ghfast.top/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe",
       "icon": "<svg viewBox=\"0 0 24 24\"><g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\"><path d=\"M3 8.5 9 3l6 5.5M9 3v15c0 1.5 1 3 3 3s3-1.5 3-3V7\"/></g></svg>"
     }
   ],

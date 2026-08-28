@@ -86,123 +86,39 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
   ipcMain.handle('update:open', async (_e, p) => {
     try { shell.openPath(p); return { ok: true }; } catch (e) { return { ok: false, error: String(e) }; }
   });
-  // 启动 kachina 更新器（BetterGI 同款增量更新器）：比对文件差异，只下载有改动的部分
-  // 流程：主程序先用镜像下载离线包 → 起本地 HTTP 源（更新器走 local 源，避开外部网络 TLS/HTTP2 干扰）
-  //       → 更新器差分下载 → 结束进程 → 替换 → 重启
-  const LOCAL_PORT = 37779; // 与 Build/kachina.config.json 的 local 源端口一致
-  let _localServer = null;
-
-  function startLocalUpdateServer(pkgPath) {
-    try {
-      const http = require('http');
-      if (_localServer) { try { _localServer.close(); } catch (e) {} _localServer = null; }
-      const server = http.createServer((req, res) => {
-        const url = req.url || '';
-        if (url === '/FuFumidi.Install.exe' && req.method === 'GET') {
-          try {
-            const stat = fs.statSync(pkgPath);
-            const range = req.headers.range;
-            if (range) {
-              const m = range.match(/bytes=(\d+)-(\d*)/);
-              const start = m ? parseInt(m[1], 10) : 0;
-              const end = (m && m[2]) ? parseInt(m[2], 10) : stat.size - 1;
-              res.writeHead(206, { 'Content-Type': 'application/octet-stream', 'Content-Range': `bytes ${start}-${end}/${stat.size}`, 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1 });
-              const rs = fs.createReadStream(pkgPath, { start, end });
-              rs.on('error', () => res.destroy());
-              rs.pipe(res);
-            } else {
-              res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': stat.size });
-              const rs = fs.createReadStream(pkgPath);
-              rs.on('error', () => res.destroy());
-              rs.pipe(res);
-            }
-          } catch (e) { res.writeHead(404); res.end(); }
-        } else { res.writeHead(404); res.end('not found'); }
-      });
-      server.listen(LOCAL_PORT, '127.0.0.1');
-      _localServer = server;
-      return server;
-    } catch (e) { return null; }
-  }
-
-  function stopLocalUpdateServer() {
-    if (_localServer) { try { _localServer.close(); } catch (e) {} _localServer = null; }
-  }
-
-  // 下载离线包到临时目录（多镜像回退），返回本地路径；onProgress 回调上报下载进度
-  async function downloadInstallPackage(version, onProgress) {
-    const url = `https://github.com/qdTXTbp/FuFumidi/releases/download/v${version}/FuFumidi.Install.${version}.exe`;
-    // 镜像按可用性排序：ghfast 实测最稳（国内可直接访问），GitHub 直连放最后（受限网络下 TLS 常挂起）
-    const mirrors = ['https://ghfast.top/' + url, 'https://gh-proxy.com/' + url, 'https://ghproxy.net/' + url, url];
-    const destDir = path.join(app.getPath('temp'), 'fufumidi-update');
-    fs.mkdirSync(destDir, { recursive: true });
-    const dest = path.join(destDir, `FuFumidi.Install.${version}.exe`);
-    if (fs.existsSync(dest) && fs.statSync(dest).size > 5 * 1024 * 1024) { if (onProgress) onProgress({ stage: 'download', percent: 100, done: true }); return dest; } // 已下载过直接复用
-    let lastErr = null;
-    const nMirrors = mirrors.length;
-    for (let i = 0; i < nMirrors; i++) {
-      const u = mirrors[i];
-      if (onProgress) onProgress({ stage: 'connecting', index: i + 1, total: nMirrors });
-      try {
-        const ctrl = new AbortController();
-        // 阶段1：等待响应头（连接挂起快速换源）
-        const headTo = setTimeout(() => ctrl.abort(), 20000);
-        const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/' + app.getVersion() }, signal: ctrl.signal });
-        clearTimeout(headTo);
-        if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
-        // 阶段2：下载数据（大文件允许更长时间）
-        const bodyTo = setTimeout(() => ctrl.abort(), 300000);
-        const total = parseInt(res.headers.get('content-length') || '0', 10) || 0;
-        const ws = fs.createWriteStream(dest + '.part');
-        const reader = res.body.getReader();
-        let received = 0, lastSend = 0;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          received += value.length;
-          const now = Date.now();
-          if (onProgress && now - lastSend > 300) { lastSend = now; onProgress({ stage: 'download', received, total, percent: total ? Math.min(99, Math.round(received / total * 100)) : 0 }); }
-          await new Promise((res2, rej2) => ws.write(Buffer.from(value), err => err ? rej2(err) : res2()));
-        }
-        clearTimeout(bodyTo);
-        await new Promise((res2, rej2) => ws.end(err => err ? rej2(err) : res2()));
-        fs.renameSync(dest + '.part', dest);
-        if (onProgress) onProgress({ stage: 'download', received, total, percent: 100, done: true });
-        return dest;
-      } catch (e) { lastErr = e; try { fs.unlinkSync(dest + '.part'); } catch (_) {} }
-    }
-    throw lastErr || new Error('下载离线包失败');
-  }
+  // 启动 kachina 更新器（BetterGI 同款增量更新器）：比对文件差异，只下载有改动的部分。
+  // 更新器自身在线下载 Install 包并在窗口内显示进度（源：ghfast 国内镜像）。
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
 
   ipcMain.handle('update:launchUpdater', async (evt, version) => {
     try {
-      const updaterDir = app.isPackaged ? path.dirname(process.execPath) : path.join(app.getAppPath(), 'release', 'win-unpacked');
+      // 直接拉起 kachina 更新器在线更新：下载进度由更新器窗口内显示（BetterGI 同款），
+      // 不再由主程序预下载离线包（镜像直连在主程序侧易失败且无窗口反馈）。
+      const updaterDir = app.isPackaged ? path.dirname(process.execPath) : path.join(app.getAppPath(), 'release', 'update');
       const updaterExe = path.join(updaterDir, 'FuFumidi.update.exe');
       if (!fs.existsSync(updaterExe)) return { ok: false, error: '更新器不存在：' + updaterExe + '（请使用新版便携版 / 重新下载）' };
-      const win = BrowserWindow.fromWebContents(evt.sender);
-      const send = (p) => { if (win && !win.isDestroyed()) win.webContents.send('update:progress', p); };
-      // 1) 确定目标版本（未传则查最新）
-      let latest = version;
-      if (!latest) {
-        send({ stage: 'version' });
-        const rel = await fetchLatestRelease();
-        latest = String(rel.tag_name || '').replace(/^v/i, '');
-      }
-      if (!latest) return { ok: false, error: '无法确定目标版本' };
-      // 2) 下载离线包（带进度）
-      send({ stage: 'download', percent: 0 });
-      const pkg = await downloadInstallPackage(latest, send);
-      // 3) 起本地更新源
-      if (!startLocalUpdateServer(pkg)) return { ok: false, error: '无法启动本地更新源' };
-      // 4) 拉起更新器（local 源，绕过外部网络 TLS/HTTP2 干扰）
-      send({ stage: 'launch' });
       const { spawn } = require('child_process');
-      const cp = spawn(updaterExe, ['-I', '--source', 'local'], { cwd: updaterDir, detached: true, stdio: 'ignore' });
+      // 先启动独立守护：更新器会先结束本进程，更新完成后由守护自动重新启动主程序。
+      // （kachina 非交互模式不会自动拉起主程序，故用 PowerShell 守护轮询更新器退出后重启）
+      try {
+        const mainExe = path.join(updaterDir, 'FuFumidi.exe');
+        const daemon = path.join(app.getPath('temp'), 'fufumidi-restart.ps1');
+        fs.writeFileSync(daemon, `param([string]$exePath, [int]$timeout = 300)
+$deadline = (Get-Date).AddSeconds($timeout)
+while ((Get-Date) -lt $deadline) {
+  if (-not (Get-Process -Name "FuFumidi.update" -ErrorAction SilentlyContinue)) { break }
+  Start-Sleep -Seconds 2
+}
+Start-Sleep -Seconds 3
+Start-Process -FilePath $exePath -WorkingDirectory (Split-Path $exePath)
+`, 'utf8');
+        const guard = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', daemon, '-exePath', mainExe], { detached: true, stdio: 'ignore' });
+        guard.unref();
+      } catch (e) { /* 守护启动失败不阻塞更新 */ }
+      const args = ['-I', '-O', '--source', 'ghfast'];
+      const cp = spawn(updaterExe, args, { cwd: updaterDir, detached: true, stdio: 'ignore' });
       cp.unref();
-      // 5) 更新器完成后清理本地源（守护：更新器退出后关闭服务器）
-      setTimeout(() => { try { if (_localServer) _localServer.close(); _localServer = null; } catch (e) {} }, 5 * 60 * 1000);
       return { ok: true };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });

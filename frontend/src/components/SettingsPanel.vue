@@ -166,23 +166,13 @@ async function updLaunch() {
     if (!bridge.update || !bridge.update.launchUpdater) { upd.status = '当前环境不支持增量更新器'; return; }
     const ok = window.confirm(t('发现新版本 ') + latest + t('，当前 ') + cur + t('。\n是否启动更新器增量更新？'));
     if (!ok) { upd.status = '已取消'; return; }
-    upd.status = '正在准备下载…';
-    const offProg = (bridge.onUpdateProgress && bridge.onUpdateProgress((p) => {
-      if (!p) return;
-      if (p.stage === 'connecting') upd.status = '正在连接下载源 ' + (p.index || 1) + '/' + (p.total || 4) + '…';
-      else if (p.stage === 'download') upd.status = p.done ? '正在启动更新器…' : ('正在下载更新包 ' + (p.percent || 0) + '%');
-      else if (p.stage === 'launch') upd.status = '正在启动更新器…';
-    }));
-    try {
-      const rr = await bridge.update.launchUpdater(latest);
-      if (rr && rr.ok) {
-        upd.status = '更新器已启动，应用即将退出并更新…';
-        setTimeout(() => { try { window.close(); } catch (e) {} }, 800);
-      } else {
-        upd.status = (rr && rr.error) || '启动失败';
-      }
-    } finally {
-      try { offProg && offProg(); } catch (e) {}
+    if (!bridge.update || !bridge.update.launchUpdater) { upd.status = '当前环境不支持增量更新器'; return; }
+    upd.status = '正在启动更新器…';
+    const rr = await bridge.update.launchUpdater(latest);
+    if (rr && rr.ok) {
+      upd.status = '更新器已启动，下载与更新进度请在更新器窗口内查看…';
+    } else {
+      upd.status = (rr && rr.error) || '启动失败';
     }
   } catch (e) {
     upd.status = '检查更新失败：' + ((e && e.message) || e);
