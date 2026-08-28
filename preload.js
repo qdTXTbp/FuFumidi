@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   exportScorePngZip: (opts) => ipcRenderer.invoke('score:exportPngZip', opts),
 
   updateCheck: () => ipcRenderer.invoke('update:check'),
+  getVersion: () => ipcRenderer.invoke('app:getVersion'),
   updateDownload: (url) => ipcRenderer.invoke('update:download', url),
   updateOpen: (p) => ipcRenderer.invoke('update:open', p),
   onUpdateProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('update:progress', w); return () => ipcRenderer.removeListener('update:progress', w); },

@@ -5,9 +5,12 @@ import { useAppStore } from '../stores/app';
 import { usePlaylistStore } from '../stores/playlist';
 import logoUrl from '../assets/logo.png';
 import { t } from '../core/i18n.js';
+import { getAppVersion } from '../core/version.js';
 
 const app = useAppStore();
 const state = app;
+const appVersion = ref('v3.1.2');
+getAppVersion().then(v => { appVersion.value = v; });
 const importFiles = (items) => app.importFiles(items);
 const selectSong = (id) => app.selectSong(id);
 const removeSong = (id) => app.removeSong(id);
@@ -408,7 +411,7 @@ onMounted(hydrateFavs);
     </div>
 
     <div style="padding:10px 14px;border-top:1px solid var(--border)" class="small muted row">
-      <span class="tag">v3.1.2</span>
+      <span class="tag">{{ appVersion }}</span>
       <span style="margin-left:auto">{{ t('离线 · Vue 3') }}</span>
     </div>
   </aside>

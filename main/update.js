@@ -4,10 +4,10 @@
 'use strict';
 
 const UPDATE_MIRRORS = [
-  'https://api.github.com/repos/qdTXTbp/FuFumidi/releases/latest',
   'https://ghfast.top/https://api.github.com/repos/qdTXTbp/FuFumidi/releases/latest',
-  'https://ghproxy.net/https://api.github.com/repos/qdTXTbp/FuFumidi/releases/latest',
   'https://gh-proxy.com/https://api.github.com/repos/qdTXTbp/FuFumidi/releases/latest',
+  'https://ghproxy.net/https://api.github.com/repos/qdTXTbp/FuFumidi/releases/latest',
+  'https://api.github.com/repos/qdTXTbp/FuFumidi/releases/latest',
 ];
 
 function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }) {
@@ -129,53 +129,75 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
     if (_localServer) { try { _localServer.close(); } catch (e) {} _localServer = null; }
   }
 
-  // 下载离线包到临时目录（多镜像回退），返回本地路径
-  async function downloadInstallPackage(version) {
+  // 下载离线包到临时目录（多镜像回退），返回本地路径；onProgress 回调上报下载进度
+  async function downloadInstallPackage(version, onProgress) {
     const url = `https://github.com/qdTXTbp/FuFumidi/releases/download/v${version}/FuFumidi.Install.${version}.exe`;
-    const mirrors = [url, 'https://ghfast.top/' + url, 'https://gh-proxy.com/' + url, 'https://ghproxy.net/' + url];
+    // 镜像按可用性排序：ghfast 实测最稳（国内可直接访问），GitHub 直连放最后（受限网络下 TLS 常挂起）
+    const mirrors = ['https://ghfast.top/' + url, 'https://gh-proxy.com/' + url, 'https://ghproxy.net/' + url, url];
     const destDir = path.join(app.getPath('temp'), 'fufumidi-update');
     fs.mkdirSync(destDir, { recursive: true });
     const dest = path.join(destDir, `FuFumidi.Install.${version}.exe`);
-    if (fs.existsSync(dest) && fs.statSync(dest).size > 5 * 1024 * 1024) return dest; // 已下载过直接复用
+    if (fs.existsSync(dest) && fs.statSync(dest).size > 5 * 1024 * 1024) { if (onProgress) onProgress({ stage: 'download', percent: 100, done: true }); return dest; } // 已下载过直接复用
     let lastErr = null;
-    for (const u of mirrors) {
+    const nMirrors = mirrors.length;
+    for (let i = 0; i < nMirrors; i++) {
+      const u = mirrors[i];
+      if (onProgress) onProgress({ stage: 'connecting', index: i + 1, total: nMirrors });
       try {
-        const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 300000);
-        const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.2' }, signal: ctrl.signal });
-        clearTimeout(to);
+        const ctrl = new AbortController();
+        // 阶段1：等待响应头（连接挂起快速换源）
+        const headTo = setTimeout(() => ctrl.abort(), 20000);
+        const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/' + app.getVersion() }, signal: ctrl.signal });
+        clearTimeout(headTo);
         if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+        // 阶段2：下载数据（大文件允许更长时间）
+        const bodyTo = setTimeout(() => ctrl.abort(), 300000);
+        const total = parseInt(res.headers.get('content-length') || '0', 10) || 0;
         const ws = fs.createWriteStream(dest + '.part');
         const reader = res.body.getReader();
+        let received = 0, lastSend = 0;
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
+          received += value.length;
+          const now = Date.now();
+          if (onProgress && now - lastSend > 300) { lastSend = now; onProgress({ stage: 'download', received, total, percent: total ? Math.min(99, Math.round(received / total * 100)) : 0 }); }
           await new Promise((res2, rej2) => ws.write(Buffer.from(value), err => err ? rej2(err) : res2()));
         }
+        clearTimeout(bodyTo);
         await new Promise((res2, rej2) => ws.end(err => err ? rej2(err) : res2()));
         fs.renameSync(dest + '.part', dest);
-        if (fs.statSync(dest).size > 5 * 1024 * 1024) return dest;
+        if (onProgress) onProgress({ stage: 'download', received, total, percent: 100, done: true });
+        return dest;
       } catch (e) { lastErr = e; try { fs.unlinkSync(dest + '.part'); } catch (_) {} }
     }
     throw lastErr || new Error('下载离线包失败');
   }
+
+  ipcMain.handle('app:getVersion', () => app.getVersion());
 
   ipcMain.handle('update:launchUpdater', async (evt, version) => {
     try {
       const updaterDir = app.isPackaged ? path.dirname(process.execPath) : path.join(app.getAppPath(), 'release', 'win-unpacked');
       const updaterExe = path.join(updaterDir, 'FuFumidi.update.exe');
       if (!fs.existsSync(updaterExe)) return { ok: false, error: '更新器不存在：' + updaterExe + '（请使用新版便携版 / 重新下载）' };
+      const win = BrowserWindow.fromWebContents(evt.sender);
+      const send = (p) => { if (win && !win.isDestroyed()) win.webContents.send('update:progress', p); };
       // 1) 确定目标版本（未传则查最新）
       let latest = version;
       if (!latest) {
+        send({ stage: 'version' });
         const rel = await fetchLatestRelease();
         latest = String(rel.tag_name || '').replace(/^v/i, '');
       }
       if (!latest) return { ok: false, error: '无法确定目标版本' };
-      // 2) 下载离线包
-      const pkg = await downloadInstallPackage(latest);
+      // 2) 下载离线包（带进度）
+      send({ stage: 'download', percent: 0 });
+      const pkg = await downloadInstallPackage(latest, send);
       // 3) 起本地更新源
       if (!startLocalUpdateServer(pkg)) return { ok: false, error: '无法启动本地更新源' };
       // 4) 拉起更新器（local 源，绕过外部网络 TLS/HTTP2 干扰）
+      send({ stage: 'launch' });
       const { spawn } = require('child_process');
       const cp = spawn(updaterExe, ['-I', '--source', 'local'], { cwd: updaterDir, detached: true, stdio: 'ignore' });
       cp.unref();

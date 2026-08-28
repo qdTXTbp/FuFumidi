@@ -5,6 +5,7 @@ import { useAppStore } from '../stores/app';
 import { ensureAudio } from '../audio.js';
 import { encodeMidi } from '../core/midi.js';
 import { t } from '../core/i18n.js';
+import { getAppVersion } from '../core/version.js';
 
 const app = useAppStore();
 const state = app;
@@ -51,8 +52,9 @@ async function saveProject() {
   const midiBytes = encodeMidi(song.tracks.map(t => ({ name: t.name, program: t.program, ch: t.ch, notes: t.notes, ccs: t.ccs || [] })),
     { division: song.tpb, tempoMap: song.tempoMap, sigMap: song.sigMap });
   const { player } = ensureAudio();
+  const ver = (await getAppVersion()).replace(/^v/i, '');
   const proj = {
-    app: 'FuFumidi', version: '3.1.2',
+    app: 'FuFumidi', version: ver || '3.1.2',
     fileName: song.name || 'project',
     midi: bufToB64(midiBytes),
     speed: state.tempo || 1,

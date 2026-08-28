@@ -9,8 +9,10 @@ import { t, setLang, getLang } from '../core/i18n.js';
 const app = useAppStore();
 const state = app;
 const toast = (m, t) => app.toast(m, t);
-// 当前版本号（与 SideBar 左下角一致）
-const appVersion = 'v3.1.2';
+// 当前版本号（从主进程读取，与 SideBar 左下角一致）
+const appVersion = ref('v3.1.2');
+import { getAppVersion } from '../core/version.js';
+getAppVersion().then(v => { appVersion.value = v; });
 import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';
 
 const bridge = window.fuBridge;
@@ -164,13 +166,23 @@ async function updLaunch() {
     if (!bridge.update || !bridge.update.launchUpdater) { upd.status = '当前环境不支持增量更新器'; return; }
     const ok = window.confirm(t('发现新版本 ') + latest + t('，当前 ') + cur + t('。\n是否启动更新器增量更新？'));
     if (!ok) { upd.status = '已取消'; return; }
-    upd.status = '正在启动更新器…';
-    const rr = await bridge.update.launchUpdater();
-    if (rr && rr.ok) {
-      upd.status = '更新器已启动，应用即将退出并更新…';
-      setTimeout(() => { try { window.close(); } catch (e) {} }, 800);
-    } else {
-      upd.status = (rr && rr.error) || '启动失败';
+    upd.status = '正在准备下载…';
+    const offProg = (bridge.onUpdateProgress && bridge.onUpdateProgress((p) => {
+      if (!p) return;
+      if (p.stage === 'connecting') upd.status = '正在连接下载源 ' + (p.index || 1) + '/' + (p.total || 4) + '…';
+      else if (p.stage === 'download') upd.status = p.done ? '正在启动更新器…' : ('正在下载更新包 ' + (p.percent || 0) + '%');
+      else if (p.stage === 'launch') upd.status = '正在启动更新器…';
+    }));
+    try {
+      const rr = await bridge.update.launchUpdater(latest);
+      if (rr && rr.ok) {
+        upd.status = '更新器已启动，应用即将退出并更新…';
+        setTimeout(() => { try { window.close(); } catch (e) {} }, 800);
+      } else {
+        upd.status = (rr && rr.error) || '启动失败';
+      }
+    } finally {
+      try { offProg && offProg(); } catch (e) {}
     }
   } catch (e) {
     upd.status = '检查更新失败：' + ((e && e.message) || e);

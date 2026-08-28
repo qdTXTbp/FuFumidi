@@ -306,12 +306,14 @@ export interface FuBridge {
 
   // updates
   updateCheck(): Promise<any>;
+  getVersion(): Promise<string>;
   updateDownload(url: string): Promise<any>;
   updateOpen(p: string): Promise<any>;
   onUpdateProgress(cb: (p: any) => void): () => void;
   update: {
     list(): Promise<UpdateRelease[]>;
     openExternal(url: string): Promise<GeneralResult>;
+    launchUpdater(version?: string): Promise<GeneralResult>;
   };
 
   // models / deps / folders
