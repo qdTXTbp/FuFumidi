@@ -324,7 +324,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     try {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       if (fs.existsSync(tmp)) start = fs.statSync(tmp).size;
-      const headers = { 'user-agent': 'FuFumidi/3.1.0' };
+      const headers = { 'user-agent': 'FuFumidi/3.1.1' };
       if (start > 0) headers['Range'] = 'bytes=' + start + '-';
       const urls = [spec.url, 'https://ghfast.top/' + spec.url, 'https://gh-proxy.com/' + spec.url, 'https://ghproxy.net/' + spec.url];
       let res = null;

@@ -9,6 +9,8 @@ import { t, setLang, getLang } from '../core/i18n.js';
 const app = useAppStore();
 const state = app;
 const toast = (m, t) => app.toast(m, t);
+// 当前版本号（与 SideBar 左下角一致）
+const appVersion = 'v3.1.1';
 import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';
 
 const bridge = window.fuBridge;
@@ -49,12 +51,7 @@ const form = reactive({
 
 /* ---------------- 更新 ---------------- */
 const upd = reactive({
-  mirror: 'ghfast',
-  releases: [],
-  version: -1,
-  asset: -1,
   status: '',
-  loading: false,
 });
 
 /* ---------------- GPU 加速 ---------------- */
@@ -124,7 +121,6 @@ async function load() {
   loadPlugins();
   loadRust();
   initGpu();
-  initUpdate();
 }
 
 /* ---------------- 外观 ---------------- */
@@ -152,67 +148,33 @@ function onLang() {
 }
 
 /* ---------------- 更新 ---------------- */
-const updSelectedRelease = computed(() => upd.releases[upd.version] || null);
-const updSelectedAsset = computed(() => {
-  const rel = updSelectedRelease.value;
-  if (!rel || !Array.isArray(rel.assets)) return null;
-  return rel.assets[upd.asset] || null;
-});
-function updMirrorUrl(u) {
-  if (upd.mirror === 'github') return u;
-  return 'https://' + upd.mirror + '.top/https://github.com/' + String(u).replace(/^https:\/\/github.com\//, '');
-}
-async function updLoadReleases() {
-  if (!bridge || !bridge.update || !bridge.update.list) return;
-  upd.loading = true;
-  upd.status = '刷新中…';
-  try {
-    const r = await bridge.update.list();
-    if (!Array.isArray(r)) { upd.status = (r && r.error) || '获取失败'; return; }
-    upd.releases = r;
-    upd.version = upd.releases.length ? 0 : -1;
-    upd.asset = updSelectedRelease.value && updSelectedRelease.value.assets && updSelectedRelease.value.assets.length ? 0 : -1;
-    upd.status = '';
-  } catch (e) {
-    upd.status = '获取失败：' + ((e && e.message) || e);
-  } finally {
-    upd.loading = false;
-  }
-}
-async function updOpenDownload() {
-  if (!bridge || !bridge.update || !bridge.update.openExternal) { upd.status = '当前环境不支持打开下载'; return; }
-  const asset = updSelectedAsset.value;
-  if (!asset) { upd.status = '请选择安装包'; return; }
-  const url = updMirrorUrl(asset.url);
-  upd.status = '正在打开下载…';
-  try {
-    const r = await bridge.update.openExternal(url);
-    upd.status = (r && r.ok) ? '已打开下载页面' : '打开失败';
-  } catch (e) {
-    upd.status = '打开失败：' + ((e && e.message) || e);
-  }
-}
-// 增量更新器（BetterGI 同款 kachina）：启动更新器，比对文件差异只下载改动部分
+// 简化更新：只显示当前版本号 + 检查更新。检查到新版本 → 弹窗询问是否更新。
 async function updLaunch() {
-  if (!bridge || !bridge.update || !bridge.update.launchUpdater) { upd.status = '当前环境不支持增量更新器'; return; }
-  upd.status = '正在启动更新器…';
+  if (!bridge || !bridge.updateCheck) { upd.status = '当前环境不支持检查更新'; return; }
+  upd.status = '正在检查更新…';
   try {
-    const r = await bridge.update.launchUpdater();
-    if (r && r.ok) {
+    const r = await bridge.updateCheck();
+    if (!r || !r.ok) { upd.status = (r && r.error) || '检查失败'; return; }
+    const cur = String(r.current || '');
+    const latest = String(r.latest || '');
+    if (cur === latest) {
+      upd.status = '已是最新版本（' + cur + '）';
+      return;
+    }
+    if (!bridge.update || !bridge.update.launchUpdater) { upd.status = '当前环境不支持增量更新器'; return; }
+    const ok = window.confirm(t('发现新版本 ') + latest + t('，当前 ') + cur + t('。\n是否启动更新器增量更新？'));
+    if (!ok) { upd.status = '已取消'; return; }
+    upd.status = '正在启动更新器…';
+    const rr = await bridge.update.launchUpdater();
+    if (rr && rr.ok) {
       upd.status = '更新器已启动，应用即将退出并更新…';
       setTimeout(() => { try { window.close(); } catch (e) {} }, 800);
     } else {
-      upd.status = (r && r.error) || '启动失败';
+      upd.status = (rr && rr.error) || '启动失败';
     }
   } catch (e) {
-    upd.status = '启动失败：' + ((e && e.message) || e);
+    upd.status = '检查更新失败：' + ((e && e.message) || e);
   }
-}
-function initUpdate() {
-  if (!bridge || !bridge.update || !bridge.update.list) return;
-  if (upd._init) return;
-  upd._init = true;
-  updLoadReleases();
 }
 
 /* ---------------- GPU 加速 ---------------- */
@@ -759,55 +721,17 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
 
         <!-- ============ 更新 ============ -->
         <div v-else-if="tab === 'update'">
-          <p class="ov-note">{{ t('增量更新器：自动比对文件差异，只下载有改动的部分。也可手动选择源和版本，打开浏览器下载安装包。') }}</p>
+          <p class="ov-note">{{ t('检查更新：发现新版本后弹窗询问，确认后增量下载并自动替换。') }}</p>
           <div class="field-row">
             <div>
-              <div class="fr-label">{{ t('增量更新（推荐）') }}</div>
-              <div class="fr-hint">{{ t('启动内置更新器，增量下载并自动替换，完成后重启') }}</div>
+              <div class="fr-label">{{ t('当前版本') }}</div>
+              <div class="fr-hint">{{ appVersion }}</div>
             </div>
             <div class="fr-ctl">
-              <button class="btn sm primary" @click="updLaunch">{{ t('立即更新') }}</button>
-            </div>
-          </div>
-          <div class="field-row">
-            <div>
-              <div class="fr-label">{{ t('下载源') }}</div>
-              <div class="fr-hint">{{ t('国内推荐 ghfast / ghproxy') }}</div>
-            </div>
-            <div class="fr-ctl">
-              <select v-model="upd.mirror" class="ov-input" style="min-width:180px">
-                <option value="ghfast">ghfast</option>
-                <option value="ghproxy">ghproxy</option>
-                <option value="github">GitHub 官方</option>
-              </select>
-            </div>
-          </div>
-          <div class="field-row">
-            <div>
-              <div class="fr-label">{{ t('版本') }}</div>
-              <div class="fr-hint">{{ t('点击刷新获取发布版本') }}</div>
-            </div>
-            <div class="fr-ctl">
-              <select v-model.number="upd.version" class="ov-input" style="min-width:220px" :disabled="!upd.releases.length" @change="upd.asset = updSelectedRelease && updSelectedRelease.assets && updSelectedRelease.assets.length ? 0 : -1">
-                <option v-for="(r, i) in upd.releases" :key="i" :value="i">{{ r.tag }} · {{ r.name }}</option>
-                <option v-if="!upd.releases.length" value="-1">{{ t('暂无可用更新') }}</option>
-              </select>
-              <button class="btn sm" @click="updLoadReleases" :disabled="upd.loading">{{ t('刷新') }}</button>
-            </div>
-          </div>
-          <div v-if="updSelectedRelease && updSelectedRelease.assets && updSelectedRelease.assets.length" class="field-row">
-            <div>
-              <div class="fr-label">{{ t('安装包') }}</div>
-              <div class="fr-hint">{{ t('Windows 安装程序 / Asar 包等') }}</div>
-            </div>
-            <div class="fr-ctl">
-              <select v-model.number="upd.asset" class="ov-input" style="min-width:240px">
-                <option v-for="(a, j) in updSelectedRelease.assets" :key="j" :value="j">{{ a.name }} · {{ (a.size/1048576).toFixed(1) }} MB</option>
-              </select>
+              <button class="btn sm primary" @click="updLaunch">{{ t('检查更新') }}</button>
             </div>
           </div>
           <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
-            <button class="btn sm primary" @click="updOpenDownload" :disabled="!updSelectedAsset">{{ t('打开下载') }}</button>
             <span style="font-size:12px;color:var(--stone)">{{ upd.status }}</span>
           </div>
         </div>

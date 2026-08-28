@@ -30,7 +30,7 @@ function toggleSidebar() {
 }
 function go(v) { setView(v); menuOpen.value = false; }
 function about() {
-  window.alert(t('FuFumidi v3.1.0\n离线 MIDI 播放 / 编辑 / 转录 / 乐谱 / 分析工作站\n本地 Vue3 + Vite + TypeScript 重构版'));
+  window.alert(t('FuFumidi v3.1.1\n离线 MIDI 播放 / 编辑 / 转录 / 乐谱 / 分析工作站\n本地 Vue3 + Vite + TypeScript 重构版'));
   menuOpen.value = false;
 }
 </script>
