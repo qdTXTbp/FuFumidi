@@ -1,0 +1,106 @@
+:root {
+  /* FuFumidi brand palette — single primary hue: deep music indigo */
+  --fufumidi-background: #f6f7fb;
+  --fufumidi-foreground: #101828;
+  --fufumidi-card: #ffffff;
+  --fufumidi-card-foreground: #101828;
+  --fufumidi-popover: #ffffff;
+  --fufumidi-popover-foreground: #101828;
+  --fufumidi-primary: #3b5bfd;
+  --fufumidi-primary-foreground: #ffffff;
+  --fufumidi-muted: #edeff7;
+  --fufumidi-muted-foreground: #5b6473;
+  --fufumidi-border: #e3e7f1;
+  --fufumidi-input: #e3e7f1;
+  --fufumidi-ring: #3b5bfd;
+
+  /* support hues for subtle gradients (same cool family) */
+  --fufumidi-support-cyan: #22c8f0;
+  --fufumidi-support-violet: #8b5cf6;
+  --fufumidi-ink-strong: #0b1220;
+
+  /* radius scale */
+  --fufumidi-radius-sm: 8px;
+  --fufumidi-radius-md: 12px;
+  --fufumidi-radius-lg: 18px;
+
+  /* shadow mood */
+  --fufumidi-shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
+  --fufumidi-shadow-md: 0 4px 12px rgba(16, 24, 40, 0.08), 0 2px 6px rgba(16, 24, 40, 0.05);
+  --fufumidi-shadow-lg: 0 16px 40px rgba(16, 24, 40, 0.12);
+
+  /* type */
+  --fufumidi-font-sans: "Inter", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+  --fufumidi-font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  --fufumidi-heading-weight: 750;
+  --fufumidi-body-size: 15px;
+  --fufumidi-muted-size: 13px;
+  --fufumidi-caption-size: 12px;
+}
+
+.dark {
+  --fufumidi-background: #0b1220;
+  --fufumidi-foreground: #eef1f8;
+  --fufumidi-card: #121a2b;
+  --fufumidi-card-foreground: #eef1f8;
+  --fufumidi-popover: #121a2b;
+  --fufumidi-popover-foreground: #eef1f8;
+  --fufumidi-primary: #6f87ff;
+  --fufumidi-primary-foreground: #0b1220;
+  --fufumidi-muted: #1a2338;
+  --fufumidi-muted-foreground: #9aa4b8;
+  --fufumidi-border: #26314a;
+  --fufumidi-input: #26314a;
+  --fufumidi-ring: #6f87ff;
+  --fufumidi-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.35);
+  --fufumidi-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --fufumidi-shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.55);
+}
+
+/* Typography helpers */
+.fufumidi-h1 {
+  font-family: var(--fufumidi-font-sans);
+  font-weight: var(--fufumidi-heading-weight);
+  letter-spacing: -0.02em;
+  line-height: 1.08;
+  color: var(--fufumidi-foreground);
+}
+
+.fufumidi-h2 {
+  font-family: var(--fufumidi-font-sans);
+  font-weight: var(--fufumidi-heading-weight);
+  letter-spacing: -0.015em;
+  line-height: 1.16;
+  color: var(--fufumidi-foreground);
+}
+
+.fufumidi-body {
+  font-family: var(--fufumidi-font-sans);
+  font-size: var(--fufumidi-body-size);
+  line-height: 1.7;
+  color: var(--fufumidi-foreground);
+}
+
+.fufumidi-muted-text {
+  color: var(--fufumidi-muted-foreground);
+}
+
+.fufumidi-mono {
+  font-family: var(--fufumidi-font-mono);
+}
+
+/* Brand surface helpers */
+.fufumidi-card-surface {
+  background-color: var(--fufumidi-card);
+  border: 1px solid var(--fufumidi-border);
+  border-radius: var(--fufumidi-radius-md);
+  box-shadow: var(--fufumidi-shadow-sm);
+}
+
+.fufumidi-hero-gradient {
+  background-image:
+    radial-gradient(1200px 480px at 78% -12%, rgba(59, 91, 253, 0.14), transparent 60%),
+    radial-gradient(900px 420px at 8% 8%, rgba(34, 200, 240, 0.1), transparent 55%),
+    linear-gradient(180deg, var(--fufumidi-background) 0%, var(--fufumidi-background) 100%);
+}

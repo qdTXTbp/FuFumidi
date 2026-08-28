@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FuFumidi 项目展示</title>
+    <style id="theme-vars">
+:root {
+  /* FuFumidi brand palette — single primary hue: deep music indigo */
+  --fufumidi-background: #f6f7fb;
+  --fufumidi-foreground: #101828;
+  --fufumidi-card: #ffffff;
+  --fufumidi-card-foreground: #101828;
+  --fufumidi-popover: #ffffff;
+  --fufumidi-popover-foreground: #101828;
+  --fufumidi-primary: #3b5bfd;
+  --fufumidi-primary-foreground: #ffffff;
+  --fufumidi-muted: #edeff7;
+  --fufumidi-muted-foreground: #5b6473;
+  --fufumidi-border: #e3e7f1;
+  --fufumidi-input: #e3e7f1;
+  --fufumidi-ring: #3b5bfd;
+
+  /* support hues for subtle gradients (same cool family) */
+  --fufumidi-support-cyan: #22c8f0;
+  --fufumidi-support-violet: #8b5cf6;
+  --fufumidi-ink-strong: #0b1220;
+
+  /* radius scale */
+  --fufumidi-radius-sm: 8px;
+  --fufumidi-radius-md: 12px;
+  --fufumidi-radius-lg: 18px;
+
+  /* shadow mood */
+  --fufumidi-shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
+  --fufumidi-shadow-md: 0 4px 12px rgba(16, 24, 40, 0.08), 0 2px 6px rgba(16, 24, 40, 0.05);
+  --fufumidi-shadow-lg: 0 16px 40px rgba(16, 24, 40, 0.12);
+
+  /* type */
+  --fufumidi-font-sans: "Inter", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+  --fufumidi-font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  --fufumidi-heading-weight: 750;
+  --fufumidi-body-size: 15px;
+  --fufumidi-muted-size: 13px;
+  --fufumidi-caption-size: 12px;
+}
+
+.dark {
+  --fufumidi-background: #0b1220;
+  --fufumidi-foreground: #eef1f8;
+  --fufumidi-card: #121a2b;
+  --fufumidi-card-foreground: #eef1f8;
+  --fufumidi-popover: #121a2b;
+  --fufumidi-popover-foreground: #eef1f8;
+  --fufumidi-primary: #6f87ff;
+  --fufumidi-primary-foreground: #0b1220;
+  --fufumidi-muted: #1a2338;
+  --fufumidi-muted-foreground: #9aa4b8;
+  --fufumidi-border: #26314a;
+  --fufumidi-input: #26314a;
+  --fufumidi-ring: #6f87ff;
+  --fufumidi-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.35);
+  --fufumidi-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --fufumidi-shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.55);
+}
+
+/* Typography helpers */
+.fufumidi-h1 {
+  font-family: var(--fufumidi-font-sans);
+  font-weight: var(--fufumidi-heading-weight);
+  letter-spacing: -0.02em;
+  line-height: 1.08;
+  color: var(--fufumidi-foreground);
+}
+
+.fufumidi-h2 {
+  font-family: var(--fufumidi-font-sans);
+  font-weight: var(--fufumidi-heading-weight);
+  letter-spacing: -0.015em;
+  line-height: 1.16;
+  color: var(--fufumidi-foreground);
+}
+
+.fufumidi-body {
+  font-family: var(--fufumidi-font-sans);
+  font-size: var(--fufumidi-body-size);
+  line-height: 1.7;
+  color: var(--fufumidi-foreground);
+}
+
+.fufumidi-muted-text {
+  color: var(--fufumidi-muted-foreground);
+}
+
+.fufumidi-mono {
+  font-family: var(--fufumidi-font-mono);
+}
+
+/* Brand surface helpers */
+.fufumidi-card-surface {
+  background-color: var(--fufumidi-card);
+  border: 1px solid var(--fufumidi-border);
+  border-radius: var(--fufumidi-radius-md);
+  box-shadow: var(--fufumidi-shadow-sm);
+}
+
+.fufumidi-hero-gradient {
+  background-image:
+    radial-gradient(1200px 480px at 78% -12%, rgba(59, 91, 253, 0.14), transparent 60%),
+    radial-gradient(900px 420px at 8% 8%, rgba(34, 200, 240, 0.1), transparent 55%),
+    linear-gradient(180deg, var(--fufumidi-background) 0%, var(--fufumidi-background) 100%);
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--fufumidi-background);
+    --color-foreground: var(--fufumidi-foreground);
+    --color-card: var(--fufumidi-card);
+    --color-card-foreground: var(--fufumidi-card-foreground);
+    --color-popover: var(--fufumidi-popover);
+    --color-popover-foreground: var(--fufumidi-popover-foreground);
+    --color-primary: var(--fufumidi-primary);
+    --color-primary-foreground: var(--fufumidi-primary-foreground);
+    --color-muted: var(--fufumidi-muted);
+    --color-muted-foreground: var(--fufumidi-muted-foreground);
+    --color-border: var(--fufumidi-border);
+    --color-input: var(--fufumidi-input);
+    --color-ring: var(--fufumidi-ring);
+    --radius-sm: var(--fufumidi-radius-sm);
+    --radius-md: var(--fufumidi-radius-md);
+    --radius-lg: var(--fufumidi-radius-lg);
+  }
+  @layer base {
+    body { background: var(--fufumidi-background); color: var(--fufumidi-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--fufumidi-background); }
+      .text-background { color: var(--fufumidi-background); }
+      .border-background { border-color: var(--fufumidi-background); }
+      .ring-background { --tw-ring-color: var(--fufumidi-background); }
+      .bg-foreground { background-color: var(--fufumidi-foreground); }
+      .text-foreground { color: var(--fufumidi-foreground); }
+      .border-foreground { border-color: var(--fufumidi-foreground); }
+      .ring-foreground { --tw-ring-color: var(--fufumidi-foreground); }
+      .bg-card { background-color: var(--fufumidi-card); }
+      .text-card { color: var(--fufumidi-card); }
+      .border-card { border-color: var(--fufumidi-card); }
+      .ring-card { --tw-ring-color: var(--fufumidi-card); }
+      .bg-card-foreground { background-color: var(--fufumidi-card-foreground); }
+      .text-card-foreground { color: var(--fufumidi-card-foreground); }
+      .border-card-foreground { border-color: var(--fufumidi-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--fufumidi-card-foreground); }
+      .bg-popover { background-color: var(--fufumidi-popover); }
+      .text-popover { color: var(--fufumidi-popover); }
+      .border-popover { border-color: var(--fufumidi-popover); }
+      .ring-popover { --tw-ring-color: var(--fufumidi-popover); }
+      .bg-popover-foreground { background-color: var(--fufumidi-popover-foreground); }
+      .text-popover-foreground { color: var(--fufumidi-popover-foreground); }
+      .border-popover-foreground { border-color: var(--fufumidi-popover-foreground); }
+      .ring-popover-foreground { --tw-ring-color: var(--fufumidi-popover-foreground); }
+      .bg-primary { background-color: var(--fufumidi-primary); }
+      .text-primary { color: var(--fufumidi-primary); }
+      .border-primary { border-color: var(--fufumidi-primary); }
+      .ring-primary { --tw-ring-color: var(--fufumidi-primary); }
+      .bg-primary-foreground { background-color: var(--fufumidi-primary-foreground); }
+      .text-primary-foreground { color: var(--fufumidi-primary-foreground); }
+      .border-primary-foreground { border-color: var(--fufumidi-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--fufumidi-primary-foreground); }
+      .bg-muted { background-color: var(--fufumidi-muted); }
+      .text-muted { color: var(--fufumidi-muted); }
+      .border-muted { border-color: var(--fufumidi-muted); }
+      .ring-muted { --tw-ring-color: var(--fufumidi-muted); }
+      .bg-muted-foreground { background-color: var(--fufumidi-muted-foreground); }
+      .text-muted-foreground { color: var(--fufumidi-muted-foreground); }
+      .border-muted-foreground { border-color: var(--fufumidi-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--fufumidi-muted-foreground); }
+      .bg-border { background-color: var(--fufumidi-border); }
+      .text-border { color: var(--fufumidi-border); }
+      .border-border { border-color: var(--fufumidi-border); }
+      .ring-border { --tw-ring-color: var(--fufumidi-border); }
+      .bg-input { background-color: var(--fufumidi-input); }
+      .text-input { color: var(--fufumidi-input); }
+      .border-input { border-color: var(--fufumidi-input); }
+      .ring-input { --tw-ring-color: var(--fufumidi-input); }
+      .bg-ring { background-color: var(--fufumidi-ring); }
+      .text-ring { color: var(--fufumidi-ring); }
+      .border-ring { border-color: var(--fufumidi-ring); }
+      .ring-ring { --tw-ring-color: var(--fufumidi-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+    <main id="top" class="overflow-x-clip">
+        <style id="critical-layout">
+            body {
+                background: var(--fufumidi-background);
+                color: var(--fufumidi-foreground);
+                min-height: 100vh;
+            }
+            img {
+                max-width: 100%;
+                height: auto;
+            }
+            .fufumidi-hero-grid {
+                display: grid;
+                align-items: center;
+                gap: 2.5rem;
+                grid-template-columns: minmax(0, 1fr);
+            }
+            .fufumidi-features-grid {
+                display: grid;
+                gap: 1rem;
+                grid-template-columns: minmax(0, 1fr);
+            }
+            .fufumidi-points-grid {
+                display: grid;
+                gap: 1.5rem;
+                grid-template-columns: minmax(0, 1fr);
+            }
+            .fufumidi-contributors-grid {
+                display: grid;
+                gap: 1.5rem;
+                grid-template-columns: minmax(0, 1fr);
+            }
+            .fufumidi-footer-cols {
+                display: grid;
+                gap: 2rem;
+                grid-template-columns: minmax(0, 1fr);
+            }
+            .fufumidi-icon-tile {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                width: 2.5rem;
+                height: 2.5rem;
+                border-radius: var(--fufumidi-radius-md);
+                background-color: color-mix(in srgb, var(--fufumidi-primary) 10%, transparent);
+                color: var(--fufumidi-primary);
+            }
+            .fufumidi-chip {
+                display: inline-flex;
+                align-items: center;
+                height: 2rem;
+                border: 1px solid var(--fufumidi-border);
+                background-color: var(--fufumidi-card);
+                border-radius: var(--fufumidi-radius-md);
+                padding: 0 0.75rem;
+                font-size: 0.75rem;
+                line-height: 1;
+                color: var(--fufumidi-muted-foreground);
+                white-space: nowrap;
+            }
+            @media (min-width: 640px) {
+                .fufumidi-features-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                .fufumidi-contributors-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            }
+            @media (min-width: 768px) {
+                .fufumidi-footer-cols { grid-template-columns: 2fr minmax(0, 1fr) minmax(0, 1fr); }
+            }
+            @media (min-width: 1024px) {
+                .fufumidi-hero-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                .fufumidi-features-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+                .fufumidi-points-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            }
+        </style>
+
+        <!-- NAV -->
+        <header class="sticky top-0 z-50 border-b border-border bg-background/90 backdrop-blur">
+            <div class="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
+                <a href="#top" class="flex min-w-0 items-center gap-2.5">
+                    <img src="../assets/logo.png" alt="FuFumidi logo" class="h-9 w-9 shrink-0 rounded-lg object-contain">
+                    <span class="truncate text-base font-bold tracking-tight text-foreground">FuFumidi</span>
+                </a>
+                <nav class="hidden items-center gap-7 lg:flex">
+                    <a href="#features" class="text-sm font-medium text-muted-foreground transition hover:text-foreground">功能</a>
+                    <a href="#screenshots" class="text-sm font-medium text-muted-foreground transition hover:text-foreground">截图</a>
+                    <a href="#tech" class="text-sm font-medium text-muted-foreground transition hover:text-foreground">技术栈</a>
+                    <a href="#contributors-zh" class="text-sm font-medium text-muted-foreground transition hover:text-foreground">贡献者</a>
+                </nav>
+                <div class="flex shrink-0 items-center gap-2">
+                    <div class="flex items-center rounded-lg border border-border bg-card p-0.5">
+                        <span class="px-2.5 py-1 text-xs font-semibold text-primary">中</span>
+                        <button data-dom-id="lang-switch-en" class="px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:text-foreground">EN</button>
+                    </div>
+                    <a href="https://github.com/qdTXTbp/FuFumidi" target="_blank" rel="noopener" class="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground transition hover:opacity-90">
+                        <svg class="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+                        GitHub
+                    </a>
+                </div>
+            </div>
+        </header>
+
+        <!-- HERO -->
+        <section id="hero-zh" class="fufumidi-hero-gradient">
+            <div class="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-24">
+                <div class="fufumidi-hero-grid grid items-center gap-10 lg:grid-cols-2">
+                    <div class="min-w-0">
+                        <span class="fufumidi-chip inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground">v3.1.2 · 完全离线</span>
+                        <h1 class="fufumidi-h1 mt-6 text-4xl sm:text-5xl" style="text-wrap: balance; word-break: keep-all; overflow-wrap: break-word;">把音乐创作带进离线世界</h1>
+                        <p class="fufumidi-body mt-5 leading-relaxed text-muted-foreground">FuFumidi 是一款完全离线的桌面音乐工具，集 MIDI 播放、编辑、可视化、分析与转写于一身，内置 Python 引擎与 AI 模型，断网也能完成从音频到乐谱的全流程创作。</p>
+                        <div class="mt-8 flex flex-wrap items-center gap-3">
+                            <a href="https://github.com/qdTXTbp/FuFumidi" target="_blank" rel="noopener" class="inline-flex h-11 shrink-0 items-center gap-2 rounded-lg bg-primary px-5 text-sm font-semibold text-primary-foreground transition hover:opacity-90">
+                                <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+                                GitHub 主页
+                            </a>
+                            <a href="#features" class="inline-flex h-11 shrink-0 items-center gap-2 rounded-lg border border-border bg-card px-5 text-sm font-semibold text-foreground transition hover:border-primary/40 hover:text-primary">
+                                探索功能
+                            </a>
+                        </div>
+                        <div class="mt-8 flex flex-wrap gap-2">
+                            <span class="fufumidi-chip inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground">开源</span>
+                            <span class="fufumidi-chip inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground">跨平台桌面</span>
+                            <span class="fufumidi-chip inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground">内置 AI 模型</span>
+                        </div>
+                    </div>
+                    <div class="min-w-0">
+                        <div class="relative min-w-0 rounded-xl border border-border bg-card p-2 shadow-md">
+                            <img src="../CN.png" alt="FuFumidi 中文界面截图" class="h-auto w-full rounded-lg object-cover">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- FEATURES -->
+        <section id="features">
+            <div class="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-20">
+                <h2 class="fufumidi-h2 text-3xl" style="text-wrap: balance; word-break: keep-all; overflow-wrap: break-word;">功能</h2>
+                <div class="fufumidi-features-grid mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div class="fufumidi-card-surface p-5">
+                        <div class="fufumidi-icon-tile flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                            <i data-lucide="music-4" class="h-5 w-5"></i>
+                        </div>
+                        <h3 class="mt-4 truncate text-base font-semibold text-foreground">钢琴卷帘编辑</h3>
+                        <p class="mt-2 line-clamp-3 text-sm leading-relaxed text-muted-foreground">音符、力度与 CC 自由编辑，精细到每一次触键。</p>
+                    </div>
+                    <div class="fufumidi-card-surface p-5">
+                        <div class="fufumidi-icon-tile flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                            <i data-lucide="audio-waveform" class="h-5 w-5"></i>
+                        </div>
+                        <h3 class="mt-4 truncate text-base font-semibold text-foreground">智能音频转写</h3>
+                        <p class="mt-2 line-clamp-3 text-sm leading-relaxed text-muted-foreground">basic-pitch 与 CRNN 钢琴模型，把音频一键变成 MIDI。</p>
+                    </div>
+                    <div class="fufumidi-card-surface p-5">
+                        <div class="fufumidi-icon-tile flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                            <i data-lucide="mic-vocal" class="h-5 w-5"></i>
+                        </div>
+                        <h3 class="mt-4 truncate text-base font-semibold text-foreground">人声分离</h3>
+                        <p class="mt-2 line-clamp-3 text-sm leading-relaxed text-muted-foreground">内置 Demucs，快速提取伴奏与人声轨。</p>
+                    </div>
+                    <div class="fufumidi-card-surface p-5">
+                        <div class="fufumidi-icon-tile flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                            <i data-lucide="waves" class="h-5 w-5"></i>
+                        </div>
+                        <h3 class="mt-4 truncate text-base font-semibold text-foreground">瀑布流可视化</h3>
+                        <p class="mt-2 line-clamp-3 text-sm leading-relaxed text-muted-foreground">Synthesia 风格键盘瀑布，演奏模式轻松上手。</p>
+                    </div>
+                    <div class="fufumidi-card-surface p-5">
+                        <div class="fufumidi-icon-tile flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                            <i data-lucide="file-music" class="h-5 w-5"></i>
+                        </div>
+                        <h3 class="mt-4 truncate text-base font-semibold text-foreground">五线谱乐谱</h3>
+                        <p class="mt-2 line-clamp-3 text-sm leading-relaxed text-muted-foreground">Verovio 引擎渲染，乐谱可读、可导出。</p>
+                    </div>
+                    <div class="fufumidi-card-surface p-5">
+                        <div class="fufumidi-icon-tile flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                            <i data-lucide="sliders-horizontal" class="h-5 w-5"></i>
+                        </div>
+                        <h3 class="mt-4 truncate text-base font-semibold text-foreground">CC 自动化</h3>
+                        <p class="mt-2 line-clamp-3 text-sm leading-relaxed text-muted-foreground">弯音、调制、表情曲线随心绘制。</p>
+                    </div>
+                    <div class="fufumidi-card-surface p-5">
+                        <div class="fufumidi-icon-tile flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                            <i data-lucide="keyboard" class="h-5 w-5"></i>
+                        </div>
+                        <h3 class="mt-4 truncate text-base font-semibold text-foreground">键位映射</h3>
+                        <p class="mt-2 line-clamp-3 text-sm leading-relaxed text-muted-foreground">键位切换映射，让演奏更顺手。</p>
+                    </div>
+                    <div class="fufumidi-card-surface p-5">
+                        <div class="fufumidi-icon-tile flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                            <i data-lucide="command" class="h-5 w-5"></i>
+                        </div>
+                        <h3 class="mt-4 truncate text-base font-semibold text-foreground">宏系统</h3>
+                        <p class="mt-2 line-clamp-3 text-sm leading-relaxed text-muted-foreground">把重复操作录制成一键指令。</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- SCREENSHOTS -->
+        <section id="screenshots" class="bg-muted/60">
+            <div class="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-20">
+                <h2 class="fufumidi-h2 text-3xl" style="text-wrap: balance; word-break: keep-all; overflow-wrap: break-word;">所见即所得的工作台</h2>
+                <div class="mt-10 rounded-xl border border-border bg-card p-2 shadow-md">
+                    <img src="../CN.png" alt="FuFumidi 工作台截图" class="h-auto w-full rounded-lg object-cover">
+                </div>
+                <div class="fufumidi-points-grid mt-10 grid gap-6 lg:grid-cols-3">
+                    <div class="flex min-w-0 items-start gap-3">
+                        <i data-lucide="check" class="mt-1 h-4 w-4 shrink-0 text-primary"></i>
+                        <p class="min-w-0 text-sm leading-relaxed text-muted-foreground">播放器、钢琴卷帘与瀑布流同屏协作</p>
+                    </div>
+                    <div class="flex min-w-0 items-start gap-3">
+                        <i data-lucide="check" class="mt-1 h-4 w-4 shrink-0 text-primary"></i>
+                        <p class="min-w-0 text-sm leading-relaxed text-muted-foreground">乐谱、分析、转写视图一键切换</p>
+                    </div>
+                    <div class="flex min-w-0 items-start gap-3">
+                        <i data-lucide="check" class="mt-1 h-4 w-4 shrink-0 text-primary"></i>
+                        <p class="min-w-0 text-sm leading-relaxed text-muted-foreground">主题与壁纸自由更换，界面由社区贡献者精心打磨</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TECH -->
+        <section id="tech">
+            <div class="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-20">
+                <h2 class="fufumidi-h2 text-3xl" style="text-wrap: balance; word-break: keep-all; overflow-wrap: break-word;">技术栈与能力</h2>
+                <div class="mt-10 flex flex-wrap gap-2">
+                    <span class="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground">Vue 3 前端</span>
+                    <span class="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground">Rust · Tauri 桌面核心</span>
+                    <span class="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground">Python 音频与转写引擎</span>
+                    <span class="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground">WebAssembly 合成器与谱面引擎</span>
+                    <span class="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground">离线模型与音色库打包</span>
+                    <span class="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground">跨平台安装包</span>
+                </div>
+                <div class="mt-10 grid gap-4 sm:grid-cols-2">
+                    <div class="fufumidi-card-surface p-6">
+                        <div class="fufumidi-icon-tile flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                            <i data-lucide="clapperboard" class="h-5 w-5"></i>
+                        </div>
+                        <h3 class="mt-4 truncate text-base font-semibold text-foreground">影视配乐</h3>
+                        <p class="mt-2 text-sm leading-relaxed text-muted-foreground">支持 SMPTE 时间码与视频对齐，边看画面边配乐</p>
+                    </div>
+                    <div class="fufumidi-card-surface p-6">
+                        <div class="fufumidi-icon-tile flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                            <i data-lucide="server-off" class="h-5 w-5"></i>
+                        </div>
+                        <h3 class="mt-4 truncate text-base font-semibold text-foreground">全离线运行</h3>
+                        <p class="mt-2 text-sm leading-relaxed text-muted-foreground">Python、模型、音色库全部内置，安装即用，无需联网</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- CONTRIBUTORS -->
+        <section id="contributors-zh">
+            <div class="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-20">
+                <h2 class="fufumidi-h2 text-3xl" style="text-wrap: balance; word-break: keep-all; overflow-wrap: break-word;">贡献者</h2>
+                <div class="fufumidi-contributors-grid mt-10 grid gap-6 sm:grid-cols-2">
+                    <div class="fufumidi-card-surface p-6">
+                        <div class="flex items-center gap-4">
+                            <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary/10 font-bold text-primary">Q</div>
+                            <div class="min-w-0">
+                                <h3 class="truncate text-base font-semibold text-foreground">qdTXTbp</h3>
+                                <p class="mt-1 truncate text-sm text-muted-foreground">项目作者 · 核心开发与整体架构</p>
+                            </div>
+                        </div>
+                        <div class="mt-5 flex flex-wrap gap-2">
+                            <a href="https://github.com/qdTXTbp/FuFumidi" target="_blank" rel="noopener" class="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground transition hover:border-primary/40 hover:text-primary">
+                                <svg class="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+                                GitHub
+                            </a>
+                            <a href="https://space.bilibili.com/1379309341" target="_blank" rel="noopener" class="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground transition hover:border-primary/40 hover:text-primary">
+                                <i data-lucide="play" class="h-3.5 w-3.5"></i>
+                                哔哩哔哩
+                            </a>
+                        </div>
+                    </div>
+                    <div class="fufumidi-card-surface p-6">
+                        <div class="flex items-center gap-4">
+                            <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary/10 font-bold text-primary">M</div>
+                            <div class="min-w-0">
+                                <h3 class="truncate text-base font-semibold text-foreground">monologue82</h3>
+                                <p class="mt-1 truncate text-sm text-muted-foreground">前端设计 · Vue 3 重构</p>
+                            </div>
+                        </div>
+                        <div class="mt-5 flex flex-wrap gap-2">
+                            <a href="https://github.com/qdTXTbp/FuFumidi" target="_blank" rel="noopener" class="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground transition hover:border-primary/40 hover:text-primary">
+                                <svg class="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+                                GitHub
+                            </a>
+                            <a href="https://space.bilibili.com/1741551557" target="_blank" rel="noopener" class="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground transition hover:border-primary/40 hover:text-primary">
+                                <i data-lucide="play" class="h-3.5 w-3.5"></i>
+                                哔哩哔哩
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- FOOTER -->
+        <footer class="border-t border-border bg-background">
+            <div class="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:py-16">
+                <div class="fufumidi-footer-cols grid gap-8 md:grid-cols-[2fr_1fr_1fr]">
+                    <div class="min-w-0">
+                        <div class="flex items-center gap-2.5">
+                            <img src="../assets/logo.png" alt="FuFumidi logo" class="h-8 w-8 shrink-0 rounded-lg object-contain">
+                            <span class="truncate text-base font-bold tracking-tight text-foreground">FuFumidi</span>
+                        </div>
+                        <p class="mt-4 text-sm leading-relaxed text-muted-foreground">FuFumidi 是一个开源、完全离线的桌面音乐工具项目，欢迎 Star、Issue 与贡献。</p>
+                    </div>
+                    <div class="min-w-0">
+                        <h4 class="text-sm font-semibold text-foreground">快速链接</h4>
+                        <ul class="mt-4 space-y-2.5">
+                            <li>
+                                <a href="https://github.com/qdTXTbp/FuFumidi" target="_blank" rel="noopener" class="text-sm text-muted-foreground transition hover:text-foreground">GitHub 仓库</a>
+                            </li>
+                            <li>
+                                <a href="https://space.bilibili.com/1379309341" target="_blank" rel="noopener" class="text-sm text-muted-foreground transition hover:text-foreground">B站 · qdTXTbp</a>
+                            </li>
+                            <li>
+                                <a href="https://space.bilibili.com/1741551557" target="_blank" rel="noopener" class="text-sm text-muted-foreground transition hover:text-foreground">B站 · monologue82</a>
+                            </li>
+                        </ul>
+                    </div>
+                    <div class="min-w-0">
+                        <h4 class="text-sm font-semibold text-foreground">致谢</h4>
+                        <p class="mt-4 text-sm leading-relaxed text-muted-foreground">感谢每一位贡献者与使用者，让完全离线的音乐创作成为可能。</p>
+                    </div>
+                </div>
+                <div class="mt-10 border-t border-border pt-6">
+                    <p class="text-xs text-muted-foreground">© 2026 FuFumidi · Made with music by qdTXTbp &amp; monologue82</p>
+                </div>
+            </div>
+        </footer>
+    </main>
+    <script>lucide.createIcons();</script>
+</body>
+</html>
