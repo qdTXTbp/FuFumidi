@@ -177,6 +177,28 @@ git push origin v<主>.<次>.<补丁>
 - **禁止**在 Release 简介中使用非 UTF-8 编码，或包含乱码字符。
 - **禁止**上传与本地 SHA256 不一致的安装包。
 
+### 11.6 Release 简介乱码原因与注意事项
+
+**问题现象**：GitHub Release 页面简介中的中文变成类似 `绂荤嚎 MIDI` 的乱码。
+
+**根本原因**：
+- 通过 PowerShell `Invoke-RestMethod` 直接构造 JSON 时，PowerShell 可能按系统 ANSI/GBK 编码发送中文；GitHub 按 UTF-8 解析时就会显示乱码。
+- 或使用了非 UTF-8 的本地文本文件作为请求体，未显式指定 `charset=utf-8`。
+
+**注意事项 / 正确做法**：
+1. **永远使用 UTF-8 作为 Release 简介编码**。
+2. 推荐流程：新建一个 UTF-8 编码的 JSON 文件（`{ "name": "...", "body": "..." }`），再用 `curl` 以二进制文件方式提交：
+   ```bash
+   curl -X PATCH \
+     -H "Authorization: token <TOKEN>" \
+     -H "Content-Type: application/json; charset=utf-8" \
+     --data-binary "@release-body.json" \
+     https://api.github.com/repos/<owner>/<repo>/releases/<release_id>
+   ```
+3. 不要直接依赖 PowerShell 控制台编码写中文；若必须用 `Invoke-RestMethod`，请先将 JSON 写入 UTF-8 文件或使用 UTF-8 字节数组。
+4. 上传后立即在 GitHub 页面检查简介中文是否正常；发现乱码立刻用 UTF-8 JSON 重新 PATCH。
+5. 建议在 Release 简介中只用标准 Markdown + 纯中文/英文，避免特殊字符被编码破坏。
+
 ---
 
 本规范自发布之日起执行，如有疑问请及时与项目负责人沟通。  
