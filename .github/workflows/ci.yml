@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - master
+      - main
+  push:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install root dependencies
+        run: npm install
+
+      - name: Install frontend dependencies
+        run: npm --prefix frontend install
+
+      - name: Build frontend
+        run: npm --prefix frontend run build
+
+      - name: Python syntax check
+        run: |
+          python -m py_compile engine/*.py
+          python -c "import sys; sys.path.insert(0,'engine'); import presets; print('presets ok')"
+
+      - name: Run UI tests
+        run: npm run test:ui
+
+      - name: Run plugin sandbox tests
+        run: npm run test:plugin
+
+      - name: Pack full asar
+        run: node build.js full
+
+      - name: Verify asar contents
+        run: npx --yes @electron/asar list dist/fufumidi-full.asar | findstr /C:"main.js" /C:"engine\music2midi.py" /C:"frontend\src\views\ViewResources.vue"
+
+  package:
+    if: github.event_name == 'push' && contains(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm install
+      - name: Install frontend dependencies
+        run: npm --prefix frontend install
+      - name: Build frontend
+        run: npm --prefix frontend run build
+      - name: Build NSIS installer
+        run: npx electron-builder --win nsis --x64 --publish never
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: FuFumidi-Setup-${{ github.ref_name }}
+          path: release/FuFumidi Setup *.exe
