@@ -106,6 +106,23 @@ function cryptoId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
+/* 内容指纹：名称 + 大小 + FNV-1a 哈希，用于导入去重 */
+function contentFp(name: string, bytes: Uint8Array): string {
+  let h = 0x811c9dc5;
+  const len = bytes.length;
+  for (let i = 0; i < len; i++) {
+    const b = bytes[i] ?? 0;
+    h = (h ^ b) >>> 0;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return (name || '').trim().toLowerCase() + '|' + len + '|' + h.toString(16);
+}
+function fpOf(song: any, name: string): string {
+  if (song.meta && song.meta.fp) return song.meta.fp;
+  if (song.__bytes) return contentFp(name, song.__bytes);
+  return '';
+}
+
 export const useAppStore = defineStore('app', {
   state: () => ({
     view: 'play' as string,
@@ -150,6 +167,27 @@ export const useAppStore = defineStore('app', {
     curStr(state): string {
       return fmtTime(state.curSec);
     },
+    /* 当前视图下的播放队列：全部曲目 / 收藏 / 歌单，并按搜索过滤 */
+    queueSongs(state): any[] {
+      const pl = usePlaylistStore();
+      let list: any[];
+      if (pl.activePlaylistId === 'all') {
+        list = state.songs;
+      } else if (pl.activePlaylistId === 'favorites') {
+        const favs = new Set(pl.favorites);
+        list = state.songs.filter(s => favs.has(s.id));
+      } else {
+        const ids = pl.songIds;
+        const order = new Map(ids.map((id, idx) => [id, idx]));
+        list = state.songs
+          .filter(s => ids.includes(s.id))
+          .slice()
+          .sort((a, b) => (order.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.id) ?? Number.MAX_SAFE_INTEGER));
+      }
+      const q = (pl.search || '').trim().toLowerCase();
+      if (q) list = list.filter(s => String(s.name || '').toLowerCase().includes(q));
+      return list;
+    },
   },
   actions: {
     toast(msg: string, type = 'info') {
@@ -158,30 +196,46 @@ export const useAppStore = defineStore('app', {
       _toastTimer = setTimeout(() => (this.toastMsg = ''), 2800);
     },
     async importFiles(items: any[]) {
-      let ok = 0;
+      let ok = 0, dup = 0;
       for (const it of items) {
+        const name = it.name.replace(/\.(mid|midi|kar|rmi)$/i, '');
+        const bytes = it.bytes ? new Uint8Array(it.bytes) : null;
+        // 内容与名字相同的曲目不重复导入
+        if (bytes) {
+          const fp = contentFp(name, bytes);
+          const exists = this.songs.some(x => {
+            if (x.meta.fp && x.meta.fp === fp) return true;
+            if (String(x.name || '') !== name) return false;
+            const xf = fpOf(x, name);
+            return !!xf && xf === fp;
+          });
+          if (exists) { dup++; continue; }
+        }
         let mid: any;
-        try { mid = parseMidi(it.bytes); } catch (e: any) { this.toast(t('无法解析 ') + it.name + '：' + e.message, 'warn'); continue; }
-        const song: any = buildSong(mid, { name: it.name.replace(/\.(mid|midi|kar|rmi)$/i, '') });
+        try { mid = parseMidi(bytes); } catch (e: any) { this.toast(t('无法解析 ') + it.name + '：' + e.message, 'warn'); continue; }
+        const song: any = buildSong(mid, { name });
         const item = {
           id: cryptoId(),
           name: song.name,
           song,
-          meta: { size: it.bytes.byteLength, time: Date.now(), tracks: song.tracks.length },
+          __bytes: bytes,
+          meta: { size: it.bytes.byteLength, time: Date.now(), tracks: song.tracks.length, dur: song.totalSec, fp: bytes ? contentFp(name, bytes) : '' },
         };
         this.songs.push(item);
         try {
           const plStore = usePlaylistStore();
           plStore.addSongs([item.id]);
         } catch (e) {}
-        await idbPut(STORE_SONGS, { id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, bytes: it.bytes });
-        await dbSongPut({ id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, bytes: Array.from(it.bytes as any) });
+        await idbPut(STORE_SONGS, { id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, dur: item.meta.dur, fp: item.meta.fp, bytes: it.bytes });
+        await dbSongPut({ id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, dur: item.meta.dur, fp: item.meta.fp, bytes: Array.from(it.bytes as any) });
         ok++;
       }
       if (ok > 0) {
         const last = this.songs[this.songs.length - 1];
         await this.selectSong(last.id);
-        this.toast(t('已导入 ') + ok + t(' 首 MIDI'));
+        this.toast(t('已导入 ') + ok + t(' 首 MIDI') + (dup ? t('，跳过 ') + dup + t(' 首重复') : ''));
+      } else if (dup > 0) {
+        this.toast(t('所选曲目已在资料库中，未重复导入'), 'warn');
       } else if (items.length) {
         this.toast(t('没有可导入的 MIDI 文件'), 'warn');
       }
@@ -193,7 +247,7 @@ export const useAppStore = defineStore('app', {
         recs = await idbAll(STORE_SONGS);
         // 首次从 IndexedDB 迁移到 SQLite（桌面版）
         if (recs.length) {
-          for (const r of recs) await dbSongPut({ id: r.id, name: r.name, size: r.size || 0, time: r.time || 0, bytes: Array.from(r.bytes || []) });
+          for (const r of recs) await dbSongPut({ id: r.id, name: r.name, size: r.size || 0, time: r.time || 0, dur: r.dur || 0, fp: r.fp || '', bytes: Array.from(r.bytes || []) });
         }
       }
       for (const r of recs) {
@@ -202,7 +256,7 @@ export const useAppStore = defineStore('app', {
           id: r.id,
           name: String(r.name || t('未命名')).replace(/\.(mid|midi|kar|rmi)$/i, ''),
           song: null,
-          meta: { size: r.size || 0, time: r.time || 0 },
+          meta: { size: r.size || 0, time: r.time || 0, dur: r.dur || 0, fp: r.fp || '' },
           __bytes: r.bytes || null,
         });
       }
@@ -222,7 +276,12 @@ export const useAppStore = defineStore('app', {
       await idbDelete(STORE_SONGS, id);
       await dbSongDelete(id);
       if (wasCurrent) { try { localStorage.removeItem('fufumidi_active'); } catch (e) {} }
-      if (this.songs.length) await this.selectSong(this.songs[0].id);
+      if (this.songs.length) {
+        // 优先选择当前队列中的下一首，避免跳出歌单/搜索结果
+        const q = this.queueSongs;
+        if (q.length) await this.selectSong(q[0].id);
+        else await this.selectSong(this.songs[0].id);
+      }
     },
     async selectSong(id: string) {
       const item = this.songs.find((s: any) => s.id === id);

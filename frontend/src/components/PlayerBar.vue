@@ -100,12 +100,16 @@ function panTitle(i) {
 }
 
 function prev() {
-  const i = state.songs.findIndex(s => s.id === state.currentId);
-  if (i > 0) selectSong(state.songs[i - 1].id);
+  const q = app.queueSongs;
+  const i = q.findIndex(s => s.id === state.currentId);
+  if (i > 0) selectSong(q[i - 1].id);
+  else if (i < 0 && q.length) selectSong(q[q.length - 1].id);
 }
 function next() {
-  const i = state.songs.findIndex(s => s.id === state.currentId);
-  if (i >= 0 && i < state.songs.length - 1) selectSong(state.songs[i + 1].id);
+  const q = app.queueSongs;
+  const i = q.findIndex(s => s.id === state.currentId);
+  if (i >= 0 && i < q.length - 1) selectSong(q[i + 1].id);
+  else if (i < 0 && q.length) selectSong(q[0].id);
 }
 </script>
 

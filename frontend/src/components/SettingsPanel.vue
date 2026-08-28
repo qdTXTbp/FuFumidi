@@ -10,7 +10,7 @@ const app = useAppStore();
 const state = app;
 const toast = (m, t) => app.toast(m, t);
 // 当前版本号（从主进程读取，与 SideBar 左下角一致）
-const appVersion = ref('v3.1.2');
+const appVersion = ref('v3.1.3');
 import { getAppVersion } from '../core/version.js';
 getAppVersion().then(v => { appVersion.value = v; });
 import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';

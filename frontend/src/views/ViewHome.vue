@@ -6,6 +6,7 @@ import { ensureAudio } from '../audio.js';
 import { encodeMidi } from '../core/midi.js';
 import { t } from '../core/i18n.js';
 import { getAppVersion } from '../core/version.js';
+import { fmtTime } from '../core/util.js';
 
 const app = useAppStore();
 const state = app;
@@ -54,7 +55,7 @@ async function saveProject() {
   const { player } = ensureAudio();
   const ver = (await getAppVersion()).replace(/^v/i, '');
   const proj = {
-    app: 'FuFumidi', version: ver || '3.1.2',
+    app: 'FuFumidi', version: ver || '3.1.3',
     fileName: song.name || 'project',
     midi: bufToB64(midiBytes),
     speed: state.tempo || 1,
@@ -151,7 +152,7 @@ async function openProject() {
         <div class="song-item" v-for="(s, i) in [...state.songs].reverse().slice(0, 8)" :key="s.id"
              :class="{ active: s.id === state.currentId }" @click="selectSong(s.id)">
           <span class="si-num">{{ i + 1 }}</span>
-          <div class="si-name"><b>{{ s.name }}</b><small>{{ s.song ? s.song.tracks.length : (s.meta.tracks || 0) }} {{ t(' 轨') }}</small></div>
+          <div class="si-name"><b>{{ s.name }}</b><small>{{ s.song ? s.song.tracks.length : (s.meta.tracks || 0) }} {{ t(' 轨') }}<template v-if="s.song?.totalSec || s.meta?.dur"> · {{ fmtTime(s.song ? s.song.totalSec : s.meta.dur) }}</template></small></div>
           <span class="tag" v-if="s.id === state.currentId && state.playing">{{ t('播放中') }}</span>
         </div>
       </div>

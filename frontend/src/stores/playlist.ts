@@ -10,6 +10,18 @@ export interface Playlist {
 
 const LS_PLAYLISTS = 'fufumidi_playlists_v1';
 const LS_ACTIVE = 'fufumidi_active_playlist';
+const LS_FAVS = 'fufumidi_favs';
+
+function loadFavs(): string[] {
+  try {
+    const raw = localStorage.getItem(LS_FAVS);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return arr.filter((x: any) => typeof x === 'string');
+    }
+  } catch (e) {}
+  return [];
+}
 
 async function dbPlaylistsAll(): Promise<Playlist[]> {
   const b = (window as any).fuBridge;
@@ -47,6 +59,7 @@ export const usePlaylistStore = defineStore('playlist', {
     favOnly: false,
     batchOn: false,
     batchSelection: [] as string[],
+    favorites: loadFavs() as string[],
   }),
   getters: {
     activePlaylist(state): Playlist | null {
@@ -200,5 +213,34 @@ export const usePlaylistStore = defineStore('playlist', {
       if (!this.batchOn) this.batchSelection = [];
     },
     setBatchSelected(ids: string[]) { this.batchSelection = ids.slice(); },
+
+    /* ---------------- 收藏 ---------------- */
+    isFavorite(id: string): boolean {
+      return this.favorites.includes(id);
+    },
+    toggleFavorite(id: string) {
+      const i = this.favorites.indexOf(id);
+      if (i >= 0) this.favorites.splice(i, 1);
+      else this.favorites.push(id);
+      this.persistFavs();
+    },
+    persistFavs() {
+      try { localStorage.setItem(LS_FAVS, JSON.stringify(this.favorites)); } catch (e) {}
+      const b = (window as any).fuBridge;
+      if (b && b.dbKvSet) { try { b.dbKvSet('favorites', this.favorites.slice()); } catch (e) {} }
+    },
+    async hydrateFavorites() {
+      const b = (window as any).fuBridge;
+      if (!b || typeof b.dbKvGet !== 'function') return;
+      try {
+        const v = await b.dbKvGet('favorites');
+        if (Array.isArray(v)) {
+          this.favorites = v.filter((x: any) => typeof x === 'string');
+          try { localStorage.setItem(LS_FAVS, JSON.stringify(this.favorites)); } catch (e) {}
+        } else {
+          this.persistFavs(); // 迁移旧 localStorage 收藏到 SQLite
+        }
+      } catch (e) {}
+    },
   },
 });

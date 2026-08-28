@@ -16,7 +16,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
     for (const base of UPDATE_MIRRORS) {
       try {
         const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 12000);
-        const r = await net.fetch(base, { headers: { 'user-agent': 'FuFumidi/3.1.2' }, signal: ctrl.signal });
+        const r = await net.fetch(base, { headers: { 'user-agent': 'FuFumidi/3.1.3' }, signal: ctrl.signal });
         clearTimeout(to);
         if (!r.ok) { lastErr = new Error('HTTP ' + r.status); continue; }
         const d = await r.json();
@@ -61,7 +61,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
     let lastErr = null;
     for (const u of mirrors) {
       try {
-        const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.2' } });
+        const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.3' } });
         if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
         const total = parseInt(res.headers.get('content-length') || '0', 10) || 0;
         const out = fs.createWriteStream(dest + '.part');
