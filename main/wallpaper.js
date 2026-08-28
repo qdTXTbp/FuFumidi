@@ -21,14 +21,22 @@ function streamDownload(url, dest, onProgress, redirects = 0) {
       if (res.statusCode !== 200) { res.resume(); reject(new Error('HTTP ' + res.statusCode)); return; }
       const total = parseInt(res.headers['content-length'] || '0', 10) || 0;
       let received = 0;
+      let lastPct = -1;
       const ws = fs.createWriteStream(dest);
+      // 单 data 监听（不再同时 pipe，避免双监听）；进度按 ~2% 间隔节流，避免高频事件闪烁
       res.on('data', (chunk) => {
         received += chunk.length;
-        if (onProgress && total > 0) {
+        const pct = total ? Math.round(received / total * 100) : 0;
+        if (onProgress && total > 0 && (pct >= lastPct + 2 || pct === 100)) {
+          lastPct = pct;
           try { onProgress(Math.max(0, Math.min(1, received / total))); } catch (e) {}
         }
+        if (!ws.write(chunk)) {
+          res.pause();
+          ws.once('drain', () => res.resume());
+        }
       });
-      res.pipe(ws);
+      res.on('end', () => { ws.end(); });
       ws.on('finish', () => { try { if (onProgress) onProgress(1); } catch (e) {} resolve(); });
       ws.on('error', reject);
       res.on('error', reject);
