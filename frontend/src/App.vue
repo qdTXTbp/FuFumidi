@@ -163,6 +163,11 @@ function onKey(e) {
   else if (e.key === '-' || e.key === '_') setTempo(state.tempo - 0.05);
 }
 
+function onBeforeUnload() {
+  // 尽力冲刷 SQLite 写队列；主进程退出前还有宽限期兜底
+  playlistStore.flushDb();
+}
+
 onMounted(() => {
   startTickLoop();
   restoreSongs();
@@ -170,10 +175,13 @@ onMounted(() => {
   initGlobal();
   loadWallpaper();
   window.addEventListener('keydown', onKey);
+  // 退出/刷新前冲刷 SQLite 写队列，避免歌单/收藏最后一步未落盘
+  window.addEventListener('beforeunload', onBeforeUnload);
 });
 onBeforeUnmount(() => {
   stopTickLoop();
   window.removeEventListener('keydown', onKey);
+  window.removeEventListener('beforeunload', onBeforeUnload);
 });
 </script>
 

@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // 主进程 SQLite 持久化服务（sql.js WASM，无原生编译）
 // 如 sql.js 加载失败则自动回退为 JSON 文件存储，不影响主流程。
 // 后续前端可在不破坏现有 IndexedDB 的情况下逐步迁移。
@@ -15,6 +15,12 @@ function createDbService({ app, path: p, fs: f }) {
   let db = null;
   let mode = 'none';
   let jsonData = { kv: {}, songs: {}, playlists: {} };
+  // 写入队列：串行化 SQLite 写入 + persist 导出，close() 前先冲刷，避免退出丢数据
+  let writeQ = Promise.resolve();
+  function enqueueWrite(fn) {
+    writeQ = writeQ.then(fn).catch(() => {});
+    return writeQ;
+  }
 
   function saveJson() {
     try {
@@ -66,26 +72,30 @@ function createDbService({ app, path: p, fs: f }) {
   }
 
   async function kvSet(key, value) {
-    await init();
-    if (mode === 'sqlite' && db) {
-      db.run('INSERT INTO kv(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', [key, JSON.stringify(value)]);
-    } else {
-      jsonData.kv[key] = value;
-    }
-    persist();
+    await enqueueWrite(async () => {
+      await init();
+      if (mode === 'sqlite' && db) {
+        db.run('INSERT INTO kv(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', [key, JSON.stringify(value)]);
+      } else {
+        jsonData.kv[key] = value;
+      }
+      persist();
+    });
     return true;
   }
 
   async function songPut(item) {
-    await init();
     if (!item || !item.id) return false;
     const row = JSON.stringify(item);
-    if (mode === 'sqlite' && db) {
-      db.run('INSERT INTO songs(id,name,data,meta,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,data=excluded.data,meta=excluded.meta,updated_at=excluded.updated_at', [item.id, item.name || '', row, JSON.stringify(item.meta || {}), Date.now()]);
-    } else {
-      jsonData.songs[item.id] = item;
-    }
-    persist();
+    await enqueueWrite(async () => {
+      await init();
+      if (mode === 'sqlite' && db) {
+        db.run('INSERT INTO songs(id,name,data,meta,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,data=excluded.data,meta=excluded.meta,updated_at=excluded.updated_at', [item.id, item.name || '', row, JSON.stringify(item.meta || {}), Date.now()]);
+      } else {
+        jsonData.songs[item.id] = item;
+      }
+      persist();
+    });
     return true;
   }
 
@@ -100,25 +110,29 @@ function createDbService({ app, path: p, fs: f }) {
   }
 
   async function songDelete(id) {
-    await init();
-    if (mode === 'sqlite' && db) {
-      db.run('DELETE FROM songs WHERE id = ?', [id]);
-    } else {
-      delete jsonData.songs[id];
-    }
-    persist();
+    await enqueueWrite(async () => {
+      await init();
+      if (mode === 'sqlite' && db) {
+        db.run('DELETE FROM songs WHERE id = ?', [id]);
+      } else {
+        delete jsonData.songs[id];
+      }
+      persist();
+    });
     return true;
   }
 
   async function playlistPut(item) {
-    await init();
     if (!item || !item.id) return false;
-    if (mode === 'sqlite' && db) {
-      db.run('INSERT INTO playlists(id,name,song_ids) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,song_ids=excluded.song_ids', [item.id, item.name || '', JSON.stringify(item.songIds || [])]);
-    } else {
-      jsonData.playlists[item.id] = item;
-    }
-    persist();
+    await enqueueWrite(async () => {
+      await init();
+      if (mode === 'sqlite' && db) {
+        db.run('INSERT INTO playlists(id,name,song_ids) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,song_ids=excluded.song_ids', [item.id, item.name || '', JSON.stringify(item.songIds || [])]);
+      } else {
+        jsonData.playlists[item.id] = item;
+      }
+      persist();
+    });
     return true;
   }
 
@@ -149,7 +163,10 @@ function createDbService({ app, path: p, fs: f }) {
   }
 
   function close() {
-    try { if (db) { db.close(); db = null; } } catch (e) {}
+    // 先等待写入队列落盘，再关闭数据库（避免退出时歌单/收藏写丢失）
+    return writeQ.then(() => {
+      try { if (db) { db.close(); db = null; } } catch (e) {}
+    });
   }
 
   return { init, status, kvGet, kvSet, songPut, songsAll, songDelete, playlistPut, playlistsAll, registerDbIpc, close };

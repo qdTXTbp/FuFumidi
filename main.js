@@ -245,10 +245,19 @@ let ModelsService = null;
 let DbService = null;
 
 // ---------- 退出时清理引擎子进程 ----------
-app.on('before-quit', () => {
+let _quitting = false;
+app.on('before-quit', (e) => {
+  if (_quitting) return; // 二次进入（app.quit 重放）直接放行
+  if (!DbService) { killAll(); if (ModelsService) ModelsService.closeAll(); return; }
+  // 给渲染进程最后一刻的 SQLite 写入（歌单/收藏 fire-and-forget）留出落盘时间，再关闭数据库
+  _quitting = true;
+  e.preventDefault();
   killAll();
   if (ModelsService) ModelsService.closeAll();
-  if (DbService) DbService.close();
+  setTimeout(async () => {
+    try { await DbService.close(); } catch (err) {}
+    app.quit();
+  }, 400);
 });
 
 // ---------- 完整性检验（settings / presets / 插件清单 误删检测与修复） ----------

@@ -23,6 +23,15 @@ function loadFavs(): string[] {
   return [];
 }
 
+/* SQLite 写入队列：串行化 + 可冲刷，避免退出时未落盘导致歌单丢失 */
+let _dbQueue: Promise<any> = Promise.resolve();
+function dbWrite(fn: () => any): void {
+  _dbQueue = _dbQueue.then(fn).catch(() => {});
+}
+async function dbFlush(): Promise<void> {
+  try { await _dbQueue; } catch (e) {}
+}
+
 async function dbPlaylistsAll(): Promise<Playlist[]> {
   const b = (window as any).fuBridge;
   if (b && typeof b.dbPlaylistsList === 'function') {
@@ -36,7 +45,7 @@ async function dbPlaylistsAll(): Promise<Playlist[]> {
 function dbPlaylistPut(pl: Playlist) {
   const b = (window as any).fuBridge;
   if (b && typeof b.dbPlaylistsPut === 'function') {
-    try { b.dbPlaylistsPut(pl); } catch (e) {}
+    dbWrite(() => b.dbPlaylistsPut(pl));
   }
 }
 
@@ -77,19 +86,31 @@ export const usePlaylistStore = defineStore('playlist', {
       try { localStorage.setItem(LS_ACTIVE, this.activePlaylistId); } catch (e) {}
       for (const p of this.playlists) dbPlaylistPut(p);
     },
+    async flushDb() {
+      // 退出前冲刷 SQLite 写入队列，确保歌单落盘
+      await dbFlush();
+    },
     async hydrateFromDb() {
+      // localStorage 在每次操作时同步写入，始终是最新状态 → 以它为准。
+      // SQLite 仅用于 localStorage 为空（首次/被清空）时的恢复来源，避免旧数据覆盖新歌单。
+      let hasLocal = false;
+      try { hasLocal = !!localStorage.getItem(LS_PLAYLISTS); } catch (e) {}
       const db = await dbPlaylistsAll();
       if (!db.length) {
-        // 首次从 localStorage 迁移到 SQLite
+        // SQLite 尚无数据：把本地歌单迁移过去
         for (const p of this.playlists) dbPlaylistPut(p);
         return false;
       }
-      this.playlists = db;
-      if (!db.some(p => p.id === this.activePlaylistId)) {
-        const def = db.find(p => p.id === 'default');
-        this.activePlaylistId = def ? def.id : (db[0]?.id || 'default');
-        try { localStorage.setItem(LS_ACTIVE, this.activePlaylistId); } catch (e) {}
+      if (!hasLocal) {
+        // localStorage 为空：从 SQLite 恢复
+        this.playlists = db;
+        if (!db.some(p => p.id === this.activePlaylistId)) {
+          const def = db.find(p => p.id === 'default');
+          this.activePlaylistId = def ? def.id : (db[0]?.id || 'default');
+          try { localStorage.setItem(LS_ACTIVE, this.activePlaylistId); } catch (e) {}
+        }
       }
+      // 本地已有歌单：保留并回写 SQLite 保持一致
       this.persist();
       return true;
     },
@@ -227,18 +248,25 @@ export const usePlaylistStore = defineStore('playlist', {
     persistFavs() {
       try { localStorage.setItem(LS_FAVS, JSON.stringify(this.favorites)); } catch (e) {}
       const b = (window as any).fuBridge;
-      if (b && b.dbKvSet) { try { b.dbKvSet('favorites', this.favorites.slice()); } catch (e) {} }
+      if (b && b.dbKvSet) { dbWrite(() => b.dbKvSet('favorites', this.favorites.slice())); }
     },
     async hydrateFavorites() {
       const b = (window as any).fuBridge;
       if (!b || typeof b.dbKvGet !== 'function') return;
       try {
+        // localStorage 为最新状态（同步写入）；kv 仅在本地为空时作为恢复来源
+        let hasLocal = false;
+        try { hasLocal = !!localStorage.getItem(LS_FAVS); } catch (e) {}
         const v = await b.dbKvGet('favorites');
-        if (Array.isArray(v)) {
-          this.favorites = v.filter((x: any) => typeof x === 'string');
-          try { localStorage.setItem(LS_FAVS, JSON.stringify(this.favorites)); } catch (e) {}
+        if (!hasLocal) {
+          if (Array.isArray(v)) {
+            this.favorites = v.filter((x: any) => typeof x === 'string');
+            try { localStorage.setItem(LS_FAVS, JSON.stringify(this.favorites)); } catch (e) {}
+          } else {
+            this.persistFavs(); // 迁移旧 localStorage 收藏到 SQLite
+          }
         } else {
-          this.persistFavs(); // 迁移旧 localStorage 收藏到 SQLite
+          this.persistFavs(); // 本地为准，回写 SQLite
         }
       } catch (e) {}
     },
