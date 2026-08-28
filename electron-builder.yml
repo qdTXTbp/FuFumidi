@@ -21,6 +21,9 @@ files:
   # 若再打进 app.asar 会重复打包（python 1.3GB / models 160MB），导致体积翻倍
   - "!resources/**"
   - "!models/**"
+  # Tauri 迁移目录与编译产物不进入 Electron 包（否则 src-tauri/target 会让 asar 膨胀到 5GB+）
+  - "!src-tauri/**"
+  - "!frontend/src/bridge/**"
 extraResources:
   - from: "resources/python"
     to: python
