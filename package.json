@@ -22,7 +22,7 @@
         "pack:source": "node build.js source",
         "pack:full": "node build.js full",
         "pack:base": "node build.js base",
-        "dist:win": "electron-builder --win nsis --x64",
+        "dist:win": "set NODE_OPTIONS=--use-system-ca&& node scripts/build-updater.js && electron-builder --win nsis --x64",
         "typecheck": "npm --prefix frontend run typecheck",
         "test:ui": "node --test frontend/tests/macro.test.js",
         "test": "npm run test:rust && npm run test:ui && npm run test:plugin",

@@ -430,7 +430,11 @@ onMounted(() => { playlist.hydrateFavorites(); });
       <span class="tag">{{ appVersion }}</span>
       <span style="margin-left:auto">{{ t('离线 · Vue 3') }}</span>
     </div>
+  </aside>
 
+  <!-- 弹窗通过 Teleport 挂到 body：.sidebar 的 backdrop-filter 会为 fixed 后代创建包含块，
+       导致 position:fixed 被限制在侧边栏内，Teleport 到 body 后弹窗才能全屏居中 -->
+  <Teleport to="body">
     <!-- 添加到歌单 -->
     <div v-if="addToPlFor" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="t('添加到歌单')" @click.self="closeAddToPl" @keydown.esc="closeAddToPl">
       <div class="ed-modal" style="width:min(320px,92vw)">
@@ -479,7 +483,7 @@ onMounted(() => { playlist.hydrateFavorites(); });
         </div>
       </div>
     </div>
-  </aside>
+  </Teleport>
 </template>
 
 <style scoped>
