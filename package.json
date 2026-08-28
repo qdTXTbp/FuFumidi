@@ -24,7 +24,7 @@
         "pack:base": "node build.js base",
         "dist:win": "electron-builder --win nsis --x64",
         "typecheck": "npm --prefix frontend run typecheck",
-        "test:ui": "node --test frontend/tests/*.test.js",
+        "test:ui": "node --test \"frontend/tests/*.test.js\"",
         "test": "npm run test:rust && npm run test:ui && npm run test:plugin",
         "test:plugin": "node --test scripts/test-plugin-sandbox.mjs"
     },
