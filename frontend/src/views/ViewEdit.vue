@@ -1082,6 +1082,7 @@ onBeforeUnmount(() => {
     </template>
 
     <!-- 力度曲线弹窗 -->
+    <Transition name="ov">
     <div v-if="vcOpen" class="ed-modal-mask" @click.self="vcOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head">
@@ -1096,8 +1097,10 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+    </Transition>
 
     <!-- 列表编辑器弹窗 -->
+    <Transition name="ov">
     <div v-if="listOpen" class="ed-modal-mask" @click.self="listOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head">
@@ -1125,7 +1128,9 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+    </Transition>
     <!-- 鼓组编辑器弹窗 -->
+    <Transition name="ov">
     <div v-if="drumOpen" class="ed-modal-mask" @click.self="drumOpen = false">
       <div class="ed-modal" style="width:min(820px,96vw)">
         <div class="ed-modal-head">
@@ -1141,8 +1146,10 @@ onBeforeUnmount(() => {
         <canvas ref="drumCv" class="drum-canvas" style="height:420px" @click="drumClick"></canvas>
       </div>
     </div>
+    </Transition>
 
     <!-- 智能量化弹窗 -->
+    <Transition name="ov">
     <div v-if="sqOpen" class="ed-modal-mask" @click.self="sqOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head"><b>{{ t('智能量化') }}</b><span class="muted small">{{ t('网格 + Groove 模板') }}</span><button class="icon-btn" style="margin-left:auto" @click="sqOpen = false"><Icon name="minus" :size="14" /></button></div>
@@ -1166,8 +1173,10 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+    </Transition>
 
     <!-- 逻辑编辑器弹窗 -->
+    <Transition name="ov">
     <div v-if="logicOpen" class="ed-modal-mask" @click.self="logicOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head"><b>{{ t('逻辑编辑器') }}</b><span class="muted small">{{ t('批量规则处理音符') }}</span><button class="icon-btn" style="margin-left:auto" @click="logicOpen = false"><Icon name="minus" :size="14" /></button></div>
@@ -1196,8 +1205,10 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+    </Transition>
 
     <!-- 宏面板弹窗 -->
+    <Transition name="ov">
     <div v-if="macroOpen" class="ed-modal-mask" @click.self="macroOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head"><b>{{ t('宏面板') }}</b><span class="muted small">{{ t('一键执行常用批量处理，操作进入撤销历史') }}</span><button class="icon-btn" style="margin-left:auto" @click="macroOpen = false"><Icon name="minus" :size="14" /></button></div>
@@ -1241,8 +1252,10 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+    </Transition>
 
     <!-- Key Switch 映射弹窗 -->
+    <Transition name="ov">
     <div v-if="ksOpen" class="ed-modal-mask" @click.self="ksOpen = false">
       <div class="ed-modal" style="width:min(560px,92vw)">
         <div class="ed-modal-head"><b>{{ t('Key Switch 映射') }}</b><span class="muted small">{{ t('为 C-2 ~ C0（MIDI 0-24）命名技法') }}</span><button class="icon-btn" style="margin-left:auto" @click="ksOpen = false"><Icon name="minus" :size="14" /></button></div>
@@ -1261,8 +1274,10 @@ onBeforeUnmount(() => {
         <div class="ed-modal-foot"><button class="btn sm primary" @click="saveKSMap">{{ t('保存') }}</button></div>
       </div>
     </div>
+    </Transition>
 
     <!-- CC 事件列表弹窗 -->
+    <Transition name="ov">
     <div v-if="ccListOpen" class="ed-modal-mask" @click.self="ccListOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head"><b>{{ t('CC 控制器事件') }}</b><span class="muted small">{{ t('当前轨道 ') }}{{ ccListItems.length }}{{ t(' 条') }}</span><button class="icon-btn" style="margin-left:auto" @click="ccListOpen = false"><Icon name="minus" :size="14" /></button></div>
@@ -1279,8 +1294,10 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+    </Transition>
 
     <!-- 撤销历史弹窗 -->
+    <Transition name="ov">
     <div v-if="historyOpen" class="ed-modal-mask" @click.self="historyOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head"><b>{{ t('撤销历史') }}</b><span class="muted small">{{ t('点击条目回退到该状态') }}</span><button class="icon-btn" style="margin-left:auto" @click="historyOpen = false"><Icon name="minus" :size="14" /></button></div>
@@ -1294,8 +1311,10 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+    </Transition>
 
     <!-- 歌词编辑弹窗 -->
+    <Transition name="ov">
     <div v-if="lyricOpen" class="ed-modal-mask" @click.self="lyricOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head"><b>{{ t('添加歌词') }}</b><span class="muted small">{{ t('为选中的 ') }}{{ editor?.selCount() || 0 }}{{ t(' 个音符添加歌词') }}</span><button class="icon-btn" style="margin-left:auto" @click="lyricOpen = false"><Icon name="minus" :size="14" /></button></div>
@@ -1306,8 +1325,10 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+    </Transition>
 
     <!-- 编辑说明弹窗 -->
+    <Transition name="ov">
     <div v-if="helpOpen" class="ed-modal-mask" @click.self="helpOpen = false">
       <div class="ed-modal" style="width:min(680px,92vw)">
         <div class="ed-modal-head"><b>{{ t('编辑功能说明') }}</b><button class="icon-btn" style="margin-left:auto" @click="helpOpen = false"><Icon name="minus" :size="14" /></button></div>
@@ -1326,6 +1347,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+    </Transition>
   </div>
 </template>
 

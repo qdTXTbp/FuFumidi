@@ -77,6 +77,8 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
   const _modelCancels = new Set();
   const _modelAborts = new Map();
   const _modelPause = new Set();
+  // 进行中的下载集合：即便页面关闭/切换也保持，模型清单可据此标记「下载中」
+  const _activeDownloads = new Set();
 
   ipcMain.handle('model:list', async () => {
     const dir = modelsDir();
@@ -89,7 +91,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     };
     push('通用转录（int8 量化）', path.join(dir, 'basic_pitch_quant.onnx'), 'basic-pitch ONNX int8 量化模型（CPU 加速）');
     const pt = MODEL_REGISTRY.piano_transcription;
-    push(pt.name, path.join(dir, pt.dest), pt.note, { id: pt.id, downloadable: true });
+    push(pt.name, path.join(dir, pt.dest), pt.note, { id: pt.id, downloadable: true, active: _activeDownloads.has(pt.id) });
     const dm = demucsModelFile();
     items.push({ id: 'demucs_htdemucs', name: '人声分离模型', path: dm || '', size: dm ? (() => { try { return fs.statSync(dm).size; } catch (e) { return 0; } })() : 0, exists: !!dm, downloadable: !dm, note: dm ? 'demucs htdemucs 已内置（约 80 MB）' : 'demucs htdemucs（未安装，可一键下载，国内自动走镜像）' });
     // 扩展模型（MuScriptor / Aria-AMT 等）：整目录检查
@@ -97,10 +99,18 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       if (k === 'piano_transcription') continue;
       const m = MODEL_REGISTRY[k];
       const dest = path.join(dir, m.dest);
-      const exists = fs.existsSync(dest);
-      const size = exists ? (() => { try { let s = 0; const walk = (p) => { const st = fs.statSync(p); if (st.isFile()) s += st.size; else for (const f of fs.readdirSync(p)) walk(path.join(p, f)); }; walk(dest); return s; } catch (e) { return 0; } })() : 0;
+      // 目录总大小（排除临时隐藏目录，如 .parts），用于展示
+      const dirSize = (() => { try { let s = 0; const walk = (p) => { const st = fs.statSync(p); if (st.isFile()) s += st.size; else for (const f of fs.readdirSync(p)) { if (f === '.parts') continue; walk(path.join(p, f)); } }; walk(dest); return s; } catch (e) { return 0; } })();
+      let exists = false, size = 0;
+      if (m.type === 'ghsplit') {
+        // 分卷下载：以最终合并产物为准，避免下载中的 .parts 被误判为「已就绪」
+        const finalFile = path.join(dest, 'model.safetensors');
+        if (fs.existsSync(finalFile)) { size = fs.statSync(finalFile).size; exists = size >= m.minSize; }
+      } else {
+        exists = dirSize >= m.minSize; size = dirSize;
+      }
       items.push({
-        id: m.id, name: m.name, path: dest, size, exists: exists && size >= m.minSize,
+        id: m.id, name: m.name, path: dest, size, exists, active: _activeDownloads.has(m.id),
         downloadable: true, note: m.note, type: m.type, repo: m.repo, gated: !!m.gated,
       });
     }
@@ -116,7 +126,13 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       if (id === 'demucs_htdemucs') p = demucsModelFile();
       else if (MODEL_REGISTRY[id]) p = path.join(modelsDir(), MODEL_REGISTRY[id].dest);
       if (!p || !fs.existsSync(p)) return { ok: false, error: 'not found' };
-      fs.unlinkSync(p);
+      // 目录型（MuScriptor/Aria 分卷或整仓）按目录递归删除；单文件直接删
+      const st = fs.statSync(p);
+      if (st.isDirectory()) fs.rmSync(p, { recursive: true, force: true });
+      else fs.unlinkSync(p);
+      // 一并清理可能存在的临时内容
+      try { fs.rmSync(p + '.tmp', { recursive: true, force: true }); } catch (_) {}
+      try { fs.rmSync(p + '.part', { recursive: true, force: true }); } catch (_) {}
       return { ok: true };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
@@ -286,6 +302,9 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       const r = await net.fetch(url, { headers, signal: ctrl.signal });
       if (!r.ok || !r.body) throw new Error('下载失败 HTTP ' + r.status + ' · ' + rel + (r.status === 401 || r.status === 403 ? '（该模型需授权：请填写有效 HF Token 并先在 HF 页面接受协议）' : ''));
       const ws = fs.createWriteStream(out);
+      // 打开失败（EPERM：杀软锁定/权限）或写入中途出错时，'error' 事件若无人监听会把主进程打崩；
+      // 错误已由下方 write/end 回调捕获并回抛给重试逻辑，这里仅消费事件避免未捕获异常。
+      ws.on('error', () => {});
       const reader = r.body.getReader();
       for (;;) {
         const { done, value } = await reader.read();
@@ -343,7 +362,11 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received: sz, total: sz, percent: 100, done: true });
         return { ok: true, path: destDir, size: sz, existed: true };
       }
+      // 上次中断残留的半成品 → 清理，避免误判已就绪
+      try { fs.unlinkSync(outFile); } catch (_) {}
     }
+    // 清理上次异常留下的临时合并文件
+    try { fs.rmSync(outFile + '.tmp', { force: true }); } catch (_) {}
     const partsDir = path.join(destDir, '.parts');
     fs.mkdirSync(partsDir, { recursive: true });
 
@@ -390,6 +413,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
           const r = await net.fetch(`${h}/${repo}/${base}/${name}`, { headers, signal: ctrl.signal });
           if (!r.ok || !r.body) throw new Error('HTTP ' + r.status + ' · ' + name);
           const ws = fs.createWriteStream(tmp);
+          ws.on('error', () => {}); // 消费 'error' 事件，防 EPERM 等未捕获异常打崩主进程
           const reader = r.body.getReader();
           for (;;) {
             const { done, value } = await reader.read();
@@ -421,8 +445,11 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         }
       });
       await Promise.all(workers);
-      // 4) 按序合并
-      const ws = fs.createWriteStream(outFile);
+      // 4) 按序合并（先写临时文件再原子重命名，中断不会留下半成品最终文件）
+      const tmpOut = outFile + '.tmp';
+      fs.rmSync(tmpOut, { force: true });
+      const ws = fs.createWriteStream(tmpOut);
+      ws.on('error', () => {}); // 消费 'error' 事件，防未捕获异常打崩主进程
       for (let i = 1; i <= parts; i++) {
         const p = path.join(partsDir, partName(meta, i));
         if (!fs.existsSync(p)) throw new Error('分卷缺失：' + partName(meta, i));
@@ -434,6 +461,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         });
       }
       await new Promise((res2, rej2) => ws.end(err => (err ? rej2(err) : res2())));
+      fs.renameSync(tmpOut, outFile);
       // 5) 校验
       const size = fs.statSync(outFile).size;
       if (meta.sha256) {
@@ -445,6 +473,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       return { ok: true, path: destDir, size };
     } catch (e) {
       if (!_modelPause.has(spec.id) && !_modelCancels.has(spec.id)) { try { fs.unlinkSync(outFile); } catch (_) {} }
+      try { fs.rmSync(outFile + '.tmp', { force: true }); } catch (_) {}
       throw e;
     } finally {
       try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) {}
@@ -455,11 +484,15 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     const spec = MODEL_REGISTRY[id];
     if (!spec || !spec.downloadable) return { ok: false, error: 'unknown model: ' + id };
     const win = BrowserWindow.fromWebContents(evt.sender);
+    // 同一模型已在下载中：阻止重复开启（页面切换/刷新后再进入也不会开第二份）
+    if (_activeDownloads.has(id)) return { ok: false, error: '模型下载已在进行中，请稍候', active: true };
+    _activeDownloads.add(id);
     // HuggingFace 整仓下载（MuScriptor / Aria-AMT）
     if (spec.type === 'hf') {
       const destDir = path.join(modelsDir(), spec.dest);
       const curSize = fs.existsSync(destDir) ? (() => { try { let s = 0; const walk = (p) => { const st = fs.statSync(p); if (st.isFile()) s += st.size; else for (const f of fs.readdirSync(p)) walk(path.join(p, f)); }; walk(destDir); return s; } catch (e) { return 0; } })() : 0;
       if (curSize >= spec.minSize) {
+        _activeDownloads.delete(id);
         if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: curSize, total: curSize, percent: 100, done: true });
         return { ok: true, path: destDir, size: curSize, existed: true };
       }
@@ -474,7 +507,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         return { ok: false, error: msg, canceled: _modelCancels.has(id), paused: _modelPause.has(id) };
       } finally {
         _modelAborts.delete(id);
-        _modelCancels.delete(id); _modelPause.delete(id);
+        _modelCancels.delete(id); _modelPause.delete(id); _activeDownloads.delete(id);
       }
     }
     // GitHub Models 仓库分卷下载（MuScriptor）
@@ -482,6 +515,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       const destDir = path.join(modelsDir(), spec.dest);
       const curSize = fs.existsSync(destDir) ? (() => { try { let s = 0; const walk = (p) => { const st = fs.statSync(p); if (st.isFile()) s += st.size; else for (const f of fs.readdirSync(p)) walk(path.join(p, f)); }; walk(destDir); return s; } catch (e) { return 0; } })() : 0;
       if (curSize >= spec.minSize) {
+        _activeDownloads.delete(id);
         if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: curSize, total: curSize, percent: 100, done: true });
         return { ok: true, path: destDir, size: curSize, existed: true };
       }
@@ -495,11 +529,12 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         return { ok: false, error: msg, canceled: _modelCancels.has(id), paused: _modelPause.has(id) };
       } finally {
         _modelAborts.delete(id);
-        _modelCancels.delete(id); _modelPause.delete(id);
+        _modelCancels.delete(id); _modelPause.delete(id); _activeDownloads.delete(id);
       }
     }
     const dest = path.join(modelsDir(), spec.dest);
     if (fs.existsSync(dest) && fs.statSync(dest).size >= spec.minSize) {
+      _activeDownloads.delete(id);
       if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: fs.statSync(dest).size, total: fs.statSync(dest).size, percent: 100, done: true });
       return { ok: true, path: dest, size: fs.statSync(dest).size, existed: true };
     }
@@ -513,7 +548,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     try {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       if (fs.existsSync(tmp)) start = fs.statSync(tmp).size;
-      const headers = { 'user-agent': 'FuFumidi/3.1.4' };
+      const headers = { 'user-agent': 'FuFumidi/3.1.5' };
       if (start > 0) headers['Range'] = 'bytes=' + start + '-';
       const urls = [spec.url, 'https://ghfast.top/' + spec.url, 'https://gh-proxy.com/' + spec.url, 'https://ghproxy.net/' + spec.url];
       let res = null;
@@ -527,6 +562,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
       const total = (parseInt(res.headers.get('content-length') || '0', 10) || 0) + start;
       out = fs.createWriteStream(tmp, { flags: start > 0 ? 'a' : 'w' });
+      out.on('error', () => {}); // 消费 'error' 事件，防 EPERM 等未捕获异常打崩主进程
       const reader = res.body.getReader();
       let received = start, lastSend = 0;
       const sendP = (done) => {
@@ -572,6 +608,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       _modelCancels.delete(id);
       _modelAborts.delete(id);
       _modelPause.delete(id);
+      _activeDownloads.delete(id);
       try { if (!keepPart && fs.existsSync(tmp) && !fs.existsSync(dest)) fs.unlinkSync(tmp); } catch (_) {}
     }
   });

@@ -25,6 +25,8 @@ const DB_NAME = 'fufumidi-db', DB_VER = 1, STORE_SONGS = 'songs';
 let _dbP: Promise<any> | null = null;
 let _toastTimer: any = null;
 let _raf: number | null = null;
+// 全局 Web 弹窗（confirm/alert/prompt）：resolve 回调存模块级，避免放进响应式状态
+let _dlgResolve: ((v: any) => void) | null = null;
 
 function openDb(): Promise<any> {
   if (_dbP) return _dbP;
@@ -146,6 +148,7 @@ export const useAppStore = defineStore('app', {
     tracks: [] as any[],
     toastMsg: '' as any,
     confirm: null as any,
+    dialog: null as any, // { kind:'confirm'|'alert'|'prompt', title, msg, okText, cancelText, value }
     fileBusy: false,
     ui: {
       settingsOpen: false,
@@ -194,6 +197,43 @@ export const useAppStore = defineStore('app', {
       this.toastMsg = { msg, type };
       clearTimeout(_toastTimer);
       _toastTimer = setTimeout(() => (this.toastMsg = ''), 2800);
+    },
+    /* ---------------- 全局 Web 弹窗（取代 window.confirm/alert/prompt） ---------------- */
+    confirmDialog(cfg: any = {}): Promise<boolean> {
+      return new Promise((resolve) => {
+        _dlgResolve = (v) => resolve(!!v);
+        this.dialog = { kind: 'confirm', title: cfg.title || t('提示'), msg: cfg.msg || '', okText: cfg.okText || t('确定'), cancelText: cfg.cancelText || t('取消'), value: '' };
+      });
+    },
+    alertDialog(cfg: any = {}): Promise<void> {
+      return new Promise((resolve) => {
+        _dlgResolve = () => resolve(undefined);
+        this.dialog = { kind: 'alert', title: cfg.title || t('提示'), msg: cfg.msg || '', okText: cfg.okText || t('确定'), value: '' };
+      });
+    },
+    promptDialog(cfg: any = {}): Promise<string | null> {
+      return new Promise((resolve) => {
+        _dlgResolve = (v) => resolve(v);
+        this.dialog = { kind: 'prompt', title: cfg.title || t('输入'), msg: cfg.msg || '', okText: cfg.okText || t('确定'), cancelText: cfg.cancelText || t('取消'), value: cfg.value ?? '' };
+      });
+    },
+    // 确认/提交：confirm 返回 true，alert 返回，prompt 返回输入值
+    dialogResolve(value: any = true) {
+      const r = _dlgResolve;
+      _dlgResolve = null;
+      this.dialog = null;
+      if (r) r(value);
+    },
+    // 取消/关闭：prompt 返回 null，confirm 返回 false，alert 直接关闭
+    dialogCancel() {
+      const r = _dlgResolve;
+      _dlgResolve = null;
+      const kind = this.dialog && this.dialog.kind;
+      this.dialog = null;
+      if (!r) return;
+      if (kind === 'prompt') r(null);
+      else if (kind === 'alert') r(undefined);
+      else r(false);
     },
     async importFiles(items: any[]) {
       let ok = 0, dup = 0;

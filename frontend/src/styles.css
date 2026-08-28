@@ -717,6 +717,23 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
   animation: ov-pop 0.18s ease;
 }
 @keyframes ov-pop { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
+/* 浮层面板开/关过渡（Vue <Transition name="ov">）：关闭也有退场动画 */
+.ov-enter-active, .ov-leave-active { transition: opacity 0.18s ease; }
+.ov-enter-from, .ov-leave-to { opacity: 0; }
+.ov-enter-active .overlay-card, .ov-leave-active .overlay-card,
+.ov-enter-active .ed-modal, .ov-leave-active .ed-modal,
+.ov-enter-active .guide-card, .ov-leave-active .guide-card,
+.ov-enter-active .cmd-palette, .ov-leave-active .cmd-palette,
+.ov-enter-active .mx-card, .ov-leave-active .mx-card {
+  transition: opacity 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.18), transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.18);
+}
+.ov-enter-from .overlay-card, .ov-leave-to .overlay-card,
+.ov-enter-from .ed-modal, .ov-leave-to .ed-modal,
+.ov-enter-from .guide-card, .ov-leave-to .guide-card,
+.ov-enter-from .cmd-palette, .ov-leave-to .cmd-palette,
+.ov-enter-from .mx-card, .ov-leave-to .mx-card {
+  opacity: 0; transform: translateY(8px) scale(0.98);
+}
 
 /* ---------- 设置面板 ---------- */
 .settings-card { width: 720px; max-height: 92vh; display: flex; flex-direction: column; overflow: hidden; }

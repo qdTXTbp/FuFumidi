@@ -49,13 +49,13 @@ function b64ToBuf(b64) {
 }
 async function saveProject() {
   const song = currentSong.value && currentSong.value.song;
-  if (!song) { window.alert(t('请先载入 MIDI 文件')); return; }
+  if (!song) { app.alertDialog({ msg: t('请先载入 MIDI 文件') }); return; }
   const midiBytes = encodeMidi(song.tracks.map(t => ({ name: t.name, program: t.program, ch: t.ch, notes: t.notes, ccs: t.ccs || [] })),
     { division: song.tpb, tempoMap: song.tempoMap, sigMap: song.sigMap });
   const { player } = ensureAudio();
   const ver = (await getAppVersion()).replace(/^v/i, '');
   const proj = {
-    app: 'FuFumidi', version: ver || '3.1.4',
+    app: 'FuFumidi', version: ver || '3.1.5',
     fileName: song.name || 'project',
     midi: bufToB64(midiBytes),
     speed: state.tempo || 1,
@@ -67,24 +67,24 @@ async function saveProject() {
   try {
     if (bridge && bridge.saveBinary) {
       const r = await bridge.saveBinary({ name, data: Array.from(bytes) });
-      if (r && r.ok) window.alert(t('已保存工程：') + r.path);
-      else if (r && !r.canceled) window.alert(t('保存工程失败'));
+      if (r && r.ok) app.alertDialog({ msg: t('已保存工程：') + r.path });
+      else if (r && !r.canceled) app.alertDialog({ msg: t('保存工程失败') });
     } else {
       const blob = new Blob([bytes], { type: 'application/json' });
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-      window.alert(t('已保存工程'));
+      app.alertDialog({ msg: t('已保存工程') });
     }
-  } catch (e) { window.alert(t('保存工程失败：') + (e.message || e)); }
+  } catch (e) { app.alertDialog({ msg: t('保存工程失败：') + (e.message || e) }); }
 }
 async function openProject() {
-  if (!bridge || !bridge.pickFile || !bridge.readBinary) { window.alert(t('请使用桌面版打开工程')); return; }
+  if (!bridge || !bridge.pickFile || !bridge.readBinary) { app.alertDialog({ msg: t('请使用桌面版打开工程') }); return; }
   try {
     const p = await bridge.pickFile({ filters: [{ name: t('FuFumidi 工程'), extensions: ['fufu'] }] });
     if (!p) return;
     const bytes = await bridge.readBinary(p);
     const proj = JSON.parse(new TextDecoder('utf-8').decode(new Uint8Array(bytes)));
-    if (!proj || !proj.midi) { window.alert(t('不是有效的工程文件')); return; }
+    if (!proj || !proj.midi) { app.alertDialog({ msg: t('不是有效的工程文件') }); return; }
     await importFiles([{ name: proj.fileName || 'project.mid', bytes: b64ToBuf(proj.midi) }]);
     if (proj.speed) setTempo(proj.speed);
     if (Array.isArray(proj.mixer)) {
@@ -101,8 +101,8 @@ async function openProject() {
       const { player } = ensureAudio();
       player.setLoop(true, proj.loop.start || 0, proj.loop.end || (currentSong.value && currentSong.value.song.totalTicks) || 0);
     }
-    window.alert(t('已打开工程'));
-  } catch (e) { window.alert(t('解析工程失败：') + (e.message || e)); }
+    app.alertDialog({ msg: t('已打开工程') });
+  } catch (e) { app.alertDialog({ msg: t('解析工程失败：') + (e.message || e) }); }
 }
 </script>
 
