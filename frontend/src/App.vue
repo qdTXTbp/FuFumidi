@@ -127,6 +127,16 @@ function dismissWallpaperPrompt() {
   settingsStore.save({ wallpaper_prompt_done: true }).catch(() => {});
 }
 
+// 全局 Web 弹窗（confirm/alert/prompt）提交/取消
+function submitDialog() {
+  if (!state.dialog) return;
+  if (state.dialog.kind === 'prompt') app.dialogResolve(state.dialog.value);
+  else app.dialogResolve(true);
+}
+function cancelDialog() {
+  app.dialogCancel();
+}
+
 function onKey(e) {
   // 全局系统快捷键（优先于输入框拦截：Ctrl+K 命令面板、Esc 关闭浮层）
   if (e.ctrlKey && (e.key === 'k' || e.key === 'K')) {
@@ -205,22 +215,63 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 全局系统功能浮层 -->
-    <div v-if="wallpaperPromptOpen" class="overlay" role="dialog" aria-modal="true" :aria-label="t('发现动态壁纸')" @click.self="dismissWallpaperPrompt">
-      <div class="overlay-card wp-prompt">
-        <div class="wp-prompt-ic"><Icon name="wallpaper" :size="30" /></div>
-        <b class="wp-prompt-title">{{ t('发现动态壁纸') }}</b>
-        <p class="wp-prompt-desc">{{ t('首次使用：是否从 GitHub 下载一张壁纸？下载后可在顶栏按钮切换，需要更多可再次从壁纸库选择或自行导入。') }}</p>
-        <div class="wp-prompt-actions">
-          <button class="btn primary" @click="goDownloadWallpaper">{{ t('去下载壁纸') }}</button>
-          <button class="btn ghost" @click="dismissWallpaperPrompt">{{ t('暂不') }}</button>
+    <Transition name="ov">
+      <div v-if="wallpaperPromptOpen" class="overlay" role="dialog" aria-modal="true" :aria-label="t('发现动态壁纸')" @click.self="dismissWallpaperPrompt">
+        <div class="overlay-card wp-prompt">
+          <div class="wp-prompt-ic"><Icon name="wallpaper" :size="30" /></div>
+          <b class="wp-prompt-title">{{ t('发现动态壁纸') }}</b>
+          <p class="wp-prompt-desc">{{ t('首次使用：是否从 GitHub 下载一张壁纸？下载后可在顶栏按钮切换，需要更多可再次从壁纸库选择或自行导入。') }}</p>
+          <div class="wp-prompt-actions">
+            <button class="btn primary" @click="goDownloadWallpaper">{{ t('去下载壁纸') }}</button>
+            <button class="btn ghost" @click="dismissWallpaperPrompt">{{ t('暂不') }}</button>
+          </div>
         </div>
       </div>
-    </div>
+    </Transition>
 
-    <SettingsPanel v-if="state.ui.settingsOpen" />
-    <ThemeLibrary v-if="state.ui.themesOpen" />
-    <WallpaperGallery v-if="state.ui.wallpaperOpen" />
-    <CommandPalette v-if="state.ui.paletteOpen" />
-    <GuideOverlay v-if="state.ui.guideOpen" />
+    <Transition name="ov">
+      <SettingsPanel v-if="state.ui.settingsOpen" />
+    </Transition>
+    <Transition name="ov">
+      <ThemeLibrary v-if="state.ui.themesOpen" />
+    </Transition>
+    <Transition name="ov">
+      <WallpaperGallery v-if="state.ui.wallpaperOpen" />
+    </Transition>
+    <Transition name="ov">
+      <CommandPalette v-if="state.ui.paletteOpen" />
+    </Transition>
+    <Transition name="ov">
+      <GuideOverlay v-if="state.ui.guideOpen" />
+    </Transition>
   </div>
+
+  <!-- 全局 Web 弹窗：统一替代 window.confirm / alert / prompt -->
+  <Teleport to="body">
+    <Transition name="ov">
+      <div v-if="state.dialog" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="state.dialog.title" @click.self="cancelDialog" @keydown.esc="cancelDialog">
+        <div class="ed-modal" style="width:min(380px,92vw)">
+          <div class="ed-modal-head">
+            <b>{{ state.dialog.title }}</b>
+            <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" aria-label="t('关闭')" @click="cancelDialog"><Icon name="close" :size="14" /></button>
+          </div>
+          <div class="small" style="padding:4px 2px;line-height:1.6;color:var(--ink);white-space:pre-wrap">{{ state.dialog.msg }}</div>
+          <input v-if="state.dialog.kind === 'prompt'" id="global-prompt-input" name="global-prompt-input" v-model="state.dialog.value" class="text-input" style="width:100%" :aria-label="state.dialog.title" @keydown.enter.prevent="submitDialog" @keydown.esc.stop="cancelDialog" />
+          <div class="ed-modal-foot">
+            <button v-if="state.dialog.kind !== 'alert'" class="btn sm ghost" @click="cancelDialog">{{ state.dialog.cancelText || t('取消') }}</button>
+            <button class="btn sm primary" @click="submitDialog">{{ state.dialog.okText || t('确定') }}</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
 </template>
+
+<style scoped>
+/* 全局 Web 弹窗（与 SideBar/ViewEdit 的 ed-modal 一致） */
+.ed-modal-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.35); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.ed-modal { width: min(380px, 92vw); background: var(--canvas); border-radius: 14px; box-shadow: 0 24px 64px rgba(16,24,40,0.2); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.ed-modal-head { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink); }
+.ed-modal-head b { font-size: 15px; }
+.ed-modal-foot { display: flex; justify-content: flex-end; gap: 8px; }
+</style>

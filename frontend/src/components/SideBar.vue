@@ -10,7 +10,7 @@ import { fmtTime } from '../core/util.js';
 
 const app = useAppStore();
 const state = app;
-const appVersion = ref('v3.1.4');
+const appVersion = ref('v3.1.5');
 getAppVersion().then(v => { appVersion.value = v; });
 const importFiles = (items) => app.importFiles(items);
 const selectSong = (id) => app.selectSong(id);
@@ -436,53 +436,59 @@ onMounted(() => { playlist.hydrateFavorites(); });
        导致 position:fixed 被限制在侧边栏内，Teleport 到 body 后弹窗才能全屏居中 -->
   <Teleport to="body">
     <!-- 添加到歌单 -->
-    <div v-if="addToPlFor" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="t('添加到歌单')" @click.self="closeAddToPl" @keydown.esc="closeAddToPl">
-      <div class="ed-modal" style="width:min(320px,92vw)">
-        <div class="ed-modal-head">
-          <b>{{ t('添加到歌单') }}</b>
-          <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" aria-label="t('关闭')" @click="closeAddToPl"><Icon name="close" :size="14" /></button>
-        </div>
-        <div class="pl-add-list">
-          <button class="pl-add-item" v-for="pl in playlist.playlists" :key="pl.id" @click="addToPlChoose(pl.id)">
-            <Icon name="folder" :size="13" /><span class="pl-name">{{ pl.name }}</span><em>{{ pl.songIds.length }}</em>
-          </button>
-          <div v-if="!playlist.playlists.length" class="muted small" style="padding:8px 2px">{{ t('暂无歌单，可在下方新建') }}</div>
-        </div>
-        <div class="pl-add-new">
-          <input id="pl-add-new-name" name="pl-add-new-name" v-model="addToPlNew" class="text-input" style="flex:1;min-width:0" :placeholder="t('新建歌单名')" aria-label="t('新建歌单名')" @keydown.enter="addToPlCreate" @keydown.esc="closeAddToPl" />
-          <button class="btn sm primary" @click="addToPlCreate">{{ t('新建并添加') }}</button>
-        </div>
-        <div class="ed-modal-foot">
-          <button class="btn sm ghost" @click="closeAddToPl">{{ t('取消') }}</button>
+    <Transition name="ov">
+      <div v-if="addToPlFor" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="t('添加到歌单')" @click.self="closeAddToPl" @keydown.esc="closeAddToPl">
+        <div class="ed-modal" style="width:min(320px,92vw)">
+          <div class="ed-modal-head">
+            <b>{{ t('添加到歌单') }}</b>
+            <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" aria-label="t('关闭')" @click="closeAddToPl"><Icon name="close" :size="14" /></button>
+          </div>
+          <div class="pl-add-list">
+            <button class="pl-add-item" v-for="pl in playlist.playlists" :key="pl.id" @click="addToPlChoose(pl.id)">
+              <Icon name="folder" :size="13" /><span class="pl-name">{{ pl.name }}</span><em>{{ pl.songIds.length }}</em>
+            </button>
+            <div v-if="!playlist.playlists.length" class="muted small" style="padding:8px 2px">{{ t('暂无歌单，可在下方新建') }}</div>
+          </div>
+          <div class="pl-add-new">
+            <input id="pl-add-new-name" name="pl-add-new-name" v-model="addToPlNew" class="text-input" style="flex:1;min-width:0" :placeholder="t('新建歌单名')" aria-label="t('新建歌单名')" @keydown.enter="addToPlCreate" @keydown.esc="closeAddToPl" />
+            <button class="btn sm primary" @click="addToPlCreate">{{ t('新建并添加') }}</button>
+          </div>
+          <div class="ed-modal-foot">
+            <button class="btn sm ghost" @click="closeAddToPl">{{ t('取消') }}</button>
+          </div>
         </div>
       </div>
-    </div>
+    </Transition>
 
     <!-- 重命名歌单 -->
-    <div v-if="renameTarget" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="t('重命名歌单')" @click.self="closeRename" @keydown.esc="closeRename">
-      <div class="ed-modal" style="width:min(320px,92vw)">
-        <div class="ed-modal-head"><b>{{ t('重命名歌单') }}</b><button class="icon-btn" style="margin-left:auto" :title="t('关闭')" aria-label="t('关闭')" @click="closeRename"><Icon name="close" :size="14" /></button></div>
-        <div style="padding:14px 4px 4px">
-          <input id="pl-rename-name" name="pl-rename-name" v-model="renameVal" class="text-input" style="width:100%" :aria-label="t('歌单名')" @keydown.enter="confirmRename" @keydown.esc="closeRename" />
-        </div>
-        <div class="ed-modal-foot">
-          <button class="btn sm ghost" @click="closeRename">{{ t('取消') }}</button>
-          <button class="btn sm primary" @click="confirmRename">{{ t('保存') }}</button>
+    <Transition name="ov">
+      <div v-if="renameTarget" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="t('重命名歌单')" @click.self="closeRename" @keydown.esc="closeRename">
+        <div class="ed-modal" style="width:min(320px,92vw)">
+          <div class="ed-modal-head"><b>{{ t('重命名歌单') }}</b><button class="icon-btn" style="margin-left:auto" :title="t('关闭')" aria-label="t('关闭')" @click="closeRename"><Icon name="close" :size="14" /></button></div>
+          <div style="padding:14px 4px 4px">
+            <input id="pl-rename-name" name="pl-rename-name" v-model="renameVal" class="text-input" style="width:100%" :aria-label="t('歌单名')" @keydown.enter="confirmRename" @keydown.esc="closeRename" />
+          </div>
+          <div class="ed-modal-foot">
+            <button class="btn sm ghost" @click="closeRename">{{ t('取消') }}</button>
+            <button class="btn sm primary" @click="confirmRename">{{ t('保存') }}</button>
+          </div>
         </div>
       </div>
-    </div>
+    </Transition>
 
     <!-- 确认弹窗 -->
-    <div v-if="confirmDlg" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="confirmDlg.title" @click.self="closeConfirm" @keydown.esc="closeConfirm">
-      <div class="ed-modal" style="width:min(340px,92vw)">
-        <div class="ed-modal-head"><b>{{ confirmDlg.title }}</b><button class="icon-btn" style="margin-left:auto" :title="t('关闭')" aria-label="t('关闭')" @click="closeConfirm"><Icon name="close" :size="14" /></button></div>
-        <div style="padding:14px 4px 4px;line-height:1.6;color:var(--ink)" class="small">{{ confirmDlg.msg }}</div>
-        <div class="ed-modal-foot">
-          <button class="btn sm ghost" @click="closeConfirm">{{ t('取消') }}</button>
-          <button class="btn sm danger" @click="runConfirm">{{ confirmDlg.okText }}</button>
+    <Transition name="ov">
+      <div v-if="confirmDlg" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="confirmDlg.title" @click.self="closeConfirm" @keydown.esc="closeConfirm">
+        <div class="ed-modal" style="width:min(340px,92vw)">
+          <div class="ed-modal-head"><b>{{ confirmDlg.title }}</b><button class="icon-btn" style="margin-left:auto" :title="t('关闭')" aria-label="t('关闭')" @click="closeConfirm"><Icon name="close" :size="14" /></button></div>
+          <div style="padding:14px 4px 4px;line-height:1.6;color:var(--ink)" class="small">{{ confirmDlg.msg }}</div>
+          <div class="ed-modal-foot">
+            <button class="btn sm ghost" @click="closeConfirm">{{ t('取消') }}</button>
+            <button class="btn sm danger" @click="runConfirm">{{ confirmDlg.okText }}</button>
+          </div>
         </div>
       </div>
-    </div>
+    </Transition>
   </Teleport>
 </template>
 

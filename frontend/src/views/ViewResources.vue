@@ -4,7 +4,7 @@
 // - 模型运行时：模型推理所需包（piano / separate 组）+ Rust 核心
 // - 模型文件：内置模型清单
 // - 诊断与配置：诊断包导出、配置导入导出
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
@@ -192,12 +192,21 @@ function saveHfToken() {
   settingsStore.save({ hf_token: hfToken.value.trim() }).catch(() => {});
   toast(t('HF Token 已保存'), 'ok');
 }
+let offModelProg = null;
+// 恢复进行中的下载状态：切回来时把仍在后台下载的模型标记为「下载中」
+function restoreDownloads(list) {
+  for (const m of list || []) {
+    if (m && m.id && m.active && !(modelProg[m.id] && modelProg[m.id].active)) {
+      modelProg[m.id] = { percent: modelProg[m.id] ? modelProg[m.id].percent : 0, active: true, error: '' };
+    }
+  }
+}
 async function refreshModels() {
-  if (bridge && bridge.modelList) { try { models.value = await bridge.modelList() || []; } catch (e) { models.value = []; } }
+  if (bridge && bridge.modelList) { try { const arr = await bridge.modelList() || []; models.value = arr; restoreDownloads(arr); } catch (e) { models.value = []; } }
 }
 function downloadModel(m) {
   if (!bridge || !bridge.modelDownload) { toast(t('当前环境不支持下载模型'), 'warn'); return; }
-  if (modelProg[m.id] && modelProg[m.id].active) return;
+  if ((modelProg[m.id] && modelProg[m.id].active) || (m && m.active)) return;
   modelProg[m.id] = { percent: 0, active: true, error: '' };
   bridge.modelDownload(m.id, modelChannel.value).then((r) => {
     if (r && r.ok) { modelProg[m.id] = { percent: 100, active: false }; toast(t('已下载：') + m.name, 'ok'); }
@@ -256,7 +265,7 @@ onMounted(() => {
   loadGpu();
   loadHfToken();
   if (bridge && bridge.onModelProgress) {
-    bridge.onModelProgress((p) => {
+    offModelProg = bridge.onModelProgress((p) => {
       if (p && p.id) {
         if (p.done) modelProg[p.id] = { percent: 100, active: false };
         else if (p.error) modelProg[p.id] = { percent: 0, active: false, error: p.error };
@@ -265,6 +274,7 @@ onMounted(() => {
     });
   }
 });
+onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {} offModelProg = null; } });
 </script>
 
 <template>
@@ -372,8 +382,8 @@ onMounted(() => {
               <span v-if="m.gated" class="mi-gated" :title="t('需在 HuggingFace 接受协议并填写 Token')">{{ t('需授权') }}</span>
               <span :class="m.exists ? 'mi-ok' : 'mi-missing'">{{ m.exists ? t('已就绪') : t('缺失') }}</span>
               <template v-if="m.downloadable && !m.exists">
-                <button class="btn sm" @click="downloadModel(m)" :disabled="modelProg[m.id] && modelProg[m.id].active" style="margin-left:auto;flex:none">
-                  {{ (modelProg[m.id] && modelProg[m.id].active) ? ((modelProg[m.id].percent || 0) + '%') : t('下载') }}
+                <button class="btn sm" @click="downloadModel(m)" :disabled="(modelProg[m.id] && modelProg[m.id].active) || m.active" style="margin-left:auto;flex:none">
+                  {{ ((modelProg[m.id] && modelProg[m.id].active) || m.active) ? ((modelProg[m.id] && modelProg[m.id].percent) || 0) + '%' : t('下载') }}
                 </button>
               </template>
               <div v-if="modelProg[m.id] && modelProg[m.id].active" class="res-bar"><div class="res-bar-fill" :style="{ width: (modelProg[m.id].percent || 0) + '%' }"></div></div>

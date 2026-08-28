@@ -10,7 +10,7 @@ const app = useAppStore();
 const state = app;
 const toast = (m, t) => app.toast(m, t);
 // 当前版本号（从主进程读取，与 SideBar 左下角一致）
-const appVersion = ref('v3.1.4');
+const appVersion = ref('v3.1.5');
 import { getAppVersion } from '../core/version.js';
 getAppVersion().then(v => { appVersion.value = v; });
 import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';
@@ -27,6 +27,36 @@ const TABS = [
   { id: 'update', label: '更新', icon: 'download' },
 ];
 const tab = ref('appearance');
+
+// 标签页切换：对设置卡片高度做柔和非线性补间（从旧高度过渡到新内容自然高度）
+const cardRef = ref(null);
+let _hTimer = null;
+function switchTab(id) {
+  const card = cardRef.value;
+  let from = 0;
+  if (card) {
+    card.style.transition = 'none';
+    from = card.getBoundingClientRect().height;
+    card.style.height = from + 'px'; // 锁定旧高度，作为补间起点
+  }
+  tab.value = id;
+  const c = cardRef.value;
+  if (!c) return;
+  nextTick(() => {
+    clearTimeout(_hTimer);
+    const body = c.querySelector('.settings-body');
+    const delta = body ? (body.scrollHeight - body.clientHeight) : 0;
+    const maxH = window.innerHeight * 0.92;
+    const target = Math.max(0, Math.min(from + delta, maxH));
+    c.style.transition = 'height 0.34s cubic-bezier(0.22, 0.9, 0.28, 1.12)'; // 非线性缓动
+    void c.offsetHeight; // 强制 reflow，确保从旧高度开始过渡
+    c.style.height = target + 'px';
+    _hTimer = setTimeout(() => {
+      const cc = cardRef.value;
+      if (cc) { cc.style.height = ''; cc.style.transition = ''; }
+    }, 400);
+  });
+}
 
 /* ---------------- 设置导航胶囊指示器 ---------------- */
 const tabsRef = ref(null);
@@ -164,7 +194,7 @@ async function updLaunch() {
       return;
     }
     if (!bridge.update || !bridge.update.launchUpdater) { upd.status = '当前环境不支持增量更新器'; return; }
-    const ok = window.confirm(t('发现新版本 ') + latest + t('，当前 ') + cur + t('。\n是否启动更新器增量更新？'));
+    const ok = await app.confirmDialog({ msg: t('发现新版本 ') + latest + t('，当前 ') + cur + t('。\n是否启动更新器增量更新？') });
     if (!ok) { upd.status = '已取消'; return; }
     if (!bridge.update || !bridge.update.launchUpdater) { upd.status = '当前环境不支持增量更新器'; return; }
     upd.status = '正在启动更新器…';
@@ -428,7 +458,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
 
 <template>
   <div class="overlay" v-focus-trap role="dialog" aria-modal="true" :aria-label="t('设置')" @click.self="cancel" @keydown.esc="cancel">
-    <div class="overlay-card settings-card">
+    <div class="overlay-card settings-card" ref="cardRef">
       <div class="settings-head">
         <Icon name="gear" :size="17" />
         <span class="settings-title">{{ t('应用设置') }}</span>
@@ -436,7 +466,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
 
       <div class="settings-tabs" ref="tabsRef">
         <span class="settings-ind" :style="{ transform: `translateX(${ind.x}px)`, width: ind.w + 'px' }"></span>
-        <button class="ov-tab" v-for="tb in TABS" :key="tb.id" :class="{ active: tab === tb.id }" @click="tab = tb.id">
+        <button class="ov-tab" v-for="tb in TABS" :key="tb.id" :class="{ active: tab === tb.id }" @click="switchTab(tb.id)">
           {{ t(tb.label) }}
         </button>
       </div>

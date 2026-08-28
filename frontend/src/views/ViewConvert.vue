@@ -500,11 +500,15 @@ async function renderVideo() {
         <Icon name="convert" :size="16" />{{ busy ? t('渲染中…') : t('渲染并导出 WAV') }}
       </button>
 
-      <div v-if="busy || done" class="conv-progress">
-        <div class="pfill" :style="{ width: progress + '%' }"></div>
-        <span>{{ progress }}%</span>
-      </div>
-      <div v-if="done" class="conv-done-tip">✓ {{ t('渲染完成，WAV 已下载') }}</div>
+      <Transition name="cv">
+        <div v-if="busy || done" class="conv-progress">
+          <div class="pfill" :style="{ width: progress + '%' }"></div>
+          <span>{{ progress }}%</span>
+        </div>
+      </Transition>
+      <Transition name="cv">
+        <div v-if="done" class="conv-done-tip">✓ {{ t('渲染完成，WAV 已下载') }}</div>
+      </Transition>
     </div>
 
     <!-- ==================== 视频 / 可视化导出 ==================== -->
@@ -604,11 +608,15 @@ async function renderVideo() {
       <button class="btn primary big" @click="renderVideo" :disabled="VE.veBusy || !song">
         <Icon name="play2" :size="16" />{{ VE.veBusy ? VE.veStage || t('导出中…') : t('导出视频 MP4') }}
       </button>
-      <div v-if="VE.veBusy" class="conv-progress">
-        <div class="pfill" :style="{ width: VE.veProgress + '%' }"></div>
-        <span>{{ Math.round(VE.veProgress) }}%</span>
-      </div>
-      <button v-if="VE.veBusy" class="btn sm danger" @click="VE.veCancel = true">{{ t('取消导出') }}</button>
+      <Transition name="cv">
+        <div v-if="VE.veBusy" class="conv-progress">
+          <div class="pfill" :style="{ width: VE.veProgress + '%' }"></div>
+          <span>{{ Math.round(VE.veProgress) }}%</span>
+        </div>
+      </Transition>
+      <Transition name="cv">
+        <button v-if="VE.veBusy" class="btn sm danger" @click="VE.veCancel = true">{{ t('取消导出') }}</button>
+      </Transition>
     </div>
   </div>
 </template>
@@ -631,6 +639,9 @@ async function renderVideo() {
 .conv-progress { display: flex; align-items: center; gap: 10px; height: 20px; background: var(--surface-soft); border-radius: 999px; overflow: hidden; padding: 0 12px; font-size: 11px; color: var(--steel); font-variant-numeric: tabular-nums; }
 .conv-progress .pfill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.2s; }
 .conv-done-tip { color: var(--success-text); font-size: 12.5px; font-weight: 600; text-align: center; }
+/* 转换页进度/完成提示显隐过渡 */
+.cv-enter-active, .cv-leave-active { transition: opacity 0.2s ease, transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.18); }
+.cv-enter-from, .cv-leave-to { opacity: 0; transform: translateY(6px); }
 .ve-card { margin-top: 18px; padding: 18px; }
 .ve-head { display: flex; flex-direction: column; gap: 4px; }
 .ve-head b { font-size: 15px; color: var(--ink); }

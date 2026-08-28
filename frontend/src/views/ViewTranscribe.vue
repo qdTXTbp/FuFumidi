@@ -32,6 +32,40 @@ const lastOut = ref('');
 const doneInfo = ref('');
 const gpuInfo = ref('');
 
+/* ---------------- 模型下载状态（用于标记哪些模型已安装） ---------------- */
+// key → model:list 返回条目的 id；basic / piano_pt 为内置兜底，始终就绪
+const modelStatus = reactive({ basic: true, piano_pt: true });
+async function refreshModelStatus() {
+  try {
+    if (bridge && bridge.modelList) {
+      const arr = await bridge.modelList() || [];
+      for (const m of arr) {
+        if (m && m.id) modelStatus[m.id] = !!m.exists;
+      }
+    }
+  } catch (e) {}
+}
+function modelInstalled(key) {
+  // 返回 true（已就绪）/ false（未下载）/ null（未知）
+  return modelStatus[key] === true || modelStatus[key] === false ? modelStatus[key] : null;
+}
+// 当前激活模型的可读名称（供日志标注）
+function currentModelLabel() {
+  if (mode.value === 'separate') return 'HTDemucs 人声分离';
+  if (mode.value === 'universal') return umodel.value === 'muscriptor' ? ('MuScriptor ' + msSize.value.toUpperCase()) : 'Basic Pitch';
+  // piano
+  if (pmodel.value === 'piano_pt') return 'piano-transcription';
+  return pmodel.value === 'aria' ? 'Aria-AMT' : 'Transkun';
+}
+function currentModelInstalled() {
+  const key = mode.value === 'separate' ? 'demucs_htdemucs'
+    : mode.value === 'universal'
+      ? (umodel.value === 'muscriptor' ? 'muscriptor_' + msSize.value : 'basic')
+      : (pmodel.value === 'aria' ? 'aria_amt' : pmodel.value === 'piano_pt' ? 'piano_pt' : 'transkun');
+  const st = modelInstalled(key);
+  return st; // true / false / null
+}
+
 // 高级参数
 const onset = ref(0.5);
 const frame = ref(0.3);
@@ -324,7 +358,7 @@ function onModeChange(m) {
 }
 async function savePreset() {
   if (!bridge || !bridge.presets) { toast('请使用桌面版保存预设', 'warn'); return; }
-  const name = window.prompt('预设名', '');
+  const name = await app.promptDialog({ title: t('保存预设'), value: '' });
   if (!name || !name.trim()) return;
   const params = collectParams();
   try {
@@ -335,7 +369,7 @@ async function savePreset() {
 }
 async function delPreset() {
   if (!bridge || !bridge.presets || !presetSel.value) return;
-  if (!window.confirm(t('删除预设「') + presetSel.value + '」？')) return;
+  if (!await app.confirmDialog({ msg: t('删除预设「') + presetSel.value + '」？' })) return;
   try {
     const r = await bridge.presets.delete(presetSel.value);
     if (r && r.ok) { toast('预设已删除', 'ok'); loadPresets(); }
@@ -354,7 +388,7 @@ async function mgrApply(name) {
 }
 async function mgrDelete(name) {
   if (!bridge || !bridge.presets) return;
-  if (!window.confirm(t('删除预设「') + name + '」？')) return;
+  if (!await app.confirmDialog({ msg: t('删除预设「') + name + '」？' })) return;
   try {
     const r = await bridge.presets.delete(name);
     if (r && r.ok) { toast('预设已删除', 'ok'); await loadPresets(); }
@@ -471,6 +505,8 @@ async function runBatch() {
   }
   running.value = true; paused.value = false; cancelAll.value = false; busy.value = true; done.value = false; progress.value = 3; stage.value = '';
   logLine(t('转录队列：共 ') + pendingCount.value + ' 首，顺序处理…');
+  const inst = currentModelInstalled();
+  logLine(t('使用模型：') + currentModelLabel() + (inst === true ? t('（已就绪）') : inst === false ? t('（未下载，请到资源中心安装）') : ''));
   const t0 = Date.now();
   clearInterval(trTimer);
   trTimer = setInterval(() => {
@@ -479,7 +515,14 @@ async function runBatch() {
     const errN = queue.filter(i => i.status === 'error').length;
     const total = Math.max(1, queue.length);
     const cur = queue.find(i => i.status === 'running');
-    const curP = cur ? (cur.progress || (cur.startedAt && cur.estMs ? Math.min(95, Math.round((Date.now() - cur.startedAt) / cur.estMs * 100)) : 0)) : 0;
+    // 当前项进度：未完成时按已用时间/预估时长估算（平滑推进而非停在 3% 突跳到 100%）
+    let curP = 0;
+    if (cur) {
+      if (cur.progress >= 100) curP = 100;
+      else if (cur.progress > 0) curP = cur.progress;
+      else if (cur.startedAt && cur.estMs) curP = Math.min(95, Math.round((Date.now() - cur.startedAt) / cur.estMs * 100));
+      if (curP > 0 && curP < 100) cur.progress = curP; // 同步到队列行内进度条
+    }
     progress.value = Math.max(3, Math.min(95, Math.round(((doneN + errN) + curP / 100) / total * 100)));
     if (!cur) stage.value = t('完成 ') + doneN + ' / ' + total + (errN ? t(' · 失败 ') + errN : '') + ' · ' + fmtTime(el);
   }, 500);
@@ -488,7 +531,7 @@ async function runBatch() {
     if (paused.value || cancelAll.value) break;
     const it = queue.find(i => i.status === 'pending');
     if (!it) break;
-    it.status = 'running'; it.progress = 1; it.error = '';
+    it.status = 'running'; it.progress = 0; it.error = '';
     it.startedAt = Date.now();
     await decodeDuration(it);
     it.estMs = Math.max(5000, estSec() * 1000 || 60000);
@@ -536,11 +579,12 @@ async function runBatch() {
   }
   if (cancelAll.value && !paused.value) logLine(t('已取消转录队列…'), true);
 }
-function startTranscribe() {
+async function startTranscribe() {
   if (busy.value) return;
   const est = estSec();
-  const msg = t('确认开始转录？\\n文件：') + queue.find(i => i.status === 'pending')?.name + t('\\n模式：') + (MODE_NAMES[mode.value] || mode.value) + t('\\n质量：') + (PERF_NAMES[perf.value] || perf.value) + (est ? t('\\n预计耗时：约 ') + fmtTime(est) : '');
-  if (!window.confirm(msg)) return;
+  const msg = t('确认开始转录？\n文件：') + queue.find(i => i.status === 'pending')?.name + t('\n模式：') + (MODE_NAMES[mode.value] || mode.value) + t('\n质量：') + (PERF_NAMES[perf.value] || perf.value) + (est ? t('\n预计耗时：约 ') + fmtTime(est) : '');
+  const ok = await app.confirmDialog({ title: t('开始转录'), msg, okText: t('开始') });
+  if (!ok) return;
   runBatch();
 }
 function cancelTranscribe() {
@@ -611,13 +655,14 @@ async function openRefineResult() {
 }
 
 /* ---------------- 引擎日志 ---------------- */
-let offLog = null, offRefine = null;
+let offLog = null, offRefine = null, offModelProg = null;
 onMounted(() => {
   loadQueue();
   loadPresets();
   loadTaskTemplates();
   loadPerfDefault();
   probeEngine();
+  refreshModelStatus();
   if (bridge && bridge.onEngineLog) {
     offLog = bridge.onEngineLog(p => {
       if (!p) return;
@@ -629,11 +674,15 @@ onMounted(() => {
   if (bridge && bridge.onRefineLog) {
     offRefine = bridge.onRefineLog(p => { if (p && p.id === rf.jobId && p.line) rl(p.line); });
   }
+  if (bridge && bridge.onModelProgress) {
+    offModelProg = bridge.onModelProgress(p => { if (p && p.done) refreshModelStatus(); });
+  }
 });
 onBeforeUnmount(() => {
   if (trTimer) clearInterval(trTimer);
   if (offLog) offLog();
   if (offRefine) offRefine();
+  if (offModelProg) { try { offModelProg(); } catch (e) {} offModelProg = null; }
 });
 </script>
 
@@ -712,13 +761,13 @@ onBeforeUnmount(() => {
       <div v-if="mode === 'universal'" class="tr-submodels">
         <div class="fb-label">{{ t('通用模型') }}</div>
         <div class="tr-pills">
-          <button class="tr-pill" :class="{ active: umodel === 'basic' }" @click="umodel = 'basic'">{{ t('Basic Pitch · 内置兜底') }}</button>
-          <button class="tr-pill" :class="{ active: umodel === 'muscriptor' }" @click="umodel = 'muscriptor'">{{ t('MuScriptor · 需下载') }}</button>
+          <button class="tr-pill" :class="{ active: umodel === 'basic' }" @click="umodel = 'basic'">{{ t('Basic Pitch · 内置兜底') }}<i v-if="modelInstalled('basic') !== null" class="ms-badge" :class="modelInstalled('basic') ? 'ok' : 'miss'">{{ modelInstalled('basic') ? t('已下载') : t('未下载') }}</i></button>
+          <button class="tr-pill" :class="{ active: umodel === 'muscriptor' }" @click="umodel = 'muscriptor'">MuScriptor<i v-if="currentModelInstalled() !== null" class="ms-badge" :class="currentModelInstalled() ? 'ok' : 'miss'">{{ currentModelInstalled() ? t('已下载') : t('未下载') }}</i></button>
         </div>
         <div v-if="umodel === 'muscriptor'" class="tr-pills">
-          <button class="tr-pill" :class="{ active: msSize === 'small' }" @click="msSize = 'small'">Small · 100M</button>
-          <button class="tr-pill" :class="{ active: msSize === 'medium' }" @click="msSize = 'medium'">{{ t('Medium · 300M（推荐）') }}</button>
-          <button class="tr-pill" :class="{ active: msSize === 'large' }" @click="msSize = 'large'">Large · 1.3B</button>
+          <button class="tr-pill" :class="{ active: msSize === 'small' }" @click="msSize = 'small'">Small · 100M<i v-if="modelInstalled('muscriptor_small') !== null" class="ms-badge" :class="modelInstalled('muscriptor_small') ? 'ok' : 'miss'">{{ modelInstalled('muscriptor_small') ? t('已下载') : t('未下载') }}</i></button>
+          <button class="tr-pill" :class="{ active: msSize === 'medium' }" @click="msSize = 'medium'">{{ t('Medium · 300M（推荐）') }}<i v-if="modelInstalled('muscriptor_medium') !== null" class="ms-badge" :class="modelInstalled('muscriptor_medium') ? 'ok' : 'miss'">{{ modelInstalled('muscriptor_medium') ? t('已下载') : t('未下载') }}</i></button>
+          <button class="tr-pill" :class="{ active: msSize === 'large' }" @click="msSize = 'large'">Large · 1.3B<i v-if="modelInstalled('muscriptor_large') !== null" class="ms-badge" :class="modelInstalled('muscriptor_large') ? 'ok' : 'miss'">{{ modelInstalled('muscriptor_large') ? t('已下载') : t('未下载') }}</i></button>
         </div>
         <div class="tr-perf-hint" v-if="umodel === 'muscriptor'">{{ t('未下载时请到资源中心 → 模型文件 按规格下载') }}</div>
       </div>
@@ -727,9 +776,9 @@ onBeforeUnmount(() => {
       <div v-if="mode === 'piano'" class="tr-submodels">
         <div class="fb-label">{{ t('钢琴模型') }}</div>
         <div class="tr-pills">
-          <button class="tr-pill" :class="{ active: pmodel === 'piano_pt' }" @click="pmodel = 'piano_pt'">{{ t('piano-transcription · 内置') }}</button>
-          <button class="tr-pill" :class="{ active: pmodel === 'aria' }" @click="pmodel = 'aria'">Aria-AMT</button>
-          <button class="tr-pill" :class="{ active: pmodel === 'transkun' }" @click="pmodel = 'transkun'">Transkun</button>
+          <button class="tr-pill" :class="{ active: pmodel === 'piano_pt' }" @click="pmodel = 'piano_pt'">{{ t('piano-transcription · 内置') }}<i v-if="modelInstalled('piano_pt') !== null" class="ms-badge" :class="modelInstalled('piano_pt') ? 'ok' : 'miss'">{{ modelInstalled('piano_pt') ? t('已下载') : t('未下载') }}</i></button>
+          <button class="tr-pill" :class="{ active: pmodel === 'aria' }" @click="pmodel = 'aria'">Aria-AMT<i v-if="modelInstalled('aria_amt') !== null" class="ms-badge" :class="modelInstalled('aria_amt') ? 'ok' : 'miss'">{{ modelInstalled('aria_amt') ? t('已下载') : t('未下载') }}</i></button>
+          <button class="tr-pill" :class="{ active: pmodel === 'transkun' }" @click="pmodel = 'transkun'">Transkun<i v-if="modelInstalled('transkun') !== null" class="ms-badge" :class="modelInstalled('transkun') ? 'ok' : 'miss'">{{ modelInstalled('transkun') ? t('已下载') : t('未下载') }}</i></button>
         </div>
         <div class="tr-perf-hint" v-if="pmodel !== 'piano_pt'">{{ t('Aria-AMT / Transkun 需先到资源中心安装对应模型') }}</div>
       </div>
@@ -950,9 +999,13 @@ onBeforeUnmount(() => {
 .tr-mode.active { border-color: var(--ink); background: var(--canvas); box-shadow: 0 0 0 1px var(--ink); }
 .tr-mode.active b { color: var(--brand-coral); }
 .tr-pills { display: flex; gap: 6px; flex-wrap: wrap; }
-.tr-pill { padding: 5px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); font-size: 12px; color: var(--slate); cursor: pointer; }
+.tr-pill { padding: 5px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); font-size: 12px; color: var(--slate); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .tr-pill:hover { border-color: var(--border-strong); }
 .tr-pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tr-pill .ms-badge { font-style: normal; font-size: 10px; line-height: 14px; height: 15px; padding: 0 6px; border-radius: 999px; }
+.tr-pill .ms-badge.ok { background: rgba(72, 187, 120, 0.16); color: #48bb78; }
+.tr-pill .ms-badge.miss { background: rgba(212, 86, 86, 0.16); color: #e06c6c; }
+.tr-pill.active .ms-badge.ok, .tr-pill.active .ms-badge.miss { background: rgba(255,255,255,0.2); color: #fff; }
 .tr-submodels { margin-top: 10px; padding: 10px 12px; border: 1px dashed var(--hairline); border-radius: 10px; background: var(--surface-soft); }
 .tr-submodels .fb-label { margin-bottom: 8px; }
 .tr-perf-hint { font-size: 11.5px; color: var(--success-text); }
@@ -973,8 +1026,9 @@ onBeforeUnmount(() => {
 .tr-tpl-preview { margin-top: 4px; }
 .tr-sum { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: var(--surface-soft); border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--slate); }
 .tr-sum b { color: var(--ink); font-weight: 600; }
-.tr-progress { display: flex; align-items: center; gap: 10px; height: 20px; background: var(--surface-soft); border-radius: 999px; overflow: hidden; padding: 0 12px; font-size: 11px; color: var(--steel); margin-top: 8px; }
-.tr-progress .pfill { height: 100%; background: var(--ink); border-radius: 999px; transition: width .2s; }
+.tr-progress { position: relative; display: flex; align-items: center; justify-content: flex-end; height: 20px; background: var(--surface-soft); border-radius: 999px; overflow: hidden; margin-top: 8px; }
+.tr-progress .pfill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--ink); border-radius: 999px; transition: width .2s; }
+.tr-progress span { position: relative; z-index: 1; padding: 0 12px; font-size: 11px; color: var(--steel); }
 .tr-stage { margin-top: 4px; text-align: center; }
 .tr-done { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .tr-log { border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); margin-top: 10px; overflow: hidden; }
