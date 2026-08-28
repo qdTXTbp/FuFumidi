@@ -29,6 +29,7 @@
         "test:plugin": "node --test scripts/test-plugin-sandbox.mjs"
     },
     "dependencies": {
+        "adm-zip": "^0.6.0",
         "sql.js": "^1.14.2"
     },
     "devDependencies": {

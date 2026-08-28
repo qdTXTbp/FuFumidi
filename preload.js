@@ -59,6 +59,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
   modelCancel: (id) => ipcRenderer.invoke('model:cancel', id),
   modelPause: (id) => ipcRenderer.invoke('model:pause', id),
   modelDelete: (id) => ipcRenderer.invoke('model:delete', id),
+  modelImportLocal: (p) => ipcRenderer.invoke('model:importLocal', p),
+  pickModelArchive: () => ipcRenderer.invoke('dialog:pickModelArchive'),
   setFolderWatch: (dir, enabled) => ipcRenderer.invoke('folder:setWatch', dir, enabled),
   onFolderWatch: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('folder-watch:file', w); return () => ipcRenderer.removeListener('folder-watch:file', w); },
   onModelProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('model:progress', w); return () => ipcRenderer.removeListener('model:progress', w); },
