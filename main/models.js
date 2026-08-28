@@ -23,13 +23,14 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     },
     // 通用多乐器转录（Kyutai MuScriptor，默认不随 Release 分发，需到资源中心下载）
     // 注意：MuScriptor 为 gated 模型（CC BY-NC 4.0），须先在 HuggingFace 接受协议，
-    // 并在资源中心填写 HF Token 后方可下载（否则 HF 返回 401）。
+    // 并经 monologue82/Models 仓库分卷分发（gh.jasonzeng.dev 加速，100MB part 合并）。
     muscriptor_small: {
       id: 'muscriptor_small',
       name: 'MuScriptor Small',
       note: '多乐器转录 · 103M 参数 · 约 400 MB · 需 HF 授权',
-      type: 'hf',
-      repo: 'MuScriptor/muscriptor-small',
+      type: 'ghsplit',
+      sizeKey: 'small',
+      repo: 'monologue82/Models',
       dest: path.join('muscriptor', 'small'),
       minSize: 5e7,
       downloadable: true,
@@ -39,8 +40,9 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       id: 'muscriptor_medium',
       name: 'MuScriptor Medium',
       note: '多乐器转录 · 307M 参数（推荐）· 约 1.2 GB · 需 HF 授权',
-      type: 'hf',
-      repo: 'MuScriptor/muscriptor-medium',
+      type: 'ghsplit',
+      sizeKey: 'medium',
+      repo: 'monologue82/Models',
       dest: path.join('muscriptor', 'medium'),
       minSize: 2e8,
       downloadable: true,
@@ -49,9 +51,10 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     muscriptor_large: {
       id: 'muscriptor_large',
       name: 'MuScriptor Large',
-      note: '多乐器转录 · 1.4B 参数 · 约 2.8 GB · 需 HF 授权',
-      type: 'hf',
-      repo: 'MuScriptor/muscriptor-large',
+      note: '多乐器转录 · 1.4B 参数 · 约 5.2 GB · 需 HF 授权',
+      type: 'ghsplit',
+      sizeKey: 'large',
+      repo: 'monologue82/Models',
       dest: path.join('muscriptor', 'large'),
       minSize: 9e8,
       downloadable: true,
@@ -187,6 +190,78 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received: size, total: size, percent: 100, done: true });
     return { ok: true, path: destDir, size };
   }
+  // GitHub Models 仓库分卷下载（MuScriptor：100MB part → 合并 + SHA256 校验）
+  // 访问走 gh.jasonzeng.dev 加速，raw 直连 / ghfast / gh-proxy 作回退
+  async function downloadSplitRepo(spec, win, ctrl) {
+    const repo = spec.repo || 'monologue82/Models';
+    const base = 'main/muscriptor/' + spec.sizeKey;
+    const hosts = [
+      'https://gh.jasonzeng.dev/https://raw.githubusercontent.com',
+      'https://raw.githubusercontent.com',
+      'https://ghfast.top/https://raw.githubusercontent.com',
+      'https://gh-proxy.com/https://raw.githubusercontent.com',
+    ];
+    const headers = { 'user-agent': 'FuFumidi' };
+    // 1) 分卷清单（manifest.json）：parts 数 / 总大小 / SHA256
+    let manifest = null, lastErr = null;
+    for (const h of hosts) {
+      try {
+        const r = await net.fetch(`${h}/${repo}/main/manifest.json`, { headers, signal: ctrl.signal });
+        if (r.ok) { manifest = await r.json(); break; }
+      } catch (e) { lastErr = e; }
+    }
+    const meta = manifest && manifest.muscriptor && manifest.muscriptor[spec.sizeKey];
+    if (!meta || !meta.parts) throw new Error('分卷清单获取失败：请确认 Models 仓库已发布 ' + spec.sizeKey + ' 分卷（manifest.json）');
+    const destDir = path.join(modelsDir(), spec.dest);
+    fs.mkdirSync(destDir, { recursive: true });
+    const outFile = path.join(destDir, meta.model || 'model.safetensors');
+    const total = meta.size || 0;
+    let received = 0;
+    let out = null;
+    try {
+      out = fs.createWriteStream(outFile);
+      for (let i = 1; i <= meta.parts; i++) {
+        const partName = (meta.model || 'model.safetensors') + '.part' + String(i).padStart(2, '0');
+        let ok = false;
+        for (const h of hosts) {
+          try {
+            const r = await net.fetch(`${h}/${repo}/${base}/${partName}`, { headers, signal: ctrl.signal });
+            if (!r.ok || !r.body) throw new Error('HTTP ' + r.status + ' · ' + partName);
+            const reader = r.body.getReader();
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (_modelCancels.has(spec.id)) { try { reader.cancel(); } catch (e) {} throw new Error('canceled'); }
+              if (_modelPause.has(spec.id)) { try { reader.cancel(); } catch (e) {} throw new Error('paused'); }
+              received += value.length;
+              const pct = total ? Math.min(99, Math.round(received / total * 100)) : 0;
+              if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received, total, percent: pct, done: false });
+              await new Promise((res2, rej2) => out.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
+            }
+            ok = true;
+            break;
+          } catch (e) { lastErr = e; }
+        }
+        if (!ok) throw lastErr || new Error('下载分卷失败：' + partName);
+      }
+      await new Promise((res2, rej2) => out.end(err => (err ? rej2(err) : res2())));
+      const size = fs.statSync(outFile).size;
+      // SHA256 校验（与 manifest 一致）
+      if (meta.sha256) {
+        const hash = await sha256File(outFile);
+        if (hash !== meta.sha256) { try { fs.unlinkSync(outFile); } catch (e) {} throw new Error('SHA256 校验失败：' + hash.slice(0, 12) + '（分卷可能不完整）'); }
+      }
+      if (size < spec.minSize) throw new Error('下载文件不完整：' + size + ' bytes');
+      if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received: size, total: size, percent: 100, done: true });
+      return { ok: true, path: destDir, size };
+    } catch (e) {
+      if (out) { try { out.destroy(); } catch (_) {} }
+      await new Promise(r => setTimeout(r, 150));
+      if (!_modelPause.has(spec.id) && !_modelCancels.has(spec.id)) { try { fs.unlinkSync(outFile); } catch (_) {} }
+      throw e;
+    }
+  }
+
   ipcMain.handle('model:download', async (evt, id, channel) => {
     const spec = MODEL_REGISTRY[id];
     if (!spec || !spec.downloadable) return { ok: false, error: 'unknown model: ' + id };
@@ -213,6 +288,27 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         _modelCancels.delete(id); _modelPause.delete(id);
       }
     }
+    // GitHub Models 仓库分卷下载（MuScriptor）
+    if (spec.type === 'ghsplit') {
+      const destDir = path.join(modelsDir(), spec.dest);
+      const curSize = fs.existsSync(destDir) ? (() => { try { let s = 0; const walk = (p) => { const st = fs.statSync(p); if (st.isFile()) s += st.size; else for (const f of fs.readdirSync(p)) walk(path.join(p, f)); }; walk(destDir); return s; } catch (e) { return 0; } })() : 0;
+      if (curSize >= spec.minSize) {
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: curSize, total: curSize, percent: 100, done: true });
+        return { ok: true, path: destDir, size: curSize, existed: true };
+      }
+      _modelCancels.delete(id); _modelPause.delete(id);
+      const ctrl = new AbortController(); _modelAborts.set(id, ctrl);
+      try {
+        return await downloadSplitRepo(spec, win, ctrl);
+      } catch (e) {
+        const msg = String((e && e.message) || e);
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, error: msg, canceled: _modelCancels.has(id), paused: _modelPause.has(id) });
+        return { ok: false, error: msg, canceled: _modelCancels.has(id), paused: _modelPause.has(id) };
+      } finally {
+        _modelAborts.delete(id);
+        _modelCancels.delete(id); _modelPause.delete(id);
+      }
+    }
     const dest = path.join(modelsDir(), spec.dest);
     if (fs.existsSync(dest) && fs.statSync(dest).size >= spec.minSize) {
       if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: fs.statSync(dest).size, total: fs.statSync(dest).size, percent: 100, done: true });
@@ -228,7 +324,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     try {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       if (fs.existsSync(tmp)) start = fs.statSync(tmp).size;
-      const headers = { 'user-agent': 'FuFumidi/2.0.0' };
+      const headers = { 'user-agent': 'FuFumidi/3.1.0' };
       if (start > 0) headers['Range'] = 'bytes=' + start + '-';
       const urls = [spec.url, 'https://ghfast.top/' + spec.url, 'https://gh-proxy.com/' + spec.url, 'https://ghproxy.net/' + spec.url];
       let res = null;

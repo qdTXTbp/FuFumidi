@@ -94,6 +94,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   update: {
     list: () => ipcRenderer.invoke('update:list'),
     openExternal: (url) => ipcRenderer.invoke('update:openExternal', url),
+    launchUpdater: () => ipcRenderer.invoke('update:launchUpdater'),
   },
   plugins: {
     list: () => ipcRenderer.invoke('plugins:list'),

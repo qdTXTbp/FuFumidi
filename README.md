@@ -7,7 +7,7 @@ FuFumidi is a fully offline desktop application designed for musicians, arranger
 
 FuFumidi 是一款完全离线的桌面应用，面向音乐人、编曲者和影视配乐师。它将转录、编辑、可视化、乐谱渲染和导出整合为一条轻量工作流。安装后无需联网。
 
-> **当前版本：3.0.0**
+> **当前版本：3.1.0**
 >
 > - 内置 Python 运行时、转录模型、Demucs 人声分离权重
 > - Vue 3 + TypeScript 重构前端

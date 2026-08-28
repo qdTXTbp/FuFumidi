@@ -126,6 +126,11 @@ body {
   pointer-events: none;
   opacity: 0.5;
   background: #000;
+  /* GPU 合成：把视频提升为独立合成层，解码帧直接上传 GPU 纹理，
+     由 GPU 做缩放/裁剪/混合，避免每帧在主线程 CPU 上光栅化 */
+  transform: translateZ(0);
+  will-change: transform;
+  backface-visibility: hidden;
 }
 .app-shell.wallpaper-on .app-main { background: transparent; }
 .app-shell.wallpaper-on { background: transparent; }

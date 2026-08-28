@@ -20,6 +20,8 @@ const DEFAULT_SETTINGS = {
   guide_done: false,
   advanced_mode: false,
   custom_wallpaper: '',
+  wallpaper_prompt_done: false,
+  wallpaper_enabled: false,
   transcribe_params: {},
   plugins_enabled: [],
   lang: 'zh',

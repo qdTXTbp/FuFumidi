@@ -5,6 +5,7 @@ release-base/
 release-ci/
 gpu-package/
 gpu-package.packbak/
+tools/
 *.asar
 *.7z
 *.log

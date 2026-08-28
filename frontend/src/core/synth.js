@@ -276,6 +276,9 @@ export class Synth {
     this.sf2Loading = null;
   }
   async loadSf2() {
+    // 桌面端（Electron）：SF2 实时渲染在 ScriptProcessor 下音色异常，统一使用内置合成器（playVoice）。
+    // 网页端（浏览器）：保留 SoundFont 高质量音色，保证网页端音色不劣化。
+    if (window && window.fuBridge) return false;
     if (this.sf2Ready) return true;
     if (this.sf2Loading) return this.sf2Loading;
     this.sf2Loading = (async () => {
@@ -343,13 +346,13 @@ export class Synth {
       } catch (e) {}
       const delay = Math.max(0, (endTime - this.ctx.currentTime) * 1000);
       const timer = setTimeout(() => { try { this.sf2 && this.sf2.midiNoteOff(ch, note.midi); } catch (e) {} }, delay);
-      this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, endTime, timer, sf2: true, ch });
+      this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, start: time, endTime, timer, sf2: true, ch });
       return;
     }
     const preset = presetFromMode('auto', note.prog, note.isDrum);
     const out = this.trackGains[note.trk];
     playVoice(this.ctx, time, note.midi, note.vel, preset, out, endTime, this.live);
-    this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, endTime });
+    this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, start: time, endTime });
     if (this.activeNotes.length > 3000) this.activeNotes = this.activeNotes.filter(a => a.endTime > this.ctx.currentTime);
     if (this.live.length > 256) this.pruneLive();
   }
@@ -362,12 +365,12 @@ export class Synth {
         this.sf2.midiProgramChange(0, prog);
         this.sf2.midiNoteOn(0, midi, vel);
         const timer = setTimeout(() => { try { this.sf2 && this.sf2.midiNoteOff(0, midi); } catch (e) {} }, dur * 1000);
-        this.activeNotes.push({ midi, trk: 0, endTime: t + dur, timer, sf2: true, ch: 0 });
+        this.activeNotes.push({ midi, trk: 0, start: t, endTime: t + dur, timer, sf2: true, ch: 0 });
       } catch (e) {}
       return;
     }
     playVoice(this.ctx, t, midi, vel, presetForProgram(prog), this.trackGains[0], t + dur, this.live);
-    this.activeNotes.push({ midi, trk: 0, endTime: t + dur });
+    this.activeNotes.push({ midi, trk: 0, start: t, endTime: t + dur });
   }
   pruneLive(limit = 256) {
     const t = this.ctx.currentTime;
@@ -390,6 +393,9 @@ export class Synth {
   }
   activeNow() {
     const t = this.ctx.currentTime;
-    return this.activeNotes.filter(a => a.endTime > t);
+    // start 为空（旧数据）时兼容为「只要还没结束就认为活动」；
+    // 有 start 时只返回「已经开始且未结束」的音符，避免 lookahead 提前 0.18s 预调度
+    // 导致琴键高亮/和弦判断早于实际发声。
+    return this.activeNotes.filter(a => a.endTime > t && (a.start == null || a.start <= t));
   }
 }

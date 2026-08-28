@@ -8,6 +8,8 @@ asarUnpack:
   - "**/*.node"
   - "renderer/dist/wallpapers/**"
   - "renderer/vendor/soundfonts/**"
+  - "renderer/vendor/jssynth/**"
+  - "renderer/dist/vendor/js-synth/**"
 files:
   - "**/*"
   - "!dist/**"
@@ -15,6 +17,10 @@ files:
   - "!release/**"
   - "!build.js"
   - "!electron-builder.yml"
+  # resources/** 与 models/** 由 extraResources 单独分发到 win-unpacked/resources，
+  # 若再打进 app.asar 会重复打包（python 1.3GB / models 160MB），导致体积翻倍
+  - "!resources/**"
+  - "!models/**"
 extraResources:
   - from: "resources/python"
     to: python

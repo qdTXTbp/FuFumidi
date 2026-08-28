@@ -16,7 +16,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
     for (const base of UPDATE_MIRRORS) {
       try {
         const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 12000);
-        const r = await net.fetch(base, { headers: { 'user-agent': 'FuFumidi/2.2.0' }, signal: ctrl.signal });
+        const r = await net.fetch(base, { headers: { 'user-agent': 'FuFumidi/3.1.0' }, signal: ctrl.signal });
         clearTimeout(to);
         if (!r.ok) { lastErr = new Error('HTTP ' + r.status); continue; }
         const d = await r.json();
@@ -61,7 +61,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
     let lastErr = null;
     for (const u of mirrors) {
       try {
-        const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/2.2.0' } });
+        const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.0' } });
         if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
         const total = parseInt(res.headers.get('content-length') || '0', 10) || 0;
         const out = fs.createWriteStream(dest + '.part');
@@ -85,6 +85,19 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
   });
   ipcMain.handle('update:open', async (_e, p) => {
     try { shell.openPath(p); return { ok: true }; } catch (e) { return { ok: false, error: String(e) }; }
+  });
+  // 启动 kachina 更新器（BetterGI 同款增量更新器）：比对文件差异，只下载有改动的部分
+  // 更新器与主程序同目录（便携版内），启动后由更新器完成 结束进程 → 替换 → 重启
+  ipcMain.handle('update:launchUpdater', async (evt) => {
+    try {
+      const updaterDir = app.isPackaged ? path.dirname(process.execPath) : path.join(app.getAppPath(), 'release', 'win-unpacked');
+      const updaterExe = path.join(updaterDir, 'FuFumidi.update.exe');
+      if (!fs.existsSync(updaterExe)) return { ok: false, error: '更新器不存在：' + updaterExe + '（请使用新版便携版 / 重新下载）' };
+      const { spawn } = require('child_process');
+      const cp = spawn(updaterExe, ['-I'], { cwd: updaterDir, detached: true, stdio: 'ignore' });
+      cp.unref();
+      return { ok: true };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 }
 

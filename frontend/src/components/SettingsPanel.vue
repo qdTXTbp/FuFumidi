@@ -192,6 +192,22 @@ async function updOpenDownload() {
     upd.status = '打开失败：' + ((e && e.message) || e);
   }
 }
+// 增量更新器（BetterGI 同款 kachina）：启动更新器，比对文件差异只下载改动部分
+async function updLaunch() {
+  if (!bridge || !bridge.update || !bridge.update.launchUpdater) { upd.status = '当前环境不支持增量更新器'; return; }
+  upd.status = '正在启动更新器…';
+  try {
+    const r = await bridge.update.launchUpdater();
+    if (r && r.ok) {
+      upd.status = '更新器已启动，应用即将退出并更新…';
+      setTimeout(() => { try { window.close(); } catch (e) {} }, 800);
+    } else {
+      upd.status = (r && r.error) || '启动失败';
+    }
+  } catch (e) {
+    upd.status = '启动失败：' + ((e && e.message) || e);
+  }
+}
 function initUpdate() {
   if (!bridge || !bridge.update || !bridge.update.list) return;
   if (upd._init) return;
@@ -743,7 +759,16 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
 
         <!-- ============ 更新 ============ -->
         <div v-else-if="tab === 'update'">
-          <p class="ov-note">{{ t('检查 GitHub 更新，可选择源（国内镜像）和版本，打开浏览器下载安装包。') }}</p>
+          <p class="ov-note">{{ t('增量更新器：自动比对文件差异，只下载有改动的部分。也可手动选择源和版本，打开浏览器下载安装包。') }}</p>
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('增量更新（推荐）') }}</div>
+              <div class="fr-hint">{{ t('启动内置更新器，增量下载并自动替换，完成后重启') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <button class="btn sm primary" @click="updLaunch">{{ t('立即更新') }}</button>
+            </div>
+          </div>
           <div class="field-row">
             <div>
               <div class="fr-label">{{ t('下载源') }}</div>

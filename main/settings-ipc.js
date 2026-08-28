@@ -3,6 +3,8 @@
 // ============================================================
 'use strict';
 
+const { DEFAULT_SETTINGS } = require('./settings');
+
 function registerSettingsIpc({ ipcMain, readSettings, writeSettings, db }) {
   // 设置（深合并嵌套键 + 原子写入）
   ipcMain.handle('settings:load', async () => {
@@ -11,8 +13,10 @@ function registerSettingsIpc({ ipcMain, readSettings, writeSettings, db }) {
       try {
         const sqliteSettings = await db.kvGet('settings');
         if (sqliteSettings && typeof sqliteSettings === 'object') {
-          // 以 SQLite 为准（settings.json 作为旧备份/降级）
-          return sqliteSettings;
+          // SQLite 优先，但必须与 DEFAULT_SETTINGS / settings.json 合并，
+          // 否则旧快照缺失的默认字段（如 wallpaper_prompt_done）会变成 undefined，
+          // 导致「是否首次启动」等判断失效。
+          return { ...DEFAULT_SETTINGS, ...fileSettings, ...sqliteSettings };
         }
       } catch (e) {}
       // 首次迁移：把 settings.json 写入 SQLite
@@ -32,7 +36,8 @@ function registerSettingsIpc({ ipcMain, readSettings, writeSettings, db }) {
     if (db && typeof db.kvSet === 'function') {
       try { await db.kvSet('settings', merged); } catch (e) {}
     }
-    return readSettings();
+    // 返回 { ok } 让前端 store 能正确回写内存，而不是返回裸 settings 对象（r.ok 恒为 undefined）
+    return { ok: true, settings: readSettings() };
   });
 
   // MIDI 文件关联开关（默认开）：通过 HKCU 注册表覆盖 .mid/.midi 的默认打开程序。

@@ -52,6 +52,16 @@ const { pyLit, parsePyJson } = require('./main/py-util');
 const APP_ID = 'com.fufumidi.app';
 app.setAppUserModelId(APP_ID);
 
+// ---------- GPU 加速开关（须在 app ready 前设置）----------
+// 动态壁纸等全屏视频渲染：启用硬件视频解码 + GPU 光栅化 + 零拷贝，
+// 把解码/合成从 CPU 主线程卸载到 GPU，降低 CPU 占用。
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+app.commandLine.appendSwitch('enable-zero-copy');
+app.commandLine.appendSwitch('enable-accelerated-video-decode');
+app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport,HardwareMediaKeyHandling');
+// 视情况启用 angle 后端
+app.commandLine.appendSwitch('use-angle', 'default');
+
 const isDev = !app.isPackaged;
 
 // ---------- 单实例锁：保证双击 .mid 打开进同一个窗口 ----------

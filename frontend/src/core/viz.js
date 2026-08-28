@@ -80,10 +80,12 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
   for (let e = 0; e <= 52; e++) if ((e - 2) % 7 === 0) { const tt = Math.floor(e * g); ctx.beginPath(); ctx.moveTo(tt, 0); ctx.lineTo(tt, wN); ctx.stroke(); }
   const M = Math.floor(j / 120), S = Math.floor((j + wN) / 120) + 1;
   ctx.font = '10px system-ui, sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  // 滚动小节线：音符竖直下落，小节线应为水平线随音符一同向下滚动（1 像素 = 1 tick）
   for (let e = M; e <= S; e++) {
-    const tt = Math.floor(wN - (120 * e - j));
-    if (tt < 0 || tt > wN) continue;
-    ctx.strokeStyle = gridStrong; ctx.beginPath(); ctx.moveTo(tt, 0); ctx.lineTo(tt, wN); ctx.stroke();
+    const ty = Math.floor(wN - (120 * e - j));
+    if (ty < -20 || ty > wN + 20) continue;
+    ctx.strokeStyle = gridStrong; ctx.beginPath(); ctx.moveTo(30, ty); ctx.lineTo(w, ty); ctx.stroke();
+    if (e > 0) { ctx.fillStyle = gridStrong; ctx.fillText(String(e), 24, ty); }
   }
   const E = new Map();
   const blocks = state.blocks || [];
