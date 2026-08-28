@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // 主进程文件/对话框服务：原生选择器、目录扫描与二进制读写
 // ============================================================
 'use strict';
@@ -59,6 +59,14 @@ function registerDialogsIpc({ ipcMain, dialog, path, fs, app }) {
   });
   ipcMain.handle('dialog:pickDirectory', async () => {
     const r = await dialog.showOpenDialog({ properties: ['openDirectory'] });
+    return r.canceled ? null : r.filePaths[0];
+  });
+  // 模型本地压缩包导入（.zip / .7z / .tar）
+  ipcMain.handle('dialog:pickModelArchive', async () => {
+    const r = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      filters: [{ name: '模型压缩包', extensions: ['zip', '7z', 'tar', 'gz', 'tgz', 'tar.gz', 'txz'] }],
+    });
     return r.canceled ? null : r.filePaths[0];
   });
   // 内置 SoundFont 列表（随应用分发，用户直接选择，无需加载外部文件）

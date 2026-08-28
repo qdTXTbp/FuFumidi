@@ -3,6 +3,9 @@
 // ============================================================
 'use strict';
 
+const { spawn } = require('child_process');
+const AdmZip = require('adm-zip');
+
 function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, demucsModelFile, sha256File, readSettings }) {
   const _folderWatchers = new Map();
 
@@ -119,6 +122,122 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       fs.unlinkSync(p);
       return { ok: true };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
+  // 本地模型压缩包导入：自动识别 MuScriptor Small/Medium/Large、Aria-AMT、钢琴模型等
+  const MODEL_DEST_MATCHERS = [
+    { re: /muscriptor[\\/]small[\\/]/i, dest: 'muscriptor/small' },
+    { re: /muscriptor[\\/]medium[\\/]/i, dest: 'muscriptor/medium' },
+    { re: /muscriptor[\\/]large[\\/]/i, dest: 'muscriptor/large' },
+    { re: /aria_amt[\\/]/i, dest: 'aria_amt' },
+    { re: /piano_transcription[\\/]/i, dest: 'piano_transcription' },
+  ];
+  function walkFiles(dir, out = []) {
+    for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, f.name);
+      if (f.isDirectory()) walkFiles(p, out);
+      else out.push(p);
+    }
+    return out;
+  }
+  function extractLocalArchive(file, outDir) {
+    const ext = path.extname(file).toLowerCase();
+    if (ext === '.zip') {
+      const zip = new AdmZip(file);
+      zip.extractAllTo(outDir, true);
+      return;
+    }
+    if (ext === '.7z') {
+      const exe = (() => { try { return process.env.SEVENZIP || '7z'; } catch (e) { return '7z'; } })();
+      return new Promise((resolve, reject) => {
+        const p = spawn(exe, ['x', '-y', '-o' + outDir, file], { stdio: 'ignore', windowsHide: true });
+        p.on('error', reject);
+        p.on('close', code => code === 0 ? resolve() : reject(new Error('7z 解压失败，请确认系统已安装 7-Zip 或在 PATH 中')));
+      });
+    }
+    if (ext === '.tar' || ext === '.gz' || ext === '.tgz' || ext === '.tar.gz' || ext === '.txz' || ext === '.tar.xz') {
+      const args = ext === '.gz' || ext === '.tgz' || ext === '.tar.gz'
+        ? ['-xzf', file, '-C', outDir]
+        : ['-xf', file, '-C', outDir];
+      return new Promise((resolve, reject) => {
+        const p = spawn('tar', args, { stdio: 'ignore', windowsHide: true });
+        p.on('error', reject);
+        p.on('close', code => code === 0 ? resolve() : reject(new Error('tar 解压失败')));
+      });
+    }
+    throw new Error('仅支持 .zip / .7z / .tar / .tar.gz 模型压缩包');
+  }
+  function detectModelDest(extractedDir, archiveName) {
+    const files = walkFiles(extractedDir);
+    for (const m of MODEL_DEST_MATCHERS) {
+      if (files.some(f => m.re.test(f))) return m.dest;
+    }
+    const n = String(archiveName || '').toLowerCase();
+    if (n.includes('muscriptor_small') || n.includes('muscriptor-small') || n.includes('muscriptor small')) return 'muscriptor/small';
+    if (n.includes('muscriptor_medium') || n.includes('muscriptor-medium') || n.includes('muscriptor medium')) return 'muscriptor/medium';
+    if (n.includes('muscriptor_large') || n.includes('muscriptor-large') || n.includes('muscriptor large')) return 'muscriptor/large';
+    if (n.includes('aria_amt')) return 'aria_amt';
+    if (n.includes('piano_transcription') || n.includes('piano transcription')) return 'piano_transcription';
+    return null;
+  }
+  function findModelSourceDir(root, dest) {
+    const parts = dest.split('/');
+    const last = parts[parts.length - 1];
+    const dirs = [];
+    const walk = (dir) => {
+      for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!f.isDirectory()) continue;
+        const p = path.join(dir, f.name);
+        dirs.push(p);
+        walk(p);
+      }
+    };
+    walk(root);
+    // 优先匹配完整路径（muscriptor/small 等）；退而求其次匹配目录名
+    for (const d of dirs) {
+      const rel = path.relative(root, d).split(path.sep).join('/');
+      if (rel.toLowerCase() === dest.toLowerCase()) return d;
+    }
+    for (const d of dirs) {
+      if (path.basename(d).toLowerCase() === last.toLowerCase() && d.toLowerCase().includes(parts[0].toLowerCase())) return d;
+    }
+    for (const d of dirs) {
+      if (path.basename(d).toLowerCase() === last.toLowerCase()) return d;
+    }
+    return root;
+  }
+  ipcMain.handle('model:importLocal', async (_e, filePath) => {
+    try {
+      if (!filePath || !fs.existsSync(filePath)) return { ok: false, error: '压缩包不存在' };
+      const ext = path.extname(filePath).toLowerCase();
+      if (!['.zip', '.7z', '.tar', '.gz', '.tgz', '.tar.gz', '.txz', '.tar.xz'].includes(ext)) return { ok: false, error: '不支持的压缩包格式' };
+      const tmp = path.join(app.getPath('temp'), 'fufumidi-model-import-' + Date.now());
+      fs.mkdirSync(tmp, { recursive: true });
+      try {
+        await extractLocalArchive(filePath, tmp);
+        const dest = detectModelDest(tmp, path.basename(filePath));
+        if (!dest) return { ok: false, error: '无法识别压缩包中的模型类型（MuScriptor / Aria-AMT / 钢琴模型）' };
+        const srcDir = findModelSourceDir(tmp, dest);
+        const destDir = path.join(modelsDir(), dest);
+        fs.mkdirSync(destDir, { recursive: true });
+        fs.rmSync(destDir, { recursive: true, force: true });
+        fs.mkdirSync(destDir, { recursive: true });
+        // 复制模型文件（不含隐藏文件/临时解压目录）
+        const files = walkFiles(srcDir);
+        let totalSize = 0;
+        for (const f of files) {
+          const rel = path.relative(srcDir, f);
+          const out = path.join(destDir, rel);
+          fs.mkdirSync(path.dirname(out), { recursive: true });
+          fs.copyFileSync(f, out);
+          totalSize += fs.statSync(out).size;
+        }
+        return { ok: true, path: destDir, size: totalSize, model: dest };
+      } finally {
+        try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) {}
+      }
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
   });
   ipcMain.handle('folder:setWatch', (_e, dir, enabled) => {
     try {

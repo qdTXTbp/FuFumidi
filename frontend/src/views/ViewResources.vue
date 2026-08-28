@@ -208,6 +208,23 @@ function downloadModel(m) {
     toast(t('下载失败：') + String((e && e.message) || e), 'error');
   });
 }
+async function importLocalModel() {
+  if (!bridge || !bridge.pickModelArchive || !bridge.modelImportLocal) { toast(t('当前环境不支持导入本地模型'), 'warn'); return; }
+  try {
+    const p = await bridge.pickModelArchive();
+    if (!p) return;
+    toast(t('正在导入本地模型压缩包…'), 'info');
+    const r = await bridge.modelImportLocal(p);
+    if (r && r.ok) {
+      toast(t('已导入模型：') + r.model + '（' + fmtSize(r.size) + '）', 'ok');
+      refreshModels();
+    } else {
+      toast(t('导入失败：') + ((r && r.error) || ''), 'error');
+    }
+  } catch (e) {
+    toast(t('导入失败：') + String((e && e.message) || e), 'error');
+  }
+}
 function fmtSize(b) {
   if (!b) return '—';
   if (b > 1 << 30) return (b / (1 << 30)).toFixed(1) + ' GB';
@@ -365,6 +382,7 @@ onMounted(() => {
           </div>
           <div class="state-box" v-else>{{ t('暂无模型信息') }}</div>
           <button class="btn sm" @click="refreshModels">{{ t('刷新模型清单') }}</button>
+          <button class="btn sm primary" @click="importLocalModel" style="margin-left:8px">{{ t('导入本地模型压缩包') }}</button>
         </div>
       </div>
     </div>
