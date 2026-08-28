@@ -13,6 +13,12 @@ files:
   - "!release/**"
   - "!build.js"
   - "!electron-builder.yml"
+  - "!resources/**"
+  - "!models/**"
+  - "!frontend/node_modules/**"
+  - "!node_modules/electron/**"
+  - "!node_modules/electron-builder/**"
+  - "!node_modules/.cache/**"
 extraResources:
   - from: "E:/Midi/FuFumidi/resources/python"
     to: python

@@ -55,10 +55,12 @@ contextBridge.exposeInMainWorld('fuBridge', {
 
   depInstall: (group) => ipcRenderer.invoke('dep:install', group),
 
-  modelDownload: (id) => ipcRenderer.invoke('model:download', id),
+  modelDownload: (id, channel) => ipcRenderer.invoke('model:download', id, channel),
   modelCancel: (id) => ipcRenderer.invoke('model:cancel', id),
   modelPause: (id) => ipcRenderer.invoke('model:pause', id),
   modelDelete: (id) => ipcRenderer.invoke('model:delete', id),
+  modelImportLocal: (p) => ipcRenderer.invoke('model:importLocal', p),
+  pickModelArchive: () => ipcRenderer.invoke('dialog:pickModelArchive'),
   setFolderWatch: (dir, enabled) => ipcRenderer.invoke('folder:setWatch', dir, enabled),
   onFolderWatch: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('folder-watch:file', w); return () => ipcRenderer.removeListener('folder-watch:file', w); },
   onModelProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('model:progress', w); return () => ipcRenderer.removeListener('model:progress', w); },
@@ -116,6 +118,11 @@ contextBridge.exposeInMainWorld('fuBridge', {
       const listener = (_e, p) => cb(p);
       ipcRenderer.on('wallpaper:addLocalProgress', listener);
       return () => ipcRenderer.removeListener('wallpaper:addLocalProgress', listener);
+    },
+    onDownloadProgress: (cb) => {
+      const listener = (_e, p) => cb(p);
+      ipcRenderer.on('wallpaper:downloadProgress', listener);
+      return () => ipcRenderer.removeListener('wallpaper:downloadProgress', listener);
     },
     removeLocal: (name) => ipcRenderer.invoke('wallpaper:removeLocal', name),
   },

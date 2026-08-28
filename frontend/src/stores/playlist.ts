@@ -65,20 +65,27 @@ export const usePlaylistStore = defineStore('playlist', {
       for (const p of this.playlists) dbPlaylistPut(p);
     },
     async hydrateFromDb() {
+      const local = this.playlists.slice();
       const db = await dbPlaylistsAll();
-      if (!db.length) {
-        // 首次从 localStorage 迁移到 SQLite
-        for (const p of this.playlists) dbPlaylistPut(p);
-        return false;
+      const byId = new Map<string, Playlist>();
+      for (const p of (db || [])) byId.set(p.id, p);
+      // 合并：保留 SQLite 已有歌单，同时补入 localStorage 中尚未写入 SQLite 的歌单，
+      // 避免 SQLite 只有默认歌单时把用户新建歌单覆盖丢失。
+      for (const p of local) {
+        if (!byId.has(p.id)) {
+          byId.set(p.id, p);
+          dbPlaylistPut(p);
+        }
       }
-      this.playlists = db;
-      if (!db.some(p => p.id === this.activePlaylistId)) {
-        const def = db.find(p => p.id === 'default');
-        this.activePlaylistId = def ? def.id : (db[0]?.id || 'default');
+      const merged = Array.from(byId.values());
+      this.playlists = merged.length ? merged : [{ id: 'default', name: t('默认歌单'), songIds: [] }];
+      if (!this.playlists.some(p => p.id === this.activePlaylistId)) {
+        const def = this.playlists.find(p => p.id === 'default');
+        this.activePlaylistId = def ? def.id : (this.playlists[0]?.id || 'default');
         try { localStorage.setItem(LS_ACTIVE, this.activePlaylistId); } catch (e) {}
       }
       this.persist();
-      return true;
+      return db.length > 0;
     },
     create(name: string) {
       const id = 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);

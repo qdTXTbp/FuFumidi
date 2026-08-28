@@ -401,16 +401,18 @@ onMounted(hydrateFavs);
 
     </div>
 
-    <div v-if="playlistNameOpen" class="side-modal-mask" @click.self="playlistNameOpen = false">
-      <div class="side-modal">
-        <b>{{ t('新建歌单') }}</b>
-        <input v-model="playlistName" class="text-input" :placeholder="t('歌单名称')" @keydown.enter="confirmNewPlaylist" autofocus />
-        <div class="row" style="gap:8px;justify-content:flex-end">
-          <button class="btn sm ghost" @click="playlistNameOpen = false">{{ t('取消') }}</button>
-          <button class="btn sm primary" @click="confirmNewPlaylist">{{ t('确定') }}</button>
+    <Teleport to="body">
+      <div v-if="playlistNameOpen" class="side-modal-mask" @click.self="playlistNameOpen = false">
+        <div class="side-modal">
+          <b>{{ t('新建歌单') }}</b>
+          <input v-model="playlistName" class="text-input" :placeholder="t('歌单名称')" @keydown.enter="confirmNewPlaylist" autofocus />
+          <div class="row" style="gap:8px;justify-content:flex-end">
+            <button class="btn sm ghost" @click="playlistNameOpen = false">{{ t('取消') }}</button>
+            <button class="btn sm primary" @click="confirmNewPlaylist">{{ t('确定') }}</button>
+          </div>
         </div>
       </div>
-    </div>
+    </Teleport>
     <div style="padding:10px 14px;border-top:1px solid var(--border)" class="small muted row">
       <span class="tag">v3.0.0</span>
       <span style="margin-left:auto">{{ t('离线 · Vue 3') }}</span>

@@ -6,6 +6,7 @@
 
 const LS_THEME = 'fufumidi_theme';
 const LS_ACCENT = 'fufumidi_accent';
+const LS_MODE = 'fufumidi_mode';
 
 export const THEMES = [
   { id: 'fufu',    name: '芙芙蓝', desc: '芙宁娜 · 蔚蓝深海',   accent: '#4f94e0', accent2: '#8fc0f0', hue: 213 },
@@ -52,26 +53,30 @@ export function paletteFromAccent(accentHex, hue) {
 }
 
 // 应用主题：把调色板写成 CSS 变量（含原令牌里的强调色族）——纯应用，不做持久化
-export function applyTheme(name, accent) {
+// mode：'light' 浅色基底 / 'dark' 深色基底；默认浅色（明亮浅色，接近经典版观感）
+export function applyTheme(name, accent, mode) {
   if (typeof document === 'undefined') return;
   const t = themeById(name);
   const R = document.documentElement.style;
   const a = accent || t.accent;
+  const lightMode = (mode || 'light') === 'light';
   let pal;
-  if (name === 'light') {
-    pal = {
-      accent: a, accent2: '#4f94e0', 'accent-dim': 'rgba(58,122,217,.15)',
-      bg0: '#f4f7fb', bg1: '#ffffff', bg2: '#eef2f7', panel: '#ffffff', panel2: '#eef2f7',
-      card: '#ffffff', card2: '#e8edf4', border: '#cfd9e6', border2: '#b8c4d4',
-      text: '#0f172a', text2: '#334155', text3: '#64748b',
-      'brand-blue-mid': '#3b82f6', 'brand-blue-deep': '#1d4ed8', 'brand-blue-700': '#17437d', 'brand-blue-200': '#bfdbfe',
-    };
-  } else if (name === 'hc') {
+  if (name === 'hc') {
     pal = {
       accent: a, accent2: '#66ffdd', 'accent-dim': 'rgba(0,255,204,.2)',
       bg0: '#000000', bg1: '#0a0a0a', bg2: '#111111', panel: '#151515', panel2: '#111111',
       card: '#1c1c1c', card2: '#262626', border: '#4a4a4a', border2: '#6b6b6b',
       text: '#ffffff', text2: '#f1f5f9', text3: '#cbd5e1',
+      'brand-blue-mid': '#3b82f6', 'brand-blue-deep': '#1d4ed8', 'brand-blue-700': '#17437d', 'brand-blue-200': '#bfdbfe',
+    };
+  } else if (lightMode) {
+    // 浅色基底 + 任意主题强调色（明亮浅色，适合白天 / 经典浅色观感）
+    const h = t.hue;
+    pal = {
+      accent: a, accent2: hsl(h, 85, 74), 'accent-dim': `hsla(${h}, 70%, 60%, 0.16)`,
+      bg0: '#f4f7fb', bg1: '#ffffff', bg2: '#eef2f7', panel: '#ffffff', panel2: '#eef2f7',
+      card: '#ffffff', card2: '#e8edf4', border: '#dbe3ee', border2: '#c9d4e2',
+      text: '#0f172a', text2: '#334155', text3: '#64748b',
       'brand-blue-mid': '#3b82f6', 'brand-blue-deep': '#1d4ed8', 'brand-blue-700': '#17437d', 'brand-blue-200': '#bfdbfe',
     };
   } else {
@@ -96,7 +101,7 @@ export function applyTheme(name, accent) {
   R.setProperty('--hairline', pal.border);
   R.setProperty('--border-strong', pal.border2);
   R.setProperty('--ink', pal.text);
-  R.setProperty('--ink-strong', name === 'light' ? '#000000' : '#ffffff');
+  R.setProperty('--ink-strong', (name === 'hc' || (!lightMode && name !== 'light')) ? '#ffffff' : '#000000');
   R.setProperty('--charcoal', pal.text);
   R.setProperty('--slate', pal.text2);
   R.setProperty('--steel', pal.text2);
@@ -104,8 +109,8 @@ export function applyTheme(name, accent) {
   R.setProperty('--muted', pal.text3);
   R.setProperty('--footer-bg', pal.bg1);
 
-  // 按钮/激活态专用：在浅色主题用黑色底白字，在深色主题用白色底深字
-  const dark = name !== 'light';
+  // 按钮/激活态专用：浅色模式黑底白字，深色模式白底深字
+  const dark = name === 'hc' || (!lightMode && name !== 'light');
 
   // 毛玻璃令牌：跟随明暗主题（深色用暗色玻璃，浅色用白色玻璃）
   R.setProperty('--glass-bg', dark ? 'rgba(20,22,28,0.55)' : 'rgba(255,255,255,0.62)');
@@ -128,23 +133,40 @@ export function applyTheme(name, accent) {
 }
 
 // 应用 + 持久化（localStorage 优先 + Electron settings 兜底）
-export function saveTheme(name, accent) {
-  applyTheme(name, accent);
+export function saveTheme(name, accent, mode) {
+  applyTheme(name, accent, mode);
   try {
     localStorage.setItem(LS_THEME, name);
     if (accent) localStorage.setItem(LS_ACCENT, accent);
     else localStorage.removeItem(LS_ACCENT);
+    if (mode) localStorage.setItem(LS_MODE, mode);
   } catch (e) {}
   if (window.fuBridge && typeof window.fuBridge.saveSettings === 'function') {
-    window.fuBridge.saveSettings({ theme: name, accent: accent || '' }).catch(() => {});
+    window.fuBridge.saveSettings({ theme: name, accent: accent || '', ui_mode: mode || loadMode() }).catch(() => {});
   }
 }
 
 // 读取当前主题（localStorage 优先，作为启动防闪烁的第一来源）
 export function loadTheme() {
-  let name = 'fufu', accent = '';
-  try { name = localStorage.getItem(LS_THEME) || 'fufu'; accent = localStorage.getItem(LS_ACCENT) || ''; } catch (e) {}
-  return { name, accent };
+  let name = 'fufu', accent = '', mode = 'light';
+  try { name = localStorage.getItem(LS_THEME) || 'fufu'; accent = localStorage.getItem(LS_ACCENT) || ''; mode = localStorage.getItem(LS_MODE) || 'light'; } catch (e) {}
+  return { name, accent, mode };
+}
+
+// 读取界面明暗模式（默认浅色）
+export function loadMode() {
+  try { return localStorage.getItem(LS_MODE) === 'dark' ? 'dark' : 'light'; } catch (e) { return 'light'; }
+}
+// 切换明暗模式：应用 + 持久化
+export function setMode(mode) {
+  const m = mode === 'dark' ? 'dark' : 'light';
+  try { localStorage.setItem(LS_MODE, m); } catch (e) {}
+  const { name, accent } = loadTheme();
+  applyTheme(name, accent, m);
+  if (window.fuBridge && typeof window.fuBridge.saveSettings === 'function') {
+    window.fuBridge.saveSettings({ ui_mode: m }).catch(() => {});
+  }
+  return m;
 }
 
 // 内置主题预览条色块

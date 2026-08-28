@@ -48,6 +48,21 @@ function packAsar(outName) {
     if (fs.existsSync(rustTargetBak)) fs.rmSync(rustTargetBak, { recursive: true, force: true });
     fs.renameSync(rustTarget, rustTargetBak);
   }
+  // electron-builder 构建产物（release/）可能包含数 GB 的 win-unpacked，绝不能进入 app.asar
+  const releaseDir = path.join(root, 'release');
+  const releaseBak = path.join(path.dirname(root), 'release.packbak');
+  const hadRelease = fs.existsSync(releaseDir);
+  if (hadRelease) {
+    if (fs.existsSync(releaseBak)) fs.rmSync(releaseBak, { recursive: true, force: true });
+    fs.renameSync(releaseDir, releaseBak);
+  }
+  const releaseBase = path.join(root, 'release-base');
+  const releaseBaseBak = path.join(path.dirname(root), 'release-base.packbak');
+  const hadReleaseBase = fs.existsSync(releaseBase);
+  if (hadReleaseBase) {
+    if (fs.existsSync(releaseBaseBak)) fs.rmSync(releaseBaseBak, { recursive: true, force: true });
+    fs.renameSync(releaseBase, releaseBaseBak);
+  }
   try {
     if (fs.existsSync(out)) fs.unlinkSync(out);
     console.log('[pack] ' + out);
@@ -58,6 +73,8 @@ function packAsar(outName) {
     if (hadFeNode && fs.existsSync(feNodeBak)) { try { fs.renameSync(feNodeBak, feNodeModules); } catch (_) {} }
     if (hadRust && fs.existsSync(rustBak)) { try { fs.renameSync(rustBak, rustCore); } catch (_) {} }
     if (hadRustTarget && fs.existsSync(rustTargetBak)) { try { fs.renameSync(rustTargetBak, rustTarget); } catch (_) {} }
+    if (hadRelease && fs.existsSync(releaseBak)) { try { fs.renameSync(releaseBak, releaseDir); } catch (_) {} }
+    if (hadReleaseBase && fs.existsSync(releaseBaseBak)) { try { fs.renameSync(releaseBaseBak, releaseBase); } catch (_) {} }
     console.error(e.message);
     process.exit(1);
   }
@@ -65,6 +82,8 @@ function packAsar(outName) {
   if (hadFeNode && fs.existsSync(feNodeBak)) { try { fs.renameSync(feNodeBak, feNodeModules); } catch (_) {} }
   if (hadRust && fs.existsSync(rustBak)) { try { fs.renameSync(rustBak, rustCore); } catch (_) {} }
   if (hadRustTarget && fs.existsSync(rustTargetBak)) { try { fs.renameSync(rustTargetBak, rustTarget); } catch (_) {} }
+  if (hadRelease && fs.existsSync(releaseBak)) { try { fs.renameSync(releaseBak, releaseDir); } catch (_) {} }
+  if (hadReleaseBase && fs.existsSync(releaseBaseBak)) { try { fs.renameSync(releaseBaseBak, releaseBase); } catch (_) {} }
 }
 
 if (mode === 'full') {
