@@ -366,10 +366,13 @@ async function renderVideo() {
     VE.veProgress = 10;
     const wavBytes = await audioBufferToWavBytesAsync(buf, (p) => { VE.veProgress = Math.min(100, 10 + Math.round(p * 10)); });
     VE.veStage = t('后台录制中（可继续使用应用）…');
-    // 2) 离屏画布录制
+    // 2) 离屏画布录制：必须挂载到 DOM 并移出视口，让 canvas 进入合成器管线，
+    //    否则 MediaRecorder 抓不到已 GPU 加速的离屏画布内容 → 视频黑屏（且无需 CUDA/硬件加速）
     const cv = document.createElement('canvas');
     const dpr = 1;
     cv.width = W; cv.height = H;
+    cv.style.cssText = 'position:fixed;left:-100000px;top:0;width:' + W + 'px;height:' + H + 'px;z-index:-1;pointer-events:none;';
+    document.body.appendChild(cv);
     const ctx = cv.getContext('2d');
     const fps = VE.fps || 30;
     let sec = VE.durMode === 'custom' ? Math.max(1, VE.durCustom || 30) : Math.max(1, s.totalSec || VE.durCustom || 30);
@@ -438,7 +441,11 @@ async function renderVideo() {
     VE.veStage = t('完成');
   } catch (e) {
     toast(t('视频导出失败：') + String(e.message || e), 'warn');
-  } finally { if (VE.veTimer) { clearInterval(VE.veTimer); VE.veTimer = null; } VE.veBusy = false; }
+  } finally {
+    if (VE.veTimer) { clearInterval(VE.veTimer); VE.veTimer = null; }
+    try { if (cv && cv.remove) cv.remove(); } catch (e) {}
+    VE.veBusy = false;
+  }
 }
 </script>
 

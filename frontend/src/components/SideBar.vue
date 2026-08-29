@@ -10,7 +10,7 @@ import { fmtTime } from '../core/util.js';
 
 const app = useAppStore();
 const state = app;
-const appVersion = ref('v3.1.5');
+const appVersion = ref('v3.1.6');
 getAppVersion().then(v => { appVersion.value = v; });
 const importFiles = (items) => app.importFiles(items);
 const selectSong = (id) => app.selectSong(id);

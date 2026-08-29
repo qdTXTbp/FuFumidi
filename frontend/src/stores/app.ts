@@ -327,22 +327,24 @@ export const useAppStore = defineStore('app', {
       const item = this.songs.find((s: any) => s.id === id);
       if (!item) return;
       if (!item.song) {
-        let rec = null;
-        if (item.__bytes) rec = { bytes: item.__bytes };
-        else rec = await idbGet(STORE_SONGS, id);
-        if (!rec) {
-          const all = await dbSongsAll();
-          rec = all.find((x: any) => x.id === id) || null;
-        }
-        if (rec && rec.bytes) {
+        let lastErr = null;
+        const tryParse = (bytes: any): boolean => {
           try {
-            const mid = parseMidi(Array.isArray(rec.bytes) ? new Uint8Array(rec.bytes) : rec.bytes);
+            const b = Array.isArray(bytes) ? new Uint8Array(bytes) : bytes;
+            const mid = parseMidi(b);
             item.song = buildSong(mid, { name: item.name });
             item.meta.tracks = item.song.tracks.length;
-          } catch (e: any) {
-            this.toast(t('无法解析已保存的 MIDI：') + e.message, 'warn');
-          }
-        }
+            return true;
+          } catch (e: any) { lastErr = e; return false; }
+        };
+        // 1) 内存中的字节缓冲（本会话导入时缓存）
+        //    解析失败说明该缓冲损坏（如 SQLite 大文件字节数组异常），清掉避免下次再用坏缓存
+        if (item.__bytes && !tryParse(item.__bytes)) item.__bytes = null;
+        // 2) IndexedDB 原生字节（最可靠，转录/导入时原生 Uint8Array 无损存储）
+        if (!item.song) { const r = await idbGet(STORE_SONGS, id); if (r && r.bytes) tryParse(r.bytes); }
+        // 3) SQLite 字节（兜底，JSON 数字数组对较大 MIDI 可能丢失）
+        if (!item.song) { const all = await dbSongsAll(); const r = all.find((x: any) => x.id === id); if (r && r.bytes) tryParse(r.bytes); }
+        if (!item.song) this.toast(t('无法解析已保存的 MIDI：') + (lastErr && lastErr.message || ''), 'warn');
       }
       if (!item.song) return;
       try { localStorage.setItem('fufumidi_active', id); } catch (e) {}
