@@ -44,20 +44,25 @@ const estSize = computed(() => {
 
 /* ---------------- 渲染 ---------------- */
 // 核心：离线渲染整曲音频 → AudioBuffer（视频导出复用）
+// opts.startSec / opts.endSec：按导出范围切片渲染（时间轴归一化到片段起点），
+// 避免整曲渲染后被 -shortest 硬截断导致音乐「被切断/听感变快」
 async function renderAudioBuffer(s, opts) {
   const sr = opts.rate || 44100;
   const scale = opts.scale || 1;
-  const totalSec = s.totalSec / scale;
+  const startSec = Math.max(0, opts.startSec || 0);
+  const endSec = opts.endSec != null ? opts.endSec : (s.totalSec / scale);
+  const segLen = Math.max(0, endSec - startSec);
   const TAIL = 1.5;
-  const totalLen = Math.max(1, Math.ceil((totalSec + TAIL) * sr));
+  const totalLen = Math.max(1, Math.ceil((segLen + TAIL) * sr));
   const notes = [];
   for (const tr of s.tracks) {
     const presetName = presetFromMode(opts.mode || 'auto', tr.program, tr.isDrum);
     for (const n of tr.notes) {
-      const t = s.baseSec(n.start) / scale;
-      const e = s.baseSec(n.end) / scale;
-      if (e <= t) continue;
-      notes.push({ t, e, midi: n.midi, vel: n.vel, preset: presetName, trk: tr.index });
+      const t0 = s.baseSec(n.start) / scale - startSec;
+      const e0 = s.baseSec(n.end) / scale - startSec;
+      if (e0 <= 0 || t0 >= segLen + TAIL) continue; // 与片段无交集
+      if (e0 <= t0) continue;
+      notes.push({ t: Math.max(0, t0), e: e0, midi: n.midi, vel: n.vel, preset: presetName, trk: tr.index });
     }
   }
   notes.sort((a, b) => a.t - b.t);
@@ -361,8 +366,16 @@ async function renderVideo() {
     if (VE.template === 'portrait') { W = 720; H = 1280; }
     else if (VE.template === 'subtitle') { W = 1280; H = 800; }
     if (!W || !H) { W = 1280; H = 720; }
-    // 1) 离线渲染音频
-    const buf = await renderAudioBuffer(s, { rate: 44100, scale: 1, mode: preset.value });
+    // 视频时长与起始（需在音频切片渲染前确定）
+    const fps = VE.fps || 30;
+    let sec = VE.durMode === 'custom' ? Math.max(1, VE.durCustom || 30) : Math.max(1, s.totalSec || VE.durCustom || 30);
+    if (sec === 0) sec = Math.min(s.totalSec, 120);
+    if (VE.range === 'custom') sec = Math.max(1, VE.end - VE.start);
+    sec = Math.min(sec, s.totalSec || sec);
+    const startSec = VE.range === 'custom' ? (VE.start || 0) : 0;
+    // 1) 离线渲染音频：按导出范围切片（[startSec, startSec+sec] 归一化），
+    //    与视频长度严格一致，避免整曲渲染后 -shortest 截断导致音乐「被切断/变快」
+    const buf = await renderAudioBuffer(s, { rate: 44100, scale: 1, mode: preset.value, startSec, endSec: startSec + sec });
     VE.veProgress = 10;
     const wavBytes = await audioBufferToWavBytesAsync(buf, (p) => { VE.veProgress = Math.min(100, 10 + Math.round(p * 10)); });
     VE.veStage = t('后台录制中（可继续使用应用）…');
@@ -374,12 +387,6 @@ async function renderVideo() {
     cv.style.cssText = 'position:fixed;left:-100000px;top:0;width:' + W + 'px;height:' + H + 'px;z-index:-1;pointer-events:none;';
     document.body.appendChild(cv);
     const ctx = cv.getContext('2d');
-    const fps = VE.fps || 30;
-    let sec = VE.durMode === 'custom' ? Math.max(1, VE.durCustom || 30) : Math.max(1, s.totalSec || VE.durCustom || 30);
-    if (sec === 0) sec = Math.min(s.totalSec, 120);
-    if (VE.range === 'custom') sec = Math.max(1, VE.end - VE.start);
-    sec = Math.min(sec, s.totalSec || sec);
-    let startSec = VE.range === 'custom' ? (VE.start || 0) : 0;
     const stream = cv.captureStream(fps);
     const bitrate = VE.quality === 'low' ? 4e6 : VE.quality === 'high' ? 16e6 : (VE.quality === 'custom' ? (VE.bitrate * 1e6) : 8e6);
     // 自动尝试多种编码/码率，避免单一种类不支持导致导出失败
@@ -417,6 +424,7 @@ async function renderVideo() {
         const el = (nowMs - start) / 1000;
         const tick = s.secToTick(Math.min(startSec + el, Math.max(0.001, s.totalSec - 0.001)));
         const vf = { winSec: 8, melodyTrack, lyricAt: lyricAtTick(s, tick), pct: (el / sec) };
+        // 音频已按片段归一化（从 0 起），频谱/波形用 el；瀑布 tick 用全曲坐标 startSec+el
         drawVideoFrame(ctx, W, H, tick, s, buf, vf, el);
         VE.veProgress = Math.min(97, 10 + (el / sec) * 87);
       };

@@ -42,7 +42,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   soundfonts: { list: () => ipcRenderer.invoke('soundfont:list') },
   pickMusicXML: () => ipcRenderer.invoke('dialog:pickMusicXML'),
   exportScorePdf: () => ipcRenderer.invoke('score:exportPdf'),
-  transcodeVideo: (data, audio) => ipcRenderer.invoke('video:transcode', { data, audio }),
+  transcodeVideo: (data, audio, opts) => ipcRenderer.invoke('video:transcode', { data, audio, ...(opts || {}) }),
   modelList: () => ipcRenderer.invoke('model:list'),
   depCheck: () => ipcRenderer.invoke('dep:check'),
   diagExport: () => ipcRenderer.invoke('diag:export'),

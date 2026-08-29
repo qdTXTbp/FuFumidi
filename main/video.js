@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // 主进程视频服务：WebM/WAV 离线合成 MP4
 // ============================================================
 'use strict';
@@ -26,7 +26,13 @@ function registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
       }
       const out = save.filePath;
       const args = ['-y', '-hide_banner', '-loglevel', 'error', '-i', webm];
-      if (wav) args.push('-i', wav, '-map', '0:v:0', '-map', '1:a:0');
+      if (wav) {
+        // 自定义导出范围时，音频从 startSec 偏移（-ss 置于 -i 前为输入 seek），
+        // 与画面 tick = startSec+el 对齐，避免音乐从头播、画面从中段开始导致的曲速错位
+        const off = opts && opts.audioOffset ? Math.max(0, Number(opts.audioOffset)) : 0;
+        if (off > 0) args.push('-ss', String(off));
+        args.push('-i', wav, '-map', '0:v:0', '-map', '1:a:0');
+      }
       args.push('-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '-movflags', '+faststart', out);
       const code =
         'import json, subprocess\n' +
