@@ -2,8 +2,26 @@
   "source": [
     {
       "id": "ghfast",
-      "name": "国内镜像",
+      "name": "国内镜像 · ghfast.top",
       "uri": "https://ghfast.top/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe",
+      "icon": "<svg viewBox=\"0 0 24 24\"><g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\"><path d=\"M3 8.5 9 3l6 5.5M9 3v15c0 1.5 1 3 3 3s3-1.5 3-3V7\"/></g></svg>"
+    },
+    {
+      "id": "ghproxy",
+      "name": "国内镜像 · gh-proxy.com",
+      "uri": "https://gh-proxy.com/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe",
+      "icon": "<svg viewBox=\"0 0 24 24\"><g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\"><path d=\"M3 8.5 9 3l6 5.5M9 3v15c0 1.5 1 3 3 3s3-1.5 3-3V7\"/></g></svg>"
+    },
+    {
+      "id": "ghproxy-net",
+      "name": "国内镜像 · ghproxy.net",
+      "uri": "https://ghproxy.net/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe",
+      "icon": "<svg viewBox=\"0 0 24 24\"><g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\"><path d=\"M3 8.5 9 3l6 5.5M9 3v15c0 1.5 1 3 3 3s3-1.5 3-3V7\"/></g></svg>"
+    },
+    {
+      "id": "github",
+      "name": "GitHub 官方",
+      "uri": "https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe",
       "icon": "<svg viewBox=\"0 0 24 24\"><g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\"><path d=\"M3 8.5 9 3l6 5.5M9 3v15c0 1.5 1 3 3 3s3-1.5 3-3V7\"/></g></svg>"
     }
   ],

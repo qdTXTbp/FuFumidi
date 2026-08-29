@@ -115,7 +115,26 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
     try { shell.openPath(p); return { ok: true }; } catch (e) { return { ok: false, error: String(e) }; }
   });
   // 启动 kachina 更新器（BetterGI 同款增量更新器）：比对文件差异，只下载有改动的部分。
-  // 更新器自身在线下载 Install 包并在窗口内显示进度（源：ghfast 国内镜像）。
+  // 更新器自身在线下载 Install 包并在窗口内显示进度（多镜像源：ghfast / gh-proxy / ghproxy.net / GitHub 官方）。
+
+  // 更新源候选（与 kachina.config.json 的 source id 对应）；启动更新前 HEAD 探测挑一个可达的，避免镜像不稳定
+  const UPDATE_SOURCES = [
+    { id: 'ghfast', uri: 'https://ghfast.top/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe' },
+    { id: 'ghproxy', uri: 'https://gh-proxy.com/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe' },
+    { id: 'ghproxy-net', uri: 'https://ghproxy.net/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe' },
+    { id: 'github', uri: 'https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe' },
+  ];
+  async function pickUpdateSource() {
+    for (const s of UPDATE_SOURCES) {
+      try {
+        const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 6000);
+        const r = await net.fetch(s.uri, { method: 'HEAD', headers: { 'user-agent': 'FuFumidi/3.1.11' }, signal: ctrl.signal });
+        clearTimeout(to);
+        if (r.ok) return s.id;
+      } catch (e) { /* 探测失败，尝试下一个源 */ }
+    }
+    return 'ghfast'; // 全部失败：回退默认（更新器窗口会展示错误，用户可手动打开更新器切换源）
+  }
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
 
@@ -139,15 +158,26 @@ while ((Get-Date) -lt $deadline) {
   Start-Sleep -Seconds 2
 }
 Start-Sleep -Seconds 3
+# 重启前做一次核心文件完整性快速自检：更新器异常中断时不再重启损坏的程序
+$resources = Join-Path (Split-Path $exePath) "resources"
+$asar = Join-Path $resources "app.asar"
+if (Test-Path $asar) {
+  $sz = (Get-Item $asar).Length
+  if ($sz -lt 1MB) { exit 3 }
+} else {
+  exit 4
+}
 Start-Process -FilePath $exePath -WorkingDirectory (Split-Path $exePath)
 `, 'utf8');
         const guard = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', daemon, '-exePath', mainExe], { detached: true, stdio: 'ignore' });
         guard.unref();
       } catch (e) { /* 守护启动失败不阻塞更新 */ }
-      const args = ['-I', '-O', '--source', 'ghfast'];
+      // 探测可用镜像源（HEAD 6 秒超时，失败自动换下一个），避免单一镜像不稳定导致下载损坏
+      const source = await pickUpdateSource();
+      const args = ['-I', '-O', '--source', source];
       const cp = spawn(updaterExe, args, { cwd: updaterDir, detached: true, stdio: 'ignore' });
       cp.unref();
-      return { ok: true };
+      return { ok: true, source };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 }

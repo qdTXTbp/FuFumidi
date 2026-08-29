@@ -271,6 +271,7 @@ const integrity = createIntegrity({
   writeSettings,
   defaultSettings: DEFAULT_SETTINGS,
   isPackaged: app.isPackaged,
+  getAppAsarPath: () => (app.isPackaged ? path.join(process.resourcesPath, 'app.asar') : null),
 });
 // 启动后后台静默检查：不打断用户，发现问题仅标记，由设置页警告条提示用户手动修复
 setTimeout(() => {
