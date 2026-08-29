@@ -10,6 +10,6 @@ export async function getAppVersion() {
       if (v) { _cached = 'v' + String(v).replace(/^v/i, ''); return _cached; }
     }
   } catch (e) { /* 忽略，走回退 */ }
-  _cached = 'v3.1.12';
+  _cached = 'v3.1.13';
   return _cached;
 }

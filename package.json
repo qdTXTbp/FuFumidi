@@ -1,7 +1,7 @@
 {
     "name": "fufumidi",
     "productName": "FuFumidi",
-    "version": "3.1.12",
+    "version": "3.1.13",
     "description": "离线 MIDI 播放 / 编辑 / 可视化 / 分析 / 乐谱 / 转录（音频转 MIDI）一体工具",
     "main": "main.js",
     "author": {
