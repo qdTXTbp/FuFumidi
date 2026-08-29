@@ -11,7 +11,7 @@ import WallpaperGallery from './components/WallpaperGallery.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import GuideOverlay from './components/GuideOverlay.vue';
 import ChangeLogOverlay from './components/ChangeLogOverlay.vue';
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { useAppStore, VIEWS } from './stores/app';
 import { usePlaylistStore } from './stores/playlist';
 import { useSettingsStore } from './stores/settings';
@@ -276,18 +276,53 @@ function onBeforeUnload() {
   playlistStore.flushDb();
 }
 
+/* ---------------- GPU 安装常驻通知条 ---------------- */
+let offGpuProg = null;
+let gpuBarTimer = null;
+// 安装进度（任意页面都可见）：App.vue 全局订阅 gpu:progress 写入 store
+function onGpuProgressGlobal(p) {
+  if (!p) return;
+  const gi = state.gpuInstall;
+  if (p.done) gi.percent = 100;
+  else if (p.percent != null && p.percent >= 0) gi.percent = p.percent;
+  if (p.text) gi.text = String(p.text);
+  if (p.error) gi.error = String(p.error);
+}
+// 安装中常驻显示；完成后保留 10 秒展示结果
+const gpuBarVisible = computed(() => {
+  const gi = state.gpuInstall;
+  return gi.active || (gi.done && Date.now() - gi.ts < 10000);
+});
+watch(() => state.gpuInstall.done, (v) => {
+  if (!v) return;
+  clearTimeout(gpuBarTimer);
+  gpuBarTimer = setTimeout(() => { state.gpuInstall.done = false; }, 10000);
+});
+function openGpuSettings() {
+  state.ui.settingsTab = 'gpu';
+  state.ui.settingsOpen = true;
+}
+function dismissGpuBar() {
+  clearTimeout(gpuBarTimer);
+  state.gpuInstall.active = false;
+  state.gpuInstall.done = false;
+}
+
 onMounted(() => {
   startTickLoop();
   restoreSongs();
   playlistStore.hydrateFromDb();
   initGlobal();
   loadWallpaper();
+  if (bridge && bridge.onGpuProgress) offGpuProg = bridge.onGpuProgress(onGpuProgressGlobal);
   window.addEventListener('keydown', onKey);
   // 退出/刷新前冲刷 SQLite 写队列，避免歌单/收藏最后一步未落盘
   window.addEventListener('beforeunload', onBeforeUnload);
 });
 onBeforeUnmount(() => {
   stopTickLoop();
+  if (offGpuProg) { try { offGpuProg(); } catch (e) {} offGpuProg = null; }
+  clearTimeout(gpuBarTimer);
   window.removeEventListener('keydown', onKey);
   window.removeEventListener('beforeunload', onBeforeUnload);
 });
@@ -311,6 +346,26 @@ onBeforeUnmount(() => {
     <div class="toast-wrap" v-if="state.toastMsg && state.toastMsg.msg" role="status" aria-live="polite">
       <div class="toast" :class="state.toastMsg.type">{{ state.toastMsg.msg }}</div>
     </div>
+
+    <!-- GPU 安装常驻通知条：任意页面可见，点击跳转设置 → GPU -->
+    <Transition name="ov">
+      <div v-if="gpuBarVisible" class="gpu-bar" :class="{ err: state.gpuInstall.done && !state.gpuInstall.ok }" role="status" @click="openGpuSettings">
+        <Icon :name="state.gpuInstall.done ? (state.gpuInstall.ok ? 'zap' : 'close') : 'zap'" :size="17" />
+        <div class="gpu-bar-body">
+          <div class="gpu-bar-title">
+            {{ state.gpuInstall.done
+              ? (state.gpuInstall.ok ? t('GPU 加速安装完成') : t('GPU 加速安装失败'))
+              : t('正在安装 GPU 加速') + (state.gpuInstall.kind ? '（' + (state.gpuInstall.kind === 'cuda' ? 'CUDA cu128' : 'DirectML') + '）' : '') }}
+          </div>
+          <div v-if="!state.gpuInstall.done" class="gpu-bar-track">
+            <div class="gpu-bar-fill" :style="{ width: Math.min(100, state.gpuInstall.percent || 0) + '%' }"></div>
+          </div>
+          <div v-else class="gpu-bar-msg">{{ state.gpuInstall.ok ? t('增强包已就绪，点击查看详情') : (state.gpuInstall.error || t('安装失败，点击查看详情')) }}</div>
+          <div v-if="!state.gpuInstall.done && state.gpuInstall.text" class="gpu-bar-tip">{{ state.gpuInstall.text }}</div>
+        </div>
+        <button class="gpu-bar-x" :title="t('关闭')" aria-label="t('关闭')" @click.stop="dismissGpuBar"><Icon name="close" :size="13" /></button>
+      </div>
+    </Transition>
 
     <!-- 全局系统功能浮层 -->
     <Transition name="ov">
@@ -416,4 +471,22 @@ onBeforeUnmount(() => {
 .imp-pl-item input:checked + span { color: var(--brand); font-weight: 600; }
 .imp-pl-item input { accent-color: var(--brand); }
 .imp-pl-new { display: flex; gap: 8px; align-items: center; }
+
+/* GPU 安装常驻通知条 */
+.gpu-bar { position: fixed; right: 16px; bottom: 76px; z-index: 980; width: min(340px, 90vw);
+  display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border-radius: 12px;
+  background: var(--canvas, #fff); border: 1px solid var(--border, rgba(0,0,0,.12));
+  box-shadow: 0 12px 32px rgba(16,24,40,.18); cursor: pointer; }
+.gpu-bar > svg { color: var(--brand, #4B3FE3); margin-top: 1px; flex: none; }
+.gpu-bar.err > svg { color: #d33; }
+.gpu-bar-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.gpu-bar-title { font-size: 13px; font-weight: 600; color: var(--ink, #171717); }
+.gpu-bar-track { height: 6px; border-radius: 3px; background: var(--border, rgba(0,0,0,.1)); overflow: hidden; }
+.gpu-bar-fill { height: 100%; background: linear-gradient(90deg, #4f94e0, #8fc0f0); transition: width .25s; }
+.gpu-bar.err .gpu-bar-fill { background: #d33; }
+.gpu-bar-msg { font-size: 12px; color: var(--text-muted, #666); line-height: 1.5; word-break: break-all; }
+.gpu-bar-tip { font-size: 11px; color: var(--text-muted, #888); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gpu-bar-x { flex: none; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 6px; background: transparent; color: var(--text-muted, #888); cursor: pointer; }
+.gpu-bar-x:hover { background: var(--surface-muted, #EFEFF2); color: var(--ink, #171717); }
 </style>

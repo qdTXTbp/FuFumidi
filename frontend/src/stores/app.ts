@@ -177,6 +177,7 @@ export const useAppStore = defineStore('app', {
     },
     integrity: null as any,
     changelog: null as any, // 更新日志数据 { from, to, logs: [{ver, items}] }
+    gpuInstall: { active: false, percent: 0, text: '', kind: null as string | null, done: false, ok: false, error: '', ts: 0 }, // 常驻 GPU 安装进度
   }),
   getters: {
     currentSong(state): any {

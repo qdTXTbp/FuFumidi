@@ -268,6 +268,14 @@ async function gpuAutoInstall() {
   gpu.busy = true;
   gpu.status = '';
   gpuSetProgress(0, t('正在检测显卡…'));
+  // 常驻通知条：全局展示安装进度（App.vue 订阅 gpu:progress 更新）
+  app.gpuInstall.active = true;
+  app.gpuInstall.done = false;
+  app.gpuInstall.ok = false;
+  app.gpuInstall.error = '';
+  app.gpuInstall.percent = 0;
+  app.gpuInstall.text = '';
+  app.gpuInstall.ts = Date.now();
   const un = bridge.onGpuProgress ? bridge.onGpuProgress((p) => {
     if (!p) return;
     if (p.done) gpuSetProgress(100, t('安装完成'));
@@ -280,39 +288,59 @@ async function gpuAutoInstall() {
       gpu.status = r.already ? t('GPU 加速已安装（无需重复安装）') : t('GPU 加速安装完成');
       if (r.gpu) gpu.detect = r.gpu;
       if (r.already) gpuSetProgress(100, '');
+      app.gpuInstall.kind = r.kind || app.gpuInstall.kind;
+      app.gpuInstall.done = true; app.gpuInstall.ok = true; app.gpuInstall.percent = 100;
     } else {
       gpu.status = t('安装失败：') + ((r && r.error) || t('未知'));
       if (r && r.gpu) gpu.detect = r.gpu;
       gpuSetProgress(null, '');
+      app.gpuInstall.kind = (r && r.kind) || app.gpuInstall.kind;
+      app.gpuInstall.done = true; app.gpuInstall.ok = false; app.gpuInstall.error = (r && r.error) || t('安装失败');
     }
     await gpuRefreshInstalled();
     await gpuLoadDetect();
   } catch (e) {
     gpu.status = t('安装失败：') + String((e && e.message) || e);
     gpuSetProgress(null, '');
+    app.gpuInstall.done = true; app.gpuInstall.ok = false; app.gpuInstall.error = String((e && e.message) || e);
   } finally {
     if (un) un();
     gpu.busy = false;
+    app.gpuInstall.active = false;
   }
 }
 async function gpuImportLocal() {
   if (!bridge || !bridge.pickZip || !bridge.gpuImportLocal) { gpu.status = t('当前环境不支持本地导入'); return; }
   gpu.busy = true;
+  app.gpuInstall.active = true;
+  app.gpuInstall.done = false;
+  app.gpuInstall.ok = false;
+  app.gpuInstall.error = '';
+  app.gpuInstall.percent = 10;
+  app.gpuInstall.text = t('正在导入本地增强包…');
+  app.gpuInstall.ts = Date.now();
   try {
     const p = await bridge.pickZip();
-    if (!p) return;
+    if (!p) { app.gpuInstall.active = false; return; }
     gpu.status = t('正在导入本地包…');
     gpuSetProgress(1, t('正在导入…'));
+    app.gpuInstall.text = t('正在解压并安装增强包…');
     const r = await bridge.gpuImportLocal(p);
     gpu.status = (r && r.ok) ? t('本地包已导入隔离环境') : (t('导入失败：') + ((r && r.error) || t('未知')));
     gpuSetProgress(null, '');
+    app.gpuInstall.done = true;
+    app.gpuInstall.ok = !!(r && r.ok);
+    app.gpuInstall.percent = 100;
+    if (!r || !r.ok) app.gpuInstall.error = (r && r.error) || t('导入失败');
     await gpuRefreshInstalled();
     await gpuLoadDetect();
   } catch (e) {
     gpu.status = t('导入失败：') + String((e && e.message) || e);
     gpuSetProgress(null, '');
+    app.gpuInstall.done = true; app.gpuInstall.ok = false; app.gpuInstall.error = String((e && e.message) || e);
   } finally {
     gpu.busy = false;
+    app.gpuInstall.active = false;
   }
 }
 async function gpuUninstall() {
