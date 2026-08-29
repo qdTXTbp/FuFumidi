@@ -36,6 +36,19 @@ def available():
         return False
 
 
+def _require_package():
+    """包缺失时的明确指引：区分「缺 Python 包」与「缺模型权重」。"""
+    try:
+        import muscriptor  # noqa: F401
+        return True
+    except Exception:
+        raise RuntimeError(
+            "未安装 muscriptor Python 运行时包（应用环境的 Python 里 `import muscriptor` 失败）。"
+            "模型权重虽已下载，但仍需安装该包：请在应用使用的 Python 中执行 "
+            "`python -m pip install muscriptor`（PyPI 0.3.0，含 torch/einops/safetensors 等依赖），"
+            "或在资源中心安装 MuScriptor 运行时。")
+
+
 def available_local_sizes():
     """本地已就绪的 MuScriptor 规格列表（有完整权重才算就绪）。"""
     models_dir = os.environ.get("FUFUMIDI_MODELS_DIR", "") or ""
@@ -52,6 +65,7 @@ def available_local_sizes():
 
 def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                           num_threads=None, **kwargs):
+    _require_package()  # 包缺失先给明确报错，再导入
     from muscriptor import TranscriptionModel
 
     params = params or {}

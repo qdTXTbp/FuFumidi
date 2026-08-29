@@ -1,6 +1,8 @@
 <script setup>
-// UTAU 可视化钢琴卷帘编辑器：画笔/选择工具、缩放、网格吸附、播放走带、歌词填词
-import { ref, watch, onMounted, nextTick } from 'vue';
+// UTAU 可视化钢琴卷帘编辑器
+// 画笔/选择工具、框选多选、缩放、网格吸附、播放走带、歌词填词、
+// 复制/剪切/粘贴/重复、撤销/重做、键盘微调、Alt拖拽复制、左右缘缩放、右键菜单
+import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import Icon from '../Icon.vue';
 import { useUtauStore } from '../../stores/utau';
 import { useAppStore } from '../../stores/app';
@@ -28,10 +30,18 @@ const playBeat = ref(0);
 
 let noteW = 88;             // 每拍宽（随缩放）
 let zoom = 1;
-let drag = null;            // { mode:'move'|'resize'|'box', ... }
+let drag = null;            // { mode:'move'|'rresize'|'lresize'|'create'|'box', ... }
 let cw = 0, ch = 0, beatEnds = 16;
 let raf = 0, playT0 = 0, playStart = 0, onsetFired = new Set();
 let audio = null;
+const clipboard = ref([]);   // 内部剪贴板（纯音符数据）
+let nudgeTok = null, nudgeT = 0; // 键盘微调的历史合并标记
+
+// 右键菜单
+const ctxOpen = ref(false);
+const ctxX = ref(0);
+const ctxY = ref(0);
+const ctxOnNote = ref(false);
 
 const yOf = p => TOP + (MAX_P - p) * ROW_H;
 const xOf = b => LEFT + b * noteW;
@@ -105,12 +115,67 @@ function scrollFollow(b) {
   if (x < el.scrollLeft + 30) el.scrollLeft = Math.max(0, x - 30);
   else if (x > el.scrollLeft + el.clientWidth - 40) el.scrollLeft = x - el.clientWidth + 40;
 }
-function seek(e) {
-  const rect = canvas.value.getBoundingClientRect();
-  playBeat.value = Math.max(0, (e.clientX - rect.left - LEFT) / noteW);
+function seekTo(beat) {
+  playBeat.value = Math.max(0, beat);
+  if (playing.value) {
+    playStart = playBeat.value; playT0 = performance.now(); onsetFired.clear();
+    const b0 = Math.max(0, Math.floor(playBeat.value));
+    for (const n of store.notes) if (n.startBeat <= b0) onsetFired.add(n.startBeat);
+  }
   draw();
 }
+function seek(e) {
+  const rect = canvas.value.getBoundingClientRect();
+  seekTo((e.clientX - rect.left - LEFT) / noteW);
+}
 function stopAll() { stop(); if (audio) { try { audio.close(); } catch (e) {} audio = null; } }
+
+/* ---------------- 剪贴板 ---------------- */
+function selIds() { return store.selectedIds.slice(); }
+function copySel() {
+  const sel = store.selectedNotes;
+  if (!sel.length) return;
+  clipboard.value = sel.map(n => ({ ...n }));
+  app.toast(t('已复制 ') + sel.length + t(' 个音符'));
+}
+function cutSel() {
+  const sel = store.selectedNotes;
+  if (!sel.length) return;
+  clipboard.value = sel.map(n => ({ ...n }));
+  store.removeNotes(selIds());
+}
+function pasteClip() {
+  if (!clipboard.value.length) { app.toast(t('剪贴板为空'), 'warn'); return; }
+  const minStart = Math.min(...clipboard.value.map(n => n.startBeat));
+  const at = snapBeat(playBeat.value);
+  store.addNotes(clipboard.value.map(n => ({ ...n, startBeat: at + (n.startBeat - minStart) })));
+}
+function dupSel() {
+  const sel = store.selectedNotes;
+  if (!sel.length) return;
+  const span = Math.max(...sel.map(n => n.startBeat + n.durBeat)) - Math.min(...sel.map(n => n.startBeat));
+  const offset = Math.max(snap.value, span);
+  store.duplicateNotes(selIds(), offset);
+}
+
+/* ---------------- 键盘微调（历史合并） ---------------- */
+function nudge(patch, tok) {
+  const ids = selIds();
+  if (!ids.length) return;
+  const now = Date.now();
+  if (nudgeTok !== tok || now - nudgeT > 700) { store.pushUndo(); nudgeTok = tok; nudgeT = now; }
+  else { nudgeT = now; }
+  for (const id of ids) {
+    const n = store.notes.find(z => z.id === id);
+    if (!n) continue;
+    const p = typeof patch === 'function' ? patch(n) : patch;
+    const next = {};
+    if (p.dStart != null) next.startBeat = Math.max(0, n.startBeat + p.dStart);
+    if (p.dDur != null) next.durBeat = Math.max(snap.value, n.durBeat + p.dDur);
+    if (p.dPitch != null) next.pitch = Math.max(MIN_P, Math.min(MAX_P, n.pitch + p.dPitch));
+    store.updateNote(id, next);
+  }
+}
 
 /* ---------------- 绘制 ---------------- */
 function draw() {
@@ -142,12 +207,14 @@ function draw() {
     if (b % 4 === 0) { ctx.fillStyle = muted; ctx.font = '9px sans-serif'; ctx.textAlign = 'left'; ctx.fillText(String(b / 4 + 1), x + 4, 14); }
   }
 
+  const selIds = new Set(store.selectedIds);
   for (const n of store.sortedNotes) {
     const x = xOf(n.startBeat), y = yOf(n.pitch);
     const w = Math.max(noteW * 0.9, n.durBeat * noteW - 2), h = ROW_H - 2;
-    const sel = store.selectedId === n.id;
+    const sel = selIds.has(n.id);
+    const primary = store.selectedId === n.id;
     ctx.fillStyle = sel ? brand : '#9aa1ff';
-    ctx.strokeStyle = sel ? brand : 'rgba(0,0,0,0.25)';
+    ctx.strokeStyle = primary ? ink : (sel ? brand : 'rgba(0,0,0,0.25)');
     ctx.lineWidth = sel ? 1.6 : 0.8;
     roundRect(ctx, x, y + 1, w, h, 3); ctx.fill(); ctx.stroke();
     if (n.lyric) {
@@ -157,6 +224,17 @@ function draw() {
     }
     ctx.fillStyle = sel ? '#fff' : 'rgba(255,255,255,0.5)';
     ctx.fillRect(x + w - 3, y + 1, 3, h);
+  }
+
+  // 框选矩形
+  if (drag && drag.mode === 'box') {
+    const x0 = Math.min(drag.x0, drag.x1), y0 = Math.min(drag.y0, drag.y1);
+    const bw = Math.abs(drag.x1 - drag.x0), bh = Math.abs(drag.y1 - drag.y0);
+    ctx.save();
+    ctx.strokeStyle = brand; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+    ctx.fillStyle = 'rgba(75,63,227,0.08)';
+    ctx.fillRect(x0, y0, bw, bh); ctx.strokeRect(x0, y0, bw, bh);
+    ctx.restore();
   }
 
   // 播放头
@@ -183,36 +261,124 @@ function roundRect(ctx, x, y, w, h, r) {
 
 /* ---------------- 交互 ---------------- */
 function toXY(e) { const r = canvas.value.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+function noteRect(n) {
+  const rx = xOf(n.startBeat), ry = yOf(n.pitch);
+  const rw = Math.max(noteW * 0.9, n.durBeat * noteW - 2), rh = ROW_H - 2;
+  return { rx, ry, rw, rh };
+}
 function hitNote(x, y) {
   for (const n of store.sortedNotes) {
-    const rx = xOf(n.startBeat), ry = yOf(n.pitch);
-    const rw = Math.max(noteW * 0.9, n.durBeat * noteW - 2), rh = ROW_H - 2;
-    if (x >= rx && x <= rx + rw && y >= ry && y <= ry + rh) return { n, resize: x > rx + rw - 8 };
+    const { rx, ry, rw, rh } = noteRect(n);
+    if (x >= rx && x <= rx + rw && y >= ry && y <= ry + rh) {
+      // 右缘缩放 / 左缘缩放 / 主体
+      const zone = (x > rx + rw - 7 && rw > 18) ? 'r' : (x < rx + 7 && rw > 26) ? 'l' : 'body';
+      return { n, zone };
+    }
   }
   return null;
 }
+function closeCtx() { ctxOpen.value = false; }
+
 function onDown(e) {
+  closeCtx();
+  // 右键/中键不参与绘制与拖拽，留给 contextmenu 开菜单
+  if (e.button !== 0) return;
   const { x, y } = toXY(e);
-  if (x < LEFT || y < TOP) return;
+  // 顶部拍号条：点击定位播放头
+  if (y < TOP) { if (x >= LEFT) seek(e); return; }
+  if (x < LEFT) return;
   const hit = hitNote(x, y);
-  if (hit) { store.select(hit.n.id); drag = { mode: hit.resize ? 'resize' : 'move', id: hit.n.id, b0: hit.n.startBeat, p0: hit.n.pitch, d0: hit.n.durBeat, x0: x, y0: y }; }
-  else if (tool.value === 'select') { store.select(null); drag = { mode: 'box', x0: x, y0: y }; }
-  else { store.addNote(snapBeat((x - LEFT) / noteW), Math.max(MIN_P, Math.min(MAX_P, MAX_P - Math.round((y - TOP) / ROW_H)))); }
+  if (hit) {
+    const multi = store.selectedIds.includes(hit.n.id) && store.selectedIds.length > 1;
+    if (e.shiftKey) { store.toggleSelect(hit.n.id); return; }
+    if (!multi && !store.selectedIds.includes(hit.n.id)) store.select(hit.n.id);
+    // Alt+拖拽 = 复制出一个再拖
+    if (e.altKey) {
+      const [cid] = store.duplicateNotes([hit.n.id], 0);
+      if (cid) {
+        const c = store.notes.find(z => z.id === cid);
+        drag = { mode: 'move', ids: [cid], orig: [{ id: cid, b0: c.startBeat, p0: c.pitch }], x0: x, y0: y };
+      }
+    } else if (hit.zone === 'r') {
+      store.pushUndo();
+      drag = { mode: 'rresize', id: hit.n.id, d0: hit.n.durBeat, x0: x };
+    } else if (hit.zone === 'l') {
+      store.pushUndo();
+      drag = { mode: 'lresize', id: hit.n.id, b0: hit.n.startBeat, d0: hit.n.durBeat, x0: x };
+    } else {
+      // 拖动：多选时整体拖
+      const ids = multi ? selIds() : [hit.n.id];
+      if (multi) store.pushUndo();
+      drag = { mode: 'move', ids, orig: ids.map(id => {
+        const n = store.notes.find(z => z.id === id);
+        return { id, b0: n.startBeat, p0: n.pitch };
+      }), x0: x, y0: y };
+    }
+  } else if (tool.value === 'select') {
+    if (!e.shiftKey) store.select(null);
+    drag = { mode: 'box', x0: x, y0: y, x1: x, y1: y, additive: !!e.shiftKey };
+  } else {
+    // 画笔：按下创建，可拖出长度
+    const start = snapBeat((x - LEFT) / noteW);
+    const pitch = Math.max(MIN_P, Math.min(MAX_P, MAX_P - Math.round((y - TOP) / ROW_H)));
+    const id = store.addNote(start, pitch);
+    drag = { mode: 'create', id, b0: start, x0: x };
+  }
   try { canvas.value.setPointerCapture(e.pointerId); } catch (err) {}
 }
 function onMove(e) {
   if (!drag) return;
   const { x, y } = toXY(e);
-  const n = store.notes.find(z => z.id === drag.id);
-  if (!n) return;
+  if (drag.mode === 'box') { drag.x1 = x; drag.y1 = y; draw(); return; }
+  if (drag.mode === 'create') {
+    const dur = snapDur(drag.b0 + (x - drag.x0) / noteW);
+    store.updateNote(drag.id, { durBeat: dur });
+    return;
+  }
+  if (drag.mode === 'rresize') {
+    const n = store.notes.find(z => z.id === drag.id); if (!n) return;
+    store.updateNote(drag.id, { durBeat: snapDur(drag.d0 + (x - drag.x0) / noteW) });
+    return;
+  }
+  if (drag.mode === 'lresize') {
+    const s = snap.value;
+    let start = Math.round((drag.b0 + (x - drag.x0) / noteW) / s) * s;
+    start = Math.max(0, Math.min(drag.b0 + drag.d0 - s, start));
+    store.updateNote(drag.id, { startBeat: start, durBeat: drag.d0 + (drag.b0 - start) });
+    return;
+  }
   if (drag.mode === 'move') {
-    const db = Math.round((x - drag.x0) / noteW), dp = -Math.round((y - drag.y0) / ROW_H);
-    store.updateNote(n.id, { startBeat: Math.max(0, drag.b0 + db), pitch: Math.max(MIN_P, Math.min(MAX_P, drag.p0 + dp)) });
-  } else if (drag.mode === 'resize') {
-    store.updateNote(n.id, { durBeat: snapDur(drag.d0 + (x - drag.x0) / noteW) });
+    const s = snap.value;
+    const db = Math.round(((x - drag.x0) / noteW) / s) * s;
+    const dp = -Math.round((y - drag.y0) / ROW_H);
+    for (const o of drag.orig) {
+      store.updateNote(o.id, {
+        startBeat: Math.max(0, o.b0 + db),
+        pitch: Math.max(MIN_P, Math.min(MAX_P, o.p0 + dp)),
+      });
+    }
   }
 }
-function onUp() { drag = null; }
+function onUp(e) {
+  if (drag && drag.mode === 'box') {
+    const x0 = Math.min(drag.x0, drag.x1), x1 = Math.max(drag.x0, drag.x1);
+    const y0 = Math.min(drag.y0, drag.y1), y1 = Math.max(drag.y0, drag.y1);
+    const hitIds = [];
+    for (const n of store.notes) {
+      const { rx, ry, rw, rh } = noteRect(n);
+      if (rx < x1 && rx + rw > x0 && ry < y1 && ry + rh > y0) hitIds.push(n.id);
+    }
+    if (drag.additive) {
+      const merged = new Set(store.selectedIds);
+      for (const id of hitIds) merged.add(id);
+      store.setSelection([...merged]);
+    } else {
+      store.setSelection(hitIds);
+    }
+  }
+  drag = null;
+  draw();
+}
 function onDbl(e) {
   const { x, y } = toXY(e); if (x < LEFT || y < TOP) return;
   const hit = hitNote(x, y); if (!hit) return;
@@ -223,14 +389,45 @@ function onDbl(e) {
 }
 function onCtx(e) {
   e.preventDefault();
-  const { x, y } = toXY(e); const hit = hitNote(x, y);
-  if (hit) { store.select(hit.n.id); store.removeNote(hit.n.id); }
+  const { x, y } = toXY(e);
+  const hit = hitNote(x, y);
+  if (hit && !store.selectedIds.includes(hit.n.id)) store.select(hit.n.id);
+  if (!hit) store.select(null);
+  ctxOnNote.value = !!hit;
+  // 菜单坐标相对容器
+  const rect = (wrap.value?.parentElement || canvas.value).getBoundingClientRect();
+  ctxX.value = e.clientX - rect.left;
+  ctxY.value = e.clientY - rect.top;
+  ctxOpen.value = true;
 }
 function onKey(e) {
   if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
-  if (e.key === 'Delete' || e.key === 'Backspace') { if (store.selectedId) store.removeNote(store.selectedId); }
-  else if (e.key === ' ' && e.code === 'Space') { e.preventDefault(); play(); }
-  else if (e.key === 'Escape') { stopAll(); }
+  const k = e.key, mod = e.ctrlKey || e.metaKey;
+  if (mod && (k === 'z' || k === 'Z')) {
+    e.preventDefault();
+    if (e.shiftKey) { if (!store.redo()) app.toast(t('没有可重做的操作')); }
+    else { if (!store.undo()) app.toast(t('没有可撤销的操作')); }
+    return;
+  }
+  if (mod && (k === 'y' || k === 'Y')) { e.preventDefault(); if (!store.redo()) app.toast(t('没有可重做的操作')); return; }
+  if (mod && (k === 'a' || k === 'A')) { e.preventDefault(); store.selectAll(); return; }
+  if (mod && (k === 'c' || k === 'C')) { e.preventDefault(); copySel(); return; }
+  if (mod && (k === 'x' || k === 'X')) { e.preventDefault(); cutSel(); return; }
+  if (mod && (k === 'v' || k === 'V')) { e.preventDefault(); pasteClip(); return; }
+  if (mod && (k === 'd' || k === 'D')) { e.preventDefault(); dupSel(); return; }
+  if (k === 'Delete' || k === 'Backspace') {
+    e.preventDefault();
+    if (store.selectedIds.length) store.removeNotes(selIds());
+    return;
+  }
+  if (k === ' ' && e.code === 'Space') { e.preventDefault(); play(); return; }
+  if (k === 'Escape') { closeCtx(); stopAll(); return; }
+  // 方向键微调
+  const s = snap.value;
+  if (k === 'ArrowLeft') { e.preventDefault(); e.shiftKey ? nudge({ dDur: -s }, 'dur-') : nudge({ dStart: -s }, 'start-'); }
+  else if (k === 'ArrowRight') { e.preventDefault(); e.shiftKey ? nudge({ dDur: s }, 'dur+') : nudge({ dStart: s }, 'start+'); }
+  else if (k === 'ArrowUp') { e.preventDefault(); nudge({ dPitch: e.shiftKey ? 12 : 1 }, 'p+'); }
+  else if (k === 'ArrowDown') { e.preventDefault(); nudge({ dPitch: e.shiftKey ? -12 : -1 }, 'p-'); }
 }
 
 function addAtEnd() {
@@ -238,25 +435,39 @@ function addAtEnd() {
   const id = store.addNote(end, 60); store.updateNote(id, { lyric: 'あ' });
   nextTick(() => { const el = wrap.value; if (el) el.scrollLeft = xOf(end) - 40; });
 }
-function delSelected() { if (store.selectedId) store.removeNote(store.selectedId); }
+function delSelected() { if (store.selectedIds.length) store.removeNotes(selIds()); }
 function goRender() { app.setView('utau'); }
+// 右键菜单入口：对主选中音符打开歌词对话框
+function onDblFromCtx() {
+  const n = store.selected;
+  if (!n) return;
+  app.promptDialog({ title: t('歌词'), msg: t('输入该音符的歌词/音节：'), value: n.lyric }).then(v => {
+    if (v != null && String(v).trim() !== '') store.updateNote(n.id, { lyric: String(v).trim() });
+  });
+}
 
 const pitchOptions = Array.from({ length: MAX_P - MIN_P + 1 }, (_, i) => MIN_P + i);
 watch(() => store.totalBeats, () => { setupCanvas(); draw(); });
 watch(() => store.notes, draw, { deep: true });
-watch(() => store.selectedId, draw);
+watch(() => [store.selectedId, store.selectedIds], draw, { deep: true });
 watch(() => store.bpm, () => { if (playing.value) playT0 = performance.now() - (playBeat.value - playStart) * 60000 / store.bpm; });
 onMounted(() => { setupCanvas(); draw(); window.addEventListener('keydown', onKey); });
+onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); });
 </script>
 
 <template>
-  <div class="us">
+  <div class="us" @pointerdown="closeCtx">
     <div class="us-toolbar">
       <button class="btn sm" :class="{ primary: playing }" @click="play"><Icon :name="playing ? 'stop' : 'play2'" :size="13" /> {{ playing ? t('停止') : t('试听') }}</button>
       <span class="sep"></span>
       <div class="tg">
-        <button class="btn sm" :class="{ on: tool === 'pencil' }" @click="tool = 'pencil'" :title="t('画笔：点击加音')"><Icon name="pencil" :size="13" /></button>
-        <button class="btn sm" :class="{ on: tool === 'select' }" @click="tool = 'select'" :title="t('选择：点击选中/拖动')"><Icon name="cursor" :size="13" /></button>
+        <button class="btn sm" :class="{ on: tool === 'pencil' }" @click="tool = 'pencil'" :title="t('画笔：点击/拖拽加音')"><Icon name="pencil" :size="13" /></button>
+        <button class="btn sm" :class="{ on: tool === 'select' }" @click="tool = 'select'" :title="t('选择：点击/框选/Shift加选')"><Icon name="cursor" :size="13" /></button>
+      </div>
+      <span class="sep"></span>
+      <div class="tg">
+        <button class="btn sm" @click="store.undo()" :disabled="!store.undoStack.length" :title="t('撤销 (Ctrl+Z)')"><Icon name="undo" :size="13" /></button>
+        <button class="btn sm" @click="store.redo()" :disabled="!store.redoStack.length" :title="t('重做 (Ctrl+Y)')"><Icon name="redo" :size="13" /></button>
       </div>
       <span class="sep"></span>
       <label class="us-ad">{{ t('吸附') }}
@@ -279,25 +490,40 @@ onMounted(() => { setupCanvas(); draw(); window.addEventListener('keydown', onKe
       </select></label>
       <span class="sep"></span>
       <button class="btn primary" @click="addAtEnd"><Icon name="plus" :size="13" /> {{ t('末尾加音') }}</button>
-      <button class="btn sm" @click="delSelected" :disabled="!store.selectedId">{{ t('删除') }}</button>
+      <button class="btn sm" @click="delSelected" :disabled="!store.selectedIds.length">{{ t('删除') }}</button>
       <button class="btn sm ghost danger" @click="store.clear()" :disabled="!store.notes.length">{{ t('清空') }}</button>
     </div>
 
-    <div ref="wrap" class="us-scroll">
+    <div ref="wrap" class="us-scroll" @pointerdown="closeCtx">
       <canvas ref="canvas" class="us-canvas"
         @pointerdown="onDown" @pointermove="onMove" @pointerup="onUp" @pointercancel="onUp"
-        @dblclick="onDbl" @contextmenu="onCtx" @pointerdown.prevent></canvas>
+        @dblclick="onDbl" @contextmenu="onCtx"></canvas>
     </div>
 
     <div class="us-foot">
-      <span class="muted small">{{ t('画笔') }}：{{ t('点击空白加音') }} · {{ t('拖音符移动') }} · {{ t('拖右缘改长') }} · {{ t('双击改歌词') }} · {{ t('右键删除') }}</span>
+      <span class="muted small">{{ t('画笔拖出音符') }} · {{ t('框选/Shift多选') }} · {{ t('Alt拖拽复制') }} · {{ t('左右缘改长') }} · {{ t('双击改歌词') }} · {{ t('方向键微调') }} · {{ t('Ctrl+C/V/Z') }}</span>
       <span class="muted small" style="margin-left:auto">{{ store.notes.length }} {{ t('音符') }} · {{ store.bpm }} BPM · {{ t('音源 ') }}{{ store.sampleNote }}</span>
+    </div>
+
+    <!-- 右键菜单 -->
+    <div v-if="ctxOpen" class="us-ctx" :style="{ left: ctxX + 'px', top: ctxY + 'px' }"
+      @pointerdown.stop @contextmenu.prevent>
+      <button class="us-ctx-i" :disabled="!store.undoStack.length" @click="store.undo(); closeCtx()"><Icon name="undo" :size="13" /> {{ t('撤销') }}</button>
+      <button class="us-ctx-i" :disabled="!store.redoStack.length" @click="store.redo(); closeCtx()"><Icon name="redo" :size="13" /> {{ t('重做') }}</button>
+      <div class="us-ctx-sep"></div>
+      <button class="us-ctx-i" :disabled="!ctxOnNote" @click="cutSel(); closeCtx()">{{ t('剪切') }}</button>
+      <button class="us-ctx-i" :disabled="!ctxOnNote" @click="copySel(); closeCtx()">{{ t('复制') }}</button>
+      <button class="us-ctx-i" :disabled="!clipboard.length" @click="pasteClip(); closeCtx()">{{ t('粘贴') }}</button>
+      <button class="us-ctx-i" :disabled="!ctxOnNote" @click="dupSel(); closeCtx()">{{ t('重复') }}</button>
+      <div class="us-ctx-sep"></div>
+      <button class="us-ctx-i" :disabled="!ctxOnNote" @click="onDblFromCtx(); closeCtx()">{{ t('编辑歌词') }}</button>
+      <button class="us-ctx-i danger" :disabled="!ctxOnNote" @click="delSelected(); closeCtx()">{{ t('删除音符') }}</button>
     </div>
   </div>
 </template>
 
 <style scoped>
-.us { padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0; }
+.us { padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0; position: relative; }
 .us-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--stone); }
 .us-toolbar label { display: inline-flex; align-items: center; gap: 6px; }
 .us-num { width: 60px; padding: 3px 6px; font-size: 12px; }
@@ -307,4 +533,16 @@ onMounted(() => { setupCanvas(); draw(); window.addEventListener('keydown', onKe
 .us-scroll { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); touch-action: none; }
 .us-canvas { display: block; cursor: crosshair; }
 .us-foot { display: flex; align-items: center; gap: 10px; line-height: 1.6; }
+
+/* 右键菜单 */
+.us-ctx { position: absolute; z-index: 30; min-width: 148px; padding: 4px; display: flex; flex-direction: column; gap: 1px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.14); font-size: 12px; }
+.us-ctx-i { display: flex; align-items: center; gap: 7px; padding: 6px 10px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--text); cursor: pointer; text-align: left; width: 100%; }
+.us-ctx-i:hover:not(:disabled) { background: var(--brand-soft); color: var(--brand-text); }
+.us-ctx-i:disabled { opacity: 0.4; cursor: default; }
+.us-ctx-i.danger { color: #d33; }
+.us-ctx-i.danger:hover:not(:disabled) { background: rgba(211,51,51,0.1); color: #d33; }
+.us-ctx-sep { height: 1px; background: var(--border); margin: 3px 6px; }
 </style>
