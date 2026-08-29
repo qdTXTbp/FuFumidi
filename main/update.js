@@ -55,6 +55,47 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
     throw lastErr || new Error('无法访问 GitHub');
   }
 
+  function sendUpdateProgress(win, received, total, done) {
+    if (!win || win.isDestroyed()) return;
+    win.webContents.send('update:progress', { received, total, percent: total ? Math.min(99, Math.round(received / total * 100)) : 0, done: !!done });
+  }
+
+  // 主进程下载完整离线安装包（多镜像回退 + 进度 + 大小校验）。
+  // 关键：下载只写临时目录，失败/中断不影响当前安装——绝不边下边改已安装文件
+  async function downloadInstallPackage(url, win) {
+    const mirrors = [url, 'https://ghfast.top/' + url, 'https://gh-proxy.com/' + url, 'https://ghproxy.net/' + url];
+    const dest = path.join(app.getPath('temp'), 'fufumidi-update', 'FuFumidi.Install.exe');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    let lastErr = null;
+    for (const u of mirrors) {
+      try {
+        const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.12' } });
+        if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+        const total = parseInt(res.headers.get('content-length') || '0', 10) || 0;
+        const out = fs.createWriteStream(dest + '.part');
+        out.on('error', () => {}); // 消费 'error'，防写入失败（EPERM 等）打崩主进程
+        const reader = res.body.getReader();
+        let received = 0, lastSend = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          received += value.length;
+          const now = Date.now();
+          if (now - lastSend > 300) { lastSend = now; sendUpdateProgress(win, received, total, false); }
+          await new Promise((res2, rej2) => out.write(Buffer.from(value), err => err ? rej2(err) : res2()));
+        }
+        await new Promise((res2, rej2) => out.end(err => err ? rej2(err) : res2()));
+        // 大小校验：明显小于声明则视为损坏，丢弃并换源重试
+        const sz = fs.statSync(dest + '.part').size;
+        if (total && sz < total * 0.9) throw new Error('下载不完整 ' + sz + '/' + total);
+        fs.renameSync(dest + '.part', dest);
+        sendUpdateProgress(win, sz, total, true);
+        return { ok: true, path: dest, size: sz };
+      } catch (e) { lastErr = e; try { fs.unlinkSync(dest + '.part'); } catch (_) {} }
+    }
+    return { ok: false, error: String((lastErr && lastErr.message) || lastErr) };
+  }
+
   ipcMain.handle('update:list', async () => {
     try {
       const r = await fetch('https://api.github.com/repos/qdTXTbp/FuFumidi/releases?per_page=10', { headers: { 'User-Agent': 'FuFumidi-Update' } });
@@ -83,101 +124,57 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
   ipcMain.handle('update:download', async (evt, url) => {
     if (!url) return { ok: false, error: 'empty url' };
     const win = BrowserWindow.fromWebContents(evt.sender);
-    const mirrors = [url, 'https://ghfast.top/' + url, 'https://gh-proxy.com/' + url, 'https://ghproxy.net/' + url];
-    const dest = path.join(app.getPath('temp'), 'fufumidi-update', 'FuFumidi-update' + path.extname(new URL(url).pathname));
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    let lastErr = null;
-    for (const u of mirrors) {
-      try {
-        const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.12' } });
-        if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
-        const total = parseInt(res.headers.get('content-length') || '0', 10) || 0;
-        const out = fs.createWriteStream(dest + '.part');
-        const reader = res.body.getReader();
-        let received = 0, lastSend = 0;
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          received += value.length;
-          const now = Date.now();
-          if (now - lastSend > 300) { lastSend = now; if (win && !win.isDestroyed()) win.webContents.send('update:progress', { received, total, percent: total ? Math.min(99, Math.round(received / total * 100)) : 0 }); }
-          await new Promise((res2, rej2) => out.write(Buffer.from(value), err => err ? rej2(err) : res2()));
-        }
-        await new Promise((res2, rej2) => out.end(err => err ? rej2(err) : res2()));
-        fs.renameSync(dest + '.part', dest);
-        if (win && !win.isDestroyed()) win.webContents.send('update:progress', { received, total, percent: 100, done: true });
-        return { ok: true, path: dest };
-      } catch (e) { lastErr = e; try { fs.unlinkSync(dest + '.part'); } catch {} }
-    }
-    return { ok: false, error: String((lastErr && lastErr.message) || lastErr) };
+    return downloadInstallPackage(url, win);
   });
   ipcMain.handle('update:open', async (_e, p) => {
     try { shell.openPath(p); return { ok: true }; } catch (e) { return { ok: false, error: String(e) }; }
   });
-  // 启动 kachina 更新器（BetterGI 同款增量更新器）：比对文件差异，只下载有改动的部分。
-  // 更新器自身在线下载 Install 包并在窗口内显示进度（多镜像源：ghfast / gh-proxy / ghproxy.net / GitHub 官方）。
-
-  // 更新源候选（与 kachina.config.json 的 source id 对应）；启动更新前 HEAD 探测挑一个可达的，避免镜像不稳定
-  const UPDATE_SOURCES = [
-    { id: 'ghfast', uri: 'https://ghfast.top/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe' },
-    { id: 'ghproxy', uri: 'https://gh-proxy.com/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe' },
-    { id: 'ghproxy-net', uri: 'https://ghproxy.net/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe' },
-    { id: 'github', uri: 'https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe' },
-  ];
-  async function pickUpdateSource() {
-    for (const s of UPDATE_SOURCES) {
-      try {
-        const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 6000);
-        const r = await net.fetch(s.uri, { method: 'HEAD', headers: { 'user-agent': 'FuFumidi/3.1.12' }, signal: ctrl.signal });
-        clearTimeout(to);
-        if (r.ok) return s.id;
-      } catch (e) { /* 探测失败，尝试下一个源 */ }
-    }
-    return 'ghfast'; // 全部失败：回退默认（更新器窗口会展示错误，用户可手动打开更新器切换源）
-  }
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
 
+  // 更新流程（防损坏设计）：
+  //  1) 主进程下载完整离线安装包到临时目录（多镜像回退 + 进度 + 大小校验）——下载中断只留临时文件，不影响当前安装
+  //  2) 下载成功且校验通过后，才拉起本地安装器静默安装（无网络依赖，不边下边改已安装文件）
+  //  3) 守护脚本在安装器退出后校验核心文件完整性，完整才重启主程序
   ipcMain.handle('update:launchUpdater', async (evt, version) => {
+    const win = BrowserWindow.fromWebContents(evt.sender);
     try {
-      // 直接拉起 kachina 更新器在线更新：下载进度由更新器窗口内显示（BetterGI 同款），
-      // 不再由主程序预下载离线包（镜像直连在主程序侧易失败且无窗口反馈）。
-      const updaterDir = app.isPackaged ? path.dirname(process.execPath) : path.join(app.getAppPath(), 'release', 'update');
-      const updaterExe = path.join(updaterDir, 'FuFumidi.update.exe');
-      if (!fs.existsSync(updaterExe)) return { ok: false, error: '更新器不存在：' + updaterExe + '（请使用新版便携版 / 重新下载）' };
+      const rel = await fetchLatestRelease();
+      const asset = assetForPlatform(rel);
+      if (!asset) return { ok: false, error: '未找到更新安装包' };
+      // 1) 主进程预下载（失败/取消不影响当前安装）
+      const dl = await downloadInstallPackage(asset.browser_download_url, win);
+      if (!dl.ok) return { ok: false, error: '更新包下载失败：' + dl.error + '（当前安装未受影响，可稍后重试）' };
+      // 2) 守护脚本：等待本地安装器退出，校验核心文件完整后重启主程序
       const { spawn } = require('child_process');
-      // 先启动独立守护：更新器会先结束本进程，更新完成后由守护自动重新启动主程序。
-      // （kachina 非交互模式不会自动拉起主程序，故用 PowerShell 守护轮询更新器退出后重启）
-      try {
-        const mainExe = path.join(updaterDir, 'FuFumidi.exe');
-        const daemon = path.join(app.getPath('temp'), 'fufumidi-restart.ps1');
-        fs.writeFileSync(daemon, `param([string]$exePath, [int]$timeout = 300)
+      const updaterDir = app.isPackaged ? path.dirname(process.execPath) : path.join(app.getAppPath(), 'release', 'win-unpacked');
+      const mainExe = path.join(updaterDir, 'FuFumidi.exe');
+      const procName = path.basename(dl.path, '.exe'); // FuFumidi.Install
+      const daemon = path.join(app.getPath('temp'), 'fufumidi-restart.ps1');
+      fs.writeFileSync(daemon, `param([string]$exePath, [string]$procName, [int]$timeout = 600)
 $deadline = (Get-Date).AddSeconds($timeout)
 while ((Get-Date) -lt $deadline) {
-  if (-not (Get-Process -Name "FuFumidi.update" -ErrorAction SilentlyContinue)) { break }
+  if (-not (Get-Process -Name $procName -ErrorAction SilentlyContinue)) { break }
   Start-Sleep -Seconds 2
 }
 Start-Sleep -Seconds 3
-# 重启前做一次核心文件完整性快速自检：更新器异常中断时不再重启损坏的程序
+# 核心文件完整性校验：安装中断/损坏时不再重启残缺程序（避免「关掉安装器就损坏工具」）
 $resources = Join-Path (Split-Path $exePath) "resources"
 $asar = Join-Path $resources "app.asar"
-if (Test-Path $asar) {
-  $sz = (Get-Item $asar).Length
-  if ($sz -lt 1MB) { exit 3 }
-} else {
-  exit 4
-}
+if (-not (Test-Path $exePath)) { exit 5 }
+if (-not (Test-Path $asar)) { exit 4 }
+$sz = (Get-Item $asar).Length
+if ($sz -lt 1MB) { exit 3 }
 Start-Process -FilePath $exePath -WorkingDirectory (Split-Path $exePath)
 `, 'utf8');
-        const guard = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', daemon, '-exePath', mainExe], { detached: true, stdio: 'ignore' });
+      try {
+        const guard = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', daemon, '-exePath', mainExe, '-procName', procName], { detached: true, stdio: 'ignore' });
         guard.unref();
       } catch (e) { /* 守护启动失败不阻塞更新 */ }
-      // 探测可用镜像源（HEAD 6 秒超时，失败自动换下一个），避免单一镜像不稳定导致下载损坏
-      const source = await pickUpdateSource();
-      const args = ['-I', '-O', '--source', source];
-      const cp = spawn(updaterExe, args, { cwd: updaterDir, detached: true, stdio: 'ignore' });
+      // 3) 本地静默安装（-I 非交互；安装包已在本地，无网络依赖）
+      const cp = spawn(dl.path, ['-I'], { cwd: path.dirname(dl.path), detached: true, stdio: 'ignore' });
       cp.unref();
-      return { ok: true, source };
+      return { ok: true, installPath: dl.path, size: dl.size };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 }

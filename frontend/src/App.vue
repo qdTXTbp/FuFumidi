@@ -190,8 +190,9 @@ async function startupUpdateCheck() {
           app.toast(t('当前环境不支持增量更新器'), 'warn');
           return;
         }
+        app.toast(t('正在下载更新包，完成后自动安装…'));
         bridge.update.launchUpdater(latest).then(rr => {
-          if (!rr || !rr.ok) app.toast((rr && rr.error) || t('更新器启动失败'), 'error');
+          if (!rr || !rr.ok) app.toast((rr && rr.error) || t('更新失败，当前安装未受影响'), 'error');
         }).catch(() => {});
       });
   }, 2500);
@@ -279,6 +280,8 @@ function onBeforeUnload() {
 /* ---------------- GPU 安装常驻通知条 ---------------- */
 let offGpuProg = null;
 let gpuBarTimer = null;
+let offUpdateProg = null;
+let updLastPct = -1;
 // 安装进度（任意页面都可见）：App.vue 全局订阅 gpu:progress 写入 store
 function onGpuProgressGlobal(p) {
   if (!p) return;
@@ -316,6 +319,15 @@ onMounted(() => {
   initGlobal();
   loadWallpaper();
   if (bridge && bridge.onGpuProgress) offGpuProg = bridge.onGpuProgress(onGpuProgressGlobal);
+  // 更新包下载进度提示（主进程预下载阶段）
+  if (bridge && bridge.onUpdateProgress) {
+    offUpdateProg = bridge.onUpdateProgress((p) => {
+      if (!p) return;
+      const pct = p.percent;
+      if (p.done) { updLastPct = -1; app.toast(t('更新包已下载，正在安装…')); }
+      else if (pct != null && pct >= 0 && pct >= updLastPct + 5) { updLastPct = pct; app.toast(t('正在下载更新包 ') + pct + '%'); }
+    });
+  }
   window.addEventListener('keydown', onKey);
   // 退出/刷新前冲刷 SQLite 写队列，避免歌单/收藏最后一步未落盘
   window.addEventListener('beforeunload', onBeforeUnload);
@@ -323,6 +335,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopTickLoop();
   if (offGpuProg) { try { offGpuProg(); } catch (e) {} offGpuProg = null; }
+  if (offUpdateProg) { try { offUpdateProg(); } catch (e) {} offUpdateProg = null; }
   clearTimeout(gpuBarTimer);
   window.removeEventListener('keydown', onKey);
   window.removeEventListener('beforeunload', onBeforeUnload);
