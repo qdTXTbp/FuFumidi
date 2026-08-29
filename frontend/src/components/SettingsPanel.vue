@@ -433,8 +433,25 @@ async function repairIntegrity() {
   const issues = (state.integrity && state.integrity.issues || []).filter(i => i.canRepair !== false);
   if (!issues.length || !bridge || !bridge.repairIntegrity) return;
   try {
-    await bridge.repairIntegrity(issues.map(i => i.id));
-    toast(t('修复完成'));
+    const r = await bridge.repairIntegrity(issues.map(i => i.id));
+    const re = (r && r.results || []).find(x => x && x.action === 'reinstall');
+    if (re) {
+      // 核心安装文件损坏：引导重新下载并安装最新版（走应用内更新流程，下载中断不影响当前安装）
+      const go = await app.confirmDialog({
+        title: t('核心文件不完整'),
+        msg: t('检测到核心安装文件损坏（可能由更新中断导致）。建议重新下载并安装最新版以恢复，现在重装吗？'),
+        okText: t('立即重装'),
+        cancelText: t('稍后'),
+      });
+      if (go && bridge.update && typeof bridge.update.launchUpdater === 'function') {
+        app.toast(t('正在下载更新包，完成后自动安装…'));
+        bridge.update.launchUpdater('').then(rr => {
+          if (!rr || !rr.ok) app.toast((rr && rr.error) || t('下载失败，当前安装未受影响'), 'error');
+        }).catch(() => {});
+      }
+    } else {
+      toast(t('修复完成'));
+    }
   } catch (e) { toast(t('修复失败：') + String(e.message || e), 'error'); }
   runIntegrity();
 }

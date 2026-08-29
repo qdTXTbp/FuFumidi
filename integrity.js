@@ -94,16 +94,16 @@ function createIntegrity(deps) {
     }
 
     // 4) 核心安装文件自检（仅打包环境）：app.asar 缺失/过小 = 更新中断或文件损坏 →
-    //    无法自动修复，明确提示用户重新运行更新器或重新安装（防「镜像不稳定升级后工具损坏」无人知晓）
+    //    引导用户重新下载安装最新版（点击「一键修复」→ repair 返回 reinstall → 前端弹窗重装）
     const asarPath = getAppAsarPath && getAppAsarPath();
     if (asarPath) {
       try {
         const st = fs.statSync(asarPath);
         if (st.size < 1 * 1024 * 1024) {
-          issues.push({ id: 'core-corrupt', severity: 'warn', canRepair: false, path: asarPath });
+          issues.push({ id: 'core-corrupt', severity: 'warn', canRepair: true, path: asarPath });
         }
       } catch (e) {
-        issues.push({ id: 'core-missing', severity: 'warn', canRepair: false, path: asarPath });
+        issues.push({ id: 'core-missing', severity: 'warn', canRepair: true, path: asarPath });
       }
     }
 
@@ -151,9 +151,9 @@ function createIntegrity(deps) {
           return { id, ok: true, action: 'disabled', plugin: pid };
         } catch (e) { return { id, ok: false, action: 'disable', error: String(e && e.message || e) }; }
       }
-      // 核心安装文件损坏/缺失：无法自动修复，给出明确指引
+      // 核心安装文件损坏/缺失：返回 reinstall 标记，由前端引导重新下载安装最新版
       if (id === 'core-corrupt' || id === 'core-missing') {
-        return { id, ok: false, action: 'reinstall', error: '核心安装文件不完整，无法自动修复：请重新运行更新器（或下载最新安装包重装）' };
+        return { id, ok: false, action: 'reinstall', error: '核心安装文件不完整，需要重新下载并安装最新版' };
       }
       return { id, ok: false, action: 'unknown', error: '未知问题类型' };
     };
