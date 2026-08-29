@@ -436,18 +436,19 @@ async function repairIntegrity() {
     const r = await bridge.repairIntegrity(issues.map(i => i.id));
     const re = (r && r.results || []).find(x => x && x.action === 'reinstall');
     if (re) {
-      // 核心安装文件损坏：引导重新下载并安装最新版（走应用内更新流程，下载中断不影响当前安装）
-      const go = await app.confirmDialog({
-        title: t('核心文件不完整'),
-        msg: t('检测到核心安装文件损坏（可能由更新中断导致）。建议重新下载并安装最新版以恢复，现在重装吗？'),
-        okText: t('立即重装'),
-        cancelText: t('稍后'),
-      });
-      if (go && bridge.update && typeof bridge.update.launchUpdater === 'function') {
-        app.toast(t('正在下载更新包，完成后自动安装…'));
+      // 一键修复：用户已点击修复 = 已授权，直接自动下载安装包并静默重装（应用内更新流程，下载中断不影响当前安装）
+      if (bridge.update && typeof bridge.update.launchUpdater === 'function') {
+        app.toast(t('正在修复：下载更新包并重装…'));
         bridge.update.launchUpdater('').then(rr => {
-          if (!rr || !rr.ok) app.toast((rr && rr.error) || t('下载失败，当前安装未受影响'), 'error');
+          if (!rr || !rr.ok) {
+            app.alertDialog({
+              title: t('修复失败'),
+              msg: t('自动修复未完成：') + ((rr && rr.error) || t('下载失败，当前安装未受影响')) + t('。可到 GitHub Releases 下载最新安装包手动重装。'),
+            });
+          }
         }).catch(() => {});
+      } else if (bridge && typeof bridge.openExternal === 'function') {
+        bridge.openExternal('https://github.com/qdTXTbp/FuFumidi/releases/latest');
       }
     } else {
       toast(t('修复完成'));
