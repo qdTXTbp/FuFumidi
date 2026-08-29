@@ -156,7 +156,7 @@ function registerGpuIpc({
         let okDl = false;
         for (const u of mirrors) {
           try {
-            const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.14' } });
+            const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.15' } });
             if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
             const out = fs.createWriteStream(outPath);
             const reader = res.body.getReader();
