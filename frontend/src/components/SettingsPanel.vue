@@ -10,7 +10,7 @@ const app = useAppStore();
 const state = app;
 const toast = (m, t) => app.toast(m, t);
 // 当前版本号（从主进程读取，与 SideBar 左下角一致）
-const appVersion = ref('v3.1.7');
+const appVersion = ref('v3.1.8');
 import { getAppVersion } from '../core/version.js';
 getAppVersion().then(v => { appVersion.value = v; });
 import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';
@@ -44,10 +44,13 @@ function switchTab(id) {
   if (!c) return;
   nextTick(() => {
     clearTimeout(_hTimer);
-    const body = c.querySelector('.settings-body');
-    const delta = body ? (body.scrollHeight - body.clientHeight) : 0;
-    const maxH = window.innerHeight * 0.92;
-    const target = Math.max(0, Math.min(from + delta, maxH));
+    // 临时释放锁定高度，读取新内容自然高度作为目标；
+    // 若直接量 scrollHeight-clientHeight，长→短时 flex:1 会把 body 拉伸到旧高度，
+    // delta≈0 → 高度不变 → 无动画（这正是「长切短没动画」的根因）
+    c.style.height = '';
+    const target = Math.min(c.getBoundingClientRect().height, window.innerHeight * 0.92);
+    // 锁回旧高度作为动画起点，再过渡到目标
+    c.style.height = Math.max(from, 1) + 'px';
     c.style.transition = 'height 0.34s cubic-bezier(0.22, 0.9, 0.28, 1.12)'; // 非线性缓动
     void c.offsetHeight; // 强制 reflow，确保从旧高度开始过渡
     c.style.height = target + 'px';

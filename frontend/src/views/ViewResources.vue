@@ -446,7 +446,8 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
     </div>
 
     <!-- 检查结果弹窗 -->
-    <div v-if="resultOpen" class="overlay" role="dialog" aria-modal="true" :aria-label="resultTitle" @click.self="resultOpen = false" @keydown.esc="resultOpen = false">
+    <Transition name="ov">
+      <div v-if="resultOpen" class="overlay" role="dialog" aria-modal="true" :aria-label="resultTitle" @click.self="resultOpen = false" @keydown.esc="resultOpen = false">
       <div class="overlay-card res-result">
         <div class="settings-head">
           <Icon name="info" :size="17" />
@@ -461,7 +462,8 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
           <button class="btn sm primary" @click="resultOpen = false">{{ t('关闭') }}</button>
         </div>
       </div>
-    </div>
+      </div>
+    </Transition>
   </div>
 </template>
 

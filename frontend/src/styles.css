@@ -724,14 +724,20 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .ov-enter-active .ed-modal, .ov-leave-active .ed-modal,
 .ov-enter-active .guide-card, .ov-leave-active .guide-card,
 .ov-enter-active .cmd-palette, .ov-leave-active .cmd-palette,
-.ov-enter-active .mx-card, .ov-leave-active .mx-card {
+.ov-enter-active .mx-card, .ov-leave-active .mx-card,
+.ov-enter-active .rep-card, .ov-leave-active .rep-card,
+.ov-enter-active .pv-card, .ov-leave-active .pv-card,
+.ov-enter-active .preset-mgr-card, .ov-leave-active .preset-mgr-card {
   transition: opacity 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.18), transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.18);
 }
 .ov-enter-from .overlay-card, .ov-leave-to .overlay-card,
 .ov-enter-from .ed-modal, .ov-leave-to .ed-modal,
 .ov-enter-from .guide-card, .ov-leave-to .guide-card,
 .ov-enter-from .cmd-palette, .ov-leave-to .cmd-palette,
-.ov-enter-from .mx-card, .ov-leave-to .mx-card {
+.ov-enter-from .mx-card, .ov-leave-to .mx-card,
+.ov-enter-from .rep-card, .ov-leave-to .rep-card,
+.ov-enter-from .pv-card, .ov-leave-to .pv-card,
+.ov-enter-from .preset-mgr-card, .ov-leave-to .preset-mgr-card {
   opacity: 0; transform: translateY(8px) scale(0.98);
 }
 

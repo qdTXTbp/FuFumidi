@@ -16,7 +16,7 @@ FuFumidi is a fully offline desktop workstation for MIDI. It targets musicians, 
 
 The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally. Nothing is uploaded.
 
-Current release line: **3.1.7**.
+Current release line: **3.1.8**.
 
 ### What it does
 

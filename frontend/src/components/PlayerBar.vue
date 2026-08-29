@@ -162,7 +162,8 @@ function next() {
     </div>
 
     <!-- 混音台弹窗 -->
-    <div v-if="mixerOpen" class="mx-overlay" @click.self="mixerOpen = false">
+    <Transition name="ov">
+      <div v-if="mixerOpen" class="mx-overlay" @click.self="mixerOpen = false">
       <div class="mx-card">
         <div class="mx-head">
           <b>混音台</b>
@@ -191,7 +192,8 @@ function next() {
           </div>
         </div>
       </div>
-    </div>
+      </div>
+    </Transition>
   </footer>
 </template>
 

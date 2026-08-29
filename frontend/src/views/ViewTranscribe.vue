@@ -936,7 +936,8 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 预设管理 -->
-    <div v-if="presetMgrOpen" class="preset-mgr-overlay" @click.self="presetMgrOpen = false">
+    <Transition name="ov">
+      <div v-if="presetMgrOpen" class="preset-mgr-overlay" @click.self="presetMgrOpen = false">
       <div class="preset-mgr-card">
         <div class="preset-mgr-head">
           <b>参数预设管理</b>
@@ -958,7 +959,8 @@ onBeforeUnmount(() => {
           <button class="btn sm primary" @click="presetMgrOpen = false">{{ t('完成') }}</button>
         </div>
       </div>
-    </div>
+      </div>
+    </Transition>
   </div>
 </template>
 

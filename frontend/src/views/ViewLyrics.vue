@@ -379,7 +379,8 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
     </div>
 
     <!-- 批量替换弹窗 -->
-    <div v-if="replaceOpen" class="rep-overlay" @click.self="replaceOpen = false">
+    <Transition name="ov">
+      <div v-if="replaceOpen" class="rep-overlay" @click.self="replaceOpen = false">
       <div class="rep-card">
         <div class="rep-head">
           <b>{{ t('批量替换歌词') }}</b>
@@ -392,7 +393,8 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
           <button class="btn sm primary" @click="doBatchReplace">{{ t('替换') }}</button>
         </div>
       </div>
-    </div>
+      </div>
+    </Transition>
   </div>
 </template>
 

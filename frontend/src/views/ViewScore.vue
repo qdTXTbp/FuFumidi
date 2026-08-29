@@ -668,7 +668,8 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 乐谱分页预览弹窗 -->
-    <div v-if="previewOpen" class="pv-overlay" @click.self="previewOpen = false">
+    <Transition name="ov">
+      <div v-if="previewOpen" class="pv-overlay" @click.self="previewOpen = false">
       <div class="pv-card">
         <div class="pv-head">
           <b>{{ t('乐谱分页预览') }}</b>
@@ -684,10 +685,12 @@ onBeforeUnmount(() => {
           </template>
         </div>
       </div>
-    </div>
+      </div>
+    </Transition>
 
     <!-- 乐谱分屏预览弹窗 -->
-    <div v-if="splitOpen" class="pv-overlay" @click.self="splitOpen = false">
+    <Transition name="ov">
+      <div v-if="splitOpen" class="pv-overlay" @click.self="splitOpen = false">
       <div class="pv-card">
         <div class="pv-head">
           <b>{{ t('乐谱分屏') }}</b>
@@ -695,7 +698,8 @@ onBeforeUnmount(() => {
         </div>
         <div ref="splitContent" class="split-body"></div>
       </div>
-    </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
