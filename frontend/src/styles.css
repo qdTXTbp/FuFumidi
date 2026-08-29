@@ -115,6 +115,10 @@ body {
   transition: grid-template-columns 0.25s ease;
 }
 .app-shell.side-collapsed { grid-template-columns: 0 1fr; }
+/* 拖动调整侧边栏宽度时禁用网格过渡，避免拖拽卡顿/滞后 */
+.app-shell.resizing { transition: none; }
+/* 拖拽宽度时：列调整光标 + 禁止文本选中 */
+body.resize-col, body.resize-col * { cursor: col-resize !important; user-select: none !important; }
 .app-shell.no-player { grid-template-rows: var(--topbar-h) 1fr 0; }
 .app-wallpaper {
   position: fixed;
@@ -146,6 +150,7 @@ body {
 /* ---------- 侧边栏（sidebar-nav） ---------- */
 .sidebar {
   grid-area: side;
+  position: relative;
   display: flex;
   flex-direction: column;
   background: var(--canvas);
@@ -400,7 +405,7 @@ body {
 .song-item .si-num { color: var(--stone); font-size: 11px; width: 22px; text-align: right; font-variant-numeric: tabular-nums; }
 .song-item .si-name { flex: 1; min-width: 0; font-size: 13px; padding-right: 4px; }
 .song-item .si-name b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--ink); }
-.song-item .si-name small { color: var(--stone); font-size: 11px; }
+.song-item .si-name small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--stone); font-size: 11px; }
 .song-item .si-tools {
   position: absolute;
   right: 10px;

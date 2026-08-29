@@ -115,6 +115,43 @@ async function initGlobal() {
       if (!settingsStore.settings.custom_wallpaper && !state.ui.wallpaperOpen) wallpaperPromptOpen.value = true;
     }, 1200);
   }
+
+  // 6) 启动时自动检查更新：有新版则弹窗询问是否更新（仅桌面端）
+  startupUpdateCheck();
+}
+
+/* 简单版本号比较（支持 x.y.z，逐段数值比较，避免 '3.1.10' < '3.1.8' 的字典序问题） */
+function verNum(v) {
+  const m = String(v || '').replace(/^v/i, '').split('.').map(x => parseInt(x, 10) || 0);
+  return ((m[0] || 0) * 1000000) + ((m[1] || 0) * 1000) + (m[2] || 0);
+}
+
+/* 启动自动检查更新：GitHub latest 对比当前版本，有新版则弹窗询问（仅桌面端） */
+async function startupUpdateCheck() {
+  if (!bridge || typeof bridge.updateCheck !== 'function') return;
+  let r = null;
+  try { r = await bridge.updateCheck(); } catch (e) { return; }
+  if (!r || !r.ok) return; // 检查失败静默，不打扰用户
+  const cur = String(r.current || '');
+  const latest = String(r.latest || '');
+  if (!latest || verNum(latest) <= verNum(cur)) return;
+  setTimeout(() => {
+    if (state.dialog) return; // 已有其他弹窗时不叠加
+    const notes = String(r.notes || '').trim();
+    const msg = t('发现新版本 ') + latest + t('，当前 ') + cur + t('。\n是否现在更新？') +
+      (notes ? '\n\n' + t('更新内容') + '：\n' + notes.slice(0, 200) : '');
+    app.confirmDialog({ title: t('发现新版本'), msg, okText: t('立即更新'), cancelText: t('暂不更新') })
+      .then(ok => {
+        if (!ok) return;
+        if (!bridge || !bridge.update || typeof bridge.update.launchUpdater !== 'function') {
+          app.toast(t('当前环境不支持增量更新器'), 'warn');
+          return;
+        }
+        bridge.update.launchUpdater(latest).then(rr => {
+          if (!rr || !rr.ok) app.toast((rr && rr.error) || t('更新器启动失败'), 'error');
+        }).catch(() => {});
+      });
+  }, 2500);
 }
 
 function goDownloadWallpaper() {
@@ -135,6 +172,23 @@ function submitDialog() {
 }
 function cancelDialog() {
   app.dialogCancel();
+}
+
+// 导入目标歌单选择浮层：默认选中当前激活歌单（真实歌单），否则仅全部曲目
+const importTarget = ref('all');
+const newImportPlName = ref('');
+watch(() => state.importPick, (v) => {
+  if (v) {
+    const active = playlistStore.activePlaylist;
+    importTarget.value = active ? active.id : 'all';
+    newImportPlName.value = '';
+  }
+});
+function confirmImportTargetModal(targetId) {
+  app.confirmImportTarget(targetId, newImportPlName.value);
+}
+function cancelImportTargetModal() {
+  app.cancelImportTarget();
 }
 
 function onKey(e) {
@@ -197,7 +251,7 @@ onBeforeUnmount(() => {
 
 <template>
   <video v-if="wpEnabled && wpUrl" :key="wpUrl" ref="bgVideo" class="app-wallpaper" :src="wpUrl" autoplay muted playsinline preload="auto" @timeupdate="onBgTime"></video>
-  <div class="app-shell" :class="{ 'side-collapsed': !state.sidebarOpen, 'no-player': !state.playerbarOpen, 'wallpaper-on': wpEnabled && wpUrl }">
+  <div class="app-shell" :style="{ '--sidebar-w': state.sidebarWidth + 'px' }" :class="{ 'side-collapsed': !state.sidebarOpen, 'no-player': !state.playerbarOpen, 'wallpaper-on': wpEnabled && wpUrl, resizing: state.sidebarResizing }">
     <SideBar />
     <TopBar />
     <main class="app-main">
@@ -265,6 +319,41 @@ onBeforeUnmount(() => {
       </div>
     </Transition>
   </Teleport>
+
+  <!-- 导入目标歌单选择：按钮/拖放/命令面板导入前询问归入哪个歌单（含批量） -->
+  <Teleport to="body">
+    <Transition name="ov">
+      <div v-if="state.importPick" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="t('导入到歌单')" @click.self="cancelImportTargetModal" @keydown.esc="cancelImportTargetModal">
+        <div class="ed-modal" style="width:min(360px,92vw)">
+          <div class="ed-modal-head">
+            <b>{{ t('导入到歌单') }}</b>
+            <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" aria-label="t('关闭')" @click="cancelImportTargetModal"><Icon name="close" :size="14" /></button>
+          </div>
+          <div class="small" style="padding:0 2px;line-height:1.6;color:var(--ink)">
+            {{ t('选择导入 ') + state.importPick.items.length + t(' 个文件到：') }}
+          </div>
+          <div class="imp-pl-list">
+            <label class="imp-pl-item">
+              <input type="radio" v-model="importTarget" value="all" />
+              <span>{{ t('全部曲目（仅加入资料库）') }}</span>
+            </label>
+            <label class="imp-pl-item" v-for="pl in playlistStore.playlists" :key="pl.id">
+              <input type="radio" v-model="importTarget" :value="pl.id" />
+              <span>{{ pl.name }}</span>
+            </label>
+          </div>
+          <div class="imp-pl-new">
+            <input v-model="newImportPlName" class="text-input" style="flex:1;min-width:0" :placeholder="t('或输入新歌单名并新建…')" @keydown.enter.prevent="confirmImportTargetModal('__new__')" />
+            <button class="btn sm" style="padding:4px 10px" @click="confirmImportTargetModal('__new__')">{{ t('新建并导入') }}</button>
+          </div>
+          <div class="ed-modal-foot">
+            <button class="btn sm ghost" @click="cancelImportTargetModal">{{ t('取消') }}</button>
+            <button class="btn sm primary" @click="confirmImportTargetModal(importTarget)">{{ t('确定') }}</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -274,4 +363,10 @@ onBeforeUnmount(() => {
 .ed-modal-head { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink); }
 .ed-modal-head b { font-size: 15px; }
 .ed-modal-foot { display: flex; justify-content: flex-end; gap: 8px; }
+.imp-pl-list { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
+.imp-pl-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-size: 14px; color: var(--ink); }
+.imp-pl-item:has(input:checked) { border-color: var(--brand); background: var(--brand-soft); }
+.imp-pl-item input:checked + span { color: var(--brand); font-weight: 600; }
+.imp-pl-item input { accent-color: var(--brand); }
+.imp-pl-new { display: flex; gap: 8px; align-items: center; }
 </style>

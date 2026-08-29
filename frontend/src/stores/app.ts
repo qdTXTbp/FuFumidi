@@ -28,6 +28,18 @@ let _raf: number | null = null;
 // 全局 Web 弹窗（confirm/alert/prompt）：resolve 回调存模块级，避免放进响应式状态
 let _dlgResolve: ((v: any) => void) | null = null;
 
+/* 侧边栏宽度：可拖动调整，带范围限制 */
+export const SIDEBAR_DEFAULT_W = 240;
+export const SIDEBAR_MIN_W = 200;
+export const SIDEBAR_MAX_W = 520;
+function readSidebarWidth(): number {
+  try {
+    const v = parseInt(localStorage.getItem('fufumidi_sidebar_w') || '', 10);
+    if (Number.isFinite(v) && v >= SIDEBAR_MIN_W && v <= SIDEBAR_MAX_W) return v;
+  } catch (e) {}
+  return SIDEBAR_DEFAULT_W;
+}
+
 function openDb(): Promise<any> {
   if (_dbP) return _dbP;
   _dbP = new Promise((res) => {
@@ -129,6 +141,8 @@ export const useAppStore = defineStore('app', {
   state: () => ({
     view: 'play' as string,
     sidebarOpen: true,
+    sidebarResizing: false,
+    sidebarWidth: readSidebarWidth(),
     playerbarOpen: true,
     playlists: [] as any[],
     activePlaylistId: 'default' as string,
@@ -149,6 +163,7 @@ export const useAppStore = defineStore('app', {
     toastMsg: '' as any,
     confirm: null as any,
     dialog: null as any, // { kind:'confirm'|'alert'|'prompt', title, msg, okText, cancelText, value }
+    importPick: null as { items: any[] } | null, // 导入目标歌单选择浮层（待导入的 item 列表）
     fileBusy: false,
     ui: {
       settingsOpen: false,
@@ -235,8 +250,11 @@ export const useAppStore = defineStore('app', {
       else if (kind === 'alert') r(undefined);
       else r(false);
     },
-    async importFiles(items: any[]) {
+    async importFiles(items: any[], target?: string) {
+      // target: 歌单 id | 'all'（仅加入资料库/全部曲目，不归入任何歌单）
+      //         | undefined（沿用当前激活歌单，否则默认歌单）
       let ok = 0, dup = 0;
+      const imported: string[] = [];
       for (const it of items) {
         const name = it.name.replace(/\.(mid|midi|kar|rmi)$/i, '');
         const bytes = it.bytes ? new Uint8Array(it.bytes) : null;
@@ -262,23 +280,54 @@ export const useAppStore = defineStore('app', {
           meta: { size: it.bytes.byteLength, time: Date.now(), tracks: song.tracks.length, dur: song.totalSec, fp: bytes ? contentFp(name, bytes) : '' },
         };
         this.songs.push(item);
-        try {
-          const plStore = usePlaylistStore();
-          plStore.addSongs([item.id]);
-        } catch (e) {}
+        imported.push(item.id);
         await idbPut(STORE_SONGS, { id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, dur: item.meta.dur, fp: item.meta.fp, bytes: it.bytes });
         await dbSongPut({ id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, dur: item.meta.dur, fp: item.meta.fp, bytes: Array.from(it.bytes as any) });
         ok++;
       }
+      // 批量归入目标歌单（全部曲目即全局资料库，无需额外归入）
+      if (ok > 0 && imported.length) {
+        const plStore = usePlaylistStore();
+        if (target && target !== 'all') {
+          plStore.addToPlaylist(target, imported);
+        } else if (!target) {
+          const active = plStore.activePlaylist;
+          if (active) plStore.addToPlaylist(active.id, imported);
+          else plStore.addToPlaylist('default', imported);
+        }
+      }
       if (ok > 0) {
         const last = this.songs[this.songs.length - 1];
         await this.selectSong(last.id);
-        this.toast(t('已导入 ') + ok + t(' 首 MIDI') + (dup ? t('，跳过 ') + dup + t(' 首重复') : ''));
+        let suffix = dup ? t('，跳过 ') + dup + t(' 首重复') : '';
+        if (target && target !== 'all') {
+          const plName = usePlaylistStore().playlists.find(p => p.id === target)?.name;
+          if (plName) suffix = t(' 到「') + plName + t('」') + suffix;
+        }
+        this.toast(t('已导入 ') + ok + t(' 首 MIDI') + suffix);
       } else if (dup > 0) {
         this.toast(t('所选曲目已在资料库中，未重复导入'), 'warn');
       } else if (items.length) {
         this.toast(t('没有可导入的 MIDI 文件'), 'warn');
       }
+    },
+    // 用户主动导入（按钮/拖放/命令面板）：先选目标歌单，确认后再真正导入
+    importWithPicker(items: any[]) {
+      if (!items || !items.length) return;
+      this.importPick = { items };
+    },
+    confirmImportTarget(targetId: string, newName?: string) {
+      const p = this.importPick;
+      this.importPick = null;
+      if (!p || !p.items.length) return;
+      if (targetId === '__new__' && newName && newName.trim()) {
+        const plStore = usePlaylistStore();
+        targetId = plStore.create(newName.trim());
+      }
+      this.importFiles(p.items, targetId);
+    },
+    cancelImportTarget() {
+      this.importPick = null;
     },
     async restoreSongs() {
       const sqliteRecs = await dbSongsAll();
@@ -447,6 +496,11 @@ export const useAppStore = defineStore('app', {
     setView(v: string) {
       this.view = VIEWS.some(x => x.id === v) ? v : 'home';
       this.syncHash();
+    },
+    setSidebarWidth(w: number) {
+      const v = Math.round(Math.max(SIDEBAR_MIN_W, Math.min(SIDEBAR_MAX_W, w)));
+      this.sidebarWidth = v;
+      try { localStorage.setItem('fufumidi_sidebar_w', String(v)); } catch (e) {}
     },
     syncHash() {
       if (typeof location === 'undefined') return;

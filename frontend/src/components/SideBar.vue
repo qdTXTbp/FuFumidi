@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
 import Icon from './Icon.vue';
-import { useAppStore } from '../stores/app';
+import { useAppStore, SIDEBAR_DEFAULT_W, SIDEBAR_MIN_W } from '../stores/app';
 import { usePlaylistStore } from '../stores/playlist';
 import logoUrl from '../assets/logo.png';
 import { t } from '../core/i18n.js';
@@ -12,7 +12,8 @@ const app = useAppStore();
 const state = app;
 const appVersion = ref('v3.1.8');
 getAppVersion().then(v => { appVersion.value = v; });
-const importFiles = (items) => app.importFiles(items);
+const importFiles = (items, target) => app.importFiles(items, target);
+const importWithPicker = (items) => app.importWithPicker(items);
 const selectSong = (id) => app.selectSong(id);
 const removeSong = (id) => app.removeSong(id);
 const toast = (m, t) => app.toast(m, t);
@@ -25,6 +26,37 @@ const playlist = usePlaylistStore();
 
 function isFav(id) { return playlist.isFavorite(id); }
 function toggleFav(id) { playlist.toggleFavorite(id); }
+
+/* ---------------- 侧边栏宽度拖动（带范围限制） ---------------- */
+function startResize(e) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  app.sidebarResizing = true;
+  document.body.classList.add('resize-col');
+  const startX = e.clientX;
+  const startW = app.sidebarWidth;
+  // 视口限制：拖动时最多占到视口减去主区域最小宽度，避免把主区域挤没
+  const maxW = Math.max(SIDEBAR_MIN_W, window.innerWidth - 360);
+  const onMove = (ev) => {
+    app.setSidebarWidth(Math.min(maxW, startW + (ev.clientX - startX)));
+  };
+  const onUp = () => {
+    app.sidebarResizing = false;
+    document.body.classList.remove('resize-col');
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+  };
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+}
+function resetSidebarWidth() {
+  app.setSidebarWidth(SIDEBAR_DEFAULT_W);
+}
+function onResizerKey(e) {
+  if (e.key === 'ArrowLeft') { app.setSidebarWidth(app.sidebarWidth - 20); e.preventDefault(); }
+  else if (e.key === 'ArrowRight') { app.setSidebarWidth(app.sidebarWidth + 20); e.preventDefault(); }
+  else if (e.key === 'Home') { resetSidebarWidth(); e.preventDefault(); }
+}
 
 /* ---------------- 歌单数据 ---------------- */
 const batchOn = ref(false);
@@ -258,7 +290,7 @@ async function onPick() {
       if (!p) return;
       const ab = await bridge.readBinary(p);
       if (!ab) { toast('读取文件失败', 'error'); return; }
-      await importFiles([{ name: baseName(p), bytes: new Uint8Array(ab) }]);
+      await importWithPicker([{ name: baseName(p), bytes: new Uint8Array(ab) }]);
     } catch (e) { /* ignore */ }
     return;
   }
@@ -290,7 +322,7 @@ function onFileChange(e) {
   const files = Array.from(e.target.files || []);
   const items = files.map(f => ({ name: f.name, bytes: null }));
   Promise.all(files.map(f => f.arrayBuffer())).then(bufs => {
-    importFiles(items.map((it, i) => ({ name: it.name, bytes: new Uint8Array(bufs[i]) })));
+    importWithPicker(items.map((it, i) => ({ name: it.name, bytes: new Uint8Array(bufs[i]) })));
   });
   e.target.value = '';
 }
@@ -300,7 +332,7 @@ function onDrop(e) {
   const files = Array.from(e.dataTransfer.files || []).filter(f => /\.(mid|midi|kar|rmi)$/i.test(f.name));
   if (!files.length) return;
   Promise.all(files.map(f => f.arrayBuffer())).then(bufs => {
-    importFiles(files.map((f, i) => ({ name: f.name, bytes: new Uint8Array(bufs[i]) })));
+    importWithPicker(files.map((f, i) => ({ name: f.name, bytes: new Uint8Array(bufs[i]) })));
   });
 }
 
@@ -392,7 +424,7 @@ onMounted(() => { playlist.hydrateFavorites(); });
         <span class="si-num" v-if="!batchOn && (!state.playing || s.id !== state.currentId)">{{ i + 1 }}</span>
         <span class="si-num playing-ic" v-else-if="!batchOn">▶</span>
         <div class="si-name">
-          <b>{{ s.name }}</b>
+          <b :title="s.name">{{ s.name }}</b>
           <small>{{ s.song ? s.song.tracks.length : (s.meta.tracks || '—') }} {{ t(' 轨 · ') }} {{ (s.meta.size / 1024).toFixed(0) }} KB<span v-if="fmtDur(s)"> · {{ fmtDur(s) }}</span></small>
         </div>
         <div class="si-tools">
@@ -430,6 +462,11 @@ onMounted(() => { playlist.hydrateFavorites(); });
       <span class="tag">{{ appVersion }}</span>
       <span style="margin-left:auto">{{ t('离线 · Vue 3') }}</span>
     </div>
+
+    <!-- 宽度拖动把手：拖拽调整侧边栏宽度（带范围限制） -->
+    <div class="sidebar-resizer" role="separator" aria-orientation="vertical" tabindex="0"
+         :title="t('拖动调整宽度')" :aria-label="t('拖动调整宽度')"
+         @mousedown="startResize" @dblclick="resetSidebarWidth" @keydown="onResizerKey"></div>
   </aside>
 
   <!-- 弹窗通过 Teleport 挂到 body：.sidebar 的 backdrop-filter 会为 fixed 后代创建包含块，
@@ -565,4 +602,32 @@ onMounted(() => { playlist.hydrateFavorites(); });
 .pl-add-item .pl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-add-item em { font-style: normal; font-size: 11px; color: var(--stone); font-variant-numeric: tabular-nums; }
 .pl-add-new { display: flex; align-items: center; gap: 6px; border-top: 1px dashed var(--hairline); padding-top: 10px; }
+
+/* 侧边栏宽度拖动把手 */
+.sidebar-resizer {
+  position: absolute;
+  top: 0; right: 0;
+  width: 7px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 6;
+  touch-action: none;
+}
+.sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0; right: 1px;
+  width: 2px;
+  height: 100%;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.15s;
+}
+.sidebar:hover .sidebar-resizer::after,
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after,
+body.resize-col .sidebar-resizer::after {
+  background: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.sidebar-resizer:focus-visible { outline: none; }
 </style>

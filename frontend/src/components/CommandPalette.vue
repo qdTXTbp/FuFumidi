@@ -9,6 +9,7 @@ const app = useAppStore();
 const state = app;
 const setView = (v) => app.setView(v);
 const importFiles = (items) => app.importFiles(items);
+const importWithPicker = (items) => app.importWithPicker(items);
 const togglePlay = () => app.togglePlay();
 const toggleLoop = () => app.toggleLoop();
 const toggleMetro = () => app.toggleMetro();
@@ -113,7 +114,7 @@ function onFileChange(e) {
   const files = Array.from(e.target.files || []);
   if (!files.length) return;
   Promise.all(files.map(f => f.arrayBuffer())).then(bufs => {
-    importFiles(files.map((f, i) => ({ name: f.name, bytes: new Uint8Array(bufs[i]) })));
+    importWithPicker(files.map((f, i) => ({ name: f.name, bytes: new Uint8Array(bufs[i]) })));
   }).catch(() => {});
   e.target.value = '';
 }
