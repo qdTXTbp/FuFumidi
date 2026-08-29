@@ -135,7 +135,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       mode: cfg.mode || 'universal',
       perf: cfg.perf || 'quality',
     };
-    const map = { onset_threshold:'onset_threshold', frame_threshold:'frame_threshold', min_note_length:'min_note_length', min_note_ms:'min_note_ms', merge_gap_ms:'merge_gap_ms', tempo:'tempo', stem_format:'stem_format' };
+    const map = { onset_threshold:'onset_threshold', frame_threshold:'frame_threshold', min_note_length:'min_note_length', min_note_ms:'min_note_ms', merge_gap_ms:'merge_gap_ms', tempo:'tempo', stem_format:'stem_format', model:'model', model_size:'model_size' };
     for (const [k, rk] of Object.entries(map)) if (cfg[k] != null) req[rk] = cfg[k];
     for (const k of ['denoise','normalize','auto_bpm','no_merge','no_velnorm','with_drums','export_stems','no_pedal']) if (cfg[k]) req[k] = true;
     const p = new Promise((resolve, reject) => { _engineWorkerPending.set(id, { resolve, reject, win: cfg.__win, logId: cfg.__logId || cfg.id }); });
