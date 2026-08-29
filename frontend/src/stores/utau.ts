@@ -40,6 +40,7 @@ export const useUtauStore = defineStore('utau', {
     notes: [] as UtauNote[],
     selectedId: null as string | null,
     voicebankDir: '',   // 桌面版：声库目录；网页版可为空（用测试音源/仅编辑）
+    voicebanks: [] as { name: string; dir: string }[],  // 已导入的声库列表
   }),
   getters: {
     selected(state): UtauNote | null {
@@ -88,5 +89,13 @@ export const useUtauStore = defineStore('utau', {
     setBpm(v: number) { this.bpm = Math.max(20, Math.min(400, v)); this.persist(); },
     setSampleNote(v: string) { this.sampleNote = v; this.persist(); },
     setVoicebank(dir: string) { this.voicebankDir = dir; this.persist(); },
+    setVoicebanks(list: { name: string; dir: string }[]) {
+      this.voicebanks = list || [];
+      // 当前声库失联则回退到已导入第一项
+      if (this.voicebankDir && !this.voicebanks.some(v => v.dir === this.voicebankDir)) {
+        this.voicebankDir = this.voicebanks.length ? this.voicebanks[0].dir : '';
+      }
+      this.persist();
+    },
   },
 });

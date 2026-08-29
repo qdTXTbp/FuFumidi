@@ -77,6 +77,9 @@ contextBridge.exposeInMainWorld('fuBridge', {
   utauExportVoicebank: (opts) => ipcRenderer.invoke('utau:exportVoicebank', opts),
   // UTAU 工程渲染：渲染人声 WAV，返回字节供预览
   utauRenderTrack: (cfg) => ipcRenderer.invoke('utau:renderTrack', cfg),
+  // 已导入声库列表 / 导入现成声库 zip
+  utauListVoicebanks: () => ipcRenderer.invoke('utau:listVoicebanks'),
+  utauImportVoicebankZip: () => ipcRenderer.invoke('utau:importVoicebankZip'),
   openEditGuide: () => ipcRenderer.invoke('guide:openEdit'),
   // 转录参数预设
   presets: {

@@ -294,6 +294,8 @@ export interface FuBridge {
   openOutput(p: string): Promise<GeneralResult>;
   utauExportVoicebank(opts: { dir: string; files: { name: string; data: string }[] }): Promise<GeneralResult>;
   utauRenderTrack(cfg: { voicebank: string; notes: any[]; sampleNote: string; bpm?: number }): Promise<GeneralResult & { out?: string; bytes?: number[]; duration_ms?: number }>;
+  utauListVoicebanks(): Promise<{ ok: boolean; list?: { name: string; dir: string }[]; error?: string }>;
+  utauImportVoicebankZip(): Promise<{ ok: boolean; canceled?: boolean; name?: string; dir?: string; error?: string }>;
   pickZip(): Promise<string[] | null>;
 
   // gpu

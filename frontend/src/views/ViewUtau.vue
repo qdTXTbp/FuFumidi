@@ -5,6 +5,7 @@ import Icon from '../components/Icon.vue';
 import { useUtauStore } from '../stores/utau';
 import { t } from '../core/i18n.js';
 import ViewVoicebank from './ViewVoicebank.vue';
+import UtauLibrary from '../components/utau/UtauLibrary.vue';
 import UtauScore from '../components/utau/UtauScore.vue';
 import UtauTune from '../components/utau/UtauTune.vue';
 import UtauRender from '../components/utau/UtauRender.vue';
@@ -36,13 +37,21 @@ onMounted(() => { store.init(); pending.value = false; });
           <Icon :name="tb.ic" :size="13" /> {{ t(tb.label) }}
         </button>
       </div>
-      <div class="utau-meta" v-if="!pending">
-        <span class="muted small">{{ store.bpm }} BPM · 音源 {{ store.sampleNote }} · {{ store.notes.length }} 音符</span>
+      <div class="utau-meta" v-if="tab !== 'voicebank' && !pending" :title="store.voicebankDir">
+        <span class="muted small">{{ store.voicebankDir ? store.voicebankDir : t('未选声库') }} · {{ store.bpm }} BPM · {{ store.notes.length }} {{ t('音符') }}</span>
       </div>
     </div>
 
     <div class="utau-body">
-      <ViewVoicebank v-if="tab === 'voicebank'" />
+      <div v-if="tab === 'voicebank'" class="utau-vb">
+        <section class="utau-sec">
+          <UtauLibrary />
+        </section>
+        <section class="utau-sec">
+          <div class="utau-sec-title"><Icon name="mic" :size="13" /> {{ t('自制声库') }}</div>
+          <ViewVoicebank />
+        </section>
+      </div>
       <UtauScore v-else-if="tab === 'score'" />
       <UtauTune v-else-if="tab === 'tune'" />
       <UtauRender v-else-if="tab === 'render'" />
@@ -59,6 +68,9 @@ onMounted(() => { store.init(); pending.value = false; });
 .utau-tab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--stone); font-size: 13px; cursor: pointer; }
 .utau-tab:hover { background: var(--surface-muted); color: var(--ink); }
 .utau-tab.on { background: var(--brand-soft); color: var(--brand-text); border-color: var(--brand); }
-.utau-meta { margin-left: auto; white-space: nowrap; }
+.utau-meta { margin-left: auto; white-space: nowrap; max-width: 46%; overflow: hidden; text-overflow: ellipsis; }
 .utau-body { flex: 1; min-height: 0; overflow: auto; }
+.utau-vb { padding: 16px 18px; display: flex; flex-direction: column; gap: 16px; }
+.utau-sec { border: 1px solid var(--border); border-radius: 12px; background: var(--canvas); padding: 14px 16px; }
+.utau-sec-title { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink); margin-bottom: 4px; }
 </style>
