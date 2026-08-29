@@ -20,7 +20,7 @@ const idx = ref(0);
 const inputEl = ref(null);
 const fileInput = ref(null);
 
-const VIEW_ICONS = { home: 'home', play: 'play2', lyrics: 'music', edit: 'edit', viz: 'viz', analyze: 'chart', score: 'score', transcribe: 'transcribe', convert: 'convert', resources: 'box', voicebank: 'mic' };
+const VIEW_ICONS = { home: 'home', play: 'play2', lyrics: 'music', edit: 'edit', viz: 'viz', analyze: 'chart', score: 'score', transcribe: 'transcribe', convert: 'convert', resources: 'box', utau: 'utau' };
 
 function close() { state.ui.paletteOpen = false; }
 

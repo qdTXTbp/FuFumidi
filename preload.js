@@ -75,6 +75,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
   openOutput: (p) => ipcRenderer.invoke('shell:openOutput', p),
   // 声库导出：把 {name, base64} 文件列表写入用户选择的目录
   utauExportVoicebank: (opts) => ipcRenderer.invoke('utau:exportVoicebank', opts),
+  // UTAU 工程渲染：渲染人声 WAV，返回字节供预览
+  utauRenderTrack: (cfg) => ipcRenderer.invoke('utau:renderTrack', cfg),
   openEditGuide: () => ipcRenderer.invoke('guide:openEdit'),
   // 转录参数预设
   presets: {

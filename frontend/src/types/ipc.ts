@@ -293,6 +293,7 @@ export interface FuBridge {
   saveBinary(opts: { name: string; data: any }): Promise<GeneralResult>;
   openOutput(p: string): Promise<GeneralResult>;
   utauExportVoicebank(opts: { dir: string; files: { name: string; data: string }[] }): Promise<GeneralResult>;
+  utauRenderTrack(cfg: { voicebank: string; notes: any[]; sampleNote: string; bpm?: number }): Promise<GeneralResult & { out?: string; bytes?: number[]; duration_ms?: number }>;
   pickZip(): Promise<string[] | null>;
 
   // gpu

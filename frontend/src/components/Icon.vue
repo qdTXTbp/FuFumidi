@@ -59,6 +59,7 @@ const P = {
   search: '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
   mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/>',
+  utau: '<path d="M4 20c0-8 3-16 8-16s8 8 8 16"/><line x1="12" y1="4" x2="12" y2="20"/><path d="M8 8v2M16 8v2" />',
 };
 </script>
 

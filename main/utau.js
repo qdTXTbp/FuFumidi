@@ -1,9 +1,9 @@
 // ============================================================
-// UTAU 声库制作 IPC：把渲染进程传来的声库文件写入用户选择的目录
+// UTAU 声库制作 IPC：声库导出 + 人声渲染
 // ============================================================
 'use strict';
 
-function registerUtauIpc({ ipcMain, path, fs }) {
+function registerUtauIpc({ ipcMain, path, fs, os, spawnEngine }) {
   ipcMain.handle('utau:exportVoicebank', async (_e, opts) => {
     try {
       const { dir, files } = opts || {};
@@ -22,6 +22,42 @@ function registerUtauIpc({ ipcMain, path, fs }) {
       return { ok: false, error: String((err && err.message) || err) };
     }
   });
+
+  // 渲染 UTAU 工程 → 人声 WAV（调 engine_utau.py render-track，返回字节供预览）
+  ipcMain.handle('utau:renderTrack', (evt, cfg) => new Promise((resolve) => {
+    const { voicebank, notes, sampleNote, bpm } = cfg || {};
+    try {
+      if (!voicebank || !notes || !Array.isArray(notes) || !notes.length) {
+        return resolve({ ok: false, error: '缺少声库目录或音符' });
+      }
+      const out = path.join(os.tmpdir(), 'fufumidi', `utau_render_${Date.now()}.wav`);
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      const args = [
+        'render-track', '--voicebank', String(voicebank),
+        '--notes', JSON.stringify(notes),
+        '--sample-note', String(sampleNote || 'C4'),
+        '--out', out,
+      ];
+      spawnEngine(args, {
+        script: 'engine_utau.py',
+        onDone: (code, r) => {
+          if (r && r.result && r.result.ok && r.result.out && fs.existsSync(r.result.out)) {
+            try {
+              const bytes = Array.from(fs.readFileSync(r.result.out));
+              return resolve({ ok: true, out: r.result.out, duration_ms: r.result.duration_ms, bytes });
+            } catch (e) {
+              return resolve({ ok: true, out: r.result.out, error: String(e) });
+            }
+          }
+          const err = (r && (r.err || r.out || '').slice(-400)) || `引擎退出码 ${code}`;
+          resolve({ ok: false, error: err });
+        },
+        onError: (e) => resolve({ ok: false, error: String(e) }),
+      });
+    } catch (err) {
+      resolve({ ok: false, error: String((err && err.message) || err) });
+    }
+  }));
 }
 
 module.exports = { registerUtauIpc };
