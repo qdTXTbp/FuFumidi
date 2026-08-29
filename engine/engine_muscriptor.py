@@ -36,6 +36,20 @@ def available():
         return False
 
 
+def available_local_sizes():
+    """本地已就绪的 MuScriptor 规格列表（有完整权重才算就绪）。"""
+    models_dir = os.environ.get("FUFUMIDI_MODELS_DIR", "") or ""
+    if not models_dir:
+        return []
+    base = os.path.join(models_dir, "muscriptor")
+    out = []
+    for s in ("small", "medium", "large"):
+        p = os.path.join(base, s, "model.safetensors")
+        if os.path.exists(p) and os.path.getsize(p) > 0:
+            out.append(s)
+    return out
+
+
 def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                           num_threads=None, **kwargs):
     from muscriptor import TranscriptionModel
@@ -51,6 +65,12 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         _log(log_cb, f"加载 MuScriptor-{size}（本地权重）…")
         load_arg = local
     else:
+        ready = available_local_sizes()
+        if size not in ready and ready:
+            # 已就绪某些规格但本规格缺失：明确指引到资源中心下载，避免 HF 下载失败抛晦涩错误
+            raise RuntimeError(
+                f"未找到 MuScriptor-{size} 本地权重，请到【资源中心 → MuScriptor】"
+                f"下载 {size} 规格后再试（当前已就绪：{' / '.join(ready)}）。")
         _log(log_cb, f"加载 MuScriptor-{size}（HuggingFace，需授权）…")
         load_arg = size
 
