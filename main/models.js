@@ -139,6 +139,29 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     }
     return out;
   }
+  // 分卷压缩包：把 .001/.002 等按顺序拼接回单文件（7z 分卷 zip/7z 均适用）
+  async function combineSplitArchive(firstPart, outFile) {
+    const dir = path.dirname(firstPart);
+    const base = path.basename(firstPart).replace(/\.\d{3,}$/, '');
+    const parts = [];
+    for (let i = 1; ; i++) {
+      const p = path.join(dir, base + '.' + String(i).padStart(3, '0'));
+      if (fs.existsSync(p)) parts.push(p);
+      else break;
+    }
+    if (parts.length < 2) return firstPart;
+    const ws = fs.createWriteStream(outFile);
+    for (const p of parts) {
+      await new Promise((res, rej) => {
+        const rs = fs.createReadStream(p);
+        rs.on('error', rej);
+        rs.on('end', res);
+        rs.pipe(ws, { end: false });
+      });
+    }
+    await new Promise((res, rej) => ws.end(err => err ? rej(err) : res()));
+    return outFile;
+  }
   function extractLocalArchive(file, outDir) {
     const ext = path.extname(file).toLowerCase();
     if (ext === '.zip') {
@@ -209,11 +232,19 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     try {
       if (!filePath || !fs.existsSync(filePath)) return { ok: false, error: '压缩包不存在' };
       const ext = path.extname(filePath).toLowerCase();
-      if (!['.zip', '.7z', '.tar', '.gz', '.tgz', '.tar.gz', '.txz', '.tar.xz'].includes(ext)) return { ok: false, error: '不支持的压缩包格式' };
+      const splitMatch = filePath.match(/\.(zip|7z|tar|gz|tgz|txz)\.[0-9]{3,}$/i);
+      const isSplit = !!splitMatch;
+      const validExt = isSplit ? '.' + splitMatch[1].toLowerCase() : ext;
+      if (!['.zip', '.7z', '.tar', '.gz', '.tgz', '.tar.gz', '.txz', '.tar.xz'].includes(validExt)) return { ok: false, error: '不支持的压缩包格式' };
       const tmp = path.join(app.getPath('temp'), 'fufumidi-model-import-' + Date.now());
       fs.mkdirSync(tmp, { recursive: true });
       try {
-        await extractLocalArchive(filePath, tmp);
+        let archiveFile = filePath;
+        if (isSplit) {
+          const combinedName = path.join(tmp, 'combined' + validExt);
+          archiveFile = await combineSplitArchive(filePath, combinedName);
+        }
+        await extractLocalArchive(archiveFile, tmp);
         const dest = detectModelDest(tmp, path.basename(filePath));
         if (!dest) return { ok: false, error: '无法识别压缩包中的模型类型（MuScriptor / Aria-AMT / 钢琴模型）' };
         const srcDir = findModelSourceDir(tmp, dest);
