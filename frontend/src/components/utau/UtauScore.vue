@@ -6,6 +6,8 @@ import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import Icon from '../Icon.vue';
 import { useUtauStore } from '../../stores/utau';
 import { useAppStore } from '../../stores/app';
+import { parseMidi, buildSong } from '../../core/midi.js';
+import { fmtTime } from '../../core/util.js';
 import { t } from '../../core/i18n.js';
 
 const store = useUtauStore();
@@ -421,7 +423,7 @@ function onKey(e) {
     return;
   }
   if (k === ' ' && e.code === 'Space') { e.preventDefault(); play(); return; }
-  if (k === 'Escape') { closeCtx(); stopAll(); return; }
+  if (k === 'Escape') { closeCtx(); libOpen.value = false; stopAll(); return; }
   // 方向键微调
   const s = snap.value;
   if (k === 'ArrowLeft') { e.preventDefault(); e.shiftKey ? nudge({ dDur: -s }, 'dur-') : nudge({ dStart: -s }, 'start-'); }
@@ -442,6 +444,105 @@ function onDblFromCtx() {
   const n = store.selected;
   if (!n) return;
   app.promptDialog({ title: t('歌词'), msg: t('输入该音符的歌词/音节：'), value: n.lyric }).then(v => {
+    if (v != null && String(v).trim() !== '') store.updateNote(n.id, { lyric: String(v).trim() });
+  });
+}
+
+/* ---------------- MIDI 基底旋律导入 ---------------- */
+const libOpen = ref(false);   // 曲库选择浮层
+const midiInput = ref(null);  // 网页端隐藏文件选择
+
+// buildSong 产物（song）→ UTAU 音符数据；自动跳过鼓轨、选音符最多的轨道
+function songToUtau(song) {
+  const tpb = song.tpb || 480;
+  let best = null;
+  for (const tk of song.tracks || []) {
+    if (tk.isDrum) continue;
+    const ns = tk.notes || [];
+    if (!best || ns.length > best.length) best = ns;
+  }
+  if (!best || !best.length) return null;
+  const items = best.slice().sort((a, b) => a.start - b.start).map(n => ({
+    startBeat: Math.max(0, n.start / tpb),
+    durBeat: Math.max(0.25, (n.end - n.start) / tpb),
+    pitch: Math.max(0, Math.min(127, Math.round(n.midi))),
+    velocity: Math.max(1, Math.min(200, n.vel || 100)),
+    lyric: 'あ',
+  }));
+  return { items, bpm: (song.initialBpm && song.initialBpm >= 20 && song.initialBpm <= 400) ? song.initialBpm : 120 };
+}
+
+async function doImportSong(song) {
+  const r = songToUtau(song);
+  if (!r || !r.items.length) { app.toast(t('该 MIDI 没有可用的旋律音符（鼓轨已自动跳过）'), 'warn'); return; }
+  // 已有音符时询问替换或追加
+  let replace = true;
+  if (store.notes.length) {
+    replace = await app.confirmDialog({
+      title: t('导入基底旋律'),
+      msg: t('将导入 ') + r.items.length + t(' 个音符作为基底旋律。是否清空当前 ') + store.notes.length + t(' 个音符？\n（选「取消」则追加到末尾）'),
+      okText: t('清空并导入'),
+      cancelText: t('追加'),
+    });
+    // confirmDialog 取消返回 false
+  }
+  stopAll();
+  store.setBpm(r.bpm);
+  const ids = store.importNotes(r.items, !!replace);
+  if (!ids.length) return;
+  app.toast(t('已导入 ') + ids.length + t(' 个音符，双击音符可修改唱音'));
+  seekTo(0);
+  nextTick(() => { const el = wrap.value; if (el) el.scrollLeft = 0; });
+  draw();
+}
+
+function applyMidiBytes(buf) {
+  try {
+    const mid = parseMidi(new Uint8Array(buf));
+    const song = buildSong(mid);
+    doImportSong(song);
+  } catch (e) { app.toast(t('无法解析该 MIDI 文件'), 'error'); }
+}
+
+// 桌面端：文件对话框；网页端：隐藏 input
+async function importMidiFile() {
+  const b = window.fuBridge;
+  if (b && b.pickFile && b.readBinary) {
+    try {
+      const p = await b.pickFile({ filters: [{ name: 'MIDI', extensions: ['mid', 'midi', 'kar', 'rmi'] }] });
+      if (!p) return;
+      const ab = await b.readBinary(p);
+      if (ab) applyMidiBytes(ab);
+      return;
+    } catch (e) { /* 回退到网页 input */ }
+  }
+  if (midiInput.value) midiInput.value.click();
+}
+function onMidiFileChange(e) {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  f.arrayBuffer().then(buf => applyMidiBytes(buf)).catch(() => app.toast(t('读取文件失败'), 'error'));
+  e.target.value = '';
+}
+
+// 从曲库选一首 MIDI 作为基底旋律
+async function importFromLibrary(item) {
+  libOpen.value = false;
+  let song = item.song;
+  if (!song) {
+    try {
+      if (item.__bytes) song = buildSong(parseMidi(new Uint8Array(item.__bytes)));
+    } catch (e) { song = null; }
+  }
+  if (!song) { app.toast(t('无法读取该曲目的 MIDI 数据'), 'warn'); return; }
+  await doImportSong(song);
+}
+
+// 修改选中音符唱音（工具栏按钮）
+function editSelectedLyric() {
+  const n = store.selected;
+  if (!n) return;
+  app.promptDialog({ title: t('唱音'), msg: t('输入该音符的歌词/音节：'), value: n.lyric }).then(v => {
     if (v != null && String(v).trim() !== '') store.updateNote(n.id, { lyric: String(v).trim() });
   });
 }
@@ -489,10 +590,16 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
         <option v-for="n in pitchOptions" :key="n" :value="pitchName(n)">{{ pitchName(n) }}</option>
       </select></label>
       <span class="sep"></span>
+      <button class="btn sm" @click="importMidiFile" :title="t('导入 MIDI 文件作为基底旋律')"><Icon name="import" :size="13" /> {{ t('导入MIDI') }}</button>
+      <button class="btn sm" @click="libOpen = true" :title="t('从曲库选择一首 MIDI 作为基底旋律')"><Icon name="music" :size="13" /> {{ t('曲库旋律') }}</button>
+      <button class="btn sm" @click="editSelectedLyric" :disabled="!store.selected" :title="t('修改选中音符的唱音')"><Icon name="pencil" :size="13" /> {{ t('改唱音') }}</button>
+      <span class="sep"></span>
       <button class="btn primary" @click="addAtEnd"><Icon name="plus" :size="13" /> {{ t('末尾加音') }}</button>
       <button class="btn sm" @click="delSelected" :disabled="!store.selectedIds.length">{{ t('删除') }}</button>
       <button class="btn sm ghost danger" @click="store.clear()" :disabled="!store.notes.length">{{ t('清空') }}</button>
     </div>
+
+    <input ref="midiInput" type="file" accept=".mid,.midi,.kar,.rmi" hidden @change="onMidiFileChange" />
 
     <div ref="wrap" class="us-scroll" @pointerdown="closeCtx">
       <canvas ref="canvas" class="us-canvas"
@@ -519,6 +626,25 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
       <button class="us-ctx-i" :disabled="!ctxOnNote" @click="onDblFromCtx(); closeCtx()">{{ t('编辑歌词') }}</button>
       <button class="us-ctx-i danger" :disabled="!ctxOnNote" @click="delSelected(); closeCtx()">{{ t('删除音符') }}</button>
     </div>
+
+    <!-- 曲库选择：选一首 MIDI 作为基底旋律 -->
+    <Transition name="ov">
+      <div v-if="libOpen" class="us-lib-mask" role="dialog" aria-modal="true" :aria-label="t('选择基底旋律')" @click.self="libOpen = false">
+        <div class="us-lib">
+          <div class="us-lib-head">
+            <b>{{ t('选择基底旋律') }}</b>
+            <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" aria-label="t('关闭')" @click="libOpen = false"><Icon name="close" :size="14" /></button>
+          </div>
+          <div class="us-lib-list">
+            <button v-for="s in app.songs" :key="s.id" class="us-lib-item" @click="importFromLibrary(s)">
+              <span class="us-lib-name">{{ s.name }}</span>
+              <span class="us-lib-meta">{{ s.meta && s.meta.dur ? fmtTime(s.meta.dur) : '' }}</span>
+            </button>
+            <div v-if="!app.songs.length" class="us-lib-empty">{{ t('资料库为空，请先导入 MIDI 歌曲') }}</div>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -545,4 +671,17 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
 .us-ctx-i.danger { color: #d33; }
 .us-ctx-i.danger:hover:not(:disabled) { background: rgba(211,51,51,0.1); color: #d33; }
 .us-ctx-sep { height: 1px; background: var(--border); margin: 3px 6px; }
+
+/* 曲库选择浮层 */
+.us-lib-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.4); display: flex; align-items: center; justify-content: center; z-index: 60; }
+.us-lib { width: min(420px, 92vw); max-height: min(70vh, 560px); background: var(--canvas); border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(16,24,40,0.24); display: flex; flex-direction: column; overflow: hidden; }
+.us-lib-head { display: flex; align-items: center; gap: 8px; padding: 13px 16px 9px; font-size: 14px; color: var(--ink); }
+.us-lib-list { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 10px 10px; display: flex; flex-direction: column; gap: 4px; }
+.us-lib-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--ink); font-size: 13px; cursor: pointer; text-align: left; }
+.us-lib-item:hover { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-text); }
+.us-lib-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.us-lib-meta { flex: none; font-size: 11px; color: var(--text-muted, #888); }
+.us-lib-empty { padding: 26px 0; text-align: center; color: var(--text-muted, #888); font-size: 13px; }
 </style>

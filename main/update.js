@@ -16,7 +16,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
     for (const base of UPDATE_MIRRORS) {
       try {
         const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 12000);
-        const r = await net.fetch(base, { headers: { 'user-agent': 'FuFumidi/3.1.9' }, signal: ctrl.signal });
+        const r = await net.fetch(base, { headers: { 'user-agent': 'FuFumidi/3.1.10' }, signal: ctrl.signal });
         clearTimeout(to);
         if (!r.ok) { lastErr = new Error('HTTP ' + r.status); continue; }
         const d = await r.json();
@@ -32,6 +32,27 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
     if (p === 'darwin') return assets.find(a => arch === 'arm64' ? /arm64.*.dmg$/i.test(a.name) : /.dmg$/i.test(a.name) && !/arm64/i.test(a.name));
     if (p === 'linux') return assets.find(a => /.AppImage$/i.test(a.name));
     return null;
+  }
+  // 按 tag 拉取 release 说明（更新完成后首次启动的更新日志补充，多镜像回退）
+  async function fetchReleaseNotes(tag) {
+    let lastErr = null;
+    const endpoints = [
+      'https://ghfast.top/https://api.github.com/repos/qdTXTbp/FuFumidi/releases/tags/' + tag,
+      'https://gh-proxy.com/https://api.github.com/repos/qdTXTbp/FuFumidi/releases/tags/' + tag,
+      'https://ghproxy.net/https://api.github.com/repos/qdTXTbp/FuFumidi/releases/tags/' + tag,
+      'https://api.github.com/repos/qdTXTbp/FuFumidi/releases/tags/' + tag,
+    ];
+    for (const u of endpoints) {
+      try {
+        const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 12000);
+        const r = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.10' }, signal: ctrl.signal });
+        clearTimeout(to);
+        if (!r.ok) { lastErr = new Error('HTTP ' + r.status); continue; }
+        const d = await r.json();
+        if (d && d.tag_name) return d;
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('无法访问 GitHub');
   }
 
   ipcMain.handle('update:list', async () => {
@@ -52,6 +73,13 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
       return { ok: true, current: app.getVersion(), latest: ver, tag: rel.tag_name, notes: (rel.body || '').slice(0, 500), url: asset ? asset.browser_download_url : null, name: asset ? asset.name : null, mirror: asset ? ('https://ghfast.top/' + asset.browser_download_url) : null };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
+  // 更新完成后首次启动：按 tag 拉取该版本完整 release 说明（离线时前端回退到内置 changelog）
+  ipcMain.handle('update:notes', async (_e, tag) => {
+    try {
+      const rel = await fetchReleaseNotes(String(tag || '').replace(/^v/i, 'v'));
+      return { ok: true, body: rel.body || '' };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
   ipcMain.handle('update:download', async (evt, url) => {
     if (!url) return { ok: false, error: 'empty url' };
     const win = BrowserWindow.fromWebContents(evt.sender);
@@ -61,7 +89,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
     let lastErr = null;
     for (const u of mirrors) {
       try {
-        const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.9' } });
+        const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.10' } });
         if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
         const total = parseInt(res.headers.get('content-length') || '0', 10) || 0;
         const out = fs.createWriteStream(dest + '.part');

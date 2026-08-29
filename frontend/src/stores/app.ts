@@ -173,8 +173,10 @@ export const useAppStore = defineStore('app', {
       wallpaperOpen: false,
       guideOpen: false,
       paletteOpen: false,
+      changelogOpen: false,
     },
     integrity: null as any,
+    changelog: null as any, // 更新日志数据 { from, to, logs: [{ver, items}] }
   }),
   getters: {
     currentSong(state): any {

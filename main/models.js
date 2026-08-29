@@ -23,6 +23,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       url: 'https://zenodo.org/record/4034264/files/CRNN_note_F1%3D0.9677_pedal_F1%3D0.9186.pth?download=1',
       minSize: 1.6e8,
       downloadable: true,
+      runtime: 'piano',
     },
     // 通用多乐器转录（Kyutai MuScriptor，默认不随 Release 分发，需到资源中心下载）
     // 注意：MuScriptor 权重经 monologue82/Models 仓库分卷分发（gh.jasonzeng.dev 加速 + 多镜像回退，
@@ -37,6 +38,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       dest: path.join('muscriptor', 'small'),
       minSize: 5e7,
       downloadable: true,
+      runtime: 'muscriptor',
     },
     muscriptor_medium: {
       id: 'muscriptor_medium',
@@ -48,6 +50,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       dest: path.join('muscriptor', 'medium'),
       minSize: 2e8,
       downloadable: true,
+      runtime: 'muscriptor',
     },
     muscriptor_large: {
       id: 'muscriptor_large',
@@ -59,6 +62,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       dest: path.join('muscriptor', 'large'),
       minSize: 9e8,
       downloadable: true,
+      runtime: 'muscriptor',
     },
     // 钢琴转录（EleutherAI Aria-AMT）
     aria_amt: {
@@ -70,6 +74,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       dest: path.join('aria_amt'),
       minSize: 1e8,
       downloadable: true,
+      runtime: 'aria',
     },
   };
   // HuggingFace 渠道：官方 / hf-mirror
@@ -91,9 +96,9 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     };
     push('通用转录（int8 量化）', path.join(dir, 'basic_pitch_quant.onnx'), 'basic-pitch ONNX int8 量化模型（CPU 加速）');
     const pt = MODEL_REGISTRY.piano_transcription;
-    push(pt.name, path.join(dir, pt.dest), pt.note, { id: pt.id, downloadable: true, active: _activeDownloads.has(pt.id) });
+    push(pt.name, path.join(dir, pt.dest), pt.note, { id: pt.id, downloadable: true, active: _activeDownloads.has(pt.id), runtime: pt.runtime });
     const dm = demucsModelFile();
-    items.push({ id: 'demucs_htdemucs', name: '人声分离模型', path: dm || '', size: dm ? (() => { try { return fs.statSync(dm).size; } catch (e) { return 0; } })() : 0, exists: !!dm, downloadable: !dm, note: dm ? 'demucs htdemucs 已内置（约 80 MB）' : 'demucs htdemucs（未安装，可一键下载，国内自动走镜像）' });
+    items.push({ id: 'demucs_htdemucs', name: '人声分离模型', path: dm || '', size: dm ? (() => { try { return fs.statSync(dm).size; } catch (e) { return 0; } })() : 0, exists: !!dm, downloadable: !dm, runtime: 'separate', note: dm ? 'demucs htdemucs 已内置（约 80 MB）' : 'demucs htdemucs（未安装，可一键下载，国内自动走镜像）' });
     // 扩展模型（MuScriptor / Aria-AMT 等）：整目录检查
     for (const k of Object.keys(MODEL_REGISTRY)) {
       if (k === 'piano_transcription') continue;
@@ -111,7 +116,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       }
       items.push({
         id: m.id, name: m.name, path: dest, size, exists, active: _activeDownloads.has(m.id),
-        downloadable: true, note: m.note, type: m.type, repo: m.repo, gated: !!m.gated,
+        downloadable: true, note: m.note, type: m.type, repo: m.repo, gated: !!m.gated, runtime: m.runtime,
       });
     }
     return items;
@@ -579,7 +584,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     try {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       if (fs.existsSync(tmp)) start = fs.statSync(tmp).size;
-      const headers = { 'user-agent': 'FuFumidi/3.1.9' };
+      const headers = { 'user-agent': 'FuFumidi/3.1.10' };
       if (start > 0) headers['Range'] = 'bytes=' + start + '-';
       const urls = [spec.url, 'https://ghfast.top/' + spec.url, 'https://gh-proxy.com/' + spec.url, 'https://ghproxy.net/' + spec.url];
       let res = null;

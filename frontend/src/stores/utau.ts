@@ -143,18 +143,38 @@ export const useUtauStore = defineStore('utau', {
       return note.id;
     },
     // 粘贴/批量插入：notes 为不带 id 的纯数据，返回新 id 列表
+    _makeNote(it: Partial<UtauNote>): UtauNote {
+      return {
+        id: nid(), startBeat: Math.max(0, it.startBeat ?? 0),
+        durBeat: Math.max(0.125, it.durBeat ?? 1),
+        pitch: Math.max(0, Math.min(127, it.pitch ?? 60)),
+        lyric: it.lyric ?? 'あ',
+        velocity: it.velocity ?? 100, volume: it.volume ?? 100,
+        vibrato: it.vibrato ?? false, vibDepth: it.vibDepth ?? 25,
+        vibFreq: it.vibFreq ?? 5.5, flags: it.flags ?? '',
+      };
+    },
     addNotes(items: Partial<UtauNote>[]): string[] {
       if (!items.length) return [];
       this.pushUndo();
       const ids: string[] = [];
       for (const it of items) {
-        const note: UtauNote = {
-          id: nid(), startBeat: it.startBeat ?? 0, durBeat: it.durBeat ?? 1,
-          pitch: it.pitch ?? 60, lyric: it.lyric ?? 'あ',
-          velocity: it.velocity ?? 100, volume: it.volume ?? 100,
-          vibrato: it.vibrato ?? false, vibDepth: it.vibDepth ?? 25,
-          vibFreq: it.vibFreq ?? 5.5, flags: it.flags ?? '',
-        };
+        const note = this._makeNote(it);
+        this.notes.push(note); ids.push(note.id);
+      }
+      this.selectedIds = ids;
+      this.selectedId = ids[ids.length - 1];
+      this.persist();
+      return ids;
+    },
+    // 导入基底旋律：一次撤销合并。replace=true 先清空现有音符
+    importNotes(items: Partial<UtauNote>[], replace = false): string[] {
+      if (!items.length) return [];
+      this.pushUndo();
+      if (replace) { this.notes = []; this.selectedId = null; this.selectedIds = []; }
+      const ids: string[] = [];
+      for (const it of items) {
+        const note = this._makeNote(it);
         this.notes.push(note); ids.push(note.id);
       }
       this.selectedIds = ids;

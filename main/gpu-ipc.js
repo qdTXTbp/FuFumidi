@@ -156,7 +156,7 @@ function registerGpuIpc({
         let okDl = false;
         for (const u of mirrors) {
           try {
-            const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.9' } });
+            const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.10' } });
             if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
             const out = fs.createWriteStream(outPath);
             const reader = res.body.getReader();
@@ -205,6 +205,31 @@ function registerGpuIpc({
       return { ok: false, error: String((e && e.message) || e) };
     }
   });
+
+  // CUDA 增强包安装后的可用性自检：确保 torch.cuda 真正可用（Blackwell 需 cu128）
+  async function verifyCudaInstall() {
+    const code = [
+      "import json",
+      "try:",
+      "    import torch",
+      "    if not torch.cuda.is_available():",
+      "        print('###CUDA ' + json.dumps({'ok': False, 'error': 'torch.cuda.is_available()=False'})); raise SystemExit",
+      "    cap = tuple(torch.cuda.get_device_capability(0))",
+      "    cv = str(torch.version.cuda or '')",
+      "    info = {'ok': True, 'name': torch.cuda.get_device_name(0), 'capability': '%d.%d' % cap, 'blackwell': cap[0] >= 9, 'cuda_version': cv}",
+      "    try:",
+      "        info['need_cu128'] = bool(info['blackwell'] and (not cv or float(cv) < 12.8))",
+      "    except Exception:",
+      "        info['need_cu128'] = True",
+      "    print('###CUDA ' + json.dumps(info))",
+      "except Exception as e:",
+      "    print('###CUDA ' + json.dumps({'ok': False, 'error': str(e)}))",
+    ].join('\n');
+    const r = await runEngineInline(code);
+    const m = (r.out || '').match(/###CUDA\s+(\{.*\})/);
+    if (m) { try { return JSON.parse(m[1]); } catch (e) {} }
+    return { ok: false, error: String((r.out || r.error || '验证输出解析失败')).slice(-300) };
+  }
 
   ipcMain.handle('gpu:installAuto', async (evt) => {
     const win = BrowserWindow.fromWebContents(evt.sender);
@@ -259,6 +284,29 @@ function registerGpuIpc({
       });
       if (result.code === 0) {
         writeGpuManifest(kind, { source: 'auto' });
+        // CUDA：安装后自检，确保 torch.cuda 真正可用（覆盖 Blackwell / RTX 50 系 cu128）
+        if (kind === 'cuda') {
+          send({ percent: 90, text: 'CUDA 增强包安装完成，正在验证 GPU 可用性…', installing: true });
+          const verified = await verifyCudaInstall();
+          if (verified && verified.ok) {
+            send({ percent: 100, done: true });
+            return {
+              ok: true, kind, verified,
+              gpu: Object.assign({}, gpuDetect, {
+                available: true, backend: 'cuda', vendor: 'nvidia',
+                name: verified.name || gpuDetect.name,
+                blackwell: !!verified.blackwell,
+                need_cu128: !!verified.need_cu128,
+              }),
+              out: result.out, err: result.err,
+            };
+          }
+          // 自检失败：给出可操作的明确指引
+          const hint = (verified && verified.blackwell)
+            ? '检测到 Blackwell（RTX 50 系）显卡，但 CUDA 版本低于 12.8 无法驱动。请更新 NVIDIA 驱动（R570+ 支持 CUDA 12.8）后重新安装。'
+            : 'CUDA 增强包已安装但 torch.cuda 不可用。请检查：① NVIDIA 显卡驱动是否已安装且较新；② 网络是否完整下载了 torch cu128 包。仍不行可到 GitHub Release 下载 fufumidi-gpu-cuda 预打包增强包，在「本地导入 ZIP」中安装。';
+          return { ok: false, kind, verified, gpu: gpuDetect, error: hint, out: result.out, err: result.err };
+        }
         send({ percent: 100, done: true });
         return { ok: true, kind, gpu: gpuDetect, out: result.out, err: result.err };
       }

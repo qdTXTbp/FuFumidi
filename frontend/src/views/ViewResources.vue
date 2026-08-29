@@ -1,8 +1,8 @@
 <script setup>
 // 资源中心：Python 依赖 / 模型运行时 / 模型文件 / 诊断与配置
 // - Python 依赖：程序运行所需包（universal 组）
-// - 模型运行时：模型推理所需包（piano / separate 组）+ Rust 核心
-// - 模型文件：内置模型清单
+// - 模型运行时：模型推理所需包（piano / separate / muscriptor / aria / transkun 组）+ Rust 核心
+// - 模型文件：内置模型清单（权重状态 + 运行时包状态，缺包可一键安装）
 // - 诊断与配置：诊断包导出、配置导入导出
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
@@ -39,6 +39,27 @@ function fmtGroups(groups, names) {
     if (!info) { lines.push('[' + g + '] ' + t('未知')); continue; }
     if (info.ok) lines.push('[' + g + '] ' + t('通过'));
     else lines.push('[' + g + '] ' + t('缺失：') + ((info.missing || []).join(', ') || t('未知')));
+  }
+  return lines.join('\n');
+}
+
+// 转录模型运行时的依赖组定义（组 → 依赖包说明）
+const MODEL_DEP_GROUPS = [
+  { id: 'piano', label: '钢琴转录（piano_transcription_inference + torch）' },
+  { id: 'separate', label: '人声分离（demucs + torch）' },
+  { id: 'muscriptor', label: 'MuScriptor 通用转录（muscriptor）' },
+  { id: 'aria', label: 'Aria-AMT 钢琴（ariautils）' },
+  { id: 'transkun', label: 'Transkun 钢琴（transkun）' },
+];
+const MODEL_DEP_LABEL = Object.fromEntries(MODEL_DEP_GROUPS.map(g => [g.id, g.label]));
+function fmtGroupsPretty(groups, names) {
+  const lines = [];
+  for (const g of names) {
+    const info = groups && groups[g];
+    const label = MODEL_DEP_LABEL[g] || g;
+    if (!info) { lines.push('[' + label + '] ' + t('未知')); continue; }
+    if (info.ok) lines.push('[' + label + '] ' + t('通过'));
+    else lines.push('[' + label + '] ' + t('缺失：') + ((info.missing || []).join(', ') || t('未知')));
   }
   return lines.join('\n');
 }
@@ -106,31 +127,33 @@ const modelBusy = ref(false);
 const modelInstallBusy = ref(false);
 const rustInfo = ref({ available: false, version: '', binary: null });
 
-// 检查模型运行所需包（piano / separate 组）
+// 检查模型运行所需包（钢琴 / 分离 / MuScriptor / Aria / Transkun 组）
+const MODEL_GROUP_IDS = MODEL_DEP_GROUPS.map(g => g.id);
 async function checkModels() {
   if (!bridge || !bridge.depCheck) { showResult(t('检查模型依赖'), t('当前环境不支持检查依赖')); return; }
   modelBusy.value = true;
   beginCheck(t('检查模型依赖'));
   try {
     const r = await bridge.depCheck();
-    if (r && r.result && r.result.groups) resultText.value = fmtGroups(r.result.groups, ['piano', 'separate']);
+    if (r && r.result && r.result.groups) resultText.value = fmtGroupsPretty(r.result.groups, MODEL_GROUP_IDS);
     else resultText.value = String((r && (r.error || r.raw)) || 'unknown').slice(-600);
   } catch (e) { resultText.value = t('依赖检查异常：') + String(e.message || e); }
   checking.value = false;
   modelBusy.value = false;
 }
-// 补全模型运行所需包（piano + separate）
+// 补全模型运行所需包（全部转录模型组）
 async function installModels() {
   if (!bridge || !bridge.depInstall) { showResult(t('补全模型依赖'), t('当前环境不支持安装依赖')); return; }
   modelInstallBusy.value = true;
   beginCheck(t('补全模型依赖'));
   const parts = [];
   try {
-    for (const g of ['piano', 'separate']) {
+    for (const g of MODEL_GROUP_IDS) {
       const r = await bridge.depInstall(g);
-      parts.push('[' + g + '] ' + ((r && r.ok) ? t('完成') : t('失败：') + String((r && (r.error || r.raw)) || 'unknown')));
+      parts.push('[' + (MODEL_DEP_LABEL[g] || g) + '] ' + ((r && r.ok) ? t('完成') : t('失败：') + String((r && (r.error || r.raw)) || 'unknown')));
     }
     resultText.value = parts.join('\n');
+    refreshModels();
   } catch (e) { resultText.value = t('依赖安装失败：') + String(e.message || e); }
   checking.value = false;
   modelInstallBusy.value = false;
@@ -185,6 +208,8 @@ const modelChannel = ref('huggingface');
 const modelProg = reactive({});
 const hfToken = ref('');
 const hfTokenVisible = ref(false);
+const depGroups = ref(null);      // dep:check 缓存：模型运行时依赖组状态（muscriptor/aria/transkun…）
+const modelRtBusy = ref(false);
 async function loadHfToken() {
   try { const s = await settingsStore.load() || {}; hfToken.value = s.hf_token || ''; } catch (e) {}
 }
@@ -203,6 +228,36 @@ function restoreDownloads(list) {
 }
 async function refreshModels() {
   if (bridge && bridge.modelList) { try { const arr = await bridge.modelList() || []; models.value = arr; restoreDownloads(arr); } catch (e) { models.value = []; } }
+  // 同步刷新模型运行时依赖组状态，用于标记「权重已就绪但缺运行时包」的模型
+  if (bridge && bridge.depCheck) {
+    try { const r = await bridge.depCheck(); depGroups.value = (r && r.result && r.result.groups) || null; }
+    catch (e) { depGroups.value = null; }
+  }
+}
+// 模型运行时缺失的包列表；null=尚未检查（返回时前端不展示该状态）
+function runtimeMissingOf(m) {
+  if (!m || !m.runtime || !depGroups.value) return null;
+  const g = depGroups.value[m.runtime];
+  if (!g) return null;
+  return g.ok ? [] : (g.missing || []);
+}
+function runtimeOk(m) {
+  const missing = runtimeMissingOf(m);
+  return Array.isArray(missing) && missing.length === 0;
+}
+// 一键安装该模型的运行时依赖包（dep 组）
+async function installModelRuntime(m) {
+  if (!bridge || !bridge.depInstall || !m.runtime) return;
+  modelRtBusy.value = true;
+  const label = MODEL_DEP_LABEL[m.runtime] || m.runtime;
+  toast(t('正在安装 ') + label + t(' 运行时…'));
+  try {
+    const r = await bridge.depInstall(m.runtime);
+    if (r && r.ok) toast(t('已安装 ') + label + t(' 运行时'), 'ok');
+    else toast(t('安装失败：') + String((r && (r.error || r.raw)) || 'unknown').slice(-200), 'error');
+  } catch (e) { toast(t('安装失败：') + String(e.message || e), 'error'); }
+  await refreshModels();
+  modelRtBusy.value = false;
 }
 function downloadModel(m) {
   if (!bridge || !bridge.modelDownload) { toast(t('当前环境不支持下载模型'), 'warn'); return; }
@@ -321,7 +376,7 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
       <div class="field-row">
         <div>
           <div class="fr-label">{{ t('模型运行依赖') }}</div>
-          <div class="fr-hint">{{ t('模型推理所需包（torch / piano_transcription / demucs）') }}</div>
+          <div class="fr-hint">{{ t('模型推理所需包：钢琴(piano_transcription)、分离(demucs)、MuScriptor(muscriptor)、Aria-AMT(ariautils)、Transkun(transkun)') }}</div>
         </div>
         <div class="fr-ctl">
           <button class="btn sm" @click="checkModels" :disabled="modelBusy">{{ modelBusy ? t('正在检查…') : t('检查依赖') }}</button>
@@ -381,6 +436,11 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
               <span class="mi-size">{{ fmtSize(m.size) }}</span>
               <span v-if="m.gated" class="mi-gated" :title="t('需在 HuggingFace 接受协议并填写 Token')">{{ t('需授权') }}</span>
               <span :class="m.exists ? 'mi-ok' : 'mi-missing'">{{ m.exists ? t('已就绪') : t('缺失') }}</span>
+              <!-- 权重已就绪但缺运行时包：模型依赖检查的一部分 -->
+              <template v-if="m.exists && m.runtime && depGroups">
+                <span :class="runtimeOk(m) ? 'mi-ok' : 'mi-missing'" :title="(runtimeMissingOf(m) || []).join(', ')">{{ runtimeOk(m) ? t('运行时就绪') : t('缺运行时包') }}</span>
+                <button v-if="!runtimeOk(m)" class="btn sm" style="margin-left:auto;flex:none" :disabled="modelRtBusy" @click="installModelRuntime(m)">{{ t('一键安装') }}</button>
+              </template>
               <template v-if="m.downloadable && !m.exists">
                 <button class="btn sm" @click="downloadModel(m)" :disabled="(modelProg[m.id] && modelProg[m.id].active) || m.active" style="margin-left:auto;flex:none">
                   {{ ((modelProg[m.id] && modelProg[m.id].active) || m.active) ? ((modelProg[m.id] && modelProg[m.id].percent) || 0) + '%' : t('下载') }}

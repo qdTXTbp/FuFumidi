@@ -286,6 +286,7 @@ async function gpuAutoInstall() {
       gpuSetProgress(null, '');
     }
     await gpuRefreshInstalled();
+    await gpuLoadDetect();
   } catch (e) {
     gpu.status = t('安装失败：') + String((e && e.message) || e);
     gpuSetProgress(null, '');

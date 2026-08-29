@@ -10,11 +10,14 @@ import ThemeLibrary from './components/ThemeLibrary.vue';
 import WallpaperGallery from './components/WallpaperGallery.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import GuideOverlay from './components/GuideOverlay.vue';
+import ChangeLogOverlay from './components/ChangeLogOverlay.vue';
 import { ref } from 'vue';
 import { useAppStore, VIEWS } from './stores/app';
 import { usePlaylistStore } from './stores/playlist';
 import { useSettingsStore } from './stores/settings';
 import { setLang, t } from './core/i18n.js';
+import { getAppVersion } from './core/version.js';
+import { getBuiltinChangeLogs, fetchRemoteChangeLog } from './core/changelog.js';
 import { applyTheme, loadTheme } from './core/theme.js';
 import { viewFromPath } from './router';
 
@@ -116,8 +119,48 @@ async function initGlobal() {
     }, 1200);
   }
 
-  // 6) 启动时自动检查更新：有新版则弹窗询问是否更新（仅桌面端）
+  // 6) 更新完成后首次启动：展示更新日志（对比上次记录的版本号）
+  checkChangeLog();
+
+  // 7) 启动时自动检查更新：有新版则弹窗询问是否更新（仅桌面端）
   startupUpdateCheck();
+}
+
+/* 更新完成后首次启动检测：当前版本 > 上次记录版本 → 展示更新日志 */
+const SEEN_KEY = 'fufumidi_seen_version';
+async function checkChangeLog() {
+  let ver = '';
+  try { ver = await getAppVersion(); } catch (e) {}
+  const cur = String(ver || '').replace(/^v/i, '');
+  const curNum = verNum(cur);
+  if (!curNum) return;
+  let seen = 0;
+  try { seen = parseInt(localStorage.getItem(SEEN_KEY) || '0', 10); } catch (e) {}
+  if (curNum <= seen) return; // 非升级（或已展示过）
+  // 先记录版本，避免展示失败导致每次启动重复弹
+  try { localStorage.setItem(SEEN_KEY, String(curNum)); } catch (e) {}
+  // 内置 changelog 为主，远端 release 说明补充内置缺失的版本
+  let logs = getBuiltinChangeLogs(seen || 0, curNum);
+  if (!logs.length) {
+    const remote = await fetchRemoteChangeLog(cur);
+    if (remote) logs = [remote];
+  } else {
+    // 当前版本若不在内置数据中，尝试远端补充
+    if (!logs.some(g => g.ver === cur)) {
+      const remote = await fetchRemoteChangeLog(cur);
+      if (remote) logs = logs.concat(remote);
+    }
+  }
+  if (!logs.length) return;
+  state.changelog = { from: seen || null, to: cur, logs };
+  // 若新手引导开着则等它关闭后再展示，避免启动叠加
+  if (state.ui.guideOpen) {
+    const off = watch(() => state.ui.guideOpen, (v) => {
+      if (!v) { off(); state.ui.changelogOpen = true; }
+    });
+  } else {
+    setTimeout(() => { state.ui.changelogOpen = true; }, 800);
+  }
 }
 
 /* 简单版本号比较（支持 x.y.z，逐段数值比较，避免 '3.1.10' < '3.1.8' 的字典序问题） */
@@ -199,11 +242,12 @@ function onKey(e) {
     return;
   }
   if (e.key === 'Escape') {
-    if (state.ui.paletteOpen || state.ui.settingsOpen || state.ui.themesOpen || state.ui.guideOpen) {
+    if (state.ui.paletteOpen || state.ui.settingsOpen || state.ui.themesOpen || state.ui.guideOpen || state.ui.changelogOpen) {
       state.ui.paletteOpen = false;
       state.ui.settingsOpen = false;
       state.ui.themesOpen = false;
       state.ui.guideOpen = false;
+      state.ui.changelogOpen = false;
       return;
     }
   }
@@ -297,6 +341,9 @@ onBeforeUnmount(() => {
     </Transition>
     <Transition name="ov">
       <GuideOverlay v-if="state.ui.guideOpen" />
+    </Transition>
+    <Transition name="ov">
+      <ChangeLogOverlay v-if="state.ui.changelogOpen" />
     </Transition>
   </div>
 

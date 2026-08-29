@@ -89,15 +89,27 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         load_arg = size
 
     if device and device != "auto":
-        try:
-            model = TranscriptionModel.load_model(load_arg, device=device)
-        except Exception:
-            model = TranscriptionModel.load_model(load_arg)
+        dev = device
     else:
+        # 自动选择：优先 CUDA（Blackwell 需 cu128 torch，装好 GPU 增强包后自动生效）；
+        # DirectML / MPS 暂不显式传入，交给 muscriptor 默认（保障 CUDA 优先、其余不破坏）
+        dev = None
+        try:
+            from engine_gpu import torch_device as _torch_device
+            _d = _torch_device()
+            if _d in ("cuda", "mps"):
+                dev = _d
+        except Exception:
+            dev = None
+    try:
+        model = TranscriptionModel.load_model(load_arg, device=dev)
+    except Exception:
         model = TranscriptionModel.load_model(load_arg)
 
     if model._device and model._device.type == "cuda":
         _log(log_cb, "使用 GPU（CUDA）推理")
+    elif model._device and model._device.type == "mps":
+        _log(log_cb, "使用 GPU（Apple Metal）推理")
     else:
         _log(log_cb, "使用 CPU 推理（较慢）")
 
