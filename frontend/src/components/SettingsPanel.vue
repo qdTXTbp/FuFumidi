@@ -265,6 +265,7 @@ async function gpuLoadDetect() {
 }
 async function gpuAutoInstall() {
   if (!bridge || !bridge.gpuInstallAuto) { gpu.status = t('当前环境不支持安装 GPU 加速'); return; }
+  if (app.gpuInstall.active) { toast(t('GPU 加速正在安装中，请稍候')); return; } // 防重复触发
   gpu.busy = true;
   gpu.status = '';
   gpuSetProgress(0, t('正在检测显卡…'));
@@ -311,6 +312,7 @@ async function gpuAutoInstall() {
 }
 async function gpuImportLocal() {
   if (!bridge || !bridge.pickZip || !bridge.gpuImportLocal) { gpu.status = t('当前环境不支持本地导入'); return; }
+  if (app.gpuInstall.active) { toast(t('GPU 增强包正在安装中，请稍候')); return; } // 防重复触发
   gpu.busy = true;
   app.gpuInstall.active = true;
   app.gpuInstall.done = false;
@@ -615,8 +617,8 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
               <div class="gpu-row"><span class="gpu-k">{{ t('安装状态') }}</span><span class="gpu-v">{{ gpu.installed }}</span></div>
               <div v-if="gpu.detect && gpu.detect.needCu128" class="gpu-warn">{{ t('检测到 RTX 50 系（Blackwell）显卡，将自动安装 CUDA 12.8（cu128）加速包') }}</div>
             </div>
-            <button class="btn primary gpu-install" @click="gpuAutoInstall" :disabled="gpu.busy">
-              {{ gpu.busy ? t('正在安装…') : (gpuInstalled ? t('GPU 加速已安装 · 点击重装/升级') : t('安装 GPU 加速')) }}
+            <button class="btn primary gpu-install" @click="gpuAutoInstall" :disabled="gpu.busy || app.gpuInstall.active">
+              {{ (gpu.busy || app.gpuInstall.active) ? t('正在安装…') : (gpuInstalled ? t('GPU 加速已安装 · 点击重装/升级') : t('安装 GPU 加速')) }}
             </button>
             <div v-if="gpu.status" class="gpu-status">{{ gpu.status }}</div>
             <div v-if="gpu.progress != null" class="gpu-prog">
@@ -626,8 +628,8 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
               <div class="gpu-prog-text">{{ gpu.progressText }}</div>
             </div>
             <div class="gpu-extra">
-              <button class="btn sm" @click="gpuImportLocal" :disabled="gpu.busy">{{ t('本地导入 ZIP') }}</button>
-              <button v-if="gpuInstalled" class="btn sm danger" @click="gpuUninstall" :disabled="gpu.busy">{{ t('卸载') }}</button>
+              <button class="btn sm" @click="gpuImportLocal" :disabled="gpu.busy || app.gpuInstall.active">{{ t('本地导入 ZIP') }}</button>
+              <button v-if="gpuInstalled" class="btn sm danger" @click="gpuUninstall" :disabled="gpu.busy || app.gpuInstall.active">{{ t('卸载') }}</button>
             </div>
           </div>
         </div>

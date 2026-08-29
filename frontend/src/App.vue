@@ -304,7 +304,8 @@ function openGpuSettings() {
 }
 function dismissGpuBar() {
   clearTimeout(gpuBarTimer);
-  state.gpuInstall.active = false;
+  // 安装进行中不允许关闭：避免后台仍在安装但界面状态被清掉，导致重复触发安装
+  if (state.gpuInstall.active) return;
   state.gpuInstall.done = false;
 }
 
