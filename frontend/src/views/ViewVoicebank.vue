@@ -201,7 +201,7 @@ function getBrandColor() {
 function drawWave() {
   const cv = waveCanvas.value;
   const s = selSeg.value;
-  if (!cv || !s || !audio.value) return;
+  if (!cv || !s) return; // 录音片段自带 ownData，无需 audio.value
   const dpr = window.devicePixelRatio || 1;
   const w = cv.clientWidth, h = cv.clientHeight;
   if (!w || !h) return;
@@ -372,7 +372,7 @@ onBeforeUnmount(() => {
       <button class="btn sm" @click="autoSplit" :disabled="!audio">{{ t('重新切分') }}</button>
     </div>
 
-    <div v-if="audio" class="vb-body">
+    <div v-if="audio || segments.length" class="vb-body">
       <div class="vb-left">
         <div class="vb-left-head">
           <b>{{ t('片段') }} ({{ segments.length }})</b>
