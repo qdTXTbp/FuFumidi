@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // 主进程更新服务：GitHub releases 检查 / 下载 / 打开
 // ============================================================
 'use strict';
@@ -16,7 +16,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
     for (const base of UPDATE_MIRRORS) {
       try {
         const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 12000);
-        const r = await net.fetch(base, { headers: { 'user-agent': 'FuFumidi/3.1.11' }, signal: ctrl.signal });
+        const r = await net.fetch(base, { headers: { 'user-agent': 'FuFumidi/3.1.12' }, signal: ctrl.signal });
         clearTimeout(to);
         if (!r.ok) { lastErr = new Error('HTTP ' + r.status); continue; }
         const d = await r.json();
@@ -45,7 +45,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
     for (const u of endpoints) {
       try {
         const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 12000);
-        const r = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.11' }, signal: ctrl.signal });
+        const r = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.12' }, signal: ctrl.signal });
         clearTimeout(to);
         if (!r.ok) { lastErr = new Error('HTTP ' + r.status); continue; }
         const d = await r.json();
@@ -89,7 +89,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
     let lastErr = null;
     for (const u of mirrors) {
       try {
-        const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.11' } });
+        const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.12' } });
         if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
         const total = parseInt(res.headers.get('content-length') || '0', 10) || 0;
         const out = fs.createWriteStream(dest + '.part');
@@ -128,7 +128,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
     for (const s of UPDATE_SOURCES) {
       try {
         const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 6000);
-        const r = await net.fetch(s.uri, { method: 'HEAD', headers: { 'user-agent': 'FuFumidi/3.1.11' }, signal: ctrl.signal });
+        const r = await net.fetch(s.uri, { method: 'HEAD', headers: { 'user-agent': 'FuFumidi/3.1.12' }, signal: ctrl.signal });
         clearTimeout(to);
         if (r.ok) return s.id;
       } catch (e) { /* 探测失败，尝试下一个源 */ }
