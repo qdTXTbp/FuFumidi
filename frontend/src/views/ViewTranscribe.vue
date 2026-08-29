@@ -112,6 +112,24 @@ const MODE_NAMES = { universal: t('通用识别'), piano: t('钢琴专用'), sep
 const PERF_NAMES = { quality: t('最高质量'), balanced: t('均衡'), fast: t('高性能') };
 const MODE_DEFAULT_PRESET = { universal: t('通用·标准'), piano: t('钢琴：最优'), separate: t('人声：最优') };
 
+// 网页版内置预设（与引擎 presets.py 的 _builtin_presets 保持一致，仅取界面可应用的键）：
+// 无桥接时 loadPresets 用这份数据填充，避免「应用预设」因列表为空而失效。
+const WEB_BUILTIN_PRESETS = [
+  { name: '人声：最优', mode: 'separate', params: { onset_threshold: 0.05, frame_threshold: 0.25, minimum_note_length: 100, include_drums: true, denoise: true, normalize: true, auto_bpm: true } },
+  { name: '钢琴：最优', mode: 'piano', params: { onset_threshold: 0.05, frame_threshold: 0.06, min_note_ms: 20, merge_gap_ms: 0, include_pedal: true, denoise: true, normalize: true } },
+  { name: '通用·标准', mode: 'universal', params: {} },
+  { name: '通用·更干净', mode: 'universal', params: { onset_threshold: 0.60, frame_threshold: 0.45, minimum_note_length: 180 } },
+  { name: '通用·更灵敏', mode: 'universal', params: { onset_threshold: 0.40, frame_threshold: 0.25, minimum_note_length: 80 } },
+  { name: '通用·人声主旋律', mode: 'universal', params: { minimum_note_length: 150 } },
+  { name: '通用·人声纯净', mode: 'universal', params: { onset_threshold: 0.45, frame_threshold: 0.35, minimum_note_length: 160, merge_gap_ms: 40, denoise: true } },
+  { name: '通用·吉他拨弦', mode: 'universal', params: { frame_threshold: 0.30, minimum_note_length: 100 } },
+  { name: '通用·低音乐器', mode: 'universal', params: { frame_threshold: 0.35, minimum_note_length: 200 } },
+  { name: '钢琴·标准', mode: 'piano', params: {} },
+  { name: '钢琴·快速琶音', mode: 'piano', params: { onset_threshold: 0.25, min_note_ms: 40, merge_gap_ms: 25, include_pedal: false } },
+  { name: '分离·标准', mode: 'separate', params: {} },
+  { name: '分离·带鼓组', mode: 'separate', params: { include_drums: true } },
+];
+
 const fileInput = ref(null);
 
 function estSec() {
@@ -318,14 +336,23 @@ function selectPerf(p) { perfUserSet = true; perf.value = p; }
 
 /* ---------------- 参数预设 ---------------- */
 async function loadPresets() {
-  if (!bridge || !bridge.presets) return;
-  try {
-    const r = await bridge.presets.list();
-    if (!r || !r.ok) { toast('加载预设失败：' + ((r && r.error) || ''), 'warn'); return; }
-    presets.list.splice(0, presets.list.length, ...Object.entries(r.presets || {}).map(([name, val]) => ({ name, ...val })));
-    presets.builtins.splice(0, presets.builtins.length, ...(r.builtins || []));
-    if (presets.list.length) presetSel.value = presets.list[0].name;
-  } catch (e) {}
+  const local = !bridge || !bridge.presets;
+  let list = [], builtins = [];
+  if (local) {
+    // 网页版无桥接：用前端内置预设，保证「应用预设」可用（保存/删除仅桌面版支持）
+    list = WEB_BUILTIN_PRESETS.map(p => ({ name: p.name, mode: p.mode, params: p.params }));
+    builtins = WEB_BUILTIN_PRESETS.map(p => p.name);
+  } else {
+    try {
+      const r = await bridge.presets.list();
+      if (!r || !r.ok) { toast('加载预设失败：' + ((r && r.error) || ''), 'warn'); return; }
+      list = Object.entries(r.presets || {}).map(([name, val]) => ({ name, ...val }));
+      builtins = r.builtins || [];
+    } catch (e) {}
+  }
+  presets.list.splice(0, presets.list.length, ...list);
+  presets.builtins.splice(0, presets.builtins.length, ...builtins);
+  if (presets.list.length) presetSel.value = presets.list[0].name;
 }
 function applyPreset(name) {
   const p = presets.list.find(x => x.name === name);
