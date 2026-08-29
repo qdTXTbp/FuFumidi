@@ -272,5 +272,103 @@ def test_envelope_attack_starts_at_zero(tmp_path):
     assert float(np.max(np.abs(x[:attack_n]))) < float(np.max(np.abs(x)))
 
 
+# ---------------------------------------------------------------- M3 测试
+def _synth_utterance(sr=44100):
+    """3 个音节（各 40ms 辅音 + 160ms 元音），间隔 150ms 静音。"""
+    parts = []
+    for seed in (0, 1, 2):
+        con = _synth_consonant(0.04, seed=seed)
+        vow = _synth_vowel(196.0, 0.16, seed=seed)
+        parts.append(np.concatenate([con, vow]))
+        if seed < 2:
+            parts.append(np.zeros(int(0.15 * sr), dtype=np.float32))
+    return np.concatenate(parts)
+
+
+def test_split_syllables_three():
+    from engine_utau import split_syllables
+    sig = _synth_utterance()
+    segs = split_syllables(sig, 44100, min_silence_ms=120,
+                           min_syllable_ms=80, silence_db=-40)
+    assert len(segs) == 3, segs
+    starts = [s for s, _ in segs]
+    ends = [e for _, e in segs]
+    # 期望边界：0 / 350 / 700 ms 与 200 / 550 / 900 ms（±40ms 容差）
+    for expect, got in zip([0, 350, 700], starts):
+        assert abs(expect - got) <= 40, (expect, got)
+    for expect, got in zip([200, 550, 900], ends):
+        assert abs(expect - got) <= 40, (expect, got)
+
+
+def test_split_syllables_merge_short_silence():
+    """静音间隔小于阈值时应合并成一个音节。"""
+    from engine_utau import split_syllables
+    sig = _synth_utterance()
+    segs = split_syllables(sig, 44100, min_silence_ms=300,
+                           min_syllable_ms=80, silence_db=-40)
+    assert len(segs) == 1, segs
+
+
+def test_auto_oto_params_cv():
+    from engine_utau import auto_oto_params
+    con = _synth_consonant(0.040, seed=0)
+    vow = _synth_vowel(196.0, 0.370, seed=0)
+    lead = np.zeros(int(0.050 * 44100), dtype=np.float32)
+    wav = np.concatenate([lead, con, vow])
+    p = auto_oto_params(wav, 44100)
+    assert 30 <= p["offset"] <= 55, p          # 前置静音(50ms)附近
+    assert 5 <= p["consonant"] <= 90, p
+    assert p["preutterance"] == p["consonant"]
+    assert 5 <= p["blank"] <= 40, p            # 尾部静音(约10ms)附近
+    assert p["overlap"] == min(30.0, p["preutterance"] * 0.3)
+
+
+def test_segment_command(tmp_path):
+    """segment CLI：切分并写出片段。"""
+    vb_dir = str(tmp_path / "vb")
+    make_test_voicebank(vb_dir)
+    import soundfile as sf
+    inp = str(tmp_path / "utter.wav")
+    sf.write(inp, _synth_utterance(), 44100, subtype="PCM_16")
+    out_dir = str(tmp_path / "segs")
+    p = subprocess.run([PY, os.path.abspath(ENGINE), "segment",
+                        "--input", inp, "--out-dir", out_dir],
+                       capture_output=True, text=True, encoding="utf-8",
+                       cwd=os.path.dirname(ENGINE))
+    result = None
+    for line in (p.stdout or "").splitlines():
+        if line.startswith("###RESULT "):
+            result = json.loads(line[len("###RESULT "):])
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    assert result and result["ok"] is True, result
+    assert result["count"] == 3
+    assert len(result["files"]) == 3
+    assert all(os.path.isfile(f) for f in result["files"])
+
+
+def test_auto_oto_command(tmp_path):
+    """auto-oto CLI：生成 oto.ini（UTF-8 与 Shift-JIS）。"""
+    vb_dir = str(tmp_path / "vb")
+    make_test_voicebank(vb_dir)
+    out = str(tmp_path / "oto.ini")
+    p = subprocess.run([PY, os.path.abspath(ENGINE), "auto-oto",
+                        "--voicebank", vb_dir, "--out", out,
+                        "--encoding", "utf-8"],
+                       capture_output=True, text=True, encoding="utf-8",
+                       cwd=os.path.dirname(ENGINE))
+    result = None
+    for line in (p.stdout or "").splitlines():
+        if line.startswith("###RESULT "):
+            result = json.loads(line[len("###RESULT "):])
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    assert result and result["ok"] is True, result
+    assert result["count"] == 6
+    assert os.path.isfile(out)
+    with open(out, "r", encoding="utf-8") as fh:
+        text = fh.read()
+    assert "か.wav=か" in text
+    assert len(text.splitlines()) == 6
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

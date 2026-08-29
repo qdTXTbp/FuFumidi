@@ -82,4 +82,4 @@ pretty_midi 的 `Note / Instrument / PrettyMIDI` 接口，不依赖 pretty_midi�
 | `test_engine_config.py` | `MODES`/`DEFAULT_MODE`/`DEFAULTS` 结构、`merge_params`、`PERF_MODES`/`PERF_LABELS`、`resolve_threads` 边界（fast≤2 / balanced≤4 / quality 不限 / 非法回退） |
 | `test_midi_post.py` | `merge_overlap`、`remove_micro_notes`、`normalize_velocity`、`apply_post`、`count_notes`（含真实 pretty_midi 集成） |
 | `test_audio_io.py` | `AUDIO_EXTENSIONS`/`MIDI_EXTENSIONS` 内容、扩展名判定（大小写）、`remove_temp` 幂等、`find_ffmpeg` 返回类型 |
-| `test_utau_engine.py` | `engine_utau.py`（歌声合成 M1/M2）：oto.ini 解析、`note_to_hz`、单音节渲染链路、升降调时长一致性、多音节拼接（preutterance 对齐 + overlap 交叉淡化）、子音速度、颤音、包络、非法歌词报错 |
+| `test_utau_engine.py` | `engine_utau.py`（歌声合成 M1/M2/M3）：oto.ini 解析、`note_to_hz`、单音节渲染、多音节拼接（preutterance 对齐 + overlap 交叉淡化）、velocity/颤音/包络、上传音频静音切分 `split_syllables`、CV 自动标注 `auto_oto_params`（ZCR 辅音/元音边界）、segment/auto-oto CLI |

@@ -360,6 +360,125 @@ def render_track(vb, notes, sample_note="C4", sr=SAMPLE_RATE):
     return buf
 
 
+def _frame_env(data, sr, frame_ms=10):
+    """短时 RMS 包络。返回 (env, hop)。env[i] 为第 i 帧均方根。"""
+    hop = max(1, int(sr * frame_ms / 1000))
+    n = len(data)
+    frames = max(1, n // hop)
+    env = np.zeros(frames)
+    x = np.asarray(data, dtype=np.float64)
+    for i in range(frames):
+        seg = x[i * hop:(i + 1) * hop]
+        env[i] = np.sqrt(np.mean(seg ** 2)) if len(seg) else 0.0
+    return env, hop
+
+
+def split_syllables(data, sr, min_silence_ms=120, min_syllable_ms=80,
+                    silence_db=-40):
+    """按静音间隙把一段音频切成音节段（CV 式逐音节录音适用）。
+
+    返回 [(start_ms, end_ms), ...]（升序、不重叠、按帧对齐）。
+    - 能量低于峰值 `silence_db` dB 视为静音；
+    - 静音间隔 < min_silence_ms 的前后音节自动合并；
+    - 短于 min_syllable_ms 的片段丢弃。
+    连续无静音的音频会得到整段一个区域（留给前端手动微调）。
+    """
+    env, hop = _frame_env(data, sr, frame_ms=10)
+    frame_ms = 10.0
+    ref = max(float(np.max(env)), 1e-9)
+    db = 20.0 * np.log10(np.maximum(env, ref * 1e-6) / ref)
+    db = np.clip(db, -200.0, 0.0)
+    voice = db > silence_db
+
+    # 连续有声区段
+    regions = []
+    in_run = False
+    for i, v in enumerate(voice):
+        if v and not in_run:
+            start = i
+            in_run = True
+        elif not v and in_run:
+            regions.append((start, i))
+            in_run = False
+    if in_run:
+        regions.append((start, len(voice)))
+
+    min_sil_f = max(1, int(min_silence_ms / frame_ms))
+    min_syl_f = max(1, int(min_syllable_ms / frame_ms))
+    merged = []
+    for r in regions:
+        if merged and (r[0] - merged[-1][1]) < min_sil_f:
+            merged[-1] = (merged[-1][0], r[1])
+        else:
+            merged.append(r)
+    merged = [r for r in merged if (r[1] - r[0]) >= min_syl_f]
+    return [(r[0] * frame_ms, r[1] * frame_ms) for r in merged]
+
+
+def auto_oto_params(sample, sr):
+    """CV 音源单采样自动标注（启发式）。
+
+    返回 dict: offset/consonant/blank/preutterance/overlap（ms，单位与 oto.ini 一致）。
+    判定思路：
+      - 有声起止：短时能量（音量法，同 SetParam auto-CV）
+      - 辅音→元音边界：过零率 ZCR——噪声/辅音 ZCR 高，元音 ZCR 低，
+        元音起点 = ZCR 首次持续 < 阈值的位置（对「元音比辅音响」也稳健）
+    """
+    x = np.asarray(sample, dtype=np.float64)
+    frame_ms = 5.0
+    hop = int(sr * frame_ms / 1000)
+    n = len(x)
+    frames = max(1, n // hop)
+    total_ms = n / sr * 1000.0
+
+    env = np.zeros(frames)
+    zcr = np.zeros(frames)
+    for i in range(frames):
+        seg = x[i * hop:(i + 1) * hop]
+        env[i] = np.sqrt(np.mean(seg ** 2)) if len(seg) else 0.0
+        if len(seg) > 1:
+            zcr[i] = np.count_nonzero(np.diff(np.signbit(seg)))
+
+    def _defaults():
+        return {"offset": 0.0, "consonant": 50.0, "blank": 20.0,
+                "preutterance": 50.0, "overlap": 20.0}
+
+    if float(np.max(env)) <= 1e-12:
+        return _defaults()
+
+    floor = float(np.percentile(env, 10)) + 1e-12
+    thr = max(floor * 3.0, float(np.max(env)) * 0.02)
+
+    start = next((i for i in range(frames) if env[i] >= thr), 0)
+    end = next((i for i in range(frames - 1, -1, -1) if env[i] >= thr), start)
+    if end <= start:
+        return _defaults()
+
+    # 元音起点：起始后 ZCR 首次连续 3 帧（15ms）低于阈值 = 周期性稳定开始
+    vowel_thr = 40.0  # 每 5ms 帧过零数（噪声≈110，元音≈2-20）
+    run = 0
+    vowel_start = None
+    for i in range(start, frames):
+        if zcr[i] < vowel_thr:
+            run += 1
+            if vowel_start is None and run >= 3:
+                vowel_start = i - run + 1
+        else:
+            run = 0
+    if vowel_start is None:
+        vowel_start = min(start + 8, frames - 1)
+
+    offset_ms = max(0.0, start * frame_ms - 10.0)          # 前置静音留 10ms 余量
+    consonant = max(5.0, (vowel_start - start) * frame_ms)  # 相对 offset 的辅音长
+    preutterance = consonant                                # 元音起点 = 辅音末
+    overlap = min(30.0, preutterance * 0.3)
+    end_ms = (end + 1) * frame_ms
+    blank = max(5.0, total_ms - end_ms)                     # 尾部静音（文件尾起算）
+    return {"offset": round(offset_ms, 1), "consonant": round(consonant, 1),
+            "blank": round(blank, 1), "preutterance": round(preutterance, 1),
+            "overlap": round(overlap, 1)}
+
+
 # ---------------------------------------------------------------- CLI
 def _print_result(res):
     print(f"###RESULT {json.dumps(res, ensure_ascii=False)}")
@@ -435,6 +554,74 @@ def cmd_render_track(args):
         sys.exit(1)
 
 
+def cmd_segment(args):
+    """上传音频 → 静音切分音节段（CV 式录音）。"""
+    try:
+        from audio_io import load_audio_float32
+        data = load_audio_float32(args.input, args.sr)
+        segs = split_syllables(data, args.sr,
+                               min_silence_ms=args.min_silence,
+                               min_syllable_ms=args.min_syllable,
+                               silence_db=args.silence_db)
+        files = []
+        if args.out_dir:
+            import soundfile as sf
+            os.makedirs(args.out_dir, exist_ok=True)
+            for i, (s_ms, e_ms) in enumerate(segs):
+                s_i = int(s_ms * args.sr / 1000)
+                e_i = int(e_ms * args.sr / 1000)
+                path = os.path.join(args.out_dir, f"{i + 1:03d}.wav")
+                sf.write(path, data[s_i:e_i], args.sr, subtype="PCM_16")
+                files.append(path)
+        _print_result({
+            "ok": True,
+            "input": os.path.abspath(args.input),
+            "count": len(segs),
+            "segments": [{"start_ms": round(s, 1), "end_ms": round(e, 1)}
+                         for s, e in segs],
+            "files": files,
+        })
+    except Exception as e:
+        _print_result({"ok": False, "error": f"{type(e).__name__}: {e}"})
+        sys.exit(1)
+
+
+def cmd_auto_oto(args):
+    """对采样目录自动生成 oto.ini（CV 启发式标注）。"""
+    try:
+        import soundfile as sf
+        if not os.path.isdir(args.voicebank):
+            raise FileNotFoundError(f"音源目录不存在：{args.voicebank}")
+        files = sorted(f for f in os.listdir(args.voicebank)
+                       if f.lower().endswith(".wav") and not f.startswith("."))
+        if not files:
+            raise ValueError("目录内没有可标注的 .wav 文件")
+
+        entries = []
+        for f in files:
+            data, sr = sf.read(os.path.join(args.voicebank, f), dtype="float32")
+            if data.ndim > 1:
+                data = data.mean(axis=1)
+            p = auto_oto_params(np.asarray(data, dtype=np.float32), sr)
+            alias = os.path.splitext(f)[0]
+            entries.append({"filename": f, "alias": alias, **p})
+
+        lines = [f"{e['filename']}={e['alias']},{e['offset']},{e['consonant']},"
+                 f"{e['blank']},{e['preutterance']},{e['overlap']}"
+                 for e in entries]
+        encoding = "shift_jis" if args.encoding == "shift-jis" else "utf-8"
+        out = ""
+        if args.out:
+            with open(args.out, "w", encoding=encoding, newline="\n") as fh:
+                fh.write("\n".join(lines) + "\n")
+            out = os.path.abspath(args.out)
+        _print_result({"ok": True, "count": len(entries), "out": out,
+                       "encoding": encoding, "entries": entries})
+    except Exception as e:
+        _print_result({"ok": False, "error": f"{type(e).__name__}: {e}"})
+        sys.exit(1)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="engine_utau.py",
@@ -462,6 +649,24 @@ def build_parser():
     t.add_argument("--sample-note", default="C4", help="音源录制音高")
     t.add_argument("--out", required=True, help="输出 WAV 路径")
     t.set_defaults(func=cmd_render_track)
+
+    s = sub.add_parser("segment", help="按静音间隙切分音频为音节段（CV 式）")
+    s.add_argument("--input", required=True, help="音频文件（任意格式）")
+    s.add_argument("--sr", type=int, default=44100, help="目标采样率")
+    s.add_argument("--min-silence", type=int, default=120,
+                   help="最小静音间隔(ms)，小于则前后音节合并")
+    s.add_argument("--min-syllable", type=int, default=80,
+                   help="最小音节时长(ms)，短于则丢弃")
+    s.add_argument("--silence-db", type=float, default=-40,
+                   help="静音阈值(dB，相对峰值)")
+    s.add_argument("--out-dir", default=None, help="切分片段写出目录（可省略）")
+    s.set_defaults(func=cmd_segment)
+
+    o = sub.add_parser("auto-oto", help="对采样目录自动生成 oto.ini（CV 启发式）")
+    o.add_argument("--voicebank", required=True, help="音源目录（含 wav 采样）")
+    o.add_argument("--out", default=None, help="输出 oto.ini 路径（默认不写盘）")
+    o.add_argument("--encoding", default="utf-8", choices=["utf-8", "shift-jis"])
+    o.set_defaults(func=cmd_auto_oto)
 
     return parser
 

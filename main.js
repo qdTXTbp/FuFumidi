@@ -46,6 +46,7 @@ const { registerGpuIpc } = require('./main/gpu-ipc');
 const { createRustService } = require('./main/rust');
 const { createDbService } = require('./main/db');
 const { registerWallpaperIpc } = require('./main/wallpaper');
+const { registerUtauIpc } = require('./main/utau');
 const { createWindow, configureSession, openFileFromArgv, openPath } = require('./main/window');
 const { pyLit, parsePyJson } = require('./main/py-util');
 
@@ -90,6 +91,7 @@ if (!gotLock) {
     DbService.registerDbIpc({ ipcMain });
     registerSettingsIpc({ ipcMain, readSettings, writeSettings, db: DbService });
     registerWallpaperIpc({ ipcMain, app, fs, net, runEngineInline, parsePyJson });
+    registerUtauIpc({ ipcMain, path, fs });
     const RustService = createRustService({ app, path, fs });
     RustService.registerRustIpc({ ipcMain });
     registerPluginsIpc();
