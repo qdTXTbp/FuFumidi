@@ -65,7 +65,7 @@ function registerDialogsIpc({ ipcMain, dialog, path, fs, app }) {
   ipcMain.handle('dialog:pickModelArchive', async () => {
     const r = await dialog.showOpenDialog({
       properties: ['openFile'],
-      filters: [{ name: '模型压缩包', extensions: ['zip', '7z', 'tar', 'gz', 'tgz', 'tar.gz', 'txz'] }],
+      filters: [{ name: '模型压缩包', extensions: ['zip', '7z', 'tar', 'gz', 'tgz', 'tar.gz', 'txz', '001', '002', '003', 'z01', 'z02'] }],
     });
     return r.canceled ? null : r.filePaths[0];
   });
