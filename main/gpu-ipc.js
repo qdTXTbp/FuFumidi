@@ -152,7 +152,7 @@ function registerGpuIpc({
         if (!f || !f.url) throw new Error('missing file url');
         const name = f.name || decodeURIComponent((new URL(f.url).pathname.split('/').pop() || 'part'));
         const outPath = path.join(dlDir, name);
-        const mirrors = [f.url, 'https://ghfast.top/' + f.url, 'https://ghproxy.net/' + f.url, 'https://gh-proxy.com/' + f.url];
+        const mirrors = [f.url, 'https://gh.jasonzeng.dev/' + f.url, 'https://ghfast.top/' + f.url, 'https://ghproxy.net/' + f.url, 'https://gh-proxy.com/' + f.url];
         let okDl = false;
         for (const u of mirrors) {
           try {
@@ -205,6 +205,19 @@ function registerGpuIpc({
       return { ok: false, error: String((e && e.message) || e) };
     }
   });
+
+  // CUDA 增强包 pip 源回退链：国内镜像优先（阿里云 pytorch-wheels / 上海交大），官方兜底。
+  // torch 需 cu128 专用 wheel（镜像 pytorch-wheels/cu128），onnxruntime-gpu 等走 PyPI 镜像。
+  const CUDA_PIP_SOURCES = [
+    { torch: 'https://mirrors.aliyun.com/pytorch-wheels/cu128', pypi: 'https://mirrors.aliyun.com/pypi/simple', label: '阿里云' },
+    { torch: 'https://mirror.sjtu.edu.cn/pytorch-wheels/cu128', pypi: 'https://pypi.tuna.tsinghua.edu.cn/simple', label: '上海交大' },
+    { torch: 'https://download.pytorch.org/whl/cu128', pypi: 'https://pypi.org/simple', label: '官方' },
+  ];
+  const DIRECTML_PIP_SOURCES = [
+    { torch: null, pypi: 'https://mirrors.aliyun.com/pypi/simple', label: '阿里云' },
+    { torch: null, pypi: 'https://pypi.tuna.tsinghua.edu.cn/simple', label: '清华' },
+    { torch: null, pypi: null, label: '官方' },
+  ];
 
   // CUDA 增强包安装后的可用性自检：确保 torch.cuda 真正可用（Blackwell 需 cu128）
   async function verifyCudaInstall() {
@@ -262,26 +275,36 @@ function registerGpuIpc({
       const targetSite = gpuEnhanceSite(kind);
       await stopEngineWorker();
       fs.mkdirSync(targetSite, { recursive: true });
-      send({ percent: 1, text: '检测到 ' + (d.name || d.vendor) + '，开始安装 ' + (kind === 'cuda' ? 'CUDA（cu128）' : 'DirectML') + ' 加速…', installing: true });
-      const result = await new Promise((res) => {
-        const c = spawn(py, ['-m', 'pip', 'install', '--target', targetSite, '-r', reqPath, '--no-input', '--disable-pip-version-check'], { env: engineEnv() });
-        let out = '', err = '';
-        const push = (s) => {
-          out += s;
-          const lines = s.split(/\r?\n/);
-          for (const l of lines) {
-            const t = l.trim();
-            if (!t) continue;
-            if (/^(Collecting|Downloading|Installing|Successfully|Requirement already|Using cached)/.test(t)) {
-              send({ percent: -1, text: t.slice(0, 120), installing: true });
+      const sourceSets = kind === 'cuda' ? CUDA_PIP_SOURCES : DIRECTML_PIP_SOURCES;
+      // 逐个源尝试：国内镜像优先，全部失败则报最后一源的错误
+      let result = null;
+      for (const src of sourceSets) {
+        send({ percent: 1, text: '检测到 ' + (d.name || d.vendor) + '，开始安装 ' + (kind === 'cuda' ? 'CUDA（cu128）' : 'DirectML') + ' 加速（源：' + src.label + '）…', installing: true });
+        const args = ['-m', 'pip', 'install', '--target', targetSite, '-r', reqPath, '--no-input', '--disable-pip-version-check'];
+        if (kind === 'cuda') { args.push('-i', src.torch, '--extra-index-url', src.pypi); }
+        else if (src.pypi) { args.push('-i', src.pypi); }
+        result = await new Promise((res) => {
+          const c = spawn(py, args, { env: engineEnv() });
+          let out = '', err = '';
+          const push = (s) => {
+            out += s;
+            const lines = s.split(/\r?\n/);
+            for (const l of lines) {
+              const t = l.trim();
+              if (!t) continue;
+              if (/^(Collecting|Downloading|Installing|Successfully|Requirement already|Using cached|Looking in)/.test(t)) {
+                send({ percent: -1, text: t.slice(0, 120), installing: true });
+              }
             }
-          }
-        };
-        c.stdout.on('data', (x) => push(x.toString('utf8')));
-        c.stderr.on('data', (x) => { err += x.toString('utf8'); push(x.toString('utf8')); });
-        c.on('close', (code) => res({ code, out: out.slice(-800), err: err.slice(-800) }));
-        c.on('error', (e) => res({ code: -1, err: String(e) }));
-      });
+          };
+          c.stdout.on('data', (x) => push(x.toString('utf8')));
+          c.stderr.on('data', (x) => { err += x.toString('utf8'); push(x.toString('utf8')); });
+          c.on('close', (code) => res({ code, out: out.slice(-800), err: err.slice(-800) }));
+          c.on('error', (e) => res({ code: -1, err: String(e) }));
+        });
+        if (result.code === 0) break;
+        send({ percent: -1, text: '源「' + src.label + '」安装失败，切换下一镜像…', installing: true });
+      }
       if (result.code === 0) {
         writeGpuManifest(kind, { source: 'auto' });
         // CUDA：安装后自检，确保 torch.cuda 真正可用（覆盖 Blackwell / RTX 50 系 cu128）
@@ -310,7 +333,7 @@ function registerGpuIpc({
         send({ percent: 100, done: true });
         return { ok: true, kind, gpu: gpuDetect, out: result.out, err: result.err };
       }
-      return { ok: false, kind, error: (result.err || result.out || '安装失败').slice(-300), out: result.out, err: result.err, gpu: gpuDetect };
+      return { ok: false, kind, error: '所有安装源（阿里云/交大/官方）均失败：' + (result.err || result.out || '安装失败').slice(-300) + '。可到 GitHub Release 下载 fufumidi-gpu-cuda / fufumidi-gpu-directml 预打包增强包，在「本地导入 ZIP」中安装。', out: result.out, err: result.err, gpu: gpuDetect };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 }
