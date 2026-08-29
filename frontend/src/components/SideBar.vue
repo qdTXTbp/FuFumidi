@@ -312,8 +312,8 @@ async function onPickFolder() {
       } catch (e) {}
     }
     if (items.length) {
-      await importFiles(items);
-      toast('已导入文件夹 ' + items.length + ' 个 MIDI', 'ok');
+      // 与文件导入一致：先询问导入到哪个歌单（含批量）
+      importWithPicker(items);
     }
   } catch (e) { /* ignore */ }
 }
