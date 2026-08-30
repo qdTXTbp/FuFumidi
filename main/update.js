@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // 主进程更新服务：GitHub releases 检查 / 下载 / 打开
 // ============================================================
 'use strict';
@@ -134,8 +134,9 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
 
   // 更新流程（防损坏设计）：
   //  1) 主进程下载完整离线安装包到临时目录（多镜像回退 + 进度 + 大小校验）——下载中断只留临时文件，不影响当前安装
-  //  2) 下载成功且校验通过后，才拉起本地安装器静默安装（无网络依赖，不边下边改已安装文件）
-  //  3) 守护脚本在安装器退出后校验核心文件完整性，完整才重启主程序
+  //  2) 应用自我退出；守护脚本=等待主应用真正退出 → 才运行本地安装器静默安装（无网络依赖，不边下边改已安装文件）
+  //     —— 关键：必须先等主应用退出再安装，否则安装器检测到 FuFumidi.exe 占用会提示「进程未关闭」并中止
+  //  3) 安装器退出后校验核心文件完整性，完整才重启主程序
   ipcMain.handle('update:launchUpdater', async (evt, version) => {
     const win = BrowserWindow.fromWebContents(evt.sender);
     try {
@@ -145,36 +146,40 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
       // 1) 主进程预下载（失败/取消不影响当前安装）
       const dl = await downloadInstallPackage(asset.browser_download_url, win);
       if (!dl.ok) return { ok: false, error: '更新包下载失败：' + dl.error + '（当前安装未受影响，可稍后重试）' };
-      // 2) 守护脚本：等待本地安装器退出，校验核心文件完整后重启主程序
+      // 2) 守护脚本：等主应用退出 → 运行安装器 → 校验 → 重启
       const { spawn } = require('child_process');
       const updaterDir = app.isPackaged ? path.dirname(process.execPath) : path.join(app.getAppPath(), 'release', 'win-unpacked');
       const mainExe = path.join(updaterDir, 'FuFumidi.exe');
-      const procName = path.basename(dl.path, '.exe'); // FuFumidi.Install
-      const daemon = path.join(app.getPath('temp'), 'fufumidi-restart.ps1');
-      fs.writeFileSync(daemon, `param([string]$exePath, [string]$procName, [int]$timeout = 600)
+      const daemon = path.join(app.getPath('temp'), 'fufumidi-install.ps1');
+      fs.writeFileSync(daemon, `param([string]$exePath, [string]$installer, [int]$timeout = 600)
+$procName = [System.IO.Path]::GetFileNameWithoutExtension($exePath)
+# 1) 先等主应用完全退出——否则安装器会检测到进程占用而中止（「进程未关闭」）
 $deadline = (Get-Date).AddSeconds($timeout)
-while ((Get-Date) -lt $deadline) {
-  if (-not (Get-Process -Name $procName -ErrorAction SilentlyContinue)) { break }
-  Start-Sleep -Seconds 2
+while (Get-Process -Name $procName -ErrorAction SilentlyContinue) {
+  if ((Get-Date) -gt $deadline) { exit 6 }
+  Start-Sleep -Seconds 1
 }
-Start-Sleep -Seconds 3
-# 核心文件完整性校验：安装中断/损坏时不再重启残缺程序（避免「关掉安装器就损坏工具」）
+Start-Sleep -Seconds 2
+# 2) 本地静默安装（-I 非交互；安装包已在本地，无网络依赖）
+$inst = Start-Process -FilePath $installer -ArgumentList '-I' -Wait -PassThru -ErrorAction SilentlyContinue
+# 3) 核心文件完整性校验：安装中断/损坏时不再重启残缺程序（避免「关掉安装器就损坏工具」）
 $resources = Join-Path (Split-Path $exePath) "resources"
 $asar = Join-Path $resources "app.asar"
 if (-not (Test-Path $exePath)) { exit 5 }
 if (-not (Test-Path $asar)) { exit 4 }
 $sz = (Get-Item $asar).Length
 if ($sz -lt 1MB) { exit 3 }
+# 4) 重启
 Start-Process -FilePath $exePath -WorkingDirectory (Split-Path $exePath)
 `, 'utf8');
       try {
-        const guard = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', daemon, '-exePath', mainExe, '-procName', procName], { detached: true, stdio: 'ignore' });
+        const guard = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', daemon, '-exePath', mainExe, '-installer', dl.path], { detached: true, stdio: 'ignore' });
         guard.unref();
       } catch (e) { /* 守护启动失败不阻塞更新 */ }
-      // 3) 本地静默安装（-I 非交互；安装包已在本地，无网络依赖）
-      const cp = spawn(dl.path, ['-I'], { cwd: path.dirname(dl.path), detached: true, stdio: 'ignore' });
-      cp.unref();
-      return { ok: true, installPath: dl.path, size: dl.size };
+      // 3) 主应用自我退出：安装交由守护脚本在应用退出后执行
+      //    延迟数百毫秒，确保上面的 IPC 响应先返回前端、界面提示能显示
+      setTimeout(() => { try { app.exit(0); } catch (e) {} }, 800);
+      return { ok: true, installPath: dl.path, size: dl.size, quitting: true };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 }
