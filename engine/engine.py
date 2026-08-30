@@ -126,6 +126,27 @@ def _basic_ok():
     return available()
 
 
+def _release_gpu_memory():
+    """转录完成/中断后统一释放模型与显存。
+
+    torch 的缓存分配器不会自动把已删除张量的显存归还给驱动，
+    需显式 empty_cache()；否则模型卸载后显存仍被占用（用户直观感受「占显存」）。
+    各引擎进程内加载的模型对象在 transcribe_* 返回后引用归零，
+    这里的 gc.collect() + torch.cuda.empty_cache() 即可真正释放。
+    """
+    try:
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
 def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
                perf_mode="quality"):
     """统一转录入口。
@@ -146,38 +167,41 @@ def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
 
     mode = mode or DEFAULT_MODE
     params = {**(DEFAULTS.get(mode, {})), **(params or {})}
+    try:
+        if mode == "piano":
+            # 钢琴子模型：piano_pt（默认 / ByteDance）/ aria / transkun
+            pmodel = (params or {}).get("model") or "piano_pt"
+            if pmodel == "aria":
+                import engine_aria
+                return engine_aria.transcribe_aria(audio_path, output_midi, params=params,
+                                                   log_cb=log_cb, num_threads=num_threads)
+            if pmodel == "transkun":
+                import engine_transkun
+                return engine_transkun.transcribe_transkun(audio_path, output_midi, params=params,
+                                                           log_cb=log_cb, num_threads=num_threads)
+            import engine_pt
+            params["perf_mode"] = perf_mode   # 性能档 → engine_pt 批量前向上限（自适应）
+            return engine_pt.transcribe_pt(audio_path, output_midi, log_cb=log_cb,
+                                           num_threads=num_threads, **params)
 
-    if mode == "piano":
-        # 钢琴子模型：piano_pt（默认 / ByteDance）/ aria / transkun
-        pmodel = (params or {}).get("model") or "piano_pt"
-        if pmodel == "aria":
-            import engine_aria
-            return engine_aria.transcribe_aria(audio_path, output_midi, params=params,
-                                               log_cb=log_cb, num_threads=num_threads)
-        if pmodel == "transkun":
-            import engine_transkun
-            return engine_transkun.transcribe_transkun(audio_path, output_midi, params=params,
-                                                       log_cb=log_cb, num_threads=num_threads)
-        import engine_pt
-        params["perf_mode"] = perf_mode   # 性能档 → engine_pt 批量前向上限（自适应）
-        return engine_pt.transcribe_pt(audio_path, output_midi, log_cb=log_cb,
-                                       num_threads=num_threads, **params)
+        if mode == "separate":
+            import engine_separate
+            return engine_separate.transcribe_separate(
+                audio_path, output_midi, params=params, log_cb=log_cb,
+                num_threads=num_threads)
 
-    if mode == "separate":
-        import engine_separate
-        return engine_separate.transcribe_separate(
-            audio_path, output_midi, params=params, log_cb=log_cb,
-            num_threads=num_threads)
-
-    # 默认 universal：子模型 basic（Basic Pitch 兜底）| muscriptor（可选）
-    umodel = (params or {}).get("model") or "basic"
-    if umodel == "muscriptor":
-        import engine_muscriptor
-        return engine_muscriptor.transcribe_muscriptor(audio_path, output_midi, params=params,
-                                                       log_cb=log_cb, num_threads=num_threads)
-    import engine_basic
-    return engine_basic.transcribe_basic(audio_path, output_midi, log_cb=log_cb,
-                                         num_threads=num_threads, **params)
+        # 默认 universal：子模型 basic（Basic Pitch 兜底）| muscriptor（可选）
+        umodel = (params or {}).get("model") or "basic"
+        if umodel == "muscriptor":
+            import engine_muscriptor
+            return engine_muscriptor.transcribe_muscriptor(audio_path, output_midi, params=params,
+                                                           log_cb=log_cb, num_threads=num_threads)
+        import engine_basic
+        return engine_basic.transcribe_basic(audio_path, output_midi, log_cb=log_cb,
+                                             num_threads=num_threads, **params)
+    finally:
+        # 无论成功/异常，转录结束后释放模型对象与显存
+        _release_gpu_memory()
 
 
 def merge_params(mode, values):

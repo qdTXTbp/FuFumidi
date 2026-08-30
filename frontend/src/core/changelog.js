@@ -3,6 +3,7 @@
 // 若内置缺失某个版本，前端会尝试经主进程 update:notes 拉取 GitHub release 说明补充。
 const CHANGELOG = {
   '3.1.21': [
+    '优化：转录完成后自动卸载模型并释放显存——MuScriptor / 钢琴 / 人声分离等进程内模型转录结束即卸载（torch.cuda.empty_cache），不再长期占用 VRAM',
     '修复：MuScriptor 转录失败「state_dict 尺寸不匹配」——本地权重加载时按规格补齐 config.json（small/medium/large 架构），muscriptor 不再误按 large 构建',
     '修复：GPU 增强后「Could not load libtorchaudio.pyd」——CUDA 增强包补齐 torchaudio 2.9.1+cu128（MuScriptor 节拍检测/人声分离会 import torchaudio，基础版 torchaudio 与 cu128 torch 不兼容）',
     '改进：资源中心 GPU 加速包支持从独立仓 monologue82/FuFumidi-GPU-Packages 在线下载（CUDA 分卷，适配 RTX 50 系 Blackwell）',

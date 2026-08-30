@@ -186,7 +186,27 @@ def transcribe_pt(audio_path, output_midi, onset_threshold=0.3, frame_threshold=
         write_events_to_midi(start_time=0, note_events=notes,
                              pedal_events=pedals, midi_path=output_midi)
 
+    # 6. 转录完成：卸载模型（_ENGINE 为模块级全局缓存，需显式置空才能释放 GPU 显存）
+    _release_pt_engine()
+
     return len(notes)
+
+
+def _release_pt_engine():
+    """释放钢琴转录引擎（全局缓存 _ENGINE）与显存。"""
+    global _ENGINE
+    try:
+        _ENGINE = None
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 def clean_notes(notes, min_note_ms=60, merge_gap_ms=30):

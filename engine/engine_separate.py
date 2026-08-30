@@ -179,6 +179,18 @@ def transcribe_separate(audio_path, output_midi, params=None, log_cb=None,
         midi.write(output_midi)
         return _count_notes(midi)
     finally:
+        # 转录完成/异常：清理 demucs 进程内模型与显存（torch 缓存分配器不会自动归还 VRAM）
+        try:
+            import gc
+            gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+        except Exception:
+            pass
         if pre_wav:
             try:
                 os.remove(pre_wav)

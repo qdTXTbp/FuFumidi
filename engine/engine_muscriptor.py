@@ -153,6 +153,20 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     # 音符数统计（pretty_midi）
     n = _count_notes(output_midi)
     _log(log_cb, f"保存 MIDI → {os.path.basename(output_midi)}（{n} 音符）")
+
+    # 转录完成：卸载模型并释放显存（torch 缓存分配器不会自动归还 VRAM）
+    try:
+        del model
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+    except Exception:
+        pass
     return n
 
 
