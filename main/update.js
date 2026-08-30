@@ -165,13 +165,18 @@ Start-Process -FilePath ${_exe} -WorkingDirectory ${_dir}
         guard.unref();
       } catch (e) { /* 守护启动失败不阻塞更新 */ }
       // 2) 拉起 kachina 增量更新器（-I 非交互、-O 强制在线、--source ghfast 指定镜像源）
-      //    更新器自带窗口显示下载进度；会自行结束主程序进程并替换文件
+      //    更新器自带窗口显示下载进度
       try {
         const upd = spawn(updaterPath, ['-I', '-O', '--source', 'ghfast'], { cwd: updaterDir, detached: true, stdio: 'ignore' });
         upd.unref();
       } catch (e) {
         return { ok: false, error: '启动更新器失败：' + String((e && e.message) || e) };
       }
+      // 3) 主程序自我退出：释放 FuFumidi.exe 文件锁。
+      //    若不退出，更新器替换文件时会报「FuFumidi.exe 正在被另外一个程序使用中」并中止。
+      //    守护脚本独立运行，等更新器退出后会自动重启新版主程序（before-quit 会先清理引擎子进程）。
+      //    延迟 1.2s 让 IPC 响应先返回前端再退出。
+      setTimeout(() => { try { app.quit(); } catch (e) {} }, 1200);
       return { ok: true, launching: true, updaterPath };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
