@@ -505,6 +505,20 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         if (hash !== meta.sha256) { try { fs.unlinkSync(outFile); } catch (e) {} throw new Error('SHA256 校验失败：' + hash.slice(0, 12) + '（分卷可能不完整）'); }
       }
       if (size < spec.minSize) throw new Error('下载文件不完整：' + size + ' bytes');
+      // 6) MuScriptor 规格：合并完成后补齐 config.json。
+      //    muscriptor 依赖权重旁的 config.json 确定模型架构；本地路径无法识别规格时
+      //    会默认按 large 构建 → 与 small/medium 权重 state_dict 尺寸不匹配报错。
+      if (spec.id && spec.id.startsWith('muscriptor_')) {
+        const muscriptorConfigs = {
+          small: { dim: 768, num_heads: 12, num_layers: 14, card: 1393 },
+          medium: { dim: 1024, num_heads: 16, num_layers: 24, card: 1395 },
+          large: { dim: 1536, num_heads: 24, num_layers: 48, card: 1395 },
+        };
+        const cfg = muscriptorConfigs[spec.sizeKey];
+        if (cfg) {
+          try { fs.writeFileSync(path.join(destDir, 'config.json'), JSON.stringify(cfg, null, 2), 'utf8'); } catch (e) {}
+        }
+      }
       if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received: size, total: size, percent: 100, done: true });
       return { ok: true, path: destDir, size };
     } catch (e) {

@@ -63,6 +63,34 @@ def available_local_sizes():
     return out
 
 
+# muscriptor 的 _resolve_config 依赖权重旁的 config.json 确定模型架构；
+# 本地路径（muscriptor/small/model.safetensors）既没有 config.json，
+# 路径分隔符也不是 muscriptor-<size>，文件名也没有 8 位哈希标签，
+# 会一路回退到默认 large（dim=1536/48层）→ 与 small/medium 权重 state_dict 尺寸不匹配。
+# 这里在权重旁补齐 config.json，让 muscriptor 从权重目录读到正确架构。
+_MUSCRIPTOR_CONFIGS = {
+    "small": {"dim": 768, "num_heads": 12, "num_layers": 14, "card": 1393},
+    "medium": {"dim": 1024, "num_heads": 16, "num_layers": 24, "card": 1395},
+    "large": {"dim": 1536, "num_heads": 24, "num_layers": 48, "card": 1395},
+}
+
+
+def _ensure_config(weights_path, size):
+    """权重旁缺 config.json 时按规格补齐（muscriptor _resolve_config 第一步即读它）。"""
+    cfg = _MUSCRIPTOR_CONFIGS.get(str(size or "").lower())
+    if not cfg:
+        return
+    config_path = os.path.join(os.path.dirname(os.path.abspath(weights_path)), "config.json")
+    if os.path.exists(config_path):
+        return
+    try:
+        import json as _json
+        with open(config_path, "w", encoding="utf-8") as f:
+            _json.dump(cfg, f)
+    except Exception:
+        pass  # 写失败不阻断转录（muscriptor 会走其他回退，代价是可能架构不匹配）
+
+
 def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                           num_threads=None, **kwargs):
     _require_package()  # 包缺失先给明确报错，再导入
@@ -76,6 +104,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     # 优先本地权重（离线），缺失才回退 HF Hub
     local = _find_local_model(size)
     if local:
+        _ensure_config(local, size)  # 补 config.json，避免 muscriptor 按默认 large 架构加载导致尺寸不匹配
         _log(log_cb, f"加载 MuScriptor-{size}（本地权重）…")
         load_arg = local
     else:
