@@ -50,3 +50,6 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   shortcutName: FuFumidi
+  # 安装前清理历史作用域（HKCU/HKLM/WOW6432Node）的残留卸载项，
+  # 根治「有之前没清理的目录/覆盖重装」反复提示（见 build/nsis-cleanup.nsh）
+  include: build/nsis-cleanup.nsh
