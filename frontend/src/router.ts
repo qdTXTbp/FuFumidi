@@ -13,6 +13,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/transcribe', name: 'transcribe', component: () => import('./views/ViewTranscribe.vue') },
   { path: '/convert', name: 'convert', component: () => import('./views/ViewConvert.vue') },
   { path: '/resources', name: 'resources', component: () => import('./views/ViewResources.vue') },
+  { path: '/soundfonts', name: 'soundfonts', component: () => import('./views/ViewSoundfonts.vue') },
   { path: '/utau', name: 'utau', component: () => import('./views/ViewUtau.vue') },
   { path: '/:pathMatch(.*)*', redirect: '/home' },
 ];

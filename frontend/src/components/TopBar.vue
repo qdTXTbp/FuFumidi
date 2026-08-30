@@ -8,7 +8,7 @@ import { getAppVersion } from '../core/version.js';
 const app = useAppStore();
 const state = app;
 const setView = (v) => app.setView(v);
-const ICONS = { home: 'home', play: 'play2', lyrics: 'music', edit: 'edit', viz: 'viz', analyze: 'chart', score: 'score', transcribe: 'transcribe', convert: 'convert', resources: 'box', utau: 'utau' };
+const ICONS = { home: 'home', play: 'play2', lyrics: 'music', edit: 'edit', viz: 'viz', analyze: 'chart', score: 'score', transcribe: 'transcribe', convert: 'convert', resources: 'box', soundfonts: 'music', utau: 'utau' };
 const menuOpen = ref(false);
 
 function openSettings() { state.ui.settingsOpen = true; menuOpen.value = false; }

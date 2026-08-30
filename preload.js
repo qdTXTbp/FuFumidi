@@ -40,6 +40,16 @@ contextBridge.exposeInMainWorld('fuBridge', {
   pickSoundFont: null,   // 已移除外部 SF2/SF3 加载：使用内置音源列表 soundfonts.list()
   readSoundFont: (p) => ipcRenderer.invoke('file:readSoundFont', p),
   soundfonts: { list: () => ipcRenderer.invoke('soundfont:list') },
+  // 音色工坊：内置精选下载 / 自定义导入 / 删除 / 打开目录
+  sfWorkshop: {
+    list: () => ipcRenderer.invoke('sf-workshop:list'),
+    download: (id) => ipcRenderer.invoke('sf-workshop:download', id),
+    cancel: (id) => ipcRenderer.invoke('sf-workshop:cancel', id),
+    import: () => ipcRenderer.invoke('sf-workshop:import'),
+    remove: (id) => ipcRenderer.invoke('sf-workshop:delete', id),
+    openDir: () => ipcRenderer.invoke('sf-workshop:openDir'),
+    onProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('sf-workshop:progress', w); return () => ipcRenderer.removeListener('sf-workshop:progress', w); },
+  },
   pickMusicXML: () => ipcRenderer.invoke('dialog:pickMusicXML'),
   exportScorePdf: () => ipcRenderer.invoke('score:exportPdf'),
   transcodeVideo: (data, audio, opts) => ipcRenderer.invoke('video:transcode', { data, audio, ...(opts || {}) }),

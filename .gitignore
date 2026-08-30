@@ -25,3 +25,5 @@ rust-core/target/
 resources/
 models/
 frontend/public/wallpapers/
+# 音色工坊：预拉取的 SF2（用于建仓镜像，不进入主仓）
+soundfonts-dist/

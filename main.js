@@ -47,6 +47,7 @@ const { createRustService } = require('./main/rust');
 const { createDbService } = require('./main/db');
 const { registerWallpaperIpc } = require('./main/wallpaper');
 const { registerUtauIpc } = require('./main/utau');
+const { registerSoundfontWorkshopIpc } = require('./main/soundfonts');
 const { createWindow, configureSession, openFileFromArgv, openPath } = require('./main/window');
 const { pyLit, parsePyJson } = require('./main/py-util');
 
@@ -92,6 +93,7 @@ if (!gotLock) {
     registerSettingsIpc({ ipcMain, readSettings, writeSettings, db: DbService });
     registerWallpaperIpc({ ipcMain, app, fs, net, runEngineInline, parsePyJson });
     registerUtauIpc({ ipcMain, path, fs, os, app, dialog, spawnEngine });
+    registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, net });
     const RustService = createRustService({ app, path, fs });
     RustService.registerRustIpc({ ipcMain });
     registerPluginsIpc();
