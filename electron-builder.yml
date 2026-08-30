@@ -47,6 +47,3 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   shortcutName: FuFumidi
-  # 安装前结束运行中的 FuFumidi 进程树（含引擎 python 子进程），
-  # 避免覆盖安装时提示「进程未关闭/文件占用」
-  include: "build/close-app.nsh"
