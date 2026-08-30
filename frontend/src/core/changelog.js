@@ -2,6 +2,11 @@
 // 版本号（不带 v）→ 该版本要点列表；发布新版本时在此追加即可。
 // 若内置缺失某个版本，前端会尝试经主进程 update:notes 拉取 GitHub release 说明补充。
 const CHANGELOG = {
+  '3.1.21': [
+    '修复：MuScriptor 转录失败「state_dict 尺寸不匹配」——本地权重加载时按规格补齐 config.json（small/medium/large 架构），muscriptor 不再误按 large 构建',
+    '修复：GPU 增强后「Could not load libtorchaudio.pyd」——CUDA 增强包补齐 torchaudio 2.9.1+cu128（MuScriptor 节拍检测/人声分离会 import torchaudio，基础版 torchaudio 与 cu128 torch 不兼容）',
+    '改进：资源中心 GPU 加速包支持从独立仓 monologue82/FuFumidi-GPU-Packages 在线下载（CUDA 分卷，适配 RTX 50 系 Blackwell）',
+  ],
   '3.1.19': [
     '修复：应用内更新「正在被另外一个程序使用中」——拉起增量更新器后主程序自动退出（等待 1.2s 让提示先返回），释放 FuFumidi.exe 文件锁，更新器可正常替换文件，更新完成后自动重启',
     '修复：安装器反复提示「有之前没清理的目录/覆盖重装」——同一应用曾以不同权限安装会在 HKCU 与 HKLM 各留一条卸载记录，安装器误判「同时存在 per-user 与 per-machine 安装」而反复提示。现安装前自动清理所有作用域的历史卸载项，安装器从干净状态开始',
