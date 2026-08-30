@@ -105,9 +105,14 @@ function createIntegrity(deps) {
         // 旧逻辑把读到的瞬态小 size 直接判为 core-corrupt，导致新安装/更新后误报。
         // 这里改为：先等待文件「落盘稳定」（连续两次采样 size 一致）再校验，规避把写入中误判为损坏。
         const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+        // Electron 会对 asar 路径做虚拟化拦截：fs.statSync(app.asar).size 会被篡改成返回 0，
+        // 导致「size < 1MB」恒成立 → 每次启动都误报 core-corrupt（普通 node 下测不出来）。
+        // 必须用未补丁的 original-fs 读取真实大小；非 Electron（开发模式）回退到普通 fs。
+        let realFs = null;
+        try { realFs = require('original-fs'); } catch (e) { realFs = fs; }
         const statOnce = () => {
           for (let i = 0; i < 3; i++) {
-            try { return fs.statSync(asarPath); }
+            try { return realFs.statSync(asarPath); }
             catch (e) { if (i < 2) sleep(120); } // ENOENT 等瞬态，重试约 240ms
           }
           return null;
@@ -129,8 +134,8 @@ function createIntegrity(deps) {
           //   bytes 0-3  pickle 头恒为 4；bytes 4-7  headerSize；bytes 12-15  JSON header 长度
           //   正常文件 headerSize 应大于 0 且远小于文件总大小，避免「占位/截断但体积足够」的漏判
           const hdr = Buffer.alloc(16);
-          const fd = fs.openSync(asarPath, 'r');
-          try { fs.readSync(fd, hdr, 0, 16, 0); } finally { fs.closeSync(fd); }
+          const fd = realFs.openSync(asarPath, 'r');
+          try { realFs.readSync(fd, hdr, 0, 16, 0); } finally { realFs.closeSync(fd); }
           const headerSize = hdr.readUInt32LE(4);
           const jsonSize = hdr.readUInt32LE(12);
           if (hdr.readUInt32LE(0) !== 4 || headerSize <= 0 || headerSize > st.size || jsonSize <= 0 || jsonSize > st.size) bad = true;
