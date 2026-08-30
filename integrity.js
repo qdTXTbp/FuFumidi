@@ -97,13 +97,34 @@ function createIntegrity(deps) {
     //    引导用户重新下载安装最新版（点击「一键修复」→ repair 返回 reinstall → 前端弹窗重装）
     const asarPath = getAppAsarPath && getAppAsarPath();
     if (asarPath) {
+      const isCorrupt = () => ({ id: 'core-corrupt', severity: 'warn', canRepair: true, path: asarPath });
+      const isMissing = () => ({ id: 'core-missing', severity: 'warn', canRepair: true, path: asarPath });
       try {
-        const st = fs.statSync(asarPath);
-        if (st.size < 1 * 1024 * 1024) {
-          issues.push({ id: 'core-corrupt', severity: 'warn', canRepair: true, path: asarPath });
+        // 安装器/更新器替换 app.asar 采用「写临时 → 删旧 → 改名」，瞬间 statSync 可能 ENOENT 或读到半写文件。
+        // 重试 3 次（共约 360ms）规避瞬态误报；仍失败才判 core-missing。
+        let st = null;
+        for (let i = 0; i < 3 && !st; i++) {
+          try { st = fs.statSync(asarPath); }
+          catch (e) {
+            if (i < 2) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 120); }
+          }
         }
+        if (!st) { issues.push(isMissing()); return { ok: issues.length === 0, issues }; }
+        let bad = st.size < 1 * 1024 * 1024;
+        if (!bad) {
+          // 二次校验 asar 文件头（Electron asar 格式）：
+          //   bytes 0-3  pickle 头恒为 4；bytes 4-7  headerSize；bytes 12-15  JSON header 长度
+          //   正常文件 headerSize 应大于 0 且远小于文件总大小，避免「占位/截断但体积足够」的漏判
+          const hdr = Buffer.alloc(16);
+          const fd = fs.openSync(asarPath, 'r');
+          try { fs.readSync(fd, hdr, 0, 16, 0); } finally { fs.closeSync(fd); }
+          const headerSize = hdr.readUInt32LE(4);
+          const jsonSize = hdr.readUInt32LE(12);
+          if (hdr.readUInt32LE(0) !== 4 || headerSize <= 0 || headerSize > st.size || jsonSize <= 0 || jsonSize > st.size) bad = true;
+        }
+        if (bad) issues.push(isCorrupt());
       } catch (e) {
-        issues.push({ id: 'core-missing', severity: 'warn', canRepair: true, path: asarPath });
+        issues.push(isMissing());
       }
     }
 
