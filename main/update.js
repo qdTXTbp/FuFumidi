@@ -132,54 +132,47 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
 
-  // 更新流程（防损坏设计）：
-  //  1) 主进程下载完整离线安装包到临时目录（多镜像回退 + 进度 + 大小校验）——下载中断只留临时文件，不影响当前安装
-  //  2) 应用自我退出；守护脚本=等待主应用真正退出 → 才运行本地安装器静默安装（无网络依赖，不边下边改已安装文件）
-  //     —— 关键：必须先等主应用退出再安装，否则安装器检测到 FuFumidi.exe 占用会提示「进程未关闭」并中止
-  //  3) 安装器退出后校验核心文件完整性，完整才重启主程序
-  ipcMain.handle('update:launchUpdater', async (evt, version) => {
-    const win = BrowserWindow.fromWebContents(evt.sender);
+  // 增量更新流程（kachina 更新器方案，见 UPDATING.md）：
+  //  1) 更新器内嵌源配置（ghfast 等镜像，指向 releases/latest/download/FuFumidi.Install.exe）
+  //     —— 由更新器自行差分下载（Range 请求）并显示进度，主进程不做整包预下载
+  //  2) 主进程写入独立守护脚本并 spawn（detached），随后拉起 FuFumidi.update.exe
+  //  3) 守护脚本轮询等待更新器退出（超时 420s）→ 短暂等待文件替换落盘 → 启动新版主程序
+  ipcMain.handle('update:launchUpdater', async (evt) => {
     try {
-      const rel = await fetchLatestRelease();
-      const asset = assetForPlatform(rel);
-      if (!asset) return { ok: false, error: '未找到更新安装包' };
-      // 1) 主进程预下载（失败/取消不影响当前安装）
-      const dl = await downloadInstallPackage(asset.browser_download_url, win);
-      if (!dl.ok) return { ok: false, error: '更新包下载失败：' + dl.error + '（当前安装未受影响，可稍后重试）' };
-      // 2) 守护脚本：等主应用退出 → 运行安装器 → 校验 → 重启
       const { spawn } = require('child_process');
       const updaterDir = app.isPackaged ? path.dirname(process.execPath) : path.join(app.getAppPath(), 'release', 'win-unpacked');
+      const updaterPath = path.join(updaterDir, 'FuFumidi.update.exe');
       const mainExe = path.join(updaterDir, 'FuFumidi.exe');
-      const daemon = path.join(app.getPath('temp'), 'fufumidi-install.ps1');
-      fs.writeFileSync(daemon, `param([string]$exePath, [string]$installer, [int]$timeout = 600)
-$procName = [System.IO.Path]::GetFileNameWithoutExtension($exePath)
-# 1) 先等主应用完全退出——否则安装器会检测到进程占用而中止（「进程未关闭」）
-$deadline = (Get-Date).AddSeconds($timeout)
+      if (!fs.existsSync(updaterPath)) {
+        return { ok: false, error: '更新器不存在：' + updaterPath + '（请使用新版便携版 / 重新下载完整安装包）' };
+      }
+      // 1) 守护脚本：等更新器退出（完成替换）→ 短暂等待落盘 → 启动新版主程序
+      //    独立进程跑，脱离主进程，即便主程序被更新器结束也能继续完成重启
+      const daemon = path.join(app.getPath('temp'), 'fufumidi-restart.ps1');
+      const _exe = JSON.stringify(mainExe).replace(/\\/g, '\\\\'); // JSON 字符串含反斜杠，需经双引号包裹并转义
+      const _dir = JSON.stringify(updaterDir);
+      fs.writeFileSync(daemon, `$procName = 'FuFumidi.update'
+$deadline = (Get-Date).AddSeconds(420)
 while (Get-Process -Name $procName -ErrorAction SilentlyContinue) {
-  if ((Get-Date) -gt $deadline) { exit 6 }
+  if ((Get-Date) -gt $deadline) { break }
   Start-Sleep -Seconds 1
 }
-Start-Sleep -Seconds 2
-# 2) 本地静默安装（-I 非交互；安装包已在本地，无网络依赖）
-$inst = Start-Process -FilePath $installer -ArgumentList '-I' -Wait -PassThru -ErrorAction SilentlyContinue
-# 3) 核心文件完整性校验：安装中断/损坏时不再重启残缺程序（避免「关掉安装器就损坏工具」）
-$resources = Join-Path (Split-Path $exePath) "resources"
-$asar = Join-Path $resources "app.asar"
-if (-not (Test-Path $exePath)) { exit 5 }
-if (-not (Test-Path $asar)) { exit 4 }
-$sz = (Get-Item $asar).Length
-if ($sz -lt 1MB) { exit 3 }
-# 4) 重启
-Start-Process -FilePath $exePath -WorkingDirectory (Split-Path $exePath)
+Start-Sleep -Seconds 3
+Start-Process -FilePath ${_exe} -WorkingDirectory ${_dir}
 `, 'utf8');
       try {
-        const guard = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', daemon, '-exePath', mainExe, '-installer', dl.path], { detached: true, stdio: 'ignore' });
+        const guard = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', daemon], { detached: true, stdio: 'ignore' });
         guard.unref();
       } catch (e) { /* 守护启动失败不阻塞更新 */ }
-      // 3) 主应用自我退出：安装交由守护脚本在应用退出后执行
-      //    延迟数百毫秒，确保上面的 IPC 响应先返回前端、界面提示能显示
-      setTimeout(() => { try { app.exit(0); } catch (e) {} }, 800);
-      return { ok: true, installPath: dl.path, size: dl.size, quitting: true };
+      // 2) 拉起 kachina 增量更新器（-I 非交互、-O 强制在线、--source ghfast 指定镜像源）
+      //    更新器自带窗口显示下载进度；会自行结束主程序进程并替换文件
+      try {
+        const upd = spawn(updaterPath, ['-I', '-O', '--source', 'ghfast'], { cwd: updaterDir, detached: true, stdio: 'ignore' });
+        upd.unref();
+      } catch (e) {
+        return { ok: false, error: '启动更新器失败：' + String((e && e.message) || e) };
+      }
+      return { ok: true, launching: true, updaterPath };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 }

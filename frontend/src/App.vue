@@ -190,7 +190,7 @@ async function startupUpdateCheck() {
           app.toast(t('当前环境不支持增量更新器'), 'warn');
           return;
         }
-        app.toast(t('正在下载更新包，完成后自动安装…'));
+        app.toast(t('正在启动增量更新器，完成后自动重启…'));
         bridge.update.launchUpdater(latest).then(rr => {
           if (!rr || !rr.ok) app.toast((rr && rr.error) || t('更新失败，当前安装未受影响'), 'error');
         }).catch(() => {});
