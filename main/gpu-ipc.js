@@ -49,34 +49,50 @@ function registerGpuIpc({
 
   ipcMain.handle('gpu:listPackages', async () => {
     try {
-      const r = await fetch('https://api.github.com/repos/qdTXTbp/FuFumidi/releases?per_page=10', { headers: { 'User-Agent': 'FuFumidi-Update' } });
-      const data = await r.json();
+      // GPU 加速包分卷存放于独立仓 monologue82/FuFumidi-GPU-Packages；
+      // 主仓（qdTXTbp/FuFumidi）仍兼容历史资产（fufumidi-gpu-cuda/directml.zip）
+      const repos = ['https://api.github.com/repos/qdTXTbp/FuFumidi/releases?per_page=10', 'https://api.github.com/repos/monologue82/FuFumidi-GPU-Packages/releases?per_page=10'];
       const out = [];
-      for (const rel of data) {
-        const assets = rel.assets || [];
-        for (const a of assets) {
-          if (a.name && /^fufumidi-gpu-directml\.zip$/i.test(a.name)) {
-            out.push({ tag: rel.tag_name, name: a.name, url: a.browser_download_url, size: a.size, kind: 'directml' });
+      const seen = new Set();
+      for (const repo of repos) {
+        let data = [];
+        try {
+          const r = await fetch(repo, { headers: { 'User-Agent': 'FuFumidi-Update' } });
+          data = await r.json();
+        } catch (e) { continue; }
+        if (!Array.isArray(data)) continue;
+        for (const rel of data) {
+          const assets = rel.assets || [];
+          for (const a of assets) {
+            if (a.name && /^fufumidi-gpu-directml\.zip$/i.test(a.name) && !seen.has(a.name)) {
+              seen.add(a.name);
+              out.push({ tag: rel.tag_name, name: a.name, url: a.browser_download_url, size: a.size, kind: 'directml' });
+            }
+            if (a.name && /^fufumidi-gpu-cuda\.zip$/i.test(a.name) && !seen.has(a.name)) {
+              seen.add(a.name);
+              out.push({ tag: rel.tag_name, name: a.name, url: a.browser_download_url, size: a.size, kind: 'cuda' });
+            }
           }
-          if (a.name && /^fufumidi-gpu-cuda\.zip$/i.test(a.name)) {
-            out.push({ tag: rel.tag_name, name: a.name, url: a.browser_download_url, size: a.size, kind: 'cuda' });
+          const cudaParts = assets.filter(a => a.name && /^fufumidi-gpu-cuda(?:-parts)?\.(zip\.\d{3}|part\d+)$/i.test(a.name));
+          if (cudaParts.length) {
+            cudaParts.sort((a, b) => {
+              const ma = String(a.name).match(/(\d+)\s*$/), mb = String(b.name).match(/(\d+)\s*$/);
+              return (ma ? parseInt(ma[1],10) : 0) - (mb ? parseInt(mb[1],10) : 0);
+            });
+            const key = 'cuda-parts-' + rel.tag_name + '-' + cudaParts[0].name;
+            if (!seen.has(key)) {
+              seen.add(key);
+              out.push({
+                tag: rel.tag_name,
+                name: 'fufumidi-gpu-cuda-parts (split)',
+                kind: 'cuda',
+                split: true,
+                size: cudaParts.reduce((sum, a) => sum + (a.size || 0), 0),
+                url: cudaParts[0].browser_download_url,
+                files: cudaParts.map(a => ({ name: a.name, url: a.browser_download_url, size: a.size }))
+              });
+            }
           }
-        }
-        const cudaParts = assets.filter(a => a.name && /^fufumidi-gpu-cuda(?:-parts)?\.(zip\.\d{3}|part\d+)$/i.test(a.name));
-        if (cudaParts.length) {
-          cudaParts.sort((a, b) => {
-            const ma = String(a.name).match(/(\d+)\s*$/), mb = String(b.name).match(/(\d+)\s*$/);
-            return (ma ? parseInt(ma[1],10) : 0) - (mb ? parseInt(mb[1],10) : 0);
-          });
-          out.push({
-            tag: rel.tag_name,
-            name: 'fufumidi-gpu-cuda-parts (split)',
-            kind: 'cuda',
-            split: true,
-            size: cudaParts.reduce((sum, a) => sum + (a.size || 0), 0),
-            url: cudaParts[0].browser_download_url,
-            files: cudaParts.map(a => ({ name: a.name, url: a.browser_download_url, size: a.size }))
-          });
         }
       }
       return { ok: true, packages: out };
@@ -122,12 +138,21 @@ function registerGpuIpc({
   ipcMain.handle('gpu:packageUrl', async (_e, kind) => {
     try {
       const suffix = kind === 'cuda' ? 'cuda' : 'directml';
-      const r = await fetch('https://api.github.com/repos/qdTXTbp/FuFumidi/releases/latest', { headers: { 'User-Agent': 'FuFumidi-Update' } });
-      const rel = await r.json();
-      const assets = (rel.assets || []).filter(a => a.name && a.name.toLowerCase().includes('gpu-' + suffix) && a.name.toLowerCase().endsWith('.zip'));
-      if (!assets.length) return { ok: false, error: '未找到 GPU 增强包资产：fufumidi-gpu-' + suffix + '.zip' };
-      const a = assets[0];
-      return { ok: true, url: a.browser_download_url, name: a.name, size: a.size };
+      // 独立 GPU 仓优先（分卷），主仓兜底（历史整包）
+      const urls = [
+        'https://api.github.com/repos/monologue82/FuFumidi-GPU-Packages/releases/latest',
+        'https://api.github.com/repos/qdTXTbp/FuFumidi/releases/latest',
+      ];
+      for (const u of urls) {
+        let rel;
+        try { rel = await (await fetch(u, { headers: { 'User-Agent': 'FuFumidi-Update' } })).json(); } catch (e) { continue; }
+        const assets = (rel.assets || []).filter(a => a.name && a.name.toLowerCase().includes('gpu-' + suffix) && a.name.toLowerCase().endsWith('.zip'));
+        if (assets.length) {
+          const a = assets[0];
+          return { ok: true, url: a.browser_download_url, name: a.name, size: a.size };
+        }
+      }
+      return { ok: false, error: '未找到 GPU 增强包资产：fufumidi-gpu-' + suffix + '.zip' };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
