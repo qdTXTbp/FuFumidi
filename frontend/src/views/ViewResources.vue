@@ -20,16 +20,18 @@ const resultOpen = ref(false);
 const resultTitle = ref('');
 const resultText = ref('');
 const checking = ref(false);
+const busyText = ref(t('正在检查…'));
 function showResult(title, text) {
   resultTitle.value = title;
   resultText.value = text || t('无结果');
   checking.value = false;
   resultOpen.value = true;
 }
-function beginCheck(title) {
+function beginCheck(title, busy) {
   resultTitle.value = title;
   resultText.value = '';
   checking.value = true;
+  busyText.value = busy || t('正在检查…');
   resultOpen.value = true;
 }
 function fmtGroups(groups, names) {
@@ -112,7 +114,7 @@ async function checkRuntime() {
 async function installRuntime() {
   if (!bridge || !bridge.depInstall) { showResult(t('补全 Python 依赖'), t('当前环境不支持安装依赖')); return; }
   pyBusy.value = true;
-  beginCheck(t('补全 Python 依赖'));
+  beginCheck(t('补全 Python 依赖'), t('正在安装…'));
   try {
     const r = await bridge.depInstall('universal');
     if (r && r.ok) resultText.value = t('依赖安装完成');
@@ -145,16 +147,19 @@ async function checkModels() {
 async function installModels() {
   if (!bridge || !bridge.depInstall) { showResult(t('补全模型依赖'), t('当前环境不支持安装依赖')); return; }
   modelInstallBusy.value = true;
-  beginCheck(t('补全模型依赖'));
+  beginCheck(t('补全模型依赖'), t('正在安装…'));
   const parts = [];
   try {
     for (const g of MODEL_GROUP_IDS) {
+      resultText.value = parts.length
+        ? parts.join('\n') + '\n' + t('正在安装：') + (MODEL_DEP_LABEL[g] || g) + '…'
+        : t('正在安装：') + (MODEL_DEP_LABEL[g] || g) + '…';
       const r = await bridge.depInstall(g);
       parts.push('[' + (MODEL_DEP_LABEL[g] || g) + '] ' + ((r && r.ok) ? t('完成') : t('失败：') + String((r && (r.error || r.raw)) || 'unknown')));
+      resultText.value = parts.join('\n');
     }
-    resultText.value = parts.join('\n');
     refreshModels();
-  } catch (e) { resultText.value = t('依赖安装失败：') + String(e.message || e); }
+  } catch (e) { parts.push(t('依赖安装失败：') + String(e.message || e)); resultText.value = parts.join('\n'); }
   checking.value = false;
   modelInstallBusy.value = false;
 }
@@ -515,9 +520,9 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
           <button class="icon-btn" style="margin-left:auto;width:30px;height:30px" :title="t('关闭')" @click="resultOpen = false"><Icon name="close" :size="15" /></button>
         </div>
         <div v-if="checking" class="res-result-loading">
-          <span class="res-spinner"></span>{{ t('正在检查…') }}
+          <span class="res-spinner"></span>{{ busyText }}
         </div>
-        <pre v-show="!checking" class="res-result-text">{{ resultText }}</pre>
+        <pre v-show="!checking || resultText" class="res-result-text">{{ resultText }}</pre>
         <div style="display:flex;justify-content:flex-end;margin-top:12px">
           <button class="btn sm primary" @click="resultOpen = false">{{ t('关闭') }}</button>
         </div>

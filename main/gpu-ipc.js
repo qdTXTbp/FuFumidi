@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // 主进程 GPU 增强包 IPC：状态、安装、卸载、下载与自动检测
 // ============================================================
 'use strict';
@@ -181,7 +181,7 @@ function registerGpuIpc({
         let okDl = false;
         for (const u of mirrors) {
           try {
-            const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.21' } });
+            const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.22' } });
             if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
             const out = fs.createWriteStream(outPath);
             const reader = res.body.getReader();

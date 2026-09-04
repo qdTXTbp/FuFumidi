@@ -25,7 +25,11 @@ const bridge = window.fuBridge;
 const playlist = usePlaylistStore();
 
 function isFav(id) { return playlist.isFavorite(id); }
-function toggleFav(id) { playlist.toggleFavorite(id); }
+function toggleFav(id) {
+  const on = !playlist.isFavorite(id);
+  playlist.toggleFavorite(id);
+  toast(on ? t('已加入收藏') : t('已取消收藏'), 'ok');
+}
 
 /* ---------------- 侧边栏宽度拖动（带范围限制） ---------------- */
 function startResize(e) {
@@ -420,7 +424,7 @@ onMounted(() => { playlist.hydrateFavorites(); });
            @dragend="resetDrag()"
            @click="selectSongOrBatch(s)">
         <input v-if="batchOn" type="checkbox" class="song-check" :checked="isSel(s.id)" @click.stop="toggleSel(s.id)" />
-        <span v-if="!batchOn && canReorder" class="si-drag" :title="t('拖动排序')" aria-label="t('拖动排序')"><Icon name="drag" :size="13" /></span>
+        <span v-if="!batchOn && canReorder" class="si-drag" :title="t('拖动排序')" :aria-label="t('拖动排序')"><Icon name="drag" :size="13" /></span>
         <span class="si-num" v-if="!batchOn && (!state.playing || s.id !== state.currentId)">{{ i + 1 }}</span>
         <span class="si-num playing-ic" v-else-if="!batchOn">▶</span>
         <div class="si-name">
@@ -428,13 +432,13 @@ onMounted(() => { playlist.hydrateFavorites(); });
           <small>{{ s.song ? s.song.tracks.length : (s.meta.tracks || '—') }} {{ t(' 轨 · ') }} {{ (s.meta.size / 1024).toFixed(0) }} KB<span v-if="fmtDur(s)"> · {{ fmtDur(s) }}</span></small>
         </div>
         <div class="si-tools">
-          <button class="icon-btn heart" :class="{ on: isFav(s.id) }" style="width:26px;height:26px;font-size:13px" :title="t('收藏')" aria-label="t('收藏')" @click.stop="toggleFav(s.id)">
+          <button class="icon-btn heart" :class="{ on: isFav(s.id) }" style="width:26px;height:26px;font-size:13px" :title="t('收藏')" :aria-label="t('收藏')" @click.stop="toggleFav(s.id)">
             <Icon :name="isFav(s.id) ? 'heart' : 'heart-o'" :size="14" />
           </button>
-          <button class="icon-btn" style="width:26px;height:26px;font-size:13px" :title="t('添加到歌单')" aria-label="t('添加到歌单')" @click.stop="openAddToPl(s.id)">
+          <button class="icon-btn" style="width:26px;height:26px;font-size:13px" :title="t('添加到歌单')" :aria-label="t('添加到歌单')" @click.stop="openAddToPl(s.id)">
             <Icon name="plus" :size="14" />
           </button>
-          <button class="icon-btn" style="width:26px;height:26px;font-size:13px" :title="t('移除')" aria-label="t('移除')" @click.stop="removeFromCurrentPl(s)">
+          <button class="icon-btn" style="width:26px;height:26px;font-size:13px" :title="t('移除')" :aria-label="t('移除')" @click.stop="removeFromCurrentPl(s)">
             <Icon name="trash" :size="14" />
           </button>
         </div>

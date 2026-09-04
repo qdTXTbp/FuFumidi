@@ -3,7 +3,7 @@
 // ============================================================
 'use strict';
 
-function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, pluginHost }) {
+function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, pluginHost, readSettings }) {
   const convertChildren = new Map();  // jobId -> 子进程句柄（转录/修正取消用）
 
   // 转录
@@ -12,10 +12,29 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
     if (!cfg.out) {
       const rawName = (cfg.name || cfg.audio || 'audio').replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '');
       const base = rawName || 'audio';
-      cfg.out = path.join(app.getPath('temp'), 'fufumidi', base + '.mid');
+      // 输出目录优先级：设置里显式配置的「默认输出目录」> 与输入文件同目录 > 系统临时目录
+      let dir = '';
+      try {
+        const s = readSettings ? readSettings() : {};
+        dir = (s && s.output_dir && String(s.output_dir).trim()) || '';
+      } catch (e) { dir = ''; }
+      if (!dir) {
+        const srcDir = (cfg.audio || '').replace(/[\\/][^\\/]*$/, '');
+        dir = srcDir && srcDir !== (cfg.audio || '') ? srcDir : app.getPath('temp');
+      }
+      // 目录不存在则创建；不可写时回退到临时目录
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+        const probe = path.join(dir, '.fuprobe_' + Date.now());
+        fs.writeFileSync(probe, '');
+        fs.unlinkSync(probe);
+      } catch (e) {
+        dir = path.join(app.getPath('temp'), 'fufumidi');
+        try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
+      }
+      cfg.out = path.join(dir, base + '.mid');
       let n = 1;
-      while (fs.existsSync(cfg.out)) { cfg.out = path.join(app.getPath('temp'), 'fufumidi', base + '_' + n + '.mid'); n++; }
-      try { fs.mkdirSync(path.dirname(cfg.out), { recursive: true }); } catch {}
+      while (fs.existsSync(cfg.out)) { cfg.out = path.join(dir, base + '_' + n + '.mid'); n++; }
     }
     const runSpawn = () => new Promise((resolve, reject) => {
       const args = ['convert', cfg.audio, '-o', cfg.out];

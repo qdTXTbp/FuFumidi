@@ -15,6 +15,7 @@ import { t } from '../core/i18n.js';
 const densityZoom = ref(1);
 const data = ref(null);
 let resizeHandler = null;
+let analyzeTimer = null;
 
 function cssVar(name, fb) {
   try {
@@ -23,9 +24,16 @@ function cssVar(name, fb) {
   } catch (e) { return fb; }
 }
 
+// 大 MIDI 保护：先清空数据渲染「正在分析…」，下一帧再同步计算统计（避免界面卡死/误以为失效）
 function collect() {
+  clearTimeout(analyzeTimer);
   const song = currentSong.value && currentSong.value.song;
-  data.value = song ? analyzeSong(song) : null;
+  if (!song) { data.value = null; return; }
+  data.value = null;
+  analyzeTimer = setTimeout(() => {
+    try { data.value = analyzeSong(song); }
+    catch (e) { data.value = null; }
+  }, 30);
 }
 
 function draw() {
@@ -48,8 +56,8 @@ function draw() {
   })));
   // 小节密度（可缩放）
   const sigN = a.sig.num || 4, barTicks = song.tpb * sigN;
-  const fullBars = Math.max(1, Math.ceil(song.totalTicks / barTicks));
-  const bars = Math.max(1, Math.ceil(fullBars / densityZoom.value));
+  const fullBars = Math.min(20000, Math.max(1, Math.ceil(song.totalTicks / barTicks)));
+  const bars = Math.min(10000, Math.max(1, Math.ceil(fullBars / densityZoom.value)));
   const dens = new Array(bars).fill(0);
   for (const tr of song.tracks) for (const n of tr.notes) {
     const bi = Math.floor(n.start / barTicks);
@@ -182,16 +190,17 @@ function cardValue(a, k) {
   }
 }
 
-watch([currentSong], () => { collect(); nextTick(draw); });
+watch([currentSong], () => { collect(); });
+watch(data, () => { if (data.value) nextTick(draw); });
 watch(densityZoom, () => { if (data.value) nextTick(draw); });
 
 onMounted(() => {
   collect();
-  nextTick(draw);
   resizeHandler = () => { if (data.value) draw(); };
   window.addEventListener('resize', resizeHandler);
 });
 onBeforeUnmount(() => {
+  if (analyzeTimer) clearTimeout(analyzeTimer);
   if (resizeHandler) window.removeEventListener('resize', resizeHandler);
 });
 </script>

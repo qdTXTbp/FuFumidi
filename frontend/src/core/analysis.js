@@ -35,15 +35,24 @@ export function detectChords(song) {
   const tpb = song.tpb;
   const sig = song.sigMap[0] || { num: 4 };
   const barTicks = tpb * (sig.num || 4);
-  const bars = Math.ceil(song.totalTicks / barTicks);
+  const bars = Math.min(8192, Math.max(1, Math.ceil(song.totalTicks / barTicks)));
+  // 大文件保护：先按小节分批，仅对音符实际覆盖的小节累计（而非「每小节扫全量音符」），
+  // 长音（跨 >3 小节）近似归属起音小节，避免病态文件退化为 O(小节×音符)。
+  const buckets = new Array(bars).fill(0).map(() => new Array(12).fill(0));
+  for (const tr of song.tracks) for (const n of tr.notes) {
+    const b0 = Math.floor(n.start / barTicks);
+    if (b0 >= bars) continue;
+    const pc = n.midi % 12;
+    const b1 = Math.min(bars - 1, Math.floor((n.end - 1) / barTicks));
+    const hi = Math.min(b1, b0 + 3); // 长音跨度封顶，只累计起音附近小节
+    for (let b = b0; b <= hi; b++) {
+      const start = Math.max(n.start, b * barTicks), end = Math.min(n.end, (b + 1) * barTicks);
+      if (end > start) buckets[b][pc] += end - start;
+    }
+  }
   const found = [];
   for (let b = 0; b < bars; b++) {
-    const start = b * barTicks, end = start + barTicks;
-    const pc = new Array(12).fill(0);
-    for (const tr of song.tracks) for (const n of tr.notes) {
-      if (n.start >= end || n.end <= start) continue;
-      pc[n.midi % 12] += Math.min(n.end, end) - Math.max(n.start, start);
-    }
+    const pc = buckets[b];
     let best = null;
     for (let r = 0; r < 12; r++) for (const [m, set] of [[0, [0, 4, 7]], [1, [0, 3, 7]]]) {
       let sc = 0; for (const d of set) sc += pc[(r + d) % 12];
@@ -146,7 +155,7 @@ export function analyzeSong(song) {
 
   // 小节密度
   const sigN = sig.num || 4, barTicks = song.tpb * sigN;
-  const fullBars = Math.max(1, Math.ceil(song.totalTicks / barTicks));
+  const fullBars = Math.min(20000, Math.max(1, Math.ceil(song.totalTicks / barTicks)));
   const dens = new Array(fullBars).fill(0);
   for (const n of all) { const bi = Math.floor(n.start / barTicks); if (bi < fullBars) dens[bi]++; }
 

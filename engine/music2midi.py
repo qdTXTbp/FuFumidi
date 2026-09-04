@@ -25,7 +25,7 @@ import os
 import sys
 import warnings
 
-VERSION = "3.1.21"
+VERSION = "3.1.22"
 
 def _patch_tqdm_compat():
     """兼容新版 tqdm 缺少 set_lock/get_lock 导致 huggingface_hub 导入失败的问题。"""

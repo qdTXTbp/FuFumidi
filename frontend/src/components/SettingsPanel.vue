@@ -686,7 +686,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
               <div class="fr-hint">{{ t('转录结果的保存位置') }}</div>
             </div>
             <div class="fr-ctl">
-              <input v-model="form.output_dir" class="ov-input mono" style="width:240px" :placeholder="t('留空 = 系统临时目录')" />
+              <input v-model="form.output_dir" class="ov-input mono" style="width:240px" :placeholder="t('留空 = 与输入文件同目录')" />
               <button class="btn sm" @click="pickDir('output_dir')">{{ t('浏览') }}</button>
             </div>
           </div>

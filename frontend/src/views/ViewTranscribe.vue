@@ -345,10 +345,19 @@ async function loadPresets() {
   } else {
     try {
       const r = await bridge.presets.list();
-      if (!r || !r.ok) { toast('加载预设失败：' + ((r && r.error) || ''), 'warn'); return; }
-      list = Object.entries(r.presets || {}).map(([name, val]) => ({ name, ...val }));
-      builtins = r.builtins || [];
-    } catch (e) {}
+      if (r && r.ok && r.presets && Object.keys(r.presets).length) {
+        list = Object.entries(r.presets).map(([name, val]) => ({ name, ...val }));
+        builtins = r.builtins || [];
+      } else {
+        // 桌面端后端预设意外为空/失败时兜底前端内置，避免预设列表空导致「应用」无反应
+        toast('加载预设失败：' + ((r && r.error) || '返回空列表') + '，已使用内置预设', 'warn');
+        list = WEB_BUILTIN_PRESETS.map(p => ({ name: p.name, mode: p.mode, params: p.params }));
+        builtins = WEB_BUILTIN_PRESETS.map(p => p.name);
+      }
+    } catch (e) {
+      list = WEB_BUILTIN_PRESETS.map(p => ({ name: p.name, mode: p.mode, params: p.params }));
+      builtins = WEB_BUILTIN_PRESETS.map(p => p.name);
+    }
   }
   presets.list.splice(0, presets.list.length, ...list);
   presets.builtins.splice(0, presets.builtins.length, ...builtins);
@@ -371,6 +380,11 @@ function applyPreset(name) {
   autoBpm.value = !!pr.auto_bpm;
   presetSel.value = name;
   return true;
+}
+// 行内「应用」按钮：应用当前选中的预设并给出反馈
+function applySelectedPreset() {
+  if (!presetSel.value) { toast('请先选择预设', 'warn'); return; }
+  if (applyPreset(presetSel.value)) toast('已应用预设：' + presetSel.value, 'ok');
 }
 function applyDefaultForMode(m) {
   const def = MODE_DEFAULT_PRESET[m];
@@ -861,7 +875,7 @@ onBeforeUnmount(() => {
               <select class="select-input" v-model="presetSel" :title="t('选择预设并应用')" style="min-width:138px">
                 <option v-for="p in presets.list" :key="p.name" :value="p.name">{{ p.name }}{{ presets.builtins.includes(p.name) ? '' : ' ✎' }}</option>
               </select>
-              <button class="btn sm" @click="presetSel && applyPreset(presetSel)">应用</button>
+              <button class="btn sm" @click="applySelectedPreset()">应用</button>
               <button class="btn sm" @click="savePreset"><Icon name="plus" :size="13" />{{ t('保存') }}</button>
               <button class="btn sm ghost danger" @click="delPreset"><Icon name="trash" :size="13" />{{ t('删除') }}</button>
               <button class="btn sm ghost" @click="openPresetMgr"><Icon name="menu" :size="13" /> 管理</button>
