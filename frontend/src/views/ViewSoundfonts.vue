@@ -16,6 +16,7 @@ const registry = ref([]);
 const customs = ref([]);
 const sfDir = ref('');
 const loading = ref(false);
+const busySf = ref(false);          // 大音色加载遮罩（解析需短暂占用主线程）
 const activePath = ref('internal');   // 当前启用的音色来源（'internal' 或 SF2 路径）
 const prog = reactive({});            // 下载进度 { id: { percent, active, error } }
 let offProg = null;
@@ -62,13 +63,24 @@ function isActive(item) {
 }
 
 // 启用某音色（立即生效 + 持久化）
-async function enable(sourcePath, name) {
-  if (!sourcePath) { toast(t('该音色尚未就绪，请先下载或导入'), 'warn'); return; }
-  const r = await setActiveSoundfontRef(sourcePath);
-  await settings.save({ active_soundfont: sourcePath });
-  activePath.value = sourcePath;
-  if (r && r.using === 'sf2') toast(t('已启用音色「') + name + '」', 'ok');
-  else toast(t('已切换为内置合成器（所选音色加载失败，会自动回退）'), 'warn');
+async function enable(item) {
+  if (!item || !item.path) { toast(t('该音色尚未就绪，请先下载或导入'), 'warn'); return; }
+  busySf.value = true;
+  try {
+    const r = await setActiveSoundfontRef(item.path);
+    if (r && r.using === 'sf2') {
+      await settings.save({ active_soundfont: item.path });
+      activePath.value = item.path;
+      toast(t('已启用音色「') + item.name + '」', 'ok');
+    } else {
+      // 加载失败：回退默认合成器并提示具体原因，避免“显示已启用实则未生效”
+      await settings.save({ active_soundfont: 'internal' });
+      activePath.value = 'internal';
+      toast(t('「') + item.name + t('」加载失败，已回退默认合成器：') + ((r && r.error) || t('未知原因')), 'warn');
+    }
+  } finally {
+    busySf.value = false;
+  }
 }
 
 function enableInternal() {
@@ -132,7 +144,9 @@ async function preview(item) {
   previewBuf[item.id] = true;
   const prev = activePath.value;
   try {
-    await setActiveSoundfontRef(item.path);
+    busySf.value = true;
+    const r = await setActiveSoundfontRef(item.path);
+    if (!r || r.using !== 'sf2') throw new Error((r && r.error) || t('音色不可用'));
     const { getSynth, getCtx } = await import('../audio.js');
     const ctx = getCtx(); const syn = getSynth();
     if (syn && ctx) {
@@ -147,6 +161,7 @@ async function preview(item) {
     toast(t('预览失败：') + String(e.message || e), 'error');
   } finally {
     previewBuf[item.id] = false;
+    busySf.value = false;
     // 预览后恢复原选择，不影响用户当前使用的音色
     setActiveSoundfontRef(prev || 'internal');
   }
@@ -169,6 +184,13 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
 
 <template>
   <div class="page">
+    <!-- 大音色解析需短暂占用主线程，期间给出遮罩提示，避免误以为卡死 -->
+    <div v-if="busySf" class="sf-busy-mask">
+      <div class="sf-busy-box">
+        <Icon name="music" :size="18" />
+        <span>{{ t('正在加载音色库…首次解析大音色需要几秒，请稍候') }}</span>
+      </div>
+    </div>
     <div class="page-head">
       <div class="page-ic"><Icon name="music" :size="20" /></div>
       <div>
@@ -226,7 +248,7 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
             </template>
             <template v-else>
               <button v-if="!item.downloaded" class="btn sm primary" @click="download(item)" :disabled="!bridge">{{ t('下载') }}</button>
-              <button v-if="item.downloaded" class="btn sm primary" :class="{ on: isActive(item) }" @click="enable(item.path, item.name)">{{ isActive(item) ? t('使用中') : t('启用') }}</button>
+              <button v-if="item.downloaded" class="btn sm primary" :class="{ on: isActive(item) }" @click="enable(item)" :disabled="busySf">{{ isActive(item) ? t('使用中') : t('启用') }}</button>
               <button v-if="item.downloaded && !isActive(item)" class="btn sm ghost" :disabled="previewBuf[item.id]" @click="preview(item)">{{ previewBuf[item.id] ? t('试听…') : t('试听') }}</button>
               <button v-if="item.downloaded && !item.builtin" class="btn sm ghost danger" @click="removeItem(item)">{{ t('删除') }}</button>
             </template>
@@ -252,7 +274,7 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
           <div class="sf-tile-desc">{{ item.desc }}</div>
           <div class="sf-tile-meta">{{ fmtSize(item.size) }}</div>
           <div class="sf-tile-actions">
-            <button class="btn sm primary" :class="{ on: isActive(item) }" @click="enable(item.path, item.name)">{{ isActive(item) ? t('使用中') : t('启用') }}</button>
+            <button class="btn sm primary" :class="{ on: isActive(item) }" @click="enable(item)" :disabled="busySf">{{ isActive(item) ? t('使用中') : t('启用') }}</button>
             <button v-if="!isActive(item)" class="btn sm ghost" :disabled="previewBuf[item.id]" @click="preview(item)">{{ previewBuf[item.id] ? t('试听…') : t('试听') }}</button>
             <button class="btn sm ghost danger" @click="removeItem(item)">{{ t('删除') }}</button>
           </div>
@@ -290,4 +312,7 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
 .sf-tile-bar { height: 5px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; }
 .sf-tile-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.15s linear; }
 .sf-tile-err { font-size: 10.5px; color: var(--error); word-break: break-all; }
+.sf-busy-mask { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--bg) 55%, transparent); backdrop-filter: blur(2px); }
+.sf-busy-box { display: flex; align-items: center; gap: 10px; background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 600; padding: 14px 20px; border-radius: 12px; border: 1px solid var(--hairline); box-shadow: 0 8px 30px rgba(0,0,0,0.14); animation: sf-busy-pulse 1.2s ease-in-out infinite; }
+@keyframes sf-busy-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
 </style>

@@ -308,12 +308,13 @@ export class Synth {
     await JSSynth.waitForReady();
     const buf = await this._readSf2Buffer(source);
     if (!buf) { this.clearSf2(); return { ok: false, using: 'internal', error: '无法读取音色文件' }; }
-    // 大音色会让 JS 合成器在主线程一口气解析全部采样，导致播放卡顿/整站掉帧。
-    // 超过阈值直接拒绝并回退内置轻量合成器，避免假死。
-    const MAX_SF2 = 64 * 1024 * 1024;
+    // 大音色解析时会在主线程占用一小段时间；上限与主进程 file:readSoundFont 一致(512MB)。
+    // 覆盖店内可下载的 FluidR3/Arachno(~141MB)、SGM(~300MB)；更大的（如 1.2GB Salamander）
+    // 会在读取阶段被主进程拒掉（buf 为 null 走上方“无法读取音色文件”），不会整包塞进 JS 合成器。
+    const MAX_SF2 = 512 * 1024 * 1024;
     if (buf.byteLength > MAX_SF2) {
       this.clearSf2();
-      return { ok: false, using: 'internal', error: '音色包过大（>' + Math.round(MAX_SF2 / 1048576) + 'MB），JS 合成器直接加载会卡顿。请改用内置音色或更小的音色包。' };
+      return { ok: false, using: 'internal', error: '音色包过大（>' + Math.round(MAX_SF2 / 1048576) + 'MB），超出当前合成器可承载范围，请改用内置音色或更小的音色包。' };
     }
     this.clearSf2();
     const syn = new JSSynth.Synthesizer();
