@@ -392,8 +392,9 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 .song-item {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 4px 10px;
   padding: 10px 12px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -403,22 +404,19 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 .song-item:hover { background: var(--surface-soft); }
 .song-item.active { background: var(--surface); border-color: var(--hairline); }
 .song-item .si-num { color: var(--stone); font-size: 11px; width: 22px; text-align: right; font-variant-numeric: tabular-nums; }
-.song-item .si-name { flex: 1; min-width: 0; font-size: 13px; padding-right: 4px; }
+.song-item .si-name { flex: 1 1 calc(100% - 42px); min-width: 0; font-size: 13px; padding-right: 4px; }
 .song-item .si-name b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--ink); }
 .song-item .si-name small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--stone); font-size: 11px; }
 .song-item .si-tools {
-  position: absolute;
-  right: 10px;
-  top: 50%;
-  transform: translateY(-50%);
+  position: static;
+  flex: 1 1 100%;
   display: flex;
+  justify-content: flex-end;
   gap: 2px;
   padding: 2px;
   border-radius: 8px;
-  background: var(--surface-soft);
   opacity: 0;
   transition: opacity 0.14s;
-  z-index: 2;
 }
 .song-item:hover .si-tools { opacity: 1; }
 .song-item .playing-ic { color: var(--success-text); }

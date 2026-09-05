@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
-import { getPlayer, getCtx } from '../audio.js';
+import { getPlayer, getCtx, getSynth } from '../audio.js';
 import { t } from '../core/i18n.js';
 import { initMidiOutput, setMidiOutEnabled, midiOutOn, midiOutOff, midiAllOff, getMidiOutDeviceName } from '../core/midiout.js';
 
@@ -20,6 +20,14 @@ const toggleMetro = () => app.toggleMetro();
 const setVolume = (v) => app.setVolume(v);
 const selectSong = (id) => app.selectSong(id);
 const toast = (m, t) => app.toast(m, t);
+const soundMode = ref((() => { try { return localStorage.getItem('fufumidi_synth_mode') || 'sf2'; } catch (e) { return 'sf2'; } })());
+function onSoundMode(e) {
+  const v = e.target.value === 'builtin' ? 'builtin' : 'sf2';
+  soundMode.value = v;
+  try { localStorage.setItem('fufumidi_synth_mode', v); } catch (err) {}
+  const s = getSynth();
+  if (s) { s.setMode(v); toast(v === 'sf2' ? t('已切换到 SoundFont（3.0.0 音色）') : t('已切换到内置合成器'), 'ok'); }
+}
 const toggleTrackMute = (i) => app.toggleTrackMute(i);
 const toggleTrackSolo = (i) => app.toggleTrackSolo(i);
 const setTrackVol = (i, v) => app.setTrackVol(i, v);
@@ -155,6 +163,14 @@ function next() {
         <span class="bpm-lbl">BPM</span>
       </div>
 
+      <div class="sound-switch" :title="t('播放音色')">
+        <Icon name="music" :size="13" />
+        <select class="select-input sound-select" :value="soundMode" @change="onSoundMode">
+          <option value="sf2">{{ t('SoundFont（3.0.0 音色）') }}</option>
+          <option value="builtin">{{ t('内置合成器') }}</option>
+        </select>
+      </div>
+
       <div class="vol-wrap">
         <span class="vol-ic"><Icon name="volume" :size="16" /></span>
         <input id="pb-volume" name="pb-volume" type="range" aria-label="t('音量')" min="0" max="1" step="0.01" :style="volStyle" :value="state.volume" @input="setVolume(parseFloat($event.target.value))">
@@ -228,4 +244,7 @@ function next() {
 .playerbar.compact .pb-progress { max-width: 180px; }
 .playerbar.compact .bpm-wrap { display: none; }
 .playerbar.compact .pb-right .vol-wrap { width: 90px; }
+.sound-switch { display: flex; align-items: center; gap: 4px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.16); border-radius: 999px; padding: 2px 6px; color: #fff; }
+.sound-switch .sound-select { border: none; background: transparent; color: #fff; font-size: 12px; padding: 3px 2px; outline: none; max-width: 138px; }
+.sound-switch .sound-select option { color: #111; background: #fff; }
 </style>

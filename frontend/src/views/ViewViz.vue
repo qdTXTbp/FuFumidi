@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue';
 import { useAppStore } from '../stores/app';
 import { getSynth, ensureAudio, getPlayer } from '../audio.js';
 
@@ -210,6 +210,13 @@ onBeforeUnmount(() => {
   parts = [];
   keys = new Set();
   spec = [];
+});
+onDeactivated(() => {
+  if (raf) cancelAnimationFrame(raf);
+  raf = null;
+});
+onActivated(() => {
+  if (!raf && cvs.spec) raf = requestAnimationFrame(tick);
 });
 </script>
 

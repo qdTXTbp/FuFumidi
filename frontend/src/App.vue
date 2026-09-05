@@ -350,7 +350,7 @@ onBeforeUnmount(() => {
     <main class="app-main">
       <router-view v-slot="{ Component }">
         <Transition name="view" mode="out-in">
-          <KeepAlive>
+          <KeepAlive :max="2">
             <component :is="Component" />
           </KeepAlive>
         </Transition>

@@ -257,21 +257,25 @@ export const useAppStore = defineStore('app', {
     async importFiles(items: any[], target?: string) {
       // target: 歌单 id | 'all'（仅加入资料库/全部曲目，不归入任何歌单）
       //         | undefined（沿用当前激活歌单，否则默认歌单）
-      let ok = 0, dup = 0;
+      let ok = 0, dup = 0, linked = 0;
       const imported: string[] = [];
       for (const it of items) {
         const name = it.name.replace(/\.(mid|midi|kar|rmi)$/i, '');
         const bytes = it.bytes ? new Uint8Array(it.bytes) : null;
-        // 内容与名字相同的曲目不重复导入
+        // 内容与名字相同的曲目不重复导入；若指定了目标歌单，则把已有曲目直接加入该歌单
         if (bytes) {
           const fp = contentFp(name, bytes);
-          const exists = this.songs.some(x => {
+          const existed = this.songs.find(x => {
             if (x.meta.fp && x.meta.fp === fp) return true;
             if (String(x.name || '') !== name) return false;
             const xf = fpOf(x, name);
             return !!xf && xf === fp;
           });
-          if (exists) { dup++; continue; }
+          if (existed) {
+            if (target && target !== 'all') { imported.push(existed.id); linked++; }
+            else { dup++; }
+            continue;
+          }
         }
         let mid: any;
         try { mid = parseMidi(bytes); } catch (e: any) { this.toast(t('无法解析 ') + it.name + '：' + e.message, 'warn'); continue; }
@@ -290,7 +294,7 @@ export const useAppStore = defineStore('app', {
         ok++;
       }
       // 批量归入目标歌单（全部曲目即全局资料库，无需额外归入）
-      if (ok > 0 && imported.length) {
+      if ((ok > 0 || linked > 0) && imported.length) {
         const plStore = usePlaylistStore();
         if (target && target !== 'all') {
           plStore.addToPlaylist(target, imported);
@@ -300,10 +304,13 @@ export const useAppStore = defineStore('app', {
           else plStore.addToPlaylist('default', imported);
         }
       }
-      if (ok > 0) {
-        const last = this.songs[this.songs.length - 1];
-        await this.selectSong(last.id);
+      if (ok > 0 || linked > 0) {
+        if (ok > 0) {
+          const last = this.songs[this.songs.length - 1];
+          await this.selectSong(last.id);
+        }
         let suffix = dup ? t('，跳过 ') + dup + t(' 首重复') : '';
+        if (linked) suffix = t('，加入歌单 ') + linked + t(' 首已有曲目') + suffix;
         if (target && target !== 'all') {
           const plName = usePlaylistStore().playlists.find(p => p.id === target)?.name;
           if (plName) suffix = t(' 到「') + plName + t('」') + suffix;

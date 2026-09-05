@@ -274,11 +274,13 @@ export class Synth {
     this.sf2 = null;
     this.sf2Ready = false;
     this.sf2Loading = null;
+    this.mode = 'sf2'; // 'sf2' 使用 SoundFont（3.0.0 音色）；'builtin' 使用内置合成器
+  }
+  setMode(mode) {
+    this.mode = mode === 'builtin' ? 'builtin' : 'sf2';
+    if (this.mode === 'sf2' && !this.sf2Ready) this.loadSf2();
   }
   async loadSf2() {
-    // 桌面端（Electron）：SF2 实时渲染在 ScriptProcessor 下音色异常，统一使用内置合成器（playVoice）。
-    // 网页端（浏览器）：保留 SoundFont 高质量音色，保证网页端音色不劣化。
-    if (window && window.fuBridge) return false;
     if (this.sf2Ready) return true;
     if (this.sf2Loading) return this.sf2Loading;
     this.sf2Loading = (async () => {
@@ -337,7 +339,7 @@ export class Synth {
   setTrackPan(i, v) { this.ensure(i + 1); this.pan[i] = clamp(v, -1, 1); if (this.panners[i]) this.panners[i].pan.setTargetAtTime(this.pan[i], this.ctx.currentTime, 0.02); }
   noteOn(time, note, endTime) {
     this.ensure(note.trk + 1);
-    if (this.sf2Ready && this.sf2) {
+    if (this.mode !== 'builtin' && this.sf2Ready && this.sf2) {
       const ch = Math.min(15, note.trk || 0);
       try {
         if (note.isDrum) this.sf2.midiSetChannelType(ch, true);
@@ -360,7 +362,7 @@ export class Synth {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     this.ensure(1);
-    if (this.sf2Ready && this.sf2) {
+    if (this.mode !== 'builtin' && this.sf2Ready && this.sf2) {
       try {
         this.sf2.midiProgramChange(0, prog);
         this.sf2.midiNoteOn(0, midi, vel);

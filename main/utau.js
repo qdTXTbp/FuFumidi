@@ -85,6 +85,22 @@ function registerUtauIpc({ ipcMain, path, fs, os, app, dialog, spawnEngine }) {
     }
   });
 
+  // 删除已导入的声库目录（只能删除 userData/voicebanks 下的声库）
+  ipcMain.handle('utau:deleteVoicebank', async (_e, dir) => {
+    try {
+      if (!dir || typeof dir !== 'string') return { ok: false, error: '参数错误' };
+      const root = vbRoot();
+      const resolved = path.resolve(dir);
+      const rootResolved = path.resolve(root);
+      if (!resolved.startsWith(rootResolved + path.sep)) return { ok: false, error: '只能删除已导入的声库目录' };
+      if (!fs.existsSync(resolved)) return { ok: false, error: '声库不存在' };
+      fs.rmSync(resolved, { recursive: true, force: true });
+      return { ok: true, dir: resolved };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+
   ipcMain.handle('utau:exportVoicebank', async (_e, opts) => {
     try {
       const { dir, files } = opts || {};
@@ -99,6 +115,33 @@ function registerUtauIpc({ ipcMain, path, fs, os, app, dialog, spawnEngine }) {
         fs.writeFileSync(path.join(dir, name), buf);
       }
       return { ok: true, dir, count: files.length };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+
+  // 导出声库为 zip 压缩包：选择保存路径后打包 oto.ini + wav 文件
+  ipcMain.handle('utau:exportVoicebankZip', async (_e, opts) => {
+    try {
+      const { files } = opts || {};
+      if (!Array.isArray(files) || !files.length) return { ok: false, error: '参数错误' };
+      const defaultDir = app.getPath('downloads') || os.homedir();
+      const r = await dialog.showSaveDialog({
+        title: '导出声库压缩包',
+        defaultPath: path.join(defaultDir, 'voicebank.zip'),
+        filters: [{ name: 'UTAU 声库', extensions: ['zip'] }],
+      });
+      if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+      const AdmZip = require('adm-zip');
+      const zip = new AdmZip();
+      for (const f of files) {
+        const name = String((f && f.name) || '').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_');
+        if (!name) continue;
+        const buf = Buffer.from(String((f && f.data) || ''), 'base64');
+        zip.addFile(name, buf);
+      }
+      zip.writeZip(r.filePath);
+      return { ok: true, path: r.filePath, count: files.length };
     } catch (err) {
       return { ok: false, error: String((err && err.message) || err) };
     }
@@ -130,7 +173,9 @@ function registerUtauIpc({ ipcMain, path, fs, os, app, dialog, spawnEngine }) {
               return resolve({ ok: true, out: r.result.out, error: String(e) });
             }
           }
-          const err = (r && (r.err || r.out || '').slice(-400)) || `引擎退出码 ${code}`;
+          const err = (r && r.result && r.result.error)
+            || (r && (r.err || r.out || '').slice(-400))
+            || `引擎退出码 ${code}`;
           resolve({ ok: false, error: err });
         },
         onError: (e) => resolve({ ok: false, error: String(e) }),

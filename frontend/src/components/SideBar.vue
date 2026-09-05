@@ -63,54 +63,103 @@ function onResizerKey(e) {
 }
 
 /* ---------------- 歌单数据 ---------------- */
-const batchOn = ref(false);
-const batchSel = ref(new Set());
-
 const isAllView = computed(() => playlist.activePlaylistId === 'all');
 const isFavView = computed(() => playlist.activePlaylistId === 'favorites');
 const activePlaylist = computed(() => playlist.activePlaylist);
 
 const visibleSongs = computed(() => app.queueSongs);
 
-function isSel(id) { return batchSel.value.has(id); }
-function toggleSel(id) {
-  const s = new Set(batchSel.value);
-  if (s.has(id)) s.delete(id); else s.add(id);
-  batchSel.value = s;
+/* ---------------- 歌单批量管理（子页面弹窗） ---------------- */
+const batchManagerOpen = ref(false);
+const batchManagerPl = ref(null);
+const bmSel = ref(new Set());
+const bmSongs = computed(() => {
+  const pl = batchManagerPl.value;
+  if (!pl) return [];
+  const all = app.songs || [];
+  return (pl.songIds || []).map(id => all.find(s => s.id === id)).filter(Boolean);
+});
+function openBatchManager(pl) {
+  batchManagerPl.value = pl;
+  bmSel.value = new Set();
+  playlist.select(pl.id);
+  batchManagerOpen.value = true;
 }
-function toggleBatch() {
-  batchOn.value = !batchOn.value;
-  batchSel.value = new Set();
-}
-function batchAll() {
-  const ids = visibleSongs.value.map(s => s.id);
-  const all = ids.length && ids.every(id => batchSel.value.has(id));
-  batchSel.value = all ? new Set() : new Set(ids);
-}
-function batchDeleteLibrary() {
-  if (!batchSel.value.size) { toast('请先勾选曲目', 'warn'); return; }
-  openConfirm(t('删除曲目'), t('确定从资料库删除 ') + batchSel.value.size + t(' 首曲目？') + t(' 将从所有歌单移除。'), async () => {
-    const ids = [...batchSel.value];
-    for (const id of ids) await removeSong(id);
-    playlist.removeFromAllPlaylists(ids);
-    batchSel.value = new Set();
-    toast(t('已删除 ') + ids.length + t(' 首'), 'ok');
+function closeBatchManager() { batchManagerOpen.value = false; batchManagerPl.value = null; bmSel.value = new Set(); }
+function bmIsSel(id) { return bmSel.value.has(id); }
+function bmToggle(id) { const s = new Set(bmSel.value); if (s.has(id)) s.delete(id); else s.add(id); bmSel.value = s; }
+function bmAll() { const ids = bmSongs.value.map(s => s.id); bmSel.value = ids.every(id => bmSel.value.has(id)) ? new Set() : new Set(ids); }
+function bmDelete() {
+  if (!bmSel.value.size) { toast('请先勾选曲目', 'warn'); return; }
+  const ids = [...bmSel.value];
+  const pl = batchManagerPl.value;
+  openConfirm(t('移除曲目'), t('确定从歌单移除 ') + ids.length + t(' 首曲目？'), async () => {
+    if (pl) playlist.removeSongs(ids);
+    bmSel.value = new Set();
+    toast(t('已移除 ') + ids.length + t(' 首'), 'ok');
   });
 }
-function batchMoveToPl(plId) {
-  const ids = [...batchSel.value];
-  if (!ids.length || !plId) return;
+function bmMove(plId) {
+  const pl = batchManagerPl.value;
+  const ids = [...bmSel.value];
+  if (!ids.length || !plId) { toast('请先勾选曲目', 'warn'); return; }
   playlist.addToPlaylist(plId, ids);
-  if (!isAllView.value && !isFavView.value) playlist.removeSongs(ids);
-  batchSel.value = new Set();
-  const pl = playlist.playlists.find(p => p.id === plId);
-  toast(t('已移动 ') + ids.length + t(' 首到「') + (pl ? pl.name : '') + '」', 'ok');
+  if (pl && pl.id !== plId) playlist.removeSongs(ids);
+  bmSel.value = new Set();
+  const target = playlist.playlists.find(p => p.id === plId);
+  toast(t('已移动 ') + ids.length + t(' 首到「') + (target ? target.name : '') + '」', 'ok');
+}
+function bmMoveIndex(id, idx) {
+  playlist.moveSongToIndex(id, idx);
+}
+/* 拖动排序 */
+const bmDragId = ref(null);
+const bmDragOverId = ref(null);
+function bmDragStart(s, e) {
+  bmDragId.value = s.id;
+  if (e && e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', s.id); } catch (err) {}
+  }
+}
+function bmDragOver(e, s) {
+  e.preventDefault();
+  bmDragOverId.value = s.id;
+}
+function bmDrop(e, s) {
+  e.preventDefault();
+  const dragId = bmDragId.value;
+  const targetId = s.id;
+  bmDragId.value = null;
+  bmDragOverId.value = null;
+  if (dragId && targetId && dragId !== targetId) {
+    const pl = batchManagerPl.value;
+    if (pl) {
+      const ti = pl.songIds.indexOf(targetId);
+      playlist.moveSongToIndex(dragId, ti);
+    }
+  }
+}
+function bmDragEnd() { bmDragId.value = null; bmDragOverId.value = null; }
+
+/* ---------------- 歌单右键菜单 ---------------- */
+const plMenu = ref(null); // { x, y, pl }
+function openPlMenu(e, pl) {
+  plMenu.value = { x: e.clientX, y: e.clientY, pl };
+}
+function closePlMenu() { plMenu.value = null; }
+function plMenuStyle() {
+  const m = plMenu.value;
+  if (!m) return {};
+  const w = Math.min(180, window.innerWidth - 8);
+  const h = Math.min(130, window.innerHeight - 8);
+  return { left: Math.max(4, Math.min(m.x, window.innerWidth - w)) + 'px', top: Math.max(4, Math.min(m.y, window.innerHeight - h)) + 'px' };
 }
 
 /* ---------------- 歌曲拖动排序 ---------------- */
 const dragId = ref(null);
 const dragOverId = ref(null);
-const canReorder = computed(() => !batchOn.value && !isFavView.value && playlist.songIds.length > 0);
+const canReorder = computed(() => !isFavView.value && playlist.songIds.length > 0);
 function resetDrag() {
   dragId.value = null;
   dragOverId.value = null;
@@ -189,13 +238,10 @@ function resetPlDrag() {
 }
 
 function baseName(p) { return String(p).split(/[\\/]/).pop() || t('未命名.mid'); }
-function selectSongOrBatch(s) {
-  if (batchOn.value) toggleSel(s.id);
-  else selectSong(s.id);
-}
 
 /* ---------------- 歌单操作（master 交互） ---------------- */
 const plCreating = ref(false);
+const plCollapsed = ref(false);
 const newPlName = ref('');
 function createPl(name) {
   const n = (name == null ? newPlName.value : name).trim();
@@ -354,28 +400,44 @@ onMounted(() => { playlist.hydrateFavorites(); });
     </div>
 
     <div class="sidebar-body">
-      <button class="btn primary" style="width:100%;justify-content:center" @click="onPick">
-        <Icon name="import" :size="15" /> {{ t('导入 MIDI') }}
-      </button>
-      <button class="btn sm" style="width:100%;justify-content:center;margin-top:6px" @click="onPickFolder">
-        <Icon name="folder" :size="14" /> {{ t('导入文件夹') }}
-      </button>
+      <div style="display:flex;gap:6px">
+        <button class="btn sm" style="flex:1;min-width:0;justify-content:center" @click="onPick">
+          <Icon name="import" :size="14" /> {{ t('导入 MIDI') }}
+        </button>
+        <button class="btn sm" style="flex:1;min-width:0;justify-content:center" @click="onPickFolder">
+          <Icon name="folder" :size="13" /> {{ t('导入文件夹') }}
+        </button>
+      </div>
       <input ref="fileInput" id="midi-file-input" name="midi-file" type="file" accept=".mid,.midi,.kar,.rmi" hidden multiple @change="onFileChange">
+
+      <!-- 搜索 -->
+      <div class="pl-search">
+        <Icon name="search" :size="13" />
+        <input id="sidebar-search" name="sidebar-search" v-model="playlist.search" class="text-input" :placeholder="t('搜索曲目')" aria-label="t('搜索曲目')" />
+        <button v-if="playlist.search" class="icon-btn" style="width:18px;height:18px;flex:none" :title="t('清空')" aria-label="t('清空')" @click="playlist.search = ''"><Icon name="close" :size="11" /></button>
+      </div>
 
       <div class="nav-sep"></div>
 
       <!-- 歌单列表 -->
       <div class="pl-head">
         <span class="nav-group-title" style="padding:6px 12px 4px">{{ t('MIDI 歌单') }}</span>
-        <button class="icon-btn" style="width:24px;height:24px" :title="t('新建歌单')" aria-label="t('新建歌单')" @click="plCreating = !plCreating">
-          <Icon name="plus" :size="14" />
-        </button>
+        <div style="display:flex;gap:2px">
+          <button class="icon-btn" style="width:24px;height:24px" :title="plCollapsed ? t('展开歌单') : t('折叠歌单')" :aria-label="plCollapsed ? t('展开歌单') : t('折叠歌单')" @click="plCollapsed = !plCollapsed">
+            {{ plCollapsed ? '▸' : '▾' }}
+          </button>
+          <button class="icon-btn" style="width:24px;height:24px" :title="t('新建歌单')" aria-label="t('新建歌单')" @click="plCreating = !plCreating">
+            <Icon name="plus" :size="14" />
+          </button>
+        </div>
       </div>
+      <div class="pl-hint muted small">{{ t('右键歌单可管理') }}</div>
       <div v-if="plCreating" class="pl-new">
         <input v-model="newPlName" class="text-input" style="flex:1;padding:4px 8px;font-size:12px" :placeholder="t('歌单名')" @keydown.enter="onNewPlKey" @keydown.esc="onNewPlKey" autofocus />
-        <button class="btn sm" style="padding:3px 10px" @click="createPl">{{ t('确定') }}</button>
+        <button class="btn sm" style="padding:3px 10px" @click="createPl()">{{ t('确定') }}</button>
       </div>
 
+      <template v-if="!plCollapsed">
       <div class="pl-item" :class="{ on: isAllView }" @click="playlist.select('all')">
         <Icon name="music" :size="13" /><span>{{ t('全部曲目') }}</span><em>{{ state.songs.length }}</em>
       </div>
@@ -390,43 +452,34 @@ onMounted(() => { playlist.hydrateFavorites(); });
            @dragleave="plDragLeave($event)"
            @drop.stop.prevent="plDrop($event, pl.id)"
            @dragend="resetPlDrag()"
+           @contextmenu.prevent="openPlMenu($event, pl)"
            @click="playlist.select(pl.id)">
         <span v-if="canReorderPlaylists" class="pl-drag"><Icon name="drag" :size="12" /></span>
         <Icon name="folder" :size="13" /><span class="pl-name" :title="pl.name">{{ pl.name }}</span><em>{{ pl.songIds.length }}</em>
-        <span class="pl-tools">
-          <button class="icon-btn" style="width:20px;height:20px;font-size:11px" :title="t('重命名')" aria-label="t('重命名')" @click.stop="openRename(pl)">✎</button>
-          <button class="icon-btn" style="width:20px;height:20px;font-size:11px" :title="t('删除歌单')" aria-label="t('删除歌单')" @click.stop="deletePl(pl)">✕</button>
-        </span>
       </div>
+      </template>
 
       <div class="nav-sep"></div>
-
-      <!-- 搜索 -->
-      <div class="pl-search">
-        <Icon name="search" :size="13" />
-        <input id="sidebar-search" name="sidebar-search" v-model="playlist.search" class="text-input" :placeholder="t('搜索曲目')" aria-label="t('搜索曲目')" />
-        <button v-if="playlist.search" class="icon-btn" style="width:18px;height:18px;flex:none" :title="t('清空')" aria-label="t('清空')" @click="playlist.search = ''"><Icon name="close" :size="11" /></button>
-      </div>
 
       <!-- 歌曲列表（按当前歌单过滤） -->
       <div v-if="!visibleSongs.length" class="muted small" style="padding:8px 12px;line-height:1.6">
         {{ emptyHint }}
       </div>
 
+      <!-- 批量管理工具栏 -->
       <div class="song-list" role="list" :class="{ 'drag-active': dragId && canReorder }" @dragover.prevent="dragOverList" @drop.prevent.stop="dropOnList">
         <div class="song-item" v-for="(s, i) in visibleSongs" :key="s.id"
-           :class="{ active: s.id === state.currentId, batching: batchOn, dragging: dragId === s.id, dragTarget: dragOverId === s.id }"
+           :class="{ active: s.id === state.currentId, dragging: dragId === s.id, dragTarget: dragOverId === s.id }"
            :draggable="canReorder"
            @dragstart="dragStart(s, $event)"
            @dragover.prevent="dragOverRow($event, s)"
            @dragleave="dragLeaveRow($event)"
            @drop.stop.prevent="dropOn($event, s)"
            @dragend="resetDrag()"
-           @click="selectSongOrBatch(s)">
-        <input v-if="batchOn" type="checkbox" class="song-check" :checked="isSel(s.id)" @click.stop="toggleSel(s.id)" />
-        <span v-if="!batchOn && canReorder" class="si-drag" :title="t('拖动排序')" :aria-label="t('拖动排序')"><Icon name="drag" :size="13" /></span>
-        <span class="si-num" v-if="!batchOn && (!state.playing || s.id !== state.currentId)">{{ i + 1 }}</span>
-        <span class="si-num playing-ic" v-else-if="!batchOn">▶</span>
+           @click="selectSong(s.id)">
+        <span v-if="canReorder" class="si-drag" :title="t('拖动排序')" :aria-label="t('拖动排序')"><Icon name="drag" :size="13" /></span>
+        <span class="si-num" v-if="(!state.playing || s.id !== state.currentId)">{{ i + 1 }}</span>
+        <span class="si-num playing-ic" v-else>▶</span>
         <div class="si-name">
           <b :title="s.name">{{ s.name }}</b>
           <small>{{ s.song ? s.song.tracks.length : (s.meta.tracks || '—') }} {{ t(' 轨 · ') }} {{ (s.meta.size / 1024).toFixed(0) }} KB<span v-if="fmtDur(s)"> · {{ fmtDur(s) }}</span></small>
@@ -444,22 +497,6 @@ onMounted(() => { playlist.hydrateFavorites(); });
         </div>
         </div>
       </div>
-
-      <!-- 批量管理工具栏 -->
-      <div v-if="batchOn" class="batch-bar">
-        <button class="btn sm" @click="batchAll">{{ t('全选') }}</button>
-        <button class="btn sm ghost danger" @click="batchDeleteLibrary" :disabled="!batchSel.size">
-          <Icon name="trash" :size="13" /> {{ t('删除') }}({{ batchSel.size }})
-        </button>
-        <select class="select-input" style="flex:1;min-width:0" :value="''" @change="e => e.target.value && (batchMoveToPl(e.target.value), e.target.value = '')">
-          <option value="" disabled>{{ t('移到歌单…') }}</option>
-          <option v-for="pl in playlist.playlists" :key="pl.id" :value="pl.id">{{ pl.name }}</option>
-        </select>
-        <button class="btn sm ghost" @click="toggleBatch">{{ t('完成') }}</button>
-      </div>
-      <button v-else-if="visibleSongs.length" class="btn sm ghost" style="width:100%;margin-top:2px" @click="toggleBatch">
-        <Icon name="check" :size="13" /> {{ t('批量管理') }}
-      </button>
     </div>
 
     <div style="padding:10px 14px;border-top:1px solid var(--border)" class="small muted row">
@@ -530,6 +567,53 @@ onMounted(() => { playlist.hydrateFavorites(); });
         </div>
       </div>
     </Transition>
+
+    <!-- 歌单右键菜单 -->
+    <Transition name="ov">
+      <div v-if="plMenu" class="pl-ctx-mask" @click.self="closePlMenu" @contextmenu.prevent="closePlMenu">
+        <div class="pl-ctx-menu" :style="plMenuStyle()">
+          <button class="pl-ctx-item" @click="openBatchManager(plMenu.pl); closePlMenu()">{{ t('批量管理歌单') }}</button>
+          <button class="pl-ctx-item" @click="closePlMenu(); openRename(plMenu.pl)">{{ t('重命名') }}</button>
+          <button class="pl-ctx-item danger" @click="closePlMenu(); deletePl(plMenu.pl)">{{ t('删除歌单') }}</button>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- 歌单批量管理子页面 -->
+    <Transition name="ov">
+      <div v-if="batchManagerOpen" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="t('批量管理歌单')" @click.self="closeBatchManager" @keydown.esc="closeBatchManager">
+        <div class="ed-modal" style="width:min(560px,92vw)">
+          <div class="ed-modal-head">
+            <b>{{ t('批量管理歌单') }} · {{ batchManagerPl && batchManagerPl.name }}</b>
+            <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" :aria-label="t('关闭')" @click="closeBatchManager"><Icon name="close" :size="14" /></button>
+          </div>
+          <div class="bm-bar">
+            <span class="batch-count">{{ bmSel.size }} {{ t('已选') }}</span>
+            <button class="btn sm" @click="bmAll">{{ t('全选') }}</button>
+            <select class="select-input" style="flex:1;min-width:0" :value="''" @change="e => e.target.value && (bmMove(e.target.value), e.target.value = '')">
+              <option value="" disabled>{{ t('移到歌单…') }}</option>
+              <option v-for="pl in playlist.playlists" :key="pl.id" :value="pl.id">{{ pl.name }}</option>
+            </select>
+            <button class="btn sm danger" @click="bmDelete" :disabled="!bmSel.size">{{ t('移除') }}</button>
+            <button class="btn sm ghost" @click="closeBatchManager">{{ t('完成') }}</button>
+          </div>
+          <div class="bm-list">
+            <div v-if="!bmSongs.length" class="muted small" style="padding:12px 4px">{{ t('当前歌单没有曲目') }}</div>
+            <div v-for="s in bmSongs" :key="s.id" class="bm-item" :class="{ 'bm-drag-target': bmDragOverId === s.id }"
+                 draggable="true"
+                 @dragstart="bmDragStart(s, $event)"
+                 @dragover="bmDragOver($event, s)"
+                 @drop="bmDrop($event, s)"
+                 @dragend="bmDragEnd()">
+              <span class="bm-drag" :title="t('拖动排序')"><Icon name="drag" :size="13" /></span>
+              <input type="checkbox" :checked="bmIsSel(s.id)" @change.stop="bmToggle(s.id)" />
+              <span class="bm-name" :title="s.name">{{ s.name }}</span>
+              <em class="muted small">{{ s.song ? s.song.tracks.length : (s.meta.tracks || '—') }} 轨</em>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </Teleport>
 </template>
 
@@ -556,6 +640,7 @@ onMounted(() => { playlist.hydrateFavorites(); });
 
 /* master 版歌单项：图标 + 计数 + hover 工具按钮 */
 .pl-head { display: flex; align-items: center; justify-content: space-between; padding-right: 6px; }
+.pl-hint { padding: 0 12px 2px; font-size: 10.5px; color: var(--stone); }
 .pl-new { display: flex; align-items: center; gap: 6px; padding: 4px 12px; }
 /* 歌单列表容器：拖拽高亮动画（上游 v3.0.0 恢复） */
 .pl-list { display: flex; flex-direction: column; gap: 2px; padding: 2px; margin-bottom: 6px; border: 1px solid transparent; border-radius: 10px; transition: box-shadow .12s, background .12s; }
@@ -580,11 +665,6 @@ onMounted(() => { playlist.hydrateFavorites(); });
 .song-item:hover .si-tools { opacity: 1; }
 .icon-btn.heart { color: var(--stone); }
 .icon-btn.heart.on { color: var(--brand-coral); }
-
-/* 批量管理 */
-.song-check { width: 15px; height: 15px; accent-color: var(--brand-blue); flex: none; cursor: pointer; }
-.batch-bar { display: flex; align-items: center; gap: 6px; padding: 6px 2px; flex-wrap: wrap; border-top: 1px dashed var(--hairline); margin-top: 4px; }
-.batch-bar .select-input { padding: 4px 6px; font-size: 12px; }
 
 /* 搜索框 */
 .pl-search { display: flex; align-items: center; gap: 6px; padding: 2px 4px; color: var(--stone); }
@@ -634,4 +714,23 @@ body.resize-col .sidebar-resizer::after {
   background: color-mix(in srgb, var(--accent) 50%, transparent);
 }
 .sidebar-resizer:focus-visible { outline: none; }
+
+/* 歌单右键菜单 */
+.pl-ctx-mask { position: fixed; inset: 0; z-index: 2000; }
+.pl-ctx-menu { position: fixed; min-width: 160px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+.pl-ctx-item { text-align: left; border: none; background: transparent; color: var(--ink); padding: 7px 10px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+.pl-ctx-item:hover { background: var(--surface-soft); }
+.pl-ctx-item.danger { color: var(--error); }
+
+/* 批量管理子页面 */
+.bm-bar { display: flex; align-items: center; gap: 6px; padding: 10px 4px; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+.bm-list { max-height: 52vh; overflow-y: auto; padding: 6px 4px; display: flex; flex-direction: column; gap: 2px; }
+.bm-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
+.bm-item:hover { background: var(--surface-soft); }
+.bm-item input { width: 14px; height: 14px; accent-color: var(--brand-blue); }
+.bm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--ink); }
+.bm-drag-target { outline: 1px dashed var(--brand); background: var(--brand-soft); }
+.bm-item[draggable="true"] { cursor: grab; }
+.bm-item[draggable="true"]:active { cursor: grabbing; }
+.bm-drag { display: inline-flex; align-items: center; color: var(--stone); cursor: grab; flex: none; }
 </style>
