@@ -332,6 +332,30 @@ async function exportVoicebank() {
   else toast(t('导出失败：') + ((r && r.error) || 'unknown'), 'error');
 }
 
+/* 导出为压缩包：采集同样的 oto.ini + wav 列表，由主进程保存为 zip */
+async function exportVoicebankZip() {
+  if (!segments.value.length) { toast(t('请先切分或添加片段'), 'warn'); return; }
+  if (!bridge || typeof bridge.utauExportVoicebankZip !== 'function') {
+    toast(t('当前环境不支持压缩包导出，请使用桌面版'), 'warn');
+    return;
+  }
+  const otoLines = segments.value.map(s => {
+    const o = s.oto || { offset: 0, consonant: 50, blank: 20, preutterance: 50, overlap: 20 };
+    return `${s.name}.wav=${s.name},${o.offset},${o.consonant},${o.blank},${o.preutterance},${o.overlap}`;
+  });
+  const otoBytes = new TextEncoder().encode(otoLines.join('\n') + '\n');
+  const files = [{ name: 'oto.ini', data: bytesToBase64(otoBytes) }];
+  for (const s of segments.value) {
+    const { data, sr, start, end } = segSlice(s);
+    if (end <= start) continue;
+    files.push({ name: s.name + '.wav', data: bytesToBase64(encodeWav16(data.subarray(start, end), sr)) });
+  }
+  const r = await bridge.utauExportVoicebankZip({ files });
+  if (r && r.ok) toast(t('已导出压缩包到 ') + (r.path || ''), 'ok');
+  else if (r && r.canceled) { /* 用户取消 */ }
+  else toast(t('导出失败：') + ((r && r.error) || 'unknown'), 'error');
+}
+
 /* ---------------- 响应式重绘 ---------------- */
 // 用轻量签名代替 JSON.stringify：segments 内含 Float32Array(ownData)，全量序列化会卡顿
 function segSignature() {
@@ -376,8 +400,11 @@ onBeforeUnmount(() => {
       <div class="vb-left">
         <div class="vb-left-head">
           <b>{{ t('片段') }} ({{ segments.length }})</b>
-          <button class="btn sm" @click="labelAll" :disabled="!segments.length">{{ t('自动标注全部') }}</button>
-          <button class="btn sm primary" @click="exportVoicebank" :disabled="!segments.length">{{ t('导出音源') }}</button>
+          <div class="vb-head-actions">
+            <button class="btn sm" @click="labelAll" :disabled="!segments.length">{{ t('自动标注全部') }}</button>
+            <button class="btn sm primary" @click="exportVoicebank" :disabled="!segments.length">{{ t('导出音源') }}</button>
+            <button class="btn sm" @click="exportVoicebankZip" :disabled="!segments.length">{{ t('导出压缩包') }}</button>
+          </div>
         </div>
         <div v-if="!segments.length" class="muted small vb-empty">
           {{ t('切分后在此列出片段，点选后右侧微调。') }}
@@ -427,9 +454,11 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .vb { padding: 18px 22px; display: flex; flex-direction: column; gap: 12px; min-height: 100%; }
-.vb-toolbar { display: flex; align-items: center; gap: 10px; }
+.vb-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.vb-toolbar .btn { min-height: 30px; }
 .vb-src-name { margin-left: auto; font-size: 12px; color: var(--stone); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vb-params { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--stone); }
+.vb-params { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--stone); background: var(--surface-muted); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+.vb-head-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .vb-params label { display: inline-flex; align-items: center; gap: 6px; }
 .vb-num { width: 76px; padding: 3px 6px; font-size: 12px; }
 .vb-body { display: grid; grid-template-columns: 300px 1fr; gap: 14px; flex: 1; min-height: 0; }

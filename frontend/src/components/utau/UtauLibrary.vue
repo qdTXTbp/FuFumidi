@@ -29,6 +29,18 @@ async function importZip() {
   finally { busy.value = false; }
 }
 function choose(v) { store.setVoicebank(v.dir); msg.value = t('当前声库：') + v.name; }
+async function removeVb(v) {
+  if (!window.confirm(t('确定删除声库「') + v.name + t('」？'))) return;
+  if (!bridge || !bridge.utauDeleteVoicebank) { msg.value = t('当前环境不支持删除声库'); return; }
+  const r = await bridge.utauDeleteVoicebank(v.dir);
+  if (r && r.ok) {
+    if (store.voicebankDir === v.dir) store.setVoicebank(null);
+    msg.value = t('已删除声库：') + v.name;
+    await refresh();
+  } else {
+    msg.value = t('删除失败：') + ((r && r.error) || 'unknown');
+  }
+}
 
 onMounted(refresh);
 </script>
@@ -51,6 +63,7 @@ onMounted(refresh);
         <span class="ul-name" :title="v.dir">{{ v.name }}</span>
         <em class="muted small">{{ v.dir }}</em>
         <span v-if="store.voicebankDir === v.dir" class="ul-on">{{ t('当前') }}</span>
+        <button class="ul-del" :title="t('删除声库')" :aria-label="t('删除声库')" @click.stop="removeVb(v)">✕</button>
       </div>
     </div>
     <div v-else class="muted small ul-empty">
@@ -73,6 +86,8 @@ onMounted(refresh);
 .ul-name { font-weight: 600; font-size: 13px; color: var(--ink); }
 .ul-item em { font-style: normal; color: var(--stone); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
 .ul-on { margin-left: auto; font-size: 11px; color: var(--brand); border: 1px solid var(--brand); border-radius: 999px; padding: 1px 8px; }
+.ul-del { margin-left: 4px; border: none; background: transparent; color: var(--error); cursor: pointer; font-size: 13px; line-height: 1; padding: 4px; border-radius: 6px; }
+.ul-del:hover { background: color-mix(in srgb, var(--error) 12%, transparent); }
 .ul-empty { padding: 6px 2px; line-height: 1.6; }
 .ul-msg { padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); font-size: 13px; color: var(--ink); }
 </style>

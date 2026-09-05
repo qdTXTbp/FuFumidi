@@ -13,6 +13,10 @@ export function ensureAudio() {
     if (!AC) throw new Error('当前环境不支持 Web Audio API');
     try { ctx = new AC({ latencyHint: 'interactive' }); } catch (e) { ctx = new AC(); }
     synth = new Synth(ctx);
+    try {
+      const savedMode = localStorage.getItem('fufumidi_synth_mode');
+      if (savedMode) synth.setMode(savedMode);
+    } catch (e) {}
     synth.loadSf2();
     player = new Player(synth);
     player.onEnd = () => {

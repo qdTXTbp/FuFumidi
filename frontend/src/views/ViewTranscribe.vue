@@ -1,6 +1,6 @@
 <script setup>
 // 转录视图：音频 → MIDI（本地 Python 引擎，桌面端通过 fuBridge 桥接）
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { clamp, esc, fmtTime } from '../core/util.js';
@@ -724,6 +724,18 @@ onBeforeUnmount(() => {
   if (offLog) offLog();
   if (offRefine) offRefine();
   if (offModelProg) { try { offModelProg(); } catch (e) {} offModelProg = null; }
+});
+onDeactivated(() => {
+  if (trTimer) clearInterval(trTimer);
+});
+onActivated(() => {
+  loadQueue();
+  refreshModelStatus();
+  if (running.value && !trTimer) {
+    // 回到页面时若队列仍在运行，简单刷新一次进度
+    running.value = false;
+    loadQueue();
+  }
 });
 </script>
 

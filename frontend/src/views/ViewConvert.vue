@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, reactive, watch, nextTick, onMounted } from 'vue';
+import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { t } from '../core/i18n.js';
@@ -225,6 +225,9 @@ function drawVideoPreview() {
 }
 watch(() => [VE.template, VE.bgColor, VE.visual, VE.showProgress, VE.showChord, VE.showTimecode, VE.showLyrics, VE.showWatermark, VE.res, VE.fps, VE.quality, VE.track], () => nextTick(drawVideoPreview), { deep: true });
 onMounted(() => nextTick(drawVideoPreview));
+onBeforeUnmount(() => { if (VE.veTimer) { clearInterval(VE.veTimer); VE.veTimer = null; } VE.veCancel = true; });
+onDeactivated(() => { if (VE.veTimer) { clearInterval(VE.veTimer); VE.veTimer = null; } });
+onActivated(() => { drawVideoPreview(); });
 function vePickBgImage() { vePickImage((d) => { VE.bgImage = d; }); }
 function vePickWatermark() { vePickImage((d) => { VE.watermark = d; }); }
 function vePickImage(cb) {

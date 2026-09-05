@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+import traceback
 
 import numpy as np
 
@@ -115,6 +116,10 @@ class Voicebank:
                     entry = e
                     break
         if entry is None:
+            # 自动切分/生成的音源通常使用 001/002 等数字别名；找不到歌词时回退到第一个原音，
+            # 避免渲染直接失败，用户仍可在 UI 中修正歌词别名。
+            if self.by_alias:
+                return next(iter(self.by_alias.values()))
             sample = ", ".join(self.aliases()[:20])
             raise KeyError(f"音源中未找到歌词「{lyric}」，可用原音（前 20 个）：{sample}")
         return entry
@@ -232,6 +237,8 @@ def _stretch_vowel(shifted, cons_n, target_n, sr):
     用零交叉对齐的循环填充，过长时尾部淡出截断。
     """
     n = len(shifted)
+    if n <= 0:
+        return np.zeros(max(1, target_n), dtype=np.float32)
     if target_n <= n:
         return _fade_tail(shifted[:target_n], sr)
 
@@ -274,6 +281,9 @@ def render_note(sample, entry, ratio, length_ms, volume=100.0, velocity=100.0,
     cutoff_s = max(off_s + 1, min(cutoff_s, len(sample)))
 
     region = sample[off_s:cutoff_s]
+    if len(region) < 64:
+        # 自动标注/生成声库可能出现有效区过短；回退使用整段采样，避免渲染直接失败
+        region = sample[:]
     if len(region) < 64:
         raise ValueError(f"原音「{entry.alias}」有效区过短（{len(region)} 样本），请检查 oto.ini")
 
@@ -318,13 +328,17 @@ def render_track(vb, notes, sample_note="C4", sr=SAMPLE_RATE):
         ratio = note_to_hz(nd["note"]) / f_sample
         length_ms = float(nd.get("length_ms", 500))
         velocity = float(nd.get("velocity", 100.0))
-        x = render_note(
-            sample, entry, ratio, length_ms,
-            volume=float(nd.get("volume", 100.0)),
-            velocity=velocity,
-            attack_ms=float(nd.get("attack_ms", 5)),
-            release_ms=float(nd.get("release_ms", 12)),
-            vibrato=nd.get("vibrato"), sr=sr)
+        try:
+            x = render_note(
+                sample, entry, ratio, length_ms,
+                volume=float(nd.get("volume", 100.0)),
+                velocity=velocity,
+                attack_ms=float(nd.get("attack_ms", 5)),
+                release_ms=float(nd.get("release_ms", 12)),
+                vibrato=nd.get("vibrato"), sr=sr)
+        except Exception:
+            # 单个原音渲染失败时用静音兜底，避免整轨因广播/空数组崩溃
+            x = np.zeros(max(1, int(length_ms * sr / 1000)), dtype=np.float32)
         # preutterance 是音符起点锚点（变调 + 子音速度后缩放）
         pre_idx = int(entry.preutterance * sr / 1000 / ratio
                       * 100.0 / max(velocity, 1.0))
@@ -348,7 +362,8 @@ def render_track(vb, notes, sample_note="C4", sr=SAMPLE_RATE):
         vel2 = float(notes[i + 1].get("velocity", 100.0))
         fade_n = int(entry2.overlap * sr / 1000 / ratio2
                       * 100.0 / max(vel2, 1.0))
-        f0 = p2
+        # 防止 preutterance 过大导致 p2 早于 p1，产生负索引/空切片
+        f0 = max(p2, p1)
         f1 = min(p2 + fade_n, p1 + len(x1))
         if f1 - f0 < 2:
             continue
@@ -550,7 +565,7 @@ def cmd_render_track(args):
             "rms": round(float(np.sqrt(np.mean(buf.astype(np.float64) ** 2))), 6),
         })
     except Exception as e:
-        _print_result({"ok": False, "error": f"{type(e).__name__}: {e}"})
+        _print_result({"ok": False, "error": f"{type(e).__name__}: {e}\n{traceback.format_exc()}"})
         sys.exit(1)
 
 

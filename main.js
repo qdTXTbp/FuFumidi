@@ -127,6 +127,10 @@ function bundledPython() {
     path.join(__dirname, 'python'),
     path.join(__dirname, 'engine', 'python'),
   ];
+  // 本地开发/新版测试客户端：回退使用本机已安装的完整 Python 运行时
+  if (process.platform === 'win32' && fs.existsSync('E:/Midi/FuFumidi/resources/python/python.exe')) {
+    roots.push('E:/Midi/FuFumidi/resources/python');
+  }
   for (const root of roots) {
     for (const n of names) {
       const p = path.join(root, n);
