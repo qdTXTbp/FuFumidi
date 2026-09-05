@@ -392,33 +392,32 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 .song-item {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
+  gap: 4px 10px;
+  padding: 9px 11px;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  border: 1px solid transparent;
-  transition: background 0.14s, border-color 0.14s;
+  border: 1px solid var(--hairline-soft);
+  background: var(--glass-bg-soft);
+  transition: background 0.14s, border-color 0.14s, box-shadow 0.14s;
 }
-.song-item:hover { background: var(--surface-soft); }
-.song-item.active { background: var(--surface); border-color: var(--hairline); }
+.song-item:hover { background: var(--surface-soft); border-color: var(--border-strong); }
+.song-item.active { background: var(--surface); border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); }
 .song-item .si-num { color: var(--stone); font-size: 11px; width: 22px; text-align: right; font-variant-numeric: tabular-nums; }
-.song-item .si-name { flex: 1; min-width: 0; font-size: 13px; padding-right: 4px; }
+.song-item .si-name { flex: 1 1 calc(100% - 42px); min-width: 0; font-size: 13px; padding-right: 4px; }
 .song-item .si-name b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--ink); }
 .song-item .si-name small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--stone); font-size: 11px; }
 .song-item .si-tools {
-  position: absolute;
-  right: 10px;
-  top: 50%;
-  transform: translateY(-50%);
+  position: static;
+  flex: 1 1 100%;
   display: flex;
+  justify-content: flex-end;
   gap: 2px;
   padding: 2px;
   border-radius: 8px;
-  background: var(--surface-soft);
   opacity: 0;
   transition: opacity 0.14s;
-  z-index: 2;
 }
 .song-item:hover .si-tools { opacity: 1; }
 .song-item .playing-ic { color: var(--success-text); }
@@ -1100,10 +1099,20 @@ body[data-density="compact"] .topbar { padding: 0 8px; }
 
 /* ---------- 视图切换（App.vue Transition） ---------- */
 .view-enter-active, .view-leave-active {
-  transition: opacity 0.18s ease, transform 0.18s ease;
+  transition: opacity 0.28s cubic-bezier(0.22, 0.8, 0.36, 1), transform 0.28s cubic-bezier(0.22, 0.8, 0.36, 1);
+  will-change: opacity, transform;
+  backface-visibility: hidden;
 }
-.view-enter-from { opacity: 0; transform: translateY(10px); }
-.view-leave-to { opacity: 0; transform: translateY(-6px); }
+.view-enter-from { opacity: 0; transform: translateY(12px) scale(0.995); }
+.view-leave-to { opacity: 0; transform: translateY(-8px) scale(0.995); }
+
+/* ---------- 分组页内子页签切换（ViewMusic / ViewViews / ViewTranscode / ViewResources） ---------- */
+.group-tab-enter-active, .group-tab-leave-active {
+  transition: opacity 0.2s cubic-bezier(0.22, 0.8, 0.36, 1), transform 0.2s cubic-bezier(0.22, 0.8, 0.36, 1);
+  will-change: opacity, transform;
+}
+.group-tab-enter-from { opacity: 0; transform: translateY(8px); }
+.group-tab-leave-to { opacity: 0; transform: translateY(-4px); }
 
 /* ---------- 按钮 / 可点元素：按下回弹 ---------- */
 .btn:active, .et-btn:active, .icon-btn:active, .chip-btn:active, .tp-btn:active,

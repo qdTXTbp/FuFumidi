@@ -124,7 +124,7 @@ function loop() { draw(); raf = requestAnimationFrame(loop); }
 
 function onResize() { draw(); }
 
-watch(() => state.view, v => { if (v === 'play') draw(); });
+watch(() => state.view, v => { if (v === 'music') draw(); });
 
 onMounted(async () => {
   await nextTick();
