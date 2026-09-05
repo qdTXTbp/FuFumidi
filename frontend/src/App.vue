@@ -11,7 +11,7 @@ import WallpaperGallery from './components/WallpaperGallery.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import GuideOverlay from './components/GuideOverlay.vue';
 import ChangeLogOverlay from './components/ChangeLogOverlay.vue';
-import { ref, computed } from 'vue';
+import { ref, computed, reactive } from 'vue';
 import { useAppStore, VIEWS } from './stores/app';
 import { usePlaylistStore } from './stores/playlist';
 import { useSettingsStore } from './stores/settings';
@@ -312,6 +312,48 @@ function dismissGpuBar() {
   state.gpuInstall.done = false;
 }
 
+/* ---------------- 模型下载：顶部通知条（任意页面可见） ---------------- */
+const dlProg = reactive({});            // id -> {active, percent, speed, received, total, done, error}
+const dlModelNames = ref({});
+const dlPeek = ref(false);              // 收起为顶部细条（露出一点）
+const dlExpanded = ref(false);          // 点击展开详细下载数据
+let dlHideTimer = null;
+let prevDlCount = 0;
+const activeDls = computed(() => Object.entries(dlProg).filter(([id, v]) => v && v.active).map(([id, v]) => ({ id, ...v, name: (dlModelNames.value[id] && dlModelNames.value[id].name) || id })));
+const overallPct = computed(() => { const d = activeDls.value; if (!d.length) return 0; return Math.round(d.reduce((s, x) => s + (x.percent || 0), 0) / d.length); });
+async function ensureDlNames() {
+  try { const arr = await bridge.modelList() || []; const m = {}; for (const x of arr) if (x && x.id) m[x.id] = x; dlModelNames.value = m; } catch (e) {}
+}
+function applyDl(p) {
+  if (!p || !p.id) return;
+  const cur = dlProg[p.id] || {};
+  dlProg[p.id] = {
+    ...cur, ...p,
+    active: !!(p.done ? false : (p.active !== false ? (cur.active !== false) : true)),
+  };
+  if (p.done) dlProg[p.id].active = false;
+  if (p.error) dlProg[p.id].active = false;
+  if (p.done) ensureDlNames();
+  const c = activeDls.value.length;
+  if (c > prevDlCount && !dlExpanded.value) { dlPeek.value = false; armHide(); }   // 新下载开始：弹出并重新计时
+  prevDlCount = c;
+  if (c === 0) { dlPeek.value = false; dlExpanded.value = false; }
+}
+function armHide() {
+  clearTimeout(dlHideTimer);
+  dlHideTimer = setTimeout(() => { if (!dlExpanded.value) dlPeek.value = true; }, 5000);
+}
+function revealDl() { if (dlPeek.value) dlPeek.value = false; armHide(); }
+function onDlLeave() { if (!dlExpanded.value) armHide(); }
+function toggleDl() {
+  if (dlPeek.value) { revealDl(); return; }
+  dlExpanded.value = !dlExpanded.value;
+  if (dlExpanded.value) clearTimeout(dlHideTimer); else armHide();
+}
+function cancelDl(id) { if (bridge && bridge.modelCancel) bridge.modelCancel(id); dlProg[id] = { ...(dlProg[id] || {}), active: false, paused: true }; }
+function dlHuman(n) { if (!n) return '—'; if (n >= 1e9) return (n / 1e9).toFixed(2) + ' GB'; if (n >= 1e6) return (n / 1e6).toFixed(0) + ' MB'; if (n >= 1e3) return (n / 1e3).toFixed(0) + ' KB'; return n + ' B'; }
+function dlSpeed(bps) { if (!bps) return ''; return bps >= 1e6 ? (bps / 1e6).toFixed(1) + ' MB/s' : (bps / 1e3).toFixed(0) + ' KB/s'; }
+
 onMounted(() => {
   startTickLoop();
   restoreSongs();
@@ -319,6 +361,9 @@ onMounted(() => {
   initGlobal();
   loadWallpaper();
   if (bridge && bridge.onGpuProgress) offGpuProg = bridge.onGpuProgress(onGpuProgressGlobal);
+  // 模型下载进度（顶部通知条）
+  if (bridge && bridge.onModelProgress) offDlProg = bridge.onModelProgress(applyDl);
+  ensureDlNames();
   // 更新包下载进度提示（主进程预下载阶段）
   if (bridge && bridge.onUpdateProgress) {
     offUpdateProg = bridge.onUpdateProgress((p) => {
@@ -336,7 +381,9 @@ onBeforeUnmount(() => {
   stopTickLoop();
   if (offGpuProg) { try { offGpuProg(); } catch (e) {} offGpuProg = null; }
   if (offUpdateProg) { try { offUpdateProg(); } catch (e) {} offUpdateProg = null; }
+  if (offDlProg) { try { offDlProg(); } catch (e) {} offDlProg = null; }
   clearTimeout(gpuBarTimer);
+  clearTimeout(dlHideTimer);
   window.removeEventListener('keydown', onKey);
   window.removeEventListener('beforeunload', onBeforeUnload);
 });
@@ -350,13 +397,15 @@ onBeforeUnmount(() => {
     <main class="app-main">
       <router-view v-slot="{ Component }">
         <Transition name="view" mode="out-in">
-          <KeepAlive :max="2">
+          <KeepAlive>
             <component :is="Component" />
           </KeepAlive>
         </Transition>
       </router-view>
     </main>
-    <PlayerBar v-if="state.playerbarOpen" />
+    <Transition name="pb">
+      <PlayerBar v-if="state.playerbarOpen" />
+    </Transition>
     <div class="toast-wrap" v-if="state.toastMsg && state.toastMsg.msg" role="status" aria-live="polite">
       <div class="toast" :class="state.toastMsg.type">{{ state.toastMsg.msg }}</div>
     </div>
@@ -378,6 +427,32 @@ onBeforeUnmount(() => {
           <div v-if="!state.gpuInstall.done && state.gpuInstall.text" class="gpu-bar-tip">{{ state.gpuInstall.text }}</div>
         </div>
         <button class="gpu-bar-x" :title="t('关闭')" aria-label="t('关闭')" @click.stop="dismissGpuBar"><Icon name="close" :size="13" /></button>
+      </div>
+    </Transition>
+
+    <!-- 模型下载：顶部通知条（5 秒无人触碰收起为顶部细条，悬停下滑，点击展开详情） -->
+    <Transition name="dlnoti">
+      <div v-if="activeDls.length" class="dl-noti" :class="{ peek: dlPeek }">
+        <div class="dl-stack" :class="{ open: dlExpanded }" @mouseenter="revealDl" @mouseleave="onDlLeave">
+          <button class="dl-bar" @click="toggleDl">
+            <Icon name="download" :size="15" />
+            <b class="dl-anypct">{{ overallPct }}%</b>
+            <span class="dl-cnt">{{ activeDls.length }} {{ t('个下载中') }}</span>
+            <i class="dl-caret">{{ dlExpanded ? '▲' : '▼' }}</i>
+          </button>
+          <div class="dl-panel">
+            <div v-for="d in activeDls" :key="d.id" class="dl-item">
+              <div class="dl-name" :title="d.id">{{ d.name }}</div>
+              <div class="dl-pbar"><i :style="{ width: (d.percent || 0) + '%' }"></i></div>
+              <div class="dl-meta">
+                <span class="pct">{{ (d.percent || 0) }}%</span>
+                <span v-if="d.speed" class="spd">⚡ {{ dlSpeed(d.speed) }}</span>
+                <span class="sz">{{ dlHuman(d.received) }} / {{ dlHuman(d.total) }}</span>
+                <button class="btn sm ghost danger" style="margin-left:auto" @click.stop="cancelDl(d.id)">{{ t('取消') }}</button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </Transition>
 
@@ -503,4 +578,35 @@ onBeforeUnmount(() => {
 .gpu-bar-x { flex: none; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;
   border: 0; border-radius: 6px; background: transparent; color: var(--text-muted, #888); cursor: pointer; }
 .gpu-bar-x:hover { background: var(--surface-muted, #EFEFF2); color: var(--ink, #171717); }
+
+/* ===== 模型下载：顶部通知条 ===== */
+.dl-noti { position: fixed; top: 0; left: 50%; transform: translate(-50%, 0); z-index: 990;
+  display: flex; flex-direction: column; align-items: center; pointer-events: none;
+  transition: transform .42s cubic-bezier(.22,.72,.22,1); padding-bottom: 12px; }
+.dl-noti.peek { transform: translate(-50%, calc(-100% + 26px)); }   /* 上移露出 26px 细条 */
+.dl-stack { pointer-events: auto; display: flex; flex-direction: column; align-items: center; }
+.dl-bar { display: inline-flex; align-items: center; gap: 9px; padding: 10px 18px; border: none; border-radius: 999px;
+  background: linear-gradient(135deg, var(--accent), var(--brand-coral)); color: #fff; font-size: 12.5px; font-weight: 700;
+  cursor: pointer; box-shadow: var(--shadow-lg); transition: transform .18s ease, box-shadow .2s ease; }
+.dl-bar:hover { box-shadow: var(--shadow-xl, 0 14px 34px rgba(0,0,0,.28)); }
+.dl-bar:active { transform: scale(.96); }
+.dl-anypct { font-variant-numeric: tabular-nums; }
+.dl-cnt { font-weight: 600; opacity: .96; }
+.dl-caret { font-style: normal; font-size: 9px; opacity: .85; }
+.dl-panel { width: 400px; max-width: 92vw; margin-top: 8px; background: var(--canvas); border: 1px solid var(--hairline);
+  border-radius: 14px; box-shadow: var(--shadow-lg); padding: 4px 14px 8px; overflow: hidden;
+  max-height: 0; opacity: 0; transform: translateY(-6px);
+  transition: max-height .3s cubic-bezier(.2,.7,.3,1), opacity .24s ease, transform .26s ease; }
+.dl-stack.open .dl-panel { max-height: 340px; opacity: 1; transform: translateY(0); overflow-y: auto; }
+.dl-item { padding: 7px 0; border-bottom: 1px solid var(--hairline-soft); }
+.dl-item:last-child { border-bottom: none; }
+.dl-name { font-size: 12px; color: var(--ink); font-weight: 600; margin-bottom: 5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 6px; }
+.dl-pbar { height: 6px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; }
+.dl-pbar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--brand-coral));
+  border-radius: 999px; transition: width .25s ease; }
+.dl-meta { display: flex; align-items: center; gap: 12px; font-size: 10.5px; color: var(--stone); margin-top: 4px; font-family: var(--mono); }
+.dl-meta .pct { color: var(--ink); font-weight: 700; }
+.dlnoti-enter-active, .dlnoti-leave-active { transition: opacity .24s ease; }
+.dlnoti-enter-from, .dlnoti-leave-to { opacity: 0; }
 </style>

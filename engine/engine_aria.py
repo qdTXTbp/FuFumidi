@@ -46,6 +46,16 @@ def transcribe_aria(audio_path, output_midi, params=None, log_cb=None,
     if model_dir:
         os.environ.setdefault("ARIA_MODEL_DIR", model_dir)
 
+    # aria-amt 官方仅支持 Linux（源码硬编码 assert os.name == "posix"）；
+    # Windows 上转录前自动应用幂等补丁，使其可用
+    if os.name == "nt":
+        try:
+            import aria_win_patch
+            if aria_win_patch.apply():
+                _log(log_cb, "已应用 Aria-AMT Windows 兼容补丁")
+        except Exception:
+            pass
+
     ckpt = _find_checkpoint(model_dir)
     if not ckpt:
         raise RuntimeError("未找到 Aria-AMT 模型权重（*.safetensors），请先在资源中心下载 Aria-AMT 模型")
@@ -59,9 +69,11 @@ def transcribe_aria(audio_path, output_midi, params=None, log_cb=None,
                  "-load_path", audio_path,
                  "-save_dir", out_dir,
                  "-bs", "1"]
-    if device.startswith("cuda"):
+    # -compile（inductor）在 Windows + cu128 上会崩（causal_mask storage weakref），
+    # 且 aria-amt 的多进程 spawn 依赖真实 .py 入口，Windows 下直接用 run.py
+    if device.startswith("cuda") and os.name != "nt":
         cmd.append("-compile")
-    _log(log_cb, "运行 " + os.path.basename(cli[0]) + " transcribe …")
+    _log(log_cb, "运行 " + "aria-amt transcribe …")
     before = set(os.listdir(out_dir))
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
     if r.returncode != 0:
@@ -91,7 +103,20 @@ def _find_checkpoint(model_dir):
 
 
 def _aria_cli():
-    """aria-amt 可执行入口：pip 安装后生成于 python 的 Scripts 目录。"""
+    """aria-amt 入口命令列表。
+
+    Windows：必须用 `python amt/run.py` 作为进程入口 —— aria-amt 内部用 multiprocessing
+    spawn 启动子进程，spawn 需要「真实 .py 文件」作主模块才能重建；console-script(exe)
+    或 `python -m amt.run` 的主模块是 runpy 包装，spawn 无法重建、子进程静默崩溃。
+    先优先 run.py，回退到 Scripts 下的 console script。
+    """
+    try:
+        import amt
+        rp = os.path.join(os.path.dirname(os.path.abspath(amt.__file__)), "run.py")
+        if os.path.isfile(rp):
+            return [sys.executable, rp]
+    except Exception:
+        pass
     scripts = os.path.join(os.path.dirname(sys.executable), "Scripts", "aria-amt")
     for cand in ([scripts + ".exe"] if os.name == "nt" else []) + [scripts]:
         if os.path.isfile(cand):

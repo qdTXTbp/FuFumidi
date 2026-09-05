@@ -274,44 +274,81 @@ export class Synth {
     this.sf2 = null;
     this.sf2Ready = false;
     this.sf2Loading = null;
-    this.mode = 'sf2'; // 'sf2' 使用 SoundFont（3.0.0 音色）；'builtin' 使用内置合成器
+    this.sf2Node = null;
   }
-  setMode(mode) {
-    this.mode = mode === 'builtin' ? 'builtin' : 'sf2';
-    if (this.mode === 'sf2' && !this.sf2Ready) this.loadSf2();
-  }
-  async loadSf2() {
-    if (this.sf2Ready) return true;
-    if (this.sf2Loading) return this.sf2Loading;
-    this.sf2Loading = (async () => {
-      try {
-        const JSSynth = (window || {}).JSSynth;
-        if (!JSSynth) return false;
-        await JSSynth.waitForReady();
-        const syn = new JSSynth.Synthesizer();
-        syn.init(this.ctx.sampleRate);
-        const node = syn.createAudioNode(this.ctx, 4096);
-        node.connect(this.master);
-        let res = null;
-        for (const p of ['../vendor/soundfonts/GeneralUser.sf2', './vendor/soundfonts/GeneralUser.sf2']) {
-          try { res = await fetch(p); if (res.ok) break; } catch (e) { res = null; }
-        }
-        if (!res) throw new Error('SF2 fetch failed');
-        const buf = await res.arrayBuffer();
-        await syn.loadSFont(buf);
-        this.sf2 = syn;
-        this.sf2Ready = true;
-        return true;
-      } catch (e) {
-        console.warn('[synth] GeneralUser.sf2 加载失败，使用内置合成器：', e && e.message || e);
-        this.sf2 = null;
-        this.sf2Ready = false;
-        return false;
-      } finally {
+  // 指定加载的音色：'internal'（内置合成器）或 SF2 来源（网页相对路径 / 桌面绝对路径 / URL）。
+  // 由音色工坊切换并持久化（settings.active_soundfont）。
+  async setSoundfont(source) {
+    // 内置合成器：不加载 SF2，回退到 Web Audio playVoice 预设
+    if (!source || source === 'internal') {
+      this.clearSf2();
+      return { ok: true, using: 'internal' };
+    }
+    if (this.sf2Loading) { try { await this.sf2Loading; } catch (e) {} }
+    const task = this._loadSf2From(source)
+      .then((r) => { this.sf2Loading = null; return r; })
+      .catch((e) => {
+        console.warn('[synth] SF2 加载失败，回退内置合成器：', e && e.message || e);
+        this.clearSf2();
         this.sf2Loading = null;
+        return { ok: false, using: 'internal', error: String(e && e.message || e) };
+      });
+    this.sf2Loading = task;
+    return task;
+  }
+  clearSf2() {
+    try { if (this.sf2Node) this.sf2Node.disconnect(); } catch (e) {}
+    this.sf2Node = null;
+    this.sf2 = null;
+    this.sf2Ready = false;
+  }
+  async _loadSf2From(source) {
+    const JSSynth = (window || {}).JSSynth;
+    if (!JSSynth) { this.clearSf2(); return { ok: false, using: 'internal', error: 'JSSynth 不可用' }; }
+    await JSSynth.waitForReady();
+    const buf = await this._readSf2Buffer(source);
+    if (!buf) { this.clearSf2(); return { ok: false, using: 'internal', error: '无法读取音色文件' }; }
+    // 大音色会让 JS 合成器在主线程一口气解析全部采样，导致播放卡顿/整站掉帧。
+    // 超过阈值直接拒绝并回退内置轻量合成器，避免假死。
+    const MAX_SF2 = 64 * 1024 * 1024;
+    if (buf.byteLength > MAX_SF2) {
+      this.clearSf2();
+      return { ok: false, using: 'internal', error: '音色包过大（>' + Math.round(MAX_SF2 / 1048576) + 'MB），JS 合成器直接加载会卡顿。请改用内置音色或更小的音色包。' };
+    }
+    this.clearSf2();
+    const syn = new JSSynth.Synthesizer();
+    syn.init(this.ctx.sampleRate);
+    // 缓冲越小播放延迟越低（4096≈93ms）；2048≈46ms，兼顾延迟与负载
+    const node = syn.createAudioNode(this.ctx, 2048);
+    node.connect(this.master);
+    await syn.loadSFont(new Uint8Array(buf));
+    this.sf2 = syn;
+    this.sf2Node = node;
+    this.sf2Ready = true;
+    return { ok: true, using: 'sf2', source: typeof source === 'string' ? source : 'soundfont' };
+  }
+  // 读取 .sf2 内容：网页内置相对路径→fetch；桌面/本地路径→IPC；否则 URL fetch
+  async _readSf2Buffer(source) {
+    const isRel = source === 'web:generaluser' || (typeof source === 'string' && (source[0] === '.' || source[0] === '/'));
+    if (isRel) {
+      const paths = source === 'web:generaluser'
+        ? ['../vendor/soundfonts/GeneralUser.sf2', './vendor/soundfonts/GeneralUser.sf2']
+        : [source];
+      for (const p of paths) {
+        try { const res = await fetch(p); if (res.ok) return await res.arrayBuffer(); } catch (e) {}
       }
-    })();
-    return this.sf2Loading;
+      return null;
+    }
+    const bridge = (typeof window !== 'undefined') ? window.fuBridge : null;
+    if (bridge && bridge.readSoundFont) {
+      try { const ab = await bridge.readSoundFont(source); return ab || null; } catch (e) { return null; }
+    }
+    try { const res = await fetch(source); if (res.ok) return await res.arrayBuffer(); } catch (e) { return null; }
+  }
+  loadSf2() {
+    // 兼容旧调用：网页端默认加载内置 GeneralUser；桌面端由音色工坊 setSoundfont 接管
+    const bridge = window && window.fuBridge;
+    return this.setSoundfont(bridge ? undefined : 'web:generaluser').catch(() => this.clearSf2());
   }
   ensure(n) {
     for (let i = this.trackGains.length; i < n; i++) {
@@ -339,7 +376,7 @@ export class Synth {
   setTrackPan(i, v) { this.ensure(i + 1); this.pan[i] = clamp(v, -1, 1); if (this.panners[i]) this.panners[i].pan.setTargetAtTime(this.pan[i], this.ctx.currentTime, 0.02); }
   noteOn(time, note, endTime) {
     this.ensure(note.trk + 1);
-    if (this.mode !== 'builtin' && this.sf2Ready && this.sf2) {
+    if (this.sf2Ready && this.sf2) {
       const ch = Math.min(15, note.trk || 0);
       try {
         if (note.isDrum) this.sf2.midiSetChannelType(ch, true);
@@ -362,7 +399,7 @@ export class Synth {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     this.ensure(1);
-    if (this.mode !== 'builtin' && this.sf2Ready && this.sf2) {
+    if (this.sf2Ready && this.sf2) {
       try {
         this.sf2.midiProgramChange(0, prog);
         this.sf2.midiNoteOn(0, midi, vel);

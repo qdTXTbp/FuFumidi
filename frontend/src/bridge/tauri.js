@@ -72,6 +72,16 @@ export function installTauriBridge() {
     readSoundFont: (p) => call('read_soundfont', { p }),
     saveBinary: (opts) => call('save_binary', { opts }),
     soundfonts: { list: () => call('soundfont_list') },
+    // 音色工坊：内置精选下载 / 自定义导入 / 删除 / 打开目录
+    sfWorkshop: {
+      list: () => call('sf_workshop_list'),
+      download: (id) => call('sf_workshop_download', { id }),
+      cancel: (id) => call('sf_workshop_cancel', { id }),
+      import: () => call('sf_workshop_import'),
+      remove: (id) => call('sf_workshop_delete', { id }),
+      openDir: () => call('sf_workshop_open_dir'),
+      onProgress: (cb) => listen('sf-workshop:progress', cb),
+    },
     pickZip: () =>
       call('pick_file', {
         opts: { filters: [{ name: 'GPU 增强包', extensions: ['zip', 'part1', 'part2', 'part3', 'part4', 'part5'] }] },

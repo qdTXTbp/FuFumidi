@@ -1,4 +1,4 @@
-﻿# FuFumidi 转录引擎 —— 内置运行时依赖清单（Electron CLI 路径专用）
+# FuFumidi 转录引擎 —— 内置运行时依赖清单（Electron CLI 路径专用）
 #
 # 与 requirements.txt 的区别：
 #   - 不含 PySide6 / gui（那是原 AudioMuse 桌面界面的依赖；Electron 只调用
@@ -23,8 +23,15 @@ ml_dtypes>=0.5.4; platform_system == "Darwin"  # macOS 不装 tensorflow，onnxr
 # ---- 钢琴专用转录引擎 ----
 piano-transcription-inference>=0.0.6
 
-# ---- 人声/乐器分离（可选增强，原版 install.bat 也询问安装）----
-demucs>=4.0.1
+# ---- 音频处理（MSST 分离，可选增强）----
+# pymss 为原 MSST 推理库封装，加载 msst_configs 的模型配置进行音轨分离。
+# 其中 bs_roformer/mel_band_roformer 等模型实现依赖以下轻量库（pymss 未声明，需显式安装）。
+pymss==2.0.1
+pydub>=0.25.1
+beartype>=0.22
+ml_collections>=0.1.1
+omegaconf>=2.3
+einops>=0.8
 
 # ---- 音频解码（任意格式）----
 librosa>=0.10.0

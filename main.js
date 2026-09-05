@@ -47,6 +47,7 @@ const { createRustService } = require('./main/rust');
 const { createDbService } = require('./main/db');
 const { registerWallpaperIpc } = require('./main/wallpaper');
 const { registerUtauIpc } = require('./main/utau');
+const { registerSoundfontWorkshopIpc } = require('./main/soundfonts');
 const { createWindow, configureSession, openFileFromArgv, openPath } = require('./main/window');
 const { pyLit, parsePyJson } = require('./main/py-util');
 
@@ -81,17 +82,18 @@ if (!gotLock) {
     registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app, fs, spawnEngine });
     registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net });
     registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline });
-    registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, pluginHost, readSettings });
+    registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, pluginHost, readSettings, resolveSeparateModel: (id) => (ModelsService ? ModelsService.resolveSeparateModel(id) : null) });
     registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, parsePyJson });
     registerPresetsIpc({ ipcMain, runEngineInline, parsePyJson, pyLit });
     registerDialogsIpc({ ipcMain, dialog, path, fs, app });
     registerDiagnosticsIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine });
-    ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, demucsModelFile, sha256File, readSettings });
+    ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings });
     DbService = createDbService({ app, path, fs });
     DbService.registerDbIpc({ ipcMain });
     registerSettingsIpc({ ipcMain, readSettings, writeSettings, db: DbService });
     registerWallpaperIpc({ ipcMain, app, fs, net, runEngineInline, parsePyJson });
     registerUtauIpc({ ipcMain, path, fs, os, app, dialog, spawnEngine });
+    registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, net });
     const RustService = createRustService({ app, path, fs });
     RustService.registerRustIpc({ ipcMain });
     registerPluginsIpc();
@@ -127,10 +129,6 @@ function bundledPython() {
     path.join(__dirname, 'python'),
     path.join(__dirname, 'engine', 'python'),
   ];
-  // 本地开发/新版测试客户端：回退使用本机已安装的完整 Python 运行时
-  if (process.platform === 'win32' && fs.existsSync('E:/Midi/FuFumidi/resources/python/python.exe')) {
-    roots.push('E:/Midi/FuFumidi/resources/python');
-  }
   for (const root of roots) {
     for (const n of names) {
       const p = path.join(root, n);
@@ -165,31 +163,6 @@ function engineDir() {
 function modelsDir() {
   const packaged = path.join(process.resourcesPath, 'models');
   return fs.existsSync(packaged) ? packaged : path.join(__dirname, 'models');
-}
-function demucsModelFile() {
-  // 内置 python 的 site-packages/demucs/remote 下已随包分发 htdemucs 权重（约 80 MB）
-  const name = '955717e8-8726e21a.th';
-  const roots = [];
-  try { roots.push(path.dirname(resolvePython())); } catch (e) {}
-  roots.push(path.join(process.resourcesPath, 'python'));
-  for (const root of roots) {
-    if (!root) continue;
-    const cands = [
-      path.join(root, 'Lib', 'site-packages', 'demucs', 'remote', name),
-      path.join(root, 'lib', 'python3.11', 'site-packages', 'demucs', 'remote', name),
-      path.join(root, 'lib', 'python3.12', 'site-packages', 'demucs', 'remote', name),
-      path.join(root, 'lib', 'python3.10', 'site-packages', 'demucs', 'remote', name),
-    ];
-    for (const c of cands) if (fs.existsSync(c)) return c;
-    try {
-      const lib = path.join(root, 'lib');
-      for (const d of fs.readdirSync(lib)) {
-        const c = path.join(lib, d, 'site-packages', 'demucs', 'remote', name);
-        if (fs.existsSync(c)) return c;
-      }
-    } catch (e) {}
-  }
-  return null;
 }
 function engineEnv(extra) {
   const env = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', FUFUMIDI_MODELS_DIR: modelsDir() };

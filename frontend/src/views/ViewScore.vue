@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { getPlayer } from '../audio.js';
@@ -550,14 +550,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   cancelAnimationFrame(followRaf);
   if (renderRaf) cancelAnimationFrame(renderRaf);
-});
-onDeactivated(() => {
-  cancelAnimationFrame(followRaf);
-  if (renderRaf) cancelAnimationFrame(renderRaf);
-});
-onActivated(() => {
-  nextTick(scheduleRender);
-  if (!followRaf) followRaf = requestAnimationFrame(loop);
 });
 </script>
 

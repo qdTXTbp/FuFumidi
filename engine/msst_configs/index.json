@@ -1,0 +1,118 @@
+{
+  "BS-Roformer_LargeV1.ckpt": {
+    "config": "config_bsrofoL.yaml",
+    "arch": "MSST"
+  },
+  "Kim_MelBandRoformer.ckpt": {
+    "config": "config_Kim_MelBandRoformer.yaml",
+    "arch": "Mel-Band Roformer"
+  },
+  "big_beta5e.ckpt": {
+    "config": "big_beta5e.yaml",
+    "arch": "Mel-Band Roformer"
+  },
+  "bs_roformer_karaoke_frazer_becruily.ckpt": {
+    "config": "config_mel_band_roformer_karaoke.yaml",
+    "arch": "BS-Roformer"
+  },
+  "bs_roformer_male_female_by_aufr33_sdr_7.2889.ckpt": {
+    "config": "config_chorus_male_female_bs_roformer.yaml",
+    "arch": "BS-Roformer"
+  },
+  "inst_v1e.ckpt": {
+    "config": "config_melbandroformer_inst.yaml",
+    "arch": "Mel-Band Roformer"
+  },
+  "kimmel_unwa_ft.ckpt": {
+    "config": "config_kimmel_unwa_ft.yaml",
+    "arch": "Mel-Band Roformer"
+  },
+  "mel_band_roformer_instrumental_becruily.ckpt": {
+    "config": "config_instrumental_becruily.yaml",
+    "arch": "Mel-Band Roformer"
+  },
+  "mel_band_roformer_vocals_becruily.ckpt": {
+    "config": "config_vocals_becruily.yaml",
+    "arch": "Mel-Band Roformer"
+  },
+  "melband_roformer_inst_v2.ckpt": {
+    "config": "config_melbandroformer_inst_v2.yaml",
+    "arch": "Mel-Band Roformer"
+  },
+  "melband_roformer_instvox_duality_v2.ckpt": {
+    "config": "config_melbandroformer_instvoc_duality.yaml",
+    "arch": "Mel-Band Roformer"
+  },
+  "model_bs_roformer_ep_317_sdr_12.9755.ckpt": {
+    "config": "model_bs_roformer_ep_317_sdr_12.9755.yaml",
+    "arch": "BS-Roformer"
+  },
+  "model_bs_roformer_ep_368_sdr_12.9628.ckpt": {
+    "config": "model_bs_roformer_ep_368_sdr_12.9628.yaml",
+    "arch": "BS-Roformer"
+  },
+  "model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt": {
+    "config": "model_mel_band_roformer_ep_3005_sdr_11.4360.yaml",
+    "arch": "Mel-Band Roformer"
+  },
+  "model_mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt": {
+    "config": "config_mel_band_roformer_karaoke.yaml",
+    "arch": "Mel-Band Roformer"
+  },
+  "model_swin_upernet_ep_56_sdr_10.6703.ckpt": {
+    "config": "config_vocals_swin_upernet.yaml",
+    "arch": "Swin-UperNet"
+  },
+  "model_vocals_htdemucs_sdr_8.78.ckpt": {
+    "config": "config_vocals_htdemucs.yaml",
+    "arch": "HTDemucs"
+  },
+  "model_vocals_mdx23c_sdr_10.17.ckpt": {
+    "config": "config_vocals_mdx23c.yaml",
+    "arch": "MDX23C"
+  },
+  "model_vocals_mel_band_roformer_sdr_8.42.ckpt": {
+    "config": "config_vocals_mel_band_roformer.yaml",
+    "arch": "Mel-Band Roformer"
+  },
+  "model_vocals_segm_models_sdr_9.77.ckpt": {
+    "config": "config_vocals_segm_models.yaml",
+    "arch": "Segmentation"
+  },
+  "HTDemucs4.th": {
+    "config": "config_musdb18_htdemucs.yaml",
+    "arch": "HTDemucs"
+  },
+  "HTDemucs4_6stems.th": {
+    "config": "config_htdemucs_6stems.yaml",
+    "arch": "HTDemucs"
+  },
+  "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt": {
+    "config": "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml",
+    "arch": "MDX23C"
+  },
+  "bs_roformer_4stems_ft.ckpt": {
+    "config": "config_bs_roformer_4stems_ft.yaml",
+    "arch": "BS-Roformer"
+  },
+  "model_bandit_plus_dnr_sdr_11.47.chpt": {
+    "config": "config_dnr_bandit_bsrnn_multi_mus64.yaml",
+    "arch": "Bandit"
+  },
+  "model_drumsep.th": {
+    "config": "config_drumsep.yaml",
+    "arch": "DrumSep"
+  },
+  "model_mdx23c_ep_168_sdr_7.0207.ckpt": {
+    "config": "config_musdb18_mdx23c.yaml",
+    "arch": "MDX23C"
+  },
+  "model_scnet_sdr_9.3244.ckpt": {
+    "config": "config_musdb18_scnet.yaml",
+    "arch": "SCNet"
+  },
+  "scnet_checkpoint_musdb18.ckpt": {
+    "config": "config_musdb18_scnet.yaml",
+    "arch": "SCNet"
+  }
+}

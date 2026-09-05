@@ -1,6 +1,6 @@
 <script setup>
 // 编辑视图：钢琴卷帘编辑器（工具栏 + 迷你图 + 可编辑画布 + 属性检查器）
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
 import EditorCanvas from '../components/EditorCanvas.vue';
 import { useAppStore } from '../stores/app';
@@ -903,14 +903,6 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (raf) cancelAnimationFrame(raf);
   window.removeEventListener('keydown', onKey);
-});
-onDeactivated(() => {
-  if (raf) cancelAnimationFrame(raf);
-  window.removeEventListener('keydown', onKey);
-});
-onActivated(() => {
-  window.addEventListener('keydown', onKey);
-  if (!raf) raf = requestAnimationFrame(loop);
 });
 </script>
 

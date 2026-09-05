@@ -34,7 +34,7 @@ REQUIRED = {
         "torch", "piano_transcription_inference",
     ],
     "separate": [
-        "torch", "demucs",
+        "pymss", "pydub", "beartype", "ml_collections", "omegaconf", "einops",
     ],
     # 转录模型运行时：模型权重已下载，仍需对应推理包才能转录
     "muscriptor": [

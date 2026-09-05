@@ -24,6 +24,18 @@ contextBridge.exposeInMainWorld('fuBridge', {
     ipcRenderer.on('engine:refine:log', w);
     return () => ipcRenderer.removeListener('engine:refine:log', w);
   },
+  // 音频处理（MSST 分离）
+  separateAudio: (cfg) => ipcRenderer.invoke('engine:separate', cfg),
+  onSeparateLog: (cb) => {
+    const w = (_e, p) => cb(p);
+    ipcRenderer.on('engine:separate:log', w);
+    return () => ipcRenderer.removeListener('engine:separate:log', w);
+  },
+  onSeparateProgress: (cb) => {
+    const w = (_e, p) => cb(p);
+    ipcRenderer.on('engine:separate:progress', w);
+    return () => ipcRenderer.removeListener('engine:separate:progress', w);
+  },
   // 设置
   getSettings: () => ipcRenderer.invoke('settings:load'),
   saveSettings: (s) => ipcRenderer.invoke('settings:save', s),
@@ -40,6 +52,16 @@ contextBridge.exposeInMainWorld('fuBridge', {
   pickSoundFont: null,   // 已移除外部 SF2/SF3 加载：使用内置音源列表 soundfonts.list()
   readSoundFont: (p) => ipcRenderer.invoke('file:readSoundFont', p),
   soundfonts: { list: () => ipcRenderer.invoke('soundfont:list') },
+  // 音色工坊：内置精选下载 / 自定义导入 / 删除 / 打开目录
+  sfWorkshop: {
+    list: () => ipcRenderer.invoke('sf-workshop:list'),
+    download: (id) => ipcRenderer.invoke('sf-workshop:download', id),
+    cancel: (id) => ipcRenderer.invoke('sf-workshop:cancel', id),
+    import: () => ipcRenderer.invoke('sf-workshop:import'),
+    remove: (id) => ipcRenderer.invoke('sf-workshop:delete', id),
+    openDir: () => ipcRenderer.invoke('sf-workshop:openDir'),
+    onProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('sf-workshop:progress', w); return () => ipcRenderer.removeListener('sf-workshop:progress', w); },
+  },
   pickMusicXML: () => ipcRenderer.invoke('dialog:pickMusicXML'),
   exportScorePdf: () => ipcRenderer.invoke('score:exportPdf'),
   transcodeVideo: (data, audio, opts) => ipcRenderer.invoke('video:transcode', { data, audio, ...(opts || {}) }),
@@ -76,13 +98,11 @@ contextBridge.exposeInMainWorld('fuBridge', {
   openOutput: (p) => ipcRenderer.invoke('shell:openOutput', p),
   // 声库导出：把 {name, base64} 文件列表写入用户选择的目录
   utauExportVoicebank: (opts) => ipcRenderer.invoke('utau:exportVoicebank', opts),
-  utauExportVoicebankZip: (opts) => ipcRenderer.invoke('utau:exportVoicebankZip', opts),
   // UTAU 工程渲染：渲染人声 WAV，返回字节供预览
   utauRenderTrack: (cfg) => ipcRenderer.invoke('utau:renderTrack', cfg),
   // 已导入声库列表 / 导入现成声库 zip
   utauListVoicebanks: () => ipcRenderer.invoke('utau:listVoicebanks'),
   utauImportVoicebankZip: () => ipcRenderer.invoke('utau:importVoicebankZip'),
-  utauDeleteVoicebank: (dir) => ipcRenderer.invoke('utau:deleteVoicebank', dir),
   openEditGuide: () => ipcRenderer.invoke('guide:openEdit'),
   // 转录参数预设
   presets: {

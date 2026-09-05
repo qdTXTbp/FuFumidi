@@ -19,6 +19,8 @@ export const VIEWS = [
   { id: 'transcribe', label: '转录', ic: 'transcribe' },
   { id: 'convert', label: '转换', ic: 'convert' },
   { id: 'resources', label: '资源中心', ic: 'box' },
+{ id: 'models', label: '模型管理', ic: 'box' },
+  { id: 'soundfonts', label: '音色工坊', ic: 'music' },
   { id: 'utau', label: 'UTAU', ic: 'utau' },
 ];
 

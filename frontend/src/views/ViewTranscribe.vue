@@ -1,6 +1,6 @@
 <script setup>
 // 转录视图：音频 → MIDI（本地 Python 引擎，桌面端通过 fuBridge 桥接）
-import { ref, reactive, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { clamp, esc, fmtTime } from '../core/util.js';
@@ -42,6 +42,13 @@ async function refreshModelStatus() {
       for (const m of arr) {
         if (m && m.id) modelStatus[m.id] = !!m.exists;
       }
+      // 音频处理可选模型（含介绍/安装态）
+      const sepArr = (arr || []).filter(m => m.kind === 'separate').map(m => ({ ...m }));
+      sepModels.value = sepArr;
+      if (!sepArr.some(m => m.id === sepModel.value)) {
+        sepModel.value = (sepArr.find(m => m.exists) || sepArr[0] || {}).id || '';
+      }
+      if (sepModel.value) applyMsPresetForModel(sepModel.value);
     }
   } catch (e) {}
 }
@@ -66,9 +73,157 @@ function currentModelInstalled() {
   return st; // true / false / null
 }
 
-// 高级参数
+const drumtoast = false;
+const sepModel = ref('demucs_htdemucs');           // 音频处理模型 id
+const sepModels = ref([]);                          // 可选模型列表（含介绍/安装态）
+const sepPickerOpen = ref(false);                   // 模型选择抽屉
+const currentSep = computed(() => sepModels.value.find(m => m.id === sepModel.value));
+function sepKindIcon(m) { return (m && m.id !== 'demucs_htdemucs') ? 'mic' : 'music'; }
+function pickSep(m) {
+  if (!m) return;
+  if (!m.exists) { toast(t('该模型未下载，请先到') + t('模型管理') + t('下载'), 'warn'); return; }
+  sepModel.value = m.id;
+  msStems.value = [];      // 空 = 输出该模型全部音轨
+  applyMsPresetForModel(m.id);
+  sepPickerOpen.value = false;
+}
+function fmtSize2(b) {
+  if (!b) return '—';
+  if (b >= 1e9) return (b / 1e9).toFixed(2) + ' GB';
+  if (b >= 1e6) return (b / 1e6).toFixed(0) + ' MB';
+  return (b / 1024).toFixed(0) + ' KB';
+}
 const onset = ref(0.5);
 const frame = ref(0.3);
+
+/* ---------------- 音频处理（MSST 分离）面板 ---------------- */
+const sepFile = ref('');              // 待分离音频
+const sepDur = ref(0);                // 待分离音频时长(s)
+const sepBusy = ref(false);
+const sepProgress = ref(0);
+const sepStage = ref('');
+const sepStartAt = ref(0);
+const sepOutputs = ref([]);
+const sepOutDir = ref('');
+const sepLogs = ref([]);
+const sepJobId = ref(0);
+// MSST 推理参数（无预设体系，逐项独立）
+const msChunk = ref(926100);          // 分块大小（样本数，建议 44100 整数倍）
+const msOverlap = ref(4);             // 重叠数 N → step = chunk // N
+const msBatch = ref(2);               // 批次大小
+const msNormalize = ref(true);        // 音频归一化
+const msTta = ref(false);             // 启用 TTA
+const msFormat = ref('wav');          // wav / flac / mp3
+const msStems = ref([]);              // 勾选的输出音轨（空=全部）
+const chunkSec = computed({
+  get: () => Math.max(1, Math.round(msChunk.value / 44100)),
+  set: v => { msChunk.value = Math.max(1, Math.round(v || 1)) * 44100; },
+});
+
+const SEP_STEM_LABELS = { vocals: '人声', other: '伴奏', drums: '鼓组', bass: '贝斯', guitar: '吉他', piano: '钢琴' };
+function sepStemLabel(s) { return SEP_STEM_LABELS[s] || s; }
+function sepArchStems(arch) {
+  const a = String(arch || '').toLowerCase();
+  if (a.includes('drumsep')) return ['drums', 'other'];
+  if (a.includes('htdemucs') || a.includes('demucs')) return ['drums', 'bass', 'other', 'vocals'];
+  return ['vocals', 'other'];
+}
+const msStemOptions = computed(() => sepArchStems(currentSep.value && currentSep.value.arch));
+function toggleStem(s) { const i = msStems.value.indexOf(s); if (i >= 0) msStems.value.splice(i, 1); else msStems.value.push(s); }
+function allStems() { msStems.value = msStemOptions.value.slice(); }
+function logSep(txt, isErr) { sepLogs.value.push({ txt, isErr: !!isErr }); if (sepLogs.value.length > 200) sepLogs.value.splice(0, sepLogs.value.length - 200); }
+async function pickSepFile() {
+  if (bridge && bridge.pickAudio) { try { const p = await bridge.pickAudio(); if (p) { sepFile.value = p; sepDur.value = 0; decodeSepDur(p); } } catch (e) {} }
+  else toast('请使用桌面版 FuFumidi 选择音频', 'warn');
+}
+async function decodeSepDur(p) {
+  try { const buf = await bridge.readBinary(p); if (!buf) return;
+    const AC = window.AudioContext || window.webkitAudioContext; const actx = new AC();
+    await new Promise(res => { try { actx.decodeAudioData(buf.slice(0), ab => { sepDur.value = ab.duration || 0; res(); }, () => res()); } catch (e) { res(); } });
+    if (actx.close) actx.close();
+  } catch (e) {}
+}
+function sepEstSec() {
+  if (!sepDur.value) return null;
+  const isGpu = !!gpuInfo.value;
+  let rtf = isGpu ? 1.5 : 10;   // GPU(如 5060)≈0.65x 实时；CPU 兜底较大
+  if (currentSep.value && /scnet|htdemucs|mdx23c|apollo/i.test(currentSep.value.arch || '')) rtf = isGpu ? 1.2 : 6;
+  if (msTta.value) rtf *= 3;
+  return sepDur.value * rtf;
+}
+async function runSeparate() {
+  if (!isDesktop || !bridge.separateAudio) { toast('请使用桌面版 FuFumidi 进行分离', 'warn'); return; }
+  if (!sepFile.value) { toast('请先选择要分离的音频', 'warn'); return; }
+  if (!currentSep.value || !currentSep.value.exists) { toast('请先选择/下载处理模型', 'warn'); return; }
+  if (msChunk.value < 44100) { toast('分块大小 chunk_size 至少 44100', 'warn'); return; }
+  sepBusy.value = true; sepProgress.value = 0; sepLogs.value = []; sepOutputs.value = []; sepOutDir.value = ''; sepStage.value = '';
+  sepStartAt.value = Date.now(); sepJobId.value++;
+  const stems = msStems.value.length ? msStems.value.slice() : null;
+  const cfg = { id: 'sep' + sepJobId.value, audio: sepFile.value, sep_model: sepModel.value,
+    chunk_size: msChunk.value, num_overlap: msOverlap.value, batch_size: msBatch.value,
+    normalize: msNormalize.value, tta: msTta.value, format: msFormat.value, stems };
+  try {
+    const res = await bridge.separateAudio(cfg);
+    if (res && res.ok) {
+      sepOutputs.value = res.outputs || []; sepOutDir.value = res.out_dir || ''; sepProgress.value = 100; sepStage.value = '分离完成';
+      toast('分离完成，共 ' + (res.outputs || []).length + ' 个音轨', 'ok');
+    } else {
+      const msg = (res && res.error) || '分离失败';
+      sepStage.value = '失败'; logSep(msg, true); toast(msg, 'warn');
+    }
+  } catch (e) { const msg = (e && e.message) || String(e); sepStage.value = '失败'; logSep(msg, true); toast('分离失败：' + msg, 'warn'); }
+  finally { sepBusy.value = false; }
+}
+function openSepOut() { if (sepOutDir.value && bridge.openOutput) bridge.openOutput(sepOutDir.value); else toast('请使用桌面版打开输出文件夹', 'warn'); }
+
+/* ---------------- MSST 参数预设（按模型保存 / 还原 / 应用） ---------------- */
+const MS_PRESET_KEY = 'fufumidi_msst_presets';
+const msSaved = ref([]);
+const msPresetSel = ref('');
+function persistMsPresets() { try { localStorage.setItem(MS_PRESET_KEY, JSON.stringify(msSaved.value)); } catch (e) {} }
+function loadMsPresets() { try { const a = JSON.parse(localStorage.getItem(MS_PRESET_KEY) || '[]'); msSaved.value = Array.isArray(a) ? a : []; } catch (e) { msSaved.value = []; } }
+const msPresetOptions = computed(() => msSaved.value.filter(p => p.modelId === sepModel.value));
+const msDefaults = () => ({ chunk: 926100, overlap: 4, batch: 2, normalize: true, tta: false, format: 'wav', stems: [] });
+function collectMsParams() { return { chunk: msChunk.value, overlap: msOverlap.value, batch: msBatch.value, normalize: msNormalize.value, tta: msTta.value, format: msFormat.value, stems: msStems.value.slice(), chunkSec: chunkSec.value }; }
+function applyMsParams(params) {
+  const d = msDefaults();
+  msChunk.value = Math.max(44100, Math.round(params.chunk || d.chunk));
+  msOverlap.value = Math.max(1, Math.round(params.overlap || d.overlap));
+  msBatch.value = Math.max(1, Math.round(params.batch || d.batch));
+  msNormalize.value = typeof params.normalize === 'boolean' ? params.normalize : d.normalize;
+  msTta.value = !!params.tta;
+  msFormat.value = ['wav', 'flac', 'mp3'].includes(params.format) ? params.format : d.format;
+  msStems.value = Array.isArray(params.stems) ? params.stems.slice() : [];
+}
+function applyMsPresetForModel(id) {
+  const saved = msSaved.value.filter(p => p.modelId === id).sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+  const p = saved[0];
+  if (p) { applyMsParams(p.params); msPresetSel.value = p.name; }
+  else { applyMsParams(msDefaults()); msPresetSel.value = ''; }
+}
+async function saveMsPreset() {
+  if (!currentSep.value) { toast('请先选择处理模型', 'warn'); return; }
+  const def = msDefaults();
+  if (msChunk.value === def.chunk && msOverlap.value === def.overlap && msBatch.value === def.batch && msNormalize.value === def.normalize && !msTta.value && msFormat.value === def.format && !msStems.value.length) {
+    toast('当前参数即为默认，无需保存', 'warn'); return;
+  }
+  const name = await app.promptDialog({ title: t('保存「') + currentSep.value.name + t('」参数预设'), value: '' });
+  if (!name || !name.trim()) return;
+  msSaved.value.push({ name: name.trim(), modelId: sepModel.value, params: collectMsParams(), savedAt: Date.now() });
+  persistMsPresets(); msPresetSel.value = name.trim();
+  toast('参数预设已保存', 'ok');
+}
+function applyMsPreset() {
+  const p = msPresetOptions.value.find(x => x.name === msPresetSel.value);
+  if (!p) { toast('请选择已保存的预设', 'warn'); return; }
+  applyMsParams(p.params); toast('已应用预设：' + p.name, 'ok');
+}
+function resetMsParams() { applyMsParams(msDefaults()); msPresetSel.value = ''; toast('已还原默认参数', 'ok'); }
+function delMsPreset() {
+  if (!msPresetSel.value) return;
+  msSaved.value = msSaved.value.filter(p => !(p.modelId === sepModel.value && p.name === msPresetSel.value));
+  persistMsPresets(); msPresetSel.value = ''; toast('预设已删除', 'ok');
+}
 const minNote = ref(128);
 const mergeGap = ref(30);
 const pedal = ref(true);
@@ -108,7 +263,7 @@ const tplIdx = ref(-1);
 // 智能修正
 const rf = reactive({ audio: '', midi: '', mode: 'auto', stem: true, busy: false, jobId: 0, progress: 0, logs: [], info: '' });
 
-const MODE_NAMES = { universal: t('通用识别'), piano: t('钢琴专用'), separate: t('人声分离') };
+const MODE_NAMES = { universal: t('通用识别'), piano: t('钢琴专用'), separate: t('音频处理') };
 const PERF_NAMES = { quality: t('最高质量'), balanced: t('均衡'), fast: t('高性能') };
 const MODE_DEFAULT_PRESET = { universal: t('通用·标准'), piano: t('钢琴：最优'), separate: t('人声：最优') };
 
@@ -510,6 +665,7 @@ function collectParams() {
     cfg.with_drums = drums.value;
     cfg.export_stems = stemExport.value;
     cfg.stem_format = stemFormat.value || 'wav';
+    cfg.sep_model = sepModel.value;
   }
   return cfg;
 }
@@ -563,6 +719,11 @@ async function runBatch() {
       else if (cur.progress > 0) curP = cur.progress;
       else if (cur.startedAt && cur.estMs) curP = Math.min(95, Math.round((Date.now() - cur.startedAt) / cur.estMs * 100));
       if (curP > 0 && curP < 100) cur.progress = curP; // 同步到队列行内进度条
+      // 统一进度信息（对齐音频处理面板）：百分比 + 已用时间 + 剩余时间
+      const elS = (Date.now() - (cur.startedAt || Date.now())) / 1000;
+      const estS = ((cur.estMs || estSec() * 1000 || 60000)) / 1000;
+      const remains = Math.max(0, Math.round(estS - elS));
+      stage.value = t('转录中 ') + Math.max(3, curP) + '% · ' + t('已用 ') + fmtTime(elS) + (remains > 0 ? ' · ' + t('剩余约 ') + fmtTime(remains) : '');
     }
     progress.value = Math.max(3, Math.min(95, Math.round(((doneN + errN) + curP / 100) / total * 100)));
     if (!cur) stage.value = t('完成 ') + doneN + ' / ' + total + (errN ? t(' · 失败 ') + errN : '') + ' · ' + fmtTime(el);
@@ -696,11 +857,12 @@ async function openRefineResult() {
 }
 
 /* ---------------- 引擎日志 ---------------- */
-let offLog = null, offRefine = null, offModelProg = null;
+let offLog = null, offRefine = null, offModelProg = null, offSeparate = null, offSepProg = null;
 onMounted(() => {
   loadQueue();
   loadPresets();
   loadTaskTemplates();
+  loadMsPresets();
   loadPerfDefault();
   probeEngine();
   refreshModelStatus();
@@ -708,7 +870,7 @@ onMounted(() => {
     offLog = bridge.onEngineLog(p => {
       if (!p) return;
       if (p.id === currentJobId.value || String(p.id).indexOf('batch') === 0) {
-        if (p.line) { logLine(p.line); stage.value = String(p.line).slice(0, 80); }
+        if (p.line) logLine(p.line);   // 详细引擎日志进日志面板；stage 由统一进度信息接管
       }
     });
   }
@@ -718,24 +880,28 @@ onMounted(() => {
   if (bridge && bridge.onModelProgress) {
     offModelProg = bridge.onModelProgress(p => { if (p && p.done) refreshModelStatus(); });
   }
+  if (bridge && bridge.onSeparateLog) {
+    offSeparate = bridge.onSeparateLog(p => { if (p && p.id === 'sep' + sepJobId.value && p.line) logSep(p.line); });
+  }
+  if (bridge && bridge.onSeparateProgress) {
+    offSepProg = bridge.onSeparateProgress(p => {
+      if (!p || p.id !== 'sep' + sepJobId.value || p.percent == null) return;
+      const pct = Math.round(p.percent);
+      sepProgress.value = Math.max(sepProgress.value, Math.min(100, pct));
+      const el = (Date.now() - sepStartAt.value) / 1000;
+      const frac = Math.max(0.01, p.percent / 100);
+      const eta = Math.max(0, Math.round(el / frac * (1 - frac)));
+      sepStage.value = '分块处理 ' + pct + '% · 已用 ' + fmtTime(el) + (eta > 0 ? ' · 剩余约 ' + fmtTime(eta) : '');
+    });
+  }
 });
 onBeforeUnmount(() => {
   if (trTimer) clearInterval(trTimer);
   if (offLog) offLog();
   if (offRefine) offRefine();
   if (offModelProg) { try { offModelProg(); } catch (e) {} offModelProg = null; }
-});
-onDeactivated(() => {
-  if (trTimer) clearInterval(trTimer);
-});
-onActivated(() => {
-  loadQueue();
-  refreshModelStatus();
-  if (running.value && !trTimer) {
-    // 回到页面时若队列仍在运行，简单刷新一次进度
-    running.value = false;
-    loadQueue();
-  }
+  if (offSeparate) { try { offSeparate(); } catch (e) {} offSeparate = null; }
+  if (offSepProg) { try { offSepProg(); } catch (e) {} offSepProg = null; }
 });
 </script>
 
@@ -752,8 +918,8 @@ onActivated(() => {
       <span class="tag" :class="isDesktop ? '' : 'warn-tag'">{{ isDesktop ? t('桌面引擎就绪') : t('请使用桌面版') }}</span>
     </div>
 
-    <!-- 音频选择 -->
-    <div class="card tr-drop-card">
+    <!-- 音频选择（转录队列；音频处理模式用独立面板） -->
+    <div v-if="mode !== 'separate'" class="card tr-drop-card">
       <div class="tr-drop" :class="{ over: dropOver }" data-guide="audio-drop"
            @dragover.prevent="dropOver = true" @dragleave="dropOver = false" @drop.prevent="onDrop"
            @click="pickAudio">
@@ -806,7 +972,7 @@ onActivated(() => {
           <b>{{ t('钢琴专用') }}</b><span>纯钢琴高精度 · 含踏板</span>
         </button>
         <button class="tr-mode" :class="{ active: mode === 'separate' }" data-guide="mode-separate" @click="onModeChange('separate')">
-          <b>{{ t('人声分离') }}</b><span>分声部转录 · 需 Demucs</span>
+          <b>{{ t('音频处理') }}</b><span>选择处理模型 · 分离 / 修复</span>
         </button>
       </div>
 
@@ -836,15 +1002,141 @@ onActivated(() => {
         <div class="tr-perf-hint" v-if="pmodel !== 'piano_pt'">{{ t('Aria-AMT / Transkun 需先到资源中心安装对应模型') }}</div>
       </div>
 
-      <div class="fb-label">性能模式</div>
-      <div class="tr-pills">
-        <button class="tr-pill" :class="{ active: perf === 'quality' }" @click="selectPerf('quality')">{{ t('最高质量') }}</button>
-        <button class="tr-pill" :class="{ active: perf === 'balanced' }" @click="selectPerf('balanced')">{{ t('均衡') }}</button>
-        <button class="tr-pill" :class="{ active: perf === 'fast' }" @click="selectPerf('fast')">{{ t('高性能') }}</button>
+      <!-- 音频处理：当前模型 + 选择模型 -->
+      <div v-if="mode === 'separate'" class="tr-submodels">
+        <div class="fb-label">{{ t('处理模型') }}</div>
+        <div class="sep-pick" @click="sepPickerOpen = true">
+          <span class="sep-pick-ic"><Icon :name="sepKindIcon(currentSep)" :size="16" /></span>
+          <span class="grow">
+            <b>{{ currentSep ? currentSep.name : t('内置 Demucs') }}</b>
+            <small>{{ currentSep ? (currentSep.arch + ' · ' + fmtSize2(currentSep.size)) : 'HTDemucs · 内置' }}</small>
+          </span>
+          <span class="btn sm ghost">{{ t('选择模型') }}</span>
+        </div>
       </div>
-      <div v-if="perfHint" class="tr-perf-hint">{{ perfHint }}</div>
 
-      <details class="tr-adv" data-guide="adv-panel">
+      <!-- 模型选择抽屉 -->
+      <Teleport to="body">
+      <Transition name="sepFade">
+        <div v-if="sepPickerOpen" class="sep-scrim" @click.self="sepPickerOpen = false">
+          <div class="sep-pane">
+            <div class="sep-head">
+              <b><Icon name="box" :size="15" /> {{ t('选择音频处理模型') }}</b>
+              <button class="icon-btn" style="margin-left:auto" @click="sepPickerOpen = false"><Icon name="close" :size="15" /></button>
+            </div>
+            <div class="sep-hint">{{ t('已下载的模型可直接选用；未下载的模型请先到模型管理下载') }}</div>
+            <div class="sep-list">
+              <div v-for="m in sepModels" :key="m.id" class="sep-item" :class="{ sel: sepModel === m.id, off: !m.exists }" @click="pickSep(m)">
+                <div class="si-head">
+                  <span class="si-ic"><Icon :name="sepKindIcon(m)" :size="14" /></span>
+                  <span class="si-arch">{{ m.arch }}</span>
+                  <span class="si-pill" :class="m.exists ? 'on' : 'off'">{{ m.exists ? t('已下载') : t('未下载') }}</span>
+                </div>
+                <div class="si-name">{{ m.name }}<span v-if="m.best" class="si-best" title="该领域效果最佳">👑 {{ m.best }}</span></div>
+                <div class="si-use">{{ m.use || m.note || '' }}</div>
+                <div class="si-foot">
+                  <span>{{ fmtSize2(m.size) }}</span>
+                  <span v-if="m.exists" class="si-check" :class="{ cur: sepModel === m.id }">{{ sepModel === m.id ? t('使用中') : t('使用') }}</span>
+                </div>
+              </div>
+              <div v-if="!sepModels.length" class="sep-none">{{ t('没有可选模型（请到模型管理查看）') }}</div>
+            </div>
+          </div>
+        </div>
+      </Transition>
+      </Teleport>
+
+      <!-- 音频处理（MSST 分离）工作区 -->
+      <div v-if="mode === 'separate'" class="tr-msst">
+        <div class="fb-label">输入音频</div>
+        <div class="sep-pick" @click="pickSepFile">
+          <span class="sep-pick-ic"><Icon name="music" :size="16" /></span>
+          <span class="grow">
+            <b>{{ sepFile ? String(sepFile).replace(/^.*[\\/]/, '') : t('选择要分离的音频') }}</b>
+            <small>MP3 / WAV / FLAC / M4A 等 · {{ sepDur ? fmtTime(sepDur) : '（未选择）' }}</small>
+          </span>
+          <span class="btn sm ghost">{{ sepFile ? t('更换') : t('选择') }}</span>
+        </div>
+
+        <div class="fb-label" style="margin-top:4px">推理参数 <small class="ms-mut">（与 MSST-WebUI 一致 · 支持按模型保存预设）</small></div>
+        <div class="ms-grid">
+          <label class="ms-field">分块大小 chunk_size<small>增大提高分离效果，也增加耗时与显存</small>
+            <div class="ms-range-row"><input type="range" min="1" max="30" step="1" v-model.number="chunkSec" /><b>{{ chunkSec }}s</b></div>
+          </label>
+          <label class="ms-field">重叠数 overlap<small>建议 4；增大提高效果、增加耗时</small>
+            <div class="ms-range-row"><input type="range" min="1" max="10" step="1" v-model.number="msOverlap" /><b>{{ msOverlap }}</b></div>
+          </label>
+          <label class="ms-field">批次大小 batch_size<small>减小降低显存，对效果影响不大</small>
+            <div class="ms-range-row"><input type="range" min="1" max="8" step="1" v-model.number="msBatch" /><b>{{ msBatch }}</b></div>
+          </label>
+        </div>
+        <div class="tr-switch"><label><span><b>音频归一化</b><small>对输入/输出进行归一化（部分模型无此功能）</small></span><input type="checkbox" v-model="msNormalize"></label></div>
+        <div class="tr-switch"><label><span><b>启用 TTA（测试时增强）</b><small>小幅提升分离质量，推理时间约 ×3</small></span><input type="checkbox" v-model="msTta"></label></div>
+
+        <div class="tr-preset-row">
+          <label class="fb-label" style="margin:0">参数预设 <small class="ms-mut">（按当前模型保存 / 还原 / 应用）</small></label>
+          <div class="row" style="gap:6px;flex-wrap:wrap">
+            <select class="select-input" v-model="msPresetSel" style="min-width:130px">
+              <option value="" disabled>{{ t('选择已保存预设') }}</option>
+              <option v-for="p in msPresetOptions" :key="p.name" :value="p.name">{{ p.name }}</option>
+            </select>
+            <button class="btn sm" @click="applyMsPreset">{{ t('应用') }}</button>
+            <button class="btn sm" @click="saveMsPreset"><Icon name="plus" :size="13" />{{ t('保存预设') }}</button>
+            <button class="btn sm ghost" @click="resetMsParams">还原默认</button>
+            <button class="btn sm ghost danger" v-if="msPresetSel" @click="delMsPreset">{{ t('删除') }}</button>
+          </div>
+        </div>
+
+        <div class="fb-label" style="margin-top:4px">输出音轨 <small class="ms-mut">（不同模型可输出的音轨不同；不勾选即全部）</small></div>
+        <div class="tr-pills" v-if="msStemOptions.length">
+          <button class="tr-pill" v-for="s in msStemOptions" :key="s" :class="{ active: msStems.includes(s) }" @click="toggleStem(s)">{{ sepStemLabel(s) }}</button>
+          <button class="tr-pill ghost-like" @click="allStems()">全选</button>
+        </div>
+
+        <div class="tr-switch" style="margin-top:6px">
+          <label><span><b>输出格式</b><small>分离音频的保存格式</small></span>
+            <select class="select-input" v-model="msFormat" style="width:104px;padding:2px 6px;font-size:11px">
+              <option value="wav">WAV（默认）</option><option value="flac">FLAC</option><option value="mp3">MP3</option>
+            </select></label>
+        </div>
+
+        <div v-if="sepFile && currentSep" class="tr-sum" style="margin-top:6px">
+          即将分离：<b>{{ currentSep.name }}</b><span v-if="sepEstSec()"> · 预计耗时约 <b>{{ fmtTime(sepEstSec()) }}</b></span>
+        </div>
+        <button class="btn primary big" style="width:100%;justify-content:center;margin-top:8px" @click="runSeparate"
+                :disabled="!currentSep || !currentSep.exists || sepBusy">
+          <Icon name="box" :size="15" />{{ sepBusy ? t('分离中…') : t('开始分离') }}
+        </button>
+        <div v-if="sepBusy || sepStage" class="tr-progress" style="margin-top:8px">
+          <div class="pfill" :style="{ width: sepProgress + '%' }"></div><span>{{ sepProgress }}%</span>
+        </div>
+        <div v-if="sepStage" class="tr-stage muted small">{{ sepStage }}</div>
+
+        <div v-if="sepOutputs.length" class="tr-done">
+          <span class="muted small">已生成 {{ sepOutputs.length }} 个音轨：</span>
+          <button class="btn sm ghost" v-if="sepOutDir" @click="openSepOut"><Icon name="folder" :size="13" /> 打开输出文件夹</button>
+        </div>
+        <div v-if="sepOutputs.length" class="ms-out-list">
+          <div v-for="o in sepOutputs" :key="o" class="ms-out-item"><Icon name="music" :size="12" /> {{ String(o).replace(/^.*[\\/]/, '') }}</div>
+        </div>
+
+        <div v-if="sepLogs.length" class="tr-log">
+          <div class="tr-log-head"><span class="log-title">分离日志</span><span class="log-count">{{ sepLogs.length }} 行</span><span style="flex:1"></span><button class="icon-btn" @click="sepLogs = []"><Icon name="trash" :size="13" /></button></div>
+          <div class="tr-log-scroll"><div v-for="(l, i) in sepLogs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div></div>
+        </div>
+      </div>
+
+      <div v-if="mode !== 'separate'">
+        <div class="fb-label">性能模式</div>
+        <div class="tr-pills">
+          <button class="tr-pill" :class="{ active: perf === 'quality' }" @click="selectPerf('quality')">{{ t('最高质量') }}</button>
+          <button class="tr-pill" :class="{ active: perf === 'balanced' }" @click="selectPerf('balanced')">{{ t('均衡') }}</button>
+          <button class="tr-pill" :class="{ active: perf === 'fast' }" @click="selectPerf('fast')">{{ t('高性能') }}</button>
+        </div>
+        <div v-if="perfHint" class="tr-perf-hint">{{ perfHint }}</div>
+      </div>
+
+      <details v-if="mode !== 'separate'" class="tr-adv" data-guide="adv-panel">
         <summary>高级参数<span class="adv-cnt">{{ t('阈值 · 踏板 · 降噪') }}</span><span class="adv-arr">▾</span></summary>
         <div class="tr-params">
           <div class="tr-slider">
@@ -896,7 +1188,8 @@ onActivated(() => {
         </div>
       </details>
 
-      <!-- 任务模板 -->
+      <!-- 任务模板（仅转录模式） -->
+      <div v-if="mode !== 'separate'">
       <div class="tr-tpl-row">
         <div>
           <div class="fb-label">任务模板</div>
@@ -945,10 +1238,11 @@ onActivated(() => {
           <div v-for="(l, i) in logs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div>
         </div>
       </div>
+      </div>
     </div>
 
     <!-- 智能修正 -->
-    <div class="card tr-card" style="border-top:1px dashed var(--border)">
+    <div v-if="mode !== 'separate'" class="card tr-card" style="border-top:1px dashed var(--border)">
       <div class="fb-label" style="font-weight:700">智能修正</div>
       <div class="fb-hint">对齐起音 · 还原力度 · 声部平衡 · 清理杂音</div>
       <div class="tr-rf-row">
@@ -1103,4 +1397,54 @@ onActivated(() => {
 .pm-name { flex: 1; cursor: pointer; color: var(--ink); font-weight: 600; }
 .pm-mode { font-size: 11px; color: var(--stone); background: var(--surface-soft); padding: 2px 8px; border-radius: 99px; }
 .preset-mgr-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--hairline); }
+
+/* ===== 音频处理：模型选择 ===== */
+.sep-pick { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--hairline); border-radius: 12px; background: var(--surface); cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+.sep-pick:hover { border-color: var(--brand-coral); box-shadow: var(--shadow-sm); }
+.sep-pick-ic { display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center; border-radius: 9px; background: linear-gradient(135deg, var(--brand-coral), color-mix(in srgb, var(--brand-coral) 70%, #8b5cf6)); color: #fff; }
+.sep-pick .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.sep-pick .grow b { font-size: 13px; color: var(--ink); }
+.sep-pick .grow small { font-size: 11px; color: var(--stone); }
+.sep-scrim { position: fixed; inset: 0; z-index: 140; background: rgba(8,10,16,.45); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.sep-pane { width: 540px; max-width: 94vw; max-height: 84vh; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 16px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden; }
+.sep-head { display: flex; align-items: center; gap: 8px; padding: 13px 16px; border-bottom: 1px solid var(--hairline); font-size: 14px; color: var(--ink); }
+.sep-hint { font-size: 11.5px; color: var(--stone); padding: 8px 16px; background: var(--surface-soft); border-bottom: 1px solid var(--hairline); }
+.sep-list { flex: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 9px; }
+.sep-item { border: 1px solid var(--hairline); border-radius: 12px; padding: 10px 12px; background: var(--surface); cursor: pointer; transition: border-color .15s, box-shadow .15s, opacity .15s; }
+.sep-item:hover { border-color: var(--brand-coral); box-shadow: var(--shadow-sm); }
+.sep-item.sel { border-color: var(--brand-coral); box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand-coral) 30%, transparent); }
+.sep-item.off { opacity: .45; cursor: not-allowed; }
+.si-head { display: flex; align-items: center; gap: 7px; }
+.si-ic { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; border-radius: 7px; background: var(--surface-soft); color: var(--accent); }
+.si-arch { font-size: 10px; font-weight: 600; color: var(--stone); text-transform: uppercase; letter-spacing: .2px; font-family: var(--mono); }
+.si-pill { margin-left: auto; font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 20px; }
+.si-pill.on { background: color-mix(in srgb, var(--ok,#22c55e) 16%, transparent); color: var(--ok,#16a34a); }
+.si-pill.off { background: var(--surface-soft); color: var(--stone); }
+.si-name { font-size: 12.5px; font-weight: 700; color: var(--ink); margin-top: 5px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.si-best { display: inline-flex; align-items: center; gap: 2px; font-size: 9.5px; font-weight: 700; color: #b45309; background: linear-gradient(135deg, #ffd700, #ffed4e); padding: 0 6px; border-radius: 20px; line-height: 15px; }
+.si-use { font-size: 11px; color: var(--slate); line-height: 1.55; margin-top: 2px; -webkit-box-orient: vertical; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; }
+.si-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--stone); font-family: var(--mono); }
+.si-check { font-size: 11px; font-weight: 700; color: var(--stone); font-family: system-ui; }
+.si-check.cur { color: var(--brand-coral); }
+.sep-none { text-align: center; color: var(--stone); padding: 30px 0; font-size: 12px; }
+.sepFade-enter-active, .sepFade-leave-active { transition: opacity .16s ease; }
+.sepFade-enter-from, .sepFade-leave-to { opacity: 0; }
+.sepFade-enter-active .sep-pane, .sepFade-leave-active .sep-pane { transition: transform .2s cubic-bezier(.2,.7,.3,1), opacity .16s; }
+.sepFade-enter-from .sep-pane, .sepFade-leave-to .sep-pane { transform: scale(.94); opacity: 0; }
+
+/* ===== 音频处理：MSST 工作区 ===== */
+.tr-msst { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }
+.ms-mut { color: var(--stone); font-weight: 400; }
+.ms-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+@media (max-width: 640px) { .ms-grid { grid-template-columns: 1fr; } }
+.ms-field { display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--hairline); border-radius: 10px; padding: 8px 10px; background: var(--surface); font-size: 12px; color: var(--slate); }
+.ms-field small { color: var(--stone); font-size: 10.5px; line-height: 1.4; }
+.ms-field .text-input { width: 100%; padding: 5px 8px; font-size: 12.5px; }
+.ms-range-row { display: flex; align-items: center; gap: 8px; }
+.ms-range-row input[type=range] { flex: 1; accent-color: var(--ink); }
+.ms-range-row b { flex: none; min-width: 30px; text-align: right; color: var(--ink); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.tr-pill.ghost-like { background: transparent; border: 1px dashed var(--border-strong); color: var(--stone); }
+.tr-pill.ghost-like:hover { border-color: var(--brand-coral); color: var(--brand-coral); }
+.ms-out-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.ms-out-item { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--success-text); background: var(--success-bg); padding: 3px 9px; border-radius: 999px; font-family: var(--mono); }
 </style>

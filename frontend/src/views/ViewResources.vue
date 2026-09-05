@@ -343,7 +343,7 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
       <div class="page-ic"><Icon name="box" :size="20" /></div>
       <div>
         <div class="page-title">{{ t('资源中心') }}</div>
-        <div class="page-sub">{{ t('Python 依赖 · 模型运行时 · 模型文件') }}</div>
+        <div class="page-sub">{{ t('Python 依赖 · 模型运行时 · GPU 加速') }}</div>
       </div>
     </div>
 
@@ -399,68 +399,6 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
       </div>
     </div>
 
-    <!-- ============ 模型文件 ============ -->
-    <div class="card res-sec">
-      <div class="res-sec-head"><Icon name="folder" :size="15" /> {{ t('模型文件') }}</div>
-      <div class="field-row top">
-        <div>
-          <div class="fr-label">HuggingFace Token</div>
-          <div class="fr-hint">{{ t('仅 Aria-AMT 等 HuggingFace 模型下载需要，MuScriptor 走 GitHub 镜像无需 Token') }}</div>
-        </div>
-        <div class="fr-ctl col">
-          <div style="display:flex;gap:6px;width:100%">
-            <input :type="hfTokenVisible ? 'text' : 'password'" v-model="hfToken" class="ov-input mono" style="flex:1;min-width:200px" placeholder="hf_xxxx（huggingface.co/settings/tokens 创建）" @change="saveHfToken" />
-            <button class="btn sm" @click="hfTokenVisible = !hfTokenVisible">{{ hfTokenVisible ? t('隐藏') : t('显示') }}</button>
-            <button class="btn sm" @click="saveHfToken">{{ t('保存') }}</button>
-          </div>
-          <div class="fr-hint" style="margin-top:4px">{{ t('MuScriptor（Small/Medium/Large）已改为 GitHub 镜像分卷下载，无需 HuggingFace 授权；HF Token 仅 Aria-AMT 等模型需要') }}</div>
-        </div>
-      </div>
-      <div class="field-row">
-        <div>
-          <div class="fr-label">{{ t('下载渠道') }}</div>
-          <div class="fr-hint">{{ t('MuScriptor 走 GitHub 镜像分卷下载（自动测速选源）；Aria-AMT 走 HuggingFace 官方或 hf-mirror') }}</div>
-        </div>
-        <div class="fr-ctl">
-          <div class="radio-pill">
-            <span :class="{ on: modelChannel === 'huggingface' }" @click="modelChannel = 'huggingface'">HuggingFace</span>
-            <span :class="{ on: modelChannel === 'hf-mirror' }" @click="modelChannel = 'hf-mirror'">hf-mirror</span>
-          </div>
-        </div>
-      </div>
-      <div class="field-row top">
-        <div style="flex:none">
-          <div class="fr-label">{{ t('内置模型') }}</div>
-          <div class="fr-hint">{{ t('点击缺失模型即可下载 · Basic Pitch 随 Release 内置') }}</div>
-        </div>
-        <div class="fr-ctl col stretch">
-          <div class="state-box" v-if="models.length">
-            <div class="model-item" v-for="m in models" :key="m.id || m.name">
-              <span class="mi-name">{{ m.name }}</span>
-              <span class="mi-note">{{ m.note }}</span>
-              <span class="mi-size">{{ fmtSize(m.size) }}</span>
-              <span v-if="m.gated" class="mi-gated" :title="t('需在 HuggingFace 接受协议并填写 Token')">{{ t('需授权') }}</span>
-              <span :class="m.exists ? 'mi-ok' : 'mi-missing'">{{ m.exists ? t('已就绪') : t('缺失') }}</span>
-              <!-- 权重已就绪但缺运行时包：模型依赖检查的一部分 -->
-              <template v-if="m.exists && m.runtime && depGroups">
-                <span :class="runtimeOk(m) ? 'mi-ok' : 'mi-missing'" :title="(runtimeMissingOf(m) || []).join(', ')">{{ runtimeOk(m) ? t('运行时就绪') : t('缺运行时包') }}</span>
-                <button v-if="!runtimeOk(m)" class="btn sm" style="margin-left:auto;flex:none" :disabled="modelRtBusy" @click="installModelRuntime(m)">{{ t('一键安装') }}</button>
-              </template>
-              <template v-if="m.downloadable && !m.exists">
-                <button class="btn sm" @click="downloadModel(m)" :disabled="(modelProg[m.id] && modelProg[m.id].active) || m.active" style="margin-left:auto;flex:none">
-                  {{ ((modelProg[m.id] && modelProg[m.id].active) || m.active) ? ((modelProg[m.id] && modelProg[m.id].percent) || 0) + '%' : t('下载') }}
-                </button>
-              </template>
-              <div v-if="modelProg[m.id] && modelProg[m.id].active" class="res-bar"><div class="res-bar-fill" :style="{ width: (modelProg[m.id].percent || 0) + '%' }"></div></div>
-              <div v-else-if="modelProg[m.id] && modelProg[m.id].error" class="res-bar-err">{{ modelProg[m.id].error }}</div>
-            </div>
-          </div>
-          <div class="state-box" v-else>{{ t('暂无模型信息') }}</div>
-          <button class="btn sm" @click="refreshModels">{{ t('刷新模型清单') }}</button>
-          <button class="btn sm primary" @click="importLocalModel" style="margin-left:8px">{{ t('导入本地模型压缩包') }}</button>
-        </div>
-      </div>
-    </div>
 
     <!-- ============ GPU 加速 ============ -->
     <div class="card res-sec">

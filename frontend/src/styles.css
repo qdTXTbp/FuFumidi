@@ -112,7 +112,7 @@ body {
     "side main"
     "player player";
   height: 100%;
-  transition: grid-template-columns 0.25s ease;
+  transition: grid-template-columns 0.25s ease, grid-template-rows 0.34s cubic-bezier(.2,.7,.3,1);
 }
 .app-shell.side-collapsed { grid-template-columns: 0 1fr; }
 /* 拖动调整侧边栏宽度时禁用网格过渡，避免拖拽卡顿/滞后 */
@@ -392,9 +392,8 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 .song-item {
   position: relative;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 4px 10px;
+  gap: 10px;
   padding: 10px 12px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -404,19 +403,22 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 .song-item:hover { background: var(--surface-soft); }
 .song-item.active { background: var(--surface); border-color: var(--hairline); }
 .song-item .si-num { color: var(--stone); font-size: 11px; width: 22px; text-align: right; font-variant-numeric: tabular-nums; }
-.song-item .si-name { flex: 1 1 calc(100% - 42px); min-width: 0; font-size: 13px; padding-right: 4px; }
+.song-item .si-name { flex: 1; min-width: 0; font-size: 13px; padding-right: 4px; }
 .song-item .si-name b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--ink); }
 .song-item .si-name small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--stone); font-size: 11px; }
 .song-item .si-tools {
-  position: static;
-  flex: 1 1 100%;
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
-  justify-content: flex-end;
   gap: 2px;
   padding: 2px;
   border-radius: 8px;
+  background: var(--surface-soft);
   opacity: 0;
   transition: opacity 0.14s;
+  z-index: 2;
 }
 .song-item:hover .si-tools { opacity: 1; }
 .song-item .playing-ic { color: var(--success-text); }
@@ -432,7 +434,12 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
   padding: 0 20px;
   z-index: 30;
   color: #fff;
+  overflow: hidden;   /* 收起时随网格行高平滑裁剪 */
 }
+
+/* 播放栏开合：底部滑入/滑出 + 淡入淡出 */
+.pb-enter-active, .pb-leave-active { transition: transform .34s cubic-bezier(.2,.7,.3,1), opacity .24s ease; }
+.pb-enter-from, .pb-leave-to { transform: translateY(100%); opacity: 0; }
 .pb-main { display: flex; align-items: center; gap: 12px; min-width: 260px; flex: none; }
 .pb-title { min-width: 0; max-width: 220px; }
 .pb-title b { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: #fff; }

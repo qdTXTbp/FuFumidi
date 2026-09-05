@@ -1,6 +1,7 @@
 appId: com.fufumidi.app
 electronVersion: 33.4.11
 productName: FuFumidi
+npmRebuild: false
 directories:
   output: release
 asarUnpack:

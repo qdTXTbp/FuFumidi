@@ -26,6 +26,7 @@ const DEFAULT_SETTINGS = {
   plugins_enabled: [],
   lang: 'zh',
   hf_token: '',   // HuggingFace 访问令牌（用于下载 gated 模型，如 MuScriptor 需授权）
+  active_soundfont: 'internal',   // 播放时使用的音色库：'internal'=内置合成器，其余为 SF2 文件绝对路径（音色工坊选择，持久化）
 };
 
 function settingsPath() {

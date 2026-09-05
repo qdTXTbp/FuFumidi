@@ -89,8 +89,12 @@ def engine_available(mode):
         from engine_pt import available
         return available()
     if mode == "separate":
-        import engine_separate
-        return engine_separate.available() and _basic_ok()
+        # 音频处理（MSST 分离）为独立引擎，不参与音频→MIDI 转录
+        try:
+            import engine_msst
+            return bool(engine_msst.available())
+        except Exception:
+            return False
     return False
 
 
@@ -185,10 +189,12 @@ def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
                                            num_threads=num_threads, **params)
 
         if mode == "separate":
-            import engine_separate
-            return engine_separate.transcribe_separate(
-                audio_path, output_midi, params=params, log_cb=log_cb,
-                num_threads=num_threads)
+            # 音频处理（MSST 分离）已改为独立 `separate` 子命令（engine_msst），
+            # 不再走「分离后转 MIDI」的转录链路。若被误调用则给出明确引导。
+            raise RuntimeError(
+                "音频处理（MSST 分离）已不再生成 MIDI。\n"
+                "请使用新的「音频处理」面板输出分离音轨；需要转 MIDI 请用通用识别或钢琴专用模式。"
+            )
 
         # 默认 universal：子模型 basic（Basic Pitch 兜底）| muscriptor（可选）
         umodel = (params or {}).get("model") or "basic"

@@ -25,7 +25,7 @@ import os
 import sys
 import warnings
 
-VERSION = "3.1.22"
+VERSION = "3.2.0"
 
 def _patch_tqdm_compat():
     """兼容新版 tqdm 缺少 set_lock/get_lock 导致 huggingface_hub 导入失败的问题。"""
@@ -104,7 +104,7 @@ def print_deps_help(mode=None):
         print(f"")
         print(f"  当前模式「{MODES.get(mode, ('', ''))[0]}」还需要：")
         if mode == "separate":
-            print("     pip install demucs")
+            print("     pip install pymss")
         else:
             print("     （install.bat 已包含）")
     print("=" * 60)
@@ -257,6 +257,53 @@ def cmd_batch(args):
     return 0 if ok == len(files) else 1
 
 
+def cmd_separate(args):
+    """音频处理（MSST 分离）：把单个音频分离为所选音轨，写入输出目录。"""
+    import engine_msst
+
+    src = os.path.abspath(args.input)
+    if not os.path.isfile(src):
+        print(f"[错误] 找不到文件: {src}")
+        return 1
+
+    out_dir = os.path.abspath(args.output or os.path.join(os.path.dirname(src), "separated"))
+    os.makedirs(out_dir, exist_ok=True)
+
+    params = {
+        "model_path": getattr(args, "model", None),
+        "config_path": getattr(args, "config", None),
+        "arch": getattr(args, "arch", None),
+        "chunk_size": args.chunk_size,
+        "num_overlap": args.num_overlap,
+        "batch_size": args.batch_size,
+        "normalize": bool(getattr(args, "normalize", False)),
+        "use_tta": bool(getattr(args, "tta", False)),
+        "stems": [s.strip() for s in args.stems.split(",") if s.strip()] if getattr(args, "stems", None) else None,
+        "output_format": (getattr(args, "format", None) or "wav").lower().lstrip("."),
+    }
+
+    print(f"[1/2] 正在分离（MSST）: {os.path.basename(src)}")
+    try:
+        def log(msg):
+            print(f"      {msg}")
+
+        def prog(p):
+            sys.stdout.write(f"###PROG {json.dumps({'percent': round(p, 1)})}\n")
+            sys.stdout.flush()
+
+        outputs = engine_msst.separate(src, out_dir, params, log_cb=log, progress_cb=prog)
+    except Exception as e:
+        print(f"[错误] 分离失败: {e}")
+        res = {'ok': False, 'error': str(e)}
+        print(f"###RESULT {json.dumps(res, ensure_ascii=False)}")
+        return 1
+
+    print(f"[2/2] 完成！共 {len(outputs)} 个音轨")
+    res = {'ok': True, 'outputs': outputs, 'out_dir': out_dir}
+    print(f"###RESULT {json.dumps(res, ensure_ascii=False)}")
+    return 0
+
+
 def cmd_probe():
     """环境诊断：输出一行 JSON（Electron 端解析）。"""
     from engine import MODES, engine_available
@@ -324,7 +371,7 @@ def build_parser():
                "  python music2midi.py batch                    # 批量转换 input/ 文件夹",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("mode", nargs="?", choices=["convert", "batch", "probe", "gui", "worker"],
+    parser.add_argument("mode", nargs="?", choices=["convert", "batch", "probe", "gui", "worker", "separate"],
                         default="gui", help="运行模式（默认 gui）")
     parser.add_argument("input", nargs="?", help="[convert] 输入音频文件")
     parser.add_argument("-o", "--output", help="[convert] 输出 MIDI 路径（默认与输入同名同目录）")
@@ -376,6 +423,16 @@ def build_parser():
     g.add_argument("--min-note-ms", type=int, default=None, help="最小音符时长(ms)")
     g.add_argument("--merge-gap-ms", type=int, default=None, help="同音高音符合并间隔(ms)")
     g.add_argument("--no-pedal", action="store_true", help="不输出踏板事件")
+
+    g = parser.add_argument_group("音频处理（MSST 分离）参数")
+    g.add_argument("--arch", type=str, default=None, help="模型架构名（BN-Roformer/Mel-Band Roformer/HTDemucs/...）")
+    g.add_argument("--config", type=str, default=None, help="MSST 模型 .yaml 配置路径")
+    g.add_argument("--chunk-size", type=int, default=None, help="分块大小（样本数，建议 44100 整数倍）")
+    g.add_argument("--num-overlap", type=int, default=None, help="重叠数 N（默认 4，增大提高效果/耗时）")
+    g.add_argument("--batch-size", type=int, default=None, help="批次大小（减小降低显存）")
+    g.add_argument("--tta", action="store_true", help="启用 TTA（推理时间 ×3，质量略升）")
+    g.add_argument("--stems", type=str, default=None, help="输出音轨，逗号分隔（默认全部）")
+    g.add_argument("--format", type=str, default=None, help="输出格式：wav/flac/mp3（默认 wav）")
 
     parser.add_argument("--version", action="version", version=f"音乐转MIDI工具 {VERSION}")
     return parser
@@ -468,6 +525,9 @@ def main():
         print("[错误] convert 模式需要指定音频文件，例如:")
         print("       python music2midi.py convert 歌曲.mp3")
         return 1
+
+    if args.mode == "separate":
+        return cmd_separate(args)
 
     # 检查指定模式所需依赖
     if not dependencies_ok(args.engine_mode):

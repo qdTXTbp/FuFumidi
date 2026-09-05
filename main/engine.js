@@ -14,7 +14,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
   const _engineWorkerPending = new Map();
 
   function spawnEngine(pyArgs, opts = {}) {
-    const { script = 'music2midi.py', onLog, onDone, onError, timeoutMs = 30 * 60 * 1000 } = opts;
+    const { script = 'music2midi.py', onLog, onProgress, onDone, onError, timeoutMs = 30 * 60 * 1000 } = opts;
     const py = resolvePython();
     const eng = engineDir();
     const scriptPath = path.isAbsolute(script) ? script : path.join(eng, script);
@@ -44,6 +44,8 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
         if (!t) continue;
         const m = t.match(/^###RESULT\s+(\{.*\})\s*$/);
         if (m) { try { result = JSON.parse(m[1]); } catch {} continue; }
+        const p = t.match(/^###PROG\s+(\{.*\})\s*$/);
+        if (p) { try { onProgress && onProgress(JSON.parse(p[1])); } catch {} continue; }
         try { onLog && onLog(t); } catch {}
       }
     };
