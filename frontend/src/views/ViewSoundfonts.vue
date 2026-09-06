@@ -62,12 +62,17 @@ function isActive(item) {
   return item && item.path && activePath.value === item.path;
 }
 
-// 启用某音色（立即生效 + 持久化）
+// 启用某音色（立即生效 + 持久化）；失败自动重试一次（大 sf2 首载偶发失败）
 async function enable(item) {
   if (!item || !item.path) { toast(t('该音色尚未就绪，请先下载或导入'), 'warn'); return; }
   busySf.value = true;
   try {
-    const r = await setActiveSoundfontRef(item.path);
+    let r = await setActiveSoundfontRef(item.path);
+    // 首次失败：等一小段（音频上下文/刚下载完成就绪）自动重试一次
+    if (!(r && r.using === 'sf2')) {
+      await new Promise(res => setTimeout(res, 400));
+      r = await setActiveSoundfontRef(item.path);
+    }
     if (r && r.using === 'sf2') {
       await settings.save({ active_soundfont: item.path });
       activePath.value = item.path;
@@ -76,7 +81,7 @@ async function enable(item) {
       // 加载失败：回退默认合成器并提示具体原因，避免“显示已启用实则未生效”
       await settings.save({ active_soundfont: 'internal' });
       activePath.value = 'internal';
-      toast(t('「') + item.name + t('」加载失败，已回退默认合成器：') + ((r && r.error) || t('未知原因')), 'warn');
+      toast(t('「') + item.name + t('」加载失败，已回退默认合成器：') + ((r && r.error) || t('未知原因')) + t('。可重启应用后再试一次。'), 'warn');
     }
   } finally {
     busySf.value = false;

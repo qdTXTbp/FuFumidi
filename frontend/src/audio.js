@@ -35,10 +35,13 @@ export function applySoundfont(source) {
   return synth.setSoundfont(source);
 }
 // 暴露当前 Synth 供 apply / 查询
-export function setActiveSoundfontRef(v) {
+export async function setActiveSoundfontRef(v) {
   if (typeof window !== 'undefined') window.__fufumidi_activeSoundfont = v;
-  if (synth) return synth.setSoundfont(v || 'internal');
-  return Promise.resolve({ ok: true, using: 'internal' });
+  if (!synth) return Promise.resolve({ ok: true, using: 'internal' });
+  // 切换音色前确保 AudioContext 处于运行态（首次交互/切页可能 suspended，
+  // 加载 SF2 时若未 resume 会让某些环境下的初始化/解码异常，表现为「应用失败」）
+  if (ctx && ctx.state === 'suspended') { try { await ctx.resume(); } catch (e) {} }
+  return synth.setSoundfont(v || 'internal');
 }
 
 export function getCtx() { return ctx; }

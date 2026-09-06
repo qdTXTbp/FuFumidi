@@ -61,11 +61,20 @@ MIRRORS = [
 PIP_BASE = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "-q",
             "--timeout", "30", "--retries", "3"]
 
-# 特殊安装源：不在 PyPI 的包，从 git 源码安装（按包名映射）
+# 特殊安装源：不在 PyPI 的包，从 git 源码安装（按包名映射）。
+# GitHub 直连在国内常长时间无进展/超时，故提供多个 GitHub 代理镜像前缀；
+# GIT_SOURCES 只放仓库 path（author/repo），安装时依次尝试各镜像再回退官方。
 GIT_SOURCES = {
-    "amt": "git+https://github.com/EleutherAI/aria-amt.git",
-    "ariautils": "git+https://github.com/EleutherAI/aria-utils.git",
+    "amt": "EleutherAI/aria-amt",
+    "ariautils": "EleutherAI/aria-utils",
 }
+# 镜像顺序：国内 GitHub 加速优先（gh.jasonzeng.dev 与应用内其它下载源一致）；最后为官方直连兜底
+GIT_MIRROR_PREFIXES = [
+    "https://gh.jasonzeng.dev/https://github.com/",
+    "https://ghfast.top/https://github.com/",
+    "https://gh-proxy.com/https://github.com/",
+    "https://github.com/",
+]
 # aria-amt 声明的 torchaudio<=2.5 会强制降级现有 torch/torchaudio，
 # 必须 --no-deps 装本体，再单独装缺失依赖（torch/torchaudio 已在环境内）
 GIT_NO_DEPS = {"amt"}
@@ -91,10 +100,13 @@ def check():
     return 0
 
 
-def _pip_run(cmd):
+def _pip_run(cmd, timeout=600):
+    # 每个镜像 600s 上限：单个源慢/挂起时快速切下一个，避免无限等待
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         return r.returncode == 0, (r.stderr or r.stdout or "").strip()[-500:]
+    except subprocess.TimeoutExpired:
+        return False, "安装超时（超过 %ss），已尝试切换下一个源" % timeout
     except Exception as e:
         return False, str(e)
 
@@ -106,16 +118,21 @@ def install(group=None):
         missing = [p for p in pkgs if not _find(p)]
         if not missing:
             continue
-        # aria 组：git 包 + 普通 pip 小依赖混合安装
+        # aria 组：git 包（走 GitHub 镜像回退）+ 普通 pip 小依赖混合安装
         if g == "aria":
             ok = True
             for m in missing:
                 if m in GIT_SOURCES:
-                    cmd = list(PIP_BASE)
-                    if m in GIT_NO_DEPS:
-                        cmd.append("--no-deps")
-                    cmd.append(GIT_SOURCES[m])
-                    ok, last_err = _pip_run(cmd)
+                    ok = False
+                    for prefix in GIT_MIRROR_PREFIXES:
+                        cmd = list(PIP_BASE)
+                        if m in GIT_NO_DEPS:
+                            cmd.append("--no-deps")
+                        # pip 默认浅拉取仓库；不指定分支避免仓库默认分支名不同导致失败
+                        cmd.append("git+" + prefix + GIT_SOURCES[m] + ".git")
+                        ok, last_err = _pip_run(cmd)
+                        if ok:
+                            break
                 else:
                     ok = False
                     for mirror in MIRRORS:

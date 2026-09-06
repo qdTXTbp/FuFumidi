@@ -398,8 +398,12 @@ export class Synth {
       } else {
         const onTimer = setTimeout(() => {
           if (!this.sf2) return;
+          // 主线程卡顿（如打开乐谱/大文件渲染）会让多个到期 setTimeout 同时触发，
+          // 若强行触发会产生大量音头聚簇 → 噪点/爆破。明显过期（>40ms）的音符跳过本次触发。
+          const now = this.ctx.currentTime;
+          if (onTime < now - 0.04) return;
           try { if (note.isDrum) this.sf2.midiSetChannelType(ch, true); else if (note.prog != null) this.sf2.midiProgramChange(ch, note.prog); this.sf2.midiNoteOn(ch, note.midi, note.vel); } catch (e) {}
-          const offTimer = setTimeout(sendOff, Math.max(0, (Math.max(endTime, onTime + 0.06) - onTime) * 1000));
+          const offTimer = setTimeout(sendOff, Math.max(0, (Math.max(endTime, onTime + 0.06) - now) * 1000));
           this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, start: onTime, endTime, timer: offTimer, sf2: true, ch });
         }, delayOn);
         this._sf2Pending.push(onTimer);
