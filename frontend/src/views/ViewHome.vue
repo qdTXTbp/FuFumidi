@@ -28,6 +28,7 @@ const QUICK = [
 ];
 
 function go(v) { setView(v); }
+function openGuide() { state.ui.guideOpen = true; }
 function openUpdate() {
   state.ui.settingsTab = 'update';
   state.ui.settingsOpen = true;
@@ -127,9 +128,9 @@ async function openProject() {
         <span class="hc-ic"><Icon name="import" :size="18" /></span>
         <div><b>{{ t('检查更新') }}</b><small>{{ t('GitHub 新版本 · 国内镜像') }}</small></div>
       </button>
-      <button class="home-card" @click="go('resources')">
-        <span class="hc-ic"><Icon name="box" :size="18" /></span>
-        <div><b>{{ t('资源中心') }}</b><small>{{ t('Python 依赖 · 模型运行时 · 模型文件') }}</small></div>
+      <button class="home-card" data-guide="quick-guide" @click="openGuide">
+        <span class="hc-ic"><Icon name="info" :size="18" /></span>
+        <div><b>{{ t('新手引导') }}</b><small>{{ t('全功能实操 · 快捷键 · 帮助') }}</small></div>
       </button>
       <button class="home-card" @click="openProject">
         <span class="hc-ic"><Icon name="folder" :size="18" /></span>

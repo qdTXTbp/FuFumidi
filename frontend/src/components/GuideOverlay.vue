@@ -23,7 +23,7 @@ const WELCOME_STEPS = [
 ];
 
 const IG_STEPS = [
-  { view: 'home', selector: '[data-guide="quick-transcribe"]', title: t('1. 进入转录页'), desc: t('点击首页“开始转录”卡片，或顶部切换到“转译”标签。'), action: true, validate: () => state.view === 'transcode' },
+  { view: 'home', selector: '[data-guide="quick-transcode"]', title: t('1. 进入转译页'), desc: t('点击首页“转译”卡片，或顶部切换到“转译”标签。'), action: true, validate: () => state.view === 'transcode' },
   { view: 'transcribe', selector: '[data-guide="mode-piano"]', title: t('2. 选择转录引擎'), desc: t('通用识别适合任意歌曲；钢琴专用适合纯钢琴；人声分离先分离人声/伴奏。'), action: true, validate: el => el.classList.contains('active') },
   { view: 'transcribe', selector: '[data-guide="audio-drop"]', title: t('3. 导入音频文件'), desc: t('点击上传区域，选择 MP3 / WAV / FLAC / M4A 等音频。建议使用音质较高的音频。'), manual: true },
   { view: 'transcribe', selector: '[data-guide="adv-panel"]', title: t('4. 调整转录参数'), desc: t('展开高级参数可调整阈值、最短音符、合并间隔、踏板、降噪、响度平衡、自动 BPM。'), manual: true },

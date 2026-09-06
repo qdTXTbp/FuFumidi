@@ -76,12 +76,20 @@ def transcribe_aria(audio_path, output_midi, params=None, log_cb=None,
     _log(log_cb, "运行 " + "aria-amt transcribe …")
     before = set(os.listdir(out_dir))
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
+    # 诊断：无论成败，把 stdout/stderr 尾部透出（原 capture 吞掉，rc==0 且无产物时无从定位）
+    tail = (r.stdout or "")[-400:].strip()
+    err_tail = (r.stderr or "")[-400:].strip()
     if r.returncode != 0:
         raise RuntimeError((r.stderr or r.stdout or "").strip()[-500:])
 
     mid = _pick_new_midi(out_dir, before)
     if not mid:
-        raise RuntimeError("aria-amt 未生成 MIDI 文件")
+        raise RuntimeError(
+            "aria-amt 未生成 MIDI 文件"
+            + ("\n[stdout] " + tail if tail else "")
+            + ("\n[stderr] " + err_tail if err_tail else "")
+            + "\n请确认 Aria-AMT 运行时已安装（资源中心 → 运行时 → Aria）且模型权重已下载。"
+        )
     src = os.path.join(out_dir, mid)
     if os.path.abspath(src) != os.path.abspath(output_midi):
         os.replace(src, output_midi)
