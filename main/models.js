@@ -414,20 +414,40 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     if (id) { _modelPause.add(id); try { const c = _modelAborts.get(id); if (c) c.abort(); } catch (e) {} }
     return { ok: true };
   });
-  // HuggingFace 整仓下载（HF 官方 / hf-mirror 双渠道；MuScriptor / Aria-AMT）
+  // HuggingFace 整仓下载（MuScriptor / Aria-AMT）。
+  // 官方 huggingface.co 在国内常遇网关错误（502/5xx），逐请求按「官方 → hf-mirror」自动回退；
+  // 401/403（授权类）、取消/暂停不回退。
   async function downloadHfRepo(spec, channel, win, ctrl, token) {
-    const host = HF_HOSTS[channel] || HF_HOSTS.huggingface;
+    // 渠道序列：用户显式指定则优先该渠道，官方失败自动落到 hf-mirror
+    const hosts = channel && HF_HOSTS[channel] && HF_HOSTS[channel] !== HF_HOSTS.huggingface
+      ? [HF_HOSTS[channel], HF_HOSTS.huggingface, HF_HOSTS['hf-mirror']]
+      : [HF_HOSTS.huggingface, HF_HOSTS['hf-mirror']];
     const destDir = path.join(modelsDir(), spec.dest);
     fs.mkdirSync(destDir, { recursive: true });
     const auth = {};
     if (token) auth.Authorization = 'Bearer ' + token;
     const headers = { 'user-agent': 'FuFumidi', ...auth };
+    const isAuthErr = (code) => code === 401 || code === 403;
     // gated 模型未带 Token 时直接给出明确指引，避免下载到一半才 401
     if (spec.gated && !token) throw new Error('该模型需要 HuggingFace 授权：请先在 huggingface.co/' + spec.repo + ' 页面接受许可协议，并在上方填写 HF Token（huggingface.co/settings/tokens 创建）');
-    const api = `https://${host}/api/models/${spec.repo}/tree/main?recursive=true`;
-    const res = await net.fetch(api, { headers, signal: ctrl.signal });
-    if (!res.ok) throw new Error('HF API HTTP ' + res.status + (res.status === 401 || res.status === 403 ? '（需授权：请检查 HF Token 是否有效且已接受模型协议）' : ''));
-    const tree = await res.json();
+    // 带渠道回退的 fetch：成功返回 {res, host}；全渠道失败抛最后错误
+    const fetchFallback = async (pathAndQuery, authHints) => {
+      let lastErr = null;
+      for (const host of hosts) {
+        if (_modelCancels.has(spec.id)) throw new Error('canceled');
+        if (_modelPause.has(spec.id)) throw new Error('paused');
+        try {
+          const r = await net.fetch(`https://${host}${pathAndQuery}`, { headers, signal: ctrl.signal });
+          if (r.ok) return { res: r, host };
+          // 授权错误：mirror 同样无权限，直接抛不折腾
+          if (isAuthErr(r.status)) throw new Error(authHints + ' HTTP ' + r.status);
+          lastErr = new Error('HTTP ' + r.status);
+        } catch (e) { lastErr = e; if (isAuthErr(parseInt(String(e && e.status || ''), 10))) throw e; }
+      }
+      throw lastErr || new Error('所有 HF 渠道均失败');
+    };
+    const treeRes = await fetchFallback(`/api/models/${spec.repo}/tree/main?recursive=true`, 'HF API');
+    const tree = await treeRes.res.json();
     const files = (tree || []).filter(f => f.type === 'file' && !/^\./.test(path.basename(f.path)));
     if (!files.length) throw new Error('仓库文件列表为空');
     const total = files.reduce((s, f) => s + (f.size || 0), 0);
@@ -442,8 +462,9 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       const rel = f.path;
       const out = path.join(destDir, rel);
       fs.mkdirSync(path.dirname(out), { recursive: true });
-      const url = `https://${host}/${spec.repo}/resolve/main/${rel.split('/').map(encodeURIComponent).join('/')}`;
-      const r = await net.fetch(url, { headers, signal: ctrl.signal });
+      const enc = rel.split('/').map(encodeURIComponent).join('/');
+      const dl = await fetchFallback(`/${spec.repo}/resolve/main/${enc}`, '下载');
+      const r = dl.res;
       if (!r.ok || !r.body) throw new Error('下载失败 HTTP ' + r.status + ' · ' + rel + (r.status === 401 || r.status === 403 ? '（该模型需授权：请填写有效 HF Token 并先在 HF 页面接受协议）' : ''));
       const ws = fs.createWriteStream(out);
       // 打开失败（EPERM：杀软锁定/权限）或写入中途出错时，'error' 事件若无人监听会把主进程打崩；

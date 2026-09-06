@@ -86,17 +86,49 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
       bundledPath: null,
     },
     {
-      id: 'sgm_v2',
-      name: 'SGM-V2.01',
+      // SGM-V2.01 官方按 GitHub 100MB 限制拆为 3 个独立 SF2 分发（乐器号互补，均为完整合法音色库）。
+      // 应用内提供三份独立下载/启用；一份覆盖不全 GM 时按需搭配。
+      id: 'sgm_v2_part1',
+      name: 'SGM-V2.01 (Part 1)',
       version: '2.01',
-      desc: '备受好评的高品质多采样 GM 音色，细节丰富、动态自然，追求更真实音色时的首选。',
-      size: 300000000,
+      desc: '高品质多采样 GM 音色之一：含钢琴/风琴/吉他等前 31 号乐器（Program 0–30）。',
+      size: 101600000,
       license: '免费个人/商用（SGM 许可条款）',
-      minSize: 2e8,
+      minSize: 90000000,
       fromRepo: null,
       repoFile: null,
       urls: [
-        _releaseBase + '/SGM_v2.01.sf2',   // 自家镜像仓库（Release 附件，经 gh.jasonzeng.dev 加速）
+        _releaseBase + '/SGM_V2_01_part1.sf2',   // 自家镜像仓库（Release 附件，经 gh.jasonzeng.dev 加速）
+      ],
+      bundledPath: null,
+    },
+    {
+      id: 'sgm_v2_part2',
+      name: 'SGM-V2.01 (Part 2)',
+      version: '2.01',
+      desc: '高品质多采样 GM 音色之一：含贝斯/弦乐/铜管/木管等中段乐器（Program 31–79）。',
+      size: 104400000,
+      license: '免费个人/商用（SGM 许可条款）',
+      minSize: 90000000,
+      fromRepo: null,
+      repoFile: null,
+      urls: [
+        _releaseBase + '/SGM_V2_01_part2.sf2',   // 自家镜像仓库（Release 附件，经 gh.jasonzeng.dev 加速）
+      ],
+      bundledPath: null,
+    },
+    {
+      id: 'sgm_v2_part3',
+      name: 'SGM-V2.01 (Part 3)',
+      version: '2.01',
+      desc: '高品质多采样 GM 音色之一：含合成音色/SFX 与全部鼓组（Program 80–127 + 鼓）。',
+      size: 99500000,
+      license: '免费个人/商用（SGM 许可条款）',
+      minSize: 90000000,
+      fromRepo: null,
+      repoFile: null,
+      urls: [
+        _releaseBase + '/SGM_V2_01_part3.sf2',   // 自家镜像仓库（Release 附件，经 gh.jasonzeng.dev 加速）
       ],
       bundledPath: null,
     },

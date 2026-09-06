@@ -158,6 +158,26 @@ while (Get-Process -Name $procName -ErrorAction SilentlyContinue) {
   Start-Sleep -Seconds 1
 }
 Start-Sleep -Seconds 3
+# 更新器替换 core 文件（app.asar 数十 MB）需数秒：等 asar 头完整且稳定后再启动主程序，
+# 避免读到半写/缺失的 asar 一启动即崩溃或触发完整性误报（最多等 60s）
+$asar = Join-Path ${_dir} 'resources\app.asar'
+$t0 = (Get-Date)
+while ($true) {
+  $ok = $false
+  $st = Get-Item $asar -ErrorAction SilentlyContinue
+  if ($st -and $st.Length -gt 1048576) {
+    try {
+      $fs = [System.IO.File]::OpenRead($asar)
+      $b = New-Object byte[] 8
+      [void]$fs.Read($b, 0, 8)
+      $fs.Close()
+      $headerSize = [BitConverter]::ToUInt32($b, 4)
+      if ([BitConverter]::ToUInt32($b, 0) -eq 4 -and $headerSize -gt 0 -and $headerSize -lt $st.Length) { $ok = $true }
+    } catch { $ok = $false }
+  }
+  if ($ok -or ((Get-Date) -gt $t0.AddSeconds(60))) { break }
+  Start-Sleep -Milliseconds 500
+}
 Start-Process -FilePath ${_exe} -WorkingDirectory ${_dir}
 `, 'utf8');
       try {
@@ -172,6 +192,10 @@ Start-Process -FilePath ${_exe} -WorkingDirectory ${_dir}
       } catch (e) {
         return { ok: false, error: '启动更新器失败：' + String((e && e.message) || e) };
       }
+      // 更新器要替换主程序 exe；若本进程仍运行，exe 被内存映射（user-mapped section）占用，
+      // 更新器覆盖时会报 CREATE_TARGET_FILE_ERR / os error 1224。故先让应用自行退出，
+      // 释放 exe 映射，再交给守护进程等待更新器完成后拉起新版本。
+      try { setTimeout(() => { try { app.exit(0); } catch (_) {} }, 400); } catch (_) {}
       return { ok: true, launching: true, updaterPath };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });

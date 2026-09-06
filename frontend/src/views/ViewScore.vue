@@ -45,6 +45,8 @@ let flow = [];          // 视觉流向（按行阅读顺序）
 let lineTops = [], lineBottoms = [];
 let renderCacheKey = '';
 let playingSet = new Set(); // 当前高亮的 SVG 元素
+let resizeObserver = null;   // 滚动容器宽度监听（折叠侧栏等布局变化触发重排）
+let _scoreRO = null;         // 关闭/复用辅助句柄
 
 const song = computed(() => (currentSong.value && currentSong.value.song) || null);
 const allTracks = computed(() => (song.value ? song.value.tracks : []));
@@ -546,10 +548,37 @@ function loop() {
 onMounted(() => {
   nextTick(scheduleRender);
   followRaf = requestAnimationFrame(loop);
+  // 容器宽度变化（折叠侧边栏 / 隐藏播放栏 / 拖宽 / 窗口缩放 / 全屏）时重新按新宽度雕刻，
+  // 避免谱面按旧宽度刻版后拥挤在左侧。rAF 合并 + >1px 阈值 + 防抖，防滚动条出现/消失造成振荡。
+  let roW = 0, roTimer = 0, roPending = false;
+  const dropRO = () => {
+    cancelAnimationFrame(roPending);
+    clearTimeout(roTimer);
+  };
+  const slot = () => {
+    roPending = 0;
+    const el = scrollEl.value;
+    const w = el ? el.clientWidth : 0;
+    if (w > 0 && Math.abs(w - roW) > 1) {
+      roW = w;
+      clearTimeout(roTimer);
+      roTimer = setTimeout(() => { renderCacheKey = ''; scheduleRender(); }, 120);
+    }
+  };
+  resizeObserver = new ResizeObserver((entries) => {
+    const el = scrollEl.value;
+    if (!el) return;
+    cancelAnimationFrame(roPending);
+    roPending = requestAnimationFrame(slot);
+  });
+  if (scrollEl.value) resizeObserver.observe(scrollEl.value);
+  _scoreRO = { dropRO, observe: () => { try { resizeObserver.observe(scrollEl.value); } catch (e) {} } };
 });
 onBeforeUnmount(() => {
   cancelAnimationFrame(followRaf);
   if (renderRaf) cancelAnimationFrame(renderRaf);
+  if (resizeObserver) { try { resizeObserver.disconnect(); } catch (e) {} resizeObserver = null; }
+  if (_scoreRO) { try { _scoreRO.dropRO(); } catch (e) {} _scoreRO = null; }
 });
 </script>
 

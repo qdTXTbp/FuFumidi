@@ -87,6 +87,8 @@ const form = reactive({
 /* ---------------- 更新 ---------------- */
 const upd = reactive({
   status: '',
+  failed: false,   // 本次更新流程是否失败（用于显示「重试」按钮）
+  launched: false, // 更新器是否已成功启动
 });
 
 /* ---------------- GPU 加速 ---------------- */
@@ -152,7 +154,9 @@ async function load() {
   form.watch_dir = s.watch_dir || '';
   form.watch_enabled = !!s.watch_enabled;
   form.file_assoc = s.file_assoc !== false;
-  if (state.integrity === null) runIntegrity();
+  // 完整性：每次打开设置都重新检查（而非仅在首次 state.integrity===null 时），
+  // 避免开机/更新瞬间的瞬时误报被缓存锁死——修复后或 asar 已恢复也能即时反映，不再“一直报错”。
+  runIntegrity();
   loadPlugins();
   loadRust();
   initGpu();
@@ -185,30 +189,33 @@ function onLang() {
 /* ---------------- 更新 ---------------- */
 // 简化更新：只显示当前版本号 + 检查更新。检查到新版本 → 弹窗询问是否更新。
 async function updLaunch() {
-  if (!bridge || !bridge.updateCheck) { upd.status = '当前环境不支持检查更新'; return; }
-  upd.status = '正在检查更新…';
+  if (!bridge || !bridge.updateCheck) { upd.status = '当前环境不支持检查更新'; upd.failed = true; return; }
+  upd.status = '正在检查更新…'; upd.failed = false; upd.launched = false;
   try {
     const r = await bridge.updateCheck();
-    if (!r || !r.ok) { upd.status = (r && r.error) || '检查失败'; return; }
+    if (!r || !r.ok) { upd.status = (r && r.error) || '检查失败'; upd.failed = true; return; }
     const cur = String(r.current || '');
     const latest = String(r.latest || '');
     if (cur === latest) {
       upd.status = '已是最新版本（' + cur + '）';
       return;
     }
-    if (!bridge.update || !bridge.update.launchUpdater) { upd.status = '当前环境不支持增量更新器'; return; }
+    if (!bridge.update || !bridge.update.launchUpdater) { upd.status = '当前环境不支持增量更新器'; upd.failed = true; return; }
     const ok = await app.confirmDialog({ msg: t('发现新版本 ') + latest + t('，当前 ') + cur + t('。\n是否启动更新器增量更新？') });
     if (!ok) { upd.status = '已取消'; return; }
-    if (!bridge.update || !bridge.update.launchUpdater) { upd.status = '当前环境不支持增量更新器'; return; }
+    if (!bridge.update || !bridge.update.launchUpdater) { upd.status = '当前环境不支持增量更新器'; upd.failed = true; return; }
     upd.status = '正在启动更新器…';
     const rr = await bridge.update.launchUpdater(latest);
     if (rr && rr.ok) {
       upd.status = '更新器已启动，下载与更新进度请在更新器窗口内查看…';
+      upd.launched = true;
     } else {
       upd.status = (rr && rr.error) || '启动失败';
+      upd.failed = true;
     }
   } catch (e) {
     upd.status = '检查更新失败：' + ((e && e.message) || e);
+    upd.failed = true;
   }
 }
 
@@ -528,6 +535,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
         <div class="integrity-head">
           <Icon name="info" :size="14" />
           <span class="integrity-title">{{ t('完整性检查发现以下问题') }}（{{ state.integrity.issues.length }}）</span>
+          <button class="btn sm" @click="runIntegrity"><Icon name="redo" :size="13" /> {{ t('重新检查') }}</button>
           <button class="btn sm danger" @click="repairIntegrity">{{ t('一键修复') }}</button>
         </div>
         <div class="integrity-list">
@@ -817,6 +825,9 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
           </div>
           <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
             <span style="font-size:12px;color:var(--stone)">{{ upd.status }}</span>
+            <!-- 走到「失败」或「已启动更新器」都显示重试：更新器窗口内的实际失败应用无法感知，
+                 只要更新未让应用重启成功（成功会重启到新版本，此态自然消失），即可点重试重新发起 -->
+            <button v-if="upd.failed || upd.launched" class="btn sm primary" @click="updLaunch"><Icon name="redo" :size="13" /> {{ t('重试') }}</button>
           </div>
         </div>
       </div>

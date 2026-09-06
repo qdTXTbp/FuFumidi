@@ -94,38 +94,49 @@ function createIntegrity(deps) {
     }
 
     // 4) 核心安装文件自检（仅打包环境）：app.asar 缺失/过小 = 更新中断或文件损坏 →
-    //    引导用户重新下载安装最新版（点击「一键修复」→ repair 返回 reinstall → 前端弹窗重装）
+    //    引导用户重新下载安装最新版（点击「一键修复」→ repair 返回 reinstall → 前端弹窗重装）。
+    //    更新器替换 75MB 的 asar 需数秒，检查恰逢替换瞬时可能读到半写/缺失文件 → 纯 stat 会误报。
+    //    因此：① 对 stat/大小/头 均带多次重试；② 用真正解析「头部内嵌 JSON」来判定完整性，
+    //    半写文件的 JSON 必 parse 失败，远比仅看 3 个 uint32 可靠。
     const asarPath = getAppAsarPath && getAppAsarPath();
     if (asarPath) {
       const isCorrupt = () => ({ id: 'core-corrupt', severity: 'warn', canRepair: true, path: asarPath });
       const isMissing = () => ({ id: 'core-missing', severity: 'warn', canRepair: true, path: asarPath });
-      try {
-        // 安装器/更新器替换 app.asar 采用「写临时 → 删旧 → 改名」，瞬间 statSync 可能 ENOENT 或读到半写文件。
-        // 重试 3 次（共约 360ms）规避瞬态误报；仍失败才判 core-missing。
-        let st = null;
-        for (let i = 0; i < 3 && !st; i++) {
-          try { st = fs.statSync(asarPath); }
-          catch (e) {
-            if (i < 2) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 120); }
-          }
-        }
-        if (!st) { issues.push(isMissing()); return { ok: issues.length === 0, issues }; }
-        let bad = st.size < 1 * 1024 * 1024;
-        if (!bad) {
-          // 二次校验 asar 文件头（Electron asar 格式）：
-          //   bytes 0-3  pickle 头恒为 4；bytes 4-7  headerSize；bytes 12-15  JSON header 长度
-          //   正常文件 headerSize 应大于 0 且远小于文件总大小，避免「占位/截断但体积足够」的漏判
+      const waitMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+      // 尝试 N 次读取并解析 asar 头；任一次成功即认为健康（规避替换窗口的瞬时半写/ENOENT）
+      let bad = true, anyErr = null;
+      for (let attempt = 0; attempt < 4 && bad; attempt++) {
+        if (attempt > 0) waitMs(400);
+        try {
+          const st = fs.statSync(asarPath);
+          if (st.size < 1 * 1024 * 1024) { bad = true; continue; }   // 过小 = 半写/损坏
           const hdr = Buffer.alloc(16);
           const fd = fs.openSync(asarPath, 'r');
           try { fs.readSync(fd, hdr, 0, 16, 0); } finally { fs.closeSync(fd); }
+          // asar 头（实测布局，全员为小端）：
+          //   bytes0-3  = 4（pickle 头）
+          //   bytes4-7  = headerSize
+          //   bytes8-11 = headerSize - 4
+          //   bytes12-15= jsonSize（header JSON 长度）
+          //   JSON 本体从偏移 16 起、长 jsonSize，首个键为 "files"
+          const marker = hdr.readUInt32LE(0);
           const headerSize = hdr.readUInt32LE(4);
           const jsonSize = hdr.readUInt32LE(12);
-          if (hdr.readUInt32LE(0) !== 4 || headerSize <= 0 || headerSize > st.size || jsonSize <= 0 || jsonSize > st.size) bad = true;
-        }
-        if (bad) issues.push(isCorrupt());
-      } catch (e) {
-        issues.push(isMissing());
+          const badHdr = (marker !== 4) || !(headerSize > 0 && headerSize <= st.size) || !(jsonSize > 0 && jsonSize <= st.size);
+          let ok = false;
+          if (!badHdr && 16 + jsonSize <= st.size) {
+            const buf = Buffer.alloc(jsonSize);
+            const f2 = fs.openSync(asarPath, 'r');
+            try { fs.readSync(f2, buf, 0, jsonSize, 16); } finally { fs.closeSync(f2); }
+            try {
+              const j = JSON.parse(buf.toString('utf8'));
+              ok = !!(j && typeof j === 'object' && 'files' in j);   // 半写文件 JSON parse 必抛或缺 files
+            } catch (e) { ok = false; }
+          }
+          bad = !ok;   // 任一字段非法或 JSON 解析失败 → 本次尝试判定为损坏，进入重试
+        } catch (e) { bad = true; anyErr = e; }
       }
+      if (bad) issues.push(anyErr && (anyErr.code === 'ENOENT') ? isMissing() : isCorrupt());
     }
 
     return { ok: issues.length === 0, issues };
