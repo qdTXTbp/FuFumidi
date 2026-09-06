@@ -185,12 +185,14 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
 <template>
   <div class="page">
     <!-- 大音色解析需短暂占用主线程，期间给出遮罩提示，避免误以为卡死 -->
+    <Transition name="fade">
     <div v-if="busySf" class="sf-busy-mask">
       <div class="sf-busy-box">
         <Icon name="music" :size="18" />
         <span>{{ t('正在加载音色库…首次解析大音色需要几秒，请稍候') }}</span>
       </div>
     </div>
+    </Transition>
     <div class="page-head">
       <div class="page-ic"><Icon name="music" :size="20" /></div>
       <div>
@@ -313,6 +315,9 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
 .sf-tile-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.15s linear; }
 .sf-tile-err { font-size: 10.5px; color: var(--error); word-break: break-all; }
 .sf-busy-mask { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--bg) 55%, transparent); backdrop-filter: blur(2px); }
+/* 加载遮罩淡入淡出 */
+.fade-enter-active, .fade-leave-active { transition: opacity .18s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 .sf-busy-box { display: flex; align-items: center; gap: 10px; background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 600; padding: 14px 20px; border-radius: 12px; border: 1px solid var(--hairline); box-shadow: 0 8px 30px rgba(0,0,0,0.14); animation: sf-busy-pulse 1.2s ease-in-out infinite; }
 @keyframes sf-busy-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
 </style>

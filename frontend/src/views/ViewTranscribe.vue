@@ -42,8 +42,8 @@ async function refreshModelStatus() {
       for (const m of arr) {
         if (m && m.id) modelStatus[m.id] = !!m.exists;
       }
-      // 音频处理可选模型（含介绍/安装态）
-      const sepArr = (arr || []).filter(m => m.kind === 'separate').map(m => ({ ...m }));
+      // 音频处理可选模型（分离 + 修复·VR）：kind 为 separate（人声分离）或 other（修复·VR）均可选用
+      const sepArr = (arr || []).filter(m => m.kind === 'separate' || m.kind === 'other').map(m => ({ ...m }));
       sepModels.value = sepArr;
       if (!sepArr.some(m => m.id === sepModel.value)) {
         sepModel.value = (sepArr.find(m => m.exists) || sepArr[0] || {}).id || '';
@@ -79,6 +79,7 @@ const sepModels = ref([]);                          // 可选模型列表（含�
 const sepPickerOpen = ref(false);                   // 模型选择抽屉
 const currentSep = computed(() => sepModels.value.find(m => m.id === sepModel.value));
 function sepKindIcon(m) { return (m && m.id !== 'demucs_htdemucs') ? 'mic' : 'music'; }
+function sepKindName(m) { return m && m.kind === 'other' ? t('修复·VR') : t('人声分离'); }
 function pickSep(m) {
   if (!m) return;
   if (!m.exists) { toast(t('该模型未下载，请先到') + t('模型管理') + t('下载'), 'warn'); return; }
@@ -1030,6 +1031,7 @@ onBeforeUnmount(() => {
                 <div class="si-head">
                   <span class="si-ic"><Icon :name="sepKindIcon(m)" :size="14" /></span>
                   <span class="si-arch">{{ m.arch }}</span>
+                  <span class="si-kind" :class="m.kind === 'other' ? 'vr' : ''">{{ sepKindName(m) }}</span>
                   <span class="si-pill" :class="m.exists ? 'on' : 'off'">{{ m.exists ? t('已下载') : t('未下载') }}</span>
                 </div>
                 <div class="si-name">{{ m.name }}<span v-if="m.best" class="si-best" title="该领域效果最佳">👑 {{ m.best }}</span></div>
@@ -1388,8 +1390,8 @@ onBeforeUnmount(() => {
 .tr-log-scroll .err { color: var(--error); }
 .tr-rf-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .rf-path { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
-.preset-mgr-overlay { position: fixed; inset: 0; z-index: 120; background: rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center; padding: 24px; }
-.preset-mgr-card { width: 560px; max-width: 94vw; max-height: 82vh; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 16px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden; }
+.preset-mgr-overlay { position: fixed; inset: 0; z-index: 120; background: rgba(0,0,0,0.35); -webkit-backdrop-filter: blur(8px) saturate(1.4); backdrop-filter: blur(8px) saturate(1.4); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.preset-mgr-card { width: 560px; max-width: 94vw; max-height: 82vh; background: var(--glass-bg-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid color-mix(in srgb, #fff 26%, transparent); border-radius: 16px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden; }
 .preset-mgr-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--hairline); color: var(--ink); font-size: 14px; }
 .preset-mgr-list { flex: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
 .preset-mgr-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); }
@@ -1405,8 +1407,8 @@ onBeforeUnmount(() => {
 .sep-pick .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .sep-pick .grow b { font-size: 13px; color: var(--ink); }
 .sep-pick .grow small { font-size: 11px; color: var(--stone); }
-.sep-scrim { position: fixed; inset: 0; z-index: 140; background: rgba(8,10,16,.45); display: flex; align-items: center; justify-content: center; padding: 24px; }
-.sep-pane { width: 540px; max-width: 94vw; max-height: 84vh; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 16px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden; }
+.sep-scrim { position: fixed; inset: 0; z-index: 140; background: rgba(8,10,16,.45); -webkit-backdrop-filter: blur(8px) saturate(1.4); backdrop-filter: blur(8px) saturate(1.4); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.sep-pane { width: 540px; max-width: 94vw; max-height: 84vh; background: var(--glass-bg-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid color-mix(in srgb, #fff 26%, transparent); border-radius: 16px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden; }
 .sep-head { display: flex; align-items: center; gap: 8px; padding: 13px 16px; border-bottom: 1px solid var(--hairline); font-size: 14px; color: var(--ink); }
 .sep-hint { font-size: 11.5px; color: var(--stone); padding: 8px 16px; background: var(--surface-soft); border-bottom: 1px solid var(--hairline); }
 .sep-list { flex: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 9px; }
@@ -1417,7 +1419,9 @@ onBeforeUnmount(() => {
 .si-head { display: flex; align-items: center; gap: 7px; }
 .si-ic { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; border-radius: 7px; background: var(--surface-soft); color: var(--accent); }
 .si-arch { font-size: 10px; font-weight: 600; color: var(--stone); text-transform: uppercase; letter-spacing: .2px; font-family: var(--mono); }
-.si-pill { margin-left: auto; font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 20px; }
+.si-kind { margin-left: auto; font-size: 9.5px; font-weight: 700; padding: 1px 7px; border-radius: 20px; background: color-mix(in srgb, var(--brand-coral) 12%, transparent); color: var(--brand-coral); }
+.si-kind.vr { background: color-mix(in srgb, #8b5cf6 14%, transparent); color: #8b5cf6; }
+.si-pill { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 20px; }
 .si-pill.on { background: color-mix(in srgb, var(--ok,#22c55e) 16%, transparent); color: var(--ok,#16a34a); }
 .si-pill.off { background: var(--surface-soft); color: var(--stone); }
 .si-name { font-size: 12.5px; font-weight: 700; color: var(--ink); margin-top: 5px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }

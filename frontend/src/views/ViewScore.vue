@@ -585,12 +585,14 @@ onBeforeUnmount(() => {
       <button class="btn sm" @click="showOpts = !showOpts" :title="t('显示选项')">
         <Icon name="eye" :size="14" />{{ t('显示') }}
       </button>
+      <Transition name="pop">
       <div v-if="showOpts" class="score-pop" @mouseleave="showOpts = false">
         <label><input type="checkbox" v-model="opts.simple" @change="changeMode()" />{{ t('简化记谱') }}</label>
         <label><input type="checkbox" v-model="opts.grid" @change="changeMode()" />{{ t('四分音符网格') }}</label>
         <label><input type="checkbox" v-model="opts.beam" @change="changeMode()" />{{ t('自动连线') }}</label>
         <label><input type="checkbox" v-model="opts.multi" @change="changeMode()" />{{ t('多轨显示') }}</label>
       </div>
+      </Transition>
 
       <span class="sep"></span>
       <button class="btn sm" @click="importMusicXML" :disabled="midiBusy" :title="t('导入 MusicXML 文件')">
@@ -729,6 +731,9 @@ onBeforeUnmount(() => {
 }
 .score-pop label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .score-pop input { accent-color: var(--ink); }
+/* 显示选项下拉开合动画 */
+.pop-enter-active, .pop-leave-active { transition: opacity .14s ease, transform .18s cubic-bezier(.2,.9,.3,1.18); transform-origin: top right; }
+.pop-enter-from, .pop-leave-to { opacity: 0; transform: scale(.96) translateY(-5px); }
 
 .score-scroll { flex: 1; overflow: auto; padding: 6px 10px 20px; }
 .score-block { margin-bottom: 14px; border-bottom: 1px dashed var(--hairline); padding-bottom: 8px; }

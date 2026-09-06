@@ -68,6 +68,7 @@ function about() {
     </button>
 
     <Teleport to="body">
+    <Transition name="mnu">
     <div v-if="menuOpen" class="menu-pop" @click.self="menuOpen = false">
       <div class="menu-pop-title">{{ t('快速跳转') }}</div>
       <button class="menu-pop-item" @click="go('transcribe')"><Icon name="transcribe" :size="14" /> {{ t('音频转 MIDI（转录）') }}</button>
@@ -90,6 +91,7 @@ function about() {
       <div class="menu-pop-title">帮助</div>
       <button class="menu-pop-item" @click="about"><Icon name="info" :size="14" /> {{ t('关于本工具') }}</button>
     </div>
+    </Transition>
     </Teleport>
   </header>
 </template>
@@ -134,4 +136,7 @@ function about() {
 }
 .menu-pop-item:hover { background: var(--surface-soft); }
 .menu-pop-div { height: 1px; background: var(--hairline); margin: 6px 4px; }
+/* 弹出菜单开合动画（右上锚点轻缩放 + 淡入淡出） */
+.mnu-enter-active, .mnu-leave-active { transition: opacity .14s ease, transform .18s cubic-bezier(.2,.9,.3,1.18); transform-origin: top right; }
+.mnu-enter-from, .mnu-leave-to { opacity: 0; transform: scale(.96) translateY(-6px); }
 </style>

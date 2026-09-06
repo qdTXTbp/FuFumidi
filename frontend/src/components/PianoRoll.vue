@@ -83,10 +83,20 @@ function draw() {
   const xOf = tick => (tick - viewStart) / (viewEnd - viewStart) * W;
 
   const brandColors = ['#ff5530', '#ea5ec1', '#1456f0', '#a855f7', '#3daeff', '#1ba673', '#3b82f6', '#f59e0b', '#d45656', '#17437d'];
+  // 大文件裁剪：notes 按 start 升序，只遍历视口附近区间（前/后各留一个视口宽），避免每帧全量扫描
+  const winTic = viewEnd - viewStart;
   for (const tr of song.tracks) {
     const color = tr.index < 10 ? brandColors[tr.index] : '#8e8e93';
+    const ns = tr.notes;
+    if (!ns.length) continue;
+    let hi2 = 0, lo2 = ns.length;
+    while (lo2 < hi2) { const m = (lo2 + hi2) >> 1; if (ns[m].start <= viewEnd) lo2 = m + 1; else hi2 = m; }
+    const up = lo2;
+    let a2 = 0, b2 = up, t0lo = viewStart - winTic;
+    while (a2 < b2) { const m = (a2 + b2) >> 1; if (ns[m].start < t0lo) a2 = m + 1; else b2 = m; }
     const alpha = 0.9;
-    for (const n of tr.notes) {
+    for (let k = a2; k < up; k++) {
+      const n = ns[k];
       if (n.end < viewStart || n.start > viewEnd) continue;
       const x = xOf(n.start), w2 = Math.max(2, xOf(n.end) - x);
       const y = (hiNote - n.midi) * rowH;

@@ -357,16 +357,28 @@ function draw() {
       ctx2d.fillText((props.ksMap[m] || '').slice(0, 10), 52, y + rowH.value - 3);
     }
   }
-  // 音符
+  // 音符（大文件裁剪：notes 按 start 升序，仅遍历视口附近区间，避免每帧全量扫描）
+  // viewT0/viewT1 已在网格段声明；winTic = 一个屏幕宽的 tick，作为向前回退窗口（覆盖跨屏长音）
+  const winTic = viewT1 - viewT0;
   for (const tr of s.tracks) {
     const col = noteColor(tr.index);
-    for (const n of tr.notes) {
+    const ns = tr.notes;
+    if (!ns.length) continue;
+    // 上界：start <= viewT1
+    let lo = 0, hi = ns.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (ns[m].start <= viewT1) lo = m + 1; else hi = m; }
+    // 下界：start >= viewT0 - 一个屏幕宽
+    let a = 0, b = lo, t0lo = viewT0 - winTic;
+    while (a < b) { const m = (a + b) >> 1; if (ns[m].start < t0lo) a = m + 1; else b = m; }
+    const isCur = tr === curTrack();
+    for (let k = a; k < lo; k++) {
+      const n = ns[k];
       const x = tickToX(n.start), w2 = Math.max(2, tickToX(n.end) - x);
       const y = (hi - n.midi) * rowH.value;
       if (x > W || x + w2 < 0) continue;
-      const sel = tr === curTrack() && selection.has(n);
+      const sel = isCur && selection.has(n);
       ctx2d.globalAlpha = 0.85;
-      ctx2d.fillStyle = tr === curTrack() ? col : steel;
+      ctx2d.fillStyle = isCur ? col : steel;
       ctx2d.fillRect(x, y + 1, w2, rowH.value - 2);
       ctx2d.globalAlpha = 1;
       if (sel) {

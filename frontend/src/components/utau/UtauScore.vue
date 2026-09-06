@@ -613,6 +613,7 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
     </div>
 
     <!-- 右键菜单 -->
+    <Transition name="ctxmenu">
     <div v-if="ctxOpen" class="us-ctx" :style="{ left: ctxX + 'px', top: ctxY + 'px' }"
       @pointerdown.stop @contextmenu.prevent>
       <button class="us-ctx-i" :disabled="!store.undoStack.length" @click="store.undo(); closeCtx()"><Icon name="undo" :size="13" /> {{ t('撤销') }}</button>
@@ -626,6 +627,7 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
       <button class="us-ctx-i" :disabled="!ctxOnNote" @click="onDblFromCtx(); closeCtx()">{{ t('编辑歌词') }}</button>
       <button class="us-ctx-i danger" :disabled="!ctxOnNote" @click="delSelected(); closeCtx()">{{ t('删除音符') }}</button>
     </div>
+    </Transition>
 
     <!-- 曲库选择：选一首 MIDI 作为基底旋律 -->
     <Transition name="ov">
@@ -671,6 +673,9 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
 .us-ctx-i.danger { color: #d33; }
 .us-ctx-i.danger:hover:not(:disabled) { background: rgba(211,51,51,0.1); color: #d33; }
 .us-ctx-sep { height: 1px; background: var(--border); margin: 3px 6px; }
+/* 右键菜单开合动画（从触发点轻缩放弹出） */
+.ctxmenu-enter-active, .ctxmenu-leave-active { transition: opacity .12s ease, transform .14s cubic-bezier(.2,.9,.3,1.18); transform-origin: left top; }
+.ctxmenu-enter-from, .ctxmenu-leave-to { opacity: 0; transform: scale(.94) translate(-3px, -3px); }
 
 /* 曲库选择浮层 */
 .us-lib-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.4); display: flex; align-items: center; justify-content: center; z-index: 60; }

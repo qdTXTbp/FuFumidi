@@ -275,6 +275,8 @@ export class Synth {
     this.sf2Ready = false;
     this.sf2Loading = null;
     this.sf2Node = null;
+    // 待触发的 SF2 note-on 定时器（用于调度：音符必须按绝对时间发声，与内置合成器一致）
+    this._sf2Pending = [];
   }
   // 指定加载的音色：'internal'（内置合成器）或 SF2 来源（网页相对路径 / 桌面绝对路径 / URL）。
   // 由音色工坊切换并持久化（settings.active_soundfont）。
@@ -379,14 +381,29 @@ export class Synth {
     this.ensure(note.trk + 1);
     if (this.sf2Ready && this.sf2) {
       const ch = Math.min(15, note.trk || 0);
-      try {
-        if (note.isDrum) this.sf2.midiSetChannelType(ch, true);
-        else if (note.prog != null) this.sf2.midiProgramChange(ch, note.prog);
-        this.sf2.midiNoteOn(ch, note.midi, note.vel);
-      } catch (e) {}
-      const delay = Math.max(0, (endTime - this.ctx.currentTime) * 1000);
-      const timer = setTimeout(() => { try { this.sf2 && this.sf2.midiNoteOff(ch, note.midi); } catch (e) {} }, delay);
-      this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, start: time, endTime, timer, sf2: true, ch });
+      // 调度到与内置合成器一致的绝对发声时刻：播放器 lookahead 会把音符提前 0~0.18s
+      // 传入，若立即触发会导致音符提前发声、节奏与内置合成器不一致。
+      // JSSynth 无「按绝对时间 note-on」API，故用 setTimeout 补足；禁止把音符发在起点之前。
+      const onTime = Math.max(this.ctx.currentTime, time);
+      const delayOn = Math.max(0, (onTime - this.ctx.currentTime) * 1000);
+      const sendOff = () => {
+        if (!this.sf2) return;
+        try { this.sf2.midiNoteOff(ch, note.midi); } catch (e) {}
+      };
+      if (delayOn === 0) {
+        // onTime 即当前时刻：立即触发（跳转/快速变速后追赶音符）
+        try { if (note.isDrum) this.sf2.midiSetChannelType(ch, true); else if (note.prog != null) this.sf2.midiProgramChange(ch, note.prog); this.sf2.midiNoteOn(ch, note.midi, note.vel); } catch (e) {}
+        const offTimer = setTimeout(sendOff, Math.max(0, (Math.max(endTime, onTime + 0.06) - onTime) * 1000));
+        this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, start: onTime, endTime, timer: offTimer, sf2: true, ch });
+      } else {
+        const onTimer = setTimeout(() => {
+          if (!this.sf2) return;
+          try { if (note.isDrum) this.sf2.midiSetChannelType(ch, true); else if (note.prog != null) this.sf2.midiProgramChange(ch, note.prog); this.sf2.midiNoteOn(ch, note.midi, note.vel); } catch (e) {}
+          const offTimer = setTimeout(sendOff, Math.max(0, (Math.max(endTime, onTime + 0.06) - onTime) * 1000));
+          this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, start: onTime, endTime, timer: offTimer, sf2: true, ch });
+        }, delayOn);
+        this._sf2Pending.push(onTimer);
+      }
       return;
     }
     const preset = presetFromMode('auto', note.prog, note.isDrum);
@@ -427,6 +444,9 @@ export class Synth {
   allStop() {
     const t = this.ctx.currentTime;
     for (const x of this.live) { if (x.tStop > t) { try { x.o.stop(); } catch (e) {} } }
+    // 取消尚未触发的 SF2 note-on（跳转/暂停/停止时，避免 antedated 音符稍后误发声）
+    for (const tm of this._sf2Pending) { try { clearTimeout(tm); } catch (e) {} }
+    this._sf2Pending = [];
     for (const a of this.activeNotes) { if (a.timer) { try { clearTimeout(a.timer); } catch (e) {} } if (a.sf2 && a.ch != null) { try { this.sf2 && this.sf2.midiNoteOff(a.ch, a.midi); } catch (e) {} } }
     this.live = [];
     this.activeNotes = [];

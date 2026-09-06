@@ -47,6 +47,7 @@ _ARCH_TABLE = {
     "bsroformer": "bs_roformer",
     "uvr": "vr",
     "vr": "vr",
+    "uvrvr": "vr",
 }
 
 

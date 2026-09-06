@@ -162,6 +162,9 @@ function next() {
     </div>
 
     <!-- 混音台弹窗 -->
+    <!-- 必须 Teleport 到 body：.playerbar 带 backdrop-filter，会为 fixed 后代创建包含块，
+         导致 fixed 覆盖层被限制在播放条内而无法正常弹出（与 SideBar 弹窗做法一致） -->
+    <Teleport to="body">
     <Transition name="ov">
       <div v-if="mixerOpen" class="mx-overlay" @click.self="mixerOpen = false">
       <div class="mx-card">
@@ -194,6 +197,7 @@ function next() {
       </div>
       </div>
     </Transition>
+    </Teleport>
   </footer>
 </template>
 
@@ -203,13 +207,17 @@ function next() {
 .mx-overlay {
   position: fixed; inset: 0; z-index: 90;
   background: rgba(10, 10, 10, 0.28);
+  -webkit-backdrop-filter: blur(8px) saturate(1.4); backdrop-filter: blur(8px) saturate(1.4);
   display: flex; align-items: flex-end; justify-content: flex-end;
   padding: 0 14px calc(var(--playerbar-h) + 14px) 0;
 }
 .mx-card {
   width: 480px; max-width: calc(100vw - 28px); max-height: 58vh; overflow-y: auto;
-  background: var(--canvas); color: var(--ink);
-  border: 1px solid var(--hairline); border-radius: 16px;
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+  color: var(--ink);
+  border: 1px solid color-mix(in srgb, #fff 26%, transparent);
+  border-radius: 16px;
   box-shadow: var(--shadow-lg); padding: 14px;
 }
 .mx-head {
