@@ -7,6 +7,7 @@
 const LS_THEME = 'fufumidi_theme';
 const LS_ACCENT = 'fufumidi_accent';
 const LS_MODE = 'fufumidi_mode';
+const LS_CUSTOM_HUE = 'fufumidi_custom_hue';
 
 export const THEMES = [
   { id: 'fufu',    name: '芙芙蓝', desc: '芙宁娜 · 蔚蓝深海',   accent: '#4f94e0', accent2: '#8fc0f0', hue: 213 },
@@ -23,6 +24,18 @@ export const THEMES = [
 ];
 
 export function themeById(id) { return THEMES.find(t => t.id === id) || THEMES[0]; }
+
+// 自定义主题（图片提取）的 hue 持久化在 localStorage，供调色板与预览共用
+export function saveCustomHue(h) { try { localStorage.setItem(LS_CUSTOM_HUE, String(Math.round(h) || 0)); } catch (e) {} }
+export function loadCustomHue() {
+  try { const v = parseInt(localStorage.getItem(LS_CUSTOM_HUE) || '', 10); if (Number.isFinite(v)) return v; } catch (e) {}
+  return 213;
+}
+// 内置主题用自带 hue；自定义主题（不在 THEMES 中）用存储 hue
+function hueOf(name, fallbackHue) {
+  if (THEMES.some(x => x.id === name)) return fallbackHue;
+  return loadCustomHue();
+}
 
 // 由 hue 生成同色系辅助色 + 深色画布（饱和度/明度参数化，保证深浅层次）
 function hsl(h, s, l, a) { return a != null ? `hsla(${h},${s}%,${l}%,${a})` : `hsl(${h},${s}%,${l}%)`; }
@@ -52,37 +65,47 @@ export function paletteFromAccent(accentHex, hue) {
   };
 }
 
-// 应用主题：把调色板写成 CSS 变量（含原令牌里的强调色族）——纯应用，不做持久化
+// 统一入口：主题 + 明暗模式 → 完整调色板（applyTheme 与主题库预览共用一份逻辑）
 // mode：'light' 浅色基底 / 'dark' 深色基底；默认浅色（明亮浅色，接近经典版观感）
-export function applyTheme(name, accent, mode) {
-  if (typeof document === 'undefined') return;
+export function paletteFor(name, accent, mode) {
   const t = themeById(name);
-  const R = document.documentElement.style;
   const a = accent || t.accent;
-  const lightMode = (mode || 'light') === 'light';
-  let pal;
+  const h = hueOf(name, t.hue);
   if (name === 'hc') {
-    pal = {
+    return {
       accent: a, accent2: '#66ffdd', 'accent-dim': 'rgba(0,255,204,.2)',
       bg0: '#000000', bg1: '#0a0a0a', bg2: '#111111', panel: '#151515', panel2: '#111111',
       card: '#1c1c1c', card2: '#262626', border: '#4a4a4a', border2: '#6b6b6b',
       text: '#ffffff', text2: '#f1f5f9', text3: '#cbd5e1',
       'brand-blue-mid': '#3b82f6', 'brand-blue-deep': '#1d4ed8', 'brand-blue-700': '#17437d', 'brand-blue-200': '#bfdbfe',
     };
-  } else if (lightMode) {
+  }
+  if ((mode || 'light') === 'light') {
     // 浅色基底 + 任意主题强调色（明亮浅色，适合白天 / 经典浅色观感）
-    const h = t.hue;
-    pal = {
+    return {
       accent: a, accent2: hsl(h, 85, 74), 'accent-dim': `hsla(${h}, 70%, 60%, 0.16)`,
       bg0: '#f4f7fb', bg1: '#ffffff', bg2: '#eef2f7', panel: '#ffffff', panel2: '#eef2f7',
       card: '#ffffff', card2: '#e8edf4', border: '#dbe3ee', border2: '#c9d4e2',
       text: '#0f172a', text2: '#334155', text3: '#64748b',
       'brand-blue-mid': '#3b82f6', 'brand-blue-deep': '#1d4ed8', 'brand-blue-700': '#17437d', 'brand-blue-200': '#bfdbfe',
     };
-  } else {
-    pal = paletteFromAccent(a, t.hue);
-    if (accent) { pal.accent = accent; pal['accent-dim'] = accent + '24'; }
   }
+  const pal = paletteFromAccent(a, h);
+  if (accent) { pal.accent = accent; pal['accent-dim'] = accent + '24'; }
+  return pal;
+}
+
+// 主题库预览用调色板（与实际应用完全一致）
+export function themePreviewPal(th, mode) {
+  return paletteFor(th.id, th.custom ? th.accent : '', mode);
+}
+
+// 应用主题：把调色板写成 CSS 变量（含原令牌里的强调色族）——纯应用，不做持久化
+export function applyTheme(name, accent, mode) {
+  if (typeof document === 'undefined') return;
+  const R = document.documentElement.style;
+  const lightMode = (mode || 'light') === 'light';
+  const pal = paletteFor(name, accent, mode);
 
   // 旧令牌（保持 canvas 引擎/旧组件兼容）
   const legacy = {
@@ -167,14 +190,6 @@ export function setMode(mode) {
     window.fuBridge.saveSettings({ ui_mode: m }).catch(() => {});
   }
   return m;
-}
-
-// 内置主题预览条色块
-export function themeSwatches(t) {
-  const pal = t.id === 'light' ? { bg0: '#f4f7fb', card: '#ffffff', border2: '#b8c4d4', accent: t.accent, accent2: t.accent2 }
-    : t.id === 'hc' ? { bg0: '#000000', card: '#1c1c1c', border2: '#6b6b6b', accent: t.accent, accent2: t.accent2 }
-    : paletteFromAccent(t.accent, t.hue);
-  return [pal.bg0, pal.card, pal.border2, pal.accent, pal.accent2];
 }
 
 // 图片提取主色：canvas 缩到 8×8，收集较饱和像素取平均色 → 提升饱和度与亮度 → 主色

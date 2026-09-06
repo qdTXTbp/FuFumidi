@@ -11,8 +11,8 @@
 </head>
 <body>
 <div id="app"></div>
-<script src="./vendor/js-synth/libfluidsynth-2.4.6-with-libsndfile.js"></script>
-<script src="./vendor/js-synth/js-synthesizer.min.js"></script>
+<!-- js-synth（libfluidsynth ~2.4MB）改为按需懒加载：仅启用 SF2 音色库时由 core/synth.js
+     动态注入。同步加载会阻塞 Vue 首帧渲染（module 脚本必须等同步脚本执行完），拖慢启动。 -->
 <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

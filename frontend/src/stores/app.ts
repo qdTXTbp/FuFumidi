@@ -511,6 +511,12 @@ export const useAppStore = defineStore('app', {
       player.syn.setTrackPan(i, v);
     },
     setView(v: string) {
+      if (v !== this.view && this.playing) {
+        // 播放中切页：预排最多 2s 音频再切入。目标视图的同步初始化（乐谱渲染、
+        // 可视化挂载等）可能阻塞主线程数百毫秒~1s+，远超 0.18s 预排窗口，此前
+        // 会出现断流卡顿；预排音符由 Web Audio 渲染线程发声，不受阻塞影响。
+        try { const { player } = ensureAudio(); player.bumpAhead(); } catch (e) {}
+      }
       this.view = viewParentOf(v);
       const tab = OLD_VIEW_TO_PARENT[v] || '';
       this.syncHash(tab);
@@ -529,8 +535,15 @@ export const useAppStore = defineStore('app', {
     },
     startTickLoop() {
       if (_raf) return;
+      let last = 0;
       const tick = () => {
-        if (this.playing) {
+        // 播放进度以 ~30fps 节流写入响应式状态：原来 60fps 逐帧写 reactive 会让所有依赖
+        // 组件（播放栏时间/进度条等）每帧重算，是播放时主线程持续占用、切界面卡顿的
+        // 主因之一。30fps 对进度显示无视觉差别，响应式开销减半。逐帧平滑动画的视图
+        // （可视化/歌词/卷帘）各自有独立绘制循环直接读 player，不受影响。
+        const now = performance.now();
+        if (this.playing && !document.hidden && now - last >= 33) {
+          last = now;
           const { player } = ensureAudio();
           const s = this.currentSong && this.currentSong.song;
           if (player && s) {

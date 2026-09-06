@@ -24,6 +24,13 @@ export class Player {
     this.onEnd = null; this._timer = null;
     // 硬件 MIDI 输出等外部旁听回调：onNote(n, noteTime, noteEndTime) / onStop()
     this.onNote = null; this.onStop = null;
+    // 预排窗口（秒）：基础 1.0s。主线程被重操作（切页 / 乐谱重绘）阻塞时，阻塞期间无法
+    // 调度新音符——窗口越大，可容忍的阻塞越长（音符节点由 Web Audio 渲染线程按绝对时间
+    // 发声；SF2 worklet 路径则把事件写入音频线程音序器）。bumpAhead 在可预见的重操作前
+    // 临时扩到 2.5s。
+    this.AHEAD_BASE = 1.0;
+    this.aheadSec = this.AHEAD_BASE;
+    this._aheadTimer = null;
   }
   load(song) { this.song = song; this.pausedTick = 0; this.loop = false; this.loopStart = 0; this.loopEnd = 0; this.prepare(); }
   prepare() {
@@ -41,6 +48,7 @@ export class Player {
     this.startTick = this.pausedTick;
     this.startSec = this.ctx.currentTime + 0.05;
     this.cursor = this._firstIndex(this.startTick);
+    this._cbCursor = this.cursor;
     this.metroBeat = Math.max(0, Math.ceil(this.startTick / this.song.tpb));
     this.syn.applyRouting();
     clearInterval(this._timer);
@@ -57,8 +65,28 @@ export class Player {
     this.playing = false;
     this.pausedTick = tick;
     clearInterval(this._timer); this._timer = null;
+    clearTimeout(this._aheadTimer); this._aheadTimer = null; this.aheadSec = this.AHEAD_BASE;
     this.syn.allStop();
     if (this.onStop) this.onStop();
+  }
+  // 临时扩大预排窗口并立即预排一次：用于切页/重渲染等即将阻塞主线程的场景，
+  // 预排的音符由 Web Audio 渲染线程按绝对时间发声，主线程阻塞不断流。
+  bumpAhead(sec = 2.5, ms = 6000) {
+    if (!this.playing) return;
+    this.aheadSec = sec;
+    // SF2 ScriptProcessor 回退路径的音符经主线程 setTimeout 触发，同步放宽迟到容忍度
+    // 避免成片掉音（worklet 音序器路径不受影响）；内联合成器同步放宽 live 修剪上限，
+    // 避免预排的待发声振荡器被提前杀掉。
+    if (this.syn) {
+      this.syn._sf2LateTol = Math.min(0.3, sec * 0.15);
+      this.syn._liveLimit = 1500;
+    }
+    clearTimeout(this._aheadTimer);
+    this._aheadTimer = setTimeout(() => {
+      this.aheadSec = this.AHEAD_BASE;
+      if (this.syn) { this.syn._sf2LateTol = 0.04; this.syn._liveLimit = 1024; }
+    }, ms);
+    this._sched();
   }
   stop() { this.pause(); this.pausedTick = 0; }
   seekTick(tick) {
@@ -75,6 +103,7 @@ export class Player {
     this.startTick = tick;
     this.startSec = this.ctx.currentTime + 0.05;
     this.cursor = this._firstIndex(tick);
+    this._cbCursor = this.cursor;
     if (this.song) this.metroBeat = Math.max(0, Math.ceil(tick / this.song.tpb));
     this._sched();
   }
@@ -100,7 +129,11 @@ export class Player {
   progress() { return this.song.totalSec ? this.currentSec() / this.song.totalSec : 0; }
   _sched() {
     if (!this.playing) return;
-    const ahead = this.ctx.currentTime + 0.18;
+    // SF2 音序器路径：事件写入音频线程音序器后按绝对 tick 自行分发，预排窗口额外扩到
+    // 30s——主线程长任务（切页 / 乐谱重绘 / 大文件渲染）阻塞远超 aheadSec 也不会断粮。
+    // 其余路径（内置合成器 / ScriptProcessor 回退）维持 aheadSec（预排即创建节点，窗口大内存涨）。
+    const extra = this.syn && this.syn._sf2SeqMode ? 30 : 0;
+    const ahead = this.ctx.currentTime + this.aheadSec + extra;
     const ev = this.events;
     while (this.cursor < ev.length) {
       const n = ev[this.cursor];
@@ -109,8 +142,22 @@ export class Player {
       const e = this.noteEndTime(n);
       if (e < this.ctx.currentTime - 0.03) { this.cursor++; continue; }
       this.syn.noteOn(t, n, e);
-      if (this.onNote) this.onNote(n, t, e);
       this.cursor++;
+    }
+    // 硬件 MIDI 旁听：与可听时刻同步（单独游标，仅推进到可听窗口内的事件才回调），
+    // 否则大预排窗口会让外接音源提前 30s 发声。
+    if (this.onNote) {
+      if (this._cbCursor == null || this._cbCursor > this.cursor) this._cbCursor = this.cursor;
+      while (this._cbCursor < this.cursor) {
+        const n = this.events[this._cbCursor];
+        const t = this.noteTime(n);
+        if (t > this.ctx.currentTime + 0.35) break;
+        const e = this.noteEndTime(n);
+        if (e >= this.ctx.currentTime - 0.03) this.onNote(n, t, e);
+        this._cbCursor++;
+      }
+    } else {
+      this._cbCursor = this.cursor;
     }
     if (this.metro && this.song) {
       const tpb = this.song.tpb;

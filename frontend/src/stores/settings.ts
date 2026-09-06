@@ -37,10 +37,18 @@ export const useSettingsStore = defineStore('settings', {
       Object.assign(this.settings, patch);
       this._syncSoundfontRef();
     },
-    // 把当前音色库选择同步到全局引用，供 audio 初始化时读取加载
+    // 把当前音色库选择同步到全局引用 + localStorage（audio.js 启动时同步直读，规避加载竞态）
     _syncSoundfontRef() {
       if (typeof window === 'undefined') return;
-      window.__fufumidi_activeSoundfont = (this.settings as any).active_soundfont || 'internal';
+      const sf = (this.settings as any).active_soundfont || 'internal';
+      const prevApplied = (window as any).__fufumidi_appliedSoundfont;
+      window.__fufumidi_activeSoundfont = sf;
+      try { localStorage.setItem('fufumidi_soundfont', sf); } catch (e) {}
+      // 启动竞态自愈：restoreSongs→ensureAudio 可能先于本同步执行（引用未就绪 → 按内置初始化）。
+      // 已应用音色与目标不一致时补加载；一致（含任意其他设置保存触发的 save）则跳过，避免 30MB SF2 反复重载。
+      if (prevApplied !== undefined && prevApplied !== sf) {
+        import('../audio').then(({ setActiveSoundfontRef }) => { setActiveSoundfontRef(sf).catch(() => {}); }).catch(() => {});
+      }
     },
   },
 });

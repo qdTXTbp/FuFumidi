@@ -10,6 +10,7 @@ const toast = (m, t) => app.toast(m, t);
 import { clamp } from '../core/util.js';
 import { drawVizWaterfall, drawVizSpectrum, drawVizScope, drawVizChord } from '../core/viz.js';
 import { playVoice, presetFromMode } from '../core/synth.js';
+import { renderSongWithSf2 } from '../core/sf2render.js';
 
 const tempo = ref(1);
 const rate = ref(44100);
@@ -54,6 +55,12 @@ async function renderAudioBuffer(s, opts) {
   const segLen = Math.max(0, endSec - startSec);
   const TAIL = 1.5;
   const totalLen = Math.max(1, Math.ceil((segLen + TAIL) * sr));
+  // 当前播放使用 SF2 音色时，导出优先用同一音色离线渲染（与播放音色一致；
+  // 此前恒用内置合成器渲染，导致导出与试听不符）。返回 null（内置音色）或失败时回退下方内置路径。
+  try {
+    const r = await renderSongWithSf2(s, { rate: sr, scale, startSec, endSec, onProgress: opts.onProgress });
+    if (r) return r;
+  } catch (e) { console.warn('[convert] SF2 离线渲染失败，回退内置合成器：', e && e.message || e); }
   const notes = [];
   for (const tr of s.tracks) {
     const presetName = presetFromMode(opts.mode || 'auto', tr.program, tr.isDrum);
@@ -99,8 +106,12 @@ async function renderAudioBuffer(s, opts) {
 }
 function audioBufferToWavBytes(buf) {
   const chs = buf.numberOfChannels, len = buf.length, sampleRate = buf.sampleRate;
+  // WAV 要求帧交错排列（L0,R0,L1,R1,…）——旧实现按「整条 L + 整条 R」平面写入，
+  // 播放器把左声道当交错流读 → 内容 2 倍速且左右声道各重复一遍（音画/听感全错）
+  const chData = [];
+  for (let c = 0; c < chs; c++) chData.push(buf.getChannelData(c));
   const out = new Float32Array(len * chs);
-  for (let c = 0; c < chs; c++) { const d = buf.getChannelData(c); const o = c * len; for (let i = 0; i < len; i++) out[o + i] = d[i]; }
+  for (let i = 0; i < len; i++) { const o = i * chs; for (let c = 0; c < chs; c++) out[o + c] = chData[c][i]; }
   const ab = new ArrayBuffer(44 + out.length * 2);
   const v = new DataView(ab);
   const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
@@ -121,14 +132,16 @@ function audioBufferToWavBytes(buf) {
 // 异步分块 WAV 编码：避免整段音频转换阻塞主线程导致界面卡死
 async function audioBufferToWavBytesAsync(buf, onProgress, gain = 1) {
   const chs = buf.numberOfChannels, len = buf.length, sampleRate = buf.sampleRate;
+  // 交错排列（修复同 audioBufferToWavBytes 的平面写入 bug）
+  const chData = [];
+  for (let c = 0; c < chs; c++) chData.push(buf.getChannelData(c));
   const out = new Float32Array(len * chs);
-  const CHUNK = 262144;
+  const CHUNK = 131072; // 每块处理的帧数
   for (let start = 0; start < len; start += CHUNK) {
     const end = Math.min(len, start + CHUNK);
-    for (let c = 0; c < chs; c++) {
-      const d = buf.getChannelData(c);
-      const o = c * len;
-      for (let i = start; i < end; i++) out[o + i] = d[i] * gain;
+    for (let i = start; i < end; i++) {
+      const o = i * chs;
+      for (let c = 0; c < chs; c++) out[o + c] = chData[c][i] * gain;
     }
     if (onProgress) onProgress(end / len);
     await new Promise(r => setTimeout(r, 0));
@@ -154,7 +167,7 @@ async function renderAudio() {
   if (busy.value) return;
   busy.value = true; done.value = false; progress.value = 0;
   try {
-    const buf = await renderAudioBuffer(s, { rate: rate.value, scale: tempo.value, mode: preset.value });
+    const buf = await renderAudioBuffer(s, { rate: rate.value, scale: tempo.value, mode: preset.value, onProgress: (p) => { progress.value = Math.round(p * 50); } });
     const g = clamp(gain.value / 100, 0, 2);
     await downloadWav(buf, s.name, g);
     progress.value = 100; done.value = true;
@@ -184,7 +197,8 @@ async function downloadWav(buf, name, g) {
   const bytes = await audioBufferToWavBytesAsync(buf, (p) => { progress.value = Math.max(progress.value, Math.round(p * 100)); }, g);
   const bridge = window.fuBridge;
   if (bridge && bridge.saveBinary) {
-    const r = await bridge.saveBinary({ name: name + '_render.wav', data: Array.from(bytes) });
+    // 直接传 Uint8Array（结构化克隆），避免 Array.from 生成数千万元素数组导致内存暴涨
+    const r = await bridge.saveBinary({ name: name + '_render.wav', data: bytes });
     if (r && r.ok) toast(t('已保存到：') + r.path, 'ok');
     else if (!(r && r.canceled)) toast(t('保存失败：') + ((r && r.error) || ''), 'warn');
     return;
@@ -375,7 +389,7 @@ async function renderVideo() {
     const startSec = VE.range === 'custom' ? (VE.start || 0) : 0;
     // 1) 离线渲染音频：按导出范围切片（[startSec, startSec+sec] 归一化），
     //    与视频长度严格一致，避免整曲渲染后 -shortest 截断导致音乐「被切断/变快」
-    const buf = await renderAudioBuffer(s, { rate: 44100, scale: 1, mode: preset.value, startSec, endSec: startSec + sec });
+    const buf = await renderAudioBuffer(s, { rate: 44100, scale: 1, mode: preset.value, startSec, endSec: startSec + sec, onProgress: (p) => { VE.veProgress = Math.min(10, Math.round(p * 10)); } });
     VE.veProgress = 10;
     const wavBytes = await audioBufferToWavBytesAsync(buf, (p) => { VE.veProgress = Math.min(100, 10 + Math.round(p * 10)); });
     VE.veStage = t('后台录制中（可继续使用应用）…');
@@ -387,7 +401,14 @@ async function renderVideo() {
     cv.style.cssText = 'position:fixed;left:-100000px;top:0;width:' + W + 'px;height:' + H + 'px;z-index:-1;pointer-events:none;';
     document.body.appendChild(cv);
     const ctx = cv.getContext('2d');
-    const stream = cv.captureStream(fps);
+    // 手动帧捕获（captureStream(0) + requestFrame）：移出视口的 canvas 合成呈现延迟可达
+    // 300ms+，自动捕获会把「时间戳=捕获时刻、内容=δ 之前绘制」的帧写入视频 → 音画不同步
+    // （实测音频领先画面 ~340ms 且随负载漂移）。手动模式下每次 requestFrame() 以当前时刻
+    // 为时间戳捕获刚画完的内容，内容时间与时间戳严格对齐。不支持时回退自动捕获。
+    let stream = cv.captureStream(0);
+    let vtrack = stream.getVideoTracks()[0];
+    const canManual = !!(vtrack && typeof vtrack.requestFrame === 'function');
+    if (!canManual) { stream = cv.captureStream(fps); vtrack = null; }
     const bitrate = VE.quality === 'low' ? 4e6 : VE.quality === 'high' ? 16e6 : (VE.quality === 'custom' ? (VE.bitrate * 1e6) : 8e6);
     // 自动尝试多种编码/码率，避免单一种类不支持导致导出失败
     const mimeCandidates = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
@@ -415,18 +436,23 @@ async function renderVideo() {
     const melodyTrack = s.tracks.findIndex((tr) => tr.isDrum === false && !/bass|贝斯|低音/.test(tr.name || ''));
     const ivMs = Math.max(16, Math.round(1000 / fps));
     await new Promise((resolve) => {
+      let drawDurEst = 16; // 绘制耗时估计(ms)：帧内容应与「捕获时刻」对齐，预补偿绘制占用的时间
       const step = () => {
-        const nowMs = performance.now();
-        if (VE.veCancel || (nowMs - start) / 1000 >= sec) {
+        const t0 = performance.now();
+        const elRaw = (t0 - start) / 1000;
+        if (VE.veCancel || elRaw >= sec) {
           if (VE.veTimer) { clearInterval(VE.veTimer); VE.veTimer = null; }
           stopRec(); resolve(); return;
         }
-        const el = (nowMs - start) / 1000;
+        // 内容时间 = 起笔时刻 + 绘制耗时（帧在绘制完成后立即 requestFrame，时间戳≈起笔+绘制耗时）
+        const el = elRaw + drawDurEst / 1000;
         const tick = s.secToTick(Math.min(startSec + el, Math.max(0.001, s.totalSec - 0.001)));
         const vf = { winSec: 8, melodyTrack, lyricAt: lyricAtTick(s, tick), pct: (el / sec) };
         // 音频已按片段归一化（从 0 起），频谱/波形用 el；瀑布 tick 用全曲坐标 startSec+el
         drawVideoFrame(ctx, W, H, tick, s, buf, vf, el);
-        VE.veProgress = Math.min(97, 10 + (el / sec) * 87);
+        if (canManual) { try { vtrack.requestFrame(); } catch (e) {} }
+        drawDurEst = Math.min(400, drawDurEst * 0.7 + (performance.now() - t0) * 0.3);
+        VE.veProgress = Math.min(97, 10 + (elRaw / sec) * 87);
       };
       VE.veTimer = setInterval(step, ivMs);
       step();
@@ -435,7 +461,8 @@ async function renderVideo() {
     const data = new Uint8Array(await webm.arrayBuffer());
     VE.veStage = t('转码为 MP4…');
     if (bridge && bridge.transcodeVideo) {
-      const r = await bridge.transcodeVideo(Array.from(data), Array.from(wavBytes));
+      // 直接传 Uint8Array（结构化克隆），此前 Array.from 会生成数亿元素数组 → 内存爆炸黑屏
+      const r = await bridge.transcodeVideo(data, wavBytes);
       if (r && r.ok) toast(t('视频已导出：') + (r.path || ''), 'ok');
       else if (!(r && r.canceled)) toast(t('视频导出失败：') + ((r && r.error) || ''), 'warn');
     } else {

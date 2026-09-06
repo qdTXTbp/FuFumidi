@@ -277,6 +277,21 @@ export class Synth {
     this.sf2Node = null;
     // 待触发的 SF2 note-on 定时器（用于调度：音符必须按绝对时间发声，与内置合成器一致）
     this._sf2Pending = [];
+    // 主线程卡顿时（如切页触发重渲染）延迟触发的容忍度（秒）：超过即跳过该音，
+    // 避免音头聚簇噪点。切页时 Player.bumpAhead 会临时放宽（见 player.js）。
+    this._sf2LateTol = 0.04;
+    // 活跃发声节点修剪上限：预排窗口扩大时（切页 bumpAhead）临时放宽，
+    // 避免预排的待发声振荡器被 pruneLive 提前杀掉。
+    this._liveLimit = 1024;
+    // SF2 AudioWorklet 音序器调度：fluid_sequencer 时钟在 worklet 线程推进
+    // （fu-seq-clock.js），音符事件按绝对时间分发给合成器——主线程阻塞不再造成
+    // 音符迟到/掉音。ScriptProcessor 回退路径仍用 setTimeout。
+    this.sf2Seq = null;          // WorkletSequencer 代理
+    this._sf2SeqClient = null;   // 合成器在音序器里的 clientId
+    this._sf2SeqMode = false;
+    this._seqAnchor = null;      // { ctx, seq }：AudioContext 时间 ↔ 音序器 tick（毫秒）锚点
+    this._sf2ChProg = [];        // 各通道已调度的 program（避免每音符重复 programchange）
+    this._sf2DrumCh = [];        // 已设为鼓组的通道
   }
   // 指定加载的音色：'internal'（内置合成器）或 SF2 来源（网页相对路径 / 桌面绝对路径 / URL）。
   // 由音色工坊切换并持久化（settings.active_soundfont）。
@@ -299,15 +314,79 @@ export class Synth {
     return task;
   }
   clearSf2() {
+    if (this.sf2Seq) {
+      // 停掉 worklet 内的音序器时钟并清空未分发事件（换音色/回退内置前）
+      try { if (this.sf2) this.sf2.callFunction('__fuSeqClockStop', null).catch(() => {}); } catch (e) {}
+      try { this.sf2Seq.removeAllEvents(); } catch (e) {}
+      this.sf2Seq = null;
+      this._sf2SeqClient = null;
+      this._sf2SeqMode = false;
+      this._seqAnchor = null;
+    }
+    // 摘掉常驻时钟节点
+    try { if (this._seqClockNode) { this._seqClockNode.disconnect(); } } catch (e) {}
+    try { if (this._seqClockMute) { this._seqClockMute.disconnect(); } } catch (e) {}
+    this._seqClockNode = null;
+    this._seqClockMute = null;
     try { if (this.sf2Node) this.sf2Node.disconnect(); } catch (e) {}
     this.sf2Node = null;
     this.sf2 = null;
     this.sf2Ready = false;
+    this._sf2ChProg = [];
+    this._sf2DrumCh = [];
+  }
+  // js-synth 按需懒加载（原先在 index.html 同步 <script> 加载会阻塞首帧）。
+  // 两条路径：
+  //   AudioWorklet（首选）：libfluidsynth 在 worklet 音频线程里合成，主线程长任务
+  //     （切页 / 乐谱重绘）完全不影响音频——ScriptProcessor 的主线程合成在阻塞时会断流。
+  //   ScriptProcessor（回退）：主线程合成，仅作为 addModule 失败时的兜底。
+  _jssynthLibLoading = null;    // js-synthesizer.min.js（AudioWorkletNodeSynthesizer + Synthesizer 类）
+  _jssynthGlueLoading = null;   // libfluidsynth 胶水（仅回退路径需要，2.4MB）
+  _workletModulesLoading = null;
+  _workletModules = false;
+  _ensureJSSynthLib() {
+    if ((window || {}).JSSynth) return Promise.resolve(true);
+    if (this._jssynthLibLoading) return this._jssynthLibLoading;
+    this._jssynthLibLoading = new Promise((resolve) => {
+      const s = document.createElement('script');
+      s.src = './vendor/js-synth/js-synthesizer.min.js';
+      s.onload = () => resolve(!!(window || {}).JSSynth);
+      s.onerror = () => { console.warn('[synth] js-synthesizer 脚本加载失败'); resolve(false); };
+      document.head.appendChild(s);
+    });
+    return this._jssynthLibLoading;
+  }
+  _ensureJSSynthGlue() {
+    if ((window || {}).Module) return Promise.resolve(true);
+    if (this._jssynthGlueLoading) return this._jssynthGlueLoading;
+    this._jssynthGlueLoading = new Promise((resolve) => {
+      const s = document.createElement('script');
+      s.src = './vendor/js-synth/libfluidsynth-2.4.6-with-libsndfile.js';
+      s.onload = () => resolve(!!(window || {}).Module);
+      s.onerror = () => { console.warn('[synth] libfluidsynth 胶水脚本加载失败'); resolve(false); };
+      document.head.appendChild(s);
+    });
+    return this._jssynthGlueLoading;
+  }
+  // 在 AudioWorkletGlobalScope 内加载 libfluidsynth + js-synthesizer 的 worklet 处理器。
+  // glue 在 worklet 作用域求值后会导出 AudioWorkletGlobalScope.wasmModule 供处理器使用。
+  _ensureWorkletModules() {
+    if (this._workletModules) return Promise.resolve(true);
+    if (this._workletModulesLoading) return this._workletModulesLoading;
+    this._workletModulesLoading = (async () => {
+      await this.ctx.audioWorklet.addModule('./vendor/js-synth/libfluidsynth-2.4.6-with-libsndfile.js');
+      await this.ctx.audioWorklet.addModule('./vendor/js-synth/js-synthesizer.worklet.min.js');
+      // 音序器时钟模块（失败不影响合成，仅回退 setTimeout 调度）
+      try { await this.ctx.audioWorklet.addModule('./vendor/js-synth/fu-seq-clock.js'); } catch (e) {
+        console.warn('[synth] 音序器时钟模块加载失败：', e && e.message || e);
+      }
+      this._workletModules = true;
+      return true;
+    })();
+    this._workletModulesLoading.catch(() => { this._workletModulesLoading = null; }); // 失败允许重试
+    return this._workletModulesLoading;
   }
   async _loadSf2From(source) {
-    const JSSynth = (window || {}).JSSynth;
-    if (!JSSynth) { this.clearSf2(); return { ok: false, using: 'internal', error: 'JSSynth 不可用' }; }
-    await JSSynth.waitForReady();
     const buf = await this._readSf2Buffer(source);
     if (!buf) { this.clearSf2(); return { ok: false, using: 'internal', error: '无法读取音色文件' }; }
     // 大音色解析时会在主线程占用一小段时间；上限与主进程 file:readSoundFont 一致(512MB)。
@@ -318,17 +397,121 @@ export class Synth {
       this.clearSf2();
       return { ok: false, using: 'internal', error: '音色包过大（>' + Math.round(MAX_SF2 / 1048576) + 'MB），超出当前合成器可承载范围，请改用内置音色或更小的音色包。' };
     }
+    // 首选 AudioWorklet
+    try {
+      const r = await this._loadSf2Worklet(buf, source);
+      if (r) return r;
+    } catch (e) {
+      console.warn('[synth] AudioWorklet 合成器初始化失败，回退 ScriptProcessor：', e && e.message || e);
+    }
+    // 回退 ScriptProcessor
+    return this._loadSf2ScriptProcessor(buf, source);
+  }
+  async _loadSf2Worklet(buf, source) {
+    const loaded = await this._ensureJSSynthLib();
+    const JSSynth = (window || {}).JSSynth;
+    if (!loaded || !JSSynth || !JSSynth.AudioWorkletNodeSynthesizer) return null;
+    if (!this.ctx.audioWorklet) return null;
+    await this._ensureWorkletModules();
+    this.clearSf2();
+    const syn = new JSSynth.AudioWorkletNodeSynthesizer();
+    const node = syn.createAudioNode(this.ctx); // settings 缺省 → worklet 侧用 fluidsynth 默认值
+    try {
+      node.connect(this.master);
+      // SF2 在 worklet 堆内加载（loadSFont 返回 Promise，缓冲经 structured clone 传入）
+      await syn.loadSFont(new Uint8Array(buf));
+    } catch (e) {
+      try { node.disconnect(); } catch (e2) {}
+      throw e;
+    }
+    this.sf2 = syn;
+    this.sf2Node = node;
+    this.sf2Ready = true;
+    console.info('[synth] SF2 已启用 AudioWorklet 合成（音频线程渲染，主线程卡顿不影响发声）');
+    // 音序器调度：把 noteon/noteoff 以绝对 tick 写入 fluid_sequencer，
+    // 由 fu-seq-clock 在 worklet 线程按真实流逝毫秒推进时钟并准时分发。
+    this._sf2SeqMode = false;
+    try {
+      const seq = await syn.createSequencer();
+      seq.setTimeScale(1000); // tick 单位 = 毫秒
+      const clientId = await seq.registerSynthesizer(syn);
+      const seqPtr = await seq.getRaw();
+      const ok = await syn.callFunction('__fuSeqClockStart', { seqPtr });
+      if (!ok) throw new Error('worklet 内时钟启动失败');
+      // 创建常驻时钟节点：worklet 无定时器 API，由该节点的 process() 在音频线程
+      // 每个渲染量子推进音序器。Chromium 不允许输入/输出同时为 0，故给 1 个输出
+      // 并经零增益接入 destination：图保持连通（必然被调度）且不发声。
+      try {
+        this._seqClockNode = new AudioWorkletNode(this.ctx, 'fu-seq-clock', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
+        const mute = this.ctx.createGain();
+        mute.gain.value = 0;
+        this._seqClockNode.connect(mute);
+        mute.connect(this.ctx.destination);
+        this._seqClockMute = mute;
+      } catch (e2) {
+        try { await syn.callFunction('__fuSeqClockStop', null); } catch (e3) {}
+        throw new Error('时钟节点创建失败：' + (e2 && e2.message || e2));
+      }
+      const t0 = await seq.getTick();
+      this._seqAnchor = { ctx: this.ctx.currentTime, seq: t0 };
+      this.sf2Seq = seq;
+      this._sf2SeqClient = clientId;
+      this._sf2SeqMode = true;
+      console.info('[synth] SF2 音序器调度已启用（音符时值由音频线程时钟分发，主线程卡顿不影响）');
+    } catch (e) {
+      this.sf2Seq = null;
+      this._sf2SeqClient = null;
+      this._seqAnchor = null;
+      console.warn('[synth] 音序器调度不可用，SF2 音符回退主线程 setTimeout 触发：', e && e.message || e);
+    }
+    return { ok: true, using: 'sf2', mode: 'worklet', source: typeof source === 'string' ? source : 'soundfont' };
+  }
+  // AudioContext 时间（秒）→ 音序器 tick（毫秒，绝对）
+  _seqTickFor(t) {
+    const a = this._seqAnchor;
+    if (!a) return 0;
+    return a.seq + Math.round((t - a.ctx) * 1000);
+  }
+  // 重读音序器时钟，校正与 AudioContext 时钟的长期漂移（寻址/暂停/恢复后调用）
+  _reanchorSeq() {
+    if (!this._sf2SeqMode || !this.sf2Seq) return;
+    this.sf2Seq.getTick().then((t) => {
+      if (this._sf2SeqMode) this._seqAnchor = { ctx: this.ctx.currentTime, seq: t };
+    }).catch(() => {});
+  }
+  async _loadSf2ScriptProcessor(buf, source) {
+    let loaded = await this._ensureJSSynthLib();
+    const JSSynth = (window || {}).JSSynth;
+    if (!loaded || !JSSynth) { this.clearSf2(); return { ok: false, using: 'internal', error: 'JSSynth 不可用' }; }
+    loaded = await this._ensureJSSynthGlue();
+    if (!loaded) { this.clearSf2(); return { ok: false, using: 'internal', error: 'libfluidsynth 运行时不可用' }; }
+    // 防御自愈：ScriptProcessor 版 Synthesizer 的 ccall 在调用期读取全局 Module。
+    // 若 Module 被外部覆盖成无 _fluid_* 导出的对象（旧版 Verovio 加载逻辑等），
+    // 调用会报「func is not a function」。检测到时重建运行时。
+    const hasFluidRuntime = () => {
+      const m = (window || {}).Module;
+      if (!m) return false;
+      try { return Object.keys(m).some(k => k.indexOf('_fluid_') === 0); } catch (e) { return false; }
+    };
+    if (!hasFluidRuntime()) {
+      console.warn('[synth] 全局 libfluidsynth 运行时无效，正在重建…');
+      this._jssynthGlueLoading = null;
+      try { window.Module = undefined; } catch (e) {}
+      loaded = await this._ensureJSSynthGlue();
+      if (!loaded) { this.clearSf2(); return { ok: false, using: 'internal', error: 'libfluidsynth 运行时不可用' }; }
+    }
+    await JSSynth.waitForReady();
     this.clearSf2();
     const syn = new JSSynth.Synthesizer();
     syn.init(this.ctx.sampleRate);
-    // 缓冲越小播放延迟越低（4096≈93ms）；2048≈46ms，兼顾延迟与负载
-    const node = syn.createAudioNode(this.ctx, 2048);
+    // 回退路径：缓冲越大越能扛主线程抖动（8192≈186ms）；正常情况不会走到这里
+    const node = syn.createAudioNode(this.ctx, 8192);
     node.connect(this.master);
     await syn.loadSFont(new Uint8Array(buf));
     this.sf2 = syn;
     this.sf2Node = node;
     this.sf2Ready = true;
-    return { ok: true, using: 'sf2', source: typeof source === 'string' ? source : 'soundfont' };
+    return { ok: true, using: 'sf2', mode: 'script-processor', source: typeof source === 'string' ? source : 'soundfont' };
   }
   // 读取 .sf2 内容：网页内置相对路径→fetch；桌面/本地路径→IPC；否则 URL fetch
   async _readSf2Buffer(source) {
@@ -381,6 +564,29 @@ export class Synth {
     this.ensure(note.trk + 1);
     if (this.sf2Ready && this.sf2) {
       const ch = Math.min(15, note.trk || 0);
+      // —— 音序器路径（AudioWorklet + fu-seq-clock）：事件按绝对 tick 写入 fluid_sequencer，
+      // worklet 线程准时分发。主线程阻塞期间已写入的事件照常发声，无迟到/掉音。 ——
+      if (this._sf2SeqMode && this.sf2Seq) {
+        const now = this.ctx.currentTime;
+        const onTime = Math.max(now, time);
+        // 调度本身被拖延过久（主线程长任务超出预排窗口）时跳过，避免解阻塞后音头聚簇噪点
+        if (time < now - (this._sf2LateTol || 0.04)) return;
+        const tick = Math.max(this._seqTickFor(now), this._seqTickFor(onTime));
+        if (note.isDrum) {
+          if (!this._sf2DrumCh[ch]) { try { this.sf2.midiSetChannelType(ch, true); } catch (e) {} this._sf2DrumCh[ch] = true; }
+        } else {
+          const wantProg = note.prog != null ? note.prog : 0;
+          if (this._sf2ChProg[ch] !== wantProg) {
+            try { this.sf2Seq.sendEventAt({ type: 'programchange', channel: ch, preset: wantProg }, tick, true); } catch (e) {}
+            this._sf2ChProg[ch] = wantProg;
+          }
+        }
+        // 'note' 事件 = noteon + 时值到后自动 noteoff（fluid seqbind 内部调度）
+        const dur = Math.max(60, Math.round((Math.max(endTime, onTime + 0.06) - onTime) * 1000));
+        try { this.sf2Seq.sendEventAt({ type: 'note', channel: ch, key: note.midi, vel: note.vel, duration: dur }, tick, true); } catch (e) {}
+        this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, start: onTime, endTime, sf2: true, ch });
+        return;
+      }
       // 调度到与内置合成器一致的绝对发声时刻：播放器 lookahead 会把音符提前 0~0.18s
       // 传入，若立即触发会导致音符提前发声、节奏与内置合成器不一致。
       // JSSynth 无「按绝对时间 note-on」API，故用 setTimeout 补足；禁止把音符发在起点之前。
@@ -399,9 +605,10 @@ export class Synth {
         const onTimer = setTimeout(() => {
           if (!this.sf2) return;
           // 主线程卡顿（如打开乐谱/大文件渲染）会让多个到期 setTimeout 同时触发，
-          // 若强行触发会产生大量音头聚簇 → 噪点/爆破。明显过期（>40ms）的音符跳过本次触发。
+          // 若强行触发会产生大量音头聚簇 → 噪点/爆破。超过容忍度（默认 40ms，
+          // 切页时 bumpAhead 临时放宽）的音符跳过本次触发。
           const now = this.ctx.currentTime;
-          if (onTime < now - 0.04) return;
+          if (onTime < now - (this._sf2LateTol || 0.04)) return;
           try { if (note.isDrum) this.sf2.midiSetChannelType(ch, true); else if (note.prog != null) this.sf2.midiProgramChange(ch, note.prog); this.sf2.midiNoteOn(ch, note.midi, note.vel); } catch (e) {}
           const offTimer = setTimeout(sendOff, Math.max(0, (Math.max(endTime, onTime + 0.06) - now) * 1000));
           this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, start: onTime, endTime, timer: offTimer, sf2: true, ch });
@@ -415,7 +622,7 @@ export class Synth {
     playVoice(this.ctx, time, note.midi, note.vel, preset, out, endTime, this.live);
     this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, start: time, endTime });
     if (this.activeNotes.length > 3000) this.activeNotes = this.activeNotes.filter(a => a.endTime > this.ctx.currentTime);
-    if (this.live.length > 256) this.pruneLive();
+    if (this.live.length > this._liveLimit) this.pruneLive(this._liveLimit);
   }
   preview(midi, prog = 0, vel = 100, dur = 0.7) {
     if (!this.ctx) return;
@@ -451,9 +658,15 @@ export class Synth {
     // 取消尚未触发的 SF2 note-on（跳转/暂停/停止时，避免 antedated 音符稍后误发声）
     for (const tm of this._sf2Pending) { try { clearTimeout(tm); } catch (e) {} }
     this._sf2Pending = [];
+    // 音序器路径：清掉所有未分发的调度事件（未来 noteon/noteoff/programchange）
+    if (this.sf2Seq && this._sf2SeqClient != null) {
+      try { this.sf2Seq.removeAllEventsFromClient(this._sf2SeqClient); } catch (e) {}
+    }
     for (const a of this.activeNotes) { if (a.timer) { try { clearTimeout(a.timer); } catch (e) {} } if (a.sf2 && a.ch != null) { try { this.sf2 && this.sf2.midiNoteOff(a.ch, a.midi); } catch (e) {} } }
     this.live = [];
     this.activeNotes = [];
+    // 跳转/重排后重读音序器锚点（校正与 AudioContext 时钟的漂移）
+    this._reanchorSeq();
   }
   activeNow() {
     const t = this.ctx.currentTime;

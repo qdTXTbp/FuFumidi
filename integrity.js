@@ -103,16 +103,21 @@ function createIntegrity(deps) {
       const isCorrupt = () => ({ id: 'core-corrupt', severity: 'warn', canRepair: true, path: asarPath });
       const isMissing = () => ({ id: 'core-missing', severity: 'warn', canRepair: true, path: asarPath });
       const waitMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+      // Electron 主进程把 *.asar 路径拦截为「归档目录」：fs.statSync(app.asar).size 恒为 0、
+      // fs.openSync(app.asar) 报 EISDIR，永远读不到归档自身原始字节 → 每次启动必误报 core-corrupt。
+      // 必须用 Electron 提供的未补丁 original-fs 读取（开发/纯 Node 环境自动回退普通 fs）。
+      // （3.1.18 曾根治，3.2.0 上游合并时被回退丢失，此处恢复）
+      const rawFs = (() => { try { const m = require('original-fs'); if (m && m.statSync && m.openSync) return m; } catch (e) {} return fs; })();
       // 尝试 N 次读取并解析 asar 头；任一次成功即认为健康（规避替换窗口的瞬时半写/ENOENT）
       let bad = true, anyErr = null;
       for (let attempt = 0; attempt < 4 && bad; attempt++) {
         if (attempt > 0) waitMs(400);
         try {
-          const st = fs.statSync(asarPath);
+          const st = rawFs.statSync(asarPath);
           if (st.size < 1 * 1024 * 1024) { bad = true; continue; }   // 过小 = 半写/损坏
           const hdr = Buffer.alloc(16);
-          const fd = fs.openSync(asarPath, 'r');
-          try { fs.readSync(fd, hdr, 0, 16, 0); } finally { fs.closeSync(fd); }
+          const fd = rawFs.openSync(asarPath, 'r');
+          try { rawFs.readSync(fd, hdr, 0, 16, 0); } finally { rawFs.closeSync(fd); }
           // asar 头（实测布局，全员为小端）：
           //   bytes0-3  = 4（pickle 头）
           //   bytes4-7  = headerSize
@@ -126,8 +131,8 @@ function createIntegrity(deps) {
           let ok = false;
           if (!badHdr && 16 + jsonSize <= st.size) {
             const buf = Buffer.alloc(jsonSize);
-            const f2 = fs.openSync(asarPath, 'r');
-            try { fs.readSync(f2, buf, 0, jsonSize, 16); } finally { fs.closeSync(f2); }
+            const f2 = rawFs.openSync(asarPath, 'r');
+            try { rawFs.readSync(f2, buf, 0, jsonSize, 16); } finally { rawFs.closeSync(f2); }
             try {
               const j = JSON.parse(buf.toString('utf8'));
               ok = !!(j && typeof j === 'object' && 'files' in j);   // 半写文件 JSON parse 必抛或缺 files

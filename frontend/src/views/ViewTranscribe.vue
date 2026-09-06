@@ -233,7 +233,7 @@ const stemExport = ref(false);
 const stemFormat = ref('wav');
 const denoise = ref(false);
 const normalize = ref(false);
-const autoBpm = ref(false);
+const autoBpm = ref(true);   // 默认开启：转写出的 MIDI 按源音频自动测速，播放/导出与原曲速度一致
 
 // 转录队列
 const queue = reactive([]);
@@ -533,7 +533,8 @@ function applyPreset(name) {
   drums.value = !!pr.include_drums;
   denoise.value = !!pr.denoise;
   normalize.value = !!pr.normalize;
-  autoBpm.value = !!pr.auto_bpm;
+  // 预设未显式指定 auto_bpm 时保留当前值（默认开），避免通用/钢琴预设把自动测速关掉
+  if (pr.auto_bpm != null) autoBpm.value = !!pr.auto_bpm;
   presetSel.value = name;
   return true;
 }

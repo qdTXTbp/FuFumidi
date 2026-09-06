@@ -37,6 +37,27 @@ function onBgTime() {
   if (!v || !v.duration || !isFinite(v.duration)) return;
   if (v.currentTime > v.duration - 0.4) v.currentTime = 0.35;
 }
+// 壁纸冻结自愈：主线程长任务（切页 / 乐谱重绘 / 转录渲染）后，muted 自动播放视频可能停摆
+// （paused=false 但 currentTime 不再前进，解码管线停止送帧且不会自行恢复）。心跳检测到
+// 停滞时轻微回退 seek 重新触发解码；窗口隐藏时跳过（Chromium 隐藏页暂停送帧属正常行为）。
+let wpTimer = 0, wpLast = -1, wpStall = 0;
+function wpWatchdog() {
+  const v = bgVideo.value;
+  if (!v || !wpEnabled.value || document.hidden || v.paused || v.readyState < 2 || !v.duration || !isFinite(v.duration)) { wpLast = -1; wpStall = 0; return; }
+  if (v.currentTime === wpLast) {
+    if (++wpStall >= 4) { // 约 2s 无推进视为停摆
+      wpStall = 0;
+      try { v.currentTime = v.currentTime > 0.1 ? v.currentTime - 0.1 : 0.1; v.play().catch(() => {}); } catch (e) {}
+    }
+  } else wpStall = 0;
+  wpLast = v.currentTime;
+}
+watch(wpEnabled, (on) => {
+  clearInterval(wpTimer);
+  wpTimer = 0;
+  if (on) wpTimer = setInterval(wpWatchdog, 500);
+}, { immediate: true });
+onBeforeUnmount(() => clearInterval(wpTimer));
 function wpFileUrl(p) {
   if (!p) return '';
   if (/^(https?:|file:|data:)/i.test(p)) return p;
@@ -280,6 +301,8 @@ function onBeforeUnload() {
 let offGpuProg = null;
 let gpuBarTimer = null;
 let offUpdateProg = null;
+let offDlProg = null;   // 模型下载进度订阅取消函数（此前未声明，严格模式下赋值抛 ReferenceError，
+                        // 中断 onMounted 后续初始化：更新进度订阅/键盘快捷键/退出前 SQLite 落盘）
 let updLastPct = -1;
 // 安装进度（任意页面都可见）：App.vue 全局订阅 gpu:progress 写入 store
 function onGpuProgressGlobal(p) {
@@ -355,10 +378,12 @@ function dlSpeed(bps) { if (!bps) return ''; return bps >= 1e6 ? (bps / 1e6).toF
 
 onMounted(() => {
   startTickLoop();
+  // settings 尽早加载（同步 active_soundfont 引用）：restoreSongs→selectSong→ensureAudio
+  // 会读该引用选择音色库，曾因晚于音频初始化导致重启后回退内置音色（另有 localStorage 兜底）
+  loadWallpaper();
   restoreSongs();
   playlistStore.hydrateFromDb();
   initGlobal();
-  loadWallpaper();
   if (bridge && bridge.onGpuProgress) offGpuProg = bridge.onGpuProgress(onGpuProgressGlobal);
   // 模型下载进度（顶部通知条）
   if (bridge && bridge.onModelProgress) offDlProg = bridge.onModelProgress(applyDl);

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, onActivated, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { getPlayer } from '../audio.js';
@@ -96,8 +96,14 @@ async function loadVerovio() {
   if (window.verovio && window.verovio.toolkit) return true;
   if (verovioLoading) return verovioLoading;
   verovioLoading = new Promise((resolve, reject) => {
-    // Emscripten Module 全局污染会破坏 Verovio 的 Toolkit 初始化
-    try { window.Module = undefined; } catch (e) {}
+    // Emscripten Module 全局污染会破坏 Verovio 的 Toolkit 初始化：加载期间临时摘除。
+    // 但 js-synth(libfluidsynth) 的运行时也挂在全局 Module 上，且其 ccall 在调用期读取
+    // 全局 Module——永久置 undefined 会让后续音色切换报「func is not a function」。
+    // 故仅在 SF2 合成器未加载时摘除，且无论成败都恢复快照（当前 verovio 构建的
+    // Module 是闭包内私有，本就互不影响，此操作只为兼容旧构建）。
+    const savedModule = window.Module;
+    if (!window.JSSynth) { try { window.Module = undefined; } catch (e) {} }
+    const restoreModule = () => { try { window.Module = savedModule; } catch (e) {} };
     const sc = document.createElement('script');
     sc.src = './vendor/verovio-toolkit-wasm.js';
     sc.onload = () => {
@@ -107,15 +113,15 @@ async function loadVerovio() {
           const v = window.verovio;
           if (v && v.toolkit && v.module && typeof v.module.cwrap === 'function') {
             const ctor = v.module.cwrap('vrvToolkit_constructor', 'number', []);
-            if (typeof ctor === 'function') { resolve(true); return; }
+            if (typeof ctor === 'function') { restoreModule(); resolve(true); return; }
           }
         } catch (e) {}
-        if (Date.now() - start > 15000) { reject(new Error('Verovio 组件初始化超时')); return; }
+        if (Date.now() - start > 15000) { restoreModule(); reject(new Error('Verovio 组件初始化超时')); return; }
         setTimeout(wait, 80);
       };
       wait();
     };
-    sc.onerror = () => reject(new Error('Verovio 组件加载失败'));
+    sc.onerror = () => { restoreModule(); reject(new Error('Verovio 组件加载失败')); };
     document.head.appendChild(sc);
   });
   return verovioLoading;
@@ -141,6 +147,7 @@ async function renderStaff() {
     const padL = sc ? (parseFloat(getComputedStyle(sc).paddingLeft) || 0) : 0;
     const padR = sc ? (parseFloat(getComputedStyle(sc).paddingRight) || 0) : 0;
     const pageW = Math.max(300, vpW - padL - padR - 8);
+    if (sc) lastRenderedW = sc.clientWidth;
     const xml = songToMusicXMLTrack(s, selTrackIdx.value);
 
     if (scoreVerovio && scoreVerovio.destroy) { try { scoreVerovio.destroy(); } catch (e) {} }
@@ -261,8 +268,16 @@ const tabPlaced = computed(() => tabBlocks.value.reduce((a, b) => a + (b.placed 
 
 /* ---------------- 渲染调度 ---------------- */
 let renderRaf = 0;
+let pendingWhileDeactivated = false; // 停用期间被搁置的渲染请求（激活时补渲染）
+let lastRenderedW = 0;    // 上次五线谱刻版用的容器宽度（激活时比对，防陈旧刻版）
 function scheduleRender() {
   if (renderRaf) return;
+  // KeepAlive 停用中组件脱离 DOM，clientWidth 恒为 0——此刻刻版必按 300px 最小宽度雕刻，
+  // 且回页后 ResizeObserver 因尺寸与上次记录一致不再触发，谱面会永久挤在左侧。留待激活时渲染。
+  const sc = scrollEl.value;
+  if (sc && !sc.isConnected) { pendingWhileDeactivated = true; return; }
+  // 五线谱渲染（Verovio loadData/renderToSVG）是重主线程操作；播放中先扩预排窗口防断流
+  try { const p = getPlayer(); if (p && p.playing) p.bumpAhead(2.5, 8000); } catch (e) {}
   renderRaf = requestAnimationFrame(() => { renderRaf = 0; doRender(); });
 }
 function doRender() {
@@ -285,10 +300,44 @@ watch([mode, trackSel, () => opts.simple, () => opts.grid, () => opts.beam, zoom
 function tickFollow() {
   if (!follow.value || !state.playing) return;
   const s = song.value;
-  if (!s || !tune) return;
+  if (!s) return;
   const p = getPlayer();
   if (!p || !p.song) return;
-  const curMs = midiToSec(s, p.currentTick()) * 1000;
+  const sc = scrollEl.value;
+  if (!sc) return;
+  const tick = p.currentTick();
+  /* 简谱 / 吉他 / 贝斯（HTML 渲染）：无 Verovio tune，独立实现视角跟随 */
+  if (mode.value !== 'staff') {
+    const tr = selTrack.value;
+    if (!tr || !tr.notes.length) return;
+    // 二分找最后一个 start <= tick 的音符
+    const ns = tr.notes;
+    let a = 0, b = ns.length;
+    while (a < b) { const m = (a + b) >> 1; if (ns[m].start <= tick) a = m + 1; else b = m; }
+    const ni = a > 0 ? a - 1 : 0;
+    if (mode.value === 'jianpu') {
+      // cells 与音符一一对应（jianpuData 按顺序映射），data-ni 标注音符索引
+      const cell = sc.querySelector('.jp-cell[data-ni="' + ni + '"]');
+      if (!cell) return;
+      const noteEl = cell.querySelector('.jp-note');
+      if (noteEl && !noteEl.classList.contains('fu-play')) {
+        for (const n of playingSet) n.classList.remove('fu-play');
+        noteEl.classList.add('fu-play');
+        playingSet = new Set([noteEl]);
+      }
+      const r = cell.getBoundingClientRect(), sr = sc.getBoundingClientRect();
+      if (r.top < sr.top + 32 || r.bottom > sr.bottom - 32) cell.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    } else {
+      // TAB（吉他/贝斯）：文本行无法映射单个音符，按 tick 比例滚动视口（粗略跟随）
+      const total = s.totalTicks || 1;
+      const target = clamp((tick / total) * (sc.scrollHeight - sc.clientHeight), 0, Math.max(0, sc.scrollHeight - sc.clientHeight));
+      if (Math.abs(sc.scrollTop - target) > 60) sc.scrollTo({ top: target, behavior: 'smooth' });
+    }
+    return;
+  }
+  // 五线谱（Verovio）
+  if (!tune) return;
+  const curMs = midiToSec(s, tick) * 1000;
   // 高亮当前音符
   const playing = new Set();
   const curSet = new Set();
@@ -545,6 +594,18 @@ function loop() {
   tickFollow();
   followRaf = requestAnimationFrame(loop);
 }
+onActivated(() => {
+  // KeepAlive 重新激活：补渲染停用期间搁置的请求；切页期间布局宽度若发生变化
+  // （折叠侧栏 / 隐藏播放栏 / 拖窗口），ResizeObserver 不会因「断连期间变化」触发，
+  // 这里按实际宽度比对后强制按新宽度重刻。
+  pendingWhileDeactivated = false;
+  nextTick(() => {
+    const sc = scrollEl.value;
+    const w = sc ? sc.clientWidth : 0;
+    if (w > 0 && lastRenderedW > 0 && Math.abs(w - lastRenderedW) > 1) renderCacheKey = '';
+    scheduleRender();
+  });
+});
 onMounted(() => {
   nextTick(scheduleRender);
   followRaf = requestAnimationFrame(loop);
@@ -668,7 +729,7 @@ onBeforeUnmount(() => {
           <template v-else>
             <div v-if="b.truncated" class="score-empty" style="padding:8px">{{ t('该轨道音符过多') }}（{{ b.total }}），{{ t('简谱仅显示前') }} {{ b.max }} {{ t('个音符') }}</div>
             <div class="jianpu" :style="{ fontSize: fontSz + 'px' }">
-              <span v-for="(c, i) in b.cells" :key="i" class="jp-cell">
+              <span v-for="(c, i) in b.cells" :key="i" class="jp-cell" :data-ni="i">
                 <span class="jp-note" :class="c.cls">{{ c.acc }}{{ c.num }}{{ c.dots }}</span>
                 <span v-if="c.dash" class="jp-dash">{{ c.dash }}</span>
               </span>
@@ -799,6 +860,8 @@ onBeforeUnmount(() => {
 :deep(#abcScore .fu-play *) { fill: #ffb224 !important; stroke: #ffb224 !important; }
 :deep(#abcScore .fu-play .abcjs-notehead) { stroke: #6b3200 !important; stroke-width: 2 !important; }
 :deep(#abcScore .fu-play .abcjs-stem) { stroke: #ffbe3c !important; stroke-width: 2.2 !important; }
+/* 简谱跟随播放高亮（HTML 渲染模式） */
+.jp-note.fu-play { background: #ffd866 !important; color: #3a2b00 !important; border-radius: 4px; box-shadow: 0 0 0 2px rgba(255, 216, 102, 0.35); }
 :deep(#abcScore .abcjs-note) { cursor: pointer; }
 :deep(#abcScore svg .abcjs-ending) { display: none; }
 :deep(#abcScore.fu-grid) { background-image: repeating-linear-gradient(to right, var(--hairline) 0 1px, transparent 1px var(--fu-beatw, 56px)); }

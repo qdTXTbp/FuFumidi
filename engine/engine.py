@@ -151,6 +151,46 @@ def _release_gpu_memory():
         pass
 
 
+def _apply_auto_bpm(midi_path, audio_path, log_cb=None):
+    """统一 auto-BPM 后处理：从源音频测速并重写 MIDI 的 tempo 事件。
+
+    用于未内置测速的子引擎（basic-pitch / MuScriptor / 钢琴系）——它们把 MIDI
+    写成固定 120 BPM，导致播放/导出与原曲录音速度不符。basic（engine_basic）
+    与分轨链路已内置测速，无需此步。
+    """
+    import os
+    if not midi_path or not os.path.isfile(midi_path):
+        return
+    from audio_io import load_audio_float32
+    from preprocess import detect_bpm
+    try:
+        wav = load_audio_float32(audio_path, 22050)
+        bpm = detect_bpm(wav, 22050)
+    except Exception as e:
+        if log_cb:
+            log_cb(f"[auto-bpm] 测速失败，保留默认速度: {e}")
+        return
+    if not bpm:
+        if log_cb:
+            log_cb("[auto-bpm] 测速失败，保留默认速度")
+        return
+    import mido
+    mid = mido.MidiFile(midi_path)
+    us = int(round(60_000_000 / float(bpm)))
+    done = False
+    for tr in mid.tracks:            # 转录输出至多一个 tempo，统一改写
+        for msg in tr:
+            if msg.type == 'set_tempo':
+                msg.tempo = us
+                done = True
+    if not done:
+        first = mid.tracks[0]
+        first.insert(0, mido.MetaMessage('set_tempo', tempo=us, time=0))
+    mid.save(midi_path)
+    if log_cb:
+        log_cb(f"[auto-bpm] 已按源音频自动测速：{bpm} BPM")
+
+
 def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
                perf_mode="quality"):
     """统一转录入口。
@@ -171,24 +211,28 @@ def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
 
     mode = mode or DEFAULT_MODE
     params = {**(DEFAULTS.get(mode, {})), **(params or {})}
+    auto_bpm = bool((params or {}).get("auto_bpm"))
+    native_bpm = False   # 子引擎是否已内置测速（basic 是；其余统一走后处理）
+    n = 0
     try:
         if mode == "piano":
             # 钢琴子模型：piano_pt（默认 / ByteDance）/ aria / transkun
             pmodel = (params or {}).get("model") or "piano_pt"
             if pmodel == "aria":
                 import engine_aria
-                return engine_aria.transcribe_aria(audio_path, output_midi, params=params,
-                                                   log_cb=log_cb, num_threads=num_threads)
-            if pmodel == "transkun":
+                n = engine_aria.transcribe_aria(audio_path, output_midi, params=params,
+                                                log_cb=log_cb, num_threads=num_threads)
+            elif pmodel == "transkun":
                 import engine_transkun
-                return engine_transkun.transcribe_transkun(audio_path, output_midi, params=params,
-                                                           log_cb=log_cb, num_threads=num_threads)
-            import engine_pt
-            params["perf_mode"] = perf_mode   # 性能档 → engine_pt 批量前向上限（自适应）
-            return engine_pt.transcribe_pt(audio_path, output_midi, log_cb=log_cb,
-                                           num_threads=num_threads, **params)
+                n = engine_transkun.transcribe_transkun(audio_path, output_midi, params=params,
+                                                        log_cb=log_cb, num_threads=num_threads)
+            else:
+                import engine_pt
+                params["perf_mode"] = perf_mode   # 性能档 → engine_pt 批量前向上限（自适应）
+                n = engine_pt.transcribe_pt(audio_path, output_midi, log_cb=log_cb,
+                                            num_threads=num_threads, **params)
 
-        if mode == "separate":
+        elif mode == "separate":
             # 音频处理（MSST 分离）已改为独立 `separate` 子命令（engine_msst），
             # 不再走「分离后转 MIDI」的转录链路。若被误调用则给出明确引导。
             raise RuntimeError(
@@ -196,15 +240,25 @@ def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
                 "请使用新的「音频处理」面板输出分离音轨；需要转 MIDI 请用通用识别或钢琴专用模式。"
             )
 
-        # 默认 universal：子模型 basic（Basic Pitch 兜底）| muscriptor（可选）
-        umodel = (params or {}).get("model") or "basic"
-        if umodel == "muscriptor":
-            import engine_muscriptor
-            return engine_muscriptor.transcribe_muscriptor(audio_path, output_midi, params=params,
-                                                           log_cb=log_cb, num_threads=num_threads)
-        import engine_basic
-        return engine_basic.transcribe_basic(audio_path, output_midi, log_cb=log_cb,
-                                             num_threads=num_threads, **params)
+        else:
+            # 默认 universal：子模型 basic（Basic Pitch 兜底）| muscriptor（可选）
+            umodel = (params or {}).get("model") or "basic"
+            if umodel == "muscriptor":
+                import engine_muscriptor
+                n = engine_muscriptor.transcribe_muscriptor(audio_path, output_midi, params=params,
+                                                             log_cb=log_cb, num_threads=num_threads)
+            else:
+                native_bpm = True   # basic 内置节拍测速
+                n = engine_basic.transcribe_basic(audio_path, output_midi, log_cb=log_cb,
+                                                  num_threads=num_threads, **params)
+
+        if auto_bpm and not native_bpm:
+            try:
+                _apply_auto_bpm(output_midi, audio_path, log_cb)
+            except Exception as e:
+                if log_cb:
+                    log_cb(f"[警告] 自动 BPM 应用失败，保留默认速度: {e}")
+        return n
     finally:
         # 无论成功/异常，转录结束后释放模型对象与显存
         _release_gpu_memory()

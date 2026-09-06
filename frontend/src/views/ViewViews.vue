@@ -39,8 +39,11 @@ watch(() => route.query.tab, (v) => {
   </div>
 </template>
 <style scoped>
-.group-page { min-height: 100%; }
-.group-tabs { display: flex; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--hairline); background: var(--canvas); position: sticky; top: 0; z-index: 30; }
+.group-page { height: 100%; display: flex; flex-direction: column; }
+.group-tabs { display: flex; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--hairline); background: var(--canvas); position: sticky; top: 0; z-index: 30; flex: none; }
+/* 乐谱视图需要受约束的高度（.score-scroll 内部滚动 + 跟随播放依赖 scrollTop），
+   否则被 2 万 px 的谱面撑开、滚动全部落在外层 .app-main 上 */
+.group-page > :deep(.score-view) { flex: 1; min-height: 0; }
 .gp-tab { display: inline-flex; align-items: center; gap: 5px; padding: 7px 14px; border: 1px solid var(--hairline); background: transparent; color: var(--steel); border-radius: 999px; cursor: pointer; font-size: 13px; transition: all .14s; }
 .gp-tab:hover { background: var(--surface-soft); color: var(--ink); }
 .gp-tab.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--ink); font-weight: 600; }
