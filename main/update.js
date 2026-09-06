@@ -11,16 +11,47 @@ const UPDATE_MIRRORS = [
 ];
 
 function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }) {
+  // 与 build/kachina.config.json 的 source id 一一对应（顺序与 UPDATE_MIRRORS 一致）
+  const UPDATE_SOURCE_IDS = ['ghfast', 'ghproxy', 'ghproxy-net', 'github'];
+  // 更新包下载源候选（kachina 更新器 --source 取 id）
+  const UPDATE_SOURCES = [
+    { id: 'ghfast', uri: 'https://ghfast.top/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe' },
+    { id: 'ghproxy', uri: 'https://gh-proxy.com/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe' },
+    { id: 'ghproxy-net', uri: 'https://ghproxy.net/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe' },
+    { id: 'github', uri: 'https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe' },
+  ];
+  // 最近一次「检查更新」实际访问成功的镜像（先探测它，命中率高）
+  let lastGoodSource = null;
+
+  // HEAD 探测可用下载源（每个 6s 超时），失败自动换下一个；全部失败回退最近可达源，再退官方直连
+  async function pickUpdateSource() {
+    const ordered = UPDATE_SOURCES.slice();
+    if (lastGoodSource) {
+      const i = ordered.findIndex(s => s.id === lastGoodSource);
+      if (i > 0) { const hit = ordered.splice(i, 1)[0]; ordered.unshift(hit); }
+    }
+    for (const s of ordered) {
+      try {
+        const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 6000);
+        const r = await net.fetch(s.uri, { method: 'HEAD', headers: { 'user-agent': 'FuFumidi/3.1.16' }, signal: ctrl.signal });
+        clearTimeout(to);
+        if (r.ok) return s.id;
+      } catch (e) { /* 该源不可达，尝试下一个 */ }
+    }
+    return lastGoodSource || 'github';
+  }
+
   async function fetchLatestRelease() {
     let lastErr = null;
-    for (const base of UPDATE_MIRRORS) {
+    for (let i = 0; i < UPDATE_MIRRORS.length; i++) {
+      const base = UPDATE_MIRRORS[i];
       try {
         const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 12000);
         const r = await net.fetch(base, { headers: { 'user-agent': 'FuFumidi/3.1.16' }, signal: ctrl.signal });
         clearTimeout(to);
         if (!r.ok) { lastErr = new Error('HTTP ' + r.status); continue; }
         const d = await r.json();
-        if (d && d.tag_name) return d;
+        if (d && d.tag_name) { lastGoodSource = UPDATE_SOURCE_IDS[i]; return d; }
       } catch (e) { lastErr = e; }
     }
     throw lastErr || new Error('无法访问 GitHub');
@@ -184,10 +215,13 @@ Start-Process -FilePath ${_exe} -WorkingDirectory ${_dir}
         const guard = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', daemon], { detached: true, stdio: 'ignore' });
         guard.unref();
       } catch (e) { /* 守护启动失败不阻塞更新 */ }
-      // 2) 拉起 kachina 增量更新器（-I 非交互、-O 强制在线、--source ghfast 指定镜像源）
-      //    更新器自带窗口显示下载进度；会自行结束主程序进程并替换文件
+      // 2) 拉起 kachina 增量更新器（-I 非交互、-O 强制在线、--source 指定下载源）
+      //    更新器自带窗口显示下载进度；会自行结束主程序进程并替换文件。
+      //    先 HEAD 探测可用镜像源，避免单一镜像（ghfast）不可达/超时导致更新失败
+      let source = 'github';
+      try { source = await pickUpdateSource(); } catch (_) {}
       try {
-        const upd = spawn(updaterPath, ['-I', '-O', '--source', 'ghfast'], { cwd: updaterDir, detached: true, stdio: 'ignore' });
+        const upd = spawn(updaterPath, ['-I', '-O', '--source', source], { cwd: updaterDir, detached: true, stdio: 'ignore' });
         upd.unref();
       } catch (e) {
         return { ok: false, error: '启动更新器失败：' + String((e && e.message) || e) };
@@ -196,7 +230,7 @@ Start-Process -FilePath ${_exe} -WorkingDirectory ${_dir}
       // 更新器覆盖时会报 CREATE_TARGET_FILE_ERR / os error 1224。故先让应用自行退出，
       // 释放 exe 映射，再交给守护进程等待更新器完成后拉起新版本。
       try { setTimeout(() => { try { app.exit(0); } catch (_) {} }, 400); } catch (_) {}
-      return { ok: true, launching: true, updaterPath };
+      return { ok: true, launching: true, updaterPath, source };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 }
