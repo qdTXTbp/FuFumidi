@@ -4,11 +4,27 @@
 // - 模型运行时：模型推理所需包（piano / separate / muscriptor / aria / transkun 组）+ Rust 核心
 // - 模型文件：内置模型清单（权重状态 + 运行时包状态，缺包可一键安装）
 // - 诊断与配置：诊断包导出、配置导入导出
-import { ref, reactive, onMounted, onBeforeUnmount } from 'vue';
+import { ref, reactive, watch, onMounted, onBeforeUnmount } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
+import ViewModels from './ViewModels.vue';
+import ViewSoundfonts from './ViewSoundfonts.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
 import { t } from '../core/i18n.js';
+
+const route = useRoute();
+const router = useRouter();
+const rcTabs = ['model', 'soundfonts', 'resources'];
+const rcTab = ref(rcTabs.includes(String(route.query.tab || '')) ? String(route.query.tab) : 'model'); // 'model' | 'soundfonts' | 'resources'
+function selectRc(id) {
+  rcTab.value = id;
+  router.replace({ query: { ...route.query, tab: id } });
+}
+watch(() => route.query.tab, (v) => {
+  const id = String(v || '');
+  if (rcTabs.includes(id)) rcTab.value = id;
+});
 
 const app = useAppStore();
 const toast = (m, type) => app.toast(m, type);
@@ -343,10 +359,66 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
       <div class="page-ic"><Icon name="box" :size="20" /></div>
       <div>
         <div class="page-title">{{ t('资源中心') }}</div>
-        <div class="page-sub">{{ t('Python 依赖 · 模型运行时 · GPU 加速') }}</div>
+        <div class="page-sub">{{ t('模型管理 · 音色工坊 · 资源管理') }}</div>
       </div>
     </div>
 
+    <div class="rc-tabs">
+      <button class="rc-tab" :class="{ on: rcTab === 'model' }" @click="selectRc('model')">{{ t('模型管理') }}</button>
+      <button class="rc-tab" :class="{ on: rcTab === 'soundfonts' }" @click="selectRc('soundfonts')">{{ t('音色工坊') }}</button>
+      <button class="rc-tab" :class="{ on: rcTab === 'resources' }" @click="selectRc('resources')">{{ t('资源管理') }}</button>
+    </div>
+
+    <Transition name="group-tab" mode="out-in">
+      <div :key="rcTab" class="rc-tab-content">
+      <template v-if="rcTab === 'model'">
+      <ViewModels />
+
+      <div class="card res-sec">
+        <div class="res-sec-head"><Icon name="settings" :size="15" /> {{ t('模型下载设置') }}</div>
+        <div class="field-row top">
+          <div>
+            <div class="fr-label">HuggingFace Token</div>
+            <div class="fr-hint">{{ t('下载需授权的模型（MuScriptor 等）时必填') }}</div>
+          </div>
+          <div class="fr-ctl col">
+            <div style="display:flex;gap:6px;width:100%">
+              <input :type="hfTokenVisible ? 'text' : 'password'" v-model="hfToken" class="ov-input mono" style="flex:1;min-width:200px" placeholder="hf_xxxx（huggingface.co/settings/tokens 创建）" @change="saveHfToken" />
+              <button class="btn sm" @click="hfTokenVisible = !hfTokenVisible">{{ hfTokenVisible ? t('隐藏') : t('显示') }}</button>
+              <button class="btn sm" @click="saveHfToken">{{ t('保存') }}</button>
+            </div>
+            <div class="fr-hint" style="margin-top:4px">{{ t('使用前需先在 huggingface.co 对应模型页接受许可协议，否则返回 401') }}</div>
+          </div>
+        </div>
+        <div class="field-row">
+          <div>
+            <div class="fr-label">{{ t('下载渠道') }}</div>
+            <div class="fr-hint">{{ t('MuScriptor / Aria-AMT 权重：HuggingFace 官方或 hf-mirror 镜像') }}</div>
+          </div>
+          <div class="fr-ctl">
+            <div class="radio-pill">
+              <span :class="{ on: modelChannel === 'huggingface' }" @click="modelChannel = 'huggingface'">HuggingFace</span>
+              <span :class="{ on: modelChannel === 'hf-mirror' }" @click="modelChannel = 'hf-mirror'">hf-mirror</span>
+            </div>
+          </div>
+        </div>
+        <div class="field-row">
+          <div>
+            <div class="fr-label">{{ t('本地模型压缩包') }}</div>
+            <div class="fr-hint">{{ t('可导入本地 .zip / .7z / .tar 模型包') }}</div>
+          </div>
+          <div class="fr-ctl">
+            <button class="btn sm" @click="importLocalModel">{{ t('导入本地模型压缩包') }}</button>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <template v-else-if="rcTab === 'soundfonts'">
+      <ViewSoundfonts />
+    </template>
+
+    <template v-else>
     <!-- ============ Python 依赖 ============ -->
     <div class="card res-sec">
       <div class="res-sec-head"><Icon name="zap" :size="15" /> {{ t('Python 依赖') }}</div>
@@ -447,6 +519,9 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
         </div>
       </div>
     </div>
+    </template>
+      </div>
+    </Transition>
 
     <!-- 检查结果弹窗 -->
     <Transition name="ov">
@@ -471,6 +546,10 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
 </template>
 
 <style scoped>
+.rc-tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+.rc-tab { border: 1px solid var(--hairline); background: var(--canvas); color: var(--steel); padding: 7px 14px; border-radius: 999px; font-size: 13px; cursor: pointer; transition: all .14s; }
+.rc-tab:hover { background: var(--surface-soft); color: var(--ink); }
+.rc-tab.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--ink); font-weight: 600; }
 .res-sec { padding: 18px 20px; margin-bottom: 14px; }
 .res-sec-head {
   display: flex; align-items: center; gap: 7px;

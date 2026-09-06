@@ -21,12 +21,10 @@ const toggleTrackMute = (i) => app.toggleTrackMute(i);
 const toggleTrackSolo = (i) => app.toggleTrackSolo(i);
 
 const QUICK = [
-  { ic: 'transcribe', title: '开始转录', sub: '音频转 MIDI · 本地引擎', view: 'transcribe', soon: false },
-  { ic: 'edit', title: '打开编辑器', sub: '逐音符精修 MIDI', view: 'edit', soon: false },
-  { ic: 'viz', title: '可视化分析', sub: '频谱 · 波形 · 声部', view: 'viz', soon: false },
-  { ic: 'chart', title: 'MIDI 分析器', sub: '音符密度 · 音域 · 调性', view: 'analyze', soon: false },
-  { ic: 'score', title: '乐谱视图', sub: '五线谱 · 简谱 · TAB', view: 'score', soon: false },
-  { ic: 'convert', title: '格式转换', sub: 'MIDI → WAV / MP4', view: 'convert', soon: false },
+  { ic: 'music', title: '音乐', sub: '演奏 · 歌词 · 编辑', view: 'music', soon: false },
+  { ic: 'viz', title: '视图', sub: '可视化 · 分析 · 乐谱', view: 'views', soon: false },
+  { ic: 'convert', title: '转译', sub: '转录 · 转换', view: 'transcode', soon: false },
+  { ic: 'box', title: '资源中心', sub: '模型 · 音色 · 资源', view: 'resources', soon: false },
 ];
 
 function go(v) { setView(v); }
