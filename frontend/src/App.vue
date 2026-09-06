@@ -12,7 +12,7 @@ import CommandPalette from './components/CommandPalette.vue';
 import GuideOverlay from './components/GuideOverlay.vue';
 import ChangeLogOverlay from './components/ChangeLogOverlay.vue';
 import { ref, computed, reactive } from 'vue';
-import { useAppStore, VIEWS } from './stores/app';
+import { useAppStore, VIEWS, viewParentOf } from './stores/app';
 import { usePlaylistStore } from './stores/playlist';
 import { useSettingsStore } from './stores/settings';
 import { setLang, t } from './core/i18n.js';
@@ -56,8 +56,7 @@ watch(() => settingsStore.settings, () => {
   wpEnabled.value = !!(s.wallpaper_enabled && s.custom_wallpaper);
 }, { deep: true });
 watch(() => route.path, (p) => {
-  const v = viewFromPath(p);
-  if (VIEWS.some(x => x.id === v)) state.view = v;
+  state.view = viewParentOf(viewFromPath(p));
 }, { immediate: true });
 const startTickLoop = () => app.startTickLoop();
 const stopTickLoop = () => app.stopTickLoop();

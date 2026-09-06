@@ -1,14 +1,16 @@
 <script setup>
 // 交互式新手引导：欢迎导览 + 全功能实操步骤（参照 v2.1 交互式引导迁移）
 import { ref, computed, nextTick, onBeforeUnmount } from 'vue';
+import { useRoute } from 'vue-router';
 import Icon from './Icon.vue';
-import { useAppStore, VIEWS } from '../stores/app';
+import { useAppStore, OLD_VIEW_TO_PARENT, viewParentOf } from '../stores/app';
 import { t } from '../core/i18n.js';
 
 const app = useAppStore();
 const state = app;
 const setView = (v) => app.setView(v);
 const bridge = window.fuBridge;
+const route = useRoute();
 
 const WELCOME_STEPS = [
   { ic: 'play2', title: t('欢迎使用 FuFumidi'), body: [ t('转录、修正、编辑、播放一条龙，全部在本机完成，无需联网。'), t('首页工作区已整合：最近曲目、保存工程、导出 MusicXML、快速开始都在一屏内。') ] },
@@ -21,7 +23,7 @@ const WELCOME_STEPS = [
 ];
 
 const IG_STEPS = [
-  { view: 'home', selector: '[data-guide="quick-transcribe"]', title: t('1. 进入转录页'), desc: t('点击首页“开始转录”卡片，或顶部切换到“转录”标签。'), action: true, validate: () => state.view === 'transcribe' },
+  { view: 'home', selector: '[data-guide="quick-transcribe"]', title: t('1. 进入转录页'), desc: t('点击首页“开始转录”卡片，或顶部切换到“转译”标签。'), action: true, validate: () => state.view === 'transcode' },
   { view: 'transcribe', selector: '[data-guide="mode-piano"]', title: t('2. 选择转录引擎'), desc: t('通用识别适合任意歌曲；钢琴专用适合纯钢琴；人声分离先分离人声/伴奏。'), action: true, validate: el => el.classList.contains('active') },
   { view: 'transcribe', selector: '[data-guide="audio-drop"]', title: t('3. 导入音频文件'), desc: t('点击上传区域，选择 MP3 / WAV / FLAC / M4A 等音频。建议使用音质较高的音频。'), manual: true },
   { view: 'transcribe', selector: '[data-guide="adv-panel"]', title: t('4. 调整转录参数'), desc: t('展开高级参数可调整阈值、最短音符、合并间隔、踏板、降噪、响度平衡、自动 BPM。'), manual: true },
@@ -123,10 +125,15 @@ function renderIg() {
   cleanupIg();
   const st = igStep.value;
   if (!st) { closeGuide(); return; }
-  if (st.view && state.view !== st.view) {
-    setView(st.view);
-    targetTimer = setTimeout(renderIg, 80);
-    return;
+  if (st.view) {
+    const parent = viewParentOf(st.view);
+    const child = OLD_VIEW_TO_PARENT[st.view] || '';
+    const currentTab = String(route.query.tab || '');
+    if (state.view !== parent || (child && currentTab !== child)) {
+      setView(st.view);
+      targetTimer = setTimeout(renderIg, 80);
+      return;
+    }
   }
   const started = Date.now();
   const tryFind = () => {

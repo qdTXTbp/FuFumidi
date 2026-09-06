@@ -573,8 +573,8 @@ onMounted(() => { playlist.hydrateFavorites(); });
       <div v-if="plMenu" class="pl-ctx-mask" @click.self="closePlMenu" @contextmenu.prevent="closePlMenu">
         <div class="pl-ctx-menu" :style="plMenuStyle()">
           <button class="pl-ctx-item" @click="openBatchManager(plMenu.pl); closePlMenu()">{{ t('批量管理歌单') }}</button>
-          <button class="pl-ctx-item" @click="closePlMenu(); openRename(plMenu.pl)">{{ t('重命名') }}</button>
-          <button class="pl-ctx-item danger" @click="closePlMenu(); deletePl(plMenu.pl)">{{ t('删除歌单') }}</button>
+          <button class="pl-ctx-item" @click="openRename(plMenu.pl); closePlMenu()">{{ t('重命名') }}</button>
+          <button class="pl-ctx-item danger" @click="deletePl(plMenu.pl); closePlMenu()">{{ t('删除歌单') }}</button>
         </div>
       </div>
     </Transition>

@@ -10,19 +10,23 @@ import { t } from '../core/i18n';
 
 export const VIEWS = [
   { id: 'home', label: '首页', ic: 'home' },
-  { id: 'play', label: '演奏', ic: 'play2' },
-  { id: 'lyrics', label: '歌词', ic: 'music' },
-  { id: 'edit', label: '编辑', ic: 'edit' },
-  { id: 'viz', label: '可视化', ic: 'viz' },
-  { id: 'analyze', label: '分析', ic: 'chart' },
-  { id: 'score', label: '乐谱', ic: 'score' },
-  { id: 'transcribe', label: '转录', ic: 'transcribe' },
-  { id: 'convert', label: '转换', ic: 'convert' },
+  { id: 'music', label: '音乐', ic: 'music' },
+  { id: 'views', label: '视图', ic: 'viz' },
+  { id: 'transcode', label: '转译', ic: 'convert' },
   { id: 'resources', label: '资源中心', ic: 'box' },
-{ id: 'models', label: '模型管理', ic: 'box' },
-  { id: 'soundfonts', label: '音色工坊', ic: 'music' },
   { id: 'utau', label: 'UTAU', ic: 'utau' },
 ];
+
+// 旧子视图 ID → 所属分组父视图，保留内部跳转（如“同步到乐谱”“打开播放”）
+export const OLD_VIEW_TO_PARENT: Record<string, string> = {
+  play: 'music', lyrics: 'music', edit: 'music',
+  viz: 'views', analyze: 'views', score: 'views',
+  transcribe: 'transcode', convert: 'transcode',
+};
+
+export function viewParentOf(v: string): string {
+  return OLD_VIEW_TO_PARENT[v] || (VIEWS.some(x => x.id === v) ? v : 'home');
+}
 
 const DB_NAME = 'fufumidi-db', DB_VER = 1, STORE_SONGS = 'songs';
 let _dbP: Promise<any> | null = null;
@@ -142,7 +146,7 @@ function fpOf(song: any, name: string): string {
 
 export const useAppStore = defineStore('app', {
   state: () => ({
-    view: 'play' as string,
+    view: 'home' as string,
     sidebarOpen: true,
     sidebarResizing: false,
     sidebarWidth: readSidebarWidth(),
@@ -507,17 +511,18 @@ export const useAppStore = defineStore('app', {
       player.syn.setTrackPan(i, v);
     },
     setView(v: string) {
-      this.view = VIEWS.some(x => x.id === v) ? v : 'home';
-      this.syncHash();
+      this.view = viewParentOf(v);
+      const tab = OLD_VIEW_TO_PARENT[v] || '';
+      this.syncHash(tab);
     },
     setSidebarWidth(w: number) {
       const v = Math.round(Math.max(SIDEBAR_MIN_W, Math.min(SIDEBAR_MAX_W, w)));
       this.sidebarWidth = v;
       try { localStorage.setItem('fufumidi_sidebar_w', String(v)); } catch (e) {}
     },
-    syncHash() {
+    syncHash(tab = '') {
       if (typeof location === 'undefined') return;
-      const target = '#/' + this.view;
+      const target = '#/' + this.view + (tab ? '?tab=' + encodeURIComponent(tab) : '');
       if (location.hash !== target) {
         try { location.hash = target; } catch (e) {}
       }
