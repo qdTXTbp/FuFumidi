@@ -95,6 +95,9 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
       minSize: 2e8,
       fromRepo: null,
       repoFile: null,
+      urls: [
+        _releaseBase + '/SGM_v2.01.sf2',   // 自家镜像仓库（Release 附件，经 gh.jasonzeng.dev 加速）
+      ],
       bundledPath: null,
     },
     {
