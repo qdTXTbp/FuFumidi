@@ -1,8 +1,8 @@
 {
     "name": "fufumidi",
     "productName": "FuFumidi",
-    "version": "3.2.7",
-    "description": "离线 MIDI 播放 / 编辑 / 可视化 / 分析 / 乐谱 / 转录（音频转 MIDI）一体工具",
+    "version": "3.2.9",
+    "description": "?? MIDI ?? / ?? / ??? / ?? / ?? / ?????? MIDI?????",
     "main": "main.js",
     "author": {
         "name": "FuFumidi",

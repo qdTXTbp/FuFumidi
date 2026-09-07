@@ -16,7 +16,7 @@ FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编�
 
 应用基于 Electron 桌面壳 + Vue 3 + TypeScript 渲染层 + 内置 Python 转录运行时，并提供可选的 Rust 核心以加速热点路径。所有音频、模型权重与推理都在本地执行，不上传任何数据。
 
-当前版本线：**3.2.7**（[发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v3.2.7)）。
+当前版本线：**3.2.9**（[发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v3.2.9)）。
 
 3.2.7 要点：转录引擎全面健壮性加固——所有模型（MuScriptor、Aria-AMT、Transkun、Basic Pitch 及未来可下载模型）统一经内置 ffmpeg 预解码音频，非标准 MP3/重命名容器不再抛晦涩错误，文件缺失给出明确提示；修复启动 SF2 加载失败后音色自愈失效；资源中心模型管理新增「下载新模型后请去资源管理补全依赖」醒目提示；安装包瘦身约 20%，清除开发残留与冗余语言包。
 
