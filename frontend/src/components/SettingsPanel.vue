@@ -219,6 +219,27 @@ async function updLaunch() {
   }
 }
 
+/* ---------------- 卸载 ---------------- */
+// 3.2.7：设置 → 更新页签 → 卸载应用。二次确认后启动 NSIS 卸载器，主程序自动退出。
+async function doUninstall() {
+  const ok = await app.confirmDialog({ msg: t('确定要卸载 FuFumidi 吗？\n将启动系统卸载程序，应用会自动退出并移除本机安装。') });
+  if (!ok) return;
+  if (!bridge || !bridge.appUninstall) { upd.status = '当前环境不支持卸载'; upd.failed = true; return; }
+  upd.status = '正在启动卸载程序…'; upd.failed = false;
+  try {
+    const r = await bridge.appUninstall();
+    if (r && r.ok) {
+      upd.status = '卸载程序已启动，应用即将退出…';
+    } else {
+      upd.status = (r && r.error) || '启动失败';
+      upd.failed = true;
+    }
+  } catch (e) {
+    upd.status = '卸载启动失败：' + ((e && e.message) || e);
+    upd.failed = true;
+  }
+}
+
 /* ---------------- GPU 加速 ---------------- */
 const gpu = reactive({
   detect: null,        // {vendor,name,blackwell,needCu128,available,backend}
@@ -828,6 +849,17 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
             <!-- 走到「失败」或「已启动更新器」都显示重试：更新器窗口内的实际失败应用无法感知，
                  只要更新未让应用重启成功（成功会重启到新版本，此态自然消失），即可点重试重新发起 -->
             <button v-if="upd.failed || upd.launched" class="btn sm primary" @click="updLaunch"><Icon name="redo" :size="13" /> {{ t('重试') }}</button>
+          </div>
+
+          <!-- 危险区：卸载 -->
+          <div class="field-row" style="margin-top:18px;border-top:1px solid var(--hairline);padding-top:14px">
+            <div>
+              <div class="fr-label">{{ t('卸载应用') }}</div>
+              <div class="fr-hint">{{ t('启动系统卸载程序并移除本机安装，应用会自动退出。用户数据（歌单 / 设置）保留在本地。') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <button class="btn sm ghost danger" @click="doUninstall">{{ t('卸载') }}</button>
+            </div>
           </div>
         </div>
       </div>

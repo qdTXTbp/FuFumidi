@@ -18,6 +18,24 @@ files:
   - "!release/**"
   - "!build.js"
   - "!electron-builder.yml"
+  # --- 3.2.6 全面自查：开发残留不入包（运行时零引用，已逐一核实） ---
+  - "!electron-builder.base.yml"
+  - "!electron-builder.ci.yml"
+  - "!build-gpu-package.js"
+  - "!frontend/**"          # Vue 源码：运行时只用 renderer/dist 构建产物
+  - "!docs/**"              # README 配图
+  - "!scripts/**"           # 构建/上传脚本
+  - "!tools/**"             # kachina-builder.exe 等构建工具
+  - "!rust-core/**"         # Rust 源码（无编译产物，rust.js 缺失时优雅降级）
+  - "!.github/**"
+  - "!README.md"
+  - "!README-CN.md"
+  - "!CHANGES.md"
+  - "!UPDATING.md"
+  - "!engine/tests/**"      # pytest 开发测试
+  - "!**/__pycache__/**"
+  - "!**/*.pyc"
+  - "!.pytest_cache/**"
   # resources/** 与 models/** 由 extraResources 单独分发到 win-unpacked/resources，
   # 若再打进 app.asar 会重复打包（python 1.3GB / models 160MB），导致体积翻倍
   - "!resources/**"
@@ -28,6 +46,11 @@ files:
   # soundfonts 下载/暂存目录不入包（开发产物，避免膨胀与未定稿资源进发布版）
   - "!soundfonts-dist/**"
   - "!.sfdist-tmp/**"
+# 应用内 i18n 仅中文/英文：裁掉其余 ~34MB 的 Chromium 语言包（缺失语言回退 en-US）
+electronLanguages:
+  - en-US
+  - zh-CN
+  - zh-TW
 extraResources:
   - from: "resources/python"
     to: python

@@ -42,7 +42,7 @@ export const useSettingsStore = defineStore('settings', {
       if (typeof window === 'undefined') return;
       const sf = (this.settings as any).active_soundfont || 'internal';
       const prevApplied = (window as any).__fufumidi_appliedSoundfont;
-      window.__fufumidi_activeSoundfont = sf;
+      (window as any).__fufumidi_activeSoundfont = sf;
       try { localStorage.setItem('fufumidi_soundfont', sf); } catch (e) {}
       // 启动竞态自愈：restoreSongs→ensureAudio 可能先于本同步执行（引用未就绪 → 按内置初始化）。
       // 已应用音色与目标不一致时补加载；一致（含任意其他设置保存触发的 save）则跳过，避免 30MB SF2 反复重载。

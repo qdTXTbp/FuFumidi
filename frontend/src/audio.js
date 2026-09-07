@@ -21,11 +21,21 @@ export function ensureAudio() {
     try { saved = window.__fufumidi_activeSoundfont || localStorage.getItem('fufumidi_soundfont') || null; } catch (e) { saved = window.__fufumidi_activeSoundfont || null; }
     const bridge = (typeof window !== 'undefined') ? window.fuBridge : null;
     const source = saved && saved !== 'internal' ? saved : (bridge ? undefined : 'web:generaluser');
-    // 记录已应用音色：settings 首次同步时据此判断是否需要竞态自愈补加载
+    // 记录已应用音色：settings 首次同步时据此判断是否需要竞态自愈补加载。
+    // 此处先按预期值标记，待 setSoundfont 返回结果后如实修正（见下）：
+    // 若启动时 SF2 加载失败（文件被删/移动/损坏，synth 内部会静默回退内置），
+    // 仍保留乐观标记会让 settings 自愈误判「已应用」而跳过补加载。
     if (typeof window !== 'undefined') window.__fufumidi_appliedSoundfont = source || 'internal';
     // 诊断钩子：CDP/控制台读取当前播放器实例（只读用途）
     if (typeof window !== 'undefined') window.__fufumidiActivePlayer = null;
-    synth.setSoundfont(source);
+    synth.setSoundfont(source).then((r) => {
+      // 3.2.6 自查修复：SF2 加载失败时 synth 内部已静默回退内置（r.using !== 'sf2'），
+      // 此时如实降级标记，让 settings 同步的自愈机制可识别并补加载；
+      // 成功加载 SF2 时维持上方乐观标记（标记语义 = 已选音色源路径）。
+      if (typeof window !== 'undefined' && (!r || r.using !== 'sf2')) window.__fufumidi_appliedSoundfont = 'internal';
+    }).catch(() => {
+      if (typeof window !== 'undefined') window.__fufumidi_appliedSoundfont = 'internal';
+    });
     player = new Player(synth);
     if (typeof window !== 'undefined') window.__fufumidiActivePlayer = player;
     player.onEnd = () => {

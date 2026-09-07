@@ -210,6 +210,11 @@ def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
     num_threads = engine_perf.resolve_threads(perf_mode)
 
     mode = mode or DEFAULT_MODE
+    # 3.2.6 健壮性加固：入口统一做存在性检查，覆盖现有与未来接入的全部引擎，
+    # 避免文件真缺失时抛出 libsndfile「File does not exist or is not a regular
+    # file (possibly a pipe?)」这类误导性错误
+    if not os.path.isfile(audio_path):
+        raise RuntimeError(f"音频文件不存在或不可读：{audio_path}")
     params = {**(DEFAULTS.get(mode, {})), **(params or {})}
     auto_bpm = bool((params or {}).get("auto_bpm"))
     native_bpm = False   # 子引擎是否已内置测速（basic 是；其余统一走后处理）
@@ -248,6 +253,7 @@ def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
                 n = engine_muscriptor.transcribe_muscriptor(audio_path, output_midi, params=params,
                                                              log_cb=log_cb, num_threads=num_threads)
             else:
+                import engine_basic   # 3.2.6 热修：auto-bpm 重构时误删，导致 universal 默认路径 NameError
                 native_bpm = True   # basic 内置节拍测速
                 n = engine_basic.transcribe_basic(audio_path, output_midi, log_cb=log_cb,
                                                   num_threads=num_threads, **params)

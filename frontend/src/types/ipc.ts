@@ -312,6 +312,7 @@ export interface FuBridge {
   // updates
   updateCheck(): Promise<any>;
   getVersion(): Promise<string>;
+  appUninstall(): Promise<GeneralResult>;
   updateDownload(url: string): Promise<any>;
   updateOpen(p: string): Promise<any>;
   onUpdateProgress(cb: (p: any) => void): () => void;

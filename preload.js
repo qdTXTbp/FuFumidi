@@ -72,6 +72,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
 
   updateCheck: () => ipcRenderer.invoke('update:check'),
   getVersion: () => ipcRenderer.invoke('app:getVersion'),
+  appUninstall: () => ipcRenderer.invoke('app:uninstall'),
   updateNotes: (tag) => ipcRenderer.invoke('update:notes', tag),
   updateDownload: (url) => ipcRenderer.invoke('update:download', url),
   updateOpen: (p) => ipcRenderer.invoke('update:open', p),

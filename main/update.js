@@ -163,6 +163,21 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
 
+  // 3.2.7：设置 → 卸载。启动 NSIS 卸载器（与主程序同级），随后退出主程序释放文件占用，
+  // 卸载器自身的确认窗口由用户操作；detached 保证主程序退出后卸载流程继续
+  ipcMain.handle('app:uninstall', async () => {
+    try {
+      const dir = app.isPackaged ? path.dirname(process.execPath) : path.join(app.getAppPath(), 'release', 'win-unpacked');
+      const un = path.join(dir, 'Uninstall FuFumidi.exe');
+      if (!fs.existsSync(un)) return { ok: false, error: '未找到卸载程序：' + un + '（免安装便携版无卸载器，请直接删除目录）' };
+      const { spawn } = require('child_process');
+      const child = spawn(un, [], { detached: true, stdio: 'ignore' });
+      child.unref();
+      setTimeout(() => { try { app.quit(); } catch (e) {} }, 600);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
+
   // 增量更新流程（kachina 更新器方案，见 UPDATING.md）：
   //  1) 更新器内嵌源配置（ghfast 等镜像，指向 releases/latest/download/FuFumidi.Install.exe）
   //     —— 由更新器自行差分下载（Range 请求）并显示进度，主进程不做整包预下载

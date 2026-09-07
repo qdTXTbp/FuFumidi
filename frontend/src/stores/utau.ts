@@ -76,7 +76,7 @@ export const useUtauStore = defineStore('utau', {
     persist() {
       try {
         // 不落盘撤销历史，避免 localStorage 无限膨胀
-        const { undoStack, redoStack, ...rest } = this.$state as Record<string, unknown>;
+        const { undoStack, redoStack, ...rest } = this.$state as unknown as Record<string, unknown>;
         void undoStack; void redoStack;
         localStorage.setItem(LS_KEY, JSON.stringify(rest));
       } catch (e) {}
@@ -117,7 +117,7 @@ export const useUtauStore = defineStore('utau', {
     },
     setSelection(ids: string[]) {
       this.selectedIds = ids;
-      this.selectedId = ids.length ? ids[ids.length - 1] : null;
+      this.selectedId = ids.length ? (ids[ids.length - 1] ?? null) : null;
     },
     toggleSelect(id: string) {
       const i = this.selectedIds.indexOf(id);
@@ -163,7 +163,7 @@ export const useUtauStore = defineStore('utau', {
         this.notes.push(note); ids.push(note.id);
       }
       this.selectedIds = ids;
-      this.selectedId = ids[ids.length - 1];
+      this.selectedId = ids[ids.length - 1] ?? null;
       this.persist();
       return ids;
     },
@@ -178,7 +178,7 @@ export const useUtauStore = defineStore('utau', {
         this.notes.push(note); ids.push(note.id);
       }
       this.selectedIds = ids;
-      this.selectedId = ids[ids.length - 1];
+      this.selectedId = ids[ids.length - 1] ?? null;
       this.persist();
       return ids;
     },
@@ -197,8 +197,8 @@ export const useUtauStore = defineStore('utau', {
       this.notes = this.notes.filter(n => !set.has(n.id));
       this.selectedIds = this.selectedIds.filter(id => !set.has(id));
       this.selectedId = this.selectedIds.length
-        ? this.selectedIds[this.selectedIds.length - 1]
-        : (this.notes.length ? this.notes[0].id : null);
+        ? (this.selectedIds[this.selectedIds.length - 1] ?? null)
+        : (this.notes[0]?.id ?? null);
       if (this.selectedId && !this.selectedIds.includes(this.selectedId)) this.selectedIds = [this.selectedId];
       this.persist();
     },
@@ -232,7 +232,7 @@ export const useUtauStore = defineStore('utau', {
       this.voicebanks = list || [];
       // 当前声库失联则回退到已导入第一项
       if (this.voicebankDir && !this.voicebanks.some(v => v.dir === this.voicebankDir)) {
-        this.voicebankDir = this.voicebanks.length ? this.voicebanks[0].dir : '';
+        this.voicebankDir = this.voicebanks.length ? (this.voicebanks[0]?.dir ?? '') : '';
       }
       this.persist();
     },

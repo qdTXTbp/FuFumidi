@@ -37,15 +37,23 @@ def transcribe_transkun(audio_path, output_midi, params=None, log_cb=None,
     os.makedirs(out_dir, exist_ok=True)
 
     _log(log_cb, "Transkun 推理中（钢琴转录）…")
-    cmd = []
-    if shutil.which("transkun"):
-        cmd = ["transkun"]
-    else:
-        cmd = [sys.executable, "-m", "transkun.transcribe"]
-    cmd += [audio_path, output_midi, "--device", device]
-    if weight:
-        cmd += ["--weight", weight]
-    _run(cmd, log_cb)
+    # 3.2.6 健壮性加固：transkun 内部音频加载器（torchaudio 系）对非标准 MP3
+    # （重命名容器/损坏头）会抛晦涩错误。与 muscriptor 引擎同款修复：统一先经
+    # 内置 ffmpeg 预解码为标准 PCM WAV（16000 = 模型原生采样率）再喂 CLI。
+    from audio_io import decode_to_wav, remove_temp
+    wav = decode_to_wav(audio_path, 16000)
+    try:
+        cmd = []
+        if shutil.which("transkun"):
+            cmd = ["transkun"]
+        else:
+            cmd = [sys.executable, "-m", "transkun.transcribe"]
+        cmd += [wav, output_midi, "--device", device]
+        if weight:
+            cmd += ["--weight", weight]
+        _run(cmd, log_cb)
+    finally:
+        remove_temp(wav)
 
     n = _count_notes(output_midi)
     _log(log_cb, f"保存 MIDI → {os.path.basename(output_midi)}（{n} 音符）")

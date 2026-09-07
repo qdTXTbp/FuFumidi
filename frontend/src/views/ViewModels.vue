@@ -114,6 +114,12 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
       </button>
     </div>
 
+    <!-- 醒目提示：新模型下载后需补全依赖 -->
+    <div class="vm-dep-tip">
+      <span class="vm-dep-ic"><Icon name="zap" :size="14" /></span>
+      <span>{{ t('下载新模型后请去「资源管理」里补全依赖，否则模型可能无法使用') }}</span>
+    </div>
+
     <!-- 卡片网格 -->
     <Transition name="vmfade" mode="out-in">
       <div class="vm-grid" :key="curTab">
@@ -194,6 +200,11 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 /* ===== 页签 ===== */
 /*** 页签：与全局 .btn/.tab 一致的轻量 pill 风格，去掉厚重渐变与强投影 ***/
 .vm-tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+
+/* ===== 依赖补全醒目提示 ===== */
+.vm-dep-tip { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; padding: 9px 14px; border-radius: var(--radius-lg); border: 1px solid color-mix(in srgb, var(--brand-coral) 38%, transparent); background: color-mix(in srgb, var(--brand-coral) 11%, var(--surface)); color: var(--ink); font-size: 12.5px; font-weight: 700; line-height: 1.5; }
+.vm-dep-ic { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; border-radius: 50%; background: color-mix(in srgb, var(--brand-coral) 18%, transparent); color: var(--brand-coral); flex: none; }
+
 .vm-tab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border: 1px solid var(--hairline); border-radius: 999px; background: transparent; color: var(--steel); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background .15s, color .15s, border-color .15s; }
 .vm-tab:hover { background: var(--surface-soft); color: var(--ink); }
 .vm-tab .tb-ic { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 50%; background: var(--surface-soft); color: var(--steel); transition: all .15s ease; }

@@ -410,7 +410,7 @@ export const useAppStore = defineStore('app', {
         if (!item.song) { const r = await idbGet(STORE_SONGS, id); if (r && r.bytes) tryParse(r.bytes); }
         // 3) SQLite 字节（兜底，JSON 数字数组对较大 MIDI 可能丢失）
         if (!item.song) { const all = await dbSongsAll(); const r = all.find((x: any) => x.id === id); if (r && r.bytes) tryParse(r.bytes); }
-        if (!item.song) this.toast(t('无法解析已保存的 MIDI：') + (lastErr && lastErr.message || ''), 'warn');
+        if (!item.song) this.toast(t('无法解析已保存的 MIDI：') + ((lastErr as any)?.message || ''), 'warn');
       }
       if (!item.song) return;
       try { localStorage.setItem('fufumidi_active', id); } catch (e) {}

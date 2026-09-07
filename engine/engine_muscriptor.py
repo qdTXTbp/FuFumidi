@@ -96,6 +96,11 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     _require_package()  # 包缺失先给明确报错，再导入
     from muscriptor import TranscriptionModel
 
+    # 3.2.6 热修：先做存在性检查，避免 libsndfile 抛「File does not exist or is not a
+    # regular file (possibly a pipe?)」这类误导性错误
+    if not os.path.isfile(audio_path):
+        raise RuntimeError(f"音频文件不存在或不可读：{audio_path}")
+
     params = params or {}
     size = str(params.get("model_size") or "medium").lower()
     device = str(params.get("device") or "auto")
@@ -145,8 +150,18 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     _log(log_cb, "推理中（多乐器转录）…")
     out_dir = os.path.dirname(os.path.abspath(output_midi))
     os.makedirs(out_dir, exist_ok=True)
-    # muscriptor 0.3+ 的 transcribe_to_midi 返回 MIDI 字节（非写文件）
-    data = model.transcribe_to_midi(audio_path)
+    # 3.2.6 热修：muscriptor 直读原始文件只支持 PCM WAV（stdlib wave）与 soundfile
+    # 可解码格式，非标准 MP3（重命名容器/损坏头）会抛 libsndfile「File does not exist…」
+    # + mpg123「Giving up searching valid MPEG header」晦涩错误。
+    # 统一先用 audio_io 预解码为标准 PCM WAV（内置 ffmpeg 按内容解码，支持一切格式），
+    # 采样率 16000 与 muscriptor 内部 _SAMPLE_RATE 一致，免去二次重采样。
+    import audio_io
+    wav_tmp = audio_io.decode_to_wav(audio_path, 16000)
+    try:
+        # muscriptor 0.3+ 的 transcribe_to_midi 返回 MIDI 字节（非写文件）
+        data = model.transcribe_to_midi(wav_tmp)
+    finally:
+        audio_io.remove_temp(wav_tmp)
     with open(output_midi, "wb") as f:
         f.write(data)
 
