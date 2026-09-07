@@ -16,7 +16,9 @@ FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编�
 
 应用基于 Electron 桌面壳 + Vue 3 + TypeScript 渲染层 + 内置 Python 转录运行时，并提供可选的 Rust 核心以加速热点路径。所有音频、模型权重与推理都在本地执行，不上传任何数据。
 
-当前版本线：**3.1.16**。
+当前版本线：**3.2.6**（[发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v3.2.6)）。
+
+3.2.6 要点：修复导出 WAV/视频音频「2 倍速且重复两遍」（WAV 声道交错写入）；视频导出音画同步、长曲不再内存黑屏；转写自动检测源音频 BPM，播放与导出速度和原曲一致；SF2 音色选择持久化且导出使用同一音色；修复完整性检查 core-corrupt 误报；主题库按深色/浅色两大分类重排。
 
 ### 核心能力
 
@@ -246,10 +248,10 @@ FuFumidi/
 
 ### 安装
 
-从 Releases 页下载安装包：
+从 [Releases 页](https://github.com/qdTXTbp/FuFumidi/releases/latest)下载安装包：
 
-- **完整安装包** - 包含 Python 运行时、全部转录模型与 Demucs 权重，推荐用于离线环境。
-- **基础安装包** - 仅 basic-pitch 模型，其余模型首次使用时按需下载。
+- **`FuFumidi-Setup-X.Y.Z.exe`（完整安装包）** - 内置 Python 运行时、全部转录模型与 Demucs 权重，推荐新用户与离线环境使用。
+- **`FuFumidi.Install.exe`（固定名增量包）** - 仅应用代码，保留磁盘上已有的环境；用于应用内自动更新、一键修复与覆盖安装。
 
 首次启动会执行完整性检验，缺失项会提示修复。
 

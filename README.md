@@ -16,7 +16,9 @@ FuFumidi is a fully offline desktop workstation for MIDI. It targets musicians, 
 
 The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally. Nothing is uploaded.
 
-Current release line: **3.1.16**.
+Current release line: **3.2.6** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v3.2.6)).
+
+What's new in 3.2.6: exported WAV/video audio no longer plays at double speed with duplicated content (WAV channel interleaving fix); video export stays in sync and no longer runs out of memory on long songs; transcription auto-detects the source BPM so playback and exports match the original recording; the selected SF2 soundfont persists and is used for exports; the false core-corrupt integrity warning is fixed; the theme library is reorganized into dark/light categories.
 
 ### What it does
 
@@ -246,10 +248,10 @@ FuFumidi/
 
 ### Installing
 
-Download the installer from the releases page:
+Download the installer from the [releases page](https://github.com/qdTXTbp/FuFumidi/releases/latest):
 
-- **Full installer** - Python runtime, all transcriber models, Demucs weights. Recommended for offline use.
-- **Base installer** - basic-pitch only. Additional models are downloaded on first use.
+- **`FuFumidi-Setup-X.Y.Z.exe` (full installer)** - Python runtime, all transcriber models, Demucs weights. Recommended for offline use and new installs.
+- **`FuFumidi.Install.exe` (fixed-name incremental package)** - app code only, keeps the existing environment on disk. For in-app auto-update, one-click repair and overwrite installs.
 
 On first launch the app runs an integrity check and prompts you to repair if anything is missing.
 
