@@ -9,9 +9,30 @@ const { spawn } = require('child_process');
 
 function createEngineService({ resolvePython, engineDir, engineEnv }) {
   const activeChildren = new Set();
-  let _engineWorker = null;
+  // worker 池：slot 0 为常驻主 worker；slot>0 为并行转录临时 worker（空闲自动回收）
+  const _workers = new Map();      // slot -> child
+  const _workerIdle = new Map();   // slot -> 回收定时器
   let _engineWorkerSeq = 0;
-  const _engineWorkerPending = new Map();
+  const _engineWorkerPending = new Map();  // 请求 id -> { resolve, reject, win, logId, child }
+  const WORKER_IDLE_MS = 120000;   // 并行 worker 空闲 2 分钟后退出，释放模型内存
+
+  function reapWorker(slot) {
+    const t = _workerIdle.get(slot);
+    if (t) { clearTimeout(t); _workerIdle.delete(slot); }
+    if (slot > 0) {
+      _workerIdle.set(slot, setTimeout(() => {
+        _workerIdle.delete(slot);
+        const child = _workers.get(slot);
+        if (child && !workerBusy(child)) { _workers.delete(slot); try { child.kill(); } catch (e) {} }
+      }, WORKER_IDLE_MS));
+    }
+  }
+
+  // 该 worker 是否仍有在途请求
+  function workerBusy(child) {
+    for (const p of _engineWorkerPending.values()) if (p.child === child) return true;
+    return false;
+  }
 
   function spawnEngine(pyArgs, opts = {}) {
     const { script = 'music2midi.py', onLog, onProgress, onDone, onError, timeoutMs = 30 * 60 * 1000 } = opts;
@@ -62,21 +83,26 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
   }
 
   function stopEngineWorker() {
-    const old = _engineWorker;
-    _engineWorker = null;
-    if (old && !old.killed) { try { old.kill(); } catch (e) {} }
+    const olds = [..._workers.values()];
+    _workers.clear();
+    for (const t of _workerIdle.values()) { try { clearTimeout(t); } catch (e) {} }
+    _workerIdle.clear();
+    for (const c of olds) { if (c && !c.killed) { try { c.kill(); } catch (e) {} } }
     const err = new Error('engine worker restarted');
     for (const p of _engineWorkerPending.values()) { try { p.reject(err); } catch (e) {} }
     _engineWorkerPending.clear();
     return new Promise((resolve) => {
-      if (!old || old.exitCode !== null) { resolve(); return; }
+      const alive = olds.filter(c => c && c.exitCode === null);
+      if (!alive.length) { resolve(); return; }
+      let left = alive.length;
       const timer = setTimeout(() => resolve(), 5000);
-      old.once('close', () => { clearTimeout(timer); resolve(); });
+      for (const c of alive) c.once('close', () => { if (--left <= 0) { clearTimeout(timer); resolve(); } });
     });
   }
 
-  function ensureEngineWorker() {
-    if (_engineWorker && !_engineWorker.killed) return _engineWorker;
+  function ensureEngineWorker(slot = 0) {
+    const cur = _workers.get(slot);
+    if (cur && !cur.killed && cur.exitCode === null) return cur;
     const py = resolvePython();
     const eng = engineDir();
     const child = spawn(py, [path.join(eng, 'music2midi.py'), 'worker'], {
@@ -115,20 +141,44 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       }
     });
     child.stderr.on('data', () => {});
-    const failAll = (err) => {
-      if (_engineWorker !== child) return;
-      _engineWorker = null;
-      for (const p of _engineWorkerPending.values()) p.reject(err);
-      _engineWorkerPending.clear();
+    // 池化：子进程异常退出只清理自己的在途请求，不影响其他槽位
+    const failOne = (err) => {
+      if (_workers.get(slot) !== child) return;
+      _workers.delete(slot);
+      const t = _workerIdle.get(slot);
+      if (t) { clearTimeout(t); _workerIdle.delete(slot); }
+      for (const [id, p] of [..._engineWorkerPending.entries()]) {
+        if (p.child === child) { _engineWorkerPending.delete(id); try { p.reject(err); } catch (e) {} }
+      }
     };
-    child.on('error', e => failAll(new Error('engine worker error: ' + e)));
-    child.on('close', () => failAll(new Error('engine worker exited')));
-    _engineWorker = child;
+    child.on('error', e => failOne(new Error('engine worker error: ' + e)));
+    child.on('close', () => failOne(new Error('engine worker exited')));
+    _workers.set(slot, child);
     return child;
   }
 
   function engineWorkerConvert(cfg) {
-    const child = ensureEngineWorker();
+    // 并行槽位配额：__slots 为渲染端并行路数（1-4）。GPU 环境显存有限，自动降 1 路；
+    // CPU 环境用满配额。在配额内挑选在途请求最少的 worker 槽位，尽量并行不串队。
+    let slots = Math.max(1, Math.min(4, parseInt(cfg.__slots, 10) || 1));
+    try {
+      const env = engineEnv();
+      if (env && env.FUFUMIDI_DISABLE_GPU !== '1') slots = Math.max(1, slots - 1); // GPU：自动降 1
+    } catch (e) {}
+    const load = new Map();
+    for (let s = 0; s < slots; s++) load.set(s, 0);
+    for (const p of _engineWorkerPending.values()) {
+      for (const [s, c] of _workers.entries()) {
+        if (p.child === c) load.set(s, (load.get(s) || 0) + 1);
+      }
+    }
+    let best = 0, bestLoad = Infinity;
+    for (let s = 0; s < slots; s++) {
+      const l = load.get(s) || 0;
+      if (l < bestLoad) { bestLoad = l; best = s; }
+    }
+    const child = ensureEngineWorker(best);
+    reapWorker(best);
     const id = 'w' + (++_engineWorkerSeq);
     const req = {
       _id: id,
@@ -140,7 +190,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
     const map = { onset_threshold:'onset_threshold', frame_threshold:'frame_threshold', min_note_length:'min_note_length', min_note_ms:'min_note_ms', merge_gap_ms:'merge_gap_ms', tempo:'tempo', stem_format:'stem_format', model:'model', model_size:'model_size' };
     for (const [k, rk] of Object.entries(map)) if (cfg[k] != null) req[rk] = cfg[k];
     for (const k of ['denoise','normalize','auto_bpm','no_merge','no_velnorm','with_drums','export_stems','no_pedal']) if (cfg[k]) req[k] = true;
-    const p = new Promise((resolve, reject) => { _engineWorkerPending.set(id, { resolve, reject, win: cfg.__win, logId: cfg.__logId || cfg.id }); });
+    const p = new Promise((resolve, reject) => { _engineWorkerPending.set(id, { resolve, reject, win: cfg.__win, logId: cfg.__logId || cfg.id, child }); });
     child.stdin.write(JSON.stringify(req) + '\n');
     return p;
   }

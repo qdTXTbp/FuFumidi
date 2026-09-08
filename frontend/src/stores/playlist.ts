@@ -122,7 +122,7 @@ export const usePlaylistStore = defineStore('playlist', {
       return id;
     },
     select(id: string) {
-      if (id === 'all' || id === 'favorites' || this.playlists.some(p => p.id === id)) {
+      if (id === 'all' || id === 'favorites' || id === 'recent' || id === 'most' || this.playlists.some(p => p.id === id)) {
         this.activePlaylistId = id;
         this.persist();
       }

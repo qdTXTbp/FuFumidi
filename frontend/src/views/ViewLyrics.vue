@@ -169,6 +169,40 @@ function importText() {
   };
   inp.click();
 }
+/* ---------------- 同名 .lrc 自动加载 ---------------- */
+// 打开歌曲时探测同目录同名 .lrc；曲目本身无歌词事件时自动导入（每会话每曲只试一次）
+const sidecarTried = {};
+async function tryAutoLoadSidecar() {
+  const s = song.value;
+  const cs = currentSong.value;
+  if (!s || !cs) return;
+  const fp = (cs.meta && cs.meta.fp) || '';
+  if (!fp || sidecarTried[cs.id]) return;
+  sidecarTried[cs.id] = true;
+  try {
+    const hasLyric = s.tracks.some(tr => (tr.events || []).some(e => e.type === 'lyric' && e.text && e.text.trim()));
+    if (hasLyric) return;
+    const bridge = window.fuBridge;
+    if (!bridge || !bridge.readSidecarLyrics) return;
+    const r = await bridge.readSidecarLyrics(fp);
+    if (!r || !r.ok || !r.b64) return;
+    const u8 = Uint8Array.from(atob(r.b64), c => c.charCodeAt(0));
+    let text;
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(u8); }
+    catch (e) { try { text = new TextDecoder('shift_jis').decode(u8); } catch (e2) { text = new TextDecoder('utf-8').decode(u8); } }
+    let added = 0;
+    for (const line of text.split(/\r?\n/).map(x => x.trim()).filter(Boolean)) {
+      const mm = line.match(/\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\](.*)/);
+      if (mm) {
+        const sec = parseInt(mm[1], 10) * 60 + parseInt(mm[2], 10) + (mm[3] ? parseInt(mm[3].padEnd(3, '0').slice(0, 3), 10) / 1000 : 0);
+        const txt = (mm[4] || '').trim();
+        if (txt && s.secToTick) { s.tracks[0].events.push({ tick: Math.round(s.secToTick(sec)), type: 'lyric', text: txt }); added++; }
+      }
+    }
+    if (added) toast(t('已自动加载同名歌词 ') + added + t(' 句'), 'ok');
+  } catch (e) {}
+}
+watch(() => currentSong.value && currentSong.value.id, () => { setTimeout(tryAutoLoadSidecar, 400); });
 function exportLrc() {
   const s = song.value;
   if (!s || !lyrics.value.length) { toast(t('暂无歌词'), 'warn'); return; }

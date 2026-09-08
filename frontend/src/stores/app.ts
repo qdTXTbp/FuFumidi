@@ -32,6 +32,8 @@ const DB_NAME = 'fufumidi-db', DB_VER = 1, STORE_SONGS = 'songs';
 let _dbP: Promise<any> | null = null;
 let _toastTimer: any = null;
 let _raf: number | null = null;
+// 正在预解析的下一首曲目 id（无缝播放：切歌时省去 parseMidi 耗时）
+const _preloading = new Set<string>();
 // 全局 Web 弹窗（confirm/alert/prompt）：resolve 回调存模块级，避免放进响应式状态
 let _dlgResolve: ((v: any) => void) | null = null;
 
@@ -165,6 +167,10 @@ export const useAppStore = defineStore('app', {
     tempo: 1,
     loop: false,
     metro: false,
+    // 播放模式：order 顺序 / shuffle 随机 / repeatOne 单曲循环 / loopAll 列表循环
+    playMode: (localStorage.getItem('fufumidi_playmode') || 'order') as string,
+    sleepUntil: 0 as number, // 睡眠定时到期时间戳（ms），0=未启用
+    sleepTimer: null as any,
     volume: 0.85,
     tracks: [] as any[],
     toastMsg: '' as any,
@@ -195,15 +201,27 @@ export const useAppStore = defineStore('app', {
     curStr(state): string {
       return fmtTime(state.curSec);
     },
-    /* 当前视图下的播放队列：全部曲目 / 收藏 / 歌单，并按搜索过滤 */
+    /* 当前视图下的播放队列：全部曲目 / 收藏 / 智能列表 / 歌单，并按搜索过滤 */
+    isAudio(state): boolean {
+      return !!(state.currentSong && state.currentSong.kind === 'audio');
+    },
     queueSongs(state): any[] {
       const pl = usePlaylistStore();
+      const stats = (): Record<string, { c: number; last: number }> => { try { return JSON.parse(localStorage.getItem('fufumidi_stats') || '{}'); } catch (e) { return {}; } };
       let list: any[];
       if (pl.activePlaylistId === 'all') {
         list = state.songs;
       } else if (pl.activePlaylistId === 'favorites') {
         const favs = new Set(pl.favorites);
         list = state.songs.filter(s => favs.has(s.id));
+      } else if (pl.activePlaylistId === 'recent') {
+        const st = stats();
+        list = state.songs.filter(s => st[s.id] && st[s.id].last)
+          .slice().sort((a, b) => (st[b.id].last || 0) - (st[a.id].last || 0)).slice(0, 100);
+      } else if (pl.activePlaylistId === 'most') {
+        const st = stats();
+        list = state.songs.filter(s => st[s.id] && st[s.id].c > 0)
+          .slice().sort((a, b) => (st[b.id].c || 0) - (st[a.id].c || 0)).slice(0, 100);
       } else {
         const ids = pl.songIds;
         const order = new Map(ids.map((id, idx) => [id, idx]));
@@ -266,6 +284,27 @@ export const useAppStore = defineStore('app', {
       let ok = 0, dup = 0, linked = 0;
       const imported: string[] = [];
       for (const it of items) {
+        // 音频曲目（播客/有声书/音乐音频）：不解析 MIDI，按 <audio> 播放
+        if (/\.(mp3|wav|flac|m4a|ogg|aac|opus)$/i.test(it.name || '')) {
+          const aname = String(it.name).replace(/\.[^.]+$/, '');
+          const abytes = it.bytes ? new Uint8Array(it.bytes) : null;
+          const aitem = {
+            id: cryptoId(),
+            name: aname,
+            kind: 'audio',
+            song: null,
+            __bytes: abytes,
+            meta: { size: it.bytes ? it.bytes.byteLength : 0, time: Date.now(), tracks: 0, dur: 0, fp: abytes ? contentFp(aname, abytes) : '' },
+          };
+          this.songs.push(aitem);
+          imported.push(aitem.id);
+          if (it.bytes) {
+            idbPut(STORE_SONGS, { id: aitem.id, name: it.name, size: aitem.meta.size, time: aitem.meta.time, dur: 0, fp: aitem.meta.fp, bytes: it.bytes, kind: 'audio' });
+            dbSongPut({ id: aitem.id, name: it.name, size: aitem.meta.size, time: aitem.meta.time, dur: 0, fp: aitem.meta.fp, bytes: Array.from(it.bytes as any), kind: 'audio' });
+          }
+          ok++;
+          continue;
+        }
         const name = it.name.replace(/\.(mid|midi|kar|rmi)$/i, '');
         const bytes = it.bytes ? new Uint8Array(it.bytes) : null;
         // 内容与名字相同的曲目不重复导入；若指定了目标歌单，则把已有曲目直接加入该歌单
@@ -361,6 +400,7 @@ export const useAppStore = defineStore('app', {
         this.songs.push({
           id: r.id,
           name: String(r.name || t('未命名')).replace(/\.(mid|midi|kar|rmi)$/i, ''),
+          kind: r.kind || 'midi',
           song: null,
           meta: { size: r.size || 0, time: r.time || 0, dur: r.dur || 0, fp: r.fp || '' },
           __bytes: r.bytes || null,
@@ -389,9 +429,58 @@ export const useAppStore = defineStore('app', {
         else await this.selectSong(this.songs[0].id);
       }
     },
+    // 音频曲目播放元素：接入合成器效果链（EQ/空间声对音频同样生效）
+    ensureAudioEl(): any {
+      if (this.audioEl) return this.audioEl;
+      const el = new Audio();
+      el.preload = 'auto';
+      try {
+        const { ctx, synth } = ensureAudio();
+        const src = ctx.createMediaElementSource(el);
+        src.connect(synth.fxIn);
+      } catch (e) {}
+      try { el.volume = this.volume; } catch (e) {}
+      this.audioEl = el;
+      return el;
+    },
     async selectSong(id: string) {
+      // 切歌前保存上一首的断点（≥30s 且未播完）
+      try {
+        if (this.currentId && this.curSec >= 30) {
+          const s0 = this.currentSong && this.currentSong.song;
+          const p0 = Math.floor(this.curSec || 0);
+          if (s0 && (!s0.totalSec || p0 < s0.totalSec * 0.95)) {
+            const m0 = JSON.parse(localStorage.getItem('fufumidi_resume') || '{}');
+            m0[this.currentId] = p0;
+            localStorage.setItem('fufumidi_resume', JSON.stringify(m0));
+          }
+        }
+      } catch (e) {}
       const item = this.songs.find((s: any) => s.id === id);
       if (!item) return;
+      // 音频曲目：不经 MIDI 解析/player，改走 <audio> 元素（仍接 EQ 效果链）
+      if (item.kind === 'audio') {
+        const el = this.ensureAudioEl();
+        try { localStorage.setItem('fufumidi_active', id); } catch (e) {}
+        this.currentId = id; this.playing = false; this.curSec = 0; this.progress = 0; this.tracks = []; this.totalSec = 0;
+        (async () => {
+          let bytes: any = item.__bytes;
+          if (!bytes) { const r = await idbGet(STORE_SONGS, id); if (r && r.bytes) { bytes = new Uint8Array(r.bytes); item.__bytes = bytes; } }
+          if (!bytes) { try { const all = await dbSongsAll(); const r = all.find((x: any) => x.id === id); if (r && r.bytes) { bytes = new Uint8Array(r.bytes); item.__bytes = bytes; } } catch (e) {} }
+          if (bytes) {
+            try { if (this._audioUrl) URL.revokeObjectURL(this._audioUrl); } catch (e) {}
+            this._audioUrl = URL.createObjectURL(new Blob([bytes]));
+            el.src = this._audioUrl;
+          }
+          el.onended = () => { try { window.__fufumidiAutoNext(); } catch (e) {} };
+        })();
+        try {
+          const rp = JSON.parse(localStorage.getItem('fufumidi_resume') || '{}');
+          const pos = rp[id];
+          if (pos && pos >= 30) { el.addEventListener('loadedmetadata', () => { try { el.currentTime = Math.min(pos, (el.duration || pos) * 0.98); } catch (e) {} }, { once: true }); this.toast(t('已恢复上次进度 ') + fmtTime(Math.floor(pos)), 'ok'); }
+        } catch (e) {}
+        return;
+      }
       if (!item.song) {
         let lastErr = null;
         const tryParse = (bytes: any): boolean => {
@@ -437,26 +526,253 @@ export const useAppStore = defineStore('app', {
         color: TRACK_COLORS[i % TRACK_COLORS.length],
         noteCount: tr.notes.length,
       }));
+      // 断点续播：上次播放 ≥30s 且未播完 → 自动跳到上次位置
+      try {
+        const rp = JSON.parse(localStorage.getItem('fufumidi_resume') || '{}');
+        const pos = rp[id];
+        if (pos && pos >= 30 && item.song.totalSec && pos < item.song.totalSec * 0.95) {
+          player.seekTick(item.song.secToTick(pos));
+          this.curSec = player.currentSec();
+          this.progress = Math.min(1, pos / item.song.totalSec);
+          this.toast(t('已恢复上次进度 ') + fmtTime(Math.floor(pos)), 'ok');
+        }
+      } catch (e) {}
     },
     togglePlay() {
+      // 音频曲目：走 <audio>
+      if (this.isAudio) {
+        const el = this.ensureAudioEl();
+        if (!el.src) { this.toast(t('请先选择音频文件'), 'warn'); return; }
+        ensureAudio(); // 确保 ctx/EQ 就绪（媒体源已接入效果链）
+        if (this.playing) { el.pause(); this.playing = false; this.saveResumePos(); }
+        else { el.play(); this.playing = true; this.trackPlay(); }
+        return;
+      }
       const { player } = ensureAudio();
       if (!this.currentSong) { this.toast(t('请先导入一首 MIDI'), 'warn'); return; }
       if (this.playing) {
         player.pause();
         this.playing = false;
+        this.saveResumePos(); // 暂停即记录断点
       } else {
         player.play();
         this.playing = true;
+        this.trackPlay(); // 播放统计
       }
     },
     stopPlay() {
+      if (this.isAudio && this.audioEl) { this.audioEl.pause(); this.audioEl.currentTime = 0; this.playing = false; this.curSec = 0; this.progress = 0; this.clearResumePos(this.currentId); return; }
       const { player } = ensureAudio();
       player.stop();
       this.playing = false;
       this.curSec = 0;
       this.progress = 0;
+      try { if (this.currentId) this.clearResumePos(this.currentId); } catch (e) {} // 手动停止 = 下次从头播
+    },
+    /* ---------------- 播放模式（顺序/随机/单曲循环/列表循环） ---------------- */
+    cyclePlayMode() {
+      const seq = ['order', 'shuffle', 'repeatOne', 'loopAll'];
+      const i = seq.indexOf(this.playMode);
+      this.playMode = seq[(i + 1) % seq.length] || 'order';
+      try { localStorage.setItem('fufumidi_playmode', this.playMode); } catch (e) {}
+      const label: Record<string, string> = { order: '顺序播放', shuffle: '随机播放', repeatOne: '单曲循环', loopAll: '列表循环' };
+      this.toast(t(label[this.playMode] || this.playMode), 'ok');
+    },
+    // 按模式计算下一首目标 id；dir: 1 下一首 / -1 上一首；返回 null 表示维持当前（单曲循环）或无处可去
+    pickNeighborId(dir: number): string | null {
+      const q = this.queueSongs;
+      if (!q.length) return null;
+      const cur = this.currentId;
+      const idx = q.findIndex((s: any) => s.id === cur);
+      if (this.playMode === 'shuffle') {
+        if (q.length === 1) return q[0].id;
+        let r: any;
+        do { r = q[Math.floor(Math.random() * q.length)]; } while (r.id === cur && q.length > 1);
+        return r.id;
+      }
+      if (this.playMode === 'repeatOne' && dir === 1) return cur || q[0].id;
+      if (idx < 0) return dir > 0 ? q[0].id : q[q.length - 1].id;
+      let ni = idx + dir;
+      if (ni < 0) ni = this.playMode === 'loopAll' ? q.length - 1 : 0;
+      if (ni >= q.length) ni = this.playMode === 'loopAll' ? 0 : q.length - 1;
+      return q[ni].id;
+    },
+    // 载入并播放指定曲目（上一首/下一首/自动切歌共用）
+    async playSongById(id: string) {
+      await this.selectSong(id);
+      const { player } = ensureAudio();
+      player.play();
+      this.playing = true;
+      this.preloadNext();
+      try { // 播放统计（最近/最常播放）
+        if (id) {
+          const st = JSON.parse(localStorage.getItem('fufumidi_stats') || '{}');
+          const e = st[id] || { c: 0, last: 0 };
+          st[id] = { c: (e.c || 0) + 1, last: Date.now() };
+          localStorage.setItem('fufumidi_stats', JSON.stringify(st));
+        }
+      } catch (e) {}
+    },
+    // 无缝播放：播放期间按当前模式预解析下一首，自动切歌时无需再等 parseMidi
+    preloadNext() {
+      try {
+        if (this.playMode === 'shuffle') return;
+        const nid = this.pickNeighborId(1);
+        if (!nid || nid === this.currentId) return;
+        const item = this.songs.find((s: any) => s.id === nid);
+        if (!item || item.song || item.kind === 'audio' || _preloading.has(nid)) return;
+        _preloading.add(nid);
+        (async () => {
+          try {
+            let bytes: any = item.__bytes;
+            if (!bytes) { const r = await idbGet(STORE_SONGS, nid); if (r && r.bytes) bytes = r.bytes; }
+            if (bytes && !item.song) {
+              try {
+                const b = Array.isArray(bytes) ? new Uint8Array(bytes) : bytes;
+                item.song = buildSong(parseMidi(b), { name: item.name });
+                item.meta.tracks = item.song.tracks.length;
+              } catch (e) { item.__bytes = null; }
+            }
+          } catch (e) {} finally { _preloading.delete(nid); }
+        })();
+      } catch (e) {}
+    },
+    trackPlay() {
+      const id = this.currentId; if (!id) return;
+      try {
+        const st = JSON.parse(localStorage.getItem('fufumidi_stats') || '{}');
+        const e = st[id] || { c: 0, last: 0 };
+        st[id] = { c: (e.c || 0) + 1, last: Date.now() };
+        localStorage.setItem('fufumidi_stats', JSON.stringify(st));
+      } catch (e) {}
+    },
+    skip(dir: number) {
+      const id = this.pickNeighborId(dir);
+      if (id) this.playSongById(id);
+      else if (dir < 0) { const { player } = ensureAudio(); player.seekTick(0); }
+    },
+    // 曲终自动处理：按播放模式决定「下一首 / 重播 / 停止」
+    async handleTrackEnd() {
+      const q = this.queueSongs;
+      const mode = this.playMode;
+      if (mode === 'repeatOne') { await this.playSongById(this.currentId); return; }
+      const idx = q.findIndex((s: any) => s.id === this.currentId);
+      if (mode === 'shuffle') {
+        if (q.length === 1) { await this.playSongById(q[0].id); return; }
+        let r: any;
+        do { r = q[Math.floor(Math.random() * q.length)]; } while (r.id === this.currentId && q.length > 1);
+        await this.playSongById(r.id);
+        return;
+      }
+      const ni = idx + 1;
+      if (ni >= 0 && ni < q.length) { await this.playSongById(q[ni].id); return; }
+      if (mode === 'loopAll' && q.length) { await this.playSongById(q[0].id); return; }
+      // 顺序播完：复位
+      this.playing = false;
+      this.curSec = 0;
+      this.progress = 0;
+      try { if (this.currentId) this.clearResumePos(this.currentId); } catch (e) {}
+    },
+    /* ---------------- 断点续播 / 书签 / 睡眠定时 ---------------- */
+    resumeMap(): Record<string, number> { try { return JSON.parse(localStorage.getItem('fufumidi_resume') || '{}'); } catch (e) { return {}; } },
+    // 保存当前曲目播放位置（≥30s 且未播完时记录）
+    saveResumePos() {
+      if (!this.currentId) return;
+      const pos = Math.floor(this.curSec || 0);
+      const s = this.currentSong && this.currentSong.song;
+      if (!s || pos < 30 || (s.totalSec && pos > s.totalSec * 0.95)) { this.clearResumePos(this.currentId); return; }
+      try { const m = this.resumeMap(); m[this.currentId] = pos; localStorage.setItem('fufumidi_resume', JSON.stringify(m)); } catch (e) {}
+    },
+    clearResumePos(id: string) { try { const m = this.resumeMap(); if (m[id]) { delete m[id]; localStorage.setItem('fufumidi_resume', JSON.stringify(m)); } } catch (e) {} },
+    bookmarksFor(): any[] {
+      try { const m = JSON.parse(localStorage.getItem('fufumidi_bookmarks') || '{}'); return Array.isArray(m[this.currentId]) ? m[this.currentId] : []; } catch (e) { return []; }
+    },
+    addBookmark(label?: string) {
+      if (!this.currentId) { this.toast(t('请先播放一首 MIDI'), 'warn'); return; }
+      const pos = Math.floor(this.curSec || 0);
+      try {
+        const m = JSON.parse(localStorage.getItem('fufumidi_bookmarks') || '{}');
+        const arr = Array.isArray(m[this.currentId]) ? m[this.currentId] : [];
+        arr.push({ t: pos, label: label || fmtTime(pos) });
+        m[this.currentId] = arr;
+        localStorage.setItem('fufumidi_bookmarks', JSON.stringify(m));
+        this.toast(t('已添加书签 ') + fmtTime(pos), 'ok');
+      } catch (e) {}
+    },
+    removeBookmark(idx: number) {
+      try {
+        const m = JSON.parse(localStorage.getItem('fufumidi_bookmarks') || '{}');
+        const arr = m[this.currentId] || [];
+        arr.splice(idx, 1);
+        m[this.currentId] = arr;
+        localStorage.setItem('fufumidi_bookmarks', JSON.stringify(m));
+      } catch (e) {}
+    },
+    setSleep(min: number) {
+      if (this.sleepTimer) { clearInterval(this.sleepTimer); this.sleepTimer = null; }
+      if (!min) { this.sleepUntil = 0; this.setVolume(this.volume); try { window.__fufumidiSleepFade = false; } catch (e) {} this.toast(t('已取消睡眠定时'), 'ok'); return; }
+      this.sleepUntil = Date.now() + min * 60000;
+      this.toast(t('睡眠定时：') + min + t(' 分钟后停止播放'), 'ok');
+      this.sleepTimer = setInterval(() => {
+        const left = this.sleepUntil - Date.now();
+        if (left <= 0) {
+          clearInterval(this.sleepTimer); this.sleepTimer = null; this.sleepUntil = 0;
+          try { window.__fufumidiSleepFade = false; } catch (e) {}
+          try { const { player } = ensureAudio(); player.pause(); } catch (e) {}
+          this.playing = false;
+          this.setVolume(this.volume);
+          this.toast(t('睡眠定时到，已停止播放'), 'ok');
+          return;
+        }
+        // 最后 15 秒线性淡出（标记睡眠淡出，避免与曲尾淡出叠加）
+        if (left < 15000) { try { window.__fufumidiSleepFade = true; } catch (e) {} this.setVolume(Math.max(0.02, this.volume * (left / 10000))); }
+        else { try { window.__fufumidiSleepFade = false; } catch (e) {} this.setVolume(this.volume); }
+      }, 500);
+    },
+    jumpBookmarkSec(sec: number) {
+      if (!this.currentSong || !this.currentSong.song) return;
+      const s = this.currentSong.song;
+      const r = Math.max(0, Math.min(1, sec / (s.totalSec || 1)));
+      this.seekRatio(r);
+    },
+    /* ---------------- 曲目标签与封面（存 localStorage，不改动 MIDI 文件） ---------------- */
+    tagsMap(): Record<string, any> { try { return JSON.parse(localStorage.getItem('fufumidi_tags') || '{}'); } catch (e) { return {}; } },
+    songTags(id?: string) { const m = this.tagsMap(); return (id && m[id]) || {}; },
+    setSongTags(id: string, patch: any) {
+      try {
+        const m = this.tagsMap();
+        m[id] = Object.assign(m[id] || {}, patch);
+        localStorage.setItem('fufumidi_tags', JSON.stringify(m));
+      } catch (e) {}
+    },
+    async editTags(id: string) {
+      const s = this.songs.find((x: any) => x.id === id);
+      if (!s) return;
+      const t0 = this.songTags(id);
+      const artist = await this.promptDialog({ title: t('艺术家'), value: t0.artist || '' });
+      if (artist === null) return;
+      const album = await this.promptDialog({ title: t('专辑'), value: t0.album || '' });
+      if (album === null) return;
+      const genre = await this.promptDialog({ title: t('流派'), value: t0.genre || '' });
+      if (genre === null) return;
+      this.setSongTags(id, { artist: artist.trim(), album: album.trim(), genre: genre.trim() });
+      let cover = t0.cover || '';
+      const wantCover = await this.confirmDialog({ title: t('专辑封面'), msg: t('是否为这首歌设置封面图片？'), okText: t('选择图片'), cancelText: t('跳过') });
+      if (wantCover && bridge && bridge.pickCover) {
+        const r = await bridge.pickCover();
+        if (r && r.ok && r.dataUrl) cover = r.dataUrl;
+      }
+      this.setSongTags(id, { cover });
+      this.toast(t('标签已保存'), 'ok');
     },
     seekRatio(r: number) {
+      // 音频曲目：直接设置 currentTime
+      if (this.isAudio && this.audioEl) {
+        const d = this.audioEl.duration || 0;
+        if (d) this.audioEl.currentTime = Math.max(0, Math.min(d * 0.999, r * d));
+        this.curSec = this.audioEl.currentTime; this.progress = r;
+        return;
+      }
       const s = this.currentSong && this.currentSong.song;
       if (!s) return;
       const { player } = ensureAudio();
@@ -483,6 +799,7 @@ export const useAppStore = defineStore('app', {
     },
     setVolume(v: number) {
       this.volume = Math.max(0, Math.min(1, v));
+      try { window.__fufumidiBaseVol = this.volume; } catch (e) {}
       const { player } = ensureAudio();
       player.syn.setVolume(this.volume);
     },

@@ -240,6 +240,65 @@ async function doUninstall() {
   }
 }
 
+/* ---------------- 常规维护：开机自启 / 关闭到托盘 / 清除用户数据 ---------------- */
+const autoStart = ref(false);
+const closeToTray = ref(true);
+const clearBusy = ref(false);
+onMounted(async () => {
+  try {
+    if (bridge && bridge.autostartGet) {
+      const r = await bridge.autostartGet();
+      if (r && r.ok) autoStart.value = !!r.openAtLogin;
+    }
+  } catch (e) {}
+  closeToTray.value = (settingsStore.settings && settingsStore.settings.close_to_tray !== false);
+});
+async function toggleAutostart() {
+  try {
+    const r = await bridge.autostartSet(!autoStart.value);
+    if (r && r.ok) { autoStart.value = !!r.openAtLogin; app.toast(autoStart.value ? t('已开启开机自启') : t('已关闭开机自启'), 'ok'); }
+    else app.toast(t('设置失败：') + ((r && r.error) || ''), 'error');
+  } catch (e) { app.toast(t('设置失败：') + String(e), 'error'); }
+}
+function toggleCloseToTray() {
+  closeToTray.value = !closeToTray.value;
+  settingsStore.settings.close_to_tray = closeToTray.value;
+  try { if (bridge && bridge.saveSettings) bridge.saveSettings({ close_to_tray: closeToTray.value }); } catch (e) {}
+  app.toast(closeToTray.value ? t('关闭按钮将最小化到托盘') : t('关闭按钮将直接退出'), 'ok');
+}
+async function clearUserData() {
+  const ok = await app.confirmDialog({
+    title: t('清除用户数据'),
+    msg: t('将清除以下本地数据：\n· 已下载的转录模型\n· 已下载的音色（SF2）\n· 播放进度、书签与播放统计\n\n不会删除你的 MIDI 曲库、歌单与收藏。\n清除后应用将自动重启。确定继续？'),
+  });
+  if (!ok) return;
+  clearBusy.value = true;
+  try {
+    if (bridge && bridge.clearUserData) {
+      const r = await bridge.clearUserData(['models', 'soundfonts', 'playdata']);
+      if (r && r.ok) {
+        // 渲染端本地播放类数据
+        try {
+          localStorage.removeItem('fufumidi_resume');
+          localStorage.removeItem('fufumidi_bookmarks');
+          localStorage.removeItem('fufumidi_stats');
+          localStorage.removeItem('fufumidi_playmode');
+          localStorage.removeItem('fufumidi_fx');
+          localStorage.removeItem('fufumidi_soundfont');
+        } catch (e) {}
+        app.toast(t('用户数据已清除，应用即将重启…'), 'ok');
+        setTimeout(() => { try { window.location.reload(); } catch (e) {} }, 800);
+      } else {
+        app.toast(t('清除失败：') + ((r && r.error) || ''), 'error');
+        clearBusy.value = false;
+      }
+    } else {
+      app.toast(t('当前环境不支持'), 'warn');
+      clearBusy.value = false;
+    }
+  } catch (e) { app.toast(t('清除失败：') + String(e), 'error'); clearBusy.value = false; }
+}
+
 /* ---------------- GPU 加速 ---------------- */
 const gpu = reactive({
   detect: null,        // {vendor,name,blackwell,needCu128,available,backend}
@@ -851,8 +910,36 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
             <button v-if="upd.failed || upd.launched" class="btn sm primary" @click="updLaunch"><Icon name="redo" :size="13" /> {{ t('重试') }}</button>
           </div>
 
-          <!-- 危险区：卸载 -->
+          <!-- 维护区：开机自启 / 关闭到托盘 / 清除用户数据 / 卸载 -->
           <div class="field-row" style="margin-top:18px;border-top:1px solid var(--hairline);padding-top:14px">
+            <div>
+              <div class="fr-label">{{ t('开机自启') }}</div>
+              <div class="fr-hint">{{ t('登录 Windows 后自动在后台启动 FuFumidi。') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <button class="btn sm" :class="{ primary: autoStart }" @click="toggleAutostart">{{ autoStart ? t('已开启') : t('已关闭') }}</button>
+            </div>
+          </div>
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('关闭时最小化到托盘') }}</div>
+              <div class="fr-hint">{{ t('点击关闭按钮时隐藏到系统托盘，音乐继续播放；从托盘菜单可恢复或退出。') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <button class="btn sm" :class="{ primary: closeToTray }" @click="toggleCloseToTray">{{ closeToTray ? t('已开启') : t('已关闭') }}</button>
+            </div>
+          </div>
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('清除用户数据') }}</div>
+              <div class="fr-hint">{{ t('清除下载的模型、下载的音色、播放进度/书签等本地数据。不会删除你的 MIDI 曲库、歌单与收藏。') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <button class="btn sm ghost danger" @click="clearUserData">{{ clearBusy ? t('清除中…') : t('清除用户数据') }}</button>
+            </div>
+          </div>
+          <!-- 危险区：卸载 -->
+          <div class="field-row" style="margin-top:8px">
             <div>
               <div class="fr-label">{{ t('卸载应用') }}</div>
               <div class="fr-hint">{{ t('启动系统卸载程序并移除本机安装，应用会自动退出。用户数据（歌单 / 设置）保留在本地。') }}</div>

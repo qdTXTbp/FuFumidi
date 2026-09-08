@@ -43,7 +43,10 @@ let tune = null;        // 渲染完成标记（Verovio 不使用 abcjs TuneObje
 let noteEvents = [];    // [{ ms, tick, elements: [...] }]
 let flow = [];          // 视觉流向（按行阅读顺序）
 let lineTops = [], lineBottoms = [];
-let renderCacheKey = '';
+let lastStaffKey = '';   // 最近一次五线谱刻版的条件指纹（自验证复用：指纹+谱面实况一致才跳过重刻）
+let activationTimer = 0;     // 激活后延迟重刻定时器（避开切页 enter 过渡，防卡顿）
+let engraving = false;       // Verovio 刻版进行中（异步全程，含 timemap 构建）
+let engraveDirty = false;    // 刻版期间条件又变了 → 完成后重调度一次
 let playingSet = new Set(); // 当前高亮的 SVG 元素
 let resizeObserver = null;   // 滚动容器宽度监听（折叠侧栏等布局变化触发重排）
 let _scoreRO = null;         // 关闭/复用辅助句柄
@@ -147,7 +150,6 @@ async function renderStaff() {
     const padL = sc ? (parseFloat(getComputedStyle(sc).paddingLeft) || 0) : 0;
     const padR = sc ? (parseFloat(getComputedStyle(sc).paddingRight) || 0) : 0;
     const pageW = Math.max(300, vpW - padL - padR - 8);
-    if (sc) lastRenderedW = sc.clientWidth;
     const xml = songToMusicXMLTrack(s, selTrackIdx.value);
 
     if (scoreVerovio && scoreVerovio.destroy) { try { scoreVerovio.destroy(); } catch (e) {} }
@@ -269,32 +271,63 @@ const tabPlaced = computed(() => tabBlocks.value.reduce((a, b) => a + (b.placed 
 /* ---------------- 渲染调度 ---------------- */
 let renderRaf = 0;
 let pendingWhileDeactivated = false; // 停用期间被搁置的渲染请求（激活时补渲染）
-let lastRenderedW = 0;    // 上次五线谱刻版用的容器宽度（激活时比对，防陈旧刻版）
 function scheduleRender() {
   if (renderRaf) return;
   // KeepAlive 停用中组件脱离 DOM，clientWidth 恒为 0——此刻刻版必按 300px 最小宽度雕刻，
   // 且回页后 ResizeObserver 因尺寸与上次记录一致不再触发，谱面会永久挤在左侧。留待激活时渲染。
   const sc = scrollEl.value;
   if (sc && !sc.isConnected) { pendingWhileDeactivated = true; return; }
-  // 五线谱渲染（Verovio loadData/renderToSVG）是重主线程操作；播放中先扩预排窗口防断流
+  // 五线谱刻版（Verovio loadData/renderToSVG）是重主线程操作。条件未变（同曲/同轨/
+  // 同缩放/同网格/同宽）且谱面已在 DOM 时直接复用 KeepAlive 缓存，切页零重刻零卡顿。
+  if (mode.value === 'staff') {
+    const key = renderKeyOf();
+    const el = scoreEl.value;
+    const hasSvg = !!(el && el.isConnected && el.querySelector('svg'));
+    // 自验证复用：指纹（曲/轨/缩放/网格/宽）与上次刻版一致且谱面实存 → 跳过重刻。
+    // 不依赖失效标记（任何真实变化都会改变指纹，虚假失效无法击穿）
+    const willSkip = lastStaffKey !== '' && key === lastStaffKey && hasSvg && tune;
+    if (willSkip) return;
+    if (engraving) { engraveDirty = true; return; } // 刻版进行中：完成后按脏标记重调度
+    lastStaffKey = key;
+  }
+  // 播放中先扩预排窗口防断流
   try { const p = getPlayer(); if (p && p.playing) p.bumpAhead(2.5, 8000); } catch (e) {}
   renderRaf = requestAnimationFrame(() => { renderRaf = 0; doRender(); });
 }
+// 五线谱刻版条件指纹：任一变化才需要重刻。宽度按 48px 桶取整——滚动条出现/消失
+// 等造成的 ≤10px 抖动不触发重刻；真实布局变化（拖侧栏/缩放窗口）仍跨桶重刻
+function renderKeyOf() {
+  const sc = scrollEl.value;
+  const s = song.value;
+  const tr = selTrack.value;
+  const wBucket = sc ? Math.round(sc.clientWidth / 48) * 48 : 0;
+  return ['staff', state.currentId || '', s ? (s.totalTicks + ':' + s.tracks.length) : '', tr ? tr.notes.length : -1,
+    selTrackIdx.value, zoom.value.toFixed(2), opts.grid ? 1 : 0, opts.beam ? 1 : 0, opts.simple ? 1 : 0, wBucket].join('|');
+}
 function doRender() {
-  if (mode.value === 'staff') renderStaff();
+  if (mode.value === 'staff') {
+    // 在途标记覆盖整个异步刻版（含 timemap）：期间的新调度请求只置脏标记，
+    // 完成后若条件已变再补一次，避免清空 DOM 造成的 hasSvg 误判引发重复刻版
+    engraving = true;
+    renderStaff().catch(() => {}).finally(() => {
+      engraving = false;
+      if (engraveDirty) { engraveDirty = false; nextTick(scheduleRender); }
+    });
+  }
   else setStatus('');
   // 非五线谱模式由响应式数据自动渲染
 }
 
-function changeMode() { renderCacheKey = ''; scheduleRender(); }
-function changeTrack() { renderCacheKey = ''; scheduleRender(); }
+function changeMode() { lastStaffKey = ''; scheduleRender(); }
+function changeTrack() { lastStaffKey = ''; scheduleRender(); }
 function setZoom(v) {
   zoom.value = clamp(parseFloat(v) || 1, 0.6, 1.8);
   scheduleRender();
 }
 
-watch([song, () => state.view], () => { renderCacheKey = ''; nextTick(scheduleRender); });
-watch([mode, trackSel, () => opts.simple, () => opts.grid, () => opts.beam, zoom], () => { renderCacheKey = ''; scheduleRender(); });
+// 曲目/模式/缩放等变化是否需要重刻由 renderKeyOf 指纹判定，这里只负责触发调度
+watch(song, () => { nextTick(scheduleRender); });
+watch([mode, trackSel, () => opts.simple, () => opts.grid, () => opts.beam, zoom], () => { scheduleRender(); });
 
 // 跟随播放
 function tickFollow() {
@@ -595,19 +628,18 @@ function loop() {
   followRaf = requestAnimationFrame(loop);
 }
 onActivated(() => {
-  // KeepAlive 重新激活：补渲染停用期间搁置的请求；切页期间布局宽度若发生变化
-  // （折叠侧栏 / 隐藏播放栏 / 拖窗口），ResizeObserver 不会因「断连期间变化」触发，
-  // 这里按实际宽度比对后强制按新宽度重刻。
+  // KeepAlive 重新激活：补渲染停用期间搁置的请求。是否需要重刻由 renderKeyOf
+  // （含容器宽度）判定——宽度在停用期间变化时 key 失配自动重刻，未变化则复用缓存。
   pendingWhileDeactivated = false;
   nextTick(() => {
-    const sc = scrollEl.value;
-    const w = sc ? sc.clientWidth : 0;
-    if (w > 0 && lastRenderedW > 0 && Math.abs(w - lastRenderedW) > 1) renderCacheKey = '';
-    scheduleRender();
+    // 需要重刻时推迟到 enter 过渡（0.28s）结束后，重刻的主线程阻塞不参与切页动画
+    clearTimeout(activationTimer);
+    activationTimer = setTimeout(scheduleRender, 320);
   });
 });
 onMounted(() => {
-  nextTick(scheduleRender);
+  clearTimeout(activationTimer);
+  activationTimer = setTimeout(scheduleRender, 320);
   followRaf = requestAnimationFrame(loop);
   // 容器宽度变化（折叠侧边栏 / 隐藏播放栏 / 拖宽 / 窗口缩放 / 全屏）时重新按新宽度雕刻，
   // 避免谱面按旧宽度刻版后拥挤在左侧。rAF 合并 + >1px 阈值 + 防抖，防滚动条出现/消失造成振荡。
@@ -620,10 +652,12 @@ onMounted(() => {
     roPending = 0;
     const el = scrollEl.value;
     const w = el ? el.clientWidth : 0;
+    // 是否重刻交给 renderKeyOf（含宽度）判定，这里不再强制失效——避免 RO 在
+    // 切页重连时以瞬时宽度误判触发整页重刻（卡顿复发根因）
     if (w > 0 && Math.abs(w - roW) > 1) {
       roW = w;
       clearTimeout(roTimer);
-      roTimer = setTimeout(() => { renderCacheKey = ''; scheduleRender(); }, 120);
+      roTimer = setTimeout(scheduleRender, 120);
     }
   };
   resizeObserver = new ResizeObserver((entries) => {
@@ -636,6 +670,7 @@ onMounted(() => {
   _scoreRO = { dropRO, observe: () => { try { resizeObserver.observe(scrollEl.value); } catch (e) {} } };
 });
 onBeforeUnmount(() => {
+  clearTimeout(activationTimer);
   cancelAnimationFrame(followRaf);
   if (renderRaf) cancelAnimationFrame(renderRaf);
   if (resizeObserver) { try { resizeObserver.disconnect(); } catch (e) {} resizeObserver = null; }
@@ -825,7 +860,7 @@ onBeforeUnmount(() => {
 .pop-enter-active, .pop-leave-active { transition: opacity .14s ease, transform .18s cubic-bezier(.2,.9,.3,1.18); transform-origin: top right; }
 .pop-enter-from, .pop-leave-to { opacity: 0; transform: scale(.96) translateY(-5px); }
 
-.score-scroll { flex: 1; overflow: auto; padding: 6px 10px 20px; }
+.score-scroll { flex: 1; overflow: auto; padding: 6px 10px 20px; scrollbar-gutter: stable; }
 .score-block { margin-bottom: 14px; border-bottom: 1px dashed var(--hairline); padding-bottom: 8px; }
 .score-block-name { font-size: 12px; color: var(--stone); margin-bottom: 4px; }
 

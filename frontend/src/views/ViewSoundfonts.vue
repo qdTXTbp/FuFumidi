@@ -145,6 +145,14 @@ function openDir() {
   if (bridge && bridge.sfWorkshop && bridge.sfWorkshop.openDir) { bridge.sfWorkshop.openDir(); }
 }
 
+// 许可受限音色（manual）：跳转官方下载页，用户解压后经「导入 .sf2 音色」导入
+function openOfficial(item) {
+  const url = item && item.officialUrl;
+  if (!url) return;
+  if (bridge && bridge.openExternal) bridge.openExternal(url);
+  else if (typeof window !== 'undefined') window.open(url, '_blank');
+}
+
 async function preview(item) {
   previewBuf[item.id] = true;
   const prev = activePath.value;
@@ -254,7 +262,8 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
               <button class="btn sm ghost" @click="cancelDownload(item)">{{ t('取消') }}</button>
             </template>
             <template v-else>
-              <button v-if="!item.downloaded" class="btn sm primary" @click="download(item)" :disabled="!bridge">{{ t('下载') }}</button>
+              <button v-if="!item.downloaded && item.manual" class="btn sm primary" @click="openOfficial(item)" :title="t('受许可条款限制，请从官网下载解压后导入')">{{ t('前往官网') }}</button>
+              <button v-if="!item.downloaded && !item.manual" class="btn sm primary" @click="download(item)" :disabled="!bridge">{{ t('下载') }}</button>
               <button v-if="item.downloaded" class="btn sm primary" :class="{ on: isActive(item) }" @click="enable(item)" :disabled="busySf">{{ isActive(item) ? t('使用中') : t('启用') }}</button>
               <button v-if="item.downloaded && !isActive(item)" class="btn sm ghost" :disabled="previewBuf[item.id]" @click="preview(item)">{{ previewBuf[item.id] ? t('试听…') : t('试听') }}</button>
               <button v-if="item.downloaded && !item.builtin" class="btn sm ghost danger" @click="removeItem(item)">{{ t('删除') }}</button>

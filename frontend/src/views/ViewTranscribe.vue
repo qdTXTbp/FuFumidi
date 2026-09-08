@@ -357,6 +357,13 @@ function clearQueue() {
   saveQueue();
   toast('已清空转录队列', 'ok');
 }
+/* ---------------- 并行数（1-4，持久化） ---------------- */
+const parallelN = ref(Math.max(1, Math.min(4, parseInt(localStorage.getItem('fufumidi_parallel') || '1', 10) || 1)));
+function setParallel(n) {
+  parallelN.value = Math.max(1, Math.min(4, n));
+  try { localStorage.setItem('fufumidi_parallel', String(parallelN.value)); } catch (e) {}
+  toast('并行数已设为 ' + parallelN.value + '（下次开始转录时生效）', 'ok');
+}
 const sortedQueue = computed(() => {
   const arr = queue.slice();
   if (sort.value === 'name') arr.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'zh'));
@@ -703,7 +710,9 @@ async function runBatch() {
     return;
   }
   running.value = true; paused.value = false; cancelAll.value = false; busy.value = true; done.value = false; progress.value = 3; stage.value = '';
-  logLine(t('转录队列：共 ') + pendingCount.value + ' 首，顺序处理…');
+  // 并行数：1-4（持久化）。GPU 模型显存有限，并行收益差；CPU 模型 2-3 收益明显。
+  const para = Math.max(1, Math.min(4, parseInt(localStorage.getItem('fufumidi_parallel') || '1', 10) || 1));
+  logLine(t('转录队列：共 ') + pendingCount.value + ' 首' + (para > 1 ? t('，并行 ') + para + t(' 路') : t('，顺序处理')));
   const inst = currentModelInstalled();
   logLine(t('使用模型：') + currentModelLabel() + (inst === true ? t('（已就绪）') : inst === false ? t('（未下载，请到资源中心安装）') : ''));
   const t0 = Date.now();
@@ -731,20 +740,20 @@ async function runBatch() {
     if (!cur) stage.value = t('完成 ') + doneN + ' / ' + total + (errN ? t(' · 失败 ') + errN : '') + ' · ' + fmtTime(el);
   }, 500);
 
-  while (true) {
-    if (paused.value || cancelAll.value) break;
-    const it = queue.find(i => i.status === 'pending');
-    if (!it) break;
+  const runningJobIds = new Set();
+  try { window.__fufumidiRunningJobs = runningJobIds; } catch (e) {}
+  const processOne = async (it) => {
     it.status = 'running'; it.progress = 0; it.error = '';
     it.startedAt = Date.now();
     await decodeDuration(it);
     it.estMs = Math.max(5000, estSec() * 1000 || 60000);
     const jid = 'batch' + it.id;
-    currentJobId.value = jid;
+    runningJobIds.add(jid); currentJobId.value = jid;
     logLine('→ ' + it.name);
     try {
       const cfg = collectParams();
       cfg.audio = it.path; cfg.id = jid; cfg.out = null; cfg.mode = mode.value; cfg.perf = perf.value;
+      cfg.__slots = para; // 主进程按此开多 worker 槽位（GPU 自动降 1）
       const res = await bridge.convert(cfg);
       if (cancelAll.value) it.status = 'canceled';
       else if (res && res.ok && res.out) {
@@ -761,9 +770,20 @@ async function runBatch() {
       if (cancelAll.value) it.status = 'canceled';
       else { it.status = 'error'; it.error = (e && e.message) || String(e); logLine(it.name + '：' + it.error, true); }
     }
-    currentJobId.value = null;
+    runningJobIds.delete(jid);
+    const rest = [...runningJobIds];
+    currentJobId.value = rest.length ? rest[rest.length - 1] : null;
     saveQueue();
-  }
+  };
+  const worker = async () => {
+    while (true) {
+      if (paused.value || cancelAll.value) break;
+      const it = queue.find(i => i.status === 'pending');
+      if (!it) break;
+      await processOne(it);
+    }
+  };
+  await Promise.all(Array.from({ length: para }, () => worker()));
   running.value = false; busy.value = false;
   clearInterval(trTimer);
   const dN = queue.filter(i => i.status === 'done').length;
@@ -794,6 +814,9 @@ async function startTranscribe() {
 function cancelTranscribe() {
   if (!busy.value) return;
   cancelAll.value = true;
+  // 并行模式下取消所有在跑任务
+  const jobs = window.__fufumidiRunningJobs || [];
+  for (const jid of jobs) { if (bridge && bridge.cancel) bridge.cancel(jid); }
   if (currentJobId.value && bridge && bridge.cancel) bridge.cancel(currentJobId.value);
   logLine(t('已请求取消转录队列…'), true);
 }
@@ -1213,6 +1236,13 @@ onBeforeUnmount(() => {
       <!-- 摘要 + 开始 -->
       <div v-if="queue.some(i => i.status === 'pending' || i.status === 'error')" class="tr-sum">
         即将转录：<b>{{ queue.find(i => i.status === 'pending' || i.status === 'error')?.name || '—' }}</b> · 引擎：<b>{{ MODE_NAMES[mode] }}</b> · 预计耗时：<b>{{ sumTime || '—' }}</b>
+      </div>
+      <div class="tr-par" style="display:flex;align-items:center;gap:8px;margin-top:12px">
+        <span style="font-size:12.5px;color:var(--steel)">{{ t('并行数') }}</span>
+        <select style="background:var(--surface);color:var(--ink);border:1px solid var(--hairline);border-radius:8px;padding:4px 8px;font-size:12.5px" :value="parallelN" @change="setParallel(parseInt($event.target.value, 10) || 1)">
+          <option v-for="n in 4" :key="n" :value="n">{{ n }}</option>
+        </select>
+        <span style="font-size:11.5px;color:var(--stone)">{{ t('多文件同时转录；GPU 模型建议保持 1') }}</span>
       </div>
       <button class="btn primary big" style="width:100%;justify-content:center;margin-top:14px" data-guide="start-transcribe" @click="startTranscribe" :disabled="busy || !isDesktop || !queue.length">
         <Icon name="transcribe" :size="16" />{{ busy ? t('转录中…') : t('开始转录') }}

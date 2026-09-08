@@ -13,6 +13,16 @@ export function ensureAudio() {
     if (!AC) throw new Error('当前环境不支持 Web Audio API');
     try { ctx = new AC({ latencyHint: 'interactive' }); } catch (e) { ctx = new AC(); }
     synth = new Synth(ctx);
+    // 应用持久化的音效设置（EQ/低音增强/空间声），随存随用
+    try {
+      const fx = JSON.parse(localStorage.getItem('fufumidi_fx') || 'null');
+      if (fx) {
+        if (fx.enabled) synth.setFxEnabled(true);
+        if (Array.isArray(fx.gains)) synth.setEqGains(fx.gains);
+        if (typeof fx.bass === 'number') synth.setBassBoost(fx.bass);
+        if (typeof fx.spatial === 'number') synth.setSpatial(fx.spatial);
+      }
+    } catch (e) {}
     // 加载音色工坊所选的音色库（优先），否则按环境回退：
     //   桌面端默认内置合成器，网页端默认内置 GeneralUser.sf2
     // localStorage 直读：启动时 restoreSongs→selectSong→ensureAudio 先于 settings 异步加载，
@@ -41,7 +51,30 @@ export function ensureAudio() {
     player.onEnd = () => {
       // 播完自动复位（由 store 监听处理 UI 状态）
       if (typeof window !== 'undefined' && window.__fufumidiOnEnd) window.__fufumidiOnEnd();
+      // 播放模式自动切歌（App.vue 注入 handleTrackEnd）
+      if (typeof window !== 'undefined' && window.__fufumidiAutoNext) {
+        setTimeout(() => { try { window.__fufumidiAutoNext(); } catch (e) {} }, 10);
+      }
     };
+    // 曲尾淡出（无缝过渡的听觉掩蔽；可在音效面板关闭）
+    window.__fufumidiBaseVol = 0.85;
+    setInterval(() => {
+      try {
+        if (!player || !player.song || !ctx || ctx.state !== 'running') return;
+        const xf = localStorage.getItem('fufumidi_crossfade') !== '0';
+        const base = window.__fufumidiBaseVol != null ? window.__fufumidiBaseVol : 0.85;
+        if (!xf) { if (synth && synth.master.gain.value !== base) synth.setVolume(base); return; }
+        // 睡眠定时淡出优先（<15s 时不叠加曲尾淡出）
+        if (window.__fufumidiSleepFade) return;
+        const cur = player.currentSec();
+        const total = player.song.totalSec || 0;
+        const left = total - cur;
+        // 曲尾淡出 + 曲首淡入（从头播放时），歌曲衔接更顺滑
+        if (player.playing && left > 0 && left < 1.5) synth.setVolume(Math.max(0.05, base * (left / 1.5)));
+        else if (player.playing && cur < 0.6 && left > 1.5) synth.setVolume(Math.max(0.05, base * Math.min(1, cur / 0.6)));
+        else if (synth.master.gain.value !== base) synth.setVolume(base);
+      } catch (e) {}
+    }, 300);
   }
   if (ctx.state === 'suspended') ctx.resume();
   return { ctx, synth, player };

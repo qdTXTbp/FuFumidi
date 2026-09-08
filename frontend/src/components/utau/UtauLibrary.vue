@@ -17,16 +17,27 @@ async function refresh() {
   if (r && r.ok) store.setVoicebanks(r.list || []);
 }
 
-async function importZip() {
+async function importZip(directPath) {
   if (!bridge || !bridge.utauImportVoicebankZip) { msg.value = t('请在桌面版导入声库 zip。'); return; }
   busy.value = true; msg.value = '';
   try {
-    const r = await bridge.utauImportVoicebankZip();
+    const r = await bridge.utauImportVoicebankZip(directPath);
     if (r && r.ok) { store.setVoicebank(r.dir); await refresh(); msg.value = t('已导入声库：') + r.name; }
     else if (r && r.canceled) { /* 用户取消 */ }
     else msg.value = t('导入失败：') + ((r && r.error) || 'unknown');
   } catch (e) { msg.value = t('导入失败：') + ((e && e.message) || e); }
   finally { busy.value = false; }
+}
+// 拖拽 zip 到声库面板直接导入
+function onDropZip(e) {
+  const files = Array.from(e.dataTransfer?.files || []).filter(f => /\.zip$/i.test(f.name));
+  if (!files.length) return;
+  e.preventDefault();
+  try {
+    const paths = files.map(f => (window.fuBridge && window.fuBridge.pathForFile) ? window.fuBridge.pathForFile(f) : null).filter(Boolean);
+    if (paths.length) importZip(paths[0]);
+    else msg.value = t('导入失败：') + t('无法获取拖拽文件路径');
+  } catch (e) { msg.value = t('导入失败：') + String(e); }
 }
 function choose(v) { store.setVoicebank(v.dir); msg.value = t('当前声库：') + v.name; }
 async function removeVb(v) {
@@ -46,11 +57,11 @@ onMounted(refresh);
 </script>
 
 <template>
-  <div class="ul">
+  <div class="ul" @dragover.prevent @drop.prevent="onDropZip">
     <div class="ul-head">
       <div>
         <b>{{ t('声库') }}</b>
-        <span class="muted small">{{ t('导入现成 UTAU 声库(.zip)，或自制声库') }}</span>
+        <span class="muted small">{{ t('导入现成 UTAU 声库(.zip) 可直接拖入此区域，或自制声库') }}</span>
       </div>
       <button class="btn primary" @click="importZip" :disabled="busy || !isDesktop">
         <Icon name="download" :size="14" /> {{ busy ? t('导入中…') : t('导入声库 (.zip)') }}

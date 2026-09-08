@@ -405,6 +405,8 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 .song-item:hover { background: var(--surface-soft); border-color: var(--border-strong); }
 .song-item.active { background: var(--surface); border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); }
 .song-item .si-num { color: var(--stone); font-size: 11px; width: 22px; text-align: right; font-variant-numeric: tabular-nums; }
+.song-item .si-cover { width: 26px; height: 26px; border-radius: 5px; object-fit: cover; flex: none; border: 1px solid var(--hairline); }
+.lib-sort { background: var(--surface); color: var(--ink); border: 1px solid var(--hairline); border-radius: 7px; font-size: 11px; padding: 3px 4px; max-width: 86px; flex: none; }
 .song-item .si-name { flex: 1 1 calc(100% - 42px); min-width: 0; font-size: 13px; padding-right: 4px; }
 .song-item .si-name b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--ink); }
 .song-item .si-name small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--stone); font-size: 11px; }

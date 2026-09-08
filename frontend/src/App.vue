@@ -378,6 +378,8 @@ function dlSpeed(bps) { if (!bps) return ''; return bps >= 1e6 ? (bps / 1e6).toF
 
 onMounted(() => {
   startTickLoop();
+  // 曲终自动切歌（播放模式：顺序/随机/单曲循环/列表循环）
+  window.__fufumidiAutoNext = () => { try { state.handleTrackEnd(); } catch (e) {} };
   // settings 尽早加载（同步 active_soundfont 引用）：restoreSongs→selectSong→ensureAudio
   // 会读该引用选择音色库，曾因晚于音频初始化导致重启后回退内置音色（另有 localStorage 兜底）
   loadWallpaper();
@@ -398,6 +400,13 @@ onMounted(() => {
     });
   }
   window.addEventListener('keydown', onKey);
+  // 关窗/刷新前保存播放断点
+  window.addEventListener('beforeunload', () => { try { state.saveResumePos(); } catch (e) {} });
+  // 托盘控制（播放/暂停、下一首）
+  if (bridge && bridge.onTrayControl) bridge.onTrayControl((act) => {
+    if (act === 'playpause') app.togglePlay();
+    else if (act === 'next') app.skip(1);
+  });
   // 退出/刷新前冲刷 SQLite 写队列，避免歌单/收藏最后一步未落盘
   window.addEventListener('beforeunload', onBeforeUnload);
 });

@@ -62,28 +62,44 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
       bundledPath: null,
     },
     {
+      // Arachno：上游仓库该文件为 Git LFS（raw 直链只返回 134 字节指针），必须走
+      // media.githubusercontent.com 真身；gh.jasonzeng.dev 可代理该域名做国内加速。
       id: 'arachno',
       name: 'Arachno SoundFont',
       version: '1.0',
       desc: '游戏/怀旧风格浓重的精调音色，乐器辨识度极高，适合游戏音乐和历史 MIDI 的还原试听。',
-      size: 148000000,
+      size: 155000000,
       license: '免费可自由使用（官方许可）',
       minSize: 90000000,
-      fromRepo: 'rwtnb/Drumsthesia',
-      repoFile: 'Arachno SoundFont - Version 1.0.sf2',
-      bundledPath: null,
-    },
-    {
-      id: 'timbres',
-      name: 'Timbres of Heaven',
-      version: '最新',
-      desc: '轻量但高品质的 GM 音色库，乐器还原自然耐听，体积紧凑适合快速加载。',
-      size: 30000000,
-      license: '免费音色（作者 S. Christian Collins 授权）',
-      minSize: 18000000,
       fromRepo: null,
       repoFile: null,
       bundledPath: null,
+      urls: [
+        // 主源：自家 soundfonts-v1 Release（prerelease）经 ghfast/gh.jasonzeng 加速——
+        // 上游该文件是 Git LFS，raw 直链只回 134 字节指针，直连 media CDN 从国内又极易中断
+        'https://gh.jasonzeng.dev/https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Arachno_SoundFont_Version_1.0.sf2',
+        'https://ghfast.top/https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Arachno_SoundFont_Version_1.0.sf2',
+        'https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Arachno_SoundFont_Version_1.0.sf2',
+        // 回退：LFS 真身（无加速，不稳定）+ archive.org 裸 SF2
+        'https://media.githubusercontent.com/media/rwtnb/Drumsthesia/main/Arachno%20SoundFont%20-%20Version%201.0.sf2',
+        'https://archive.org/download/free-soundfonts-sf2-2019-04/Arachno_SoundFont_Version_1.0.sf2',
+      ],
+    },
+    {
+      // Timbres of Heaven：作者许可条款禁止未经书面授权再分发（只能链官方页），且官方
+      // 分发为 .7z 压缩包（工具内无解包运行时）→ 标记 manual，UI 显示「前往官网」+ 手动导入。
+      id: 'timbres',
+      name: 'Timbres of Heaven',
+      version: '4.0 (XGM)',
+      desc: '高品质全能 GM/XGM 音色库（约 370MB），乐器还原自然耐听。受作者许可条款限制不提供自动下载，请前往官网下载解压后导入。',
+      size: 370000000,
+      license: '免费使用 · 不可再分发（Don Allen / Midkar 授权条款）',
+      minSize: 180000000,
+      fromRepo: null,
+      repoFile: null,
+      bundledPath: null,
+      manual: true,
+      officialUrl: 'https://midkar.com/SoundFonts/index.html',
     },
     {
       // SGM-V2.01 官方按 GitHub 100MB 限制拆为 3 个独立 SF2 分发（乐器号互补，均为完整合法音色库）。
@@ -133,28 +149,42 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
       bundledPath: null,
     },
     {
+      // Aspirin-DX：上游 NeoSoundFonts 持续维护（libre 重制版），直接链其 Release 附件，
+      // 走 gh.jasonzeng.dev / ghfast 代理加速 + 官方直连回退。
       id: 'aspirin_dx',
       name: 'Aspirin-DX Soundbank',
-      version: 'DX',
-      desc: '复古电子/DX 合成器风格音色，适合电子乐和较“闪亮”的 MIDI 重演绎。',
-      size: 12500000,
-      license: '免费可自由使用',
-      minSize: 6000000,
+      version: '2026-07-08',
+      desc: 'FM 合成器风格的 GM 音色库（Fairytale Edition，libre 重制版），复古电子乐与合成器音色出彩。',
+      size: 69000000,
+      license: 'libre 开源重制（NeoSoundFonts 维护）',
+      minSize: 60000000,
       fromRepo: null,
       repoFile: null,
       bundledPath: null,
+      urls: [
+        'https://gh.jasonzeng.dev/https://github.com/NeoSoundFonts/Aspirin-DX-Soundbank/releases/download/2026-07-08/Version-20260708.sf2',
+        'https://ghfast.top/https://github.com/NeoSoundFonts/Aspirin-DX-Soundbank/releases/download/2026-07-08/Version-20260708.sf2',
+        'https://github.com/NeoSoundFonts/Aspirin-DX-Soundbank/releases/download/2026-07-08/Version-20260708.sf2',
+      ],
     },
     {
+      // Salamander：上游 FreePats 只分发 tar.xz 压缩包（工具内无法解包）且无 GitHub 托管的
+      // 裸 SF2 → 解包后随自家 soundfonts-v1 Release（prerelease）分发，CC-BY-3.0 允许再分发。
       id: 'salamander',
       name: 'Salamander Grand Piano',
-      version: 'v3',
-      desc: '单件三角钢琴多力度采样音色，专为钢琴曲目设计，音色纯净自然。',
-      size: 200000000,
+      version: '3+20200602',
+      desc: '单件三角钢琴多力度采样音色（Yamaha C5，16 力度层），专为钢琴曲目设计，音色纯净自然。',
+      size: 310000000,
       license: 'CC BY 3.0（使用需署名原钢琴录音艺术家）',
       minSize: 1.2e8,
-      fromRepo: 'bramanp/salamander-grand-piano-sf2',
-      repoFile: null, // 以 Release 附件分发
+      fromRepo: null,
+      repoFile: null,
       bundledPath: null,
+      urls: [
+        'https://gh.jasonzeng.dev/https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Salamander_Grand_Piano_SF2_V3_20200602.sf2',
+        'https://ghfast.top/https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Salamander_Grand_Piano_SF2_V3_20200602.sf2',
+        'https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Salamander_Grand_Piano_SF2_V3_20200602.sf2',
+      ],
     },
   ];
 
@@ -198,6 +228,7 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
         size, expected: it.size, license: it.license,
         downloaded: size >= it.minSize,
         builtin: !!it.bundledPath && size >= it.minSize,
+        manual: !!it.manual, officialUrl: it.officialUrl || '',
         path: p,
         sources: (githubRawCandidates(it).length ? ['github'] : []) ,
         category: '内置精选',
@@ -223,6 +254,8 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
   ipcMain.handle('sf-workshop:download', async (_e, id) => {
     const it = REGISTRY.find(x => x.id === id);
     if (!it) return { ok: false, error: '未知音色库: ' + id };
+    // 许可受限音色（如 Timbres of Heaven）：不提供自动下载，引导官网获取后手动导入
+    if (it.manual) return { ok: false, manual: true, officialUrl: it.officialUrl || '', error: '该音色受作者许可条款限制，不提供自动下载。请前往官网下载并解压，再通过「导入 .sf2 音色」导入。' };
     const win = BrowserWindow.fromWebContents(_e.sender);
     const send = (p) => { if (win && !win.isDestroyed()) win.webContents.send('sf-workshop:progress', p); };
     // 已存在完整 → 直接返回
@@ -233,61 +266,92 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
     // 候选 URL 列表：仓库 raw 镜像 + 官方源（fallback）
     const candidates = [...githubRawCandidates(it), ...(it.urls || [])].filter(Boolean);
 
-    const ctrl = new AbortController();
-    _aborts.set(id, ctrl);
-    let total = 0, lastErr = null;
-    let ws = null;
+    // 健壮下载：多源轮换 + 断点续传（.part 保留跨轮次/跨调用）+ 停滞看门狗
+    //  - STALL_MS 内没有任何字节到达 → 取消当前流，换下一个源（或同源 Range 续传）
+    //  - 416（Range 越界，.part 过期/损坏）→ 丢弃 .part 重下
+    //  - 用户取消走 ctrl.abort()（isUserAbort 标记），与停滞中止区分
+    const STALL_MS = 25000;
+    const MAX_ROUNDS = 10;
+    const entry = { ctrl: null, isUserAbort: false };
+    _aborts.set(id, entry);
+    let ws = null, lastErr = null;
+
+    const sendProg = (received, expectTotal, done, error) => {
+      send({ id, received, total: expectTotal || (it.size * 1.2), percent: done ? 100 : (expectTotal ? Math.min(99, Math.round(received / expectTotal * 100)) : 99), done: !!done, error: error || '' });
+    };
+
     try {
-      for (let i = 0; i < candidates.length; i++) {
-        const url = candidates[i];
-        let received = 0;
+      for (let round = 0; round < MAX_ROUNDS; round++) {
+        const url = candidates[round % candidates.length];
+        const ctrl = new AbortController();
+        entry.ctrl = ctrl;
+        let received = 0, expectTotal = 0;
         try {
-          const r = await net.fetch(url, { headers: { 'user-agent': 'FuFumidi' }, signal: ctrl.signal });
+          const have = await statFile(out + '.part');
+          const headers = { 'user-agent': 'FuFumidi' };
+          if (have > 0) headers['range'] = 'bytes=' + have + '-';
+          const r = await net.fetch(url, { headers, signal: ctrl.signal });
+          if (r.status === 416) { // .part 越界（过期/损坏）→ 丢弃重下
+            try { fs.rmSync(out + '.part', { force: true }); } catch (_) {}
+            throw new Error('断点越界已重置');
+          }
           if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
-          if (total === 0) total = parseInt(r.headers.get('content-length') || '0', 10);
-          ws = fs.createWriteStream(out + '.part');
+          const clen = parseInt(r.headers.get('content-length') || '0', 10);
+          const resumable = r.status === 206 && have > 0;
+          if (!resumable && have > 0) { try { fs.rmSync(out + '.part', { force: true }); } catch (_) {} } // 全量重下
+          received = resumable ? have : 0;
+          expectTotal = clen ? received + clen : 0;
+          ws = fs.createWriteStream(out + '.part', { flags: resumable ? 'a' : 'w' });
           ws.on('error', () => {});
           const reader = r.body.getReader();
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            received += value.length;
-            send({ id, received, total: total || (it.size * 1.2), percent: total ? Math.min(99, Math.round(received / total * 100)) : 99, done: false });
-            await new Promise((res2, rej2) => ws.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
-          }
+          let lastData = Date.now();
+          const watchdog = setInterval(() => {
+            if (Date.now() - lastData > STALL_MS) {
+              try { reader.cancel('stalled'); } catch (_) {}
+              try { ctrl.abort(); } catch (_) {} // 兜底：流不响应 cancel 时强制中断
+            }
+          }, 3000);
+          let got = 0;
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              lastData = Date.now();
+              got += value.length;
+              received = (resumable ? have : 0) + got;
+              sendProg(received, expectTotal, false);
+              await new Promise((res2, rej2) => ws.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
+            }
+          } finally { clearInterval(watchdog); }
           await new Promise((res2, rej2) => ws.end(err => (err ? rej2(err) : res2())));
           const st = await fs.promises.stat(out + '.part');
-          if (st.size < it.minSize) { try { fs.rmSync(out + '.part', { force: true }); } catch (_) {} throw new Error('文件不完整'); }
+          if (st.size < it.minSize) { lastErr = new Error('文件不完整（' + st.size + ' < ' + it.minSize + '）'); sendProg(st.size, it.size, false, lastErr.message); continue; }
           await fs.promises.rename(out + '.part', out);
           const fin = await statFile(out);
-          send({ id, received: fin, total: fin, percent: 100, done: true });
-          _aborts.delete(id);
+          sendProg(fin, fin, true);
           return { ok: true, path: out, size: fin };
         } catch (e) {
           lastErr = e;
           try { if (ws) ws.destroy(); } catch (_) {}
-          try { fs.rmSync(out + '.part', { force: true }); } catch (_) {}
-          send({ id, received: 0, total: total || it.size, percent: 0, done: false, error: '第 ' + (i + 1) + ' 个源失败：' + (e && e.message) });
+          ws = null;
+          if (entry.isUserAbort) return { ok: false, cancelled: true, error: '已取消' };
+          const have = await statFile(out + '.part');
+          sendProg(have, it.size, false, '第 ' + (round + 1) + ' 轮失败（' + ((e && e.message) || e) + '），自动换源/续传…');
         }
       }
-      // 无自动下载源时给出明确指引；有源但全部失败则提示网络不可达/手动导入
-      if (!candidates.length) {
-        return { ok: false, error: '该音色暂无自动下载源，请自行获取 .sf2 后到「我的音色」手动导入。' };
-      }
-      if (lastErr) {
-        return { ok: false, error: '自动下载失败（当前网络或镜像不可达）。可在「我的音色」中点击导入，手动选择已下载的 .sf2 文件。' };
-      }
+      // 全部轮次失败：.part 保留，用户重试可续传
+      const have = await statFile(out + '.part');
+      const tail = have > 0 ? '。已有 ' + Math.round(have / 1048576) + 'MB 断点，再次点击下载将从断点继续。' : '。也可在「我的音色」手动导入。';
+      return { ok: false, error: '自动下载失败（已多源轮换重试 ' + MAX_ROUNDS + ' 轮）：' + ((lastErr && lastErr.message) || '网络不可达') + tail };
     } catch (e) {
       return { ok: false, error: String((e && e.message) || e) };
     } finally {
       _aborts.delete(id);
-      try { fs.rmSync(out + '.part', { force: true }); } catch (_) {}
     }
-    return { ok: false, error: '未知错误' };
   });
 
   ipcMain.handle('sf-workshop:cancel', async (_e, id) => {
-    try { const c = _aborts.get(id); if (c) c.abort(); } catch (e) {}
+    try { const c = _aborts.get(id); if (c) { c.isUserAbort = true; c.ctrl.abort(); } } catch (e) {}
     return { ok: true };
   });
 

@@ -1,5 +1,7 @@
 // Preload 桥接：主进程 ↔ 渲染进程（fuBridge）
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
+// 拖拽文件 → 本地路径（UTAU 声库 zip 拖拽导入用）
+function filePathFor(f) { try { return webUtils.getPathForFile(f); } catch (e) { return null; } }
 
 contextBridge.exposeInMainWorld('fuBridge', {
   // 打开文件（双击 .mid 关联）
@@ -73,6 +75,17 @@ contextBridge.exposeInMainWorld('fuBridge', {
   updateCheck: () => ipcRenderer.invoke('update:check'),
   getVersion: () => ipcRenderer.invoke('app:getVersion'),
   appUninstall: () => ipcRenderer.invoke('app:uninstall'),
+  // 开机自启
+  autostartGet: () => ipcRenderer.invoke('app:autostart:get'),
+  autostartSet: (open) => ipcRenderer.invoke('app:autostart:set', open),
+  // 清除用户数据（模型/音色/播放类数据）
+  clearUserData: (scopes) => ipcRenderer.invoke('app:clearUserData', scopes),
+  // 曲目封面选择（返回 data URL）
+  pickCover: () => ipcRenderer.invoke('sys:pickCover'),
+  // 托盘控制（播放/暂停、下一首）
+  onTrayControl: (cb) => { const w = (_e, act) => cb(act); ipcRenderer.on('tray:control', w); return () => ipcRenderer.removeListener('tray:control', w); },
+  // 读取与指定音频/ midi 文件同目录的同名 .lrc 歌词（base64 传输，渲染端自解码）
+  readSidecarLyrics: (filePath) => ipcRenderer.invoke('sys:readSidecarLyrics', filePath),
   updateNotes: (tag) => ipcRenderer.invoke('update:notes', tag),
   updateDownload: (url) => ipcRenderer.invoke('update:download', url),
   updateOpen: (p) => ipcRenderer.invoke('update:open', p),
@@ -105,7 +118,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
   utauRenderTrack: (cfg) => ipcRenderer.invoke('utau:renderTrack', cfg),
   // 已导入声库列表 / 导入现成声库 zip
   utauListVoicebanks: () => ipcRenderer.invoke('utau:listVoicebanks'),
-  utauImportVoicebankZip: () => ipcRenderer.invoke('utau:importVoicebankZip'),
+  utauImportVoicebankZip: (directPath) => ipcRenderer.invoke('utau:importVoicebankZip', directPath),
+  pathForFile: (f) => filePathFor(f),
   openEditGuide: () => ipcRenderer.invoke('guide:openEdit'),
   // 转录参数预设
   presets: {

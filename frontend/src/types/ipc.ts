@@ -313,6 +313,11 @@ export interface FuBridge {
   updateCheck(): Promise<any>;
   getVersion(): Promise<string>;
   appUninstall(): Promise<GeneralResult>;
+  autostartGet(): Promise<{ ok: boolean; openAtLogin: boolean; error?: string }>;
+  autostartSet(open: boolean): Promise<{ ok: boolean; openAtLogin: boolean; error?: string }>;
+  clearUserData(scopes: string[]): Promise<{ ok: boolean; done?: string[]; needRestart?: boolean; error?: string }>;
+  onTrayControl(cb: (act: string) => void): () => void;
+  readSidecarLyrics(filePath: string): Promise<{ ok: boolean; path?: string; b64?: string; bytes?: number; error?: string }>;
   updateDownload(url: string): Promise<any>;
   updateOpen(p: string): Promise<any>;
   onUpdateProgress(cb: (p: any) => void): () => void;

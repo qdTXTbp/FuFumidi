@@ -268,6 +268,49 @@ export class Synth {
     this.compressor.attack.value = 0.003;
     this.compressor.release.value = 0.25;
     this.master.connect(this.analyser); this.analyser.connect(this.kill); this.kill.connect(this.compressor); this.compressor.connect(ctx.destination);
+    /* ---------------- 音效链：10 段 EQ + 低音增强 + 空间展宽（可旁路） ---------------- */
+    // 拓扑：master → fxIn → [EQ 级联] → [bassShelf] → [mid/side 展宽] → fxOut → analyser → ...
+    // fxEnabled=false 时走 master → analyser 直连（零处理旁路）
+    const EQ_FREQS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+    this.fxIn = ctx.createGain(); this.fxOut = ctx.createGain();
+    this.eqFilters = EQ_FREQS.map((f, i) => {
+      const bq = ctx.createBiquadFilter();
+      bq.type = i === 0 ? 'lowshelf' : (i === EQ_FREQS.length - 1 ? 'highshelf' : 'peaking');
+      bq.frequency.value = f; bq.Q.value = 1.1; bq.gain.value = 0;
+      return bq;
+    });
+    for (let i = 0; i < this.eqFilters.length - 1; i++) this.eqFilters[i].connect(this.eqFilters[i + 1]);
+    this.bassShelf = ctx.createBiquadFilter();
+    this.bassShelf.type = 'lowshelf'; this.bassShelf.frequency.value = 120; this.bassShelf.gain.value = 0;
+    this.eqFilters[this.eqFilters.length - 1].connect(this.bassShelf);
+    // mid/side 立体声展宽：L' = L + s*(L-R)/2, R' = R - s*(L-R)/2（s=0 原声，s=1 最大展宽）
+    this.splitter = ctx.createChannelSplitter(2);
+    this.merger = ctx.createChannelMerger(2);
+    const midL = ctx.createGain(), midR = ctx.createGain();
+    const invR = ctx.createGain(), invL = ctx.createGain();
+    const sideL = ctx.createGain(), sideR = ctx.createGain();
+    invR.gain.value = -1; invL.gain.value = -1;
+    sideL.gain.value = 0; sideR.gain.value = 0;
+    this.bassShelf.connect(this.splitter);
+    this.splitter.connect(midL, 0); this.splitter.connect(midR, 1);        // L/R 直通（mid 分量）
+    this.splitter.connect(invR, 1);                                        // -R
+    this.splitter.connect(invL, 0);                                        // -L
+    midL.connect(sideL); invR.connect(sideL);   // side = L - R（左耳加正 side）
+    midR.connect(sideR); invL.connect(sideR);   // 反相 side 加到右耳
+    sideL.connect(this.merger, 0, 0); midL.connect(this.merger, 0, 0);
+    sideR.connect(this.merger, 0, 1); midR.connect(this.merger, 0, 1);
+    this.bassShelf.connect(this.fxOut);
+    this.merger.connect(this.fxOut);
+    this.fxOut.connect(this.analyser);
+    this.fxEnabled = false;
+    this.setSpatial = (v) => { const s = Math.max(0, Math.min(1, v || 0)); try { sideL.gain.setTargetAtTime(s * 0.5, ctx.currentTime, 0.03); sideR.gain.setTargetAtTime(-s * 0.5, ctx.currentTime, 0.03); } catch (e) {} };
+    this.setEqGains = (gains) => { if (!Array.isArray(gains)) return; this.eqFilters.forEach((f, i) => { try { f.gain.setTargetAtTime(Math.max(-12, Math.min(12, gains[i] || 0)), ctx.currentTime, 0.03); } catch (e) {} }); };
+    this.setBassBoost = (db) => { try { this.bassShelf.gain.setTargetAtTime(Math.max(0, Math.min(12, db || 0)), ctx.currentTime, 0.03); } catch (e) {} };
+    this.setFxEnabled = (on) => {
+      this.fxEnabled = !!on;
+      try { this.master.disconnect(); } catch (e) {}
+      this.master.connect(on ? this.fxIn : this.analyser);
+    };
     this.trackGains = []; this.vol = []; this.mute = []; this.solo = [];
     this.panners = []; this.pan = [];
     this.live = []; this.activeNotes = [];

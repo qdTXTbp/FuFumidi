@@ -2,7 +2,7 @@
 // FuFumidi —— Electron 主进程
 // 纯离线本地应用：加载内置 renderer 界面 + 本地 Python 转录引擎子进程
 // ============================================================
-const { app, BrowserWindow, session, dialog, shell, Menu, ipcMain, net } = require('electron');
+const { app, BrowserWindow, session, dialog, shell, Menu, ipcMain, net, Tray } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -79,7 +79,7 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     configureSession({ session, dialog, app });
-    registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app, fs, spawnEngine });
+    registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app, fs, spawnEngine, dialog });
     registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net });
     registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline });
     registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, pluginHost, readSettings, resolveSeparateModel: (id) => (ModelsService ? ModelsService.resolveSeparateModel(id) : null) });
@@ -87,6 +87,9 @@ if (!gotLock) {
     registerPresetsIpc({ ipcMain, runEngineInline, parsePyJson, pyLit });
     registerDialogsIpc({ ipcMain, dialog, path, fs, app });
     registerDiagnosticsIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine });
+    // 模型目录迁移 + 内置模型 junction（须在模型服务注册前完成 junction，迁移可后台）
+    try { linkBundledModels(); } catch (_) {}
+    migrateUserModels();
     ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings });
     DbService = createDbService({ app, path, fs });
     DbService.registerDbIpc({ ipcMain });
@@ -106,7 +109,8 @@ if (!gotLock) {
       engineDir, engineEnv, resolvePython,
       runEngineInline, parsePyJson,
     });
-    createWindow({ BrowserWindow, shell, pluginHost, rootDir: __dirname });
+    const mainWin = createWindow({ BrowserWindow, shell, pluginHost, rootDir: __dirname });
+    setupTray({ win: mainWin, app, readSettings, rootDir: __dirname });
     Menu.setApplicationMenu(null); // 隐藏默认菜单栏，界面更清爽
 
     // 启动参数里带上 .mid/.midi 时（例如：双击文件 / 命令行调用）自动打开
@@ -121,6 +125,36 @@ if (!gotLock) {
 // ---------- Python 路径解析（跨平台 + 内置运行时优先） ----------
 // 内置运行时：打包时用 python-build-standalone 分发自包含 CPython + 预装依赖，
 // 使应用在任意平台开箱即用，无需用户安装 Python。
+// ---------- 系统托盘：关闭最小化到托盘后台播放（设置 close_to_tray，默认开） ----------
+let _tray = null;
+function setupTray({ win, app, readSettings, rootDir }) {
+  try {
+    const iconPath = path.join(rootDir, 'build', 'icon.png');
+    _tray = new Tray(fs.existsSync(iconPath) ? iconPath : path.join(rootDir, 'build', 'icon.ico'));
+    _tray.setToolTip('FuFumidi');
+    const showWin = () => { if (win.isDestroyed()) return; win.show(); win.focus(); };
+    _tray.setContextMenu(Menu.buildFromTemplate([
+      { label: '显示主窗口', click: showWin },
+      { label: '播放 / 暂停', click: () => { if (!win.isDestroyed()) win.webContents.send('tray:control', 'playpause'); } },
+      { label: '下一首', click: () => { if (!win.isDestroyed()) win.webContents.send('tray:control', 'next'); } },
+      { type: 'separator' },
+      { label: '退出', click: () => { app.isQuiting = true; app.quit(); } },
+    ]));
+    _tray.on('double-click', showWin);
+    // 关闭按钮：默认隐藏到托盘（后台继续播放）；设置 close_to_tray=false 时直接退出
+    win.on('close', (e) => {
+      let toTray = true;
+      try { const s = readSettings(); toTray = (s && s.close_to_tray !== false); } catch (_) {}
+      if (!app.isQuiting && toTray && !BrowserWindow.getAllWindows().every(w => w.isDestroyed())) {
+        e.preventDefault();
+        win.hide();
+      }
+    });
+    app.on('before-quit', () => { app.isQuiting = true; });
+  } catch (e) {
+    console.warn('[tray] 托盘初始化失败（忽略）:', e && e.message);
+  }
+}
 function bundledPython() {
   const names = process.platform === 'win32' ? ['python.exe'] : ['python', 'python3'];
   const roots = [
@@ -159,13 +193,61 @@ function engineDir() {
   if (fs.existsSync(path.join(unpacked, 'music2midi.py'))) return unpacked;
   return path.join(__dirname, 'engine');
 }
-// 离线模型目录：打包后 extraResources 分发到 resources/models，开发模式在 app/models
-function modelsDir() {
+// 模型目录双轨制：
+//   用户模型 → userData/fufumidi/models（随用户数据保留，更新/重装不再丢失）
+//   内置模型 → resources/models（extraResources，只读分发）
+// 引擎只看 FUFUMIDI_MODELS_DIR（用户目录）；内置模型通过 NTFS junction 透出（免管理员权限）
+function bundledModelsDir() {
   const packaged = path.join(process.resourcesPath, 'models');
   return fs.existsSync(packaged) ? packaged : path.join(__dirname, 'models');
 }
+function userModelsDir() {
+  const d = path.join(app.getPath('userData'), 'fufumidi', 'models');
+  try { fs.mkdirSync(d, { recursive: true }); } catch (_) {}
+  return d;
+}
+function modelsDir() {
+  return userModelsDir();
+}
+// 为内置模型的每个顶层子目录创建 junction（已存在同名真实目录则跳过）
+function linkBundledModels() {
+  const from = bundledModelsDir(), to = userModelsDir();
+  try {
+    for (const name of fs.readdirSync(from)) {
+      const src = path.join(from, name);
+      const dst = path.join(to, name);
+      if (fs.existsSync(dst)) continue;
+      try { fs.symlinkSync(src, dst, 'junction'); } catch (_) {}
+    }
+  } catch (_) {}
+}
+// 一次性迁移：把旧安装目录内已下载的模型复制到用户目录（升级自旧版的用户资产救援）
+function migrateUserModels() {
+  const to = userModelsDir();
+  const flag = path.join(to, '.migrated_v1');
+  if (fs.existsSync(flag)) return;
+  const from = bundledModelsDir();
+  try {
+    fs.mkdirSync(to, { recursive: true });
+    let moved = 0;
+    const copyDir = (src, dst) => {
+      fs.mkdirSync(dst, { recursive: true });
+      for (const name of fs.readdirSync(src)) {
+        const s = path.join(src, name), d = path.join(dst, name);
+        const st = fs.lstatSync(s);
+        if (st.isDirectory()) copyDir(s, d);
+        else if (!fs.existsSync(d)) { try { fs.copyFileSync(s, d); moved++; } catch (_) {} }
+      }
+    };
+    copyDir(from, to);
+    fs.writeFileSync(flag, String(new Date().toISOString()));
+    console.log('[models] 用户模型迁移完成，文件数:', moved);
+  } catch (e) {
+    console.warn('[models] 迁移失败（忽略，下次启动重试）:', e && e.message);
+  }
+}
 function engineEnv(extra) {
-  const env = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', FUFUMIDI_MODELS_DIR: modelsDir() };
+  const env = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', FUFUMIDI_MODELS_DIR: modelsDir(), FUFUMIDI_MODELS_BUNDLED_DIR: bundledModelsDir() };
   const sites = installedGpuKinds().map(gpuEnhanceSite);
   if (sites.length) {
     const old = process.env.PYTHONPATH || '';

@@ -24,11 +24,14 @@ function registerUtauIpc({ ipcMain, path, fs, os, app, dialog, spawnEngine }) {
   });
 
   // 导入现成声库 zip → 解压到 userData/voicebanks，返回声库目录
-  ipcMain.handle('utau:importVoicebankZip', async () => {
+  // directPath（可选）：拖拽导入时由渲染端经 webUtils.getPathForFile 传入，跳过文件对话框
+  ipcMain.handle('utau:importVoicebankZip', async (_e, directPath) => {
     try {
       const win = dialog;
       let files;
-      if (typeof dialog.showOpenDialog === 'function') {
+      if (directPath && typeof directPath === 'string' && /\.zip$/i.test(directPath) && fs.existsSync(directPath)) {
+        files = [directPath];
+      } else if (typeof dialog.showOpenDialog === 'function') {
         const r = await dialog.showOpenDialog({
           properties: ['openFile'],
           filters: [{ name: 'UTAU 声库', extensions: ['zip'] }],

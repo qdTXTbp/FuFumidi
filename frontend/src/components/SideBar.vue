@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import Icon from './Icon.vue';
 import { useAppStore, SIDEBAR_DEFAULT_W, SIDEBAR_MIN_W } from '../stores/app';
 import { usePlaylistStore } from '../stores/playlist';
@@ -63,11 +63,41 @@ function onResizerKey(e) {
 }
 
 /* ---------------- 歌单数据 ---------------- */
+// 整理方式（默认/艺术家/专辑/流派/文件夹），持久化到 localStorage
+const libSort = ref((() => { try { return localStorage.getItem('fufumidi_libsort') || 'default'; } catch (e) { return 'default'; } })());
+watch(libSort, (v) => { try { localStorage.setItem('fufumidi_libsort', v); } catch (e) {} });
 const isAllView = computed(() => playlist.activePlaylistId === 'all');
 const isFavView = computed(() => playlist.activePlaylistId === 'favorites');
 const activePlaylist = computed(() => playlist.activePlaylist);
 
-const visibleSongs = computed(() => app.queueSongs);
+const visibleSongs = computed(() => {
+  const base = app.queueSongs;
+  if (libSort.value === 'default') return base;
+  const key = (s) => {
+    const tg = app.songTags(s.id) || {};
+    if (libSort.value === 'artist') return (tg.artist || '—').toLowerCase();
+    if (libSort.value === 'album') return ((tg.album || '—') + ' ' + s.name).toLowerCase();
+    if (libSort.value === 'genre') return ((tg.genre || '—') + ' ' + s.name).toLowerCase();
+    if (libSort.value === 'folder') {
+      const fp = (s.meta && s.meta.fp) || '';
+      const dir = fp.includes('\\') || fp.includes('/') ? fp.replace(/[\\/][^\\/]*$/, '').toLowerCase() : '—';
+      return dir + ' ' + s.name.toLowerCase();
+    }
+    return s.name.toLowerCase();
+  };
+  return base.slice().sort((a, b) => key(a).localeCompare(key(b), 'zh'));
+});
+/* ---------------- 标签编辑（艺术家/专辑/流派/封面） ---------------- */
+async function editTags(id) { try { await app.editTags(id); } catch (e) {} }
+function tagOf(id) { return app.songTags(id) || {}; }
+function rowCover(id) { const t = app.songTags(id); return t && t.cover ? t.cover : ''; }
+function rowSub(s) {
+  const tg = app.songTags(s.id) || {};
+  const bits = [];
+  if (tg.artist) bits.push(tg.artist);
+  if (tg.album) bits.push(tg.album);
+  return bits.join(' · ');
+}
 
 /* ---------------- 歌单批量管理（子页面弹窗） ---------------- */
 const batchManagerOpen = ref(false);
@@ -379,7 +409,7 @@ function onFileChange(e) {
 
 function onDrop(e) {
   dragOver.value = false;
-  const files = Array.from(e.dataTransfer.files || []).filter(f => /\.(mid|midi|kar|rmi)$/i.test(f.name));
+  const files = Array.from(e.dataTransfer.files || []).filter(f => /\.(mid|midi|kar|rmi|mp3|wav|flac|m4a|ogg|aac|opus)$/i.test(f.name));
   if (!files.length) return;
   Promise.all(files.map(f => f.arrayBuffer())).then(bufs => {
     importWithPicker(files.map((f, i) => ({ name: f.name, bytes: new Uint8Array(bufs[i]) })));
@@ -408,13 +438,20 @@ onMounted(() => { playlist.hydrateFavorites(); });
           <Icon name="folder" :size="13" /> {{ t('导入文件夹') }}
         </button>
       </div>
-      <input ref="fileInput" id="midi-file-input" name="midi-file" type="file" accept=".mid,.midi,.kar,.rmi" hidden multiple @change="onFileChange">
+      <input ref="fileInput" id="midi-file-input" name="midi-file" type="file" accept=".mid,.midi,.kar,.rmi,.mp3,.wav,.flac,.m4a,.ogg,.aac,.opus" hidden multiple @change="onFileChange">
 
       <!-- 搜索 -->
       <div class="pl-search">
         <Icon name="search" :size="13" />
         <input id="sidebar-search" name="sidebar-search" v-model="playlist.search" class="text-input" :placeholder="t('搜索曲目')" aria-label="t('搜索曲目')" />
         <button v-if="playlist.search" class="icon-btn" style="width:18px;height:18px;flex:none" :title="t('清空')" aria-label="t('清空')" @click="playlist.search = ''"><Icon name="close" :size="11" /></button>
+        <select class="lib-sort" :title="t('整理方式')" :value="libSort" @change="libSort = $event.target.value">
+          <option value="default">{{ t('默认') }}</option>
+          <option value="artist">{{ t('按艺术家') }}</option>
+          <option value="album">{{ t('按专辑') }}</option>
+          <option value="genre">{{ t('按流派') }}</option>
+          <option value="folder">{{ t('按文件夹') }}</option>
+        </select>
       </div>
 
       <div class="nav-sep"></div>
@@ -438,11 +475,19 @@ onMounted(() => { playlist.hydrateFavorites(); });
       </div>
 
       <template v-if="!plCollapsed">
-      <div class="pl-item" :class="{ on: isAllView }" @click="playlist.select('all')">
-        <Icon name="music" :size="13" /><span>{{ t('全部曲目') }}</span><em>{{ state.songs.length }}</em>
-      </div>
-      <div class="pl-item" :class="{ on: isFavView }" @click="playlist.select('favorites')">
-        <Icon name="heart" :size="13" /><span>{{ t('收藏') }}</span><em>{{ playlist.favorites.length }}</em>
+      <div class="pl-grid">
+        <div class="pl-item" :class="{ on: isAllView }" @click="playlist.select('all')">
+          <Icon name="music" :size="13" /><span>{{ t('全部曲目') }}</span><em>{{ state.songs.length }}</em>
+        </div>
+        <div class="pl-item" :class="{ on: isFavView }" @click="playlist.select('favorites')">
+          <Icon name="heart" :size="13" /><span>{{ t('收藏') }}</span><em>{{ playlist.favorites.length }}</em>
+        </div>
+        <div class="pl-item" :class="{ on: playlist.activePlaylistId === 'recent' }" @click="playlist.select('recent')">
+          <Icon name="clock" :size="13" /><span>{{ t('最近播放') }}</span>
+        </div>
+        <div class="pl-item" :class="{ on: playlist.activePlaylistId === 'most' }" @click="playlist.select('most')">
+          <Icon name="zap" :size="13" /><span>{{ t('最常播放') }}</span>
+        </div>
       </div>
       <div class="pl-item" v-for="pl in playlist.playlists" :key="pl.id"
            :class="{ on: playlist.activePlaylistId === pl.id, dragging: plDragId === pl.id, dragTarget: plOverId === pl.id, dragable: canReorderPlaylists }"
@@ -480,9 +525,10 @@ onMounted(() => { playlist.hydrateFavorites(); });
         <span v-if="canReorder" class="si-drag" :title="t('拖动排序')" :aria-label="t('拖动排序')"><Icon name="drag" :size="13" /></span>
         <span class="si-num" v-if="(!state.playing || s.id !== state.currentId)">{{ i + 1 }}</span>
         <span class="si-num playing-ic" v-else>▶</span>
+        <img v-if="rowCover(s.id)" class="si-cover" :src="rowCover(s.id)" alt="" />
         <div class="si-name">
           <b :title="s.name">{{ s.name }}</b>
-          <small>{{ s.song ? s.song.tracks.length : (s.meta.tracks || '—') }} {{ t(' 轨 · ') }} {{ (s.meta.size / 1024).toFixed(0) }} KB<span v-if="fmtDur(s)"> · {{ fmtDur(s) }}</span></small>
+          <small>{{ rowSub(s) ? rowSub(s) + ' · ' : '' }}{{ s.song ? s.song.tracks.length : (s.meta.tracks || '—') }} {{ t(' 轨 · ') }} {{ (s.meta.size / 1024).toFixed(0) }} KB<span v-if="fmtDur(s)"> · {{ fmtDur(s) }}</span></small>
         </div>
         <div class="si-tools">
           <button class="icon-btn heart" :class="{ on: isFav(s.id) }" style="width:26px;height:26px;font-size:13px" :title="t('收藏')" :aria-label="t('收藏')" @click.stop="toggleFav(s.id)">
@@ -490,6 +536,9 @@ onMounted(() => { playlist.hydrateFavorites(); });
           </button>
           <button class="icon-btn" style="width:26px;height:26px;font-size:13px" :title="t('添加到歌单')" :aria-label="t('添加到歌单')" @click.stop="openAddToPl(s.id)">
             <Icon name="plus" :size="14" />
+          </button>
+          <button class="icon-btn" style="width:26px;height:26px;font-size:13px" :title="t('编辑信息（艺术家/专辑/流派/封面）')" :aria-label="t('编辑信息')" @click.stop="editTags(s.id)">
+            <Icon name="pencil" :size="13" />
           </button>
           <button class="icon-btn" style="width:26px;height:26px;font-size:13px" :title="t('移除')" :aria-label="t('移除')" @click.stop="removeFromCurrentPl(s)">
             <Icon name="trash" :size="14" />
@@ -646,6 +695,11 @@ onMounted(() => { playlist.hydrateFavorites(); });
 .pl-list { display: flex; flex-direction: column; gap: 2px; padding: 2px; margin-bottom: 6px; border: 1px solid transparent; border-radius: 10px; transition: box-shadow .12s, background .12s; }
 .pl-list:has(.pl-item.dragging) { box-shadow: inset 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 5%, transparent); }
 .pl-item { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: var(--radius-sm); font-size: 13px; color: var(--charcoal); cursor: pointer; border: 1px solid transparent; transition: background 0.12s, color 0.12s, border-color 0.12s, box-shadow 0.12s; }
+/* 智能入口 2×2 网格：全部曲目/收藏/最近播放/最常播放 两两并置，精简面板高度 */
+.pl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 0 8px; margin-bottom: 4px; }
+.pl-grid .pl-item { padding: 6px 9px; gap: 6px; font-size: 12px; min-width: 0; }
+.pl-grid .pl-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-grid .pl-item em { flex: none; }
 .pl-item:hover { background: var(--surface-soft); color: var(--ink); }
 .pl-item.on { background: color-mix(in srgb, var(--brand-blue-200) 58%, transparent); color: var(--brand-blue-deep); font-weight: 600; }
 .pl-item .pl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

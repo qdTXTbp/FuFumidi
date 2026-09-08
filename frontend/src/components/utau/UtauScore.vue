@@ -2,7 +2,7 @@
 // UTAU 可视化钢琴卷帘编辑器
 // 画笔/选择工具、框选多选、缩放、网格吸附、播放走带、歌词填词、
 // 复制/剪切/粘贴/重复、撤销/重做、键盘微调、Alt拖拽复制、左右缘缩放、右键菜单
-import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, reactive, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import Icon from '../Icon.vue';
 import { useUtauStore } from '../../stores/utau';
 import { useAppStore } from '../../stores/app';
@@ -505,6 +505,22 @@ function applyMidiBytes(buf) {
 }
 
 // 桌面端：文件对话框；网页端：隐藏 input
+/* ---------------- UTAU 参数预设（BPM + 音源音高，存 localStorage） ---------------- */
+const utauPresets = reactive((() => { try { return JSON.parse(localStorage.getItem('fufumidi_utau_presets') || '{}'); } catch (e) { return {}; } })());
+function saveUtauPreset() {
+  const name = prompt(t('预设名称'), 'Preset ' + (Object.keys(utauPresets).length + 1));
+  if (!name || !name.trim()) return;
+  utauPresets[name.trim()] = { bpm: store.bpm, sampleNote: store.sampleNote };
+  try { localStorage.setItem('fufumidi_utau_presets', JSON.stringify(utauPresets)); } catch (e) {}
+  app.toast(t('已保存预设 ') + name.trim(), 'ok');
+}
+function applyUtauPreset(name) {
+  const p = utauPresets[name];
+  if (!p) return;
+  if (p.bpm) store.setBpm(p.bpm);
+  if (p.sampleNote) store.setSampleNote(p.sampleNote);
+  app.toast(t('已应用预设 ') + name, 'ok');
+}
 async function importMidiFile() {
   const b = window.fuBridge;
   if (b && b.pickFile && b.readBinary) {
@@ -589,6 +605,11 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
       <label>{{ t('音源音高') }}<select class="select-input" :value="store.sampleNote" @change="e => store.setSampleNote(e.target.value)">
         <option v-for="n in pitchOptions" :key="n" :value="pitchName(n)">{{ pitchName(n) }}</option>
       </select></label>
+      <label>{{ t('预设') }}<select class="select-input" :value="''" @change="applyUtauPreset($event.target.value)">
+        <option value="">{{ t('选择…') }}</option>
+        <option v-for="(p, k) in utauPresets" :key="k" :value="k">{{ k }}（{{ p.bpm }} BPM / {{ p.sampleNote }}）</option>
+      </select></label>
+      <button class="btn sm" @click="saveUtauPreset" :title="t('把当前 BPM 与音源音高保存为预设')">{{ t('存为预设') }}</button>
       <span class="sep"></span>
       <button class="btn sm" @click="importMidiFile" :title="t('导入 MIDI 文件作为基底旋律')"><Icon name="import" :size="13" /> {{ t('导入MIDI') }}</button>
       <button class="btn sm" @click="libOpen = true" :title="t('从曲库选择一首 MIDI 作为基底旋律')"><Icon name="music" :size="13" /> {{ t('曲库旋律') }}</button>

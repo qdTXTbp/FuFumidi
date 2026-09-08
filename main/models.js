@@ -10,6 +10,32 @@ const MSST_CATALOG = require('./models-msst-catalog');
 function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings }) {
   const _folderWatchers = new Map();
 
+  // 带防护的下载 fetch：
+  //   - 连接超时（connectMs）只约束到「响应头到达」，正文流不受总时长限制（大文件不再被 120s 砍断）
+  //   - 停滞看门狗（stallMs 内无任何字节）→ abort 使读流抛错，由调用方换源/续传
+  //   - 用户取消（ctrl.signal）始终可中断
+  async function fetchGuarded(url, { headers, ctrl, connectMs = 30000, stallMs = 30000 } = {}) {
+    const srcCtrl = new AbortController();
+    const onUser = () => { try { srcCtrl.abort(); } catch (_) {} };
+    if (ctrl) { if (ctrl.signal.aborted) onUser(); else ctrl.signal.addEventListener('abort', onUser); }
+    const timer = setTimeout(() => { try { srcCtrl.abort(); } catch (_) {} }, connectMs);
+    let r;
+    try {
+      r = await net.fetch(url, { headers: headers || {}, signal: srcCtrl.signal });
+    } finally { clearTimeout(timer); }
+    try {
+      if (ctrl) ctrl.signal.removeEventListener('abort', onUser);
+    } catch (_) {}
+    if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
+    const reader = r.body.getReader();
+    let lastData = Date.now();
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastData > stallMs) { try { srcCtrl.abort(); } catch (_) {} }
+    }, 3000);
+    const cleanup = () => { clearInterval(watchdog); };
+    return { res: r, reader, cleanup, srcCtrl };
+  }
+
   // 内置模型注册表：本地模型清单 + 缺失模型官方源一键下载（带进度/取消）
   // 条目字段：
   //   url       单文件直链（可选，自动叠加 gh 镜像回退）
@@ -577,13 +603,13 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       for (const h of [primaryHost, ...hosts.filter(x => x !== primaryHost)]) {
         if (_modelCancels.has(spec.id)) throw new Error('canceled');
         if (_modelPause.has(spec.id)) throw new Error('paused');
+        let gd = null;
         try {
-          const sig = AbortSignal.any ? AbortSignal.any([ctrl.signal, AbortSignal.timeout(120000)]) : ctrl.signal;
-          const r = await net.fetch(`${h}/${repo}/${base}/${name}`, { headers, signal: sig });
-          if (!r.ok || !r.body) throw new Error('HTTP ' + r.status + ' · ' + name);
+          gd = await fetchGuarded(`${h}/${repo}/${base}/${name}`, { headers, ctrl, connectMs: 30000, stallMs: 30000 });
+          const r = gd.res;
           const ws = fs.createWriteStream(tmp);
           ws.on('error', () => {}); // 消费 'error' 事件，防 EPERM 等未捕获异常打崩主进程
-          const reader = r.body.getReader();
+          const reader = gd.reader;
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -600,6 +626,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
           ok = true;
           break;
         } catch (e) { lastErr = e; try { fs.unlinkSync(tmp); } catch (_) {} }
+        finally { try { if (gd) gd.cleanup(); } catch (_) {} }
       }
       if (!ok) throw lastErr || new Error('下载分卷失败：' + name);
     };
@@ -733,76 +760,93 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     const tmp = dest + '.part';
     const ctrl = new AbortController();
     _modelAborts.set(id, ctrl);
-    const timeout = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 120000);
-    let out = null, start = 0, keepPart = false;
+    let out = null, keepPart = true, lastErr = null;
     try {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
-      if (fs.existsSync(tmp)) start = fs.statSync(tmp).size;
-      const headers = { 'user-agent': 'FuFumidi/3.1.22' };
-      if (start > 0) headers['Range'] = 'bytes=' + start + '-';
-      const urls = [spec.url, 'https://ghfast.top/' + spec.url, 'https://gh-proxy.com/' + spec.url, 'https://ghproxy.net/' + spec.url];
-      let res = null;
-      for (const u of urls) {
+      const urls = [spec.url, 'https://ghfast.top/' + spec.url, 'https://gh-proxy.com/' + spec.url, 'https://ghproxy.net/' + spec.url].filter(Boolean);
+      // 多源轮换 + 断点续传轮次：失败保留 .part，Range 续传（停滞/断连不再从零开始）
+      const MAX_ROUNDS = 8;
+      for (let round = 0; round < MAX_ROUNDS; round++) {
+        if (_modelPause.has(id)) throw new Error('paused');
+        if (_modelCancels.has(id)) throw new Error('canceled');
+        let start = fs.existsSync(tmp) ? fs.statSync(tmp).size : 0;
+        const headers = { 'user-agent': 'FuFumidi/3.1.22' };
+        if (start > 0) headers['Range'] = 'bytes=' + start + '-';
+        let gd = null, res = null;
+        for (const u of urls) {
+          try {
+            gd = await fetchGuarded(u, { headers, ctrl, connectMs: 30000, stallMs: 30000 });
+            res = gd.res;
+            if (res.ok && res.body) break;
+            try { if (gd) gd.cleanup(); } catch (_) {}
+            gd = null; res = null;
+          } catch (e) {
+            lastErr = e;
+            try { if (gd) gd.cleanup(); } catch (_) {}
+            gd = null; res = null;
+            if (_modelPause.has(id) || _modelCancels.has(id)) break;
+          }
+        }
+        if (!res || !gd) throw new Error(lastErr ? ('所有下载源均失败：' + lastErr.message) : '所有下载源均失败');
+        const resumable = res.status === 206 && start > 0;
+        if (!resumable && start > 0) { try { fs.rmSync(tmp, { force: true }); } catch (_) {} start = 0; } // 源不支持 Range → 全量重下
+        const total = (parseInt(res.headers.get('content-length') || '0', 10) || 0) + start;
+        out = fs.createWriteStream(tmp, { flags: resumable ? 'a' : 'w' });
+        out.on('error', () => {}); // 消费 'error' 事件，防 EPERM 等未捕获异常打崩主进程
+        const reader = gd.reader;
+        let received = start, lastSend = 0, lastT = 0, lastR = 0, speed = 0;
+        const tickSpeed = () => {
+          const now = Date.now();
+          if (!lastT) { lastT = now; lastR = received; return; }
+          const dt = now - lastT;
+          if (dt >= 300) { speed = ((received - lastR) / dt) * 1000; lastT = now; lastR = received; }
+        };
+        const sendP = (done) => {
+          const now = Date.now();
+          if (!done && now - lastSend < 300) return;
+          lastSend = now;
+          if (!done) tickSpeed();
+          const pct = total ? Math.min(99, Math.round(received / total * 100)) : 0;
+          if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received, total, percent: pct, done: !!done, speed });
+        };
+        let got = 0;
         try {
-          const sig = AbortSignal.any ? AbortSignal.any([ctrl.signal, AbortSignal.timeout(120000)]) : ctrl.signal;
-          res = await net.fetch(u, { headers, signal: sig });
-          if (res.ok && res.body) break; else res = null;
-        } catch (e) { res = null; }
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (_modelPause.has(id)) { try { reader.cancel(); } catch (e) {} throw new Error('paused'); }
+            if (_modelCancels.has(id)) { try { reader.cancel(); } catch (e) {} throw new Error('canceled'); }
+            got += value.length;
+            received = start + got;
+            sendP(false);
+            await new Promise((res2, rej2) => out.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
+          }
+          await new Promise((res2, rej2) => out.end(err => (err ? rej2(err) : res2())));
+        } finally { try { gd.cleanup(); } catch (_) {} }
+        sendP(true);
+        if (_modelPause.has(id)) throw new Error('paused');
+        if (_modelCancels.has(id)) throw new Error('canceled');
+        fs.renameSync(tmp, dest);
+        const size = fs.statSync(dest).size;
+        if (size < spec.minSize) throw new Error('下载文件不完整：' + size + ' bytes');
+        if (spec.sha256) {
+          const hash = await sha256File(dest);
+          if (hash !== spec.sha256) { try { fs.unlinkSync(dest); } catch (e) {} throw new Error('SHA256 校验失败：' + hash); }
+        }
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: size, total: size, percent: 100, done: true, speed: 0 });
+        return { ok: true, path: dest, size };
       }
-      if (!res) throw new Error('所有下载源均失败');
-      if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
-      const total = (parseInt(res.headers.get('content-length') || '0', 10) || 0) + start;
-      out = fs.createWriteStream(tmp, { flags: start > 0 ? 'a' : 'w' });
-      out.on('error', () => {}); // 消费 'error' 事件，防 EPERM 等未捕获异常打崩主进程
-      const reader = res.body.getReader();
-      let received = start, lastSend = 0, lastT = 0, lastR = 0, speed = 0;
-      const tickSpeed = () => {
-        const now = Date.now();
-        if (!lastT) { lastT = now; lastR = received; return; }
-        const dt = now - lastT;
-        if (dt >= 300) { speed = ((received - lastR) / dt) * 1000; lastT = now; lastR = received; }
-      };
-      const sendP = (done) => {
-        const now = Date.now();
-        if (!done && now - lastSend < 300) return;
-        lastSend = now;
-        if (!done) tickSpeed();
-        const pct = total ? Math.min(99, Math.round(received / total * 100)) : 0;
-        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received, total, percent: pct, done: !!done, speed });
-      };
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (_modelPause.has(id)) { try { reader.cancel(); } catch (e) {} throw new Error('paused'); }
-        if (_modelCancels.has(id)) { try { reader.cancel(); } catch (e) {} throw new Error('canceled'); }
-        received += value.length;
-        sendP(false);
-        await new Promise((res2, rej2) => out.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
-      }
-      await new Promise((res2, rej2) => out.end(err => (err ? rej2(err) : res2())));
-      sendP(true);
-      if (_modelPause.has(id)) throw new Error('paused');
-      if (_modelCancels.has(id)) throw new Error('canceled');
-      fs.renameSync(tmp, dest);
-      const size = fs.statSync(dest).size;
-      if (size < spec.minSize) throw new Error('下载文件不完整：' + size + ' bytes');
-      if (spec.sha256) {
-        const hash = await sha256File(dest);
-        if (hash !== spec.sha256) { try { fs.unlinkSync(dest); } catch (e) {} throw new Error('SHA256 校验失败：' + hash); }
-      }
-      if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: size, total: size, percent: 100, done: true, speed: 0 });
-      return { ok: true, path: dest, size };
+      throw new Error('自动下载失败（已多源轮换重试 ' + MAX_ROUNDS + ' 轮，断点已保留，重试将继续）：' + ((lastErr && lastErr.message) || '网络不可达'));
     } catch (e) {
       if (out) { try { out.destroy(); } catch (_) {} }
       await new Promise(r => setTimeout(r, 150));
       const msg = String((e && e.message) || e);
       const paused = _modelPause.has(id);
-      keepPart = paused;
-      if (!paused && !_modelCancels.has(id)) { try { fs.unlinkSync(tmp); } catch (_) {} }
+      keepPart = paused || _modelCancels.has(id) || /paused|canceled/i.test(msg) ? keepPart : true;
+      // .part 一律保留（断点续传）；仅 SHA 失败等由上方清理目标文件
       if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, error: msg, canceled: _modelCancels.has(id), paused });
       return { ok: false, error: msg, canceled: _modelCancels.has(id), paused };
     } finally {
-      clearTimeout(timeout);
       _modelCancels.delete(id);
       _modelAborts.delete(id);
       _modelPause.delete(id);
