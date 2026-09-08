@@ -518,7 +518,9 @@ export const useAppStore = defineStore('app', {
         try { const { player } = ensureAudio(); player.bumpAhead(); } catch (e) {}
       }
       this.view = viewParentOf(v);
-      const tab = OLD_VIEW_TO_PARENT[v] || '';
+      // v 为旧子视图 id（play/lyrics/edit/viz/analyze/score/transcribe/convert）时，
+      // tab 应为该子视图 id 本身；OLD_VIEW_TO_PARENT 的值是父视图名，不能当 tab 用
+      const tab = OLD_VIEW_TO_PARENT[v] ? v : '';
       this.syncHash(tab);
     },
     setSidebarWidth(w: number) {

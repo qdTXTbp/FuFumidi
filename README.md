@@ -16,9 +16,9 @@ FuFumidi is a fully offline desktop workstation for MIDI. It targets musicians, 
 
 The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally. Nothing is uploaded.
 
-Current release line: **3.2.8** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v3.2.8)).
+Current release line: **3.2.9** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v3.2.9)).
 
-What's new in 3.2.8: the incremental updater now writes every downloaded file to a temporary file and atomically swaps it in after hash verification — an interrupted or throttled update can no longer truncate or corrupt the installed application; if an update does fail midway, simply running the updater again repairs the installation without reinstalling.
+What's new in 3.2.9: the interactive walkthrough is fixed — steps 7-14 now switch to the correct sub-tab and highlight the right element instead of pointing at hidden ones; "Open Player" / "Sync to Score" shortcuts land on the intended tab; the engine-selection step no longer needs a double click.
 
 ### What it does
 

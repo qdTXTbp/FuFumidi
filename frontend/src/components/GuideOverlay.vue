@@ -35,8 +35,8 @@ const IG_STEPS = [
   { view: 'analyze', selector: '#azPitch', title: t('10. MIDI 数据分析'), desc: t('鼠标悬停在图表上可查看具体数值；分析结果可帮助判断是否需要修正调性/音区。'), manual: true },
   { view: 'score', selector: '.score-view', title: t('11. 乐谱视图'), desc: t('查看可跟随播放的五线谱；可选择乐谱轨道、开启播放跟随、点击乐谱音符定位播放头。'), manual: true },
   { view: 'convert', selector: '.convert-view', title: t('12. 导出转换'), desc: t('可导出 MIDI、MusicXML、WAV、视频；导出前可选择范围和速度。'), manual: true },
-  { view: 'home', selector: '[data-guide="quick-settings"]', title: t('13. 应用设置'), desc: t('设置主题、强调色、字号、语言、Python 解释器、默认输出目录、MIDI 文件关联、插件管理。'), action: true, validate: () => !!state.ui.settingsOpen },
-  { view: 'home', selector: '[data-guide="quick-settings"]', title: t('14. 完成'), desc: t('你已经掌握 FuFumidi 的主要功能。常用快捷键：Space 播放/暂停、L 循环、M 节拍器、Ctrl+K 命令面板、F1 帮助。'), manual: true },
+  { view: 'home', selector: '[data-guide="quick-settings"]', title: t('13. 应用设置'), desc: t('设置主题、强调色、字号、语言、Python 解释器、默认输出目录、MIDI 文件关联、插件管理。'), action: true, validate: () => !!state.ui.settingsOpen, onEnter: () => { state.ui.settingsOpen = false; } },
+  { view: 'home', selector: '[data-guide="quick-settings"]', title: t('14. 完成'), desc: t('你已经掌握 FuFumidi 的主要功能。常用快捷键：Space 播放/暂停、L 循环、M 节拍器、Ctrl+K 命令面板、F1 帮助。'), manual: true, onEnter: () => { state.ui.settingsOpen = false; } },
 ];
 
 const mode = ref('welcome');
@@ -112,7 +112,8 @@ function attachIg(el, st) {
   updateHighlight();
   if (st.action) {
     const handler = () => {
-      if (st.validate ? st.validate(el) : true) igNext();
+      // 延迟一拍再校验：Vue 的类名/状态更新是异步的，同步校验会读到旧状态（第 2 步要点两次才能过）
+      setTimeout(() => { if (st.validate ? st.validate(el) : true) igNext(); }, 60);
     };
     el.addEventListener('click', handler);
     actionOff = () => el.removeEventListener('click', handler);
@@ -127,7 +128,8 @@ function renderIg() {
   if (!st) { closeGuide(); return; }
   if (st.view) {
     const parent = viewParentOf(st.view);
-    const child = OLD_VIEW_TO_PARENT[st.view] || '';
+    // st.view 为旧子视图 id 时，目标页签就是它本身；OLD_VIEW_TO_PARENT 的值是父视图名
+    const child = OLD_VIEW_TO_PARENT[st.view] ? st.view : '';
     const currentTab = String(route.query.tab || '');
     if (state.view !== parent || (child && currentTab !== child)) {
       setView(st.view);
@@ -135,6 +137,7 @@ function renderIg() {
       return;
     }
   }
+  if (st.onEnter) { try { st.onEnter(); } catch (e) {} }
   const started = Date.now();
   const tryFind = () => {
     const el = typeof st.selector === 'string' ? document.querySelector(st.selector) : null;
