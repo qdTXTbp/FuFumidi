@@ -16,9 +16,9 @@ FuFumidi is a fully offline desktop workstation for MIDI. It targets musicians, 
 
 The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally. Nothing is uploaded.
 
-Current release line: **3.3.0** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v3.3.0)).
+Current release line: **3.3.1** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v3.3.1)).
 
-What's new in 3.3.0: pro sound shaping (10-band EQ with presets, bass boost & spatial audio), play modes with seamless transition, resume/bookmarks/sleep timer, a smart library (sort by artist/album/genre/folder, recent & most-played, tag editing with covers), audio-track playback, .lrc auto-loading, tray background playback + autostart, a "clear user data" button and the Salamander Grand Piano soundfont. Fixes: parallel transcription now really parallelizes (multi-worker pool, GPU-aware), score-view switching no longer stutters, large-model downloads survive stalls with resumable chunks, and downloaded models/soundfonts survive updates.
+What's new in 3.3.1: fixes transcription-model downloads failing with ENOENT after upgrading to 3.3.0 (stale junctions left behind when the installer replaces the bundled model directory are now auto-healed at startup and before every download; bundled small model files are copied into the user directory instead of being junction-linked).
 
 ### What it does
 

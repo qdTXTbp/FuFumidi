@@ -41,6 +41,20 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
   //   url       单文件直链（可选，自动叠加 gh 镜像回退）
   //   repo      HuggingFace 仓库（type='hf'，走 HF 官方 / hf-mirror 双渠道，整仓递归下载）
   //   dest      本地相对路径（文件或目录）
+  // 清除断链占位：安装器更新会整体替换 resources/models，指向旧内置模型的 junction
+  // 目标随之消失，残留断链让 mkdir/statSync 报 ENOENT（「模型下载损坏 / 无法下载」的根因）。
+  // 下载前对 modelsDir 顶层子项做一次清理，保证目标路径可正常创建。
+  function healBrokenModelLinks() {
+    try {
+      const root = modelsDir();
+      for (const name of fs.readdirSync(root)) {
+        const p = path.join(root, name);
+        let st = null;
+        try { st = fs.statSync(p); } catch (_) {}
+        if (!st) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
+      }
+    } catch (_) {}
+  }
   const MODEL_REGISTRY = {
     piano_transcription: {
       id: 'piano_transcription',
@@ -700,6 +714,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
   ipcMain.handle('model:download', async (evt, id, channel) => {
     const spec = MODEL_REGISTRY[id] || _msstRegistry[id];
     if (!spec || !spec.downloadable) return { ok: false, error: 'unknown model: ' + id };
+    healBrokenModelLinks(); // 清除断链（junction 目标被安装器替换后残留），否则 mkdir ENOENT
     const win = BrowserWindow.fromWebContents(evt.sender);
     // 同一模型已在下载中：阻止重复开启（页面切换/刷新后再进入也不会开第二份）
     if (_activeDownloads.has(id)) return { ok: false, error: '模型下载已在进行中，请稍候', active: true };

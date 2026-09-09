@@ -89,6 +89,7 @@ if (!gotLock) {
     registerDiagnosticsIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine });
     // 模型目录迁移 + 内置模型 junction（须在模型服务注册前完成 junction，迁移可后台）
     try { linkBundledModels(); } catch (_) {}
+    try { healModelsDir(); } catch (_) {} // 清除断链（安装器替换 resources/models 后旧 junction 目标消失）
     migrateUserModels();
     ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings });
     DbService = createDbService({ app, path, fs });
@@ -209,15 +210,34 @@ function userModelsDir() {
 function modelsDir() {
   return userModelsDir();
 }
-// 为内置模型的每个顶层子目录创建 junction（已存在同名真实目录则跳过）
+// 为内置模型的每个顶层「目录」创建 junction（已存在同名真实目录则跳过）。
+// 只处理目录：文件（如 basic_pitch_quant.onnx）由迁移复制，目录型 reparse 指向文件在目标更新后会变断链
 function linkBundledModels() {
   const from = bundledModelsDir(), to = userModelsDir();
   try {
     for (const name of fs.readdirSync(from)) {
       const src = path.join(from, name);
+      let st = null;
+      try { st = fs.statSync(src); } catch (_) { continue; }
+      if (!st.isDirectory()) continue;
       const dst = path.join(to, name);
       if (fs.existsSync(dst)) continue;
       try { fs.symlinkSync(src, dst, 'junction'); } catch (_) {}
+    }
+  } catch (_) {}
+}
+// 修复断链：安装器更新会整体替换 resources/models，旧 junction 的目标目录可能随之消失，
+// 残留断链让后续 mkdir/statSync 报 ENOENT（表现为「模型下载损坏 / 无法下载」）。启动时清除断链占位。
+function healModelsDir() {
+  const root = userModelsDir();
+  try {
+    for (const name of fs.readdirSync(root)) {
+      const p = path.join(root, name);
+      let st = null;
+      try { st = fs.statSync(p); } catch (_) {}
+      if (!st) {
+        try { fs.rmSync(p, { recursive: true, force: true }); console.warn('[models] 已移除断链占位:', name); } catch (_) {}
+      }
     }
   } catch (_) {}
 }
