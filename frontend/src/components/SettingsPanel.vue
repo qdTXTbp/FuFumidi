@@ -264,7 +264,7 @@ function toggleCloseToTray() {
   closeToTray.value = !closeToTray.value;
   settingsStore.settings.close_to_tray = closeToTray.value;
   try { if (bridge && bridge.saveSettings) bridge.saveSettings({ close_to_tray: closeToTray.value }); } catch (e) {}
-  app.toast(closeToTray.value ? t('关闭按钮将最小化到托盘') : t('关闭按钮将直接退出'), 'ok');
+  app.toast(closeToTray.value ? t('最小化 / 关闭将隐藏到托盘后台播放') : t('关闭按钮将直接退出'), 'ok');
 }
 async function clearUserData() {
   const ok = await app.confirmDialog({
@@ -922,7 +922,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
           </div>
           <div class="field-row">
             <div>
-              <div class="fr-label">{{ t('关闭时最小化到托盘') }}</div>
+              <div class="fr-label">{{ t('最小化 / 关闭到托盘') }}</div>
               <div class="fr-hint">{{ t('点击关闭按钮时隐藏到系统托盘，音乐继续播放；从托盘菜单可恢复或退出。') }}</div>
             </div>
             <div class="fr-ctl">

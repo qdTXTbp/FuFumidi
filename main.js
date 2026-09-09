@@ -126,12 +126,21 @@ if (!gotLock) {
 // ---------- Python 路径解析（跨平台 + 内置运行时优先） ----------
 // 内置运行时：打包时用 python-build-standalone 分发自包含 CPython + 预装依赖，
 // 使应用在任意平台开箱即用，无需用户安装 Python。
-// ---------- 系统托盘：关闭最小化到托盘后台播放（设置 close_to_tray，默认开） ----------
+// ---------- 系统托盘：最小化/关闭到托盘后台播放（设置 close_to_tray，默认开） ----------
 let _tray = null;
 function setupTray({ win, app, readSettings, rootDir }) {
+  // Tray 只能用真实磁盘图标：打包后 __dirname 在 asar 内，build/ 图标经 extraResources
+  // 落到 resources/icon.png；开发模式回退源码树 build/。
+  let toTrayOn = () => { let v = true; try { const s = readSettings(); v = !(s && s.close_to_tray === false); } catch (_) {} return v; };
   try {
-    const iconPath = path.join(rootDir, 'build', 'icon.png');
-    _tray = new Tray(fs.existsSync(iconPath) ? iconPath : path.join(rootDir, 'build', 'icon.ico'));
+    const iconCandidates = [
+      path.join(process.resourcesPath || '', 'icon.png'),
+      path.join(rootDir, 'build', 'icon.png'),
+      path.join(rootDir, 'build', 'icon.ico'),
+    ];
+    const iconPath = iconCandidates.find(p => { try { return p && fs.existsSync(p); } catch (_) { return false; } });
+    if (!iconPath) throw new Error('托盘图标缺失: ' + iconCandidates.join(' , '));
+    _tray = new Tray(iconPath);
     _tray.setToolTip('FuFumidi');
     const showWin = () => { if (win.isDestroyed()) return; win.show(); win.focus(); };
     _tray.setContextMenu(Menu.buildFromTemplate([
@@ -142,19 +151,19 @@ function setupTray({ win, app, readSettings, rootDir }) {
       { label: '退出', click: () => { app.isQuiting = true; app.quit(); } },
     ]));
     _tray.on('double-click', showWin);
-    // 关闭按钮：默认隐藏到托盘（后台继续播放）；设置 close_to_tray=false 时直接退出
-    win.on('close', (e) => {
-      let toTray = true;
-      try { const s = readSettings(); toTray = (s && s.close_to_tray !== false); } catch (_) {}
-      if (!app.isQuiting && toTray && !BrowserWindow.getAllWindows().every(w => w.isDestroyed())) {
-        e.preventDefault();
-        win.hide();
-      }
-    });
-    app.on('before-quit', () => { app.isQuiting = true; });
   } catch (e) {
-    console.warn('[tray] 托盘初始化失败（忽略）:', e && e.message);
+    console.warn('[tray] 托盘初始化失败（关闭将直接退出）:', e && e.message);
+    _tray = null;
   }
+  // 关闭/最小化拦截与 Tray 创建解耦：仅在托盘就绪时隐藏到托盘，
+  // 托盘失败时放行默认行为（避免窗口消失后无法找回）
+  win.on('close', (e) => {
+    if (!app.isQuiting && _tray && toTrayOn()) { e.preventDefault(); win.hide(); }
+  });
+  win.on('minimize', (e) => {
+    if (_tray && toTrayOn()) { e.preventDefault(); win.hide(); }
+  });
+  app.on('before-quit', () => { app.isQuiting = true; });
 }
 function bundledPython() {
   const names = process.platform === 'win32' ? ['python.exe'] : ['python', 'python3'];

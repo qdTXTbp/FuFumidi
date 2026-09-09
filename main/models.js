@@ -617,11 +617,11 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       for (const h of [primaryHost, ...hosts.filter(x => x !== primaryHost)]) {
         if (_modelCancels.has(spec.id)) throw new Error('canceled');
         if (_modelPause.has(spec.id)) throw new Error('paused');
-        let gd = null;
+        let gd = null, ws = null;
         try {
           gd = await fetchGuarded(`${h}/${repo}/${base}/${name}`, { headers, ctrl, connectMs: 30000, stallMs: 30000 });
           const r = gd.res;
-          const ws = fs.createWriteStream(tmp);
+          ws = fs.createWriteStream(tmp);
           ws.on('error', () => {}); // 消费 'error' 事件，防 EPERM 等未捕获异常打崩主进程
           const reader = gd.reader;
           for (;;) {
@@ -639,8 +639,14 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
           fs.renameSync(tmp, dest);
           ok = true;
           break;
-        } catch (e) { lastErr = e; try { fs.unlinkSync(tmp); } catch (_) {} }
-        finally { try { if (gd) gd.cleanup(); } catch (_) {} }
+        } catch (e) {
+          lastErr = e;
+          // 先销毁写入流并等句柄释放，再清理 tmp。否则句柄未关时 unlink 会把文件置为
+          // delete-pending，下一源重试 createWriteStream 同一路径 → EPERM（分卷下载失败主因）
+          if (ws) { try { ws.destroy(); } catch (_) {} }
+          await new Promise(res2 => { let fin = false; const fin2 = () => { if (!fin) { fin = true; res2(); } }; const t = setTimeout(fin2, 400); try { ws.once('close', fin2); } catch (_) { clearTimeout(t); fin2(); } });
+          try { fs.unlinkSync(tmp); } catch (_) {}
+        } finally { try { if (gd) gd.cleanup(); } catch (_) {} }
       }
       if (!ok) throw lastErr || new Error('下载分卷失败：' + name);
     };
@@ -654,6 +660,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     };
     const partsList = Array.from({ length: parts }, (_, i) => i + 1);
     let cursor = 0;
+    let merged = false;
     try {
       const workers = Array.from({ length: Math.min(SPLIT_CONCURRENCY, parts) }, async () => {
         while (cursor < partsList.length) {
@@ -679,6 +686,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       }
       await new Promise((res2, rej2) => ws.end(err => (err ? rej2(err) : res2())));
       fs.renameSync(tmpOut, outFile);
+      merged = true; // 合并成功：finally 才允许清理 .parts（失败/暂停/取消保留分卷以续传）
       // 5) 校验
       const size = fs.statSync(outFile).size;
       if (meta.sha256) {
@@ -707,7 +715,8 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       try { fs.rmSync(outFile + '.tmp', { force: true }); } catch (_) {}
       throw e;
     } finally {
-      try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) {}
+      // 仅合并成功后清理分卷；失败/暂停/取消保留 .parts，重新下载时按已完整分卷续传
+      if (merged) { try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) {} }
     }
   }
 

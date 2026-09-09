@@ -719,6 +719,7 @@ export const useAppStore = defineStore('app', {
           clearInterval(this.sleepTimer); this.sleepTimer = null; this.sleepUntil = 0;
           try { window.__fufumidiSleepFade = false; } catch (e) {}
           try { const { player } = ensureAudio(); player.pause(); } catch (e) {}
+          try { if (this.isAudio && this.audioEl) this.audioEl.pause(); } catch (e) {} // 音频曲目同样停止
           this.playing = false;
           this.setVolume(this.volume);
           this.toast(t('睡眠定时到，已停止播放'), 'ok');

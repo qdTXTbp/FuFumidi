@@ -546,6 +546,8 @@ export const I18N_MAP = {
   '关闭按钮将最小化到托盘': 'Close button now minimizes to tray',
   '关闭按钮将直接退出': 'Close button now quits the app',
   '清除用户数据': 'Clear user data',
+  '最小化 / 关闭到托盘': 'Minimize / close to tray',
+  '最小化 / 关闭将隐藏到托盘后台播放': 'Minimizing / closing will hide to tray and keep playing',
   '将清除以下本地数据：\n· 已下载的转录模型\n· 已下载的音色（SF2）\n· 播放进度、书签与播放统计\n\n不会删除你的 MIDI 曲库、歌单与收藏。\n清除后应用将自动重启。确定继续？': 'This will clear the following local data:\n· Downloaded transcription models\n· Downloaded soundfonts (SF2)\n· Playback progress, bookmarks and stats\n\nYour MIDI library, playlists and favourites are kept.\nThe app will restart afterwards. Continue?',
   '清除中…': 'Clearing…',
   '用户数据已清除，应用即将重启…': 'User data cleared — restarting…',
