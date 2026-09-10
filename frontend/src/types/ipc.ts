@@ -306,6 +306,7 @@ export interface FuBridge {
   gpuImportLocal(p: string | string[], kind: GpuKind): Promise<GeneralResult>;
   gpuStatus(): Promise<GpuStatusResult>;
   gpuUninstall(kind: GpuKind): Promise<GeneralResult>;
+  gpuCancelInstall(): Promise<GeneralResult>;
   gpuDownloadPackage(opts: GpuDownloadOptions): Promise<GeneralResult>;
   onGpuProgress(cb: (p: any) => void): () => void;
 

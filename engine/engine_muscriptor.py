@@ -8,6 +8,7 @@ MuScriptor 通用多乐器转录引擎（Kyutai + Mirelo）
 - GPU：Windows 需 CUDA 12.8（cu128）支持 RTX 50 系 Blackwell
 """
 import os
+import time
 
 
 def _find_local_model(size):
@@ -147,6 +148,14 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     else:
         _log(log_cb, "使用 CPU 推理（较慢）")
 
+    # 批量推理仅在 CUDA / MPS 上有意义：CPU 批量吞吐无收益且更吃内存，
+    # DirectML 设备不被 muscriptor 支持。非 GPU 设备强制回串行（质量最优）。
+    _dev_type = getattr(getattr(model, "_device", None), "type", "") or ""
+    if int(params.get("muscriptor_batch") or 0) >= 2 and _dev_type not in ("cuda", "mps"):
+        _log(log_cb, f"当前设备为 {_dev_type or 'cpu'}，批量推理仅 GPU 生效，已改回串行（质量最优）")
+        params = dict(params)
+        params["muscriptor_batch"] = 0
+
     _log(log_cb, "推理中（多乐器转录）…")
     out_dir = os.path.dirname(os.path.abspath(output_midi))
     os.makedirs(out_dir, exist_ok=True)
@@ -158,8 +167,64 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     import audio_io
     wav_tmp = audio_io.decode_to_wav(audio_path, 16000)
     try:
-        # muscriptor 0.3+ 的 transcribe_to_midi 返回 MIDI 字节（非写文件）
-        data = model.transcribe_to_midi(wav_tmp)
+        # 真实进度上报：muscriptor 的 transcribe() 是事件流，其中夹带 ProgressEvent
+        # （completed/total 个 5s 分块）。官方 transcribe_to_midi 内部即「事件流 →
+        # events_to_midi_bytes」，这里改为自行组合，只为在事件流中插入进度透传。
+        # 通过日志通道发送 ###PROG 前缀行，前端解析后替代「按时间估算」的假进度。
+        import json as _json
+        try:
+            from muscriptor.events import ProgressEvent as _ProgressEvent
+        except Exception:
+            _ProgressEvent = None
+
+        def _events_with_progress(events):
+            if _ProgressEvent is None:
+                yield from events
+                return
+            for ev in events:
+                if isinstance(ev, _ProgressEvent):
+                    try:
+                        if log_cb and getattr(ev, "total", 0):
+                            log_cb('###PROG ' + _json.dumps(
+                                {"completed": int(ev.completed), "total": int(ev.total)}))
+                    except Exception:
+                        pass
+                yield ev
+
+        # 节拍网格只检测一次（OOM 降级重试时复用，避免重复解码/检测）
+        beat_grid = model.detect_beat_grid_for(wav_tmp)
+
+        # muscriptor 0.3+ 的 transcribe_to_midi 返回 MIDI 字节（非写文件）。
+        # 批量推理开关：prelude_forcing=False + batch_size>1 可提速 2-4×
+        # （长音频 chunk 串行是大瓶颈），代价是 chunk 边界延续音符质量略降。
+        # 默认关闭（batch=1 + prelude_forcing=True，边界质量最优）。
+        # 实测（RTX 5070 Ti，medium，120s 音频）：batch=1 57s → batch=4 25s → batch=8 23s。
+        batch = int(params.get("muscriptor_batch") or 0)
+        t0 = time.perf_counter()
+        data = None
+        while data is None:
+            try:
+                if batch >= 2:
+                    _log(log_cb, f"批量推理：batch_size={batch}（prelude_forcing 关闭，边界质量略降）…")
+                    events = model.transcribe(wav_tmp, batch_size=batch, prelude_forcing=False)
+                else:
+                    events = model.transcribe(wav_tmp)
+                data = model.events_to_midi_bytes(_events_with_progress(events), beat_grid=beat_grid)
+            except Exception as e:
+                # 显存溢出自动降级：batch ≥2 → 减半重试 → 串行兜底，绝不因此转录失败
+                oom = "out of memory" in str(e).lower() or "OutOfMemoryError" in type(e).__name__
+                if oom and batch >= 2:
+                    batch = batch // 2
+                    _log(log_cb, f"GPU 显存不足，自动降低批量至 batch_size={batch} 重试…")
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                    continue
+                raise
+        _log(log_cb, f"[计时] muscriptor 推理（含解码/分块/解码为 MIDI）：{time.perf_counter() - t0:.1f}s")
     finally:
         audio_io.remove_temp(wav_tmp)
     with open(output_midi, "wb") as f:

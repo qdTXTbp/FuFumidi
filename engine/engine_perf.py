@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 性能模式：为不同配置的电脑控制引擎计算强度
 ==========================================
@@ -131,11 +131,19 @@ def detect_recommended():
         score += 2
 
     if score >= 5:
-        # 高配置：默认直接用最好的模式/模型
-        res["recommended"] = "quality"
-        res["reasons"].append(
-            "高配置（多核 CPU + 充足内存" + (" + GPU" if gpu_avail else "") +
-            "）：默认使用最高质量模式与模型")
+        # 高配置：GPU（CUDA/MPS）机器默认推荐「均衡」——GPU 批量推理实测约 2.3×
+        # 提速且边界质量损失极小；「最高质量」（MuScriptor 串行+prelude_forcing）
+        # 保留给愿意以数倍耗时换取极致边界质量的用户，可手动切换。
+        if gpu_backend in ("cuda", "mps"):
+            res["recommended"] = "balanced"
+            res["reasons"].append(
+                "高配置 + GPU：默认推荐「均衡」档（GPU 批量推理，长音频约 2.3× 提速）；"
+                "追求极致质量可手动选「最高质量」（串行，耗时数倍）")
+        else:
+            res["recommended"] = "quality"
+            res["reasons"].append(
+                "高配置（多核 CPU + 充足内存" + (" + GPU" if gpu_avail else "") +
+                "）：默认使用最高质量模式与模型")
     elif score >= 2:
         res["recommended"] = "balanced"
         res["reasons"].append("中配置：推荐「均衡」档，可按需手动选择最高质量")

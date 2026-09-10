@@ -15,6 +15,8 @@ getAppVersion().then(v => { appVersion.value = v; });
 const importFiles = (items, target) => app.importFiles(items, target);
 const importWithPicker = (items) => app.importWithPicker(items);
 const selectSong = (id) => app.selectSong(id);
+// 双击播放：常规歌单软件的通用交互（单击选中 / 双击切歌并开始播放）
+const playSong = (id) => app.playSongById(id);
 const removeSong = (id) => app.removeSong(id);
 const toast = (m, t) => app.toast(m, t);
 
@@ -521,7 +523,8 @@ onMounted(() => { playlist.hydrateFavorites(); });
            @dragleave="dragLeaveRow($event)"
            @drop.stop.prevent="dropOn($event, s)"
            @dragend="resetDrag()"
-           @click="selectSong(s.id)">
+           @click="selectSong(s.id)"
+           @dblclick="playSong(s.id)">
         <span v-if="canReorder" class="si-drag" :title="t('拖动排序')" :aria-label="t('拖动排序')"><Icon name="drag" :size="13" /></span>
         <span class="si-num" v-if="(!state.playing || s.id !== state.currentId)">{{ i + 1 }}</span>
         <span class="si-num playing-ic" v-else>▶</span>

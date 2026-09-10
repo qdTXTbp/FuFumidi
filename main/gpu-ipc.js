@@ -28,6 +28,29 @@ function registerGpuIpc({
   runEngineInline,
   parsePyJson,
 }) {
+  // 安装/下载的可取消状态：pip 子进程引用 + 下载 AbortController
+  let _gpuInstallProc = null;
+  let _gpuDownloadCtl = null;
+  let _gpuCanceled = false;
+
+  function _killProcTree(pid) {
+    try {
+      if (!pid) return;
+      const { spawnSync } = require('child_process');
+      if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
+      else { try { process.kill(-pid, 'SIGKILL'); } catch (e) {} }
+    } catch (e) {}
+  }
+
+  // 取消进行中的 GPU 增强包安装/下载：杀掉 pip 进程树并中止下载流。
+  // 半装的 site-packages 由 installAuto 的成功路径负责清理（见其 canceled 分支）。
+  ipcMain.handle('gpu:cancelInstall', async () => {
+    _gpuCanceled = true;
+    try { if (_gpuDownloadCtl) _gpuDownloadCtl.abort(); } catch (e) {}
+    try { if (_gpuInstallProc && _gpuInstallProc.pid) _killProcTree(_gpuInstallProc.pid); } catch (e) {}
+    return { ok: true };
+  });
+
   ipcMain.handle('gpu:status', async () => {
     try {
       const dirs = installedGpuKinds();
@@ -142,6 +165,9 @@ function registerGpuIpc({
     fs.rmSync(dlDir, { recursive: true, force: true });
     fs.mkdirSync(dlDir, { recursive: true });
     let lastErr = null;
+    _gpuCanceled = false;
+    const ctl = new AbortController();
+    _gpuDownloadCtl = ctl;   // 供 gpu:cancelInstall 中止下载流
     try {
       const files = (Array.isArray(opts.files) && opts.files.length) ? opts.files : [{ name: opts.name || '', url: opts.url, size: opts.size || 0 }];
       const isSplit = files.length > 1 || /.part\d+$|\.zip\.\d{3}$/i.test(files[0].name || '');
@@ -155,13 +181,15 @@ function registerGpuIpc({
         const mirrors = [f.url, 'https://gh.jasonzeng.dev/' + f.url, 'https://ghfast.top/' + f.url, 'https://ghproxy.net/' + f.url, 'https://gh-proxy.com/' + f.url];
         let okDl = false;
         for (const u of mirrors) {
+          if (_gpuCanceled) break;
+          const out = fs.createWriteStream(outPath);
           try {
-            const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.16' } });
+            const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.16' }, signal: ctl.signal });
             if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
-            const out = fs.createWriteStream(outPath);
             const reader = res.body.getReader();
             let received = 0, lastSend = 0;
             while (true) {
+              if (_gpuCanceled) { try { reader.cancel(); } catch (e) {} break; }
               const { done, value } = await reader.read();
               if (done) break;
               received += value.length; receivedAll += value.length;
@@ -170,15 +198,25 @@ function registerGpuIpc({
                 lastSend = now;
                 if (win && !win.isDestroyed()) win.webContents.send('gpu:progress', { received: receivedAll, total: totalAll, percent: totalAll ? Math.min(99, Math.round(receivedAll/totalAll*100)) : 0 });
               }
-              await new Promise((res2, rej2) => out.write(Buffer.from(value), err => err ? rej2(err) : res2()));
+              await new Promise((res2, rej2) => out.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
             }
-            await new Promise((res2, rej2) => out.end(err => err ? rej2(err) : res2()));
-            okDl = true;
-            break;
-          } catch (e) { lastErr = e; }
+            await new Promise((res2, rej2) => out.end(err => (err ? rej2(err) : res2())));
+            okDl = !_gpuCanceled;
+            if (okDl) break;
+            throw new Error('canceled');
+          } catch (e) {
+            lastErr = e;
+            try { out.destroy(); } catch (_) {}
+            if (_gpuCanceled) break;
+          }
         }
+        if (_gpuCanceled) break;
         if (!okDl) throw lastErr || new Error('download failed');
         paths.push(outPath);
+      }
+      if (_gpuCanceled) {
+        try { fs.rmSync(dlDir, { recursive: true, force: true }); } catch (e) {}
+        return { ok: false, canceled: true, error: '已取消下载' };
       }
       if (isSplit) {
         await combineSplitParts(paths, zipTmp);
@@ -202,7 +240,10 @@ function registerGpuIpc({
     } catch (e) {
       try { fs.unlinkSync(zipTmp); } catch {}
       try { fs.rmSync(dlDir, { recursive: true, force: true }); } catch {}
+      if (_gpuCanceled) return { ok: false, canceled: true, error: '已取消下载' };
       return { ok: false, error: String((e && e.message) || e) };
+    } finally {
+      _gpuDownloadCtl = null;
     }
   });
 
@@ -247,6 +288,7 @@ function registerGpuIpc({
   ipcMain.handle('gpu:installAuto', async (evt) => {
     const win = BrowserWindow.fromWebContents(evt.sender);
     const send = (p) => { if (win && !win.isDestroyed()) win.webContents.send('gpu:progress', p); };
+    _gpuCanceled = false;   // 新一轮安装：清除上次的取消标记
     try {
       const py = resolvePython();
       const code = 'from engine_gpu import detect; import json; print(\'###RESULT \' + json.dumps(detect()))';
@@ -279,12 +321,17 @@ function registerGpuIpc({
       // 逐个源尝试：国内镜像优先，全部失败则报最后一源的错误
       let result = null;
       for (const src of sourceSets) {
+        if (_gpuCanceled) break;
         send({ percent: 1, text: '检测到 ' + (d.name || d.vendor) + '，开始安装 ' + (kind === 'cuda' ? 'CUDA（cu128）' : 'DirectML') + ' 加速（源：' + src.label + '）…', installing: true });
-        const args = ['-m', 'pip', 'install', '--target', targetSite, '-r', reqPath, '--no-input', '--disable-pip-version-check'];
+        // --retries/--timeout：网络抖动自动重试；--cache-dir：已下载 wheel 复用，失败后续传
+        const pipCache = path.join(app.getPath('userData'), 'fufumidi', 'pip-cache');
+        const args = ['-m', 'pip', 'install', '--target', targetSite, '-r', reqPath, '--no-input', '--disable-pip-version-check',
+                      '--retries', '5', '--timeout', '60', '--cache-dir', pipCache];
         if (kind === 'cuda') { args.push('-i', src.torch, '--extra-index-url', src.pypi); }
         else if (src.pypi) { args.push('-i', src.pypi); }
         result = await new Promise((res) => {
           const c = spawn(py, args, { env: engineEnv() });
+          _gpuInstallProc = c;   // 供 gpu:cancelInstall 杀掉进程树
           let out = '', err = '';
           const push = (s) => {
             out += s;
@@ -299,11 +346,18 @@ function registerGpuIpc({
           };
           c.stdout.on('data', (x) => push(x.toString('utf8')));
           c.stderr.on('data', (x) => { err += x.toString('utf8'); push(x.toString('utf8')); });
-          c.on('close', (code) => res({ code, out: out.slice(-800), err: err.slice(-800) }));
-          c.on('error', (e) => res({ code: -1, err: String(e) }));
+          c.on('close', (code) => { if (_gpuInstallProc === c) _gpuInstallProc = null; res({ code, out: out.slice(-800), err: err.slice(-800) }); });
+          c.on('error', (e) => { if (_gpuInstallProc === c) _gpuInstallProc = null; res({ code: -1, err: String(e) }); });
         });
+        if (_gpuCanceled) break;
         if (result.code === 0) break;
         send({ percent: -1, text: '源「' + src.label + '」安装失败，切换下一镜像…', installing: true });
+      }
+      // 用户取消：清理半装的 targetSite，避免残留损坏的 site-packages 被 PYTHONPATH 加载
+      if (_gpuCanceled) {
+        try { fs.rmSync(targetSite, { recursive: true, force: true }); } catch (e) {}
+        send({ percent: 0, text: '已取消安装', done: true });
+        return { ok: false, canceled: true, kind, error: '已取消安装' };
       }
       if (result.code === 0) {
         writeGpuManifest(kind, { source: 'auto' });

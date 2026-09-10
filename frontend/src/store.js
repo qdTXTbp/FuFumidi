@@ -162,9 +162,15 @@ export async function importFiles(items) {
     ok++;
   }
   if (ok > 0) {
-    const last = state.songs[state.songs.length - 1];
-    await selectSong(last.id);
-    toast(`已导入 ${ok} 首 MIDI`);
+    // 正在播放时不打断当前曲目：只入库并提示，用户可稍后自行切换
+    // （原先无条件 selectSong → 内部 player.stop()，导致导入即中断播放）
+    if (state.playing && state.currentId) {
+      toast(`已导入 ${ok} 首 MIDI（保持当前播放）`);
+    } else {
+      const last = state.songs[state.songs.length - 1];
+      await selectSong(last.id);
+      toast(`已导入 ${ok} 首 MIDI`);
+    }
   } else if (items.length) {
     toast('没有可导入的 MIDI 文件', 'warn');
   }

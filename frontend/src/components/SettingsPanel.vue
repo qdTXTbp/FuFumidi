@@ -364,6 +364,7 @@ async function gpuAutoInstall() {
   app.gpuInstall.percent = 0;
   app.gpuInstall.text = '';
   app.gpuInstall.ts = Date.now();
+  app.gpuInstall.dismissed = false;   // 新一轮安装：恢复浮层显示
   const un = bridge.onGpuProgress ? bridge.onGpuProgress((p) => {
     if (!p) return;
     if (p.done) gpuSetProgress(100, t('安装完成'));
@@ -378,6 +379,11 @@ async function gpuAutoInstall() {
       if (r.already) gpuSetProgress(100, '');
       app.gpuInstall.kind = r.kind || app.gpuInstall.kind;
       app.gpuInstall.done = true; app.gpuInstall.ok = true; app.gpuInstall.percent = 100;
+    } else if (r && r.canceled) {
+      // 用户主动取消：中性提示，不计为安装失败
+      gpu.status = t('已取消 GPU 加速安装');
+      gpuSetProgress(null, '');
+      app.gpuInstall.done = true; app.gpuInstall.ok = false; app.gpuInstall.error = t('已取消安装');
     } else {
       gpu.status = t('安装失败：') + ((r && r.error) || t('未知'));
       if (r && r.gpu) gpu.detect = r.gpu;
@@ -397,6 +403,16 @@ async function gpuAutoInstall() {
     app.gpuInstall.active = false;
   }
 }
+// 取消进行中的 GPU 增强包安装/下载（主进程杀掉 pip 进程树并清理半装目录）
+async function cancelGpuInstall() {
+  if (!bridge || !bridge.gpuCancelInstall) return;
+  try {
+    app.gpuInstall.text = t('正在取消安装…');
+    await bridge.gpuCancelInstall();
+  } catch (e) {
+    toast(t('取消失败：') + String((e && e.message) || e), 'warn');
+  }
+}
 async function gpuImportLocal() {
   if (!bridge || !bridge.pickZip || !bridge.gpuImportLocal) { gpu.status = t('当前环境不支持本地导入'); return; }
   if (app.gpuInstall.active) { toast(t('GPU 增强包正在安装中，请稍候')); return; } // 防重复触发
@@ -408,6 +424,7 @@ async function gpuImportLocal() {
   app.gpuInstall.percent = 10;
   app.gpuInstall.text = t('正在导入本地增强包…');
   app.gpuInstall.ts = Date.now();
+  app.gpuInstall.dismissed = false;   // 新一轮导入：恢复浮层显示
   try {
     const p = await bridge.pickZip();
     if (!p) { app.gpuInstall.active = false; return; }
@@ -726,6 +743,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
             <button class="btn primary gpu-install" @click="gpuAutoInstall" :disabled="gpu.busy || app.gpuInstall.active">
               {{ (gpu.busy || app.gpuInstall.active) ? t('正在安装…') : (gpuInstalled ? t('GPU 加速已安装 · 点击重装/升级') : t('安装 GPU 加速')) }}
             </button>
+            <button v-if="app.gpuInstall.active && bridge && bridge.gpuCancelInstall" class="btn sm danger" style="margin-top:8px;width:100%" @click="cancelGpuInstall">{{ t('取消安装') }}</button>
             <div v-if="gpu.status" class="gpu-status">{{ gpu.status }}</div>
             <div v-if="gpu.progress != null" class="gpu-prog">
               <div style="height:8px;background:var(--surface-soft);border-radius:999px;overflow:hidden;border:1px solid var(--hairline)">

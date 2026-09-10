@@ -30,7 +30,17 @@ def available():
 def transcribe_transkun(audio_path, output_midi, params=None, log_cb=None,
                         num_threads=None, **kwargs):
     params = params or {}
-    device = str(params.get("device") or "cuda")
+    # 设备解析：优先显式传入；auto → engine_gpu 探测（无 CUDA 增强包时回退 CPU，
+    # 避免 CPU 版 torch 收到 --device cuda 直接崩溃）
+    device = str(params.get("device") or "")
+    if not device or device == "auto":
+        try:
+            from engine_gpu import torch_device as _td
+            _d = _td()
+            # transkun CLI 只认 cuda/cpu（DirectML 设备名不适用）
+            device = "cuda" if _d == "cuda" else "cpu"
+        except Exception:
+            device = "cpu"
     weight = str(params.get("weight") or "").strip()
 
     out_dir = os.path.dirname(os.path.abspath(output_midi))

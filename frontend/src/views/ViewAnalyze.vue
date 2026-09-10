@@ -140,7 +140,9 @@ function chordChips() {
   const DEGREE = ['Ⅰ', 'Ⅱ', 'Ⅲ', 'Ⅳ', 'Ⅴ', 'Ⅵ', 'Ⅶ'];
   const SCALE = [0, 2, 4, 5, 7, 9, 11];
   return a.chords.map(c => {
-    const cr = KEY_NAME.indexOf(c.name.replace(/m$/, ''));
+    // 优先用结构化的 root（扩展后缀 m7/maj7/dim/sus4、转位 C/E 等无法用字符串反解）；
+    // 回退分支兼容旧版本缓存的分析结果
+    const cr = (typeof c.root === 'number') ? c.root : KEY_NAME.indexOf(String(c.name).replace(/m$/, ''));
     const idx = SCALE.indexOf(((cr - a.rootPc) + 12) % 12);
     return {
       deg: idx >= 0 ? DEGREE[idx] : '♯',

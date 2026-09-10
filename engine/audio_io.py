@@ -23,6 +23,9 @@ AUDIO_EXTENSIONS = {
 # 播放器（MIDI 播放页）可打开的 MIDI 文件扩展名
 MIDI_EXTENSIONS = {".mid", ".midi", ".kar", ".rmi"}
 
+# 最近一次解码耗时（秒）：转录引擎完成后由 engine.transcribe 读取并上报 [计时] 日志
+LAST_DECODE_SEC = 0.0
+
 
 def find_ffmpeg():
     """返回可用的 ffmpeg 路径（系统自带或 imageio-ffmpeg 内置）。"""
@@ -76,6 +79,9 @@ def decode_to_wav(src, sr):
     WAV / FLAC / OGG / AIFF 走 soundfile 进程内转换；其余走 ffmpeg。
     返回值是一个临时文件，用完请调用 remove_temp() 删除。
     """
+    global LAST_DECODE_SEC
+    import time as _time
+    _t0 = _time.perf_counter()
     ext = os.path.splitext(src)[1].lower()
     if ext in (".wav", ".wave", ".flac", ".ogg", ".oga", ".aiff", ".aif", ".opus"):
         try:
@@ -91,10 +97,13 @@ def decode_to_wav(src, sr):
             fd, tmp = tempfile.mkstemp(prefix="midi_tool_", suffix=".wav")
             os.close(fd)
             sf.write(tmp, data, sr, subtype="PCM_16")
+            LAST_DECODE_SEC = _time.perf_counter() - _t0
             return tmp
         except Exception:
             pass  # 走 ffmpeg 兜底
-    return ffmpeg_to_wav(src, sr, mono=True)
+    out = ffmpeg_to_wav(src, sr, mono=True)
+    LAST_DECODE_SEC = _time.perf_counter() - _t0
+    return out
 
 
 def load_audio_float32(src, sr):

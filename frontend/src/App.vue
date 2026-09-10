@@ -313,9 +313,10 @@ function onGpuProgressGlobal(p) {
   if (p.text) gi.text = String(p.text);
   if (p.error) gi.error = String(p.error);
 }
-// 安装中常驻显示；完成后保留 10 秒展示结果
+// 安装中常驻显示；完成后保留 10 秒展示结果。用户手动收起后不再弹出。
 const gpuBarVisible = computed(() => {
   const gi = state.gpuInstall;
+  if (gi.dismissed) return false;
   return gi.active || (gi.done && Date.now() - gi.ts < 10000);
 });
 watch(() => state.gpuInstall.done, (v) => {
@@ -329,8 +330,9 @@ function openGpuSettings() {
 }
 function dismissGpuBar() {
   clearTimeout(gpuBarTimer);
-  // 安装进行中不允许关闭：避免后台仍在安装但界面状态被清掉，导致重复触发安装
-  if (state.gpuInstall.active) return;
+  // 只收起浮层，不影响后台任务（安装/下载继续，可在「设置 → GPU」查看状态）；
+  // 标记 dismissed 后进度事件不会再把浮层弹回来（原先 active 时直接 return，× 点不动）
+  if (state.gpuInstall.active) { state.gpuInstall.dismissed = true; return; }
   state.gpuInstall.done = false;
 }
 

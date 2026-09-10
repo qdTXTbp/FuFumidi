@@ -248,6 +248,10 @@ onBeforeUnmount(cleanupIg);
 .guide-dots i { width:8px; height:8px; border-radius:50%; background: var(--hairline); transition:.2s; }
 .guide-dots i.on { background: var(--accent); transform: scale(1.25); }
 .guide-overlay { background: rgba(6,10,16,.58); backdrop-filter: blur(2px); pointer-events: none; }
+/* 交互式实操：挖洞遮罩由 .ig-highlight 的 999px box-shadow 负责，
+   容器自身不再叠加磨砂/变暗——否则虚线框内的目标会被二次模糊与压暗
+   （.overlay 基线的 backdrop-filter: blur(2px) 会穿透到洞内内容） */
+.guide-overlay:has(.ig-highlight) { background: transparent; backdrop-filter: none; }
 .guide-overlay .guide-card, .guide-overlay .ig-card { pointer-events: auto; }
 .guide-overlay :deep(.ig-target) { position: relative !important; z-index: 1200 !important; outline: 2px dashed var(--accent) !important; outline-offset: 3px !important; pointer-events: auto !important; }
 .ig-highlight {

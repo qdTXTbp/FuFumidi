@@ -691,7 +691,9 @@ function onWheel(e) {
   } else if (e.shiftKey) {
     viewTick.value = Math.max(0, viewTick.value + e.deltaY / pxPerTick.value);
   } else {
-    viewTop.value = clamp(viewTop.value + e.deltaY / rowH.value, 0, 127);
+    // viewTop = 屏幕顶部的音高。滚轮向下（deltaY>0）应看到更低的音高 → viewTop 减小
+    // （原先为 +=，方向与滚轮直觉相反）
+    viewTop.value = clamp(viewTop.value - e.deltaY / rowH.value, 0, 127);
   }
   draw();
 }

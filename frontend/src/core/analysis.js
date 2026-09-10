@@ -31,6 +31,33 @@ export function maxPolyphony(notes) {
   return mx;
 }
 
+// 和弦类型表（s：相对根音的半音集合；suffix：显示后缀）。
+// 顺序即同分优先级：三和弦在前，避免七和弦因音数多而在证据不足时抢占判定。
+const CHORD_TYPES = [
+  { s: [0, 4, 7],      suffix: '' },      // 大三
+  { s: [0, 3, 7],      suffix: 'm' },     // 小三
+  { s: [0, 4, 7, 11],  suffix: 'maj7' },  // 大七
+  { s: [0, 4, 7, 10],  suffix: '7' },     // 属七
+  { s: [0, 3, 7, 10],  suffix: 'm7' },    // 小七
+  { s: [0, 3, 6, 10],  suffix: 'm7b5' },  // 半减七
+  { s: [0, 3, 6],      suffix: 'dim' },   // 减三
+  { s: [0, 3, 6, 9],   suffix: 'dim7' },  // 减七
+  { s: [0, 4, 8],      suffix: 'aug' },   // 增三
+  { s: [0, 5, 7],      suffix: 'sus4' },  // 挂四
+  { s: [0, 2, 7],      suffix: 'sus2' },  // 挂二
+];
+
+/**
+ * 单小节和弦评分：平均强度（消除音数红利）+ 根音明确度 - 非和弦音惩罚。
+ * 返回 { sc, cover }；cover 为和弦内音权重占比，用于置信度门槛。
+ */
+function scoreChord(pc, total, root, set) {
+  let inSum = 0;
+  for (const d of set) inSum += pc[(root + d) % 12];
+  const outSum = total - inSum;
+  return { sc: inSum / set.length + pc[root] * 0.35 - outSum * 0.45, cover: inSum / total };
+}
+
 export function detectChords(song) {
   const tpb = song.tpb;
   const sig = song.sigMap[0] || { num: 4 };
@@ -39,10 +66,13 @@ export function detectChords(song) {
   // 大文件保护：先按小节分批，仅对音符实际覆盖的小节累计（而非「每小节扫全量音符」），
   // 长音（跨 >3 小节）近似归属起音小节，避免病态文件退化为 O(小节×音符)。
   const buckets = new Array(bars).fill(0).map(() => new Array(12).fill(0));
+  const bassPc = new Array(bars).fill(-1);   // 每小节最低音的 pitch class（用于转位判定）
+  const bassMidi = new Array(bars).fill(127);
   for (const tr of song.tracks) for (const n of tr.notes) {
     const b0 = Math.floor(n.start / barTicks);
     if (b0 >= bars) continue;
     const pc = n.midi % 12;
+    if (n.midi < bassMidi[b0]) { bassMidi[b0] = n.midi; bassPc[b0] = pc; }
     const b1 = Math.min(bars - 1, Math.floor((n.end - 1) / barTicks));
     const hi = Math.min(b1, b0 + 3); // 长音跨度封顶，只累计起音附近小节
     for (let b = b0; b <= hi; b++) {
@@ -53,17 +83,23 @@ export function detectChords(song) {
   const found = [];
   for (let b = 0; b < bars; b++) {
     const pc = buckets[b];
+    let total = 0;
+    for (let i = 0; i < 12; i++) total += pc[i];
+    if (total <= 0) continue;
     let best = null;
-    for (let r = 0; r < 12; r++) for (const [m, set] of [[0, [0, 4, 7]], [1, [0, 3, 7]]]) {
-      let sc = 0; for (const d of set) sc += pc[(r + d) % 12];
-      if (!best || sc > best.sc) best = { r, m, sc };
+    for (let r = 0; r < 12; r++) for (const tp of CHORD_TYPES) {
+      const { sc, cover } = scoreChord(pc, total, r, tp.s);
+      if (cover < 0.5) continue;             // 置信度门槛：和弦内音须占多数权重
+      if (!best || sc > best.sc) best = { r, tp, sc, cover };
     }
-    if (best && best.sc > 0) found.push({ bar: b + 1, r: best.r, m: best.m, sc: best.sc });
+    if (best) found.push({ bar: b + 1, r: best.r, suffix: best.tp.suffix, set: best.tp.s, sc: best.sc, bass: bassPc[b] });
   }
   const map = new Map();
   for (const f of found) {
-    const name = KEY_NAME[f.r] + (f.m === 0 ? '' : 'm');
-    if (!map.has(name)) map.set(name, { name, count: 0, bars: [] });
+    // 转位：最低音不是根音且在和弦内 → 记为 和弦/低音（如 C/E、G7/B）
+    const inv = f.bass >= 0 && f.bass !== f.r && f.set.includes((f.bass - f.r + 12) % 12);
+    const name = KEY_NAME[f.r] + f.suffix + (inv ? '/' + KEY_NAME[f.bass] : '');
+    if (!map.has(name)) map.set(name, { name, root: f.r, suffix: f.suffix, bass: inv ? f.bass : -1, count: 0, bars: [] });
     const e = map.get(name); e.count++; e.bars.push(f.bar);
   }
   return Array.from(map.values()).sort((a, b) => b.count - a.count).slice(0, 8);

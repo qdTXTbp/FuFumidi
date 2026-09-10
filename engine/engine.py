@@ -206,6 +206,7 @@ def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
         音符数量
     """
     import engine_perf
+    import time as _time
     engine_perf.apply_global(perf_mode)
     num_threads = engine_perf.resolve_threads(perf_mode)
 
@@ -219,10 +220,15 @@ def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
     auto_bpm = bool((params or {}).get("auto_bpm"))
     native_bpm = False   # 子引擎是否已内置测速（basic 是；其余统一走后处理）
     n = 0
+    _t_all = _time.perf_counter()
+    _t_engine = None
+    _engine_label = mode
     try:
+        _t_engine = _time.perf_counter()
         if mode == "piano":
             # 钢琴子模型：piano_pt（默认 / ByteDance）/ aria / transkun
             pmodel = (params or {}).get("model") or "piano_pt"
+            _engine_label = f"piano/{pmodel}"
             if pmodel == "aria":
                 import engine_aria
                 n = engine_aria.transcribe_aria(audio_path, output_midi, params=params,
@@ -248,22 +254,42 @@ def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
         else:
             # 默认 universal：子模型 basic（Basic Pitch 兜底）| muscriptor（可选）
             umodel = (params or {}).get("model") or "basic"
+            _engine_label = f"universal/{umodel}"
             if umodel == "muscriptor":
                 import engine_muscriptor
                 n = engine_muscriptor.transcribe_muscriptor(audio_path, output_midi, params=params,
-                                                             log_cb=log_cb, num_threads=num_threads)
+                                                            log_cb=log_cb, num_threads=num_threads)
             else:
                 import engine_basic   # 3.2.6 热修：auto-bpm 重构时误删，导致 universal 默认路径 NameError
                 native_bpm = True   # basic 内置节拍测速
                 n = engine_basic.transcribe_basic(audio_path, output_midi, log_cb=log_cb,
                                                   num_threads=num_threads, **params)
+        if log_cb:
+            try:
+                import audio_io as _aio
+                _dec = getattr(_aio, "LAST_DECODE_SEC", None)
+                _dec_s = f"，其中音频解码 {_dec:.1f}s" if _dec else ""
+                log_cb(f"[计时] 推理引擎（{_engine_label}）耗时 {_time.perf_counter() - _t_engine:.1f}s{_dec_s}")
+            except Exception:
+                pass
 
         if auto_bpm and not native_bpm:
+            _t_bpm = _time.perf_counter()
             try:
                 _apply_auto_bpm(output_midi, audio_path, log_cb)
             except Exception as e:
                 if log_cb:
                     log_cb(f"[警告] 自动 BPM 应用失败，保留默认速度: {e}")
+            if log_cb:
+                try:
+                    log_cb(f"[计时] 自动 BPM 后处理：{_time.perf_counter() - _t_bpm:.1f}s")
+                except Exception:
+                    pass
+        if log_cb:
+            try:
+                log_cb(f"[计时] 总耗时 {_time.perf_counter() - _t_all:.1f}s（{_engine_label}）")
+            except Exception:
+                pass
         return n
     finally:
         # 无论成功/异常，转录结束后释放模型对象与显存

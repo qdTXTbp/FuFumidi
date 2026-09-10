@@ -21,6 +21,7 @@ const msSize = ref('medium');            // MuScriptor 规格：small | medium |
 const pmodel = ref('piano_pt');          // 钢琴子模型：piano_pt | aria | transkun
 const perf = ref('quality');             // quality | balanced | fast
 const perfHint = ref('');
+const bassBoost = ref(false);            // 低音增强（仅 basic 子模型）：关闭 melodia trick 以保留低音声部
 const busy = ref(false);
 const done = ref(false);
 const progress = ref(0);
@@ -293,6 +294,8 @@ function estSec() {
   let f = { universal: 1.5, piano: 4, separate: 10 }[mode.value] || 2;
   if (perf.value === 'fast') f *= 1.5;
   else if (perf.value === 'balanced') f *= 1.15;
+  // MuScriptor 批量推理实测提速（batch=4 ≈ 4.8x 实时 vs 串行 2.1x），预估相应下调
+  if (mode.value === 'universal' && umodel.value === 'muscriptor' && perf.value !== 'quality') f *= 0.45;
   return Math.max(2, Math.round(duration.value * f));
 }
 const sumTime = computed(() => {
@@ -307,7 +310,7 @@ function addPaths(paths) {
   for (const p of (paths || [])) {
     if (!p) continue;
     if (queue.some(i => i.path === p)) continue;
-    queue.push({ id: nextId++, path: p, name: String(p).replace(/^.*[\\/]/, ''), status: 'pending', progress: 0, duration: 0, out: '', note_count: 0, error: '' });
+    queue.push({ id: nextId++, path: p, name: String(p).replace(/^.*[\\/]/, ''), status: 'pending', progress: 0, realPct: 0, duration: 0, out: '', note_count: 0, error: '' });
   }
   saveQueue();
 }
@@ -668,7 +671,23 @@ function collectParams() {
   }
   if (mode.value === 'universal') {
     cfg.model = umodel.value;
-    if (umodel.value === 'muscriptor') cfg.model_size = msSize.value;
+    // 低音增强（basic 子模型）：melodia trick 会额外强化主旋律、相对压制伴奏声部，
+    // 旋律密集时低音容易被吞；关闭后低音声部保留更完整。下限 40Hz 过滤次声噪声。
+    if (bassBoost.value && umodel.value === 'basic') {
+      cfg.no_melodia = true;
+      cfg.min_freq = 40;
+    }
+    if (umodel.value === 'muscriptor') {
+      cfg.model_size = msSize.value;
+      // MuScriptor 批量推理：GPU 上串行 chunk（batch=1）利用率仅 ~65%，批量可提至
+      // 2-4× 实时。质量档保持串行 + prelude_forcing（边界延续质量最优）；
+      // 均衡/高性能档用批量吞吐（prelude_forcing 关闭，边界质量略降）。
+      // batch 上限按规格收紧（RTX 5070 Ti 12GB 实测：medium batch=4 峰值 4.2GB /
+      // batch=8 峰值 7.9GB 且仅剩 2GB 余量 / batch=16 触发驱动静默回退系统内存，
+      // 速度暴跌 5 倍；4→8 仅再快 10%，故 fast 不超过 balanced 两档的显存预算）。
+      if (perf.value === 'balanced') cfg.muscriptor_batch = 4;
+      else if (perf.value === 'fast') cfg.muscriptor_batch = { small: 8, medium: 4, large: 2 }[msSize.value] || 4;
+    }
   }
   if (mode.value === 'separate') {
     cfg.with_drums = drums.value;
@@ -726,7 +745,8 @@ async function runBatch() {
     // 当前项进度：未完成时按已用时间/预估时长估算（平滑推进而非停在 3% 突跳到 100%）
     let curP = 0;
     if (cur) {
-      if (cur.progress >= 100) curP = 100;
+      if (cur.realPct > 0) curP = Math.min(99, cur.realPct);   // 引擎真实分块进度优先（替代时间估算）
+      else if (cur.progress >= 100) curP = 100;
       else if (cur.progress > 0) curP = cur.progress;
       else if (cur.startedAt && cur.estMs) curP = Math.min(95, Math.round((Date.now() - cur.startedAt) / cur.estMs * 100));
       if (curP > 0 && curP < 100) cur.progress = curP; // 同步到队列行内进度条
@@ -734,7 +754,8 @@ async function runBatch() {
       const elS = (Date.now() - (cur.startedAt || Date.now())) / 1000;
       const estS = ((cur.estMs || estSec() * 1000 || 60000)) / 1000;
       const remains = Math.max(0, Math.round(estS - elS));
-      stage.value = t('转录中 ') + Math.max(3, curP) + '% · ' + t('已用 ') + fmtTime(elS) + (remains > 0 ? ' · ' + t('剩余约 ') + fmtTime(remains) : '');
+      // 百分比已由上方进度条呈现，此处只显示时间信息（原先重复显示「转录中 3%」且估算值长期不变）
+      stage.value = t('已用 ') + fmtTime(elS) + (remains > 0 ? ' · ' + t('剩余约 ') + fmtTime(remains) : '');
     }
     progress.value = Math.max(3, Math.min(95, Math.round(((doneN + errN) + curP / 100) / total * 100)));
     if (!cur) stage.value = t('完成 ') + doneN + ' / ' + total + (errN ? t(' · 失败 ') + errN : '') + ' · ' + fmtTime(el);
@@ -743,7 +764,7 @@ async function runBatch() {
   const runningJobIds = new Set();
   try { window.__fufumidiRunningJobs = runningJobIds; } catch (e) {}
   const processOne = async (it) => {
-    it.status = 'running'; it.progress = 0; it.error = '';
+    it.status = 'running'; it.progress = 0; it.realPct = 0; it.error = '';
     it.startedAt = Date.now();
     await decodeDuration(it);
     it.estMs = Math.max(5000, estSec() * 1000 || 60000);
@@ -802,6 +823,15 @@ async function runBatch() {
     toast('转录失败', 'warn');
   }
   if (cancelAll.value && !paused.value) logLine(t('已取消转录队列…'), true);
+  // 长音频·质量档提示：串行档在长音频上明显慢于 GPU 批量档，完成后给出可操作建议
+  if (dN && !eN && perf.value === 'quality' && mode.value === 'universal' && umodel.value === 'muscriptor') {
+    const totalMin = queue.filter(i => i.status === 'done').reduce((s, i) => s + (i.duration || 0), 0) / 60;
+    if (totalMin >= 20) {
+      const elapsedMin = Math.max(1, Math.round((Date.now() - t0) / 60000));
+      const estFast = Math.max(1, Math.round(elapsedMin / 2.3));
+      logLine(t('长音频提示：本次「最高质量」档（串行推理）耗时约 ') + elapsedMin + t(' 分钟；切「均衡」档（GPU 批量推理）约 ') + estFast + t(' 分钟即可完成，chunk 边界质量差异极小。'));
+    }
+  }
 }
 async function startTranscribe() {
   if (busy.value) return;
@@ -894,6 +924,17 @@ onMounted(() => {
   if (bridge && bridge.onEngineLog) {
     offLog = bridge.onEngineLog(p => {
       if (!p) return;
+      // MuScriptor 真实分块进度（引擎侧 ###PROG 前缀）：只更新进度，不进日志面板
+      const ln = p.line ? String(p.line).trim() : '';
+      if (ln.indexOf('###PROG ') === 0) {
+        try {
+          const d = JSON.parse(ln.slice(8));
+          const qid = parseInt(String(p.id).replace(/^batch/, ''), 10);
+          const it = queue.find((x) => x.id === qid);
+          if (it && d && d.total > 0) it.realPct = Math.min(99, Math.round(d.completed / d.total * 100));
+        } catch (e) {}
+        return;
+      }
       if (p.id === currentJobId.value || String(p.id).indexOf('batch') === 0) {
         if (p.line) logLine(p.line);   // 详细引擎日志进日志面板；stage 由统一进度信息接管
       }
@@ -1183,6 +1224,9 @@ onBeforeUnmount(() => {
           </div>
           <div class="tr-switch" v-if="mode === 'piano'">
             <label><span><b>包含踏板事件</b><small>还原延音踏板</small></span><input type="checkbox" v-model="pedal"></label>
+          </div>
+          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'basic'">
+            <label><span><b>{{ t('低音增强') }}</b><small>{{ t('弱化主旋律强化，保留贝斯 / 低音声部（旋律密集时更不易丢低音）') }}</small></span><input type="checkbox" v-model="bassBoost"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'separate'">
             <label><span><b>输出鼓组节奏轨</b><small>同时转录鼓点 / 打击乐节奏</small></span><input type="checkbox" v-model="drums"></label>

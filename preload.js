@@ -138,6 +138,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   gpuImportLocal: (p, kind) => ipcRenderer.invoke('gpu:importLocal', p, kind),
   gpuStatus: () => ipcRenderer.invoke('gpu:status'),
   gpuUninstall: (kind) => ipcRenderer.invoke('gpu:uninstall', kind),
+  gpuCancelInstall: () => ipcRenderer.invoke('gpu:cancelInstall'),
   pickZip: () => ipcRenderer.invoke('dialog:pickZip'),
   gpuDownloadPackage: (opts) => ipcRenderer.invoke('gpu:downloadPackage', opts),
   onGpuProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('gpu:progress', w); return () => ipcRenderer.removeListener('gpu:progress', w); },

@@ -160,6 +160,9 @@ def _resolve_params(args, mode):
     # 子模型选择：universal → basic / muscriptor；piano → piano_pt / aria / transkun
     if getattr(args, "model", None): p["model"] = args.model
     if getattr(args, "model_size", None): p["model_size"] = args.model_size
+    # muscriptor 批量推理（0=关闭边界质量优先；>=2 开启批量吞吐）
+    _mb = getattr(args, "muscriptor_batch", None)
+    if _mb: p["muscriptor_batch"] = int(_mb)
     return p, mode
 
 
@@ -480,8 +483,31 @@ def cmd_worker():
                 tempo=req.get('tempo'),
                 model=req.get('model'),
                 model_size=req.get('model_size'),
+                muscriptor_batch=req.get('muscriptor_batch'),
             )
-            buf = io.StringIO()
+            class _LogTee(io.StringIO):
+                """stdout 分流：把转换日志逐行实时转发到真实 stdout（###LOG 协议），
+                worker 模式的 UI 因此能看到引擎日志与 [计时] 各阶段耗时；
+                ###RESULT 行不转发（由 buf 常规提取）。"""
+
+                def __init__(self, job_id, real):
+                    super().__init__()
+                    self._job = job_id
+                    self._real = real
+
+                def write(self, s):
+                    try:
+                        for line in s.splitlines():
+                            line = line.rstrip()
+                            if line and not line.startswith('###RESULT'):
+                                self._real.write('###LOG ' + _json.dumps({'_id': self._job, 'line': line}, ensure_ascii=False) + '\n')
+                                self._real.flush()
+                    except Exception:
+                        pass
+                    return super().write(s)
+
+            _real_stdout = _sys.stdout
+            buf = _LogTee(job, _real_stdout)
             code = 1
             res = None
             try:
