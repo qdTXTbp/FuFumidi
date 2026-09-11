@@ -196,7 +196,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         # modelsDir，torch.hub 读到同名缓存即复用，离线可用）；未下载或加载失败时自动跳过，
         # 回退为「无节拍网格」的旧调用，绝不阻断转录。
         beat_grid = None
-        beat_enabled = bool(params.get("beat_grid", True))
+        beat_enabled = bool(params.get("beat_grid", False))
         if beat_enabled:
             _mdir = os.environ.get("FUFUMIDI_MODELS_DIR", "") or ""
             _ckpt = os.path.join(_mdir, "hub", "checkpoints", "beat_this-final0.ckpt") if _mdir else ""
