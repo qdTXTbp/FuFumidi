@@ -117,6 +117,22 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       downloadable: true,
       runtime: 'muscriptor',
     },
+    // 节拍网格检测（Beat This!）：MuScriptor 转录做音符时值对齐的可选前处理权重。
+    // 原版经 torch.hub 从 JKU 云盘下载并缓存到系统 ~/.cache/torch（可能截断/联网失败/落外部盘），
+    // 这里纳入资源中心，走国内/多源回退下载，落到软件 models 目录内的 hub/checkpoints 供 torch.hub 复用。
+    beat_this: {
+      id: 'beat_this',
+      name: '节拍网格检测（Beat This!）',
+      note: 'MuScriptor 转录时值对齐 · final0 · 约 81 MB · 国内镜像下载',
+      kind: 'transcribe',
+      arch: 'BeatThis',
+      use: 'MuScriptor 转录可选前置：节拍网格检测，提升音符时值 / 对齐（未下载或失败时自动跳过）',
+      dest: path.join('hub', 'checkpoints', 'beat_this-final0.ckpt'),
+      url: 'https://raw.githubusercontent.com/monologue82/Models/main/beat_this/beat_this-final0.ckpt',
+      minSize: 7e7,
+      downloadable: true,
+      runtime: 'muscriptor',
+    },
     // 钢琴转录（EleutherAI Aria-AMT）
     aria_amt: {
       id: 'aria_amt',

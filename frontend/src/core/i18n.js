@@ -557,6 +557,8 @@ export const I18N_MAP = {
   '启用音效': 'Enable effects',
   '自定义': 'Custom',
   '低音增强': 'Bass boost',
+  '节拍网格检测': 'Beat grid',
+  '对齐音符时值；未下载或失败时自动跳过，不影响转录': 'Align note timing; auto-skips if missing or failed, without blocking transcription.',
   '空间声': 'Spatial',
   '提示：开启「启用音效」后调节实时生效，设置自动保存。': 'Turn on "Enable effects" to apply changes live. Settings are saved automatically.',
   '已自动加载同名歌词 ': 'Auto-loaded matching .lrc: ',

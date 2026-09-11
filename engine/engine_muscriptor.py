@@ -191,8 +191,26 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                         pass
                 yield ev
 
-        # 节拍网格只检测一次（OOM 降级重试时复用，避免重复解码/检测）
-        beat_grid = model.detect_beat_grid_for(wav_tmp)
+        # 节拍网格只检测一次（OOM 降级重试时复用，避免重复解码/检测）。
+        # 权重经资源中心下载到 modelsDir/hub/checkpoints/beat_this-final0.ckpt（TORCH_HOME 指向
+        # modelsDir，torch.hub 读到同名缓存即复用，离线可用）；未下载或加载失败时自动跳过，
+        # 回退为「无节拍网格」的旧调用，绝不阻断转录。
+        beat_grid = None
+        beat_enabled = bool(params.get("beat_grid", True))
+        if beat_enabled:
+            _mdir = os.environ.get("FUFUMIDI_MODELS_DIR", "") or ""
+            _ckpt = os.path.join(_mdir, "hub", "checkpoints", "beat_this-final0.ckpt") if _mdir else ""
+            if _ckpt and os.path.isfile(_ckpt) and os.path.getsize(_ckpt) > 0:
+                try:
+                    beat_grid = model.detect_beat_grid_for(wav_tmp)
+                    _log(log_cb, "已加载节拍网格（Beat This! 本地权重）")
+                except Exception as e:
+                    beat_grid = None
+                    _log(log_cb, f"节拍网格检测失败，已跳过（不影响转录）：{e}")
+            else:
+                _log(log_cb, "未找到节拍网格权重，已跳过（可在资源中心下载「节拍网格检测 / Beat This!」以提升时值对齐）")
+        else:
+            _log(log_cb, "已关闭节拍网格检测")
 
         # muscriptor 0.3+ 的 transcribe_to_midi 返回 MIDI 字节（非写文件）。
         # 批量推理开关：prelude_forcing=False + batch_size>1 可提速 2-4×

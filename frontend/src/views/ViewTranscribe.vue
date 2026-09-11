@@ -22,6 +22,7 @@ const pmodel = ref('piano_pt');          // 钢琴子模型：piano_pt | aria | 
 const perf = ref('quality');             // quality | balanced | fast
 const perfHint = ref('');
 const bassBoost = ref(false);            // 低音增强（仅 basic 子模型）：关闭 melodia trick 以保留低音声部
+const beatGrid = ref(true);              // 节拍网格检测（仅 MuScriptor）：时值对齐，未下载/失败自动跳过
 const busy = ref(false);
 const done = ref(false);
 const progress = ref(0);
@@ -679,6 +680,7 @@ function collectParams() {
     }
     if (umodel.value === 'muscriptor') {
       cfg.model_size = msSize.value;
+      cfg.beat_grid = beatGrid.value;
       // MuScriptor 批量推理：GPU 上串行 chunk（batch=1）利用率仅 ~65%，批量可提至
       // 2-4× 实时。质量档保持串行 + prelude_forcing（边界延续质量最优）；
       // 均衡/高性能档用批量吞吐（prelude_forcing 关闭，边界质量略降）。
@@ -1227,6 +1229,9 @@ onBeforeUnmount(() => {
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'basic'">
             <label><span><b>{{ t('低音增强') }}</b><small>{{ t('弱化主旋律强化，保留贝斯 / 低音声部（旋律密集时更不易丢低音）') }}</small></span><input type="checkbox" v-model="bassBoost"></label>
+          </div>
+          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
+            <label><span><b>{{ t('节拍网格检测') }}</b><small>{{ t('对齐音符时值；未下载或失败时自动跳过，不影响转录') }}</small></span><input type="checkbox" v-model="beatGrid"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'separate'">
             <label><span><b>输出鼓组节奏轨</b><small>同时转录鼓点 / 打击乐节奏</small></span><input type="checkbox" v-model="drums"></label>

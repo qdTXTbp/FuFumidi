@@ -16,9 +16,9 @@ FuFumidi is a fully offline desktop workstation for MIDI. It targets musicians, 
 
 The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally. Nothing is uploaded.
 
-Current release line: **3.3.1** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v3.3.1)).
+Current release line: **3.4.0** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v3.4.0)).
 
-What's new in 3.3.1: a major transcription speed-up — MuScriptor now runs GPU batch inference (about 2.3x faster on long audio, GPU utilization up from ~68% to ~90%), GPU machines default to the "Balanced" preset instead of the slow serial one, and a new "bass boost" option keeps bass lines when melodies get dense. Fixes: importing songs no longer interrupts playback, piano-roll wheel scrolling follows the expected direction, the onboarding tour no longer blurs the highlighted target, chord analysis now recognizes seventh/sus chords and inversions, playlists support double-click playback, GPU package installation can be cancelled, the transcription progress bar reports real chunk progress, and a redundant "transcribing 3%" label was removed.
+What's new in 3.4.0: a MuScriptor transcription stability fix — the "beat grid detection" weights are now bundled into the Resource Center (downloaded via domestic mirrors, stored inside the app folder, no longer depending on foreign sources or leaking to the system cache), with an on/off toggle before transcribing and graceful auto-skip if the weights are missing or fail to load, fixing the `final0` checkpoint load error that broke transcription in v3.3.1.
 
 ### What it does
 

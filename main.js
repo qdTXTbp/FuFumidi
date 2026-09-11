@@ -277,6 +277,10 @@ function migrateUserModels() {
 }
 function engineEnv(extra) {
   const env = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', FUFUMIDI_MODELS_DIR: modelsDir(), FUFUMIDI_MODELS_BUNDLED_DIR: bundledModelsDir() };
+  // torch.hub.get_dir() = $TORCH_HOME/hub，checkpoints 缓存到 $TORCH_HOME/hub/checkpoints。
+  // 指向软件 models 目录，使 beat_this-final0.ckpt 等 torch.hub 权重统一落盘到软件内
+  // （不再外泄到系统 ~/.cache/torch，且资源中心可复用该路径）。
+  env.TORCH_HOME = modelsDir();
   const sites = installedGpuKinds().map(gpuEnhanceSite);
   if (sites.length) {
     const old = process.env.PYTHONPATH || '';
