@@ -407,6 +407,10 @@ export const useAppStore = defineStore('app', {
         });
       }
       if (!this.songs.length) return;
+      // 启动自愈：清理歌单/收藏中指向已不存在曲目的悬空引用（历史版本删除曲目时未同步所致）
+      try {
+        usePlaylistStore().pruneMissing(new Set(this.songs.map((s: any) => s.id)));
+      } catch (e) {}
       let active: string | null = null;
       try { active = localStorage.getItem('fufumidi_active'); } catch (e) {}
       if (active && this.songs.some((s: any) => s.id === active)) await this.selectSong(active);
@@ -421,6 +425,13 @@ export const useAppStore = defineStore('app', {
       this.songs.splice(i, 1);
       await idbDelete(STORE_SONGS, id);
       await dbSongDelete(id);
+      // 同步清理歌单与收藏中的引用：否则会残留悬空 id，歌单显示数大于实际曲目数
+      try {
+        const plStore = usePlaylistStore();
+        plStore.removeFromAllPlaylists([id]);
+        const fi = plStore.favorites.indexOf(id);
+        if (fi >= 0) { plStore.favorites.splice(fi, 1); plStore.persistFavs(); }
+      } catch (e) {}
       if (wasCurrent) { try { localStorage.removeItem('fufumidi_active'); } catch (e) {} }
       if (this.songs.length) {
         // 优先选择当前队列中的下一首，避免跳出歌单/搜索结果

@@ -173,6 +173,21 @@ export const usePlaylistStore = defineStore('playlist', {
       for (const p of this.playlists) p.songIds = p.songIds.filter(id => !set.has(id));
       this.persist();
     },
+    /** 清理指向已不存在曲目的引用（歌单 + 收藏），返回清理条数。
+     *  历史版本删除曲目时未同步歌单引用，会残留「悬空 id」导致歌单显示数虚高，启动时自愈。 */
+    pruneMissing(validIds: Set<string>): number {
+      let removed = 0;
+      for (const p of this.playlists) {
+        const before = p.songIds.length;
+        p.songIds = p.songIds.filter(id => validIds.has(id));
+        removed += before - p.songIds.length;
+      }
+      const fb = this.favorites.length;
+      this.favorites = this.favorites.filter(id => validIds.has(id));
+      removed += fb - this.favorites.length;
+      if (removed > 0) { this.persist(); this.persistFavs(); }
+      return removed;
+    },
     moveSong(dragId: string, targetId: string, before: boolean) {
       const list = this.activePlaylist;
       if (!list) return;
