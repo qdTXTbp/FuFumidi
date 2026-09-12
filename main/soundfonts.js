@@ -186,6 +186,128 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
         'https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Salamander_Grand_Piano_SF2_V3_20200602.sf2',
       ],
     },
+
+    // ---------- 以下 8 款与手机端 FuMiVoice「音色库」目录保持一致 ----------
+    // 源速度：jsDelivr 实测约 2.6MB/s，但对单文件限 20MB、对单仓库限 50MB；
+    // 雅马哈三角钢琴 / Galaxy 电钢 / Supersaw / GIGA FM 体积超限只能走第三方 GitHub Pages，
+    // 实测仅约 24KB/s —— 这几项标 slow，由界面提前告知用户“较慢”，避免误以为卡住。
+    {
+      id: 'fluidr3_mono',
+      name: 'FluidR3 Mono GM',
+      version: '3.1 (mono)',
+      fileName: 'FluidR3Mono_GM.sf3',
+      desc: '完整 128 音色 + 鼓组，音色均衡自然，日常聆听首选；单声道 SF3 体积仅约 14MB，载入很快。',
+      size: 14563174,
+      license: 'CC BY 3.0 · 可自由使用（保留署名）',
+      minSize: 9000000,
+      fromRepo: null,
+      repoFile: null,
+      bundledPath: null,
+      category: '通用音色库',
+      urls: ['https://cdn.jsdelivr.net/gh/musescore/MuseScore@2.1/share/sound/FluidR3Mono_GM.sf3'],
+    },
+    {
+      id: 'fm_gm_mini',
+      name: 'FM/GM 紧凑版',
+      fileName: 'FM_GM_SoundFont_mini.sf2',
+      desc: '完整 GM，FM 合成味道，复古游戏机听感，兼容 GS/XG/GM2 别名。',
+      size: 14337918,
+      license: 'GPL-3.0',
+      minSize: 9000000,
+      fromRepo: null,
+      repoFile: null,
+      bundledPath: null,
+      category: '通用音色库',
+      urls: ['https://cdn.jsdelivr.net/gh/zeittresor/opensoundfont@main/FM_GM_SoundFont_v0_2_1_mini.sf2'],
+    },
+    {
+      id: 'giga_fm_gm',
+      name: 'GIGA FM GM',
+      fileName: 'giga-hq-fm-gm.sf2',
+      desc: '完整 GM，FM 合成味道更重，复古游戏机听感。',
+      size: 20575222,
+      license: 'CC BY 4.0',
+      minSize: 13000000,
+      fromRepo: null,
+      repoFile: null,
+      bundledPath: null,
+      category: '通用音色库',
+      slow: true,
+      urls: ['https://smpldsnds.github.io/soundfonts/soundfonts/giga-hq-fm-gm.sf2'],
+    },
+    {
+      id: 'yamaha_grand',
+      name: '雅马哈 C5 三角钢琴',
+      fileName: 'yamaha-grand-lite.sf2',
+      desc: '单独强化的钢琴音色，弹钢琴曲首选。',
+      size: 21782810,
+      license: 'GPL-3.0',
+      minSize: 14000000,
+      fromRepo: null,
+      repoFile: null,
+      bundledPath: null,
+      category: '单音色强化',
+      slow: true,
+      urls: ['https://smpldsnds.github.io/soundfonts/soundfonts/yamaha-grand-lite.sf2'],
+    },
+    {
+      id: 'galaxy_ep',
+      name: 'Galaxy 电钢琴',
+      fileName: 'galaxy-electric-pianos.sf2',
+      desc: '电钢琴合集，适合流行与爵士。',
+      size: 30299302,
+      license: 'GPL-3.0',
+      minSize: 19000000,
+      fromRepo: null,
+      repoFile: null,
+      bundledPath: null,
+      category: '单音色强化',
+      slow: true,
+      urls: ['https://smpldsnds.github.io/soundfonts/soundfonts/galaxy-electric-pianos.sf2'],
+    },
+    {
+      id: 'supersaw',
+      name: 'Supersaw 合成音色',
+      fileName: 'supersaw-collection.sf2',
+      desc: '60 个锯齿波音色，电子舞曲风格。',
+      size: 56358642,
+      license: 'GPL-3.0',
+      minSize: 35000000,
+      fromRepo: null,
+      repoFile: null,
+      bundledPath: null,
+      category: '合成与电子',
+      slow: true,
+      urls: ['https://smpldsnds.github.io/soundfonts/soundfonts/supersaw-collection.sf2'],
+    },
+    {
+      id: 'florestan',
+      name: 'Florestan 轻量 GM',
+      fileName: 'florestan-subset.sf2',
+      desc: '约 0.5MB 的极简 GM 子集，秒下秒加载，适合快速试听。',
+      size: 531786,
+      license: '公共素材',
+      minSize: 330000,
+      fromRepo: null,
+      repoFile: null,
+      bundledPath: null,
+      category: '轻量音色库',
+      urls: ['https://cdn.jsdelivr.net/gh/schellingb/TinySoundFont@master/examples/florestan-subset.sf2'],
+    },
+    {
+      id: 'vintage_dreams',
+      name: 'Vintage Dreams Waves',
+      fileName: 'VintageDreamsWaves-v2.sf2',
+      desc: '约 0.3MB 的复古合成波形，怀旧电子音色。',
+      size: 314640,
+      license: '公共素材',
+      minSize: 200000,
+      fromRepo: null,
+      repoFile: null,
+      bundledPath: null,
+      category: '轻量音色库',
+      urls: ['https://cdn.jsdelivr.net/gh/FluidSynth/fluidsynth@master/sf2/VintageDreamsWaves-v2.sf2'],
+    },
   ];
 
   const sfDir = () => path.join(app.getPath('userData'), 'fufumidi', 'soundfonts');
@@ -197,8 +319,10 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
     if (item.bundledPath) return path.join(__dirname, '..', item.bundledPath);
     return path.join(sfDir(), sfFileName(item));
   }
-  // 仓库内的目标文件名：优先显式 repoFile，否则从 fromRepo 派生
+  // 仓库内的目标文件名：优先显式 fileName（与手机端同名，便于跨端对应），
+  // 其次 repoFile，最后从显示名派生
   function sfFileName(item) {
+    if (item.fileName) return item.fileName;
     if (item.repoFile) return item.repoFile;
     return item.name.replace(/[^a-zA-Z0-9._ -]/g, '').trim() + '.sf2';
   }
@@ -231,7 +355,8 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
         manual: !!it.manual, officialUrl: it.officialUrl || '',
         path: p,
         sources: (githubRawCandidates(it).length ? ['github'] : []) ,
-        category: '内置精选',
+        category: it.category || '内置精选',
+        slow: !!it.slow,
       });
     }
     // 用户自定义 SF2（拷贝到 userData/fufumidi/soundfonts，非注册表项）

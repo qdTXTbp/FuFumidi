@@ -111,6 +111,14 @@ async function handleSync(env, storage, userId, body) {
   const songWrites = [];
   const plWrites = [];
 
+  // 云端曲目的完整元信息（本次写入前的状态）。
+  // 只回传"有变化"的 songs 时，客户端无法判断未变更曲目在云端是否已有字节，
+  // 于是每次同步都把它们当新曲目重传一遍 —— 这就是"每次都是全量上传"的原因。
+  // 因此额外回传一份精简清单（不含 meta，体积很小），供客户端判断是否需要上传字节。
+  const cloudMeta = svSongs
+    .filter((s) => !s.deleted)
+    .map((s) => ({ id: s.id, updatedAt: s.updatedAt, hasData: !!s.hasData }));
+
   if (mode === 'pull') {
     // 云端权威：把云端有效存档整份下发，客户端以它为唯一基准
     return ok({
@@ -146,7 +154,7 @@ async function handleSync(env, storage, userId, body) {
       plWrites.push({ id: sv.id, name: sv.name || '', songIds: [], updatedAt: t, deleted: true });
     }
     await flushWrites(env, storage, userId, songWrites, plWrites);
-    return ok({ songs: [], playlists: [], serverTime: t });
+    return ok({ songs: [], playlists: [], cloudMeta, serverTime: t });
   }
 
   // 需要回传给客服端的"服务器较新/新增"项
@@ -217,6 +225,7 @@ async function handleSync(env, storage, userId, body) {
   return ok({
     songs: retSongs,
     playlists: retPlaylists,
+    cloudMeta,
     serverTime: t,
   });
 }

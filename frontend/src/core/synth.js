@@ -1,6 +1,47 @@
 // Web Audio 合成引擎 + 播放器调度（从 legacy FuFumidi.html 抽取，保持行为一致）
 import { clamp, midiFreq } from './util.js';
 
+// SF2 合成器设置：与手机端 FuMiVoice（BASSMIDI）对齐。
+// FluidSynth 的混响与合唱**默认开启**，而 BASSMIDI 两项默认关闭——同一个音色库
+// 在两端因此听感不同（PC 更"湿"、有空间感与轻微失谐，手机端干净贴耳；
+// 单声道音色库如 FluidR3 Mono 尤其明显）。这里显式关闭，让两端听到的是同一个声音。
+export const SF2_SYNTH_SETTINGS = { reverbActive: false, chorusActive: false };
+
+// 读出 SF2/SF3 里的 (bank, preset) 清单：SF3 只有采样数据是 Vorbis 压缩，
+// 预设头（phdr）与 SF2 完全相同，可直接扫。失败时返回空集合，
+// resolveSf2Bank 会因此始终退回 0 号库（等价于不做库选择，不会更差）。
+// 离线导出渲染（sf2render.js）复用同一份实现，保证导出与播放一致。
+export function indexSf2Presets(buf) {
+  const set = new Set();
+  try {
+    const b = new Uint8Array(buf);
+    // 找 'phdr' 标签（RIFF 结构：[4 字节 id][4 字节长度][数据]）
+    let at = -1;
+    for (let i = 0, n = b.length - 4; i < n; i++) {
+      if (b[i] === 0x70 && b[i + 1] === 0x68 && b[i + 2] === 0x64 && b[i + 3] === 0x72) { at = i; break; }
+    }
+    if (at < 0) return set;
+    const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    const count = Math.floor(dv.getUint32(at + 4, true) / 38) - 1;   // 每条 38 字节，末条是终止记录
+    for (let k = 0; k < count; k++) {
+      const o = at + 8 + k * 38;
+      set.add(dv.getUint16(o + 22, true) * 128 + dv.getUint16(o + 20, true));   // bank * 128 + preset
+    }
+  } catch (e) { /* 解析失败按“未知”处理 */ }
+  return set;
+}
+
+// 该音符最终使用的 (bank, prog)：文件选了库里不存在的库号 → 退回 0 号库。
+// FluidSynth 选不到音色时会沿用上一个音色（整条通道错音），退库比错音更接近
+// 手机端 BASSMIDI 的表现。
+export function resolveSf2Bank(presets, bank, prog) {
+  const b = bank > 0 ? bank : 0;
+  if (!b) return { bank: 0, prog };
+  const known = !!(presets && presets.size);
+  if (!known || !presets.has(b * 128 + prog)) return { bank: 0, prog };
+  return { bank: b, prog };
+}
+
 /* GM 音色库映射（program → 内置合成预设） */
 const PRESET_FALLBACK = [
   [7, 'piano'], [15, 'musicbox'], [23, 'organ'], [31, 'guitar'], [39, 'bass'],
@@ -334,7 +375,9 @@ export class Synth {
     this._sf2SeqMode = false;
     this._seqAnchor = null;      // { ctx, seq }：AudioContext 时间 ↔ 音序器 tick（毫秒）锚点
     this._sf2ChProg = [];        // 各通道已调度的 program（避免每音符重复 programchange）
+    this._sf2ChBank = [];        // 各通道已调度的音色库（避免每音符重复 CC0）
     this._sf2DrumCh = [];        // 已设为鼓组的通道
+    this._sf2Presets = null;     // 已加载音色库里的 (bank, preset) 清单，见 _indexSf2Presets
   }
   // 指定加载的音色：'internal'（内置合成器）或 SF2 来源（网页相对路径 / 桌面绝对路径 / URL）。
   // 由音色工坊切换并持久化（settings.active_soundfont）。
@@ -376,6 +419,7 @@ export class Synth {
     this.sf2 = null;
     this.sf2Ready = false;
     this._sf2ChProg = [];
+    this._sf2ChBank = [];
     this._sf2DrumCh = [];
   }
   // js-synth 按需懒加载（原先在 index.html 同步 <script> 加载会阻塞首帧）。
@@ -440,6 +484,9 @@ export class Synth {
       this.clearSf2();
       return { ok: false, using: 'internal', error: '音色包过大（>' + Math.round(MAX_SF2 / 1048576) + 'MB），超出当前合成器可承载范围，请改用内置音色或更小的音色包。' };
     }
+    // 记下这份音色库里实际存在的 (bank, preset)：回放时若文件指定的库号库里没有，
+    // 就退回 0 号库（见 _sf2ProgramFor），避免 FluidSynth 选不到音色而沿用上一音色。
+    this._sf2Presets = indexSf2Presets(buf);
     // 首选 AudioWorklet
     try {
       const r = await this._loadSf2Worklet(buf, source);
@@ -458,7 +505,7 @@ export class Synth {
     await this._ensureWorkletModules();
     this.clearSf2();
     const syn = new JSSynth.AudioWorkletNodeSynthesizer();
-    const node = syn.createAudioNode(this.ctx); // settings 缺省 → worklet 侧用 fluidsynth 默认值
+    const node = syn.createAudioNode(this.ctx, SF2_SYNTH_SETTINGS);
     try {
       node.connect(this.master);
       // SF2 在 worklet 堆内加载（loadSFont 返回 Promise，缓冲经 structured clone 传入）
@@ -546,7 +593,7 @@ export class Synth {
     await JSSynth.waitForReady();
     this.clearSf2();
     const syn = new JSSynth.Synthesizer();
-    syn.init(this.ctx.sampleRate);
+    syn.init(this.ctx.sampleRate, SF2_SYNTH_SETTINGS);
     // 回退路径：缓冲越大越能扛主线程抖动（8192≈186ms）；正常情况不会走到这里
     const node = syn.createAudioNode(this.ctx, 8192);
     node.connect(this.master);
@@ -603,10 +650,69 @@ export class Synth {
   setTrackMute(i, b) { this.ensure(i + 1); this.mute[i] = b; this.applyRouting(); }
   setTrackSolo(i, b) { this.ensure(i + 1); this.solo[i] = b; this.applyRouting(); }
   setTrackPan(i, v) { this.ensure(i + 1); this.pan[i] = clamp(v, -1, 1); if (this.panners[i]) this.panners[i].pan.setTargetAtTime(this.pan[i], this.ctx.currentTime, 0.02); }
+  // ---- 音色 / 音色库下发 ----
+  // MIDI 的 program 与 bank（CC0）都是通道级状态，文件里会中途变化，也可能写在别的轨里；
+  // 这里按「音符所在通道 + 该时刻的状态」下发，与手机端 BASSMIDI 直接播放文件事件一致。
+  // 该音符最终使用的 (bank, prog)：文件选了库里不存在的库号 → 退回 0 号库
+  _sf2ProgramFor(note) {
+    return resolveSf2Bank(this._sf2Presets, note.bank || 0, note.prog != null ? note.prog : 0);
+  }
+  // 音序器路径：CC0（库号）先于 programchange，二者同一 tick（音序器对同一时刻按写入顺序分发）
+  _seqApplyProgram(ch, note, tick) {
+    if (!this.sf2Seq) return;
+    const { bank, prog } = this._sf2ProgramFor(note);
+    if (this._sf2ChBank[ch] !== bank) {
+      try { this.sf2Seq.sendEventAt({ type: 'controlchange', channel: ch, control: 0, value: bank }, tick, true); } catch (e) {}
+      this._sf2ChBank[ch] = bank;
+    }
+    if (this._sf2ChProg[ch] !== prog) {
+      try { this.sf2Seq.sendEventAt({ type: 'programchange', channel: ch, preset: prog }, tick, true); } catch (e) {}
+      this._sf2ChProg[ch] = prog;
+    }
+  }
+  // 主线程合成路径（ScriptProcessor 回退）：直接调 js-synth API
+  _directApplyProgram(ch, note) {
+    const { bank, prog } = this._sf2ProgramFor(note);
+    if (this._sf2ChBank[ch] !== bank) {
+      try { this.sf2.midiControl(ch, 0, bank); } catch (e) {}
+      this._sf2ChBank[ch] = bank;
+    }
+    try { this.sf2.midiProgramChange(ch, prog); } catch (e) {}
+    this._sf2ChProg[ch] = prog;
+  }
+  // 通用通道事件（CC / 弯音）。
+  // 手机端 BASSMIDI 是直接播放文件事件的，音量(CC7)、声像(CC10)、表情(CC11)、
+  // 延音(CC64)、弯音这些「演奏信息」都在其中；电脑端此前只发音符与音色，
+  // 这些全部丢失（表情渐强、钢琴踏板、弯音都没了），是两端听感的另一半差异。
+  // 注意：库号 CC0/CC32 不在这里下发，它由 _sf2ProgramFor 做「缺库退回 0 号库」处理。
+  midiEvent(time, ev) {
+    if (!ev || !this.sf2Ready || !this.sf2) return;
+    const ch = ev.ch != null ? ev.ch : 0;
+    if (this._sf2SeqMode && this.sf2Seq) {
+      const now = this.ctx.currentTime;
+      const tick = Math.max(this._seqTickFor(now), this._seqTickFor(Math.max(now, time)));
+      try {
+        if (ev.kind === 'bend') this.sf2Seq.sendEventAt({ type: 'pitchbend', channel: ch, value: ev.val }, tick, true);
+        else this.sf2Seq.sendEventAt({ type: 'controlchange', channel: ch, control: ev.cc, value: ev.val }, tick, true);
+      } catch (e) {}
+      return;
+    }
+    // 回退路径：与音符同样按绝对时间用 setTimeout 下发
+    const delay = Math.max(0, (Math.max(this.ctx.currentTime, time) - this.ctx.currentTime) * 1000);
+    const fire = () => {
+      if (!this.sf2) return;
+      try {
+        if (ev.kind === 'bend') this.sf2.midiPitchBend(ch, ev.val);
+        else this.sf2.midiControl(ch, ev.cc, ev.val);
+      } catch (e) {}
+    };
+    if (delay === 0) fire(); else this._sf2Pending.push(setTimeout(fire, delay));
+  }
   noteOn(time, note, endTime) {
     this.ensure(note.trk + 1);
     if (this.sf2Ready && this.sf2) {
-      const ch = Math.min(15, note.trk || 0);
+      // 用音符自己的 MIDI 通道（不是轨序号）；note.ch 由 player.prepare 从文件里取
+      const ch = note.ch != null ? note.ch : Math.min(15, note.trk || 0);
       // —— 音序器路径（AudioWorklet + fu-seq-clock）：事件按绝对 tick 写入 fluid_sequencer，
       // worklet 线程准时分发。主线程阻塞期间已写入的事件照常发声，无迟到/掉音。 ——
       if (this._sf2SeqMode && this.sf2Seq) {
@@ -618,11 +724,7 @@ export class Synth {
         if (note.isDrum) {
           if (!this._sf2DrumCh[ch]) { try { this.sf2.midiSetChannelType(ch, true); } catch (e) {} this._sf2DrumCh[ch] = true; }
         } else {
-          const wantProg = note.prog != null ? note.prog : 0;
-          if (this._sf2ChProg[ch] !== wantProg) {
-            try { this.sf2Seq.sendEventAt({ type: 'programchange', channel: ch, preset: wantProg }, tick, true); } catch (e) {}
-            this._sf2ChProg[ch] = wantProg;
-          }
+          this._seqApplyProgram(ch, note, tick);
         }
         // 'note' 事件 = noteon + 时值到后自动 noteoff（fluid seqbind 内部调度）
         const dur = Math.max(60, Math.round((Math.max(endTime, onTime + 0.06) - onTime) * 1000));
@@ -641,7 +743,7 @@ export class Synth {
       };
       if (delayOn === 0) {
         // onTime 即当前时刻：立即触发（跳转/快速变速后追赶音符）
-        try { if (note.isDrum) this.sf2.midiSetChannelType(ch, true); else if (note.prog != null) this.sf2.midiProgramChange(ch, note.prog); this.sf2.midiNoteOn(ch, note.midi, note.vel); } catch (e) {}
+        try { if (note.isDrum) this.sf2.midiSetChannelType(ch, true); else this._directApplyProgram(ch, note); this.sf2.midiNoteOn(ch, note.midi, note.vel); } catch (e) {}
         const offTimer = setTimeout(sendOff, Math.max(0, (Math.max(endTime, onTime + 0.06) - onTime) * 1000));
         this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, start: onTime, endTime, timer: offTimer, sf2: true, ch });
       } else {
@@ -652,7 +754,7 @@ export class Synth {
           // 切页时 bumpAhead 临时放宽）的音符跳过本次触发。
           const now = this.ctx.currentTime;
           if (onTime < now - (this._sf2LateTol || 0.04)) return;
-          try { if (note.isDrum) this.sf2.midiSetChannelType(ch, true); else if (note.prog != null) this.sf2.midiProgramChange(ch, note.prog); this.sf2.midiNoteOn(ch, note.midi, note.vel); } catch (e) {}
+          try { if (note.isDrum) this.sf2.midiSetChannelType(ch, true); else this._directApplyProgram(ch, note); this.sf2.midiNoteOn(ch, note.midi, note.vel); } catch (e) {}
           const offTimer = setTimeout(sendOff, Math.max(0, (Math.max(endTime, onTime + 0.06) - now) * 1000));
           this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, start: onTime, endTime, timer: offTimer, sf2: true, ch });
         }, delayOn);
@@ -708,6 +810,10 @@ export class Synth {
     for (const a of this.activeNotes) { if (a.timer) { try { clearTimeout(a.timer); } catch (e) {} } if (a.sf2 && a.ch != null) { try { this.sf2 && this.sf2.midiNoteOff(a.ch, a.midi); } catch (e) {} } }
     this.live = [];
     this.activeNotes = [];
+    // 上面清掉了未分发的调度事件（含 program/bank 变更），缓存的通道状态已不可信，
+    // 清掉让下一个音符重新下发，避免跳转后沿用错误的音色。
+    this._sf2ChProg = [];
+    this._sf2ChBank = [];
     // 跳转/重排后重读音序器锚点（校正与 AudioContext 时钟的漂移）
     this._reanchorSeq();
   }

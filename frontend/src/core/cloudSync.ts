@@ -174,10 +174,19 @@ async function localPlaylists(): Promise<any[]> {
   try { const arr = await b.dbPlaylistsList(); return Array.isArray(arr) ? arr : []; } catch (e) { return []; }
 }
 
-/** 归一化字节来源：SQLite 里可能是 number[]，IndexedDB 里是 Uint8Array */
+/** 归一化字节来源：IndexedDB 里可能是 Uint8Array，也可能是 ArrayBuffer/其它 TypedArray 视图 */
 function pickBytes(v: any): Uint8Array | null {
   if (!v) return null;
+  // 转录、文件夹导入等走 file:readBinary（经 IPC 回来的是 ArrayBuffer），
+  // 早期版本把它原样写进了 IndexedDB。只认 Uint8Array/数组的话，这些曲目会被
+  // 误判成「本机找不到 MIDI 内容」——播放没问题（播放路径用 new Uint8Array(r.bytes)
+  // 能正确转换），只有云同步读不出来。
   if (v instanceof Uint8Array) return v.length ? v : null;
+  if (v instanceof ArrayBuffer) return v.byteLength ? new Uint8Array(v) : null;
+  if (ArrayBuffer.isView(v)) {
+    const t = new Uint8Array((v as ArrayBufferView).buffer, (v as ArrayBufferView).byteOffset, (v as ArrayBufferView).byteLength);
+    return t.length ? t : null;
+  }
   if (Array.isArray(v)) return v.length ? new Uint8Array(v) : null;
   return null;
 }
@@ -417,17 +426,26 @@ async function syncInner(acc: any, mode: 'merge' | 'push' | 'pull'): Promise<Clo
   for (const r of cloudSongs) if (r && r.id) cloudMap.set(String(r.id), r);
 
   // ---- 分批上传本地新增/有更新的字节 ----
+  // 服务端额外下发的云端全量清单（含未变更项）。没有它时，未变更曲目的 hasData 无从得知，
+  // 会被判定成"云端没有"从而每次同步都重传整库 —— 旧服务端不下发该字段，此时退回原判定。
+  const cloudAllMap = new Map<string, any>();
+  let haveCloudAll = false;
+  if (Array.isArray(res.cloudMeta)) {
+    haveCloudAll = true;
+    for (const r of res.cloudMeta) if (r && r.id) cloudAllMap.set(String(r.id), r);
+  }
   const toUpload: string[] = [];
   if (mode !== 'pull') {
     for (const [key, info] of metaByKey) {
       if (!info.hasBytes) continue;
-      const sv = cloudMap.get(key);
-      // 云端没有、云端只有空壳(!hasData)、或本地更新 -> 都需要把字节送上去
+      const sv = (haveCloudAll ? cloudAllMap : cloudMap).get(key);
+      // 云端没有、云端只有空壳(!hasData)、或本地更新 -> 才需要把字节送上去
       if (!sv || !sv.hasData || info.updatedAt > (Number(sv.updatedAt) || 0)) toUpload.push(key);
     }
   }
   let uploadedSongs = 0;
   if (toUpload.length) report('upload', `准备上传 ${toUpload.length} 首…`, 0, toUpload.length);
+  else if (mode !== 'pull') report('upload', '本机曲目均无改动，无需上传', 0, 0);
   for (let i = 0; i < toUpload.length; i += BATCH) {
     const batch = toUpload.slice(i, i + BATCH).map((key) => {
       const info = metaByKey.get(key)!;

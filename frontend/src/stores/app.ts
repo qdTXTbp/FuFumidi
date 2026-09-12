@@ -64,12 +64,12 @@ function openDb(): Promise<any> {
   });
   return _dbP;
 }
-async function idbAll(store: string): Promise<any[]> {
+async function idbKeys(store: string): Promise<any[]> {
   const db = await openDb();
   return new Promise((res) => {
     if (!db) return res([]);
     try {
-      const rq = db.transaction(store, 'readonly').objectStore(store).getAll();
+      const rq = db.transaction(store, 'readonly').objectStore(store).getAllKeys();
       rq.onsuccess = () => res(rq.result || []);
       rq.onerror = () => res([]);
     } catch (e) { res([]); }
@@ -144,6 +144,27 @@ function fpOf(song: any, name: string): string {
   if (song.meta && song.meta.fp) return song.meta.fp;
   if (song.__bytes) return contentFp(name, song.__bytes);
   return '';
+}
+
+/**
+ * 把任意来源的曲目字节归一化成 Uint8Array。
+ *
+ * 曲目字节有三种来源形态：file:readBinary 经 IPC 回来的是 ArrayBuffer、
+ * IndexedDB 里可能存着这种 ArrayBuffer、SQLite 里存的是 number[]。
+ * 不归一化会出现两类问题：
+ *   - Array.from(ArrayBuffer) 得到空数组 → 迁移到 SQLite 时字节丢失；
+ *   - number[] 直接当 Uint8Array 用（Blob / parseMidi）会失败。
+ */
+function toBytes(v: any): Uint8Array | null {
+  if (!v) return null;
+  if (v instanceof Uint8Array) return v.length ? v : null;
+  if (v instanceof ArrayBuffer) return v.byteLength ? new Uint8Array(v) : null;
+  if (ArrayBuffer.isView(v)) {
+    const t = new Uint8Array((v as ArrayBufferView).buffer, (v as ArrayBufferView).byteOffset, (v as ArrayBufferView).byteLength);
+    return t.length ? t : null;
+  }
+  if (Array.isArray(v)) return v.length ? Uint8Array.from(v) : null;
+  return null;
 }
 
 export const useAppStore = defineStore('app', {
@@ -299,8 +320,11 @@ export const useAppStore = defineStore('app', {
           this.songs.push(aitem);
           imported.push(aitem.id);
           if (it.bytes) {
-            idbPut(STORE_SONGS, { id: aitem.id, name: it.name, size: aitem.meta.size, time: aitem.meta.time, dur: 0, fp: aitem.meta.fp, bytes: it.bytes, kind: 'audio' });
-            dbSongPut({ id: aitem.id, name: it.name, size: aitem.meta.size, time: aitem.meta.time, dur: 0, fp: aitem.meta.fp, bytes: Array.from(it.bytes as any), kind: 'audio' });
+            // 归一化成 Uint8Array 再落库：readBinary 经 IPC 回来的是 ArrayBuffer，
+            // 原样存进 IndexedDB 后，云同步的 pickBytes 认不出（它只认 Uint8Array/数组），
+            // 会把这类曲目判成"本机没有 MIDI 内容"。SQLite 侧 Array.from(ArrayBuffer) 也会得到空数组。
+            idbPut(STORE_SONGS, { id: aitem.id, name: it.name, size: aitem.meta.size, time: aitem.meta.time, dur: 0, fp: aitem.meta.fp, bytes: abytes, kind: 'audio' });
+            dbSongPut({ id: aitem.id, name: it.name, size: aitem.meta.size, time: aitem.meta.time, dur: 0, fp: aitem.meta.fp, bytes: Array.from(abytes as any), kind: 'audio' });
           }
           ok++;
           continue;
@@ -334,8 +358,8 @@ export const useAppStore = defineStore('app', {
         };
         this.songs.push(item);
         imported.push(item.id);
-        await idbPut(STORE_SONGS, { id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, dur: item.meta.dur, fp: item.meta.fp, bytes: it.bytes });
-        await dbSongPut({ id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, dur: item.meta.dur, fp: item.meta.fp, bytes: Array.from(it.bytes as any) });
+        await idbPut(STORE_SONGS, { id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, dur: item.meta.dur, fp: item.meta.fp, bytes });
+        await dbSongPut({ id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, dur: item.meta.dur, fp: item.meta.fp, bytes: Array.from(bytes as any) });
         ok++;
       }
       // 批量归入目标歌单（全部曲目即全局资料库，无需额外归入）
@@ -386,16 +410,36 @@ export const useAppStore = defineStore('app', {
       this.importPick = null;
     },
     async restoreSongs() {
+      // 取 SQLite 与 IndexedDB 的并集，而不是"有 SQLite 就只读 SQLite"。
+      // 只读一边时，任一次写入没落库（历史上迁移就把 ArrayBuffer 写成了空字节数组），
+      // 那部分曲目会从界面消失，但云同步是"IndexedDB 优先 + 补 SQLite"仍看得到它们，
+      // 于是界面数量与云备份数量长期对不上。这里以 SQLite 为基准，把 IndexedDB 里缺的补进来。
       const sqliteRecs = await dbSongsAll();
-      let recs = sqliteRecs;
-      if (!recs.length) {
-        recs = await idbAll(STORE_SONGS);
-        // 首次从 IndexedDB 迁移到 SQLite（桌面版）
-        if (recs.length) {
-          for (const r of recs) await dbSongPut({ id: r.id, name: r.name, size: r.size || 0, time: r.time || 0, dur: r.dur || 0, fp: r.fp || '', bytes: Array.from(r.bytes || []) });
-        }
+      const byId = new Map<string, any>();
+      for (const r of sqliteRecs) if (r && r.id) byId.set(String(r.id), r);
+
+      const backfill: any[] = [];
+      // 只读主键做比对：直接 getAll() 会把整库 MIDI 字节都读进内存，几百首时开销很大
+      for (const k of await idbKeys(STORE_SONGS)) {
+        if (k === undefined || k === null) continue;
+        const id = String(k);
+        const cur = byId.get(id);
+        if (cur && toBytes(cur.bytes)) continue;   // SQLite 那份已完整，无需回填
+        const r = await idbGet(STORE_SONGS, k);
+        if (!r || !r.id) continue;
+        const merged = cur ? { ...cur, bytes: r.bytes } : r;
+        byId.set(id, merged);
+        // 仅在确实能从 IndexedDB 补到字节时才回写，避免对"两边都没字节"的记录反复写库
+        if (toBytes(merged.bytes)) backfill.push(merged);
       }
-      for (const r of recs) {
+      // 回写 SQLite：补齐缺失记录、修正空字节记录（IndexedDB 里的 ArrayBuffer 必须先归一化，
+      // 否则 Array.from(ArrayBuffer) 又会写成空数组）。写完即收敛，不会每次启动都重写。
+      for (const r of backfill) {
+        const rb = toBytes(r.bytes)!;
+        await dbSongPut({ id: r.id, name: r.name, size: r.size || 0, time: r.time || 0, dur: r.dur || 0, fp: r.fp || '', bytes: Array.from(rb) });
+      }
+
+      for (const r of byId.values()) {
         if (!r || !r.id || this.songs.some((s: any) => s.id === r.id)) continue;
         this.songs.push({
           id: r.id,
@@ -403,7 +447,7 @@ export const useAppStore = defineStore('app', {
           kind: r.kind || 'midi',
           song: null,
           meta: { size: r.size || 0, time: r.time || 0, dur: r.dur || 0, fp: r.fp || '' },
-          __bytes: r.bytes || null,
+          __bytes: toBytes(r.bytes),
         });
       }
       if (!this.songs.length) return;
@@ -433,7 +477,7 @@ export const useAppStore = defineStore('app', {
           kind: r.kind || 'midi',
           song: null,
           meta: { size: r.size || 0, time: r.time || 0, dur: r.dur || 0, fp: r.fp || '' },
-          __bytes: r.bytes || null,
+          __bytes: toBytes(r.bytes),
         });
       }
     },
@@ -517,7 +561,8 @@ export const useAppStore = defineStore('app', {
         let lastErr = null;
         const tryParse = (bytes: any): boolean => {
           try {
-            const b = Array.isArray(bytes) ? new Uint8Array(bytes) : bytes;
+            const b = toBytes(bytes);
+            if (!b) throw new Error('字节为空');
             const mid = parseMidi(b);
             item.song = buildSong(mid, { name: item.name });
             item.meta.tracks = item.song.tracks.length;
@@ -527,7 +572,7 @@ export const useAppStore = defineStore('app', {
         // 1) 内存中的字节缓冲（本会话导入时缓存）
         //    解析失败说明该缓冲损坏（如 SQLite 大文件字节数组异常），清掉避免下次再用坏缓存
         if (item.__bytes && !tryParse(item.__bytes)) item.__bytes = null;
-        // 2) IndexedDB 原生字节（最可靠，转录/导入时原生 Uint8Array 无损存储）
+        // 2) IndexedDB 原生字节（最可靠；形态可能是 Uint8Array 或早期版本存入的 ArrayBuffer，由 toBytes 统一）
         if (!item.song) { const r = await idbGet(STORE_SONGS, id); if (r && r.bytes) tryParse(r.bytes); }
         // 3) SQLite 字节（兜底，JSON 数字数组对较大 MIDI 可能丢失）
         if (!item.song) { const all = await dbSongsAll(); const r = all.find((x: any) => x.id === id); if (r && r.bytes) tryParse(r.bytes); }
@@ -660,7 +705,8 @@ export const useAppStore = defineStore('app', {
             if (!bytes) { const r = await idbGet(STORE_SONGS, nid); if (r && r.bytes) bytes = r.bytes; }
             if (bytes && !item.song) {
               try {
-                const b = Array.isArray(bytes) ? new Uint8Array(bytes) : bytes;
+                const b = toBytes(bytes);
+                if (!b) throw new Error('字节为空');
                 item.song = buildSong(parseMidi(b), { name: item.name });
                 item.meta.tracks = item.song.tracks.length;
               } catch (e) { item.__bytes = null; }

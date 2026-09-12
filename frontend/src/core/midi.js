@@ -51,8 +51,8 @@ export function parseMidi(bytes) {
         if (ty === 0x80) { const n = u8(); u8(); close(n); }
         else if (ty === 0x90) { const n = u8(), v = u8(); if (v === 0) close(n); else { if (active.has(n)) close(n); active.set(n, { start: tick, vel: v, ch }); } }
         else if (ty === 0xc0) { program = u8(); events.push({ tick, type: 'program', program, ch }); }
-        else if (ty === 0xb0) { const cc = u8(), cv = u8(); ccs.push({ tick, cc, cv }); if (cc === 7) events.push({ tick, type: 'cc7', val: cv }); }
-        else if (ty === 0xe0) { const lo = u8(), hi = u8(); events.push({ tick, type: 'bend', val: (hi << 7) | lo }); }
+        else if (ty === 0xb0) { const cc = u8(), cv = u8(); ccs.push({ tick, cc, cv, ch }); if (cc === 7) events.push({ tick, type: 'cc7', val: cv }); }
+        else if (ty === 0xe0) { const lo = u8(), hi = u8(); events.push({ tick, type: 'bend', val: (hi << 7) | lo, ch }); }
         else if (ty === 0xa0) { u8(); u8(); }
         else if (ty === 0xd0) { u8(); }
         else { for (let i = 0; i < 2; i++) { if (p < end) u8(); } }
@@ -165,10 +165,56 @@ export function buildSong(mid, meta = {}) {
     events: tk.events,
     ccs: (tk.ccs || []).slice(),
   }));
+  // MIDI 的 program（音色）与 bank（音色库，CC0/CC32）是**通道级**状态：不跟随轨道，
+  // 会在一首曲子里中途变化，而且文件常把 setup 事件放在与音符不同的轨道里
+  // （例如格式 1 的 24 轨文件里，音符在轨 15~22，但各通道的音色事件分散在不同轨）。
+  // 因此这里跨轨道按通道汇总成时间线，回放时逐音符取「该时刻该通道」的真实音色。
+  const chanProg = new Map();   // ch -> [{tick, program}]
+  const chanCtl = new Map();    // ch -> [{tick, cc, val}]，只收 CC0/CC32（库号）
+  const pushTL = (m, ch, item) => { const a = m.get(ch); if (a) a.push(item); else m.set(ch, [item]); };
+  for (const tk of mid.tracks) {
+    for (const e of tk.events) if (e.type === 'program' && e.ch != null) pushTL(chanProg, e.ch, { tick: e.tick, program: e.program });
+    for (const c of (tk.ccs || [])) if (c.ch != null && (c.cc === 0 || c.cc === 32)) pushTL(chanCtl, c.ch, { tick: c.tick, cc: c.cc, val: c.cv });
+  }
+  const byTick = (a, b) => a.tick - b.tick;
+  for (const a of chanProg.values()) a.sort(byTick);
+  for (const a of chanCtl.values()) a.sort(byTick);
+  // 把 CC0（库号 MSB）/CC32（变体号 LSB）合成为「库号时间线」。
+  // 注意不能直接取最后一条事件：文件里 CC32 紧跟 CC0 之后，最后一条的值恒为 0。
+  // 库号取 CC0；只有 CC32 的文件（少见）退回用 CC32 的值。
+  const chanBank = new Map();   // ch -> [{tick, bank}]
+  for (const [ch, arr] of chanCtl) {
+    let msb = null, lsb = null, last = -1;
+    const out = [];
+    for (const r of arr) {
+      if (r.cc === 0) msb = r.val; else lsb = r.val;
+      const bank = (msb != null ? msb : (lsb != null ? lsb : 0)) & 0x7f;
+      if (bank !== last) { out.push({ tick: r.tick, bank }); last = bank; }
+    }
+    chanBank.set(ch, out);
+  }
+  // 二分找出「tick 之前最后一条」记录的下标；没有则 -1
+  function lastAt(arr, tick) {
+    if (!arr || !arr.length || arr[0].tick > tick) return -1;
+    let lo = 0, hi = arr.length - 1, ans = -1;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (arr[m].tick <= tick) { ans = m; lo = m + 1; } else hi = m - 1; }
+    return ans;
+  }
+  // 通道在 tick 时刻的状态：program 为 null 表示文件没写过（调用方自行给默认值）；bank 默认 0 号库。
+  function chanStateAt(ch, tick) {
+    let program = null, bank = 0;
+    const ps = chanProg.get(ch);
+    const pi = lastAt(ps, tick);
+    if (pi >= 0) program = ps[pi].program;
+    const bs = chanBank.get(ch);
+    const bi = lastAt(bs, tick);
+    if (bi >= 0) bank = bs[bi].bank;
+    return { program, bank };
+  }
   let totalTicks = 0;
   for (const tr of tracks) for (const n of tr.notes) totalTicks = Math.max(totalTicks, n.end);
   totalTicks += tpb;
-  const song = Object.assign({ format: mid.format, tpb, tracks, tempoMap: map, sigMap, keySig, totalTicks }, meta);
+  const song = Object.assign({ format: mid.format, tpb, tracks, tempoMap: map, sigMap, keySig, totalTicks, chanStateAt }, meta);
   song.totalSec = baseSec(song.totalTicks);
   song.baseSec = baseSec;
   song.secToTick = secToTick;

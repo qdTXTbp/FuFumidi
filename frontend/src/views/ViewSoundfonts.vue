@@ -250,7 +250,8 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
             <span v-if="item.downloaded" :class="['plg-tag', 'on']">{{ item.builtin ? t('内置') : t('已下载') }}</span>
           </div>
           <div class="sf-tile-desc">{{ item.desc }}</div>
-          <div class="sf-tile-meta">{{ fmtSize(item.expected) }} · {{ item.license }}</div>
+          <div class="sf-tile-meta"><span class="sf-cat">{{ item.category }}</span>{{ fmtSize(item.expected) }} · {{ item.license }}</div>
+          <div v-if="item.slow" class="sf-tile-slow">{{ t('该音色源较慢，下载可能需数分钟，请耐心等待') }}</div>
           <div v-if="item.size" class="sf-tile-meta" style="color:var(--ok)">{{ t('本地 ') + fmtSize(item.size) }}</div>
           <div class="sf-tile-bar" v-if="prog[item.id] && prog[item.id].active">
             <div class="sf-tile-fill" :style="{ width: (prog[item.id].percent || 0) + '%' }"></div>
@@ -320,6 +321,8 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
 .sf-ver { font-size: 11px; font-weight: 500; color: var(--stone); margin-left: 4px; }
 .sf-tile-desc { font-size: 12px; color: var(--slate); line-height: 1.6; min-height: 36px; }
 .sf-tile-meta { font-size: 11px; color: var(--stone); }
+.sf-cat { display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 999px; font-size: 10px; color: var(--slate); background: var(--surface-soft); }
+.sf-tile-slow { font-size: 10.5px; color: var(--amber); line-height: 1.5; }
 .sf-tile-actions { display: flex; align-items: center; gap: 6px; margin-top: auto; flex-wrap: wrap; padding-top: 2px; }
 .sf-tile-actions .btn { flex: 1; justify-content: center; }
 .sf-tile-actions .btn.ghost { flex: 0 1 auto; }
