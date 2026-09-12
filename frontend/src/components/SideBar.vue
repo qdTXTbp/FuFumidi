@@ -1,8 +1,10 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue';
 import Icon from './Icon.vue';
+import CloudUserDialog from './CloudUserDialog.vue';
 import { useAppStore, SIDEBAR_DEFAULT_W, SIDEBAR_MIN_W } from '../stores/app';
 import { usePlaylistStore } from '../stores/playlist';
+import { useCloudStore } from '../stores/cloud';
 import logoUrl from '../assets/logo.png';
 import { t } from '../core/i18n.js';
 import { getAppVersion } from '../core/version.js';
@@ -10,6 +12,7 @@ import { fmtTime } from '../core/util.js';
 
 const app = useAppStore();
 const state = app;
+const cloud = useCloudStore();
 const appVersion = ref('v3.1.8');
 getAppVersion().then(v => { appVersion.value = v; });
 const importFiles = (items, target) => app.importFiles(items, target);
@@ -418,7 +421,10 @@ function onDrop(e) {
   });
 }
 
-onMounted(() => { playlist.hydrateFavorites(); });
+onMounted(() => { playlist.hydrateFavorites(); cloud.init(); });
+
+// 云同步用户弹窗开关（点击左下角头像触发）
+const showAuth = ref(false);
 </script>
 
 <template>
@@ -553,7 +559,16 @@ onMounted(() => { playlist.hydrateFavorites(); });
 
     <div style="padding:10px 14px;border-top:1px solid var(--border)" class="small muted row">
       <span class="tag">{{ appVersion }}</span>
-      <span style="margin-left:auto">{{ t('离线 · Vue 3') }}</span>
+      <button class="cloud-user" style="margin-left:auto;display:flex;align-items:center;gap:8px;background:none;border:none;color:inherit;cursor:pointer;padding:3px 6px;border-radius:9px"
+              :title="t('账号与云同步')" :aria-label="t('账号与云同步')" @click="showAuth = true">
+        <span class="cloud-avatar">
+          <svg viewBox="0 0 40 40" width="26" height="26" aria-hidden="true">
+            <circle cx="20" cy="14" r="9" fill="#9aa0a6"/>
+            <path d="M7 36a13 13 0 0 1 26 0z" fill="#9aa0a6"/>
+          </svg>
+        </span>
+        <span class="cloud-uname" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:110px">{{ cloud.account ? cloud.account.email : t('未登录用户') }}</span>
+      </button>
     </div>
 
     <!-- 宽度拖动把手：拖拽调整侧边栏宽度（带范围限制） -->
@@ -667,9 +682,20 @@ onMounted(() => { playlist.hydrateFavorites(); });
       </div>
     </Transition>
   </Teleport>
+
+  <!-- 云同步/账号弹窗：未登录登录注册，已登录管理同步 -->
+  <CloudUserDialog :open="showAuth" @close="showAuth = false" />
 </template>
 
 <style scoped>
+.cloud-avatar {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--card, #2a2e37);
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: none;
+}
+.cloud-avatar svg { display: block; border-radius: 50%; }
+.cloud-user:hover { background: var(--hover, rgba(255,255,255,0.06)); }
 .btn.sidebar-primary {
   border: 1px solid var(--accent);
   background: var(--accent);

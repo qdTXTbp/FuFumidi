@@ -416,6 +416,27 @@ export const useAppStore = defineStore('app', {
       if (active && this.songs.some((s: any) => s.id === active)) await this.selectSong(active);
       else await this.selectSong(this.songs[this.songs.length - 1].id);
     },
+    /** 云同步用：仅从内存移除曲目（DB 侧由同步逻辑负责），不触发其它副作用 */
+    dropSongsLocal(ids: string[]) {
+      const set = new Set(ids || []);
+      if (!set.size) return;
+      this.songs = this.songs.filter((s: any) => !set.has(s.id));
+    },
+    /** 云同步用：把 DB 中新增的曲目补进内存（保持当前选中/播放不变） */
+    async mergeSongsFromDb() {
+      const recs = await dbSongsAll();
+      for (const r of recs) {
+        if (!r || !r.id || this.songs.some((s: any) => s.id === r.id)) continue;
+        this.songs.push({
+          id: r.id,
+          name: String(r.name || t('未命名')).replace(/\.(mid|midi|kar|rmi)$/i, ''),
+          kind: r.kind || 'midi',
+          song: null,
+          meta: { size: r.size || 0, time: r.time || 0, dur: r.dur || 0, fp: r.fp || '' },
+          __bytes: r.bytes || null,
+        });
+      }
+    },
     async removeSong(id: string) {
       const i = this.songs.findIndex((s: any) => s.id === id);
       if (i < 0) return;

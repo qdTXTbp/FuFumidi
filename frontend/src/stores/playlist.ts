@@ -114,6 +114,17 @@ export const usePlaylistStore = defineStore('playlist', {
       this.persist();
       return true;
     },
+    /** 云同步用：用同步结果整体替换歌单（含 localStorage 落盘），并修正当前激活歌单 */
+    applyDbSnapshot(list: Playlist[]) {
+      if (!Array.isArray(list)) return;
+      this.playlists = list;
+      if (!this.playlists.some(p => p.id === this.activePlaylistId)) {
+        const def = this.playlists.find(p => p.id === 'default');
+        this.activePlaylistId = def ? def.id : (this.playlists[0]?.id || 'default');
+        try { localStorage.setItem(LS_ACTIVE, this.activePlaylistId); } catch (e) {}
+      }
+      this.persist();
+    },
     create(name: string) {
       const id = 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       this.playlists.push({ id, name: name || t('未命名歌单'), songIds: [] });

@@ -4,6 +4,8 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick } 
 import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
+import { useCloudStore } from '../stores/cloud';
+import CloudSyncChoiceDialog from './CloudSyncChoiceDialog.vue';
 import { t, setLang, getLang } from '../core/i18n.js';
 
 const app = useAppStore();
@@ -18,12 +20,19 @@ import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../
 const bridge = window.fuBridge;
 const settingsStore = useSettingsStore();
 
+/* ---- 云同步：账号状态共享自 stores/cloud；此处仅保留同步与管理功能 ---- */
+const cloud = useCloudStore();
+// 立即同步：先弹选择框，让用户决定以本机还是云端存档为准
+const syncChoiceOpen = ref(false);
+onMounted(() => cloud.init());
+
 const TABS = [
   { id: 'appearance', label: '外观', icon: 'palette' },
   { id: 'gpu', label: 'GPU', icon: 'zap' },
   { id: 'feature', label: '功能', icon: 'folder' },
   { id: 'keys', label: '快捷键', icon: 'kbd' },
   { id: 'plugins', label: '插件', icon: 'spark' },
+  { id: 'cloud', label: '云同步', icon: 'cloud' },
   { id: 'update', label: '更新', icon: 'download' },
 ];
 const tab = ref('appearance');
@@ -967,6 +976,53 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
             </div>
           </div>
         </div>
+        <div v-else-if="tab === 'cloud'">
+          <p class="ov-note">{{ t('把电脑端的歌单与 MIDI 歌曲上传到云端，并在手机端同步。') }}</p>
+
+          <template v-if="cloud.account">
+            <div class="field-row">
+              <div>
+                <div class="fr-label">{{ t('当前账号') }}</div>
+                <div class="fr-hint">{{ cloud.account.email }}</div>
+              </div>
+              <div class="fr-ctl">
+                <button class="btn sm ghost" @click="cloud.logout()" :disabled="cloud.busy">{{ cloud.busy ? t('处理中…') : t('退出登录') }}</button>
+              </div>
+            </div>
+            <div class="field-row">
+              <div>
+                <div class="fr-label">{{ t('同步歌单与歌曲') }}</div>
+                <div class="fr-hint">{{ t('将本地歌单/歌曲上传云端，并拉取其他设备的新增与修改。') }}</div>
+              </div>
+              <div class="fr-ctl">
+                <button class="btn sm primary" @click="syncChoiceOpen = true" :disabled="cloud.busy">{{ cloud.busy ? t('同步中…') : t('立即同步') }}</button>
+              </div>
+            </div>
+            <div class="field-row">
+              <div>
+                <div class="fr-label">{{ t('同步曲目存放目录') }}</div>
+                <div class="fr-hint">{{ cloud.dir || '—' }}</div>
+              </div>
+            </div>
+            <div v-if="cloud.err" style="font-size:12px;color:#e05858;margin-top:6px">{{ cloud.err }}</div>
+            <div v-if="cloud.last && cloud.last.ok" style="font-size:12px;color:var(--stone);margin-top:6px">
+              上传 {{ cloud.last.uploadedSongs }} 曲 / {{ cloud.last.uploadedPlaylists }} 单，下载 {{ cloud.last.downloadedSongs }} 曲，歌单共 {{ cloud.last.appliedPlaylists }} 个
+            </div>
+            <div v-if="cloud.last && cloud.last.ok && cloud.last.missingBytes" style="font-size:12px;color:#e0a558;margin-top:4px">
+              注意：有 {{ cloud.last.missingBytes }} 首曲目在本机找不到 MIDI 内容（曲库记录与本地缓存都没有字节），已跳过备份。请重新导入这些文件后再同步。
+            </div>
+          </template>
+
+          <template v-else>
+            <div class="field-row">
+              <div>
+                <div class="fr-label">{{ t('未登录') }}</div>
+                <div class="fr-hint">{{ t('请点击左下角用户头像登录 / 注册后进行云同步。') }}</div>
+              </div>
+            </div>
+            <div v-if="cloud.err" style="font-size:12px;color:#e05858;margin-top:6px">{{ cloud.err }}</div>
+          </template>
+        </div>
       </div>
 
       <div class="settings-foot">
@@ -974,5 +1030,8 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
         <button class="btn primary" @click="apply">{{ t('保存') }}</button>
       </div>
     </div>
+
+    <!-- 立即同步：先选择以本机还是云端存档为准 -->
+    <CloudSyncChoiceDialog :open="syncChoiceOpen" @close="syncChoiceOpen = false" />
   </div>
 </template>

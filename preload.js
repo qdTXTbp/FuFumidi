@@ -188,6 +188,10 @@ contextBridge.exposeInMainWorld('fuBridge', {
   dbSongsDelete: (id) => ipcRenderer.invoke('db:songs:delete', id),
   dbPlaylistsList: () => ipcRenderer.invoke('db:playlists:list'),
   dbPlaylistsPut: (item) => ipcRenderer.invoke('db:playlists:put', item),
+  dbPlaylistsDelete: (id) => ipcRenderer.invoke('db:playlists:delete', id),
+  // 云同步下发的曲目落盘到独立目录（与本地曲库分开）
+  dbCloudSongPut: (name, bytes) => ipcRenderer.invoke('db:cloud-song:put', name, bytes),
+  dbCloudSongDir: () => ipcRenderer.invoke('db:cloud-song:dir'),
   // 应用事件通知（song-loaded / view-changed 等 → 插件事件钩子）
   notify: (ev, payload) => ipcRenderer.send('app:event', ev, payload),
 });

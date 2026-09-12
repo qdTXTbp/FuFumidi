@@ -14,11 +14,11 @@
 
 FuFumidi is a fully offline desktop workstation for MIDI. It targets musicians, arrangers, transcriptionists and film composers who need a single tool that can go from raw audio to a clean, editable, publishable MIDI/score asset without ever leaving the machine.
 
-The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally. Nothing is uploaded.
+The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally; transcription and editing never upload anything. Only when you opt in to cloud sync does your playlist and MIDI library get uploaded to your own cloud account.
 
-Current release line: **3.4.0** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v3.4.0)).
+Current release line: **4.0.0** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v4.0.0)).
 
-What's new in 3.4.0: a MuScriptor transcription stability fix — the "beat grid detection" weights are now bundled into the Resource Center (downloaded via domestic mirrors, stored inside the app folder, no longer depending on foreign sources or leaking to the system cache), with an on/off toggle before transcribing and graceful auto-skip if the weights are missing or fail to load, fixing the `final0` checkpoint load error that broke transcription in v3.3.1.
+What's new in 4.0.0: cloud sync — sign up / sign in with an email account (bot check included), back up playlists and MIDI songs to Cloudflare D1 + R2, and sync two-way with the FuMiVoice mobile app. Manual sync asks whether the local or the cloud archive should win. Also fixes three bugs: large libraries (hundreds of songs) aborting mid-sync, playlists never being uploaded, and some songs being backed up as metadata only without their MIDI content.
 
 ### What it does
 

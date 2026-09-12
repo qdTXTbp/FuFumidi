@@ -385,6 +385,10 @@ export interface FuBridge {
   dbSongsDelete(id: string): Promise<boolean>;
   dbPlaylistsList(): Promise<any[]>;
   dbPlaylistsPut(item: any): Promise<boolean>;
+  dbPlaylistsDelete(id: string): Promise<boolean>;
+  /** 云同步：把下发的曲目落盘到独立目录（<userData>/fufumidi/cloud-songs） */
+  dbCloudSongPut(name: string, bytes: number[] | Uint8Array): Promise<boolean>;
+  dbCloudSongDir(): Promise<string>;
 
   // app events
   notify(ev: string, payload: any): void;

@@ -1,0 +1,42 @@
+# ============================================================
+# 云端同步后端 Cloudflare Worker 配置
+# 部署前请替换以下占位值：
+#   account_id        -> 你的 CF Account ID
+#   database_id       -> 已创建的 D1 数据库 ID
+#   TURNSTILE_SECRET  -> Turnstile Secret Key（.dev.vars 或 --secret）
+#   RESEND_API_KEY    -> Resend 邮件服务的 API Key（用于发邮箱验证码）
+# ============================================================
+name = "fufumidi-cloud-sync"
+main = "src/index.js"
+compatibility_date = "2024-09-01"
+compatibility_flags = ["nodejs_compat"]
+account_id = "3b038b2931865bbba88904de408ba5c4"
+workers_dev = true
+
+# R2 存储：MIDI 文件体存 R2（已在 dashboard 创建 fufumidi-midi 桶）
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "fufumidi-midi"
+preview_bucket_name = "fufumidi-midi"
+
+# D1 数据库：账号/会话/歌单引用/歌曲元数据仍存于此
+[[d1_databases]]
+binding = "DB"
+database_name = "fufumidi-cloud-sync"
+database_id = "9e0774aa-2ac2-46f7-8605-8fa661603054"
+
+[vars]
+# MIDI 文件体存储：d1（存 BLOB）或 r2（存对象）。当前用 r2
+STORAGE_PROVIDER = "r2"
+# 业务展示用，仅用于提示
+APP_NAME = "FuMiVoice Cloud Sync"
+# Turnstile 站点密钥（公开值，可明文放 vars；配套 Secret 用 wrangler secret put TURNSTILE_SECRET）
+TURNSTILE_SITE_KEY = "0x4AAAAAAEw9YF870FXnrS6y"
+
+
+
+
+
+
+
+

@@ -146,9 +146,40 @@ function createDbService({ app, path: p, fs: f }) {
     return Object.values(jsonData.playlists);
   }
 
+  async function playlistDelete(id) {
+    if (!id) return false;
+    await enqueueWrite(async () => {
+      await init();
+      if (mode === 'sqlite' && db) {
+        db.run('DELETE FROM playlists WHERE id = ?', [id]);
+      } else {
+        delete jsonData.playlists[id];
+      }
+      persist();
+    });
+    return true;
+  }
+
   async function status() {
     await init();
     return { ok: true, mode, dbPath, jsonPath };
+  }
+
+  // 云同步曲目落盘目录：与本地曲库分开存放，便于查看、备份与单独清理
+  const cloudSongsDir = p.join(dbDir, 'cloud-songs');
+  function cloudSongsDirPath() { return cloudSongsDir; }
+  async function cloudSongPut(name, bytes) {
+    try {
+      const file = String(name || '').trim();
+      if (!file) return false;
+      f.mkdirSync(cloudSongsDir, { recursive: true });
+      // 只保留纯文件名，避免云端 id 里的路径分隔符写到目录之外
+      const safe = file.replace(/[\\/:*?"<>|]/g, '_');
+      f.writeFileSync(p.join(cloudSongsDir, safe), Buffer.from(bytes || []));
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   function registerDbIpc({ ipcMain }) {
@@ -160,6 +191,10 @@ function createDbService({ app, path: p, fs: f }) {
     ipcMain.handle('db:songs:delete', (_e, id) => songDelete(id));
     ipcMain.handle('db:playlists:list', () => playlistsAll());
     ipcMain.handle('db:playlists:put', (_e, item) => playlistPut(item));
+    ipcMain.handle('db:playlists:delete', (_e, id) => playlistDelete(id));
+    // 云同步：把下发的曲目落盘到独立目录，并返回该目录路径（界面展示用）
+    ipcMain.handle('db:cloud-song:put', (_e, name, bytes) => cloudSongPut(name, bytes));
+    ipcMain.handle('db:cloud-song:dir', () => cloudSongsDirPath());
   }
 
   function close() {
@@ -169,7 +204,7 @@ function createDbService({ app, path: p, fs: f }) {
     });
   }
 
-  return { init, status, kvGet, kvSet, songPut, songsAll, songDelete, playlistPut, playlistsAll, registerDbIpc, close };
+  return { init, status, kvGet, kvSet, songPut, songsAll, songDelete, playlistPut, playlistsAll, registerDbIpc, close, cloudSongPut, cloudSongsDirPath };
 }
 
 module.exports = { createDbService };

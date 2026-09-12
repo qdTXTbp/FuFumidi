@@ -1,0 +1,15 @@
+{
+  "name": "fufumidi-cloud-sync",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 migrations apply DB",
+    "db:create": "wrangler d1 create fufumidi-cloud-sync"
+  },
+  "devDependencies": {
+    "wrangler": "^3.80.0"
+  }
+}
