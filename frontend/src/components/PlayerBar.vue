@@ -4,6 +4,7 @@ import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
 import { getPlayer, getCtx, getSynth } from '../audio.js';
 import { t } from '../core/i18n.js';
+import { GM_INSTRUMENTS, gmByProgram } from '../core/gmInstruments.js';
 import { initMidiOutput, setMidiOutEnabled, midiOutOn, midiOutOff, midiAllOff, getMidiOutDeviceName } from '../core/midiout.js';
 
 const app = useAppStore();
@@ -91,6 +92,29 @@ async function toggleMidiOut() {
 
 /* ---------------- 混音台弹窗 ---------------- */
 const mixerOpen = ref(false);
+// 音色选择：instrumentFor 为正在换音色的轨道序号；instQuery 为搜索词
+const instrumentFor = ref(null);
+const instQuery = ref('');
+function openInstrument(i) { instrumentFor.value = i; instQuery.value = ''; }
+function closeInstrument() { instrumentFor.value = null; instQuery.value = ''; }
+function instPicked(i, prog) { app.setTrackProgram(i, prog); instQuery.value = ''; }
+function instReset(i) { app.setTrackProgram(i, -1); instQuery.value = ''; }
+function instrumentNameOf(program) {
+  const it = gmByProgram(program);
+  return it ? it.name : (program >= 0 ? (program + 1) : '');
+}
+function instrumentFamilyOf(program) {
+  const it = gmByProgram(program);
+  return it ? it.family : '';
+}
+const instFiltered = computed(() => {
+  const q = instQuery.value.trim().toLowerCase();
+  if (!q) return GM_INSTRUMENTS;
+  return GM_INSTRUMENTS.filter(it =>
+    it.name.toLowerCase().includes(q) ||
+    it.englishName.toLowerCase().includes(q) ||
+    it.family.toLowerCase().includes(q));
+});
 function panStyle(i) {
   const v = state.tracks[i]?.pan || 0;
   return { '--fill': ((v + 1) / 2) * 100 + '%' };
@@ -108,7 +132,7 @@ function next() {
 }
 const playMode = computed(() => state.playMode || 'order');
 const modeIcon = computed(() => ({ order: 'modeOrder', shuffle: 'shuffle', repeatOne: 'repeat1', loopAll: 'refresh' }[playMode.value] || 'modeOrder'));
-const modeTitle = computed(() => ({ order: '顺序播放', shuffle: '随机播放', repeatOne: '单曲循环', loopAll: '列表循环' }[playMode.value] || '播放模式'));
+const modeTitle = computed(() => ({ order: t('顺序播放'), shuffle: t('随机播放'), repeatOne: t('单曲循环'), loopAll: t('列表循环') }[playMode.value] || t('播放模式')));
 function cycleMode() { app.cyclePlayMode(); }
 
 /* ---------------- 书签 & 睡眠定时 ---------------- */
@@ -178,13 +202,13 @@ function toggleCrossfade() {
   <footer class="playerbar" :class="{ compact }">
     <div class="pb-main">
       <div class="pb-transport">
-        <button class="tp-btn" :title="t('播放模式：') + modeTitle" aria-label="t('播放模式')" @click="cycleMode" :class="{ on: playMode !== 'order' }"><Icon :name="modeIcon" :size="15" /></button>
-        <button class="tp-btn" :title="t('上一首')" aria-label="t('上一首')" @click="prev" :disabled="!currentSong"><Icon name="prev" :size="17" /></button>
+        <button class="tp-btn" :title="t('播放模式：') + modeTitle" :aria-label="t('播放模式')" @click="cycleMode" :class="{ on: playMode !== 'order' }"><Icon :name="modeIcon" :size="15" /></button>
+        <button class="tp-btn" :title="t('上一首')" :aria-label="t('上一首')" @click="prev" :disabled="!currentSong"><Icon name="prev" :size="17" /></button>
         <button class="tp-play" :class="{ playing: state.playing }" :title="state.playing ? t('暂停') : t('播放')" @click="togglePlay">
           <Icon :name="state.playing ? 'pause' : 'play'" :size="20" />
         </button>
-        <button class="tp-btn" :title="t('停止')" aria-label="t('停止')" @click="stopPlay" :disabled="!currentSong"><Icon name="stop" :size="16" /></button>
-        <button class="tp-btn" :title="t('下一首')" aria-label="t('下一首')" @click="next" :disabled="!currentSong"><Icon name="next" :size="17" /></button>
+        <button class="tp-btn" :title="t('停止')" :aria-label="t('停止')" @click="stopPlay" :disabled="!currentSong"><Icon name="stop" :size="16" /></button>
+        <button class="tp-btn" :title="t('下一首')" :aria-label="t('下一首')" @click="next" :disabled="!currentSong"><Icon name="next" :size="17" /></button>
         <button class="tp-btn" :title="t('添加书签（记录当前进度）')" @click="addBk" :disabled="!currentSong"><Icon name="target" :size="15" /></button>
         <button v-if="bks.length" class="tp-btn" :class="{ on: bkOpen }" :title="t('书签列表')" @click="toggleBkList"><Icon name="chevron" :size="14" /></button>
         <button class="tp-btn" :class="{ on: state.sleepUntil > 0 }" :title="sleepTitle" @click="sleepOpen = !sleepOpen; bkOpen = false"><Icon name="clock" :size="15" /></button>
@@ -209,33 +233,33 @@ function toggleCrossfade() {
 
     <div class="pb-progress">
       <div class="pb-time"><span>{{ curStr }}</span><span>{{ totalStr }}</span></div>
-      <input id="pb-progress" name="pb-progress" type="range" aria-label="t('播放进度')" min="0" max="1" step="0.0001" :style="pbStyle" :value="displayProgress"
+      <input id="pb-progress" name="pb-progress" type="range" :aria-label="t('播放进度')" min="0" max="1" step="0.0001" :style="pbStyle" :value="displayProgress"
              @pointerdown="onProgressDragStart" @pointerup="onProgressDragEnd" @pointercancel="onProgressDragEnd"
              @input="onProgressInput">
     </div>
 
     <div class="pb-right">
-      <button class="tp-btn" :class="{ 'toggle-on': midiOn }" :title="t('MIDI 硬件输出')" aria-label="t('MIDI 硬件输出')" @click="toggleMidiOut"><Icon name="music" :size="16" /></button>
-      <button class="tp-btn" :class="{ 'toggle-on': state.loop }" :title="t('循环播放')" aria-label="t('循环播放')" @click="toggleLoop" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="loop" :size="16" /></button>
-      <button class="tp-btn" :class="{ 'toggle-on': state.metro }" title="节拍器" aria-label="t('节拍器')" @click="toggleMetro" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="metro" :size="16" /></button>
-      <button class="tp-btn" :class="{ 'toggle-on': mixerOpen }" :title="t('混音台')" aria-label="t('混音台')" @click="mixerOpen = !mixerOpen" :disabled="isAudio || !state.tracks.length" :style="isAudio ? { opacity: .4 } : null"><Icon name="cclane" :size="16" /></button>
-      <button class="tp-btn" :class="{ 'toggle-on': fxOpen || fx.enabled }" :title="t('音效调节')" aria-label="t('音效调节')" @click="toggleFxOpen"><Icon name="cresc" :size="16" /></button>
-      <button class="tp-btn" :class="{ 'toggle-on': compact }" :title="t('紧凑/完整播放栏')" aria-label="t('紧凑/完整播放栏')" @click="compact = !compact"><Icon name="menu" :size="16" /></button>
+      <button class="tp-btn" :class="{ 'toggle-on': midiOn }" :title="t('MIDI 硬件输出')" :aria-label="t('MIDI 硬件输出')" @click="toggleMidiOut"><Icon name="music" :size="16" /></button>
+      <button class="tp-btn" :class="{ 'toggle-on': state.loop }" :title="t('循环播放')" :aria-label="t('循环播放')" @click="toggleLoop" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="loop" :size="16" /></button>
+      <button class="tp-btn" :class="{ 'toggle-on': state.metro }" :title="t('节拍器')" :aria-label="t('节拍器')" @click="toggleMetro" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="metro" :size="16" /></button>
+      <button class="tp-btn" :class="{ 'toggle-on': mixerOpen }" :title="t('混音台')" :aria-label="t('混音台')" @click="mixerOpen = !mixerOpen" :disabled="isAudio || !state.tracks.length" :style="isAudio ? { opacity: .4 } : null"><Icon name="cclane" :size="16" /></button>
+      <button class="tp-btn" :class="{ 'toggle-on': fxOpen || fx.enabled }" :title="t('音效调节')" :aria-label="t('音效调节')" @click="toggleFxOpen"><Icon name="cresc" :size="16" /></button>
+      <button class="tp-btn" :class="{ 'toggle-on': compact }" :title="t('紧凑/完整播放栏')" :aria-label="t('紧凑/完整播放栏')" @click="compact = !compact"><Icon name="menu" :size="16" /></button>
 
       <div class="row" style="gap:4px">
-        <button class="chip-btn" @click="stepTempo(-0.05)" :title="t('减速')" aria-label="t('减速')">−</button>
-        <input id="pb-tempo" name="pb-tempo" class="num-input" aria-label="t('速度倍率')" type="number" min="0.25" max="4" step="0.05" v-model.number="state.tempo" style="width:52px;text-align:center" :title="t('速度倍率')">
-        <button class="chip-btn" @click="stepTempo(0.05)" :title="t('加速')" aria-label="t('加速')">＋</button>
+        <button class="chip-btn" @click="stepTempo(-0.05)" :title="t('减速')" :aria-label="t('减速')">−</button>
+        <input id="pb-tempo" name="pb-tempo" class="num-input" :aria-label="t('速度倍率')" type="number" min="0.25" max="4" step="0.05" v-model.number="state.tempo" style="width:52px;text-align:center" :title="t('速度倍率')">
+        <button class="chip-btn" @click="stepTempo(0.05)" :title="t('加速')" :aria-label="t('加速')">＋</button>
       </div>
 
       <div class="bpm-wrap">
-        <input id="pb-bpm" name="pb-bpm" class="num-input" aria-label="t('BPM（修改后应用到歌曲）')" type="number" min="20" max="400" step="1" v-model.number="bpmVal" style="width:64px;text-align:center" :title="t('BPM（修改后应用到歌曲）')">
+        <input id="pb-bpm" name="pb-bpm" class="num-input" :aria-label="t('BPM（修改后应用到歌曲）')" type="number" min="20" max="400" step="1" v-model.number="bpmVal" style="width:64px;text-align:center" :title="t('BPM（修改后应用到歌曲）')">
         <span class="bpm-lbl">BPM</span>
       </div>
 
       <div class="vol-wrap">
         <span class="vol-ic"><Icon name="volume" :size="16" /></span>
-        <input id="pb-volume" name="pb-volume" type="range" aria-label="t('音量')" min="0" max="1" step="0.01" :style="volStyle" :value="state.volume" @input="setVolume(parseFloat($event.target.value))">
+        <input id="pb-volume" name="pb-volume" type="range" :aria-label="t('音量')" min="0" max="1" step="0.01" :style="volStyle" :value="state.volume" @input="setVolume(parseFloat($event.target.value))">
       </div>
     </div>
 
@@ -247,8 +271,8 @@ function toggleCrossfade() {
       <div v-if="mixerOpen" class="mx-overlay" @click.self="mixerOpen = false">
       <div class="mx-card">
         <div class="mx-head">
-          <b>混音台</b>
-          <button class="icon-btn" @click="mixerOpen = false" title="关闭"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
+          <b>{{ t('混音台') }}</b>
+          <button class="icon-btn" @click="mixerOpen = false" :title="t('关闭')"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
         </div>
         <div class="muted small" style="padding:0 2px 8px">{{ t('音量/静音/独奏/声像作用于 MIDI 通道：同一通道上的多条轨会一起变化') }}</div>
         <div v-if="!state.tracks.length" class="muted small" style="padding:12px 4px">{{ t('当前曲目没有可混音的轨道') }}</div>
@@ -256,11 +280,15 @@ function toggleCrossfade() {
           <span class="mt-color" :style="{ background: tr.color }"></span>
           <div class="mt-name">
             <b>{{ tr.name }}</b>
-            <small>Ch {{ (tr.ch || 0) + 1 }} · 音色 #{{ tr.program }}{{ tr.isDrum ? t(' · 打击乐') : '' }} · {{ tr.noteCount }} 音符</small>
+            <button v-if="!tr.isDrum" class="mt-inst" :title="t('点击更换音色')" @click="openInstrument(i)">
+              <small>{{ t(instrumentNameOf(tr.program)) }}<em v-if="instrumentFamilyOf(tr.program)"> · {{ t(instrumentFamilyOf(tr.program)) }}</em></small>
+              <Icon name="target" :size="11" />
+            </button>
+            <small v-else>Ch {{ (tr.ch || 0) + 1 }} · {{ t('打击乐') }} · {{ tr.noteCount }}{{ t(' 音符') }}</small>
           </div>
           <div class="mt-ctl">
-            <button class="chip-btn" :class="{ 'on-solo': tr.solo }" :title="t('独奏')" aria-label="t('独奏')" @click="toggleTrackSolo(i)">S</button>
-            <button class="chip-btn" :class="{ 'on-mute': tr.mute }" :title="t('静音')" aria-label="t('静音')" @click="toggleTrackMute(i)">M</button>
+            <button class="chip-btn" :class="{ 'on-solo': tr.solo }" :title="t('独奏')" :aria-label="t('独奏')" @click="toggleTrackSolo(i)">S</button>
+            <button class="chip-btn" :class="{ 'on-mute': tr.mute }" :title="t('静音')" :aria-label="t('静音')" @click="toggleTrackMute(i)">M</button>
           </div>
           <div class="mt-vol" :title="t('音量 ') + Math.round(tr.vol * 100) + '%'">
             <input type="range" min="0" max="1" step="0.01" :style="{ '--fill': tr.vol * 100 + '%' }"
@@ -273,6 +301,36 @@ function toggleCrossfade() {
             <span class="muted small">R</span>
           </div>
         </div>
+
+        <!-- 音色选择浮层（覆盖在混音台卡片内；选择即生效，可反复试听，完成/恢复后关闭） -->
+        <div v-if="instrumentFor" class="mx-instr-mask" @click.self="closeInstrument">
+          <div class="mx-instr">
+            <div class="mx-head">
+              <b>{{ t('选择音色') }}</b>
+              <button class="icon-btn" @click="closeInstrument" :title="t('关闭')"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
+            </div>
+            <div class="mx-inst-search">
+              <Icon name="search" :size="13" />
+              <input v-model="instQuery" class="text-input" :placeholder="t('搜索音色，如「钢琴」')" autofocus />
+            </div>
+            <div class="mx-inst-list">
+              <button v-for="it in instFiltered" :key="it.program" class="mx-inst-item"
+                      :class="{ sel: it.program === state.tracks[instrumentFor].program }"
+                      @click="instPicked(instrumentFor, it.program)">
+                <span class="muted small" style="width:32px;flex:none">{{ ('00' + (it.program + 1)).slice(-3) }}</span>
+                <span class="mx-inst-names">
+                  <b>{{ t(it.name) }}</b>
+                  <small>{{ it.englishName }} · {{ it.family }}</small>
+                </span>
+              </button>
+              <div v-if="!instFiltered.length" class="muted small" style="padding:12px 4px">{{ t('没有匹配的音色') }}</div>
+            </div>
+            <div class="mx-inst-foot">
+              <button class="btn sm ghost" @click="instReset(instrumentFor)">{{ t('恢复文件音色') }}</button>
+              <button class="btn sm" @click="closeInstrument">{{ t('完成') }}</button>
+            </div>
+          </div>
+        </div>
       </div>
       </div>
     </Transition>
@@ -282,7 +340,7 @@ function toggleCrossfade() {
       <div class="mx-card">
         <div class="mx-head">
           <b>{{ t('音效调节') }}</b>
-          <button class="icon-btn" @click="fxOpen = false" title="关闭"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
+          <button class="icon-btn" @click="fxOpen = false" :title="t('关闭')"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
         </div>
         <div class="eq-toolbar">
           <label class="eq-switch">
@@ -292,7 +350,7 @@ function toggleCrossfade() {
             <input type="checkbox" :checked="crossfadeOn" @change="toggleCrossfade"><span>{{ t('曲尾淡出') }}</span>
           </label>
           <select class="eq-preset" :value="fx.preset" @change="applyPreset($event.target.value)">
-            <option v-for="(p, k) in EQ_PRESETS" :key="k" :value="k">{{ p.name }}</option>
+            <option v-for="(p, k) in EQ_PRESETS" :key="k" :value="k">{{ t(p.name) }}</option>
             <option value="custom">{{ t('自定义') }}</option>
           </select>
         </div>
@@ -373,6 +431,51 @@ function toggleCrossfade() {
   border-radius: 16px;
   box-shadow: var(--shadow-lg); padding: 14px;
 }
+/* 音色选择浮层 */
+.mx-instr-mask {
+  position: absolute; inset: 0; z-index: 5;
+  background: rgba(10, 10, 10, 0.35); border-radius: 16px;
+  display: flex; align-items: stretch; justify-content: center;
+}
+.mx-card { position: relative; }
+.mx-instr {
+  width: 100%; max-width: 440px; margin: 10px;
+  display: flex; flex-direction: column;
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+  border: 1px solid color-mix(in srgb, #fff 26%, transparent);
+  border-radius: 12px; padding: 12px;
+}
+.mx-inst-search {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; margin-bottom: 8px;
+  border: 1px solid var(--border); border-radius: 9px;
+  color: var(--steel);
+}
+.mx-inst-list {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 2px;
+  padding-right: 2px;
+}
+.mx-inst-item {
+  display: flex; align-items: center; gap: 8px; text-align: left;
+  padding: 6px 8px; border-radius: 8px; background: none; border: none;
+  color: var(--ink); cursor: pointer;
+}
+.mx-inst-item:hover { background: var(--surface-soft); }
+.mx-inst-item.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
+.mx-inst-names { display: flex; flex-direction: column; min-width: 0; }
+.mx-inst-names b { font-size: 13px; font-weight: 600; }
+.mx-inst-names small { font-size: 11.5px; color: var(--stone); }
+.mx-inst-foot { display: flex; justify-content: space-between; gap: 8px; padding-top: 10px; }
+.mt-inst {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: none; border: none; cursor: pointer; padding: 0;
+  color: var(--accent);
+}
+.mt-inst small { font-size: 11.5px; color: var(--accent); }
+.mt-inst em { font-style: normal; opacity: 0.7; color: var(--stone); }
+.mt-inst:hover small { text-decoration: underline; }
 .mx-head {
   display: flex; align-items: center; justify-content: space-between;
   font-size: 14px; font-weight: 700; color: var(--ink);

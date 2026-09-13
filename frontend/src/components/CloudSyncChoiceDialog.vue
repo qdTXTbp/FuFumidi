@@ -48,8 +48,8 @@ const cloudEmpty = computed(() => {
 
           <div style="display:flex;flex-direction:column;gap:10px;padding:4px 2px">
             <template v-if="cloud.counts">
-              <div class="muted" style="font-size:12px">{{ t('本机存档') }}：{{ cloud.counts.localSongs }} {{ t('曲') }} / {{ cloud.counts.localPlaylists }} {{ t('个歌单') }}</div>
-              <div class="muted" style="font-size:12px">{{ t('云端存档') }}：{{ cloud.counts.cloudSongs }} {{ t('曲') }} / {{ cloud.counts.cloudPlaylists }} {{ t('个歌单') }}</div>
+              <div class="muted" style="font-size:12px">{{ t('本机存档') }}{{ t('：') }}{{ cloud.counts.localSongs }} {{ t('曲') }} / {{ cloud.counts.localPlaylists }} {{ t('个歌单') }}</div>
+              <div class="muted" style="font-size:12px">{{ t('云端存档') }}{{ t('：') }}{{ cloud.counts.cloudSongs }} {{ t('曲') }} / {{ cloud.counts.cloudPlaylists }} {{ t('个歌单') }}</div>
               <div class="muted" style="font-size:12px">{{ t('请选择以哪一份为准；选择后另一份将被覆盖。') }}</div>
             </template>
             <div v-else style="font-size:12px;color:var(--stone)">

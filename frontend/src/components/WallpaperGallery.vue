@@ -152,7 +152,7 @@ onMounted(load);
       <div class="settings-head">
         <Icon name="wallpaper" :size="17" />
         <span class="settings-title">{{ t('壁纸库') }}</span>
-        <button class="icon-btn" style="margin-left:auto;width:30px;height:30px" :title="t('关闭')" aria-label="t('关闭')" @click="closeWallpaperGallery">
+        <button class="icon-btn" style="margin-left:auto;width:30px;height:30px" :title="t('关闭')" :aria-label="t('关闭')" @click="closeWallpaperGallery">
           <Icon name="close" :size="15" />
         </button>
       </div>
@@ -174,7 +174,7 @@ onMounted(load);
           </div>
           <div class="wp-card-dl" v-else-if="item.local" :title="t('已下载')"><Icon name="check" :size="15" /></div>
           <div class="wp-card-dl" v-else><Icon name="download" :size="16" /></div>
-          <button v-if="item.local" class="wp-card-del" :title="t('删除壁纸')" aria-label="t('删除壁纸')" @click.stop="removeLocalItem(item, i)">
+          <button v-if="item.local" class="wp-card-del" :title="t('删除壁纸')" :aria-label="t('删除壁纸')" @click.stop="removeLocalItem(item, i)">
             <Icon name="trash" :size="13" />
           </button>
         </button>

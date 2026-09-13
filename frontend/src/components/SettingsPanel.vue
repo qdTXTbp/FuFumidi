@@ -26,15 +26,15 @@ const cloud = useCloudStore();
 const syncChoiceOpen = ref(false);
 onMounted(() => cloud.init());
 
-const TABS = [
-  { id: 'appearance', label: '外观', icon: 'palette' },
+const TABS = computed(() => [
+  { id: 'appearance', label: t('外观'), icon: 'palette' },
   { id: 'gpu', label: 'GPU', icon: 'zap' },
-  { id: 'feature', label: '功能', icon: 'folder' },
-  { id: 'keys', label: '快捷键', icon: 'kbd' },
-  { id: 'plugins', label: '插件', icon: 'spark' },
-  { id: 'cloud', label: '云同步', icon: 'cloud' },
-  { id: 'update', label: '更新', icon: 'download' },
-];
+  { id: 'feature', label: t('功能'), icon: 'folder' },
+  { id: 'keys', label: t('快捷键'), icon: 'kbd' },
+  { id: 'plugins', label: t('插件'), icon: 'spark' },
+  { id: 'cloud', label: t('云同步'), icon: 'cloud' },
+  { id: 'update', label: t('更新'), icon: 'download' },
+]);
 const tab = ref('appearance');
 
 // 标签页切换：对设置卡片高度做柔和非线性补间（从旧高度过渡到新内容自然高度）
@@ -115,8 +115,8 @@ const rustInfo = ref({ available: false, version: '', binary: null });
 const plugins = ref([]);
 const pluginLog = ref('');
 
-/* ---------------- 快捷键（只读展示） ---------------- */
-const KEYMAP = [
+/* ---------------- 快捷键（只读展示，computed 以随语言切换刷新） ---------------- */
+const KEYMAP = computed(() => [
   { keys: ['Space'], label: t('播放 / 暂停') },
   { keys: ['←', '→'], label: t('快退 / 快进') },
   { keys: ['L'], label: t('切换循环') },
@@ -140,7 +140,7 @@ const KEYMAP = [
   { keys: ['Alt', '拖拽'], label: t('编辑器调整力度') },
   { keys: ['Shift', '拖拽'], label: t('吸附到音符（歌词/编辑器）') },
   { keys: ['Ctrl', '拖拽'], label: t('吸附到网格') },
-];
+]);
 
 /* ---------------- 初始化 ---------------- */
 async function load() {
@@ -198,32 +198,32 @@ function onLang() {
 /* ---------------- 更新 ---------------- */
 // 简化更新：只显示当前版本号 + 检查更新。检查到新版本 → 弹窗询问是否更新。
 async function updLaunch() {
-  if (!bridge || !bridge.updateCheck) { upd.status = '当前环境不支持检查更新'; upd.failed = true; return; }
-  upd.status = '正在检查更新…'; upd.failed = false; upd.launched = false;
+  if (!bridge || !bridge.updateCheck) { upd.status = t('当前环境不支持检查更新'); upd.failed = true; return; }
+  upd.status = t('正在检查更新…'); upd.failed = false; upd.launched = false;
   try {
     const r = await bridge.updateCheck();
-    if (!r || !r.ok) { upd.status = (r && r.error) || '检查失败'; upd.failed = true; return; }
+    if (!r || !r.ok) { upd.status = (r && r.error) || t('检查失败'); upd.failed = true; return; }
     const cur = String(r.current || '');
     const latest = String(r.latest || '');
     if (cur === latest) {
-      upd.status = '已是最新版本（' + cur + '）';
+      upd.status = t('已是最新版本（') + cur + t('）');
       return;
     }
-    if (!bridge.update || !bridge.update.launchUpdater) { upd.status = '当前环境不支持增量更新器'; upd.failed = true; return; }
+    if (!bridge.update || !bridge.update.launchUpdater) { upd.status = t('当前环境不支持增量更新器'); upd.failed = true; return; }
     const ok = await app.confirmDialog({ msg: t('发现新版本 ') + latest + t('，当前 ') + cur + t('。\n是否启动更新器增量更新？') });
-    if (!ok) { upd.status = '已取消'; return; }
-    if (!bridge.update || !bridge.update.launchUpdater) { upd.status = '当前环境不支持增量更新器'; upd.failed = true; return; }
-    upd.status = '正在启动更新器…';
+    if (!ok) { upd.status = t('已取消'); return; }
+    if (!bridge.update || !bridge.update.launchUpdater) { upd.status = t('当前环境不支持增量更新器'); upd.failed = true; return; }
+    upd.status = t('正在启动更新器…');
     const rr = await bridge.update.launchUpdater(latest);
     if (rr && rr.ok) {
-      upd.status = '更新器已启动，下载与更新进度请在更新器窗口内查看…';
+      upd.status = t('更新器已启动，下载与更新进度请在更新器窗口内查看…');
       upd.launched = true;
     } else {
-      upd.status = (rr && rr.error) || '启动失败';
+      upd.status = (rr && rr.error) || t('启动失败');
       upd.failed = true;
     }
   } catch (e) {
-    upd.status = '检查更新失败：' + ((e && e.message) || e);
+    upd.status = t('检查更新失败：') + ((e && e.message) || e);
     upd.failed = true;
   }
 }
@@ -233,18 +233,18 @@ async function updLaunch() {
 async function doUninstall() {
   const ok = await app.confirmDialog({ msg: t('确定要卸载 FuFumidi 吗？\n将启动系统卸载程序，应用会自动退出并移除本机安装。') });
   if (!ok) return;
-  if (!bridge || !bridge.appUninstall) { upd.status = '当前环境不支持卸载'; upd.failed = true; return; }
-  upd.status = '正在启动卸载程序…'; upd.failed = false;
+  if (!bridge || !bridge.appUninstall) { upd.status = t('当前环境不支持卸载'); upd.failed = true; return; }
+  upd.status = t('正在启动卸载程序…'); upd.failed = false;
   try {
     const r = await bridge.appUninstall();
     if (r && r.ok) {
-      upd.status = '卸载程序已启动，应用即将退出…';
+      upd.status = t('卸载程序已启动，应用即将退出…');
     } else {
-      upd.status = (r && r.error) || '启动失败';
+      upd.status = (r && r.error) || t('启动失败');
       upd.failed = true;
     }
   } catch (e) {
-    upd.status = '卸载启动失败：' + ((e && e.message) || e);
+    upd.status = t('卸载启动失败：') + ((e && e.message) || e);
     upd.failed = true;
   }
 }
@@ -284,7 +284,7 @@ async function clearUserData() {
   clearBusy.value = true;
   try {
     if (bridge && bridge.clearUserData) {
-      const r = await bridge.clearUserData(['models', 'soundfonts', 'playdata']);
+      const r = await bridge.clearUserData(['models', 'soundfonts', 'deps', 'playdata']);
       if (r && r.ok) {
         // 渲染端本地播放类数据
         try {
@@ -311,7 +311,7 @@ async function clearUserData() {
 /* ---------------- GPU 加速 ---------------- */
 const gpu = reactive({
   detect: null,        // {vendor,name,blackwell,needCu128,available,backend}
-  installed: '检测中…',
+  installed: t('检测中…'),
   installedKind: null,
   busy: false,
   status: '',
@@ -329,7 +329,7 @@ const gpuCard = computed(() => {
 const gpuRecommended = computed(() => {
   const d = gpu.detect;
   if (!d || !d.vendor) return t('不可用（CPU）');
-  if (d.vendor === 'nvidia') return 'CUDA' + (d.needCu128 ? '（cu128 · RTX 50 系）' : '');
+  if (d.vendor === 'nvidia') return 'CUDA' + (d.needCu128 ? t('（cu128 · RTX 50 系）') : '');
   if (d.vendor === 'amd' || d.vendor === 'intel') return 'DirectML';
   return t('不可用');
 });
@@ -343,9 +343,9 @@ async function gpuRefreshInstalled() {
   try {
     const r = await bridge.gpuStatus();
     if (r && r.ok) {
-      if (r.cuda && r.directml) gpu.installed = 'CUDA + DirectML 已安装';
-      else if (r.cuda) gpu.installed = 'CUDA 已安装';
-      else if (r.directml) gpu.installed = 'DirectML 已安装';
+      if (r.cuda && r.directml) gpu.installed = t('CUDA + DirectML 已安装');
+      else if (r.cuda) gpu.installed = t('CUDA 已安装');
+      else if (r.directml) gpu.installed = t('DirectML 已安装');
       else gpu.installed = t('未安装');
       gpu.installedKind = r.cuda ? 'cuda' : (r.directml ? 'directml' : null);
     } else { gpu.installed = t('未安装'); gpu.installedKind = null; }
@@ -496,6 +496,19 @@ function resetGuide() {
   if (bridge && bridge.saveSettings) bridge.saveSettings({ guide_done: false }).catch(() => {});
   state.ui.guideOpen = true;
 }
+/* 曲库维护：清理本地字节已丢失的失效曲目（转录产物文件被删后留下的空壳条目） */
+const pruneBusy = ref(false);
+async function pruneLibrary() {
+  if (pruneBusy.value) return;
+  pruneBusy.value = true;
+  try {
+    const n = await app.pruneBrokenSongs();
+    toast(n > 0 ? (t('已清理 ') + n + t(' 首失效曲目')) : t('没有发现失效曲目'), n > 0 ? 'ok' : 'info');
+  } catch (e) {
+    toast(t('清理失败：') + String((e && e.message) || e), 'error');
+  }
+  pruneBusy.value = false;
+}
 
 /* ---------------- 快捷键 ---------------- */
 function resetKeys() { toast(t('恢复默认快捷键')); }
@@ -609,7 +622,7 @@ function cancel() { state.ui.settingsOpen = false; }
 
 /* ---------------- 生命周期 ---------------- */
 watch(() => state.ui.settingsTab, v => {
-  if (TABS.some(t => t.id === v)) tab.value = v;
+  if (TABS.value.some(t => t.id === v)) tab.value = v;
 });
 let offWatch = null, offPlgLog = null;
 onMounted(() => {
@@ -732,8 +745,10 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
             </div>
             <div class="fr-ctl">
               <div class="radio-pill">
-                <span :class="{ on: form.lang === 'zh' }" @click="form.lang = 'zh'; onLang()">{{ t('中文') }}</span>
+                <span :class="{ on: form.lang === 'zh' }" @click="form.lang = 'zh'; onLang()">{{ t('简体中文') }}</span>
+                <span :class="{ on: form.lang === 'zh-Hant' }" @click="form.lang = 'zh-Hant'; onLang()">{{ t('繁體中文') }}</span>
                 <span :class="{ on: form.lang === 'en' }" @click="form.lang = 'en'; onLang()">English</span>
+                <span :class="{ on: form.lang === 'ja' }" @click="form.lang = 'ja'; onLang()">日本語</span>
               </div>
             </div>
           </div>
@@ -872,6 +887,15 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
               </label>
             </div>
           </div>
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('清理失效曲目') }}</div>
+              <div class="fr-hint">{{ t('移除本地文件已丢失、无法播放的空壳条目') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <button class="btn sm" :disabled="pruneBusy" @click="pruneLibrary">{{ pruneBusy ? t('清理中…') : t('开始清理') }}</button>
+            </div>
+          </div>
         </div>
 
         <!-- ============ 快捷键 ============ -->
@@ -959,7 +983,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
           <div class="field-row">
             <div>
               <div class="fr-label">{{ t('清除用户数据') }}</div>
-              <div class="fr-hint">{{ t('清除下载的模型、下载的音色、播放进度/书签等本地数据。不会删除你的 MIDI 曲库、歌单与收藏。') }}</div>
+              <div class="fr-hint">{{ t('清除下载的模型、下载的音色、资源中心安装的依赖（GPU 增强包等）、播放进度/书签等本地数据。不会删除你的 MIDI 曲库、歌单与收藏。') }}</div>
             </div>
             <div class="fr-ctl">
               <button class="btn sm ghost danger" @click="clearUserData">{{ clearBusy ? t('清除中…') : t('清除用户数据') }}</button>
@@ -1006,10 +1030,10 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
             </div>
             <div v-if="cloud.err" style="font-size:12px;color:#e05858;margin-top:6px">{{ cloud.err }}</div>
             <div v-if="cloud.last && cloud.last.ok" style="font-size:12px;color:var(--stone);margin-top:6px">
-              上传 {{ cloud.last.uploadedSongs }} 曲 / {{ cloud.last.uploadedPlaylists }} 单，下载 {{ cloud.last.downloadedSongs }} 曲，歌单共 {{ cloud.last.appliedPlaylists }} 个
+              {{ t('上传 ') }}{{ cloud.last.uploadedSongs }}{{ t(' 曲 / ') }}{{ cloud.last.uploadedPlaylists }}{{ t(' 单，下载 ') }}{{ cloud.last.downloadedSongs }}{{ t(' 曲，歌单共 ') }}{{ cloud.last.appliedPlaylists }}{{ t(' 个') }}
             </div>
             <div v-if="cloud.last && cloud.last.ok && cloud.last.missingBytes" style="font-size:12px;color:#e0a558;margin-top:4px">
-              注意：有 {{ cloud.last.missingBytes }} 首曲目在本机找不到 MIDI 内容（曲库记录与本地缓存都没有字节），已跳过备份。请重新导入这些文件后再同步。
+              {{ t('注意：有 ') }}{{ cloud.last.missingBytes }}{{ t(' 首曲目在本机找不到 MIDI 内容（曲库记录与本地缓存都没有字节），已跳过备份。请重新导入这些文件后再同步。') }}
             </div>
           </template>
 

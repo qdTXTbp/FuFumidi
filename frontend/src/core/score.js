@@ -143,7 +143,7 @@ export function songToAbc(s, trkIdx, groupN = 4, opts = {}) {
   const low = tr.notes.filter(n => n.midi < 60);
   const high = tr.notes.filter(n => n.midi >= 60);
   const twoStaff = low.length > 0 && high.length > 0;
-  const name = String(tr.name || ('轨道 ' + (trkIdx + 1))).replace(/[\r\n|%]/g, ' ').replace(/\s+/g, ' ').trim() || ('Track ' + (trkIdx + 1));
+  const name = String(tr.name || (t('轨道 ') + (trkIdx + 1))).replace(/[\r\n|%]/g, ' ').replace(/\s+/g, ' ').trim() || ('Track ' + (trkIdx + 1));
   const beam = !!opts.beam;
   let h = 'X:1\nT:' + name + '\nM:' + sig.num + '/' + sig.den + '\nL:1/4\nQ:1/4=' + bpm + '\nK:' + (ABC_KEY_NAMES[sf] || 'C') + '\n';
   const group = Math.max(1, Math.round(groupN) || 4);

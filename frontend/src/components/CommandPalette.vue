@@ -122,7 +122,7 @@ function onFileChange(e) {
 
 <template>
   <div class="overlay top-aligned" v-focus-trap role="dialog" aria-modal="true" :aria-label="t('命令面板')" @click.self="close" @keydown.esc="close">
-    <div class="cmd-palette" role="dialog" aria-label="命令面板">
+    <div class="cmd-palette" role="dialog" :aria-label="t('命令面板')">
       <input ref="inputEl" v-model="query" class="cmd-input" :placeholder="t('输入命令或搜索…')" @keydown="onKey" />
       <div class="cmd-list">
         <template v-for="(g, gi) in groups" :key="g[0]">

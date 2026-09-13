@@ -83,10 +83,10 @@ function registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app
     } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   });
 
-  // 清除用户数据：下载的模型 / 下载的音色 / 播放类本地数据（断点、书签、统计）
+  // 清除用户数据：下载的模型 / 下载的音色 / 资源中心安装的依赖（GPU 增强包等）/ 播放类本地数据
   // 不删除 MIDI 曲库、歌单与收藏（这些可在应用内自行管理）
   ipcMain.handle('app:clearUserData', async (_e, scopes) => {
-    const list = Array.isArray(scopes) ? scopes : ['models', 'soundfonts', 'playdata'];
+    const list = Array.isArray(scopes) ? scopes : ['models', 'soundfonts', 'deps', 'playdata'];
     const done = [];
     try {
       const ud = app.getPath('userData');
@@ -99,9 +99,17 @@ function registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app
         rm(path.join(ud, 'fufumidi', 'soundfonts'));
         done.push('soundfonts');
       }
+      if (list.includes('deps')) {
+        // 资源中心安装的依赖：GPU 增强包（CUDA / DirectML 实际装到这里的 site-packages）
+        // 及其残留的 pip 下载缓存。这些都是可在资源中心重新安装的，按「清除数据」语义一并清掉。
+        rm(path.join(ud, 'fufumidi', 'gpu-enhancements'));
+        rm(path.join(ud, 'fufumidi', 'pip-cache'));
+        done.push('deps');
+      }
       if (list.includes('playdata')) { done.push('playdata'); }
       // 清空模型后需要重建内置模型 junction → 提示前端重启应用
-      return { ok: true, done, needRestart: done.includes('models') };
+      const needRestart = done.includes('models') || done.includes('deps');
+      return { ok: true, done, needRestart };
     } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   });
 

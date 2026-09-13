@@ -1,11 +1,13 @@
 // Web MIDI 硬件输出（基础版：系统首个 MIDI 输出设备）
 // 与合成器播放协调：由 PlayerBar 挂接 Player.onNote / onStop 回调驱动
+import { t } from './i18n.js';
+
 let midiOut = null;
 let enabled = false;
 
 export function isMidiOutEnabled() { return enabled; }
 export function setMidiOutEnabled(b) { enabled = b; }
-export function getMidiOutDeviceName() { return midiOut ? (midiOut.name || 'MIDI 输出') : ''; }
+export function getMidiOutDeviceName() { return midiOut ? (midiOut.name || t('MIDI 输出')) : ''; }
 
 export async function initMidiOutput() {
   if (!navigator.requestMIDIAccess) return false;

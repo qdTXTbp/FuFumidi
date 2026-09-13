@@ -92,14 +92,14 @@ async function doLogout() { await cloud.logout(); emit('close'); }
         <div class="ed-modal" style="width:min(360px,92vw)">
           <div class="ed-modal-head">
             <b>{{ cloud.account ? t('云同步') : t('登录 / 注册') }}</b>
-            <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" aria-label="t('关闭')" @click="close"><Icon name="close" :size="14" /></button>
+            <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" :aria-label="t('关闭')" @click="close"><Icon name="close" :size="14" /></button>
           </div>
 
           <!-- 冲突：本机与云端存档都非空，须用户选择保留哪一侧 -->
           <div v-if="conflict" class="cloud-user-body" style="display:flex;flex-direction:column;gap:10px;padding:6px 2px">
             <div style="font-size:13px;font-weight:600">{{ t('检测到歌单存档冲突') }}</div>
-            <div class="muted" style="font-size:12px">{{ t('本机存档') }}：{{ conflict.localSongs || 0 }} {{ t('曲') }} / {{ conflict.localN }} {{ t('个歌单') }}</div>
-            <div class="muted" style="font-size:12px">{{ t('云端存档') }}：{{ conflict.cloudSongs || 0 }} {{ t('曲') }} / {{ conflict.cloudN }} {{ t('个歌单') }}</div>
+            <div class="muted" style="font-size:12px">{{ t('本机存档') }}{{ t('：') }}{{ conflict.localSongs || 0 }} {{ t('曲') }} / {{ conflict.localN }} {{ t('个歌单') }}</div>
+            <div class="muted" style="font-size:12px">{{ t('云端存档') }}{{ t('：') }}{{ conflict.cloudSongs || 0 }} {{ t('曲') }} / {{ conflict.cloudN }} {{ t('个歌单') }}</div>
             <div class="muted" style="font-size:12px">{{ t('请选择保留哪一份；选择后另一份将被覆盖。') }}</div>
             <div v-if="conflictMsg" style="font-size:12px;color:#e05858">{{ conflictMsg }}</div>
             <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
@@ -142,7 +142,7 @@ async function doLogout() { await cloud.logout(); emit('close'); }
                    @keydown.enter="submit" />
             <!-- 人机验证：iframe 加载托管页，通过 postMessage 回传 token -->
             <div class="cloud-ts">
-              <iframe :src="TS_URL" class="cloud-ts-frame" title="人机验证"></iframe>
+              <iframe :src="TS_URL" class="cloud-ts-frame" :title="t('人机验证')"></iframe>
               <div v-if="tsErr" class="cloud-ts-err">{{ tsErr }}</div>
             </div>
             <div v-if="formErr" style="font-size:12px;color:#e05858">{{ formErr }}</div>

@@ -607,7 +607,7 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
       </select></label>
       <label>{{ t('预设') }}<select class="select-input" :value="''" @change="applyUtauPreset($event.target.value)">
         <option value="">{{ t('选择…') }}</option>
-        <option v-for="(p, k) in utauPresets" :key="k" :value="k">{{ k }}（{{ p.bpm }} BPM / {{ p.sampleNote }}）</option>
+        <option v-for="(p, k) in utauPresets" :key="k" :value="k">{{ k }}{{ t('（') }}{{ p.bpm }} BPM / {{ p.sampleNote }}{{ t('）') }}</option>
       </select></label>
       <button class="btn sm" @click="saveUtauPreset" :title="t('把当前 BPM 与音源音高保存为预设')">{{ t('存为预设') }}</button>
       <span class="sep"></span>
@@ -656,7 +656,7 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
         <div class="us-lib">
           <div class="us-lib-head">
             <b>{{ t('选择基底旋律') }}</b>
-            <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" aria-label="t('关闭')" @click="libOpen = false"><Icon name="close" :size="14" /></button>
+            <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" :aria-label="t('关闭')" @click="libOpen = false"><Icon name="close" :size="14" /></button>
           </div>
           <div class="us-lib-list">
             <button v-for="s in app.songs" :key="s.id" class="us-lib-item" @click="importFromLibrary(s)">

@@ -3,6 +3,7 @@ import { reactive, computed } from 'vue';
 import { ensureAudio } from './audio.js';
 import { parseMidi, buildSong } from './core/midi.js';
 import { TRACK_COLORS, fmtTime } from './core/util.js';
+import { t } from './core/i18n.js';
 
 export const VIEWS = [
   { id: 'home', label: '首页', ic: 'home' },
@@ -148,7 +149,7 @@ export async function importFiles(items) {
   let ok = 0;
   for (const it of items) {
     let mid;
-    try { mid = parseMidi(it.bytes); } catch (e) { toast('无法解析 ' + it.name + '：' + e.message, 'warn'); continue; }
+    try { mid = parseMidi(it.bytes); } catch (e) { toast(t('无法解析 ') + it.name + t('：') + e.message, 'warn'); continue; }
     const song = buildSong(mid, { name: it.name.replace(/\.(mid|midi|kar|rmi)$/i, '') });
     const item = {
       id: cryptoId(),
@@ -165,14 +166,14 @@ export async function importFiles(items) {
     // 正在播放时不打断当前曲目：只入库并提示，用户可稍后自行切换
     // （原先无条件 selectSong → 内部 player.stop()，导致导入即中断播放）
     if (state.playing && state.currentId) {
-      toast(`已导入 ${ok} 首 MIDI（保持当前播放）`);
+      toast(t('已导入 ') + ok + t(' 首 MIDI（保持当前播放）'));
     } else {
       const last = state.songs[state.songs.length - 1];
       await selectSong(last.id);
-      toast(`已导入 ${ok} 首 MIDI`);
+      toast(t('已导入 ') + ok + t(' 首 MIDI'));
     }
   } else if (items.length) {
-    toast('没有可导入的 MIDI 文件', 'warn');
+    toast(t('没有可导入的 MIDI 文件'), 'warn');
   }
 }
 
@@ -183,7 +184,7 @@ export async function restoreSongs() {
     if (!r || !r.id || state.songs.some(s => s.id === r.id)) continue;
     state.songs.push({
       id: r.id,
-      name: String(r.name || '未命名').replace(/\.(mid|midi|kar|rmi)$/i, ''),
+      name: String(r.name || t('未命名')).replace(/\.(mid|midi|kar|rmi)$/i, ''),
       song: null,
       meta: { size: r.size || 0, time: r.time || 0 },
     });
@@ -221,7 +222,7 @@ export function loadPlaylists() {
     const arr = JSON.parse(localStorage.getItem(LS_PLAYLISTS) || '[]');
     if (Array.isArray(arr)) {
       state.playlists.splice(0, state.playlists.length,
-        ...arr.filter(p => p && typeof p.id === 'string').map(p => ({ id: p.id, name: p.name || '未命名歌单', fav: !!p.fav, items: Array.isArray(p.items) ? p.items.filter(x => typeof x === 'string') : [] })));
+        ...arr.filter(p => p && typeof p.id === 'string').map(p => ({ id: p.id, name: p.name || t('未命名歌单'), fav: !!p.fav, items: Array.isArray(p.items) ? p.items.filter(x => typeof x === 'string') : [] })));
     }
   } catch (e) {}
   try {
@@ -242,13 +243,13 @@ export function savePlaylists() {
 }
 export function createPlaylist(name) {
   const n = String(name || '').trim();
-  if (!n) { toast('请输入歌单名', 'warn'); return null; }
-  if (state.playlists.some(p => p.name === n)) { toast('已存在同名歌单', 'warn'); return null; }
+  if (!n) { toast(t('请输入歌单名'), 'warn'); return null; }
+  if (state.playlists.some(p => p.name === n)) { toast(t('已存在同名歌单'), 'warn'); return null; }
   const pl = { id: cryptoId(), name: n, fav: false, items: [] };
   state.playlists.push(pl);
   savePlaylists();
   state.activePl = pl.id;
-  toast('已创建歌单「' + n + '」', 'ok');
+  toast(t('已创建歌单「') + n + t('」'), 'ok');
   return pl;
 }
 export function renamePlaylist(id, name) {
@@ -263,11 +264,11 @@ export function deletePlaylist(id) {
   const i = state.playlists.findIndex(p => p.id === id);
   if (i < 0) return;
   const pl = state.playlists[i];
-  if (!window.confirm('删除歌单「' + pl.name + '」？歌曲不会被删除。')) return;
+  if (!window.confirm(t('删除歌单「') + pl.name + t('」？歌曲不会被删除。'))) return;
   state.playlists.splice(i, 1);
   if (state.activePl === id) state.activePl = 'all';
   savePlaylists();
-  toast('歌单已删除', 'ok');
+  toast(t('歌单已删除'), 'ok');
 }
 export function addSongToPl(plId, songId) {
   const pl = state.playlists.find(p => p.id === plId);
@@ -287,7 +288,7 @@ export function toggleFav(songId) {
   if (i >= 0) state.favs.splice(i, 1);
   else state.favs.push(songId);
   savePlaylists();
-  toast(i >= 0 ? '已取消收藏' : '已加入收藏', 'ok');
+  toast(i >= 0 ? t('已取消收藏') : t('已加入收藏'), 'ok');
 }
 // 批量操作
 export function setBatchMode(on) {
@@ -300,16 +301,16 @@ export function toggleBatchSel(songId) {
   else state.batchSel.push(songId);
 }
 export async function batchRemoveSongs() {
-  if (!state.batchSel.length) { toast('请先勾选歌曲', 'warn'); return; }
+  if (!state.batchSel.length) { toast(t('请先勾选歌曲'), 'warn'); return; }
   const n = state.batchSel.length;
-  if (!window.confirm('删除选中的 ' + n + ' 首歌曲？')) return;
+  if (!window.confirm(t('删除选中的 ') + n + t(' 首歌曲？'))) return;
   const ids = state.batchSel.slice();
   for (const id of ids) await removeSong(id);
   setBatchMode(false);
-  toast('已删除 ' + n + ' 首歌曲', 'ok');
+  toast(t('已删除 ') + n + t(' 首歌曲'), 'ok');
 }
 export function batchMoveToPl(plId) {
-  if (!state.batchSel.length) { toast('请先勾选歌曲', 'warn'); return; }
+  if (!state.batchSel.length) { toast(t('请先勾选歌曲'), 'warn'); return; }
   const pl = state.playlists.find(p => p.id === plId);
   if (!pl) return;
   const n = state.batchSel.length;
@@ -317,7 +318,7 @@ export function batchMoveToPl(plId) {
   savePlaylists();
   state.activePl = pl.id;
   setBatchMode(false);
-  toast('已添加 ' + n + ' 首到「' + pl.name + '」', 'ok');
+  toast(t('已添加 ') + n + t(' 首到「') + pl.name + t('」'), 'ok');
 }
 
 // 当前歌单的歌曲（响应式过滤：all / 收藏 / 指定歌单）
@@ -361,13 +362,13 @@ export const wallpaperSrc = computed(() => {
 // 循环切换：关闭 → 视频1 → 视频2 → 关闭
 export function cycleWallpaper() {
   const w = state.wallpaper;
-  if (!w.sources.length) { toast('未找到壁纸视频，请在设置中选择', 'warn'); return; }
+  if (!w.sources.length) { toast(t('未找到壁纸视频，请在设置中选择'), 'warn'); return; }
   if (!w.enabled) { w.enabled = true; w.index = 0; }
   else if (w.index < w.sources.length - 1) w.index++;
   else w.enabled = false;
   saveWallpaper();
-  if (w.enabled) toast('壁纸：' + baseName(w.sources[w.index]), 'ok');
-  else toast('已关闭动态壁纸', 'ok');
+  if (w.enabled) toast(t('壁纸：') + baseName(w.sources[w.index]), 'ok');
+  else toast(t('已关闭动态壁纸'), 'ok');
 }
 function baseName(p) { return String(p).split(/[\\/]/).pop(); }
 export function setWallpaperEnabled(on) {
@@ -434,7 +435,7 @@ export async function selectSong(id) {
         item.song = buildSong(mid, { name: item.name });
         item.meta.tracks = item.song.tracks.length;
       } catch (e) {
-        toast('无法解析已保存的 MIDI：' + e.message, 'warn');
+        toast(t('无法解析已保存的 MIDI：') + e.message, 'warn');
       }
     }
   }
@@ -467,7 +468,7 @@ export async function selectSong(id) {
 
 export function togglePlay() {
   const { player } = ensureAudio();
-  if (!currentSong.value) { toast('请先导入一首 MIDI', 'warn'); return; }
+  if (!currentSong.value) { toast(t('请先导入一首 MIDI'), 'warn'); return; }
   if (state.playing) {
     player.pause();
     state.playing = false;

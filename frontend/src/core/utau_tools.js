@@ -5,6 +5,7 @@
 // - encodeWav16:    Float32 单声道 → PCM16 WAV ArrayBuffer
 // - decodeAudioData: ArrayBuffer → { data: Float32Array, sr }
 // ============================================================
+import { t } from './i18n.js';
 
 function r1(x) { return Math.round(x * 10) / 10; }
 
@@ -139,7 +140,7 @@ export function encodeWav16(mono, sr) {
 /** 解码音频为单声道 float32。 */
 export async function decodeAudioData(arrayBuffer) {
   const AC = window.AudioContext || window.webkitAudioContext;
-  if (!AC) throw new Error('浏览器不支持 AudioContext');
+  if (!AC) throw new Error(t('浏览器不支持 AudioContext'));
   const ctx = new AC();
   try {
     const ab = await ctx.decodeAudioData(arrayBuffer.slice(0));

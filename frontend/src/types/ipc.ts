@@ -183,7 +183,7 @@ export interface Settings {
   watch_dir?: string;
   watch_enabled?: boolean;
   file_assoc?: boolean;
-  lang?: 'zh' | 'en';
+  lang?: 'zh' | 'zh-Hant' | 'en' | '';
   [key: string]: any;
 }
 

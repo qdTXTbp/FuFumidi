@@ -12,12 +12,12 @@ const app = useAppStore();
 const toast = (m, type) => app.toast(m, type);
 const bridge = window.fuBridge;
 
-/* ---------------- 分类 ---------------- */
-const TABS = [
+/* ---------------- 分类 --------------- */
+const TABS = computed(() => [
   { id: 'transcribe', label: t('转录模型'), ic: 'transcribe' },
   { id: 'separate', label: t('人声分离'), ic: 'mic' },
   { id: 'other', label: t('修复·VR'), ic: 'box' },
-];
+]);
 const curTab = ref('transcribe');
 
 /* ---------------- 模型列表与进度 ---------------- */
@@ -129,7 +129,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
             <span class="vm-ic"><Icon :name="kindIcon(m)" :size="15" /></span>
             <span class="vm-arch">{{ m.arch || t('未知架构') }}</span>
           </div>
-          <div class="vm-name-line"><div class="vm-name">{{ m.name }}</div><span v-if="m.best" class="vm-best" title="该领域效果最佳">👑 {{ m.best }}</span></div>
+          <div class="vm-name-line"><div class="vm-name">{{ m.name }}</div><span v-if="m.best" class="vm-best" :title="t('该领域效果最佳')">👑 {{ m.best }}</span></div>
           <div class="vm-use">{{ m.use || m.note || '' }}</div>
           <div class="vm-foot">
             <span class="pill" :class="m.exists ? 'on' : (prog[m.id] && prog[m.id].active ? 'run' : 'off')">{{ m.exists ? t('已安装') : (prog[m.id] && prog[m.id].active ? (prog[m.id].percent || 0) + '%' : t('未安装')) }}</span>

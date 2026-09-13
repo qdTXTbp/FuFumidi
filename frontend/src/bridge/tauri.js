@@ -3,6 +3,7 @@
 // 把 Electron preload 的 IPC 方法映射到 Tauri invoke。
 // 前端组件无需任何改动（api.ts 检测 window.fuBridge）。
 // ============================================================
+import { t } from '../core/i18n.js';
 
 export function isTauri() {
   return typeof window !== 'undefined' && !!(window.__TAURI_INTERNALS__);
@@ -84,7 +85,7 @@ export function installTauriBridge() {
     },
     pickZip: () =>
       call('pick_file', {
-        opts: { filters: [{ name: 'GPU 增强包', extensions: ['zip', 'part1', 'part2', 'part3', 'part4', 'part5'] }] },
+        opts: { filters: [{ name: t('GPU 增强包'), extensions: ['zip', 'part1', 'part2', 'part3', 'part4', 'part5'] }] },
       }).then((p) => (p ? [p] : null)),
 
     // ---- 转录引擎 ----
@@ -188,7 +189,7 @@ export function installTauriBridge() {
 
     // ---- 可选 Rust 核心：Tauri 原生即 Rust，无需外部二进制 ----
     rustStatus: () => Promise.resolve({ ok: true, available: false, binary: null, version: null }),
-    rustInvoke: () => Promise.resolve({ ok: false, error: 'Tauri 原生模式无需外部 Rust 核心' }),
+    rustInvoke: () => Promise.resolve({ ok: false, error: t('Tauri 原生模式无需外部 Rust 核心') }),
 
     // ---- 文件夹监听（Tauri 阶段暂不实现，返回空订阅）----
     setFolderWatch: () => Promise.resolve({ ok: true }),

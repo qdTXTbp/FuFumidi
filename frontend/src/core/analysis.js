@@ -199,7 +199,7 @@ export function analyzeSong(song) {
   const major = [0, 2, 4, 5, 7, 9, 11];
   const off = all.filter(n => !major.includes(((n.midi % 12) - rootPc + 12) % 12));
   const offBars = [...new Set(off.map(n => Math.floor(n.start / Math.max(1, barTicks)) + 1))].sort((a, b) => a - b).slice(0, 8);
-  const offNames = [...new Set(off.map(n => noteName(n.midi)))].slice(0, 8).join('、');
+  const offNames = [...new Set(off.map(n => noteName(n.midi)))].slice(0, 8).join(t('、'));
 
   // 节奏稳定性
   const tpb = song.tpb || 480;

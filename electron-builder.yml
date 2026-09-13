@@ -46,11 +46,12 @@ files:
   # soundfonts 下载/暂存目录不入包（开发产物，避免膨胀与未定稿资源进发布版）
   - "!soundfonts-dist/**"
   - "!.sfdist-tmp/**"
-# 应用内 i18n 仅中文/英文：裁掉其余 ~34MB 的 Chromium 语言包（缺失语言回退 en-US）
+# 应用内 i18n 覆盖中文/英文/日文：裁掉其余 ~34MB 的 Chromium 语言包（缺失语言回退 en-US）
 electronLanguages:
   - en-US
   - zh-CN
   - zh-TW
+  - ja
 extraResources:
   - from: "resources/python"
     to: python

@@ -69,7 +69,7 @@ function panStyle(i) {
             <span class="mt-color" :style="{ background: tr.color }"></span>
             <div class="mt-name">
               <b>{{ tr.name }}</b>
-              <small>音色 #{{ tr.program }}{{ tr.isDrum ? t(' · 打击乐') : '' }} · {{ tr.noteCount }}{{ t(' 音符') }}</small>
+              <small>{{ t('音色 ') }}#{{ tr.program }}{{ tr.isDrum ? t(' · 打击乐') : '' }} · {{ tr.noteCount }}{{ t(' 音符') }}</small>
             </div>
             <div class="mt-ctl">
               <button class="chip-btn" :class="{ 'on-solo': tr.solo }" :title="t('独奏')" @click="toggleTrackSolo(i)">S</button>

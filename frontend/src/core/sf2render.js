@@ -8,6 +8,7 @@
 // 通道/音色映射与 synth.noteOn 的 SF2 路径一致（逐音符用文件真实通道与 program/bank）。
 // ============================================================
 import { SF2_SYNTH_SETTINGS, indexSf2Presets, resolveSf2Bank } from './synth.js';
+import { t } from './i18n.js';
 
 let _libLoading = null;     // js-synthesizer.min.js + libfluidsynth 胶水（主线程）
 let _renderSyn = null;      // 常驻离线合成器（同一 SF2/采样率重复导出免重载）
@@ -30,11 +31,11 @@ async function ensureLib() {
     _libLoading = (async () => {
       if (!w.JSSynth) {
         const ok = await loadScript('./vendor/js-synth/js-synthesizer.min.js');
-        if (!ok || !(window || {}).JSSynth) throw new Error('js-synthesizer 脚本加载失败');
+        if (!ok || !(window || {}).JSSynth) throw new Error(t('js-synthesizer 脚本加载失败'));
       }
       if (!(window || {}).Module) {
         const ok = await loadScript('./vendor/js-synth/libfluidsynth-2.4.6-with-libsndfile.js');
-        if (!ok || !(window || {}).Module) throw new Error('libfluidsynth 运行时加载失败');
+        if (!ok || !(window || {}).Module) throw new Error(t('libfluidsynth 运行时加载失败'));
       }
       return true;
     })().catch((e) => { _libLoading = null; throw e; });
@@ -66,10 +67,10 @@ async function ensureRenderSynth(source, sampleRate) {
   if (_renderSyn && _renderSynKey === key) return _renderSyn;
   await ensureLib();
   const JSSynth = (window || {}).JSSynth;
-  if (!JSSynth || !JSSynth.Synthesizer) throw new Error('JSSynth.Synthesizer 不可用');
+  if (!JSSynth || !JSSynth.Synthesizer) throw new Error(t('JSSynth.Synthesizer 不可用'));
   await JSSynth.waitForReady();
   const buf = await readSf2Buffer(source);
-  if (!buf) throw new Error('无法读取音色文件');
+  if (!buf) throw new Error(t('无法读取音色文件'));
   if (_renderSyn) { try { _renderSyn.close(); } catch (e) {} _renderSyn = null; }
   const syn = new JSSynth.Synthesizer();
   syn.init(sampleRate, SF2_SYNTH_SETTINGS);

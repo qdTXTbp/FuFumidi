@@ -4,6 +4,8 @@
 // 画布/墨色等中性色保持不变（--canvas/--surface/--ink/--hairline）。
 // ============================================================
 
+import { t } from './i18n.js';
+
 const LS_THEME = 'fufumidi_theme';
 const LS_ACCENT = 'fufumidi_accent';
 const LS_MODE = 'fufumidi_mode';
@@ -222,7 +224,7 @@ export function extractAccentFromImage(file) {
       } catch (e) { reject(e); }
       finally { URL.revokeObjectURL(url); }
     };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('图片加载失败')); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error(t('图片加载失败'))); };
     img.src = url;
   });
 }

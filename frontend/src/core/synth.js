@@ -1,5 +1,6 @@
 // Web Audio 合成引擎 + 播放器调度（从 legacy FuFumidi.html 抽取，保持行为一致）
 import { clamp, midiFreq } from './util.js';
+import { t } from './i18n.js';
 
 // SF2 合成器设置：与手机端 FuMiVoice（BASSMIDI）对齐。
 // FluidSynth 的混响与合唱**默认开启**，而 BASSMIDI 两项默认关闭——同一个音色库
@@ -382,6 +383,7 @@ export class Synth {
     this._sf2ChBank = [];        // 各通道已调度的音色库（避免每音符重复 CC0）
     this._sf2DrumCh = [];        // 已设为鼓组的通道
     this._sf2Presets = null;     // 已加载音色库里的 (bank, preset) 清单，见 _indexSf2Presets
+    this._sf2ChProgOverride = {}; // 混音台手动指定的通道音色（ch → program），优先于文件音色
   }
   // 指定加载的音色：'internal'（内置合成器）或 SF2 来源（网页相对路径 / 桌面绝对路径 / URL）。
   // 由音色工坊切换并持久化（settings.active_soundfont）。
@@ -481,14 +483,14 @@ export class Synth {
   }
   async _loadSf2From(source) {
     const buf = await this._readSf2Buffer(source);
-    if (!buf) { this.clearSf2(); return { ok: false, using: 'internal', error: '无法读取音色文件' }; }
+    if (!buf) { this.clearSf2(); return { ok: false, using: 'internal', error: t('无法读取音色文件') }; }
     // 大音色解析时会在主线程占用一小段时间；上限与主进程 file:readSoundFont 一致(512MB)。
     // 覆盖店内可下载的 FluidR3/Arachno(~141MB)、SGM(~300MB)；更大的（如 1.2GB Salamander）
     // 会在读取阶段被主进程拒掉（buf 为 null 走上方“无法读取音色文件”），不会整包塞进 JS 合成器。
     const MAX_SF2 = 512 * 1024 * 1024;
     if (buf.byteLength > MAX_SF2) {
       this.clearSf2();
-      return { ok: false, using: 'internal', error: '音色包过大（>' + Math.round(MAX_SF2 / 1048576) + 'MB），超出当前合成器可承载范围，请改用内置音色或更小的音色包。' };
+      return { ok: false, using: 'internal', error: t('音色包过大（>') + Math.round(MAX_SF2 / 1048576) + 'MB' + t('），超出当前合成器可承载范围，请改用内置音色或更小的音色包。') };
     }
     // 记下这份音色库里实际存在的 (bank, preset)：回放时若文件指定的库号库里没有，
     // 就退回 0 号库（见 _sf2ProgramFor），避免 FluidSynth 选不到音色而沿用上一音色。
@@ -578,9 +580,9 @@ export class Synth {
   async _loadSf2ScriptProcessor(buf, source) {
     let loaded = await this._ensureJSSynthLib();
     const JSSynth = (window || {}).JSSynth;
-    if (!loaded || !JSSynth) { this.clearSf2(); return { ok: false, using: 'internal', error: 'JSSynth 不可用' }; }
+    if (!loaded || !JSSynth) { this.clearSf2(); return { ok: false, using: 'internal', error: t('JSSynth 不可用') }; }
     loaded = await this._ensureJSSynthGlue();
-    if (!loaded) { this.clearSf2(); return { ok: false, using: 'internal', error: 'libfluidsynth 运行时不可用' }; }
+    if (!loaded) { this.clearSf2(); return { ok: false, using: 'internal', error: t('libfluidsynth 运行时不可用') }; }
     // 防御自愈：ScriptProcessor 版 Synthesizer 的 ccall 在调用期读取全局 Module。
     // 若 Module 被外部覆盖成无 _fluid_* 导出的对象（旧版 Verovio 加载逻辑等），
     // 调用会报「func is not a function」。检测到时重建运行时。
@@ -594,7 +596,7 @@ export class Synth {
       this._jssynthGlueLoading = null;
       try { window.Module = undefined; } catch (e) {}
       loaded = await this._ensureJSSynthGlue();
-      if (!loaded) { this.clearSf2(); return { ok: false, using: 'internal', error: 'libfluidsynth 运行时不可用' }; }
+      if (!loaded) { this.clearSf2(); return { ok: false, using: 'internal', error: t('libfluidsynth 运行时不可用') }; }
     }
     await JSSynth.waitForReady();
     this.clearSf2();
@@ -659,8 +661,12 @@ export class Synth {
   // ---- 音色 / 音色库下发 ----
   // MIDI 的 program 与 bank（CC0）都是通道级状态，文件里会中途变化，也可能写在别的轨里；
   // 这里按「音符所在通道 + 该时刻的状态」下发，与手机端 BASSMIDI 直接播放文件事件一致。
-  // 该音符最终使用的 (bank, prog)：文件选了库里不存在的库号 → 退回 0 号库
+  // 该音符最终使用的 (bank, prog)：文件选了库里不存在的库号 → 退回 0 号库。
+  // 若用户通过混音台给某通道手动指定了音色（_sf2ChProgOverride），则优先用它（0 号库）。
   _sf2ProgramFor(note) {
+    const ch = note.ch != null ? note.ch : Math.min(15, note.trk || 0);
+    const ov = this._sf2ChProgOverride[ch];
+    if (ov != null) return resolveSf2Bank(this._sf2Presets, 0, ov);
     return resolveSf2Bank(this._sf2Presets, note.bank || 0, note.prog != null ? note.prog : 0);
   }
   // 音序器路径：CC0（库号）先于 programchange，二者同一 tick（音序器对同一时刻按写入顺序分发）
@@ -749,6 +755,29 @@ export class Synth {
   resetChannelMix() {
     this.chVol = {}; this.chMute = {}; this.chSolo = {}; this.chPan = {};
     this._fileCc7 = {}; this._fileCc10 = {}; this._knownCh = new Set();
+    this._sf2ChProgOverride = {};
+  }
+  // 手动给某通道指定音色（混音台）：prog<0 表示清除覆盖、回到文件原音色。
+  // program 是通道级状态，同一通道上的多条轨会一起变，与手机端 BASSMIDI 一致。
+  // 设置后立即对当前播放的曲目生效（下一个该通道的音符以及已按覆盖下发的通道）。
+  setChannelProgram(ch, prog) {
+    if (prog == null || prog < 0) delete this._sf2ChProgOverride[ch];
+    else this._sf2ChProgOverride[ch] = Math.round(clamp(prog, 0, 127));
+    // 清掉下发缓存，强制下一次音符按新音色重新下发
+    this._sf2ChBank[ch] = undefined;
+    this._sf2ChProg[ch] = undefined;
+    const cur = this._sf2ChProgOverride[ch];
+    if (cur == null || !this.sf2Ready) return;
+    const { bank, prog: p } = resolveSf2Bank(this._sf2Presets, 0, cur);
+    const now = this.ctx.currentTime;
+    if (this._sf2SeqMode && this.sf2Seq) {
+      const tick = this._seqTickFor(now);
+      try { this.sf2Seq.sendEventAt({ type: 'controlchange', channel: ch, control: 0, value: bank }, tick, true); } catch (e) {}
+      try { this.sf2Seq.sendEventAt({ type: 'programchange', channel: ch, preset: p }, tick, true); } catch (e) {}
+    } else if (this.sf2) {
+      try { this.sf2.midiControl(ch, 0, bank); } catch (e) {}
+      try { this.sf2.midiProgramChange(ch, p); } catch (e) {}
+    }
   }
   _anyChSolo() { for (const k in this.chSolo) if (this.chSolo[k]) return true; return false; }
   _chEffective(ch) {
@@ -835,7 +864,9 @@ export class Synth {
       }
       return;
     }
-    const preset = presetFromMode('auto', note.prog, note.isDrum);
+    const ch = note.ch != null ? note.ch : Math.min(15, note.trk || 0);
+    const ov = this._sf2ChProgOverride[ch];
+    const preset = presetFromMode('auto', ov != null ? ov : note.prog, note.isDrum);
     const out = this.trackGains[note.trk];
     playVoice(this.ctx, time, note.midi, note.vel, preset, out, endTime, this.live);
     this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, start: time, endTime });

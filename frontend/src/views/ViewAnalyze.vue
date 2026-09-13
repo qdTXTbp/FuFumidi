@@ -130,7 +130,7 @@ function summaryText() {
   if (a.avg > 8) txt += t('。该曲音符较密集，快速段落可能有较高演奏难度');
   else if (a.avg < 2) txt += t('。该曲节奏较舒缓，整体律动平稳');
   else txt += t('。整体密度适中，节奏律动较为均衡');
-  return txt + '。';
+  return txt + t('。');
 }
 
 function chordChips() {
@@ -273,7 +273,7 @@ onBeforeUnmount(() => {
         <div class="az-card card">
           <h4><Icon name="chart" :size="14" /> {{ t('离调 / 错音检测') }}</h4>
           <div class="az-txt">
-            <template v-if="data.off.length">{{ t('检测到 ') }}<b>{{ data.off.length }}</b>{{ t(' 个离调/错音，主要出现在第 ') }}{{ data.offBars.join('、') }}{{ t(' 小节附近（如 ') }}{{ data.offNames }}){{ t('）。建议重点检查这些片段的音高。') }}</template>
+            <template v-if="data.off.length">{{ t('检测到 ') }}<b>{{ data.off.length }}</b>{{ t(' 个离调/错音，主要出现在第 ') }}{{ data.offBars.join(t('、')) }}{{ t(' 小节附近（如 ') }}{{ data.offNames }}{{ t('）') }}{{ t('。建议重点检查这些片段的音高。') }}</template>
             <template v-else>{{ t('未检测到明显离调音符，整体音高较贴合调性。') }}</template>
           </div>
         </div>

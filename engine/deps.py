@@ -80,11 +80,36 @@ GIT_MIRROR_PREFIXES = [
 GIT_NO_DEPS = {"amt"}
 
 
-def _find(name):
+# 需要「真实导入」才能确认健康的包：这些是公共基础依赖，最容易出现
+# 「文件在、但版本混杂导致 import 崩溃」的情况（issue #18：NumPy 2.4.6 缺 numpy.exceptions）。
+# 其余包用 find_spec 判断即可，避免每次都把 torch 等重包完整导入拖慢自检。
+DEEP_PROBE = {
+    "numpy", "scipy", "soundfile", "pretty_midi", "librosa",
+    "onnxruntime", "torch", "muscriptor",
+}
+
+
+def _status(name):
+    """返回 'ok' / 'missing' / 'broken'。
+
+    'broken' 指包能定位到（find_spec 成功）但实际 import 抛异常——
+    此时 find_spec 会误判为「已安装」，导致补全依赖跳过它、永远修不好。
+    """
     try:
-        return importlib.util.find_spec(name) is not None
+        if importlib.util.find_spec(name) is None:
+            return "missing"
     except Exception:
-        return False
+        return "missing"
+    if name in DEEP_PROBE:
+        try:
+            importlib.import_module(name)
+        except Exception:
+            return "broken"
+    return "ok"
+
+
+def _find(name):
+    return _status(name) == "ok"
 
 
 def _emit(obj):
@@ -94,8 +119,18 @@ def _emit(obj):
 def check():
     result = {"python": sys.executable, "groups": {}}
     for group, pkgs in REQUIRED.items():
-        missing = [p for p in pkgs if not _find(p)]
-        result["groups"][group] = {"ok": len(missing) == 0, "missing": missing}
+        missing, broken = [], []
+        for p in pkgs:
+            st = _status(p)
+            if st == "missing":
+                missing.append(p)
+            elif st == "broken":
+                broken.append(p)
+        result["groups"][group] = {
+            "ok": not missing and not broken,
+            "missing": missing,
+            "broken": broken,   # 已安装但导入失败（如半损坏的 numpy）
+        }
     _emit(result)
     return 0
 
@@ -115,8 +150,31 @@ def install(group=None):
     groups = REQUIRED if group in (None, "all") else {group: REQUIRED[group]}
     last_err = None
     for g, pkgs in groups.items():
-        missing = [p for p in pkgs if not _find(p)]
+        missing, broken = [], []
+        for p in pkgs:
+            st = _status(p)
+            if st == "missing":
+                missing.append(p)
+            elif st == "broken":
+                broken.append(p)
+        # 损坏（能找到但导入失败，例如半更新过的 numpy）必须强制重装覆盖，
+        # 否则 pip 认为「已满足要求」直接跳过，用户重装多少次都没用（issue #18）。
+        if broken:
+            ok = False
+            for mirror in MIRRORS:
+                cmd = list(PIP_BASE) + ["--force-reinstall", "--no-cache-dir"]
+                if mirror:
+                    cmd += ["-i", mirror]
+                cmd += broken
+                ok, last_err = _pip_run(cmd)
+                if ok:
+                    break
+            if not ok:
+                _emit({"ok": False, "error": last_err or "修复损坏依赖失败", "group": g})
+                return 1
         if not missing:
+            if broken:
+                _emit({"ok": True, "repaired": broken, "group": g})
             continue
         # aria 组：git 包（走 GitHub 镜像回退）+ 普通 pip 小依赖混合安装
         if g == "aria":

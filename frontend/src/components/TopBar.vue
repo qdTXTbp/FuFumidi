@@ -39,8 +39,8 @@ function about() {
 </script>
 
 <template>
-  <header class="topbar" role="navigation" aria-label="t('主导航')">
-    <button class="icon-btn" :title="t('折叠 / 展开侧边栏')" aria-label="t('折叠 / 展开侧边栏')" @click="toggleSidebar">
+  <header class="topbar" role="navigation" :aria-label="t('主导航')">
+    <button class="icon-btn" :title="t('折叠 / 展开侧边栏')" :aria-label="t('折叠 / 展开侧边栏')" @click="toggleSidebar">
       <Icon name="panel" :size="17" />
     </button>
     <div class="tab" v-for="v in VIEWS" :key="v.id" :class="{ active: state.view === v.id }" :aria-current="state.view === v.id ? 'page' : null" :data-view="v.id" @click="setView(v.id)">
@@ -51,19 +51,19 @@ function about() {
     <span class="tag" v-if="state.songs.length && state.currentId">
       <Icon name="music" :size="12" /> {{ state.songs.find(s => s.id === state.currentId)?.name }}
     </span>
-    <button class="icon-btn" :class="{ active: state.playerbarOpen }" :title="t('隐藏 / 显示底部播放栏')" aria-label="t('隐藏 / 显示底部播放栏')" @click="togglePlayerbar">
+    <button class="icon-btn" :class="{ active: state.playerbarOpen }" :title="t('隐藏 / 显示底部播放栏')" :aria-label="t('隐藏 / 显示底部播放栏')" @click="togglePlayerbar">
       <Icon name="player" :size="16" />
     </button>
-    <button class="icon-btn" :title="t('动态壁纸')" aria-label="t('动态壁纸')" @click="openWallpapers">
+    <button class="icon-btn" :title="t('动态壁纸')" :aria-label="t('动态壁纸')" @click="openWallpapers">
       <Icon name="wallpaper" :size="16" />
     </button>
-    <button class="icon-btn" :title="t('帮助')" aria-label="t('帮助')" @click="openHelp">
+    <button class="icon-btn" :title="t('帮助')" :aria-label="t('帮助')" @click="openHelp">
       <Icon name="info" :size="17" />
     </button>
-    <button class="icon-btn" :title="t('设置')" aria-label="t('设置')" @click="openSettings">
+    <button class="icon-btn" :title="t('设置')" :aria-label="t('设置')" @click="openSettings">
       <Icon name="gear" :size="17" />
     </button>
-    <button class="icon-btn" :title="t('更多')" aria-label="t('更多')" @click="menuOpen = !menuOpen">
+    <button class="icon-btn" :title="t('更多')" :aria-label="t('更多')" @click="menuOpen = !menuOpen">
       <Icon name="menu" :size="17" />
     </button>
 
@@ -81,14 +81,14 @@ function about() {
       <button class="menu-pop-item" @click="togglePlayerbar"><Icon name="menu" :size="14" /> {{ state.playerbarOpen ? t('隐藏播放栏') : t('显示播放栏') }}</button>
       <button class="menu-pop-item" @click="toggleSidebar"><Icon name="menu" :size="14" /> {{ t('切换侧边栏') }}</button>
       <div class="menu-pop-div"></div>
-      <div class="menu-pop-title">设置</div>
+      <div class="menu-pop-title">{{ t('设置') }}</div>
       <button class="menu-pop-item" @click="openSettingsTab('appearance')"><Icon name="gear" :size="14" /> {{ t('应用设置') }}</button>
       <button class="menu-pop-item" @click="openThemes"><Icon name="palette" :size="14" /> {{ t('主题库') }}</button>
       <button class="menu-pop-item" @click="openWallpapers"><Icon name="wallpaper" :size="14" /> {{ t('动态壁纸') }}</button>
       <button class="menu-pop-item" @click="openPalette"><Icon name="kbd" :size="14" /> {{ t('命令面板') }}</button>
       <button class="menu-pop-item" @click="openSettingsTab('keys')"><Icon name="kbd" :size="14" /> {{ t('快捷键') }}</button>
       <div class="menu-pop-div"></div>
-      <div class="menu-pop-title">帮助</div>
+      <div class="menu-pop-title">{{ t('帮助') }}</div>
       <button class="menu-pop-item" @click="about"><Icon name="info" :size="14" /> {{ t('关于本工具') }}</button>
     </div>
     </Transition>

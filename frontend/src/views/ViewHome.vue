@@ -21,10 +21,10 @@ const toggleTrackMute = (i) => app.toggleTrackMute(i);
 const toggleTrackSolo = (i) => app.toggleTrackSolo(i);
 
 const QUICK = [
-  { ic: 'music', title: '音乐', sub: '演奏 · 歌词 · 编辑', view: 'music', soon: false },
-  { ic: 'viz', title: '视图', sub: '可视化 · 分析 · 乐谱', view: 'views', soon: false },
-  { ic: 'convert', title: '转译', sub: '转录 · 转换', view: 'transcode', soon: false },
-  { ic: 'box', title: '资源中心', sub: '模型 · 音色 · 资源', view: 'resources', soon: false },
+  { ic: 'music', title: t('音乐'), sub: t('演奏 · 歌词 · 编辑'), view: 'music', soon: false },
+  { ic: 'viz', title: t('视图'), sub: t('可视化 · 分析 · 乐谱'), view: 'views', soon: false },
+  { ic: 'convert', title: t('转译'), sub: t('转录 · 转换'), view: 'transcode', soon: false },
+  { ic: 'box', title: t('资源中心'), sub: t('模型 · 音色 · 资源'), view: 'resources', soon: false },
 ];
 
 function go(v) { setView(v); }

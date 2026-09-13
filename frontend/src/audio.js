@@ -2,6 +2,7 @@
 // 惰性初始化：首次播放 / 导入时才创建，避免阻塞首屏。
 import { Synth } from './core/synth.js';
 import { Player } from './core/player.js';
+import { t } from './core/i18n.js';
 
 let ctx = null;
 let synth = null;
@@ -10,7 +11,7 @@ let player = null;
 export function ensureAudio() {
   if (!ctx) {
     const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) throw new Error('当前环境不支持 Web Audio API');
+    if (!AC) throw new Error(t('当前环境不支持 Web Audio API'));
     try { ctx = new AC({ latencyHint: 'interactive' }); } catch (e) { ctx = new AC(); }
     synth = new Synth(ctx);
     // 应用持久化的音效设置（EQ/低音增强/空间声），随存随用

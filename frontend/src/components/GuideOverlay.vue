@@ -12,7 +12,7 @@ const setView = (v) => app.setView(v);
 const bridge = window.fuBridge;
 const route = useRoute();
 
-const WELCOME_STEPS = [
+const WELCOME_STEPS = computed(() => [
   { ic: 'play2', title: t('欢迎使用 FuFumidi'), body: [ t('转录、修正、编辑、播放一条龙，全部在本机完成，无需联网。'), t('首页工作区已整合：最近曲目、保存工程、导出 MusicXML、快速开始都在一屏内。') ] },
   { ic: 'viz', title: t('播放与可视化'), body: [ t('演奏视图：瀑布流下落音符，跟随播放实时滚动；点击底部琴键可试听单音。'), t('可视化页支持仪表盘 / 瀑布流模式切换，还可点击和弦高亮对应音符。') ] },
   { ic: 'music', title: t('歌词页面'), body: [ t('实时预览当前歌词，并配有波形 / 频谱辅助定位。'), t('歌词时间轴为钢琴卷帘式：可直接拖拽歌词块对齐，Shift 吸附音符、Ctrl 吸附网格。') ] },
@@ -20,9 +20,9 @@ const WELCOME_STEPS = [
   { ic: 'score', title: t('乐谱页面'), body: [ t('自动根据音域切换高低音谱号，并使用 8va / 8vb / 15ma 避免加线“梯子”。'), t('符干方向按谱号中线规则优化，音符间距与连线排版更均匀。') ] },
   { ic: 'transcribe', title: t('转录与转换'), body: [ t('音频转 MIDI：通用识别 / 钢琴专用 / 人声分离三种引擎，性能档位自动推荐。'), t('转换页新增 16:9 视频预览与输出估算，导出前即可看到画质和文件大小预期。') ] },
   { ic: 'palette', title: t('个性化与设置'), body: [ t('主题库与强调色：深色扁平设计，多种配色随心切换。'), t('支持中英双语、快捷键、插件扩展；更多功能已集中到首页“更多功能”横排区域。') ] },
-];
+]);
 
-const IG_STEPS = [
+const IG_STEPS = computed(() => [
   { view: 'home', selector: '[data-guide="quick-transcode"]', title: t('1. 进入转译页'), desc: t('点击首页“转译”卡片，或顶部切换到“转译”标签。'), action: true, validate: () => state.view === 'transcode' },
   { view: 'transcribe', selector: '[data-guide="mode-piano"]', title: t('2. 选择转录引擎'), desc: t('通用识别适合任意歌曲；钢琴专用适合纯钢琴；人声分离先分离人声/伴奏。'), action: true, validate: el => el.classList.contains('active') },
   { view: 'transcribe', selector: '[data-guide="audio-drop"]', title: t('3. 导入音频文件'), desc: t('点击上传区域，选择 MP3 / WAV / FLAC / M4A 等音频。建议使用音质较高的音频。'), manual: true },
@@ -37,7 +37,7 @@ const IG_STEPS = [
   { view: 'convert', selector: '.convert-view', title: t('12. 导出转换'), desc: t('可导出 MIDI、MusicXML、WAV、视频；导出前可选择范围和速度。'), manual: true },
   { view: 'home', selector: '[data-guide="quick-settings"]', title: t('13. 应用设置'), desc: t('设置主题、强调色、字号、语言、Python 解释器、默认输出目录、MIDI 文件关联、插件管理。'), action: true, validate: () => !!state.ui.settingsOpen, onEnter: () => { state.ui.settingsOpen = false; } },
   { view: 'home', selector: '[data-guide="quick-settings"]', title: t('14. 完成'), desc: t('你已经掌握 FuFumidi 的主要功能。常用快捷键：Space 播放/暂停、L 循环、M 节拍器、Ctrl+K 命令面板、F1 帮助。'), manual: true, onEnter: () => { state.ui.settingsOpen = false; } },
-];
+]);
 
 const mode = ref('welcome');
 const welcomeIdx = ref(0);
@@ -49,9 +49,9 @@ let pollTimer = null;
 let scrollHandler = null;
 let actionOff = null;
 
-const isLastWelcome = computed(() => welcomeIdx.value >= WELCOME_STEPS.length - 1);
-const welcomeStep = computed(() => WELCOME_STEPS[welcomeIdx.value]);
-const igStep = computed(() => IG_STEPS[igIdx.value] || null);
+const isLastWelcome = computed(() => welcomeIdx.value >= WELCOME_STEPS.value.length - 1);
+const welcomeStep = computed(() => WELCOME_STEPS.value[welcomeIdx.value]);
+const igStep = computed(() => IG_STEPS.value[igIdx.value] || null);
 
 function markDone() {
   try { localStorage.setItem('fufumidi_guide_done', '1'); } catch (e) {}
@@ -158,7 +158,7 @@ function igNext() {
   nextTick(renderIg);
 }
 
-function finishIg() { toast('恭喜！你已完成 FuFumidi 全功能教程', 'ok'); closeGuide(); }
+function finishIg() { toast(t('恭喜！你已完成 FuFumidi 全功能教程'), 'ok'); closeGuide(); }
 function toast(msg, type) { app.toast(msg, type); }
 
 /* 欢迎页插画装饰 */
@@ -173,7 +173,7 @@ onBeforeUnmount(cleanupIg);
     <div v-if="mode === 'welcome'" class="guide-card">
       <div class="guide-head">
         <span class="guide-count">{{ t('新手引导') }}</span>
-        <button class="icon-btn" :title="t('关闭')" aria-label="t('关闭')" @click="skip"><Icon name="plus" :size="16" style="transform:rotate(45deg)" /></button>
+        <button class="icon-btn" :title="t('关闭')" :aria-label="t('关闭')" @click="skip"><Icon name="plus" :size="16" style="transform:rotate(45deg)" /></button>
       </div>
       <div class="guide-art">
         <span class="g-step">{{ welcomeIdx + 1 }} / {{ WELCOME_STEPS.length }}</span>

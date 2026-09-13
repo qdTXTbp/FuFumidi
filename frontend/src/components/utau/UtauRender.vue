@@ -97,7 +97,7 @@ function exportJson() {
         </button>
         <span v-if="isDesktop && !store.voicebankDir" class="warn small">{{ t('（网页版默认无，需桌面版选择）') }}</span>
       </div>
-      <div class="ur-row"><span class="ur-label">{{ t('工程') }}</span><em>{{ store.bpm }} BPM · {{ store.notes.length }} 音符 · 共 {{ (store.totalBeats).toFixed(1) }} 拍</em></div>
+      <div class="ur-row"><span class="ur-label">{{ t('工程') }}</span><em>{{ store.bpm }} BPM · {{ store.notes.length }} {{ t('音符') }} · {{ t('共') }} {{ (store.totalBeats).toFixed(1) }} {{ t('拍') }}</em></div>
 
       <div class="ur-actions">
         <button class="btn primary" @click="render" :disabled="busy || !store.notes.length">

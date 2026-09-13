@@ -74,7 +74,7 @@ function loadAbcjs() {
     const s = document.createElement('script');
     s.src = './vendor/abcjs-min.js';
     s.onload = () => { abcjsLoaded = true; resolve(); };
-    s.onerror = () => { reject(new Error('abcjs 组件加载失败')); };
+    s.onerror = () => { reject(new Error(t('abcjs 组件加载失败'))); };
     document.head.appendChild(s);
   });
   return abcjsLoading;
@@ -119,12 +119,12 @@ async function loadVerovio() {
             if (typeof ctor === 'function') { restoreModule(); resolve(true); return; }
           }
         } catch (e) {}
-        if (Date.now() - start > 15000) { restoreModule(); reject(new Error('Verovio 组件初始化超时')); return; }
+        if (Date.now() - start > 15000) { restoreModule(); reject(new Error(t('Verovio 组件初始化超时'))); return; }
         setTimeout(wait, 80);
       };
       wait();
     };
-    sc.onerror = () => { restoreModule(); reject(new Error('Verovio 组件加载失败')); };
+    sc.onerror = () => { restoreModule(); reject(new Error(t('Verovio 组件加载失败'))); };
     document.head.appendChild(sc);
   });
   return verovioLoading;
@@ -143,7 +143,7 @@ async function renderStaff() {
   setStatus(t('正在生成…'));
   try { await loadVerovio(); } catch (e) { el.innerHTML = '<div class="score-empty">' + esc(String(e.message || e)) + '</div>'; setStatus(t('生成失败')); return; }
   const vrv = window.verovio;
-  if (!vrv || !vrv.toolkit) { el.innerHTML = '<div class="score-empty">Verovio 组件未加载（离线资源缺失）</div>'; setStatus(t('生成失败')); return; }
+  if (!vrv || !vrv.toolkit) { el.innerHTML = '<div class="score-empty">' + esc(t('Verovio 组件未加载（离线资源缺失）')) + '</div>'; setStatus(t('生成失败')); return; }
 
   try {
     const vpW = sc ? sc.clientWidth : 900;
@@ -164,7 +164,7 @@ async function renderStaff() {
       spacingLinear: 0.45, spacingNonLinear: 0.8, spacingStaff: 5,
     });
     const loadRes = scoreVerovio.loadData(xml);
-    if (loadRes === false || loadRes < 0) { el.innerHTML = '<div class="score-empty">MusicXML 加载失败</div>'; setStatus(t('生成失败')); return; }
+    if (loadRes === false || loadRes < 0) { el.innerHTML = '<div class="score-empty">' + esc(t('MusicXML 加载失败')) + '</div>'; setStatus(t('生成失败')); return; }
     const pages = scoreVerovio.getPageCount();
     let html = '';
     for (let p = 1; p <= pages; p++) { try { html += scoreVerovio.renderToSVG(p, {}) || ''; } catch (e) {} }
@@ -762,7 +762,7 @@ onBeforeUnmount(() => {
           <div class="score-block-name">{{ b.name }}</div>
           <div v-if="b.error" class="score-empty">{{ b.error }}</div>
           <template v-else>
-            <div v-if="b.truncated" class="score-empty" style="padding:8px">{{ t('该轨道音符过多') }}（{{ b.total }}），{{ t('简谱仅显示前') }} {{ b.max }} {{ t('个音符') }}</div>
+            <div v-if="b.truncated" class="score-empty" style="padding:8px">{{ t('该轨道音符过多') }}{{ t('（') }}{{ b.total }}{{ t('），') }}{{ t('简谱仅显示前') }} {{ b.max }} {{ t('个音符') }}</div>
             <div class="jianpu" :style="{ fontSize: fontSz + 'px' }">
               <span v-for="(c, i) in b.cells" :key="i" class="jp-cell" :data-ni="i">
                 <span class="jp-note" :class="c.cls">{{ c.acc }}{{ c.num }}{{ c.dots }}</span>
@@ -821,7 +821,7 @@ onBeforeUnmount(() => {
       <div class="pv-card">
         <div class="pv-head">
           <b>{{ t('乐谱分屏') }}</b>
-          <button class="icon-btn" @click="splitOpen = false" title="关闭"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
+          <button class="icon-btn" @click="splitOpen = false" :title="t('关闭')"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
         </div>
         <div ref="splitContent" class="split-body"></div>
       </div>

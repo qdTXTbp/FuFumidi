@@ -418,7 +418,7 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
       <div class="rep-card">
         <div class="rep-head">
           <b>{{ t('批量替换歌词') }}</b>
-          <button class="icon-btn" @click="replaceOpen = false" title="关闭"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
+          <button class="icon-btn" @click="replaceOpen = false" :title="t('关闭')"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
         </div>
         <input v-model="repFrom" class="text-input" :placeholder="t('查找')" @keydown.enter="doBatchReplace" />
         <input v-model="repTo" class="text-input" :placeholder="t('替换为')" @keydown.enter="doBatchReplace" />

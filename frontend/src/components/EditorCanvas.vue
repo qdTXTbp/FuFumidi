@@ -8,6 +8,7 @@ const app = useAppStore();
 const state = app;
 const currentSong = computed(() => app.currentSong);
 import { KEY_NAME, noteName, clamp } from '../core/util.js';
+import { t } from '../core/i18n.js';
 
 const props = defineProps({
   tool: { type: String, default: 'select' },      // select | pencil | erase
@@ -419,7 +420,7 @@ function draw() {
     ctx2d.strokeStyle = 'rgba(20,86,240,0.35)';
     ctx2d.beginPath(); ctx2d.moveTo(0, yBase); ctx2d.lineTo(W, yBase); ctx2d.stroke();
     ctx2d.fillStyle = 'rgba(20,86,240,0.6)'; ctx2d.font = '9px monospace'; ctx2d.textAlign = 'right';
-    ctx2d.fillText('音频', W - 4, yBase + 11);
+    ctx2d.fillText(t('音频'), W - 4, yBase + 11);
   }
   // 画笔预览
   if (dragState.value && dragState.value.type === 'create') {

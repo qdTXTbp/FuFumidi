@@ -9,6 +9,7 @@ import {
 } from '../core/cloudSync';
 import { useAppStore } from './app';
 import { usePlaylistStore } from './playlist';
+import { t } from '../core/i18n.js';
 
 export interface CloudAccount {
   email: string;
@@ -68,7 +69,7 @@ export const useCloudStore = defineStore('cloud', () => {
         account.value = { email, userId: '' };
         await applyOutcome(out);
       } else {
-        err.value = (out && out.error) || '登录失败';
+        err.value = (out && out.error) || t('登录失败');
       }
       return out;
     } finally { busy.value = false; }
@@ -82,7 +83,7 @@ export const useCloudStore = defineStore('cloud', () => {
         account.value = { email, userId: '' };
         await applyOutcome(out);
       } else {
-        err.value = (out && out.error) || '注册失败';
+        err.value = (out && out.error) || t('注册失败');
       }
       return out;
     } finally { busy.value = false; }
@@ -93,7 +94,7 @@ export const useCloudStore = defineStore('cloud', () => {
     try {
       const out = await cloudResolveConflict(choose);
       if (out && out.ok) await applyOutcome(out);
-      else err.value = (out && out.error) || '操作失败';
+      else err.value = (out && out.error) || t('操作失败');
       return out;
     } finally { busy.value = false; }
   }
@@ -110,7 +111,7 @@ export const useCloudStore = defineStore('cloud', () => {
     try {
       const out = await cloudSync(mode);
       last.value = out;
-      if (out && !out.ok) err.value = out.error || '同步失败';
+      if (out && !out.ok) err.value = out.error || t('同步失败');
       else await applyOutcome(out);
       return out;
     } finally {
@@ -126,7 +127,7 @@ export const useCloudStore = defineStore('cloud', () => {
     try {
       const r = await cloudFetchCounts();
       counts.value = r && r.ok ? r : null;
-      if (!r || !r.ok) err.value = (r && r.error) || '读取存档信息失败';
+      if (!r || !r.ok) err.value = (r && r.error) || t('读取存档信息失败');
       return r;
     } finally { busy.value = false; }
   }

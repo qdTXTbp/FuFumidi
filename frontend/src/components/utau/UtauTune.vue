@@ -36,12 +36,12 @@ const vf = v => Math.max(1, Math.min(12, parseFloat(v) || 5.5));
 
       <div class="utn-card">
         <b>{{ t('flags（预留）') }}</b>
-        <input class="text-input utn-flags" :value="n.flags" placeholder="如 g-3B50Y90" @input="e => patch({ flags: e.target.value })" />
+        <input class="text-input utn-flags" :value="n.flags" :placeholder="t('如 g-3B50Y90')" @input="e => patch({ flags: e.target.value })" />
         <div class="muted small">{{ t('引擎渲染时应用（当前版本记入工程）。') }}</div>
       </div>
 
       <div class="utn-card neutral">
-        <div class="utn-row wide"><span class="muted">{{ t('当前音符') }}</span><em>{{ n.lyric }} · 第 {{ n.startBeat }} 拍起 · {{ n.durBeat }} 拍</em></div>
+        <div class="utn-row wide"><span class="muted">{{ t('当前音符') }}</span><em>{{ n.lyric }} · {{ t('第') }} {{ n.startBeat }} {{ t('拍起') }} · {{ n.durBeat }} {{ t('拍') }}</em></div>
       </div>
     </div>
   </div>

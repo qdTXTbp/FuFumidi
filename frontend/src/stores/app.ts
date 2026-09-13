@@ -347,7 +347,7 @@ export const useAppStore = defineStore('app', {
           }
         }
         let mid: any;
-        try { mid = parseMidi(bytes); } catch (e: any) { this.toast(t('无法解析 ') + it.name + '：' + e.message, 'warn'); continue; }
+        try { mid = parseMidi(bytes); } catch (e: any) { this.toast(t('无法解析 ') + it.name + t('：') + e.message, 'warn'); continue; }
         const song: any = buildSong(mid, { name });
         const item = {
           id: cryptoId(),
@@ -505,6 +505,24 @@ export const useAppStore = defineStore('app', {
         else await this.selectSong(this.songs[0].id);
       }
     },
+    /** 清理「失效曲目」：内存与本地库都取不到字节的条目（例如转录产物文件被删、
+     *  临时目录也被清理后留下的空壳）。这类条目光占列表且无法播放/编辑。
+     *  返回清理掉的数量。 */
+    async pruneBrokenSongs(): Promise<number> {
+      const broken: string[] = [];
+      for (const s of this.songs as any[]) {
+        const mem = s && s.__bytes;
+        if (mem && (mem.length || mem.byteLength)) continue;
+        let has = false;
+        try {
+          const r = await idbGet(STORE_SONGS, s.id);
+          has = !!(r && r.bytes && (r.bytes.length || r.bytes.byteLength));
+        } catch (e) {}
+        if (!has) broken.push(s.id);
+      }
+      for (const id of broken) await this.removeSong(id);
+      return broken.length;
+    },
     // 音频曲目播放元素：接入合成器效果链（EQ/空间声对音频同样生效）
     ensureAudioEl(): any {
       if (this.audioEl) return this.audioEl;
@@ -608,6 +626,7 @@ export const useAppStore = defineStore('app', {
           name: tr.name,
           ch,
           program: tr.program,
+          origProgram: tr.program,   // 混音台换音色后恢复用
           isDrum: tr.isDrum,
           vol: 1,
           mute: false,
@@ -666,7 +685,7 @@ export const useAppStore = defineStore('app', {
       const i = seq.indexOf(this.playMode);
       this.playMode = seq[(i + 1) % seq.length] || 'order';
       try { localStorage.setItem('fufumidi_playmode', this.playMode); } catch (e) {}
-      const label: Record<string, string> = { order: '顺序播放', shuffle: '随机播放', repeatOne: '单曲循环', loopAll: '列表循环' };
+      const label: Record<string, string> = { order: t('顺序播放'), shuffle: t('随机播放'), repeatOne: t('单曲循环'), loopAll: t('列表循环') };
       this.toast(t(label[this.playMode] || this.playMode), 'ok');
     },
     // 按模式计算下一首目标 id；dir: 1 下一首 / -1 上一首；返回 null 表示维持当前（单曲循环）或无处可去
@@ -944,6 +963,17 @@ export const useAppStore = defineStore('app', {
         player.syn.setTrackPan(k, v);
       });
       player.syn.setChannelPan(tr.ch, v);
+    },
+    /** 给某轨道换音色（混音台）：prog<0 恢复文件原音色；同一通道的多条轨会一起变 */
+    setTrackProgram(i: number, prog: number) {
+      const tr: any = this.tracks[i];
+      if (!tr) return;
+      const { player } = ensureAudio();
+      this.tracks.forEach((o: any) => {
+        if (o.ch !== tr.ch) return;
+        o.program = (prog < 0) ? (o.origProgram != null ? o.origProgram : o.program) : prog;
+      });
+      player.syn.setChannelProgram(tr.ch, prog < 0 ? -1 : prog);
     },
     setView(v: string) {
       if (v !== this.view && this.playing) {

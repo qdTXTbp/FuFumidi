@@ -55,8 +55,11 @@ function fmtGroups(groups, names) {
   for (const g of names) {
     const info = groups && groups[g];
     if (!info) { lines.push('[' + g + '] ' + t('未知')); continue; }
-    if (info.ok) lines.push('[' + g + '] ' + t('通过'));
-    else lines.push('[' + g + '] ' + t('缺失：') + ((info.missing || []).join(', ') || t('未知')));
+    if (info.ok) { lines.push('[' + g + '] ' + t('通过')); continue; }
+    const parts = [];
+    if (info.missing && info.missing.length) parts.push(t('缺失：') + info.missing.join(', '));
+    if (info.broken && info.broken.length) parts.push(t('已损坏（可点「补全」重装）：') + info.broken.join(', '));
+    lines.push('[' + g + '] ' + (parts.join('；') || t('未知')));
   }
   return lines.join('\n');
 }
@@ -74,10 +77,13 @@ function fmtGroupsPretty(groups, names) {
   const lines = [];
   for (const g of names) {
     const info = groups && groups[g];
-    const label = MODEL_DEP_LABEL[g] || g;
+    const label = t(MODEL_DEP_LABEL[g] || g);
     if (!info) { lines.push('[' + label + '] ' + t('未知')); continue; }
-    if (info.ok) lines.push('[' + label + '] ' + t('通过'));
-    else lines.push('[' + label + '] ' + t('缺失：') + ((info.missing || []).join(', ') || t('未知')));
+    if (info.ok) { lines.push('[' + label + '] ' + t('通过')); continue; }
+    const parts = [];
+    if (info.missing && info.missing.length) parts.push(t('缺失：') + info.missing.join(', '));
+    if (info.broken && info.broken.length) parts.push(t('已损坏（可点「补全」重装）：') + info.broken.join(', '));
+    lines.push('[' + label + '] ' + (parts.join('；') || t('未知')));
   }
   return lines.join('\n');
 }
@@ -168,10 +174,10 @@ async function installModels() {
   try {
     for (const g of MODEL_GROUP_IDS) {
       resultText.value = parts.length
-        ? parts.join('\n') + '\n' + t('正在安装：') + (MODEL_DEP_LABEL[g] || g) + '…'
-        : t('正在安装：') + (MODEL_DEP_LABEL[g] || g) + '…';
+        ? parts.join('\n') + '\n' + t('正在安装：') + t(MODEL_DEP_LABEL[g] || g) + '…'
+        : t('正在安装：') + t(MODEL_DEP_LABEL[g] || g) + '…';
       const r = await bridge.depInstall(g);
-      parts.push('[' + (MODEL_DEP_LABEL[g] || g) + '] ' + ((r && r.ok) ? t('完成') : t('失败：') + String((r && (r.error || r.raw)) || 'unknown')));
+      parts.push('[' + t(MODEL_DEP_LABEL[g] || g) + '] ' + ((r && r.ok) ? t('完成') : t('失败：') + String((r && (r.error || r.raw)) || 'unknown')));
       resultText.value = parts.join('\n');
     }
     refreshModels();
@@ -211,7 +217,7 @@ async function exportConfig() {
 async function importConfig() {
   if (!bridge || !bridge.pickFile || !bridge.readBinary) { toast(t('当前环境不支持导入配置'), 'warn'); return; }
   try {
-    const p = await bridge.pickFile({ filters: [{ name: 'FuFumidi 配置', extensions: ['json'] }] });
+    const p = await bridge.pickFile({ filters: [{ name: t('FuFumidi 配置'), extensions: ['json'] }] });
     if (!p) return;
     const bytes = await bridge.readBinary(p);
     const cfg = JSON.parse(new TextDecoder('utf-8').decode(new Uint8Array(bytes)));
@@ -270,7 +276,7 @@ function runtimeOk(m) {
 async function installModelRuntime(m) {
   if (!bridge || !bridge.depInstall || !m.runtime) return;
   modelRtBusy.value = true;
-  const label = MODEL_DEP_LABEL[m.runtime] || m.runtime;
+  const label = t(MODEL_DEP_LABEL[m.runtime] || m.runtime);
   toast(t('正在安装 ') + label + t(' 运行时…'));
   try {
     const r = await bridge.depInstall(m.runtime);
@@ -301,7 +307,7 @@ async function importLocalModel() {
     toast(t('正在导入本地模型压缩包…'), 'info');
     const r = await bridge.modelImportLocal(p);
     if (r && r.ok) {
-      toast(t('已导入模型：') + r.model + '（' + fmtSize(r.size) + '）', 'ok');
+      toast(t('已导入模型：') + r.model + t('（') + fmtSize(r.size) + t('）'), 'ok');
       refreshModels();
     } else {
       toast(t('导入失败：') + ((r && r.error) || ''), 'error');
@@ -383,7 +389,7 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
           </div>
           <div class="fr-ctl col">
             <div style="display:flex;gap:6px;width:100%">
-              <input :type="hfTokenVisible ? 'text' : 'password'" v-model="hfToken" class="ov-input mono" style="flex:1;min-width:200px" placeholder="hf_xxxx（huggingface.co/settings/tokens 创建）" @change="saveHfToken" />
+              <input :type="hfTokenVisible ? 'text' : 'password'" v-model="hfToken" class="ov-input mono" style="flex:1;min-width:200px" :placeholder="t('hf_xxxx（huggingface.co/settings/tokens 创建）')" @change="saveHfToken" />
               <button class="btn sm" @click="hfTokenVisible = !hfTokenVisible">{{ hfTokenVisible ? t('隐藏') : t('显示') }}</button>
               <button class="btn sm" @click="saveHfToken">{{ t('保存') }}</button>
             </div>

@@ -8,8 +8,8 @@ import { t } from '../core/i18n.js';
 const route = useRoute();
 const router = useRouter();
 const tabs = [
-  { id: 'transcribe', label: '转录', ic: 'transcribe' },
-  { id: 'convert', label: '转换', ic: 'convert' },
+  { id: 'transcribe', label: t('转录'), ic: 'transcribe' },
+  { id: 'convert', label: t('转换'), ic: 'convert' },
 ];
 const comps = { transcribe: ViewTranscribe, convert: ViewConvert };
 const validTab = (id) => tabs.some(x => x.id === id);

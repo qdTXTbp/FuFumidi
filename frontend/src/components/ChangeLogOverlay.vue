@@ -21,7 +21,7 @@ function close() { state.ui.changelogOpen = false; }
             {{ state.changelog.from }} → {{ state.changelog.to }}
           </span>
         </div>
-        <button class="icon-btn" :title="t('关闭')" aria-label="t('关闭')" @click="close"><Icon name="close" :size="14" /></button>
+        <button class="icon-btn" :title="t('关闭')" :aria-label="t('关闭')" @click="close"><Icon name="close" :size="14" /></button>
       </div>
       <div class="cl-body">
         <template v-if="state.changelog && state.changelog.logs && state.changelog.logs.length">

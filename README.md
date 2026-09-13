@@ -16,9 +16,9 @@ FuFumidi is a fully offline desktop workstation for MIDI. It targets musicians, 
 
 The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally; transcription and editing never upload anything. Only when you opt in to cloud sync does your playlist and MIDI library get uploaded to your own cloud account.
 
-Current release line: **4.0.2** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v4.0.2)).
+Current release line: **4.1.0** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v4.1.0)).
 
-What's new in 4.0.2: batch management is back in the song list (multi-select / select-all, then move to a playlist, favorite or remove in bulk); fixes the transcriber's "Beat grid (Beat This!)" toggle having no effect because the engine never received the flag.
+What's new in 4.1.0: fixes transcription failing permanently on some machines (the bundled Python inherited the system `PYTHONPATH` and loaded a second, older numpy, failing with `No module named 'numpy.exceptions'`); the dependency check now verifies by real import and can force-reinstall broken packages; new "Clean up broken songs" under Settings → Features; removing a song from a playlist now offers to delete it from the library when it belongs to no other playlist; batch management is unified into a single entry. Adds full i18n (Simplified Chinese / Traditional Chinese / English / Japanese).
 
 ### What it does
 
@@ -39,6 +39,14 @@ What's new in 4.0.2: batch management is back in the song list (multi-select / s
 - Integrity check and one-click repair for the bundled runtime.
 - Optional Rust core (`src-tauri/`) for performance-critical paths.
 - GPU acceleration options for CUDA and DirectML, with a graceful fallback to CPU.
+
+### i18n contribution rule
+
+The UI supports three interface languages: **Simplified Chinese / Traditional Chinese / English**.
+
+- Every new UI string MUST include an English translation in `frontend/src/core/i18n.js` (`I18N_MAP`); missing English = incomplete.
+- Traditional Chinese is auto-derived from the Simplified source via `frontend/src/core/zhHant.js` (no manual per-string translation needed; add to its `PHRASE` map only when a term needs a Traditional-Chinese wording difference).
+- The language can be switched anytime in Settings (persisted to `localStorage(fufumidi_lang)` and `settings.lang`). On a fresh install the UI follows the system/browser language once; updates never reset the user's choice.
 
 ---
 

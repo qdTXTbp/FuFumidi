@@ -260,13 +260,13 @@ function loadImageBytes(img) {
 // 实时和弦识别
 function detectLiveChord(notes) {
   const pcs = [...new Set(notes.map(n => ((n.midi % 12) + 12) % 12))].sort((a, b) => a - b);
-  if (pcs.length < 3) return { name: pcs.length ? '未形成完整三和弦' : '', minor: false };
+  if (pcs.length < 3) return { name: pcs.length ? t('未形成完整三和弦') : '', minor: false };
   const root = pcs[0];
   const has = (iv) => pcs.includes((root + iv) % 12);
   const NAME = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   if (has(4) && has(7)) return { name: NAME[root], minor: false };
   if (has(3) && has(7)) return { name: NAME[root] + 'm', minor: true };
-  return { name: NAME[root] + '（近似）', minor: false };
+  return { name: NAME[root] + t('（近似）'), minor: false };
 }
 const TRACK_COLORS = ['#ff5530', '#ea5ec1', '#1456f0', '#a855f7', '#3daeff', '#1ba673', '#3b82f6', '#f59e0b', '#d45656', '#17437d'];
 function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
@@ -504,7 +504,7 @@ async function renderVideo() {
         <div class="field-row">
           <label>{{ t('音色风格') }}</label>
           <select class="select-input" v-model="preset" style="min-width:150px">
-            <option v-for="p in PRESETS" :key="p[0]" :value="p[0]">{{ p[1] }}</option>
+            <option v-for="p in PRESETS" :key="p[0]" :value="p[0]">{{ t(p[1]) }}</option>
           </select>
         </div>
         <div class="field-row">
@@ -567,7 +567,7 @@ async function renderVideo() {
         <div class="field-row">
           <label>{{ t('音色风格') }}</label>
           <select class="select-input" v-model="preset" style="min-width:150px">
-            <option v-for="p in PRESETS" :key="p[0]" :value="p[0]">{{ p[1] }}</option>
+            <option v-for="p in PRESETS" :key="p[0]" :value="p[0]">{{ t(p[1]) }}</option>
           </select>
         </div>
 <div class="field-row">
@@ -601,7 +601,7 @@ async function renderVideo() {
           </select>
         </div>
         <div class="field-row">
-          <label>{{ t('码率') }}（Mbps）</label>
+          <label>{{ t('码率') }}{{ t('（') }}Mbps{{ t('）') }}</label>
           <input type="number" min="0.5" step="0.5" class="num-input" v-model.number="VE.bitrate" style="width:100%" />
         </div>
         <div class="field-row">

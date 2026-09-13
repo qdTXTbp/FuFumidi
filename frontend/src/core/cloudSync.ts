@@ -9,6 +9,8 @@
 // - 冲突：登录时本机与云端都有存档 -> 交给界面选择保留哪一侧。
 // ============================================================
 
+import { t } from './i18n.js';
+
 // 主用自定义域名（国内可直连），失败自动回退 workers.dev 兜底
 const BASES = [
   'https://fusync.de5.net',
@@ -76,7 +78,7 @@ function hostOf(base: string): string {
 /** 取响应片段用于报错：折叠空白并截断，避免把整页 HTML 塞进提示 */
 function snippet(text: string): string {
   const s = String(text || '').replace(/\s+/g, ' ').trim();
-  if (!s) return '空响应';
+  if (!s) return t('空响应');
   return s.length > 120 ? s.slice(0, 120) + '…' : s;
 }
 
@@ -109,7 +111,7 @@ async function httpJson(path: string, opts: { method?: string; token?: string; b
         // 非 JSON：多为网关错误页 / WAF 挑战页 / 运营商劫持页（状态码可能是 200），
         // 也可能来自 Worker 超限（Error 1102）。这类失败源于链路而非业务，
         // 换备用域名重试往往能通；把所有尝试理由汇总报出，便于定位真正原因。
-        failures.push(`${hostOf(base)}（HTTP ${res.status} 非 JSON 响应：${snippet(text)}）`);
+        failures.push(`${hostOf(base)}${t('（')}HTTP ${res.status}${t(' 非 JSON 响应：')}${snippet(text)}${t('）')}`);
         continue;
       }
       if (data.ok === false) {
@@ -119,17 +121,17 @@ async function httpJson(path: string, opts: { method?: string; token?: string; b
         throw err;
       }
       if (!res.ok) {
-        failures.push(`${hostOf(base)}（HTTP ${res.status}：${snippet(text)}）`);
+        failures.push(`${hostOf(base)}${t('（')}HTTP ${res.status}${t('：')}${snippet(text)}${t('）')}`);
         continue;
       }
       activeBase = base;
       return data;
     } catch (e: any) {
       if (e && e.business) throw e;
-      failures.push(`${hostOf(base)}（${(e && e.message) || '连接失败'}）`);
+      failures.push(`${hostOf(base)}${t('（')}${(e && e.message) || t('连接失败')}${t('）')}`);
     }
   }
-  throw new Error('无法连接云服务，已尝试：' + failures.join('；'));
+  throw new Error(t('无法连接云服务，已尝试：') + failures.join(t('；')));
 }
 
 /* ---------------- 本地数据读取 ---------------- */
@@ -353,10 +355,10 @@ async function syncInner(acc: any, mode: 'merge' | 'push' | 'pull'): Promise<Clo
   const b = br();
   const now = Date.now();
 
-  report('prepare', '正在读取本机曲库…');
+  report('prepare', t('正在读取本机曲库…'));
   const songs = await localSongs();
   const playlists = await localPlaylists();
-  report('prepare', `本机 ${songs.length} 首，正在与云端比对…`);
+  report('prepare', t('本机 ') + songs.length + t(' 首，正在与云端比对…'));
 
   const knownSongs: string[] = (await kvGet(KNOWN_SONGS_KEY)) || [];
   const knownPls: string[] = (await kvGet(KNOWN_PLAYLISTS_KEY)) || [];
@@ -444,8 +446,8 @@ async function syncInner(acc: any, mode: 'merge' | 'push' | 'pull'): Promise<Clo
     }
   }
   let uploadedSongs = 0;
-  if (toUpload.length) report('upload', `准备上传 ${toUpload.length} 首…`, 0, toUpload.length);
-  else if (mode !== 'pull') report('upload', '本机曲目均无改动，无需上传', 0, 0);
+  if (toUpload.length) report('upload', t('准备上传 ') + toUpload.length + t(' 首…'), 0, toUpload.length);
+  else if (mode !== 'pull') report('upload', t('本机曲目均无改动，无需上传'), 0, 0);
   for (let i = 0; i < toUpload.length; i += BATCH) {
     const batch = toUpload.slice(i, i + BATCH).map((key) => {
       const info = metaByKey.get(key)!;
@@ -453,7 +455,7 @@ async function syncInner(acc: any, mode: 'merge' | 'push' | 'pull'): Promise<Clo
     });
     const r = await httpJson('/songs/put', { method: 'POST', token: acc.token, body: { songs: batch } });
     uploadedSongs += Number(r.saved) || 0;
-    report('upload', `已上传 ${Math.min(i + BATCH, toUpload.length)}/${toUpload.length} 首…`, Math.min(i + BATCH, toUpload.length), toUpload.length);
+    report('upload', t('已上传 ') + Math.min(i + BATCH, toUpload.length) + '/' + toUpload.length + t(' 首…'), Math.min(i + BATCH, toUpload.length), toUpload.length);
   }
 
   // ---- 应用下发曲目：处理墓碑，并挑出需要下载字节的曲目 ----
@@ -495,7 +497,7 @@ async function syncInner(acc: any, mode: 'merge' | 'push' | 'pull'): Promise<Clo
   // ---- 分批下载字节并落盘 ----
   let downloadedSongs = 0;
   const idbRows: any[] = [];
-  if (toDownload.length) report('download', `准备下载 ${toDownload.length} 首…`, 0, toDownload.length);
+  if (toDownload.length) report('download', t('准备下载 ') + toDownload.length + t(' 首…'), 0, toDownload.length);
   for (let i = 0; i < toDownload.length; i += BATCH) {
     const ids = toDownload.slice(i, i + BATCH);
     const r = await httpJson('/songs/get', { method: 'POST', token: acc.token, body: { ids } });
@@ -522,12 +524,12 @@ async function syncInner(acc: any, mode: 'merge' | 'push' | 'pull'): Promise<Clo
       idbRows.push({ ...row, bytes });
       if (!exist) byName.set(key, { id, name: key } as LocalSong);
       downloadedSongs++;
-      report('download', `已下载 ${downloadedSongs}/${toDownload.length} 首…`, downloadedSongs, toDownload.length);
+      report('download', t('已下载 ') + downloadedSongs + '/' + toDownload.length + t(' 首…'), downloadedSongs, toDownload.length);
     }
   }
   await idbPutSongs(idbRows);
-  if (toDownload.length) report('download', `已下载 ${toDownload.length}/${toDownload.length} 首`, toDownload.length, toDownload.length);
-  report('playlist', '正在写入歌单…');
+  if (toDownload.length) report('download', t('已下载 ') + toDownload.length + '/' + toDownload.length + t(' 首'), toDownload.length, toDownload.length);
+  report('playlist', t('正在写入歌单…'));
 
   // ---- 应用下发的歌单（把文件名映射回本地曲目 id）----
   const nameToId = new Map<string, string>();
@@ -563,7 +565,7 @@ async function syncInner(acc: any, mode: 'merge' | 'push' | 'pull'): Promise<Clo
   await kvSet(KNOWN_PLAYLISTS_KEY, knownPlsNext);
   await kvSet(PL_STATE_KEY, nextPlState);
 
-  report('done', '同步完成');
+  report('done', t('同步完成'));
   return {
     ok: true,
     uploadedSongs,
@@ -633,7 +635,7 @@ async function doAuth(path: string, email: string, password: string, turnstile?:
       method: 'POST',
       body: { email, password, turnstile: turnstile || null, deviceId: await deviceId() },
     });
-    if (!res.token) return { ok: false, error: '服务器未发放会话' };
+    if (!res.token) return { ok: false, error: t('服务器未发放会话') };
     const acc = { email: res.email || email, userId: res.userId, token: res.token };
     await setAccount(acc);
     const out = await reconcile(acc, res);
@@ -671,7 +673,7 @@ export interface CloudCounts {
 export async function cloudFetchCounts(): Promise<CloudCounts> {
   const local = await localCounts();
   const acc = await getAccount();
-  if (!acc || !acc.token) return { ok: false, error: '未登录', ...local, cloudSongs: 0, cloudPlaylists: 0 };
+  if (!acc || !acc.token) return { ok: false, error: t('未登录'), ...local, cloudSongs: 0, cloudPlaylists: 0 };
   try {
     const res = await httpJson('/counts', { token: acc.token });
     return {
@@ -686,7 +688,7 @@ export async function cloudFetchCounts(): Promise<CloudCounts> {
 
 export async function cloudSync(mode: 'merge' | 'push' | 'pull' = 'merge'): Promise<CloudSyncOutcome> {
   const acc = await getAccount();
-  if (!acc || !acc.token) return { ok: false, error: '未登录' };
+  if (!acc || !acc.token) return { ok: false, error: t('未登录') };
   try { return await syncInner(acc, mode); }
   catch (e: any) { return { ok: false, error: e && e.message ? e.message : String(e) }; }
 }
@@ -694,7 +696,7 @@ export async function cloudSync(mode: 'merge' | 'push' | 'pull' = 'merge'): Prom
 /** 冲突解决：local=保留本机覆盖云端；cloud=保留云端覆盖本机 */
 export async function cloudResolveConflict(choose: 'local' | 'cloud'): Promise<CloudSyncOutcome> {
   const acc = await getAccount();
-  if (!acc || !acc.token) return { ok: false, error: '未登录' };
+  if (!acc || !acc.token) return { ok: false, error: t('未登录') };
   try {
     const out = await syncInner(acc, choose === 'cloud' ? 'pull' : 'push');
     await markLinked(acc.userId);

@@ -13,10 +13,10 @@ import UtauRender from '../components/utau/UtauRender.vue';
 const store = useUtauStore();
 
 const TABS = [
-  { id: 'voicebank', label: '声库制作', ic: 'mic' },
-  { id: 'score', label: '曲谱编辑', ic: 'edit' },
-  { id: 'tune', label: '调声', ic: 'spark' },
-  { id: 'render', label: '合成渲染', ic: 'convert' },
+  { id: 'voicebank', label: t('声库制作'), ic: 'mic' },
+  { id: 'score', label: t('曲谱编辑'), ic: 'edit' },
+  { id: 'tune', label: t('调声'), ic: 'spark' },
+  { id: 'render', label: t('合成渲染'), ic: 'convert' },
 ];
 const tab = ref('voicebank');
 const pending = ref(true);
@@ -29,7 +29,7 @@ onMounted(() => { store.init(); pending.value = false; });
     <div class="utau-head">
       <div class="utau-title">
         <Icon name="utau" :size="16" />
-        <b>UTAU 工作台</b>
+        <b>{{ t('UTAU 工作台') }}</b>
         <span class="tag">{{ t('音MAD 制作') }}</span>
       </div>
       <div class="utau-tabs">

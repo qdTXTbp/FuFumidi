@@ -76,7 +76,7 @@ async function enable(item) {
     if (r && r.using === 'sf2') {
       await settings.save({ active_soundfont: item.path });
       activePath.value = item.path;
-      toast(t('已启用音色「') + item.name + '」', 'ok');
+      toast(t('已启用音色「') + item.name + t('」'), 'ok');
     } else {
       // 加载失败：回退默认合成器并提示具体原因，避免“显示已启用实则未生效”
       await settings.save({ active_soundfont: 'internal' });
@@ -98,12 +98,12 @@ async function download(item) {
   if (!bridge || !bridge.sfWorkshop || !item || !item.id) return;
   if (prog[item.id] && prog[item.id].active) return;
   prog[item.id] = { percent: 0, active: true, error: '' };
-  toast(t('开始下载「') + item.name + '」…');
+  toast(t('开始下载「') + item.name + t('」') + '…');
   try {
     const r = await bridge.sfWorkshop.download(item.id);
     if (r && r.ok) {
       prog[item.id] = { percent: 100, active: false };
-      toast(t('音色「') + item.name + '」下载完成' + (r.existed ? '（已存在）' : ''), 'ok');
+      toast(t('音色「') + item.name + t('」下载完成') + (r.existed ? t('（已存在）') : ''), 'ok');
     } else {
       prog[item.id] = { percent: 0, active: false, error: (r && r.error) || t('下载失败') };
       toast(t('下载失败：') + ((r && r.error) || ''), 'error');
@@ -124,7 +124,7 @@ async function importLocal() {
   if (!bridge || !bridge.sfWorkshop || !bridge.sfWorkshop.import) { toast(t('请使用桌面版导入音色'), 'warn'); return; }
   try {
     const r = await bridge.sfWorkshop.import();
-    if (r && r.ok) { toast(t('已导入音色「') + r.name + '」', 'ok'); await refresh(); }
+    if (r && r.ok) { toast(t('已导入音色「') + r.name + t('」'), 'ok'); await refresh(); }
     else if (r && !r.canceled) toast(t('导入失败：') + ((r && r.error) || ''), 'error');
   } catch (e) { toast(t('导入失败：') + String(e.message || e), 'error'); }
 }
@@ -133,7 +133,7 @@ async function removeItem(item) {
   const isActiveNow = isActive(item);
   const r = await (bridge.sfWorkshop.remove(item.id));
   if (r && r.ok) {
-    toast(t('已删除音色「') + item.name + '」', 'ok');
+    toast(t('已删除音色「') + item.name + t('」'), 'ok');
     if (isActiveNow) { await settings.save({ active_soundfont: 'internal' }); setActiveSoundfontRef('internal'); activePath.value = 'internal'; toast(t('已回退到默认合成器'), 'warn'); }
     await refresh();
   } else {
@@ -169,7 +169,7 @@ async function preview(item) {
       setTimeout(() => syn.preview(72, 0, 100, 0.5), 300);
       setTimeout(() => syn.preview(76, 0, 100, 0.7), 600);
     }
-    toast(t('已预览「') + item.name + '」音色', 'ok');
+    toast(t('已预览「') + item.name + t('」音色'), 'ok');
   } catch (e) {
     toast(t('预览失败：') + String(e.message || e), 'error');
   } finally {
@@ -239,7 +239,7 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
       <div class="sf-head">
         <Icon name="box" :size="15" />
         <span>{{ t('内置精选音色库') }}</span>
-        <em class="sf-sub">{{ registry.length + ' 款' }}</em>
+        <em class="sf-sub">{{ registry.length + t(' 款') }}</em>
       </div>
       <div v-if="loading" class="sf-empty">{{ t('加载中…') }}</div>
       <div v-else-if="!registry.length" class="sf-empty">{{ bridge ? t('暂无音色库信息') : t('请使用桌面版') }}</div>
@@ -279,7 +279,7 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
       <div class="sf-head">
         <Icon name="folder" :size="15" />
         <span>{{ t('我的音色') }}</span>
-        <em class="sf-sub">{{ customs.length + ' 个' }}</em>
+        <em class="sf-sub">{{ customs.length + t(' 个') }}</em>
       </div>
       <div v-if="!customs.length" class="sf-empty">{{ t('还没有自定义音色，点击「导入 .sf2 音色」添加本地音色文件。') }}</div>
       <div v-else class="sf-grid">

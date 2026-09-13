@@ -90,14 +90,14 @@ function trUp() { recordCmd('transpose 1'); editor.value?.transposeSelected(1); 
 function trDown() { recordCmd('transpose -1'); editor.value?.transposeSelected(-1); refreshSel(); }
 function octUp() { recordCmd('transpose 12'); editor.value?.transposeSelected(12); refreshSel(); }
 function octDown() { recordCmd('transpose -12'); editor.value?.transposeSelected(-12); refreshSel(); }
-function copy() { const n = editor.value?.copySelected() || 0; toast('已复制 ' + n + t(' 个音符'), 'ok'); }
+function copy() { const n = editor.value?.copySelected() || 0; toast(t('已复制 ') + n + t(' 个音符'), 'ok'); }
 function paste() {
   const s = song.value; if (!s) return;
   const playTick = Math.round(s.secToTick(state.curSec / state.tempo));
   const n = editor.value?.pasteAt(playTick) || 0;
-  if (n) toast('已粘贴 ' + n + t(' 个音符'), 'ok');
+  if (n) toast(t('已粘贴 ') + n + t(' 个音符'), 'ok');
 }
-function dup() { const n = editor.value?.duplicateSelected() || 0; if (n) toast('已克隆 ' + n + t(' 个音符'), 'ok'); }
+function dup() { const n = editor.value?.duplicateSelected() || 0; if (n) toast(t('已克隆 ') + n + t(' 个音符'), 'ok'); }
 function velUp() { recordCmd('vel_inc 3'); editor.value?.velRampSelected(3); refreshSel(); }
 function velDown() { recordCmd('vel_dec 3'); editor.value?.velRampSelected(-3); refreshSel(); }
 function samePitch() { editor.value?.selectSamePitch(); refreshSel(); }
@@ -105,7 +105,7 @@ function selectAll() { editor.value?.selectAll(); refreshSel(); }
 
 /* ---------------- 力度曲线 ---------------- */
 function openVelCurve() {
-  if (!editor.value?.selCount()) { toast('请先在钢琴卷帘中选择音符', 'warn'); return; }
+  if (!editor.value?.selCount()) { toast(t('请先在钢琴卷帘中选择音符'), 'warn'); return; }
   const n = editor.value.selCount();
   const v = editor.value.selInfo();
   // 初始：线性渐变（首音符力度 → 末音符力度）
@@ -186,13 +186,13 @@ function applyVelCurve() {
   editor.value?.applyVelCurve([...vcVals.value]);
   vcOpen.value = false;
   refreshSel();
-  toast('力度曲线已应用', 'ok');
+  toast(t('力度曲线已应用'), 'ok');
 }
 
 /* ---------------- 列表编辑器 ---------------- */
 function openList() {
   const notes = editor.value?.selNotes();
-  if (!notes || !notes.length) { toast('请先在钢琴卷帘中选择音符', 'warn'); return; }
+  if (!notes || !notes.length) { toast(t('请先在钢琴卷帘中选择音符'), 'warn'); return; }
   listDraft.value = notes.map(n => ({ start: n.start, end: n.end, midi: n.midi, vel: n.vel }));
   listOpen.value = true;
 }
@@ -200,27 +200,27 @@ function saveList() {
   editor.value?.applyDraft(listDraft.value);
   listOpen.value = false;
   refreshSel();
-  toast('列表修改已应用', 'ok');
+  toast(t('列表修改已应用'), 'ok');
 }
 function addPedal() {
   const n = editor.value?.addPedal() || 0;
-  if (n) toast('已添加踏板（CC64 起止）', 'ok');
-  else toast('请先选择音符或载入曲目', 'warn');
+  if (n) toast(t('已添加踏板（CC64 起止）'), 'ok');
+  else toast(t('请先选择音符或载入曲目'), 'warn');
 }
 function delPedal() {
   const n = editor.value?.delPedal() || 0;
-  if (n) toast('已删除 ' + n + t(' 个踏板事件'), 'ok');
-  else toast('区间内没有踏板事件', 'warn');
+  if (n) toast(t('已删除 ') + n + t(' 个踏板事件'), 'ok');
+  else toast(t('区间内没有踏板事件'), 'warn');
 }
 function setLoopFromSel() {
   const sel = editor.value?.selRef();
-  if (!sel || !sel.length) { toast('请先选择音符，再设置为选区循环', 'warn'); return; }
+  if (!sel || !sel.length) { toast(t('请先选择音符，再设置为选区循环'), 'warn'); return; }
   let a = Infinity, b = 0;
   for (const n of sel) { a = Math.min(a, n.start); b = Math.max(b, n.end); }
   const { player } = ensureAudio();
   player.setLoop(true, a, b);
   state.loop = true;
-  toast('已设置选区循环（' + a + ' - ' + b + '）', 'ok');
+  toast(t('已设置选区循环（') + a + ' - ' + b + t('）'), 'ok');
 }
 function clearLoopSel() {
   const s = song.value;
@@ -228,7 +228,7 @@ function clearLoopSel() {
   const { player } = ensureAudio();
   player.setLoop(false, 0, s.totalTicks);
   state.loop = false;
-  toast('已清除循环', 'ok');
+  toast(t('已清除循环'), 'ok');
 }
 
 // 鼓组编辑器弹窗
@@ -240,7 +240,7 @@ const DRUM_NAMES = {35:'Acoustic Bass Drum',36:'Bass Drum 1',38:'Acoustic Snare'
 const drumTracks = computed(() => song.value ? song.value.tracks.map((t, i) => ({ i, t })) : []);
 
 function openDrumEditor() {
-  if (!song.value) { toast('请先载入 MIDI', 'warn'); return; }
+  if (!song.value) { toast(t('请先载入 MIDI'), 'warn'); return; }
   const drums = drumTracks.value.filter(x => x.t.isDrum || x.t.ch === 9);
   const list = drums.length ? drums : drumTracks.value;
   drumTrack.value = list.length ? list[0].i : 0;
@@ -310,7 +310,7 @@ function drumClear() {
     for (const h of hits) { const i = tr.notes.indexOf(h); if (i >= 0) tr.notes.splice(i, 1); }
     editor.value?.notifyExternalEdit();
     drawDrum();
-    toast('已清除 ' + hits.length + t(' 个鼓点'), 'ok');
+    toast(t('已清除 ') + hits.length + t(' 个鼓点'), 'ok');
   }
 }
 watch(drumTrack, () => nextTick(drawDrum));
@@ -377,39 +377,39 @@ const historyList = computed(() => (editor.value ? editor.value.historySnapshots
 /* ---- 批量操作 ---- */
 function selectChordBatch() {
   const tr = song.value?.tracks[trackIndex.value];
-  if (!tr || !editor.value?.selCount()) { toast('请先选中一个音符', 'warn'); return; }
+  if (!tr || !editor.value?.selCount()) { toast(t('请先选中一个音符'), 'warn'); return; }
   const arr = editor.value.selRef();
   const ref0 = arr[0];
   const eps = Math.max(0.005, (ref0.end - ref0.start) * 0.5);
   const hits = tr.notes.filter(n => Math.abs(n.start - ref0.start) <= eps || Math.abs(n.end - ref0.end) <= eps);
   editor.value.selectNotes(hits);
   refreshSel();
-  toast('已选择 ' + hits.length + t(' 个和弦音符'), 'ok');
+  toast(t('已选择 ') + hits.length + t(' 个和弦音符'), 'ok');
 }
 function deleteShortNotes() {
   const s = song.value, tr = s?.tracks[trackIndex.value];
   if (!tr || !tr.notes.length) return;
   const sec = 0.08, bpm = s.initialBpm || 120;
   const short = tr.notes.filter(n => (n.end - n.start) / s.tpb * (60 / bpm) < sec);
-  if (!short.length) { toast('当前轨道没有短于 80ms 的音符', 'ok'); return; }
+  if (!short.length) { toast(t('当前轨道没有短于 80ms 的音符'), 'ok'); return; }
   editor.value.pushStateForTrack(trackIndex.value);
   for (const n of short) { const i = tr.notes.indexOf(n); if (i >= 0) tr.notes.splice(i, 1); }
   editor.value.notifyExternalEdit();
-  toast('已删除 ' + short.length + t(' 个短音'), 'ok');
+  toast(t('已删除 ') + short.length + t(' 个短音'), 'ok');
 }
 function loudScale(f) {
   const tr = song.value?.tracks[trackIndex.value];
   if (!tr) return;
   const arr = editor.value?.selCount() ? editor.value.selRef() : tr.notes;
-  if (!arr.length) { toast('没有可处理的音符', 'warn'); return; }
+  if (!arr.length) { toast(t('没有可处理的音符'), 'warn'); return; }
   editor.value.pushStateForTrack(trackIndex.value);
   for (const n of tr.notes) if (arr.includes(n)) n.vel = clamp(Math.round(n.vel * f), 1, 127);
   editor.value.notifyExternalEdit();
-  toast('已调整响度 ' + (f > 1 ? '+' : '') + Math.round((f - 1) * 100) + '%', 'ok');
+  toast(t('已调整响度 ') + (f > 1 ? '+' : '') + Math.round((f - 1) * 100) + '%', 'ok');
 }
 function applyBpm() {
   const s = song.value;
-  if (!s) { toast('请先载入 MIDI', 'warn'); return; }
+  if (!s) { toast(t('请先载入 MIDI'), 'warn'); return; }
   const bpm = clamp(bpmInput.value || 120, 20, 400);
   const us = Math.round(60e6 / bpm);
   const map = s.tempoMap;
@@ -428,7 +428,7 @@ function applyBpm() {
   const { player } = ensureAudio();
   player.load(s);
   player.setScale(state.tempo);
-  toast('BPM 已应用到歌曲：' + bpm, 'ok');
+  toast(t('BPM 已应用到歌曲：') + bpm, 'ok');
 }
 
 /* ---- 智能伴奏 ---- */
@@ -451,7 +451,7 @@ function analyzeBarsForChords(s) {
 }
 function addAccompaniment() {
   const s = song.value;
-  if (!s) { toast('请先载入 MIDI', 'warn'); return; }
+  if (!s) { toast(t('请先载入 MIDI'), 'warn'); return; }
   const tpb = s.tpb, bars = Math.max(1, s.bars);
   const chords = analyzeBarsForChords(s);
   const bass = [], arp = [], pad = [];
@@ -482,25 +482,25 @@ function addAccompaniment() {
   s.tracks.push({ index: nextIdx + 1, name: t('智能分解和弦'), ch: 1, program: 26, isDrum: false, notes: arp, events: [], ccs: [] });
   s.tracks.push({ index: nextIdx + 2, name: t('智能铺底'), ch: 3, program: 49, isDrum: false, notes: pad, events: [], ccs: [] });
   editor.value.notifyExternalEdit();
-  toast('已生成智能伴奏：贝斯 / 分解和弦 / 铺底 3 轨（Ctrl+Z 可撤销）', 'ok');
+  toast(t('已生成智能伴奏：贝斯 / 分解和弦 / 铺底 3 轨（Ctrl+Z 可撤销）'), 'ok');
 }
 
 /* ---- 智能量化 + Groove ---- */
-function openSmartQuantize() { if (song.value) sqOpen.value = true; else toast('请先载入 MIDI', 'warn'); }
+function openSmartQuantize() { if (song.value) sqOpen.value = true; else toast(t('请先载入 MIDI'), 'warn'); }
 function extractGroove() {
   const notes = editor.value?.selNotes();
-  if (!notes || !notes.length) { toast('请先选中要提取 Groove 的音符', 'err'); return; }
+  if (!notes || !notes.length) { toast(t('请先选中要提取 Groove 的音符'), 'err'); return; }
   const gridTicks = (song.value.tpb || 480) * 4 / (sqGrid.value || 8);
   const offsets = notes.map(n => { const ideal = Math.round(n.start / gridTicks) * gridTicks; return (n.start - ideal) / gridTicks; });
   localStorage.setItem('fufumidi_custom_groove', JSON.stringify(offsets));
-  toast('已提取自定义 Groove：' + offsets.length + t(' 个偏移'), 'ok');
+  toast(t('已提取自定义 Groove：') + offsets.length + t(' 个偏移'), 'ok');
 }
 function applySmartQuantize() {
   const s = song.value; if (!s) return;
   const tpb = s.tpb, gridTicks = tpb * 4 / (sqGrid.value || 8);
   const strength = (sqStrength.value || 0) / 100;
   const notes = editor.value?.selCount() ? editor.value.selRef() : s.tracks.reduce((a, t) => a.concat(t.notes), []);
-  if (!notes.length) { toast('没有可处理的音符', 'warn'); return; }
+  if (!notes.length) { toast(t('没有可处理的音符'), 'warn'); return; }
   editor.value.pushStateForTrack(editor.value?.selCount() ? trackIndex.value : -1);
   let count = 0;
   for (const n of notes) {
@@ -523,10 +523,10 @@ function applySmartQuantize() {
   }
   editor.value.notifyExternalEdit();
   sqOpen.value = false;
-  toast('已量化 ' + count + t(' 个音符'), 'ok');
+  toast(t('已量化 ') + count + t(' 个音符'), 'ok');
 }
 /* ---- 逻辑编辑器 ---- */
-function openLogicEditor() { if (song.value) logicOpen.value = true; else toast('请先载入 MIDI', 'warn'); }
+function openLogicEditor() { if (song.value) logicOpen.value = true; else toast(t('请先载入 MIDI'), 'warn'); }
 function applyLogic() {
   const s = song.value; if (!s) return;
   const tpb = s.tpb;
@@ -534,7 +534,7 @@ function applyLogic() {
   if (logicTarget.value === 'sel') notes = editor.value?.selRef() || [];
   else if (logicTarget.value === 'track') notes = s.tracks[trackIndex.value]?.notes.slice() || [];
   else for (const tr of s.tracks) notes = notes.concat(tr.notes);
-  if (!notes.length) { toast('目标区间没有音符', 'warn'); return; }
+  if (!notes.length) { toast(t('目标区间没有音符'), 'warn'); return; }
   const condVal = parseFloat(logicCondVal.value) || 0;
   const actVal = parseFloat(logicActVal.value) || 0;
   const cond = logicCond.value, action = logicAction.value;
@@ -572,7 +572,7 @@ function applyLogic() {
   editor.value.pushStateForTrack(logicTarget.value === 'all' ? -1 : trackIndex.value);
   editor.value.notifyExternalEdit();
   logicOpen.value = false;
-  toast('已处理 ' + changed + t(' 个音符'), changed ? 'ok' : 'err');
+  toast(t('已处理 ') + changed + t(' 个音符'), changed ? 'ok' : 'err');
 }
 
 /* ---- 宏系统 ---- */
@@ -583,10 +583,10 @@ function toggleRecording() {
   recording.value = !recording.value;
   if (!recording.value && recordLines.value.length) {
     macroCmd.value = recordLines.value.join('\n');
-    toast('已停止录制，共捕获 ' + recordLines.value.length + t(' 条操作'), 'ok');
+    toast(t('已停止录制，共捕获 ') + recordLines.value.length + t(' 条操作'), 'ok');
   } else if (recording.value) {
     recordLines.value = [];
-    toast('开始录制宏操作', 'ok');
+    toast(t('开始录制宏操作'), 'ok');
   }
 }
 function clearRecorded() { recordLines.value = []; }
@@ -599,21 +599,21 @@ function runMacro(name) {
   const script = macroToCmd(name);
   const result = applyMacroScript(s, script, { selection });
   if (name === 'normalize_vel' && !result.changed) {
-    toast('没有可处理的音符', 'err');
+    toast(t('没有可处理的音符'), 'err');
     return;
   }
   recordCmd(script);
   editor.value.pushStateForTrack(name === 'normalize_vel' && editor.value?.selCount() ? trackIndex.value : -1);
   editor.value.notifyExternalEdit();
   macroOpen.value = false;
-  toast('宏已执行，处理 ' + result.changed + t(' 个音符'), 'ok');
+  toast(t('宏已执行，处理 ') + result.changed + t(' 个音符'), 'ok');
 }
 function addCustomMacro() {
   const name = macroName.value.trim(), cmd = macroCmd.value.trim();
-  if (!name || !cmd) { toast('请填写宏名称和命令', 'err'); return; }
+  if (!name || !cmd) { toast(t('请填写宏名称和命令'), 'err'); return; }
   const arr = loadCustomMacros(); arr.push({ name, cmd }); saveCustomMacros(arr);
   customMacros.value = arr; macroName.value = ''; macroCmd.value = '';
-  toast('自定义宏已保存', 'ok');
+  toast(t('自定义宏已保存'), 'ok');
 }
 function runCustomMacro(cmd) {
   const s = song.value; if (!s) return;
@@ -624,7 +624,7 @@ function runCustomMacro(cmd) {
   editor.value.pushStateForTrack(-1);
   editor.value.notifyExternalEdit();
   macroOpen.value = false;
-  toast('自定义宏已执行，处理 ' + result.changed + t(' 个音符'), 'ok');
+  toast(t('自定义宏已执行，处理 ') + result.changed + t(' 个音符'), 'ok');
 }
 function delCustomMacro(i) {
   const arr = loadCustomMacros(); arr.splice(i, 1); saveCustomMacros(arr); customMacros.value = arr;
@@ -641,7 +641,7 @@ function saveKSMap() {
   for (const m of Object.keys(ksDraft.value)) if (ksDraft.value[m] && +m <= 24) map[+m] = ksDraft.value[m];
   ksMap.value = map; saveKS(map);
   ksOpen.value = false;
-  toast('Key Switch 映射已保存', 'ok');
+  toast(t('Key Switch 映射已保存'), 'ok');
 }
 
 /* ---- CC 事件列表 ---- */
@@ -660,13 +660,13 @@ function delCCItem(i) {
 /* ---- 歌词编辑（添加到选中音符） ---- */
 function openLyricEditor() {
   const n = editor.value?.selCount();
-  if (!n) { toast('请先在钢琴卷帘中选择音符', 'warn'); return; }
+  if (!n) { toast(t('请先在钢琴卷帘中选择音符'), 'warn'); return; }
   lyricText.value = '';
   lyricOpen.value = true;
 }
 function addLyricToSel() {
   const s = song.value, text = lyricText.value.trim();
-  if (!s || !text) { toast('请输入歌词', 'warn'); return; }
+  if (!s || !text) { toast(t('请输入歌词'), 'warn'); return; }
   const notes = editor.value?.selNotes();
   if (!notes || !notes.length) return;
   const tr = s.tracks[trackIndex.value];
@@ -675,34 +675,34 @@ function addLyricToSel() {
   tr.events.sort((a, b) => a.tick - b.tick);
   editor.value.notifyExternalEdit();
   lyricOpen.value = false;
-  toast('已为 ' + notes.length + t(' 个音符添加歌词'), 'ok');
+  toast(t('已为 ') + notes.length + t(' 个音符添加歌词'), 'ok');
 }
 
 /* ---- 音频对齐 ---- */
 async function loadAudio() {
-  if (!bridge || !bridge.pickAudio) { toast('请使用桌面版选择音频', 'warn'); return; }
+  if (!bridge || !bridge.pickAudio) { toast(t('请使用桌面版选择音频'), 'warn'); return; }
   const p = await bridge.pickAudio();
   if (!p) return;
   try {
     const buf = await bridge.readBinary(p);
-    if (!buf) { toast('无法读取音频文件', 'err'); return; }
+    if (!buf) { toast(t('无法读取音频文件'), 'err'); return; }
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
     const audioBuf = await ctx.decodeAudioData(ab);
     audioData.value = { data: audioBuf.getChannelData(0), rate: audioBuf.sampleRate };
     audioCtx = ctx;
-    toast('音频已载入，可在卷帘底部查看波形', 'ok');
-  } catch (e) { toast('音频解码失败：' + (e.message || e), 'err'); }
+    toast(t('音频已载入，可在卷帘底部查看波形'), 'ok');
+  } catch (e) { toast(t('音频解码失败：') + (e.message || e), 'err'); }
 }
 function snapAudio() {
-  if (!audioData.value) { toast('请先载入原音频', 'warn'); return; }
+  if (!audioData.value) { toast(t('请先载入原音频'), 'warn'); return; }
   const n = editor.value?.snapSelToAudio() || 0;
   toast(n ? t('已吸附 ') + n + t(' 个音符到波形起音') : t('没有可吸附的音符（需载入音频）'), n ? 'ok' : 'warn');
 }
 async function toggleAudioSync() {
   const s = song.value; if (!s) return;
-  if (audioSyncOn.value) { if (audioEl) { audioEl.pause(); audioEl = null; } audioSyncOn.value = false; toast('已停止试听', 'ok'); return; }
-  if (!audioData.value) { toast('请先载入原音频', 'warn'); return; }
+  if (audioSyncOn.value) { if (audioEl) { audioEl.pause(); audioEl = null; } audioSyncOn.value = false; toast(t('已停止试听'), 'ok'); return; }
+  if (!audioData.value) { toast(t('请先载入原音频'), 'warn'); return; }
   try {
     const p = await bridge.pickAudio();
     if (!p) return;
@@ -713,8 +713,8 @@ async function toggleAudioSync() {
     else audioEl.src = URL.createObjectURL(blob);
     audioEl.play();
     audioSyncOn.value = true;
-    toast('试听中（播放 MIDI 同时播放原音频）', 'ok');
-  } catch (e) { toast('音频试听失败：' + (e.message || e), 'err'); }
+    toast(t('试听中（播放 MIDI 同时播放原音频）'), 'ok');
+  } catch (e) { toast(t('音频试听失败：') + (e.message || e), 'err'); }
 }
 
 /* ---- 音色 ---- */
@@ -748,20 +748,20 @@ function timbreChange() {
   tr.program = timbre.value;
   const { player } = ensureAudio();
   player.load(song.value); player.setScale(state.tempo);
-  toast('音色已切换：' + (GM_NAMES[timbre.value] || (t('音色 ') + timbre.value)), 'ok');
+  toast(t('音色已切换：') + (GM_NAMES[timbre.value] || (t('音色 ') + timbre.value)), 'ok');
 }
 function timbreAll() {
   const s = song.value; if (!s) return;
   for (const tr of s.tracks) if (!tr.isDrum) tr.program = timbre.value;
   const { player } = ensureAudio();
   player.load(s); player.setScale(state.tempo);
-  toast('已把当前音色应用到全部非鼓轨', 'ok');
+  toast(t('已把当前音色应用到全部非鼓轨'), 'ok');
 }
 function smartTimbre() {
   const tr = song.value?.tracks[trackIndex.value]; if (!tr) return;
   // 按音域/密度/名称智能选择
   const notes = tr.notes;
-  if (!notes.length) { toast('当前轨道没有音符', 'warn'); return; }
+  if (!notes.length) { toast(t('当前轨道没有音符'), 'warn'); return; }
   const lo = Math.min(...notes.map(n => n.midi)), hi = Math.max(...notes.map(n => n.midi));
   const name = (tr.name || '').toLowerCase();
   let p = 0;
@@ -780,7 +780,7 @@ function smartTimbre() {
   tr.program = p;
   const { player } = ensureAudio();
   player.load(song.value); player.setScale(state.tempo);
-  toast('智能音色：' + (GM_NAMES[p] || p), 'ok');
+  toast(t('智能音色：') + (GM_NAMES[p] || p), 'ok');
 }
 
 /* ---- 全屏编辑 ---- */
@@ -793,37 +793,37 @@ function toggleFullscreen() {
 /* ---- 视频轨道嵌入（影视配乐对齐） ---- */
 const videoUrl = ref('');
 async function loadVideo() {
-  if (!bridge || !bridge.pickFile) { toast('请使用桌面版选择视频', 'warn'); return; }
+  if (!bridge || !bridge.pickFile) { toast(t('请使用桌面版选择视频'), 'warn'); return; }
   const p = await bridge.pickFile({ title: t('选择视频文件'), filters: [{ name: t('视频'), extensions: ['mp4', 'webm', 'mkv', 'mov', 'avi'] }] });
   if (!p) return;
   videoUrl.value = 'file://' + p.replace(/\\/g, '/');
-  toast('视频已嵌入编辑区，播放 MIDI 时自动同步', 'ok');
+  toast(t('视频已嵌入编辑区，播放 MIDI 时自动同步'), 'ok');
 }
-function removeVideo() { videoUrl.value = ''; toast('已移除视频轨道', 'ok'); }
+function removeVideo() { videoUrl.value = ''; toast(t('已移除视频轨道'), 'ok'); }
 
 function newMidi() {
   const mid = { ticksPerBeat: 480, format: 1, tracks: [{ name: t('音轨 1'), ch: 0, program: 0, events: [], notes: [], ccs: [] }] };
   const bytes = encodeMidi(mid.tracks, { division: 480 });
   importFiles([{ name: t('未命名.mid'), bytes }]);
-  toast('已新建空白 MIDI', 'ok');
+  toast(t('已新建空白 MIDI'), 'ok');
 }
 async function exportMidi() {
   const s = song.value;
-  if (!s) { toast('请先载入 MIDI', 'warn'); return; }
+  if (!s) { toast(t('请先载入 MIDI'), 'warn'); return; }
   try {
     const bytes = encodeMidi(s.tracks, { division: s.tpb, tempoMap: s.tempoMap, sigMap: s.sigMap });
     if (bridge && bridge.saveBinary) {
       const r = await bridge.saveBinary({ name: s.name + '.mid', data: Array.from(bytes) });
-      if (r && r.ok) toast('已导出 MIDI', 'ok');
-      else if (!(r && r.canceled)) toast('导出失败：' + ((r && r.error) || ''), 'warn');
+      if (r && r.ok) toast(t('已导出 MIDI'), 'ok');
+      else if (!(r && r.canceled)) toast(t('导出失败：') + ((r && r.error) || ''), 'warn');
     } else {
       const blob = new Blob([bytes], { type: 'audio/midi' });
       const a = document.createElement('a');
       a.download = s.name + '.mid'; a.href = URL.createObjectURL(blob); a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-      toast('已导出 MIDI', 'ok');
+      toast(t('已导出 MIDI'), 'ok');
     }
-  } catch (e) { toast('导出失败：' + (e.message || e), 'warn'); }
+  } catch (e) { toast(t('导出失败：') + (e.message || e), 'warn'); }
 }
 
 /* ---------------- 迷你图 ---------------- */
@@ -911,41 +911,41 @@ onBeforeUnmount(() => {
     <div class="page-head">
       <div class="page-ic"><Icon name="edit" :size="20" /></div>
       <div class="grow">
-        <div class="page-title">编辑器</div>
-        <div class="page-sub">钢琴卷帘 · 画笔点击添加 · 拖拽移动 · 边缘拉伸</div>
+        <div class="page-title">{{ t('编辑器') }}</div>
+        <div class="page-sub">{{ t('钢琴卷帘 · 画笔点击添加 · 拖拽移动 · 边缘拉伸') }}</div>
       </div>
       <button class="btn sm" @click="selectAll"><Icon name="target" :size="13" />{{ t('全选') }}</button>
-      <button class="btn sm" @click="newMidi"><Icon name="plus" :size="13" /> 新建</button>
+      <button class="btn sm" @click="newMidi"><Icon name="plus" :size="13" /> {{ t('新建') }}</button>
       <button class="btn sm primary" @click="exportMidi"><Icon name="save" :size="13" />{{ t('导出 MIDI') }}</button>
     </div>
 
     <div v-if="!currentSong" class="empty card">
       <div class="empty-ic"><Icon name="edit" :size="34" /></div>
       <b>{{ t('还没有载入曲目') }}</b>
-      <p>导入 MIDI 文件后即可在钢琴卷帘中逐音符精修：添加、移动、拉伸、量化、移调。</p>
+      <p>{{ t('导入 MIDI 文件后即可在钢琴卷帘中逐音符精修：添加、移动、拉伸、量化、移调。') }}</p>
     </div>
 
     <template v-else>
       <!-- 工具栏 -->
       <div class="card ed-toolbar">
         <div class="et-group">
-          <button class="et-btn" :class="{ active: tool === 'select' }" title="选择 V" @click="tool = 'select'"><Icon name="cursor" :size="14" />{{ t('选择') }}</button>
-          <button class="et-btn" :class="{ active: tool === 'pencil' }" title="画笔 B" @click="tool = 'pencil'"><Icon name="pencil" :size="14" />画笔</button>
-          <button class="et-btn" :class="{ active: tool === 'erase' }" title="橡皮 E" @click="tool = 'erase'"><Icon name="erase" :size="14" />橡皮</button>
+          <button class="et-btn" :class="{ active: tool === 'select' }" :title="t('选择 V')" @click="tool = 'select'"><Icon name="cursor" :size="14" />{{ t('选择') }}</button>
+          <button class="et-btn" :class="{ active: tool === 'pencil' }" :title="t('画笔 B')" @click="tool = 'pencil'"><Icon name="pencil" :size="14" />{{ t('画笔') }}</button>
+          <button class="et-btn" :class="{ active: tool === 'erase' }" :title="t('橡皮 E')" @click="tool = 'erase'"><Icon name="erase" :size="14" />{{ t('橡皮') }}</button>
         </div>
         <span class="et-sep"></span>
-        <span class="et-label">吸附</span>
+        <span class="et-label">{{ t('吸附') }}</span>
         <select class="select-input" v-model="snapRatio" style="width:auto;padding:4px 8px">
           <option v-for="s in SNAPS" :key="s[0]" :value="s[0]">{{ s[1] }}</option>
         </select>
         <span class="et-sep"></span>
-        <span class="et-label">编辑轨道</span>
+        <span class="et-label">{{ t('编辑轨道') }}</span>
         <select class="select-input" v-model="trackIndex" style="width:auto;max-width:170px;padding:4px 8px">
-          <option v-for="(tr, i) in song.tracks" :key="i" :value="i">{{ tr.name }}（{{ state.tracks[i]?.noteCount ?? tr.notes.length }}）</option>
+          <option v-for="(tr, i) in song.tracks" :key="i" :value="i">{{ tr.name }}{{ t('（') }}{{ state.tracks[i]?.noteCount ?? tr.notes.length }}{{ t('）') }}</option>
         </select>
         <span class="et-sep"></span>
-        <button class="et-btn" :title="t('撤销 Ctrl+Z')" @click="undo"><Icon name="undo" :size="14" />撤销</button>
-        <button class="et-btn" :title="t('重做 Ctrl+Y')" @click="redo"><Icon name="redo" :size="14" />重做</button>
+        <button class="et-btn" :title="t('撤销 Ctrl+Z')" @click="undo"><Icon name="undo" :size="14" />{{ t('撤销') }}</button>
+        <button class="et-btn" :title="t('重做 Ctrl+Y')" @click="redo"><Icon name="redo" :size="14" />{{ t('重做') }}</button>
         <button class="et-btn danger" :title="t('删除 Del')" @click="del"><Icon name="trash" :size="14" />{{ t('删除') }}</button>
         <span class="et-sep"></span>
         <button class="et-btn" :title="t('量化到吸附网格')" @click="quantize"><Icon name="quantize" :size="14" />{{ t('量化') }}</button>
@@ -954,64 +954,64 @@ onBeforeUnmount(() => {
         <button class="et-btn" :title="t('降八度')" @click="octDown"><Icon name="minus" :size="14" />-8</button>
         <button class="et-btn" :title="t('升八度')" @click="octUp"><Icon name="plus" :size="14" />+8</button>
         <span class="et-sep"></span>
-        <button class="et-btn" :title="t('复制 Ctrl+C')" @click="copy"><Icon name="copy" :size="14" />复制</button>
-        <button class="et-btn" :title="t('粘贴到播放头 Ctrl+V')" @click="paste"><Icon name="paste" :size="14" />粘贴</button>
-        <button class="et-btn" :title="t('克隆选区到其后')" @click="dup"><Icon name="plus" :size="14" />克隆</button>
+        <button class="et-btn" :title="t('复制 Ctrl+C')" @click="copy"><Icon name="copy" :size="14" />{{ t('复制') }}</button>
+        <button class="et-btn" :title="t('粘贴到播放头 Ctrl+V')" @click="paste"><Icon name="paste" :size="14" />{{ t('粘贴') }}</button>
+        <button class="et-btn" :title="t('克隆选区到其后')" @click="dup"><Icon name="plus" :size="14" />{{ t('克隆') }}</button>
         <span class="et-sep"></span>
-        <button class="et-btn" :title="t('选区力度渐强')" @click="velUp"><Icon name="cresc" :size="14" />渐强</button>
-        <button class="et-btn" :title="t('选区力度渐弱')" @click="velDown"><Icon name="dim" :size="14" />渐弱</button>
-        <button class="et-btn" :title="t('力度曲线：绘制力度包络并应用到选区')" @click="openVelCurve"><Icon name="chart" :size="14" />力度曲线</button>
-        <button class="et-btn" :title="t('同音高批量选择')" @click="samePitch"><Icon name="target" :size="14" />同音高</button>
-        <button class="et-btn" :title="t('列表编辑器：精确修改音符数值')" @click="openList"><Icon name="list" :size="14" />列表</button>
-        <button class="et-btn" :title="t('鼓组编辑器：打击乐专用视图')" @click="openDrumEditor"><Icon name="drum" :size="14" />鼓组</button>
+        <button class="et-btn" :title="t('选区力度渐强')" @click="velUp"><Icon name="cresc" :size="14" />{{ t('渐强') }}</button>
+        <button class="et-btn" :title="t('选区力度渐弱')" @click="velDown"><Icon name="dim" :size="14" />{{ t('渐弱') }}</button>
+        <button class="et-btn" :title="t('力度曲线：绘制力度包络并应用到选区')" @click="openVelCurve"><Icon name="chart" :size="14" />{{ t('力度曲线') }}</button>
+        <button class="et-btn" :title="t('同音高批量选择')" @click="samePitch"><Icon name="target" :size="14" />{{ t('同音高') }}</button>
+        <button class="et-btn" :title="t('列表编辑器：精确修改音符数值')" @click="openList"><Icon name="list" :size="14" />{{ t('列表') }}</button>
+        <button class="et-btn" :title="t('鼓组编辑器：打击乐专用视图')" @click="openDrumEditor"><Icon name="drum" :size="14" />{{ t('鼓组') }}</button>
         <span class="et-sep"></span>
-        <span class="et-label">CC泳道</span>
+        <span class="et-label">{{ t('CC泳道') }}</span>
         <select class="select-input" v-model="ccNumber" style="width:auto;max-width:130px;padding:4px 8px">
           <option v-for="c in CC_OPTIONS" :key="c[0]" :value="c[0]">{{ c[1] }}</option>
         </select>
         <button class="et-btn" :class="{ active: ccEnabled }" :title="t('切换 CC 自动化泳道')" @click="ccEnabled = !ccEnabled"><Icon name="cclane" :size="14" />{{ ccEnabled ? t('关闭泳道') : t('显示泳道') }}</button>
         <span class="et-sep"></span>
-        <span class="et-label">踏板</span>
-        <button class="et-btn" :title="t('在选区/整轨起止处添加延音踏板（CC64）')" @click="addPedal"><Icon name="cclane" :size="14" />+ 踏板</button>
-        <button class="et-btn" :title="t('删除选区/整轨内的踏板事件')" @click="delPedal"><Icon name="cclane" :size="14" />- 踏板</button>
+        <span class="et-label">{{ t('踏板') }}</span>
+        <button class="et-btn" :title="t('在选区/整轨起止处添加延音踏板（CC64）')" @click="addPedal"><Icon name="cclane" :size="14" />+ {{ t('踏板') }}</button>
+        <button class="et-btn" :title="t('删除选区/整轨内的踏板事件')" @click="delPedal"><Icon name="cclane" :size="14" />- {{ t('踏板') }}</button>
         <span class="et-sep"></span>
         <span class="et-label">{{ t('循环') }}</span>
-        <button class="et-btn" :class="{ active: state.loop }" :title="t('将选区设为循环')" @click="setLoopFromSel"><Icon name="loop" :size="14" />选区循环</button>
-        <button class="et-btn" :title="t('清除循环')" @click="clearLoopSel"><Icon name="minus" :size="14" />清循环</button>
+        <button class="et-btn" :class="{ active: state.loop }" :title="t('将选区设为循环')" @click="setLoopFromSel"><Icon name="loop" :size="14" />{{ t('选区循环') }}</button>
+        <button class="et-btn" :title="t('清除循环')" @click="clearLoopSel"><Icon name="minus" :size="14" />{{ t('清循环') }}</button>
         <button class="et-btn et-more" :class="{ active: advOpen }" @click="advOpen = !advOpen">
-          <Icon name="chevron" :size="13" :style="{ transform: advOpen ? 'rotate(180deg)' : '' }" /> 高级
+          <Icon name="chevron" :size="13" :style="{ transform: advOpen ? 'rotate(180deg)' : '' }" /> {{ t('高级') }}
         </button>
       </div>
 
       <!-- 高级工具区（折叠） -->
       <div v-if="advOpen" class="card ed-adv">
         <div class="adv-row">
-          <span class="et-label">音阶</span>
-          <button class="et-btn" :class="{ active: scaleSnap }" :title="t('新音符吸附到当前调式音阶')" @click="scaleSnap = !scaleSnap"><Icon name="target" :size="14" />音阶吸附</button>
+          <span class="et-label">{{ t('音阶') }}</span>
+          <button class="et-btn" :class="{ active: scaleSnap }" :title="t('新音符吸附到当前调式音阶')" @click="scaleSnap = !scaleSnap"><Icon name="target" :size="14" />{{ t('音阶吸附') }}</button>
           <span class="et-sep"></span>
-          <span class="et-label">批量</span>
-          <button class="et-btn" :title="t('选中与当前音符同时发声的音符')" @click="selectChordBatch"><Icon name="music" :size="14" />和弦</button>
-          <button class="et-btn" :title="t('删除当前轨道短于 80ms 的音符')" @click="deleteShortNotes"><Icon name="trash" :size="14" />删短音</button>
+          <span class="et-label">{{ t('批量') }}</span>
+          <button class="et-btn" :title="t('选中与当前音符同时发声的音符')" @click="selectChordBatch"><Icon name="music" :size="14" />{{ t('和弦') }}</button>
+          <button class="et-btn" :title="t('删除当前轨道短于 80ms 的音符')" @click="deleteShortNotes"><Icon name="trash" :size="14" />{{ t('删短音') }}</button>
           <button class="et-btn" :title="t('选区/整轨响度降低 10%')" @click="loudScale(0.9)"><Icon name="minus" :size="14" />-10%</button>
           <button class="et-btn" :title="t('选区/整轨响度提高 10%')" @click="loudScale(1.1)"><Icon name="plus" :size="14" />+10%</button>
           <span class="et-sep"></span>
           <span class="et-label">BPM</span>
           <input v-model.number="bpmInput" class="num-input" type="number" min="20" max="400" step="1" style="width:62px" />
-          <button class="et-btn" :title="t('应用为歌曲速度（改写 tempo 事件）')" @click="applyBpm"><Icon name="zap" :size="14" />应用</button>
+          <button class="et-btn" :title="t('应用为歌曲速度（改写 tempo 事件）')" @click="applyBpm"><Icon name="zap" :size="14" />{{ t('应用') }}</button>
           <span class="et-sep"></span>
-          <button class="et-btn" :title="t('基于当前旋律/和弦自动生成 贝斯+分解和弦+铺底')" @click="addAccompaniment"><Icon name="spark" :size="14" />智能伴奏</button>
+          <button class="et-btn" :title="t('基于当前旋律/和弦自动生成 贝斯+分解和弦+铺底')" @click="addAccompaniment"><Icon name="spark" :size="14" />{{ t('智能伴奏') }}</button>
           <button class="et-btn" :title="t('智能量化：网格 + Groove 模板')" @click="openSmartQuantize"><Icon name="quantize" :size="14" />{{ t('智能量化') }}</button>
-          <button class="et-btn" :title="t('逻辑编辑器：批量规则处理音符')" @click="openLogicEditor"><Icon name="edit" :size="14" />逻辑</button>
-          <button class="et-btn" :title="t('宏面板：一键执行常用批量处理')" @click="openMacroPanel"><Icon name="zap" :size="14" />宏</button>
-          <button class="et-btn" :title="t('Key Switch 映射配置')" @click="openKSMap"><Icon name="kbd" :size="14" />键位</button>
-          <button class="et-btn" :title="t('撤销历史')" @click="openHistory"><Icon name="clock" :size="14" />历史</button>
+          <button class="et-btn" :title="t('逻辑编辑器：批量规则处理音符')" @click="openLogicEditor"><Icon name="edit" :size="14" />{{ t('逻辑') }}</button>
+          <button class="et-btn" :title="t('宏面板：一键执行常用批量处理')" @click="openMacroPanel"><Icon name="zap" :size="14" />{{ t('宏') }}</button>
+          <button class="et-btn" :title="t('Key Switch 映射配置')" @click="openKSMap"><Icon name="kbd" :size="14" />{{ t('键位') }}</button>
+          <button class="et-btn" :title="t('撤销历史')" @click="openHistory"><Icon name="clock" :size="14" />{{ t('历史') }}</button>
         </div>
         <div class="adv-row">
-          <span class="et-label">CC 绘制</span>
+          <span class="et-label">{{ t('CC 绘制') }}</span>
           <select v-model="ccMode" class="select-input" style="width:auto;padding:4px 8px">
-            <option value="free">{{ t('手绘') }}</option><option value="line">{{ t('直线') }}</option><option value="curve">曲线</option>
+            <option value="free">{{ t('手绘') }}</option><option value="line">{{ t('直线') }}</option><option value="curve">{{ t('曲线') }}</option>
           </select>
-          <button class="et-btn" :title="t('查看当前轨道 CC 控制器事件')" @click="openCCList"><Icon name="list" :size="14" />CC 列表</button>
+          <button class="et-btn" :title="t('查看当前轨道 CC 控制器事件')" @click="openCCList"><Icon name="list" :size="14" />{{ t('CC 列表') }}</button>
           <button class="et-btn" :class="{ active: cc2Enabled }" :title="t('切换第二条 CC 泳道')" @click="cc2Enabled = !cc2Enabled"><Icon name="cclane" :size="14" />CC2</button>
           <select v-model="cc2Number" class="select-input" style="width:auto;padding:4px 8px">
             <option v-for="c in CC_OPTIONS" :key="c[0]" :value="c[0]">{{ c[1] }}</option>
@@ -1020,12 +1020,12 @@ onBeforeUnmount(() => {
           <span class="et-label">{{ t('歌词') }}</span>
           <button class="et-btn" :title="t('为选中的音符添加歌词')" @click="openLyricEditor"><Icon name="music" :size="14" />{{ t('添加歌词') }}</button>
           <span class="et-sep"></span>
-          <span class="et-label">音频</span>
-          <button class="et-btn" :title="t('载入原音频，在卷帘底部显示波形与起音')" @click="loadAudio"><Icon name="import" :size="14" />载入</button>
-          <button class="et-btn" :title="t('选区/整轨音符吸附到最近的波形起音（±80ms）')" @click="snapAudio"><Icon name="target" :size="14" />吸附起音</button>
-          <button class="et-btn" :class="{ active: audioSyncOn }" :title="t('播放 MIDI 时同步试听原音频')" @click="toggleAudioSync"><Icon name="play" :size="14" />试听</button>
+          <span class="et-label">{{ t('音频') }}</span>
+          <button class="et-btn" :title="t('载入原音频，在卷帘底部显示波形与起音')" @click="loadAudio"><Icon name="import" :size="14" />{{ t('载入') }}</button>
+          <button class="et-btn" :title="t('选区/整轨音符吸附到最近的波形起音（±80ms）')" @click="snapAudio"><Icon name="target" :size="14" />{{ t('吸附起音') }}</button>
+          <button class="et-btn" :class="{ active: audioSyncOn }" :title="t('播放 MIDI 时同步试听原音频')" @click="toggleAudioSync"><Icon name="play" :size="14" />{{ t('试听') }}</button>
            <button class="et-btn" :title="t('嵌入视频轨道（影视配乐对齐）')" @click="loadVideo"><Icon name="play2" :size="14" />{{ t('视频') }}</button>
-           <button v-if="videoUrl" class="et-btn" :title="t('移除视频轨道')" @click="removeVideo"><Icon name="trash" :size="14" />移除视频</button>
+           <button v-if="videoUrl" class="et-btn" :title="t('移除视频轨道')" @click="removeVideo"><Icon name="trash" :size="14" />{{ t('移除视频') }}</button>
         </div>
         <div class="adv-row">
           <span class="et-label">{{ t('音色') }}</span>
@@ -1034,11 +1034,11 @@ onBeforeUnmount(() => {
           </select>
           <button class="et-btn" :class="{ active: timbreFavs.has(Number(timbre)) }" :title="t('收藏/取消收藏当前音色')" @click="toggleTimbreFav">♡</button>
           <button class="et-btn" :title="t('把当前音色应用到全部非鼓轨')" @click="timbreAll"><Icon name="plus" :size="14" />{{ t('全部') }}</button>
-          <button class="et-btn" :title="t('按轨道音域/密度/名称智能选择音色')" @click="smartTimbre"><Icon name="spark" :size="14" />智能</button>
+          <button class="et-btn" :title="t('按轨道音域/密度/名称智能选择音色')" @click="smartTimbre"><Icon name="spark" :size="14" />{{ t('智能') }}</button>
           <span class="et-sep"></span>
-          <button class="et-btn" :title="t('同步到乐谱：在五线谱查看当前编辑结果')" @click="setView('score')"><Icon name="score" :size="14" />乐谱同步</button>
-          <button class="et-btn" :title="t('全屏编辑，最大化钢琴卷帘')" @click="toggleFullscreen"><Icon name="expand" :size="14" />全屏</button>
-          <button class="et-btn" :title="t('编辑功能介绍')" @click="helpOpen = true"><Icon name="info" :size="14" />说明</button>
+          <button class="et-btn" :title="t('同步到乐谱：在五线谱查看当前编辑结果')" @click="setView('score')"><Icon name="score" :size="14" />{{ t('乐谱同步') }}</button>
+          <button class="et-btn" :title="t('全屏编辑，最大化钢琴卷帘')" @click="toggleFullscreen"><Icon name="expand" :size="14" />{{ t('全屏') }}</button>
+          <button class="et-btn" :title="t('编辑功能介绍')" @click="helpOpen = true"><Icon name="info" :size="14" />{{ t('说明') }}</button>
         </div>
       </div>
 
@@ -1049,7 +1049,7 @@ onBeforeUnmount(() => {
           <button class="icon-btn" :title="t('缩小')" @click="editor?.zoomBy(0.85)"><Icon name="minus" :size="13" /></button>
           <span class="ez-pct">{{ zoomPct }}%</span>
           <button class="icon-btn" :title="t('放大')" @click="editor?.zoomBy(1.18)"><Icon name="plus" :size="13" /></button>
-          <button class="btn sm ghost" @click="editor?.fit()"><Icon name="expand" :size="13" />适应</button>
+          <button class="btn sm ghost" @click="editor?.fit()"><Icon name="expand" :size="13" />{{ t('适应') }}</button>
         </div>
       </div>
 
@@ -1065,10 +1065,10 @@ onBeforeUnmount(() => {
 
       <!-- 属性检查器 -->
       <div class="card ed-inspector">
-        <span class="ins-item">选中 <b>{{ sel.count }}</b></span>
-        <span class="ins-item">音高 <b>{{ sel.midi ?? '—' }}</b></span>
-        <span class="ins-item">音名 <b>{{ sel.name || '—' }}</b></span>
-        <span class="ins-item">力度
+        <span class="ins-item">{{ t('选中') }} <b>{{ sel.count }}</b></span>
+        <span class="ins-item">{{ t('音高') }} <b>{{ sel.midi ?? '—' }}</b></span>
+        <span class="ins-item">{{ t('音名') }} <b>{{ sel.name || '—' }}</b></span>
+        <span class="ins-item">{{ t('力度') }}
           <input type="range" min="1" max="127" :value="sel.vel ?? 80" style="width:90px" data-guide="velocity-slider" :disabled="!sel.vel"
                  @input="e => editor?.setSelVel(+e.target.value)" />
         </span>
@@ -1077,7 +1077,7 @@ onBeforeUnmount(() => {
         <span class="ins-item">{{ t('长度') }}<input type="number" class="num-input" :value="sel.len ?? 0" step="1" min="1" :disabled="!sel.len"
                  @change="e => editor?.setSelLen(+e.target.value)" style="width:78px" /></span>
         <span class="ins-item">SMPTE <b style="font-family:var(--mono)">{{ smpteText }}</b></span>
-        <span class="ins-item et-tip">单位：tick · Ctrl+滚轮 缩放 · Shift+滚轮 平移 · 滚轮 上下滚动</span>
+        <span class="ins-item et-tip">{{ t('单位：tick · Ctrl+滚轮 缩放 · Shift+滚轮 平移 · 滚轮 上下滚动') }}</span>
       </div>
     </template>
 
@@ -1086,14 +1086,14 @@ onBeforeUnmount(() => {
     <div v-if="vcOpen" class="ed-modal-mask" @click.self="vcOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head">
-          <b>力度曲线</b><span class="muted small">在画布上拖拽绘制力度包络，应用到选区 {{ vcVals.length }} 个音符</span>
+          <b>{{ t('力度曲线') }}</b><span class="muted small">{{ t('在画布上拖拽绘制力度包络，应用到选区 ') }}{{ vcVals.length }}{{ t(' 个音符') }}</span>
           <button class="icon-btn" style="margin-left:auto" @click="vcOpen = false"><Icon name="minus" :size="14" /></button>
         </div>
         <canvas ref="vcCanvas" class="vc-canvas" style="height:160px"
                 @pointerdown="vcDown" @pointermove="vcMove" @pointerup="vcUp" @pointerleave="vcUp"></canvas>
         <div class="ed-modal-foot">
           <button class="btn sm" @click="vcOpen = false">{{ t('取消') }}</button>
-          <button class="btn sm primary" @click="applyVelCurve">应用曲线</button>
+          <button class="btn sm primary" @click="applyVelCurve">{{ t('应用曲线') }}</button>
         </div>
       </div>
     </div>
@@ -1104,12 +1104,12 @@ onBeforeUnmount(() => {
     <div v-if="listOpen" class="ed-modal-mask" @click.self="listOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head">
-          <b>列表编辑器</b><span class="muted small">精确修改选中 {{ listDraft.length }} 个音符（单位：tick）</span>
+          <b>{{ t('列表编辑器') }}</b><span class="muted small">{{ t('精确修改选中 ') }}{{ listDraft.length }}{{ t(' 个音符（单位：tick）') }}</span>
           <button class="icon-btn" style="margin-left:auto" @click="listOpen = false"><Icon name="minus" :size="14" /></button>
         </div>
         <div class="ed-list-scroll">
           <table class="ed-list-table">
-            <thead><tr><th>#</th><th>{{ t('起点') }}</th><th>终点</th><th>音高</th><th>力度</th><th>{{ t('时长') }}</th></tr></thead>
+            <thead><tr><th>#</th><th>{{ t('起点') }}</th><th>{{ t('终点') }}</th><th>{{ t('音高') }}</th><th>{{ t('力度') }}</th><th>{{ t('时长') }}</th></tr></thead>
             <tbody>
               <tr v-for="(r, i) in listDraft" :key="i">
                 <td>{{ i + 1 }}</td>
@@ -1124,7 +1124,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="ed-modal-foot">
           <button class="btn sm" @click="listOpen = false">{{ t('取消') }}</button>
-          <button class="btn sm primary" @click="saveList">保存修改</button>
+          <button class="btn sm primary" @click="saveList">{{ t('保存修改') }}</button>
         </div>
       </div>
     </div>
@@ -1134,14 +1134,14 @@ onBeforeUnmount(() => {
     <div v-if="drumOpen" class="ed-modal-mask" @click.self="drumOpen = false">
       <div class="ed-modal" style="width:min(820px,96vw)">
         <div class="ed-modal-head">
-          <b>鼓组编辑器</b><span class="muted small">打击乐网格 · 点击添加/删除鼓点</span>
+          <b>{{ t('鼓组编辑器') }}</b><span class="muted small">{{ t('打击乐网格 · 点击添加/删除鼓点') }}</span>
           <button class="icon-btn" style="margin-left:auto" @click="drumOpen = false"><Icon name="minus" :size="14" /></button>
         </div>
         <div class="row" style="gap:8px">
           <select class="select-input" v-model="drumTrack" style="min-width:160px">
-            <option v-for="d in drumTracks" :key="d.i" :value="d.i">{{ d.t.name }}（{{ d.t.notes.length }}）</option>
+            <option v-for="d in drumTracks" :key="d.i" :value="d.i">{{ d.t.name }}{{ t('（') }}{{ d.t.notes.length }}{{ t('）') }}</option>
           </select>
-          <button class="btn sm danger" @click="drumClear">清除当前轨道鼓点</button>
+          <button class="btn sm danger" @click="drumClear">{{ t('清除当前轨道鼓点') }}</button>
         </div>
         <canvas ref="drumCv" class="drum-canvas" style="height:420px" @click="drumClick"></canvas>
       </div>
@@ -1154,22 +1154,22 @@ onBeforeUnmount(() => {
       <div class="ed-modal">
         <div class="ed-modal-head"><b>{{ t('智能量化') }}</b><span class="muted small">{{ t('网格 + Groove 模板') }}</span><button class="icon-btn" style="margin-left:auto" @click="sqOpen = false"><Icon name="minus" :size="14" /></button></div>
         <div class="adv-form-grid">
-          <label>网格
+          <label>{{ t('网格') }}
             <select v-model="sqGrid" class="select-input" style="width:100%">
               <option :value="4">1/4</option><option :value="8">1/8</option><option :value="16">1/16</option><option :value="32">1/32</option>
             </select>
           </label>
           <label>Groove
             <select v-model="sqGroove" class="select-input" style="width:100%">
-              <option value="none">{{ t('无') }}</option><option value="funk">Funk</option><option value="jazz">Jazz</option><option value="rock">Rock</option><option value="latin">Latin</option><option value="custom">自定义 Groove</option>
+              <option value="none">{{ t('无') }}</option><option value="funk">Funk</option><option value="jazz">Jazz</option><option value="rock">Rock</option><option value="latin">Latin</option><option value="custom">{{ t('自定义 Groove') }}</option>
             </select>
           </label>
           <label class="span2">{{ t('强度') }}<input type="range" min="0" max="100" v-model.number="sqStrength" style="width:100%" /> <span class="muted small">{{ sqStrength }}%</span></label>
         </div>
         <div class="ed-modal-foot">
-          <button class="btn sm" @click="extractGroove">提取选中为 Groove</button>
+          <button class="btn sm" @click="extractGroove">{{ t('提取选中为 Groove') }}</button>
           <button class="btn sm" @click="sqOpen = false">{{ t('取消') }}</button>
-          <button class="btn sm primary" @click="applySmartQuantize">应用量化</button>
+          <button class="btn sm primary" @click="applySmartQuantize">{{ t('应用量化') }}</button>
         </div>
       </div>
     </div>
@@ -1181,27 +1181,27 @@ onBeforeUnmount(() => {
       <div class="ed-modal">
         <div class="ed-modal-head"><b>{{ t('逻辑编辑器') }}</b><span class="muted small">{{ t('批量规则处理音符') }}</span><button class="icon-btn" style="margin-left:auto" @click="logicOpen = false"><Icon name="minus" :size="14" /></button></div>
         <div class="adv-form-grid">
-          <label>目标
+          <label>{{ t('目标') }}
             <select v-model="logicTarget" class="select-input" style="width:100%">
-              <option value="all">{{ t('所有音符') }}</option><option value="sel">{{ t('选中音符') }}</option><option value="track">当前轨道</option>
+              <option value="all">{{ t('所有音符') }}</option><option value="sel">{{ t('选中音符') }}</option><option value="track">{{ t('当前轨道') }}</option>
             </select>
           </label>
-          <label>条件
+          <label>{{ t('条件') }}
             <select v-model="logicCond" class="select-input" style="width:100%">
-              <option value="vel_lt">{{ t('力度 <') }}</option><option value="vel_gt">{{ t('力度 >') }}</option><option value="dur_lt">{{ t('时值 <') }}</option><option value="pitch_eq">音高 =</option>
+              <option value="vel_lt">{{ t('力度 <') }}</option><option value="vel_gt">{{ t('力度 >') }}</option><option value="dur_lt">{{ t('时值 <') }}</option><option value="pitch_eq">{{ t('音高 =') }}</option>
             </select>
           </label>
-          <label>条件值 <input v-model.number="logicCondVal" class="num-input" type="number" style="width:100%" /></label>
-          <label>操作
+          <label>{{ t('条件值 ') }}<input v-model.number="logicCondVal" class="num-input" type="number" style="width:100%" /></label>
+          <label>{{ t('操作') }}
             <select v-model="logicAction" class="select-input" style="width:100%">
               <option value="vel_inc">{{ t('力度 +') }}</option><option value="vel_dec">{{ t('力度 -') }}</option><option value="vel_fix">{{ t('固定力度') }}</option><option value="quantize">{{ t('量化') }}</option><option value="transpose">{{ t('移调') }}</option><option value="delete">{{ t('删除') }}</option>
             </select>
           </label>
-          <label>操作值 <input v-model.number="logicActVal" class="num-input" type="number" style="width:100%" /></label>
+          <label>{{ t('操作值 ') }}<input v-model.number="logicActVal" class="num-input" type="number" style="width:100%" /></label>
         </div>
         <div class="ed-modal-foot">
           <button class="btn sm" @click="logicOpen = false">{{ t('取消') }}</button>
-          <button class="btn sm primary" @click="applyLogic">应用规则</button>
+          <button class="btn sm primary" @click="applyLogic">{{ t('应用规则') }}</button>
         </div>
       </div>
     </div>
@@ -1221,7 +1221,7 @@ onBeforeUnmount(() => {
           <button :class="['btn sm', recording ? 'danger' : '']" @click="toggleRecording">
             {{ recording ? t('停止并生成命令') : t('开始录制操作') }}
           </button>
-          <span v-if="recording" class="muted small">正在录制 {{ recordLines.length }} 条</span>
+          <span v-if="recording" class="muted small">{{ t('正在录制 ') }}{{ recordLines.length }}{{ t(' 条') }}</span>
           <button v-if="recordLines.length" class="btn sm ghost" @click="clearRecorded">{{ t('清空录制') }}</button>
         </div>
         <div v-if="recordLines.length" class="macro-record-list">
@@ -1232,10 +1232,10 @@ onBeforeUnmount(() => {
           <div v-for="(m, i) in customMacros" :key="i" class="macro-item">
             <span class="macro-name">{{ m.name }}</span>
             <code class="macro-cmd">{{ m.cmd }}</code>
-            <button class="btn sm" @click="runCustomMacro(m.cmd)">运行</button>
+            <button class="btn sm" @click="runCustomMacro(m.cmd)">{{ t('运行') }}</button>
             <button class="btn sm danger" @click="delCustomMacro(i)">{{ t('删除') }}</button>
           </div>
-          <div v-if="!customMacros.length" class="muted small">暂无自定义宏</div>
+          <div v-if="!customMacros.length" class="muted small">{{ t('暂无自定义宏') }}</div>
           <div class="macro-add">
             <input v-model="macroName" class="num-input" :placeholder="t('宏名称')" style="flex:1" />
             <input v-model="macroCmd" class="num-input" :placeholder="t('命令：transpose 12 / quantize 8 / normalize')" style="flex:2" />
@@ -1245,7 +1245,7 @@ onBeforeUnmount(() => {
           <div class="macro-doc">
             <div v-for="d in MACRO_DOC" :key="d.cmd" class="macro-doc-row">
               <code>{{ d.cmd }}</code>
-              <span>{{ d.desc }}</span>
+              <span>{{ t(d.desc) }}</span>
             </div>
           </div>
           <div class="muted small" style="margin-top:4px">{{ t('操作录制：打开录制后点击内置宏或工具栏移调/量化/力度按钮，会自动生成命令；停止后填入名称即可保存为自定义宏。') }}</div>
@@ -1263,7 +1263,7 @@ onBeforeUnmount(() => {
           <select v-model="ksPreset" class="select-input" style="min-width:150px">
             <option value="">{{ t('选择预设') }}</option><option value="spitfire">Spitfire</option><option value="vsl">VSL</option><option value="eastwest">EastWest</option>
           </select>
-          <button class="btn sm" @click="applyKSPreset">应用预设</button>
+          <button class="btn sm" @click="applyKSPreset">{{ t('应用预设') }}</button>
         </div>
         <div class="ks-list">
           <div v-for="m in 25" :key="m - 1" class="ks-row">
@@ -1283,7 +1283,7 @@ onBeforeUnmount(() => {
         <div class="ed-modal-head"><b>{{ t('CC 控制器事件') }}</b><span class="muted small">{{ t('当前轨道 ') }}{{ ccListItems.length }}{{ t(' 条') }}</span><button class="icon-btn" style="margin-left:auto" @click="ccListOpen = false"><Icon name="minus" :size="14" /></button></div>
         <div class="ed-list-scroll" style="max-height:50vh">
           <table class="ed-list-table">
-            <thead><tr><th>#</th><th>Tick</th><th>CC</th><th>值</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>Tick</th><th>CC</th><th>{{ t('值') }}</th><th></th></tr></thead>
             <tbody>
               <tr v-for="(c, i) in ccListItems" :key="i">
                 <td>{{ i + 1 }}</td><td>{{ c.tick }}</td><td>CC{{ c.cc }}</td><td>{{ c.cv }}</td>
@@ -1304,10 +1304,10 @@ onBeforeUnmount(() => {
         <div class="ks-list">
           <div v-for="(h, i) in historyList" :key="i" class="ks-row">
             <span class="ks-label">#{{ historyList.length - i }}</span>
-            <span class="muted small">轨道 {{ h.ti + 1 }} · {{ h.notes }} 个音符 · {{ new Date(h.at).toLocaleTimeString() }}</span>
-            <button class="btn sm" @click="historyOpen = false">撤销</button>
+            <span class="muted small">{{ t('轨道 ') }}{{ h.ti + 1 }} · {{ h.notes }}{{ t(' 个音符 · ') }}{{ new Date(h.at).toLocaleTimeString() }}</span>
+            <button class="btn sm" @click="historyOpen = false">{{ t('撤销') }}</button>
           </div>
-          <div v-if="!historyList.length" class="muted small">暂无撤销记录</div>
+          <div v-if="!historyList.length" class="muted small">{{ t('暂无撤销记录') }}</div>
         </div>
       </div>
     </div>
@@ -1333,17 +1333,17 @@ onBeforeUnmount(() => {
       <div class="ed-modal" style="width:min(680px,92vw)">
         <div class="ed-modal-head"><b>{{ t('编辑功能说明') }}</b><button class="icon-btn" style="margin-left:auto" @click="helpOpen = false"><Icon name="minus" :size="14" /></button></div>
         <div class="help-scroll">
-          <div class="help-sec"><b>钢琴卷帘</b><span>选择/画笔/橡皮三种工具；拖拽移动音符、边缘拉伸改时值、Alt 拖拽调力度；支持吸附、音阶吸附、撤销/重做。</span></div>
-          <div class="help-sec"><b>CC 自动化</b><span>展开 CC 泳道后选择 CC1/7/10/11/64；支持手绘、直线、曲线三种绘制；点击/拖动直接写 CC 数据。</span></div>
-          <div class="help-sec"><b>Key Switch</b><span>C-2~C0 区域橙色高亮；支持自定义技法名称，并提供 Spitfire/VSL/EastWest 预设模板。</span></div>
-          <div class="help-sec"><b>{{ t('逻辑编辑器') }}</b><span>按“目标→条件→操作”批量修改音符：力度、时值、音高、删除、量化、移调。</span></div>
-          <div class="help-sec"><b>列表编辑器</b><span>以表格精确编辑每个音符的起点/终点/音高/力度；支持添加、删除、排序。</span></div>
-          <div class="help-sec"><b>宏系统</b><span>内置清理/移调/力度标准化宏；支持自定义命令宏。</span></div>
-          <div class="help-sec"><b>{{ t('智能量化') }}</b><span>按 1/4、1/8、1/16、1/32 量化；支持 Funk/Jazz/Rock/Latin/自定义 Groove；可提取选中音符的 Groove。</span></div>
-          <div class="help-sec"><b>鼓组编辑器</b><span>打击乐专用网格视图，点击添加/删除鼓点，支持鼓轨切换与清除。</span></div>
-          <div class="help-sec"><b>智能伴奏</b><span>基于当前旋律/和弦自动生成 贝斯 + 分解和弦 + 铺底 3 轨（可撤销）。</span></div>
-          <div class="help-sec"><b>音频对齐</b><span>载入原音频后在卷帘底部显示波形；「吸附起音」把音符吸附到最近的波形起音（±80ms）；「试听」同步播放原音频检查对齐效果。</span></div>
-          <div class="help-sec"><b>影视配乐</b><span>载入视频轨道嵌入编辑区右上角，播放 MIDI 时自动同步，用于影视配乐对齐。</span></div>
+          <div class="help-sec"><b>{{ t('钢琴卷帘') }}</b><span>{{ t('选择/画笔/橡皮三种工具；拖拽移动音符、边缘拉伸改时值、Alt 拖拽调力度；支持吸附、音阶吸附、撤销/重做。') }}</span></div>
+          <div class="help-sec"><b>{{ t('CC 自动化') }}</b><span>{{ t('展开 CC 泳道后选择 CC1/7/10/11/64；支持手绘、直线、曲线三种绘制；点击/拖动直接写 CC 数据。') }}</span></div>
+          <div class="help-sec"><b>Key Switch</b><span>{{ t('C-2~C0 区域橙色高亮；支持自定义技法名称，并提供 Spitfire/VSL/EastWest 预设模板。') }}</span></div>
+          <div class="help-sec"><b>{{ t('逻辑编辑器') }}</b><span>{{ t('按“目标→条件→操作”批量修改音符：力度、时值、音高、删除、量化、移调。') }}</span></div>
+          <div class="help-sec"><b>{{ t('列表编辑器') }}</b><span>{{ t('以表格精确编辑每个音符的起点/终点/音高/力度；支持添加、删除、排序。') }}</span></div>
+          <div class="help-sec"><b>{{ t('宏系统') }}</b><span>{{ t('内置清理/移调/力度标准化宏；支持自定义命令宏。') }}</span></div>
+          <div class="help-sec"><b>{{ t('智能量化') }}</b><span>{{ t('按 1/4、1/8、1/16、1/32 量化；支持 Funk/Jazz/Rock/Latin/自定义 Groove；可提取选中音符的 Groove。') }}</span></div>
+          <div class="help-sec"><b>{{ t('鼓组编辑器') }}</b><span>{{ t('打击乐专用网格视图，点击添加/删除鼓点，支持鼓轨切换与清除。') }}</span></div>
+          <div class="help-sec"><b>{{ t('智能伴奏') }}</b><span>{{ t('基于当前旋律/和弦自动生成 贝斯 + 分解和弦 + 铺底 3 轨（可撤销）。') }}</span></div>
+          <div class="help-sec"><b>{{ t('音频对齐') }}</b><span>{{ t('载入原音频后在卷帘底部显示波形；「吸附起音」把音符吸附到最近的波形起音（±80ms）；「试听」同步播放原音频检查对齐效果。') }}</span></div>
+          <div class="help-sec"><b>{{ t('影视配乐') }}</b><span>{{ t('载入视频轨道嵌入编辑区右上角，播放 MIDI 时自动同步，用于影视配乐对齐。') }}</span></div>
         </div>
       </div>
     </div>

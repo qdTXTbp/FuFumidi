@@ -15,7 +15,7 @@ import { ref, computed, reactive } from 'vue';
 import { useAppStore, VIEWS, viewParentOf } from './stores/app';
 import { usePlaylistStore } from './stores/playlist';
 import { useSettingsStore } from './stores/settings';
-import { setLang, t } from './core/i18n.js';
+import { setLang, t, browserLang } from './core/i18n.js';
 import { getAppVersion } from './core/version.js';
 import { getBuiltinChangeLogs, fetchRemoteChangeLog } from './core/changelog.js';
 import { applyTheme, loadTheme } from './core/theme.js';
@@ -111,12 +111,23 @@ async function initGlobal() {
   if (!hasLsTheme && s.theme) applyTheme(s.theme, s.accent || '', lt.mode);
 
   // 2) 语言 / 字号 / 密度（localStorage 优先，settings 兜底）
+  // 语言“首次启动”语义：安装后的第一次运行才按浏览器语言确定并记住；
+  // 更新/覆盖安装会保留本地存储，不会重置用户语言（见 setLang / browserLang）。
   let lang = 'zh', font = null, density = null;
   try {
-    lang = localStorage.getItem('fufumidi_lang') || s.lang || 'zh';
+    const stored = localStorage.getItem('fufumidi_lang');
+    const sLang = (s && s.lang) || '';
+    if (stored) {
+      lang = stored;                       // 用户已设定过（或更新后保留）→ 用它
+    } else if (sLang) {
+      lang = sLang;                        // 设置里存过 → 用它
+    } else {
+      lang = browserLang();                // 安装后首次启动 → 按浏览器语言
+      try { localStorage.setItem('fufumidi_lang', lang); } catch (e) {}
+    }
     font = localStorage.getItem('fufumidi_font');
     density = localStorage.getItem('fufumidi_density');
-  } catch (e) { lang = s.lang || 'zh'; }
+  } catch (e) { lang = (s && s.lang) || 'zh'; }
   setLang(lang);
   applyDisplayPrefs({ font_size: font || s.font_size, density: density || s.density });
 
@@ -202,7 +213,7 @@ async function startupUpdateCheck() {
     if (state.dialog) return; // 已有其他弹窗时不叠加
     const notes = String(r.notes || '').trim();
     const msg = t('发现新版本 ') + latest + t('，当前 ') + cur + t('。\n是否现在更新？') +
-      (notes ? '\n\n' + t('更新内容') + '：\n' + notes.slice(0, 200) : '');
+      (notes ? '\n\n' + t('更新内容') + t('：') + '\n' + notes.slice(0, 200) : '');
     app.confirmDialog({ title: t('发现新版本'), msg, okText: t('立即更新'), cancelText: t('暂不更新') })
       .then(ok => {
         if (!ok) return;
@@ -453,7 +464,7 @@ onBeforeUnmount(() => {
           <div class="gpu-bar-title">
             {{ state.gpuInstall.done
               ? (state.gpuInstall.ok ? t('GPU 加速安装完成') : t('GPU 加速安装失败'))
-              : t('正在安装 GPU 加速') + (state.gpuInstall.kind ? '（' + (state.gpuInstall.kind === 'cuda' ? 'CUDA cu128' : 'DirectML') + '）' : '') }}
+              : t('正在安装 GPU 加速') + (state.gpuInstall.kind ? t('（') + (state.gpuInstall.kind === 'cuda' ? 'CUDA cu128' : 'DirectML') + t('）') : '') }}
           </div>
           <div v-if="!state.gpuInstall.done" class="gpu-bar-track">
             <div class="gpu-bar-fill" :style="{ width: Math.min(100, state.gpuInstall.percent || 0) + '%' }"></div>
@@ -461,7 +472,7 @@ onBeforeUnmount(() => {
           <div v-else class="gpu-bar-msg">{{ state.gpuInstall.ok ? t('增强包已就绪，点击查看详情') : (state.gpuInstall.error || t('安装失败，点击查看详情')) }}</div>
           <div v-if="!state.gpuInstall.done && state.gpuInstall.text" class="gpu-bar-tip">{{ state.gpuInstall.text }}</div>
         </div>
-        <button class="gpu-bar-x" :title="t('关闭')" aria-label="t('关闭')" @click.stop="dismissGpuBar"><Icon name="close" :size="13" /></button>
+        <button class="gpu-bar-x" :title="t('关闭')" :aria-label="t('关闭')" @click.stop="dismissGpuBar"><Icon name="close" :size="13" /></button>
       </div>
     </Transition>
 
@@ -533,7 +544,7 @@ onBeforeUnmount(() => {
         <div class="ed-modal" style="width:min(380px,92vw)">
           <div class="ed-modal-head">
             <b>{{ state.dialog.title }}</b>
-            <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" aria-label="t('关闭')" @click="cancelDialog"><Icon name="close" :size="14" /></button>
+            <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" :aria-label="t('关闭')" @click="cancelDialog"><Icon name="close" :size="14" /></button>
           </div>
           <div class="small" style="padding:4px 2px;line-height:1.6;color:var(--ink);white-space:pre-wrap">{{ state.dialog.msg }}</div>
           <input v-if="state.dialog.kind === 'prompt'" id="global-prompt-input" name="global-prompt-input" v-model="state.dialog.value" class="text-input" style="width:100%" :aria-label="state.dialog.title" @keydown.enter.prevent="submitDialog" @keydown.esc.stop="cancelDialog" />
@@ -553,7 +564,7 @@ onBeforeUnmount(() => {
         <div class="ed-modal" style="width:min(360px,92vw)">
           <div class="ed-modal-head">
             <b>{{ t('导入到歌单') }}</b>
-            <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" aria-label="t('关闭')" @click="cancelImportTargetModal"><Icon name="close" :size="14" /></button>
+            <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" :aria-label="t('关闭')" @click="cancelImportTargetModal"><Icon name="close" :size="14" /></button>
           </div>
           <div class="small" style="padding:0 2px;line-height:1.6;color:var(--ink)">
             {{ t('选择导入 ') + state.importPick.items.length + t(' 个文件到：') }}

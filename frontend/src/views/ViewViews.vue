@@ -9,9 +9,9 @@ import { t } from '../core/i18n.js';
 const route = useRoute();
 const router = useRouter();
 const tabs = [
-  { id: 'viz', label: '可视化', ic: 'viz' },
-  { id: 'analyze', label: '分析', ic: 'chart' },
-  { id: 'score', label: '乐谱', ic: 'score' },
+  { id: 'viz', label: t('可视化'), ic: 'viz' },
+  { id: 'analyze', label: t('分析'), ic: 'chart' },
+  { id: 'score', label: t('乐谱'), ic: 'score' },
 ];
 const comps = { viz: ViewViz, analyze: ViewAnalyze, score: ViewScore };
 const validTab = (id) => tabs.some(x => x.id === id);

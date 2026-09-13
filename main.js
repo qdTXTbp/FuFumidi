@@ -277,14 +277,21 @@ function migrateUserModels() {
 }
 function engineEnv(extra) {
   const env = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', FUFUMIDI_MODELS_DIR: modelsDir(), FUFUMIDI_MODELS_BUNDLED_DIR: bundledModelsDir() };
+  // 内置 Python 必须运行在「干净」环境：宿主机的 PYTHONPATH / PYTHONHOME / PYTHONSTARTUP 等
+  // 会把系统上版本不匹配或半损坏的第三方包（numpy / torch）带进来，表现为
+  // 应用自检通过、转录却报 `No module named 'numpy.exceptions'`（见 issue #18）。
+  // 这里只保留应用自己注入的两个编码变量，其余 PYTHON* 一律剔除。
+  for (const k of Object.keys(env)) {
+    if (k !== 'PYTHONIOENCODING' && k !== 'PYTHONUTF8' && /^PYTHON/i.test(k)) delete env[k];
+  }
   // torch.hub.get_dir() = $TORCH_HOME/hub，checkpoints 缓存到 $TORCH_HOME/hub/checkpoints。
   // 指向软件 models 目录，使 beat_this-final0.ckpt 等 torch.hub 权重统一落盘到软件内
   // （不再外泄到系统 ~/.cache/torch，且资源中心可复用该路径）。
   env.TORCH_HOME = modelsDir();
   const sites = installedGpuKinds().map(gpuEnhanceSite);
   if (sites.length) {
-    const old = process.env.PYTHONPATH || '';
-    env.PYTHONPATH = sites.concat(old ? [old] : []).join(path.delimiter);
+    // 只保留应用自己的 GPU 增强包路径，不再拼接宿主 PYTHONPATH
+    env.PYTHONPATH = sites.join(path.delimiter);
   } else {
     // 没有安装隔离 GPU 增强包时，强制 CPU，避免基础环境中的旧 GPU 包继续生效
     env.FUFUMIDI_DISABLE_GPU = '1';
