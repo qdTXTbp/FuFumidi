@@ -250,12 +250,13 @@ function toggleCrossfade() {
           <b>混音台</b>
           <button class="icon-btn" @click="mixerOpen = false" title="关闭"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
         </div>
+        <div class="muted small" style="padding:0 2px 8px">{{ t('音量/静音/独奏/声像作用于 MIDI 通道：同一通道上的多条轨会一起变化') }}</div>
         <div v-if="!state.tracks.length" class="muted small" style="padding:12px 4px">{{ t('当前曲目没有可混音的轨道') }}</div>
         <div v-for="(tr, i) in state.tracks" :key="i" class="mix-track">
           <span class="mt-color" :style="{ background: tr.color }"></span>
           <div class="mt-name">
             <b>{{ tr.name }}</b>
-            <small>音色 #{{ tr.program }}{{ tr.isDrum ? t(' · 打击乐') : '' }} · {{ tr.noteCount }} 音符</small>
+            <small>Ch {{ (tr.ch || 0) + 1 }} · 音色 #{{ tr.program }}{{ tr.isDrum ? t(' · 打击乐') : '' }} · {{ tr.noteCount }} 音符</small>
           </div>
           <div class="mt-ctl">
             <button class="chip-btn" :class="{ 'on-solo': tr.solo }" :title="t('独奏')" aria-label="t('独奏')" @click="toggleTrackSolo(i)">S</button>

@@ -354,6 +354,80 @@ function removeFromCurrentPl(s) {
     playlist.removeSongs([s.id]);
   }
 }
+/* ---------------- 歌曲列表：批量管理（多选 / 全选 / 批量操作） ---------------- */
+// 勾选状态存在 playlist store 的 batchOn / batchSelection，与「批量管理歌单」共用同一套语义
+const batchSel = computed(() => new Set(playlist.batchSelection));
+const allVisibleSelected = computed(() => {
+  const ids = visibleSongs.value.map(s => s.id);
+  return ids.length > 0 && ids.every(id => batchSel.value.has(id));
+});
+const allSelectedFav = computed(() => {
+  const ids = playlist.batchSelection;
+  return ids.length > 0 && ids.every(id => playlist.isFavorite(id));
+});
+function batchIsSel(id) { return batchSel.value.has(id); }
+function batchToggle(id) {
+  const s = new Set(playlist.batchSelection);
+  if (s.has(id)) s.delete(id); else s.add(id);
+  playlist.setBatchSelected([...s]);
+}
+/** 全选/取消全选：作用于「当前可见」的曲目（已应用搜索与整理方式） */
+function batchAll() {
+  playlist.setBatchSelected(allVisibleSelected.value ? [] : visibleSongs.value.map(s => s.id));
+}
+function exitBatch() {
+  playlist.setBatchSelected([]);
+  if (playlist.batchOn) playlist.toggleBatch();
+}
+function batchMove(plId) {
+  const ids = playlist.batchSelection.slice();
+  if (!ids.length) { toast(t('请先勾选曲目'), 'warn'); return; }
+  const target = playlist.playlists.find(p => p.id === plId);
+  if (!target) return;
+  playlist.addToPlaylist(plId, ids);
+  // 目标不是当前歌单时等同「移动」：从当前歌单移除，避免同一首同时留在两边
+  if (plId !== playlist.activePlaylistId) playlist.removeSongs(ids);
+  playlist.setBatchSelected([]);
+  toast(t('已移动 ') + ids.length + t(' 首到「') + target.name + '」', 'ok');
+}
+function batchFavorite() {
+  const ids = playlist.batchSelection.slice();
+  if (!ids.length) { toast(t('请先勾选曲目'), 'warn'); return; }
+  // 选中的全部已收藏 → 这次取消收藏；否则统一设为收藏
+  const turnOff = ids.every(id => playlist.isFavorite(id));
+  for (const id of ids) if (turnOff === playlist.isFavorite(id)) playlist.toggleFavorite(id);
+  playlist.setBatchSelected([]);
+  toast((turnOff ? t('已取消收藏 ') : t('已收藏 ')) + ids.length + t(' 首'), 'ok');
+}
+/** 批量移除：语义与单首行的「移除」按钮一致（收藏页=取消收藏 / 全部曲目=从资料库删除 / 歌单=取消归入） */
+function batchRemove() {
+  const ids = playlist.batchSelection.slice();
+  if (!ids.length) { toast(t('请先勾选曲目'), 'warn'); return; }
+  if (isFavView.value) { batchFavorite(); return; }
+  if (isAllView.value) {
+    openConfirm(t('删除曲目'), t('确定从资料库删除选中的 ') + ids.length + t(' 首曲目？') + t(' 将从所有歌单移除。'), () => {
+      for (const id of ids) removeSong(id);
+      playlist.removeFromAllPlaylists(ids);
+      playlist.setBatchSelected([]);
+      toast(t('已删除 ') + ids.length + t(' 首'), 'ok');
+    });
+  } else {
+    openConfirm(t('移除曲目'), t('确定从歌单移除 ') + ids.length + t(' 首曲目？'), () => {
+      playlist.removeSongs(ids);
+      playlist.setBatchSelected([]);
+      toast(t('已移除 ') + ids.length + t(' 首'), 'ok');
+    });
+  }
+}
+// 切歌单 / 改搜索 / 换整理方式后，勾选集合里可能留下当前列表看不到的曲目，
+// 那样「已选 N」与实际可操作对象不符 —— 只保留仍在可见列表里的。
+watch([() => playlist.activePlaylistId, () => playlist.search, libSort], () => {
+  if (!playlist.batchOn) return;
+  const vis = new Set(visibleSongs.value.map(s => s.id));
+  const kept = playlist.batchSelection.filter(id => vis.has(id));
+  if (kept.length !== playlist.batchSelection.length) playlist.setBatchSelected(kept);
+});
+
 const emptyHint = computed(() => {
   if (playlist.search && !visibleSongs.value.length) return t('未找到匹配的曲目');
   if (isFavView.value) return t('收藏为空，点击歌曲右侧 ♥ 收藏。');
@@ -519,19 +593,38 @@ const showAuth = ref(false);
         {{ emptyHint }}
       </div>
 
-      <!-- 批量管理工具栏 -->
-      <div class="song-list" role="list" :class="{ 'drag-active': dragId && canReorder }" @dragover.prevent="dragOverList" @drop.prevent.stop="dropOnList">
+      <!-- 批量管理：多选 / 全选 / 批量操作（勾选状态在 playlist.batchSelection） -->
+      <div v-if="visibleSongs.length || playlist.batchOn" class="bm-bar song-batch-bar">
+        <template v-if="playlist.batchOn">
+          <span class="batch-count">{{ playlist.batchSelection.length }} {{ t('已选') }}</span>
+          <button class="btn sm" @click="batchAll">{{ allVisibleSelected ? t('取消全选') : t('全选') }}</button>
+          <select class="select-input" style="flex:1;min-width:0" :value="''" @change="e => e.target.value && (batchMove(e.target.value), e.target.value = '')">
+            <option value="" disabled>{{ t('移到歌单…') }}</option>
+            <option v-for="pl in playlist.playlists" :key="pl.id" :value="pl.id">{{ pl.name }}</option>
+          </select>
+          <button class="btn sm" @click="batchFavorite" :disabled="!playlist.batchSelection.length">{{ allSelectedFav ? t('取消收藏') : t('收藏') }}</button>
+          <button class="btn sm danger" @click="batchRemove" :disabled="!playlist.batchSelection.length">{{ isAllView ? t('删除') : t('移除') }}</button>
+          <button class="btn sm ghost" @click="exitBatch">{{ t('完成') }}</button>
+        </template>
+        <template v-else>
+          <button class="btn sm ghost" @click="playlist.toggleBatch()"><Icon name="quantize" :size="13" />{{ t('批量管理') }}</button>
+          <span class="muted small">{{ t('勾选后批量移除 / 移动 / 收藏') }}</span>
+        </template>
+      </div>
+
+      <div class="song-list" role="list" :class="{ 'drag-active': dragId && canReorder && !playlist.batchOn }" @dragover.prevent="dragOverList" @drop.prevent.stop="dropOnList">
         <div class="song-item" v-for="(s, i) in visibleSongs" :key="s.id"
-           :class="{ active: s.id === state.currentId, dragging: dragId === s.id, dragTarget: dragOverId === s.id }"
-           :draggable="canReorder"
+           :class="{ active: s.id === state.currentId, dragging: dragId === s.id, dragTarget: dragOverId === s.id, 'batch-sel': playlist.batchOn && batchIsSel(s.id) }"
+           :draggable="canReorder && !playlist.batchOn"
            @dragstart="dragStart(s, $event)"
            @dragover.prevent="dragOverRow($event, s)"
            @dragleave="dragLeaveRow($event)"
            @drop.stop.prevent="dropOn($event, s)"
            @dragend="resetDrag()"
-           @click="selectSong(s.id)"
-           @dblclick="playSong(s.id)">
-        <span v-if="canReorder" class="si-drag" :title="t('拖动排序')" :aria-label="t('拖动排序')"><Icon name="drag" :size="13" /></span>
+           @click="playlist.batchOn ? batchToggle(s.id) : selectSong(s.id)"
+           @dblclick="playlist.batchOn ? batchToggle(s.id) : playSong(s.id)">
+        <input v-if="playlist.batchOn" class="si-check" type="checkbox" :checked="batchIsSel(s.id)" :title="s.name" :aria-label="s.name" @click.stop="batchToggle(s.id)" />
+        <span v-if="canReorder && !playlist.batchOn" class="si-drag" :title="t('拖动排序')" :aria-label="t('拖动排序')"><Icon name="drag" :size="13" /></span>
         <span class="si-num" v-if="(!state.playing || s.id !== state.currentId)">{{ i + 1 }}</span>
         <span class="si-num playing-ic" v-else>▶</span>
         <img v-if="rowCover(s.id)" class="si-cover" :src="rowCover(s.id)" alt="" />
@@ -539,7 +632,7 @@ const showAuth = ref(false);
           <b :title="s.name">{{ s.name }}</b>
           <small>{{ rowSub(s) ? rowSub(s) + ' · ' : '' }}{{ s.song ? s.song.tracks.length : (s.meta.tracks || '—') }} {{ t(' 轨 · ') }} {{ (s.meta.size / 1024).toFixed(0) }} KB<span v-if="fmtDur(s)"> · {{ fmtDur(s) }}</span></small>
         </div>
-        <div class="si-tools">
+        <div class="si-tools" v-if="!playlist.batchOn">
           <button class="icon-btn heart" :class="{ on: isFav(s.id) }" style="width:26px;height:26px;font-size:13px" :title="t('收藏')" :aria-label="t('收藏')" @click.stop="toggleFav(s.id)">
             <Icon :name="isFav(s.id) ? 'heart' : 'heart-o'" :size="14" />
           </button>
@@ -807,6 +900,11 @@ body.resize-col .sidebar-resizer::after {
 
 /* 批量管理子页面 */
 .bm-bar { display: flex; align-items: center; gap: 6px; padding: 10px 4px; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+/* 曲目列表上方的批量工具栏：比弹窗里的工具栏更紧凑，且不做分隔线 */
+.song-batch-bar { padding: 6px 12px; border-bottom: none; }
+/* 批量模式下每行的勾选框 */
+.si-check { width: 14px; height: 14px; flex: none; accent-color: var(--brand-blue); }
+.song-item.batch-sel { background: var(--surface); box-shadow: inset 0 0 0 1px var(--accent); }
 .bm-list { max-height: 52vh; overflow-y: auto; padding: 6px 4px; display: flex; flex-direction: column; gap: 2px; }
 .bm-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
 .bm-item:hover { background: var(--surface-soft); }

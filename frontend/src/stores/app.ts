@@ -587,22 +587,36 @@ export const useAppStore = defineStore('app', {
       this.curSec = 0;
       this.progress = 0;
       player.load(item.song);
+      // 新曲目：清空通道混音状态（音色库模式下混音台按 MIDI 通道生效，见 synth.setChannelVol）
+      try { player.syn.resetChannelMix(); } catch (e) {}
       player.setScale(this.tempo);
       player.setLoop(this.loop, 0, item.song.totalTicks);
       player.setMetronome(this.metro);
       this.totalSec = item.song.totalSec;
-      this.tracks = item.song.tracks.map((tr: any, i: number) => ({
-        index: i,
-        name: tr.name,
-        program: tr.program,
-        isDrum: tr.isDrum,
-        vol: 1,
-        mute: false,
-        solo: false,
-        pan: 0,
-        color: TRACK_COLORS[i % TRACK_COLORS.length],
-        noteCount: tr.notes.length,
-      }));
+      this.tracks = item.song.tracks.map((tr: any, i: number) => {
+        // 混音台生效用的 MIDI 通道：取该轨音符用得最多的通道
+        // （轨号与通道并不一一对应，一个通道上也可能有多条轨 → 那些轨会一起变化）
+        const cnt = new Map<number, number>();
+        for (const n of (tr.notes || [])) {
+          const c = n.ch != null ? n.ch : (tr.ch != null ? tr.ch : 0);
+          cnt.set(c, (cnt.get(c) || 0) + 1);
+        }
+        let ch = tr.ch != null ? tr.ch : 0, best = -1;
+        for (const [c, k] of cnt) if (k > best) { best = k; ch = c; }
+        return {
+          index: i,
+          name: tr.name,
+          ch,
+          program: tr.program,
+          isDrum: tr.isDrum,
+          vol: 1,
+          mute: false,
+          solo: false,
+          pan: 0,
+          color: TRACK_COLORS[i % TRACK_COLORS.length],
+          noteCount: tr.notes.length,
+        };
+      });
       // 断点续播：上次播放 ≥30s 且未播完 → 自动跳到上次位置
       try {
         const rp = JSON.parse(localStorage.getItem('fufumidi_resume') || '{}');
@@ -883,28 +897,53 @@ export const useAppStore = defineStore('app', {
       player.syn.setVolume(this.volume);
     },
     setTrackVol(i: number, v: number) {
-      if (!this.tracks[i]) return;
-      this.tracks[i].vol = v;
+      const tr: any = this.tracks[i];
+      if (!tr) return;
       const { player } = ensureAudio();
-      player.syn.setTrackVol(i, v);
+      // 同一 MIDI 通道上的轨在音色库播放时物理上分不开（SF2 只有一路混合输出）→
+      // 一起变化，避免界面与实际不一致；内置合成器同样处理，保证两种模式表现一致。
+      this.tracks.forEach((o: any, k: number) => {
+        if (o.ch !== tr.ch) return;
+        o.vol = v;
+        player.syn.setTrackVol(k, v);
+      });
+      player.syn.setChannelVol(tr.ch, v);
     },
     toggleTrackMute(i: number) {
-      if (!this.tracks[i]) return;
-      this.tracks[i].mute = !this.tracks[i].mute;
+      const tr: any = this.tracks[i];
+      if (!tr) return;
+      const on = !tr.mute;
       const { player } = ensureAudio();
-      player.syn.setTrackMute(i, this.tracks[i].mute);
+      this.tracks.forEach((o: any, k: number) => {
+        if (o.ch !== tr.ch) return;
+        o.mute = on;
+        player.syn.setTrackMute(k, on);
+      });
+      player.syn.setChannelMute(tr.ch, on);
     },
     toggleTrackSolo(i: number) {
-      if (!this.tracks[i]) return;
-      this.tracks[i].solo = !this.tracks[i].solo;
+      const tr: any = this.tracks[i];
+      if (!tr) return;
+      const on = !tr.solo;
       const { player } = ensureAudio();
-      player.syn.setTrackSolo(i, this.tracks[i].solo);
+      this.tracks.forEach((o: any, k: number) => {
+        if (o.ch !== tr.ch) return;
+        o.solo = on;
+        player.syn.setTrackSolo(k, on);
+      });
+      // 独奏是全局开关：任一通道独奏时，其余通道要立刻静掉（含正在发声的音符）
+      this.tracks.forEach((o: any) => player.syn.setChannelSolo(o.ch, !!o.solo));
     },
     setTrackPan(i: number, v: number) {
-      if (!this.tracks[i]) return;
-      this.tracks[i].pan = v;
+      const tr: any = this.tracks[i];
+      if (!tr) return;
       const { player } = ensureAudio();
-      player.syn.setTrackPan(i, v);
+      this.tracks.forEach((o: any, k: number) => {
+        if (o.ch !== tr.ch) return;
+        o.pan = v;
+        player.syn.setTrackPan(k, v);
+      });
+      player.syn.setChannelPan(tr.ch, v);
     },
     setView(v: string) {
       if (v !== this.view && this.playing) {

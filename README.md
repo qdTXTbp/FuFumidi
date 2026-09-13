@@ -16,9 +16,9 @@ FuFumidi is a fully offline desktop workstation for MIDI. It targets musicians, 
 
 The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally; transcription and editing never upload anything. Only when you opt in to cloud sync does your playlist and MIDI library get uploaded to your own cloud account.
 
-Current release line: **4.0.1** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v4.0.1)).
+Current release line: **4.0.2** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v4.0.2)).
 
-What's new in 4.0.1: cloud sync now uploads only the songs that actually changed (and says so when nothing needs uploading), with progress and elapsed-time feedback on both desktop and mobile; fixes MIDI files created by the transcriber failing to sync and a library-migration bug that could drop MIDI bytes; adds 8 soundfonts to match the FuMiVoice mobile catalog.
+What's new in 4.0.2: batch management is back in the song list (multi-select / select-all, then move to a playlist, favorite or remove in bulk); fixes the transcriber's "Beat grid (Beat This!)" toggle having no effect because the engine never received the flag.
 
 ### What it does
 

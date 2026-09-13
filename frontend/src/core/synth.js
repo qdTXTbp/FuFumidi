@@ -354,6 +354,10 @@ export class Synth {
     };
     this.trackGains = []; this.vol = []; this.mute = []; this.solo = [];
     this.panners = []; this.pan = [];
+    // 通道混音状态（音色库/SF2 播放用；说明见 setChannelVol 一段的注释）
+    this.chVol = {}; this.chMute = {}; this.chSolo = {}; this.chPan = {};
+    this._fileCc7 = {}; this._fileCc10 = {};   // 文件里该通道最后一次 CC7 / CC10
+    this._knownCh = new Set();                 // 已下发过通道增益的通道
     this.live = []; this.activeNotes = [];
     this.sf2 = null;
     this.sf2Ready = false;
@@ -421,6 +425,8 @@ export class Synth {
     this._sf2ChProg = [];
     this._sf2ChBank = [];
     this._sf2DrumCh = [];
+    // 引擎重建后通道增益需要重新下发（用户推子保留，见通道混音一段）
+    this._knownCh = new Set();
   }
   // js-synth 按需懒加载（原先在 index.html 同步 <script> 加载会阻塞首帧）。
   // 两条路径：
@@ -688,31 +694,98 @@ export class Synth {
   midiEvent(time, ev) {
     if (!ev || !this.sf2Ready || !this.sf2) return;
     const ch = ev.ch != null ? ev.ch : 0;
-    if (this._sf2SeqMode && this.sf2Seq) {
-      const now = this.ctx.currentTime;
-      const tick = Math.max(this._seqTickFor(now), this._seqTickFor(Math.max(now, time)));
-      try {
-        if (ev.kind === 'bend') this.sf2Seq.sendEventAt({ type: 'pitchbend', channel: ch, value: ev.val }, tick, true);
-        else this.sf2Seq.sendEventAt({ type: 'controlchange', channel: ch, control: ev.cc, value: ev.val }, tick, true);
-      } catch (e) {}
+    if (ev.kind === 'bend') { this._sendBendAt(ch, ev.val, time); return; }
+    if (ev.cc === 7) {
+      // 文件自己的通道音量（自动化）：记为基准，再由推子/静音/独奏叠加后下发
+      this._fileCc7[ch] = ev.val;
+      this._applyChannelGain(ch, time);
       return;
     }
-    // 回退路径：与音符同样按绝对时间用 setTimeout 下发
-    const delay = Math.max(0, (Math.max(this.ctx.currentTime, time) - this.ctx.currentTime) * 1000);
-    const fire = () => {
-      if (!this.sf2) return;
-      try {
-        if (ev.kind === 'bend') this.sf2.midiPitchBend(ch, ev.val);
-        else this.sf2.midiControl(ch, ev.cc, ev.val);
-      } catch (e) {}
-    };
+    if (ev.cc === 10) {
+      this._fileCc10[ch] = ev.val;
+      this._applyChannelPan(ch, time);
+      return;
+    }
+    this._sendCcAt(ch, ev.cc, ev.val, time);
+  }
+  // 通道事件的两种下发路径：音序器写绝对 tick；回退路径按绝对时间 setTimeout。
+  // time 为空表示「立刻」（混音台推子这类实时操作）。
+  _sendCcAt(ch, cc, val, time) {
+    if (!this.sf2Ready || !this.sf2) return;
+    if (this._sf2SeqMode && this.sf2Seq) {
+      const now = this.ctx.currentTime;
+      const at = time == null ? now : Math.max(now, time);
+      const tick = Math.max(this._seqTickFor(now), this._seqTickFor(at));
+      try { this.sf2Seq.sendEventAt({ type: 'controlchange', channel: ch, control: cc, value: val }, tick, true); } catch (e) {}
+      return;
+    }
+    const now = this.ctx.currentTime;
+    const delay = Math.max(0, ((time == null ? now : Math.max(now, time)) - now) * 1000);
+    const fire = () => { if (!this.sf2) return; try { this.sf2.midiControl(ch, cc, val); } catch (e) {} };
     if (delay === 0) fire(); else this._sf2Pending.push(setTimeout(fire, delay));
   }
+  _sendBendAt(ch, val, time) {
+    if (!this.sf2Ready || !this.sf2) return;
+    if (this._sf2SeqMode && this.sf2Seq) {
+      const now = this.ctx.currentTime;
+      const at = time == null ? now : Math.max(now, time);
+      const tick = Math.max(this._seqTickFor(now), this._seqTickFor(at));
+      try { this.sf2Seq.sendEventAt({ type: 'pitchbend', channel: ch, value: val }, tick, true); } catch (e) {}
+      return;
+    }
+    const now = this.ctx.currentTime;
+    const delay = Math.max(0, ((time == null ? now : Math.max(now, time)) - now) * 1000);
+    const fire = () => { if (!this.sf2) return; try { this.sf2.midiPitchBend(ch, val); } catch (e) {} };
+    if (delay === 0) fire(); else this._sf2Pending.push(setTimeout(fire, delay));
+  }
+  /* ---------------- 通道混音（音色库 / SF2 播放） ----------------
+     音色库的输出只有一路混合节点（sf2Node → master），没法在 Web Audio 层按轨插增益，
+     所以音色库模式的混音台改用 MIDI 通道音量(CC7) / 声像(CC10)：音量、静音、独奏
+     立即生效（包括正在发声的音符），且不改变音色 —— 与手机端 BASSMIDI 播放同一文件
+     时的模型一致。
+     叠加关系是「推子优先、文件自动化打底」：
+       通道实际音量 = 文件 CC7（文件没写过则按 127）× 推子 × 静音/独奏
+     粒度是「通道」而非「轨」：同一通道上的多条轨物理上分不开，会一起变化。 */
+  resetChannelMix() {
+    this.chVol = {}; this.chMute = {}; this.chSolo = {}; this.chPan = {};
+    this._fileCc7 = {}; this._fileCc10 = {}; this._knownCh = new Set();
+  }
+  _anyChSolo() { for (const k in this.chSolo) if (this.chSolo[k]) return true; return false; }
+  _chEffective(ch) {
+    if (this.chMute[ch]) return 0;
+    if (this._anyChSolo() && !this.chSolo[ch]) return 0;
+    return this.chVol[ch] != null ? this.chVol[ch] : 1;
+  }
+  _applyChannelGain(ch, time) {
+    const base = this._fileCc7[ch];
+    const val = Math.round((base == null ? 127 : base) * this._chEffective(ch));
+    this._sendCcAt(ch, 7, Math.max(0, Math.min(127, val)), time);
+  }
+  _applyChannelPan(ch, time) {
+    // 声像没法相乘，用户推子按偏移叠加在文件 CC10 之上（默认 64 = 居中）
+    const base = this._fileCc10[ch] == null ? 64 : this._fileCc10[ch];
+    const val = base + Math.round((this.chPan[ch] || 0) * 63);
+    this._sendCcAt(ch, 10, Math.max(0, Math.min(127, val)), time);
+  }
+  _applyAllChannelGains() {
+    const t = this.ctx ? this.ctx.currentTime : 0;
+    for (const ch of this._knownCh) this._applyChannelGain(ch, t);
+  }
+  setChannelVol(ch, v) { this.chVol[ch] = clamp(v, 0, 1); this._applyChannelGain(ch); }
+  setChannelMute(ch, b) { this.chMute[ch] = !!b; this._applyChannelGain(ch); }
+  setChannelSolo(ch, b) { this.chSolo[ch] = !!b; this._applyAllChannelGains(); }
+  setChannelPan(ch, v) { this.chPan[ch] = clamp(v, -1, 1); this._applyChannelPan(ch); }
   noteOn(time, note, endTime) {
     this.ensure(note.trk + 1);
     if (this.sf2Ready && this.sf2) {
       // 用音符自己的 MIDI 通道（不是轨序号）；note.ch 由 player.prepare 从文件里取
       const ch = note.ch != null ? note.ch : Math.min(15, note.trk || 0);
+      // 该通道首次发声时补发一次通道增益/声像：混音台在起播前调过的推子不会丢
+      if (!this._knownCh.has(ch)) {
+        this._knownCh.add(ch);
+        this._applyChannelGain(ch, time);
+        this._applyChannelPan(ch, time);
+      }
       // —— 音序器路径（AudioWorklet + fu-seq-clock）：事件按绝对 tick 写入 fluid_sequencer，
       // worklet 线程准时分发。主线程阻塞期间已写入的事件照常发声，无迟到/掉音。 ——
       if (this._sf2SeqMode && this.sf2Seq) {

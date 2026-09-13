@@ -163,6 +163,10 @@ def _resolve_params(args, mode):
     # muscriptor 批量推理（0=关闭边界质量优先；>=2 开启批量吞吐）
     _mb = getattr(args, "muscriptor_batch", None)
     if _mb: p["muscriptor_batch"] = int(_mb)
+    # 节拍网格检测（仅 muscriptor 用到）：勾选才加载 Beat This! 权重，
+    # 未下载/加载失败时由 engine_muscriptor 自行跳过。必须在这里显式取出——
+    # 只放在 worker 的 Namespace 里也不够，参数最终要靠这里进 params。
+    if getattr(args, "beat_grid", False): p["beat_grid"] = True
     return p, mode
 
 
@@ -415,6 +419,8 @@ def build_parser():
     g.add_argument("--max-freq", "--maximum-frequency", dest="maximum_frequency",
                    type=float, default=None, help="最高音高(Hz)，0=不限")
     g.add_argument("--no-melodia", action="store_true", help="关闭旋律增强")
+    g.add_argument("--beat-grid", action="store_true",
+                   help="[muscriptor] 加载 Beat This! 权重做节拍网格检测（未下载/失败时自动跳过）")
     g.add_argument("--tempo", type=int, default=None, help="MIDI 速度 BPM（默认 120）")
     g.add_argument("--with-drums", action="store_true",
                    help="[separate] 同时输出鼓组节奏轨")
@@ -484,6 +490,9 @@ def cmd_worker():
                 model=req.get('model'),
                 model_size=req.get('model_size'),
                 muscriptor_batch=req.get('muscriptor_batch'),
+                # 节拍网格检测开关：漏了这一项时模板/界面勾了也传不进引擎，
+                # 引擎会一直按默认关闭处理（日志固定输出「已关闭节拍网格检测」）。
+                beat_grid=bool(req.get('beat_grid')),
             )
             class _LogTee(io.StringIO):
                 """stdout 分流：把转换日志逐行实时转发到真实 stdout（###LOG 协议），
