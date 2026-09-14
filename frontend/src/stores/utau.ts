@@ -16,6 +16,9 @@ export interface UtauNote {
   flags: string;       // 调声 flags（预留，引擎后续支持）
 }
 
+// 新建音符的默认调声参数；「重置参数」也回到这里的取值
+export const NOTE_DEFAULTS = { velocity: 100, volume: 100, vibrato: false, vibDepth: 25, vibFreq: 5.5, flags: '' };
+
 const LS_KEY = 'fufumidi_utau_project_v1';
 let _nid = 1;
 const nid = () => 'n' + (++_nid).toString(36) + Date.now().toString(36).slice(-4);
@@ -134,7 +137,7 @@ export const useUtauStore = defineStore('utau', {
       this.pushUndo();
       const note: UtauNote = {
         id: nid(), startBeat, durBeat: 1, pitch, lyric: 'あ',
-        velocity: 100, volume: 100, vibrato: false, vibDepth: 25, vibFreq: 5.5, flags: '',
+        ...NOTE_DEFAULTS,
       };
       this.notes.push(note);
       this.selectedId = note.id;
@@ -149,9 +152,9 @@ export const useUtauStore = defineStore('utau', {
         durBeat: Math.max(0.125, it.durBeat ?? 1),
         pitch: Math.max(0, Math.min(127, it.pitch ?? 60)),
         lyric: it.lyric ?? 'あ',
-        velocity: it.velocity ?? 100, volume: it.volume ?? 100,
-        vibrato: it.vibrato ?? false, vibDepth: it.vibDepth ?? 25,
-        vibFreq: it.vibFreq ?? 5.5, flags: it.flags ?? '',
+        velocity: it.velocity ?? NOTE_DEFAULTS.velocity, volume: it.volume ?? NOTE_DEFAULTS.volume,
+        vibrato: it.vibrato ?? NOTE_DEFAULTS.vibrato, vibDepth: it.vibDepth ?? NOTE_DEFAULTS.vibDepth,
+        vibFreq: it.vibFreq ?? NOTE_DEFAULTS.vibFreq, flags: it.flags ?? NOTE_DEFAULTS.flags,
       };
     },
     addNotes(items: Partial<UtauNote>[]): string[] {
@@ -225,6 +228,16 @@ export const useUtauStore = defineStore('utau', {
       this.notes = []; this.selectedId = null; this.selectedIds = [];
       this.persist();
     },
+    /* ---------- 一键重置（P1-5：让编辑结果可预测） ---------- */
+    /** 重置颤音（音高相关的调声编辑） */
+    resetVibrato(ids: string[]) {
+      this.updateNotes(ids, { vibrato: NOTE_DEFAULTS.vibrato, vibDepth: NOTE_DEFAULTS.vibDepth, vibFreq: NOTE_DEFAULTS.vibFreq });
+    },
+    /** 重置全部调声参数（子音速度/音量/颤音/flags） */
+    resetParams(ids: string[]) {
+      this.updateNotes(ids, { ...NOTE_DEFAULTS });
+    },
+
     setBpm(v: number) { this.bpm = Math.max(20, Math.min(400, v)); this.persist(); },
     setSampleNote(v: string) { this.sampleNote = v; this.persist(); },
     setVoicebank(dir: string) { this.voicebankDir = dir; this.persist(); },

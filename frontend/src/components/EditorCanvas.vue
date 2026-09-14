@@ -23,7 +23,7 @@ const props = defineProps({
   cc2Number: { type: Number, default: 1 },
   ccMode: { type: String, default: 'free' },      // free | line | curve
 });
-const emit = defineEmits(['select', 'modify', 'zoom']);
+const emit = defineEmits(['select', 'modify', 'zoom', 'ctxmenu']);
 
 const wrap = ref(null);
 const canvas = ref(null);
@@ -679,6 +679,21 @@ function onUp() {
   }
   dragState.value = null;
 }
+/* 右键菜单：命中音符时先选中它，再把坐标交给上层（ViewEdit）弹菜单 */
+function onCtxMenu(e) {
+  const s = song(), tr = curTrack();
+  if (!s || !tr) { emit('ctxmenu', { x: e.clientX, y: e.clientY, hit: false, tick: 0, midi: 60 }); return; }
+  const rect = canvas.value.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  const n = hitTest(x, y);
+  if (n && !selection.has(n)) { selection.clear(); selection.add(n); emit('select'); draw(); }
+  emit('ctxmenu', {
+    x: e.clientX, y: e.clientY,
+    hit: !!(n || selection.size),
+    tick: snapTick(xToTick(x)),
+    midi: yToMidi(y),
+  });
+}
 function onWheel(e) {
   e.preventDefault();
   const rect = canvas.value.getBoundingClientRect();
@@ -717,7 +732,7 @@ function focusSelection() {
   draw();
 }
 function deleteSelected() { if (selection.size) deleteNotes([...selection]); }
-function quantizeSelected() { if (selection.size) quantize([...selection]); }
+function quantizeSelected(ratio) { if (selection.size) quantize([...selection], ratio); }
 function transposeSelected(d) { if (selection.size) transpose([...selection], d); }
 function velRampSelected(dir) { if (selection.size) velRamp([...selection], dir); }
 function selectAll() {
@@ -954,7 +969,7 @@ onBeforeUnmount(() => { if (raf) cancelAnimationFrame(raf); });
 </script>
 
 <template>
-  <div class="ed-canvas-wrap" ref="wrap" data-guide="edit-canvas" @wheel.prevent="onWheel">
+  <div class="ed-canvas-wrap" ref="wrap" data-guide="edit-canvas" @wheel.prevent="onWheel" @contextmenu.prevent="onCtxMenu">
     <canvas ref="canvas" :style="{ height: H + 'px' }" @pointerdown="onDown" @pointermove="onMove" @pointerup="onUp" @pointerleave="onUp"></canvas>
     <div v-if="ccEnabled" class="cc-lane" :style="{ height: CC_LANE_H + 'px' }">
       <canvas ref="ccCanvas" class="cc-lane-canvas" @pointerdown="ccDown" @pointermove="ccMove" @pointerup="ccUp" @pointerleave="ccUp"></canvas>

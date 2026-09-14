@@ -103,6 +103,95 @@ function velDown() { recordCmd('vel_dec 3'); editor.value?.velRampSelected(-3); 
 function samePitch() { editor.value?.selectSamePitch(); refreshSel(); }
 function selectAll() { editor.value?.selectAll(); refreshSel(); }
 
+/* ---------------- 钢琴卷帘右键菜单 ---------------- */
+const ctxMenu = ref(null);   // { x, y, hit, tick, midi }
+const ctxSub = ref('');      // '' | 'quantize' | 'transpose' | 'velocity'
+const CTX_W = 182, CTX_H = 402, CTX_SUB_W = 158;
+function openCtxMenu(p) {
+  if (!p) return;
+  closeCtxMenu();
+  ctxMenu.value = p;
+  // 打开菜单本身不改选中，但要把检查器同步到最新选择（右键命中音符时画布已改选）
+  nextTick(refreshSel);
+}
+function closeCtxMenu() { ctxMenu.value = null; ctxSub.value = ''; }
+function ctxMenuStyle() {
+  const m = ctxMenu.value;
+  if (!m) return {};
+  return {
+    left: Math.max(4, Math.min(m.x, window.innerWidth - CTX_W - 8)) + 'px',
+    top: Math.max(4, Math.min(m.y, window.innerHeight - CTX_H - 8)) + 'px',
+  };
+}
+/** 子菜单是否向左弹出（贴近视口右缘时） */
+const ctxSubFlip = computed(() => {
+  const m = ctxMenu.value;
+  if (!m) return false;
+  const left = Math.max(4, Math.min(m.x, window.innerWidth - CTX_W - 8));
+  return left + CTX_W + CTX_SUB_W > window.innerWidth;
+});
+/** 菜单项依赖选区，无选区时给出提示而不是静默失败 */
+function needSel() {
+  if (!editor.value || !editor.value.selCount()) {
+    toast(t('请先在钢琴卷帘中选择音符'), 'warn');
+    closeCtxMenu();
+    return false;
+  }
+  return true;
+}
+function ctxCut() {
+  if (!needSel()) return;
+  const n = editor.value.copySelected() || 0;
+  if (n) { editor.value.deleteSelected(); toast(t('已剪切 ') + n + t(' 个音符'), 'ok'); }
+  refreshSel(); closeCtxMenu();
+}
+function ctxCopy() { copy(); closeCtxMenu(); }
+function ctxPaste() {
+  const tick = ctxMenu.value ? ctxMenu.value.tick : 0;
+  const n = editor.value?.pasteAt(tick) || 0;
+  if (n) toast(t('已粘贴 ') + n + t(' 个音符'), 'ok');
+  refreshSel(); closeCtxMenu();
+}
+function ctxDup() { dup(); closeCtxMenu(); }
+function ctxDelete() { del(); closeCtxMenu(); }
+/** ratio 为「拍的比例」（EditorCanvas.quantize 用），N 为宏命令里的分音符数（4/ratio） */
+function ctxQuantize(ratio) {
+  if (!needSel()) return;
+  recordCmd('quantize ' + Math.round(4 / ratio));
+  editor.value.quantizeSelected(ratio);
+  refreshSel(); closeCtxMenu();
+}
+function ctxTranspose(d) {
+  if (!needSel()) return;
+  recordCmd('transpose ' + d);
+  editor.value.transposeSelected(d);
+  refreshSel(); closeCtxMenu();
+}
+function ctxVel(d) {
+  if (!needSel()) return;
+  recordCmd('vel_' + (d > 0 ? 'inc' : 'dec') + ' ' + Math.abs(d));
+  editor.value.velRampSelected(d);
+  refreshSel(); closeCtxMenu();
+}
+function ctxVelReset() {
+  if (!needSel()) return;
+  editor.value.setSelVel(80);
+  toast(t('已重置力度为默认值 80'), 'ok');
+  refreshSel(); closeCtxMenu();
+}
+function ctxSamePitch() { if (!needSel()) return; samePitch(); closeCtxMenu(); }
+function ctxSelectAll() { selectAll(); closeCtxMenu(); }
+function ctxSelectNone() { editor.value?.selectNone(); refreshSel(); closeCtxMenu(); }
+function ctxToggleScaleSnap() { scaleSnap.value = !scaleSnap.value; closeCtxMenu(); }
+/** 量化选项：label + 拍比例 */
+const CTX_QUANTIZE = [
+  [t('1/4 音符'), 1],
+  [t('1/8 音符'), 0.5],
+  [t('1/16 音符'), 0.25],
+  [t('1/32 音符'), 0.125],
+  [t('1/8 三连音'), 1 / 3],
+];
+
 /* ---------------- 力度曲线 ---------------- */
 function openVelCurve() {
   if (!editor.value?.selCount()) { toast(t('请先在钢琴卷帘中选择音符'), 'warn'); return; }
@@ -1059,7 +1148,7 @@ onBeforeUnmount(() => {
                       :cc-enabled="ccEnabled" :cc-number="ccNumber"
                       :scale-snap="scaleSnap" :ks-map="ksMap" :audio="audioData"
                       :cc2-enabled="cc2Enabled" :cc2-number="cc2Number" :cc-mode="ccMode"
-                      @select="refreshSel" @modify="refreshSel" @zoom="onZoom" />
+                      @select="refreshSel" @modify="refreshSel" @zoom="onZoom" @ctxmenu="openCtxMenu" />
         <video v-if="videoUrl" :src="videoUrl" controls playsinline class="ed-video-overlay"></video>
       </div>
 
@@ -1348,6 +1437,59 @@ onBeforeUnmount(() => {
       </div>
     </div>
     </Transition>
+
+    <!-- 钢琴卷帘右键菜单 -->
+    <Transition name="ov">
+      <div v-if="ctxMenu" class="ctx-mask" @click.self="closeCtxMenu" @contextmenu.prevent="closeCtxMenu">
+        <div class="ctx-menu" :style="ctxMenuStyle()" @mouseleave="ctxSub = ''">
+          <button class="ctx-item" @click="ctxCut"><span>{{ t('剪切') }}</span></button>
+          <button class="ctx-item" @click="ctxCopy"><span>{{ t('复制') }}</span><span class="ctx-k">Ctrl+C</span></button>
+          <button class="ctx-item" @click="ctxPaste"><span>{{ t('粘贴到指针处') }}</span><span class="ctx-k">Ctrl+V</span></button>
+          <button class="ctx-item" @click="ctxDup"><span>{{ t('重复') }}</span></button>
+          <div class="ctx-sep"></div>
+
+          <div class="ctx-sub-wrap" @mouseenter="ctxSub = 'quantize'">
+            <button class="ctx-item" :class="{ on: ctxSub === 'quantize' }"><span>{{ t('量化') }}</span><span class="ctx-arrow">▸</span></button>
+            <div v-if="ctxSub === 'quantize'" class="ctx-menu ctx-sub" :class="{ flip: ctxSubFlip }">
+              <button class="ctx-item" v-for="q in CTX_QUANTIZE" :key="q[1]" @click="ctxQuantize(q[1])"><span>{{ q[0] }}</span></button>
+              <div class="ctx-sep"></div>
+              <button class="ctx-item" @click="ctxQuantize(snapRatio)"><span>{{ t('按当前吸附网格') }}</span><span class="ctx-k">{{ snapRatio ? snapRatio : '—' }}</span></button>
+            </div>
+          </div>
+
+          <div class="ctx-sub-wrap" @mouseenter="ctxSub = 'transpose'">
+            <button class="ctx-item" :class="{ on: ctxSub === 'transpose' }"><span>{{ t('移调') }}</span><span class="ctx-arrow">▸</span></button>
+            <div v-if="ctxSub === 'transpose'" class="ctx-menu ctx-sub" :class="{ flip: ctxSubFlip }">
+              <button class="ctx-item" @click="ctxTranspose(1)"><span>{{ t('升 1 个半音') }}</span></button>
+              <button class="ctx-item" @click="ctxTranspose(-1)"><span>{{ t('降 1 个半音') }}</span></button>
+              <button class="ctx-item" @click="ctxTranspose(12)"><span>{{ t('升 1 个八度') }}</span></button>
+              <button class="ctx-item" @click="ctxTranspose(-12)"><span>{{ t('降 1 个八度') }}</span></button>
+            </div>
+          </div>
+
+          <div class="ctx-sub-wrap" @mouseenter="ctxSub = 'velocity'">
+            <button class="ctx-item" :class="{ on: ctxSub === 'velocity' }"><span>{{ t('力度') }}</span><span class="ctx-arrow">▸</span></button>
+            <div v-if="ctxSub === 'velocity'" class="ctx-menu ctx-sub" :class="{ flip: ctxSubFlip }">
+              <button class="ctx-item" @click="ctxVel(5)"><span>{{ t('力度 +5') }}</span></button>
+              <button class="ctx-item" @click="ctxVel(-5)"><span>{{ t('力度 −5') }}</span></button>
+              <div class="ctx-sep"></div>
+              <button class="ctx-item" @click="ctxVelReset"><span>{{ t('重置为默认力度') }}</span><span class="ctx-k">80</span></button>
+            </div>
+          </div>
+          <div class="ctx-sep"></div>
+
+          <button class="ctx-item" @click="ctxSamePitch"><span>{{ t('选中同音高') }}</span></button>
+          <button class="ctx-item" @click="ctxSelectAll"><span>{{ t('全选') }}</span><span class="ctx-k">Ctrl+A</span></button>
+          <button class="ctx-item" @click="ctxSelectNone"><span>{{ t('取消选择') }}</span></button>
+          <div class="ctx-sep"></div>
+
+          <button class="ctx-item" @click="ctxToggleScaleSnap">
+            <span>{{ t('音阶吸附') }}</span><span v-if="scaleSnap" class="ctx-check">✓</span>
+          </button>
+          <button class="ctx-item danger" @click="ctxDelete"><span>{{ t('删除') }}</span><span class="ctx-k">Del</span></button>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -1419,4 +1561,18 @@ onBeforeUnmount(() => {
 .ed-fullscreen .ed-adv { display: flex; }
 .ed-wrap-rel { position: relative; flex: 1; min-height: 0; }
 .ed-video-overlay { position: absolute; top: 4px; right: 4px; width: 300px; max-width: 34%; border-radius: 8px; z-index: 20; background: #000; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+
+/* 钢琴卷帘右键菜单 */
+.ctx-mask { position: fixed; inset: 0; z-index: 2000; }
+.ctx-menu { position: fixed; min-width: 182px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+.ctx-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; text-align: left; border: none; background: transparent; color: var(--ink); padding: 7px 10px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+.ctx-item:hover, .ctx-item.on { background: var(--surface-soft); }
+.ctx-item.danger { color: var(--error); }
+.ctx-k { color: var(--stone); font-size: 10.5px; font-family: var(--mono); flex: none; }
+.ctx-arrow { color: var(--stone); font-size: 11px; line-height: 1; }
+.ctx-check { color: var(--accent); font-size: 12px; }
+.ctx-sub-wrap { position: relative; }
+.ctx-menu.ctx-sub { position: absolute; left: 100%; top: -4px; min-width: 158px; max-height: 46vh; overflow-y: auto; }
+.ctx-menu.ctx-sub.flip { left: auto; right: 100%; }
+.ctx-sep { height: 1px; background: var(--hairline); margin: 3px 6px; }
 </style>

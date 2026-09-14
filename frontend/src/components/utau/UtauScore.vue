@@ -438,6 +438,21 @@ function addAtEnd() {
   nextTick(() => { const el = wrap.value; if (el) el.scrollLeft = xOf(end) - 40; });
 }
 function delSelected() { if (store.selectedIds.length) store.removeNotes(selIds()); }
+/* 一键重置：颤音（音高相关编辑）/ 全部调声参数 回到默认值 */
+function ctxResetVibrato() {
+  const ids = selIds();
+  if (!ids.length) { closeCtx(); return; }
+  store.resetVibrato(ids);
+  app.toast(t('已重置颤音'), 'ok');
+  closeCtx();
+}
+function ctxResetParams() {
+  const ids = selIds();
+  if (!ids.length) { closeCtx(); return; }
+  store.resetParams(ids);
+  app.toast(t('已重置调声参数'), 'ok');
+  closeCtx();
+}
 function goRender() { app.setView('utau'); }
 // 右键菜单入口：对主选中音符打开歌词对话框
 function onDblFromCtx() {
@@ -646,6 +661,10 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
       <button class="us-ctx-i" :disabled="!ctxOnNote" @click="dupSel(); closeCtx()">{{ t('重复') }}</button>
       <div class="us-ctx-sep"></div>
       <button class="us-ctx-i" :disabled="!ctxOnNote" @click="onDblFromCtx(); closeCtx()">{{ t('编辑歌词') }}</button>
+      <div class="us-ctx-sep"></div>
+      <button class="us-ctx-i" :disabled="!ctxOnNote" @click="ctxResetVibrato">{{ t('重置颤音') }}</button>
+      <button class="us-ctx-i" :disabled="!ctxOnNote" @click="ctxResetParams">{{ t('重置全部参数') }}</button>
+      <div class="us-ctx-sep"></div>
       <button class="us-ctx-i danger" :disabled="!ctxOnNote" @click="delSelected(); closeCtx()">{{ t('删除音符') }}</button>
     </div>
     </Transition>
