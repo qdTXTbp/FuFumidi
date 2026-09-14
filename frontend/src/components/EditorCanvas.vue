@@ -126,6 +126,10 @@ function pushState() {
 function afterEdit() {
   const s = song(), item = currentSong.value;
   if (!s || !item) return;
+  // 维持「notes 按 start 升序」不变量：draw() 的视口裁剪用二分查找定位可见区间，
+  // 新建/粘贴/拖动如果打乱顺序，新音符会落在窗口之外而整段画不出来（大文件尤其明显）。
+  const ct = curTrack();
+  if (ct) sortNotes(ct.notes);
   // 重算曲长
   let totalTicks = 0;
   for (const tr of s.tracks) for (const n of tr.notes) totalTicks = Math.max(totalTicks, n.end);
@@ -242,6 +246,12 @@ function velRamp(arr, dir) {
   const sorted = arr.slice().sort((a, b) => a.start - b.start);
   sorted.forEach((n, i) => { n.vel = clamp(Math.round(n.vel + dir * i), 1, 127); });
   afterEdit();
+}
+/* 音符数组按 start 升序（同起点按音高）：仅在已乱序时才真正排序，代价 O(n) 检查 */
+function sortNotes(ns) {
+  for (let i = 1; i < ns.length; i++) {
+    if (ns[i].start < ns[i - 1].start) { ns.sort((a, b) => a.start - b.start || a.midi - b.midi); return; }
+  }
 }
 /* 静音：仅影响发声与显示，不改动力度/时值（撤销可回退） */
 function toggleMute(n) {
@@ -692,6 +702,8 @@ function onMove(e) {
       n.start = ns; n.end = Math.max(ns + 1, o.end + Math.round(dTick));
       n.midi = clamp(o.midi + Math.round(dMidi), 0, 127);
     });
+    // 拖动改 start：实时维持升序，否则被拖的音符可能落在二分窗口外而看不见
+    const trM = curTrack(); if (trM) sortNotes(trM.notes);
     draw();
   } else if (d.type === 'resize' || d.type === 'resize-left') {
     const n = d.notes[0], o = d.orig[0];
@@ -700,6 +712,7 @@ function onMove(e) {
     } else {
       n.start = Math.max(0, Math.min(o.end - 60, snapTick(xToTick(x))));
     }
+    const trR = curTrack(); if (trR) sortNotes(trR.notes);
     draw();
   } else if (d.type === 'create') {
     const raw = xToTick(x);
