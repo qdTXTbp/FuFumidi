@@ -180,6 +180,13 @@ function ctxVelReset() {
   refreshSel(); closeCtxMenu();
 }
 function ctxSamePitch() { if (!needSel()) return; samePitch(); closeCtxMenu(); }
+/** 静音/取消静音选中音符（只影响发声，删除与导出不受影响） */
+function ctxMute(on) {
+  if (!needSel()) return;
+  editor.value.setSelMuted(on);
+  toast(on ? t('已静音选中音符') : t('已取消静音'), 'ok');
+  refreshSel(); closeCtxMenu();
+}
 function ctxSelectAll() { selectAll(); closeCtxMenu(); }
 function ctxSelectNone() { editor.value?.selectNone(); refreshSel(); closeCtxMenu(); }
 function ctxToggleScaleSnap() { scaleSnap.value = !scaleSnap.value; closeCtxMenu(); }
@@ -409,6 +416,14 @@ const scaleSnap = ref(false);
 const cc2Enabled = ref(false);
 const cc2Number = ref(1);
 const ccMode = ref('free');
+/* P0-2 编辑器偏好：新音符默认力度 + 音符着色方案（本地持久化） */
+const editPrefs = (() => { try { return JSON.parse(localStorage.getItem('fufumidi_edit_prefs') || '{}') || {}; } catch (e) { return {}; } })();
+const defaultVelocity = ref(typeof editPrefs.defaultVelocity === 'number' ? editPrefs.defaultVelocity : 80);
+const colorMode = ref(editPrefs.colorMode || 'track');
+const COLOR_MODES = [['track', t('按轨道')], ['pitch', t('按音高')], ['velocity', t('按力度')], ['selection', t('按选中')]];
+watch([defaultVelocity, colorMode], () => {
+  try { localStorage.setItem('fufumidi_edit_prefs', JSON.stringify({ defaultVelocity: defaultVelocity.value, colorMode: colorMode.value })); } catch (e) {}
+});
 const bpmInput = ref(song.value ? song.value.initialBpm : 120);
 const fullscreenOn = ref(false);
 
@@ -1021,7 +1036,15 @@ onBeforeUnmount(() => {
           <button class="et-btn" :class="{ active: tool === 'select' }" :title="t('选择 V')" @click="tool = 'select'"><Icon name="cursor" :size="14" />{{ t('选择') }}</button>
           <button class="et-btn" :class="{ active: tool === 'pencil' }" :title="t('画笔 B')" @click="tool = 'pencil'"><Icon name="pencil" :size="14" />{{ t('画笔') }}</button>
           <button class="et-btn" :class="{ active: tool === 'erase' }" :title="t('橡皮 E')" @click="tool = 'erase'"><Icon name="erase" :size="14" />{{ t('橡皮') }}</button>
+          <button class="et-btn" :class="{ active: tool === 'mute' }" :title="t('静音：点击音符切换发声/静音（不删除、不改力度）')" @click="tool = 'mute'"><Icon name="minus" :size="14" />{{ t('静音') }}</button>
         </div>
+        <span class="et-sep"></span>
+        <span class="et-label">{{ t('默认力度') }}</span>
+        <input class="num-input" type="number" min="1" max="127" step="1" style="width:58px" v-model.number="defaultVelocity" :title="t('画笔新建音符时使用的力度')" />
+        <span class="et-label">{{ t('着色') }}</span>
+        <select class="select-input" v-model="colorMode" style="width:auto;padding:4px 8px" :title="t('音符着色方案')">
+          <option v-for="c in COLOR_MODES" :key="c[0]" :value="c[0]">{{ c[1] }}</option>
+        </select>
         <span class="et-sep"></span>
         <span class="et-label">{{ t('吸附') }}</span>
         <select class="select-input" v-model="snapRatio" style="width:auto;padding:4px 8px">
@@ -1148,6 +1171,7 @@ onBeforeUnmount(() => {
                       :cc-enabled="ccEnabled" :cc-number="ccNumber"
                       :scale-snap="scaleSnap" :ks-map="ksMap" :audio="audioData"
                       :cc2-enabled="cc2Enabled" :cc2-number="cc2Number" :cc-mode="ccMode"
+                      :default-velocity="defaultVelocity" :color-mode="colorMode"
                       @select="refreshSel" @modify="refreshSel" @zoom="onZoom" @ctxmenu="openCtxMenu" />
         <video v-if="videoUrl" :src="videoUrl" controls playsinline class="ed-video-overlay"></video>
       </div>
@@ -1422,7 +1446,7 @@ onBeforeUnmount(() => {
       <div class="ed-modal" style="width:min(680px,92vw)">
         <div class="ed-modal-head"><b>{{ t('编辑功能说明') }}</b><button class="icon-btn" style="margin-left:auto" @click="helpOpen = false"><Icon name="minus" :size="14" /></button></div>
         <div class="help-scroll">
-          <div class="help-sec"><b>{{ t('钢琴卷帘') }}</b><span>{{ t('选择/画笔/橡皮三种工具；拖拽移动音符、边缘拉伸改时值、Alt 拖拽调力度；支持吸附、音阶吸附、撤销/重做。') }}</span></div>
+          <div class="help-sec"><b>{{ t('钢琴卷帘') }}</b><span>{{ t('选择/画笔/橡皮/静音四种工具；拖拽移动音符、边缘拉伸改时值、Alt 拖拽调力度；支持吸附、音阶吸附、撤销/重做；可设置新音符默认力度与着色方案（轨道/音高/力度/选中）。') }}</span></div>
           <div class="help-sec"><b>{{ t('CC 自动化') }}</b><span>{{ t('展开 CC 泳道后选择 CC1/7/10/11/64；支持手绘、直线、曲线三种绘制；点击/拖动直接写 CC 数据。') }}</span></div>
           <div class="help-sec"><b>Key Switch</b><span>{{ t('C-2~C0 区域橙色高亮；支持自定义技法名称，并提供 Spitfire/VSL/EastWest 预设模板。') }}</span></div>
           <div class="help-sec"><b>{{ t('逻辑编辑器') }}</b><span>{{ t('按“目标→条件→操作”批量修改音符：力度、时值、音高、删除、量化、移调。') }}</span></div>
@@ -1479,6 +1503,8 @@ onBeforeUnmount(() => {
           <div class="ctx-sep"></div>
 
           <button class="ctx-item" @click="ctxSamePitch"><span>{{ t('选中同音高') }}</span></button>
+          <button class="ctx-item" @click="ctxMute(true)"><span>{{ t('静音选中') }}</span></button>
+          <button class="ctx-item" @click="ctxMute(false)"><span>{{ t('取消静音') }}</span></button>
           <button class="ctx-item" @click="ctxSelectAll"><span>{{ t('全选') }}</span><span class="ctx-k">Ctrl+A</span></button>
           <button class="ctx-item" @click="ctxSelectNone"><span>{{ t('取消选择') }}</span></button>
           <div class="ctx-sep"></div>

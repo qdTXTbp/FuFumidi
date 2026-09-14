@@ -40,6 +40,8 @@ export class Player {
     const arr = [];
     const st = this.song.chanStateAt;
     for (const tr of this.song.tracks) for (const n of tr.notes) {
+      // 编辑器里静音的音符不参与发声（导出 MIDI 仍保留，避免编辑动作丢音符）
+      if (n.muted) continue;
       // 通道取「音符自己的通道」，而不是轨序号：轨号与 MIDI 通道并不一一对应
       // （24 轨的文件里轨 16 才是 ch9 鼓、轨 20~22 各自是 ch15），用轨号会让
       // 轨 15~22 全挤到同一个通道，甚至被鼓轨把整条通道改成鼓组。

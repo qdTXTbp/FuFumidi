@@ -22,6 +22,8 @@ const props = defineProps({
   cc2Enabled: { type: Boolean, default: false },  // 第二条 CC 泳道
   cc2Number: { type: Number, default: 1 },
   ccMode: { type: String, default: 'free' },      // free | line | curve
+  defaultVelocity: { type: Number, default: 80 }, // 新音符默认力度
+  colorMode: { type: String, default: 'track' },  // track | pitch | velocity | selection
 });
 const emit = defineEmits(['select', 'modify', 'zoom', 'ctxmenu']);
 
@@ -63,6 +65,14 @@ function computeRange() {
 function noteColor(i) {
   const C = ['#ff5530', '#ea5ec1', '#1456f0', '#a855f7', '#3daeff', '#1ba673', '#3b82f6', '#f59e0b', '#d45656', '#17437d'];
   return C[i % C.length];
+}
+/* 音高着色：12 个音级各一色（同名音全曲同色，便于看调性/声部走向） */
+const PITCH_COLORS = ['#ff5530', '#fb7185', '#ea5ec1', '#a855f7', '#6366f1', '#1456f0', '#3daeff', '#22b8cf', '#1ba673', '#84cc16', '#f59e0b', '#d45656'];
+function pitchColor(midi) { return PITCH_COLORS[((midi % 12) + 12) % 12]; }
+/* 力度着色：低力度冷色（蓝）→ 高力度暖色（红） */
+function velColor(v) {
+  const k = Math.max(0, Math.min(1, (Number(v) || 0) / 127));
+  return 'hsl(' + Math.round(210 - k * 210) + ', 78%, ' + Math.round(58 - 8 * k) + '%)';
 }
 function cssVar(name, fb) {
   try {
@@ -193,7 +203,7 @@ function redo() {
 function addNote(tick, midi, len) {
   const tr = curTrack(); if (!tr) return;
   pushState();
-  tr.notes.push({ start: Math.round(tick), end: Math.round(tick + len), midi: clamp(scaleSnapPitch(Math.round(midi)), 0, 127), vel: 80 });
+  tr.notes.push({ start: Math.round(tick), end: Math.round(tick + len), midi: clamp(scaleSnapPitch(Math.round(midi)), 0, 127), vel: clamp(Math.round(props.defaultVelocity), 1, 127) });
   afterEdit();
 }
 function deleteNotes(arr) {
@@ -237,6 +247,26 @@ function velRamp(arr, dir) {
   const sorted = arr.slice().sort((a, b) => a.start - b.start);
   sorted.forEach((n, i) => { n.vel = clamp(Math.round(n.vel + dir * i), 1, 127); });
   afterEdit();
+}
+/* 静音：仅影响发声与显示，不改动力度/时值（撤销可回退） */
+function toggleMute(n) {
+  const tr = curTrack(); if (!tr || !n) return;
+  pushState();
+  n.muted = !n.muted;
+  afterEdit();
+}
+function setSelMuted(on) {
+  const tr = curTrack(); if (!tr || !selection.size) return;
+  pushState();
+  for (const n of selection) n.muted = !!on;
+  afterEdit();
+}
+/* 选区静音状态：全静音返回 true，全不静音返回 false，混合返回 null */
+function selMuted() {
+  if (!selection.size) return null;
+  let on = 0;
+  for (const n of selection) if (n.muted) on++;
+  return on === 0 ? false : (on === selection.size ? true : null);
 }
 function selectSamePitch() {
   const tr = curTrack(); if (!tr || !selection.size) return;
@@ -380,8 +410,17 @@ function draw() {
       const y = (hi - n.midi) * rowH.value;
       if (x > W || x + w2 < 0) continue;
       const sel = isCur && selection.has(n);
-      ctx2d.globalAlpha = 0.85;
-      ctx2d.fillStyle = isCur ? col : steel;
+      // 着色方案：非当前轨道一律灰（保持「正在编辑哪条轨」的视觉层级）
+      let fill = steel;
+      if (isCur) {
+        if (props.colorMode === 'pitch') fill = pitchColor(n.midi);
+        else if (props.colorMode === 'velocity') fill = velColor(n.vel);
+        else if (props.colorMode === 'selection') fill = sel ? '#ff5530' : steel;
+        else fill = col;
+      }
+      // 静音音符半透明显示（不发声，但仍可编辑）
+      ctx2d.globalAlpha = n.muted ? 0.35 : 0.85;
+      ctx2d.fillStyle = fill;
       ctx2d.fillRect(x, y + 1, w2, rowH.value - 2);
       ctx2d.globalAlpha = 1;
       if (sel) {
@@ -594,6 +633,11 @@ function onDown(e) {
     const n = hitTest(x, y);
     if (n) deleteNotes([n]);
     else { dragState.value = { type: 'marquee', x0: x, y0: y, box: null }; }
+  } else if (props.tool === 'mute') {
+    // 静音工具：点击音符切换 muted（不改力度、不删音符，可撤销）
+    const n = hitTest(x, y);
+    if (n) toggleMute(n);
+    else { dragState.value = { type: 'marquee', x0: x, y0: y, box: null }; }
   } else {
     const n = hitTest(x, y);
     if (n) {
@@ -671,7 +715,7 @@ function onUp() {
     const len = Math.max(d.len || Math.max(song()?.tpb || 480, 120), 60);
     const st = Math.round(d.startTick);
     const en = Math.round(st + len);
-    tr.notes.push({ start: st, end: en, midi: clamp(scaleSnapPitch(Math.round(d.startMidi)), 0, 127), vel: 80 });
+    tr.notes.push({ start: st, end: en, midi: clamp(scaleSnapPitch(Math.round(d.startMidi)), 0, 127), vel: clamp(Math.round(props.defaultVelocity), 1, 127) });
     afterEdit();
   } else if (d.type === 'marquee' && d.box) {
     emit('select');
@@ -939,6 +983,7 @@ defineExpose({
   copySelected, pasteAt, duplicateSelected, selectSamePitch,
   selectAll, selectNone, selCount, selInfo,
   setSelVel, setSelMidi, setSelStart, setSelLen, applyVelCurve, replaceNotes, selNotes, selRef, selectNotes, applyDraft,
+  toggleMute, setSelMuted, selMuted,
   addPedal, delPedal, selSpan, addNote, deleteNotes, pushStateForTrack, notifyExternalEdit,
   undo, redo, canUndo, canRedo, clearHistory, historySnapshots,
   snapSelToAudio,

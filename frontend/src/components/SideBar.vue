@@ -663,23 +663,17 @@ const showAuth = ref(false);
         {{ emptyHint }}
       </div>
 
-      <!-- 批量管理：多选 / 全选 / 批量操作（勾选状态在 playlist.batchSelection） -->
-      <div v-if="visibleSongs.length || playlist.batchOn" class="bm-bar song-batch-bar">
-        <template v-if="playlist.batchOn">
-          <span class="batch-count">{{ playlist.batchSelection.length }} {{ t('已选') }}</span>
-          <button class="btn sm" @click="batchAll">{{ allVisibleSelected ? t('取消全选') : t('全选') }}</button>
-          <select class="select-input" style="flex:1;min-width:0" :value="''" @change="e => e.target.value && (batchMove(e.target.value), e.target.value = '')">
-            <option value="" disabled>{{ t('移到歌单…') }}</option>
-            <option v-for="pl in playlist.playlists" :key="pl.id" :value="pl.id">{{ pl.name }}</option>
-          </select>
-          <button class="btn sm" @click="batchFavorite" :disabled="!playlist.batchSelection.length">{{ allSelectedFav ? t('取消收藏') : t('收藏') }}</button>
-          <button class="btn sm danger" @click="batchRemove" :disabled="!playlist.batchSelection.length">{{ isAllView ? t('删除') : t('移除') }}</button>
-          <button class="btn sm ghost" @click="exitBatch">{{ t('完成') }}</button>
-        </template>
-        <template v-else>
-          <button class="btn sm ghost" @click="playlist.toggleBatch()"><Icon name="quantize" :size="13" />{{ t('批量管理') }}</button>
-          <span class="muted small">{{ t('勾选后批量移除 / 移动 / 收藏') }}</span>
-        </template>
+      <!-- 批量管理模式工具栏：入口统一到曲目右键「批量管理」（歌单内直接开 4.0.0 式管理子页面） -->
+      <div v-if="playlist.batchOn" class="bm-bar song-batch-bar">
+        <span class="batch-count">{{ playlist.batchSelection.length }} {{ t('已选') }}</span>
+        <button class="btn sm" @click="batchAll">{{ allVisibleSelected ? t('取消全选') : t('全选') }}</button>
+        <select class="select-input" style="flex:1;min-width:0" :value="''" @change="e => e.target.value && (batchMove(e.target.value), e.target.value = '')">
+          <option value="" disabled>{{ t('移到歌单…') }}</option>
+          <option v-for="pl in playlist.playlists" :key="pl.id" :value="pl.id">{{ pl.name }}</option>
+        </select>
+        <button class="btn sm" @click="batchFavorite" :disabled="!playlist.batchSelection.length">{{ allSelectedFav ? t('取消收藏') : t('收藏') }}</button>
+        <button class="btn sm danger" @click="batchRemove" :disabled="!playlist.batchSelection.length">{{ isAllView ? t('删除') : t('移除') }}</button>
+        <button class="btn sm ghost" @click="exitBatch">{{ t('完成') }}</button>
       </div>
 
       <div class="song-list" role="list" :class="{ 'drag-active': dragId && canReorder && !playlist.batchOn }" @dragover.prevent="dragOverList" @drop.prevent.stop="dropOnList">
@@ -787,7 +781,7 @@ const showAuth = ref(false);
 
     <!-- 确认弹窗 -->
     <Transition name="ov">
-      <div v-if="confirmDlg" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="confirmDlg.title" @click.self="closeConfirm" @keydown.esc="closeConfirm">
+      <div v-if="confirmDlg" class="ed-modal-mask ed-modal-top" role="dialog" aria-modal="true" :aria-label="confirmDlg.title" @click.self="closeConfirm" @keydown.esc="closeConfirm">
         <div class="ed-modal" style="width:min(340px,92vw)">
           <div class="ed-modal-head"><b>{{ confirmDlg.title }}</b><button class="icon-btn" style="margin-left:auto" :title="t('关闭')" :aria-label="t('关闭')" @click="closeConfirm"><Icon name="close" :size="14" /></button></div>
           <div style="padding:14px 4px 4px;line-height:1.6;color:var(--ink)" class="small">{{ confirmDlg.msg }}</div>
@@ -949,6 +943,8 @@ const showAuth = ref(false);
 
 /* 弹窗（与 ViewEdit 一致的应用内弹窗样式） */
 .ed-modal-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.35); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+/* 确认弹窗需要盖在批量管理子页面（同 z-index 且更靠后渲染）之上 */
+.ed-modal-top { z-index: 2100; }
 .ed-modal { width: min(560px, 92vw); background: var(--canvas); border-radius: 14px; box-shadow: 0 24px 64px rgba(16,24,40,0.2); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .ed-modal-head { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink); }
 .ed-modal-head b { font-size: 15px; }
