@@ -10,16 +10,22 @@ function cssVar(name, fb) {
 }
 
 export function detectKey(notes) {
+  const k = detectKeySpec(notes);
+  return KEY_NAME[k.root] + ' ' + t(k.mode === 'major' ? '大调' : '小调');
+}
+
+/** 调性（结构化）：供编辑器「按分析结果设调」直接使用 */
+export function detectKeySpec(notes) {
   const h = new Array(12).fill(0);
   for (const n of notes) h[n.midi % 12]++;
   const major = [0, 2, 4, 5, 7, 9, 11], minor = [0, 2, 3, 5, 7, 8, 10];
   let best = null;
-  for (let r = 0; r < 12; r++) for (const [mode, set] of [['M', major], ['m', minor]]) {
+  for (let r = 0; r < 12; r++) for (const [mode, set] of [['major', major], ['minor', minor]]) {
     let sc = 0;
     for (let pc = 0; pc < 12; pc++) sc += h[pc] * (set.includes((pc - r + 12) % 12) ? 1 : -0.3);
-    if (!best || sc > best.sc) best = { r, mode, sc };
+    if (!best || sc > best.sc) best = { root: r, mode, sc };
   }
-  return KEY_NAME[best.r] + ' ' + t(best.mode === 'M' ? '大调' : '小调');
+  return { root: best.root, mode: best.mode };
 }
 
 export function maxPolyphony(notes) {

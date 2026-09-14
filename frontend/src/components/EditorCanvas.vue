@@ -9,6 +9,7 @@ const state = app;
 const currentSong = computed(() => app.currentSong);
 import { KEY_NAME, noteName, clamp } from '../core/util.js';
 import { t } from '../core/i18n.js';
+import { snapToScale, scalePitchClasses } from '../core/scale.js';
 
 const props = defineProps({
   tool: { type: String, default: 'select' },      // select | pencil | erase
@@ -16,7 +17,8 @@ const props = defineProps({
   trackIndex: { type: Number, default: 0 },
   ccEnabled: { type: Boolean, default: false },   // 是否显示 CC 泳道
   ccNumber: { type: Number, default: 11 },        // CC 控制器编号
-  scaleSnap: { type: Boolean, default: false },   // 新音符吸附到调式音阶
+  scaleSpec: { type: Object, default: null },     // { root, type, custom } 调内编辑用的音阶；空则按曲目自动判断
+  scaleMode: { type: String, default: 'off' },    // off | highlight（高亮调内音） | constrain（约束到调内音）
   ksMap: { type: Object, default: () => ({}) },   // Key Switch 映射 { midi: 技法名 }
   audio: { type: Object, default: null },         // 音频波形 { data: Float32Array, rate: number }
   cc2Enabled: { type: Boolean, default: false },  // 第二条 CC 泳道
@@ -91,32 +93,25 @@ function snapTick(t) {
   const st = s.tpb * props.snapRatio;
   return Math.max(0, Math.round(t / st) * st);
 }
-/* 音阶吸附：把 midi 吸附到当前调式音阶内最近音（主音由音符直方图估计） */
-const MAJOR = [0, 2, 4, 5, 7, 9, 11], MINOR = [0, 2, 3, 5, 7, 8, 10];
-let _scaleCache = null;
-function scaleSnapPitch(midi) {
-  if (!props.scaleSnap) return midi;
+/* 调内编辑（P0-1）：显式音阶优先，未配置时按音符直方图自动估计调式 */
+let _autoScale = null;
+function autoScale() {
+  if (_autoScale) return _autoScale;
   const s = song();
-  if (!_scaleCache) {
-    const hist = new Array(12).fill(0);
-    for (const tr of s.tracks) for (const n of tr.notes) hist[((n.midi % 12) + 12) % 12]++;
-    let root = 0, max = 0;
-    for (let i = 0; i < 12; i++) if (hist[i] > max) { max = hist[i]; root = i; }
-    const minor = hist[(root + 3) % 12] >= hist[(root + 4) % 12];
-    const deg = minor ? MINOR : MAJOR;
-    _scaleCache = { root: root % 12, deg };
-  }
-  const { root, deg } = _scaleCache;
-  const oct = Math.floor(midi / 12), pc = ((midi % 12) + 12) % 12;
-  let best = { d: 99, m: midi };
-  for (const d of deg) {
-    const m = oct * 12 + root + d;
-    for (const cand of [m - 12, m, m + 12]) {
-      const dd = Math.abs(cand - midi);
-      if (dd < best.d) best = { d: dd, m: cand };
-    }
-  }
-  return clamp(best.m, 0, 127);
+  if (!s) return { root: 0, type: 'major' };
+  const hist = new Array(12).fill(0);
+  for (const tr of s.tracks) for (const n of tr.notes) hist[((n.midi % 12) + 12) % 12]++;
+  let root = 0, max = 0;
+  for (let i = 0; i < 12; i++) if (hist[i] > max) { max = hist[i]; root = i; }
+  const minor = hist[(root + 3) % 12] >= hist[(root + 4) % 12];
+  _autoScale = { root: root % 12, type: minor ? 'minor' : 'major' };
+  return _autoScale;
+}
+/** 当前生效的音阶：显式配置优先，否则用自动判断结果 */
+function effScale() { return props.scaleSpec || autoScale(); }
+function scaleSnapPitch(midi) {
+  if (props.scaleMode !== 'constrain') return midi;
+  return snapToScale(midi, effScale());
 }
 
 /* ---------------- 撤销 / 重做 ---------------- */
@@ -339,6 +334,17 @@ function draw() {
     if (!isBlack(m)) continue;
     ctx2d.fillStyle = 'rgba(10,10,10,0.028)';
     ctx2d.fillRect(0, (hi - m) * rowH.value, W, rowH.value);
+  }
+  // 调内音高亮：非「关闭」模式下，把调内音所在行铺一层浅色带（Studio One 的 Scale Panel 效果）
+  if (props.scaleMode !== 'off') {
+    const set = scalePitchClasses(effScale());
+    if (set) {
+      ctx2d.fillStyle = 'rgba(20,86,240,0.06)';
+      for (let m = lo; m <= hi; m++) {
+        if (!set.has(((m % 12) + 12) % 12)) continue;
+        ctx2d.fillRect(0, (hi - m) * rowH.value, W, rowH.value);
+      }
+    }
   }
   // 垂直网格：按「拍」绘制（与吸附粒度解耦，避免缩放后线条糊成一片），
   // 小节线更强；过密时只画第一根强线（与原仓库一致）。
@@ -709,6 +715,10 @@ function onUp() {
   const tr = curTrack();
   if ((d.type === 'move' || d.type === 'resize' || d.type === 'resize-left') && d.notes.length && tr) {
     // 位置/长度已在拖拽中直接修改；状态在 onDown 时已入撤销栈
+    if (d.type === 'move' && props.scaleMode === 'constrain') {
+      const sc = effScale();
+      for (const n of d.notes) n.midi = clamp(snapToScale(n.midi, sc), 0, 127);
+    }
     afterEdit();
   } else if (d.type === 'create' && tr) {
     pushState();
@@ -992,7 +1002,7 @@ defineExpose({
 /* ---------------- 生命周期 ---------------- */
 let raf = 0;
 function loop() { draw(); ccDrawLane(); raf = requestAnimationFrame(loop); }
-watch(() => currentSong.value, () => { selection.clear(); resetView(); draw(); });
+watch(() => currentSong.value, () => { selection.clear(); _autoScale = null; resetView(); draw(); });
 watch(() => props.trackIndex, () => { selection.clear(); draw(); ccDrawLane(); });
 watch(() => props.tool, () => { dragState.value = null; draw(); });
 watch(() => props.ccNumber, () => ccDrawLane());
@@ -1000,7 +1010,8 @@ watch(() => props.cc2Number, () => ccDrawLane());
 watch(() => props.cc2Enabled, (v) => { if (!v) ccDrawing.value = false; ccDrawLane(); });
 watch(() => props.ccMode, () => ccDrawLane());
 watch(() => props.ccEnabled, (v) => { if (!v) ccDrawing.value = false; ccDrawLane(); });
-watch(() => props.scaleSnap, () => { _scaleCache = null; });
+watch(() => props.scaleMode, () => { draw(); });
+watch(() => props.scaleSpec, () => { draw(); }, { deep: true });
 watch(() => props.audio, () => { _onsetsCache = null; draw(); });
 watch(() => props.ksMap, () => draw(), { deep: true });
 

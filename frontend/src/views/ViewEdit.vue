@@ -13,8 +13,10 @@ const toast = (m, t) => app.toast(m, t);
 const importFiles = (items) => app.importFiles(items);
 const setView = (v) => app.setView(v);
 import { encodeMidi } from '../core/midi.js';
-import { noteName, clamp } from '../core/util.js';
+import { noteName, clamp, KEY_NAME } from '../core/util.js';
 import { MACRO_DOC, macroToCmd, applyMacroScript, parseMacroScript } from '../core/macro.js';
+import { SCALE_TYPES, parseCustomDegrees } from '../core/scale.js';
+import { detectKeySpec } from '../core/analysis.js';
 import { t } from '../core/i18n.js';
 
 const bridge = window.fuBridge;
@@ -412,7 +414,43 @@ function drumClear() {
 watch(drumTrack, () => nextTick(drawDrum));
 
 /* ============ 高级编辑功能（对齐原仓库） ============ */
-const scaleSnap = ref(false);
+/* P0-1 调内编辑：音阶配置（本地持久化）+ 关闭/高亮/约束三态 */
+const SCALE_KEY = 'fufumidi_scale';
+const scaleCfg = (() => { try { return JSON.parse(localStorage.getItem(SCALE_KEY) || '{}') || {}; } catch (e) { return {}; } })();
+const scaleMode = ref(['off', 'highlight', 'constrain'].includes(scaleCfg.mode) ? scaleCfg.mode : 'off');
+const scaleRoot = ref(Number.isFinite(Number(scaleCfg.root)) ? Number(scaleCfg.root) : -1);  // -1 = 自动
+const scaleType = ref(scaleCfg.type || 'major');
+const customDegText = ref(scaleCfg.customText || '0,2,4,7,9');
+const ROOT_OPTIONS = KEY_NAME.map((n, i) => [i, n]);
+const SCALE_MODE_OPTIONS = [['off', t('关闭')], ['highlight', t('高亮调内音')], ['constrain', t('约束到音阶')]];
+/** 传给画布的显式音阶；主音选「自动」时返回 null，由画布按曲目判断 */
+const scaleSpec = computed(() => (scaleRoot.value < 0
+  ? null
+  : { root: scaleRoot.value, type: scaleType.value, custom: scaleType.value === 'custom' ? parseCustomDegrees(customDegText.value) : [] }));
+/** 「音阶吸附」开关：等效于在 约束 / 关闭 之间切换（保持旧入口可用） */
+const scaleSnap = computed({
+  get: () => scaleMode.value === 'constrain',
+  set: (v) => { scaleMode.value = v ? 'constrain' : 'off'; },
+});
+watch([scaleMode, scaleRoot, scaleType, customDegText], () => {
+  try {
+    localStorage.setItem(SCALE_KEY, JSON.stringify({
+      mode: scaleMode.value, root: scaleRoot.value, type: scaleType.value, customText: customDegText.value,
+    }));
+  } catch (e) {}
+});
+/** 按曲目分析结果设调（复用 analysis 的调性判定） */
+function scaleFromAnalysis() {
+  const s = song.value; if (!s) return;
+  const all = [];
+  for (const tr of s.tracks) for (const n of tr.notes) all.push(n);
+  if (!all.length) { toast(t('当前曲目没有音符'), 'warn'); return; }
+  const k = detectKeySpec(all);
+  scaleRoot.value = k.root;
+  scaleType.value = k.mode === 'minor' ? 'minor' : 'major';
+  if (scaleMode.value === 'off') scaleMode.value = 'highlight';
+  toast(t('已按分析结果设为 ') + KEY_NAME[k.root] + t(k.mode === 'minor' ? ' 小调' : ' 大调'), 'ok');
+}
 const cc2Enabled = ref(false);
 const cc2Number = ref(1);
 const ccMode = ref('free');
@@ -1099,7 +1137,19 @@ onBeforeUnmount(() => {
       <div v-if="advOpen" class="card ed-adv">
         <div class="adv-row">
           <span class="et-label">{{ t('音阶') }}</span>
-          <button class="et-btn" :class="{ active: scaleSnap }" :title="t('新音符吸附到当前调式音阶')" @click="scaleSnap = !scaleSnap"><Icon name="target" :size="14" />{{ t('音阶吸附') }}</button>
+          <select class="select-input" :value="scaleRoot" style="width:auto;padding:4px 8px" :title="t('主音（自动 = 按曲目判断）')" @change="e => scaleRoot = Number(e.target.value)">
+            <option :value="-1">{{ t('自动') }}</option>
+            <option v-for="r in ROOT_OPTIONS" :key="r[0]" :value="r[0]">{{ r[1] }}</option>
+          </select>
+          <select class="select-input" v-model="scaleType" style="width:auto;padding:4px 8px" :title="t('音阶类型')">
+            <option v-for="sc in SCALE_TYPES" :key="sc[0]" :value="sc[0]">{{ t(sc[1]) }}</option>
+          </select>
+          <input v-if="scaleType === 'custom'" v-model="customDegText" class="text-input" style="width:110px;padding:4px 8px;font-size:12px"
+                 :placeholder="t('音级 0,2,4,7,9')" :title="t('自定义音级（相对主音的半音，逗号分隔）')" />
+          <select class="select-input" v-model="scaleMode" style="width:auto;padding:4px 8px" :title="t('调内编辑模式：高亮调内音 / 拖拽与新建只落在调内音')">
+            <option v-for="m in SCALE_MODE_OPTIONS" :key="m[0]" :value="m[0]">{{ m[1] }}</option>
+          </select>
+          <button class="et-btn" :title="t('按曲目分析结果自动设调')" @click="scaleFromAnalysis"><Icon name="zap" :size="14" />{{ t('按分析设调') }}</button>
           <span class="et-sep"></span>
           <span class="et-label">{{ t('批量') }}</span>
           <button class="et-btn" :title="t('选中与当前音符同时发声的音符')" @click="selectChordBatch"><Icon name="music" :size="14" />{{ t('和弦') }}</button>
@@ -1169,7 +1219,7 @@ onBeforeUnmount(() => {
       <div class="ed-wrap-rel">
         <EditorCanvas ref="editor" :tool="tool" :snap-ratio="snapRatio" :track-index="trackIndex"
                       :cc-enabled="ccEnabled" :cc-number="ccNumber"
-                      :scale-snap="scaleSnap" :ks-map="ksMap" :audio="audioData"
+                      :scale-spec="scaleSpec" :scale-mode="scaleMode" :ks-map="ksMap" :audio="audioData"
                       :cc2-enabled="cc2Enabled" :cc2-number="cc2Number" :cc-mode="ccMode"
                       :default-velocity="defaultVelocity" :color-mode="colorMode"
                       @select="refreshSel" @modify="refreshSel" @zoom="onZoom" @ctxmenu="openCtxMenu" />
@@ -1509,7 +1559,7 @@ onBeforeUnmount(() => {
           <button class="ctx-item" @click="ctxSelectNone"><span>{{ t('取消选择') }}</span></button>
           <div class="ctx-sep"></div>
 
-          <button class="ctx-item" @click="ctxToggleScaleSnap">
+          <button class="ctx-item" :title="t('拖拽与新建音符只落在当前音阶的调内音')" @click="ctxToggleScaleSnap">
             <span>{{ t('音阶吸附') }}</span><span v-if="scaleSnap" class="ctx-check">✓</span>
           </button>
           <button class="ctx-item danger" @click="ctxDelete"><span>{{ t('删除') }}</span><span class="ctx-k">Del</span></button>
