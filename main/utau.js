@@ -150,6 +150,29 @@ function registerUtauIpc({ ipcMain, path, fs, os, app, dialog, spawnEngine }) {
     }
   });
 
+  // 查询声库可用别名（P1-4 发音/别名替换）：调 engine_utau.py aliases，可按关键字过滤
+  ipcMain.handle('utau:aliases', (evt, cfg) => new Promise((resolve) => {
+    const { voicebank, query, limit } = cfg || {};
+    try {
+      if (!voicebank) return resolve({ ok: false, error: '未选择声库' });
+      const args = ['aliases', '--voicebank', String(voicebank), '--limit', String(Math.max(1, Math.min(2000, Number(limit) || 300)))];
+      if (query) args.push('--query', String(query));
+      spawnEngine(args, {
+        script: 'engine_utau.py',
+        onDone: (code, r) => {
+          if (r && r.result && r.result.ok) return resolve(r.result);
+          const err = (r && r.result && r.result.error)
+            || (r && (r.err || r.out || '').slice(-400))
+            || `引擎退出码 ${code}`;
+          resolve({ ok: false, error: err });
+        },
+        onError: (e) => resolve({ ok: false, error: String(e) }),
+      });
+    } catch (err) {
+      resolve({ ok: false, error: String((err && err.message) || err) });
+    }
+  }));
+
   // 渲染 UTAU 工程 → 人声 WAV（调 engine_utau.py render-track，返回字节供预览）
   ipcMain.handle('utau:renderTrack', (evt, cfg) => new Promise((resolve) => {
     const { voicebank, notes, sampleNote, bpm } = cfg || {};

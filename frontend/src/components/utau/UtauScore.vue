@@ -587,6 +587,54 @@ watch(() => store.totalBeats, () => { setupCanvas(); draw(); });
 watch(() => store.notes, draw, { deep: true });
 watch(() => [store.selectedId, store.selectedIds], draw, { deep: true });
 watch(() => store.bpm, () => { if (playing.value) playT0 = performance.now() - (playBeat.value - playStart) * 60000 / store.bpm; });
+/* ---------------- P1-4 发音 / 别名替换 ---------------- */
+const aliasOpen = ref(false);
+const aliasQuery = ref('');
+const aliasAll = ref([]);          // 当前声库的全部别名（首次打开时拉取并缓存）
+const aliasDir = ref('');
+const aliasBusy = ref(false);
+const aliasTotal = ref(0);
+const aliasFiltered = computed(() => {
+  const q = aliasQuery.value.trim();
+  const all = aliasAll.value;
+  const hit = q ? all.filter(a => a.indexOf(q) >= 0) : all;
+  return hit.slice(0, 300);
+});
+async function ensureAliases() {
+  const dir = store.voicebankDir;
+  if (!dir) { app.toast(t('请先在「声库制作」选择声库'), 'warn'); return false; }
+  const api = window.fuBridge;
+  if (!api || typeof api.utauAliases !== 'function') { app.toast(t('网页版无法读取声库发音，请用桌面版'), 'warn'); return false; }
+  if (aliasDir.value === dir && aliasAll.value.length) return true;
+  aliasBusy.value = true;
+  try {
+    const r = await api.utauAliases({ voicebank: dir, limit: 2000 });
+    if (!r || !r.ok) { app.toast(t('读取声库发音失败：') + ((r && r.error) || 'unknown'), 'err'); return false; }
+    aliasAll.value = r.aliases || [];
+    aliasTotal.value = r.total || aliasAll.value.length;
+    aliasDir.value = dir;
+    return true;
+  } catch (e) {
+    app.toast(t('读取声库发音失败：') + ((e && e.message) || e), 'err');
+    return false;
+  } finally { aliasBusy.value = false; }
+}
+function openAliasPicker() {
+  const n = store.selected;
+  aliasQuery.value = n ? String(n.lyric || '') : '';
+  aliasOpen.value = true;
+  ensureAliases();
+}
+function applyAlias(a) {
+  const ids = selIds();
+  if (!ids.length) { closeAliasPicker(); return; }
+  store.updateNotes(ids, { lyric: a });
+  app.toast(t('已替换发音：') + a + t('（') + ids.length + t(' 个音符）'), 'ok');
+  closeAliasPicker();
+}
+function closeAliasPicker() { aliasOpen.value = false; }
+watch(() => store.voicebankDir, () => { aliasDir.value = ''; aliasAll.value = []; aliasTotal.value = 0; });
+
 /* ---------------- P0-3 参数车道（逐音符合成参数） ---------------- */
 const PARAM_H = 84;
 const paramKey = ref('');            // '' = 关闭；否则 UtauParamKey
@@ -939,6 +987,7 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
       <button class="btn sm" @click="importMidiFile" :title="t('导入 MIDI 文件作为基底旋律')"><Icon name="import" :size="13" /> {{ t('导入MIDI') }}</button>
       <button class="btn sm" @click="libOpen = true" :title="t('从曲库选择一首 MIDI 作为基底旋律')"><Icon name="music" :size="13" /> {{ t('曲库旋律') }}</button>
       <button class="btn sm" @click="editSelectedLyric" :disabled="!store.selected" :title="t('修改选中音符的唱音')"><Icon name="pencil" :size="13" /> {{ t('改唱音') }}</button>
+      <button class="btn sm" @click="openAliasPicker" :disabled="!store.selected" :title="t('从声库别名列表里替换选中音符的发音')"><Icon name="music" :size="13" /> {{ t('发音') }}</button>
       <span class="sep"></span>
       <button class="btn primary" @click="addAtEnd"><Icon name="plus" :size="13" /> {{ t('末尾加音') }}</button>
       <button class="btn sm" @click="delSelected" :disabled="!store.selectedIds.length">{{ t('删除') }}</button>
@@ -1010,12 +1059,38 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
       <button class="us-ctx-i" :disabled="!ctxOnNote" @click="dupSel(); closeCtx()">{{ t('重复') }}</button>
       <div class="us-ctx-sep"></div>
       <button class="us-ctx-i" :disabled="!ctxOnNote" @click="onDblFromCtx(); closeCtx()">{{ t('编辑歌词') }}</button>
+      <button class="us-ctx-i" :disabled="!ctxOnNote" @click="openAliasPicker(); closeCtx()">{{ t('替换发音（别名）') }}</button>
       <div class="us-ctx-sep"></div>
       <button class="us-ctx-i" :disabled="!ctxOnNote" @click="ctxResetVibrato">{{ t('重置颤音') }}</button>
       <button class="us-ctx-i" :disabled="!ctxOnNote" @click="ctxResetParams">{{ t('重置全部参数') }}</button>
       <div class="us-ctx-sep"></div>
       <button class="us-ctx-i danger" :disabled="!ctxOnNote" @click="delSelected(); closeCtx()">{{ t('删除音符') }}</button>
     </div>
+    </Transition>
+
+    <!-- P1-4 发音 / 别名替换 -->
+    <Transition name="ov">
+      <div v-if="aliasOpen" class="us-lib-mask" role="dialog" aria-modal="true" :aria-label="t('替换发音')" @click.self="closeAliasPicker">
+        <div class="us-lib">
+          <div class="us-lib-head">
+            <b>{{ t('替换发音（别名）') }}</b>
+            <span class="muted small">{{ t('声库别名 ') }}{{ aliasTotal || aliasAll.length }}</span>
+            <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" :aria-label="t('关闭')" @click="closeAliasPicker"><Icon name="close" :size="14" /></button>
+          </div>
+          <div class="row" style="gap:8px">
+            <input v-model="aliasQuery" class="text-input" style="flex:1" :placeholder="t('搜索别名（如 か / a / 001）')" :aria-label="t('搜索别名')" />
+            <span class="muted small">{{ aliasFiltered.length }}</span>
+          </div>
+          <div class="us-lib-list">
+            <button v-for="a in aliasFiltered" :key="a" class="us-lib-item" @click="applyAlias(a)">
+              <span class="us-lib-name">{{ a }}</span>
+            </button>
+            <div v-if="aliasBusy" class="us-lib-empty">{{ t('正在读取声库…') }}</div>
+            <div v-else-if="!aliasAll.length" class="us-lib-empty">{{ t('请先在「声库制作」选择声库，或该声库没有可用别名') }}</div>
+            <div v-else-if="!aliasFiltered.length" class="us-lib-empty">{{ t('没有匹配的别名') }}</div>
+          </div>
+        </div>
+      </div>
     </Transition>
 
     <!-- 曲库选择：选一首 MIDI 作为基底旋律 -->

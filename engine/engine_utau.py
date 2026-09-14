@@ -686,6 +686,28 @@ def cmd_render_track(args):
         sys.exit(1)
 
 
+def cmd_aliases(args):
+    """列出音源可用别名（可按关键字过滤）：供前端做发音 / 别名替换（P1-4）。"""
+    try:
+        vb = Voicebank(args.voicebank)
+        items = vb.aliases()
+        total = len(items)
+        q = (args.query or "").strip()
+        if q:
+            items = [a for a in items if q in a]
+        limit = max(1, int(args.limit or 300))
+        _print_result({
+            "ok": True,
+            "count": len(items),
+            "total": total,
+            "aliases": items[:limit],
+            "truncated": len(items) > limit,
+        })
+    except Exception as e:
+        _print_result({"ok": False, "error": f"{type(e).__name__}: {e}"})
+        sys.exit(1)
+
+
 def cmd_segment(args):
     """上传音频 → 静音切分音节段（CV 式录音）。"""
     try:
@@ -786,6 +808,12 @@ def build_parser():
     t.add_argument("--sample-note", default="C4", help="音源录制音高")
     t.add_argument("--out", required=True, help="输出 WAV 路径")
     t.set_defaults(func=cmd_render_track)
+
+    a = sub.add_parser("aliases", help="列出音源可用别名（可按关键字过滤）")
+    a.add_argument("--voicebank", required=True, help="音源目录（含 oto.ini）")
+    a.add_argument("--query", default=None, help="关键字过滤（子串匹配）")
+    a.add_argument("--limit", type=int, default=300, help="最多返回条数")
+    a.set_defaults(func=cmd_aliases)
 
     s = sub.add_parser("segment", help="按静音间隙切分音频为音节段（CV 式）")
     s.add_argument("--input", required=True, help="音频文件（任意格式）")

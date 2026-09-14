@@ -116,6 +116,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
   utauExportVoicebankZip: (opts) => ipcRenderer.invoke('utau:exportVoicebankZip', opts),
   // UTAU 工程渲染：渲染人声 WAV，返回字节供预览
   utauRenderTrack: (cfg) => ipcRenderer.invoke('utau:renderTrack', cfg),
+  // 声库可用别名（P1-4 发音/别名替换）
+  utauAliases: (cfg) => ipcRenderer.invoke('utau:aliases', cfg),
   // 已导入声库列表 / 导入现成声库 zip
   utauListVoicebanks: () => ipcRenderer.invoke('utau:listVoicebanks'),
   utauImportVoicebankZip: (directPath) => ipcRenderer.invoke('utau:importVoicebankZip', directPath),

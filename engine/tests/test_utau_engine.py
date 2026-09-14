@@ -409,6 +409,33 @@ def test_render_track_passes_note_params(tmp_path):
     assert not np.allclose(a[:n], b[:n], atol=1e-4)
 
 
+def test_aliases_command(tmp_path):
+    """aliases CLI：列出声库全部别名，并支持关键字过滤（P1-4 发音替换用）。"""
+    vb_dir = str(tmp_path / "vb")
+    make_test_voicebank(vb_dir)
+
+    def run_alias(*args):
+        cmd = [PY, os.path.abspath(ENGINE), "aliases", "--voicebank", vb_dir, *args]
+        p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                           cwd=os.path.dirname(ENGINE))
+        result = None
+        for line in (p.stdout or "").splitlines():
+            if line.startswith("###RESULT "):
+                result = json.loads(line[len("###RESULT "):])
+        return p, result
+
+    p1, r1 = run_alias()
+    assert p1.returncode == 0 and r1["ok"] is True, (p1.stdout, r1)
+    assert r1["total"] == 6 and r1["count"] == 6
+    assert "か" in r1["aliases"] and "あ" in r1["aliases"]
+
+    p2, r2 = run_alias("--query", "か")
+    assert p2.returncode == 0 and r2["count"] == 1 and r2["aliases"] == ["か"]
+
+    p3, r3 = run_alias("--limit", "2")
+    assert r3["ok"] is True and len(r3["aliases"]) == 2 and r3["truncated"] is True
+
+
 # ---------------------------------------------------------------- M3 测试
 def _synth_utterance(sr=44100):
     """3 个音节（各 40ms 辅音 + 160ms 元音），间隔 150ms 静音。"""
