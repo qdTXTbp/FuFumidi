@@ -57,11 +57,11 @@ export function isInScale(midi, spec) {
   return set ? set.has(normPc(midi)) : true;
 }
 
-/** 吸附到最近的调内音（跨八度比较；距离相同时取更低音，结果限于 0-127） */
-export function snapToScale(midi, spec) {
-  const set = scalePitchClasses(spec);
+/** 吸附到指定音级集合（0-11）中最近的音；集合为空时只做范围收敛 */
+export function snapToPcs(midi, pcs) {
+  const set = (pcs instanceof Set) ? pcs : new Set(pcs || []);
   const m0 = Math.max(0, Math.min(127, Math.round(midi)));
-  if (!set) return m0;
+  if (!set.size) return m0;
   if (set.has(normPc(m0))) return m0;
   let best = m0, bestD = 99;
   for (let d = -6; d <= 6; d++) {
@@ -72,6 +72,11 @@ export function snapToScale(midi, spec) {
     if (ad < bestD) { bestD = ad; best = cand; }
   }
   return best;
+}
+
+/** 吸附到最近的调内音（跨八度比较；距离相同时取更低音，结果限于 0-127） */
+export function snapToScale(midi, spec) {
+  return snapToPcs(midi, scalePitchClasses(spec));
 }
 
 /** 解析「0,2,4,7,9」这类自定义音级文本 */

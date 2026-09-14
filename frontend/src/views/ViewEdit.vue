@@ -16,7 +16,8 @@ import { encodeMidi } from '../core/midi.js';
 import { noteName, clamp, KEY_NAME } from '../core/util.js';
 import { MACRO_DOC, macroToCmd, applyMacroScript, parseMacroScript } from '../core/macro.js';
 import { SCALE_TYPES, parseCustomDegrees } from '../core/scale.js';
-import { detectKeySpec } from '../core/analysis.js';
+import { detectKeySpec, detectChordTrack, chordPcsByName } from '../core/analysis.js';
+import { listArticulations, applyArticulation, upsertUserArticulation, removeUserArticulation } from '../core/articulations.js';
 import { t } from '../core/i18n.js';
 
 const bridge = window.fuBridge;
@@ -439,6 +440,45 @@ watch([scaleMode, scaleRoot, scaleType, customDegText], () => {
     }));
   } catch (e) {}
 });
+/* P1-2 和弦轨：逐小节和弦（自动识别 + 手动覆盖），约束模式下与音阶一起决定调内音 */
+const chordOpen = ref(false);
+const chordBars = ref([]);       // [{ bar, tick, endTick, name, pcs, manual }]
+const chordManual = ref({});     // bar → 手改和弦名
+/** 传给画布的约束数据（只在显示和弦轨时参与约束/高亮） */
+const chordSpec = computed(() => (chordOpen.value
+  ? chordBars.value.map(b => ({ tick: b.tick, endTick: b.endTick, pcs: b.pcs }))
+  : []));
+function rebuildChordBars(list) {
+  const manual = chordManual.value;
+  chordBars.value = list.map(b => {
+    const nm = manual[b.bar];
+    if (!nm) return { ...b, manual: false };
+    const pcs = chordPcsByName(nm);
+    return { ...b, name: nm, pcs: pcs || b.pcs, manual: true };
+  });
+}
+function analyzeChordTrack() {
+  const s = song.value; if (!s) return;
+  const list = detectChordTrack(s);
+  if (!list.length) { toast(t('没有识别到和弦（曲目可能没有音符）'), 'warn'); return; }
+  rebuildChordBars(list);
+  chordOpen.value = true;
+  toast(t('已生成和弦轨：') + list.length + t(' 个小节'), 'ok');
+}
+function editChordBar(b) {
+  app.promptDialog({
+    title: t('编辑小节和弦'),
+    msg: t('第 ') + b.bar + t(' 小节：输入和弦名（如 C / Am7 / G7/B），留空恢复自动识别'),
+    value: b.name,
+  }).then(v => {
+    if (v == null) return;
+    const nm = String(v).trim();
+    if (!nm) delete chordManual.value[b.bar]; else chordManual.value[b.bar] = nm;
+    const s = song.value; if (s) rebuildChordBars(detectChordTrack(s));
+  });
+}
+function clearChordBars() { chordBars.value = []; chordManual.value = {}; chordOpen.value = false; }
+
 /** 按曲目分析结果设调（复用 analysis 的调性判定） */
 function scaleFromAnalysis() {
   const s = song.value; if (!s) return;
@@ -469,12 +509,11 @@ const fullscreenOn = ref(false);
 function loadKS() { try { return JSON.parse(localStorage.getItem('fufumidi_ksmap') || '{}') || {}; } catch (e) { return {}; } }
 function saveKS(m) { localStorage.setItem('fufumidi_ksmap', JSON.stringify(m)); }
 const ksMap = ref(loadKS());
-const KS_PRESETS = {
-  spitfire: {0:'Legato',1:'Staccato',2:'Tremolo',3:'Pizzicato',4:'Spiccato',5:'Marcato',6:'Sustain',7:'Con Sordino',8:'Flautando',9:'Harmonics',10:'Trill'},
-  vsl: {0:'Legato',1:'Detache',2:'Staccato',3:'Spiccato',4:'Pizzicato',5:'Tremolo',6:'Trill',7:'Sforzando',8:'Marcato',9:'Portamento'},
-  eastwest: {0:'Legato',1:'Staccato',2:'Tremolo',3:'Pizzicato',4:'Spiccato',5:'Marcato',6:'Sustain',7:'Con Sordino',8:'Harmonics',9:'Trill',10:'Flautando'},
-};
+/* P1-3 演奏法库：内置 + 用户自定义（core/articulations.js），可另存/删除并绑定到轨道 */
+const articulations = ref(listArticulations());
+function reloadArticulations() { articulations.value = listArticulations(); }
 const ksPreset = ref('');
+const ksLibName = ref('');
 const ksOpen = ref(false);
 const ksDraft = ref({});
 
@@ -773,10 +812,36 @@ function delCustomMacro(i) {
 }
 
 /* ---- Key Switch ---- */
-function openKSMap() { ksDraft.value = { ...ksMap.value }; ksPreset.value = ''; ksOpen.value = true; }
+function openKSMap() { reloadArticulations(); ksDraft.value = { ...ksMap.value }; ksPreset.value = ''; ksLibName.value = ''; ksOpen.value = true; }
+/** 应用某个库（内置或用户）到草稿 */
 function applyKSPreset() {
-  const preset = KS_PRESETS[ksPreset.value]; if (!preset) return;
-  for (const m of Object.keys(preset)) if (+m <= 24) ksDraft.value[+m] = preset[m];
+  if (!ksPreset.value) return;
+  ksDraft.value = applyArticulation(ksDraft.value, ksPreset.value);
+}
+/** 把当前草稿另存为用户库 */
+function saveArticulationLib() {
+  const item = upsertUserArticulation(ksLibName.value, ksDraft.value);
+  if (!item) { toast(t('请先填写库名称'), 'warn'); return; }
+  reloadArticulations();
+  ksPreset.value = item.id;
+  ksLibName.value = '';
+  toast(t('已保存演奏法库「') + item.name + '」', 'ok');
+}
+function delArticulationLib(id) {
+  const lib = articulations.value.find(a => a.id === id);
+  if (!lib || lib.builtin) return;
+  removeUserArticulation(id);
+  reloadArticulations();
+  if (ksPreset.value === id) ksPreset.value = '';
+  toast(t('已删除演奏法库'), 'ok');
+}
+/** 把当前映射绑定到编辑中的轨道；切换轨道时自动套用 */
+function bindArticulationToTrack() {
+  const s = song.value, tr = s && s.tracks[trackIndex.value];
+  if (!tr) return;
+  if (!ksPreset.value) { toast(t('请先选择一个演奏法库'), 'warn'); return; }
+  tr.artSet = ksPreset.value;
+  toast(t('已绑定到轨道「') + (tr.name || '') + t('」'), 'ok');
 }
 function saveKSMap() {
   const map = {};
@@ -785,6 +850,13 @@ function saveKSMap() {
   ksOpen.value = false;
   toast(t('Key Switch 映射已保存'), 'ok');
 }
+// 切换轨道：若该轨绑定了演奏法库，自动套用（不覆盖手动映射时用户可再手动保存）
+watch(trackIndex, () => {
+  const s = song.value, tr = s && s.tracks[trackIndex.value];
+  if (!tr || !tr.artSet) return;
+  const next = applyArticulation(ksMap.value, tr.artSet);
+  if (JSON.stringify(next) !== JSON.stringify(ksMap.value)) { ksMap.value = next; saveKS(next); }
+});
 
 /* ---- CC 事件列表 ---- */
 const ccListItems = computed(() => {
@@ -1151,6 +1223,8 @@ onBeforeUnmount(() => {
           </select>
           <button class="et-btn" :title="t('按曲目分析结果自动设调')" @click="scaleFromAnalysis"><Icon name="zap" :size="14" />{{ t('按分析设调') }}</button>
           <span class="et-sep"></span>
+          <button class="et-btn" :title="t('分析逐小节和弦并显示和弦轨（约束模式下与音阶一起决定调内音）')" @click="analyzeChordTrack"><Icon name="music" :size="14" />{{ t('分析和弦') }}</button>
+          <span class="et-sep"></span>
           <span class="et-label">{{ t('批量') }}</span>
           <button class="et-btn" :title="t('选中与当前音符同时发声的音符')" @click="selectChordBatch"><Icon name="music" :size="14" />{{ t('和弦') }}</button>
           <button class="et-btn" :title="t('删除当前轨道短于 80ms 的音符')" @click="deleteShortNotes"><Icon name="trash" :size="14" />{{ t('删短音') }}</button>
@@ -1215,11 +1289,24 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <!-- P1-2 和弦轨：逐小节和弦，点击可手改 -->
+      <div v-if="chordOpen && chordBars.length" class="chord-lane">
+        <span class="chord-lane-label">{{ t('和弦') }}</span>
+        <div class="chord-cells">
+          <button v-for="b in chordBars.slice(0, 128)" :key="b.bar" class="chord-cell" :class="{ manual: b.manual }"
+                  :title="t('第 ') + b.bar + t(' 小节 · 点击修改和弦')" @click="editChordBar(b)">
+            <em>{{ b.bar }}</em><b>{{ b.name }}</b>
+          </button>
+        </div>
+        <span v-if="chordBars.length > 128" class="muted small">{{ t('仅显示前 128 小节') }}</span>
+        <button class="btn sm ghost" @click="clearChordBars">{{ t('隐藏') }}</button>
+      </div>
+
       <!-- 钢琴卷帘 -->
       <div class="ed-wrap-rel">
         <EditorCanvas ref="editor" :tool="tool" :snap-ratio="snapRatio" :track-index="trackIndex"
                       :cc-enabled="ccEnabled" :cc-number="ccNumber"
-                      :scale-spec="scaleSpec" :scale-mode="scaleMode" :ks-map="ksMap" :audio="audioData"
+                      :scale-spec="scaleSpec" :scale-mode="scaleMode" :chord-track="chordSpec" :ks-map="ksMap" :audio="audioData"
                       :cc2-enabled="cc2Enabled" :cc2-number="cc2Number" :cc-mode="ccMode"
                       :default-velocity="defaultVelocity" :color-mode="colorMode"
                       @select="refreshSel" @modify="refreshSel" @zoom="onZoom" @ctxmenu="openCtxMenu" />
@@ -1421,12 +1508,19 @@ onBeforeUnmount(() => {
     <Transition name="ov">
     <div v-if="ksOpen" class="ed-modal-mask" @click.self="ksOpen = false">
       <div class="ed-modal" style="width:min(560px,92vw)">
-        <div class="ed-modal-head"><b>{{ t('Key Switch 映射') }}</b><span class="muted small">{{ t('为 C-2 ~ C0（MIDI 0-24）命名技法') }}</span><button class="icon-btn" style="margin-left:auto" @click="ksOpen = false"><Icon name="minus" :size="14" /></button></div>
+        <div class="ed-modal-head"><b>{{ t('演奏法库 / Key Switch 映射') }}</b><span class="muted small">{{ t('为 C-2 ~ C0（MIDI 0-24）命名技法') }}</span><button class="icon-btn" style="margin-left:auto" @click="ksOpen = false"><Icon name="minus" :size="14" /></button></div>
         <div class="row" style="gap:8px">
-          <select v-model="ksPreset" class="select-input" style="min-width:150px">
-            <option value="">{{ t('选择预设') }}</option><option value="spitfire">Spitfire</option><option value="vsl">VSL</option><option value="eastwest">EastWest</option>
+          <select v-model="ksPreset" class="select-input" style="min-width:170px">
+            <option value="">{{ t('选择演奏法库') }}</option>
+            <option v-for="a in articulations" :key="a.id" :value="a.id">{{ a.name }}{{ a.builtin ? '' : t('（自定义）') }}</option>
           </select>
-          <button class="btn sm" @click="applyKSPreset">{{ t('应用预设') }}</button>
+          <button class="btn sm" @click="applyKSPreset">{{ t('载入库') }}</button>
+          <button class="btn sm ghost" @click="bindArticulationToTrack">{{ t('绑定到当前轨道') }}</button>
+          <button v-if="ksPreset && !(articulations.find(a => a.id === ksPreset) || {}).builtin" class="btn sm danger" @click="delArticulationLib(ksPreset)">{{ t('删除库') }}</button>
+        </div>
+        <div class="row" style="gap:8px">
+          <input v-model="ksLibName" class="num-input" :placeholder="t('库名称（另存当前映射）')" style="flex:1" />
+          <button class="btn sm primary" @click="saveArticulationLib">{{ t('另存为库') }}</button>
         </div>
         <div class="ks-list">
           <div v-for="m in 25" :key="m - 1" class="ks-row">
@@ -1498,7 +1592,7 @@ onBeforeUnmount(() => {
         <div class="help-scroll">
           <div class="help-sec"><b>{{ t('钢琴卷帘') }}</b><span>{{ t('选择/画笔/橡皮/静音四种工具；拖拽移动音符、边缘拉伸改时值、Alt 拖拽调力度；支持吸附、音阶吸附、撤销/重做；可设置新音符默认力度与着色方案（轨道/音高/力度/选中）。') }}</span></div>
           <div class="help-sec"><b>{{ t('CC 自动化') }}</b><span>{{ t('展开 CC 泳道后选择 CC1/7/10/11/64；支持手绘、直线、曲线三种绘制；点击/拖动直接写 CC 数据。') }}</span></div>
-          <div class="help-sec"><b>Key Switch</b><span>{{ t('C-2~C0 区域橙色高亮；支持自定义技法名称，并提供 Spitfire/VSL/EastWest 预设模板。') }}</span></div>
+          <div class="help-sec"><b>Key Switch</b><span>{{ t('C-2~C0 区域橙色高亮；技法名来自演奏法库（内置 Spitfire/VSL/EastWest，可另存为自定义库并绑定到轨道）。') }}</span></div>
           <div class="help-sec"><b>{{ t('逻辑编辑器') }}</b><span>{{ t('按“目标→条件→操作”批量修改音符：力度、时值、音高、删除、量化、移调。') }}</span></div>
           <div class="help-sec"><b>{{ t('列表编辑器') }}</b><span>{{ t('以表格精确编辑每个音符的起点/终点/音高/力度；支持添加、删除、排序。') }}</span></div>
           <div class="help-sec"><b>{{ t('宏系统') }}</b><span>{{ t('内置清理/移调/力度标准化宏；支持自定义命令宏。') }}</span></div>
@@ -1637,6 +1731,16 @@ onBeforeUnmount(() => {
 .ed-fullscreen .ed-adv { display: flex; }
 .ed-wrap-rel { position: relative; flex: 1; min-height: 0; }
 .ed-video-overlay { position: absolute; top: 4px; right: 4px; width: 300px; max-width: 34%; border-radius: 8px; z-index: 20; background: #000; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+
+/* P1-2 和弦轨 */
+.chord-lane { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.chord-lane-label { font-size: 11px; color: var(--stone); flex: none; }
+.chord-cells { display: flex; gap: 2px; overflow-x: auto; flex: 1; min-width: 0; padding-bottom: 2px; }
+.chord-cell { display: inline-flex; flex-direction: column; align-items: center; gap: 1px; min-width: 46px; padding: 2px 6px; border: 1px solid var(--hairline); border-radius: 6px; background: var(--canvas); cursor: pointer; flex: none; }
+.chord-cell:hover { background: var(--surface-soft); }
+.chord-cell em { font-style: normal; font-size: 9px; color: var(--stone); line-height: 1.1; }
+.chord-cell b { font-size: 11px; color: var(--ink); line-height: 1.2; }
+.chord-cell.manual { border-color: var(--accent); }
 
 /* 钢琴卷帘右键菜单 */
 .ctx-mask { position: fixed; inset: 0; z-index: 2000; }

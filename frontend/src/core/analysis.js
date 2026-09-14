@@ -65,6 +65,21 @@ function scoreChord(pc, total, root, set) {
 }
 
 export function detectChords(song) {
+  const { perBar } = barChordScan(song);
+  const map = new Map();
+  for (const f of perBar) {
+    if (!f) continue;
+    // 转位：最低音不是根音且在和弦内 → 记为 和弦/低音（如 C/E、G7/B）
+    const inv = f.bass >= 0 && f.bass !== f.r && f.set.includes((f.bass - f.r + 12) % 12);
+    const name = KEY_NAME[f.r] + f.suffix + (inv ? '/' + KEY_NAME[f.bass] : '');
+    if (!map.has(name)) map.set(name, { name, root: f.r, suffix: f.suffix, bass: inv ? f.bass : -1, count: 0, bars: [] });
+    const e = map.get(name); e.count++; e.bars.push(f.bar);
+  }
+  return Array.from(map.values()).sort((a, b) => b.count - a.count).slice(0, 8);
+}
+
+/** 逐小节和弦扫描：返回每小节的最优和弦（无音符的小节为 null） */
+function barChordScan(song) {
   const tpb = song.tpb;
   const sig = song.sigMap[0] || { num: 4 };
   const barTicks = tpb * (sig.num || 4);
@@ -86,7 +101,7 @@ export function detectChords(song) {
       if (end > start) buckets[b][pc] += end - start;
     }
   }
-  const found = [];
+  const perBar = new Array(bars).fill(null);
   for (let b = 0; b < bars; b++) {
     const pc = buckets[b];
     let total = 0;
@@ -98,17 +113,54 @@ export function detectChords(song) {
       if (cover < 0.5) continue;             // 置信度门槛：和弦内音须占多数权重
       if (!best || sc > best.sc) best = { r, tp, sc, cover };
     }
-    if (best) found.push({ bar: b + 1, r: best.r, suffix: best.tp.suffix, set: best.tp.s, sc: best.sc, bass: bassPc[b] });
+    if (best) perBar[b] = { bar: b + 1, r: best.r, suffix: best.tp.suffix, set: best.tp.s, sc: best.sc, bass: bassPc[b] };
   }
-  const map = new Map();
-  for (const f of found) {
-    // 转位：最低音不是根音且在和弦内 → 记为 和弦/低音（如 C/E、G7/B）
-    const inv = f.bass >= 0 && f.bass !== f.r && f.set.includes((f.bass - f.r + 12) % 12);
-    const name = KEY_NAME[f.r] + f.suffix + (inv ? '/' + KEY_NAME[f.bass] : '');
-    if (!map.has(name)) map.set(name, { name, root: f.r, suffix: f.suffix, bass: inv ? f.bass : -1, count: 0, bars: [] });
-    const e = map.get(name); e.count++; e.bars.push(f.bar);
+  return { bars, barTicks, perBar };
+}
+
+/**
+ * 和弦轨（P1-2）：逐小节和弦，供编辑器显示与「约束到和弦音」使用。
+ * 返回 [{ bar, tick, endTick, name, root, suffix, pcs }]，仅含有音符的小节。
+ */
+export function detectChordTrack(song) {
+  const { barTicks, perBar } = barChordScan(song);
+  const out = [];
+  for (const f of perBar) {
+    if (!f) continue;
+    const pcs = [...new Set(f.set.map(d => (f.r + d) % 12))];
+    out.push({
+      bar: f.bar,
+      tick: (f.bar - 1) * barTicks,
+      endTick: f.bar * barTicks,
+      name: KEY_NAME[f.r] + f.suffix,
+      root: f.r, suffix: f.suffix, pcs,
+    });
   }
-  return Array.from(map.values()).sort((a, b) => b.count - a.count).slice(0, 8);
+  return out;
+}
+
+/* 音名 → pitch class（支持 #/b 与大小写） */
+const PC_BY_NAME = (() => {
+  const m = {};
+  KEY_NAME.forEach((n, i) => { m[n] = i; });
+  m['Db'] = 1; m['Eb'] = 3; m['Gb'] = 6; m['Ab'] = 8; m['Bb'] = 10;
+  return m;
+})();
+
+/** 和弦名 → 调内音级集合（0-11）；无法解析返回 null。用于手改小节和弦后重算约束集合 */
+export function chordPcsByName(name) {
+  const s = String(name || '').trim();
+  const m = s.match(/^([A-Ga-g][#b]?)(.*)$/);
+  if (!m) return null;
+  const root = PC_BY_NAME[m[1][0].toUpperCase() + m[1].slice(1)];
+  if (root == null) return null;
+  const parts = m[2].split('/');
+  const suffix = (parts[0] || '').trim();
+  const tp = CHORD_TYPES.find(x => x.suffix === suffix) || CHORD_TYPES.find(x => x.suffix === '');
+  const pcs = tp.s.map(d => (root + d) % 12);
+  const bass = (parts[1] || '').trim();
+  if (bass && PC_BY_NAME[bass] != null) pcs.push(PC_BY_NAME[bass]);
+  return [...new Set(pcs)];
 }
 
 function clearCanvas(cv) {

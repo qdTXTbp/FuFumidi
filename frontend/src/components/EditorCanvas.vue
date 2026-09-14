@@ -9,7 +9,7 @@ const state = app;
 const currentSong = computed(() => app.currentSong);
 import { KEY_NAME, noteName, clamp } from '../core/util.js';
 import { t } from '../core/i18n.js';
-import { snapToScale, scalePitchClasses } from '../core/scale.js';
+import { snapToPcs, scalePitchClasses } from '../core/scale.js';
 
 const props = defineProps({
   tool: { type: String, default: 'select' },      // select | pencil | erase
@@ -19,6 +19,7 @@ const props = defineProps({
   ccNumber: { type: Number, default: 11 },        // CC 控制器编号
   scaleSpec: { type: Object, default: null },     // { root, type, custom } 调内编辑用的音阶；空则按曲目自动判断
   scaleMode: { type: String, default: 'off' },    // off | highlight（高亮调内音） | constrain（约束到调内音）
+  chordTrack: { type: Array, default: () => [] }, // P1-2 和弦轨 [{ tick, endTick, pcs }]；约束时并入当前小节的调内音
   ksMap: { type: Object, default: () => ({}) },   // Key Switch 映射 { midi: 技法名 }
   audio: { type: Object, default: null },         // 音频波形 { data: Float32Array, rate: number }
   cc2Enabled: { type: Boolean, default: false },  // 第二条 CC 泳道
@@ -109,9 +110,23 @@ function autoScale() {
 }
 /** 当前生效的音阶：显式配置优先，否则用自动判断结果 */
 function effScale() { return props.scaleSpec || autoScale(); }
-function scaleSnapPitch(midi) {
+/** 该 tick 所在小节的和弦音级（无和弦轨返回 null） */
+function chordPcsAt(tick) {
+  if (!props.chordTrack || !props.chordTrack.length) return null;
+  for (const b of props.chordTrack) if (tick >= b.tick && tick < b.endTick) return b.pcs;
+  return null;
+}
+/** 约束集合：音阶调内音 ∪ 该小节和弦音 */
+function constrainPcsAt(tick) {
+  const s = scalePitchClasses(effScale());
+  const set = s ? new Set(s) : new Set();
+  const c = chordPcsAt(tick);
+  if (c && c.length) for (const p of c) set.add(p);
+  return set;
+}
+function scaleSnapPitch(midi, tick) {
   if (props.scaleMode !== 'constrain') return midi;
-  return snapToScale(midi, effScale());
+  return snapToPcs(midi, constrainPcsAt(tick == null ? viewTick.value : tick));
 }
 
 /* ---------------- 撤销 / 重做 ---------------- */
@@ -202,7 +217,7 @@ function redo() {
 function addNote(tick, midi, len) {
   const tr = curTrack(); if (!tr) return;
   pushState();
-  tr.notes.push({ start: Math.round(tick), end: Math.round(tick + len), midi: clamp(scaleSnapPitch(Math.round(midi)), 0, 127), vel: clamp(Math.round(props.defaultVelocity), 1, 127) });
+  tr.notes.push({ start: Math.round(tick), end: Math.round(tick + len), midi: clamp(scaleSnapPitch(Math.round(midi), tick), 0, 127), vel: clamp(Math.round(props.defaultVelocity), 1, 127) });
   afterEdit();
 }
 function deleteNotes(arr) {
@@ -346,13 +361,27 @@ function draw() {
     ctx2d.fillRect(0, (hi - m) * rowH.value, W, rowH.value);
   }
   // 调内音高亮：非「关闭」模式下，把调内音所在行铺一层浅色带（Studio One 的 Scale Panel 效果）
+  // 有和弦轨时按小节绘制「音阶 ∪ 和弦音」，否则整屏统一按音阶
   if (props.scaleMode !== 'off') {
-    const set = scalePitchClasses(effScale());
-    if (set) {
-      ctx2d.fillStyle = 'rgba(20,86,240,0.06)';
-      for (let m = lo; m <= hi; m++) {
-        if (!set.has(((m % 12) + 12) % 12)) continue;
-        ctx2d.fillRect(0, (hi - m) * rowH.value, W, rowH.value);
+    ctx2d.fillStyle = 'rgba(20,86,240,0.06)';
+    if (props.chordTrack && props.chordTrack.length) {
+      for (const bar of props.chordTrack) {
+        const x0 = Math.max(0, tickToX(bar.tick)), x1 = Math.min(W, tickToX(bar.endTick));
+        if (x1 <= 0 || x0 >= W) continue;
+        const set = constrainPcsAt(bar.tick);
+        if (!set.size) continue;
+        for (let m = lo; m <= hi; m++) {
+          if (!set.has(((m % 12) + 12) % 12)) continue;
+          ctx2d.fillRect(x0, (hi - m) * rowH.value, Math.max(1, x1 - x0), rowH.value);
+        }
+      }
+    } else {
+      const set = scalePitchClasses(effScale());
+      if (set) {
+        for (let m = lo; m <= hi; m++) {
+          if (!set.has(((m % 12) + 12) % 12)) continue;
+          ctx2d.fillRect(0, (hi - m) * rowH.value, W, rowH.value);
+        }
       }
     }
   }
@@ -729,8 +758,7 @@ function onUp() {
   if ((d.type === 'move' || d.type === 'resize' || d.type === 'resize-left') && d.notes.length && tr) {
     // 位置/长度已在拖拽中直接修改；状态在 onDown 时已入撤销栈
     if (d.type === 'move' && props.scaleMode === 'constrain') {
-      const sc = effScale();
-      for (const n of d.notes) n.midi = clamp(snapToScale(n.midi, sc), 0, 127);
+      for (const n of d.notes) n.midi = clamp(snapToPcs(n.midi, constrainPcsAt(n.start)), 0, 127);
     }
     afterEdit();
   } else if (d.type === 'create' && tr) {
@@ -738,7 +766,7 @@ function onUp() {
     const len = Math.max(d.len || Math.max(song()?.tpb || 480, 120), 60);
     const st = Math.round(d.startTick);
     const en = Math.round(st + len);
-    tr.notes.push({ start: st, end: en, midi: clamp(scaleSnapPitch(Math.round(d.startMidi)), 0, 127), vel: clamp(Math.round(props.defaultVelocity), 1, 127) });
+    tr.notes.push({ start: st, end: en, midi: clamp(scaleSnapPitch(Math.round(d.startMidi), st), 0, 127), vel: clamp(Math.round(props.defaultVelocity), 1, 127) });
     afterEdit();
   } else if (d.type === 'marquee' && d.box) {
     emit('select');
@@ -1025,6 +1053,7 @@ watch(() => props.ccMode, () => ccDrawLane());
 watch(() => props.ccEnabled, (v) => { if (!v) ccDrawing.value = false; ccDrawLane(); });
 watch(() => props.scaleMode, () => { draw(); });
 watch(() => props.scaleSpec, () => { draw(); }, { deep: true });
+watch(() => props.chordTrack, () => { draw(); }, { deep: true });
 watch(() => props.audio, () => { _onsetsCache = null; draw(); });
 watch(() => props.ksMap, () => draw(), { deep: true });
 
