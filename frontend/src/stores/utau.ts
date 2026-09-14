@@ -19,6 +19,7 @@ export interface UtauNote {
     gender?: number;   // 明亮度 0..100（50=不变）
     breath?: number;   // 气声 0..100
   };
+  pitchCurve?: { pos: number; cents: number }[];  // P1-1 手绘音高曲线：pos 0-1（相对音符时长），cents 相对基频
 }
 
 // 新建音符的默认调声参数；「重置参数」也回到这里的取值
@@ -280,17 +281,52 @@ export const useUtauStore = defineStore('utau', {
     setParam(id: string, key: UtauParamKey, value: number) { this.setParams([id], key, value); },
     setParamsForSelection(key: UtauParamKey, value: number) { this.setParams([...this.selectedIds], key, value); },
 
+    /* ---------- P1-1 手绘音高曲线 ---------- */
+    /** 写入某音符的音高曲线（points 需按 pos 升序）；history=false 供拖拽逐帧调用 */
+    setPitchCurve(id: string, points: { pos: number; cents: number }[], history = true) {
+      const n = this.notes.find(x => x.id === id);
+      if (!n) return;
+      const pts = (points || [])
+        .map(p => ({ pos: Math.max(0, Math.min(1, Number(p.pos) || 0)), cents: Math.max(-2400, Math.min(2400, Math.round(Number(p.cents) || 0))) }))
+        .sort((a, b) => a.pos - b.pos);
+      if (history) this.pushUndo();
+      if (pts.length) n.pitchCurve = pts; else delete n.pitchCurve;
+      this.persist();
+    },
+    clearPitchCurve(ids: string[]) {
+      const list = this.notes.filter(n => ids.includes(n.id) && n.pitchCurve && n.pitchCurve.length);
+      if (!list.length) return;
+      this.pushUndo();
+      for (const n of list) delete n.pitchCurve;
+      this.persist();
+    },
+    /** 按 pos 采样曲线（线性插值）；无曲线返回 null */
+    samplePitchCurve(n: UtauNote, pos: number) {
+      const c = n.pitchCurve; if (!c || !c.length) return null;
+      if (pos <= c[0].pos) return c[0].cents;
+      const last = c[c.length - 1];
+      if (pos >= last.pos) return last.cents;
+      for (let i = 1; i < c.length; i++) {
+        if (pos <= c[i].pos) {
+          const a = c[i - 1], b = c[i];
+          const k = (pos - a.pos) / Math.max(1e-6, b.pos - a.pos);
+          return a.cents + (b.cents - a.cents) * k;
+        }
+      }
+      return last.cents;
+    },
+
     /* ---------- 一键重置（P1-5：让编辑结果可预测） ---------- */
     /** 重置颤音（音高相关的调声编辑） */
     resetVibrato(ids: string[]) {
       this.updateNotes(ids, { vibrato: NOTE_DEFAULTS.vibrato, vibDepth: NOTE_DEFAULTS.vibDepth, vibFreq: NOTE_DEFAULTS.vibFreq });
     },
-    /** 重置全部调声参数（子音速度/音量/颤音/flags + P0-3 参数） */
+    /** 重置全部调声参数（子音速度/音量/颤音/flags + P0-3 参数 + P1-1 音高曲线） */
     resetParams(ids: string[]) {
       const list = this.notes.filter(n => ids.includes(n.id));
       if (!list.length) return;
       this.pushUndo();
-      for (const n of list) { Object.assign(n, NOTE_DEFAULTS); delete n.params; }
+      for (const n of list) { Object.assign(n, NOTE_DEFAULTS); delete n.params; delete n.pitchCurve; }
       this.persist();
     },
 

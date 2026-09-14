@@ -273,9 +273,9 @@ def test_envelope_attack_starts_at_zero(tmp_path):
 
 
 # ---------------------------------------------------------------- P0-3 逐音符参数
-def _f0_fft(x, sr=SR, lo=80.0, hi=600.0):
-    """在 80-600Hz 内取 FFT 峰值作为基频估计（测试音源谐波丰富，一次谐波最强）。"""
-    seg = np.asarray(x, dtype=np.float64)[int(0.15 * sr):int(0.45 * sr)]
+def _f0_fft(x, sr=SR, lo=80.0, hi=600.0, t0=0.15, t1=0.45):
+    """在指定时间窗内取 80-600Hz 的 FFT 峰值作为基频估计（测试音源一次谐波最强）。"""
+    seg = np.asarray(x, dtype=np.float64)[int(t0 * sr):int(t1 * sr)]
     spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
     freqs = np.fft.rfftfreq(len(seg), 1.0 / sr)
     band = (freqs >= lo) & (freqs <= hi)
@@ -358,6 +358,35 @@ def test_breath_adds_noise_band(tmp_path):
     assert abs(_f0_fft(b) - _f0_fft(a)) < 5.0
     assert np.array_equal(b, c), "气声噪声应可复现（固定随机种子）"
     assert float(np.max(np.abs(b))) <= 1.0
+
+
+def test_pitch_curve_raises_f0(tmp_path):
+    """手绘音高曲线：全零曲线与不加曲线等价；上扬曲线让后半段基频升高。"""
+    vb_dir = str(tmp_path / "vb")
+    make_test_voicebank(vb_dir)
+    base_args = ["--lyric", "あ", "--note", "C4", "--length", "800", "--sample-note", "G3"]
+    outs = {}
+    cases = {
+        "none": None,
+        "zero": json.dumps([{"pos": 0, "cents": 0}, {"pos": 1, "cents": 0}]),
+        "up": json.dumps([{"pos": 0, "cents": 0}, {"pos": 0.45, "cents": 0}, {"pos": 1, "cents": 1200}]),
+    }
+    for tag, curve in cases.items():
+        path = str(tmp_path / f"c_{tag}.wav")
+        args = list(base_args)
+        if curve is not None:
+            args += ["--pitch-curve", curve]
+        p, r = run_render(vb_dir, *args, "--out", path)
+        assert p.returncode == 0 and r["ok"] is True, (p.stdout, r)
+        import soundfile as sf
+        outs[tag] = (sf.read(path)[0], r["duration_ms"])
+    assert outs["none"][1] == outs["up"][1] == outs["zero"][1]
+    assert np.allclose(outs["zero"][0], outs["none"][0], atol=1e-6), "全零曲线应等同于不加曲线"
+    # 前段（曲线接近 0）基频基本一致；后段（曲线升到 +1200 附近）明显更高
+    assert abs(_f0_fft(outs["up"][0], t0=0.1, t1=0.2) - _f0_fft(outs["none"][0], t0=0.1, t1=0.2)) < 8
+    f_up = _f0_fft(outs["up"][0], t0=0.62, t1=0.78)
+    f_flat = _f0_fft(outs["none"][0], t0=0.62, t1=0.78)
+    assert f_up > f_flat * 1.15, (f_flat, f_up)
 
 
 def test_render_track_passes_note_params(tmp_path):

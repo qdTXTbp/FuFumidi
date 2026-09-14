@@ -241,6 +241,30 @@ def _apply_cents(ratio, cents):
     return ratio * (2.0 ** (c / 1200.0))
 
 
+def _apply_pitch_curve(x, sr, points):
+    """逐音符手绘音高曲线：把 [{pos(0-1), cents}] 重采样为逐样本音分偏移后变速播放。
+
+    与 _apply_vibrato 同一套相位累积做法，只是偏移量来自曲线而非正弦。
+    """
+    n = len(x)
+    if not points or n < 128:
+        return x
+    pts = sorted([p for p in points if isinstance(p, dict)], key=lambda p: float(p.get("pos", 0)))
+    if len(pts) < 2:
+        return x
+    pos = np.clip(np.array([float(p.get("pos", 0)) for p in pts], dtype=np.float64), 0.0, 1.0)
+    cents = np.clip(np.array([float(p.get("cents", 0)) for p in pts], dtype=np.float64), -2400.0, 2400.0)
+    t = np.linspace(0.0, 1.0, n)
+    cents_t = np.interp(t, pos, cents)
+    # 读取步进：cents 为正 → 读得更快 → 音高升高（步进 2.0 = 快一倍 = 升八度）
+    adv = 2.0 ** (cents_t / 1200.0)
+    idx = np.cumsum(adv) - 1.0
+    j = np.floor(idx).astype(np.int64)
+    frac = idx - j
+    j = np.clip(j, 0, n - 2)
+    return (x[j] * (1.0 - frac) + x[j + 1] * frac).astype(np.float32)
+
+
 def _limit_peak(x, ceiling=0.99):
     """峰值保护：频谱倾斜/混入噪声这类叠加式处理后限制峰值，避免写 PCM16 时削波。
 
@@ -335,7 +359,7 @@ def _stretch_vowel(shifted, cons_n, target_n, sr):
 
 def render_note(sample, entry, ratio, length_ms, volume=100.0, velocity=100.0,
                 attack_ms=5, release_ms=12, vibrato=None, sr=SAMPLE_RATE,
-                pitch_cents=0.0, gender=50.0, breath=0.0):
+                pitch_cents=0.0, gender=50.0, breath=0.0, pitch_curve=None):
     """渲染单个音节：切分有效区 → 变调 → 子音速度 → 拉伸/循环 → 颤音 → 性别 → 气声 → 包络 → 音量。
 
     参数：
@@ -346,8 +370,9 @@ def render_note(sample, entry, ratio, length_ms, volume=100.0, velocity=100.0,
       velocity  子音速度 0-200（辅音区时长缩放，100=不变）
       vibrato   {"depth_cent","freq_hz","delay_ms"} 或 None
       pitch_cents 音高偏差（音分，±100 = 半音），叠加在 ratio 上
-      gender    性别/明亮度 0-100（50=不变），近似共振峰移位
-      breath    气声 0-100（0=关闭）
+       gender    性别/明亮度 0-100（50=不变），近似共振峰移位
+       breath    气声 0-100（0=关闭）
+       pitch_curve 手绘音高曲线 [{"pos":0-1,"cents":音分}]，作用于拼接后的整音节
     """
     ratio = _apply_cents(ratio, pitch_cents)
     off_s = int(entry.offset * sr / 1000)
@@ -384,8 +409,9 @@ def render_note(sample, entry, ratio, length_ms, volume=100.0, velocity=100.0,
     target_n = max(1, int(round(length_ms * sr / 1000)))
     out = _stretch_vowel(shifted, cons_n, target_n, sr)
 
-    if vibrato:
-        out = _apply_vibrato(out, sr, vibrato)
+    # 渲染叠加顺序：音符基频 → pitch 参数（已折进 ratio）→ 音高曲线 → 颤音 → 音色 → 气声 → 包络
+    curved = _apply_pitch_curve(out, sr, pitch_curve)
+    out = _apply_vibrato(curved, sr, vibrato) if vibrato else curved
 
     out = _apply_gender(out, sr, gender)
     out = _apply_breath(out, sr, breath)
@@ -399,8 +425,8 @@ def render_note(sample, entry, ratio, length_ms, volume=100.0, velocity=100.0,
 def render_track(vb, notes, sample_note="C4", sr=SAMPLE_RATE):
     """渲染多音节音轨：按 preutterance 对齐音符起点 + overlap 交叉淡化拼接。
 
-    notes: [{"lyric","note","length_ms","velocity","volume",
-             "attack_ms","release_ms","vibrato","pitch_cents","gender","breath"}]（后几项可省略）
+    notes: [{"lyric","note","length_ms","velocity","volume","attack_ms","release_ms",
+             "vibrato","pitch_cents","gender","breath","pitch_curve"}]（后几项可省略）
     返回 float32 单声道数组。
     """
     f_sample = note_to_hz(sample_note)
@@ -422,7 +448,8 @@ def render_track(vb, notes, sample_note="C4", sr=SAMPLE_RATE):
                 release_ms=float(nd.get("release_ms", 12)),
                 vibrato=nd.get("vibrato"), sr=sr,
                 gender=nd.get("gender", 50.0),
-                breath=nd.get("breath", 0.0))
+                breath=nd.get("breath", 0.0),
+                pitch_curve=nd.get("pitch_curve"))
         except Exception:
             # 单个原音渲染失败时用静音兜底，避免整轨因广播/空数组崩溃
             x = np.zeros(max(1, int(length_ms * sr / 1000)), dtype=np.float32)
@@ -604,7 +631,8 @@ def cmd_render(args):
                           volume=args.volume, velocity=args.velocity,
                           vibrato=vibrato,
                           pitch_cents=args.pitch_cents,
-                          gender=args.gender, breath=args.breath)
+                          gender=args.gender, breath=args.breath,
+                          pitch_curve=(json.loads(args.pitch_curve) if args.pitch_curve else None))
 
         # 写 WAV
         import soundfile as sf
@@ -746,6 +774,8 @@ def build_parser():
     r.add_argument("--pitch-cents", type=float, default=0.0, help="音高偏差（音分，±100 = 半音）")
     r.add_argument("--gender", type=float, default=50.0, help="性别/明亮度 0-100（50=不变）")
     r.add_argument("--breath", type=float, default=0.0, help="气声 0-100（0=关闭）")
+    r.add_argument("--pitch-curve", default=None,
+                   help='手绘音高曲线 JSON，如 [{"pos":0,"cents":0},{"pos":1,"cents":200}]')
     r.add_argument("--out", required=True, help="输出 WAV 路径")
     r.set_defaults(func=cmd_render)
 

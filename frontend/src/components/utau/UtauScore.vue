@@ -65,6 +65,7 @@ function setupCanvas() {
   c.style.width = cw + 'px'; c.style.height = ch + 'px';
   const ctx = c.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   setupParamCanvas();
+  setupCurveCanvas();
 }
 
 /* ---------------- 工具栏 ---------------- */
@@ -252,6 +253,7 @@ function draw() {
     }
   }
   drawParam();
+  drawCurve();
 }
 function V(n) { try { const v = getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v || F(n); } catch (e) { return F(n); } }
 function F(n) { return { '--surface': '#F7F7F8', '--border': 'rgba(23,23,23,0.12)', '--text': '#171717', '--text-muted': '#52525B', '--brand': '#4B3FE3', '--surface-muted': '#EFEFF2' }[n] || '#fff'; }
@@ -708,6 +710,189 @@ watch(paramKey, async () => {
   if (paramKey.value) { setupParamCanvas(); drawParam(); }
 });
 
+/* ---------------- P1-1 音高曲线手绘车道 ---------------- */
+const CURVE_H = 96;
+const CURVE_SEMI = 1200;                    // 车道量程：±1200 音分（一个八度）
+const curveMode = ref('off');               // off | draw（手绘） | point（控制点）
+const curveCanvas = ref(null);
+let curveCtx = null;
+let curveGesture = null;                    // { pushed, noteId, points, kind }
+
+function setupCurveCanvas() {
+  const c = curveCanvas.value; if (!c) return;
+  const dpr = window.devicePixelRatio || 1;
+  c.width = Math.round(cw * dpr); c.height = Math.round(CURVE_H * dpr);
+  c.style.width = cw + 'px'; c.style.height = CURVE_H + 'px';
+  curveCtx = c.getContext('2d'); curveCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+const curveMid = () => CURVE_H / 2;
+const centsToY = v => curveMid() - Math.max(-CURVE_SEMI, Math.min(CURVE_SEMI, v)) / CURVE_SEMI * (curveMid() - 6);
+const yToCents = y => Math.round(Math.max(-1, Math.min(1, (curveMid() - y) / (curveMid() - 6))) * CURVE_SEMI);
+function noteSpan(n) {
+  const x = xOf(n.startBeat);
+  const w = Math.max(noteW * 0.9, n.durBeat * noteW - 2);
+  return { x, w };
+}
+function noteAtX(x) {
+  for (const n of store.sortedNotes) {
+    const { x: nx, w } = noteSpan(n);
+    if (x >= nx && x <= nx + w) return n;
+  }
+  return null;
+}
+function drawCurve() {
+  const c = curveCanvas.value;
+  if (!c || curveMode.value === 'off') return;
+  const dpr = window.devicePixelRatio || 1;
+  if (c.width !== Math.round(cw * dpr)) setupCurveCanvas();
+  const g = curveCtx || c.getContext('2d');
+  if (!g) return;
+  const brand = V('--brand');
+  c.style.transform = 'translateX(' + (-(wrap.value ? wrap.value.scrollLeft : 0)) + 'px)';
+  g.clearRect(0, 0, cw, CURVE_H);
+  g.fillStyle = V('--surface-muted'); g.fillRect(0, 0, cw, CURVE_H);
+  // 拍线 + 0 音分中线 + ±半个八度参考线
+  for (let b = 0; b <= beatEnds; b++) {
+    const x = xOf(b);
+    g.strokeStyle = (b % 4 === 0) ? V('--border') : 'rgba(128,128,128,0.16)';
+    g.lineWidth = 1;
+    g.beginPath(); g.moveTo(x, 0); g.lineTo(x, CURVE_H); g.stroke();
+  }
+  g.setLineDash([4, 4]); g.strokeStyle = 'rgba(128,128,128,0.6)';
+  g.beginPath(); g.moveTo(0, curveMid()); g.lineTo(cw, curveMid()); g.stroke();
+  g.setLineDash([]);
+  g.fillStyle = 'rgba(128,128,128,0.35)';
+  g.font = '9px sans-serif'; g.textAlign = 'right';
+  g.fillText('+1200', LEFT - 6, 12);
+  g.fillText('0', LEFT - 6, curveMid() + 3);
+  g.fillText('-1200', LEFT - 6, CURVE_H - 4);
+  // 每个音符：底纹 + 曲线
+  const sel = new Set(store.selectedIds);
+  for (const n of store.sortedNotes) {
+    const { x, w } = noteSpan(n);
+    if (x > cw || x + w < 0) continue;
+    g.fillStyle = sel.has(n.id) ? 'rgba(255,85,48,0.10)' : 'rgba(128,128,128,0.06)';
+    g.fillRect(x, 0, w, CURVE_H);
+    if (sel.has(n.id)) { g.strokeStyle = '#ff5530'; g.lineWidth = 1; g.strokeRect(x + 0.5, 0.5, w - 1, CURVE_H - 1); }
+    const cu = n.pitchCurve;
+    if (!cu || !cu.length) continue;
+    g.strokeStyle = brand; g.lineWidth = 2; g.beginPath();
+    cu.forEach((p, i) => {
+      const px = x + p.pos * w, py = centsToY(p.cents);
+      if (i === 0) g.moveTo(px, py); else g.lineTo(px, py);
+    });
+    g.stroke();
+    if (curveMode.value === 'point') {
+      for (const p of cu) {
+        g.fillStyle = '#fff'; g.strokeStyle = brand; g.lineWidth = 1.5;
+        g.beginPath(); g.arc(x + p.pos * w, centsToY(p.cents), 3.5, 0, Math.PI * 2);
+        g.fill(); g.stroke();
+      }
+    }
+  }
+  // 播放头
+  if (playing.value || playBeat.value > 0) {
+    const px = xOf(playBeat.value);
+    g.strokeStyle = brand; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(px, 0); g.lineTo(px, CURVE_H); g.stroke();
+  }
+}
+function curveXY(e) { const r = curveCanvas.value.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+function curvePushNote(n) {
+  if (!curveGesture.pushed) { store.pushUndo(); curveGesture.pushed = true; }
+}
+/** 手绘：按下即清空该音符原曲线，滑动过程中按 x 采样 */
+function curvePaint(e) {
+  const { x, y } = curveXY(e);
+  const n = store.sortedNotes.find(k => k.id === curveGesture.noteId);
+  if (!n) return;
+  const { x: nx, w } = noteSpan(n);
+  const pos = Math.max(0, Math.min(1, (x - nx) / Math.max(1, w)));
+  const cents = yToCents(y);
+  curvePushNote(n);
+  const pts = curveGesture.points.slice();
+  pts.push({ pos, cents });
+  curveGesture.points = pts;
+  store.setPitchCurve(n.id, pts, false);
+  drawCurve();
+}
+/** 控制点：拖动最近点 / 空白处新增 */
+function curvePoint(e, initial) {
+  const { x, y } = curveXY(e);
+  const n = store.sortedNotes.find(k => k.id === curveGesture.noteId);
+  if (!n) return;
+  const { x: nx, w } = noteSpan(n);
+  const cur = (n.pitchCurve || []).map(p => ({ ...p }));
+  if (initial) {
+    let bi = -1, bd = 9;
+    cur.forEach((p, i) => {
+      const d = Math.hypot(nx + p.pos * w - x, centsToY(p.cents) - y);
+      if (d < bd) { bd = d; bi = i; }
+    });
+    curveGesture.idx = bi >= 0 ? bi : -1;
+    if (bi < 0) {
+      curvePushNote(n);
+      cur.push({ pos: Math.max(0, Math.min(1, (x - nx) / Math.max(1, w))), cents: yToCents(y) });
+      curveGesture.idx = cur.length - 1;
+    }
+    curveGesture.points = cur;
+  }
+  const i = curveGesture.idx;
+  if (i < 0 || i >= cur.length) return;
+  curvePushNote(n);
+  cur[i] = { pos: Math.max(0, Math.min(1, (x - nx) / Math.max(1, w))), cents: yToCents(y) };
+  curveGesture.points = cur;
+  store.setPitchCurve(n.id, cur, false);
+  drawCurve();
+}
+function curveDown(e) {
+  if (curveMode.value === 'off') return;
+  e.preventDefault();
+  const { x } = curveXY(e);
+  const n = noteAtX(x);
+  if (!n) { curveGesture = null; return; }
+  if (!store.selectedIds.includes(n.id)) store.select(n.id);
+  curveGesture = { pushed: false, noteId: n.id, points: [], idx: -1, kind: curveMode.value };
+  try { curveCanvas.value.setPointerCapture(e.pointerId); } catch (err) {}
+  if (curveMode.value === 'draw') curvePaint(e); else curvePoint(e, true);
+}
+function curveMove(e) {
+  if (!curveGesture) return;
+  if (curveGesture.kind === 'draw') curvePaint(e); else curvePoint(e, false);
+}
+function curveUp() {
+  if (curveGesture) {
+    // 手绘至少要有两个点才有意义
+    if (curveGesture.kind === 'draw' && curveGesture.points.length < 2) {
+      const n = store.sortedNotes.find(k => k.id === curveGesture.noteId);
+      if (n) store.setPitchCurve(n.id, []);
+    }
+    curveGesture = null;
+  }
+}
+/** 双击控制点删除 */
+function curveDbl(e) {
+  if (curveMode.value !== 'point') return;
+  const { x, y } = curveXY(e);
+  const n = noteAtX(x);
+  if (!n || !n.pitchCurve || !n.pitchCurve.length) return;
+  const { x: nx, w } = noteSpan(n);
+  const rest = n.pitchCurve.filter(p => Math.hypot(nx + p.pos * w - x, centsToY(p.cents) - y) > 8);
+  if (rest.length !== n.pitchCurve.length) store.setPitchCurve(n.id, rest);
+}
+function curveClear() {
+  const ids = store.selectedIds.length ? [...store.selectedIds] : store.notes.map(n => n.id);
+  const has = store.notes.filter(n => ids.includes(n.id) && n.pitchCurve && n.pitchCurve.length);
+  if (!has.length) { app.toast(t('没有可清除的音高曲线'), 'warn'); return; }
+  store.clearPitchCurve(has.map(n => n.id));
+  app.toast(t('已清除音高曲线'), 'ok');
+}
+watch(curveMode, async () => {
+  await nextTick();
+  if (curveMode.value !== 'off') { if (paramKey.value) paramKey.value = ''; setupCurveCanvas(); drawCurve(); }
+});
+watch(paramKey, (v) => { if (v && curveMode.value !== 'off') curveMode.value = 'off'; });
+
 onMounted(() => { setupCanvas(); draw(); window.addEventListener('keydown', onKey); });
 onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); });
 </script>
@@ -762,7 +947,7 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
 
     <input ref="midiInput" type="file" accept=".mid,.midi,.kar,.rmi" hidden @change="onMidiFileChange" />
 
-    <div ref="wrap" class="us-scroll" @pointerdown="closeCtx" @scroll="drawParam">
+    <div ref="wrap" class="us-scroll" @pointerdown="closeCtx" @scroll="drawParam(); drawCurve()">
       <canvas ref="canvas" class="us-canvas"
         @pointerdown="onDown" @pointermove="onMove" @pointerup="onUp" @pointercancel="onUp"
         @dblclick="onDbl" @contextmenu="onCtx"></canvas>
@@ -782,10 +967,29 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
           {{ t('默认') }} {{ paramMetaNow.def }} · {{ t('范围') }} {{ paramMetaNow.min }}~{{ paramMetaNow.max }}
         </span>
       </template>
+      <span v-if="!paramMetaNow" class="sep"></span>
+      <template v-if="!paramMetaNow">
+        <span class="muted small">{{ t('音高曲线') }}</span>
+        <select v-model="curveMode" class="text-input" style="width:auto;padding:3px 6px">
+          <option value="off">{{ t('关闭') }}</option>
+          <option value="draw">{{ t('手绘') }}</option>
+          <option value="point">{{ t('控制点') }}</option>
+        </select>
+        <template v-if="curveMode !== 'off'">
+          <span class="muted small">{{ curveMode === 'draw' ? t('在音符区间内按住拖动即可绘制曲线') : t('拖动控制点改音高；空白处点击新增；双击删除') }}</span>
+          <button class="btn sm ghost" @click="curveClear">{{ t('清除曲线') }}</button>
+          <span class="muted small" style="margin-left:auto">{{ t('量程 ±1200 音分') }}</span>
+        </template>
+      </template>
     </div>
     <div v-if="paramKey" class="us-param-lane">
       <canvas ref="paramCanvas" class="us-param-canvas"
         @pointerdown="paramDown" @pointermove="paramMove" @pointerup="paramUp" @pointercancel="paramUp"></canvas>
+    </div>
+    <div v-if="curveMode !== 'off'" class="us-param-lane us-curve-lane">
+      <canvas ref="curveCanvas" class="us-param-canvas"
+        @pointerdown="curveDown" @pointermove="curveMove" @pointerup="curveUp" @pointercancel="curveUp"
+        @dblclick="curveDbl"></canvas>
     </div>
 
     <div class="us-foot">
@@ -863,6 +1067,7 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
 .us-param-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px 0; flex: none; }
 .us-param-lane { position: relative; height: 84px; overflow: hidden; border-top: 1px solid var(--border); background: var(--surface-muted); flex: none; }
 .us-param-canvas { position: absolute; top: 0; left: 0; display: block; cursor: crosshair; touch-action: none; }
+.us-curve-lane { height: 96px; }
 /* 右键菜单开合动画（从触发点轻缩放弹出） */
 .ctxmenu-enter-active, .ctxmenu-leave-active { transition: opacity .12s ease, transform .14s cubic-bezier(.2,.9,.3,1.18); transform-origin: left top; }
 .ctxmenu-enter-from, .ctxmenu-leave-to { opacity: 0; transform: scale(.94) translate(-3px, -3px); }

@@ -30,6 +30,9 @@ function renderPayload() {
     if (p.pitch) item.pitch_cents = p.pitch;
     if (p.gender != null && p.gender !== 50) item.gender = p.gender;
     if (p.breath) item.breath = p.breath;
+    if (Array.isArray(n.pitchCurve) && n.pitchCurve.length >= 2) {
+      item.pitch_curve = n.pitchCurve.map(q => ({ pos: q.pos, cents: q.cents }));
+    }
     return item;
   });
 }
