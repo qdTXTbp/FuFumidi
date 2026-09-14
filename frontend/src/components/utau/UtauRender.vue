@@ -25,6 +25,11 @@ function renderPayload() {
     if (n.velocity !== 100) item.velocity = n.velocity;
     if (n.volume !== 100) item.volume = n.volume;
     if (n.vibrato) item.vibrato = { depth_cent: n.vibDepth, freq_hz: n.vibFreq, delay_ms: 0 };
+    // P0-3 逐音符参数：只传非默认值（引擎侧缺省即默认）
+    const p = n.params || {};
+    if (p.pitch) item.pitch_cents = p.pitch;
+    if (p.gender != null && p.gender !== 50) item.gender = p.gender;
+    if (p.breath) item.breath = p.breath;
     return item;
   });
 }

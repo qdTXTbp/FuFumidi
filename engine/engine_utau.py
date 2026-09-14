@@ -230,6 +230,82 @@ def _apply_vibrato(x, sr, vib):
     return x[j] * (1.0 - frac) + x[j + 1] * frac
 
 
+def _apply_cents(ratio, cents):
+    """把音分偏移折算进频率比（±100 音分 = 半音）"""
+    try:
+        c = float(cents or 0.0)
+    except (TypeError, ValueError):
+        c = 0.0
+    if abs(c) < 1e-6:
+        return ratio
+    return ratio * (2.0 ** (c / 1200.0))
+
+
+def _limit_peak(x, ceiling=0.99):
+    """峰值保护：频谱倾斜/混入噪声这类叠加式处理后限制峰值，避免写 PCM16 时削波。
+
+    只针对数字上限，不按源峰值压制——否则提亮这类操作会让整体响度莫名变小。
+    """
+    p = float(np.max(np.abs(x))) if len(x) else 0.0
+    if p > ceiling > 0:
+        x = x * (ceiling / p)
+    return x
+
+
+def _apply_gender(x, sr, v):
+    """性别参数（近似共振峰移位）：对频谱做以 1kHz 为枢轴的倾斜。
+
+    v: 0-100，50 = 不变；>50 提亮（更"女声"），<50 变暗（更"男声"）。
+    纯 numpy 频域实现，避免引入额外依赖；倾斜后按 RMS 对齐，防止响度突变。
+    """
+    try:
+        k = (float(v) - 50.0) / 50.0
+    except (TypeError, ValueError):
+        return x
+    n = len(x)
+    if abs(k) < 0.02 or n < 256:
+        return x
+    spec = np.fft.rfft(np.asarray(x, dtype=np.float64))
+    freqs = np.fft.rfftfreq(n, 1.0 / sr)
+    # 倾斜量限幅 ±6dB：不限幅时 0/100 两端会把低频抬到削波、把高频削没
+    tilt_db = np.clip(k * 6.0 * np.log2(np.maximum(freqs, 20.0) / 1000.0), -6.0, 6.0)
+    out = np.fft.irfft(spec * (10.0 ** (tilt_db / 20.0)), n=n)
+    rms_src = float(np.sqrt(np.mean(np.asarray(x, dtype=np.float64) ** 2))) or 1e-9
+    rms_out = float(np.sqrt(np.mean(out ** 2))) or 1e-9
+    return _limit_peak(out * (rms_src / rms_out)).astype(np.float32)
+
+
+def _apply_breath(x, sr, v):
+    """气声：混入 1.5k-7kHz 带通噪声，噪声包络跟随原音（与音节同步）。
+
+    v: 0-100（0 = 关闭）。噪声用固定种子，保证同一工程重复渲染结果一致。
+    """
+    try:
+        amt = float(v) / 100.0
+    except (TypeError, ValueError):
+        return x
+    n = len(x)
+    if amt <= 0.005 or n < 256:
+        return x
+    rng = np.random.RandomState(20240501)
+    freqs = np.fft.rfftfreq(n, 1.0 / sr)
+    ramp = (np.clip((freqs - 1200.0) / 600.0, 0.0, 1.0)
+            * np.clip((8000.0 - freqs) / 1000.0, 0.0, 1.0))
+    noise = np.fft.irfft(np.fft.rfft(rng.standard_normal(n)) * ramp, n=n)
+    # 包络跟随：粗网格整流 + 一阶平滑 + 线性插值回全长（避免 O(n·win) 卷积）
+    hop = max(1, int(sr * 0.005))
+    idx = np.arange(0, n, hop)
+    coarse = np.abs(np.asarray(x, dtype=np.float64)[idx])
+    sm = np.empty_like(coarse)
+    acc = 0.0
+    for i in range(len(coarse)):
+        acc = 0.4 * acc + 0.6 * coarse[i]
+        sm[i] = acc
+    env = np.interp(np.arange(n), idx, sm)
+    peak = float(np.max(env)) or 1e-9
+    return _limit_peak(np.asarray(x, dtype=np.float64) + noise * (env / peak) * amt * 0.35).astype(np.float32)
+
+
 def _stretch_vowel(shifted, cons_n, target_n, sr):
     """把变调后的片段调整到目标时长。
 
@@ -258,8 +334,9 @@ def _stretch_vowel(shifted, cons_n, target_n, sr):
 
 
 def render_note(sample, entry, ratio, length_ms, volume=100.0, velocity=100.0,
-                attack_ms=5, release_ms=12, vibrato=None, sr=SAMPLE_RATE):
-    """渲染单个音节：切分有效区 → 变调 → 子音速度 → 拉伸/循环 → 颤音 → 包络 → 音量。
+                attack_ms=5, release_ms=12, vibrato=None, sr=SAMPLE_RATE,
+                pitch_cents=0.0, gender=50.0, breath=0.0):
+    """渲染单个音节：切分有效区 → 变调 → 子音速度 → 拉伸/循环 → 颤音 → 性别 → 气声 → 包络 → 音量。
 
     参数：
       sample    float32 单声道采样
@@ -268,7 +345,11 @@ def render_note(sample, entry, ratio, length_ms, volume=100.0, velocity=100.0,
       length_ms 音符目标时长（ms）
       velocity  子音速度 0-200（辅音区时长缩放，100=不变）
       vibrato   {"depth_cent","freq_hz","delay_ms"} 或 None
+      pitch_cents 音高偏差（音分，±100 = 半音），叠加在 ratio 上
+      gender    性别/明亮度 0-100（50=不变），近似共振峰移位
+      breath    气声 0-100（0=关闭）
     """
+    ratio = _apply_cents(ratio, pitch_cents)
     off_s = int(entry.offset * sr / 1000)
     # 右边界：blank>0 从文件尾回退；blank<0 从 offset 起算；0/缺失视为文件尾
     if entry.blank > 0:
@@ -306,6 +387,9 @@ def render_note(sample, entry, ratio, length_ms, volume=100.0, velocity=100.0,
     if vibrato:
         out = _apply_vibrato(out, sr, vibrato)
 
+    out = _apply_gender(out, sr, gender)
+    out = _apply_breath(out, sr, breath)
+
     out = _envelope(out, sr, attack_ms, release_ms)
     if volume != 100.0:
         out = out * (volume / 100.0)
@@ -316,7 +400,7 @@ def render_track(vb, notes, sample_note="C4", sr=SAMPLE_RATE):
     """渲染多音节音轨：按 preutterance 对齐音符起点 + overlap 交叉淡化拼接。
 
     notes: [{"lyric","note","length_ms","velocity","volume",
-             "attack_ms","release_ms","vibrato"}]（后四项可省略）
+             "attack_ms","release_ms","vibrato","pitch_cents","gender","breath"}]（后几项可省略）
     返回 float32 单声道数组。
     """
     f_sample = note_to_hz(sample_note)
@@ -325,7 +409,8 @@ def render_track(vb, notes, sample_note="C4", sr=SAMPLE_RATE):
     for nd in notes:
         entry = vb.get(nd["lyric"])
         sample = vb.load_sample(entry)
-        ratio = note_to_hz(nd["note"]) / f_sample
+        # 音高偏差参与变调比：preutterance / overlap 也按同一比例折算，保持拼接锚点一致
+        ratio = _apply_cents(note_to_hz(nd["note"]) / f_sample, nd.get("pitch_cents"))
         length_ms = float(nd.get("length_ms", 500))
         velocity = float(nd.get("velocity", 100.0))
         try:
@@ -335,7 +420,9 @@ def render_track(vb, notes, sample_note="C4", sr=SAMPLE_RATE):
                 velocity=velocity,
                 attack_ms=float(nd.get("attack_ms", 5)),
                 release_ms=float(nd.get("release_ms", 12)),
-                vibrato=nd.get("vibrato"), sr=sr)
+                vibrato=nd.get("vibrato"), sr=sr,
+                gender=nd.get("gender", 50.0),
+                breath=nd.get("breath", 0.0))
         except Exception:
             # 单个原音渲染失败时用静音兜底，避免整轨因广播/空数组崩溃
             x = np.zeros(max(1, int(length_ms * sr / 1000)), dtype=np.float32)
@@ -358,7 +445,7 @@ def render_track(vb, notes, sample_note="C4", sr=SAMPLE_RATE):
         p1, x1 = pieces[i]
         p2, x2 = pieces[i + 1]
         entry2 = vb.get(notes[i + 1]["lyric"])
-        ratio2 = note_to_hz(notes[i + 1]["note"]) / f_sample
+        ratio2 = _apply_cents(note_to_hz(notes[i + 1]["note"]) / f_sample, notes[i + 1].get("pitch_cents"))
         vel2 = float(notes[i + 1].get("velocity", 100.0))
         fade_n = int(entry2.overlap * sr / 1000 / ratio2
                       * 100.0 / max(vel2, 1.0))
@@ -515,7 +602,9 @@ def cmd_render(args):
 
         out = render_note(sample, entry, ratio, args.length,
                           volume=args.volume, velocity=args.velocity,
-                          vibrato=vibrato)
+                          vibrato=vibrato,
+                          pitch_cents=args.pitch_cents,
+                          gender=args.gender, breath=args.breath)
 
         # 写 WAV
         import soundfile as sf
@@ -654,6 +743,9 @@ def build_parser():
     r.add_argument("--velocity", type=float, default=100.0, help="子音速度 0-200")
     r.add_argument("--volume", type=float, default=100.0, help="音量(%)")
     r.add_argument("--vibrato", default=None, help="颤音 JSON，如 {\"depth_cent\":25,\"freq_hz\":5.5}")
+    r.add_argument("--pitch-cents", type=float, default=0.0, help="音高偏差（音分，±100 = 半音）")
+    r.add_argument("--gender", type=float, default=50.0, help="性别/明亮度 0-100（50=不变）")
+    r.add_argument("--breath", type=float, default=0.0, help="气声 0-100（0=关闭）")
     r.add_argument("--out", required=True, help="输出 WAV 路径")
     r.set_defaults(func=cmd_render)
 

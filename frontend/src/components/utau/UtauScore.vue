@@ -2,9 +2,9 @@
 // UTAU 可视化钢琴卷帘编辑器
 // 画笔/选择工具、框选多选、缩放、网格吸附、播放走带、歌词填词、
 // 复制/剪切/粘贴/重复、撤销/重做、键盘微调、Alt拖拽复制、左右缘缩放、右键菜单
-import { ref, reactive, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import Icon from '../Icon.vue';
-import { useUtauStore } from '../../stores/utau';
+import { useUtauStore, UTAU_PARAMS, paramMeta, paramValue } from '../../stores/utau';
 import { useAppStore } from '../../stores/app';
 import { parseMidi, buildSong } from '../../core/midi.js';
 import { fmtTime } from '../../core/util.js';
@@ -64,6 +64,7 @@ function setupCanvas() {
   c.width = Math.round(cw * dpr); c.height = Math.round(ch * dpr);
   c.style.width = cw + 'px'; c.style.height = ch + 'px';
   const ctx = c.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  setupParamCanvas();
 }
 
 /* ---------------- 工具栏 ---------------- */
@@ -250,6 +251,7 @@ function draw() {
       ctx.fillText(playBeat.value.toFixed(1) + t(' 拍'), px + 6, TOP + 8);
     }
   }
+  drawParam();
 }
 function V(n) { try { const v = getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v || F(n); } catch (e) { return F(n); } }
 function F(n) { return { '--surface': '#F7F7F8', '--border': 'rgba(23,23,23,0.12)', '--text': '#171717', '--text-muted': '#52525B', '--brand': '#4B3FE3', '--surface-muted': '#EFEFF2' }[n] || '#fff'; }
@@ -583,6 +585,129 @@ watch(() => store.totalBeats, () => { setupCanvas(); draw(); });
 watch(() => store.notes, draw, { deep: true });
 watch(() => [store.selectedId, store.selectedIds], draw, { deep: true });
 watch(() => store.bpm, () => { if (playing.value) playT0 = performance.now() - (playBeat.value - playStart) * 60000 / store.bpm; });
+/* ---------------- P0-3 参数车道（逐音符合成参数） ---------------- */
+const PARAM_H = 84;
+const paramKey = ref('');            // '' = 关闭；否则 UtauParamKey
+const paramCanvas = ref(null);
+let paramCtx = null;
+let paramGesture = null;             // { pushed, lastX }
+const paramMetaNow = computed(() => (paramKey.value ? paramMeta(paramKey.value) : null));
+
+function setupParamCanvas() {
+  const c = paramCanvas.value; if (!c) return;
+  const dpr = window.devicePixelRatio || 1;
+  c.width = Math.round(cw * dpr); c.height = Math.round(PARAM_H * dpr);
+  c.style.width = cw + 'px'; c.style.height = PARAM_H + 'px';
+  paramCtx = c.getContext('2d'); paramCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+const paramPad = 8;
+function paramToY(v) {
+  const m = paramMetaNow.value; if (!m) return PARAM_H;
+  const h = PARAM_H - paramPad * 2;
+  const k = (Math.max(m.min, Math.min(m.max, Number(v) || 0)) - m.min) / Math.max(1e-9, m.max - m.min);
+  return paramPad + (1 - k) * h;
+}
+function paramFromY(y) {
+  const m = paramMetaNow.value; if (!m) return 0;
+  const h = PARAM_H - paramPad * 2;
+  const k = 1 - Math.max(0, Math.min(1, (y - paramPad) / h));
+  return Math.round(m.min + k * (m.max - m.min));
+}
+function drawParam() {
+  const c = paramCanvas.value; if (!c || !paramKey.value) return;
+  const dpr = window.devicePixelRatio || 1;
+  if (c.width !== Math.round(cw * dpr)) setupParamCanvas();
+  const g = paramCtx || c.getContext('2d');
+  if (!g) return;
+  const m = paramMetaNow.value;
+  const brand = V('--brand');
+  c.style.transform = 'translateX(' + (-(wrap.value ? wrap.value.scrollLeft : 0)) + 'px)';
+  g.clearRect(0, 0, cw, PARAM_H);
+  g.fillStyle = V('--surface-muted'); g.fillRect(0, 0, cw, PARAM_H);
+  // 拍线
+  for (let b = 0; b <= beatEnds; b++) {
+    const x = xOf(b);
+    g.strokeStyle = (b % 4 === 0) ? V('--border') : 'rgba(128,128,128,0.16)';
+    g.lineWidth = 1;
+    g.beginPath(); g.moveTo(x, 0); g.lineTo(x, PARAM_H); g.stroke();
+  }
+  // 默认值参考线
+  const yDef = paramToY(m.def);
+  g.setLineDash([4, 4]); g.strokeStyle = 'rgba(128,128,128,0.6)';
+  g.beginPath(); g.moveTo(0, yDef); g.lineTo(cw, yDef); g.stroke();
+  g.setLineDash([]);
+  // 每个音符：从默认值线出发的柱状
+  for (const n of store.sortedNotes) {
+    const x = xOf(n.startBeat);
+    const w = Math.max(noteW * 0.9, n.durBeat * noteW - 2);
+    const v = paramValue(n, paramKey.value);
+    if (Math.abs(v - m.def) < 1e-9) continue;
+    const y = paramToY(v);
+    g.fillStyle = 'rgba(75,63,227,0.45)';
+    g.fillRect(x + 1, Math.min(y, yDef), w - 2, Math.max(1, Math.abs(y - yDef)));
+    g.fillStyle = brand;
+    g.fillRect(x + 1, y - 1, w - 2, 2);
+  }
+  // 选中音符描边
+  const sel = new Set(store.selectedIds);
+  for (const n of store.sortedNotes) {
+    if (!sel.has(n.id)) continue;
+    const x = xOf(n.startBeat), w = Math.max(noteW * 0.9, n.durBeat * noteW - 2);
+    g.strokeStyle = '#ff5530'; g.lineWidth = 1.5;
+    g.strokeRect(x + 1, 1, w - 2, PARAM_H - 2);
+  }
+  // 播放头
+  if (playing.value || playBeat.value > 0) {
+    const px = xOf(playBeat.value);
+    g.strokeStyle = brand; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(px, 0); g.lineTo(px, PARAM_H); g.stroke();
+  }
+  // 量程标签
+  g.fillStyle = V('--text-muted'); g.font = '9px sans-serif'; g.textAlign = 'right';
+  g.fillText(String(m.max), LEFT - 6, paramPad + 8);
+  g.fillText(String(m.def), LEFT - 6, yDef + 3);
+  g.fillText(String(m.min), LEFT - 6, PARAM_H - paramPad + 2);
+}
+function paramXY(e) { const r = paramCanvas.value.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+/** 手势中按 x 连续写入：单点拖动改一个音的值，横扫即可批量设值 */
+function paramPaint(e) {
+  if (!paramKey.value || !paramGesture) return;
+  const { x, y } = paramXY(e);
+  const v = paramFromY(y);
+  const x0 = paramGesture.lastX;
+  const [a, b] = x0 <= x ? [x0, x] : [x, x0];
+  const hits = [];
+  for (const n of store.sortedNotes) {
+    const nx = xOf(n.startBeat), nw = Math.max(noteW * 0.9, n.durBeat * noteW - 2);
+    if (nx + nw >= a - 1 && nx <= b + 1) hits.push(n.id);
+  }
+  if (hits.length) {
+    if (!paramGesture.pushed) { store.pushUndo(); paramGesture.pushed = true; }
+    store.setParams(hits, paramKey.value, v, false);
+  }
+  paramGesture.lastX = x;
+  drawParam();
+}
+function paramDown(e) {
+  if (!paramKey.value) return;
+  e.preventDefault();
+  paramGesture = { pushed: false, lastX: paramXY(e).x };
+  try { paramCanvas.value.setPointerCapture(e.pointerId); } catch (err) {}
+  paramPaint(e);
+}
+function paramMove(e) { if (paramGesture) paramPaint(e); }
+function paramUp() { paramGesture = null; }
+function paramResetAll() {
+  const ids = store.selectedIds.length ? [...store.selectedIds] : store.notes.map(n => n.id);
+  if (!ids.length) { app.toast(t('没有可重置的音符'), 'warn'); return; }
+  store.setParams(ids, paramKey.value, paramMetaNow.value.def);
+  app.toast(t('已重置参数为默认值'), 'ok');
+}
+watch(paramKey, async () => {
+  await nextTick();
+  if (paramKey.value) { setupParamCanvas(); drawParam(); }
+});
+
 onMounted(() => { setupCanvas(); draw(); window.addEventListener('keydown', onKey); });
 onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); });
 </script>
@@ -637,10 +762,30 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
 
     <input ref="midiInput" type="file" accept=".mid,.midi,.kar,.rmi" hidden @change="onMidiFileChange" />
 
-    <div ref="wrap" class="us-scroll" @pointerdown="closeCtx">
+    <div ref="wrap" class="us-scroll" @pointerdown="closeCtx" @scroll="drawParam">
       <canvas ref="canvas" class="us-canvas"
         @pointerdown="onDown" @pointermove="onMove" @pointerup="onUp" @pointercancel="onUp"
         @dblclick="onDbl" @contextmenu="onCtx"></canvas>
+    </div>
+
+    <!-- P0-3 参数车道：逐音符调声参数的可视化编辑 -->
+    <div class="us-param-bar">
+      <span class="muted small">{{ t('参数车道') }}</span>
+      <select v-model="paramKey" class="text-input" style="width:auto;padding:3px 6px">
+        <option value="">{{ t('关闭') }}</option>
+        <option v-for="p in UTAU_PARAMS" :key="p.key" :value="p.key">{{ t(p.label) }}</option>
+      </select>
+      <template v-if="paramMetaNow">
+        <span class="muted small">{{ t('在车道上拖动/横扫即可改值（可撤销）') }}</span>
+        <button class="btn sm ghost" @click="paramResetAll">{{ t('重置为默认') }}</button>
+        <span class="muted small" style="margin-left:auto">
+          {{ t('默认') }} {{ paramMetaNow.def }} · {{ t('范围') }} {{ paramMetaNow.min }}~{{ paramMetaNow.max }}
+        </span>
+      </template>
+    </div>
+    <div v-if="paramKey" class="us-param-lane">
+      <canvas ref="paramCanvas" class="us-param-canvas"
+        @pointerdown="paramDown" @pointermove="paramMove" @pointerup="paramUp" @pointercancel="paramUp"></canvas>
     </div>
 
     <div class="us-foot">
@@ -713,6 +858,11 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
 .us-ctx-i.danger { color: #d33; }
 .us-ctx-i.danger:hover:not(:disabled) { background: rgba(211,51,51,0.1); color: #d33; }
 .us-ctx-sep { height: 1px; background: var(--border); margin: 3px 6px; }
+
+/* P0-3 参数车道 */
+.us-param-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px 0; flex: none; }
+.us-param-lane { position: relative; height: 84px; overflow: hidden; border-top: 1px solid var(--border); background: var(--surface-muted); flex: none; }
+.us-param-canvas { position: absolute; top: 0; left: 0; display: block; cursor: crosshair; touch-action: none; }
 /* 右键菜单开合动画（从触发点轻缩放弹出） */
 .ctxmenu-enter-active, .ctxmenu-leave-active { transition: opacity .12s ease, transform .14s cubic-bezier(.2,.9,.3,1.18); transform-origin: left top; }
 .ctxmenu-enter-from, .ctxmenu-leave-to { opacity: 0; transform: scale(.94) translate(-3px, -3px); }

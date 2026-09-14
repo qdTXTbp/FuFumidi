@@ -272,6 +272,114 @@ def test_envelope_attack_starts_at_zero(tmp_path):
     assert float(np.max(np.abs(x[:attack_n]))) < float(np.max(np.abs(x)))
 
 
+# ---------------------------------------------------------------- P0-3 逐音符参数
+def _f0_fft(x, sr=SR, lo=80.0, hi=600.0):
+    """在 80-600Hz 内取 FFT 峰值作为基频估计（测试音源谐波丰富，一次谐波最强）。"""
+    seg = np.asarray(x, dtype=np.float64)[int(0.15 * sr):int(0.45 * sr)]
+    spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
+    freqs = np.fft.rfftfreq(len(seg), 1.0 / sr)
+    band = (freqs >= lo) & (freqs <= hi)
+    return float(freqs[band][int(np.argmax(spec[band]))])
+
+
+def _centroid(x, sr=SR):
+    seg = np.asarray(x, dtype=np.float64)[int(0.15 * sr):int(0.45 * sr)]
+    spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
+    freqs = np.fft.rfftfreq(len(seg), 1.0 / sr)
+    return float((freqs * spec).sum() / max(1e-9, spec.sum()))
+
+
+def _band_energy(x, lo, hi, sr=SR):
+    seg = np.asarray(x, dtype=np.float64)[int(0.15 * sr):int(0.45 * sr)]
+    spec = np.abs(np.fft.rfft(seg))
+    freqs = np.fft.rfftfreq(len(seg), 1.0 / sr)
+    band = (freqs >= lo) & (freqs <= hi)
+    return float(np.sum(spec[band] ** 2))
+
+
+def test_pitch_cents_shifts_f0(tmp_path):
+    """音高偏差按音分折算：+100 音分抬高基频、-100 音分降低，时长不变。"""
+    vb_dir = str(tmp_path / "vb")
+    make_test_voicebank(vb_dir)
+    outs = {}
+    for tag, cents in (("base", None), ("up", "100"), ("down", "-100")):
+        path = str(tmp_path / f"{tag}.wav")
+        args = ["--lyric", "あ", "--note", "C4", "--length", "600", "--sample-note", "G3"]
+        if cents is not None:
+            args += ["--pitch-cents", cents]
+        p, r = run_render(vb_dir, *args, "--out", path)
+        assert p.returncode == 0 and r["ok"] is True, (p.stdout, r)
+        import soundfile as sf
+        outs[tag] = (sf.read(path)[0], r["duration_ms"])
+    import soundfile as sf  # noqa: F401
+    f_base, f_up, f_down = (_f0_fft(v[0]) for v in outs.values())
+    assert f_up == pytest.approx(f_base * 2 ** (100 / 1200), rel=0.03), (f_base, f_up)
+    assert f_down == pytest.approx(f_base * 2 ** (-100 / 1200), rel=0.03), (f_base, f_down)
+    assert len({v[1] for v in outs.values()}) == 1, outs
+
+
+def test_gender_tilts_brightness(tmp_path):
+    """性别参数改变频谱重心（>50 更亮、<50 更暗），且 50 = 默认不变。"""
+    vb_dir = str(tmp_path / "vb")
+    make_test_voicebank(vb_dir)
+    res = {}
+    for tag, g in (("base", None), ("bright", "100"), ("dark", "0"), ("mid", "50")):
+        path = str(tmp_path / f"g_{tag}.wav")
+        args = ["--lyric", "あ", "--note", "C4", "--length", "600", "--sample-note", "G3"]
+        if g is not None:
+            args += ["--gender", g]
+        p, r = run_render(vb_dir, *args, "--out", path)
+        assert p.returncode == 0 and r["ok"] is True, (p.stdout, r)
+        import soundfile as sf
+        res[tag] = sf.read(path)[0]
+    assert _centroid(res["bright"]) > _centroid(res["base"]) * 1.02
+    assert _centroid(res["dark"]) < _centroid(res["base"]) * 0.98
+    assert np.allclose(res["mid"], res["base"], atol=1e-6)
+    # 峰值不超过数字上限（叠加式处理需做峰值保护）
+    assert max(float(np.max(np.abs(x))) for x in res.values()) <= 1.0
+
+
+def test_breath_adds_noise_band(tmp_path):
+    """气声在元音段混入 2k-7k 噪声带，且不改变音高；同一输入结果可复现。"""
+    vb_dir = str(tmp_path / "vb")
+    make_test_voicebank(vb_dir)
+    o1 = str(tmp_path / "dry.wav")
+    o2 = str(tmp_path / "breath.wav")
+    o3 = str(tmp_path / "breath2.wav")
+    base_args = ["--lyric", "あ", "--note", "C4", "--length", "600", "--sample-note", "G3"]
+    p1, r1 = run_render(vb_dir, *base_args, "--out", o1)
+    p2, r2 = run_render(vb_dir, *base_args, "--breath", "80", "--out", o2)
+    p3, r3 = run_render(vb_dir, *base_args, "--breath", "80", "--out", o3)
+    assert all(p.returncode == 0 for p in (p1, p2, p3))
+    assert all(r["ok"] for r in (r1, r2, r3))
+    import soundfile as sf
+    a, b, c = sf.read(o1)[0], sf.read(o2)[0], sf.read(o3)[0]
+    assert _band_energy(b, 2000, 7000) > _band_energy(a, 2000, 7000) * 1.5
+    assert abs(_f0_fft(b) - _f0_fft(a)) < 5.0
+    assert np.array_equal(b, c), "气声噪声应可复现（固定随机种子）"
+    assert float(np.max(np.abs(b))) <= 1.0
+
+
+def test_render_track_passes_note_params(tmp_path):
+    """render-track 逐音符透传 pitch_cents / gender / breath：能渲染且输出不同。"""
+    vb_dir = str(tmp_path / "vb")
+    make_test_voicebank(vb_dir)
+    o1 = str(tmp_path / "t1.wav")
+    o2 = str(tmp_path / "t2.wav")
+    plain = [{"lyric": "か", "note": "C4", "length_ms": 300},
+             {"lyric": "あ", "note": "D4", "length_ms": 300}]
+    tuned = [dict(plain[0], pitch_cents=100.0, gender=90.0, breath=60.0), plain[1]]
+    p1, r1 = run_render_track(vb_dir, plain, "--sample-note", "G3", "--out", o1)
+    p2, r2 = run_render_track(vb_dir, tuned, "--sample-note", "G3", "--out", o2)
+    assert p1.returncode == 0 and p2.returncode == 0, (p1.stdout, p2.stdout)
+    assert r1["ok"] and r2["ok"]
+    import soundfile as sf
+    a, b = sf.read(o1)[0], sf.read(o2)[0]
+    n = min(len(a), len(b))
+    assert abs(len(a) - len(b)) / len(a) < 0.01
+    assert not np.allclose(a[:n], b[:n], atol=1e-4)
+
+
 # ---------------------------------------------------------------- M3 测试
 def _synth_utterance(sr=44100):
     """3 个音节（各 40ms 辅音 + 160ms 元音），间隔 150ms 静音。"""

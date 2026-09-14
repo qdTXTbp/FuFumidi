@@ -14,10 +14,45 @@ export interface UtauNote {
   vibDepth: number;    // 颤音深度（音分）
   vibFreq: number;     // 颤音频率 Hz
   flags: string;       // 调声 flags（预留，引擎后续支持）
+  params?: {           // P0-3 逐音符合成参数（音高偏差 / 性别 / 气声）；缺省即默认值
+    pitch?: number;    // 音分偏移 -100..100
+    gender?: number;   // 明亮度 0..100（50=不变）
+    breath?: number;   // 气声 0..100
+  };
 }
 
 // 新建音符的默认调声参数；「重置参数」也回到这里的取值
 export const NOTE_DEFAULTS = { velocity: 100, volume: 100, vibrato: false, vibDepth: 25, vibFreq: 5.5, flags: '' };
+
+/* ---------- P0-3 参数车道：参数元数据与读写 ---------- */
+export type UtauParamKey = 'pitch' | 'vibDepth' | 'volume' | 'gender' | 'breath';
+
+export const UTAU_PARAMS: { key: UtauParamKey; label: string; min: number; max: number; def: number; bipolar: boolean }[] = [
+  { key: 'pitch', label: '音高偏差', min: -100, max: 100, def: 0, bipolar: true },
+  { key: 'vibDepth', label: '颤音深度', min: 0, max: 100, def: 25, bipolar: false },
+  { key: 'volume', label: '音量', min: 0, max: 200, def: 100, bipolar: false },
+  { key: 'gender', label: '性别', min: 0, max: 100, def: 50, bipolar: false },
+  { key: 'breath', label: '气声', min: 0, max: 100, def: 0, bipolar: false },
+];
+
+export function paramMeta(key: UtauParamKey) {
+  return UTAU_PARAMS.find(p => p.key === key) || UTAU_PARAMS[0];
+}
+const clampParam = (key: UtauParamKey, v: number) => {
+  const m = paramMeta(key);
+  return Math.max(m.min, Math.min(m.max, Number(v) || 0));
+};
+
+/** 读取某参数当前值（volume / vibDepth 复用已有扁平字段，其余取 params） */
+export function paramValue(n: UtauNote, key: UtauParamKey): number {
+  if (key === 'volume') return n.volume;
+  if (key === 'vibDepth') return n.vibDepth;
+  const p = n.params || {};
+  if (key === 'pitch') return p.pitch != null ? p.pitch : 0;
+  if (key === 'gender') return p.gender != null ? p.gender : 50;
+  if (key === 'breath') return p.breath != null ? p.breath : 0;
+  return 0;
+}
 
 const LS_KEY = 'fufumidi_utau_project_v1';
 let _nid = 1;
@@ -228,14 +263,35 @@ export const useUtauStore = defineStore('utau', {
       this.notes = []; this.selectedId = null; this.selectedIds = [];
       this.persist();
     },
+    /* ---------- P0-3 参数车道 ---------- */
+    /** 批量写参数；history=false 供拖拽逐帧调用（手势开始时由调用方 pushUndo） */
+    setParams(ids: string[], key: UtauParamKey, value: number, history = true) {
+      const list = this.notes.filter(n => ids.includes(n.id));
+      if (!list.length) return;
+      const v = clampParam(key, value);
+      if (history) this.pushUndo();
+      for (const n of list) {
+        if (key === 'volume') n.volume = v;
+        else if (key === 'vibDepth') n.vibDepth = v;
+        else n.params = { ...(n.params || {}), [key]: v };
+      }
+      this.persist();
+    },
+    setParam(id: string, key: UtauParamKey, value: number) { this.setParams([id], key, value); },
+    setParamsForSelection(key: UtauParamKey, value: number) { this.setParams([...this.selectedIds], key, value); },
+
     /* ---------- 一键重置（P1-5：让编辑结果可预测） ---------- */
     /** 重置颤音（音高相关的调声编辑） */
     resetVibrato(ids: string[]) {
       this.updateNotes(ids, { vibrato: NOTE_DEFAULTS.vibrato, vibDepth: NOTE_DEFAULTS.vibDepth, vibFreq: NOTE_DEFAULTS.vibFreq });
     },
-    /** 重置全部调声参数（子音速度/音量/颤音/flags） */
+    /** 重置全部调声参数（子音速度/音量/颤音/flags + P0-3 参数） */
     resetParams(ids: string[]) {
-      this.updateNotes(ids, { ...NOTE_DEFAULTS });
+      const list = this.notes.filter(n => ids.includes(n.id));
+      if (!list.length) return;
+      this.pushUndo();
+      for (const n of list) { Object.assign(n, NOTE_DEFAULTS); delete n.params; }
+      this.persist();
     },
 
     setBpm(v: number) { this.bpm = Math.max(20, Math.min(400, v)); this.persist(); },
