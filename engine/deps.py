@@ -9,6 +9,7 @@ import argparse
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -78,6 +79,27 @@ GIT_MIRROR_PREFIXES = [
 # aria-amt 声明的 torchaudio<=2.5 会强制降级现有 torch/torchaudio，
 # 必须 --no-deps 装本体，再单独装缺失依赖（torch/torchaudio 已在环境内）
 GIT_NO_DEPS = {"amt"}
+
+# zip 兜底时仓库默认分支名不统一（main / master），两个都试
+ARCHIVE_REFS = ["main", "master"]
+
+
+def _aria_specs(pkg):
+    """aria 组两个 GitHub 包的候选安装目标。
+
+    用户机一般没装 git，而 pip 的 git+ 必须有 git 可执行文件才能用——
+    这正是「一键补全 aria 组永远失败」的原因。所以优先试 git+，
+    git 不可用时改用源码 zip：pip 支持直接从 archive 的 zip URL 安装，
+    只需要 HTTPS，不需要 git。
+    """
+    repo = GIT_SOURCES[pkg]
+    specs = []
+    if shutil.which("git"):
+        specs += ["git+" + p + repo + ".git" for p in GIT_MIRROR_PREFIXES]
+    for p in GIT_MIRROR_PREFIXES:
+        for ref in ARCHIVE_REFS:
+            specs.append(p + repo + "/archive/refs/heads/" + ref + ".zip")
+    return specs
 
 
 # 需要「真实导入」才能确认健康的包：这些是公共基础依赖，最容易出现
@@ -182,12 +204,11 @@ def install(group=None):
             for m in missing:
                 if m in GIT_SOURCES:
                     ok = False
-                    for prefix in GIT_MIRROR_PREFIXES:
+                    for spec in _aria_specs(m):
                         cmd = list(PIP_BASE)
                         if m in GIT_NO_DEPS:
                             cmd.append("--no-deps")
-                        # pip 默认浅拉取仓库；不指定分支避免仓库默认分支名不同导致失败
-                        cmd.append("git+" + prefix + GIT_SOURCES[m] + ".git")
+                        cmd.append(spec)
                         ok, last_err = _pip_run(cmd)
                         if ok:
                             break
@@ -202,7 +223,7 @@ def install(group=None):
                         if ok:
                             break
                 if not ok:
-                    _emit({"ok": False, "error": last_err or "安装失败（请确认系统已安装 git）", "group": g})
+                    _emit({"ok": False, "error": last_err or "安装失败（GitHub 各镜像与官方源均不可达）", "group": g})
                     return 1
             _emit({"ok": True, "installed": missing, "group": g})
             continue

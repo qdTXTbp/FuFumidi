@@ -38,6 +38,16 @@ librosa>=0.10.0
 soundfile>=0.12.0
 imageio-ffmpeg>=0.4.8
 
+# ---- 转录模型运行时：模型权重之外的推理包 ----
+# 漏掉这组会导致全新安装后「资源管理 → 模型运行时」自检直接报缺失：
+#   aria: missing amt / ariautils / orjson，transkun: missing transkun
+# （4.2.0 的安装包就是这个状态：整条 aria / transkun 转录链路装完即不可用）
+#
+# 注意：aria 组的 amt / ariautils 不在 PyPI，只能从 GitHub 装，
+# 由 scripts/bundle-python.js 单独处理，不能写进这里。
+transkun>=2.0.1
+orjson>=3.10
+
 # ---- MIDI 处理 ----
 pretty_midi>=0.2.10
 
