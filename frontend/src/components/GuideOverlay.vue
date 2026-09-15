@@ -219,6 +219,7 @@ onBeforeUnmount(cleanupIg);
 <style scoped>
 .guide-art {
   position: relative;
+  flex: none;
   height: 92px;
   display: grid;
   place-items: center;
@@ -244,7 +245,7 @@ onBeforeUnmount(cleanupIg);
 .g-note:nth-child(3){ top:30%; right:10%; font-size:30px; animation-delay:1.9s; }
 .g-note:nth-child(4){ top:64%; right:22%; font-size:15px; animation-delay:.5s; }
 @keyframes gfloat { 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-6px); } }
-.guide-dots { display: flex; gap: 6px; margin-top: 14px; }
+.guide-dots { display: flex; gap: 6px; margin-top: 14px; flex: none; }
 .guide-dots i { width:8px; height:8px; border-radius:50%; background: var(--hairline); transition:.2s; }
 .guide-dots i.on { background: var(--accent); transform: scale(1.25); }
 .guide-overlay { background: rgba(6,10,16,.58); backdrop-filter: blur(2px); pointer-events: none; }

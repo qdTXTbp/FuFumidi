@@ -1,5 +1,5 @@
 <script setup>
-// UTAU 工作台：声库制作 / 曲谱歌词 / 调声 / 合成渲染 四个子模块，共享 UTAU 工程
+// UTAU 工作台：声库制作 / 曲谱与调声（同屏）/ 合成渲染，共享 UTAU 工程
 import { ref, onMounted } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useUtauStore } from '../stores/utau';
@@ -12,10 +12,10 @@ import UtauRender from '../components/utau/UtauRender.vue';
 
 const store = useUtauStore();
 
+// 曲谱与调声合并为一屏：左栏调声检查器 + 右侧曲谱，选中即调，无需来回切页
 const TABS = [
   { id: 'voicebank', label: t('声库制作'), ic: 'mic' },
-  { id: 'score', label: t('曲谱编辑'), ic: 'edit' },
-  { id: 'tune', label: t('调声'), ic: 'spark' },
+  { id: 'score', label: t('曲谱与调声'), ic: 'edit' },
   { id: 'render', label: t('合成渲染'), ic: 'convert' },
 ];
 const tab = ref('voicebank');
@@ -42,7 +42,7 @@ onMounted(() => { store.init(); pending.value = false; });
       </div>
     </div>
 
-    <div class="utau-body">
+    <div class="utau-body" :class="{ 'utau-body-flat': tab === 'score' }">
       <div v-if="tab === 'voicebank'" class="utau-vb">
         <section class="utau-sec">
           <UtauLibrary />
@@ -52,8 +52,12 @@ onMounted(() => { store.init(); pending.value = false; });
           <ViewVoicebank />
         </section>
       </div>
-      <UtauScore v-else-if="tab === 'score'" />
-      <UtauTune v-else-if="tab === 'tune'" />
+      <div v-else-if="tab === 'score'" class="utau-work">
+        <UtauTune />
+        <section class="utau-stage">
+          <UtauScore />
+        </section>
+      </div>
       <UtauRender v-else-if="tab === 'render'" />
     </div>
   </div>
@@ -70,6 +74,14 @@ onMounted(() => { store.init(); pending.value = false; });
 .utau-tab.on { background: var(--brand-soft); color: var(--brand-text); border-color: var(--brand); }
 .utau-meta { margin-left: auto; white-space: nowrap; max-width: 46%; overflow: hidden; text-overflow: ellipsis; }
 .utau-body { flex: 1; min-height: 0; overflow: auto; }
+/* 曲谱与调声：左右分栏，不做整页滚动（各自内部滚动） */
+.utau-body-flat { overflow: hidden; }
+.utau-work { display: flex; gap: 10px; height: 100%; min-height: 0; padding: 10px 14px; }
+/* 窗口偏窄时收窄左栏（检查器与工具共用 --inspector-w），给曲谱留出宽度 */
+@media (max-width: 1120px) { .utau-work { --inspector-w: 198px; } }
+.utau-stage { flex: 1; min-width: 0; min-height: 0; }
+/* 分栏后由工作台统一给外边距，避免与曲谱自身内边距叠加 */
+.utau-stage :deep(.us) { padding: 0; }
 .utau-vb { padding: 16px 18px; display: flex; flex-direction: column; gap: 16px; }
 .utau-sec { border: 1px solid var(--border); border-radius: 12px; background: var(--canvas); padding: 14px 16px; }
 .utau-sec-title { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink); margin-bottom: 4px; }

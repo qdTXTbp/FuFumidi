@@ -9,7 +9,7 @@ import { t } from '../core/i18n.js';
 const app = useAppStore();
 const state = app;
 const toast = (m, t) => app.toast(m, t);
-import { THEMES, themePreviewPal, saveTheme, saveCustomHue, loadCustomHue, extractAccentFromImage, loadMode } from '../core/theme.js';
+import { THEMES, themeById, themePreviewPal, saveTheme, saveCustomHue, loadCustomHue, extractAccentFromImage, loadMode } from '../core/theme.js';
 
 const bridge = window.fuBridge;
 
@@ -19,18 +19,24 @@ const curMode = ref('light');
 const customAccent = ref('');
 const customHue = ref(213);
 
-const COLOR_THEMES = THEMES.filter(x => x.id !== 'light' && x.id !== 'hc');
+const COLOR_THEMES = THEMES.filter(x => !['light', 'hc', 'studio'].includes(x.id));
 
-// 两大分类：深色（各主题暗色版 + 高对比 + 自定义）/ 浅色（各主题亮色版 + 经典浅色 + 自定义）
+// 两大分类：深色（各主题暗色版 + 高对比 + 专业工作站 + 自定义）/ 浅色（各主题亮色版 + 经典浅色 + 自定义）
 const SECTIONS = [
   { mode: 'dark', label: '深色主题', ic: 'moon' },
   { mode: 'light', label: '浅色主题', ic: 'sun' },
 ];
+// 固定基底的专属卡片：高对比 / 专业工作站只在深色区，经典浅色只在浅色区
+const FIXED = {
+  dark: [
+    { id: 'hc', name: '高对比', desc: '无障碍 · 黑底高亮' },
+    { id: 'studio', name: '专业工作站', desc: '深灰蓝 · 编曲 / 调声专业深色' },
+  ],
+  light: [{ id: 'light', name: '经典浅色', desc: '明亮通透 · 适合白天' }],
+};
 function buildList(mode) {
   const list = COLOR_THEMES.map(x => ({ ...x, mode }));
-  list.push(mode === 'dark'
-    ? { id: 'hc', name: '高对比', desc: '无障碍 · 黑底高亮', accent: '#00ffcc', accent2: '#66ffdd', hue: 170, mode }
-    : { id: 'light', name: '经典浅色', desc: '明亮通透 · 适合白天', accent: '#3a7ad9', accent2: '#4f94e0', hue: 174, mode });
+  for (const f of FIXED[mode]) list.push({ ...themeById(f.id), ...f, mode });
   if (customAccent.value) {
     list.push({ id: 'custom', name: t('自定义主题'), desc: t('由你的图片生成'), accent: customAccent.value, hue: customHue.value, custom: true, mode });
   }

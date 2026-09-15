@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { analyzeSong, barChart, hBarChart, DUR_LABELS } from '../core/analysis.js';
@@ -14,6 +14,9 @@ import { t } from '../core/i18n.js';
 
 const densityZoom = ref(1);
 const data = ref(null);
+// 本视图被 <KeepAlive> 缓存：离开后实例仍在、DOM 已脱离文档，
+// 此时若继续算统计/画图，document.getElementById 会拿到 null 并抛错
+const active = ref(true);
 let resizeHandler = null;
 let analyzeTimer = null;
 
@@ -31,6 +34,7 @@ function collect() {
   if (!song) { data.value = null; return; }
   data.value = null;
   analyzeTimer = setTimeout(() => {
+    if (!active.value) return;   // 视图已切走：DOM 不在文档中，算完也没处画
     try { data.value = analyzeSong(song); }
     catch (e) { data.value = null; }
   }, 30);
@@ -39,6 +43,7 @@ function collect() {
 function draw() {
   const a = data.value;
   if (!a) return;
+  if (!active.value || !byId('azPitch')) return;   // 被缓存/未挂载时 canvas 取不到
   const song = currentSong.value.song;
 
   // 音高分布
@@ -198,8 +203,18 @@ watch(densityZoom, () => { if (data.value) nextTick(draw); });
 
 onMounted(() => {
   collect();
-  resizeHandler = () => { if (data.value) draw(); };
+  resizeHandler = () => { if (active.value && data.value) draw(); };
   window.addEventListener('resize', resizeHandler);
+});
+// KeepAlive 重新激活：DOM 又回到文档中，补一次统计与绘制
+onActivated(() => {
+  active.value = true;
+  if (!data.value) collect();
+  else nextTick(draw);
+});
+onDeactivated(() => {
+  active.value = false;
+  if (analyzeTimer) clearTimeout(analyzeTimer);
 });
 onBeforeUnmount(() => {
   if (analyzeTimer) clearTimeout(analyzeTimer);
@@ -263,11 +278,11 @@ onBeforeUnmount(() => {
               <button class="chip-btn" @click="densityZoom = Math.min(8, +(densityZoom * 2).toFixed(3))">+</button>
             </span>
           </h4>
-          <div class="chart-wrap" style="height:150px"><canvas id="azDensity"></canvas></div>
+          <div class="chart-wrap cw-tall"><canvas id="azDensity"></canvas></div>
         </div>
       </div>
       <div class="az-row">
-        <div class="az-card card az-wide"><h4><Icon name="chart" :size="14" /> {{ t('音频 / MIDI 对齐对比') }}</h4><div class="chart-wrap" style="height:150px"><canvas id="azCompare"></canvas></div></div>
+        <div class="az-card card az-wide"><h4><Icon name="chart" :size="14" /> {{ t('音频 / MIDI 对齐对比') }}</h4><div class="chart-wrap cw-tall"><canvas id="azCompare"></canvas></div></div>
       </div>
       <div class="az-row">
         <div class="az-card card">
@@ -287,7 +302,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="az-row">
-        <div class="az-card card az-wide"><h4><Icon name="chart" :size="14" /> {{ t('力度动态曲线') }}</h4><div class="chart-wrap" style="height:130px"><canvas id="azVelCurve"></canvas></div></div>
+        <div class="az-card card az-wide"><h4><Icon name="chart" :size="14" /> {{ t('力度动态曲线') }}</h4><div class="chart-wrap cw-short"><canvas id="azVelCurve"></canvas></div></div>
       </div>
     </template>
     <template v-else>
@@ -297,8 +312,9 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.stat-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 14px; }
-@media (max-width: 1100px) { .stat-grid { grid-template-columns: repeat(3, 1fr); } }
+.stat-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+@media (max-width: 1100px) { .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 620px) { .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .stat-card { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 12px 14px; background: var(--surface); }
 .stat-card .sc-label { font-size: 11px; color: var(--stone); margin-bottom: 4px; }
 .stat-card .sc-value { font-size: 17px; font-weight: 700; color: var(--ink); letter-spacing: -0.3px; }
@@ -311,8 +327,12 @@ onBeforeUnmount(() => {
 .az-card h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--ink); }
 .az-card h4 .az-zoom { margin-left: auto; display: flex; align-items: center; gap: 6px; font-weight: 500; }
 .az-card h4 .az-zoom-txt { font-size: 11px; min-width: 40px; text-align: center; }
-.chart-wrap { height: 140px; }
+/* 图表高度跟随窗口：大屏不浪费、小屏不必整页滚动 */
+.chart-wrap { height: clamp(120px, 17vh, 190px); }
+.chart-wrap.cw-tall { height: clamp(140px, 21vh, 210px); }
+.chart-wrap.cw-short { height: clamp(110px, 15vh, 170px); }
 .chart-wrap canvas { width: 100%; height: 100%; display: block; }
+@media (max-width: 900px) { .chart-wrap, .chart-wrap.cw-tall, .chart-wrap.cw-short { height: clamp(110px, 16vh, 150px); } }
 .az-txt { font-size: 12.5px; color: var(--slate); line-height: 1.8; min-height: 40px; }
 .chord-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chord-chips .chip { display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-full); background: var(--surface); font-size: 12px; color: var(--ink); cursor: pointer; }

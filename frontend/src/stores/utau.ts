@@ -13,7 +13,8 @@ export interface UtauNote {
   vibrato: boolean;
   vibDepth: number;    // 颤音深度（音分）
   vibFreq: number;     // 颤音频率 Hz
-  flags: string;       // 调声 flags（预留，引擎后续支持）
+  vibFade: number;     // 颤音渐入时长（ms）：引擎在元音区按此渐入，0 = 立即起颤
+  flags: string;       // UTAU flags（g/B/b/t/a/Y/H/h/C/c/D/E/P/F/L/N），由引擎解析并生效
   params?: {           // P0-3 逐音符合成参数（音高偏差 / 性别 / 气声）；缺省即默认值
     pitch?: number;    // 音分偏移 -100..100
     gender?: number;   // 明亮度 0..100（50=不变）
@@ -23,7 +24,7 @@ export interface UtauNote {
 }
 
 // 新建音符的默认调声参数；「重置参数」也回到这里的取值
-export const NOTE_DEFAULTS = { velocity: 100, volume: 100, vibrato: false, vibDepth: 25, vibFreq: 5.5, flags: '' };
+export const NOTE_DEFAULTS = { velocity: 100, volume: 100, vibrato: false, vibDepth: 25, vibFreq: 5.5, vibFade: 0, flags: '' };
 
 /* ---------- P0-3 参数车道：参数元数据与读写 ---------- */
 export type UtauParamKey = 'pitch' | 'vibDepth' | 'volume' | 'gender' | 'breath';
@@ -190,7 +191,8 @@ export const useUtauStore = defineStore('utau', {
         lyric: it.lyric ?? 'あ',
         velocity: it.velocity ?? NOTE_DEFAULTS.velocity, volume: it.volume ?? NOTE_DEFAULTS.volume,
         vibrato: it.vibrato ?? NOTE_DEFAULTS.vibrato, vibDepth: it.vibDepth ?? NOTE_DEFAULTS.vibDepth,
-        vibFreq: it.vibFreq ?? NOTE_DEFAULTS.vibFreq, flags: it.flags ?? NOTE_DEFAULTS.flags,
+        vibFreq: it.vibFreq ?? NOTE_DEFAULTS.vibFreq, vibFade: it.vibFade ?? NOTE_DEFAULTS.vibFade,
+        flags: it.flags ?? NOTE_DEFAULTS.flags,
       };
     },
     addNotes(items: Partial<UtauNote>[]): string[] {
@@ -319,7 +321,10 @@ export const useUtauStore = defineStore('utau', {
     /* ---------- 一键重置（P1-5：让编辑结果可预测） ---------- */
     /** 重置颤音（音高相关的调声编辑） */
     resetVibrato(ids: string[]) {
-      this.updateNotes(ids, { vibrato: NOTE_DEFAULTS.vibrato, vibDepth: NOTE_DEFAULTS.vibDepth, vibFreq: NOTE_DEFAULTS.vibFreq });
+      this.updateNotes(ids, {
+        vibrato: NOTE_DEFAULTS.vibrato, vibDepth: NOTE_DEFAULTS.vibDepth,
+        vibFreq: NOTE_DEFAULTS.vibFreq, vibFade: NOTE_DEFAULTS.vibFade,
+      });
     },
     /** 重置全部调声参数（子音速度/音量/颤音/flags + P0-3 参数 + P1-1 音高曲线） */
     resetParams(ids: string[]) {

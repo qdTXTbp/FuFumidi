@@ -2,9 +2,10 @@
 // 主进程音色工坊服务：SoundFont 库注册表、多源下载/进度、导入/删除/选择
 // ============================================================
 'use strict';
+const Paths = require('./paths');
 
-// 自定义目录（用户上传/下载的 SF2）存在 userData/fufumidi/soundfonts 下，
-// 内置随包分发的（如 renderer/vendor/soundfonts/GeneralUser.sf2）由 soundfont:list 单独列出。
+// 自定义目录（用户上传/下载的 SF2）在数据根目录的 soundfonts/ 下（默认位于工具目录旁，
+// 不挤占 C 盘）；内置随包分发的（如 renderer/vendor/soundfonts/GeneralUser.sf2）由 soundfont:list 单独列出。
 function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, net }) {
   // ---- 下载源镜像列表：GitHub 仓库搭配代理镜像加速（与模型下载一致的习惯）----
   // hosts[0] 优先尝试；后续为主仓库 / 镜像回退。
@@ -310,7 +311,7 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
     },
   ];
 
-  const sfDir = () => path.join(app.getPath('userData'), 'fufumidi', 'soundfonts');
+  const sfDir = () => Paths.soundfontsDir();
   // 内置随包 SF 目录（soundfont:list 已扫描），这里作为“已内置可用”的判定来源
   const bundledDir = () => path.join(__dirname, '..', 'renderer', 'vendor', 'soundfonts');
 

@@ -453,15 +453,20 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.vb { padding: 18px 22px; display: flex; flex-direction: column; gap: 12px; min-height: 100%; }
-.vb-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.vb-toolbar .btn { min-height: 30px; }
+.vb { padding: 0; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.vb-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; overflow-x: auto; flex: none; }
+.vb-toolbar .btn { min-height: var(--ctl-h); }
 .vb-src-name { margin-left: auto; font-size: 12px; color: var(--stone); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vb-params { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--stone); background: var(--surface-muted); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
 .vb-head-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .vb-params label { display: inline-flex; align-items: center; gap: 6px; }
 .vb-num { width: 76px; padding: 3px 6px; font-size: 12px; }
-.vb-body { display: grid; grid-template-columns: 300px 1fr; gap: 14px; flex: 1; min-height: 0; }
+.vb-body { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 14px; flex: 1; min-height: 0; }
+/* 窄窗口回退单列：左栏（切分列表）折到上方，避免右侧波形被压到溢出 */
+@media (max-width: 860px) {
+  .vb-body { grid-template-columns: minmax(0, 1fr); }
+  .vb-left { max-height: 42vh; }
+}
 .vb-left { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 12px; background: var(--canvas); min-height: 0; }
 .vb-left-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
 .vb-left-head b { margin-right: auto; }
@@ -475,7 +480,8 @@ onBeforeUnmount(() => {
 .vb-tools { display: inline-flex; gap: 2px; }
 .vb-right { display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--canvas); padding: 12px; min-height: 0; }
 .vb-wave-head { display: flex; align-items: baseline; gap: 10px; font-size: 13px; }
-.vb-wave { width: 100%; height: 220px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); cursor: crosshair; touch-action: none; }
+/* 波形高度跟随窗口：短窗口下不再把右栏（波形 + oto 网格）撑出可视区 */
+.vb-wave { width: 100%; height: clamp(150px, 26vh, 260px); border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); cursor: crosshair; touch-action: none; }
 .vb-oto-grid { display: flex; flex-wrap: wrap; gap: 10px; }
 .vb-oto-item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 5px 9px; border: 1px solid var(--border); border-radius: 8px; }
 .vb-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }

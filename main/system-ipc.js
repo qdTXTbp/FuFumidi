@@ -2,6 +2,7 @@
 // 主进程系统 IPC：环境探针、完整性、帮助窗口与打开输出位置
 // ============================================================
 'use strict';
+const Paths = require('./paths');
 
 function registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app, fs, spawnEngine }) {
   // 环境探针
@@ -90,26 +91,71 @@ function registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app
     const done = [];
     try {
       const ud = app.getPath('userData');
+      // 新旧两处都要清：数据根目录（工具目录旁）与旧版 userData 位置
+      const legacySf = path.join(ud, 'fufumidi', 'soundfonts');
       const rm = (p) => { try { fs.rmSync(p, { recursive: true, force: true }); return true; } catch (e) { return false; } };
       if (list.includes('models')) {
+        rm(Paths.modelsDir());
         rm(path.join(ud, 'fufumidi', 'models'));
         done.push('models');
       }
       if (list.includes('soundfonts')) {
-        rm(path.join(ud, 'fufumidi', 'soundfonts'));
+        rm(Paths.soundfontsDir());
+        rm(legacySf);
         done.push('soundfonts');
       }
       if (list.includes('deps')) {
         // 资源中心安装的依赖：GPU 增强包（CUDA / DirectML 实际装到这里的 site-packages）
         // 及其残留的 pip 下载缓存。这些都是可在资源中心重新安装的，按「清除数据」语义一并清掉。
+        rm(Paths.gpuEnhanceRoot());
         rm(path.join(ud, 'fufumidi', 'gpu-enhancements'));
+        rm(Paths.pipCacheDir());
         rm(path.join(ud, 'fufumidi', 'pip-cache'));
+        // 第三方缓存（HF / matplotlib / numba）：同样可在下次使用时自动重建
+        rm(Paths.cacheRoot());
         done.push('deps');
       }
       if (list.includes('playdata')) { done.push('playdata'); }
       // 清空模型后需要重建内置模型 junction → 提示前端重启应用
       const needRestart = done.includes('models') || done.includes('deps');
       return { ok: true, done, needRestart };
+    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  });
+
+  // 数据目录概览：依赖 / 环境 / 模型 / 缓存的统一落点（供设置页与资源中心展示）
+  ipcMain.handle('system:dataRoot', async () => {
+    try { return await Paths.overview(); }
+    catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  });
+  // 在资源管理器中打开数据根目录（或某个子目录）
+  ipcMain.handle('system:openDataRoot', (_e, sub) => {
+    try {
+      const sub2 = String(sub == null ? '' : sub);
+      // 只允许数据根目录下的子目录名：拒绝 .. 与路径分隔符，避免被拼出任意路径
+      const root = Paths.dataRoot();
+      let target = root;
+      if (sub2 && !/[\\/]/.test(sub2) && sub2 !== '.' && sub2 !== '..') {
+        const cand = path.join(root, sub2);
+        if (fs.existsSync(cand)) target = cand;
+      }
+      shell.openPath(target);
+      return { ok: true, dir: target };
+    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  });
+  // 清理数据根目录下的中间产物（temp/）：可随时安全清理
+  ipcMain.handle('system:cleanTemp', () => {
+    try {
+      const dir = Paths.tempDir();
+      let freed = 0;
+      for (const name of fs.readdirSync(dir)) {
+        const p = path.join(dir, name);
+        try {
+          const sz = (() => { try { return fs.statSync(p).size; } catch (_) { return 0; } })();
+          fs.rmSync(p, { recursive: true, force: true });
+          freed += sz;
+        } catch (_) {}
+      }
+      return { ok: true, freed, dir };
     } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   });
 

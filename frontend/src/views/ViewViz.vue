@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue';
 import { useAppStore } from '../stores/app';
 import { getSynth, ensureAudio, getPlayer } from '../audio.js';
 
@@ -179,8 +179,14 @@ function drawRoll(ctx2d, c, u, syn, song, player) {
   });
 }
 
-function tick() {
+// 高刷屏 rAF 可达 300fps：频谱/瀑布限流到 ~60fps（视觉无差别，省 5 倍 FFT 与绘制）
+const MIN_FRAME_MS = 15;
+let lastPaint = 0;
+function tick(ts) {
   raf = requestAnimationFrame(tick);
+  const now = ts || performance.now();
+  if (now - lastPaint < MIN_FRAME_MS) return;
+  lastPaint = now;
   const syn = getSynth();
   const song = currentSong.value && currentSong.value.song;
   if (!syn || !song) return;
@@ -204,6 +210,10 @@ onMounted(() => {
   };
   raf = requestAnimationFrame(tick);
 });
+// KeepAlive 保活期间停掉循环：频谱/瀑布每帧都要算 FFT 与大量绘制，
+// 离开本页后继续跑会明显拖慢整个应用
+onActivated(() => { if (!raf) raf = requestAnimationFrame(tick); });
+onDeactivated(() => { if (raf) { cancelAnimationFrame(raf); raf = null; } });
 onBeforeUnmount(() => {
   if (raf) cancelAnimationFrame(raf);
   raf = null;
@@ -250,19 +260,23 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.viz-page { display: flex; flex-direction: column; }
-.viz-col { display: flex; flex-direction: column; gap: 14px; height: 100%; }
-.viz-hero { display: flex; flex-direction: column; }
+.viz-page { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.viz-col { display: flex; flex-direction: column; gap: 14px; height: 100%; min-height: 0; }
+.viz-hero { display: flex; flex-direction: column; min-height: 0; }
 .viz-hero .vc-body { height: 46vh; min-height: 260px; }
-.viz-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-@media (max-width: 900px) { .viz-grid { grid-template-columns: 1fr; } }
-.viz-card .vc-body { height: 160px; }
-.vc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; font-weight: 600; color: var(--ink); }
+/* 卡片列用 minmax(0,1fr)：canvas 的内在宽度（300px）会把纯 1fr 撑破并横向裁切 */
+.viz-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.viz-card { min-width: 0; }
+.viz-card .vc-body { height: clamp(140px, 20vh, 220px); }
+@media (max-width: 1024px) { .viz-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 720px) { .viz-grid { grid-template-columns: minmax(0, 1fr); } }
+.vc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; font-weight: 600; color: var(--ink); flex-wrap: wrap; }
 .vc-head b { letter-spacing: -0.2px; }
 .vc-head .vc-zoom { font-size: 11px; min-width: 44px; text-align: center; font-weight: 500; }
 .vc-body canvas { width: 100%; height: 100%; display: block; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--canvas); }
 .chip-btn.active { background: var(--accent); color: #fff; }
 .viz-page.waterfall .viz-grid { display: none; }
 .viz-page.waterfall .viz-hero { flex: 1; }
-.viz-page.waterfall .viz-hero .vc-body { height: calc(100vh - 220px); min-height: 300px; }
+/* 全屏瀑布流：不写死 vh 魔法数，直接吃掉剩余高度（窗口变化时自适应） */
+.viz-page.waterfall .viz-hero .vc-body { flex: 1; height: auto; min-height: 300px; }
 </style>

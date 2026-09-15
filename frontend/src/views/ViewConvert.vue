@@ -664,7 +664,7 @@ async function renderVideo() {
 </template>
 
 <style scoped>
-.convert-view { max-width: 820px; padding: 18px 26px 40px; }
+.convert-view { max-width: 820px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
 .conv-info-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 12px; padding: 8px 14px; margin-bottom: 12px; font-size: 12.5px; color: var(--steel); }
 .conv-song { color: var(--stone); }
 .conv-form { display: flex; flex-direction: column; gap: 16px; }

@@ -5,6 +5,7 @@
 
 const { spawn } = require('child_process');
 const AdmZip = require('adm-zip');
+const Paths = require('./paths');
 const MSST_CATALOG = require('./models-msst-catalog');
 
 function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings }) {
@@ -123,12 +124,15 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     beat_this: {
       id: 'beat_this',
       name: '节拍网格检测（Beat This!）',
-      note: 'MuScriptor 转录时值对齐 · final0 · 约 81 MB · 国内镜像下载',
+      note: 'MuScriptor 转录时值对齐 · final0 · 约 81 MB · 多源并行加速下载',
       kind: 'transcribe',
       arch: 'BeatThis',
       use: 'MuScriptor 转录可选前置：节拍网格检测，提升音符时值 / 对齐（未下载或失败时自动跳过）',
       dest: path.join('hub', 'checkpoints', 'beat_this-final0.ckpt'),
       url: 'https://raw.githubusercontent.com/monologue82/Models/main/beat_this/beat_this-final0.ckpt',
+      // 完整性校验（对已验证可用的 final0 权重计算）：分段并行下载后校验，防止镜像返回
+      // 截断/被改写的文件被当成模型装进本地
+      sha256: '8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331',
       minSize: 7e7,
       downloadable: true,
       runtime: 'muscriptor',
@@ -412,7 +416,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       const isSplit = !!splitMatch;
       const validExt = isSplit ? '.' + splitMatch[1].toLowerCase() : ext;
       if (!['.zip', '.7z', '.tar', '.gz', '.tgz', '.tar.gz', '.txz', '.tar.xz'].includes(validExt)) return { ok: false, error: '不支持的压缩包格式' };
-      const tmp = path.join(app.getPath('temp'), 'fufumidi-model-import-' + Date.now());
+      const tmp = path.join(Paths.tempDir(), 'fufumidi-model-import-' + Date.now());
       fs.mkdirSync(tmp, { recursive: true });
       try {
         let archiveFile = filePath;
@@ -547,6 +551,253 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received: size, total: size, percent: 100, done: true, speed: 0 });
     return { ok: true, path: destDir, size };
   }
+  // ============================================================
+  // 单文件模型的高速下载（Beat This! / 钢琴转录 等）
+  // 相比原来的「单连接 + 多源轮换」，这里加了两件事：
+  //   ① 多源并发测速选最快（含 GitHub 加速镜像，raw 直连作对照）
+  //   ② 单文件多分段并行下载（各分段独立成文件，互不干扰，天然可续传）
+  // 任何一步不满足条件（源不支持 Range / 拿不到长度）都回退到旧的单连接逻辑。
+  // ============================================================
+  const SEG_MAX = 8;              // 最多分段数
+  const SEG_MIN_BYTES = 4 * 1024 * 1024;   // 小于 4MB 不值得分段
+  const SEG_CONCURRENCY = 4;      // 同时在跑的分段数
+
+  /** 由原始 URL 推导候选下载源（GitHub 走加速镜像，其它源原样） */
+  function mirrorUrls(spec) {
+    const raw = String(spec.url || '');
+    const out = [];
+    if (Array.isArray(spec.mirrors)) out.push(...spec.mirrors);
+    if (!raw) return [...new Set(out.filter(Boolean))];
+    out.push(raw);
+    if (/^https:\/\/(raw\.githubusercontent\.com|github\.com)\//i.test(raw)) {
+      for (const p of [
+        'https://gh.jasonzeng.dev/',   // 与分卷下载同一个加速入口，国内通常最快
+        'https://ghfast.top/',
+        'https://gh-proxy.com/',
+        'https://ghproxy.net/',
+        'https://hub.gitmirror.com/',
+        'https://raw.gitmirror.com/',
+      ]) out.push(p + raw);
+    }
+    return [...new Set(out.filter(Boolean))];
+  }
+
+  /** 小样本测速：各源取前 512KB 计时，返回按速度降序的候选 */
+  async function rankMirrors(urls, ctrl) {
+    const SAMPLE = 512 * 1024;
+    const probe = async (u) => {
+      const t0 = Date.now();
+      const gd = await fetchGuarded(u, { headers: { 'user-agent': 'FuFumidi/4.1.0', Range: 'bytes=0-' + (SAMPLE - 1) }, ctrl, connectMs: 8000, stallMs: 8000 });
+      try {
+        let got = 0, total = 0;
+        const cr = gd.res.headers.get('content-range') || '';
+        const m = cr.match(/\/(\d+)\s*$/);
+        if (m) total = parseInt(m[1], 10) || 0;
+        if (!total) total = parseInt(gd.res.headers.get('content-length') || '0', 10) || 0;
+        const reader = gd.reader;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          got += value.length;
+          if (got >= SAMPLE) { try { await reader.cancel(); } catch (_) {} break; }
+        }
+        const ms = Math.max(1, Date.now() - t0);
+        return { url: u, mbps: (got / ms) * 1000 / 1048576, total, ranged: gd.res.status === 206 };
+      } finally { try { gd.cleanup(); } catch (_) {} }
+    };
+    const settled = await Promise.all(urls.map(async (u) => {
+      try { return await probe(u); } catch (_) { return { url: u, mbps: 0, total: 0, ranged: false }; }
+    }));
+    return settled.filter(r => r.mbps > 0).sort((a, b) => b.mbps - a.mbps);
+  }
+
+  /** 取远端文件总长度 */
+  async function remoteSize(u, ctrl) {
+    const gd = await fetchGuarded(u, { headers: { 'user-agent': 'FuFumidi/4.1.0', Range: 'bytes=0-0' }, ctrl, connectMs: 8000, stallMs: 8000 });
+    try {
+      const cr = gd.res.headers.get('content-range') || '';
+      const m = cr.match(/\/(\d+)\s*$/);
+      if (m) return parseInt(m[1], 10) || 0;
+      return parseInt(gd.res.headers.get('content-length') || '0', 10) || 0;
+    } finally { try { await gd.reader.cancel(); } catch (_) {} try { gd.cleanup(); } catch (_) {} }
+  }
+
+  async function downloadSingleFast(spec, dest, win, ctrl, id) {
+    const urls = mirrorUrls(spec);
+    const ranked = await rankMirrors(urls, ctrl);
+    if (!ranked.length) throw new Error('所有下载源均不可用');
+    const best = ranked[0];
+    let total = best.total || await remoteSize(best.url, ctrl);
+    if (!total) throw new Error('无法获取文件大小');
+    let segCount = total >= SEG_MIN_BYTES ? Math.min(SEG_MAX, Math.floor(total / (2 * 1024 * 1024))) : 1;
+    if (!best.ranged) segCount = 1;                 // 源不支持 Range → 单分段（等价于单连接）
+    const segSize = Math.ceil(total / segCount);
+    const segPath = (i) => dest + '.fs' + i;
+    const segBytes = (i) => Math.max(0, Math.min(total, (i + 1) * segSize) - i * segSize);
+
+    // 本段下载专用的中断器：任一分段失败就整体停下，避免「一边报错一边还有后台写入」。
+    // 每轮重试都会换成新的控制器（被 abort 过的 controller 不能复用）。
+    let segCtrl = new AbortController();
+    const onOuterAbort = () => { try { segCtrl.abort(); } catch (_) {} };
+    if (ctrl) { if (ctrl.signal.aborted) onOuterAbort(); else ctrl.signal.addEventListener('abort', onOuterAbort); }
+    const releaseOuter = () => { try { if (ctrl) ctrl.signal.removeEventListener('abort', onOuterAbort); } catch (_) {} };
+
+    // 续传：已存在且长度正确的分段跳过
+    let downloaded = 0;
+    const todo = [];
+    for (let i = 0; i < segCount; i++) {
+      let ok = false;
+      try { ok = fs.existsSync(segPath(i)) && fs.statSync(segPath(i)).size === segBytes(i); } catch (_) {}
+      if (ok) downloaded += segBytes(i); else todo.push(i);
+    }
+    let lastSend = 0, lastT = 0, lastR = 0, speed = 0;
+    const sendP = (done) => {
+      const now = Date.now();
+      if (!done && now - lastSend < 300) return;
+      lastSend = now;
+      if (!done) {
+        if (!lastT) { lastT = now; lastR = downloaded; }
+        else if (now - lastT >= 300) { speed = ((downloaded - lastR) / (now - lastT)) * 1000; lastT = now; lastR = downloaded; }
+      }
+      const pct = total ? Math.min(99, Math.round(downloaded / total * 100)) : 0;
+      if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: downloaded, total, percent: pct, done: !!done, speed, segmented: segCount });
+    };
+    sendP(false);
+
+    const fetchSeg = async (i, url) => {
+      const start = i * segSize;
+      const end = Math.min(total, start + segSize) - 1;
+      const gd = await fetchGuarded(url, {
+        headers: { 'user-agent': 'FuFumidi/4.1.0', Range: `bytes=${start}-${end}` },
+        ctrl: segCtrl, connectMs: 20000, stallMs: 60000,
+      });
+      // 每次尝试都用唯一临时名：重试同一分段时不会和上一次残留的文件句柄打架
+      // （Windows 上「先 rm 再以同名 open」经常拿到 EPERM，实测踩过）
+      const fn = segPath(i) + '.' + Date.now().toString(36) + '.tmp';
+      let got = 0;
+      let ws = null;
+      try {
+        // 单分段（源不支持 Range）时允许 200；多分段必须 206，否则该源不可用于分段
+        if (segCount > 1 ? gd.res.status !== 206 : !gd.res.ok) throw new Error('该源不支持分段（Range）');
+        ws = fs.createWriteStream(fn, { flags: 'w' });
+        const errP = new Promise((_res, rej) => ws.on('error', rej));
+        errP.catch(() => {});   // 循环已结束时才报错也不产生未处理的 rejection
+        const reader = gd.reader;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (_modelPause.has(id)) { try { reader.cancel(); } catch (_) {} throw new Error('paused'); }
+          if (_modelCancels.has(id)) { try { reader.cancel(); } catch (_) {} throw new Error('canceled'); }
+          got += value.length;
+          downloaded += value.length;
+          sendP(false);
+          await Promise.race([errP, new Promise((res2, rej2) => ws.write(Buffer.from(value), err => (err ? rej2(err) : res2())))]);
+        }
+        await new Promise((res2, rej2) => ws.end(err => (err ? rej2(err) : res2())));
+        ws = null;
+        if (got !== segBytes(i)) throw new Error('分段长度不符：' + got + '/' + segBytes(i));
+        fs.renameSync(fn, segPath(i));
+      } catch (e) {
+        // 回退本段已计入的进度，避免进度条虚高后卡住
+        downloaded = Math.max(0, downloaded - got);
+        throw e;
+      } finally {
+        // 必须先关掉写入流再删文件：Windows 下文件被占用时删除会静默失败
+        if (ws) { try { ws.destroy(); } catch (_) {} await new Promise(r => setTimeout(r, 30)); }
+        try { fs.rmSync(fn, { force: true }); } catch (_) {}
+        try { gd.cleanup(); } catch (_) {}
+      }
+    };
+
+    // 分段均衡分摊到多个镜像（公共加速站的单连接常被限速，分散开总吞吐更高），
+    // 每段失败后依次换到其它镜像重试
+    const sourceOrder = ranked.map(r => r.url);
+    let cursor = 0;
+    const runOne = async (i) => {
+      let lastErr = null;
+      for (let attempt = 0; attempt < Math.max(3, sourceOrder.length); attempt++) {
+        const url = sourceOrder[(i + attempt) % sourceOrder.length];
+        try { await fetchSeg(i, url); return; }
+        catch (e) {
+          lastErr = e;
+          const msg = String((e && e.message) || e);
+          if (/paused|canceled|不支持分段/.test(msg) || segCtrl.signal.aborted) throw e;
+          await new Promise(r => setTimeout(r, 400));   // 换源前稍作退避，避免连续触发对端限流
+        }
+      }
+      throw new Error('分段 ' + i + ' 下载失败：' + ((lastErr && lastErr.message) || ''));
+    };
+    // 用 allSettled 而不是 all：任一分段失败时其它分段往往只差几秒，
+    // 让它们自然收尾再统一判定，能避免「一个镜像抽风 → 全体被中断 → 报错信息失真」
+    const runRound = async () => {
+      cursor = 0;
+      const workers = Array.from({ length: Math.max(1, Math.min(SEG_CONCURRENCY, todo.length)) }, async () => {
+        for (;;) {
+          if (_modelPause.has(id)) throw new Error('paused');
+          if (_modelCancels.has(id)) throw new Error('canceled');
+          if (segCtrl.signal.aborted) throw new Error('canceled');
+          const idx = cursor++;
+          if (idx >= todo.length) return;
+          await runOne(todo[idx]);
+        }
+      });
+      const settled = await Promise.allSettled(workers);
+      const errs = settled.filter(r => r.status === 'rejected').map(r => r.reason);
+      if (!errs.length) return null;
+      // 取「真实原因」优先：被连带中断的 aborted 错误信息没有价值
+      return errs.find(e => !/aborted/i.test(String((e && e.message) || e))) || errs[0];
+    };
+    const stopRound = () => { try { segCtrl.abort(); } catch (_) {} };
+    const startRound = () => {
+      segCtrl = new AbortController();
+      if (ctrl && ctrl.signal.aborted) { try { segCtrl.abort(); } catch (_) {} }
+    };
+
+    let fail = await runRound();
+    if (fail) {
+      // 整体再试一轮：重新测速排序（网络状况可能已变），已完成的分段自动跳过
+      stopRound();
+      await new Promise(r => setTimeout(r, 800));
+      cleanSegTmp(dest, segCount);
+      const msg = String((fail && fail.message) || fail);
+      if (/paused|canceled/i.test(msg)) { releaseOuter(); throw fail; }
+      const reranked = await rankMirrors(urls, ctrl).catch(() => []);
+      if (reranked.length) { sourceOrder.length = 0; sourceOrder.push(...reranked.map(r => r.url)); }
+      startRound();
+      fail = await runRound();
+    }
+    if (fail) {
+      stopRound();
+      await new Promise(r => setTimeout(r, 250));
+      cleanSegTmp(dest, segCount);
+      releaseOuter();
+      throw new Error('分段下载失败（已重试一轮）：' + ((fail && fail.message) || fail));
+    }
+    releaseOuter();
+    sendP(true);
+
+    // 合并分段 → .part → 目标
+    const part = dest + '.part';
+    await new Promise((res2, rej2) => {
+      const ws = fs.createWriteStream(part, { flags: 'w' });
+      ws.on('error', rej2);
+      let i = 0;
+      const next = () => {
+        if (i >= segCount) { ws.end(() => res2()); return; }
+        const rs = fs.createReadStream(segPath(i++));
+        rs.on('error', rej2);
+        rs.on('end', next);
+        rs.pipe(ws, { end: false });
+      };
+      next();
+    });
+    const size = fs.statSync(part).size;
+    if (size !== total) throw new Error('合并后大小不符：' + size + '/' + total);
+    fs.renameSync(part, dest);
+    for (let i = 0; i < segCount; i++) { try { fs.rmSync(segPath(i), { force: true }); } catch (_) {} }
+    return { size, segments: segCount, speed: ranked[0].mbps };
+  }
+
   // GitHub Models 仓库分卷下载（MuScriptor：分卷 → 并行下载 → 合并 + SHA256 校验）
   // 特性：① 下载前对多源自动测速选最快 ② 分卷最多 4 路并行 ③ 按序合并 ④ SHA256 校验
   // 访问走 gh.jasonzeng.dev 加速，raw 直连 / ghfast / gh-proxy 作回退
@@ -797,6 +1048,37 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     }
     _modelCancels.delete(id);
     _modelPause.delete(id);
+    // 先走「多源测速 + 分段并行」的高速路径；任何不满足条件的情况（源不支持 Range、
+    // 拿不到长度、镜像全挂）都会抛错，随后自动回退到下面的单连接续传逻辑
+    let lastFastErr = null;
+    {
+      const fastCtrl = new AbortController();
+      _modelAborts.set(id, fastCtrl);
+      try {
+        const r = await downloadSingleFast(spec, dest, win, fastCtrl, id);
+        if (r.size < spec.minSize) throw new Error('下载文件不完整：' + r.size + ' bytes');
+        if (spec.sha256) {
+          const hash = await sha256File(dest);
+          if (hash !== spec.sha256) { try { fs.unlinkSync(dest); } catch (e) {} throw new Error('SHA256 校验失败：' + hash); }
+        }
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: r.size, total: r.size, percent: 100, done: true, speed: 0 });
+        _modelAborts.delete(id);
+        _activeDownloads.delete(id);
+        return { ok: true, path: dest, size: r.size, segmented: r.segments };
+      } catch (e) {
+        const msg = String((e && e.message) || e);
+        console.log('[model] 分段加速路径失败，回退单连接：' + msg);
+        _modelAborts.delete(id);
+        // 取消 / 暂停：按用户意图返回，不再回退重试
+        if (/paused|canceled/i.test(msg)) {
+          _activeDownloads.delete(id);
+          if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, error: msg, canceled: _modelCancels.has(id), paused: _modelPause.has(id) });
+          return { ok: false, error: msg, canceled: _modelCancels.has(id), paused: _modelPause.has(id) };
+        }
+        // 其余情况保留信息，回退单连接逻辑（分段残片与 .part 都会沿用）
+        lastFastErr = e;
+      }
+    }
     const tmp = dest + '.part';
     const ctrl = new AbortController();
     _modelAborts.set(id, ctrl);
@@ -876,24 +1158,47 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: size, total: size, percent: 100, done: true, speed: 0 });
         return { ok: true, path: dest, size };
       }
-      throw new Error('自动下载失败（已多源轮换重试 ' + MAX_ROUNDS + ' 轮，断点已保留，重试将继续）：' + ((lastErr && lastErr.message) || '网络不可达'));
+      throw new Error('自动下载失败（已多源轮换重试 ' + MAX_ROUNDS + ' 轮，断点已保留，重试将继续）：'
+        + ((lastErr && lastErr.message) || '网络不可达')
+        + (lastFastErr ? '；分段加速失败：' + (lastFastErr.message || lastFastErr) : ''));
     } catch (e) {
       if (out) { try { out.destroy(); } catch (_) {} }
       await new Promise(r => setTimeout(r, 150));
-      const msg = String((e && e.message) || e);
+      const rawMsg = String((e && e.message) || e);
+      const msg = /aborted/i.test(rawMsg)
+        ? '下载中断（连接被中止或长时间没有数据；断点已保留，可稍后重试续传）'
+        : rawMsg;
+      console.log('[model] 单连接路径失败：' + rawMsg);
       const paused = _modelPause.has(id);
       keepPart = paused || _modelCancels.has(id) || /paused|canceled/i.test(msg) ? keepPart : true;
       // .part 一律保留（断点续传）；仅 SHA 失败等由上方清理目标文件
       if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, error: msg, canceled: _modelCancels.has(id), paused });
       return { ok: false, error: msg, canceled: _modelCancels.has(id), paused };
     } finally {
+      const wasCanceled = _modelCancels.has(id) || _modelPause.has(id);
       _modelCancels.delete(id);
       _modelAborts.delete(id);
       _modelPause.delete(id);
       _activeDownloads.delete(id);
       try { if (!keepPart && fs.existsSync(tmp) && !fs.existsSync(dest)) fs.unlinkSync(tmp); } catch (_) {}
+      // 取消/暂停：顺便清掉分段残片，避免数据目录里留一堆 .fsN 垃圾；
+      // 网络类失败则保留（下次可跳过分段续传）
+      if (wasCanceled) cleanSegments(dest);
     }
   });
+
+  /** 清理某目标文件的分段残片（.fsN 与任意 .fsN.*.tmp） */
+  function cleanSegments(dest) { cleanSegTmp(dest, SEG_MAX); for (let i = 0; i < SEG_MAX; i++) { try { fs.rmSync(dest + '.fs' + i, { force: true }); } catch (_) {} } }
+  /** 只清理分段临时文件（保留已完成的分段以便续传） */
+  function cleanSegTmp(dest, segCount) {
+    let names = [];
+    try { names = fs.readdirSync(path.dirname(dest)); } catch (_) { return; }
+    const base = path.basename(dest) + '.fs';
+    for (const n of names) {
+      if (!n.startsWith(base) || !n.endsWith('.tmp')) continue;
+      try { fs.rmSync(path.join(path.dirname(dest), n), { force: true }); } catch (_) {}
+    }
+  }
 
   function closeAll() {
     for (const w of _folderWatchers.values()) { try { w.close(); } catch {} }

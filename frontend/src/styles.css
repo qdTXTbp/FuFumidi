@@ -33,6 +33,62 @@
   --error: #d45656;
   --footer-bg: #0a0a0a;
 
+  /* ── 工作站面板层级（0=卷帘画布 → 3=抬升卡片） ── */
+  --panel-0: var(--canvas);
+  --panel-1: var(--surface);
+  --panel-2: var(--surface-soft);
+  --panel-3: var(--card2, var(--surface));
+
+  /* ── 编曲网格 / 走带 ── */
+  --grid: rgba(15, 23, 42, 0.08);
+  --grid-strong: rgba(15, 23, 42, 0.16);
+  --grid-bar: rgba(15, 23, 42, 0.28);
+  --row-alt: rgba(15, 23, 42, 0.035);
+  --row-line: rgba(15, 23, 42, 0.06);
+  --playhead: #ff5530;
+  --playhead-soft: rgba(255, 85, 48, 0.16);
+  --loop-region: rgba(79, 142, 247, 0.13);
+  --sel: #ff5530;
+  --sel-soft: rgba(255, 85, 48, 0.14);
+  --tint: rgba(20, 86, 240, 0.06);
+  --tint-strong: rgba(20, 86, 240, 0.20);
+
+  /* ── 车道（参数 / 力度 / 音高） ── */
+  --lane-bg: var(--surface-soft);
+  --lane-head: var(--surface);
+  --lane-line: rgba(15, 23, 42, 0.10);
+  --curve: #4f8ef7;
+
+  /* ── 轨道色板（音符着色 / 轨道头） ── */
+  --track-1: #3b82f6;
+  --track-2: #14b8a6;
+  --track-3: #22c55e;
+  --track-4: #f59e0b;
+  --track-5: #ef4444;
+  --track-6: #a855f7;
+  --track-7: #06b6d4;
+  --track-8: #ec4899;
+
+  /* ── 卷帘 canvas 专用（Canvas 无法用 CSS 做 alpha 叠加，故单独给令牌） ── */
+  --note-s: 72%;
+  --note-l: 52%;
+  --ks-bg: rgba(245, 158, 11, 0.18);
+  --ks-fg: #b45309;
+  --cc: #d4a017;
+  --wave-bg: rgba(20, 86, 240, 0.05);
+  --wave-bar: rgba(20, 86, 240, 0.35);
+
+  /* ── 乐谱 / 卷帘音符块（Canvas 绘制） ── */
+  --note-fill: #8b83f0;
+  --note-fill-on: var(--accent);
+  --note-edge: rgba(23, 23, 23, 0.25);
+  --on-note: #ffffff;
+
+  /* ── 力度色带（弱→强） ── */
+  --vel-low: #4f8ef7;
+  --vel-mid: #22c55e;
+  --vel-high: #f59e0b;
+
   /* 主按钮 / 激活态（主题系统可覆盖为白底深字） */
   --btn-bg: #0a0a0a;
   --btn-fg: #ffffff;
@@ -40,12 +96,30 @@
   /* 兼容旧组件引用 */
   --accent: var(--brand-blue);
   --accent2: var(--brand-purple);
+  --brand: var(--brand-blue);
+  --brand-soft: var(--accent-dim);
+  --brand-text: var(--brand-blue-deep);
   --green: var(--success-text);
   --amber: #f59e0b;
   --red: var(--error);
   --pink: var(--brand-magenta);
   --border: var(--hairline);
   --border-strong: #d0d3d9;
+  /* UTAU / 声库等旧组件沿用的历史令牌名（补齐以支持深色主题） */
+  --surface-muted: var(--surface-soft);
+  --text-muted: var(--muted);
+  /* 历史别名：这些名字在组件里被引用过但从未定义，缺失会让整条声明失效 */
+  --danger: var(--error);
+  --warning: var(--amber);
+  --ok: var(--success-text);
+  --radius-full: 999px;
+  /* 运行时由 core/theme.js 注入的变量：给出兜底，主题未应用时不至于整条声明失效 */
+  --accent-dim: rgba(20, 86, 240, 0.16);
+  --bg0: #f4f7fb;
+  --bg1: #ffffff;
+  --bg2: #eef2f7;
+  --card: #ffffff;
+  --card2: #e8edf4;
   --glass: rgba(10, 10, 10, 0.04);
   --glass-bg: rgba(255, 255, 255, 0.62);
   --glass-bg-strong: rgba(255, 255, 255, 0.78);
@@ -72,6 +146,32 @@
   --sidebar-w: 240px;
   --topbar-h: 52px;
   --playerbar-h: 76px;
+
+  /* 页面节奏（各页统一从这里取值，避免 16/18/22/26 混用） */
+  --page-pad-x: 22px;
+  --page-pad-y: 20px;
+  --page-pad-b: 32px;
+  --page-max: 1280px;
+  --card-pad: 16px;
+
+  /* 浮层层级（统一刻度，避免同级互相压盖）
+     顺序：页面吸顶 < 浮起小面板 < 遮罩弹层 < 应用内弹窗 < 右键菜单 < 顶层确认 < Toast */
+  --z-float: 200;
+  --z-toast: 2400;
+  --z-overlay: 900;
+  --z-modal: 1000;
+  --z-modal-top: 2100;
+  --z-ctx: 2000;
+
+  /* 工作站控件尺寸（工具栏 / 检查器 / 车道统一节奏） */
+  --ctl-h: 28px;
+  --ctl-h-sm: 22px;
+  --ctl-gap: 6px;
+  --toolbar-h: 40px;
+  --statusbar-h: 24px;
+  --inspector-w: 232px;
+  --lane-h: 84px;
+  --lane-h-tall: 96px;
 
   /* DM Sans 首选，回退 Inter / 系统字体（离线环境） */
   --font: "DM Sans", "Inter", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -143,6 +243,7 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
   grid-area: main;
   overflow-y: auto;
   overflow-x: hidden;
+  min-height: 0;
   background: var(--canvas);
   scroll-behavior: smooth;
 }
@@ -243,6 +344,7 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
   border-radius: 999px;
   cursor: pointer;
   white-space: nowrap;
+  flex: none;
   transition: background 0.15s, color 0.15s;
 }
 .tab:hover { background: var(--surface-soft); color: var(--ink); }
@@ -309,7 +411,7 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
   background: var(--canvas);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-lg);
-  padding: 16px;
+  padding: var(--card-pad);
   box-shadow: var(--shadow-sm);
 }
 .card-title {
@@ -325,12 +427,32 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 .card-title .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--brand-blue); }
 
 /* ---------- 页面 ---------- */
+/* 页面外边距统一入口：各页只改令牌（或加 .page-flat 去掉内边距），不再各写一套 px */
 .page {
-  padding: 22px 26px 40px;
-  max-width: 1280px;
+  padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b);
+  max-width: var(--page-max);
   margin: 0 auto;
 }
-.page-head { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; }
+/* 嵌套在带内边距容器里使用的页面（资源中心子页等）：不再叠加内边距与外层限宽 */
+.page-flat { padding: 0; max-width: none; margin: 0; }
+/* 作为子页时的紧凑页头（外层已有大标题与页签，这里只做二级标题） */
+.page-head-sm { margin-bottom: 14px; gap: 10px; }
+.page-head-sm .page-ic { width: 32px; height: 32px; border-radius: 9px; font-size: 16px; }
+.page-head-sm .page-title { font-size: 15px; }
+.page-head-sm .page-sub { font-size: 11.5px; }
+
+/* ---------- 分组页（主页/视图/转换 三大类共用） ---------- */
+/* 统一为「确定高度 + 纵向 flex」，子页的 height:100% / flex:1 才有意义 */
+.group-page { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.group-page > .page { flex: 1; min-height: 0; }
+.group-page > * { min-height: 0; }
+.group-tabs { display: flex; gap: 8px; padding: 10px var(--page-pad-x); border-bottom: 1px solid var(--hairline); background: var(--canvas); position: sticky; top: 0; z-index: 30; flex: none; }
+.gp-tab { flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 7px 14px; border: 1px solid var(--hairline); border-radius: 999px; background: transparent; color: var(--steel); font-size: 13px; cursor: pointer; white-space: nowrap; transition: all .14s; }
+.gp-tab:hover { background: var(--surface-soft); color: var(--ink); }
+.gp-tab.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--ink); font-weight: 600; }
+
+/* 页头：窄窗口自动换行（右侧统计标签下沉一行），长标题省略而不撑破 */
+.page-head { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; flex-wrap: wrap; row-gap: 10px; }
 .page-ic {
   width: 44px; height: 44px;
   border-radius: 12px;
@@ -341,15 +463,17 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
   box-shadow: var(--shadow-sm);
   flex: none;
 }
-.page-title { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; color: var(--ink); }
-.page-sub { font-size: 12.5px; color: var(--stone); margin-top: 2px; }
+.page-title { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.page-sub { font-size: 12.5px; color: var(--stone); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- 网格 ---------- */
+/* 统一 minmax(0,1fr)：纯 1fr 的 min-content 会被 canvas/pre 等替换元素撑破 */
 .grid { display: grid; gap: 14px; }
-.grid-2 { grid-template-columns: 1fr 1fr; }
-.grid-3 { grid-template-columns: repeat(3, 1fr); }
-.grid-4 { grid-template-columns: repeat(4, 1fr); }
-@media (max-width: 1100px) { .grid-4 { grid-template-columns: repeat(2, 1fr); } .grid-3 { grid-template-columns: repeat(2, 1fr); } }
+.grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1100px) { .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 820px) { .grid-2, .grid-3, .grid-4 { grid-template-columns: minmax(0, 1fr); } }
 
 /* ---------- 首页卡片（白卡 + 品牌色图标块） ---------- */
 .home-card {
@@ -389,10 +513,12 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 .home-sec-head { font-size: 13px; font-weight: 700; color: var(--slate); margin-bottom: 12px; display: flex; align-items: center; gap: 8px; letter-spacing: -0.1px; }
 
 /* ---------- 歌曲列表 ---------- */
+/* 单行布局：曲名自适应剩余宽度，工具按钮由各行自行决定（侧栏为悬停浮层，见 SideBar.vue），
+   避免 flex-wrap 把一行拆成「序号/封面 → 曲名 → 工具」三层而把行高撑到 100px+ */
 .song-item {
   position: relative;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 4px 10px;
   padding: 9px 11px;
@@ -404,15 +530,15 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 }
 .song-item:hover { background: var(--surface-soft); border-color: var(--border-strong); }
 .song-item.active { background: var(--surface); border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); }
-.song-item .si-num { color: var(--stone); font-size: 11px; width: 22px; text-align: right; font-variant-numeric: tabular-nums; }
+.song-item .si-num { color: var(--stone); font-size: 11px; width: 22px; text-align: right; font-variant-numeric: tabular-nums; flex: none; }
 .song-item .si-cover { width: 26px; height: 26px; border-radius: 5px; object-fit: cover; flex: none; border: 1px solid var(--hairline); }
 .lib-sort { background: var(--surface); color: var(--ink); border: 1px solid var(--hairline); border-radius: 7px; font-size: 11px; padding: 3px 4px; max-width: 86px; flex: none; }
-.song-item .si-name { flex: 1 1 calc(100% - 42px); min-width: 0; font-size: 13px; padding-right: 4px; }
+.song-item .si-name { flex: 1 1 auto; min-width: 0; font-size: 13px; padding-right: 4px; }
 .song-item .si-name b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--ink); }
 .song-item .si-name small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--stone); font-size: 11px; }
 .song-item .si-tools {
   position: static;
-  flex: 1 1 100%;
+  flex: none;
   display: flex;
   justify-content: flex-end;
   gap: 2px;
@@ -441,7 +567,7 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 /* 播放栏开合：底部滑入/滑出 + 淡入淡出 */
 .pb-enter-active, .pb-leave-active { transition: transform .34s cubic-bezier(.2,.7,.3,1), opacity .24s ease; }
 .pb-enter-from, .pb-leave-to { transform: translateY(100%); opacity: 0; }
-.pb-main { display: flex; align-items: center; gap: 12px; min-width: 260px; flex: none; }
+.pb-main { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 0 1 auto; }
 .pb-title { min-width: 0; max-width: 220px; }
 .pb-title b { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: #fff; }
 .pb-title small { font-size: 11px; color: rgba(255, 255, 255, 0.55); }
@@ -619,8 +745,10 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
   border-radius: var(--radius-lg);
   overflow: hidden;
   background: var(--canvas);
+  /* 高度交给 CSS（视口相关 + 上下限），JS 按实测高度绘制 */
+  height: clamp(220px, 34vh, 380px);
 }
-.pianoroll-wrap canvas { display: block; width: 100%; }
+.pianoroll-wrap canvas { display: block; width: 100%; height: 100%; }
 
 /* ---------- Toast（白卡） ---------- */
 .toast-wrap {
@@ -628,7 +756,7 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
   top: calc(var(--topbar-h) + 14px);
   left: 50%;
   transform: translateX(-50%);
-  z-index: 300;
+  z-index: var(--z-toast);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -711,7 +839,7 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 120;
+  z-index: var(--z-overlay);
   animation: ov-fade 0.16s ease;
 }
 .overlay.top-aligned { align-items: flex-start; padding-top: 12vh; }
@@ -723,10 +851,26 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
   box-shadow: var(--shadow-lg);
   max-width: 92vw;
   max-height: 92vh;
-  overflow: auto;
   padding: 22px 24px;
+  /* 卡片自身不滚动，滚动交给内部内容区：避免出现「双滚动条」 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   animation: ov-pop 0.18s ease;
 }
+/* 卡片内的滚动区（主题库/壁纸库/命令面板/资源结果等）：占满剩余高度并自行滚动 */
+.overlay-card .thm-body,
+.overlay-card .wp-grid,
+.overlay-card .res-result-text,
+.overlay-card .cmd-list,
+.overlay-card .settings-body { flex: 1; min-height: 0; max-height: none; }
+/* 未显式声明滚动区的卡片：整卡可滚动（保持旧行为，不至于把内容裁掉） */
+.overlay-card.ov-scroll { overflow: auto; }
+
+/* ---------- 弹窗（.ed-modal）统一高度上限 ---------- */
+/* 各处的 .ed-modal 只定义宽度/内边距，这里统一加高度上限与内边距，避免小窗口裁切 */
+.ed-modal-mask { padding: 16px; }
+.ed-modal { max-height: min(86vh, 920px); overflow: auto; }
 @keyframes ov-pop { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
 /* 浮层面板开/关过渡（Vue <Transition name="ov">）：关闭也有退场动画 */
 .ov-enter-active, .ov-leave-active { transition: opacity 0.18s ease; }
@@ -878,6 +1022,17 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .ov-input:focus { border-color: var(--ink); }
 .ov-input.mono { font-family: var(--mono); }
 .ov-input[type="color"] { width: 36px; height: 30px; padding: 2px; border-radius: 8px; cursor: pointer; }
+
+/* 数据目录（依赖 / 环境 / 模型 / 缓存的统一落点） */
+.dr-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; max-width: 420px; }
+.dr-badge { flex: none; padding: 1px 8px; border-radius: 999px; background: var(--accent-dim, rgba(20, 86, 240, 0.14)); color: var(--accent); font-size: 10.5px; white-space: nowrap; }
+.dr-path { font-size: 10.5px; color: var(--stone); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.dr-entries { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; max-width: 420px; }
+.dr-entry { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--canvas); color: var(--ink); font-size: 11.5px; cursor: pointer; transition: border-color 0.14s, background 0.14s; }
+.dr-entry:hover { border-color: var(--accent); background: var(--surface-soft); }
+.dr-entry-l { color: var(--slate); }
+.dr-entry-s { font-family: var(--mono); font-size: 10.5px; color: var(--stone); }
+.dr-entry-w { color: var(--amber); font-size: 10.5px; }
 
 /* 单选胶囊 */
 .radio-pill { display: inline-flex; background: var(--surface); border: 1px solid var(--hairline); border-radius: 999px; padding: 2px; gap: 2px; }
@@ -1068,7 +1223,16 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 }
 
 /* ---------- 新手引导 ---------- */
-.guide-card { width: 460px; max-width: 92vw; background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg); padding: 22px 24px; }
+/* 桌面小窗口高度不足时，正文可滚动而底部按钮始终可见 */
+.guide-card {
+  width: 460px; max-width: 92vw;
+  max-height: min(88vh, 720px);
+  display: flex; flex-direction: column;
+  background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg);
+  padding: 22px 24px;
+}
+.guide-head, .guide-foot { flex: none; }
+.guide-body { overflow-y: auto; min-height: 0; }
 .guide-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .guide-count { font-size: 12px; font-weight: 700; color: var(--stone); letter-spacing: 0.6px; text-transform: uppercase; }
 .guide-body { display: flex; flex-direction: column; align-items: stretch; }
@@ -1110,8 +1274,8 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .guide-foot .guide-btn:hover { background: var(--surface-soft); color: var(--ink); transform: none; box-shadow: none; }
 
 /* ---------- 密度（紧凑模式收紧主要间距） ---------- */
+body[data-density="compact"] { --card-pad: 13px; }
 body[data-density="compact"] .page { padding: 14px 18px 28px; }
-body[data-density="compact"] .card { padding: 12px 14px; }
 body[data-density="compact"] .nav-item { padding: 6px 10px; }
 body[data-density="compact"] .song-item { padding: 7px 10px; }
 body[data-density="compact"] .btn { padding: 7px 14px; }
@@ -1439,3 +1603,42 @@ input[type="checkbox"]:active, input[type="radio"]:active { transform: scale(0.8
 .wp-prompt-title { font-size: 17px; font-weight: 700; color: var(--ink); }
 .wp-prompt-desc { font-size: 12.5px; color: var(--slate); line-height: 1.7; }
 .wp-prompt-actions { display: flex; gap: 10px; margin-top: 8px; }
+
+/* ============================================================
+   全局响应式：窗口变窄时的统一降级
+   窗口最小宽 980（main/window.js），因此所有断点都在 980 以上可落地；
+   各视图自带断点（ViewPlay 980 / ViewVoicebank 860 / ViewUtau 1120 …）优先处理页内布局。
+   ============================================================ */
+/* 播放条：整条最小内容宽约 1300px，窗口不足时按「次要控件先让位」的顺序收缩，
+   否则 overflow:hidden 会直接把右侧音量/速度控件裁掉 */
+@media (max-width: 1400px) {
+  .playerbar { gap: 12px; padding: 0 14px; }
+  .pb-main { gap: 8px; }
+  .pb-title { max-width: 160px; }
+  .vol-wrap { width: 100px; }
+}
+@media (max-width: 1200px) {
+  .pb-title { display: none; }
+  .bpm-wrap { display: none; }
+}
+@media (max-width: 1040px) {
+  .playerbar { gap: 8px; }
+  .pb-right { gap: 6px; }
+  /* MIDI 硬件输出 / 循环播放：窄窗口下让位（仍可在设置与工具栏中访问） */
+  .pb-right > .tp-btn:nth-of-type(-n+2) { display: none; }
+  .vol-wrap { width: 78px; }
+}
+
+/* 设置面板：字段行「标签 + 定宽控件」横排在窄窗口会被挤出卡片，改为上下堆叠 */
+@media (max-width: 860px) {
+  .settings-card { width: 100%; }
+  .field-row { flex-direction: column; align-items: stretch; gap: 8px; }
+  .field-row .fr-ctl { flex: 1 1 auto; min-width: 0; justify-content: flex-start; flex-wrap: wrap; }
+  .settings-body { padding-left: 18px; padding-right: 18px; }
+}
+
+/* 工具栏：小窗口收紧纵向内边距，避免「高工具栏 + 内容」双重挤压 */
+@media (max-width: 1100px) {
+  .page { padding: var(--page-pad-y) 16px var(--page-pad-b); }
+  .group-tabs { padding: 8px 16px; }
+}

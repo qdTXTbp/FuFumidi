@@ -213,18 +213,22 @@ function toggleCrossfade() {
         <button v-if="bks.length" class="tp-btn" :class="{ on: bkOpen }" :title="t('书签列表')" @click="toggleBkList"><Icon name="chevron" :size="14" /></button>
         <button class="tp-btn" :class="{ on: state.sleepUntil > 0 }" :title="sleepTitle" @click="sleepOpen = !sleepOpen; bkOpen = false"><Icon name="clock" :size="15" /></button>
       </div>
-      <div v-if="bkOpen" class="pb-pop">
-        <div v-for="(b, i) in bks" :key="i" class="pb-pop-row">
-          <button class="pb-pop-jump" @click="jumpBk(b)"><Icon name="target" :size="12" /> {{ b.label }}</button>
-          <button class="pb-pop-del" :title="t('删除书签')" @click="delBk(i)"><Icon name="trash" :size="12" /></button>
+      <!-- 书签/睡眠弹层必须 Teleport 到 body：.playerbar 带 overflow:hidden + backdrop-filter，
+           留在内部会被裁剪/错位（与下方混音台同理） -->
+      <Teleport to="body">
+        <div v-if="bkOpen" class="pb-pop pb-pop-fixed">
+          <div v-for="(b, i) in bks" :key="i" class="pb-pop-row">
+            <button class="pb-pop-jump" @click="jumpBk(b)"><Icon name="target" :size="12" /> {{ b.label }}</button>
+            <button class="pb-pop-del" :title="t('删除书签')" @click="delBk(i)"><Icon name="trash" :size="12" /></button>
+          </div>
+          <div v-if="!bks.length" class="pb-pop-empty">{{ t('暂无书签，点击目标按钮在当前进度添加') }}</div>
         </div>
-        <div v-if="!bks.length" class="pb-pop-empty">{{ t('暂无书签，点击目标按钮在当前进度添加') }}</div>
-      </div>
-      <div v-if="sleepOpen" class="pb-pop">
-        <button v-for="m in [15, 30, 60, 90]" :key="m" class="pb-pop-jump" @click="setSleepMin(m)">{{ m }} {{ t('分钟') }}</button>
-        <button class="pb-pop-jump" @click="setSleepMin(0)">{{ t('关闭定时') }}</button>
-        <div v-if="state.sleepUntil" class="pb-pop-empty">{{ t('剩余约 ') + Math.max(0, Math.round((state.sleepUntil - Date.now()) / 60000)) + t(' 分钟') }}</div>
-      </div>
+        <div v-if="sleepOpen" class="pb-pop pb-pop-fixed">
+          <button v-for="m in [15, 30, 60, 90]" :key="m" class="pb-pop-jump" @click="setSleepMin(m)">{{ m }} {{ t('分钟') }}</button>
+          <button class="pb-pop-jump" @click="setSleepMin(0)">{{ t('关闭定时') }}</button>
+          <div v-if="state.sleepUntil" class="pb-pop-empty">{{ t('剩余约 ') + Math.max(0, Math.round((state.sleepUntil - Date.now()) / 60000)) + t(' 分钟') }}</div>
+        </div>
+      </Teleport>
       <div class="pb-title">
         <b>{{ currentSong?.name || t('未选择曲目') }}</b>
         <small>{{ currentSong ? (currentSong.song ? currentSong.song.tracks.length + t(' 轨 · ') : '') + curStr + ' / ' + totalStr : t('导入 MIDI 开始播放') }}</small>
@@ -393,6 +397,15 @@ function toggleCrossfade() {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+/* Teleport 到 body 的弹层：相对视口定位在播放栏上方居中 */
+.pb-pop-fixed {
+  position: fixed;
+  left: 50%;
+  right: auto;
+  bottom: calc(var(--playerbar-h) + 10px);
+  transform: translateX(-50%);
+  z-index: var(--z-modal, 1000);
 }
 .pb-pop-row { display: flex; gap: 4px; align-items: center; }
 .pb-pop-jump { flex: 1; display: flex; align-items: center; gap: 6px; padding: 7px 10px; border: 0; background: transparent; color: var(--ink); border-radius: 7px; cursor: pointer; font-size: 12.5px; text-align: left; }

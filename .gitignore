@@ -22,6 +22,8 @@ __pycache__/
 *.pyo
 .DS_Store
 rust-core/target/
+# 开发模式下的数据根目录（模型 / 缓存 / 中间产物；发布版在安装目录旁）
+FuFumidiData/
 # 本地大体积资源（不在 git 仓库中，构建前按 README 准备）
 resources/
 models/

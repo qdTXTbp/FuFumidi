@@ -80,8 +80,21 @@ contextBridge.exposeInMainWorld('fuBridge', {
   autostartSet: (open) => ipcRenderer.invoke('app:autostart:set', open),
   // 清除用户数据（模型/音色/播放类数据）
   clearUserData: (scopes) => ipcRenderer.invoke('app:clearUserData', scopes),
+  // 数据目录（依赖 / 环境 / 模型 / 缓存的统一落点）
+  dataRoot: () => ipcRenderer.invoke('system:dataRoot'),
+  openDataRoot: (sub) => ipcRenderer.invoke('system:openDataRoot', sub),
+  cleanTemp: () => ipcRenderer.invoke('system:cleanTemp'),
   // 曲目封面选择（返回 data URL）
   pickCover: () => ipcRenderer.invoke('sys:pickCover'),
+  // 曲库文件（每个 MIDI 曲目对应的真实 .mid 文件）
+  writeMidi: (opts) => ipcRenderer.invoke('library:writeMidi', opts),
+  hasMidi: (p) => ipcRenderer.invoke('library:hasMidi', p),
+  checkMidi: (items) => ipcRenderer.invoke('library:checkMidi', items),
+  deleteMidi: (p) => ipcRenderer.invoke('library:deleteMidi', p),
+  revealMidi: (p) => ipcRenderer.invoke('library:reveal', p),
+  midiStats: () => ipcRenderer.invoke('library:stats'),
+  verifyMidi: () => ipcRenderer.invoke('library:verify'),
+  dupeMidi: () => ipcRenderer.invoke('library:dupes'),
   // 托盘控制（播放/暂停、下一首）
   onTrayControl: (cb) => { const w = (_e, act) => cb(act); ipcRenderer.on('tray:control', w); return () => ipcRenderer.removeListener('tray:control', w); },
   // 读取与指定音频/ midi 文件同目录的同名 .lrc 歌词（base64 传输，渲染端自解码）
@@ -116,11 +129,18 @@ contextBridge.exposeInMainWorld('fuBridge', {
   utauExportVoicebankZip: (opts) => ipcRenderer.invoke('utau:exportVoicebankZip', opts),
   // UTAU 工程渲染：渲染人声 WAV，返回字节供预览
   utauRenderTrack: (cfg) => ipcRenderer.invoke('utau:renderTrack', cfg),
+  // UTAU 引擎支持的 flags 一览（默认值/范围/说明，供 UI 展示）
+  utauFlags: () => ipcRenderer.invoke('utau:flags'),
   // 声库可用别名（P1-4 发音/别名替换）
   utauAliases: (cfg) => ipcRenderer.invoke('utau:aliases', cfg),
   // 已导入声库列表 / 导入现成声库 zip
   utauListVoicebanks: () => ipcRenderer.invoke('utau:listVoicebanks'),
   utauImportVoicebankZip: (directPath) => ipcRenderer.invoke('utau:importVoicebankZip', directPath),
+  // 声库资源中心：可一键安装的开源/免费声库清单、下载安装、取消
+  utauVoicebankRegistry: () => ipcRenderer.invoke('utau:voicebankRegistry'),
+  utauDownloadVoicebank: (id) => ipcRenderer.invoke('utau:downloadVoicebank', id),
+  utauCancelVoicebankDownload: (id) => ipcRenderer.invoke('utau:cancelVoicebankDownload', id),
+  onVoicebankProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('utau:voicebankProgress', w); return () => ipcRenderer.removeListener('utau:voicebankProgress', w); },
   pathForFile: (f) => filePathFor(f),
   openEditGuide: () => ipcRenderer.invoke('guide:openEdit'),
   // 转录参数预设

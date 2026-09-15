@@ -8,7 +8,8 @@ import { t } from '../core/i18n.js';
 
 const app = useAppStore();
 const toast = (m, t) => app.toast(m, t);
-const importFiles = (items) => app.importFiles(items);
+// 转录结果属于后台产物：正在播放时只入库，不抢切当前曲目（避免打断播放）
+const importFiles = (items) => app.importFiles(items, undefined, { keepPlaying: true });
 const setView = (v) => app.setView(v);
 
 const bridge = window.fuBridge;
@@ -1394,7 +1395,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.tr-view { max-width: 900px; padding: 18px 26px 40px; }
+.tr-view { max-width: 900px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
 .warn-tag { color: var(--amber); border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.1); }
 .tr-drop-card { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
 .tr-drop { display: flex; align-items: center; gap: 14px; padding: 22px; border: 1.5px dashed var(--border-strong); border-radius: 14px; background: var(--canvas); cursor: pointer; transition: border-color .15s, background .15s; }
@@ -1422,7 +1423,7 @@ onBeforeUnmount(() => {
 .tb-badge.canceled { color: var(--muted); }
 .tr-batch-stat { margin-top: 6px; }
 .tr-card { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
-.tr-modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.tr-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .tr-mode { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--surface); text-align: left; cursor: pointer; transition: all .15s; }
 .tr-mode b { display: block; font-size: 13px; color: var(--ink); margin-bottom: 2px; }
 .tr-mode span { font-size: 11px; color: var(--stone); line-height: 1.4; }

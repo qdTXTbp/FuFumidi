@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, onActivated, nextTick } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { getPlayer } from '../audio.js';
@@ -623,20 +623,30 @@ function onScoreClick(e) {
 
 /* ---------------- 生命周期 ---------------- */
 let followRaf = 0;
-function loop() {
-  tickFollow();
+// 高刷屏 rAF 可达 300fps：谱面跟随播放限流到 ~60fps，避免 5 倍滚动同步与重排
+const MIN_FRAME_MS = 15;
+let lastFollow = 0;
+function loop(ts) {
   followRaf = requestAnimationFrame(loop);
+  const now = ts || performance.now();
+  if (now - lastFollow < MIN_FRAME_MS) return;
+  lastFollow = now;
+  tickFollow();
 }
 onActivated(() => {
   // KeepAlive 重新激活：补渲染停用期间搁置的请求。是否需要重刻由 renderKeyOf
   // （含容器宽度）判定——宽度在停用期间变化时 key 失配自动重刻，未变化则复用缓存。
   pendingWhileDeactivated = false;
+  // 恢复「谱面跟随播放」循环（停用期间已在 onDeactivated 中停掉，避免后台空转）
+  if (!followRaf) followRaf = requestAnimationFrame(loop);
   nextTick(() => {
     // 需要重刻时推迟到 enter 过渡（0.28s）结束后，重刻的主线程阻塞不参与切页动画
     clearTimeout(activationTimer);
     activationTimer = setTimeout(scheduleRender, 320);
   });
 });
+// KeepAlive 保活期间停掉跟随循环，否则离开乐谱页后仍每帧 tickFollow
+onDeactivated(() => { if (followRaf) { cancelAnimationFrame(followRaf); followRaf = 0; } });
 onMounted(() => {
   clearTimeout(activationTimer);
   activationTimer = setTimeout(scheduleRender, 320);
@@ -833,9 +843,10 @@ onBeforeUnmount(() => {
 <style scoped>
 .score-view { display: flex; flex-direction: column; height: 100%; background: var(--canvas); }
 .score-toolbar {
+  position: relative;           /* .score-pop 的定位基准（否则会跑到窗口右上角） */
   display: flex; align-items: center; gap: 8px;
-  padding: 10px 14px; border-bottom: 1px solid var(--hairline);
-  flex-wrap: wrap; flex: none;
+  padding: 8px 14px; border-bottom: 1px solid var(--hairline);
+  flex-wrap: nowrap; overflow-x: auto; flex: none;
 }
 .tb-label { font-size: 12px; color: var(--stone); font-weight: 600; }
 .trk-sel { display: inline-flex; align-items: center; gap: 6px; }
@@ -848,7 +859,7 @@ onBeforeUnmount(() => {
 .zoom-fab { display: inline-flex; align-items: center; gap: 2px; }
 .zf-pct { font-size: 11px; color: var(--stone); min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
 .score-pop {
-  position: absolute; top: 46px; right: 130px; z-index: 40;
+  position: absolute; top: calc(100% + 6px); right: 10px; z-index: 60;
   background: var(--canvas); border: 1px solid var(--hairline);
   border-radius: 12px; box-shadow: var(--shadow);
   padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;

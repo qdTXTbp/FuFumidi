@@ -2,6 +2,7 @@
 // 主进程任务队列服务：音频转录、智能修正与任务取消
 // ============================================================
 'use strict';
+const Paths = require('./paths');
 
 function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, pluginHost, readSettings, resolveSeparateModel }) {
   const convertChildren = new Map();  // jobId -> 子进程句柄（转录/修正取消用）
@@ -20,16 +21,16 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
       } catch (e) { dir = ''; }
       if (!dir) {
         const srcDir = (cfg.audio || '').replace(/[\\/][^\\/]*$/, '');
-        dir = srcDir && srcDir !== (cfg.audio || '') ? srcDir : app.getPath('temp');
+        dir = srcDir && srcDir !== (cfg.audio || '') ? srcDir : Paths.tempDir();
       }
-      // 目录不存在则创建；不可写时回退到临时目录
+      // 目录不存在则创建；不可写时回退到数据根目录的 temp
       try {
         fs.mkdirSync(dir, { recursive: true });
         const probe = path.join(dir, '.fuprobe_' + Date.now());
         fs.writeFileSync(probe, '');
         fs.unlinkSync(probe);
       } catch (e) {
-        dir = path.join(app.getPath('temp'), 'fufumidi');
+        dir = path.join(Paths.tempDir(), 'fufumidi');
         try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
       }
       cfg.out = path.join(dir, base + '.mid');
@@ -95,7 +96,7 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
     if (!cfg || !cfg.audio || !cfg.midi) { reject(new Error('缺少输入：需要原始音频与转录 MIDI 路径')); return; }
     if (!cfg.out) {
       const base = cfg.midi.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '') + '_refined';
-      cfg.out = path.join(app.getPath('temp'), 'fufumidi', `${base}_${Date.now()}.mid`);
+      cfg.out = path.join(Paths.tempDir(), 'fufumidi', `${base}_${Date.now()}.mid`);
       try { fs.mkdirSync(path.dirname(cfg.out), { recursive: true }); } catch {}
     }
     const args = ['refine', '--audio', cfg.audio, '--midi', cfg.midi, '-o', cfg.out];
@@ -139,9 +140,9 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
     }
     if (!dir) {
       const srcDir = (cfg.audio || '').replace(/[\\/][^\\/]*$/, '');
-      dir = srcDir && srcDir !== (cfg.audio || '') ? srcDir : app.getPath('temp');
+      dir = srcDir && srcDir !== (cfg.audio || '') ? srcDir : Paths.tempDir();
     }
-    try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { dir = app.getPath('temp'); try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} }
+    try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { dir = Paths.tempDir(); try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} }
 
     const args = ['separate', cfg.audio, '--output', dir,
       '--model', resolved.modelPath, '--config', resolved.configPath, '--arch', resolved.arch];

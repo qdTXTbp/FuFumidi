@@ -196,7 +196,7 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
 </script>
 
 <template>
-  <div class="page">
+  <div class="page page-flat">
     <!-- 大音色解析需短暂占用主线程，期间给出遮罩提示，避免误以为卡死 -->
     <Transition name="fade">
     <div v-if="busySf" class="sf-busy-mask">
@@ -206,7 +206,7 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
       </div>
     </div>
     </Transition>
-    <div class="page-head">
+    <div class="page-head page-head-sm">
       <div class="page-ic"><Icon name="music" :size="20" /></div>
       <div>
         <div class="page-title">{{ t('音色工坊') }}</div>
@@ -252,7 +252,7 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
           <div class="sf-tile-desc">{{ item.desc }}</div>
           <div class="sf-tile-meta"><span class="sf-cat">{{ item.category }}</span>{{ fmtSize(item.expected) }} · {{ item.license }}</div>
           <div v-if="item.slow" class="sf-tile-slow">{{ t('该音色源较慢，下载可能需数分钟，请耐心等待') }}</div>
-          <div v-if="item.size" class="sf-tile-meta" style="color:var(--ok)">{{ t('本地 ') + fmtSize(item.size) }}</div>
+          <div v-if="item.size" class="sf-tile-meta" style="color:var(--success-text)">{{ t('本地 ') + fmtSize(item.size) }}</div>
           <div class="sf-tile-bar" v-if="prog[item.id] && prog[item.id].active">
             <div class="sf-tile-fill" :style="{ width: (prog[item.id].percent || 0) + '%' }"></div>
           </div>
@@ -331,7 +331,7 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
 .sf-tile-bar { height: 5px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; }
 .sf-tile-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.15s linear; }
 .sf-tile-err { font-size: 10.5px; color: var(--error); word-break: break-all; }
-.sf-busy-mask { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--bg) 55%, transparent); backdrop-filter: blur(2px); }
+.sf-busy-mask { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--canvas) 55%, transparent); backdrop-filter: blur(2px); }
 /* 加载遮罩淡入淡出 */
 .fade-enter-active, .fade-leave-active { transition: opacity .18s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }

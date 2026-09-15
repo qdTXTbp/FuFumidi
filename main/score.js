@@ -2,6 +2,7 @@
 // 主进程乐谱服务：PNG 分页 ZIP / PDF 导出
 // ============================================================
 'use strict';
+const Paths = require('./paths');
 
 function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline }) {
   ipcMain.handle('score:exportPngZip', async (evt, opts) => {
@@ -14,7 +15,7 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
         filters: [{ name: 'ZIP', extensions: ['zip'] }],
       });
       if (save.canceled || !save.filePath) return { ok: false, canceled: true };
-      const tmpDir = path.join(app.getPath('temp'), 'fufumidi-score-png');
+      const tmpDir = path.join(Paths.tempDir(), 'fufumidi-score-png');
       fs.mkdirSync(tmpDir, { recursive: true });
       for (let i = 0; i < opts.tiles.length; i++) {
         fs.writeFileSync(path.join(tmpDir, 'score-' + String(i + 1).padStart(3, '0') + '.png'), Buffer.from(opts.tiles[i].data));

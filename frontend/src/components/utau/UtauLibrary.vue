@@ -1,7 +1,8 @@
 <script setup>
 // 声库管理：导入现成 UTAU 声库(zip) / 选择当前声库 / 进入自制
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onActivated } from 'vue';
 import Icon from '../Icon.vue';
+import UtauVoicebankStore from './UtauVoicebankStore.vue';
 import { useUtauStore } from '../../stores/utau';
 import { t } from '../../core/i18n.js';
 
@@ -10,6 +11,8 @@ const bridge = window.fuBridge;
 const isDesktop = !!(bridge && bridge.utauListVoicebanks);
 const busy = ref(false);
 const msg = ref('');
+// 展开「开源免费声库」资源面板（资源中心同一组件，装完即可设为当前声库）
+const showStore = ref(false);
 
 async function refresh() {
   if (!bridge || !bridge.utauListVoicebanks) return;
@@ -54,6 +57,8 @@ async function removeVb(v) {
 }
 
 onMounted(refresh);
+// KeepAlive 保活：切回本页时重新扫描声库目录，避免在别的页面装完声库后列表还是旧的
+onActivated(refresh);
 </script>
 
 <template>
@@ -63,10 +68,17 @@ onMounted(refresh);
         <b>{{ t('声库') }}</b>
         <span class="muted small">{{ t('导入现成 UTAU 声库(.zip) 可直接拖入此区域，或自制声库') }}</span>
       </div>
-      <button class="btn primary" @click="importZip" :disabled="busy || !isDesktop">
-        <Icon name="download" :size="14" /> {{ busy ? t('导入中…') : t('导入声库 (.zip)') }}
-      </button>
+      <div class="ul-head-act">
+        <button class="btn" @click="showStore = !showStore">
+          <Icon name="spark" :size="14" /> {{ showStore ? t('收起免费声库') : t('浏览免费声库') }}
+        </button>
+        <button class="btn primary" @click="importZip" :disabled="busy || !isDesktop">
+          <Icon name="download" :size="14" /> {{ busy ? t('导入中…') : t('导入声库 (.zip)') }}
+        </button>
+      </div>
     </div>
+
+    <UtauVoicebankStore v-if="showStore" @installed="refresh" />
 
     <div v-if="store.voicebanks.length" class="ul-list">
       <div v-for="v in store.voicebanks" :key="v.dir" class="ul-item" :class="{ on: store.voicebankDir === v.dir }" @click="choose(v)">
@@ -87,10 +99,11 @@ onMounted(refresh);
 
 <style scoped>
 .ul { display: flex; flex-direction: column; gap: 10px; }
-.ul-head { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+.ul-head { display: flex; align-items: center; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
+.ul-head-act { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ul-head b { font-size: 14px; color: var(--ink); }
-.ul-head > div { display: flex; flex-direction: column; gap: 2px; }
-.ul-list { display: flex; flex-direction: column; gap: 6px; }
+.ul-head > div:first-child { display: flex; flex-direction: column; gap: 2px; }
+.ul-list { display: flex; flex-direction: column; gap: 6px; max-height: 46vh; overflow-y: auto; padding-right: 2px; }
 .ul-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
 .ul-item:hover { background: var(--surface-muted); }
 .ul-item.on { border-color: var(--brand); background: var(--brand-soft); }

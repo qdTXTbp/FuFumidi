@@ -9,6 +9,7 @@ import { useRoute, useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import ViewModels from './ViewModels.vue';
 import ViewSoundfonts from './ViewSoundfonts.vue';
+import UtauVoicebankStore from '../components/utau/UtauVoicebankStore.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
 import { t } from '../core/i18n.js';
@@ -194,6 +195,75 @@ async function loadRust() {
   }
 }
 
+/* ---------------- 曲库文件 + Rust 核心 ---------------- */
+const lib = reactive({
+  files: 0, bytes: 0, dir: '',
+  verifyBusy: false, verifyResult: null, orphanCount: 0,
+  dupeBusy: false, dupeResult: null,
+  err: '',
+});
+async function loadLibStats() {
+  try {
+    if (!bridge || !bridge.midiStats) return;
+    const r = await bridge.midiStats();
+    if (r && r.ok) { lib.files = r.count || 0; lib.bytes = r.bytes || 0; lib.dir = r.dir || ''; }
+  } catch (e) {}
+}
+async function verifyLibrary() {
+  if (!bridge || !bridge.verifyMidi) return;
+  lib.verifyBusy = true; lib.err = '';
+  try {
+    const r = await bridge.verifyMidi();
+    lib.verifyResult = r || null;
+    if (!r || !r.ok) lib.err = (r && r.error) || 'unknown';
+    else {
+      const bad = r.badCount || 0;
+      toast(bad ? t('体检完成：发现 ') + bad + t(' 个无法解析的文件') : t('体检完成：全部曲目文件可正常解析'),
+        bad ? 'warn' : 'ok');
+      if (bad) await pruneBadFiles(r.bad || []);
+      // 反向一致性：磁盘上不应存在「曲库已没有对应曲目」的孤儿文件
+      const orphans = await cleanOrphanFiles(r.files || []);
+      lib.orphanCount = orphans;
+    }
+    loadLibStats();
+  } catch (e) { lib.err = String(e); }
+  lib.verifyBusy = false;
+}
+/** 清理孤儿文件：磁盘上存在但曲库已无对应曲目的 .mid（保证文件与曲目一一对应） */
+async function cleanOrphanFiles(files) {
+  try {
+    const known = new Set((app.songs || [])
+      .filter((s) => s.meta && s.meta.path)
+      .map((s) => String(s.meta.path).toLowerCase()));
+    const orphans = (files || []).filter((f) => !known.has(String(f.file || '').toLowerCase()));
+    for (const f of orphans) { try { await bridge.deleteMidi(f.file); } catch (e) {} }
+    if (orphans.length) toast(t('已清理 ') + orphans.length + t(' 个无主文件'), 'ok');
+    return orphans.length;
+  } catch (e) { return 0; }
+}
+/** 把体检发现的问题文件对应的曲目从曲库清理掉（避免留下打不开的空壳） */
+async function pruneBadFiles(bad) {
+  try {
+    const paths = new Set((bad || []).map((b) => String(b.file || '').toLowerCase()));
+    if (!paths.size) return;
+    const victims = (app.songs || []).filter((s) => s.meta && s.meta.path && paths.has(String(s.meta.path).toLowerCase()));
+    for (const s of victims) await app.removeSong(s.id, { deleteFile: true });
+    if (victims.length) toast(t('已清理 ') + victims.length + t(' 个损坏曲目'), 'ok');
+  } catch (e) {}
+}
+async function findDupes() {
+  if (!bridge || !bridge.dupeMidi) return;
+  lib.dupeBusy = true; lib.err = '';
+  try {
+    const r = await bridge.dupeMidi();
+    lib.dupeResult = r || null;
+    if (!r || !r.ok) lib.err = (r && r.error) || 'unknown';
+    else toast(r.dupeGroups ? t('发现 ') + r.dupeGroups + t(' 组重复文件') : t('未发现重复文件'), r.dupeGroups ? 'warn' : 'ok');
+  } catch (e) { lib.err = String(e); }
+  lib.dupeBusy = false;
+}
+function revealLibDir() { try { bridge && bridge.openDataRoot && bridge.openDataRoot('midi'); } catch (e) {} }
+
 /* ---------------- 诊断与配置 ---------------- */
 async function exportDiag() {
   if (!bridge || !bridge.diagExport) return;
@@ -346,6 +416,7 @@ onMounted(() => {
   loadRust();
   loadGpu();
   loadHfToken();
+  loadLibStats();
   if (bridge && bridge.onModelProgress) {
     offModelProg = bridge.onModelProgress((p) => {
       if (p && p.id) {
@@ -363,7 +434,7 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
   <div class="page">
     <div class="page-head">
       <div class="page-ic"><Icon name="box" :size="20" /></div>
-      <div>
+      <div class="grow">
         <div class="page-title">{{ t('资源中心') }}</div>
         <div class="page-sub">{{ t('模型管理 · 音色工坊 · 资源管理') }}</div>
       </div>
@@ -502,6 +573,58 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
       </div>
     </div>
 
+    <!-- ============ 曲库文件与 Rust 核心 ============ -->
+    <div class="card res-sec">
+      <div class="res-sec-head"><Icon name="box" :size="15" /> {{ t('曲库文件与 Rust 核心') }}</div>
+      <div class="field-row top">
+        <div>
+          <div class="fr-label">{{ t('曲库 MIDI 文件') }}</div>
+          <div class="fr-hint">{{ t('每个曲目都对应一个真实 .mid 文件，集中存放在数据目录的 midi/ 下。') }}</div>
+        </div>
+        <div class="fr-ctl col">
+          <div class="lib-stats">
+            <span class="lib-badge">{{ lib.files }} {{ t('个文件') }}</span>
+            <span class="lib-badge">{{ fmtSize(lib.bytes) }}</span>
+            <span v-if="rustInfo.available" class="lib-badge on">Rust {{ rustInfo.version || '—' }}</span>
+            <span v-else class="lib-badge off">{{ t('纯 JS 模式') }}</span>
+          </div>
+          <div class="lib-path" :title="lib.dir">{{ lib.dir || t('（尚未创建）') }}</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button class="btn sm" @click="revealLibDir">{{ t('打开曲库目录') }}</button>
+            <button class="btn sm primary" :disabled="lib.verifyBusy" @click="verifyLibrary">{{ lib.verifyBusy ? t('体检中…') : t('曲库文件体检') }}</button>
+            <button class="btn sm" :disabled="lib.dupeBusy" @click="findDupes">{{ lib.dupeBusy ? t('检测中…') : t('检测重复文件') }}</button>
+          </div>
+        </div>
+      </div>
+      <div v-if="lib.verifyResult" class="lib-result">
+        <div>{{ t('体检引擎：') }}<b>{{ lib.verifyResult.engine === 'rust' ? 'Rust 核心' : 'JS 回退' }}</b>
+          · {{ t('文件 ') }}{{ lib.verifyResult.count }} · {{ t('总音符 ') }}{{ lib.verifyResult.totalNotes }}
+          · {{ t('异常 ') }}<b :class="{ bad: lib.verifyResult.badCount }">{{ lib.verifyResult.badCount }}</b>
+          <span v-if="lib.orphanCount"> · {{ t('已清理无主文件 ') }}<b>{{ lib.orphanCount }}</b></span>
+        </div>
+        <div v-if="lib.verifyResult.badCount" class="lib-bad">
+          <div v-for="b in lib.verifyResult.bad.slice(0, 6)" :key="b.file">· {{ b.file }}</div>
+          <div v-if="lib.verifyResult.badCount > 6">… {{ t('等 ') }}{{ lib.verifyResult.badCount }}{{ t(' 个') }}</div>
+        </div>
+      </div>
+      <div v-if="lib.dupeResult" class="lib-result">
+        <div>{{ t('重复检测引擎：') }}<b>{{ lib.dupeResult.engine === 'rust' ? 'Rust 核心' : 'JS 回退' }}</b>
+          · {{ t('扫描 ') }}{{ lib.dupeResult.count }}{{ t(' 个文件') }} · {{ t('重复组 ') }}<b :class="{ bad: lib.dupeResult.dupeGroups }">{{ lib.dupeResult.dupeGroups }}</b>
+          · {{ t('可清理 ') }}{{ lib.dupeResult.dupeFiles }}
+        </div>
+        <div v-for="(g, gi) in lib.dupeResult.groups.slice(0, 3)" :key="gi" class="lib-bad">
+          <div v-for="f in g" :key="f.file">· {{ f.file }}</div>
+        </div>
+      </div>
+      <div v-if="lib.err" class="lib-err">{{ lib.err }}</div>
+    </div>
+
+    <!-- ============ UTAU 声库资源（开源 / 免费，一键安装） ============ -->
+    <div class="card res-sec">
+      <div class="res-sec-head"><Icon name="mic" :size="15" /> {{ t('UTAU 声库资源') }}</div>
+      <UtauVoicebankStore />
+    </div>
+
     <!-- ============ 诊断与配置 ============ -->
     <div class="card res-sec">
       <div class="res-sec-head"><Icon name="save" :size="15" /> {{ t('诊断与配置') }}</div>
@@ -552,11 +675,13 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
 </template>
 
 <style scoped>
-.rc-tabs { display: flex; gap: 6px; margin-bottom: 14px; }
-.rc-tab { border: 1px solid var(--hairline); background: var(--canvas); color: var(--steel); padding: 7px 14px; border-radius: 999px; font-size: 13px; cursor: pointer; transition: all .14s; }
+.rc-tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.rc-tab { border: 1px solid var(--hairline); background: var(--canvas); color: var(--steel); padding: 7px 14px; border-radius: var(--radius-full, 999px); font-size: 13px; cursor: pointer; transition: all .14s; white-space: nowrap; }
 .rc-tab:hover { background: var(--surface-soft); color: var(--ink); }
 .rc-tab.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--ink); font-weight: 600; }
-.res-sec { padding: 18px 20px; margin-bottom: 14px; }
+/* 标签页内容容器：统一去掉末个子卡片的悬挂外边距，避免底部出现多余空白 */
+.rc-tab-content > :last-child { margin-bottom: 0; }
+.res-sec { margin-bottom: 14px; }
 .res-sec-head {
   display: flex; align-items: center; gap: 7px;
   font-size: 13.5px; font-weight: 700; color: var(--ink);
@@ -574,15 +699,28 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
   animation: res-spin 0.7s linear infinite;
 }
 @keyframes res-spin { to { transform: rotate(360deg); } }
+/* 高度交给全局 .overlay-card .res-result-text{flex:1}：这里不再自设 max-height，
+   否则会与全局规则同特异度打架，导致弹窗下方留大片空白 */
 .res-result-text {
   white-space: pre-wrap; word-break: break-word;
   font-family: var(--mono); font-size: 12px; line-height: 1.7;
   color: var(--slate); background: var(--surface-soft);
   border: 1px solid var(--hairline); border-radius: 10px;
-  padding: 12px 14px; max-height: 52vh; overflow: auto;
+  padding: 12px 14px; overflow: auto;
   margin: 0;
 }
 .res-bar { flex: 1; min-width: 90px; height: 5px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; margin: 4px 0 0; }
 .res-bar-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.15s linear; }
 .res-bar-err { flex-basis: 100%; font-size: 10.5px; color: var(--error); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 曲库文件与 Rust 核心 */
+.lib-stats { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; max-width: 440px; }
+.lib-badge { padding: 1px 8px; border-radius: 999px; background: var(--surface-soft); color: var(--slate); font-size: 10.5px; font-family: var(--mono); white-space: nowrap; }
+.lib-badge.on { background: var(--success-bg); color: var(--success-text); }
+.lib-badge.off { background: var(--surface-soft); color: var(--stone); }
+.lib-path { font-family: var(--mono); font-size: 10.5px; color: var(--stone); max-width: 440px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-result { font-size: 12px; color: var(--slate); line-height: 1.8; padding: 8px 10px; margin-top: 8px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface-soft); }
+.lib-result b { color: var(--ink); font-family: var(--mono); }
+.lib-result b.bad { color: var(--error); }
+.lib-bad { font-family: var(--mono); font-size: 10.5px; color: var(--stone); word-break: break-all; margin-top: 2px; }
+.lib-err { margin-top: 8px; font-size: 11.5px; color: var(--error); word-break: break-all; }
 </style>

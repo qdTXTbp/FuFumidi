@@ -2,6 +2,7 @@
 // 主进程视频服务：WebM/WAV 离线合成 MP4
 // ============================================================
 'use strict';
+const Paths = require('./paths');
 
 function registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, parsePyJson }) {
   // 视频导出：接收渲染器录制的 WebM（可视化 + 可选离线渲染的 WAV 音频）→ 内置 ffmpeg 合成 MP4
@@ -15,7 +16,7 @@ function registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
         filters: [{ name: 'MP4 视频', extensions: ['mp4'] }],
       });
       if (save.canceled || !save.filePath) return { ok: false, canceled: true };
-      const tmpDir = path.join(app.getPath('temp'), 'fufumidi-video');
+      const tmpDir = path.join(Paths.tempDir(), 'fufumidi-video');
       fs.mkdirSync(tmpDir, { recursive: true });
       const webm = path.join(tmpDir, Date.now() + '.webm');
       fs.writeFileSync(webm, Buffer.from(opts.data));

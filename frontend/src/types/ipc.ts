@@ -226,6 +226,67 @@ export interface RustStatusResult {
   version?: string;
 }
 
+/** 数据目录中的单个功能区（模型 / GPU 增强包 / 音色库 / 声库 / 曲库文件 / 缓存 / 中间产物） */
+export interface DataRootEntry {
+  key: string;
+  label: string;
+  dir: string;
+  exists: boolean;
+  /** 旧版落点（迁移尚未完成时非空） */
+  legacyDir?: string | null;
+  /** true = 旧位置仍有数据、尚未迁移到数据根目录 */
+  pending?: boolean;
+  /** true = 数据目录里已有同名内容，为避免覆盖已跳过迁移（当前沿用旧位置） */
+  conflict?: boolean;
+  /** true = 体积统计超出预算（只统计了一部分） */
+  sizePartial?: boolean;
+  size: number;
+}
+
+/** 声库资源中心条目（utau:voicebankRegistry） */
+export interface VoicebankEntry {
+  id: string;
+  name: string;
+  author: string;
+  /** 语言与录音方式（単独音 / 擴張整音 等） */
+  lang: string;
+  desc: string;
+  /** 使用条款摘要（原样展示，由使用者自行遵守） */
+  license: string;
+  /** 上游仓库 / 官方页 */
+  repo: string;
+  officialUrl: string;
+  installed: boolean;
+  /** 安装目标目录 */
+  dir: string;
+  /** 已安装时的实际占用字节数 */
+  size: number;
+}
+
+/** 声库下载/解包进度（utau:voicebankProgress） */
+export interface VoicebankProgress {
+  id: string;
+  phase?: 'download' | 'extract' | 'done' | 'error';
+  received?: number;
+  total?: number;
+  percent: number;
+  done: boolean;
+  error?: string;
+}
+
+/** 数据目录概览（system:dataRoot） */
+export interface DataRootOverview {
+  ok: boolean;
+  root?: string;
+  reason?: string;
+  installRoot?: string;
+  legacyBase?: string;
+  configured?: string;
+  entries?: DataRootEntry[];
+  migration?: { moved: string[]; failed: { name: string; error: string }[]; at: string } | null;
+  error?: string;
+}
+
 export interface DbStatusResult {
   ok?: boolean;
   mode: 'none' | 'json' | 'sqlite' | string;
@@ -294,10 +355,16 @@ export interface FuBridge {
   openOutput(p: string): Promise<GeneralResult>;
   utauExportVoicebank(opts: { dir: string; files: { name: string; data: string }[] }): Promise<GeneralResult>;
   utauExportVoicebankZip(opts: { files: { name: string; data: string }[] }): Promise<GeneralResult & { canceled?: boolean; path?: string; count?: number }>;
-  utauRenderTrack(cfg: { voicebank: string; notes: any[]; sampleNote: string; bpm?: number }): Promise<GeneralResult & { out?: string; bytes?: number[]; duration_ms?: number }>;
+  utauRenderTrack(cfg: { voicebank: string; notes: any[]; sampleNote: string; bpm?: number }): Promise<GeneralResult & { out?: string; bytes?: Uint8Array | number[]; duration_ms?: number; warnings?: string[]; engineVersion?: string }>;
   utauAliases(cfg: { voicebank: string; query?: string; limit?: number }): Promise<{ ok: boolean; aliases?: string[]; count?: number; total?: number; error?: string }>;
+  utauFlags(): Promise<{ ok: boolean; engine_version?: string; supported?: { flag: string; default: number | null; min: number | null; max: number | null; desc: string }[]; unsupported?: { flag: string; desc: string }[]; example?: string; error?: string }>;
   utauListVoicebanks(): Promise<{ ok: boolean; list?: { name: string; dir: string }[]; error?: string }>;
   utauImportVoicebankZip(): Promise<{ ok: boolean; canceled?: boolean; name?: string; dir?: string; error?: string }>;
+  /** 声库资源中心：可一键安装的开源/免费声库条目 */
+  utauVoicebankRegistry(): Promise<{ ok: boolean; dir?: string; list?: VoicebankEntry[]; error?: string }>;
+  utauDownloadVoicebank(id: string): Promise<{ ok: boolean; canceled?: boolean; existed?: boolean; name?: string; dir?: string; files?: number; size?: number; error?: string }>;
+  utauCancelVoicebankDownload(id: string): Promise<GeneralResult>;
+  onVoicebankProgress(cb: (p: VoicebankProgress) => void): () => void;
   pickZip(): Promise<string[] | null>;
 
   // gpu
@@ -318,6 +385,32 @@ export interface FuBridge {
   autostartGet(): Promise<{ ok: boolean; openAtLogin: boolean; error?: string }>;
   autostartSet(open: boolean): Promise<{ ok: boolean; openAtLogin: boolean; error?: string }>;
   clearUserData(scopes: string[]): Promise<{ ok: boolean; done?: string[]; needRestart?: boolean; error?: string }>;
+  /** 数据目录概览：依赖 / 环境 / 模型 / 缓存的统一落点 */
+  dataRoot(): Promise<DataRootOverview>;
+  openDataRoot(sub?: string): Promise<{ ok: boolean; dir?: string; error?: string }>;
+  cleanTemp(): Promise<{ ok: boolean; freed?: number; dir?: string; error?: string }>;
+  /** 曲库文件：每个 MIDI 曲目对应的真实 .mid 文件 */
+  writeMidi(opts: { name: string; bytes: Uint8Array | number[]; path?: string }): Promise<{ ok: boolean; path?: string; existed?: boolean; error?: string }>;
+  hasMidi(p: string): Promise<{ ok: boolean; exists: boolean; size?: number }>;
+  checkMidi(items: { id: string; name: string; path?: string }[]): Promise<{ ok: boolean; missing: { id: string; name: string }[]; root?: string }>;
+  deleteMidi(p: string): Promise<{ ok: boolean; deleted?: boolean; error?: string }>;
+  revealMidi(p: string): Promise<{ ok: boolean; path?: string; fellBackToDir?: boolean; error?: string }>;
+  midiStats(): Promise<{ ok: boolean; dir?: string; count: number; bytes: number; error?: string }>;
+  /** 曲库文件体检（Rust 核心 batch-stats，回退 JS） */
+  verifyMidi(): Promise<{
+    ok: boolean; engine: 'rust' | 'js'; dir?: string; count: number; badCount: number;
+    totalNotes: number; totalBytes: number;
+    files: { file: string; ok: boolean; error?: string; tracks?: number; notes?: number; bpm?: number; size?: number }[];
+    bad: { file: string; ok: boolean; error?: string }[];
+    error?: string;
+  }>;
+  /** 重复曲库文件检测（Rust 核心 hash-batch，回退 JS） */
+  dupeMidi(): Promise<{
+    ok: boolean; engine: 'rust' | 'js'; dir?: string; count: number;
+    dupeGroups: number; dupeFiles: number;
+    groups: { file: string; size: number }[][];
+    error?: string;
+  }>;
   onTrayControl(cb: (act: string) => void): () => void;
   readSidecarLyrics(filePath: string): Promise<{ ok: boolean; path?: string; b64?: string; bytes?: number; error?: string }>;
   updateDownload(url: string): Promise<any>;

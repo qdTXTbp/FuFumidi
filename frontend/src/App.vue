@@ -608,10 +608,12 @@ onBeforeUnmount(() => {
 .imp-pl-new { display: flex; gap: 8px; align-items: center; }
 
 /* GPU 安装常驻通知条 */
-.gpu-bar { position: fixed; right: 16px; bottom: 76px; z-index: 980; width: min(340px, 90vw);
+.gpu-bar { position: fixed; right: 16px; bottom: calc(var(--playerbar-h) + 8px); z-index: 980; width: min(340px, 90vw);
   display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border-radius: 12px;
   background: var(--canvas, #fff); border: 1px solid var(--border, rgba(0,0,0,.12));
   box-shadow: 0 12px 32px rgba(16,24,40,.18); cursor: pointer; }
+/* 播放栏收起时（no-player）通知条贴底，避免悬空 */
+.app-shell.no-player .gpu-bar { bottom: 16px; }
 .gpu-bar > svg { color: var(--brand, #4B3FE3); margin-top: 1px; flex: none; }
 .gpu-bar.err > svg { color: #d33; }
 .gpu-bar-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
@@ -626,7 +628,7 @@ onBeforeUnmount(() => {
 .gpu-bar-x:hover { background: var(--surface-muted, #EFEFF2); color: var(--ink, #171717); }
 
 /* ===== 模型下载：顶部通知条 ===== */
-.dl-noti { position: fixed; top: 0; left: 50%; transform: translate(-50%, 0); z-index: 990;
+.dl-noti { position: fixed; top: 0; left: 50%; transform: translate(-50%, 0); z-index: 995;
   display: flex; flex-direction: column; align-items: center; pointer-events: none;
   transition: transform .42s cubic-bezier(.22,.72,.22,1); padding-bottom: 12px; }
 .dl-noti.peek { transform: translate(-50%, calc(-100% + 26px)); }   /* 上移露出 26px 细条 */

@@ -97,8 +97,8 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 </script>
 
 <template>
-  <div class="page vm-page">
-    <div class="page-head">
+  <div class="page page-flat vm-page">
+    <div class="page-head page-head-sm">
       <div class="page-ic"><Icon name="box" :size="20" /></div>
       <div class="grow">
         <div class="page-title">{{ t('模型管理') }}</div>

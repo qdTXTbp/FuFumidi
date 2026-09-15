@@ -150,15 +150,23 @@ def test_render_pitch_difference(tmp_path):
 
 
 def test_render_unknown_lyric(tmp_path):
+    """未知歌词默认回退到首个原音并给出 warnings；--strict 时直接报错（v0.2.0）。"""
     vb_dir = str(tmp_path / "vb")
     make_test_voicebank(vb_dir)
     out = str(tmp_path / "x.wav")
     p, result = run_render(vb_dir, "--lyric", "不存在", "--note", "C4",
                            "--length", "300", "--out", out)
-    assert p.returncode != 0
-    assert result and result["ok"] is False
-    assert "不存在" in result["error"]
-    assert not os.path.exists(out)
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    assert result and result["ok"] is True, result
+    assert any("不存在" in w for w in result.get("warnings", [])), result
+    assert os.path.isfile(out)
+
+    out2 = str(tmp_path / "y.wav")
+    p2, r2 = run_render(vb_dir, "--lyric", "不存在", "--note", "C4",
+                        "--length", "300", "--strict", "--out", out2)
+    assert p2.returncode != 0
+    assert r2 and r2["ok"] is False and "不存在" in r2["error"]
+    assert not os.path.exists(out2)
 
 
 def run_render_track(vb_dir, notes, *args):
@@ -532,6 +540,191 @@ def test_auto_oto_command(tmp_path):
         text = fh.read()
     assert "か.wav=か" in text
     assert len(text.splitlines()) == 6
+
+
+# ---------------------------------------------------------------- v0.2.0 专业化
+def _spec_centroid(x, sr=SR):
+    """整段频谱重心（不依赖固定时间窗，适合变速后的片段）。"""
+    seg = np.asarray(x, dtype=np.float64)
+    if len(seg) < 64:
+        return 0.0
+    spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
+    freqs = np.fft.rfftfreq(len(seg), 1.0 / sr)
+    return float((freqs * spec).sum() / max(1e-9, spec.sum()))
+
+
+def _envelope_peak(x, lo=300.0, hi=3500.0, sr=SR, t0=0.10, t1=0.45):
+    """频谱包络（平滑掉谐波结构）的峰值频率 —— 用来衡量共振峰位置。"""
+    seg = np.asarray(x, dtype=np.float64)[int(t0 * sr):int(t1 * sr)]
+    if len(seg) < 64:
+        seg = np.asarray(x, dtype=np.float64)
+    spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
+    freqs = np.fft.rfftfreq(len(seg), 1.0 / sr)
+    df = freqs[1] - freqs[0]
+    w = max(3, int(300.0 / max(df, 1e-9)))
+    env = np.convolve(spec, np.ones(w) / w, mode="same")
+    band = (freqs >= lo) & (freqs <= hi)
+    return float(freqs[band][int(np.argmax(env[band]))])
+
+
+def make_formant_voicebank(vb_dir, f0=196.0, formant=800.0):
+    """带明确共振峰（默认 800Hz）的谐波音源：验证变调是否保住共振峰。"""
+    import soundfile as sf
+    os.makedirs(vb_dir, exist_ok=True)
+    dur = 0.45
+    t = np.arange(int(dur * SR)) / SR
+    sig = np.zeros_like(t)
+    for h in range(1, int(SR / 2 / 0.9 / f0)):
+        f = f0 * h
+        amp = np.exp(-0.5 * ((f - formant) / 380.0) ** 2) + 0.02 / h
+        sig += amp * np.sin(2 * np.pi * f * t)
+    env = np.clip(t / 0.02, 0, 1) * np.clip((dur - t) / 0.03, 0, 1)
+    sf.write(os.path.join(vb_dir, "あ.wav"), (sig * env * 0.4).astype(np.float32), SR,
+             subtype="PCM_16")
+    with open(os.path.join(vb_dir, "oto.ini"), "wb") as fh:
+        fh.write("あ.wav=あ,0,5,10,5,3\n".encode("utf-8"))
+    return vb_dir
+
+
+def test_parse_flags():
+    """flags 解析：连写、正负号、夹紧、无参 flag、未知字母。"""
+    from engine_utau import parse_flags
+    values, given, unsupported = parse_flags("g-3B50Y90")
+    assert values == {"g": -3.0, "B": 50.0, "Y": 90.0}, values
+    assert given == ["g", "B", "Y"] and unsupported == []
+
+    v2, _, _ = parse_flags("g999")
+    assert v2["g"] == 100.0, v2          # 越界夹紧
+    v3, g3, _ = parse_flags("N")
+    assert v3 == {"N": None} and g3 == ["N"]
+    _, _, un = parse_flags("g5WQ9")
+    assert un == ["W"], un               # 未知字母被忽略，已知不支持项被记录
+    v4, _, _ = parse_flags("")
+    assert v4 == {}
+
+
+def test_psola_duration_and_unit():
+    """PSOLA/O LA 单元行为：变调不改变时长；OLA 伸缩保持频谱重心。"""
+    from engine_utau import _ola_stretch, _pitch_resample, _psola_shift
+    vow = _synth_vowel(196.0, 0.5, seed=7)
+    for ratio in (1.5, 0.7):
+        y = _psola_shift(vow, SR, ratio, 196.0)
+        assert len(y) == len(vow), (ratio, len(y), len(vow))
+        assert not np.isnan(y).any()
+
+    noise = _synth_consonant(0.12, seed=3)
+    base_c = _spec_centroid(noise)
+    st = _ola_stretch(noise, SR, 2.0)
+    rs = _pitch_resample(noise, 0.5)
+    assert abs(len(st) - 2 * len(noise)) / (2 * len(noise)) < 0.05, len(st)
+    assert abs(_spec_centroid(st) - base_c) / base_c < 0.15, "OLA 不应改变频谱重心"
+    assert abs(_spec_centroid(rs) - base_c) / base_c > 0.30, "线性变速会把频谱整体搬走"
+
+
+def test_psola_keeps_formant(tmp_path):
+    """核心质量断言：变调 +7 半音时，PSOLA 保住共振峰，线性重采样把共振峰搬走。"""
+    vb_dir = make_formant_voicebank(str(tmp_path / "vb"))
+    args = ["--lyric", "あ", "--length", "600", "--sample-note", "G3"]
+    outs = {}
+    for tag, note, extra in (("base", "G3", []),
+                             ("psola", "D4", []),
+                             ("linear", "D4", ["--flags", "N"])):
+        path = str(tmp_path / f"f_{tag}.wav")
+        p, r = run_render(vb_dir, *args, "--note", note, *extra, "--out", path)
+        assert p.returncode == 0 and r["ok"] is True, (p.stdout, r)
+        import soundfile as sf
+        outs[tag] = sf.read(path)[0]
+
+    f_base = _f0_fft(outs["base"], lo=120, hi=400)
+    f_ps = _f0_fft(outs["psola"], lo=150, hi=600)
+    f_ln = _f0_fft(outs["linear"], lo=150, hi=600)
+    assert f_ps == pytest.approx(f_base * 2 ** (7 / 12), rel=0.04), (f_base, f_ps)
+    assert f_ln == pytest.approx(f_ps, rel=0.04), (f_ps, f_ln)
+
+    pk_base = _envelope_peak(outs["base"])
+    pk_ps = _envelope_peak(outs["psola"])
+    pk_ln = _envelope_peak(outs["linear"])
+    assert abs(pk_base - 800) < 150, pk_base
+    assert abs(pk_ps - 800) < 180, f"PSOLA 应保住共振峰：{pk_ps}"
+    assert pk_ln > 950, f"线性重采样应把共振峰搬高：{pk_ln}"
+
+
+def test_flags_pitch_and_gender(tmp_path):
+    """t flag 按 10 音分/单位移调；g flag 调整共振峰（正=更暗、负=更亮）。"""
+    vb_dir = str(tmp_path / "vb")
+    make_test_voicebank(vb_dir)
+    args = ["--lyric", "あ", "--note", "C4", "--length", "600", "--sample-note", "G3"]
+    outs = {}
+    for tag, extra in (("base", []), ("t10", ["--flags", "t10"]),
+                       ("g40", ["--flags", "g40"]), ("gm40", ["--flags", "g-40"])):
+        path = str(tmp_path / f"fl_{tag}.wav")
+        p, r = run_render(vb_dir, *args, *extra, "--out", path)
+        assert p.returncode == 0 and r["ok"] is True, (p.stdout, r)
+        assert r["engine_version"] == "0.2.0"
+        import soundfile as sf
+        outs[tag] = sf.read(path)[0]
+
+    assert _f0_fft(outs["t10"]) == pytest.approx(_f0_fft(outs["base"]) * 2 ** (100 / 1200), rel=0.03)
+    assert _centroid(outs["g40"]) < _centroid(outs["base"]) * 0.98
+    assert _centroid(outs["gm40"]) > _centroid(outs["base"]) * 1.02
+
+
+def test_flags_breath_and_unsupported_warning(tmp_path):
+    """B flag 增加气声；不支持的 flag 不静默忽略，而是进 warnings。"""
+    vb_dir = str(tmp_path / "vb")
+    make_test_voicebank(vb_dir)
+    args = ["--lyric", "あ", "--note", "C4", "--length", "600", "--sample-note", "G3"]
+    p1, r1 = run_render(vb_dir, *args, "--out", str(tmp_path / "b0.wav"))
+    p2, r2 = run_render(vb_dir, *args, "--flags", "B90W", "--out", str(tmp_path / "b90.wav"))
+    assert p1.returncode == 0 and p2.returncode == 0 and r1["ok"] and r2["ok"]
+    import soundfile as sf
+    dry = sf.read(str(tmp_path / "b0.wav"))[0]
+    wet = sf.read(str(tmp_path / "b90.wav"))[0]
+    assert _band_energy(wet, 2000, 7000) > _band_energy(dry, 2000, 7000) * 1.5
+    assert any("W" in w for w in r2["warnings"]), r2["warnings"]
+    assert r2["flags"] == ["B"], r2["flags"]      # W 不属于受支持集合
+
+
+def test_flags_command(tmp_path):
+    """flags CLI：列出受支持与已知不支持项（供 UI 展示说明）。"""
+    p = subprocess.run([PY, os.path.abspath(ENGINE), "flags"],
+                       capture_output=True, text=True, encoding="utf-8",
+                       cwd=os.path.dirname(ENGINE))
+    result = None
+    for line in (p.stdout or "").splitlines():
+        if line.startswith("###RESULT "):
+            result = json.loads(line[len("###RESULT "):])
+    assert p.returncode == 0 and result and result["ok"] is True, (p.stdout, p.stderr)
+    flags = {f["flag"] for f in result["supported"]}
+    assert {"g", "B", "b", "t", "a", "Y", "H", "C", "P", "N"} <= flags, flags
+    assert any(f["flag"] == "W" for f in result["unsupported"])
+    assert result["engine_version"] == "0.2.0"
+
+
+def test_equal_power_crossfade():
+    """等功率交叉淡化：两条淡化曲线的平方和恒为 1（不会像线性淡化那样掉 3dB）。"""
+    from engine_utau import _equal_power_crossfade
+    n = 512
+    on = np.ones(n)
+    z = np.zeros(n)
+    fade_out = _equal_power_crossfade(on, z)     # 纯 a→b 的淡出侧
+    fade_in = _equal_power_crossfade(z, on)      # 淡入侧
+    assert np.allclose(fade_out ** 2 + fade_in ** 2, 1.0, atol=1e-9)
+    assert float(fade_out[0]) == pytest.approx(1.0, abs=1e-9)
+    assert float(fade_out[-1]) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_render_track_returns_warnings(tmp_path):
+    """render_track 返回 (buf, warnings)：回退歌词会被记录下来。"""
+    from engine_utau import Voicebank, render_track
+    vb_dir = str(tmp_path / "vb")
+    make_test_voicebank(vb_dir)
+    vb = Voicebank(vb_dir)
+    buf, warnings = render_track(vb, [{"lyric": "か", "note": "C4", "length_ms": 200},
+                                      {"lyric": "未知", "note": "C4", "length_ms": 200}],
+                                 sample_note="G3")
+    assert len(buf) > 0 and float(np.max(np.abs(buf))) > 0.01
+    assert any("未知" in w for w in warnings), warnings
 
 
 if __name__ == "__main__":

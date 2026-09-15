@@ -1,9 +1,10 @@
-﻿// ============================================================
+// ============================================================
 // 主进程插件服务：插件宿主、清单加载、插件 IPC 与渲染层事件桥
 // ============================================================
 'use strict';
 
 const PluginHost = require('../plugin-host');
+const Paths = require('./paths');
 
 function createPluginService({ app, path, fs, shell, ipcMain, BrowserWindow, readSettings, writeSettings, spawnEngine }) {
   const PLUGINS_USER_DIR = () => path.join(app.getPath('userData'), 'fufumidi', 'plugins');
@@ -41,8 +42,8 @@ function createPluginService({ app, path, fs, shell, ipcMain, BrowserWindow, rea
       try {
         const srcPath = path.join(__dirname, '..', 'plugins', 'plugin-dev.html');
         if (!fs.existsSync(srcPath)) return { ok: false, path: srcPath };
-        // asar 归档内的文件无法用 shell.openPath 直接打开：先解出到系统临时目录再打开
-        const docDir = path.join(app.getPath('temp'), 'FuFumidi-dev-doc');
+        // asar 归档内的文件无法用 shell.openPath 直接打开：先解出到数据根目录的 temp/ 再打开
+        const docDir = path.join(Paths.tempDir(), 'FuFumidi-dev-doc');
         fs.mkdirSync(docDir, { recursive: true });
         const outPath = path.join(docDir, 'plugin-dev.html');
         fs.writeFileSync(outPath, fs.readFileSync(srcPath));

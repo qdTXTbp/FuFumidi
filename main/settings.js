@@ -27,6 +27,7 @@ const DEFAULT_SETTINGS = {
   lang: '',   // 界面语言：''=未设定（首次启动按浏览器语言确定），可选 'zh' | 'zh-Hant' | 'en' | 'ja'
   hf_token: '',   // HuggingFace 访问令牌（用于下载 gated 模型，如 MuScriptor 需授权）
   active_soundfont: 'internal',   // 播放时使用的音色库：'internal'=内置合成器，其余为 SF2 文件绝对路径（音色工坊选择，持久化）
+  data_root: '',  // 数据根目录（模型 / 依赖 / 缓存 / 临时文件的落点）；留空 = 自动（工具目录旁的 FuFumidiData）
 };
 
 function settingsPath() {

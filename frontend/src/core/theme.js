@@ -23,6 +23,7 @@ export const THEMES = [
   { id: 'gold',    name: '鎏金',   desc: '暖金奢华',           accent: '#fbbf24', accent2: '#fcd34d', hue: 45 },
   { id: 'light',   name: '浅色',   desc: '明亮浅色 · 适合白天', accent: '#3a7ad9', accent2: '#4f94e0', hue: 174 },
   { id: 'hc',      name: '高对比', desc: '深底高对比 · 无障碍', accent: '#00ffcc', accent2: '#66ffdd', hue: 170 },
+  { id: 'studio',  name: '专业工作站', desc: '深灰蓝 · 编曲 / 调声专业深色', accent: '#4f8ef7', accent2: '#8ab4ff', hue: 217 },
 ];
 
 export function themeById(id) { return THEMES.find(t => t.id === id) || THEMES[0]; }
@@ -82,6 +83,19 @@ export function paletteFor(name, accent, mode) {
       'brand-blue-mid': '#3b82f6', 'brand-blue-deep': '#1d4ed8', 'brand-blue-700': '#17437d', 'brand-blue-200': '#bfdbfe',
     };
   }
+  if (name === 'studio') {
+    // 专业工作站：固定深底（不受明暗模式影响），面板比画布抬升一级
+    return {
+      accent: a, accent2: '#8ab4ff', 'accent-dim': 'rgba(79,142,247,.20)',
+      bg0: '#15171c', bg1: '#191c22', bg2: '#1e2229',
+      panel: '#191c22', panel2: '#1e2229',
+      card: '#22262f', card2: '#2a2f39',
+      border: '#333a45', border2: '#454e5c',
+      text: '#e9ebef', text2: '#b6bdc9', text3: '#8a929f',
+      'brand-blue-mid': '#5b9cf8', 'brand-blue-deep': '#2f6fd0',
+      'brand-blue-700': '#1f4f9e', 'brand-blue-200': '#bfd8ff',
+    };
+  }
   if ((mode || 'light') === 'light') {
     // 浅色基底 + 任意主题强调色（明亮浅色，适合白天 / 经典浅色观感）
     return {
@@ -108,6 +122,8 @@ export function applyTheme(name, accent, mode) {
   const R = document.documentElement.style;
   const lightMode = (mode || 'light') === 'light';
   const pal = paletteFor(name, accent, mode);
+  // 深底主题：hc / studio 固定深色，其余由明暗模式决定
+  const dark = name === 'hc' || name === 'studio' || (!lightMode && name !== 'light');
 
   // 旧令牌（保持 canvas 引擎/旧组件兼容）
   const legacy = {
@@ -126,16 +142,13 @@ export function applyTheme(name, accent, mode) {
   R.setProperty('--hairline', pal.border);
   R.setProperty('--border-strong', pal.border2);
   R.setProperty('--ink', pal.text);
-  R.setProperty('--ink-strong', (name === 'hc' || (!lightMode && name !== 'light')) ? '#ffffff' : '#000000');
+  R.setProperty('--ink-strong', dark ? '#ffffff' : '#000000');
   R.setProperty('--charcoal', pal.text);
   R.setProperty('--slate', pal.text2);
   R.setProperty('--steel', pal.text2);
   R.setProperty('--stone', pal.text3);
   R.setProperty('--muted', pal.text3);
   R.setProperty('--footer-bg', pal.bg1);
-
-  // 按钮/激活态专用：浅色模式黑底白字，深色模式白底深字
-  const dark = name === 'hc' || (!lightMode && name !== 'light');
 
   // 毛玻璃令牌：跟随明暗主题（深色用暗色玻璃，浅色用白色玻璃）
   R.setProperty('--glass-bg', dark ? 'rgba(20,22,28,0.55)' : 'rgba(255,255,255,0.62)');
@@ -155,6 +168,42 @@ export function applyTheme(name, accent, mode) {
   R.setProperty('--brand-blue-deep', pal['brand-blue-deep']);
   R.setProperty('--brand-blue-700', pal['brand-blue-700']);
   R.setProperty('--brand-blue-200', pal['brand-blue-200']);
+
+  // 工作站语义令牌（网格 / 走带 / 车道 / 轨道色板）——随明暗基底切换
+  const ws = dark ? {
+    grid: 'rgba(255,255,255,0.06)', 'grid-strong': 'rgba(255,255,255,0.13)',
+    'grid-bar': 'rgba(255,255,255,0.26)', 'row-alt': 'rgba(255,255,255,0.035)',
+    'row-line': 'rgba(255,255,255,0.05)', 'playhead': '#ff7a52',
+    'playhead-soft': 'rgba(255,122,82,0.18)', 'sel': '#ff7a52',
+    'sel-soft': 'rgba(255,122,82,0.16)', 'tint': 'rgba(120,170,255,0.10)',
+    'tint-strong': 'rgba(120,170,255,0.22)',
+    'lane-line': 'rgba(255,255,255,0.10)', curve: '#6ea8ff',
+    'note-l': '64%', 'ks-bg': 'rgba(251,191,36,0.18)', 'ks-fg': '#fbbf24', cc: '#e3b341',
+    'wave-bg': 'rgba(110,168,255,0.07)', 'wave-bar': 'rgba(110,168,255,0.35)',
+    'note-fill': '#8b83f0', 'note-edge': 'rgba(0,0,0,0.42)',
+  } : {
+    grid: 'rgba(15,23,42,0.08)', 'grid-strong': 'rgba(15,23,42,0.16)',
+    'grid-bar': 'rgba(15,23,42,0.28)', 'row-alt': 'rgba(15,23,42,0.035)',
+    'row-line': 'rgba(15,23,42,0.06)', 'playhead': '#ff5530',
+    'playhead-soft': 'rgba(255,85,48,0.16)', 'sel': '#ff5530',
+    'sel-soft': 'rgba(255,85,48,0.14)', 'tint': 'rgba(20,86,240,0.06)',
+    'tint-strong': 'rgba(20,86,240,0.20)',
+    'lane-line': 'rgba(15,23,42,0.10)', curve: '#4f8ef7',
+    'note-l': '52%', 'ks-bg': 'rgba(245,158,11,0.18)', 'ks-fg': '#b45309', cc: '#d4a017',
+    'wave-bg': 'rgba(20,86,240,0.05)', 'wave-bar': 'rgba(20,86,240,0.35)',
+    'note-fill': '#8b83f0', 'note-edge': 'rgba(23,23,23,0.25)',
+  };
+  R.setProperty('--loop-region', dark ? 'rgba(110,168,255,0.14)' : 'rgba(79,142,247,0.13)');
+  for (const k in ws) R.setProperty('--' + k, ws[k]);
+
+  // 轨道色板：深底提亮、浅底加深，保证与背景的对比度
+  const tracks = dark
+    ? ['#5b9cf8', '#2dd4bf', '#4ade80', '#fbbf24', '#f87171', '#c084fc', '#22d3ee', '#f472b6']
+    : ['#3b82f6', '#14b8a6', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899'];
+  tracks.forEach((c, i) => R.setProperty('--track-' + (i + 1), c));
+  R.setProperty('--vel-low', tracks[0]);
+  R.setProperty('--vel-mid', tracks[2]);
+  R.setProperty('--vel-high', tracks[3]);
 }
 
 // 应用 + 持久化（localStorage 优先 + Electron settings 兜底）

@@ -61,7 +61,7 @@ function panStyle(i) {
     <template v-else>
       <PianoRoll />
 
-      <div class="grid" style="margin-top:16px;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr)">
+      <div class="grid play-grid">
         <!-- 轨道混音 -->
         <div class="card">
           <div class="card-title"><span class="dot"></span>{{ t('轨道混音器') }}</div>
@@ -117,3 +117,12 @@ function panStyle(i) {
     </template>
   </div>
 </template>
+
+<style scoped>
+/* 卷帘 + 混音/概览两栏：窄窗口自动堆叠，避免轨道行被挤压 */
+.play-grid { margin-top: 16px; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+.mix-track { min-width: 0; }
+@media (max-width: 980px) {
+  .play-grid { grid-template-columns: minmax(0, 1fr); }
+}
+</style>

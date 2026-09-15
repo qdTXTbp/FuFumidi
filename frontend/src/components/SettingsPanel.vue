@@ -103,6 +103,8 @@ const upd = reactive({
 /* ---------------- GPU 加速 ---------------- */
 
 const isCustomTheme = computed(() => !THEMES.some(x => x.id === form.theme));
+// 固定深色基底的主题：切换界面模式不会改变其观感（高对比 / 专业工作站）
+const isDarkFixed = computed(() => form.theme === 'hc' || form.theme === 'studio');
 const themeOpts = computed(() => {
   const list = THEMES.slice();
   if (isCustomTheme.value) list.push({ id: form.theme, name: t('自定义主题'), desc: '' });
@@ -261,6 +263,7 @@ onMounted(async () => {
     }
   } catch (e) {}
   closeToTray.value = (settingsStore.settings && settingsStore.settings.close_to_tray !== false);
+  loadDataRoot();
 });
 async function toggleAutostart() {
   try {
@@ -275,6 +278,48 @@ function toggleCloseToTray() {
   try { if (bridge && bridge.saveSettings) bridge.saveSettings({ close_to_tray: closeToTray.value }); } catch (e) {}
   app.toast(closeToTray.value ? t('最小化 / 关闭将隐藏到托盘后台播放') : t('关闭按钮将直接退出'), 'ok');
 }
+/* ---------------- 数据目录（依赖 / 环境 / 模型 / 缓存的统一落点） ---------------- */
+const dataRoot = reactive({ root: '', reason: '', installRoot: '', entries: [], busy: false });
+const REASON_TEXT = {
+  'install-dir': t('工具目录（默认）'),
+  'configured': t('自定义目录'),
+  'configured-not-writable': t('自定义目录不可写，已回退'),
+  'install-dir-not-writable': t('工具目录不可写，已回退到用户数据目录'),
+  'no-writable-location': t('未找到可写位置，已回退到用户数据目录'),
+};
+async function loadDataRoot() {
+  try {
+    if (!bridge || !bridge.dataRoot) return;
+    const r = await bridge.dataRoot();
+    if (r && r.ok) {
+      dataRoot.root = r.root || '';
+      dataRoot.reason = REASON_TEXT[r.reason] || r.reason || '';
+      dataRoot.installRoot = r.installRoot || '';
+      dataRoot.entries = Array.isArray(r.entries) ? r.entries : [];
+    }
+  } catch (e) {}
+}
+function openDataRoot(sub) {
+  try { if (bridge && bridge.openDataRoot) bridge.openDataRoot(sub || ''); } catch (e) {}
+}
+async function cleanTemp() {
+  dataRoot.busy = true;
+  try {
+    const r = await bridge.cleanTemp();
+    if (r && r.ok) app.toast(t('已清理中间产物，释放 ') + fmtSize(r.freed), 'ok');
+    else app.toast(t('清理失败：') + ((r && r.error) || ''), 'error');
+    loadDataRoot();
+  } catch (e) { app.toast(t('清理失败：') + String(e), 'error'); }
+  dataRoot.busy = false;
+}
+function fmtSize(b) {
+  const n = Number(b) || 0;
+  if (n <= 0) return '0 MB';
+  if (n > 1 << 30) return (n / (1 << 30)).toFixed(2) + ' GB';
+  if (n > 1 << 20) return (n / (1 << 20)).toFixed(1) + ' MB';
+  return (n / 1024).toFixed(0) + ' KB';
+}
+
 async function clearUserData() {
   const ok = await app.confirmDialog({
     title: t('清除用户数据'),
@@ -685,7 +730,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
           <div class="field-row">
             <div>
               <div class="fr-label">{{ t('界面主题') }}</div>
-              <div class="fr-hint">{{ t('从主题库选择，或在此切换') }}</div>
+              <div class="fr-hint">{{ isDarkFixed ? t('该主题固定深色基底，不受界面模式影响') : t('从主题库选择，或在此切换') }}</div>
             </div>
             <div class="fr-ctl">
               <select v-model="form.theme" class="ov-input" style="width:150px" @change="onThemeChange">
@@ -978,6 +1023,30 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
             </div>
             <div class="fr-ctl">
               <button class="btn sm" :class="{ primary: closeToTray }" @click="toggleCloseToTray">{{ closeToTray ? t('已开启') : t('已关闭') }}</button>
+            </div>
+          </div>
+          <div class="field-row" style="margin-top:18px;border-top:1px solid var(--hairline);padding-top:14px">
+            <div>
+              <div class="fr-label">{{ t('数据目录') }}</div>
+              <div class="fr-hint">{{ t('模型权重、GPU 增强包、音色库、声库、第三方缓存与中间产物都集中在这里，默认位于工具目录旁的 FuFumidiData，不占用 C 盘；应用内更新不会删除该目录。') }}</div>
+            </div>
+            <div class="fr-ctl col">
+              <input :value="dataRoot.root" class="ov-input mono" style="width:100%;max-width:420px" readonly :title="dataRoot.root" />
+              <div class="dr-meta">
+                <span class="dr-badge">{{ dataRoot.reason || t('读取中…') }}</span>
+                <span v-if="dataRoot.installRoot" class="dr-path" :title="dataRoot.installRoot">{{ t('工具目录：') }}{{ dataRoot.installRoot }}</span>
+              </div>
+              <div class="dr-entries">
+                <button v-for="e in dataRoot.entries" :key="e.key" class="dr-entry" :title="e.dir + (e.pending ? t('（迁移待完成，当前仍使用旧位置）') : '')" @click="openDataRoot(e.key)">
+                  <span class="dr-entry-l">{{ e.label }}</span>
+                  <span class="dr-entry-s">{{ e.size ? fmtSize(e.size) : t('空') }}</span>
+                  <span v-if="e.pending" class="dr-entry-w">{{ e.conflict ? t('目标已有内容') : t('待迁移') }}</span>
+                </button>
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <button class="btn sm" @click="openDataRoot('')">{{ t('打开数据目录') }}</button>
+                <button class="btn sm ghost" :disabled="dataRoot.busy" @click="cleanTemp">{{ dataRoot.busy ? t('清理中…') : t('清理中间产物') }}</button>
+              </div>
             </div>
           </div>
           <div class="field-row">

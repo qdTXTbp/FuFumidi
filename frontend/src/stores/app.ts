@@ -129,6 +129,9 @@ function cryptoId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
+/** 曲库文件自检的 single-flight 句柄（并发调用复用同一轮） */
+let _ensureLibP: Promise<{ rebuilt: number; pruned: number }> | null = null;
+
 /* 内容指纹：名称 + 大小 + FNV-1a 哈希，用于导入去重 */
 function contentFp(name: string, bytes: Uint8Array): string {
   let h = 0x811c9dc5;
@@ -299,9 +302,10 @@ export const useAppStore = defineStore('app', {
       else if (kind === 'alert') r(undefined);
       else r(false);
     },
-    async importFiles(items: any[], target?: string) {
+    async importFiles(items: any[], target?: string, opts?: { keepPlaying?: boolean }) {
       // target: 歌单 id | 'all'（仅加入资料库/全部曲目，不归入任何歌单）
       //         | undefined（沿用当前激活歌单，否则默认歌单）
+      // opts.keepPlaying: 后台导入（如转录完成）时，若正在播放则不抢切曲目
       let ok = 0, dup = 0, linked = 0;
       const imported: string[] = [];
       for (const it of items) {
@@ -349,17 +353,20 @@ export const useAppStore = defineStore('app', {
         let mid: any;
         try { mid = parseMidi(bytes); } catch (e: any) { this.toast(t('无法解析 ') + it.name + t('：') + e.message, 'warn'); continue; }
         const song: any = buildSong(mid, { name });
+        // 每个 MIDI 曲目都必须对应一个真实 .mid 文件（<数据根目录>/midi），
+        // 落盘失败也照样入库，但会在启动自检里被重建，绝不会留下「只有名字没有内容」的空壳
+        const filePath = await this.writeMidiFile(name, bytes as Uint8Array);
         const item = {
           id: cryptoId(),
           name: song.name,
           song,
           __bytes: bytes,
-          meta: { size: it.bytes.byteLength, time: Date.now(), tracks: song.tracks.length, dur: song.totalSec, fp: bytes ? contentFp(name, bytes) : '' },
+          meta: { size: it.bytes.byteLength, time: Date.now(), tracks: song.tracks.length, dur: song.totalSec, fp: bytes ? contentFp(name, bytes) : '', path: filePath },
         };
         this.songs.push(item);
         imported.push(item.id);
-        await idbPut(STORE_SONGS, { id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, dur: item.meta.dur, fp: item.meta.fp, bytes });
-        await dbSongPut({ id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, dur: item.meta.dur, fp: item.meta.fp, bytes: Array.from(bytes as any) });
+        await idbPut(STORE_SONGS, { id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, dur: item.meta.dur, fp: item.meta.fp, path: filePath, bytes });
+        await dbSongPut({ id: item.id, name: it.name, size: item.meta.size, time: item.meta.time, dur: item.meta.dur, fp: item.meta.fp, path: filePath, bytes: Array.from(bytes as any) });
         ok++;
       }
       // 批量归入目标歌单（全部曲目即全局资料库，无需额外归入）
@@ -374,9 +381,16 @@ export const useAppStore = defineStore('app', {
         }
       }
       if (ok > 0 || linked > 0) {
+        let keptPlaying = false;
         if (ok > 0) {
           const last = this.songs[this.songs.length - 1];
-          await this.selectSong(last.id);
+          // 后台导入（转录完成等）正在播放时不打断当前曲目：只入库/入歌单，
+          // 由用户自己决定何时切换；用户显式导入（对话框/拖放/新建）仍直接切到新曲目。
+          if (opts && opts.keepPlaying && this.playing && this.currentId) {
+            keptPlaying = true;
+          } else {
+            await this.selectSong(last.id);
+          }
         }
         let suffix = dup ? t('，跳过 ') + dup + t(' 首重复') : '';
         if (linked) suffix = t('，加入歌单 ') + linked + t(' 首已有曲目') + suffix;
@@ -384,6 +398,7 @@ export const useAppStore = defineStore('app', {
           const plName = usePlaylistStore().playlists.find(p => p.id === target)?.name;
           if (plName) suffix = t(' 到「') + plName + t('」') + suffix;
         }
+        if (keptPlaying) suffix += t('（正在播放，未切换曲目）');
         this.toast(t('已导入 ') + ok + t(' 首 MIDI') + suffix);
       } else if (dup > 0) {
         this.toast(t('所选曲目已在资料库中，未重复导入'), 'warn');
@@ -436,7 +451,7 @@ export const useAppStore = defineStore('app', {
       // 否则 Array.from(ArrayBuffer) 又会写成空数组）。写完即收敛，不会每次启动都重写。
       for (const r of backfill) {
         const rb = toBytes(r.bytes)!;
-        await dbSongPut({ id: r.id, name: r.name, size: r.size || 0, time: r.time || 0, dur: r.dur || 0, fp: r.fp || '', bytes: Array.from(rb) });
+        await dbSongPut({ id: r.id, name: r.name, size: r.size || 0, time: r.time || 0, dur: r.dur || 0, fp: r.fp || '', path: r.path || '', bytes: Array.from(rb) });
       }
 
       for (const r of byId.values()) {
@@ -446,7 +461,7 @@ export const useAppStore = defineStore('app', {
           name: String(r.name || t('未命名')).replace(/\.(mid|midi|kar|rmi)$/i, ''),
           kind: r.kind || 'midi',
           song: null,
-          meta: { size: r.size || 0, time: r.time || 0, dur: r.dur || 0, fp: r.fp || '' },
+          meta: { size: r.size || 0, time: r.time || 0, dur: r.dur || 0, fp: r.fp || '', path: r.path || '' },
           __bytes: toBytes(r.bytes),
         });
       }
@@ -459,6 +474,8 @@ export const useAppStore = defineStore('app', {
       try { active = localStorage.getItem('fufumidi_active'); } catch (e) {}
       if (active && this.songs.some((s: any) => s.id === active)) await this.selectSong(active);
       else await this.selectSong(this.songs[this.songs.length - 1].id);
+      // 曲库文件自检（后台）：补齐缺失的 .mid 文件、清掉取不到内容的空壳曲目
+      this.ensureLibraryFiles().catch(() => {});
     },
     /** 云同步用：仅从内存移除曲目（DB 侧由同步逻辑负责），不触发其它副作用 */
     dropSongsLocal(ids: string[]) {
@@ -476,20 +493,26 @@ export const useAppStore = defineStore('app', {
           name: String(r.name || t('未命名')).replace(/\.(mid|midi|kar|rmi)$/i, ''),
           kind: r.kind || 'midi',
           song: null,
-          meta: { size: r.size || 0, time: r.time || 0, dur: r.dur || 0, fp: r.fp || '' },
+          meta: { size: r.size || 0, time: r.time || 0, dur: r.dur || 0, fp: r.fp || '', path: r.path || '' },
           __bytes: toBytes(r.bytes),
         });
       }
     },
-    async removeSong(id: string) {
+    async removeSong(id: string, opts?: { deleteFile?: boolean }) {
       const i = this.songs.findIndex((s: any) => s.id === id);
       if (i < 0) return;
       const wasCurrent = this.currentId === id;
+      const item = this.songs[i];
       const { player } = ensureAudio();
       if (wasCurrent) { player.stop(); this.playing = false; this.currentId = null; this.tracks = []; }
       this.songs.splice(i, 1);
       await idbDelete(STORE_SONGS, id);
       await dbSongDelete(id);
+      // 曲目对应的真实 .mid 文件：只有「删除」语义才删磁盘文件，「移除」只解除歌单归属
+      if (opts && opts.deleteFile) {
+        const p = item && item.meta && item.meta.path;
+        if (p) { try { await bridge.deleteMidi(p); } catch (e) {} }
+      }
       // 同步清理歌单与收藏中的引用：否则会残留悬空 id，歌单显示数大于实际曲目数
       try {
         const plStore = usePlaylistStore();
@@ -498,17 +521,87 @@ export const useAppStore = defineStore('app', {
         if (fi >= 0) { plStore.favorites.splice(fi, 1); plStore.persistFavs(); }
       } catch (e) {}
       if (wasCurrent) { try { localStorage.removeItem('fufumidi_active'); } catch (e) {} }
-      if (this.songs.length) {
+      // 只有「删掉的正是当前曲目」才需要另选一首续上；
+      // 否则（删除别的曲目 / 后台清理空壳）绝不能重新 selectSong —— 那会 stop+load 当前曲目，
+      // 表现为「删一首歌，正在播放的音乐突然从头开始」。
+      if (wasCurrent && this.songs.length) {
         // 优先选择当前队列中的下一首，避免跳出歌单/搜索结果
         const q = this.queueSongs;
         if (q.length) await this.selectSong(q[0].id);
         else await this.selectSong(this.songs[0].id);
       }
     },
+    /** 把字节写成曲目的真实 .mid 文件；失败返回空串（不影响入库，后续自检会重建） */
+    async writeMidiFile(name: string, bytes: any): Promise<string> {
+      try {
+        if (!bridge || typeof bridge.writeMidi !== 'function') return '';
+        const b = toBytes(bytes);
+        if (!b) return '';
+        const r = await bridge.writeMidi({ name, bytes: b });
+        return (r && r.ok && r.path) ? String(r.path) : '';
+      } catch (e) { return ''; }
+    },
+    /**
+     * 曲库文件自检：保证「每个 MIDI 曲目都有真实 .mid 文件」。
+     * 1) 文件缺失且有字节（内存 / IndexedDB / SQLite）→ 重建文件并回写 path；
+     * 2) 文件缺失且到处都取不到字节 → 判定为空壳曲目，从曲库与歌单中清理。
+     * 返回 { rebuilt, pruned }。
+     */
+    async ensureLibraryFiles(): Promise<{ rebuilt: number; pruned: number }> {
+      // single-flight：启动自检与「清理失效曲目」可能同时触发，
+      // 并发跑会让同一曲目被写两次（主进程同名写入存在竞态 → 产生「名字 (1).mid」副本）
+      if (_ensureLibP) return _ensureLibP;
+      _ensureLibP = this._ensureLibraryFilesImpl().finally(() => { _ensureLibP = null; });
+      return _ensureLibP;
+    },
+    async _ensureLibraryFilesImpl(): Promise<{ rebuilt: number; pruned: number }> {
+      const midi = (this.songs as any[]).filter((s: any) => (s.kind || 'midi') === 'midi');
+      if (!midi.length) return { rebuilt: 0, pruned: 0 };
+      let missing: any[] = [];
+      try {
+        if (bridge && typeof bridge.checkMidi === 'function') {
+          const r = await bridge.checkMidi(midi.map((s: any) => ({ id: s.id, name: s.name, path: (s.meta && s.meta.path) || '' })));
+          if (r && r.ok && Array.isArray(r.missing)) missing = r.missing;
+          else return { rebuilt: 0, pruned: 0 };
+        } else return { rebuilt: 0, pruned: 0 };
+      } catch (e) { return { rebuilt: 0, pruned: 0 }; }
+      if (!missing.length) return { rebuilt: 0, pruned: 0 };
+      const need = new Set(missing.map((m: any) => String(m.id)));
+      const broken: string[] = [];
+      let rebuilt = 0;
+      for (const s of midi) {
+        if (!need.has(s.id)) continue;
+        let bytes = toBytes(s.__bytes);
+        if (!bytes) {
+          try { const r = await idbGet(STORE_SONGS, s.id); bytes = toBytes(r && r.bytes); } catch (e) {}
+        }
+        if (!bytes && s.meta && s.meta.path) {
+          try { const b = await bridge.readBinary(s.meta.path); bytes = toBytes(b); } catch (e) {}
+        }
+        if (!bytes) { broken.push(s.id); continue; }
+        const p = await this.writeMidiFile(s.name, bytes);
+        if (p) {
+          s.meta = { ...(s.meta || {}), path: p };
+          rebuilt++;
+          // 回写 path（字节照旧由调用方决定是否补写，这里只在确实缺字节时补）
+          try { await dbSongPut({ id: s.id, name: s.name, size: s.meta.size || bytes.length, time: s.meta.time || 0, dur: s.meta.dur || 0, fp: s.meta.fp || '', path: p, bytes: Array.from(bytes as any) }); } catch (e) {}
+        } else broken.push(s.id);
+      }
+      let pruned = 0;
+      if (broken.length) {
+        // 空壳曲目：任何来源都取不到内容 → 不留在曲库里（同时清掉歌单/收藏引用）
+        for (const id of broken) await this.removeSong(id);
+        pruned = broken.length;
+      }
+      return { rebuilt, pruned };
+    },
     /** 清理「失效曲目」：内存与本地库都取不到字节的条目（例如转录产物文件被删、
      *  临时目录也被清理后留下的空壳）。这类条目光占列表且无法播放/编辑。
      *  返回清理掉的数量。 */
     async pruneBrokenSongs(): Promise<number> {
+      // 先做一次曲库文件自检：能靠磁盘文件/IndexedDB/SQLite 重建的就不算失效
+      let rebuiltPruned = 0;
+      try { rebuiltPruned = (await this.ensureLibraryFiles()).pruned; } catch (e) {}
       const broken: string[] = [];
       for (const s of this.songs as any[]) {
         const mem = s && s.__bytes;
@@ -518,10 +611,14 @@ export const useAppStore = defineStore('app', {
           const r = await idbGet(STORE_SONGS, s.id);
           has = !!(r && r.bytes && (r.bytes.length || r.bytes.byteLength));
         } catch (e) {}
+        // 磁盘上的真实文件同样算有效来源（避免把「有文件、索引字节缺失」的曲目误判为空壳）
+        if (!has && s.meta && s.meta.path && bridge && typeof bridge.hasMidi === 'function') {
+          try { const h = await bridge.hasMidi(s.meta.path); has = !!(h && h.exists); } catch (e) {}
+        }
         if (!has) broken.push(s.id);
       }
       for (const id of broken) await this.removeSong(id);
-      return broken.length;
+      return rebuiltPruned + broken.length;
     },
     // 音频曲目播放元素：接入合成器效果链（EQ/空间声对音频同样生效）
     ensureAudioEl(): any {
@@ -594,6 +691,10 @@ export const useAppStore = defineStore('app', {
         if (!item.song) { const r = await idbGet(STORE_SONGS, id); if (r && r.bytes) tryParse(r.bytes); }
         // 3) SQLite 字节（兜底，JSON 数字数组对较大 MIDI 可能丢失）
         if (!item.song) { const all = await dbSongsAll(); const r = all.find((x: any) => x.id === id); if (r && r.bytes) tryParse(r.bytes); }
+        // 4) 磁盘上的真实 .mid 文件（每个曲目都必须有；索引字节丢失时靠它救回）
+        if (!item.song && item.meta && item.meta.path) {
+          try { const b = await bridge.readBinary(item.meta.path); if (b) tryParse(b); } catch (e) {}
+        }
         if (!item.song) this.toast(t('无法解析已保存的 MIDI：') + ((lastErr as any)?.message || ''), 'warn');
       }
       if (!item.song) return;

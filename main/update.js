@@ -2,6 +2,7 @@
 // 主进程更新服务：GitHub releases 检查 / 下载 / 打开
 // ============================================================
 'use strict';
+const Paths = require('./paths');
 
 const UPDATE_MIRRORS = [
   'https://ghfast.top/https://api.github.com/repos/qdTXTbp/FuFumidi/releases/latest',
@@ -95,8 +96,15 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
   // 关键：下载只写临时目录，失败/中断不影响当前安装——绝不边下边改已安装文件
   async function downloadInstallPackage(url, win) {
     const mirrors = [url, 'https://ghfast.top/' + url, 'https://gh-proxy.com/' + url, 'https://ghproxy.net/' + url];
-    const dest = path.join(app.getPath('temp'), 'fufumidi-update', 'FuFumidi.Install.exe');
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    // 优先写数据根目录的 temp/（不占 C 盘）；该目录已在 kachina.config.json 的
+    // ignoreFolderPath 中，更新器不会在替换安装目录时把它删掉。不可写时回退系统 Temp。
+    let dest = path.join(Paths.tempDir(), 'fufumidi-update', 'FuFumidi.Install.exe');
+    try {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+    } catch (_) {
+      dest = path.join(app.getPath('temp'), 'fufumidi-update', 'FuFumidi.Install.exe');
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+    }
     let lastErr = null;
     for (const u of mirrors) {
       try {
@@ -194,7 +202,10 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
       }
       // 1) 守护脚本：等更新器退出（完成替换）→ 短暂等待落盘 → 启动新版主程序
       //    独立进程跑，脱离主进程，即便主程序被更新器结束也能继续完成重启
-      const daemon = path.join(app.getPath('temp'), 'fufumidi-restart.ps1');
+      // 守护脚本也放数据根目录 temp/（同样被更新器 ignoreFolderPath 保护）
+      let daemon = path.join(Paths.tempDir(), 'fufumidi-restart.ps1');
+      try { fs.mkdirSync(path.dirname(daemon), { recursive: true }); }
+      catch (_) { daemon = path.join(app.getPath('temp'), 'fufumidi-restart.ps1'); }
       const _exe = JSON.stringify(mainExe).replace(/\\/g, '\\\\'); // JSON 字符串含反斜杠，需经双引号包裹并转义
       const _dir = JSON.stringify(updaterDir);
       fs.writeFileSync(daemon, `$procName = 'FuFumidi.update'

@@ -2,6 +2,7 @@
 // 主进程 GPU 增强包 IPC：状态、安装、卸载、下载与自动检测
 // ============================================================
 'use strict';
+const Paths = require('./paths');
 
 function registerGpuIpc({
   ipcMain,
@@ -120,13 +121,13 @@ function registerGpuIpc({
       const detected = inferGpuKind(first);
       const k = String(detected || kind || '').toLowerCase();
       if (k !== 'cuda' && k !== 'directml') return { ok: false, error: '无法识别增强包类型，请先选择 DirectML 或 CUDA 包/分卷' };
-      const zipTmp = path.join(app.getPath('temp'), 'fufumidi-gpu-import.zip');
+      const zipTmp = path.join(Paths.tempDir(), 'fufumidi-gpu-import.zip');
       if (localPaths.length > 1 || isSplitPackagePath(first)) {
         await combineSplitParts(localPaths, zipTmp);
       } else {
         fs.copyFileSync(first, zipTmp);
       }
-      const extractDir = path.join(app.getPath('temp'), 'fufumidi-gpu-import');
+      const extractDir = path.join(Paths.tempDir(), 'fufumidi-gpu-import');
       fs.rmSync(extractDir, { recursive: true, force: true });
       fs.mkdirSync(extractDir, { recursive: true });
       const psCmd = 'Expand-Archive -Path "' + zipTmp + '" -DestinationPath "' + extractDir + '" -Force';
@@ -159,9 +160,9 @@ function registerGpuIpc({
     const kind = String(opts.kind || inferGpuKind(opts.name || (opts.files && opts.files[0] && (opts.files[0].name || opts.files[0].url)) || opts.url) || '').toLowerCase();
     if (kind !== 'cuda' && kind !== 'directml') return { ok: false, error: '无法识别增强包类型' };
     const win = BrowserWindow.fromWebContents(evt.sender);
-    const dlDir = path.join(app.getPath('temp'), 'fufumidi-gpu-dl');
-    const extractDir = path.join(app.getPath('temp'), 'fufumidi-gpu-extract');
-    const zipTmp = path.join(app.getPath('temp'), 'fufumidi-gpu-dl.zip');
+    const dlDir = path.join(Paths.tempDir(), 'fufumidi-gpu-dl');
+    const extractDir = path.join(Paths.tempDir(), 'fufumidi-gpu-extract');
+    const zipTmp = path.join(Paths.tempDir(), 'fufumidi-gpu-dl.zip');
     fs.rmSync(dlDir, { recursive: true, force: true });
     fs.mkdirSync(dlDir, { recursive: true });
     let lastErr = null;
@@ -324,7 +325,7 @@ function registerGpuIpc({
         if (_gpuCanceled) break;
         send({ percent: 1, text: '检测到 ' + (d.name || d.vendor) + '，开始安装 ' + (kind === 'cuda' ? 'CUDA（cu128）' : 'DirectML') + ' 加速（源：' + src.label + '）…', installing: true });
         // --retries/--timeout：网络抖动自动重试；--cache-dir：已下载 wheel 复用，失败后续传
-        const pipCache = path.join(app.getPath('userData'), 'fufumidi', 'pip-cache');
+        const pipCache = Paths.pipCacheDir();
         const args = ['-m', 'pip', 'install', '--target', targetSite, '-r', reqPath, '--no-input', '--disable-pip-version-check',
                       '--retries', '5', '--timeout', '60', '--cache-dir', pipCache];
         if (kind === 'cuda') { args.push('-i', src.torch, '--extra-index-url', src.pypi); }

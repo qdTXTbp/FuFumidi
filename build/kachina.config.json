@@ -39,7 +39,8 @@
     "${INSTALL_PATH}/resources/python",
     "${INSTALL_PATH}/resources/models",
     "${INSTALL_PATH}/resources/wallpapers",
-    "${INSTALL_PATH}/resources/wallpaper-thumbs"
+    "${INSTALL_PATH}/resources/wallpaper-thumbs",
+    "${INSTALL_PATH}/FuFumidiData"
   ],
   "userDataPath": [],
   "extraUninstallPath": [],

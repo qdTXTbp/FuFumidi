@@ -1,6 +1,6 @@
 <script setup>
-// 编辑视图：钢琴卷帘编辑器（工具栏 + 迷你图 + 可编辑画布 + 属性检查器）
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
+// 编辑视图：钢琴卷帘工作台（走带工具栏 + 左侧检查器 + 多车道舞台 + 状态栏）
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
 import EditorCanvas from '../components/EditorCanvas.vue';
 import { useAppStore } from '../stores/app';
@@ -38,6 +38,8 @@ const editor = ref(null);
 const miniEl = ref(null);
 const miniWrap = ref(null);
 const advOpen = ref(false);
+// 三视图切换：钢琴卷帘 / 鼓组网格（乐谱为独立页面，见 setEditorView）
+const viewMode = ref('piano');
 
 // 力度曲线弹窗
 const vcOpen = ref(false);
@@ -72,6 +74,25 @@ const smpteText = computed(() => {
   const ff = Math.floor((sec % 1) * fps);
   return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0') + ':' + String(ss).padStart(2, '0') + ':' + String(ff).padStart(2, '0');
 });
+// 状态栏：小节:拍 位置 + 速度 + 当前轨道，给出与 DAW 一致的时间参照
+const posText = computed(() => {
+  const s = song.value; if (!s) return '1:1';
+  const tpb = s.tpb || 480;
+  const sig = (s.sigMap && s.sigMap[0]) ? s.sigMap[0].num : 4;
+  const tick = Math.max(0, Math.round(s.secToTick(state.curSec / (state.tempo || 1))));
+  const per = tpb * sig;
+  return (Math.floor(tick / per) + 1) + ':' + (Math.floor((tick % per) / tpb) + 1);
+});
+// 速度取自曲目本身（state.tempo 是播放倍速，不是 BPM）
+const bpmText = computed(() => {
+  const s = song.value;
+  return Math.round((s && s.initialBpm) || 120);
+});
+const curTrackInfo = computed(() => {
+  const s = song.value; if (!s) return null;
+  return s.tracks[trackIndex.value] || null;
+});
+const selMutedNow = computed(() => (editor.value && sel.count ? editor.value.selMuted() : false));
 
 function refreshSel() {
   const info = editor.value ? editor.value.selInfo() : null;
@@ -330,20 +351,25 @@ function clearLoopSel() {
   toast(t('已清除循环'), 'ok');
 }
 
-// 鼓组编辑器弹窗
-const drumOpen = ref(false);
+// 鼓组网格视图（原独立弹窗 → 收编为编辑器内的第二视图）
 const drumTrack = ref(0);
 const drumCv = ref(null);
 const DRUM_PITCHES = [35,36,38,40,41,43,45,47,48,50,51,53,55,57,59,60,61,63,65,66,67,69,71,72,73,75,76,77,79,81];
 const DRUM_NAMES = {35:'Acoustic Bass Drum',36:'Bass Drum 1',38:'Acoustic Snare',40:'Electric Snare',41:'Floor Tom 2',43:'Floor Tom 1',45:'Low Tom',47:'Low-Mid Tom',48:'Hi-Mid Tom',50:'High Tom',51:'Ride Cymbal 1',53:'Ride Bell',55:'Splash Cymbal',57:'Crash Cymbal 2',59:'Ride Cymbal 2',60:'Hi Bongo',61:'Low Bongo',63:'High Conga',65:'Low Conga',66:'High Timbale',67:'Low Timbale',69:'Cowbell',71:'High Agogo',72:'Low Agogo',73:'Maracas',75:'Claves',76:'Hi Wood Block',77:'Low Wood Block',79:'Open Cuica',81:'Open Hi-Hat'};
 const drumTracks = computed(() => song.value ? song.value.tracks.map((t, i) => ({ i, t })) : []);
 
+/** 三视图切换：钢琴卷帘 / 鼓组网格 / 乐谱（乐谱跳转到乐谱页） */
+function setEditorView(v) {
+  if (v === 'score') { setView('score'); return; }
+  if (v === 'drum') { openDrumEditor(); return; }
+  viewMode.value = 'piano';
+}
 function openDrumEditor() {
   if (!song.value) { toast(t('请先载入 MIDI'), 'warn'); return; }
   const drums = drumTracks.value.filter(x => x.t.isDrum || x.t.ch === 9);
   const list = drums.length ? drums : drumTracks.value;
   drumTrack.value = list.length ? list[0].i : 0;
-  drumOpen.value = true;
+  viewMode.value = 'drum';
   nextTick(drawDrum);
 }
 function drawDrum() {
@@ -355,17 +381,19 @@ function drawDrum() {
   const g = cv.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, w, h);
-  g.fillStyle = cssVar('--surface-soft', 'rgba(10,10,10,0.03)'); g.fillRect(0, 0, w, h);
+  g.fillStyle = cssVar('--canvas', '#ffffff'); g.fillRect(0, 0, w, h);
   const rows = DRUM_PITCHES.length;
   const tr = s.tracks[drumTrack.value]; if (!tr) return;
   const tpb = s.tpb || 480, bars = Math.min(8, s.bars || 4), beats = bars * 4;
   const rowH = h / rows, colW = w / beats;
   const hair = cssVar('--hairline', 'rgba(10,10,10,0.07)');
   const border2 = cssVar('--border-strong', 'rgba(10,10,10,0.16)');
+  const slate = cssVar('--steel', 'rgba(10,10,10,0.5)');
   for (let i = 0; i < rows; i++) {
     const y = i * rowH;
+    if (i % 2) { g.fillStyle = cssVar('--row-alt', 'rgba(10,10,10,0.03)'); g.fillRect(0, y, w, rowH); }
     g.strokeStyle = hair; g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke();
-    g.fillStyle = cssVar('--slate', 'rgba(10,10,10,0.5)'); g.font = '9px monospace'; g.textAlign = 'left'; g.textBaseline = 'middle';
+    g.fillStyle = slate; g.font = '9px monospace'; g.textAlign = 'left'; g.textBaseline = 'middle';
     g.fillText(String(DRUM_NAMES[DRUM_PITCHES[i]] || DRUM_PITCHES[i]).slice(0, 14), 4, y + rowH / 2);
   }
   for (let b = 0; b < beats; b++) {
@@ -373,8 +401,14 @@ function drawDrum() {
     g.strokeStyle = b % 4 === 0 ? border2 : hair;
     g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke();
   }
-  g.fillStyle = '#ff5530';
-  for (const n of tr.notes) {
+  g.fillStyle = cssVar('--note-fill', '#8b83f0');
+  // 只画可见的 8 小节：notes 按 start 升序，二分定位右界后截断遍历
+  // （大 MIDI 单轨 9 万+ 音符时，全量遍历 + indexOf 会直接卡死主线程）
+  const maxTick = beats * tpb;
+  let end = tr.notes.length, lo = 0, hi = end;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (tr.notes[m].start < maxTick) lo = m + 1; else hi = m; }
+  for (let i = 0; i < lo; i++) {
+    const n = tr.notes[i];
     const ri = DRUM_PITCHES.indexOf(n.midi); if (ri < 0) continue;
     const x = n.start / (tpb * 4) * colW;
     g.fillRect(x + 1, ri * rowH + 2, Math.max(4, (n.end - n.start) / (tpb * 4) * colW - 2), rowH - 4);
@@ -1041,6 +1075,12 @@ async function exportMidi() {
 }
 
 /* ---------------- 迷你图 ---------------- */
+// 迷你图是「静态缩略图」：把小节块预渲染到离屏画布并缓存，之后每次只贴一次图。
+// 原实现被无条件放进 rAF 循环，每帧遍历全曲所有音符（大 MIDI 9 万+ 次 fillRect/帧），
+// 且组件被 KeepAlive 保活后离开编辑页仍在跑 —— 这是「整个界面卡」的主因。
+const MINI_C = ['#ff5530', '#ea5ec1', '#1456f0', '#a855f7', '#3daeff', '#1ba673', '#3b82f6', '#f59e0b', '#d45656', '#17437d'];
+let miniRev = 0;                       // 内容版本：只在真正改动曲目时 +1
+let _miniCache = { key: '', cv: null };
 function drawMini() {
   const cv = miniEl.value, s = song.value;
   if (!cv || !s) return;
@@ -1049,17 +1089,27 @@ function drawMini() {
   if (cv.width !== Math.floor(W * dpr) || cv.height !== Math.floor(H * dpr)) { cv.width = Math.floor(W * dpr); cv.height = Math.floor(H * dpr); }
   const g = cv.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  let count = 0;
+  for (const tr of s.tracks) count += tr.notes.length;
+  const key = W + '|' + dpr + '|' + s.totalTicks + '|' + count + '|' + miniRev;
+  if (!_miniCache.cv || _miniCache.key !== key) {
+    const off = document.createElement('canvas');
+    off.width = Math.floor(W * dpr); off.height = Math.floor(H * dpr);
+    const og = off.getContext('2d');
+    og.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const scale = W / s.totalTicks;
+    for (const tr of s.tracks) {
+      og.fillStyle = MINI_C[tr.index % MINI_C.length];
+      for (const n of tr.notes) {
+        const x = n.start * scale, w2 = Math.max(1, (n.end - n.start) * scale);
+        og.fillRect(x, 12 + (tr.index % 2) * 8, w2, 4);
+      }
+    }
+    _miniCache = { key, cv: off };
+  }
   g.clearRect(0, 0, W, H);
   g.fillStyle = cssVar('--surface-soft', 'rgba(10,10,10,0.04)'); g.fillRect(0, 0, W, H);
-  const C = ['#ff5530', '#ea5ec1', '#1456f0', '#a855f7', '#3daeff', '#1ba673', '#3b82f6', '#f59e0b', '#d45656', '#17437d'];
-  const scale = W / s.totalTicks;
-  for (const tr of s.tracks) {
-    g.fillStyle = C[tr.index % C.length];
-    for (const n of tr.notes) {
-      const x = n.start * scale, w2 = Math.max(1, (n.end - n.start) * scale);
-      g.fillRect(x, 12 + (tr.index % 2) * 8, w2, 4);
-    }
-  }
+  g.drawImage(_miniCache.cv, 0, 0, W, H);
   g.fillStyle = 'rgba(255,85,48,0.5)'; g.fillRect(0, 0, 2, H);
 }
 function miniClick(e) {
@@ -1089,33 +1139,59 @@ function onKey(e) {
 }
 
 let raf = 0;
-function loop() { drawMini(); raf = requestAnimationFrame(loop); }
+let stageActive = true;
+let miniRo = null;
+function drawStage() {
+  if (viewMode.value === 'drum') drawDrum(); else drawMini();
+}
+// 迷你图 / 鼓组网格都是「静态图」，不需要每帧重绘：改为按需调度（内容或尺寸变化时）。
+// 原实现是无条件 rAF 循环，被 KeepAlive 保活后离开编辑页仍在遍历全曲音符 → 整个应用卡顿。
+function scheduleDraw() {
+  if (raf || !stageActive) return;
+  raf = requestAnimationFrame(() => { raf = 0; drawStage(); });
+}
+// 真正改动曲目：迷你图缓存失效 + 重绘（选区变化不重建缩略图）
+function onModified() { miniRev++; refreshSel(); scheduleDraw(); }
 
 watch(currentSong, () => {
   const tracks = song.value?.tracks || [];
   const nonEmpty = tracks.findIndex(t => t.notes && t.notes.length);
   trackIndex.value = nonEmpty >= 0 ? nonEmpty : Math.min(trackIndex.value, Math.max(0, tracks.length - 1));
+  viewMode.value = 'piano';
   refreshSel();
   const tr = song.value?.tracks[trackIndex.value];
   if (tr) { timbre.value = tr.program != null ? tr.program : 0; }
   if (song.value) bpmInput.value = song.value.initialBpm || 120;
-  nextTick(drawMini);
+  miniRev++;
+  _miniCache = { key: '', cv: null };
+  nextTick(scheduleDraw);
 }, { immediate: true });
 watch(trackIndex, () => {
   trackIndex.value = Math.min(trackIndex.value, Math.max(0, (song.value?.tracks.length || 1) - 1));
   refreshSel();
   const tr = song.value?.tracks[trackIndex.value];
   if (tr) { timbre.value = tr.program != null ? tr.program : 0; }
+  scheduleDraw();
 });
 
 onMounted(async () => {
   window.addEventListener('keydown', onKey);
   await nextTick();
-  raf = requestAnimationFrame(loop);
+  // 布局尺寸变化（侧栏/播放栏开合、窗口缩放、检查器收窄）时重画舞台缩略图
+  if (typeof ResizeObserver !== 'undefined' && miniWrap.value) {
+    miniRo = new ResizeObserver(() => scheduleDraw());
+    miniRo.observe(miniWrap.value);
+  }
   refreshSel();
+  scheduleDraw();
 });
+onActivated(() => { stageActive = true; scheduleDraw(); });
+onDeactivated(() => { stageActive = false; if (raf) { cancelAnimationFrame(raf); raf = 0; } });
 onBeforeUnmount(() => {
+  stageActive = false;
   if (raf) cancelAnimationFrame(raf);
+  raf = 0;
+  if (miniRo) { miniRo.disconnect(); miniRo = null; }
   window.removeEventListener('keydown', onKey);
 });
 </script>
@@ -1140,7 +1216,9 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-else>
-      <!-- 工具栏 -->
+      <!-- 工具栏 + 「更多」面板：面板改为浮层（绝对定位在工具栏下方），
+           不再挤压下方钢琴卷帘的高度 —— 展开后卷帘高度保持不变 -->
+      <div class="ed-toolbar-wrap">
       <div class="card ed-toolbar">
         <div class="et-group">
           <button class="et-btn" :class="{ active: tool === 'select' }" :title="t('选择 V')" @click="tool = 'select'"><Icon name="cursor" :size="14" />{{ t('选择') }}</button>
@@ -1149,135 +1227,182 @@ onBeforeUnmount(() => {
           <button class="et-btn" :class="{ active: tool === 'mute' }" :title="t('静音：点击音符切换发声/静音（不删除、不改力度）')" @click="tool = 'mute'"><Icon name="minus" :size="14" />{{ t('静音') }}</button>
         </div>
         <span class="et-sep"></span>
-        <span class="et-label">{{ t('默认力度') }}</span>
-        <input class="num-input" type="number" min="1" max="127" step="1" style="width:58px" v-model.number="defaultVelocity" :title="t('画笔新建音符时使用的力度')" />
-        <span class="et-label">{{ t('着色') }}</span>
-        <select class="select-input" v-model="colorMode" style="width:auto;padding:4px 8px" :title="t('音符着色方案')">
-          <option v-for="c in COLOR_MODES" :key="c[0]" :value="c[0]">{{ c[1] }}</option>
-        </select>
-        <span class="et-sep"></span>
-        <span class="et-label">{{ t('吸附') }}</span>
-        <select class="select-input" v-model="snapRatio" style="width:auto;padding:4px 8px">
-          <option v-for="s in SNAPS" :key="s[0]" :value="s[0]">{{ s[1] }}</option>
-        </select>
-        <span class="et-sep"></span>
-        <span class="et-label">{{ t('编辑轨道') }}</span>
-        <select class="select-input" v-model="trackIndex" style="width:auto;max-width:170px;padding:4px 8px">
-          <option v-for="(tr, i) in song.tracks" :key="i" :value="i">{{ tr.name }}{{ t('（') }}{{ state.tracks[i]?.noteCount ?? tr.notes.length }}{{ t('）') }}</option>
-        </select>
+        <div class="et-group ed-view-switch">
+          <button class="et-btn" :class="{ active: viewMode === 'piano' }" :title="t('钢琴卷帘视图')" @click="setEditorView('piano')"><Icon name="music" :size="14" />{{ t('钢琴') }}</button>
+          <button class="et-btn" :class="{ active: viewMode === 'drum' }" :title="t('鼓组网格视图')" @click="setEditorView('drum')"><Icon name="drum" :size="14" />{{ t('鼓组') }}</button>
+          <button class="et-btn" :title="t('同步到乐谱：在五线谱查看当前编辑结果')" @click="setEditorView('score')"><Icon name="score" :size="14" />{{ t('乐谱') }}</button>
+        </div>
         <span class="et-sep"></span>
         <button class="et-btn" :title="t('撤销 Ctrl+Z')" @click="undo"><Icon name="undo" :size="14" />{{ t('撤销') }}</button>
         <button class="et-btn" :title="t('重做 Ctrl+Y')" @click="redo"><Icon name="redo" :size="14" />{{ t('重做') }}</button>
         <button class="et-btn danger" :title="t('删除 Del')" @click="del"><Icon name="trash" :size="14" />{{ t('删除') }}</button>
         <span class="et-sep"></span>
         <button class="et-btn" :title="t('量化到吸附网格')" @click="quantize"><Icon name="quantize" :size="14" />{{ t('量化') }}</button>
-        <button class="et-btn" :title="t('降半音')" @click="trDown"><Icon name="minus" :size="14" />-1</button>
-        <button class="et-btn" :title="t('升半音')" @click="trUp"><Icon name="plus" :size="14" />+1</button>
-        <button class="et-btn" :title="t('降八度')" @click="octDown"><Icon name="minus" :size="14" />-8</button>
-        <button class="et-btn" :title="t('升八度')" @click="octUp"><Icon name="plus" :size="14" />+8</button>
         <span class="et-sep"></span>
-        <button class="et-btn" :title="t('复制 Ctrl+C')" @click="copy"><Icon name="copy" :size="14" />{{ t('复制') }}</button>
-        <button class="et-btn" :title="t('粘贴到播放头 Ctrl+V')" @click="paste"><Icon name="paste" :size="14" />{{ t('粘贴') }}</button>
-        <button class="et-btn" :title="t('克隆选区到其后')" @click="dup"><Icon name="plus" :size="14" />{{ t('克隆') }}</button>
-        <span class="et-sep"></span>
-        <button class="et-btn" :title="t('选区力度渐强')" @click="velUp"><Icon name="cresc" :size="14" />{{ t('渐强') }}</button>
-        <button class="et-btn" :title="t('选区力度渐弱')" @click="velDown"><Icon name="dim" :size="14" />{{ t('渐弱') }}</button>
-        <button class="et-btn" :title="t('力度曲线：绘制力度包络并应用到选区')" @click="openVelCurve"><Icon name="chart" :size="14" />{{ t('力度曲线') }}</button>
-        <button class="et-btn" :title="t('同音高批量选择')" @click="samePitch"><Icon name="target" :size="14" />{{ t('同音高') }}</button>
-        <button class="et-btn" :title="t('列表编辑器：精确修改音符数值')" @click="openList"><Icon name="list" :size="14" />{{ t('列表') }}</button>
-        <button class="et-btn" :title="t('鼓组编辑器：打击乐专用视图')" @click="openDrumEditor"><Icon name="drum" :size="14" />{{ t('鼓组') }}</button>
-        <span class="et-sep"></span>
-        <span class="et-label">{{ t('CC泳道') }}</span>
-        <select class="select-input" v-model="ccNumber" style="width:auto;max-width:130px;padding:4px 8px">
-          <option v-for="c in CC_OPTIONS" :key="c[0]" :value="c[0]">{{ c[1] }}</option>
-        </select>
-        <button class="et-btn" :class="{ active: ccEnabled }" :title="t('切换 CC 自动化泳道')" @click="ccEnabled = !ccEnabled"><Icon name="cclane" :size="14" />{{ ccEnabled ? t('关闭泳道') : t('显示泳道') }}</button>
-        <span class="et-sep"></span>
-        <span class="et-label">{{ t('踏板') }}</span>
-        <button class="et-btn" :title="t('在选区/整轨起止处添加延音踏板（CC64）')" @click="addPedal"><Icon name="cclane" :size="14" />+ {{ t('踏板') }}</button>
-        <button class="et-btn" :title="t('删除选区/整轨内的踏板事件')" @click="delPedal"><Icon name="cclane" :size="14" />- {{ t('踏板') }}</button>
-        <span class="et-sep"></span>
-        <span class="et-label">{{ t('循环') }}</span>
-        <button class="et-btn" :class="{ active: state.loop }" :title="t('将选区设为循环')" @click="setLoopFromSel"><Icon name="loop" :size="14" />{{ t('选区循环') }}</button>
-        <button class="et-btn" :title="t('清除循环')" @click="clearLoopSel"><Icon name="minus" :size="14" />{{ t('清循环') }}</button>
         <button class="et-btn et-more" :class="{ active: advOpen }" @click="advOpen = !advOpen">
-          <Icon name="chevron" :size="13" :style="{ transform: advOpen ? 'rotate(180deg)' : '' }" /> {{ t('高级') }}
+          <Icon name="chevron" :size="13" :style="{ transform: advOpen ? 'rotate(180deg)' : '' }" /> {{ t('更多') }}
         </button>
       </div>
 
-      <!-- 高级工具区（折叠） -->
+      <!-- 高级工具区（折叠，按用途分组） -->
       <div v-if="advOpen" class="card ed-adv">
         <div class="adv-row">
-          <span class="et-label">{{ t('音阶') }}</span>
-          <select class="select-input" :value="scaleRoot" style="width:auto;padding:4px 8px" :title="t('主音（自动 = 按曲目判断）')" @change="e => scaleRoot = Number(e.target.value)">
-            <option :value="-1">{{ t('自动') }}</option>
-            <option v-for="r in ROOT_OPTIONS" :key="r[0]" :value="r[0]">{{ r[1] }}</option>
-          </select>
-          <select class="select-input" v-model="scaleType" style="width:auto;padding:4px 8px" :title="t('音阶类型')">
-            <option v-for="sc in SCALE_TYPES" :key="sc[0]" :value="sc[0]">{{ t(sc[1]) }}</option>
-          </select>
-          <input v-if="scaleType === 'custom'" v-model="customDegText" class="text-input" style="width:110px;padding:4px 8px;font-size:12px"
-                 :placeholder="t('音级 0,2,4,7,9')" :title="t('自定义音级（相对主音的半音，逗号分隔）')" />
-          <select class="select-input" v-model="scaleMode" style="width:auto;padding:4px 8px" :title="t('调内编辑模式：高亮调内音 / 拖拽与新建只落在调内音')">
-            <option v-for="m in SCALE_MODE_OPTIONS" :key="m[0]" :value="m[0]">{{ m[1] }}</option>
-          </select>
-          <button class="et-btn" :title="t('按曲目分析结果自动设调')" @click="scaleFromAnalysis"><Icon name="zap" :size="14" />{{ t('按分析设调') }}</button>
-          <span class="et-sep"></span>
-          <button class="et-btn" :title="t('分析逐小节和弦并显示和弦轨（约束模式下与音阶一起决定调内音）')" @click="analyzeChordTrack"><Icon name="music" :size="14" />{{ t('分析和弦') }}</button>
-          <span class="et-sep"></span>
-          <span class="et-label">{{ t('批量') }}</span>
-          <button class="et-btn" :title="t('选中与当前音符同时发声的音符')" @click="selectChordBatch"><Icon name="music" :size="14" />{{ t('和弦') }}</button>
+          <span class="et-label">{{ t('剪贴板') }}</span>
+          <button class="et-btn" :title="t('复制 Ctrl+C')" @click="copy"><Icon name="copy" :size="14" />{{ t('复制') }}</button>
+          <button class="et-btn" :title="t('粘贴到播放头 Ctrl+V')" @click="paste"><Icon name="paste" :size="14" />{{ t('粘贴') }}</button>
+          <button class="et-btn" :title="t('克隆选区到其后')" @click="dup"><Icon name="plus" :size="14" />{{ t('克隆') }}</button>
+          <button class="et-btn" :title="t('全选 Ctrl+A')" @click="selectAll"><Icon name="target" :size="14" />{{ t('全选') }}</button>
+          <button class="et-btn" :title="t('同音高批量选择')" @click="samePitch"><Icon name="target" :size="14" />{{ t('同音高') }}</button>
+          <button class="et-btn" :title="t('列表编辑器：精确修改音符数值')" @click="openList"><Icon name="list" :size="14" />{{ t('列表') }}</button>
+        </div>
+        <div class="adv-row">
+          <span class="et-label">{{ t('力度') }}</span>
+          <button class="et-btn" :title="t('选区力度渐强')" @click="velUp"><Icon name="cresc" :size="14" />{{ t('渐强') }}</button>
+          <button class="et-btn" :title="t('选区力度渐弱')" @click="velDown"><Icon name="dim" :size="14" />{{ t('渐弱') }}</button>
+          <button class="et-btn" :title="t('力度曲线：绘制力度包络并应用到选区')" @click="openVelCurve"><Icon name="chart" :size="14" />{{ t('力度曲线') }}</button>
           <button class="et-btn" :title="t('删除当前轨道短于 80ms 的音符')" @click="deleteShortNotes"><Icon name="trash" :size="14" />{{ t('删短音') }}</button>
           <button class="et-btn" :title="t('选区/整轨响度降低 10%')" @click="loudScale(0.9)"><Icon name="minus" :size="14" />-10%</button>
           <button class="et-btn" :title="t('选区/整轨响度提高 10%')" @click="loudScale(1.1)"><Icon name="plus" :size="14" />+10%</button>
+        </div>
+        <div class="adv-row">
+          <span class="et-label">{{ t('移调') }}</span>
+          <button class="et-btn" :title="t('降半音')" @click="trDown"><Icon name="minus" :size="14" />{{ t('半音') }} -1</button>
+          <button class="et-btn" :title="t('升半音')" @click="trUp"><Icon name="plus" :size="14" />{{ t('半音') }} +1</button>
+          <button class="et-btn" :title="t('降八度')" @click="octDown"><Icon name="minus" :size="14" />{{ t('八度') }} -8</button>
+          <button class="et-btn" :title="t('升八度')" @click="octUp"><Icon name="plus" :size="14" />{{ t('八度') }} +8</button>
+        </div>
+        <div class="adv-row">
+          <span class="et-label">{{ t('音阶') }}</span>
+          <select class="select-input" :value="scaleRoot" style="width:auto" :title="t('主音（自动 = 按曲目判断）')" @change="e => scaleRoot = Number(e.target.value)">
+            <option :value="-1">{{ t('自动') }}</option>
+            <option v-for="r in ROOT_OPTIONS" :key="r[0]" :value="r[0]">{{ r[1] }}</option>
+          </select>
+          <select class="select-input" v-model="scaleType" style="width:auto" :title="t('音阶类型')">
+            <option v-for="sc in SCALE_TYPES" :key="sc[0]" :value="sc[0]">{{ t(sc[1]) }}</option>
+          </select>
+          <input v-if="scaleType === 'custom'" v-model="customDegText" class="text-input" style="width:110px"
+                 :placeholder="t('音级 0,2,4,7,9')" :title="t('自定义音级（相对主音的半音，逗号分隔）')" />
+          <select class="select-input" v-model="scaleMode" style="width:auto" :title="t('调内编辑模式：高亮调内音 / 拖拽与新建只落在调内音')">
+            <option v-for="m in SCALE_MODE_OPTIONS" :key="m[0]" :value="m[0]">{{ m[1] }}</option>
+          </select>
+          <button class="et-btn" :title="t('按曲目分析结果自动设调')" @click="scaleFromAnalysis"><Icon name="zap" :size="14" />{{ t('按分析设调') }}</button>
+        </div>
+        <div class="adv-row">
+          <span class="et-label">{{ t('和弦') }}</span>
+          <button class="et-btn" :title="t('分析逐小节和弦并显示和弦轨（约束模式下与音阶一起决定调内音）')" @click="analyzeChordTrack"><Icon name="music" :size="14" />{{ t('分析和弦') }}</button>
+          <button class="et-btn" :title="t('选中与当前音符同时发声的音符')" @click="selectChordBatch"><Icon name="music" :size="14" />{{ t('和弦批量') }}</button>
           <span class="et-sep"></span>
           <span class="et-label">BPM</span>
           <input v-model.number="bpmInput" class="num-input" type="number" min="20" max="400" step="1" style="width:62px" />
           <button class="et-btn" :title="t('应用为歌曲速度（改写 tempo 事件）')" @click="applyBpm"><Icon name="zap" :size="14" />{{ t('应用') }}</button>
-          <span class="et-sep"></span>
+        </div>
+        <div class="adv-row">
+          <span class="et-label">{{ t('生成') }}</span>
           <button class="et-btn" :title="t('基于当前旋律/和弦自动生成 贝斯+分解和弦+铺底')" @click="addAccompaniment"><Icon name="spark" :size="14" />{{ t('智能伴奏') }}</button>
           <button class="et-btn" :title="t('智能量化：网格 + Groove 模板')" @click="openSmartQuantize"><Icon name="quantize" :size="14" />{{ t('智能量化') }}</button>
+        </div>
+        <div class="adv-row">
+          <span class="et-label">{{ t('批处理') }}</span>
           <button class="et-btn" :title="t('逻辑编辑器：批量规则处理音符')" @click="openLogicEditor"><Icon name="edit" :size="14" />{{ t('逻辑') }}</button>
           <button class="et-btn" :title="t('宏面板：一键执行常用批量处理')" @click="openMacroPanel"><Icon name="zap" :size="14" />{{ t('宏') }}</button>
           <button class="et-btn" :title="t('Key Switch 映射配置')" @click="openKSMap"><Icon name="kbd" :size="14" />{{ t('键位') }}</button>
           <button class="et-btn" :title="t('撤销历史')" @click="openHistory"><Icon name="clock" :size="14" />{{ t('历史') }}</button>
         </div>
         <div class="adv-row">
-          <span class="et-label">{{ t('CC 绘制') }}</span>
-          <select v-model="ccMode" class="select-input" style="width:auto;padding:4px 8px">
+          <span class="et-label">{{ t('CC 泳道') }}</span>
+          <select class="select-input" v-model="ccNumber" style="width:auto;max-width:130px">
+            <option v-for="c in CC_OPTIONS" :key="c[0]" :value="c[0]">{{ c[1] }}</option>
+          </select>
+          <button class="et-btn" :class="{ active: ccEnabled }" :title="t('切换 CC 自动化泳道')" @click="ccEnabled = !ccEnabled"><Icon name="cclane" :size="14" />{{ ccEnabled ? t('关闭泳道') : t('显示泳道') }}</button>
+          <select v-model="ccMode" class="select-input" style="width:auto" :title="t('CC 绘制方式')">
             <option value="free">{{ t('手绘') }}</option><option value="line">{{ t('直线') }}</option><option value="curve">{{ t('曲线') }}</option>
           </select>
           <button class="et-btn" :title="t('查看当前轨道 CC 控制器事件')" @click="openCCList"><Icon name="list" :size="14" />{{ t('CC 列表') }}</button>
           <button class="et-btn" :class="{ active: cc2Enabled }" :title="t('切换第二条 CC 泳道')" @click="cc2Enabled = !cc2Enabled"><Icon name="cclane" :size="14" />CC2</button>
-          <select v-model="cc2Number" class="select-input" style="width:auto;padding:4px 8px">
+          <select v-model="cc2Number" class="select-input" style="width:auto">
             <option v-for="c in CC_OPTIONS" :key="c[0]" :value="c[0]">{{ c[1] }}</option>
           </select>
-          <span class="et-sep"></span>
-          <span class="et-label">{{ t('歌词') }}</span>
+        </div>
+        <div class="adv-row">
+          <span class="et-label">{{ t('踏板与循环') }}</span>
+          <button class="et-btn" :title="t('在选区/整轨起止处添加延音踏板（CC64）')" @click="addPedal"><Icon name="cclane" :size="14" />+ {{ t('踏板') }}</button>
+          <button class="et-btn" :title="t('删除选区/整轨内的踏板事件')" @click="delPedal"><Icon name="cclane" :size="14" />- {{ t('踏板') }}</button>
+          <button class="et-btn" :class="{ active: state.loop }" :title="t('将选区设为循环')" @click="setLoopFromSel"><Icon name="loop" :size="14" />{{ t('选区循环') }}</button>
+          <button class="et-btn" :title="t('清除循环')" @click="clearLoopSel"><Icon name="minus" :size="14" />{{ t('清循环') }}</button>
+        </div>
+        <div class="adv-row">
+          <span class="et-label">{{ t('歌词与音频') }}</span>
           <button class="et-btn" :title="t('为选中的音符添加歌词')" @click="openLyricEditor"><Icon name="music" :size="14" />{{ t('添加歌词') }}</button>
-          <span class="et-sep"></span>
-          <span class="et-label">{{ t('音频') }}</span>
           <button class="et-btn" :title="t('载入原音频，在卷帘底部显示波形与起音')" @click="loadAudio"><Icon name="import" :size="14" />{{ t('载入') }}</button>
           <button class="et-btn" :title="t('选区/整轨音符吸附到最近的波形起音（±80ms）')" @click="snapAudio"><Icon name="target" :size="14" />{{ t('吸附起音') }}</button>
           <button class="et-btn" :class="{ active: audioSyncOn }" :title="t('播放 MIDI 时同步试听原音频')" @click="toggleAudioSync"><Icon name="play" :size="14" />{{ t('试听') }}</button>
-           <button class="et-btn" :title="t('嵌入视频轨道（影视配乐对齐）')" @click="loadVideo"><Icon name="play2" :size="14" />{{ t('视频') }}</button>
-           <button v-if="videoUrl" class="et-btn" :title="t('移除视频轨道')" @click="removeVideo"><Icon name="trash" :size="14" />{{ t('移除视频') }}</button>
+          <button class="et-btn" :title="t('嵌入视频轨道（影视配乐对齐）')" @click="loadVideo"><Icon name="play2" :size="14" />{{ t('视频') }}</button>
+          <button v-if="videoUrl" class="et-btn" :title="t('移除视频轨道')" @click="removeVideo"><Icon name="trash" :size="14" />{{ t('移除视频') }}</button>
         </div>
         <div class="adv-row">
-          <span class="et-label">{{ t('音色') }}</span>
-          <select v-model.number="timbre" class="select-input" style="width:auto;max-width:230px;padding:4px 8px" @change="timbreChange">
-            <option v-for="(nm, p) in GM_NAMES" :key="p" :value="Number(p)">{{ p }} {{ nm }}</option>
-          </select>
-          <button class="et-btn" :class="{ active: timbreFavs.has(Number(timbre)) }" :title="t('收藏/取消收藏当前音色')" @click="toggleTimbreFav">♡</button>
-          <button class="et-btn" :title="t('把当前音色应用到全部非鼓轨')" @click="timbreAll"><Icon name="plus" :size="14" />{{ t('全部') }}</button>
-          <button class="et-btn" :title="t('按轨道音域/密度/名称智能选择音色')" @click="smartTimbre"><Icon name="spark" :size="14" />{{ t('智能') }}</button>
-          <span class="et-sep"></span>
-          <button class="et-btn" :title="t('同步到乐谱：在五线谱查看当前编辑结果')" @click="setView('score')"><Icon name="score" :size="14" />{{ t('乐谱同步') }}</button>
+          <span class="et-label">{{ t('视图') }}</span>
           <button class="et-btn" :title="t('全屏编辑，最大化钢琴卷帘')" @click="toggleFullscreen"><Icon name="expand" :size="14" />{{ t('全屏') }}</button>
           <button class="et-btn" :title="t('编辑功能介绍')" @click="helpOpen = true"><Icon name="info" :size="14" />{{ t('说明') }}</button>
         </div>
       </div>
+      </div>
 
+      <!-- ② 工作区：左侧检查器 + 右侧多车道舞台 -->
+      <div class="ed-main">
+        <aside class="ed-insp">
+          <div class="insp-sec">
+            <div class="insp-h"><Icon name="cursor" :size="12" />{{ t('音符检查器') }}</div>
+            <div class="insp-row"><span>{{ t('选中') }}</span><b>{{ sel.count }}</b></div>
+            <div class="insp-row"><span>{{ t('音名') }}</span><b>{{ sel.name || '—' }}</b></div>
+            <div class="insp-row"><span>{{ t('音高') }}</span><b>{{ sel.midi ?? '—' }}</b></div>
+            <div class="insp-row"><span>{{ t('力度') }}</span><b>{{ sel.vel ?? '—' }}</b></div>
+            <input class="insp-range" type="range" min="1" max="127" :value="sel.vel ?? 80" data-guide="velocity-slider" :disabled="!sel.vel"
+                   @input="e => editor?.setSelVel(+e.target.value)" />
+            <div class="insp-row"><span>{{ t('起点') }}</span>
+              <input type="number" class="num-input" :value="sel.start ?? 0" step="1" min="0" :disabled="!sel.start"
+                     @change="e => editor?.setSelStart(+e.target.value)" /></div>
+            <div class="insp-row"><span>{{ t('长度') }}</span>
+              <input type="number" class="num-input" :value="sel.len ?? 0" step="1" min="1" :disabled="!sel.len"
+                     @change="e => editor?.setSelLen(+e.target.value)" /></div>
+            <div class="insp-btns">
+              <button class="btn sm" :class="{ primary: selMutedNow === true }" :disabled="!sel.count" @click="editor?.setSelMuted(true)">{{ t('静音') }}</button>
+              <button class="btn sm" :class="{ primary: selMutedNow === false }" :disabled="!sel.count" @click="editor?.setSelMuted(false)">{{ t('取消静音') }}</button>
+            </div>
+          </div>
+
+          <div class="insp-sec">
+            <div class="insp-h"><Icon name="music" :size="12" />{{ t('轨道') }}</div>
+            <select class="select-input" v-model="trackIndex" style="width:100%">
+              <option v-for="(tr, i) in song.tracks" :key="i" :value="i">{{ tr.name }}{{ t('（') }}{{ state.tracks[i]?.noteCount ?? tr.notes.length }}{{ t('）') }}</option>
+            </select>
+            <div class="insp-row"><span>{{ t('通道') }}</span><b>{{ (curTrackInfo?.ch ?? 0) + 1 }}</b></div>
+            <div class="insp-row"><span>{{ t('音色') }}</span><b>{{ String(timbre).padStart(3, '0') }}</b></div>
+            <select v-model.number="timbre" class="select-input" style="width:100%" @change="timbreChange">
+              <option v-for="(nm, p) in GM_NAMES" :key="p" :value="Number(p)">{{ p }} {{ nm }}</option>
+            </select>
+            <div class="insp-btns">
+              <button class="btn sm" :class="{ primary: timbreFavs.has(Number(timbre)) }" :title="t('收藏/取消收藏当前音色')" @click="toggleTimbreFav">♡ {{ t('收藏') }}</button>
+              <button class="btn sm" :title="t('把当前音色应用到全部非鼓轨')" @click="timbreAll">{{ t('全部') }}</button>
+              <button class="btn sm" :title="t('按轨道音域/密度/名称智能选择音色')" @click="smartTimbre">{{ t('智能') }}</button>
+            </div>
+          </div>
+
+          <div class="insp-sec">
+            <div class="insp-h"><Icon name="quantize" :size="12" />{{ t('网格与显示') }}</div>
+            <div class="insp-row"><span>{{ t('吸附') }}</span>
+              <select class="select-input" v-model="snapRatio">
+                <option v-for="s in SNAPS" :key="s[0]" :value="s[0]">{{ s[1] }}</option>
+              </select></div>
+            <div class="insp-row"><span>{{ t('着色') }}</span>
+              <select class="select-input" v-model="colorMode" :title="t('音符着色方案')">
+                <option v-for="c in COLOR_MODES" :key="c[0]" :value="c[0]">{{ c[1] }}</option>
+              </select></div>
+            <div class="insp-row"><span>{{ t('默认力度') }}</span>
+              <input class="num-input" type="number" min="1" max="127" step="1" v-model.number="defaultVelocity" :title="t('画笔新建音符时使用的力度')" /></div>
+          </div>
+        </aside>
+
+        <section class="ed-stage">
       <!-- 迷你图 + 缩放 -->
       <div class="ed-nav" ref="miniWrap">
         <canvas ref="miniEl" class="ed-mini" style="height:34px" @click="miniClick"></canvas>
@@ -1302,32 +1427,42 @@ onBeforeUnmount(() => {
         <button class="btn sm ghost" @click="clearChordBars">{{ t('隐藏') }}</button>
       </div>
 
-      <!-- 钢琴卷帘 -->
-      <div class="ed-wrap-rel">
+      <!-- 钢琴卷帘（用 v-show 保活：切到鼓组再切回不会丢撤销历史与视图位置） -->
+      <div v-show="viewMode === 'piano'" class="ed-wrap-rel">
         <EditorCanvas ref="editor" :tool="tool" :snap-ratio="snapRatio" :track-index="trackIndex"
                       :cc-enabled="ccEnabled" :cc-number="ccNumber"
                       :scale-spec="scaleSpec" :scale-mode="scaleMode" :chord-track="chordSpec" :ks-map="ksMap" :audio="audioData"
                       :cc2-enabled="cc2Enabled" :cc2-number="cc2Number" :cc-mode="ccMode"
                       :default-velocity="defaultVelocity" :color-mode="colorMode"
-                      @select="refreshSel" @modify="refreshSel" @zoom="onZoom" @ctxmenu="openCtxMenu" />
+                      @select="refreshSel" @modify="onModified" @zoom="onZoom" @ctxmenu="openCtxMenu" />
         <video v-if="videoUrl" :src="videoUrl" controls playsinline class="ed-video-overlay"></video>
       </div>
 
-      <!-- 属性检查器 -->
-      <div class="card ed-inspector">
-        <span class="ins-item">{{ t('选中') }} <b>{{ sel.count }}</b></span>
-        <span class="ins-item">{{ t('音高') }} <b>{{ sel.midi ?? '—' }}</b></span>
-        <span class="ins-item">{{ t('音名') }} <b>{{ sel.name || '—' }}</b></span>
-        <span class="ins-item">{{ t('力度') }}
-          <input type="range" min="1" max="127" :value="sel.vel ?? 80" style="width:90px" data-guide="velocity-slider" :disabled="!sel.vel"
-                 @input="e => editor?.setSelVel(+e.target.value)" />
-        </span>
-        <span class="ins-item">{{ t('起点') }}<input type="number" class="num-input" :value="sel.start ?? 0" step="1" min="0" :disabled="!sel.start"
-                 @change="e => editor?.setSelStart(+e.target.value)" style="width:78px" /></span>
-        <span class="ins-item">{{ t('长度') }}<input type="number" class="num-input" :value="sel.len ?? 0" step="1" min="1" :disabled="!sel.len"
-                 @change="e => editor?.setSelLen(+e.target.value)" style="width:78px" /></span>
-        <span class="ins-item">SMPTE <b style="font-family:var(--mono)">{{ smpteText }}</b></span>
-        <span class="ins-item et-tip">{{ t('单位：tick · Ctrl+滚轮 缩放 · Shift+滚轮 平移 · 滚轮 上下滚动') }}</span>
+      <!-- 鼓组网格（打击乐专用视图） -->
+      <div v-show="viewMode !== 'piano'" class="ed-wrap-rel ed-drum">
+        <div class="ed-drum-bar">
+          <select class="select-input" v-model="drumTrack">
+            <option v-for="d in drumTracks" :key="d.i" :value="d.i">{{ d.t.name }}{{ t('（') }}{{ d.t.notes.length }}{{ t('）') }}</option>
+          </select>
+          <span class="et-label">{{ t('点击格子添加 / 删除鼓点') }}</span>
+          <button class="btn sm danger" style="margin-left:auto" @click="drumClear">{{ t('清除当前轨道鼓点') }}</button>
+        </div>
+        <canvas ref="drumCv" class="drum-canvas" @click="drumClick"></canvas>
+      </div>
+
+        </section>
+      </div>
+
+      <!-- ③ 状态栏：位置 / 时间 / 速度 / 轨道 / 选中 / 缩放 -->
+      <div class="ed-status">
+        <span class="st-i">{{ t('位置') }} <b>{{ posText }}</b></span>
+        <span class="st-i">SMPTE <b>{{ smpteText }}</b></span>
+        <span class="st-i">BPM <b>{{ bpmText }}</b></span>
+        <span class="st-i">{{ t('轨道') }} <b>{{ curTrackInfo?.name || '—' }}</b></span>
+        <span class="st-i">{{ t('选中') }} <b>{{ sel.count }}</b></span>
+        <span class="st-grow"></span>
+        <span class="st-i">{{ t('缩放') }} <b>{{ zoomPct }}%</b></span>
+        <span class="st-i st-tip">{{ t('Ctrl+滚轮 缩放 · Shift+滚轮 平移 · Alt+拖拽 力度 · 单位 tick') }}</span>
       </div>
     </template>
 
@@ -1379,25 +1514,6 @@ onBeforeUnmount(() => {
       </div>
     </div>
     </Transition>
-    <!-- 鼓组编辑器弹窗 -->
-    <Transition name="ov">
-    <div v-if="drumOpen" class="ed-modal-mask" @click.self="drumOpen = false">
-      <div class="ed-modal" style="width:min(820px,96vw)">
-        <div class="ed-modal-head">
-          <b>{{ t('鼓组编辑器') }}</b><span class="muted small">{{ t('打击乐网格 · 点击添加/删除鼓点') }}</span>
-          <button class="icon-btn" style="margin-left:auto" @click="drumOpen = false"><Icon name="minus" :size="14" /></button>
-        </div>
-        <div class="row" style="gap:8px">
-          <select class="select-input" v-model="drumTrack" style="min-width:160px">
-            <option v-for="d in drumTracks" :key="d.i" :value="d.i">{{ d.t.name }}{{ t('（') }}{{ d.t.notes.length }}{{ t('）') }}</option>
-          </select>
-          <button class="btn sm danger" @click="drumClear">{{ t('清除当前轨道鼓点') }}</button>
-        </div>
-        <canvas ref="drumCv" class="drum-canvas" style="height:420px" @click="drumClick"></canvas>
-      </div>
-    </div>
-    </Transition>
-
     <!-- 智能量化弹窗 -->
     <Transition name="ov">
     <div v-if="sqOpen" class="ed-modal-mask" @click.self="sqOpen = false">
@@ -1664,29 +1780,63 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.edit-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; padding: 16px 22px 0; }
-.ed-toolbar { padding: 10px 14px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 10px; border-radius: 14px; }
-.et-group { display: flex; align-items: center; gap: 5px; }
-.et-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 26px; padding: 5px 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; font-size: 12px; line-height: 1.2; white-space: nowrap; color: var(--slate); cursor: pointer; transition: background .13s, color .13s, border-color .13s; }
+.edit-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; padding: 12px var(--page-pad-x) 0; }
+.ed-toolbar-wrap { position: relative; flex: none; }
+.ed-toolbar { padding: 5px 10px; display: flex; align-items: center; gap: 3px; flex-wrap: nowrap; overflow-x: auto; flex: none; margin-bottom: 8px; border-radius: 12px; }
+.ed-view-switch { background: var(--surface-soft); border-radius: 9px; padding: 2px; gap: 2px; }
+/* 分段控件内按钮压到 22px，加上 2px 内边距后整组正好 26px，与同排按钮同高同基线 */
+.ed-view-switch .et-btn { height: 22px; min-height: 22px; padding: 0 10px; }
+.ed-main { display: flex; gap: 10px; flex: 1; min-height: 0; }
+.ed-insp { width: var(--inspector-w); flex: none; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+/* 窄窗口：逐级收窄检查器，把宽度让给卷帘（默认窗口下保持 232px 不动） */
+@media (max-width: 1120px) { .edit-view { --inspector-w: 200px; } }
+@media (max-width: 1000px) { .edit-view { --inspector-w: 176px; } }
+.insp-sec { background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px; padding: 9px 10px; display: flex; flex-direction: column; gap: 6px; }
+.insp-h { display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; color: var(--stone); }
+.insp-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 12px; color: var(--slate); }
+.insp-row > span { flex: none; }
+.insp-row b { color: var(--ink); font-weight: 600; font-size: 11.5px; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.insp-row .select-input, .insp-row .num-input { width: 100px; }
+.insp-range { width: 100%; }
+.insp-btns { display: flex; gap: 5px; flex-wrap: wrap; }
+.insp-btns .btn { flex: 1; min-width: 0; padding: 3px 6px; font-size: 11px; justify-content: center; }
+.ed-stage { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ed-status { display: flex; align-items: center; gap: 14px; height: var(--statusbar-h); padding: 0 6px; margin-top: 6px; border-top: 1px solid var(--hairline); font-size: 11px; color: var(--stone); flex: none; overflow: hidden; }
+.st-i { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.st-i b { color: var(--ink); font-family: var(--mono); font-weight: 600; font-variant-numeric: tabular-nums; }
+.st-grow { flex: 1; }
+.st-tip { color: var(--muted); }
+.ed-drum { display: flex; flex-direction: column; gap: 6px; }
+.ed-drum-bar { display: flex; align-items: center; gap: 8px; flex: none; }
+.ed-drum-bar .select-input { min-width: 170px; }
+.ed-drum .drum-canvas { flex: 1; min-height: 0; width: 100%; display: block; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; cursor: crosshair; }
+.et-group { display: flex; align-items: center; gap: 4px; }
+/* 统一 26px 基准高度：原先分段控件（padding 2px + 26px 按钮 = 30px）比同排按钮高 2px，
+   是「功能栏错位」的直接原因 */
+.et-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 26px; min-height: 26px; padding: 0 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; font-size: 12px; line-height: 1; white-space: nowrap; color: var(--slate); cursor: pointer; transition: background .13s, color .13s, border-color .13s; }
 .et-btn:hover { background: var(--surface-soft); color: var(--ink); }
 .et-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .et-btn.danger { color: var(--error); }
-.et-btn.et-more { margin-left: auto; }
+/* 不再用 margin-left:auto 把「更多」顶到最右（会留下大段空隙）。
+   工具栏在极窄窗口下靠横向滚动兜底，sticky 让「更多」始终钉在右边缘可见。 */
+.et-btn.et-more {
+  margin-left: 0;
+  position: sticky;
+  right: 0;
+  background: var(--canvas);
+}
 .et-btn.et-more.active { background: var(--surface-soft); color: var(--ink); }
-.et-sep { width: 1px; height: 20px; background: var(--hairline); margin: 0 3px; }
+.et-sep { width: 1px; height: 18px; background: var(--hairline); margin: 0 4px; flex: none; }
 .et-label { font-size: 11px; color: var(--stone); }
 .ed-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .ed-mini { flex: 1; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 8px; display: block; cursor: pointer; }
 .ed-zoom { display: flex; align-items: center; gap: 5px; flex: none; }
 .ez-pct { font-size: 11px; color: var(--steel); min-width: 42px; text-align: center; font-variant-numeric: tabular-nums; }
-.ed-inspector { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 8px 14px; margin-top: 8px; font-size: 12px; color: var(--slate); flex: none; }
-.ins-item { display: inline-flex; align-items: center; gap: 5px; }
-.ins-item b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
-.ins-item input[type=range] { accent-color: var(--ink); }
+.insp-range { accent-color: var(--accent); }
 .num-input { width: 60px; padding: 3px 5px; font-size: 11px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 6px; color: var(--ink); font-family: var(--mono); outline: none; }
 .num-input:focus { border-color: var(--ink); }
 .et-tip { margin-left: auto; color: var(--stone); font-size: 10.5px; }
-.ed-modal-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.35); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.ed-modal-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.35); display: flex; align-items: center; justify-content: center; z-index: var(--z-modal); }
 .ed-modal { width: min(560px, 92vw); background: var(--canvas); border-radius: 14px; box-shadow: 0 24px 64px rgba(16,24,40,0.2); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .ed-modal-head { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink); }
 .ed-modal-head b { font-size: 15px; }
@@ -1698,8 +1848,58 @@ onBeforeUnmount(() => {
 .ed-list-table td { padding: 3px 6px; border-bottom: 1px solid var(--hairline-soft); color: var(--ink); }
 .ed-list-table td .num-input { width: 70px; }
 .drum-canvas { width: 100%; display: block; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; cursor: crosshair; touch-action: none; }
-.ed-adv { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; margin-bottom: 8px; }
-.adv-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 「更多」高级工具面板：悬浮分栏卡片（贴在工具栏正下方）。
+   历史问题有两个：
+     ① 原先是「在文档流里」的块，展开就把钢琴卷帘压矮（卷帘过小）；
+     ② 改成 auto-fit 网格后每个分组仍是裸 flex 行，各格内容行数差异大、控件高度
+        22/26/20 混杂 → 视觉上「排列不整齐且错位」。
+   现在：绝对定位浮层（不占舞台高度）+ 分组卡片（标题独占一行、控件统一 22px 高、
+   组内左对齐成列），宽度自适应分栏，整体限高内滚。 */
+.ed-adv {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: var(--z-overlay);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  align-items: start;
+  gap: 8px 10px;
+  padding: 10px;
+  max-height: min(54vh, 400px);
+  overflow-y: auto;
+  background: var(--surface);
+  box-shadow: 0 18px 48px rgba(16, 24, 40, .18);
+}
+/* 分组卡片：标题一行、控件区一行起，组内按钮与输入框按同一基准线排列 */
+.ed-adv .adv-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-content: flex-start;
+  gap: 4px 6px;
+  min-width: 0;
+  min-height: 62px;
+  padding: 6px 8px;
+  background: var(--surface-soft);
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+}
+/* 首个标签作为分组标题：独占整行，其余（BPM 等行内小标题）保持内联 */
+.ed-adv .adv-row > .et-label:first-child {
+  flex: 0 0 100%;
+  margin-bottom: 1px;
+  color: var(--stone);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+.ed-adv .adv-row .et-label { flex: none; color: var(--stone); font-size: 11px; font-weight: 600; }
+.ed-adv .adv-row .et-sep { display: none; }
+/* 面板内控件统一到 22px 高：按钮与下拉/数字/文本输入同高，消除错位 */
+.ed-adv .et-btn { height: 22px; min-height: 22px; padding: 0 8px; font-size: 11.5px; }
+.ed-adv .select-input { height: 22px; padding: 0 24px 0 8px; font-size: 11.5px; background-position: right 7px center; }
+.ed-adv .num-input, .ed-adv .text-input { height: 22px; padding: 0 7px; font-size: 11.5px; }
 .adv-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .adv-form-grid label { font-size: 12px; color: var(--slate); display: flex; flex-direction: column; gap: 5px; }
 .adv-form-grid .span2 { grid-column: 1 / -1; }
@@ -1725,10 +1925,15 @@ onBeforeUnmount(() => {
 .help-sec b { display: block; color: var(--ink); }
 .ed-fullscreen .page-head { display: none; }
 .ed-fullscreen .ed-wrap-rel { flex: 1; }
-.ed-fullscreen .ed-toolbar,
-.ed-fullscreen .ed-nav,
-.ed-fullscreen .ed-inspector,
-.ed-fullscreen .ed-adv { display: flex; }
+.ed-fullscreen .ed-status { display: flex; }
+/* 全屏时收起左侧检查器，把宽度全部让给卷帘 */
+.ed-fullscreen .ed-insp { display: none; }
+.ed-fullscreen .ed-toolbar { display: flex; }
+/* 全屏模式屏幕更高：每栏放宽，展示高度也放宽（仍是悬浮卡片网格） */
+.ed-fullscreen .ed-adv {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  max-height: min(62vh, 520px);
+}
 .ed-wrap-rel { position: relative; flex: 1; min-height: 0; }
 .ed-video-overlay { position: absolute; top: 4px; right: 4px; width: 300px; max-width: 34%; border-radius: 8px; z-index: 20; background: #000; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
 
@@ -1743,7 +1948,7 @@ onBeforeUnmount(() => {
 .chord-cell.manual { border-color: var(--accent); }
 
 /* 钢琴卷帘右键菜单 */
-.ctx-mask { position: fixed; inset: 0; z-index: 2000; }
+.ctx-mask { position: fixed; inset: 0; z-index: var(--z-ctx); }
 .ctx-menu { position: fixed; min-width: 182px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 4px; display: flex; flex-direction: column; gap: 2px; }
 .ctx-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; text-align: left; border: none; background: transparent; color: var(--ink); padding: 7px 10px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
 .ctx-item:hover, .ctx-item.on { background: var(--surface-soft); }

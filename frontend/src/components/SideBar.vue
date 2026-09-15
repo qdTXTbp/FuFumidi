@@ -20,7 +20,7 @@ const importWithPicker = (items) => app.importWithPicker(items);
 const selectSong = (id) => app.selectSong(id);
 // 双击播放：常规歌单软件的通用交互（单击选中 / 双击切歌并开始播放）
 const playSong = (id) => app.playSongById(id);
-const removeSong = (id) => app.removeSong(id);
+const removeSong = (id, opts) => app.removeSong(id, opts);
 const toast = (m, t) => app.toast(m, t);
 
 const fileInput = ref(null);
@@ -73,6 +73,8 @@ const libSort = ref((() => { try { return localStorage.getItem('fufumidi_libsort
 watch(libSort, (v) => { try { localStorage.setItem('fufumidi_libsort', v); } catch (e) {} });
 const isAllView = computed(() => playlist.activePlaylistId === 'all');
 const isFavView = computed(() => playlist.activePlaylistId === 'favorites');
+/** 虚拟智能视图（全部曲目/收藏/最近播放/最常播放）：没有真实的歌单归属，不能「移除」 */
+const isVirtualView = computed(() => ['all', 'favorites', 'recent', 'most'].includes(String(playlist.activePlaylistId)));
 const activePlaylist = computed(() => playlist.activePlaylist);
 
 const visibleSongs = computed(() => {
@@ -132,22 +134,32 @@ function bmAll() {
   const ids = bmSongs.value.map(s => s.id);
   bmSel.value = ids.length && ids.every(id => bmSel.value.has(id)) ? new Set() : new Set(ids);
 }
-/** 移除：与列表「移除」语义一致 —— 移出本歌单，已不属于任何歌单的孤儿从资料库彻底删除 */
+/** 移除：只把曲目移出本歌单，全部曲目与本地 .mid 文件都不动 */
 function bmDelete() {
   const ids = [...bmSel.value];
   if (!ids.length) { toast(t('请先勾选曲目'), 'warn'); return; }
-  const cur = batchManagerPl.value ? batchManagerPl.value.id : playlist.activePlaylistId;
-  const orphanIds = ids.filter(id => !playlist.playlists.some(p => p.id !== cur && p.songIds.includes(id)));
-  const keptIds = ids.filter(id => !orphanIds.includes(id));
-  const msg = orphanIds.length
-    ? t('确定从歌单移除 ') + ids.length + t(' 首曲目？其中 ') + orphanIds.length + t(' 首不属于任何歌单，将从资料库彻底删除。')
-    : t('确定从歌单移除 ') + ids.length + t(' 首曲目？');
-  openConfirm(t('移除曲目'), msg, () => {
-    if (keptIds.length) playlist.removeSongs(keptIds);
-    for (const id of orphanIds) removeSong(id);
+  openConfirm(t('移除曲目'), t('确定从本歌单移除选中的 ') + ids.length + t(' 首曲目？曲目仍保留在全部曲目中。'), () => {
+    playlist.removeSongs(ids);
     bmSel.value = new Set();
     toast(t('已移除 ') + ids.length + t(' 首'), 'ok');
   });
+}
+/** 删除：从全部曲目与所有歌单移除，并删除本地 MIDI 文件（不可撤销） */
+function bmDeleteForever() {
+  const ids = [...bmSel.value];
+  if (!ids.length) { toast(t('请先勾选曲目'), 'warn'); return; }
+  openConfirm(
+    t('删除曲目'),
+    t('确定删除选中的 ') + ids.length + t(' 首曲目？将从全部曲目与所有歌单移除，并删除本地 MIDI 文件，不可撤销。'),
+    () => {
+      (async () => {
+        for (const id of ids) await removeSong(id, { deleteFile: true });
+        bmSel.value = new Set();
+        toast(t('已删除 ') + ids.length + t(' 首'), 'ok');
+      })();
+    },
+    t('删除')
+  );
 }
 function bmMove(plId) {
   const pl = batchManagerPl.value;
@@ -158,6 +170,25 @@ function bmMove(plId) {
   bmSel.value = new Set();
   const target = playlist.playlists.find(p => p.id === plId);
   toast(t('已移动 ') + ids.length + t(' 首到「') + (target ? target.name : '') + '」', 'ok');
+}
+/** 勾选项是否已全部收藏（决定按钮显示「收藏」还是「取消收藏」） */
+const bmAllFav = computed(() => {
+  const ids = [...bmSel.value];
+  return ids.length > 0 && ids.every(id => playlist.isFavorite(id));
+});
+/** 批量收藏/取消收藏：全部已收藏则统一取消，否则统一收藏；保留勾选便于继续移动/移除 */
+function bmFav() {
+  const ids = [...bmSel.value];
+  if (!ids.length) { toast(t('请先勾选曲目'), 'warn'); return; }
+  const turnOff = ids.every(id => playlist.isFavorite(id));
+  for (const id of ids) if (turnOff === playlist.isFavorite(id)) playlist.toggleFavorite(id);
+  toast((turnOff ? t('已取消收藏 ') : t('已收藏 ')) + ids.length + t(' 首'), 'ok');
+}
+/** 单行收藏切换（不改变勾选状态） */
+function bmToggleFav(id) {
+  const on = !playlist.isFavorite(id);
+  playlist.toggleFavorite(id);
+  toast(on ? t('已收藏') : t('已取消收藏'), 'ok');
 }
 /* 子页面内拖动排序 */
 const bmDragId = ref(null);
@@ -396,25 +427,37 @@ function deletePl(pl) {
     () => { playlist.remove(pl.id); toast(t('歌单已处理'), 'ok'); },
     last ? t('清空') : undefined);
 }
-function removeFromCurrentPl(s) {
+/**
+ * 移除：只解除歌曲与「当前歌单」的归入关系。
+ * 永远不动资料库（全部曲目）与本地 .mid 文件；收藏页里的「移除」等价于取消收藏。
+ */
+function songRemove(s) {
   if (isFavView.value) { toggleFav(s.id); return; }
-  if (isAllView.value) {
-    openConfirm(t('删除曲目'), t('确定从资料库删除「') + s.name + t('」') + t('？') + t(' 将从所有歌单移除。'), () => {
-      removeSong(s.id);
-      playlist.removeFromAllPlaylists([s.id]);
-    });
-  } else {
-    // 移出当前歌单；若此后它已不属于任何歌单，就视为孤儿，直接从资料库彻底删除，
-    // 省得用户还要再去「全部曲目」删一次（转录产物、本地文件已删除时尤其常见）。
-    const stillUsed = playlist.playlists.some(p => p.id !== playlist.activePlaylistId && p.songIds.includes(s.id));
-    if (stillUsed) {
-      playlist.removeSongs([s.id]);
-    } else {
-      openConfirm(t('删除曲目'), t('「') + s.name + t('」不属于任何歌单，将从资料库彻底删除，确定吗？'), () => {
-        removeSong(s.id);
-      });
-    }
-  }
+  if (isVirtualView.value) { toast(t('该视图是智能筛选而非歌单，请使用「删除」'), 'warn'); return; }
+  playlist.removeSongs([s.id]);
+  toast(t('已从歌单移除「') + s.name + t('」'), 'ok');
+}
+/** 删除：从全部曲目与所有歌单移除，并删除本地 MIDI 文件（不可撤销） */
+function songDelete(s) {
+  openConfirm(
+    t('删除曲目'),
+    t('将删除「') + s.name + t('」：从全部曲目与所有歌单移除，并删除本地 MIDI 文件。此操作不可撤销。'),
+    () => {
+      removeSong(s.id, { deleteFile: true });
+      toast(t('已删除「') + s.name + t('」'), 'ok');
+    },
+    t('删除')
+  );
+}
+/** 在资源管理器中定位曲目对应的真实 .mid 文件 */
+async function songReveal(s) {
+  try {
+    const p = (s && s.meta && s.meta.path) || '';
+    if (!bridge || typeof bridge.revealMidi !== 'function') { toast(t('当前环境不支持'), 'warn'); return; }
+    const r = await bridge.revealMidi(p);
+    if (r && r.ok) toast(r.fellBackToDir ? t('该曲目暂无本地文件，已打开曲库目录') : t('已在资源管理器中定位'), 'ok');
+    else toast(t('打开失败：') + ((r && r.error) || ''), 'error');
+  } catch (e) { toast(t('打开失败：') + String(e), 'error'); }
 }
 /* ---------------- 歌曲列表：批量管理（多选 / 全选 / 批量操作） ---------------- */
 // 勾选状态存在 playlist store 的 batchOn / batchSelection；歌单右键「批量管理」复用同一套
@@ -461,33 +504,35 @@ function batchFavorite() {
   playlist.setBatchSelected([]);
   toast((turnOff ? t('已取消收藏 ') : t('已收藏 ')) + ids.length + t(' 首'), 'ok');
 }
-/** 批量移除：语义与单首行的「移除」按钮一致（收藏页=取消收藏 / 全部曲目=从资料库删除 / 歌单=取消归入） */
+/** 批量移除：只解除与「当前歌单」的归入关系，资料库与本地文件不动（收藏页=取消收藏） */
 function batchRemove() {
   const ids = playlist.batchSelection.slice();
   if (!ids.length) { toast(t('请先勾选曲目'), 'warn'); return; }
   if (isFavView.value) { batchFavorite(); return; }
-  if (isAllView.value) {
-    openConfirm(t('删除曲目'), t('确定从资料库删除选中的 ') + ids.length + t(' 首曲目？') + t(' 将从所有歌单移除。'), () => {
-      for (const id of ids) removeSong(id);
-      playlist.removeFromAllPlaylists(ids);
-      playlist.setBatchSelected([]);
-      toast(t('已删除 ') + ids.length + t(' 首'), 'ok');
-    });
-  } else {
-    // 与单首「移除」一致：已不属于任何歌单的孤儿直接彻底删除，其余仅移出当前歌单
-    const cur = playlist.activePlaylistId;
-    const orphanIds = ids.filter(id => !playlist.playlists.some(p => p.id !== cur && p.songIds.includes(id)));
-    const keptIds = ids.filter(id => !orphanIds.includes(id));
-    const msg = orphanIds.length
-      ? t('确定从歌单移除 ') + ids.length + t(' 首曲目？其中 ') + orphanIds.length + t(' 首不属于任何歌单，将从资料库彻底删除。')
-      : t('确定从歌单移除 ') + ids.length + t(' 首曲目？');
-    openConfirm(t('移除曲目'), msg, () => {
-      if (keptIds.length) playlist.removeSongs(keptIds);
-      for (const id of orphanIds) removeSong(id);
-      playlist.setBatchSelected([]);
-      toast(t('已移除 ') + ids.length + t(' 首'), 'ok');
-    });
-  }
+  if (isVirtualView.value) { toast(t('该视图是智能筛选而非歌单，请使用「删除」'), 'warn'); return; }
+  openConfirm(t('移除曲目'), t('确定从当前歌单移除选中的 ') + ids.length + t(' 首曲目？曲目仍保留在全部曲目中。'), () => {
+    playlist.removeSongs(ids);
+    playlist.setBatchSelected([]);
+    toast(t('已移除 ') + ids.length + t(' 首'), 'ok');
+  });
+}
+/** 批量删除：从全部曲目与所有歌单移除，并删除本地 MIDI 文件（不可撤销） */
+function batchDelete() {
+  const ids = playlist.batchSelection.slice();
+  if (!ids.length) { toast(t('请先勾选曲目'), 'warn'); return; }
+  openConfirm(
+    t('删除曲目'),
+    t('确定删除选中的 ') + ids.length + t(' 首曲目？将从全部曲目与所有歌单移除，并删除本地 MIDI 文件，不可撤销。'),
+    () => {
+      // 串行 await：并发删除会让每次 removeSong 末尾的续播互相打断（播放抖动、重复解析）
+      (async () => {
+        for (const id of ids) await removeSong(id, { deleteFile: true });
+        playlist.setBatchSelected([]);
+        toast(t('已删除 ') + ids.length + t(' 首'), 'ok');
+      })();
+    },
+    t('删除')
+  );
 }
 // 切歌单 / 改搜索 / 换整理方式后，勾选集合里可能留下当前列表看不到的曲目，
 // 那样「已选 N」与实际可操作对象不符 —— 只保留仍在可见列表里的。
@@ -672,7 +717,10 @@ const showAuth = ref(false);
           <option v-for="pl in playlist.playlists" :key="pl.id" :value="pl.id">{{ pl.name }}</option>
         </select>
         <button class="btn sm" @click="batchFavorite" :disabled="!playlist.batchSelection.length">{{ allSelectedFav ? t('取消收藏') : t('收藏') }}</button>
-        <button class="btn sm danger" @click="batchRemove" :disabled="!playlist.batchSelection.length">{{ isAllView ? t('删除') : t('移除') }}</button>
+        <!-- 移除：仅解除与当前歌单的归入关系（智能筛选视图下不适用） -->
+        <button v-if="!isVirtualView" class="btn sm" @click="batchRemove" :disabled="!playlist.batchSelection.length">{{ t('移除') }}</button>
+        <!-- 删除：从全部曲目与所有歌单移除，并删除本地 MIDI 文件 -->
+        <button class="btn sm danger" @click="batchDelete" :disabled="!playlist.batchSelection.length">{{ t('删除') }}</button>
         <button class="btn sm ghost" @click="exitBatch">{{ t('完成') }}</button>
       </div>
 
@@ -707,7 +755,7 @@ const showAuth = ref(false);
           <button class="icon-btn" style="width:26px;height:26px;font-size:13px" :title="t('编辑信息（艺术家/专辑/流派/封面）')" :aria-label="t('编辑信息')" @click.stop="editTags(s.id)">
             <Icon name="pencil" :size="13" />
           </button>
-          <button class="icon-btn" style="width:26px;height:26px;font-size:13px" :title="t('移除')" :aria-label="t('移除')" @click.stop="removeFromCurrentPl(s)">
+          <button class="icon-btn" style="width:26px;height:26px;font-size:13px" :title="isFavView ? t('取消收藏') : (isVirtualView ? t('删除（含本地文件）') : t('从歌单移除'))" :aria-label="t('移除')" @click.stop="isFavView ? toggleFav(s.id) : (isVirtualView ? songDelete(s) : songRemove(s))">
             <Icon name="trash" :size="14" />
           </button>
         </div>
@@ -824,9 +872,14 @@ const showAuth = ref(false);
           </div>
           <button class="pl-ctx-item" @click="toggleFav(songMenu.s.id); closeSongMenu()">{{ isFav(songMenu.s.id) ? t('取消收藏') : t('收藏') }}</button>
           <button class="pl-ctx-item" @click="editTags(songMenu.s.id); closeSongMenu()">{{ t('编辑信息') }}</button>
+          <button class="pl-ctx-item" @click="songReveal(songMenu.s); closeSongMenu()">{{ t('打开所在文件夹') }}</button>
           <div class="ctx-sep"></div>
           <button class="pl-ctx-item" @click="songMenuBatch(songMenu.s)">{{ t('批量管理') }}</button>
-          <button class="pl-ctx-item danger" @click="removeFromCurrentPl(songMenu.s); closeSongMenu()">{{ isFavView ? t('取消收藏') : (isAllView ? t('删除') : t('移除')) }}</button>
+          <!-- 移除：只解除与当前歌单的归入关系（全部曲目/收藏/智能筛选视图下不适用） -->
+          <button v-if="!isVirtualView" class="pl-ctx-item" @click="songRemove(songMenu.s); closeSongMenu()">{{ t('从歌单移除') }}</button>
+          <!-- 删除：从全部曲目与所有歌单移除，并删除本地 MIDI 文件 -->
+          <button v-if="isFavView" class="pl-ctx-item danger" @click="toggleFav(songMenu.s.id); closeSongMenu()">{{ t('取消收藏') }}</button>
+          <button v-else class="pl-ctx-item danger" @click="songDelete(songMenu.s); closeSongMenu()">{{ t('删除（含本地文件）') }}</button>
         </div>
       </div>
     </Transition>
@@ -843,16 +896,22 @@ const showAuth = ref(false);
           <div class="bm-bar bm-manager-bar">
             <span class="batch-count">{{ bmSel.size }} {{ t('已选') }}</span>
             <button class="btn sm" @click="bmAll">{{ bmSongs.length && bmSongs.every(s => bmIsSel(s.id)) ? t('取消全选') : t('全选') }}</button>
-            <select class="select-input" style="flex:1;min-width:0" :value="''" @change="e => e.target.value && (bmMove(e.target.value), e.target.value = '')">
+            <span class="bm-spacer"></span>
+            <button class="btn sm" :disabled="!bmSel.size" :title="t('批量收藏/取消收藏勾选的曲目')" @click="bmFav">
+              <span class="bm-heart" :class="{ on: bmAllFav }">{{ bmAllFav ? '♥' : '♡' }}</span>
+              {{ bmAllFav ? t('取消收藏') : t('收藏') }}
+            </button>
+            <select class="select-input bm-move" :value="''" :aria-label="t('移到歌单')" @change="e => e.target.value && (bmMove(e.target.value), e.target.value = '')">
               <option value="" disabled>{{ t('移到歌单…') }}</option>
               <option v-for="pl in playlist.playlists" :key="pl.id" :value="pl.id">{{ pl.name }}</option>
             </select>
-            <button class="btn sm danger" @click="bmDelete" :disabled="!bmSel.size">{{ t('移除') }}</button>
+            <button class="btn sm" @click="bmDelete" :disabled="!bmSel.size">{{ t('移除') }}</button>
+            <button class="btn sm danger" @click="bmDeleteForever" :disabled="!bmSel.size">{{ t('删除') }}</button>
             <button class="btn sm ghost" @click="closeBatchManager">{{ t('完成') }}</button>
           </div>
           <div class="bm-list">
             <div v-if="!bmSongs.length" class="muted small" style="padding:12px 4px">{{ t('当前歌单没有曲目') }}</div>
-            <div v-for="s in bmSongs" :key="s.id" class="bm-item" :class="{ 'bm-drag-target': bmDragOverId === s.id }"
+            <div v-for="s in bmSongs" :key="s.id" class="bm-item" :class="{ 'bm-drag-target': bmDragOverId === s.id, 'bm-fav-on': playlist.isFavorite(s.id) }"
                  draggable="true"
                  @dragstart="bmDragStart(s, $event)"
                  @dragover.prevent="bmDragOver($event, s)"
@@ -863,6 +922,10 @@ const showAuth = ref(false);
               <input type="checkbox" :checked="bmIsSel(s.id)" :aria-label="s.name" @click.stop="bmToggle(s.id)" />
               <span class="bm-name" :title="s.name">{{ s.name }}</span>
               <em class="muted small">{{ s.song ? s.song.tracks.length : (s.meta.tracks || '—') }} {{ t(' 轨') }}</em>
+              <button class="bm-fav-btn" :class="{ on: playlist.isFavorite(s.id) }"
+                      :title="playlist.isFavorite(s.id) ? t('取消收藏') : t('收藏')"
+                      :aria-label="playlist.isFavorite(s.id) ? t('取消收藏') : t('收藏')"
+                      @click.stop="bmToggleFav(s.id)">{{ playlist.isFavorite(s.id) ? '♥' : '♡' }}</button>
             </div>
           </div>
         </div>
@@ -930,9 +993,27 @@ const showAuth = ref(false);
 .pl-item.pl-drag-before { box-shadow: 0 -2px 0 0 var(--accent) !important; }
 .pl-item.pl-drag-after { box-shadow: 0 2px 0 0 var(--accent) !important; }
 
-/* master 版歌曲工具按钮：普通布局（非绝对定位） */
-.song-item .si-tools { display: flex; gap: 2px; opacity: 0; transition: opacity 0.14s; flex: none; background: transparent; position: static; transform: none; padding: 0; }
-.song-item:hover .si-tools { opacity: 1; }
+/* 曲目行：保持单行（曲名独占剩余宽度），工具按钮悬停时浮在右侧，
+   不再参与布局计算 —— 否则 240px 侧栏里「序号/封面 + 曲名 + 4 个按钮」会折成三层、行高 100px+ */
+.song-item .si-tools {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 2px;
+  flex: none;
+  padding: 2px 3px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, transparent, var(--surface-soft) 26%);
+  box-shadow: none;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s;
+}
+.song-item:hover .si-tools,
+.song-item:focus-within .si-tools { opacity: 1; pointer-events: auto; }
+.song-item.active:hover .si-tools { background: linear-gradient(90deg, transparent, var(--surface) 26%); }
 .icon-btn.heart { color: var(--stone); }
 .icon-btn.heart.on { color: var(--brand-coral); }
 
@@ -942,9 +1023,9 @@ const showAuth = ref(false);
 .pl-search input::placeholder { color: var(--stone); opacity: .8; }
 
 /* 弹窗（与 ViewEdit 一致的应用内弹窗样式） */
-.ed-modal-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.35); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.ed-modal-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.35); display: flex; align-items: center; justify-content: center; z-index: var(--z-modal); }
 /* 确认弹窗需要盖在批量管理子页面（同 z-index 且更靠后渲染）之上 */
-.ed-modal-top { z-index: 2100; }
+.ed-modal-top { z-index: var(--z-modal-top); }
 .ed-modal { width: min(560px, 92vw); background: var(--canvas); border-radius: 14px; box-shadow: 0 24px 64px rgba(16,24,40,0.2); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .ed-modal-head { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink); }
 .ed-modal-head b { font-size: 15px; }
@@ -988,7 +1069,7 @@ body.resize-col .sidebar-resizer::after {
 .sidebar-resizer:focus-visible { outline: none; }
 
 /* 歌单右键菜单 */
-.pl-ctx-mask { position: fixed; inset: 0; z-index: 2000; }
+.pl-ctx-mask { position: fixed; inset: 0; z-index: var(--z-ctx); }
 .pl-ctx-menu { position: fixed; min-width: 160px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 4px; display: flex; flex-direction: column; gap: 2px; }
 .pl-ctx-item { text-align: left; border: none; background: transparent; color: var(--ink); padding: 7px 10px; border-radius: 6px; font-size: 13px; cursor: pointer; }
 .pl-ctx-item:hover { background: var(--surface-soft); }
@@ -996,11 +1077,20 @@ body.resize-col .sidebar-resizer::after {
 
 /* 批量管理子页面 */
 .bm-bar { display: flex; align-items: center; gap: 6px; padding: 10px 4px; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+.bm-spacer { flex: 1; min-width: 0; }
+.bm-move { flex: 0 1 150px; min-width: 104px; }
+.bm-heart { color: var(--brand-magenta); font-size: 12px; }
+.bm-heart.on { color: var(--brand-coral); }
 .bm-list { max-height: 52vh; overflow-y: auto; padding: 6px 4px; display: flex; flex-direction: column; gap: 2px; }
 .bm-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
 .bm-item:hover { background: var(--surface-soft); }
 .bm-item input { width: 14px; height: 14px; accent-color: var(--brand-blue); flex: none; }
 .bm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--ink); }
+.bm-fav-btn { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--stone); font-size: 12px; cursor: pointer; }
+.bm-fav-btn:hover { background: var(--surface); color: var(--brand-coral); }
+.bm-fav-btn.on { color: var(--brand-coral); }
+.bm-item.bm-fav-on .bm-name { color: var(--ink-strong); }
 .bm-drag-target { outline: 1px dashed var(--accent); background: var(--surface-soft); }
 .bm-item[draggable="true"] { cursor: grab; }
 .bm-item[draggable="true"]:active { cursor: grabbing; }

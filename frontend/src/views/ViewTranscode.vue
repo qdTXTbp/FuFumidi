@@ -37,9 +37,5 @@ watch(() => route.query.tab, (v) => {
   </div>
 </template>
 <style scoped>
-.group-page { min-height: 100%; }
-.group-tabs { display: flex; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--hairline); background: var(--canvas); position: sticky; top: 0; z-index: 30; }
-.gp-tab { display: inline-flex; align-items: center; gap: 5px; padding: 7px 14px; border: 1px solid var(--hairline); background: transparent; color: var(--steel); border-radius: 999px; cursor: pointer; font-size: 13px; transition: all .14s; }
-.gp-tab:hover { background: var(--surface-soft); color: var(--ink); }
-.gp-tab.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--ink); font-weight: 600; }
+/* .group-page / .group-tabs / .gp-tab 由 styles.css 统一提供 */
 </style>

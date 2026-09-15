@@ -188,6 +188,7 @@ function draw() {
   ctx.clearRect(0, 0, cw, ch);
   const bg = V('--surface'), border = V('--border'), muted = V('--text-muted'),
         brand = V('--brand'), ink = V('--text'), whiteKey = V('--surface-muted');
+  const grid = V('--grid'), onNote = V('--on-note'), noteFill = V('--note-fill');
   ctx.fillStyle = bg; ctx.fillRect(0, 0, cw, ch);
   ctx.fillStyle = whiteKey; ctx.fillRect(0, 0, LEFT, ch); ctx.fillRect(0, 0, cw, TOP);
 
@@ -205,7 +206,7 @@ function draw() {
   }
   for (let b = 0; b <= beatEnds; b++) {
     const x = xOf(b);
-    ctx.strokeStyle = (b % 4 === 0) ? border : 'rgba(128,128,128,0.14)';
+    ctx.strokeStyle = (b % 4 === 0) ? border : grid;
     ctx.lineWidth = (b % 4 === 0) ? 1.4 : 0.6;
     ctx.beginPath(); ctx.moveTo(x, TOP); ctx.lineTo(x, ch); ctx.stroke();
     if (b % 4 === 0) { ctx.fillStyle = muted; ctx.font = '9px sans-serif'; ctx.textAlign = 'left'; ctx.fillText(String(b / 4 + 1), x + 4, 14); }
@@ -217,17 +218,20 @@ function draw() {
     const w = Math.max(noteW * 0.9, n.durBeat * noteW - 2), h = ROW_H - 2;
     const sel = selIds.has(n.id);
     const primary = store.selectedId === n.id;
-    ctx.fillStyle = sel ? brand : '#9aa1ff';
-    ctx.strokeStyle = primary ? ink : (sel ? brand : 'rgba(0,0,0,0.25)');
+    ctx.fillStyle = sel ? brand : noteFill;
+    ctx.strokeStyle = primary ? ink : (sel ? brand : V('--note-edge'));
     ctx.lineWidth = sel ? 1.6 : 0.8;
     roundRect(ctx, x, y + 1, w, h, 3); ctx.fill(); ctx.stroke();
     if (n.lyric) {
       ctx.save(); ctx.beginPath(); ctx.rect(x + 2, y + 1, w - 4, h); ctx.clip();
-      ctx.fillStyle = '#fff'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+      ctx.fillStyle = onNote; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
       ctx.fillText(n.lyric, x + 4, y + h / 2 + 3); ctx.restore();
     }
-    ctx.fillStyle = sel ? '#fff' : 'rgba(255,255,255,0.5)';
+    ctx.save();
+    ctx.globalAlpha = sel ? 1 : 0.5;
+    ctx.fillStyle = onNote;
     ctx.fillRect(x + w - 3, y + 1, 3, h);
+    ctx.restore();
   }
 
   // 框选矩形
@@ -236,7 +240,7 @@ function draw() {
     const bw = Math.abs(drag.x1 - drag.x0), bh = Math.abs(drag.y1 - drag.y0);
     ctx.save();
     ctx.strokeStyle = brand; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
-    ctx.fillStyle = 'rgba(75,63,227,0.08)';
+    ctx.fillStyle = V('--tint-strong');
     ctx.fillRect(x0, y0, bw, bh); ctx.strokeRect(x0, y0, bw, bh);
     ctx.restore();
   }
@@ -248,7 +252,7 @@ function draw() {
     ctx.beginPath(); ctx.moveTo(px, TOP); ctx.lineTo(px, ch); ctx.stroke();
     ctx.fillStyle = brand; ctx.fillRect(px - 4, TOP, 8, 8);
     if (playing.value) {
-      ctx.fillStyle = '#fff'; ctx.font = '9px sans-serif'; ctx.textAlign = 'left';
+      ctx.fillStyle = onNote; ctx.font = '9px sans-serif'; ctx.textAlign = 'left';
       ctx.fillText(playBeat.value.toFixed(1) + t(' 拍'), px + 6, TOP + 8);
     }
   }
@@ -256,7 +260,16 @@ function draw() {
   drawCurve();
 }
 function V(n) { try { const v = getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v || F(n); } catch (e) { return F(n); } }
-function F(n) { return { '--surface': '#F7F7F8', '--border': 'rgba(23,23,23,0.12)', '--text': '#171717', '--text-muted': '#52525B', '--brand': '#4B3FE3', '--surface-muted': '#EFEFF2' }[n] || '#fff'; }
+function F(n) {
+  return {
+    '--surface': '#F7F7F8', '--border': 'rgba(23,23,23,0.12)', '--text': '#171717',
+    '--text-muted': '#52525B', '--brand': '#4B3FE3', '--surface-muted': '#EFEFF2',
+    '--muted': '#a8aab2', '--grid': 'rgba(15,23,42,0.08)', '--grid-strong': 'rgba(15,23,42,0.16)',
+    '--tint-strong': 'rgba(20,86,240,0.20)', '--row-alt': 'rgba(15,23,42,0.035)',
+    '--sel': '#ff5530', '--sel-soft': 'rgba(255,85,48,0.14)',
+    '--note-fill': '#8b83f0', '--note-edge': 'rgba(23,23,23,0.25)', '--on-note': '#ffffff',
+  }[n] || '#fff';
+}
 function roundRect(ctx, x, y, w, h, r) {
   const rr = Math.min(r, w / 2, h / 2);
   ctx.beginPath();
@@ -677,13 +690,13 @@ function drawParam() {
   // 拍线
   for (let b = 0; b <= beatEnds; b++) {
     const x = xOf(b);
-    g.strokeStyle = (b % 4 === 0) ? V('--border') : 'rgba(128,128,128,0.16)';
+    g.strokeStyle = (b % 4 === 0) ? V('--border') : V('--grid');
     g.lineWidth = 1;
     g.beginPath(); g.moveTo(x, 0); g.lineTo(x, PARAM_H); g.stroke();
   }
   // 默认值参考线
   const yDef = paramToY(m.def);
-  g.setLineDash([4, 4]); g.strokeStyle = 'rgba(128,128,128,0.6)';
+  g.setLineDash([4, 4]); g.strokeStyle = V('--grid-strong');
   g.beginPath(); g.moveTo(0, yDef); g.lineTo(cw, yDef); g.stroke();
   g.setLineDash([]);
   // 每个音符：从默认值线出发的柱状
@@ -693,7 +706,7 @@ function drawParam() {
     const v = paramValue(n, paramKey.value);
     if (Math.abs(v - m.def) < 1e-9) continue;
     const y = paramToY(v);
-    g.fillStyle = 'rgba(75,63,227,0.45)';
+    g.fillStyle = V('--tint-strong');
     g.fillRect(x + 1, Math.min(y, yDef), w - 2, Math.max(1, Math.abs(y - yDef)));
     g.fillStyle = brand;
     g.fillRect(x + 1, y - 1, w - 2, 2);
@@ -703,7 +716,7 @@ function drawParam() {
   for (const n of store.sortedNotes) {
     if (!sel.has(n.id)) continue;
     const x = xOf(n.startBeat), w = Math.max(noteW * 0.9, n.durBeat * noteW - 2);
-    g.strokeStyle = '#ff5530'; g.lineWidth = 1.5;
+    g.strokeStyle = V('--sel'); g.lineWidth = 1.5;
     g.strokeRect(x + 1, 1, w - 2, PARAM_H - 2);
   }
   // 播放头
@@ -802,14 +815,14 @@ function drawCurve() {
   // 拍线 + 0 音分中线 + ±半个八度参考线
   for (let b = 0; b <= beatEnds; b++) {
     const x = xOf(b);
-    g.strokeStyle = (b % 4 === 0) ? V('--border') : 'rgba(128,128,128,0.16)';
+    g.strokeStyle = (b % 4 === 0) ? V('--border') : V('--grid');
     g.lineWidth = 1;
     g.beginPath(); g.moveTo(x, 0); g.lineTo(x, CURVE_H); g.stroke();
   }
-  g.setLineDash([4, 4]); g.strokeStyle = 'rgba(128,128,128,0.6)';
+  g.setLineDash([4, 4]); g.strokeStyle = V('--grid-strong');
   g.beginPath(); g.moveTo(0, curveMid()); g.lineTo(cw, curveMid()); g.stroke();
   g.setLineDash([]);
-  g.fillStyle = 'rgba(128,128,128,0.35)';
+  g.fillStyle = V('--muted');
   g.font = '9px sans-serif'; g.textAlign = 'right';
   g.fillText('+1200', LEFT - 6, 12);
   g.fillText('0', LEFT - 6, curveMid() + 3);
@@ -819,9 +832,9 @@ function drawCurve() {
   for (const n of store.sortedNotes) {
     const { x, w } = noteSpan(n);
     if (x > cw || x + w < 0) continue;
-    g.fillStyle = sel.has(n.id) ? 'rgba(255,85,48,0.10)' : 'rgba(128,128,128,0.06)';
+    g.fillStyle = sel.has(n.id) ? V('--sel-soft') : V('--row-alt');
     g.fillRect(x, 0, w, CURVE_H);
-    if (sel.has(n.id)) { g.strokeStyle = '#ff5530'; g.lineWidth = 1; g.strokeRect(x + 0.5, 0.5, w - 1, CURVE_H - 1); }
+    if (sel.has(n.id)) { g.strokeStyle = V('--sel'); g.lineWidth = 1; g.strokeRect(x + 0.5, 0.5, w - 1, CURVE_H - 1); }
     const cu = n.pitchCurve;
     if (!cu || !cu.length) continue;
     g.strokeStyle = brand; g.lineWidth = 2; g.beginPath();
@@ -832,7 +845,7 @@ function drawCurve() {
     g.stroke();
     if (curveMode.value === 'point') {
       for (const p of cu) {
-        g.fillStyle = '#fff'; g.strokeStyle = brand; g.lineWidth = 1.5;
+        g.fillStyle = V('--on-note'); g.strokeStyle = brand; g.lineWidth = 1.5;
         g.beginPath(); g.arc(x + p.pos * w, centsToY(p.cents), 3.5, 0, Math.PI * 2);
         g.fill(); g.stroke();
       }
@@ -1116,7 +1129,7 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
 
 <style scoped>
 .us { padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0; position: relative; }
-.us-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--stone); }
+.us-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; overflow-x: auto; font-size: 12px; color: var(--stone); flex: none; }
 .us-toolbar label { display: inline-flex; align-items: center; gap: 6px; }
 .us-num { width: 60px; padding: 3px 6px; font-size: 12px; }
 .tg { display: inline-flex; gap: 2px; }
@@ -1127,28 +1140,28 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
 .us-foot { display: flex; align-items: center; gap: 10px; line-height: 1.6; }
 
 /* 右键菜单 */
-.us-ctx { position: absolute; z-index: 30; min-width: 148px; padding: 4px; display: flex; flex-direction: column; gap: 1px;
+.us-ctx { position: absolute; z-index: var(--z-ctx); min-width: 148px; padding: 4px; display: flex; flex-direction: column; gap: 1px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0,0,0,0.14); font-size: 12px; }
 .us-ctx-i { display: flex; align-items: center; gap: 7px; padding: 6px 10px; border: 0; border-radius: 6px;
   background: transparent; color: var(--text); cursor: pointer; text-align: left; width: 100%; }
 .us-ctx-i:hover:not(:disabled) { background: var(--brand-soft); color: var(--brand-text); }
 .us-ctx-i:disabled { opacity: 0.4; cursor: default; }
-.us-ctx-i.danger { color: #d33; }
-.us-ctx-i.danger:hover:not(:disabled) { background: rgba(211,51,51,0.1); color: #d33; }
+.us-ctx-i.danger { color: var(--red); }
+.us-ctx-i.danger:hover:not(:disabled) { background: rgba(211,51,51,0.1); color: var(--red); }
 .us-ctx-sep { height: 1px; background: var(--border); margin: 3px 6px; }
 
 /* P0-3 参数车道 */
 .us-param-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px 0; flex: none; }
-.us-param-lane { position: relative; height: 84px; overflow: hidden; border-top: 1px solid var(--border); background: var(--surface-muted); flex: none; }
+.us-param-lane { position: relative; height: var(--lane-h, 84px); overflow: hidden; border-top: 1px solid var(--border); background: var(--surface-muted); flex: none; }
 .us-param-canvas { position: absolute; top: 0; left: 0; display: block; cursor: crosshair; touch-action: none; }
-.us-curve-lane { height: 96px; }
+.us-curve-lane { height: var(--lane-h-tall, 96px); }
 /* 右键菜单开合动画（从触发点轻缩放弹出） */
 .ctxmenu-enter-active, .ctxmenu-leave-active { transition: opacity .12s ease, transform .14s cubic-bezier(.2,.9,.3,1.18); transform-origin: left top; }
 .ctxmenu-enter-from, .ctxmenu-leave-to { opacity: 0; transform: scale(.94) translate(-3px, -3px); }
 
 /* 曲库选择浮层 */
-.us-lib-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.4); display: flex; align-items: center; justify-content: center; z-index: 60; }
+.us-lib-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.4); display: flex; align-items: center; justify-content: center; z-index: var(--z-overlay, 900); }
 .us-lib { width: min(420px, 92vw); max-height: min(70vh, 560px); background: var(--canvas); border-radius: 14px;
   box-shadow: 0 24px 64px rgba(16,24,40,0.24); display: flex; flex-direction: column; overflow: hidden; }
 .us-lib-head { display: flex; align-items: center; gap: 8px; padding: 13px 16px 9px; font-size: 14px; color: var(--ink); }

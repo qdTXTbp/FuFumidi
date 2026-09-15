@@ -26,7 +26,7 @@ files:
   - "!docs/**"              # README 配图
   - "!scripts/**"           # 构建/上传脚本
   - "!tools/**"             # kachina-builder.exe 等构建工具
-  - "!rust-core/**"         # Rust 源码（无编译产物，rust.js 缺失时优雅降级）
+  - "!rust-core/**"         # Rust 源码（编译产物经 extraResources 分发到 resources/rust-core）
   - "!.github/**"
   - "!README.md"
   - "!README-CN.md"
@@ -57,6 +57,9 @@ extraResources:
     to: python
   - from: "resources/models"
     to: models
+  # 可选 Rust 核心（scripts/build-rust.ps1 产物）：缺失时 main/rust.js 自动降级为纯 JS 路径
+  - from: "resources/rust-core"
+    to: rust-core
   - from: "resources/elevate.exe"
     to: elevate.exe
   - from: "build/icon.png"

@@ -6,9 +6,11 @@
 const { app } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const Paths = require('./paths');
 
+// GPU 增强包落在数据根目录（默认在工具目录旁），与模型/缓存同处一地，不挤占 C 盘
 function gpuEnhanceRoot() {
-  return path.join(app.getPath('userData'), 'fufumidi', 'gpu-enhancements');
+  return Paths.gpuEnhanceRoot();
 }
 function gpuEnhanceDir(kind) {
   return path.join(gpuEnhanceRoot(), kind || '');

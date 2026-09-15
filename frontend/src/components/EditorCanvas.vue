@@ -1,6 +1,6 @@
 <script setup>
 // 可编辑钢琴卷帘：选择 / 画笔 / 橡皮 · 拖拽移动 · 缩放平移 · 撤销重做
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue';
 import { useAppStore } from '../stores/app';
 import { ensureAudio } from '../audio.js';
 
@@ -47,7 +47,14 @@ const selection = reactive(new Set());  // 选中的音符对象引用
 const pxPerBeat = computed(() => 22 * zoom.value);
 const pxPerTick = computed(() => pxPerBeat.value / (song()?.tpb || 480));
 const rowH = computed(() => 8 * Math.max(0.6, Math.min(2, zoom.value)));
-const H = 420;
+/* 卷帘高度：填满舞台可用高度（扣掉 CC 车道），让卷帘像 DAW 一样铺满窗口而非固定 420px */
+const H = ref(420);
+function availH() {
+  const el = wrap.value;
+  const lanes = (props.ccEnabled ? CC_LANE_H : 0) + (props.ccEnabled && props.cc2Enabled ? CC_LANE_H : 0);
+  const avail = (el ? el.clientHeight : 0) - lanes;
+  return avail > 180 ? Math.round(avail) : 420;
+}
 
 function song() { return (currentSong.value && currentSong.value.song) || null; }
 function curTrack() {
@@ -65,17 +72,19 @@ function computeRange() {
   }
   viewTop.value = hi >= lo ? Math.min(127, hi + 4) : 60;
 }
-function noteColor(i) {
-  const C = ['#ff5530', '#ea5ec1', '#1456f0', '#a855f7', '#3daeff', '#1ba673', '#3b82f6', '#f59e0b', '#d45656', '#17437d'];
-  return C[i % C.length];
+/* 轨道着色：轮转 8 个轨道色令牌 */
+function noteColor(i, pal) { return pal.tracks[((i % pal.tracks.length) + pal.tracks.length) % pal.tracks.length]; }
+/* 音高着色：12 个音级各一色（同名音全曲同色，便于看调性/声部走向）；
+   饱和度/亮度取自主题令牌，保证深色底也看得清 */
+const PITCH_HUES = [8, 345, 300, 275, 240, 225, 205, 187, 160, 85, 38, 0];
+function pitchColor(midi, pal) {
+  const i = ((midi % 12) + 12) % 12;
+  return 'hsl(' + PITCH_HUES[i] + ', ' + pal.noteS + ', ' + pal.noteL + ')';
 }
-/* 音高着色：12 个音级各一色（同名音全曲同色，便于看调性/声部走向） */
-const PITCH_COLORS = ['#ff5530', '#fb7185', '#ea5ec1', '#a855f7', '#6366f1', '#1456f0', '#3daeff', '#22b8cf', '#1ba673', '#84cc16', '#f59e0b', '#d45656'];
-function pitchColor(midi) { return PITCH_COLORS[((midi % 12) + 12) % 12]; }
 /* 力度着色：低力度冷色（蓝）→ 高力度暖色（红） */
-function velColor(v) {
+function velColor(v, pal) {
   const k = Math.max(0, Math.min(1, (Number(v) || 0) / 127));
-  return 'hsl(' + Math.round(210 - k * 210) + ', 78%, ' + Math.round(58 - 8 * k) + '%)';
+  return 'hsl(' + Math.round(210 - k * 210) + ', ' + pal.noteS + ', ' + pal.noteL + ')';
 }
 function cssVar(name, fb) {
   try {
@@ -83,6 +92,45 @@ function cssVar(name, fb) {
     return v || fb;
   } catch (e) { return fb; }
 }
+/* 一次性解析本轮绘制所需的全部颜色令牌（避免在逐音符循环里反复 getComputedStyle）。
+   结果按主题缓存：主题切换由 applyTheme 写 documentElement 的内联样式触发，
+   用 MutationObserver 失效即可 —— 否则每帧 ~30 次 getComputedStyle 会让整个应用发烫
+   （实测后台保活时 getComputedStyle 调用量达 5000+/秒）。 */
+const TRACK_FALLBACK = ['#3b82f6', '#14b8a6', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899'];
+let _pal = null;
+function buildPalette() {
+  const tracks = [];
+  for (let i = 1; i <= 8; i++) tracks.push(cssVar('--track-' + i, TRACK_FALLBACK[i - 1]));
+  return {
+    canvas: cssVar('--canvas', '#ffffff'),
+    surface: cssVar('--surface', '#f7f8fa'),
+    hair: cssVar('--hairline', 'rgba(10,10,10,.1)'),
+    border2: cssVar('--border-strong', 'rgba(10,10,10,.18)'),
+    stone: cssVar('--stone', 'rgba(10,10,10,.4)'),
+    steel: cssVar('--steel', '#c9ccd2'),
+    rowAlt: cssVar('--row-alt', 'rgba(10,10,10,0.028)'),
+    tint: cssVar('--tint', 'rgba(20,86,240,0.06)'),
+    tintStrong: cssVar('--tint-strong', 'rgba(20,86,240,0.20)'),
+    sel: cssVar('--sel', '#ff5530'),
+    playhead: cssVar('--playhead', '#ff5530'),
+    playheadSoft: cssVar('--playhead-soft', 'rgba(255,85,48,0.16)'),
+    curve: cssVar('--curve', '#4f8ef7'),
+    ksBg: cssVar('--ks-bg', 'rgba(245,158,11,0.18)'),
+    ksFg: cssVar('--ks-fg', '#b45309'),
+    cc: cssVar('--cc', '#d4a017'),
+    waveBg: cssVar('--wave-bg', 'rgba(20,86,240,0.05)'),
+    waveBar: cssVar('--wave-bar', 'rgba(20,86,240,0.35)'),
+    laneBg: cssVar('--lane-bg', 'rgba(10,10,10,0.03)'),
+    noteS: cssVar('--note-s', '72%'),
+    noteL: cssVar('--note-l', '52%'),
+    tracks,
+  };
+}
+function themeColors() {
+  if (!_pal) _pal = buildPalette();
+  return _pal;
+}
+function invalidatePalette() { _pal = null; }
 
 /* ---------------- 坐标换算 ---------------- */
 function xToTick(x) { return viewTick.value + x / pxPerTick.value; }
@@ -335,35 +383,37 @@ function draw() {
   const s = song();
   const dpr = window.devicePixelRatio || 1;
   const W = wEl.clientWidth || 600;
-  if (cv.width !== Math.floor(W * dpr) || cv.height !== Math.floor(H * dpr)) {
-    cv.width = Math.floor(W * dpr); cv.height = Math.floor(H * dpr);
+  const HK = H.value;
+  if (cv.width !== Math.floor(W * dpr) || cv.height !== Math.floor(HK * dpr)) {
+    cv.width = Math.floor(W * dpr); cv.height = Math.floor(HK * dpr);
   }
   ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx2d.clearRect(0, 0, W, H);
-  const bgTop = cssVar('--canvas', '#ffffff');
-  const bgBottom = cssVar('--surface', '#f7f8fa');
-  const hair = cssVar('--hairline', 'rgba(10,10,10,.1)');
-  const border2 = cssVar('--border-strong', 'rgba(10,10,10,.18)');
-  const stone = cssVar('--stone', 'rgba(10,10,10,.4)');
-  const steel = cssVar('--steel', '#c9ccd2');
-  const g = ctx2d.createLinearGradient(0, 0, 0, H);
+  ctx2d.clearRect(0, 0, W, HK);
+  const pal = themeColors();
+  const bgTop = pal.canvas;
+  const bgBottom = pal.surface;
+  const hair = pal.hair;
+  const border2 = pal.border2;
+  const stone = pal.stone;
+  const steel = pal.steel;
+  const g = ctx2d.createLinearGradient(0, 0, 0, HK);
   g.addColorStop(0, bgTop); g.addColorStop(1, bgBottom);
-  ctx2d.fillStyle = g; ctx2d.fillRect(0, 0, W, H);
+  ctx2d.fillStyle = g; ctx2d.fillRect(0, 0, W, HK);
   if (!s) return;
 
-  const lo = viewTop.value - Math.ceil(H / rowH.value);
+  const lo = viewTop.value - Math.ceil(HK / rowH.value);
   const hi = viewTop.value;
   const isBlack = m => { const p = ((m % 12) + 12) % 12; return [1, 3, 6, 8, 10].includes(p); };
   // 键盘行背景
   for (let m = lo; m <= hi; m++) {
     if (!isBlack(m)) continue;
-    ctx2d.fillStyle = 'rgba(10,10,10,0.028)';
+    ctx2d.fillStyle = pal.rowAlt;
     ctx2d.fillRect(0, (hi - m) * rowH.value, W, rowH.value);
   }
   // 调内音高亮：非「关闭」模式下，把调内音所在行铺一层浅色带（Studio One 的 Scale Panel 效果）
   // 有和弦轨时按小节绘制「音阶 ∪ 和弦音」，否则整屏统一按音阶
   if (props.scaleMode !== 'off') {
-    ctx2d.fillStyle = 'rgba(20,86,240,0.06)';
+    ctx2d.fillStyle = pal.tint;
     if (props.chordTrack && props.chordTrack.length) {
       for (const bar of props.chordTrack) {
         const x0 = Math.max(0, tickToX(bar.tick)), x1 = Math.min(W, tickToX(bar.endTick));
@@ -404,7 +454,7 @@ function draw() {
       lastStrongX = x;
     }
     ctx2d.strokeStyle = isBar ? border2 : hair;
-    ctx2d.beginPath(); ctx2d.moveTo(x, 0); ctx2d.lineTo(x, H); ctx2d.stroke();
+    ctx2d.beginPath(); ctx2d.moveTo(x, 0); ctx2d.lineTo(x, HK); ctx2d.stroke();
   }
   // 水平音高轨道线（每个音高一行，C 音位稍强）
   for (let m = lo; m <= hi; m++) {
@@ -427,9 +477,9 @@ function draw() {
     for (const m of ksKeys) {
       if (m < lo || m > hi) continue;
       const y = (hi - m) * rowH.value;
-      ctx2d.fillStyle = 'rgba(255,140,0,0.18)';
+      ctx2d.fillStyle = pal.ksBg;
       ctx2d.fillRect(0, y, W, rowH.value);
-      ctx2d.fillStyle = '#b45309';
+      ctx2d.fillStyle = pal.ksFg;
       ctx2d.fillText((props.ksMap[m] || '').slice(0, 10), 52, y + rowH.value - 3);
     }
   }
@@ -439,7 +489,7 @@ function draw() {
   // 遮蔽会导致下方 y=(hi-midi)*rowH 用「音符数」当「最高音」，音符全部画到画布外不可见。
   const winTic = viewT1 - viewT0;
   for (const tr of s.tracks) {
-    const col = noteColor(tr.index);
+    const col = noteColor(tr.index, pal);
     const ns = tr.notes;
     if (!ns.length) continue;
     // 上界：start <= viewT1
@@ -458,9 +508,9 @@ function draw() {
       // 着色方案：非当前轨道一律灰（保持「正在编辑哪条轨」的视觉层级）
       let fill = steel;
       if (isCur) {
-        if (props.colorMode === 'pitch') fill = pitchColor(n.midi);
-        else if (props.colorMode === 'velocity') fill = velColor(n.vel);
-        else if (props.colorMode === 'selection') fill = sel ? '#ff5530' : steel;
+        if (props.colorMode === 'pitch') fill = pitchColor(n.midi, pal);
+        else if (props.colorMode === 'velocity') fill = velColor(n.vel, pal);
+        else if (props.colorMode === 'selection') fill = sel ? pal.sel : steel;
         else fill = col;
       }
       // 静音音符半透明显示（不发声，但仍可编辑）
@@ -469,7 +519,7 @@ function draw() {
       ctx2d.fillRect(x, y + 1, w2, rowH.value - 2);
       ctx2d.globalAlpha = 1;
       if (sel) {
-        ctx2d.strokeStyle = '#ff5530'; ctx2d.lineWidth = 1.5;
+        ctx2d.strokeStyle = pal.sel; ctx2d.lineWidth = 1.5;
         ctx2d.strokeRect(x - 1, y, w2 + 2, rowH.value);
       }
     }
@@ -479,9 +529,9 @@ function draw() {
   const a = props.audio;
   if (a && a.data && a.rate) {
     const WAVE_H = 42;
-    const yBase = H - WAVE_H;
-    ctx2d.fillStyle = 'rgba(20,86,240,0.05)'; ctx2d.fillRect(0, yBase, W, WAVE_H);
-    ctx2d.strokeStyle = 'rgba(20,86,240,0.7)'; ctx2d.lineWidth = 1;
+    const yBase = HK - WAVE_H;
+    ctx2d.fillStyle = pal.waveBg; ctx2d.fillRect(0, yBase, W, WAVE_H);
+    ctx2d.strokeStyle = pal.curve; ctx2d.lineWidth = 1;
     const secPerTick = s.totalSec > 0 ? s.totalSec / s.totalTicks : 60 / 120 / s.tpb;
     const t0 = Math.max(0, xToTick(0)), t1 = Math.max(t0 + 1, xToTick(W));
     const s0 = t0 * secPerTick * a.rate, s1 = t1 * secPerTick * a.rate;
@@ -501,9 +551,9 @@ function draw() {
         ctx2d.beginPath(); ctx2d.moveTo(x, y1); ctx2d.lineTo(x, y2); ctx2d.stroke();
       }
     }
-    ctx2d.strokeStyle = 'rgba(20,86,240,0.35)';
+    ctx2d.strokeStyle = pal.waveBar;
     ctx2d.beginPath(); ctx2d.moveTo(0, yBase); ctx2d.lineTo(W, yBase); ctx2d.stroke();
-    ctx2d.fillStyle = 'rgba(20,86,240,0.6)'; ctx2d.font = '9px monospace'; ctx2d.textAlign = 'right';
+    ctx2d.fillStyle = pal.curve; ctx2d.font = '9px monospace'; ctx2d.textAlign = 'right';
     ctx2d.fillText(t('音频'), W - 4, yBase + 11);
   }
   // 画笔预览
@@ -511,25 +561,25 @@ function draw() {
     const d = dragState.value;
     const x = tickToX(d.startTick), w2 = Math.max(2, tickToX(d.startTick + d.len) - x);
     const y = (hi - d.startMidi) * rowH.value;
-    ctx2d.fillStyle = 'rgba(20,86,240,0.45)';
+    ctx2d.fillStyle = pal.tintStrong;
     ctx2d.fillRect(x, y + 1, w2, rowH.value - 2);
-    ctx2d.strokeStyle = 'rgba(20,86,240,0.9)'; ctx2d.lineWidth = 1.2;
+    ctx2d.strokeStyle = pal.curve; ctx2d.lineWidth = 1.2;
     ctx2d.strokeRect(x - 1, y, w2 + 2, rowH.value);
   }
   // 播放头
   const curTick = s.secToTick(state.curSec / state.tempo);
   const px = tickToX(curTick);
-  const pg = ctx2d.createLinearGradient(0, 0, 0, H);
-  pg.addColorStop(0, 'rgba(255,85,48,0.4)'); pg.addColorStop(1, 'rgba(255,85,48,0.05)');
+  const pg = ctx2d.createLinearGradient(0, 0, 0, HK);
+  pg.addColorStop(0, pal.playhead); pg.addColorStop(1, pal.playheadSoft);
   ctx2d.fillStyle = pg;
-  ctx2d.fillRect(px - 1, 0, 2.5, H);
-  ctx2d.fillStyle = '#ff5530'; ctx2d.fillRect(px - 4, 0, 8, 3);
+  ctx2d.fillRect(px - 1, 0, 2.5, HK);
+  ctx2d.fillStyle = pal.playhead; ctx2d.fillRect(px - 4, 0, 8, 3);
   // 框选
   if (dragState.value && dragState.value.type === 'marquee' && dragState.value.box) {
     const b = dragState.value.box;
-    ctx2d.strokeStyle = 'rgba(20,86,240,0.7)'; ctx2d.lineWidth = 1;
+    ctx2d.strokeStyle = pal.curve; ctx2d.lineWidth = 1;
     ctx2d.strokeRect(b.x, b.y, b.w, b.h);
-    ctx2d.fillStyle = 'rgba(20,86,240,0.08)';
+    ctx2d.fillStyle = pal.tintStrong;
     ctx2d.fillRect(b.x, b.y, b.w, b.h);
   }
 }
@@ -540,12 +590,13 @@ const ccDrawing = ref(false);
 const ccLast = ref(null);   // {tick, val}
 function drawCC(g, W, H2, ccNum) {
   const s = song();
+  const pal = themeColors();
   g.clearRect(0, 0, W, H2);
-  g.fillStyle = cssVar('--surface-soft', 'rgba(10,10,10,0.03)'); g.fillRect(0, 0, W, H2);
+  g.fillStyle = pal.laneBg; g.fillRect(0, 0, W, H2);
   const name = CC_NAMES[ccNum] || ('CC' + ccNum);
-  const hair = cssVar('--hairline', 'rgba(10,10,10,0.08)');
-  const stone = cssVar('--stone', 'rgba(10,10,10,0.35)');
-  const slate = cssVar('--slate', 'rgba(10,10,10,0.5)');
+  const hair = pal.hair;
+  const stone = pal.stone;
+  const slate = pal.steel;
   g.fillStyle = slate; g.font = '9.5px monospace'; g.textAlign = 'left'; g.textBaseline = 'middle';
   g.fillText(name + ' ' + ccNum, 6, 10);
   for (const v of [0, 64, 127]) {
@@ -556,14 +607,14 @@ function drawCC(g, W, H2, ccNum) {
   const tr = curTrack();
   const ccs = (tr && (tr.ccs || []).filter(c => c.cc === ccNum).sort((a, b) => a.tick - b.tick)) || [];
   if (!s || !ccs.length) return;
-  g.strokeStyle = '#d4a017'; g.lineWidth = 1.4; g.beginPath();
+  g.strokeStyle = pal.cc; g.lineWidth = 1.4; g.beginPath();
   for (let i = 0; i < ccs.length; i++) {
     const x = tickToX(ccs[i].tick);
     const y = H2 - 4 - (ccs[i].cv / 127) * (H2 - 12);
     if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
   }
   g.stroke();
-  g.fillStyle = '#d4a017';
+  g.fillStyle = pal.cc;
   for (const c of ccs) {
     const x = tickToX(c.tick);
     const y = H2 - 4 - (c.cv / 127) * (H2 - 12);
@@ -1041,29 +1092,84 @@ defineExpose({
 });
 
 /* ---------------- 生命周期 ---------------- */
+// 绘制循环改为「按需重绘」：只有在内容变化（dirty）或正在播放（播放头每帧移动）时才真正画。
+// 原实现无条件每帧 draw()+ccDrawLane()，大 MIDI（9 万+音符）下会把主线程占满，
+// 且被 KeepAlive 保活的组件离开页面后仍在烧 CPU —— 表现为「整个界面卡」。
 let raf = 0;
-function loop() { draw(); ccDrawLane(); raf = requestAnimationFrame(loop); }
-watch(() => currentSong.value, () => { selection.clear(); _autoScale = null; resetView(); draw(); });
-watch(() => props.trackIndex, () => { selection.clear(); draw(); ccDrawLane(); });
-watch(() => props.tool, () => { dragState.value = null; draw(); });
+let dirty = true;
+// 可见性：KeepAlive 把被缓存的子树移入 0×0 的隐藏容器，v-show 隐藏同理，尺寸都会归零。
+// onDeactivated 只会对被缓存组件的「根」触发，嵌套组件收不到 —— 所以用尺寸变化来判定可见性，
+// 隐藏时 loop 直接空转（不读画布、不绘制）。
+let visible = false;
+// 高刷屏上 rAF 可达 300fps，而播放头/曲线这类连续重绘 60fps 已足够：
+// 用最小帧间隔限流，避免 5 倍的无谓绘制（实测本机 rAF=300fps）。
+const MIN_FRAME_MS = 15;
+let lastPaint = 0;
+function markDirty() { dirty = true; }
+function loop(ts) {
+  const now = ts || performance.now();
+  if (visible && (dirty || state.playing) && (dirty || now - lastPaint >= MIN_FRAME_MS)) {
+    dirty = false;
+    lastPaint = now;
+    draw();
+    if (props.ccEnabled) ccDrawLane();
+  }
+  raf = requestAnimationFrame(loop);
+}
+function startLoop() { if (!raf) raf = requestAnimationFrame(loop); }
+function stopLoop() { if (raf) { cancelAnimationFrame(raf); raf = 0; } }
+
+watch(() => currentSong.value, () => { selection.clear(); _autoScale = null; resetView(); markDirty(); draw(); });
+watch(() => props.trackIndex, () => { selection.clear(); markDirty(); draw(); if (props.ccEnabled) ccDrawLane(); });
+watch(() => props.tool, () => { dragState.value = null; markDirty(); draw(); });
 watch(() => props.ccNumber, () => ccDrawLane());
 watch(() => props.cc2Number, () => ccDrawLane());
-watch(() => props.cc2Enabled, (v) => { if (!v) ccDrawing.value = false; ccDrawLane(); });
-watch(() => props.ccMode, () => ccDrawLane());
-watch(() => props.ccEnabled, (v) => { if (!v) ccDrawing.value = false; ccDrawLane(); });
-watch(() => props.scaleMode, () => { draw(); });
-watch(() => props.scaleSpec, () => { draw(); }, { deep: true });
-watch(() => props.chordTrack, () => { draw(); }, { deep: true });
-watch(() => props.audio, () => { _onsetsCache = null; draw(); });
-watch(() => props.ksMap, () => draw(), { deep: true });
+watch(() => props.cc2Enabled, (v) => { if (!v) ccDrawing.value = false; markDirty(); ccDrawLane(); });
+watch(() => props.ccMode, () => markDirty());
+watch(() => props.ccEnabled, (v) => { if (!v) ccDrawing.value = false; markDirty(); ccDrawLane(); });
+watch(() => props.scaleMode, () => { markDirty(); draw(); });
+watch(() => props.scaleSpec, () => { markDirty(); draw(); }, { deep: true });
+watch(() => props.chordTrack, () => { markDirty(); draw(); }, { deep: true });
+watch(() => props.audio, () => { _onsetsCache = null; markDirty(); draw(); });
+watch(() => props.ksMap, () => { markDirty(); draw(); }, { deep: true });
+// 播放中由 state.playing 兜底每帧重绘；暂停时拖动进度条 / 定位也要跟着走
+watch(() => state.curSec, () => { if (!state.playing) markDirty(); });
 
+// 主题切换：applyTheme 直接改 documentElement 的内联样式，监测到就失效颜色缓存
+let palObs = null;
+let ro = null;
 onMounted(async () => {
   await nextTick();
   ctx2d = canvas.value.getContext('2d');
+  H.value = availH();
   resetView();
-  raf = requestAnimationFrame(loop);
+  // 跟随舞台尺寸：窗口/检查器变化时重算卷帘高度，保证铺满且不重叠车道
+  if (typeof ResizeObserver !== 'undefined' && wrap.value) {
+    const syncVisible = () => {
+      const v = wrap.value ? (wrap.value.clientWidth > 0 && wrap.value.clientHeight > 0) : false;
+      if (v !== visible) { visible = v; markDirty(); }
+    };
+    syncVisible();
+    ro = new ResizeObserver(() => {
+      const n = availH();
+      if (n !== H.value) { H.value = n; markDirty(); }
+      syncVisible();
+    });
+    ro.observe(wrap.value);
+  }
+  if (typeof MutationObserver !== 'undefined') {
+    palObs = new MutationObserver(() => { invalidatePalette(); markDirty(); });
+    palObs.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
+  }
+  startLoop();
 });
-onBeforeUnmount(() => { if (raf) cancelAnimationFrame(raf); });
+onActivated(() => { markDirty(); startLoop(); });
+onDeactivated(stopLoop);
+onBeforeUnmount(() => {
+  stopLoop();
+  if (ro) { ro.disconnect(); ro = null; }
+  if (palObs) { palObs.disconnect(); palObs = null; }
+});
 </script>
 
 <template>
@@ -1079,7 +1185,7 @@ onBeforeUnmount(() => { if (raf) cancelAnimationFrame(raf); });
 </template>
 
 <style scoped>
-.ed-canvas-wrap { position: relative; width: 100%; overflow: hidden; }
+.ed-canvas-wrap { position: relative; width: 100%; height: 100%; overflow: hidden; }
 .ed-canvas-wrap canvas { display: block; width: 100%; cursor: crosshair; touch-action: none; }
 .cc-lane { border-top: 1px solid var(--hairline); background: var(--surface); }
 .cc-lane-canvas { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }

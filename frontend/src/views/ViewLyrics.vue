@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { getPlayer, ensureAudio } from '../audio.js';
@@ -294,34 +294,38 @@ function noteSelHint() {
 }
 
 /* ---------------- 时间轴 ---------------- */
-function drawTimeline() {
-  const cv = tlEl.value, s = song.value;
-  if (!cv || !s) return;
-  const dpr = window.devicePixelRatio || 1;
-  const w = cv.clientWidth, h = cv.clientHeight;
-  if (!w || !h) return;
-  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
-  const ctx = cv.getContext('2d');
+// 静态层（小节线 / 音符密度 / 歌词标记 / 图例）预渲染到离屏画布并缓存，每帧只贴一次图 + 画播放游标。
+// 原实现每帧都重建「全曲音符数组」并逐个 fillRect（大 MIDI 9 万+ 音符 → 每帧 9 万次绘制 + 9 万元素分配），
+// 是本页卡顿的根因。
+let _tlCache = { key: '', cv: null };
+function tlKey(s) {
+  let n = 0;
+  for (const tr of s.tracks) n += (tr.notes || []).length;
+  return s.totalTicks + '|' + n + '|' + lyrics.value.map(l => l.tick).join(',');
+}
+function buildTimelineCache(s, w, h, dpr) {
+  const off = document.createElement('canvas');
+  off.width = Math.round(w * dpr); off.height = Math.round(h * dpr);
+  const ctx = off.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = cssVar('--surface-soft', 'rgba(10,10,10,0.03)'); ctx.fillRect(0, 0, w, h);
   const total = s.totalTicks || 1, tpb = s.tpb || 480;
-  // 小节线
+  // 小节线（合并成一条 path 一次 stroke，避免每根线一次绘制调用）
   ctx.strokeStyle = cssVar('--hairline', 'rgba(10,10,10,0.06)'); ctx.lineWidth = 1;
+  ctx.beginPath();
   for (let tk = 0; tk <= total; tk += tpb) {
     const x = Math.round(tk / total * w);
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+    ctx.moveTo(x, 0); ctx.lineTo(x, h);
   }
+  ctx.stroke();
   // 音符密度（半透明蓝）
   const laneTop = 0, laneH = Math.round(h * 0.62);
-  const notes = [];
-  for (const tr of s.tracks) for (const n of tr.notes || []) notes.push(n);
-  if (notes.length) {
-    let mn = 127, mx = 0;
-    for (const n of notes) { if (n.midi < mn) mn = n.midi; if (n.midi > mx) mx = n.midi; }
+  let mn = 127, mx = 0, cnt = 0;
+  for (const tr of s.tracks) for (const n of tr.notes || []) { if (n.midi < mn) mn = n.midi; if (n.midi > mx) mx = n.midi; cnt++; }
+  if (cnt) {
     const range = Math.max(1, mx - mn);
     ctx.fillStyle = 'rgba(20,86,240,0.22)';
-    for (const n of notes) {
+    for (const tr of s.tracks) for (const n of tr.notes || []) {
       const x1 = Math.round(n.start / total * w), x2 = Math.round(n.end / total * w);
       const y = laneTop + (1 - (n.midi - mn) / range) * (laneH - 8) + 4;
       if (x2 > x1) ctx.fillRect(x1, y, Math.max(1, x2 - x1), 2);
@@ -336,29 +340,59 @@ function drawTimeline() {
       if (x >= 0 && x <= w) ctx.fillRect(x, laneTop + laneH + 8, 2, h - laneH - 16);
     }
   }
-  // 播放游标
-  if (state.playing) {
-    const p = getPlayer();
-    if (p && p.song) {
-      const x = Math.round(p.currentTick() / total * w);
-      ctx.fillStyle = cssVar('--ink', 'rgba(10,10,10,0.75)'); ctx.fillRect(x - 0.5, 0, 1.5, h);
-    }
-  }
   // 图例
   ctx.fillStyle = cssVar('--slate', 'rgba(10,10,10,0.55)'); ctx.font = '10px system-ui'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   ctx.fillText(t('蓝：音符 · 橙：歌词 · 竖线：播放位置'), 6, h - 16);
+  return off;
+}
+function drawTimeline() {
+  const cv = tlEl.value, s = song.value;
+  if (!cv || !s) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (!w || !h) return;
+  // 只在尺寸真变化时改 canvas 尺寸（给 width 赋值会重置画布，代价很高）
+  const pw = Math.round(w * dpr), ph = Math.round(h * dpr);
+  if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; }
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const key = tlKey(s);
+  if (!_tlCache.cv || _tlCache.key !== key) _tlCache = { key, cv: buildTimelineCache(s, w, h, dpr) };
+  ctx.clearRect(0, 0, w, h);
+  ctx.drawImage(_tlCache.cv, 0, 0, w, h);
+  // 播放游标（唯一每帧变化的部分）
+  ctx.fillStyle = cssVar('--ink', 'rgba(10,10,10,0.75)');
+  if (state.playing) {
+    const p = getPlayer();
+    if (p && p.song) {
+      const x = Math.round(p.currentTick() / (s.totalTicks || 1) * w);
+      ctx.fillRect(x - 0.5, 0, 1.5, h);
+    }
+  }
 }
 
 let raf = 0;
-function loop() {
-  updateHighlight();
-  if (tlEl.value) drawTimeline();
+function startLoop() { if (!raf) raf = requestAnimationFrame(loop); }
+function stopLoop() { if (raf) { cancelAnimationFrame(raf); raf = 0; } }
+// 高刷屏 rAF 可达 300fps：歌词高亮与时间轴限流到 ~60fps（视觉无差别，省 5 倍无谓工作）
+const MIN_FRAME_MS = 15;
+let lastPaint = 0;
+function loop(ts) {
+  const now = ts || performance.now();
+  if (now - lastPaint >= MIN_FRAME_MS) {
+    lastPaint = now;
+    updateHighlight();
+    if (tlEl.value) drawTimeline();
+  }
   raf = requestAnimationFrame(loop);
 }
 
 watch(song, () => nextTick(() => drawTimeline()));
-onMounted(() => { raf = requestAnimationFrame(loop); });
-onBeforeUnmount(() => cancelAnimationFrame(raf));
+onMounted(startLoop);
+// KeepAlive 保活期间停掉循环：否则离开本页后仍在每帧刷新高亮与时间轴，拖累整个应用
+onActivated(() => { nextTick(() => drawTimeline()); startLoop(); });
+onDeactivated(stopLoop);
+onBeforeUnmount(stopLoop);
 </script>
 
 <template>
@@ -433,8 +467,8 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
 </template>
 
 <style scoped>
-.lyrics-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; padding: 18px 26px 24px; max-width: 1100px; margin: 0 auto; }
-.lyr-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.lyrics-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; padding: var(--page-pad-y) var(--page-pad-x) 24px; max-width: 1100px; margin: 0 auto; }
+.lyr-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; overflow-x: auto; margin-bottom: 10px; flex: none; }
 .sep { width: 1px; height: 20px; background: var(--hairline); margin: 0 2px; }
 .lyr-ctl { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--steel); }
 .lyr-ctl input[type=checkbox] { accent-color: var(--ink); }

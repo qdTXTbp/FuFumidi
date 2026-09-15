@@ -407,9 +407,17 @@ fn run_batch_transform(input_dir: &str, output_dir: &str, mode: &str, arg: i32) 
 }
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
-    let out = match args.first().map(|s| s.as_str()) {
-        Some("ping") => r#"{"ok":true,"service":"fufumidi-core","version":"0.1.0"}"#.to_string(),
-        Some("version") => r#"{"ok":true,"version":"0.1.0"}"#.to_string(),
+    let out = run(&args);
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+    writeln!(handle, "{}", out).expect("write stdout");
+}
+
+/// 命令分发：与 stdout 解耦，便于单测直接断言输出（必须始终是一行合法 JSON）
+fn run(args: &[String]) -> String {
+    match args.first().map(|s| s.as_str()) {
+        Some("ping") => r#"{"ok":true,"service":"fufumidi-core","version":"0.2.0"}"#.to_string(),
+        Some("version") => r#"{"ok":true,"version":"0.2.0"}"#.to_string(),
         Some("midi-stats") => {
             let path = args.get(1).cloned().unwrap_or_default();
             match fs::read(&path) {
@@ -428,14 +436,17 @@ fn main() {
             let files = walk_files(&dir, &["mid", "midi"]);
             let mut arr = Vec::new();
             for f in &files {
-                if let Ok(bytes) = fs::read(f) {
-                    match stat_smf(&bytes) {
+                // 读不出来的文件也必须出现在结果里（ok:false），否则调用方会把
+                // 「扫不到」误判成「全部正常」，体检与去重结果都会失真
+                match fs::read(f) {
+                    Ok(bytes) => match stat_smf(&bytes) {
                         Ok(s) => arr.push(format!(
-                            r#"{{"file":{},"format":{},"tracks":{},"notes":{},"bpm":{:.2},"min_midi":{},"max_midi":{},"avg_vel":{:.1}}}"#,
-                            json_str(f), s.format, s.tracks, s.notes, s.bpm, s.min_midi, s.max_midi, s.avg_vel
+                            r#"{{"file":{},"format":{},"tracks":{},"notes":{},"bpm":{:.2},"min_midi":{},"max_midi":{},"avg_vel":{:.1},"size":{}}}"#,
+                            json_str(f), s.format, s.tracks, s.notes, s.bpm, s.min_midi, s.max_midi, s.avg_vel, bytes.len()
                         )),
-                        Err(e) => arr.push(format!(r#"{{"file":{},"ok":false,"error":{}}}"#, json_str(f), json_str(&e))),
-                    }
+                        Err(e) => arr.push(format!(r#"{{"file":{},"ok":false,"error":{},"size":{}}}"#, json_str(f), json_str(&e), bytes.len())),
+                    },
+                    Err(e) => arr.push(format!(r#"{{"file":{},"ok":false,"error":{},"size":0}}"#, json_str(f), json_str(&e.to_string()))),
                 }
             }
             format!(r#"{{"ok":true,"count":{},"files":[{}]}}"#, arr.len(), arr.join(","))
@@ -445,8 +456,13 @@ fn main() {
             let files = walk_files(&dir, &["mid", "midi", "sf2", "sf3", "wav", "mp3", "flac"]);
             let mut arr = Vec::new();
             for f in &files {
-                if let Ok(bytes) = fs::read(f) {
-                    arr.push(format!(r#"{{"file":{},"hash":{:016x},"size":{}}}"#, json_str(f), fnv1a(&bytes), bytes.len()));
+                match fs::read(f) {
+                    Ok(bytes) => {
+                        // hash 必须带引号：{:016x} 直接内插会产出 `"hash":a1b2…` 这种非法 JSON，
+                        // 调用方 JSON.parse 会失败并整体回退到 JS 路径（实测踩过）
+                        arr.push(format!(r#"{{"file":{},"hash":"{:016x}","size":{}}}"#, json_str(f), fnv1a(&bytes), bytes.len()));
+                    }
+                    Err(e) => arr.push(format!(r#"{{"file":{},"ok":false,"error":{},"size":0}}"#, json_str(f), json_str(&e.to_string()))),
                 }
             }
             format!(r#"{{"ok":true,"count":{},"files":[{}]}}"#, arr.len(), arr.join(","))
@@ -464,10 +480,7 @@ fn main() {
             run_batch_transform(&dir, &out_dir, "transpose", semitones)
         }
         _ => r#"{"ok":false,"error":"unknown command"}"#.to_string(),
-    };
-    let stdout = io::stdout();
-    let mut handle = stdout.lock();
-    writeln!(handle, "{}", out).expect("write stdout");
+    }
 }
 
 fn json_str(s: &str) -> String {
@@ -490,6 +503,68 @@ fn json_str(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 极简 JSON 校验：只检查「括号配对 / 字符串外不允许裸标识符」这类会导致
+    /// 调用方 JSON.parse 失败的结构性错误（历史上 hash-batch 就漏了 hash 的引号）。
+    fn assert_single_line_json(s: &str) {
+        assert!(!s.contains('\n'), "输出必须是一行: {}", s);
+        let bytes = s.as_bytes();
+        let mut depth = 0i32;
+        let mut in_str = false;
+        let mut esc = false;
+        for (i, &b) in bytes.iter().enumerate() {
+            if in_str {
+                if esc { esc = false; }
+                else if b == b'\\' { esc = true; }
+                else if b == b'"' { in_str = false; }
+                continue;
+            }
+            match b {
+                b'"' => in_str = true,
+                b'{' | b'[' => depth += 1,
+                b'}' | b']' => depth -= 1,
+                _ => {}
+            }
+            assert!(depth >= 0, "括号不配对 @{}", i);
+        }
+        assert!(!in_str, "字符串未闭合: {}", s);
+        assert_eq!(depth, 0, "括号未闭合: {}", s);
+        assert!(s.starts_with('{') && s.ends_with('}'), "必须是对象: {}", s);
+    }
+
+    #[test]
+    fn cli_outputs_are_valid_single_line_json() {
+        assert_single_line_json(&run(&["ping".into()]));
+        assert_single_line_json(&run(&["version".into()]));
+        assert_single_line_json(&run(&["nope".into()]));
+    }
+
+    #[test]
+    fn hash_batch_quotes_the_hash_field() {
+        let dir = env::temp_dir().join(format!("fufumidi-hash-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        let data: &[u8] = b"MThd\x00\x00\x00\x06\x00\x00\x00\x01\x01\xe0MTrk\x00\x00\x00\x0d\x64\x90\x3c\x64\x83\x60\x80\x3c\x00\x00\xff\x2f\x00";
+        fs::write(dir.join("a.mid"), data).expect("write");
+        let out = run(&["hash-batch".into(), dir.to_string_lossy().to_string()]);
+        assert_single_line_json(&out);
+        assert!(out.contains(r#""hash":""#), "hash 必须是带引号的字符串: {}", out);
+        assert!(out.contains(r#""count":1"#), "应扫描到 1 个文件: {}", out);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn batch_stats_has_no_bare_nan_or_inf() {
+        let dir = env::temp_dir().join(format!("fufumidi-stats-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        let data: &[u8] = b"MThd\x00\x00\x00\x06\x00\x00\x00\x01\x01\xe0MTrk\x00\x00\x00\x0d\x64\x90\x3c\x64\x83\x60\x80\x3c\x00\x00\xff\x2f\x00";
+        fs::write(dir.join("a.mid"), data).expect("write");
+        let out = run(&["batch-stats".into(), dir.to_string_lossy().to_string()]);
+        assert_single_line_json(&out);
+        assert!(!out.contains("NaN") && !out.contains("inf"), "数值必须是有限数: {}", out);
+        let _ = fs::remove_dir_all(&dir);
+    }
 
 
     #[test]

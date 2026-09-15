@@ -7,6 +7,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
+const Paths = require('./paths');
 
 function streamDownload(url, dest, onProgress, redirects = 0) {
   return new Promise((resolve, reject) => {
@@ -143,7 +144,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
   const WALLPAPER_RAW = `https://raw.githubusercontent.com/${WALLPAPER_REPO}/main/${WALLPAPER_DIR}`;
   // Git LFS 视频需通过 media.githubusercontent.com 获取真实文件
   const WALLPAPER_MEDIA = `https://media.githubusercontent.com/media/${WALLPAPER_REPO}/main/${WALLPAPER_DIR}`;
-  const thumbCacheDir = path.join(app.getPath('userData'), 'wallpaper-thumbs');
+  const thumbCacheDir = Paths.cacheDir('wallpaper-thumbs');
   try { f.mkdirSync(thumbCacheDir, { recursive: true }); } catch (e) {}
   // 远程壁纸目录缓存：5 分钟内直接复用 GitHub API 结果
   async function fetchRemoteList() {
