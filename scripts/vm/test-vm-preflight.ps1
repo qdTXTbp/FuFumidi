@@ -30,7 +30,7 @@ if ($os.Caption -match '家庭版|Home') {
 # 2) 管理员权限（部署时需要）
 Write-Host "[2] 管理员权限"
 $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if ($elevated) { Ok "当前已提权，可直接部署" } else { Warn "当前未提权：自检可用，但部署脚本必须以管理员身份运行" }
+if ($elevated) { Ok "当前已提权" } else { Warn "当前未提权：仅「首次安装 VirtualBox」需要管理员；VirtualBox 已装好的话，部署虚拟机不需要提权" }
 
 # 3) CPU 虚拟化
 Write-Host "[3] CPU 虚拟化"

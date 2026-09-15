@@ -32,7 +32,7 @@ param(
   [switch]$DryRun
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'   # 不能用 Stop：VBoxManage 会把版本横幅写到 stderr，Stop 下会被当成终止性错误
 $SnapName = 'clean-baseline'
 
 function Step($m) { Write-Host ("`n==> " + $m) -ForegroundColor Cyan }
@@ -43,23 +43,20 @@ function Invoke-VBox {
   param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
   if ($DryRun) { Write-Host ("    [DryRun] VBoxManage " + ($Args -join ' ')) -ForegroundColor DarkGray; return }
   $out = & $script:VBox @Args 2>&1
-  if ($LASTEXITCODE -ne 0) { Write-Host ("    VBoxManage " + ($Args -join ' ') + " -> " + ($out -join ' ')) -ForegroundColor Red; throw ("VBoxManage 执行失败: " + ($Args -join ' ')) }
-  if ($out) { Write-Host ("    " + ($out -join ' ')) -ForegroundColor DarkGray }
+  $code = $LASTEXITCODE
+  # VBoxManage 把版本横幅写到 stderr，过滤掉以免刷屏
+  $msg = ($out | Where-Object { $_ -notmatch 'VirtualBox Command Line Management Interface|Copyright \(C\)|^Oracle VirtualBox' -and "$_" -ne '' }) -join '  '
+  if ($code -ne 0) { Write-Host ("    VBoxManage " + ($Args -join ' ') + " -> " + $msg) -ForegroundColor Red; throw ("VBoxManage 执行失败: " + ($Args -join ' ')) }
+  if ($msg) { Write-Host ("    " + $msg) -ForegroundColor DarkGray }
+  return $out
 }
 
 # ---------- 1. 权限与前置 ----------
 Step "1/7 检查环境"
 $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $elevated -and -not $DryRun) {
-  Die @"
-需要管理员权限。请以管理员身份打开 PowerShell 后重跑：
-  powershell -ExecutionPolicy Bypass -File "$PSCommandPath"
-
-（先跑无需提权的自检可查看整体准备情况：
-  powershell -ExecutionPolicy Bypass -File "$(Join-Path $PSScriptRoot 'test-vm-preflight.ps1')"）
-"@
-}
-if ($DryRun -and -not $elevated) { Info "DryRun 模式：不要求提权（本模式不做任何改动）" }
+# 只有「安装 VirtualBox」这一步需要管理员；创建/配置虚拟机是当前用户级别的操作，不需要提权。
+# 因此这里不强制提权，等到第 2 步真正需要装 VirtualBox 时再判断。
+if ($DryRun) { Info "DryRun 模式：不做任何改动" }
 $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
 if (-not $cpu.VirtualizationFirmwareEnabled) { Die "固件未开启 CPU 虚拟化（BIOS/UEFI 里开启 SVM/VT-x）" }
 Info ("CPU: " + $cpu.Name + "  虚拟化已开启")
@@ -86,8 +83,17 @@ else {
   if ($cmd) { $script:VBox = $cmd.Source }
 }
 if ($script:VBox) {
-  Info ("已安装：" + $script:VBox)
+  Info ("已安装：" + $script:VBox + "  " + (& $script:VBox --version))
 } else {
+  if (-not $elevated) {
+    Die @"
+未安装 VirtualBox，且当前未提权（装 VirtualBox 需要管理员）。
+请二选一：
+  1) 以管理员身份打开 PowerShell 后重跑本脚本（首次需要装 VirtualBox）：
+       powershell -ExecutionPolicy Bypass -File "$PSCommandPath"
+  2) 先自己装好 VirtualBox，再用普通权限重跑（创建/配置虚拟机本身不需要管理员）
+"@
+  }
   if ($DryRun) { Write-Host "    [DryRun] winget install Oracle.VirtualBox" -ForegroundColor DarkGray; $script:VBox = $cand }
   else {
     Info "通过 winget 安装 VirtualBox…"
@@ -127,8 +133,15 @@ if ($existing -match [regex]::Escape($VmName)) {
 } else {
   Invoke-VBox createvm --name $VmName --ostype Windows11_64 --register --basefolder $VmRoot
   Invoke-VBox modifyvm $VmName --memory $MemoryMB --cpus $Cpus --vram 128 --graphicscontroller vmsvga
-  Invoke-VBox modifyvm $VmName --firmware efi --secureboot on --tpm-type 2.0
-  Invoke-VBox modifyvm $VmName --clipboard-mode bidirectional --draganddrop bidirectional
+  Invoke-VBox modifyvm $VmName --firmware efi --tpm-type 2.0
+  # VirtualBox 7.x：Secure Boot 不再由 modifyvm 控制。
+  # 新虚拟机首次启动前 UEFI 变量存储尚不存在，必须先 inituefivarstore，
+  # 再登记微软 KEK/db 与 Oracle 平台密钥，最后才能打开 Secure Boot。
+  Invoke-VBox modifynvram $VmName inituefivarstore
+  Invoke-VBox modifynvram $VmName enrollmssignatures
+  Invoke-VBox modifynvram $VmName enrollorclpk
+  Invoke-VBox modifynvram $VmName secureboot --enable
+  Invoke-VBox modifyvm $VmName --clipboard-mode bidirectional --drag-and-drop bidirectional
   Invoke-VBox modifyvm $VmName --nic1 nat --audio-enabled off
   Invoke-VBox setextradata $VmName VBoxInternal2/EfiGraphicsResolution 1920x1080
   Invoke-VBox createmedium disk --filename (Join-Path $VmRoot ($VmName + '\' + $VmName + '.vdi')) --size ($DiskGB * 1024) --variant Standard
@@ -149,8 +162,8 @@ if ($Manual) {
   Invoke-VBox startvm $VmName --type gui
 } else {
   Info "无人值守安装（自动创建本地账号，跳过 OOBE）…"
-  Invoke-VBox unattended install $VmName --iso=$IsoPath --user=$UserName --password=$Password `
-    --full-user-name="Tester" --hostname="fufumidi-test" --locale=zh_CN --country=CN `
+  Invoke-VBox unattended install $VmName --iso=$IsoPath --user=$UserName --user-password=$Password `
+    --full-user-name="Tester" --hostname="fufumidi-test.local" --locale=zh_CN --country=CN `
     --time-zone="Asia/Shanghai" --install-additions --start-vm=gui
   Info "安装进行中：虚拟机会自动重启若干次，全程约 20–40 分钟，请勿关闭窗口"
 }

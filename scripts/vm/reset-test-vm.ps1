@@ -11,7 +11,7 @@ param(
   [switch]$Headless
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'   # 不能用 Stop：VBoxManage 会把版本横幅写到 stderr，Stop 下会被当成终止性错误
 function Step($m) { Write-Host ("`n==> " + $m) -ForegroundColor Cyan }
 function Info($m) { Write-Host ("    " + $m) }
 function Die($m)  { Write-Host ("[失败] " + $m) -ForegroundColor Red; exit 1 }

@@ -213,7 +213,7 @@ powershell -ExecutionPolicy Bypass -File scripts/vm/stop-test-vm.ps1
 | 文件 | 用途 |
 |---|---|
 | `scripts/vm/test-vm-preflight.ps1` | 宿主机前置条件自检（无需管理员） |
-| `scripts/vm/deploy-test-vm.ps1` | 部署测试虚拟机（需管理员；支持 `-DryRun` 预演） |
+| `scripts/vm/deploy-test-vm.ps1` | 部署测试虚拟机（**首次装 VirtualBox 需管理员**；已装好则普通权限即可；支持 `-DryRun` 预演） |
 | `scripts/vm/make-baseline.ps1` | 系统装完后打基线快照 `clean-baseline` |
 | `scripts/vm/reset-test-vm.ps1` | 回滚到 `clean-baseline` 并启动（每轮测试起点） |
 | `scripts/vm/stop-test-vm.ps1` | 关闭虚拟机（可加 `-Revert` 顺手回滚） |
