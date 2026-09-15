@@ -9,25 +9,25 @@ h = {"Authorization": "token " + token, "Accept": "application/vnd.github+json"}
 
 # 1) 取 release id
 api = "https://api.github.com/repos/%s/releases/tags/%s" % (repo, tag)
-r = requests.get(api, headers=h, timeout=60, verify=False)
+r = requests.get(api, headers=h, timeout=60)
 r.raise_for_status()
 rid = r.json()["id"]
 print("release id:", rid)
 
 # 2) 若同名资产已存在，先删除（同名覆盖需要）
 assets_url = "https://api.github.com/repos/%s/releases/%s/assets" % (repo, rid)
-r = requests.get(assets_url, headers=h, timeout=60, verify=False)
+r = requests.get(assets_url, headers=h, timeout=60)
 r.raise_for_status()
 for a in r.json():
     if a["name"] == name:
         print("deleting old asset:", name, a["id"])
-        dr = requests.delete("https://api.github.com/repos/%s/releases/assets/%s" % (repo, a["id"]), headers=h, timeout=60, verify=False)
+        dr = requests.delete("https://api.github.com/repos/%s/releases/assets/%s" % (repo, a["id"]), headers=h, timeout=60)
         print("delete status:", dr.status_code)
 
 # 3) 上传
 url = "https://uploads.github.com/repos/%s/releases/%s/assets?name=%s" % (repo, rid, name)
 with open(path, "rb") as f:
-    up = requests.post(url, headers=dict(h, **{"Content-Type": "application/octet-stream"}), data=f, timeout=900, verify=False)
+    up = requests.post(url, headers=dict(h, **{"Content-Type": "application/octet-stream"}), data=f, timeout=900)
 print("upload status:", up.status_code)
 if up.status_code != 201:
     print(up.text[:500])
