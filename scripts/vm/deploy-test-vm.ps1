@@ -132,7 +132,7 @@ if ($existing -match [regex]::Escape($VmName)) {
   Info ($VmName + " 已存在，跳过创建（如需重建请先删除该虚拟机）")
 } else {
   Invoke-VBox createvm --name $VmName --ostype Windows11_64 --register --basefolder $VmRoot
-  Invoke-VBox modifyvm $VmName --memory $MemoryMB --cpus $Cpus --vram 128 --graphicscontroller vmsvga
+  Invoke-VBox modifyvm $VmName --memory $MemoryMB --cpus $Cpus --vram 128 --graphicscontroller vboxsvga
   Invoke-VBox modifyvm $VmName --firmware efi --tpm-type 2.0
   # VirtualBox 7.x：Secure Boot 不再由 modifyvm 控制。
   # 新虚拟机首次启动前 UEFI 变量存储尚不存在，必须先 inituefivarstore，

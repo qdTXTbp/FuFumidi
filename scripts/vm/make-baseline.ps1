@@ -1,7 +1,7 @@
 ﻿# ============================================================
 # 创建/更新测试虚拟机基线快照 clean-baseline
 # 在 Windows 11 装完、首次进入桌面、且未安装任何被测程序时执行。
-# 需管理员权限（VirtualBox 常规操作）。
+# 不需要管理员权限：虚拟机注册在当前用户下，快照属用户级操作。
 #
 # 用法: powershell -ExecutionPolicy Bypass -File scripts/vm/make-baseline.ps1
 # 可选: -VmName FuFumidiTest  -SnapName clean-baseline  -Force（已存在则删除重建）
@@ -18,7 +18,8 @@ function Info($m) { Write-Host ("    " + $m) }
 function Die($m)  { Write-Host ("[失败] " + $m) -ForegroundColor Red; exit 1 }
 
 $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $elevated) { Die "需要管理员权限，请以管理员身份打开 PowerShell 后重跑。" }
+# 只有「首次安装 VirtualBox」需要管理员；打快照是当前用户级别的操作。
+if (-not $elevated) { Info "当前未提权（打快照不需要管理员，继续）" }
 
 $VBox = 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe'
 if (-not (Test-Path $VBox)) { $c = Get-Command VBoxManage -ErrorAction SilentlyContinue; if ($c) { $VBox = $c.Source } else { Die "找不到 VBoxManage.exe，请先运行 deploy-test-vm.ps1" } }

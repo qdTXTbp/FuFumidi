@@ -66,6 +66,7 @@ powershell -ExecutionPolicy Bypass -File scripts/vm/test-vm-preflight.ps1
 | guest | Windows 11 x64（正式版 ISO） |
 | 规格 | 4 vCPU / 8 GB 内存 / 80 GB 动态磁盘 |
 | 固件 | **UEFI + Secure Boot + TPM 2.0**（Win11 硬性要求） |
+| 显卡控制器 | **VBoxSVGA**（`vmsvga` 下 Win11 会黑屏且无 ACPI 响应，勿用） |
 | 目录 | `E:\VMs\FuFumidiTest\`（宿主机盘符按实际可用空间调整） |
 | 网络 | NAT（与宿主机共享网络） |
 | 共享/剪贴板 | 共享文件夹 `\\?\E:\Midi\安装包` 挂到虚拟机 `Z:`，便于取安装包 |
@@ -100,6 +101,48 @@ powershell -ExecutionPolicy Bypass -File scripts/vm/stop-test-vm.ps1
 
 > **纪律**：每轮测试**必须**从 `clean-baseline` 回滚开始。
 > 不允许「上一轮装过的虚拟机继续用下一轮」，否则等价于宿主机那种脏环境，失去全部意义。
+
+### 2.5 在虚拟机里执行命令
+
+用 `guest-run.ps1` 把一段 PowerShell 送进 guest 执行并取回 UTF-8 输出：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/vm/guest-run.ps1 -ScriptPath .\probe.ps1
+```
+
+> 不要直接用 `VBoxManage guestcontrol ... -- powershell -Command "..."`：
+> VBoxManage 会剥掉参数里的引号（带空格的命令必被拆散），且 stdout 按本地代码页解码，中文全乱码。
+
+`guest-probe.ps1` 是现成的环境自检（系统版本 / 身份 / 时间 / 硬件 / 分辨率 / 网络连通性 / 是否已装被测程序），
+每轮测试开始前先跑一次，确认基线符合本节规格。
+
+配套工具（`scripts/vm/`）：
+
+| 脚本 | 用途 |
+|---|---|
+| `test-vm-preflight.ps1` | 部署前自检（虚拟化 / 磁盘 / 工具链 / ISO） |
+| `deploy-test-vm.ps1` | 建虚拟机 + 无人值守装 Win11 |
+| `make-baseline.ps1` | 关机并创建基线快照 `clean-baseline` |
+| `reset-test-vm.ps1` | 回滚到基线并启动（每轮测试的起点） |
+| `stop-test-vm.ps1` | 关闭虚拟机 |
+| `guest-run.ps1` | 在 guest 内执行 PowerShell 并取回输出 |
+| `guest-probe.ps1` | guest 环境自检 |
+
+### 2.6 宿主机 Hyper-V 的性能陷阱
+
+若宿主机启用了 Hyper-V / VBS（`HvHost`、`vmcompute` 在运行，或「内核隔离 → 内存完整性」开启），
+AMD-V 会被 Windows 虚拟机监控程序独占，VirtualBox 只能退回 **NEM 模式**
+（日志出现 `NEM: Snail execution mode is active!`）。
+
+后果：安装 Windows 就要 1 小时以上，guest 会长时间无响应、黑屏、ACPI 关机不生效。
+要拿到可用的测试速度，**必须**在宿主机上关掉 Windows 虚拟机监控程序后重启：
+
+```powershell
+# 管理员执行，之后重启宿主机；恢复用 auto
+bcdedit /set hypervisorlaunchtype off
+```
+
+> 副作用：依赖 Hyper-V 的功能（WSL2、Docker Desktop、部分安卓模拟器等）在关闭期间不可用。
 
 ---
 
