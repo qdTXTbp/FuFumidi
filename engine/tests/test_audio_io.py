@@ -14,6 +14,7 @@
 """
 
 import os
+import time
 
 import audio_io
 
@@ -87,3 +88,45 @@ def test_remove_temp_none_ok():
 def test_find_ffmpeg_returns_path_or_none():
     r = audio_io.find_ffmpeg()
     assert r is None or (isinstance(r, str) and r)
+
+
+# ---------- sweep_stale_temp ----------
+# 回归守卫：引擎进程被强杀时 finally 不执行，解码出的 WAV（单文件上百 MB）与
+# demucs 声部目录会一直堆在 %TEMP%。实测曾遗留 12 个文件共 1.34 GB。
+
+def _seed(root, name, age_hours, is_dir=False):
+    p = root / name
+    if is_dir:
+        p.mkdir(parents=True, exist_ok=True)
+        (p / "stem.wav").write_bytes(b"RIFF")
+    else:
+        p.write_bytes(b"RIFF")
+    ts = time.time() - age_hours * 3600
+    os.utime(p, (ts, ts))
+    return p
+
+
+def test_sweep_removes_stale_files_and_dirs(monkeypatch, tmp_path):
+    monkeypatch.setattr(audio_io.tempfile, "gettempdir", lambda: str(tmp_path))
+    old_file = _seed(tmp_path, "midi_tool_old.wav", 10)
+    old_dir = _seed(tmp_path, "midi_tool_sep_old", 10, is_dir=True)
+    fresh = _seed(tmp_path, "midi_tool_fresh.wav", 0)
+    foreign = _seed(tmp_path, "other_app.wav", 10)
+
+    n = audio_io.sweep_stale_temp(max_age_hours=6)
+
+    assert n == 2
+    assert not old_file.exists()
+    assert not old_dir.exists()
+    assert fresh.exists(), "刚生成的临时文件可能正被别的进程使用，不能删"
+    assert foreign.exists(), "不是本应用前缀的文件不能碰"
+
+
+def test_sweep_no_leftovers_returns_zero(monkeypatch, tmp_path):
+    monkeypatch.setattr(audio_io.tempfile, "gettempdir", lambda: str(tmp_path))
+    assert audio_io.sweep_stale_temp() == 0
+
+
+def test_temp_prefix_is_what_engine_writes():
+    # sweep 的匹配前缀必须与 audio_io 实际用的 mkstemp 前缀一致
+    assert audio_io.TEMP_PREFIX == "midi_tool_"

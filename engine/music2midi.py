@@ -547,6 +547,17 @@ def cmd_worker():
 def main():
     args = build_parser().parse_args()
 
+    # 回收上次异常退出（进程被强杀 → finally 没跑）留在系统临时目录里的解码 WAV
+    # 与 demucs 声部目录。正常路径下它们都在各自的 finally 里删掉了，这里只兜残留。
+    # worker 模式的 stdout 是 ###RESULT 协议，不能掺任何输出，故仅非 worker 模式打印。
+    try:
+        from audio_io import sweep_stale_temp
+        n = sweep_stale_temp()
+        if n and args.mode != "worker":
+            print("[清理] 回收 %d 项上次遗留的临时文件/目录" % n, flush=True)
+    except Exception:
+        pass
+
     if args.mode == "gui":
         return run_gui()
 

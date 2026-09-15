@@ -26,6 +26,40 @@ MIDI_EXTENSIONS = {".mid", ".midi", ".kar", ".rmi"}
 # 最近一次解码耗时（秒）：转录引擎完成后由 engine.transcribe 读取并上报 [计时] 日志
 LAST_DECODE_SEC = 0.0
 
+# 本模块所有临时文件/目录统一用这个前缀，便于启动时批量回收
+TEMP_PREFIX = "midi_tool_"
+# 回收阈值：超过这个时长仍留在临时目录的，视为上次异常退出（进程被强杀）留下的
+STALE_TEMP_HOURS = 6
+
+
+def sweep_stale_temp(max_age_hours=STALE_TEMP_HOURS):
+    """清掉系统临时目录里本应用遗留的临时文件/目录，返回清理项数。
+
+    正常路径下每个临时文件都在调用方的 finally 里删掉了；但引擎进程被强杀
+    （取消转录 / 超时 / 崩溃）时 finally 不会执行 —— 而解码出来的 WAV 是整首歌
+    （单文件上百 MB），demucs 的声部目录更大，堆在 %TEMP% 里会一直涨。
+    实测遗留 12 个 midi_tool_*.wav 共 1.34 GB。
+    """
+    import glob
+    import shutil
+    import time
+    root = tempfile.gettempdir()
+    cutoff = time.time() - max_age_hours * 3600
+    n = 0
+    for p in glob.glob(os.path.join(root, TEMP_PREFIX + "*")):
+        try:
+            # 刚生成的可能正被别的进程使用，只回收"明显过期"的
+            if os.path.getmtime(p) > cutoff:
+                continue
+            if os.path.isdir(p):
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                os.remove(p)
+            n += 1
+        except Exception:
+            pass
+    return n
+
 
 def find_ffmpeg():
     """返回可用的 ffmpeg 路径（系统自带或 imageio-ffmpeg 内置）。"""
@@ -51,7 +85,7 @@ def ffmpeg_to_wav(src, sr, mono=True, extra=()):
             "未找到 ffmpeg，无法解码该格式。请双击运行 install.bat 完成依赖安装。"
         )
 
-    fd, tmp = tempfile.mkstemp(prefix="midi_tool_", suffix=".wav")
+    fd, tmp = tempfile.mkstemp(prefix=TEMP_PREFIX, suffix=".wav")
     os.close(fd)
     cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
            "-i", src, "-vn"]
@@ -94,7 +128,7 @@ def decode_to_wav(src, sr):
                 data = data[:, 0]
             if sr0 != sr:
                 data = _resample(data, sr0, sr)
-            fd, tmp = tempfile.mkstemp(prefix="midi_tool_", suffix=".wav")
+            fd, tmp = tempfile.mkstemp(prefix=TEMP_PREFIX, suffix=".wav")
             os.close(fd)
             sf.write(tmp, data, sr, subtype="PCM_16")
             LAST_DECODE_SEC = _time.perf_counter() - _t0
