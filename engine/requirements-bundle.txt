@@ -54,7 +54,10 @@ pretty_midi>=0.2.10
 # ---- 数值与信号（通用依赖，随上面包自动解析，这里显式钉住）----
 numpy>=1.24
 scipy>=1.10
-tqdm>=4.59.0,<4.60
+# 不能钉 <4.60：pymss==2.0.1 要求 tqdm>=4.60，钉住会让整份清单无法安装
+# （这是它长期只能靠手工装、进而漂移出「缺依赖」问题的原因之一）。
+# 新版 tqdm 缺 set_lock / get_lock，由 engine/deps.py 的 _patch_tqdm_compat 兜住。
+tqdm>=4.60
 
 # ---- 引擎计算后端：CPU 版即可（自动调用全部 CPU 核 / GPU 可选）----
 # torch 由 bundle-python.js 按 --torch 参数选择 CPU 或 CUDA 版本安装，
