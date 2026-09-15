@@ -74,6 +74,11 @@ FuFumidi.update.exe（kachina 增量更新器，与主程序 exe 同级）
 
 - 代码已合入 `master`，`package.json` 版本号已更新为 `X.Y.Z`。
 - 所有版本号一致：`package.json` / 前端 / CI tag。
+- **已在干净 Windows 11 虚拟机中完成全功能测试**（见 `docs/TESTING.md`），
+  并产出测试报告 `docs/test-reports/YYYY-MM-DD-vX.Y.Z-vm.md`。
+
+  > 宿主机上的自动化回归（`cdp-*.cjs`）**不能**替代这一步：宿主机是脏环境，
+  > 会掩盖内置依赖缺失、首次启动路径、数据迁移、卸载残留等问题。
 
 ### 步骤
 
