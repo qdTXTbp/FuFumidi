@@ -55,6 +55,11 @@ electronLanguages:
 extraResources:
   - from: "resources/python"
     to: python
+  # VC++ 2015-2022 x64 运行库：干净 Windows 不自带，缺了 torch/onnxruntime 直接
+  # 加载失败。这里另存一份（不在更新器 ignoreFolderPath 里，更新会带上），
+  # 由 main.js 的 ensureRuntimeDlls 在首次用到引擎时补进 resources/python。
+  - from: "resources/vcredist"
+    to: vcredist
   - from: "resources/models"
     to: models
   # 可选 Rust 核心（scripts/build-rust.ps1 产物）：缺失时 main/rust.js 自动降级为纯 JS 路径
@@ -81,5 +86,6 @@ nsis:
   createDesktopShortcut: true
   shortcutName: FuFumidi
   # 安装前清理历史作用域（HKCU/HKLM/WOW6432Node）的残留卸载项，
-  # 根治「有之前没清理的目录/覆盖重装」反复提示（见 build/nsis-cleanup.nsh）
-  include: build/nsis-cleanup.nsh
+  # 根治「有之前没清理的目录/覆盖重装」反复提示；
+  # 卸载时询问是否保留 FuFumidiData（模型/声库/曲库），见 build/nsis-custom.nsh
+  include: build/nsis-custom.nsh

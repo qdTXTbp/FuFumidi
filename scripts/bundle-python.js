@@ -50,6 +50,18 @@ const VCRUNTIME = [
 ];
 const VCRUNTIME_SRC = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
 
+// basic-pitch 的声明依赖里带 tensorflow，pip 会顺带装上整套 TF（约 1.1GB）。
+// 本应用走 ONNX 后端（basic_pitch_quant.onnx + onnxruntime），出厂运行时不带 TF：
+// 装上它除了白占 1.1GB、把安装包从 551MB 顶到 836MB，还会把 ml-dtypes 钉到 0.2.0，
+// 与 requirements 里 onnx<1.17 的约束互相打架。所以装完直接卸掉。
+const TF_STACK = [
+  'tensorflow',
+  'tensorflow-intel',
+  'tensorflow-estimator',
+  'tensorflow-io-gcs-filesystem',
+  'keras',
+];
+
 // aria 组的两个包不在 PyPI，只能从 GitHub 拿。依次尝试各加速镜像。
 const GIT_MIRRORS = [
   'https://gh.jasonzeng.dev/https://github.com/',
@@ -92,13 +104,28 @@ if (!checkOnly) {
     console.error('[错误] requirements-bundle.txt 安装失败：所有镜像均不可用');
     process.exit(1);
   }
+  // 见 TF_STACK 注释：basic-pitch 会拖来整套 TensorFlow，装完立刻卸掉
+  for (const p of TF_STACK) {
+    tryRun('"' + python + '" -m pip uninstall -y -q ' + p);
+  }
+  if (require('child_process').spawnSync('"' + python + '" -c "import tensorflow"', { shell: true }).status === 0) {
+    console.error('[错误] TensorFlow 仍在运行时里（约 1.1GB，不应随包分发）');
+    process.exit(1);
+  }
+  console.log('    已确认运行时不带 TensorFlow（走 ONNX 后端）');
 
   console.log('== 2/4 部署 VC++ 2015-2022 x64 运行库（app-local）==');
+  // 两处都要放：
+  //   resources/python/     → python.exe 同目录，进程直接能解析到
+  //   resources/vcredist/   → 不在更新器 ignoreFolderPath 里，老用户走增量更新
+  //                          也能拿到，由 main.js 的 ensureRuntimeDlls 补进去
+  const vcOut = [pythonDir, path.join(root, 'resources', 'vcredist')];
   const lack = [];
+  for (const dir of vcOut) fs.mkdirSync(dir, { recursive: true });
   for (const dll of VCRUNTIME) {
     const src = path.join(VCRUNTIME_SRC, dll);
     if (!fs.existsSync(src)) { lack.push(dll); continue; }
-    fs.copyFileSync(src, path.join(pythonDir, dll));
+    for (const dir of vcOut) fs.copyFileSync(src, path.join(dir, dll));
   }
   if (lack.length) {
     console.error('[错误] 宿主机缺这些运行库文件：' + lack.join(', '));
@@ -106,7 +133,7 @@ if (!checkOnly) {
     console.error('       没有它们，安装包在干净 Windows 上 torch / onnxruntime 会直接 WinError 126。');
     process.exit(1);
   }
-  console.log('    已部署 ' + VCRUNTIME.length + ' 个 DLL 到 resources/python');
+  console.log('    已部署 ' + VCRUNTIME.length + ' 个 DLL 到 resources/python 与 resources/vcredist');
 
   console.log('== 3/4 安装 aria 组（不在 PyPI，走 GitHub）==');
   const git = tryRun('git --version');

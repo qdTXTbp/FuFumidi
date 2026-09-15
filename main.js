@@ -200,11 +200,38 @@ function bundledPython() {
   }
   return null;
 }
+/**
+ * 补齐内置 Python 运行时的 VC++ 运行库（仅 Windows，进程内只做一次）。
+ *
+ * 干净 Windows 不自带 VC++ 2015-2022 x64 运行库，torch / onnxruntime 会以
+ * WinError 126 加载失败（表现为「模型运行时」自检里 universal / piano /
+ * muscriptor 三组全 broken，转录引擎整条不可用）。
+ *
+ * 为什么不能只放在 resources/python 里：更新器的 ignoreFolderPath 跳过
+ * resources/python，老用户更新后拿不到那份 DLL。所以在 resources/vcredist
+ * （不在忽略列表，更新会带上）另存一份，首次用到引擎时补进 python 目录。
+ */
+let _vcDllsEnsured = false;
+function ensureRuntimeDlls(pyExe) {
+  if (_vcDllsEnsured || process.platform !== 'win32') return;
+  _vcDllsEnsured = true;
+  try {
+    const pyDir = path.dirname(pyExe);
+    const src = path.join(process.resourcesPath, 'vcredist');
+    if (!fs.existsSync(src) || !fs.existsSync(pyDir)) return;
+    for (const f of fs.readdirSync(src)) {
+      if (!/\.dll$/i.test(f)) continue;
+      const dst = path.join(pyDir, f);
+      if (fs.existsSync(dst)) continue;
+      try { fs.copyFileSync(path.join(src, f), dst); } catch (_) {}
+    }
+  } catch (_) {}
+}
 function resolvePython() {
   const s = readSettings();
   if (s.engine_path && fs.existsSync(s.engine_path)) return s.engine_path;  // 用户显式指定优先
   const b = bundledPython();
-  if (b) return b;                                                            // 内置运行时其次
+  if (b) { ensureRuntimeDlls(b); return b; }                                   // 内置运行时其次
   if (process.env.FUFUMIDI_PYTHON && fs.existsSync(process.env.FUFUMIDI_PYTHON)) return process.env.FUFUMIDI_PYTHON;
   if (process.platform === 'win32') {
     // 开发机已知的完整环境（含 torch/demucs，供钢琴/人声分离模式）
