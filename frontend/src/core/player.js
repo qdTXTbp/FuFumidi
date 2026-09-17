@@ -238,6 +238,18 @@ export class Player {
     const extra = this.syn && this.syn._sf2SeqMode ? 30 : 0;
     const ahead = this.ctx.currentTime + this.aheadSec + extra;
     const ev = this.events;
+    // 节点预算软上限（只对「预排即建节点」的内置合成器路径有效）。
+    // 该路径的节点数 ≈ 预排窗口 ×（窗口内密度 + 尾音），而预排窗口越长越能容忍主线程卡顿，
+    // 于是极密段落必然与 1024 的节点预算冲突：构造曲目 large-60k 平均 160 音符/秒、实测段落
+    // 约 180 音符/秒（每音符约 4.4 个节点 ⇒ 约 790 节点/秒），1 秒窗口加尾音就顶到 1024，
+    // pruneLive 于是每 25ms 丢弃一批「还排在窗口里」的节点（实测 336 节点/秒被丢）。
+    // 这里改成：占用接近预算时本趟不再往后排，把「丢音」换成「预排窗口变浅」。
+    // 按上述密度换算，窗口由 1.0s 收到约 0.67s；窗口只影响主线程卡顿的容忍度，不影响已经
+    // 在响的内容，下一趟（25ms 后）节点随发声自然回收，继续往后排。
+    // 普通曲目（库中最密 31 音符/秒，窗口内约 180 个节点）永远碰不到这个上限，行为不变。
+    const limit = this.syn && this.syn._liveLimit ? this.syn._liveLimit : 0;
+    const softCap = limit ? Math.floor((limit * 3) / 4) : 0;
+    if (softCap && this.syn.expireLive) this.syn.expireLive();
     while (this.cursor < ev.length) {
       const n = ev[this.cursor];
       const t = this.noteTime(n);
@@ -246,6 +258,7 @@ export class Player {
       if (e < this.ctx.currentTime - 0.03) { this.cursor++; continue; }
       this.syn.noteOn(t, n, e);
       this.cursor++;
+      if (softCap && this.syn.live.length >= softCap) break;
     }
     // 通道事件（CC / 弯音）：与音符同一条时间轴。它们是状态变更而非发声事件，
     // 迟到也要补发（跳转/主线程卡顿后直接落到最新状态），所以不做丢弃判断。

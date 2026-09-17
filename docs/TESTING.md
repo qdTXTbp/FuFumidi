@@ -144,6 +144,35 @@ bcdedit /set hypervisorlaunchtype off
 
 > 副作用：依赖 Hyper-V 的功能（WSL2、Docker Desktop、部分安卓模拟器等）在关闭期间不可用。
 
+### 2.7 宿主机 L2 探针套件（`scripts/cdp/`）
+
+L2 的 CDP 探针已收入仓库，不再散落在打包目录里。统一约定：
+
+| 项 | 约定 |
+|---|---|
+| 目标 | 本地安装版渲染进程，需带 `--remote-debugging-port=9222` 启动 |
+| 端口 | `CDP_PORT`（默认 9222） |
+| 单段表达式 | `CDP_OUT_DIR` 无关；`cdp-eval.cjs` 用 `EXPR_FILE` 传入表达式文件（避免 PowerShell 拆坏引号） |
+| 输出目录 | `CDP_OUT_DIR`（默认脚本所在目录），写报告类脚本使用 |
+| 极密压力曲目 | `CDP_MIDI`（默认脚本同目录的 `large-60k.mid`）。仓库不含该二进制样本，用任意 ≥100 音符/秒的 MIDI 替代即可 |
+
+```powershell
+cd scripts/cdp
+$env:CDP_PORT='9222'
+node cdp-viz-immersive.cjs        # 可视化沉浸 / 瀑布流 / 帧内绘制（含 26 项断言）
+node cdp-fx-tempo.cjs             # 音效链 + 倍速
+node cdp-fx-gain.cjs              # 音效链增益（固定测试音、时对齐）
+node cdp-init-recovery.cjs        # 音频初始化稳健性（注入故障后能否恢复）
+node cdp-frametime-probe.cjs      # 帧交付间隔（可视化页瀑布流，需 SONG=normal|heavy）
+$env:EXPR_FILE='.\expr-spatial-channels.js'; node cdp-eval.cjs    # 空间声声道分离度
+$env:EXPR_FILE='.\expr-viz-drawcost.js';     node cdp-eval.cjs    # 帧内绘制耗时 / 渐变数
+$env:EXPR_FILE='.\expr-dense-fix.js';        node cdp-eval.cjs    # 极密曲目丢音（内置合成器路径）
+```
+
+> 探针里的 `expr-*.js` 是「单段被测代码」，必须与断言口径一起看：例如
+> `expr-spatial-channels.js` 判「居中信号不变」用的是**同源同相同频**的 L/R，
+> 用两路不同频率的振荡器测「居中」是无效的（L-R 本来就不为 0）。
+
 ---
 
 ## 3. 干净虚拟机全功能测试清单（发布闸门）

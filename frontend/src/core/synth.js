@@ -352,8 +352,8 @@ export class Synth {
     this.splitter.connect(midL, 0); this.splitter.connect(midR, 1);        // L/R 直通（mid 分量）
     this.splitter.connect(invR, 1);                                        // -R
     this.splitter.connect(invL, 0);                                        // -L
-    midL.connect(sideL); invR.connect(sideL);   // side = L - R（左耳加正 side）
-    midR.connect(sideR); invL.connect(sideR);   // 反相 side 加到右耳
+    midL.connect(sideL); invR.connect(sideL);   // sideL 输入 = L - R（左耳加正 side）
+    midR.connect(sideR); invL.connect(sideR);   // sideR 输入 = R - L = -(L - R)
     sideL.connect(this.merger, 0, 0); midL.connect(this.merger, 0, 0);
     sideR.connect(this.merger, 0, 1); midR.connect(this.merger, 0, 1);
     // 展宽级的输出是唯一的干路出口。此前这里还并联了一条 bassShelf → fxOut 的直通，
@@ -361,7 +361,13 @@ export class Synth {
     this.merger.connect(this.fxOut);
     this.fxOut.connect(this.analyser);
     this.fxEnabled = false;
-    this.setSpatial = (v) => { const s = Math.max(0, Math.min(1, v || 0)); try { sideL.gain.setTargetAtTime(s * 0.5, ctx.currentTime, 0.03); sideR.gain.setTargetAtTime(-s * 0.5, ctx.currentTime, 0.03); } catch (e) {} };
+    // 两侧 side 增益都取 +s/2：sideL 的输入是 (L-R)、sideR 的输入是 (R-L)，各自都是
+    // 「本侧相对对侧的差」，加在本侧上即得 L' = L + s(L-R)/2、R' = R - s(L-R)/2。
+    // 此前右耳的 side 增益写成 -s/2，与 sideR 输入里已有的反相叠加，等效于
+    // R' = R + s(L-R)/2 —— 右声道被「收窄」而不是展宽：硬右声像的信号在 s=1 时右耳只剩
+    // 1/3（约 -9.5dB），同时左耳得到一个反相副本，声像整体左偏。
+    // 总电平守恒，所以只测总电平的旧验证看不出这个问题（必须做声道级测量才能暴露）。
+    this.setSpatial = (v) => { const s = Math.max(0, Math.min(1, v || 0)); const g = s * 0.5; try { sideL.gain.setTargetAtTime(g, ctx.currentTime, 0.03); sideR.gain.setTargetAtTime(g, ctx.currentTime, 0.03); } catch (e) {} };
     this.setEqGains = (gains) => { if (!Array.isArray(gains)) return; this.eqFilters.forEach((f, i) => { try { f.gain.setTargetAtTime(Math.max(-12, Math.min(12, gains[i] || 0)), ctx.currentTime, 0.03); } catch (e) {} }); };
     this.setBassBoost = (db) => { try { this.bassShelf.gain.setTargetAtTime(Math.max(0, Math.min(12, db || 0)), ctx.currentTime, 0.03); } catch (e) {} };
     this.setFxEnabled = (on) => {
@@ -926,12 +932,24 @@ export class Synth {
     playVoice(this.ctx, t, midi, vel, presetForProgram(prog), this.trackGains[0], t + dur, this.live);
     this.activeNotes.push({ midi, trk: 0, start: t, endTime: t + dur });
   }
-  pruneLive(limit = 256) {
+  // 回收已经自然结束的发声节点（tStop 已过），返回清理后的占用数。
+  // 与 pruneLive 拆开是为了让调度器能每 25ms 拿到**准确的节点占用**来决定还能不能继续往后排，
+  // 而 pruneLive 自带排序（用于应急丢弃），不该以这个频率跑。原地压缩，不产生新数组。
+  expireLive() {
     const t = this.ctx.currentTime;
+    const live = this.live;
+    let w = 0;
+    for (let i = 0; i < live.length; i++) {
+      const x = live[i];
+      if (x.tStop <= t) { try { x.o.stop(); } catch (e) {} continue; }
+      live[w++] = x;
+    }
+    if (w !== live.length) live.length = w;
+    return live.length;
+  }
+  pruneLive(limit = 256) {
     // 1) 先回收已经自然结束的发声节点
-    const expires = this.live.filter(x => x.tStop <= t);
-    for (const x of expires) { try { x.o.stop(); } catch (e) {} }
-    this.live = this.live.filter(x => x.tStop > t);
+    this.expireLive();
     if (this.live.length <= limit) return;
     // 2) 仍超预算时必须丢掉一些节点，但**挑谁丢**是关键：
     //    预排窗口内的音符先创建节点、后到点发声，所以「还没开始发声」的节点（tStart > t）
@@ -941,6 +959,7 @@ export class Synth {
     //    （实测 160 音符/秒的文件），每个新音都触发一轮修剪、把正在响的整批掐掉，
     //    整首歌变成数字静音（分析器读到全 128，而包络、节点、音频图全都正常）。
     //    因此：先丢未发声的（越晚开始越先丢），不够再丢已发声里剩余声音最少的。
+    const t = this.ctx.currentTime;
     const over = this.live.length - limit;
     const pending = [], sounding = [];
     for (const x of this.live) ((x.tStart == null || x.tStart <= t) ? sounding : pending).push(x);

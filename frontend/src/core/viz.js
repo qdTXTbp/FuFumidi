@@ -371,14 +371,20 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
     return gv;
   };
   const whiteLiveColor = cssVar('--ink', '#0a0a0a');
+  // 琴键底色渐变按「纵向」定义，颜色只取决于 y；每个白键/黑键的 y 区间完全一致，
+  // 因此整屏琴键可以共用两个渐变对象，而不是每个键各建一个（实测 90 个/帧 → 4 个/帧）。
+  // 横向平移不改变纵向渐变的着色（着色由 y 在轴上的投影决定），渲染结果逐像素一致。
+  const grWk = ctx.createLinearGradient(0, wN, 0, wN + x);
+  grWk.addColorStop(0, kp.wkTop); grWk.addColorStop(1, kp.wkBot);
+  const bkH = Math.floor(0.6 * x);
+  const grBk = ctx.createLinearGradient(0, wN, 0, wN + bkH);
+  grBk.addColorStop(0, kp.bkTop); grBk.addColorStop(1, kp.bkBot);
   for (let i = wk0; i < wk1; i++) {
     const pitch = WHITE_MIDI[i];
     const px = Math.floor((i - wk0) * g), pw = Math.floor(g);
     const act = sounding.get(pitch);
     const gv = glowOf(pitch, act !== undefined || live.has(pitch));
-    const gr = ctx.createLinearGradient(px, wN, px, wN + x);
-    gr.addColorStop(0, kp.wkTop); gr.addColorStop(1, kp.wkBot);
-    ctx.fillStyle = gr;
+    ctx.fillStyle = grWk;
     ctx.beginPath(); ctx.roundRect(px, wN, pw, x, [0, 0, 4, 4]); ctx.fill();
     if (gv > 0.02) {
       ctx.globalAlpha = gv;
@@ -395,12 +401,10 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
   for (let i = wk0; i < wk1; i++) {
     const pitch = WHITE_MIDI[i] + 1;
     if (!BLACK_PC.includes(pitch % 12)) continue;
-    const bx = Math.floor((i - wk0 + 1) * g - 0.35 * g), bw = Math.floor(0.7 * g), bh = Math.floor(0.6 * x);
+    const bx = Math.floor((i - wk0 + 1) * g - 0.35 * g), bw = Math.floor(0.7 * g), bh = bkH;
     const act = sounding.get(pitch);
     const gv = glowOf(pitch, act !== undefined || live.has(pitch));
-    const gr = ctx.createLinearGradient(bx, wN, bx, wN + bh);
-    gr.addColorStop(0, kp.bkTop); gr.addColorStop(1, kp.bkBot);
-    ctx.fillStyle = gr;
+    ctx.fillStyle = grBk;
     ctx.beginPath(); ctx.roundRect(bx, wN, bw, bh, [0, 0, 2, 2]); ctx.fill();
     if (gv > 0.02) {
       ctx.globalAlpha = gv;

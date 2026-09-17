@@ -16,6 +16,7 @@ function fakeSynth(now, entries) {
     stopped,
     live: entries.map(e => ({ o: { stop() { stopped.push(e.id); } }, tStop: e.tStop, tStart: e.tStart, id: e.id })),
     pruneLive: Synth.prototype.pruneLive,
+    expireLive: Synth.prototype.expireLive,
   };
 }
 const ids = (s) => s.live.map(x => x.id).sort();
@@ -74,4 +75,37 @@ test('缺少 tStart 的节点按「已发声」处理，不会误伤正在响的
   s.pruneLive(1);
   assert.deepEqual(s.stopped, ['fut']);
   assert.deepEqual(ids(s), ['legacy']);
+});
+
+// expireLive 是调度器每趟（25ms）用来拿「当前节点占用」的入口：它只回收已经自然结束的节点、
+// 不做任何丢弃，因此必须是纯回收语义；同时要原地压缩（这个频率下不该产生新数组）。
+test('expireLive 只回收已结束的节点，并原样保留其余节点', () => {
+  const s = fakeSynth(10, [
+    { id: 'ended1', tStart: 9.0, tStop: 9.9 },
+    { id: 'ring', tStart: 9.8, tStop: 11.0 },
+    { id: 'fut', tStart: 10.6, tStop: 11.6 },
+  ]);
+  const before = s.live;
+  const n = s.expireLive();
+  assert.equal(n, 2, '返回值是清理后的占用数');
+  assert.equal(s.live.length, 2);
+  assert.equal(s.live, before, '应原地压缩，不新建数组');
+  assert.deepEqual(s.stopped, ['ended1']);
+  assert.deepEqual(ids(s), ['fut', 'ring']);
+});
+
+test('expireLive 在 tStop 恰好等于当前时刻时也回收（与旧实现同界）', () => {
+  const s = fakeSynth(10, [{ id: 'edge', tStart: 9.5, tStop: 10 }, { id: 'keep', tStart: 9.5, tStop: 10.0001 }]);
+  assert.equal(s.expireLive(), 1);
+  assert.deepEqual(ids(s), ['keep']);
+});
+
+test('expireLive 不丢弃还在响或还排在窗口里的节点（哪怕远超预算）', () => {
+  const s = fakeSynth(10, [
+    { id: 'r1', tStart: 9.9, tStop: 11 },
+    { id: 'f1', tStart: 10.4, tStop: 11.4 },
+    { id: 'f2', tStart: 10.9, tStop: 11.9 },
+  ]);
+  assert.equal(s.expireLive(), 3);
+  assert.deepEqual(s.stopped, [], '没有节点自然结束，就不该 stop 任何东西');
 });
