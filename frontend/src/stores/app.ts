@@ -210,6 +210,7 @@ export const useAppStore = defineStore('app', {
       guideOpen: false,
       paletteOpen: false,
       changelogOpen: false,
+      immersive: false, // 可视化沉浸模式：顶栏/侧栏/播放栏一并隐去
     },
     integrity: null as any,
     changelog: null as any, // 更新日志数据 { from, to, logs: [{ver, items}] }

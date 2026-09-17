@@ -220,6 +220,12 @@ body {
 /* 拖拽宽度时：列调整光标 + 禁止文本选中 */
 body.resize-col, body.resize-col * { cursor: col-resize !important; user-select: none !important; }
 .app-shell.no-player { grid-template-rows: var(--topbar-h) 1fr 0; }
+/* 沉浸模式（可视化页进入）：顶栏/侧栏/播放栏三条轨道全部收掉，画面独占整个窗口。
+   与 .no-player / .side-collapsed 叠加也以本规则为准（写在后面）。 */
+.app-shell.immersive { grid-template-columns: 0 1fr; grid-template-rows: 0 1fr 0; }
+.app-shell.immersive .sidebar,
+.app-shell.immersive .topbar,
+.app-shell.immersive .playerbar { display: none; }
 .app-wallpaper {
   position: fixed;
   inset: 0;

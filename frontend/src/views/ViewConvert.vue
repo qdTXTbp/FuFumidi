@@ -8,7 +8,7 @@ const app = useAppStore();
 const currentSong = computed(() => app.currentSong);
 const toast = (m, t) => app.toast(m, t);
 import { clamp } from '../core/util.js';
-import { drawVizWaterfall, drawVizSpectrum, drawVizScope, drawVizChord } from '../core/viz.js';
+import { drawVizWaterfall, drawVizSpectrum, drawVizScope, drawVizChord, rmsAt, smoothEnergy } from '../core/viz.js';
 import { playVoice, presetFromMode } from '../core/synth.js';
 import { renderSongWithSf2 } from '../core/sf2render.js';
 
@@ -280,14 +280,19 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
     if (VE.track === 'melody' && !tr.isDrum && tr.index !== vf.melodyTrack) continue;
     for (const n of tr.notes) if (n.start <= tick && n.end >= tick) activeNotes.push(n);
   }
-  if (!drawVideoFrame._state) drawVideoFrame._state = { parts: [], keys: new Set(), lastD: 0, blocks: null, songRef: null };
+  if (!drawVideoFrame._state) drawVideoFrame._state = {};
+  // 能量包络与实时视图同算法（viz.rmsAt ↔ viz.rmsFromBytes），这里从已解码的音频缓冲取，
+  // 因此导出画面与实时预览的「随音乐脉动」是同一套视觉语言且逐帧可复现。
+  const st = drawVideoFrame._state;
+  st.energy = smoothEnergy(st.energy, rmsAt(audioBuf, nowSec));
   const opts = {
-    state: drawVideoFrame._state,
+    state: st,
     zoom: 1,
     colorScheme: 0,
     showLyrics: !!VE.showLyrics,
     lyricAt: vf.lyricAt || '',
     activeNotes,
+    energy: st.energy,
   };
   const drawPanelBg = (x, y, w2, h2, title, sub, dot) => {
     ctx.fillStyle = cvar('--surface', '#101826');
@@ -430,6 +435,9 @@ async function renderVideo() {
     rec.onerror = (e) => { console.warn('[video] MediaRecorder error', e); };
     const stopped = new Promise((res) => { rec.onstop = res; });
     rec.start(500);
+    // 每次导出都从干净的帧间状态起笔（粒子 / 能量包络 / 上次绘制时刻）。
+    // 否则预览或其他导出遗留的粒子会让同一份工程两次导出的画面不一致。
+    drawVideoFrame._state = null;
     const start = performance.now();
     const stopRec = () => { try { if (rec.state !== 'inactive') rec.stop(); } catch (e) {} setTimeout(() => { try { stream.getTracks().forEach((t2) => t2.stop()); } catch (e) {} }, 300); };
     let cancelFlag = false;

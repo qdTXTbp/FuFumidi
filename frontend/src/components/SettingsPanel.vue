@@ -126,6 +126,8 @@ const KEYMAP = computed(() => [
   { keys: ['+', '−'], label: t('加速 / 减速') },
   { keys: ['Ctrl', 'K'], label: t('打开命令面板') },
   { keys: ['F1'], label: t('打开新手引导 / 帮助') },
+  { keys: ['I'], label: t('沉浸模式（可视化）') },
+  { keys: ['Esc'], label: t('退出沉浸模式（Esc）') },
   { keys: ['Ctrl', '1-9'], label: t('切换首页/演奏/歌词/编辑等视图') },
   { keys: ['Ctrl', 'Z'], label: t('撤销（编辑器）') },
   { keys: ['Ctrl', 'Y'], label: t('重做（编辑器）') },

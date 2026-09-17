@@ -437,7 +437,7 @@ onBeforeUnmount(() => {
 
 <template>
   <video v-if="wpEnabled && wpUrl" :key="wpUrl" ref="bgVideo" class="app-wallpaper" :src="wpUrl" autoplay muted playsinline preload="auto" @timeupdate="onBgTime"></video>
-  <div class="app-shell" :style="{ '--sidebar-w': state.sidebarWidth + 'px' }" :class="{ 'side-collapsed': !state.sidebarOpen, 'no-player': !state.playerbarOpen, 'wallpaper-on': wpEnabled && wpUrl, resizing: state.sidebarResizing }">
+  <div class="app-shell" :style="{ '--sidebar-w': state.sidebarWidth + 'px' }" :class="{ 'side-collapsed': !state.sidebarOpen, 'no-player': !state.playerbarOpen, 'wallpaper-on': wpEnabled && wpUrl, resizing: state.sidebarResizing, immersive: state.ui.immersive }">
     <SideBar />
     <TopBar />
     <main class="app-main">

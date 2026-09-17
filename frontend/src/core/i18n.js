@@ -2529,6 +2529,12 @@ export const I18N_MAP = {
   "中文 · 单独音（CV）": "Chinese · CV (monopitch)",
   "中文扩张整音声库：音头用独立音（如 kai、bei），语尾用「_韵母」或「韵母 R」，中文演唱自然度较高。": "Chinese extended-CV voicebank: onsets use standalone syllables (e.g. kai, bei) and endings use “_vowel” or “vowel R”, which makes Chinese singing sound fairly natural.",
 
+/* 4.3.0 i18n：可视化沉浸模式 */
+  "沉浸模式": "Immersive mode",
+  "退出沉浸模式（Esc）": "Exit immersive mode (Esc)",
+  "控件 3 秒无操作后自动淡出，移动鼠标或按 I 退出": "Controls fade out after 3 seconds idle — move the mouse or press I to exit",
+  "沉浸模式（可视化）": "Immersive mode (visualizer)",
+
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */
