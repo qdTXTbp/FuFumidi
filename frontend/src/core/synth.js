@@ -376,6 +376,8 @@ export class Synth {
     this._fileCc7 = {}; this._fileCc10 = {};   // 文件里该通道最后一次 CC7 / CC10
     this._knownCh = new Set();                 // 已下发过通道增益的通道
     this.live = []; this.activeNotes = [];
+    // 活跃音符表的清理阈值：达到它才做一次全量过滤，过滤后按实际存活量上浮（见 _trimActive）
+    this._trimThreshold = 3000;
     this.sf2 = null;
     this.sf2Ready = false;
     this.sf2Loading = null;
@@ -820,8 +822,27 @@ export class Synth {
   setChannelMute(ch, b) { this.chMute[ch] = !!b; this._applyChannelGain(ch); }
   setChannelSolo(ch, b) { this.chSolo[ch] = !!b; this._applyAllChannelGains(); }
   setChannelPan(ch, v) { this.chPan[ch] = clamp(v, -1, 1); this._applyChannelPan(ch); }
+  // 活跃音符表的清理（对所有发声路径生效）。
+  //
+  // 为什么必须放在这里：这张表既被 activeNow() 每帧全量 filter，也被 allStop() 全量遍历
+  // 逐条发 midiNoteOff。原先只有内置合成器分支会修剪，而 SF2 的三条分支都提前 return ——
+  // 桌面端默认走 SF2，于是这张表只增不减（一首 5 分钟密集曲目可累积数万条），
+  // 表现为「播放越久越卡」。
+  //
+  // 为什么不能简单地「超阈值就全量过滤」：极密曲目（实测 160 音符/秒）在预排窗口内随时
+  // 有近 5000 条尚未结束的记录，它们都清不掉；若每个音符都触发一次 5000 条的全量过滤，
+  // 一秒就是百万级扫描。改为「表长比上次清理后又涨了 1/4 才再清一次」，均摊到每个音符是常数。
+  _trimActive() {
+    const a = this.activeNotes;
+    if (a.length < this._trimThreshold) return;
+    const now = this.ctx.currentTime;
+    this.activeNotes = a.filter(x => x.endTime > now);
+    // 阈值跟随实际存活量上浮，保证不会每来一个音符就清一次
+    this._trimThreshold = Math.max(3000, Math.floor(this.activeNotes.length * 1.25));
+  }
   noteOn(time, note, endTime) {
     this.ensure(note.trk + 1);
+    this._trimActive();
     if (this.sf2Ready && this.sf2) {
       // 用音符自己的 MIDI 通道（不是轨序号）；note.ch 由 player.prepare 从文件里取
       const ch = note.ch != null ? note.ch : Math.min(15, note.trk || 0);
@@ -886,13 +907,13 @@ export class Synth {
     const out = this.trackGains[note.trk];
     playVoice(this.ctx, time, note.midi, note.vel, preset, out, endTime, this.live);
     this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, start: time, endTime });
-    if (this.activeNotes.length > 3000) this.activeNotes = this.activeNotes.filter(a => a.endTime > this.ctx.currentTime);
     if (this.live.length > this._liveLimit) this.pruneLive(this._liveLimit);
   }
   preview(midi, prog = 0, vel = 100, dur = 0.7) {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     this.ensure(1);
+    this._trimActive();
     if (this.sf2Ready && this.sf2) {
       try {
         this.sf2.midiProgramChange(0, prog);
@@ -949,6 +970,7 @@ export class Synth {
     for (const a of this.activeNotes) { if (a.timer) { try { clearTimeout(a.timer); } catch (e) {} } if (a.sf2 && a.ch != null) { try { this.sf2 && this.sf2.midiNoteOff(a.ch, a.midi); } catch (e) {} } }
     this.live = [];
     this.activeNotes = [];
+    this._trimThreshold = 3000;
     // 上面清掉了未分发的调度事件（含 program/bank 变更），缓存的通道状态已不可信，
     // 清掉让下一个音符重新下发，避免跳转后沿用错误的音色。
     this._sf2ChProg = [];
