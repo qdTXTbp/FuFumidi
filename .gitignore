@@ -30,3 +30,6 @@ models/
 frontend/public/wallpapers/
 # 音色工坊：预拉取的 SF2（用于建仓镜像，不进入主仓）
 soundfonts-dist/
+
+# CDP 探针的运行产物（默认写到脚本目录）
+scripts/cdp/*-report.txt
