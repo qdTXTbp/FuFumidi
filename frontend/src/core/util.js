@@ -21,4 +21,19 @@ export function fmtSize(n) {
 
 export const pad2 = n => String(n).padStart(2, '0');
 
+// 从若干条轨道里就地移除一批音符，返回移除总数。
+//
+// 此前各处都是逐个 `indexOf` + `splice`：每次都要线性查找、还要把尾部整体搬移，
+// 音符上万时合计 O(N²) —— 表现为「点一下卡很久，甚至像点了没反应」。
+// 这里改为倒序单趟 splice：索引从尾部往前走，已处理过的尾部不会再被搬移，整体为 O(N)。
+export function removeNotes(tracks, doomed) {
+  let n = 0;
+  for (const tr of tracks) {
+    for (let i = tr.notes.length - 1; i >= 0; i--) {
+      if (doomed.has(tr.notes[i])) { tr.notes.splice(i, 1); n++; }
+    }
+  }
+  return n;
+}
+
 export const TRACK_COLORS = ['#ff5530', '#ea5ec1', '#1456f0', '#a855f7', '#3daeff', '#1ba673', '#3b82f6', '#f59e0b', '#d45656', '#17437d'];

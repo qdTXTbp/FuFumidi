@@ -13,7 +13,7 @@ const toast = (m, t) => app.toast(m, t);
 const importFiles = (items) => app.importFiles(items);
 const setView = (v) => app.setView(v);
 import { encodeMidi } from '../core/midi.js';
-import { noteName, clamp, KEY_NAME } from '../core/util.js';
+import { noteName, clamp, KEY_NAME, removeNotes } from '../core/util.js';
 import { MACRO_DOC, macroToCmd, applyMacroScript, parseMacroScript } from '../core/macro.js';
 import { SCALE_TYPES, parseCustomDegrees } from '../core/scale.js';
 import { detectKeySpec, detectChordTrack, chordPcsByName } from '../core/analysis.js';
@@ -440,7 +440,7 @@ function drumClear() {
   const hits = tr.notes.filter(n => DRUM_PITCHES.includes(n.midi));
   if (hits.length) {
     editor.value?.pushStateForTrack(drumTrack.value);
-    for (const h of hits) { const i = tr.notes.indexOf(h); if (i >= 0) tr.notes.splice(i, 1); }
+    removeNotes([tr], new Set(hits));
     editor.value?.notifyExternalEdit();
     drawDrum();
     toast(t('已清除 ') + hits.length + t(' 个鼓点'), 'ok');
@@ -608,7 +608,7 @@ function deleteShortNotes() {
   const short = tr.notes.filter(n => (n.end - n.start) / s.tpb * (60 / bpm) < sec);
   if (!short.length) { toast(t('当前轨道没有短于 80ms 的音符'), 'ok'); return; }
   editor.value.pushStateForTrack(trackIndex.value);
-  for (const n of short) { const i = tr.notes.indexOf(n); if (i >= 0) tr.notes.splice(i, 1); }
+  removeNotes([tr], new Set(short));
   editor.value.notifyExternalEdit();
   toast(t('已删除 ') + short.length + t(' 个短音'), 'ok');
 }
@@ -618,7 +618,9 @@ function loudScale(f) {
   const arr = editor.value?.selCount() ? editor.value.selRef() : tr.notes;
   if (!arr.length) { toast(t('没有可处理的音符'), 'warn'); return; }
   editor.value.pushStateForTrack(trackIndex.value);
-  for (const n of tr.notes) if (arr.includes(n)) n.vel = clamp(Math.round(n.vel * f), 1, 127);
+  // 选区可能是整轨（一屏几万个音符），此时直接对全轨生效，省掉 Set 与逐音符成员判断
+  const sel = arr === tr.notes ? null : new Set(arr);
+  for (const n of tr.notes) if (!sel || sel.has(n)) n.vel = clamp(Math.round(n.vel * f), 1, 127);
   editor.value.notifyExternalEdit();
   toast(t('已调整响度 ') + (f > 1 ? '+' : '') + Math.round((f - 1) * 100) + '%', 'ok');
 }
@@ -755,7 +757,10 @@ function applyLogic() {
   const cond = logicCond.value, action = logicAction.value;
   let changed = 0;
   if (action === 'delete') {
-    // 删除目标内满足条件的音符
+    // 删除目标内满足条件的音符。此前对每个音符做 tracks.find(t => t.notes.includes(n)) +
+    // indexOf + splice：全曲 2 万音符时是数亿次比较，且每次 splice 还要搬移尾部。
+    // 先把命中的音符收成一个集合，再让每条轨道各走一趟。
+    const doomed = new Set();
     for (const n of notes) {
       let ok = false;
       if (cond === 'vel_lt') ok = n.vel < condVal;
@@ -763,10 +768,9 @@ function applyLogic() {
       else if (cond === 'dur_lt') ok = (n.end - n.start) < condVal;
       else if (cond === 'pitch_eq') ok = n.midi === condVal;
       else ok = true;
-      if (!ok) continue;
-      const tr = s.tracks.find(t => t.notes.includes(n));
-      if (tr) { const i = tr.notes.indexOf(n); if (i >= 0) { tr.notes.splice(i, 1); changed++; } }
+      if (ok) doomed.add(n);
     }
+    changed = removeNotes(s.tracks, doomed);
   } else {
     for (const n of notes) {
       let ok = false;
