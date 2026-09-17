@@ -1,7 +1,7 @@
 // 播放器（lookahead 调度 + 变速 / 循环 / 跳转）——从 legacy FuFumidi.html 抽取
 import { clamp } from './util.js';
 
-/* 节拍器咔哒声 */
+/* 节拍器咔哒声：返回已排队的振荡器，交给调用方登记以便随时取消 */
 function metroClick(ctx, time, accent, out) {
   time = Math.max(0, time);
   const o = ctx.createOscillator();
@@ -12,6 +12,7 @@ function metroClick(ctx, time, accent, out) {
   g.gain.exponentialRampToValueAtTime(0.0001, time + 0.06);
   o.connect(g); g.connect(out);
   o.start(time); o.stop(time + 0.07);
+  return o;
 }
 
 export class Player {
@@ -24,6 +25,10 @@ export class Player {
     this.playing = false; this.pausedTick = 0;
     this.scale = 1; this.loop = false; this.loopStart = 0; this.loopEnd = 0;
     this.metro = false; this.metroBeat = 0;
+    // 已排队但还没响完的节拍器振荡器。节拍器会在预排窗口内一次排完（SF2 音序器路径下
+    // 窗口可达 30s），若只翻标志位不取消这些振荡器，关掉节拍器/暂停/跳转后它们仍会
+    // 按原时间轴继续响，最多约 30 秒。
+    this._metroNodes = [];
     this.onEnd = null; this._timer = null;
     // 硬件 MIDI 输出等外部旁听回调：onNote(n, noteTime, noteEndTime) / onStop()
     this.onNote = null; this.onStop = null;
@@ -139,8 +144,16 @@ export class Player {
     this.pausedTick = tick;
     clearInterval(this._timer); this._timer = null;
     clearTimeout(this._aheadTimer); this._aheadTimer = null; this.aheadSec = this.AHEAD_BASE;
+    this._clearMetro();
     this.syn.allStop();
     if (this.onStop) this.onStop();
+  }
+  // 取消所有已排队的节拍器点击声（关闭节拍器 / 暂停 / 跳转 / 变速重排时都必须调用，
+  // 否则旧时间轴上的点击声会与新排的一起响）
+  _clearMetro() {
+    if (!this._metroNodes.length) return;
+    for (const x of this._metroNodes) { try { x.o.stop(); } catch (e) {} }
+    this._metroNodes.length = 0;
   }
   // 临时扩大预排窗口并立即预排一次：用于切页/重渲染等即将阻塞主线程的场景，
   // 预排的音符由 Web Audio 渲染线程按绝对时间发声，主线程阻塞不断流。
@@ -173,6 +186,7 @@ export class Player {
     this.seekTick(this.song.secToTick(sec));
   }
   _restartAt(tick) {
+    this._clearMetro();
     this.syn.allStop();
     this.startTick = tick;
     this.startSec = this.ctx.currentTime + 0.05;
@@ -203,6 +217,7 @@ export class Player {
   }
   setMetronome(on) {
     this.metro = !!on;
+    this._clearMetro();   // 开关切换都可能重排时间轴，先把旧的取消掉，避免两套点击声叠加
     if (this.song) this.metroBeat = Math.max(0, Math.ceil((this.playing ? this.currentTick() : this.pausedTick) / this.song.tpb));
   }
   currentTick() {
@@ -259,13 +274,16 @@ export class Player {
     }
     if (this.metro && this.song) {
       const tpb = this.song.tpb;
+      // 丢弃已经响完的登记项，让列表长度只与预排窗口内还剩几声成正比
+      const nowT = this.ctx.currentTime;
+      if (this._metroNodes.length) this._metroNodes = this._metroNodes.filter(x => x.end > nowT);
       while (true) {
         const tick = this.metroBeat * tpb;
         const t = this.startSec + (this.song.baseSec(tick) - this.song.baseSec(this.startTick)) * this.scale;
         if (t > ahead) break;
-        if (t >= this.ctx.currentTime - 0.03) {
+        if (t >= nowT - 0.03) {
           const sig = this.song.sigMap[0] || { num: 4 };
-          metroClick(this.ctx, t, this.metroBeat % sig.num === 0, this.syn.master);
+          this._metroNodes.push({ o: metroClick(this.ctx, t, this.metroBeat % sig.num === 0, this.syn.master), end: t + 0.07 });
         }
         this.metroBeat++;
       }
