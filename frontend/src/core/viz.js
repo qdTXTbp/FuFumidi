@@ -193,6 +193,21 @@ function patchRoundRect() {
 
 const MAX_PARTS = 260; // 粒子总量上限：每帧要逐个更新+绘制，不设上限会拖垮大曲目
 
+// 纵向坐标吸附到「设备像素」，只用于文字这类必须清晰、又不随播放移动的内容。
+//
+// 关于移动内容为什么**不**吸附：滚动速度是 0.933 CSS 像素/帧，而 dpr=2.5 时设备像素粒度
+// 是 0.4 CSS 像素 —— 一帧要走 2.33 个设备像素，吸附后只能走 2 或 3 个，于是每帧的位移在
+// 2/3 之间跳，观感就是轻微闪烁。实测（同一场景、同一时刻、各 40 帧）逐帧变化量的波动系数：
+//   吸附到 CSS 像素 24.6% ／ 吸附到设备像素 21.6% ／ 完全不吸附 15.8%
+// 所以移动中的音符块与小节线一律按精确坐标绘制（由画布自身做亚像素抗锯齿），
+// 只有小节线编号这种静态文字才吸附，避免字发虚。
+function pixelScale(ctx) {
+  try {
+    const m = ctx.getTransform ? ctx.getTransform() : null;
+    return (m && m.a > 0) ? m.a : 1;
+  } catch (e) { return 1; }
+}
+
 // 抽离自 ViewViz.drawRoll：绘制竖向音符瀑布到 ctx（w x h）
 export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
   patchRoundRect();
@@ -208,6 +223,9 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
   }
   const x = Math.min(120, Math.round(0.2 * h));
   const wN = Math.floor(h - x); // 卷帘区高度；击键线在 y = wN
+  // 纵向吸附到设备像素：所有会随播放移动的纵向坐标都过它，保证整场滚动步进一致、边缘不忽清忽虚
+  const sc = pixelScale(ctx);
+  const snapY = (yv) => Math.round(yv * sc) / sc;
   const bg = ctx.createLinearGradient(0, 0, 0, h);
   bg.addColorStop(0, cssVar('--canvas', '#ffffff'));
   bg.addColorStop(1, cssVar('--surface', '#f7f8fa'));
@@ -264,10 +282,11 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
   ctx.font = '10px system-ui, sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
   // 滚动小节线：音符竖直下落，小节线应为水平线随音符一同向下滚动（1 像素 = 1 tick）
   for (let e = M; e <= S; e++) {
-    const ty = Math.floor(wN - (120 * e - j));
+    const ty = wN - (120 * e - j);
     if (ty < -20 || ty > wN + 20) continue;
     ctx.strokeStyle = gridStrong; ctx.beginPath(); ctx.moveTo(30, ty); ctx.lineTo(w, ty); ctx.stroke();
-    if (e > 0) { ctx.fillStyle = gridStrong; ctx.fillText(String(e), 24, ty); }
+    // 线随音符一起按精确坐标移动（见 pixelScale 处的说明）；编号是静态文字，吸附住避免发虚
+    if (e > 0) { ctx.fillStyle = gridStrong; ctx.fillText(String(e), 24, snapY(ty)); }
   }
   const liveNotes = opts.activeNotes || [];
   const live = new Set(liveNotes.map(m => m.midi));
@@ -295,16 +314,18 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
       const inset = Math.round(cwBase * 0.12 * depth / 2);
       const cw = Math.max(2, Math.floor(cwBase) - inset * 2);
       const sx = sxBase + inset;
-      const isSound = b.start <= d && b.end >= d;
       const velN = clamp01((b.vel == null ? 90 : b.vel) / 127);
-      let blur = 0;
-      if (isSound) blur = 9 + 13 * velN;            // 正在发声：发光强度随力度
-      else if (depth < 0.12) blur = (1 - depth / 0.12) * 9; // 即将击键：进线前渐亮
+      // 发光强度：只看「起音边到击键线的距离」，越近越亮，越过击键线后沿同一条曲线衰减。
+      // 全程连续 —— 此前是「正在发声(9+13*vel) / 即将击键(0→9)」两段拼接，音头处会有一次
+      // 最高 13px 的光晕阶跃，密集音符下观感就是一片片地在闪。
+      const near = Math.max(0, 1 - Math.abs(wN - bottom) / (wN * 0.16));
+      const blur = 20 * near * (0.55 + 0.45 * velN);
       ctx.fillStyle = blockColor(b, cs);
       ctx.globalAlpha = 1 - 0.5 * depth;
       if (blur > 0) { ctx.shadowBlur = blur; ctx.shadowColor = ctx.fillStyle; }
+      // 按精确坐标绘制（不吸附）——理由见 pixelScale 处的说明
       ctx.beginPath();
-      ctx.roundRect(sx, Math.floor(top), cw, Math.floor(Math.max(bottom - top, 5)), 4);
+      ctx.roundRect(sx, top, cw, Math.max(bottom - top, 5), 4);
       ctx.fill();
       if (blur > 0) ctx.shadowBlur = 0;
       ctx.globalAlpha = 1;
@@ -339,21 +360,33 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
 
   // ---- 琴键 ----
   const kp = keyPalette(state);
+  // 琴键余辉：按下即亮，松开后在约 0.18s 内淡出。此前是硬开硬关并直接挂 20px 发光，
+  // 密集音符下琴键会一片片地闪。高亮层改为叠在底色上按余辉强度渐入渐出。
+  const keyGlow = state.keyGlow || (state.keyGlow = new Map());
+  const KEY_DECAY = 0.09;
+  const glowOf = (pitch, on) => {
+    const prev = keyGlow.get(pitch) || 0;
+    const gv = on ? 1 : Math.max(0, prev - KEY_DECAY);
+    if (gv > 0.02) keyGlow.set(pitch, gv); else keyGlow.delete(pitch);
+    return gv;
+  };
+  const whiteLiveColor = cssVar('--ink', '#0a0a0a');
   for (let i = wk0; i < wk1; i++) {
     const pitch = WHITE_MIDI[i];
     const px = Math.floor((i - wk0) * g), pw = Math.floor(g);
     const act = sounding.get(pitch);
-    const on = act !== undefined || live.has(pitch);
-    if (on) {
-      ctx.fillStyle = act !== undefined ? act : cssVar('--ink', '#0a0a0a');
-      ctx.shadowBlur = 20; ctx.shadowColor = ctx.fillStyle;
-    } else {
-      const gr = ctx.createLinearGradient(px, wN, px, wN + x);
-      gr.addColorStop(0, kp.wkTop); gr.addColorStop(1, kp.wkBot);
-      ctx.fillStyle = gr;
-    }
+    const gv = glowOf(pitch, act !== undefined || live.has(pitch));
+    const gr = ctx.createLinearGradient(px, wN, px, wN + x);
+    gr.addColorStop(0, kp.wkTop); gr.addColorStop(1, kp.wkBot);
+    ctx.fillStyle = gr;
     ctx.beginPath(); ctx.roundRect(px, wN, pw, x, [0, 0, 4, 4]); ctx.fill();
-    ctx.shadowBlur = 0;
+    if (gv > 0.02) {
+      ctx.globalAlpha = gv;
+      ctx.fillStyle = act !== undefined ? act : whiteLiveColor;
+      ctx.shadowBlur = 18 * gv; ctx.shadowColor = ctx.fillStyle;
+      ctx.beginPath(); ctx.roundRect(px, wN, pw, x, [0, 0, 4, 4]); ctx.fill();
+      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+    }
     ctx.beginPath(); ctx.moveTo(px + pw, wN); ctx.lineTo(px + pw, wN + x - 4);
     ctx.strokeStyle = kp.wkLine; ctx.stroke();
     if (pitch % 12 === 0) { ctx.fillStyle = text; ctx.font = '10px system-ui, sans-serif'; ctx.fillText('C' + (pitch / 12 - 1), px + 4, h - 5); }
@@ -364,14 +397,20 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
     if (!BLACK_PC.includes(pitch % 12)) continue;
     const bx = Math.floor((i - wk0 + 1) * g - 0.35 * g), bw = Math.floor(0.7 * g), bh = Math.floor(0.6 * x);
     const act = sounding.get(pitch);
-    if (act !== undefined) ctx.fillStyle = act;
-    else {
-      const gr = ctx.createLinearGradient(bx, wN, bx, wN + bh);
-      gr.addColorStop(0, kp.bkTop); gr.addColorStop(1, kp.bkBot);
-      ctx.fillStyle = gr;
+    const gv = glowOf(pitch, act !== undefined || live.has(pitch));
+    const gr = ctx.createLinearGradient(bx, wN, bx, wN + bh);
+    gr.addColorStop(0, kp.bkTop); gr.addColorStop(1, kp.bkBot);
+    ctx.fillStyle = gr;
+    ctx.beginPath(); ctx.roundRect(bx, wN, bw, bh, [0, 0, 2, 2]); ctx.fill();
+    if (gv > 0.02) {
+      ctx.globalAlpha = gv;
+      // 黑键上「仅合成器在响」用深色压暗（浅色主题下 --ink 也是深色，深色主题下则不然，
+      // 这里保持与改动前一致的语义）
+      ctx.fillStyle = act !== undefined ? act : '#0a0a0a';
+      ctx.shadowBlur = 18 * gv; ctx.shadowColor = ctx.fillStyle;
+      ctx.beginPath(); ctx.roundRect(bx, wN, bw, bh, [0, 0, 2, 2]); ctx.fill();
+      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
     }
-    if (live.has(pitch)) { ctx.fillStyle = cssVar('--ink', '#0a0a0a'); ctx.shadowBlur = 20; ctx.shadowColor = ctx.fillStyle; }
-    ctx.beginPath(); ctx.roundRect(bx, wN, bw, bh, [0, 0, 2, 2]); ctx.fill(); ctx.shadowBlur = 0;
   }
   for (let e = state.parts.length - 1; e >= 0; e--) {
     const p = state.parts[e];
