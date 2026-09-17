@@ -111,9 +111,12 @@ function draw() {
     const color = brandColors[tr.index % brandColors.length];
     const ns = tr.notes;
     if (!ns.length) continue;
-    let hi2 = 0, lo2 = ns.length;
-    while (lo2 < hi2) { const m = (lo2 + hi2) >> 1; if (ns[m].start <= viewEnd) lo2 = m + 1; else hi2 = m; }
-    const up = lo2;
+    // 上界二分：第一个 start > viewEnd 的下标。此前这里写成 `let hi2 = 0, lo2 = ns.length`
+    // 配 `while (lo2 < hi2)`，条件一开始就不成立、循环一次都不执行，up 恒等于数组长度 ——
+    // 于是「只遍历视口附近区间」的裁剪完全失效，每帧从视口左界一路扫到全曲末尾。
+    let uLo = 0, uHi = ns.length;
+    while (uLo < uHi) { const m = (uLo + uHi) >> 1; if (ns[m].start <= viewEnd) uLo = m + 1; else uHi = m; }
+    const up = uLo;
     let a2 = 0, b2 = up, t0lo = viewStart - winTic;
     while (a2 < b2) { const m = (a2 + b2) >> 1; if (ns[m].start < t0lo) a2 = m + 1; else b2 = m; }
     const alpha = 0.9;
