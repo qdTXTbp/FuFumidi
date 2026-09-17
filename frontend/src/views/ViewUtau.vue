@@ -33,7 +33,7 @@ onMounted(() => { store.init(); pending.value = false; });
         <span class="tag">{{ t('音MAD 制作') }}</span>
       </div>
       <div class="utau-tabs">
-        <button v-for="tb in TABS" :key="tb.id" class="utau-tab" :class="{ on: tab === tb.id }" @click="tab = tb.id">
+        <button v-for="tb in TABS" :key="tb.id" class="utau-tab" :data-guide="'utau-tab-' + tb.id" :class="{ on: tab === tb.id }" @click="tab = tb.id">
           <Icon :name="tb.ic" :size="13" /> {{ t(tb.label) }}
         </button>
       </div>

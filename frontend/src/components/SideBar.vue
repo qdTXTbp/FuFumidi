@@ -628,7 +628,7 @@ const showAuth = ref(false);
 
     <div class="sidebar-body">
       <div style="display:flex;gap:6px">
-        <button class="btn sm" style="flex:1;min-width:0;justify-content:center" @click="onPick">
+        <button class="btn sm" data-guide="sidebar-import" style="flex:1;min-width:0;justify-content:center" @click="onPick">
           <Icon name="import" :size="14" /> {{ t('导入 MIDI') }}
         </button>
         <button class="btn sm" style="flex:1;min-width:0;justify-content:center" @click="onPickFolder">
@@ -654,7 +654,7 @@ const showAuth = ref(false);
       <div class="nav-sep"></div>
 
       <!-- 歌单列表 -->
-      <div class="pl-head">
+      <div class="pl-head" data-guide="sidebar-playlists">
         <span class="nav-group-title" style="padding:6px 12px 4px">{{ t('MIDI 歌单') }}</span>
         <div style="display:flex;gap:2px">
           <button class="icon-btn" style="width:24px;height:24px" :title="plCollapsed ? t('展开歌单') : t('折叠歌单')" :aria-label="plCollapsed ? t('展开歌单') : t('折叠歌单')" @click="plCollapsed = !plCollapsed">
@@ -672,7 +672,7 @@ const showAuth = ref(false);
       </div>
 
       <template v-if="!plCollapsed">
-      <div class="pl-grid">
+      <div class="pl-grid" data-guide="sidebar-views">
         <div class="pl-item" :class="{ on: isAllView }" @click="playlist.select('all')">
           <Icon name="music" :size="13" /><span>{{ t('全部曲目') }}</span><em>{{ state.songs.length }}</em>
         </div>

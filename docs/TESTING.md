@@ -164,6 +164,7 @@ node cdp-fx-tempo.cjs             # 音效链 + 倍速
 node cdp-fx-gain.cjs              # 音效链增益（固定测试音、时对齐）
 node cdp-init-recovery.cjs        # 音频初始化稳健性（注入故障后能否恢复）
 node cdp-frametime-probe.cjs      # 帧交付间隔（可视化页瀑布流，需 SONG=normal|heavy）
+node cdp-guide-walk.cjs           # 新手引导全章节逐步走查（每步的选择器都要真实可解析）
 $env:EXPR_FILE='.\expr-spatial-channels.js'; node cdp-eval.cjs    # 空间声声道分离度
 $env:EXPR_FILE='.\expr-viz-drawcost.js';     node cdp-eval.cjs    # 帧内绘制耗时 / 渐变数
 $env:EXPR_FILE='.\expr-dense-fix.js';        node cdp-eval.cjs    # 极密曲目丢音（内置合成器路径）

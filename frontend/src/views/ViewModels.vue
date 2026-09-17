@@ -109,7 +109,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 
     <!-- 分类页签 -->
     <div class="vm-tabs">
-      <button v-for="tb in TABS" :key="tb.id" class="vm-tab" :class="{ active: curTab === tb.id }" @click="curTab = tb.id">
+      <button v-for="tb in TABS" :key="tb.id" class="vm-tab" :data-guide="'vm-tab-' + tb.id" :class="{ active: curTab === tb.id }" @click="curTab = tb.id">
         <span class="tb-ic"><Icon :name="tb.ic" :size="14" /></span>{{ tb.label }}<span class="tb-cnt">{{ countFor(tb.id) }}</span>
       </button>
     </div>

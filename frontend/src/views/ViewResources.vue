@@ -451,7 +451,7 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
       <template v-if="rcTab === 'model'">
       <ViewModels />
 
-      <div class="card res-sec">
+      <div class="card res-sec" data-guide="vm-download-settings">
         <div class="res-sec-head"><Icon name="settings" :size="15" /> {{ t('模型下载设置') }}</div>
         <div class="field-row top">
           <div>

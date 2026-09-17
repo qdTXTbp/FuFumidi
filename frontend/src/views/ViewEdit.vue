@@ -1243,7 +1243,7 @@ onBeforeUnmount(() => {
         <span class="et-sep"></span>
         <button class="et-btn" :title="t('量化到吸附网格')" @click="quantize"><Icon name="quantize" :size="14" />{{ t('量化') }}</button>
         <span class="et-sep"></span>
-        <button class="et-btn et-more" :class="{ active: advOpen }" @click="advOpen = !advOpen">
+        <button class="et-btn et-more" data-guide="edit-more" :class="{ active: advOpen }" @click="advOpen = !advOpen">
           <Icon name="chevron" :size="13" :style="{ transform: advOpen ? 'rotate(180deg)' : '' }" /> {{ t('更多') }}
         </button>
       </div>
@@ -1293,7 +1293,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="adv-row">
           <span class="et-label">{{ t('和弦') }}</span>
-          <button class="et-btn" :title="t('分析逐小节和弦并显示和弦轨（约束模式下与音阶一起决定调内音）')" @click="analyzeChordTrack"><Icon name="music" :size="14" />{{ t('分析和弦') }}</button>
+          <button class="et-btn" data-guide="edit-chord-analyze" :title="t('分析逐小节和弦并显示和弦轨（约束模式下与音阶一起决定调内音）')" @click="analyzeChordTrack"><Icon name="music" :size="14" />{{ t('分析和弦') }}</button>
           <button class="et-btn" :title="t('选中与当前音符同时发声的音符')" @click="selectChordBatch"><Icon name="music" :size="14" />{{ t('和弦批量') }}</button>
           <span class="et-sep"></span>
           <span class="et-label">BPM</span>

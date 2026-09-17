@@ -291,14 +291,14 @@ onBeforeUnmount(() => {
       <div class="viz-hero card">
         <div class="vc-head" :class="{ 'hud-hidden': immersive && !hudOn }">
           <span class="dot" style="background:var(--brand-coral)"></span><b>{{ t('音符瀑布') }}</b>
-          <button class="chip-btn" :class="{ 'active': mode === 'dash' }" @click="mode = 'dash'">{{ t('仪表盘') }}</button>
-          <button class="chip-btn" :class="{ 'active': mode === 'waterfall' }" @click="mode = 'waterfall'">{{ t('瀑布流') }}</button>
+          <button class="chip-btn" :class="{ 'active': mode === 'dash' }" data-guide="viz-modes" @click="mode = 'dash'">{{ t('仪表盘') }}</button>
+          <button class="chip-btn" :class="{ 'active': mode === 'waterfall' }" data-guide="viz-waterfall" @click="mode = 'waterfall'">{{ t('瀑布流') }}</button>
           <button class="chip-btn" @click="colorScheme = (colorScheme + 1) % 4" :title="t('切换瀑布流配色')">{{ t('配色') }}</button>
           <span style="flex:1"></span>
           <button class="chip-btn" @click="wfZoom = Math.max(0.4, +(wfZoom - 0.1).toFixed(2))">−</button>
           <span class="vc-zoom">{{ Math.round(wfZoom * 100) }}%</span>
           <button class="chip-btn" @click="wfZoom = Math.min(3, +(wfZoom + 0.1).toFixed(2))">+</button>
-          <button class="chip-btn" :disabled="!currentSong" :title="t('沉浸模式')" @click="toggleImmersive">
+          <button class="chip-btn" :disabled="!currentSong" data-guide="viz-immersive" :title="t('沉浸模式')" @click="toggleImmersive">
             <Icon name="expand" :size="13" />{{ t('沉浸模式') }}
           </button>
           <span class="muted small" style="margin-left:10px">{{ t('Synthesia · 播放同步') }}</span>

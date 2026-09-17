@@ -691,7 +691,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
 
       <div class="settings-tabs" ref="tabsRef">
         <span class="settings-ind" :style="{ transform: `translateX(${ind.x}px)`, width: ind.w + 'px' }"></span>
-        <button class="ov-tab" v-for="tb in TABS" :key="tb.id" :class="{ active: tab === tb.id }" @click="switchTab(tb.id)">
+        <button class="ov-tab" v-for="tb in TABS" :key="tb.id" :data-guide="'set-tab-' + tb.id" :class="{ active: tab === tb.id }" @click="switchTab(tb.id)">
           {{ t(tb.label) }}
         </button>
       </div>

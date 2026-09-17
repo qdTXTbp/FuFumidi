@@ -54,16 +54,16 @@ function about() {
     <button class="icon-btn" :class="{ active: state.playerbarOpen }" :title="t('隐藏 / 显示底部播放栏')" :aria-label="t('隐藏 / 显示底部播放栏')" @click="togglePlayerbar">
       <Icon name="player" :size="16" />
     </button>
-    <button class="icon-btn" :title="t('动态壁纸')" :aria-label="t('动态壁纸')" @click="openWallpapers">
+    <button class="icon-btn" data-guide="topbar-wallpaper" :title="t('动态壁纸')" :aria-label="t('动态壁纸')" @click="openWallpapers">
       <Icon name="wallpaper" :size="16" />
     </button>
-    <button class="icon-btn" :title="t('帮助')" :aria-label="t('帮助')" @click="openHelp">
+    <button class="icon-btn" data-guide="topbar-help" :title="t('帮助')" :aria-label="t('帮助')" @click="openHelp">
       <Icon name="info" :size="17" />
     </button>
-    <button class="icon-btn" :title="t('设置')" :aria-label="t('设置')" @click="openSettings">
+    <button class="icon-btn" data-guide="topbar-settings" :title="t('设置')" :aria-label="t('设置')" @click="openSettings">
       <Icon name="gear" :size="17" />
     </button>
-    <button class="icon-btn" :title="t('更多')" :aria-label="t('更多')" @click="menuOpen = !menuOpen">
+    <button class="icon-btn" data-guide="topbar-more" :title="t('更多')" :aria-label="t('更多')" @click="menuOpen = !menuOpen">
       <Icon name="menu" :size="17" />
     </button>
 

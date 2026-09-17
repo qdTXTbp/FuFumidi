@@ -202,16 +202,16 @@ function toggleCrossfade() {
   <footer class="playerbar" :class="{ compact }">
     <div class="pb-main">
       <div class="pb-transport">
-        <button class="tp-btn" :title="t('播放模式：') + modeTitle" :aria-label="t('播放模式')" @click="cycleMode" :class="{ on: playMode !== 'order' }"><Icon :name="modeIcon" :size="15" /></button>
+        <button class="tp-btn" data-guide="pb-mode" :title="t('播放模式：') + modeTitle" :aria-label="t('播放模式')" @click="cycleMode" :class="{ on: playMode !== 'order' }"><Icon :name="modeIcon" :size="15" /></button>
         <button class="tp-btn" :title="t('上一首')" :aria-label="t('上一首')" @click="prev" :disabled="!currentSong"><Icon name="prev" :size="17" /></button>
         <button class="tp-play" :class="{ playing: state.playing }" :title="state.playing ? t('暂停') : t('播放')" @click="togglePlay">
           <Icon :name="state.playing ? 'pause' : 'play'" :size="20" />
         </button>
         <button class="tp-btn" :title="t('停止')" :aria-label="t('停止')" @click="stopPlay" :disabled="!currentSong"><Icon name="stop" :size="16" /></button>
         <button class="tp-btn" :title="t('下一首')" :aria-label="t('下一首')" @click="next" :disabled="!currentSong"><Icon name="next" :size="17" /></button>
-        <button class="tp-btn" :title="t('添加书签（记录当前进度）')" @click="addBk" :disabled="!currentSong"><Icon name="target" :size="15" /></button>
+        <button class="tp-btn" data-guide="pb-bookmark" :title="t('添加书签（记录当前进度）')" @click="addBk" :disabled="!currentSong"><Icon name="target" :size="15" /></button>
         <button v-if="bks.length" class="tp-btn" :class="{ on: bkOpen }" :title="t('书签列表')" @click="toggleBkList"><Icon name="chevron" :size="14" /></button>
-        <button class="tp-btn" :class="{ on: state.sleepUntil > 0 }" :title="sleepTitle" @click="sleepOpen = !sleepOpen; bkOpen = false"><Icon name="clock" :size="15" /></button>
+        <button class="tp-btn" data-guide="pb-sleep" :class="{ on: state.sleepUntil > 0 }" :title="sleepTitle" @click="sleepOpen = !sleepOpen; bkOpen = false"><Icon name="clock" :size="15" /></button>
       </div>
       <!-- 书签/睡眠弹层必须 Teleport 到 body：.playerbar 带 overflow:hidden + backdrop-filter，
            留在内部会被裁剪/错位（与下方混音台同理） -->
@@ -243,11 +243,11 @@ function toggleCrossfade() {
     </div>
 
     <div class="pb-right">
-      <button class="tp-btn" :class="{ 'toggle-on': midiOn }" :title="t('MIDI 硬件输出')" :aria-label="t('MIDI 硬件输出')" @click="toggleMidiOut"><Icon name="music" :size="16" /></button>
-      <button class="tp-btn" :class="{ 'toggle-on': state.loop }" :title="t('循环播放')" :aria-label="t('循环播放')" @click="toggleLoop" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="loop" :size="16" /></button>
-      <button class="tp-btn" :class="{ 'toggle-on': state.metro }" :title="t('节拍器')" :aria-label="t('节拍器')" @click="toggleMetro" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="metro" :size="16" /></button>
-      <button class="tp-btn" :class="{ 'toggle-on': mixerOpen }" :title="t('混音台')" :aria-label="t('混音台')" @click="mixerOpen = !mixerOpen" :disabled="isAudio || !state.tracks.length" :style="isAudio ? { opacity: .4 } : null"><Icon name="cclane" :size="16" /></button>
-      <button class="tp-btn" :class="{ 'toggle-on': fxOpen || fx.enabled }" :title="t('音效调节')" :aria-label="t('音效调节')" @click="toggleFxOpen"><Icon name="cresc" :size="16" /></button>
+      <button class="tp-btn" data-guide="pb-midiout" :class="{ 'toggle-on': midiOn }" :title="t('MIDI 硬件输出')" :aria-label="t('MIDI 硬件输出')" @click="toggleMidiOut"><Icon name="music" :size="16" /></button>
+      <button class="tp-btn" data-guide="pb-loop" :class="{ 'toggle-on': state.loop }" :title="t('循环播放')" :aria-label="t('循环播放')" @click="toggleLoop" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="loop" :size="16" /></button>
+      <button class="tp-btn" data-guide="pb-metro" :class="{ 'toggle-on': state.metro }" :title="t('节拍器')" :aria-label="t('节拍器')" @click="toggleMetro" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="metro" :size="16" /></button>
+      <button class="tp-btn" data-guide="pb-mixer" :class="{ 'toggle-on': mixerOpen }" :title="t('混音台')" :aria-label="t('混音台')" @click="mixerOpen = !mixerOpen" :disabled="isAudio || !state.tracks.length" :style="isAudio ? { opacity: .4 } : null"><Icon name="cclane" :size="16" /></button>
+      <button class="tp-btn" data-guide="pb-fx" :class="{ 'toggle-on': fxOpen || fx.enabled }" :title="t('音效调节')" :aria-label="t('音效调节')" @click="toggleFxOpen"><Icon name="cresc" :size="16" /></button>
       <button class="tp-btn" :class="{ 'toggle-on': compact }" :title="t('紧凑/完整播放栏')" :aria-label="t('紧凑/完整播放栏')" @click="compact = !compact"><Icon name="menu" :size="16" /></button>
 
       <div class="row" style="gap:4px">

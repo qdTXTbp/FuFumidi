@@ -61,15 +61,38 @@ async function main() {
     };
     const tailMax = await sample(300);      // 停止瞬间的余音
     const quietMax = await sample(1800);    // 之后应彻底安静
+
+    // 灵敏度对照（负向对照）：临时插一个短促方波，确认这个采样确实读得到声音。
+    // 没有这一步的话，「quietMax 很小」也可能只是采样读不到任何东西 —— 那样阈值再紧也
+    // 发现不了真泄漏。读数与注入幅度是线性的：gain 0.12 经 master(0.85) 后约 0.10 幅度，
+    // 实测正好读到 13/255；这里用 0.5 让读数稳定高于静音上限。
+    const probeLevel = await (async () => {
+      const ctx = syn.ctx;
+      const o = ctx.createOscillator(); const g = ctx.createGain();
+      o.type = 'square'; o.frequency.value = 1000; g.gain.value = 0.5;
+      o.connect(g); g.connect(syn.master);
+      o.start();
+      const mx = await sample(350);
+      try { o.stop(); } catch (e) {}
+      try { g.disconnect(); } catch (e) {}
+      return mx;
+    })();
+    const afterProbeQuiet = await sample(600);
+
     P.setMetronome(false);
-    return { queued, stoppedLen, tailMax, quietMax, playing: st.playing };
+    return { queued, stoppedLen, tailMax, quietMax, probeLevel, afterProbeQuiet, playing: st.playing };
   })()`, 240000);
   console.log('  ' + JSON.stringify(rA));
   if (rA && !rA.__err) {
+    // 阈值 8/255（约 -30 dBFS）：暂停后的残余是「已在响的音符的衰减尾巴」，实测 1~4/255；
+    // 而一个节拍器点击是短促瞬态，量级远高于此。原来的阈值 2 落在尾巴的波动范围内，会偶发误报。
+    const QUIET_LIMIT = 8;
     check('开启后确有拍点被预排（存在会被遗留的点击声）', rA.queued > 5, '排队 ' + rA.queued + ' 声');
     check('暂停后登记表被清空', rA.stoppedLen === 0, '剩 ' + rA.stoppedLen);
-    check('暂停后不再持续有点击声（1.8s 窗口内接近静音）', rA.quietMax <= 2,
-      '余音段 ' + rA.tailMax + '/255，其后 ' + rA.quietMax + '/255');
+    check('采样灵敏度足够（注入短促音可被读到，读数须显著高于静音上限）', rA.probeLevel > QUIET_LIMIT * 2,
+      '注入音读数 ' + rA.probeLevel + '/255（静音上限 ' + QUIET_LIMIT + '）');
+    check('暂停后不再持续有点击声（1.8s 窗口内接近静音）', rA.quietMax <= QUIET_LIMIT,
+      '余音段 ' + rA.tailMax + '/255，其后 ' + rA.quietMax + '/255（上限 ' + QUIET_LIMIT + '）');
   } else { check('节拍器项可执行', false, JSON.stringify(rA)); fail++; }
 
   console.log('\n=== B. 瀑布流滚动平滑度（逐帧变化量的波动）===');
