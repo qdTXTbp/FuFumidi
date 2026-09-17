@@ -169,7 +169,8 @@ export class Player {
   }
   seekSec(sec) {
     if (!this.song) return;
-    this.seekTick(this.song.secToTick(sec / this.scale));
+    // sec 是歌曲时间轴上的刻度（与 currentSec / totalSec 同量纲），不随倍速伸缩
+    this.seekTick(this.song.secToTick(sec));
   }
   _restartAt(tick) {
     this.syn.allStop();
@@ -182,8 +183,17 @@ export class Player {
     if (this.song) this.metroBeat = Math.max(0, Math.ceil(tick / this.song.tpb));
     this._sched();
   }
-  setScale(s) {
-    this.scale = s;
+  // setScale(speed)：speed 是「播放速度倍率」——1 = 原速，2 = 快一倍，0.5 = 慢一半，
+  // 与界面上的「速度倍率 / BPM」同向（调用方直接传 state.tempo）。
+  //
+  // 内部一律使用 this.scale = 墙上时间 / 歌曲时间（= 1/speed），调度换算都基于它：
+  // noteTime 用它把歌曲时间差放大成墙上时间差，currentTick 用它除回去。
+  // 之前这里直接把 speed 赋给 this.scale，于是界面按「加速」按钮实际把曲子放慢了，
+  // BPM 输入框填 240 得到一半速度 —— 方向整个是反的。收敛在这一处换算，
+  // 调用方（app.ts / ViewEdit / EditorCanvas）无需各自记得取倒数。
+  setScale(speed) {
+    const sp = Number(speed) > 0 ? Number(speed) : 1;
+    this.scale = 1 / sp;
     if (this.playing) { const t = this.currentTick(); this.pausedTick = t; this._restartAt(t); }
   }
   setLoop(on, a, b) {
@@ -200,7 +210,10 @@ export class Player {
     const rel = (this.ctx.currentTime - this.startSec) / this.scale;
     return this.song.secToTick(this.song.baseSec(this.startTick) + rel);
   }
-  currentSec() { return this.song.baseSec(this.currentTick()) * this.scale; }
+  // 歌曲时间轴上的当前位置（秒），与 song.totalSec 同量纲 —— 倍速只改变它推进的快慢，
+  // 不改变它的刻度。此前返回值多乘了一次 this.scale，于是倍速 ≠ 1 时：播放时间文本翻倍、
+  // 曲尾淡出（按 totalSec - currentSec 判断）失效或中途误触发。
+  currentSec() { return this.song.baseSec(this.currentTick()); }
   progress() { return this.song.totalSec ? this.currentSec() / this.song.totalSec : 0; }
   _sched() {
     if (!this.playing) return;

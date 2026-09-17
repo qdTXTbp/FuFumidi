@@ -108,7 +108,9 @@ export function playVoice(ctx, time, midi, vel, preset, out, endTime, live) {
   const peak = 0.11 + v * v * 0.92;
   const freq = midiFreq(midi);
   const tStop = Math.max(endTime, time + 0.06) + (preset === 'drum' ? 0.32 : 0.2);
-  const reg = (o) => { try { o.stop(tStop); } catch (e) {} liveArr.push({ o, tStop }); return o; };
+  // tStart 记录该节点的预定发声时刻：pruneLive 要靠它区分「已开始发声」与「还排在窗口里」。
+  // 本函数内所有节点都以同一个（已钳制的）time 启动，所以这里直接记 time 就是准的。
+  const reg = (o) => { try { o.stop(tStop); } catch (e) {} liveArr.push({ o, tStop, tStart: time }); return o; };
   const mkOsc = (type, f) => { const o = ctx.createOscillator(); o.type = type; o.frequency.value = f; o.start(time); reg(o); return o; };
   const mkFilter = (type, f, q, to) => { const fl = ctx.createBiquadFilter(); fl.type = type; fl.frequency.value = f; fl.Q.value = q || 0.7; fl.connect(to); return fl; };
 
@@ -321,19 +323,32 @@ export class Synth {
       bq.frequency.value = f; bq.Q.value = 1.1; bq.gain.value = 0;
       return bq;
     });
+    // 音效链的入口必须接上 EQ 第一级。缺了这一跳的话：master → fxIn 之后无路可走，
+    // 而 setFxEnabled 已经把 master → analyser 的直连断开，于是「打开音效」= 整机静音
+    // （EQ / 低音增强 / 空间声 三个功能也因此从未真正生效过）。
+    this.fxIn.connect(this.eqFilters[0]);
     for (let i = 0; i < this.eqFilters.length - 1; i++) this.eqFilters[i].connect(this.eqFilters[i + 1]);
     this.bassShelf = ctx.createBiquadFilter();
     this.bassShelf.type = 'lowshelf'; this.bassShelf.frequency.value = 120; this.bassShelf.gain.value = 0;
     this.eqFilters[this.eqFilters.length - 1].connect(this.bassShelf);
     // mid/side 立体声展宽：L' = L + s*(L-R)/2, R' = R - s*(L-R)/2（s=0 原声，s=1 最大展宽）
     this.splitter = ctx.createChannelSplitter(2);
+    // 单声道源（如 FluidR3 Mono 这类单声道音色库）在 ChannelSplitter 的 'discrete' 下只会进
+    // 0 号输出，展宽后右耳整条丢失。不能直接改 splitter 的 channelInterpretation
+    // （Chromium 会抛 InvalidStateError：ChannelSplitter 只允许 'discrete'），
+    // 所以先用一个显式两声道 + 'speakers' 的增益级把源上混成立体声再进分离器。
+    this.fxStereo = ctx.createGain();
+    this.fxStereo.channelCount = 2;
+    this.fxStereo.channelCountMode = 'explicit';
+    this.fxStereo.channelInterpretation = 'speakers';
     this.merger = ctx.createChannelMerger(2);
     const midL = ctx.createGain(), midR = ctx.createGain();
     const invR = ctx.createGain(), invL = ctx.createGain();
     const sideL = ctx.createGain(), sideR = ctx.createGain();
     invR.gain.value = -1; invL.gain.value = -1;
     sideL.gain.value = 0; sideR.gain.value = 0;
-    this.bassShelf.connect(this.splitter);
+    this.bassShelf.connect(this.fxStereo);
+    this.fxStereo.connect(this.splitter);
     this.splitter.connect(midL, 0); this.splitter.connect(midR, 1);        // L/R 直通（mid 分量）
     this.splitter.connect(invR, 1);                                        // -R
     this.splitter.connect(invL, 0);                                        // -L
@@ -341,7 +356,8 @@ export class Synth {
     midR.connect(sideR); invL.connect(sideR);   // 反相 side 加到右耳
     sideL.connect(this.merger, 0, 0); midL.connect(this.merger, 0, 0);
     sideR.connect(this.merger, 0, 1); midR.connect(this.merger, 0, 1);
-    this.bassShelf.connect(this.fxOut);
+    // 展宽级的输出是唯一的干路出口。此前这里还并联了一条 bassShelf → fxOut 的直通，
+    // 而 s=0 时 merger 输出的就是原信号（midL/midR 增益为 1），两条并联即 2× 电平（约 +6dB）。
     this.merger.connect(this.fxOut);
     this.fxOut.connect(this.analyser);
     this.fxEnabled = false;
@@ -891,15 +907,34 @@ export class Synth {
   }
   pruneLive(limit = 256) {
     const t = this.ctx.currentTime;
+    // 1) 先回收已经自然结束的发声节点
     const expires = this.live.filter(x => x.tStop <= t);
     for (const x of expires) { try { x.o.stop(); } catch (e) {} }
     this.live = this.live.filter(x => x.tStop > t);
-    if (this.live.length > limit) {
-      const sorted = this.live.slice().sort((a, b) => a.tStop - b.tStop);
-      const remove = sorted.slice(0, this.live.length - limit);
-      for (const x of remove) { try { x.o.stop(); } catch (e) {} }
-      this.live = this.live.filter(x => !remove.includes(x));
+    if (this.live.length <= limit) return;
+    // 2) 仍超预算时必须丢掉一些节点，但**挑谁丢**是关键：
+    //    预排窗口内的音符先创建节点、后到点发声，所以「还没开始发声」的节点（tStart > t）
+    //    丢掉只是少放一个未来的音；已经发声的丢掉就是把耳朵里的声音掐掉。
+    //    原实现按 tStop 从小到大砍 —— tStop 近似等于「音符结束时刻」，于是每次砍的都是
+    //    此刻最接近结束、也就是**正在响**的那些音。音符密集到预排窗口本身就撑满上限时
+    //    （实测 160 音符/秒的文件），每个新音都触发一轮修剪、把正在响的整批掐掉，
+    //    整首歌变成数字静音（分析器读到全 128，而包络、节点、音频图全都正常）。
+    //    因此：先丢未发声的（越晚开始越先丢），不够再丢已发声里剩余声音最少的。
+    const over = this.live.length - limit;
+    const pending = [], sounding = [];
+    for (const x of this.live) ((x.tStart == null || x.tStart <= t) ? sounding : pending).push(x);
+    pending.sort((a, b) => b.tStart - a.tStart);
+    sounding.sort((a, b) => a.tStop - b.tStop);
+    const drop = [];
+    for (const arr of [pending, sounding]) {
+      for (const x of arr) {
+        if (drop.length >= over) break;
+        drop.push(x);
+      }
     }
+    for (const x of drop) { try { x.o.stop(); } catch (e) {} }
+    const set = new Set(drop);
+    this.live = this.live.filter(x => !set.has(x));
   }
   allStop() {
     const t = this.ctx.currentTime;

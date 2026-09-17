@@ -8,55 +8,69 @@ let ctx = null;
 let synth = null;
 let player = null;
 
+// 初始化必须整体成功才落到模块变量（见下方 catch 的说明），所以这里用局部名装配。
 export function ensureAudio() {
   if (!ctx) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) throw new Error(t('当前环境不支持 Web Audio API'));
-    try { ctx = new AC({ latencyHint: 'interactive' }); } catch (e) { ctx = new AC(); }
-    synth = new Synth(ctx);
-    // 应用持久化的音效设置（EQ/低音增强/空间声），随存随用
+    let c = null;
     try {
-      const fx = JSON.parse(localStorage.getItem('fufumidi_fx') || 'null');
-      if (fx) {
-        if (fx.enabled) synth.setFxEnabled(true);
-        if (Array.isArray(fx.gains)) synth.setEqGains(fx.gains);
-        if (typeof fx.bass === 'number') synth.setBassBoost(fx.bass);
-        if (typeof fx.spatial === 'number') synth.setSpatial(fx.spatial);
-      }
-    } catch (e) {}
-    // 加载音色工坊所选的音色库（优先），否则按环境回退：
-    //   桌面端默认内置合成器，网页端默认内置 GeneralUser.sf2
-    // localStorage 直读：启动时 restoreSongs→selectSong→ensureAudio 先于 settings 异步加载，
-    // window 引用此时尚未同步（曾导致重启后总是回退内置音色），localStorage 同步读取无竞态
-    let saved = null;
-    try { saved = window.__fufumidi_activeSoundfont || localStorage.getItem('fufumidi_soundfont') || null; } catch (e) { saved = window.__fufumidi_activeSoundfont || null; }
-    const bridge = (typeof window !== 'undefined') ? window.fuBridge : null;
-    const source = saved && saved !== 'internal' ? saved : (bridge ? undefined : 'web:generaluser');
-    // 记录已应用音色：settings 首次同步时据此判断是否需要竞态自愈补加载。
-    // 此处先按预期值标记，待 setSoundfont 返回结果后如实修正（见下）：
-    // 若启动时 SF2 加载失败（文件被删/移动/损坏，synth 内部会静默回退内置），
-    // 仍保留乐观标记会让 settings 自愈误判「已应用」而跳过补加载。
-    if (typeof window !== 'undefined') window.__fufumidi_appliedSoundfont = source || 'internal';
-    // 诊断钩子：CDP/控制台读取当前播放器实例（只读用途）
-    if (typeof window !== 'undefined') window.__fufumidiActivePlayer = null;
-    synth.setSoundfont(source).then((r) => {
-      // 3.2.6 自查修复：SF2 加载失败时 synth 内部已静默回退内置（r.using !== 'sf2'），
-      // 此时如实降级标记，让 settings 同步的自愈机制可识别并补加载；
-      // 成功加载 SF2 时维持上方乐观标记（标记语义 = 已选音色源路径）。
-      if (typeof window !== 'undefined' && (!r || r.using !== 'sf2')) window.__fufumidi_appliedSoundfont = 'internal';
-    }).catch(() => {
-      if (typeof window !== 'undefined') window.__fufumidi_appliedSoundfont = 'internal';
-    });
-    player = new Player(synth);
-    if (typeof window !== 'undefined') window.__fufumidiActivePlayer = player;
-    player.onEnd = () => {
-      // 播完自动复位（由 store 监听处理 UI 状态）
-      if (typeof window !== 'undefined' && window.__fufumidiOnEnd) window.__fufumidiOnEnd();
-      // 播放模式自动切歌（App.vue 注入 handleTrackEnd）
-      if (typeof window !== 'undefined' && window.__fufumidiAutoNext) {
-        setTimeout(() => { try { window.__fufumidiAutoNext(); } catch (e) {} }, 10);
-      }
-    };
+      try { c = new AC({ latencyHint: 'interactive' }); } catch (e) { c = new AC(); }
+      const s = new Synth(c);
+      // 应用持久化的音效设置（EQ/低音增强/空间声），随存随用
+      try {
+        const fx = JSON.parse(localStorage.getItem('fufumidi_fx') || 'null');
+        if (fx) {
+          if (fx.enabled) s.setFxEnabled(true);
+          if (Array.isArray(fx.gains)) s.setEqGains(fx.gains);
+          if (typeof fx.bass === 'number') s.setBassBoost(fx.bass);
+          if (typeof fx.spatial === 'number') s.setSpatial(fx.spatial);
+        }
+      } catch (e) {}
+      // 加载音色工坊所选的音色库（优先），否则按环境回退：
+      //   桌面端默认内置合成器，网页端默认内置 GeneralUser.sf2
+      // localStorage 直读：启动时 restoreSongs→selectSong→ensureAudio 先于 settings 异步加载，
+      // window 引用此时尚未同步（曾导致重启后总是回退内置音色），localStorage 同步读取无竞态
+      let saved = null;
+      try { saved = window.__fufumidi_activeSoundfont || localStorage.getItem('fufumidi_soundfont') || null; } catch (e) { saved = window.__fufumidi_activeSoundfont || null; }
+      const bridge = (typeof window !== 'undefined') ? window.fuBridge : null;
+      const source = saved && saved !== 'internal' ? saved : (bridge ? undefined : 'web:generaluser');
+      // 记录已应用音色：settings 首次同步时据此判断是否需要竞态自愈补加载。
+      // 此处先按预期值标记，待 setSoundfont 返回结果后如实修正（见下）：
+      // 若启动时 SF2 加载失败（文件被删/移动/损坏，synth 内部会静默回退内置），
+      // 仍保留乐观标记会让 settings 自愈误判「已应用」而跳过补加载。
+      if (typeof window !== 'undefined') window.__fufumidi_appliedSoundfont = source || 'internal';
+      // 诊断钩子：CDP/控制台读取当前播放器实例（只读用途）
+      if (typeof window !== 'undefined') window.__fufumidiActivePlayer = null;
+      s.setSoundfont(source).then((r) => {
+        // 3.2.6 自查修复：SF2 加载失败时 synth 内部已静默回退内置（r.using !== 'sf2'），
+        // 此时如实降级标记，让 settings 同步的自愈机制可识别并补加载；
+        // 成功加载 SF2 时维持上方乐观标记（标记语义 = 已选音色源路径）。
+        if (typeof window !== 'undefined' && (!r || r.using !== 'sf2')) window.__fufumidi_appliedSoundfont = 'internal';
+      }).catch(() => {
+        if (typeof window !== 'undefined') window.__fufumidi_appliedSoundfont = 'internal';
+      });
+      const p = new Player(s);
+      p.onEnd = () => {
+        // 播完自动复位（由 store 监听处理 UI 状态）
+        if (typeof window !== 'undefined' && window.__fufumidiOnEnd) window.__fufumidiOnEnd();
+        // 播放模式自动切歌（App.vue 注入 handleTrackEnd）
+        if (typeof window !== 'undefined' && window.__fufumidiAutoNext) {
+          setTimeout(() => { try { window.__fufumidiAutoNext(); } catch (e) {} }, 10);
+        }
+      };
+      // 三件都建好后再落到模块变量：任何一步抛异常都不会留下
+      // 「ctx 有值但 synth/player 为 null」的半初始化单例。那种状态下上面这个 if (!ctx)
+      // 永远不会再进入、也就永远不会重建，而调用方（如 selectSong 里的 player.stop()）
+      // 会直接崩在 null 上 —— 表现为「任何一次选曲都失败，必须重启应用」。
+      ctx = c; synth = s; player = p;
+      if (typeof window !== 'undefined') window.__fufumidiActivePlayer = p;
+    } catch (e) {
+      // 关掉半成品上下文并保持模块变量为 null，让下一次 ensureAudio 能重新尝试
+      try { if (c && c.state !== 'closed') c.close(); } catch (_) {}
+      ctx = null; synth = null; player = null;
+      throw e;
+    }
     // 曲尾淡出（无缝过渡的听觉掩蔽；可在音效面板关闭）
     window.__fufumidiBaseVol = 0.85;
     setInterval(() => {
