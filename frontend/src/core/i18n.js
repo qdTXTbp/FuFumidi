@@ -2750,10 +2750,12 @@ export const I18N_MAP = {
   '跳过此步': 'Skip this step',
   '点高亮处继续': 'Click the highlight to continue',
   /* 更新通道 */
-  '测试版通道': 'Beta channel',
-  '开启后会先收到内测版本（X.Y.Z-beta.N）；关闭后停在当前版本，等正式版号追平再自动更新。': 'When on, you receive beta builds (X.Y.Z-beta.N) first. Turning it off keeps the current version until a stable release catches up.',
-  '已加入测试版通道': 'Joined the beta channel',
-  '已退出测试版通道': 'Left the beta channel',
+  '更新通道': 'Update channel',
+  '正式版': 'Stable',
+  '测试版': 'Beta',
+  '正式版稳定可靠；测试版可抢先体验新功能，但更新较频繁、可能包含较多未修复的 Bug。': 'The stable release is reliable. The beta gives early access to new features, but updates more often and may contain unresolved bugs.',
+  '已切换到测试版通道': 'Switched to the beta channel',
+  '已切换到正式版通道': 'Switched to the stable channel',
 
 };
 

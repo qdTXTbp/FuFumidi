@@ -236,13 +236,15 @@ async function updLaunch() {
 }
 
 /* ---------------- 更新通道 ---------------- */
-// 开启后参与内测：检查更新会先取最新测试版（prerelease）；当时若没有测试版，照常拿正式版。
-// 关闭只是不再收测试版，不会回退版本 —— 更新器只能向前，留在当前版本等正式版号追平。
+// 二选一：正式版（默认，稳定）/ 测试版（提前收到 prerelease，抢先体验新功能）。
+// 测试版没有对应测试版时回退到正式版；退回正式版只是不再收测试版，不会回退版本 ——
+// 更新器只能向前，留在当前版本等正式版号追平。
 const updateChannel = ref('stable');
-function toggleChannel() {
-  updateChannel.value = setUpdateChannel(updateChannel.value === 'beta' ? 'stable' : 'beta');
+function setChannel(ch) {
+  const next = ch === 'beta' ? 'beta' : 'stable';
+  updateChannel.value = setUpdateChannel(next);
   upd.status = ''; upd.failed = false; upd.launched = false;
-  toast(updateChannel.value === 'beta' ? t('已加入测试版通道') : t('已退出测试版通道'));
+  toast(next === 'beta' ? t('已切换到测试版通道') : t('已切换到正式版通道'));
 }
 
 /* ---------------- 卸载 ---------------- */
@@ -1023,11 +1025,14 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
 
           <div class="field-row" style="margin-top:18px;border-top:1px solid var(--hairline);padding-top:14px">
             <div>
-              <div class="fr-label">{{ t('测试版通道') }}</div>
-              <div class="fr-hint">{{ t('开启后会先收到内测版本（X.Y.Z-beta.N）；关闭后停在当前版本，等正式版号追平再自动更新。') }}</div>
+              <div class="fr-label">{{ t('更新通道') }}</div>
+              <div class="fr-hint">{{ t('正式版稳定可靠；测试版可抢先体验新功能，但更新较频繁、可能包含较多未修复的 Bug。') }}</div>
             </div>
             <div class="fr-ctl">
-              <button class="btn sm" :class="{ primary: updateChannel === 'beta' }" @click="toggleChannel">{{ updateChannel === 'beta' ? t('已开启') : t('已关闭') }}</button>
+              <div class="radio-pill">
+                <span :class="{ on: updateChannel !== 'beta' }" @click="setChannel('stable')">{{ t('正式版') }}</span>
+                <span :class="{ on: updateChannel === 'beta' }" @click="setChannel('beta')">{{ t('测试版') }}</span>
+              </div>
             </div>
           </div>
 
