@@ -14,7 +14,7 @@
 
 FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编曲者、转录师和影视配乐师，目标是把「音频」到「干净、可编辑、可发布的 MIDI / 乐谱」这条链路完整落在本机，全程不联网。
 
-应用基于 Electron 桌面壳 + Vue 3 + TypeScript 渲染层 + 内置 Python 转录运行时，并提供可选的 Rust 核心以加速热点路径。所有音频、模型权重与推理都在本地执行，转录与编辑全程不上传任何数据；只有在你自己开启云同步（可选）时，才会把歌单与 MIDI 曲目上传到你自己的云端账号。
+应用基于 Electron 桌面壳 + Vue 3 + TypeScript 渲染层 + 内置 Python 转录运行时，并提供可选的原生 Rust 核心以加速曲库的批量操作。所有音频、模型权重与推理都在本地执行，转录与编辑全程不上传任何数据；只有在你自己开启云同步（可选）时，才会把歌单与 MIDI 曲目上传到你自己的云端账号。
 
 当前版本线：**4.3.0**（[发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v4.3.0)）。
 
@@ -37,7 +37,7 @@ FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编�
 - 11 个哈希路由视图，应用内 i18n，10 套内置主题 + 图片提取主色自定义主题，`Ctrl+K` 命令面板，新手引导，主题库，动态壁纸画廊。
 - 插件沙箱，第三方代码在独立 worker 中运行。
 - 完整性检验与一键修复。
-- 可选 Rust 核心（`src-tauri/`）承担性能关键路径。
+- 可选原生 Rust 核心（`rust-core/`）加速批量、CPU 密集的曲库操作。
 - 支持 CUDA 与 DirectML GPU 加速，无 GPU 时优雅回退到 CPU。
 
 ### 多语言（i18n）开发守则
@@ -210,7 +210,7 @@ FuFumidi 由三个进程组成。
 
 可选加速：
 
-- **Rust 核心**（`rust-core/`、`src-tauri/`）：Tauri v2 壳与本地库 `fufumidi_lib`，承担性能关键路径。通过 `npm run build:rust` 构建，`npm run test:rust` 验证。
+- **Rust 核心**（`rust-core/`）：独立原生命令行工具 `fufumidi-core`，经子进程 JSON 协议调用，承担曲库里的批量重活——文件体检（`batch-stats`）、按 SHA-256 内容哈希去重（`hash-batch`）、批量量化 / 移调（`quantize-batch` / `transpose-batch`）。未内置该二进制时优雅降级到 JS / Python。（`src-tauri/` 是独立的 Tauri 迁移壳，当前 Electron 运行时未驱动。）通过 `npm run build:rust` 构建，`npm run test:rust` 验证。
 - **GPU 运行时**（`engine/engine_gpu.py`、`main/gpu.js`、`main/gpu-ipc.js`）：根据本地驱动选择 CUDA 或 DirectML，均不可用时回退到 CPU。
 - **插件系统**（`plugins/`、`plugin-host.js`、`plugin-worker.js`）：每个插件运行在独立 worker 内，拥有受限的 API。
 
@@ -235,8 +235,8 @@ FuFumidi/
   engine/                 Python 转录引擎、模型、ffmpeg 封装、MIDI 工具
     tests/                引擎测试与 wav / midi 测试素材
   plugins/                内置插件与插件开发指南
-  src-tauri/              可选 Rust 路径使用的 Tauri v2 壳
-  rust-core/              Tauri 壳使用的 Rust 库
+  src-tauri/              Tauri 迁移壳（当前 Electron 运行时未驱动）
+  rust-core/              原生命令行批处理工具 fufumidi-core（JSON 协议调用）
   build/                  图标、kachina 配置、安装包素材
   scripts/                构建与校验脚本
   .github/workflows/      CI 流水线

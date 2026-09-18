@@ -37,7 +37,7 @@ What's new in 4.3.0: fixes a batch of long-standing issues that quietly degraded
 - 11 hash-routed views, in-app i18n, 10 built-in themes plus image-based custom theme generation, `Ctrl+K` command palette, onboarding guide, theme library and dynamic wallpaper gallery.
 - Plugin sandbox that runs third-party code inside its own worker.
 - Integrity check and one-click repair for the bundled runtime.
-- Optional Rust core (`src-tauri/`) for performance-critical paths.
+- Optional native Rust core (`rust-core/`) accelerates batch, CPU-heavy library operations.
 - GPU acceleration options for CUDA and DirectML, with a graceful fallback to CPU.
 
 ### i18n contribution rule
@@ -209,7 +209,7 @@ FuFumidi is a three-process application.
 
 Optional accelerations:
 
-- **Rust core** (`rust-core/`, `src-tauri/`) - a Tauri v2 shell and a native library (`fufumidi_lib`) that expose performance-critical paths. Built via `npm run build:rust` and validated by `npm run test:rust`.
+- **Rust core** (`rust-core/`) - a standalone native CLI (`fufumidi-core`) driven over a JSON subprocess protocol. It handles the heavy, CPU-bound batch work in the library: track-health scanning (`batch-stats`), duplicate detection via SHA-256 content hashing (`hash-batch`), and batch quantization / transposition (`quantize-batch` / `transpose-batch`). It degrades gracefully to JS / Python when the binary is not bundled. (`src-tauri/` is a separate Tauri migration shell, not used by the current Electron runtime.) Built via `npm run build:rust` and validated by `npm run test:rust`.
 - **GPU runtime** (`engine/engine_gpu.py`, `main/gpu.js`, `main/gpu-ipc.js`) - selects CUDA or DirectML based on the local driver, and falls back to CPU when neither is available.
 - **Plugins** (`plugins/`, `plugin-host.js`, `plugin-worker.js`) - a sandboxed extension system that runs each plugin in a dedicated worker with a scoped API.
 
@@ -234,8 +234,8 @@ FuFumidi/
   engine/                 Python transcriber, models, ffmpeg wrapper, MIDI utilities
     tests/                Engine test suite with fixture wav/midi
   plugins/                Built-in plugins and the plugin developer guide
-  src-tauri/              Tauri v2 shell for the optional Rust path
-  rust-core/              Rust library used by the Tauri shell
+  src-tauri/              Tauri migration shell (not used by the current Electron runtime)
+  rust-core/              Native batch-processing CLI (fufumidi-core) over a JSON protocol
   build/                  Icon, kachina config, installer artwork
   scripts/                Build and verification scripts
   .github/workflows/      CI pipelines

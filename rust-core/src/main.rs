@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use sha2::{Digest, Sha256};
 
 fn walk_files(dir: &str, exts: &[&str]) -> Vec<String> {
     let mut out = Vec::new();
@@ -24,13 +25,9 @@ fn walk_files(dir: &str, exts: &[&str]) -> Vec<String> {
     out
 }
 
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for &b in bytes {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
+/// 字节数组 → 小写 hex（用于 SHA-256 输出）
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 struct MidiStats {
@@ -55,117 +52,61 @@ fn read_vlq(data: &[u8], pos: &mut usize) -> u32 {
     value
 }
 
-fn stat_smf(bytes: &[u8]) -> Result<MidiStats, String> {
-    if bytes.len() < 14 || &bytes[0..4] != b"MThd" {
-        return Err("not a MIDI file".into());
-    }
-    let head_len = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
-    if head_len < 6 {
-        return Err("MThd too short".into());
-    }
-    let format = u16::from_be_bytes([bytes[8], bytes[9]]);
-    let ntrks = u16::from_be_bytes([bytes[10], bytes[11]]) as usize;
-    let division_raw = u16::from_be_bytes([bytes[12], bytes[13]]);
-    if division_raw & 0x8000 != 0 {
-        return Err("SMPTE MIDI files not supported".into());
-    }
-    let tpb = (division_raw & 0x7fff) as f64;
-    if tpb <= 0.0 {
-        return Err("invalid division".into());
-    }
-
-    let mut pos = 14 + head_len.saturating_sub(6);
+/// 基于 SMF 事件流做统计（用于 batch-stats / midi-stats）。
+/// 与量化/移调共用同一个 `parse_smf`，因此天然支持 running status ——
+/// 不再维护第二套「跳过 running status」的解析，杜绝两条路径行为不一致。
+fn stat_smf_bytes(bytes: &[u8]) -> Result<MidiStats, String> {
+    let smf = parse_smf(bytes)?;
     let mut tempo_us = 500_000u32;
-    let mut track_count = 0usize;
-    let mut notes: Vec<(i32, u32, i32, u32)> = Vec::new(); // (midi, vel, start_tick, dur_ticks)
-    let mut active: Vec<(i32, i32, u32, i32)> = Vec::new(); // (channel, midi, start_tick, vel)
-
-    for _ in 0..ntrks {
-        if pos + 8 > bytes.len() { break; }
-        if &bytes[pos..pos + 4] == b"MTrk" {
-            track_count += 1;
-            let len = u32::from_be_bytes([bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]]) as usize;
-            pos += 8;
-            let end = (pos + len).min(bytes.len());
-            let mut tick: u32 = 0;
-            while pos < end {
-                tick += read_vlq(bytes, &mut pos);
-                if pos >= end { break; }
-                let status = bytes[pos];
-                if status & 0x80 == 0 {
-                    // running status not handled fully; skip byte
-                    pos += 1;
-                    continue;
+    let mut notes: Vec<(i32, u32, u32, u32)> = Vec::new(); // (midi, vel, start_tick, dur_ticks)
+    for track in &smf.tracks {
+        let mut active: Vec<(i32, i32, u32, i32)> = Vec::new(); // (channel, midi, onset_tick, vel)
+        for ev in track {
+            let raw = &ev.raw;
+            if raw.is_empty() { continue; }
+            let status = raw[0];
+            if status == 0xFF {
+                // meta 事件；tempo (0x51) 的布局是 [0xFF, 0x51, mlen, b0, b1, b2]
+                if raw.len() >= 6 && raw[1] == 0x51 && raw[2] == 3 {
+                    let v = ((raw[3] as u32) << 16) | ((raw[4] as u32) << 8) | (raw[5] as u32);
+                    if v > 0 { tempo_us = v; }
                 }
-                pos += 1;
-                let is_meta = status == 0xFF;
-                let is_sysex = status == 0xF0 || status == 0xF7;
-                if is_meta {
-                    let mtype = bytes.get(pos).copied().unwrap_or(0);
-                    pos += 1;
-                    let mlen = read_vlq(bytes, &mut pos) as usize;
-                    let mdata_end = (pos + mlen).min(bytes.len());
-                    if mtype == 0x51 && mlen >= 3 {
-                        let b0 = bytes.get(pos).copied().unwrap_or(0);
-                        let b1 = bytes.get(pos + 1).copied().unwrap_or(0);
-                        let b2 = bytes.get(pos + 2).copied().unwrap_or(0);
-                        let v = ((b0 as u32) << 16) | ((b1 as u32) << 8) | (b2 as u32);
-                        if v > 0 { tempo_us = v; }
-                    }
-                    pos = mdata_end;
-                    continue;
+                continue;
+            }
+            let kind = status & 0xF0;
+            let channel = (status & 0x0F) as i32;
+            if kind == 0x80 { // note off
+                if raw.len() < 2 { continue; }
+                let note = raw[1] as i32;
+                if let Some(idx) = active.iter().position(|a| a.0 == channel && a.1 == note) {
+                    let (_, _, onset, vel) = active.remove(idx);
+                    notes.push((note, vel.max(0) as u32, onset, ev.tick.saturating_sub(onset)));
                 }
-                if is_sysex {
-                    let slen = read_vlq(bytes, &mut pos) as usize;
-                    pos = (pos + slen).min(bytes.len());
-                    continue;
-                }
-                // channel events
-                let channel = (status & 0x0F) as i32;
-                let kind = status & 0xF0;
-                match kind {
-                    0x80 => { // note off
-                        let note = bytes.get(pos).copied().unwrap_or(0) as i32;
-                        pos += 1;
-                        if pos < end { pos += 1; } // velocity
-                        if let Some(idx) = active.iter().position(|a| a.0 == channel && a.1 == note) {
-                            let (_, _, st, vel) = active.remove(idx);
-                            notes.push((note, vel as u32, st as i32, tick.saturating_sub(st)));
-                        }
+            } else if kind == 0x90 { // note on
+                if raw.len() < 3 { continue; }
+                let note = raw[1] as i32;
+                let vel = raw[2] as i32;
+                if vel == 0 {
+                    if let Some(idx) = active.iter().position(|a| a.0 == channel && a.1 == note) {
+                        let (_, _, onset, v2) = active.remove(idx);
+                        notes.push((note, v2.max(0) as u32, onset, ev.tick.saturating_sub(onset)));
                     }
-                    0x90 => { // note on
-                        let note = bytes.get(pos).copied().unwrap_or(0) as i32;
-                        let vel = bytes.get(pos + 1).copied().unwrap_or(0) as i32;
-                        pos += 2;
-                        if vel == 0 {
-                            if let Some(idx) = active.iter().position(|a| a.0 == channel && a.1 == note) {
-                                let (_, _, st, v2) = active.remove(idx);
-                                notes.push((note, v2 as u32, st as i32, tick.saturating_sub(st)));
-                            }
-                        } else {
-                            if let Some(idx) = active.iter().position(|a| a.0 == channel && a.1 == note) {
-                                active.remove(idx);
-                            }
-                            active.push((channel, note, tick, vel));
-                        }
+                } else {
+                    if let Some(idx) = active.iter().position(|a| a.0 == channel && a.1 == note) {
+                        active.remove(idx);
                     }
-                    _ => {
-                        // two data bytes for most channel messages
-                        if pos < end { pos += 1; }
-                        if pos < end { pos += 1; }
-                    }
+                    active.push((channel, note, ev.tick, vel));
                 }
             }
-            pos = end;
-        } else {
-            break;
         }
     }
 
-    if notes.is_empty() || track_count == 0 {
+    if notes.is_empty() || smf.tracks.is_empty() {
         return Err("no note events found".into());
     }
 
+    let format = smf.format;
+    let track_count = smf.tracks.len();
     let min_midi = notes.iter().map(|n| n.0).min().unwrap_or(0);
     let max_midi = notes.iter().map(|n| n.0).max().unwrap_or(127);
     let avg_vel = notes.iter().map(|n| n.1 as f64).sum::<f64>() / notes.len() as f64;
@@ -421,7 +362,7 @@ fn run(args: &[String]) -> String {
         Some("midi-stats") => {
             let path = args.get(1).cloned().unwrap_or_default();
             match fs::read(&path) {
-                Ok(bytes) => match stat_smf(&bytes) {
+                Ok(bytes) => match stat_smf_bytes(&bytes) {
                     Ok(s) => format!(
                         r#"{{"ok":true,"format":{},"tracks":{},"notes":{},"bpm":{:.2},"min_midi":{},"max_midi":{},"avg_vel":{:.1},"avg_dur_ticks":{:.1}}}"#,
                         s.format, s.tracks, s.notes, s.bpm, s.min_midi, s.max_midi, s.avg_vel, s.avg_dur_ticks
@@ -439,7 +380,7 @@ fn run(args: &[String]) -> String {
                 // 读不出来的文件也必须出现在结果里（ok:false），否则调用方会把
                 // 「扫不到」误判成「全部正常」，体检与去重结果都会失真
                 match fs::read(f) {
-                    Ok(bytes) => match stat_smf(&bytes) {
+                    Ok(bytes) => match stat_smf_bytes(&bytes) {
                         Ok(s) => arr.push(format!(
                             r#"{{"file":{},"format":{},"tracks":{},"notes":{},"bpm":{:.2},"min_midi":{},"max_midi":{},"avg_vel":{:.1},"size":{}}}"#,
                             json_str(f), s.format, s.tracks, s.notes, s.bpm, s.min_midi, s.max_midi, s.avg_vel, bytes.len()
@@ -458,9 +399,10 @@ fn run(args: &[String]) -> String {
             for f in &files {
                 match fs::read(f) {
                     Ok(bytes) => {
-                        // hash 必须带引号：{:016x} 直接内插会产出 `"hash":a1b2…` 这种非法 JSON，
-                        // 调用方 JSON.parse 会失败并整体回退到 JS 路径（实测踩过）
-                        arr.push(format!(r#"{{"file":{},"hash":"{:016x}","size":{}}}"#, json_str(f), fnv1a(&bytes), bytes.len()));
+                        // SHA-256 与 JS 侧 `library:dupes` 回退路径保持一致（Node crypto.sha256），
+                        // 这样去重分组不受「Rust 是否可用」影响。hash 必须带引号，否则 JSON.parse 会失败。
+                        let h = to_hex(&Sha256::digest(&bytes));
+                        arr.push(format!(r#"{{"file":{},"hash":"{}","size":{}}}"#, json_str(f), h, bytes.len()));
                     }
                     Err(e) => arr.push(format!(r#"{{"file":{},"ok":false,"error":{},"size":0}}"#, json_str(f), json_str(&e.to_string()))),
                 }
@@ -503,6 +445,12 @@ fn json_str(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
+
+    /// running-status 一致性测试用的 SMF：第二个 note-on / note-off 省略状态字节，
+    /// 必须被解析为「2 个音符」而不是被跳过。
+    const RUNNING_STATUS_MIDI: &[u8] =
+        b"\x4d\x54\x68\x64\x00\x00\x00\x06\x00\x00\x00\x01\x01\xe0\x4d\x54\x72\x6b\x00\x00\x00\x13\x00\x90\x3c\x64\x83\x60\x40\x5a\x00\x80\x3c\x00\x00\x40\x00\x00\xff\x2f\x00";
 
     /// 极简 JSON 校验：只检查「括号配对 / 字符串外不允许裸标识符」这类会导致
     /// 调用方 JSON.parse 失败的结构性错误（历史上 hash-batch 就漏了 hash 的引号）。
@@ -548,7 +496,9 @@ mod tests {
         fs::write(dir.join("a.mid"), data).expect("write");
         let out = run(&["hash-batch".into(), dir.to_string_lossy().to_string()]);
         assert_single_line_json(&out);
-        assert!(out.contains(r#""hash":""#), "hash 必须是带引号的字符串: {}", out);
+        let expect_hash = to_hex(&Sha256::digest(data));
+        assert_eq!(expect_hash.len(), 64, "SHA-256 应为 64 位 hex");
+        assert!(out.contains(&format!(r#""hash":"{}""#, expect_hash)), "hash 应为 SHA-256 hex: {}", out);
         assert!(out.contains(r#""count":1"#), "应扫描到 1 个文件: {}", out);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -584,15 +534,32 @@ mod tests {
         assert_eq!(smf.tracks[0][1].tick, 480); // original 100+480 = 580 -> 0+480 = 480
     }
     #[test]
-    fn fnv_is_stable() {
-        assert_eq!(fnv1a(b""), 0xcbf29ce484222325);
-        assert_eq!(fnv1a(b"a"), 0xaf63dc4c8601ec8c);
+    fn empty_hash_is_known_sha256() {
+        // SHA-256("") 的标准摘要，验证 to_hex/Sha256 接线正确
+        assert_eq!(to_hex(&Sha256::digest(b"")), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    }
+
+    /// running status 必须被正确统计：两个音符（第二个省略状态字节）。
+    /// 旧统计路径遇到 running status 会跳字节导致音符数错乱，此测试守住一致性。
+    #[test]
+    fn running_status_is_counted_by_stats() {
+        let s = stat_smf_bytes(RUNNING_STATUS_MIDI).expect("should parse running-status SMF");
+        assert_eq!(s.notes, 2, "running status 下应统计出 2 个音符");
+        assert_eq!(s.min_midi, 60);
+        assert_eq!(s.max_midi, 64);
+        assert_eq!(s.tracks, 1);
+        // 同一文件走量化/移调（parse_smf 完整路径）也应解析出同样的 note 事件数
+        let smf = parse_smf(RUNNING_STATUS_MIDI).expect("parse should be ok");
+        let note_events = smf.tracks[0].iter()
+            .filter(|e| !e.raw.is_empty() && (e.raw[0] & 0xF0 == 0x90 || e.raw[0] & 0xF0 == 0x80))
+            .count();
+        assert_eq!(note_events, 4, "应有 2 个 note-on + 2 个 note-off");
     }
 
     #[test]
     fn parses_single_note_midi() {
         let data = b"MThd\x00\x00\x00\x06\x00\x00\x00\x01\x01\xe0MTrk\x00\x00\x00\x09\x00\x90\x3c\x64\x83\x60\x80\x3c\x00";
-        let s = stat_smf(data).expect("should parse");
+        let s = stat_smf_bytes(data).expect("should parse");
         assert_eq!(s.format, 0);
         assert_eq!(s.tracks, 1);
         assert_eq!(s.notes, 1);

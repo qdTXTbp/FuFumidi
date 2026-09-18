@@ -8,6 +8,7 @@
 // ============================================================
 'use strict';
 const Paths = require('./paths');
+const crypto = require('crypto');
 
 const MIDI_EXT_RE = /\.(mid|midi|kar|rmi)$/i;
 
@@ -232,9 +233,9 @@ function registerLibraryIpc({ ipcMain, path, fs, shell, rustInvoke }) {
         const full = path.join(dir, n);
         try {
           const buf = fs.readFileSync(full);
-          let h = 0x811c9dc5;
-          for (let i = 0; i < buf.length; i++) { h = (h ^ buf[i]) >>> 0; h = Math.imul(h, 0x01000193) >>> 0; }
-          rows.push({ file: full, hash: h.toString(16).padStart(16, '0'), size: buf.length });
+          // SHA-256 与 Rust 侧 hash-batch 保持一致：去重分组不受「Rust 是否可用」影响
+          const digest = crypto.createHash('sha256').update(buf).digest('hex');
+          rows.push({ file: full, hash: digest, size: buf.length });
         } catch (_) {}
       }
     }
@@ -244,8 +245,7 @@ function registerLibraryIpc({ ipcMain, path, fs, shell, rustInvoke }) {
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push({ file: r.file, size: r.size || 0 });
     }
-    // 哈希（JS 回退仅 32 位）只能用来缩小范围：真正判重前逐字节比对内容，
-    // 否则同尺寸的不同文件一旦碰撞就会被当成重复让用户清理
+    // SHA-256 已将碰撞概率降到可忽略，仍保留逐字节比对作为最终判重，双保险
     const dupes = [];
     for (const g of groups.values()) {
       if (g.length < 2) continue;

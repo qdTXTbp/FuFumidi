@@ -3,6 +3,9 @@ name = "fufumidi-core"
 version = "0.2.0"
 edition = "2021"
 
+[dependencies]
+sha2 = "0.10"
+
 [[bin]]
 name = "fufumidi-core"
 path = "src/main.rs"
