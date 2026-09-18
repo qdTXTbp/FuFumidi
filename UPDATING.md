@@ -46,16 +46,32 @@ FuFumidi.update.exe（kachina 增量更新器，与主程序 exe 同级）
 - `update:check`：检查更新，返回 `current`（`app.getVersion()`）与 `latest`。
 - `app:getVersion`：前端动态读取版本号（避免硬编码不一致）。
 - `update:launchUpdater`：
-  1. 写 `fufumidi-restart.ps1` 守护脚本到临时目录并 `spawn`（detached）；
-  2. `spawn` 更新器：`-I -O --source ghfast`（非交互、强制在线、指定 ghfast 源）。
+  1. 探测可用下载源（HEAD 多镜像，最多约 24s）；**必须在起守护进程之前**——否则守护进程会在更新器还没出现时误判成已结束；
+  2. `spawn` 更新器：`-I -O --source <id>`（非交互、强制在线、指定源）；
+  3. 用 WMI 拉起守护脚本（原因见 3.2），确认它已写日志后主进程自行退出，释放 exe 映射。
 
 ### 3.2 守护脚本（`fufumidi-restart.ps1`，运行时生成）
 
 ```
-轮询等待 FuFumidi.update 进程退出（超时 420s）
-→ 等待 3s（文件替换完成）
-→ Start-Process 启动主程序 FuFumidi.exe
+[主进程] 探测可用下载源（HEAD，最多约 24s）
+      → 拉起 FuFumidi.update.exe
+      → 用 WMI（Win32_Process.Create）拉起守护脚本   ← 不能用 spawn detached，见下
+      → 确认守护脚本已写日志 → 主进程自行退出（释放 exe 映射）
+
+[守护]  等更新器出现（最多 90s）
+      → 等更新器退出（最多 600s；此时文件替换才结束）
+      → 等 app.asar 头部完整（最多 60s）
+      → Start-Process 启动新版主程序
 ```
+
+**为什么必须用 WMI 拉起守护进程**：实测 `detached: true` 的 `powershell.exe -File`
+会在 1 秒内退出、退出码 0、脚本一行都不执行（宿主机与虚拟机均可复现）；
+而不 detached 的子进程又会随主进程一起结束，活不到「更新器退出」那一刻。
+`Win32_Process.Create` 建出来的进程挂在 `WmiPrvSE` 下，既不在调用方进程树里、
+也不带 `DETACHED_PROCESS`，才真能活过主进程。
+
+**排查入口**：整条流程都写 `<数据目录>\temp\fufumidi-restart.log`，
+主进程的行带 `[main]` 前缀、守护进程的行不带。缺 `[guard] start` 就说明守护没跑起来。
 
 ### 3.3 更新器配置（`Build/kachina.config.json`）
 
@@ -118,7 +134,7 @@ python scripts/upload-release-asset.py <GH_TOKEN> qdTXTbp/FuFumidi vX.Y.Z `
 |---|---|---|
 | `Error: Invalid remote index` | URI 含 `${version}` 占位符未被替换（404） | 改用 `releases/latest/download` 固定地址 |
 | 更新器提示「更新器不存在」 | 正式包未随包分发更新器 | 确认 `electron-builder.yml` 的 `extraFiles` 生效，更新器与 exe 同级 |
-| 更新完成后程序未自动打开 | 使用旧版（无守护逻辑） | 升级到含守护逻辑的版本（≥3.1.2） |
+| 更新完成后程序未自动打开 | 守护进程没起来 | 看 `<数据目录>\temp\fufumidi-restart.log`：缺 `[guard] start` = 守护进程没跑（注意 detached 的 PowerShell 不执行脚本，必须用 WMI 拉起，见 `main/update.js`）；有 `[guard]` 但停在 `updater appeared=False` = 更新器没起来 |
 | 下载卡在 0% | 主程序侧旧逻辑预下载离线包 | 已废弃：改为更新器内下载并显示进度 |
 | TLS/证书校验失败（构建/上传） | 本地网络工具干扰 | 构建用 `NODE_TLS_REJECT_UNAUTHORIZED=0`；上传脚本已 `verify=False` |
 
