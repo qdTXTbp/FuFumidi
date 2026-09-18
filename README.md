@@ -368,6 +368,11 @@ Each plugin runs in its own worker with a scoped `ctx` object that exposes `comm
 Coding conventions are documented in `.github/CODING_GUIDELINES.md`.
 
 
+## Credits
+
+Thanks to OrbisAI Security for providing automated security auditing.
+
+
 ## License
 
 MIT

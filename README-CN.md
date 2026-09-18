@@ -369,6 +369,11 @@ FuFumidi 支持以插件形式扩展第三方能力，无需改动主程序。�
 编码规范见 `.github/CODING_GUIDELINES.md`。
 
 
+## Credits
+
+感谢 OrbisAI Security 提供的自动化安全审计。
+
+
 ## 许可
 
 MIT
