@@ -2642,7 +2642,7 @@ export const I18N_MAP = {
   '高级工具面板': 'Advanced tools panel',
   '这里集中了：力度（渐强 / 渐弱 / 曲线 / 删短音 / 响度）、量化（网格 + Groove 模板，可提取自定义 Groove）、移调、音阶与调内编辑、和弦批量选择、BPM、智能伴奏、逻辑编辑器与宏、CC 泳道与踏板，以及原音频 / 视频对齐。': 'Gathered here: velocity (crescendo / diminuendo / curves / remove short notes / loudness), quantize (grid + Groove templates, custom Groove extraction), transpose, scale and in-key editing, batch chord selection, BPM, smart accompaniment, logic editor and macros, CC lanes and pedals, plus source audio / video alignment.',
   '生成和弦轨': 'Generate a chord track',
-  '点「分析和弦」按小节识别和弦，卷帘下方会出现和弦轨。': 'Click “Analyze Chords” to detect chords by bar; a chord track appears below the piano roll.',
+  '点「分析和弦」按小节识别和弦，卷帘下方会出现和弦轨（识别需要一点时间，稍等即可）。': 'Click “Analyze Chords” to detect chords bar by bar; the chord track then appears below the piano roll (detection takes a moment, just wait).',
   '和弦轨': 'Chord track',
   '和弦显示在卷帘下方，点任一小节可手改（如 C / Am7 / G7/B，留空恢复自动识别）。': 'Chords appear below the piano roll; click any bar to edit them by hand (e.g. C / Am7 / G7/B, leave empty to restore auto detection).',
   '轨道音色与网格': 'Track instrument & grid',

@@ -114,9 +114,11 @@ const CHAPTERS = computed(() => [
       { parent: 'home', selector: '[data-guide="pb-metro"]', title: t('节拍器'), desc: t('跟着节拍练习或对拍；关闭后已排队的点击声会立刻取消。'), manual: true },
       { parent: 'home', selector: '#pb-tempo', title: t('播放速度'), desc: t('0.25× ~ 4× 变速播放，适合听清快速段落。加速即加速，与界面方向一致。'), manual: true },
       { parent: 'home', selector: '#pb-volume', title: t('音量'), desc: t('总音量；分轨音量与声像在混音台里调。'), manual: true },
-      { parent: 'home', selector: '[data-guide="pb-mixer"]', title: t('打开混音台'), desc: t('点开混音台：每轨独奏 S / 静音 M / 音量 / 声像。点轨道上的音色名可以换音色。'), action: true, needSong: true },
+      { parent: 'home', selector: '[data-guide="pb-mixer"]', title: t('打开混音台'), desc: t('点开混音台：每轨独奏 S / 静音 M / 音量 / 声像。点轨道上的音色名可以换音色。'), action: true, needSong: true,
+        onEnter: () => { const b = document.querySelector('[data-guide="pb-mixer"]'); if (b && document.querySelector('.mix-track')) b.click(); } },
       { parent: 'home', selector: '.mix-track', title: t('分轨控制与换音色'), desc: t('音色按 MIDI 通道生效：同一通道上的多条轨会一起变；「恢复文件音色」可还原。'), manual: true, needSong: true },
-      { parent: 'home', selector: '[data-guide="pb-fx"]', title: t('音效调节'), desc: t('打开音效面板：10 段均衡器、预设、低音增强、空间声（立体声展宽）。'), action: true },
+      { parent: 'home', selector: '[data-guide="pb-fx"]', title: t('音效调节'), desc: t('打开音效面板：10 段均衡器、预设、低音增强、空间声（立体声展宽）。'), action: true,
+        onEnter: () => { const b = document.querySelector('[data-guide="pb-fx"]'); if (b && document.querySelector('.eq-bands')) b.click(); } },
       { parent: 'home', selector: '.eq-bands', title: t('均衡器与低音增强'), desc: t('先勾选「启用音效」才生效；调节实时听到变化，设置会自动保存。'), manual: true },
       { parent: 'home', selector: '[data-guide="pb-bookmark"]', title: t('书签与睡眠定时'), desc: t('把当前进度存成书签便于来回跳；时钟图标可设置 15/30/60/90 分钟后自动停止播放。'), manual: true, needSong: true },
     ],
@@ -132,7 +134,8 @@ const CHAPTERS = computed(() => [
       { parent: 'views', tab: 'viz', selector: '#vizScope', title: t('波形示波器'), desc: t('实时波形，可直观看到响度与动态。'), manual: true, needSong: true },
       { parent: 'views', tab: 'viz', selector: '#vizChord', title: t('实时和弦'), desc: t('跟随播放显示当前和弦名，适合边听边核对和声。'), manual: true, needSong: true },
       { parent: 'views', tab: 'viz', selector: '[data-guide="viz-waterfall"]', title: t('瀑布流布局与缩放'), desc: t('切到瀑布流后音符占满整个画面；顶部还能切换配色、缩放可视音域。'), action: true },
-      { parent: 'views', tab: 'viz', selector: '[data-guide="viz-immersive"]', title: t('沉浸模式'), desc: t('点「沉浸模式」（或按 I）隐去顶栏、侧栏、播放栏，只剩画面；鼠标静止 3 秒控件自动淡出，按 Esc 退出。'), action: true },
+      { parent: 'views', tab: 'viz', selector: '[data-guide="viz-immersive"]', title: t('沉浸模式'), desc: t('点「沉浸模式」（或按 I）隐去顶栏、侧栏、播放栏，只剩画面；鼠标静止 3 秒控件自动淡出，按 Esc 退出。'), action: true,
+        onEnter: () => { if (state.ui.immersive && typeof state.setImmersive === 'function') state.setImmersive(false); } },
     ],
   },
   {
@@ -161,9 +164,12 @@ const CHAPTERS = computed(() => [
       { parent: 'music', tab: 'edit', selector: '[data-guide="edit-canvas"]', title: t('钢琴卷帘'), desc: t('框选或点选音符；拖动移动位置，拖边缘改时值，Delete 删除。'), manual: true, needSong: true },
       { parent: 'music', tab: 'edit', selector: '.ed-toolbar-wrap', title: t('工具栏'), desc: t('选择 V / 画笔 B / 橡皮 E / 静音，以及撤销 Ctrl+Z、重做 Ctrl+Y、量化、复制粘贴等。'), manual: true, needSong: true },
       { parent: 'music', tab: 'edit', selector: '[data-guide="velocity-slider"]', title: t('音符检查器'), desc: t('选中音符后在这里精确改音高、力度、起点与长度；也可静音该音符。'), manual: true, needSong: true },
-      { parent: 'music', tab: 'edit', selector: '[data-guide="edit-more"]', title: t('打开「更多」面板'), desc: t('常用操作在工具栏，低频但强力的工具收在这个「更多」面板里。点它展开。'), action: true, needSong: true },
+      { parent: 'music', tab: 'edit', selector: '[data-guide="edit-more"]', title: t('打开「更多」面板'), desc: t('常用操作在工具栏，低频但强力的工具收在这个「更多」面板里。点它展开。'), action: true, needSong: true,
+        // 「更多」是开关式按钮：若用户上次已经展开过，这次点击反而会收起，后面的步骤就会
+        // 「找不到目标」。所以进这步前先把它归位到关闭态，让点击的结果是确定的。
+        onEnter: () => { if (document.querySelector('.ed-adv') && document.querySelector('[data-guide="edit-more"]')) document.querySelector('[data-guide="edit-more"]').click(); } },
       { parent: 'music', tab: 'edit', selector: '.ed-adv', title: t('高级工具面板'), desc: t('这里集中了：力度（渐强 / 渐弱 / 曲线 / 删短音 / 响度）、量化（网格 + Groove 模板，可提取自定义 Groove）、移调、音阶与调内编辑、和弦批量选择、BPM、智能伴奏、逻辑编辑器与宏、CC 泳道与踏板，以及原音频 / 视频对齐。'), manual: true, needSong: true },
-      { parent: 'music', tab: 'edit', selector: '[data-guide="edit-chord-analyze"]', title: t('生成和弦轨'), desc: t('点「分析和弦」按小节识别和弦，卷帘下方会出现和弦轨。'), action: true, needSong: true },
+      { parent: 'music', tab: 'edit', selector: '[data-guide="edit-chord-analyze"]', title: t('生成和弦轨'), desc: t('点「分析和弦」按小节识别和弦，卷帘下方会出现和弦轨（识别需要一点时间，稍等即可）。'), action: true, needSong: true },
       { parent: 'music', tab: 'edit', selector: '.chord-lane', title: t('和弦轨'), desc: t('和弦显示在卷帘下方，点任一小节可手改（如 C / Am7 / G7/B，留空恢复自动识别）。'), manual: true, needSong: true },
       { parent: 'music', tab: 'edit', selector: '.ed-insp', title: t('轨道音色与网格'), desc: t('同一面板下方还有：轨道选择与 GM 音色（含收藏 / 应用到全部非鼓轨 / 智能选音色），以及吸附值、音符着色方案、新建音符的默认力度。'), manual: true, needSong: true },
       { parent: 'music', tab: 'edit', selector: '.ed-mini', title: t('迷你图与缩放'), desc: t('底部迷你图显示整曲概览，点一下即跳转；可缩放或适应全曲。快捷键：Ctrl+滚轮缩放、Shift+滚轮横向平移、Alt+拖拽调力度。'), manual: true, needSong: true },
@@ -218,7 +224,11 @@ const CHAPTERS = computed(() => [
   {
     id: 'utau', ic: 'utau', name: t('UTAU 音MAD'), desc: t('声库制作 → 调声 → 合成渲染'),
     steps: [
-      { parent: 'utau', selector: '[data-guide="utau-tab-voicebank"]', title: t('声库制作'), desc: t('三步走的起点：先做出声库，再调声，最后合成渲染。三个页签在这里切换。'), manual: true },
+      { parent: 'utau', selector: '[data-guide="utau-tab-voicebank"]', title: t('声库制作'), desc: t('三步走的起点：先做出声库，再调声，最后合成渲染。三个页签在这里切换。'), manual: true,
+        // 页签是「记忆」的：上一轮停在哪个页签，重新进入这一章就还停在哪儿，而后面的步骤
+        // 全都长在声库页签上。这里先把它切回声库页签（已经在该页签时点击是空操作），
+        // 免得用户按着引导走却看不到下一步要讲的东西。
+        onEnter: () => { const b = document.querySelector('[data-guide="utau-tab-voicebank"]'); if (b) b.click(); } },
       { parent: 'utau', selector: '.vb-toolbar', title: t('上传音频或录音'), desc: t('点「上传音频切分」选一个音源文件，也可以直接用麦克风录音。这是后面几步的前提。'), manual: true },
       { parent: 'utau', selector: '.vb-params', title: t('切分参数'), desc: t('按最小静音 / 最小音节 / 静音阈值自动切分；参数改动后可点「重新切分」。'), manual: true },
       { parent: 'utau', selector: '.vb-segs', title: t('片段列表与波形编辑器'), desc: t('切好后每个音节一块：点选后右侧出现波形，拖动 offset / overlap / preutterance / consonant / blank 五个标记校准边界。'), manual: true, requires: 'audio' },
@@ -389,7 +399,7 @@ function renderIg() {
       attachIg(vis || el, st);
       return;
     }
-    if (Date.now() - started < 4000) {
+    if (Date.now() - started < 6000) {
       retryTimer = setTimeout(tryFind, 100);
       return;
     }
