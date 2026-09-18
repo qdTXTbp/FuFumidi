@@ -49,6 +49,10 @@ if (Test-Path $leftImg) { $packArgs += '-t'; $packArgs += $leftImg }
 if ($LASTEXITCODE -ne 0) { throw "pack updater failed" }
 
 Copy-Item (Join-Path $staging 'FuFumidi.update.exe') (Join-Path $winUnpacked 'FuFumidi.update.exe') -Force
+# electron-builder 的 extraFiles 从 release/update/FuFumidi.update.exe 取更新器装进 NSIS 包，
+# 这里必须同步一份 —— 否则安装包里嵌的是上一次留下的旧更新器，kachina.config.json 的改动
+# （如新增镜像源）在正式包里不会生效。
+Copy-Item (Join-Path $staging 'FuFumidi.update.exe') (Join-Path $outDir 'FuFumidi.update.exe') -Force
 
 Write-Host "[3/4] gen: scanning files, generating metadata + hashes + diff patches ..."
 $diffArgs = @()
