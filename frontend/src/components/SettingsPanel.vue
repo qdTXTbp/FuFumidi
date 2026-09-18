@@ -13,7 +13,7 @@ const state = app;
 const toast = (m, t) => app.toast(m, t);
 // 当前版本号（从主进程读取，与 SideBar 左下角一致）
 const appVersion = ref('v3.1.8');
-import { getAppVersion } from '../core/version.js';
+import { getAppVersion, cmpVersion, getUpdateChannel, setUpdateChannel } from '../core/version.js';
 getAppVersion().then(v => { appVersion.value = v; });
 import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';
 
@@ -167,6 +167,8 @@ async function load() {
   form.watch_dir = s.watch_dir || '';
   form.watch_enabled = !!s.watch_enabled;
   form.file_assoc = s.file_assoc !== false;
+  // settings 是持久真相，localStorage 只是启动时用于即时读取的缓存；打开设置时校准一次
+  updateChannel.value = setUpdateChannel(s.update_channel || getUpdateChannel());
   // 完整性：每次打开设置都重新检查（而非仅在首次 state.integrity===null 时），
   // 避免开机/更新瞬间的瞬时误报被缓存锁死——修复后或 asar 已恢复也能即时反映，不再“一直报错”。
   runIntegrity();
@@ -205,11 +207,11 @@ async function updLaunch() {
   if (!bridge || !bridge.updateCheck) { upd.status = t('当前环境不支持检查更新'); upd.failed = true; return; }
   upd.status = t('正在检查更新…'); upd.failed = false; upd.launched = false;
   try {
-    const r = await bridge.updateCheck();
+    const r = await bridge.updateCheck(getUpdateChannel());
     if (!r || !r.ok) { upd.status = (r && r.error) || t('检查失败'); upd.failed = true; return; }
     const cur = String(r.current || '');
     const latest = String(r.latest || '');
-    if (cur === latest) {
+    if (cmpVersion(latest, cur) <= 0) {
       upd.status = t('已是最新版本（') + cur + t('）');
       return;
     }
@@ -218,7 +220,8 @@ async function updLaunch() {
     if (!ok) { upd.status = t('已取消'); return; }
     if (!bridge.update || !bridge.update.launchUpdater) { upd.status = t('当前环境不支持增量更新器'); upd.failed = true; return; }
     upd.status = t('正在启动更新器…');
-    const rr = await bridge.update.launchUpdater(latest);
+    // 传「这个 latest 实际来自哪个通道」：测试通道下当时若没有测试版，latest 来自正式通道
+    const rr = await bridge.update.launchUpdater(r.channel || getUpdateChannel());
     if (rr && rr.ok) {
       upd.status = t('更新器已启动，下载与更新进度请在更新器窗口内查看…');
       upd.launched = true;
@@ -230,6 +233,16 @@ async function updLaunch() {
     upd.status = t('检查更新失败：') + ((e && e.message) || e);
     upd.failed = true;
   }
+}
+
+/* ---------------- 更新通道 ---------------- */
+// 开启后参与内测：检查更新会先取最新测试版（prerelease）；当时若没有测试版，照常拿正式版。
+// 关闭只是不再收测试版，不会回退版本 —— 更新器只能向前，留在当前版本等正式版号追平。
+const updateChannel = ref('stable');
+function toggleChannel() {
+  updateChannel.value = setUpdateChannel(updateChannel.value === 'beta' ? 'stable' : 'beta');
+  upd.status = ''; upd.failed = false; upd.launched = false;
+  toast(updateChannel.value === 'beta' ? t('已加入测试版通道') : t('已退出测试版通道'));
 }
 
 /* ---------------- 卸载 ---------------- */
@@ -1006,6 +1019,16 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
             <!-- 走到「失败」或「已启动更新器」都显示重试：更新器窗口内的实际失败应用无法感知，
                  只要更新未让应用重启成功（成功会重启到新版本，此态自然消失），即可点重试重新发起 -->
             <button v-if="upd.failed || upd.launched" class="btn sm primary" @click="updLaunch"><Icon name="redo" :size="13" /> {{ t('重试') }}</button>
+          </div>
+
+          <div class="field-row" style="margin-top:18px;border-top:1px solid var(--hairline);padding-top:14px">
+            <div>
+              <div class="fr-label">{{ t('测试版通道') }}</div>
+              <div class="fr-hint">{{ t('开启后会先收到内测版本（X.Y.Z-beta.N）；关闭后停在当前版本，等正式版号追平再自动更新。') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <button class="btn sm" :class="{ primary: updateChannel === 'beta' }" @click="toggleChannel">{{ updateChannel === 'beta' ? t('已开启') : t('已关闭') }}</button>
+            </div>
           </div>
 
           <!-- 维护区：开机自启 / 关闭到托盘 / 清除用户数据 / 卸载 -->

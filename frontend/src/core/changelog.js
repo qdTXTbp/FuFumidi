@@ -1,6 +1,8 @@
 // 内置更新日志：用于「更新完成后首次启动」弹窗展示。
 // 版本号（不带 v）→ 该版本要点列表；发布新版本时在此追加即可。
 // 若内置缺失某个版本，前端会尝试经主进程 update:notes 拉取 GitHub release 说明补充。
+import { cmpVersion } from './version.js';
+
 const CHANGELOG = {
   '4.3.0': [
     '改进：新手引导重做为「按功能分类的 13 个章节」——此前是一条 14 步的线性流程，只覆盖转录与编辑两条主线，混音台、音效、节拍器、沉浸模式、歌词、乐谱导出、资源中心的模型与依赖、UTAU 全流程、命令面板等大量功能都没有提到。现在按功能区划为：快速上手 / 曲库与歌单 / 播放与音质 / 可视化与沉浸 / 数据分析 / 乐谱 / 编辑与修正 / 歌词 / 转录 / 导出与转换 / 资源中心 / UTAU / 设置与个性化，共 88 步；可以只学需要的章节，进度会记住，也能「全部依次学习」。每一步都高亮界面上的真实位置并说明该做什么，找不到目标时会给出具体原因（例如「请先选中一首曲目」）而不是默默跳过。全章节目录下的每一步都经过自动化逐步走查（86 项通过 / 2 项依赖需先上传音频素材而跳过）。',
@@ -203,22 +205,19 @@ const CHANGELOG = {
   ],
 };
 
-function verNum(v) {
-  const m = String(v || '').replace(/^v/i, '').split('.').map(x => parseInt(x, 10) || 0);
-  return ((m[0] || 0) * 1000000) + ((m[1] || 0) * 1000) + (m[2] || 0);
-}
-
-// 收集 (from, to] 区间内的内置 changelog 条目，按版本从旧到新排序
-// from 传 0 表示全部（首次启动）
-export function getBuiltinChangeLogs(from = 0, to = 999999) {
-  const f = typeof from === 'number' ? from : verNum(from);
-  const t = typeof to === 'number' ? to : verNum(to);
+// 收集 (from, to] 区间内的内置 changelog 条目，按版本从旧到新排序。
+// from 传空 / 0 表示全部（首次启动）。比较走语义化版本，beta / rc 也能正确排序。
+export function getBuiltinChangeLogs(from = '', to = '') {
+  const f = String(from || '').trim();
+  const hasFrom = !!f && f !== '0';
+  const t = String(to || '').trim();
   const out = [];
   for (const ver of Object.keys(CHANGELOG)) {
-    const n = verNum(ver);
-    if (n > f && n <= t) out.push({ ver, items: CHANGELOG[ver] });
+    if (hasFrom && cmpVersion(ver, f) <= 0) continue;
+    if (t && cmpVersion(ver, t) > 0) continue;
+    out.push({ ver, items: CHANGELOG[ver] });
   }
-  out.sort((a, b) => verNum(a.ver) - verNum(b.ver));
+  out.sort((a, b) => cmpVersion(a.ver, b.ver));
   return out;
 }
 

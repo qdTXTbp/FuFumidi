@@ -4,29 +4,58 @@
 'use strict';
 const Paths = require('./paths');
 
+// ── 更新通道 ────────────────────────────────────────────────────────────────
+// stable：用 GitHub 的 releases/latest 锚点。该端点会自动跳过 prerelease，
+//         所以测试版永远不会顶掉正式用户看到的版本。
+// beta  ：用固定 tag `beta` 的 release，每次内测以同一资产名覆盖上传。
+//         必须是固定 tag —— kachina 更新器的源地址编译在 exe 里，只能靠
+//         `--source <id>` 选源，没法在运行时换成带版本号的动态 URL。
+const GH_REPO = 'qdTXTbp/FuFumidi';
+const GH_WEB = 'https://github.com/' + GH_REPO + '/';
+const GH_API = 'https://api.github.com/repos/' + GH_REPO + '/';
+const UA = 'FuFumidi/3.1.16';
+
+// 镜像前缀（空串 = 官方直连）。id 与 build/kachina.config.json 的 source 一一对应，
+// 测试通道的 id 加 -beta 后缀（ghfast-beta …）。
 const UPDATE_MIRRORS = [
-  'https://ghfast.top/https://api.github.com/repos/qdTXTbp/FuFumidi/releases/latest',
-  'https://gh-proxy.com/https://api.github.com/repos/qdTXTbp/FuFumidi/releases/latest',
-  'https://ghproxy.net/https://api.github.com/repos/qdTXTbp/FuFumidi/releases/latest',
-  'https://api.github.com/repos/qdTXTbp/FuFumidi/releases/latest',
+  { id: 'ghfast', prefix: 'https://ghfast.top/' },
+  { id: 'ghproxy', prefix: 'https://gh-proxy.com/' },
+  { id: 'ghproxy-net', prefix: 'https://ghproxy.net/' },
+  { id: 'github', prefix: '' },
 ];
+// 更新包下载地址 / 版本查询接口，按通道取值
+const CHANNEL_ASSET_PATH = {
+  stable: 'releases/latest/download/FuFumidi.Install.exe',
+  beta: 'releases/download/beta/FuFumidi.Install.exe',
+};
+const CHANNEL_API_PATH = {
+  stable: 'releases/latest',
+  beta: 'releases?per_page=20',
+};
+// 测试通道的版本 tag 形如 v4.4.0-beta.1 / v4.4.0-rc.2
+const BETA_TAG_RE = /^v?\d+\.\d+\.\d+-(?:beta|rc)\.\d+$/i;
+
+function normChannel(v) { return String(v || '').toLowerCase() === 'beta' ? 'beta' : 'stable'; }
+function sourceIdOf(mirrorId, channel) { return normChannel(channel) === 'beta' ? mirrorId + '-beta' : mirrorId; }
 
 function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }) {
-  // 与 build/kachina.config.json 的 source id 一一对应（顺序与 UPDATE_MIRRORS 一致）
-  const UPDATE_SOURCE_IDS = ['ghfast', 'ghproxy', 'ghproxy-net', 'github'];
-  // 更新包下载源候选（kachina 更新器 --source 取 id）
-  const UPDATE_SOURCES = [
-    { id: 'ghfast', uri: 'https://ghfast.top/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe' },
-    { id: 'ghproxy', uri: 'https://gh-proxy.com/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe' },
-    { id: 'ghproxy-net', uri: 'https://ghproxy.net/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe' },
-    { id: 'github', uri: 'https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe' },
-  ];
-  // 最近一次「检查更新」实际访问成功的镜像（先探测它，命中率高）
+  // 最近一次「检查更新」实际访问成功的源 id（先探测它，命中率高）
   let lastGoodSource = null;
 
+  // 测试通道的最新版：releases 列表里第一个 prerelease 版本。
+  // 必须排除固定锚点 release（tag 就叫 `beta`）—— 它只承载分发资产，不对应版本。
+  function pickBetaRelease(list) {
+    if (!Array.isArray(list)) return null;
+    for (const r of list) {
+      if (r && r.prerelease && BETA_TAG_RE.test(String(r.tag_name || ''))) return r;
+    }
+    return null;
+  }
+
   // HEAD 探测可用下载源（每个 6s 超时），失败自动换下一个；全部失败回退最近可达源，再退官方直连
-  async function pickUpdateSource() {
-    const ordered = UPDATE_SOURCES.slice();
+  async function pickUpdateSource(channel) {
+    const ch = normChannel(channel);
+    const ordered = UPDATE_MIRRORS.map(m => ({ id: sourceIdOf(m.id, ch), uri: m.prefix + GH_WEB + CHANNEL_ASSET_PATH[ch] }));
     if (lastGoodSource) {
       const i = ordered.findIndex(s => s.id === lastGoodSource);
       if (i > 0) { const hit = ordered.splice(i, 1)[0]; ordered.unshift(hit); }
@@ -34,29 +63,41 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
     for (const s of ordered) {
       try {
         const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 6000);
-        const r = await net.fetch(s.uri, { method: 'HEAD', headers: { 'user-agent': 'FuFumidi/3.1.16' }, signal: ctrl.signal });
+        const r = await net.fetch(s.uri, { method: 'HEAD', headers: { 'user-agent': UA }, signal: ctrl.signal });
         clearTimeout(to);
         if (r.ok) return s.id;
       } catch (e) { /* 该源不可达，尝试下一个 */ }
     }
-    return lastGoodSource || 'github';
+    return lastGoodSource || sourceIdOf('github', ch);
   }
 
-  async function fetchLatestRelease() {
+  // 拉某个通道的 release（多镜像回退）
+  async function fetchChannelRelease(channel) {
+    const ch = normChannel(channel);
     let lastErr = null;
-    for (let i = 0; i < UPDATE_MIRRORS.length; i++) {
-      const base = UPDATE_MIRRORS[i];
+    for (const m of UPDATE_MIRRORS) {
       try {
         const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 12000);
-        const r = await net.fetch(base, { headers: { 'user-agent': 'FuFumidi/3.1.16' }, signal: ctrl.signal });
+        const r = await net.fetch(m.prefix + GH_API + CHANNEL_API_PATH[ch], { headers: { 'user-agent': UA }, signal: ctrl.signal });
         clearTimeout(to);
         if (!r.ok) { lastErr = new Error('HTTP ' + r.status); continue; }
         const d = await r.json();
-        if (d && d.tag_name) { lastGoodSource = UPDATE_SOURCE_IDS[i]; return d; }
+        const rel = ch === 'beta' ? pickBetaRelease(d) : d;
+        if (rel && rel.tag_name) { lastGoodSource = sourceIdOf(m.id, ch); return rel; }
       } catch (e) { lastErr = e; }
     }
     throw lastErr || new Error('无法访问 GitHub');
   }
+
+  // 决定该给用户报哪个版本：测试通道优先取最新测试版，没有测试版时回退正式版
+  //（这样测试通道用户不会被卡在旧测试版上，正式版发布后能正常升上去）
+  async function resolveRelease(channel) {
+    if (normChannel(channel) === 'beta') {
+      try { const r = await fetchChannelRelease('beta'); if (r) return { release: r, channel: 'beta' }; } catch (e) {}
+    }
+    return { release: await fetchChannelRelease('stable'), channel: 'stable' };
+  }
+
   function assetForPlatform(release) {
     const p = process.platform, arch = process.arch;
     const assets = release.assets || [];
@@ -68,16 +109,11 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
   // 按 tag 拉取 release 说明（更新完成后首次启动的更新日志补充，多镜像回退）
   async function fetchReleaseNotes(tag) {
     let lastErr = null;
-    const endpoints = [
-      'https://ghfast.top/https://api.github.com/repos/qdTXTbp/FuFumidi/releases/tags/' + tag,
-      'https://gh-proxy.com/https://api.github.com/repos/qdTXTbp/FuFumidi/releases/tags/' + tag,
-      'https://ghproxy.net/https://api.github.com/repos/qdTXTbp/FuFumidi/releases/tags/' + tag,
-      'https://api.github.com/repos/qdTXTbp/FuFumidi/releases/tags/' + tag,
-    ];
+    const endpoints = UPDATE_MIRRORS.map(m => m.prefix + GH_API + 'releases/tags/' + tag);
     for (const u of endpoints) {
       try {
         const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 12000);
-        const r = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.16' }, signal: ctrl.signal });
+        const r = await net.fetch(u, { headers: { 'user-agent': UA }, signal: ctrl.signal });
         clearTimeout(to);
         if (!r.ok) { lastErr = new Error('HTTP ' + r.status); continue; }
         const d = await r.json();
@@ -145,12 +181,14 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
   ipcMain.handle('update:openExternal', async (_e, url) => {
     try { shell.openExternal(url); return { ok: true }; } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
-  ipcMain.handle('update:check', async () => {
+  // channel: 'stable' | 'beta'。返回的 channel 是「这个 latest 实际来自哪个通道」，
+  // 拉起更新器时必须把它一起传回去 —— 否则会出现「报的是测试版版本、却从正式锚点下载」。
+  ipcMain.handle('update:check', async (_e, channel) => {
     try {
-      const rel = await fetchLatestRelease();
+      const { release: rel, channel: hit } = await resolveRelease(channel);
       const asset = assetForPlatform(rel);
       const ver = (rel.tag_name || '').replace(/^v/i, '');
-      return { ok: true, current: app.getVersion(), latest: ver, tag: rel.tag_name, notes: (rel.body || '').slice(0, 500), url: asset ? asset.browser_download_url : null, name: asset ? asset.name : null, mirror: asset ? ('https://ghfast.top/' + asset.browser_download_url) : null };
+      return { ok: true, current: app.getVersion(), latest: ver, tag: rel.tag_name, channel: hit, notes: (rel.body || '').slice(0, 500), url: asset ? asset.browser_download_url : null, name: asset ? asset.name : null, mirror: asset ? ('https://ghfast.top/' + asset.browser_download_url) : null };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
   // 更新完成后首次启动：按 tag 拉取该版本完整 release 说明（离线时前端回退到内置 changelog）
@@ -193,7 +231,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
   //  3) 主进程再写一份独立守护脚本，用 WMI（Win32_Process.Create）把它拉起来 ——
   //     不能直接 spawn：detached 的 PowerShell 起不来，不 detached 的又会随主进程结束。
   //     守护脚本先等更新器出现、再等它退出（完成文件替换）→ 短暂等待落盘 → 启动新版主程序
-  ipcMain.handle('update:launchUpdater', async (evt) => {
+  ipcMain.handle('update:launchUpdater', async (evt, channel) => {
     try {
       const { spawn } = require('child_process');
       const updaterDir = app.isPackaged ? path.dirname(process.execPath) : path.join(app.getAppPath(), 'release', 'win-unpacked');
@@ -271,9 +309,11 @@ L 'app started'
       // 探测下载源要走 HEAD 请求（最多约 24s），所以这一步必须排在守护进程之前。
       // 主进程也往同一个日志里写几行：更新流程不生效时，看这一份就能知道卡在哪一步。
       const _t = (m) => { try { fs.appendFileSync(_log, new Date().toTimeString().slice(0, 8) + ' [main] ' + m + '\n'); } catch (_) {} };
-      let source = 'github';
+      const ch = normChannel(channel);
+      let source = sourceIdOf('github', ch);
+      _t('channel=' + ch);
       _t('probing update source');
-      try { source = await pickUpdateSource(); } catch (_) {}
+      try { source = await pickUpdateSource(ch); } catch (_) {}
       _t('source=' + source);
       try {
         const upd = spawn(updaterPath, ['-I', '-O', '--source', source], { cwd: updaterDir, detached: true, stdio: 'ignore' });

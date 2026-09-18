@@ -16,7 +16,7 @@ import { useAppStore, VIEWS, viewParentOf } from './stores/app';
 import { usePlaylistStore } from './stores/playlist';
 import { useSettingsStore } from './stores/settings';
 import { setLang, t, browserLang } from './core/i18n.js';
-import { getAppVersion } from './core/version.js';
+import { getAppVersion, cmpVersion, getUpdateChannel } from './core/version.js';
 import { getBuiltinChangeLogs, fetchRemoteChangeLog } from './core/changelog.js';
 import { applyTheme, loadTheme } from './core/theme.js';
 import { viewFromPath } from './router';
@@ -159,19 +159,27 @@ async function initGlobal() {
 
 /* 更新完成后首次启动检测：当前版本 > 上次记录版本 → 展示更新日志 */
 const SEEN_KEY = 'fufumidi_seen_version';
+// 旧版本把版本号折算成数字存进 SEEN_KEY（major*1e6+minor*1e3+patch）。直接沿用这个数字
+// 会永远大于任何 4.x 版本号，导致升级后既不弹日志、也判断不出"这次到底升没升"。
+function seenFromLegacyNum(n) {
+  const num = Number(n) || 0;
+  if (!num) return '';
+  return Math.floor(num / 1000000) + '.' + (Math.floor(num / 1000) % 1000) + '.' + (num % 1000);
+}
 async function checkChangeLog() {
   let ver = '';
   try { ver = await getAppVersion(); } catch (e) {}
   const cur = String(ver || '').replace(/^v/i, '');
-  const curNum = verNum(cur);
-  if (!curNum) return;
-  let seen = 0;
-  try { seen = parseInt(localStorage.getItem(SEEN_KEY) || '0', 10); } catch (e) {}
-  if (curNum <= seen) return; // 非升级（或已展示过）
+  if (!cur) return;
+  // 存字符串做语义化比较：存数字会把 4.4.0-beta.1 与 4.4.0 视作同一版本，从测试版升正式版就不弹了
+  let seen = '';
+  try { seen = String(localStorage.getItem(SEEN_KEY) || ''); } catch (e) {}
+  if (/^\d+$/.test(seen)) seen = seenFromLegacyNum(seen);
+  if (seen && cmpVersion(cur, seen) <= 0) return; // 非升级（或已展示过）
   // 先记录版本，避免展示失败导致每次启动重复弹
-  try { localStorage.setItem(SEEN_KEY, String(curNum)); } catch (e) {}
+  try { localStorage.setItem(SEEN_KEY, cur); } catch (e) {}
   // 内置 changelog 为主，远端 release 说明补充内置缺失的版本
-  let logs = getBuiltinChangeLogs(seen || 0, curNum);
+  let logs = getBuiltinChangeLogs(seen, cur);
   if (!logs.length) {
     const remote = await fetchRemoteChangeLog(cur);
     if (remote) logs = [remote];
@@ -194,21 +202,16 @@ async function checkChangeLog() {
   }
 }
 
-/* 简单版本号比较（支持 x.y.z，逐段数值比较，避免 '3.1.10' < '3.1.8' 的字典序问题） */
-function verNum(v) {
-  const m = String(v || '').replace(/^v/i, '').split('.').map(x => parseInt(x, 10) || 0);
-  return ((m[0] || 0) * 1000000) + ((m[1] || 0) * 1000) + (m[2] || 0);
-}
-
-/* 启动自动检查更新：GitHub latest 对比当前版本，有新版则弹窗询问（仅桌面端） */
+/* 启动自动检查更新：对比当前版本，有新版则弹窗询问（仅桌面端）。
+   通道（正式 / 测试）来自设置，主进程按通道给出 latest 与它实际命中的通道。 */
 async function startupUpdateCheck() {
   if (!bridge || typeof bridge.updateCheck !== 'function') return;
   let r = null;
-  try { r = await bridge.updateCheck(); } catch (e) { return; }
+  try { r = await bridge.updateCheck(getUpdateChannel()); } catch (e) { return; }
   if (!r || !r.ok) return; // 检查失败静默，不打扰用户
   const cur = String(r.current || '');
   const latest = String(r.latest || '');
-  if (!latest || verNum(latest) <= verNum(cur)) return;
+  if (!latest || cmpVersion(latest, cur) <= 0) return;
   setTimeout(() => {
     if (state.dialog) return; // 已有其他弹窗时不叠加
     const notes = String(r.notes || '').trim();
@@ -222,7 +225,9 @@ async function startupUpdateCheck() {
           return;
         }
         app.toast(t('正在启动增量更新器，完成后自动重启…'));
-        bridge.update.launchUpdater(latest).then(rr => {
+        // 更新器要按「这个 latest 实际来自哪个通道」去下载：测试通道下若当时没有测试版，
+        // latest 其实是正式版，必须用正式锚点，否则会下载错包。
+        bridge.update.launchUpdater(r.channel || getUpdateChannel()).then(rr => {
           if (!rr || !rr.ok) app.toast((rr && rr.error) || t('更新失败，当前安装未受影响'), 'error');
         }).catch(() => {});
       });

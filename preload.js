@@ -72,7 +72,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   diagExport: () => ipcRenderer.invoke('diag:export'),
   exportScorePngZip: (opts) => ipcRenderer.invoke('score:exportPngZip', opts),
 
-  updateCheck: () => ipcRenderer.invoke('update:check'),
+  updateCheck: (channel) => ipcRenderer.invoke('update:check', channel),
   getVersion: () => ipcRenderer.invoke('app:getVersion'),
   appUninstall: () => ipcRenderer.invoke('app:uninstall'),
   // 开机自启
@@ -167,7 +167,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   update: {
     list: () => ipcRenderer.invoke('update:list'),
     openExternal: (url) => ipcRenderer.invoke('update:openExternal', url),
-    launchUpdater: () => ipcRenderer.invoke('update:launchUpdater'),
+    launchUpdater: (channel) => ipcRenderer.invoke('update:launchUpdater', channel),
   },
   plugins: {
     list: () => ipcRenderer.invoke('plugins:list'),

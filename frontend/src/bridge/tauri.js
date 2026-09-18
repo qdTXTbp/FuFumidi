@@ -123,11 +123,11 @@ export function installTauriBridge() {
     update: {
       list: () => call('update_list'),
       openExternal: (url) => call('open_external', { url }),
-      launchUpdater: (version) => call('launch_updater', { version }),
+      launchUpdater: (channel) => call('launch_updater', { channel }),
     },
     // 主程序检查更新（对比 GitHub latest 与当前版本，有新版才拉起更新器）
     getVersion: () => call('app_version'),
-    updateCheck: () => call('check_update'),
+    updateCheck: (channel) => call('check_update', { channel }),
     updateDownload: (url) => call('update_download', { url }),
     updateOpen: (p) => call('update_open', { p }),
     onUpdateProgress: (cb) => listen('update:progress', cb),

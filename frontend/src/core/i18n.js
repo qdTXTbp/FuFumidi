@@ -2749,6 +2749,11 @@ export const I18N_MAP = {
   '退出引导': 'Exit guide',
   '跳过此步': 'Skip this step',
   '点高亮处继续': 'Click the highlight to continue',
+  /* 更新通道 */
+  '测试版通道': 'Beta channel',
+  '开启后会先收到内测版本（X.Y.Z-beta.N）；关闭后停在当前版本，等正式版号追平再自动更新。': 'When on, you receive beta builds (X.Y.Z-beta.N) first. Turning it off keeps the current version until a stable release catches up.',
+  '已加入测试版通道': 'Joined the beta channel',
+  '已退出测试版通道': 'Left the beta channel',
 
 };
 
