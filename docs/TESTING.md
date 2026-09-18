@@ -244,6 +244,29 @@ $env:EXPR_FILE='.\expr-dense-fix.js';        node cdp-eval.cjs    # 极密曲目
 
 ---
 
+## 3.1 可自动化的 L3 断言（`scripts/vm/l3-*.ps1`）
+
+清单里 A / B / E / J 的大部分、以及四语与主题，都已经有脚本化断言；脚本经
+`guest-run.ps1` 在 guest 内执行（**必须纯 ASCII**，理由见 `l3-01` 文件头）。
+
+| 脚本 | 覆盖清单项 |
+|---|---|
+| `l3-01-install-offline.ps1` | A 断网安装（宿主机先 `setlinkstate1 off`） |
+| `l3-02-post-install.ps1` | A 资产完整性 / 快捷方式 / 注册表；B 数据目录；出厂依赖 `music2midi.py probe` |
+| `l3-05-updater-hash.ps1` | A 随包更新器与构建产物逐字节一致 |
+| `l3-06-launch-app.ps1` | B 首次启动（CDP 就绪 + 数据目录落地） |
+| `l3-04-start-relay.ps1` | 建反向隧道：宿主机经 `9330` 驱动 guest 界面 |
+| `l3-07-uninstall-keep-data.ps1` | J 静默卸载保留数据 |
+| `l3-08-install-cn-path.ps1` | A 含空格与中文的安装路径 + 首次启动 |
+
+宿主机侧的界面断言（引导走查 / 四语 / 主题 / 播放 / 视图 / 大文件 / 真实转录）用
+`scripts/cdp/` 里的 `expr-guest-*.js` 配合 `cdp-eval.cjs` 执行，详见
+`docs/test-reports/2026-09-18-v4.3.0-vm.md`。
+
+> 经虚拟机的反向隧道跑长求值时，**>30 s 没有流量往返的求值响应会被 NAT 丢掉**（脚本其实已经
+> 在页面里跑完）。这类探针一律把结果挂到页面 `window` 上，再用一次短求值取走；引导走查则可
+> 用 `WALK_FROM` / `WALK_TO` 指定章节区间断点续跑。
+
 ## 4. 结果记录
 
 每轮测试产出 `docs/test-reports/YYYY-MM-DD-vX.Y.Z-vm.md`，模板：

@@ -90,7 +90,8 @@ npx electron-builder --win dir --x64
 # 2. 生成更新器 + 离线包（旧版目录可选，用于生成差分补丁）
 powershell -ExecutionPolicy Bypass -File scripts/build-kachina.ps1 -Version X.Y.Z
 #   输出：
-#     release/update/FuFumidi.update.exe          更新器（内嵌最新 config）
+#     release/update/FuFumidi.update.exe          更新器（内嵌最新 config；electron-builder 的
+#                                                 extraFiles 从这里取，脚本会同步覆盖，别手工删）
 #     release/update/FuFumidi.Install.X.Y.Z.exe   离线包（上传用）
 
 # 3. 上传离线包到 GitHub Releases（固定名 FuFumidi.Install.exe，覆盖旧版）

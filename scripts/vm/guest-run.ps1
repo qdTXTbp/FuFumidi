@@ -39,6 +39,9 @@ $wrapLines = @(
 Set-Content -LiteralPath $wrapLocal -Value $wrapLines -Encoding UTF8
 
 & $vbox guestcontrol $VmName mkdir --parents @auth $guestDir 2>&1 | Out-Null
+# 先把 guest 内上一轮的 out.txt 删掉：否则本次执行若在很早期就失败（例如脚本解析错误），
+# copyfrom 会把**上一轮的结果**当成本轮结果取回来，看起来像「跑过了」——实际什么都没跑。
+& $vbox guestcontrol $VmName rm @auth ($guestDir + '\out.txt') 2>&1 | Out-Null
 & $vbox guestcontrol $VmName copyto @auth $ScriptPath ($guestDir + '\run.ps1') 2>&1 | Out-Null
 & $vbox guestcontrol $VmName copyto @auth $wrapLocal   ($guestDir + '\wrap.ps1') 2>&1 | Out-Null
 

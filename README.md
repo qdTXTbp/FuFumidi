@@ -16,9 +16,9 @@ FuFumidi is a fully offline desktop workstation for MIDI. It targets musicians, 
 
 The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally; transcription and editing never upload anything. Only when you opt in to cloud sync does your playlist and MIDI library get uploaded to your own cloud account.
 
-Current release line: **4.1.0** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v4.1.0)).
+Current release line: **4.3.0** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v4.3.0)).
 
-What's new in 4.1.0: fixes transcription failing permanently on some machines (the bundled Python inherited the system `PYTHONPATH` and loaded a second, older numpy, failing with `No module named 'numpy.exceptions'`); the dependency check now verifies by real import and can force-reinstall broken packages; new "Clean up broken songs" under Settings → Features; removing a song from a playlist now offers to delete it from the library when it belongs to no other playlist; batch management is unified into a single entry. Adds full i18n (Simplified Chinese / Traditional Chinese / English / Japanese).
+What's new in 4.3.0: fixes a batch of long-standing issues that quietly degraded the experience — enabling the effects chain muted the whole app (so EQ / bass boost / spatial widening had never actually worked), spatial widening attenuated right-panned content instead of widening it, the playback speed control ran backwards, very dense songs played silently or dropped notes, playback via an external soundfont got slower the longer it ran, the metronome could not be switched off, and a failed audio-engine init left the app unusable until restart. The visualizer gains an immersive mode and note-fall depth, scrolling flicker is gone, and frame time / draw cost on large songs dropped sharply. The onboarding guide was rebuilt into 13 feature-based chapters (88 steps — learn only what you need).
 
 ### What it does
 
