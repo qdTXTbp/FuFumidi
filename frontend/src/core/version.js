@@ -74,3 +74,30 @@ export function setUpdateChannel(v) {
   } catch (e) {}
   return ch;
 }
+
+/* ── 下载源 ───────────────────────────────────────────────────────────
+   'auto'（默认）：优先国内 CNB，不可用自动回退 GitHub（镜像 → 官方）
+   'cnb'：国内优先（CNB Releases 镜像）
+   'github'：全球优先（GitHub 官方直连，失败回退国内镜像）
+   真正的分流在主进程（main/download-source.js + main/update.js）；这里的值
+   通过检查更新 / 启动更新器的 IPC 传过去。localStorage 与
+   settings.download_source 双写，前者保证启动瞬间可读，后者持久化。 */
+const SOURCE_KEY = 'fufumidi_download_source';
+
+export function getDownloadSource() {
+  try {
+    const v = localStorage.getItem(SOURCE_KEY);
+    return v === 'cnb' || v === 'github' ? v : 'auto';
+  } catch (e) { return 'auto'; }
+}
+
+export function setDownloadSource(v) {
+  const s = v === 'cnb' || v === 'github' ? v : 'auto';
+  try { localStorage.setItem(SOURCE_KEY, s); } catch (e) {}
+  try {
+    if (window.fuBridge && typeof window.fuBridge.saveSettings === 'function') {
+      window.fuBridge.saveSettings({ download_source: s }).catch(() => {});
+    }
+  } catch (e) {}
+  return s;
+}

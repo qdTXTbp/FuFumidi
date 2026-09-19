@@ -2756,6 +2756,15 @@ export const I18N_MAP = {
   '正式版稳定可靠；测试版可抢先体验新功能，但更新较频繁、可能包含较多未修复的 Bug。': 'The stable release is reliable. The beta gives early access to new features, but updates more often and may contain unresolved bugs.',
   '已切换到测试版通道': 'Switched to the beta channel',
   '已切换到正式版通道': 'Switched to the stable channel',
+  /* 下载源 */
+  '自动': 'Auto',
+  '国内': 'China',
+  '全球': 'Global',
+  '国内 · CNB': 'China · CNB',
+  '全球 · GitHub': 'Global · GitHub',
+  '自动（优先国内）': 'Auto (China first)',
+  '已切换下载源：': 'Download source switched to: ',
+  '国内源经 CNB 镜像，速度更快；全球源直连 GitHub，适合境外网络。自动会在国内源不可用时回退。': 'The China source mirrors through CNB for faster speeds. The Global source connects directly to GitHub, better for networks outside China. Auto falls back when the China source is unavailable.',
 
 };
 

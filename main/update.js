@@ -3,6 +3,7 @@
 // ============================================================
 'use strict';
 const Paths = require('./paths');
+const DS = require('./download-source');
 
 // ── 更新通道 ────────────────────────────────────────────────────────────────
 // stable：用 GitHub 的 releases/latest 锚点。该端点会自动跳过 prerelease，
@@ -38,24 +39,46 @@ const BETA_TAG_RE = /^v?\d+\.\d+\.\d+-(?:beta|rc)\.\d+$/i;
 function normChannel(v) { return String(v || '').toLowerCase() === 'beta' ? 'beta' : 'stable'; }
 function sourceIdOf(mirrorId, channel) { return normChannel(channel) === 'beta' ? mirrorId + '-beta' : mirrorId; }
 
-function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }) {
+function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, readSettings }) {
   // 最近一次「检查更新」实际访问成功的源 id（先探测它，命中率高）
   let lastGoodSource = null;
 
-  // 测试通道的最新版：releases 列表里第一个 prerelease 版本。
-  // 必须排除固定锚点 release（tag 就叫 `beta`）—— 它只承载分发资产，不对应版本。
-  function pickBetaRelease(list) {
-    if (!Array.isArray(list)) return null;
-    for (const r of list) {
-      if (r && r.prerelease && BETA_TAG_RE.test(String(r.tag_name || ''))) return r;
-    }
-    return null;
+  // 当前下载源偏好：'auto' | 'cnb' | 'github'（见 main/download-source.js）
+  function pref() {
+    try { return DS.normSource(readSettings && readSettings() && readSettings().download_source); } catch (e) { return 'auto'; }
+  }
+  // 某个通道下、按偏好排序的更新源（CNB 国内 / GitHub 镜像 · 官方）
+  function orderedUpdateSources(channel) {
+    const ch = normChannel(channel);
+    const cnb = { id: sourceIdOf('cnb', ch), uri: ch === 'beta' ? DS.cnbTagUrl('beta', 'FuFumidi.Install.exe') : DS.cnbLatestUrl('FuFumidi.Install.exe') };
+    const gh = UPDATE_MIRRORS.map(m => ({ id: sourceIdOf(m.id, ch), uri: m.prefix + GH_WEB + CHANNEL_ASSET_PATH[ch] }));
+    const github = gh[gh.length - 1];            // 官方直连（UPDATE_MIRRORS 末位 prefix 为空）
+    const mirrors = gh.slice(0, gh.length - 1);  // 国内加速镜像
+    // 国内优先：[CNB, 镜像…, GitHub 官方]；全球优先：[GitHub 官方, 镜像…, CNB 兜底]
+    return DS.preferCnb(pref()) ? [cnb, ...gh] : [github, ...mirrors, cnb];
+  }
+  // 从 CNB 的 latest.yml 读最新版本（公开地址，无需认证），合成 GitHub release 同构对象
+  async function fetchCnbRelease(channel) {
+    const ch = normChannel(channel);
+    const versionUrl = ch === 'beta' ? DS.cnbTagUrl('beta', 'latest.yml') : DS.cnbVersionUrl();
+    const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 12000);
+    let text;
+    try {
+      const r = await net.fetch(versionUrl, { headers: { 'user-agent': UA }, signal: ctrl.signal });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      text = await r.text();
+    } finally { clearTimeout(to); }
+    const m = String(text).match(/^version:\s*["']?([^\s"']+)/m);
+    if (!m) throw new Error('CNB 版本信息缺失');
+    const ver = m[1].replace(/^v/i, '');
+    const instUrl = ch === 'beta' ? DS.cnbTagUrl('beta', 'FuFumidi.Install.exe') : DS.cnbLatestUrl('FuFumidi.Install.exe');
+    return { tag_name: 'v' + ver, body: '', assets: [{ name: 'FuFumidi.Install.exe', browser_download_url: instUrl, size: 0 }] };
   }
 
   // HEAD 探测可用下载源（每个 6s 超时），失败自动换下一个；全部失败回退最近可达源，再退官方直连
   async function pickUpdateSource(channel) {
     const ch = normChannel(channel);
-    const ordered = UPDATE_MIRRORS.map(m => ({ id: sourceIdOf(m.id, ch), uri: m.prefix + GH_WEB + CHANNEL_ASSET_PATH[ch] }));
+    const ordered = orderedUpdateSources(channel);
     if (lastGoodSource) {
       const i = ordered.findIndex(s => s.id === lastGoodSource);
       if (i > 0) { const hit = ordered.splice(i, 1)[0]; ordered.unshift(hit); }
@@ -69,6 +92,16 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
       } catch (e) { /* 该源不可达，尝试下一个 */ }
     }
     return lastGoodSource || sourceIdOf('github', ch);
+  }
+
+  // 测试通道的最新版：releases 列表里第一个 prerelease 版本。
+  // 必须排除固定锚点 release（tag 就叫 `beta`）—— 它只承载分发资产，不对应版本。
+  function pickBetaRelease(list) {
+    if (!Array.isArray(list)) return null;
+    for (const r of list) {
+      if (r && r.prerelease && BETA_TAG_RE.test(String(r.tag_name || ''))) return r;
+    }
+    return null;
   }
 
   // 拉某个通道的 release（多镜像回退）
@@ -92,7 +125,12 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
   // 决定该给用户报哪个版本：测试通道优先取最新测试版，没有测试版时回退正式版
   //（这样测试通道用户不会被卡在旧测试版上，正式版发布后能正常升上去）
   async function resolveRelease(channel) {
-    if (normChannel(channel) === 'beta') {
+    const ch = normChannel(channel);
+    // 正式版 + 国内优先：先读 CNB 的 latest.yml（公开地址、免认证）拿版本号
+    if (ch === 'stable' && DS.preferCnb(pref())) {
+      try { return { release: await fetchCnbRelease('stable'), channel: 'stable' }; } catch (e) { /* 回退 GitHub */ }
+    }
+    if (ch === 'beta') {
       try { const r = await fetchChannelRelease('beta'); if (r) return { release: r, channel: 'beta' }; } catch (e) {}
     }
     return { release: await fetchChannelRelease('stable'), channel: 'stable' };
@@ -131,7 +169,12 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
   // 主进程下载完整离线安装包（多镜像回退 + 进度 + 大小校验）。
   // 关键：下载只写临时目录，失败/中断不影响当前安装——绝不边下边改已安装文件
   async function downloadInstallPackage(url, win) {
-    const mirrors = [url, 'https://ghfast.top/' + url, 'https://gh-proxy.com/' + url, 'https://ghproxy.net/' + url];
+    // 按下载源偏好排序：国内优先 → CNB 打头；全球优先 → GitHub（含镜像）打头。
+    // githubMirrorCandidates 对非 GitHub 地址原样返回，避免把 CNB 地址套上 gh 镜像前缀。
+    const cnbUrl = DS.cnbLatestUrl('FuFumidi.Install.exe');
+    const ghChain = DS.githubMirrorCandidates(url);
+    const ordered = DS.preferCnb(pref()) ? [cnbUrl, ...ghChain] : [...ghChain, cnbUrl];
+    const mirrors = [...new Set(ordered)].filter(Boolean);
     // 优先写数据根目录的 temp/（不占 C 盘）；该目录已在 kachina.config.json 的
     // ignoreFolderPath 中，更新器不会在替换安装目录时把它删掉。不可写时回退系统 Temp。
     let dest = path.join(Paths.tempDir(), 'fufumidi-update', 'FuFumidi.Install.exe');
@@ -188,7 +231,10 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net }
       const { release: rel, channel: hit } = await resolveRelease(channel);
       const asset = assetForPlatform(rel);
       const ver = (rel.tag_name || '').replace(/^v/i, '');
-      return { ok: true, current: app.getVersion(), latest: ver, tag: rel.tag_name, channel: hit, notes: (rel.body || '').slice(0, 500), url: asset ? asset.browser_download_url : null, name: asset ? asset.name : null, mirror: asset ? ('https://ghfast.top/' + asset.browser_download_url) : null };
+      const mirrorUrl = DS.preferCnb(pref())
+        ? DS.cnbLatestUrl('FuFumidi.Install.exe')
+        : (asset ? ('https://ghfast.top/' + asset.browser_download_url) : null);
+      return { ok: true, current: app.getVersion(), latest: ver, tag: rel.tag_name, channel: hit, notes: (rel.body || '').slice(0, 500), url: asset ? asset.browser_download_url : null, name: asset ? asset.name : null, mirror: mirrorUrl, source: pref() };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
   // 更新完成后首次启动：按 tag 拉取该版本完整 release 说明（离线时前端回退到内置 changelog）

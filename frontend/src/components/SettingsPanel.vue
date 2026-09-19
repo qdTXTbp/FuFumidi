@@ -13,7 +13,7 @@ const state = app;
 const toast = (m, t) => app.toast(m, t);
 // 当前版本号（从主进程读取，与 SideBar 左下角一致）
 const appVersion = ref('v3.1.8');
-import { getAppVersion, cmpVersion, getUpdateChannel, setUpdateChannel } from '../core/version.js';
+import { getAppVersion, cmpVersion, getUpdateChannel, setUpdateChannel, getDownloadSource, setDownloadSource } from '../core/version.js';
 getAppVersion().then(v => { appVersion.value = v; });
 import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';
 
@@ -169,6 +169,7 @@ async function load() {
   form.file_assoc = s.file_assoc !== false;
   // settings 是持久真相，localStorage 只是启动时用于即时读取的缓存；打开设置时校准一次
   updateChannel.value = setUpdateChannel(s.update_channel || getUpdateChannel());
+  downloadSource.value = setDownloadSource(s.download_source || getDownloadSource());
   // 完整性：每次打开设置都重新检查（而非仅在首次 state.integrity===null 时），
   // 避免开机/更新瞬间的瞬时误报被缓存锁死——修复后或 asar 已恢复也能即时反映，不再“一直报错”。
   runIntegrity();
@@ -245,6 +246,20 @@ function setChannel(ch) {
   updateChannel.value = setUpdateChannel(next);
   upd.status = ''; upd.failed = false; upd.launched = false;
   toast(next === 'beta' ? t('已切换到测试版通道') : t('已切换到正式版通道'));
+}
+
+/* ---------------- 下载源 ---------------- */
+// 'auto'=自动（优先国内 CNB，不可用回退 GitHub）；'cnb'=国内优先；'github'=全球优先。
+// 影响更新检查与增量更新下载；后续模型 / 音色等 GitHub 资产也走同一偏好。
+const downloadSource = ref('auto');
+function sourceLabel(s) {
+  return s === 'cnb' ? t('国内 · CNB') : s === 'github' ? t('全球 · GitHub') : t('自动（优先国内）');
+}
+function setSource(src) {
+  const next = setDownloadSource(src);
+  downloadSource.value = next;
+  upd.status = ''; upd.failed = false; upd.launched = false;
+  toast(t('已切换下载源：') + sourceLabel(next));
 }
 
 /* ---------------- 卸载 ---------------- */
@@ -1032,6 +1047,20 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
               <div class="radio-pill">
                 <span :class="{ on: updateChannel !== 'beta' }" @click="setChannel('stable')">{{ t('正式版') }}</span>
                 <span :class="{ on: updateChannel === 'beta' }" @click="setChannel('beta')">{{ t('测试版') }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('下载源') }}</div>
+              <div class="fr-hint">{{ t('国内源经 CNB 镜像，速度更快；全球源直连 GitHub，适合境外网络。自动会在国内源不可用时回退。') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <div class="radio-pill">
+                <span :class="{ on: downloadSource === 'auto' }" @click="setSource('auto')">{{ t('自动') }}</span>
+                <span :class="{ on: downloadSource === 'cnb' }" @click="setSource('cnb')">{{ t('国内') }}</span>
+                <span :class="{ on: downloadSource === 'github' }" @click="setSource('github')">{{ t('全球') }}</span>
               </div>
             </div>
           </div>
