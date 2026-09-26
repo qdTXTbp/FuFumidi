@@ -19,10 +19,10 @@
   --fufumidi-support-violet: #8b5cf6;
   --fufumidi-ink-strong: #0b1220;
 
-  /* radius scale */
+  /* radius scale — restrained 4/8/12/16px */
   --fufumidi-radius-sm: 8px;
   --fufumidi-radius-md: 12px;
-  --fufumidi-radius-lg: 18px;
+  --fufumidi-radius-lg: 16px;
 
   /* shadow mood */
   --fufumidi-shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);

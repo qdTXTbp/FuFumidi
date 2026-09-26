@@ -29,7 +29,7 @@
   /* radius scale */
   --fufumidi-radius-sm: 8px;
   --fufumidi-radius-md: 12px;
-  --fufumidi-radius-lg: 18px;
+  --fufumidi-radius-lg: 16px;
 
   /* shadow mood */
   --fufumidi-shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
@@ -112,6 +112,282 @@
     linear-gradient(180deg, var(--fufumidi-background) 0%, var(--fufumidi-background) 100%);
 }
 
+/* ---- Motion & ambience tokens ---- */
+:root {
+  --fufumidi-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --fufumidi-ease-soft: cubic-bezier(0.65, 0, 0.35, 1);
+  --fufumidi-aurora-1: 22%;
+  --fufumidi-aurora-2: 15%;
+  --fufumidi-aurora-3: 18%;
+  --fufumidi-aurora-grid: 6%;
+}
+
+.dark {
+  --fufumidi-aurora-1: 34%;
+  --fufumidi-aurora-2: 24%;
+  --fufumidi-aurora-3: 28%;
+  --fufumidi-aurora-grid: 9%;
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 5rem;
+}
+
+/* ---- ThreeUI-style procedural hero ambience (transform/opacity only) ---- */
+.fufumidi-hero-gradient {
+  position: relative;
+  isolation: isolate;
+}
+
+.fufumidi-ambience {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 58%, transparent 98%);
+  mask-image: linear-gradient(180deg, #000 0%, #000 58%, transparent 98%);
+}
+
+.fufumidi-ambience .aurora {
+  position: absolute;
+  border-radius: 9999px;
+  animation: fufumidi-aurora-drift var(--drift, 30s) var(--fufumidi-ease-soft) infinite alternate;
+  animation-delay: var(--drift-delay, 0s);
+}
+
+.aurora-a {
+  top: -12rem;
+  left: 46%;
+  width: 44rem;
+  height: 44rem;
+  background: radial-gradient(circle at center, color-mix(in srgb, var(--fufumidi-primary) var(--fufumidi-aurora-1), transparent) 0%, transparent 68%);
+  --drift: 32s;
+}
+
+.aurora-b {
+  top: -8rem;
+  left: -12rem;
+  width: 34rem;
+  height: 34rem;
+  background: radial-gradient(circle at center, color-mix(in srgb, var(--fufumidi-support-cyan) var(--fufumidi-aurora-2), transparent) 0%, transparent 66%);
+  --drift: 26s;
+  --drift-delay: -6s;
+}
+
+.aurora-c {
+  top: 38%;
+  left: 16%;
+  width: 30rem;
+  height: 30rem;
+  background: radial-gradient(circle at center, color-mix(in srgb, var(--fufumidi-support-violet) var(--fufumidi-aurora-3), transparent) 0%, transparent 66%);
+  --drift: 38s;
+  --drift-delay: -14s;
+}
+
+@keyframes fufumidi-aurora-drift {
+  from { transform: translate3d(-2.5%, -1.5%, 0) scale(1); }
+  to { transform: translate3d(3.5%, 2.5%, 0) scale(1.09); }
+}
+
+.fufumidi-ambience .gridlines {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--fufumidi-foreground) var(--fufumidi-aurora-grid), transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--fufumidi-foreground) var(--fufumidi-aurora-grid), transparent) 1px, transparent 1px);
+  background-size: 52px 52px;
+  -webkit-mask-image: radial-gradient(120% 78% at 50% 0%, #000 24%, transparent 74%);
+  mask-image: radial-gradient(120% 78% at 50% 0%, #000 24%, transparent 74%);
+}
+
+/* ---- Entrance choreography (fails open: settles visible without JS) ---- */
+.on-enter {
+  animation: fufumidi-enter 720ms var(--fufumidi-ease-out) both;
+  animation-delay: calc(var(--i, 0) * 85ms);
+}
+
+@keyframes fufumidi-enter {
+  from { opacity: 0; transform: translate3d(0, 16px, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ---- ThinkingOrbs-style status orb ---- */
+.orb {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 64px;
+  height: 64px;
+  color: var(--fufumidi-primary);
+}
+
+.orb-lg { width: 64px; height: 64px; }
+.orb-sm { width: 20px; height: 20px; }
+.orb-xs { width: 16px; height: 16px; }
+
+.orb::before {
+  content: "";
+  position: absolute;
+  inset: -22%;
+  border-radius: 9999px;
+  background: radial-gradient(circle at center, color-mix(in srgb, currentColor 16%, transparent) 0%, transparent 70%);
+  animation: fufumidi-orb-glow 4.2s var(--fufumidi-ease-soft) infinite;
+}
+
+.orb-ring {
+  position: absolute;
+  inset: 0;
+  animation-name: fufumidi-orb-spin;
+  animation-duration: calc(var(--spin, 18) * 1s);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-direction: var(--dir, normal);
+}
+
+.orb-dot {
+  position: absolute;
+  border-radius: 9999px;
+  background-color: currentColor;
+  animation: fufumidi-orb-pulse 2.6s var(--fufumidi-ease-soft) infinite;
+}
+
+@keyframes fufumidi-orb-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fufumidi-orb-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.72); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes fufumidi-orb-glow {
+  0%, 100% { opacity: 0.45; transform: scale(0.92); }
+  50% { opacity: 0.9; transform: scale(1.06); }
+}
+
+/* ---- Floating engine-status badge over the hero screenshot ---- */
+.orb-badge {
+  position: absolute;
+  left: 0.5rem;
+  bottom: -1rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.7rem 1rem 0.7rem 0.85rem;
+  border: 1px solid var(--fufumidi-border);
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--fufumidi-card) 92%, transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--fufumidi-shadow-md);
+}
+
+@media (min-width: 1024px) {
+  .orb-badge { left: -0.75rem; bottom: -1.5rem; }
+}
+
+.orb-badge .orb::before { display: none; }
+
+.orb-badge-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.orb-badge-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--fufumidi-foreground);
+}
+
+.orb-badge-meta {
+  font-size: 0.6875rem;
+  color: var(--fufumidi-muted-foreground);
+}
+
+/* ---- Gradient hairline + accent glow for framed screenshots ---- */
+.shot-frame { position: relative; }
+
+.shot-frame::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(140deg, color-mix(in srgb, var(--fufumidi-primary) 45%, transparent), transparent 46%, color-mix(in srgb, var(--fufumidi-support-cyan) 38%, transparent));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.shot-glow {
+  box-shadow: var(--fufumidi-shadow-md), 0 28px 64px -34px color-mix(in srgb, var(--fufumidi-primary) 55%, transparent);
+}
+
+/* ---- Micro-interactions ---- */
+@media (hover: hover) {
+  .fufumidi-card-surface,
+  .fufumidi-icon-tile,
+  .icon-square {
+    transition: transform 240ms var(--fufumidi-ease-out), box-shadow 240ms var(--fufumidi-ease-out), border-color 240ms var(--fufumidi-ease-out);
+  }
+
+  .fufumidi-card-surface:hover {
+    transform: translate3d(0, -3px, 0);
+    box-shadow: var(--fufumidi-shadow-md);
+    border-color: color-mix(in srgb, var(--fufumidi-primary) 34%, var(--fufumidi-border));
+  }
+
+  .fufumidi-card-surface:hover .fufumidi-icon-tile,
+  .fufumidi-card-surface:hover .icon-square {
+    transform: scale(1.07);
+  }
+}
+
+:where(a, button, [tabindex]):focus-visible {
+  outline: 2px solid var(--fufumidi-ring);
+  outline-offset: 2px;
+}
+
+/* ---- Reduced motion: keep the ambience, drop the travel ---- */
+@keyframes fufumidi-orb-fade {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+
+  .fufumidi-ambience .aurora,
+  .orb-ring,
+  .orb::before,
+  .on-enter {
+    animation: none;
+  }
+
+  .orb-dot {
+    animation-name: fufumidi-orb-fade;
+    animation-duration: 4.5s;
+    opacity: 0.85;
+  }
+
+  .fufumidi-card-surface,
+  .fufumidi-icon-tile,
+  .icon-square {
+    transition: none;
+  }
+
+  .fufumidi-card-surface:hover,
+  .fufumidi-card-surface:hover .fufumidi-icon-tile,
+  .fufumidi-card-surface:hover .icon-square {
+    transform: none;
+  }
+}
+
     </style>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
     <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
@@ -133,6 +409,7 @@
     --radius-sm: var(--fufumidi-radius-sm);
     --radius-md: var(--fufumidi-radius-md);
     --radius-lg: var(--fufumidi-radius-lg);
+    --radius-xl: var(--fufumidi-radius-lg);
   }
   @layer base {
     body { background: var(--fufumidi-background); color: var(--fufumidi-foreground); }
@@ -266,33 +543,48 @@
       </header>
 
       <!-- HERO -->
-      <section id="hero-en" class="fufumidi-hero-gradient mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-24">
-        <div class="hero-en-grid grid items-center gap-10 lg:grid-cols-2">
-          <div class="min-w-0">
-            <div class="chip gap-2 text-primary">
-              <span aria-hidden="true" class="h-2 w-2 shrink-0 rounded-full bg-primary"></span>
-              <span class="font-semibold">v3.1.8 · Fully Offline</span>
+      <section id="hero-en" class="fufumidi-hero-gradient">
+        <div class="fufumidi-ambience" aria-hidden="true">
+          <span class="aurora aurora-a"></span>
+          <span class="aurora aurora-b"></span>
+          <span class="aurora aurora-c"></span>
+          <span class="gridlines"></span>
+        </div>
+        <div class="relative z-10 mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-24">
+          <div class="hero-en-grid grid items-center gap-10 lg:grid-cols-2">
+            <div class="min-w-0">
+              <div class="chip on-enter gap-2 text-primary" style="--i: 0">
+                <span class="orb orb-xs" data-orb="sm" aria-hidden="true"></span>
+                <span class="font-semibold">v3.1.8 · Fully Offline</span>
+              </div>
+              <h1 class="fufumidi-h1 on-enter mt-5 text-4xl lg:text-5xl" style="--i: 1; text-wrap: balance; word-break: keep-all; overflow-wrap: break-word;">Music creation, fully offline</h1>
+              <p class="on-enter mt-4 text-base leading-relaxed text-muted-foreground sm:text-lg" style="--i: 2">FuFumidi is a fully offline desktop music toolkit combining MIDI playback, editing, visualization, analysis, scoring, and transcription, with Python engines and AI models bundled in, so you can go from audio to score without a connection.</p>
+              <div class="on-enter mt-8 flex flex-wrap items-center gap-3" style="--i: 3">
+                <a href="https://github.com/qdTXTbp/FuFumidi" target="_blank" rel="noopener" class="inline-flex h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-lg bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-sm transition hover:opacity-90">
+                  <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+                  View on GitHub
+                </a>
+                <a href="#features" class="inline-flex h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border border-border bg-card px-5 text-sm font-semibold text-foreground transition hover:border-primary/40 hover:text-primary">
+                  Explore Features
+                  <i data-lucide="arrow-right" class="h-4 w-4"></i>
+                </a>
+              </div>
+              <div class="on-enter mt-8 flex flex-wrap gap-2" style="--i: 4">
+                <span class="chip rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground">Open source</span>
+                <span class="chip rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground">Cross-platform desktop</span>
+                <span class="chip rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground">Bundled AI models</span>
+              </div>
             </div>
-            <h1 class="fufumidi-h1 mt-5 text-4xl lg:text-5xl" style="text-wrap: balance; word-break: keep-all; overflow-wrap: break-word;">Music creation, fully offline</h1>
-            <p class="mt-4 text-base leading-relaxed text-muted-foreground sm:text-lg">FuFumidi is a fully offline desktop music toolkit combining MIDI playback, editing, visualization, analysis, scoring, and transcription, with Python engines and AI models bundled in, so you can go from audio to score without a connection.</p>
-            <div class="mt-8 flex flex-wrap items-center gap-3">
-              <a href="https://github.com/qdTXTbp/FuFumidi" target="_blank" rel="noopener" class="inline-flex h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-lg bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-sm transition hover:opacity-90">
-                <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
-                View on GitHub
-              </a>
-              <a href="#features" class="inline-flex h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border border-border bg-card px-5 text-sm font-semibold text-foreground transition hover:border-primary/40 hover:text-primary">
-                Explore Features
-                <i data-lucide="arrow-right" class="h-4 w-4"></i>
-              </a>
+            <div class="shot-frame shot-glow on-enter relative min-w-0 rounded-xl border border-border bg-card p-2" style="--i: 5">
+              <img src="../EN.png" alt="FuFumidi English interface screenshot" class="h-auto w-full rounded-lg object-cover">
+              <div class="orb-badge">
+                <span class="orb orb-lg" data-orb="lg" aria-hidden="true"></span>
+                <span class="orb-badge-text">
+                  <span class="orb-badge-title">Local AI engine</span>
+                  <span class="orb-badge-meta">Fully offline · ready</span>
+                </span>
+              </div>
             </div>
-            <div class="mt-8 flex flex-wrap gap-2">
-              <span class="chip rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground">Open source</span>
-              <span class="chip rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground">Cross-platform desktop</span>
-              <span class="chip rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground">Bundled AI models</span>
-            </div>
-          </div>
-          <div class="relative min-w-0 rounded-xl border border-border bg-card p-2 shadow-md">
-            <img src="../EN.png" alt="FuFumidi English interface screenshot" class="h-auto w-full rounded-lg object-cover">
           </div>
         </div>
       </section>
@@ -349,7 +641,7 @@
       <section id="screenshots" class="scroll-mt-16 bg-muted/60">
         <div class="fufumidi-shell mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-20">
           <h2 class="fufumidi-h2 text-center text-2xl sm:text-3xl" style="text-wrap: balance; word-break: keep-all; overflow-wrap: break-word;">A workbench that shows everything</h2>
-          <div class="relative mt-8 w-full rounded-xl border border-border bg-card p-2 shadow-md">
+          <div class="shot-frame shot-glow relative mt-8 w-full rounded-xl border border-border bg-card p-2">
             <img src="../EN.png" alt="FuFumidi workbench with player, piano roll, waterfall and score views" class="h-auto w-full rounded-lg object-cover">
           </div>
           <ul class="checklist mt-8 grid gap-3 sm:grid-cols-3">
@@ -461,6 +753,63 @@
         </div>
       </footer>
     </main>
+    <script>
+      /* ThinkingOrbs-style status orb: builds the dot lattice from a geometry config; purely decorative, so a script failure costs nothing */
+      (function () {
+        var GEOM = {
+          lg: [
+            { r: 26.5, n: 12, d: 4, o: 0.85, spin: 22, dir: 1 },
+            { r: 16, n: 8, d: 3.5, o: 0.92, spin: 15, dir: -1 },
+            { r: 7, n: 4, d: 3, o: 1, spin: 9, dir: 1, center: 2.5 }
+          ],
+          sm: [
+            { r: 7.5, n: 8, d: 3, o: 0.92, spin: 12, dir: 1, center: 2.5 }
+          ]
+        };
+        var BASE = { lg: 64, sm: 20 };
+
+        function dot(x, y, d, i) {
+          var el = document.createElement('i');
+          el.className = 'orb-dot';
+          el.style.left = x.toFixed(2) + 'px';
+          el.style.top = y.toFixed(2) + 'px';
+          el.style.width = d.toFixed(2) + 'px';
+          el.style.height = d.toFixed(2) + 'px';
+          el.style.marginLeft = (-d / 2).toFixed(2) + 'px';
+          el.style.marginTop = (-d / 2).toFixed(2) + 'px';
+          el.style.animationDelay = (-(i * 0.137) % 2.6).toFixed(3) + 's';
+          return el;
+        }
+
+        function build(host) {
+          var key = host.getAttribute('data-orb') || 'sm';
+          var rings = GEOM[key];
+          if (!rings || host.childElementCount) return;
+          var base = BASE[key] || 20;
+          var box = host.getBoundingClientRect();
+          var s = (box.width || base) / base;
+          var c = base / 2;
+          var id = 0;
+          rings.forEach(function (ring) {
+            var layer = document.createElement('span');
+            layer.className = 'orb-ring';
+            layer.style.setProperty('--spin', ring.spin);
+            layer.style.setProperty('--dir', ring.dir < 0 ? 'reverse' : 'normal');
+            layer.style.opacity = ring.o;
+            for (var i = 0; i < ring.n; i++) {
+              var a = (Math.PI * 2 * i) / ring.n;
+              layer.appendChild(dot(c + Math.cos(a) * ring.r * s, c + Math.sin(a) * ring.r * s, ring.d * s, id++));
+            }
+            if (ring.center) layer.appendChild(dot(c, c, ring.center * s, id++));
+            host.appendChild(layer);
+          });
+        }
+
+        try {
+          document.querySelectorAll('[data-orb]').forEach(build);
+        } catch (e) {}
+      })();
+    </script>
     <script>lucide.createIcons();</script>
 </body>
 </html>
