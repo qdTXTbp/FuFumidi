@@ -602,7 +602,7 @@ html {
                     <div class="min-w-0">
                         <span class="fufumidi-chip on-enter inline-flex h-8 shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground" style="--i: 0">
                             <span class="orb orb-xs" data-orb="sm" aria-hidden="true"></span>
-                            <span class="font-semibold text-primary">v3.1.8 · 完全离线</span>
+                            <span class="font-semibold text-primary"><span data-app-version>v4.3.0</span> · 完全离线</span>
                         </span>
                         <h1 class="fufumidi-h1 on-enter mt-6 text-4xl sm:text-5xl" style="--i: 1; text-wrap: balance; word-break: keep-all; overflow-wrap: break-word;">把音乐创作带进离线世界</h1>
                         <p class="fufumidi-body on-enter mt-5 leading-relaxed text-muted-foreground" style="--i: 2">FuFumidi 是一款完全离线的桌面音乐工具，集 MIDI 播放、编辑、可视化、分析与转写于一身，内置 Python 引擎与 AI 模型，断网也能完成从音频到乐谱的全流程创作。</p>
@@ -892,6 +892,40 @@ html {
 
         try {
           document.querySelectorAll('[data-orb]').forEach(build);
+        } catch (e) {}
+      })();
+
+      /* 版本号：读取 GitHub 最新 Release 并刷新展示，失败时保留静态兜底值 */
+      (function () {
+        var API = 'https://api.github.com/repos/qdTXTbp/FuFumidi/releases/latest';
+
+        function normalize(raw) {
+          var m = String(raw || '').match(/(\d+\.\d+(?:\.\d+)?)/);
+          return m ? 'v' + m[1] : '';
+        }
+
+        function apply(v) {
+          if (!v) return;
+          var nodes = document.querySelectorAll('[data-app-version]');
+          for (var i = 0; i < nodes.length; i++) nodes[i].textContent = v;
+        }
+
+        function load(url, ms) {
+          if (typeof fetch !== 'function') return Promise.reject(new Error('fetch unavailable'));
+          if (typeof AbortController !== 'function') return fetch(url).then(function (r) { return r.json(); });
+          var ctl = new AbortController();
+          var timer = setTimeout(function () { ctl.abort(); }, ms);
+          return fetch(url, { signal: ctl.signal }).then(function (r) {
+            clearTimeout(timer);
+            if (!r.ok) throw new Error('http ' + r.status);
+            return r.json();
+          }, function (err) { clearTimeout(timer); throw err; });
+        }
+
+        try {
+          load(API, 5000).then(function (data) {
+            apply(normalize(data && (data.tag_name || data.name)));
+          }).catch(function () {});
         } catch (e) {}
       })();
     </script>
