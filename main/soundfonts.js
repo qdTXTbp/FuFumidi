@@ -3,6 +3,7 @@
 // ============================================================
 'use strict';
 const Paths = require('./paths');
+const DS = require('./download-source');
 
 // 自定义目录（用户上传/下载的 SF2）在数据根目录的 soundfonts/ 下（默认位于工具目录旁，
 // 不挤占 C 盘）；内置随包分发的（如 renderer/vendor/soundfonts/GeneralUser.sf2）由 soundfont:list 单独列出。
@@ -17,6 +18,38 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
   ];
   // 自家音色库镜像仓库 Release 附件（配 gh.jasonzeng.dev 加速分发大文件）
   const _releaseBase = 'https://gh.jasonzeng.dev/https://github.com/monologue82/FuFumidiSoundFonts/releases/download/v1';
+  // 已镜像到 CNB 的自有音色库文件（提交在 CNB 镜像仓库里，走 git raw 直读）；
+  // 文件名与 GitHub 侧完全一致，按 basename 匹配即可
+  const CNB_SF_FILES = new Set([
+    'GeneralUser.GS.v1.471.sf2',
+    'SGM_V2_01_part1.sf2', 'SGM_V2_01_part2.sf2', 'SGM_V2_01_part3.sf2',
+  ]);
+  // CNB 有两个不同的体积限制，别搞混：
+  //   git 推送上限 256 MiB（pre-receive 拒绝，推不上去）
+  //   git raw 读取上限 100 MiB（推得上去但读不出来：errcode 2000033
+  //   "raw file size xxx MiB exceeded 100 MiB"）
+  // 所以凡是需要 raw 直读的文件都必须 ≤100 MiB；超限的一律作为 Release 资产（对象存储）分发。
+  const CNB_SF_RELEASE_FILES = new Set([
+    'Salamander_Grand_Piano_SF2_V3_20200602.sf2',   // 1.18GB
+    'FluidR3_GM.sf2',                                // 141.5MB
+    'Arachno_SoundFont_Version_1.0.sf2',             // 148.2MB
+  ]);
+  /** 自有镜像文件补一条 CNB 直链，并按下载源偏好把候选地址排序（国内优先 CNB 打头） */
+  function orderSfUrls(urls) {
+    const list = (urls || []).filter(Boolean);
+    let cnb = null;
+    for (const u of list) {
+      const seg = String(u).split('?')[0].split('/').pop() || '';
+      let base = seg;
+      try { base = decodeURIComponent(seg); } catch (e) { /* 非法百分号编码就按原样比 */ }
+      if (CNB_SF_RELEASE_FILES.has(base)) {
+        cnb = DS.cnbRepoReleaseUrl(DS.CNB_MIRROR_REPOS.fufumidi, 'soundfonts-v1', base);
+        break;
+      }
+      if (CNB_SF_FILES.has(base)) { cnb = DS.cnbRepoRawUrl(DS.CNB_MIRROR_REPOS.soundfonts, 'main', base); break; }
+    }
+    return DS.orderUrls(cnb, list);
+  }
 
   // ---- 音色库注册表：内置可一键下载的音色库 ----
   // 字段：
@@ -389,8 +422,8 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
     if (cur >= it.minSize) { send({ id, received: cur, total: cur, percent: 100, done: true }); return { ok: true, existed: true }; }
     fs.mkdirSync(sfDir(), { recursive: true });
     const out = localFilePath(it);
-    // 候选 URL 列表：仓库 raw 镜像 + 官方源（fallback）
-    const candidates = [...githubRawCandidates(it), ...(it.urls || [])].filter(Boolean);
+    // 候选 URL 列表：仓库 raw 镜像 + 自有 Release 镜像（按下载源偏好排序，国内优先时 CNB 打头）
+    const candidates = orderSfUrls([...githubRawCandidates(it), ...(it.urls || [])]);
 
     // 健壮下载：多源轮换 + 断点续传（.part 保留跨轮次/跨调用）+ 停滞看门狗
     //  - STALL_MS 内没有任何字节到达 → 取消当前流，换下一个源（或同源 Range 续传）

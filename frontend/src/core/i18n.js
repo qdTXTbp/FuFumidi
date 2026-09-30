@@ -2766,6 +2766,24 @@ export const I18N_MAP = {
   '已切换下载源：': 'Download source switched to: ',
   '国内源经 CNB 镜像，速度更快；全球源直连 GitHub，适合境外网络。自动会在国内源不可用时回退。': 'The China source mirrors through CNB for faster speeds. The Global source connects directly to GitHub, better for networks outside China. Auto falls back when the China source is unavailable.',
 
+  /* 预打包 GPU 增强包（设置 → GPU 加速） */
+  '预打包增强包（自动安装失败时备用）': 'Prebuilt pack (fallback when auto-install fails)',
+  '（分卷）': ' (split parts)',
+  '下载并安装': 'Download and install',
+  '国内优先走 CNB 镜像，境外走 GitHub。': 'In China the CNB mirror is preferred; elsewhere GitHub is used.',
+  '当前环境不支持下载增强包': 'This environment does not support downloading the pack',
+  '正在下载增强包…': 'Downloading the pack…',
+  '增强包已下载并安装': 'Pack downloaded and installed',
+  '已取消下载增强包': 'Pack download cancelled',
+  '下载安装失败：': 'Download and install failed: ',
+  '下载安装失败': 'Download and install failed',
+
+  /* GPU 加速状态（补齐既有缺漏） */
+  '（cu128 · RTX 50 系）': ' (cu128 · RTX 50 series)',
+  'CUDA + DirectML 已安装': 'CUDA + DirectML installed',
+  'CUDA 已安装': 'CUDA installed',
+  'DirectML 已安装': 'DirectML installed',
+
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */

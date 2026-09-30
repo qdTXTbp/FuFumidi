@@ -7,11 +7,12 @@
 ## 1. 整体架构
 
 ```
-GitHub Releases (qdTXTbp/FuFumidi)
-   │  资产：FuFumidi.Install.exe  ← 固定名，releases/latest/download 恒指向最新版
-   ▼
-ghfast.top 镜像（国内加速）
-   ▼
+GitHub Releases (qdTXTbp/FuFumidi)              CNB Releases (FuFuCloud-mirror/FuFuMIDI)
+   │ 上游：FuFumidi.Install.exe                   │ 镜像：同资产名，两条通道各一个锚点
+   │ 正式 releases/latest/download                │ 正式 .../-/releases/latest/download
+   │ 测试 固定 tag beta                            │ 测试 固定 tag beta
+   └────────────────────┬─────────────────────────┘
+                        ▼  按「下载源偏好」+「更新通道」选源（HEAD 探测，失败自动换下一个）
 FuFumidi.update.exe（kachina 增量更新器，与主程序 exe 同级）
    │  差分下载：只拉改动部分（Range 请求）
    ▼
@@ -19,20 +20,24 @@ FuFumidi.update.exe（kachina 增量更新器，与主程序 exe 同级）
 ```
 
 - 更新器：kachina-installer（BetterGI 同款增量更新器），窗口内显示下载进度。
-- 下载源：`https://ghfast.top/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe`
-  - 使用 `releases/latest/download` 固定地址，**自动指向最新版本，无需写死版本号**。
-  - 走 ghfast.top 镜像加速，规避 GitHub 直连的 TLS/HTTP2 干扰。
+- 下载源是**两条线路 + 多个镜像**，运行时只能靠 `--source <id>` 选（源地址编译在更新器 exe 里，见 3.3）：
+  - `cnb` / `cnb-beta`：CNB 国内镜像（「下载源 = 自动 / 国内」时的首选，见 3.5）
+  - `ghfast` / `ghproxy` / `ghproxy-net`：GitHub 加速镜像
+  - `github` / `github-beta`：GitHub 官方直连（境外网络首选）
+- 两条线路都使用**地址不变**的锚点：正式 `releases/latest/download`、测试固定 tag `beta`，
+  自动指向最新版本，无需写死版本号。
 
 ---
 
 ## 2. 客户端更新流程（用户视角）
 
 1. 设置 → 更新 → 点击「检查更新」。
-2. 主程序请求 GitHub latest 版本（多镜像回退），与当前版本比对。
+2. 主程序按「下载源偏好」查最新版本（正式版 + 国内优先时读 CNB 的 `latest.yml`，否则走 GitHub API，
+   均多镜像回退，见 §3.5），与当前版本比对。
 3. 发现新版本 → 弹窗确认。
 4. 确认后主程序：
    a. 启动**独立守护进程**（`powershell` 隐藏窗口，等待更新器退出后自动重启主程序）；
-   b. 拉起 `FuFumidi.update.exe -I -O --source ghfast`。
+   b. 拉起 `FuFumidi.update.exe -I -O --source <id>`（`<id>` 由「下载源偏好 + 更新通道」决定，见 §3.5）。
 5. 更新器窗口弹出，显示下载进度（差分下载，仅改动部分）。
 6. 更新器结束主程序进程 → 替换文件 → 完成。
 7. 守护进程检测到更新器退出 → 自动启动新版本主程序。
@@ -73,14 +78,45 @@ FuFumidi.update.exe（kachina 增量更新器，与主程序 exe 同级）
 **排查入口**：整条流程都写 `<数据目录>\temp\fufumidi-restart.log`，
 主进程的行带 `[main]` 前缀、守护进程的行不带。缺 `[guard] start` 就说明守护没跑起来。
 
-### 3.3 更新器配置（`Build/kachina.config.json`）
+### 3.3 更新器配置（`build/kachina.config.json`）
 
-- 仅保留一个源：`ghfast`，URI 为 `releases/latest/download` 固定地址。
+声明两条线路、每条线路各带正式与测试两个通道的源，URI 全部是**地址不变**的锚点：
+
+| 源 id | 线路 / 通道 | URI |
+|---|---|---|
+| `cnb` | 国内 CNB · 正式 | `https://cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/releases/latest/download/FuFumidi.Install.exe` |
+| `cnb-beta` | 国内 CNB · 测试 | `https://cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/releases/download/beta/FuFumidi.Install.exe` |
+| `ghfast` / `ghproxy` / `ghproxy-net` | GitHub 加速镜像 · 正式 | `<镜像前缀>https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe` |
+| `ghfast-beta` / `ghproxy-beta` / `ghproxy-net-beta` | GitHub 加速镜像 · 测试 | `<镜像前缀>https://github.com/qdTXTbp/FuFumidi/releases/download/beta/FuFumidi.Install.exe` |
+| `github` / `github-beta` | GitHub 官方 · 正式 / 测试 | 同上，前缀为空 |
+
 - **不要**在 URI 中使用 `${version}` 占位符——kachina 对自定义 HTTP 源不会替换该占位符，会请求到带字面 `${version}` 的无效 URL，导致 `Invalid remote index`。
+- 改完 `kachina.config.json` **必须重新生成更新器**（`npm run dist:win` 会自动先跑 `scripts/build-updater.js`），否则改动不生效。
+- 源是编译进 exe 的：用户机器上已装的旧更新器里没有 `cnb`，得先升到带该源的版本，之后才吃得到（与 §5.1 对 beta 的说明同理）。
 
 ### 3.4 打包（`electron-builder.yml`）
 
 - `extraFiles`：`release/update/FuFumidi.update.exe` → exe 同级，保证 `launchUpdater` 能找到更新器。
+
+### 3.5 下载源偏好（国内 CNB / 全球 GitHub）
+
+设置 → 更新 → 「下载源」三选一，存 `settings.download_source`
+（同时双写 localStorage `fufumidi_download_source`，保证启动瞬间就能读到）：
+
+| 取值 | 含义 | 源探测顺序 |
+|---|---|---|
+| `auto`（默认） | 自动（优先国内） | `[CNB, ghfast, gh-proxy, ghproxy.net, GitHub]` |
+| `cnb` | 国内优先 | 同上 |
+| `github` | 全球优先 | `[GitHub, ghfast, gh-proxy, ghproxy.net, CNB 兜底]` |
+
+- 解析逻辑集中在 `main/download-source.js`（`sourceOf` / `preferCnb` / `cnbLatestUrl` / `cnbTagUrl` /
+  `githubMirrorCandidates`），更新、以及后续的模型 / 音色下载共用同一套偏好。
+- 主进程侧三处都按偏好排序，**任何一处失败都自动回退到序列中的下一个源，不会因为 CNB 不可用而收不到更新**：
+  1. `resolveRelease()` —— 正式版 + 国内优先时先读 CNB 的 `latest.yml` 拿版本号（公开地址、免认证），失败再走 GitHub API；
+  2. `pickUpdateSource()` —— HEAD 探测可用源（每个 6s 超时），取第一个可达的；
+  3. `downloadInstallPackage()` —— 应用内整包下载的镜像顺序。
+- `githubMirrorCandidates()` 只给 GitHub 地址套镜像前缀，CNB 地址原样返回，
+  避免拼出 `https://ghfast.top/https://cnb.cool/...` 这类无效 URL。
 
 ---
 
@@ -126,16 +162,33 @@ python scripts/upload-release-asset.py <GH_TOKEN> qdTXTbp/FuFumidi vX.Y.Z `
 
 > `FuFumidi.Install.exe` 必须每次发布覆盖上传，否则 `releases/latest/download` 仍指向旧版。
 
+### 发布后同步到 CNB 国内源
+
+GitHub 侧发布完成后，按 **§5.6** 把这批资产镜像一份到 CNB
+（`FuFuCloud-mirror/FuFuMIDI` 的同一 tag 下），否则「下载源 = 自动 / 国内」的用户拿不到国内加速。
+镜像后按 §5.6 的验证命令确认 `latest` 锚点的 `version:` 已跟上。
+
 ---
 
 ## 5. 测试版与正式版双通道
 
-两条通道靠 **GitHub 的 prerelease 语义**天然隔离，互不影响：
+两条通道靠 **GitHub 的 prerelease 语义**天然隔离，互不影响；CNB 侧是纯资产镜像，用「`latest` 锚点 / 固定 tag `beta`」对应同一套语义：
 
-| 通道 | 版本查询 | 下载锚点 | 谁能拿到 |
-|---|---|---|---|
-| 正式 stable | `releases/latest`（**自动跳过 prerelease**） | `releases/latest/download/FuFumidi.Install.exe` | 所有人（默认） |
-| 测试 beta | `releases` 列表里第一个 prerelease | `releases/download/beta/FuFumidi.Install.exe` | 在「设置 → 更新 → 测试版通道」开启的人 |
+| 通道 | 版本查询 | 下载锚点（GitHub） | 下载锚点（CNB 国内源） | 谁能拿到 |
+|---|---|---|---|---|
+| 正式 stable | `releases/latest`（**自动跳过 prerelease**） | `releases/latest/download/FuFumidi.Install.exe` | `.../cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/releases/latest/download/FuFumidi.Install.exe` | 所有人（默认） |
+| 测试 beta | `releases` 列表里第一个 prerelease | `releases/download/beta/FuFumidi.Install.exe` | `.../-/releases/download/beta/FuFumidi.Install.exe` | 在「设置 → 更新 → 测试版通道」开启的人 |
+
+**CNB 两个锚点怎么区分**
+
+- **正式**：`.../-/releases/latest/download/...`。CNB 的 `is_latest` 由平台自动指向**最高 semver 的非预发布 release**
+  （实测：把 v4.3.0 → v4.2.2 → … → v4.0.2 按版本降序批量建完 release 后，`latest` 仍指向 4.3.0，
+  可排除「按创建时间」这一可能）。**所以正式渠道不需要在 CNB 上手工维护锚点，镜像新版本即可自动跟上。**
+- **测试**：`.../-/releases/download/beta/...`，固定 tag `beta`，每次内测覆盖上传同名资产 —— 原因与 §5.1 完全相同
+  （kachina 的源地址编译在 exe 里，必须是「内容会变、地址不变」的锚点）。
+- **CNB 没有测试版的版本元数据**（`beta` 不是 semver，`latest.yml` 只反映正式版），
+  所以**测试通道的版本查询永远走 GitHub Releases API**，CNB 只承担安装包下载。
+  这也意味着：只开测试通道 + 只走国内源的用户，检查版本仍需要能访问 GitHub API（通常有镜像兜底）。
 
 通道选择存在 `settings.update_channel`（同时写 localStorage `fufumidi_update_channel`，
 保证启动瞬间就能读到），由前端作为参数传给 `update:check` / `update:launchUpdater`。
@@ -197,6 +250,9 @@ python scripts/upload-release-asset.py $env:GH_TOKEN qdTXTbp/FuFumidi beta `
 > 反过来，`--prerelease` 一定不能漏 —— 一旦 `beta` 锚点变成正式 release，
 > `releases/latest` 会指向它，所有正式用户都会收到内测包。
 
+第 4 步完成后，还要按 **§5.6** 把 `beta` 锚点的资产镜像到 CNB，
+否则「下载源 = 自动 / 国内」的测试者探测不到 CNB 锚点，会回退到 ghfast。
+
 ### 5.4 转正
 
 1. 版本号改为 `4.4.0`，重新构建（**不要**再夹带功能改动）。
@@ -212,10 +268,65 @@ python scripts/upload-release-asset.py $env:GH_TOKEN qdTXTbp/FuFumidi v4.4.0 `
 
 `releases/latest` 随即指向 4.4.0，正式与测试两条通道的用户都能升上来。
 
+最后按 **§5.6** 把该 tag 的资产镜像到 CNB（**含 `latest.yml`**，否则国内源查不到版本号）。
+
 ### 5.5 通道隔离回归（每次发版必做）
 
 在正式通道环境下「检查更新」，**看到任何 prerelease 版本号即为失败**。
 这条断言用于防止把测试版误发成正式 release。
+
+### 5.6 CNB 国内源镜像（每次发版必做）
+
+CNB 仓库 `FuFuCloud-mirror/FuFuMIDI` 是 GitHub Releases 的**资产镜像**，供「下载源 = 自动 / 国内」的用户走国内线路。
+它不承载任何独立版本，纯粹是同一批资产换一个下载地址。
+
+**必须镜像的资产**（与 kachina 增量更新相关）：
+
+| 资产 | 用途 | 需镜像到 |
+|---|---|---|
+| `FuFumidi.Install.exe` | **固定名**离线包，两条锚点都引用它 | 正式锚点 + `beta` 锚点 |
+| `FuFumidi.Install.X.Y.Z.exe` | 带版本号离线包（留档，可选） | 对应版本 tag |
+| `FuFumidi.update.exe` | 更新器本体（更新器会自更新，漏镜像会退到 GitHub） | 正式锚点 + `beta` 锚点 |
+| `latest.yml` | 版本元数据，`fetchCnbRelease()` 读它的 `version:` 字段 | **仅正式锚点** |
+
+**步骤**
+
+```powershell
+$env:CNB_TOKEN = '<CNB 访问令牌>'   # 从环境变量读，不要内联进脚本
+
+# 正式版发布后：镜像该 tag 的资产
+node <镜像脚本> --tag vX.Y.Z --assets "FuFumidi.Install.exe,FuFumidi.Install.X.Y.Z.exe,FuFumidi.update.exe,latest.yml"
+
+# 测试版发布后：额外把离线包覆盖到固定锚点 tag beta
+node <镜像脚本> --tag beta --assets "FuFumidi.Install.exe,FuFumidi.update.exe"
+```
+
+镜像走 CNB Release API 三步（脚本即封装这三步）：`POST /-/releases` 建/取 release →
+`POST /-/releases/{id}/asset-upload-url` 拿上传地址 → `PUT` 上传资产 → `POST verify_url` 确认。
+脚本是**幂等**的：已存在的同名资产会跳过，中断后直接重跑即可续传。
+
+> 一次性补历史 / 补漏的全量脚本在仓库外的 `d:\FuFuMIDI\cnb-mirror-releases.js`
+> （遍历 GitHub 全部 release，只挑上述 4 个资产名）。注意它当前把令牌**内联在源码里**，
+> 补完历史后应改为读环境变量，且**不要**把带令牌的副本提交进仓库。
+
+**发布后验证（两条锚点各查一次）**
+
+```powershell
+# 正式：version 必须等于本次正式版号；安装包必须 200 且 size 合理
+curl -sSL https://cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/releases/latest/download/latest.yml
+curl -sSI  https://cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/releases/latest/download/FuFumidi.Install.exe
+```
+
+**注意事项**
+
+- **未发过 beta 时 `beta` 锚点返回 404 是正常的**（`release for tag beta not found`）。
+  客户端 `pickUpdateSource()` 探测失败会自动换下一个源，功能不中断。
+- **`beta` 锚点不能顶掉 `latest`**：CNB 的 `is_latest` 按最高 semver 计算，`beta` 不是 semver 所以不应被标记。
+  但这一点**尚未在真实 `beta` tag 上验证过** —— 第一次发布 beta 后，请再查一次
+  `.../releases/latest/download/latest.yml`，若版本号变成了 beta 锚点的内容，
+  就把镜像脚本里 `beta` 那条改成 `prerelease: true` 后重建该 release。
+- CNB 的 `latest` 是**平台行为**，不是我们写死的：以后若 CNB 改成「按创建时间」决定 latest，
+  需要改为在建 release 时显式传 `make_latest`。
 
 ---
 
@@ -228,6 +339,9 @@ python scripts/upload-release-asset.py $env:GH_TOKEN qdTXTbp/FuFumidi v4.4.0 `
 | 更新完成后程序未自动打开 | 守护进程没起来 | 看 `<数据目录>\temp\fufumidi-restart.log`：缺 `[guard] start` = 守护进程没跑（注意 detached 的 PowerShell 不执行脚本，必须用 WMI 拉起，见 `main/update.js`）；有 `[guard]` 但停在 `updater appeared=False` = 更新器没起来 |
 | 下载卡在 0% | 主程序侧旧逻辑预下载离线包 | 已废弃：改为更新器内下载并显示进度 |
 | TLS/证书校验失败（构建/上传） | 本地网络工具干扰 | 构建用 `NODE_TLS_REJECT_UNAUTHORIZED=0`；上传脚本已 `verify=False` |
+| CNB 源 404（`release for tag beta not found`） | 还没镜像过 `beta` 锚点（本地从未发过 beta） | 正常，客户端会自动回退 ghfast；发 beta 时按 §5.6 镜像 |
+| CNB 的 `latest.yml` 版本号落后于 GitHub | 新版本发布后没镜像到 CNB | 按 §5.6 补镜像；补完 `latest` 会自动指向最高的正式版，无需手工改锚点 |
+| 「下载源 = 国内」但下载仍走 ghfast | CNB 源探测失败（未镜像 / 网络不通） | 属预期回退；确认 §5.6 已镜像，并 `curl -sSI` 验证 CNB 锚点可达 |
 
 ---
 
@@ -237,5 +351,7 @@ python scripts/upload-release-asset.py $env:GH_TOKEN qdTXTbp/FuFumidi v4.4.0 `
 |---|---|
 | `scripts/build-kachina.ps1` | 生成更新器 + 离线包（差分） |
 | `scripts/upload-release-asset.py` | 上传/覆盖 Release 资产（固定名） |
-| `Build/kachina.config.json` | 更新器内嵌源配置（ghfast 固定源） |
+| `build/kachina.config.json` | 更新器内嵌源配置（CNB / ghfast / ghproxy / ghproxy-net / GitHub，各带正式与测试源） |
 | `main/update.js` | 主进程更新服务（检查/启动更新器/守护重启） |
+| `main/download-source.js` | 下载源偏好解析 + CNB / GitHub 地址构造（更新、模型、音色共用） |
+| `d:\FuFuMIDI\cnb-mirror-releases.js` | 仓库外的一次性脚本：把 GitHub Release 资产全量镜像到 CNB（幂等、可续跑） |

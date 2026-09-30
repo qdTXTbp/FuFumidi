@@ -29,6 +29,27 @@ const GH_MIRRORS = [
   { id: 'ghproxy-net', prefix: 'https://ghproxy.net/' },
 ];
 
+// ── CNB 上的资源镜像仓库（公开仓库 —— CNB 的 raw 端点禁止秘密仓库）──
+// fufumidi：应用本体 / 更新包 / 以及各种超限大文件的 Release 资产（对象存储）
+// models  ：monologue82/Models 的整树镜像（git raw 直读）
+// media   ：monologue82/Media 的整树镜像（动态壁纸）
+// soundfonts：音色库 SF2 的小文件（git raw 直读）
+//
+// 注意：CNB 有两个不同的体积限制，务必区分 ——
+//   1) git 推送上限 256 MiB：超限文件 pre-receive 直接拒绝，根本推不进仓库
+//   2) git raw 读取上限 100 MiB：文件推得进去，但 /-/git/raw/ 读不出来，
+//      返回 errcode 2000033「raw file size xxx MiB exceeded 100 MiB, please pull via git client」
+// 因此：需要 raw 直读的文件必须 ≤100 MiB（首选 256 MiB 与 100 MiB 中的较小者，
+// 早期误按 256 MiB 判断，导致 100~256 MiB 之间的文件（FluidR3 141MB、Arachno 148MB、
+// 壁纸 215MB）在国内源下全部 413，已改走 Release 资产）。
+// 超限的一律走 Release 资产通道 —— cnbRepoReleaseUrl(<repo>, <tag>, <file>)，对象存储，1.5GB+ 可用。
+const CNB_MIRROR_REPOS = {
+  fufumidi: 'FuFuCloud-mirror/FuFuMIDI',
+  models: 'FuFuCloud-mirror/Models',
+  media: 'FuFuCloud-mirror/Media',
+  soundfonts: 'FuFuCloud-mirror/FuFumidiSoundFonts',
+};
+
 const SOURCES = ['auto', 'cnb', 'github'];
 const SOURCE_LABELS = { auto: '自动（优先国内）', cnb: '国内 · CNB', github: '全球 · GitHub' };
 
@@ -42,10 +63,23 @@ function sourceOf(settings) {
   try { return normSource(settings && settings.download_source); } catch (e) { return 'auto'; }
 }
 
+/** 当前下载源偏好（直接读设置；调用方无需再传 readSettings） */
+function currentSource() {
+  try { return sourceOf(require('./settings').readSettings()); } catch (e) { return 'auto'; }
+}
+
 /** 该偏好下是否优先走国内 CNB */
 function preferCnb(source) {
   const s = normSource(source);
   return s === 'auto' || s === 'cnb';
+}
+
+/** 按偏好把「CNB 地址」与「GitHub 系地址」合成候选列表：国内优先 CNB 打头，全球优先 GitHub 打头 */
+function orderUrls(cnbUrl, ghUrls, source) {
+  const gh = (Array.isArray(ghUrls) ? ghUrls : [ghUrls]).filter(Boolean);
+  const cnb = cnbUrl ? [cnbUrl] : [];
+  const ordered = preferCnb(source === undefined ? currentSource() : source) ? [...cnb, ...gh] : [...gh, ...cnb];
+  return [...new Set(ordered)];
 }
 
 // ── CNB 下载地址 ──
@@ -55,6 +89,16 @@ function cnbLatestUrl(file) { return CNB_RELEASES + 'latest/download/' + file; }
 function cnbTagUrl(tag, file) { return CNB_RELEASES + 'download/' + encodeURIComponent(tag) + '/' + file; }
 /** 最新版 latest.yml（electron-builder 产物，含 version 字段，可用于免认证查版本） */
 function cnbVersionUrl() { return cnbLatestUrl('latest.yml'); }
+
+/** 指定镜像仓库下某个 tag 的 Release 资产直链 */
+function cnbRepoReleaseUrl(repo, tag, file) {
+  return 'https://cnb.cool/' + repo + '/-/releases/download/' + encodeURIComponent(tag) + '/' + encodeURIComponent(file);
+}
+/** 指定镜像仓库下某个 ref 的原始文件直链（等价于 raw.githubusercontent.com/<org>/<repo>/<ref>/<path>） */
+function cnbRepoRawUrl(repo, ref, filePath) {
+  const p = String(filePath || '').split('/').map(encodeURIComponent).join('/');
+  return 'https://cnb.cool/' + repo + '/-/git/raw/' + encodeURIComponent(ref) + '/' + p;
+}
 
 /** 把 GitHub raw/资产地址套上镜像前缀，得到候选下载地址（不改动非 GitHub 地址） */
 function githubMirrorCandidates(url) {
@@ -67,11 +111,14 @@ module.exports = {
   SOURCE_LABELS,
   normSource,
   sourceOf,
+  currentSource,
   preferCnb,
+  orderUrls,
   // 仓库/地址常量
   CNB_REPO_PATH,
   CNB_WEB,
   CNB_RELEASES,
+  CNB_MIRROR_REPOS,
   GH_REPO,
   GH_WEB,
   GH_API,
@@ -81,5 +128,7 @@ module.exports = {
   cnbLatestUrl,
   cnbTagUrl,
   cnbVersionUrl,
+  cnbRepoReleaseUrl,
+  cnbRepoRawUrl,
   githubMirrorCandidates,
 };

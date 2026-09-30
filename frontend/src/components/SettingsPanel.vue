@@ -394,6 +394,7 @@ const gpu = reactive({
   status: '',
   progress: null,
   progressText: '',
+  packages: [],        // 预打包增强包（离线/自动安装失败时的备用），按需从主进程拉取
 });
 const gpuInstalled = computed(() => !!gpu.installedKind);
 const gpuCard = computed(() => {
@@ -559,6 +560,64 @@ function initGpu() {
   gpuRefreshInstalled();
   gpuLoadDetect();
 }
+// 预打包增强包：自动安装（pip）失败时的备用路径。列表来自主进程，
+// 主进程按下载源偏好先查 CNB / GitHub，所以国内网络下也能列出并走 CNB 下载。
+function gpuLoadPackages() {
+  if (!bridge || !bridge.gpuListPackages) return;
+  bridge.gpuListPackages().then((r) => {
+    const list = (r && r.ok && Array.isArray(r.packages)) ? r.packages : [];
+    gpu.packages = list.map((p) => ({ ...p, sizeText: p.size ? fmtSize(p.size) : '' }));
+  }).catch(() => { gpu.packages = []; });
+}
+// 下载并安装预打包增强包：进度复用 gpu:progress 事件（与一键安装同一条常驻通知条）
+async function gpuDownloadRemote(pkg) {
+  if (!bridge || !bridge.gpuDownloadPackage) { gpu.status = t('当前环境不支持下载增强包'); return; }
+  if (app.gpuInstall.active) { toast(t('GPU 增强包正在安装中，请稍候')); return; }
+  gpu.busy = true;
+  gpu.status = '';
+  app.gpuInstall.active = true;
+  app.gpuInstall.done = false;
+  app.gpuInstall.ok = false;
+  app.gpuInstall.error = '';
+  app.gpuInstall.percent = 0;
+  app.gpuInstall.text = t('正在下载增强包…');
+  app.gpuInstall.ts = Date.now();
+  app.gpuInstall.dismissed = false;
+  const un = bridge.onGpuProgress ? bridge.onGpuProgress((p) => {
+    if (!p) return;
+    if (p.done) gpuSetProgress(100, t('安装完成'));
+    else if (p.text) gpuSetProgress(gpu.progress || 2, p.text);
+    else if (p.percent != null && p.percent >= 0) gpuSetProgress(p.percent, (p.percent) + '%');
+  }) : null;
+  try {
+    const r = await bridge.gpuDownloadPackage({ url: pkg.url, name: pkg.name, size: pkg.size, kind: pkg.kind, files: pkg.files });
+    if (r && r.ok) {
+      gpu.status = t('增强包已下载并安装');
+      gpuSetProgress(100, t('安装完成'));
+      app.gpuInstall.done = true; app.gpuInstall.ok = true; app.gpuInstall.percent = 100;
+    } else if (r && r.canceled) {
+      gpu.status = t('已取消下载增强包');
+      gpuSetProgress(null, '');
+      app.gpuInstall.done = true; app.gpuInstall.ok = false; app.gpuInstall.error = t('已取消下载增强包');
+    } else {
+      gpu.status = t('下载安装失败：') + ((r && r.error) || t('未知'));
+      gpuSetProgress(null, '');
+      app.gpuInstall.done = true; app.gpuInstall.ok = false; app.gpuInstall.error = (r && r.error) || t('下载安装失败');
+    }
+    await gpuRefreshInstalled();
+    await gpuLoadDetect();
+  } catch (e) {
+    gpu.status = t('下载安装失败：') + String((e && e.message) || e);
+    gpuSetProgress(null, '');
+    app.gpuInstall.done = true; app.gpuInstall.ok = false; app.gpuInstall.error = String((e && e.message) || e);
+  } finally {
+    if (un) un();
+    gpu.busy = false;
+    app.gpuInstall.active = false;
+  }
+}
+// 切到 GPU 页签时才拉列表（含网络请求，不随设置页打开就发）
+watch(tab, (v) => { if (v === 'gpu') gpuLoadPackages(); }, { immediate: true });
 
 /* ---------------- 功能 ---------------- */
 async function pickDir(key) {
@@ -851,6 +910,16 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
                 <div style="height:100%;width:0%;background:linear-gradient(90deg,#4f94e0,#8fc0f0);transition:width .2s" :style="{ width: Math.min(100, (gpu.progress || 0)) + '%' }"></div>
               </div>
               <div class="gpu-prog-text">{{ gpu.progressText }}</div>
+            </div>
+            <!-- 预打包增强包：自动安装（pip）失败/无网络时的备用路径，可一键下载并安装 -->
+            <div v-if="gpu.packages.length" style="margin-top:12px;border-top:1px solid var(--hairline);padding-top:12px">
+              <div style="font-size:12px;color:var(--text-soft);margin-bottom:6px">{{ t('预打包增强包（自动安装失败时备用）') }}</div>
+              <div v-for="p in gpu.packages" :key="p.kind + '|' + p.name" style="display:flex;align-items:center;gap:8px;margin:6px 0">
+                <span style="flex:1;font-size:13px">{{ (p.kind === 'cuda' ? 'CUDA' : 'DirectML') + (p.split ? t('（分卷）') : '') }}</span>
+                <span style="font-size:12px;color:var(--text-soft)">{{ p.sizeText }}</span>
+                <button class="btn sm" @click="gpuDownloadRemote(p)" :disabled="gpu.busy || app.gpuInstall.active">{{ t('下载并安装') }}</button>
+              </div>
+              <div style="font-size:12px;color:var(--text-soft);margin-top:4px">{{ t('国内优先走 CNB 镜像，境外走 GitHub。') }}</div>
             </div>
             <div class="gpu-extra">
               <button class="btn sm" @click="gpuImportLocal" :disabled="gpu.busy || app.gpuInstall.active">{{ t('本地导入 ZIP') }}</button>

@@ -2,6 +2,7 @@
 // 主进程动态壁纸服务：桌面视频发现、GitHub 壁纸库列取与下载
 // ============================================================
 'use strict';
+const DS = require('./download-source');
 
 const path = require('path');
 const fs = require('fs');
@@ -144,6 +145,16 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
   const WALLPAPER_RAW = `https://raw.githubusercontent.com/${WALLPAPER_REPO}/main/${WALLPAPER_DIR}`;
   // Git LFS 视频需通过 media.githubusercontent.com 获取真实文件
   const WALLPAPER_MEDIA = `https://media.githubusercontent.com/media/${WALLPAPER_REPO}/main/${WALLPAPER_DIR}`;
+  // CNB 侧同一仓库的整树镜像：视频真身与缩略图都能走 git raw 直读（比 media 域名快得多）
+  const cnbWallpaperUrl = (name) => DS.cnbRepoRawUrl(DS.CNB_MIRROR_REPOS.media, 'main', `${WALLPAPER_DIR}/${name}`);
+  // 但 CNB 的 git raw 单文件上限是 100 MiB（超过返回 errcode 2000033
+  // "raw file size xxx MiB exceeded 100 MiB"），推得进仓库却读不出来。
+  // 超限壁纸只能作为 Release 资产（对象存储）分发 —— 与音色库、GPU 包同一套规则。
+  const CNB_WP_RELEASE_FILES = new Set(['studio_video_1716732543213.mp4']);
+  /** 壁纸在国内源的地址：超限的走 Release 资产，其余走 git raw 直读 */
+  const cnbBestWallpaperUrl = (name) => (CNB_WP_RELEASE_FILES.has(name)
+    ? DS.cnbRepoReleaseUrl(DS.CNB_MIRROR_REPOS.media, 'wallpapers-v1', name)
+    : cnbWallpaperUrl(name));
   const thumbCacheDir = Paths.cacheDir('wallpaper-thumbs');
   try { f.mkdirSync(thumbCacheDir, { recursive: true }); } catch (e) {}
   // 远程壁纸目录缓存：5 分钟内直接复用 GitHub API 结果
@@ -174,12 +185,19 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       const remoteThumbs = await Promise.all(vids.map(async (f) => {
         const base = f.name.replace(/\.(mp4|webm|mov)$/i, '');
         const th = thumbs.find(t => t.name.replace(/\.(jpg|jpeg|png)$/i, '') === base);
-        let thumb = th ? `${WALLPAPER_RAW}/${encodeURIComponent(th.name)}` : '';
-        if (thumb) {
-          const safeName = (th.name || f.name).replace(/[\\/:*?"<>|]/g, '_');
-          thumb = await fetchThumbDataCached(net, thumb, path.join(thumbCacheDir, safeName));
+        const safeName = ((th && th.name) || f.name).replace(/[\\/:*?"<>|]/g, '_');
+        // 缩略图：按下载源偏好先试 CNB 镜像，失败再回退 GitHub raw
+        let thumb = '';
+        if (th) {
+          for (const u of DS.orderUrls(cnbWallpaperUrl(th.name), `${WALLPAPER_RAW}/${encodeURIComponent(th.name)}`)) {
+            thumb = await fetchThumbDataCached(net, u, path.join(thumbCacheDir, safeName));
+            if (thumb) break;
+          }
         }
-        return { name: f.name, video: `${WALLPAPER_MEDIA}/${encodeURIComponent(f.name)}`, remote: `${WALLPAPER_MEDIA}/${encodeURIComponent(f.name)}`, thumb };
+        // 视频地址：国内优先给 CNB 镜像（视频是 LFS，GitHub media 域名在国内很慢）；
+        // 超限视频由 cnbBestWallpaperUrl 自动改用 Release 资产
+        const videoUrl = DS.orderUrls(cnbBestWallpaperUrl(f.name), `${WALLPAPER_MEDIA}/${encodeURIComponent(f.name)}`)[0];
+        return { name: f.name, video: videoUrl, remote: videoUrl, thumb };
       }));
       // 合并本地壁纸：远程项若本地已有同名文件 → 标记为已下载（local），不重复新增项
       const locals = await listLocalWallpapers();
@@ -269,7 +287,26 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
         try { if (evt && !evt.sender.isDestroyed()) evt.sender.send('wallpaper:downloadProgress', { name: safe, progress: p }); } catch (e) {}
       };
       sendP(0);
-      await streamDownload(url, tmp, (p) => sendP(p));
+      // 候选源：CNB 镜像（国内快）与 GitHub media，按下载源偏好排序，逐个回退
+      const cnb = cnbBestWallpaperUrl(safe);   // 超限视频自动改用 Release 资产地址
+      const gh = `${WALLPAPER_MEDIA}/${encodeURIComponent(safe)}`;
+      const candidates = /^https:\/\/cnb\.cool\//i.test(url)
+        ? DS.orderUrls(url, gh)
+        : DS.orderUrls(cnb, /^https:\/\/media\.githubusercontent\.com\//i.test(url) ? url : gh);
+      let lastErr = null;
+      let got = 0;
+      for (const u of candidates) {
+        try {
+          await streamDownload(u, tmp, (p) => sendP(p));
+          try { got = f.statSync(tmp).size; } catch (e) { got = 0; }
+          if (got > 0) break;
+          throw new Error('下载文件为空');
+        } catch (e) {
+          lastErr = e;
+          try { f.unlinkSync(tmp); } catch (e2) {}
+        }
+      }
+      if (!got) throw lastErr || new Error('所有下载源均失败');
       // 完整性校验：0 字节 = 下载失败/被拦截，删除残留避免假壁纸
       let size = 0;
       try { size = f.statSync(tmp).size; } catch (e) {}

@@ -3,6 +3,13 @@
 // ============================================================
 'use strict';
 const Paths = require('./paths');
+const DS = require('./download-source');
+
+/** 从 GitHub Release 资产地址里取出 tag：.../releases/download/<tag>/<file> */
+function ghReleaseTagOf(url) {
+  const m = String(url || '').match(/\/releases\/download\/([^/]+)\//);
+  return m ? m[1] : '';
+}
 
 function registerGpuIpc({
   ipcMain,
@@ -71,37 +78,84 @@ function registerGpuIpc({
     return { ok: true, removed: existed, restored };
   });
 
+  // GPU 增强包资产挂在**历史 tag** 上（如 v2.1.0 / gpu-v2），不在 releases/latest 里，
+  // 所以必须遍历 release 列表找到「第一个带 fufumidi-gpu-* 资产的 release」，不能只看 latest。
+  // 两边都查：GitHub 是资产名的权威来源；CNB 镜像仓库有一份同结构副本。
+  // 按下载源偏好决定先查哪边（与 update.js / download-source.js 的语义一致），
+  // 任一侧不可达或没找到就自动换另一侧 —— 国内网络下 GitHub API 常不通，靠回退仍能列出并下载。
+  const GPU_ASSET_RE = /^fufumidi-gpu-/i;
+  // 发现阶段必须限时：不加超时的话 GitHub 在国内会挂很久，设置页会一直转圈
+  const timeoutSignal = (ms) => {
+    try { return AbortSignal.timeout(ms); } catch (e) { return undefined; }
+  };
+  function firstGpuRelease(list) {
+    if (!Array.isArray(list)) return null;
+    for (const rel of list) {
+      if ((rel.assets || []).some((a) => GPU_ASSET_RE.test(a.name || ''))) return rel;
+    }
+    return null;
+  }
+  async function githubGpuReleases() {
+    const r = await fetch('https://api.github.com/repos/qdTXTbp/FuFumidi/releases?per_page=100',
+      { headers: { 'User-Agent': 'FuFumidi-Update' }, signal: timeoutSignal(8000) });
+    const data = await r.json();
+    return Array.isArray(data) ? data : null;
+  }
+  // 注意端点选择：api.cnb.cool 需要鉴权（匿名请求 401 "user is not logged in"），
+  // 应用是公开分发的、不能内嵌令牌，所以这里必须走 **cnb.cool 的 Web 同名路径** ——
+  // 它匿名可取，且要带上 Accept: application/vnd.cnb.api+json（否则返回 HTML 页面）。
+  // page_size 要显式给，默认只返回 10 条，可能漏掉带 GPU 资产的那个 release。
+  // 实测（2026-09-27）：该端点一次返回 46 个 release，assets 全部内联，无需逐个 tag 再查。
+  async function cnbGpuReleases() {
+    const repo = DS.CNB_MIRROR_REPOS.fufumidi;
+    const r = await fetch(`https://cnb.cool/${repo}/-/releases?page=1&page_size=100`,
+      { headers: { Accept: 'application/vnd.cnb.api+json' }, signal: timeoutSignal(8000) });
+    const j = await r.json();
+    const list = Array.isArray(j) ? j : (j.releases || null);
+    return Array.isArray(list) ? list : null;
+  }
+  async function findGpuRelease() {
+    // 必须显式把当前偏好传进去：preferCnb() 不传参时等价于 preferCnb(undefined)，
+    // 会被 normSource 归到 'auto' 而恒为 true，导致「全球优先」也去查 CNB。
+    const chain = DS.preferCnb(DS.currentSource()) ? [cnbGpuReleases, githubGpuReleases] : [githubGpuReleases, cnbGpuReleases];
+    for (const fetchList of chain) {
+      try {
+        const rel = firstGpuRelease(await fetchList());
+        if (rel) return rel;
+      } catch (e) { /* 换另一个源 */ }
+    }
+    return null;
+  }
+
   ipcMain.handle('gpu:listPackages', async () => {
     try {
-      const r = await fetch('https://api.github.com/repos/qdTXTbp/FuFumidi/releases?per_page=10', { headers: { 'User-Agent': 'FuFumidi-Update' } });
-      const data = await r.json();
+      const rel = await findGpuRelease();
+      if (!rel) return { ok: true, packages: [] };
       const out = [];
-      for (const rel of data) {
-        const assets = rel.assets || [];
-        for (const a of assets) {
-          if (a.name && /^fufumidi-gpu-directml\.zip$/i.test(a.name)) {
-            out.push({ tag: rel.tag_name, name: a.name, url: a.browser_download_url, size: a.size, kind: 'directml' });
-          }
-          if (a.name && /^fufumidi-gpu-cuda\.zip$/i.test(a.name)) {
-            out.push({ tag: rel.tag_name, name: a.name, url: a.browser_download_url, size: a.size, kind: 'cuda' });
-          }
+      const assets = rel.assets || [];
+      for (const a of assets) {
+        if (a.name && /^fufumidi-gpu-directml\.zip$/i.test(a.name)) {
+          out.push({ tag: rel.tag_name, name: a.name, url: a.browser_download_url, size: a.size, kind: 'directml' });
         }
-        const cudaParts = assets.filter(a => a.name && /^fufumidi-gpu-cuda(?:-parts)?\.(zip\.\d{3}|part\d+)$/i.test(a.name));
-        if (cudaParts.length) {
-          cudaParts.sort((a, b) => {
-            const ma = String(a.name).match(/(\d+)\s*$/), mb = String(b.name).match(/(\d+)\s*$/);
-            return (ma ? parseInt(ma[1],10) : 0) - (mb ? parseInt(mb[1],10) : 0);
-          });
-          out.push({
-            tag: rel.tag_name,
-            name: 'fufumidi-gpu-cuda-parts (split)',
-            kind: 'cuda',
-            split: true,
-            size: cudaParts.reduce((sum, a) => sum + (a.size || 0), 0),
-            url: cudaParts[0].browser_download_url,
-            files: cudaParts.map(a => ({ name: a.name, url: a.browser_download_url, size: a.size }))
-          });
+        if (a.name && /^fufumidi-gpu-cuda\.zip$/i.test(a.name)) {
+          out.push({ tag: rel.tag_name, name: a.name, url: a.browser_download_url, size: a.size, kind: 'cuda' });
         }
+      }
+      const cudaParts = assets.filter(a => a.name && /^fufumidi-gpu-cuda(?:-parts)?\.(zip\.\d{3}|part\d+)$/i.test(a.name));
+      if (cudaParts.length) {
+        cudaParts.sort((a, b) => {
+          const ma = String(a.name).match(/(\d+)\s*$/), mb = String(b.name).match(/(\d+)\s*$/);
+          return (ma ? parseInt(ma[1],10) : 0) - (mb ? parseInt(mb[1],10) : 0);
+        });
+        out.push({
+          tag: rel.tag_name,
+          name: 'fufumidi-gpu-cuda-parts (split)',
+          kind: 'cuda',
+          split: true,
+          size: cudaParts.reduce((sum, a) => sum + (a.size || 0), 0),
+          url: cudaParts[0].browser_download_url,
+          files: cudaParts.map(a => ({ name: a.name, url: a.browser_download_url, size: a.size }))
+        });
       }
       return { ok: true, packages: out };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
@@ -146,9 +200,8 @@ function registerGpuIpc({
   ipcMain.handle('gpu:packageUrl', async (_e, kind) => {
     try {
       const suffix = kind === 'cuda' ? 'cuda' : 'directml';
-      const r = await fetch('https://api.github.com/repos/qdTXTbp/FuFumidi/releases/latest', { headers: { 'User-Agent': 'FuFumidi-Update' } });
-      const rel = await r.json();
-      const assets = (rel.assets || []).filter(a => a.name && a.name.toLowerCase().includes('gpu-' + suffix) && a.name.toLowerCase().endsWith('.zip'));
+      const rel = await findGpuRelease();
+      const assets = ((rel && rel.assets) || []).filter(a => a.name && a.name.toLowerCase().includes('gpu-' + suffix) && a.name.toLowerCase().endsWith('.zip'));
       if (!assets.length) return { ok: false, error: '未找到 GPU 增强包资产：fufumidi-gpu-' + suffix + '.zip' };
       const a = assets[0];
       return { ok: true, url: a.browser_download_url, name: a.name, size: a.size };
@@ -179,11 +232,20 @@ function registerGpuIpc({
         if (!f || !f.url) throw new Error('missing file url');
         const name = f.name || decodeURIComponent((new URL(f.url).pathname.split('/').pop() || 'part'));
         const outPath = path.join(dlDir, name);
-        const mirrors = [f.url, 'https://gh.jasonzeng.dev/' + f.url, 'https://ghfast.top/' + f.url, 'https://ghproxy.net/' + f.url, 'https://gh-proxy.com/' + f.url];
+        // 候选源：自有 CNB 镜像（按下载源偏好排前/排后）+ GitHub 各加速镜像。
+        // GPU 包体积远超 CNB 的两个体积上限（git 推送 256 MiB / git raw 读取 100 MiB），
+        // 所以镜像只能落在 CNB Release 资产上（对象存储），地址形如
+        // /-/releases/download/<tag>/<file>；tag 与 GitHub 侧保持一致。
+        const cnbUrl = ghReleaseTagOf(f.url) ? DS.cnbRepoReleaseUrl(DS.CNB_MIRROR_REPOS.fufumidi, ghReleaseTagOf(f.url), name) : null;
+        const mirrors = DS.orderUrls(cnbUrl, DS.githubMirrorCandidates(f.url));
         let okDl = false;
         for (const u of mirrors) {
           if (_gpuCanceled) break;
           const out = fs.createWriteStream(outPath);
+          // 必须挂一个空的 error 监听：WriteStream 的打开是异步的，若此时目录被清理
+          // （下面 catch 里的 rmSync）/ 磁盘满 / 无权限，会 emit 'error'；没人接就是
+          // 未处理事件 → 直接崩掉主进程。真正的写失败由下面 out.write 的回调上报并捕获。
+          out.on('error', () => {});
           try {
             const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.16' }, signal: ctl.signal });
             if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);

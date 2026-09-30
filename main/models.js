@@ -7,6 +7,7 @@ const { spawn } = require('child_process');
 const AdmZip = require('adm-zip');
 const Paths = require('./paths');
 const MSST_CATALOG = require('./models-msst-catalog');
+const DS = require('./download-source');
 
 function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings }) {
   const _folderWatchers = new Map();
@@ -157,12 +158,21 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
   // 数据源：monologue82/Models 仓库 manifest.json（vocal/multi/single/vr 全部分类）+ 本地目录（models-msst-catalog.js，
   // 简介与 model_viewer.html 逐条一致）。manifest 首次拉取后缓存到 modelsDir/msst-manifest.json，离线可复用。
   const _msstRegistry = {};
-  const MSST_MANIFEST_HOSTS = [
+  // 自有 Models 仓库：GitHub 上游 + CNB 整树镜像（两者路径结构一致，只换前缀）
+  const MODELS_GH_REPO = 'monologue82/Models';
+  const MODELS_CNB_REPO = DS.CNB_MIRROR_REPOS.models;
+  const GH_RAW_PREFIXES = [
     'https://gh.jasonzeng.dev/https://raw.githubusercontent.com',
     'https://raw.githubusercontent.com',
     'https://ghfast.top/https://raw.githubusercontent.com',
     'https://gh-proxy.com/https://raw.githubusercontent.com',
   ];
+  /** 同一文件在「CNB 镜像 / GitHub 各加速前缀」下的候选地址，按下载源偏好排序 */
+  function modelSrcUrls(relPath, ref = 'main') {
+    const gh = GH_RAW_PREFIXES.map((h) => `${h}/${MODELS_GH_REPO}/${ref}/${relPath}`);
+    const cnb = DS.cnbRepoRawUrl(MODELS_CNB_REPO, ref, relPath);
+    return DS.orderUrls(cnb, gh, DS.sourceOf(readSettings()));
+  }
   function inferMsstArch(name) {
     const n = String(name || '').toLowerCase();
     if (n.includes('mdx23c')) return 'MDX23C';
@@ -188,9 +198,9 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
   async function ensureMsstModels() {
     let manifest = null;
     const manifestFile = path.join(modelsDir(), 'msst-manifest.json');
-    for (const h of MSST_MANIFEST_HOSTS) {
+    for (const u of modelSrcUrls('manifest.json')) {
       try {
-        const r = await net.fetch(`${h}/monologue82/Models/main/manifest.json`, { headers: { 'user-agent': 'FuFumidi' } });
+        const r = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi' } });
         if (r.ok) { manifest = await r.json(); break; }
       } catch (e) {}
     }
@@ -562,14 +572,14 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
   const SEG_MIN_BYTES = 4 * 1024 * 1024;   // 小于 4MB 不值得分段
   const SEG_CONCURRENCY = 4;      // 同时在跑的分段数
 
-  /** 由原始 URL 推导候选下载源（GitHub 走加速镜像，其它源原样） */
+  /** 由原始 URL 推导候选下载源（自有 Models 仓库优先 CNB 镜像；GitHub 走加速镜像，其它源原样） */
   function mirrorUrls(spec) {
     const raw = String(spec.url || '');
     const out = [];
     if (Array.isArray(spec.mirrors)) out.push(...spec.mirrors);
     if (!raw) return [...new Set(out.filter(Boolean))];
-    out.push(raw);
     if (/^https:\/\/(raw\.githubusercontent\.com|github\.com)\//i.test(raw)) {
+      const gh = [raw];
       for (const p of [
         'https://gh.jasonzeng.dev/',   // 与分卷下载同一个加速入口，国内通常最快
         'https://ghfast.top/',
@@ -577,8 +587,14 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         'https://ghproxy.net/',
         'https://hub.gitmirror.com/',
         'https://raw.gitmirror.com/',
-      ]) out.push(p + raw);
+      ]) gh.push(p + raw);
+      // 自有 Models 仓库的文件 → 追加 CNB 整树镜像，并按下载源偏好排到最前 / 最后
+      const m = raw.match(/^https:\/\/raw\.githubusercontent\.com\/monologue82\/Models\/main\/(.+)$/i);
+      const cnb = m ? DS.cnbRepoRawUrl(MODELS_CNB_REPO, 'main', m[1]) : null;
+      out.push(...DS.orderUrls(cnb, gh, DS.sourceOf(readSettings())));
+      return [...new Set(out.filter(Boolean))];
     }
+    out.push(raw);
     return [...new Set(out.filter(Boolean))];
   }
 
@@ -803,21 +819,14 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
   // 访问走 gh.jasonzeng.dev 加速，raw 直连 / ghfast / gh-proxy 作回退
   const SPLIT_CONCURRENCY = 4;
   async function downloadSplitRepo(spec, win, ctrl) {
-    const repo = spec.repo || 'monologue82/Models';
     const _cat = spec.splitCat || 'muscriptor';   // 分卷仓库分类：muscriptor / vocal / multi / single / vr
-    const base = 'main/' + _cat + '/' + spec.sizeKey;
-    const hosts = [
-      'https://gh.jasonzeng.dev/https://raw.githubusercontent.com',
-      'https://raw.githubusercontent.com',
-      'https://ghfast.top/https://raw.githubusercontent.com',
-      'https://gh-proxy.com/https://raw.githubusercontent.com',
-    ];
+    const base = _cat + '/' + spec.sizeKey;       // 仓库内相对路径（ref 由 modelSrcUrls 统一处理）
     const headers = { 'user-agent': 'FuFumidi' };
     // 1) 分卷清单（manifest.json）：parts 数 / 总大小 / SHA256
     let manifest = null, lastErr = null;
-    for (const h of hosts) {
+    for (const u of modelSrcUrls('manifest.json')) {
       try {
-        const r = await net.fetch(`${h}/${repo}/main/manifest.json`, { headers, signal: ctrl.signal });
+        const r = await net.fetch(u, { headers, signal: ctrl.signal });
         if (r.ok) { manifest = await r.json(); break; }
       } catch (e) { lastErr = e; }
     }
@@ -845,13 +854,14 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     fs.mkdirSync(partsDir, { recursive: true });
 
     // 2) 测速：对每个源下载 part01 前 256KB，取最快
-    const probe = async (host, bytes = 256 * 1024) => {
+    const partUrls = (name) => modelSrcUrls(`${base}/${name}`);
+    const allUrls = partUrls(partName(meta, 1));
+    const probe = async (u, bytes = 256 * 1024) => {
       const t0 = Date.now();
       try {
         const sig = AbortSignal.any ? AbortSignal.any([ctrl.signal, AbortSignal.timeout(90000)]) : ctrl.signal;
-        const u = `${host}/${repo}/${base}/${partName(meta, 1)}`;
         const r = await net.fetch(u, { headers, signal: sig });
-        if (!r.ok || !r.body) return { host, mbps: 0 };
+        if (!r.ok || !r.body) return { url: u, mbps: 0 };
         const reader = r.body.getReader();
         let got = 0;
         for (;;) {
@@ -861,13 +871,13 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
           if (got >= bytes) { try { await reader.cancel(); } catch (e) {} break; }
         }
         const ms = Math.max(1, Date.now() - t0);
-        return { host, mbps: got / 1024 / 1024 / (ms / 1000) };
-      } catch (e) { return { host, mbps: 0 }; }
+        return { url: u, mbps: got / 1024 / 1024 / (ms / 1000) };
+      } catch (e) { return { url: u, mbps: 0 }; }
     };
-    const speeds = await Promise.all(hosts.map(h => probe(h)));
+    const speeds = await Promise.all(allUrls.map(u => probe(u)));
     speeds.sort((a, b) => b.mbps - a.mbps);
-    const primaryHost = speeds[0].mbps > 0 ? speeds[0].host : hosts[0];
-    if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, text: `测速完成，选用 ${primaryHost.replace('https://', '')}（${speeds[0].mbps.toFixed(1)} MB/s）`, received: 0, total, percent: 0, done: false });
+    const primaryUrl = speeds[0].mbps > 0 ? speeds[0].url : allUrls[0];
+    if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, text: `测速完成，选用 ${primaryUrl.replace('https://', '')}（${speeds[0].mbps.toFixed(1)} MB/s）`, received: 0, total, percent: 0, done: false });
 
     // 3) 并行下载分卷（并发 SPLIT_CONCURRENCY，全部写入 .parts/）
     function partName(meta, i) { return (meta.model || 'model.safetensors') + '.part' + String(i).padStart(2, '0'); }
@@ -881,12 +891,15 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       }
       const tmp = dest + '.part';
       let ok = false;
-      for (const h of [primaryHost, ...hosts.filter(x => x !== primaryHost)]) {
+      // 与测速结果保持同一顺序：最快源优先（换成当前分卷的文件名），其余按下载源偏好回退
+      const first = primaryUrl.replace(partName(meta, 1), name);
+      const urls = [first, ...partUrls(name).filter((u) => u !== first)];
+      for (const u of urls) {
         if (_modelCancels.has(spec.id)) throw new Error('canceled');
         if (_modelPause.has(spec.id)) throw new Error('paused');
         let gd = null, ws = null;
         try {
-          gd = await fetchGuarded(`${h}/${repo}/${base}/${name}`, { headers, ctrl, connectMs: 30000, stallMs: 30000 });
+          gd = await fetchGuarded(u, { headers, ctrl, connectMs: 30000, stallMs: 30000 });
           const r = gd.res;
           ws = fs.createWriteStream(tmp);
           ws.on('error', () => {}); // 消费 'error' 事件，防 EPERM 等未捕获异常打崩主进程
@@ -1085,7 +1098,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     let out = null, keepPart = true, lastErr = null;
     try {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
-      const urls = [spec.url, 'https://ghfast.top/' + spec.url, 'https://gh-proxy.com/' + spec.url, 'https://ghproxy.net/' + spec.url].filter(Boolean);
+      const urls = mirrorUrls(spec);
       // 多源轮换 + 断点续传轮次：失败保留 .part，Range 续传（停滞/断连不再从零开始）
       const MAX_ROUNDS = 8;
       for (let round = 0; round < MAX_ROUNDS; round++) {
