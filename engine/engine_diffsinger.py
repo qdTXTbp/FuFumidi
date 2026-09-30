@@ -32,6 +32,10 @@ CUDAExecutionProvider / DmlExecutionProvider / CPUExecutionProvider；
         [--start-beat 4 --end-beat 8] [--context-sec 0.5] \
         [--device auto|cpu|cuda|dml]
 
+    # --notes 也可写成 @<json 文件路径>（整曲音符量大时推荐，规避 Windows 命令行上限）：
+    python engine_diffsinger.py render --voicebank <声库目录> \
+        --notes @notes.json --bpm 120 --out out.wav
+
 输出协议（与 music2midi.py / engine_utau.py 一致）：
     stdout 仅打印 `###RESULT {json}`；警告/提示走 stderr；
     进度用 `###PROG {json}`（percent 0-100）。
@@ -1810,8 +1814,18 @@ def cmd_render(args):
         return
 
     # ---- 3) 音符（拍 → 秒）----
+    # --notes 支持两种写法（与 engine_utau.py 约定一致）：
+    #   1) JSON 字面量             —— 适合少量音符 / 手工调试
+    #   2) @<json 文件路径>        —— 主进程默认用法：整曲数百个音符的 JSON 约
+    #      30–200 KB，直接拼进命令行会撞 Windows 32K 上限（spawn ENAMETOOLONG），
+    #      故落临时文件后只传路径。
     try:
-        notes = json.loads(args.notes)
+        raw = args.notes
+        if isinstance(raw, str) and raw.startswith("@"):
+            with open(raw[1:], "r", encoding="utf-8") as f:
+                notes = json.load(f)
+        else:
+            notes = json.loads(raw)
     except Exception as e:  # noqa: BLE001
         emit_result({"ok": False, "error": "notes JSON 解析失败：" + str(e)})
         return
@@ -2080,7 +2094,9 @@ def main():
 
     r = sub.add_parser("render", help="渲染音符序列为 WAV")
     r.add_argument("--voicebank", required=True, help="声库目录（含 dsconfig.yaml）")
-    r.add_argument("--notes", required=True, help='音符 JSON：[{"startBeat":0,"durBeat":1,"pitch":60,"lyric":"啊"}]')
+    r.add_argument("--notes", required=True, help='音符 JSON，或 @文件路径：'
+                                                   '[{"startBeat":0,"durBeat":1,"pitch":60,"lyric":"啊"}]；'
+                                                   '整曲建议 @<临时 json 文件>，避免命令行超长')
     r.add_argument("--bpm", type=float, default=120.0, help="速度（BPM，拍→秒换算）")
     r.add_argument("--vocoder", default=None, help="声码器 onnx 或目录（声库未自带时使用）")
     r.add_argument("--out", required=True, help="输出 WAV 路径")
