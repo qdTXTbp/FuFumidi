@@ -5,6 +5,7 @@
 // - 下载中关闭抽屉 → 全屏弹窗实时显示 速度 + 进度（可取消）
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
+import DiffSingerCatalog from './DiffSingerCatalog.vue';
 import { useAppStore } from '../stores/app';
 import { t } from '../core/i18n.js';
 
@@ -17,6 +18,7 @@ const TABS = computed(() => [
   { id: 'transcribe', label: t('转录模型'), ic: 'transcribe' },
   { id: 'separate', label: t('人声分离'), ic: 'mic' },
   { id: 'other', label: t('修复·VR'), ic: 'box' },
+  { id: 'diffsinger', label: t('DiffSinger 声库'), ic: 'spark' },
 ]);
 const curTab = ref('transcribe');
 
@@ -104,7 +106,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
         <div class="page-title">{{ t('模型管理') }}</div>
         <div class="page-sub">{{ TABS.map(tb => tb.label + ' ' + countFor(tb.id)).join(' · ') }}</div>
       </div>
-      <button class="btn sm ghost" @click="refresh">{{ t('刷新') }}</button>
+      <button v-if="curTab !== 'diffsinger'" class="btn sm ghost" @click="refresh">{{ t('刷新') }}</button>
     </div>
 
     <!-- 分类页签 -->
@@ -115,13 +117,16 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
     </div>
 
     <!-- 醒目提示：新模型下载后需补全依赖 -->
-    <div class="vm-dep-tip">
+    <div v-if="curTab !== 'diffsinger'" class="vm-dep-tip">
       <span class="vm-dep-ic"><Icon name="zap" :size="14" /></span>
       <span>{{ t('下载新模型后请去「资源管理」里补全依赖，否则模型可能无法使用') }}</span>
     </div>
 
+    <!-- DiffSinger 声库目录（独立板块，非模型卡片的 kind 分组） -->
+    <DiffSingerCatalog v-if="curTab === 'diffsinger'" />
+
     <!-- 卡片网格 -->
-    <Transition name="vmfade" mode="out-in">
+    <Transition v-else name="vmfade" mode="out-in">
       <div class="vm-grid" :key="curTab">
         <div v-for="(m, i) in tabbedList" :key="m.id" class="vm-card" :class="{ inst: m.exists, down: prog[m.id] && prog[m.id].active }" :style="{ animationDelay: (i * 40) + 'ms' }" @click="detail = m">
           <div class="vm-top" :class="'k-' + (m.kind || 'other')"></div>

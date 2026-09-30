@@ -780,6 +780,127 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     return { ok: true };
   });
 
+  /* ---------------- ModelScope 声库目录（资源中心 · 模型管理 → DiffSinger） ---------------- */
+  // 数据源：ModelScope aihobbyist/ACG-DiffSinger-VoiceDB（作者 @红血球AE3803，CC-BY-NC-4.0）。
+  // 清单一律由 scripts/diffsinger-ms/sync.mjs 从官方 API 抽取生成到 diffsinger-ms-catalog.js，
+  // UI 只消费生成的静态模块 —— 保证「完整列出、不遗漏、不截断」，且可随上游更新一键同步。
+  // 下载地址全部为 ModelScope 官方直连（全球同源），不做任何镜像替换。
+  const MSCat = (() => { try { return require('./diffsinger-ms-catalog'); } catch (e) { return null; } })();
+
+  ipcMain.handle('diffsinger:msCatalog', () => {
+    try {
+      if (!MSCat) return { ok: false, error: '声库目录数据缺失（请重新构建应用）' };
+      const root = vbRoot();
+      const installedNames = (() => {
+        try {
+          if (!fs.existsSync(root)) return new Set();
+          return new Set(fs.readdirSync(root).filter((n) => {
+            try { return fs.statSync(path.join(root, n)).isDirectory(); } catch (e) { return false; }
+          }));
+        } catch (e) { return new Set(); }
+      })();
+      const works = MSCat.WORKS.map((w) => ({
+        id: w.id,
+        label: w.label,
+        source: w.source,
+        categories: w.categories.map((c) => ({
+          source: c.source,
+          label: c.label,
+          desc: c.desc,
+          models: c.models.map((m) => ({
+            name: m.name,
+            work: m.work,
+            workId: m.workId,
+            category: m.category,
+            desc: m.desc,
+            path: m.path,
+            size: m.size,
+            placeholder: !!m.placeholder,
+            url: m.url,
+            installed: installedNames.has(m.name),
+          })),
+        })),
+      }));
+      return {
+        ok: true,
+        repo: MSCat.MS_REPO,
+        repoUrl: `https://www.modelscope.cn/models/${MSCat.MS_REPO.owner}/${MSCat.MS_REPO.name}`,
+        author: '@红血球AE3803',
+        license: 'CC-BY-NC-4.0（非商用）',
+        stats: MSCat.STATS,
+        works,
+        dir: root,
+      };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+
+  // 直连 ModelScope 官方地址下载声库，下载完自动解压并注册到本地声库库。
+  // cfg: { name, path, url?, size? }（url 缺省时按上游路径现算，确保始终指向官方地址）
+  ipcMain.handle('diffsinger:msDownload', async (_e, cfg) => {
+    const win = BrowserWindow.fromWebContents(_e.sender);
+    const name = String((cfg && cfg.name) || '').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim();
+    const id = name || ('ms_' + Date.now());
+    const send = (p) => { if (win && !win.isDestroyed()) win.webContents.send('diffsinger:msProgress', { id, ...p }); };
+    try {
+      if (!MSCat) return { ok: false, error: '声库目录数据缺失（请重新构建应用）' };
+      const rec = MSCat.BY_PATH.get(String((cfg && cfg.path) || ''));
+      if (!rec) return { ok: false, error: '目录中不存在该声库条目' };
+      if (rec.placeholder) return { ok: false, error: '该声库在上游仓库中尚未上传权重（仅占位文件），暂不可下载' };
+      if (!enabled()) return { ok: false, error: '请先启用 DiffSinger 模块' };
+
+      const dlDir = path.join(Paths.tempDir(), 'diffsinger-dl');
+      fs.mkdirSync(dlDir, { recursive: true });
+      const zipPath = path.join(dlDir, 'ms-' + id + '.zip');
+      const entry = { isUserAbort: false };
+      // 直连官方地址；不追加任何镜像候选，保证全球同源一致
+      const url = rec.url || MSCat.msFileUrl(rec.path);
+      await downloadWithMirrors({
+        urls: [url],
+        out: zipPath,
+        minSize: 1e5,
+        isUserAbort: entry,
+        onProgress: (p) => send({
+          phase: 'download',
+          percent: p.total ? Math.min(88, Math.round((p.received / p.total) * 88)) : 0,
+          received: p.received, total: p.total, done: false, error: p.error || '', host: p.host,
+        }),
+      });
+      send({ phase: 'extract', percent: 90, done: false });
+      const AdmZip = require('adm-zip');
+      const zip = new AdmZip(zipPath);
+      const stage = path.join(dlDir, 'ms-' + id + '-extract');
+      try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
+      fs.mkdirSync(stage, { recursive: true });
+      zip.extractAllTo(stage, true);
+      const cfgDir = findInTree(stage, 'dsconfig.yaml', 4);
+      if (!cfgDir) throw new Error('声库包里没有 dsconfig.yaml（包结构可能已变更）');
+      const root = vbRoot();
+      fs.mkdirSync(root, { recursive: true });
+      let finalDir = path.join(root, id);
+      let i = 2;
+      while (fs.existsSync(finalDir)) { finalDir = path.join(root, id + '_' + i++); }
+      fs.cpSync(cfgDir, finalDir, { recursive: true });
+      try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
+      try { fs.rmSync(zipPath, { force: true }); } catch (e2) {}
+      if (!findInTree(finalDir, 'dsconfig.yaml', 0)) throw new Error('安装后未找到 dsconfig.yaml');
+      send({ phase: 'done', percent: 100, done: true });
+      return { ok: true, name: id, dir: finalDir, size: dirBytes(finalDir), source: 'modelscope' };
+    } catch (err) {
+      send({ phase: 'error', percent: 0, done: true, error: String((err && err.message) || err) });
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+
+  ipcMain.handle('diffsinger:msCancelDownload', (_e, name) => {
+    const id = String(name || '');
+    const key = path.join(Paths.tempDir(), 'diffsinger-dl', 'ms-' + id + '.zip');
+    const ent = _dlAborts.get(key);
+    if (ent) { ent.isUserAbort = true; try { ent.ctrl.abort(); } catch (e) {} }
+    return { ok: true };
+  });
+
   /* ---------------- 声库信息与渲染 ---------------- */
   // 统一的「启用 + 组件就绪」前置检查：错误信息给出分步指引
   function precheck(voicebank) {

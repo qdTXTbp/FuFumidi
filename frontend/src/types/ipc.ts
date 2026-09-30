@@ -351,6 +351,67 @@ export interface DiffsingerVoicebankProgress {
   error?: string;
 }
 
+/** ModelScope 声库目录条目（diffsinger:msCatalog） */
+export interface DiffsingerMsModel {
+  name: string;
+  work: string;
+  workId: string;
+  category: string;
+  desc: string;
+  /** 上游仓库内相对路径，同时作为唯一定位键 */
+  path: string;
+  size: number;
+  /** true = 上游仅占位文件，尚无真实权重 */
+  placeholder: boolean;
+  /** 直连 ModelScope 官方地址（全球同源） */
+  url: string;
+  installed: boolean;
+}
+
+export interface DiffsingerMsCategory {
+  source: string;
+  label: string;
+  desc: string;
+  models: DiffsingerMsModel[];
+}
+
+export interface DiffsingerMsWork {
+  id: string;
+  label: string;
+  source: string;
+  categories: DiffsingerMsCategory[];
+}
+
+/** ModelScope 声库目录概览（diffsinger:msCatalog） */
+export interface DiffsingerMsCatalog {
+  ok: boolean;
+  repo?: { owner: string; name: string; revision: string };
+  repoUrl?: string;
+  author?: string;
+  license?: string;
+  stats?: {
+    total: number;
+    available: number;
+    placeholder: number;
+    works: { id: string; label: string; source: string; models: number; categories: number }[];
+  };
+  works?: DiffsingerMsWork[];
+  dir?: string;
+  error?: string;
+}
+
+/** ModelScope 声库下载进度（diffsinger:msProgress） */
+export interface DiffsingerMsProgress {
+  id: string;
+  phase?: 'download' | 'extract' | 'done' | 'error';
+  received?: number;
+  total?: number;
+  percent: number;
+  done: boolean;
+  error?: string;
+  host?: string;
+}
+
 /** 声库 inspect 结果（diffsinger:inspectVoicebank） */
 export interface DiffsingerVoicebankInfo {
   ok: boolean;
@@ -531,6 +592,9 @@ export interface FuBridge {
   diffsingerVoicebankRegistry(): Promise<{ ok: boolean; dir?: string; list?: DiffsingerVoicebankEntry[]; error?: string }>;
   diffsingerDownloadVoicebank(id: string): Promise<GeneralResult & { canceled?: boolean; existed?: boolean; name?: string; dir?: string; size?: number }>;
   diffsingerCancelVoicebankDownload(id: string): Promise<GeneralResult>;
+  diffsingerMsCatalog(): Promise<DiffsingerMsCatalog>;
+  diffsingerMsDownload(cfg: { name: string; path: string }): Promise<GeneralResult & { canceled?: boolean; name?: string; dir?: string; size?: number; source?: string }>;
+  diffsingerMsCancelDownload(name: string): Promise<GeneralResult>;
   diffsingerInspectVoicebank(cfg: { voicebank: string }): Promise<DiffsingerVoicebankInfo>;
   diffsingerRender(cfg: {
     voicebank: string;
@@ -543,6 +607,7 @@ export interface FuBridge {
   }): Promise<DiffsingerRenderResult>;
   onDiffsingerRuntimeProgress(cb: (p: DiffsingerRuntimeProgress) => void): () => void;
   onDiffsingerVoicebankProgress(cb: (p: DiffsingerVoicebankProgress) => void): () => void;
+  onDiffsingerMsProgress(cb: (p: DiffsingerMsProgress) => void): () => void;
   onDiffsingerRenderProgress(cb: (p: { percent?: number; text?: string }) => void): () => void;
   pickZip(): Promise<string[] | null>;
 
