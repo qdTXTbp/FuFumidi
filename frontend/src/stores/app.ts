@@ -15,6 +15,7 @@ export const VIEWS = [
   { id: 'transcode', label: '转译', ic: 'convert' },
   { id: 'resources', label: '资源中心', ic: 'box' },
   { id: 'utau', label: 'UTAU', ic: 'utau' },
+  { id: 'diffsinger', label: 'DiffSinger', ic: 'utau' },
 ];
 
 // 旧子视图 ID → 所属分组父视图，保留内部跳转（如“同步到乐谱”“打开播放”）

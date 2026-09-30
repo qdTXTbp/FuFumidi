@@ -274,6 +274,109 @@ export interface VoicebankProgress {
   error?: string;
 }
 
+/* ---------------- DiffSinger 模块化集成 ---------------- */
+
+/** DiffSinger 组件安装状态（diffsinger:status） */
+export interface DiffsingerStatus {
+  ok: boolean;
+  enabled: boolean;
+  deps: {
+    installed: string[];
+    missing: string[];
+    ok: boolean;
+    error?: string;
+    /** 模块未启用时的占位标记 */
+    skipped?: boolean;
+  };
+  vocoder: {
+    installed: boolean;
+    dir: string;
+    runtime?: Record<string, any>;
+  };
+  voicebankDir: string;
+  voicebankCount: number;
+  /** 启用 + 依赖 + 声码器 三者齐备，可渲染 */
+  ready: boolean;
+  error?: string;
+}
+
+/** DiffSinger 公开声库条目（diffsinger:voicebankRegistry） */
+export interface DiffsingerVoicebankEntry {
+  id: string;
+  name: string;
+  author: string;
+  lang: string;
+  desc: string;
+  license: string;
+  officialUrl: string;
+  installed: boolean;
+  dir: string;
+  size: number;
+}
+
+/** 组件安装进度（diffsinger:runtimeProgress） */
+export interface DiffsingerRuntimeProgress {
+  phase?: 'deps' | 'vocoder' | 'error';
+  percent: number;
+  text?: string;
+  received?: number;
+  total?: number;
+  done?: boolean;
+}
+
+/** 声库下载进度（diffsinger:voicebankProgress） */
+export interface DiffsingerVoicebankProgress {
+  id: string;
+  phase?: 'download' | 'extract' | 'done' | 'error';
+  received?: number;
+  total?: number;
+  percent: number;
+  done: boolean;
+  error?: string;
+}
+
+/** 声库 inspect 结果（diffsinger:inspectVoicebank） */
+export interface DiffsingerVoicebankInfo {
+  ok: boolean;
+  name?: string;
+  version?: string;
+  languages?: string[];
+  phonemeCount?: number;
+  phonemes?: string[];
+  hasAcoustic?: boolean;
+  hasVariance?: boolean;
+  /** 声库自带声码器路径（为空 = 依赖通用组件位） */
+  vocoder?: string;
+  builtinVocoder?: boolean;
+  dictionaryWords?: number;
+  sampleRate?: number;
+  error?: string;
+}
+
+/** 调教音符（DiffSinger）：与 UTAU 同款拍制坐标 */
+export interface DiffsingerNote {
+  startBeat: number;
+  durBeat: number;
+  pitch: number;
+  lyric: string;
+  vibrato?: boolean;
+  vibDepth?: number;
+  vibFreq?: number;
+  vibFade?: number;
+  pitchOffset?: number;
+}
+
+/** DiffSinger 渲染结果（diffsinger:render） */
+export interface DiffsingerRenderResult {
+  ok: boolean;
+  out?: string;
+  bytes?: Uint8Array;
+  duration_ms?: number;
+  warnings?: string[];
+  engineVersion?: string;
+  error?: string;
+}
+
 /** 数据目录概览（system:dataRoot） */
 export interface DataRootOverview {
   ok: boolean;
@@ -365,6 +468,24 @@ export interface FuBridge {
   utauDownloadVoicebank(id: string): Promise<{ ok: boolean; canceled?: boolean; existed?: boolean; name?: string; dir?: string; files?: number; size?: number; error?: string }>;
   utauCancelVoicebankDownload(id: string): Promise<GeneralResult>;
   onVoicebankProgress(cb: (p: VoicebankProgress) => void): () => void;
+
+  // DiffSinger 模块化集成（未启用模块时 status 返回 enabled=false，组件零下载）
+  diffsingerStatus(): Promise<DiffsingerStatus>;
+  diffsingerSetEnabled(on: boolean): Promise<GeneralResult & { enabled?: boolean }>;
+  diffsingerInstallRuntime(): Promise<GeneralResult>;
+  diffsingerCancelRuntimeInstall(): Promise<GeneralResult>;
+  diffsingerUninstallRuntime(opts?: { alsoVoicebanks?: boolean }): Promise<GeneralResult>;
+  diffsingerListVoicebanks(): Promise<{ ok: boolean; list?: { name: string; dir: string; size?: number }[]; error?: string }>;
+  diffsingerImportVoicebankZip(directPath?: string): Promise<GeneralResult & { canceled?: boolean; kind?: 'voicebank' | 'vocoder'; name?: string; dir?: string; size?: number }>;
+  diffsingerDeleteVoicebank(dir: string): Promise<GeneralResult>;
+  diffsingerVoicebankRegistry(): Promise<{ ok: boolean; dir?: string; list?: DiffsingerVoicebankEntry[]; error?: string }>;
+  diffsingerDownloadVoicebank(id: string): Promise<GeneralResult & { canceled?: boolean; existed?: boolean; name?: string; dir?: string; size?: number }>;
+  diffsingerCancelVoicebankDownload(id: string): Promise<GeneralResult>;
+  diffsingerInspectVoicebank(cfg: { voicebank: string }): Promise<DiffsingerVoicebankInfo>;
+  diffsingerRender(cfg: { voicebank: string; notes: DiffsingerNote[]; bpm?: number }): Promise<DiffsingerRenderResult>;
+  onDiffsingerRuntimeProgress(cb: (p: DiffsingerRuntimeProgress) => void): () => void;
+  onDiffsingerVoicebankProgress(cb: (p: DiffsingerVoicebankProgress) => void): () => void;
+  onDiffsingerRenderProgress(cb: (p: { percent?: number; text?: string }) => void): () => void;
   pickZip(): Promise<string[] | null>;
 
   // gpu

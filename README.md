@@ -65,6 +65,7 @@ A short map of the main views. Each view is reachable from the sidebar or via th
 | Score | Verovio score view and PDF export. |
 | Transcribe | Audio to MIDI (see below). |
 | Convert | MIDI to audio and MIDI to video. |
+| DiffSinger | Optional AI singing synthesis: components download on demand after enabling; tune and render directly from library MIDI (see below). |
 | Resources | Model, soundfont and asset management. |
 | Settings | Appearance, engine, plugins, keyboard shortcuts, i18n. |
 
@@ -93,6 +94,14 @@ The engine layer is spread across a small family of Python modules so a specific
 - `engine/diag.py` - diagnostic export for support reports.
 
 Transcription results are validated by `engine/tests/`, which exercises the pipeline end-to-end with the fixture files `data/_test_melody.wav` and `data/_test_out.mid`.
+
+---
+
+## DiffSinger Singing Synthesis (Optional Module)
+
+DiffSinger is a **fully optional** AI singing-synthesis module: disabled by default with zero downloads and zero disk footprint; only after enabling does it fetch the two component groups on demand — the Python inference dependencies (`onnxruntime` / `pyyaml`) and the universal NSF-HiFiGAN vocoder (DiffSinger Community Vocoder release by openvpi). **The official training repository is never cloned**: voicebanks ship with ONNX models, and `engine/engine_diffsinger.py` runs inference directly (phonemization → duration allocation → frame-level pitch curve → acoustic → vocoder → WAV), the same way OpenUTAU loads them.
+
+The tuning workbench lets you **pick a MIDI directly from your existing music library**: it parses all non-drum tracks, imports the chosen melody track as the base note sequence, and renders singing after per-note lyric / pitch / duration / vibrato editing — with playback and WAV export. Voicebanks can be imported locally (zip / .oudep) or downloaded from the curated public registry.
 
 ---
 

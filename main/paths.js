@@ -122,6 +122,10 @@ function gpuEnhanceRoot() { return areaDir('gpu-enhancements'); }
 function soundfontsDir() { return areaDir('soundfonts'); }
 /** UTAU 声库目录 */
 function voicebanksDir() { return areaDir('voicebanks'); }
+/** DiffSinger 模块根目录（运行时组件与通用声码器；模块未启用时保持为空） */
+function diffsingerRoot() { return areaDir('diffsinger'); }
+/** DiffSinger 声库目录 */
+function diffsingerVoicebanksDir() { return areaDir('diffsinger-voicebanks'); }
 /** 曲库 MIDI 真实文件目录（不迁移：本目录是本次新增的） */
 function midiDir() { return ensure(at('midi')); }
 /** 第三方缓存根目录 */
@@ -148,6 +152,8 @@ function applyToEnv(env) {
   env.FUFUMIDI_MODELS_DIR = modelsDir();
   env.FUFUMIDI_SOUNDFONTS_DIR = soundfontsDir();
   env.FUFUMIDI_MIDI_DIR = midiDir();
+  env.FUFUMIDI_DIFFSINGER_ROOT = diffsingerRoot();
+  env.FUFUMIDI_DIFFSINGER_VB_DIR = diffsingerVoicebanksDir();
   env.FUFUMIDI_TEMP_DIR = tempDir();
   env.FUFUMIDI_CACHE_DIR = cacheRoot();
 
@@ -394,6 +400,8 @@ async function overview() {
     { key: 'gpu-enhancements', label: 'GPU 增强包' },
     { key: 'soundfonts', label: '音色库' },
     { key: 'voicebanks', label: 'UTAU 声库' },
+    { key: 'diffsinger', label: 'DiffSinger 组件' },
+    { key: 'diffsinger-voicebanks', label: 'DiffSinger 声库' },
     { key: 'midi', label: 'MIDI 曲库文件' },
     { key: 'cache', label: '第三方缓存' },
     { key: 'temp', label: '中间产物' },
@@ -446,6 +454,8 @@ module.exports = {
   gpuEnhanceRoot,
   soundfontsDir,
   voicebanksDir,
+  diffsingerRoot,
+  diffsingerVoicebanksDir,
   midiDir,
   cacheRoot,
   cacheDir,

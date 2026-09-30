@@ -66,6 +66,7 @@ FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编�
 | 乐谱 | Verovio 制谱与 PDF 导出。 |
 | 转录 | 音频转 MIDI（详见下文）。 |
 | 转换 | MIDI 转音频与 MIDI 转视频。 |
+| DiffSinger | 可选 AI 歌声合成：启用后按需下载组件，从曲库 MIDI 直接调教渲染（详见下文）。 |
 | 资源 | 模型、音色库与素材管理。 |
 | 设置 | 外观、引擎、插件、快捷键、语言。 |
 
@@ -94,6 +95,14 @@ FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编�
 - `engine/diag.py` - 诊断导出，用于支持反馈。
 
 转录流程由 `engine/tests/` 端到端验证，使用 `data/_test_melody.wav` 与 `data/_test_out.mid` 作为测试素材。
+
+---
+
+## DiffSinger 歌声合成（可选模块）
+
+DiffSinger 是**完全可选**的 AI 歌声合成模块：默认关闭、未启用时零下载零占用；启用后才按需安装两类组件——Python 推理依赖（`onnxruntime` / `pyyaml`）与通用 NSF-HiFiGAN 声码器（openvpi 社区声码器）。**不克隆官方训练仓库**：声库发布时自带 ONNX 模型，推理直接由 `engine/engine_diffsinger.py` 加载（音素化 → 时长分配 → 帧级音高曲线 → acoustic → vocoder → WAV），与 OpenUTAU 的加载方式一致。
+
+调教工作台支持**直接从已有音乐库选择 MIDI 曲目**：解析全部非鼓轨、选旋律轨一键导入为基底音符序列，逐音符编辑歌词/音高/时长/颤音后渲染试听或导出 WAV。声库支持本地导入 zip / .oudep，也提供公开声库一键下载。
 
 ---
 

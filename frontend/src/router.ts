@@ -19,6 +19,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/models', redirect: { path: '/resources', query: { tab: 'model' } } },
   { path: '/soundfonts', redirect: { path: '/resources', query: { tab: 'soundfonts' } } },
   { path: '/utau', name: 'utau', component: () => import('./views/ViewUtau.vue') },
+  { path: '/diffsinger', name: 'diffsinger', component: () => import('./views/ViewDiffSinger.vue') },
   { path: '/:pathMatch(.*)*', redirect: '/home' },
 ];
 

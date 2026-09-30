@@ -49,6 +49,7 @@ const { createDbService } = require('./main/db');
 const { registerLibraryIpc } = require('./main/library');
 const { registerWallpaperIpc } = require('./main/wallpaper');
 const { registerUtauIpc } = require('./main/utau');
+const { registerDiffsingerIpc } = require('./main/diffsinger');
 const { registerSoundfontWorkshopIpc } = require('./main/soundfonts');
 const { createWindow, configureSession, openFileFromArgv, openPath } = require('./main/window');
 const { pyLit, parsePyJson } = require('./main/py-util');
@@ -118,6 +119,8 @@ if (!gotLock) {
     registerSettingsIpc({ ipcMain, readSettings, writeSettings, db: DbService });
     registerWallpaperIpc({ ipcMain, app, fs, net, runEngineInline, parsePyJson });
     registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawnEngine });
+    // DiffSinger 模块化集成：默认关闭；启用后才按需下载推理依赖与通用声码器（模块内自检）
+    registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawn, spawnEngine, resolvePython, engineEnv, readSettings, writeSettings });
     registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, net });
     registerPluginsIpc();
     registerGpuIpc({

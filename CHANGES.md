@@ -4,6 +4,20 @@
 
 ---
 
+## 0. DiffSinger 模块化集成（可选 AI 歌声合成）
+
+- **完全可选模块**：`settings.diffsinger_enabled` 默认关闭；未启用时零下载、零磁盘占用，应用行为与原先一致。
+- **启用后才按需下载组件**（`main/diffsinger.js` → `diffsinger:installRuntime`）：
+  1. Python 推理依赖 `onnxruntime` / `pyyaml`（pip 安装，按 `download_source` 偏好选择官方源/清华镜像，失败自动换源，流式日志）；
+  2. 通用声码器 NSF-HiFiGAN onnx（openvpi 社区声码器 Release，多源加速 + 断点续传 + 停滞看门狗，约 55 MB）。
+- **不克隆 openvpi/DiffSinger 官方仓库**：推理直接加载声库自带的 ONNX 模型（acoustic + vocoder），官方仓库是训练框架，引入它只会拖入数百 MB 的 torch 训练依赖。
+- **声库管理**：本地导入 zip / OpenUTAU 依赖包（.oudep，安装为通用声码器）；公开声库注册表一键下载（收录作者公开仓库条目，多源 + 进度 + 取消）。声库落在 `<数据根目录>/diffsinger-voicebanks/`。
+- **引擎** `engine/engine_diffsinger.py`（ONNX 推理）：歌词查声库词典成音素 → 音素时长分配 → 帧级音高曲线（直线 + 颤音/音分偏移，不经 variance 改写，用户画什么就是什么）→ acoustic ONNX → NSF-HiFiGAN → 零依赖 WAV 写出。ONNX 输入按名字聚类自适应（跨声库兼容），未知音素/缺词典/缺声码器均给出明确中文指引。
+- **调教工作台**（`frontend/src/views/ViewDiffSinger.vue` + `stores/diffsinger.ts`）：**直接从已有音乐库选择 MIDI 曲目** → 解析全部非鼓轨 → 选旋律轨（默认音符最多）→ 一键导入为基底音符序列，逐音符编辑歌词/音高/时长/颤音 → 渲染 → 试听/导出 WAV。
+- 新增端到端冒烟测试 `engine/tests/test_diffsinger_smoke.py`（假声库 + 假 ONNX 模型跑通 deps/inspect/render/错误指引）。
+
+---
+
 ## 1. 前端整体重构（Vue 3 + Vite，渐进式）
 
 原仓库为单文件 `renderer/FuFumidi.html`（约 800KB 内联 JS/CSS），维护成本高。现采用**渐进式重构**：核心音频/MIDI 逻辑保留模块化，UI 层拆分为 Vue 3 组件，构建产物输出到 `renderer/dist`；`main.js` 加载新版 Vue 界面。旧版单文件界面已彻底移除（删除 `renderer/FuFumidi.html` 与 `edit-guide.html`），构建前需先执行 `cd frontend && npm run build` 生成界面。
