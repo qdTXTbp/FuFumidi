@@ -35,7 +35,11 @@ files:
   - "!engine/tests/**"      # pytest 开发测试
   - "!**/__pycache__/**"
   - "!**/*.pyc"
-  - "!.pytest_cache/**"
+  - "!**/.pytest_cache/**"  # 必须带 **/ 前缀：pytest 缓存实际在 engine/ 下，写成 !.pytest_cache/** 只匹配根目录，等于没排
+  # 开发模式的数据根目录。发布版的数据根目录就是「安装目录旁的 FuFumidiData」，
+  # 打进包会被原样铺到用户机器上 —— 实测带进去了开发机曲库里的 MIDI、
+  # basic_pitch 权重与 matplotlib 缓存，等于把本机私有曲目随安装包分发出去。
+  - "!FuFumidiData/**"
   # resources/** 与 models/** 由 extraResources 单独分发到 win-unpacked/resources，
   # 若再打进 app.asar 会重复打包（python 1.3GB / models 160MB），导致体积翻倍
   - "!resources/**"

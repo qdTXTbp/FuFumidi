@@ -494,6 +494,9 @@ onBeforeUnmount(() => {
           <div class="dl-panel">
             <div v-for="d in activeDls" :key="d.id" class="dl-item">
               <div class="dl-name" :title="d.id">{{ d.name }}</div>
+              <!-- 主进程在测速后会发 text（如「选用 国内源 CNB（cnb.cool）（31.2 MB/s）」）。
+                   此前这条信息只进内存、界面从不显示，用户无法确认是否真走了国内源。 -->
+              <div v-if="d.text" class="dl-src" :title="d.text">{{ d.text }}</div>
               <div class="dl-pbar"><i :style="{ width: (d.percent || 0) + '%' }"></i></div>
               <div class="dl-meta">
                 <span class="pct">{{ (d.percent || 0) }}%</span>
@@ -654,6 +657,9 @@ onBeforeUnmount(() => {
 .dl-item { padding: 7px 0; border-bottom: 1px solid var(--hairline-soft); }
 .dl-item:last-child { border-bottom: none; }
 .dl-name { font-size: 12px; color: var(--ink); font-weight: 600; margin-bottom: 5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 6px; }
+/* 实际选中的下载源（主进程测速结果）。过长时省略，完整内容在 title 里 */
+.dl-src { font-size: 10.5px; color: var(--stone); margin: -2px 0 5px; font-family: var(--mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 6px; }
 .dl-pbar { height: 6px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; }
 .dl-pbar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--brand-coral));

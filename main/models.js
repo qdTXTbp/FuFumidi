@@ -149,6 +149,11 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       type: 'hf',
       repo: 'AEmotionStudio/aria-amt-models',
       dest: path.join('aria_amt'),
+      // 主体权重 426MB 已镜像到 CNB（Release 资产）：
+      // huggingface.co 在国内连不通、hf-mirror.com 实测只有 2~3MB/s，
+      // 而同一文件走 CNB 可达 20MB/s 以上。命中这条就直接取国内源，失败自动回落 HF 渠道。
+      // 注意 CNB 的 git raw 上限 100MiB，426MB 只能走 Release 资产通道。
+      cnbMirror: { tag: 'models-extra-v1', files: ['piano-medium-double-1.0.safetensors'] },
       minSize: 1e8,
       downloadable: true,
       runtime: 'aria',
@@ -484,6 +489,36 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     if (id) { _modelPause.add(id); try { const c = _modelAborts.get(id); if (c) c.abort(); } catch (e) {} }
     return { ok: true };
   });
+  // 分段并发下载单个大文件（Range 分片 → 各写各的偏移 → 汇总进度）。
+  // 为什么需要：CNB 的 Release 资产（对象存储）单连接实测被限到 ~5MB/s，
+  // 而它支持 Range —— 4 段并发实测 19.8MB/s（3.8 倍），是可观差距。
+  // 前提：源必须真正支持 Range（返回 206）；返回 200 说明被忽略，抛错让调用方回退单连接。
+  async function downloadSegmented(url, out, total, onBytes, ctrl, headers, segs = 4) {
+    const fh = await fs.promises.open(out, 'w');
+    try {
+      const segSize = Math.ceil(total / segs);
+      const worker = async (i) => {
+        const start = i * segSize;
+        const end = Math.min(start + segSize, total) - 1;
+        if (start > end) return;
+        const r = await net.fetch(url, { headers: { ...headers, Range: `bytes=${start}-${end}` }, signal: ctrl.signal });
+        if (r.status !== 206 || !r.body) throw new Error(r.status === 200 ? '源不支持 Range' : 'HTTP ' + r.status);
+        const reader = r.body.getReader();
+        let pos = start;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          await fh.write(Buffer.from(value), 0, value.length, pos);
+          pos += value.length;
+          onBytes(value.length);
+        }
+      };
+      await Promise.all(Array.from({ length: segs }, (_, i) => worker(i)));
+    } finally { try { await fh.close(); } catch (_) {} }
+    const sz = (await fs.promises.stat(out)).size;
+    if (sz !== total) throw new Error('分段下载后大小不符：' + sz + '/' + total);
+  }
+
   // HuggingFace 整仓下载（MuScriptor / Aria-AMT）。
   // 官方 huggingface.co 在国内常遇网关错误（502/5xx），逐请求按「官方 → hf-mirror」自动回退；
   // 401/403（授权类）、取消/暂停不回退。
@@ -500,15 +535,36 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     const isAuthErr = (code) => code === 401 || code === 403;
     // gated 模型未带 Token 时直接给出明确指引，避免下载到一半才 401
     if (spec.gated && !token) throw new Error('该模型需要 HuggingFace 授权：请先在 huggingface.co/' + spec.repo + ' 页面接受许可协议，并在上方填写 HF Token（huggingface.co/settings/tokens 创建）');
-    // 带渠道回退的 fetch：成功返回 {res, host}；全渠道失败抛最后错误
-    const fetchFallback = async (pathAndQuery, authHints) => {
+    // 该 HF 仓库文件是否已有 CNB 镜像（spec.cnbMirror，见 Aria-AMT 条目）；有则给出 Release 资产直链。
+    // 这些仓库的文件普遍 >100MiB，超过 CNB 的 git raw 上限，所以一律走 Release 资产通道。
+    const cnbMirrorUrl = (rel) => {
+      const m = spec && spec.cnbMirror;
+      if (!m || !m.tag || !Array.isArray(m.files) || !m.files.includes(rel)) return null;
+      return DS.cnbRepoReleaseUrl(DS.CNB_MIRROR_REPOS.fufumidi, m.tag, path.basename(rel));
+    };
+    // 带渠道回退的 fetch：成功返回 {res, url}；全渠道失败抛最后错误
+    const fetchFallback = async (pathAndQuery, authHints, extraUrls) => {
       let lastErr = null;
+      // ① 优先试镜像（CNB）。这条不套 HF 的授权语义 —— 它本就在境外渠道之外，
+      //    任何失败（含 403）都只表示「这条不通」，继续走下面的 HF 渠道即可。
+      //    实测：huggingface.co 在本机连不通、hf-mirror.com 只有 2~3MB/s，
+      //    而同文件走 CNB 可到 20MB/s 以上，所以镜像必须排在最前。
+      for (const url of (extraUrls || [])) {
+        if (_modelCancels.has(spec.id)) throw new Error('canceled');
+        if (_modelPause.has(spec.id)) throw new Error('paused');
+        try {
+          const r = await net.fetch(url, { headers, signal: ctrl.signal });
+          if (r.ok) return { res: r, url };
+          lastErr = new Error('HTTP ' + r.status);
+        } catch (e) { lastErr = e; }
+      }
+      // ② HuggingFace 渠道：官方 → hf-mirror
       for (const host of hosts) {
         if (_modelCancels.has(spec.id)) throw new Error('canceled');
         if (_modelPause.has(spec.id)) throw new Error('paused');
         try {
           const r = await net.fetch(`https://${host}${pathAndQuery}`, { headers, signal: ctrl.signal });
-          if (r.ok) return { res: r, host };
+          if (r.ok) return { res: r, url: `https://${host}${pathAndQuery}` };
           // 授权错误：mirror 同样无权限，直接抛不折腾
           if (isAuthErr(r.status)) throw new Error(authHints + ' HTTP ' + r.status);
           lastErr = new Error('HTTP ' + r.status);
@@ -533,7 +589,26 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       const out = path.join(destDir, rel);
       fs.mkdirSync(path.dirname(out), { recursive: true });
       const enc = rel.split('/').map(encodeURIComponent).join('/');
-      const dl = await fetchFallback(`/${spec.repo}/resolve/main/${enc}`, '下载');
+      // 命中 CNB 镜像的文件（见 spec.cnbMirror）优先走国内 Release 资产。
+      // 大文件再叠一层分段并发：Release 资产单连接实测被限到 ~5MB/s，分段可到 ~20MB/s。
+      // 分段没拿到（例如源忽略 Range）就删掉半成品，回落下面的 HF 渠道，不影响可用性。
+      const cnbUrl = cnbMirrorUrl(rel);
+      if (cnbUrl && (f.size || 0) > 64 * 1024 * 1024) {
+        try {
+          await downloadSegmented(cnbUrl, out, f.size, (n) => {
+            received += n;
+            reportSpeed();
+            const pct = total ? Math.min(99, Math.round(received / total * 100)) : 0;
+            if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received, total, percent: pct, done: false, speed });
+          }, ctrl, headers);
+          continue;   // 该文件已从 CNB 取完
+        } catch (e) {
+          if (_modelCancels.has(spec.id)) throw new Error('canceled');
+          if (_modelPause.has(spec.id)) throw new Error('paused');
+          try { fs.rmSync(out, { force: true }); } catch (_) {}
+        }
+      }
+      const dl = await fetchFallback(`/${spec.repo}/resolve/main/${enc}`, '下载', cnbUrl ? [cnbUrl] : null);
       const r = dl.res;
       if (!r.ok || !r.body) throw new Error('下载失败 HTTP ' + r.status + ' · ' + rel + (r.status === 401 || r.status === 403 ? '（该模型需授权：请填写有效 HF Token 并先在 HF 页面接受协议）' : ''));
       const ws = fs.createWriteStream(out);
@@ -859,7 +934,10 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     const probe = async (u, bytes = 256 * 1024) => {
       const t0 = Date.now();
       try {
-        const sig = AbortSignal.any ? AbortSignal.any([ctrl.signal, AbortSignal.timeout(90000)]) : ctrl.signal;
+        // 只读 256KB 用来排序，8 秒足够（实测 CNB 31MB/s 时约 8ms）。
+        // 这里原本是 90 秒，而候选里含 raw.githubusercontent.com 直连 —— 国内必然连不通，
+        // Promise.all 会一直等到它超时，于是「点下载后要等一分半才出现进度」。
+        const sig = AbortSignal.any ? AbortSignal.any([ctrl.signal, AbortSignal.timeout(8000)]) : ctrl.signal;
         const r = await net.fetch(u, { headers, signal: sig });
         if (!r.ok || !r.body) return { url: u, mbps: 0 };
         const reader = r.body.getReader();
@@ -877,7 +955,10 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     const speeds = await Promise.all(allUrls.map(u => probe(u)));
     speeds.sort((a, b) => b.mbps - a.mbps);
     const primaryUrl = speeds[0].mbps > 0 ? speeds[0].url : allUrls[0];
-    if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, text: `测速完成，选用 ${primaryUrl.replace('https://', '')}（${speeds[0].mbps.toFixed(1)} MB/s）`, received: 0, total, percent: 0, done: false });
+    // 明确标出实际选中的源：国内镜像直接写「国内源 CNB」，方便用户确认没退回境外线路
+    let srcLabel = speeds[0].mbps > 0 ? primaryUrl.replace('https://', '') : allUrls[0].replace('https://', '');
+    if (/cnb\.cool/i.test(primaryUrl)) srcLabel = '国内源 CNB（cnb.cool）';
+    if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, text: `测速完成，选用 ${srcLabel}（${speeds[0].mbps.toFixed(1)} MB/s）`, received: 0, total, percent: 0, done: false });
 
     // 3) 并行下载分卷（并发 SPLIT_CONCURRENCY，全部写入 .parts/）
     function partName(meta, i) { return (meta.model || 'model.safetensors') + '.part' + String(i).padStart(2, '0'); }

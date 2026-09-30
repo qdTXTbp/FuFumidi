@@ -13,7 +13,7 @@ const state = app;
 const toast = (m, t) => app.toast(m, t);
 // 当前版本号（从主进程读取，与 SideBar 左下角一致）
 const appVersion = ref('v3.1.8');
-import { getAppVersion, cmpVersion, getUpdateChannel, setUpdateChannel, getDownloadSource, setDownloadSource } from '../core/version.js';
+import { getAppVersion, cmpVersion, getUpdateChannel, setUpdateChannel, getDownloadSource, setDownloadSource, normalizeDownloadSource } from '../core/version.js';
 getAppVersion().then(v => { appVersion.value = v; });
 import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';
 
@@ -169,7 +169,10 @@ async function load() {
   form.file_assoc = s.file_assoc !== false;
   // settings 是持久真相，localStorage 只是启动时用于即时读取的缓存；打开设置时校准一次
   updateChannel.value = setUpdateChannel(s.update_channel || getUpdateChannel());
-  downloadSource.value = setDownloadSource(s.download_source || getDownloadSource());
+  // 下载源：这里必须用**纯归一化**，不能调 setDownloadSource ——
+  // 后者会把值写回 localStorage 与设置，而 s 可能来自 store 的内存缓存（未必最新），
+  // 会把用户刚选的源反向覆盖成旧值，表现为「选完国内，重开设置又变回自动」。
+  downloadSource.value = normalizeDownloadSource(s.download_source ?? getDownloadSource());
   // 完整性：每次打开设置都重新检查（而非仅在首次 state.integrity===null 时），
   // 避免开机/更新瞬间的瞬时误报被缓存锁死——修复后或 asar 已恢复也能即时反映，不再“一直报错”。
   runIntegrity();
@@ -258,6 +261,9 @@ function sourceLabel(s) {
 function setSource(src) {
   const next = setDownloadSource(src);
   downloadSource.value = next;
+  // 必须再走一次 store.save：store 的 load() 有 loaded 缓存，第二次打开设置会直接返回
+  // 内存里的旧对象。不在这里同步内存，重开设置就会读回旧值（download_source 看似没保存）。
+  try { settingsStore.save({ download_source: next }); } catch (e) {}
   upd.status = ''; upd.failed = false; upd.launched = false;
   toast(t('已切换下载源：') + sourceLabel(next));
 }

@@ -84,15 +84,21 @@ export function setUpdateChannel(v) {
    settings.download_source 双写，前者保证启动瞬间可读，后者持久化。 */
 const SOURCE_KEY = 'fufumidi_download_source';
 
+/** 纯归一化：把任意值收敛成合法取值，**不产生任何副作用**（不写 localStorage、不落盘）。
+ *  读取设置时必须用它 —— setDownloadSource 带写副作用，用在「加载」路径上，
+ *  会拿当前（可能已过期的）值反向覆盖用户已经保存的选择。 */
+export function normalizeDownloadSource(v) {
+  return v === 'cnb' || v === 'github' ? v : 'auto';
+}
+
 export function getDownloadSource() {
   try {
-    const v = localStorage.getItem(SOURCE_KEY);
-    return v === 'cnb' || v === 'github' ? v : 'auto';
+    return normalizeDownloadSource(localStorage.getItem(SOURCE_KEY));
   } catch (e) { return 'auto'; }
 }
 
 export function setDownloadSource(v) {
-  const s = v === 'cnb' || v === 'github' ? v : 'auto';
+  const s = normalizeDownloadSource(v);
   try { localStorage.setItem(SOURCE_KEY, s); } catch (e) {}
   try {
     if (window.fuBridge && typeof window.fuBridge.saveSettings === 'function') {
