@@ -34,3 +34,6 @@ soundfonts-dist/
 
 # CDP 探针的运行产物（默认写到脚本目录）
 scripts/cdp/*-report.txt
+
+# WorkBuddy 会话数据（本地项目数据，不入库）
+.workbuddy/
