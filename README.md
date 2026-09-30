@@ -16,9 +16,9 @@ FuFumidi is a fully offline desktop workstation for MIDI. It targets musicians, 
 
 The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally; transcription and editing never upload anything. Only when you opt in to cloud sync does your playlist and MIDI library get uploaded to your own cloud account.
 
-Current release line: **4.4.0** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v4.4.0)).
+Current release line: **4.4.1** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v4.4.1)).
 
-What's new in 4.4.0: a three-way **Download source** setting (China CNB / Global GitHub / Auto) now drives update checks, incremental updates, models, soundfonts, wallpapers and the GPU pack alike — models, soundfonts, wallpapers, the GPU pack and historical release assets are all mirrored on CNB, so nothing on the China route depends on GitHub being reachable. Settings → Update gains a stable/beta channel switch, so those who want early builds can opt in without affecting stable users. Settings → GPU acceleration gains one-click download of the prebuilt enhancement pack as a fallback when automatic install fails. The native Rust core moves to a unified SMF parser (running status supported) and library dedup switches to SHA-256. It also fixes a batch of China-route defects: soundfonts and wallpapers over 100 MiB could not be fetched back from CNB, the GPU pack was not listed at all when only the China route was reachable, and a failed download could take the whole main process down.
+What's new in 4.4.1: fixes the split CUDA archive in Settings → GPU acceleration being undownloadable — the part list was still carrying the UI framework's reactive proxy objects when handed to the main process, so the cross-process transfer was rejected outright ("An object could not be cloned") and the request never left the renderer; the DirectML package carries no part list and was therefore unaffected. Also fixes the release flow not re-pointing CNB's version anchor at a newly published stable release — users on the China route kept seeing the old version number and never got an update prompt, with no error to signal it.
 
 ### What it does
 

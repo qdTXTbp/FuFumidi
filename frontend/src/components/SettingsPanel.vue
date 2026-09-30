@@ -596,7 +596,17 @@ async function gpuDownloadRemote(pkg) {
     else if (p.percent != null && p.percent >= 0) gpuSetProgress(p.percent, (p.percent) + '%');
   }) : null;
   try {
-    const r = await bridge.gpuDownloadPackage({ url: pkg.url, name: pkg.name, size: pkg.size, kind: pkg.kind, files: pkg.files });
+    // 必须显式摊平成普通对象再传 —— pkg 来自 gpu.packages（reactive 数组），
+    // 直接传会让 files 变成 Proxy。ipcRenderer.invoke 走结构化克隆，
+    // Proxy 无法克隆，会立刻抛 "An object could not be cloned"：
+    // 请求压根到不了主进程。而只有分卷 CUDA 包带 files，所以表现为
+    // 「CUDA 分卷无法下载、DirectML 正常」。
+    const plainFiles = Array.isArray(pkg.files)
+      ? pkg.files.map((f) => ({ name: f.name, url: f.url, size: f.size }))
+      : null;
+    const r = await bridge.gpuDownloadPackage({
+      url: pkg.url, name: pkg.name, size: pkg.size, kind: pkg.kind, files: plainFiles,
+    });
     if (r && r.ok) {
       gpu.status = t('增强包已下载并安装');
       gpuSetProgress(100, t('安装完成'));

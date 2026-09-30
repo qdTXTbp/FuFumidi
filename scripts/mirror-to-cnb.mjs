@@ -37,6 +37,13 @@ const TOKEN = process.env.CNB_TOKEN || '';
 const CNB_API = 'https://api.cnb.cool';
 const CNB_HOST = 'cnb.cool';
 const DEFAULT_CNB_REPO = 'FuFuCloud-mirror/FuFuMIDI';
+// 正式版 tag（v4.4.0 这种）必须挂上 CNB 的 latest 锚点。
+// 应用在「下载源 = 自动 / 国内」时是读 `/-/releases/latest/download/latest.yml` 的
+// `version:` 字段来判断有没有新版本的（见 main/update.js 的 fetchCnbRelease）——
+// 锚点没跟上的话，走国内源的用户永远收不到更新提示，且不会有任何报错。
+// 注意：CNB 的 latest **不是**「自动取最高 semver」，而是 release 上的 is_latest 标记，
+// 只能在建 release 时用 make_latest 指定（或事后 PATCH）。
+const RELEASE_VERSION_TAG_RE = /^v\d+\.\d+\.\d+$/;
 const TMP = path.join(os.tmpdir(), 'fufumidi-cnb-mirror');
 fs.mkdirSync(TMP, { recursive: true });
 
@@ -194,10 +201,19 @@ async function download(url, dest, expectedSize) {
 // ---------------- release 模式 ----------------
 async function ensureRelease(repo, tag, commitish) {
   const got = cnbJson('GET', `${CNB_API}/${repo}/-/releases/tags/${encodeURIComponent(tag)}`);
-  if (got && got.id) return { rel: got, created: false };
+  if (got && got.id) {
+    // 已存在：早期版本这里固定写 make_latest:false，正式版镜像完也不会挂上 latest 锚点。
+    // 补一次 PATCH，让重跑镜像脚本能自愈（不必手工改 CNB 上的 release）。
+    if (RELEASE_VERSION_TAG_RE.test(tag) && got.is_latest === false) {
+      cnbJson('PATCH', `${CNB_API}/${repo}/-/releases/${got.id}`, { make_latest: 'true' });
+      console.log('  已把 latest 锚点指向: ' + tag);
+    }
+    return { rel: got, created: false };
+  }
   // 目标 tag 在 CNB 仓库里不存在时，必须给 target_commitish，CNB 才会据此建标签
   const created = cnbJson('POST', `${CNB_API}/${repo}/-/releases`, {
-    tag_name: tag, name: tag, body: '镜像自 GitHub', prerelease: false, make_latest: 'false',
+    tag_name: tag, name: tag, body: '镜像自 GitHub', prerelease: false,
+    make_latest: RELEASE_VERSION_TAG_RE.test(tag) ? 'true' : 'false',
     target_commitish: commitish || 'main',
   });
   if (created && created.id) return { rel: created, created: true };
