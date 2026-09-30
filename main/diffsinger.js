@@ -18,6 +18,7 @@
 // ============================================================
 'use strict';
 const Paths = require('./paths');
+const DS = require('./download-source');
 
 function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawn, spawnEngine, resolvePython, engineEnv, readSettings, writeSettings }) {
 
@@ -28,20 +29,29 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
   const runtimeFile = () => path.join(dsRoot(), 'runtime.json');
 
   // 通用声码器：openvpi 社区声码器项目（DiffSinger Community Vocoder Project）
-  // nsf-hifigan-44.1k-hop512-128bin-2024.02（CC BY-NC-SA 4.0，非商用）
+  // nsf-hifigan-44.1k-hop512-128bin-2024.02（CC BY-NC-SA 4.0，非商用；许可证随包分发）
   // zip 内含 ONNX 模型， acoustic 模型输出 128 bin mel → 波形。
+  // 双源分发（发布流程见 scripts/diffsinger-mirror/README.md）：
+  //   国内 = CNB 镜像仓库 Release 资产；全球 = 同名 GitHub 自有仓库 Release；openvpi 官方仅兜底。
+  // 按 settings.download_source 排序候选，失败自动换源 + 断点续传。
   const VOCODER_SPEC = {
     id: 'nsf_hifigan_44.1k_2024.02',
     name: 'NSF-HiFiGAN 通用声码器',
     note: 'openvpi 社区声码器 · 44.1kHz / 128 mel bins · 约 55 MB · CC BY-NC-SA 4.0（非商用）',
-    url: 'https://github.com/openvpi/vocoders/releases/download/nsf-hifigan-44.1k-hop512-128bin-2024.02/nsf_hifigan_44.1k_hop512_128bin_2024.02.zip',
+    tag: 'vocoder-2024.02',
+    file: 'nsf_hifigan_44.1k_hop512_128bin_2024.02.zip',
+    ghUrl: 'https://github.com/FuFuCloud-mirror/DiffSinger/releases/download/vocoder-2024.02/nsf_hifigan_44.1k_hop512_128bin_2024.02.zip',
+    fallbackUrl: 'https://github.com/openvpi/vocoders/releases/download/nsf-hifigan-44.1k-hop512-128bin-2024.02/nsf_hifigan_44.1k_hop512_128bin_2024.02.zip',
     officialUrl: 'https://github.com/openvpi/vocoders/releases',
+    cnb: { repo: DS.CNB_MIRROR_REPOS.diffsinger, tag: 'vocoder-2024.02', file: 'nsf_hifigan_44.1k_hop512_128bin_2024.02.zip' },
   };
   // 推理依赖：ONNX Runtime（CPU）+ YAML 解析。numpy 由引擎环境自带。
   const DS_PY_DEPS = ['onnxruntime', 'pyyaml'];
 
   // 公开声库注册表：仅收录「作者公开托管、可自由下载」的仓库（同 UTAU 声库中心原则）。
   // 条目均来自声库作者自己的 GitHub Release，使用条款原样展示，由使用者自行遵守。
+  // 合规说明：仅 openvpi 声码器（CC BY-NC-SA 4.0 明确允许再分发）会镜像到 CNB；
+  // 第三方声库（如 Ria 白名单条款未授权模型权重再分发）只走作者 GitHub 源，不做镜像。
   const VB_REGISTRY = [
     {
       id: 'ria_multi_dict',
@@ -51,7 +61,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       lang: '日本語 · 多字典（支持跨语种）',
       desc: '开源 DiffSinger 日文声库（多字典分支）：平假名 + 外来语片假名覆盖完整。v0.4-multi-dict。',
       license: '白名单条款 · 详见仓库 README（输出音频需注明声库名）',
-      url: 'https://github.com/RibosomeK/RiaDiffSinger/releases/download/v0.4-multi-dict/Ria-v0.4-multi-dict.zip',
+      ghUrl: 'https://github.com/RibosomeK/RiaDiffSinger/releases/download/v0.4-multi-dict/Ria-v0.4-multi-dict.zip',
       officialUrl: 'https://github.com/RibosomeK/RiaDiffSinger',
     },
   ];
@@ -97,16 +107,26 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
   }
   const vbInstalled = (it) => !!findInTree(path.join(vbRoot(), it.dirName), 'dsconfig.yaml', 0);
 
-  /** 多源候选地址：GitHub 走加速镜像（与模型/音色库下载同一套入口） */
-  function ghMirrorUrls(url) {
-    const out = [
-      'https://gh.jasonzeng.dev/' + url,
-      'https://ghfast.top/' + url,
-      'https://gh-proxy.com/' + url,
-      url,
-    ];
-    return [...new Set(out)];
+  /** 资产候选地址：按 settings.download_source 偏好排序（国内源 CNB 打头 / 全球源 GitHub 打头），失败轮换 */
+  function assetUrls(spec) {
+    const source = readSettings ? (readSettings().download_source || 'auto') : 'auto';
+    const ghUrls = [
+      ...DS.githubMirrorCandidates(spec.ghUrl),
+      ...DS.githubMirrorCandidates(spec.fallbackUrl || ''),
+    ].filter(Boolean);
+    const cnbUrl = spec.cnb ? DS.cnbRepoReleaseUrl(spec.cnb.repo, spec.cnb.tag, spec.cnb.file) : '';
+    return DS.orderUrls(cnbUrl, ghUrls, source);
   }
+  /** 当前源标签（进度展示用）：候选列表第一个的 host 归属 */
+  function sourceLabelOf(urls) {
+    const u = String(urls[0] || '');
+    if (u.includes('cnb.cool')) return '国内源 · CNB';
+    if (u.includes('FuFuCloud-mirror/DiffSinger')) return '全球源 · GitHub（自有仓库）';
+    if (u.includes('openvpi')) return '全球源 · openvpi 官方';
+    return '全球源 · GitHub 镜像';
+  }
+
+  const hostOf = (u) => { try { return new URL(u).host; } catch (e) { return ''; } };
 
   /* ---------------- 通用下载器（多源轮换 + 断点续传 + 停滞看门狗） ---------------- */
   async function downloadWithMirrors({ urls, out, minSize, onProgress, isUserAbort }) {
@@ -149,10 +169,10 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
             const { done, value } = await reader.read();
             if (done) break;
             lastData = Date.now();
-            got += value.length;
-            const received = have + got;
-            onProgress && onProgress({ received, total });
-            await new Promise((res2, rej2) => ws.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
+              got += value.length;
+              const received = have + got;
+              onProgress && onProgress({ received, total, host: hostOf(url) });
+              await new Promise((res2, rej2) => ws.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
           }
         } finally { clearInterval(watchdog); }
         await new Promise((res2, rej2) => ws.end(err => (err ? rej2(err) : res2())));
@@ -167,7 +187,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         try { if (ws) ws.destroy(); } catch (e2) {}
         ws = null;
         if (isUserAbort && isUserAbort.aborted) return { cancelled: true };
-        onProgress && onProgress({ retry: round + 1, error: '第 ' + (round + 1) + ' 轮失败，自动换源/续传…' });
+        onProgress && onProgress({ retry: round + 1, host: hostOf(url), error: '第 ' + (round + 1) + ' 轮失败，自动换源/续传…' });
         if (round === MAX_ROUNDS - 1) {
           throw new Error('下载失败（已多源轮换 ' + MAX_ROUNDS + ' 轮）：' + ((lastErr && lastErr.message) || '网络不可达'));
         }
@@ -323,14 +343,15 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         const dlDir = path.join(Paths.tempDir(), 'diffsinger-dl');
         fs.mkdirSync(dlDir, { recursive: true });
         const zipPath = path.join(dlDir, 'vocoder.zip');
+        const vUrls = assetUrls(VOCODER_SPEC);
         await downloadWithMirrors({
-          urls: ghMirrorUrls(VOCODER_SPEC.url),
+          urls: vUrls,
           out: zipPath,
           minSize: 1e6,
           isUserAbort: _runtimeBusy,
           onProgress: (p) => send({
             phase: 'vocoder', percent: p.total ? Math.min(96, Math.round(p.received / p.total * 96)) : 0,
-            received: p.received, total: p.total, text: p.error || '', done: false,
+            received: p.received, total: p.total, host: p.host, text: p.error || ('当前源：' + sourceLabelOf(vUrls)), done: false,
           }),
         });
         send({ phase: 'vocoder', percent: 97, text: '正在解压声码器…', done: false });
@@ -572,15 +593,16 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     const zipPath = path.join(dlDir, it.id + '.zip');
     const entry = { isUserAbort: false };
     try {
+      const vUrls = assetUrls(it);
       await downloadWithMirrors({
-        urls: ghMirrorUrls(it.url),
+        urls: vUrls,
         out: zipPath,
         minSize: 5e5,
         isUserAbort: entry,
         onProgress: (p) => send({
           id, phase: 'download',
           percent: p.total ? Math.min(88, Math.round(p.received / p.total * 88)) : 0,
-          received: p.received, total: p.total, done: false, error: p.error || '',
+          received: p.received, total: p.total, done: false, error: p.error || '', host: p.host,
         }),
       });
       send({ id, phase: 'extract', percent: 90, done: false });

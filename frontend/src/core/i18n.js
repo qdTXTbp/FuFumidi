@@ -2158,6 +2158,8 @@ export const I18N_MAP = {
   "请先选择声库": "Select a voicebank first",
   "没有音符可渲染": "No notes to render",
   "组件安装已在进行中": "Component installation is already in progress",
+  "加入曲库": "Add to library",
+  "已加入曲库，可在「音乐」中播放": "Added to library — play it from Music",
   "该功能正在逐步迁移到新的现代化界面中。核心能力（MIDI 解析、Web Audio 合成、播放调度）已完成模块化，此视图将在后续迭代接入。": "This feature is being migrated to the new modern UI. Core capabilities (MIDI parsing, Web Audio synthesis, playback scheduling) are already modularized; this view will be wired up in a later iteration.",
   "迁移计划中": "Migration planned",
   "渐进式重构 · 保留离线能力": "Progressive refactor · offline capability kept",

@@ -110,6 +110,18 @@ async function doSaveWav() {
   try { await bridge.saveBinary({ name, data: bytes }); } catch (e) { msg.value = String((e && e.message) || e); }
 }
 
+/* 渲染结果加入曲库：复用音频曲目通道，走既有播放器/歌单/云同步体系 */
+async function doAddToLibrary() {
+  const bytes = getLastWavBytes();
+  if (!bytes) return;
+  const base = (store.sourceName || 'diffsinger').replace(/\.(mid|midi|kar|rmi)$/i, '');
+  const name = base + '_vocal.wav';
+  try {
+    await app.importFiles([{ name, bytes }], 'all');
+    msg.value = t('已加入曲库，可在「音乐」中播放');
+  } catch (e) { msg.value = String((e && e.message) || e); }
+}
+
 const fmtBytes = (n) => {
   n = Number(n) || 0;
   if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
@@ -225,6 +237,7 @@ const fmtBytes = (n) => {
             </div>
             <div v-if="store.renderUrl" class="ds-audio">
               <audio controls :src="store.renderUrl"></audio>
+              <button class="btn" @click="doAddToLibrary"><Icon name="music" :size="14" /> {{ t('加入曲库') }}</button>
               <button class="btn" @click="doSaveWav"><Icon name="save" :size="14" /> {{ t('导出 WAV') }}</button>
               <span class="muted small">{{ (store.lastDurationMs / 1000).toFixed(1) }}s</span>
             </div>

@@ -48,6 +48,8 @@ const CNB_MIRROR_REPOS = {
   models: 'FuFuCloud-mirror/Models',
   media: 'FuFuCloud-mirror/Media',
   soundfonts: 'FuFuCloud-mirror/FuFumidiSoundFonts',
+  // DiffSinger 可选模块组件：通用声码器（openvpi，CC BY-NC-SA 4.0 允许镜像，保留声明）
+  diffsinger: 'FuFuCloud-mirror/DiffSinger',
 };
 
 const SOURCES = ['auto', 'cnb', 'github'];

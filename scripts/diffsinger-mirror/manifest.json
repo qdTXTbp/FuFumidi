@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "updatedAt": "2026-09-30",
+  "description": "FuFumidi DiffSinger 可选模块的组件分发清单。国内源 = CNB 镜像仓库 Release 资产；全球源 = 同名 GitHub 仓库 Release（自有镜像，上游兜底）。",
+  "repositories": {
+    "github": "FuFuCloud-mirror/DiffSinger",
+    "cnb": "FuFuCloud-mirror/DiffSinger"
+  },
+  "components": [
+    {
+      "id": "nsf_hifigan_44.1k_2024.02",
+      "kind": "vocoder",
+      "tag": "vocoder-2024.02",
+      "file": "nsf_hifigan_44.1k_hop512_128bin_2024.02.zip",
+      "sizeApprox": "55 MB",
+      "license": "CC BY-NC-SA 4.0（openvpi DiffSinger Community Vocoder Project，非商用，再分发须保留声明）",
+      "upstream": "https://github.com/openvpi/vocoders/releases/tag/nsf-hifigan-44.1k-hop512-128bin-2024.02",
+      "note": "镜像合规：CC BY-NC-SA 4.0 明确允许再分发，随包保留许可证即可。"
+    }
+  ],
+  "voicebanks": [
+    {
+      "id": "ria_multi_dict",
+      "dirName": "Ria",
+      "upstreamTag": "v0.4-multi-dict",
+      "file": "Ria-v0.4-multi-dict.zip",
+      "mirror": false,
+      "license": "白名单条款（输出音频需注明声库名）",
+      "upstream": "https://github.com/RibosomeK/RiaDiffSinger/releases/tag/v0.4-multi-dict",
+      "note": "合规：条款未授权模型权重再分发，只走作者 GitHub 源（含加速镜像），不做 CNB 镜像。若未来作者书面授权，把 mirror 改为 true 并补 tag/file 即可。"
+    }
+  ]
+}
