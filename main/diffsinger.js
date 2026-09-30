@@ -944,13 +944,26 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     if (!notes || !Array.isArray(notes) || !notes.length) return resolve({ ok: false, error: '没有音符可渲染' });
     const win = BrowserWindow.fromWebContents(evt.sender);
     const send = (p) => { if (win && !win.isDestroyed()) win.webContents.send('diffsinger:renderProgress', p); };
+    let notesJson = null;   // 长音符序列的临时落盘文件，渲染结束（成功或失败）都要回收
+    // 统一出口：清理临时音符文件后再 resolve，避免长曲反复渲染堆积垃圾
+    const done = (r) => {
+      if (notesJson) { try { fs.unlinkSync(notesJson); } catch (e) {} notesJson = null; }
+      resolve(r);
+      return undefined;
+    };
     try {
       const out = path.join(Paths.tempDir(), 'fufumidi', `diffsinger_render_${Date.now()}.wav`);
       fs.mkdirSync(path.dirname(out), { recursive: true });
+      // 音符序列走「@临时文件」而不是命令行字面量：
+      // Windows CreateProcess 的命令行上限约 32K 字符，而 DiffSinger 每个音符要带
+      // 颤音/音分等 10 个字段（约 150 字节），整曲（数百音符）必然触发
+      // spawn ENAMETOOLONG。engine_utau.py 早已采用同一约定（--notes @file）。
+      notesJson = path.join(Paths.tempDir(), 'fufumidi', `diffsinger_notes_${Date.now()}_${process.pid}.json`);
+      fs.writeFileSync(notesJson, JSON.stringify(notes), 'utf8');
       const args = [
         'render',
         '--voicebank', String(voicebank),
-        '--notes', JSON.stringify(notes),
+        '--notes', '@' + notesJson,
         '--bpm', String(Math.max(20, Math.min(400, Number(bpm) || 120))),
         '--out', out,
       ];
@@ -981,7 +994,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
           if (r && r.result && r.result.ok && r.result.out && fs.existsSync(r.result.out)) {
             try {
               const bytes = fs.readFileSync(r.result.out);
-              return resolve({
+              return done({
                 ok: true, out: r.result.out, duration_ms: r.result.duration_ms, bytes,
                 warnings: r.result.warnings || [],
                 engineVersion: r.result.engine_version || '',
@@ -990,18 +1003,18 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
                 range: r.result.range || null,
               });
             } catch (e) {
-              return resolve({ ok: true, out: r.result.out, error: String(e) });
+              return done({ ok: true, out: r.result.out, error: String(e) });
             }
           }
           const err = (r && r.result && r.result.error)
             || (r && (r.err || r.out || '').slice(-600))
             || ('引擎退出码 ' + code);
-          resolve({ ok: false, error: err });
+          done({ ok: false, error: err });
         },
-        onError: (e) => resolve({ ok: false, error: String(e) }),
+        onError: (e) => done({ ok: false, error: String(e) }),
       });
     } catch (err) {
-      resolve({ ok: false, error: String((err && err.message) || err) });
+      done({ ok: false, error: String((err && err.message) || err) });
     }
   }));
 }

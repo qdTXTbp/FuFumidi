@@ -197,6 +197,12 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
   // 渲染 UTAU 工程 → 人声 WAV（调 engine_utau.py render-track，返回字节供预览）
   ipcMain.handle('utau:renderTrack', (evt, cfg) => new Promise((resolve) => {
     const { voicebank, notes, sampleNote, bpm } = cfg || {};
+    let notesJson = null;   // notes 落盘文件，出口统一回收
+    const done = (r) => {
+      if (notesJson) { try { fs.unlinkSync(notesJson); } catch (e) {} notesJson = null; }
+      resolve(r);
+      return undefined;
+    };
     try {
       if (!voicebank || !notes || !Array.isArray(notes) || !notes.length) {
         return resolve({ ok: false, error: '缺少声库目录或音符' });
@@ -204,9 +210,13 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
       // 中间产物统一落在数据根目录 temp/（原先落系统 Temp，会持续占用 C 盘）
       const out = path.join(Paths.tempDir(), 'fufumidi', `utau_render_${Date.now()}.wav`);
       fs.mkdirSync(path.dirname(out), { recursive: true });
+      // 音符序列走「@临时文件」：整轨数百音符的 JSON 会撞 Windows 32K 命令行上限
+      // （spawn ENAMETOOLONG）。engine_utau.py 的 --notes 原生支持 @file 约定。
+      notesJson = path.join(Paths.tempDir(), 'fufumidi', `utau_notes_${Date.now()}_${process.pid}.json`);
+      fs.writeFileSync(notesJson, JSON.stringify(notes), 'utf8');
       const args = [
         'render-track', '--voicebank', String(voicebank),
-        '--notes', JSON.stringify(notes),
+        '--notes', '@' + notesJson,
         '--sample-note', String(sampleNote || 'C4'),
         '--out', out,
       ];
@@ -218,25 +228,25 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
               // 直接回 Buffer（结构化克隆按字节传递）：整轨 WAV 可达数十 MB，
               // 转成 number[] 会有数百 MB 的 JS 数组开销，是长曲渲染的主要瓶颈。
               const bytes = fs.readFileSync(r.result.out);
-              return resolve({
+              return done({
                 ok: true, out: r.result.out, duration_ms: r.result.duration_ms, bytes,
                 // 引擎侧提示（歌词回退 / 未支持的 flags / 单个原音渲染失败）透传给 UI
                 warnings: r.result.warnings || [],
                 engineVersion: r.result.engine_version || '',
               });
             } catch (e) {
-              return resolve({ ok: true, out: r.result.out, error: String(e) });
+              return done({ ok: true, out: r.result.out, error: String(e) });
             }
           }
           const err = (r && r.result && r.result.error)
             || (r && (r.err || r.out || '').slice(-400))
             || `引擎退出码 ${code}`;
-          resolve({ ok: false, error: err });
+          done({ ok: false, error: err });
         },
-        onError: (e) => resolve({ ok: false, error: String(e) }),
+        onError: (e) => done({ ok: false, error: String(e) }),
       });
     } catch (err) {
-      resolve({ ok: false, error: String((err && err.message) || err) });
+      done({ ok: false, error: String((err && err.message) || err) });
     }
   }));
 
