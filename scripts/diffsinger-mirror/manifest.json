@@ -11,8 +11,9 @@
       "id": "nsf_hifigan_44.1k_2024.02",
       "kind": "vocoder",
       "tag": "vocoder-2024.02",
-      "file": "nsf_hifigan_44.1k_hop512_128bin_2024.02.zip",
-      "sizeApprox": "55 MB",
+      "file": "nsf_hifigan_44.1k_hop512_128bin_2024.02.oudep",
+      "sizeApprox": "50.4 MB",
+      "sha256": "ab949b2a6a85dd638888d03d8e9566fab5bffe18cc5377ec32a8d264d92feee2",
       "license": "CC BY-NC-SA 4.0（openvpi DiffSinger Community Vocoder Project，非商用，再分发须保留声明）",
       "upstream": "https://github.com/openvpi/vocoders/releases/tag/nsf-hifigan-44.1k-hop512-128bin-2024.02",
       "note": "镜像合规：CC BY-NC-SA 4.0 明确允许再分发，随包保留许可证即可。"

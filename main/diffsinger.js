@@ -30,20 +30,21 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
 
   // 通用声码器：openvpi 社区声码器项目（DiffSinger Community Vocoder Project）
   // nsf-hifigan-44.1k-hop512-128bin-2024.02（CC BY-NC-SA 4.0，非商用；许可证随包分发）
-  // zip 内含 ONNX 模型， acoustic 模型输出 128 bin mel → 波形。
+  // 注意：同名 .zip 包内只有 model.ckpt（PyTorch 权重，onnxruntime 用不了），
+  // 真正带 ONNX 的是 .oudep（OpenUTAU 依赖包，实为 zip：*.onnx + vocoder.yaml + oudep.yaml + NOTICE）。
   // 双源分发（发布流程见 scripts/diffsinger-mirror/README.md）：
   //   国内 = CNB 镜像仓库 Release 资产；全球 = 同名 GitHub 自有仓库 Release；openvpi 官方仅兜底。
   // 按 settings.download_source 排序候选，失败自动换源 + 断点续传。
   const VOCODER_SPEC = {
     id: 'nsf_hifigan_44.1k_2024.02',
     name: 'NSF-HiFiGAN 通用声码器',
-    note: 'openvpi 社区声码器 · 44.1kHz / 128 mel bins · 约 55 MB · CC BY-NC-SA 4.0（非商用）',
+    note: 'openvpi 社区声码器 · 44.1kHz / 128 mel bins · 约 50 MB（.oudep） · CC BY-NC-SA 4.0（非商用）',
     tag: 'vocoder-2024.02',
-    file: 'nsf_hifigan_44.1k_hop512_128bin_2024.02.zip',
-    ghUrl: 'https://github.com/FuFuCloud-mirror/DiffSinger/releases/download/vocoder-2024.02/nsf_hifigan_44.1k_hop512_128bin_2024.02.zip',
-    fallbackUrl: 'https://github.com/openvpi/vocoders/releases/download/nsf-hifigan-44.1k-hop512-128bin-2024.02/nsf_hifigan_44.1k_hop512_128bin_2024.02.zip',
+    file: 'nsf_hifigan_44.1k_hop512_128bin_2024.02.oudep',
+    ghUrl: 'https://github.com/FuFuCloud-mirror/DiffSinger/releases/download/vocoder-2024.02/nsf_hifigan_44.1k_hop512_128bin_2024.02.oudep',
+    fallbackUrl: 'https://github.com/openvpi/vocoders/releases/download/nsf-hifigan-44.1k-hop512-128bin-2024.02/nsf_hifigan_44.1k_hop512_128bin_2024.02.oudep',
     officialUrl: 'https://github.com/openvpi/vocoders/releases',
-    cnb: { repo: DS.CNB_MIRROR_REPOS.diffsinger, tag: 'vocoder-2024.02', file: 'nsf_hifigan_44.1k_hop512_128bin_2024.02.zip' },
+    cnb: { repo: DS.CNB_MIRROR_REPOS.diffsinger, tag: 'vocoder-2024.02', file: 'nsf_hifigan_44.1k_hop512_128bin_2024.02.oudep' },
   };
   // 推理依赖：ONNX Runtime（CPU）+ YAML 解析。numpy 由引擎环境自带。
   const DS_PY_DEPS = ['onnxruntime', 'pyyaml'];
@@ -339,7 +340,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         try { return fs.existsSync(vDir) && fs.readdirSync(vDir).some(n => /\.onnx$/i.test(n)); } catch (e) { return false; }
       })();
       if (!hasOnnx) {
-        send({ phase: 'vocoder', percent: 0, text: '正在下载通用声码器（NSF-HiFiGAN，约 55 MB）…', done: false });
+        send({ phase: 'vocoder', percent: 0, text: '正在下载通用声码器（NSF-HiFiGAN，约 50 MB）…', done: false });
         const dlDir = path.join(Paths.tempDir(), 'diffsinger-dl');
         fs.mkdirSync(dlDir, { recursive: true });
         const zipPath = path.join(dlDir, 'vocoder.zip');

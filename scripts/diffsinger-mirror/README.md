@@ -25,29 +25,43 @@
 
 ## 发布 / 更新组件
 
-组件清单见 `manifest.json`。当前只有一个组件(通用声码器):
+组件清单见 `manifest.json`。当前只有一个组件(通用声码器)。
+
+> **资产格式注意(踩过坑)**:openvpi 的 `vocoders` Release 里同名资产有 **两种**:
+> - `*.zip` —— 内含 `model.ckpt`(**PyTorch 权重**),onnxruntime 用不了;
+> - `*.oudep` —— OpenUTAU 依赖包(实为 zip),内含 `nsf_hifigan_44.1k_hop512_128bin_2024.02.onnx`
+>   + `vocoder.yaml` + `oudep.yaml` + `NOTICE.txt`/`NOTICE.zh-CN.txt`。
+>
+> **镜像与下载一律用 `.oudep`。**(另有一个 `_logE.oudep` 变体,对数能量版,暂不使用。)
 
 ```powershell
 # 0) 准备 CNB 令牌(只从环境变量读)
 $env:CNB_TOKEN = '<CNB 访问令牌>'
 
-# 1) 下载上游声码器(openvpi 官方 Release,已验证直链)
-$zip = 'nsf_hifigan_44.1k_hop512_128bin_2024.02.zip'
-Invoke-WebRequest "https://github.com/openvpi/vocoders/releases/download/nsf-hifigan-44.1k-hop512-128bin-2024.02/$zip" -OutFile $zip
+# 1) 下载上游声码器(openvpi 官方 Release,已验证直链,52,893,206 字节)
+$file = 'nsf_hifigan_44.1k_hop512_128bin_2024.02.oudep'
+Invoke-WebRequest "https://github.com/openvpi/vocoders/releases/download/nsf-hifigan-44.1k-hop512-128bin-2024.02/$file" -OutFile $file
+# 校验(可选):
+# (Get-FileHash $file -Algorithm SHA256).Hash
+#   = AB949B2A6A85DD638888D03D8E9566FAB5BFFE18CC5377EC32A8D264D92FEEE2
 
 # 2) 传到 GitHub 自有仓库(release tag = vocoder-2024.02)
 #    需要 gh CLI 已认证;没有 gh 也可在网页端上传
-gh release create vocoder-2024.02 $zip --repo FuFuCloud-mirror/DiffSinger --title "NSF-HiFiGAN vocoder 2024.02" --notes "Mirrored from openvpi/vocoders (CC BY-NC-SA 4.0)."
+gh release create vocoder-2024.02 $file --repo FuFuCloud-mirror/DiffSinger --title "NSF-HiFiGAN vocoder 2024.02" --notes "Mirrored from openvpi/vocoders (CC BY-NC-SA 4.0)."
 
-# 3) 镜像到 CNB(复用项目现有脚本:GitHub Release 资产 → CNB Release 资产,幂等)
+# 3) 镜像到 CNB(两条路,任选)
+#    a) 网页端:cnb.cool → 仓库 → Releases → 新建 Release(tag: vocoder-2024.02) → 上传 $file
+#    b) 命令行:复用项目现有脚本(GitHub Release 资产 → CNB Release 资产,幂等)
 node scripts/mirror-to-cnb.mjs release `
   --repo FuFuCloud-mirror/DiffSinger --tag vocoder-2024.02 `
   --dst-repo FuFuCloud-mirror/DiffSinger --dst-tag vocoder-2024.02
 ```
 
 完成后国内源地址即:
-`https://cnb.cool/FuFuCloud-mirror/DiffSinger/-/releases/download/vocoder-2024.02/nsf_hifigan_44.1k_hop512_128bin_2024.02.zip`
+`https://cnb.cool/FuFuCloud-mirror/DiffSinger/-/releases/download/vocoder-2024.02/nsf_hifigan_44.1k_hop512_128bin_2024.02.oudep`
 (与 `main/download-source.js` 的 `cnbRepoReleaseUrl()` 拼接规则一致。)
+
+未镜像完成时,应用会自动回落到 GitHub 自有仓库 → openvpi 官方,功能不受影响,只是国内可能慢。
 
 ## 合规红线(务必遵守)
 
