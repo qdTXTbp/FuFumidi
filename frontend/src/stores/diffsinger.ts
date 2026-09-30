@@ -109,6 +109,21 @@ export const useDiffsingerStore = defineStore('diffsinger', {
     renderUrl: '',
     renderWarnings: [] as string[],
     lastDurationMs: 0,
+
+    /* 范围渲染预览 —— 只合成选区内音符（可带前后文） */
+    rangeEnabled: false,
+    rangeStartBeat: 0,
+    rangeEndBeat: 4,
+    rangeContextSec: 0.5,
+    /** 上次范围渲染返回的选区元信息（秒） */
+    lastRange: null as any,
+    /** 上次渲染使用的推理链路与后端 */
+    lastPipeline: '',
+    lastDevice: null as { provider: string; requested: string } | null,
+    /** 推理后端偏好：auto / cpu / cuda / dml */
+    device: 'auto' as string,
+    /** 推理后端信息（来自 status.gpu） */
+    gpu: null as any,
   }),
   getters: {
     selected(state): DsNote | null {
@@ -153,6 +168,7 @@ export const useDiffsingerStore = defineStore('diffsinger', {
           this.depsSkipped = !!(s.deps && s.deps.skipped);
           this.vocoderInstalled = !!(s.vocoder && s.vocoder.installed);
           this.vocoderDir = (s.vocoder && s.vocoder.dir) || '';
+          this.gpu = s.gpu || null;
         }
       } catch (e) {}
       this.checking = false;
@@ -394,6 +410,15 @@ export const useDiffsingerStore = defineStore('diffsinger', {
       if (!this.ready) return '组件未就绪：请先在「模块与声库」安装推理组件';
       if (!this.voicebankDir) return '请先选择声库';
       if (!this.notes.length) return '没有音符可渲染';
+      // 范围渲染：只在开启且选区合法时生效
+      let range: any = null;
+      if (this.rangeEnabled) {
+        const s = Number(this.rangeStartBeat), e = Number(this.rangeEndBeat);
+        if (!(e > s)) return '选区无效：结束拍必须大于起始拍';
+        const hit = this.notes.filter(n => n.startBeat < e && n.startBeat + n.durBeat > s);
+        if (!hit.length) return '选区内没有音符：请把选区对准音符所在的拍位';
+        range = { startBeat: s, endBeat: e, contextSec: Number(this.rangeContextSec) || 0 };
+      }
       this.rendering = true;
       this.renderPct = 0;
       this.renderText = '';
@@ -409,7 +434,10 @@ export const useDiffsingerStore = defineStore('diffsinger', {
           vibrato: n.vibrato, vibDepth: n.vibDepth, vibFreq: n.vibFreq, vibFade: n.vibFade,
           pitchOffset: n.pitchOffset,
         }));
-        const r = await (bridge as any).diffsingerRender({ voicebank: this.voicebankDir, notes, bpm: this.bpm });
+        const r = await (bridge as any).diffsingerRender({
+          voicebank: this.voicebankDir, notes, bpm: this.bpm,
+          range, device: this.device || 'auto',
+        });
         if (r && r.ok && r.bytes) {
           const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes as any);
           _lastWavBytes = bytes;
@@ -418,6 +446,9 @@ export const useDiffsingerStore = defineStore('diffsinger', {
           this.renderUrl = URL.createObjectURL(blob);
           this.renderWarnings = r.warnings || [];
           this.lastDurationMs = r.duration_ms || 0;
+          this.lastRange = r.range || null;
+          this.lastPipeline = r.pipeline || '';
+          this.lastDevice = r.device || null;
           return '';
         }
         return (r && r.error) || '渲染失败';
@@ -428,11 +459,27 @@ export const useDiffsingerStore = defineStore('diffsinger', {
         this.rendering = false;
       }
     },
+    /** 把选区设为「某个音符」或「全部音符」的便捷入口 */
+    setRangeToNote(id: string) {
+      const n = this.notes.find(x => x.id === id);
+      if (!n) return;
+      this.rangeEnabled = true;
+      this.rangeStartBeat = n.startBeat;
+      this.rangeEndBeat = n.startBeat + n.durBeat;
+    },
+    setRangeFull() {
+      this.rangeEnabled = false;
+      this.rangeStartBeat = 0;
+      this.rangeEndBeat = this.totalBeats || 4;
+    },
     clearRender() {
       if (this.renderUrl) { try { URL.revokeObjectURL(this.renderUrl); } catch (e) {} }
       this.renderUrl = '';
       this.renderWarnings = [];
       this.lastDurationMs = 0;
+      this.lastRange = null;
+      this.lastPipeline = '';
+      this.lastDevice = null;
       _lastWavBytes = null;
     },
   },

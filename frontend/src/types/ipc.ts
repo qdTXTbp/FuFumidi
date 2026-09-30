@@ -276,6 +276,20 @@ export interface VoicebankProgress {
 
 /* ---------------- DiffSinger 模块化集成 ---------------- */
 
+/** DiffSinger 推理后端（GPU）信息（diffsinger:status.gpu） */
+export interface DiffsingerGpuInfo {
+  /** 请求的设备：auto / cpu / cuda / dml */
+  device: string;
+  /** onnxruntime 当前可用的全部 provider */
+  providers: string[];
+  /** 实际生效的 provider（如 CUDAExecutionProvider） */
+  active: string;
+  onnxruntime?: string;
+  /** GPU 增强包被禁用（未安装或 FUFUMIDI_DISABLE_GPU=1） */
+  disabled?: boolean;
+  note?: string;
+}
+
 /** DiffSinger 组件安装状态（diffsinger:status） */
 export interface DiffsingerStatus {
   ok: boolean;
@@ -288,6 +302,8 @@ export interface DiffsingerStatus {
     /** 模块未启用时的占位标记 */
     skipped?: boolean;
   };
+  /** 推理后端信息（GPU 加速状态） */
+  gpu?: DiffsingerGpuInfo | null;
   vocoder: {
     installed: boolean;
     dir: string;
@@ -366,6 +382,34 @@ export interface DiffsingerNote {
   pitchOffset?: number;
 }
 
+/** 渲染选区（diffsinger:render.range） */
+export interface DiffsingerRenderRange {
+  /** 选区起点（秒，绝对时间） */
+  startSec: number;
+  /** 选区终点（秒，绝对时间） */
+  endSec: number;
+  /** 实际推理起点（含前置上下文，秒） */
+  originSec: number;
+  /** 前置上下文时长（秒） */
+  contextBefore?: number;
+  /** 后置上下文时长（秒） */
+  contextAfter?: number;
+  /** 选区内命中的音符数 */
+  selectedNoteCount?: number;
+}
+
+/** 渲染请求的选区参数 */
+export interface DiffsingerRenderSelection {
+  /** true 或省略起止拍位时渲染整曲 */
+  full?: boolean;
+  /** 选区起始拍 */
+  startBeat?: number;
+  /** 选区结束拍 */
+  endBeat?: number;
+  /** 选区前后保留的上下文秒数（默认 0.5，0 表示不留） */
+  contextSec?: number;
+}
+
 /** DiffSinger 渲染结果（diffsinger:render） */
 export interface DiffsingerRenderResult {
   ok: boolean;
@@ -374,6 +418,12 @@ export interface DiffsingerRenderResult {
   duration_ms?: number;
   warnings?: string[];
   engineVersion?: string;
+  /** 实际使用的推理链路：v2（五段式）/ classic（简化） */
+  pipeline?: string;
+  /** 实际生效的推理后端 */
+  device?: { provider: string; requested: string } | null;
+  /** 范围渲染时的选区元信息（整曲渲染为 null） */
+  range?: DiffsingerRenderRange | null;
   error?: string;
 }
 
@@ -482,7 +532,15 @@ export interface FuBridge {
   diffsingerDownloadVoicebank(id: string): Promise<GeneralResult & { canceled?: boolean; existed?: boolean; name?: string; dir?: string; size?: number }>;
   diffsingerCancelVoicebankDownload(id: string): Promise<GeneralResult>;
   diffsingerInspectVoicebank(cfg: { voicebank: string }): Promise<DiffsingerVoicebankInfo>;
-  diffsingerRender(cfg: { voicebank: string; notes: DiffsingerNote[]; bpm?: number }): Promise<DiffsingerRenderResult>;
+  diffsingerRender(cfg: {
+    voicebank: string;
+    notes: DiffsingerNote[];
+    bpm?: number;
+    /** 选区渲染参数；省略或 full=true 时渲染整曲 */
+    range?: DiffsingerRenderSelection | null;
+    /** 推理后端：auto（默认，GPU 优先）/ cpu / cuda / dml */
+    device?: string;
+  }): Promise<DiffsingerRenderResult>;
   onDiffsingerRuntimeProgress(cb: (p: DiffsingerRuntimeProgress) => void): () => void;
   onDiffsingerVoicebankProgress(cb: (p: DiffsingerVoicebankProgress) => void): () => void;
   onDiffsingerRenderProgress(cb: (p: { percent?: number; text?: string }) => void): () => void;

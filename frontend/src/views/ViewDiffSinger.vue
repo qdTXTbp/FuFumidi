@@ -101,6 +101,47 @@ const evtVal = (e) => (e && e.target ? e.target.value : '');
 const numVal = (e, def = 0) => { const v = Number(evtVal(e)); return Number.isFinite(v) ? v : def; };
 const chkVal = (e) => !!(e && e.target && e.target.checked);
 
+/* ---------------- 范围渲染与推理后端展示 ---------------- */
+/** 选区命中信息提示（拍位 → 秒，命中音符数） */
+const rangeHint = computed(() => {
+  const s = Number(store.rangeStartBeat), e = Number(store.rangeEndBeat);
+  if (!(e > s)) return t('选区无效：结束拍必须大于起始拍');
+  const spb = 60 / Math.max(20, Math.min(400, store.bpm || 120));
+  const hit = store.notes.filter(n => n.startBeat < e && n.startBeat + n.durBeat > s).length;
+  if (!hit) return t('选区内没有音符：请把选区对准音符所在的拍位');
+  const ctx = Number(store.rangeContextSec) || 0;
+  return t('选区') + ' ' + (s * spb).toFixed(2) + '–' + (e * spb).toFixed(2) + 's · '
+    + hit + ' ' + t('个音符') + (ctx > 0 ? (' · ' + t('前后各') + ' ' + ctx + 's ' + t('上下文')) : '');
+});
+const isGpuProvider = (p) => !!p && /CUDA|Dml|DirectML|Tensorrt|ROCM|CoreML|MIGraphX/i.test(String(p));
+const gpuShort = (p) => {
+  const s = String(p || '');
+  if (/CUDA/i.test(s)) return 'GPU · CUDA';
+  if (/Tensorrt/i.test(s)) return 'GPU · TensorRT';
+  if (/Dml|DirectML/i.test(s)) return 'GPU · DirectML';
+  if (/CoreML/i.test(s)) return 'GPU · CoreML';
+  if (/ROCM|MIGraphX/i.test(s)) return 'GPU · ROCm';
+  if (/CPU/i.test(s)) return 'CPU';
+  return s.replace(/ExecutionProvider$/i, '');
+};
+
+/** 推理设备选项：只列出当前环境声明可用的后端 */
+const deviceOptions = computed(() => {
+  const provs = (store.gpu && store.gpu.providers) || [];
+  const has = (re) => provs.some(p => re.test(String(p)));
+  const list = [{ v: 'auto', label: t('自动') }];
+  if (has(/CUDA|Tensorrt/i)) list.push({ v: 'cuda', label: 'CUDA' });
+  if (has(/Dml|DirectML/i)) list.push({ v: 'dml', label: 'DirectML' });
+  list.push({ v: 'cpu', label: 'CPU' });
+  return list;
+});
+const deviceHint = computed(() => {
+  const d = store.device || 'auto';
+  if (d === 'auto') return t('按可用性自动选择（GPU 优先）');
+  if (d === 'cpu') return t('强制 CPU（兼容性最好，速度较慢）');
+  return t('强制使用该 GPU 后端；不可用时引擎会自动回退 CPU');
+});
+
 /* ---------------- 渲染与导出 ---------------- */
 async function doRender() { await run(() => store.render()); }
 async function doSaveWav() {
@@ -228,8 +269,26 @@ const fmtBytes = (n) => {
 
           <!-- 渲染区 -->
           <div class="ds-render">
+            <!-- 范围渲染预览 -->
+            <div class="ds-range">
+              <label class="ds-check">
+                <input type="checkbox" :checked="store.rangeEnabled" :disabled="!store.notes.length" @change="store.rangeEnabled = chkVal($event)" />
+                <span>{{ t('只渲染选区（预览）') }}</span>
+              </label>
+              <template v-if="store.rangeEnabled">
+                <div class="ds-range-fields">
+                  <label>{{ t('起始拍') }}<input type="number" step="0.25" min="0" :value="store.rangeStartBeat" @change="store.rangeStartBeat = Math.max(0, numVal($event, 0))" /></label>
+                  <label>{{ t('结束拍') }}<input type="number" step="0.25" min="0" :value="store.rangeEndBeat" @change="store.rangeEndBeat = Math.max(0, numVal($event, 4))" /></label>
+                  <label>{{ t('前后文') }}<input type="number" step="0.1" min="0" max="10" :value="store.rangeContextSec" @change="store.rangeContextSec = Math.max(0, Math.min(10, numVal($event, 0.5)))" /><em class="muted">s</em></label>
+                  <button class="btn tiny" :title="t('把选区对准当前音符')" :disabled="!store.selectedId" @click="store.setRangeToNote(store.selectedId)">{{ t('定位到所选音符') }}</button>
+                  <button class="btn tiny" @click="store.setRangeFull()">{{ t('重置') }}</button>
+                </div>
+                <p class="muted small ds-range-hint">{{ rangeHint }}</p>
+              </template>
+            </div>
+
             <button class="btn primary big" :disabled="busy || store.rendering || !store.notes.length" @click="doRender">
-              <Icon name="play" :size="15" /> {{ store.rendering ? t('渲染中…') : t('渲染歌声') }}
+              <Icon name="play" :size="15" /> {{ store.rendering ? t('渲染中…') : (store.rangeEnabled ? t('渲染选区') : t('渲染歌声')) }}
             </button>
             <div v-if="store.rendering" class="ds-prog">
               <div class="bar"><i :style="{ width: (store.renderPct || 0) + '%' }"></i></div>
@@ -240,6 +299,10 @@ const fmtBytes = (n) => {
               <button class="btn" @click="doAddToLibrary"><Icon name="music" :size="14" /> {{ t('加入曲库') }}</button>
               <button class="btn" @click="doSaveWav"><Icon name="save" :size="14" /> {{ t('导出 WAV') }}</button>
               <span class="muted small">{{ (store.lastDurationMs / 1000).toFixed(1) }}s</span>
+              <span v-if="store.lastRange" class="ds-tag">{{ t('选区') }} {{ store.lastRange.startSec.toFixed(2) }}–{{ store.lastRange.endSec.toFixed(2) }}s</span>
+              <span v-else class="ds-tag">{{ t('整曲') }}</span>
+              <span v-if="store.lastPipeline" class="ds-tag" :class="{ on: store.lastPipeline === 'v2' }">{{ store.lastPipeline === 'v2' ? t('五段式') : t('简化') }}</span>
+              <span v-if="store.lastDevice" class="ds-tag" :class="{ on: isGpuProvider(store.lastDevice.provider) }">{{ gpuShort(store.lastDevice.provider) }}</span>
             </div>
             <ul v-if="store.renderWarnings.length" class="ds-warn small">
               <li v-for="(w, i) in store.renderWarnings" :key="i"><Icon name="info" :size="12" /> {{ w }}</li>
@@ -281,6 +344,34 @@ const fmtBytes = (n) => {
                 <p class="muted small">{{ store.vocoderInstalled ? t('已安装（NSF-HiFiGAN）') : t('未安装（约 55 MB，下载后本地推理）') }}</p>
               </div>
             </div>
+            <div class="ds-status" :class="{ ok: store.gpu && isGpuProvider(store.gpu.active) }">
+              <Icon :name="store.gpu && isGpuProvider(store.gpu.active) ? 'zap' : 'info'" :size="15" />
+              <div>
+                <b>{{ t('推理后端') }}</b>
+                <p class="muted small" v-if="store.gpu && isGpuProvider(store.gpu.active)">
+                  {{ t('GPU 加速已生效：') }}{{ gpuShort(store.gpu.active) }}
+                </p>
+                <p class="muted small" v-else-if="store.gpu && store.gpu.disabled">
+                  {{ t('GPU 增强包未安装，当前使用 CPU（可在「模块与声库」安装 GPU 加速包）') }}
+                </p>
+                <p class="muted small" v-else-if="store.gpu">
+                  {{ t('当前使用 CPU 推理（未检测到可用的 GPU 后端）') }}
+                </p>
+                <p class="muted small" v-else>{{ t('未检测') }}</p>
+                <p v-if="store.gpu && store.gpu.providers && store.gpu.providers.length" class="muted small ds-providers">
+                  {{ t('可用后端：') }}{{ store.gpu.providers.map(gpuShort).join(' / ') }}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- 推理后端偏好 -->
+          <div class="ds-device-row">
+            <span class="muted small">{{ t('推理设备') }}</span>
+            <div class="ds-seg">
+              <button v-for="d in deviceOptions" :key="d.v" class="ds-seg-btn" :class="{ on: (store.device || 'auto') === d.v }" @click="store.device = d.v">{{ d.label }}</button>
+            </div>
+            <span class="muted small">{{ deviceHint }}</span>
           </div>
 
           <div class="ds-install">
@@ -470,6 +561,26 @@ const fmtBytes = (n) => {
 .ds-render > .btn { align-self: flex-start; }
 .ds-audio { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .ds-audio audio { height: 38px; max-width: 460px; }
+.ds-tag { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--ink-muted); font-size: 11px; white-space: nowrap; }
+.ds-tag.on { border-color: rgba(46, 160, 103, .55); color: var(--ink); background: rgba(46, 160, 103, .12); }
+
+/* 范围渲染预览 */
+.ds-range { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.ds-check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.ds-check span { font-size: 13px; }
+.ds-range-fields { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.ds-range-fields label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-muted); }
+.ds-range-fields input[type="number"] { width: 72px; }
+.ds-range-hint { margin: 0; }
+.btn.tiny { padding: 3px 9px; font-size: 11px; }
+
+/* 推理设备选择 */
+.ds-device-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 12px; }
+.ds-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.ds-seg-btn { border: 0; background: var(--surface); color: var(--ink-muted); padding: 5px 12px; font-size: 12px; cursor: pointer; }
+.ds-seg-btn + .ds-seg-btn { border-left: 1px solid var(--border); }
+.ds-seg-btn.on { background: var(--brand); color: #fff; }
+.ds-providers { opacity: .8; }
 .ds-warn { margin: 0; padding: 8px 12px; border: 1px solid rgba(217, 164, 65, .5); background: rgba(217, 164, 65, .1); border-radius: 9px; color: var(--ink); list-style: none; }
 .ds-warn li { display: flex; gap: 6px; align-items: center; padding: 2px 0; }
 .ds-msg { color: var(--brand-text); }

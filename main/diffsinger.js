@@ -108,6 +108,124 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
   }
   const vbInstalled = (it) => !!findInTree(path.join(vbRoot(), it.dirName), 'dsconfig.yaml', 0);
 
+  /** 剥掉压缩包/文件夹外层多余的包裹目录：返回真正含内容的目录 */
+  function stripWrapperDir(dir, maxDepth = 3) {
+    let cur = dir;
+    for (let i = 0; i < maxDepth; i++) {
+      let entries = [];
+      try { entries = fs.readdirSync(cur); } catch (e) { return cur; }
+      const dirs = [], files = [];
+      for (const n of entries) {
+        try { (fs.statSync(path.join(cur, n)).isDirectory() ? dirs : files).push(n); } catch (e) {}
+      }
+      // 平台噪音目录忽略（macOS zip 会带 __MACOSX）
+      const realDirs = dirs.filter(n => n !== '__MACOSX' && !n.startsWith('.'));
+      if (realDirs.length !== 1 || files.length) return cur;
+      const cand = path.join(cur, realDirs[0]);
+      // 只有候选里才有「实质内容」时才继续下钻
+      let inner = [];
+      try { inner = fs.readdirSync(cand); } catch (e) { return cur; }
+      const hasPayload = inner.some(n => /dsconfig\.ya?ml$/i.test(n) || /\.onnx$/i.test(n))
+        || inner.some(n => { try { return fs.statSync(path.join(cand, n)).isDirectory(); } catch (e) { return false; } });
+      if (!hasPayload) return cur;
+      cur = cand;
+    }
+    return cur;
+  }
+
+  /** 在目录树里定位声库根（含 dsconfig.yaml 且不是子模型目录的那层）
+   *  返回 { root, name } 或 null。优先选层级最浅的那个（避免误命中 dsdur/dspitch 子配置）。 */
+  function detectVoicebankRoot(start) {
+    const found = [];
+    const walk = (d, depth) => {
+      if (depth > 4) return;
+      let entries = [];
+      try { entries = fs.readdirSync(d); } catch (e) { return; }
+      if (entries.includes('dsconfig.yaml')) {
+        const score = voicebankRootScore(d);
+        if (score > 0) found.push({ root: d, depth, score });
+        return; // 命中就不再往这个子树里找（子模型目录另有自己的 dsconfig）
+      }
+      for (const n of entries) {
+        if (n === '__MACOSX' || n.startsWith('.')) continue;
+        const p = path.join(d, n);
+        let isDir = false;
+        try { isDir = fs.statSync(p).isDirectory(); } catch (e) { continue; }
+        if (isDir) walk(p, depth + 1);
+      }
+    };
+    walk(start, 0);
+    if (!found.length) return null;
+    found.sort((a, b) => (b.score - a.score) || (a.depth - b.depth));
+
+    // 声库显示名：character.txt 的 name= 优先，其次 dsconfig 的 name，最后目录名
+    const best = found[0].root;
+    let name = '';
+    try {
+      const ct = path.join(best, 'character.txt');
+      if (fs.existsSync(ct)) {
+        const m = fs.readFileSync(ct, 'utf8').match(/^\s*name\s*=\s*(.+?)\s*$/mi);
+        if (m) name = m[1].trim();
+      }
+    } catch (e) {}
+    if (!name) {
+      try {
+        const y = fs.readFileSync(path.join(best, 'dsconfig.yaml'), 'utf8');
+        const m = y.match(/^\s*name\s*:\s*(.+?)\s*$/mi);
+        if (m) name = m[1].replace(/^["']|["']$/g, '').trim();
+      } catch (e) {}
+    }
+    if (!name) name = path.basename(best);
+    return { root: best, name };
+  }
+
+  /** 给一个 dsconfig.yaml 所在目录打分：主声库根的特征（有 acoustic / 顶层 onnx）分高 */
+  function voicebankRootScore(dir) {
+    let score = 0;
+    let cfg = '';
+    try { cfg = fs.readFileSync(path.join(dir, 'dsconfig.yaml'), 'utf8'); } catch (e) { return 0; }
+    // 主声库根：dsconfig 里带 acoustic 字段，且同级目录有 onnx
+    if (/^\s*acoustic\s*:/mi.test(cfg)) score += 10;
+    if (/^\s*(vocoder|sample_rate|hop_size)\s*:/mi.test(cfg)) score += 2;
+    try {
+      if (fs.readdirSync(dir).some(n => /\.onnx$/i.test(n))) score += 5;
+    } catch (e) {}
+    const base = path.basename(dir).toLowerCase();
+    // 子模型目录明显不是根
+    if (/^(dsdur|dspitch|dsvariance|dsvocoder|dsacoustic)$/.test(base)) score -= 20;
+    return score;
+  }
+
+  /** 汇总声库内识别到的模型与词典，用于导入后展示 / 排查 */
+  function collectModelSummary(root) {
+    const models = { acoustic: '', linguistic: '', dur: '', pitch: '', variance: '', vocoder: '', hasVocoderDir: false };
+    const files = [];
+    const walk = (d, depth) => {
+      if (depth > 3) return;
+      let entries = [];
+      try { entries = fs.readdirSync(d); } catch (e) { return; }
+      for (const n of entries) {
+        const p = path.join(d, n);
+        let isDir = false;
+        try { isDir = fs.statSync(p).isDirectory(); } catch (e) { continue; }
+        if (isDir) { walk(p, depth + 1); continue; }
+        if (/\.onnx$/i.test(n)) files.push({ name: n, rel: path.relative(root, p).replace(/\\/g, '/'), size: (() => { try { return fs.statSync(p).size; } catch (e) { return 0; } })() });
+      }
+    };
+    walk(root, 0);
+    const pick = (re) => { const f = files.find(f => re.test(f.rel) || re.test(f.name)); return f ? f.rel : ''; };
+    models.acoustic = pick(/aco|acoustic/i);
+    models.linguistic = pick(/linguistic/i);
+    models.dur = pick(/(^|[/\\])dur|\.dur\./i);
+    models.pitch = pick(/\.pitch\.|pit\.|pitch_/i);
+    models.variance = pick(/variance|var\./i);
+    models.vocoder = pick(/hifigan|vocoder|dspvocoder/i);
+    models.hasVocoderDir = fs.existsSync(path.join(root, 'dsvocoder'));
+    models.totalOnnx = files.length;
+    models.files = files.slice(0, 40);
+    return models;
+  }
+
   /** 资产候选地址：按 settings.download_source 偏好排序（国内源 CNB 打头 / 全球源 GitHub 打头），失败轮换 */
   function assetUrls(spec) {
     const source = readSettings ? (readSettings().download_source || 'auto') : 'auto';
@@ -248,6 +366,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         ok: true,
         enabled: enabledNow,
         deps: { installed: deps.installed || [], missing: deps.missing || [], ok: !!(deps.ok), error: deps.error || '', skipped: !!deps.skipped },
+        gpu: deps.gpu || null,
         vocoder: { installed: vocoderInstalled, dir: vocoderDir(), spec: VOCODER_SPEC, runtime: rt },
         voicebankDir: vbRoot(),
         voicebankCount: voicebanks.length,
@@ -447,48 +566,46 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     }
   });
 
-  // 导入本地声库 zip / OpenUTAU 依赖包（.oudep = 改后缀的 zip，通常是声码器）
+  // 导入本地声库：zip / .oudep（依赖包）/ 已解压的文件夹
   // directPath：拖拽导入时由渲染端传入，跳过文件对话框
   ipcMain.handle('diffsinger:importVoicebankZip', async (_e, directPath) => {
     try {
-      let files;
-      if (directPath && typeof directPath === 'string' && /\.(zip|oudep)$/i.test(directPath) && fs.existsSync(directPath)) {
-        files = [directPath];
+      let picked = null;
+      if (directPath && typeof directPath === 'string' && fs.existsSync(directPath)) {
+        picked = directPath;
       } else {
         const r = await dialog.showOpenDialog({
-          properties: ['openFile'],
+          properties: ['openFile', 'openDirectory'],
           filters: [{ name: 'DiffSinger 声库', extensions: ['zip', 'oudep'] }],
         });
         if (r.canceled || !r.filePaths || !r.filePaths.length) return { ok: false, canceled: true };
-        files = r.filePaths;
+        picked = r.filePaths[0];
       }
-      const zipPath = files[0];
-      const AdmZip = require('adm-zip');
-      const zip = new AdmZip(zipPath);
-      const isOudep = /\.oudep$/i.test(zipPath);
-      const dlDir = path.join(Paths.tempDir(), 'diffsinger-dl');
-      fs.mkdirSync(dlDir, { recursive: true });
-      const stage = path.join(dlDir, 'import-' + Date.now());
-      zip.extractAllTo(stage, true);
-      const norm = (p) => String(p).replace(/\\/g, '/');
+
+      const isDir = (() => { try { return fs.statSync(picked).isDirectory(); } catch (e) { return false; } })();
+      const isOudep = /\.oudep$/i.test(picked);
+      let stage = null;
+      let cleanupStage = false;
+
+      if (!isDir) {
+        if (!/\.(zip|oudep)$/i.test(picked)) {
+          return { ok: false, error: '不支持的文件类型：请选择 .zip / .oudep 声库包，或直接选择已解压的声库文件夹' };
+        }
+        const AdmZip = require('adm-zip');
+        const zip = new AdmZip(picked);
+        const dlDir = path.join(Paths.tempDir(), 'diffsinger-dl');
+        fs.mkdirSync(dlDir, { recursive: true });
+        stage = path.join(dlDir, 'import-' + Date.now());
+        zip.extractAllTo(stage, true);
+        cleanupStage = true;
+      } else {
+        stage = picked;
+      }
+
       try {
-        // OpenUTAU 归档常带一层顶层目录：找到含目标的子目录
-        const stripTop = (dir) => {
-          let cur = dir;
-          for (let i = 0; i < 2; i++) {
-            const subs = fs.readdirSync(cur).filter(n => { try { return fs.statSync(path.join(cur, n)).isDirectory(); } catch (e) { return false; } });
-            const files2 = fs.readdirSync(cur).filter(n => { try { return fs.statSync(path.join(cur, n)).isFile(); } catch (e) { return false; } });
-            if (!subs.length || files2.length) return cur;
-            const cand = path.join(cur, subs[0]);
-            const hasTarget = fs.existsSync(path.join(cand, 'dsconfig.yaml')) || fs.readdirSync(cand).some(n => /\.onnx$/i.test(n));
-            if (hasTarget) { cur = cand; continue; }
-            return cur;
-          }
-          return cur;
-        };
+        // ---- 依赖包（.oudep）：装到通用声码器位 ----
         if (isOudep) {
-          // 依赖包：装到通用声码器位
-          const src = stripTop(stage);
+          const src = stripWrapperDir(stage);
           const files2 = [];
           const walk = (d) => {
             for (const n of fs.readdirSync(d)) {
@@ -506,31 +623,55 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
           fs.mkdirSync(vDir, { recursive: true });
           for (const f of files2) fs.copyFileSync(f, path.join(vDir, path.basename(f)));
           writeRuntime({ vocoder: { file: path.basename(onnxF), imported: true } });
-          return { ok: true, kind: 'vocoder', name: path.basename(zipPath), dir: vDir };
+          return { ok: true, kind: 'vocoder', name: path.basename(picked), dir: vDir };
         }
-        // 声库包：找 dsconfig.yaml
-        const cfgDir = findInTree(stage, 'dsconfig.yaml', 4);
-        if (!cfgDir) throw new Error('压缩包里没有找到 dsconfig.yaml（请确认是 DiffSinger / OpenUTAU 声库）');
-        let name = path.basename(zipPath, path.extname(zipPath)).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_');
-        name = name || ('voicebank_' + Date.now());
+
+        // ---- 声库包：定位含 dsconfig.yaml 的目录 ----
+        const info = detectVoicebankRoot(stage);
+        if (!info) {
+          throw new Error('没有找到 dsconfig.yaml。请确认这是 DiffSinger / OpenUTAU 声库（压缩包内应含 dsconfig.yaml 与 *.onnx），或直接选择已解压的声库文件夹');
+        }
+        const { root: cfgDir, name: detectedName } = info;
+
+        // 名字优先级：压缩包/文件夹名 → character.txt 的 name= → dsconfig 的 name
+        let name = isDir
+          ? path.basename(picked.replace(/[/\\]+$/, ''))
+          : path.basename(picked, path.extname(picked));
+        name = String(name || '').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim();
+        if (!name) name = detectedName || ('voicebank_' + Date.now());
+
+        if (isDir && path.resolve(cfgDir) === path.resolve(picked)) {
+          // 用户直接选了「已经是声库根」的文件夹：复制一份到声库库，不原地注册
+        }
         const root = vbRoot();
         fs.mkdirSync(root, { recursive: true });
         let dest = path.join(root, name);
         let i = 2;
         while (fs.existsSync(dest)) { dest = path.join(root, name + '_' + i++); }
+
         fs.mkdirSync(dest, { recursive: true });
-        const items = fs.readdirSync(cfgDir);
-        for (const n of items) {
+        for (const n of fs.readdirSync(cfgDir)) {
           const p = path.join(cfgDir, n);
-          const st = fs.statSync(p);
-          if (st.isDirectory()) fs.cpSync(p, path.join(dest, n), { recursive: true });
-          else fs.copyFileSync(p, path.join(dest, n));
+          let st;
+          try { st = fs.statSync(p); } catch (e) { continue; }
+          const target = path.join(dest, n);
+          if (st.isDirectory()) fs.cpSync(p, target, { recursive: true });
+          else fs.copyFileSync(p, target);
         }
-        if (!findInTree(dest, 'dsconfig.yaml', 0)) throw new Error('安装后未找到 dsconfig.yaml');
-        try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
-        return { ok: true, kind: 'voicebank', name, dir: dest, size: dirBytes(dest) };
+
+        const check = detectVoicebankRoot(dest);
+        if (!check) throw new Error('安装后未找到 dsconfig.yaml（可能解压失败或权限不足）');
+
+        // 收集声库摘要，便于前端展示与排查
+        const models = collectModelSummary(dest);
+        return {
+          ok: true, kind: 'voicebank', name, dir: dest, size: dirBytes(dest),
+          models, detectedName, fromDir: isDir,
+        };
       } finally {
-        try { if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
+        if (cleanupStage) {
+          try { if (stage && fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
+        }
       }
     } catch (err) {
       return { ok: false, error: String((err && err.message) || err) };
@@ -675,6 +816,8 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
   // notes 用「拍」为单位（四分音符=1），引擎侧按 bpm 换算秒。
   ipcMain.handle('diffsinger:render', (evt, cfg) => new Promise((resolve) => {
     const { voicebank, notes, bpm } = cfg || {};
+    const range = (cfg && cfg.range) || null;
+    const device = (cfg && cfg.device) || 'auto';
     const pre = precheck(voicebank);
     if (!pre.ok) return resolve(pre);
     if (!notes || !Array.isArray(notes) || !notes.length) return resolve({ ok: false, error: '没有音符可渲染' });
@@ -690,6 +833,17 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         '--bpm', String(Math.max(20, Math.min(400, Number(bpm) || 120))),
         '--out', out,
       ];
+      // 范围渲染：只合成选区内音符（带前后文），未传或 full 时整曲渲染
+      let rangeArg = null;
+      if (range && !range.full && range.startBeat != null && range.endBeat != null
+          && Number(range.endBeat) > Number(range.startBeat)) {
+        rangeArg = { startBeat: Number(range.startBeat), endBeat: Number(range.endBeat) };
+        args.push('--start-beat', String(rangeArg.startBeat), '--end-beat', String(rangeArg.endBeat));
+        const ctx = range.contextSec == null ? 0.5 : Math.max(0, Math.min(10, Number(range.contextSec)));
+        args.push('--context-sec', String(ctx));
+      }
+      // 推理后端：auto 交给引擎按可用性自动选择（GPU 优先）
+      if (device && device !== 'auto') args.push('--device', String(device));
       // 声码器优先级：声库自带 > 通用组件位
       const vd = vocoderDir();
       try {
@@ -710,6 +864,9 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
                 ok: true, out: r.result.out, duration_ms: r.result.duration_ms, bytes,
                 warnings: r.result.warnings || [],
                 engineVersion: r.result.engine_version || '',
+                pipeline: r.result.pipeline || '',
+                device: r.result.device || null,
+                range: r.result.range || null,
               });
             } catch (e) {
               return resolve({ ok: true, out: r.result.out, error: String(e) });
