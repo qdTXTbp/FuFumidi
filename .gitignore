@@ -9,6 +9,9 @@ release-beta/
 release-test/
 gpu-package/
 gpu-package.packbak/
+# GPU 增强包的 staging / 打包输出（解压后都是数 GB，绝不入库）
+gpu-package-rocm*/
+gpu-package-out*/
 tools/
 *.asar
 *.7z
