@@ -11,6 +11,7 @@
 """
 
 import os
+import unicodedata
 import re
 import sys
 
@@ -1104,6 +1105,167 @@ def test_resampler_item():
         RI.host = old_host
 
 
+def test_japanese_vcv_phonemizer():
+    """`Plugin.Builtin/JapaneseVCVPhonemizer.cs` —— VCV 别名判定与回落链。"""
+    from singing.openutau.plugin_builtin import japanese_vcv as J
+    from singing.openutau import Note, PhonemeAttributes, registered
+    ja_cs_path = os.path.join(os.path.dirname(REF), 'OpenUtau.Plugin.Builtin',
+                              'JapaneseVCVPhonemizer.cs')
+    if not os.path.isfile(ja_cs_path):
+        print('  SKIP 找不到 JapaneseVCVPhonemizer.cs')
+        return
+    cs = open(ja_cs_path, encoding='utf-8-sig').read().replace('\r\n', '\n')
+
+    # ---- 源码一致性：注册信息与 vowels 表
+    m = re.search(r'\[Phonemizer\("([^"]*)",\s*"([^"]*)"(?:,\s*author:\s*"([^"]*)")?'
+                  r'(?:,\s*language:\s*"([^"]*)")?\)\]', cs)
+    check('JA VCV: [Phonemizer] 的 name/tag/language 与 C# 一致',
+          m is not None and m.group(1) == J.JapaneseVCVPhonemizer.name
+          and m.group(2) == J.JapaneseVCVPhonemizer.tag
+          and m.group(4) == J.JapaneseVCVPhonemizer.language,
+          'C#=%r 我们=%r' % (m.groups() if m else None,
+                             (J.JapaneseVCVPhonemizer.name, J.JapaneseVCVPhonemizer.tag,
+                              J.JapaneseVCVPhonemizer.language)))
+    check('JA VCV: 已在注册表里（tag 为键）',
+          registered().get('JA VCV') is J.JapaneseVCVPhonemizer)
+
+    cs_vowels = re.findall(r'^\s{12}"([a-zA-Z]+=.*)",\s*$', cs, re.M)
+    check('JA VCV: vowels 表逐行与 C# 一致（%d 行）' % len(cs_vowels),
+          tuple(cs_vowels) == J.VOWELS,
+          'C#=%r\n       我们=%r' % (cs_vowels, list(J.VOWELS)))
+    # 行数 × 各行假名数 = 表项数；且顺序（优先级）由行序决定
+    check('JA VCV: 查表规模 170 项且无重复键（重复在 C# 会抛异常）',
+          len(J.VOWEL_LOOKUP) == 170, 'got %d' % len(J.VOWEL_LOOKUP))
+    check('JA VCV: ぁ/あ/か 都归 a', all(J.VOWEL_LOOKUP[k] == 'a' for k in 'ぁあか'))
+    check('JA VCV: ゃ 归 a（拗音归尾元音）', J.VOWEL_LOOKUP['ゃ'] == 'a')
+    check('JA VCV: n 归 n、ng 归 N（拨音两行不能合并）',
+          J.VOWEL_LOOKUP['n'] == 'n' and J.VOWEL_LOOKUP['ng'] == 'N'
+          and J.VOWEL_LOOKUP['ん'] == 'n' and J.VOWEL_LOOKUP['ン'] == 'N')
+
+    # ---- 功能：用假歌手驱动
+    def _mk_oto(alias, color=''):
+        return UOto(Oto(alias=alias, wav=alias + '.wav'),
+                    UOtoSet(OtoSet(file='oto.ini', name='main'), singers_path='/vb'),
+                    [USubbank(Subbank(color=color))])
+
+    class _Singer:
+        def __init__(self, aliases):
+            self.aliases = aliases
+
+        def try_get_mapped_oto(self, phoneme, tone, color=None):
+            return self.aliases.get(phoneme)
+
+    ph = J.JapaneseVCVPhonemizer()
+
+    # (1) 无前邻：应命中 "- な"
+    singer = _Singer({'- な': _mk_oto('- な'), 'な': _mk_oto('な')})
+    ph.set_singer(singer)
+    r = ph.process([Note(lyric='な', tone=60)])
+    check('JA VCV: 无前邻时优先 "- な"',
+          [p.phoneme for p in r.phonemes] == ['- な'], 'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (2) 有前邻 "き"（尾元音 i）→ 应命中 "i な"
+    singer = _Singer({'i な': _mk_oto('i な'), '- な': _mk_oto('- な'), 'な': _mk_oto('な')})
+    ph.set_singer(singer)
+    r = ph.process([Note(lyric='な', tone=60)], prev_neighbour=Note(lyric='き'))
+    check('JA VCV: 前邻"き"的尾元音 i → 命中 "i な"',
+          [p.phoneme for p in r.phonemes] == ['i な'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (3) 前邻是拗音 "きゃ" → 取最后一个字素 "ゃ" → 元音 a → "a な"
+    singer = _Singer({'a な': _mk_oto('a な')})
+    ph.set_singer(singer)
+    r = ph.process([Note(lyric='な', tone=60)], prev_neighbour=Note(lyric='きゃ'))
+    check('JA VCV: 前邻"きゃ"取末字素 ゃ → 元音 a → "a な"',
+          [p.phoneme for p in r.phonemes] == ['a な'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (4) 前邻尾音查不到元音（如 "X"）→ 退回 "- な" / "な" 长链
+    singer = _Singer({'な': _mk_oto('な')})
+    ph.set_singer(singer)
+    r = ph.process([Note(lyric='な', tone=60)], prev_neighbour=Note(lyric='X'))
+    check('JA VCV: 前邻尾音不是假名时回落到裸歌词',
+          [p.phoneme for p in r.phonemes] == ['な'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (5) 全都不命中 → 回落原歌词
+    singer = _Singer({})
+    ph.set_singer(singer)
+    r = ph.process([Note(lyric='ふにゃ', tone=60)])
+    check('JA VCV: 全部候选都不命中时回落原歌词',
+          [p.phoneme for p in r.phonemes] == ['ふにゃ'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (6) phoneticHint：先试 hint，命中即返回；未命中则**继续走正常流程**
+    singer = _Singer({'HINT': _mk_oto('HINT'), '- な': _mk_oto('- な')})
+    ph.set_singer(singer)
+    r = ph.process([Note(lyric='な', tone=60, phonetic_hint='HINT')])
+    check('JA VCV: 有 phoneticHint 且命中时优先用 hint',
+          [p.phoneme for p in r.phonemes] == ['HINT'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+    # hint 未命中时 C# 会继续往下走正常流程（不是跳过）—— 这里应命中 "- な"
+    singer = _Singer({'HINT': _mk_oto('HINT'), '- な': _mk_oto('- な')})
+    ph.set_singer(singer)
+    r = ph.process([Note(lyric='な', tone=60, phonetic_hint='NOPE')])
+    check('JA VCV: hint 未命中时**继续走正常流程**（命中 "- な"）',
+          [p.phoneme for p in r.phonemes] == ['- な'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (7) NFC 归一化：分解形式的 か+゙ 要先合成成 が 才能查表
+    decomposed = unicodedata.normalize('NFD', 'が')
+    check('JA VCV: 测试前置 —— 分解形式确实与合成形式不同',
+          decomposed != 'が' and len(decomposed) == 2)
+    singer = _Singer({'a が': _mk_oto('a が')})
+    ph.set_singer(singer)
+    r = ph.process([Note(lyric='が', tone=60)],
+                   prev_neighbour=Note(lyric=unicodedata.normalize('NFD', 'か')))
+    check('JA VCV: 前邻歌词先做 NFC 归一化（否则查不到尾元音）',
+          [p.phoneme for p in r.phonemes] == ['a が'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (8) alt 后缀：候选先试 `test + alt`，命中就用它（alt=0 → "i な0"）
+    colored = _mk_oto('i な0', color='Soft')
+    plain = _mk_oto('i な', color='')
+    singer = _Singer({'i な': plain, 'i な0': colored})
+    ph.set_singer(singer)
+    r = ph.process([Note(lyric='な', tone=60,
+                         phoneme_attributes=[PhonemeAttributes(index=0, alternate=0,
+                                                               voice_color='Soft')])],
+                   prev_neighbour=Note(lyric='き'))
+    check('JA VCV: 候选先试 test+alt（alt=0 → "i な0"）',
+          [p.phoneme for p in r.phonemes] == ['i な0'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+    # alt 未命中时回落到 test 本身
+    singer = _Singer({'i な': plain})
+    ph.set_singer(singer)
+    r = ph.process([Note(lyric='な', tone=60,
+                         phoneme_attributes=[PhonemeAttributes(index=0, alternate=7)])],
+                   prev_neighbour=Note(lyric='き'))
+    check('JA VCV: test+alt 未命中时回落 test 本身',
+          [p.phoneme for p in r.phonemes] == ['i な'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+    # 颜色优先：前邻 "き" 下 "i な" 与 "* な" 都命中，应挑 IsColorMatch('Soft') 的 "* な"
+    singer = _Singer({'i な': _mk_oto('i な', color=''),
+                      '* な': _mk_oto('* な', color='Soft')})
+    ph.set_singer(singer)
+    r = ph.process([Note(lyric='な', tone=60,
+                         phoneme_attributes=[PhonemeAttributes(index=0, voice_color='Soft')])],
+                   prev_neighbour=Note(lyric='き'))
+    check('JA VCV: 多候选命中时优先取 IsColorMatch(color) 的那个（不是第一个）',
+          [p.phoneme for p in r.phonemes] == ['* な'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+    # 没有颜色匹配的候选时退回第一个
+    singer = _Singer({'i な': _mk_oto('i な', color=''),
+                      '* な': _mk_oto('* な', color='Other')})
+    ph.set_singer(singer)
+    r = ph.process([Note(lyric='な', tone=60,
+                         phoneme_attributes=[PhonemeAttributes(index=0, voice_color='Soft')])],
+                   prev_neighbour=Note(lyric='き'))
+    check('JA VCV: 无颜色匹配候选时退回第一个命中项',
+          [p.phoneme for p in r.phonemes] == ['i な'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+
 def test_xxhash64():
     """XXH32/XXH64 官方测试向量 —— 对不上，所有缓存键都会静默错。"""
     from singing.openutau.xxhash import xxh32, xxh64 as _x
@@ -1158,6 +1320,8 @@ def main():
     test_render_phrase_build()
     print('--- Renderers 注册表 / ApplyDynamics ---')
     test_renderers_registry()
+    print('--- Plugin.Builtin/JapaneseVCV ---')
+    test_japanese_vcv_phonemizer()
     print('--- Classic/ResamplerItem ---')
     test_resampler_item()
     print('\n结果: %d passed, %d failed' % (len(_PASS), len(_FAIL)))

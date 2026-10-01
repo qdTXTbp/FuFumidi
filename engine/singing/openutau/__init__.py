@@ -20,6 +20,7 @@
   - `openutau/xxhash.py`      XXH32/XXH64（K4os.Hash.xxHash.XXH32/XXH64）
   - `openutau/binary_writer.py`  `System.IO.BinaryWriter` 的字节布局复刻（缓存键用）
   - `openutau/classic/`        `OpenUtau.Classic` 命名空间（ResamplerItem 等）
+  - `openutau/plugin_builtin/` `OpenUtau.Plugin.Builtin` 内置音素化器（JA VCV 已搬）
   - `openutau/pipeline_source.py` 渲染输入契约（Pipeline/PhraseSource.cs）
   - `openutau/render_phrase.py`   RenderNote/RenderPhone/RenderPhrase（Render/RenderPhrase.cs）
   - `openutau/oto.py`         原音模型（Ustx/USinger.cs 的 UOto + Classic/VoiceBank.cs）
@@ -125,6 +126,10 @@ from .singer import (  # noqa: F401
 from .spline import CubicSplineSegment  # noqa: F401
 from .timeaxis import TimeAxis  # noqa: F401
 from .xxhash import digest_of32, digest_of64, xxh32, xxh64  # noqa: F401
+
+# 导入内置音素化器即完成注册（对应 C# 的 [Phonemizer(...)] 在程序集加载时注册）。
+# 放在最后：它们依赖上面的基类与注册表。
+from . import plugin_builtin  # noqa: E402,F401
 
 __all__ = [
     'Ustx',
