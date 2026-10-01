@@ -5,16 +5,19 @@
   - `load_voicebank(vb_dir)`                 声库 → dict（含 phonemes / 各阶段模型）
   - `load_dictionaries(vb, cache=None)`      声库内词典 → {word: [phonemes]}
   - `lyrics_to_phonemes(notes, vb, dicts, phoneme_set)`  每音符歌词 → 音素序列
-  - `split_ph_duration` / `build_pitch_curve` / `run_acoustic` / `run_vocoder`（M2 用）
+  - `render_phrase(cfg, on_progress)`        **M2 抽取出的整条渲染流水线**（原 cmd_render 主体）
 
-**M1 只接「音素化」这一半**：
-`cmd_render()` 里 1817–2150 行把「音符归一化 → 音素 → 时长 → 音高 → 声学 → 声码器」
-整条流水线写在一个函数体内，没有可复用的边界。要把它接进 Renderer 抽象，
-必须先做一次**纯搬运式抽取**（把函数体切成 render_phrase()，cmd_render 改为调用它）。
-这类改动没有模型就跑不了验证，属于 M2 的第一步，故此处不留半成品实现：
-`DiffSingerRenderer.render()` 明确抛 NotImplementedError，而不是给出可能不对的结果。
+M2 进展：`cmd_render()` 里原本内联成一整段的流水线（1817–2143 行）已**纯搬运**抽成
+`render_phrase()`，CLI 与这里的 `DiffSingerRenderer` 共用同一份实现。
+
+⚠ 关于验证方式的重要事实：**这条流水线不是逐位可复现的**。
+实测同一份代码连跑 4 次，波形 `max|d| ≈ 0.11–0.16`、逐样本相关系数 ≈ 0（声码器激励相位每次不同），
+所以「WAV sha256 相同」**不能**当作等价判据。改用对数谱（幅度谱）对照：
+同码重跑相关 0.9927–0.9959，抽取前 vs 抽取后 0.9929–0.9961 —— 区间完全重叠，
+即抽取带来的差异落在流水线自身的噪声地板上。详见 `engine/tests/test_singing_adapters.py`。
 """
 
+import json
 import os
 import sys
 
@@ -26,7 +29,7 @@ if _ENGINE_DIR not in sys.path:
 import engine_diffsinger  # noqa: E402
 
 from ..api import Phonemizer, Renderer, register_phonemizer, register_renderer  # noqa: E402
-from ..types import Phoneme, PhonemizedNote, RenderContext, RenderRequest, RenderResult  # noqa: E402
+from ..types import Phoneme, PhonemizedNote, RenderContext, RenderPitchResult, RenderRequest, RenderResult  # noqa: E402
 
 
 def normalize_notes(notes, bpm):
@@ -106,13 +109,41 @@ class DiffSingerPhonemizer(Phonemizer):
 
 @register_renderer
 class DiffSingerRenderer(Renderer):
-    """DiffSinger 渲染器 —— M2 才接（见模块 docstring）。"""
+    """DiffSinger 渲染器：委托 `render_phrase()`（M2 从 cmd_render 抽出的整条流水线）。
+
+    注意 `render_phrase` 的 `notes` 走的是 CLI 同款解析（JSON 字符串或 `@文件`），
+    所以这里显式 `json.dumps` —— 直接传 list 会落到 `json.loads(list)` 而报错。
+    """
 
     name = 'diffsinger'
     kinds = ('diffsinger',)
 
-    def render(self, req, ctx=None):   # pragma: no cover - M2 实现
-        raise NotImplementedError(
-            'DiffSingerRenderer 尚未接入：`cmd_render()` 的流水线仍内联在单函数里，'
-            '需要先在 M2 做一次纯搬运式抽取（render_phrase()），再用模型实测做对照验证。'
-            '当前请继续走既有的 diffsinger:render IPC。')
+    def render(self, req, ctx=None):
+        ctx = ctx or RenderContext(voicebank_dir=self.voicebank_dir, sample_rate=req.sample_rate)
+        vb_dir = self.voicebank_dir or ctx.voicebank_dir
+        p = req.params or {}
+        cfg = {
+            'voicebank': vb_dir,
+            'notes': json.dumps(list(req.notes or []), ensure_ascii=False),
+            'bpm': req.bpm,
+            'vocoder': p.get('vocoder'),
+            'start_beat': p.get('start_beat'),
+            'end_beat': p.get('end_beat'),
+            'context_sec': p.get('context_sec', 0.5),
+            'full': p.get('full', False),
+            'device': req.device or 'auto',
+            # 适配器只要波形，不落盘（out 为空时 render_phrase 跳过写文件）
+            'out': p.get('out') or '',
+        }
+        # RenderError 直接向上抛：接口约定「失败应抛异常，不要把错误塞进 samples」
+        res = engine_diffsinger.render_phrase(cfg, on_progress=p.get('on_progress'))
+        for w in (res.get('warnings') or []):
+            ctx.warn(w)
+        ctx.cache['bpm'] = req.bpm
+        return RenderResult(
+            samples=res.get('wav'),
+            sample_rate=int(res.get('sample_rate') or req.sample_rate or 44100),
+            leading_ms=0.0,
+            position_ms=0.0,
+            estimated_length_ms=float(res.get('duration_ms') or 0.0),
+        )

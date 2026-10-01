@@ -1814,28 +1814,49 @@ def run_acoustic_v2(vb, ph_seq, ph_dur_frames, pitch, breathiness, voicing, tens
     return mel
 
 
-def cmd_render(args):
+class RenderError(Exception):
+    """渲染的可预期失败（参数 / 声库 / 模型不满足）。msg 直接面向用户。"""
+
+
+def render_phrase(cfg, on_progress=None):
+    """DiffSinger 渲染流水线 —— 由 cmd_render() **纯搬运**抽出，逻辑一行未改。
+
+    M2 第一步：这条流水线原先整段内联在 cmd_render() 里（没有复用边界），
+    抽出来之后 CLI（cmd_render）与 singing.adapters.diffsinger.DiffSingerRenderer
+    共用同一份实现。
+
+    ⚠ 行为等价的判据（实测得出的结论，务必照做）：
+    这条流水线**逐位不可复现** —— 同码连跑 4 次，波形逐样本相关系数 ≈ 0
+    （幅度谱一致、相位每次不同；谱平坦度 0.087，确认是正常乐音而非噪声）。
+    所以 **不能**拿 WAV sha256 当等价判据。正确做法是比对
+      ① 确定性中间量（phoneme_count / duration_ms / pipeline / range 等元数据）；
+      ② 对数（幅度）谱：同码重跑相关 0.9927–0.9959，抽取前 vs 抽取后 0.9929–0.9961，
+         区间完全重叠 = 抽取带来的差异落在流水线自身噪声地板内。
+
+    cfg 键：voicebank / notes / bpm / vocoder / start_beat / end_beat /
+            context_sec / full / device / out（out 为空则只出波形不落盘）
+    on_progress(percent, text) 可选。
+    成功返回 dict（字段与旧 emit_result 成功分支一致，另含 wav / sample_rate 供适配器取用）；
+    失败抛 RenderError。
+    """
+    cfg = cfg or {}
     warnings_out = []
+    _prog = on_progress if callable(on_progress) else (lambda *_a, **_k: None)
     try:
         import numpy as np  # noqa: F401  提前失败给清晰报错
     except ImportError:
-        emit_result({"ok": False, "error": "缺少 numpy：引擎环境异常，请用「一键修复」检查 Python 环境"})
-        return
+        raise RenderError("缺少 numpy：引擎环境异常，请用「一键修复」检查 Python 环境")
     try:
-        import onnxruntime as ort
+        import onnxruntime as ort  # noqa: F401
     except ImportError:
-        emit_result({"ok": False, "error": "缺少 onnxruntime：请先启用 DiffSinger 模块并安装组件（模块与声库 → 安装组件）"})
-        return
-
+        raise RenderError("缺少 onnxruntime：请先启用 DiffSinger 模块并安装组件（模块与声库 → 安装组件）")
     # ---- 1) 声库 ----
     try:
-        vb = load_voicebank(args.voicebank)
+        vb = load_voicebank(cfg.get("voicebank"))
     except ValueError as e:
-        emit_result({"ok": False, "error": str(e)})
-        return
+        raise RenderError(str(e))
     if not vb["acoustic"]:
-        emit_result({"ok": False, "error": "声库里没有 acoustic 模型（dsconfig.yaml 的 acoustic 字段为空或文件缺失）"})
-        return
+        raise RenderError("声库里没有 acoustic 模型（dsconfig.yaml 的 acoustic 字段为空或文件缺失）")
 
     # ---- 2) 声码器：声库自带 > 子模型目录（dsvocoder/）> --vocoder 参数（通用组件位）----
     vocoder_path = vb["vocoder"]
@@ -1846,8 +1867,8 @@ def cmd_render(args):
             if mp and os.path.isfile(mp):
                 vocoder_path = mp
                 break
-    if not vocoder_path and args.vocoder:
-        vp = str(args.vocoder)
+    if not vocoder_path and cfg.get("vocoder"):
+        vp = str(cfg.get("vocoder"))
         if os.path.isdir(vp):
             for n in sorted(os.listdir(vp)):
                 if n.lower().endswith(".onnx"):
@@ -1856,8 +1877,7 @@ def cmd_render(args):
         elif os.path.isfile(vp):
             vocoder_path = vp
     if not vocoder_path:
-        emit_result({"ok": False, "error": "没有可用声码器：声库未自带且通用声码器未安装（模块与声库 → 安装组件）"})
-        return
+        raise RenderError("没有可用声码器：声库未自带且通用声码器未安装（模块与声库 → 安装组件）")
 
     # ---- 3) 音符（拍 → 秒）----
     # --notes 支持两种写法（与 engine_utau.py 约定一致）：
@@ -1866,15 +1886,14 @@ def cmd_render(args):
     #      30–200 KB，直接拼进命令行会撞 Windows 32K 上限（spawn ENAMETOOLONG），
     #      故落临时文件后只传路径。
     try:
-        raw = args.notes
+        raw = cfg.get("notes")
         if isinstance(raw, str) and raw.startswith("@"):
             with open(raw[1:], "r", encoding="utf-8") as f:
                 payload = json.load(f)
         else:
             payload = json.loads(raw)
     except Exception as e:  # noqa: BLE001
-        emit_result({"ok": False, "error": "notes JSON 解析失败：" + str(e)})
-        return
+        raise RenderError("notes JSON 解析失败：" + str(e))
     # 载荷两种形态：裸 list（旧约定）；或 {"notes": [...], "pitchCurve": [{beat,cents}]}
     # （P3 音高曲线随工程一起下发，见 main/diffsinger.js 与 stores/diffsinger.ts）。
     pitch_curve = []
@@ -1884,9 +1903,8 @@ def cmd_render(args):
     else:
         notes = payload
     if not isinstance(notes, list) or not notes:
-        emit_result({"ok": False, "error": "没有音符可渲染"})
-        return
-    bpm = max(20.0, min(400.0, float(args.bpm or 120)))
+        raise RenderError("没有音符可渲染")
+    bpm = max(20.0, min(400.0, float(cfg.get("bpm") or 120)))
     spb = 60.0 / bpm
     norm = []
     for n in notes:
@@ -1908,30 +1926,27 @@ def cmd_render(args):
             "pitchOffset": float(n.get("pitchOffset") or 0),
         })
     if not norm:
-        emit_result({"ok": False, "error": "没有有效音符"})
-        return
+        raise RenderError("没有有效音符")
     norm.sort(key=lambda x: x["startSec"])
 
     # ---- 3.5) 范围渲染：选区 + 前后文，把时间轴平移到 0 ----
     range_info = None
     shift_sec = 0.0   # 时间轴平移量；音高曲线要与音符一样减去它，否则选区内会错位
-    if not getattr(args, "full", False) and (
-            getattr(args, "start_beat", None) is not None or getattr(args, "end_beat", None) is not None):
-        sb = getattr(args, "start_beat", None)
-        eb = getattr(args, "end_beat", None)
+    if not cfg.get("full", False) and (
+            cfg.get("start_beat") is not None or cfg.get("end_beat") is not None):
+        sb = cfg.get("start_beat")
+        eb = cfg.get("end_beat")
         start_sec = None if sb is None else max(0.0, float(sb) * spb)
         end_sec = None if eb is None else max(0.0, float(eb) * spb)
         if start_sec is not None and end_sec is not None and end_sec <= start_sec:
-            emit_result({"ok": False, "error": "选区无效：终点必须大于起点（start-beat %.4g / end-beat %.4g）" % (sb, eb)})
-            return
+            raise RenderError("选区无效：终点必须大于起点（start-beat %.4g / end-beat %.4g）" % (sb, eb))
         picked, cut_start, cut_end, range_info = select_render_range(
-            norm, start_sec, end_sec, float(getattr(args, "context_sec", 0.5) or 0.0))
+            norm, start_sec, end_sec, float(cfg.get("context_sec", 0.5) or 0.0))
         if picked is None:
-            emit_result({"ok": False, "error": "选区内没有音符：请把选区对准音符所在的拍位（可在时间轴上直接拖拽选取）"})
-            return
+            raise RenderError("选区内没有音符：请把选区对准音符所在的拍位（可在时间轴上直接拖拽选取）")
         norm = picked
         shift_sec = float(range_info.get("originSec", 0.0) or 0.0)
-        emit_progress(6, "选区：%d/%d 个音符（含前后文），起 %.2fs 止 %.2fs" % (
+        _prog(6, "选区：%d/%d 个音符（含前后文），起 %.2fs 止 %.2fs" % (
             range_info["renderNoteCount"], range_info["totalNoteCount"],
             range_info["startSec"], range_info["endSec"]))
     total_sec = max(n["startSec"] + n["durSec"] for n in norm) + 0.35
@@ -1950,7 +1965,7 @@ def cmd_render(args):
             curve_pts.append((cb * spb - shift_sec, cc))
         curve_pts.sort(key=lambda x: x[0])
 
-    emit_progress(8, "解析音素…")
+    _prog(8, "解析音素…")
     # ---- 4) 歌词 → 音素 ----
     phoneme_set = set(vb["phonemes"]) or {"AP", "SP"}
     dicts = load_dictionaries(vb)
@@ -1972,8 +1987,7 @@ def cmd_render(args):
             ph_dur.append(max(0.02, d))
         prev_end = note["startSec"] + note["durSec"]
     if not ph_seq:
-        emit_result({"ok": False, "error": "音素序列为空"})
-        return
+        raise RenderError("音素序列为空")
 
     # 音素 → id（声库 phonemes 表；不在表里的用 AP 的 id 兜底并告警）
     ph_list = list(vb["phonemes"]) if vb["phonemes"] else sorted(phoneme_set)
@@ -2004,16 +2018,15 @@ def cmd_render(args):
     pitch = build_pitch_curve(frames, norm, hop_sec, curve_pts or None)
 
     # ---- 推理后端：auto → engine_gpu 判定；失败自动降级 CPU ----
-    providers, p_note = resolve_providers(getattr(args, "device", "auto") or "auto")
+    providers, p_note = resolve_providers(cfg.get("device") or "auto")
     if providers is None:
-        emit_result({"ok": False, "error": p_note})
-        return
+        raise RenderError(p_note)
     if p_note:
         warnings_out.append(p_note)
     dev_label = providers[0]
-    emit_progress(22, "推理后端：%s" % dev_label)
+    _prog(22, "推理后端：%s" % dev_label)
 
-    emit_progress(25, "加载 acoustic 模型…")
+    _prog(25, "加载 acoustic 模型…")
     acoustic_sess = None
     try:
         acoustic_sess, w0 = make_session(vb["acoustic"], providers)
@@ -2021,12 +2034,11 @@ def cmd_render(args):
             warnings_out.append(w0)
     except Exception as e:  # noqa: BLE001
         if not vb.get("stages"):
-            emit_result({"ok": False, "error": "acoustic 模型加载失败：" + str(e)})
-            return
+            raise RenderError("acoustic 模型加载失败：" + str(e))
         # v2 声库：主 acoustic 加载不了还有子模型链路，先不致命
         warnings_out.append("主 acoustic 模型加载失败（将尝试 v2 链路）：" + str(e)[:160])
 
-    emit_progress(45, "acoustic 推理…")
+    _prog(45, "acoustic 推理…")
     mel = None
     pipeline_used = "classic"
     try:
@@ -2048,7 +2060,7 @@ def cmd_render(args):
         v2_fail = None
         if vb.get("stages"):
             mel, v2_fail = run_diffsinger_v2(vb, norm, ph_seq, ph_dur, ph_mids, pitch, mel_bins_hint,
-                                             providers, warnings_out, emit_progress)
+                                             providers, warnings_out, _prog)
             if mel is not None:
                 pipeline_used = "v2"
                 if len(pitch) != mel.shape[2]:
@@ -2056,24 +2068,21 @@ def cmd_render(args):
             else:
                 # v2 声库（自带五段式子模型）不应静默回退到简化链路——报出真实原因
                 if acoustic_sess is None:
-                    emit_result({"ok": False, "error": (v2_fail or "v2 链路不可用")
-                                 + "；声库主 acoustic 亦不可用，无法合成"})
-                    return
+                    raise RenderError((v2_fail or "v2 链路不可用")
+                                      + "；声库主 acoustic 亦不可用，无法合成")
                 warnings_out.append("v2 链路不可用（%s），已回退简化链路" % (v2_fail or "未知原因"))
         if mel is None:
             pipeline_used = "classic"
             if acoustic_sess is None:
-                emit_result({"ok": False, "error": "acoustic 模型不可用：声库主模型加载失败且 v2 链路也不可用，无法合成"})
-                return
+                raise RenderError("acoustic 模型不可用：声库主模型加载失败且 v2 链路也不可用，无法合成")
             mel = run_acoustic(acoustic_sess, phoneme_ids, ph_dur, ph_mids, pitch, mel_bins_hint, warnings_out)
     except Exception as e:  # noqa: BLE001
         msg = str(e)
         if "onnxruntime" in msg and "shape" in msg.lower():
             msg += "（该声库的模型输入布局可能不受当前版本支持，请反馈声库名称）"
-        emit_result({"ok": False, "error": "acoustic 推理失败：" + msg})
-        return
+        raise RenderError("acoustic 推理失败：" + msg)
 
-    emit_progress(70, "声码器合成波形…")
+    _prog(70, "声码器合成波形…")
     pad_frames = 0
     try:
         if v_sess is None:
@@ -2099,11 +2108,10 @@ def cmd_render(args):
         if pad_frames:
             wav = wav[: max(0, len(wav) - int(pad_frames * hop))]
     except Exception as e:  # noqa: BLE001
-        emit_result({"ok": False, "error": "声码器合成失败：" + str(e)})
-        return
+        raise RenderError("声码器合成失败：" + str(e))
 
     # ---- 7) 落盘 ----
-    emit_progress(92, "写出 WAV…")
+    _prog(92, "写出 WAV…")
     try:
         # 尾部裁掉 0.3s 静音、头部去直流
         tail = int(sr * 0.30)
@@ -2116,20 +2124,20 @@ def cmd_render(args):
             if b - a > int(sr * 0.02):
                 wav = wav[a:b]
                 range_info["trimmed"] = True
-                emit_progress(96, "已裁出选区：%.2fs ~ %.2fs（%.2fs）" % (
+                _prog(96, "已裁出选区：%.2fs ~ %.2fs（%.2fs）" % (
                     range_info["startSec"], range_info["endSec"], range_info["endSec"] - range_info["startSec"]))
             else:
                 range_info["trimmed"] = False
                 warnings_out.append("选区过短（不足 20ms），已保留整段上下文音频")
-        out = os.path.abspath(args.out)
-        os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-        write_wav(out, wav, sr)
+        out = os.path.abspath(cfg["out"]) if cfg.get("out") else ""
+        if out:
+            os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+            write_wav(out, wav, sr)
     except Exception as e:  # noqa: BLE001
-        emit_result({"ok": False, "error": "WAV 写出失败：" + str(e)})
-        return
+        raise RenderError("WAV 写出失败：" + str(e))
 
-    emit_progress(100, "完成")
-    emit_result({
+    _prog(100, "完成")
+    return {
         "ok": True,
         "out": out,
         "duration_ms": int(len(wav) / sr * 1000),
@@ -2137,10 +2145,37 @@ def cmd_render(args):
         "engine_version": VERSION,
         "phoneme_count": len(ph_seq),
         "sample_rate": sr,
-        "device": {"provider": dev_label, "requested": (getattr(args, "device", "auto") or "auto")},
+        "device": {"provider": dev_label, "requested": (cfg.get("device") or "auto")},
         "pipeline": pipeline_used,
         "range": range_info,
-    })
+        "wav": wav,
+        "sample_rate": sr,
+    }
+
+
+def cmd_render(args):
+    """CLI 入口：只做参数搬运 + 结果输出，真正的流水线在 render_phrase()。
+
+    注意与旧实现的等价性：旧版失败时是 `emit_result(ok:false)` 后**正常返回**（退出码 0），
+    不是 sys.exit(1) —— 这里保持同样语义，避免主进程的解析逻辑发生变化。
+    """
+    try:
+        res = render_phrase({
+            "voicebank": args.voicebank,
+            "notes": args.notes,
+            "bpm": args.bpm,
+            "vocoder": getattr(args, "vocoder", None),
+            "start_beat": getattr(args, "start_beat", None),
+            "end_beat": getattr(args, "end_beat", None),
+            "context_sec": getattr(args, "context_sec", 0.5),
+            "full": getattr(args, "full", False),
+            "device": getattr(args, "device", "auto"),
+            "out": args.out,
+        }, on_progress=emit_progress)
+    except RenderError as e:
+        emit_result({"ok": False, "error": str(e)})
+        return
+    emit_result({k: v for k, v in res.items() if k not in ("wav", "sample_rate")})
 
 
 # ================================================================

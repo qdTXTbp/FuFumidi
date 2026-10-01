@@ -109,11 +109,8 @@ def test_registry():
         check('registry: 未知渲染器应报错', False, '没有报错')
     except KeyError:
         check('registry: 未知渲染器应报错', True)
-    try:
-        DiffSingerRenderer(voicebank_dir='').render(RenderRequest(notes=[]))
-        check('diffsinger renderer: 未接入时应明确报错', False, '没有报错')
-    except NotImplementedError:
-        check('diffsinger renderer: 未接入时应明确报错', True)
+    check('registry: diffsinger 渲染器已接入（M2 抽出 render_phrase 后）',
+          DiffSingerRenderer.name == 'diffsinger' and callable(getattr(DiffSingerRenderer, 'render', None)))
 
 
 def _find_real_diffsinger_vb():
@@ -169,6 +166,53 @@ def test_normalize_matches_legacy():
           'got %r' % normalize_notes([{'startBeat': 1}], 1e9)[0]['startSec'])
 
 
+def test_diffsinger_renderer():
+    """真机渲染（可选）：需要用真实声库跑一次完整 ONNX 流水线，约 20s。
+
+    默认跳过，避免拖慢日常测试；用 FUFUMIDI_SINGING_FULL=1 打开，例如：
+        FUFUMIDI_SINGING_FULL=1 python engine/tests/test_singing_adapters.py
+
+    ⚠ 断言方式说明：这条流水线**逐位不可复现**（声码器激励相位每次不同，
+    实测同码重跑逐样本相关系数 ≈ 0），所以这里**不比对 WAV 字节**，只校验：
+      1) 适配器能跑通并返回等长、同采样率的波形；
+      2) 输出确实是**有谐波结构的乐音**而不是噪声（谱平坦度 + 基频谐波幅度）。
+    行为等价性另由对数谱对照实验证明（见 M2 提交说明）。
+    """
+    if os.environ.get('FUFUMIDI_SINGING_FULL') != '1':
+        _SKIP.append('diffsinger renderer 真机渲染（设 FUFUMIDI_SINGING_FULL=1 打开）')
+        print('  SKIP diffsinger renderer 真机渲染（设 FUFUMIDI_SINGING_FULL=1 打开）')
+        return
+    vb = _find_real_diffsinger_vb()
+    if not vb:
+        _SKIP.append('diffsinger renderer 真机渲染（没找到真实声库）')
+        print('  SKIP diffsinger renderer 真机渲染（没找到真实声库）')
+        return
+    try:
+        import numpy as np
+        r = get_renderer('diffsinger', voicebank_dir=vb)
+        notes = [{'startBeat': 0, 'durBeat': 1, 'pitch': 60, 'lyric': 'la'},
+                 {'startBeat': 1, 'durBeat': 1, 'pitch': 62, 'lyric': 'la'}]
+        res = r.render(RenderRequest(notes=notes, bpm=120.0, device='cpu'))
+        a = np.asarray(res.samples, dtype='float64')
+        check('diffsinger renderer: 返回非空波形', len(a) > 0, 'len=%d' % len(a))
+        check('diffsinger renderer: 采样率取自声库', res.sample_rate == 44100, 'got %d' % res.sample_rate)
+        check('diffsinger renderer: estimated_length_ms 与波形一致',
+              abs(res.estimated_length_ms - len(a) / res.sample_rate * 1000.0) < 2.0,
+              'est=%.1f 实际=%.1f' % (res.estimated_length_ms, len(a) / res.sample_rate * 1000.0))
+        # 有谐波结构（不是噪声）：取能量最高的一帧看谱平坦度 + 基频谐波
+        L = 4096
+        best, bi = 0.0, 0
+        for i in range(0, max(0, len(a) - L), L // 2):
+            e = float(np.sum(a[i:i + L] ** 2))
+            if e > best:
+                best, bi = e, i
+        spec = np.abs(np.fft.rfft(a[bi:bi + L] * np.hanning(L)))
+        flat = float(np.exp(np.mean(np.log(spec + 1e-12))) / (np.mean(spec) + 1e-12))
+        check('diffsinger renderer: 输出是乐音而非噪声（谱平坦度 < 0.5）', flat < 0.5, 'flatness=%.4f' % flat)
+    except Exception as e:
+        check('diffsinger renderer: 真机渲染跑通', False, '%s: %s' % (type(e).__name__, e))
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix='fufu-sing-test-')
     try:
@@ -177,6 +221,7 @@ def main():
         test_registry()
         test_normalize_matches_legacy()
         test_diffsinger_phonemizer()
+        test_diffsinger_renderer()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
