@@ -1266,6 +1266,181 @@ def test_japanese_vcv_phonemizer():
           'got %r' % [p.phoneme for p in r.phonemes])
 
 
+def _mk_named_oto(alias, color=''):
+    """造一个带 subbanks 的 UOto（无 subbanks 时 is_color_match 会抛，与 C# 一致）。"""
+    return UOto(Oto(alias=alias, wav=alias + '.wav'),
+                UOtoSet(OtoSet(file='oto.ini', name='main'), singers_path='/vb'),
+                [USubbank(Subbank(color=color))])
+
+
+class _OtoSinger:
+    """按别名查表的假歌手。"""
+
+    def __init__(self, aliases):
+        self.aliases = aliases
+
+    def try_get_mapped_oto(self, phoneme, tone, color=None):
+        return self.aliases.get(phoneme)
+
+
+def test_chinese_vcv_phonemizer():
+    """`Plugin.Builtin/ChineseVCVPhonemizer.cs` —— 尾韵母查表 + 尾韵 R + 汉字罗马化。"""
+    from singing.openutau.plugin_builtin import chinese_vcv as C
+    from singing.openutau import BaseChinesePhonemizer, Note, PhonemeAttributes, registered
+    ja_path = os.path.join(os.path.dirname(REF), 'OpenUtau.Plugin.Builtin',
+                           'ChineseVCVPhonemizer.cs')
+    if not os.path.isfile(ja_path):
+        print('  SKIP 找不到 ChineseVCVPhonemizer.cs')
+        return
+    cs = open(ja_path, encoding='utf-8-sig').read().replace('\r\n', '\n')
+
+    # ---- 源码一致性：注册信息
+    m = re.search(r'\[Phonemizer\("([^"]*)",\s*"([^"]*)",\s*"([^"]*)"(?:,\s*language:\s*"([^"]*)")?\)\]', cs)
+    check('ZH VCV: [Phonemizer] 的 name/tag/author/language 与 C# 一致',
+          m is not None and (m.group(1), m.group(2), m.group(3), m.group(4)) == (
+              C.ChineseVCVPhonemizer.name, C.ChineseVCVPhonemizer.tag,
+              C.ChineseVCVPhonemizer.author, C.ChineseVCVPhonemizer.language),
+          'C#=%r 我们=%r' % (m.groups() if m else None,
+                             (C.ChineseVCVPhonemizer.name, C.ChineseVCVPhonemizer.tag,
+                              C.ChineseVCVPhonemizer.author, C.ChineseVCVPhonemizer.language)))
+    check('ZH VCV: 已在注册表里', registered().get('ZH VCV') is C.ChineseVCVPhonemizer)
+
+    cs_rows = re.findall(r'^\s{12}"([^"]*=.*)",\s*$', cs, re.M)
+    check('ZH VCV: tailMap 逐行与 C# 一致（%d 行）' % len(cs_rows),
+          tuple(cs_rows) == C.TAIL_MAP, 'C#=%r\n       我们=%r' % (cs_rows, list(C.TAIL_MAP)))
+    check('ZH VCV: 查表 408 项且无重复键', len(C.TAIL_LOOKUP) == 408,
+          'got %d' % len(C.TAIL_LOOKUP))
+    check('ZH VCV: 尾韵母归类正确（tian→ian / zhi→ir / zi→iz / nv→v / yun→vn）',
+          (C.TAIL_LOOKUP['tian'], C.TAIL_LOOKUP['zhi'], C.TAIL_LOOKUP['zi'],
+           C.TAIL_LOOKUP['nv'], C.TAIL_LOOKUP['yun'])
+          == ('ian', 'ir', 'iz', 'v', 'vn'))
+
+    # ---- ExtractPurePinyin
+    ex = C.ChineseVCVPhonemizer.extract_pure_pinyin
+    check('ZH VCV.ExtractPurePinyin: "-tian" → "tian"', ex('-tian') == 'tian')
+    check('ZH VCV.ExtractPurePinyin: "- tian"（带空格）→ "tian"', ex('- tian') == 'tian')
+    check('ZH VCV.ExtractPurePinyin: "ian bu" → 取最后一段 "bu"', ex('ian bu') == 'bu')
+    check('ZH VCV.ExtractPurePinyin: "+" 原样', ex('+') == '+')
+    check('ZH VCV.ExtractPurePinyin: 空串 → ""', ex('') == '' and ex('   ') == '')
+
+    # ---- Romanize（汉字 → 无声调拼音）
+    check('ZH VCV.Romanize: 单字汉字转拼音（云→yun）',
+          BaseChinesePhonemizer.romanize(['天', 'tian', '云']) == ['tian', 'tian', 'yun'],
+          'got %r' % BaseChinesePhonemizer.romanize(['天', 'tian', '云']))
+    check('ZH VCV.Romanize: 多字歌词原样保留（不转换）',
+          BaseChinesePhonemizer.romanize(['你好']) == ['你好'])
+    # ★ 索引对齐：中间的 "你好" 被跳过时，后面的字**不能**错位拿到别人的拼音
+    check('ZH VCV.Romanize: 多字歌词跳过后索引不错位',
+          BaseChinesePhonemizer.romanize(['天', '你好', '云']) == ['tian', '你好', 'yun'],
+          'got %r' % BaseChinesePhonemizer.romanize(['天', '你好', '云']))
+    check('ZH VCV.Romanize: ü 写作 v（女→nv / 绿→lv），与 tailMap 的 v/vn 对得上',
+          BaseChinesePhonemizer.romanize(['女', '绿', '军']) == ['nv', 'lv', 'jun'],
+          'got %r' % BaseChinesePhonemizer.romanize(['女', '绿', 'jun']))
+    _g = [Note(lyric='天', tone=60, position=0, duration=480)]
+    BaseChinesePhonemizer.romanize_notes([_g])
+    check('ZH VCV.RomanizeNotes: 就地替换首音符歌词', _g[0].lyric == 'tian')
+
+    # ---- Process
+    ph = C.ChineseVCVPhonemizer()
+
+    # (1) 连音符透传
+    ph.set_singer(_OtoSinger({}))
+    r = ph.process([Note(lyric='+', tone=60, duration=480)])
+    check('ZH VCV: "+" 原样透传', [p.phoneme for p in r.phonemes] == ['+'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (2) 前邻尾韵母已知 → tail 本字 优先
+    ph.set_singer(_OtoSinger({'ian tian': _mk_named_oto('ian tian'),
+                              '- tian': _mk_named_oto('- tian')}))
+    r = ph.process([Note(lyric='tian', tone=60, duration=480)],
+                   prev_neighbour=Note(lyric='qian'))
+    check('ZH VCV: 前邻 qian(尾韵 ian) → 命中 "ian tian"',
+          [p.phoneme for p in r.phonemes] == ['ian tian'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (3) 前邻未知 → 回落 "- 本字"
+    ph.set_singer(_OtoSinger({'- tian': _mk_named_oto('- tian')}))
+    r = ph.process([Note(lyric='tian', tone=60, duration=480)],
+                   prev_neighbour=Note(lyric='zzz'))
+    check('ZH VCV: 前邻尾韵不认识时回落 "- 本字"',
+          [p.phoneme for p in r.phonemes] == ['- tian'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (4) 全部不命中 → 回落原拼音
+    ph.set_singer(_OtoSinger({}))
+    r = ph.process([Note(lyric='tian', tone=60, duration=480)])
+    check('ZH VCV: 全部候选落空时回落原拼音',
+          [p.phoneme for p in r.phonemes] == ['tian'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (5) phoneticHint：命中用别名；**未命中直接用 hint 本身**（不回落正常流程）
+    ph.set_singer(_OtoSinger({'H': _mk_named_oto('H'), '- tian': _mk_named_oto('- tian')}))
+    r = ph.process([Note(lyric='tian', tone=60, duration=480, phonetic_hint='H')])
+    check('ZH VCV: phoneticHint 命中 → 用 oto 别名',
+          [p.phoneme for p in r.phonemes] == ['H'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+    r = ph.process([Note(lyric='tian', tone=60, duration=480, phonetic_hint='NOPE')])
+    check('ZH VCV: phoneticHint 未命中 → 直接用 hint（与 JA VCV 不同，不走正常流程）',
+          [p.phoneme for p in r.phonemes] == ['NOPE'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (6) 尾韵 R：无后续邻居时追加，位置 = total - min(total/6, 60)
+    ph.set_singer(_OtoSinger({'tian': _mk_named_oto('tian'),
+                              'ian R': _mk_named_oto('ian R')}))
+    r = ph.process([Note(lyric='tian', tone=60, duration=480)])
+    check('ZH VCV: 句末追加尾韵 R（两个音素）', len(r.phonemes) == 2,
+          'got %r' % [p.phoneme for p in r.phonemes])
+    check('ZH VCV: 尾韵 R 的音素名取自 oto 别名', r.phonemes[1].phoneme == 'ian R',
+          'got %r' % r.phonemes[1].phoneme)
+    check('ZH VCV: 尾韵 R 位置 = 480 - min(480/6,60) = 420', r.phonemes[1].position == 420,
+          'got %r' % r.phonemes[1].position)
+    r = ph.process([Note(lyric='tian', tone=60, duration=120)])
+    check('ZH VCV: 短音时位置 = 120 - min(20,60) = 100', r.phonemes[1].position == 100,
+          'got %r' % r.phonemes[1].position)
+    # 有后续邻居 → 不加尾韵
+    r = ph.process([Note(lyric='tian', tone=60, duration=480)],
+                   next_neighbour=Note(lyric='bu'))
+    check('ZH VCV: 有后续邻居时**不**加尾韵 R', len(r.phonemes) == 1,
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (7) alt：alt 命中与普通命中是**两个独立 if**（都会进结果表）
+    #     这里让"普通别名"匹配颜色、alt 别名不匹配 → 应取普通那个
+    ph.set_singer(_OtoSinger({'ian tian0': _mk_named_oto('ian tian0', color='Other'),
+                              'ian tian': _mk_named_oto('ian tian', color='Soft')}))
+    r = ph.process([Note(lyric='tian', tone=60, duration=480,
+                         phoneme_attributes=[PhonemeAttributes(index=0, alternate=0,
+                                                               voice_color='Soft')])],
+                   prev_neighbour=Note(lyric='qian'))
+    check('ZH VCV: alt 与普通别名同时进结果表 → 颜色匹配者胜出（说明不是 else-if）',
+          [p.phoneme for p in r.phonemes] == ['ian tian'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+    # alt 别名匹配颜色 → 取 alt 别名
+    ph.set_singer(_OtoSinger({'ian tian0': _mk_named_oto('ian tian0', color='Soft'),
+                              'ian tian': _mk_named_oto('ian tian', color='')}))
+    r = ph.process([Note(lyric='tian', tone=60, duration=480,
+                         phoneme_attributes=[PhonemeAttributes(index=0, alternate=0,
+                                                               voice_color='Soft')])],
+                   prev_neighbour=Note(lyric='qian'))
+    check('ZH VCV: alt 别名颜色匹配时取 alt 别名',
+          [p.phoneme for p in r.phonemes] == ['ian tian0'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (8) ★ 不回落轨道默认值：只有音符自身属性生效
+    #     给 phoneme.tag/PA 之外设一个"轨道默认色"也没用（我们根本不读 project/track）
+    ph.set_singer(_OtoSinger({'ian tian': _mk_named_oto('ian tian', color='TrackColor')}))
+    r = ph.process([Note(lyric='tian', tone=60, duration=480)], prev_neighbour=Note(lyric='qian'))
+    check('ZH VCV: 无 phonemeAttributes 时 color 为空串（不回落轨道色）',
+          [p.phoneme for p in r.phonemes] == ['ian tian'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (9) SetUp 不设 project/track（C# 原文如此）
+    ph2 = C.ChineseVCVPhonemizer()
+    ph2.set_up([[Note(lyric='天', tone=60, duration=480)]], 'PROJ', 'TRACK')
+    check('ZH VCV.SetUp: 只做罗马化，**不**设置 project/track（照搬 C# 的不调 base）',
+          ph2.project is None and ph2.track is None,
+          'got project=%r track=%r' % (ph2.project, ph2.track))
+
+
 def test_xxhash64():
     """XXH32/XXH64 官方测试向量 —— 对不上，所有缓存键都会静默错。"""
     from singing.openutau.xxhash import xxh32, xxh64 as _x
@@ -1320,6 +1495,8 @@ def main():
     test_render_phrase_build()
     print('--- Renderers 注册表 / ApplyDynamics ---')
     test_renderers_registry()
+    print('--- Plugin.Builtin/ChineseVCV ---')
+    test_chinese_vcv_phonemizer()
     print('--- Plugin.Builtin/JapaneseVCV ---')
     test_japanese_vcv_phonemizer()
     print('--- Classic/ResamplerItem ---')

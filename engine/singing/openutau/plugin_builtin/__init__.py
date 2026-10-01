@@ -7,14 +7,18 @@
 
 已照搬：
   - `japanese_vcv.py`    Japanese VCV Phonemizer (legacy)（JapaneseVCVPhonemizer.cs 116 行）
+  - `chinese_vcv.py`     Chinese VCV Phonemizer（ChineseVCVPhonemizer.cs 241 行）
 
 未照搬（后续）：
-  - `ChineseVCVPhonemizer.cs`(241) / `ChineseCVVCPhonemizer.cs`(264) / `ArpasingPhonemizer.cs`(62)
+  - `ChineseCVVCPhonemizer.cs`(264) / `ChineseCVVPhonemizer.cs`(133) / `ArpasingPhonemizer.cs`(62)
+    （Arpasing 还牵出整条 `OpenUtau.Core/G2p` 链路：`LatinDiphonePhonemizer` +
+    `G2pDictionary` / `G2pFallbacks` / `ArpabetG2p` + 随包词典）
   - 其余内置 phonemizer 与 `OpenUtau.Plugin.Builtin` 下的字典类（Presamp / VCV 等）
 
 导入本包即完成注册（对应 C# 的 `[Phonemizer(...)]` 特性在程序集加载时注册）。
 """
 
+from . import chinese_vcv  # noqa: F401
 from . import japanese_vcv  # noqa: F401
 
-__all__ = ['japanese_vcv']
+__all__ = ['japanese_vcv', 'chinese_vcv']

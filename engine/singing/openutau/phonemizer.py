@@ -87,11 +87,13 @@ class Phonemizer(ABC):
     name: str = ''
     tag: str = ''
     language: str = ''
+    author: str = ''
 
     def __init__(self):
         self.name = type(self).name
         self.tag = type(self).tag
         self.language = type(self).language
+        self.author = getattr(type(self), 'author', '')
         self.set_up_exception: Optional[BaseException] = None
         self.bpm: float = 0.0
         self.time_axis = None

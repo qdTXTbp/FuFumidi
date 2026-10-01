@@ -124,6 +124,7 @@ from .singer import (  # noqa: F401
     Preferences,
 )
 from .spline import CubicSplineSegment  # noqa: F401
+from .base_chinese import BaseChinesePhonemizer  # noqa: F401
 from .timeaxis import TimeAxis  # noqa: F401
 from .xxhash import digest_of32, digest_of64, xxh32, xxh64  # noqa: F401
 
@@ -144,6 +145,7 @@ __all__ = [
     'RenderPhraseEvents',
     'USinger', 'USingerType', 'SINGER_TYPE_NAMES', 'SINGER_TYPE_FROM_NAME', 'Preferences',
     'xxh32', 'xxh64', 'digest_of32', 'digest_of64',
+    'BaseChinesePhonemizer',
     'CubicSplineSegment', 'PhraseLayout',
     'VibratoSource', 'CurveSource', 'NoteSource', 'PhonemeSource', 'PhraseSource',
     'RenderNote', 'RenderPhone', 'RenderPhrase', 'PITCH_INTERVAL',
