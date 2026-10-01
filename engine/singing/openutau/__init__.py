@@ -42,6 +42,7 @@ from .phonemizer import (  # noqa: F401
     register,
     registered,
 )
+from .phoneme import UPhoneme, ValidateOptions  # noqa: F401
 from .renderer import (  # noqa: F401
     IRenderer,
     RenderPhraseEvents,
@@ -64,6 +65,7 @@ __all__ = [
     'MusicMath', 'NAME_IN_OCTAVE', 'UOto', 'UOtoSet', 'USubbank', 'Oto', 'OtoSet', 'Subbank',
     'Phonemizer', 'Note', 'Phoneme', 'PhonemeAttributes', 'PhonemeExpression', 'Result',
     'register', 'registered',
+    'UPhoneme', 'ValidateOptions',
     'IRenderer', 'RenderResult', 'RenderPitchResult', 'RenderRealCurveResult',
     'RenderPhraseEvents',
     'USinger', 'USingerType', 'SINGER_TYPE_NAMES', 'SINGER_TYPE_FROM_NAME', 'Preferences',

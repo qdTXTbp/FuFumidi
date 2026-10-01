@@ -288,6 +288,100 @@ def test_singer_base():
     check('USinger: IsFavourite 取消收藏', Preferences.favorite_singers == [])
 
 
+def test_phoneme_model():
+    from singing.openutau import UPhoneme
+    from singing.ustx import UExpression, UExpressionDescriptor, UExpressionType, UNote
+
+    proj = UProject()
+    tr = proj.tracks[0]
+    proj.expressions['vel'] = UExpressionDescriptor(
+        abbr='vel', name='Velocity', type=UExpressionType.NUMERICAL,
+        min=0, max=200, default_value=100, flag='V')
+    proj.expressions['gen'] = UExpressionDescriptor(
+        abbr='gen', name='Gender', type=UExpressionType.NUMERICAL,
+        min=0, max=100, default_value=50, flag='g', skip_output_if_default=True)
+    proj.expressions['clr'] = UExpressionDescriptor(
+        abbr='clr', name='VoiceColor', type=UExpressionType.OPTIONS,
+        options=['', 'Soft'], default_value=0, is_flag=True)
+    # 轨道自己的 gen 覆盖工程的（GetExpressionDescriptors 是「替换」不是「合并」）
+    tr.track_expressions.append(UExpressionDescriptor(
+        abbr='gen', name='TrackGender', type=UExpressionType.NUMERICAL,
+        min=0, max=100, default_value=50, flag='g', skip_output_if_default=False))
+
+    descs = UPhoneme.get_expression_descriptors(proj, tr)
+    abbrs = [d.abbr for d in descs]
+    check('GetExpressionDescriptors: 轨道同名项替换工程项（不重复）',
+          abbrs.count('gen') == 1 and 'gen' in abbrs, 'got %r' % abbrs)
+    check('GetExpressionDescriptors: 保留工程里其它项', 'vel' in abbrs and 'clr' in abbrs)
+
+    note = UNote(position=0, duration=480, tone=60, lyric='la')
+    ph = UPhoneme()
+    ph.index = 0
+    ph.parent = note
+    ph.position_ms = 0
+    ph.end_ms = 500
+    ph.duration = 480
+
+    # GetExpression 优先级：音符音素表达式 > 音素化器表达式 > 描述符默认值
+    v, explicit = ph.get_expression(proj, tr, 'vel')
+    check('GetExpression: 都没有时回落描述符默认值（100）且 explicit=False',
+          (v, explicit) == (100.0, False), 'got %r' % ((v, explicit),))
+    note.phonemizer_expressions.append(
+        UExpression(index=0, abbr='vel', descriptor=proj.expressions['vel'], _value=77))
+    v, explicit = ph.get_expression(proj, tr, 'vel')
+    check('GetExpression: 音素化器表达式优先于默认值，且 explicit=False',
+          (v, explicit) == (77.0, False), 'got %r' % ((v, explicit),))
+    note.phoneme_expressions.append(
+        UExpression(index=0, abbr='vel', descriptor=proj.expressions['vel'], _value=55))
+    v, explicit = ph.get_expression(proj, tr, 'vel')
+    check('GetExpression: 用户音素表达式最优先，且 explicit=True',
+          (v, explicit) == (55.0, True), 'got %r' % ((v, explicit),))
+
+    # BuildResamplerFlags
+    flags = ph.build_resampler_flags(descs, lambda a: ph.get_expression(proj, tr, a)[0])
+    names = [f[0] for f in flags]
+    check('BuildResamplerFlags: vel 产出 flag V', ('V', 55, 'vel') in flags, 'got %r' % flags)
+    check('BuildResamplerFlags: gen 默认值且未 skip 时仍产出 flag g',
+          ('g', 50, 'gen') in flags, 'got %r' % flags)
+    # clr 是 Options+isFlag → 产出 options[值]
+    check('BuildResamplerFlags: Options 取 options[值]', ('', None, 'clr') in flags, 'got %r' % flags)
+
+    # skipOutputIfDefault：把工程的 gen 拿来单测（它带 skip_output_if_default=True）
+    only_gen = [proj.expressions['gen']]
+    skipped = UPhoneme.build_resampler_flags(only_gen, lambda a: 50.0)
+    check('BuildResamplerFlags: skipOutputIfDefault 且等于默认值 → 跳过', skipped == [],
+          'got %r' % skipped)
+    kept = UPhoneme.build_resampler_flags(only_gen, lambda a: 60.0)
+    check('BuildResamplerFlags: 不等于默认值 → 产出', kept == [('g', 60, 'gen')], 'got %r' % kept)
+
+    # GetFadeIn / GetFadeOut 的固定兜底值
+    ph2 = UPhoneme()
+    ph2.crossfade, ph2.overlapped = True, False
+    check('GetFadeIn: 未重叠时兜底 5', ph2.get_fade_in() == 5, 'got %r' % ph2.get_fade_in())
+    ph2.overlapped = True
+    ph2.overlap = 12.5
+    check('GetFadeIn: crossfade&&overlapped 时用 overlap', ph2.get_fade_in() == 12.5)
+    check('GetFadeOut: 无 Next 时兜底 35', ph2.get_fade_out() == 35, 'got %r' % ph2.get_fade_out())
+
+    # ValidateEnvelope 的点位计算（vol=100 / atk=100 / dec=0 → 直线满幅）
+    proj.expressions['vol'] = UExpressionDescriptor(abbr='vol', default_value=100, min=0, max=100)
+    proj.expressions['atk'] = UExpressionDescriptor(abbr='atk', default_value=100, min=0, max=100)
+    proj.expressions['dec'] = UExpressionDescriptor(abbr='dec', default_value=0, min=0, max=100)
+    ph.error = False
+    ph.preutter = 50
+    ph.tail_intrude = 0
+    ph.tail_overlap = 0
+    ph.attack_time_delta = None
+    ph.release_time_delta = None
+    ph.crossfade, ph.overlapped = False, False
+    ph._validate_envelope(proj, tr, note)
+    pts = [(round(p.x, 3), round(p.y, 3)) for p in ph.envelope.data]
+    check('ValidateEnvelope: x = (-50, -45, 0, 465, 500)',
+          [p[0] for p in pts] == [-50, -45, 0, 465, 500], 'got %r' % pts)
+    check('ValidateEnvelope: y = (0, 100, 100, 100, 0)',
+          [p[1] for p in pts] == [0, 100, 100, 100, 0], 'got %r' % pts)
+
+
 def main():
     print('--- Format.Ustx 常量 ---')
     test_format_constants()
@@ -299,6 +393,8 @@ def main():
     test_musicmath()
     print('--- UOto / USubbank 模型 ---')
     test_oto_model()
+    print('--- UPhoneme 模型 ---')
+    test_phoneme_model()
     print('--- Phonemizer 基类 ---')
     test_phonemizer_base()
     print('--- TimeAxis ---')

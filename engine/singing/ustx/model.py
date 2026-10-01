@@ -267,6 +267,9 @@ class UNote:
     next: Any = field(default=None, metadata=NO_YAML)
     extends: Any = field(default=None, metadata=NO_YAML)
     phonemizer_expressions: List['UExpression'] = field(default_factory=list, metadata=NO_YAML)
+    # 所属 part 里该音符的音素下标集合（UPhoneme.SetExpression 用它清理失效项）。
+    # C# 里由 part 推出；这里作为运行时属性，由调用方设置，未设置按空集合处理。
+    phoneme_indexes: List[int] = field(default_factory=list, metadata=NO_YAML)
 
     @property
     def end(self) -> int:
