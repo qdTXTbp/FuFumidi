@@ -7,6 +7,7 @@ mod gpu;
 mod models;
 mod plugins;
 mod presets;
+mod procutils;
 mod score;
 mod settings;
 mod system;
@@ -61,8 +62,10 @@ pub fn run() {
             updater::launch_updater,
             updater::check_update,
             updater::update_list,
+            updater::update_notes,
             updater::update_download,
             updater::update_open,
+            updater::app_version,
             updater::open_external,
             db::db_status,
             db::db_kv_get,

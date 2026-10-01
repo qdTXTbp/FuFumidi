@@ -128,7 +128,8 @@ export function installTauriBridge() {
     // 主程序检查更新（对比 GitHub latest 与当前版本，有新版才拉起更新器）
     getVersion: () => call('app_version'),
     updateCheck: (channel) => call('check_update', { channel }),
-    updateDownload: (url) => call('update_download', { url }),
+    updateNotes: (tag) => call('update_notes', { tag }),
+    updateDownload: (url, channel, name, size) => call('update_download', { url, channel, name, size }),
     updateOpen: (p) => call('update_open', { p }),
     onUpdateProgress: (cb) => listen('update:progress', cb),
 
