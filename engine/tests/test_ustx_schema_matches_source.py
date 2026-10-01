@@ -20,6 +20,7 @@ if ENGINE not in sys.path:
     sys.path.insert(0, ENGINE)
 
 from singing.ustx import model as m  # noqa: E402
+from singing.ustx.io import _yaml_key  # noqa: E402
 
 REF = os.environ.get('OPENUTAU_REF') or r'D:/FuFuMIDI/_ref/OpenUtau/OpenUtau.Core/Ustx'
 
@@ -77,13 +78,18 @@ def _member_name(body):
     做法：**从行尾倒推**——声明必然以 `;` 或 `{...}`（可再跟 `= ...;`）收尾，
     紧挨着的那串标识符就是成员名。这样不受「类型里有逗号/空格/泛型」影响。
     """
-    body = body.strip()
+    body = body.strip().replace('@', '')   # C# 关键字转义：`@in` / `@out`，真实标识符是 in/out
     if body.startswith('static '):
         body = body[len('static '):].strip()
     if body.startswith('const '):          # const 字段不参与序列化（如 UCurve.interval）
         return None
     if re.match(r'^(?:abstract\s+|sealed\s+|partial\s+)*class\b', body):
         return None
+    # 跨行的属性声明：`public float @in {` / `public USinger Singer {` 这种只开了个头。
+    # 必须排除 enum/struct/interface，否则 `public enum PitchPointShape {` 会被当成属性。
+    mb = re.match(r'^(?:static\s+)?(?!enum\b|struct\b|interface\b)[\w<>,\[\]\?\.]+\s+(\w+)\s*\{\s*$', body)
+    if mb:
+        return mb.group(1)
     m = re.search(r'(\w+)\s*((?:\{[^{}]*\}\s*(?:=[^;]*;)?)|(?:=[^;]*;)|;)\s*$', body)
     if not m:
         return None
@@ -155,8 +161,9 @@ def yaml_keys_of_cs(path, cls):
     return keys
 
 
+# 比对用 YAML 键（字段可能带 yaml_name 别名，如 vib_in → in）
 def our_keys_of(cls):
-    return {f.name for f in dataclasses.fields(cls) if f.metadata.get('yaml') is not False}
+    return {_yaml_key(f) for f in dataclasses.fields(cls) if f.metadata.get('yaml') is not False}
 
 
 _PASS, _FAIL = [], []

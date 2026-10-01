@@ -114,10 +114,40 @@ class UExpressionDescriptor:
 
 @dataclass
 class UExpression:
-    """对应 UExpression.cs 的 UExpression（音符上的表达式取值）。"""
+    """对应 UExpression.cs 的 UExpression（音符上的表达式取值）。
 
-    abbr: str = ''
+    ★ `value` 的 setter 有**条件夹紧**（照搬自 C#，容易漏）：
+      - `descriptor is None` → 原样存（还没绑描述符）
+      - `abbr == 'clr'`      → 原样存 —— 语音色存的是**选项下标**，不按 min/max 夹
+      - 其余                 → 夹到 `[descriptor.min, descriptor.max]`
+    Python 里 `value` 是属性（走 property 夹紧），序列化字段用 `_value` + yaml_name 别名。
+    """
+
     index: Optional[int] = None
+    abbr: str = ''
+    # [YamlIgnore]：绑定的描述符（提供 min/max）
+    descriptor: Any = field(default=None, metadata=NO_YAML)
+    _value: float = field(default=0, metadata={'yaml_name': 'value'})
+
+    def __post_init__(self):
+        # C# 反序列化走的是 setter，所以载入时同样要夹
+        self._value = self._clamp(self._value)
+
+    def _clamp(self, v: float) -> float:
+        d = self.descriptor
+        if d is None:
+            return v
+        if self.abbr == 'clr':
+            return v
+        return min(d.max, max(d.min, v))
+
+    @property
+    def value(self) -> float:
+        return self._value
+
+    @value.setter
+    def value(self, v: float):
+        self._value = self._clamp(v)
 
 
 @dataclass
@@ -131,6 +161,27 @@ class UPhonemeOverride:
     overlap_delta: Optional[float] = None
     attack_time_delta: Optional[float] = None
     release_time_delta: Optional[float] = None
+
+
+@dataclass
+class Vector2:
+    """对应 System.Numerics.Vector2 的用法（包络点用 (x, y)，单位 ms）。"""
+
+    x: float = 0
+    y: float = 0
+
+
+@dataclass
+class UEnvelope:
+    """对应 UPhoneme.cs 的 UEnvelope：音素包络。
+
+    构造函数默认 5 个点：`(0,0) (0,100) (0,100) (0,100) (0,0)`
+    —— 与 OpenUTAU 一致（直线起、满幅、直线落），照搬时不要改成"更合理"的形状。
+    """
+
+    data: List[Vector2] = field(default_factory=lambda: [
+        Vector2(0, 0), Vector2(0, 100), Vector2(0, 100), Vector2(0, 100), Vector2(0, 0),
+    ])
 
 
 @dataclass
@@ -152,14 +203,44 @@ class UPitch:
 
 @dataclass
 class UVibrato:
-    """对应 UNote.cs 的 UVibrato。"""
+    """对应 UNote.cs 的 UVibrato。
+
+    ★ 两个照搬要点（都容易漏）：
+    1. **每个量的 setter 都有夹紧**：length∈[0,100] / period∈[5,500] / depth∈[5,200] /
+       in,out∈[0,100] / shift∈[0,100] / drift,volLink∈[-100,100]。
+    2. **in 与 out 互相约束**：设 in 会把 out 压到 `min(out, 100-in)`，反之亦然。
+    3. C# 里这两个属性写作 `@in` / `@out`（关键字转义），YAML 键就是 `in` / `out`；
+       Python 的 `in` 是关键字，故字段名用 `vib_in`/`vib_out` + `yaml_name` 别名。
+    """
 
     length: float = 0
     period: float = 175
     depth: float = 25
+    vib_in: float = field(default=10, metadata={'yaml_name': 'in'})
+    vib_out: float = field(default=10, metadata={'yaml_name': 'out'})
     shift: float = 0
     drift: float = 0
     vol_link: float = 0
+
+    #: 各量的夹紧范围（照搬 C# setter 里的 Math.Max/Min）
+    _CLAMP = {
+        'length': (0, 100), 'period': (5, 500), 'depth': (5, 200),
+        'vib_in': (0, 100), 'vib_out': (0, 100),
+        'shift': (0, 100), 'drift': (-100, 100), 'vol_link': (-100, 100),
+    }
+
+    def __setattr__(self, name, value):
+        rng = UVibrato._CLAMP.get(name)
+        if rng and isinstance(value, (int, float)):
+            value = max(rng[0], min(rng[1], value))
+        object.__setattr__(self, name, value)
+        # in/out 的相互约束 —— C# setter 里就写着 `_out = Math.Min(_out, 100 - _in)`
+        if name == 'vib_in':
+            o = object.__getattribute__(self, 'vib_out')
+            object.__setattr__(self, 'vib_out', min(o, 100 - value))
+        elif name == 'vib_out':
+            i = object.__getattribute__(self, 'vib_in')
+            object.__setattr__(self, 'vib_in', min(i, 100 - value))
 
 
 @dataclass
@@ -177,6 +258,40 @@ class UNote:
     phoneme_overrides: List[UPhonemeOverride] = field(default_factory=list)
     # C# 里是 `public string? PhonemizerOverride { get; set; } = null;`（会被序列化）
     phonemizer_override: Optional[str] = None
+
+    # ---- 以下均为 C# 里 [YamlIgnore] 的运行时成员，照搬其语义（不参与读写）----
+    position_ms: float = field(default=0.0, metadata=NO_YAML)
+    end_ms: float = field(default=0.0, metadata=NO_YAML)
+    extended_duration: int = field(default=0, metadata=NO_YAML)
+    prev: Any = field(default=None, metadata=NO_YAML)
+    next: Any = field(default=None, metadata=NO_YAML)
+    extends: Any = field(default=None, metadata=NO_YAML)
+    phonemizer_expressions: List['UExpression'] = field(default_factory=list, metadata=NO_YAML)
+
+    @property
+    def end(self) -> int:
+        return self.position + self.duration
+
+    @property
+    def adjusted_tone(self) -> float:
+        """`tone + tuning / 100f` —— 调音以百分之一音为单位叠加在音高上。"""
+        return self.tone + self.tuning / 100.0
+
+    @property
+    def duration_ms(self) -> float:
+        return self.end_ms - self.position_ms
+
+    @property
+    def extended_end(self) -> int:
+        return self.position + self.extended_duration
+
+    @property
+    def left_bound(self) -> int:
+        return self.position
+
+    @property
+    def right_bound(self) -> int:
+        return self.position + self.duration
 
 
 @dataclass
@@ -327,9 +442,23 @@ class UProject:
     tracks: List[UTrack] = field(default_factory=lambda: [UTrack()])
     # [YamlIgnore]：运行时把 voice_parts/wave_parts 合并成的统一列表
     parts: List[Any] = field(default_factory=list, metadata=NO_YAML)
+    # [YamlIgnore]：tick↔ms 换算轴（C# 是 readonly 字段，构造时 BuildSegments）
+    time_axis: Any = field(default=None, metadata=NO_YAML)
     # 序列化用的临时字段（AfterLoad 时会并回 parts）
     voice_parts: Optional[List[UVoicePart]] = None
     wave_parts: Optional[List[UWavePart]] = None
+
+    def __post_init__(self):
+        self.build_time_axis()
+
+    def build_time_axis(self) -> None:
+        """重建时间轴。延迟导入 TimeAxis 是为了避免 ustx ↔ openutau 循环导入。
+
+        对应 C# 里 `UProject` 构造函数的 `timeAxis.BuildSegments(this)` 与 `Validate()` 里的同名调用。
+        """
+        from ..openutau.timeaxis import TimeAxis
+        self.time_axis = TimeAxis()
+        self.time_axis.build_segments(self)
 
     @property
     def resolution(self) -> int:

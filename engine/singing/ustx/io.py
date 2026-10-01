@@ -34,6 +34,16 @@ class _NoAliasDumper(yaml.SafeDumper):
 
 # ---------------------------------------------------------------- 对象 → 纯数据
 
+def _yaml_key(f) -> str:
+    """字段在 YAML 里的键名。
+
+    默认就是字段名；仅当 C# 用了**关键字标识符**（如 `public float @in`）时才需要别名 ——
+    Python 里 `in`/`out` 是关键字，不能直接当属性名，所以用 `metadata={'yaml_name': ...}`
+    指定真实键名，保证写出来的 .ustx 与 OpenUTAU 完全一致。
+    """
+    return f.metadata.get('yaml_name') or f.name
+
+
 def to_plain(obj):
     """把 model 转成 dict/list/标量（跳过 [YamlIgnore]、跳过 None）。"""
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
@@ -44,7 +54,7 @@ def to_plain(obj):
             v = getattr(obj, f.name)
             if v is None:            # OmitNull
                 continue
-            out[f.name] = to_plain(v)
+            out[_yaml_key(f)] = to_plain(v)
         return out
     if isinstance(obj, (list, tuple)):
         return [to_plain(v) for v in obj]
@@ -92,9 +102,10 @@ def from_plain(cls, data):
     hints = typing.get_type_hints(cls)
     kwargs = {}
     for f in dataclasses.fields(cls):
-        if f.name not in data:
+        key = _yaml_key(f)
+        if key not in data:
             continue
-        kwargs[f.name] = _convert(hints.get(f.name, typing.Any), data[f.name])
+        kwargs[f.name] = _convert(hints.get(f.name, typing.Any), data[key])
     return cls(**kwargs)
 
 

@@ -25,6 +25,8 @@ if ENGINE not in sys.path:
 import yaml  # noqa: E402
 
 from singing.ustx import (  # noqa: E402
+    UEnvelope,
+    UVibrato,
     PitchPoint,
     PitchPointShape,
     UMixFx,
@@ -165,11 +167,70 @@ def test_unknown_keys_ignored():
     check('未知键被忽略（不抛异常且解析成功）', p.name == '测试工程')
 
 
+def test_vibrato_and_expression_semantics():
+    """UVibrato 的夹紧/联动 与 UExpression.value 的条件夹紧（照搬自 C#）。"""
+    from singing.ustx import UEnvelope, UVibrato
+    v = UVibrato()
+    check('UVibrato: 默认 in/out 都是 10', (v.vib_in, v.vib_out) == (10, 10),
+          'got %r' % ((v.vib_in, v.vib_out),))
+    v.vib_in = 80
+    check('UVibrato: 设 in=80 把 out 压到 min(10, 20)=10', v.vib_out == 10, 'got %r' % v.vib_out)
+    v.vib_in = 95
+    check('UVibrato: 设 in=95 把 out 压到 min(10, 5)=5', v.vib_out == 5, 'got %r' % v.vib_out)
+    v.period = 9999
+    v.depth = 1
+    check('UVibrato: period 夹到 500 / depth 夹到 5', (v.period, v.depth) == (500, 5),
+          'got %r' % ((v.period, v.depth),))
+    e = UEnvelope()
+    check('UEnvelope: 默认 5 点 (0,0)(0,100)(0,100)(0,100)(0,0)',
+          [(p.x, p.y) for p in e.data] == [(0, 0), (0, 100), (0, 100), (0, 100), (0, 0)],
+          'got %r' % [(p.x, p.y) for p in e.data])
+
+    # UExpression.value 的条件夹紧
+    desc = UExpressionDescriptor(abbr='dyn', min=-240, max=120)
+    ex = UExpression(index=0, abbr='dyn', descriptor=desc, _value=999)
+    check('UExpression: 有描述符时夹到 max', ex.value == 120, 'got %r' % ex.value)
+    ex.value = -999
+    check('UExpression: 有描述符时夹到 min', ex.value == -240, 'got %r' % ex.value)
+    check('UExpression: 无描述符时不夹', UExpression(abbr='dyn', _value=999).value == 999)
+    check('UExpression: clr 存下标不夹', UExpression(abbr='clr', descriptor=desc, _value=999).value == 999)
+
+
+def test_vibrato_expression_roundtrip():
+    """in/out 的 YAML 键必须是 in/out（C# 的 @in/@out），且能往返。"""
+    p = UProject()
+    n = UNote(position=0, duration=480, tone=60, lyric='la',
+              vibrato=UVibrato(length=20, vib_in=30, vib_out=40),
+              phoneme_expressions=[UExpression(index=0, abbr='dyn', _value=77)])
+    part = UVoicePart(track_no=0, position=0, duration=480)
+    part.notes.append(n)
+    p.parts = [part]
+    text = dumps(p)
+    import re as _re
+    check('YAML 用 in: 键（不是 vib_in）', _re.search(r'(?m)^\s*in: 30$', text) is not None,
+          '未找到 in: 30')
+    check('YAML 用 out: 键（不是 vib_out）', _re.search(r'(?m)^\s*out: 40$', text) is not None,
+          '未找到 out: 40')
+    check('YAML 不出现 vib_in/vib_out', 'vib_in' not in text and 'vib_out' not in text)
+    check('YAML 用 value: 键（不是 _value）', _re.search(r'(?m)^\s*value: 77$', text) is not None,
+          '未找到 value: 77')
+    q = loads(text)
+    v = q.parts[0].notes[0].vibrato
+    check('往返: vibrato length/in/out 一致', (v.length, v.vib_in, v.vib_out) == (20, 30, 40),
+          'got %r' % ((v.length, v.vib_in, v.vib_out),))
+    check('往返: 表达式 value 一致', q.parts[0].notes[0].phoneme_expressions[0].value == 77,
+          'got %r' % q.parts[0].notes[0].phoneme_expressions[0].value)
+
+
 def main():
     print('--- 键名 / OmitNull / YamlIgnore ---')
     test_keys_and_omit()
     print('--- 语义往返 ---')
     test_roundtrip()
+    print('--- 颤音 / 表达式的夹紧语义 ---')
+    test_vibrato_and_expression_semantics()
+    print('--- 颤音 / 表达式的键名与往返 ---')
+    test_vibrato_expression_roundtrip()
     print('--- 未知键兼容 ---')
     test_unknown_keys_ignored()
     print('\n结果: %d passed, %d failed' % (len(_PASS), len(_FAIL)))
