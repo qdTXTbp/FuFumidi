@@ -977,6 +977,12 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
   border: 1px solid color-mix(in srgb, var(--amber) 35%, transparent);
   border-radius: 8px; padding: 7px 10px;
 }
+/* 正向提示（如 ROCm 已生效），与告警同形但换绿色 */
+.gpu-warn.ok {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+  border-color: color-mix(in srgb, var(--green) 35%, transparent);
+}
 .gpu-install { width: 100%; padding: 11px 16px; font-size: 14px; font-weight: 700; }
 .gpu-status { font-size: 12px; color: var(--stone); min-height: 16px; }
 .gpu-prog-text { font-size: 11.5px; color: var(--stone); margin-top: 5px; font-family: var(--mono); word-break: break-all; }

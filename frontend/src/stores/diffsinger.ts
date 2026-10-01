@@ -528,10 +528,17 @@ export const useDiffsingerStore = defineStore('diffsinger', {
           vibrato: n.vibrato, vibDepth: n.vibDepth, vibFreq: n.vibFreq, vibFade: n.vibFade,
           pitchOffset: n.pitchOffset,
         }));
+        // 必须显式摊平成普通对象再传 —— this.pitchCurve 来自 Pinia state，
+        // 是响应式数组（Proxy）。ipcRenderer.invoke 走结构化克隆，而 V8 序列化器
+        // 对 Proxy 一律拒绝：**即使是空数组**也抛 "An object could not be cloned"，
+        // 请求根本到不了主进程，所以「渲染歌声」每次必然失败（与此前 GPU 分卷清单同因）。
+        const plainPitchCurve = Array.isArray(this.pitchCurve)
+          ? this.pitchCurve.map(p => ({ beat: p.beat, cents: p.cents }))
+          : [];
         const r = await (bridge as any).diffsingerRender({
           voicebank: this.voicebankDir, notes, bpm: this.bpm,
           range, device: this.device || 'auto',
-          pitchCurve: this.pitchCurve,
+          pitchCurve: plainPitchCurve,
         });
         if (r && r.ok && r.bytes) {
           const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes as any);

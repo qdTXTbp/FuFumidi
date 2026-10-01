@@ -1,5 +1,9 @@
 // ============================================================
 // 主进程 GPU 增强包 IPC：状态、安装、卸载、下载与自动检测
+//
+// 支持三种 kind：cuda / directml / rocm（见 main/gpu.js 的 KIND_PY）。
+// ★ ROCm 的轮子只有 cp312，必须在 Python 3.12 运行时下才生效；
+//   3.11 下安装/启用都会被拒（并给出可操作的说明），避免下 1.9GB 却装而无用。
 // ============================================================
 'use strict';
 const Paths = require('./paths');
@@ -30,6 +34,15 @@ function registerGpuIpc({
   installGpuSite,
   isSplitPackagePath,
   combineSplitParts,
+  // ---- 新增：类型与 Python 版本约束 ----
+  GPU_KINDS,
+  KIND_LABEL,
+  isGpuKind,
+  requiredPython,
+  fitsPython,
+  readGpuManifest,
+  currentPythonMinor,
+  pythonForMinor,
   engineDir,
   engineEnv,
   resolvePython,
@@ -50,8 +63,27 @@ function registerGpuIpc({
     } catch (e) {}
   }
 
+  /** 该 kind 的语言/环境前置条件（供 UI 与错误信息复用） */
+  function kindPrereq(kind) {
+    const need = requiredPython(kind);
+    const cur = currentPythonMinor();
+    const ok = fitsPython(kind, cur);
+    const hasRuntime = need ? !!pythonForMinor(need) : false;
+    return { kind, label: KIND_LABEL[kind] || kind, requiresPython: need, currentPython: cur, fits: ok, hasRuntime };
+  }
+
+  /** 不满足前置条件时的可操作提示（返回 null 表示可用） */
+  function prereqError(kind) {
+    const p = kindPrereq(kind);
+    if (p.fits) return null;
+    if (p.requiresPython === '3.12') {
+      return 'ROCm 增强包只有 Python 3.12（cp312）轮子，内置运行时是 Python ' + p.currentPython + '，'
+        + '需先安装独立的 Python 3.12 引擎运行时才能启用（当前未检测到）。';
+    }
+    return '该增强包要求 Python ' + p.requiresPython + '，当前运行时是 ' + p.currentPython + '。';
+  }
+
   // 取消进行中的 GPU 增强包安装/下载：杀掉 pip 进程树并中止下载流。
-  // 半装的 site-packages 由 installAuto 的成功路径负责清理（见其 canceled 分支）。
   ipcMain.handle('gpu:cancelInstall', async () => {
     _gpuCanceled = true;
     try { if (_gpuDownloadCtl) _gpuDownloadCtl.abort(); } catch (e) {}
@@ -62,12 +94,21 @@ function registerGpuIpc({
   ipcMain.handle('gpu:status', async () => {
     try {
       const dirs = installedGpuKinds();
-      return { ok: true, directml: dirs.indexOf('directml') >= 0, cuda: dirs.indexOf('cuda') >= 0, isolated: true, paths: dirs };
+      const out = { ok: true, isolated: true, paths: dirs, kinds: dirs, currentPython: currentPythonMinor() };
+      for (const k of GPU_KINDS) {
+        out[k] = dirs.indexOf(k) >= 0;
+        if (dirs.indexOf(k) >= 0) out[k + 'Active'] = !!fitsPython(k, currentPythonMinor());
+      }
+      // rocm 已安装但当前解释器不满足 → 需切到 3.12 才生效
+      out.needsPython312 = dirs.indexOf('rocm') >= 0 && !fitsPython('rocm', currentPythonMinor());
+      out.canPython312 = !!pythonForMinor('3.12');
+      return out;
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
+
   ipcMain.handle('gpu:uninstall', async (_e, kind) => {
     const k = String(kind || '').toLowerCase();
-    if (k !== 'cuda' && k !== 'directml') return { ok: false, error: '未知的增强包类型' };
+    if (!isGpuKind(k)) return { ok: false, error: '未知的增强包类型' };
     const dir = gpuEnhanceDir(k);
     const existed = fs.existsSync(dir);
     await stopEngineWorker();
@@ -105,7 +146,6 @@ function registerGpuIpc({
   // 应用是公开分发的、不能内嵌令牌，所以这里必须走 **cnb.cool 的 Web 同名路径** ——
   // 它匿名可取，且要带上 Accept: application/vnd.cnb.api+json（否则返回 HTML 页面）。
   // page_size 要显式给，默认只返回 10 条，可能漏掉带 GPU 资产的那个 release。
-  // 实测（2026-09-27）：该端点一次返回 46 个 release，assets 全部内联，无需逐个 tag 再查。
   async function cnbGpuReleases() {
     const repo = DS.CNB_MIRROR_REPOS.fufumidi;
     const r = await fetch(`https://cnb.cool/${repo}/-/releases?page=1&page_size=100`,
@@ -127,37 +167,44 @@ function registerGpuIpc({
     return null;
   }
 
+  /** 分卷资产名：fufumidi-gpu-<kind>.partN 或 fufumidi-gpu-<kind>[-parts].zip.00N */
+  function splitPartsFor(assets, kind) {
+    const re = new RegExp('^fufumidi-gpu-' + kind + '(?:-parts)?\\.(zip\\.\\d{3}|part\\d+)$', 'i');
+    const parts = (assets || []).filter((a) => a.name && re.test(a.name));
+    parts.sort((a, b) => splitNum(a.name) - splitNum(b.name));
+    return parts;
+  }
+  function splitNum(name) {
+    const m = String(name || '').match(/(\d+)\s*$/);
+    return m ? parseInt(m[1], 10) : 0;
+  }
+
   ipcMain.handle('gpu:listPackages', async () => {
     try {
       const rel = await findGpuRelease();
       if (!rel) return { ok: true, packages: [] };
-      const out = [];
       const assets = rel.assets || [];
-      for (const a of assets) {
-        if (a.name && /^fufumidi-gpu-directml\.zip$/i.test(a.name)) {
-          out.push({ tag: rel.tag_name, name: a.name, url: a.browser_download_url, size: a.size, kind: 'directml' });
+      const out = [];
+      for (const kind of GPU_KINDS) {
+        const single = assets.find((a) => a.name && a.name.toLowerCase() === ('fufumidi-gpu-' + kind + '.zip'));
+        if (single) {
+          out.push({ tag: rel.tag_name, name: single.name, url: single.browser_download_url, size: single.size, kind, requiresPython: requiredPython(kind) });
         }
-        if (a.name && /^fufumidi-gpu-cuda\.zip$/i.test(a.name)) {
-          out.push({ tag: rel.tag_name, name: a.name, url: a.browser_download_url, size: a.size, kind: 'cuda' });
+        const parts = splitPartsFor(assets, kind);
+        if (parts.length) {
+          out.push({
+            tag: rel.tag_name,
+            name: 'fufumidi-gpu-' + kind + '-parts (split)',
+            kind,
+            split: true,
+            requiresPython: requiredPython(kind),
+            size: parts.reduce((sum, a) => sum + (a.size || 0), 0),
+            url: parts[0].browser_download_url,
+            files: parts.map(a => ({ name: a.name, url: a.browser_download_url, size: a.size }))
+          });
         }
       }
-      const cudaParts = assets.filter(a => a.name && /^fufumidi-gpu-cuda(?:-parts)?\.(zip\.\d{3}|part\d+)$/i.test(a.name));
-      if (cudaParts.length) {
-        cudaParts.sort((a, b) => {
-          const ma = String(a.name).match(/(\d+)\s*$/), mb = String(b.name).match(/(\d+)\s*$/);
-          return (ma ? parseInt(ma[1],10) : 0) - (mb ? parseInt(mb[1],10) : 0);
-        });
-        out.push({
-          tag: rel.tag_name,
-          name: 'fufumidi-gpu-cuda-parts (split)',
-          kind: 'cuda',
-          split: true,
-          size: cudaParts.reduce((sum, a) => sum + (a.size || 0), 0),
-          url: cudaParts[0].browser_download_url,
-          files: cudaParts.map(a => ({ name: a.name, url: a.browser_download_url, size: a.size }))
-        });
-      }
-      return { ok: true, packages: out };
+      return { ok: true, packages: out, currentPython: currentPythonMinor() };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
   ipcMain.handle('dialog:pickZip', async (evt) => {
@@ -174,7 +221,9 @@ function registerGpuIpc({
       const first = localPaths[0];
       const detected = inferGpuKind(first);
       const k = String(detected || kind || '').toLowerCase();
-      if (k !== 'cuda' && k !== 'directml') return { ok: false, error: '无法识别增强包类型，请先选择 DirectML 或 CUDA 包/分卷' };
+      if (!isGpuKind(k)) return { ok: false, error: '无法识别增强包类型，请先选择 CUDA / DirectML / ROCm 包或分卷' };
+      const block = prereqError(k);
+      if (block) return { ok: false, kind: k, error: block, requiresPython: requiredPython(k) };
       const zipTmp = path.join(Paths.tempDir(), 'fufumidi-gpu-import.zip');
       if (localPaths.length > 1 || isSplitPackagePath(first)) {
         await combineSplitParts(localPaths, zipTmp);
@@ -190,19 +239,19 @@ function registerGpuIpc({
       const spSrc = path.join(extractDir, 'site-packages');
       if (!fs.existsSync(spSrc)) return { ok: false, error: '压缩包内缺少 site-packages 目录' };
       await stopEngineWorker();
-      installGpuSite(k, spSrc, { name: path.basename(first), source: 'local' });
+      installGpuSite(k, spSrc, { name: path.basename(first), source: 'local', requiresPython: requiredPython(k) });
       try { fs.unlinkSync(zipTmp); } catch {}
       try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch {}
-      return { ok: true, kind: k, split: localPaths.length > 1 || isSplitPackagePath(first) };
+      return { ok: true, kind: k, split: localPaths.length > 1 || isSplitPackagePath(first), requiresPython: requiredPython(k), active: !!fitsPython(k, currentPythonMinor()) };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
   ipcMain.handle('gpu:packageUrl', async (_e, kind) => {
     try {
-      const suffix = kind === 'cuda' ? 'cuda' : 'directml';
+      if (!isGpuKind(kind)) return { ok: false, error: '未知的增强包类型' };
       const rel = await findGpuRelease();
-      const assets = ((rel && rel.assets) || []).filter(a => a.name && a.name.toLowerCase().includes('gpu-' + suffix) && a.name.toLowerCase().endsWith('.zip'));
-      if (!assets.length) return { ok: false, error: '未找到 GPU 增强包资产：fufumidi-gpu-' + suffix + '.zip' };
+      const assets = ((rel && rel.assets) || []).filter(a => a.name && a.name.toLowerCase().includes('gpu-' + kind) && a.name.toLowerCase().endsWith('.zip'));
+      if (!assets.length) return { ok: false, error: '未找到 GPU 增强包资产：fufumidi-gpu-' + kind + '.zip' };
       const a = assets[0];
       return { ok: true, url: a.browser_download_url, name: a.name, size: a.size };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
@@ -211,7 +260,10 @@ function registerGpuIpc({
   ipcMain.handle('gpu:downloadPackage', async (evt, opts) => {
     if (!opts || (!opts.url && !(opts.files && opts.files.length))) return { ok: false, error: 'empty url' };
     const kind = String(opts.kind || inferGpuKind(opts.name || (opts.files && opts.files[0] && (opts.files[0].name || opts.files[0].url)) || opts.url) || '').toLowerCase();
-    if (kind !== 'cuda' && kind !== 'directml') return { ok: false, error: '无法识别增强包类型' };
+    if (!isGpuKind(kind)) return { ok: false, error: '无法识别增强包类型' };
+    // 前置条件（如 ROCm 需 Python 3.12）：先拦下来，别让用户白下 1.9GB
+    const block = prereqError(kind);
+    if (block) return { ok: false, kind, error: block, requiresPython: requiredPython(kind) };
     const win = BrowserWindow.fromWebContents(evt.sender);
     const dlDir = path.join(Paths.tempDir(), 'fufumidi-gpu-dl');
     const extractDir = path.join(Paths.tempDir(), 'fufumidi-gpu-extract');
@@ -294,12 +346,12 @@ function registerGpuIpc({
       const spSrc = path.join(extractDir, 'site-packages');
       if (!fs.existsSync(spSrc)) throw new Error('压缩包内缺少 site-packages 目录');
       await stopEngineWorker();
-      installGpuSite(kind, spSrc, { name: opts.name || 'fufumidi-gpu-' + kind + '.zip', url: opts.url, source: 'download', split: isSplit });
+      installGpuSite(kind, spSrc, { name: opts.name || 'fufumidi-gpu-' + kind + '.zip', url: opts.url, source: 'download', split: isSplit, requiresPython: requiredPython(kind) });
       try { fs.unlinkSync(zipTmp); } catch {}
       try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch {}
       try { fs.rmSync(dlDir, { recursive: true, force: true }); } catch {}
       if (win && !win.isDestroyed()) win.webContents.send('gpu:progress', { received: receivedAll, total: totalAll, percent: 100, done: true });
-      return { ok: true, kind };
+      return { ok: true, kind, requiresPython: requiredPython(kind), active: !!fitsPython(kind, currentPythonMinor()) };
     } catch (e) {
       try { fs.unlinkSync(zipTmp); } catch {}
       try { fs.rmSync(dlDir, { recursive: true, force: true }); } catch {}
@@ -323,27 +375,33 @@ function registerGpuIpc({
     { torch: null, pypi: null, label: '官方' },
   ];
 
-  // CUDA 增强包安装后的可用性自检：确保 torch.cuda 真正可用（Blackwell 需 cu128）
-  async function verifyCudaInstall() {
+  // 增强包安装后的可用性自检：确保 torch 真的认到对应后端
+  //   cuda → torch.cuda.is_available()（Blackwell 需 cu128）
+  //   rocm → torch.version.hip 非空
+  async function verifyTorchBackend(kind) {
+    const isCuda = kind === 'cuda';
     const code = [
       "import json",
       "try:",
       "    import torch",
-      "    if not torch.cuda.is_available():",
-      "        print('###CUDA ' + json.dumps({'ok': False, 'error': 'torch.cuda.is_available()=False'})); raise SystemExit",
-      "    cap = tuple(torch.cuda.get_device_capability(0))",
-      "    cv = str(torch.version.cuda or '')",
-      "    info = {'ok': True, 'name': torch.cuda.get_device_name(0), 'capability': '%d.%d' % cap, 'blackwell': cap[0] >= 9, 'cuda_version': cv}",
-      "    try:",
-      "        info['need_cu128'] = bool(info['blackwell'] and (not cv or float(cv) < 12.8))",
-      "    except Exception:",
-      "        info['need_cu128'] = True",
-      "    print('###CUDA ' + json.dumps(info))",
+      isCuda
+        ? "    ok = bool(torch.cuda.is_available())"
+        : "    ok = bool(getattr(torch.version, 'hip', None))",
+      "    if not ok:",
+      "        print('###BACKEND ' + json.dumps({'ok': False, 'error': 'backend unavailable'})); raise SystemExit",
+      "    info = {'ok': True, 'torch': torch.__version__, 'hip': getattr(torch.version, 'hip', None), 'cuda_version': getattr(torch.version, 'cuda', None)}",
+      isCuda ? "    cap = tuple(torch.cuda.get_device_capability(0))" : "    cap = None",
+      isCuda ? "    info['name'] = torch.cuda.get_device_name(0)" : "    info['name'] = 'ROCm GPU'",
+      isCuda ? "    info['capability'] = '%d.%d' % cap" : "    info['capability'] = None",
+      isCuda ? "    info['blackwell'] = cap[0] >= 9" : "    info['blackwell'] = False",
+      isCuda ? "    try: info['need_cu128'] = bool(info['blackwell'] and (not info['cuda_version'] or float(info['cuda_version']) < 12.8))" : "    info['need_cu128'] = False",
+      isCuda ? "    except Exception: info['need_cu128'] = True" : "",
+      "    print('###BACKEND ' + json.dumps(info))",
       "except Exception as e:",
-      "    print('###CUDA ' + json.dumps({'ok': False, 'error': str(e)}))",
-    ].join('\n');
+      "    print('###BACKEND ' + json.dumps({'ok': False, 'error': str(e)}))",
+    ].filter(Boolean).join('\n');
     const r = await runEngineInline(code);
-    const m = (r.out || '').match(/###CUDA\s+(\{.*\})/);
+    const m = (r.out || '').match(/###BACKEND\s+(\{.*\})/);
     if (m) { try { return JSON.parse(m[1]); } catch (e) {} }
     return { ok: false, error: String((r.out || r.error || '验证输出解析失败')).slice(-300) };
   }
@@ -373,6 +431,9 @@ function registerGpuIpc({
       if (!d.vendor) {
         return { ok: false, error: '未检测到可用的独立显卡（NVIDIA / AMD / Intel），无法安装 GPU 加速；可在下方「本地导入 ZIP」手动安装增强包', gpu: gpuDetect };
       }
+      // 一键安装只覆盖「开箱即用」的两条路：NVIDIA → CUDA，AMD/Intel → DirectML。
+      // ROCm 需要较新的 Radeon + Adrenalin 26.1.1+ 驱动，且必须配 Python 3.12 运行时，
+      // 属于显式选择项（见下方「预打包增强包」列表），不在这里自动装。
       const kind = d.vendor === 'nvidia' ? 'cuda' : 'directml';
       const req = kind === 'cuda' ? 'requirements-gpu-cuda.txt' : 'requirements-gpu-directml.txt';
       const reqPath = path.join(engineDir(), req);
@@ -423,11 +484,11 @@ function registerGpuIpc({
         return { ok: false, canceled: true, kind, error: '已取消安装' };
       }
       if (result.code === 0) {
-        writeGpuManifest(kind, { source: 'auto' });
+        writeGpuManifest(kind, { source: 'auto', requiresPython: requiredPython(kind) });
         // CUDA：安装后自检，确保 torch.cuda 真正可用（覆盖 Blackwell / RTX 50 系 cu128）
         if (kind === 'cuda') {
           send({ percent: 90, text: 'CUDA 增强包安装完成，正在验证 GPU 可用性…', installing: true });
-          const verified = await verifyCudaInstall();
+          const verified = await verifyTorchBackend('cuda');
           if (verified && verified.ok) {
             send({ percent: 100, done: true });
             return {
@@ -450,7 +511,7 @@ function registerGpuIpc({
         send({ percent: 100, done: true });
         return { ok: true, kind, gpu: gpuDetect, out: result.out, err: result.err };
       }
-      return { ok: false, kind, error: '所有安装源（阿里云/交大/官方）均失败：' + (result.err || result.out || '安装失败').slice(-300) + '。可到 GitHub Release 下载 fufumidi-gpu-cuda / fufumidi-gpu-directml 预打包增强包，在「本地导入 ZIP」中安装。', out: result.out, err: result.err, gpu: gpuDetect };
+      return { ok: false, kind, error: '所有安装源（阿里云/交大/官方）均失败：' + (result.err || result.out || '安装失败').slice(-300) + '。可到 GitHub Release 下载 fufumidi-gpu-cuda / fufumidi-gpu-directml / fufumidi-gpu-rocm 预打包增强包，在「本地导入 ZIP」中安装。', out: result.out, err: result.err, gpu: gpuDetect };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 }

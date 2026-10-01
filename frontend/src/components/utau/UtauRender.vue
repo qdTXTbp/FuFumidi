@@ -143,12 +143,18 @@ async function render() {
     const isDS = await detectDiffsingerVoicebank(store.voicebankDir);
     let r;
     if (isDS) {
-      const payload = renderPayload();
+      // 注意：这里的源必须是 targetNotes（UtauNote 带 startBeat/durBeat/pitch），
+      // 不能用 renderPayload() —— 那是 UTAU 引擎的载荷，只有 note/length_ms，
+      // 没有 startBeat/durBeat/pitch，取出来全是 undefined，渲染必然失败。
+      // 同时逐字段摊平成普通对象，避免把响应式 Proxy 交给结构化克隆。
       r = await bridge.diffsingerRender({
         voicebank: store.voicebankDir,
         bpm: store.bpm,
-        notes: payload.map((n) => ({
-          startBeat: n.startBeat, durBeat: n.durBeat, pitch: n.pitch, lyric: n.lyric || n.syllable || 'a',
+        notes: targetNotes.value.map((n) => ({
+          startBeat: n.startBeat, durBeat: n.durBeat, pitch: n.pitch,
+          lyric: n.lyric || 'a',
+          vibrato: !!n.vibrato, vibDepth: n.vibDepth, vibFreq: n.vibFreq, vibFade: n.vibFade || 0,
+          pitchOffset: (n.params && n.params.pitch) || 0,
         })),
       });
     } else {

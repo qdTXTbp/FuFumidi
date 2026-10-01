@@ -29,6 +29,12 @@ const {
   installGpuSite,
   isSplitPackagePath,
   combineSplitParts,
+  GPU_KINDS,
+  KIND_LABEL,
+  isGpuKind,
+  requiredPython,
+  fitsPython,
+  readGpuManifest,
 } = GpuService;
 const { createEngineService } = require('./main/engine');
 const { DEFAULT_SETTINGS, SETTINGS_PATH, readSettings, writeSettings } = require('./main/settings');
@@ -129,6 +135,8 @@ if (!gotLock) {
       installedGpuKinds, gpuEnhanceDir, gpuEnhanceSite,
       inferGpuKind, writeGpuManifest, installGpuSite,
       isSplitPackagePath, combineSplitParts,
+      GPU_KINDS, KIND_LABEL, isGpuKind, requiredPython, fitsPython, readGpuManifest,
+      currentPythonMinor, pythonForMinor,
       engineDir, engineEnv, resolvePython,
       runEngineInline, parsePyJson,
     });
@@ -230,9 +238,61 @@ function ensureRuntimeDlls(pyExe) {
     }
   } catch (_) {}
 }
+// ---- 独立 Python 3.12 引擎运行时 ----
+// ROCm 增强包只有 cp312 轮子，而内置运行时是 3.11，所以需要第二套完整运行时。
+// 约定：目录名 resources/python312，**必须带 .fufumidi-engine-ready 标记**才算可用——
+// 标记由 scripts/bundle-python312.js 在依赖装齐后写入。没有标记就不切过去，
+// 否则引擎会在一个缺依赖的 3.12 里跑，整条转录链路直接不可用。
+const PY312_READY_MARK = '.fufumidi-engine-ready';
+const PY312_DIRS = [
+  () => path.join(process.resourcesPath, 'python312'),
+  () => path.join(__dirname, '..', 'python312'),
+  () => path.join(__dirname, 'python312'),
+  () => path.join(__dirname, 'resources', 'python312'),
+];
+function bundledPython312() {
+  const names = process.platform === 'win32' ? ['python.exe'] : ['python', 'python3'];
+  for (const dir of PY312_DIRS) {
+    let d;
+    try { d = dir(); } catch (_) { continue; }
+    if (!fs.existsSync(path.join(d, PY312_READY_MARK))) continue;
+    for (const n of names) {
+      const p = path.join(d, n);
+      if (fs.existsSync(p)) return p;
+    }
+  }
+  return null;
+}
+/** 运行时目录里的 CPython 次版本（读 python3XX.dll，避免起子进程探测） */
+function pythonMinorOfDir(dir) {
+  try {
+    const m = fs.readdirSync(dir).map((f) => (f.match(/^python(\d)(\d+)\.dll$/i) || [])).find(Boolean);
+    if (m) return m[1] + '.' + m[2];
+  } catch (_) {}
+  return null;
+}
+/** 指定次版本的可用解释器（'3.12' 为空表示独立运行时尚未就绪） */
+function pythonForMinor(minor) {
+  if (String(minor) === '3.12') return bundledPython312();
+  return bundledPython();
+}
+/** 当前实际会用的引擎 Python 次版本（供 GPU 增强包判断能否加载） */
+function currentPythonMinor() {
+  try {
+    const exe = resolvePython();
+    return pythonMinorOfDir(path.dirname(exe)) || '3.11';
+  } catch (_) { return '3.11'; }
+}
 function resolvePython() {
   const s = readSettings();
   if (s.engine_path && fs.existsSync(s.engine_path)) return s.engine_path;  // 用户显式指定优先
+  // 装了 rocm 且有就绪的 3.12 运行时 → 切过去（ROCm 只有 cp312 轮子）。
+  // 没有 3.12 运行时不硬切：那会让整个引擎跑在缺依赖的解释器上。
+  // 这种情况下 rocm 的 site-packages 会被 engineEnv() 过滤掉，等价于「已安装未启用」。
+  if (installedGpuKinds().indexOf('rocm') >= 0) {
+    const p312 = bundledPython312();
+    if (p312) { ensureRuntimeDlls(p312); return p312; }
+  }
   const b = bundledPython();
   if (b) { ensureRuntimeDlls(b); return b; }                                   // 内置运行时其次
   if (process.env.FUFUMIDI_PYTHON && fs.existsSync(process.env.FUFUMIDI_PYTHON)) return process.env.FUFUMIDI_PYTHON;
@@ -412,10 +472,17 @@ function engineEnv(extra) {
     const st = readSettings();
     if (st && st.hf_token) env.HF_TOKEN = String(st.hf_token).trim();
   } catch (_) {}
-  const sites = installedGpuKinds().map(gpuEnhanceSite);
+  // 只挂「与当前解释器 ABI 匹配」的增强包：三种包都按 CPython 次版本编译
+  // （cuda/directml → cp311，rocm → cp312）。把不匹配的塞进 PYTHONPATH 会拖进
+  // 一堆加载不了的 .pyd，比不挂更糟。装了但版本不匹配的，视为「已安装未启用」，
+  // 由设置页给出提示（rocm 需 Python 3.12 运行时）。
+  const minor = currentPythonMinor();
+  const activeKinds = installedGpuKinds().filter((k) => fitsPython(k, minor));
+  const sites = activeKinds.map(gpuEnhanceSite);
   if (sites.length) {
     // 只保留应用自己的 GPU 增强包路径，不再拼接宿主 PYTHONPATH
     env.PYTHONPATH = sites.join(path.delimiter);
+    env.FUFUMIDI_GPU_KINDS = activeKinds.join(',');
   } else {
     // 没有安装隔离 GPU 增强包时，强制 CPU，避免基础环境中的旧 GPU 包继续生效
     env.FUFUMIDI_DISABLE_GPU = '1';

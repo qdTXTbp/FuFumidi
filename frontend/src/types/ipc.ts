@@ -5,7 +5,7 @@
 
 export type EngineMode = 'universal' | 'piano' | 'separate';
 export type PerfMode = 'quality' | 'balanced' | 'fast';
-export type GpuKind = 'cuda' | 'directml';
+export type GpuKind = 'cuda' | 'directml' | 'rocm';
 
 export interface ConvertRequest {
   audio: string;
@@ -72,6 +72,10 @@ export interface GpuInfo {
   mps?: boolean;
   directml?: boolean;
   torch_directml?: boolean;
+  /** AMD ROCm 加速已启用（torch.version.hip 非空） */
+  rocm?: boolean;
+  /** ROCm HIP 版本，如 '7.2.26024-f6f897bd3d' */
+  hip_version?: string | null;
   note?: string;
 }
 
@@ -102,12 +106,25 @@ export interface GpuPackage {
   kind: GpuKind;
   split?: boolean;
   files?: GpuPackageFile[];
+  /** 该包要求的 CPython 次版本（'3.11' / '3.12'），ROCm 为 '3.12' */
+  requiresPython?: string | null;
 }
 
 export interface GpuStatusResult {
   ok: boolean;
   directml?: boolean;
   cuda?: boolean;
+  rocm?: boolean;
+  /** 对应 kind 是否与当前解释器 ABI 匹配（装了但不匹配 = 已安装未启用） */
+  cudaActive?: boolean;
+  directmlActive?: boolean;
+  rocmActive?: boolean;
+  /** 装了 rocm 但当前不是 3.12（需切换到 3.12 运行时才生效） */
+  needsPython312?: boolean;
+  /** 是否存在就绪的 Python 3.12 引擎运行时 */
+  canPython312?: boolean;
+  currentPython?: string;
+  kinds?: GpuKind[];
   isolated?: boolean;
   paths?: string[];
   error?: string;
@@ -130,6 +147,10 @@ export interface GeneralResult {
   split?: boolean;
   removed?: boolean;
   restored?: boolean;
+  /** 该增强包要求的 CPython 次版本 */
+  requiresPython?: string | null;
+  /** 安装后是否已生效（版本不匹配时为 false = 已安装未启用） */
+  active?: boolean;
 }
 
 export interface PresetItem {
@@ -604,6 +625,12 @@ export interface FuBridge {
     range?: DiffsingerRenderSelection | null;
     /** 推理后端：auto（默认，GPU 优先）/ cpu / cuda / dml */
     device?: string;
+    /**
+     * P3 音高曲线：[{beat, cents}]，beat 为绝对拍位，cents 为音分偏移。
+     * 必须传**纯对象数组**：store 里的响应式数组是 Proxy，
+     * 结构化克隆无法处理，会抛 "An object could not be cloned"。
+     */
+    pitchCurve?: { beat: number; cents: number }[];
   }): Promise<DiffsingerRenderResult>;
   onDiffsingerRuntimeProgress(cb: (p: DiffsingerRuntimeProgress) => void): () => void;
   onDiffsingerVoicebankProgress(cb: (p: DiffsingerVoicebankProgress) => void): () => void;

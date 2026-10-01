@@ -7,13 +7,17 @@ GPU 加速检测与设备选择
 
 后端选择策略（按厂商自动匹配）：
 - NVIDIA 显卡 → CUDA（torch.cuda；onnxruntime CUDAExecutionProvider）
+- AMD 显卡（较新 Radeon）→ ROCm 优先（torch.version.hip 非空；需 Python 3.12 运行时）
 - AMD / Intel 显卡 → DirectML（torch-directml 跑 torch 模型；onnxruntime DmlExecutionProvider 跑 basic-pitch）
 - 无法识别 / 未安装对应运行时 → CPU（行为与之前完全一致）
 
+注意：ROCm 版 torch 会把 HIP 映射到 `cuda` 命名空间，`torch.cuda.is_available()` 同样为 True。
+所以判定 ROCm 的唯一可靠依据是 `torch.version.hip` 非空，必须先于 CUDA 分支检查。
+
 用法:
     from engine_gpu import detect, torch_device, onnx_provider
-    info = detect()              # {'available':True,'backend':'cuda','device':'cuda','vendor':'nvidia',...}
-    dev   = torch_device()       # 'cuda' / 'privateuseone:0'(DirectML) / 'mps' / 'cpu'
+    info = detect()              # {'available':True,'backend':'cuda'|'rocm'|'directml',...}
+    dev   = torch_device()       # 'cuda'（CUDA/ROCm 都是它）/ 'privateuseone:0'(DirectML) / 'mps' / 'cpu'
     prov  = onnx_provider()      # 'CUDAExecutionProvider' / 'DmlExecutionProvider' / 'CPUExecutionProvider'
 """
 
@@ -83,7 +87,8 @@ def _probe():
     gpu = {"available": False, "backend": None, "device": "cpu", "name": None,
            "vendor": None, "recommended_backend": "cpu",
            "cuda": False, "mps": False, "directml": False, "onnx_gpu": False,
-           "onnx_provider": "CPUExecutionProvider"}
+           "onnx_provider": "CPUExecutionProvider",
+           "rocm": False, "hip_version": None}
     disabled = os.environ.get("FUFUMIDI_DISABLE_GPU") == "1"
     if disabled:
         gpu["disabled"] = True
@@ -107,24 +112,42 @@ def _probe():
         import torch
         if torch.cuda.is_available():
             gpu["available"] = True
-            gpu["backend"] = "cuda"
             gpu["device"] = "cuda"
-            gpu["cuda"] = True
-            gpu["vendor"] = "nvidia"
-            try:
-                gpu["name"] = torch.cuda.get_device_name(0)
-            except Exception:
-                gpu["name"] = "NVIDIA GPU"
-            # 计算能力 → 判断是否 Blackwell（RTX 50 系 sm_120 需 CUDA 12.8 / cu128 torch）
-            try:
-                cap = tuple(torch.cuda.get_device_capability(0))
-                gpu["capability"] = "%d.%d" % cap
-                gpu["blackwell"] = cap[0] >= 9
-                gpu["need_cu128"] = gpu["blackwell"] and not _torch_is_cu128()
-            except Exception:
+            # ROCm 版 torch 把 HIP 映射进 cuda 命名空间（is_available() 也为 True），
+            # 唯一可靠区分是 torch.version.hip 非空 —— 必须先判它，否则 AMD 会被当成 NVIDIA。
+            hip = getattr(torch.version, "hip", None)
+            if hip:
+                gpu["backend"] = "rocm"
+                gpu["rocm"] = True
+                gpu["hip_version"] = str(hip)
+                gpu["vendor"] = "amd"
+                try:
+                    gpu["name"] = torch.cuda.get_device_name(0)
+                except Exception:
+                    gpu["name"] = "AMD ROCm GPU"
+                # ROCm 下 get_device_capability() 返回的是 gfx 版本（如 gfx1100 → 11.0），
+                # 与 NVIDIA 的 sm 计算能力不是一回事，绝不能套用 Blackwell 判定。
                 gpu["capability"] = None
                 gpu["blackwell"] = False
                 gpu["need_cu128"] = False
+            else:
+                gpu["backend"] = "cuda"
+                gpu["cuda"] = True
+                gpu["vendor"] = "nvidia"
+                try:
+                    gpu["name"] = torch.cuda.get_device_name(0)
+                except Exception:
+                    gpu["name"] = "NVIDIA GPU"
+                # 计算能力 → 判断是否 Blackwell（RTX 50 系 sm_120 需 CUDA 12.8 / cu128 torch）
+                try:
+                    cap = tuple(torch.cuda.get_device_capability(0))
+                    gpu["capability"] = "%d.%d" % cap
+                    gpu["blackwell"] = cap[0] >= 9
+                    gpu["need_cu128"] = gpu["blackwell"] and not _torch_is_cu128()
+                except Exception:
+                    gpu["capability"] = None
+                    gpu["blackwell"] = False
+                    gpu["need_cu128"] = False
         else:
             try:
                 if torch.backends.mps.is_available():
@@ -169,19 +192,25 @@ def _probe():
     except Exception:
         pass
 
-    # ---- 厂商识别 → 推荐后端：NVIDIA → CUDA；AMD/Intel → DirectML ----
-    if gpu.get("vendor") is None and not gpu.get("cuda"):
+    # ---- 厂商识别 → 推荐后端：ROCm > CUDA > DirectML ----
+    if gpu.get("vendor") is None and not (gpu.get("cuda") or gpu.get("rocm")):
         gpu["vendor"] = _gpu_vendor()
-    if gpu["cuda"]:
+    if gpu.get("rocm"):
+        gpu["recommended_backend"] = "rocm"
+    elif gpu["cuda"]:
         gpu["recommended_backend"] = "cuda"
     elif gpu.get("directml") or gpu.get("torch_directml"):
         gpu["recommended_backend"] = "directml"
     else:
         gpu["recommended_backend"] = "cpu"
-    if gpu["vendor"] == "nvidia" and not gpu["cuda"]:
+    if gpu.get("rocm"):
+        gpu["note"] = "已启用 AMD ROCm 加速（HIP " + str(gpu.get("hip_version") or "") + "）"
+    elif gpu["vendor"] == "nvidia" and not gpu["cuda"]:
         gpu["note"] = "检测到 NVIDIA 显卡，但未安装 CUDA 版 torch；改用 CUDA 运行时可显著加速"
-    elif gpu["vendor"] in ("amd", "intel") and not (gpu.get("directml") or gpu.get("torch_directml")):
-        gpu["note"] = "检测到 " + gpu["vendor"].upper() + " 显卡，建议安装 DirectML 运行时以加速"
+    elif gpu["vendor"] == "amd" and not (gpu.get("directml") or gpu.get("torch_directml")):
+        gpu["note"] = "检测到 AMD 显卡，建议安装 DirectML 运行时以加速（较新 Radeon 可选 ROCm，需 Python 3.12 运行时）"
+    elif gpu["vendor"] == "intel" and not (gpu.get("directml") or gpu.get("torch_directml")):
+        gpu["note"] = "检测到 INTEL 显卡，建议安装 DirectML 运行时以加速"
     return gpu
 
 
@@ -195,7 +224,8 @@ def detect():
             _cache = {"available": False, "backend": None, "device": "cpu",
                       "name": None, "vendor": None, "recommended_backend": "cpu",
                       "cuda": False, "mps": False, "directml": False,
-                      "onnx_gpu": False, "onnx_provider": "CPUExecutionProvider"}
+                      "onnx_gpu": False, "onnx_provider": "CPUExecutionProvider",
+                      "rocm": False, "hip_version": None}
     return _cache
 
 

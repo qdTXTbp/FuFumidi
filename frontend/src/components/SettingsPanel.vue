@@ -397,10 +397,18 @@ async function clearUserData() {
 }
 
 /* ---------------- GPU 加速 ---------------- */
+// 三种增强包：cuda（NVIDIA）/ directml（AMD·Intel）/ rocm（AMD 较新 Radeon，需 Python 3.12）
+const GPU_KIND_LABEL = { cuda: 'CUDA', directml: 'DirectML', rocm: 'ROCm' };
+function gpuKindLabel(k) { return GPU_KIND_LABEL[k] || String(k || '').toUpperCase(); }
 const gpu = reactive({
   detect: null,        // {vendor,name,blackwell,needCu128,available,backend}
   installed: t('检测中…'),
   installedKind: null,
+  kinds: [],           // 已安装的 kind 列表
+  rocmActive: false,   // ROCm 是否已在当前解释器下生效
+  needsPython312: false, // 装了 rocm 但当前不是 3.12
+  canPython312: false,   // 是否存在就绪的 Python 3.12 引擎运行时
+  currentPython: '',
   busy: false,
   status: '',
   progress: null,
@@ -419,9 +427,23 @@ const gpuRecommended = computed(() => {
   const d = gpu.detect;
   if (!d || !d.vendor) return t('不可用（CPU）');
   if (d.vendor === 'nvidia') return 'CUDA' + (d.needCu128 ? t('（cu128 · RTX 50 系）') : '');
-  if (d.vendor === 'amd' || d.vendor === 'intel') return 'DirectML';
+  if (d.vendor === 'amd') {
+    if (d.backend === 'rocm' || gpu.rocmActive) return 'ROCm';
+    // AMD 默认走 DirectML（覆盖面最广）；较新 Radeon 才能用 ROCm，且需要 3.12 运行时
+    return 'DirectML' + (gpu.canPython312 ? t('（较新 Radeon 可选 ROCm）') : '');
+  }
+  if (d.vendor === 'intel') return 'DirectML';
   return t('不可用');
 });
+/** 预打包增强包的前置条件（返回非空字符串 = 不可安装，作为按钮 title 展示） */
+function gpuPkgBlockedReason(p) {
+  if (!p || !p.requiresPython) return '';
+  if (p.requiresPython === gpu.currentPython) return '';
+  // ROCm 需要 3.12：只要存在就绪的 3.12 运行时就能装（装完会切过去）
+  if (p.requiresPython === '3.12' && gpu.canPython312) return '';
+  if (p.requiresPython === '3.12') return t('ROCm 需要 Python 3.12 引擎运行时，当前尚未就绪，暂时无法安装');
+  return t('该增强包所需的 Python 运行时尚未就绪，暂时无法安装');
+}
 
 function gpuSetProgress(p, txt) {
   gpu.progress = p;
@@ -432,13 +454,18 @@ async function gpuRefreshInstalled() {
   try {
     const r = await bridge.gpuStatus();
     if (r && r.ok) {
-      if (r.cuda && r.directml) gpu.installed = t('CUDA + DirectML 已安装');
-      else if (r.cuda) gpu.installed = t('CUDA 已安装');
-      else if (r.directml) gpu.installed = t('DirectML 已安装');
-      else gpu.installed = t('未安装');
-      gpu.installedKind = r.cuda ? 'cuda' : (r.directml ? 'directml' : null);
-    } else { gpu.installed = t('未安装'); gpu.installedKind = null; }
-  } catch (e) { gpu.installed = t('未知'); gpu.installedKind = null; }
+      const kinds = Array.isArray(r.kinds) ? r.kinds : ['cuda', 'directml', 'rocm'].filter((k) => !!r[k]);
+      gpu.kinds = kinds;
+      gpu.rocmActive = !!r.rocmActive;
+      gpu.needsPython312 = !!r.needsPython312;
+      gpu.canPython312 = !!r.canPython312;
+      gpu.currentPython = r.currentPython || '';
+      if (!kinds.length) gpu.installed = t('未安装');
+      else gpu.installed = kinds.map(gpuKindLabel).join(' + ') + ' ' + t('已安装');
+      // 卸载针对「主」增强包：装了 ROCm 就以 ROCm 为主（它与 3.12 绑定）
+      gpu.installedKind = kinds.length ? (kinds.indexOf('rocm') >= 0 ? 'rocm' : kinds[0]) : null;
+    } else { gpu.installed = t('未安装'); gpu.installedKind = null; gpu.kinds = []; }
+  } catch (e) { gpu.installed = t('未知'); gpu.installedKind = null; gpu.kinds = []; }
 }
 async function gpuLoadDetect() {
   if (!bridge || !bridge.probe) { gpu.detect = null; return; }
@@ -919,7 +946,10 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
               <div class="gpu-row"><span class="gpu-k">{{ t('显卡') }}</span><span class="gpu-v">{{ gpuCard }}</span></div>
               <div class="gpu-row"><span class="gpu-k">{{ t('推荐加速') }}</span><span class="gpu-v">{{ gpuRecommended }}</span></div>
               <div class="gpu-row"><span class="gpu-k">{{ t('安装状态') }}</span><span class="gpu-v">{{ gpu.installed }}</span></div>
+              <div v-if="gpu.currentPython" class="gpu-row"><span class="gpu-k">{{ t('引擎运行时') }}</span><span class="gpu-v">Python {{ gpu.currentPython }}</span></div>
               <div v-if="gpu.detect && gpu.detect.needCu128" class="gpu-warn">{{ t('检测到 RTX 50 系（Blackwell）显卡，将自动安装 CUDA 12.8（cu128）加速包') }}</div>
+              <div v-if="gpu.needsPython312" class="gpu-warn">{{ t('ROCm 增强包已安装，但当前引擎运行时是 Python 3.11 —— ROCm 只有 3.12（cp312）的轮子，需装好 Python 3.12 引擎运行时后才会生效（已安装但未启用）。') }}</div>
+              <div v-else-if="gpu.rocmActive" class="gpu-warn ok">{{ t('ROCm 加速已生效（AMD 较新 Radeon）。') }}</div>
             </div>
             <button class="btn primary gpu-install" @click="gpuAutoInstall" :disabled="gpu.busy || app.gpuInstall.active">
               {{ (gpu.busy || app.gpuInstall.active) ? t('正在安装…') : (gpuInstalled ? t('GPU 加速已安装 · 点击重装/升级') : t('安装 GPU 加速')) }}
@@ -936,11 +966,12 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
             <div v-if="gpu.packages.length" style="margin-top:12px;border-top:1px solid var(--hairline);padding-top:12px">
               <div style="font-size:12px;color:var(--text-soft);margin-bottom:6px">{{ t('预打包增强包（自动安装失败时备用）') }}</div>
               <div v-for="p in gpu.packages" :key="p.kind + '|' + p.name" style="display:flex;align-items:center;gap:8px;margin:6px 0">
-                <span style="flex:1;font-size:13px">{{ (p.kind === 'cuda' ? 'CUDA' : 'DirectML') + (p.split ? t('（分卷）') : '') }}</span>
+                <span style="flex:1;font-size:13px">{{ gpuKindLabel(p.kind) + (p.split ? t('（分卷）') : '') + (p.requiresPython === '3.12' ? t('（需 Python 3.12 运行时）') : '') }}</span>
                 <span style="font-size:12px;color:var(--text-soft)">{{ p.sizeText }}</span>
-                <button class="btn sm" @click="gpuDownloadRemote(p)" :disabled="gpu.busy || app.gpuInstall.active">{{ t('下载并安装') }}</button>
+                <button class="btn sm" @click="gpuDownloadRemote(p)" :disabled="gpu.busy || app.gpuInstall.active || !!gpuPkgBlockedReason(p)" :title="gpuPkgBlockedReason(p)">{{ t('下载并安装') }}</button>
               </div>
               <div style="font-size:12px;color:var(--text-soft);margin-top:4px">{{ t('国内优先走 CNB 镜像，境外走 GitHub。') }}</div>
+              <div style="font-size:12px;color:var(--text-soft);margin-top:2px">{{ t('ROCm 仅适用于较新 Radeon（RX 7000/9000 等），且需 Adrenalin 26.1.1+ 驱动。') }}</div>
             </div>
             <div class="gpu-extra">
               <button class="btn sm" @click="gpuImportLocal" :disabled="gpu.busy || app.gpuInstall.active">{{ t('本地导入 ZIP') }}</button>

@@ -494,7 +494,8 @@ async function probeEngine() {
     }
     if (p && p.gpu) {
       const g = p.gpu;
-      if (g.cuda) gpuInfo.value = 'GPU · ' + (g.vendor === 'nvidia' ? 'NVIDIA' : 'CUDA') + ' ✓';
+      if (g.rocm) gpuInfo.value = 'GPU · AMD (ROCm) ✓';
+      else if (g.cuda) gpuInfo.value = 'GPU · ' + (g.vendor === 'nvidia' ? 'NVIDIA' : 'CUDA') + ' ✓';
       else if (g.mps) gpuInfo.value = 'GPU · Apple (MPS) ✓';
       else if (g.torch_directml || g.directml) gpuInfo.value = 'GPU · ' + (g.vendor === 'amd' ? 'AMD' : g.vendor === 'intel' ? 'Intel' : 'DirectML') + ' (DirectML) ✓';
     }

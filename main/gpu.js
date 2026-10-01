@@ -1,12 +1,44 @@
 // ============================================================
 // 主进程 GPU 增强包服务
-// 负责 GPU 增强目录、安装/卸载、分卷合并、类型识别
+// 负责 GPU 增强目录、安装/卸载、分卷合并、类型识别、Python 版本约束
+//
+// 三种增强包（kind）：
+//   cuda     —— NVIDIA（torch cu128 + onnxruntime-gpu）
+//   directml —— AMD / Intel（torch-directml + onnxruntime-directml）
+//   rocm     —— AMD 较新 Radeon（ROCm 7.2；**只提供 cp312 轮子，必须配 Python 3.12 运行时**）
+//
+// ★ Python 版本约束：增强包是按某个 CPython 次版本编译的（site-packages 里的
+//   *.pyd 带 ABI tag）。内置运行时是 3.11，而 ROCm 只有 cp312，
+//   所以「启用 ROCm = 把解释器切到 3.12」。见 KIND_PY / requiredPython()。
 // ============================================================
 'use strict';
 const { app } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const Paths = require('./paths');
+
+const GPU_KINDS = ['cuda', 'directml', 'rocm'];
+/** 每种增强包所要求的 CPython 次版本（决定用哪个解释器跑引擎） */
+const KIND_PY = { cuda: '3.11', directml: '3.11', rocm: '3.12' };
+const KIND_LABEL = { cuda: 'CUDA', directml: 'DirectML', rocm: 'ROCm' };
+
+/** 是否是已知的增强包类型 */
+function isGpuKind(kind) {
+  return GPU_KINDS.indexOf(String(kind || '').toLowerCase()) >= 0;
+}
+
+/** 该增强包要求的 Python 次版本（'3.11' / '3.12'）；未知类型返回 null */
+function requiredPython(kind) {
+  return KIND_PY[String(kind || '').toLowerCase()] || null;
+}
+
+/** 该增强包能否在给定的 Python 次版本下加载 */
+function fitsPython(kind, minor) {
+  const need = requiredPython(kind);
+  if (!need) return false;
+  if (!minor) return false;
+  return String(minor) === need;
+}
 
 // GPU 增强包落在数据根目录（默认在工具目录旁），与模型/缓存同处一地，不挤占 C 盘
 function gpuEnhanceRoot() {
@@ -18,8 +50,16 @@ function gpuEnhanceDir(kind) {
 function gpuEnhanceSite(kind) {
   return path.join(gpuEnhanceDir(kind), 'site-packages');
 }
+/** 读取增强包清单（安装时写入）。缺失或损坏返回 null。 */
+function readGpuManifest(kind) {
+  try {
+    const p = path.join(gpuEnhanceDir(kind), 'manifest.json');
+    if (!fs.existsSync(p)) return null;
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch (e) { return null; }
+}
 function installedGpuKinds() {
-  return ['cuda', 'directml'].filter(k => {
+  return GPU_KINDS.filter(k => {
     const dir = gpuEnhanceDir(k);
     return fs.existsSync(path.join(dir, 'site-packages')) && fs.existsSync(path.join(dir, 'manifest.json'));
   });
@@ -28,6 +68,8 @@ function inferGpuKind(nameOrUrl) {
   const t = String(nameOrUrl || '').toLowerCase();
   if (t.indexOf('cuda') >= 0) return 'cuda';
   if (t.indexOf('directml') >= 0 || t.indexOf('dml') >= 0) return 'directml';
+  // rocm / hip：ROCm on Windows 的 torch 里 torch.version.hip 有值、version.cuda 为空
+  if (t.indexOf('rocm') >= 0 || t.indexOf('rocmsdk') >= 0 || t.indexOf('-hip') >= 0) return 'rocm';
   return null;
 }
 function writeGpuManifest(kind, meta) {
@@ -83,9 +125,16 @@ async function combineSplitParts(parts, outZip) {
 }
 
 module.exports = {
+  GPU_KINDS,
+  KIND_PY,
+  KIND_LABEL,
+  isGpuKind,
+  requiredPython,
+  fitsPython,
   gpuEnhanceRoot,
   gpuEnhanceDir,
   gpuEnhanceSite,
+  readGpuManifest,
   installedGpuKinds,
   inferGpuKind,
   writeGpuManifest,
