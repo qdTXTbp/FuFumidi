@@ -18,7 +18,8 @@
 导入本包即完成注册（对应 C# 的 `[Phonemizer(...)]` 特性在程序集加载时注册）。
 """
 
+from . import chinese_cvvc  # noqa: F401
 from . import chinese_vcv  # noqa: F401
 from . import japanese_vcv  # noqa: F401
 
-__all__ = ['japanese_vcv', 'chinese_vcv']
+__all__ = ['japanese_vcv', 'chinese_vcv', 'chinese_cvvc']

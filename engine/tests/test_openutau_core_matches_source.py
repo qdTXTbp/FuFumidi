@@ -1441,6 +1441,241 @@ def test_chinese_vcv_phonemizer():
           'got project=%r track=%r' % (ph2.project, ph2.track))
 
 
+def test_ini_read_blocks():
+    """`Classic/Ini.cs` —— 段头行会被取走、注释行**保留**、首行非段头要抛错。"""
+    from singing.openutau.classic.ini import Ini
+    cs = _read('Classic/Ini.cs')
+    if cs is None:
+        print('  SKIP 找不到 Classic/Ini.cs')
+        return
+    check('Ini: 段头用 Regex.IsMatch（部分匹配）', 'headerRegex.IsMatch(line)' in cs)
+    check('Ini: 空行 continue（注释行不跳过）',
+          'if (string.IsNullOrEmpty(line))' in cs and '//' not in cs.replace('///', ''))
+    check('Ini: 首行非段头时抛错（blocks.Count == 0）',
+          'throw new FileFormatException("Unexpected beginning of ust file.")' in cs)
+    check('Ini: 循环后把首行取为 header 并从 lines 删掉',
+          'block.header = block.lines[0].line;' in cs and 'block.lines.RemoveAt(0);' in cs)
+
+    lines = ['[VOWEL]', 'a=a,aa,ah', '; note', '', '[CONSONANT]', 'b=b,bb', '[REPLACE]', 'x=y']
+    blocks = Ini.read_blocks(lines, 't.ini', r'\[\w+\]')
+    check('Ini: 分出 3 个段', [b.header for b in blocks] == ['[VOWEL]', '[CONSONANT]', '[REPLACE]'],
+          'got %r' % [b.header for b in blocks])
+    check('Ini: 段头行已从 lines 移除',
+          [l.line for l in blocks[0].lines] == ['a=a,aa,ah', '; note'],
+          'got %r' % [l.line for l in blocks[0].lines])
+    check('Ini: 注释行**保留**在段内容里（由调用方按 = 过滤）',
+          '; note' in [l.line for l in blocks[0].lines])
+    check('Ini: 空行被跳过（lineNumber 仍按原文件计数）',
+          [l.line_number for l in blocks[1].lines] == [5],
+          'got %r' % [l.line_number for l in blocks[1].lines])
+    try:
+        Ini.read_blocks(['// comment', '[VOWEL]'], 't.ini', r'\[\w+\]')
+        check('Ini: 首个段头之前有内容 → 抛 ValueError', False, '没有抛错')
+    except ValueError:
+        check('Ini: 首个段头之前有内容 → 抛 ValueError', True)
+    check('Ini.find_block: 找不到返回 None', Ini.find_block(blocks, 'NOPE') is None)
+
+
+def _write_presamp_ini(dir_path, text):
+    os.makedirs(dir_path, exist_ok=True)
+    p = os.path.join(dir_path, 'presamp.ini')
+    with open(p, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(text)
+    return p
+
+
+class _CvvcSinger(_OtoSinger):
+    """带 location / 编码的假歌手（供 presamp.ini 读取用）。"""
+
+    def __init__(self, aliases, location=''):
+        super().__init__(aliases)
+        self.location = location
+        self.text_file_encoding = 'utf-8'
+
+
+def test_chinese_cvvc_phonemizer():
+    """`Plugin.Builtin/ChineseCVVCPhonemizer.cs` —— presamp.ini 三表 + VC/CV 切分。"""
+    import tempfile
+    from singing.openutau.plugin_builtin import chinese_cvvc as V
+    from singing.openutau import Note, PhonemeAttributes, registered
+    cvc_path = os.path.join(os.path.dirname(REF), 'OpenUtau.Plugin.Builtin',
+                            'ChineseCVVCPhonemizer.cs')
+    if not os.path.isfile(cvc_path):
+        print('  SKIP 找不到 ChineseCVVCPhonemizer.cs')
+        return
+    cs = open(cvc_path, encoding='utf-8-sig').read().replace('\r\n', '\n')
+
+    m = re.search(r'\[Phonemizer\("([^"]*)",\s*"([^"]*)"(?:,\s*"([^"]*)")?(?:,\s*language:\s*"([^"]*)")?\)\]', cs)
+    check('ZH CVVC: [Phonemizer] 的 name/tag/language 与 C# 一致（无 author）',
+          m is not None and (m.group(1), m.group(2), m.group(4)) == (
+              V.ChineseCVVCPhonemizer.name, V.ChineseCVVCPhonemizer.tag,
+              V.ChineseCVVCPhonemizer.language),
+          'C#=%r 我们=%r' % (m.groups() if m else None,
+                             (V.ChineseCVVCPhonemizer.name, V.ChineseCVVCPhonemizer.tag,
+                              V.ChineseCVVCPhonemizer.language)))
+    check('ZH CVVC: 已在注册表里', registered().get('ZH CVVC') is V.ChineseCVVCPhonemizer)
+    check('ZH CVVC: Convert.ToInt32 语义（四舍六入五成双，不是截断）',
+          'Convert.ToInt32' in cs and V._to_int32(2.5) == 2 and V._to_int32(3.5) == 4)
+    check('ZH CVVC: 查 VC 时用的是**前一个音符**的 tone（prevNeighbour.Value.tone）',
+          'prevNeighbour.Value.tone + (attr0.toneShift' in cs)
+    check('ZH CVVC: 缺省 attr 用 `?? default`（PhonemeAttributes 是 struct → 全空实例）',
+          '?? default;' in cs and V._DEFAULT_ATTR.tone_shift is None
+          and V._DEFAULT_ATTR.voice_color is None and V._DEFAULT_ATTR.alternate is None)
+    check('ZH CVVC: SetUp 会调 base.SetUp（与 ZH VCV 相反）',
+          'base.SetUp(groups, project, track);' in cs)
+
+    # ---- 用真的 presamp.ini 驱动
+    # 真实格式（取自 OpenUtau.Test/Files/presampini/default/presamp.ini）：
+    #   [VOWEL]     `尾韵母=代表音=音素表[,音素表...][=时长]`  → 读 parts[0] / parts[2]
+    #   [CONSONANT] `声母=音素表[,音素表...][=优先级]`        → 读 parts[0] / parts[1]
+    #   [REPLACE]   `原词=替换词`
+    tmp = tempfile.mkdtemp(prefix='fufumidi-cvvc-')
+    _write_presamp_ini(tmp, '\n'.join([
+        '[VOWEL]',
+        'a=a=a,aa,ah,ba,da',
+        'u=u=u,uu,bu',
+        'i=i=i,ii,bi',
+        '[CONSONANT]',
+        'b=b,bb,ba,bi,bu=1',
+        'd=d,dd,da=1',
+        '[REPLACE]',
+        'lve=lv',
+        '',
+    ]))
+    ph = V.ChineseCVVCPhonemizer()
+    singer = _CvvcSinger({}, location=tmp)
+    ph.set_singer(singer)
+    check('ZH CVVC.SetSinger: 解析出 [VOWEL]（aa/ah/ba 都归 a）',
+          ph.vowels.get('aa') == 'a' and ph.vowels.get('ah') == 'a'
+          and ph.vowels.get('ba') == 'a' and ph.vowels.get('bu') == 'u',
+          'got %r' % ph.vowels)
+    check('ZH CVVC.SetSinger: 解析出 [CONSONANT]（ba/bi/bu 都归 b）',
+          ph.consonants.get('b') == 'b' and ph.consonants.get('bb') == 'b'
+          and ph.consonants.get('ba') == 'b', 'got %r' % ph.consonants)
+    check('ZH CVVC.SetSinger: 解析出 [REPLACE]', ph.replace.get('lve') == 'lv',
+          'got %r' % ph.replace)
+    check('ZH CVVC.SetSinger: 同一歌手再次设置 → 提前返回、表被保留',
+          (ph.set_singer(singer), len(ph.vowels) > 0)[1])
+
+    axis = TimeAxis()
+    axis.build_segments(UProject())
+    ph.set_timing(axis)
+
+    n = lambda **kw: Note(**{'lyric': '', 'tone': 60, 'position': 0, 'duration': 480, **kw})
+    _full = {'vowels': dict(ph.vowels), 'consonants': dict(ph.consonants),
+             'replace': dict(ph.replace)}
+
+    def _resinger(aliases):
+        s = _CvvcSinger(aliases, location=tmp)
+        ph.singer = s
+        ph.vowels = dict(_full['vowels'])
+        ph.consonants = dict(_full['consonants'])
+        ph.replace = dict(_full['replace'])
+        return s
+
+    # (1) replace 精确替换（需要前邻以拿到 prevVowel）
+    _resinger({'a lv': _mk_named_oto('a lv')})
+    r = ph.process([n(lyric='lve')], prev_neighbour=n(lyric='a'))
+    check('ZH CVVC: [REPLACE] 精确整串替换后参与后续查表',
+          [p.phoneme for p in r.phonemes] == ['a lv'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (2) lyric == '-' / 'r' → 单独的 "{prevVowel} R"
+    _resinger({'a R': _mk_named_oto('a R')})
+    r = ph.process([n(lyric='-')], prev_neighbour=n(lyric='a'))
+    check('ZH CVVC: 歌词 "-" → 只产出 "{prevVowel} R"（命中 oto 别名）',
+          [p.phoneme for p in r.phonemes] == ['a R'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+    _resinger({})
+    r = ph.process([n(lyric='R')], prev_neighbour=n(lyric='a'))
+    check('ZH CVVC: 歌词 "r"（大小写不敏感）→ 回落 "{prevVowel} R" 字面量',
+          [p.phoneme for p in r.phonemes] == ['a R'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+    r = ph.process([n(lyric='R')])
+    check('ZH CVVC: 无前邻时 prevVowel 默认 "-"',
+          [p.phoneme for p in r.phonemes] == ['- R'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (3) "{prevVowel} {lyric}" 命中 + 句末 + "{currVowel} R" 命中 → 2 音素
+    _resinger({'a bu': _mk_named_oto('a bu'), 'u R': _mk_named_oto('u R')})
+    r = ph.process([n(lyric='bu', duration=480)], prev_neighbour=n(lyric='a'))
+    check('ZH CVVC: 整串 VC 命中 + 句末尾韵 → 2 个音素',
+          [p.phoneme for p in r.phonemes] == ['a bu', 'u R'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+    check('ZH CVVC: 尾韵位置 = 480 - min(80,60) = 420', r.phonemes[1].position == 420,
+          'got %r' % r.phonemes[1].position)
+    # 有后续邻居 → 只有 1 个音素
+    r = ph.process([n(lyric='bu', duration=480)], prev_neighbour=n(lyric='a'),
+                   next_neighbour=n(lyric='bi'))
+    check('ZH CVVC: 有后续邻居时整串命中只出 1 个音素',
+          [p.phoneme for p in r.phonemes] == ['a bu'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # (4) 整串不命中 → 走 VC/CV 切分（无前邻）
+    _resinger({'- b': _mk_named_oto('- b')})
+    r = ph.process([n(lyric='ba', duration=480)])
+    check('ZH CVVC: 整串不命中 → VC + CV 两个音素',
+          [p.phoneme for p in r.phonemes] == ['- b', 'ba'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+    check('ZH CVVC: 无前邻时 VC 的 position 为负（-vcLen）', r.phonemes[0].position < 0,
+          'got %r' % r.phonemes[0].position)
+
+    # (5) 有前邻时 VC 用**前一个音符**的 tone 查 oto
+    seen = []
+
+    class _ToneSpy(_CvvcSinger):
+        def try_get_mapped_oto(self, p, tone, color=None):
+            seen.append((p, tone))
+            return self.aliases.get(p)
+
+    s = _ToneSpy({'a b': _mk_named_oto('a b')}, location=tmp)
+    ph.singer = s
+    ph.vowels = dict(_full['vowels'])
+    ph.consonants = dict(_full['consonants'])
+    ph.replace = dict(_full['replace'])
+    ph.process([n(lyric='ba', tone=62)], prev_neighbour=n(lyric='a', tone=67))
+    hit = [t for p, t in seen if p == 'a b']       # prevVowel='a' + consonant 'b'
+    check('ZH CVVC: 查 VC 用的是前邻音符的 tone（67，不是当前的 62）',
+          hit and hit[0] == 67, 'got %r' % seen)
+
+    # (6) 有前邻时 vcLen = min(prevDuration/1.5, max(30, 120*1)) = min(320, 120) = 120
+    _resinger({'a b': _mk_named_oto('a b')})
+    r = ph.process([n(lyric='ba', position=480, duration=480)],
+                   prev_neighbour=n(lyric='a', position=0, duration=480))
+    check('ZH CVVC: VC 的 position = -min(prevDuration/1.5, max(30, vcLen*ratio)) = -120',
+          len(r.phonemes) == 2 and r.phonemes[0].position == -120,
+          'got %r' % [p.position for p in r.phonemes])
+
+    # (7) 全部落空 → 回落原歌词（cvOtoSimple 未命中时）
+    _resinger({})
+    r = ph.process([n(lyric='zz')])
+    check('ZH CVVC: 全部落空时回落原歌词', [p.phoneme for p in r.phonemes] == ['zz'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+    check('ZH CVVC: 句末整串不命中但有 CV oto 时用 CV 别名兜底',
+          _resinger({'ba': _mk_named_oto('BA')}) is not None
+          and [p.phoneme for p in ph.process([n(lyric='ba')]).phonemes] == ['BA'],
+          'got %r' % [p.phoneme for p in ph.process([n(lyric='ba')]).phonemes])
+
+    # (8) SetUp 会设置 project/track（与 ZH VCV 相反）
+    ph2 = V.ChineseCVVCPhonemizer()
+    ph2.set_up([[Note(lyric='天', tone=60, duration=480)]], 'PROJ', 'TRACK')
+    check('ZH CVVC.SetUp: 设置了 project/track（并做了罗马化）',
+          ph2.project == 'PROJ' and ph2.track == 'TRACK',
+          'got %r / %r' % (ph2.project, ph2.track))
+
+    # (9) 缺 [VOWEL] 段 → 吞掉异常、表为空（C# 也是 catch 住继续）
+    tmp2 = tempfile.mkdtemp(prefix='fufumidi-cvvc-nosec-')
+    _write_presamp_ini(tmp2, '[CONSONANT]\nb=b,bb\n')
+    ph3 = V.ChineseCVVCPhonemizer()
+    ph3.set_singer(_CvvcSinger({}, location=tmp2))
+    check('ZH CVVC.SetSinger: 缺 [VOWEL] 段时吞异常且表为空（vowels/consonants/replace 全空）',
+          ph3.vowels == {} and ph3.consonants == {} and ph3.replace == {},
+          'got %r %r %r' % (ph3.vowels, ph3.consonants, ph3.replace))
+
+    os.remove(os.path.join(tmp, 'presamp.ini'))
+    os.remove(os.path.join(tmp2, 'presamp.ini'))
+
+
 def test_xxhash64():
     """XXH32/XXH64 官方测试向量 —— 对不上，所有缓存键都会静默错。"""
     from singing.openutau.xxhash import xxh32, xxh64 as _x
@@ -1495,6 +1730,10 @@ def main():
     test_render_phrase_build()
     print('--- Renderers 注册表 / ApplyDynamics ---')
     test_renderers_registry()
+    print('--- Classic/Ini ---')
+    test_ini_read_blocks()
+    print('--- Plugin.Builtin/ChineseCVVC ---')
+    test_chinese_cvvc_phonemizer()
     print('--- Plugin.Builtin/ChineseVCV ---')
     test_chinese_vcv_phonemizer()
     print('--- Plugin.Builtin/JapaneseVCV ---')
