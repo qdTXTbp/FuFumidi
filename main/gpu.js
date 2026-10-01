@@ -36,7 +36,9 @@ function requiredPython(kind) {
 function fitsPython(kind, minor) {
   const need = requiredPython(kind);
   if (!need) return false;
-  if (!minor) return false;
+  // 先校验格式：探测失败时可能传进来 'undefined.undefined' 之类的脏值，
+  // 不能让它悄悄参与比较（宁可判不匹配，也不要拿脏值去放行）。
+  if (!/^\d+\.\d+$/.test(String(minor || ''))) return false;
   return String(minor) === need;
 }
 

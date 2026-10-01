@@ -265,9 +265,14 @@ function bundledPython312() {
 }
 /** 运行时目录里的 CPython 次版本（读 python3XX.dll，避免起子进程探测） */
 function pythonMinorOfDir(dir) {
+  // 注意：不要写成 readdir().map(f => f.match(re) || []).find(Boolean) ——
+  // 空数组 [] 是 truthy，find(Boolean) 会命中第一个 **不匹配** 的条目并返回 []，
+  // 于是拼出 'undefined.undefined'（实测就是这么冒出来的）。这里显式逐个匹配。
   try {
-    const m = fs.readdirSync(dir).map((f) => (f.match(/^python(\d)(\d+)\.dll$/i) || [])).find(Boolean);
-    if (m) return m[1] + '.' + m[2];
+    for (const f of fs.readdirSync(dir)) {
+      const m = /^python(\d)(\d+)\.dll$/i.exec(f);
+      if (m) return m[1] + '.' + m[2];
+    }
   } catch (_) {}
   return null;
 }
