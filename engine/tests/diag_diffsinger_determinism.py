@@ -9,9 +9,12 @@ DiffSinger 的 v2 流水线由多段 ONNX 组成（linguistic → dur → varian
 
 已知结论（2026-10-01 实测）：源头是 `run_variance`（方差预测）。
 同进程内两次渲染逐位一致，跨进程才不一致；已排除 PYTHONHASHSEED、模型内随机算子、
-线程数（intra/inter=1 + ORT_SEQUENTIAL）、图优化（DISABLE_ALL / ENABLE_BASIC）——
-四种缓解全部无效。判定为 ORT CPU EP 的浮点非确定性（疑为 MLAS 按指针对齐选 kernel），
-被 variance/pitch 的 10 步扩散放大。**在本层无法修复。**
+线程数（intra/inter=1 + ORT_SEQUENTIAL）、图优化（DISABLE_ALL / ENABLE_BASIC）、
+以及**扩散步数**（`steps=1` 仍逐次不同）—— 所以不是"多步扩散放大"，
+而是前向计算本身的浮点差异就足够大。判定为 ORT CPU EP 的浮点非确定性
+（疑为 MLAS 按指针对齐选 kernel，ASLR 使每进程不同）。**在本层无法修复。**
+换 GPU 也不解决：CUDA/cuDNN 默认用原子归约 + 算法自动选择，本就不保证可复现；
+且内置 onnxruntime 只有 CPU EP，本机无从验证。
 
 ## 用法
     # 需要真实声库（含 dsdur/dspitch/dsvariance/dsvocoder 全套 onnx）
