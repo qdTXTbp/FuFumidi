@@ -1,0 +1,171 @@
+# -*- coding: utf-8 -*-
+"""照搬一致性校验（M2-a/M2-b 地基）：Python vs OpenUTAU 的 C# 源码。
+
+延续 test_ustx_schema_matches_source.py 的做法 —— **把"照搬"交给机器强制**：
+  1. `Format.Ustx` 的常量表逐条比对（键名 + 字面值）
+  2. `USingerType` 的枚举值逐条比对（注意它是 Flags 且数值不连续）
+  3. `TimeAxis` 的功能验证（tick↔ms / bar↔beat / 非法 bpm 的防御）
+  4. `Phonemizer` 基类的轨道默认值语义（VEL → 辅音伸缩比）
+
+参考源码缺失时自动 SKIP。可离线运行。
+"""
+
+import os
+import re
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ENGINE = os.path.dirname(HERE)
+if ENGINE not in sys.path:
+    sys.path.insert(0, ENGINE)
+
+REF = os.environ.get('OPENUTAU_REF') or r'D:/FuFuMIDI/_ref/OpenUtau/OpenUtau.Core'
+
+from singing.openutau import Phonemizer, TimeAxis, USingerType  # noqa: E402
+from singing.openutau.renderer import SINGER_TYPE_NAMES  # noqa: E402
+from singing.ustx import UExpressionDescriptor, UProject, UTrack  # noqa: E402
+from singing.ustx.format import Ustx  # noqa: E402
+
+_PASS, _FAIL = [], []
+
+
+def check(label, cond, detail=''):
+    (_PASS if cond else _FAIL).append(label)
+    print('  %s %s%s' % ('PASS' if cond else 'FAIL', label, ('\n       ' + detail) if (detail and not cond) else ''))
+
+
+def _read(rel):
+    p = os.path.join(REF, rel)
+    return open(p, encoding='utf-8-sig').read().replace('\r\n', '\n') if os.path.isfile(p) else None
+
+
+def test_format_constants():
+    src = _read('Format/Ustx.cs')
+    if src is None:
+        print('  SKIP 找不到 Format/Ustx.cs')
+        return
+    want = dict(re.findall(r'public const string (\w+) = "([^"]*)";', src))
+    got = {k: v for k, v in vars(Ustx).items() if k.isupper() and isinstance(v, str)}
+    check('Format.Ustx: 常量个数一致（%d）' % len(want), len(want) == len(got),
+          'C#=%d 我们=%d' % (len(want), len(got)))
+    diff = {k: (want.get(k), got.get(k)) for k in set(want) | set(got) if want.get(k) != got.get(k)}
+    check('Format.Ustx: 每个常量的字面值一致', not diff, '不一致: %r' % diff)
+
+
+def test_singer_type_enum():
+    src = _read('Ustx/USinger.cs')
+    if src is None:
+        print('  SKIP 找不到 Ustx/USinger.cs')
+        return
+    m = re.search(r'enum USingerType\s*\{([^}]*)\}', src)
+    if not m:
+        check('USingerType: 在源码中找到枚举', False)
+        return
+    want = {}
+    for name, val in re.findall(r'(\w+)\s*=\s*(0x[0-9a-fA-F]+)', m.group(1)):
+        want[name.upper()] = int(val, 16)
+    got = {k: v for k, v in vars(USingerType).items() if k.isupper() and isinstance(v, int)}
+    check('USingerType: 枚举项与值一致（%d 项）' % len(want), want == got,
+          'C#=%r 我们=%r' % (want, got))
+    # 短名映射也要齐
+    for t, short in SINGER_TYPE_NAMES.items():
+        check('SingerTypeNames: %s -> %s' % (short, hex(t)), short in src)
+
+
+class _DummyPhonemizer(Phonemizer):
+    name = 'dummy'
+    tag = 'TEST DUMMY'
+    language = 'ZH'
+
+    def set_singer(self, singer):
+        pass
+
+    def process(self, notes, prev, next_, prev_neighbour, next_neighbour, prevs):
+        return self.make_simple_result('a')
+
+
+def test_phonemizer_base():
+    p = _DummyPhonemizer()
+    check('Phonemizer: 注册信息来自类属性', p.name == 'dummy' and p.tag == 'TEST DUMMY')
+    r = p.make_simple_result('la')
+    check('Phonemizer: MakeSimpleResult 返回单音素', len(r.phonemes) == 1 and r.phonemes[0].phoneme == 'la')
+    check('Phonemizer: 默认 LegacyMapping=False', p.legacy_mapping is False)
+
+    # 轨道默认值：VEL 描述符 50 → 2^(1-0.5)=√2
+    proj = UProject()
+    proj.expressions['vel'] = UExpressionDescriptor(abbr='vel', name='Velocity', min=0, max=200,
+                                                    default_value=100)
+    proj.expressions['vel'].custom_default_value = 50
+    p.set_up([], proj, proj.tracks[0])
+    check('Phonemizer: GetParentConsonantStretchRatio 用轨道 CustomDefaultValue',
+          abs(p.get_parent_consonant_stretch_ratio() - 2 ** 0.5) < 1e-9,
+          'got %r' % p.get_parent_consonant_stretch_ratio())
+    # 没有该描述符时回落 1
+    p2 = _DummyPhonemizer()
+    p2.set_up([], UProject(), UTrack())
+    check('Phonemizer: 无 VEL 描述符时比值=1', p2.get_parent_consonant_stretch_ratio() == 1)
+
+    # TrackExpressions 优先于 project.expressions
+    proj2 = UProject()
+    proj2.expressions['shft'] = UExpressionDescriptor(abbr='shft', min=-24, max=24, default_value=0)
+    proj2.expressions['shft'].custom_default_value = 3
+    tr = proj2.tracks[0]
+    tr.track_expressions.append(UExpressionDescriptor(abbr='shft', min=-24, max=24, default_value=0))
+    tr.track_expressions[0].custom_default_value = -7
+    p3 = _DummyPhonemizer()
+    p3.set_up([], proj2, tr)
+    check('Phonemizer: 轨道表达式优先于工程表达式', p3.get_parent_tone_shift() == -7,
+          'got %r' % p3.get_parent_tone_shift())
+
+
+def test_timeaxis():
+    proj = UProject()
+    ta = TimeAxis()
+    ta.build_segments(proj)
+    # resolution=480, 120bpm, 4/4 → 每 tick = 60000/(120*480) ms；1 拍(480tick) = 500ms
+    check('TimeAxis: 480 tick = 500 ms', abs(ta.tick_pos_to_ms_pos(480) - 500.0) < 1e-9,
+          'got %r' % ta.tick_pos_to_ms_pos(480))
+    check('TimeAxis: ms→tick 往返', ta.ms_pos_to_tick_pos(500.0) == 480,
+          'got %r' % ta.ms_pos_to_tick_pos(500.0))
+    check('TimeAxis: bpm=120', ta.get_bpm_at_tick(0) == 120)
+    bar, beat, rem = ta.tick_pos_to_bar_beat(1920)      # 1920 tick = 1 小节
+    check('TimeAxis: 1920 tick = 第 2 小节第 1 拍', (bar, beat, rem) == (1, 0, 0), 'got %r' % ((bar, beat, rem),))
+    check('TimeAxis: bar/beat→tick', ta.bar_beat_to_tick_pos(1, 0) == 1920,
+          'got %r' % ta.bar_beat_to_tick_pos(1, 0))
+    check('TimeAxis: next_bar_beat 跨小节进位', ta.next_bar_beat(0, 3) == (1, 0),
+          'got %r' % (ta.next_bar_beat(0, 3),))
+
+    # 非法 bpm 的防御（照搬 C# IsValidBpm 的用意）
+    proj2 = UProject()
+    proj2.tempos = [__import__('singing.ustx.model', fromlist=['UTempo']).UTempo(position=0, bpm=0)]
+    ta2 = TimeAxis()
+    ta2.build_segments(proj2)
+    check('TimeAxis: bpm=0 回落默认 120', ta2.get_bpm_at_tick(0) == 120,
+          'got %r' % ta2.get_bpm_at_tick(0))
+    check('TimeAxis: 超界 tick 夹到末段不抛异常', ta3_ok(ta2))
+
+
+def ta3_ok(ta):
+    try:
+        ta.tick_pos_to_ms_pos(10 ** 12)
+        ta.tick_pos_to_ms_pos(float('nan'))
+        return True
+    except Exception:
+        return False
+
+
+def main():
+    print('--- Format.Ustx 常量 ---')
+    test_format_constants()
+    print('--- USingerType 枚举 ---')
+    test_singer_type_enum()
+    print('--- Phonemizer 基类 ---')
+    test_phonemizer_base()
+    print('--- TimeAxis ---')
+    test_timeaxis()
+    print('\n结果: %d passed, %d failed' % (len(_PASS), len(_FAIL)))
+    return 1 if _FAIL else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

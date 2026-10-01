@@ -101,6 +101,16 @@ class UExpressionDescriptor:
     options: Optional[List[str]] = None
     skip_output_if_default: bool = False
 
+    @property
+    def custom_default_value(self) -> float:
+        """对应 UExpression.cs 的 `CustomDefaultValue => _customDefaultValue ?? defaultValue`。"""
+        return self._custom_default_value if self._custom_default_value is not None else self.default_value
+
+    @custom_default_value.setter
+    def custom_default_value(self, value: float) -> None:
+        # 等于 defaultValue 时归一为 None（与 C# setter 一致，写盘时就不多带一个键）
+        self._custom_default_value = None if value == self.default_value else value
+
 
 @dataclass
 class UExpression:
@@ -273,6 +283,22 @@ class UTrack:
     singer_obj: Any = field(default=None, metadata=NO_YAML)
     voice_color_exp: Any = field(default=None, metadata=NO_YAML)
     voice_color2_exp: Any = field(default=None, metadata=NO_YAML)
+
+    def try_get_exp_descriptor(self, project, abbr):
+        """照搬 UTrack.cs 的 `TryGetExpDescriptor`：轨道级 → 工程级依次查找。
+
+        顺序不能改：voice color（clr / clry）优先命中运行时字段，
+        然后才是轨道自己的表达式表，最后落回工程表达式表。
+        """
+        from .format import Ustx  # 常量表在 ustx 包内，避免与 openutau 包循环导入
+        if abbr == Ustx.CLR and self.voice_color_exp is not None:
+            return self.voice_color_exp
+        if abbr == Ustx.CLRY and self.voice_color2_exp is not None:
+            return self.voice_color2_exp
+        for e in self.track_expressions:
+            if e.abbr == abbr:
+                return e
+        return project.expressions.get(abbr)
 
 
 @dataclass
