@@ -61,12 +61,17 @@ SINGER_TYPE_FROM_NAME = {
 class Preferences:
     """`Preferences.Default` 的替身（见模块 docstring 的等价性说明）。
 
-    只保留 USinger 用到的三项；字段名与 C# 对齐，便于逐项核对。
+    只保留 USinger 与 Renderers 用到的几项；字段名与 C# 对齐，便于逐项核对。
+    （`Renderers.GetDefaultRenderer` 会读 `DefaultRenderer`，默认值是**空串**。）
     """
 
     sorting_order: Optional[str] = None
     language: Optional[str] = None
     favorite_singers: List[str] = []
+    #: 对应 C# `Preferences.Default.DefaultRenderer`（默认 `string.Empty`）
+    default_renderer: str = ''
+    #: 对应 C# `Preferences.Default.NumRenderThreads`（默认 2，Classic 并行渲染用）
+    num_render_threads: int = 2
 
 
 class USinger:

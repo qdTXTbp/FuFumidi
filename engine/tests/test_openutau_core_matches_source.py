@@ -803,6 +803,175 @@ def test_render_phrase_build():
     check('RenderPhrase.BuildXsyVariant: 原乐句不被改动', rp.hash != v.hash)
 
 
+def test_renderers_registry():
+    """`Render/renderers.py` 对 Renderers.cs 的一致性（常量、分支顺序、ApplyDynamics）。"""
+    cs = _read('Render/Renderers.cs')
+    if cs is None:
+        print('  SKIP 找不到 Render/Renderers.cs')
+        return
+    import singing.openutau.renderers as R
+    from singing.openutau import (CLASSIC, DIFFSINGER, ENUNU, VOICEVOX, VOGEN, WORLDLINE_R,
+                                  WORLDLINE_R2, WORLDLINE_R11)
+
+    # ---- 常量字面值
+    want = dict(re.findall(r'public const string (\w+) = "([^"]*)";', cs))
+    got = {'CLASSIC': CLASSIC, 'WORLDLINE_R': WORLDLINE_R, 'WORLDLINE_R2': WORLDLINE_R2,
+           'WORLDLINE_R11': WORLDLINE_R11, 'ENUNU': ENUNU, 'VOGEN': VOGEN,
+           'DIFFSINGER': DIFFSINGER, 'VOICEVOX': VOICEVOX}
+    check('Renderers: 8 个常量字面值一致（%d）' % len(want), want == got,
+          'C#=%r 我们=%r' % (want, got))
+
+    # ---- 四个静态数组的字面值与顺序（C# 里写的是常量**标识符**，要经常量表转成字面值）
+    def _cs_array(name):
+        m = re.search(r'static readonly string\[\] %s = new\[\] \{(.*?)\};' % name, cs, re.S)
+        if not m:
+            return None
+        return [want.get(s.strip().strip('"'), s.strip().strip('"'))
+                for s in m.group(1).split(',') if s.strip()]
+
+    check('Renderers: classicRenderers 顺序一致',
+          _cs_array('classicRenderers') == [WORLDLINE_R, WORLDLINE_R11, CLASSIC],
+          'C#=%r' % _cs_array('classicRenderers'))
+    for cs_name, ours, label in (
+            ('enunuRenderers', [ENUNU], 'enunuRenderers'),
+            ('vogenRenderers', [VOGEN], 'vogenRenderers'),
+            ('diffSingerRenderers', [DIFFSINGER], 'diffSingerRenderers'),
+            ('voicevoxRenderers', [VOICEVOX], 'voicevoxRenderers')):
+        check('Renderers: %s 一致' % label, _cs_array(cs_name) == ours,
+              'C#=%r 我们=%r' % (_cs_array(cs_name), ours))
+    check('Renderers: noRenderers 是空数组', re.search(r'string\[\] noRenderers = new string\[0\]', cs) is not None)
+
+    # ---- getRendererOptions 的字面量（注意 "Classic" 的大小写）
+    m = re.search(r'getRendererOptions\(\)\s*\{(.*?)\}', cs, re.S)
+    opts = re.findall(r'"([^"]+)"', m.group(1)) if m else None
+    check('Renderers: getRendererOptions 字面量一致（含 "Classic" 的大小写）',
+          opts == R.get_renderer_options(), 'C#=%r 我们=%r' % (opts, R.get_renderer_options()))
+
+    # ---- ApplyDynamics 里写死的常数
+    check('Renderers: ApplyDynamics 的 interval=5', re.search(r'ApplyDynamics.*?const int interval = 5;', cs, re.S) is not None)
+    check('Renderers: ApplyDynamics 采样率写死 44100', '1000 * 44100' in cs and R.SAMPLE_RATE == 44100)
+    check('Renderers: ApplyDynamics 末段 b 取自身（不外推）',
+          'phrase.dynamics[i + 1]' in cs and '(i + 1) == phrase.dynamics.Length' in cs)
+
+    # ---- GetDefaultRenderer 比较的字面量
+    check('Renderers: GetDefaultRenderer 比的是 "Classic"（非 CLASSIC）',
+          'DefaultRenderer == "Classic"' in cs)
+
+    # ---- 分支顺序：WORLDLINE-R2 / -R1.1 必须在前缀兜底之前
+    i_r2 = cs.index('renderer == WORLDLINE_R2')
+    i_prefix = cs.index('renderer?.StartsWith(WORLDLINE_R.Substring(0, 9))')
+    i_r11 = cs.index('renderer == WORLDLINE_R11')
+    check('Renderers: 源码里 R2/R1.1 分支排在前缀兜底之前（C# 顺序）',
+          i_r2 < i_prefix and i_r11 < i_prefix, 'r2=%d r11=%d prefix=%d' % (i_r2, i_r11, i_prefix))
+
+    # ---- 功能：GetSupportedRenderers 按精确值匹配
+    check('Renderers.GetSupportedRenderers(Classic=0x1)',
+          R.get_supported_renderers(0x1) == (WORLDLINE_R, WORLDLINE_R11, CLASSIC))
+    check('Renderers.GetSupportedRenderers(DiffSinger=0x5) 不是 0x1|0x4 的按位判定',
+          R.get_supported_renderers(0x5) == (DIFFSINGER,))
+    check('Renderers.GetSupportedRenderers(未知) 返回共享空元组',
+          R.get_supported_renderers(0x99) is R.NO_RENDERERS)
+
+    # ---- 功能：DefaultRenderer=="Classic" 且 Classic → 常量 CLASSIC
+    class _Pref:
+        default_renderer = 'Classic'
+
+    class _PrefLower:
+        default_renderer = 'CLASSIC'
+
+    check('Renderers.GetDefaultRenderer: "Classic"+Classic → CLASSIC',
+          R.get_default_renderer(0x1, _Pref()) == CLASSIC)
+    check('Renderers.GetDefaultRenderer: "CLASSIC"（全大写）不进特判分支',
+          R.get_default_renderer(0x1, _PrefLower()) == WORLDLINE_R,
+          'got %r' % R.get_default_renderer(0x1, _PrefLower()))
+
+    # ---- 功能：CreateRenderer 的版本分派与前缀兜底
+    R.reset_registry()
+    seen = {}
+
+    def _ws_factory(version):
+        def f(**kw):
+            seen[kw.get('version')] = True
+            return {'version': kw.get('version')}
+        return f
+
+    R.register_renderer(WORLDLINE_R, _ws_factory(10))
+    R.register_renderer(WORLDLINE_R2, _ws_factory(20))
+    R.register_renderer(WORLDLINE_R11, _ws_factory(11))
+    check('Renderers.CreateRenderer(WORLDLINE-R2) → version=20（不被前缀兜底吃掉）',
+          R.create_renderer(WORLDLINE_R2) == {'version': 20}, 'got %r' % R.create_renderer(WORLDLINE_R2))
+    check('Renderers.CreateRenderer(WORLDLINE-R1.1) → version=11',
+          R.create_renderer(WORLDLINE_R11) == {'version': 11})
+    check('Renderers.CreateRenderer(WORLDLINE-R) → version=10',
+          R.create_renderer(WORLDLINE_R) == {'version': 10})
+    check('Renderers.CreateRenderer(未注册的 CLASSIC) → None（C# 对未知名也返回 null）',
+          R.create_renderer(CLASSIC) is None)
+    check('Renderers.CreateRenderer(未知) → None', R.create_renderer('NOPE') is None)
+    check('Renderers.CreateRenderer(None) → None', R.create_renderer(None) is None)
+
+    # ---- 功能：GetOrCreate 永不失效
+    holder = []
+
+    class _FakeR:
+        expression_graph_slot = 'slot-x'
+
+        def __init__(self):
+            holder.append(self)
+
+    R.register_renderer(CLASSIC, _FakeR)
+    a1 = R.get_or_create(CLASSIC)
+    a2 = R.get_or_create(CLASSIC)
+    check('Renderers.GetOrCreate: 同 id 同实例（进程级缓存）', a1 is a2 and len(holder) == 1,
+          'got %d 个实例' % len(holder))
+    check('Renderers.GetExpressionGraphSlot: 走渲染器的槽位',
+          R.get_expression_graph_slot(CLASSIC) == 'slot-x')
+    check('Renderers.GetExpressionGraphSlot: 渲染器不存在时回落 id 本身',
+          R.get_expression_graph_slot('NOPE') == 'NOPE')
+
+    # ---- 功能：GetCacheLock 同一个 key 同一把锁
+    check('Renderers.GetCacheLock: 同 key 同对象', R.get_cache_lock('a.wav') is R.get_cache_lock('a.wav'))
+    check('Renderers.GetCacheLock: 不同 key 不同对象', R.get_cache_lock('a.wav') is not R.get_cache_lock('b.wav'))
+
+    R.reset_registry()
+
+    # ---- 功能：ApplyDynamics 的插值与末段常数
+    _axis = TimeAxis()
+    _axis.build_segments(UProject())
+
+    class _Phrase:
+        position = 0
+        leading = 0
+        dynamics = [1.0, 2.0]
+        time_axis = _axis
+
+    class _Result:
+        position_ms = 0.0
+        leading_ms = 0.0
+
+        def __init__(self, n):
+            self.samples = [1.0] * n
+
+    # 120bpm、480 resolution → 每 tick = 60000/120/480 ms ≈ 1.041667ms
+    # dynamics 间隔 5 tick ≈ 5.2083ms ≈ 229.6 样本 → 前 229 样本乘 (1→2) 的斜坡
+    p = _Phrase()
+    r = _Result(400)
+    R.apply_dynamics(p, r)
+    check('ApplyDynamics: 第 0 个样本乘 a(=1)', abs(r.samples[0] - 1.0) < 1e-9,
+          'got %r' % r.samples[0])
+    check('ApplyDynamics: 段内单调上升（a→b 线性插值）',
+          r.samples[1] < r.samples[100] < 1.99, 'got %r' % r.samples[100])
+    # 最后一段：i=1 是末项 → b 取自身 2.0 → 增益恒为 2.0（不外推）
+    check('ApplyDynamics: 末段 b 取自身 → 增益恒为 2.0',
+          abs(r.samples[350] - 2.0) < 1e-9, 'got %r' % r.samples[350])
+
+    # dynamics 为 None 时直接返回（不改动样本）
+    p2 = _Phrase()
+    p2.dynamics = None
+    r2 = _Result(10)
+    R.apply_dynamics(p2, r2)
+    check('ApplyDynamics: dynamics 为 None 时不动样本', r2.samples == [1.0] * 10)
+
+
 def test_xxhash64():
     """XXH64 官方测试向量 —— 它对不上，所有缓存键都会静默错。"""
     from singing.openutau import xxh64 as _x
@@ -849,6 +1018,8 @@ def main():
     test_render_note_phone_fields()
     print('--- RenderPhrase 乐句装配 ---')
     test_render_phrase_build()
+    print('--- Renderers 注册表 / ApplyDynamics ---')
+    test_renderers_registry()
     print('\n结果: %d passed, %d failed' % (len(_PASS), len(_FAIL)))
     return 1 if _FAIL else 0
 

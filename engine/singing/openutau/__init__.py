@@ -23,9 +23,10 @@
   - `openutau/oto.py`         原音模型（Ustx/USinger.cs 的 UOto + Classic/VoiceBank.cs）
   - `openutau/singer.py`      USinger 基类（Ustx/USinger.cs）
   - `openutau/phoneme.py`     UPhoneme（Ustx/UPhoneme.cs）
+  - `openutau/renderers.py`   渲染器注册表 + ApplyDynamics（Render/Renderers.cs）
 
 未照搬（后续）：
-  - `Classic/ClassicRenderer.cs`、`Classic/WorldlineRenderer.cs`（M2-a 主体）
+  - `Classic/ClassicRenderer.cs`、`Classic/WorldlineRenderer.cs`、`Render/Worldline.cs`（M2-a 主体）
   - `Classic/ClassicSinger.cs` / `Ustx/UOtoFrq.cs`（MOD+ 与 .frq 依赖）
   - `Pipeline/PhraseBuilder.cs` / `PhraseSource.FromPart`（乐句切分）
   - `ExpressionGraph/*`（表达式图；`RenderPhrase` 里对应的分支恒跳过）
@@ -76,6 +77,35 @@ from .render_phrase import (  # noqa: F401
     RenderPhone,
     RenderPhrase,
 )
+from .renderers import (  # noqa: F401
+    CLASSIC,
+    CLASSIC_RENDERERS,
+    DIFFSINGER,
+    DIFFSINGER_RENDERERS,
+    ENUNU,
+    ENUNU_RENDERERS,
+    NO_RENDERERS,
+    RENDERER_OPTIONS,
+    SAMPLE_RATE,
+    VOICEVOX,
+    VOICEVOX_RENDERERS,
+    VOGEN,
+    VOGEN_RENDERERS,
+    WORLDLINE_R,
+    WORLDLINE_R2,
+    WORLDLINE_R11,
+    apply_dynamics,
+    create_renderer,
+    get_cache_lock,
+    get_default_renderer,
+    get_expression_graph_slot,
+    get_or_create,
+    get_renderer_options,
+    get_supported_renderers,
+    register_renderer,
+    registered_renderers,
+    reset_registry,
+)
 from .renderer import (  # noqa: F401
     IRenderer,
     RenderPhraseEvents,
@@ -110,4 +140,11 @@ __all__ = [
     'CubicSplineSegment', 'PhraseLayout',
     'VibratoSource', 'CurveSource', 'NoteSource', 'PhonemeSource', 'PhraseSource',
     'RenderNote', 'RenderPhone', 'RenderPhrase', 'PITCH_INTERVAL',
+    'CLASSIC', 'WORLDLINE_R', 'WORLDLINE_R2', 'WORLDLINE_R11', 'ENUNU', 'VOGEN',
+    'DIFFSINGER', 'VOICEVOX', 'CLASSIC_RENDERERS', 'ENUNU_RENDERERS', 'VOGEN_RENDERERS',
+    'DIFFSINGER_RENDERERS', 'VOICEVOX_RENDERERS', 'NO_RENDERERS', 'RENDERER_OPTIONS',
+    'SAMPLE_RATE', 'apply_dynamics', 'create_renderer', 'get_cache_lock',
+    'get_default_renderer', 'get_expression_graph_slot', 'get_or_create',
+    'get_renderer_options', 'get_supported_renderers', 'register_renderer',
+    'registered_renderers', 'reset_registry',
 ]
