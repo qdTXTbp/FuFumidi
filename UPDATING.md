@@ -253,6 +253,31 @@ python scripts/upload-release-asset.py $env:GH_TOKEN qdTXTbp/FuFumidi beta `
 第 4 步完成后，还要按 **§5.6** 把 `beta` 锚点的资产镜像到 CNB，
 否则「下载源 = 自动 / 国内」的测试者探测不到 CNB 锚点，会回退到 ghfast。
 
+#### 5.3.1 可选：生成差分补丁（让老版本用户增量更新）
+
+默认离线包是全量的（测试者要下 ~130MB）。若希望**上一个版本的用户只下载改动部分**，
+给 `build-kachina.ps1` 传 `-OldDirs <上一版 win-unpacked 目录>`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build-kachina.ps1 -Version 4.5.0-beta.1 `
+    -OldDirs "D:\old\v4.4.1"
+```
+
+- **基线目录必须是「纯净的上一版 win-unpacked」**：读它 `resources/app.asar` 里 `package.json`
+  的 `version` 确认真实版本（顶层 `version` 文件是 Electron 版本，不是应用版本）；
+  并确认它**不含任何尚未发布的改动**，否则差分基线错位、补丁对不上，更新器只能回退到全量下载。
+- **基线目录要清掉运行时脏数据**：`FuFumidiData/` 与 `**/__pycache__/`（纯净的 win-unpacked 不该有）。
+- 效果参考：4.4.1 → 4.5.0-beta.1 的增量下载约 **3.2MB**（其中 `app.asar` 补丁 3.1MB、
+  `FuFumidi.exe` 补丁仅 213 字节），对比全量 129MB 减少约 97%。
+
+> **安全校验（每次带 `-OldDirs` 构建后必做）**
+> 生成的 `metadata-<ver>.json` 里会多出 `deletes` 列表 —— 它是「旧目录有、新 staging 没有」的文件。
+> 由于 `build-kachina.ps1` 的 staging 通过 robocopy 排除了 `resources/python`、`resources/models`、
+> `resources/wallpapers`，`deletes` 里必然出现 `resources/python` 下的海量条目。
+> **这些必须全部落在 `build/kachina.config.json` 的 `ignoreFolderPath` 保护名单内**，
+> 否则更新器会真的删除用户的 Python 运行时 / 模型。
+> 校验方法：把 `deletes` 逐条与 `ignoreFolderPath` 做前缀匹配，要求「未受保护」的条目数为 **0**。
+
 ### 5.4 转正
 
 1. 版本号改为 `4.4.0`，重新构建（**不要**再夹带功能改动）。
@@ -327,6 +352,10 @@ curl -sSI  https://cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/releases/latest/download
   就把镜像脚本里 `beta` 那条改成 `prerelease: true` 后重建该 release。
 - CNB 的 `latest` 是**平台行为**，不是我们写死的：以后若 CNB 改成「按创建时间」决定 latest，
   需要改为在建 release 时显式传 `make_latest`。
+- **在 CNB 上新建 release 需要 `target_commitish`**，而默认分支名各仓库不同：
+  `FuFuCloud-mirror/FuFuMIDI` 是 `master`，传 `main` 会报 `invalid commit revision main`。
+  `mirror-to-cnb.mjs` 已改为按候选（`master` → `main`，或用 `--commitish` 显式指定）自动重试，
+  无需再手工补建。
 
 ---
 

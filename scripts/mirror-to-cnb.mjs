@@ -210,14 +210,24 @@ async function ensureRelease(repo, tag, commitish) {
     }
     return { rel: got, created: false };
   }
-  // 目标 tag 在 CNB 仓库里不存在时，必须给 target_commitish，CNB 才会据此建标签
-  const created = cnbJson('POST', `${CNB_API}/${repo}/-/releases`, {
-    tag_name: tag, name: tag, body: '镜像自 GitHub', prerelease: false,
-    make_latest: RELEASE_VERSION_TAG_RE.test(tag) ? 'true' : 'false',
-    target_commitish: commitish || 'main',
-  });
-  if (created && created.id) return { rel: created, created: true };
-  throw new Error('创建 release 失败: ' + JSON.stringify(created).slice(0, 200));
+  // 目标 tag 在 CNB 仓库里不存在时，必须给 target_commitish，CNB 才会据此建标签。
+  // 默认分支名各仓库并不统一（FuFuCloud-mirror/FuFuMIDI 是 master，其它镜像仓库可能是 main），
+  // 传错会报 `invalid commit revision <name>`；因此不写死，按候选依次尝试：
+  // 显式传了 --commitish 就只用它，否则依次试 master / main。
+  const branches = commitish ? [commitish] : ['master', 'main'];
+  let lastErr = '';
+  for (const br of branches) {
+    const created = cnbJson('POST', `${CNB_API}/${repo}/-/releases`, {
+      tag_name: tag, name: tag, body: '镜像自 GitHub', prerelease: false,
+      make_latest: RELEASE_VERSION_TAG_RE.test(tag) ? 'true' : 'false',
+      target_commitish: br,
+    });
+    if (created && created.id) return { rel: created, created: true };
+    lastErr = JSON.stringify(created).slice(0, 200);
+    // 只有「分支名不对」才值得换下一个候选；其它错误（权限/参数）直接抛出
+    if (!/invalid commit revision/i.test(lastErr)) break;
+  }
+  throw new Error('创建 release 失败: ' + lastErr);
 }
 
 async function uploadAsset(repo, releaseId, name, size, localFile) {

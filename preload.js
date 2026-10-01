@@ -158,6 +158,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
   diffsingerMsCancelDownload: (name) => ipcRenderer.invoke('diffsinger:msCancelDownload', name),
   diffsingerInspectVoicebank: (cfg) => ipcRenderer.invoke('diffsinger:inspectVoicebank', cfg),
   diffsingerRender: (cfg) => ipcRenderer.invoke('diffsinger:render', cfg),
+  // 统一声库清单（UTAU + DiffSinger 融合）：音频制作侧可切换两类声库
+  voicebankUnified: () => ipcRenderer.invoke('voicebank:unified'),
   onDiffsingerRuntimeProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('diffsinger:runtimeProgress', w); return () => ipcRenderer.removeListener('diffsinger:runtimeProgress', w); },
   onDiffsingerVoicebankProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('diffsinger:voicebankProgress', w); return () => ipcRenderer.removeListener('diffsinger:voicebankProgress', w); },
   onDiffsingerMsProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('diffsinger:msProgress', w); return () => ipcRenderer.removeListener('diffsinger:msProgress', w); },

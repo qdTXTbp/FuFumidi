@@ -222,7 +222,35 @@ function draw() {
     ctx.strokeStyle = primary ? ink : (sel ? brand : V('--note-edge'));
     ctx.lineWidth = sel ? 1.6 : 0.8;
     roundRect(ctx, x, y + 1, w, h, 3); ctx.fill(); ctx.stroke();
-    if (n.lyric) {
+
+    // OpenUTAU 式音素视图：在音符内画出「辅音 → 元音」的分界，直观看到发音结构。
+    // 分界位置由子音速度 velocity 估算（100 = 基准；越小辅音越长），与引擎 oto 子音切分同向。
+    if (phonemeView.value && n.lyric) {
+      const consRatio = Math.max(0.12, Math.min(0.72, 0.34 * (n.velocity != null ? n.velocity : 100) / 100));
+      const cw2 = Math.max(4, w * consRatio);
+      ctx.save();
+      ctx.beginPath(); ctx.rect(x + 1, y + 1, w - 2, h); ctx.clip();
+      // 辅音区浅色底
+      ctx.fillStyle = V('--tint-strong');
+      ctx.fillRect(x + 1, y + 1, cw2, h);
+      // 分界虚线
+      ctx.strokeStyle = brand; ctx.lineWidth = 1; ctx.setLineDash([2, 2]);
+      ctx.beginPath(); ctx.moveTo(x + 1 + cw2, y + 1); ctx.lineTo(x + 1 + cw2, y + h + 1); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+      // 音素标签：辅音取首字母、元音取其余（近似），宽度足够时才画
+      if (w > 30) {
+        ctx.save();
+        ctx.beginPath(); ctx.rect(x + 1, y + 1, w - 2, h); ctx.clip();
+        ctx.fillStyle = onNote; ctx.font = '8.5px sans-serif';
+        ctx.textAlign = 'center';
+        const cons = String(n.lyric).slice(0, 1);
+        const vow = String(n.lyric).slice(1) || '';
+        ctx.fillText(cons, x + 1 + cw2 / 2, y + h / 2 + 3);
+        if (vow && w - cw2 > 14) ctx.fillText(vow, x + 1 + cw2 + (w - cw2) / 2, y + h / 2 + 3);
+        ctx.restore();
+      }
+    } else if (n.lyric) {
       ctx.save(); ctx.beginPath(); ctx.rect(x + 2, y + 1, w - 4, h); ctx.clip();
       ctx.fillStyle = onNote; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
       ctx.fillText(n.lyric, x + 4, y + h / 2 + 3); ctx.restore();
@@ -775,6 +803,13 @@ watch(paramKey, async () => {
 const CURVE_H = 96;
 const CURVE_SEMI = 1200;                    // 车道量程：±1200 音分（一个八度）
 const curveMode = ref('off');               // off | draw（手绘） | point（控制点）
+
+/* ---------------- OpenUTAU 式音素视图 ---------------- */
+// 在音符内显示「辅音 → 元音」切分（分界位置由子音速度 velocity 估算），
+// 让曲谱像 OpenUTAU 一样能直观看到发音结构。默认关闭，不改变既有观感。
+const phonemeView = ref(false);
+try { phonemeView.value = localStorage.getItem('fufumidi_utau_phoneme_view') === '1'; } catch (e) {}
+watch(phonemeView, (v) => { try { localStorage.setItem('fufumidi_utau_phoneme_view', v ? '1' : '0'); } catch (e) {} draw(); });
 const curveCanvas = ref(null);
 let curveCtx = null;
 let curveGesture = null;                    // { pushed, noteId, points, kind }
@@ -1022,6 +1057,10 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
         <option value="">{{ t('关闭') }}</option>
         <option v-for="p in UTAU_PARAMS" :key="p.key" :value="p.key">{{ t(p.label) }}</option>
       </select>
+      <label class="us-phoneme-toggle" :title="t('在音符内显示辅音→元音的音素切分（OpenUTAU 式）')">
+        <input type="checkbox" v-model="phonemeView" />
+        <span>{{ t('音素视图') }}</span>
+      </label>
       <template v-if="paramMetaNow">
         <span class="muted small">{{ t('在车道上拖动/横扫即可改值（可撤销）') }}</span>
         <button class="btn sm ghost" @click="paramResetAll">{{ t('重置为默认') }}</button>
@@ -1153,6 +1192,9 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('keydown', onKey); })
 
 /* P0-3 参数车道 */
 .us-param-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px 0; flex: none; }
+.us-phoneme-toggle { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--stone); cursor: pointer; user-select: none; }
+.us-phoneme-toggle input { cursor: pointer; accent-color: var(--brand); }
+.us-phoneme-toggle span { white-space: nowrap; }
 .us-param-lane { position: relative; height: var(--lane-h, 84px); overflow: hidden; border-top: 1px solid var(--border); background: var(--surface-muted); flex: none; }
 .us-param-canvas { position: absolute; top: 0; left: 0; display: block; cursor: crosshair; touch-action: none; }
 .us-curve-lane { height: var(--lane-h-tall, 96px); }

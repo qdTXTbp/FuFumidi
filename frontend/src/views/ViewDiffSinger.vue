@@ -1,7 +1,8 @@
 <script setup>
 // DiffSinger 工作台：模块与声库（启用后才下载组件）/ 调教工作台（从曲库 MIDI 导入调教）
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import Icon from '../components/Icon.vue';
+import PianoRoll from '../components/pianoroll/PianoRoll.vue';
 import { useDiffsingerStore, getLastWavBytes } from '../stores/diffsinger';
 import { useAppStore } from '../stores/app';
 import { noteName } from '../core/util';
@@ -10,6 +11,39 @@ import { bridge, isDesktop } from '../api';
 
 const store = useDiffsingerStore();
 const app = useAppStore();
+
+/* ---------------- 可视化谱面（OpenUTAU 式） ---------------- */
+// roll = 钢琴卷帘（默认，与 UTAU 工作台同一套通用组件）；list = 表格兜底（批量改数值更直接）
+const viewMode = ref('roll');
+try { viewMode.value = localStorage.getItem('fufumidi_ds_view') === 'list' ? 'list' : 'roll'; } catch (e) {}
+watch(viewMode, v => { try { localStorage.setItem('fufumidi_ds_view', v); } catch (e) {} });
+
+/** 通用钢琴卷帘的变更接口：适配 DiffSinger store（组件本身不依赖任何 store） */
+const rollApi = {
+  addNote: (startBeat, pitch) => store.addNote(startBeat, pitch),
+  updateNote: (id, patch) => store.updateNote(id, patch),
+  setNotesDuration: (ids, durBeat) => store.setNotesDuration(ids, durBeat),
+  moveNotes: (ids, dBeat, dPitch) => store.moveNotes(ids, dBeat, dPitch),
+  removeNotes: (ids) => store.removeNotes(ids),
+  setSelection: (ids, primary) => store.setSelection(ids, primary),
+  selectAll: () => store.selectAll(),
+  pushUndo: () => store.pushUndo(),
+  undo: () => store.undo(),
+  redo: () => store.redo(),
+  getPitchPoints: () => store.pitchCurve,
+  setPitchPoints: (pts) => store.setPitchCurve(pts),
+};
+
+function dsNoteLabel(n) { return n && n.lyric ? n.lyric : ''; }
+
+function onEditLyric(n) {
+  if (!n) return;
+  app.promptDialog({ title: t('歌词'), msg: t('输入该音符的歌词/音节：'), value: n.lyric }).then(v => {
+    if (v == null) return;
+    store.pushUndo();
+    store.updateNote(n.id, { lyric: String(v) });
+  });
+}
 
 const TABS = [
   { id: 'studio', label: t('调教工作台'), ic: 'edit' },
@@ -226,6 +260,7 @@ const fmtBytes = (n) => {
               <Icon name="music" :size="14" /> {{ t('从曲库选择 MIDI') }}
             </button>
             <button class="btn" :disabled="busy" @click="addNote"><Icon name="plus" :size="14" /> {{ t('添加音符') }}</button>
+            <button class="btn" :disabled="busy || !store.notes.length" @click="viewMode = viewMode === 'roll' ? 'list' : 'roll'">{{ viewMode === 'roll' ? t('列表编辑') : t('谱面编辑') }}</button>
             <button class="btn danger" :disabled="busy || !store.notes.length" @click="store.clear()"><Icon name="trash" :size="14" /> {{ t('清空') }}</button>
             <span v-if="store.sourceName" class="muted small ds-src">{{ t('来源：') }}{{ store.sourceName }} · {{ store.notes.length }} {{ t('音符') }}</span>
             <span v-else class="muted small ds-src">{{ store.notes.length }} {{ t('音符') }}</span>
@@ -240,7 +275,20 @@ const fmtBytes = (n) => {
           </div>
 
           <!-- 音符表 -->
-          <div class="ds-notes">
+          <!-- 可视化谱面（OpenUTAU 式钢琴卷帘，与 UTAU 工作台共用同一通用组件） -->
+          <PianoRoll
+            v-if="viewMode === 'roll'"
+            :notes="store.sortedNotes"
+            :selected-id="store.selectedId"
+            :selected-ids="store.selectedIds"
+            :bpm="store.bpm"
+            :api="rollApi"
+            :note-label="dsNoteLabel"
+            :height="380"
+            @edit-lyric="onEditLyric"
+          />
+
+          <div v-else class="ds-notes">
             <div class="ds-notes-head ds-row">
               <span>#</span><span>{{ t('起点') }}</span><span>{{ t('时长') }}</span><span>{{ t('音高') }}</span>
               <span>{{ t('歌词') }}</span><span>{{ t('颤音') }}</span><span>{{ t('深度') }}</span><span>{{ t('频率') }}</span><span>{{ t('音分') }}</span><span></span>

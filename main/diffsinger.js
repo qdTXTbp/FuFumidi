@@ -838,11 +838,35 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
 
   // 直连 ModelScope 官方地址下载声库，下载完自动解压并注册到本地声库库。
   // cfg: { name, path, url?, size? }（url 缺省时按上游路径现算，确保始终指向官方地址）
+  //
+  // 进度双通道：
+  //   - `diffsinger:msProgress` 给资源中心板块内部用（含 phase，区分下载/解压）；
+  //   - `model:progress`        给全局顶部下载通知条用（与常规模型下载同一条链路），
+  //     因此 AI 声库下载同样拥有弹窗、实时速度、展开面板与进出动画。
   ipcMain.handle('diffsinger:msDownload', async (_e, cfg) => {
     const win = BrowserWindow.fromWebContents(_e.sender);
     const name = String((cfg && cfg.name) || '').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim();
     const id = name || ('ms_' + Date.now());
+    const evtId = 'dsms:' + id;   // 顶部通知条用独立命名空间，避免与模型 id 撞车
     const send = (p) => { if (win && !win.isDestroyed()) win.webContents.send('diffsinger:msProgress', { id, ...p }); };
+    // label 供全局下载通知条显示（形如「神里绫华（原神）」），比裸 id 可读
+    const recForLabel = MSCat ? MSCat.BY_PATH.get(String((cfg && cfg.path) || '')) : null;
+    const gLabel = recForLabel ? (recForLabel.name + (recForLabel.work ? '（' + recForLabel.work + '）' : '')) : id;
+    const sendG = (p) => { if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: evtId, label: gLabel, ...p }); };
+    // 解压/拷贝阶段没有字节进度，用匀速爬条填充这段等待，避免界面看起来卡住
+    let compressTimer = null;
+    const startCompressTicker = (label, from, to) => {
+      stopCompressTicker();
+      let pct = from;
+      send({ phase: 'extract', percent: pct, text: label, done: false });
+      sendG({ received: 1, total: 1, percent: pct, done: false, text: label, speed: 0 });
+      compressTimer = setInterval(() => {
+        pct = Math.min(to, pct + Math.max(0.4, (to - pct) * 0.18));
+        send({ phase: 'extract', percent: Math.round(pct), text: label, done: false });
+        sendG({ received: 1, total: 1, percent: Math.round(pct), done: false, text: label, speed: 0 });
+      }, 400);
+    };
+    const stopCompressTicker = () => { if (compressTimer) { clearInterval(compressTimer); compressTimer = null; } };
     try {
       if (!MSCat) return { ok: false, error: '声库目录数据缺失（请重新构建应用）' };
       const rec = MSCat.BY_PATH.get(String((cfg && cfg.path) || ''));
@@ -856,26 +880,44 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       const entry = { isUserAbort: false };
       // 直连官方地址；不追加任何镜像候选，保证全球同源一致
       const url = rec.url || MSCat.msFileUrl(rec.path);
+      const host = hostOf(url);
+      const totalHint = Number(rec.size) || 0;
+      send({ phase: 'download', percent: 0, received: 0, total: totalHint, text: '正在连接 ModelScope 官方源…', done: false });
+      sendG({ received: 0, total: totalHint, percent: 0, done: false, text: 'ModelScope 官方源 · ' + (rec.category || ''), speed: 0 });
+
+      // 实时测速：downloadWithMirrors 只回字节数，速度在这里按 300ms 窗口自行计算
+      let lastT = 0, lastR = 0, speed = 0;
       await downloadWithMirrors({
         urls: [url],
         out: zipPath,
         minSize: 1e5,
         isUserAbort: entry,
-        onProgress: (p) => send({
-          phase: 'download',
-          percent: p.total ? Math.min(88, Math.round((p.received / p.total) * 88)) : 0,
-          received: p.received, total: p.total, done: false, error: p.error || '', host: p.host,
-        }),
+        onProgress: (p) => {
+          const now = Date.now();
+          if (lastT && now - lastT >= 300) { speed = ((p.received - lastR) / (now - lastT)) * 1000; lastT = now; lastR = p.received; }
+          else if (!lastT) { lastT = now; lastR = p.received; }
+          const pct = p.total ? Math.min(88, Math.round((p.received / p.total) * 88)) : 0;
+          send({
+            phase: 'download', percent: pct, received: p.received, total: p.total || totalHint,
+            speed, text: p.error || '', done: false, host: p.host,
+          });
+          sendG({
+            received: p.received, total: p.total || totalHint, percent: pct, done: false,
+            speed, text: p.error || (p.host ? ('来源 ' + p.host) : ''), host: p.host,
+          });
+        },
       });
-      send({ phase: 'extract', percent: 90, done: false });
+      startCompressTicker('正在解压声库包…', 88, 94);
       const AdmZip = require('adm-zip');
       const zip = new AdmZip(zipPath);
       const stage = path.join(dlDir, 'ms-' + id + '-extract');
       try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
       fs.mkdirSync(stage, { recursive: true });
       zip.extractAllTo(stage, true);
+      send({ phase: 'extract', percent: 94, text: '正在校验声库结构…', done: false });
       const cfgDir = findInTree(stage, 'dsconfig.yaml', 4);
       if (!cfgDir) throw new Error('声库包里没有 dsconfig.yaml（包结构可能已变更）');
+      startCompressTicker('正在安装到声库目录…', 95, 99);
       const root = vbRoot();
       fs.mkdirSync(root, { recursive: true });
       let finalDir = path.join(root, id);
@@ -885,11 +927,17 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
       try { fs.rmSync(zipPath, { force: true }); } catch (e2) {}
       if (!findInTree(finalDir, 'dsconfig.yaml', 0)) throw new Error('安装后未找到 dsconfig.yaml');
-      send({ phase: 'done', percent: 100, done: true });
+      stopCompressTicker();
+      send({ phase: 'done', percent: 100, text: '安装完成', done: true });
+      sendG({ received: 1, total: 1, percent: 100, done: true, text: '安装完成', speed: 0 });
       return { ok: true, name: id, dir: finalDir, size: dirBytes(finalDir), source: 'modelscope' };
     } catch (err) {
-      send({ phase: 'error', percent: 0, done: true, error: String((err && err.message) || err) });
-      return { ok: false, error: String((err && err.message) || err) };
+      stopCompressTicker();
+      const msg = String((err && err.message) || err);
+      const canceled = !!(entry && entry.isUserAbort);
+      send({ phase: canceled ? 'canceled' : 'error', percent: 0, done: true, error: canceled ? '' : msg });
+      sendG({ received: 0, total: 0, percent: 0, done: true, error: canceled ? '' : msg, canceled, speed: 0 });
+      return { ok: false, error: msg, canceled };
     }
   });
 
@@ -939,6 +987,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     const { voicebank, notes, bpm } = cfg || {};
     const range = (cfg && cfg.range) || null;
     const device = (cfg && cfg.device) || 'auto';
+    const pitchCurve = (cfg && cfg.pitchCurve) || null;   // P3 音高曲线：[{beat, cents}]
     const pre = precheck(voicebank);
     if (!pre.ok) return resolve(pre);
     if (!notes || !Array.isArray(notes) || !notes.length) return resolve({ ok: false, error: '没有音符可渲染' });
@@ -959,7 +1008,10 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       // 颤音/音分等 10 个字段（约 150 字节），整曲（数百音符）必然触发
       // spawn ENAMETOOLONG。engine_utau.py 早已采用同一约定（--notes @file）。
       notesJson = path.join(Paths.tempDir(), 'fufumidi', `diffsinger_notes_${Date.now()}_${process.pid}.json`);
-      fs.writeFileSync(notesJson, JSON.stringify(notes), 'utf8');
+      // 有音高曲线时载荷升级为 {notes, pitchCurve}（引擎兼容裸 list，见 engine_diffsinger.py）
+      fs.writeFileSync(notesJson, JSON.stringify(
+        (pitchCurve && pitchCurve.length) ? { notes, pitchCurve } : notes
+      ), 'utf8');
       const args = [
         'render',
         '--voicebank', String(voicebank),
@@ -1017,6 +1069,55 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       done({ ok: false, error: String((err && err.message) || err) });
     }
   }));
+
+  /* ---------------- 统一声库清单（UTAU + DiffSinger 融合） ---------------- */
+  // 音频制作侧允许在 UTAU 声库与 DiffSinger AI 声库之间切换；两个工作台共享同一份
+  // 清单，避免各自维护一套列表。返回每条带 kind 标签：
+  //   kind: 'utau' | 'diffsinger'
+  // UTAU 声库来自 Paths.voicebanksDir()，DiffSinger 来自 Paths.diffsingerVoicebanksDir()。
+  ipcMain.handle('voicebank:unified', () => {
+    const scan = (root, kind) => {
+      const out = [];
+      try {
+        if (!root || !fs.existsSync(root)) return out;
+        for (const name of fs.readdirSync(root)) {
+          const dir = path.join(root, name);
+          try { if (!fs.statSync(dir).isDirectory()) continue; } catch (e) { continue; }
+          // DiffSinger 声库必须含 dsconfig.yaml 才算有效
+          let ok = true;
+          if (kind === 'diffsinger') {
+            try {
+              if (!fs.existsSync(path.join(dir, 'dsconfig.yaml'))
+                  && !findInTree(dir, 'dsconfig.yaml', 1)) ok = false;
+            } catch (e) { ok = false; }
+          }
+          if (!ok) continue;
+          let size = 0;
+          try { size = dirBytes(dir); } catch (e) {}
+          out.push({ kind, name, dir, size, id: kind + ':' + name });
+        }
+      } catch (e) {}
+      return out;
+    };
+    // 两侧各自容错：任一目录不可访问（未创建 / 权限）时不连累另一侧
+    let utauRoot = '', dsRoot = '';
+    try { utauRoot = Paths.voicebanksDir(); } catch (e) {}
+    try { dsRoot = Paths.diffsingerVoicebanksDir(); } catch (e) {}
+    try {
+      const utau = scan(utauRoot, 'utau');
+      const ds = scan(dsRoot, 'diffsinger');
+      return {
+        ok: true,
+        list: [...utau, ...ds],
+        utauRoot,
+        diffsingerRoot: dsRoot,
+        utauCount: utau.length,
+        diffsingerCount: ds.length,
+      };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
 }
 
 module.exports = { registerDiffsingerIpc };

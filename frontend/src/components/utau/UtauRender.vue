@@ -32,6 +32,21 @@ const busyMs = ref(0);
 const errorText = ref('');
 let busyTimer = 0;
 
+// 判断所选声库是否为 DiffSinger AI 声库（含 dsconfig.yaml）。
+// 融合后用户在同一个工作台即可切换两类声库，渲染时按类型分流到对应引擎。
+async function detectDiffsingerVoicebank(dir) {
+  if (!dir || !bridge || !bridge.voicebankUnified) return false;
+  try {
+    const r = await bridge.voicebankUnified();
+    if (r && r.ok) {
+      const hit = (r.list || []).find(v => v.dir === dir);
+      if (hit) return hit.kind === 'diffsinger';
+    }
+  } catch (e) {}
+  // 回退：目录名含 diffsinger-voicebanks 视为 AI 声库
+  return /diffsinger-voicebanks/i.test(String(dir));
+}
+
 const targetNotes = computed(() => {
   if (scope.value !== 'selection') return store.sortedNotes;
   const sel = new Set(store.selectedIds);
@@ -123,12 +138,27 @@ async function render() {
   const t0 = performance.now();
   busyTimer = setInterval(() => { busyMs.value = Math.round(performance.now() - t0); }, 200);
   try {
-    const r = await bridge.utauRenderTrack({
-      voicebank: store.voicebankDir,
-      notes: renderPayload(),
-      sampleNote: store.sampleNote,
-      bpm: store.bpm,
-    });
+    // 融合：按所选声库类型走对应引擎 —— DiffSinger AI 声库走 diffsinger:render，
+    // UTAU 声库走 utau:render-track。用户在「曲谱与调声」顶栏一键切换即可换引擎。
+    const isDS = await detectDiffsingerVoicebank(store.voicebankDir);
+    let r;
+    if (isDS) {
+      const payload = renderPayload();
+      r = await bridge.diffsingerRender({
+        voicebank: store.voicebankDir,
+        bpm: store.bpm,
+        notes: payload.map((n) => ({
+          startBeat: n.startBeat, durBeat: n.durBeat, pitch: n.pitch, lyric: n.lyric || n.syllable || 'a',
+        })),
+      });
+    } else {
+      r = await bridge.utauRenderTrack({
+        voicebank: store.voicebankDir,
+        notes: renderPayload(),
+        sampleNote: store.sampleNote,
+        bpm: store.bpm,
+      });
+    }
     const elapsedMs = Math.round(performance.now() - t0);
     if (!r || !r.ok) { errorText.value = t('渲染失败：') + ((r && r.error) || 'unknown'); return; }
     const rec = {

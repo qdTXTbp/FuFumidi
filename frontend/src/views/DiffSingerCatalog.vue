@@ -9,9 +9,11 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
+import { useVoicebankStore } from '../stores/voicebank';
 import { t } from '../core/i18n.js';
 
 const app = useAppStore();
+const vbStore = useVoicebankStore();
 const toast = (m, type) => app.toast(m, type);
 const bridge = window.fuBridge;
 
@@ -26,12 +28,27 @@ const stateFilter = ref('all');   // all | available | installed | placeholder
 const prog = reactive({});        // name -> {active, percent, received, total, error}
 
 /* ---------------- 数据加载 ---------------- */
+// 把目录统计回写共享 store，供 ViewModels 页签徽标 / 页面副标题显示真实数量
+// （此前 countFor('diffsinger') 恒为 0，用户看到「可下载声库数量为 0」）
+function publishStats() {
+  if (!data.value) return;
+  const st = data.value.stats || {};
+  vbStore.setDiffsingerStats(st);
+  let installed = 0;
+  for (const w of (data.value.works || [])) {
+    for (const c of (w.categories || [])) {
+      for (const m of (c.models || [])) if (m.installed) installed++;
+    }
+  }
+  vbStore.setDiffsingerInstalled(installed);
+}
+
 async function refresh() {
   if (!bridge || !bridge.diffsingerMsCatalog) { errMsg.value = t('当前环境不支持声库目录'); return; }
   loading.value = true;
   try {
     const r = await bridge.diffsingerMsCatalog();
-    if (r && r.ok) { data.value = r; errMsg.value = ''; }
+    if (r && r.ok) { data.value = r; errMsg.value = ''; publishStats(); }
     else errMsg.value = (r && r.error) || t('加载失败');
   } catch (e) {
     errMsg.value = String((e && e.message) || e);
@@ -134,12 +151,36 @@ function cancelDownload(name) {
 function onProgress(p) {
   if (!p || !p.id) return;
   const cur = prog[p.id] || {};
-  const next = { ...cur, percent: p.percent || 0, received: p.received || 0, total: p.total || cur.total || 0, error: p.error || '' };
-  if (p.done || p.phase === 'done') { next.active = false; next.percent = 100; next.done = true; }
+  const next = {
+    ...cur,
+    percent: p.percent || 0,
+    received: p.received || 0,
+    total: p.total || cur.total || 0,
+    speed: p.speed || 0,
+    phase: p.phase || cur.phase || '',
+    text: p.text || '',
+    error: p.error || '',
+  };
+  if (p.done || p.phase === 'done') { next.active = false; next.percent = 100; next.done = true; next.phase = 'done'; }
   else if (p.phase === 'error') { next.active = false; next.error = p.error || t('下载失败'); }
+  else if (p.phase === 'canceled') { next.active = false; next.percent = 0; }
   else next.active = true;
   prog[p.id] = next;
   if (p.phase === 'done') refresh();
+}
+
+/** 阶段文案：下载 / 解压 / 安装（与全局通知条进度语义一致） */
+function phaseText(name) {
+  const st = prog[name];
+  if (!st) return '';
+  if (st.phase === 'extract') return st.text || t('正在解压…');
+  if (st.done) return t('安装完成');
+  if (st.error) return st.error;
+  return st.text || t('正在下载…');
+}
+function fmtSpeed(bps) {
+  if (!bps) return '';
+  return bps >= 1e6 ? (bps / 1e6).toFixed(1) + ' MB/s' : (bps / 1e3).toFixed(0) + ' KB/s';
 }
 
 let off = null;
@@ -257,7 +298,17 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
                   <span v-else class="ds-btn dis">{{ t('暂不可用') }}</span>
                 </div>
               </div>
-              <div v-if="isBusy(m.name)" class="ds-bar-mini"><i :style="{ width: (prog[m.name].percent || 0) + '%' }"></i></div>
+              <div v-if="isBusy(m.name)" class="ds-prog">
+                <div class="ds-prog-line">
+                  <span class="ds-prog-ph">{{ phaseText(m.name) }}</span>
+                  <span v-if="prog[m.name].speed" class="ds-prog-spd">⚡ {{ fmtSpeed(prog[m.name].speed) }}</span>
+                </div>
+                <div class="ds-bar-mini"><i :style="{ width: (prog[m.name].percent || 0) + '%' }"></i></div>
+                <div class="ds-prog-meta">
+                  <span>{{ prog[m.name].percent || 0 }}%</span>
+                  <span v-if="!prog[m.name].phase || prog[m.name].phase === 'download'">{{ human(prog[m.name].received) }} / {{ human(prog[m.name].total) }}</span>
+                </div>
+              </div>
               <div v-if="prog[m.name] && prog[m.name].error" class="ds-card-err">{{ prog[m.name].error }}</div>
             </div>
           </div>
@@ -339,7 +390,17 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 .ds-btn.cancel { border-color: color-mix(in srgb, var(--brand-coral) 45%, transparent); background: transparent; color: var(--brand-coral); }
 .ds-btn.dis { border-color: var(--hairline); background: transparent; color: var(--stone); cursor: not-allowed; }
 .ds-bar-mini { height: 3px; border-radius: 2px; background: var(--surface-soft); overflow: hidden; }
-.ds-bar-mini i { display: block; height: 100%; background: var(--brand-coral); transition: width .2s; }
+.ds-bar-mini i { display: block; height: 100%; background: var(--brand-coral); transition: width .25s ease; }
+
+/* 卡片内进度：阶段文案 + 实时速度 + 字节数（与全局顶部通知条一致） */
+.ds-prog { display: flex; flex-direction: column; gap: 4px; margin-top: 2px; }
+.ds-prog-line { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--stone); }
+.ds-prog-ph { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.ds-prog-spd { flex: 0 0 auto; color: var(--brand-coral); font-variant-numeric: tabular-nums; }
+.ds-prog-meta { display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--stone); font-variant-numeric: tabular-nums; }
+/* 解压/安装阶段无字节进度，给进度条加流光表示“仍在工作” */
+.ds-card.down .ds-bar-mini i { background: linear-gradient(90deg, var(--brand-coral), color-mix(in srgb, var(--brand-coral) 55%, #fff), var(--brand-coral)); background-size: 200% 100%; animation: ds-flow 1.2s linear infinite; }
+@keyframes ds-flow { to { background-position: -200% 0; } }
 .ds-card-err { font-size: 10.5px; color: #c0392b; line-height: 1.35; }
 
 /* 空态与提示 */

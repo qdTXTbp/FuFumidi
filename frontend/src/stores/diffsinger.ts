@@ -20,21 +20,24 @@ export interface DsNote {
 
 export const DS_NOTE_DEFAULTS = { vibrato: false, vibDepth: 25, vibFreq: 5.5, vibFade: 0, pitchOffset: 0 };
 
+/** 撤销快照：音符列表 + 选区 + 音高曲线（可视化谱面用）。DsNote 是扁平结构，浅拷贝逐项即可。 */
+interface Snap { notes: DsNote[]; selectedId: string | null; selectedIds: string[]; pitchCurve: { beat: number; cents: number }[] }
+
 const LS_KEY = 'fufumidi_diffsinger_project_v1';
 let _nid = 1;
 const nid = () => 'd' + (++_nid).toString(36) + Date.now().toString(36).slice(-4);
 
-function readProject(): { bpm: number; voicebankDir: string; notes: DsNote[] } {
+function readProject(): { bpm: number; voicebankDir: string; notes: DsNote[]; pitchCurve: { beat: number; cents: number }[] } {
   try {
     const raw = localStorage.getItem(LS_KEY);
     if (raw) {
       const d = JSON.parse(raw);
       if (d && Array.isArray(d.notes)) {
-        return { bpm: d.bpm || 120, voicebankDir: d.voicebankDir || '', notes: d.notes };
+        return { bpm: d.bpm || 120, voicebankDir: d.voicebankDir || '', notes: d.notes, pitchCurve: Array.isArray(d.pitchCurve) ? d.pitchCurve : [] };
       }
     }
   } catch (e) {}
-  return { bpm: 120, voicebankDir: '', notes: [] };
+  return { bpm: 120, voicebankDir: '', notes: [], pitchCurve: [] };
 }
 
 /* 从曲库曲目读取 MIDI 字节：内存缓存 → IndexedDB → 磁盘镜像 */
@@ -98,6 +101,10 @@ export const useDiffsingerStore = defineStore('diffsinger', {
     bpm: 120,
     notes: [] as DsNote[],
     selectedId: null as string | null,
+    selectedIds: [] as string[],     // 多选（可视化谱面：框选 / Shift 点选）
+    undoStack: [] as Snap[],
+    redoStack: [] as Snap[],
+    pitchCurve: [] as { beat: number; cents: number }[],  // 音高微调曲线（拍 → 音分 -200..200）
     voicebankDir: '',
     sourceName: '',   // 从曲库导入的 MIDI 曲目名
     sourceId: '',
@@ -144,14 +151,22 @@ export const useDiffsingerStore = defineStore('diffsinger', {
   actions: {
     persist() {
       try {
-        const { notes, bpm, voicebankDir } = this.$state as any;
-        localStorage.setItem(LS_KEY, JSON.stringify({ notes, bpm, voicebankDir }));
+        const { notes, bpm, voicebankDir, pitchCurve } = this.$state as any;
+        localStorage.setItem(LS_KEY, JSON.stringify({ notes, bpm, voicebankDir, pitchCurve }));
       } catch (e) {}
     },
     init() {
       const p = readProject();
       this.bpm = p.bpm; this.voicebankDir = p.voicebankDir; this.notes = p.notes;
+      this.pitchCurve = p.pitchCurve;
     },
+
+    /** 音高微调曲线：整表替换（可视化谱面的音高工具用） */
+    setPitchCurve(points: { beat: number; cents: number }[]) {
+      this.pitchCurve = points.map(p => ({ beat: Math.max(0, p.beat), cents: Math.max(-200, Math.min(200, p.cents)) }));
+      this.persist();
+    },
+    clearPitchCurve() { this.pitchCurve = []; this.persist(); },
 
     /* ---------------- 模块状态 ---------------- */
     async loadStatus() {
@@ -353,6 +368,85 @@ export const useDiffsingerStore = defineStore('diffsinger', {
     removeNote(id: string) {
       this.notes = this.notes.filter(n => n.id !== id);
       if (this.selectedId === id) this.selectedId = this.notes.length ? this.notes[this.notes.length - 1].id : null;
+      this.selectedIds = this.selectedIds.filter(x => x !== id);
+      this.persist();
+    },
+
+    /* ---------------- 撤销 / 重做（可视化谱面用） ---------------- */
+    /** 在每次会改变音符的操作**之前**调用，压入当前快照 */
+    pushUndo() {
+      this.undoStack.push({
+        notes: this.notes.map(n => ({ ...n })),
+        selectedId: this.selectedId,
+        selectedIds: [...this.selectedIds],
+        pitchCurve: this.pitchCurve.map(p => ({ ...p })),
+      });
+      if (this.undoStack.length > 100) this.undoStack.shift();
+      this.redoStack = [];
+    },
+    _snapshot(): Snap {
+      return {
+        notes: this.notes.map(n => ({ ...n })),
+        selectedId: this.selectedId,
+        selectedIds: [...this.selectedIds],
+        pitchCurve: this.pitchCurve.map(p => ({ ...p })),
+      };
+    },
+    _restore(s: Snap) {
+      this.notes = s.notes;
+      this.selectedId = s.selectedId;
+      this.selectedIds = [...s.selectedIds];
+      this.pitchCurve = s.pitchCurve.map(p => ({ ...p }));
+      this.persist();
+    },
+    undo() {
+      const s = this.undoStack.pop();
+      if (!s) return;
+      this.redoStack.push(this._snapshot());
+      this._restore(s);
+    },
+    redo() {
+      const s = this.redoStack.pop();
+      if (!s) return;
+      this.undoStack.push(this._snapshot());
+      this._restore(s);
+    },
+
+    /* ---------------- 选区（多选） ---------------- */
+    /** primary 传 null 时保留当前主选（若仍在选区内），否则取第一个 */
+    setSelection(ids: string[], primary: string | null = null) {
+      this.selectedIds = [...new Set(ids)];
+      if (primary !== null) this.selectedId = primary;
+      else if (!this.selectedId || !this.selectedIds.includes(this.selectedId)) this.selectedId = this.selectedIds[0] ?? null;
+    },
+    selectOne(id: string | null) { this.selectedId = id; this.selectedIds = id ? [id] : []; },
+    selectAll() { this.setSelection(this.notes.map(n => n.id), this.notes.length ? this.notes[0]!.id : null); },
+    clearSelection() { this.selectedIds = []; this.selectedId = null; },
+
+    /* ---------------- 批量编辑（拖拽 / 方向键） ---------------- */
+    /** 按相对量平移：起点与音高同时变化（多选整体拖动） */
+    moveNotes(ids: string[], dBeat: number, dPitch: number) {
+      const set = new Set(ids);
+      for (const n of this.notes) {
+        if (!set.has(n.id)) continue;
+        n.startBeat = Math.max(0, n.startBeat + dBeat);
+        n.pitch = Math.max(0, Math.min(127, n.pitch + dPitch));
+      }
+      this.persist();
+    },
+    /** 按绝对量设置时长（右缘拖拽；多选取新的统一时长） */
+    setNotesDuration(ids: string[], durBeat: number) {
+      const set = new Set(ids);
+      for (const n of this.notes) if (set.has(n.id)) n.durBeat = Math.max(0.125, durBeat);
+      this.persist();
+    },
+    removeNotes(ids: string[]) {
+      const set = new Set(ids);
+      this.notes = this.notes.filter(n => !set.has(n.id));
+      this.selectedIds = this.selectedIds.filter(id => !set.has(id));
+      if (!this.selectedId || set.has(this.selectedId)) {
+        this.selectedId = this.selectedIds[0] ?? (this.notes.length ? this.notes[this.notes.length - 1]!.id : null);
+      }
       this.persist();
     },
     clear() {
@@ -437,6 +531,7 @@ export const useDiffsingerStore = defineStore('diffsinger', {
         const r = await (bridge as any).diffsingerRender({
           voicebank: this.voicebankDir, notes, bpm: this.bpm,
           range, device: this.device || 'auto',
+          pitchCurve: this.pitchCurve,
         });
         if (r && r.ok && r.bytes) {
           const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes as any);

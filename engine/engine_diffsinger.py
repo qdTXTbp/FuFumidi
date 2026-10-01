@@ -286,6 +286,18 @@ def load_voicebank(vb_dir):
     lang_prefixes = sorted({p.split("/")[0] for p in phonemes if "/" in p})
     multi_lang = len(lang_prefixes) > 1
 
+    # mel 规格健全性校验（参考 OpenUTAU 对 dsconfig 的校验）：
+    # 这些字段必须与声码器匹配，错值不会立刻报错，但会解出噪音/全静音，早发现早提醒。
+    _nmb = int(cfg.get("num_mel_bins") or 128)
+    if _nmb < 1 or _nmb > 512:
+        warn("声学模型 num_mel_bins=%d 异常（应在 1..512），声码器解码很可能出错" % _nmb)
+    _mb = str(cfg.get("mel_base") or "10")
+    if _mb not in ("10", "e"):
+        warn("mel_base=%s 异常（应为 10 或 e）" % _mb)
+    _ms = str(cfg.get("mel_scale") or "slaney")
+    if _ms not in ("slaney", "htk"):
+        warn("mel_scale=%s 异常（应为 slaney 或 htk）" % _ms)
+
     return {
         "dir": vb_dir,
         "base": base,
@@ -306,6 +318,10 @@ def load_voicebank(vb_dir):
         "sample_rate": int(cfg.get("sample_rate") or cfg.get("sampling_rate") or 44100),
         "hop_size": int(cfg.get("hop_size") or cfg.get("frame_size") or 512),
         "num_mel_bins": int(cfg.get("num_mel_bins") or 128),
+        "mel_fmin": float(cfg.get("mel_fmin") or 40),
+        "mel_fmax": float(cfg.get("mel_fmax") or 16000),
+        "mel_base": str(cfg.get("mel_base") or "10"),
+        "mel_scale": str(cfg.get("mel_scale") or "slaney"),
         # v2 五段式子模型目录（OpenUTAU 约定：声库根下的 dsdur / dspitch / dsvariance / dsvocoder）
         "stages": _load_stages(base, cfg),
     }
@@ -808,8 +824,35 @@ def split_ph_duration(phonemes, dur_sec):
     return [head] + [rest] * (len(phonemes) - 1)
 
 
-def build_pitch_curve(frames, notes, hop_sec):
-    """帧级音高（Hz）：音符区间直线 + 颤音（正弦，渐入）；间隙沿用前值。"""
+def _curve_cents_at(curve_pts, t):
+    """在按 beat 升序的 [(sec, cents)] 控制点上做线性插值，取 t 秒处的音分偏移。
+    区间之外偏移为 0 —— 这是「偏移曲线」语义：只影响用户实际画过的区段，
+    未画区域不附加偏移（与 OpenUTAU 表达式曲线的默认零值一致）。"""
+    if not curve_pts:
+        return 0.0
+    if t < curve_pts[0][0] or t > curve_pts[-1][0]:
+        return 0.0
+    if t == curve_pts[0][0]:
+        return curve_pts[0][1]
+    if t == curve_pts[-1][0]:
+        return curve_pts[-1][1]
+    lo, hi = 0, len(curve_pts) - 1
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if curve_pts[mid][0] <= t:
+            lo = mid
+        else:
+            hi = mid
+    t0, c0 = curve_pts[lo]
+    t1, c1 = curve_pts[hi]
+    if t1 <= t0:
+        return c1
+    k = (t - t0) / (t1 - t0)
+    return c0 + (c1 - c0) * k
+
+
+def build_pitch_curve(frames, notes, hop_sec, curve_pts=None):
+    """帧级音高（Hz）：音符区间直线 + 颤音（正弦，渐入）+ 可选自由音高曲线（音分偏移）；间隙沿用前值。"""
     curve = [0.0] * frames
     events = []  # (t0, t1, hz, vibrato 参数)
     for n in notes:
@@ -843,6 +886,9 @@ def build_pitch_curve(frames, notes, hop_sec):
                 break
         if hz is None:
             hz = last_hz  # 间隙（SP/AP）沿用前一音高，避免 NSF 谐波激励跳变
+        if curve_pts:
+            # 自由音高曲线最后叠加（最细粒度控制，参考 OpenUTAU 的 pitch 工具车道）
+            hz *= 2.0 ** (_curve_cents_at(curve_pts, t) / 1200.0)
         curve[i] = hz
         last_hz = hz
     return curve
@@ -1823,12 +1869,20 @@ def cmd_render(args):
         raw = args.notes
         if isinstance(raw, str) and raw.startswith("@"):
             with open(raw[1:], "r", encoding="utf-8") as f:
-                notes = json.load(f)
+                payload = json.load(f)
         else:
-            notes = json.loads(raw)
+            payload = json.loads(raw)
     except Exception as e:  # noqa: BLE001
         emit_result({"ok": False, "error": "notes JSON 解析失败：" + str(e)})
         return
+    # 载荷两种形态：裸 list（旧约定）；或 {"notes": [...], "pitchCurve": [{beat,cents}]}
+    # （P3 音高曲线随工程一起下发，见 main/diffsinger.js 与 stores/diffsinger.ts）。
+    pitch_curve = []
+    if isinstance(payload, dict):
+        notes = payload.get("notes") or []
+        pitch_curve = payload.get("pitchCurve") or []
+    else:
+        notes = payload
     if not isinstance(notes, list) or not notes:
         emit_result({"ok": False, "error": "没有音符可渲染"})
         return
@@ -1860,6 +1914,7 @@ def cmd_render(args):
 
     # ---- 3.5) 范围渲染：选区 + 前后文，把时间轴平移到 0 ----
     range_info = None
+    shift_sec = 0.0   # 时间轴平移量；音高曲线要与音符一样减去它，否则选区内会错位
     if not getattr(args, "full", False) and (
             getattr(args, "start_beat", None) is not None or getattr(args, "end_beat", None) is not None):
         sb = getattr(args, "start_beat", None)
@@ -1875,10 +1930,25 @@ def cmd_render(args):
             emit_result({"ok": False, "error": "选区内没有音符：请把选区对准音符所在的拍位（可在时间轴上直接拖拽选取）"})
             return
         norm = picked
+        shift_sec = float(range_info.get("originSec", 0.0) or 0.0)
         emit_progress(6, "选区：%d/%d 个音符（含前后文），起 %.2fs 止 %.2fs" % (
             range_info["renderNoteCount"], range_info["totalNoteCount"],
             range_info["startSec"], range_info["endSec"]))
     total_sec = max(n["startSec"] + n["durSec"] for n in norm) + 0.35
+
+    # P3 音高微调曲线（拍 → 音分）→ 秒；按选区平移量 originSec 同步平移，与音符对齐
+    curve_pts = []
+    if pitch_curve:
+        for p in pitch_curve:
+            try:
+                cb = float(p.get("beat", 0.0))
+                cc = float(p.get("cents", 0.0))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if not (-200.0 <= cc <= 200.0):
+                continue
+            curve_pts.append((cb * spb - shift_sec, cc))
+        curve_pts.sort(key=lambda x: x[0])
 
     emit_progress(8, "解析音素…")
     # ---- 4) 歌词 → 音素 ----
@@ -1931,7 +2001,7 @@ def cmd_render(args):
     hop = vb["hop_size"]
     hop_sec = hop / float(sr)
     frames = int(math.ceil(total_sec / hop_sec)) + 1
-    pitch = build_pitch_curve(frames, norm, hop_sec)
+    pitch = build_pitch_curve(frames, norm, hop_sec, curve_pts or None)
 
     # ---- 推理后端：auto → engine_gpu 判定；失败自动降级 CPU ----
     providers, p_note = resolve_providers(getattr(args, "device", "auto") or "auto")

@@ -13,7 +13,7 @@ const state = app;
 const toast = (m, t) => app.toast(m, t);
 // 当前版本号（从主进程读取，与 SideBar 左下角一致）
 const appVersion = ref('v3.1.8');
-import { getAppVersion, cmpVersion, getUpdateChannel, setUpdateChannel, getDownloadSource, setDownloadSource, normalizeDownloadSource } from '../core/version.js';
+import { getAppVersion, cmpVersion, getUpdateChannel, setUpdateChannel, normalizeUpdateChannel, getDownloadSource, setDownloadSource, normalizeDownloadSource } from '../core/version.js';
 getAppVersion().then(v => { appVersion.value = v; });
 import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';
 
@@ -167,8 +167,10 @@ async function load() {
   form.watch_dir = s.watch_dir || '';
   form.watch_enabled = !!s.watch_enabled;
   form.file_assoc = s.file_assoc !== false;
-  // settings 是持久真相，localStorage 只是启动时用于即时读取的缓存；打开设置时校准一次
-  updateChannel.value = setUpdateChannel(s.update_channel || getUpdateChannel());
+  // 更新通道：这里必须用**纯归一化**，不能调 setUpdateChannel ——
+  // 后者会把值写回 localStorage 与设置，而 s 可能来自 store 的内存缓存（未必最新），
+  // 会把用户刚选的通道反向覆盖成旧值，表现为「选了测试版，重开设置又变回正式版」。
+  updateChannel.value = normalizeUpdateChannel(s.update_channel || getUpdateChannel());
   // 下载源：这里必须用**纯归一化**，不能调 setDownloadSource ——
   // 后者会把值写回 localStorage 与设置，而 s 可能来自 store 的内存缓存（未必最新），
   // 会把用户刚选的源反向覆盖成旧值，表现为「选完国内，重开设置又变回自动」。
@@ -247,6 +249,9 @@ const updateChannel = ref('stable');
 function setChannel(ch) {
   const next = ch === 'beta' ? 'beta' : 'stable';
   updateChannel.value = setUpdateChannel(next);
+  // 必须再走一次 store.save：store 的 load() 有 loaded 缓存，第二次打开设置会直接返回
+  // 内存里的旧对象。不在这里同步内存，重开设置就会读回旧值（update_channel 看似没保存）。
+  try { settingsStore.save({ update_channel: next }); } catch (e) {}
   upd.status = ''; upd.failed = false; upd.launched = false;
   toast(next === 'beta' ? t('已切换到测试版通道') : t('已切换到正式版通道'));
 }

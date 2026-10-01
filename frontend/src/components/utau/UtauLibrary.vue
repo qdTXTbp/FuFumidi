@@ -1,6 +1,7 @@
 <script setup>
 // 声库管理：导入现成 UTAU 声库(zip) / 选择当前声库 / 进入自制
-import { ref, onMounted, onActivated } from 'vue';
+// 融合后：列表同时展示 UTAU 声库与 DiffSinger AI 声库（AI 声库只读，来源为资源中心下载）
+import { ref, computed, onMounted, onActivated } from 'vue';
 import Icon from '../Icon.vue';
 import UtauVoicebankStore from './UtauVoicebankStore.vue';
 import { useUtauStore } from '../../stores/utau';
@@ -14,11 +15,23 @@ const msg = ref('');
 // 展开「开源免费声库」资源面板（资源中心同一组件，装完即可设为当前声库）
 const showStore = ref(false);
 
+// 统一清单（UTAU + DiffSinger）；不可用时回退到 UTAU store 里的列表
+const unifiedList = ref([]);
+
 async function refresh() {
+  // DiffSinger AI 声库（只读展示，便于在同一处切换）
+  if (bridge && bridge.voicebankUnified) {
+    try {
+      const u = await bridge.voicebankUnified();
+      if (u && u.ok) unifiedList.value = u.list || [];
+    } catch (e) {}
+  }
   if (!bridge || !bridge.utauListVoicebanks) return;
   const r = await bridge.utauListVoicebanks();
   if (r && r.ok) store.setVoicebanks(r.list || []);
 }
+
+const dsVoicebanks = computed(() => unifiedList.value.filter(v => v.kind === 'diffsinger'));
 
 async function importZip(directPath) {
   if (!bridge || !bridge.utauImportVoicebankZip) { msg.value = t('请在桌面版导入声库 zip。'); return; }
@@ -81,6 +94,7 @@ onActivated(refresh);
     <UtauVoicebankStore v-if="showStore" @installed="refresh" />
 
     <div v-if="store.voicebanks.length" class="ul-list">
+      <div class="ul-group-lb">{{ t('UTAU 声库') }} · {{ store.voicebanks.length }}</div>
       <div v-for="v in store.voicebanks" :key="v.dir" class="ul-item" :class="{ on: store.voicebankDir === v.dir }" @click="choose(v)">
         <Icon name="folder" :size="14" />
         <span class="ul-name" :title="v.dir">{{ v.name }}</span>
@@ -91,6 +105,20 @@ onActivated(refresh);
     </div>
     <div v-else class="muted small ul-empty">
       {{ isDesktop ? t('还没有导入声库。导入一个现成声库即可在「合成渲染」使用。') : t('网页版无法导入 zip 声库，请用桌面版。可先自制声库用于演示。') }}
+    </div>
+
+    <!-- DiffSinger AI 声库（只读展示；制作仅限常规 UTAU，AI 声库从资源中心下载） -->
+    <div v-if="dsVoicebanks.length" class="ul-list ul-ds-list">
+      <div class="ul-group-lb">
+        <Icon name="spark" :size="11" /> {{ t('DiffSinger AI 声库') }} · {{ dsVoicebanks.length }}
+        <span class="muted small ul-ds-tip">{{ t('从资源中心下载，制作音频时可切换') }}</span>
+      </div>
+      <div v-for="v in dsVoicebanks" :key="v.dir" class="ul-item ul-item-ds" :class="{ on: store.voicebankDir === v.dir }" @click="choose(v)">
+        <Icon name="spark" :size="14" />
+        <span class="ul-name" :title="v.dir">{{ v.name }}</span>
+        <em class="muted small">{{ v.dir }}</em>
+        <span v-if="store.voicebankDir === v.dir" class="ul-on">{{ t('当前') }}</span>
+      </div>
     </div>
 
     <div v-if="msg" class="ul-msg">{{ msg }}</div>
@@ -104,6 +132,13 @@ onActivated(refresh);
 .ul-head b { font-size: 14px; color: var(--ink); }
 .ul-head > div:first-child { display: flex; flex-direction: column; gap: 2px; }
 .ul-list { display: flex; flex-direction: column; gap: 6px; max-height: 46vh; overflow-y: auto; padding-right: 2px; }
+/* 分组标题：区分 UTAU 声库与 DiffSinger AI 声库 */
+.ul-group-lb { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--stone); padding: 2px 2px 0; }
+.ul-ds-tip { font-weight: 400; }
+.ul-ds-list { margin-top: 4px; }
+/* AI 声库条目：左侧描边区别于 UTAU 声库，且不可删除 */
+.ul-item-ds { border-left: 3px solid color-mix(in srgb, var(--brand-coral) 55%, transparent); }
+.ul-item-ds:hover { background: var(--surface-muted); }
 .ul-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
 .ul-item:hover { background: var(--surface-muted); }
 .ul-item.on { border-color: var(--brand); background: var(--brand-soft); }

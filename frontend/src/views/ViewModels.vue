@@ -7,9 +7,11 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import DiffSingerCatalog from './DiffSingerCatalog.vue';
 import { useAppStore } from '../stores/app';
+import { useVoicebankStore } from '../stores/voicebank';
 import { t } from '../core/i18n.js';
 
 const app = useAppStore();
+const vbStore = useVoicebankStore();
 const toast = (m, type) => app.toast(m, type);
 const bridge = window.fuBridge;
 
@@ -29,7 +31,13 @@ const loading = ref(false);
 const detail = ref(null);             // 当前选中模型（详情抽屉）
 
 const tabbedList = computed(() => list.value.filter(m => m.kind === curTab.value));
-function countFor(tb) { return list.value.filter(m => m.kind === tb).length; }
+// DiffSinger 声库不在 modelList 里，数量从共享 store 取（由 DiffSingerCatalog 拉目录后写入）；
+// 未加载完成前显示「…」而非 0，避免误报「可下载声库数量为 0」。
+function countFor(tb) {
+  if (tb === 'diffsinger') return vbStore.dsLoaded ? vbStore.dsAvailable : null;
+  return list.value.filter(m => m.kind === tb).length;
+}
+function cnt(n) { return n == null ? '…' : String(n); }
 
 function kindIcon(m) { return (m.kind === 'separate') ? 'mic' : (m.kind === 'transcribe') ? 'music' : 'box'; }
 
@@ -89,11 +97,26 @@ function closeDetail() {
 
 /* ---------------- 生命周期 ---------------- */
 let off = null;
+// 预取 DiffSinger 声库目录统计：即使不进 DiffSinger 页签，页签徽标也能显示真实
+// 可下载数量（此前恒为 0）。失败静默 —— 点进页签时 DiffSingerCatalog 会再拉一次。
+async function prefetchDiffSingerStats() {
+  if (!bridge || !bridge.diffsingerMsCatalog) return;
+  try {
+    const r = await bridge.diffsingerMsCatalog();
+    if (r && r.ok && r.stats) {
+      vbStore.setDiffsingerStats(r.stats);
+      let installed = 0;
+      for (const w of (r.works || [])) for (const c of (w.categories || [])) for (const m of (c.models || [])) if (m.installed) installed++;
+      vbStore.setDiffsingerInstalled(installed);
+    }
+  } catch (e) {}
+}
 onMounted(async () => {
   await refresh();
   loading.value = false;
   for (const m of list.value) { if (m.active) prog[m.id] = { ...(prog[m.id] || {}), active: true, percent: prog[m.id] ? prog[m.id].percent : 0 }; }
   if (bridge && bridge.onModelProgress) off = bridge.onModelProgress(onProgress);
+  prefetchDiffSingerStats();
 });
 onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 </script>
@@ -104,7 +127,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
       <div class="page-ic"><Icon name="box" :size="20" /></div>
       <div class="grow">
         <div class="page-title">{{ t('模型管理') }}</div>
-        <div class="page-sub">{{ TABS.map(tb => tb.label + ' ' + countFor(tb.id)).join(' · ') }}</div>
+        <div class="page-sub">{{ TABS.map(tb => tb.label + ' ' + cnt(countFor(tb.id))).join(' · ') }}</div>
       </div>
       <button v-if="curTab !== 'diffsinger'" class="btn sm ghost" @click="refresh">{{ t('刷新') }}</button>
     </div>
@@ -112,7 +135,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
     <!-- 分类页签 -->
     <div class="vm-tabs">
       <button v-for="tb in TABS" :key="tb.id" class="vm-tab" :data-guide="'vm-tab-' + tb.id" :class="{ active: curTab === tb.id }" @click="curTab = tb.id">
-        <span class="tb-ic"><Icon :name="tb.ic" :size="14" /></span>{{ tb.label }}<span class="tb-cnt">{{ countFor(tb.id) }}</span>
+        <span class="tb-ic"><Icon :name="tb.ic" :size="14" /></span>{{ tb.label }}<span class="tb-cnt">{{ cnt(countFor(tb.id)) }}</span>
       </button>
     </div>
 

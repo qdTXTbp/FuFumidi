@@ -15,7 +15,13 @@ files:
   - "**/*"
   - "!dist/**"
   - "!.git/**"
+  # 打包输出目录必须整体排除：默认 output 为 release/，但本地测试常用
+  # release-test/ 等自定义 output（如 -c.directories.output=release-test），
+  # 若只排除 release/** 会把上一次的完整产物（含 python/models，数 GB）
+  # 当源码重新打回 app.asar，实测让 asar 从 ~200MB 膨胀到 2GB+。
   - "!release/**"
+  - "!release-*/**"
+  - "!*-unpacked/**"
   - "!build.js"
   - "!electron-builder.yml"
   # --- 3.2.6 全面自查：开发残留不入包（运行时零引用，已逐一核实） ---
@@ -26,6 +32,10 @@ files:
   - "!docs/**"              # README 配图
   - "!scripts/**"           # 构建/上传脚本
   - "!tools/**"             # kachina-builder.exe 等构建工具
+  # 编辑器/AI 工具的项目数据目录：工作日志、临时脚本、编辑器配置。
+  # 属开发机内部数据（且不是运行时依赖），打进包会把工作日志随安装包分发出去。
+  - "!.workbuddy/**"
+  - "!.trae/**"
   - "!rust-core/**"         # Rust 源码（编译产物经 extraResources 分发到 resources/rust-core）
   - "!.github/**"
   - "!README.md"

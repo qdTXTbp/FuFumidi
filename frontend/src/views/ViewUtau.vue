@@ -5,6 +5,7 @@ import Icon from '../components/Icon.vue';
 import { useUtauStore } from '../stores/utau';
 import { t } from '../core/i18n.js';
 import ViewVoicebank from './ViewVoicebank.vue';
+import VoicebankPicker from '../components/utau/VoicebankPicker.vue';
 import UtauLibrary from '../components/utau/UtauLibrary.vue';
 import UtauScore from '../components/utau/UtauScore.vue';
 import UtauTune from '../components/utau/UtauTune.vue';
@@ -20,6 +21,14 @@ const TABS = [
 ];
 const tab = ref('voicebank');
 const pending = ref(true);
+
+// 融合：音频制作侧可在 UTAU 声库与 DiffSinger AI 声库之间切换
+// （制作声库仍仅限常规 UTAU 声库，见「声库制作」页）。切换后写回 UTAU store。
+const singerKind = ref('utau');
+function onSingerChange(e) {
+  if (!e) return;
+  store.setVoicebank(e.dir || '');
+}
 
 onMounted(() => { store.init(); pending.value = false; });
 </script>
@@ -38,7 +47,13 @@ onMounted(() => { store.init(); pending.value = false; });
         </button>
       </div>
       <div class="utau-meta" v-if="tab !== 'voicebank' && !pending" :title="store.voicebankDir">
-        <span class="muted small">{{ store.voicebankDir ? store.voicebankDir : t('未选声库') }} · {{ store.bpm }} BPM · {{ store.notes.length }} {{ t('音符') }}</span>
+        <VoicebankPicker
+          v-model="store.voicebankDir"
+          v-model:kind="singerKind"
+          compact
+          @change="onSingerChange"
+        />
+        <span class="muted small utau-meta-txt">{{ store.bpm }} BPM · {{ store.notes.length }} {{ t('音符') }}</span>
       </div>
     </div>
 
@@ -72,7 +87,8 @@ onMounted(() => { store.init(); pending.value = false; });
 .utau-tab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--stone); font-size: 13px; cursor: pointer; }
 .utau-tab:hover { background: var(--surface-muted); color: var(--ink); }
 .utau-tab.on { background: var(--brand-soft); color: var(--brand-text); border-color: var(--brand); }
-.utau-meta { margin-left: auto; white-space: nowrap; max-width: 46%; overflow: hidden; text-overflow: ellipsis; }
+.utau-meta { margin-left: auto; display: flex; align-items: center; gap: 10px; max-width: 62%; }
+.utau-meta-txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .utau-body { flex: 1; min-height: 0; overflow: auto; }
 /* 曲谱与调声：左右分栏，不做整页滚动（各自内部滚动） */
 .utau-body-flat { overflow: hidden; }

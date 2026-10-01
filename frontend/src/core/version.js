@@ -10,7 +10,7 @@ export async function getAppVersion() {
       if (v) { _cached = 'v' + String(v).replace(/^v/i, ''); return _cached; }
     }
   } catch (e) { /* 忽略，走回退 */ }
-  _cached = 'v4.4.1';
+  _cached = 'v5.0.0-beta.1';
   return _cached;
 }
 
@@ -60,12 +60,19 @@ export function cmpVersion(a, b) {
    启动瞬间就能读到，后者是跨设备/重装的持久值。 */
 const CHANNEL_KEY = 'fufumidi_update_channel';
 
+/** 纯归一化：把任意值收敛成合法取值，**不产生任何副作用**（不写 localStorage、不落盘）。
+ *  读取设置时必须用它 —— setUpdateChannel 带写副作用，用在「加载」路径上，
+ *  会拿当前（可能已过期的）值反向覆盖用户已经保存的选择（表现为「选了测试版，重开设置又变回正式版」）。*/
+export function normalizeUpdateChannel(v) {
+  return v === 'beta' ? 'beta' : 'stable';
+}
+
 export function getUpdateChannel() {
-  try { return localStorage.getItem(CHANNEL_KEY) === 'beta' ? 'beta' : 'stable'; } catch (e) { return 'stable'; }
+  try { return normalizeUpdateChannel(localStorage.getItem(CHANNEL_KEY)); } catch (e) { return 'stable'; }
 }
 
 export function setUpdateChannel(v) {
-  const ch = v === 'beta' ? 'beta' : 'stable';
+  const ch = normalizeUpdateChannel(v);
   try { localStorage.setItem(CHANNEL_KEY, ch); } catch (e) {}
   try {
     if (window.fuBridge && typeof window.fuBridge.saveSettings === 'function') {

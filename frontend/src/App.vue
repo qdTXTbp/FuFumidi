@@ -371,6 +371,9 @@ function applyDl(p) {
     ...cur, ...p,
     active: !!(p.done ? false : (p.active !== false ? (cur.active !== false) : true)),
   };
+  // DiffSinger AI 声库（id 前缀 dsms:）不在 modelList 里，展示名直接用主进程发来的 label
+  // （形如「神里绫华（原神）」），避免全局条只显示裸 id。
+  if (p.label) dlModelNames.value[p.id] = { ...(dlModelNames.value[p.id] || {}), name: p.label };
   if (p.done) dlProg[p.id].active = false;
   if (p.error) dlProg[p.id].active = false;
   if (p.done) ensureDlNames();
@@ -390,7 +393,13 @@ function toggleDl() {
   dlExpanded.value = !dlExpanded.value;
   if (dlExpanded.value) clearTimeout(dlHideTimer); else armHide();
 }
-function cancelDl(id) { if (bridge && bridge.modelCancel) bridge.modelCancel(id); dlProg[id] = { ...(dlProg[id] || {}), active: false, paused: true }; }
+function cancelDl(id) {
+  // DiffSinger AI 声库走独立取消通道（modelCancel 只认常规模型 id）
+  if (typeof id === 'string' && id.startsWith('dsms:')) {
+    if (bridge && bridge.diffsingerMsCancelDownload) bridge.diffsingerMsCancelDownload(id.slice(5));
+  } else if (bridge && bridge.modelCancel) bridge.modelCancel(id);
+  dlProg[id] = { ...(dlProg[id] || {}), active: false, paused: true };
+}
 function dlHuman(n) { if (!n) return '—'; if (n >= 1e9) return (n / 1e9).toFixed(2) + ' GB'; if (n >= 1e6) return (n / 1e6).toFixed(0) + ' MB'; if (n >= 1e3) return (n / 1e3).toFixed(0) + ' KB'; return n + ' B'; }
 function dlSpeed(bps) { if (!bps) return ''; return bps >= 1e6 ? (bps / 1e6).toFixed(1) + ' MB/s' : (bps / 1e3).toFixed(0) + ' KB/s'; }
 
