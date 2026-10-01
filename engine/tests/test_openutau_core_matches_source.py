@@ -10,10 +10,11 @@
 参考源码缺失时自动 SKIP。可离线运行。
 """
 
+import math
 import os
-import unicodedata
 import re
 import sys
+import unicodedata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENGINE = os.path.dirname(HERE)
@@ -1676,6 +1677,234 @@ def test_chinese_cvvc_phonemizer():
     os.remove(os.path.join(tmp2, 'presamp.ini'))
 
 
+class _Seg:
+    """`SynthSegment` 的最小替身（扁平 sp_env / ap，字段名与 C# 对齐）。"""
+
+    def __init__(self, p0, p1, p3, p4, skip_frames, f0, sp_env, ap,
+                 sp_env_harmonic=None, stretch=None):
+        self.p0, self.p1, self.p3, self.p4 = p0, p1, p3, p4
+        self.skip_frames = skip_frames
+        self.f0 = f0
+        self.sp_env = sp_env
+        self.ap = ap
+        self.sp_env_harmonic = sp_env_harmonic
+        self.stretch = stretch
+
+
+def test_worldline_pure():
+    """`Render/Worldline.cs` 里**不含原生调用**的那些逻辑。"""
+    from singing.openutau import worldline as W
+    cs = _read('Render/Worldline.cs')
+    if cs is None:
+        print('  SKIP 找不到 Render/Worldline.cs')
+        return
+
+    # ---- 源码一致性：常量与两处不同的 auto gain
+    check('Worldline: ResamplerPadding=2 / ResamplerVoicedF0=40 与 C# 一致',
+          'const int ResamplerPadding = 2;' in cs
+          and 'const double ResamplerVoicedF0 = 40.0;' in cs
+          and (W.RESAMPLER_PADDING, W.RESAMPLER_VOICED_F0) == (2, 40.0))
+    check('Worldline: Resample 的 auto gain 用 ResamplerVoicedF0、退化点是 max == 0',
+          'f0.Count(f => f > ResamplerVoicedF0)' in cs
+          and 'max == 0 ? 1.0 : Math.Pow(0.5 / max, GetFlag(item, "P", 86) * 0.01)' in cs)
+    check('Worldline: GetAutoGain 用 config.f0_floor、退化点是 max < 1e-3f（两处不同）',
+          'f0.Count(f => f > config.f0_floor)' in cs and '(max < 1e-3f)' in cs)
+    check('Worldline: 两处 auto gain 的 logistic 权重公式相同',
+          cs.count('1.0 / (1.0 + Math.Exp(5.0 - 10.0 * voicedRatio))') == 2)
+    check('Worldline: Resampler 分析参数写死 (44100, 441, 2048)',
+          'InitAnalysisConfig(44100, 441, 2048)' in cs
+          and (W.RESAMPLER_FS, W.RESAMPLER_HOP_SIZE, W.RESAMPLER_FFT_SIZE) == (44100, 441, 2048))
+    check('Worldline: 音高弯曲线步长 = 60000/tempo/480*5',
+          '60000.0 / item.tempo / 480.0 * 5' in cs)
+    check('Worldline: tone → freq 走 MusicMath.ToneToFreq(item.tone + pitch * 0.01)',
+          'MusicMath.ToneToFreq(item.tone + pitch * 0.01)' in cs)
+    check('Worldline: FitCurve 用**曲线末值**填充（不是默认值）',
+          'Array.Fill(result, curve[^1], copy, length - copy)' in cs)
+    check('Worldline: 三段夹紧是 _blend_weight 除法的前提',
+          'p0 = Math.Max(0, p0);' in cs and 'p1 = Math.Max(p0 + 1, p1);' in cs
+          and 'p3 = Math.Min(p4 - 1, p3);' in cs)
+
+    # ---- AnalysisConfig：f0_floor 会被 (float) 转换
+    cfg = W.init_analysis_config(44100, 441, 2048)
+    check('Worldline.AnalysisConfig: frame_ms = hop/fs*1000 = 10.0', cfg.frame_ms == 10.0,
+          'got %r' % cfg.frame_ms)
+    # 3*44100/(2048-3) = 64.6943765... → float32 → 64.69437408447266
+    check('Worldline.AnalysisConfig: f0_floor = (float)(3*fs/(fft-3))',
+          abs(cfg.f0_floor - 64.69437408447266) < 1e-12, 'got %r' % cfg.f0_floor)
+    check('Worldline.AnalysisConfig: f0_floor 是 float32 舍入后的值（不是 double 原值）',
+          cfg.f0_floor != 3 * 44100 / 2045)
+
+    # ---- 帧数 / 样本数公式
+    check('Worldline.F0FrameCount: 44100 样本 @10ms → 101 帧',
+          W.f0_frame_count(44100, 44100, 10.0, -1) == 101,
+          'got %r' % W.f0_frame_count(44100, 44100, 10.0, -1))
+    check('Worldline.F0FrameCount: length<=0 → 0', W.f0_frame_count(0, 44100, 10.0, -1) == 0)
+    check('Worldline.F0FrameCount: method=2(pyin) 会取更大值',
+          W.f0_frame_count(44100, 44100, 10.0, 2) >= W.f0_frame_count(44100, 44100, 10.0, -1))
+    check('Worldline.WorldSynthesisSampleCount: 5001 帧 @10ms → 2205001',
+          W.world_synthesis_sample_count(5001, 10.0, 44100) == 2205001,
+          'got %r' % W.world_synthesis_sample_count(5001, 10.0, 44100))
+
+    # ---- FitCurve
+    check('Worldline.FitCurve: null/空 → 全填默认值', W.fit_curve(None, 3, 0.5) == [0.5] * 3
+          and W.fit_curve([], 3, 0.5) == [0.5] * 3)
+    check('Worldline.FitCurve: 比目标短 → 用**末值**补足',
+          W.fit_curve([1.0, 2.0, 3.0], 6, 0.0) == [1.0, 2.0, 3.0, 3.0, 3.0, 3.0])
+    check('Worldline.FitCurve: 比目标长 → 截断', W.fit_curve([1.0, 2.0, 3.0], 2, 0.0) == [1.0, 2.0])
+
+    # ---- GetFlag
+    class _Item:
+        flags = [('g', 50, 'gen'), ('P', None, 'peak')]
+
+    check('Worldline.GetFlag: 取到值', W.get_flag(_Item(), 'g', 0) == 50)
+    check('Worldline.GetFlag: 命中但没值 → 用默认', W.get_flag(_Item(), 'P', 86) == 86)
+    check('Worldline.GetFlag: 未命中 → 用默认', W.get_flag(_Item(), 'zz', 7) == 7)
+
+    # ---- compute_frame_bounds（含夹紧）
+    check('Worldline.compute_frame_bounds: 常规值',
+          W.compute_frame_bounds(10.0, 0.0, 0.0, 50.0, 5.0, 5.0) == (0, 0, 1, 4, 5),
+          'got %r' % (W.compute_frame_bounds(10.0, 0.0, 0.0, 50.0, 5.0, 5.0),))
+    check('Worldline.compute_frame_bounds: 负数 p0 夹到 0、p1 至少 p0+1',
+          W.compute_frame_bounds(10.0, -100.0, 0.0, 50.0, 0.0, 0.0)[1:3] == (0, 1),
+          'got %r' % (W.compute_frame_bounds(10.0, -100.0, 0.0, 50.0, 0.0, 0.0),))
+    _fb = W.compute_frame_bounds(10.0, 0.0, 0.0, 50.0, 0.0, 100.0)
+    check('Worldline.compute_frame_bounds: p3 <= p4-1（夹紧是 min，可为负；保证不除零）',
+          _fb[3] <= _fb[4] - 1, 'got %r' % (_fb,))
+
+    # ---- compute_timemap
+    t_dst, stretch = W.compute_timemap(0, 10, 0.0, 100.0, 100.0, 0.0, 10.0)
+    check('Worldline.compute_timemap: tDst 长度 = ceil(durRequired/frameMs)', len(t_dst) == 10,
+          'got %r' % len(t_dst))
+    check('Worldline.compute_timemap: consonant=0 时全程走元音分支',
+          all(abs(t - i) < 1e-9 for i, t in enumerate(t_dst)),
+          'got %r' % t_dst[:4])
+    check('Worldline.compute_timemap: 元音段 stretch = 1/vowelSpeed = 1',
+          all(abs(s - 1.0) < 1e-9 for s in stretch))
+    # velocity=100 → consonantSpeed = 0.5^(1-1) = 1；辅音 30ms 以内的帧 stretch = 1/1 = 1
+    t_dst2, st2 = W.compute_timemap(0, 10, 0.0, 200.0, 100.0, 30.0, 10.0)
+    check('Worldline.compute_timemap: consonant>0 时前 3 帧落在辅音段',
+          abs(t_dst2[0] - 0.0) < 1e-9 and abs(t_dst2[2] - 2.0) < 1e-9
+          and abs(t_dst2[3] - 3.0) < 1e-9, 'got %r' % t_dst2[:5])
+    # velocity=0 → consonantSpeed = 0.5；辅音被拉长 → aux 段 stretch = 2
+    _, st3 = W.compute_timemap(0, 10, 0.0, 200.0, 0.0, 30.0, 10.0)
+    check('Worldline.compute_timemap: velocity=0 时 consonantSpeed=0.5 → 辅音段 stretch=2',
+          abs(st3[0] - 2.0) < 1e-9, 'got %r' % st3[:3])
+    # srcLengthMs = 10*10-3 = 97 → vowelSpeed = 97/100 = 0.97 → tDst[1] = (9.7+3)/10 = 1.27
+    _toff = W.compute_timemap(0, 10, 3.0, 100.0, 100.0, 0.0, 10.0)[0]
+    check('Worldline.compute_timemap: offsetFracMs 平移 + vowelSpeed 压缩源时长',
+          abs(_toff[0] - 0.3) < 1e-9 and abs(_toff[1] - 1.27) < 1e-9, 'got %r' % _toff[:3])
+
+    # ---- resample_features
+    f0d, spd, apd = W.resample_features([0.0, 0.5, 1.0], [100.0, 200.0],
+                                        [1.0, 2.0, 3.0, 4.0], [0.1, 0.2, 0.3, 0.4], 2)
+    check('Worldline.resample_features: 中点线性插值 f0',
+          abs(f0d[1] - 150.0) < 1e-9, 'got %r' % f0d)
+    check('Worldline.resample_features: sp 按 sp_size 分帧插值（pos=0.5 时两帧各半）',
+          abs(spd[2] - 2.0) < 1e-9 and abs(spd[3] - 3.0) < 1e-9, 'got %r' % spd)
+    check('Worldline.resample_features: pos=0 直接取第 0 帧',
+          spd[0] == 1.0 and spd[1] == 2.0, 'got %r' % spd)
+    check('Worldline.resample_features: ap 同样插值',
+          abs(apd[2] - 0.2) < 1e-9 and abs(apd[3] - 0.3) < 1e-9, 'got %r' % apd)
+    f0d2, _, _ = W.resample_features([1.0, 5.0], [100.0, 200.0], [0.0, 0.0], [0.0, 0.0], 1)
+    check('Worldline.resample_features: 末帧直接取（不外推）', f0d2[1] == 200.0,
+          'got %r' % f0d2)
+
+    # ---- apply_pitch_bend
+    f0 = [0.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
+    W.apply_pitch_bend(f0, [100, 300], 60, 20.0, 50.0, 10.0, 64.69437408447266)
+    check('Worldline.apply_pitch_bend: 无声帧（f0 <= f0_floor）保持不变', f0[0] == 0.0,
+          'got %r' % f0[0])
+    check('Worldline.apply_pitch_bend: pos<=0 时取 pitches[0]（+100 音分 → 61 号音）',
+          abs(f0[2] - MusicMath.tone_to_freq(61)) < 1e-9, 'got %r' % f0[2])
+    # i=7: pos = (70-20)/50 = 1.0 → index=1 → pitches[1]=300 → tone 60+3=63
+    check('Worldline.apply_pitch_bend: pos>=1 时取 pitches[1]（+300 音分 → 63 号音）',
+          abs(f0[7] - MusicMath.tone_to_freq(63)) < 1e-9, 'got %r' % f0[7])
+    # 空 pitches → pitch 恒为 0 → 就是 tone 本身的频率
+    f0b = [100.0] * 3
+    W.apply_pitch_bend(f0b, [], 69, 0.0, 50.0, 10.0, 64.69)
+    check('Worldline.apply_pitch_bend: 无音高曲线时 f0 = ToneToFreq(tone)',
+          all(abs(v - 440.0) < 1e-9 for v in f0b), 'got %r' % f0b)
+
+    # ---- 两处 auto gain 的差异
+    out = [0.5, -0.5]
+    # weight 是 logistic，不是 0/1：全有声 → 1/(1+e^-5) ≈ 0.9933；全无声 → 1/(1+e^5) ≈ 0.0067
+    w_hi = 1.0 / (1.0 + math.exp(-5.0))
+    w_lo = 1.0 / (1.0 + math.exp(5.0))
+    g1 = W.resample_auto_gain(out, 1.0, [100.0, 100.0], False, 100.0, 86)
+    check('Worldline.resample_auto_gain: 全有声 → max = outMax*w_hi + wavMax*(1-w_hi)',
+          abs(g1 - math.pow(0.5 / (0.5 * w_hi + 1.0 * (1 - w_hi)), 0.86)) < 1e-12,
+          'got %r' % g1)
+    g2 = W.resample_auto_gain(out, 1.0, [0.0, 0.0], False, 100.0, 86)
+    check('Worldline.resample_auto_gain: 全无声 → 更偏向 wavMax',
+          abs(g2 - math.pow(0.5 / (0.5 * w_lo + 1.0 * (1 - w_lo)), 0.86)) < 1e-12,
+          'got %r' % g2)
+    check('Worldline.resample_auto_gain: 有声占比越高 → max 越小 → 增益越大',
+          g1 > g2, 'got g1=%r g2=%r' % (g1, g2))
+    g3 = W.resample_auto_gain(out, 1.0, [100.0, 100.0], True, 100.0, 86)
+    check('Worldline.resample_auto_gain: direct=True → gain 乘 0', g3 == 0.0, 'got %r' % g3)
+    check('Worldline.resample_auto_gain: volume 参与乘算（×0.01）',
+          abs(W.resample_auto_gain(out, 1.0, [100.0, 100.0], False, 50.0, 86)
+              - math.pow(0.5 / (0.5 * w_hi + 1.0 * (1 - w_hi)), 0.86) * 0.5) < 1e-12)
+    # segment_auto_gain 的退化阈值是 max < 1e-3f（两处样本与 wavMax 都要很小才会触发）
+    check('Worldline.segment_auto_gain: max < 1e-3 时退化为 1.0',
+          W.segment_auto_gain([1e-6, -1e-6], [0.0], 1e-6, 64.69, 86) == 1.0,
+          'got %r' % W.segment_auto_gain([1e-6, -1e-6], [0.0], 1e-6, 64.69, 86))
+    check('Worldline.segment_auto_gain: 正常量级时 = (0.5/max)^(P*0.01)',
+          abs(W.segment_auto_gain([1.0], [100.0], 1.0, 64.69, 86)
+              - math.pow(0.5 / 1.0, 0.86)) < 1e-12,
+          'got %r' % W.segment_auto_gain([1.0], [100.0], 1.0, 64.69, 86))
+
+    # ---- blend_features（单段可精确验算）
+    sp_size = 1
+    seg = _Seg(p0=0, p1=1, p3=3, p4=5, skip_frames=0,
+               f0=[10.0, 20.0, 30.0, 40.0, 50.0],
+               sp_env=[1.0, 2.0, 3.0, 4.0, 5.0],
+               ap=[0.1, 0.2, 0.3, 0.4, 0.5])
+    total, f0o, spo, apo = W.blend_features([seg], sp_size)
+    check('Worldline.blend_features: totalFrames = max(p4) + 1', total == 6, 'got %r' % total)
+    check('Worldline.blend_features: sp 累加在 1e-12 基线上（weight 见分支）',
+          abs(spo[0] - 1e-12) < 1e-15 and abs(spo[1] - (1e-12 + 2.0)) < 1e-9
+          and abs(spo[4] - (1e-12 + 5.0 * 0.5)) < 1e-9,
+          'got %r' % spo)
+    check('Worldline.blend_features: 段内 ap 直接取自身（dirty==0 时 wa=0,wb=1）',
+          abs(apo[1] - 0.2) < 1e-12 and abs(apo[3] - 0.4) < 1e-12, 'got %r' % apo)
+    check('Worldline.blend_features: 末帧复制前一帧（f0/sp/ap 三样）',
+          f0o[5] == f0o[4] and spo[5] == spo[4] and apo[5] == apo[4],
+          'got %r / %r / %r' % (f0o[5], spo[5], apo[5]))
+    # p4=3 → totalFrames=4，但只有 j=0..2 被遍历；第 3 帧由"复制前一帧"填上
+    seg_a = _Seg(0, 1, 2, 3, 0, [1.0, 2.0, 3.0], [1.0, 2.0, 3.0], [0.1, 0.2, 0.3])
+    total2, f0o2, spo2, apo2 = W.blend_features([seg_a], 1)
+    check('Worldline.blend_features: j==p3 时 weight=1（sp 全量累加）',
+          abs(spo2[2] - (1e-12 + 3.0)) < 1e-9, 'got %r' % spo2)
+    check('Worldline.blend_features: totalFrames-1 帧由"复制前一帧"得到',
+          total2 == 4 and f0o2[3] == f0o2[2] and spo2[3] == spo2[2] and apo2[3] == apo2[2],
+          'got total=%r f0=%r' % (total2, f0o2))
+
+    # f0Curve 只覆盖有声帧
+    seg_b = _Seg(0, 1, 2, 3, 0, [100.0, 0.0, 100.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
+    _, f0o3, _, _ = W.blend_features([seg_b], 1, f0_curve=[500.0], f0_floor=64.69)
+    check('Worldline.blend_features: f0Curve 只覆盖有声帧（无声帧保持 0）',
+          f0o3[0] == 500.0 and f0o3[1] == 0.0, 'got %r' % f0o3)
+
+    # ---- blend_continuous_noise_features
+    seg_h = _Seg(0, 1, 2, 3, 0, [1.0, 2.0, 3.0], [1.0, 2.0, 3.0], [0.1, 0.2, 0.3],
+                 sp_env_harmonic=[4.0, 5.0, 6.0], stretch=[1.0, 1.5, 2.0])
+    toh, f0h, sph, aph, sth = W.blend_continuous_noise_features([seg_h], 1)
+    check('Worldline.blend_continuous_noise_features: totalFrames = max(p4)+1', toh == 4,
+          'got %r' % toh)
+    check('Worldline.blend_continuous_noise_features: 谐波包络同样累加',
+          abs(sph[1] - (1e-12 + 5.0)) < 1e-9, 'got %r' % sph)
+    check('Worldline.blend_continuous_noise_features: stretch 按 ap 的方式混合',
+          abs(sth[1] - 1.5) < 1e-12, 'got %r' % sth)
+    check('Worldline.blend_continuous_noise_features: 末帧复制前一帧（含 stretch）',
+          sth[3] == sth[2] and f0h[3] == f0h[2], 'got %r / %r' % (sth[3], f0h[3]))
+
+    # ---- 原生库：找不到时优雅降级
+    native = W.WorldlineNative('definitely-not-a-real-library-xyz')
+    check('Worldline.WorldlineNative: 库不存在时 available=False 且不抛异常',
+          native.available is False and bool(native.error))
+
+
 def test_xxhash64():
     """XXH32/XXH64 官方测试向量 —— 对不上，所有缓存键都会静默错。"""
     from singing.openutau.xxhash import xxh32, xxh64 as _x
@@ -1730,6 +1959,8 @@ def main():
     test_render_phrase_build()
     print('--- Renderers 注册表 / ApplyDynamics ---')
     test_renderers_registry()
+    print('--- Render/Worldline（纯逻辑） ---')
+    test_worldline_pure()
     print('--- Classic/Ini ---')
     test_ini_read_blocks()
     print('--- Plugin.Builtin/ChineseCVVC ---')

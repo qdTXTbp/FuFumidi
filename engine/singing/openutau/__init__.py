@@ -126,6 +126,33 @@ from .singer import (  # noqa: F401
 from .spline import CubicSplineSegment  # noqa: F401
 from .base_chinese import BaseChinesePhonemizer  # noqa: F401
 from .timeaxis import TimeAxis  # noqa: F401
+from .worldline import (  # noqa: F401
+    FLOOR_F0,
+    RESAMPLER_FFT_SIZE,
+    RESAMPLER_FS,
+    RESAMPLER_HOP_SIZE,
+    RESAMPLER_PADDING,
+    RESAMPLER_VOICED_F0,
+    AnalysisConfig,
+    CutOffBeforeOffsetError,
+    CutOffExceedDurationError,
+    SynthRequestError,
+    WorldlineNative,
+    apply_pitch_bend,
+    blend_continuous_noise_features,
+    blend_features,
+    compute_frame_bounds,
+    compute_timemap,
+    f0_frame_count,
+    fit_curve,
+    get_flag,
+    get_native,
+    init_analysis_config,
+    resample_auto_gain,
+    resample_features,
+    segment_auto_gain,
+    world_synthesis_sample_count,
+)
 from .xxhash import digest_of32, digest_of64, xxh32, xxh64  # noqa: F401
 
 # 导入内置音素化器即完成注册（对应 C# 的 [Phonemizer(...)] 在程序集加载时注册）。
@@ -146,6 +173,13 @@ __all__ = [
     'USinger', 'USingerType', 'SINGER_TYPE_NAMES', 'SINGER_TYPE_FROM_NAME', 'Preferences',
     'xxh32', 'xxh64', 'digest_of32', 'digest_of64',
     'BaseChinesePhonemizer',
+    'AnalysisConfig', 'SynthRequestError', 'CutOffExceedDurationError', 'CutOffBeforeOffsetError',
+    'WorldlineNative', 'RESAMPLER_PADDING', 'RESAMPLER_VOICED_F0', 'FLOOR_F0',
+    'RESAMPLER_FS', 'RESAMPLER_HOP_SIZE', 'RESAMPLER_FFT_SIZE',
+    'init_analysis_config', 'get_native', 'f0_frame_count', 'world_synthesis_sample_count',
+    'get_flag', 'fit_curve', 'compute_frame_bounds', 'compute_timemap', 'resample_features',
+    'apply_pitch_bend', 'resample_auto_gain', 'segment_auto_gain',
+    'blend_features', 'blend_continuous_noise_features',
     'CubicSplineSegment', 'PhraseLayout',
     'VibratoSource', 'CurveSource', 'NoteSource', 'PhonemeSource', 'PhraseSource',
     'RenderNote', 'RenderPhone', 'RenderPhrase', 'PITCH_INTERVAL',
