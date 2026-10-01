@@ -42,10 +42,12 @@ CUDAExecutionProvider / DmlExecutionProvider / CPUExecutionProvider；
 """
 
 import argparse
+import hashlib
 import json
 import math
 import os
 import sys
+import tempfile
 import traceback
 
 VERSION = "0.2.0"
@@ -99,6 +101,96 @@ def resolve_providers(device):
     return _PROVIDER_FALLBACK.get(want, [want, "CPUExecutionProvider"]), ""
 
 
+# ---------------- 推理结果张量缓存 ----------------
+# 移植自 OpenUTAU 的 `OpenUtau.Core/DiffSinger/DiffSingerCache.cs`。
+#
+# 为什么必须有它：
+#   1) **正确性**：ORT 的 CPU 浮点计算跨进程不稳定（我们已定位到 variance 模型：
+#      相同输入在不同进程得到约 20% 不同的输出；详见 engine/tests/diag_diffsinger_determinism.py）。
+#      结果是「同一工程重新渲染得到不同波形」。有了缓存，重渲染必然命中、逐位一致。
+#   2) **性能**：命中即跳过 ONNX 推理，重渲染（试听/局部返工）大幅提速。
+#
+# 键 = 模型标识（文件名+大小+mtime）+ **全部输入张量**（按名字排序，含 dtype/shape/字节）。
+# 因此 steps/depth 这类采样参数天然进键 —— 改了参数不会拿到旧结果。
+# 关掉：环境变量 FUFUMIDI_DS_CACHE=0
+_DS_CACHE_DISABLED = os.environ.get("FUFUMIDI_DS_CACHE") == "0"
+_DS_CACHE_DIR = None
+
+
+def _ds_cache_dir():
+    global _DS_CACHE_DIR
+    if _DS_CACHE_DIR is None:
+        base = os.environ.get("FUFUMIDI_CACHE_DIR") or os.path.join(tempfile.gettempdir(), "fufumidi-cache")
+        d = os.path.join(base, "diffsinger")
+        try:
+            os.makedirs(d, exist_ok=True)
+            _DS_CACHE_DIR = d
+        except Exception:  # noqa: BLE001
+            _DS_CACHE_DIR = ""      # 建不出来就当没有缓存，不能因为缓存挂掉整个渲染
+    return _DS_CACHE_DIR
+
+
+def _feed_key(model_path, feed):
+    """模型标识 + 全部输入张量 → 缓存键。"""
+    import numpy as np
+    h = hashlib.sha256()
+    p = str(model_path)
+    h.update(os.path.basename(p).encode("utf-8", "replace"))
+    try:
+        st = os.stat(p)
+        h.update(("%d:%d" % (st.st_size, int(st.st_mtime))).encode("ascii"))
+    except Exception:  # noqa: BLE001
+        pass
+    for name in sorted(feed.keys()):
+        a = np.ascontiguousarray(feed[name])
+        h.update(("\x00%s|%s|%s|" % (name, a.dtype, a.shape)).encode("utf-8", "replace"))
+        h.update(a.tobytes())
+    return h.hexdigest()[:32]
+
+
+class _CachedSession:
+    """包一层 InferenceSession，只拦 run()；get_inputs/get_outputs 等原样透传。"""
+
+    __slots__ = ("_sess", "_path")
+
+    def __init__(self, sess, model_path):
+        object.__setattr__(self, "_sess", sess)
+        object.__setattr__(self, "_path", model_path)
+
+    def __getattr__(self, name):          # 未定义的属性一律透传给真实会话
+        return getattr(object.__getattribute__(self, "_sess"), name)
+
+    def run(self, output_names, input_feed, run_options=None):
+        import numpy as np
+        sess = object.__getattribute__(self, "_sess")
+        if _DS_CACHE_DISABLED or output_names is not None:
+            return sess.run(output_names, input_feed, run_options)
+        d = _ds_cache_dir()
+        if not d:
+            return sess.run(None, input_feed)
+        fp = os.path.join(d, "ds-" + _feed_key(object.__getattribute__(self, "_path"), input_feed) + ".npz")
+        try:
+            if os.path.isfile(fp):
+                z = np.load(fp)
+                names = sorted(z.files, key=lambda s: int(s[1:]))
+                return [z[n] for n in names]
+        except Exception:  # noqa: BLE001 缓存损坏 → 当作未命中
+            pass
+        out = sess.run(None, input_feed)
+        try:
+            np.savez(fp, **{("o%d" % i): np.asarray(o) for i, o in enumerate(out)})
+        except Exception:  # noqa: BLE001
+            pass
+        return out
+
+
+def _wrap_session(sess, model_path):
+    try:
+        return _CachedSession(sess, model_path)
+    except Exception:  # noqa: BLE001
+        return sess
+
+
 def make_session(model_path, providers):
     """按 provider 列表创建会话；CUDA 失败时自动退回 CPU 并返回 (session, warning)。"""
     import onnxruntime as ort
@@ -107,13 +199,13 @@ def make_session(model_path, providers):
     if providers and providers[0] != "CPUExecutionProvider":
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     try:
-        return ort.InferenceSession(model_path, sess_options=so, providers=providers), ""
+        return _wrap_session(ort.InferenceSession(model_path, sess_options=so, providers=providers), model_path), ""
     except Exception as e:  # noqa: BLE001
         if providers and providers[0] == "CPUExecutionProvider":
             raise
         w = "GPU 后端（%s）加载失败，已退回 CPU：%s" % (providers[0], str(e)[:160])
         sess = ort.InferenceSession(model_path, sess_options=so, providers=["CPUExecutionProvider"])
-        return sess, w
+        return _wrap_session(sess, model_path), w
 
 # ---------------- 依赖名（与主进程 DS_PY_DEPS 对齐） ----------------
 DEPS = {
