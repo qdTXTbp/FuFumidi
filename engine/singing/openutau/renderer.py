@@ -20,31 +20,12 @@
 """
 
 from abc import ABC, abstractmethod
+
+# USingerType 与 SingerTypeUtils 的正主在 singer.py（对应 USinger.cs），这里转发以便
+# 沿用 `from singing.openutau.renderer import USingerType` 的写法。
+from .singer import SINGER_TYPE_FROM_NAME, SINGER_TYPE_NAMES, USingerType  # noqa: F401
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Sequence, Tuple
-
-
-class USingerType:
-    """对应 USinger.cs 的 `[Flags] enum USingerType`（**数值**，不是字符串）。
-
-    C# 原定义：Classic = 0x1, Enunu = 0x2, Vogen = 0x4, DiffSinger = 0x5, Voicevox = 0x6。
-    注意它是 Flags 枚举且数值不连续（DiffSinger=0x5 同时含 0x1|0x4），照搬时不要"整理"成 0..n。
-    """
-
-    CLASSIC = 0x1
-    ENUNU = 0x2
-    VOGEN = 0x4
-    DIFFSINGER = 0x5
-    VOICEVOX = 0x6
-
-
-# 对应 SingerTypeUtils.SingerTypeNames（枚举 → 渲染器/声库目录用的短名）
-SINGER_TYPE_NAMES = {
-    USingerType.CLASSIC: 'utau',
-    USingerType.ENUNU: 'enunu',
-    USingerType.DIFFSINGER: 'diffsinger',
-    USingerType.VOICEVOX: 'voicevox',
-}
 
 
 @dataclass

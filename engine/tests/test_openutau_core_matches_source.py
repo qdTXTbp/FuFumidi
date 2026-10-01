@@ -22,9 +22,10 @@ if ENGINE not in sys.path:
 REF = os.environ.get('OPENUTAU_REF') or r'D:/FuFuMIDI/_ref/OpenUtau/OpenUtau.Core'
 
 from singing.openutau import (  # noqa: E402
-    NAME_IN_OCTAVE, MusicMath, Oto, OtoSet, Phonemizer, Subbank, TimeAxis, UOto, UOtoSet, USingerType, USubbank,
+    NAME_IN_OCTAVE, MusicMath, Oto, OtoSet, Phonemizer, Preferences, Subbank, TimeAxis,
+    UOto, UOtoSet, USinger, USingerType, USubbank,
 )
-from singing.openutau.renderer import SINGER_TYPE_NAMES  # noqa: E402
+from singing.openutau.renderer import SINGER_TYPE_FROM_NAME, SINGER_TYPE_NAMES  # noqa: E402
 from singing.ustx import UExpressionDescriptor, UProject, UTrack  # noqa: E402
 from singing.ustx.format import Ustx  # noqa: E402
 
@@ -214,11 +215,86 @@ def test_oto_model():
     check('UOto: IsColorMatch 未命中非空色', not us2.is_color_match('Soft'))
 
 
+def test_singer_base():
+    src = _read('Ustx/USinger.cs')
+    if src is None:
+        print('  SKIP 找不到 Ustx/USinger.cs')
+        return
+    # 两个名字表的 4 项映射要与源码一致
+    for short, enum_name in (('utau', 'Classic'), ('enunu', 'Enunu'),
+                             ('diffsinger', 'DiffSinger'), ('voicevox', 'Voicevox')):
+        check('SingerTypeNames: %s 出现在源码映射里' % short,
+              re.search(r'\{\s*USingerType\.%s,\s*"%s"\s*\}' % (enum_name, short), src) is not None)
+        check('SingerTypeFromName: %s 反向映射正确' % short,
+              SINGER_TYPE_FROM_NAME[short] == getattr(USingerType, enum_name.upper()))
+
+    u = USinger()
+    check('USinger: 基类默认查不到 oto（False, None）', u.try_get_oto('a') == (False, None))
+    check('USinger: TryGetMappedOto 默认转调 TryGetOto（不做音高映射）',
+          u.try_get_mapped_oto('a', 60, 'Soft') == (False, None))
+    check('USinger: 默认 Otos 是空表（C# 的 emptyOtos）', u.otos == [])
+    check('USinger: 默认 Loaded = found && loaded', u.is_loaded is False)
+
+    m = USinger.create_missing('Ghost')
+    check('USinger: CreateMissing 只有名字且未找到', m.name == 'Ghost' and not m.has_found)
+    check('USinger: 未找到时 localized_name 带 [Missing] 前缀',
+          m.localized_name == '[Missing] Ghost', 'got %r' % m.localized_name)
+
+    # 语言回落链：SortingOrder → Language → Name
+    class _LocalizedSinger(USinger):
+        @property
+        def localized_names(self):
+            return {'zh': '中文名', 'ja': '日本語名'}
+
+    real = _LocalizedSinger('DefaultName')
+    real.found = True
+    old_sort, old_lang = Preferences.sorting_order, Preferences.language
+    try:
+        Preferences.sorting_order = 'ja'
+        Preferences.language = 'zh'
+        check('USinger: SortingOrder 优先于 Language', real.localized_name == '日本語名',
+              'got %r' % real.localized_name)
+        Preferences.sorting_order = None
+        check('USinger: SortingOrder 为空时用 Language', real.localized_name == '中文名',
+              'got %r' % real.localized_name)
+        Preferences.language = 'fr'
+        check('USinger: 语言取不到时回落 Name', real.localized_name == 'DefaultName',
+              'got %r' % real.localized_name)
+        Preferences.language = None
+        check('USinger: 语言全空时回落 Name', real.localized_name == 'DefaultName',
+              'got %r' % real.localized_name)
+    finally:
+        Preferences.sorting_order, Preferences.language = old_sort, old_lang
+
+    # Equals 只比 Id
+    class _IdSinger(USinger):
+        def __init__(self, sid, name=''):
+            super().__init__(name)
+            self._sid = sid
+
+        @property
+        def id(self):
+            return self._sid
+
+    check('USinger: equals 只比 Id', _IdSinger('a', 'X').equals(_IdSinger('a', 'Y')) is True)
+    check('USinger: Id 不同则不等', _IdSinger('a').equals(_IdSinger('b')) is False)
+    check('USinger: equals(None) 为 False', _IdSinger('a').equals(None) is False)
+    # 收藏走 Preferences（替身）
+    Preferences.favorite_singers = []
+    s1 = _IdSinger('fav1')
+    s1.is_favourite = True
+    check('USinger: IsFavourite 写入偏好', Preferences.favorite_singers == ['fav1'])
+    s1.is_favourite = False
+    check('USinger: IsFavourite 取消收藏', Preferences.favorite_singers == [])
+
+
 def main():
     print('--- Format.Ustx 常量 ---')
     test_format_constants()
-    print('--- USingerType 枚举 ---')
+    print('--- USingerType / SingerTypeUtils ---')
     test_singer_type_enum()
+    print('--- USinger 基类 ---')
+    test_singer_base()
     print('--- MusicMath 音名换算 ---')
     test_musicmath()
     print('--- UOto / USubbank 模型 ---')

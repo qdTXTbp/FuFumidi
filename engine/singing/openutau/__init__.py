@@ -48,7 +48,13 @@ from .renderer import (  # noqa: F401
     RenderPitchResult,
     RenderRealCurveResult,
     RenderResult,
+)
+from .singer import (  # noqa: F401
+    SINGER_TYPE_FROM_NAME,
+    SINGER_TYPE_NAMES,
+    USinger,
     USingerType,
+    Preferences,
 )
 from .timeaxis import TimeAxis  # noqa: F401
 
@@ -59,5 +65,6 @@ __all__ = [
     'Phonemizer', 'Note', 'Phoneme', 'PhonemeAttributes', 'PhonemeExpression', 'Result',
     'register', 'registered',
     'IRenderer', 'RenderResult', 'RenderPitchResult', 'RenderRealCurveResult',
-    'RenderPhraseEvents', 'USingerType',
+    'RenderPhraseEvents',
+    'USinger', 'USingerType', 'SINGER_TYPE_NAMES', 'SINGER_TYPE_FROM_NAME', 'Preferences',
 ]
