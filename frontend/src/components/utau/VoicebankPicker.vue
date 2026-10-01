@@ -9,7 +9,7 @@
 //   <VoicebankPicker v-model="selectedDir" v-model:kind="engineKind" />
 // engineKind: 'utau' | 'diffsinger'
 // 切换引擎时，如果新引擎下已有对应类型的声库，会自动选中第一个可用项。
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onActivated, watch } from 'vue';
 import Icon from '../Icon.vue';
 import { t } from '../../core/i18n.js';
 
@@ -89,6 +89,9 @@ function baseName(dir) { return dir ? String(dir).replace(/^.*[\\/]/, '') : ''; 
 
 watch(() => props.kind, (v) => { if (v && v !== curKind.value) switchKind(v); });
 onMounted(refresh);
+// KeepAlive 保活：本组件在 <KeepAlive> 的视图树里，离开再回来不会重跑 onMounted，
+// 于是「在资源中心下载完声库，回到工作台下拉里却看不到」——切回时主动重扫一次。
+onActivated(refresh);
 defineExpose({ refresh });
 </script>
 

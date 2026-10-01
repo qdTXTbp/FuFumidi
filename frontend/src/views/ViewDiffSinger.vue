@@ -1,6 +1,6 @@
 <script setup>
 // DiffSinger 工作台：模块与声库（启用后才下载组件）/ 调教工作台（从曲库 MIDI 导入调教）
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, onActivated } from 'vue';
 import Icon from '../components/Icon.vue';
 import PianoRoll from '../components/pianoroll/PianoRoll.vue';
 import { useDiffsingerStore, getLastWavBytes } from '../stores/diffsinger';
@@ -61,14 +61,23 @@ async function run(fn) {
   finally { busy.value = false; }
 }
 
-onMounted(async () => {
-  store.init();
+// 只刷新「模块状态 + 声库清单」，**不要**在这里调 store.init() ——
+// init() 会用本地工程覆盖内存状态，把未保存的编辑抹掉。
+async function refreshModuleAndVoicebanks() {
   if (!store.hasBridge) return;
   await store.loadStatus();
   await store.refreshVoicebanks();
   await store.refreshRegistry();
   if (store.voicebankDir) void store.inspect();
+}
+
+onMounted(async () => {
+  store.init();
+  await refreshModuleAndVoicebanks();
 });
+// KeepAlive 保活：本视图被 <KeepAlive> 缓存，切回来不会重跑 onMounted，
+// 于是「在资源中心下载完 AI 声库，回到工作台的下拉里找不到」——激活时补一次。
+onActivated(refreshModuleAndVoicebanks);
 
 /* ---------------- 模块管理 ---------------- */
 async function toggleEnabled() {

@@ -6,7 +6,7 @@
 //   - 分组：作品（原神 / 崩坏：星穹铁道）→ 目录（地区 / 部分）→ 角色；
 //   - 搜索：模型名称 / 分类 / 说明 全字段匹配；筛选：作品 + 目录 + 状态；
 //   - 下载：直连 ModelScope 官方地址（全球同源），完成后自动解压注册。
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, reactive, computed, onMounted, onActivated, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useVoicebankStore } from '../stores/voicebank';
@@ -189,6 +189,10 @@ onMounted(async () => {
   if (bridge && bridge.onDiffsingerMsProgress) off = bridge.onDiffsingerMsProgress(onProgress);
 });
 onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
+// KeepAlive 保活：视图被缓存，切回来不会重跑 onMounted。别处（导入 zip / 删除声库）
+// 改过声库目录后，这里的「已安装」标记与体积会停在旧值 —— 激活时重拉一次目录。
+// 加 loading 守卫，避免和进行中的请求叠加。
+onActivated(() => { if (!loading.value) refresh(); });
 </script>
 
 <template>
