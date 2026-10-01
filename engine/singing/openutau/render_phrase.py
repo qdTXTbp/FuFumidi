@@ -19,8 +19,8 @@
 两处 `Hash()` 都用 `BinaryWriter` 按固定顺序写字段再取 `XXH64`。
 **写入顺序、类型宽度（float 4B / double 8B / int 4B / long 8B / ulong 8B）、
 字符串的 7-bit 变长长度前缀**都不能变，否则缓存键与"输入是否变化"的判断会对不上，
-表现为"同一份工程时快时慢、偶尔复用错缓存"。这里用一个极小的 `_BinaryWriter`
-复刻 `BinaryWriter` 的字节布局。
+表现为"同一份工程时快时慢、偶尔复用错缓存"。字节布局由 `binary_writer.BinaryWriter`
+复刻（`Classic/ResamplerItem` 也用同一个），字符串用 7-bit 变长长度前缀 + UTF-8。
 
 ## 尚未照搬、因此目前走不到的分支（照搬时如实保留守卫）
 - **表达式图**（`source.ExpressionGraph != null`）：三处 `? pitches.ToArray() : null`
@@ -45,70 +45,15 @@ import os
 from typing import List, Optional, Tuple
 
 from ..ustx.model import PitchPoint, PitchPointShape
+from .binary_writer import BinaryWriter
 from .format import Ustx
 from .music_math import MusicMath, fdiv, idiv
 from .phrase_layout import PhraseLayout
 from .pipeline_source import CurveSource, NoteSource, PhonemeSource, PhraseSource
 from .spline import CubicSplineSegment
-from .xxhash64 import xxh64
 
 #: 音高/曲线采样间隔（tick）—— C# 里是 `const int pitchInterval = 5` / `interval = 5`
 PITCH_INTERVAL = 5
-
-
-class _BinaryWriter:
-    """只复刻 C# `BinaryWriter` 在本文件里用到的字节布局（一律小端）。"""
-
-    __slots__ = ('_buf',)
-
-    def __init__(self):
-        self._buf = bytearray()
-
-    def write_float(self, v: float) -> None:
-        import struct
-        self._buf += struct.pack('<f', v)
-
-    def write_double(self, v: float) -> None:
-        import struct
-        self._buf += struct.pack('<d', v)
-
-    def write_int(self, v: int) -> None:
-        import struct
-        self._buf += struct.pack('<i', v)
-
-    def write_long(self, v: int) -> None:
-        """`BinaryWriter.Write(long)`：8 字节小端有符号。"""
-        import struct
-        self._buf += struct.pack('<q', v)
-
-    def write_ulong(self, v: int) -> None:
-        """`BinaryWriter.Write(ulong)`：8 字节小端无符号。"""
-        import struct
-        self._buf += struct.pack('<Q', v)
-
-    def write_bool(self, v: bool) -> None:
-        self._buf += b'\x01' if v else b'\x00'
-
-    def write_str(self, s: Optional[str]) -> None:
-        """`BinaryWriter.Write(string)`：先写 7-bit 编码的**字节长度**，再写 UTF-8 字节。
-
-        注意 `null` 与空串写出**同样**的一个 0x00 长度字节（C# 行为），
-        所以这里把 None 当空串处理。
-        """
-        b = (s or '').encode('utf-8')
-        n = len(b)
-        while True:  # LEB128
-            byte = n & 0x7F
-            n >>= 7
-            if n:
-                self._buf.append(byte | 0x80)
-            else:
-                self._buf.append(byte)
-                break
-        self._buf += b
-
-    def digest(self) -> int:
-        return xxh64(bytes(self._buf))
 
 
 class RenderNote:
@@ -200,7 +145,7 @@ class RenderPhone:
 
     def _compute_hash(self) -> int:
         """照搬 C# 的 `Hash()`：写入顺序/类型宽度必须逐字节一致。"""
-        w = _BinaryWriter()
+        w = BinaryWriter()
         w.write_double(self.adjusted_tempo)
         w.write_int(self.duration)
         w.write_str(self.phoneme)
@@ -519,7 +464,7 @@ class RenderPhrase:
         `post_effect=False` 得到 `preEffectHash` —— 只覆盖"音素参数"，不含音高/曲线，
         用于判断"能否只改效果而不用重新合成"。
         """
-        w = _BinaryWriter()
+        w = BinaryWriter()
         w.write_str(self.singer.id)
         w.write_str(str(self.renderer) if self.renderer is not None else '')
         w.write_str(self.wavtool)

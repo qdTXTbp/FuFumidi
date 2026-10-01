@@ -972,18 +972,156 @@ def test_renderers_registry():
     check('ApplyDynamics: dynamics 为 None 时不动样本', r2.samples == [1.0] * 10)
 
 
+def test_resampler_item():
+    """`Classic/ResamplerItem.cs` —— 单音素的 resampler 参数、哈希与包络换算。"""
+    from singing.openutau.classic import resampler_item as RI
+    cs = _read('Classic/ResamplerItem.cs')
+    if cs is None:
+        print('  SKIP 找不到 Classic/ResamplerItem.cs')
+        return
+
+    # ---- 源码一致性：哈希写入顺序
+    want = _cs_writes(_slice(cs, 'ulong Hash() {', 'public List<Vector2> EnvelopeMsToSamples'))
+    py_src = open(os.path.join(ENGINE, 'singing', 'openutau', 'classic', 'resampler_item.py'),
+                  encoding='utf-8').read()
+    got = _py_writes(_slice(py_src, 'def _hash(self)', 'def envelope_ms_to_samples'))
+    check('ResamplerItem.Hash: 写入顺序与 C# 逐项一致', want == got,
+          'C#=%r\n       我们=%r' % (want, got))
+
+    # ---- 源码一致性：关键常量与算式
+    check('ResamplerItem: 辅音伸缩用 2 的幂（2^(1-velocity*0.01)）',
+          'Math.Pow(2, 1.0 - velocity * 0.01)' in cs)
+    check('ResamplerItem: durRequired 向上取整到 50 的倍数（ceil(x/50+0.5)*50）',
+          'Math.Ceiling(durRequired / 50.0 + 0.5) * 50.0' in cs)
+    check('ResamplerItem: 输出文件名 res-{XXH32(singerId):x8}-{hash:x16}.wav',
+          'XXH32.DigestOf' in cs and 'res-' in cs and 'x8' in cs and 'x16' in cs)
+
+    # ---- 功能：构造一个真实的 RenderPhrase，再建 ResamplerItem
+    class _Resampler:
+        def supports_flag(self, abbr):
+            return abbr != 'dropme'
+
+        def __str__(self):
+            return 'test-resampler'
+
+    class _Host(RI.ClassicHost):
+        cache_path = r'C:\cache'
+
+        def get_resampler(self, name):
+            return _Resampler()
+
+        def get_source_temp_path(self, singer_id, oto, ext):
+            return r'C:\cache\tmp\%s%s' % (singer_id, ext)
+
+    old_host = RI.host
+    RI.host = _Host()
+    try:
+        uoto = UOto(Oto(alias='a', wav='a.wav', offset=100.0, consonant=50.0,
+                        cutoff=-200.0, preutter=60.0, overlap=20.0),
+                    UOtoSet(OtoSet(file='oto.ini', name='main'), singers_path='/vb'), None)
+        # 注意 velocity 是**归一化**值（PhonemeSource 里 `Velocity = vel * 0.01f`），
+        # 所以 1.0 对应 UTAU 的 100。
+        env_pts = [Vector2(0, 0), Vector2(50, 100), Vector2(200, 100),
+                   Vector2(250, 100), Vector2(300, 0)]
+        ph = _mk_phoneme(
+            oto=uoto, envelope=env_pts,
+            flags=[('V', 50, 'vel'), ('M', None, 'mod'), ('X', 1, 'dropme')],
+            velocity=1.0, volume=100.0, modulation=0.0,
+            preutter=50.0, overlap=10.0, tail_intrude=25.0, tail_overlap=5.0,
+            leading=50)
+        src = _mk_phrase_source([_mk_note()])
+        rp = RenderPhrase(src, [ph], 0, 1)
+        item = RI.ResamplerItem(rp, rp.phones[0])
+
+        check('ResamplerItem: flags 按 resampler.supports_flag 过滤掉不支持的',
+              item.flags == [('V', 50, 'vel'), ('M', None, 'mod')], 'got %r' % item.flags)
+        check('ResamplerItem: GetFlagsString 拼出 "V50M"', item.get_flags_string() == 'V50M',
+              'got %r' % item.get_flags_string())
+        check('ResamplerItem: velocity/volume/modulation 是 ×100 取整',
+              (item.velocity, item.volume, item.modulation) == (100, 10000, 0),
+              'got %r' % ((item.velocity, item.volume, item.modulation),))
+        # skipOver = oto.Preutter * 2^(1-vel*0.01) - leadingMs = 60*2^0 - 50 = 10
+        check('ResamplerItem: skipOver = oto.Preutter*2^(1-vel*0.01) - leadingMs = 10',
+              abs(item.skip_over - 10.0) < 1e-9, 'got %r' % item.skip_over)
+        # durRequired = (500-0) + 30 + 10 = 540 → ceil(540/50+0.5)*50 = ceil(11.3)*50 = 600
+        check('ResamplerItem: durRequired = ceil((540/50)+0.5)*50 = 600',
+              abs(item.dur_required - 600.0) < 1e-9, 'got %r' % item.dur_required)
+        check('ResamplerItem: 直接透传 oto 的 offset/consonant/cutoff',
+              (item.offset, item.consonant, item.cutoff) == (100.0, 50.0, -200.0),
+              'got %r' % ((item.offset, item.consonant, item.cutoff),))
+        check('ResamplerItem: durCorrection 照抄 RenderPhone 的值',
+              item.dur_correction == rp.phones[0].dur_correction_ms)
+        check('ResamplerItem: tempo 取 phone.adjustedTempo', item.tempo == 120.0,
+              'got %r' % item.tempo)
+        check('ResamplerItem: inputFile 取 oto.file',
+              item.input_file.replace('\\', '/').endswith('/vb/a.wav'), 'got %r' % item.input_file)
+        check('ResamplerItem: outputFile 带 XXH32(singerId) 前缀',
+              item.output_file.startswith('C:\\cache\\res-')
+              and item.output_file.endswith('.wav')
+              and len(os.path.basename(item.output_file)) == len('res-') + 8 + 1 + 16 + 4,
+              'got %r' % item.output_file)
+        check('ResamplerItem: 两个缓存文件都登记到乐句',
+              len(rp.cache_files) == 2, 'got %r' % rp.cache_files)
+        check('ResamplerItem: 音高序列长度 ≥ 0 且为 int',
+              isinstance(item.pitches, list)
+              and all(isinstance(v, int) for v in item.pitches),
+              'got %r' % (item.pitches[:5],))
+        check('ResamplerItem.Hash: 同一输入两次构造同值',
+              RI.ResamplerItem(rp, rp.phones[0]).hash == item.hash)
+
+        # ★ struct 语义：EnvelopeMsToSamples 不能污染 phone.envelope
+        before = [(p.x, p.y) for p in rp.phones[0].envelope]
+        env = item.envelope_ms_to_samples()
+        after = [(p.x, p.y) for p in rp.phones[0].envelope]
+        check('ResamplerItem.EnvelopeMsToSamples: **不改动** phone.envelope（C# struct 语义）',
+              before == after, '改动前=%r 改动后=%r' % (before, after))
+        check('ResamplerItem.EnvelopeMsToSamples: 返回的是新对象（不与原包络同一引用）',
+              all(a is not b for a, b in zip(env, rp.phones[0].envelope)))
+        # skipOver=10ms → 441 样本；首点 x = (0 + shift) * 44.1 + 441 = 441，y = 0/100 = 0
+        check('ResamplerItem.EnvelopeMsToSamples: 首点 x = skipOverSamples、y 除以 100',
+              env[0].x == 441 and env[0].y == 0.0, 'got %r' % env[0])
+        check('ResamplerItem.EnvelopeMsToSamples: 后续点按 ms→样本换算（+min() 平移）',
+              env[1].x == 441 + int(50 * 44100 / 1000) and env[1].y == 1.0, 'got %r' % env[1])
+
+        # apply_envelope：就地乘增益（441 → 2646 上升，2647..9261 保持 1，13671 后为 0）
+        samples = [1.0] * 16000
+        item.apply_envelope(samples)
+        check('ResamplerItem.ApplyEnvelope: 首样本落在包络起点前 → 增益 0',
+              samples[0] == 0.0, 'got %r' % samples[0])
+        check('ResamplerItem.ApplyEnvelope: 平台段增益 1', samples[5000] == 1.0,
+              'got %r' % samples[5000])
+        check('ResamplerItem.ApplyEnvelope: 尾样本落在包络终点后 → 增益 0',
+              samples[-1] == 0.0, 'got %r' % samples[-1])
+
+        # 未配置 host 时应明确报错（不静默给错路径）
+        RI.host = old_host
+        try:
+            RI.ResamplerItem(rp, rp.phones[0])
+            check('ResamplerItem: 未配置 host 时抛 NotImplementedError', False, '没有抛错')
+        except NotImplementedError:
+            check('ResamplerItem: 未配置 host 时抛 NotImplementedError', True)
+    finally:
+        RI.host = old_host
+
+
 def test_xxhash64():
-    """XXH64 官方测试向量 —— 它对不上，所有缓存键都会静默错。"""
-    from singing.openutau import xxh64 as _x
+    """XXH32/XXH64 官方测试向量 —— 对不上，所有缓存键都会静默错。"""
+    from singing.openutau.xxhash import xxh32, xxh64 as _x
     check('XXH64("")=0xEF46DB3751D8E999', _x(b'') == 0xEF46DB3751D8E999,
           'got %s' % hex(_x(b'')))
     check('XXH64("a")=0xD24EC4F1A98C6E5B', _x(b'a') == 0xD24EC4F1A98C6E5B,
           'got %s' % hex(_x(b'a')))
     check('XXH64("abc")=0x44BC2CF5AD770999', _x(b'abc') == 0x44BC2CF5AD770999,
           'got %s' % hex(_x(b'abc')))
-    # 跨过 32 字节分支（>=32 走 4 路累加）
+    check('XXH32("")=0x02CC5D05', xxh32(b'') == 0x02CC5D05, 'got %s' % hex(xxh32(b'')))
+    check('XXH32("a")=0x550D7456', xxh32(b'a') == 0x550D7456, 'got %s' % hex(xxh32(b'a')))
+    check('XXH32("abc")=0x32D153FF', xxh32(b'abc') == 0x32D153FF,
+          'got %s' % hex(xxh32(b'abc')))
+    # 跨过 16 / 32 字节分支（XXH32 ≥16、XXH64 ≥32 走多路累加）
     long = b'The quick brown fox jumps over the lazy dog'
-    check('XXH64: 长度 ≥ 32 的分支可用', len(hex(_x(long))) > 2 and _x(long) == _x(long))
+    check('XXH32/64: 长输入分支可用且稳定',
+          len(hex(xxh32(long))) > 2 and xxh32(long) == xxh32(long)
+          and _x(long) == _x(long))
 
 
 def main():
@@ -1020,6 +1158,8 @@ def main():
     test_render_phrase_build()
     print('--- Renderers 注册表 / ApplyDynamics ---')
     test_renderers_registry()
+    print('--- Classic/ResamplerItem ---')
+    test_resampler_item()
     print('\n结果: %d passed, %d failed' % (len(_PASS), len(_FAIL)))
     return 1 if _FAIL else 0
 

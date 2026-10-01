@@ -17,7 +17,9 @@
   - `openutau/music_math.py`  音乐/时间换算（Util/MusicMath.cs）
   - `openutau/spline.py`      三次样条（Util/SplineInterpolate.cs）
   - `openutau/phrase_layout.py` 乐句时域排布（Render/PhraseLayout.cs）
-  - `openutau/xxhash64.py`    XXH64（K4os.Hash.xxHash.XXH64）
+  - `openutau/xxhash.py`      XXH32/XXH64（K4os.Hash.xxHash.XXH32/XXH64）
+  - `openutau/binary_writer.py`  `System.IO.BinaryWriter` 的字节布局复刻（缓存键用）
+  - `openutau/classic/`        `OpenUtau.Classic` 命名空间（ResamplerItem 等）
   - `openutau/pipeline_source.py` 渲染输入契约（Pipeline/PhraseSource.cs）
   - `openutau/render_phrase.py`   RenderNote/RenderPhone/RenderPhrase（Render/RenderPhrase.cs）
   - `openutau/oto.py`         原音模型（Ustx/USinger.cs 的 UOto + Classic/VoiceBank.cs）
@@ -122,7 +124,7 @@ from .singer import (  # noqa: F401
 )
 from .spline import CubicSplineSegment  # noqa: F401
 from .timeaxis import TimeAxis  # noqa: F401
-from .xxhash64 import digest_of, xxh64  # noqa: F401
+from .xxhash import digest_of32, digest_of64, xxh32, xxh64  # noqa: F401
 
 __all__ = [
     'Ustx',
@@ -136,7 +138,7 @@ __all__ = [
     'IRenderer', 'RenderResult', 'RenderPitchResult', 'RenderRealCurveResult',
     'RenderPhraseEvents',
     'USinger', 'USingerType', 'SINGER_TYPE_NAMES', 'SINGER_TYPE_FROM_NAME', 'Preferences',
-    'xxh64', 'digest_of',
+    'xxh32', 'xxh64', 'digest_of32', 'digest_of64',
     'CubicSplineSegment', 'PhraseLayout',
     'VibratoSource', 'CurveSource', 'NoteSource', 'PhonemeSource', 'PhraseSource',
     'RenderNote', 'RenderPhone', 'RenderPhrase', 'PITCH_INTERVAL',
