@@ -26,11 +26,17 @@ NO_YAML = {'yaml': False}
 
 
 class PitchPointShape:
-    """对应 UNote.cs 的 `enum PitchPointShape`（序列化为名字）。"""
+    """对应 UNote.cs 的 `enum PitchPointShape`（序列化为名字）。
+
+    五个值都要在：`io/l/i/o/sp`。`i`（SineIn）/`sp`（Spline）在 `RenderPhrase`
+    构建音高时会被显式判断，漏掉它们会让弯音形状静默退化成 io。
+    """
 
     IO = 'io'   # SineInOut
     L = 'l'     # Linear
-    O = 'o'
+    I = 'i'     # SineIn
+    O = 'o'     # SineOut
+    SP = 'sp'   # Spline
 
 
 class UExpressionType:
@@ -186,11 +192,17 @@ class UEnvelope:
 
 @dataclass
 class PitchPoint:
-    """对应 UNote.cs 的 PitchPoint。"""
+    """对应 UNote.cs 的 PitchPoint。
+
+    `auto_completed` 是 C# 里的 `[YamlIgnore] public bool autoCompleted` ——
+    由"自动补全的端点"标记（RenderPhrase 会插入这样的点），不写盘，
+    但**渲染时读**：spline 段只在**非**自动补全的点上生效。
+    """
 
     x: float = 0
     y: float = 0
     shape: str = PitchPointShape.IO
+    auto_completed: bool = field(default=False, metadata=NO_YAML)
 
 
 @dataclass

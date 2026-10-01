@@ -23,34 +23,9 @@
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-# ---------------------------------------------------------------- MusicMath（Util/MusicMath.cs）
-
-NAME_IN_OCTAVE = {
-    'C': 0, 'C#': 1, 'Db': 1,
-    'D': 2, 'D#': 3, 'Eb': 3,
-    'E': 4,
-    'F': 5, 'F#': 6, 'Gb': 6,
-    'G': 7, 'G#': 8, 'Ab': 8,
-    'A': 9, 'A#': 10, 'Bb': 10,
-    'B': 11,
-}
-
-
-class MusicMath:
-    @staticmethod
-    def name_to_tone(name: str) -> int:
-        """音名 → 音高号（C4 = 60）。非法返回 -1（照搬 C# 的 -1 约定，不是抛异常）。"""
-        if not name or len(name) < 2:
-            return -1
-        n = 2 if name[1] in '#b' else 1
-        head, num = name[:n], name[n:]
-        try:
-            octave = int(num)
-        except ValueError:
-            return -1
-        if head not in NAME_IN_OCTAVE:
-            return -1
-        return 12 * (octave + 1) + NAME_IN_OCTAVE[head]
+# MusicMath 已按 C# 的文件边界独立成 music_math.py（Util/MusicMath.cs），
+# 这里只做转发，保持 `from .oto import MusicMath, NAME_IN_OCTAVE` 的写法可用。
+from .music_math import NAME_IN_OCTAVE, MusicMath  # noqa: F401
 
 
 # ---------------------------------------------------------------- 原始结构（Classic/VoiceBank.cs）

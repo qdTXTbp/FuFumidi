@@ -78,6 +78,17 @@ class IRenderer(ABC):
     #: 该渲染器服务的歌手类型
     singer_type: str = USingerType.CLASSIC
 
+    def __str__(self) -> str:
+        """对应 C# 的默认 `Object.ToString()` —— 返回**类型全名**，不是对象地址。
+
+        ★ 别删这个覆盖：`RenderPhrase.Hash()` 里有一项就是 `renderer?.ToString()`。
+        Python 默认的 `str(obj)` 会把内存地址拼进去，于是"每次重建渲染器实例"
+        都会得到不同的哈希 —— 缓存会静默失效（每次都当成新输入重算），
+        排查起来极难。C# 的默认 ToString() 只给类型名，这里对齐它。
+        子类若要区分同一类型的不同配置，应**自己**覆盖 `__str__`（C# 里也是这么做的）。
+        """
+        return '%s.%s' % (type(self).__module__, type(self).__name__)
+
     @property
     def supports_render_pitch(self) -> bool:
         return False

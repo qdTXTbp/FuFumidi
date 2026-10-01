@@ -22,11 +22,15 @@ if ENGINE not in sys.path:
 REF = os.environ.get('OPENUTAU_REF') or r'D:/FuFuMIDI/_ref/OpenUtau/OpenUtau.Core'
 
 from singing.openutau import (  # noqa: E402
-    NAME_IN_OCTAVE, MusicMath, Oto, OtoSet, Phonemizer, Preferences, Subbank, TimeAxis,
-    UOto, UOtoSet, USinger, USingerType, USubbank,
+    NAME_IN_OCTAVE, CubicSplineSegment, CurveSource, IRenderer, MusicMath, NoteSource, Oto,
+    OtoSet, PhonemeSource, PhraseLayout, PhraseSource, Phonemizer, Preferences, RenderNote,
+    RenderPhone, RenderPhrase, RenderPitchResult, RenderResult, Subbank, TimeAxis,
+    UOto, UOtoSet, USinger, USingerType, USubbank, VibratoSource,
 )
 from singing.openutau.renderer import SINGER_TYPE_FROM_NAME, SINGER_TYPE_NAMES  # noqa: E402
-from singing.ustx import UExpressionDescriptor, UProject, UTrack  # noqa: E402
+from singing.ustx import (  # noqa: E402
+    PitchPoint, PitchPointShape, UExpressionDescriptor, UProject, UTrack, Vector2,
+)
 from singing.ustx.format import Ustx  # noqa: E402
 
 _PASS, _FAIL = [], []
@@ -382,6 +386,437 @@ def test_phoneme_model():
           [p[1] for p in pts] == [0, 100, 100, 100, 0], 'got %r' % pts)
 
 
+# ---------------------------------------------------------------- RenderPhrase 系列
+
+def _our_src(name):
+    p = os.path.join(ENGINE, 'singing', 'openutau', name)
+    return open(p, encoding='utf-8').read().replace('\r\n', '\n') if os.path.isfile(p) else None
+
+
+def _norm_ident(s):
+    """把 C# / Python 的字段写法归一到同一串，便于逐项比对。
+
+    `adjustedTone` / `self.adjusted_tone` → `adjustedtone`
+    `flag.Item2.Value` / `flag[1]`          → `flag1`
+    `renderer?.ToString() ?? ""`           → `renderertostring`
+    """
+    s = s.strip()
+    s = s.split('??')[0].strip()
+    if 'ToString' in s or 'str(' in s:
+        return 'renderertostring'
+    s = s.replace('self.', '')
+    s = s.replace('.Value', '').replace('.value', '')
+    s = s.replace('.Item1', '[0]').replace('.item1', '[0]')
+    s = s.replace('.Item2', '[1]').replace('.item2', '[1]')
+    s = s.replace('.', '')
+    s = s.replace('[0]', '0').replace('[1]', '1')
+    s = s.replace('_', '').strip("'\" ")
+    return s.lower()
+
+
+def _cs_writes(body):
+    """抽出 C# 里 `writer.Write(x);` 的实参序列。"""
+    return [_norm_ident(a) for a in re.findall(r'writer\.Write\((.+?)\);', body)]
+
+
+def _py_writes(body):
+    """抽出 Python 里 `w.write_xxx(...)` 的实参序列（逐行匹配，容许嵌套括号）。"""
+    out = []
+    for line in body.split('\n'):
+        m = re.match(r"\s*w\.write_\w+\((.*)\)\s*$", line)
+        if m:
+            out.append(_norm_ident(m.group(1)))
+    return out
+
+
+def _slice(text, start_marker, end_marker):
+    i = text.index(start_marker)
+    j = text.index(end_marker, i)
+    return text[i:j]
+
+
+def test_render_phrase_source_conformance():
+    """`RenderPhone.Hash()` / `RenderPhrase.Hash()` 的写入顺序必须与 C# 逐项一致。
+
+    这是缓存键的字节布局：顺序错一位，缓存就会"看起来命中其实不命中"。
+    """
+    cs = _read('Render/RenderPhrase.cs')
+    py = _our_src('render_phrase.py')
+    if cs is None or py is None:
+        print('  SKIP 找不到 RenderPhrase.cs 或 render_phrase.py')
+        return
+
+    # ---- RenderPhone.Hash()
+    cs_phone = _slice(cs, 'private ulong Hash() {', 'public class RenderPhrase')
+    want = [w for w in _cs_writes(cs_phone)]
+    got = _py_writes(_slice(py, 'def _compute_hash(self)', 'def __str__(self)'))
+    check('RenderPhone.Hash: 写入项数与 C# 一致（%d）' % len(want), len(want) == len(got),
+          'C#=%r\n       我们=%r' % (want, got))
+    check('RenderPhone.Hash: 写入顺序与 C# 逐项一致', want == got,
+          'C#=%r\n       我们=%r' % (want, got))
+
+    # ---- RenderPhrase.Hash(bool)（前半：与 postEffect 无关的部分）
+    cs_phrase = _slice(cs, 'private ulong Hash(bool postEffect)', 'internal static RenderPhrase BuildXsyVariant')
+    want2 = _cs_writes(cs_phrase)
+    # C# 里 phones / curves 是 foreach + 两条 Write，Python 同样两条，序列可比
+    got2 = _py_writes(_slice(py, 'def _hash(self, post_effect', 'def add_cache_file'))
+    check('RenderPhrase.Hash: 写入顺序与 C# 逐项一致（含 postEffect 段）', want2 == got2,
+          'C#=%r\n       我们=%r' % (want2, got2))
+
+    # ---- postEffect 里 8 条曲线的先后顺序
+    m = re.search(r'new float\[\]\[\]\s*\{(.*?)\}', cs_phrase, re.S)
+    want3 = [_norm_ident(x) for x in m.group(1).split(',')] if m else None
+    m2 = re.search(r'for array in \((.*?)\):', _slice(py, 'def _hash(self, post_effect', 'def add_cache_file'), re.S)
+    got3 = [_norm_ident(x) for x in m2.group(1).split(',')] if m2 else None
+    check('RenderPhrase.Hash: postEffect 的 8 条曲线顺序一致', want3 == got3,
+          'C#=%r\n       我们=%r' % (want3, got3))
+
+    # ---- pitchInterval 常量
+    want4 = re.findall(r'const int (?:pitchInterval|interval) = (\d+);', cs)
+    got4 = re.findall(r'PITCH_INTERVAL = (\d+)', py)
+    check('RenderPhrase: pitchInterval 与 SampleCurve.interval 都是 5，且我们也是 5',
+          want4 == ['5', '5'] and got4 == ['5'], 'C#=%r 我们=%r' % (want4, got4))
+
+    # ---- PitchPointShape 枚举（io / l / i / o / sp）
+    cs_note = _read('Ustx/UNote.cs')
+    if cs_note:
+        enum = _slice(cs_note, 'public enum PitchPointShape {', 'public class PitchPoint')
+        # 最后一枚枚值（sp）后面没有逗号，所以 ,? 要可选
+        want5 = re.findall(r'^\s{8}(\w+)\s*,?\s*$', enum, re.M)
+        our_model = open(os.path.join(ENGINE, 'singing', 'ustx', 'model.py'), encoding='utf-8').read()
+        got5 = re.findall(r"^\s{4}([A-Z]+) = '(\w+)'", _slice(our_model, 'class PitchPointShape', 'class UExpressionType'), re.M)
+        check('PitchPointShape: 枚举名集合一致（%d 个）' % len(want5),
+              [n.lower() for n, _ in got5] == want5, 'C#=%r 我们=%r' % (want5, got5))
+
+    # ---- PhraseLayout / CubicSplineSegment 的构造参数
+    import dataclasses as _dc
+    cs_layout = _read('Render/PhraseLayout.cs')
+    if cs_layout:
+        n_cs = len(re.findall(r'public PhraseLayout\(([^)]*)\)', cs_layout)[0].split(','))
+        n_our = len(_dc.fields(PhraseLayout))
+        check('PhraseLayout: C# 构造参数 4 个（startMs/endMs/leadingMs/estimatedMs）', n_cs == 4,
+              'C#=%d' % n_cs)
+        check('PhraseLayout: 我们的 dataclass 字段数一致', n_our == n_cs, '我们=%d' % n_our)
+    cs_spline = _read('Util/SplineInterpolate.cs')
+    if cs_spline:
+        m3 = re.search(r'public CubicSplineSegment\((.*?)\)\s*\{', cs_spline, re.S)
+        check('CubicSplineSegment: 构造参数 8 个（x_1,y_1,x0,y0,x1,y1,x2,y2）',
+              m3 is not None and len(m3.group(1).split(',')) == 8,
+              'got %r' % (m3.group(1).replace('\n', ' ') if m3 else None))
+
+
+def test_spline():
+    """CubicSplineSegment：端点夹取 + GetX 的牛顿迭代反解。"""
+    s = CubicSplineSegment(0, 0, 10, 0, 20, 100, 30, 100)
+    check('CubicSpline: x<=x0 取 y0', s.get_y(5) == 0.0, 'got %r' % s.get_y(5))
+    check('CubicSpline: x>=x1 取 y1', s.get_y(25) == 100.0, 'got %r' % s.get_y(25))
+    check('CubicSpline: 中点落在两端之间', 0.0 < s.get_y(15) < 100.0, 'got %r' % s.get_y(15))
+    # GetX：若首尾同高（y0 == y1），y > min 时按 C# 返回 x0/x1 的边界分支
+    flat = CubicSplineSegment(0, 50, 10, 50, 20, 50, 30, 50)
+    check('CubicSpline: 平坦段的 GetX 走端点分支', flat.get_x(50) in (10.0, 20.0),
+          'got %r' % flat.get_x(50))
+    # 单调上升段的 GetX 应能把 GetY 的结果反解回去（牛顿迭代 5 次，容差放宽）
+    up = CubicSplineSegment(0, 0, 0, 0, 100, 100, 200, 200)
+    ok = all(abs(up.get_y(up.get_x(y)) - y) < 1.0 for y in (20, 50, 80))
+    check('CubicSpline: GetX 与 GetY 近似互逆', ok,
+          'got %r' % [up.get_y(up.get_x(y)) for y in (20, 50, 80)])
+
+
+def test_musicmath_extra():
+    """MusicMath 的插值 / 常量换算（RenderPhrase 直接依赖）。"""
+    check('MusicMath.Linear 端点/中点', MusicMath.linear(0, 10, 0, 10, 5) == 5,
+          'got %r' % MusicMath.linear(0, 10, 0, 10, 5))
+    check('MusicMath.Linear 区间退化时返回 y1', MusicMath.linear(5, 5, 1, 2, 5) == 2,
+          'got %r' % MusicMath.linear(5, 5, 1, 2, 5))
+    check('MusicMath.DecibelToLinear(0)=1', abs(MusicMath.decibel_to_linear(0) - 1) < 1e-12)
+    check('MusicMath.DecibelToLinear(20)=10', abs(MusicMath.decibel_to_linear(20) - 10) < 1e-9)
+    check('MusicMath.DecibelToLinear(10)=sqrt(10)',
+          abs(MusicMath.decibel_to_linear(10) - 10 ** 0.5) < 1e-12)
+    check('MusicMath.TempoMsToTick(120, 500)=480', MusicMath.tempo_ms_to_tick(120, 500) == 480,
+          'got %r' % MusicMath.tempo_ms_to_tick(120, 500))
+    check('MusicMath.TempoTickToMs(120, 480)=500', MusicMath.tempo_tick_to_ms(120, 480) == 500,
+          'got %r' % MusicMath.tempo_tick_to_ms(120, 480))
+    # InterpolateShape：io 与 sp 都走 SinEasingInOut；l 走线性；i/o 各自单边
+    io = MusicMath.interpolate_shape(0, 10, 0, 10, 5, 'io')
+    sp = MusicMath.interpolate_shape(0, 10, 0, 10, 5, 'sp')
+    lin = MusicMath.interpolate_shape(0, 10, 0, 10, 5, 'l')
+    i_ = MusicMath.interpolate_shape(0, 10, 0, 10, 5, 'i')
+    o_ = MusicMath.interpolate_shape(0, 10, 0, 10, 5, 'o')
+    check('MusicMath.InterpolateShape: io == sp（同走 SinEasingInOut）', io == sp,
+          'io=%r sp=%r' % (io, sp))
+    check('MusicMath.InterpolateShape: l 与 io 不同', lin != io)
+    check('MusicMath.InterpolateShape: i/o 关于中点互补', abs(i_ + o_ - 10) < 1e-9,
+          'i=%r o=%r' % (i_, o_))
+
+
+def test_curve_source_sample():
+    """CurveSource.Sample 必须复刻 Array.BinarySearch 的三条分支。"""
+    c = CurveSource(abbr='dyn', xs=[0, 100, 200], ys=[10, 20, 30], default_y=7, min=0)
+    check('CurveSource.Sample: 命中顶点直接取 Ys（右邻点）', c.sample(100) == 20,
+          'got %r' % c.sample(100))
+    check('CurveSource.Sample: 命中首点', c.sample(0) == 10, 'got %r' % c.sample(0))
+    check('CurveSource.Sample: 区间内线性插值', c.sample(50) == 15, 'got %r' % c.sample(50))
+    check('CurveSource.Sample: 左越界回落 DefaultY', c.sample(-10) == 7,
+          'got %r' % c.sample(-10))
+    check('CurveSource.Sample: 右越界回落 DefaultY', c.sample(999) == 7,
+          'got %r' % c.sample(999))
+    check('CurveSource.Sample: 空曲线回落 DefaultY', CurveSource.empty('dyn', 7, 0).sample(5) == 7)
+    check('CurveSource.Empty: is_empty 为真', CurveSource.empty('dyn', 0, 0).is_empty)
+    check('CurveSource: 有数据时 is_empty 为假', not c.is_empty)
+
+
+def test_vibrato_source_eval():
+    """VibratoSource 与实时版（UVibrato）算式必须一致 —— 这里按公式逐项验证。"""
+    vib = VibratoSource(length=50, period=100, depth=50, vib_in=20, vib_out=20,
+                        shift=0, drift=0, vol_link=0)
+    note = NoteSource(position=0, duration=480, adjusted_tone=60.0, duration_ms=500.0)
+    # nStart = 1 - 50/100 = 0.5；nPos = 0.4 < nStart → y 归零，音高回到 AdjustedTone
+    v = vib.evaluate(0.4, 0.5, note)
+    check('Vibrato.Evaluate: nPos < nStart 时 y 归零',
+          abs(v.y - 60.0) < 1e-12, 'got %r' % v.y)
+    check('Vibrato.Evaluate: 返回的 tick = note.Position + Duration*nPos',
+          abs(v.x - 192) < 1e-9, 'got %r' % v.x)
+    # nPos = 0.625 落在颤音区内（nStart=0.5，进区 0.6，出区 0.9），t=0.25 → sin=1
+    import math as _math
+    v2 = vib.evaluate(0.625, 0.5, note)
+    expect_y = 60.0 + (_math.sin(2 * _math.pi * 0.25) * 50 + 50 / 100 * 0) / 100
+    check('Vibrato.Evaluate: 区内按 sin 起伏（AdjustedTone + y/100）',
+          abs(v2.y - expect_y) < 1e-9, '期望≈%r 得到 %r' % (expect_y, v2.y))
+    # 反相颤音：VibratoSource（快照版）里局部 shift 是死代码，正负 volLink 结果同值
+    pos = VibratoSource(length=100, period=100, depth=0, vib_in=0, vib_out=0,
+                        shift=0, drift=0, vol_link=50)
+    neg = VibratoSource(length=100, period=100, depth=0, vib_in=0, vib_out=0,
+                        shift=0, drift=0, vol_link=-50)
+    same = all(abs(pos.evaluate_volume(x, 1.0) - neg.evaluate_volume(x, 1.0)) < 1e-12
+               for x in (0.1, 0.25, 0.4, 0.6))
+    check('Vibrato.EvaluateVolume: 照搬快照版 —— volLink 正负同值（C# 局部 shift 为死代码）', same,
+          'pos(0.25)=%r neg(0.25)=%r' % (pos.evaluate_volume(0.25, 1.0),
+                                         neg.evaluate_volume(0.25, 1.0)))
+    check('Vibrato.EvaluateVolume: volLink=25% 时仍有 ±0.2 的起伏',
+          abs(pos.evaluate_volume(0.25, 1.0) - 1.1) < 1e-9,
+          'got %r' % pos.evaluate_volume(0.25, 1.0))
+    check('Vibrato.EvaluateVolume: volLink=0 时恒为 1',
+          VibratoSource(length=50, period=100, depth=50, vib_in=0, vib_out=0,
+                        vol_link=0).evaluate_volume(0.5, 1.0) == 1.0)
+
+
+class _FakeRenderer(IRenderer):
+    """只为驱动 RenderPhrase 的最小渲染器（Layout 直接回报音素跨度）。"""
+
+    singer_type = USingerType.CLASSIC
+
+    def supports_expression(self, descriptor):
+        return False
+
+    def layout(self, phrase):
+        return RenderResult(samples=None, leading_ms=phrase.leading_ms,
+                            position_ms=phrase.position_ms,
+                            estimated_length_ms=phrase.duration_ms)
+
+    async def render(self, phrase, progress=None, track_no=0, cancellation=None,
+                     is_pre_render=False, render_events=None):
+        return RenderResult()
+
+    def load_rendered_pitch(self, phrase, selected_note_positions=None):
+        return RenderPitchResult()
+
+    def get_suggested_expressions(self, singer, render_settings):
+        return []
+
+
+class _FakeSinger:
+    id = 'test-singer'
+
+
+def _mk_phrase_source(notes, curves=None, descriptors=None, note_pitch_points=None):
+    proj = UProject()
+    ta = TimeAxis()
+    ta.build_segments(proj)
+    n = len(notes)
+    for i, note in enumerate(notes):
+        note.prev = i - 1 if i > 0 else -1
+        note.next = i + 1 if i < n - 1 else -1
+        note.extends = -1
+        if note_pitch_points and i in note_pitch_points:
+            note.pitch_points = note_pitch_points[i]
+    return PhraseSource(part_position=0, axis=ta, default_bpm=120.0,
+                        singer=_FakeSinger(), renderer=_FakeRenderer(),
+                        resampler='', wavtool='', classic_singer=None,
+                        modp_supported=False, notes=notes,
+                        curves=curves or [], curve_descriptors=descriptors or [],
+                        expression_graph=None)
+
+
+def _mk_note(duration=480, end=480, tone=60, position=0, adjusted_tone=60.0):
+    return NoteSource(index=0, position=position, duration=duration, end=end,
+                      lyric='a', tone=tone, tuning=0, adjusted_tone=adjusted_tone,
+                      duration_ms=500.0, prev=-1, next=-1, extends=-1)
+
+
+def _mk_phoneme(**kw):
+    base = dict(position=0, duration=480, end=480,
+                position_ms=0.0, duration_ms=500.0, end_ms=500.0,
+                preutter=50.0, overlap=10.0, tail_intrude=25.0, tail_overlap=5.0,
+                leading=50, phoneme='a', tone=60, note_index=0,
+                tempo=120.0, adjusted_tempo=120.0, resampler='', flags=[], suffix='',
+                suffix2=None, volume=100.0, velocity=100.0, modulation=0.0,
+                direct=False, tone_shift=0,
+                envelope=[Vector2(0, 0), Vector2(0, 100), Vector2(0, 100),
+                          Vector2(0, 100), Vector2(0, 0)])
+    base.update(kw)
+    return PhonemeSource(**base)
+
+
+def test_render_note_phone_fields():
+    """RenderNote / RenderPhone 的派生字段（`durCorrectionMs` 最容易搬错）。"""
+    # IRenderer 的 ToString 语义：同类实例必须给出同一字符串（否则乐句哈希会漂）
+    r1, r2 = _FakeRenderer(), _FakeRenderer()
+    check('IRenderer.__str__: 同类实例同一字符串（不含内存地址）', str(r1) == str(r2),
+          'got %r / %r' % (str(r1), str(r2)))
+    check('IRenderer.__str__: 含类型名而不含 0x', 'FakeRenderer' in str(r1) and '0x' not in str(r1),
+          'got %r' % str(r1))
+
+    src = _mk_phrase_source([_mk_note()])
+    ph = _mk_phoneme()
+    p = RenderPhone(src, ph, 0)
+    check('RenderPhone.dur_correction_ms = preutter - tail_intrude + tail_overlap',
+          abs(p.dur_correction_ms - 30.0) < 1e-12, 'got %r' % p.dur_correction_ms)
+    check('RenderPhone.leading_ms = preutter', p.leading_ms == 50.0)
+    check('RenderPhone.position = partPosition + position - phrasePosition',
+          p.position == 0, 'got %r' % p.position)
+    check('RenderPhone.end = position + duration', p.end == 480, 'got %r' % p.end)
+    check('RenderPhone.note_index 随 PhonemeSource', p.note_index == 0)
+    check('RenderPhone.hash 是 64 位无符号', 0 <= p.hash < 2 ** 64)
+
+    rn = RenderNote(_mk_note(), src.axis, 0, 0)
+    check('RenderNote.position 相对乐句起点', rn.position == 0, 'got %r' % rn.position)
+    check('RenderNote.end = position + duration', rn.end == 480)
+    check('RenderNote.positionMs 用绝对 tick 查轴', abs(rn.position_ms - 0.0) < 1e-9)
+    check('RenderNote.endMs = 480 tick → 500 ms', abs(rn.end_ms - 500.0) < 1e-9,
+          'got %r' % rn.end_ms)
+
+    # with_oto / xsy 掩码
+    p.with_oto(None)
+    q = p.with_oto(object())
+    check('RenderPhone.WithOto: 哈希异或掩码', q.hash == (p.hash ^ RenderPhone.OTO2_HASH_MASK),
+          'got %r' % q.hash)
+    check('RenderPhone.WithOto: 原对象不被改动', p.oto is ph.oto)
+
+
+def test_render_phrase_build():
+    """RenderPhrase 的乐句装配：音高铺平、颤音、PITD、曲线、两级哈希。"""
+    src = _mk_phrase_source([_mk_note()])
+    ph = _mk_phoneme()
+    rp = RenderPhrase(src, [ph], 0, 1)
+
+    check('RenderPhrase.position = partPosition + 首个音素 position', rp.position == 0)
+    check('RenderPhrase.end = partPosition + 末音素 end', rp.end == 480)
+    check('RenderPhrase.duration = end - position', rp.duration == 480)
+    check('RenderPhrase.leading 取首个音素的 leading', rp.leading == 50)
+    check('RenderPhrase.positionMs/endMs 取首末音素', (rp.position_ms, rp.end_ms) == (0.0, 500.0))
+    check('RenderPhrase.durationMs = endMs - positionMs', rp.duration_ms == 500.0)
+
+    # pitchStart = position - partPosition - leading = -50
+    # 数组长度 = (end - partPosition - pitchStart) / 5 + 1 = (480 + 50)/5 + 1 = 107
+    check('RenderPhrase.pitches 长度按 pitchInterval=5 铺满', len(rp.pitches) == 107,
+          'got %d' % len(rp.pitches))
+    check('RenderPhrase.pitches 无颤音/弯音时按音符铺平（AdjustedTone*100）',
+          set(rp.pitches) == {6000.0}, 'got %r' % sorted(set(rp.pitches))[:4])
+    check('RenderPhrase.phones 数量 = 乐句内音素数', len(rp.phones) == 1)
+    check('RenderPhrase.notes 数量 = 乐句覆盖音符数', len(rp.notes) == 1)
+    check('RenderPhrase.layout 由 renderer.Layout 得出', rp.layout.estimated_ms == 500.0,
+          'got %r' % (rp.layout,))
+
+    # 两级哈希：preEffectHash 不含音高，hash 含
+    src2 = _mk_phrase_source([_mk_note(adjusted_tone=62.0)])
+    rp2 = RenderPhrase(src2, [_mk_phoneme()], 0, 1)
+    check('RenderPhrase: 仅改 AdjustedTone 时 preEffectHash 不变',
+          rp2.pre_effect_hash == rp.pre_effect_hash)
+    check('RenderPhrase: 仅改 AdjustedTone 时 hash 改变', rp2.hash != rp.hash)
+    check('RenderPhrase: 同一输入两次构建 hash 一致（确定性）',
+          RenderPhrase(src, [_mk_phoneme()], 0, 1).hash == rp.hash)
+
+    # 颤音：pitches 不再是常数
+    src3 = _mk_phrase_source([_mk_note()])
+    src3.notes[0].vibrato = VibratoSource(length=100, period=100, depth=50,
+                                          vib_in=0, vib_out=0, shift=0, drift=0, vol_link=0)
+    rp3 = RenderPhrase(src3, [_mk_phoneme()], 0, 1)
+    check('RenderPhrase: 有颤音时 pitches 有起伏', len(set(rp3.pitches)) > 1,
+          'got %d 个不同值' % len(set(rp3.pitches)))
+    check('RenderPhrase: 仅改颤音不改变音素哈希',
+          rp3.phones[0].hash == rp.phones[0].hash)
+    check('RenderPhrase: 仅改颤音会改变乐句哈希', rp3.hash != rp.hash)
+
+    # PITD：整个音高被抬高
+    pitd = CurveSource(abbr=Ustx.PITD, xs=[0, 480], ys=[0, 100], default_y=0, min=0)
+    src4 = _mk_phrase_source([_mk_note()], curves=[pitd])
+    rp4 = RenderPhrase(src4, [_mk_phoneme()], 0, 1)
+    check('RenderPhrase: PITD 叠加到 pitches 末点 (+100)',
+          abs(rp4.pitches[-1] - 6100.0) < 1e-9, 'got %r' % rp4.pitches[-1])
+    check('RenderPhrase: pitchesBeforeDeviation 保留 PITD 之前的值',
+          set(rp4.pitches_before_deviation) == {6000.0})
+
+    # 曲线：DYN 走分贝换算，未给数据的表达式走默认值
+    dyn = CurveSource(abbr=Ustx.DYN, xs=[0, 480], ys=[0, 100], default_y=0, min=0.0)
+    descs = [UExpressionDescriptor(name='Dynamics', abbr='dyn', min=0, max=100, default_value=0),
+             UExpressionDescriptor(name='Gender', abbr='genc', min=-100, max=100, default_value=0)]
+    src5 = _mk_phrase_source([_mk_note()], curves=[dyn], descriptors=descs)
+    rp5 = RenderPhrase(src5, [_mk_phoneme()], 0, 1)
+    check('RenderPhrase: DYN 曲线末点 = DecibelToLinear(10)',
+          rp5.dynamics is not None and abs(rp5.dynamics[-1] - 10 ** 0.5) < 1e-9,
+          'got %r' % (rp5.dynamics[-1] if rp5.dynamics else None))
+    check('RenderPhrase: DYN 起点取 min → 换算为 0', rp5.dynamics[0] == 0.0,
+          'got %r' % rp5.dynamics[0])
+    check('RenderPhrase: 缺数据的 GENC 走 CurveSource.Empty 的默认值',
+          rp5.gender == [0.0] * len(rp5.pitches), 'got %r' % (rp5.gender[:3] if rp5.gender else None))
+    check('RenderPhrase: 未定义的曲线进 curves 列表',
+          all(name != 'dyn' and name != 'genc' for name, _ in rp5.curves))
+
+    # 自定义曲线
+    vib_c = CurveSource(abbr='vib', xs=[0, 480], ys=[0, 50], default_y=0, min=0.0)
+    desc6 = UExpressionDescriptor(name='Vib', abbr='vib', min=0, max=100, default_value=0)
+    src6 = _mk_phrase_source([_mk_note()], curves=[vib_c], descriptors=[desc6])
+    rp6 = RenderPhrase(src6, [_mk_phoneme()], 0, 1)
+    check('RenderPhrase: 自定义曲线进 curves', len(rp6.curves) == 1 and rp6.curves[0][0] == 'vib',
+          'got %r' % [(n, len(a)) for n, a in rp6.curves])
+    check('RenderPhrase: 自定义曲线长度与 pitches 一致',
+          len(rp6.curves[0][1]) == len(rp6.pitches))
+
+    # 弯音点（io 形状走 InterpolateShape）
+    pp = [PitchPoint(0, 0, PitchPointShape.IO), PitchPoint(240, 0, PitchPointShape.IO)]
+    src7 = _mk_phrase_source([_mk_note()], note_pitch_points={0: pp})
+    rp7 = RenderPhrase(src7, [_mk_phoneme()], 0, 1)
+    check('RenderPhrase: 有弯音点时 pitches 仍在合理量级（±2000 音分内）',
+          all(abs(v - 6000.0) < 2000 for v in rp7.pitches),
+          '偏差异常: %r' % sorted({round(v, 2) for v in rp7.pitches})[:5])
+
+    # 缓存文件记录
+    rp7.add_cache_file(r'C:\tmp\abc.wav')
+    rp7.add_cache_file(r'C:\tmp\abc.frq')
+    check('RenderPhrase.add_cache_file: 按去扩展名去重', rp7.cache_files == ['abc'],
+          'got %r' % rp7.cache_files)
+
+    # xsy 变体
+    v = RenderPhrase.build_xsy_variant(rp)
+    check('RenderPhrase.BuildXsyVariant: 掩码作用于乐句哈希',
+          v.hash == (rp.hash ^ RenderPhone.OTO2_HASH_MASK))
+    check('RenderPhrase.BuildXsyVariant: 原乐句不被改动', rp.hash != v.hash)
+
+
+def test_xxhash64():
+    """XXH64 官方测试向量 —— 它对不上，所有缓存键都会静默错。"""
+    from singing.openutau import xxh64 as _x
+    check('XXH64("")=0xEF46DB3751D8E999', _x(b'') == 0xEF46DB3751D8E999,
+          'got %s' % hex(_x(b'')))
+    check('XXH64("a")=0xD24EC4F1A98C6E5B', _x(b'a') == 0xD24EC4F1A98C6E5B,
+          'got %s' % hex(_x(b'a')))
+    check('XXH64("abc")=0x44BC2CF5AD770999', _x(b'abc') == 0x44BC2CF5AD770999,
+          'got %s' % hex(_x(b'abc')))
+    # 跨过 32 字节分支（>=32 走 4 路累加）
+    long = b'The quick brown fox jumps over the lazy dog'
+    check('XXH64: 长度 ≥ 32 的分支可用', len(hex(_x(long))) > 2 and _x(long) == _x(long))
+
+
 def main():
     print('--- Format.Ustx 常量 ---')
     test_format_constants()
@@ -399,6 +834,21 @@ def main():
     test_phonemizer_base()
     print('--- TimeAxis ---')
     test_timeaxis()
+    print('--- XXH64 ---')
+    test_xxhash64()
+    print('--- MusicMath 扩展（插值/换算） ---')
+    test_musicmath_extra()
+    print('--- CubicSplineSegment ---')
+    test_spline()
+    print('--- CurveSource / VibratoSource ---')
+    test_curve_source_sample()
+    test_vibrato_source_eval()
+    print('--- RenderPhrase 源码一致性（写入顺序/常量/枚举） ---')
+    test_render_phrase_source_conformance()
+    print('--- RenderNote / RenderPhone 派生字段 ---')
+    test_render_note_phone_fields()
+    print('--- RenderPhrase 乐句装配 ---')
+    test_render_phrase_build()
     print('\n结果: %d passed, %d failed' % (len(_PASS), len(_FAIL)))
     return 1 if _FAIL else 0
 

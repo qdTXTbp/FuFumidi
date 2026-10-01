@@ -14,17 +14,36 @@
   - `openutau/timeaxis.py`    tick↔ms 换算轴（TimeAxis.cs）
   - `openutau/phonemizer.py`  音素化器基类（Api/Phonemizer.cs）
   - `openutau/renderer.py`    渲染器接口（Render/IRenderer.cs）
+  - `openutau/music_math.py`  音乐/时间换算（Util/MusicMath.cs）
+  - `openutau/spline.py`      三次样条（Util/SplineInterpolate.cs）
+  - `openutau/phrase_layout.py` 乐句时域排布（Render/PhraseLayout.cs）
+  - `openutau/xxhash64.py`    XXH64（K4os.Hash.xxHash.XXH64）
+  - `openutau/pipeline_source.py` 渲染输入契约（Pipeline/PhraseSource.cs）
+  - `openutau/render_phrase.py`   RenderNote/RenderPhone/RenderPhrase（Render/RenderPhrase.cs）
+  - `openutau/oto.py`         原音模型（Ustx/USinger.cs 的 UOto + Classic/VoiceBank.cs）
+  - `openutau/singer.py`      USinger 基类（Ustx/USinger.cs）
+  - `openutau/phoneme.py`     UPhoneme（Ustx/UPhoneme.cs）
 
 未照搬（后续）：
-  - `USinger` / `UPitch` 之外的 UPhoneme、RenderPhrase
   - `Classic/ClassicRenderer.cs`、`Classic/WorldlineRenderer.cs`（M2-a 主体）
+  - `Classic/ClassicSinger.cs` / `Ustx/UOtoFrq.cs`（MOD+ 与 .frq 依赖）
+  - `Pipeline/PhraseBuilder.cs` / `PhraseSource.FromPart`（乐句切分）
+  - `ExpressionGraph/*`（表达式图；`RenderPhrase` 里对应的分支恒跳过）
   - `OpenUtau.Plugin.Builtin/*Phonemizer.cs` 的具体实现（M2-b 主体）
 """
 
 from .format import Ustx  # noqa: F401
-from .oto import (  # noqa: F401
-    MusicMath,
+from .music_math import (  # noqa: F401
+    KEYS_IN_OCTAVE,
     NAME_IN_OCTAVE,
+    NUMBERED_NOTATIONS,
+    SOLFEGES,
+    ZOOM_RATIOS,
+    MusicMath,
+    fdiv,
+    idiv,
+)
+from .oto import (  # noqa: F401
     Oto,
     OtoSet,
     Subbank,
@@ -32,6 +51,7 @@ from .oto import (  # noqa: F401
     UOtoSet,
     USubbank,
 )
+from .phrase_layout import PhraseLayout  # noqa: F401
 from .phonemizer import (  # noqa: F401
     Note,
     Phoneme,
@@ -43,6 +63,19 @@ from .phonemizer import (  # noqa: F401
     registered,
 )
 from .phoneme import UPhoneme, ValidateOptions  # noqa: F401
+from .pipeline_source import (  # noqa: F401
+    CurveSource,
+    NoteSource,
+    PhonemeSource,
+    PhraseSource,
+    VibratoSource,
+)
+from .render_phrase import (  # noqa: F401
+    PITCH_INTERVAL,
+    RenderNote,
+    RenderPhone,
+    RenderPhrase,
+)
 from .renderer import (  # noqa: F401
     IRenderer,
     RenderPhraseEvents,
@@ -57,16 +90,24 @@ from .singer import (  # noqa: F401
     USingerType,
     Preferences,
 )
+from .spline import CubicSplineSegment  # noqa: F401
 from .timeaxis import TimeAxis  # noqa: F401
+from .xxhash64 import digest_of, xxh64  # noqa: F401
 
 __all__ = [
     'Ustx',
     'TimeAxis',
-    'MusicMath', 'NAME_IN_OCTAVE', 'UOto', 'UOtoSet', 'USubbank', 'Oto', 'OtoSet', 'Subbank',
+    'MusicMath', 'NAME_IN_OCTAVE', 'KEYS_IN_OCTAVE', 'SOLFEGES', 'NUMBERED_NOTATIONS',
+    'ZOOM_RATIOS', 'fdiv', 'idiv',
+    'UOto', 'UOtoSet', 'USubbank', 'Oto', 'OtoSet', 'Subbank',
     'Phonemizer', 'Note', 'Phoneme', 'PhonemeAttributes', 'PhonemeExpression', 'Result',
     'register', 'registered',
     'UPhoneme', 'ValidateOptions',
     'IRenderer', 'RenderResult', 'RenderPitchResult', 'RenderRealCurveResult',
     'RenderPhraseEvents',
     'USinger', 'USingerType', 'SINGER_TYPE_NAMES', 'SINGER_TYPE_FROM_NAME', 'Preferences',
+    'xxh64', 'digest_of',
+    'CubicSplineSegment', 'PhraseLayout',
+    'VibratoSource', 'CurveSource', 'NoteSource', 'PhonemeSource', 'PhraseSource',
+    'RenderNote', 'RenderPhone', 'RenderPhrase', 'PITCH_INTERVAL',
 ]
