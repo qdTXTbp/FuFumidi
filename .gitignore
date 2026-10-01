@@ -7,6 +7,7 @@ release-ci/
 # 本地测试用的构建输出目录（内含 win-unpacked，产物数百文件）
 release-beta/
 release-test/
+release-unpacked/
 gpu-package/
 gpu-package.packbak/
 # GPU 增强包的 staging / 打包输出（解压后都是数 GB，绝不入库）

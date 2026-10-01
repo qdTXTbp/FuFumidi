@@ -22,6 +22,11 @@ files:
   - "!release/**"
   - "!release-*/**"
   - "!*-unpacked/**"
+  # GPU 增强包的构建中间产物：gpu-package/（cuda/directml staging）、
+  # gpu-package-rocm/（4.5GB / 1.8 万文件）、gpu-package-out/（分卷输出 6.8GB）。
+  # 它们不在 release* 命名下，只靠上面三条排不掉 —— 实测误打进 asar 会让它
+  # 从 ~70MB 膨胀到 **15GB**（36086 条目，其中 3.6 万来自这几个目录）。
+  - "!gpu-package*/**"
   - "!build.js"
   - "!electron-builder.yml"
   # --- 3.2.6 全面自查：开发残留不入包（运行时零引用，已逐一核实） ---
