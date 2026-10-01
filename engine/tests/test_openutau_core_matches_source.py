@@ -21,7 +21,9 @@ if ENGINE not in sys.path:
 
 REF = os.environ.get('OPENUTAU_REF') or r'D:/FuFuMIDI/_ref/OpenUtau/OpenUtau.Core'
 
-from singing.openutau import Phonemizer, TimeAxis, USingerType  # noqa: E402
+from singing.openutau import (  # noqa: E402
+    NAME_IN_OCTAVE, MusicMath, Oto, OtoSet, Phonemizer, Subbank, TimeAxis, UOto, UOtoSet, USingerType, USubbank,
+)
 from singing.openutau.renderer import SINGER_TYPE_NAMES  # noqa: E402
 from singing.ustx import UExpressionDescriptor, UProject, UTrack  # noqa: E402
 from singing.ustx.format import Ustx  # noqa: E402
@@ -154,11 +156,73 @@ def ta3_ok(ta):
         return False
 
 
+def test_musicmath():
+    src = _read('Util/MusicMath.cs')
+    if src is None:
+        print('  SKIP 找不到 Util/MusicMath.cs')
+        return
+    block = re.search(r'NameInOctave\s*=\s*new Dictionary<string, int>\s*\{(.*?)\};', src, re.S)
+    if not block:
+        check('MusicMath: 从源码解析 NameInOctave', False)
+        return
+    want = {}
+    for name, val in re.findall(r'\{\s*"([^"]+)"\s*,\s*(\d+)\s*\}', block.group(1)):
+        want[name] = int(val)
+    check('MusicMath: NameInOctave 与源码一致（%d 项）' % len(want), want == NAME_IN_OCTAVE,
+          'C#=%r 我们=%r' % (want, NAME_IN_OCTAVE))
+    # 功能：C4=60，C#4=61，Db4=61，越界返回 -1
+    cases = [('C4', 60), ('C#4', 61), ('Db4', 61), ('A4', 69), ('B3', 59), ('C-1', 0)]
+    for name, exp in cases:
+        got = MusicMath.name_to_tone(name)
+        check('MusicMath.NameToTone(%s)=%d' % (name, exp), got == exp, 'got %r' % got)
+    for bad in ('X4', 'Cx', '', 'C'):
+        check('MusicMath.NameToTone(%r) 返回 -1' % bad, MusicMath.name_to_tone(bad) == -1,
+              'got %r' % MusicMath.name_to_tone(bad))
+
+
+def test_oto_model():
+    # 夹紧/取整规则：offset/consonant/preutter 夹到 ≥0 且 round 3 位；cutoff/overlap 只 round
+    raw = Oto(alias='a', phonetic='a', wav='a.wav',
+              offset=-5.12345, consonant=2.00049, cutoff=-3.14159,
+              preutter=10.55555, overlap=-1.23456)
+    us = UOtoSet(OtoSet(file='oto.ini', name='main'), singers_path='/vb')
+    u = UOto(raw, us, None)
+    check('UOto: offset 夹到 ≥0 且 round3', u.offset == 0.0, 'got %r' % u.offset)
+    check('UOto: consonant round3', u.consonant == 2.0, 'got %r' % u.consonant)
+    check('UOto: cutoff 保留负值只 round3', u.cutoff == -3.142, 'got %r' % u.cutoff)
+    check('UOto: preutter round3', u.preutter == 10.556, 'got %r' % u.preutter)
+    check('UOto: overlap 保留负值只 round3', u.overlap == -1.235, 'got %r' % u.overlap)
+    check('UOto: file 拼到 otoSet.location', u.file.replace('\\', '/').endswith('/vb/a.wav'),
+          'got %r' % u.file)
+    d = UOto.of_dummy('ka')
+    check('UOto.OfDummy: alias/phonetic 都是给定值', d.alias == 'ka' and d.phonetic == 'ka')
+    check('UOto: 无 subbanks 时 Color 为空', u.color == '' and u.prefix == '' and u.suffix == '')
+
+    # USubbank：ToneRanges 字符串 → tone_set
+    sb = USubbank(Subbank(color='Soft', prefix='P', suffix='S', tone_ranges=['C4', 'E4-G4']))
+    check('USubbank: 单音 + 闭区间展开', sb.tone_set == [60, 64, 65, 66, 67], 'got %r' % sb.tone_set)
+    check('USubbank: ToneRangesString 回写', sb.tone_ranges_string == 'C4,E4-G4',
+          'got %r' % sb.tone_ranges_string)
+    check('USubbank: 非法音名静默跳过', USubbank(Subbank(tone_ranges=['X9'])).tone_set == [])
+    # 注意：无参路径 `UOto()` 下 subbanks 保持 null（与 C# 一致），
+    # 所以测 subbank 相关行为必须走「带原始 oto」的构造路径。
+    check('UOto: 无参构造时 subbanks 为 None（与 C# 一致）', UOto().subbanks is None)
+    ok_set = UOtoSet(OtoSet(file='oto.ini', name='main'), singers_path='/vb')
+    us2 = UOto(Oto(alias='a', wav='a.wav'), ok_set, [USubbank(Subbank(color=''))])
+    check('UOto: Color 空子音色显示 (main)', us2.color == '(main)', 'got %r' % us2.color)
+    check('UOto: IsColorMatch 命中空色', us2.is_color_match(''), '未命中空色')
+    check('UOto: IsColorMatch 未命中非空色', not us2.is_color_match('Soft'))
+
+
 def main():
     print('--- Format.Ustx 常量 ---')
     test_format_constants()
     print('--- USingerType 枚举 ---')
     test_singer_type_enum()
+    print('--- MusicMath 音名换算 ---')
+    test_musicmath()
+    print('--- UOto / USubbank 模型 ---')
+    test_oto_model()
     print('--- Phonemizer 基类 ---')
     test_phonemizer_base()
     print('--- TimeAxis ---')

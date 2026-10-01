@@ -22,6 +22,16 @@
 """
 
 from .format import Ustx  # noqa: F401
+from .oto import (  # noqa: F401
+    MusicMath,
+    NAME_IN_OCTAVE,
+    Oto,
+    OtoSet,
+    Subbank,
+    UOto,
+    UOtoSet,
+    USubbank,
+)
 from .phonemizer import (  # noqa: F401
     Note,
     Phoneme,
@@ -45,6 +55,7 @@ from .timeaxis import TimeAxis  # noqa: F401
 __all__ = [
     'Ustx',
     'TimeAxis',
+    'MusicMath', 'NAME_IN_OCTAVE', 'UOto', 'UOtoSet', 'USubbank', 'Oto', 'OtoSet', 'Subbank',
     'Phonemizer', 'Note', 'Phoneme', 'PhonemeAttributes', 'PhonemeExpression', 'Result',
     'register', 'registered',
     'IRenderer', 'RenderResult', 'RenderPitchResult', 'RenderRealCurveResult',
