@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import unicodedata
+import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENGINE = os.path.dirname(HERE)
@@ -1905,6 +1906,70 @@ def test_worldline_pure():
           native.available is False and bool(native.error))
 
 
+def test_pipeline_identities():
+    """`Pipeline/Identities.cs` —— 值语义标识与"影响范围"。"""
+    from singing.openutau import DocRevision, ImpactKind, ImpactSet, PartId
+    cs = _read('Pipeline/Identities.cs')
+    if cs is None:
+        print('  SKIP 找不到 Pipeline/Identities.cs')
+        return
+
+    # ---- 源码一致性：ImpactKind 的数值各自成位
+    want = dict((k.upper(), int(v)) for k, v in
+                re.findall(r'^\s{8}(\w+) = (\d+),', cs, re.M))
+    got = {'NONE': ImpactKind.NONE, 'PART': ImpactKind.PART, 'CURVES': ImpactKind.CURVES,
+           'MIX': ImpactKind.MIX, 'TRACK': ImpactKind.TRACK, 'PROJECT': ImpactKind.PROJECT}
+    check('Identities: ImpactKind 数值与 C# 一致（0/1/2/4/8/16，各自成位）',
+          want == got, 'C#=%r 我们=%r' % (want, got))
+    check('Identities: ImpactKind 不是连续序号（别"整理"）',
+          sorted(got.values()) == [0, 1, 2, 4, 8, 16])
+    check('Identities: PartId 的 ToString 用 "N" 格式', 'Value.ToString("N")' in cs)
+    check('Identities: PartId / DocRevision 是 record struct（值语义）',
+          'readonly record struct PartId(Guid Value)' in cs
+          and 'readonly record struct DocRevision(long Value)' in cs)
+
+    # ---- PartId 值语义
+    a = PartId.new()
+    b = PartId(a.value)
+    check('Identities.PartId: 同 Guid → 相等（值语义）', a == b)
+    check('Identities.PartId: 可哈希且去重（能当字典键）', len({a, b}) == 1)
+    check('Identities.PartId: __str__ 是 32 位小写十六进制、无连字符',
+          len(str(a)) == 32 and str(a) == str(a).lower() and '-' not in str(a),
+          'got %r' % str(a))
+    check('Identities.PartId: New() 每次不同', PartId.new() != PartId.new())
+    check('Identities.PartId.compare_to: 自反为 0 / 小于为 -1 / 大于为 1',
+          a.compare_to(b) == 0
+          and PartId(uuid.UUID(int=1)).compare_to(PartId(uuid.UUID(int=2))) == -1
+          and PartId(uuid.UUID(int=2)).compare_to(PartId(uuid.UUID(int=1))) == 1)
+
+    # ---- DocRevision
+    check('Identities.DocRevision.compare_to: 基本序',
+          DocRevision(1).compare_to(DocRevision(2)) == -1
+          and DocRevision(2).compare_to(DocRevision(2)) == 0
+          and DocRevision(3).compare_to(DocRevision(2)) == 1)
+    check('Identities.DocRevision: __str__ 是十进制', str(DocRevision(42)) == '42')
+
+    # ---- ImpactSet
+    check('Identities.ImpactSet.all(): kind=Project 且三个载荷都是 None',
+          ImpactSet.all().kind == ImpactKind.PROJECT and ImpactSet.all().part is None
+          and ImpactSet.all().track is None and ImpactSet.all().curve_abbrs is None)
+    check('Identities.ImpactSet.none(): kind=None',
+          ImpactSet.none().kind == ImpactKind.NONE)
+    check('Identities.ImpactSet.mix_only(): kind=Mix',
+          ImpactSet.mix_only().kind == ImpactKind.MIX)
+    check('Identities.ImpactSet.part_of(): 带 part、其余为 None',
+          (lambda s: s.kind == ImpactKind.PART and s.part == 'P' and s.track is None
+           and s.curve_abbrs is None)(ImpactSet.part_of('P')))
+    check('Identities.ImpactSet.track_of(): 带 track、part 为 None',
+          (lambda s: s.kind == ImpactKind.TRACK and s.track == 'T' and s.part is None)
+          (ImpactSet.track_of('T')))
+    check('Identities.ImpactSet.curves_of(): 曲线缩写是**列表**（null 与空列表不同）',
+          (lambda s: s.kind == ImpactKind.CURVES and s.curve_abbrs == ['dyn', 'pitd'])
+          (ImpactSet.curves_of('P', 'dyn', 'pitd')))
+    check('Identities.ImpactSet.curves_of(): 不给缩写时是**空列表**（不是 None）',
+          ImpactSet.curves_of('P').curve_abbrs == [])
+
+
 def test_xxhash64():
     """XXH32/XXH64 官方测试向量 —— 对不上，所有缓存键都会静默错。"""
     from singing.openutau.xxhash import xxh32, xxh64 as _x
@@ -1959,6 +2024,8 @@ def main():
     test_render_phrase_build()
     print('--- Renderers 注册表 / ApplyDynamics ---')
     test_renderers_registry()
+    print('--- Pipeline/Identities ---')
+    test_pipeline_identities()
     print('--- Render/Worldline（纯逻辑） ---')
     test_worldline_pure()
     print('--- Classic/Ini ---')

@@ -126,6 +126,12 @@ from .singer import (  # noqa: F401
 from .spline import CubicSplineSegment  # noqa: F401
 from .base_chinese import BaseChinesePhonemizer  # noqa: F401
 from .timeaxis import TimeAxis  # noqa: F401
+from .pipeline_identities import (  # noqa: F401
+    DocRevision,
+    ImpactKind,
+    ImpactSet,
+    PartId,
+)
 from .worldline import (  # noqa: F401
     FLOOR_F0,
     RESAMPLER_FFT_SIZE,
@@ -173,6 +179,7 @@ __all__ = [
     'USinger', 'USingerType', 'SINGER_TYPE_NAMES', 'SINGER_TYPE_FROM_NAME', 'Preferences',
     'xxh32', 'xxh64', 'digest_of32', 'digest_of64',
     'BaseChinesePhonemizer',
+    'PartId', 'DocRevision', 'ImpactKind', 'ImpactSet',
     'AnalysisConfig', 'SynthRequestError', 'CutOffExceedDurationError', 'CutOffBeforeOffsetError',
     'WorldlineNative', 'RESAMPLER_PADDING', 'RESAMPLER_VOICED_F0', 'FLOOR_F0',
     'RESAMPLER_FS', 'RESAMPLER_HOP_SIZE', 'RESAMPLER_FFT_SIZE',

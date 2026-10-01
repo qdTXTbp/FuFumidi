@@ -8,8 +8,9 @@
 Python 侧作为纯数据类，字段名与 C# 逐一对齐。）
 
 ## 与 C# 的等价性差异
-- 少数字段的类型来自我们尚未照搬的模块（`PartId` / `DocRevision` / 表达式图程序 /
-  `PhonemeAnchors`），这里用 `Any` 占位并注明 —— 属于"类型未搬"，不是行为差异。
+- `PartId` / `DocRevision` 已照搬（`pipeline_identities.py`），不再用占位类型。
+- 仍用 `Any` 占位的只剩表达式图程序（`ExpressionGraphProgram`）与 `PhonemeAnchors` ——
+  属于"类型未搬"，不是行为差异。
 - `VibratoSource.In` / `.Out` 在 C# 里是 `In`/`Out`（`in`/`out` 在 Python 是关键字），
   这里写作 `vib_in` / `vib_out`。
 - `VibratoSource.Evaluate` / `EvaluateVolume` 与 `CurveSource.Sample` / `Empty` 是
@@ -27,6 +28,7 @@ import math
 # C# 里这几处用的都是 System.Numerics.Vector2；ustx 包已为同一用途照搬了它。
 from ..ustx.model import PitchPoint, Vector2
 from .music_math import MusicMath, fdiv
+from .pipeline_identities import DocRevision, PartId
 
 
 @dataclass
@@ -221,8 +223,8 @@ class PhonemeSource:
 class PhraseSource:
     """对应 PhraseSource.cs 的 PhraseSource（一个乐句的全部输入）。"""
 
-    part_id: Any = None                        # PartId（未照搬，占位）
-    revision: Any = None                       # DocRevision（未照搬，占位）
+    part_id: Optional[PartId] = None           # PartId（Pipeline/Identities.cs）
+    revision: Optional[DocRevision] = None     # DocRevision（Pipeline/Identities.cs）
     generation: int = 0
     part_position: int = 0
     axis: Any = None                           # TimeAxis
