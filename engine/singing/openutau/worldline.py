@@ -77,8 +77,9 @@
 
 import ctypes
 import math
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, List, Optional, Sequence
+from typing import Any, List, Optional, Sequence, Tuple
 
 from .music_math import MusicMath, as_float32
 from .wave import Wave
@@ -114,6 +115,13 @@ class CutOffExceedDurationError(SynthRequestError):
 
 class CutOffBeforeOffsetError(SynthRequestError):
     """对应 `CutOffBeforeOffsetError`。"""
+
+
+class SynthCancelled(Exception):
+    """对应 C# 的 `OperationCanceledException`（`ParallelOptions.CancellationToken` 触发）。
+
+    `RenderPhrase`/渲染器只需 `catch` 它然后返回已有结果，语义与 C# 一致。
+    """
 
 
 # ---------------------------------------------------------------- AnalysisConfig
@@ -451,6 +459,9 @@ def blend_continuous_noise_features(segments: Sequence[Any], sp_size: int,
 
     比 `blend_features` 多混一条 `sp_harmonic`（谐波半边的包络）与逐帧 `stretch`。
     段对象需额外带 `sp_env_harmonic` 与 `stretch`（后者是**每帧**一个值）。
+
+    返回 `(total_frames, f0, sp, sp_harmonic, ap, stretch)` —— **六个**，
+    与 C# 传给 `WorldSynthesisContinuousNoise` 的五个数组 + 帧数一一对应。
     """
     total_frames = max(s.p4 for s in segments) + 1
     f0 = [0.0] * total_frames
@@ -494,7 +505,10 @@ def blend_continuous_noise_features(segments: Sequence[Any], sp_size: int,
             if f0[i] > f0_floor:
                 f0[i] = f0_fit[i]
 
-    return total_frames, f0, sp_harmonic, ap, stretch
+    # ★ 必须把 **sp 与 sp_harmonic 都返回** —— C# 的
+    #   `WorldSynthesisContinuousNoise(f0, sp, spHarmonic, ap, stretch, ...)` 要两个都吃。
+    #   （早前这版漏了 `sp`，而当时的测试跟着实现写成了 5 元组，于是"一致地错"。）
+    return total_frames, f0, sp, sp_harmonic, ap, stretch
 
 
 # ---------------------------------------------------------------- 原生边界
@@ -566,6 +580,15 @@ class WorldlineNative:
         lib.WorldSynthesisSampleCount.restype = ctypes.c_int
         lib.WorldSynthesisSampleCount.argtypes = [ctypes.c_int, ctypes.c_double, ctypes.c_int]
         # 扁平数组那一版重载（C# 里 `double[] mgcOrSp` 那个）
+        lib.WorldSynthesisContinuousNoise.restype = ctypes.c_int
+        lib.WorldSynthesisContinuousNoise.argtypes = [
+            ctypes.POINTER(ctypes.c_double), ctypes.c_int,
+            ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
+            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_ulong,
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
         lib.WorldSynthesis.restype = ctypes.c_int
         lib.WorldSynthesis.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_int,
                                        ctypes.POINTER(ctypes.c_double), ctypes.c_bool,
@@ -638,6 +661,30 @@ class WorldlineNative:
                                     len(samples), _f64_buffer(f0_in), num_frames,
                                     sp_env, ap)
         return list(sp_env), list(ap)
+
+    def world_synthesis_continuous_noise(
+            self, f0: Sequence[float], sp: Sequence[float], harmonic_sp: Sequence[float],
+            ap: Sequence[float], stretch: Sequence[float],
+            fft_size: int, hop_size: int, fs: int, seed: int,
+            gender: Sequence[float], tension: Sequence[float],
+            breathiness: Sequence[float], voicing: Sequence[float]) -> List[float]:
+        """对应 `Worldline.WorldSynthesisContinuousNoise`（R1.1 的合成）。
+
+        输出长度用 `WorldSynthesisSampleCount(f0.Length, hopSize*1000/fs, fs)` 算
+        —— 注意这里的帧周期是**用 hopSize 换算的**，不是 `config.frame_ms`。
+        """
+        self._require()
+        frame_period = hop_size * 1000.0 / fs
+        count = self._lib.WorldSynthesisSampleCount(len(f0), frame_period, fs)
+        y = (ctypes.c_double * count)()
+        self._lib.WorldSynthesisContinuousNoise(
+            _f64_buffer(f0), len(f0),
+            _f64_buffer(sp), _f64_buffer(harmonic_sp),
+            _f64_buffer(ap), _f64_buffer(stretch),
+            fft_size, hop_size, fs, seed, y,
+            _f64_buffer(gender), _f64_buffer(tension),
+            _f64_buffer(breathiness), _f64_buffer(voicing))
+        return list(y)
 
     def world_synthesis(self, f0: Sequence[float], mgc_or_sp: Sequence[float],
                         is_mgc: bool, mgc_size: int,
@@ -853,3 +900,182 @@ def resample(item, native=None) -> List[float]:
         for i in range(len(output)):
             output[i] = output[i] * gain_factor
     return output
+
+
+# ---------------------------------------------------------------- PhraseSynthV2
+
+
+def _cancelled(cancellation) -> bool:
+    """C# 的 `cancellation.IsCancellationRequested`；`None` 表示不取消。"""
+    return cancellation is not None and cancellation.is_set()
+
+
+def _default_hnsep() -> Optional[Any]:
+    """`Hnsep.Instance` 的替身（可注入）。
+
+    C# 是 `Hnsep.Instance`（单例，首次访问时加载 ONNX 模型）。Python 侧由宿主注入；
+    没注入就是 `None` → R1.1 那条路给出明确报错，而不是静默算错。
+    """
+    return _HNSEP_INSTANCE
+
+
+#: 宿主注入的谐波/噪声分离模型（对应 `Hnsep.Instance`）
+_HNSEP_INSTANCE: Optional[Any] = None
+
+
+def set_hnsep(instance: Optional[Any]) -> None:
+    """注入 hnsep 模型（宿主在启动时调；传 None 恢复为"没有"）。
+
+    需要的接口（对应 `Core/Analysis/Hnsep`）：
+        .sample_rate -> int
+        .harmonic(samples: list[float]) -> list[float]
+    """
+    global _HNSEP_INSTANCE
+    _HNSEP_INSTANCE = instance
+
+
+class PhraseSynthV2:
+    """对应 `Worldline.PhraseSynthV2`。
+
+    一个乐句的"分析 + 合成"会话：先 `AddRequest` 排队，再 `AnalyzeRequests` 并行分析
+    （每项变成一个 `SynthSegment`），然后 `SetCurves` 给曲线，最后
+    `Synth()`（Worldline-R）或 `SynthContinuousNoise(seed)`（R1.1）出样本。
+
+    ★ 三个方法的**调用顺序**是语义：`AnalyzeRequests` 可重复调用（队列空就返回），
+    所以 `SynthFeatures` / `Synth` / `SynthContinuousNoise` 各自开头都会调一次。
+
+    ★ `AnalyzeRequests` 的失败语义：**按提交顺序取第一个异常**原样重抛
+    （C# 用 `Parallel.For` + `state.Break()`，注释说明 "Break still runs every lower
+    index, so the earliest failure is found"）。失败的请求会挂到异常的 `.item` 上。
+    """
+
+    def __init__(self, fs: int, hop_size: int, fft_size: int, use_hnsep: bool = False,
+                 native: Optional[WorldlineNative] = None,
+                 num_render_threads: Optional[int] = None,
+                 hnsep: Optional[Any] = None):
+        self._native = native if native is not None else get_native()
+        self.config = init_analysis_config(fs, hop_size, fft_size, self._native)
+        #: 对应 `hnsep = useHnsep ? Hnsep.Instance : null;`
+        self.hnsep = (hnsep if hnsep is not None else _default_hnsep()) if use_hnsep else None
+        if num_render_threads is None:
+            from .singer import Preferences
+            num_render_threads = Preferences.num_render_threads
+        self._num_render_threads = num_render_threads
+
+        self._segments: List[SynthSegment] = []
+        self._pending: List[Tuple[Any, Any]] = []
+        self._f0_curve: Optional[Sequence[float]] = None
+        self._gender_curve: Optional[Sequence[float]] = None
+        self._tension_curve: Optional[Sequence[float]] = None
+        self._breathiness_curve: Optional[Sequence[float]] = None
+        self._voicing_curve: Optional[Sequence[float]] = None
+
+    # ------------------------------------------------------------------ 排队 / 分析
+
+    def add_request(self, item, pos_ms: float, skip_ms: float, length_ms: float,
+                    fade_in_ms: float, fade_out_ms: float) -> None:
+        """对应 `AddRequest`：**只排队**，分析留给 `AnalyzeRequests`。"""
+        cfg = self.config
+        hnsep = self.hnsep
+        native = self._native
+        self._pending.append((item, lambda: SynthSegment(
+            cfg, item, pos_ms, skip_ms, length_ms, fade_in_ms, fade_out_ms,
+            for_resampler=False, hnsep=hnsep, native=native)))
+
+    def analyze_requests(self, cancellation=None) -> None:
+        """对应 `AnalyzeRequests`：并行分析，按**提交顺序**取第一个异常重抛。
+
+        `cancellation` 是 `threading.Event`（`is_set()`）；已取消时抛 `SynthCancelled`
+        —— 对应 C# 把 `CancellationToken` 交给 `Parallel.For` 后抛出的
+        `OperationCanceledException`。渲染器接住它就返回已有结果。
+        """
+        if len(self._pending) == 0:
+            return
+        if _cancelled(cancellation):
+            raise SynthCancelled()
+        n = len(self._pending)
+        results: List[Optional[SynthSegment]] = [None] * n
+        errors: List[Optional[BaseException]] = [None] * n
+
+        def run(i: int) -> None:
+            try:
+                results[i] = self._pending[i][1]()
+            except BaseException as e:          # noqa: BLE001 —— 逐个收集，最后按序取首个
+                if isinstance(e, SynthRequestError):
+                    e.item = self._pending[i][0]
+                errors[i] = e
+
+        with ThreadPoolExecutor(max_workers=max(1, self._num_render_threads)) as pool:
+            futures = [pool.submit(run, i) for i in range(n)]
+            for f in futures:                   # 全部等完，不提前取消
+                f.result()
+
+        error = next((e for e in errors if e is not None), None)
+        if error is not None:
+            raise error
+        self._segments.extend(results)          # type: ignore[arg-type]
+        self._pending.clear()
+
+    def set_curves(self, f0, gender, tension, breathiness, voicing) -> None:
+        """对应 `SetCurves`。"""
+        self._f0_curve = f0
+        self._gender_curve = gender
+        self._tension_curve = tension
+        self._breathiness_curve = breathiness
+        self._voicing_curve = voicing
+
+    # ------------------------------------------------------------------ 合成
+
+    def synth_features(self):
+        """对应 `SynthFeatures`。返回 `(total_frames, f0, sp, ap)`（sp/ap 是**扁平**数组）。"""
+        self.analyze_requests()
+        sp_size = self.config.fft_size // 2 + 1
+        return blend_features(self._segments, sp_size, f0_curve=self._f0_curve,
+                              f0_floor=self.config.f0_floor)
+
+    def synth(self) -> List[float]:
+        """对应 `Synth`（Worldline-R / version 10）。
+
+        C# 返回 `float[]`（`samples.Select(s => (float)s)`），所以这里逐个过 `as_float32`。
+        """
+        self.analyze_requests()
+        if len(self._segments) == 0:
+            return []
+        total_frames, f0, sp, ap = self.synth_features()
+        sp_size = self.config.fft_size // 2 + 1
+        samples = self._native.world_synthesis(
+            f0, sp, False, sp_size, ap, False, self.config.fft_size,
+            self.config.frame_ms, self.config.fs,
+            fit_curve(self._gender_curve, total_frames, 0.5),
+            fit_curve(self._tension_curve, total_frames, 0.5),
+            fit_curve(self._breathiness_curve, total_frames, 0.5),
+            fit_curve(self._voicing_curve, total_frames, 1.0))
+        return [as_float32(s) for s in samples]
+
+    def synth_continuous_noise(self, seed: int) -> List[float]:
+        """对应 `SynthContinuousNoise`（Worldline-R1.1 / version 11）。
+
+        ★ 第一行的守卫照搬 C#：`if (hnsep == null) throw new InvalidOperationException(
+        "SynthContinuousNoise needs the hnsep analysis.");`
+
+        目前**还走不通**，两处依赖未搬（都给的是明确报错，不是静默出错）：
+        - `SynthSegment` 的谐波分离分支（需要 `HnAnalysisF0In` 原生绑定 + 把
+          `sp_env_harmonic` 一路带到 `resample_features`）；
+        - 就算上面通了，还要宿主注入 hnsep 模型（见 `set_hnsep`）。
+        """
+        if self.hnsep is None:
+            raise RuntimeError('SynthContinuousNoise needs the hnsep analysis.')
+        self.analyze_requests()
+        if len(self._segments) == 0:
+            return []
+        sp_size = self.config.fft_size // 2 + 1
+        total_frames, f0, sp, sp_harmonic, ap, stretch = blend_continuous_noise_features(
+            self._segments, sp_size, f0_curve=self._f0_curve, f0_floor=self.config.f0_floor)
+        samples = self._native.world_synthesis_continuous_noise(
+            f0, sp, sp_harmonic, ap, stretch,
+            self.config.fft_size, self.config.hop_size, self.config.fs, seed,
+            fit_curve(self._gender_curve, total_frames, 0.5),
+            fit_curve(self._tension_curve, total_frames, 0.5),
+            fit_curve(self._breathiness_curve, total_frames, 0.5),
+            fit_curve(self._voicing_curve, total_frames, 1.0))
+        return [as_float32(s) for s in samples]

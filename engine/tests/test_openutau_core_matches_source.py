@@ -1895,11 +1895,13 @@ def test_worldline_pure():
     # ---- blend_continuous_noise_features
     seg_h = _Seg(0, 1, 2, 3, 0, [1.0, 2.0, 3.0], [1.0, 2.0, 3.0], [0.1, 0.2, 0.3],
                  sp_env_harmonic=[4.0, 5.0, 6.0], stretch=[1.0, 1.5, 2.0])
-    toh, f0h, sph, aph, sth = W.blend_continuous_noise_features([seg_h], 1)
+    # 返回**六个**：total_frames, f0, sp, sp_harmonic, ap, stretch（C# 两个包络都要）
+    toh, f0h, sph, sph_h, aph, sth = W.blend_continuous_noise_features([seg_h], 1)
     check('Worldline.blend_continuous_noise_features: totalFrames = max(p4)+1', toh == 4,
           'got %r' % toh)
-    check('Worldline.blend_continuous_noise_features: 谐波包络同样累加',
-          abs(sph[1] - (1e-12 + 5.0)) < 1e-9, 'got %r' % sph)
+    check('Worldline.blend_continuous_noise_features: sp 与 sp_harmonic **都**返回',
+          abs(sph[1] - (1e-12 + 2.0)) < 1e-9 and abs(sph_h[1] - (1e-12 + 5.0)) < 1e-9,
+          'got sp=%r harm=%r' % (sph, sph_h))
     check('Worldline.blend_continuous_noise_features: stretch 按 ap 的方式混合',
           abs(sth[1] - 1.5) < 1e-12, 'got %r' % sth)
     check('Worldline.blend_continuous_noise_features: 末帧复制前一帧（含 stretch）',
@@ -4922,6 +4924,204 @@ def test_mod_plus():
           'got %r / %r' % (no_adj.pitches[50], no_adj.pitches[100]))
 
 
+def test_worldline_renderer():
+    """`Classic/WorldlineRenderer.cs` —— 三版本分派 / 与 Classic 的能力差异 / v10 真机端到端。"""
+    import tempfile
+
+    from singing.openutau import Progress, RenderPhrase
+    from singing.openutau import worldline as W
+    from singing.openutau.classic import (HOP_SIZES, ClassicRenderer,
+                                          WorldlineRenderer)
+    from singing.openutau.renderers import WORLDLINE_R, WORLDLINE_R11, WORLDLINE_R2
+
+    cs = _read('Classic/WorldlineRenderer.cs')
+    if cs is None:
+        print('  SKIP 找不到 Classic/WorldlineRenderer.cs')
+        return
+
+    # ---------------- 源码一致性
+    check('WorldlineRenderer: hopSize 分派 10→441 / 11→220 / 20→512，其余抛错',
+          '10 => 441,' in cs and '11 => 220,' in cs and '20 => 512,' in cs
+          and 'Unsupported WorldlineRenderer version' in cs
+          and HOP_SIZES == {10: 441, 11: 220, 20: 512})
+    check('WorldlineRenderer: frameMs = hopSize * 1000 / 44100',
+          'frameMs = hopSize * 1000.0 / 44100.0;' in cs)
+    check('WorldlineRenderer: 缓存文件名含版本号 wdl-v{version}-{hash:x16}.wav',
+          'wdl-v{version}-{phrase.hash:x16}.wav' in cs)
+    check('WorldlineRenderer: 读缓存与写缓存各在 lock 内、合成在 lock 外',
+          cs.count('lock (cacheLock)') == 2
+          and cs.index('var phraseSynth = new Worldline.PhraseSynthV2') > cs.index('lock (cacheLock) {'))
+    check('WorldlineRenderer: 三种版本都要过 AddDirects 与 ApplyDynamics',
+          'AddDirects(phrase, resamplerItems, result);' in cs
+          and 'Renderers.ApplyDynamics(phrase, result);' in cs)
+    check('WorldlineRenderer: SampleCurve 里 index 越界时**留 0**',
+          'if (index < curve.Length) {' in cs)
+    check('WorldlineRenderer: AddDirects 的 length = cutoff>=0 ? (len-offset-cutoff) : -cutoff',
+          'int length = cutoff >= 0 ? (samples.Length - offset - cutoff) : -cutoff;' in cs)
+    check('WorldlineRenderer: ExpressionGraphSlot 固定为 WORLDLINE_R',
+          'RenderGraphSlot' in cs or 'ExpressionGraphSlot => Renderers.WORLDLINE_R' in cs)
+    check('WorldlineRenderer: ToString 按版本返回三个名字',
+          '11 => Renderers.WORLDLINE_R11,' in cs and '20 => Renderers.WORLDLINE_R2,' in cs)
+    check('WorldlineRenderer: v11 用 useHnsep: version == 11',
+          'useHnsep: version == 11' in cs)
+    check('WorldlineRenderer: v10 走 Synth()、v11 走 SynthContinuousNoise(seed: phrase.hash)',
+          'phraseSynth.SynthContinuousNoise(seed: phrase.hash)' in cs
+          and 'result.samples = phraseSynth.Synth();' in cs)
+
+    # ★ 与 ClassicRenderer 的能力差异：这里**没有** flag 兜底
+    class _D:
+        def __init__(self, abbr, is_flag=False, flag=''):
+            self.abbr, self.is_flag, self.flag = abbr, is_flag, flag
+
+    wr = WorldlineRenderer(10)
+    cr = ClassicRenderer()
+    check('WorldlineRenderer: hopSize/frameMs（10 → 441 / 10.0ms）',
+          wr.hop_size == 441 and wr.frame_ms == 10.0)
+    check('WorldlineRenderer: __str__ 是渲染器名（不是版本号）',
+          str(wr) == WORLDLINE_R and str(WorldlineRenderer(11)) == WORLDLINE_R11
+          and str(WorldlineRenderer(20)) == WORLDLINE_R2)
+    check('WorldlineRenderer: expression_graph_slot 三个版本共用 WORLDLINE_R',
+          wr.expression_graph_slot == WORLDLINE_R
+          and WorldlineRenderer(11).expression_graph_slot == WORLDLINE_R)
+    try:
+        WorldlineRenderer(99)
+        check('WorldlineRenderer: 未知版本抛 ValueError', False, '没抛错')
+    except ValueError:
+        check('WorldlineRenderer: 未知版本抛 ValueError', True)
+
+    check('WorldlineRenderer: SupportsExpression **只**看白名单（没有 flag 兜底）',
+          wr.supports_expression(_D('dyn')) is True
+          and wr.supports_expression(_D('eng', is_flag=True)) is False
+          and cr.supports_expression(_D('eng', is_flag=True)) is True,
+          'wr(dyn)=%r wr(eng,flag)=%r cr(eng,flag)=%r'
+          % (wr.supports_expression(_D('dyn')),
+             wr.supports_expression(_D('eng', is_flag=True)),
+             cr.supports_expression(_D('eng', is_flag=True))))
+    check('WorldlineRenderer: 白名单里**没有** ENG/ATK/DEC（与 Classic 不同）',
+          not ({'eng', 'atk', 'dec'} & WorldlineRenderer.SUPPORTED_EXP)
+          and {'eng', 'atk', 'dec'} <= ClassicRenderer.SUPPORTED_EXP)
+    check('WorldlineRenderer: 白名单里有 GENC/BREC/TENC/VOIC（Worldline 独有）',
+          {'genc', 'brec', 'tenc', 'voic'} <= WorldlineRenderer.SUPPORTED_EXP)
+
+    # ---- SampleCurve：越界留 0（不是夹到末点）
+    class _TA:
+        def ms_pos_to_tick_pos(self, ms):
+            return int(ms / 500.0 * 480)      # 120bpm 下 500ms = 480 tick
+
+    class _Ph:
+        position_ms = 0.0
+        leading_ms = 0.0
+        position = 0
+        leading = 0
+        time_axis = _TA()
+
+    curve = [10.0, 20.0, 30.0]
+    out = wr.sample_curve(_Ph(), curve, 0.0, 8, lambda x: x * 2)
+    check('WorldlineRenderer.SampleCurve: 起点取 curve[0]（tick 0）', out[0] == 20.0,
+          'got %r' % out)
+    # ticks = int(i*10/500*480) = int(i*9.6) → i=0→0(idx0) / i=1→9(idx1) / i=2→19(idx3 越界→0)
+    check('WorldlineRenderer.SampleCurve: 超出曲线长度后**留 0**（不是夹到末点）',
+          out[0] == 20.0 and out[1] == 40.0 and out[2] == 0.0 and out[-1] == 0.0,
+          'got %r' % out)
+    check('WorldlineRenderer.SampleCurve: curve=None 时整段填默认值',
+          wr.sample_curve(_Ph(), None, 0.5, 4, lambda x: x) == [0.5] * 4)
+    check('WorldlineRenderer.SampleCurve: 默认值**不过** convert（C# 直接 Array.Fill）',
+          wr.sample_curve(_Ph(), None, 0.5, 2, lambda x: x * 999) == [0.5, 0.5])
+
+    # ---- v11 / v20 的依赖报错（不依赖真机）
+    try:
+        WorldlineRenderer(11)._make_phrase_synth()
+        check('WorldlineRenderer: v11 无 hnsep 时给出明确的依赖报错', False, '没抛错')
+    except NotImplementedError as e:
+        check('WorldlineRenderer: v11 无 hnsep 时给出明确的依赖报错',
+              'Hnsep' in str(e) or '谐波' in str(e), 'got %r' % str(e)[:60])
+    try:
+        WorldlineRenderer(20)._synth_r2(None)
+        check('WorldlineRenderer: v20 给出 ONNX 依赖报错（并说清缺哪两件）', False, '没抛错')
+    except NotImplementedError as e:
+        check('WorldlineRenderer: v20 给出 ONNX 依赖报错（并说清缺哪两件）',
+              'Data.Resources.mel' in str(e) and 'pc-nsf-hifigan' in str(e))
+    check('WorldlineRenderer: register_worldline_renderers 可重复登记',
+          (__import__('singing.openutau.classic', fromlist=['x'])
+           .register_worldline_renderers()) is None)
+
+    # ---------------- v10 端到端（真机）
+    dll = os.path.join(REF_ROOT, 'runtimes', 'win-x64', 'native', 'worldline.dll')
+    if not os.path.isfile(dll):
+        print('  SKIP 找不到预编译 worldline.dll（%s）' % dll)
+        return
+    native = W.get_native(dll)
+    if not native.available:
+        print('  SKIP worldline.dll 加载失败：%s' % native.error)
+        return
+
+    tmp = tempfile.mkdtemp(prefix='fufumidi-worldline-')
+    old_host = None
+    try:
+        project, track, part, phrase_classic = _render_fixture(tmp)
+        # 把轨道渲染器换成 Worldline-R(10)，再重建乐句（乐句的哈希含 renderer.ToString()）
+        wr10 = WorldlineRenderer(10)
+        track.renderer_settings.renderer_obj = wr10
+        phrases = RenderPhrase.from_part(project, track, part)
+        check('WorldlineRenderer e2e: 能构建出乐句', len(phrases) == 1)
+        phrase = phrases[0]
+        check('WorldlineRenderer e2e: 乐句哈希与 Classic 的不同（渲染器名进哈希）',
+              phrase.hash != phrase_classic.hash)
+
+        resampler = _CountingResampler()
+        old_host = _install_host(_test_classic_host(tmp, resampler))
+        seen = []
+        progress = Progress(len(phrase.phones),
+                            notify=lambda pct, info: seen.append((pct, info)))
+        result = _run(wr10.render(phrase, progress, track_no=0))
+
+        check('WorldlineRenderer e2e: 产出非空样本',
+              result.samples is not None and len(result.samples) > 0,
+              'got %r' % (None if result.samples is None else len(result.samples)))
+        check('WorldlineRenderer e2e: 样本有限且不静音',
+              all(math.isfinite(v) for v in result.samples)
+              and max(abs(v) for v in result.samples) > 1e-3,
+              'got peak %r' % max(abs(v) for v in result.samples))
+        check('WorldlineRenderer e2e: 输出主频 ≈ 440Hz（tone 69 → 变调生效，过零率 ±10%%）',
+              _dominant_zero_cross(samples_of(result)) is not None
+              and abs(_dominant_zero_cross(samples_of(result)) - 440.0) < 44.0,
+              'got %r' % _dominant_zero_cross(samples_of(result)))
+        check('WorldlineRenderer e2e: 缓存文件已登记进 phrase',
+              any('wdl-v10-' in f for f in phrase.cache_files),
+              'got %r' % phrase.cache_files)
+        # 第二次渲染读缓存（不再合成）——宿主仍在，不要提前复原
+        result2 = _run(wr10.render(phrase, None, track_no=0))
+        check('WorldlineRenderer e2e: 第二次渲染样本等长（读的就是同一份缓存）',
+              len(result2.samples) == len(result.samples))
+        check('WorldlineRenderer e2e: 进度上报到 100（每个音素一次 + 收尾）',
+              seen and seen[-1][0] == 100, 'got %r' % seen)
+    finally:
+        if old_host is not None:
+            try:
+                _install_host(old_host)
+            except Exception:
+                pass
+
+
+def samples_of(result):
+    """`RenderResult.samples` 的取值辅助（可能为 None）。"""
+    return result.samples or []
+
+
+def _dominant_zero_cross(samples):
+    """用**过零率**估主频（与 ClassicRenderer 的端到端判据同一套做法）。"""
+    import math as _m
+    if not samples:
+        return None
+    crossings = 0
+    prev = samples[0]
+    for v in samples[1:]:
+        if (prev < 0 <= v) or (prev > 0 >= v):
+            crossings += 1
+        prev = v
+    return crossings / 2.0 / (len(samples) / 44100.0) if samples else None
+
+
 def test_xxhash64():
     """XXH32/XXH64 官方测试向量 —— 对不上，所有缓存键都会静默错。"""
     from singing.openutau.xxhash import xxh32, xxh64 as _x
@@ -4989,6 +5189,8 @@ def main():
     test_document_snapshot_store()
     print('--- Render/Worldline（纯逻辑） ---')
     test_worldline_pure()
+    print('--- Classic/WorldlineRenderer ---')
+    test_worldline_renderer()
     print('--- RenderPhrase MOD+ ---')
     test_mod_plus()
     print('--- Classic/ClassicSinger + OtoWatcher + Loader ---')

@@ -3,8 +3,9 @@
 > 上游：`OpenUtau/`（C#）—— `OpenUtau.Core` + `OpenUtau.Plugin.Builtin` + `cpp/worldline`
 > 落点：`engine/singing/`（纯 Python，**不依赖 torch / numpy**，可脱离主程序单测）
 > 方针：**除外观外不允许自研** —— 每一处都应能回答"对应 OpenUTAU 的哪个文件/函数"
-> 最后更新：2026-10-02 —— **P0 / P1-a / P1-b / P1-d / P2 均已完成**；`RenderPhrase` 的 MOD+ 分支也已补齐
-> 2026-10-02 复核：四项测试 **932 项断言全绿**（含 `worldline.dll` 真机端到端）
+> 最后更新：2026-10-02 —— **P0 / P1-a / P1-b / P1-d / P2 均已完成**；`RenderPhrase` 的 MOD+ 与
+> `WorldlineRenderer` v10 也已补齐（Classic 线三条渲染器路径**全部可跑**）
+> 2026-10-02 复核：四项测试 **965 项断言全绿**（含 `worldline.dll` 真机端到端）
 
 ---
 
@@ -31,17 +32,22 @@
   用 `.frq` 分析出的音高偏差对每个音素做细粒度微调（元音段铺 `toneDiffStretch`、
   辅音段反向铺 `toneDiffFix`，两端按包络渐入/渐出）。至此 `RenderPhrase` 只剩
   表达式图一处未搬。
+- 再补齐 **`WorldlineRenderer`**（276 行）与它的 `PhraseSynthV2`：
+  **v10（`WORLDLINE-R`，正是 Classic 歌手的默认渲染器）全通并真机验证**；
+  v11（R1.1）与 v20（R2）各缺一块外部依赖（ONNX 谐波分离模型 / 程序集内嵌 mel 模型 +
+  可下载声码器包），都在**入口处**给精确报错，不是静默算错。
+  → 至此 Classic 线的**三条渲染器路径**（`CLASSIC` / `WORLDLINE-R*`）都可跑。
 
 **真机验证**（加载 OpenUTAU 随包分发的 `runtimes/win-x64/native/worldline.dll`）：
 `RenderPhrase.from_part` → `ClassicRenderer.render()` 产出的样本，主频用**过零率**实测
 ≈ 440Hz（源素材 300Hz、tone 69）—— 变调与拼接都真的生效了。
 
-已完成规模：Python **11,167 行**（`engine/singing/**/*.py`，53 个文件，排除 `__pycache__`），
-对应 C# **约 9,660 行**（对第 3 节列出的 45 个 C# 源文件逐项 `wc -l` 求和，
+已完成规模：Python **11,748 行**（`engine/singing/**/*.py`，54 个文件，排除 `__pycache__`），
+对应 C# **约 9,940 行**（对第 3 节列出的 46 个 C# 源文件逐项 `wc -l` 求和，
 含 `RenderEngine.cs` 的 `Progress` 部分）。
 另有 NWaves 三段转写（**无 C# 对应物**，属第三方库替换）。
 
-一致性测试 **5,717 行 / 932 项断言**（四个文件合计：19 + 59 + 835 + 19；
+一致性测试 **5,919 行 / 965 项断言**（四个文件合计：19 + 59 + 868 + 19；
 参考源码缺失时自动 SKIP）。
 
 ---
@@ -75,9 +81,9 @@
 | Classic 声库配置（`character.yaml`） | 91 行 | ✅ 完成 |
 | Classic 声库加载（`character.txt` / `oto.ini` / `prefix.map`） | 549 行 | ✅ 完成（`FileTrace` + `Voicebank` 一并补齐） |
 | Classic 歌手（`ClassicSinger` + `OtoWatcher` + `ClassicSingerLoader`） | 243 + 42 + 30 行 | ✅ 完成 |
-| Worldline 的 `PhraseSynthV2`（R1.1） | 780 行中约 240 | ❌ 未开始（只被 `WorldlineRenderer` 用） |
+| Worldline 的 `PhraseSynthV2` | 780 行中约 240 | ✅ 完成（v10 全通；R1.1 缺 hnsep 模型） |
 | Classic 执行层 · 外部工具进程 | ~700 行 | ❌ 未开始 |
-| `WorldlineRenderer` | 276 行 | ❌ 未开始 |
+| `WorldlineRenderer` | 276 行 | 🟡 v10 全通（真机验证）；v11/v20 缺外部依赖，入口报错 |
 | Pipeline（乐句切分 / 快照 / 后台构建） | 548 + 162 + 216 行 | ✅ 完成 |
 | G2p（字素→音素） | 771 行 + 数据 | ❌ 未开始 |
 | 编辑器侧 | — | ❌ 未开始（M3） |
@@ -121,6 +127,7 @@
 | `openutau/classic/worldline_resampler.py` | `Classic/WorldlineResampler.cs` |
 | `openutau/worldline.py` 的 `SynthSegment` / `resample` / `WorldlineNative` | `Render/Worldline.cs` 的对应片段 + `cpp/worldline/worldline.h` 的 6 个导出 |
 | `openutau/classic/classic_renderer.py` | `Classic/ClassicRenderer.cs` |
+| `openutau/classic/worldline_renderer.py` | `Classic/WorldlineRenderer.cs`（v10 全通；v11/v20 入口报错） |
 | `openutau/render_engine.py`（部分：`Progress`） | `Render/RenderEngine.cs` 的 `Progress`（其余属 M3） |
 | `openutau/classic/ini.py` | `Classic/Ini.cs` |
 | `openutau/base_chinese.py` | `BaseChinesePhonemizer.cs` |
@@ -143,11 +150,11 @@
 cd engine/tests
 python test_ustx_schema_matches_source.py        # 19 passed
 python test_ustx_roundtrip.py                    # 59 passed
-python test_openutau_core_matches_source.py      # 835 passed   ← 含 worldline.dll 真机端到端
+python test_openutau_core_matches_source.py      # 868 passed   ← 含 worldline.dll 真机端到端
 python test_singing_adapters.py                  # 19 passed / 1 skipped
 ```
 
-合计 **932 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
+合计 **965 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
 整套测试**可离线运行**。
 
 `worldline.dll` 真机测试的 SKIP 条件是"找不到 `/d/FuFuMIDI/_ref/OpenUtau/runtimes/win-x64/native/worldline.dll`
@@ -235,6 +242,8 @@ assert '(i + 1) == phrase.dynamics.Length' in cs
 | 32 | **`(int)Math.Ceiling(x) / n` 是「先 ceil 再整数除法」** | 分子可为负时，C# 的整数除法**向零截断**，Python 的 `//` 向下取整 —— `-1/5` 得 `0` vs `-1`。直接照抄成 `ceil(x) // n` 会在负数段算错下标 | 用 `idiv(math.ceil(x), n)`。本轮 MOD+ 的 `endIndex` 正是这个形态 |
 | 33 | **`Math.Clamp(v, 0, n-1)` 在 `n == 0` 时抛 `ArgumentException`** | C# 抛错、被外层的 per-phoneme `catch` 吞掉 → **整个音素被跳过**；若 Python 侧写成 `max(0, min(-1, v))` 会静默得到 0 并继续算，结果完全不同 | 显式在 `n <= 0` 时抛错，让同一层 `except` 接住 —— 这才是"等价" |
 | 34 | **C# 的局部函数可以用在使用之后** | `Fade(...)` 在 C# 里声明在调用它的循环**下面**（同一块内合法）；Python 必须先定义 | 提前定义闭包，别以为"照抄顺序"能行 |
+| 35 | **函数"算了却没返回"的东西** | `blend_continuous_noise_features` 累加了 `sp` 却只返回 `sp_harmonic`（漏了 `sp`），而 C# 的 `WorldSynthesisContinuousNoise(f0, sp, spHarmonic, …)` **两个都要**。★ 当时那条测试**跟着实现写成了 5 元组**并断言"谐波在第三个位置"，于是"一致地错"、测试全绿 | 移植多返回值函数时，**逐个数 C# 调用点要几个参数**，别只照着自己写的返回值改测试。已改成 6 元组并让测试断言 **sp 与 sp_harmonic 各归其位** |
+
 
 ### 附：写测试时的最大陷阱 —— 凭直觉填期望
 
@@ -311,6 +320,8 @@ expect = math.pow(0.5 / (0.5 * w_hi + 1.0 * (1 - w_hi)), 0.86)
 | **`IDisposable`** | `dispose()`，并额外支持 `with` 用法 | Python 无 `IDisposable`；`with` 是顺手的等价物，不改变语义 |
 | **`as_float32` 的落点** | 提到 `music_math.py` 成为**共享**辅助（原先只在 `worldline.py` 里私有） | MOD+ 也要用它（C# 写了 `2f` / `1.0f` / `100f` 与 `(float)(diff * 100)`）。放在共用处，避免两份实现悄悄漂移；`worldline` 的私有版已删除并改为导入 |
 | **MOD+ 里 `OtoFrq` 的导入方式** | **函数内惰性导入** | `classic/` 包反向依赖 `render_phrase`（`classic_renderer` → `RenderPhrase`），模块级导入成环。`oto.py` 对 `VoicebankLoader` 用的是同一招 |
+| **WorldlineRenderer 的 v11 / v20** | **v10 做完整；v11/v20 在入口处给精确报错**（列出缺什么、给替代方案），不写半截实现 | v11 要 ONNX 谐波分离模型 `Hnsep`（`SynthSegment` 的谐波分支 + `HnAnalysisF0In` + `sp_env_harmonic` 传递都还没接）；v20 要 `Data.Resources.mel`（**程序集内嵌资源**，仓库里无独立文件）+ 可下载包 `pc-nsf-hifigan`（走未搬的 `PackageManager`）。★ v10 就是 `GetDefaultRenderer` 对 Classic 歌手给的默认渲染器，所以它是真正高价值的那条 |
+| **`SynthCancelled`** | 自定义异常，`analyze_requests(cancellation)` 里检查 `threading.Event` 后抛 | 对应 C# 把 `CancellationToken` 交给 `Parallel.For` 抛出的 `OperationCanceledException`；渲染器 `except SynthCancelled: return result` 与 C# 逐字对应 |
 
 ---
 
@@ -362,10 +373,10 @@ tone 69 变调，输出主频用**过零率**实测 ≈ 440Hz（±10% 内）。
 （渲染器接口需要的那一小块）。**里程碑达成**：`RenderPhrase → 变调 → 拼接 → 样本`
 已端到端真机跑通（见第 0 节）。
 
-> 剩下的渲染器侧工作（都不阻塞"出声"）：
-> - `WorldlineRenderer`(276)：Worldline 线 R1.1/R2，依赖 `PhraseSynthV2`（下面那条）。
-> - `PhraseSynthV2` + R1.1（约 240 行）：`DecodeMgc` / `DecodeBap` / `HnAnalysisF0In` /
->   `WorldSynthesisContinuousNoise` 四个绑定 + `Core/Analysis/Hnsep`。
+> **已补齐**：`WorldlineRenderer`(276) + `PhraseSynthV2`（约 240 行）已落地，
+> v10（`WORLDLINE-R`，Classic 歌手的默认渲染器）**真机端到端验证**；R1.1/R2 在入口报错。
+> 仍未接的是 R1.1 的谐波分支：`HnAnalysisF0In` 绑定 + `Core/Analysis/Hnsep`（ONNX）
+> + `SynthSegment` 的 `sp_env_harmonic` 传递。
 
 ### P1-c —— 外部工具线（独立可选）
 
@@ -437,7 +448,7 @@ tone 69 变调，输出主频用**过零率**实测 ≈ 440Hz（±10% 内）。
 |---|---|
 | ~~M1 抽象层~~ | ✅ 已完成（`singing/api.py` + 适配器） |
 | ~~M2-c `.ustx` 双向兼容~~ | ✅ 已完成 |
-| **M2-a 渲染器主体** | 🟡 Classic 线全通（**声库 → 参数层 → 变调 → 拼接 → 渲染器**，含 MOD+）；`WorldlineRenderer` 待做 |
+| **M2-a 渲染器主体** | ✅ Classic 线全通：`CLASSIC` 与 `WORLDLINE-R` 两条路径**都真机跑通**（含 MOD+）；R1.1/R2 缺外部依赖（入口报错） |
 | **M2-b 音素化器** | 🟡 3 / 51 |
 | **M2 渲染输入链路** | ✅ 完成（P0）：`歌词 → 音素 → 乐句 → RenderPhrase[]`，可断言哈希 |
 | **M2 拼接出声** | ✅ 完成（P1-a）：`RenderPhrase → 音素 wav 拼接`（`SharpWavtool`） |

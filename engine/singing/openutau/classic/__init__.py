@@ -15,6 +15,7 @@
   - `frq.py`                   `.frq` / `.mrq` 基频缓存与 `OtoFrq`（Classic/Frq.cs）
   - `worldline_resampler.py`   自带的变调器（Classic/WorldlineResampler.cs）
   - `classic_renderer.py`      把变调器与拼接器串成一条乐句（Classic/ClassicRenderer.cs）
+  - `worldline_renderer.py`    Worldline 渲染器 v10/v11/v20（Classic/WorldlineRenderer.cs）
   - `oto_watcher.py`           `oto.ini` 变更监视（Classic/OtoWatcher.cs；后端可注入）
   - `classic_singer.py`        UTAU 声库歌手（Classic/ClassicSinger.cs）
   - `classic_singer_loader.py` 声库发现（Classic/ClassicSingerLoader.cs；工厂可注册）
@@ -26,7 +27,6 @@
 未照搬（后续）：
   - `ExeResampler` / `ExeWavtool` / `UnixWavtool` / `ToolsManager` / `VoicebankFiles`
     （外部工具进程那一整片；还需要 `Util/Base64.cs`、`Util/ProcessRunner.cs`、`OS.cs`）
-  - `WorldlineRenderer`（Worldline 线 R1.1/R2；依赖 `Worldline.PhraseSynthV2`）
   - `Presamp`(731) / `Ust` / `UstNote` / `PluginLoader` / `VoicebankErrorChecker`
   - `EnunuSinger` / `DiffSingerSinger` / `VoicevoxSinger`（`ClassicSingerLoader` 里
     留了 `register_singer_factory` 注册点，未注册时回落到 `ClassicSinger`）
@@ -55,10 +55,17 @@ from .voicebank_config import (  # noqa: F401
     VoicebankConfig,
 )
 from .voicebank_loader import FileTrace, VoicebankLoader  # noqa: F401
+from .worldline_renderer import (  # noqa: F401
+    HOP_SIZES,
+    WorldlineRenderer,
+    hop_size_for_version,
+    register_worldline_renderers,
+)
 from .worldline_resampler import WorldlineResampler  # noqa: F401
 
-# 让 `Renderers.CreateRenderer(CLASSIC)` 拿得到实例（C# 是 switch 里 `new`）
+# 让 `Renderers.CreateRenderer(...)` 拿得到实例（C# 是 switch 里 `new`）
 register_classic_renderer()
+register_worldline_renderers()
 
 __all__ = [
     'ClassicSinger', 'OtoData', 'OTO_DATA_EMPTY', 'OtoWatcher', 'ReloadScheduler',
@@ -67,6 +74,7 @@ __all__ = [
     'IResampler', 'IWavtool', 'ResamplerItem', 'ClassicHost', 'ResamplerManifest',
     'SharpWavtool', 'WorldlineResampler', 'ClassicRenderer',
     'register_classic_renderer',
+    'WorldlineRenderer', 'register_worldline_renderers', 'HOP_SIZES', 'hop_size_for_version',
     'IFrqFiles', 'Frq', 'Mrq', 'OtoFrq',
     'VoicebankConfig', 'SymbolSet', 'SymbolSetPreset', 'SingerTypeValues',
     'VoicebankLoader', 'FileTrace',
