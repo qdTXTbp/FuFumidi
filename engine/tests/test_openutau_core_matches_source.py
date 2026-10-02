@@ -7475,6 +7475,178 @@ def test_french_cvvc_phonemizer():
           'got %r' % [p.phoneme for p in r6b.phonemes])
 
 
+def test_turkish_cvvc_phonemizer():
+    """`Plugin.Builtin/TurkishCVVCPhonemizer.cs`（356 行）—— **直接继承 `Phonemizer`**，
+    自己实现歌词分段、VC 边界计算与 oto 查询。零外部依赖。
+    """
+    from singing.openutau import Note, Oto, OtoSet, UOto, UOtoSet, USubbank, Subbank, TimeAxis, registered
+    from singing.ustx import UProject
+    from singing.openutau.plugin_builtin import TurkishCVVCPhonemizer
+    from singing.openutau.plugin_builtin import turkish_cvvc as T
+
+    cs = open(os.path.join(os.path.dirname(REF), 'OpenUtau.Plugin.Builtin',
+                           'TurkishCVVCPhonemizer.cs'), encoding='utf-8-sig').read()
+    cs = cs.replace('\r\n', '\n')
+
+    # ---------------- 源码一致性
+    m = re.search(r'\[Phonemizer\("([^"]*)",\s*"([^"]*)",\s*"([^"]*)"(?:,\s*language\s*:\s*"([^"]*)")?\)\]',
+                  cs)
+    check('TR CVVC: [Phonemizer] 的 name/tag/author/language 与 C# 一致',
+          m is not None and (m.group(1), m.group(2), m.group(3), m.group(4)) == (
+              TurkishCVVCPhonemizer.name, TurkishCVVCPhonemizer.tag,
+              TurkishCVVCPhonemizer.author, TurkishCVVCPhonemizer.language),
+          'C#=%r' % (m.groups() if m else None,))
+    check('TR CVVC: 继承 Phonemizer（不是 SyllableBased）且已注册',
+          'class TurkishCVVCPhonemizer : Phonemizer' in cs
+          and registered().get('TR CVVC') is TurkishCVVCPhonemizer)
+
+    def _split_arr(name):
+        mm = re.search(r'%s = new string\[\] \{([^}]*)\}' % name, cs)
+        if not mm:
+            return None
+        return [s.strip().strip('"').strip("'") for s in mm.group(1).split(',')]
+
+    # glottalStops / vowels / sustainedConsonants 用 regex 数组
+    check('TR CVVC: glottalStops 逐项一致',
+          _split_arr('glottalStops') == list(T.GLOTTAL_STOPS))
+    check('TR CVVC: vowels 逐项一致（9 项）',
+          _split_arr('vowels') == list(T.VOWELS))
+    check('TR CVVC: sustainedConsonants 逐项一致',
+          _split_arr('sustainedConsonants') == list(T.SUSTAINED_CONSONANTS))
+    # consonants 用 Split(',')
+    cs_cons = re.search(r'consonants = "([^"]*)"\.Split', cs)
+    check('TR CVVC: consonants 逐项一致（45 项）',
+          cs_cons and cs_cons.group(1).split(',') == list(T.CONSONANTS))
+
+    # SetSinger 直接存字段
+    check('TR CVVC: SetSinger 直接赋值 this.singer',
+          'public override void SetSinger(USinger singer) => this.singer = singer;' in cs)
+
+    # ---------------- 行为
+    def oto(alias, **kwargs):
+        return UOto(Oto(alias=alias, wav=alias + '.wav', **kwargs),
+                    UOtoSet(OtoSet(file='oto.ini', name='main'), singers_path='/vb'),
+                    [USubbank(Subbank(color=''))])
+
+    class _S:
+        def __init__(self, al):
+            self.al = al
+            self.found = True
+            self.loaded = True
+            self.location = ''
+            self.id = 'tr-test'
+
+        @property
+        def is_loaded(self):
+            return self.found and self.loaded
+
+        def try_get_oto(self, p):
+            return (p in self.al), self.al.get(p)
+
+        def try_get_mapped_oto(self, p, tone, color=None):
+            return (p in self.al), self.al.get(p)
+
+    AX = TimeAxis()
+    AX.build_segments(UProject())
+
+    ph = TurkishCVVCPhonemizer()
+    ph.set_singer(_S({}))
+    ph.set_timing(AX)
+
+    # ---- 歌词转换
+    check('TR CVVC.convertToOtoStyledLyric: 土耳其字符映射',
+          ph._convert_to_oto_styled_lyric('çşğæEıöü') == 'chsh9aeaeeuoeue')
+
+    # ---- 歌词分段
+    seg = ph._get_segmented_phonemes('şarkı')
+    check('TR CVVC.getSegmentedPhonemes: şarkı → [sh,_,a,r,k]',
+          (seg.start_c1, seg.start_c2, seg.vow, seg.end_c1, seg.end_c2) == ('sh', '', 'a', 'r', 'k'))
+    seg2 = ph._get_segmented_phonemes('a')
+    check('TR CVVC.getSegmentedPhonemes: 单元音 → [_,_,a,_,_]',
+          (seg2.start_c1, seg2.start_c2, seg2.vow, seg2.end_c1, seg2.end_c2) == ('', '', 'a', '', ''))
+    seg3 = ph._get_segmented_phonemes('9a')
+    check('TR CVVC.getSegmentedPhonemes: 词首 9 被记为 has_9_before_vow',
+          seg3.has_9_before_vow is True and seg3.vow == 'a')
+
+    # ---- getNoteStart
+    c = T._SegmentedLyric('la', 'l', '', 'a', '', '', False)
+    p_empty = T._SegmentedLyric.empty()
+    check('TR CVVC.getNoteStart: 无前邻 → ["- la", "la", "la"]',
+          ph._get_note_start(c, p_empty) == ['- la', 'la', 'la'])
+
+    prev_v = T._SegmentedLyric('ba', 'b', '', 'a', '', '', False)
+    check('TR CVVC.getNoteStart: 前邻元音 + 当前元音 → V+V',
+          ph._get_note_start(T._SegmentedLyric('a', '', '', 'a', '', '', False), prev_v)
+          == ['a a', 'a', 'a'])
+
+    prev_vc = T._SegmentedLyric('al', 'a', '', 'a', 'l', '', False)
+    check('TR CVVC.getNoteStart: 前邻持续辅音 L → 用大写 L 做 VC',
+          ph._get_note_start(T._SegmentedLyric('a', '', '', 'a', '', '', False), prev_vc)
+          == ['L a', 'a', 'a'])
+
+    prev_vc_nonsus = T._SegmentedLyric('ab', 'a', '', 'a', 'b', '', False)
+    check('TR CVVC.getNoteStart: 前邻非持续辅音 b → result[0] 不变（仍是 "- a"）',
+          ph._get_note_start(T._SegmentedLyric('a', '', '', 'a', '', '', False), prev_vc_nonsus)
+          == ['- a', 'a', 'a'])
+
+    c_cv = T._SegmentedLyric('la', 'l', '', 'a', '', '', False)
+    check('TR CVVC.getNoteStart: 当前带辅音 → 只返回 [noteStart, lyric]',
+          ph._get_note_start(c_cv, prev_v) == ['la', 'la'])
+
+    # ---- getConsonantEnding
+    check('TR CVVC.getConsonantEnding: 无尾音无下一音 → ["V -"]',
+          ph._get_consonant_ending(T._SegmentedLyric('a', '', '', 'a', '', '', False),
+                                   False, T._SegmentedLyric.empty()) == ['a -'])
+    check('TR CVVC.getConsonantEnding: 无尾音 + 下一音带辅音 → V+c',
+          ph._get_consonant_ending(T._SegmentedLyric('a', '', '', 'a', '', '', False),
+                                   True,
+                                   T._SegmentedLyric('be', 'b', '', 'e', '', '', False))
+          == ['a by'],
+          'got %r' % ph._get_consonant_ending(T._SegmentedLyric('a', '', '', 'a', '', '', False),
+                                              True,
+                                              T._SegmentedLyric('be', 'b', '', 'e', '', '', False)))
+    check('TR CVVC.getConsonantEnding: 喉塞音结尾 → 直接 V+?',
+          ph._get_consonant_ending(T._SegmentedLyric('a?', '', '', 'a', '?', '', False),
+                                   False, T._SegmentedLyric.empty()) == ['a ?'])
+
+    # ---- checkOtoUntilHit 的 alt 拼接语义
+    ph2 = TurkishCVVCPhonemizer()
+    ph2.set_singer(_S({'- la': oto('- la'), '- la3': oto('- la3')}))
+    ph2.set_timing(AX)
+    n = Note(lyric='la', tone=60, duration=480,
+             phoneme_attributes=[type('A', (), {'index': 0, 'voice_color': None,
+                                                  'tone_shift': None, 'alternate': 3,
+                                                  'consonant_stretch_ratio': None})()])
+    hit = ph2._check_oto_until_hit(['- la'], n)
+    check('TR CVVC.checkOtoUntilHit: alt=3 时先试 "- la3"',
+          hit is not None and hit.alias == '- la3')
+
+    # ---- Process 端到端：有歌手命中 noteStart / noteEnd
+    ph3 = TurkishCVVCPhonemizer()
+    ph3.set_singer(_S({'- la': oto('- la'), 'a -': oto('a -')}))
+    ph3.set_timing(AX)
+    r = ph3.process([Note(lyric='la', tone=60, duration=480)],
+                    None, None, None, None, [])
+    check('TR CVVC.Process: 单音节 CV 无尾音无下一音 → ["- la", "a -"]',
+          [(p.phoneme, p.position) for p in r.phonemes] == [('- la', 0), ('a -', 360)],
+          'got %r' % [(p.phoneme, p.position) for p in r.phonemes])
+
+    # ---- Process：无 oto 命中时回退到原歌词
+    ph4 = TurkishCVVCPhonemizer()
+    ph4.set_singer(_S({}))
+    ph4.set_timing(AX)
+    r4 = ph4.process([Note(lyric='xyz', tone=60, duration=480)],
+                     None, None, None, None, [])
+    check('TR CVVC.Process: 完全无命中 → 返回原歌词',
+          [p.phoneme for p in r4.phonemes] == ['xyz'])
+
+    # ---- Process：句首点号直接输出后续字符串
+    r5 = ph4.process([Note(lyric='.hello', tone=60, duration=480)],
+                     None, None, None, None, [])
+    check('TR CVVC.Process: 句首 "." → 直接输出后面的字符串',
+          [p.phoneme for p in r5.phonemes] == ['hello'])
+
+
 def _raises_type(exc, fn):
     """小工具：期望抛**指定类型**的异常（本文件已有一个更宽松的 `_raises(fn)`）."""
     try:
@@ -7547,6 +7719,8 @@ def main():
     test_french_vccv_phonemizer()
     print('--- Plugin.Builtin/FrenchCVVC（SyllableBased 第二个真实用户）---')
     test_french_cvvc_phonemizer()
+    print('--- Plugin.Builtin/TurkishCVVC（直接继承 Phonemizer）---')
+    test_turkish_cvvc_phonemizer()
     print('--- 音素化器 × 真 ClassicSinger（接口契约回归） ---')
     test_phonemizers_against_real_singer()
     print('--- Plugin.Builtin/JapaneseCVVC ---')

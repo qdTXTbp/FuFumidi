@@ -20,6 +20,8 @@
                          **`SyllableBased` 基类的第一个真实用户**）
   - `french_cvvc.py`    French CVVC Phonemizer（FrenchCVVCPhonemizer.cs 757 行；
                          同语言家族的第二个真实用户，验证基类 + 复杂别名格式化）
+  - `turkish_cvvc.py`   Turkish CVVC Phonemizer（TurkishCVVCPhonemizer.cs 356 行；
+                         **直接继承 `Phonemizer`**，自己实现歌词分段与 VC 计算）
 
 未照搬（后续）：
   - `SyllableBasedPhonemizer` 家族的其余 15 个具体子类（EnglishVCCV / EnglishCVVC 等）
@@ -40,7 +42,9 @@ from .monophone import MonophonePhonemizer  # noqa: F401
 from .phoneme_based import PhonemeBasedPhonemizer  # noqa: F401
 from .syllable_based import SyllableBasedPhonemizer  # noqa: F401
 from . import japanese_vcv  # noqa: F401
+from .turkish_cvvc import TurkishCVVCPhonemizer  # noqa: F401
 
 __all__ = ['japanese_vcv', 'chinese_vcv', 'chinese_cvvc', 'japanese_cvvc', 'chinese_cvv',
            'PhonemeBasedPhonemizer', 'MonophonePhonemizer', 'LatinDiphonePhonemizer',
-           'SyllableBasedPhonemizer', 'FrenchVCCVPhonemizer', 'FrenchCVVCPhonemizer']
+           'SyllableBasedPhonemizer', 'FrenchVCCVPhonemizer', 'FrenchCVVCPhonemizer',
+           'TurkishCVVCPhonemizer']
