@@ -24,6 +24,7 @@
 """
 
 import math
+import struct
 
 #: `MusicMath.a = Math.Pow(2, 1.0 / 12)` —— 半音频率比
 _A = math.pow(2, 1.0 / 12)
@@ -88,6 +89,16 @@ def idiv(a, b) -> int:
     b = int(b)
     q = abs(a) // abs(b)
     return -q if (a < 0) != (b < 0) else q
+
+
+def as_float32(v: float) -> float:
+    """把 double 舍成 float32 —— 对应 C# 里的 `(float)expr` 与 `2f` / `100f` 这类字面量。
+
+    凡 C# 在某一步用了 float 类型（强制转换、`f` 后缀字面量）的地方，都要在这里过一遍，
+    否则那一步的舍入就丢了。单次误差约 1e-7，但它会**进入后续比较**（例如
+    "有声/无声"的阈值判定、"是否超过 1e-3"的退化判定），在边界帧上可能改变结果。
+    """
+    return struct.unpack('<f', struct.pack('<f', v))[0]
 
 
 class MusicMath:

@@ -77,11 +77,10 @@
 
 import ctypes
 import math
-import struct
 from dataclasses import dataclass
 from typing import Any, List, Optional, Sequence
 
-from .music_math import MusicMath
+from .music_math import MusicMath, as_float32
 from .wave import Wave
 
 # ---------------------------------------------------------------- 常量
@@ -131,17 +130,12 @@ class AnalysisConfig:
     frame_ms: float = 0.0
 
 
-def _as_float32(v: float) -> float:
-    """把 double 舍成 float32（对应 C# 的 `(float)expr`）。"""
-    return struct.unpack('<f', struct.pack('<f', v))[0]
-
-
 def get_f0_floor_for_cheap_trick(fs: int, fft_size: int) -> float:
     """对应上游 WORLD 的 `GetF0FloorForCheapTrick`：`3 * fs / (fft_size - 3)`。
 
     C# 调用处会 `(float)` 转换，所以这里也做 float32 舍入。
     """
-    return _as_float32(3.0 * fs / (fft_size - 3.0))
+    return as_float32(3.0 * fs / (fft_size - 3.0))
 
 
 def init_analysis_config(fs: int, hop_size: int, fft_size: int,

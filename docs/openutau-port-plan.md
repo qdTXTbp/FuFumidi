@@ -3,8 +3,8 @@
 > 上游：`OpenUtau/`（C#）—— `OpenUtau.Core` + `OpenUtau.Plugin.Builtin` + `cpp/worldline`
 > 落点：`engine/singing/`（纯 Python，**不依赖 torch / numpy**，可脱离主程序单测）
 > 方针：**除外观外不允许自研** —— 每一处都应能回答"对应 OpenUTAU 的哪个文件/函数"
-> 最后更新：2026-10-02 —— **P0 / P1-a / P1-b / P1-d / P2 均已完成**
-> 2026-10-02 复核：四项测试 **901 项断言全绿**（含 `worldline.dll` 真机端到端）
+> 最后更新：2026-10-02 —— **P0 / P1-a / P1-b / P1-d / P2 均已完成**；`RenderPhrase` 的 MOD+ 分支也已补齐
+> 2026-10-02 复核：四项测试 **932 项断言全绿**（含 `worldline.dll` 真机端到端）
 
 ---
 
@@ -27,17 +27,21 @@
   子音色匹配、`prefix+phoneme+suffix` 映射、搜索词、原子发布）+ `OtoWatcher`
   + `ClassicSingerLoader`。
   → `render_phrase.py` 里 MOD+ 分支的守卫（`classic_singer is not None`）**现在可以真被触发了**。
+- 随后补齐 `RenderPhrase.cs` 里最大的一段独立逻辑：**MOD+**（73 行）——
+  用 `.frq` 分析出的音高偏差对每个音素做细粒度微调（元音段铺 `toneDiffStretch`、
+  辅音段反向铺 `toneDiffFix`，两端按包络渐入/渐出）。至此 `RenderPhrase` 只剩
+  表达式图一处未搬。
 
 **真机验证**（加载 OpenUTAU 随包分发的 `runtimes/win-x64/native/worldline.dll`）：
 `RenderPhrase.from_part` → `ClassicRenderer.render()` 产出的样本，主频用**过零率**实测
 ≈ 440Hz（源素材 300Hz、tone 69）—— 变调与拼接都真的生效了。
 
-已完成规模：Python **11,024 行**（`engine/singing/**/*.py`，53 个文件，排除 `__pycache__`），
-对应 C# **约 9,590 行**（对第 3 节列出的 45 个 C# 源文件逐项 `wc -l` 求和，
+已完成规模：Python **11,167 行**（`engine/singing/**/*.py`，53 个文件，排除 `__pycache__`），
+对应 C# **约 9,660 行**（对第 3 节列出的 45 个 C# 源文件逐项 `wc -l` 求和，
 含 `RenderEngine.cs` 的 `Progress` 部分）。
 另有 NWaves 三段转写（**无 C# 对应物**，属第三方库替换）。
 
-一致性测试 **5,882 行 / 901 项断言**（四个文件合计：19 + 59 + 804 + 19；
+一致性测试 **5,717 行 / 932 项断言**（四个文件合计：19 + 59 + 835 + 19；
 参考源码缺失时自动 SKIP）。
 
 ---
@@ -58,7 +62,7 @@
 | 子系统 | 上游体量 | 状态 |
 |---|---|---|
 | `.ustx` 工程格式（读写） | ~2,000 行 | ✅ 完成 |
-| 乐句渲染输入（`RenderPhrase` / 3 类） | 663 行 | ✅ 完成 |
+| 乐句渲染输入（`RenderPhrase` / 3 类，含 MOD+） | 663 行 | ✅ 完成（只剩表达式图未搬） |
 | 渲染器接口与注册表 | 146 + 141 行 | ✅ 完成（具体渲染器未搬） |
 | Worldline 纯逻辑 | 780 行中约 400 | ✅ 完成（原生边界另计） |
 | 音素化器基类 / 中文基类 | 250 + 51 行 | ✅ 完成 |
@@ -139,11 +143,11 @@
 cd engine/tests
 python test_ustx_schema_matches_source.py        # 19 passed
 python test_ustx_roundtrip.py                    # 59 passed
-python test_openutau_core_matches_source.py      # 804 passed   ← 含 worldline.dll 真机端到端
+python test_openutau_core_matches_source.py      # 835 passed   ← 含 worldline.dll 真机端到端
 python test_singing_adapters.py                  # 19 passed / 1 skipped
 ```
 
-合计 **901 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
+合计 **932 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
 整套测试**可离线运行**。
 
 `worldline.dll` 真机测试的 SKIP 条件是"找不到 `/d/FuFuMIDI/_ref/OpenUtau/runtimes/win-x64/native/worldline.dll`
@@ -228,6 +232,10 @@ assert '(i + 1) == phrase.dynamics.Length' in cs
 | 30 | **`Save()` 在"没加载过"时会崩** | C# 里 `oto_watcher` 只在 `Reload()` 里创建，`Save()` 直接 `otoWatcher.Paused = true` → NRE。Python 侧是 `AttributeError` | 照搬（已在测试里把"会崩"写成断言）。修它属行为变更，应单独立项 |
 | 31 | **`Regex.Escape` ≠ `re.escape`（但本例里无碍）** | 两者转义字符集不同（Python 多转 `-`/`&`/`~`，C# 多转 `#`）。这里 pattern 只当**分组身份**用（同 prefix+suffix ⇒ 同 pattern），转义是逐字符的确定性映射、对输入单射，所以**分组结果完全一致** | 用 `re.escape` 即可；但要知道"pattern 串本身长得不一样"，别拿它去跟 C# 做字符串相等断言 |
 
+| 32 | **`(int)Math.Ceiling(x) / n` 是「先 ceil 再整数除法」** | 分子可为负时，C# 的整数除法**向零截断**，Python 的 `//` 向下取整 —— `-1/5` 得 `0` vs `-1`。直接照抄成 `ceil(x) // n` 会在负数段算错下标 | 用 `idiv(math.ceil(x), n)`。本轮 MOD+ 的 `endIndex` 正是这个形态 |
+| 33 | **`Math.Clamp(v, 0, n-1)` 在 `n == 0` 时抛 `ArgumentException`** | C# 抛错、被外层的 per-phoneme `catch` 吞掉 → **整个音素被跳过**；若 Python 侧写成 `max(0, min(-1, v))` 会静默得到 0 并继续算，结果完全不同 | 显式在 `n <= 0` 时抛错，让同一层 `except` 接住 —— 这才是"等价" |
+| 34 | **C# 的局部函数可以用在使用之后** | `Fade(...)` 在 C# 里声明在调用它的循环**下面**（同一块内合法）；Python 必须先定义 | 提前定义闭包，别以为"照抄顺序"能行 |
+
 ### 附：写测试时的最大陷阱 —— 凭直觉填期望
 
 **症状**：连续出现"实现正确、测试期望错误"。本项目一轮内错了 7 处
@@ -301,6 +309,8 @@ expect = math.pow(0.5 / (0.5 * w_hi + 1.0 * (1 - w_hi)), 0.86)
 | **`SingerManager.Inst.ScheduleReload`** | 可注入的模块级 `scheduler`；默认实现**直接 `singer.reload()`** | 与 `ClassicHost` / `Renderer` 注册表同一套路。差别只在时机（C# 是丢到主调度器排队），不在结果。★ docstring 里已提醒：watcher 回调可能在别的线程，真多线程用要注入排队版本 |
 | **`EnunuSinger` / `DiffSingerSinger` / `VoicevoxSinger`** | `ClassicSingerLoader` 改成**工厂注册表**，未注册时回落到 `ClassicSinger` | 与 `Renderers.CreateRenderer` 同一套路。C# 的 `default` 分支本来也是 `ClassicSinger`，所以未注册时的行为与 C# 的"该类型不存在"一致 |
 | **`IDisposable`** | `dispose()`，并额外支持 `with` 用法 | Python 无 `IDisposable`；`with` 是顺手的等价物，不改变语义 |
+| **`as_float32` 的落点** | 提到 `music_math.py` 成为**共享**辅助（原先只在 `worldline.py` 里私有） | MOD+ 也要用它（C# 写了 `2f` / `1.0f` / `100f` 与 `(float)(diff * 100)`）。放在共用处，避免两份实现悄悄漂移；`worldline` 的私有版已删除并改为导入 |
+| **MOD+ 里 `OtoFrq` 的导入方式** | **函数内惰性导入** | `classic/` 包反向依赖 `render_phrase`（`classic_renderer` → `RenderPhrase`），模块级导入成环。`oto.py` 对 `VoicebankLoader` 用的是同一招 |
 
 ---
 
@@ -378,11 +388,11 @@ tone 69 变调，输出主频用**过零率**实测 ≈ 440Hz（±10% 内）。
 | `Classic/ClassicSinger.cs` | 243 行 | ✅ 完成（`classic/classic_singer.py`） |
 | `Classic/OtoWatcher.cs` | 42 行 | ✅ 完成（`classic/oto_watcher.py`，监视后端可注入） |
 | `Classic/ClassicSingerLoader.cs` | 30 行 | ✅ 完成（`classic/classic_singer_loader.py`，歌手工厂可注册） |
-| `UOtoFrq`（把 `OtoFrq` 接进 `UOto`，MOD+ 在运行期消费它） | — | 🟡 类型已在 `frq.py`；**接进 `UOto` 的装配**待做 |
+| `OtoFrq` 接进 `UOto`（MOD+ 在运行期消费它） | — | ✅ 完成（`render_phrase._apply_mod_plus`） |
 
-> `render_phrase.py` 里 MOD+ 分支的守卫（`classic_singer is not None`）**现在可以真被触发**；
-> 剩下的是把 `OtoFrq` 挂到 `UOto` 上（`render_phrase.py` 的 `_apply_mod_plus` 目前是
-> 显式 `NotImplementedError`，触发时会给明确信息而不是静默出错）。
+> 说明：C# 里并没有一个叫 `UOtoFrq` 的类型 —— 那就是 `UOto.Frq`（`OtoFrq?`）。
+> MOD+ 在**第一次用到时**惰性 `new OtoFrq(oto, cSinger.Frqs)` 并挂在 oto 上，
+> 同时缓存进 `ClassicSinger.Frqs`（按 wav 路径为键），所以同一音源只分析一次。
 
 本轮（声库侧）顺带补上的两个"不搬就缺零件"的东西：
 `oto.Voicebank`（`character.txt` + `character.yaml` + oto 摊平后的结果，含它的
@@ -427,7 +437,7 @@ tone 69 变调，输出主频用**过零率**实测 ≈ 440Hz（±10% 内）。
 |---|---|
 | ~~M1 抽象层~~ | ✅ 已完成（`singing/api.py` + 适配器） |
 | ~~M2-c `.ustx` 双向兼容~~ | ✅ 已完成 |
-| **M2-a 渲染器主体** | 🟡 Classic 线全通（**声库 → 参数层 → 变调 → 拼接 → 渲染器**）；`WorldlineRenderer` 待做 |
+| **M2-a 渲染器主体** | 🟡 Classic 线全通（**声库 → 参数层 → 变调 → 拼接 → 渲染器**，含 MOD+）；`WorldlineRenderer` 待做 |
 | **M2-b 音素化器** | 🟡 3 / 51 |
 | **M2 渲染输入链路** | ✅ 完成（P0）：`歌词 → 音素 → 乐句 → RenderPhrase[]`，可断言哈希 |
 | **M2 拼接出声** | ✅ 完成（P1-a）：`RenderPhrase → 音素 wav 拼接`（`SharpWavtool`） |

@@ -25,11 +25,13 @@
 ## 尚未照搬、因此目前走不到的分支（照搬时如实保留守卫）
 - **表达式图**（`source.ExpressionGraph != null`）：三处 `? pitches.ToArray() : null`
   与 `graphCurves` 都依赖 `ExpressionGraph`，未搬 → 恒为 None，分支跳过。
-- **MOD+**（`source.ModpSupported && source.ClassicSinger != null`）：依赖
-  `ClassicSinger` / `OtoFrq`，未搬 → `classic_singer` 恒为 None，分支跳过。
-  真走到说明地基已补齐，那时再把 C# 的 MOD+ 段落原样搬进 `_apply_mod_plus`。
-- `FromPart`（依赖 `PhraseSource.FromPart`）与 `DeleteCacheFiles`（依赖 `PathManager`）
-  同理未搬，见文末说明。
+- `FromPart` 已搬（见 `pipeline_source`），但 `DeleteCacheFiles` 里依赖
+  `PathManager` 的那半段（`ClassicSinger` 的 `Frq` 清理）仍未搬，见文末说明。
+
+## MOD+ 已搬（`source.ModpSupported && source.ClassicSinger != null`）
+`_apply_mod_plus` 是 `RenderPhrase.cs` 里最大的一段独立逻辑（约 75 行）：用 `.frq`
+分析出的音高偏差对每个音素做细粒度微调。P2 完成后 `classic_singer` 不再恒为 None，
+这条分支**现在可以真被触发**。细节见该方法的 docstring。
 
 ## 已知的载体差异（不是逻辑差异）
 C# 里 `pitches` / `dynamics` / `curves` 都是 `float[]`，逐步累加会**每一步都舍到
@@ -44,10 +46,10 @@ import os
 
 from typing import List, Optional, Tuple
 
-from ..ustx.model import PitchPoint, PitchPointShape
+from ..ustx.model import PitchPoint, PitchPointShape, Vector2
 from .binary_writer import BinaryWriter
 from .format import Ustx
-from .music_math import MusicMath, fdiv, idiv
+from .music_math import MusicMath, as_float32, fdiv, idiv
 from .phrase_layout import PhraseLayout
 from .pipeline_source import CurveSource, NoteSource, PhonemeSource, PhraseSource
 from .spline import CubicSplineSegment
@@ -449,14 +451,150 @@ class RenderPhrase:
     # ------------------------------------------------------------------ 内部
 
     def _apply_mod_plus(self, source, phrase_phonemes, pitches, pitch_start):
-        """MOD+（对 oto 频率表做音高微调）。
+        """MOD+ —— **照搬** `RenderPhrase.cs` 里 `source.ModpSupported && source.ClassicSinger != null`
+        那段（约 75 行）：用 `.frq` 分析出的音高偏差，对每个音素做一次细粒度音高微调。
 
-        对应 C# 里 `source.ModpSupported && source.ClassicSinger != null` 那段。
-        **尚未照搬**：需要 `ClassicSinger` 与 `OtoFrq`（M2-a 剩余部分）。
-        当前 `PhraseSource.classic_singer` 恒为 None，所以这条分支不会被触发；
-        真被触发说明地基已补齐 —— 那时把 C# 的 MOD+ 段落原样搬到这里。
+        整体结构：**逐个音素、每个音素整段包在 try/catch 里**，任何一个音素出错只记日志、
+        继续下一个（错的那段 pitches 保持原样）。
+
+        ## 照搬时保留的语义（别"整理"掉）
+        1. `ModpRaw == 0` 的判定在 `try` **之外** —— 也就是"没启用 MOD+ 的音素"不参与，
+           而"启用了但 oto 为 None"的音素会进 try 然后被 catch 掉。两者结果相同但路径不同。
+        2. `Frq` 是**惰性挂到 `UOto` 上**并缓存进 `cSinger.Frqs` 的（按 wav 路径为键），
+           所以同一音源只用分析一次。挂上后若 `loaded == False` 就跳过该音素。
+        3. `tempo` 取**该音素所属音符的速度**（`NoteTempos[0].bpm`），拿不到才回落
+           `source.DefaultBpm`。C# 原文注释写着 "compromise 妥協！" —— 照搬这个折衷。
+        4. `consonantStretch = 2^(1 - VelRaw/100)`，其中 `1.0f - VelRaw/100f` 是**float32** 运算
+           （C# 里写的是 `2f` / `1.0f` / `100f`），所以这里显式过一遍 `as_float32`。
+        5. `startStretch` 用 `(Consonant - Preutter) * consonantStretch` 折算，
+           含义是"元音段第一个 pitch 帧的位置"。
+        6. **两个循环方向相反**：第一个从 `startStretch` 往右铺 `toneDiffStretch`（元音段），
+           第二个从 `startStretch - 1` 往**左**铺 `toneDiffFix`（辅音段，`frqPoint` 从
+           `toneDiffFix.Length` 往前数）。第二个循环里越界是 `continue`（不是 `break`）。
+        7. `stretch` 只在"元音段铺不下"时才 > 1：判据是
+           `len(toneDiffStretch) * frqIntervalTick < (endIndex - startStretch) * pitchInterval`。
+        8. `Fade` 是 C# 的**局部函数**（声明在使用之后，C# 允许）：句尾渐出用 `env3→env4`，
+           句首渐入用 `env0→env1`；`env1.X`/`env3.X` 是包络点在 [0,1] 上的归一化位置。
+        9. 除法一律走 `fdiv`：`endIndex == startIndex` 时 `percentage` 在 C# 是 ±Inf/NaN
+           （**不抛错**，会继续算下去），而包络宽度为 0 时 `env1.X` 同理。
+           用 Python 的 `/` 会抛 `ZeroDivisionError` 被 catch 吞掉 —— 那是**另一种**结果。
+
+        ## 与 C# 的差异
+        C# 的 `OtoFrq` 构造若失败会抛，被 catch 吞掉；Python 侧 `OtoFrq(oto, frqs)` 同样
+        在内部把"没有 .frq/.mrq"处理成 `loaded = False`（不抛），两条路都落到"跳过该音素"。
         """
-        raise NotImplementedError('MOD+ 需要 ClassicSinger / OtoFrq（尚未照搬）')
+        # 惰性导入：`classic/` 包反向依赖本模块（classic_renderer → RenderPhrase），
+        # 模块级导入会成环。`oto.py` 对 `VoicebankLoader` 用的是同一招。
+        from .classic.frq import OtoFrq
+        # ---- C# 的局部函数 `Fade`（必须先定义再用）
+        def Fade(diff, pit, start_index, end_index, env0, env1, env3, env4, phoneme):
+            percentage = fdiv(pit - start_index, end_index - start_index)
+            if phoneme.next_adjacent and percentage > env3.x:
+                diff = (diff * max(0.0, min(100.0, MusicMath.linear(
+                    env3.x, env4.x, env3.y, env4.y, percentage))) / 100)
+            if phoneme.prev_adjacent and percentage < env1.x:
+                diff = (diff * max(0.0, min(100.0, MusicMath.linear(
+                    env0.x, env1.x, env0.y, env1.y, percentage))) / 100)
+            return diff
+
+        def clamp_index(v, n):
+            """`Math.Clamp((int)expr, 0, n - 1)` —— `n == 0` 时 C# 抛 ArgumentException。"""
+            if n <= 0:
+                raise ValueError('Math.Clamp: min > max (n = %d)' % n)
+            return max(0, min(n - 1, v))
+
+        c_singer = source.classic_singer
+        n_pitches = len(pitches)
+
+        for phoneme in phrase_phonemes:
+            phoneme_modp = phoneme.modp_raw
+            if phoneme_modp == 0:
+                continue
+            try:
+                oto = phoneme.oto
+                if oto.frq is None:
+                    oto.frq = OtoFrq(oto, c_singer.frqs)
+                if not oto.frq.loaded:
+                    continue
+                frq = oto.frq
+
+                note_tempos = phoneme.note_tempos
+                tempo = note_tempos[0].bpm if len(note_tempos) > 0 else source.default_bpm
+                # `(double)1 * 1000 / 44100 * frq.hopSize` —— 44100 是 .frq 的计时基准
+                frq_interval_tick = MusicMath.tempo_ms_to_tick(
+                    tempo, 1.0 * 1000 / 44100 * frq.hop_size)
+                consonant_stretch = math.pow(
+                    2.0, as_float32(1.0 - as_float32(phoneme.vel_raw / 100.0)))
+
+                preutter = MusicMath.tempo_ms_to_tick(
+                    tempo, min(phoneme.preutter, oto.preutter * consonant_stretch))
+                start_index = max(0, math.floor(
+                    (phoneme.position - pitch_start - preutter) / PITCH_INTERVAL))
+                position = int(round((phoneme.position - pitch_start) / PITCH_INTERVAL))
+                start_stretch = position + int(round(MusicMath.tempo_ms_to_tick(
+                    tempo, (oto.consonant - oto.preutter) * consonant_stretch)
+                    / PITCH_INTERVAL))
+                end_index = min(n_pitches, idiv(math.ceil(
+                    phoneme.end - pitch_start - MusicMath.tempo_ms_to_tick(
+                        tempo, phoneme.tail_intrude - phoneme.tail_overlap)),
+                    PITCH_INTERVAL))
+                # ★ C# 是 `(int)Math.Ceiling(x) / pitchInterval`：先取整、再**整数除法**。
+                #   分子可能为负 → 必须用 idiv（向零截断），不能用 `//`（向下取整）。
+
+                stretch = 1.0
+                if (len(frq.tone_diff_stretch) * frq_interval_tick
+                        < (end_index - start_stretch) * PITCH_INTERVAL):
+                    stretch = ((end_index - start_stretch) * PITCH_INTERVAL
+                               / (len(frq.tone_diff_stretch) * frq_interval_tick))
+
+                env0 = Vector2(0, 0)
+                env1 = Vector2(fdiv(phoneme.envelope[1].x - phoneme.envelope[0].x,
+                                    phoneme.envelope[4].x - phoneme.envelope[0].x), 100)
+                env3 = Vector2(fdiv(phoneme.envelope[3].x - phoneme.envelope[0].x,
+                                    phoneme.envelope[4].x - phoneme.envelope[0].x), 100)
+                env4 = Vector2(1, 0)
+
+                # ---- 元音段：从 startStretch 往右，铺 toneDiffStretch
+                i = 0
+                while start_stretch + i <= end_index:
+                    pit = start_stretch + i
+                    if pit >= n_pitches:
+                        break
+                    frq_point = i * (PITCH_INTERVAL / frq_interval_tick) / stretch
+                    n_str = len(frq.tone_diff_stretch)
+                    lo = clamp_index(math.floor(frq_point), n_str)
+                    hi = clamp_index(math.ceil(frq_point), n_str)
+                    diff = MusicMath.linear(lo, hi, frq.tone_diff_stretch[lo],
+                                            frq.tone_diff_stretch[hi], frq_point)
+                    diff = diff * phoneme_modp / 100
+                    diff = Fade(diff, pit, start_index, end_index, env0, env1, env3, env4, phoneme)
+                    pitches[pit] = pitches[pit] + as_float32(diff * 100)   # C#: (float)(diff * 100)
+                    i += 1
+
+                # ---- 辅音段：从 startStretch-1 往**左**，铺 toneDiffFix
+                i = 0
+                while start_stretch + i - 1 >= start_index:
+                    pit = start_stretch + i - 1
+                    # ★ 越界时是 `continue`（不是 break）—— 后面的 pit 还可能落在范围内。
+                    # ★ `i` 必须留到算完 frqPoint 之后再减，否则第一次就偏了一格。
+                    if not (pit > end_index or pit >= n_pitches):
+                        frq_point = (len(frq.tone_diff_fix)
+                                     + i * (PITCH_INTERVAL / frq_interval_tick) / consonant_stretch)
+                        n_fix = len(frq.tone_diff_fix)
+                        lo = clamp_index(math.floor(frq_point), n_fix)
+                        hi = clamp_index(math.ceil(frq_point), n_fix)
+                        diff = MusicMath.linear(lo, hi, frq.tone_diff_fix[lo],
+                                                frq.tone_diff_fix[hi], frq_point)
+                        diff = diff * phoneme_modp / 100
+                        diff = Fade(diff, pit, start_index, end_index, env0, env1, env3, env4, phoneme)
+                        pitches[pit] = pitches[pit] + as_float32(diff * 100)
+                    i -= 1
+            except Exception:
+                # C# 是 `catch (Exception e) { Log.Error(e, "Failed to compute mod plus."); }`
+                # —— 单个音素出错不影响其它音素，该音素的 pitches 保持原样
+                continue
+
+        return pitches
 
     def _hash(self, post_effect: bool) -> int:
         """对应 C# 的 `Hash(bool postEffect)`。

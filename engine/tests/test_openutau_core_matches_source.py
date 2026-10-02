@@ -4773,6 +4773,155 @@ def test_classic_singer():
         CS.set_romaji_converter(None)
 
 
+class _FakeFrq:
+    """`OtoFrq` 的替身（`render_phrase.py` 只读它的 loaded / hop_size / 两张差分表）。"""
+
+    def __init__(self, stretch=None, fix=None, hop_size=441, loaded=True):
+        self.loaded = loaded
+        self.hop_size = hop_size
+        self.tone_diff_stretch = list(stretch if stretch is not None else [5.0] * 10)
+        self.tone_diff_fix = list(fix if fix is not None else [3.0] * 10)
+
+
+class _FakeClassicSinger:
+    """只需要 `Frqs`（把 wav 路径映射到频率表）与 `id`。"""
+
+    def __init__(self):
+        self.frqs = {}
+        self.id = 'classic-test'
+
+
+def test_mod_plus():
+    """`render_phrase.py` 的 MOD+ 分支（`RenderPhrase.cs` 里最大的一段独立逻辑）。"""
+    from singing.openutau import classic as _classic  # noqa: F401  (确认 classic 可导入)
+    cs = _read('Render/RenderPhrase.cs')
+    if cs is None:
+        print('  SKIP 找不到 Render/RenderPhrase.cs')
+        return
+
+    # ---------------- 源码一致性
+    check('MOD+: 守卫是 ModpSupported && ClassicSinger != null',
+          'source.ModpSupported && source.ClassicSinger != null' in cs)
+    check('MOD+: ModpRaw == 0 的判定在 try **之外**',
+          'if (phonemeModp == 0)' in cs
+          and cs.index('if (phonemeModp == 0)') < cs.index('Failed to compute mod plus.'))
+    check('MOD+: 单个音素出错只记日志（catch 吞掉）',
+          'catch(Exception e) {' in cs.replace('catch (Exception e) {', 'catch(Exception e) {')
+          and 'Failed to compute mod plus.' in cs)
+    check('MOD+: Frq 惰性挂到 Oto 上并缓存进 cSinger.Frqs',
+          'if (phoneme.Oto.Frq == null) {' in cs
+          and 'new OtoFrq(phoneme.Oto, cSinger.Frqs)' in cs)
+    check('MOD+: loaded == false 时跳过该音素',
+          'if (phoneme.Oto.Frq.loaded == false) {' in cs
+          and 'continue;' in cs)
+    check('MOD+: tempo 取 NoteTempos[0].bpm，回落 DefaultBpm（原文注释 "妥協"）',
+          'noteTempos.Length > 0 ? noteTempos[0].bpm : source.DefaultBpm' in cs
+          and 'compromise 妥協' in cs)
+    check('MOD+: consonantStretch 用的是 float 字面量（2f / 1.0f / 100f）',
+          'Math.Pow(2f, 1.0f - phoneme.VelRaw / 100f)' in cs)
+    check('MOD+: frqIntervalTick = TempoMsToTick(tempo, 1000/44100*hopSize)',
+          '(double)1 * 1000 / 44100 * frq.hopSize' in cs)
+    check('MOD+: preutter 取 min(phoneme.Preutter, oto.Preutter * consonantStretch)',
+          'Math.Min(phoneme.Preutter, phoneme.Oto.Preutter * consonantStretch)' in cs)
+    check('MOD+: endIndex 是「先 Ceiling 再整数除法」',
+          'Math.Ceiling(phoneme.End - pitchStart - MusicMath.TempoMsToTick(tempo, phoneme.TailIntrude - phoneme.TailOverlap)) / pitchInterval' in cs)
+    check('MOD+: stretch 只在元音段铺不下时 > 1',
+          'frq.toneDiffStretch.Length * frqIntervalTick < ((double)endIndex - startStretch) * pitchInterval' in cs)
+    check('MOD+: 加进 pitches 前有 (float) 转换',
+          'pitches[pit] = pitches[pit] + (float)(diff * 100);' in cs)
+    check('MOD+: 辅音段循环是 i--（往左铺），越界用 continue',
+          'for (int i = 0; startStretch + i - 1 >= startIndex; i--)' in cs
+          and 'if (pit > endIndex || pit >= pitches.Length) continue;' in cs)
+    check('MOD+: 辅音段的 frqPoint 从 toneDiffFix.Length 往前数',
+          'frq.toneDiffFix.Length + (i * (pitchInterval / frqIntervalTick) / consonantStretch)' in cs)
+    check('MOD+: Fade 用 env3→env4 渐出、env0→env1 渐入，且都 Clamp 到 [0,100]',
+          'env3.X, env4.X, env3.Y, env4.Y, percentage' in cs
+          and 'env0.X, env1.X, env0.Y, env1.Y, percentage' in cs
+          and cs.count('Math.Clamp(MusicMath.Linear(') >= 2)
+    check('MOD+: env1/env3 的 X 是包络点在 [0,1] 上的归一化位置',
+          '(phoneme.Envelope[1].X - phoneme.Envelope[0].X) / (phoneme.Envelope[4].X - phoneme.Envelope[0].X)' in cs)
+
+    # ---------------- 行为：走真实的 RenderPhrase 构造路径
+    def _run(phoneme_kw=None, frq=None, modp=True, singer=True):
+        kw = {'oto': _modp_oto(frq), 'modp_raw': 100.0, 'vel_raw': 100.0,
+              'prev_adjacent': False, 'next_adjacent': False}
+        kw.update(phoneme_kw or {})
+        ph = _mk_phoneme(**kw)
+        src = _mk_phrase_source([_mk_note()])
+        src.modp_supported = modp
+        src.classic_singer = _FakeClassicSinger() if singer else None
+        rp = RenderPhrase(src, [ph], 0, 1)
+        return rp
+
+    def _modp_oto(frq):
+        o = _mk_named_oto('a')
+        o.preutter = 60.0
+        o.consonant = 50.0
+        o.frq = frq
+        return o
+
+    # 基线：MOD+ 关闭时是全平的 6000
+    base = _run(modp=False)
+    check('MOD+: modp_supported=False 时不动 pitches',
+          set(base.pitches) == {6000.0}, 'got %r' % sorted(set(base.pitches))[:4])
+
+    # 开启 MOD+：元音段 +500、辅音段 +300（见下方推导）
+    rp = _run(frq=_FakeFrq())
+    check('MOD+: 元音段被加上 toneDiffStretch * modp（6000 → 6500）',
+          rp.pitches[50] == 6500.0, 'got %r' % rp.pitches[50])
+    check('MOD+: 辅音段被加上 toneDiffFix * modp（6000 → 6300）',
+          rp.pitches[0] == 6300.0, 'got %r' % rp.pitches[0])
+    check('MOD+: 两段交界处由元音段接管（pit == startStretch）',
+          rp.pitches[8] == 6500.0, 'got %r' % rp.pitches[8])
+    check('MOD+: endIndex 之后不再改动', rp.pitches[103] == 6000.0,
+          'got %r' % rp.pitches[103])
+    check('MOD+: pitchesBeforeDeviation 记的是 MOD+ **之后**的值',
+          set(rp.pitches_before_deviation) != {6000.0})
+
+    # modp_raw == 0 → 不进循环
+    check('MOD+: modp_raw=0 时不动 pitches',
+          set(_run(frq=_FakeFrq(), phoneme_kw={'modp_raw': 0.0}).pitches) == {6000.0})
+
+    # loaded == False → continue
+    check('MOD+: frq.loaded=False 时不动 pitches',
+          set(_run(frq=_FakeFrq(loaded=False)).pitches) == {6000.0})
+
+    # oto 为 None → try 里抛 → 被 catch 吞掉
+    ph_none = _mk_phoneme(oto=None, modp_raw=100.0, vel_raw=100.0)
+    src_none = _mk_phrase_source([_mk_note()])
+    src_none.modp_supported = True
+    src_none.classic_singer = _FakeClassicSinger()
+    check('MOD+: oto 为 None 时被 catch 吞掉、pitches 不变',
+          set(RenderPhrase(src_none, [ph_none], 0, 1).pitches) == {6000.0})
+
+    # 差分表为空 → clamp_index 抛（对应 C# Math.Clamp 的 ArgumentException）→ 整只音素跳过
+    check('MOD+: toneDiffStretch 为空时整只音素被跳过（Math.Clamp 抛错那一路）',
+          set(_run(frq=_FakeFrq(stretch=[])).pitches) == {6000.0})
+    check('MOD+: toneDiffFix 为空只影响辅音段（元音段照常）',
+          _run(frq=_FakeFrq(fix=[])).pitches[50] == 6500.0
+          and _run(frq=_FakeFrq(fix=[])).pitches[0] == 6000.0)
+
+    # classic_singer 为 None → 整个 MOD+ 段跳过
+    check('MOD+: classic_singer 为 None 时不动 pitches',
+          set(_run(frq=_FakeFrq(), singer=False).pitches) == {6000.0})
+
+    # stretch > 1：差分表很小时元音段被拉伸（值仍取端点，故幅度不变）
+    check('MOD+: 差分表很小时 stretch > 1（元音段仍铺满到 endIndex）',
+          _run(frq=_FakeFrq(stretch=[5.0] * 3)).pitches[100] == 6500.0,
+          'got %r' % _run(frq=_FakeFrq(stretch=[5.0] * 3)).pitches[100])
+
+    # 帧尾邻近时走 Fade：把包络做成非退化（env[4].X != env[0].X）才能看到效果
+    env = [Vector2(0, 0), Vector2(50, 100), Vector2(200, 100), Vector2(250, 100), Vector2(300, 0)]
+    faded = _run(frq=_FakeFrq(), phoneme_kw={'envelope': env, 'next_adjacent': True})
+    check('MOD+: 非退化包络 + NextAdjacent 时句尾被渐出（后段增量变小）',
+          faded.pitches[100] < faded.pitches[50],
+          'got %r / %r' % (faded.pitches[50], faded.pitches[100]))
+    no_adj = _run(frq=_FakeFrq(), phoneme_kw={'envelope': env})
+    check('MOD+: 没有邻接标记时不做渐出（全程等量）',
+          no_adj.pitches[100] == no_adj.pitches[50],
+          'got %r / %r' % (no_adj.pitches[50], no_adj.pitches[100]))
+
+
 def test_xxhash64():
     """XXH32/XXH64 官方测试向量 —— 对不上，所有缓存键都会静默错。"""
     from singing.openutau.xxhash import xxh32, xxh64 as _x
@@ -4840,6 +4989,8 @@ def main():
     test_document_snapshot_store()
     print('--- Render/Worldline（纯逻辑） ---')
     test_worldline_pure()
+    print('--- RenderPhrase MOD+ ---')
+    test_mod_plus()
     print('--- Classic/ClassicSinger + OtoWatcher + Loader ---')
     test_classic_singer()
     print('--- Classic/Ini ---')
