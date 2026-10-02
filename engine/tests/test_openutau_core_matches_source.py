@@ -1286,8 +1286,15 @@ def _mk_named_oto(alias, color=''):
 class _OtoSinger:
     """按别名查表的假歌手。"""
 
-    def __init__(self, aliases):
+    def __init__(self, aliases, location=''):
         self.aliases = aliases
+        # ★ 真 `USinger` 一定有下面这些**属性**：缺了会让"读歌手状态/路径"的代码在
+        #   测试里抛 AttributeError（而真机不会）。替身要照抄真实现的**属性面**，
+        #   不只是方法签名 —— 这是上一轮那个 (found, oto) bug 的同类。
+        self.found = True
+        self.loaded = True
+        self.location = location
+        self.id = 'fake-singer'
 
     def try_get_mapped_oto(self, phoneme, tone, color=None):
         # ★ 同契约：`(found, oto)`，别返回裸值
@@ -5681,11 +5688,12 @@ def test_phoneme_based_phonemizer():
           'addTail = false;' in cs_m)
     check('Monophone: 回落链最后返回**带 alt 后缀**的原串（不是裸 symbol）',
           'return $"{symbol}{alt}";' in cs_m)
-    check('两个基类都是 abstract、**不注册**（name 为空）',
+    check('两个基类都是 abstract、**不注册**（name 为空、且不在注册表里）',
           'abstract class PhonemeBasedPhonemizer' in cs
           and 'abstract class MonophonePhonemizer' in cs_m
           and PhonemeBasedPhonemizer.name == '' and MonophonePhonemizer.name == ''
-          and 'test mono' not in registered() and len(registered()) == 4)
+          and PhonemeBasedPhonemizer not in registered().values()
+          and MonophonePhonemizer not in registered().values())
 
     # ---------------- 行为
     # 1) `?` 前缀强制别名
@@ -5822,6 +5830,133 @@ def test_phoneme_based_phonemizer():
           'got %r' % [p.phoneme for p in r.phonemes])
 
 
+def test_chinese_cvv_phonemizer():
+    """`Plugin.Builtin/ChineseCVVPhonemizer.cs` —— 拼音拆成「整音 + 尾韵」。"""
+    from singing.openutau import Note, registered
+    from singing.openutau.plugin_builtin import chinese_cvv as CVV
+    from singing.openutau.plugin_builtin.chinese_cvv import (ChineseCVVG2p,
+                                                             ChineseCVVMonophonePhonemizer)
+
+    cvv_path = os.path.join(os.path.dirname(REF), 'OpenUtau.Plugin.Builtin',
+                            'ChineseCVVPhonemizer.cs')
+    if not os.path.isfile(cvv_path):
+        print('  SKIP 找不到 ChineseCVVPhonemizer.cs')
+        return
+    cs = open(cvv_path, encoding='utf-8-sig').read().replace('\r\n', '\n')
+
+    # ---------------- 源码一致性
+    m = re.search(r'\[Phonemizer\("([^"]*)",\s*"([^"]*)"(?:,\s*"([^"]*)")?'
+                  r'(?:,\s*language\s*:\s*"([^"]*)")?\)\]', cs)
+    check('ZH CVV: [Phonemizer] 的 name/tag/language 与 C# 一致（**无 author**）',
+          m is not None and (m.group(1), m.group(2), m.group(4)) == (
+              ChineseCVVMonophonePhonemizer.name, ChineseCVVMonophonePhonemizer.tag,
+              ChineseCVVMonophonePhonemizer.language),
+          'C#=%r 我们=%r' % (m.groups() if m else None,
+                             (ChineseCVVMonophonePhonemizer.name,
+                              ChineseCVVMonophonePhonemizer.tag,
+                              ChineseCVVMonophonePhonemizer.language)))
+    check('ZH CVV: 已在注册表里', registered().get('ZH CVV') is ChineseCVVMonophonePhonemizer)
+    check('ZH CVV: 继承 MonophonePhonemizer（音素驱动那条线）',
+          issubclass(ChineseCVVMonophonePhonemizer, __import__(
+              'singing.openutau.plugin_builtin', fromlist=['x']).MonophonePhonemizer))
+    check('ZH CVV: 构造函数里 ConsonantLength = 120（基类默认 60）',
+          'ConsonantLength = 120;' in cs
+          and ChineseCVVMonophonePhonemizer().consonant_length == 120)
+    check('ZH CVV: 类名是 ChineseCVVMonophonePhonemizer（文件名与类名不同）',
+          'class ChineseCVVMonophonePhonemizer : MonophonePhonemizer' in cs)
+    check('ZH CVV: LoadG2p 三段回落（插件目录 → 声库目录 → 内置）且最后包 G2pFallbacks',
+          "Path.Combine(PluginDir, \"zhcvv.yaml\")" in cs
+          and "Path.Combine(singer.Location, \"zhcvv.yaml\")" in cs
+          and 'g2ps.Add(new ChineseCVVG2p());' in cs
+          and 'return new G2pFallbacks(g2ps.ToArray());' in cs)
+    check('ZH CVV: 声库那份包了 try/catch、插件那份**没有**（照搬这个不对称）',
+          cs.index('g2ps.Add(G2pDictionary.NewBuilder().Load(File.ReadAllText(path)).Build());')
+          < cs.index('g2ps.Add(G2pDictionary.NewBuilder().Load(File.ReadAllText(file)).Build());')
+          and cs.count('Log.Error(e, $"Failed to load {file}");') == 1)
+    check('ZH CVV: LoadVowelFallbacks 是 _un=_en;_uai=_ai',
+          '"' + '_un=_en;_uai=_ai' + '"' in cs
+          and ChineseCVVMonophonePhonemizer().load_vowel_fallbacks()
+          == {'_un': ['_en'], '_uai': ['_ai']})
+    check('ZH CVV: SetUp 先 base.SetUp 再做汉字罗马化',
+          'base.SetUp(groups, project, track);' in cs
+          and 'BaseChinesePhonemizer.RomanizeNotes(groups);' in cs)
+    check('ZH CVV: G2p 的 IsVowel 判据是"**不以 _ 开头**"',
+          'return !phoneme.StartsWith("_");' in cs)
+    check('ZH CVV: G2p 的 IsGlide 恒 false / IsValidSymbol 恒 true / UnpackHint 不过滤',
+          'public bool IsGlide(string phoneme){\n            return false;' in cs
+          and 'public bool IsValidSymbol(string symbol){\n            return true;' in cs
+          and 'hint.Split(separator)\n                .ToArray();' in cs)
+    check('ZH CVV: Query 的第一个条件要求 len > 2（zh/ch/sh 才走双字母）',
+          'lyric.Length > 2 && cSet.Contains(lyric.Substring(0, 2))' in cs)
+    check('ZH CVV: 两条拼写修正的顺序（先 v 化、后 an→ian）',
+          cs.index('vowel = "v" + vowel.Substring(1);') < cs.index('vowel = "ian";'))
+    check('ZH CVV: 查到尾韵时返回 [lyric, tail]（整音在前）',
+          'return new string[] { lyric, tail };' in cs)
+    check('ZH CVV: pinyins/tails/pinyinList/tailList 是**死字段**（声明后未使用）',
+          cs.count('pinyinList') == 1 and cs.count('tailList') == 1
+          and len(CVV.PINYIN_LIST) > 300 and len(CVV.TAIL_LIST) == 15)
+
+    # ---------------- G2p 行为（这些是"拆拼音"的全部规则）
+    g = ChineseCVVG2p()
+    check('ZH CVV G2p: 声母表 23 项、韵母映射 25 项',
+          len(ChineseCVVG2p.CONSONANTS) == 23 and len(ChineseCVVG2p.VOWELS) == 25,
+          'got %r / %r' % (len(ChineseCVVG2p.CONSONANTS), len(ChineseCVVG2p.VOWELS)))
+    check('ZH CVV G2p: IsVowel —— 带声母的整音**算元音**，只有 _xx 不算',
+          g.is_vowel('duang') is True and g.is_vowel('_ang') is False)
+    check('ZH CVV G2p: 双字母声母要 len > 2（zhang 拆出 zh / zha 也拆出 zh）',
+          g.query('zhang') == ['zhang', '_ang'] and g.query('zha') == ['zha'])
+    check('ZH CVV G2p: len == 2 时**不**走双字母声母（zh → z + h，查不到尾韵）',
+          g.query('zh') == ['zh'], 'got %r' % g.query('zh'))
+    check('ZH CVV G2p: 单字母声母（duang → d + uang → _ang）',
+          g.query('duang') == ['duang', '_ang'])
+    check('ZH CVV G2p: 纯韵母（an → _an）', g.query('an') == ['an', '_an'])
+    check('ZH CVV G2p: j/q/x/y + un/uan → v 化（jun → _vn）',
+          g.query('jun') == ['jun', '_vn'] and g.query('juan') == ['juan', '_en2']
+          and g.query('xun') == ['xun', '_vn'], 'got %r' % g.query('jun'))
+    check('ZH CVV G2p: yuan → y + uan → van → _en2（"an→ian" 那条**不**触发）',
+          g.query('yuan') == ['yuan', '_en2'], 'got %r' % g.query('yuan'))
+    check('ZH CVV G2p: yan → y + an → ian → _en2（"an→ian" 触发）',
+          g.query('yan') == ['yan', '_en2'], 'got %r' % g.query('yan'))
+    check('ZH CVV G2p: 查不到尾韵时只返回 [lyric]', g.query('zha') == ['zha'])
+    check('ZH CVV G2p: UnpackHint 只切分、不过滤空段',
+          g.unpack_hint('a  _ang') == ['a', '', '_ang'])
+
+    # ---------------- 端到端（走 Monophone 那条线）
+    ph = ChineseCVVMonophonePhonemizer()
+    ph.set_singer(_OtoSinger({'_ang': _mk_named_oto('_ang'), '_vn': _mk_named_oto('_vn')}))
+    ph.set_timing(_CVVC_AXIS)
+    r = ph.process([Note(lyric='duang', tone=60, duration=480)])
+    check('ZH CVV: 整音原样保留、尾韵被追加（两个音素）',
+          [p.phoneme for p in r.phonemes] == ['duang', '_ang'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+    check('ZH CVV: ConsonantLength=120 → 尾韵占 120、整音吃掉 360（手推）',
+          [p.position for p in r.phonemes] == [0, 360],
+          'got %r' % [p.position for p in r.phonemes])
+    # 尾韵别名查不到 → Monophone 第 4 段回落到原符号（这里符号本身就是 _ang）
+    ph2 = ChineseCVVMonophonePhonemizer()
+    ph2.set_singer(_OtoSinger({}))
+    ph2.set_timing(_CVVC_AXIS)
+    r2 = ph2.process([Note(lyric='jun', tone=60, duration=480)])
+    check('ZH CVV: 别名查不到时尾韵回落成符号本身（Monophone 第 4 段）',
+          [p.phoneme for p in r2.phonemes] == ['jun', '_vn'],
+          'got %r' % [p.phoneme for p in r2.phonemes])
+    # SetUp 会做汉字→拼音
+    groups = [[Note(lyric='当', tone=60, duration=480)]]
+    ph2.set_up(groups, 'PROJ', 'TRACK')
+    check('ZH CVV.SetUp: 汉字被罗马化成拼音（当 → dang）', groups[0][0].lyric == 'dang',
+          'got %r' % groups[0][0].lyric)
+    check('ZH CVV.SetUp: 调了 base.SetUp（project/track 有值）',
+          ph2.project == 'PROJ' and ph2.track == 'TRACK')
+    # _uai 的元音回落：查不到 _uai 时用 _ai
+    ph3 = ChineseCVVMonophonePhonemizer()
+    ph3.set_singer(_OtoSinger({'_ai': _mk_named_oto('_ai')}))
+    ph3.set_timing(_CVVC_AXIS)
+    r3 = ph3.process([Note(lyric='guai', tone=60, duration=480)])
+    check('ZH CVV: _uai 查不到时按 vowelFallback 回落到 _ai',
+          [p.phoneme for p in r3.phonemes] == ['guai', '_ai'],
+          'got %r' % [p.phoneme for p in r3.phonemes])
+
+
 def test_xxhash64():
     """XXH32/XXH64 官方测试向量 —— 对不上，所有缓存键都会静默错。"""
     from singing.openutau.xxhash import xxh32, xxh64 as _x
@@ -5889,6 +6024,8 @@ def main():
     test_document_snapshot_store()
     print('--- Render/Worldline（纯逻辑） ---')
     test_worldline_pure()
+    print('--- Plugin.Builtin/ChineseCVV ---')
+    test_chinese_cvv_phonemizer()
     print('--- Plugin.Builtin/PhonemeBased + Monophone ---')
     test_phoneme_based_phonemizer()
     print('--- Core/G2p 基础设施 ---')

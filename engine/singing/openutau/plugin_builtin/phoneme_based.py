@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""音素驱动的音素化器基类 —— **照搬**
+r"""音素驱动的音素化器基类 —— **照搬**
 `OpenUtau.Plugin.Builtin/PhonemeBasedPhonemizer.cs`（226 行）。
 
 与 `SyllableBasedPhonemizer` 那条线的区别：这条线**以"音素序列"为单位**做事 ——
