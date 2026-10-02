@@ -4475,6 +4475,304 @@ def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
 
 
+def _build_voicebank_dir(root, name, character_txt, oto_ini, extra_files=()):
+    """在磁盘上造一个最小可用声库目录，返回 `character.txt` 的路径。"""
+    vb = os.path.join(root, name)
+    os.makedirs(vb, exist_ok=True)
+    with open(os.path.join(vb, 'character.txt'), 'w', encoding='utf-8') as f:
+        f.write(character_txt)
+    with open(os.path.join(vb, 'oto.ini'), 'w', encoding='utf-8') as f:
+        f.write(oto_ini)
+    for fn in extra_files:
+        with open(os.path.join(vb, fn), 'wb') as f:
+            f.write(b'RIFF')
+    return os.path.join(vb, 'character.txt')
+
+
+def test_classic_singer():
+    """`Classic/ClassicSinger.cs` + `OtoWatcher.cs` + `ClassicSingerLoader.cs`。"""
+    import tempfile
+
+    from singing.openutau.classic import (ClassicHost, ClassicSinger, OtoWatcher,
+                                          OTO_DATA_EMPTY, ReloadScheduler,
+                                          VoicebankLoader, adjust_singer_type,
+                                          find_all_singers, register_singer_factory,
+                                          registered_singer_types,
+                                          reset_singer_factories)
+    from singing.openutau.classic import classic_singer as CS
+    from singing.openutau.classic import oto_watcher as OW
+    from singing.openutau.oto import Voicebank
+    from singing.openutau.singer import USingerType
+
+    cs = _read('Classic/ClassicSinger.cs')
+    cs_w = _read('Classic/OtoWatcher.cs')
+    cs_l = _read('Classic/ClassicSingerLoader.cs')
+    if cs is None or cs_w is None or cs_l is None:
+        print('  SKIP 找不到 ClassicSinger.cs / OtoWatcher.cs / ClassicSingerLoader.cs')
+        return
+
+    # ---------------- 源码一致性：OtoWatcher
+    check('OtoWatcher: Filter 是 oto.ini 且递归',
+          'watcher.Filter = "oto.ini";' in cs_w
+          and 'watcher.IncludeSubdirectories = true;' in cs_w
+          and OW.WATCH_FILTER == 'oto.ini')
+    check('OtoWatcher: Paused 时**只跳过调度**（不停止监视）',
+          'if (Paused)' in cs_w and 'return;' in cs_w)
+    check('OtoWatcher: 四种变更事件都挂同一个处理器',
+          all(('watcher.%s += OnFileChanged;' % e) in cs_w
+              for e in ('Changed', 'Created', 'Deleted', 'Renamed')))
+    check('OtoWatcher: Dispose 只停后端，不复位 Paused',
+          'watcher.Dispose();' in cs_w and 'Paused = false' not in cs_w)
+    check('OtoWatcher: 调度的是 SingerManager.Inst.ScheduleReload',
+          'SingerManager.Inst.ScheduleReload(singer);' in cs_w)
+
+    # ---------------- 源码一致性：ClassicSinger
+    check('ClassicSinger: subbanks 按 prefix+suffix 长度**降序**',
+          'OrderByDescending(subbank => subbank.Prefix.Length + subbank.Suffix.Length)' in cs)
+    check('ClassicSinger: 分组键是 ^prefix(.*)suffix$',
+          'new Regex(group.Key)' in cs and '$"^{Regex.Escape(subbank.Prefix)}(.*){Regex.Escape(subbank.Suffix)}$"' in cs)
+    check('ClassicSinger: 先写回 oto.Phonetic 再构造 UOto（顺序是语义）',
+          cs.index('oto.Phonetic = m.Groups[1].Value;') < cs.index('uOto = new UOto(oto, uSet, group.Value);'))
+    check('ClassicSinger: otoMap 冲突时保留**先出现**的（ContainsKey 守卫）',
+          'if (!d.otoMap.ContainsKey(oto.Alias))' in cs)
+    check('ClassicSinger: SearchTerms 加两项，罗马字那项包在 try/catch 里',
+          'oto.SearchTerms.Add(oto.Alias.ToLowerInvariant().Replace(" ", ""));' in cs
+          and 'WanaKana.ToRomaji(oto.Alias)' in cs and '} catch { }' in cs)
+    check('ClassicSinger: 单次原子发布 data = d',
+          'data = d;' in cs and cs.index('data = d;') > cs.index('// Single atomic publish'))
+    check('ClassicSinger: FreeMemory 用共享的 OtoData.Empty',
+          'data = OtoData.Empty;' in cs
+          and 'public static readonly OtoData Empty = new OtoData();' in cs)
+    check('ClassicSinger: Save 直接访问 otoWatcher（未加载时会 NRE，照搬不修）',
+          'otoWatcher.Paused = true;' in cs)
+    check('ClassicSinger: TryGetMappedOto 的颜色分支用 `Color == color`',
+          'subbank.Color == color && subbank.toneSet.Contains(tone)' in cs)
+    check('ClassicSinger: 静态那份找的是**空 Color** 的 subbank',
+          'string.IsNullOrEmpty(subbank.Color) && subbank.toneSet.Contains(tone)' in cs)
+    check('ClassicSinger: GetSuggestions 非 alias 模式先按长度再按字典序，之后才加别名',
+          'OrderBy(pair => pair.Key.Length)' in cs and 'ThenBy(pair => pair.Key)' in cs
+          and cs.rindex('result.TryAdd(oto.Alias, oto);') > cs.index('ThenBy(pair => pair.Key)'))
+
+    # ---------------- 源码一致性：ClassicSingerLoader
+    check('ClassicSingerLoader: 按 SingerType 精确值分派，default 落到 ClassicSinger',
+          'switch (v.SingerType)' in cs_l and 'return new ClassicSinger(v) as USinger;' in cs_l)
+    check('ClassicSingerLoader: **每个路径各建一个 loader**',
+          'foreach (var path in PathManager.Inst.SingersPaths)' in cs_l
+          and 'var loader = new VoicebankLoader(path);' in cs_l)
+
+    # ---------------- 行为：造一个真实声库
+    tmp = tempfile.mkdtemp(prefix='fufumidi-singer-')
+    saved_is_test = VoicebankLoader.is_test
+    VoicebankLoader.is_test = True
+    try:
+        # oto.ini：别名形如 "P_a_S"，prefix="P_" suffix="_S"；另有重复别名与无效行
+        # ★ 注意：subbanks 必须来自真实的 prefix.map —— `reload()` 会重读整个声库，
+        #   手工往 `bank.subbanks` 里塞会被冲掉。
+        # ★ `portrait` 不在 character.txt 的键表里（C# 同样不认），只在 character.yaml。
+        chtxt = ('name=Tester\n'
+                 'author=Someone\n'
+                 'voice=TesterCV\n'
+                 'sample=sample.wav\n'
+                 'image=icon.png\n')
+        ototxt = ('a.wav=P_a_S,0,50,-30,100,20\n'      # 命中 subbank P_/_S → phonetic = "a"
+                  'b.wav=Q_b_T,0,50,0,100,20\n'        # 命中 subbank Q_/_T → phonetic = "b"
+                  'c.wav=c,0,50,0,100,20\n'            # 不命中任何 subbank → dummy
+                  'd.wav=d,0,50,0,100,XX\n')           # overlap 解析失败 → IsValid=false
+        path = _build_voicebank_dir(tmp, 'Tester', chtxt, ototxt,
+                                    extra_files=('icon.png', 'p.png', 'sample.wav'))
+        vb_dir = os.path.dirname(path)
+        # prefix.map：制表符三列「音名 / 前缀 / 后缀」→ 两个子音色
+        with open(os.path.join(vb_dir, 'prefix.map'), 'w', encoding='utf-8') as f:
+            f.write('C4\tP_\t_S\nE4\tP_\t_S\nG4\tP_\t_S\nA4\tQ_\t_T\n')
+        with open(os.path.join(vb_dir, 'character.yaml'), 'w', encoding='utf-8') as f:
+            f.write('portrait: p.png\nportrait_opacity: 0.67\nportrait_height: 300\n')
+        bank = Voicebank()
+        bank.file = path
+        bank.base_path = tmp
+        VoicebankLoader.load_info(bank, path, tmp)
+
+        singer = ClassicSinger(bank)
+        check('ClassicSinger: 构造后 found=True、loaded=False',
+              singer.found is True and singer.loaded is False)
+        check('ClassicSinger: 未加载时 data 就是共享的 OtoData.Empty',
+              singer.data is OTO_DATA_EMPTY)
+
+        singer.reload()
+        check('ClassicSinger.Reload: loaded=True 且 oto_dirty 清掉',
+              singer.loaded is True and singer.oto_dirty is False)
+        check('ClassicSinger.Reload: 建了 oto_watcher', singer.oto_watcher is not None)
+        check('ClassicSinger.Reload: data 已换成新对象（原子发布）',
+              singer.data is not OTO_DATA_EMPTY)
+
+        check('ClassicSinger: otos 数量 = 有效 oto 数（解析失败那条被剔除，但进了 errors）',
+              len(singer.otos) == 3 and len(singer.errors) == 1,
+              'otos=%d errors=%r' % (len(singer.otos), singer.errors))
+        check('ClassicSinger: subbanks 来自 prefix.map（两个子音色，音域各自成形）',
+              sorted((s.prefix, s.suffix) for s in singer.subbanks) == [('P_', '_S'), ('Q_', '_T')],
+              'got %r' % [(x.prefix, x.suffix, x.tone_set) for x in singer.subbanks])
+        check('ClassicSinger: P_/_S 的音域是 C4/E4/G4 → 60/64/67',
+              next(x for x in singer.subbanks if x.prefix == 'P_').tone_set == [60, 64, 67],
+              'got %r' % next(x for x in singer.subbanks if x.prefix == 'P_').tone_set)
+        check('ClassicSinger: 命中的正则组 1 写回了原始 oto.Phonetic',
+              bank.oto_sets[0].otos[0].phonetic == 'a'
+              and bank.oto_sets[0].otos[1].phonetic == 'b',
+              'got %r' % [o.phonetic for o in bank.oto_sets[0].otos[:2]])
+        check('ClassicSinger: 命中时 UOto 拿到该组的 subbank 列表',
+              [(x.prefix, x.suffix) for x in singer.otos[0].subbanks] == [('P_', '_S')],
+              'got %r' % [(x.prefix, x.suffix) for x in singer.otos[0].subbanks])
+        check('ClassicSinger: 不命中时用 dummy subbank（prefix/suffix 均为空）',
+              singer.otos[2].subbanks is not None and singer.otos[2].subbanks[0].prefix == '')
+        check('ClassicSinger: location = character.txt 所在目录',
+              os.path.normcase(singer.location) == os.path.normcase(os.path.dirname(path)),
+              'got %r' % singer.location)
+        check('ClassicSinger: avatar/portrait/sample 拼到 location 上',
+              singer.avatar and singer.avatar.endswith('icon.png')
+              and singer.portrait.endswith('p.png') and singer.sample.endswith('sample.wav'))
+        check('ClassicSinger: avatar_data 读到了内容（覆盖基类的只读 property）',
+              singer.avatar_data == b'RIFF', 'got %r' % singer.avatar_data)
+        check('ClassicSinger: search_terms 每项都是别名小写去空格',
+              all(' ' not in t and t == t.lower() for t in singer.otos[0].search_terms))
+        check('ClassicSinger: 未注入罗马字转换器时只留 1 项（等价于 C# 的 catch 吞掉）',
+              len(singer.otos[0].search_terms) == 1,
+              'got %r' % singer.otos[0].search_terms)
+        CS.set_romaji_converter(lambda s: 'ROMAJI')
+        singer.reload()
+        check('ClassicSinger: 注入转换器后有 2 项搜索词',
+              len(singer.otos[0].search_terms) == 2, 'got %r' % singer.otos[0].search_terms)
+        CS.set_romaji_converter(None)
+
+        # otoMap 冲突保留先出现的：加一条重复别名的 oto
+        check('ClassicSinger: otoMap 里同名别名只留一个',
+              len({o.alias for o in singer.otos}) == len(singer.data.oto_map),
+              'otos=%d map=%d' % (len({o.alias for o in singer.otos}),
+                                  len(singer.data.oto_map)))
+
+        # ---- oto 查询
+        ok, oto = singer.try_get_oto('P_a_S')
+        check('ClassicSinger.TryGetOto: 按别名精确查', ok and oto.alias == 'P_a_S')
+        ok, oto = singer.try_get_oto('nope')
+        check('ClassicSinger.TryGetOto: 查不到返回 (False, None)',
+              ok is False and oto is None)
+        # color='' + tone 命中 P_ 的 C4(60) → 拼 P_aP_... 实际查 'P_a_S'
+        ok, oto = singer.try_get_mapped_oto('a', 60, '')
+        check('ClassicSinger.TryGetMappedOto: 空 color 命中 subbank 时拼 prefix+phoneme+suffix',
+              ok and oto.alias == 'P_a_S', 'got %r' % (oto.alias if oto else None))
+        # 音域不命中（tone=100 不在任何 toneSet）→ 退到裸别名 'a'（不存在）→ False
+        ok, oto = singer.try_get_mapped_oto('a', 100, '')
+        check('ClassicSinger.TryGetMappedOto: subbank 未命中时退到裸别名',
+              ok is False and oto is None, 'got %r' % (oto,))
+        ok, oto = singer.try_get_mapped_oto('c', 100)
+        check('ClassicSinger.TryGetMappedOto: 两参重载 = 空 color 那份逻辑',
+              ok and oto.alias == 'c')
+        # 带 color：C# 先找 Color == color 的 subbank（我们没给 subbank 设 color 值 → 落空）
+        ok, oto = singer.try_get_mapped_oto('a', 60, 'Soft')
+        check('ClassicSinger.TryGetMappedOto: 颜色不匹配时回落到空 color 逻辑',
+              ok and oto.alias == 'P_a_S')
+
+        # ---- GetSuggestions
+        sugs = singer.get_suggestions('', False)
+        check('ClassicSinger.GetSuggestions: 空文本 = 全部（非 alias 模式先给 phonetic）',
+              'a' in sugs and 'b' in sugs, 'got %r' % list(sugs)[:6])
+        sugs_a = singer.get_suggestions('', True)
+        check('ClassicSinger.GetSuggestions: alias 模式只给别名',
+              set(sugs_a) == {o.alias for o in singer.otos}, 'got %r' % list(sugs_a))
+        check('ClassicSinger.GetSuggestions: 过滤走 search_terms 子串',
+              all('x' not in k for k in singer.get_suggestions('a', True))
+              and len(singer.get_suggestions('a', True)) >= 1)
+        sugs_na = singer.get_suggestions('', False)
+        keys = list(sugs_na)
+        check('ClassicSinger.GetSuggestions: 非 alias 模式下 phonetic 段先按长度再按字典序',
+              keys[:3] == sorted(keys[:3], key=lambda k: (len(k), k)) or len(keys) < 3,
+              'got %r' % keys[:6])
+
+        # ---- FreeMemory
+        singer.free_memory()
+        check('ClassicSinger.FreeMemory: data 回到**共享**的 OtoData.Empty（同一对象）',
+              singer.data is OTO_DATA_EMPTY and singer.loaded is False)
+        check('ClassicSinger.FreeMemory: oto_watcher 被置 None', singer.oto_watcher is None)
+
+        # ---- Save 未加载时会崩（C# 同样 NRE）
+        singer2 = ClassicSinger(bank)
+        try:
+            singer2.save()
+            check('ClassicSinger.Save: 未加载就保存会崩（与 C# 的 NRE 一致）', False, '没抛错')
+        except AttributeError:
+            check('ClassicSinger.Save: 未加载就保存会崩（与 C# 的 NRE 一致）', True)
+
+        # ---- OtoWatcher 行为
+        class _SpyBackend:
+            def __init__(self):
+                self.started = None
+                self.stopped = False
+
+            def start(self, path, on_change, on_error, file_filter, recursive):
+                self.started = (path, file_filter, recursive)
+                self.on_change = on_change
+
+            def stop(self):
+                self.stopped = True
+
+        reloaded = []
+
+        class _SpyScheduler(ReloadScheduler):
+            def schedule_reload(self, singer_):
+                reloaded.append(singer_)
+
+        saved_sched = OW.scheduler
+        OW.scheduler = _SpyScheduler()
+        try:
+            be = _SpyBackend()
+            w = OtoWatcher(singer2, '/vb', backend=be)
+            check('OtoWatcher: 后端收到 (路径, oto.ini, 递归=True)',
+                  be.started == ('/vb', 'oto.ini', True), 'got %r' % (be.started,))
+            be.on_change('/vb/oto.ini', 'Changed')
+            check('OtoWatcher: 未暂停时排一次重载', len(reloaded) == 1)
+            w.paused = True
+            be.on_change('/vb/oto.ini', 'Changed')
+            check('OtoWatcher: 暂停时不排重载', len(reloaded) == 1)
+            w.on_error(RuntimeError('x'))
+            check('OtoWatcher: OnError 只记日志不抛', True)
+            w.dispose()
+            check('OtoWatcher.Dispose: 停后端但**不复位** paused',
+                  be.stopped is True and w.paused is True)
+        finally:
+            OW.scheduler = saved_sched
+
+        # ---- ClassicSingerLoader
+        reset_singer_factories()
+        check('ClassicSingerLoader: 未注册任何类型时一律回落 ClassicSinger',
+              isinstance(adjust_singer_type(bank), ClassicSinger))
+        register_singer_factory(USingerType.ENUNU, lambda v: 'ENUNU-SINGER')
+        bank_e = Voicebank()
+        bank_e.singer_type = USingerType.ENUNU
+        check('ClassicSingerLoader: 注册后按 SingerType 分派',
+              adjust_singer_type(bank_e) == 'ENUNU-SINGER'
+              and USingerType.ENUNU in registered_singer_types(),
+              'got %r / %r' % (adjust_singer_type(bank_e), registered_singer_types()))
+        bank_v = Voicebank()
+        bank_v.singer_type = USingerType.VOICEVOX
+        check('ClassicSingerLoader: 未注册的类型仍回落 ClassicSinger',
+              isinstance(adjust_singer_type(bank_v), ClassicSinger))
+        check('ClassicSingerLoader: Classic 类型不受 ENUNU 注册影响',
+              isinstance(adjust_singer_type(bank), ClassicSinger))
+
+        saved_paths = ClassicHost.singers_paths
+        try:
+            ClassicHost.singers_paths = [tmp]
+            found = find_all_singers()
+            check('ClassicSingerLoader.FindAllSingers: 遍历 host.singers_paths 找出声库',
+                  len(found) >= 1 and all(isinstance(s, ClassicSinger) for s in found),
+                  'got %r' % found)
+            ClassicHost.singers_paths = []
+            check('ClassicSingerLoader.FindAllSingers: 无搜索路径时返回空表',
+                  find_all_singers() == [])
+        finally:
+            ClassicHost.singers_paths = saved_paths
+    finally:
+        VoicebankLoader.is_test = saved_is_test
+        CS.set_romaji_converter(None)
+
+
 def test_xxhash64():
     """XXH32/XXH64 官方测试向量 —— 对不上，所有缓存键都会静默错。"""
     from singing.openutau.xxhash import xxh32, xxh64 as _x
@@ -4542,6 +4840,8 @@ def main():
     test_document_snapshot_store()
     print('--- Render/Worldline（纯逻辑） ---')
     test_worldline_pure()
+    print('--- Classic/ClassicSinger + OtoWatcher + Loader ---')
+    test_classic_singer()
     print('--- Classic/Ini ---')
     test_ini_read_blocks()
     print('--- Plugin.Builtin/ChineseCVVC ---')

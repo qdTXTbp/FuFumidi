@@ -3,9 +3,8 @@
 > 上游：`OpenUtau/`（C#）—— `OpenUtau.Core` + `OpenUtau.Plugin.Builtin` + `cpp/worldline`
 > 落点：`engine/singing/`（纯 Python，**不依赖 torch / numpy**，可脱离主程序单测）
 > 方针：**除外观外不允许自研** —— 每一处都应能回答"对应 OpenUTAU 的哪个文件/函数"
-> 最后更新：2026-10-02 —— P0 / P1-a / P1-b / P1-d 已完成；P2 进行中（声库配置 + 加载器已搬）
-> 2026-10-02 复核：四项测试 841 项断言**全绿**（含 `worldline.dll` 真机端到端），
-> 第 0 节与第 4 节的数据已按实测修正
+> 最后更新：2026-10-02 —— **P0 / P1-a / P1-b / P1-d / P2 均已完成**
+> 2026-10-02 复核：四项测试 **901 项断言全绿**（含 `worldline.dll` 真机端到端）
 
 ---
 
@@ -22,21 +21,23 @@
   6 个原生 ctypes 绑定、`Classic/WorldlineResampler.cs`。
 - P1-d 搬完**串起来**的那一步：`Classic/ClassicRenderer.cs`（internal / external
   两条分支）+ `RenderEngine.cs` 里渲染器要用的 `Progress`。
-- P2（进行中）搬完**声库侧**的两块：`Classic/VoicebankConfig.cs`（`character.yaml`
-  的配置模型）与 `Classic/VoicebankLoader.cs`（`character.txt` / `oto.ini` /
-  `prefix.map` → `oto.Voicebank`，含 `FileTrace`）；`ClassicSinger`（`OtoFrq`
-  的消费方）尚未搬。
+- P2 搬完**声库侧全部三块**：`Classic/VoicebankConfig.cs`（`character.yaml` 模型）、
+  `Classic/VoicebankLoader.cs`（`character.txt` / `oto.ini` / `prefix.map` →
+  `oto.Voicebank`，含 `FileTrace`），以及 **`ClassicSinger`**（oto 表的构建与查询：
+  子音色匹配、`prefix+phoneme+suffix` 映射、搜索词、原子发布）+ `OtoWatcher`
+  + `ClassicSingerLoader`。
+  → `render_phrase.py` 里 MOD+ 分支的守卫（`classic_singer is not None`）**现在可以真被触发了**。
 
 **真机验证**（加载 OpenUTAU 随包分发的 `runtimes/win-x64/native/worldline.dll`）：
 `RenderPhrase.from_part` → `ClassicRenderer.render()` 产出的样本，主频用**过零率**实测
 ≈ 440Hz（源素材 300Hz、tone 69）—— 变调与拼接都真的生效了。
 
-已完成规模：Python **10,408 行**（`engine/singing/**/*.py`，50 个文件，排除 `__pycache__`），
-对应 C# **9,275 行**（对第 3 节列出的 42 个 C# 源文件逐一 `wc -l` 求和；
-若把 `RenderEngine.cs` 整个 542 行也计入则是 9,817 —— 我们只搬了它的 `Progress`）。
+已完成规模：Python **11,024 行**（`engine/singing/**/*.py`，53 个文件，排除 `__pycache__`），
+对应 C# **约 9,590 行**（对第 3 节列出的 45 个 C# 源文件逐项 `wc -l` 求和，
+含 `RenderEngine.cs` 的 `Progress` 部分）。
 另有 NWaves 三段转写（**无 C# 对应物**，属第三方库替换）。
 
-一致性测试 **5,266 行 / 841 项断言**（四个文件合计：19 + 59 + 744 + 19；
+一致性测试 **5,882 行 / 901 项断言**（四个文件合计：19 + 59 + 804 + 19；
 参考源码缺失时自动 SKIP）。
 
 ---
@@ -69,6 +70,7 @@
 | Classic 渲染器（串起来） | 152 行 | ✅ 完成（internal / external 两条分支） |
 | Classic 声库配置（`character.yaml`） | 91 行 | ✅ 完成 |
 | Classic 声库加载（`character.txt` / `oto.ini` / `prefix.map`） | 549 行 | ✅ 完成（`FileTrace` + `Voicebank` 一并补齐） |
+| Classic 歌手（`ClassicSinger` + `OtoWatcher` + `ClassicSingerLoader`） | 243 + 42 + 30 行 | ✅ 完成 |
 | Worldline 的 `PhraseSynthV2`（R1.1） | 780 行中约 240 | ❌ 未开始（只被 `WorldlineRenderer` 用） |
 | Classic 执行层 · 外部工具进程 | ~700 行 | ❌ 未开始 |
 | `WorldlineRenderer` | 276 行 | ❌ 未开始 |
@@ -120,6 +122,9 @@
 | `openutau/base_chinese.py` | `BaseChinesePhonemizer.cs` |
 | `openutau/classic/voicebank_config.py` | `Classic/VoicebankConfig.cs`（`VoicebankConfig` / `SymbolSet` / `SymbolSetPreset` / `SingerTypeValues`） |
 | `openutau/classic/voicebank_loader.py` | `Classic/VoicebankLoader.cs`（`FileTrace` + `VoicebankLoader`） |
+| `openutau/classic/classic_singer.py` | `Classic/ClassicSinger.cs`（`OtoData` + `ClassicSinger`） |
+| `openutau/classic/oto_watcher.py` | `Classic/OtoWatcher.cs`（监视后端可注入） |
+| `openutau/classic/classic_singer_loader.py` | `Classic/ClassicSingerLoader.cs`（歌手工厂可注册） |
 | `openutau/plugin_builtin/japanese_vcv.py` | `Plugin.Builtin/JapaneseVCVPhonemizer.cs` |
 | `openutau/plugin_builtin/chinese_vcv.py` | `Plugin.Builtin/ChineseVCVPhonemizer.cs` |
 | `openutau/plugin_builtin/chinese_cvvc.py` | `Plugin.Builtin/ChineseCVVCPhonemizer.cs` |
@@ -134,11 +139,11 @@
 cd engine/tests
 python test_ustx_schema_matches_source.py        # 19 passed
 python test_ustx_roundtrip.py                    # 59 passed
-python test_openutau_core_matches_source.py      # 744 passed   ← 含 worldline.dll 真机端到端
+python test_openutau_core_matches_source.py      # 804 passed   ← 含 worldline.dll 真机端到端
 python test_singing_adapters.py                  # 19 passed / 1 skipped
 ```
 
-合计 **841 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
+合计 **901 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
 整套测试**可离线运行**。
 
 `worldline.dll` 真机测试的 SKIP 条件是"找不到 `/d/FuFuMIDI/_ref/OpenUtau/runtimes/win-x64/native/worldline.dll`
@@ -218,6 +223,11 @@ assert '(i + 1) == phrase.dynamics.Length' in cs
 | 26 | **`Array.ForEach(s, temp => temp.Trim())` 什么都不做** | `string` 不可变，trim 结果被丢弃 → `name = Foo`（等号两侧有空格）**认不出来**，会落进 `OtherInfo`。以为它 trim 了就会写出错的测试期望 | 照搬（不 trim），并在测试里把"认不出来"写成断言 |
 | 27 | **`AddAliasForMissingFiles` 造出的 oto `IsValid` 是 false** | 看着像 bug（对象初始化器里没写 `IsValid`），而 `ClassicSinger` 只收有效条目 → 该功能当前实际不生效。若"顺手修好"，行为会变 | 照搬 + 记档：改正确属行为变更，应单独立项 |
 
+| 28 | **`character.txt` 的键表里**没有** `portrait`** | 写了 `portrait=p.png` 会被**静默忽略**（`PortraitOpacity` / `PortraitHeight` 同理）；它们只在 `character.yaml` 里 | 照搬（`parse_character_txt` 只认 name/名前/image/author/created by/voice*/cv/sample/web/version）。测试里想验 portrait 就得给 `character.yaml` |
+| 29 | **`Voicebank.Reload()` 会重读整个声库** | 它会把 `subbanks` / `oto_sets` 一起清掉重建 —— 在测试里手工往 `voicebank.subbanks` 塞值，`singer.reload()` 一跑就没了，表现为"子音色匹配整条失效" | 子音色必须来自**真实的 `prefix.map`**（制表符三列：音名 / 前缀 / 后缀）。这也是一条真实行为：运行期改 `voicebank.subbanks` 是留不住的 |
+| 30 | **`Save()` 在"没加载过"时会崩** | C# 里 `oto_watcher` 只在 `Reload()` 里创建，`Save()` 直接 `otoWatcher.Paused = true` → NRE。Python 侧是 `AttributeError` | 照搬（已在测试里把"会崩"写成断言）。修它属行为变更，应单独立项 |
+| 31 | **`Regex.Escape` ≠ `re.escape`（但本例里无碍）** | 两者转义字符集不同（Python 多转 `-`/`&`/`~`，C# 多转 `#`）。这里 pattern 只当**分组身份**用（同 prefix+suffix ⇒ 同 pattern），转义是逐字符的确定性映射、对输入单射，所以**分组结果完全一致** | 用 `re.escape` 即可；但要知道"pattern 串本身长得不一样"，别拿它去跟 C# 做字符串相等断言 |
+
 ### 附：写测试时的最大陷阱 —— 凭直觉填期望
 
 **症状**：连续出现"实现正确、测试期望错误"。本项目一轮内错了 7 处
@@ -286,6 +296,11 @@ expect = math.pow(0.5 / (0.5 * w_hi + 1.0 * (1 - w_hi)), 0.86)
 | **`Parallel.ForEach` 的异常聚合** | `AggregateException`（顺序不定）→ 按**提交顺序**取第一个异常原样重抛 | 失败语义相同（都会把失败暴露出来），但顺序可预期，且不必引入一个 Python 里不存在的类型 |
 | **`Progress` 的合并派发（coalescing）** | 不搬；只保留 `total/completed/complete/clear` + 一个 `notify` 回调 | C# 那套"最多一个 UI 投递在飞"是为了不刷爆 UI，且绑定 `DocManager.ExecuteCmd` / `MainScheduler`（都是 M3 的编辑器层）。合并策略交给宿主 |
 | **`Progress` 的 `total = 0`** | C# 算出 NaN 继续走；Python 让它抛 `ZeroDivisionError` | 这是"调用方没算好总步数"的显式错误，静默给 NaN 只会让"进度条不动"更难查 |
+| **`WanaKanaNet.ToRomaji`（第三方日文罗马字库）** | 做成**可注入钩子** `classic_singer.set_romaji_converter(fn)`；未注入时跳过罗马字搜索词 | 未注入 ⇒ 只留"别名小写去空格"一项。**这与 C# 里那次调用抛异常被 `catch { }` 吞掉的结果完全一致**，所以不是行为差异，只是少一项搜索词 |
+| **`FileSystemWatcher`（.NET 专有）** | `OtoWatcher` 的监视后端做成**可注入**；不注入时用 `_NoopBackend`（不监视） | Python 标准库没有等价物。真监视是**宿主能力**（可接 `watchdog`），不是引擎逻辑，所以没在这里自研轮询器。代价只是失去"外部改 oto.ini 自动重载"（需要时显式 `reload()`） |
+| **`SingerManager.Inst.ScheduleReload`** | 可注入的模块级 `scheduler`；默认实现**直接 `singer.reload()`** | 与 `ClassicHost` / `Renderer` 注册表同一套路。差别只在时机（C# 是丢到主调度器排队），不在结果。★ docstring 里已提醒：watcher 回调可能在别的线程，真多线程用要注入排队版本 |
+| **`EnunuSinger` / `DiffSingerSinger` / `VoicevoxSinger`** | `ClassicSingerLoader` 改成**工厂注册表**，未注册时回落到 `ClassicSinger` | 与 `Renderers.CreateRenderer` 同一套路。C# 的 `default` 分支本来也是 `ClassicSinger`，所以未注册时的行为与 C# 的"该类型不存在"一致 |
+| **`IDisposable`** | `dispose()`，并额外支持 `with` 用法 | Python 无 `IDisposable`；`with` 是顺手的等价物，不改变语义 |
 
 ---
 
@@ -328,7 +343,8 @@ tone 69 变调，输出主频用**过零率**实测 ≈ 440Hz（±10% 内）。
 >   `SynthContinuousNoise`，以及 `DecodeMgc` / `DecodeBap` / `HnAnalysisF0In` /
 >   `WorldSynthesisContinuousNoise` 四个绑定 + `Core/Analysis/Hnsep`。只被
 >   `WorldlineRenderer` 用。
-> - `OtoFrq` 的消费方（`UOtoFrq` + `ClassicSinger`）在 P2。
+> - `OtoFrq` 的消费方：`ClassicSinger` **已在 P2 搬完**；剩"把 `OtoFrq` 挂到 `UOto` 上"
+>   这一步（类型本身在 `frq.py` 里）。
 
 ### ~~P1-d —— 把两端串起来~~ ✅ 已完成
 
@@ -352,21 +368,21 @@ tone 69 变调，输出主频用**过零率**实测 ≈ 440Hz（±10% 内）。
 > （现在已满足）。`ExeWavtool` 还顺带决定了"外部路径下谁跑 resampler"这件事
 > （见第 6 节陷阱 22）。
 
-### P2 —— 声库与 .frq（进行中）
+### ~~P2 —— 声库与 .frq~~ ✅ 已完成
 
 | 项 | 体量 | 状态 |
 |---|---|---|
 | `Classic/VoicebankConfig.cs` | 91 行 | ✅ 完成（`classic/voicebank_config.py`） |
 | `Classic/VoicebankLoader.cs` | 549 行 | ✅ 完成（`classic/voicebank_loader.py`，含 `FileTrace`） |
 | `Classic/VoiceBank.cs` 的 `Voicebank` | 57 行 | ✅ 完成（补进 `oto.py`；`Subbank`/`Oto`/`OtoSet` 原已在） |
-| `Classic/ClassicSinger.cs` | 243 行 | ⬜ 未开始 |
-| `UOtoFrq`（把 `OtoFrq` 接进 `UOto`，MOD+ 依赖） | — | ⬜ 未开始 |
-| `Classic/ClassicSingerLoader.cs` | — | ⬜ 未开始 |
+| `Classic/ClassicSinger.cs` | 243 行 | ✅ 完成（`classic/classic_singer.py`） |
+| `Classic/OtoWatcher.cs` | 42 行 | ✅ 完成（`classic/oto_watcher.py`，监视后端可注入） |
+| `Classic/ClassicSingerLoader.cs` | 30 行 | ✅ 完成（`classic/classic_singer_loader.py`，歌手工厂可注册） |
+| `UOtoFrq`（把 `OtoFrq` 接进 `UOto`，MOD+ 在运行期消费它） | — | 🟡 类型已在 `frq.py`；**接进 `UOto` 的装配**待做 |
 
-> `Classic/Frq.cs`(284) 已在 P1-b 搬完；这里剩下的是**消费方**
-> （`ClassicSinger` 用 `OtoFrq` 填 `UOto.UOtoFrq`）。
-
-> 补齐后 `render_phrase.py` 里 MOD+ 分支的守卫（`classic_singer is not None`）才会启用。
+> `render_phrase.py` 里 MOD+ 分支的守卫（`classic_singer is not None`）**现在可以真被触发**；
+> 剩下的是把 `OtoFrq` 挂到 `UOto` 上（`render_phrase.py` 的 `_apply_mod_plus` 目前是
+> 显式 `NotImplementedError`，触发时会给明确信息而不是静默出错）。
 
 本轮（声库侧）顺带补上的两个"不搬就缺零件"的东西：
 `oto.Voicebank`（`character.txt` + `character.yaml` + oto 摊平后的结果，含它的
@@ -411,12 +427,13 @@ tone 69 变调，输出主频用**过零率**实测 ≈ 440Hz（±10% 内）。
 |---|---|
 | ~~M1 抽象层~~ | ✅ 已完成（`singing/api.py` + 适配器） |
 | ~~M2-c `.ustx` 双向兼容~~ | ✅ 已完成 |
-| **M2-a 渲染器主体** | 🟡 Classic 线全通（参数层 + 变调 + 拼接 + 渲染器）；`WorldlineRenderer` 待做 |
+| **M2-a 渲染器主体** | 🟡 Classic 线全通（**声库 → 参数层 → 变调 → 拼接 → 渲染器**）；`WorldlineRenderer` 待做 |
 | **M2-b 音素化器** | 🟡 3 / 51 |
 | **M2 渲染输入链路** | ✅ 完成（P0）：`歌词 → 音素 → 乐句 → RenderPhrase[]`，可断言哈希 |
 | **M2 拼接出声** | ✅ 完成（P1-a）：`RenderPhrase → 音素 wav 拼接`（`SharpWavtool`） |
 | **M2 变调出声** | ✅ 完成（P1-b）：`音素 wav → 按音高拉伸`（`Worldline.Resample`，真机验证） |
 | **~~M2 端到端可跑~~** | ✅ **完成（P1-d）**：`歌词 → 音素 → 乐句 → 变调 → 拼接 → 样本`（真机验证主频） |
+| **~~M2 声库侧~~** | ✅ **完成（P2）**：`character.txt/yaml + oto.ini + prefix.map` → `ClassicSinger` → oto 查询 |
 | M3 编辑器替换 | ⬜ |
 | M4 删除旧的 UTAU / DiffSinger 模块 | ⬜ 等音素化器与编辑器接完，且已冻结基线 `openutau-port-baseline` |
 

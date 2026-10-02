@@ -15,6 +15,9 @@
   - `frq.py`                   `.frq` / `.mrq` 基频缓存与 `OtoFrq`（Classic/Frq.cs）
   - `worldline_resampler.py`   自带的变调器（Classic/WorldlineResampler.cs）
   - `classic_renderer.py`      把变调器与拼接器串成一条乐句（Classic/ClassicRenderer.cs）
+  - `oto_watcher.py`           `oto.ini` 变更监视（Classic/OtoWatcher.cs；后端可注入）
+  - `classic_singer.py`        UTAU 声库歌手（Classic/ClassicSinger.cs）
+  - `classic_singer_loader.py` 声库发现（Classic/ClassicSingerLoader.cs；工厂可注册）
   - `ini.py`                   INI 分块读取（Classic/Ini.cs）
   - `voicebank_config.py`      `character.yaml` 的配置模型（Classic/VoicebankConfig.cs）
   - `voicebank_loader.py`      声库加载：character.txt / character.yaml / oto.ini /
@@ -24,13 +27,24 @@
   - `ExeResampler` / `ExeWavtool` / `UnixWavtool` / `ToolsManager` / `VoicebankFiles`
     （外部工具进程那一整片；还需要 `Util/Base64.cs`、`Util/ProcessRunner.cs`、`OS.cs`）
   - `WorldlineRenderer`（Worldline 线 R1.1/R2；依赖 `Worldline.PhraseSynthV2`）
-  - `ClassicSinger` / `Presamp` / `OtoWatcher` / `Ust` / `PluginLoader`
+  - `Presamp`(731) / `Ust` / `UstNote` / `PluginLoader` / `VoicebankErrorChecker`
+  - `EnunuSinger` / `DiffSingerSinger` / `VoicevoxSinger`（`ClassicSingerLoader` 里
+    留了 `register_singer_factory` 注册点，未注册时回落到 `ClassicSinger`）
 """
 
 from .classic_renderer import ClassicRenderer, register_classic_renderer  # noqa: F401
 from .frq import IFrqFiles, Frq, Mrq, OtoFrq  # noqa: F401
 from .i_resampler import IResampler  # noqa: F401
 from .i_wavtool import IWavtool  # noqa: F401
+from .classic_singer import OTO_DATA_EMPTY, ClassicSinger, OtoData  # noqa: F401
+from .classic_singer_loader import (  # noqa: F401
+    adjust_singer_type,
+    find_all_singers,
+    register_singer_factory,
+    registered_singer_types,
+    reset_singer_factories,
+)
+from .oto_watcher import OtoWatcher, ReloadScheduler  # noqa: F401
 from .resampler_item import ClassicHost, ResamplerItem  # noqa: F401
 from .resampler_manifest import ResamplerManifest  # noqa: F401
 from .sharp_wavtool import SharpWavtool  # noqa: F401
@@ -47,6 +61,9 @@ from .worldline_resampler import WorldlineResampler  # noqa: F401
 register_classic_renderer()
 
 __all__ = [
+    'ClassicSinger', 'OtoData', 'OTO_DATA_EMPTY', 'OtoWatcher', 'ReloadScheduler',
+    'adjust_singer_type', 'find_all_singers', 'register_singer_factory',
+    'registered_singer_types', 'reset_singer_factories',
     'IResampler', 'IWavtool', 'ResamplerItem', 'ClassicHost', 'ResamplerManifest',
     'SharpWavtool', 'WorldlineResampler', 'ClassicRenderer',
     'register_classic_renderer',

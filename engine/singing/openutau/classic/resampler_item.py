@@ -30,6 +30,7 @@
 
 import math
 import os
+from typing import List
 
 from ..binary_writer import BinaryWriter
 from ..music_math import MusicMath, fdiv
@@ -53,6 +54,10 @@ class ClassicHost:
     #: 对应 `PathManager.Inst.RootPath`（随包分发的 `worldline.dll` 就在这一层；
     #: 它也是 `Preferences.Inst` 之类的同级目录）
     root_path: str = ''
+    #: 对应 `PathManager.Inst.SingersPaths`：声库搜索根目录列表。
+    #: 默认空列表 —— 对应"一个搜索路径都没配"，于是 `find_all_singers()` 返回空表
+    #: （这是**真实答案**，不是错误，所以不抛 `NotImplementedError`）。
+    singers_paths: List[str] = []
 
     def get_resampler(self, name: str):
         """对应 `ToolsManager.Inst.GetResampler(name)`。
