@@ -6,7 +6,7 @@
 > 最后更新：2026-10-02 —— P0~P2 完成；MOD+ / `WorldlineRenderer` v10 / `JapaneseCVVC` /
 > **G2p 基础设施** / **`PhonemeBased`+`Monophone`+`LatinDiphone` 基类** / **`ChineseCVV`** /
 > **`ArpabetG2p`** 已补齐
-> 2026-10-02 复核：四项测试 **1,329 项断言全绿**（含 `worldline.dll` 真机端到端）
+> 2026-10-03 复核：四项测试 **1,367 项断言全绿**（含 `worldline.dll` 真机端到端）
 
 ---
 
@@ -82,12 +82,12 @@
 `RenderPhrase.from_part` → `ClassicRenderer.render()` 产出的样本，主频用**过零率**实测
 ≈ 440Hz（源素材 300Hz、tone 69）—— 变调与拼接都真的生效了。
 
-已完成规模：Python **16,109 行**（`engine/singing/**/*.py`，70 个文件，排除 `__pycache__`），
-对应 C# **约 11,105 行**（对第 3 节列出的 58 个 C# 源文件逐项 `wc -l` 求和，
+已完成规模：Python **16,690 行**（`engine/singing/**/*.py`，71 个文件，排除 `__pycache__`），
+对应 C# **约 11,862 行**（对第 3 节列出的 59 个 C# 源文件逐项 `wc -l` 求和，
 含 `RenderEngine.cs` 的 `Progress` 部分）。
 另有 NWaves 三段转写（**无 C# 对应物**，属第三方库替换）。
 
-一致性测试 **7,351 行 / 1,329 项断言**（四个文件合计：19 + 59 + **1245** + 6；
+一致性测试 **7,598 行 / 1,367 项断言**（四个文件合计：19 + 59 + **1289** + 6；
 参考源码缺失时自动 SKIP）。
 
 ---
@@ -113,7 +113,7 @@
 | Worldline 纯逻辑 | 780 行中约 400 | ✅ 完成（原生边界另计） |
 | 音素化器基类 / 中文基类 | 250 + 51 行 | ✅ 完成 |
 | `SyllableBasedPhonemizer`(2204) / `PhonemeBased`+`Monophone`(257) | 2204 + 257 行 | ✅ 完成（`SyllableBased` 那条线连同 `YamlWatcher` + `G2pRemapper` 一并搬完；17 个具体子类未搬） |
-| 内置音素化器 | 51 个文件 / 25,707 行 | 🟡 **6 / 51**（JA VCV / JA CVVC / ZH VCV / ZH CVVC / ZH CVV / **FR VCCV**） |
+| 内置音素化器 | 51 个文件 / 25,707 行 | 🟡 **7 / 51**（JA VCV / JA CVVC / ZH VCV / ZH CVVC / ZH CVV / **FR VCCV / FR CVVC**） |
 | Classic 参数层 | 188 + 57 行 | ✅ 完成 |
 | Classic 执行层 · 底座（WAV / 接口 / 清单） | 173 + 25 + 11 + 28 行 | ✅ 完成 |
 | Classic 执行层 · 内置 wavtool | 187 行（+NWaves 三段转写） | ✅ 完成 |
@@ -195,6 +195,7 @@
 | `openutau/classic/yaml_watcher.py` | `Classic/YamlWatcher.cs`（监视后端可注入） |
 | `openutau/plugin_builtin/syllable_based.py` | `Plugin.Builtin/SyllableBasedPhonemizer.cs`（2204 行，全文件） |
 | `openutau/plugin_builtin/french_vccv.py` | `Plugin.Builtin/FrenchVCCVPhonemizer.cs`（**`SyllableBased` 首个真实用户**） |
+| `openutau/plugin_builtin/french_cvvc.py` | `Plugin.Builtin/FrenchCVVCPhonemizer.cs`（757 行；同法语家族第二个真实用户） |
 
 每个模块的 `__init__.py` 里维护着一份"已照搬 / 未照搬"清单，与上表同步。
 
@@ -206,11 +207,11 @@
 cd engine/tests
 python test_ustx_schema_matches_source.py        # 19 passed
 python test_ustx_roundtrip.py                    # 59 passed
-python test_openutau_core_matches_source.py      # 1245 passed ← 含 worldline.dll 真机端到端
+python test_openutau_core_matches_source.py      # 1289 passed ← 含 worldline.dll 真机端到端
 python -m pytest test_singing_adapters.py -q     # 6 passed
 ```
 
-合计 **1,329 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
+合计 **1,367 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
 整套测试**可离线运行**。
 
 `worldline.dll` 真机测试的 SKIP 条件是"找不到 `/d/FuFuMIDI/_ref/OpenUtau/runtimes/win-x64/native/worldline.dll`
@@ -492,18 +493,18 @@ tone 69 变调，输出主频用**过零率**实测 ≈ 440Hz（±10% 内）。
   `character.txt` 的键识别与死代码 quirk / 判型（配置优先 + 遗留 dsconfig）/ `ApplyConfig`
   的引用语义 / `prefix.map` 去重与音域分段 / `SearchAll` 的深/浅两档。
 
-### P3 —— 更多音素化器（当前 6 / 51）
+### P3 —— 更多音素化器（当前 7 / 51）
 
 **两条基类线现在都就位了**（`SyllableBased` 2204 / `PhonemeBased`+`Monophone`+`LatinDiphone` 292），
 所以下面这些基本是"照着 C# 逐个转写 + 配一致性测试"的体力活。优先级建议：
 
-1. `SyllableBased` 家族里**零外部依赖**的几个（`TurkishCVVC`(356) 等），
-   它们是新基类的**首批真实用户**，能顺带验证基类的 YAML / 规则引擎路径
+1. `SyllableBased` 家族里**只用文本字典、不依赖语言 G2p 类**的：
+   `FrenchCVVC`(757，**已完成**)、`TurkishCVVC`(356) 等 —— 它们是新基类的**真实用户**
 2. `JapanesePresampPhonemizer` / `PresampSamplePhonemizer`（还需 `Classic/Presamp.cs` 731）
 3. `ChineseCVVPlusPhonemizer`（中文线补全）
 4. **`ArpasingPhonemizer`(62)**：前置（`LatinDiphone` + `ArpabetG2p` + 字典）**都已完成**，
    只剩随包 `arpasing.yaml` 词典数据要一起搬
-5. 韩语系列 / 欧洲各语系
+5. 韩语系列 / 欧洲各语系（大多要先搬 `Core/G2p` 的语言 G2p 类）
 
 ### P4 —— 编辑器侧（M3）
 
