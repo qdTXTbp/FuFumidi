@@ -3,8 +3,9 @@
 > 上游：`OpenUtau/`（C#）—— `OpenUtau.Core` + `OpenUtau.Plugin.Builtin` + `cpp/worldline`
 > 落点：`engine/singing/`（纯 Python，**不依赖 torch / numpy**，可脱离主程序单测）
 > 方针：**除外观外不允许自研** —— 每一处都应能回答"对应 OpenUTAU 的哪个文件/函数"
-> 最后更新：2026-10-02 —— P0~P2 全部完成；MOD+ / `WorldlineRenderer` v10 / `JapaneseCVVC` 已补齐
-> 2026-10-02 复核：四项测试 **1004 项断言全绿**（含 `worldline.dll` 真机端到端）
+> 最后更新：2026-10-02 —— P0~P2 完成；MOD+ / `WorldlineRenderer` v10 / `JapaneseCVVC` /
+> **G2p 基础设施** 已补齐；下一步是 `SyllableBasedPhonemizer`（解锁 17 个语言音素化器）
+> 2026-10-02 复核：四项测试 **1053 项断言全绿**（含 `worldline.dll` 真机端到端）
 
 ---
 
@@ -38,6 +39,11 @@
   → 至此 Classic 线的**三条渲染器路径**（`CLASSIC` / `WORLDLINE-R*`）都可跑。
 - 再补一个音素化器：**`JapaneseCVVCPhonemizer`**（298 行）—— 日语三条线（VCV / CVVC /
   Presamp）已通两条；CVVC 还负责在下一个音符之前**插一个 VC 音素**。
+- 再补 **G2p 基础设施**（`Api/IG2p.cs` + `IG2pSymbols.cs` + `G2pDictionaryData.cs` +
+  `G2pDictionary.cs` + `G2pFallbacks.cs` + `G2pPack.cs`，共 387 行 C#）——
+  这是 `SyllableBasedPhonemizer`(2204) / `PhonemeBasedPhonemizer`(226) 两条基类线的前置；
+  搬完它，"解锁 17 个语言音素化器"就只差那两条基类本身。
+  ONNX 会话做成**可注入**（没注入就是 C# 里 `Session == null` 的既有分支，返回空）。
 - ★ 并**修掉一个跨模块的真 bug**：`USinger.try_get_mapped_oto` 返回 `(found, oto)`
   （照搬 C# 的 `out` 参数），但有**三个**音素化器把它当裸值用 —— 在真 `ClassicSinger`
   上会 `AttributeError: 'tuple' object has no attribute 'is_color_match'`。
@@ -49,12 +55,12 @@
 `RenderPhrase.from_part` → `ClassicRenderer.render()` 产出的样本，主频用**过零率**实测
 ≈ 440Hz（源素材 300Hz、tone 69）—— 变调与拼接都真的生效了。
 
-已完成规模：Python **12,136 行**（`engine/singing/**/*.py`，55 个文件，排除 `__pycache__`），
-对应 C# **约 10,240 行**（对第 3 节列出的 47 个 C# 源文件逐项 `wc -l` 求和，
+已完成规模：Python **12,707 行**（`engine/singing/**/*.py`，61 个文件，排除 `__pycache__`），
+对应 C# **约 10,630 行**（对第 3 节列出的 53 个 C# 源文件逐项 `wc -l` 求和，
 含 `RenderEngine.cs` 的 `Progress` 部分）。
 另有 NWaves 三段转写（**无 C# 对应物**，属第三方库替换）。
 
-一致性测试 **6,189 行 / 1004 项断言**（四个文件合计：19 + 59 + 907 + 19；
+一致性测试 **6,401 行 / 1053 项断言**（四个文件合计：19 + 59 + 956 + 19；
 参考源码缺失时自动 SKIP）。
 
 ---
@@ -92,7 +98,7 @@
 | Classic 执行层 · 外部工具进程 | ~700 行 | ❌ 未开始 |
 | `WorldlineRenderer` | 276 行 | 🟡 v10 全通（真机验证）；v11/v20 缺外部依赖，入口报错 |
 | Pipeline（乐句切分 / 快照 / 后台构建） | 548 + 162 + 216 行 | ✅ 完成 |
-| G2p（字素→音素） | 771 行 + 数据 | ❌ 未开始 |
+| G2p（字素→音素） | 387 行（基座）+ 771 行（具体语言） | 🟡 **基座完成**（Trie 字典 / 回落链 / 打包字典）；具体语言 G2p 未搬 |
 | 编辑器侧 | — | ❌ 未开始（M3） |
 
 ---
@@ -147,6 +153,11 @@
 | `openutau/plugin_builtin/chinese_vcv.py` | `Plugin.Builtin/ChineseVCVPhonemizer.cs` |
 | `openutau/plugin_builtin/chinese_cvvc.py` | `Plugin.Builtin/ChineseCVVCPhonemizer.cs` |
 | `openutau/plugin_builtin/japanese_cvvc.py` | `Plugin.Builtin/JapaneseCVVCPhonemizer.cs` |
+| `openutau/g2p/i_g2p.py` | `Api/IG2p.cs` + `Api/IG2pSymbols.cs` |
+| `openutau/g2p/dictionary_data.py` | `Api/G2pDictionaryData.cs` |
+| `openutau/g2p/dictionary.py` | `Api/G2pDictionary.cs`（Trie + Builder） |
+| `openutau/g2p/fallbacks.py` | `Api/G2pFallbacks.cs` |
+| `openutau/g2p/pack.py` | `Api/G2pPack.cs`（ONNX 会话可注入） |
 
 每个模块的 `__init__.py` 里维护着一份"已照搬 / 未照搬"清单，与上表同步。
 
@@ -158,11 +169,11 @@
 cd engine/tests
 python test_ustx_schema_matches_source.py        # 19 passed
 python test_ustx_roundtrip.py                    # 59 passed
-python test_openutau_core_matches_source.py      # 907 passed   ← 含 worldline.dll 真机端到端
+python test_openutau_core_matches_source.py      # 956 passed   ← 含 worldline.dll 真机端到端
 python test_singing_adapters.py                  # 19 passed / 1 skipped
 ```
 
-合计 **1004 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
+合计 **1053 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
 整套测试**可离线运行**。
 
 `worldline.dll` 真机测试的 SKIP 条件是"找不到 `/d/FuFuMIDI/_ref/OpenUtau/runtimes/win-x64/native/worldline.dll`
@@ -253,6 +264,7 @@ assert '(i + 1) == phrase.dynamics.Length' in cs
 | 35 | **函数"算了却没返回"的东西** | `blend_continuous_noise_features` 累加了 `sp` 却只返回 `sp_harmonic`（漏了 `sp`），而 C# 的 `WorldSynthesisContinuousNoise(f0, sp, spHarmonic, …)` **两个都要**。★ 当时那条测试**跟着实现写成了 5 元组**并断言"谐波在第三个位置"，于是"一致地错"、测试全绿 | 移植多返回值函数时，**逐个数 C# 调用点要几个参数**，别只照着自己写的返回值改测试。已改成 6 元组并让测试断言 **sp 与 sp_harmonic 各归其位** |
 | 36 | **测试替身与真实现的返回契约不一致** | 这是本轮最贵的一类：`USinger.try_get_mapped_oto` 返回 `(found, oto)`，而**三个**音素化器当裸值用 → 真 `ClassicSinger` 上 `AttributeError: 'tuple' object has no attribute 'is_color_match'`。**测试全绿**，因为替身也返回裸值（两边一致地错） | ① 替身必须**照抄真实现的签名与返回形状**；② 关键接口补一条**用真实现**驱动的用例（本轮的 `test_phonemizers_against_real_singer`）；③ 在基类加**严格解包**的统一入口 `Phonemizer.mapped_oto()`，替身写错立刻 `TypeError` |
 | 37 | **把返回元组的函数当布尔用** | `if self._check_oto_until_hit_vc(...):` —— 元组**恒为真**，于是永远走"命中"分支，然后在 `oto1 is None` 上炸。同一处还**重复调用**了两次（第二次才解包） | 一次调用、立刻解包：`hit, oto = f(); if hit:`。已在本模块注释里点明这是自己踩过的坑 |
+| 38 | **`^[\p{P}]$` 只匹配「恰好一个」标点字符** | 字符类**没有量词**又带首尾锚点，所以 `"!!"`（两个字符）**不匹配** —— 直觉上会以为"全是标点"。而且 Python 的 `re` **没有 `\p{P}`**，直接翻译会抛错 | 用 `unicodedata.category(ch).startswith('P')` 等价实现，并**显式保留"只判一个字符"**（`len(s) != 1 → False`）。读 C# 正则时要**先看有没有量词** |
 
 
 ### 附：写测试时的最大陷阱 —— 凭直觉填期望
@@ -331,6 +343,7 @@ expect = math.pow(0.5 / (0.5 * w_hi + 1.0 * (1 - w_hi)), 0.86)
 | **`as_float32` 的落点** | 提到 `music_math.py` 成为**共享**辅助（原先只在 `worldline.py` 里私有） | MOD+ 也要用它（C# 写了 `2f` / `1.0f` / `100f` 与 `(float)(diff * 100)`）。放在共用处，避免两份实现悄悄漂移；`worldline` 的私有版已删除并改为导入 |
 | **MOD+ 里 `OtoFrq` 的导入方式** | **函数内惰性导入** | `classic/` 包反向依赖 `render_phrase`（`classic_renderer` → `RenderPhrase`），模块级导入成环。`oto.py` 对 `VoicebankLoader` 用的是同一招 |
 | **WorldlineRenderer 的 v11 / v20** | **v10 做完整；v11/v20 在入口处给精确报错**（列出缺什么、给替代方案），不写半截实现 | v11 要 ONNX 谐波分离模型 `Hnsep`（`SynthSegment` 的谐波分支 + `HnAnalysisF0In` + `sp_env_harmonic` 传递都还没接）；v20 要 `Data.Resources.mel`（**程序集内嵌资源**，仓库里无独立文件）+ 可下载包 `pc-nsf-hifigan`（走未搬的 `PackageManager`）。★ v10 就是 `GetDefaultRenderer` 对 Classic 歌手给的默认渲染器，所以它是真正高价值的那条 |
+| **`G2pPack` 的 ONNX 会话** | **可注入的会话工厂**（`g2p.pack.set_onnx_session_factory`）；没注入时 `session is None` → `predict` 返回空 | C# 直接 `new InferenceSession(g2pData)`（`Microsoft.ML.OnnxRuntime`）。★ 没注入时**不是"降级成别的算法"**，而是走 C# 里**本来就有的** `Session == null` 分支（返回空 → 查不到 → 由上层回落）。所以两边落点相同，只是"未登录词没法预测" |
 | **`SynthCancelled`** | 自定义异常，`analyze_requests(cancellation)` 里检查 `threading.Event` 后抛 | 对应 C# 把 `CancellationToken` 交给 `Parallel.For` 抛出的 `OperationCanceledException`；渲染器 `except SynthCancelled: return result` 与 C# 逐字对应 |
 
 ---

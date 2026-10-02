@@ -5388,6 +5388,216 @@ def test_japanese_cvvc_phonemizer():
           len(r.phonemes) == 1, 'got %r' % [p.phoneme for p in r.phonemes])
 
 
+def test_g2p():
+    """`Api/G2pDictionary.cs` / `G2pFallbacks.cs` / `G2pPack.cs` —— G2P 基础设施。"""
+    from singing.openutau.g2p import (G2pDictionary, G2pFallbacks, G2pPack,
+                                      G2pDictionaryData, SymbolData,
+                                      is_all_punct, set_onnx_session_factory)
+
+    cs_dict = _read('Api/G2pDictionary.cs')
+    cs_fb = _read('Api/G2pFallbacks.cs')
+    cs_pack = _read('Api/G2pPack.cs')
+    if cs_dict is None or cs_fb is None or cs_pack is None:
+        print('  SKIP 找不到 G2p 的 C# 源码')
+        return
+
+    # ---------------- 源码一致性
+    check('G2pDictionary: 用 Trie 存（原文注释引了维基）',
+          'Dictionaries are stored as a trie for compact footprint' in cs_dict)
+    check('G2pDictionary: Query 命中时返回**副本**（Clone）',
+          'return node.symbols.Clone() as string[];' in cs_dict)
+    check('G2pDictionary: add_symbol(type) 的 else 分支是**移除**滑音（不是什么都不做）',
+          'glideSymbols.Remove(symbol);' in cs_dict
+          and cs_dict.count('glideSymbols.Remove(symbol);') == 2)
+    check('G2pDictionary: add_entry 在**叶子处按已登记符号过滤**',
+          'node.symbols = symbols' in cs_dict and 'Where(symbol => phonemeSymbols.ContainsKey(symbol))' in cs_dict)
+    check('G2pDictionary: 文档警告"符号必须先登记"',
+          'Must finish adding symbols before adding entries' in cs_dict)
+    check('G2pFallbacks: is_vowel/is_glide 由**第一个认识该符号**的字典决定',
+          # 3 处：IsValidSymbol 自己一处、IsVowel/IsGlide 各一处
+          cs_fb.count('if (dict.IsValidSymbol(symbol))') == 3
+          and cs_fb.count('return dict.IsVowel(symbol);') == 1
+          and cs_fb.count('return dict.IsGlide(symbol);') == 1,
+          'IsValidSymbol 出现 %d 次' % cs_fb.count('if (dict.IsValidSymbol(symbol))'))
+    check('G2pPack: kAllPunct 是 ^[\\p{P}]$（只匹配**一个**标点字符）',
+          r'Regex(@"^[\p{P}]$")' in cs_pack)
+    check('G2pPack: Query 里 dict 命中就**不查缓存**',
+          'if (phonemes == null && !PredCache.TryGetValue(grapheme, out phonemes))' in cs_pack)
+    check('G2pPack: 预测循环上界写死 48、起始 tgt 是 2',
+          'tgt.Length < 48' in cs_pack and 'new int[,] { { 2 } }' in cs_pack)
+    check('G2pPack: dict.txt 按**两个空格**切、phones.txt 按空白切',
+          'line.Split(new string[] { "  " }, StringSplitOptions.None)' in cs_pack
+          and 'line.Split()' in cs_pack)
+    check('G2pPack: 跳过以 ;;; 开头的行', 'line.StartsWith(";;;")' in cs_pack)
+
+    # ---------------- Trie / Builder
+    b = G2pDictionary.new_builder()
+    b.add_symbol('AA', 'vowel')
+    b.add_symbol('R', 'liquid')
+    b.add_symbol('K', 'consonant')
+    b.add_entry('car', ['K', 'AA', 'R'])
+    b.add_entry('card', ['K', 'AA', 'R', 'D'])
+    d = b.build()
+    check('G2pDictionary.query: 命中返回音素列表', d.query('car') == ['K', 'AA', 'R'])
+    check('G2pDictionary.query: 未命中返回 **None**（不是空列表）', d.query('cat') is None)
+    check('G2pDictionary.query: **前缀**不算命中（trie 要走到叶子）', d.query('ca') is None)
+    got = d.query('car')
+    got.append('污染')
+    check('G2pDictionary.query: 返回的是**副本**（改它不影响字典）',
+          d.query('car') == ['K', 'AA', 'R'])
+    check('G2pDictionary: is_vowel 只认登记为 vowel 的',
+          d.is_vowel('AA') is True and d.is_vowel('K') is False
+          and d.is_vowel('没登记') is False)
+    check('G2pDictionary: is_glide 只认 semivowel/liquid',
+          d.is_glide('R') is True and d.is_glide('K') is False)
+    check('G2pDictionary.unpack_hint: 保留空段后按有效性过滤（含重复空格）',
+          d.unpack_hint('K  XX AA') == ['K', 'AA'])
+    check('G2pDictionary.unpack_hint: 全无效 → 空列表（不是 None）',
+          d.unpack_hint('XX YY') == [])
+
+    # add_symbol 的三态：同一个符号先 liquid 再 consonant → 滑音被**移除**
+    b2 = G2pDictionary.new_builder()
+    b2.add_symbol('R', 'liquid')
+    r_is_glide_1 = b2.build()   # 还没登记完，先看不了；下面重建
+    b3 = G2pDictionary.new_builder()
+    b3.add_symbol('R', 'liquid')
+    d3a = b3.build()
+    b4 = G2pDictionary.new_builder()
+    b4.add_symbol('R', 'liquid')
+    b4.add_symbol('R', 'consonant')
+    d4 = b4.build()
+    check('G2pDictionary.add_symbol: liquid → is_glide True', d3a.is_glide('R') is True)
+    check('G2pDictionary.add_symbol: 再用 consonant 登记 → is_glide 变 False（else 是**移除**）',
+          d4.is_glide('R') is False)
+    check('G2pDictionary.add_symbol(isVowel): 不碰滑音集合',
+          (lambda bb: (bb.add_symbol('X', True), bb.build().is_glide('X'))[1]
+           )(G2pDictionary.new_builder()) is False)
+
+    # 正确顺序：**先登记符号、再写条目** → 音素保留
+    b5 = G2pDictionary.new_builder()
+    b5.add_symbol('P', 'vowel')
+    b5.add_symbol('Q', 'consonant')
+    b5.add_entry('ab', ['P', 'Q'])
+    check('G2pDictionary: 先 add_symbol 再 add_entry → 音素保留',
+          b5.build().query('ab') == ['P', 'Q'], 'got %r' % b5.build().query('ab'))
+    # 反过来（先写条目）→ 过滤发生在**写入时**，音素永久丢失
+    b6 = G2pDictionary.new_builder()
+    b6.add_entry('ab', ['P', 'Q'])       # 登记之前就写条目
+    b6.add_symbol('P', 'vowel')
+    b6.add_symbol('Q', 'consonant')
+    check('G2pDictionary: 反过来（先 add_entry）→ 音素被永久过滤掉（过滤发生在写入时）',
+          b6.build().query('ab') == [], 'got %r' % b6.build().query('ab'))
+
+    # ---------------- G2pFallbacks
+    def mk(symbol, is_vowel, is_glide=False, entries=None):
+        bb = G2pDictionary.new_builder()
+        bb.add_symbol(symbol, is_vowel, is_glide)
+        for g, ph in (entries or {}).items():
+            bb.add_entry(g, ph)
+        return bb.build()
+
+    d_a = mk('AA', True, False, {'x': ['AA']})
+    d_b = mk('AA', False, True, {'x': ['BB'], 'y': ['AA']})
+    fb = G2pFallbacks([d_a, d_b])
+    check('G2pFallbacks.is_valid_symbol: 任一认识即可',
+          fb.is_valid_symbol('AA') is True and fb.is_valid_symbol('ZZ') is False)
+    check('G2pFallbacks.is_vowel: 由**第一个**认识该符号的字典决定',
+          fb.is_vowel('AA') is True)
+    check('G2pFallbacks.query: 取第一个非 None', fb.query('x') == ['AA'])
+    check('G2pFallbacks.query: 前者没有才轮到后者', fb.query('y') == ['AA'])
+    check('G2pFallbacks.query: 都没有 → None', fb.query('zzz') is None)
+    check('G2pFallbacks.is_valid_symbol: 空字典 → False',
+          G2pFallbacks([]).is_valid_symbol('AA') is False)
+
+    # ---------------- G2pPack（真包）
+    pack_path = os.path.join(os.path.dirname(REF), 'OpenUtau.Core', 'G2p', 'Data',
+                             'g2p-arpabet.zip')
+    if not os.path.isfile(pack_path):
+        print('  SKIP 找不到 g2p-arpabet.zip')
+        return
+
+    class _ArpabetLike(G2pPack):
+        """对应 `ArpabetG2p`（真正那个类下一步再搬；这里只为驱动 `G2pPack`）。"""
+
+        def __init__(self, data):
+            super().__init__()
+            self.grapheme_indexes = {c: i for i, c in enumerate('abcdefghijklmnopqrstuvwxyz')}
+            # 真正那个类（`ArpabetG2p`）从自己的静态数组填 `Phonemes`；这里给足长度即可
+            self.phonemes = ['ph%d' % i for i in range(50)]
+            built, session = self.load_pack(
+                data, lambda s: s.lower(),
+                lambda s: self.remove_tail_digits(s.lower()))
+            self.dict, self.session = built, session
+
+    data = open(pack_path, 'rb').read()
+    g = _ArpabetLike(data)
+    check('G2pPack: 真包加载后词表可查（hello → hh ah l ow）',
+          g.query('hello') == ['hh', 'ah', 'l', 'ow'], 'got %r' % g.query('hello'))
+    check('G2pPack: car → k aa r / the → dh ah',
+          g.query('car') == ['k', 'aa', 'r'] and g.query('the') == ['dh', 'ah'],
+          'got %r / %r' % (g.query('car'), g.query('the')))
+    check('G2pPack: 符号表按 prep_phoneme 小写化后登记（is_vowel("aa")=True）',
+          g.is_vowel('aa') is True, 'got aa=%r AA=%r' % (g.is_vowel('aa'), g.is_vowel('AA')))
+    check('G2pPack: l 是 liquid → is_glide(l)=True', g.is_glide('l') is True)
+    check('G2pPack.query: 空串 → None', g.query('') is None)
+    check('G2pPack.query: 单标点字符 = None（走 kAllPunct 短路）', g.query('!') is None)
+    check("G2pPack.query: 多字符标点**不**走短路 —— 它到 predict 那步才因无字母而空",
+          is_all_punct('!!') is False and g.query('!!') is None)
+    check('G2pPack.remove_tail_digits: 循环去尾（aa12 → aa）',
+          G2pPack.remove_tail_digits('aa12') == 'aa'
+          and G2pPack.remove_tail_digits('12') == '' and G2pPack.remove_tail_digits('ab') == 'ab')
+    check('G2pPack.encode_word: 小写后查表、**查不到的字符丢掉**',
+          g.encode_word('A1B') == [[0, 1]], 'got %r（只有 a/b 在字母表里）' % g.encode_word('A1B'))
+    check('G2pPack.predict: 没注入会话 → 空数组（= C# 的 Session == null 分支）',
+          g.session is None and g.predict('zzzz') == [])
+
+    # 注入一个假会话，验证自回归解码
+    calls = []
+
+    class _FakeSession:
+        def run(self, feeds):
+            calls.append((list(feeds['src'][0]), list(feeds['tgt'][0]), feeds['t'][0]))
+            # 依次吐出 3 个符号（下标 3/4/5），然后吐 2（结束符）
+            n = len(feeds['tgt'][0]) - 1
+            return [[[3 + n if n < 3 else 2]]]
+
+    set_onnx_session_factory(lambda blob: _FakeSession())
+    g2 = _ArpabetLike(data)
+    check('G2pPack: 注入工厂后拿到了会话', g2.session is not None)
+    pred = g2.predict('zzzz')
+    check('G2pPack.predict: 真的调了会话（自回归，多轮）', len(calls) >= 4,
+          'got %d 次' % len(calls))
+    check('G2pPack.predict: 依次收下 tgt.Length - 1 个符号（跳过起始 2）',
+          len(pred) == 3 and all(isinstance(p, str) for p in pred),
+          'got %r' % pred)
+    check('G2pPack.predict: 吐出 2 时推进 t（结束条件）',
+          any(c[2] > 0 for c in calls), 'got %r' % calls[:5])
+    check('G2pPack.query: 预测结果进缓存（第二次不再 predict）',
+          g2.query('zzzz') == pred and 'zzzz' in g2.pred_cache)
+    set_onnx_session_factory(None)
+
+    # ---------------- is_all_punct
+    check('is_all_punct: 只对**单**标点字符为真',
+          [is_all_punct(x) for x in ['!', ',', '!!', ',,', 'a', '', 'あ']]
+          == [True, True, False, False, False, False, False])
+
+    # ---------------- G2pDictionaryData
+    dd = G2pDictionaryData.from_plain({
+        'symbols': [{'symbol': 'AA', 'type': 'vowel'}],
+        'entries': [{'grapheme': 'car', 'phonemes': ['K', 'AA', 'R']}]})
+    check('G2pDictionaryData.from_plain: 解析 symbols / entries',
+          dd.symbols[0].symbol == 'AA' and dd.symbols[0].type == 'vowel'
+          and dd.entries[0].grapheme == 'car' and dd.entries[0].phonemes == ['K', 'AA', 'R'])
+    check('G2pDictionaryData.from_plain: 缺段给 **None**（不是空列表，与 C# 反序列化一致）',
+          G2pDictionaryData.from_plain({}).symbols is None
+          and G2pDictionaryData.from_plain({}).entries is None)
+    b7 = G2pDictionary.new_builder().load({
+        'symbols': [{'symbol': 'AA', 'type': 'vowel'}, {'symbol': 'K', 'type': 'consonant'}],
+        'entries': [{'grapheme': 'car', 'phonemes': ['K', 'AA']}]})
+    check('G2pDictionary.Builder.load(dict): 从普通 dict 装载',
+          b7.build().query('car') == ['K', 'AA'])
+
+
 def test_xxhash64():
     """XXH32/XXH64 官方测试向量 —— 对不上，所有缓存键都会静默错。"""
     from singing.openutau.xxhash import xxh32, xxh64 as _x
@@ -5455,6 +5665,8 @@ def main():
     test_document_snapshot_store()
     print('--- Render/Worldline（纯逻辑） ---')
     test_worldline_pure()
+    print('--- Core/G2p 基础设施 ---')
+    test_g2p()
     print('--- 音素化器 × 真 ClassicSinger（接口契约回归） ---')
     test_phonemizers_against_real_singer()
     print('--- Plugin.Builtin/JapaneseCVVC ---')
