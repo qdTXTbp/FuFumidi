@@ -7008,6 +7008,228 @@ def test_syllable_based_phonemizer():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_french_vccv_phonemizer():
+    """`Plugin.Builtin/FrenchVCCVPhonemizer.cs`（294 行）—— `SyllableBased` 基类的
+    **第一个真实用户**：覆盖 GetVowels/GetConsonants/GetDictionaryName/ProcessSyllable/
+    ProcessEnding/NoGap/GetTransitionBasicLengthMs/GetSymbols，零外部 G2p 类、零 YAML。
+    """
+    from singing.openutau import Note, Phoneme, registered
+    from singing.openutau.plugin_builtin import FrenchVCCVPhonemizer
+    from singing.openutau.plugin_builtin import french_vccv as F
+
+    cs = open(os.path.join(os.path.dirname(REF), 'OpenUtau.Plugin.Builtin',
+                           'FrenchVCCVPhonemizer.cs'), encoding='utf-8-sig').read()
+    cs = cs.replace('\r\n', '\n')
+
+    # ---------------- 源码一致性
+    m = re.search(r'\[Phonemizer\("([^"]*)",\s*"([^"]*)",\s*"([^"]*)"(?:,\s*language\s*:\s*"([^"]*)")?\)\]',
+                  cs)
+    check('FR VCCV: [Phonemizer] 的 name/tag/author/language 与 C# 一致',
+          m is not None and (m.group(1), m.group(2), m.group(3), m.group(4)) == (
+              FrenchVCCVPhonemizer.name, FrenchVCCVPhonemizer.tag,
+              FrenchVCCVPhonemizer.author, FrenchVCCVPhonemizer.language),
+          'C#=%r' % (m.groups() if m else None,))
+    check('FR VCCV: 继承 SyllableBasedPhonemizer 且已注册',
+          'class FrenchVCCVPhonemizer : SyllableBasedPhonemizer' in cs
+          and registered().get('FR VCCV') is FrenchVCCVPhonemizer)
+    check('FR VCCV: GetDictionaryName => "cmudict_fr.txt"',
+          'GetDictionaryName() => "cmudict_fr.txt";' in cs
+          and FrenchVCCVPhonemizer().get_dictionary_name() == 'cmudict_fr.txt')
+    check('FR VCCV: NoGap => true', 'protected override bool NoGap => true;' in cs
+          and FrenchVCCVPhonemizer().no_gap is True)
+    check('FR VCCV: GetTransitionBasicLengthMs 转调 GetTransitionBasicLengthMsByOto',
+          'double otoLength = GetTransitionBasicLengthMsByOto(alias, tone, attr);' in cs
+          and 'return otoLength;' in cs)
+
+    # vowels / consonants 逐项
+    def _split_arr(name):
+        mm = re.search(r'%s = "([^"]*)"\.Split' % name, cs)
+        return mm.group(1).split(',') if mm else None
+
+    check('FR VCCV: vowels 逐项一致（26 项，含撇号变体）',
+          _split_arr('vowels') == list(F.VOWELS) and len(F.VOWELS) == 26,
+          'C#=%r' % (_split_arr('vowels'),))
+    check('FR VCCV: consonants 逐项一致（24 项）',
+          _split_arr('consonants') == list(F.CONSONANTS) and len(F.CONSONANTS) == 24)
+    check("FR VCCV: vowels 里有撇号变体（A' / E' / …）",
+          "A'" in F.VOWELS and "0'" in F.VOWELS)
+    check('FR VCCV: consonants 里有 _hh 这种多字符符号',
+          '_hh' in F.CONSONANTS and 'Z' in F.CONSONANTS)
+
+    # dictionaryReplacements：丢自映射（★ 跨两行字符串字面量，要拼接）
+    raw_block = re.search(r'dictionaryReplacements = \((.*?)\)\.Split', cs, re.S)
+    raw_full = ''.join(re.findall(r'"([^"]*)"', raw_block.group(1))) if raw_block else ''
+    want_map = {}
+    for entry in raw_full.split(';'):
+        if entry:
+            parts = entry.split('=')
+            if len(parts) == 2 and parts[0] != parts[1]:
+                want_map[parts[0]] = parts[1]
+    check('FR VCCV: dictionaryReplacements 逐项一致（且丢自映射 4=4）',
+          want_map == F._REPL_MAP, 'C#=%r 我们=%r' % (want_map, F._REPL_MAP))
+    check('FR VCCV: ★ 自映射 4=4 被丢、hh=h 保留（因为 hh != h）',
+          '4' not in F._REPL_MAP and F._REPL_MAP.get('hh') == 'h')
+    check('FR VCCV: GetDictionaryPhonemesReplacement 返回这份硬编码表（副本）',
+          FrenchVCCVPhonemizer().get_dictionary_phonemes_replacement() == dict(F._REPL_MAP)
+          and FrenchVCCVPhonemizer().get_dictionary_phonemes_replacement() is not F._REPL_MAP)
+
+    # arpabet / m2rUg
+    ar = re.search(r'arpabet = "([^"]*)"\.Split', cs)
+    mk = re.search(r'm2rUg = "([^"]*)"\.Split', cs)
+    check('FR VCCV: arpabet / m2rUg 两个数组逐项一致（各 35 项）',
+          ar and mk and ar.group(1).split(',') == list(F._ARPABET)
+          and mk.group(1).split(',') == list(F._M2RUG)
+          and len(F._ARPABET) == 35 == len(F._M2RUG),
+          'arpabet=%r m2rUg=%r' % (ar.group(1) if ar else None,
+                                   mk.group(1) if mk else None))
+
+    # ★ 上游怪癖要在位
+    check('FR VCCV: ★ ProcessSyllable 里 lastC/firstC 是死局部变量（C# 声明后未用）',
+          'var lastC = cc.Length - 1;' in cs and 'var firstC = 0;' in cs)
+    check('FR VCCV: ★ IsVV 分支里 CanMakeAliasExtension 被**注释掉**了',
+          '//if (!CanMakeAliasExtension(syllable))' in cs
+          and '//    basePhoneme = null;' in cs)
+    check('FR VCCV: ★ GetSymbols 里 `if (convert == null) return null;` 是死代码',
+          'if (convert == null)' in cs)
+    check('FR VCCV: ★ vocal fry 剥离只改局部 prevV（Contains / Replace 撇号）',
+          "if (prevV.Contains(\"'\"))" in cs and "prevV = prevV.Replace(\"'\", \"\");" in cs)
+    check('FR VCCV: ★ n+j → J 的规则在 VCV 多辅音分支末尾',
+          '"j" && $"{cc[cc.Length-2]}" == "n")' in cs.replace('\n', ' '))
+    check('FR VCCV: ★ ProcessEnding 单辅音的 vc = "{v}{cc[0]} -"（**v 与 cc[0] 间无空格**）',
+          'var vc = $"{v}{cc[0]} -";' in cs)
+    check('FR VCCV: shortConsonants / longConsonants 是死字段（声明后未用）',
+          'shortConsonants' in cs and 'longConsonants' in cs)
+
+    # ---------------- 行为
+    def oto(alias):
+        from singing.openutau import (Oto, OtoSet, UOto, UOtoSet, USubbank, Subbank)
+        return UOto(Oto(alias=alias, wav=alias + '.wav'),
+                    UOtoSet(OtoSet(file='oto.ini', name='main'), singers_path='/vb'),
+                    [USubbank(Subbank(color=''))])
+
+    class _S:
+        def __init__(self, al):
+            self.al = al
+            self.found = True
+            self.loaded = True
+            self.location = ''
+            self.id = 'fr-test'
+
+        @property
+        def is_loaded(self):
+            return self.found and self.loaded
+
+        def try_get_oto(self, p):
+            return (p in self.al), self.al.get(p)
+
+        def try_get_mapped_oto(self, p, tone, color=None):
+            return (p in self.al), self.al.get(p)
+
+    # ---- GetSymbols 的 arpabet→m2rUg 转换（phoneticHint 走 getSymbolsRaw，不查字典）
+    ph = FrenchVCCVPhonemizer()
+    ph.set_singer(_S({'- A': oto('- A')}))
+    ph.set_timing(_CVVC_AXIS)
+    check('FR VCCV.GetSymbols: arpabet 提示被转成 m2rUg（aa ai b → A E b）',
+          ph.get_symbols(Note(lyric='x', phonetic_hint='aa ai b')) == ['A', 'E', 'b'],
+          'got %r' % ph.get_symbols(Note(lyric='x', phonetic_hint='aa ai b')))
+    check('FR VCCV.GetSymbols: gn → J',
+          ph.get_symbols(Note(lyric='x', phonetic_hint='gn')) == ['J'])
+    check('FR VCCV.GetSymbols: 已经是 m2rUg 的符号原样通过（A b → A b）',
+          ph.get_symbols(Note(lyric='x', phonetic_hint='A b')) == ['A', 'b'])
+    check('FR VCCV.GetSymbols: 空提示 → 走歌词分支，词典查不到给 None（并设 error）',
+          ph.get_symbols(Note(lyric='x', phonetic_hint='')) is None
+          and ph.error == 'word not found', 'got %r' % ph.error)
+    ph.error = ''  # 清掉副作用，别污染后面
+
+    # ---- 端到端：单音节 "- A" + 句末 "A -"（走 IsStartingV / IsEndingV）
+    ph2 = FrenchVCCVPhonemizer()
+    ph2.set_singer(_S({'- A': oto('- A'), 'A -': oto('A -')}))
+    ph2.set_timing(_CVVC_AXIS)
+    r = ph2.process([Note(lyric='x', phonetic_hint='aa', tone=60, duration=480)])
+    check('FR VCCV.Process: 单音节 → ["- A", "A -"]（基音 + 句末尾韵）',
+          [p.phoneme for p in r.phonemes] == ['- A', 'A -'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+    check('FR VCCV.Process: 基音 position=0；句末 = 容器 − Min(50, 容器/3) = 430',
+          r.phonemes[0].position == 0 and r.phonemes[1].position == 430,
+          'got %r' % [p.position for p in r.phonemes])
+
+    # ---- ProcessSyllable 各分支（用空歌手让所有 HasOto 走 false 路径，确定性）
+    ph3 = FrenchVCCVPhonemizer()
+    ph3.set_singer(_S({}))
+    ph3.set_timing(_CVVC_AXIS)
+
+    check('FR VCCV.IsStartingV → ["- {v}"]',
+          ph3.process_syllable(F.Syllable(prev_v='', cc=[], v='A', tone=60))
+          == ['- A'])
+    check('FR VCCV.IsVV → ["{prevV} {v}"]',
+          ph3.process_syllable(F.Syllable(prev_v='A', cc=[], v='E', tone=60))
+          == ['A E'])
+    check("FR VCCV.IsVV: ★ vocal fry 撇号被剥（prevV 带 ' → 剥成无撇号）",
+          ph3.process_syllable(F.Syllable(prev_v="A'", cc=[], v='E', tone=60))
+          == ['A E'])
+    check('FR VCCV.IsStartingCV(1 辅音): HasOto 全假 → 只剩 base "{c}{v}"'
+          '（TryAddPhoneme 没命中就不加）',
+          ph3.process_syllable(F.Syllable(prev_v='', cc=['b'], v='A', tone=60))
+          == ['bA'],
+          'got %r' % ph3.process_syllable(F.Syllable(prev_v='', cc=['b'], v='A', tone=60)))
+    check('FR VCCV.IsVCV(1 辅音) → ["{prevV} {c}", "{c}{v}"]',
+          ph3.process_syllable(F.Syllable(prev_v='A', cc=['b'], v='E', tone=60,
+                                          can_alias_be_extended=True))
+          == ['A b', 'bE'])
+    # 多辅音 + n j → J 规则（空歌手 → ccv/cci 都查不到）
+    check('FR VCCV.IsVCV(>1 辅音): ★ 末尾 n+j → basePhoneme="J{v}"',
+          ph3.process_syllable(F.Syllable(prev_v='A', cc=['n', 'j'], v='E', tone=60,
+                                          duration=480, position=240,
+                                          can_alias_be_extended=True))
+          == ['A n', 'JE'],
+          'got %r' % ph3.process_syllable(F.Syllable(prev_v='A', cc=['n', 'j'], v='E',
+                                                     tone=60, duration=480, position=240,
+                                                     can_alias_be_extended=True)))
+    # 多辅音、不是 n+j（空歌手）
+    r6 = ph3.process_syllable(F.Syllable(prev_v='A', cc=['b', 'l'], v='E', tone=60,
+                                        duration=480, position=240,
+                                        can_alias_be_extended=True))
+    check('FR VCCV.IsVCV(>1 辅音, 非 n+j): ["{prevV} {c0}", base] —— 空 singer 下 cci 全没命中',
+          r6[0] == 'A b' and r6[-1] == 'lE', 'got %r' % r6)
+
+    # ---- ProcessEnding
+    check('FR VCCV.IsEndingV → ["{v} -"]',
+          ph3.process_ending(F.Ending(prev_v='A', cc=[], tail='', tone=60)) == ['A -'])
+    check('FR VCCV.IsEndingVC(1 辅音): HasOto 假 → ["{v} {c}", "{c} -"]',
+          ph3.process_ending(F.Ending(prev_v='A', cc=['n'], tail='', tone=60))
+          == ['A n', 'n -'])
+    check('FR VCCV.IsEndingVCC(>1 辅音): 空 singer 下 cci 全没命中，只剩 ["{v} {c0}"]',
+          ph3.process_ending(F.Ending(prev_v='A', cc=['n', 'j'], tail='', tone=60))
+          == ['A n'],
+          'got %r' % ph3.process_ending(F.Ending(prev_v='A', cc=['n', 'j'], tail='', tone=60)))
+
+    # ---- 带歌手的 IsStartingCV：命中 "- bA" 时不再拆
+    ph4 = FrenchVCCVPhonemizer()
+    ph4.set_singer(_S({'- bA': oto('- bA'), 'bA': oto('bA'), '- b': oto('- b')}))
+    ph4.set_timing(_CVVC_AXIS)
+    check('FR VCCV.IsStartingCV: 命中 "- bA" → 直接用，不再 TryAddPhoneme',
+          ph4.process_syllable(F.Syllable(prev_v='', cc=['b'], v='A', tone=60))
+          == ['- bA'])
+    # 命中 "bA" 但不命中 "- bA" → 走拆分
+    ph5 = FrenchVCCVPhonemizer()
+    ph5.set_singer(_S({'bA': oto('bA'), '- b': oto('- b')}))
+    ph5.set_timing(_CVVC_AXIS)
+    check('FR VCCV.IsStartingCV: 不命中 "- bA" 但命中 "- b" + "bA" → 拆成两段',
+          ph5.process_syllable(F.Syllable(prev_v='', cc=['b'], v='A', tone=60))
+          == ['- b', 'bA'])
+
+    # ---- 真 ClassicSinger 上也要能跑（接口契约回归）
+    real = _real_classic_singer({'- A': oto('- A'), 'A -': oto('A -')})
+    real.loaded = True
+    ph6 = FrenchVCCVPhonemizer()
+    ph6.set_singer(real)
+    ph6.set_timing(_CVVC_AXIS)
+    r6b = ph6.process([Note(lyric='x', phonetic_hint='aa', tone=60, duration=480)])
+    check('FR VCCV × 真 ClassicSinger: 端到端能跑（不把 (found, oto) 当裸值）',
+          [p.phoneme for p in r6b.phonemes] == ['- A', 'A -'],
+          'got %r' % [p.phoneme for p in r6b.phonemes])
+
+
 def _raises_type(exc, fn):
     """小工具：期望抛**指定类型**的异常（本文件已有一个更宽松的 `_raises(fn)`）。"""
     try:
@@ -7076,6 +7298,8 @@ def main():
     test_g2p()
     print('--- Plugin.Builtin/SyllableBased + G2pRemapper + YamlWatcher ---')
     test_syllable_based_phonemizer()
+    print('--- Plugin.Builtin/FrenchVCCV（SyllableBased 首个真实用户）---')
+    test_french_vccv_phonemizer()
     print('--- 音素化器 × 真 ClassicSinger（接口契约回归） ---')
     test_phonemizers_against_real_singer()
     print('--- Plugin.Builtin/JapaneseCVVC ---')

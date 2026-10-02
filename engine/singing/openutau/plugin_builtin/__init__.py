@@ -16,9 +16,11 @@
                          含手写的 `ChineseCVVG2p`）
   - `syllable_based.py`  `SyllableBasedPhonemizer` 基类（**2204 行**，最重的一条线，
                          **抽象、不注册**；含 YAML 配置装载 + 规则引擎 + 边界替换）
+  - `french_vccv.py`    French VCCV m2RUg Phonemizer（FrenchVCCVPhonemizer.cs 294 行；
+                         **`SyllableBased` 基类的第一个真实用户**）
 
 未照搬（后续）：
-  - `SyllableBasedPhonemizer` 家族的 17 个具体子类（EnglishVCCV / EnglishCVVC 等）
+  - `SyllableBasedPhonemizer` 家族的其余 16 个具体子类（EnglishVCCV / EnglishCVVC 等）
   - `ChineseCVVPlusPhonemizer.cs` / `ArpasingPhonemizer.cs`(62) 等其余内置 phonemizer
   - `OpenUtau.Plugin.Builtin` 下的字典类（Presamp / VCV 等）
 
@@ -29,6 +31,7 @@ from . import chinese_cvvc  # noqa: F401
 from . import chinese_vcv  # noqa: F401
 from . import chinese_cvv  # noqa: F401
 from . import japanese_cvvc  # noqa: F401
+from .french_vccv import FrenchVCCVPhonemizer  # noqa: F401
 from .latin_diphone import LatinDiphonePhonemizer  # noqa: F401
 from .monophone import MonophonePhonemizer  # noqa: F401
 from .phoneme_based import PhonemeBasedPhonemizer  # noqa: F401
@@ -37,4 +40,4 @@ from . import japanese_vcv  # noqa: F401
 
 __all__ = ['japanese_vcv', 'chinese_vcv', 'chinese_cvvc', 'japanese_cvvc', 'chinese_cvv',
            'PhonemeBasedPhonemizer', 'MonophonePhonemizer', 'LatinDiphonePhonemizer',
-           'SyllableBasedPhonemizer']
+           'SyllableBasedPhonemizer', 'FrenchVCCVPhonemizer']
