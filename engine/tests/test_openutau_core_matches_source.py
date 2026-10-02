@@ -7647,6 +7647,129 @@ def test_turkish_cvvc_phonemizer():
           [p.phoneme for p in r5.phonemes] == ['hello'])
 
 
+def test_arpasing_phonemizer():
+    """`Plugin.Builtin/ArpasingPhonemizer.cs`（62 行）+ `Data/arpasing.template.yaml`。
+
+    `LatinDiphone` 子类：LoadG2p 三层回落（插件目录 arpasing.yaml（缺则写模板，无
+    try/catch）→ 声库目录 arpasing.yaml（有 try/catch）→ 内置 ArpabetG2p → G2pFallbacks）。
+    """
+    import tempfile
+    import unittest.mock
+    from singing.openutau import Note, registered
+    from singing.openutau.g2p import ArpabetG2p, set_data_dir
+    from singing.openutau.g2p import arpabet as A
+    from singing.openutau.plugin_builtin import ArpasingPhonemizer
+    from singing.openutau.plugin_builtin import arpasing as AR
+
+    cs = open(os.path.join(os.path.dirname(REF), 'OpenUtau.Plugin.Builtin',
+                           'ArpasingPhonemizer.cs'), encoding='utf-8-sig').read()
+    cs = cs.replace('\r\n', '\n')
+
+    # ---------------- 源码一致性
+    m = re.search(r'\[Phonemizer\("([^"]*)",\s*"([^"]*)"(?:,\s*language\s*:\s*"([^"]*)")?\)\]',
+                  cs)
+    check('EN ARPA: [Phonemizer] 的 name/tag/language 与 C# 一致（author 缺省空）',
+          m is not None and (m.group(1), m.group(2), m.group(3)) == (
+              ArpasingPhonemizer.name, ArpasingPhonemizer.tag,
+              ArpasingPhonemizer.language)
+          and ArpasingPhonemizer.author == '',
+          'C#=%r' % (m.groups() if m else None,))
+    check('EN ARPA: 继承 LatinDiphonePhonemizer 且已注册',
+          'class ArpasingPhonemizer : LatinDiphonePhonemizer' in cs
+          and registered().get('EN ARPA') is ArpasingPhonemizer)
+    check('EN ARPA: 构造函数里 Initialize() 包在 try/catch',
+          'try {' in cs and 'Initialize();' in cs
+          and 'Log.Error(e, "Failed to initialize.");' in cs)
+    check('EN ARPA: LoadG2p 插件目录那份**无** try/catch（读完直接 Build）',
+          'g2ps.Add(G2pDictionary.NewBuilder().Load(File.ReadAllText(path)).Build());' in cs)
+    check('EN ARPA: 缺文件时 CreateDirectory + 写模板（对应内嵌资源）',
+          'Directory.CreateDirectory(PluginDir);' in cs
+          and 'File.WriteAllBytes(path, Data.Resources.arpasing_template);' in cs)
+    check('EN ARPA: 声库目录那份**有** try/catch',
+          'Log.Error(e, $"Failed to load {file}");' in cs)
+    check('EN ARPA: 内置回落是 ArpabetG2p',
+          'g2ps.Add(new ArpabetG2p());' in cs)
+
+    # 模板数据与 C# 资源文件逐字一致
+    tpl_cs = open(os.path.join(os.path.dirname(REF), 'OpenUtau.Plugin.Builtin',
+                               'Data', 'arpasing.template.yaml'),
+                  encoding='utf-8-sig').read().replace('\r\n', '\n')
+    check('EN ARPA: 内嵌模板与 C# 的 arpasing.template.yaml 逐字一致',
+          AR.ARPASING_TEMPLATE == tpl_cs,
+          'len(C#)=%d len(我们)=%d' % (len(tpl_cs), len(AR.ARPASING_TEMPLATE)))
+
+    # LoadVowelFallbacks 逐项
+    check('EN ARPA: LoadVowelFallbacks 与 C# 单行字符串逐项一致',
+          ArpasingPhonemizer().load_vowel_fallbacks() == {
+              'aa': ['ah', 'ae'], 'ae': ['ah', 'aa'], 'ah': ['aa', 'ae'],
+              'ao': ['ow'], 'ow': ['ao'], 'eh': ['ae'], 'ih': ['iy'],
+              'iy': ['ih'], 'uh': ['uw'], 'uw': ['uh'], 'aw': ['ao']})
+
+    # ---------------- 行为
+    data_dir = os.path.join(os.path.dirname(REF), 'OpenUtau.Core', 'G2p', 'Data')
+    if not os.path.isdir(data_dir):
+        print('  SKIP 找不到 G2p/Data 目录')
+        return
+    set_data_dir(data_dir)
+    ArpabetG2p.reset_cache()
+
+    with tempfile.TemporaryDirectory() as plugin_dir:
+        # ★ 先测 quirk：plugin_dir 为空串时 makedirs('') 抛错 → 被构造 catch 吞 → g2p=None
+        old = os.environ.get('FUFUMIDI_PLUGIN_DIR')
+        os.environ['FUFUMIDI_PLUGIN_DIR'] = ''
+        try:
+            ph_empty = ArpasingPhonemizer()
+            check('EN ARPA: ★ PluginDir 为空串时 CreateDirectory 抛错被构造吞掉（g2p=None）',
+                  ph_empty.g2p is None)
+        finally:
+            if old is None:
+                os.environ.pop('FUFUMIDI_PLUGIN_DIR', None)
+            else:
+                os.environ['FUFUMIDI_PLUGIN_DIR'] = old
+
+        with unittest.mock.patch.dict(os.environ, {'FUFUMIDI_PLUGIN_DIR': plugin_dir}):
+            ph = ArpasingPhonemizer()
+            check('EN ARPA: PluginDir 缺 arpasing.yaml 时**写出模板**',
+                  os.path.isfile(os.path.join(plugin_dir, 'arpasing.yaml')))
+            check('EN ARPA: g2p 三层回落装载成功',
+                  ph.g2p is not None and ph.vowel_fallback != {})
+            check('EN ARPA: 内置 ArpabetG2p 可查（hello → hh ah l ow）',
+                  ph.g2p.query('hello') == ['hh', 'ah', 'l', 'ow'])
+            check('EN ARPA: 模板里的词条可查（openutau）',
+                  ph.g2p.query('openutau')
+                  == ['ow', 'p', 'eh', 'n', 'w', 'uw', 't', 'ah', 'w', 'uw'])
+
+            # 端到端：有 hint 的 diphone 别名选择（空歌手 → 全走回落串）
+            class _S:
+                def __init__(self, al):
+                    self.al = al
+                    self.found = True
+                    self.loaded = True
+                    self.location = ''
+                    self.id = 'arpa-test'
+
+                @property
+                def is_loaded(self):
+                    return self.found and self.loaded
+
+                def try_get_oto(self, p):
+                    return (p in self.al), self.al.get(p)
+
+                def try_get_mapped_oto(self, p, tone, color=None):
+                    return (p in self.al), self.al.get(p)
+
+            ph3 = ArpasingPhonemizer()
+            ph3.set_singer(_S({}))
+            r = ph3.process([Note(lyric='hello', phonetic_hint='hh ah l ow',
+                                  tone=60, duration=480)], None, None, None, None, [])
+            check('EN ARPA.Process: diphone 别名（空歌手走回落串）',
+                  [p.phoneme for p in r.phonemes]
+                  == ['- hh', 'hh ah', 'ah l', 'l ow', 'ow -'],
+                  'got %r' % [p.phoneme for p in r.phonemes])
+            check('EN ARPA.Process: addTail 在无下一邻居时补 "-"（5 个符号）',
+                  len(r.phonemes) == 5)
+
+
 def _raises_type(exc, fn):
     """小工具：期望抛**指定类型**的异常（本文件已有一个更宽松的 `_raises(fn)`）."""
     try:
@@ -7721,6 +7844,8 @@ def main():
     test_french_cvvc_phonemizer()
     print('--- Plugin.Builtin/TurkishCVVC（直接继承 Phonemizer）---')
     test_turkish_cvvc_phonemizer()
+    print('--- Plugin.Builtin/Arpasing（LatinDiphone 子类）---')
+    test_arpasing_phonemizer()
     print('--- 音素化器 × 真 ClassicSinger（接口契约回归） ---')
     test_phonemizers_against_real_singer()
     print('--- Plugin.Builtin/JapaneseCVVC ---')

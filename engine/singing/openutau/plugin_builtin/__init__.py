@@ -22,6 +22,8 @@
                          同语言家族的第二个真实用户，验证基类 + 复杂别名格式化）
   - `turkish_cvvc.py`   Turkish CVVC Phonemizer（TurkishCVVCPhonemizer.cs 356 行；
                          **直接继承 `Phonemizer`**，自己实现歌词分段与 VC 计算）
+  - `arpasing.py`       English Arpasing Phonemizer（ArpasingPhonemizer.cs 62 行；
+                         `LatinDiphone` 子类，arpasing.yaml 模板已内嵌）
 
 未照搬（后续）：
   - `SyllableBasedPhonemizer` 家族的其余 15 个具体子类（EnglishVCCV / EnglishCVVC 等）
@@ -35,6 +37,7 @@ from . import chinese_cvvc  # noqa: F401
 from . import chinese_vcv  # noqa: F401
 from . import chinese_cvv  # noqa: F401
 from . import japanese_cvvc  # noqa: F401
+from .arpasing import ArpasingPhonemizer  # noqa: F401
 from .french_cvvc import FrenchCVVCPhonemizer  # noqa: F401
 from .french_vccv import FrenchVCCVPhonemizer  # noqa: F401
 from .latin_diphone import LatinDiphonePhonemizer  # noqa: F401
@@ -47,4 +50,4 @@ from .turkish_cvvc import TurkishCVVCPhonemizer  # noqa: F401
 __all__ = ['japanese_vcv', 'chinese_vcv', 'chinese_cvvc', 'japanese_cvvc', 'chinese_cvv',
            'PhonemeBasedPhonemizer', 'MonophonePhonemizer', 'LatinDiphonePhonemizer',
            'SyllableBasedPhonemizer', 'FrenchVCCVPhonemizer', 'FrenchCVVCPhonemizer',
-           'TurkishCVVCPhonemizer']
+           'TurkishCVVCPhonemizer', 'ArpasingPhonemizer']
