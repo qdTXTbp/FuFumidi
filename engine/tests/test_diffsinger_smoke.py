@@ -8,8 +8,12 @@ import sys
 import tempfile
 
 import numpy as np
-import onnx
-from onnx import TensorProto, helper, numpy_helper
+import pytest
+
+onnx = pytest.importorskip("onnx")
+helper = pytest.importorskip("onnx.helper")
+numpy_helper = pytest.importorskip("onnx.numpy_helper")
+TensorProto = onnx.TensorProto
 
 PY = sys.executable
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))

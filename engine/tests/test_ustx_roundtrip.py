@@ -123,7 +123,6 @@ def test_keys_and_omit():
     tr = plain['tracks'][0]
     check('OmitNull: 未设置的 expression_graph 不写', 'expression_graph' not in tr)
     check('OmitNull: voice_parts 里没有 null 字段', all(v is not None for v in tr.values()))
-    return text
 
 
 def test_roundtrip():

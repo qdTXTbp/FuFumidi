@@ -23,16 +23,21 @@ if ENGINE not in sys.path:
     sys.path.insert(0, ENGINE)
 
 REF = os.environ.get('OPENUTAU_REF') or r'D:/FuFuMIDI/_ref/OpenUtau/OpenUtau.Core'
+#: 参考仓库根目录（预编译的 `runtimes/*/native/worldline.dll` 在这里）
+REF_ROOT = os.path.dirname(REF)
 
 from singing.openutau import (  # noqa: E402
-    NAME_IN_OCTAVE, CubicSplineSegment, CurveSource, IRenderer, MusicMath, NoteSource, Oto,
-    OtoSet, PhonemeSource, PhraseLayout, PhraseSource, Phonemizer, Preferences, RenderNote,
-    RenderPhone, RenderPhrase, RenderPitchResult, RenderResult, Subbank, TimeAxis,
-    UOto, UOtoSet, USinger, USingerType, USubbank, VibratoSource,
+    NAME_IN_OCTAVE, Wave, CubicSplineSegment, CurveSource, IRenderer, MusicMath, NoteSource,
+    Oto, OtoSet, PhonemeSource, PhraseLayout, PhraseSource, Phonemizer, Preferences,
+    RenderNote, RenderPhone, RenderPhrase, RenderPitchResult, RenderResult, Subbank,
+    TimeAxis, UOto, UOtoSet, USinger, USingerType, USubbank, VibratoSource,
+)
+from singing.openutau.classic import (  # noqa: E402
+    ClassicRenderer, IResampler, IWavtool, SharpWavtool, WorldlineResampler,
 )
 from singing.openutau.renderer import SINGER_TYPE_FROM_NAME, SINGER_TYPE_NAMES  # noqa: E402
 from singing.ustx import (  # noqa: E402
-    PitchPoint, PitchPointShape, UExpressionDescriptor, UProject, UTrack, Vector2,
+    PitchPoint, PitchPointShape, UCurve, UExpressionDescriptor, UProject, UTrack, Vector2,
 )
 from singing.ustx.format import Ustx  # noqa: E402
 
@@ -1970,6 +1975,2506 @@ def test_pipeline_identities():
           ImpactSet.curves_of('P').curve_abbrs == [])
 
 
+# ====================================================================== Pipeline
+#
+# 上游对应测试：`OpenUtau.Test/Core/Pipeline/PhraseSourceBuilderTest.cs`
+#   - PhraseSourceBuilderTest（后台构建 / 合并到最新快照 / 丢弃已删除的 part）
+#   - PhraseBuildGateTest（两条时序断言）
+#   - DocumentSnapshotStoreTest（五条失效半径断言）
+# 这里按同一批用例转写，另外加上 `FromPart` 的快照字段断言。
+
+class _PipelineSinger(USinger):
+    """对应上游 `PhraseSourceBuilderTest.TestSinger`。"""
+
+    def __init__(self, oto_a):
+        super().__init__('builder-test-singer')
+        self._oto_a = oto_a
+        self.found = True
+        self.loaded = True
+
+    @property
+    def id(self):
+        return 'builder-test-singer'
+
+    @property
+    def subbanks(self):
+        return []
+
+    def try_get_oto(self, phoneme):
+        return (True, self._oto_a) if phoneme == 'A' else (False, None)
+
+    def try_get_mapped_oto(self, phoneme, tone, color=None):
+        return False, None
+
+
+class _PipelineRenderer(_FakeRenderer):
+    """上游 `TestRenderer`：不支持任何表达式；可选地声明乐句两端余量。"""
+
+    def __init__(self, head_ms=0.0, tail_ms=0.0):
+        self._head_ms = head_ms
+        self._tail_ms = tail_ms
+
+    def phrase_padding(self, singer, phonemes):
+        return (self._head_ms, self._tail_ms)
+
+
+def _pipeline_fixture(head_ms=0.0, tail_ms=0.0):
+    """上游 `BuildFixture()` 的转写（两条相邻音符、两个有效音素）。"""
+    from singing.openutau import UPhoneme, ValidateOptions
+    from singing.ustx import UNote, UExpressionType, UPitch, UVibrato, UVoicePart
+
+    project = UProject()
+    specs = [
+        ('engine', 'eng', 0, 100, 0, ['']),
+        ('volume', 'vol', 0, 100, 100, None),
+        ('velocity', 'vel', 0, 100, 100, None),
+        ('modulation', 'mod', 0, 100, 0, None),
+        ('direct', 'dir', 0, 100, 0, None),
+        ('shift', 'shft', 0, 100, 0, None),
+        ('attack', 'atk', 0, 100, 100, None),
+        ('decay', 'dec', 0, 100, 100, None),
+    ]
+    for name, abbr, mn, mx, dv, options in specs:
+        project.expressions[abbr] = UExpressionDescriptor(
+            name=name, abbr=abbr, type=UExpressionType.NUMERICAL,
+            min=mn, max=mx, default_value=dv, options=options)
+
+    track = project.tracks[0]
+    track.singer_obj = _PipelineSinger(UOto.of_dummy('A'))
+    track.renderer_settings.renderer_obj = _PipelineRenderer(head_ms, tail_ms)
+
+    part = UVoicePart(track_no=0, position=0)
+    project.parts.append(part)
+
+    note0 = UNote(position=0, duration=480, tone=60, lyric='a', pitch=UPitch(), vibrato=UVibrato())
+    note1 = UNote(position=480, duration=480, tone=62, lyric='u', pitch=UPitch(), vibrato=UVibrato())
+    for note in (note0, note1):
+        note.extended_duration = 480
+    note0.next, note1.prev = note1, note0
+    part.notes.extend([note0, note1])
+
+    phoneme0 = UPhoneme()
+    phoneme0.position, phoneme0.phoneme, phoneme0.parent = 0, 'A', note0
+    phoneme1 = UPhoneme()
+    phoneme1.position, phoneme1.phoneme, phoneme1.parent = 480, 'A', note1
+    part.phonemes.extend([phoneme0, phoneme1])
+    phoneme0.next, phoneme1.prev = phoneme1, phoneme0
+
+    phoneme0.validate(ValidateOptions(), project, track, part, note0)
+    phoneme1.validate(ValidateOptions(), project, track, part, note1)
+    assert not phoneme0.error and not phoneme1.error, 'fixture 的音素必须有效'
+    return project, track, part
+
+
+def test_phrase_source_from_part():
+    """`PhraseSource.FromPart` / `BuildPhrases`：链路端到端（歌词 → 渲染输入）。"""
+    from singing.openutau import DocRevision, PhraseSource
+    from singing.openutau.pipeline_source import host
+    from singing.openutau.render_phrase import RenderPhrase
+
+    cs = _read('Pipeline/PhraseSource.cs')
+    if cs is None:
+        print('  SKIP 找不到 Pipeline/PhraseSource.cs')
+        return
+
+    project, track, part = _pipeline_fixture()
+    old_revision = host.revision
+    try:
+        host.revision = DocRevision(7)
+        source = PhraseSource.from_part(project, track, part, 3)
+        check('FromPart: 有有效音素时返回快照（不是 None）', source is not None)
+        check('FromPart: PartId / Revision / Generation 原样带过来',
+              source.part_id == part.id and source.revision == DocRevision(7)
+              and source.generation == 3,
+              'got %r / %r / %r' % (source.part_id, source.revision, source.generation))
+        check('FromPart: 相邻音素合成一条乐句组（无间隙）',
+              source.phrase_groups == [(0, 2)], 'got %r' % (source.phrase_groups,))
+        check('FromPart: 笔记下标用 Prev/Next/Extends 的**下标**表达（-1 表示无）',
+              [(n.prev, n.next, n.extends) for n in source.notes] == [(-1, 1, -1), (0, -1, -1)],
+              'got %r' % [(n.prev, n.next, n.extends) for n in source.notes])
+        check('FromPart: 时间轴是**副本**（与工程的时间轴不是同一对象）',
+              source.axis is not project.time_axis)
+
+        ph = source.phonemes
+        check('PhonemeSource: 几何量照搬（position/end/duration）',
+              (ph[0].position, ph[0].duration, ph[0].end) == (0, 480, 480),
+              'got %r' % [(p.position, p.duration, p.end) for p in ph])
+        check('PhonemeSource: PrevAdjacent / NextAdjacent 按 End/position 判定',
+              (ph[0].prev_adjacent, ph[0].next_adjacent) == (False, True)
+              and (ph[1].prev_adjacent, ph[1].next_adjacent) == (True, False),
+              'got %r' % [(p.prev_adjacent, p.next_adjacent) for p in ph])
+        # Leading = max(0, TickBetweenMsPos(PositionMs - preutter, PositionMs))
+        want_leading = max(0, source.axis.ticks_between_ms_pos(
+            ph[0].position_ms - ph[0].preutter, ph[0].position_ms))
+        check('PhonemeSource: Leading 由 preutter 换算成 tick 且不为负',
+              ph[0].leading == want_leading and ph[0].leading >= 0,
+              'got %r / want %r' % (ph[0].leading, want_leading))
+        check('PhonemeSource: Volume/Velocity 是 ×0.01 的归一化值（VelRaw 保留原值）',
+              ph[0].volume == 1.0 and ph[0].velocity == 1.0 and ph[0].vel_raw == 100.0,
+              'got %r' % ((ph[0].volume, ph[0].velocity, ph[0].vel_raw),))
+        check('PhonemeSource: AdjustedTempo = Duration / 等效 tick 时长 × Tempo',
+              ph[0].tempo == 120.0 and abs(ph[0].adjusted_tempo - 120.0) < 1e-9,
+              'got %r / %r' % (ph[0].tempo, ph[0].adjusted_tempo))
+        check('PhonemeSource: Tempos 用 (absStart - Leading, absEnd) 取段',
+              ph[0].tempos[0]['position'] == -ph[0].leading,
+              'got %r / leading=%r' % (ph[0].tempos, ph[0].leading))
+        check('PhonemeSource: oto 与音符音高带入快照',
+              ph[0].oto is not None and ph[0].tone == 60 and ph[0].note_index == 0,
+              'got %r' % (ph[0].oto,))
+        check('PhonemeSource: 包络是**逐点新建**的（不与活文档共享 Vector2）',
+              ph[0].envelope[2] is not part.phonemes[0].envelope.data[2]
+              and ph[0].envelope[2].y == part.phonemes[0].envelope.data[2].y)
+        check('PhonemeSource: mod+ 描述符缺失 → ModpRaw 按 0（不是报错）',
+              ph[0].modp_raw == 0.0)
+
+        # ---- eng 描述符有非空选项时覆盖轨道级 resampler
+        project.expressions['eng'].options = ['worldline']
+        source2 = PhraseSource.from_part(project, track, part, 4)
+        check('PhonemeSource: eng 的 options[值] 非空时覆盖 resampler',
+              source2.phonemes[0].resampler == 'worldline',
+              'got %r' % source2.phonemes[0].resampler)
+        project.expressions['eng'].options = ['']
+
+        # ---- 切组：两段之间有间隙就分成两条乐句
+        part.phonemes[1].position = 960
+        gap_source = PhraseSource.from_part(project, track, part, 5)
+        check('FromPart: 存在间隙且渲染器不要求合并 → 切成两组',
+              gap_source.phrase_groups == [(0, 1), (1, 2)],
+              'got %r' % (gap_source.phrase_groups,))
+
+        # ---- 构建：一首一尾两条乐句
+        phrases = gap_source.build_phrases()
+        check('BuildPhrases: 每个乐句组产出一条 RenderPhrase（组数一致）',
+              len(phrases) == len(gap_source.phrase_groups) == 2,
+              'got %d' % len(phrases))
+        check('BuildPhrases: position/end 用 part 相对 tick 组装',
+              [(p.position, p.end) for p in phrases] == [(0, 480), (960, 1440)],
+              'got %r' % [(p.position, p.end) for p in phrases])
+
+        # ---- 全部音素失效 → None（调用方据此清空 renderPhrases）
+        for p in part.phonemes:
+            p.error = True
+        check('FromPart: 没有可用音素时返回 None（而不是空快照）',
+              PhraseSource.from_part(project, track, part, 6) is None)
+        for p in part.phonemes:
+            p.error = False
+
+        # ---- RenderPhrase.FromPart：脚本/测试用的一站式入口
+        part.phonemes[1].position = 480
+        part.phonemes[1].prev = part.phonemes[0]
+        inline = RenderPhrase.from_part(project, track, part)
+        check('RenderPhrase.from_part: 同步构建且与 build_phrases 结果同哈希',
+              len(inline) == 1
+              and inline[0].hash == PhraseSource.from_part(project, track, part, 0).build_phrases()[0].hash,
+              'got %d' % len(inline))
+        part.phonemes[0].error = True
+        part.phonemes[1].error = True
+        check('RenderPhrase.from_part: 无可用音素时返回**空列表**（不是 None）',
+              RenderPhrase.from_part(project, track, part) == [])
+    finally:
+        host.revision = old_revision
+
+
+def test_phrase_source_merge_adjacent():
+    """`renderer.ShouldMergePhrases` 能把有间隙的两段并回一条乐句。"""
+    from singing.openutau import PhraseSource
+
+    project, track, part = _pipeline_fixture()
+    part.phonemes[1].position = 990          # 间隙 10ms
+    track.renderer_settings.renderer_obj = _PipelineRenderer(head_ms=20.0, tail_ms=20.0)
+    merged = PhraseSource.from_part(project, track, part, 1)
+    check('FromPart: 间隙 < head+tail 余量 → 渲染器要求合并，仍是一组',
+          merged.phrase_groups == [(0, 2)], 'got %r' % (merged.phrase_groups,))
+
+    track.renderer_settings.renderer_obj = _PipelineRenderer()
+    split = PhraseSource.from_part(project, track, part, 2)
+    check('FromPart: 同样的间隙、余量为 0 → 仍是两组',
+          split.phrase_groups == [(0, 1), (1, 2)], 'got %r' % (split.phrase_groups,))
+
+    cs = _read('Render/IRenderer.cs')
+    if cs is not None:
+        check('IRenderer: ShouldMergePhrases 默认实现就是 GapOverlapsPadding',
+              'ShouldMergePhrases(UProject project, UTrack track, UPhoneme prev, UPhoneme next)'
+              in cs.replace('\n', ' ') or 'GapOverlapsPadding' in cs)
+
+
+def test_phrase_build_gate():
+    """上游 `PhraseBuildGateTest`：两条时序断言。"""
+    from singing.openutau import PhraseBuildGate
+
+    gate = PhraseBuildGate()
+    check('PhraseBuildGate: 初始就绪（Slim(true)）', gate.is_current(0))
+    gate.mark_pending(1)
+    check('PhraseBuildGate: MarkPending 后未就绪且 WaitFor 超时返回 False',
+          gate.wait_for(1, 0.05) is False and gate.is_current(1) is False)
+    gate.mark_completed(1)
+    check('PhraseBuildGate: MarkCompleted 后就绪（WaitFor 返回 True）',
+          gate.wait_for(1, 0.1) is True and gate.is_current(1) is True)
+    gate.mark_pending(2)
+    check('PhraseBuildGate: 有更新的代际在等 → 未就绪', gate.is_current(2) is False)
+
+    gate2 = PhraseBuildGate()
+    gate2.mark_pending(1)
+    gate2.mark_completed(1)
+    gate2.mark_pending(3)
+    gate2.mark_completed(2)
+    check('PhraseBuildGate: 被取代的旧代际完成**不算**新代际就绪', gate2.is_current(3) is False)
+    gate2.mark_completed(3)
+    check('PhraseBuildGate: 新代际完成才就绪', gate2.is_current(3) is True)
+
+
+def _wait_until(condition, timeout_s=5.0):
+    import time
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if condition():
+            return True
+        time.sleep(0.01)
+    return condition()
+
+
+def test_phrase_source_builder():
+    """上游 `PhraseSourceBuilderTest` 三条用例的转写。"""
+    from singing.openutau import PhraseSource, PhraseSourceBuilder
+    from singing.openutau.pipeline_source import host
+
+    old_project = host.project
+    builders = []
+    try:
+        # ---- 1) 后台构建并落到 part 的回指槽
+        project, track, part = _pipeline_fixture()
+        host.project = project
+        builder = PhraseSourceBuilder(None)
+        builders.append(builder)
+        part.phrase_generation += 1
+        generation = part.phrase_generation
+        source = PhraseSource.from_part(project, track, part, generation)
+        expected = source.build_phrases()[0].hash
+        part.phrase_gate.mark_pending(generation)
+        check('PhraseSourceBuilder: Push 成功', builder.push(source, part) is True)
+        check('PhraseSourceBuilder: 构建在后台线程落地并写进 render_phrases',
+              _wait_until(lambda: part.phrase_applied_generation == generation
+                          and len(part.render_phrases) == 1
+                          and part.render_phrases[0].hash == expected),
+              'gen=%r count=%r' % (part.phrase_applied_generation, len(part.render_phrases)))
+        check('PhraseSourceBuilder: 落地后 PhraseBuildGate 也就绪',
+              part.phrase_gate.is_current(generation) is True)
+
+        # ---- 2) 同一 part 的多份快照合并到最新
+        project2, track2, part2 = _pipeline_fixture()
+        host.project = project2
+        part2.phrase_generation += 1
+        gen1 = part2.phrase_generation
+        source1 = PhraseSource.from_part(project2, track2, part2, gen1)
+        part2.notes[0].tone = 70
+        part2.phrase_generation += 1
+        gen2 = part2.phrase_generation
+        source2 = PhraseSource.from_part(project2, track2, part2, gen2)
+        check('PhraseSourceBuilder: 改了音符后两份快照哈希不同',
+              source1.build_phrases()[0].hash != source2.build_phrases()[0].hash)
+        part2.phrase_gate.mark_pending(gen2)
+        builder.push(source1, part2)
+        builder.push(source2, part2)
+        latest_hash = source2.build_phrases()[0].hash
+        check('PhraseSourceBuilder: 最终落地的是最新那份（代际更大的）',
+              _wait_until(lambda: part2.phrase_applied_generation == gen2
+                          and len(part2.render_phrases) > 0
+                          and part2.render_phrases[0].hash == latest_hash),
+              'gen=%r' % part2.phrase_applied_generation)
+
+        # ---- 3) part 已不在工程里 → 结果被丢弃
+        project3, track3, part3 = _pipeline_fixture()
+        host.project = _pipeline_fixture()[0]     # 另一个工程，不含 part3
+        part3.phrase_generation += 1
+        gen3 = part3.phrase_generation
+        source3 = PhraseSource.from_part(project3, track3, part3, gen3)
+        part3.phrase_gate.mark_pending(gen3)
+        builder.push(source3, part3)
+        _wait_until(lambda: False, 1.0)           # 让 worker 跑完
+        check('PhraseSourceBuilder: part 不在工程里 → 不落地（代际不动、列表为空）',
+              part3.phrase_applied_generation != gen3 and part3.render_phrases == [])
+
+        # ---- 4) Dispose 后 Push 被拒
+        dead = PhraseSourceBuilder(None)
+        dead.dispose()
+        check('PhraseSourceBuilder: Dispose 后 Push 返回 False',
+              dead.push(source3, part3) is False)
+        check('PhraseSourceBuilder: Dispose 会把 Current 让出',
+              PhraseSourceBuilder.current is None)
+    finally:
+        host.project = old_project
+        for b in builders:
+            b.dispose()
+
+    cs = _read('Pipeline/PhraseSourceBuilder.cs')
+    if cs is not None:
+        check('PhraseSourceBuilder: worker 是**单线程**（声库资源未做线程隔离）',
+              'The worker is single-threaded on purpose' in cs)
+        check('PhraseSourceBuilder: 合并到"每个 part 的最新一份"',
+              'latest[request.Part] = request' in cs and 'supersedes the older one' in cs)
+
+
+def test_document_snapshot_store():
+    """上游 `DocumentSnapshotStoreTest` 五条用例的转写。"""
+    from singing.openutau import (
+        DocRevision, DocumentSnapshotStore, ImpactSet, PartId, SubbankView, TrackSnapshot,
+    )
+    from singing.ustx import UVoicePart
+
+    track_no = 9999
+    part_id = PartId.new()
+    other_id = PartId.new()
+    store = DocumentSnapshotStore()          # 用独立实例，避免污染模块级单例
+
+    def make_part():
+        return UVoicePart(track_no=track_no)
+
+    # ---- Part / Curves 只失效那一个 part
+    part = make_part()
+    part.id = part_id
+    other = make_part()
+    other.id = other_id
+    store.set_part(part, None)
+    store.set_part(other, None)
+    check('SnapshotStore: SetPart 后能取回', store.try_get_part(part_id)[0] is True)
+    store.invalidate(ImpactSet.part_of(part))
+    check('SnapshotStore: PartOf 只丢这一个 part',
+          store.try_get_part(part_id)[0] is False and store.try_get_part(other_id)[0] is True)
+    store.set_part(part, None)
+    store.invalidate(ImpactSet.curves_of(part, 'pitd'))
+    check('SnapshotStore: CurvesOf 与 PartOf 同一处理（曲线变了也要重取乐句快照）',
+          store.try_get_part(part_id)[0] is False)
+    store.remove_part(other_id)
+
+    # ---- Track 连带失效该轨的 part
+    track = UTrack(track_name='test', track_no=track_no)
+    part = make_part()
+    part.id = part_id
+    store.set_track(track)
+    store.set_part(part, None)
+    store.invalidate(ImpactSet.track_of(track))
+    check('SnapshotStore: TrackOf 丢掉该轨**和**它的 part',
+          store.try_get_track(track_no)[0] is False and store.try_get_part(part_id)[0] is False)
+
+    # ---- Project 清空一切
+    part = make_part()
+    part.id = part_id
+    store.set_part(part, None)
+    store.invalidate(ImpactSet.all())
+    check('SnapshotStore: All(Project) 清空 part 快照', store.try_get_part(part_id)[0] is False)
+
+    # ---- Mix / None 什么都不动（混音改动与快照无关）
+    part = make_part()
+    part.id = part_id
+    store.set_part(part, None)
+    store.invalidate(ImpactSet.mix_only())
+    store.invalidate(ImpactSet.none())
+    found, snapshot = store.try_get_part(part_id)
+    check('SnapshotStore: MixOnly / None 保留快照（别"顺手"清一遍）',
+          found is True and snapshot.part_id == part_id and snapshot.track_no == track_no)
+    store.remove_part(part_id)
+
+    # ---- 组装 ProjectSnapshot
+    part = make_part()
+    part.id = part_id
+    store.set_part(part, None)
+    store.set_track(UTrack(track_name='test', track_no=track_no))
+    store.set_revision(DocRevision(42))
+    project = UProject()
+    snapshot = store.snapshot(project)
+    check('SnapshotStore: Snapshot 带出 revision / 轨 / part',
+          snapshot.revision.value >= 42
+          and snapshot.parts.get(part_id) is not None
+          and snapshot.parts[part_id].source is None
+          and any(t.track_no == track_no for t in snapshot.tracks))
+    check('SnapshotStore: 时间轴快照是副本（与活对象脱钩）',
+          snapshot.time_axis.axis is not project.time_axis)
+    store.remove_part(part_id)
+
+    # ---- TrackSnapshot.Of 的字段映射
+    track2 = UTrack(track_name='t2', track_no=3, volume=0.5, pan=-0.25, mute=True)
+    track2.renderer_settings.renderer = 'CLASSIC'
+    track2.renderer_settings.resampler = 'resampler.exe'
+    track2.renderer_settings.wavtool = 'wavtool.exe'
+    snap = TrackSnapshot.of(track2)
+    check('TrackSnapshot.Of: 字段映射（含 Muted → mute）',
+          (snap.track_no, snap.renderer_id, snap.resampler, snap.wavtool,
+           snap.volume, snap.pan, snap.muted) == (3, 'CLASSIC', 'resampler.exe',
+                                                 'wavtool.exe', 0.5, -0.25, True),
+          'got %r' % (snap,))
+    check('TrackSnapshot.Of: 无歌手时 SingerId=None 且 SingerType=Classic / Subbanks=空',
+          snap.singer_id is None and snap.singer_type == USingerType.CLASSIC
+          and snap.subbanks == [])
+    check('SubbankView: 值语义（record）',
+          SubbankView('Soft', '_S') == SubbankView('Soft', '_S'))
+
+    cs = _read('Pipeline/Snapshots.cs')
+    if cs is not None:
+        check('SnapshotStore: 源码里 None/Mix 两个 case 都是空分支',
+              'case ImpactKind.None:' in cs and 'case ImpactKind.Mix:' in cs)
+        flat = cs.replace('\n', ' ')
+        check('SnapshotStore: 源码里 Track 分支同时丢轨与该轨的 parts',
+              'tracks.Remove(trackNo);' in cs and 'parts[id].TrackNo == trackNo' in flat)
+
+
+def test_pipeline_source_conformance():
+    """源码一致性：三处最容易搬错的算式/顺序必须在 C# 里能找到。"""
+    cs = _read('Pipeline/PhraseSource.cs')
+    if cs is None:
+        print('  SKIP 找不到 Pipeline/PhraseSource.cs')
+        return
+    flat = cs.replace('\n', ' ')
+
+    # 切组条件（间隙 + 渲染器的合并请求）
+    check('PhraseSource: FromPart 的切组判据照搬',
+          'phonemes[i - 1].End != phonemes[i].position' in flat
+          and '!renderer.ShouldMergePhrases(project, track, phonemes[i - 1], phonemes[i])' in flat)
+    check('PhraseSource: 没有可用音素时返回 null（不是空快照）',
+          'return null;' in cs)
+    check('PhraseSource: PhonemeSource 的 AdjustedTempo 算式照搬',
+          'AdjustedTempo = Duration / actualTickDuration * Tempo' in flat)
+    check('PhraseSource: Leading 用 (PositionMs - preutter, PositionMs) 换算',
+          'axis.TicksBetweenMsPos(PositionMs - phoneme.preutter, PositionMs)' in flat)
+    check('PhraseSource: Volume/Velocity/VelRaw 的换算照搬',
+          'VelRaw = vel;' in cs and 'Velocity = vel * 0.01f;' in cs
+          and 'Volume = phoneme.GetExpression(project, track, Format.Ustx.VOL).Item1 * 0.01f;' in flat)
+    check('PhraseSource: mod+ 只在描述符存在时取值（否则 0）',
+          'ModpRaw = hasModp ? phoneme.GetExpression(project, track, Format.Ustx.MODP).Item1 : 0f;' in flat)
+    check('PhraseSource: ToneShift 是 (int) 截断转换', 'ToneShift = (int)phoneme.GetExpression' in flat)
+    check('PhraseSource: XsyAvailable 来自 part 上的 xsy 曲线',
+          'XsyAvailable = part.curves.Any(c => c.abbr == Format.Ustx.XSY);' in flat)
+    check('PhraseSource: 包络逐点拷贝（ToArray）而不是共享', 'Envelope = phoneme.envelope.data.ToArray();' in flat)
+    check('PhraseSource: BuildPhrases 按 PhraseGroups 逐个装配',
+          'new RenderPhrase(this, phonemes, PhraseGroups[i].Start, PhraseGroups[i].End)' in flat)
+
+
+# ====================================================================== Classic 执行层
+#
+# `Format/Wave.cs`、`Classic/IResampler.cs` / `IWavtool.cs` / `SharpWavtool.cs`，
+# 以及它们依赖的 NWaves 两个原语（第三方库替换）。
+
+def _write_wav(path, samples, channels=1, framerate=44100, sampwidth=2):
+    """测试用：写一个 PCM WAV（默认 44.1kHz 单声道 16 位）。
+
+    这里按 **32768** 缩放（不是 `Wave.WriteMono16Wav` 的 32767），为的是让
+    `0.5 → 16384 → 0.5` 这种往返在断言里读起来干净；读取侧本来就除以 32768。
+    """
+    import struct
+    import wave as _w
+    pcm = bytearray()
+    for v in samples:
+        s = max(-32768, min(32767, int(round(max(-1.0, min(1.0, v)) * 32768))))
+        pcm += struct.pack('<h', s)
+    with _w.open(path, 'wb') as w:
+        w.setnchannels(channels)
+        w.setsampwidth(sampwidth)
+        w.setframerate(framerate)
+        w.writeframes(bytes(pcm))
+
+
+def test_wave_io():
+    """`Format/Wave.cs`：16 位 WAV 缓存文件的写入与读取。"""
+    import tempfile
+    from singing.openutau import Wave, WaveHost
+
+    cs = _read('Format/Wave.cs')
+    if cs is None:
+        print('  SKIP 找不到 Format/Wave.cs')
+        return
+
+    tmp = tempfile.mkdtemp(prefix='fufumidi-wave-')
+    try:
+        # ---- WriteMono16Wav 的换算：先夹到 ±1，再 (short)(v * short.MaxValue)
+        path = os.path.join(tmp, 'a.wav')
+        Wave.write_mono16_wav(path, [0.0, 1.0, -1.0, 2.0, -2.0, 0.5])
+        got = Wave.get_samples(path)
+        check('Wave.WriteMono16Wav: ±1 之外先夹紧（不是回绕）',
+              got[1] == 32767 / 32768.0 and got[3] == got[1] and got[4] == got[2],
+              'got %r' % got)
+        check('Wave.WriteMono16Wav: 0.5 → int(0.5*32767)=16383（向零截断）',
+              got[5] == 16383 / 32768.0, 'got %r' % got[5])
+        check('Wave.WriteMono16Wav: 输出是 44.1kHz 单声道 16 位',
+              _wav_format(path) == (44100, 1, 2), 'got %r' % (_wav_format(path),))
+
+        # ---- 往返：量化误差 ≤ 1/32767
+        rng = [math.sin(i / 50.0) * 0.9 for i in range(1000)]
+        path2 = os.path.join(tmp, 'b.wav')
+        Wave.write_mono16_wav(path2, rng)
+        back = Wave.get_samples(path2)
+        # ★ 写入乘 short.MaxValue=32767、读取除 32768（NAudio 的 Pcm16BitToSampleProvider），
+        # 两头不对称，所以误差上界约 1/32767 + 1/32768，不是 1/32768
+        check('Wave 往返: 长度一致且逐样本误差 ≤ 1/32767 + 1/32768',
+              len(back) == len(rng)
+              and max(abs(a - b) for a, b in zip(rng, back)) <= 1 / 32767.0 + 1 / 32768.0 + 1e-12,
+              'got %r' % (max(abs(a - b) for a, b in zip(rng, back)),))
+
+        # ---- 输入列表不被改动
+        original = list(rng)
+        Wave.write_mono16_wav(os.path.join(tmp, 'c.wav'), rng)
+        check('Wave.WriteMono16Wav: 不改动入参', rng == original)
+
+        # ---- 采样率不对 → 明确报错（不静默给错数据）
+        path3 = os.path.join(tmp, 'd.wav')
+        _write_wav(path3, [0.1, 0.2], framerate=48000)
+        try:
+            Wave.get_samples(path3)
+            check('Wave: 非 44.1kHz 明确报错（不静默重采样）', False, '没有抛异常')
+        except ValueError as e:
+            check('Wave: 非 44.1kHz 明确报错（不静默重采样）',
+                  '48000' in str(e) and 'WaveHost.decode_mono' in str(e), 'got %r' % str(e))
+
+        # ---- 多声道取第 0 声道（对应 C# 的 ToMono(1, 0)）
+        import struct
+        path4 = os.path.join(tmp, 'e.wav')
+        with __import__('wave').open(path4, 'wb') as w:
+            w.setnchannels(2)
+            w.setsampwidth(2)
+            w.setframerate(44100)
+            w.writeframes(b''.join(struct.pack('<hh', 1000, -1000) for _ in range(4)))
+        check('Wave: 多声道取第 0 声道', Wave.get_samples(path4) == [1000 / 32768.0] * 4,
+              'got %r' % Wave.get_samples(path4))
+
+        # ---- 8 / 24 / 32 位的换算比例
+        path5 = os.path.join(tmp, 'f.wav')
+        _write_wav(path5, [], sampwidth=1)
+        with __import__('wave').open(path5, 'wb') as w:
+            w.setnchannels(1); w.setsampwidth(1); w.setframerate(44100)
+            w.writeframes(bytes([0, 128, 255]))
+        check('Wave: 8 位按 (b-128)/128',
+              Wave.get_samples(path5) == [-1.0, 0.0, 127 / 128.0],
+              'got %r' % Wave.get_samples(path5))
+
+        # ---- CorrectSampleScale
+        samples = [1.0, -2.0, 4.0]
+        Wave.correct_sample_scale(samples)
+        check('Wave.CorrectSampleScale: 峰值 ≤ 8 时不动', samples == [1.0, -2.0, 4.0])
+        samples = [16.0, -32.0]
+        Wave.correct_sample_scale(samples)
+        check('Wave.CorrectSampleScale: 峰值 > 8 → 乘 2^-15',
+              samples == [16.0 * 0.5 ** 15, -32.0 * 0.5 ** 15], 'got %r' % samples)
+        samples = [float(2 ** 24)]
+        Wave.correct_sample_scale(samples)
+        check('Wave.CorrectSampleScale: 峰值 > 2^23 → 乘 2^-31',
+              samples == [float(2 ** 24) * 0.5 ** 31], 'got %r' % samples)
+
+        # ---- 解码后端可替换
+        class _Stub(WaveHost):
+            def decode_mono(self, path):
+                return [0.25]
+
+        old = __import__('singing.openutau.wave', fromlist=['host']).host
+        try:
+            __import__('singing.openutau.wave', fromlist=['host']).host = _Stub()
+            check('Wave: 默认解码器可被宿主替换',
+                  Wave.get_samples('whatever.xyz') == [0.25])
+        finally:
+            __import__('singing.openutau.wave', fromlist=['host']).host = old
+
+        check('Wave.cs: 写入前把样本夹到 ±1（照搬）',
+              'if (v > 1f)' in cs and 'if (v < -1f)' in cs)
+        check('Wave.cs: 16 位换算用 short.MaxValue', '(short)(v * short.MaxValue)' in cs)
+        check('Wave.cs: GetSamples 会重采样到 44100',
+              'new WdlResamplingSampleProvider(sampleProvider, 44100)' in cs)
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _wav_format(path):
+    import wave as _w
+    with _w.open(path, 'rb') as w:
+        return (w.getframerate(), w.getnchannels(), w.getsampwidth())
+
+
+def test_nwaves_filter():
+    """NWaves 的 `IirPeak` / `TransferFunction.Zi` / `ZiFilter.ZeroPhase` 转写。
+
+    ★ 期望值一律**按 C#/NWaves 的公式在测试里现算**（别凭直觉填常数）。
+    """
+    import struct
+
+    from singing.openutau.classic.nwaves_filter import TransferFunction, ZiFilter, iir_peak
+
+    # ---- IirPeak 的系数与 NWaves 公式逐项一致
+    freq, q = 1000 / 44100, 5
+    w0 = 2 * freq * math.pi
+    bw = w0 / q
+    gb = 1 / math.sqrt(2)
+    beta = gb / math.sqrt(1 - gb * gb) * math.tan(bw / 2)
+    gain = 1 / (1 + beta)
+    tf = iir_peak(freq, q)
+    check('IirPeak: 分子 = [1-gain, 0, gain-1]',
+          tf.numerator == [1 - gain, 0.0, gain - 1], 'got %r' % tf.numerator)
+    check('IirPeak: 分母 = [1, -2cos(w0)gain, 2gain-1]',
+          tf.denominator == [1.0, -2 * math.cos(w0) * gain, 2 * gain - 1],
+          'got %r' % tf.denominator)
+    check('IirPeak: 直流增益为 0（分子两端的系数抵消）', abs(sum(tf.numerator)) < 1e-18)
+    try:
+        iir_peak(0.6, 5)
+        check('IirPeak: 归一化频率越界报错（Guard）', False)
+    except ValueError:
+        check('IirPeak: 归一化频率越界报错（Guard）', True)
+
+    # ---- Zi：按伴随矩阵公式现算
+    # ★ 用的是 **double** 系数（C# 的 `ZiFilter.Tf` 指向原始的 `TransferFunction`，
+    # 只有滤波器内部的 `_a`/`_b` 才舍到 float32）
+    a, b = tf.denominator, tf.numerator
+    big_b = [b[i] - a[i] * b[0] for i in range(1, 3)]
+    total = (1 + a[1]) + a[2]                       # Eye - Companion(a).T 的首列之和
+    zi0 = sum(big_b) / total
+    zi1 = (1 + a[1]) * zi0 - (b[1] - a[1] * b[0])
+    check('TransferFunction.Zi: 与伴随矩阵公式一致',
+          abs(tf.zi[0] - zi0) < 1e-12 and abs(tf.zi[1] - zi1) < 1e-12 and tf.zi[2] == 0.0,
+          'got %r want %r' % (tf.zi, [zi0, zi1, 0.0]))
+
+    # ---- Process 与 Direct-Form-II-transposed 递推一致
+    b_c, a_c = [1.0, 0.5], [1.0, -0.3]
+    f = ZiFilter(TransferFunction(b_c, a_c))
+    out = [f.process(v) for v in [1.0, 0.0, 0.0, 0.0, 0.0]]
+    # y0 = b0 = 1；y1 = b1 - a1*y0 = 0.5 + 0.3 = 0.8；y2 = -a1*y1 = 0.24 …
+    y = [1.0, 0.8, 0.24, 0.072, 0.0216]
+    check('ZiFilter.Process: 与手算的 DF-II 转置递推一致',
+          max(abs(x - e) for x, e in zip(out, y)) < 1e-6, 'got %r want %r' % (out, y))
+
+    # ---- ZeroPhase（filtfilt）的性质
+    fs, f0 = 44100, 1000.0
+    n = 4410                                   # 100 个整周期
+    sine = [math.sin(2 * math.pi * f0 * i / fs) for i in range(n)]
+    f2 = ZiFilter(iir_peak(f0 / fs, 5))
+    out2 = f2.zero_phase(list(sine))
+    check('ZiFilter.ZeroPhase: 输出长度与输入一致', len(out2) == n)
+    mid = slice(n // 4, n * 3 // 4)
+    amp_in = max(abs(v) for v in sine[mid])
+    amp_out = max(abs(v) for v in out2[mid])
+    # ★ IirPeak 是"**峰值处单位增益**"的谐振器：notch 在 w0 处为 0、Peak 在 w0 处为 1，
+    # 直流/奈奎斯特处为 0（分子 = (1-g)(1 - z^-2)）
+    check('IirPeak.ZeroPhase: 在中心频率处增益 ≈ 1（峰值单位增益，不是放大）',
+          abs(amp_out / amp_in - 1) < 0.05, 'got %r' % (amp_out / amp_in))
+    # 直流（常数输入）应被压到 0 附近
+    const = [1.0] * n
+    out_dc = ZiFilter(iir_peak(f0 / fs, 5)).zero_phase(list(const))
+    check('IirPeak.ZeroPhase: 直流被压到 0 附近（分子在 z=1 处有零点）',
+          max(abs(v) for v in out_dc[n // 2:]) < 1e-3,
+          'got %r' % max(abs(v) for v in out_dc[n // 2:]))
+    # 零相位 = 输出与输入**同相**：滞后 0 处的相关最大
+    def _corr_lag(lag):
+        acc = 0.0
+        for i in range(n // 4, n * 3 // 4):
+            acc += out2[i] * sine[i - lag]
+        return acc
+    middle = _corr_lag(0)
+    check('ZiFilter.ZeroPhase: 与输入同相（±1 样本内的相关都不如 0 滞后）',
+          middle > _corr_lag(1) and middle > _corr_lag(-1),
+          'got %r / %r / %r' % (middle, _corr_lag(1), _corr_lag(-1)))
+    check('ZiFilter.ZeroPhase: 不改动入参', sine[0] == 0.0 and sine[-1] == sine[-1])
+    # 默认 padLength = 3*(max(len(a),len(b))-1)；把它撑到超过信号长度就会触发 Guard
+    long_tf = TransferFunction([1.0] * 10, [1.0] * 10)
+    try:
+        ZiFilter(long_tf).zero_phase([0.0, 0.0, 0.0, 1.0])
+        check('ZiFilter.ZeroPhase: padLength 超过信号长度时报错（Guard）', False)
+    except ValueError as e:
+        check('ZiFilter.ZeroPhase: padLength 超过信号长度时报错（Guard）',
+              'pad length' in str(e), 'got %r' % str(e))
+
+
+class _StubOto:
+    """只带 `offset` / `cutoff` 的 oto 替身（`SharpWavtool` 的 direct 分支只读这两项）。"""
+
+    def __init__(self, offset=0.0, cutoff=0.0):
+        self.offset = offset
+        self.cutoff = cutoff
+
+
+class _StubPhone:
+    def __init__(self, position_ms=0.0, leading_ms=0.0, direct=False, oto=None,
+                 envelope=None, phoneme='a'):
+        self.position_ms = position_ms
+        self.leading_ms = leading_ms
+        self.direct = direct
+        self.oto = oto or _StubOto()
+        self.phoneme = phoneme
+        self.envelope = envelope or [Vector2(0, 0), Vector2(0, 100), Vector2(0, 100),
+                                     Vector2(0, 100), Vector2(0, 0)]
+
+
+class _StubItem:
+    """`SharpWavtool` / `Worldline.SynthSegment` 只用到 `ResamplerItem` 的这几项
+    （真实实现在 test_resampler_item 里测）。"""
+
+    def __init__(self, phrase, phone, input_file='', output_file='', skip_over=0.0,
+                 envelope_ms=None, offset=0.0, cutoff=0.0, consonant=0.0, velocity=100,
+                 dur_required=0.0, volume=100, tempo=120.0, tone=69, flags=None,
+                 pitches=None):
+        self.phrase = phrase
+        self.phone = phone
+        self.input_file = input_file
+        self.output_file = output_file
+        self.skip_over = skip_over
+        self.offset = offset
+        self.cutoff = cutoff
+        self.consonant = consonant
+        self.velocity = velocity
+        self.dur_required = dur_required
+        self.volume = volume
+        self.tempo = tempo
+        self.tone = tone
+        self.flags = flags or []
+        self.pitches = pitches if pitches is not None else []
+        self._envelope_ms = envelope_ms or [Vector2(0, 0), Vector2(0, 100),
+                                            Vector2(0, 100), Vector2(0, 100), Vector2(0, 0)]
+
+    def envelope_ms_to_samples(self):
+        return [Vector2(p.x, p.y) for p in self._envelope_ms]
+
+    def apply_envelope(self, samples):
+        # 增益恒为 1 的平坦包络 → 不影响定位断言
+        return None
+
+
+class _StubPhrase:
+    def __init__(self, time_axis, position_ms=0.0, leading_ms=0.0, position=0, leading=0,
+                 pitches=None):
+        self.time_axis = time_axis
+        self.position_ms = position_ms
+        self.leading_ms = leading_ms
+        self.position = position
+        self.leading = leading
+        self.pitches = pitches if pitches is not None else [6000] * 200
+
+
+def test_sharp_wavtool():
+    """`Classic/SharpWavtool.cs`：拼接与相位补偿。"""
+    import tempfile
+
+    from singing.openutau.classic import IWavtool, SharpWavtool
+
+    cs = _read('Classic/SharpWavtool.cs')
+    if cs is None:
+        print('  SKIP 找不到 Classic/SharpWavtool.cs')
+        return
+    flat = cs.replace('\n', ' ')
+
+    check('SharpWavtool: 是 IWavtool 的实现', issubclass(SharpWavtool, IWavtool))
+    check('SharpWavtool: ToString 给出 simple / convergence',
+          str(SharpWavtool(False)) == 'simple' and str(SharpWavtool(True)) == 'convergence')
+    check('SharpWavtool: 名字常量照搬',
+          SharpWavtool.NAME_SIMPLE == 'simple' and SharpWavtool.NAME_CONVERGENCE == 'convergence')
+
+    proj = UProject()
+    axis = TimeAxis()
+    axis.build_segments(proj)
+    phrase = _StubPhrase(axis)
+    tmp = tempfile.mkdtemp(prefix='fufumidi-wavtool-')
+    try:
+        wav1 = os.path.join(tmp, 'p0.wav')
+        wav2 = os.path.join(tmp, 'p1.wav')
+        _write_wav(wav1, [0.5] * 100)
+        _write_wav(wav2, [0.25] * 100)
+
+        # ---- 不取消时按 skipOver 裁前导、按 positionMs 叠进缓冲
+        item0 = _StubItem(phrase, _StubPhone(position_ms=0.0, leading_ms=0.0),
+                          output_file=wav1, skip_over=0.0)
+        item1 = _StubItem(phrase, _StubPhone(position_ms=10.0, leading_ms=0.0),
+                          output_file=wav2, skip_over=0.0)
+        # posMs = phone.positionMs - 0 - (phrase.positionMs - phrase.leadingMs) = 10 → 441 样本
+        out = SharpWavtool(False).concatenate([item0, item1], tmp)
+        check('SharpWavtool.simple: 长度 = max(posSamples + len - skipSamples)',
+              len(out) == 441 + 100, 'got %d' % len(out))
+        check('SharpWavtool.simple: 音素 0 落在 0..99',
+              all(v == 0.5 for v in out[:100]), 'got %r' % out[:5])
+        check('SharpWavtool.simple: 音素 1 落在 441..540，中间是静音',
+              all(v == 0.25 for v in out[441:541]) and all(v == 0.0 for v in out[100:441]),
+              'got %r' % out[435:445])
+
+        # ---- 重叠区相加
+        item2 = _StubItem(phrase, _StubPhone(position_ms=0.0, leading_ms=0.0),
+                          output_file=wav2, skip_over=0.0)
+        out_sum = SharpWavtool(False).concatenate([item0, item2], tmp)
+        check('SharpWavtool.simple: 重叠样本是**相加**（不是覆盖）',
+              all(abs(v - 0.75) < 1e-12 for v in out_sum[:100]), 'got %r' % out_sum[:5])
+
+        # ---- skipOver = +50 样本：丢掉 resampler 输出开头的前导，整体**左移** 50
+        item3 = _StubItem(phrase, _StubPhone(position_ms=10.0, leading_ms=0.0),
+                          output_file=wav2, skip_over=50 * 1000.0 / 44100)
+        out_skip = SharpWavtool(False).concatenate([item0, item3], tmp)
+        check('SharpWavtool.simple: skipOver>0 → 丢前导 + 左移（长度 = pos + len - skip）',
+              len(out_skip) == 441 + 100 - 50
+              and all(v == 0.25 for v in out_skip[441:491]),
+              'got len=%d %r' % (len(out_skip), out_skip[435:445]))
+
+        # ---- skipOver 超过素材长度 → Array.Resize 拿到负数长度，C# 会抛，这里同样抛
+        item_bad = _StubItem(phrase, _StubPhone(position_ms=10.0, leading_ms=0.0),
+                             output_file=wav2, skip_over=1000 * 1000.0 / 44100)
+        try:
+            SharpWavtool(False).concatenate([item0, item_bad], tmp)
+            check('SharpWavtool: 缓冲长度算成负数时抛错（对应 C# Array.Resize）', False)
+        except ValueError as e:
+            check('SharpWavtool: 缓冲长度算成负数时抛错（对应 C# Array.Resize）',
+                  'Resize' in str(e), 'got %r' % str(e))
+
+        # ---- CancellationToken 已取消 → None
+        ev = __import__('threading').Event()
+        ev.set()
+        check('SharpWavtool: 已取消时返回 None',
+              SharpWavtool(False).concatenate([item0], tmp, ev) is None)
+
+        # ---- 非 direct 且输出文件不存在 → 整个音素被跳过（不报错）
+        missing = _StubItem(phrase, _StubPhone(), output_file=os.path.join(tmp, 'nope.wav'))
+        check('SharpWavtool: 输出文件不存在时跳过该音素',
+              SharpWavtool(False).concatenate([missing], tmp) == [])
+
+        # ---- direct：直接读原音 wav，按 oto 的 offset/cutoff 切片
+        direct = _StubItem(phrase, _StubPhone(direct=True, oto=_StubOto(offset=10.0, cutoff=10.0)),
+                           input_file=wav1, output_file=wav1)
+        out_direct = SharpWavtool(False).concatenate([direct], tmp)
+        # offset = int(10/1000*44100) = 441；cutoff = 441；length = 100 - 441 - 441 < 0 → 空
+        check('SharpWavtool.direct: 切片长度按 oto 的 offset/cutoff（不足时取空）',
+              out_direct == [], 'got %r' % (len(out_direct),))
+        direct2 = _StubItem(phrase, _StubPhone(direct=True, oto=_StubOto(offset=0.0, cutoff=-10.0)),
+                            input_file=wav1, output_file=wav1)
+        out_direct2 = SharpWavtool(False).concatenate([direct2], tmp)
+        # Take(441) 在只有 100 个样本时给 100 个（不是补零）
+        check('SharpWavtool.direct: 负 cutoff 表示"取到末尾"（length = -cutoff，素材不足就取完）',
+              len(out_direct2) == 100 and all(v == 0.5 for v in out_direct2),
+              'got %d' % len(out_direct2))
+
+        # ---- 相位补偿：端到端跑通（正弦素材），长度对齐且不抛异常
+        n = 4410
+        sine = [math.sin(2 * math.pi * 440 * i / 44100) for i in range(n)]
+        s0 = os.path.join(tmp, 's0.wav')
+        s1 = os.path.join(tmp, 's1.wav')
+        _write_wav(s0, sine)
+        _write_wav(s1, sine)
+        p_phrase = _StubPhrase(axis, pitches=[6900] * 400)     # A4 ≈ 440Hz
+        p0 = _StubItem(p_phrase, _StubPhone(position_ms=0.0), output_file=s0)
+        p1 = _StubItem(p_phrase, _StubPhone(position_ms=100.0), output_file=s1)
+        out_phase = SharpWavtool(True).concatenate([p0, p1], tmp)
+        out_plain = SharpWavtool(False).concatenate([p0, p1], tmp)
+        check('SharpWavtool.convergence: 首个音素不被平移（correction 从 i=1 起）',
+              out_phase[:4410] == out_plain[:4410])
+        # 第二段最多整体平移一个相位修正量（半个周期 ≈ 50 样本）；C# 的 Array.Resize
+        # 在变小时会截断，所以长度**不是**严格相等，允许这段修正量的范围
+        check('SharpWavtool.convergence: 只有第二段可能整体平移（|Δ长度| ≤ 半个周期）',
+              abs(len(out_phase) - len(out_plain)) <= 51,
+              'got %r / %r' % (len(out_phase), len(out_plain)))
+
+        # ---- 源码一致性
+        check('SharpWavtool: posSamples/skipSamples 的换算照搬',
+              'segment.posSamples = (int)Math.Round(segment.posMs * 44100 / 1000);' in flat
+              and 'segment.skipSamples = (int)Math.Round(item.skipOver * 44100 / 1000);' in flat)
+        check('SharpWavtool: posMs 用两头 leadingMs 之差',
+              'item.phone.positionMs - item.phone.leadingMs - (phrase.positionMs - phrase.leadingMs)'
+              in flat)
+        check('SharpWavtool: 相位差取"离 0 更近"的等价角',
+              'if (Math.Abs(diff - 2 * Math.PI) < diff)' in flat)
+        check('SharpWavtool: correction 用 diff/2π * fs / headWindowF0',
+              'segments[i].correction = (int)(diff / 2 / Math.PI * 44100 / segments[i].headWindowF0);'
+              in flat)
+        check('SharpWavtool: 叠加用 Array.Resize（变小时会截断）',
+              'Array.Resize(ref phraseSamples' in flat)
+        check('SharpWavtool: 读缓存文件时按 outputFile 取共享锁',
+              'lock (Renderers.GetCacheLock(item.outputFile))' in flat)
+        check('SharpWavtool: 相位窗口是 440 / 880（中心 ±440）',
+              'Math.Max((int)windowCenter.X - 440, 0)' in flat and 'Math.Min(880,' in flat)
+
+        # ---- IResampler / IWavtool 的源码一致性
+        iw = _read('Classic/IWavtool.cs')
+        if iw is not None:
+            check('IWavtool: 只声明 Concatenate + CheckPermissions',
+                  'float[] Concatenate(List<ResamplerItem> resamplerItems, string tempPath, CancellationTokenSource cancellation);'
+                  in iw.replace('\n', ' ') and 'void CheckPermissions();' in iw)
+        ir = _read('Classic/IResampler.cs')
+        if ir is not None:
+            want_members = ['FilePath', 'NoWrapperScript', 'DoResampler', 'DoResamplerReturnsFile',
+                            'CheckPermissions', 'Manifest', 'SupportsFlag']
+            check('IResampler: 七个成员的接口照搬',
+                  all(m in ir for m in want_members), 'got %r' % ir)
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_resampler_manifest():
+    """`Classic/ResamplerManifest.cs`：读 YAML + 键小写化（第一个优先）。"""
+    import tempfile
+
+    from singing.openutau.classic import ResamplerManifest
+
+    cs = _read('Classic/ResamplerManifest.cs')
+    if cs is None:
+        print('  SKIP 找不到 Classic/ResamplerManifest.cs')
+        return
+
+    tmp = tempfile.mkdtemp(prefix='fufumidi-manifest-')
+    try:
+        path = os.path.join(tmp, 'r.yaml')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('expressions:\n'
+                    '  Ten:\n    name: tension\n    abbr: ten\n'
+                    '  ten:\n    name: SHADOW\n    abbr: ten\n'
+                    'expression_filter: true\n')
+        manifest = ResamplerManifest.load(path)
+        check('ResamplerManifest: expressionFilter → expression_filter',
+              manifest.expression_filter is True)
+        check('ResamplerManifest: 键统一小写', set(manifest.expressions) == {'ten'},
+              'got %r' % set(manifest.expressions))
+        check('ResamplerManifest: 同名键**取第一个**（不是后者覆盖）',
+              manifest.expressions['ten'].name == 'tension',
+              'got %r' % manifest.expressions['ten'].name)
+        check('ResamplerManifest: 反序列化成 UExpressionDescriptor',
+              isinstance(manifest.expressions['ten'], UExpressionDescriptor))
+
+        empty = os.path.join(tmp, 'empty.yaml')
+        with open(empty, 'w', encoding='utf-8') as f:
+            f.write('{}\n')
+        check('ResamplerManifest: 空清单 → 空表达式表 + filter 关闭',
+              ResamplerManifest.load(empty).expressions == {}
+              and ResamplerManifest.load(empty).expression_filter is False)
+
+        check('ResamplerManifest.cs: 用 GroupBy(小写).First() 而不是覆盖',
+              'GroupBy(kvp => kvp.Key.ToLower())' in cs and '.First().Value' in cs)
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_voicebank_config():
+    """`Classic/VoicebankConfig.cs`：字段表 / 默认值 / 枚举 / OmitNull 写盘。"""
+    import dataclasses
+    import shutil
+    import tempfile
+
+    from singing.openutau.classic import (
+        SingerTypeValues, SymbolSet, SymbolSetPreset, VoicebankConfig,
+    )
+    from singing.openutau.classic.voicebank_config import Subbank as CfgSubbank
+    from singing.openutau.oto import Subbank as OtoSubbank
+    from singing.openutau.singer import SINGER_TYPE_FROM_NAME
+    from singing.ustx.io import dump_yaml
+
+    cs = _read('Classic/VoicebankConfig.cs')
+    if cs is None:
+        print('  SKIP 找不到 Classic/VoicebankConfig.cs')
+        return
+
+    # --- 枚举：SymbolSetPreset 的名字与顺序
+    m = re.search(r'enum SymbolSetPreset\s*\{([^}]*)\}', cs)
+    want_presets = [x.strip() for x in m.group(1).split(',') if x.strip()] if m else []
+    got_presets = [v for k, v in vars(SymbolSetPreset).items()
+                   if k.isupper() and isinstance(v, str)]
+    check('SymbolSetPreset: 三枚枚举名一致', want_presets == got_presets,
+          'C#=%r 我们=%r' % (want_presets, got_presets))
+
+    # --- VoicebankConfig 的字段名与**声明顺序**（= 写盘顺序）
+    # C# 有两种写法：`public float X = 0.67f;`（字段带初值）与
+    # `public string X { get; set; } = "-";`（属性，初值在访问器**之后**），都要认。
+    body = re.search(r'class VoicebankConfig\s*\{(.*?)\n    \}', cs, re.S).group(1)
+    member_re = re.compile(
+        r'^\s*public\s+(.+?)\s+(\w+)\s*'
+        r'(?:=\s*([^;{]+?)\s*)?'
+        r'(?:;|\{\s*get;\s*set;\s*\})'
+        r'(?:\s*=\s*([^;{]+?)\s*;)?\s*$', re.M)
+
+    def snake(name):
+        return re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
+
+    def _members(src_body):
+        return [(n, (a or b)) for _, n, a, b in member_re.findall(src_body)]
+
+    members = _members(body)
+    want_fields = [snake(n) for n, _ in members]
+    got_fields = [f.name for f in dataclasses.fields(VoicebankConfig)]
+    check('VoicebankConfig: 字段个数一致（%d）' % len(want_fields),
+          len(want_fields) == len(got_fields), 'C#=%d 我们=%d' % (len(want_fields), len(got_fields)))
+    check('VoicebankConfig: 字段名与声明顺序一致', want_fields == got_fields,
+          'C#=%r\n       我们=%r' % (want_fields, got_fields))
+
+    # --- C# 里显式写了初始值的字段，默认值必须逐个对上
+    cs_defaults = {snake(n): v for n, v in members if v is not None}
+    check('VoicebankConfig: PortraitOpacity 默认 0.67f',
+          VoicebankConfig().portrait_opacity == 0.67
+          and 'f' in (cs_defaults.get('portrait_opacity') or ''),
+          'C#=%r' % cs_defaults.get('portrait_opacity'))
+    check('VoicebankConfig: PortraitHeight 默认 0',
+          VoicebankConfig().portrait_height == 0 and cs_defaults.get('portrait_height') == '0')
+    check('VoicebankConfig: UseFilenameAsAlias 是三态 bool?（默认 None，不是 False）',
+          VoicebankConfig().use_filename_as_alias is None
+          and cs_defaults.get('use_filename_as_alias') == 'null')
+    # 其余（string/Dictionary/数组）C# 都是引用类型默认 null → 我们这边必须是 None，不能是空串
+    no_init = [snake(n) for n, v in members if v is None]
+    check('VoicebankConfig: 无初始值的引用类型字段默认 None（不是 ""/[]）',
+          all(getattr(VoicebankConfig(), f) is None for f in no_init),
+          'got %r' % {f: getattr(VoicebankConfig(), f) for f in no_init})
+
+    # --- SymbolSet 的字段与默认值
+    sb_members = _members(re.search(r'class SymbolSet\s*\{(.*?)\n    \}', cs, re.S).group(1))
+    check('SymbolSet: 字段名/顺序一致（preset, head, tail）',
+          [snake(n) for n, _ in sb_members] == [f.name for f in dataclasses.fields(SymbolSet)],
+          'C#=%r' % [snake(n) for n, _ in sb_members])
+    check('SymbolSet: head 默认 "-"、tail 默认 "R"（初值写在访问器之后）',
+          SymbolSet().head == '-' and SymbolSet().tail == 'R'
+          and dict((snake(n), v) for n, v in sb_members).get('head') == '"-"')
+    check('SymbolSet: preset 默认 unknown（枚举 0）',
+          SymbolSet().preset == SymbolSetPreset.UNKNOWN)
+
+    # --- Subbank：Python 侧留在 oto.py，但必须是**同一个类对象**（不是复制品）
+    check('Subbank: oto.Subbank 与配置模型引用的是同一个类', CfgSubbank is OtoSubbank)
+
+    # --- SingerTypeValues 的取值就是 SingerTypeFromName 的键
+    check('SingerTypeValues: 取值 = SingerTypeFromName.Keys',
+          SingerTypeValues.get_values() == list(SINGER_TYPE_FROM_NAME.keys()))
+    check('SingerTypeValues.cs: 确实取 SingerTypeFromName.Keys',
+          'SingerTypeUtils.SingerTypeFromName.Keys' in cs)
+    check('SingerTypeValues: 含 utau', 'utau' in SingerTypeValues.get_values())
+
+    # --- 写盘：OmitNull 只略过 null，**默认值照样写**
+    yaml_cs = _read('Util/Yaml.cs')
+    check('Util/Yaml.cs: 用的是 OmitNull（不是 OmitDefaults）',
+          yaml_cs is not None and 'DefaultValuesHandling.OmitNull' in yaml_cs
+          and 'OmitDefaults' not in yaml_cs)
+
+    text = dump_yaml(VoicebankConfig())
+    check('写盘: 默认值 portrait_opacity 写出来', 'portrait_opacity: 0.67' in text, 'got:\n%s' % text)
+    check('写盘: 默认值 portrait_height 写出来', 'portrait_height: 0' in text, 'got:\n%s' % text)
+    check('写盘: OmitNull —— 没设的字符串键不出现',
+          re.search(r'(?m)^name:', text) is None and 'version:' not in text
+          and 'symbol_set' not in text and 'subbanks' not in text
+          and 'use_filename_as_alias' not in text, 'got:\n%s' % text)
+
+    # --- 读盘：下划线键 / 嵌套 / 未知键忽略 / 三态
+    tmp = tempfile.mkdtemp(prefix='fufumidi-vbconfig-')
+    try:
+        path = os.path.join(tmp, 'character.yaml')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('name: Tester\n'
+                    'localized_names:\n  ja-JP: テスター\n'
+                    'search_terms:\n- tester\n'
+                    'singer_type: utau\n'
+                    'portrait_opacity: 0.5\n'
+                    'symbol_set:\n  preset: hiragana\n  head: "-"\n  tail: R\n'
+                    'subbanks:\n- color: Soft\n  prefix: P\n  suffix: S\n'
+                    '  tone_ranges:\n  - C4\n  - E4-G4\n'
+                    'use_filename_as_alias: true\n'
+                    'brand_new_key: 1\n')
+        cfg = VoicebankConfig.load(path)
+        check('读盘: name / localized_names', cfg.name == 'Tester'
+              and cfg.localized_names == {'ja-JP': 'テスター'}, 'got %r' % cfg.localized_names)
+        check('读盘: search_terms 是数组', cfg.search_terms == ['tester'], 'got %r' % cfg.search_terms)
+        check('读盘: symbol_set 反序列化成 SymbolSet',
+              isinstance(cfg.symbol_set, SymbolSet) and cfg.symbol_set.preset == 'hiragana'
+              and cfg.symbol_set.tail == 'R', 'got %r' % cfg.symbol_set)
+        check('读盘: subbanks 反序列化成 Subbank 列表',
+              isinstance(cfg.subbanks, list) and len(cfg.subbanks) == 1
+              and cfg.subbanks[0].tone_ranges == ['C4', 'E4-G4'], 'got %r' % cfg.subbanks)
+        check('读盘: use_filename_as_alias 三态 true', cfg.use_filename_as_alias is True)
+        check('读盘: 未知键忽略（IgnoreUnmatchedProperties）',
+              not hasattr(cfg, 'brand_new_key'))
+
+        # --- save → load 往返
+        out = os.path.join(tmp, 'out', 'character.yaml')
+        os.makedirs(os.path.dirname(out))
+        cfg.save(out)
+        back = VoicebankConfig.load(out)
+        check('往返: 关键字段一致',
+              (back.name, back.singer_type, back.portrait_opacity) == ('Tester', 'utau', 0.5),
+              'got %r' % ((back.name, back.singer_type, back.portrait_opacity),))
+        check('往返: symbol_set 子对象一致',
+              back.symbol_set == cfg.symbol_set and back.subbanks == cfg.subbanks)
+        check('往返: 未知键没有被写回', 'brand_new_key' not in open(out, encoding='utf-8').read())
+
+        # 空文件 / 空映射都要能读（C# 的 Deserialize 返回全默认实例）
+        empty = os.path.join(tmp, 'empty.yaml')
+        with open(empty, 'w', encoding='utf-8') as f:
+            f.write('{}\n')
+        blank = VoicebankConfig.load(empty)
+        check('读盘: 空 YAML → 全默认（引用类型为 None）',
+              blank.name is None and blank.subbanks is None
+              and blank.portrait_opacity == 0.67)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # --- 上游怪癖：SymbolSet 目前未被使用，照搬不删
+    check('源码: SymbolSet 仍标注 "Not used by OpenUtau at the moment."',
+          'Not used by OpenUtau at the moment.' in cs)
+
+
+def test_voicebank_loader():
+    """`Classic/VoicebankLoader.cs`：常量 / 方法表 / oto 解析 / prefix.map / 写回。"""
+    import shutil
+    import tempfile
+
+    from singing.openutau.classic import FileTrace, VoicebankConfig, VoicebankLoader
+    from singing.openutau.classic import voicebank_loader as VL
+    from singing.openutau.oto import Voicebank
+    from singing.openutau.singer import Preferences, USingerType
+
+    cs = _read('Classic/VoicebankLoader.cs')
+    if cs is None:
+        print('  SKIP 找不到 Classic/VoicebankLoader.cs')
+        return
+
+    def snake(name):
+        return re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
+
+    # --- 常量表：C# 的 `kXxx` → 我们的 UPPER_SNAKE
+    want = dict(re.findall(r'public const string (k\w+) = "([^"]*)";', cs))
+    got = {k: v for k, v in vars(VL).items() if k.isupper() and isinstance(v, str)}
+    expected = {snake(n[1:]).upper(): v for n, v in want.items()}
+    missing = set(expected) - set(got)
+    # DEFAULT_ENCODING 是 Python 侧补的（C# 把 `Encoding.GetEncoding("shift_jis")`
+    # 写死在两处，没有常量），不算多出来的文件名常量。
+    extra = set(got) - set(expected) - {'DEFAULT_ENCODING'}
+    check('VoicebankLoader: 常量表逐项对上（%d 个）' % len(want), not missing and not extra,
+          '缺=%r 多出=%r' % (sorted(missing), sorted(extra)))
+    check('VoicebankLoader: 每个文件名的字面值一致',
+          {k: got.get(k) for k in expected} == expected, 'C#=%r 我们=%r' % (want, got))
+    check('VoicebankLoader: 默认编码常量 = .NET 的 shift_jis(=cp932)',
+          'Encoding.GetEncoding("shift_jis")' in cs and VL.DEFAULT_ENCODING == 'cp932')
+    check('VoicebankLoader: kConfigYaml 是上游的死常量，也照搬',
+          'kConfigYaml' in want and VL.CONFIG_YAML == 'config.yaml')
+
+    # --- 成员表：C# 的方法名 → Python 名（重命名处已注明载体差异）
+    member_map = {
+        'SearchAll': 'search_all',
+        'LoadVoicebank': 'load_voicebank',
+        'LoadInfo': 'load_info',
+        'ParseCharacterTxt': 'parse_character_txt',
+        'ApplyConfig': 'apply_config',
+        'LoadSubbanks': 'load_subbanks',
+        'LoadPrefixMap': 'load_prefix_map',
+        'LoadMap': 'load_map',
+        'ParsePrefixMap': 'parse_prefix_map',
+        'LoadOtoSets': 'load_oto_sets',
+        'ParseOtoSet': 'parse_oto_set',
+        'GetOtoDeclaredEncoding': 'get_oto_declared_encoding',
+        'AddAliasForMissingFiles': 'add_alias_for_missing_files',
+        'CheckWavExist': 'check_wav_exist',
+        'AddFilenameAlias': 'add_filename_alias',
+        'ParseOto': 'parse_oto',
+        'WriteOtoSets': 'write_oto_sets',
+        'WriteOtoSet': 'write_oto_set',
+    }
+    missing = [c for c in member_map if ('%s(' % c) not in cs]
+    check('VoicebankLoader.cs: 这些成员名都在源码里', not missing, '缺: %r' % missing)
+    absent = [p for c, p in member_map.items() if not hasattr(VoicebankLoader, p)]
+    check('VoicebankLoader: 逐个成员都已落地', not absent, '缺: %r' % absent)
+    # 两个搬成模块级函数（C# 是 static，但 Python 侧无状态、放模块更清楚）
+    check('ParseDouble / RemoveExtension 搬成模块级函数',
+          'ParseDouble(' in cs and 'RemoveExtension(' in cs
+          and callable(VL.parse_double) and callable(VL._remove_extension))
+    check('VoicebankLoader.IsTest 默认 false',
+          'public static bool IsTest = false;' in cs and VoicebankLoader.is_test is False)
+
+    # --- `FileTrace`：拷贝语义 + 行号显示 +1
+    trace = FileTrace('oto.ini', 3, 'x=y')
+    copied = trace.copy()
+    copied.line = 'changed'
+    check('FileTrace: copy() 是独立副本（陷阱 #1）',
+          trace.line == 'x=y' and copied.line == 'changed' and copied is not trace)
+    check('FileTrace: ToString 的行号是 lineNumber+1', str(trace) == '"oto.ini"\nat line 4:\n"x=y"',
+          'got %r' % str(trace))
+
+    # --- 编码名换算（.NET 的 shift_jis 实为 cp932）
+    check('get_encoding: shift_jis → cp932', VL.get_encoding('shift_jis') == 'cp932')
+    check('get_encoding: utf-8 → utf-8', VL.get_encoding('utf-8') == 'utf-8')
+    try:
+        VL.get_encoding(' utf-8')
+        check('get_encoding: 带空白的名字要报错（.NET 的严格度）', False, '居然通过了')
+    except LookupError:
+        check('get_encoding: 带空白的名字要报错（.NET 的严格度）', True)
+
+    # --- double 格式化：C# 的 `0.0 → "0"`、指数大写 E
+    check('_cs_double: 0.0 → "0"（不是 Python 的 "0.0"）', VL._cs_double(0.0) == '0',
+          'got %r' % VL._cs_double(0.0))
+    check('_cs_double: 50 → "50" / -3.142 原样', VL._cs_double(50.0) == '50'
+          and VL._cs_double(-3.142) == '-3.142')
+    check('_cs_double: 指数用大写 E', VL._cs_double(1e-05) == '1E-05',
+          'got %r' % VL._cs_double(1e-05))
+
+    # --- parse_double：C# 的 NumberStyles.Float + "空串算成功"
+    check('parse_double: None/空串 → (True, 0)',
+          VL.parse_double(None) == (True, 0.0) and VL.parse_double('') == (True, 0.0))
+    check('parse_double: 带空白的数字可解析', VL.parse_double(' 2.5 ') == (True, 2.5))
+    check('parse_double: 非数字 → False', VL.parse_double('XX')[0] is False
+          and VL.parse_double('1,5')[0] is False)
+
+    # --- `_read_lines`：只认 \r\n / \r / \n，末尾换行不产生空行
+    check('_read_lines: 三种换行都认', VL._read_lines('a\r\nb\rc\nd') == ['a', 'b', 'c', 'd'])
+    check('_read_lines: 末尾换行不产生多余空行', VL._read_lines('a\n') == ['a'])
+    check('_read_lines: 中间空行保留', VL._read_lines('a\n\nb') == ['a', '', 'b'])
+
+    tmp = tempfile.mkdtemp(prefix='fufumidi-vbloader-')
+    saved_is_test = VoicebankLoader.is_test
+    try:
+        # ---------------- 一个真实的（最小）声库目录
+        vb = os.path.join(tmp, 'Tester')
+        os.makedirs(vb)
+        with open(os.path.join(vb, 'character.txt'), 'w', encoding='utf-8') as f:
+            f.write('# 这是注释行\n'
+                    'name=Tester\n'
+                    'author=Someone\n'
+                    'voice=TesterCV\n'
+                    'sample=sample.wav\n'
+                    'web=https://example.com\n'
+                    'version=1.0\n'
+                    'image=icon.png\n'
+                    'image = notpicked.png\n')   # 等号两侧有空格 → 认不出来（死代码 quirk）
+        with open(os.path.join(vb, 'oto.ini'), 'w', encoding='utf-8') as f:
+            f.write('a.wav=a_alt,0,50,-30,100,20\n'    # 合法（cutoff 允许负）；别名与文件名不同
+                    'b.wav=,0,50,0,100,20\n'         # 空别名 → 用文件名
+                    'c.wav=c\n'                      # 截断 → 数值全 0 且 IsValid=true（quirk）
+                    'd.wav=d,0,50,0,100,XX\n'        # overlap 解析失败
+                    'garbage line\n'                 # 没有 '=' → 报格式错
+                    '\n')                            # 空行 → 无效条目但无错
+        with open(os.path.join(vb, 'a.wav'), 'wb') as f:
+            f.write(b'RIFF')
+        with open(os.path.join(vb, 'extra.wav'), 'wb') as f:
+            f.write(b'RIFF')
+
+        # is_test 打开 → 跳过 wav 存在性检查，先把"纯解析"测干净
+        VoicebankLoader.is_test = True
+        oto_set = VoicebankLoader.parse_oto_set(os.path.join(vb, 'oto.ini'), 'utf-8', None)
+        by_alias = {o.alias: o for o in oto_set.otos}
+        check('parse_oto: 合法行 is_valid=True 且数值就位',
+              by_alias['a_alt'].is_valid and (by_alias['a_alt'].offset, by_alias['a_alt'].consonant,
+                                              by_alias['a_alt'].cutoff, by_alias['a_alt'].preutter,
+                                              by_alias['a_alt'].overlap)
+              == (0.0, 50.0, -30.0, 100.0, 20.0), 'got %r' % by_alias['a_alt'])
+        check('parse_oto: 空别名回退成"文件名去扩展名"', by_alias['b'].alias == 'b')
+        check('parse_oto: 截断行 c.wav=c → is_valid=True 且数值全 0（parse_double quirk）',
+              by_alias['c'].is_valid and (by_alias['c'].offset, by_alias['c'].overlap) == (0.0, 0.0))
+        check('parse_oto: overlap 非数字 → is_valid=False 且报错提到 overlap',
+              (not by_alias['d'].is_valid) and 'overlap' in by_alias['d'].error,
+              'got %r' % by_alias['d'].error)
+        garbage = next(o for o in oto_set.otos
+                       if o.file_trace is not None and o.file_trace.line == 'garbage line')
+        check('parse_oto: 没有 "=" 的行报格式错', 'does not match format' in garbage.error)
+        parsed_only = [o for o in oto_set.otos if o.file_trace is not None]
+        blanks = [o for o in parsed_only if not o.is_valid and not o.error]
+        check('parse_oto: 空行产出"无效但无错"的条目（写回时原样输出）', len(blanks) == 1,
+              'got %d' % len(blanks))
+        check('parse_oto: 每行的 FileTrace 互不共享且行号递增',
+              len({id(o.file_trace) for o in parsed_only}) == len(parsed_only)
+              and [o.file_trace.line_number for o in parsed_only] == list(range(len(parsed_only))),
+              'got %r' % [o.file_trace.line_number for o in parsed_only])
+        check('AddAliasForMissingFiles: 补上 extra.wav 的别名，但 **is_valid 仍是 False**（上游行为）',
+              any(o.alias == 'extra' and not o.is_valid and o.file_trace is None
+                  for o in oto_set.otos),
+              'got %r' % [(o.alias, o.is_valid) for o in oto_set.otos])
+
+        # 真开 wav 存在性检查：a.wav 在、b/c/d 的 wav 不在 → 标错 + 失效
+        VoicebankLoader.is_test = False
+        oto_set2 = VoicebankLoader.parse_oto_set(os.path.join(vb, 'oto.ini'), 'utf-8', None)
+        by_alias2 = {o.alias: o for o in oto_set2.otos}
+        check('CheckWavExist: 文件在的条目保持有效', by_alias2['a_alt'].is_valid)
+        check('CheckWavExist: 文件缺失的条目 is_valid=False 且 error 写明缺失',
+              (not by_alias2['b'].is_valid) and 'Sound file missing' in by_alias2['b'].error,
+              'got %r' % by_alias2['b'].error)
+
+        # useFilenameAsAlias：追加"文件名"别名，参考条目取 Offset 最小者
+        VoicebankLoader.is_test = True
+        oto_set3 = VoicebankLoader.parse_oto_set(os.path.join(vb, 'oto.ini'), 'utf-8', True)
+        check('AddFilenameAlias: 已存在同名别名就不重复追加（b 的名字和别名都是 b）',
+              sum(1 for o in oto_set3.otos if o.alias == 'a') == 1
+              and sum(1 for o in oto_set3.otos if o.alias == 'b') == 1,
+              'got %r' % [(o.alias, o.is_valid) for o in oto_set3.otos])
+        added = next(o for o in oto_set3.otos if o.alias == 'a')
+        ref_alt = next(o for o in oto_set3.otos if o.alias == 'a_alt')
+        check('AddFilenameAlias: 复制参考条目的数值且 is_valid=True',
+              added.is_valid and added.wav == 'a.wav' and added.offset == ref_alt.offset
+              and added.consonant == ref_alt.consonant and added.cutoff == ref_alt.cutoff)
+        check('AddFilenameAlias: file_trace 是**共享**引用（不是复制）',
+              added.file_trace is ref_alt.file_trace)
+
+        # ---------------- 写回：无效条目按原始行原样写
+        out_dir = os.path.join(tmp, 'write')
+        os.makedirs(out_dir)
+        src = os.path.join(out_dir, 'oto.ini')
+        with open(src, 'w', encoding='utf-8') as f:
+            f.write('a.wav=a,0,50,0,100,20\ngarbage line\n\n')
+        parsed = VoicebankLoader.parse_oto_set(src, 'utf-8', None)
+        VoicebankLoader.write_oto_set(parsed, src, 'utf-8')
+        rewrote = open(src, encoding='utf-8').read()
+        check('write_oto_set: 往返后逐字符一致（含无法解析的行）',
+              rewrote == 'a.wav=a,0,50,0,100,20\ngarbage line\n\n', 'got %r' % rewrote)
+        check('write_oto_set: 整数值按 C# 写 "0" 而不是 "0.0"', ',0,50,0,100,20' in rewrote)
+
+        # ---------------- #Charset: 声明（含"不 trim"的怪癖与 10 行上限）
+        cs1 = os.path.join(tmp, 'charset1.ini')
+        with open(cs1, 'w', encoding='utf-8') as f:
+            f.write('#Charset:utf-8\na.wav=a,0,0,0,0,0\n')
+        check('GetOtoDeclaredEncoding: #Charset:utf-8（无空格）→ utf-8',
+              VoicebankLoader.get_oto_declared_encoding(cs1) == 'utf-8')
+        cs2 = os.path.join(tmp, 'charset2.ini')
+        with open(cs2, 'w', encoding='utf-8') as f:
+            f.write('#Charset: utf-8\na.wav=a,0,0,0,0,0\n')
+        check('GetOtoDeclaredEncoding: "#Charset: utf-8"（有空格）被判成没声明（上游怪癖）',
+              VoicebankLoader.get_oto_declared_encoding(cs2) is None)
+        cs3 = os.path.join(tmp, 'charset3.ini')
+        with open(cs3, 'w', encoding='utf-8') as f:
+            f.write('\n' * 10 + '#Charset:utf-8\n')
+        check('GetOtoDeclaredEncoding: 只看前 10 行', VoicebankLoader.get_oto_declared_encoding(cs3) is None)
+
+        # ---------------- StreamReader 的 BOM 检测
+        bom_file = os.path.join(tmp, 'bom.txt')
+        with open(bom_file, 'wb') as f:
+            f.write(b'\xef\xbb\xbfname=BOM\xe4\xb8\xad\n')
+        check('_read_text: 有 UTF-8 BOM 时改用它并吃掉 BOM（StreamReader 行为）',
+              'name=BOM中' in VL._read_text(bom_file, 'cp932'), 'got %r' % VL._read_text(bom_file, 'cp932'))
+
+        # ---------------- character.txt 解析 + load_info 判型
+        bank = Voicebank()
+        VoicebankLoader.load_info(bank, os.path.join(vb, 'character.txt'), tmp)
+        check('ParseCharacterTxt: 认识的键都读出来了',
+              (bank.name, bank.author, bank.voice, bank.sample, bank.web, bank.version, bank.image)
+              == ('Tester', 'Someone', 'TesterCV', 'sample.wav', 'https://example.com', '1.0', 'icon.png'),
+              'got %r' % ((bank.name, bank.author, bank.voice, bank.sample, bank.web,
+                           bank.version, bank.image),))
+        check('ParseCharacterTxt: 无扩展名目录 → id 是相对路径',
+              bank.id.replace('\\', '/') == 'Tester', 'got %r' % bank.id)
+        check('ParseCharacterTxt: "image = x"（等号两侧空格）**认不出来**，落进 other_info',
+              bank.image == 'icon.png' and 'image = notpicked.png' in bank.other_info,
+              'got %r' % bank.other_info)
+        check('ParseCharacterTxt: 没配 character.yaml 时默认 shift_jis(=cp932)',
+              bank.text_file_encoding == 'cp932', 'got %r' % bank.text_file_encoding)
+        check('LoadInfo: 没有 yaml/enuconfig/dsconfig → Classic', bank.singer_type == USingerType.CLASSIC)
+
+        # 缺 name 时兜底命名
+        noname = Voicebank()
+        no_name_txt = os.path.join(tmp, 'NoName', 'character.txt')
+        os.makedirs(os.path.dirname(no_name_txt))
+        with open(no_name_txt, 'w', encoding='utf-8') as f:
+            f.write('author=X\n')
+        VoicebankLoader.load_info(noname, no_name_txt, tmp)
+        check('ParseCharacterTxt: 没有 name → "No Name (id)"',
+              noname.name == 'No Name (NoName)', 'got %r' % noname.name)
+
+        # character.yaml 的 singer_type 优先；legacy 判型走文件名
+        yaml_dir = os.path.join(tmp, 'FromYaml')
+        os.makedirs(yaml_dir)
+        with open(os.path.join(yaml_dir, 'character.txt'), 'w', encoding='utf-8') as f:
+            f.write('name=Y\n')
+        with open(os.path.join(yaml_dir, 'character.yaml'), 'w', encoding='utf-8') as f:
+            f.write('singer_type: diffsinger\ntext_file_encoding: utf-8\n')
+        bank_y = Voicebank()
+        VoicebankLoader.load_info(bank_y, os.path.join(yaml_dir, 'character.txt'), tmp)
+        check('LoadInfo: character.yaml 的 singer_type 优先 → DiffSinger',
+              bank_y.singer_type == USingerType.DIFFSINGER)
+        check('LoadInfo: character.yaml 的 text_file_encoding 生效', bank_y.text_file_encoding == 'utf-8')
+        ds_dir = os.path.join(tmp, 'LegacyDs')
+        os.makedirs(ds_dir)
+        with open(os.path.join(ds_dir, 'character.txt'), 'w', encoding='utf-8') as f:
+            f.write('name=L\n')
+        with open(os.path.join(ds_dir, 'dsconfig.yaml'), 'w', encoding='utf-8') as f:
+            f.write('{}\n')
+        bank_l = Voicebank()
+        VoicebankLoader.load_info(bank_l, os.path.join(ds_dir, 'character.txt'), tmp)
+        check('LoadInfo: 遗留判型认得 dsconfig.yaml → DiffSinger',
+              bank_l.singer_type == USingerType.DIFFSINGER)
+
+        # ---------------- ApplyConfig 的引用语义
+        cfg = VoicebankConfig(name='  ', image='  ',
+                              subbanks=[Subbank(color=None, prefix=None, suffix=None)])
+        b2 = Voicebank()
+        b2.singer_type = USingerType.CLASSIC
+        cfg.use_filename_as_alias = True
+        VoicebankLoader.apply_config(b2, cfg)
+        check('ApplyConfig: 纯空白的 name/image 不覆盖（IsNullOrWhiteSpace）',
+              b2.name is None and b2.image is None)
+        check('ApplyConfig: Subbank 的空字段被就地补成空串，且是**同一批对象**',
+              b2.subbanks[0] is cfg.subbanks[0]
+              and (b2.subbanks[0].color, b2.subbanks[0].prefix, b2.subbanks[0].suffix) == ('', '', ''),
+              'got %r' % b2.subbanks[0])
+        check('ApplyConfig: Classic 才吃 UseFilenameAsAlias', b2.use_filename_as_alias is True)
+
+        # ---------------- prefix.map → 子音色 / 音域
+        pm_dir = os.path.join(tmp, 'Prefix')
+        os.makedirs(pm_dir)
+        with open(os.path.join(pm_dir, 'character.txt'), 'w', encoding='utf-8') as f:
+            f.write('name=P\n')
+        with open(os.path.join(pm_dir, 'prefix.map'), 'w', encoding='utf-8') as f:
+            f.write('C4\t\t\nD4\t\t\nC4\t\t\n')          # 重复行要去重
+        bank_p = Voicebank()
+        VoicebankLoader.load_info(bank_p, os.path.join(pm_dir, 'character.txt'), tmp)
+        VoicebankLoader.load_subbanks(bank_p)
+        check('ParsePrefixMap: 重复取音去重（SortedSet 语义）',
+              VoicebankLoader.parse_prefix_map(os.path.join(pm_dir, 'prefix.map'), 'cp932')[('', '')]
+              == [60, 62])
+        check('LoadMap: 不相邻的音各自成一段（C4 与 D4 各自单点）',
+              len(bank_p.subbanks) == 1 and bank_p.subbanks[0].tone_ranges == ['C4', 'D4'],
+              'got %r' % [(s.color, s.prefix, s.suffix, s.tone_ranges) for s in bank_p.subbanks])
+        empty_bank = Voicebank()
+        empty_bank.file = os.path.join(tmp, 'EmptyBank', 'character.txt')
+        os.makedirs(os.path.dirname(empty_bank.file))
+        VoicebankLoader.load_subbanks(empty_bank)
+        check('LoadSubbanks: 一个都没有时补一个空占位（ToneRanges=[] 不是 None）',
+              len(empty_bank.subbanks) == 1 and empty_bank.subbanks[0].tone_ranges == [])
+
+        # ---------------- search_all + load_oto_sets + reload
+        bank_s = Voicebank()
+        bank_s.base_path = tmp
+        bank_s.file = os.path.join(vb, 'character.txt')
+        VoicebankLoader.load_voicebank(bank_s)
+        check('LoadVoicebank: oto 表按相对目录命名（根目录 → 空串）',
+              len(bank_s.oto_sets) == 1 and bank_s.oto_sets[0].name == '',
+              'got %r' % [s.name for s in bank_s.oto_sets])
+        old_name = bank_s.name
+        bank_s.name = 'MUTATED'
+        bank_s.reload()
+        check('Voicebank.reload: 重新读回（且 BasePath/File 保留）',
+              bank_s.name == old_name, 'got %r' % bank_s.name)
+
+        sub_dir = os.path.join(vb, 'sub')
+        os.makedirs(sub_dir)
+        with open(os.path.join(sub_dir, 'oto.ini'), 'w', encoding='utf-8') as f:
+            f.write('a.wav=a,0,0,0,0,0\n')
+        VoicebankLoader.load_oto_sets(bank_s, vb)
+        check('LoadOtoSets: 递归子目录并写相对名',
+              {s.name for s in bank_s.oto_sets} >= {'sub'},
+              'got %r' % [s.name for s in bank_s.oto_sets])
+
+        found = VoicebankLoader(tmp).search_all()
+        check('SearchAll: 递归找到全部 character.txt（按目录 id 认）',
+              {b.id.replace('\\', '/') for b in found}
+              == {'Tester', 'NoName', 'FromYaml', 'LegacyDs', 'Prefix'},
+              'got %r' % sorted(b.id for b in found))
+        Preferences.load_deep_folder_singer = False
+        try:
+            shallow = VoicebankLoader(tmp).search_all()
+        finally:
+            Preferences.load_deep_folder_singer = True
+        check('SearchAll: LoadDeepFolderSinger=False 时只看一级子目录',
+              {b.id.replace('\\', '/') for b in shallow}
+              == {'Tester', 'NoName', 'FromYaml', 'LegacyDs', 'Prefix'},
+              'got %r' % sorted(b.id for b in shallow))
+    finally:
+        VoicebankLoader.is_test = saved_is_test
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_frq_files():
+    """`Classic/Frq.cs`：`.frq` 读写、`Build`、帧对齐，以及 `OtoFrq` 的偏差折算。"""
+    import struct
+    import tempfile
+
+    from singing.openutau.classic import Frq, Mrq, OtoFrq
+    from singing.openutau.classic.frq import get_frq_file, get_mrq_file
+
+    cs = _read('Classic/Frq.cs')
+    if cs is None:
+        print('  SKIP 找不到 Classic/Frq.cs')
+        return
+
+    check('VoicebankFiles.GetFrqFile: a.wav → a_wav.frq（点换下划线）',
+          get_frq_file('C:/bank/a.wav').endswith('a_wav.frq'),
+          'got %r' % get_frq_file('C:/bank/a.wav'))
+    check('VoicebankFiles.GetMrqFile: 与 wav 同目录的 desc.mrq',
+          get_mrq_file('C:/bank/a.wav').replace('\\', '/').endswith('/bank/desc.mrq'),
+          'got %r' % get_mrq_file('C:/bank/a.wav'))
+
+    tmp = tempfile.mkdtemp(prefix='fufumidi-frq-')
+    try:
+        # ---- Build：averageF0 是**有声帧**（f>0）的算术平均；amp = hop 内平均绝对值 × 2^15
+        samples = [0.5] * 1024
+        f0 = [100.0, 200.0, 0.0, 300.0]
+        frq = Frq.build(samples, f0)
+        check('Frq.Build: hopSize = kHopSize = 256', frq.hop_size == 256)
+        check('Frq.Build: averageF0 只用 f > 0 的帧（(100+200+300)/3）',
+              abs(frq.average_f0 - 200.0) < 1e-9, 'got %r' % frq.average_f0)
+        check('Frq.Build: amp = hop 内平均 |样本| × 2^15',
+              abs(frq.amp[0] - 0.5 * 2 ** 15) < 1e-9 and len(frq.amp) == 4,
+              'got %r' % frq.amp)
+        # f0 比样本能覆盖的 hop 多一个 → 最后那一帧 count == 0，amp 记 0
+        check('Frq.Build: 样本耗尽的那一段 amp = 0（count == 0）',
+              Frq.build([0.5] * 1024, [100.0] * 5).amp[4] == 0.0)
+
+        # ---- Save / Load 往返：文件格式逐字段对照（FREQ0003）
+        wav = os.path.join(tmp, 'a.wav')
+        _write_wav(wav, [0.1] * 100)
+        frq_path = get_frq_file(wav)
+        with open(frq_path, 'wb') as f:
+            frq.save(f)
+        raw = open(frq_path, 'rb').read()
+        check('Frq.Save: 头 8 字节是 ASCII "FREQ0003"', raw[:8] == b'FREQ0003')
+        check('Frq.Save: 头之后是 hopSize(int32) + averageF0(double)',
+              struct.unpack_from('<i', raw, 8)[0] == 256
+              and abs(struct.unpack_from('<d', raw, 12)[0] - 200.0) < 1e-9)
+        check('Frq.Save: averageF0 之后是 16 字节空白（4 个 int 0）',
+              raw[20:36] == b'\x00' * 16)
+        check('Frq.Save: 然后是 length(int32) + length 组 (f0, amp)',
+              struct.unpack_from('<i', raw, 36)[0] == 4 and len(raw) == 40 + 4 * 16,
+              'got %r' % len(raw))
+
+        loaded = Frq()
+        check('Frq.Load: 能读回自己写的文件', loaded.load(wav) is True)
+        check('Frq.Load: hopSize / averageF0 / f0 / amp 一致',
+              loaded.hop_size == 256 and abs(loaded.average_f0 - 200.0) < 1e-9
+              and loaded.f0 == f0 and loaded.amp == frq.amp)
+        # 这条会走 Frq.Load 的失败分支（记一条 error 日志），临时提日志级别免得刷屏
+        import logging as _logging
+        _logging.getLogger('singing.openutau.classic.frq').setLevel(_logging.CRITICAL)
+        check('Frq.Load: 头不对时返回 False（不抛）',
+              (lambda p: (open(p, 'wb').write(b'XXXX0003' + raw[8:]), Frq().load(wav))[1])(
+                  frq_path) is False)
+        _logging.getLogger('singing.openutau.classic.frq').setLevel(_logging.NOTSET)
+        with open(frq_path, 'wb') as f:
+            frq.save(f)
+
+        # ---- 没有 .frq 文件时返回 False
+        absent = os.path.join(tmp, 'nope.wav')
+        check('Frq.Load: 文件不存在 → False', Frq().load(absent) is False)
+        check('Frq.Load: wavPath 为空 → False', Frq().load('') is False)
+
+        # ---- Mrq：读 desc.mrq 里同名的条目
+        with open(get_mrq_file(wav), 'wb') as f:
+            # nf0 = 2，后面紧跟 2 个 float32（size 必须 >= 12 + nf0*4）
+            body = struct.pack('<iii', 2, 44100, 512) + struct.pack('<ff', 100.0, 400.0)
+            f.write(b'mrq ' + struct.pack('<iii', 1, 1, len(b'a.wav')))
+            f.write('a.wav'.encode('utf-16-le'))
+            f.write(struct.pack('<i', len(body)) + body)
+        mrq = Mrq()
+        check('Mrq.Load: 能读回同名条目', mrq.load(wav) is True)
+        check('Mrq.Load: hopSize / wavSampleRate 取自条目头',
+              mrq.hop_size == 512 and mrq.wav_sample_rate == 44100,
+              'got %r / %r' % (mrq.hop_size, mrq.wav_sample_rate))
+        check('Mrq.Load: f0 是 float32 读出来的', mrq.f0 == [100.0, 400.0], 'got %r' % mrq.f0)
+        check('Mrq.Load: averageF0 是**对数域**平均再转回 Hz',
+              abs(mrq.average_f0 - math.pow(2.0, (math.log(100.0, 2) + math.log(400.0, 2)) / 2)) < 1e-9,
+              'got %r' % mrq.average_f0)
+
+        # ---- OtoFrq：把 offset/consonant/cutoff 折算成"相对平均音高的半音偏差"
+        frq2 = Frq.build([0.5] * 1024, [200.0] * 400)      # 全有声、全 200Hz
+        table = {}
+        oto = _StubOto(offset=0.0, cutoff=0.0)
+        oto.file = 'x'
+        oto.consonant = 100.0
+        table['x'] = frq2
+        oto_frq = OtoFrq(oto, table)
+        check('OtoFrq: 命中缓存表时不重新读文件', oto_frq.loaded is True)
+        check('OtoFrq: 全部等于平均音高 → 偏差全 0',
+              all(abs(v) < 1e-9 for v in oto_frq.tone_diff_fix)
+              and all(abs(v) < 1e-9 for v in oto_frq.tone_diff_stretch),
+              'got %r / %r' % (oto_frq.tone_diff_fix[:3], oto_frq.tone_diff_stretch[:3]))
+
+        # 期望长度按 C# 的公式现算（别凭直觉填常数）
+        def _frq_len(ms):
+            return int(math.floor(ms * frq2.wav_sample_rate / 1000 / frq2.hop_size))
+        want_fix = _frq_len(oto.offset + oto.consonant) - _frq_len(oto.offset)
+        want_cutoff = len(frq2.f0) - _frq_len(oto.cutoff)      # cutoff >= 0 那一支
+        check('OtoFrq: fix 段 = ConvertMsToFrqLength(offset+consonant) - (offset)',
+              len(oto_frq.tone_diff_fix) == want_fix, 'got %d / want %d'
+              % (len(oto_frq.tone_diff_fix), want_fix))
+        check('OtoFrq: stretch 段 = (f0.Length - ConvertMsToFrqLength(cutoff)) - consonant',
+              len(oto_frq.tone_diff_stretch) == want_cutoff - want_fix,
+              'got %d / want %d' % (len(oto_frq.tone_diff_stretch), want_cutoff - want_fix))
+
+        # ---- Completion：无声帧用前后最近的有声帧补
+        frqs = [0.0, 0.0, 200.0, 0.0, 0.0, 400.0, 0.0]
+        completion = OtoFrq._completion(frqs)
+        check('OtoFrq.Completion: 一侧有有声帧 → 直接取它',
+              completion[0] == 200.0 and completion[1] == 200.0 and completion[6] == 400.0,
+              'got %r' % completion)
+        check('OtoFrq.Completion: 两侧都有 → 按**帧下标**线性插值（min=2, max=5）',
+              abs(completion[3] - MusicMath.linear(2, 5, 200.0, 400.0, 3)) < 1e-9
+              and abs(completion[4] - MusicMath.linear(2, 5, 200.0, 400.0, 4)) < 1e-9,
+              'got %r' % completion)
+        check('OtoFrq.Completion: 全无声时补 0', OtoFrq._completion([0.0, 0.0]) == [0.0, 0.0])
+
+        check('Frq.cs: 无声判据是 f <= 60（不是 f <= 0）', 'frqs[i] <= 60' in cs)
+        check('Frq.cs: 头是 "FREQ0003" 且检查后抛 FormatException',
+              '"FREQ0003" not found' not in cs and 'FREQ0003 header not found.' in cs)
+        check('Frq.cs: Build 的 averageF0 用 f > 0 过滤', 'f => f > 0' in cs)
+        check('Frq.cs: kHopSize = 256', 'const int kHopSize = 256;' in cs)
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+class _FakeNative:
+    """`resample()` 编排测试用的假原生库（记录每次调用，返回构造好的形状）。"""
+
+    available = True
+    error = None
+
+    def __init__(self, f0_value=440.0, frames=101):
+        self.f0_value = f0_value
+        self.frames = frames
+        self.f0_methods = []
+        self.analysis_samples = None
+        self.synthesis_call = None
+
+    def init_analysis_config(self, fs, hop_size, fft_size):
+        from singing.openutau.worldline import init_analysis_config
+        return init_analysis_config(fs, hop_size, fft_size)
+
+    def f0(self, samples, fs, frame_period, method):
+        self.f0_methods.append(method)
+        return [self.f0_value] * self.frames
+
+    def world_analysis_f0_in(self, config, samples, f0_in):
+        self.analysis_samples = list(samples)
+        sp_size = config.fft_size // 2 + 1
+        n = len(f0_in)
+        return [1e-6] * (n * sp_size), [1.0] * (n * sp_size)
+
+    def world_synthesis(self, f0, sp, is_mgc, mgc_size, bap, is_bap, fft_size,
+                        frame_period, fs, gender, tension, breathiness, voicing):
+        from singing.openutau.worldline import world_synthesis_sample_count
+        self.synthesis_call = dict(
+            f0=list(f0), sp_size=len(sp) // max(1, len(f0)), is_mgc=is_mgc,
+            mgc_size=mgc_size, is_bap=is_bap, fft_size=fft_size,
+            gender=list(gender), tension=list(tension),
+            breathiness=list(breathiness), voicing=list(voicing))
+        count = world_synthesis_sample_count(len(f0), frame_period, fs)
+        return [0.25] * count
+
+
+def test_worldline_resample_orchestration():
+    """`Worldline.Resample` 的**编排**：补边 → 音高弯曲 → 合成 → 裁到 durRequired → 增益。
+
+    用假原生库跑，验证的是"每一步的顺序与参数"（DSP 本身由下面的真机测试兜底）。
+    """
+    import tempfile
+
+    from singing.openutau.worldline import (
+        RESAMPLER_PADDING, CutOffBeforeOffsetError, CutOffExceedDurationError,
+        apply_pitch_bend, get_flag, resample,
+    )
+
+    cs = _read('Render/Worldline.cs')
+    if cs is None:
+        print('  SKIP 找不到 Render/Worldline.cs')
+        return
+
+    tmp = tempfile.mkdtemp(prefix='fufumidi-resample-')
+    try:
+        n = 44100
+        sine = [0.5 * math.sin(2 * math.pi * 440 * i / 44100) for i in range(n)]
+        wav = os.path.join(tmp, 'p.wav')
+        _write_wav(wav, sine)
+
+        phrase = _StubPhrase(_time_axis())
+        item = _StubItem(phrase, _StubPhone(), input_file=wav, offset=0.0, cutoff=0.0,
+                         consonant=100.0, velocity=100, dur_required=500.0, volume=100,
+                         tempo=120.0, tone=69, flags=[], pitches=[0] * 200)
+        native = _FakeNative()
+        out = resample(item, native=native)
+
+        check('Resample: 没有 .frq 时用 method=2（pyin）', native.f0_methods == [2],
+              'got %r' % native.f0_methods)
+        check('Resample: 输出长度 = int(durRequired * fs / 1000)',
+              len(out) == int(500.0 * 44100 / 1000), 'got %d' % len(out))
+        check('Resample: 全都不是 NaN/Inf',
+              all(math.isfinite(v) for v in out))
+
+        # 补边：SynthSegment 的 f0 是 50 帧（durRequired 500ms / frame_ms 10）
+        call = native.synthesis_call
+        check('Resample: f0 两端各补 ResamplerPadding 帧',
+              len(call['f0']) == 50 + 2 * RESAMPLER_PADDING
+              and call['f0'][0] == call['f0'][1] == call['f0'][2],
+              'got %d' % len(call['f0']))
+        check('Resample: sp 是扁平数组（每帧 fftSize/2+1）',
+              call['sp_size'] == call['fft_size'] // 2 + 1,
+              'got %r / %r' % (call['sp_size'], call['fft_size']))
+        check('Resample: isMgc / isBap 都是 false', call['is_mgc'] is False
+              and call['is_bap'] is False)
+        check('Resample: gender/tension 用 0.5 + flag/200，breathiness 用 0.5+flag*0.005，'
+              'voicing 用 flag*0.01',
+              call['gender'][0] == 0.5 + get_flag(item, 'g', 0) / 200.0
+              and call['breathiness'][0] == 0.5 + get_flag(item, 'Mb', 0) * 0.005
+              and call['voicing'][0] == get_flag(item, 'Mv', 100) * 0.01,
+              'got %r' % ((call['gender'][0], call['breathiness'][0], call['voicing'][0]),))
+
+        # 音高弯曲：tone=69 + pitch=0 → 440Hz；同一条曲线用帮助函数现算对账
+        expect_f0 = [440.0] * len(call['f0'])
+        apply_pitch_bend(expect_f0, item.pitches, item.tone,
+                         2 * 10.0 + 0.0, 60000.0 / item.tempo / 480.0 * 5, 10.0, 0.0)
+        check('Resample: 音高弯曲后 f0 = tone_to_freq(tone + pitch*0.01)',
+              max(abs(a - b) for a, b in zip(call['f0'], expect_f0)) < 1e-9,
+              'got %r / want %r' % (call['f0'][:2], expect_f0[:2]))
+
+        # ---- resampler 路径**不做**输入增益（原样本原样进分析）
+        from singing.openutau import Wave
+        decoded = Wave.get_samples(wav)
+        peak = max(abs(v) for v in decoded)
+        observed = max(abs(v) for v in native.analysis_samples)
+        check('SynthSegment(forResampler): 分析输入就是原样本，**不做**输入增益',
+              abs(observed - peak) < 1e-12, 'got %r / want %r' % (observed, peak))
+
+        # ---- 乐句合成路径（forResampler=false）**做**输入增益 + 算帧边界
+        from singing.openutau.worldline import SynthSegment, segment_auto_gain
+        native2 = _FakeNative()
+        config = native2.init_analysis_config(44100, 441, 2048)
+        seg = SynthSegment(config, item, pos_ms=100.0, skip_ms=0.0, length_ms=400.0,
+                           fade_in_ms=50.0, fade_out_ms=50.0,
+                           for_resampler=False, native=native2)
+        # 期望增益按公式现算：volume × GetAutoGain（segMax 与 wavMax 都是整段峰值）
+        expect_gain = item.volume * 0.01 * segment_auto_gain(
+            decoded, [440.0] * 101, peak, config.f0_floor, get_flag(item, 'P', 86))
+        check('SynthSegment(乐句路径): 输入侧乘 volume × GetAutoGain',
+              abs(max(abs(v) for v in native2.analysis_samples) - peak * expect_gain) < 1e-9,
+              'got %r / want %r'
+              % (max(abs(v) for v in native2.analysis_samples), peak * expect_gain))
+        check('SynthSegment(乐句路径): 算了 skipFrames / p0 / p1 / p3 / p4',
+              (seg.skip_frames, seg.p0, seg.p1, seg.p3, seg.p4) == (0, 10, 15, 45, 50),
+              'got %r' % ((seg.skip_frames, seg.p0, seg.p1, seg.p3, seg.p4),))
+        check('SynthSegment(resampler 路径): p0..p4 保持 0',
+              SynthSegment(config, item, native=native2).p0 == 0)
+
+        # ---- cutoff 超过文件长度 → CutOffExceedDurationError
+        bad = _StubItem(phrase, _StubPhone(), input_file=wav, offset=0.0,
+                        cutoff=-2000.0, dur_required=500.0)     # -cutoff + offset > wavMs
+        try:
+            resample(bad, native=_FakeNative())
+            check('Resample: cutoff 超出音频长度抛 CutOffExceedDurationError', False)
+        except CutOffExceedDurationError:
+            check('Resample: cutoff 超出音频长度抛 CutOffExceedDurationError', True)
+
+        # ---- cutoff 把整段切没了 → CutOffBeforeOffsetError
+        bad2 = _StubItem(phrase, _StubPhone(), input_file=wav, offset=0.0,
+                         cutoff=1000.0, dur_required=500.0)
+        try:
+            resample(bad2, native=_FakeNative())
+            check('Resample: srcEndFrame <= srcStartFrame 抛 CutOffBeforeOffsetError', False)
+        except CutOffBeforeOffsetError:
+            check('Resample: srcEndFrame <= srcStartFrame 抛 CutOffBeforeOffsetError', True)
+
+        # ---- 有 .frq 时改用 method=-1（只问帧数），且 .frq 的"有声/无声"决定音高弯曲
+        from singing.openutau.classic import Frq
+        from singing.openutau.classic.frq import get_frq_file
+        # .frq 全是"无声"（0 低于 f0_floor）→ 音高弯曲在**所有**帧上都不生效，
+        # 最终 f0 保持 0（而不是被弯到 440）—— 这就是 .frq 真正影响的东西
+        with open(get_frq_file(wav), 'wb') as f:
+            Frq.build(sine, [0.0] * 172).save(f)
+        native3 = _FakeNative(f0_value=0.0)
+        resample(item, native=native3)
+        check('Resample: 有 .frq 时 F0 用 method=-1（只问帧数，不做提取）',
+              native3.f0_methods == [-1], 'got %r' % native3.f0_methods)
+        check('Resample: .frq 判为无声 → 音高弯曲不生效（f0 保持 0）',
+              all(v == 0.0 for v in native3.synthesis_call['f0']),
+              'got %r' % native3.synthesis_call['f0'][:4])
+        # .frq 全是"有声"（300Hz > f0_floor）→ 音高弯曲照常把 f0 弯到 440
+        with open(get_frq_file(wav), 'wb') as f:
+            Frq.build(sine, [300.0] * 172).save(f)
+        native4 = _FakeNative(f0_value=0.0)
+        resample(item, native=native4)
+        check('Resample: .frq 判为有声 → 音高弯曲把 f0 弯到 tone 69 的 440Hz',
+              all(abs(v - 440.0) < 1e-9 for v in native4.synthesis_call['f0']),
+              'got %r' % native4.synthesis_call['f0'][:4])
+
+        # ---- 源码一致性
+        flat = cs.replace('\n', ' ')
+        check('Worldline.cs: Resample 用 InitAnalysisConfig(44100, 441, 2048)',
+              'var config = InitAnalysisConfig(44100, 441, 2048);' in flat)
+        check('Worldline.cs: 补边用 Math.Clamp(i - ResamplerPadding, 0, length - 1)',
+              'int src = Math.Clamp(i - ResamplerPadding, 0, length - 1);' in flat)
+        check('Worldline.cs: startMs = ResamplerPadding * frameMs + segment.offsetFracMs',
+              'double startMs = ResamplerPadding * frameMs + segment.offsetFracMs;' in flat)
+        check('Worldline.cs: stepMs = 60000 / tempo / 480 * 5',
+              'double stepMs = 60000.0 / item.tempo / 480.0 * 5;' in flat)
+        check('Worldline.cs: 增益指数用 flag P（默认 86）',
+              'GetFlag(item, "P", 86)' in flat)
+        check('Worldline.cs: 输出裁到 durRequired',
+              '(int)(item.durRequired * fs / 1000)' in flat)
+        check('Worldline.cs: resampler 路径的 cutoff 越界是错误',
+              'throw new CutOffExceedDurationError();' in flat)
+        check('Worldline.cs: srcEndFrame <= srcStartFrame 是错误',
+              'throw new CutOffBeforeOffsetError();' in flat)
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _time_axis():
+    proj = UProject()
+    axis = TimeAxis()
+    axis.build_segments(proj)
+    return axis
+
+
+def test_worldline_resample_live():
+    """**真机**：加载 OpenUTAU 随包分发的 `worldline.dll` 跑一遍 `Resample`。
+
+    参考仓库里没有预编译库（或不在 Windows 上）就 SKIP。这条用例是"变调真的出声"
+    的唯一机器证明 —— 它验证的是"合成出来的波形主频 = 目标音高"。
+    """
+    dll = os.path.join(REF_ROOT, 'runtimes', 'win-x64', 'native', 'worldline.dll')
+    if not os.path.isfile(dll):
+        print('  SKIP 找不到预编译 worldline.dll（%s）' % dll)
+        return
+
+    import struct
+    import tempfile
+
+    from singing.openutau.worldline import WorldlineNative, f0_frame_count, resample
+
+    native = WorldlineNative(dll)
+    if not native.available:
+        print('  SKIP worldline.dll 加载失败：%s' % native.error)
+        return
+
+    config = native.init_analysis_config(44100, 441, 2048)
+    check('WorldlineNative: InitAnalysisConfig 回填 fs/hop/fft',
+          (config.fs, config.hop_size, config.fft_size) == (44100, 441, 2048),
+          'got %r' % (config,))
+    check('WorldlineNative: frame_ms = hop / fs * 1000 = 10',
+          abs(config.frame_ms - 10.0) < 1e-9, 'got %r' % config.frame_ms)
+    check('WorldlineNative: f0_floor = 3*fs/(fft-3)（float32）',
+          abs(config.f0_floor - struct.unpack('<f', struct.pack('<f', 3.0 * 44100 / 2045))[0])
+          < 1e-6, 'got %r' % config.f0_floor)
+
+    tmp = tempfile.mkdtemp(prefix='fufumidi-worldline-')
+    try:
+        n = 44100
+        src_hz = 300.0
+        sine = [0.5 * math.sin(2 * math.pi * src_hz * i / 44100) for i in range(n)]
+
+        # ---- F0FrameCount 的纯公式与原生一致（它是**上界**，见下一条）
+        for method, label in ((2, 'pyin'), (-1, '占位'), (0, 'dio')):
+            want = f0_frame_count(44100, 44100, config.frame_ms, method)
+            got = native.f0_frame_count(44100, 44100, config.frame_ms, method)
+            check('WorldlineNative.F0FrameCount(%s) 与纯公式一致' % label, got == want,
+                  'got %r / want %r' % (got, want))
+
+        # ---- F0 提取：应认出 300Hz 左右
+        capacity = native.f0_frame_count(44100, 44100, config.frame_ms, 2)
+        f0 = native.f0(sine, 44100, config.frame_ms, 2)
+        voiced = [v for v in f0 if v > config.f0_floor]
+        # ★ `F0FrameCount` 是**上界**：缓冲按它分配，但 `F0` 返回估计器实际产出的帧数
+        # （可能更少，pyin 这里是 99 < 101 的容量）
+        check('WorldlineNative.F0: 帧数不超过 F0FrameCount 上界，且非空',
+              0 < len(f0) <= capacity, 'got %d / capacity %d' % (len(f0), capacity))
+        check('WorldlineNative.F0: 中段有声帧的基频 ≈ 300Hz',
+              len(voiced) > 50 and abs(sum(voiced) / len(voiced) - src_hz) < 15.0,
+              'got %r（%d 个有声帧）' % (sorted(voiced)[len(voiced) // 2] if voiced else None,
+                                      len(voiced)))
+
+        # ---- Resample：tone 69（A4 = 440Hz）→ 输出主频应是 440Hz
+        wav = os.path.join(tmp, 'live.wav')
+        _write_wav(wav, sine)
+        phrase = _StubPhrase(_time_axis())
+        item = _StubItem(phrase, _StubPhone(), input_file=wav, offset=0.0, cutoff=0.0,
+                         consonant=50.0, velocity=100, dur_required=500.0, volume=100,
+                         tempo=120.0, tone=69, flags=[], pitches=[0] * 200)
+        out = resample(item, native=native)
+        check('Worldline.Resample(真机): 输出长度 = durRequired 的样本数',
+              len(out) == int(500.0 * 44100 / 1000), 'got %d' % len(out))
+        check('Worldline.Resample(真机): 样本有限且不静音',
+              all(math.isfinite(v) for v in out) and max(abs(v) for v in out) > 1e-3,
+              'got peak %r' % max(abs(v) for v in out))
+
+        # 主频用**过零率**粗测（中段，避开边缘的补边与淡入）
+        mid = out[4410:17640]
+        crossings = sum(1 for i in range(1, len(mid)) if (mid[i - 1] < 0) != (mid[i] < 0))
+        measured = crossings / 2.0 / (len(mid) / 44100.0)
+        check('Worldline.Resample(真机): 输出主频 ≈ tone 69 的 440Hz（过零率 ±10%%）',
+              abs(measured - 440.0) < 44.0, 'got %.1f Hz' % measured)
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_worldline_resampler_class():
+    """`Classic/WorldlineResampler.cs`：接口实现与 Manifest。"""
+    from singing.openutau.classic import IResampler, WorldlineResampler
+
+    cs = _read('Classic/WorldlineResampler.cs')
+    if cs is None:
+        print('  SKIP 找不到 Classic/WorldlineResampler.cs')
+        return
+
+    resampler = WorldlineResampler('/root')
+    check('WorldlineResampler: 是 IResampler 的实现',
+          isinstance(resampler, IResampler))
+    check('WorldlineResampler: ToString 是 "worldline"', str(resampler) == 'worldline')
+    check('WorldlineResampler: FilePath = RootPath + name + 平台扩展名',
+          os.path.basename(resampler.file_path).startswith('worldline.'),
+          'got %r' % resampler.file_path)
+    check('WorldlineResampler: NoWrapperScript = true（自带实现）',
+          resampler.no_wrapper_script is True)
+    check('WorldlineResampler: SupportsFlag 恒为 true', resampler.supports_flag('zzz') is True)
+    check('WorldlineResampler: CheckPermissions 是空操作',
+          resampler.check_permissions() is None)
+
+    manifest = resampler.manifest
+    check('WorldlineResampler.Manifest: expressionFilter = false（不过滤 flag）',
+          manifest.expression_filter is False)
+    check('WorldlineResampler.Manifest: 声明 ten/brea/voi 三个表达式',
+          set(manifest.expressions) == {'ten', 'brea', 'voi'},
+          'got %r' % set(manifest.expressions))
+    ten = manifest.expressions['ten']
+    voi = manifest.expressions['voi']
+    check('WorldlineResampler.Manifest: ten = [-100,100] 默认 0 flag Mt',
+          (ten.min, ten.max, ten.default_value, ten.flag, ten.is_flag)
+          == (-100, 100, 0, 'Mt', True), 'got %r' % (ten,))
+    check('WorldlineResampler.Manifest: voi = [0,100] 默认 100 flag Mv',
+          (voi.min, voi.max, voi.default_value, voi.flag, voi.is_flag)
+          == (0, 100, 100, 'Mv', True), 'got %r' % (voi,))
+
+    # DoResampler 把两种 SynthRequestError 转成带音素名的**同类型**异常
+    # （保留类型，渲染器才能按类型分支；C# 的可见文案包装属 M3）
+    from singing.openutau.classic import worldline_resampler as WR
+    from singing.openutau.worldline import CutOffExceedDurationError
+    item = _StubItem(_StubPhrase(_time_axis()),
+                     _StubPhone(phoneme='ka'), input_file='nope.wav')
+    original = WR.resample
+
+    def _fake(args, native=None):
+        raise CutOffExceedDurationError()
+
+    WR.resample = _fake
+    try:
+        try:
+            WorldlineResampler('/root').do_resampler(item)
+            check('WorldlineResampler: cutoff 越界 → 同类型异常且带上音素名', False)
+        except CutOffExceedDurationError as e:
+            check('WorldlineResampler: cutoff 越界 → 同类型异常且带上音素名',
+                  'ka' in str(e) and e.item is item, 'got %r' % str(e))
+    finally:
+        WR.resample = original
+
+    check('WorldlineResampler.cs: name = "worldline"', 'public const string name = "worldline";' in cs)
+    check('WorldlineResampler.cs: NoWrapperScript = true', 'NoWrapperScript = true;' in cs)
+    check('WorldlineResampler.cs: CheckPermissions 是空实现', 'public void CheckPermissions() { }' in cs)
+    check('WorldlineResampler.cs: Manifest 里 expressionFilter = false',
+          'expressionFilter = false' in cs)
+    check('WorldlineResampler.cs: DoResamplerReturnsFile 按 outputFile 取缓存锁写 WAV',
+          'lock (Renderers.GetCacheLock(item.outputFile))' in cs
+          and 'Wave.WriteMono16Wav(item.outputFile, samples);' in cs)
+
+
+# ====================================================================== ClassicRenderer
+#
+# 端到端：`RenderPhrase → 变调 → 拼接 → 样本`（P1-d 的里程碑判据）。
+
+class _RenderSinger(USinger):
+    """oto 指向**真实 wav** 的歌手（`UPhoneme.Validate` 要求 `TryGetOto` 命中）。"""
+
+    def __init__(self, oto_file):
+        super().__init__('render-singer')
+        self.found = True
+        self.loaded = True
+        self._oto = UOto()
+        self._oto.alias = 'A'
+        self._oto.phonetic = 'A'
+        self._oto.file = oto_file
+        self._oto.offset = 0.0
+        self._oto.consonant = 50.0
+        self._oto.cutoff = 0.0
+        self._oto.preutter = 50.0
+        self._oto.overlap = 10.0
+
+    @property
+    def id(self):
+        return 'render-singer'
+
+    @property
+    def subbanks(self):
+        return []
+
+    def try_get_oto(self, phoneme):
+        return (True, self._oto) if phoneme == 'A' else (False, None)
+
+    def try_get_mapped_oto(self, phoneme, tone, color=None):
+        return False, None
+
+
+def _render_fixture(tmp, wavtool='convergence'):
+    """造一个**能真渲染**的最小工程：一条轨 / 一个 part / 两个音素。
+
+    两个音素都用 `A`，oto 指向真实 44.1kHz 正弦 wav，所以整条链路真的会读文件、
+    真的会调 resampler 与 wavtool —— 不是打桩。
+    """
+    from singing.openutau import UPhoneme, ValidateOptions
+    from singing.ustx import UNote, UExpressionType, UPitch, UVibrato, UVoicePart
+
+    src = os.path.join(tmp, 'src.wav')
+    _write_wav(src, [0.5 * math.sin(2 * math.pi * 300 * i / 44100) for i in range(22050)])
+
+    project = UProject()
+    specs = [
+        ('engine', 'eng', UExpressionType.OPTIONS, 0, 100, 0, None, ['']),
+        ('volume', 'vol', UExpressionType.NUMERICAL, 0, 100, 100, None, None),
+        ('velocity', 'vel', UExpressionType.NUMERICAL, 0, 100, 100, 'V', None),
+        ('modulation', 'mod', UExpressionType.NUMERICAL, 0, 100, 0, None, None),
+        ('direct', 'dir', UExpressionType.NUMERICAL, 0, 100, 0, None, None),
+        ('shift', 'shft', UExpressionType.NUMERICAL, 0, 100, 0, None, None),
+        ('attack', 'atk', UExpressionType.NUMERICAL, 0, 100, 100, None, None),
+        ('decay', 'dec', UExpressionType.NUMERICAL, 0, 100, 100, None, None),
+        # DYN 的 min = -240 是刻意的：`_curve_convert` 把「等于 min」当作 0（无声），
+        # 所以只有 min≠0 才能表示"增益 1.0"（decibel_to_linear(0) = 1）
+        ('dynamics', 'dyn', UExpressionType.CURVE, -240, 120, 0, None, None),
+        ('pitch deviation', 'pitd', UExpressionType.CURVE, -1200, 1200, 0, None, None),
+    ]
+    for name, abbr, typ, mn, mx, dv, flag, options in specs:
+        project.expressions[abbr] = UExpressionDescriptor(
+            name=name, abbr=abbr, type=typ, min=mn, max=mx, default_value=dv,
+            flag=flag or '', options=options,
+            is_flag=bool(flag) or typ == UExpressionType.OPTIONS)
+
+    track = project.tracks[0]
+    track.singer_obj = _RenderSinger(src)
+    track.renderer_settings.renderer = 'CLASSIC'
+    track.renderer_settings.renderer_obj = ClassicRenderer()
+    track.renderer_settings.resampler = 'worldline'
+    track.renderer_settings.wavtool = wavtool
+
+    part = UVoicePart(track_no=0, position=0)
+    # dyn 曲线：取值 0（= unity 增益），避免动态处理把断言搅浑
+    part.curves.append(UCurve(xs=[0], ys=[0], abbr='dyn',
+                              descriptor=project.expressions['dyn']))
+    project.parts.append(part)
+
+    note0 = UNote(position=0, duration=480, tone=69, lyric='A',
+                  pitch=UPitch(), vibrato=UVibrato())
+    note1 = UNote(position=480, duration=480, tone=69, lyric='A',
+                  pitch=UPitch(), vibrato=UVibrato())
+    for note in (note0, note1):
+        note.extended_duration = 480
+    note0.next, note1.prev = note1, note0
+    part.notes.extend([note0, note1])
+
+    phoneme0 = UPhoneme()
+    phoneme0.position, phoneme0.phoneme, phoneme0.parent = 0, 'A', note0
+    phoneme1 = UPhoneme()
+    phoneme1.position, phoneme1.phoneme, phoneme1.parent = 480, 'A', note1
+    part.phonemes.extend([phoneme0, phoneme1])
+    phoneme0.next, phoneme1.prev = phoneme1, phoneme0
+    for note, phoneme in ((note0, phoneme0), (note1, phoneme1)):
+        phoneme.validate(ValidateOptions(), project, track, part, note)
+    assert not phoneme0.error and not phoneme1.error, 'fixture 的音素必须有效'
+
+    phrase = RenderPhrase.from_part(project, track, part)[0]
+    return project, track, part, phrase
+
+
+def _test_classic_host(cache_path, resampler, wavtool=None):
+    """`ToolsManager` / `VoicebankFiles` / `PathManager` 的最小替身。"""
+    from singing.openutau.classic import ClassicHost
+
+    class _Host(ClassicHost):
+        def __init__(self):
+            self.cache_path = cache_path
+            self.root_path = cache_path
+            self.source_temp_calls = 0
+
+        def get_resampler(self, name):
+            return resampler
+
+        def get_source_temp_path(self, singer_id, oto, ext):
+            return os.path.join(cache_path, 'src-%s%s' % (singer_id, ext))
+
+        def get_wavtool(self, name):
+            return wavtool
+
+        def copy_source_temp(self, source, temp):
+            self.source_temp_calls += 1
+
+        def copy_back_meta_files(self, source, temp):
+            pass
+
+    return _Host()
+
+
+def _install_host(host):
+    """把宿主装到 `resampler_item.host`（`ResamplerItem` 读的就是它），返回旧的。
+
+    C# 里 `ResamplerItem` 与 `ClassicRenderer` 读的是同一批全局单例；
+    `ClassicRenderer` 不显式注入时会跟随这个模块级替身，所以装一处即可。
+    """
+    from singing.openutau.classic import resampler_item
+
+    old = resampler_item.host
+    resampler_item.host = host
+    return old
+
+
+def test_classic_renderer_basics():
+    """`Classic/ClassicRenderer.cs` 的非 DSP 部分：能力声明 / 布局 / 注册 / 进度。"""
+    from singing.openutau import Progress, create_renderer, register_classic_renderer
+    from singing.openutau.renderers import CLASSIC, reset_registry
+    from singing.ustx import UExpressionDescriptor
+
+    cs = _read('Classic/ClassicRenderer.cs')
+    if cs is None:
+        print('  SKIP 找不到 Classic/ClassicRenderer.cs')
+        return
+
+    r = ClassicRenderer()
+    check('ClassicRenderer: SingerType = Classic', r.singer_type == USingerType.CLASSIC)
+    check('ClassicRenderer: SupportsRenderPitch = false（Classic 线不产音高曲线）',
+          r.supports_render_pitch is False)
+    check('ClassicRenderer: ToString = Renderers.CLASSIC', str(r) == CLASSIC)
+    check('ClassicRenderer: LoadRenderedPitch 返回 None', r.load_rendered_pitch(None) is None)
+
+    # ---- SupportsExpression：有 flag 的无条件支持，其余查白名单
+    def exp(abbr, flag='', is_flag=False):
+        return UExpressionDescriptor(name=abbr, abbr=abbr, min=0, max=100,
+                                     default_value=0, flag=flag, is_flag=is_flag)
+
+    check('ClassicRenderer: 白名单内的 abbr 支持（vel/dyn/pitd…）',
+          all(r.supports_expression(exp(a)) for a in ('dyn', 'pitd', 'clr', 'clry', 'xsy',
+                                                      'eng', 'vel', 'vol', 'atk', 'dec',
+                                                      'mod', 'mod+', 'alt', 'dir', 'shft')))
+    check('ClassicRenderer: 白名单外的 abbr 不支持（如 genc）',
+          r.supports_expression(exp('genc')) is False)
+    check('ClassicRenderer: 带 flag 的一律支持（哪怕 abbr 不在白名单）',
+          r.supports_expression(exp('zzz', flag='g')) is True)
+    check('ClassicRenderer: isFlag 为真也支持', r.supports_expression(exp('zzz', is_flag=True)))
+    check('ClassicRenderer: 描述符为 None 时返回 False（不抛）',
+          r.supports_expression(None) is False)
+    check('ClassicRenderer: 白名单恰好是 C# 那 15 项',
+          ClassicRenderer.SUPPORTED_EXP == frozenset(
+              ['dyn', 'pitd', 'clr', 'clry', 'xsy', 'eng', 'vel', 'vol', 'atk', 'dec',
+               'mod', 'mod+', 'alt', 'dir', 'shft']),
+          'got %r' % sorted(ClassicRenderer.SUPPORTED_EXP))
+
+    # ---- Layout：estimatedLengthMs = durationMs + leadingMs
+    class _P:
+        leading_ms, position_ms, duration_ms = 12.5, 100.0, 500.0
+    layout = r.layout(_P())
+    check('ClassicRenderer.Layout: estimatedLengthMs = durationMs + leadingMs',
+          (layout.leading_ms, layout.position_ms, layout.estimated_length_ms)
+          == (12.5, 100.0, 512.5), 'got %r' % (layout,))
+    check('ClassicRenderer.Layout: 不产出样本（samples=None，只做布局）',
+          layout.samples is None)
+
+    # ---- GetSuggestedExpressions：清单为 null 时给空数组
+    check('ClassicRenderer: 没有 resampler / manifest 时给空列表',
+          r.get_suggested_expressions(None, None) == [])
+    check('ClassicRenderer: 有 manifest 时交出它的表达式',
+          len(r.get_suggested_expressions(None, _settings_with_manifest())) == 3)
+
+    # ---- 注册：C# 的 `CreateRenderer` 里 `new ClassicRenderer()`
+    reset_registry()
+    check('ClassicRenderer: reset_registry 之后 CLASSIC 拿不到实例',
+          create_renderer(CLASSIC) is None)
+    register_classic_renderer()
+    got = create_renderer(CLASSIC)
+    check('ClassicRenderer: register_classic_renderer 后可创建',
+          isinstance(got, ClassicRenderer))
+    check('ClassicRenderer: CreateRenderer 两次返回不同实例（C# 每次 new）',
+          create_renderer(CLASSIC) is not got)
+    check('ClassicRenderer: GetOrCreate 才做缓存（同 id 同实例）',
+          __import__('singing.openutau.renderers', fromlist=['x']).get_or_create(CLASSIC)
+          is __import__('singing.openutau.renderers', fromlist=['x']).get_or_create(CLASSIC))
+
+    # ---- 缓存锁必须**可重入**：C# 是 `object` + `lock()`（= Monitor），
+    # ClassicRenderer 先锁 item.outputFile，再进 WorldlineResampler 里的同一把锁。
+    # 用非重入的 threading.Lock 会在这条嵌套路径上**自锁死**（真踩过）。
+    import threading as _threading
+
+    from singing.openutau.renderers import get_cache_lock
+    lock = get_cache_lock('reentrancy-probe')
+    check('GetCacheLock: 返回的是可重入锁（对应 C# 的 Monitor）',
+          isinstance(lock, type(_threading.RLock())), 'got %r' % type(lock))
+    check('GetCacheLock: 同一线程可重复进入（嵌套加锁不会自锁死）',
+          lock.acquire(blocking=False) and lock.acquire(blocking=False),
+          'got %r' % lock)
+    lock.release()
+    lock.release()
+    check('GetCacheLock: 同一个 key 拿到同一把锁',
+          get_cache_lock('reentrancy-probe') is lock)
+
+    # ---- Progress（RenderEngine.cs 里渲染器用到的那一块）
+    seen = []
+    p = Progress(4, notify=lambda pct, info: seen.append((pct, info)))
+    check('Progress: 初始 completed = 0', p.completed == 0)
+    p.complete(1, 'a')
+    check('Progress: Complete 累加并按 completed*100/total 上报',
+          p.completed == 1 and seen[-1] == (25.0, 'a'), 'got %r' % (seen,))
+    p.complete(3, 'b')
+    check('Progress: 累加到 total 时上报 100', p.completed == 4 and seen[-1] == (100.0, 'b'))
+    p.clear()
+    check('Progress: Clear 上报 0 + 空文案，且**不动**计数',
+          seen[-1] == (0.0, '') and p.completed == 4, 'got %r' % (seen,))
+    check('Progress: total = 0 时报错（C# 是 NaN，这里选择不静默）',
+          _raises(lambda: Progress(0).complete(0, '')))
+
+    # ---- 源码一致性
+    flat = cs.replace('\n', ' ')
+    check('ClassicRenderer.cs: internal/external 按 wavtool 名分派',
+          'if (phrase.wavtool == SharpWavtool.nameConvergence || phrase.wavtool == SharpWavtool.nameSimple)'
+          in flat)
+    check('ClassicRenderer.cs: RenderInternal 写死 new SharpWavtool(true)',
+          'var wavtool = new SharpWavtool(true);' in flat)
+    check('ClassicRenderer.cs: 缓存在就读、不读才拼',
+          'if (!File.Exists(item.outputFile))' in flat)
+    check('ClassicRenderer.cs: VoicebankFiles 两次调用都带 WorldlineResampler 守卫',
+          flat.count('if (!(item.resampler is WorldlineResampler))') == 2)
+    check('ClassicRenderer.cs: direct 音素不做 resample', 'if(!item.phone.direct){' in flat
+          or 'if (!item.phone.direct)' in flat)
+    check('ClassicRenderer.cs: progress.Complete(1, ...) 在 if 之外',
+          'progress.Complete(1, $"Track {trackNo + 1}: {item.resampler}' in flat)
+    check('ClassicRenderer.cs: 外部路径按 phrase.hash 取 cat-{hash:x16}.wav',
+          'cat-{phrase.hash:x16}.wav' in flat)
+    check('ClassicRenderer.cs: Layout 用 DurationMs + LeadingMs',
+          'estimatedLengthMs = phrase.durationMs + phrase.leadingMs' in flat)
+    check('ClassicRenderer.cs: ApplyDynamics 只在 samples 非 null 时调',
+          flat.count('if (result.samples != null)') == 2)
+
+
+def _settings_with_manifest():
+    from singing.openutau.classic import ResamplerManifest, WorldlineResampler
+    from singing.ustx.model import URenderSettings
+
+    settings = URenderSettings()
+    settings.resampler_obj = WorldlineResampler('/root')
+    assert isinstance(settings.resampler_obj.manifest, ResamplerManifest)
+    return settings
+
+
+def _raises(fn) -> bool:
+    try:
+        fn()
+        return False
+    except Exception:
+        return True
+
+
+class _CountingResampler(WorldlineResampler):
+    """记下被真正调用了几次 —— 用来证明**缓存命中会跳过 resample**。"""
+
+    def __init__(self):
+        super().__init__('/root')
+        self.calls = 0
+
+    def do_resampler_returns_file(self, args, logger=None):
+        self.calls += 1
+        return super().do_resampler_returns_file(args, logger)
+
+
+class _WritingWavtool(IWavtool):
+    """外部 wavtool 的替身：内部用 `SharpWavtool`，但**把结果写到 temp_path**。
+
+    它还负责两件 `ExeWavtool` 会做的事（照 `Classic/ExeWavtool.cs:39-42`）：
+    1. 对 `resampler.no_wrapper_script` 为真的音素，**在 wavtool 里跑 resampler**
+       （外部 resampler 则是由 wavtool 生成的脚本去调 exe）——
+       所以 `RenderExternal` 自己**不**跑 resampler，缓存文件是这里产出的；
+    2. 把结果写进 `tempPath`，让"`cat-{hash}.wav` 命中就直接读"这条缓存生效。
+    """
+
+    def __init__(self):
+        self.calls = 0
+        self._inner = SharpWavtool(False)
+
+    def concatenate(self, resampler_items, temp_path, cancellation=None):
+        self.calls += 1
+        from singing.openutau.renderers import get_cache_lock
+        for item in resampler_items:
+            if (item.resampler.no_wrapper_script
+                    and not (cancellation is not None and cancellation.is_set())
+                    and not os.path.isfile(item.output_file)):
+                with get_cache_lock(item.output_file):
+                    item.resampler.do_resampler_returns_file(item, None)
+        samples = self._inner.concatenate(resampler_items, temp_path, cancellation)
+        if samples is not None and temp_path:
+            Wave.write_mono16_wav(temp_path, samples)
+        return samples
+
+    def check_permissions(self):
+        return None
+
+
+def test_classic_renderer_internal_end_to_end():
+    """**端到端**（真机）：`RenderPhrase → Worldline 变调 → SharpWavtool 拼接 → 样本`。
+
+    这是 P1-d 的里程碑判据 —— 缺了 `worldline.dll` 就 SKIP。
+    """
+    import tempfile
+
+    from singing.openutau import Progress
+    from singing.openutau import worldline as W
+    from singing.openutau.classic import ClassicRenderer
+
+    dll = os.path.join(REF_ROOT, 'runtimes', 'win-x64', 'native', 'worldline.dll')
+    if not os.path.isfile(dll):
+        print('  SKIP 找不到预编译 worldline.dll（%s）' % dll)
+        return
+    native = W.get_native(dll)
+    if not native.available:
+        print('  SKIP worldline.dll 加载失败：%s' % native.error)
+        return
+
+    tmp = tempfile.mkdtemp(prefix='fufumidi-classic-')
+    old_host = None
+    try:
+        project, track, part, phrase = _render_fixture(tmp)
+        check('端到端: 乐句有 2 个音素（fixture 前提）', len(phrase.phones) == 2)
+        check('端到端: phrase.wavtool = convergence → 走 RenderInternal',
+              phrase.wavtool == 'convergence')
+
+        resampler = _CountingResampler()
+        old_host = _install_host(_test_classic_host(tmp, resampler))
+        renderer = ClassicRenderer()
+        host = renderer.classic_host
+
+        seen = []
+        progress = Progress(len(phrase.phones),
+                            notify=lambda pct, info: seen.append((pct, info)))
+        result = _run(renderer.render(phrase, progress, track_no=0))
+
+        check('端到端: 产出非空样本', result.samples is not None and len(result.samples) > 0,
+              'got %r' % (None if result.samples is None else len(result.samples)))
+        check('端到端: 样本有限且不静音',
+              all(math.isfinite(v) for v in result.samples)
+              and max(abs(v) for v in result.samples) > 1e-3,
+              'got peak %r' % max(abs(v) for v in result.samples))
+        check('端到端: 布局沿用 Layout（positionMs / leadingMs）',
+              (result.position_ms, result.leading_ms)
+              == (phrase.position_ms, phrase.leading_ms))
+        check('端到端: 两个音素各上报一次进度（总数到 100）',
+              len(seen) == 2 and seen[-1][0] == 100.0, 'got %r' % (seen,))
+        check('端到端: 每个音素各调一次 resampler', resampler.calls == 2,
+              'got %d' % resampler.calls)
+        check('端到端: 自带 Worldline 不碰 VoicebankFiles（无需解码到临时文件）',
+              host.source_temp_calls == 0)
+        check('端到端: 动态曲线非 None（ApplyDynamics 会跑）',
+              phrase.dynamics is not None)
+
+        # 输出主频应是 tone 69 的 440Hz（源是 300Hz → 证明变调真的生效了）
+        mid = result.samples[len(result.samples) // 4:len(result.samples) * 3 // 4]
+        crossings = sum(1 for i in range(1, len(mid)) if (mid[i - 1] < 0) != (mid[i] < 0))
+        measured = crossings / 2.0 / (len(mid) / 44100.0)
+        check('端到端: 输出主频 ≈ 440Hz（源 300Hz → 变调生效，过零率 ±10%%）',
+              abs(measured - 440.0) < 44.0, 'got %.1f Hz' % measured)
+
+        # ---- 第二次渲染：缓存命中 → 不再调 resampler
+        phrase2 = RenderPhrase.from_part(project, track, part)[0]
+        result2 = _run(renderer.render(phrase2, None, track_no=0))
+        check('端到端: 第二次渲染复用音素缓存（不再调 resampler）',
+              resampler.calls == 2, 'got %d' % resampler.calls)
+        check('端到端: 第二次渲染样本与第一次等长',
+              len(result2.samples) == len(result.samples))
+
+        # ---- 取消：拼接器直接返回 None，且不调 ApplyDynamics
+        cancelled = __import__('threading').Event()
+        cancelled.set()
+        phrase3 = RenderPhrase.from_part(project, track, part)[0]
+        result3 = _run(renderer.render(phrase3, None, track_no=0, cancellation=cancelled))
+        check('端到端: 取消时 samples 为 None', result3.samples is None)
+    finally:
+        if old_host is not None:
+            _install_host(old_host)
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_classic_renderer_external_path():
+    """`RenderExternal`：按 `phrase.hash` 缓存整条乐句，命中就读、不重拼。"""
+    import tempfile
+
+    from singing.openutau import Progress
+    from singing.openutau.classic import ClassicRenderer
+
+    tmp = tempfile.mkdtemp(prefix='fufumidi-classic-ext-')
+    old_host = None
+    try:
+        project, track, part, phrase = _render_fixture(tmp, wavtool='wavtool.exe')
+        check('外部路径: phrase.wavtool 不是 simple/convergence → 走 RenderExternal',
+              phrase.wavtool == 'wavtool.exe')
+
+        resampler = _CountingResampler()
+        wavtool = _WritingWavtool()
+        old_host = _install_host(_test_classic_host(tmp, resampler, wavtool))
+        renderer = ClassicRenderer()
+        host = renderer.classic_host
+
+        seen = []
+        progress = Progress(len(phrase.phones),
+                            notify=lambda pct, info: seen.append((pct, info)))
+        result = _run(renderer.render(phrase, progress, track_no=2))
+
+        wav_path = os.path.join(tmp, 'cat-%016x.wav' % phrase.hash)
+        check('外部路径: 结果写到 cat-{hash:016x}.wav', os.path.isfile(wav_path))
+        check('外部路径: 那条缓存路径登记进了 phrase.cache_files',
+              os.path.splitext(os.path.basename(wav_path))[0] in phrase.cache_files,
+              'got %r' % phrase.cache_files)
+        check('外部路径: 进度用的是另一种文案（Track N : wavtool "音素…"）',
+              seen[0][0] == 0.0 and 'wavtool.exe' in seen[0][1]
+              and seen[-1][0] == 100.0, 'got %r' % (seen,))
+        check('外部路径: VoicebankFiles 被调用（外部程序要解码后的临时输入）',
+              host.source_temp_calls == len(phrase.phones),
+              'got %d' % host.source_temp_calls)
+        check('外部路径: 拼接过一次', wavtool.calls == 1, 'got %d' % wavtool.calls)
+        check('外部路径: 产出非空样本',
+              result.samples is not None and len(result.samples) > 0)
+
+        # ---- 第二次：cat-{hash}.wav 已存在 → 直接读，不再拼
+        phrase2 = RenderPhrase.from_part(project, track, part)[0]
+        result2 = _run(renderer.render(phrase2, None, track_no=2))
+        check('外部路径: 第二次渲染读缓存（不再调 wavtool）',
+              wavtool.calls == 1, 'got %d' % wavtool.calls)
+        check('外部路径: 第二次样本与第一次等长（读的就是同一份缓存）',
+              len(result2.samples) == len(result.samples),
+              'got %r / %r' % (len(result2.samples), len(result.samples)))
+    finally:
+        if old_host is not None:
+            _install_host(old_host)
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_classic_renderer_resample_failure():
+    """resampler 没产出文件时抛错，并把位置换算成小节:拍.刻度写进消息。"""
+    import tempfile
+
+    from singing.openutau.pipeline_source import host as doc_host
+
+    tmp = tempfile.mkdtemp(prefix='fufumidi-classic-fail-')
+    old_project = doc_host.project
+    old_host = None
+    try:
+        project, track, part, phrase = _render_fixture(tmp)
+
+        class _NullResampler(WorldlineResampler):
+            def do_resampler_returns_file(self, args, logger=None):
+                return None                     # 什么都不写 → 文件不存在
+
+        doc_host.project = project
+        old_host = _install_host(_test_classic_host(tmp, _NullResampler()))
+        renderer = ClassicRenderer()
+        try:
+            _run(renderer.render(phrase, None, track_no=0))
+            check('ClassicRenderer: resampler 无产出时抛错', False, '没有抛异常')
+        except OSError as e:
+            # 工程在 → 位置换算成 bar:beat.ticks（默认 4/4、bpm 120、res 480）
+            check('ClassicRenderer: resampler 无产出时抛错，且消息带小节:拍.刻度',
+                  'failed to resample' in str(e) and '0:0.000' in str(e),
+                  'got %r' % str(e))
+
+        doc_host.project = None
+        phrase2 = RenderPhrase.from_part(project, track, part)[0]
+
+        class _NullResampler2(WorldlineResampler):
+            def do_resampler_returns_file(self, args, logger=None):
+                return None
+
+        try:
+            # 清掉上一次可能写下的缓存，保证真的再调一次 resampler
+            for f in os.listdir(tmp):
+                if f.startswith('res-'):
+                    os.remove(os.path.join(tmp, f))
+            _install_host(_test_classic_host(tmp, _NullResampler2()))
+            _run(ClassicRenderer().render(phrase2, None, track_no=0))
+            check('ClassicRenderer: 工程缺失时退化成 tick N（不编造坐标）', False)
+        except OSError as e:
+            check('ClassicRenderer: 工程缺失时退化成 tick N（不编造坐标）',
+                  'tick ' in str(e), 'got %r' % str(e))
+    finally:
+        doc_host.project = old_project
+        if old_host is not None:
+            _install_host(old_host)
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _run(coro):
+    """跑一个协程（渲染是 async 的，对应 C# 的 `Task<RenderResult>`）。"""
+    import asyncio
+    return asyncio.new_event_loop().run_until_complete(coro)
+
+
 def test_xxhash64():
     """XXH32/XXH64 官方测试向量 —— 对不上，所有缓存键都会静默错。"""
     from singing.openutau.xxhash import xxh32, xxh64 as _x
@@ -2026,6 +4531,15 @@ def main():
     test_renderers_registry()
     print('--- Pipeline/Identities ---')
     test_pipeline_identities()
+    print('--- Pipeline/PhraseSource（取快照 / 切乐句 / 出 RenderPhrase） ---')
+    test_phrase_source_from_part()
+    test_phrase_source_merge_adjacent()
+    test_pipeline_source_conformance()
+    print('--- Pipeline/PhraseSourceBuilder（门闩 / 后台构建） ---')
+    test_phrase_build_gate()
+    test_phrase_source_builder()
+    print('--- Pipeline/Snapshots（快照 + 增量失效） ---')
+    test_document_snapshot_store()
     print('--- Render/Worldline（纯逻辑） ---')
     test_worldline_pure()
     print('--- Classic/Ini ---')
@@ -2038,6 +4552,29 @@ def main():
     test_japanese_vcv_phonemizer()
     print('--- Classic/ResamplerItem ---')
     test_resampler_item()
+    print('--- Format/Wave（WAV 缓存文件的读写） ---')
+    test_wave_io()
+    print('--- Classic/SharpWavtool + NWaves 原语 ---')
+    test_nwaves_filter()
+    test_sharp_wavtool()
+    test_resampler_manifest()
+    print('--- Classic/VoicebankConfig（character.yaml） ---')
+    test_voicebank_config()
+    print('--- Classic/VoicebankLoader（character.txt / oto.ini / prefix.map） ---')
+    test_voicebank_loader()
+    print('--- Classic/Frq（.frq / .mrq / OtoFrq） ---')
+    test_frq_files()
+    print('--- Worldline.Resample（编排 + 真机） ---')
+    test_worldline_resample_orchestration()
+    test_worldline_resample_live()
+    print('--- Classic/WorldlineResampler ---')
+    test_worldline_resampler_class()
+    print('--- Classic/ClassicRenderer（能力 / 布局 / 注册 / Progress） ---')
+    test_classic_renderer_basics()
+    print('--- ClassicRenderer 端到端（变调 → 拼接 → 样本） ---')
+    test_classic_renderer_internal_end_to_end()
+    test_classic_renderer_external_path()
+    test_classic_renderer_resample_failure()
     print('\n结果: %d passed, %d failed' % (len(_PASS), len(_FAIL)))
     return 1 if _FAIL else 0
 

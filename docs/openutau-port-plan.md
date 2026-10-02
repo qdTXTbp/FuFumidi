@@ -3,18 +3,41 @@
 > 上游：`OpenUtau/`（C#）—— `OpenUtau.Core` + `OpenUtau.Plugin.Builtin` + `cpp/worldline`
 > 落点：`engine/singing/`（纯 Python，**不依赖 torch / numpy**，可脱离主程序单测）
 > 方针：**除外观外不允许自研** —— 每一处都应能回答"对应 OpenUTAU 的哪个文件/函数"
-> 最后更新：2026-10-01（提交 `039419c`）
+> 最后更新：2026-10-02 —— P0 / P1-a / P1-b / P1-d 已完成；P2 进行中（声库配置 + 加载器已搬）
+> 2026-10-02 复核：四项测试 841 项断言**全绿**（含 `worldline.dll` 真机端到端），
+> 第 0 节与第 4 节的数据已按实测修正
 
 ---
 
 ## 0. 一句话现状
 
-**引擎的"纯逻辑层"基本搬完，链路是断的。** 音素化（歌词→音素）与乐句构建（音素→渲染输入）
-两头都通了，但中间缺 `Pipeline/PhraseBuilder` 与 `PhraseSource.FromPart`；
-渲染器的"参数层"（`ResamplerItem`）通了，"执行层"（resampler/wavtool）还差外部工具进程。
+**整条链路通了：`歌词 → 音素 → 乐句 → 变调 → 拼接 → 样本`。**
 
-已完成规模：Python **5,954 行**，对应 C# **7,342 行**（逐文件实测 `wc -l`）；
-一致性测试 **2,497 行 / 471 项断言**。
+- P0 把 `Pipeline/PhraseSource.FromPart` / `BuildPhrases` / `PhraseSourceBuilder` /
+  `Snapshots` 搬完，可以从 `UVoicePart` 直接构建 `RenderPhrase[]` 并断言其哈希。
+- P1-a 搬完执行层的**底座**：`Format/Wave.cs`、`IResampler` / `IWavtool` 两个接口、
+  `ResamplerManifest`，以及内置拼接器 `SharpWavtool`（`simple` 与默认的 `convergence`
+  都可用，后者连 NWaves 的 `IirPeak` / `ZiFilter.ZeroPhase` 一起转写了）。
+- P1-b 搬完**变调**：`Classic/Frq.cs`、`Worldline.cs` 的 `SynthSegment` + `Resample`、
+  6 个原生 ctypes 绑定、`Classic/WorldlineResampler.cs`。
+- P1-d 搬完**串起来**的那一步：`Classic/ClassicRenderer.cs`（internal / external
+  两条分支）+ `RenderEngine.cs` 里渲染器要用的 `Progress`。
+- P2（进行中）搬完**声库侧**的两块：`Classic/VoicebankConfig.cs`（`character.yaml`
+  的配置模型）与 `Classic/VoicebankLoader.cs`（`character.txt` / `oto.ini` /
+  `prefix.map` → `oto.Voicebank`，含 `FileTrace`）；`ClassicSinger`（`OtoFrq`
+  的消费方）尚未搬。
+
+**真机验证**（加载 OpenUTAU 随包分发的 `runtimes/win-x64/native/worldline.dll`）：
+`RenderPhrase.from_part` → `ClassicRenderer.render()` 产出的样本，主频用**过零率**实测
+≈ 440Hz（源素材 300Hz、tone 69）—— 变调与拼接都真的生效了。
+
+已完成规模：Python **10,408 行**（`engine/singing/**/*.py`，50 个文件，排除 `__pycache__`），
+对应 C# **9,275 行**（对第 3 节列出的 42 个 C# 源文件逐一 `wc -l` 求和；
+若把 `RenderEngine.cs` 整个 542 行也计入则是 9,817 —— 我们只搬了它的 `Progress`）。
+另有 NWaves 三段转写（**无 C# 对应物**，属第三方库替换）。
+
+一致性测试 **5,266 行 / 841 项断言**（四个文件合计：19 + 59 + 744 + 19；
+参考源码缺失时自动 SKIP）。
 
 ---
 
@@ -40,8 +63,16 @@
 | 音素化器基类 / 中文基类 | 250 + 51 行 | ✅ 完成 |
 | 内置音素化器 | 51 个文件 / 25,707 行 | 🟡 **3 / 51** |
 | Classic 参数层 | 188 + 57 行 | ✅ 完成 |
-| Classic 执行层（外部工具进程） | ~1,300 行 | ❌ 未开始 |
-| Pipeline（乐句切分 / 快照） | 988 行 | ❌ **未开始（关键缺口）** |
+| Classic 执行层 · 底座（WAV / 接口 / 清单） | 173 + 25 + 11 + 28 行 | ✅ 完成 |
+| Classic 执行层 · 内置 wavtool | 187 行（+NWaves 三段转写） | ✅ 完成 |
+| Classic 执行层 · Worldline 变调 | 66 + `Frq` 284 行 | ✅ 完成（`Resample` 主路径 + 真机验证） |
+| Classic 渲染器（串起来） | 152 行 | ✅ 完成（internal / external 两条分支） |
+| Classic 声库配置（`character.yaml`） | 91 行 | ✅ 完成 |
+| Classic 声库加载（`character.txt` / `oto.ini` / `prefix.map`） | 549 行 | ✅ 完成（`FileTrace` + `Voicebank` 一并补齐） |
+| Worldline 的 `PhraseSynthV2`（R1.1） | 780 行中约 240 | ❌ 未开始（只被 `WorldlineRenderer` 用） |
+| Classic 执行层 · 外部工具进程 | ~700 行 | ❌ 未开始 |
+| `WorldlineRenderer` | 276 行 | ❌ 未开始 |
+| Pipeline（乐句切分 / 快照 / 后台构建） | 548 + 162 + 216 行 | ✅ 完成 |
 | G2p（字素→音素） | 771 行 + 数据 | ❌ 未开始 |
 | 编辑器侧 | — | ❌ 未开始（M3） |
 
@@ -56,7 +87,7 @@
 | `ustx/format.py` | `Format/Ustx.cs` |
 | `openutau/music_math.py` | `Util/MusicMath.cs`（全文件） |
 | `openutau/spline.py` | `Util/SplineInterpolate.cs` |
-| `openutau/oto.py` | `Ustx/USinger.cs` 的 `UOto` 部分 + `Classic/VoiceBank.cs` |
+| `openutau/oto.py` | `Ustx/USinger.cs` 的 `UOto` 部分 + `Classic/VoiceBank.cs`（`Voicebank` / `OtoSet` / `Oto` / `Subbank`） |
 | `openutau/singer.py` | `Ustx/USinger.cs`（基类与 `SingerTypeUtils`） |
 | `openutau/phoneme.py` | `Ustx/UPhoneme.cs` |
 | `openutau/phonemizer.py` | `Api/Phonemizer.cs` |
@@ -66,13 +97,29 @@
 | `openutau/phrase_layout.py` | `Render/PhraseLayout.cs` |
 | `openutau/render_phrase.py` | `Render/RenderPhrase.cs`（3 个类） |
 | `openutau/worldline.py` | `Render/Worldline.cs` 的**纯逻辑部分** + 10 个导出的 ctypes 绑定 |
-| `openutau/pipeline_source.py` | `Pipeline/PhraseSource.cs`（5 个数据类 + `Evaluate`/`Sample`） |
+| `openutau/pipeline_source.py` | `Pipeline/PhraseSource.cs`（5 个数据类 + `Evaluate`/`Sample` + `FromPart`/`BuildPhrases`/`DrivenPhonemes`） |
 | `openutau/pipeline_identities.py` | `Pipeline/Identities.cs` |
+| `openutau/pipeline_builder.py` | `Pipeline/PhraseSourceBuilder.cs`（`PhraseBuildGate` + 单线程 worker） |
+| `openutau/pipeline_snapshots.py` | `Pipeline/Snapshots.cs`（5 个快照类 + `DocumentSnapshotStore`） |
+| `ustx/model.py` 的 `UPart.Id` / `UVoicePart.ApplyPhraseSourceResult` | `Ustx/UPart.cs` 的对应片段 |
 | `openutau/binary_writer.py` | `System.IO.BinaryWriter`（缓存键字节布局复刻） |
 | `openutau/xxhash.py` | `K4os.Hash.xxHash.XXH32` / `XXH64` |
 | `openutau/classic/resampler_item.py` | `Classic/ResamplerItem.cs` |
+| `openutau/wave.py` | `Format/Wave.cs`（解码后端可注入；编辑器侧部分未搬） |
+| `openutau/classic/i_resampler.py` | `Classic/IResampler.cs` |
+| `openutau/classic/i_wavtool.py` | `Classic/IWavtool.cs` |
+| `openutau/classic/resampler_manifest.py` | `Classic/ResamplerManifest.cs` |
+| `openutau/classic/sharp_wavtool.py` | `Classic/SharpWavtool.cs` |
+| `openutau/classic/nwaves_filter.py` | **无 C# 对应物**：NWaves 的 `DesignFilter.IirPeak` + `TransferFunction.Zi` + `ZiFilter.ZeroPhase`（第三方库替换） |
+| `openutau/classic/frq.py` | `Classic/Frq.cs`（`IFrqFiles` / `Frq` / `Mrq` / `OtoFrq`） |
+| `openutau/classic/worldline_resampler.py` | `Classic/WorldlineResampler.cs` |
+| `openutau/worldline.py` 的 `SynthSegment` / `resample` / `WorldlineNative` | `Render/Worldline.cs` 的对应片段 + `cpp/worldline/worldline.h` 的 6 个导出 |
+| `openutau/classic/classic_renderer.py` | `Classic/ClassicRenderer.cs` |
+| `openutau/render_engine.py`（部分：`Progress`） | `Render/RenderEngine.cs` 的 `Progress`（其余属 M3） |
 | `openutau/classic/ini.py` | `Classic/Ini.cs` |
 | `openutau/base_chinese.py` | `BaseChinesePhonemizer.cs` |
+| `openutau/classic/voicebank_config.py` | `Classic/VoicebankConfig.cs`（`VoicebankConfig` / `SymbolSet` / `SymbolSetPreset` / `SingerTypeValues`） |
+| `openutau/classic/voicebank_loader.py` | `Classic/VoicebankLoader.cs`（`FileTrace` + `VoicebankLoader`） |
 | `openutau/plugin_builtin/japanese_vcv.py` | `Plugin.Builtin/JapaneseVCVPhonemizer.cs` |
 | `openutau/plugin_builtin/chinese_vcv.py` | `Plugin.Builtin/ChineseVCVPhonemizer.cs` |
 | `openutau/plugin_builtin/chinese_cvvc.py` | `Plugin.Builtin/ChineseCVVCPhonemizer.cs` |
@@ -87,11 +134,24 @@
 cd engine/tests
 python test_ustx_schema_matches_source.py        # 19 passed
 python test_ustx_roundtrip.py                    # 59 passed
-python test_openutau_core_matches_source.py      # 393 passed
+python test_openutau_core_matches_source.py      # 744 passed   ← 含 worldline.dll 真机端到端
 python test_singing_adapters.py                  # 19 passed / 1 skipped
 ```
 
-参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），整套测试**可离线运行**。
+合计 **841 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
+整套测试**可离线运行**。
+
+`worldline.dll` 真机测试的 SKIP 条件是"找不到 `/d/FuFuMIDI/_ref/OpenUtau/runtimes/win-x64/native/worldline.dll`
+或 dll 加载失败" —— **本机可得，所以那几条是真的跑了**（端到端一条断言输出主频 ≈ 440Hz）。
+
+> 两个可选依赖的降级行为：
+> - 第三方 `pypinyin`（`BaseChinesePhonemizer` 用来做汉字→拼音）：**未安装不崩**，
+>   汉字原样返回，于是 `ZH VCV.Romanize*` 那几条断言会失败。本机已装 `0.55.0`，
+>   全绿。这属于**环境缺依赖**，不是照搬偏差。
+> - `onnx`（仅 `test_diffsinger_smoke.py` 用）：已改成 `pytest.importorskip`，缺失即整文件跳过。
+>
+> （顺带记一笔：`romanize` 里 `if pinyin_result is None` 这个降级守卫是死分支 ——
+> 列表推导永远不会是 `None`。要不要改成真判空属于 M2-b 的事，别顺手改。）
 
 ---
 
@@ -141,6 +201,22 @@ assert '(i + 1) == phrase.dynamics.Length' in cs
 | 9 | **`Array.BinarySearch`** | 未命中时用**插入点** `~idx`，只在 `(0, len)` 内插值 | `bisect.bisect_left` + 命中判定 |
 | 10 | **`if (TryX(out v)) return ...;`** | 可能是"**命中**即返回（未命中继续往下）"，也可能"一律返回" | 逐字读清楚 —— 同一项目里两种语义**确实同时存在**（`phoneticHint` 的处理在 JA VCV 与 ZH VCV 恰好相反） |
 | 11 | **`Math.Round`** | 与 Python `round()` 同为 banker's rounding | ✅ 这条**不用担心** |
+| 12 | **`Dictionary<T, ...>` / `HashSet<T>` 以对象为键** | C# 是**引用相等**；Python 的 `@dataclass` 生成 `__eq__` 后 `__hash__` 变 `None`（**根本不能当键**），就算能当键也是**逐字段比较** —— 两个内容相同的音符会被合并成一个 | 键改用 `id(obj)`（`PhraseSource._of` 的 `noteIndexByNote`、`PhraseSourceBuilder` 的 `latest` 字典） |
+| 13 | **`list.Contains(obj)` / `list.IndexOf(obj)`** | 同上：C# 是引用相等，Python `in`/`index` 走 `__eq__` | 写成 `any(p is obj for p in list)`；别为了省事写 `obj in list` |
+| 14 | **`TimeAxis.Clone()` 不复制 `Timestamp`** | 克隆体恒为 0，所以 `RenderPhrase.Hash()` 里那一项**实际没有贡献**（"改速度导致缓存失效"只能靠 pitches/dynamics 间接覆盖） | **照搬不修**；已在 `RenderPhrase._hash` 的 docstring 里写明，要修应单独立项 |
+| 15 | **`Array.Resize(ref arr, n)` 在 `n` 变小时会截断** | 不是"只扩容"：后写入的段若位置更靠前，会**悄悄丢掉**前面已累加的样本（`n < 0` 时 C# 抛 `ArgumentOutOfRangeException`） | 照搬（`SharpWavtool._resize`），负数同样抛；别写成"取 max" |
+| 16 | **NAudio 的 16 位换算两头不对称** | 写用 `short.MaxValue = 32767`、读用 `/32768`，往返误差上界因此是 `1/32767 + 1/32768` 而不是 `1/32768` | 照搬；写测试期望时别按"对称量化"算 |
+| 17 | **`F0FrameCount` 是"缓冲上界"不是"帧数"** | 拿它当长度去读数据会读到尾巴上的**填充 0**（被当成无声）；实测 pyin 对 1 秒 44.1kHz 只产出 99 帧、容量 101 | `F0()` 按**返回值**裁长度；`method == -1`（只要帧数）才按容量算 |
+| 18 | **同一份文件里两处"无声判据"阈值不同** | `Frq.Build` 统计平均用 `f > 0`；`OtoFrq.Completion` 却把 `<= 60` 当无声。统一它们会让 `.frq` 的平均音高与 MOD+ 的偏差同时漂 | 照搬，别"整理"成同一个常量 |
+| 19 | **构造器链里两条路方向相反** | `SynthSegment` 的 resampler 路径**不做**输入增益（增益在 `Resample` 输出端）、乐句路径**做**输入增益；照搬时若合并成一个 `if` 分支，很容易把增益做两次或一次都不做 | 用显式布尔参数区分两条路，并在 docstring 里写明"增益在哪一侧" |
+| 20 | **`IirPeak` 是"峰值单位增益"谐振器，不是放大器** | 断言"它把目标频率放大 N 倍"必错；`\|H(w0)\| = 1`、直流为 0 | 测它要测"直流被压掉、中心频率保持"，或直接对着公式算系数 |
+| 21 | **`lock(obj)` 是不可重入不了解的坑** | C# 的 `Monitor` **同线程可重复进入**；Python 的 `threading.Lock` 不是 → **自锁死**（线程等自己）。本项目真实踩到：`ClassicRenderer` 先按 `item.outputFile` 加锁，再进 `WorldlineResampler` 里的**同一把**锁 | 凡 C# 用 `lock` 的地方，Python 一律用 `RLock`；并在测试里断言"同线程可重复进入" |
+| 22 | **"谁负责跑 resampler"在两条分支上不同** | `RenderInternal` 自己跑 resampler；`RenderExternal` **不跑** —— 那是 `ExeWavtool` 的活（`item.resampler.NoWrapperScript && !File.Exists(outputFile)` 那个分支）。照着"补齐"会在外部路径上把 resampler 跑两遍或一遍都不跑 | 照搬这条**有意的不对称**，并在 docstring 里写明"缓存文件是谁产出的" |
+| 23 | **.NET 的 `Encoding.GetEncoding("shift_jis")` 实为 code page 932** | Python 的 `'shift_jis'` 是 JIS，读老声库会在边缘字符上解错（`①`、`～`、`¥` 一类） | 编码名统一过一张表映射到 `'cp932'`；`.NET` 名字非法会抛，而 Python 的 `codecs.lookup` 会把空白归一化掉，所以**显式拒绝含空白的名字**（`#Charset: utf-8` 正是靠这一点被判成"没声明"） |
+| 24 | **`new StreamReader(stream, encoding)` 默认检测 BOM、解码失败不抛** | Python `open(encoding=...)` 默认 `errors='strict'`，坏字节直接抛；带 UTF-8 BOM 的 `character.txt` 会被当成 cp932 解出 `\ufeff` | `_read_text` 手写 BOM 检测（UTF-8/16/32，UTF-32 必须排在 UTF-16 前）+ `errors='replace'`（.NET 的替换字符是 `'?'`、Python 是 `U+FFFD`，唯一差异） |
+| 25 | **C# `double.ToString()` 没带 `InvariantCulture`** | 写出 `0.0` 时 C# 是 `"0"`、Python 是 `"0.0"`；指数形式 C# 是 `"1E-05"`；更要命的是**逗号小数点的系统上上游会写出坏 oto.ini** | `_cs_double` 复刻"最短可往返 + 省 `.0` + 大写 `E`"；那个区域性缺陷**不照搬**（Python 固定用 `.`），已记档 |
+| 26 | **`Array.ForEach(s, temp => temp.Trim())` 什么都不做** | `string` 不可变，trim 结果被丢弃 → `name = Foo`（等号两侧有空格）**认不出来**，会落进 `OtherInfo`。以为它 trim 了就会写出错的测试期望 | 照搬（不 trim），并在测试里把"认不出来"写成断言 |
+| 27 | **`AddAliasForMissingFiles` 造出的 oto `IsValid` 是 false** | 看着像 bug（对象初始化器里没写 `IsValid`），而 `ClassicSinger` 只收有效条目 → 该功能当前实际不生效。若"顺手修好"，行为会变 | 照搬 + 记档：改正确属行为变更，应单独立项 |
 
 ### 附：写测试时的最大陷阱 —— 凭直觉填期望
 
@@ -148,6 +224,25 @@ assert '(i + 1) == phrase.dynamics.Length' in cs
 （权重、增益、长度、夹紧方向、分帧插值…）。
 
 **规律**：凡"看起来像常数"的值（weight / gain / 阈值 / 长度）**几乎都是公式值**。
+本轮又栽了三次，全是这一类：
+
+- `IirPeak` 不是"把目标频率放大"的带通，而是**峰值处单位增益**的谐振器
+  （`|H(w0)| = 1`，直流为 0），我按直觉断言"增益 > 5"；
+- `ZiFilter` 的冲激响应手算时把 `b1 - a1*y0` 错写成了 `b1`；
+- 断言 `.frq` 会把 f0 搬到分析帧上，却忘了**同一份数据还要过一遍音高弯曲**，
+  于是"300Hz"被弯成了 "440Hz" —— 应该断言的是"有声/无声判定生效"。
+
+三次都靠"把公式抄进测试"或"把中间量打印出来"才发现。
+
+本轮还多了一类**更贵的**教训：**卡死比报错难查一个数量级**。表现是整份测试
+静默不动、无任何输出（stdout 被重定向后是块缓冲，所以"没输出"既可能是卡死也可能
+只是没 flush）。定位手段按性价比排序：
+
+1. **先拿最小复现跑一遍**（把可疑那一段单独拎出来计时）—— 本轮一跑就发现单线程
+   0.3s 能跑完，于是"是不是太慢"这个问题直接被排除；
+2. **`faulthandler.dump_traceback_later(15, exit=True)`** —— 一次性给出**所有线程**的
+   Python 栈，本轮正是它把两个 worker 钉在 `get_cache_lock` 那一行上；
+3. `python -u` + 重定向到文件（而不是 `| Select-Object`，那会把输出全缓冲住）。
 
 **对策**：把 **C# 的公式抄进测试里算期望**：
 ```python
@@ -173,47 +268,123 @@ expect = math.pow(0.5 / (0.5 * w_hi + 1.0 * (1 - w_hi)), 0.86)
 | **全局单例**（`ToolsManager` / `VoicebankFiles` / `PathManager` / `Preferences`） | 用可注入的宿主对象顶替 | Python 无全局单例；未配置时抛 `NotImplementedError`，**不静默给错路径** |
 | **float32 vs float64** | 保留 float64，偏差写进 docstring | 引入 numpy 会让这个包不能脱离 numpy 单测；偏差约 1e-7，且哈希仍按 float32 写出 |
 | **`IsHanzi` 的判据** | 收窄为"长度为 1 且为汉字" | 让"先收集、再按 `Length == 1` 替换"两处**共用同一判据**；否则多字汉字串会被收集却替换不到，`pinyinIndex` **错位** |
+| **`Subbank` / `FileTrace` 的落点** | `Subbank` 留在 `oto.py`、`FileTrace` 留在 `classic/voicebank_loader.py`，两侧互相引用即可 | C# 把 `Subbank` 定义在 `VoicebankConfig.cs`、`FileTrace` 定义在 `VoicebankLoader.cs`，但 `oto.py` 在 `classic/` **之外**：反向导入会先把 `classic` 包初始化，而 `classic/__init__.py` 必须延迟到 `openutau/__init__.py` 末尾才导入（渲染器注册顺序）—— 必然成环。所以 `Oto.file_trace` 用 `TYPE_CHECKING` 前向引用标注，`voicebank_config.py` 反过来 `from ..oto import Subbank`。**文件边界服从可导入性**，已写进各自 docstring |
+| **`DocManager.Inst`（Revision/Project/MainScheduler）** | 用可注入宿主 `pipeline_source.host` 顶替；`from_part` 另留显式 `revision` 参数 | 与 `ClassicHost` 同一套路。未配置时 `project=None` → 构建结果按"part 已被删除"同一条路径丢弃，不会静默写错地方 |
+| **`TaskScheduler mainScheduler`** | 可调用对象（`fn -> None`）；为 `None` 时就地应用 | Python 无 `TaskScheduler`。`None` 恰好对应 C# "没有 worker 的测试宿主"那条路径 |
+| **`BlockingCollection.Take(token)`** | `queue.Queue` + 哨兵对象唤醒 | Python 的 `get()` 不能被 `Event` 打断，只能塞哨兵；语义相同（dispose 后 worker 立即退出） |
+| **快照里的 `tempos`** | 沿用 `TimeAxis.tempos_between_ticks()` 既有的 `dict` 形态 | 该方法早已按此形态落地，改成 `UTempo` 会让 `RenderPhrase` 一起改，收益为零 |
+| **`UPart.Id` / `UTrack.TrackNo` / `UCurve.descriptor`** | 补成运行时字段（`NO_YAML`） | 它们都是 C# 的 `[YamlIgnore]` 成员，不写盘；但管线与 `CurveSource` 要读 |
+| **是否随包分发 UTAU 的 resampler.exe / wavtool.exe** | **不分发**，Classic 线走自包含路径（`SharpWavtool` + 未来的 `WorldlineResampler`） | `docs/utau/selection-report.md` 早已定调：原版 exe 是闭源 freeware、**重分发授权不明**、仅 Windows 且依赖日文 locale。`ExeResampler` / `ExeWavtool` 仍会搬（OpenUTAU 就是这么设计的），但只服务"用户自备工具"，不进关键路径 |
+| **NWaves（.NET 库）缺失** | 把用到的三段（`IirPeak` / `TransferFunction.Zi` / `ZiFilter.ZeroPhase`）逐行转写进 `classic/nwaves_filter.py` | 与 `pypinyin` 替代 `csharp-pinyin` 同类：.NET 库没法在 Python 里引用。NWaves 是 MIT，文件头写明出处与行级对应 |
+| **`Wave.OpenFile` + NAudio 解码/重采样链** | 折叠成可注入的 `WaveHost.decode_mono(path)`；默认只认 44.1kHz PCM WAV，其它**明确报错** | C# 的 `WdlResamplingSampleProvider` 是自研重采样器，照搬=自研 DSP。音源基本就是 44.1k WAV；其它容器由宿主接 ffmpeg（项目已有 `engine/ffmpeg_wrap.py`） |
+| **`Array.Resize` 的浮点语义** | 照搬（含"变小时截断"与"负数抛错"） | 上游就是靠"音素位置单调不减"成立的；改成"取 max"是行为变更 |
+| **原生 `worldline` 库的取用方式** | 运行期 ctypes 加载；`WorldlineNative(library_path)` 可显式指定，`get_native()` 惰性缓存 | 与 C# 的 `DllImport("worldline")` 解析结果对齐（`worldline.dll` / `libworldline.so` / `libworldline.dylib`）。找不到库时 `available=False`，纯逻辑照常工作，只有真调 DSP 才抛 |
+| **`worldline` 的 NumSharp `NDArray`** | 一律换成**扁平 `list[float]`**（`frame * sp_size + k`） | 数学一致；而且 ctypes 本来就要传 `double*` 扁平缓冲，省掉一次 `ToArray<double>()`。包不依赖 numpy 这条底线也保住了 |
+| **`WorldlineNative.F0` 的错误语义** | C# 的包装 `catch` 住异常后**返回 null**（调用方随即 NRE）；这里让 `SynthRequestError` 冒出来 | 失败语义相同（都是"拿不到 f0"），但错误信息可读。已在 docstring 注明这是有意的差异 |
+| **`MessageCustomizableException`（带 `<translate:...>` 键的 UI 文案）** | 不产生；`WorldlineResampler.do_resampler` 保留**异常类型**并把音素名写进消息 | 翻译键是 UI 层（M3）的事，管线不需要。渲染器要按类型分支，所以类型必须保住 |
+| **`Renderers.GetCacheLock` 的锁类型** | C# 是 `object` + `lock()`（= `Monitor`，**可重入**）→ Python 用 `threading.RLock` | 嵌套加锁是真实存在的（`ClassicRenderer` → `WorldlineResampler` → `SharpWavtool` 都按同一 key 加锁）。用 `threading.Lock` 会在第一次真渲染时自锁死 —— 已实测并加了回归断言 |
+| **`Parallel.ForEach` 的异常聚合** | `AggregateException`（顺序不定）→ 按**提交顺序**取第一个异常原样重抛 | 失败语义相同（都会把失败暴露出来），但顺序可预期，且不必引入一个 Python 里不存在的类型 |
+| **`Progress` 的合并派发（coalescing）** | 不搬；只保留 `total/completed/complete/clear` + 一个 `notify` 回调 | C# 那套"最多一个 UI 投递在飞"是为了不刷爆 UI，且绑定 `DocManager.ExecuteCmd` / `MainScheduler`（都是 M3 的编辑器层）。合并策略交给宿主 |
+| **`Progress` 的 `total = 0`** | C# 算出 NaN 继续走；Python 让它抛 `ZeroDivisionError` | 这是"调用方没算好总步数"的显式错误，静默给 NaN 只会让"进度条不动"更难查 |
 
 ---
 
 ## 8. 未完成清单（按优先级）
 
-### P0 —— 把链路接通（推荐下一步）
+### ~~P0 —— 把链路接通~~ ✅ 已完成
 
-**`Pipeline/PhraseBuilder` + `PhraseSource.FromPart` + `Snapshots.cs`**（988 行）
-> **当前最大的缺口。** 没有它，音素化的结果无法喂给已经写好的 `RenderPhrase` ——
-> 整条链路是断的。做了这一项，"歌词 → 渲染输入"就端到端可测。
->
-> - `PhraseSource.cs` 剩余部分：`FromPart`(约 30 行) + `BuildPhrases`
-> - `PhraseSourceBuilder.cs`：162 行
-> - `Snapshots.cs`：216 行（快照 + 增量失效，依赖 `Identities`，已就位）
-> - `PhonemeAnchors` / `ExpressionGraph`：表达式图相关，可先留 `None` 守卫
+`PhraseSource.FromPart` / `BuildPhrases` / `DrivenPhonemes`（548 行的剩余部分）、
+`PhraseSourceBuilder.cs`（162）、`Snapshots.cs`（216）三块都已落地，见第 3 节对照表。
+本轮同时补齐了两个"不搬就没法用"的零件：`UPart.Id` / `UVoicePart.ApplyPhraseSourceResult`
+（`UPart.cs` 的对应片段）与 `RenderPhrase.FromPart`。
 
-### P1 —— 让渲染能出声
+接下来可选的两项收尾（都不阻塞 P1）：
 
-| 项 | 体量 | 说明 |
+- `UPart.UpdatePhrases()`：把"音素化 → 取快照 → 投递 → 等落地"串起来，
+  依赖音素化器的 `PhonemesUpToDate` 判定（编辑器侧，可与 M3 一起做）。
+- `ExpressionGraph/*`：`driven_phonemes()` 目前走的是"C# 的提前返回"那条路径，
+  真接上图之后要把 `DrivenPhonemes` 的剩余分支搬进来。
+
+### ~~P1-a —— 底座 + 内置 wavtool~~ ✅ 已完成
+
+`Format/Wave.cs`（WAV 缓存文件的读写）、`Classic/IResampler.cs` / `IWavtool.cs` /
+`ResamplerManifest.cs`、`Classic/SharpWavtool.cs`，外加 NWaves 三段原语的转写。
+见第 3 节对照表。
+
+> 决策点已定：**不随包分发 UTAU 的外部工具**（理由见第 7 节），
+> Classic 线走 `SharpWavtool` + `WorldlineResampler` 这条自包含路径。
+
+### ~~P1-b —— Worldline 变调~~ ✅ 已完成
+
+`Classic/Frq.cs`(284)、`Worldline.cs` 的 `SynthSegment` + `Resample`
+（含 `.frq` 接入、音高弯曲、`srcEndMs` 两支不对称）、6 个原生导出的 ctypes 绑定，
+以及 `Classic/WorldlineResampler.cs`(66)。见第 3 节对照表。
+
+**真机验证**：加载 `runtimes/win-x64/native/worldline.dll`，把 300Hz 正弦按
+tone 69 变调，输出主频用**过零率**实测 ≈ 440Hz（±10% 内）。
+
+> 仍有未搬的两块（都不阻塞 P1-d）：
+> - `PhraseSynthV2`（R1.1，约 240 行）：`AnalyzeRequests` 的并行分析、`Synth`、
+>   `SynthContinuousNoise`，以及 `DecodeMgc` / `DecodeBap` / `HnAnalysisF0In` /
+>   `WorldSynthesisContinuousNoise` 四个绑定 + `Core/Analysis/Hnsep`。只被
+>   `WorldlineRenderer` 用。
+> - `OtoFrq` 的消费方（`UOtoFrq` + `ClassicSinger`）在 P2。
+
+### ~~P1-d —— 把两端串起来~~ ✅ 已完成
+
+`Classic/ClassicRenderer.cs`(152) 与 `RenderEngine.cs` 里的 `Progress`
+（渲染器接口需要的那一小块）。**里程碑达成**：`RenderPhrase → 变调 → 拼接 → 样本`
+已端到端真机跑通（见第 0 节）。
+
+> 剩下的渲染器侧工作（都不阻塞"出声"）：
+> - `WorldlineRenderer`(276)：Worldline 线 R1.1/R2，依赖 `PhraseSynthV2`（下面那条）。
+> - `PhraseSynthV2` + R1.1（约 240 行）：`DecodeMgc` / `DecodeBap` / `HnAnalysisF0In` /
+>   `WorldSynthesisContinuousNoise` 四个绑定 + `Core/Analysis/Hnsep`。
+
+### P1-c —— 外部工具线（独立可选）
+
+`Util/Base64.cs`(77) + `Util/ProcessRunner.cs`(95) + `OS.cs`(119) +
+`Classic/ExeResampler.cs`(141) / `ExeWavtool.cs`(224) / `UnixWavtool.cs` /
+`ToolsManager.cs`(140) / `VoicebankFiles.cs`(122)。
+
+> 只服务"用户自备 resampler/wavtool"（OpenUTAU 的原生用法）。`ToolsManager` 里
+> `SearchWavtools` 会构造 `SharpWavtool(true/false)`，所以它必须排在 P1-a 之后
+> （现在已满足）。`ExeWavtool` 还顺带决定了"外部路径下谁跑 resampler"这件事
+> （见第 6 节陷阱 22）。
+
+### P2 —— 声库与 .frq（进行中）
+
+| 项 | 体量 | 状态 |
 |---|---|---|
-| `Classic/IResampler.cs` + `IWavtool.cs` | 25 行 | 两个接口，简单 |
-| `Classic/SharpWavtool.cs` | 187 行 | 内置 wavtool；**依赖 NWaves 滤波器**（需评估） |
-| `Classic/ExeResampler.cs` / `ExeWavtool.cs` | 141 + 224 行 | 外部工具进程（spawn + 参数拼装） |
-| `Classic/ToolsManager.cs` / `VoicebankFiles.cs` | 140 + 122 行 | 工具发现与临时文件管理 |
-| `Classic/WorldlineResampler.cs` | 66 行 | 调 `Worldline.Resample` |
-| `Classic/ClassicRenderer.cs` | 152 行 | 串起来 |
-| `Classic/WorldlineRenderer.cs` | 276 行 | Worldline 线（R1.1/R2） |
+| `Classic/VoicebankConfig.cs` | 91 行 | ✅ 完成（`classic/voicebank_config.py`） |
+| `Classic/VoicebankLoader.cs` | 549 行 | ✅ 完成（`classic/voicebank_loader.py`，含 `FileTrace`） |
+| `Classic/VoiceBank.cs` 的 `Voicebank` | 57 行 | ✅ 完成（补进 `oto.py`；`Subbank`/`Oto`/`OtoSet` 原已在） |
+| `Classic/ClassicSinger.cs` | 243 行 | ⬜ 未开始 |
+| `UOtoFrq`（把 `OtoFrq` 接进 `UOto`，MOD+ 依赖） | — | ⬜ 未开始 |
+| `Classic/ClassicSingerLoader.cs` | — | ⬜ 未开始 |
 
-> 决策点：**是否随包分发 UTAU 的外部 resampler/wavtool**（OpenUTAU 需要用户自备）。
-> 若不分发，则 Classic 线只能走 `SharpWavtool` + `WorldlineResampler` 这条自包含路径。
-
-### P2 —— 声库与 .frq
-
-| 项 | 体量 |
-|---|---|
-| `Classic/ClassicSinger.cs` | 243 行 |
-| `Classic/Frq.cs`（`.frq` 基频文件） | 284 行 |
-| `UOtoFrq`（MOD+ 依赖） | — |
-| `Classic/VoicebankLoader.cs` / `VoicebankConfig.cs` | 549 + 91 行 |
+> `Classic/Frq.cs`(284) 已在 P1-b 搬完；这里剩下的是**消费方**
+> （`ClassicSinger` 用 `OtoFrq` 填 `UOto.UOtoFrq`）。
 
 > 补齐后 `render_phrase.py` 里 MOD+ 分支的守卫（`classic_singer is not None`）才会启用。
+
+本轮（声库侧）顺带补上的两个"不搬就缺零件"的东西：
+`oto.Voicebank`（`character.txt` + `character.yaml` + oto 摊平后的结果，含它的
+`reload()`）与 `classic/voicebank_loader.FileTrace`（`Oto.file_trace` 的真实类型）。
+`Preferences` 也补了 `load_deep_folder_singer`（**默认 true**，`SearchAll` 靠它决定是否递归）。
+
+**新加的一致性断言**（`test_openutau_core_matches_source.py`）：
+- `VoicebankConfig.cs`：枚举名 / 18 个字段的**名字与声明顺序** / 每个默认值
+  （含 `0.67f`、三态 `bool?`、引用类型必须是 `None` 而不是 `''`）/ `OmitNull` 写盘与
+  未知键忽略 / 往返。
+- `VoicebankLoader.cs`：6 个 `kXxx` 常量 / 20 个成员名逐项落地 / `FileTrace.copy` 独立 /
+  `.NET shift_jis → cp932` / `_cs_double` 的 `"0"`、`"1E-05"` / `parse_double` 的
+  "空串算成功" / `_read_lines` 的三种换行 / **oto 六种行形态**（合法、空别名回退、截断行
+  判有效、数值报错、无 `=`、空行）/ `FileTrace` 每行独立且行号递增 /
+  `CheckWavExist` 的缺失标记 / `AddFilenameAlias` 的"同名不重复加"与 `FileTrace` 共享 /
+  `write_oto_set` 往返逐字符一致 / `#Charset:` 的"不 trim"怪癖与 10 行上限 / BOM 检测 /
+  `character.txt` 的键识别与死代码 quirk / 判型（配置优先 + 遗留 dsconfig）/ `ApplyConfig`
+  的引用语义 / `prefix.map` 去重与音域分段 / `SearchAll` 的深/浅两档。
 
 ### P3 —— 更多音素化器（当前 3 / 51）
 
@@ -240,11 +411,14 @@ expect = math.pow(0.5 / (0.5 * w_hi + 1.0 * (1 - w_hi)), 0.86)
 |---|---|
 | ~~M1 抽象层~~ | ✅ 已完成（`singing/api.py` + 适配器） |
 | ~~M2-c `.ustx` 双向兼容~~ | ✅ 已完成 |
-| **M2-a 渲染器主体** | 🟡 参数层完成；执行层待做（P1） |
+| **M2-a 渲染器主体** | 🟡 Classic 线全通（参数层 + 变调 + 拼接 + 渲染器）；`WorldlineRenderer` 待做 |
 | **M2-b 音素化器** | 🟡 3 / 51 |
-| **M2 端到端可跑** | ⬜ **需 P0 + P1**：`歌词 → 音素 → 乐句 → 渲染 → WAV` |
+| **M2 渲染输入链路** | ✅ 完成（P0）：`歌词 → 音素 → 乐句 → RenderPhrase[]`，可断言哈希 |
+| **M2 拼接出声** | ✅ 完成（P1-a）：`RenderPhrase → 音素 wav 拼接`（`SharpWavtool`） |
+| **M2 变调出声** | ✅ 完成（P1-b）：`音素 wav → 按音高拉伸`（`Worldline.Resample`，真机验证） |
+| **~~M2 端到端可跑~~** | ✅ **完成（P1-d）**：`歌词 → 音素 → 乐句 → 变调 → 拼接 → 样本`（真机验证主频） |
 | M3 编辑器替换 | ⬜ |
-| M4 删除旧的 UTAU / DiffSinger 模块 | ⬜ 等 M2 端到端可跑，且已冻结基线 `openutau-port-baseline` |
+| M4 删除旧的 UTAU / DiffSinger 模块 | ⬜ 等音素化器与编辑器接完，且已冻结基线 `openutau-port-baseline` |
 
 ---
 

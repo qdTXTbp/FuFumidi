@@ -19,19 +19,35 @@
   - `openutau/phrase_layout.py` 乐句时域排布（Render/PhraseLayout.cs）
   - `openutau/xxhash.py`      XXH32/XXH64（K4os.Hash.xxHash.XXH32/XXH64）
   - `openutau/binary_writer.py`  `System.IO.BinaryWriter` 的字节布局复刻（缓存键用）
+  - `openutau/wave.py`        音频容器读写（Format/Wave.cs；解码后端可注入）
   - `openutau/classic/`        `OpenUtau.Classic` 命名空间（ResamplerItem 等）
   - `openutau/plugin_builtin/` `OpenUtau.Plugin.Builtin` 内置音素化器（JA VCV 已搬）
-  - `openutau/pipeline_source.py` 渲染输入契约（Pipeline/PhraseSource.cs）
+  - `openutau/pipeline_source.py` 渲染输入契约 + 取快照/切乐句（Pipeline/PhraseSource.cs）
+  - `openutau/pipeline_builder.py` 乐句快照的后台构建（Pipeline/PhraseSourceBuilder.cs）
+  - `openutau/pipeline_snapshots.py` 文档快照与增量失效（Pipeline/Snapshots.cs）
   - `openutau/render_phrase.py`   RenderNote/RenderPhone/RenderPhrase（Render/RenderPhrase.cs）
   - `openutau/oto.py`         原音模型（Ustx/USinger.cs 的 UOto + Classic/VoiceBank.cs）
   - `openutau/singer.py`      USinger 基类（Ustx/USinger.cs）
   - `openutau/phoneme.py`     UPhoneme（Ustx/UPhoneme.cs）
   - `openutau/renderers.py`   渲染器注册表 + ApplyDynamics（Render/Renderers.cs）
+  - `openutau/worldline.py`   Worldline.cs 的纯逻辑 + `SynthSegment`/`Resample` + ctypes 绑定
+  - `openutau/classic/frq.py`  `.frq` / `.mrq` 基频缓存与 `OtoFrq`（Classic/Frq.cs）
+  - `openutau/classic/worldline_resampler.py` 自带的变调器（Classic/WorldlineResampler.cs）
+  - `openutau/classic/voicebank_config.py` `character.yaml` 配置模型（Classic/VoicebankConfig.cs）
 
 未照搬（后续）：
-  - `Classic/ClassicRenderer.cs`、`Classic/WorldlineRenderer.cs`、`Render/Worldline.cs`（M2-a 主体）
-  - `Classic/ClassicSinger.cs` / `Ustx/UOtoFrq.cs`（MOD+ 与 .frq 依赖）
-  - `Pipeline/PhraseBuilder.cs` / `PhraseSource.FromPart`（乐句切分）
+  - `Classic/ClassicRenderer.cs` / `Classic/WorldlineRenderer.cs`（把 resampler 与
+    wavtool 串成一条乐句；两端都已就位，缺中间那段"逐音素调 resampler → 交给 wavtool"）
+  - `Render/Worldline.cs` 的 `PhraseSynthV2`（含 R1.1 的 `Hnsep` 分析与
+    `SynthContinuousNoise`；需补 `DecodeMgc` / `DecodeBap` / `HnAnalysisF0In` /
+    `WorldSynthesisContinuousNoise` 四个绑定）—— 只被 `WorldlineRenderer` 用
+  - `Classic/ExeResampler.cs` / `ExeWavtool.cs` / `UnixWavtool.cs` / `ToolsManager.cs`
+    / `VoicebankFiles.cs`（用户自备工具那条支线，需要 `Util/Base64.cs`、
+    `Util/ProcessRunner.cs`、`Util/OS.cs`）
+  - `Classic/ClassicSinger.cs` / `Ustx/UOtoFrq.cs`（MOD+ 依赖；`.frq` 本身已搬）
+  - `UPart.UpdatePhrases()`（音素化→取快照→投递那条链路，需要音素化器的
+    "是否最新"判定；管线的三段 `FromPart`/`BuildPhrases`/`PhraseSourceBuilder`
+    已就位，`UPart.ApplyPhraseSourceResult` 也已就位）
   - `ExpressionGraph/*`（表达式图；`RenderPhrase` 里对应的分支恒跳过）
   - `OpenUtau.Plugin.Builtin/*Phonemizer.cs` 的具体实现（M2-b 主体）
 """
@@ -54,6 +70,7 @@ from .oto import (  # noqa: F401
     UOto,
     UOtoSet,
     USubbank,
+    Voicebank,
 )
 from .phrase_layout import PhraseLayout  # noqa: F401
 from .phonemizer import (  # noqa: F401
@@ -69,10 +86,20 @@ from .phonemizer import (  # noqa: F401
 from .phoneme import UPhoneme, ValidateOptions  # noqa: F401
 from .pipeline_source import (  # noqa: F401
     CurveSource,
+    DocHost,
     NoteSource,
     PhonemeSource,
     PhraseSource,
     VibratoSource,
+)
+from .pipeline_builder import PhraseBuildGate, PhraseSourceBuilder  # noqa: F401
+from .pipeline_snapshots import (  # noqa: F401
+    DocumentSnapshotStore,
+    PartSnapshot,
+    ProjectSnapshot,
+    SubbankView,
+    TimeAxisSnapshot,
+    TrackSnapshot,
 )
 from .render_phrase import (  # noqa: F401
     PITCH_INTERVAL,
@@ -124,6 +151,7 @@ from .singer import (  # noqa: F401
     Preferences,
 )
 from .spline import CubicSplineSegment  # noqa: F401
+from .wave import Wave, WaveHost  # noqa: F401
 from .base_chinese import BaseChinesePhonemizer  # noqa: F401
 from .timeaxis import TimeAxis  # noqa: F401
 from .pipeline_identities import (  # noqa: F401
@@ -142,6 +170,7 @@ from .worldline import (  # noqa: F401
     AnalysisConfig,
     CutOffBeforeOffsetError,
     CutOffExceedDurationError,
+    SynthSegment,
     SynthRequestError,
     WorldlineNative,
     apply_pitch_bend,
@@ -154,12 +183,19 @@ from .worldline import (  # noqa: F401
     get_flag,
     get_native,
     init_analysis_config,
+    resample,
     resample_auto_gain,
     resample_features,
     segment_auto_gain,
     world_synthesis_sample_count,
 )
 from .xxhash import digest_of32, digest_of64, xxh32, xxh64  # noqa: F401
+from .render_engine import Progress  # noqa: F401
+
+# 导入 `classic` 即完成 `CLASSIC` 渲染器的注册（对应 C# 在 `CreateRenderer` 里 `new`）。
+# 放在 `plugin_builtin` 之前并显式 import：那样注册不依赖"音素化器恰好 import 了
+# `classic.ini`"这条隐式路径。
+from .classic import ClassicRenderer, register_classic_renderer  # noqa: E402,F401
 
 # 导入内置音素化器即完成注册（对应 C# 的 [Phonemizer(...)] 在程序集加载时注册）。
 # 放在最后：它们依赖上面的基类与注册表。
@@ -170,10 +206,13 @@ __all__ = [
     'TimeAxis',
     'MusicMath', 'NAME_IN_OCTAVE', 'KEYS_IN_OCTAVE', 'SOLFEGES', 'NUMBERED_NOTATIONS',
     'ZOOM_RATIOS', 'fdiv', 'idiv',
-    'UOto', 'UOtoSet', 'USubbank', 'Oto', 'OtoSet', 'Subbank',
+    'UOto', 'UOtoSet', 'USubbank', 'Oto', 'OtoSet', 'Subbank', 'Voicebank',
     'Phonemizer', 'Note', 'Phoneme', 'PhonemeAttributes', 'PhonemeExpression', 'Result',
     'register', 'registered',
     'UPhoneme', 'ValidateOptions',
+    'Wave', 'WaveHost',
+    'Progress',
+    'ClassicRenderer', 'register_classic_renderer',
     'IRenderer', 'RenderResult', 'RenderPitchResult', 'RenderRealCurveResult',
     'RenderPhraseEvents',
     'USinger', 'USingerType', 'SINGER_TYPE_NAMES', 'SINGER_TYPE_FROM_NAME', 'Preferences',
@@ -187,8 +226,12 @@ __all__ = [
     'get_flag', 'fit_curve', 'compute_frame_bounds', 'compute_timemap', 'resample_features',
     'apply_pitch_bend', 'resample_auto_gain', 'segment_auto_gain',
     'blend_features', 'blend_continuous_noise_features',
+    'SynthSegment', 'resample',
     'CubicSplineSegment', 'PhraseLayout',
-    'VibratoSource', 'CurveSource', 'NoteSource', 'PhonemeSource', 'PhraseSource',
+    'VibratoSource', 'CurveSource', 'NoteSource', 'PhonemeSource', 'PhraseSource', 'DocHost',
+    'PhraseBuildGate', 'PhraseSourceBuilder',
+    'DocumentSnapshotStore', 'TimeAxisSnapshot', 'SubbankView', 'TrackSnapshot',
+    'PartSnapshot', 'ProjectSnapshot',
     'RenderNote', 'RenderPhone', 'RenderPhrase', 'PITCH_INTERVAL',
     'CLASSIC', 'WORLDLINE_R', 'WORLDLINE_R2', 'WORLDLINE_R11', 'ENUNU', 'VOGEN',
     'DIFFSINGER', 'VOICEVOX', 'CLASSIC_RENDERERS', 'ENUNU_RENDERERS', 'VOGEN_RENDERERS',

@@ -72,6 +72,9 @@ class Preferences:
     default_renderer: str = ''
     #: 对应 C# `Preferences.Default.NumRenderThreads`（默认 2，Classic 并行渲染用）
     num_render_threads: int = 2
+    #: 对应 C# `Preferences.Default.LoadDeepFolderSinger`（**默认 true**）：
+    #: `VoicebankLoader.SearchAll` 据此决定是递归找 character.txt 还是只看一级子目录。
+    load_deep_folder_singer: bool = True
 
 
 class USinger:

@@ -173,11 +173,19 @@ def reset_registry() -> None:
 
 
 def get_cache_lock(key: str) -> threading.Lock:
-    """对应 C# `GetCacheLock`：按 key 取一把共享锁，用于串行化同一输出文件的写入。"""
+    """对应 C# `GetCacheLock`：按 key 取一把共享锁，用于串行化同一输出文件的读写。
+
+    ★ **必须是可重入锁（`RLock`）**。C# 的 `GetCacheLock` 返回的是 `object`，
+    调用方一律配 `lock (obj)` —— 也就是 `Monitor`，**同一线程可重复进入**。
+    而嵌套是真的会发生的：`ClassicRenderer.RenderInternal` 先按 `item.outputFile`
+    加锁，再调 `IResampler.DoResamplerReturnsFile`；`WorldlineResampler` 的
+    实现里**又加了一次同一把锁**（C# 原文如此，见 `WorldlineResampler.cs`）。
+    用非重入的 `threading.Lock` 会在这里**自锁死**（线程等自己持有的锁）。
+    """
     with _REGISTRY_LOCK:
         lock = _CACHE_LOCKS.get(key)
         if lock is None:
-            lock = threading.Lock()
+            lock = threading.RLock()
             _CACHE_LOCKS[key] = lock
         return lock
 

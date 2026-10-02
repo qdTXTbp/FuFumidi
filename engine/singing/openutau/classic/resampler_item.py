@@ -50,6 +50,9 @@ class ClassicHost:
 
     #: 对应 `PathManager.Inst.CachePath`（resampler/wavtool 的临时文件都落在这里）
     cache_path: str = ''
+    #: 对应 `PathManager.Inst.RootPath`（随包分发的 `worldline.dll` 就在这一层；
+    #: 它也是 `Preferences.Inst` 之类的同级目录）
+    root_path: str = ''
 
     def get_resampler(self, name: str):
         """对应 `ToolsManager.Inst.GetResampler(name)`。
@@ -64,6 +67,31 @@ class ClassicHost:
         """对应 `VoicebankFiles.Inst.GetSourceTempPath(singerId, oto, ext)`。"""
         raise NotImplementedError(
             'ClassicHost.get_source_temp_path 未配置：需要 VoicebankFiles（尚未照搬）')
+
+    def get_wavtool(self, name: str):
+        """对应 `ToolsManager.Inst.GetWavtool(name)`。
+
+        ★ C# 里 `name` 对不上时**回落**到 `wavtoolsMap[SharpWavtool.nameConvergence]`，
+        而不是返回 null；所以返回的对象必须永远可用。
+        """
+        raise NotImplementedError(
+            'ClassicHost.get_wavtool 未配置：需要工具管理器（Classic/ToolsManager 尚未照搬）')
+
+    def copy_source_temp(self, source: str, temp: str) -> None:
+        """对应 `VoicebankFiles.Inst.CopySourceTemp(source, temp)`。
+
+        ★ 只在**外部 resampler** 那条路上被调用（C# 用
+        `!(item.resampler is WorldlineResampler)` 守卫）：外部程序要一个解码成
+        WAV 的临时输入文件，而自带的 Worldline 直接读原音，不需要这一趟拷贝。
+        默认抛 `NotImplementedError` —— 自包含路径永远不会走到。
+        """
+        raise NotImplementedError(
+            'ClassicHost.copy_source_temp 未配置：需要 VoicebankFiles（尚未照搬）')
+
+    def copy_back_meta_files(self, source: str, temp: str) -> None:
+        """对应 `VoicebankFiles.Inst.CopyBackMetaFiles(source, temp)`（同上，仅外部路径用）。"""
+        raise NotImplementedError(
+            'ClassicHost.copy_back_meta_files 未配置：需要 VoicebankFiles（尚未照搬）')
 
 
 #: 当前宿主（对应 C# 的全局单例）。测试/主程序在启动时替换它。

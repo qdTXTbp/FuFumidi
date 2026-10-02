@@ -18,21 +18,38 @@
   这里只做数值回写（事件留待 M3 前端需要时再接）。
 - `IsColorMatch` 在 C# 里若 `Subbanks` 为 null 会抛 NullReference；Python 这里同样会抛
   （TypeError），未做"更友好"的处理 —— 保持行为一致比"更健壮"更重要。
+- `Subbank` 在 C# 里其实定义于 **VoicebankConfig.cs**（`VoiceBank.cs` 只是用它）。
+  这里没把它挪进 `classic/voicebank_config.py`，是因为 `oto.py` 位于 `classic/`
+  **之外**，反向导入会触发 `classic` 包的初始化，而 `classic/__init__.py` 又要
+  延迟到 `openutau/__init__.py` 末尾才导入（渲染器注册顺序）—— 构成循环。
+  代之以：类留在 `oto.py`，`voicebank_config.py` 反过来 `from ..oto import Subbank`。
+- `FileTrace`（定义在 `Classic/VoicebankLoader.cs`）同理不能顶层导入，
+  `Oto.file_trace` 用**前向引用**标注，见该字段的注释。
+- `Voicebank.TextFileEncoding` 在 C# 是 `Encoding` 对象；Python 侧存编码**名**
+  （如 `'cp932'`），由 `VoicebankLoader` 负责名字 ↔ codec 的换算。
+- C# 的三个 `ToString()`（`Voicebank→Name` / `OtoSet→Name` / `Oto→Alias`）都搬了；
+  其中 `Voicebank.ToString()` 可能是 null，Python 的 `__str__` 必须返回 str，兜了空串。
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 # MusicMath 已按 C# 的文件边界独立成 music_math.py（Util/MusicMath.cs），
 # 这里只做转发，保持 `from .oto import MusicMath, NAME_IN_OCTAVE` 的写法可用。
 from .music_math import NAME_IN_OCTAVE, MusicMath  # noqa: F401
+from .singer import USingerType
+
+if TYPE_CHECKING:
+    # `FileTrace` 定义在 `classic/VoicebankLoader.cs`；**运行时**不能导入
+    # （`voicebank_loader` 反过来要 `Oto`，会成环），只用于类型标注。
+    from .classic.voicebank_loader import FileTrace
 
 
 # ---------------------------------------------------------------- 原始结构（Classic/VoiceBank.cs）
 
 @dataclass
 class Subbank:
-    """对应 Classic/VoiceBank.cs 的 Subbank。"""
+    """对应 VoicebankConfig.cs 的 `Subbank`（定义位置见模块 docstring 的说明）。"""
 
     color: str = ''
     prefix: str = ''
@@ -52,9 +69,18 @@ class Oto:
     cutoff: float = 0
     preutter: float = 0
     overlap: float = 0
-    is_valid: bool = True
+    #: C# 里 `public bool IsValid;` —— 引用/值类型默认是 **false**，
+    #: 只有 `VoicebankLoader.ParseOto` 六个字段全部解析成功才置 true。
+    #: 别"顺手"改成 True：那会让"没解析出来"的条目被当成有效原音。
+    is_valid: bool = False
     error: str = ''
-    file_trace: Optional[str] = None
+    #: 对应 C# 的 `FileTrace? FileTrace`。类型是 `Classic/VoicebankLoader.cs` 里定义的
+    #: `FileTrace` 对象（**不是字符串**）；标注用的导入在 `TYPE_CHECKING` 块里。
+    file_trace: Optional['FileTrace'] = None
+
+    def __str__(self):
+        """对应 C# 的 `Oto.ToString() => Alias`（见陷阱 #8：别留默认的内存地址版）。"""
+        return self.alias
 
 
 @dataclass
@@ -64,6 +90,84 @@ class OtoSet:
     file: str = ''
     name: str = ''
     otos: List[Oto] = field(default_factory=list)
+
+    def __str__(self):
+        return self.name
+
+
+@dataclass
+class Voicebank:
+    """对应 Classic/VoiceBank.cs 的 `Voicebank`（`character.txt` + `character.yaml`
+    + oto 摊平之后的声库信息；具体加载见 `Classic/VoicebankLoader.cs`）。
+
+    注意几个默认值：`portrait_opacity` 在这里是 **0**（C# 的字段默认值），
+    与 `character.yaml` 里的 `PortraitOpacity = 0.67f` **不是**同一个默认 ——
+    只有配置文件写了 portrait 时才会被覆盖成 0.67。
+    `singer_type` 默认 `USingerType.Classic`。
+    """
+
+    base_path: Optional[str] = None
+    file: Optional[str] = None
+    name: Optional[str] = None
+    localized_names: Dict[str, str] = field(default_factory=dict)
+    search_terms: List[str] = field(default_factory=list)
+    image: Optional[str] = None
+    portrait: Optional[str] = None
+    portrait_opacity: float = 0.0
+    portrait_height: int = 0
+    author: Optional[str] = None
+    voice: Optional[str] = None
+    web: Optional[str] = None
+    version: Optional[str] = None
+    sample: Optional[str] = None
+    other_info: Optional[str] = None
+    default_phonemizer: Optional[str] = None
+    #: C# 是 `Encoding`；Python 侧存**编码名**（如 `'cp932'`），载体差异。
+    text_file_encoding: Optional[str] = None
+    singer_type: int = USingerType.CLASSIC
+    oto_sets: List['OtoSet'] = field(default_factory=list)
+    subbanks: List[Subbank] = field(default_factory=list)
+    id: Optional[str] = None
+    #: 三态 `bool?`：`None` = 未声明。
+    use_filename_as_alias: Optional[bool] = None
+
+    def reload(self) -> None:
+        """对应 C# 的 `Reload()`：清空后重新加载。
+
+        照搬的怪癖：**不清 `default_phonemizer`**（C# 同样没清），
+        且 `base_path` / `file` 保留（`LoadVoicebank` 还要靠它们重新定位）。
+        改成"清干净"属于行为变更，应单独立项。
+        """
+        self.name = None
+        self.localized_names.clear()
+        self.search_terms.clear()
+        self.image = None
+        self.portrait = None
+        self.portrait_opacity = 0
+        self.portrait_height = 0
+        self.author = None
+        self.voice = None
+        self.web = None
+        self.version = None
+        self.sample = None
+        self.other_info = None
+        self.text_file_encoding = None
+        self.singer_type = USingerType.CLASSIC
+        self.oto_sets.clear()
+        self.subbanks.clear()
+        self.id = None
+        self.use_filename_as_alias = None
+        # 延迟导入：本模块在 `classic/` 之外，顶层导入会构成循环（见模块 docstring）。
+        from .classic.voicebank_loader import VoicebankLoader
+
+        VoicebankLoader.load_voicebank(self)
+
+    def __str__(self):
+        """对应 C# 的 `Voicebank.ToString() => Name`。
+
+        C# 允许返回 null，Python 的 `__str__` 必须返回 str，所以这里兜了个空串。
+        """
+        return self.name or ''
 
 
 # ---------------------------------------------------------------- UOto 一族（Ustx/USinger.cs）

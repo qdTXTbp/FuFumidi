@@ -147,20 +147,32 @@ def after_load(project: UProject) -> None:
 
 # ---------------------------------------------------------------- 对外接口
 
+def dump_yaml(obj) -> str:
+    """通用 YAML 序列化（OmitNull / DisableAliases / 不折行）。
+
+    与 `Yaml.DefaultSerializer` 同一套设置。`UProject` 之外的模型
+    （如 `Classic/VoicebankConfig`）也走 OpenUTAU 的全局 Yaml 配置，所以抽出来共用。
+    """
+    return yaml.dump(to_plain(obj), Dumper=_NoAliasDumper,
+                     allow_unicode=True, sort_keys=False,
+                     default_flow_style=False, width=10 ** 6)
+
+
+def load_yaml(cls, text: str):
+    """通用 YAML 反序列化：**未知键忽略**（对应 `IgnoreUnmatchedProperties`）。"""
+    return from_plain(cls, yaml.safe_load(text) or {})
+
+
 def dumps(project: UProject) -> str:
     before_save(project)
     try:
-        text = yaml.dump(to_plain(project), Dumper=_NoAliasDumper,
-                         allow_unicode=True, sort_keys=False,
-                         default_flow_style=False, width=10 ** 6)
+        return dump_yaml(project)
     finally:
         after_save(project)
-    return text
 
 
 def loads(text: str) -> UProject:
-    data = yaml.safe_load(text) or {}
-    project = from_plain(UProject, data)
+    project = load_yaml(UProject, text)
     after_load(project)
     return project
 

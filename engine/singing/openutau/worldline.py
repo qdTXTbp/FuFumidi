@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Worldline —— **照搬** `OpenUtau.Core/Render/Worldline.cs` 里**不含原生调用**的部分。
+"""Worldline —— **照搬** `OpenUtau.Core/Render/Worldline.cs`（780 行）。
 
 ## 先看清楚：Worldline 不是纯 C#
-`Worldline.cs`(780 行) 里约 380 行是 `[DllImport("worldline")]` —— 真正的 DSP 在
+`Worldline.cs` 里约 380 行是 `[DllImport("worldline")]` —— 真正的 DSP 在
 `cpp/worldline/`（1534 行 C++，Bazel 构建，vendor 了 WORLD / libpyin / spline），
 预编译二进制随仓库分发（`runtimes/*/native/worldline.{dll,so,dylib}`）。
-所以这里只搬**能脱离原生库成立**的那部分，原生边界单独放在 `WorldlineNative`：
+所以这里把**能脱离原生库成立的纯逻辑**放在模块级，原生调用收进 `WorldlineNative`
+一个类里；`resample()` 则是把两者串起来的那条主路径。
 
-| 本模块包含（纯逻辑） | 对应 C# |
+| 本模块 | 对应 C# |
 |---|---|
 | `AnalysisConfig` / `init_analysis_config` | `InitAnalysisConfig` 的**结构**与字段计算 |
 | `get_samples_for_dio` / `world_synthesis_sample_count` | 两个 Count 导出函数的公式 |
@@ -20,7 +21,14 @@
 | `segment_auto_gain` | `SynthSegment.GetAutoGain`（用 `config.f0_floor`，阈值不同） |
 | `blend_features` | `PhraseSynthV2.SynthFeatures` 的交叠混合 |
 | `blend_continuous_noise_features` | `PhraseSynthV2.SynthContinuousNoise` 的交叠混合 |
-| `WorldlineNative` | 那 10 个导出的 ctypes 绑定 |
+| `SynthSegment` | 私有嵌套类 `SynthSegment`（含 `.frq` 接入与裁段） |
+| `resample` | `Worldline.Resample(ResamplerItem)` —— **经典线的变调入口** |
+| `WorldlineNative` | ctypes 绑定（已绑 6 个导出，见该类的 docstring） |
+
+**未照搬**：`PhraseSynthV2` 整个类（含 `AnalyzeRequests` 的并行分析、
+`Synth` / `SynthContinuousNoise`）—— 它只被 `WorldlineRenderer` 用，等 P1-d 一起搬；
+届时还要补 `DecodeMgc` / `DecodeBap` / `HnAnalysisF0In` / `WorldSynthesisContinuousNoise`
+四个绑定与 `Core/Analysis/Hnsep`（R1.1）。
 
 ## 照搬时保留的语义（别"整理"掉）
 1. **`Resample` 与 `SynthSegment.GetAutoGain` 是两个不同的 auto gain**，别合并：
@@ -42,6 +50,22 @@
    `ap` 是"`dirty==0` 时直接取自身值，否则按 `1-weight`/`weight` 混合"（初值 1.0）。
 7. 混合结束后**把最后一帧复制成前一帧**（"the wavtool fades the phrase out"）。
 8. `f0Curve` 覆盖只在 `f0 > f0_floor`（有声）的帧上生效。
+9. **`SynthSegment` 的两条构造路径增益位置相反**：resampler 那条（`forResampler: true`）
+   不做输入增益、增益在 `Resample` 的输出端做，且 cutoff 超过文件长度是**错误**；
+   乐句合成那条（`forResampler: false`）在**输入端**乘增益，并额外算
+   `skipFrames / p0 / p1 / p3 / p4`。C# 用构造器链实现，这里用 `for_resampler` 参数
+   —— 但语义等价，且 `p0..p4` 只有乐句那条才会被设置。
+10. `.frq` 接入时的**帧对齐**：`ratio = config.hop_size / frq.hopSize`，
+    分析帧 i 覆盖 `[floor(i*ratio), ceil((i+1)*ratio)]` 这段 `.frq` 帧，
+    只把其中 `> f0_floor` 的取平均；一个有声帧都没有就写 0。
+    这也是 `F0(..., method: -1)` 的意义 —— 有 `.frq` 时只问帧数，不真做 F0 提取。
+11. `srcEndMs` 的两支不对称（与 `Frq.Cs` 的 cutoff 换算同源）：
+    `cutoff < 0` 时是 `-cutoff + offset`，否则是 `wavMs - cutoff`。
+12. **`F0FrameCount` 是上界，不是"帧数"**：缓冲按它分配，但 `F0` 返回的是估计器
+    实际产出的帧数（可能更少 —— 实测 pyin 对 1 秒 44.1kHz 是 99 帧、容量 101）。
+    所以 `f0()` 必须按返回值**裁长度**。`method == -1`（"只要帧数"）则是把整块
+    缓冲填 0 并返回**容量** —— `.frq` 那条路径正是靠这个：先拿一整套 0，
+    再用 `.frq` 的值把每一帧覆盖掉。
 
 ## 与 C# 的载体差异
 - C# 用 **NumSharp**（`NDArray`）表示 f0/sp/ap 矩阵；这里一律用**扁平 list**
@@ -58,6 +82,7 @@ from dataclasses import dataclass
 from typing import Any, List, Optional, Sequence
 
 from .music_math import MusicMath
+from .wave import Wave
 
 # ---------------------------------------------------------------- 常量
 
@@ -481,14 +506,39 @@ def blend_continuous_noise_features(segments: Sequence[Any], sp_size: int,
 # ---------------------------------------------------------------- 原生边界
 
 
+class _NativeAnalysisConfig(ctypes.Structure):
+    """对应 `cpp/worldline/worldline.h` 的 `struct AnalysisConfig`（字段顺序即内存布局）。"""
+
+    _fields_ = [('fs', ctypes.c_int),
+                ('hop_size', ctypes.c_int),
+                ('fft_size', ctypes.c_int),
+                ('f0_floor', ctypes.c_float),
+                ('frame_ms', ctypes.c_double)]
+
+
+def _f32_buffer(values: Sequence[float]):
+    return (ctypes.c_float * len(values))(*values)
+
+
+def _f64_buffer(values: Sequence[float]):
+    return (ctypes.c_double * len(values))(*values)
+
+
 class WorldlineNative:
-    """`worldline` 原生库的 ctypes 绑定（对应 `Worldline.cs` 里那 10 个 `DllImport`）。
+    """`worldline` 原生库的 ctypes 绑定（对应 `Worldline.cs` 里的 `[DllImport]`）。
 
     ★ 这是**可选**的：找不到库时 `available` 为 False，纯逻辑部分照常工作，
     只有真正要分析/合成时才会抛错。库名与查找顺序照搬 C# 的 `DllImport("worldline")`
     在各平台上的解析结果（`worldline.dll` / `libworldline.so` / `libworldline.dylib`）。
 
     `library_path` 可显式指定（便于把随包分发的 `worldline.dll` 指过来）。
+
+    **已绑定**（`Resample` 这条链路要用的）：`F0FrameCount` / `F0` /
+    `InitAnalysisConfig` / `WorldAnalysisF0In` / `WorldSynthesisSampleCount` /
+    `WorldSynthesis`。
+    **未绑定**（调用方还没搬进来）：`DecodeMgc` / `DecodeBap` / `HnAnalysisF0In` /
+    `WorldSynthesisContinuousNoise` —— 它们分别服务 R1.1 的 `Hnsep` 分析与
+    `PhraseSynthV2.SynthContinuousNoise`，等 `PhraseSynthV2` 落地时一起补。
     """
 
     _LIB_NAMES = ('worldline.dll', 'libworldline.so', 'libworldline.dylib', 'worldline')
@@ -510,12 +560,38 @@ class WorldlineNative:
         lib.F0.restype = ctypes.c_int
         lib.F0.argtypes = [ctypes.POINTER(ctypes.c_float), ctypes.c_int, ctypes.c_int,
                            ctypes.c_double, ctypes.c_int, ctypes.POINTER(ctypes.c_double)]
+        lib.InitAnalysisConfig.restype = None
+        lib.InitAnalysisConfig.argtypes = [ctypes.POINTER(_NativeAnalysisConfig),
+                                          ctypes.c_int, ctypes.c_int, ctypes.c_int]
+        lib.WorldAnalysisF0In.restype = None
+        lib.WorldAnalysisF0In.argtypes = [ctypes.POINTER(_NativeAnalysisConfig),
+                                          ctypes.POINTER(ctypes.c_float), ctypes.c_int,
+                                          ctypes.POINTER(ctypes.c_double), ctypes.c_int,
+                                          ctypes.POINTER(ctypes.c_double),
+                                          ctypes.POINTER(ctypes.c_double)]
         lib.WorldSynthesisSampleCount.restype = ctypes.c_int
         lib.WorldSynthesisSampleCount.argtypes = [ctypes.c_int, ctypes.c_double, ctypes.c_int]
+        # 扁平数组那一版重载（C# 里 `double[] mgcOrSp` 那个）
+        lib.WorldSynthesis.restype = ctypes.c_int
+        lib.WorldSynthesis.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_int,
+                                       ctypes.POINTER(ctypes.c_double), ctypes.c_bool,
+                                       ctypes.c_int,
+                                       ctypes.POINTER(ctypes.c_double), ctypes.c_bool,
+                                       ctypes.c_int,
+                                       ctypes.c_double, ctypes.c_int,
+                                       ctypes.POINTER(ctypes.c_double),
+                                       ctypes.POINTER(ctypes.c_double),
+                                       ctypes.POINTER(ctypes.c_double),
+                                       ctypes.POINTER(ctypes.c_double),
+                                       ctypes.POINTER(ctypes.c_double)]
 
     @property
     def available(self) -> bool:
         return self._lib is not None
+
+    def _require(self) -> None:
+        if not self.available:
+            raise SynthRequestError('worldline 原生库不可用：%s' % (self.error or '未加载'))
 
     def init_analysis_config(self, fs: int, hop_size: int, fft_size: int) -> AnalysisConfig:
         """问原生库要 `AnalysisConfig`（唯一权威来源）。
@@ -523,23 +599,69 @@ class WorldlineNative:
         原生侧的 `InitAnalysisConfig(AnalysisConfig*, fs, hop_size, fft_size)` 只写结构体，
         不分配任何内存，所以这里用一块 ctypes 结构体直接取回。
         """
-
-        class _NativeConfig(ctypes.Structure):
-            _fields_ = [('fs', ctypes.c_int),
-                        ('hop_size', ctypes.c_int),
-                        ('fft_size', ctypes.c_int),
-                        ('f0_floor', ctypes.c_float),
-                        ('frame_ms', ctypes.c_double)]
-
-        if not self.available:
-            raise SynthRequestError('worldline 原生库不可用：%s' % (self.error or '未加载'))
-        func = self._lib.InitAnalysisConfig
-        func.restype = None
-        func.argtypes = [ctypes.POINTER(_NativeConfig), ctypes.c_int, ctypes.c_int, ctypes.c_int]
-        cfg = _NativeConfig()
-        func(ctypes.byref(cfg), fs, hop_size, fft_size)
+        self._require()
+        cfg = _NativeAnalysisConfig()
+        self._lib.InitAnalysisConfig(ctypes.byref(cfg), fs, hop_size, fft_size)
         return AnalysisConfig(fs=cfg.fs, hop_size=cfg.hop_size, fft_size=cfg.fft_size,
                               f0_floor=cfg.f0_floor, frame_ms=cfg.frame_ms)
+
+    def f0_frame_count(self, length: int, fs: int, frame_period: float, method: int) -> int:
+        """对应原生 `F0FrameCount`（`F0` 的输出缓冲上界）。"""
+        self._require()
+        return self._lib.F0FrameCount(length, fs, frame_period, method)
+
+    def f0(self, samples: Sequence[float], fs: int, frame_period: float,
+           method: int) -> List[float]:
+        """对应 `Worldline.F0(samples, fs, framePeriod, method)`。
+
+        ★ 与 C# 的差异：原包装 `catch` 住异常后**返回 null**（调用方随即 NRE），
+        这里让 `SynthRequestError` 直接冒出来 —— 失败语义相同，但错误信息可读。
+        """
+        self._require()
+        count = self._lib.F0FrameCount(len(samples), fs, frame_period, method)
+        buffer = (ctypes.c_double * count)()
+        size = self._lib.F0(_f32_buffer(samples), len(samples), fs, frame_period,
+                            method, buffer)
+        if size == count:
+            return list(buffer)
+        return list(buffer[:size])
+
+    def world_analysis_f0_in(self, config: AnalysisConfig, samples: Sequence[float],
+                             f0_in: Sequence[float]):
+        """对应 `Worldline.WorldAnalysisF0In` → 返回 `(sp_env, ap)`，都按**扁平**排布。
+
+        每帧 `fft_size // 2 + 1` 个 double；第 i 帧第 k 个频点 = `i * sp_size + k`。
+        """
+        self._require()
+        num_frames = len(f0_in)
+        sp_size = config.fft_size // 2 + 1
+        sp_env = (ctypes.c_double * (num_frames * sp_size))()
+        ap = (ctypes.c_double * (num_frames * sp_size))()
+        cfg = _NativeAnalysisConfig(fs=config.fs, hop_size=config.hop_size,
+                                    fft_size=config.fft_size,
+                                    f0_floor=config.f0_floor, frame_ms=config.frame_ms)
+        self._lib.WorldAnalysisF0In(ctypes.byref(cfg), _f32_buffer(samples),
+                                    len(samples), _f64_buffer(f0_in), num_frames,
+                                    sp_env, ap)
+        return list(sp_env), list(ap)
+
+    def world_synthesis(self, f0: Sequence[float], mgc_or_sp: Sequence[float],
+                        is_mgc: bool, mgc_size: int,
+                        bap_or_ap: Sequence[float], is_bap: bool, fft_size: int,
+                        frame_period: float, fs: int,
+                        gender: Sequence[float], tension: Sequence[float],
+                        breathiness: Sequence[float], voicing: Sequence[float]) -> List[float]:
+        """对应扁平数组那一版 `Worldline.WorldSynthesis`（`isMgc` / `isBap` 都是 false）。"""
+        self._require()
+        count = self._lib.WorldSynthesisSampleCount(len(f0), frame_period, fs)
+        y = (ctypes.c_double * count)()
+        self._lib.WorldSynthesis(_f64_buffer(f0), len(f0),
+                                 _f64_buffer(mgc_or_sp), bool(is_mgc), mgc_size,
+                                 _f64_buffer(bap_or_ap), bool(is_bap), fft_size,
+                                 frame_period, fs, y,
+                                 _f64_buffer(gender), _f64_buffer(tension),
+                                 _f64_buffer(breathiness), _f64_buffer(voicing))
+        return list(y)
 
 
 #: 默认实例（惰性创建；找不到库时 available 为 False，不影响纯逻辑）
@@ -552,3 +674,188 @@ def get_native(library_path: Optional[str] = None) -> WorldlineNative:
     if default_native is None or (library_path and not default_native.available):
         default_native = WorldlineNative(library_path)
     return default_native
+
+
+# ---------------------------------------------------------------- SynthSegment / Resample
+
+
+class SynthSegment:
+    """对应 `Worldline.cs` 的私有嵌套类 `SynthSegment`。
+
+    它把"一个音素的原音 wav → 一帧一帧的 f0/sp/ap"这段做完：读 wav（有 `.frq`
+    就直接用它，省掉一次 F0 提取）→ 按 oto 的 offset/cutoff 裁段 → 分析 →
+    按 `tDst` 把特征重采样到目标时长。
+
+    ★ C# 有两个公开构造函数，**相反的两条路**（别混）：
+    - `SynthSegment(cfg, item)`（`forResampler: true`）：resampler 用。
+      **不做输入增益**（因为增益在 `Resample` 的输出端做），cutoff 超过文件长度是**错误**。
+    - `SynthSegment(cfg, item, posMs, skipMs, lengthMs, fadeInMs, fadeOutMs, hnsep)`
+      （`forResampler: false`）：乐句合成（`PhraseSynthV2`）用。**做输入增益**，
+      并且额外算 `skipFrames / p0 / p1 / p3 / p4` 这几个帧边界。
+
+    `hnsep`（Worldline-R1.1 的谐波/噪声分离，`Core/Analysis/Hnsep`）尚未照搬，
+    传入非 None 会抛 `NotImplementedError` —— `Resample` 这条路径恒为 None。
+    """
+
+    def __init__(self, config: AnalysisConfig, item, pos_ms: float = 0.0,
+                 skip_ms: float = 0.0, length_ms: float = 0.0,
+                 fade_in_ms: float = 0.0, fade_out_ms: float = 0.0,
+                 for_resampler: bool = True, hnsep=None, native=None):
+        self.config = config
+        self.f0: List[float] = []
+        self.sp_env: List[float] = []
+        self.ap: List[float] = []
+        self.sp_env_harmonic: Optional[List[float]] = None
+        self.stretch: List[float] = []
+        self.wav_max = 0.0
+        #: oto offset 的**亚帧**部分；f0/sp/ap 的第 0 帧正好落在 offset 上
+        self.offset_frac_ms = 0.0
+        self.skip_frames = 0
+        self.p0 = 0
+        self.p1 = 0
+        self.p3 = 0
+        self.p4 = 0
+
+        native = native if native is not None else get_native()
+        fs = RESAMPLER_FS
+        samples = Wave.get_samples(item.input_file)
+        if len(samples) == 0:
+            raise Exception('Empty samples in %s.' % item.input_file)
+
+        # 延迟导入：`classic/__init__.py` 会 import 本模块（经 WorldlineResampler），
+        # 顶层反向 import 会在"先导入 classic 再导入本模块"时成环。
+        from .classic.frq import Frq
+
+        frq = Frq()
+        has_frq = frq.load(item.input_file)
+        f0_src = native.f0(samples, fs, config.frame_ms, -1 if has_frq else 2)
+        if has_frq:
+            # 把 .frq 的帧（hopSize 一般是 256）搬到分析帧（hop_size = 441）上：
+            # 每个分析帧取它覆盖到的那些 .frq 帧里**有声**帧的平均
+            frq_f0 = frq.f0
+            for i in range(len(f0_src)):
+                ratio = config.hop_size / frq.hop_size
+                index0 = min(len(frq_f0) - 1, int(math.floor(i * ratio)))
+                index1 = min(len(frq_f0) - 1, int(math.ceil((i + 1) * ratio)))
+                sum_f0 = 0.0
+                count = 0
+                for j in range(index0, index1 + 1):
+                    if frq_f0[j] > config.f0_floor:
+                        sum_f0 += frq_f0[j]
+                        count += 1
+                f0_src[i] = (sum_f0 / count) if count > 0 else 0.0
+
+        src_start_frame = int(item.offset / config.frame_ms)     # C# 是 `(int)` 截断
+        src_start_frame = max(0, src_start_frame)
+        self.offset_frac_ms = max(0.0, item.offset - src_start_frame * config.frame_ms)
+        wav_ms = len(samples) / fs * 1000.0
+        src_end_ms = ((-item.cutoff + item.offset) if item.cutoff < 0
+                      else (wav_ms - item.cutoff))
+        if for_resampler and src_end_ms > wav_ms + 0.1:
+            raise CutOffExceedDurationError()
+        src_end_frame = int(math.ceil(src_end_ms / config.frame_ms))
+        src_end_frame = min(len(f0_src), src_end_frame)
+        if src_end_frame <= src_start_frame:
+            raise CutOffBeforeOffsetError()
+
+        self.wav_max = max((abs(s) for s in samples), default=0.0)
+
+        # 前后各留 2 帧再分析，合成时多余的边缘帧会被丢掉（让合成"稳下来"）
+        trim_start_frame = max(0, src_start_frame - 2)
+        trim_end_frame = min(len(f0_src), src_end_frame + 2)
+        src_start_frame -= trim_start_frame
+        src_end_frame -= trim_start_frame
+        f0_src = f0_src[trim_start_frame:trim_end_frame]
+        trim_start_sample = trim_start_frame * config.hop_size
+        trim_end_sample = min(len(samples), trim_end_frame * config.hop_size)
+        untrimmed = samples
+        samples = [0.0] * ((trim_end_frame - trim_start_frame) * config.hop_size)
+        n_copy = trim_end_sample - trim_start_sample
+        if n_copy < 0:
+            raise ValueError('Array.Copy 长度为负：%d' % n_copy)
+        samples[0:n_copy] = untrimmed[trim_start_sample:trim_start_sample + n_copy]
+
+        if hnsep is not None:
+            raise NotImplementedError(
+                'hnsep（Worldline-R1.1 的谐波/噪声分离）尚未照搬；'
+                'Resample 这条路径的 hnsep 恒为 None。')
+
+        if not for_resampler:
+            # 乐句合成那条路：增益在**输入端**做（resampler 那条在输出端做）
+            gain = item.volume * 0.01 * segment_auto_gain(
+                samples, f0_src, self.wav_max, config.f0_floor, get_flag(item, 'P', 86))
+            for i in range(len(samples)):
+                samples[i] = samples[i] * gain
+
+        sp_size = config.fft_size // 2 + 1
+        sp_env_src, ap_src = native.world_analysis_f0_in(config, samples, f0_src)
+
+        t_dst, self.stretch = compute_timemap(
+            src_start_frame, src_end_frame, self.offset_frac_ms, item.dur_required,
+            item.velocity, item.consonant, config.frame_ms)
+        f0_dst, sp_dst, ap_dst = resample_features(t_dst, f0_src, sp_env_src, ap_src, sp_size)
+        self.f0 = f0_dst
+        self.sp_env = sp_dst
+        self.ap = ap_dst
+
+        if not for_resampler:
+            self.skip_frames, self.p0, self.p1, self.p3, self.p4 = compute_frame_bounds(
+                config.frame_ms, pos_ms, skip_ms, length_ms, fade_in_ms, fade_out_ms)
+
+
+def resample(item, native=None) -> List[float]:
+    """对应 `Worldline.Resample(ResamplerItem)`：把一个音素渲染成**恰好 `durRequired` ms**。
+
+    包络与重叠留给 wavtool —— 这里只负责"变调 + 拉伸 + 自动增益"。
+    """
+    native = native if native is not None else get_native()
+    config = native.init_analysis_config(RESAMPLER_FS, RESAMPLER_HOP_SIZE, RESAMPLER_FFT_SIZE)
+    segment = SynthSegment(config, item, native=native)
+    sp_size = config.fft_size // 2 + 1
+    frame_ms = config.frame_ms
+    fs = config.fs
+
+    # 两端各补 ResamplerPadding 帧（边缘帧复制），让合成在"要保留的音频"之前稳下来
+    length = len(segment.f0)
+    total = length + 2 * RESAMPLER_PADDING
+    f0 = [0.0] * total
+    sp = [0.0] * (total * sp_size)
+    ap = [0.0] * (total * sp_size)
+    for i in range(total):
+        src = max(0, min(i - RESAMPLER_PADDING, length - 1))
+        f0[i] = segment.f0[src]
+        so = src * sp_size
+        o = i * sp_size
+        sp[o:o + sp_size] = segment.sp_env[so:so + sp_size]
+        ap[o:o + sp_size] = segment.ap[so:so + sp_size]
+
+    # 输出从"补边 + offset 的亚帧部分"之后开始（与原生 resampler 对齐）
+    start_ms = RESAMPLER_PADDING * frame_ms + segment.offset_frac_ms
+
+    # 音高弯曲线：从输出起点算起，每 5 tick 一个音分值
+    step_ms = 60000.0 / item.tempo / 480.0 * 5
+    apply_pitch_bend(f0, item.pitches, item.tone, start_ms, step_ms, frame_ms,
+                     config.f0_floor)
+
+    flag_g = get_flag(item, 'g', 0)
+    flag_mt = get_flag(item, 'Mt', 0)
+    flag_mb = get_flag(item, 'Mb', 0)
+    flag_mv = get_flag(item, 'Mv', 100)
+    samples = native.world_synthesis(
+        f0, sp, False, sp_size, ap, False, config.fft_size, frame_ms, fs,
+        [0.5 + flag_g / 200.0] * total,
+        [0.5 + flag_mt / 200.0] * total,
+        [0.5 + flag_mb * 0.005] * total,
+        [flag_mv * 0.01] * total)
+
+    start_sample = min(len(samples), int(start_ms * fs / 1000))
+    length_samples = min(len(samples) - start_sample, int(item.dur_required * fs / 1000))
+    output = list(samples[start_sample:start_sample + length_samples])
+
+    # 自动增益：与源文件整体（不是本段）做加权，避免把辅音过度放大
+    gain_factor = resample_auto_gain(output, segment.wav_max, f0, item.phone.direct,
+                                     item.volume, get_flag(item, 'P', 86))
+    if gain_factor != 1:
+        for i in range(len(output)):
+            output[i] = output[i] * gain_factor
+    return output

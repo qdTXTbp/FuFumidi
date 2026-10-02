@@ -171,10 +171,22 @@ class UPhonemeOverride:
 
 @dataclass
 class Vector2:
-    """对应 System.Numerics.Vector2 的用法（包络点用 (x, y)，单位 ms）。"""
+    """对应 System.Numerics.Vector2 的用法（包络点用 (x, y)，单位 ms）。
+
+    两个运算符是按 C# 的用法补的（`SharpWavtool` 里 `(envelope[0] + envelope[1]) * 0.5`
+    就是 `System.Numerics` 的向量加与**标量**乘），不做组件对组件的乘。
+    """
 
     x: float = 0
     y: float = 0
+
+    def __add__(self, other: 'Vector2') -> 'Vector2':
+        return Vector2(self.x + other.x, self.y + other.y)
+
+    def __mul__(self, scalar: float) -> 'Vector2':
+        return Vector2(self.x * scalar, self.y * scalar)
+
+    __rmul__ = __mul__
 
 
 @dataclass
@@ -311,11 +323,17 @@ class UNote:
 
 @dataclass
 class UCurve:
-    """对应 UCurve.cs 的 UCurve（x 为 tick，y 为取值）。"""
+    """对应 UCurve.cs 的 UCurve（x 为 tick，y 为取值）。
+
+    `descriptor` 是 C# 里 `[YamlIgnore] public UExpressionDescriptor descriptor;`
+    —— 不写盘，但渲染侧要读它（`CurveSource` 从它取 `min` 与 `defaultValue`，
+    `Sample` 的回落值也是 `descriptor.defaultValue`）。
+    """
 
     xs: List[int] = field(default_factory=list)
     ys: List[int] = field(default_factory=list)
     abbr: str = ''
+    descriptor: Any = field(default=None, metadata=NO_YAML)
 
 
 @dataclass
@@ -334,6 +352,17 @@ class UMaskedCurve:
     runs: List[UMaskedRun] = field(default_factory=list)
 
 
+def _new_part_id():
+    """`Pipeline.PartId.New()` —— 延迟导入。
+
+    `PartId` 属于 `openutau.pipeline_identities`；在顶层 import 它会触发
+    `singing.openutau` 的 `__init__`（那里又 import 了 ustx），与 `build_time_axis`
+    同一个理由，只能延迟到实例化时再取。
+    """
+    from ..openutau.pipeline_identities import PartId
+    return PartId.new()
+
+
 @dataclass
 class UPart:
     """对应 UPart.cs 的 UPart（基类）。"""
@@ -342,6 +371,13 @@ class UPart:
     comment: str = ''
     track_no: int = 0
     position: int = 0
+    #: `[YamlIgnore] public Pipeline.PartId Id { get; internal set; } = PartId.New();`
+    #: —— 能扛住克隆/剪切粘贴/重新载入的稳定身份，不写盘。
+    id: Any = field(default=None, metadata=NO_YAML)
+
+    def __post_init__(self):
+        if self.id is None:
+            self.id = _new_part_id()
 
 
 @dataclass
@@ -356,6 +392,41 @@ class UVoicePart(UPart):
     phonemes: List[Any] = field(default_factory=list, metadata=NO_YAML)
     phonemes_revision: int = field(default=0, metadata=NO_YAML)
     render_phrases: List[Any] = field(default_factory=list, metadata=NO_YAML)
+    #: 乐句快照的代际：每次取快照 +1，用来丢弃迟到的旧结果
+    phrase_generation: int = field(default=0, metadata=NO_YAML)
+    phrase_applied_generation: int = field(default=0, metadata=NO_YAML)
+    #: `Pipeline.PhraseBuildGate`（在 `__post_init__` 里延迟创建）
+    phrase_gate: Any = field(default=None, metadata=NO_YAML)
+    #: C# 的 `lock (this)` —— 构建线程与主线程都会碰 render_phrases
+    _phrase_lock: Any = field(default=None, metadata=NO_YAML, compare=False, repr=False)
+
+    def __post_init__(self):
+        super().__post_init__()
+        import threading
+
+        from ..openutau.pipeline_builder import PhraseBuildGate
+        self.phrase_gate = PhraseBuildGate()
+        self._phrase_lock = threading.Lock()
+
+    def apply_phrase_source_result(self, source, phrases) -> None:
+        """对应 UPart.cs 的 `ApplyPhraseSourceResult(PhraseSource, RenderPhrase[])`。
+
+        ★ **代际比较是唯一的防串写手段**：后台可能还在跑更旧的快照，迟到的结果
+        必须被丢掉（`applied = source.Generation > phraseAppliedGeneration`），
+        否则"改了音符又改回来"会偶尔渲染出中间态。
+
+        C# 末尾还有一句 `if (DocManager.Inst.MainScheduler != null)
+        RenderView.Inst.InvalidateAll();` —— 那是编辑器重绘通知（M3，`RenderView`
+        未照搬），不属于管线这一层。
+        """
+        with self._phrase_lock:
+            applied = source.generation > self.phrase_applied_generation
+            if applied:
+                self.phrase_applied_generation = source.generation
+                self.render_phrases = list(phrases)
+        if not applied:
+            return
+        self.phrase_gate.mark_completed(source.generation)
 
 
 @dataclass
@@ -413,6 +484,9 @@ class UTrack:
     singer_obj: Any = field(default=None, metadata=NO_YAML)
     voice_color_exp: Any = field(default=None, metadata=NO_YAML)
     voice_color2_exp: Any = field(default=None, metadata=NO_YAML)
+    #: `[YamlIgnore] public int TrackNo { set; get; }` —— Validate 时由 project.tracks 的
+    #: 下标填进来（`TrackNo = project.tracks.IndexOf(this)`），不写盘。
+    track_no: int = field(default=0, metadata=NO_YAML)
 
     def try_get_exp_descriptor(self, project, abbr):
         """照搬 UTrack.cs 的 `TryGetExpDescriptor`：轨道级 → 工程级依次查找。

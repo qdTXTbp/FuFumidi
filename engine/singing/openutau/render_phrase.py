@@ -463,6 +463,13 @@ class RenderPhrase:
 
         `post_effect=False` 得到 `preEffectHash` —— 只覆盖"音素参数"，不含音高/曲线，
         用于判断"能否只改效果而不用重新合成"。
+
+        ⚠ **上游既有怪癖（照搬，不"顺手修好"）**：这里写的是
+        `timeAxis.Timestamp`，而 `RenderPhrase` 用的 `source.Axis` 是
+        `project.timeAxis.Clone()`；C# 的 `TimeAxis.Clone()` 走 `new TimeAxis()`，
+        `Timestamp` 没被复制 → 恒为 0。所以这一项**实际上对哈希没有贡献**
+        （"改速度导致缓存失效"这件事由 pitches/dynamics 的数值间接覆盖）。
+        我们的 `TimeAxis.clone()` 同样不复制 timestamp，行为一致。
         """
         w = BinaryWriter()
         w.write_str(self.singer.id)
@@ -526,6 +533,19 @@ class RenderPhrase:
         variant.phones = [p.with_oto(p.oto2) if p.oto2 is not None else p for p in src.phones]
         variant.hash = src.hash ^ RenderPhone.OTO2_HASH_MASK
         return variant
+
+    @staticmethod
+    def from_part(project, track, part) -> List['RenderPhrase']:
+        """对应 `RenderPhrase.FromPart(project, track, part)`：同步取快照 + 构建。
+
+        给脚本与测试用的**一站式入口**（代际传 0：这是一次性构建，不参与
+        "迟到结果"的判定）。part 没有可用音素时返回**空列表**（C# 的
+        `new List<RenderPhrase>()`），不是 None。
+        """
+        source = PhraseSource.from_part(project, track, part, 0)
+        if source is None:
+            return []
+        return source.build_phrases()
 
     def __repr__(self):
         return 'RenderPhrase(pos=%d, dur=%d, phones=%d, notes=%d)' % (

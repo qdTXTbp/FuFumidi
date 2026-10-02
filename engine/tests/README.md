@@ -44,12 +44,14 @@ python -m pytest tests/ -q --cov=. --cov-report=term-missing
 
 ## 被 skip 的测试与原因
 
-当前**没有任何用例被 skip**（`pytest -q` 结果里的 `s` = 0）。
+没有用例被硬编码 skip。“条件性”跳过（依赖未安装时自动 `importorskip`，不算失败）：
 
-唯一的“条件性”用例是 `tests/test_midi_post.py::test_real_pretty_midi_objects`，
-它在 `pretty_midi` 未安装时通过 `pytest.importorskip("pretty_midi")` 自动跳过——
-因为真实 MIDI 对象需要 pretty_midi。其余 midi_post 用例用轻量假对象模拟
-pretty_midi 的 `Note / Instrument / PrettyMIDI` 接口，不依赖 pretty_midi。
+- `tests/test_midi_post.py::test_real_pretty_midi_objects` —— `pretty_midi` 未安装时
+  通过 `pytest.importorskip("pretty_midi")` 自动跳过，因为真实 MIDI 对象需要
+  pretty_midi。其余 midi_post 用例用轻量假对象模拟
+  pretty_midi 的 `Note / Instrument / PrettyMIDI` 接口，不依赖 pretty_midi。
+- `tests/test_diffsinger_smoke.py`（整模块） —— `onnx` 未安装时通过
+  `pytest.importorskip("onnx")` 整体跳过，因为冒烟测试要构造真实 ONNX 模型。
 
 如果将来新增用例不得不触碰重型库，规范是：
 
@@ -83,3 +85,8 @@ pretty_midi 的 `Note / Instrument / PrettyMIDI` 接口，不依赖 pretty_midi�
 | `test_midi_post.py` | `merge_overlap`、`remove_micro_notes`、`normalize_velocity`、`apply_post`、`count_notes`（含真实 pretty_midi 集成） |
 | `test_audio_io.py` | `AUDIO_EXTENSIONS`/`MIDI_EXTENSIONS` 内容、扩展名判定（大小写）、`remove_temp` 幂等、`find_ffmpeg` 返回类型 |
 | `test_utau_engine.py` | `engine_utau.py`（歌声合成）：oto.ini 解析、`note_to_hz`、单音节渲染、多音节拼接（preutterance 对齐 + 等功率 overlap 交叉淡化）、velocity/颤音/包络、静音切分 `split_syllables`、CV 自动标注 `auto_oto_params`、segment/auto-oto/aliases/flags CLI；**v0.2.0 专业化**：`parse_flags`（连写/夹紧/未知项）、TD-PSOLA 变调保共振峰（对比 `--flags N` 线性重采样）、OLA 辅音伸缩保频谱、t/g/B flags 生效、未支持 flag 进 warnings、`--strict` 歌词报错、`render_track` 返回 warnings |
+| `test_linked_list.py` | `linked_list.py`（有序链表合并）：`ListNode` 构造默认值、空链/单侧空边界、交错与整体有序合并、链内重复值保序、相等值稳定取左链节点、复用原节点不新建 |
+| `test_diffsinger_smoke.py` | `engine_diffsinger.py` 端到端冒烟：构造假声库 + 假 ONNX 模型跑通 render 管线（需 onnx，缺则整模块跳过） |
+| `test_singing_adapters.py` | `singing` 抽象层对照（M1）：UTAU 适配器输出与直接调用 `render_track` 逐位一致、音素化器字段取自 oto.ini 原值、注册表解析/未知报错/未接渲染器抛 NotImplementedError、DiffSinger 音素化有真实声库才跑（没有就跳过，不假装通过） |
+| `test_ustx_roundtrip.py` | ustx YAML 序列化：键名合法（snake_case）、OmitNull/YamlIgnore 生效、语义往返一致、颤音/表达式夹紧语义、未知键忽略兼容 |
+| `conftest.py` | 共享 fixture（非测试文件）：`tmp`（临时工作目录 str 路径）、`vb_dir`（最小 UTAU 音源）。`test_singing_adapters.py` 是脚本/pytest 双模式文件，脚本模式由 `main()` 手动传参，pytest 收集模式靠这两个 fixture 解析同名参数 |
