@@ -7770,6 +7770,158 @@ def test_arpasing_phonemizer():
                   len(r.phonemes) == 5)
 
 
+def _workflow_project(tmp):
+    """全链路测试用的最小工程（表达式表 / 时间轴 / 轨道 / part / 两个「な」）。"""
+    from singing.openutau.classic import ClassicRenderer
+    from singing.ustx import (UCurve, UExpressionDescriptor, UExpressionType,
+                              UNote, UPitch, UProject, UVibrato, UVoicePart,
+                              PitchPoint)
+
+    src = os.path.join(tmp, 'src.wav')
+    _write_wav(src, [0.5 * math.sin(2 * math.pi * 300 * i / 44100) for i in range(22050)])
+
+    project = UProject()
+    specs = [
+        ('volume', 'vol', UExpressionType.NUMERICAL, 0, 100, 100, None, None),
+        ('velocity', 'vel', UExpressionType.NUMERICAL, 0, 100, 100, 'V', None),
+        ('shift', 'shft', UExpressionType.NUMERICAL, 0, 100, 0, None, None),
+        ('color', 'clr', UExpressionType.OPTIONS, 0, 100, 0, None, ['']),
+        ('dynamics', 'dyn', UExpressionType.CURVE, -240, 120, 0, None, None),
+        ('attack', 'atk', UExpressionType.NUMERICAL, 0, 100, 100, None, None),
+        ('decay', 'dec', UExpressionType.NUMERICAL, 0, 100, 100, None, None),
+    ]
+    for name, abbr, typ, mn, mx, dv, flag, options in specs:
+        project.expressions[abbr] = UExpressionDescriptor(
+            name=name, abbr=abbr, type=typ, min=mn, max=mx, default_value=dv,
+            flag=flag or '', options=options,
+            is_flag=bool(flag) or typ == UExpressionType.OPTIONS)
+    project.time_axis.build_segments(project)
+
+    track = project.tracks[0]
+    track.renderer_settings.renderer = 'CLASSIC'
+    track.renderer_settings.renderer_obj = ClassicRenderer()
+    track.renderer_settings.resampler = 'worldline'
+    track.renderer_settings.wavtool = 'convergence'
+
+    part = UVoicePart(track_no=0, position=0)
+    part.curves.append(UCurve(xs=[0], ys=[0], abbr='dyn',
+                              descriptor=project.expressions['dyn']))
+    note0 = UNote(position=0, duration=480, tone=69, lyric='な',
+                  pitch=UPitch(data=[PitchPoint(x=0, y=0)]), vibrato=UVibrato())
+    note1 = UNote(position=480, duration=480, tone=69, lyric='な',
+                  pitch=UPitch(data=[PitchPoint(x=0, y=0)]), vibrato=UVibrato())
+    part.notes.extend([note0, note1])
+    project.parts.append(part)
+    return project, track, part, src
+
+
+def test_workflow_end_to_end():
+    """★ **整套工作流**：工程/音符 → 音素化（真 ClassicSinger + JA VCV 音素化器）→
+    `UPhoneme` 校验 → `PhraseSource` → `ClassicRenderer`（真机 worldline.dll）→ 样本。
+
+    音素化与乐句部分**零外部依赖**；渲染部分缺 `worldline.dll` 时 SKIP
+    （渲染本身已由 `test_classic_renderer_internal_end_to_end` 单独覆盖）。
+    对应 C#：`PhonemizerRunner.Phonemize` + `UPart.Validate`（音素化段）+
+    `Pipeline.PhraseSource.FromPart` + `IRenderer.Render`。
+    """
+    import tempfile
+
+    from singing.openutau import ValidateOptions
+    from singing.openutau.part_validate import validate_part_phonemes
+    from singing.openutau.plugin_builtin import japanese_vcv as JV
+    from singing.openutau.render_phrase import RenderPhrase
+
+    tmp = tempfile.mkdtemp(prefix='fufumidi-workflow-')
+    try:
+        project, track, part, src = _workflow_project(tmp)
+
+        def _oto(alias):
+            from singing.openutau.oto import (Oto, OtoSet, UOto, UOtoSet, USubbank,
+                                              Subbank)
+            u = UOto(Oto(alias=alias, wav=alias + '.wav'),
+                    UOtoSet(OtoSet(file='oto.ini', name='main'), singers_path='/vb'),
+                    [USubbank(Subbank(color=''))])
+            u.file = src          # 指向真实 300Hz 正弦 wav，渲染环节真的有素材
+            u.preutter = 50.0
+            u.overlap = 10.0
+            return u
+
+        singer = _real_classic_singer({'- な': _oto('- な'), 'a な': _oto('a な')})
+        singer.loaded = True        # 真 ClassicSinger 默认未加载（宿主负责加载）
+        singer.voicebank.id = 'workflow-singer'   # 渲染缓存文件名要用
+        track.singer_obj = singer
+
+        phonemizer = JV.JapaneseVCVPhonemizer()
+        response = validate_part_phonemes(ValidateOptions(), project, track, part,
+                                          phonemizer, timestamp=1)
+
+        check('工作流: 两个音符组都送进了音素化器',
+              response.note_indexes == [0, 1])
+        check('工作流: 音素化结果 ["- な", "a な"]（第二音的别名来自**前邻歌词的元音**）',
+              [p.phoneme for p in part.phonemes] == ['- な', 'a な'],
+              'got %r' % [p.phoneme for p in part.phonemes])
+        check('工作流: rawPosition 是 part 相对 tick（0 / 480）',
+              [p.raw_position for p in part.phonemes] == [0, 480])
+        check('工作流: 音素全部校验通过（无 error、oto 命中、preutter>0）',
+              all(not p.error for p in part.phonemes)
+              and all(p.oto is not None for p in part.phonemes)
+              and all(p.preutter > 0 for p in part.phonemes))
+        check('工作流: note.phonemeIndexes 已回填（各 [0]）',
+              part.notes[0].phoneme_indexes == [0]
+              and part.notes[1].phoneme_indexes == [0])
+        check('工作流: 音素化器没建议表达式 → phonemizerExpressions 为空',
+              all(not n.phonemizer_expressions for n in part.notes))
+
+        phrases = RenderPhrase.from_part(project, track, part)
+        check('工作流: 相邻两个音符并成**一条**乐句（2 个 phone）',
+              len(phrases) == 1 and len(phrases[0].phones) == 2,
+              'got %r' % [(len(p.phones),) for p in phrases])
+        check('工作流: 乐句里的音素别名与 UPhoneme 一致',
+              [ph.phoneme for ph in phrases[0].phones] == ['- な', 'a な'])
+
+        # ---- 渲染环节（真机）
+        dll = os.path.join(REF_ROOT, 'runtimes', 'win-x64', 'native', 'worldline.dll')
+        if not os.path.isfile(dll):
+            print('  SKIP 渲染环节：找不到 worldline.dll（音素化/乐句已验证）')
+            return
+        from singing.openutau import worldline as W
+        native = W.get_native(dll)
+        if not native.available:
+            print('  SKIP 渲染环节：worldline.dll 加载失败：%s' % native.error)
+            return
+        from singing.openutau import Progress
+        from singing.openutau.classic import ClassicRenderer
+        from singing.openutau.classic.worldline_resampler import WorldlineResampler
+
+        class _Resampler(WorldlineResampler):
+            def __init__(self):
+                super().__init__('/root')
+
+        resampler = _Resampler()
+        old_host = _install_host(_test_classic_host(tmp, resampler))
+        try:
+            renderer = ClassicRenderer()
+            result = _run(renderer.render(phrases[0], Progress(2), track_no=0))
+            check('工作流: 渲染产出非空样本',
+                  result.samples is not None and len(result.samples) > 0,
+                  'got %r' % (None if result.samples is None else len(result.samples)))
+            check('工作流: 样本有限且不静音',
+                  all(math.isfinite(v) for v in result.samples)
+                  and max(abs(v) for v in result.samples) > 1e-3,
+                  'got peak %r' % max(abs(v) for v in result.samples))
+            # 输出主频 ≈ 440Hz（tone 69；源 300Hz）—— 变调真的生效
+            mid = result.samples[len(result.samples) // 4: len(result.samples) * 3 // 4]
+            measured = _dominant_zero_cross(mid)
+            check('工作流: 输出主频 ≈ 440Hz（过零率 ±10%）',
+                  measured is not None and abs(measured - 440.0) < 44.0,
+                  'got %.1f Hz' % (measured or 0.0))
+        finally:
+            _install_host(old_host)
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _raises_type(exc, fn):
     """小工具：期望抛**指定类型**的异常（本文件已有一个更宽松的 `_raises(fn)`）."""
     try:
@@ -7846,6 +7998,8 @@ def main():
     test_turkish_cvvc_phonemizer()
     print('--- Plugin.Builtin/Arpasing（LatinDiphone 子类）---')
     test_arpasing_phonemizer()
+    print('--- ★ 整套工作流端到端（音素化→乐句→渲染）---')
+    test_workflow_end_to_end()
     print('--- 音素化器 × 真 ClassicSinger（接口契约回归） ---')
     test_phonemizers_against_real_singer()
     print('--- Plugin.Builtin/JapaneseCVVC ---')

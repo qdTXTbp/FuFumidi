@@ -6,7 +6,7 @@
 > 最后更新：2026-10-02 —— P0~P2 完成；MOD+ / `WorldlineRenderer` v10 / `JapaneseCVVC` /
 > **G2p 基础设施** / **`PhonemeBased`+`Monophone`+`LatinDiphone` 基类** / **`ChineseCVV`** /
 > **`ArpabetG2p`** 已补齐
-> 2026-10-03 复核：四项测试 **1,406 项断言全绿**（含 `worldline.dll` 真机端到端）
+> 2026-10-03 复核：四项测试 **1,417 项断言全绿**（含 `worldline.dll` 真机端到端）
 
 ---
 
@@ -82,12 +82,12 @@
 `RenderPhrase.from_part` → `ClassicRenderer.render()` 产出的样本，主频用**过零率**实测
 ≈ 440Hz（源素材 300Hz、tone 69）—— 变调与拼接都真的生效了。
 
-已完成规模：Python **17,183 行**（`engine/singing/**/*.py`，73 个文件，排除 `__pycache__`），
-对应 C# **约 12,280 行**（对第 3 节列出的 61 个 C# 源文件逐项 `wc -l` 求和，
+已完成规模：Python **17,675 行**（`engine/singing/**/*.py`，75 个文件，排除 `__pycache__`），
+对应 C# **约 12,541 行**（对第 3 节列出的 63 个 C# 源文件逐项 `wc -l` 求和，
 含 `RenderEngine.cs` 的 `Progress` 部分）。
 另有 NWaves 三段转写（**无 C# 对应物**，属第三方库替换）。
 
-一致性测试 **7,897 行 / 1,406 项断言**（四个文件合计：19 + 59 + **1328** + 6；
+一致性测试 **8,051 行 / 1,417 项断言**（四个文件合计：19 + 59 + **1339** + 6；
 参考源码缺失时自动 SKIP）。
 
 ---
@@ -114,6 +114,7 @@
 | 音素化器基类 / 中文基类 | 250 + 51 行 | ✅ 完成 |
 | `SyllableBasedPhonemizer`(2204) / `PhonemeBased`+`Monophone`(257) | 2204 + 257 行 | ✅ 完成（`SyllableBased` 那条线连同 `YamlWatcher` + `G2pRemapper` 一并搬完；17 个具体子类未搬） |
 | 内置音素化器 | 51 个文件 / 25,707 行 | 🟡 **9 / 51**（JA VCV / JA CVVC / ZH VCV / ZH CVVC / ZH CVV / **FR VCCV / FR CVVC / TR CVVC / EN ARPA**） |
+| **★ 全链路** | 歌词 → 音素化 → `UPhoneme` → `PhraseSource` → 渲染 → 样本 | 🟢 **端到端已打通**（`test_workflow_end_to_end`，真 ClassicSinger + 真 worldline.dll，440Hz 判据） |
 | Classic 参数层 | 188 + 57 行 | ✅ 完成 |
 | Classic 执行层 · 底座（WAV / 接口 / 清单） | 173 + 25 + 11 + 28 行 | ✅ 完成 |
 | Classic 执行层 · 内置 wavtool | 187 行（+NWaves 三段转写） | ✅ 完成 |
@@ -198,6 +199,8 @@
 | `openutau/plugin_builtin/french_cvvc.py` | `Plugin.Builtin/FrenchCVVCPhonemizer.cs`（757 行；同法语家族第二个真实用户） |
 | `openutau/plugin_builtin/turkish_cvvc.py` | `Plugin.Builtin/TurkishCVVCPhonemizer.cs`（356 行；直接继承 `Phonemizer`） |
 | `openutau/plugin_builtin/arpasing.py` | `Plugin.Builtin/ArpasingPhonemizer.cs`（62 行；`LatinDiphone` 子类）+ `Data/arpasing.template.yaml`（内嵌模板） |
+| `openutau/phonemizer_runner.py` | `Api/PhonemizerRunner.cs`（261 行）的 `Phonemize` 核心（同步版；线程/调度/UI 属 M3） |
+| `openutau/part_validate.py` | `Ustx/UNote.cs` 的 `Validate`/`ToPhonemizerNote` + `Ustx/UPart.cs` 音素化段（组构建/响应落表/覆写/夹紧） |
 
 每个模块的 `__init__.py` 里维护着一份"已照搬 / 未照搬"清单，与上表同步。
 
@@ -209,11 +212,11 @@
 cd engine/tests
 python test_ustx_schema_matches_source.py        # 19 passed
 python test_ustx_roundtrip.py                    # 59 passed
-python test_openutau_core_matches_source.py      # 1328 passed ← 含 worldline.dll 真机端到端
+python test_openutau_core_matches_source.py      # 1339 passed ← 含 worldline.dll 真机端到端
 python -m pytest test_singing_adapters.py -q     # 6 passed
 ```
 
-合计 **1,406 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
+合计 **1,417 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
 整套测试**可离线运行**。
 
 `worldline.dll` 真机测试的 SKIP 条件是"找不到 `/d/FuFuMIDI/_ref/OpenUtau/runtimes/win-x64/native/worldline.dll`

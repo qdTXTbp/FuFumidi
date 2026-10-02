@@ -34,11 +34,18 @@ from .oto import UOto
 
 
 class ValidateOptions:
-    """对应 C# 的 `ValidateOptions`（校验范围开关）。"""
+    """对应 C# 的 `ValidateOptions`（校验范围开关）。
 
-    def __init__(self, skip_timing: bool = False, part: Any = None):
+    C# 的完整字段是 `SkipTiming / SkipPhoneme / SkipPhonemizer / Part`
+    （`skip_phoneme` / `skip_phonemizer` 在音素化编排里用）。
+    """
+
+    def __init__(self, skip_timing: bool = False, part: Any = None,
+                 skip_phoneme: bool = False, skip_phonemizer: bool = False):
         self.skip_timing = skip_timing
         self.part = part
+        self.skip_phoneme = skip_phoneme
+        self.skip_phonemizer = skip_phonemizer
 
 
 class UPhoneme:
