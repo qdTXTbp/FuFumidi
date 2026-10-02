@@ -6,7 +6,7 @@
 > 最后更新：2026-10-02 —— P0~P2 完成；MOD+ / `WorldlineRenderer` v10 / `JapaneseCVVC` /
 > **G2p 基础设施** / **`PhonemeBased`+`Monophone`+`LatinDiphone` 基类** / **`ChineseCVV`** /
 > **`ArpabetG2p`** 已补齐
-> 2026-10-02 复核：四项测试 **1138 项断言全绿**（含 `worldline.dll` 真机端到端）
+> 2026-10-02 复核：四项测试 **1,290 项断言全绿**（含 `worldline.dll` 真机端到端）
 
 ---
 
@@ -58,17 +58,36 @@
   之所以一直没暴露，是因为**测试替身也返回裸值**（替身与真实现接口不一致 → 测试全绿）。
   现在统一走 `Phonemizer.mapped_oto()`（**严格解包**，替身写错就立刻 TypeError），
   并补了一条**用真 `ClassicSinger`** 驱动的回归用例。
+- 再补 `LatinDiphonePhonemizer`(35) + **`ArpabetG2p`**(195) —— Arpasing 那条线的前置；
+  `ArpabetG2p` 的词典数据走 `set_data_dir()` 注入（**不在引擎内硬编码路径**）。
+- ★ 最后补**音节驱动那条基类线**：`SyllableBasedPhonemizer`（**2204 行，全文件**），
+  连带两个此前缺口的依赖：
+  - `G2pRemapper`(53)：把子类**硬编码**的符号表套到（YAML / G2P 模型）字典上；
+  - `YamlWatcher`(47)：监视声库/插件目录的 `.yaml` 变更 → 清缓存 + 让歌手重载。
+
+  `SyllableBased` 家族有 **17 个具体子类**（EnglishVCCV / EnglishCVVC / …），
+  所以这条基类就位后，"逐个补子类"变成纯体力活。这一步同时搬来了：
+  YAML 配置装载（`symbols` / `replacements` / `fallbacks` / `timings` /
+  `diphthongs` / `vowelsustains` / `isglides`，含**版本比对 + 旧文件改名备份**）、
+  组语法规则引擎（`vowel` / `consonant&y` / `vowel!a` / `vowel=i`，含**组捕获回填**）、
+  边界替换（`"null"` 占位符）、以及 `MakePhonemes` / `ScalePhonemes` 的 tick 对齐。
+
+  ★ 这一步又踩了一次"**替身属性面不全**"：`HasOto` 第二段查 `singer.TryGetOto`、
+  `SetSinger` 读 `singer.Loaded`（= `Found && loaded`），而老的测试替身
+  只有 `try_get_mapped_oto` / `loaded` → 一跑就 `AttributeError`。
+  已按"替身照抄真实现的**属性面**"把 `_OtoSinger` 补齐（加 `try_get_oto`、`is_loaded`）；
+  引擎侧也统一走 `_singer_is_loaded()` 助手，避免替身与真实现的差异再漏进测试。
 
 **真机验证**（加载 OpenUTAU 随包分发的 `runtimes/win-x64/native/worldline.dll`）：
 `RenderPhrase.from_part` → `ClassicRenderer.render()` 产出的样本，主频用**过零率**实测
 ≈ 440Hz（源素材 300Hz、tone 69）—— 变调与拼接都真的生效了。
 
-已完成规模：Python **13,411 行**（`engine/singing/**/*.py`，66 个文件，排除 `__pycache__`），
+已完成规模：Python **15,795 行**（`engine/singing/**/*.py`，69 个文件，排除 `__pycache__`），
 对应 C# **约 11,105 行**（对第 3 节列出的 58 个 C# 源文件逐项 `wc -l` 求和，
 含 `RenderEngine.cs` 的 `Progress` 部分）。
 另有 NWaves 三段转写（**无 C# 对应物**，属第三方库替换）。
 
-一致性测试 **6,892 行 / 1138 项断言**（四个文件合计：19 + 59 + 1041 + 19；
+一致性测试 **7,127 行 / 1,290 项断言**（四个文件合计：19 + 59 + **1206** + 6；
 参考源码缺失时自动 SKIP）。
 
 ---
@@ -93,7 +112,7 @@
 | 渲染器接口与注册表 | 146 + 141 行 | ✅ 完成（具体渲染器未搬） |
 | Worldline 纯逻辑 | 780 行中约 400 | ✅ 完成（原生边界另计） |
 | 音素化器基类 / 中文基类 | 250 + 51 行 | ✅ 完成 |
-| `SyllableBasedPhonemizer`(2204) / `PhonemeBased`+`Monophone`(257) | 2204 + 257 行 | 🟡 `PhonemeBased`+`Monophone` **完成**；`SyllableBased` 未开始（它牵着 `YamlWatcher`，要拆几步） |
+| `SyllableBasedPhonemizer`(2204) / `PhonemeBased`+`Monophone`(257) | 2204 + 257 行 | ✅ 完成（`SyllableBased` 那条线连同 `YamlWatcher` + `G2pRemapper` 一并搬完；17 个具体子类未搬） |
 | 内置音素化器 | 51 个文件 / 25,707 行 | 🟡 **5 / 51**（JA VCV / JA CVVC / ZH VCV / ZH CVVC / ZH CVV） |
 | Classic 参数层 | 188 + 57 行 | ✅ 完成 |
 | Classic 执行层 · 底座（WAV / 接口 / 清单） | 173 + 25 + 11 + 28 行 | ✅ 完成 |
@@ -172,6 +191,9 @@
 | `openutau/plugin_builtin/chinese_cvv.py` | `Plugin.Builtin/ChineseCVVPhonemizer.cs`（含 `ChineseCVVG2p`） |
 | `openutau/g2p/arpabet.py` | `G2p/ArpabetG2p.cs`（数据走 `set_data_dir` 注入） |
 | `openutau/plugin_builtin/latin_diphone.py` | `Plugin.Builtin/LatinDiphonePhonemizer.cs` |
+| `openutau/g2p/remapper.py` | `Api/G2pRemapper.cs` |
+| `openutau/classic/yaml_watcher.py` | `Classic/YamlWatcher.cs`（监视后端可注入） |
+| `openutau/plugin_builtin/syllable_based.py` | `Plugin.Builtin/SyllableBasedPhonemizer.cs`（2204 行，全文件） |
 
 每个模块的 `__init__.py` 里维护着一份"已照搬 / 未照搬"清单，与上表同步。
 
@@ -183,11 +205,11 @@
 cd engine/tests
 python test_ustx_schema_matches_source.py        # 19 passed
 python test_ustx_roundtrip.py                    # 59 passed
-python test_openutau_core_matches_source.py      # 1041 passed  ← 含 worldline.dll 真机端到端
-python test_singing_adapters.py                  # 19 passed / 1 skipped
+python test_openutau_core_matches_source.py      # 1206 passed ← 含 worldline.dll 真机端到端
+python -m pytest test_singing_adapters.py -q     # 6 passed
 ```
 
-合计 **1138 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
+合计 **1,290 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
 整套测试**可离线运行**。
 
 `worldline.dll` 真机测试的 SKIP 条件是"找不到 `/d/FuFuMIDI/_ref/OpenUtau/runtimes/win-x64/native/worldline.dll`
@@ -282,6 +304,12 @@ assert '(i + 1) == phrase.dynamics.Length' in cs
 | 39 | **`Array.IndexOf` 找不到返回 **-1**，而它被拿去乘了** | `startTick = -ConsonantLength * firstVowel` —— 找不到元音时 `firstVowel = -1`，于是 `startTick` 变成**正** `ConsonantLength`（本该是 0 或负）。Python 里若按"没找到就当 0"处理，整条音符的音素位置会全偏 | 照搬：`first_vowel = is_vowel.index(True) if True in is_vowel else -1`，并**专门为这个 quirk 写一条断言**（无元音时首音素 position = +60） |
 | 40 | **C# 的 `List.Sort` 是**不稳定**排序，Python 的 `sorted` 是稳定的** | 等键元素的相对顺序在 C# 里是**未定义**的（introsort）。这里影响对齐表：同一下标的两项谁先谁后会改变后续的"手动项去重"结果 | 实测对齐表通常 < 16 项 → C# 走插入排序，**恰好是稳定的**，所以 Python 的稳定排序等价。已把"这是巧合一致"写进注释；若将来对齐表规模变大（> 16），需要重新核对 |
 | 41 | **`len > 2` 而不是 `len >= 2`（离一错位）** | `ChineseCVVG2p.Query` 里"取双字母声母 zh/ch/sh" 的条件是 `lyric.Length > 2`。所以 `"zhang"`(5) 会拆成 `zh`+`ang`，而 `"zh"`(2) **不会** —— 落到下一个条件变成 `z`+`h`、查不到尾韵。写成 `>= 2` 会让 `"zh"` 的行为完全不同 | 照搬 `len > 2`，并**两个都写进测试**（`zhang → ['zhang','_ang']` 与 `zh → ['zh']`）。凡是 C# 里出现 `> N` 的地方，都要问一句"边界上那个值会怎样" |
+| 42 | **★ struct 的值语义会静默消失**（本轮最贵的一类） | `Syllable` / `Ending` 在 C# 是 `struct`。`var syllable = syllables[i];` 是**拷贝** → 之后写 `syllable.prevBasePhoneme = …` **不会回写数组**；`ApplyBoundaryReplacements(Syllable x)` 是**按值**入参 → 函数里改 `x.prevV` 不会影响调用者。Python 的 `dataclass` 是引用语义，照字面转写会让"改副本"变成"改原对象" | 凡 C# 结构体被赋给局部变量 / 传参的地方，**显式 `copy.copy()`**；`ApplyBoundaryReplacements` 内部第一件事就是 `copy.copy(syllable)`。并写一条断言："调用后原对象字段不变" |
+| 43 | **struct 上的 `FirstOrDefault(...) ?? 默认值` 是死代码** | `PhonemeAttributes` 是 struct，`List<T>.FirstOrDefault()` **永远不返回 null**（返回 `default(T)`），所以 `attr = dynamicAttrs?.FirstOrDefault(...) ?? notes[0].phonemeAttributes?.FirstOrDefault(...) ?? default` 里**第二支只在 `dynamicAttrs` 本身为 null 时才可能走到**。按"没找到就回落"去实现是**行为变更** | 照抄成 `if dynamicAttrs is None: 查 notes[0] else: 查 dynamicAttrs，找不到就给 DEFAULT_ATTR`，并在 docstring 写明"那一支实践上不可达" |
+| 44 | **`(int)` 是向零截断，`Convert.ToInt32` 是四舍六入五成双 —— 同一个文件里两种都有** | `AssignAllAffixes` 的 `altValue = (int)altExpr.value` 是**截断**（2.7 → 2）；而 `ChineseCVVCPhonemizer` 的 `Convert.ToInt32(...)` 是**银行家舍入**（由 `int(round(x))` 复刻）。混用会让 `.5` 附近差 1 | 逐个看 C# 写的是哪一种：`(int)expr` / 整数除法 → `idiv()` 或 `int()`；`Convert.ToInt32` → `int(round())`。测试里对 `2.7 → 2` 这种**能区分两种语义**的值写断言 |
+| 45 | **`System.Version` 的缺段补 **-1**，于是 `"1.2" < "1.2.0"`** | YAML 版本比对用 `Version.TryParse`；`Version("1.2")` 的 Build/Revision 是 **-1**（不是 0），所以它**小于** `Version("1.2.0")`。若按"补 0 / 按字符串比"实现，本该触发的"版本过旧要备份重写"就不会触发 | `_parse_version()` 显式把缺段填 `-1`，并按 4 元组比较；单独为 `"1.2" < "1.2.0"` 写断言 |
+| 46 | **规则过滤的 `where` 与"边界"耦合：`inside` 的规则在边界上**不生效** | `ApplyReplacements` 的过滤是 `where=="all" \|\| (!isBoundary && where=="inside") \|\| (isBoundary && where=="boundary")`。句末 `Ending` 那条路径**恒传 `isBoundary=true`**，于是所有默认 `where="inside"` 的规则在句末**一个都不参与** | 测试里要**两套都写**：`inside` 规则在音节内部生效、在句末不生效；要让句末也生效必须写 `where="all"`（本轮就是这里先写错了期望） |
+| 47 | **C# 的 `params` 重载在 Python 里要用**仅关键字参数** | `TryAddPhoneme(list, tone, params string[])` 与 `TryAddPhoneme(list, tone, bool isGlide, params string[])` 同名。Python 用 `*targets` + 仅关键字 `is_glide=False` 复刻 —— 但**位置传 `True` 会被 `*targets` 吃掉**（本轮测试就先这么写错了） | 签名写成 `(self, source, tone, *targets, is_glide: bool = False)`，docstring 里点明对应哪个重载；测试用关键字形式调用 |
 
 
 ### 附：写测试时的最大陷阱 —— 凭直觉填期望
@@ -465,15 +493,15 @@ tone 69 变调，输出主频用**过零率**实测 ≈ 440Hz（±10% 内）。
 
 ### P3 —— 更多音素化器（当前 5 / 51）
 
-同模式，风险低，适合批量推进。优先级建议：
+**两条基类线现在都就位了**（`SyllableBased` 2204 / `PhonemeBased`+`Monophone`+`LatinDiphone` 292），
+所以下面这些基本是"照着 C# 逐个转写 + 配一致性测试"的体力活。优先级建议：
 
-1. ~~`JapaneseCVVCPhonemizer`~~ ✅ / `JapanesePresampPhonemizer`（还需 `Presamp.cs` 731）
-   、`TurkishCVVCPhonemizer`(356，**零外部依赖**，好做)
-2. `ChineseCVVPhonemizer`(133) / `ChineseCVVPlusPhonemizer`（中文线补全）
-3. `PresampSamplePhonemizer`(164) — 需要 `Classic/Presamp.cs`(731)
-4. **`Arpasing` 系**：`ArpasingPhonemizer.cs` 只有 62 行，但它牵出整条
-   `OpenUtau.Core/G2p`（771 行 + 数据）+ `LatinDiphonePhonemizer`(35) +
-   随包 `arpasing.yaml` 词典 —— **单列一步**，不要当成"一个 62 行文件"
+1. `SyllableBased` 家族里**零外部依赖**的几个（`TurkishCVVC`(356) 等），
+   它们是新基类的**首批真实用户**，能顺带验证基类的 YAML / 规则引擎路径
+2. `JapanesePresampPhonemizer` / `PresampSamplePhonemizer`（还需 `Classic/Presamp.cs` 731）
+3. `ChineseCVVPlusPhonemizer`（中文线补全）
+4. **`ArpasingPhonemizer`(62)**：前置（`LatinDiphone` + `ArpabetG2p` + 字典）**都已完成**，
+   只剩随包 `arpasing.yaml` 词典数据要一起搬
 5. 韩语系列 / 欧洲各语系
 
 ### P4 —— 编辑器侧（M3）

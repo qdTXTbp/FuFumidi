@@ -1296,8 +1296,18 @@ class _OtoSinger:
         self.location = location
         self.id = 'fake-singer'
 
+    @property
+    def is_loaded(self):
+        """★ 真 `USinger.Loaded` = `found && loaded`。替身要照抄真实现的**属性面**。"""
+        return self.found and self.loaded
+
     def try_get_mapped_oto(self, phoneme, tone, color=None):
         # ★ 同契约：`(found, oto)`，别返回裸值
+        oto = self.aliases.get(phoneme)
+        return (oto is not None), oto
+
+    def try_get_oto(self, phoneme):
+        """★ 真 `USinger` 也有这个（`HasOto` 的第二段就查它）。"""
         oto = self.aliases.get(phoneme)
         return (oto is not None), oto
 
@@ -6103,6 +6113,912 @@ def test_xxhash64():
           and _x(long) == _x(long))
 
 
+def test_syllable_based_phonemizer():
+    """`G2p/G2pRemapper.cs` + `Classic/YamlWatcher.cs` +
+    `Plugin.Builtin/SyllableBasedPhonemizer.cs`（2204 行）—— 重头戏。
+
+    这一条覆盖三件事：
+      1. 从 C# 源码抽「常量 / 结构 / 辅助属性 / 关键算式」逐项比对（照搬由机器强制）；
+      2. 用 `Replacement` / `Syllable` / `Ending` 走通 YAML 规则引擎与边界替换的行为；
+      3. 用**最小具体子类**把 `Process` 全链路跑一遍，手推 position 期望值。
+    """
+    import shutil
+    import tempfile
+
+    from singing.openutau import Note, Phoneme, PhonemeExpression, registered
+    from singing.openutau.g2p import G2pDictionary, G2pRemapper
+    from singing.openutau.plugin_builtin import syllable_based as SBP
+    from singing.openutau.classic.yaml_watcher import YamlWatcher
+
+    cs_path = os.path.join(os.path.dirname(REF), 'OpenUtau.Plugin.Builtin',
+                           'SyllableBasedPhonemizer.cs')
+    if not os.path.isfile(cs_path):
+        print('  SKIP 找不到 SyllableBasedPhonemizer.cs')
+        return
+    cs = open(cs_path, encoding='utf-8-sig').read().replace('\r\n', '\n')
+
+    check('SBP: 是**抽象基类**、不进注册表（C# 没有 [Phonemizer] 特性）',
+          'public abstract class SyllableBasedPhonemizer : Phonemizer, IG2pSymbols' in cs
+          and SBP.SyllableBasedPhonemizer.name == ''
+          and SBP.SyllableBasedPhonemizer not in set(registered().values()))
+    check('SBP: FORCED_ALIAS_SYMBOL = "?"',
+          'private const string FORCED_ALIAS_SYMBOL = "?";' in cs
+          and SBP.FORCED_ALIAS_SYMBOL == '?')
+    check('SBP: TransitionBasicLengthMs => 100',
+          'protected double TransitionBasicLengthMs => 100;' in cs
+          and SBP.SyllableBasedPhonemizer.TRANSITION_BASIC_LENGTH_MS == 100)
+    check('SBP: 字段默认 tails = "-,R".Split(\',\')（两个元素）',
+          'protected string[] tails = "-,R".Split(\',\');' in cs
+          and SBP.SyllableBasedPhonemizer().tails == ['-', 'R'])
+    check('SBP: SetSinger 里把 tails 重置成 "-".Split(\',\')（**只剩 "-"，与字段默认不同**）',
+          '"-".Split(\',\')' in cs)
+    check('SBP: wordSeparators={" ","_"} 用 Split(char[])；wordSeparator={"  "}（两个空格）',
+          'private readonly string[] wordSeparators = new[] { " ", "_" };' in cs
+          and 'private readonly string[] wordSeparator = new[] { "  " };' in cs
+          and SBP.WORD_SEPARATOR == '  ')
+    check('SBP: GROUP_KEYWORDS 逐项与 C# 的内联数组一致',
+          tuple(re.findall(r'"(\w+)"', re.search(
+              r'return new\[\] \{(.*?)\}\.Contains\(baseGroup\);',
+              cs, re.S).group(1))) == SBP.GROUP_KEYWORDS,
+          'C#=%r' % (re.findall(r'"(\w+)"', re.search(
+              r'return new\[\] \{(.*?)\}\.Contains\(baseGroup\);',
+              cs, re.S).group(1)),))
+    check('SBP: 静态状态与实例状态分得清清楚楚（generation / watcher / 缓存是 static）',
+          'private static int globalSbpGeneration = 0;' in cs
+          and 'private int localSbpGeneration = 0;' in cs
+          and 'public static YamlWatcher singerYamlWatcher;' in cs
+          and 'public static YamlWatcher pluginYamlWatcher;' in cs)
+    check('SBP: 字典状态三个成员照抄（含"缺键会抛"的那两个）',
+          'protected bool hasDictionary => dictionaries.ContainsKey(GetType());' in cs
+          and 'protected IG2p dictionary => dictionaries[GetType()];' in cs
+          and 'protected bool isDictionaryLoading => dictionaries[GetType()] == null;' in cs)
+    check('SBP: YAMLData 的字段集与 C# 一致（8 个）',
+          set(re.findall(r'public [\w\.\?\[\]]+ (\w+) \{ get; set; \}',
+                         re.search(r'public class YAMLData \{(.*?)\n            public class SymbolData',
+                                   cs, re.S).group(1))) ==
+          {'version', 'isglides', 'symbols', 'replacements', 'fallbacks', 'timings',
+           'diphthongs', 'vowelsustains'})
+    check('SBP: Replacement.where 默认 "inside"，且 from/to 是 object（可标量可序列）',
+          'public string where { get; set; } = "inside";' in cs
+          and 'public object from { get; set; }' in cs
+          and 'public object to { get; set; }' in cs
+          and SBP.Replacement().where == 'inside')
+    check('SBP: SyncAttributes / GetDynamicPhonemeAttributes 两个钩子都在',
+          'protected virtual void SyncAttributes(Note[] notes, List<string> phonemeSymbols,'
+          in cs and 'GetDynamicPhonemeAttributes(string alias, int index,' in cs)
+
+    # ---------------- 上游"怪癖"必须在位（照搬，不许顺手修好）
+    check('SBP: ★ MakePhonemes 末尾的 `isEnding ? count-1 : count-1` 退化为同一分支（照搬）',
+          'isEnding ? phonemeSymbols.Count - 1 : phonemeSymbols.Count - 1' in cs)
+    check('SBP: ★ 字典替换的 else-if 用的是**同一个键**（死代码）',
+          'else if (dictionaryReplacements.TryGetValue(subResult[i], out string replacedExact))' in cs)
+    check('SBP: ★ ValidateAlias 的 legacy 回落**两次都返回同一个值**（HasOto 白判）',
+          cs.count('return legacyTarget;') == 2)
+    check('SBP: ★ `dynamicTails` 算了但没用（死变量）', cs.count('dynamicTails') == 1)
+    check('SBP: ★ `consExceptions` 只声明未使用（死字段）', cs.count('consExceptions') == 1)
+    check('SBP: ★ MakeSyllables 的循环条件用的是单个 `&`（非短路位与）',
+          'for (; lastSymbolI < symbols.Length & noteI < notes.Length; lastSymbolI++)' in cs)
+    check('SBP: ★ "tail 当音节"的那种 bucket 标的是 isEnding=false',
+          'syllablePhonemeBuckets.Add((endingPhonemes, modifiedSyllable.duration,'
+          in cs and ', false, modifiedSyllable.tone, ""));' in cs
+          and ', true, ending.tone, ""));' in cs)
+    check('SBP: ★ ApplyBoundaryReplacements**没有** early-return 的拷贝分支差异（值语义）',
+          'private Syllable ApplyBoundaryReplacements(Syllable syllable) {' in cs
+          and 'private Ending ApplyBoundaryReplacements(Ending ending) {' in cs)
+    check('SBP: ★ HasOto 试查三段（带音高 → 裸别名 → 空音色），且 lock 是**它自己**',
+          'if (currentSinger.TryGetMappedOto(alias, tone, out _)) {' in cs
+          and 'if (currentSinger.TryGetOto(alias, out _)) {' in cs
+          and 'if (currentSinger.TryGetMappedOto(alias, tone, "", out _)) {' in cs
+          and 'lock (currentSinger) {' in cs)
+    check('SBP: ★ 2 参重载的 oto 查询在 GetTransitionBasicLengthMsByOto 里',
+          'if (singer.TryGetMappedOto(mappedAlias, tone + toneShift, out var oto)) {' in cs
+          and 'return oto.Preutter - oto.Overlap;' in cs)
+
+    # ---------------- 关键算式逐字对照
+    check('SBP: 整数除法 / 截断三处（containerLength/3、*0.8、(int)(...)）',
+          'int maxAllowed = containerLength / 3;' in cs
+          and 'var maxAllowedConsonantTick = (int)(containerLengthTick * 0.8);' in cs
+          and 'int duration = lastNote.duration / notesToSplit / 15 * 15;' in cs.replace(
+              'var duration = lastNote.duration', 'int duration = lastNote.duration'))
+    check('SBP: ★ vel 走 `(float)`（float32 舍入）—— 不是可省的一步',
+          'float vel = (float)(100.0 - 100.0 * Math.Log2(pAttr.consonantStretchRatio.Value));' in cs
+          and SBP.as_float32(100.0 - 100.0 * math.log2(3.0))
+          != (100.0 - 100.0 * math.log2(3.0)))
+    check('SBP: 节奏系数公式字面一致：(300 - Clamp(bpm,90,300)) / (300-90) / 3 + 0.33',
+          'return (300 - Math.Clamp(bpm, 90, 300)) / (300 - 90) / 3 + 0.33;' in cs)
+    check('SBP: 常数过渡长 = TransitionBasicLengthMs * GetTempoNoteLengthFactor()',
+          'return TransitionBasicLengthMs * GetTempoNoteLengthFactor();' in cs)
+    check('SBP: ★ NoGap 分支用可见的 50 tick 锚点（上限容器的 1/3）',
+          'int targetTicks = 50;' in cs and 'phonemes[phonemeI].position = System.Math.Min(targetTicks, maxAllowed);' in cs)
+    check('SBP: ★ IsShort(Syllable) 用 duration != -1 当哨兵',
+          'syllable.duration != -1 && TickToMs(syllable.duration) < GetTransitionBasicLengthMs() * 2' in cs)
+    check('SBP: 延音音符判定是 "+~" / "+*"',
+          'note.lyric.StartsWith("+~") || note.lyric.StartsWith("+*")' in cs)
+    check('SBP: 边界替换里的 "null" 占位符（音节 / 句末各一处）',
+          'currentPhonemes.Add(hasPrevV ? syllable.prevV : "null");' in cs
+          and 'currentPhonemes.Add(hasTail ? ending.tail : "null");' in cs)
+    check('SBP: 音节边界判据 = (有前元音 && position==0) || 无前元音',
+          'bool isBoundary = (hasPrevV && syllable.position == 0) || !hasPrevV;' in cs)
+    check('SBP: 句末边界恒为 true（ApplyBoundaryReplacements(ending) 里写死）',
+          'List<string> finalPhonemes = ApplyReplacements(currentPhonemes, true);' in cs)
+    check('SBP: 组语法三个运算符齐全（& 并集 / ! 排除 / = 限定）',
+          'if (cleanRule.Contains("&")) {' in cs
+          and 'if (cleanRule.Contains("!")) {' in cs
+          and 'if (cleanRule.Contains("=")) {' in cs)
+    check('SBP: 规则排序是 Count 降序 + 串长降序（都靠稳定排序）',
+          '.OrderByDescending(r => r.FromList.Count)\n                .ThenByDescending(r => r.FromList.Sum(s => s.Length))' in cs)
+    check('SBP: to 侧只回填**第一个**组关键字（后面的组名会原样留下）',
+          cs.count('string.Join("", cleanParts)') == 2)
+    check('SBP: G2pRemapper 参与字典构造 + 硬编码的 AddEntry("a", ["a"])',
+          'dictionaries[GetType()] = new G2pRemapper(' in cs
+          and 'builder.AddEntry("a", new string[] { "a" });' in cs)
+    check('SBP: ParseDictionary 的分隔符与注释行规则（"  " 两空格 / ";;;" 注释 / 必须 2 段）',
+          'if (line.StartsWith(";;;")) {' in cs and 'if (parts.Length != 2) {' in cs
+          and 'line.Trim().Split(wordSeparator, StringSplitOptions.None)' in cs)
+
+    # ---------------- YAML 版本/备份机制
+    check('SBP: ReadVersionFast 找 "version:" 行、Trim 引号',
+          'trimmed.StartsWith("version:", StringComparison.OrdinalIgnoreCase)' in cs
+          and ".Trim().Trim('\"', '\\'');" in cs)
+    check('SBP: 版本比较是 Version.TryParse + 「非纯数字」的字符串回落',
+          'Version.TryParse(currentVersion, out Version currV)' in cs
+          and '!double.TryParse(currentVersion, out _)' in cs)
+    check('SBP: 旧文件改名为 {名}_backup({版本}){扩展名}',
+          '_backup({safeVersion}){Path.GetExtension(YamlFileName)}' in cs)
+    check('SBP: watcher 回调里 Thread.Sleep(200) + 清缓存 + generation++',
+          cs.count('System.Threading.Thread.Sleep(200);') == 2
+          and cs.count('YamlCache.Clear();') == 2
+          and cs.count('globalSbpGeneration++;') == 2)
+
+    # ---------------- 版本解析语义（手推）
+    check('SBP: ★ Version 缺段补 -1 → "1.2" < "1.2.0"（不是相等！）',
+          (SBP._parse_version('1.2') < SBP._parse_version('1.2.0')) is True
+          and SBP._parse_version('1.2') == (1, 2, -1, -1))
+    check('SBP: Version 只认 "主.次" 起步；"1" / "1.3b" 解析失败',
+          SBP._parse_version('1') is None and SBP._parse_version('1.3b') is None)
+    check('SBP: double.TryParse 的回落只认纯数字（"1.3b" 不算）',
+          SBP._try_parse_double('1.3') and not SBP._try_parse_double('1.3b'))
+
+    # ================= 行为：最小具体子类 =================
+    class _Sbp(SBP.SyllableBasedPhonemizer):
+        name = 'sbp-test'
+        tag = 'TEST'
+
+        def __init__(self, vowels=('a', 'i', 'u', 'e', 'o'),
+                     consonants=('k', 's', 't', 'y', 'n', 'm', 'sh')):
+            self._v = list(vowels)
+            self._c = list(consonants)
+            super().__init__()
+
+        def get_vowels(self):
+            return list(self._v)
+
+        def get_consonants(self):
+            return list(self._c)
+
+        def process_syllable(self, syllable):
+            """VCV/CVVC 混合风格：有前元音又有辅音时拆成 **VC + CV** 两个音素。"""
+            cc = ''.join(syllable.cc)
+            if syllable.prev_v and cc:
+                return ['%s %s' % (syllable.prev_v, cc), '%s%s' % (cc, syllable.v)]
+            if syllable.prev_v:
+                return ['%s %s' % (syllable.prev_v, syllable.v)]
+            return ['- %s%s' % (cc, syllable.v)]
+
+        def process_ending(self, ending):
+            cc = ''.join(ending.cc)
+            if ending.has_tail:
+                return ['%s%s %s' % (ending.prev_v, cc, ending.tail)]
+            return ['%s%s -' % (ending.prev_v, cc)]
+
+    def oto(alias, preutter=0.0, overlap=0.0, color=''):
+        from singing.openutau import Oto, OtoSet, UOto, UOtoSet, USubbank, Subbank
+        return UOto(Oto(alias=alias, wav=alias + '.wav', preutter=preutter, overlap=overlap),
+                    UOtoSet(OtoSet(file='oto.ini', name='main'), singers_path='/vb'),
+                    [USubbank(Subbank(color=color))])
+
+    ph = _Sbp()
+    ph.set_timing(_CVVC_AXIS)
+    lf = ph.get_tempo_note_length_factor()
+    base_ms = ph.get_transition_basic_length_ms_by_constant()
+
+    # ---- 贪心 tokenize
+    check('SBP.tokenize: 单字母逐个切', ph.tokenize_phonemes('kya') == ['k', 'y', 'a'],
+          'got %r' % (ph.tokenize_phonemes('kya'),))
+    check('SBP.tokenize: 最长优先（"sh" 赢过 "s"）',
+          ph.tokenize_phonemes('sha') == ['sh', 'a'],
+          'got %r' % (ph.tokenize_phonemes('sha'),))
+    check('SBP.tokenize: 未知字符退化成单字符', ph.tokenize_phonemes('kx') == ['k', 'x'])
+    check('SBP.tokenize: 空串给空表', ph.tokenize_phonemes('') == [])
+    check('SBP.tokenize: ★ 顺序是 Distinct(保序) 后稳定排序 —— 同长度按插入序',
+          ph.tokenize_phonemes('as') == ['a', 's'])   # 'a'(元音) 在 's'(辅音) 前
+
+    # ---- GetSymbols
+    check('SBP.GetSymbols: 无字典时按空格切（tokenization 默认关）',
+          ph.get_symbols(Note(lyric='k a')) == ['k', 'a'])
+    check('SBP.GetSymbols: 歌词命中 tails 时**直接**返回它本身（早于一切切分）',
+          ph.get_symbols(Note(lyric='-')) == ['-'] and ph.get_symbols(Note(lyric='R')) == ['R'])
+    check('SBP.GetSymbols: 空歌词给空表', ph.get_symbols(Note(lyric='')) == [])
+    check('SBP.GetSymbols: 多个空格被 RemoveEmptyEntries 丢掉',
+          ph.get_symbols(Note(lyric='k  a ')) == ['k', 'a'])
+
+    class _Tok(_Sbp):
+        @property
+        def enable_phoneme_tokenization(self):
+            return True
+
+    tok = _Tok()
+    check('SBP.GetSymbols: 打开 tokenization 后无空格串走 TokenizePhonemes',
+          tok.get_symbols(Note(lyric='sha')) == ['sh', 'a'],
+          'got %r' % (tok.get_symbols(Note(lyric='sha')),))
+    check('SBP.GetSymbols: 有空格时逐段 tokenize 再拼起来',
+          tok.get_symbols(Note(lyric='sha kya')) == ['sh', 'a', 'k', 'y', 'a'])
+
+    # ---- 节奏系数
+    check('SBP: 节奏系数 bpm=120 → (300-120)/210/3+0.33',
+          abs(lf - ((300 - 120) / (300 - 90) / 3 + 0.33)) < 1e-12, 'got %r' % lf)
+
+    def _factor(bpm):
+        p = _Sbp()
+        p.set_timing(_CVVC_AXIS)
+        p.bpm = bpm
+        return p.get_tempo_note_length_factor()
+
+    check('SBP: 节奏系数被 Clamp 到 [90,300]（bpm=50 同 90；bpm=400 同 300）',
+          abs(_factor(50) - _factor(90)) < 1e-12
+          and abs(_factor(400) - _factor(300)) < 1e-12
+          and abs(_factor(300) - 0.33) < 1e-12,
+          'got %r / %r / %r' % (_factor(50), _factor(90), _factor(300)))
+    check('SBP: 常数过渡长 = 100 * 系数', abs(base_ms - 100 * lf) < 1e-12)
+
+    # ---- 音节切分
+    notes1 = [Note(lyric='k a s i', tone=60, duration=480)]
+    syl = ph.make_syllables(notes1, None)
+    check('SBP.MakeSyllables: 2 个元音 → 2 个音节（音符不够时先把末音符切碎）',
+          syl is not None and len(syl) == 2, 'got %r' % (len(syl) if syl else None))
+    check('SBP.MakeSyllables: 首音节 prev_v="" / cc=["k"] / v="a"',
+          syl[0].prev_v == '' and syl[0].cc == ['k'] and syl[0].v == 'a')
+    check('SBP.MakeSyllables: ★ 首音节 duration = -1（"没有前邻"的哨兵）',
+          syl[0].duration == -1 and syl[0].position == 0)
+    check('SBP.MakeSyllables: 第二音节 prev_v="a" / cc=["s"] / v="i"，'
+          'position = 前音符时长（480/2=240）',
+          (syl[1].prev_v, syl[1].cc, syl[1].v, syl[1].position, syl[1].duration)
+          == ('a', ['s'], 'i', 240, 240),
+          'got %r' % ((syl[1].prev_v, syl[1].cc, syl[1].v, syl[1].position, syl[1].duration),))
+    check('SBP.MakeSyllables: 第二音节 canAliasBeExtended = true，首音节则否',
+          syl[1].can_alias_be_extended is True and syl[0].can_alias_be_extended is False)
+    check('SBP.MakeSyllables: 前视 nextV/nextCc 从后一音节回填',
+          syl[0].next_v == 'i' and syl[0].next_cc == ['s']
+          and syl[1].next_v == '' and syl[1].next_cc == [])
+    check('SBP.MakeSyllables: helpers 分类正确（首 CV / VCV）',
+          syl[0].is_starting_cv and syl[0].is_starting_cv_with_one_consonant
+          and syl[1].is_vcv_with_one_consonant and not syl[0].is_vv)
+
+    end1 = ph.make_ending(notes1)
+    check('SBP.MakeEnding: prev_v="i" / cc=[] / hasTail=False',
+          (end1.prev_v, end1.cc, end1.has_tail) == ('i', [], False))
+    check('SBP.MakeEnding: position = 所有音符时长和；duration 从**最后一个元音**那个音符起算',
+          end1.position == 480 and end1.duration == 240,
+          'got %r / %r' % (end1.position, end1.duration))
+    check('SBP.MakeEnding: 空输入 / `?` 开头都给 None',
+          ph.make_ending([]) is None and ph.make_ending([Note(lyric='?abc')]) is None)
+
+    # ---- 音符不够时的切分（整数除法链 + 15 tick 对齐）
+    shrunk = ph.handle_not_enough_notes([Note(position=0, duration=500, tone=60)], [0, 1])
+    check('SBP.HandleNotEnoughNotes: 500/2/15*15 = 240（**先整除再乘回 15**），余数给最后一个',
+          [n.duration for n in shrunk] == [240, 260],
+          'got %r' % [n.duration for n in shrunk])
+    check('SBP.HandleNotEnoughNotes: position 连贯递增；tone/属性沿用末音符',
+          [n.position for n in shrunk] == [0, 240] and all(n.tone == 60 for n in shrunk))
+
+    class _ShortNotes(_Sbp):
+        def handle_not_enough_notes(self, notes, vowel_ids):
+            return list(notes)      # 故意不补齐，用来触发错误分支
+
+    ph_bad = _ShortNotes()
+    ph_bad.set_timing(_CVVC_AXIS)
+    check('SBP.MakeSyllables: ★ 音符补不齐时报 "Not enough extension notes, N more expected"',
+          ph_bad.make_syllables(notes1, None) is None
+          and ph_bad.error == 'Not enough extension notes, 1 more expected',
+          'got %r' % ph_bad.error)
+
+    # ---- 规则引擎（ApplyReplacements）
+    ph_r = _Sbp()
+    check('SBP.ApplyReplacements: 无规则时原样返回（同一对象）',
+          ph_r.apply_replacements(['k', 'a'], False) == ['k', 'a'])
+    ph_r.merging_replacements = [SBP.Replacement(from_=['k', 'a'], to=['k a'])]
+    check('SBP.ApplyReplacements: 合并规则把两段并成一段',
+          ph_r.apply_replacements(['k', 'a', 's'], False) == ['k a', 's'],
+          'got %r' % ph_r.apply_replacements(['k', 'a', 's'], False))
+    ph_r.merging_replacements = []
+    ph_r.splitting_replacements = [SBP.Replacement(from_='a', to=['a', 'R'])]
+    check('SBP.ApplyReplacements: 拆分规则把一段拆成两段',
+          ph_r.apply_replacements(['k', 'a'], False) == ['k', 'a', 'R'],
+          'got %r' % ph_r.apply_replacements(['k', 'a'], False))
+    check('SBP.ApplyReplacements: 单元素 from 也会被**主循环**吃掉（拆分回落段几乎不可达）',
+          ph_r.apply_replacements(['a', 'i'], False) == ['a', 'R', 'i'],
+          'got %r' % ph_r.apply_replacements(['a', 'i'], False))
+
+    # 组语法 + 捕获回填
+    ph_r.splitting_replacements = [SBP.Replacement(from_=['vowel', 'consonant'],
+                                                   to=['consonant', 'vowel'])]
+    check('SBP.ApplyReplacements: 组捕获后重排（vowel,consonant → consonant,vowel）',
+          ph_r.apply_replacements(['a', 'k'], False) == ['k', 'a'],
+          'got %r' % ph_r.apply_replacements(['a', 'k'], False))
+    ph_r.splitting_replacements = [SBP.Replacement(from_=['vowel', 'consonant'],
+                                                   to=['consonant+vowel'])]
+    check('SBP.ApplyReplacements: ★ to 侧 "X+Y" 只回填**第一个**组名，第二个组名会原样留下',
+          ph_r.apply_replacements(['a', 'k'], False) == ['kvowel'],
+          'got %r' % ph_r.apply_replacements(['a', 'k'], False))
+    ph_r.splitting_replacements = [SBP.Replacement(from_=['vowel!a'], to=['X'])]
+    check('SBP.ApplyReplacements: "!" 排除（vowel!a 不匹配 a、匹配 i）',
+          ph_r.apply_replacements(['a'], False) == ['a']
+          and ph_r.apply_replacements(['i'], False) == ['X'])
+    ph_r.splitting_replacements = [SBP.Replacement(from_=['vowel=i'], to=['X'])]
+    check('SBP.ApplyReplacements: "=" 限定（vowel=i 只匹配 i）',
+          ph_r.apply_replacements(['i'], False) == ['X']
+          and ph_r.apply_replacements(['a'], False) == ['a'])
+    ph_r.splitting_replacements = [SBP.Replacement(from_=['consonant&y'], to=['X'])]
+    check('SBP.ApplyReplacements: "&" 并集（y 不在辅音表里也能被并进来）',
+          ph_r.apply_replacements(['y'], False) == ['X']
+          and ph_r.apply_replacements(['k'], False) == ['X']
+          and ph_r.apply_replacements(['a'], False) == ['a'])
+    ph_r.splitting_replacements = [SBP.Replacement(from_=['(vowel)'], to=['X'])]
+    check('SBP.ApplyReplacements: 组名外的括号会被 Trim 掉（"(vowel)" == "vowel"）',
+          ph_r.apply_replacements(['a'], False) == ['X'])
+    ph_r.splitting_replacements = [SBP.Replacement(from_=['vowel'], to=['X'],
+                                                   where='boundary')]
+    check('SBP.ApplyReplacements: where=boundary 的规则在 inside 时**不**生效',
+          ph_r.apply_replacements(['a'], False) == ['a']
+          and ph_r.apply_replacements(['a'], True) == ['X'])
+    ph_r.splitting_replacements = []
+    check('SBP.IsGroupKeyword: 括号/修饰符都要先剥掉（"vowel!a" / "(nasal)"）',
+          ph_r.is_group_keyword('vowel!a') and ph_r.is_group_keyword('(nasal)')
+          and not ph_r.is_group_keyword('k'))
+    check('SBP._replacement_from_key: 字符串原样 / 序列逗号拼接 / 其余空串',
+          SBP._replacement_from_key('a') == 'a'
+          and SBP._replacement_from_key(['a', 'b']) == 'a,b'
+          and SBP._replacement_from_key(1) == '')
+
+    # ---- 边界替换（值语义：不许改到调用者的对象）
+    ph_b = _Sbp()
+    sy = SBP.Syllable(prev_v='a', cc=['k'], v='i', position=240)
+    check('SBP.ApplyBoundaryReplacements(Syllable): 无规则时原样返回',
+          ph_b.apply_boundary_replacements_syllable(sy) is sy)
+    ph_b.merging_replacements = [SBP.Replacement(from_=['a', 'k'], to=['a k'])]
+    out = ph_b.apply_boundary_replacements_syllable(sy)
+    check('SBP.ApplyBoundaryReplacements(Syllable): 合并后 prevV 变成 "a k"、cc 清空',
+          (out.prev_v, out.cc, out.v) == ('a k', [], 'i'),
+          'got %r' % ((out.prev_v, out.cc, out.v),))
+    check('SBP.ApplyBoundaryReplacements(Syllable): ★ 值语义 —— 原对象**没被改**',
+          (sy.prev_v, sy.cc, sy.v) == ('a', ['k'], 'i'))
+    check('SBP.ApplyBoundaryReplacements(Syllable): isBoundary = 有前元音 && position==0 '
+          '（这里 position=240 → inside）',
+          'bool isBoundary = (hasPrevV && syllable.position == 0) || !hasPrevV;' in cs)
+
+    ph_b.merging_replacements = []
+    # ★ 边界替换时 isBoundary=True → `where="inside"` 的规则**不参与**，必须写 "all"
+    ph_b.splitting_replacements = [SBP.Replacement(from_='null', to=['-'], where='all'),
+                                   SBP.Replacement(from_='R', to=['-'], where='all')]
+    sy2 = SBP.Syllable(prev_v='', cc=['k'], v='i', position=0)
+    out2 = ph_b.apply_boundary_replacements_syllable(sy2)
+    check('SBP.ApplyBoundaryReplacements(Syllable): "null" 占位符被换成 "-"（prevV="-", cc=["k"]）',
+          (out2.prev_v, out2.cc, out2.v) == ('-', ['k'], 'i'),
+          'got %r' % ((out2.prev_v, out2.cc, out2.v),))
+
+    end_a = SBP.Ending(prev_v='a', cc=['k'], tail='R')
+    oute = ph_b.apply_boundary_replacements_ending(end_a)
+    check('SBP.ApplyBoundaryReplacements(Ending): tail="R" 的规则把它换成 "-"',
+          (oute.prev_v, oute.cc, oute.tail, oute.has_tail) == ('a', ['k'], '-', True),
+          'got %r' % ((oute.prev_v, oute.cc, oute.tail),))
+    end_b = SBP.Ending(prev_v='a', cc=['k'], tail='')
+    oute2 = ph_b.apply_boundary_replacements_ending(end_b)
+    check('SBP.ApplyBoundaryReplacements(Ending): ★ tail 为空时按 "null" 参与匹配 '
+          '（所以空 tail 也能被规则补成 "-"）',
+          (oute2.prev_v, oute2.cc, oute2.tail) == ('a', ['k'], '-'))
+
+    # ---- has_oto 三段试查
+    class _SplitSinger:
+        """只在指定那一段返回命中，用来逐段验证 HasOto 的三次尝试。"""
+
+        def __init__(self, by_two=None, by_raw=None, by_empty_color=None):
+            self.by_two = by_two or {}
+            self.by_raw = by_raw or {}
+            self.by_empty_color = by_empty_color or {}
+            self.found = True
+            self.loaded = True
+            self.location = ''
+            self.id = 'split'
+
+        @property
+        def is_loaded(self):
+            return self.found and self.loaded
+
+        def try_get_mapped_oto(self, p, tone, color=None):
+            table = self.by_two if color is None else (
+                self.by_empty_color if color == '' else {})
+            return (p in table), table.get(p)
+
+        def try_get_oto(self, p):
+            return (p in self.by_raw), self.by_raw.get(p)
+
+    ph_h = _Sbp()
+    ph_h.singer = _SplitSinger(by_two={'x': oto('x')})
+    check('SBP.HasOto: 第 1 段 —— 2 参 `TryGetMappedOto(alias, tone)` 命中',
+          ph_h.has_oto('x', 60) is True)
+    ph_h.singer = _SplitSinger(by_raw={'x': oto('x')})
+    check('SBP.HasOto: 第 2 段 —— 裸别名 `TryGetOto` 命中',
+          ph_h.has_oto('x', 60) is True)
+    ph_h.singer = _SplitSinger(by_empty_color={'x': oto('x')})
+    check('SBP.HasOto: 第 3 段 —— 只有**空音色**那条重载命中',
+          ph_h.has_oto('x', 60) is True)
+    ph_h.singer = _SplitSinger()
+    check('SBP.HasOto: 三段都不命中 → False；空别名 → False（早退）',
+          ph_h.has_oto('x', 60) is False and ph_h.has_oto('', 60) is False)
+    ph_h.singer = None
+    check('SBP.HasOto: singer 为 None → False', ph_h.has_oto('x', 60) is False)
+    ph_h.singer = _OtoSinger({'x': oto('x')})
+    ph_h.singer.loaded = False
+    check('SBP.HasOto: ★ 歌手"找到了但没加载" → False（Loaded = Found && loaded）',
+          ph_h.has_oto('x', 60) is False and ph_h.singer.is_loaded is False)
+
+    # ---- validate_alias 回落链
+    ph_v = _Sbp()
+    ph_v.set_singer(_OtoSinger({'sh uw': oto('sh uw'), 'yy': oto('yy')}))
+    ph_v.set_timing(_CVVC_AXIS)
+    ph_v.yaml_fallbacks = [SBP.Replacement(from_='x', to='sh')]
+    check('SBP.ValidateAlias: 单规则精确替换命中（"x uw" → "sh uw"）',
+          ph_v.validate_alias('x uw', 60) == 'sh uw',
+          'got %r' % ph_v.validate_alias('x uw', 60))
+    check('SBP.ValidateAlias: oto 里本来就有的别名原样返回',
+          ph_v.validate_alias('sh uw', 60) == 'sh uw')
+    ph_v.yaml_fallbacks = []
+
+    class _Legacy(_Sbp):
+        def get_aliases_fallback(self):
+            return {'zz': 'yy'}
+
+    ph_l = _Legacy()
+    ph_l.set_singer(_OtoSinger({'yy': oto('yy')}))
+    ph_l.set_timing(_CVVC_AXIS)
+    check('SBP.ValidateAlias: legacy 回落命中 oto 时用它',
+          ph_l.validate_alias('zz', 60) == 'yy')
+    ph_l.set_singer(_OtoSinger({}))
+    check('SBP.ValidateAlias: ★ legacy 目标**查不到 oto 也照样返回它**（C# 两次 return 同一个值）',
+          ph_l.validate_alias('zz', 60) == 'yy')
+    check('SBP.ValidateAlias: 完全没招时返回原别名',
+          ph_l.validate_alias('nothing', 60) == 'nothing')
+    check('SBP.ValidateAlias: singer 未就绪 / 空别名 → 原样返回',
+          ph_l.validate_alias('', 60) == ''
+          and _Sbp().validate_alias('abc', 60) == 'abc')
+
+    # ---- is_short / 别名延续 / 同 subbank
+    check('SBP.IsShort(Syllable): 250ms 音符不短、62.5ms 短、duration=-1 直接 false',
+          ph.is_short(SBP.Syllable(duration=240)) is False
+          and ph.is_short(SBP.Syllable(duration=60)) is True
+          and ph.is_short(SBP.Syllable(duration=-1)) is False,
+          'got %r / %r' % (ph.is_short(SBP.Syllable(duration=240)),
+                           ph.is_short(SBP.Syllable(duration=60))))
+    check('SBP.IsShort(Ending): 没有 -1 哨兵那一层，60 tick 就是短',
+          ph.is_short(SBP.Ending(duration=60)) is True
+          and ph.is_short(SBP.Ending(duration=240)) is False)
+    check('SBP.CanMakeAliasExtension: 三者齐备才行（可延长 && prevV==v && cc 为空）',
+          ph.can_make_alias_extension(
+              SBP.Syllable(prev_v='a', cc=[], v='a', can_alias_be_extended=True)) is True
+          and ph.can_make_alias_extension(
+              SBP.Syllable(prev_v='a', cc=['k'], v='a', can_alias_be_extended=True)) is False
+          and ph.can_make_alias_extension(
+              SBP.Syllable(prev_v='i', cc=[], v='a', can_alias_be_extended=True)) is False)
+
+    class _Sub:
+        def __init__(self, tone_set):
+            self.tone_set = tone_set
+
+    class _SubSinger:
+        def __init__(self, subbanks):
+            self.subbanks = subbanks
+            self.found = True
+            self.loaded = True
+            self.location = ''
+            self.id = 'sub'
+
+        @property
+        def is_loaded(self):
+            return self.found and self.loaded
+
+        def try_get_oto(self, p):
+            return False, None
+
+        def try_get_mapped_oto(self, p, tone, color=None):
+            return False, None
+
+    ph_s = _Sbp()
+    ph_s.singer = _SubSinger([_Sub([60])])
+    check('SBP.AreTonesFromTheSameSubbank: 只有一个 subbank → 恒 true',
+          ph_s.are_tones_from_the_same_subbank(60, 72) is True)
+    ph_s.singer = _SubSinger([_Sub([60]), _Sub([72])])
+    check('SBP.AreTonesFromTheSameSubbank: "一边含一边不含" → false',
+          ph_s.are_tones_from_the_same_subbank(60, 72) is False)
+    ph_s.singer = _SubSinger([_Sub([60, 72]), _Sub([60, 72])])
+    check('SBP.AreTonesFromTheSameSubbank: 同一集合同时含二者 → true',
+          ph_s.are_tones_from_the_same_subbank(60, 72) is True)
+    check('SBP.AreTonesFromTheSameSubbank: tone 相等直接 true（不查 subbank）',
+          ph_s.are_tones_from_the_same_subbank(63, 63) is True)
+
+    # ---- TryAddPhoneme 两个重载
+    ph_t = _Sbp()
+    ph_t.set_singer(_OtoSinger({'v R': oto('v R')}))
+    lst = []
+    check('SBP.TryAddPhoneme(list, tone, ...): 命中就加进列表并返回 True',
+          ph_t.try_add_phoneme(lst, 60, 'x', 'v R') is True and lst == ['v R'])
+    check('SBP.TryAddPhoneme: 一个都没命中时不加、返回 False',
+          ph_t.try_add_phoneme(lst, 60, 'nope') is False and lst == ['v R'])
+    ph_t.runtime_glides.clear()
+    check('SBP.TryAddPhoneme(list, tone, isGlide=True, ...): 顺带把它登记成滑音'
+          '（★ Python 用**仅关键字** is_glide 代替 C# 的重载）',
+          ph_t.try_add_phoneme(lst, 60, 'v R', is_glide=True) is True
+          and ph_t.is_glide('v R') is True and 'v R' in ph_t.runtime_glides)
+    ph_t.enable_glides = False
+    check('SBP.IsGlide: enableGlides=false 时即使登记过也算 false（两个条件都要）',
+          ph_t.is_glide('v R') is False)
+
+    # ---- 字典状态的"缺键会抛"
+    ph_k = _Sbp()
+    check('SBP: has_dictionary 为 False 时读 dictionary / is_dictionary_loading **会抛 KeyError**'
+          '（照搬 C# 的字典索引语义）',
+          ph_k.has_dictionary is False
+          and _raises_type(KeyError, lambda: ph_k.dictionary)
+          and _raises_type(KeyError, lambda: ph_k.is_dictionary_loading))
+
+    # ================= 端到端：Process 全链路 =================
+    ph_e = _Sbp()
+    ph_e.set_singer(_OtoSinger({'- ka': oto('- ka'), 'a -': oto('a -'),
+                                'a i': oto('a i'), 'i -': oto('i -')}))
+    ph_e.set_timing(_CVVC_AXIS)
+    r = ph_e.process([Note(lyric='k a', tone=60, duration=480)])
+    check('SBP.Process: 单音节 → 基音 + 句末尾韵两个音素，别名走 ProcessSyllable/ProcessEnding',
+          [p.phoneme for p in r.phonemes] == ['- ka', 'a -'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+    check('SBP.Process: 基音 position=0（无 glide 时锚点就是元音）',
+          r.phonemes[0].position == 0, 'got %r' % r.phonemes[0].position)
+    check('SBP.Process: ★ 句末音素 = 容器 − Min(50, 容器/3)（NoGap 吸附 50 tick）',
+          r.phonemes[1].position == 480 - min(50, 480 // 3),
+          'got %r' % r.phonemes[1].position)
+    check('SBP.Process: index 被重排成连续的 0,1',
+          [p.index for p in r.phonemes] == [0, 1],
+          'got %r' % [p.index for p in r.phonemes])
+
+    ph_e2 = _Sbp()
+    ph_e2.set_singer(_OtoSinger({'- ka': oto('- ka'), 'a -': oto('a -')}))
+    ph_e2.set_timing(_CVVC_AXIS)
+    r2 = ph_e2.process([Note(lyric='k a', tone=60, duration=120)])
+    check('SBP.Process: 短音符时容器/3 才是上限（120/3=40 < 50）',
+          r2.phonemes[1].position == 120 - min(50, 120 // 3) == 80,
+          'got %r' % r2.phonemes[1].position)
+
+    class _NoGapOff(_Sbp):
+        @property
+        def no_gap(self):
+            return False
+
+    ph_ng = _NoGapOff()
+    ph_ng.set_singer(_OtoSinger({'- ka': oto('- ka', preutter=100.0),
+                                 'a -': oto('a -', preutter=100.0)}))
+    ph_ng.set_timing(_CVVC_AXIS)
+    r3 = ph_ng.process([Note(lyric='k a', tone=60, duration=480)])
+    check('SBP.Process: ★ NoGap=false 时改用完整 Preutter（position = 容器 − MsToTick(100)）',
+          r3.phonemes[1].position == 480 - ph_ng.ms_to_tick(100.0),
+          'got %r vs %r' % (r3.phonemes[1].position, 480 - ph_ng.ms_to_tick(100.0)))
+
+    # 带前邻：VC + CV
+    ph_e3 = _Sbp()
+    ph_e3.set_singer(_OtoSinger({'a k': oto('a k'), 'ki': oto('ki'),
+                                 'i -': oto('i -')}))
+    ph_e3.set_timing(_CVVC_AXIS)
+    r4 = ph_e3.process([Note(lyric='k i', tone=60, duration=480)],
+                       prev_neighbours=[Note(lyric='a', tone=60, duration=480)])
+    check('SBP.Process: 有前邻时首音节 prevV 来自前一词 → 产出 VC（"a k"）与 CV（"ki"）',
+          [p.phoneme for p in r4.phonemes][:2] == ['a k', 'ki'],
+          'got %r' % [p.phoneme for p in r4.phonemes])
+    check('SBP.Process: VC 落在**负**位置（挤到音符起点之前），CV 在 0',
+          r4.phonemes[0].position < 0 and r4.phonemes[1].position == 0,
+          'got %r' % [p.position for p in r4.phonemes])
+
+    # `?` 强制别名 / 未加载歌手
+    check('SBP.Process: `?abc` 直接产出 abc',
+          [p.phoneme for p in ph_e.process([Note(lyric='?abc', tone=60, duration=480)])
+           .phonemes] == ['abc'])
+    check('SBP.Process: 歌手为 None 时给空音素（MakeSimpleResult("")）',
+          [p.phoneme for p in _Sbp().process([Note(lyric='k a')]).phonemes] == [''])
+
+    # ---- AssignAllAffixes 的 alt 处理
+    ph_a = _Sbp()
+    ph_a.set_singer(_OtoSinger({'- ka': oto('- ka'), '- ka2': oto('- ka2')}))
+    ph_a.set_timing(_CVVC_AXIS)
+    attr = SBP.PhonemeAttributes(index=0, alternate=2)
+    p0 = Phoneme(phoneme='- ka', index=0, position=0)
+    out_a = ph_a.assign_all_affixes([p0], [Note(lyric='k a', tone=60, duration=480)], [],
+                                    [attr])
+    check('SBP.AssignAllAffixes: attr.alternate=2 → 先试 "- ka2" 命中',
+          out_a[0].phoneme == '- ka2', 'got %r' % out_a[0].phoneme)
+    check('SBP.AssignAllAffixes: 正值 alt 会写回 expressions（供 UI 滑条回显）',
+          any(e.abbr == 'alt' and e.value == 2 for e in out_a[0].expressions))
+    # alt 来自音素自带表达式时取 (int) 截断
+    ph_a2 = _Sbp()
+    ph_a2.set_singer(_OtoSinger({'- ka': oto('- ka'), '- ka2': oto('- ka2')}))
+    ph_a2.set_timing(_CVVC_AXIS)
+    p1 = Phoneme(phoneme='- ka', index=0, position=0,
+                 expressions=[PhonemeExpression(abbr='alt', value=2.7)])
+    out_a2 = ph_a2.assign_all_affixes([p1], [Note(lyric='k a', tone=60, duration=480)], [], [])
+    check('SBP.AssignAllAffixes: ★ alt 取自带表达式时是 `(int)` **向零截断**（2.7 → 2，不是 3）',
+          out_a2[0].phoneme == '- ka2'
+          and any(e.abbr == 'alt' and e.value == 2 for e in out_a2[0].expressions),
+          'got %r / %r' % (out_a2[0].phoneme, out_a2[0].expressions))
+    p2 = Phoneme(phoneme='- ka', index=0, position=0,
+                 expressions=[PhonemeExpression(abbr='alt', value=-3.0)])
+    out_a3 = ph_a2.assign_all_affixes([p2], [Note(lyric='k a', tone=60, duration=480)], [], [])
+    check('SBP.AssignAllAffixes: ★ 非正的 alt 不会被采用，但**原表达式也不会被清掉**'
+          '（altValue 为 null 就不重写 expressions）',
+          out_a3[0].phoneme == '- ka'
+          and any(e.abbr == 'alt' and e.value == -3.0 for e in out_a3[0].expressions),
+          'got %r / %r' % (out_a3[0].phoneme, out_a3[0].expressions))
+    p3 = Phoneme(phoneme=None, index=0, position=77)
+    out_a4 = ph_a2.assign_all_affixes([p3], [Note(lyric='k a', tone=60, duration=480)], [], [])
+    check('SBP.AssignAllAffixes: phoneme 为 None 时把 position 归零（哨兵语义）',
+          out_a4[0].position == 0)
+
+    # ---- 真 ClassicSinger 上也要能跑（接口契约回归）
+    ph_real = _Sbp()
+    real_singer = _real_classic_singer({'- ka': oto('- ka'), 'a -': oto('a -')})
+    real_singer.loaded = True            # ★ `Loaded = Found && loaded`，真歌手默认没加载
+    ph_real.set_singer(real_singer)
+    ph_real.set_timing(_CVVC_AXIS)
+    rr = ph_real.process([Note(lyric='k a', tone=60, duration=480)])
+    check('SBP × 真 ClassicSinger: 端到端能跑（不会把 (found, oto) 当裸值）',
+          [p.phoneme for p in rr.phonemes] == ['- ka', 'a -'],
+          'got %r' % [p.phoneme for p in rr.phonemes])
+
+    # ================= G2pRemapper =================
+    base = G2pDictionary.new_builder()
+    base.add_symbol('a', True)
+    base.add_symbol('k', False)
+    base.add_entry('ka', ['k', 'a'])
+    base_d = base.build()
+    remap = G2pRemapper(base_d, {'A': True, 'K': False}, {'a': 'A', 'k': 'K'})
+    check('G2pRemapper: is_valid_symbol/is_vowel 用**自己**的表，不看被包的字典',
+          remap.is_valid_symbol('A') and not remap.is_valid_symbol('a')
+          and remap.is_vowel('A') is True and remap.is_vowel('a') is False)
+    check('G2pRemapper: query 做音素替换，且**不动**被包字典的内部数组',
+          remap.query('ka') == ['K', 'A'] and base_d.query('ka') == ['k', 'a'])
+    check('G2pRemapper: query 查不到时**原样返回 None**（不是空表）',
+          remap.query('zzz') is None and remap.query('A') is None)
+    check('G2pRemapper: ★ is_glide 只看自己的 glideSymbols，**不透传**给被包的字典',
+          remap.is_glide('a') is False
+          and G2pRemapper(base_d, {'a': True}, {}).is_glide('a') is False)
+    check('G2pRemapper: unpack_hint 保留空段再按自己的表过滤',
+          remap.unpack_hint('K  A') == ['K', 'A']
+          and remap.unpack_hint('a k') == [])
+
+    # ================= YamlWatcher =================
+    class _FakeWatchBackend:
+        def __init__(self):
+            self.started = None
+            self.stopped = False
+            self.on_change = None
+            self.on_error = None
+
+        def start(self, path, on_change, on_error, file_filter, recursive):
+            self.started = (path, file_filter, recursive)
+            self.on_change = on_change
+            self.on_error = on_error
+
+        def stop(self):
+            self.stopped = True
+
+    fired = []
+    be = _FakeWatchBackend()
+    w = YamlWatcher('/some/dir', lambda: fired.append(1), backend=be)
+    check('YamlWatcher: 递归监视 *.yaml（Filter="*.yaml" / IncludeSubdirectories=true）',
+          be.started == ('/some/dir', '*.yaml', True), 'got %r' % (be.started,))
+    be.on_change('/some/dir/a.yaml', 'Changed')
+    check('YamlWatcher: 有变更就回调', fired == [1])
+    w.paused = True
+    be.on_change('/some/dir/b.yaml', 'Created')
+    check('YamlWatcher: Paused 时只跳过回调、不停止监视', fired == [1])
+    w.paused = False
+    be.on_change('/some/dir/a.yaml', 'Deleted')
+    be.on_change('/some/dir/a.yaml', 'Renamed')
+    check('YamlWatcher: 四种变更都走同一个回调（不做去重 → 删+建会触发两次）',
+          fired == [1, 1, 1])
+    check('YamlWatcher: on_error 只记日志、不抛', w.on_error(ValueError('x')) is None)
+    w.dispose()
+    check('YamlWatcher: Dispose 只停后端，**不复位** Paused', be.stopped is True)
+    check('YamlWatcher: 不注入后端时用 Noop（默认不监视，也不报错）',
+          YamlWatcher('/nope', None).dispose() is None)
+
+    # SBP 侧的 watcher 回调：清缓存 + generation++ + 让歌手重载
+    gen_before = SBP.SyllableBasedPhonemizer.global_sbp_generation
+    SBP.SyllableBasedPhonemizer.clear_yaml_cache()
+    SBP.SyllableBasedPhonemizer.yaml_cache['sentinel'] = (1.0, None)
+    reloaded = []
+
+    class _WatchSinger(_OtoSinger):
+        def reload(self):
+            reloaded.append(1)
+
+    ph_w = _Sbp()
+    ph_w.singer = _WatchSinger({})
+    ph_w._singer_loaded = True
+    ph_w._on_yaml_changed('/some/dir', 'Singer')
+    check('SBP._onYamlChanged: 先清 YAML 缓存再 generation++',
+          SBP.SyllableBasedPhonemizer.yaml_cache == {}
+          and SBP.SyllableBasedPhonemizer.global_sbp_generation == gen_before + 1)
+    check('SBP._onYamlChanged: 把 _singerLoaded 复位，并让歌手重载（走了可注入调度器）',
+          ph_w._singer_loaded is False and reloaded == [1])
+    ph_w.local_sbp_generation = gen_before      # 别把 generation 差带进后面的用例
+    SBP.SyllableBasedPhonemizer.global_sbp_generation = gen_before
+
+    # ================= YAML 装载 =================
+    try:
+        import yaml  # noqa: F401
+    except ImportError:
+        print('  SKIP 没有 PyYAML，跳过 YAML 装载用例')
+        return
+
+    tmp = tempfile.mkdtemp(prefix='sbp-yaml-')
+    old_plugin_dir = os.environ.get('FUFUMIDI_PLUGIN_DIR')
+    try:
+        os.environ['FUFUMIDI_PLUGIN_DIR'] = tmp
+
+        class _Yaml(_Sbp):
+            @property
+            def yaml_file_name(self):
+                return 'test_sbp.yaml'
+
+            @property
+            def yaml_template(self):
+                return b'version: 1.0\n'
+
+            @property
+            def yaml_version(self):
+                return '1.0'
+
+        singer_dir = os.path.join(tmp, 'singer')
+        os.makedirs(singer_dir, exist_ok=True)
+        global_yaml = os.path.join(tmp, 'test_sbp.yaml')
+        singer_yaml = os.path.join(singer_dir, 'test_sbp.yaml')
+
+        # (1) 全局文件缺失 + 有模板 → 自动写出来
+        SBP.SyllableBasedPhonemizer.clear_yaml_cache()
+        ph_y = _Yaml()
+        ph_y.set_singer(_OtoSinger({}, location=singer_dir))
+        check('SBP.SetSinger(YAML): 全局 YAML 缺失且有模板 → 自动创建（WriteAllBytes 语义）',
+              os.path.isfile(global_yaml)
+              and open(global_yaml, 'rb').read() == b'version: 1.0\n')
+
+        # (2) 版本更旧 → 改名备份 + 覆写模板
+        with open(global_yaml, 'w', encoding='utf-8') as f:
+            f.write('version: 0.9\nsymbols:\n  - symbol: Q\n    type: vowel\n')
+        SBP.SyllableBasedPhonemizer.clear_yaml_cache()
+        ph_y2 = _Yaml()
+        ph_y2.set_singer(_OtoSinger({}, location=singer_dir))
+        backup = os.path.join(tmp, 'test_sbp_backup(0.9).yaml')
+        check('SBP.SetSinger(YAML): 旧版本先改名备份为 {名}_backup({版本}){扩展名}',
+              os.path.isfile(backup), 'got %r' % os.listdir(tmp))
+        check('SBP.SetSinger(YAML): 备份里留着旧内容、新文件被写成模板',
+              'symbols:' in open(backup, encoding='utf-8').read()
+              and open(global_yaml, 'rb').read() == b'version: 1.0\n')
+
+        # (3) 正常装载：全局 + 声库两份叠加（声库在后、覆盖在前）
+        with open(global_yaml, 'w', encoding='utf-8') as f:
+            f.write(
+                'version: 1.0\n'
+                'isglides: false\n'
+                'symbols:\n'
+                '  - symbol: Q\n    type: vowel\n'
+                '  - symbol: zz\n    type: nasal\n'
+                '  - symbol: dy\n    type: diphthong\n'
+                '  - symbol: "**"\n    type: tail\n'
+                'timings:\n'
+                '  - symbol: zz\n    value: 2.5\n'
+                'diphthongs:\n'
+                '  - from: dy\n    to: D\n'
+                'vowelsustains:\n'
+                '  - symbol: Q\n    sustain: "Q -"\n    offset: 0.5\n'
+                'fallbacks:\n'
+                '  - from: X\n    to: Y\n'
+                '  - from: onlyfrom\n'
+                'replacements:\n'
+                '  - from: [a, k]\n    to: [a k]\n'
+                '  - from: q\n    to: [q, R]\n')
+        with open(singer_yaml, 'w', encoding='utf-8') as f:
+            f.write('version: 1.0\nsymbols:\n  - symbol: SS\n    type: fricative\n'
+                    'timings:\n  - symbol: SS\n    value: 3.0\n')
+        SBP.SyllableBasedPhonemizer.clear_yaml_cache()
+        ph_y3 = _Yaml()
+        ph_y3.set_singer(_OtoSinger({}, location=singer_dir))
+        check('SBP.SetSinger(YAML): symbols 按 type 归并；vowel 与 diphthong 一起进 vowels',
+              ph_y3.vowels[:2] == ['Q', 'dy'] and 'SS' not in ph_y3.vowels,
+              'got %r' % ph_y3.vowels)
+        check('SBP.SetSinger(YAML): ★ tails 被 SetSinger 重置成 ["-"] 后再并入 YAML 的 tail',
+              ph_y3.tails == ['**', '-'], 'got %r' % ph_y3.tails)
+        check('SBP.SetSinger(YAML): 分类符表（nasal / fricative）各自并入 consonants',
+              'zz' in ph_y3.nasal and 'SS' in ph_y3.fricative
+              and 'zz' in ph_y3.consonants and 'SS' in ph_y3.consonants)
+        check('SBP.SetSinger(YAML): ★ 声库那份**后**解析 → 覆盖全局的 timings',
+              ph_y3.phoneme_overrides == {'zz': 2.5, 'SS': 3.0},
+              'got %r' % ph_y3.phoneme_overrides)
+        check('SBP.SetSinger(YAML): diphthongs 的显式映射优先，没给 to 的自动补 "{d}-"',
+              ph_y3.diphthong_tails == {'dy': 'D'},
+              'got %r' % ph_y3.diphthong_tails)
+        check('SBP.SetSinger(YAML): vowelsustains 收进 (sustain, offset)',
+              ph_y3.vowel_sustains.get('Q') == ('Q -', 0.5))
+        check('SBP.SetSinger(YAML): replacements 按 from 的类型分流 —— 标量进 splitting、'
+              '序列进 merging',
+              [r.from_ for r in ph_y3.merging_replacements] == [['a', 'k']]
+              and [r.from_ for r in ph_y3.splitting_replacements] == ['q'],
+              'got %r / %r' % ([r.from_ for r in ph_y3.merging_replacements],
+                               [r.from_ for r in ph_y3.splitting_replacements]))
+        check('SBP.SetSinger(YAML): ★ replacements 里标量 from 会顺带删掉同名 '
+              'dictionaryReplacements 项（C# 原文如此）',
+              'dictionaryReplacements.Remove(fromStr);' in cs)
+        check('SBP.SetSinger(YAML): fallbacks 只留 from/to 都非空的（缺 to 的被丢）',
+              [r.from_ for r in ph_y3.yaml_fallbacks] == ['X'],
+              'got %r' % [r.from_ for r in ph_y3.yaml_fallbacks])
+        check('SBP.SetSinger(YAML): isglides: false → enableGlides=false',
+              ph_y3.enable_glides is False)
+        check('SBP.SetSinger(YAML): 硬编码表被备份下来（再换歌手时用备份重置）',
+              ph_y3._backup_vowels == ['a', 'i', 'u', 'e', 'o']
+              and ph_y3._backup_consonants == ['k', 's', 't', 'y', 'n', 'm', 'sh'])
+
+        # (4) 模板版本相同 → 不备份、不覆写（内容保留）
+        SBP.SyllableBasedPhonemizer.clear_yaml_cache()
+        before = open(global_yaml, encoding='utf-8').read()
+        ph_y4 = _Yaml()
+        ph_y4.set_singer(_OtoSinger({}, location=singer_dir))
+        check('SBP.SetSinger(YAML): 版本相同 → 不动原文件（保护用户改动）',
+              open(global_yaml, encoding='utf-8').read() == before
+              and not os.path.isfile(os.path.join(tmp, 'test_sbp_backup(1.0).yaml')))
+        check('SBP.SetSinger(YAML): ★ "1.2" < "1.2.0"（Version 缺段补 -1）也会触发改写',
+              SBP._parse_version('1.2') < SBP._parse_version('1.2.0'))
+
+        # (5) YAML 缓存按「全路径 + mtime」命中
+        SBP.SyllableBasedPhonemizer.clear_yaml_cache()
+        d1 = SBP.SyllableBasedPhonemizer._load_yaml_cached(global_yaml)
+        n_after_first = len(SBP.SyllableBasedPhonemizer.yaml_cache)
+        d2 = SBP.SyllableBasedPhonemizer._load_yaml_cached(global_yaml)
+        check('SBP.LoadYamlCached: 同一文件第二次读走缓存（命中同一对象）',
+              d1 is d2 and n_after_first == 1)
+        check('SBP.ReadVersionFast: 从文件里读出 version 值',
+              SBP.read_version_fast(global_yaml) == '1.0')
+        check('SBP.LoadYamlCached: 坏 YAML 只记日志、返回 None（不抛）',
+              SBP.SyllableBasedPhonemizer._load_yaml_cached(
+                  os.path.join(tmp, 'nope.yaml')) is None)
+
+        # (6) 解析失败/未知键要"容错"（IgnoreUnmatchedProperties 语义）
+        data = SBP.YAMLData.from_plain({'version': '9', 'unknownKey': 1, 'symbols': 'oops'})
+        check('SBP.YAMLData: 未知键忽略、类型不符的字段退化成默认（容错反序列化）',
+              data.version == '9' and data.symbols == [] and data.isglides is None)
+    finally:
+        if old_plugin_dir is None:
+            os.environ.pop('FUFUMIDI_PLUGIN_DIR', None)
+        else:
+            os.environ['FUFUMIDI_PLUGIN_DIR'] = old_plugin_dir
+        SBP.SyllableBasedPhonemizer.clear_yaml_cache()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _raises_type(exc, fn):
+    """小工具：期望抛**指定类型**的异常（本文件已有一个更宽松的 `_raises(fn)`）。"""
+    try:
+        fn()
+    except exc:
+        return True
+    except Exception:
+        return False
+    return False
+
+
 def main():
     print('--- Format.Ustx 常量 ---')
     test_format_constants()
@@ -6158,6 +7074,8 @@ def main():
     test_phoneme_based_phonemizer()
     print('--- Core/G2p 基础设施 ---')
     test_g2p()
+    print('--- Plugin.Builtin/SyllableBased + G2pRemapper + YamlWatcher ---')
+    test_syllable_based_phonemizer()
     print('--- 音素化器 × 真 ClassicSinger（接口契约回归） ---')
     test_phonemizers_against_real_singer()
     print('--- Plugin.Builtin/JapaneseCVVC ---')

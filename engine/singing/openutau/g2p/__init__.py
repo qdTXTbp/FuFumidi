@@ -21,12 +21,13 @@ C# 把这几件东西按**命名空间**分在两处：接口与实现基类在 
 - `dictionary.py`     `Api/G2pDictionary.cs`（Trie + Builder）
 - `fallbacks.py`      `Api/G2pFallbacks.cs`
 - `pack.py`           `Api/G2pPack.cs`（ONNX 会话可注入）
+- `remapper.py`       `Api/G2pRemapper.cs`（音素重映射 —— `SyllableBasedPhonemizer` 靠它
+                      把子类硬编码的符号表套到字典上）
 - `arpabet.py`        `Core/G2p/ArpabetG2p.cs`（英文 ARPA 表；数据走 `set_data_dir` 注入）
 
 ## 未照搬（后续）
-- `G2pRemapper.cs`（音素重映射）、其余语言 G2p（`KoreanG2p` / `JapaneseMonophoneG2p` /
-  `FrenchG2p` / `GermanG2p` / `ItalianG2p` / `SpanishG2p` / `RussianG2p` /
-  `PortugueseG2p` / `FilipinoG2p`）
+- 其余语言 G2p（`KoreanG2p` / `JapaneseMonophoneG2p` / `FrenchG2p` / `GermanG2p` /
+  `ItalianG2p` / `SpanishG2p` / `RussianG2p` / `PortugueseG2p` / `FilipinoG2p`）
 """
 
 from .arpabet import ArpabetG2p, build_grapheme_indexes, set_data_dir  # noqa: F401
@@ -35,12 +36,14 @@ from .dictionary_data import G2pDictionaryData, SymbolData  # noqa: F401
 from .fallbacks import G2pFallbacks  # noqa: F401
 from .i_g2p import IG2p, IG2pSymbols  # noqa: F401
 from .pack import G2pPack, is_all_punct, set_onnx_session_factory  # noqa: F401
+from .remapper import G2pRemapper  # noqa: F401
 
 __all__ = [
     'IG2p', 'IG2pSymbols',
     'G2pDictionaryData', 'SymbolData',
     'G2pDictionary', 'TrieNode',
     'G2pFallbacks',
+    'G2pRemapper',
     'G2pPack', 'set_onnx_session_factory', 'is_all_punct',
     'ArpabetG2p', 'set_data_dir', 'build_grapheme_indexes',
 ]

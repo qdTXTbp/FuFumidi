@@ -17,6 +17,7 @@
   - `classic_renderer.py`      把变调器与拼接器串成一条乐句（Classic/ClassicRenderer.cs）
   - `worldline_renderer.py`    Worldline 渲染器 v10/v11/v20（Classic/WorldlineRenderer.cs）
   - `oto_watcher.py`           `oto.ini` 变更监视（Classic/OtoWatcher.cs；后端可注入）
+  - `yaml_watcher.py`          `.yaml` 变更监视（Classic/YamlWatcher.cs；后端可注入）
   - `classic_singer.py`        UTAU 声库歌手（Classic/ClassicSinger.cs）
   - `classic_singer_loader.py` 声库发现（Classic/ClassicSingerLoader.cs；工厂可注册）
   - `ini.py`                   INI 分块读取（Classic/Ini.cs）
