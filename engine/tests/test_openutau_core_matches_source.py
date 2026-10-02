@@ -5957,6 +5957,132 @@ def test_chinese_cvv_phonemizer():
           'got %r' % [p.phoneme for p in r3.phonemes])
 
 
+def test_arpabet_g2p_and_latin_diphone():
+    """`G2p/ArpabetG2p.cs` + `LatinDiphonePhonemizer.cs`。"""
+    from singing.openutau import Note
+    from singing.openutau.g2p import ArpabetG2p, set_data_dir
+    from singing.openutau.g2p import arpabet as A
+    from singing.openutau.plugin_builtin import LatinDiphonePhonemizer
+
+    cs = _read('G2p/ArpabetG2p.cs')
+    cs_l = open(os.path.join(os.path.dirname(REF), 'OpenUtau.Plugin.Builtin',
+                             'LatinDiphonePhonemizer.cs'), encoding='utf-8-sig').read()
+    if cs is None:
+        print('  SKIP 找不到 G2p/ArpabetG2p.cs')
+        return
+
+    # ---------------- 源码一致性
+    def arr(name, src=cs):
+        m = re.search(r'%s = new string\[\]\s*\{(.*?)\};' % name, src, re.S)
+        if not m:
+            return None
+        # ★ C# 源码里单引号写成 "\'"（转义）；提取后要反转义才是真正的字面值
+        return [v.replace("\\'", "'") for v in re.findall(r'"([^"]*)"', m.group(1))]
+
+    check('ArpabetG2p: graphemes 表逐项一致（32 项，**前 4 项是空串**）',
+          arr('graphemes') == list(A.GRAPHEMES), 'C#=%r' % arr('graphemes'))
+    check('ArpabetG2p: phonemes 表逐项一致（43 项，前 4 项空串）',
+          arr('phonemes') == list(A.PHONEMES) and len(A.PHONEMES) == 43)
+    check('ArpabetG2p: 下标是 Skip(4) 之后的 i + 4',
+          '.Skip(4)\n                        .Select((g, i) => Tuple.Create(g, i))\n'
+          in cs or 't.Item2 + 4' in cs)
+    check('ArpabetG2p: LoadPack 的预处理是 小写化 / 去尾部数字后小写化',
+          's => s.ToLowerInvariant(),\n                        s => RemoveTailDigits(s.ToLowerInvariant())' in cs)
+    check('ArpabetG2p: 用静态字段 + lock 做"每进程只装一次"的缓存',
+          'private static object lockObj = new object();' in cs
+          and 'if (graphemeIndexes == null) {' in cs)
+    check('ArpabetG2p: 包来自程序集内嵌资源 Data.Resources.g2p_arpabet',
+          'Data.Resources.g2p_arpabet' in cs)
+
+    check('LatinDiphone: 继承 PhonemeBasedPhonemizer（抽象、不注册）',
+          'abstract class LatinDiphonePhonemizer : PhonemeBasedPhonemizer' in cs_l
+          and LatinDiphonePhonemizer.name == '')
+    check('LatinDiphone: 五段回落的顺序（alt → 双音素 → 元音回落 → **"- 符号"** → 原串）',
+          cs_l.index('$"{prevSymbol} {symbol}{alt}"')
+          < cs_l.index('$"{prevSymbol} {symbol}"')
+          < cs_l.index('$"{prevSymbol} {fallback}"')
+          < cs_l.index('$"- {symbol}"')
+          < cs_l.index('return $"{prevSymbol} {symbol}{alt}";'))
+    check('LatinDiphone: 第 4 段 `"- {symbol}"` 是 Monophone **没有**的',
+          '$"- {symbol}"' in cs_l)
+
+    # ---------------- ArpabetG2p 行为
+    set_data_dir(None)
+    try:
+        ArpabetG2p.reset_cache()
+        ArpabetG2p()
+        check('ArpabetG2p: 未配数据目录时抛 FileNotFoundError（并说明怎么配）', False, '没抛错')
+    except FileNotFoundError as e:
+        check('ArpabetG2p: 未配数据目录时抛 FileNotFoundError（并说明怎么配）',
+              'set_data_dir' in str(e), 'got %r' % str(e)[:60])
+
+    data_dir = os.path.join(os.path.dirname(REF), 'OpenUtau.Core', 'G2p', 'Data')
+    if not os.path.isdir(data_dir):
+        print('  SKIP 找不到 G2p/Data 目录')
+        return
+    set_data_dir(data_dir)
+    ArpabetG2p.reset_cache()
+    g = ArpabetG2p()
+    check('ArpabetG2p: 真包可查（hello → hh ah l ow）',
+          g.query('hello') == ['hh', 'ah', 'l', 'ow'], 'got %r' % g.query('hello'))
+    check('ArpabetG2p: grapheme_indexes 的下标是 4..31（\'→4 / -→5 / a→6 / z→31）',
+          (g.grapheme_indexes["'"], g.grapheme_indexes['-'],
+           g.grapheme_indexes['a'], g.grapheme_indexes['z']) == (4, 5, 6, 31),
+          'got %r' % {k: g.grapheme_indexes[k] for k in ("'", '-', 'a', 'z')})
+    check('ArpabetG2p: 那 4 个空串**不在**索引表里（Skip(4) 去掉了）',
+          '' not in g.grapheme_indexes)
+    check('ArpabetG2p: Phonemes 前 4 项是空串（与下标 0..3 对应）',
+          g.phonemes[:4] == ['', '', '', ''])
+    check('ArpabetG2p: 进程级缓存 —— 第二次构造复用同一个 dict 对象',
+          ArpabetG2p().dict is g.dict)
+    check('ArpabetG2p: pack 里的符号按"去尾数字后小写"登记（is_vowel("aa")=True）',
+          g.is_vowel('aa') is True and g.is_vowel('AA') is False)
+    check('ArpabetG2p: 未注入会话 → predict 返回空（= C# 的 Session==null 分支）',
+          g.session is None and g.predict('zzzz') == [])
+
+    # ---------------- LatinDiphone 行为
+    def mk(aliases, fallbacks=None, vowels=(), glides=()):
+        class _Lat(LatinDiphonePhonemizer):
+            name = 'lat'
+            tag = 'lat'
+
+            def load_g2p(self):
+                return _FakeG2p({}, vowels, glides)
+
+            def load_vowel_fallbacks(self):
+                return dict(fallbacks or {})
+
+        inst = _Lat()
+        inst.set_singer(_OtoSinger(aliases))
+        inst.set_timing(_CVVC_AXIS)
+        return inst
+
+    a = mk({'- A': _mk_named_oto('- A')}, vowels=['A'])
+    check('LatinDiphone: 五段回落 —— 双音素查不到就找 "- {symbol}"',
+          a.get_phoneme_or_fallback('-', 'A', 60, '', '') == '- A')
+    a2 = mk({'- A0': _mk_named_oto('- A0')}, vowels=['A'])
+    check('LatinDiphone: 第 1 段试 "{prev} {symbol}{alt}"',
+          a2.get_phoneme_or_fallback('-', 'A', 60, '', '0') == '- A0')
+    a3 = mk({'- A': _mk_named_oto('- A')}, vowels=['A'])
+    check('LatinDiphone: 第 2 段试 "{prev} {symbol}"',
+          a3.get_phoneme_or_fallback('-', 'A', 60, '', '') == '- A')
+    a4 = mk({'- C': _mk_named_oto('- C')}, fallbacks={'B': ['C']}, vowels=['B', 'C'])
+    check('LatinDiphone: 第 3 段用 vowelFallback 逐个试',
+          a4.get_phoneme_or_fallback('-', 'B', 60, '', '') == '- C')
+    a5 = mk({}, vowels=['A'])
+    check('LatinDiphone: 第 5 段返回 "{prev} {symbol}{alt}"（**带 alt 后缀**）',
+          a5.get_phoneme_or_fallback('X', 'A', 60, '', '9') == 'X A9')
+
+    # 端到端：双音素别名按 "上一符号 + 本符号" 逐对生成
+    ph = mk({'A B': _mk_named_oto('A B'), '- A': _mk_named_oto('- A')},
+            vowels=['A', 'B'], glides=[])
+    ph.add_tail = False
+    r = ph.process([Note(lyric='x', tone=60, duration=480, phonetic_hint='A B')])
+    check('LatinDiphone 端到端: 上一符号是 "-"（首音符）→ "- A"，随后 "A B"',
+          [p.phoneme for p in r.phonemes] == ['- A', 'A B'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+
 def test_xxhash64():
     """XXH32/XXH64 官方测试向量 —— 对不上，所有缓存键都会静默错。"""
     from singing.openutau.xxhash import xxh32, xxh64 as _x
@@ -6024,6 +6150,8 @@ def main():
     test_document_snapshot_store()
     print('--- Render/Worldline（纯逻辑） ---')
     test_worldline_pure()
+    print('--- G2p/ArpabetG2p + LatinDiphone ---')
+    test_arpabet_g2p_and_latin_diphone()
     print('--- Plugin.Builtin/ChineseCVV ---')
     test_chinese_cvv_phonemizer()
     print('--- Plugin.Builtin/PhonemeBased + Monophone ---')

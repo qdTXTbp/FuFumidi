@@ -11,6 +11,7 @@
   - `japanese_cvvc.py`   Japanese CVVC Phonemizer (legacy)（JapaneseCVVCPhonemizer.cs 298 行）
   - `phoneme_based.py`   `PhonemeBasedPhonemizer` 基类（226 行，**抽象、不注册**）
   - `monophone.py`       `MonophonePhonemizer` 基类（31 行，**抽象、不注册**）
+  - `latin_diphone.py`   `LatinDiphonePhonemizer` 基类（35 行，**抽象、不注册**）
   - `chinese_cvv.py`     Chinese CVV（十月式整音扩张）（ChineseCVVPhonemizer.cs 133 行，
                          含手写的 `ChineseCVVG2p`）
 
@@ -27,9 +28,10 @@ from . import chinese_cvvc  # noqa: F401
 from . import chinese_vcv  # noqa: F401
 from . import chinese_cvv  # noqa: F401
 from . import japanese_cvvc  # noqa: F401
+from .latin_diphone import LatinDiphonePhonemizer  # noqa: F401
 from .monophone import MonophonePhonemizer  # noqa: F401
 from .phoneme_based import PhonemeBasedPhonemizer  # noqa: F401
 from . import japanese_vcv  # noqa: F401
 
 __all__ = ['japanese_vcv', 'chinese_vcv', 'chinese_cvvc', 'japanese_cvvc', 'chinese_cvv',
-           'PhonemeBasedPhonemizer', 'MonophonePhonemizer']
+           'PhonemeBasedPhonemizer', 'MonophonePhonemizer', 'LatinDiphonePhonemizer']

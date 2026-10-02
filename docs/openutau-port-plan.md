@@ -4,8 +4,9 @@
 > 落点：`engine/singing/`（纯 Python，**不依赖 torch / numpy**，可脱离主程序单测）
 > 方针：**除外观外不允许自研** —— 每一处都应能回答"对应 OpenUTAU 的哪个文件/函数"
 > 最后更新：2026-10-02 —— P0~P2 完成；MOD+ / `WorldlineRenderer` v10 / `JapaneseCVVC` /
-> **G2p 基础设施** / **`PhonemeBased`+`Monophone` 基类** / **`ChineseCVV`** 已补齐
-> 2026-10-02 复核：四项测试 **1115 项断言全绿**（含 `worldline.dll` 真机端到端）
+> **G2p 基础设施** / **`PhonemeBased`+`Monophone`+`LatinDiphone` 基类** / **`ChineseCVV`** /
+> **`ArpabetG2p`** 已补齐
+> 2026-10-02 复核：四项测试 **1138 项断言全绿**（含 `worldline.dll` 真机端到端）
 
 ---
 
@@ -62,12 +63,12 @@
 `RenderPhrase.from_part` → `ClassicRenderer.render()` 产出的样本，主频用**过零率**实测
 ≈ 440Hz（源素材 300Hz、tone 69）—— 变调与拼接都真的生效了。
 
-已完成规模：Python **13,240 行**（`engine/singing/**/*.py`，64 个文件，排除 `__pycache__`），
-对应 C# **约 11,020 行**（对第 3 节列出的 56 个 C# 源文件逐项 `wc -l` 求和，
+已完成规模：Python **13,411 行**（`engine/singing/**/*.py`，66 个文件，排除 `__pycache__`），
+对应 C# **约 11,105 行**（对第 3 节列出的 58 个 C# 源文件逐项 `wc -l` 求和，
 含 `RenderEngine.cs` 的 `Progress` 部分）。
 另有 NWaves 三段转写（**无 C# 对应物**，属第三方库替换）。
 
-一致性测试 **6,764 行 / 1115 项断言**（四个文件合计：19 + 59 + 1018 + 19；
+一致性测试 **6,892 行 / 1138 项断言**（四个文件合计：19 + 59 + 1041 + 19；
 参考源码缺失时自动 SKIP）。
 
 ---
@@ -106,7 +107,7 @@
 | Classic 执行层 · 外部工具进程 | ~700 行 | ❌ 未开始 |
 | `WorldlineRenderer` | 276 行 | 🟡 v10 全通（真机验证）；v11/v20 缺外部依赖，入口报错 |
 | Pipeline（乐句切分 / 快照 / 后台构建） | 548 + 162 + 216 行 | ✅ 完成 |
-| G2p（字素→音素） | 387 行（基座）+ 771 行（具体语言） | 🟡 **基座完成**（Trie 字典 / 回落链 / 打包字典）；具体语言 G2p 未搬 |
+| G2p（字素→音素） | 387 行（基座）+ 771 行（具体语言） | 🟡 基座 + **`ArpabetG2p`** 完成；其余 9 个语言 G2p 未搬 |
 | 编辑器侧 | — | ❌ 未开始（M3） |
 
 ---
@@ -169,6 +170,8 @@
 | `openutau/plugin_builtin/phoneme_based.py` | `Plugin.Builtin/PhonemeBasedPhonemizer.cs` |
 | `openutau/plugin_builtin/monophone.py` | `Plugin.Builtin/MonophonePhonemizer.cs` |
 | `openutau/plugin_builtin/chinese_cvv.py` | `Plugin.Builtin/ChineseCVVPhonemizer.cs`（含 `ChineseCVVG2p`） |
+| `openutau/g2p/arpabet.py` | `G2p/ArpabetG2p.cs`（数据走 `set_data_dir` 注入） |
+| `openutau/plugin_builtin/latin_diphone.py` | `Plugin.Builtin/LatinDiphonePhonemizer.cs` |
 
 每个模块的 `__init__.py` 里维护着一份"已照搬 / 未照搬"清单，与上表同步。
 
@@ -180,11 +183,11 @@
 cd engine/tests
 python test_ustx_schema_matches_source.py        # 19 passed
 python test_ustx_roundtrip.py                    # 59 passed
-python test_openutau_core_matches_source.py      # 1018 passed  ← 含 worldline.dll 真机端到端
+python test_openutau_core_matches_source.py      # 1041 passed  ← 含 worldline.dll 真机端到端
 python test_singing_adapters.py                  # 19 passed / 1 skipped
 ```
 
-合计 **1115 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
+合计 **1138 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
 整套测试**可离线运行**。
 
 `worldline.dll` 真机测试的 SKIP 条件是"找不到 `/d/FuFuMIDI/_ref/OpenUtau/runtimes/win-x64/native/worldline.dll`

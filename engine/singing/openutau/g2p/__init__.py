@@ -21,11 +21,15 @@ C# 把这几件东西按**命名空间**分在两处：接口与实现基类在 
 - `dictionary.py`     `Api/G2pDictionary.cs`（Trie + Builder）
 - `fallbacks.py`      `Api/G2pFallbacks.cs`
 - `pack.py`           `Api/G2pPack.cs`（ONNX 会话可注入）
+- `arpabet.py`        `Core/G2p/ArpabetG2p.cs`（英文 ARPA 表；数据走 `set_data_dir` 注入）
 
 ## 未照搬（后续）
-- `G2pRemapper.cs`（音素重映射）、各类具体语言 G2p（`ArpabetG2p` 等）
+- `G2pRemapper.cs`（音素重映射）、其余语言 G2p（`KoreanG2p` / `JapaneseMonophoneG2p` /
+  `FrenchG2p` / `GermanG2p` / `ItalianG2p` / `SpanishG2p` / `RussianG2p` /
+  `PortugueseG2p` / `FilipinoG2p`）
 """
 
+from .arpabet import ArpabetG2p, build_grapheme_indexes, set_data_dir  # noqa: F401
 from .dictionary import G2pDictionary, TrieNode  # noqa: F401
 from .dictionary_data import G2pDictionaryData, SymbolData  # noqa: F401
 from .fallbacks import G2pFallbacks  # noqa: F401
@@ -38,4 +42,5 @@ __all__ = [
     'G2pDictionary', 'TrieNode',
     'G2pFallbacks',
     'G2pPack', 'set_onnx_session_factory', 'is_all_punct',
+    'ArpabetG2p', 'set_data_dir', 'build_grapheme_indexes',
 ]
