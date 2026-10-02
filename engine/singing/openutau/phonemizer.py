@@ -215,6 +215,26 @@ class Phonemizer(ABC):
                     return desc.options[index] or ''
         return ''
 
+    # ---------------------------------------------------------------- oto 查询（统一入口）
+
+    def mapped_oto(self, phoneme: str, tone: int, color: Optional[str] = None):
+        """取映射后的 oto，**返回单值**（找到就给 oto，找不到给 `None`）。
+
+        ★ 一律走这里，别直接 `self.singer.try_get_mapped_oto(...)` 然后当裸值用。
+
+        原因：`USinger.try_get_mapped_oto` 返回的是 **`(found, oto)` 元组**
+        （照搬 C# 的 `bool TryGetMappedOto(..., out UOto oto)`）。若某个音素化器
+        把它当裸值（`if oto is not None:`），在真 `ClassicSinger` 上会拿到
+        `(True, <UOto>)`，`is not None` 为真 → 后续 `oto.is_color_match(...)` 直接
+        `AttributeError: 'tuple' object has no attribute 'is_color_match'`。
+
+        更麻烦的是：如果测试替身也返回裸值，这个错误**永远不会被测出来**
+        （替身与真实现接口不一致 → 测试全绿、真机崩）。所以这里**严格解包**：
+        替身一旦返回裸值就立刻 `TypeError`，把问题挡在测试阶段。
+        """
+        found, oto = self.singer.try_get_mapped_oto(phoneme, tone, color)
+        return oto if found else None
+
     # ---------------------------------------------------------------- 音高映射
 
     @staticmethod
@@ -224,11 +244,12 @@ class Phonemizer(ABC):
         先试带 alt 后缀的别名，再试不带 alt 的；都没有就原样返回。
         singer 需实现 `try_get_mapped_oto(alias, tone, color) -> oto|None`，oto 有 `.alias`。
         """
-        oto = singer.try_get_mapped_oto(phoneme + (alt or ''), tone, color)
-        if oto is not None:
+        # ★ 与 `mapped_oto` 同样的理由：必须在**调用处**严格解包
+        found, oto = singer.try_get_mapped_oto(phoneme + (alt or ''), tone, color)
+        if found:
             return oto.alias
-        oto = singer.try_get_mapped_oto(phoneme, tone, color)
-        if oto is not None:
+        found, oto = singer.try_get_mapped_oto(phoneme, tone, color)
+        if found:
             return oto.alias
         return phoneme
 

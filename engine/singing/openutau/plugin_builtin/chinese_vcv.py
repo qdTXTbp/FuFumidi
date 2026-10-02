@@ -198,11 +198,11 @@ class ChineseVCVPhonemizer(Phonemizer):
         for input_ in inputs:
             # 先试带备用索引的别名（注意：与下面那个 if 是**并列**，不是 else if）
             if alt is not None:
-                oto_alt = self.singer.try_get_mapped_oto('%s%d' % (input_, alt),
-                                                         note.tone + tone_shift, color)
+                oto_alt = self.mapped_oto('%s%d' % (input_, alt),
+                                          note.tone + tone_shift, color)
                 if oto_alt is not None:
                     results.append(oto_alt)
-            oto = self.singer.try_get_mapped_oto(input_, note.tone + tone_shift, color)
+            oto = self.mapped_oto(input_, note.tone + tone_shift, color)
             if oto is not None:
                 results.append(oto)
 

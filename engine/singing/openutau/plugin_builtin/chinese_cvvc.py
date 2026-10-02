@@ -155,7 +155,7 @@ class ChineseCVVCPhonemizer(Phonemizer):
 
         # 单独成段的尾韵行：只产出 "{prevVowel} R"
         if lyric == '-' or lyric.lower() == 'r':
-            oto1 = self.singer.try_get_mapped_oto('%s R' % prev_vowel, t0, c0)
+            oto1 = self.mapped_oto('%s R' % prev_vowel, t0, c0)
             if oto1 is not None:
                 return self.make_simple_result(oto1.alias)
             return self.make_simple_result('%s R' % prev_vowel)
@@ -163,10 +163,10 @@ class ChineseCVVCPhonemizer(Phonemizer):
         curr_vowel = self.vowels.get(lyric, lyric)
         total_duration = sum(n.duration for n in notes)
 
-        oto = self.singer.try_get_mapped_oto('%s %s' % (prev_vowel, lyric), t0, c0)
+        oto = self.mapped_oto('%s %s' % (prev_vowel, lyric), t0, c0)
         if oto is not None:
             if next_neighbour is None:
-                oto1 = self.singer.try_get_mapped_oto('%s R' % curr_vowel, t1, c1)
+                oto1 = self.mapped_oto('%s R' % curr_vowel, t1, c1)
                 if oto1 is not None:
                     # 自动补尾韵
                     return Result(phonemes=[
@@ -178,7 +178,7 @@ class ChineseCVVCPhonemizer(Phonemizer):
 
         vc_len = 120
         end_tick = notes[-1].position + notes[-1].duration
-        cv_oto = self.singer.try_get_mapped_oto(lyric, t1, c1)
+        cv_oto = self.mapped_oto(lyric, t1, c1)
         if cv_oto is not None:
             vc_len = -self.time_axis.ms_to_tick_at(-cv_oto.preutter, end_tick)
             if cv_oto.overlap == 0 and vc_len < 120:
@@ -187,7 +187,7 @@ class ChineseCVVCPhonemizer(Phonemizer):
                 vc_len = -self.time_axis.ms_to_tick_at(
                     -(cv_oto.preutter - cv_oto.overlap), end_tick)
 
-        cv_oto_simple = self.singer.try_get_mapped_oto(lyric, t0, c0)
+        cv_oto_simple = self.mapped_oto(lyric, t0, c0)
         if cv_oto_simple is not None:
             lyric = cv_oto_simple.alias
 
@@ -196,7 +196,7 @@ class ChineseCVVCPhonemizer(Phonemizer):
             # ★ 用的是**前一个音符**的 tone
             vt = prev_neighbour.tone + (attr0.tone_shift if attr0.tone_shift is not None
                                         else self.get_parent_tone_shift())
-            vc_hit = self.singer.try_get_mapped_oto(vc_phoneme, vt, c0)
+            vc_hit = self.mapped_oto(vc_phoneme, vt, c0)
             if vc_hit is not None:
                 vc_phoneme = vc_hit.alias
             prev_duration = notes[0].position - prev_neighbour.position
@@ -204,7 +204,7 @@ class ChineseCVVCPhonemizer(Phonemizer):
                      else self.get_parent_consonant_stretch_ratio())
             vc_len = _to_int32(min(prev_duration / 1.5, max(30, vc_len * ratio)))
         else:
-            vc_hit = self.singer.try_get_mapped_oto(vc_phoneme, t0, c0)
+            vc_hit = self.mapped_oto(vc_phoneme, t0, c0)
             if vc_hit is not None:
                 vc_phoneme = vc_hit.alias
             ratio = (attr1.consonant_stretch_ratio if attr1.consonant_stretch_ratio is not None
@@ -212,9 +212,9 @@ class ChineseCVVCPhonemizer(Phonemizer):
             vc_len = _to_int32(min(vc_len * 2, max(30, vc_len * ratio)))
 
         if next_neighbour is None:      # 自动补尾韵
-            oto0 = self.singer.try_get_mapped_oto('%s %s' % (prev_vowel, lyric), t0, c0)
+            oto0 = self.mapped_oto('%s %s' % (prev_vowel, lyric), t0, c0)
             if oto0 is not None:
-                oto_end = self.singer.try_get_mapped_oto('%s R' % curr_vowel, t1, c1)
+                oto_end = self.mapped_oto('%s R' % curr_vowel, t1, c1)
                 if oto_end is not None:
                     return Result(phonemes=[
                         Phoneme(phoneme=oto0.alias),
@@ -224,16 +224,16 @@ class ChineseCVVCPhonemizer(Phonemizer):
             else:
                 # 用 VC（若存在）
                 if prev_neighbour is None:
-                    vc_oto1 = self.singer.try_get_mapped_oto(vc_phoneme, t0, c0)
+                    vc_oto1 = self.mapped_oto(vc_phoneme, t0, c0)
                 else:
                     vc_oto1 = None
                 if vc_oto1 is None and prev_neighbour is not None:
                     vt = prev_neighbour.tone + (attr0.tone_shift if attr0.tone_shift is not None
                                                 else self.get_parent_tone_shift())
-                    vc_oto1 = self.singer.try_get_mapped_oto(vc_phoneme, vt, c0)
+                    vc_oto1 = self.mapped_oto(vc_phoneme, vt, c0)
                 if vc_oto1 is not None:
                     vc_phoneme = vc_oto1.alias
-                    oto_end = self.singer.try_get_mapped_oto('%s R' % curr_vowel, t2, c2)
+                    oto_end = self.mapped_oto('%s R' % curr_vowel, t2, c2)
                     if oto_end is not None:
                         return Result(phonemes=[
                             Phoneme(phoneme=vc_phoneme, position=-vc_len),
@@ -242,7 +242,7 @@ class ChineseCVVCPhonemizer(Phonemizer):
                                     position=total_duration - min(total_duration // 6, 60)),
                         ])
                 # 只有基音 + 尾韵
-                oto_end1 = self.singer.try_get_mapped_oto('%s R' % curr_vowel, t1, c1)
+                oto_end1 = self.mapped_oto('%s R' % curr_vowel, t1, c1)
                 if oto_end1 is not None:
                     return Result(phonemes=[
                         Phoneme(phoneme=(cv_oto_simple.alias if cv_oto_simple is not None
@@ -251,7 +251,7 @@ class ChineseCVVCPhonemizer(Phonemizer):
                                 position=total_duration - min(total_duration // 6, 60)),
                     ])
 
-        oto = self.singer.try_get_mapped_oto(vc_phoneme, t0, c0)
+        oto = self.mapped_oto(vc_phoneme, t0, c0)
         if oto is not None:
             return Result(phonemes=[
                 Phoneme(phoneme=vc_phoneme, position=-vc_len),

@@ -1160,7 +1160,10 @@ def test_japanese_vcv_phonemizer():
             self.aliases = aliases
 
         def try_get_mapped_oto(self, phoneme, tone, color=None):
-            return self.aliases.get(phoneme)
+            # ★ 必须与 `USinger.try_get_mapped_oto` 同契约：返回 `(found, oto)`
+            #   （照搬 C# 的 out 参数）。返回裸值会让音素化器的 bug 测不出来。
+            oto = self.aliases.get(phoneme)
+            return (oto is not None), oto
 
     ph = J.JapaneseVCVPhonemizer()
 
@@ -1287,7 +1290,9 @@ class _OtoSinger:
         self.aliases = aliases
 
     def try_get_mapped_oto(self, phoneme, tone, color=None):
-        return self.aliases.get(phoneme)
+        # ★ 同契约：`(found, oto)`，别返回裸值
+        oto = self.aliases.get(phoneme)
+        return (oto is not None), oto
 
 
 def test_chinese_vcv_phonemizer():
@@ -1633,7 +1638,9 @@ def test_chinese_cvvc_phonemizer():
     class _ToneSpy(_CvvcSinger):
         def try_get_mapped_oto(self, p, tone, color=None):
             seen.append((p, tone))
-            return self.aliases.get(p)
+            # ★ 同契约：`(found, oto)`
+            oto = self.aliases.get(p)
+            return (oto is not None), oto
 
     s = _ToneSpy({'a b': _mk_named_oto('a b')}, location=tmp)
     ph.singer = s
@@ -5122,6 +5129,265 @@ def _dominant_zero_cross(samples):
     return crossings / 2.0 / (len(samples) / 44100.0) if samples else None
 
 
+#: `ms_to_tick` 需要一个 time_axis（120bpm / 480 resolution）
+_CVVC_AXIS = TimeAxis()
+_CVVC_AXIS.build_segments(UProject())
+
+
+def _real_classic_singer(alias_to_oto):
+    """造一个**用真 `ClassicSinger.try_get_mapped_oto`** 的歌手（只有 oto 表是手填的）。
+
+    ★ 这就是能抓到"音素化器把 `(found, oto)` 当裸值"的那类测试：
+    它走的是真实现的返回契约，而不是替身自己编的契约。
+    """
+    from singing.openutau.classic.classic_singer import ClassicSinger, OtoData
+    from singing.openutau.oto import Voicebank
+
+    singer = ClassicSinger(Voicebank())
+    singer.data = OtoData()
+    singer.data.oto_map = dict(alias_to_oto)
+    return singer
+
+
+def test_phonemizers_against_real_singer():
+    """★ 回归：四个音素化器必须能跑在**真 `ClassicSinger`** 上。
+
+    `USinger.try_get_mapped_oto` 返回 `(found, oto)`（照搬 C# 的 out 参数）。
+    早前三个音素化器把它当**裸值**用（`if oto is not None:`），于是拿到
+    `(True, <UOto>)` 后继续 `oto.is_color_match(...)` →
+    `AttributeError: 'tuple' object has no attribute 'is_color_match'`。
+
+    **为什么当时没被测出来**：测试替身返回的是裸值 —— 替身与真实现接口不一致，
+    测试全绿而真机必崩。现在替身已改成同契约，并且加了这一条**用真歌手**的用例。
+    """
+    from singing.openutau import Note, PhonemeAttributes
+    from singing.openutau.plugin_builtin import (chinese_cvvc as CVC, chinese_vcv as CV,
+                                                 japanese_cvvc as JC, japanese_vcv as JV)
+
+    def oto(alias, color=''):
+        return _mk_named_oto(alias, color=color)
+
+    # --- JA VCV：无前邻 → "- な"
+    singer = _real_classic_singer({'- な': oto('- な')})
+    ph = JV.JapaneseVCVPhonemizer()
+    ph.set_singer(singer)
+    r = ph.process([Note(lyric='な', tone=60, duration=480)])
+    check('真歌手: JA VCV 能跑（无前邻 → "- な"）',
+          [p.phoneme for p in r.phonemes] == ['- な'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # --- JA CVVC：无前邻 → "- か"，且不插 VC
+    singer = _real_classic_singer({'- か': oto('- か')})
+    ph = JC.JapaneseCVVCPhonemizer()
+    ph.set_singer(singer)
+    r = ph.process([Note(lyric='か', tone=60, duration=480)])
+    check('真歌手: JA CVVC 能跑（无前邻 → "- か"）',
+          [p.phoneme for p in r.phonemes] == ['- か'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # --- ZH VCV：无前邻 → "- tian"
+    singer = _real_classic_singer({'- tian': oto('- tian')})
+    ph = CV.ChineseVCVPhonemizer()
+    ph.set_singer(singer)
+    r = ph.process([Note(lyric='tian', tone=60, duration=480)])
+    check('真歌手: ZH VCV 能跑（无前邻 → "- tian"）',
+          [p.phoneme for p in r.phonemes] == ['- tian'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # --- ZH CVVC：整串命中
+    singer = _real_classic_singer({'- bu': oto('- bu')})
+    ph = CVC.ChineseCVVCPhonemizer()
+    ph.set_singer(singer)
+    r = ph.process([Note(lyric='bu', tone=60, duration=480)],
+                   next_neighbour=Note(lyric='bi'))
+    check('真歌手: ZH CVVC 能跑（整串命中 "- bu"）',
+          [p.phoneme for p in r.phonemes] == ['- bu'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # --- 颜色匹配那条路也要能过（会走到 is_color_match）
+    # 「き」的元音是 i → 候选首项是 "i な"
+    singer = _real_classic_singer({'i な': oto('i な', color='Soft'),
+                                   '* な': oto('* な', color='Soft')})
+    ph = JV.JapaneseVCVPhonemizer()
+    ph.set_singer(singer)
+    r = ph.process([Note(lyric='な', tone=60, duration=480,
+                         phoneme_attributes=[PhonemeAttributes(index=0, voice_color='Soft')])],
+                   prev_neighbour=Note(lyric='き'))
+    check('真歌手: 走 is_color_match 的路径不炸（JA VCV / 颜色命中 "i な"）',
+          [p.phoneme for p in r.phonemes] == ['i な'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # --- 一律走 `mapped_oto`：直接调 `singer.try_get_mapped_oto` 当裸值会炸（留作反证）
+    found, got = singer.try_get_mapped_oto('i な', 60, 'Soft')
+    check('真歌手: try_get_mapped_oto 的契约就是 (found, oto) 元组',
+          found is True and isinstance(got, tuple) is False and hasattr(got, 'alias'),
+          'got %r' % ((found, got),))
+    check('Phonemizer.mapped_oto: 严格解包（有就返 oto、没有返 None）',
+          ph.mapped_oto('i な', 60, 'Soft') is got and ph.mapped_oto('没有的', 60, '') is None)
+    try:
+        class _BareSinger:
+            def try_get_mapped_oto(self, p, tone, color=None):
+                return object()          # 替身返回裸值（旧测试替身的做法）
+        ph._saved, ph.singer = ph.singer, _BareSinger()
+        ph.mapped_oto('a', 60, '')
+        check('Phonemizer.mapped_oto: 替身返回裸值时**立刻 TypeError**（把问题挡在测试期）',
+              False, '没有抛错')
+    except TypeError:
+        check('Phonemizer.mapped_oto: 替身返回裸值时**立刻 TypeError**（把问题挡在测试期）', True)
+    finally:
+        ph.singer = ph._saved
+
+
+def test_japanese_cvvc_phonemizer():
+    """`Plugin.Builtin/JapaneseCVVCPhonemizer.cs` —— 三张表 + VC 插入。"""
+    from singing.openutau import Note, PhonemeAttributes, registered
+    from singing.openutau.plugin_builtin import japanese_cvvc as J
+
+    cs = open(os.path.join(os.path.dirname(REF), 'OpenUtau.Plugin.Builtin',
+                           'JapaneseCVVCPhonemizer.cs'), encoding='utf-8-sig').read()
+
+    # ---- 源码一致性
+    m = re.search(r'\[Phonemizer\("([^"]*)",\s*"([^"]*)",\s*"([^"]*)"\s*,\s*language\s*:\s*"([^"]*)"\)\]', cs)
+    check('JA CVVC: [Phonemizer] 的 name/tag/author/language 与 C# 一致',
+          m is not None and (m.group(1), m.group(2), m.group(3), m.group(4)) == (
+              J.JapaneseCVVCPhonemizer.name, J.JapaneseCVVCPhonemizer.tag,
+              J.JapaneseCVVCPhonemizer.author, J.JapaneseCVVCPhonemizer.language),
+          'C#=%r 我们=%r' % (m.groups() if m else None,
+                             (J.JapaneseCVVCPhonemizer.name, J.JapaneseCVVCPhonemizer.tag,
+                              J.JapaneseCVVCPhonemizer.author, J.JapaneseCVVCPhonemizer.language)))
+    check('JA CVVC: 已在注册表里', registered().get('JA CVVC') is J.JapaneseCVVCPhonemizer)
+    check('JA CVVC: 原作者的注释也照搬（提醒后人别顺手重构）',
+          'can probably be cleaned up more but i have work in the morning' in cs)
+
+    # ★ 逐**字符串**精确比对（比"数行数"强得多；也避开 `new string[]{` 与 `new string[] {`
+    #   两种写法、以及行尾逗号的差异）
+    for name, ours, count in (('plainVowels', J.PLAIN_VOWELS, 8),
+                              ('nonVowels', J.NON_VOWELS, 40),
+                              ('vowels', J.VOWELS, 8),
+                              ('consonants', J.CONSONANTS, 37),
+                              ('substitution', J.SUBSTITUTION, 13)):
+        arr = re.search(r'%s = new string\[\]\s*\{(.*?)\};' % name, cs, re.S)
+        got = re.findall(r'"([^"]*)"', arr.group(1)) if arr else None
+        check('JA CVVC: %s 逐项一致（%d 项）' % (name, count),
+              got is not None and tuple(got) == tuple(ours),
+              'C#=%r\n       我们=%r' % (got, ours))
+    check('JA CVVC: 三张表的规模（元音 164 / 声母 198 / 替代 18）',
+          (len(J.VOWEL_LOOKUP), len(J.CONSONANT_LOOKUP), len(J.SUBSTITUTE_LOOKUP))
+          == (164, 198, 18),
+          'got %r' % ((len(J.VOWEL_LOOKUP), len(J.CONSONANT_LOOKUP),
+                       len(J.SUBSTITUTE_LOOKUP)),))
+    check('JA CVVC: 元音表**键取成员**（か→a）', J.VOWEL_LOOKUP.get('か') == 'a')
+    check('JA CVVC: 声母表**键取成员**（ち→ch）', J.CONSONANT_LOOKUP.get('ち') == 'ch')
+    check('JA CVVC: 替代表**方向相反**（键取原名：ts→t）',
+          J.SUBSTITUTE_LOOKUP.get('ts') == 't' and J.SUBSTITUTE_LOOKUP.get('ly') == 'l')
+    check('JA CVVC: 拨音大小写分属两个元音键（ん→n / ン→N）',
+          J.VOWEL_LOOKUP.get('ん') == 'n' and J.VOWEL_LOOKUP.get('ン') == 'N')
+
+    check('JA CVVC: 两处 checkOto 的**失败语义相反**（VC 那份不取第一个）',
+          'oto = otos.First();' in cs and 'if (oto != null) {' in cs
+          and cs.count('otos.FirstOrDefault(oto => oto.IsColorMatch(color))') == 2)
+    check('JA CVVC: originalCurrentLyric 在任何 oto 替换**之前**存下',
+          cs.index('var originalCurrentLyric = currentLyric;')
+          < cs.index('if (checkOtoUntilHit(tests, note, out var oto))'))
+    check('JA CVVC: vcLength 的 Convert.ToInt32(min(totalDuration/2, …))',
+          'Convert.ToInt32(Math.Min(totalDuration / 2, vcLength * (nextAttr.consonantStretchRatio' in cs)
+    check('JA CVVC: 查下一音符 oto 用的是 nextNeighbour 的 tone 与属性',
+          'nextNeighbour.Value.tone + (nextAttr.toneShift' in cs)
+
+    # ---- 行为（替身已按真契约返回元组）
+    class _S:
+        def __init__(self, aliases):
+            self.aliases = aliases
+
+        def try_get_mapped_oto(self, phoneme, tone, color=None):
+            oto = self.aliases.get(phoneme)
+            return (oto is not None), oto
+
+    def run(lyrics, aliases, prev=None, next_=None, attrs=None, **kw):
+        ph = J.JapaneseCVVCPhonemizer()
+        ph.set_singer(_S(aliases))
+        ph.set_timing(_CVVC_AXIS)
+        note = Note(lyric=lyrics, tone=60, duration=480, position=0,
+                    phoneme_attributes=attrs or [])
+        return ph.process([note], prev_neighbour=prev, next_neighbour=next_, **kw)
+
+    check('JA CVVC: 无前邻优先 "- か"',
+          [p.phoneme for p in run('か', {'- か': _mk_named_oto('- か')}).phonemes] == ['- か'])
+    check('JA CVVC: 无前邻时 "- か" 不命中则用裸歌词',
+          [p.phoneme for p in run('か', {}).phonemes] == ['か'])
+
+    # 前邻是元音类（本音符是 plainVowel）→ 用前邻**末字符**的元音
+    r = run('あ', {'a あ': _mk_named_oto('a あ')}, prev=Note(lyric='か'))
+    check('JA CVVC: 前邻「か」末字符 → 元音 a → 命中 "a あ"',
+          [p.phoneme for p in r.phonemes] == ['a あ'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+    # 非元音歌词走 cfLyric
+    r = run('き', {'* き': _mk_named_oto('* き')}, prev=Note(lyric='か'))
+    check('JA CVVC: 非纯元音歌词走 "* き"',
+          [p.phoneme for p in r.phonemes] == ['* き'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # phoneticHint：只试 hint 自己
+    ph = J.JapaneseCVVCPhonemizer()
+    ph.set_singer(_S({'HINT': _mk_named_oto('HINT'), '- な': _mk_named_oto('- な')}))
+    ph.set_timing(_CVVC_AXIS)
+    r = ph.process([Note(lyric='な', tone=60, duration=480, phonetic_hint='HINT')])
+    check('JA CVVC: 有 phoneticHint 时不做 "- な" 前缀试探',
+          [p.phoneme for p in r.phonemes] == ['HINT'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # ---- VC 插入
+    # ★ 「き」的元音是 **i**（不是 a）→ VC 别名应是 "i k"
+    # 下一音符的 oto 带 preutter=60 → vcLength = ms_to_tick(60) = 58（120bpm/480 下 60ms）
+    next_oto = _mk_named_oto('か')
+    next_oto.preutter = 60.0
+    aliases = {'* き': _mk_named_oto('* き'),
+               'i k': _mk_named_oto('i k'),
+               'か': next_oto}
+    r = run('き', aliases, prev=Note(lyric='か'), next_=Note(lyric='か'))
+    check('JA CVVC: 下一个音符是声母类 → 插入 VC（两个音素）',
+          len(r.phonemes) == 2, 'got %r' % [p.phoneme for p in r.phonemes])
+    check('JA CVVC: VC 音素 = "{本音符元音} {下一音符声母}" = "i k"',
+          r.phonemes[1].phoneme == 'i k', 'got %r' % r.phonemes[1].phoneme)
+    # position = totalDuration - vcLength = 480 - ms_to_tick(preutter=60) = 480 - 58
+    check('JA CVVC: VC 的 position = totalDuration - vcLength = 422',
+          r.phonemes[1].position == 422, 'got %r' % r.phonemes[1].position)
+    # Overlap < 0 时 vcLength 用 Preutter - Overlap（更长）
+    neg = _mk_named_oto('か')
+    neg.preutter = 60.0
+    neg.overlap = -30.0
+    aliases_neg = {'* き': _mk_named_oto('* き'), 'i k': _mk_named_oto('i k'), 'か': neg}
+    r2 = run('き', aliases_neg, prev=Note(lyric='か'), next_=Note(lyric='か'))
+    check('JA CVVC: oto.Overlap < 0 时 vcLength 用 (Preutter - Overlap) → position 更小',
+          r2.phonemes[1].position == 480 - 86,
+          'got %r（期望 394 = 480 - ms_to_tick(90)）' % r2.phonemes[1].position)
+
+    # 下一音符是单字符纯元音 → 不插 VC
+    r = run('き', {'* き': _mk_named_oto('* き')}, prev=Note(lyric='か'), next_=Note(lyric='あ'))
+    check('JA CVVC: 下一音符是单字符纯元音 → **不**插 VC',
+          len(r.phonemes) == 1, 'got %r' % [p.phoneme for p in r.phonemes])
+    # 下一音符声母查不到 → 不插 VC
+    r = run('き', {'* き': _mk_named_oto('* き')}, prev=Note(lyric='か'),
+            next_=Note(lyric='Xyz'))
+    check('JA CVVC: 下一音符声母查不到 → **不**插 VC',
+          len(r.phonemes) == 1, 'got %r' % [p.phoneme for p in r.phonemes])
+    # VC 查不到 → 不插 VC
+    r = run('き', {'* き': _mk_named_oto('* き')}, prev=Note(lyric='か'), next_=Note(lyric='か'))
+    check('JA CVVC: VC 别名查不到 → **不**插 VC（且整只音符只出主音素）',
+          len(r.phonemes) == 1, 'got %r' % [p.phoneme for p in r.phonemes])
+    # 替代符号参与候选（ts→t）
+    r = run('き', {'* き': _mk_named_oto('* き'), 'i t': _mk_named_oto('i t')},
+            prev=Note(lyric='か'), next_=Note(lyric='つ'))
+    check('JA CVVC: 主候选查不到时用 substitution 的替代候选（ts→t → "i t"）',
+          len(r.phonemes) == 2 and r.phonemes[1].phoneme == 'i t',
+          'got %r' % [p.phoneme for p in r.phonemes])
+    # 下一音符带 phoneticHint → 整段 VC 逻辑跳过
+    r = run('き', {'* き': _mk_named_oto('* き'), 'i k': _mk_named_oto('i k')},
+            prev=Note(lyric='か'), next_=Note(lyric='か', phonetic_hint='H'))
+    check('JA CVVC: 下一音符带 phoneticHint 时跳过 VC 逻辑',
+          len(r.phonemes) == 1, 'got %r' % [p.phoneme for p in r.phonemes])
+
+
 def test_xxhash64():
     """XXH32/XXH64 官方测试向量 —— 对不上，所有缓存键都会静默错。"""
     from singing.openutau.xxhash import xxh32, xxh64 as _x
@@ -5189,6 +5455,10 @@ def main():
     test_document_snapshot_store()
     print('--- Render/Worldline（纯逻辑） ---')
     test_worldline_pure()
+    print('--- 音素化器 × 真 ClassicSinger（接口契约回归） ---')
+    test_phonemizers_against_real_singer()
+    print('--- Plugin.Builtin/JapaneseCVVC ---')
+    test_japanese_cvvc_phonemizer()
     print('--- Classic/WorldlineRenderer ---')
     test_worldline_renderer()
     print('--- RenderPhrase MOD+ ---')

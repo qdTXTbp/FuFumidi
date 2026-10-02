@@ -3,9 +3,8 @@
 > 上游：`OpenUtau/`（C#）—— `OpenUtau.Core` + `OpenUtau.Plugin.Builtin` + `cpp/worldline`
 > 落点：`engine/singing/`（纯 Python，**不依赖 torch / numpy**，可脱离主程序单测）
 > 方针：**除外观外不允许自研** —— 每一处都应能回答"对应 OpenUTAU 的哪个文件/函数"
-> 最后更新：2026-10-02 —— **P0 / P1-a / P1-b / P1-d / P2 均已完成**；`RenderPhrase` 的 MOD+ 与
-> `WorldlineRenderer` v10 也已补齐（Classic 线三条渲染器路径**全部可跑**）
-> 2026-10-02 复核：四项测试 **965 项断言全绿**（含 `worldline.dll` 真机端到端）
+> 最后更新：2026-10-02 —— P0~P2 全部完成；MOD+ / `WorldlineRenderer` v10 / `JapaneseCVVC` 已补齐
+> 2026-10-02 复核：四项测试 **1004 项断言全绿**（含 `worldline.dll` 真机端到端）
 
 ---
 
@@ -37,17 +36,25 @@
   v11（R1.1）与 v20（R2）各缺一块外部依赖（ONNX 谐波分离模型 / 程序集内嵌 mel 模型 +
   可下载声码器包），都在**入口处**给精确报错，不是静默算错。
   → 至此 Classic 线的**三条渲染器路径**（`CLASSIC` / `WORLDLINE-R*`）都可跑。
+- 再补一个音素化器：**`JapaneseCVVCPhonemizer`**（298 行）—— 日语三条线（VCV / CVVC /
+  Presamp）已通两条；CVVC 还负责在下一个音符之前**插一个 VC 音素**。
+- ★ 并**修掉一个跨模块的真 bug**：`USinger.try_get_mapped_oto` 返回 `(found, oto)`
+  （照搬 C# 的 `out` 参数），但有**三个**音素化器把它当裸值用 —— 在真 `ClassicSinger`
+  上会 `AttributeError: 'tuple' object has no attribute 'is_color_match'`。
+  之所以一直没暴露，是因为**测试替身也返回裸值**（替身与真实现接口不一致 → 测试全绿）。
+  现在统一走 `Phonemizer.mapped_oto()`（**严格解包**，替身写错就立刻 TypeError），
+  并补了一条**用真 `ClassicSinger`** 驱动的回归用例。
 
 **真机验证**（加载 OpenUTAU 随包分发的 `runtimes/win-x64/native/worldline.dll`）：
 `RenderPhrase.from_part` → `ClassicRenderer.render()` 产出的样本，主频用**过零率**实测
 ≈ 440Hz（源素材 300Hz、tone 69）—— 变调与拼接都真的生效了。
 
-已完成规模：Python **11,748 行**（`engine/singing/**/*.py`，54 个文件，排除 `__pycache__`），
-对应 C# **约 9,940 行**（对第 3 节列出的 46 个 C# 源文件逐项 `wc -l` 求和，
+已完成规模：Python **12,136 行**（`engine/singing/**/*.py`，55 个文件，排除 `__pycache__`），
+对应 C# **约 10,240 行**（对第 3 节列出的 47 个 C# 源文件逐项 `wc -l` 求和，
 含 `RenderEngine.cs` 的 `Progress` 部分）。
 另有 NWaves 三段转写（**无 C# 对应物**，属第三方库替换）。
 
-一致性测试 **5,919 行 / 965 项断言**（四个文件合计：19 + 59 + 868 + 19；
+一致性测试 **6,189 行 / 1004 项断言**（四个文件合计：19 + 59 + 907 + 19；
 参考源码缺失时自动 SKIP）。
 
 ---
@@ -72,7 +79,7 @@
 | 渲染器接口与注册表 | 146 + 141 行 | ✅ 完成（具体渲染器未搬） |
 | Worldline 纯逻辑 | 780 行中约 400 | ✅ 完成（原生边界另计） |
 | 音素化器基类 / 中文基类 | 250 + 51 行 | ✅ 完成 |
-| 内置音素化器 | 51 个文件 / 25,707 行 | 🟡 **3 / 51** |
+| 内置音素化器 | 51 个文件 / 25,707 行 | 🟡 **4 / 51**（JA VCV / JA CVVC / ZH VCV / ZH CVVC） |
 | Classic 参数层 | 188 + 57 行 | ✅ 完成 |
 | Classic 执行层 · 底座（WAV / 接口 / 清单） | 173 + 25 + 11 + 28 行 | ✅ 完成 |
 | Classic 执行层 · 内置 wavtool | 187 行（+NWaves 三段转写） | ✅ 完成 |
@@ -139,6 +146,7 @@
 | `openutau/plugin_builtin/japanese_vcv.py` | `Plugin.Builtin/JapaneseVCVPhonemizer.cs` |
 | `openutau/plugin_builtin/chinese_vcv.py` | `Plugin.Builtin/ChineseVCVPhonemizer.cs` |
 | `openutau/plugin_builtin/chinese_cvvc.py` | `Plugin.Builtin/ChineseCVVCPhonemizer.cs` |
+| `openutau/plugin_builtin/japanese_cvvc.py` | `Plugin.Builtin/JapaneseCVVCPhonemizer.cs` |
 
 每个模块的 `__init__.py` 里维护着一份"已照搬 / 未照搬"清单，与上表同步。
 
@@ -150,11 +158,11 @@
 cd engine/tests
 python test_ustx_schema_matches_source.py        # 19 passed
 python test_ustx_roundtrip.py                    # 59 passed
-python test_openutau_core_matches_source.py      # 868 passed   ← 含 worldline.dll 真机端到端
+python test_openutau_core_matches_source.py      # 907 passed   ← 含 worldline.dll 真机端到端
 python test_singing_adapters.py                  # 19 passed / 1 skipped
 ```
 
-合计 **965 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
+合计 **1004 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
 整套测试**可离线运行**。
 
 `worldline.dll` 真机测试的 SKIP 条件是"找不到 `/d/FuFuMIDI/_ref/OpenUtau/runtimes/win-x64/native/worldline.dll`
@@ -243,6 +251,8 @@ assert '(i + 1) == phrase.dynamics.Length' in cs
 | 33 | **`Math.Clamp(v, 0, n-1)` 在 `n == 0` 时抛 `ArgumentException`** | C# 抛错、被外层的 per-phoneme `catch` 吞掉 → **整个音素被跳过**；若 Python 侧写成 `max(0, min(-1, v))` 会静默得到 0 并继续算，结果完全不同 | 显式在 `n <= 0` 时抛错，让同一层 `except` 接住 —— 这才是"等价" |
 | 34 | **C# 的局部函数可以用在使用之后** | `Fade(...)` 在 C# 里声明在调用它的循环**下面**（同一块内合法）；Python 必须先定义 | 提前定义闭包，别以为"照抄顺序"能行 |
 | 35 | **函数"算了却没返回"的东西** | `blend_continuous_noise_features` 累加了 `sp` 却只返回 `sp_harmonic`（漏了 `sp`），而 C# 的 `WorldSynthesisContinuousNoise(f0, sp, spHarmonic, …)` **两个都要**。★ 当时那条测试**跟着实现写成了 5 元组**并断言"谐波在第三个位置"，于是"一致地错"、测试全绿 | 移植多返回值函数时，**逐个数 C# 调用点要几个参数**，别只照着自己写的返回值改测试。已改成 6 元组并让测试断言 **sp 与 sp_harmonic 各归其位** |
+| 36 | **测试替身与真实现的返回契约不一致** | 这是本轮最贵的一类：`USinger.try_get_mapped_oto` 返回 `(found, oto)`，而**三个**音素化器当裸值用 → 真 `ClassicSinger` 上 `AttributeError: 'tuple' object has no attribute 'is_color_match'`。**测试全绿**，因为替身也返回裸值（两边一致地错） | ① 替身必须**照抄真实现的签名与返回形状**；② 关键接口补一条**用真实现**驱动的用例（本轮的 `test_phonemizers_against_real_singer`）；③ 在基类加**严格解包**的统一入口 `Phonemizer.mapped_oto()`，替身写错立刻 `TypeError` |
+| 37 | **把返回元组的函数当布尔用** | `if self._check_oto_until_hit_vc(...):` —— 元组**恒为真**，于是永远走"命中"分支，然后在 `oto1 is None` 上炸。同一处还**重复调用**了两次（第二次才解包） | 一次调用、立刻解包：`hit, oto = f(); if hit:`。已在本模块注释里点明这是自己踩过的坑 |
 
 
 ### 附：写测试时的最大陷阱 —— 凭直觉填期望
@@ -423,11 +433,12 @@ tone 69 变调，输出主频用**过零率**实测 ≈ 440Hz（±10% 内）。
   `character.txt` 的键识别与死代码 quirk / 判型（配置优先 + 遗留 dsconfig）/ `ApplyConfig`
   的引用语义 / `prefix.map` 去重与音域分段 / `SearchAll` 的深/浅两档。
 
-### P3 —— 更多音素化器（当前 3 / 51）
+### P3 —— 更多音素化器（当前 4 / 51）
 
 同模式，风险低，适合批量推进。优先级建议：
 
-1. `JapaneseCVVCPhonemizer` / `JapanesePresampPhonemizer`（日语线补全）
+1. ~~`JapaneseCVVCPhonemizer`~~ ✅ / `JapanesePresampPhonemizer`（还需 `Presamp.cs` 731）
+   、`TurkishCVVCPhonemizer`(356，**零外部依赖**，好做)
 2. `ChineseCVVPhonemizer`(133) / `ChineseCVVPlusPhonemizer`（中文线补全）
 3. `PresampSamplePhonemizer`(164) — 需要 `Classic/Presamp.cs`(731)
 4. **`Arpasing` 系**：`ArpasingPhonemizer.cs` 只有 62 行，但它牵出整条

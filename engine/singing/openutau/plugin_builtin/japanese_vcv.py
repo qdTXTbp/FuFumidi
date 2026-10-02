@@ -133,11 +133,11 @@ class JapaneseVCVPhonemizer(Phonemizer):
         for test in input_:
             # C# 的 `test + alt`：alt 为 null 时等于 test（字符串 + null → 空串）
             alt_suffix = str(alt) if alt is not None else ''
-            oto_alt = self.singer.try_get_mapped_oto(test + alt_suffix, note.tone + shift, color)
+            oto_alt = self.mapped_oto(test + alt_suffix, note.tone + shift, color)
             if oto_alt is not None:
                 otos.append(oto_alt)
             else:
-                oto_candidacy = self.singer.try_get_mapped_oto(test, note.tone + shift, color)
+                oto_candidacy = self.mapped_oto(test, note.tone + shift, color)
                 if oto_candidacy is not None:
                     otos.append(oto_candidacy)
 
