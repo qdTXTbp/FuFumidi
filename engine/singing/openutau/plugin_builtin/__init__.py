@@ -9,6 +9,8 @@
   - `japanese_vcv.py`    Japanese VCV Phonemizer (legacy)（JapaneseVCVPhonemizer.cs 116 行）
   - `chinese_vcv.py`     Chinese VCV Phonemizer（ChineseVCVPhonemizer.cs 241 行）
   - `japanese_cvvc.py`   Japanese CVVC Phonemizer (legacy)（JapaneseCVVCPhonemizer.cs 298 行）
+  - `phoneme_based.py`   `PhonemeBasedPhonemizer` 基类（226 行，**抽象、不注册**）
+  - `monophone.py`       `MonophonePhonemizer` 基类（31 行，**抽象、不注册**）
 
 未照搬（后续）：
   - `ChineseCVVCPhonemizer.cs`(264) / `ChineseCVVPhonemizer.cs`(133) / `ArpasingPhonemizer.cs`(62)
@@ -22,6 +24,9 @@
 from . import chinese_cvvc  # noqa: F401
 from . import chinese_vcv  # noqa: F401
 from . import japanese_cvvc  # noqa: F401
+from .monophone import MonophonePhonemizer  # noqa: F401
+from .phoneme_based import PhonemeBasedPhonemizer  # noqa: F401
 from . import japanese_vcv  # noqa: F401
 
-__all__ = ['japanese_vcv', 'chinese_vcv', 'chinese_cvvc', 'japanese_cvvc']
+__all__ = ['japanese_vcv', 'chinese_vcv', 'chinese_cvvc', 'japanese_cvvc',
+           'PhonemeBasedPhonemizer', 'MonophonePhonemizer']

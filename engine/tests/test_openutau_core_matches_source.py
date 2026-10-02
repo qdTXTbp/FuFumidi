@@ -5598,6 +5598,230 @@ def test_g2p():
           b7.build().query('car') == ['K', 'AA'])
 
 
+class _FakeG2p:
+    """最小的 `IG2p`：给定了 `query` 表与元音/滑音集合。"""
+
+    def __init__(self, queries=None, vowels=(), glides=(), symbols=None):
+        self.queries = queries or {}
+        self.vowels = set(vowels)
+        self.glides = set(glides)
+        self.symbols = set(symbols) if symbols is not None else set(self.vowels | self.glides)
+
+    def is_valid_symbol(self, s):
+        return s in self.symbols
+
+    def is_vowel(self, s):
+        return s in self.vowels
+
+    def is_glide(self, s):
+        return s in self.glides
+
+    def query(self, grapheme):
+        return self.queries.get(grapheme)
+
+    def unpack_hint(self, hint, separator=' '):
+        return [s for s in hint.split(separator) if self.is_valid_symbol(s)]
+
+
+def _mk_mono(queries=None, vowels=(), glides=(), fallbacks=None, aliases=None):
+    """造一个 `MonophonePhonemizer` 的具体子类实例（供测试驱动）。"""
+    from singing.openutau.plugin_builtin import MonophonePhonemizer
+
+    class _Mono(MonophonePhonemizer):
+        name = 'test mono'
+        tag = 'test mono'
+
+        def load_g2p(self):
+            return _FakeG2p(queries, vowels, glides)
+
+        def load_vowel_fallbacks(self):
+            return dict(fallbacks or {})
+
+    ph = _Mono()
+    ph.set_singer(_OtoSinger(aliases or {}))
+    ph.set_timing(_CVVC_AXIS)
+    return ph
+
+
+def test_phoneme_based_phonemizer():
+    """`PhonemeBasedPhonemizer` + `MonophonePhonemizer` —— 音素驱动那条基类线。"""
+    from singing.openutau import Note, PhonemeAttributes, registered
+    from singing.openutau.plugin_builtin import MonophonePhonemizer, PhonemeBasedPhonemizer
+
+    cs = open(os.path.join(os.path.dirname(REF), 'OpenUtau.Plugin.Builtin',
+                           'PhonemeBasedPhonemizer.cs'), encoding='utf-8-sig').read()
+    cs_m = open(os.path.join(os.path.dirname(REF), 'OpenUtau.Plugin.Builtin',
+                             'MonophonePhonemizer.cs'), encoding='utf-8-sig').read()
+
+    # ---------------- 源码一致性
+    check('PhonemeBased: 构造函数里 Initialize 包在 try/catch（失败不阻断构造）',
+          'public PhonemeBasedPhonemizer() {' in cs and 'Failed to initialize.' in cs)
+    check('PhonemeBased: SetSinger 会**重新** LoadG2p', cs.count('g2p = LoadG2p();') == 2)
+    check('PhonemeBased: `?` 前缀 = 强制别名（取 Substring(1)）',
+          "note.lyric[0] == '?'" in cs and 'note.lyric.Substring(1)' in cs)
+    check('PhonemeBased: lyric == "-" 时试 "{前邻末符号} -"',
+          'note.lyric == "-" && prevSymbols != null' in cs
+          and 'alias = $"{prevSymbols.Last()} -";' in cs)
+    check('PhonemeBased: addTail 默认 true；"没有下一邻居"时追加 "-"',
+          'public bool addTail { get; set; } = true;' in cs
+          and 'symbols.Append("-")' in cs)
+    check('PhonemeBased: glide 的对齐用 i-1（"辅音-消音-元音"）',
+          'i>=2 && isGlide[i-1] && !isVowel[i-2]' in cs)
+    check('PhonemeBased: 手动对齐是 "+n" 的 n-1、且带 manual 标记',
+          'int.TryParse(notes[i].lyric.Substring(1), out var idx)' in cs
+          and 'alignments.Add(Tuple.Create(idx - 1, position, true));' in cs)
+    check('PhonemeBased: 收尾对齐点是 (phonemes.Length, position, true)',
+          'alignments.Add(Tuple.Create(phonemes.Length, position, true));' in cs)
+    check('PhonemeBased: 手动项与"时间不递增或下标相同"的邻居互删',
+          'alignments.RemoveAt(i - 1);' in cs and 'alignments.RemoveAt(i + 1);' in cs)
+    check('PhonemeBased: DistributeDuration 的整数除法与"没有元音时辅音平分"',
+          'Math.Min(ConsonantLength, duration / 2 / consonants)' in cs
+          and ': duration / consonants;' in cs)
+    check('Monophone: 构造函数里 addTail = false（与基类默认相反）',
+          'addTail = false;' in cs_m)
+    check('Monophone: 回落链最后返回**带 alt 后缀**的原串（不是裸 symbol）',
+          'return $"{symbol}{alt}";' in cs_m)
+    check('两个基类都是 abstract、**不注册**（name 为空）',
+          'abstract class PhonemeBasedPhonemizer' in cs
+          and 'abstract class MonophonePhonemizer' in cs_m
+          and PhonemeBasedPhonemizer.name == '' and MonophonePhonemizer.name == ''
+          and 'test mono' not in registered() and len(registered()) == 4)
+
+    # ---------------- 行为
+    # 1) `?` 前缀强制别名
+    ph = _mk_mono({'a': ['A']}, vowels=['A'], aliases={'A': _mk_named_oto('AAA')})
+    r = ph.process([Note(lyric='?逼我', tone=60, duration=480)])
+    check('PhonemeBased: `?xxx` 直接产出 xxx（不走查表）',
+          [p.phoneme for p in r.phonemes] == ['逼我'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # 2) 查不到符号 → 回落原歌词
+    ph = _mk_mono({}, vowels=['A'], aliases={})
+    r = ph.process([Note(lyric='zzz', tone=60, duration=480)])
+    check('PhonemeBased: 歌词查不到符号时回落原歌词',
+          [p.phoneme for p in r.phonemes] == ['zzz'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # 3) `-` 歌词 + 前邻
+    ph = _mk_mono({'a': ['A']}, vowels=['A'], aliases={'A -': _mk_named_oto('A -')})
+    r = ph.process([Note(lyric='-', tone=60, duration=480)],
+                   prev_neighbour=Note(lyric='a', tone=60, duration=480))
+    check('PhonemeBased: lyric "-" + 前邻 → 产出 "{前邻末符号} -" 的别名',
+          [p.phoneme for p in r.phonemes] == ['A -'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # 4) addTail：PhonemeBased 默认 true、Monophone false
+    ph = _mk_mono({'a': ['A']}, vowels=['A'], aliases={'A': _mk_named_oto('A'),
+                                                       'A -': _mk_named_oto('A -')})
+    check('PhonemeBased: add_tail 默认 True；Monophone 覆盖为 False',
+          ph.add_tail is False and PhonemeBasedPhonemizer().add_tail is True)
+
+    # 5) DistributeDuration 的整数除法（手推）
+    #    单音符 480 tick，符号 [C, A]（C 辅音 / A 元音），ConsonantLength=60
+    #    firstVowel=1 → startTick = -60；alignment = [(2, 480, True)]
+    #    duration = 480 - (-60) = 540；vowels=1 consonants=1
+    #    consonantDuration = min(60, 540/2/1=270) = 60
+    #    vowelDuration = (540 - 60*1)/1 = 480
+    #    → C.position = -60，A.position = -60+60 = 0
+    ph = _mk_mono({'a': ['C', 'A']}, vowels=['A'], glides=[],
+                  aliases={'C': _mk_named_oto('C'), 'A': _mk_named_oto('A')})
+    ph.add_tail = False
+    r = ph.process([Note(lyric='a', tone=60, duration=480)])
+    check('PhonemeBased.DistributeDuration: 辅音给固定 60、元音吃掉剩余 480（手推）',
+          [(p.phoneme, p.position) for p in r.phonemes] == [('C', -60), ('A', 0)],
+          'got %r' % [(p.phoneme, p.position) for p in r.phonemes])
+
+    # 6) 没有元音时辅音平分（firstVowel = -1 → startTick 变成**正数**，照搬 quirk）
+    ph = _mk_mono({'a': ['C', 'D']}, vowels=[], glides=[],
+                  aliases={'C': _mk_named_oto('C'), 'D': _mk_named_oto('D')})
+    ph.add_tail = False
+    r = ph.process([Note(lyric='a', tone=60, duration=480)])
+    check('PhonemeBased: 无元音时 firstVowel=-1 → startTick=+60（照搬 Array.IndexOf 的 quirk）',
+          r.phonemes[0].position == 60, 'got %r' % r.phonemes[0].position)
+    # duration = 480 - 60 = 420 → 每个辅音 420//2 = 210 → [60, 270]
+    check('PhonemeBased: 无元音时两个辅音平分（各 210 → [60, 270]）',
+          [p.position for p in r.phonemes] == [60, 270],
+          'got %r' % [p.position for p in r.phonemes])
+
+    # 7) glide 的对齐特例：[C, G, A] → 对齐到 G（i-1）
+    ph = _mk_mono({'a': ['C', 'G', 'A']}, vowels=['A'], glides=['G'],
+                  aliases={x: _mk_named_oto(x) for x in ('C', 'G', 'A')})
+    ph.add_tail = False
+    r = ph.process([Note(lyric='a', tone=60, duration=480)])
+    # ★ 关键：glide 特例把对齐点放在**下标 1**（G）而不是 2（A）—— 于是切分是
+    #   [0,1) 与 [1,3) 两段，而不是 [0,2) 与 [2,3)：
+    #   firstVowel=2 → startTick = -120；
+    #   段1 [0,1) = [C]，duration = 0-(-120) = 120，无元音 → 全给 C → C = -120；
+    #   段2 [1,3) = [G, A]，duration = 480，有元音 → 辅音固定 60 → G = 0，A = 60
+    check('PhonemeBased: glide 特例把对齐点放在下标 1 → [-120, 0, 60]',
+          [p.position for p in r.phonemes] == [-120, 0, 60],
+          'got %r' % [p.position for p in r.phonemes])
+
+    # 8) addTail：无下一邻居时追加 "-"（PhonemeBased 默认 true）
+    #    用一个"原样回显符号"的子类，这样断言的就是 addTail 本身而不是别名的拼法
+    class _Echo(PhonemeBasedPhonemizer):
+        name = 'echo'
+        tag = 'echo'
+
+        def load_g2p(self):
+            return _FakeG2p({'a': ['A']}, vowels=['A'])
+
+        def load_vowel_fallbacks(self):
+            return {}
+
+        def get_phoneme_or_fallback(self, prev_symbol, symbol, tone, color, alt):
+            return symbol
+
+    e = _Echo()
+    e.set_timing(_CVVC_AXIS)
+    check('PhonemeBased: add_tail 默认 True', e.add_tail is True)
+    check('PhonemeBased.addTail: 无下一邻居 → 符号串尾部多出一个 "-"',
+          [p.phoneme for p in e.process([Note(lyric='a', tone=60, duration=480)]).phonemes]
+          == ['A', '-'],
+          'got %r' % [p.phoneme for p in e.process([Note(lyric='a', tone=60,
+                                                        duration=480)]).phonemes])
+    check('PhonemeBased.addTail: **有**下一邻居时**不**追加',
+          [p.phoneme for p in e.process(
+              [Note(lyric='a', tone=60, duration=480)],
+              next_neighbour=Note(lyric='a', tone=60, duration=480)).phonemes] == ['A'])
+
+    # 9) phoneticHint：按空白切分 + 丢无效符号
+    ph = _mk_mono({}, vowels=['A'], glides=['G'], aliases={'A': _mk_named_oto('A')})
+    ph.add_tail = False
+    r = ph.process([Note(lyric='随便', tone=60, duration=480, phonetic_hint='XX A YY')])
+    check('PhonemeBased: phoneticHint 切分后**丢掉无效符号**',
+          [p.phoneme for p in r.phonemes] == ['A'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+    # 10) Monophone 的四段回落
+    ph = _mk_mono({}, vowels=['A', 'B', 'C'], glides=[],
+                  fallbacks={'B': ['C']},
+                  aliases={'Aalt': _mk_named_oto('Aalt')})
+    check('Monophone: 第 1 步试 "{symbol}{alt}"（直接拼接，无分隔符）',
+          ph.get_phoneme_or_fallback('-', 'A', 60, '', 'alt') == 'Aalt')
+    ph2 = _mk_mono({}, vowels=['A', 'B', 'C'], fallbacks={'B': ['C']},
+                   aliases={'A': _mk_named_oto('AAA')})
+    check('Monophone: 第 2 步试裸 symbol',
+          ph2.get_phoneme_or_fallback('-', 'A', 60, '', '') == 'AAA')
+    ph3 = _mk_mono({}, vowels=['A', 'B', 'C'], fallbacks={'B': ['C']},
+                   aliases={'C': _mk_named_oto('CCC')})
+    check('Monophone: 第 3 步用 vowelFallback 逐个试',
+          ph3.get_phoneme_or_fallback('-', 'B', 60, '', '') == 'CCC')
+    ph4 = _mk_mono({}, vowels=['A'], fallbacks={}, aliases={})
+    check('Monophone: 第 4 步返回 **{symbol}{alt}**（带后缀，不是裸 symbol）',
+          ph4.get_phoneme_or_fallback('-', 'Z', 60, '', '7') == 'Z7'
+          and ph4.get_phoneme_or_fallback('-', 'Z', 60, '', '') == 'Z')
+
+    # 11) 音符属性（alternate / voice_color / tone_shift）会被读
+    ph = _mk_mono({}, vowels=['A'], fallbacks={},
+                  aliases={'A0': _mk_named_oto('A0')})
+    r = ph.process([Note(lyric='x', tone=60, duration=480, phonetic_hint='A',
+                         phoneme_attributes=[PhonemeAttributes(index=0, alternate=0)])])
+    check('PhonemeBased: 音符的 alternate 参与 "{symbol}{alt}" 查询',
+          [p.phoneme for p in r.phonemes] == ['A0'],
+          'got %r' % [p.phoneme for p in r.phonemes])
+
+
 def test_xxhash64():
     """XXH32/XXH64 官方测试向量 —— 对不上，所有缓存键都会静默错。"""
     from singing.openutau.xxhash import xxh32, xxh64 as _x
@@ -5665,6 +5889,8 @@ def main():
     test_document_snapshot_store()
     print('--- Render/Worldline（纯逻辑） ---')
     test_worldline_pure()
+    print('--- Plugin.Builtin/PhonemeBased + Monophone ---')
+    test_phoneme_based_phonemizer()
     print('--- Core/G2p 基础设施 ---')
     test_g2p()
     print('--- 音素化器 × 真 ClassicSinger（接口契约回归） ---')

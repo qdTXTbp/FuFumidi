@@ -4,8 +4,8 @@
 > 落点：`engine/singing/`（纯 Python，**不依赖 torch / numpy**，可脱离主程序单测）
 > 方针：**除外观外不允许自研** —— 每一处都应能回答"对应 OpenUTAU 的哪个文件/函数"
 > 最后更新：2026-10-02 —— P0~P2 完成；MOD+ / `WorldlineRenderer` v10 / `JapaneseCVVC` /
-> **G2p 基础设施** 已补齐；下一步是 `SyllableBasedPhonemizer`（解锁 17 个语言音素化器）
-> 2026-10-02 复核：四项测试 **1053 项断言全绿**（含 `worldline.dll` 真机端到端）
+> **G2p 基础设施** / **`PhonemeBased`+`Monophone` 基类** 已补齐
+> 2026-10-02 复核：四项测试 **1083 项断言全绿**（含 `worldline.dll` 真机端到端）
 
 ---
 
@@ -44,6 +44,10 @@
   这是 `SyllableBasedPhonemizer`(2204) / `PhonemeBasedPhonemizer`(226) 两条基类线的前置；
   搬完它，"解锁 17 个语言音素化器"就只差那两条基类本身。
   ONNX 会话做成**可注入**（没注入就是 C# 里 `Session == null` 的既有分支，返回空）。
+- 再补**音素驱动那条基类线**：`PhonemeBasedPhonemizer`(226) + `MonophonePhonemizer`(31)。
+  这条线是 `ChineseCVV` / `LatinDiphone`（→ Arpasing / FrenchCMU / GermanDiphone）的前置。
+  与 `SyllableBased` 那条线的分工：**这条以"音素序列"为单位**（G2P 查符号 → 按时长铺开 →
+  逐个换别名），那条以"音节"为单位。
 - ★ 并**修掉一个跨模块的真 bug**：`USinger.try_get_mapped_oto` 返回 `(found, oto)`
   （照搬 C# 的 `out` 参数），但有**三个**音素化器把它当裸值用 —— 在真 `ClassicSinger`
   上会 `AttributeError: 'tuple' object has no attribute 'is_color_match'`。
@@ -55,12 +59,12 @@
 `RenderPhrase.from_part` → `ClassicRenderer.render()` 产出的样本，主频用**过零率**实测
 ≈ 440Hz（源素材 300Hz、tone 69）—— 变调与拼接都真的生效了。
 
-已完成规模：Python **12,707 行**（`engine/singing/**/*.py`，61 个文件，排除 `__pycache__`），
-对应 C# **约 10,630 行**（对第 3 节列出的 53 个 C# 源文件逐项 `wc -l` 求和，
+已完成规模：Python **13,033 行**（`engine/singing/**/*.py`，63 个文件，排除 `__pycache__`），
+对应 C# **约 10,890 行**（对第 3 节列出的 55 个 C# 源文件逐项 `wc -l` 求和，
 含 `RenderEngine.cs` 的 `Progress` 部分）。
 另有 NWaves 三段转写（**无 C# 对应物**，属第三方库替换）。
 
-一致性测试 **6,401 行 / 1053 项断言**（四个文件合计：19 + 59 + 956 + 19；
+一致性测试 **6,627 行 / 1083 项断言**（四个文件合计：19 + 59 + 986 + 19；
 参考源码缺失时自动 SKIP）。
 
 ---
@@ -85,6 +89,7 @@
 | 渲染器接口与注册表 | 146 + 141 行 | ✅ 完成（具体渲染器未搬） |
 | Worldline 纯逻辑 | 780 行中约 400 | ✅ 完成（原生边界另计） |
 | 音素化器基类 / 中文基类 | 250 + 51 行 | ✅ 完成 |
+| `SyllableBasedPhonemizer`(2204) / `PhonemeBased`+`Monophone`(257) | 2204 + 257 行 | 🟡 `PhonemeBased`+`Monophone` **完成**；`SyllableBased` 未开始（它牵着 `YamlWatcher`，要拆几步） |
 | 内置音素化器 | 51 个文件 / 25,707 行 | 🟡 **4 / 51**（JA VCV / JA CVVC / ZH VCV / ZH CVVC） |
 | Classic 参数层 | 188 + 57 行 | ✅ 完成 |
 | Classic 执行层 · 底座（WAV / 接口 / 清单） | 173 + 25 + 11 + 28 行 | ✅ 完成 |
@@ -158,6 +163,8 @@
 | `openutau/g2p/dictionary.py` | `Api/G2pDictionary.cs`（Trie + Builder） |
 | `openutau/g2p/fallbacks.py` | `Api/G2pFallbacks.cs` |
 | `openutau/g2p/pack.py` | `Api/G2pPack.cs`（ONNX 会话可注入） |
+| `openutau/plugin_builtin/phoneme_based.py` | `Plugin.Builtin/PhonemeBasedPhonemizer.cs` |
+| `openutau/plugin_builtin/monophone.py` | `Plugin.Builtin/MonophonePhonemizer.cs` |
 
 每个模块的 `__init__.py` 里维护着一份"已照搬 / 未照搬"清单，与上表同步。
 
@@ -169,11 +176,11 @@
 cd engine/tests
 python test_ustx_schema_matches_source.py        # 19 passed
 python test_ustx_roundtrip.py                    # 59 passed
-python test_openutau_core_matches_source.py      # 956 passed   ← 含 worldline.dll 真机端到端
+python test_openutau_core_matches_source.py      # 986 passed   ← 含 worldline.dll 真机端到端
 python test_singing_adapters.py                  # 19 passed / 1 skipped
 ```
 
-合计 **1053 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
+合计 **1083 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
 整套测试**可离线运行**。
 
 `worldline.dll` 真机测试的 SKIP 条件是"找不到 `/d/FuFuMIDI/_ref/OpenUtau/runtimes/win-x64/native/worldline.dll`
@@ -265,6 +272,8 @@ assert '(i + 1) == phrase.dynamics.Length' in cs
 | 36 | **测试替身与真实现的返回契约不一致** | 这是本轮最贵的一类：`USinger.try_get_mapped_oto` 返回 `(found, oto)`，而**三个**音素化器当裸值用 → 真 `ClassicSinger` 上 `AttributeError: 'tuple' object has no attribute 'is_color_match'`。**测试全绿**，因为替身也返回裸值（两边一致地错） | ① 替身必须**照抄真实现的签名与返回形状**；② 关键接口补一条**用真实现**驱动的用例（本轮的 `test_phonemizers_against_real_singer`）；③ 在基类加**严格解包**的统一入口 `Phonemizer.mapped_oto()`，替身写错立刻 `TypeError` |
 | 37 | **把返回元组的函数当布尔用** | `if self._check_oto_until_hit_vc(...):` —— 元组**恒为真**，于是永远走"命中"分支，然后在 `oto1 is None` 上炸。同一处还**重复调用**了两次（第二次才解包） | 一次调用、立刻解包：`hit, oto = f(); if hit:`。已在本模块注释里点明这是自己踩过的坑 |
 | 38 | **`^[\p{P}]$` 只匹配「恰好一个」标点字符** | 字符类**没有量词**又带首尾锚点，所以 `"!!"`（两个字符）**不匹配** —— 直觉上会以为"全是标点"。而且 Python 的 `re` **没有 `\p{P}`**，直接翻译会抛错 | 用 `unicodedata.category(ch).startswith('P')` 等价实现，并**显式保留"只判一个字符"**（`len(s) != 1 → False`）。读 C# 正则时要**先看有没有量词** |
+| 39 | **`Array.IndexOf` 找不到返回 **-1**，而它被拿去乘了** | `startTick = -ConsonantLength * firstVowel` —— 找不到元音时 `firstVowel = -1`，于是 `startTick` 变成**正** `ConsonantLength`（本该是 0 或负）。Python 里若按"没找到就当 0"处理，整条音符的音素位置会全偏 | 照搬：`first_vowel = is_vowel.index(True) if True in is_vowel else -1`，并**专门为这个 quirk 写一条断言**（无元音时首音素 position = +60） |
+| 40 | **C# 的 `List.Sort` 是**不稳定**排序，Python 的 `sorted` 是稳定的** | 等键元素的相对顺序在 C# 里是**未定义**的（introsort）。这里影响对齐表：同一下标的两项谁先谁后会改变后续的"手动项去重"结果 | 实测对齐表通常 < 16 项 → C# 走插入排序，**恰好是稳定的**，所以 Python 的稳定排序等价。已把"这是巧合一致"写进注释；若将来对齐表规模变大（> 16），需要重新核对 |
 
 
 ### 附：写测试时的最大陷阱 —— 凭直觉填期望
