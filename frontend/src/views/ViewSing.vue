@@ -17,6 +17,7 @@ import { useAppStore } from '../stores/app';
 import { getTransport } from '../core/sing_transport.js';
 import { FX_TYPES, FX_ORDER } from '../core/track_fx.js';
 import { CURVE_TARGETS, curveOf, defaultFor, targetsFor } from '../core/track_automation.js';
+import { notePhonemes } from '../core/phoneme.js';
 
 const store = useSingerStore();
 const app = useAppStore();
@@ -292,6 +293,99 @@ function applyAlign() {
   if (!n) { say(t('偏移量为 0，什么都没改'), 'info'); return; }
   say(t('已把 ') + String(n) + t(' 个音符整体平移 ') + String(alignMs.value) + t(' ms'), 'ok',
     { hint: t('Ctrl+Z 可以撤销。'), action: { label: t('撤销'), run: () => store.undo() } });
+}
+
+/* ------------------------------------------------------------ 参数车道（P2-4）
+ * 表格加点保留（精确输入用），同时把它画成可拖拽车道：只在打开「自动化」页签时给车道，
+ * 免得平时白占一条 70px 的高度。 */
+const autoLane = computed<any>(() => {
+  const t0 = tr.value;
+  if (!t0 || propsTab.value !== 'auto') return null;
+  const tgt: any = curTarget.value || {};
+  const curve: any = curCurve.value;
+  return {
+    abbr: curAbbr.value,
+    label: (tgt.label || curAbbr.value) + (tgt.unit ? ' (' + tgt.unit + ')' : ''),
+    min: Number.isFinite(tgt.min) ? tgt.min : 0,
+    max: Number.isFinite(tgt.max) ? tgt.max : 100,
+    def: Number.isFinite(tgt.def) ? tgt.def : defaultFor(curAbbr.value),
+    unit: tgt.unit || '',
+    points: ((curve && curve.points) || []).map((p: any) => ({ beat: p.beat, value: p.value })),
+  };
+});
+/** 车道拖拽结果落库：排序与钳制交给 store 的 normalizeCurve */
+function onAutoLane(pts: any[]) {
+  const t0 = tr.value;
+  if (!t0) return;
+  store.setCurve(t0.id, curAbbr.value, (pts || []).map((p: any) => ({ beat: p.beat, value: p.value })));
+}
+
+/* ------------------------------------------------------------ 音素级编辑（P2-2）
+ * 条带上点一个音素 → 这里改**那一个音素**的表达式。
+ *
+ * ★ 与音符级字段的分工：音符级值会落到该音符的每个音素；这里按下标单独覆盖，
+ *   引擎侧（build_part）让音素级优先。所以「辅音轻、元音亮」可以同时成立。
+ * ★ 下标来自 core/phoneme.js 的派生（与条带绘制同一套），是**估计**：
+ *   引擎真正的音素切分以声库 oto 为准；下标越界时引擎会忽略，不会渲染失败。
+ */
+const PH_EXPRS: { abbr: string; label: string; min: number; max: number; def: number; hint: string }[] = [
+  { abbr: 'vol', label: '音量 VOL', min: 0, max: 100, def: 100, hint: '表情级音量（100 = 原样，不是衰减量）' },
+  { abbr: 'vel', label: '力度 VEL', min: 0, max: 100, def: 100, hint: '辅音速度与力度，越小越柔' },
+  { abbr: 'dyn', label: '力度曲线 DYN', min: -240, max: 120, def: 0, hint: '音量曲线偏移（-240 ~ 120）' },
+  { abbr: 'atk', label: '起音 ATK', min: 0, max: 100, def: 100, hint: '音符开头的咬字力度' },
+  { abbr: 'dec', label: '衰减 DEC', min: 0, max: 100, def: 100, hint: '越小收得越快' },
+  { abbr: 'shft', label: '音高偏移 SHFT', min: 0, max: 100, def: 0, hint: '音高偏移量（0 ~ 100）' },
+  { abbr: 'clr', label: '语音色 CLR', min: 0, max: 99, def: 0, hint: '语音色选项下标；声库没有多语音色时保持 0' },
+];
+const selPh = ref<{ noteId: string; index: number; text: string } | null>(null);
+/** 面板当前作用的音符：优先用条带上点选的那个，否则跟随卷帘选中的音符 */
+const phNote = computed<any>(() => {
+  const id = (selPh.value && selPh.value.noteId) || store.selectedId;
+  return (tr.value?.notes || []).find((n: any) => n.id === id) || null;
+});
+/** 该音符的音素列表（与条带同一套派生） */
+const phItems = computed<any[]>(() => { const n = phNote.value; return n ? notePhonemes(n) : []; });
+/** 当前下标；没点过条带时默认第一个音素 */
+const phIndex = computed<number>(() => {
+  if (selPh.value && phNote.value && selPh.value.noteId === phNote.value.id) return selPh.value.index;
+  return phItems.value.length ? 0 : -1;
+});
+const phCur = computed<any>(() => (phIndex.value >= 0 ? phItems.value[phIndex.value] : null));
+/** 当前音素上已设的覆盖值 */
+const phVals = computed<Record<string, number>>(() => {
+  const n = phNote.value;
+  if (!n || phIndex.value < 0) return {};
+  return (n.phExpressions || {})[String(phIndex.value)] || {};
+});
+const phOverrideCount = computed(() => Object.keys(phVals.value).length);
+/** 条带上点选音素（组件发上来的事件；点空白发 null） */
+function onPickPhoneme(p: any) {
+  selPh.value = p && p.noteId != null
+    ? { noteId: p.noteId, index: Number(p.index) || 0, text: String(p.text || '') }
+    : null;
+}
+function pickPhonemeIndex(i: number) {
+  const n = phNote.value;
+  if (!n) return;
+  const it = phItems.value[i];
+  store.select(n.id);
+  selPh.value = { noteId: n.id, index: i, text: (it && it.text) || '' };
+}
+function setPhExpr(abbr: string, e: Event) {
+  const n = phNote.value;
+  if (!n) return;
+  const el = e.target as HTMLInputElement;
+  const raw = String(el.value).trim();
+  if (!raw) { store.setPhonemeExpression(n.id, phIndex.value, abbr, null); return; }
+  const val = Number(raw);
+  if (!Number.isFinite(val)) { el.value = String(phVals.value[abbr] ?? ''); return; }
+  store.setPhonemeExpression(n.id, phIndex.value, abbr, val);
+}
+function clearPhExpr() {
+  const n = phNote.value;
+  if (!n) return;
+  store.clearPhonemeExpressions(n.id, phIndex.value);
+  say(t('已清空该音素的覆盖，回到音符/轨道默认值'), 'ok');
 }
 
 /* ------------------------------------------------------------ 多选批量操作（P2-1）
@@ -1370,6 +1464,10 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             <button class="btn" @click="autoAddPoint"><Icon name="plus" :size="12" /> {{ t('加点') }}</button>
             <button class="btn" @click="store.clearCurve(tr.id, curAbbr)">{{ t('清空') }}</button>
           </div>
+          <!-- P2-4：表格用于精确输入，车道用于"凭耳朵拖" —— 两条路都留着 -->
+          <p class="muted auto-hint">
+            {{ t('下面的车道可以直接拖：空白处按下加点并拖动，Alt+点或右键点删除。表格用于精确输入。') }}
+          </p>
           <div v-if="curCurve && curCurve.points.length" class="auto-grid">
             <div v-for="(p, i) in curCurve.points" :key="i" class="curve-row">
               <span class="ci">{{ i + 1 }}</span>
@@ -1416,9 +1514,14 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         :playhead-beat="playheadBeat"
         :beats-per-bar="beatsPerBar"
         :scale="scale"
+        :sel-phoneme="selPh"
+        :automation="autoLane"
         @edit-lyric="(id) => store.select(id)"
+        @automation-begin="store.pushUndo()"
+        @set-automation="onAutoLane"
         @set-scale="onRollScale"
         @set-scale-root="onRollScaleRoot"
+        @edit-phoneme="onPickPhoneme"
       />
 
       <!-- 选中音符的详细编辑（两边共用一套，引擎特有项按轨道显示） -->
@@ -1503,6 +1606,31 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         </template>
       </div>
 
+      <!-- 音素级编辑（P2-2）：条带上点一个音素，或点下面的音素芯片 -->
+      <div v-if="!isAudio && phNote && phItems.length" class="ph-panel">
+        <div class="ph-head small">
+          <b>{{ t('音素级编辑') }}</b>
+          <span class="muted">{{ t('音符「') }}{{ phNote.lyric || '—' }}{{ t('」的音素（辅音 → 元音）：') }}</span>
+          <button v-for="(it, i) in phItems" :key="i" class="chip-btn"
+                  :class="{ on: i === phIndex, has: !!(phNote.phExpressions && phNote.phExpressions[String(i)]) }"
+                  :title="t('编辑这个音素（下标 ') + i + t('）；带圆点表示已单独设过') "
+                  @click="pickPhonemeIndex(i)">{{ it.text }}</button>
+          <span class="sp" />
+          <span v-if="phOverrideCount" class="muted">{{ t('本音素已覆盖 ') }}{{ phOverrideCount }}{{ t(' 项') }}</span>
+          <button class="btn sm" :disabled="!phOverrideCount" @click="clearPhExpr">{{ t('清除本音素覆盖') }}</button>
+        </div>
+        <div class="ph-grid small">
+          <label v-for="e in PH_EXPRS" :key="e.abbr" :title="t(e.hint) + t('；留空 = 用音符/轨道的值')">
+            <span>{{ t(e.label) }}</span>
+            <input type="number" :min="e.min" :max="e.max" :placeholder="String(e.def)"
+                   :value="phVals[e.abbr] ?? ''" @change="setPhExpr(e.abbr, $event)" />
+          </label>
+        </div>
+        <p class="muted small ph-note">
+          {{ t('只改这一个音素；留空即沿用音符级/轨道默认值。音素切分是按歌词估计的，引擎以声库 oto 为准，下标越界会被忽略。') }}
+        </p>
+      </div>
+
       <!-- 音高曲线（两边共用） -->
       <div v-if="!isAudio" class="curves">
         <div class="curves-head small">
@@ -1554,6 +1682,19 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .se-acts { display: flex; gap: 6px; flex-wrap: wrap; }
 .edt-msg.hint { color: var(--stone); }
 /* 多选批量工具行（P2-1）与歌词告警（P2-5） */
+/* 音素级编辑面板（P2-2） */
+.auto-hint { margin: 6px 0 0; line-height: 1.7; }
+.ph-panel { margin: 8px 12px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); }
+.ph-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ph-head .sp { flex: 1; }
+.ph-head .chip-btn.has { box-shadow: inset 0 0 0 1.5px var(--brand-coral); }
+.ph-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px 10px; margin-top: 8px; }
+.ph-grid label { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.ph-grid label span { color: var(--slate); font-size: 11.5px; }
+.ph-grid input { width: 74px; height: 24px; border: 1px solid var(--hairline); border-radius: 7px;
+  background: var(--surface-soft); color: var(--ink); font-size: 12px; text-align: right; }
+.ph-note { margin: 8px 0 0; line-height: 1.7; }
 /* 工程条上的小控件（P2-3） */
 .proj-field { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--slate); }
 .proj-field input, .proj-field select { height: 24px; border: 1px solid var(--hairline); border-radius: 7px;

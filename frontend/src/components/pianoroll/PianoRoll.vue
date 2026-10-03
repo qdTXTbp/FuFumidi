@@ -42,8 +42,15 @@ const props = defineProps({
   scale: { type: Object, default: null },
   /* ---- P2-3：每小节几拍（由工程拍号换算而来；只影响小节线与编号）---- */
   beatsPerBar: { type: Number, default: 4 },
+  /* ---- P2-2：当前选中的音素 { noteId, index }，用于在条带上高亮 ---- */
+  selPhoneme: { type: Object, default: null },
+  /* ---- P2-4：参数车道（自动化曲线）
+     { abbr, label, unit, min, max, def, points: [{beat, value}] }；null = 不显示车道。
+     宿主决定"什么时候给"（例如只在打开自动化页签时给），组件不猜。 */
+  automation: { type: Object, default: null },
 });
-const emit = defineEmits(['edit-lyric', 'set-scale', 'set-scale-root', 'edit-phoneme']);
+const emit = defineEmits(['edit-lyric', 'set-scale', 'set-scale-root', 'edit-phoneme',
+  'set-automation', 'automation-begin']);
 
 /* ---------------- 布局 ---------------- */
 // 键盘列宽 / 顶部留白以 props 为准（挂载期固定，不随运行时变）
@@ -264,8 +271,9 @@ function draw() {
     }
   }
 
-  // 音素条带与音符层同源重绘，保证始终对齐
+  // 音素条带 / 参数车道 / 音高车道都与音符层同源重绘，保证始终对齐
   drawPhoneme();
+  drawAuto();
   drawPitch();
 }
 
@@ -637,15 +645,19 @@ function drawPhoneme() {
   let lastTextEndX = -Infinity, raise = false;
   for (const row of derivePhonemes(props.notes)) {
     const selected = selSet.has(row.noteId);
-    for (const it of row.items) {
+    row.items.forEach((it, phIdx) => {
       const x0 = xOf(row.startBeat + it.t0);
       const x1 = xOf(row.startBeat + it.t1);
       const w = Math.max(2, x1 - x0) - 1;
-      if (x0 + w < scrollX.value - 60 || x0 > scrollX.value + (wrap.value ? wrap.value.clientWidth : cw) + 60) continue;
+      if (x0 + w < scrollX.value - 60 || x0 > scrollX.value + (wrap.value ? wrap.value.clientWidth : cw) + 60) return;
+      /* P2-2：当前正在编辑的音素（条带上点选的那个）单独强调 —— 用户点了它就得看见它 */
+      const phSel = !!props.selPhoneme && props.selPhoneme.noteId === row.noteId
+        && Number(props.selPhoneme.index) === phIdx;
       // 分段块：辅音用强调底、元音用普通底
-      g.fillStyle = selected ? brand : (it.cons ? V('--tint-strong') : V('--note-fill'));
+      g.fillStyle = phSel ? V('--brand-coral') : (selected ? brand : (it.cons ? V('--tint-strong') : V('--note-fill')));
       g.fillRect(x0, bandTop, w, bandH);
-      g.strokeStyle = selected ? brand : V('--note-edge'); g.lineWidth = 1;
+      g.strokeStyle = phSel ? V('--brand-coral') : (selected ? brand : V('--note-edge'));
+      g.lineWidth = phSel ? 2 : 1;
       g.strokeRect(x0 + 0.5, bandTop + 0.5, w, bandH);
       // 音素起点竖线（对应 OpenUTAU 的 position 线）
       g.strokeStyle = selected ? brand : ink; g.globalAlpha = 0.6;
@@ -664,10 +676,186 @@ function drawPhoneme() {
         g.fillText(it.text, x0 + 4, ty);
         lastTextEndX = x0 + tw + 2;
       }
+    });
+  }
+}
+
+/**
+ * P2-2：音素条带上点选单个音素 → 通知宿主打开音素面板。
+ * 命中判定用**与绘制同一套** derivePhonemes / xOf，所以"看到哪就能点到哪"；
+ * 点空白处发 null，宿主据此收起面板（比"点了没反应"清楚）。
+ */
+function phDown(e) {
+  if (!props.canEdit || !phonemeCanvas.value) return;
+  const rect = phonemeCanvas.value.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  if (x < LEFT) return;
+  const beat = beatOf(x);
+  for (const row of derivePhonemes(props.notes)) {
+    for (let i = 0; i < row.items.length; i++) {
+      const it = row.items[i];
+      if (beat >= row.startBeat + it.t0 && beat <= row.startBeat + it.t1) {
+        props.api.setSelection([row.noteId], row.noteId);
+        emit('edit-phoneme', { noteId: row.noteId, index: i, text: it.text });
+        return;
+      }
+    }
+  }
+  emit('edit-phoneme', null);
+}
+
+/* ---------------- 参数车道（P2-4） ----------------
+ * 自动化此前只有「表格加点」：在输入框里敲 beat 与数值，改 5 个点要敲 10 次。
+ * 这里把它画成**可拖拽的曲线车道**（对齐 OpenUTAU 的曲线编辑）：
+ *   · 空白处按下 → 在该处加一个点并开始拖
+ *   · 拖点 → 同时改 beat（吸附）与数值
+ *   · Alt+点 / 右键点 → 删掉那个点
+ * ★ x 映射与音符层共用 xOf()，所以车道与卷帘天然对齐；
+ *   点数组的排序/钳制交给宿主的 store（它已有 normalizeCurve）。
+ */
+const AUTO_H = 70;
+const autoCanvas = ref(null);
+let autoCtx = null;
+let autoDrag = null;
+
+function autoSpec() {
+  const a = props.automation;
+  if (!a || !a.abbr) return null;
+  const min = Number.isFinite(a.min) ? Number(a.min) : 0;
+  const max = Number.isFinite(a.max) ? Number(a.max) : 100;
+  return { min, max: max > min ? max : min + 1, def: Number.isFinite(a.def) ? Number(a.def) : min, unit: a.unit || '' };
+}
+function setupAutoCanvas() {
+  const c = autoCanvas.value; if (!c) return;
+  const dpr = window.devicePixelRatio || 1;
+  c.width = Math.round(cw * dpr); c.height = Math.round(AUTO_H * dpr);
+  c.style.width = cw + 'px'; c.style.height = AUTO_H + 'px';
+  autoCtx = c.getContext('2d');
+  autoCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+function yOfVal(v, spec) {
+  const k = (Number(v) - spec.min) / (spec.max - spec.min);
+  const pad = 8;
+  return AUTO_H - pad - Math.max(0, Math.min(1, k)) * (AUTO_H - pad * 2);
+}
+function valOfY(y, spec) {
+  const pad = 8;
+  const k = 1 - (y - pad) / (AUTO_H - pad * 2);
+  const v = spec.min + Math.max(0, Math.min(1, k)) * (spec.max - spec.min);
+  return Math.round(v * 100) / 100;
+}
+function autoPoints() {
+  const a = props.automation;
+  const pts = (a && Array.isArray(a.points)) ? a.points : [];
+  return pts.map((p) => ({ beat: Number(p.beat) || 0, value: Number(p.value) || 0 })).sort((x, y) => x.beat - y.beat);
+}
+function drawAuto() {
+  const c = autoCanvas.value;
+  const spec = autoSpec();
+  if (!c || !spec) return;
+  const dpr = window.devicePixelRatio || 1;
+  if (c.width !== Math.round(cw * dpr) || c.height !== Math.round(AUTO_H * dpr)) setupAutoCanvas();
+  const g = autoCtx; if (!g) return;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const surf = V('--surface'), muted = V('--surface-muted'), border = V('--border');
+  const ink = V('--text'), dim = V('--text-muted'), brand = V('--brand'), grid = V('--grid');
+  g.clearRect(0, 0, cw, AUTO_H);
+  g.fillStyle = surf; g.fillRect(0, 0, cw, AUTO_H);
+  g.fillStyle = muted; g.fillRect(0, 0, LEFT, AUTO_H);
+  g.fillStyle = dim; g.font = '9px system-ui, sans-serif'; g.textAlign = 'right';
+  g.fillText(String((props.automation && props.automation.label) || 'AUTO'), LEFT - 6, 14);
+  g.fillText(String(spec.max), LEFT - 6, 24);
+  g.fillText(String(spec.min), LEFT - 6, AUTO_H - 4);
+
+  const perBarA = perBarFor(props.beatsPerBar);
+  for (let b = 0; b <= Math.ceil(totalBeats.value); b++) {
+    const x = xOf(b); const isBar = b % perBarA === 0;
+    g.strokeStyle = isBar ? border : grid; g.lineWidth = isBar ? 1.2 : 0.6;
+    g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, AUTO_H); g.stroke();
+  }
+  // 默认值基线（虚线）：一眼看出哪里被抬起来了
+  const yDef = yOfVal(spec.def, spec);
+  g.save(); g.setLineDash([4, 3]); g.strokeStyle = dim; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(LEFT, yDef + 0.5); g.lineTo(cw, yDef + 0.5); g.stroke(); g.restore();
+
+  const pts = autoPoints();
+  // 曲线：首点之前取首点值、末点之后取末点值（与运行时的采样语义一致）
+  g.strokeStyle = brand; g.lineWidth = 1.6; g.beginPath();
+  if (pts.length) {
+    g.moveTo(LEFT, yOfVal(pts[0].value, spec));
+    for (const p of pts) g.lineTo(xOf(p.beat), yOfVal(p.value, spec));
+    g.lineTo(cw, yOfVal(pts[pts.length - 1].value, spec));
+  }
+  g.stroke();
+  for (const p of pts) {
+    const x = xOf(p.beat), y = yOfVal(p.value, spec);
+    g.fillStyle = surf; g.strokeStyle = brand; g.lineWidth = 1.6;
+    g.beginPath(); g.arc(x, y, 3.6, 0, Math.PI * 2); g.fill(); g.stroke();
+  }
+  if (autoDrag) {
+    const cur = pts[autoDrag.index];
+    if (cur) {
+      g.fillStyle = ink; g.font = '10px system-ui, sans-serif'; g.textAlign = 'left';
+      g.fillText(String(cur.value) + spec.unit + ' @ ' + cur.beat.toFixed(2), xOf(cur.beat) + 7, yOfVal(cur.value, spec) - 5);
     }
   }
 }
 
+function autoXY(e) {
+  const r = autoCanvas.value.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+function autoHit(x, y, spec) {
+  const pts = autoPoints();
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const px = xOf(pts[i].beat), py = yOfVal(pts[i].value, spec);
+    if (Math.abs(px - x) <= 6 && Math.abs(py - y) <= 6) return i;
+  }
+  return -1;
+}
+function emitAuto(pts) { emit('set-automation', pts); }
+
+function aDown(e) {
+  const spec = autoSpec();
+  if (!spec || !props.canEdit) return;
+  const { x, y } = autoXY(e);
+  if (x < LEFT) return;
+  const pts = autoPoints();
+  const hitIdx = autoHit(x, y, spec);
+  /* 一次拖拽 = 一步撤销：宿主收到 begin 才 pushUndo，
+     后续的 set-automation 只改数据（否则拖一次会灌满整个撤销栈）。 */
+  emit('automation-begin');
+  if (hitIdx >= 0 && (e.altKey || e.button === 2)) {           // Alt / 右键点：删点
+    pts.splice(hitIdx, 1);
+    emitAuto(pts);
+    return;
+  }
+  let index = hitIdx;
+  if (index < 0) {                                             // 空白：加点并直接进入拖动
+    pts.push({ beat: Math.max(0, snapBeat(beatOf(x))), value: valOfY(y, spec) });
+    pts.sort((a, b) => a.beat - b.beat);
+    index = pts.length - 1;
+    emitAuto(pts);
+  }
+  autoDrag = { index };
+  try { autoCanvas.value.setPointerCapture(e.pointerId); } catch (err) { /* 老实现忽略 */ }
+  nextTick(drawAuto);
+}
+function aMove(e) {
+  if (!autoDrag) return;
+  const spec = autoSpec();
+  if (!spec) return;
+  const { x, y } = autoXY(e);
+  const pts = autoPoints();
+  const p = pts[autoDrag.index];
+  if (!p) return;
+  p.beat = Math.max(0, snapBeat(beatOf(x)));
+  p.value = valOfY(y, spec);
+  pts.sort((a, b) => a.beat - b.beat);
+  emitAuto(pts);
+  nextTick(drawAuto);
+}
+function aUp() { autoDrag = null; nextTick(drawAuto); }
 /* ---------------- 音高车道（P3） ----------------
    参考 OpenUTAU 的曲线车道：车道内是「拍 → 音分」的控制点折线，工具齐全
    （手绘 / 直线 / 正弦 / 平滑 / 移动控制点）。与音符、音素同处一个滚动容器，天然对齐。 */
@@ -870,6 +1058,11 @@ watch(() => props.playheadBeat, () => draw());
 // 音阶高亮与剪贴板可用性也会改变画面
 watch(() => (props.scale && props.scale.type) + ':' + (props.scale && props.scale.root), () => draw());
 watch(() => props.beatsPerBar, () => draw());
+// 选中的音素变了要重画（条带上的强调块）
+watch(() => props.selPhoneme && (props.selPhoneme.noteId + '#' + props.selPhoneme.index) || '', () => draw());
+/* 参数车道：曲线/目标/拍号变化都要重画（点数组是宿主传下来的新数组，直接比引用） */
+watch(() => props.automation, () => nextTick(drawAuto), { deep: true });
+watch(() => props.beatsPerBar, () => nextTick(drawAuto));
 watch(pitchRev, () => { loadPitch(); nextTick(drawPitch); });
 watch(showPhoneme, v => { try { localStorage.setItem('fufumidi_roll_phoneme', v ? '1' : '0'); } catch (e) {} });
 
@@ -952,7 +1145,13 @@ defineExpose({
         @pointerdown="onDown" @pointermove="onMove" @pointerup="onUp" @pointercancel="onUp"
         @dblclick="onDbl" @contextmenu="onCtx"></canvas>
       <!-- 音素条带：与上方音符画布同处一个滚动容器，横向天然对齐 -->
-      <canvas v-if="showPhoneme" ref="phonemeCanvas" class="pr-canvas pr-ph-canvas"></canvas>
+      <canvas v-if="showPhoneme" ref="phonemeCanvas" class="pr-canvas pr-ph-canvas"
+        :style="{ cursor: canEdit ? 'pointer' : 'default' }" @pointerdown="phDown"></canvas>
+      <!-- 参数车道（P2-4）：拖拽编辑自动化曲线 -->
+      <canvas v-if="automation && automation.abbr" ref="autoCanvas" class="pr-canvas pr-ph-canvas pr-auto-canvas"
+        :style="{ cursor: canEdit ? 'crosshair' : 'default' }"
+        @pointerdown="aDown" @pointermove="aMove" @pointerup="aUp" @pointercancel="aUp"
+        @contextmenu.prevent="aDown"></canvas>
       <!-- 音高车道：曲线与控制点 -->
       <canvas v-if="pitchOn" ref="pitchCanvas" class="pr-canvas pr-ph-canvas"
         @pointerdown="pDown" @pointermove="pMove" @pointerup="pUp" @pointercancel="pUp"></canvas>
@@ -997,6 +1196,7 @@ defineExpose({
 .pr-canvas { display: block; }
 /* 音素条带：贴住音符区底部，横向随同一滚动容器对齐 */
 .pr-ph-canvas { border-top: 1px solid var(--border); }
+.pr-auto-canvas { touch-action: none; }
 .pr-ctx { position: absolute; z-index: 40; min-width: 132px; padding: 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); box-shadow: 0 8px 24px rgba(0,0,0,.28); }
 .pr-ctx-i { display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font-size: 12.5px; text-align: left; cursor: pointer; }
 .pr-ctx-i:hover:not(:disabled) { background: var(--surface-muted); }

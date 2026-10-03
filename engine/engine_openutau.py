@@ -346,8 +346,42 @@ def build_part(project, track, notes, tpb=480):
         except Exception:                                   # noqa: BLE001
             vib = UVibrato()
 
-        # ---- 每音符表达式 → 该音符每个音素的 phoneme_expressions
-        #      识别不了的键静默跳过：表达式表由工程决定，前端多传了不该让整轨渲染失败。
+        # ---- 表达式 → 该音符每个音素的 phoneme_expressions
+        #      两级来源，**音素级优先**：
+        #        1) 音符级 `expressions`（落到 `phoneme_indexes` 给的每个下标，缺省 [0]）
+        #        2) 音素级 `phoneme_expressions: [{'index': i, 'expressions': {abbr: 数值}}]`
+        #      ★ 同一 (下标, abbr) 只允许留一条：`UPhoneme.get_expression` 取的是**首个**
+        #      命中项，所以被音素级覆盖的 (下标, abbr) 必须从音符级的扩散里排除，
+        #      否则「辅音 100 / 元音 55」里的辅音会被音符级的 90 抢先命中。
+        #      识别不了的 abbr、非法下标、类型不对的条目一律静默跳过：
+        #      表达式表由工程决定，前端多传了不该让整轨渲染失败。
+        pe_entries = []            # [(下标, abbr, 描述符, 值)]
+        covered = set()            # 已被音素级覆盖的 (下标, abbr)
+        raw_pe = n.get('phoneme_expressions')
+        if isinstance(raw_pe, (list, tuple)):
+            for item in raw_pe:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    idx = int(item.get('index'))
+                except (TypeError, ValueError):
+                    continue
+                if idx < 0:
+                    continue
+                vals = item.get('expressions')
+                if not isinstance(vals, dict):
+                    continue
+                for abbr, val in vals.items():
+                    desc = project.expressions.get(str(abbr))
+                    if desc is None:
+                        continue
+                    try:
+                        fv = float(val)
+                    except (TypeError, ValueError):
+                        continue
+                    pe_entries.append((idx, str(abbr), desc, fv))
+                    covered.add((idx, str(abbr)))
+
         exp_list = []
         raw_exp = n.get('expressions')
         if isinstance(raw_exp, dict):
@@ -364,8 +398,12 @@ def build_part(project, track, notes, tpb=480):
                 except (TypeError, ValueError):
                     continue
                 for idx in indexes:
+                    if (int(idx), str(abbr)) in covered:
+                        continue
                     exp_list.append(UExpression(index=int(idx), abbr=str(abbr),
                                                 descriptor=desc, _value=fv))
+        for idx, abbr, desc, fv in pe_entries:
+            exp_list.append(UExpression(index=idx, abbr=abbr, descriptor=desc, _value=fv))
 
         out.append(UNote(position=position, duration=duration, tone=tone,
                          lyric=str(n.get('lyric') or ''),

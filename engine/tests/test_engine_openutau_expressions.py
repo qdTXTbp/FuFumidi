@@ -99,6 +99,50 @@ def main():
     idxs = [e.index for e in part3.notes[0].phoneme_expressions]
     check('index 用的是调用方给的下标', idxs == [7], idxs)
 
+    print('--- 音素级覆盖 phoneme_expressions：同一音符里各音素取值不同 ---')
+    part4 = eo.build_part(project, track, [
+        {'startBeat': 0.0, 'durBeat': 1.0, 'pitch': 60, 'lyric': 'ka',
+         'expressions': {'vol': 90},
+         'phoneme_expressions': [
+             {'index': 1, 'expressions': {'vol': 55, 'atk': 250}},   # 元音：轻一点 + atk 越界要夹住
+             {'index': 0, 'expressions': {'vol': 100}},               # 辅音：原样
+             {'index': 9, 'expressions': {'vol': 10}},                # 越界下标：留着但引擎侧不会命中
+             {'index': 'x', 'expressions': {'vol': 10}},              # 下标非法：整条跳过
+             {'index': 2},                                            # 没有 expressions：跳过
+             'not-a-dict',                                            # 类型不对：跳过
+         ]},
+    ], tpb=480)
+    note4 = part4.notes[0]
+    got4 = sorted([(e.index, e.abbr, round(float(e.value), 2)) for e in note4.phoneme_expressions])
+    check('音素级覆盖写到了对应下标上',
+          (1, 'vol', 55.0) in got4 and (1, 'atk', 100.0) in got4, got4)
+    # 4 条 = (0,vol,100) (1,atk,100) (1,vol,55) (9,vol,10)：
+    #   非法下标 'x' / 缺 expressions / 非 dict 三类脏数据被跳过；
+    #   音符级的 (0,vol,90) 因为被音素级覆盖而**不再重复下发**（见下一条断言）。
+    check('非法/缺字段的条目被跳过，且被覆盖的下标不再重复下发',
+          all(not isinstance(i, str) for i, _, _ in got4) and len(got4) == 4
+          and (0, 'vol', 100.0) in got4 and (0, 'vol', 90.0) not in got4, got4)
+    phs4 = make_phonemes(part4, track, project, note4, count=2)
+    check('元音（下标 1）拿到音素级取值 55，而不是音符级的 90',
+          phs4[1].get_expression(project, track, 'vol')[0] == 55.0,
+          phs4[1].get_expression(project, track, 'vol'))
+    check('辅音（下标 0）拿到自己的 100，不被元音覆盖',
+          phs4[0].get_expression(project, track, 'vol')[0] == 100.0,
+          phs4[0].get_expression(project, track, 'vol'))
+    check('音符级 expressions 仍然生效（作为未覆盖音素的底）',
+          'vol' in [a for _, a, _ in got4])
+
+    print('--- 音素级覆盖的健壮性：整条都是脏数据也不该抛 ---')
+    part5 = eo.build_part(project, track, [
+        {'startBeat': 0.0, 'durBeat': 1.0, 'pitch': 60, 'lyric': 'a',
+         'phoneme_expressions': 'nonsense'},
+        {'startBeat': 1.0, 'durBeat': 1.0, 'pitch': 60, 'lyric': 'a',
+         'phoneme_expressions': [None, 3, {'index': -1, 'expressions': {'vol': 1}}]},
+    ], tpb=480)
+    check('脏数据不抛异常、也不产生表达式项',
+          len(part5.notes) == 2 and all(len(x.phoneme_expressions) == 0 for x in part5.notes),
+          [len(x.phoneme_expressions) for x in part5.notes])
+
     print('\n结果: %d passed, %d failed' % (len(_PASS), len(_FAIL)))
     return 0 if not _FAIL else 1
 

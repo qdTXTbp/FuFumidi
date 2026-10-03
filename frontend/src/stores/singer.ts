@@ -120,6 +120,17 @@ export interface SingNote {
   shft?: number;
   clr?: number;
 
+  /**
+   * 音素级表达式覆盖（P2-2）：下标 → { abbr: 数值 }。
+   *
+   * ★ 与上面那批音符级字段的关系：音符级值落在**该音符的每个音素**上；
+   *   这里按下标单独覆盖。引擎在 build_part 里让音素级优先
+   *   （被覆盖的 (下标, abbr) 不再从音符级扩散），所以「辅音轻、元音亮」能各自成立。
+   * 下标从 0 起，顺序与卷帘音素条带一致；越界下标引擎会忽略（不会炸）。
+   * 用字符串做键是因为 JSON 对象键只能是字符串 —— 取值时 Number(k) 转回来。
+   */
+  phExpressions?: Record<string, Record<string, number>>;
+
   /* ---- DiffSinger 侧 ---- */
   pitchOffset?: number;  // 音分偏移
 }
@@ -275,9 +286,17 @@ const HISTORY_MAX = 50;
 function noteSignature(notes: any[]): string {
   let h = 0;
   for (const n of notes || []) {
+    /* 音素级覆盖（P2-2）也要进指纹：否则「改了辅音的音量」不会提示渲染已过期，
+       用户会以为改动没生效 —— 至少要把下标与取值都算进去。 */
+    const pe = n.phExpressions
+      ? Object.keys(n.phExpressions).sort()
+        .map((k) => k + ':' + Object.keys(n.phExpressions[k] || {}).sort()
+          .map((a) => a + '=' + n.phExpressions[k][a]).join(','))
+        .join(';')
+      : '';
     const s = [n.startBeat, n.durBeat, n.pitch, n.lyric || '', n.velocity ?? '', n.volume ?? '',
       n.gender ?? '', n.breath ?? '', n.dyn ?? '', n.atk ?? '', n.dec ?? '', n.shft ?? '', n.clr ?? '',
-      n.vibrato ? 1 : 0, n.vibDepth ?? '', n.vibFreq ?? ''].join('|');
+      n.vibrato ? 1 : 0, n.vibDepth ?? '', n.vibFreq ?? '', pe].join('|');
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
   }
   return notes.length + ':' + (h >>> 0);
@@ -495,6 +514,41 @@ export const useSingerStore = defineStore('singer', {
       this.pushUndo();
       const t = this.tracks.find(x => x.id === id);
       if (t && t.audio) Object.assign(t.audio, patch);
+    },
+
+    /**
+     * 写一个音素级表达式（P2-2）。value 传 null/undefined = 清掉这一项。
+     * 清到该下标没有任何覆盖时，把整个下标也删掉 —— 免得 payload 里留一堆空对象。
+     */
+    setPhonemeExpression(noteId: string, index: number, abbr: string, value: number | null) {
+      const idx = Math.max(0, Math.floor(Number(index) || 0));
+      for (const t0 of this.tracks) {
+        const n = t0.notes.find((x) => x.id === noteId);
+        if (!n) continue;
+        const all: Record<string, Record<string, number>> = Object.assign({}, n.phExpressions || {});
+        const cur: Record<string, number> = Object.assign({}, all[String(idx)] || {});
+        if (value == null) delete cur[abbr];
+        else cur[abbr] = Number(value);
+        if (Object.keys(cur).length) all[String(idx)] = cur;
+        else delete all[String(idx)];
+        if (Object.keys(all).length) n.phExpressions = all;
+        else delete n.phExpressions;
+        return;
+      }
+    },
+
+    /** 清空某个音素（下标）的全部覆盖；不传 index 则清空该音符所有音素覆盖 */
+    clearPhonemeExpressions(noteId: string, index?: number) {
+      for (const t0 of this.tracks) {
+        const n = t0.notes.find((x) => x.id === noteId);
+        if (!n) continue;
+        if (index == null) { delete n.phExpressions; return; }
+        const all: Record<string, Record<string, number>> = Object.assign({}, n.phExpressions || {});
+        delete all[String(Math.max(0, Math.floor(Number(index) || 0)))];
+        if (Object.keys(all).length) n.phExpressions = all;
+        else delete n.phExpressions;
+        return;
+      }
     },
 
     /**
@@ -1149,6 +1203,26 @@ export const useSingerStore = defineStore('singer', {
         if (typeof n.clr === 'number') expressions.clr = n.clr;
 
         if (Object.keys(expressions).length) raw.expressions = expressions;
+
+        /* 音素级覆盖（P2-2）→ 引擎的 phoneme_expressions: [{index, expressions}]。
+           ★ 只下发非空项；下标要能转成非负整数，脏键直接跳过
+             （引擎侧会再挡一次，两边都不因为脏数据让整轨渲染失败）。 */
+        const pe = n.phExpressions;
+        if (pe && typeof pe === 'object') {
+          const items: { index: number; expressions: Record<string, number> }[] = [];
+          for (const k of Object.keys(pe)) {
+            const idx = Number(k);
+            const vals = pe[k];
+            if (!Number.isInteger(idx) || idx < 0 || !vals || typeof vals !== 'object') continue;
+            const clean: Record<string, number> = {};
+            for (const abbr of Object.keys(vals)) {
+              const v = Number(vals[abbr]);
+              if (Number.isFinite(v)) clean[abbr] = v;
+            }
+            if (Object.keys(clean).length) items.push({ index: idx, expressions: clean });
+          }
+          if (items.length) raw.phoneme_expressions = items;
+        }
         return raw;
       });
       const r = await (bridge as any).utauRenderTrack({
