@@ -16,9 +16,9 @@ FuFumidi is a fully offline desktop workstation for MIDI. It targets musicians, 
 
 The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally; transcription and editing never upload anything. Only when you opt in to cloud sync does your playlist and MIDI library get uploaded to your own cloud account.
 
-Current release line: **4.4.1** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v4.4.1)).
+Current release line: **5.0.0-beta.1** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v5.0.0-beta.1), beta channel).
 
-What's new in 4.4.1: fixes the split CUDA archive in Settings → GPU acceleration being undownloadable — the part list was still carrying the UI framework's reactive proxy objects when handed to the main process, so the cross-process transfer was rejected outright ("An object could not be cloned") and the request never left the renderer; the DirectML package carries no part list and was therefore unaffected. Also fixes the release flow not re-pointing CNB's version anchor at a newly published stable release — users on the China route kept seeing the old version number and never got an update prompt, with no error to signal it.
+What's new in 5.0.0-beta.1: **UTAU and DiffSinger are now genuinely fused** — the "Make Audio" workbench gets a unified voicebank picker, so choosing a voicebank and hitting render dispatches to concatenative synthesis or AI inference automatically. The DiffSinger workbench gains **OpenUTAU-style score editing** (a general piano roll, a phoneme strip, and a ±200-cent pitch lane with move / draw / line / sine / smooth tools), and **pitch curves drawn on the score now actually affect the rendered audio**. The score view adds an optional phoneme display, and voicebank downloads share the same global notification bar as regular models. Also fixed: whole-song renders failing with spawn ENAMETOOLONG, the update-channel toggle not persisting, the resource centre always reporting zero downloadable voicebanks, and missing pack exclusion rules that could bloat app.asar past 2 GB. The 4.5.0 feature set is folded into this major version; there will be no separate 4.5.0 release.
 
 ### What it does
 
