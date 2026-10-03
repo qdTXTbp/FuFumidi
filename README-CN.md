@@ -357,12 +357,14 @@ cd engine && pytest
 
 FuFumidi 支持以插件形式扩展第三方能力，无需改动主程序。一个插件 = 一个目录 + `plugin.json` 清单 + 入口脚本。完整开发文档见 `plugins/plugin-dev.html`，简明索引见 `plugins/README.md`。
 
-内置示例：
+内置插件：
 
-- `plugins/example-hello/` - 最小 hello-world 示例。
-- `plugins/beat-detect/` - 对当前曲目做节拍检测。
-- `plugins/midi-stats/` - 输出当前 MIDI 文件的统计信息。
-- `plugins/batch-rename/` - 批量重命名导入文件。
+- `plugins/auto-key-cmajor/`（**v1.0.0**）- 自动识别 MIDI 调性并转到 C 大调（自然音级映射，转调后音名拼写正确），原文件不改动，结果写入同目录新文件。
+
+> 约定：**只保留 `auto-key-cmajor` 这一个内置插件**。此前的示例插件
+> （`example-hello` / `beat-detect` / `midi-stats` / `batch-rename`）已删除，
+> 后续版本不得再加回来 —— 写插件看 `plugins/plugin-dev.html` 与本文档即可，
+> 不需要在应用里内置示例。
 
 每个插件在独立 worker 中运行，获得一个受限的 `ctx` 对象，暴露 `commands`、`events`、`engine.run`、`settings`、`ui`、`log` 与 `app.getSongMeta`。引擎调用与内置转录共用同一套 Python 运行时，因此插件可以复用 `engine/` 下的任意脚本。
 

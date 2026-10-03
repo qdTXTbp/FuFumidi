@@ -6,6 +6,10 @@
 FuFumidi 提供插件入口，第三方可在不改动主程序的情况下扩展功能。
 插件 = 一个目录 + `plugin.json` 清单 + 入口脚本。插件由你主动安装，等同本地可信代码。
 
+> **内置插件只有一个**：`auto-key-cmajor`（自动转 C 大调，v1.0.0）。
+> 本仓库不再内置示例插件（历史上的 example-hello / beat-detect / midi-stats / batch-rename
+> 已删除），后续版本也不要再加回 —— 本文档 + `plugin-dev.html` 就是完整的开发说明。
+
 ## 1. 安装位置
 
 - **用户插件**（推荐）：`用户目录/fufumidi/plugins/<插件名>/`（Windows 一般位于

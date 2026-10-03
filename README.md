@@ -356,12 +356,14 @@ cd engine && pytest
 
 FuFumidi supports plugins as third-party extensions that run without modifying the main program. A plugin is a directory with a `plugin.json` manifest and an entry script. The full developer guide is at `plugins/plugin-dev.html` and the concise index at `plugins/README.md`.
 
-Built-in examples:
+Bundled plugins:
 
-- `plugins/example-hello/` - minimal hello-world plugin.
-- `plugins/beat-detect/` - beat detection against the loaded song.
-- `plugins/midi-stats/` - statistics over the current MIDI file.
-- `plugins/batch-rename/` - bulk renaming of imported files.
+- `plugins/auto-key-cmajor/` (**v1.0.0**) - detects the key of a MIDI file and transposes it to C major using a natural-minor mapping, writing the result to a new file (the original is left untouched).
+
+> Policy: `auto-key-cmajor` is the **only** bundled plugin. The earlier demo plugins
+> (`example-hello` / `beat-detect` / `midi-stats` / `batch-rename`) have been removed and
+> must not be re-added in future releases — `plugins/plugin-dev.html` plus this README are
+> enough to write a plugin without shipping an example inside the app.
 
 Each plugin runs in its own worker with a scoped `ctx` object that exposes `commands`, `events`, `engine.run`, `settings`, `ui`, `log` and `app.getSongMeta`. The engine is invoked through the same Python runtime as the built-in transcriber, so a plugin can call any script under `engine/`.
 
