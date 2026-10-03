@@ -205,6 +205,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
     openDocs: () => ipcRenderer.invoke('plugins:openDocs'),
     openDir: () => ipcRenderer.invoke('plugins:openDir'),
     // 插件市场安装：两段式，download 只落缓存并返回包内清单，确认后才 install
+    // 插件中心目录（主进程代取，避免渲染进程直连撞 CSP/CORS）
+    catalog: (channel) => ipcRenderer.invoke('plugins:catalog', channel),
     installFromPlatform: (slug, version) => ipcRenderer.invoke('plugins:installFromPlatform', slug, version),
     confirmInstall: (token, overwrite) => ipcRenderer.invoke('plugins:confirmInstall', token, overwrite),
     cancelInstall: (token) => ipcRenderer.invoke('plugins:cancelInstall', token),

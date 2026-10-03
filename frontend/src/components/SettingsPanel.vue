@@ -826,6 +826,11 @@ async function rescanPlugins() {
   try { plugins.value = await bridge.plugins.rescan() || []; } catch (e) {}
 }
 function openDocs() { if (bridge && bridge.plugins && bridge.plugins.openDocs) bridge.plugins.openDocs(); }
+/** 打开应用内的插件中心（切视图，不唤起浏览器） */
+function openPluginCenter() {
+  state.ui.settingsOpen = false;
+  state.setView('plugins');
+}
 function openPluginDir() { if (bridge && bridge.plugins && bridge.plugins.openDir) bridge.plugins.openDir(); }
 function onPluginLog(p) {
   const line = p && p.line != null ? String(p.line) : JSON.stringify(p || '');
@@ -1248,6 +1253,16 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
             {{ t('插件用于扩展 FuFumidi 功能：将插件目录放入') }} <b>{{ t('用户目录/fufumidi/plugins/<插件名>/') }}</b>
             {{ t('，内含 plugin.json 清单与入口脚本，重载后即可在此启用。插件由你主动安装并运行，等同于本地可信代码。') }}
           </p>
+          <!-- 插件中心：应用内打开（不唤起浏览器），下载后由主进程解压安装并立即启用 -->
+          <div class="plg-store">
+            <div class="plg-store-txt">
+              <b>{{ t('插件中心') }}</b>
+              <small>{{ t('浏览官方插件平台，点一下即可下载安装并启用；无需手动放目录。') }}</small>
+            </div>
+            <button class="btn sm primary" @click="openPluginCenter">
+              <Icon name="box" :size="13" /> {{ t('打开插件中心') }}
+            </button>
+          </div>
           <div class="plg-head">
             <span>{{ t('已安装插件') }}（{{ plugins.length }}）</span>
             <button class="btn sm" @click="rescanPlugins">{{ t('重新扫描') }}</button>
@@ -1444,6 +1459,12 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
 <style scoped>
 /* ---- 操作系统级全局热键（用户自己录制） ---- */
 .hk-sec { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+/* 插件中心入口条 */
+.plg-store { display: flex; align-items: center; gap: 12px; margin: 10px 0 14px; padding: 10px 14px;
+             border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.plg-store-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.plg-store-txt b { font-size: 13px; }
+.plg-store-txt small { color: var(--stone); font-size: 11.5px; }
 .hk-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .hk-head b { font-size: 13px; }
 .hk-head .sp { flex: 1; }

@@ -54,6 +54,39 @@ function createPluginService({ app, path, fs, shell, ipcMain, BrowserWindow, rea
       } catch (e) { return DEFAULT_PLATFORM_URL; }
     };
 
+    /**
+     * 插件中心目录：GET {baseUrl}/api/store/manifest/{channel}
+     * 在主进程里取（渲染进程直连会撞 CSP / CORS），失败**如实回报**而不是空列表 ——
+     * 界面要能区分「平台连不上」和「平台上一个插件都没有」。
+     */
+    ipcMain.handle('plugins:catalog', async (_e, channel) => {
+      const ch = channel === 'beta' ? 'beta' : 'stable';
+      const url = platformBase().replace(/\/+$/, '') + '/api/store/manifest/' + ch;
+      try {
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), 15000);
+        let res;
+        try {
+          res = await fetch(url, { signal: ac.signal, headers: { accept: 'application/json' } });
+        } finally { clearTimeout(timer); }
+        if (!res.ok) return { ok: false, error: '插件中心返回 ' + res.status, url };
+        const j = await res.json();
+        return {
+          ok: true,
+          url,
+          channel: j.channel || ch,
+          generatedAt: j.generatedAt || '',
+          plugins: Array.isArray(j.plugins) ? j.plugins : [],
+        };
+      } catch (e) {
+        return {
+          ok: false,
+          url,
+          error: (e && e.name === 'AbortError') ? '连接插件中心超时（15s）' : String((e && e.message) || e),
+        };
+      }
+    });
+
     ipcMain.handle('plugins:installFromPlatform', async (_e, slug, version) => {
       const r = await Installer.download({
         baseUrl: platformBase(),
