@@ -317,6 +317,8 @@ export const useSingerStore = defineStore('singer', {
          歌词、渲染设置同样会写坏工程，却一直没有撤销入口。这里做成**整页共用**的一栈。 */
     history: [] as string[],
     future: [] as string[],
+    /** 「渲染全部轨」的停止请求标记（见 cancelRender）；不进工程文件 */
+    _cancelled: false as boolean,
   }),
 
   getters: {
@@ -887,6 +889,15 @@ export const useSingerStore = defineStore('singer', {
      * 逐条串行而不是并行：两条 DiffSinger 同时跑会把显存/内存打满，
      * 而引擎侧有 phrase 级缓存，第二次渲染同一条轨会明显更快。
      */
+    /** 请求停止「渲染全部轨」的后续排队。
+     *  ★ 不谎报能力：已经在跑的那一条**不会**被打断（引擎进程里没做可中断渲染），
+     *    它跑完即停，剩下的条数不再开始。按钮文案也照这个如实写。 */
+    cancelRender() {
+      if (!this.busy) return;
+      this._cancelled = true;
+      this.msg = '已停止：正在渲染的这一条跑完就结束';
+    },
+
     async renderAll(): Promise<string> {
       const todo = this.tracks.filter(t =>
         t.kind === 'voice' && !!t.singer && t.notes.length > 0);
@@ -894,12 +905,15 @@ export const useSingerStore = defineStore('singer', {
       this.busy = true;
       this.progress = 0;
       this.msg = '';
+      this._cancelled = false;
       const failed: string[] = [];
+      let stopped = false;
       try {
         let i = 0;
         // ★ 用 for-of 而不是下标：`noUncheckedIndexedAccess` 下 `todo[i]` 是
         //   `SingTrack | undefined`，下标写法要到处加判空
         for (const t of todo) {
+          if (this._cancelled) { stopped = true; break; }
           i += 1;
           const who = t.name || t.singerName || (t.engine === 'utau' ? 'UTAU' : 'DiffSinger');
           this.msg = '正在渲染 ' + i + '/' + todo.length + '：' + who;
@@ -912,6 +926,11 @@ export const useSingerStore = defineStore('singer', {
         this.progress = 100;
       }
       const n = todo.length;
+      if (stopped) {
+        const okN = Math.max(0, i - 1 - failed.length);
+        return '已停止（渲染 ' + okN + '/' + n + ' 轨）'
+          + (failed.length ? '；失败的：' + failed.join('；') : '');
+      }
       if (!failed.length) return '';
       if (failed.length >= n) return failed.join('；');
       return '已渲染 ' + (n - failed.length) + '/' + n + ' 轨，失败的：' + failed.join('；');

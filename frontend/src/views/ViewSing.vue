@@ -137,6 +137,16 @@ function autoDelPoint(pts: { beat: number; value: number }[], i: number) {
 
 /* ------------------------------------------------------------ 轨道 */
 function addTrack(engine) { store.addTrack(engine); msg.value = ''; }
+/** 该引擎下已安装的声库（点选用）。空列表时给"去声库页签装"的提示。 */
+function banksFor(engine: string) {
+  return store.banks.filter((b) => b.engine === engine);
+}
+function onSingerPick(id: string, e: Event) {
+  const dir = String((e.target as HTMLSelectElement).value || '');
+  const hit = store.banks.find((b) => b.dir === dir);
+  store.patchTrack(id, { singer: dir, singerName: hit ? hit.name : (dir ? String(dir).split(/[\\/]/).pop() || '' : '') });
+}
+
 function onSingerPath(id, e) {
   const d = e.target.value.trim();
   store.patchTrack(id, { singer: d, singerName: d ? d.split(/[\\/]/).pop() : '' });
@@ -463,7 +473,11 @@ function tseek(e: Event) {
 watch(() => store.renderUrl, () => { void reloadTransport(); });
 
 /* 页面级快捷键只在「调教」页挂载期间生效（切走即摘掉） */
-onMounted(() => window.addEventListener('keydown', onSingKey));
+onMounted(() => {
+  window.addEventListener('keydown', onSingKey);
+  // 进页即拉声库列表：歌手选择器是**点选**的，列表为空就等于没法选歌手
+  void store.loadBanks();
+});
 onBeforeUnmount(() => window.removeEventListener('keydown', onSingKey));
 
 const fmtMs = (ms: number) => {
@@ -495,19 +509,38 @@ function curveSet(i, e) {
 }
 
 /* ------------------------------------------------------------ 渲染 */
-async function doRender() { msg.value = await store.renderTrack(); }
+/**
+ * 渲染 → **自动装载并试听**。
+ *
+ * 旧流程渲完只丢出一句话，用户还要自己找播放键、再等一次解码 ——
+ * 一次"渲一下听听"要三步。现在渲完直接把传输器装满并起播（失败才只报错）。
+ */
+async function playAfterRender() {
+  const err = await reloadTransport();
+  if (err) { msg.value = err; return; }
+  transport.seek(0);
+  transport.play();
+  tplaying.value = transport.playing;
+}
+
+async function doRender() {
+  msg.value = '';
+  const err = await store.renderTrack();
+  msg.value = err;
+  if (!err) await playAfterRender();
+}
 
 /**
  * 渲染所有声部轨。
  *
  * 渲染是串行的（两条 DiffSinger 同时跑会打满显存），一条几十秒，
- * 所以这里全程显示"正在渲染 i/n"，别让用户以为卡死了。
+ * 所以这里全程显示"正在渲染 i/n"（进度与分条文案都在 store 里），别让用户以为卡死了。
  */
 async function doRenderAll() {
   msg.value = '';
   const err = await store.renderAll();
-  msg.value = err;
-  await reloadTransport();          // 全部渲完再一次性装进传输器
+  msg.value = err || store.msg;
+  if (!err) await playAfterRender();   // 全部渲完一次性装进传输器并起播
 }
 
 /** 静音要立刻听得见：改的是 lane 上的状态，而 lane 是 load() 时生成的 → 必须重装 */
@@ -654,8 +687,19 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           </div>
           <!-- 声部轨：选歌手 + 语言；音频轨：文件信息 + 静音 -->
           <template v-if="x.kind === 'voice'">
-            <input class="pth" :value="x.singer" :placeholder="t('歌手目录（留空则该轨用默认歌手）')"
-                   @click.stop @change="onSingerPath(x.id, $event)" />
+            <!-- 歌手选择：**点选**而不是手打路径。声库列表来自 store.banks（两类混排的同一份来源），
+                 只列与该轨引擎匹配的那些；路径不在列表里时补一个"（原路径）"选项，避免静默清空。 -->
+            <select class="pth" :value="x.singer || ''" :title="t('该轨使用哪个声库')"
+                    @click.stop @change="onSingerPick(x.id, $event)">
+              <option value="">{{ t('（未选歌手）') }}</option>
+              <option v-if="x.singer && !banksFor(x.engine).includes(x.singer)" :value="x.singer">
+                {{ x.singerName || String(x.singer).split(/[\\/]/).pop() }}
+              </option>
+              <option v-for="b in banksFor(x.engine)" :key="b.dir" :value="b.dir">{{ b.name }}</option>
+            </select>
+            <button class="ib" :title="t('刷新声库列表')" @click.stop="store.loadBanks()">
+              <Icon name="refresh" :size="11" />
+            </button>
             <div class="trk-row2" @click.stop>
               <select class="lang" :value="x.language" @click.stop
                       @change="store.patchTrack(x.id, { language: sval($event) })">
@@ -750,7 +794,14 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         </button>
       </div>
 
-      <div v-if="store.busy" class="edt-prog"><i :style="{ width: store.progress + '%' }" /></div>
+      <!-- 渲染进行中：进度条 + 分条文案 + 取消入口（不然长曲只能干等） -->
+      <div v-if="store.busy" class="edt-prog-wrap">
+        <div class="edt-prog"><i :style="{ width: store.progress + '%' }" /></div>
+        <span class="muted small">{{ store.msg || t('正在渲染…') }}</span>
+        <button class="btn sm" :title="t('正在渲染的这一条不会被打断，它跑完即停')" @click="store.cancelRender">
+          {{ t('停止后续渲染') }}
+        </button>
+      </div>
       <p v-if="msg" class="edt-msg small">{{ msg }}</p>
       <!-- 渲染门禁原因：只在"想渲但渲不了"时显示，平时不占位 -->
       <p v-else-if="renderReason && !store.busy && !isAudio" class="edt-msg small hint">
@@ -1047,6 +1098,8 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .sing-empty ol { margin: 0; padding-left: 20px; color: var(--slate); font-size: 12.5px; line-height: 1.9; }
 .se-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
 .edt-msg.hint { color: var(--stone); }
+.edt-prog-wrap { display: flex; align-items: center; gap: 10px; padding: 4px 2px; }
+.edt-prog-wrap .edt-prog { flex: 1; }
 .sing { flex: 1; min-height: 0; display: flex; }
 .sing-banks { flex: 1; min-height: 0; }
 
@@ -1065,6 +1118,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .trk-row1 { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
 .trk-row2 { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .trk-item .nm { flex: 1; min-width: 0; }
+.trk-item .pth { width: 100%; min-width: 0; font-size: 11.5px; height: 24px; }
 .trk-item .pth { width: 100%; font-size: 11px; }
 .trk-item .eng { font-size: 10.5px; padding: 1px 3px; border-radius: 4px;
                  border: 1px solid var(--border); }

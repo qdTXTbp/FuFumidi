@@ -2988,6 +2988,12 @@ export const I18N_MAP = {
   '新建 UTAU 轨': 'New UTAU track',
   '去声库页签装声库': 'Install voicebanks in the Voicebanks tab',
   '力度（0 ~ 100，默认 100）：影响辅音速度与音量，越小越柔': 'Velocity (0-100, default 100): affects consonant speed and loudness; lower is softer',
+  '停止后续渲染': 'Stop remaining renders',
+  '正在渲染的这一条不会被打断，它跑完即停': 'The track currently rendering will not be interrupted; it stops after finishing',
+  '刷新声库列表': 'Refresh voicebank list',
+  '该轨使用哪个声库': 'Voicebank used by this track',
+  '（未选歌手）': '(no singer selected)',
+
   'GENC（-100 ~ 100，默认 0 = 不变）：正值更亮（偏女声），负值更暗': 'GENC (-100 to 100, default 0 = unchanged): positive is brighter, negative darker',
   '气声（0 ~ 100，默认 0）': 'Breathiness (0-100, default 0)',
   '音量（表情级 0 ~ 100，默认 100 = 原样；不是衰减量）': 'Volume (expression 0-100, default 100 = unchanged; not an attenuation)',
