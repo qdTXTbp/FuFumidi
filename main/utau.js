@@ -3,6 +3,10 @@
 // ============================================================
 'use strict';
 const Paths = require('./paths');
+const { safeExtractAllTo } = require('./zip-safe');
+// 直接 require 而不是走 `registerUtauIpc` 的入参：本模块的注册参数里没有 readSettings，
+// 而引擎选择要读设置。Node 模块缓存保证拿到的是同一个 settings 单例。
+const { readSettings } = require('./settings');
 
 function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawnEngine }) {
   // 声库是体积较大的模型类资产：统一放在数据根目录（默认工具目录旁），不挤占 C 盘
@@ -57,7 +61,9 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
       let i = 2;
       while (fs.existsSync(dest)) { dest = path.join(root, name + '_' + i++); }
       fs.mkdirSync(dest, { recursive: true });
-      zip.extractAllTo(dest, true);
+      const _zsafe = safeExtractAllTo(zip, dest);
+
+      if (!_zsafe.ok) throw new Error('压缩包安全校验未通过：' + _zsafe.error);
       // 归一化：若解压后只有一层子目录且含 oto.ini，把该层作为声库根
       const inner = fs.readdirSync(dest).filter(n => fs.statSync(path.join(dest, n)).isDirectory());
       if (inner.length === 1) {
@@ -194,11 +200,30 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
     }
   }));
 
-  // 渲染 UTAU 工程 → 人声 WAV（调 engine_utau.py render-track，返回字节供预览）
+  // ============================================================
+  // UTAU 渲染引擎选择
+  // ============================================================
+  // `openutau` = 照搬 OpenUTAU 的核心（engine/singing/，引擎入口 engine_openutau.py）
+  // `legacy`   = 本项目早期自研的 engine_utau.py
+  // 默认走 openutau；**失败自动回落 legacy**，保证任何声库都还能出声（不留死路）。
+  const UTAU_ENGINES = { openutau: 'engine_openutau.py', legacy: 'engine_utau.py' };
+  function utauEngineScript() {
+    try {
+      const s = readSettings() || {};
+      return UTAU_ENGINES[s.utau_engine] || UTAU_ENGINES.openutau;
+    } catch (e) {
+      return UTAU_ENGINES.openutau;
+    }
+  }
+
+  // 渲染 UTAU 工程 → 人声 WAV（调引擎的 render-track，返回字节供预览）
   ipcMain.handle('utau:renderTrack', (evt, cfg) => new Promise((resolve) => {
     const { voicebank, notes, sampleNote, bpm } = cfg || {};
     let notesJson = null;   // notes 落盘文件，出口统一回收
+    let settled = false;
     const done = (r) => {
+      if (settled) return undefined;
+      settled = true;
       if (notesJson) { try { fs.unlinkSync(notesJson); } catch (e) {} notesJson = null; }
       resolve(r);
       return undefined;
@@ -211,7 +236,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
       const out = path.join(Paths.tempDir(), 'fufumidi', `utau_render_${Date.now()}.wav`);
       fs.mkdirSync(path.dirname(out), { recursive: true });
       // 音符序列走「@临时文件」：整轨数百音符的 JSON 会撞 Windows 32K 命令行上限
-      // （spawn ENAMETOOLONG）。engine_utau.py 的 --notes 原生支持 @file 约定。
+      // （spawn ENAMETOOLONG）。两个引擎都原生支持 @file 约定。
       notesJson = path.join(Paths.tempDir(), 'fufumidi', `utau_notes_${Date.now()}_${process.pid}.json`);
       fs.writeFileSync(notesJson, JSON.stringify(notes), 'utf8');
       const args = [
@@ -220,8 +245,14 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
         '--sample-note', String(sampleNote || 'C4'),
         '--out', out,
       ];
-      spawnEngine(args, {
-        script: 'engine_utau.py',
+      if (bpm) args.push('--bpm', String(bpm));
+
+      const primary = utauEngineScript();
+      const fallback = primary === UTAU_ENGINES.legacy
+        ? UTAU_ENGINES.openutau : UTAU_ENGINES.legacy;
+
+      const spawnWith = (script, isRetry) => spawnEngine(args, {
+        script,
         onDone: (code, r) => {
           if (r && r.result && r.result.ok && r.result.out && fs.existsSync(r.result.out)) {
             try {
@@ -233,6 +264,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
                 // 引擎侧提示（歌词回退 / 未支持的 flags / 单个原音渲染失败）透传给 UI
                 warnings: r.result.warnings || [],
                 engineVersion: r.result.engine_version || '',
+                engine: script === UTAU_ENGINES.openutau ? 'openutau' : 'legacy',
               });
             } catch (e) {
               return done({ ok: true, out: r.result.out, error: String(e) });
@@ -241,10 +273,20 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
           const err = (r && r.result && r.result.error)
             || (r && (r.err || r.out || '').slice(-400))
             || `引擎退出码 ${code}`;
-          done({ ok: false, error: err });
+          // 首选引擎失败 → 用另一个再试一次（只在首选是 openutau 时回落到 legacy，
+          // 反向不回落：legacy 失败通常意味着声库本身有问题，换引擎也救不回来）
+          if (!isRetry && primary === UTAU_ENGINES.openutau) {
+            return spawnWith(fallback, true);
+          }
+          done({ ok: false, error: err, engine: script === UTAU_ENGINES.openutau ? 'openutau' : 'legacy' });
         },
-        onError: (e) => done({ ok: false, error: String(e) }),
+        onError: (e) => {
+          if (!isRetry && primary === UTAU_ENGINES.openutau) return spawnWith(fallback, true);
+          return done({ ok: false, error: String(e) });
+        },
       });
+
+      spawnWith(primary, false);
     } catch (err) {
       done({ ok: false, error: String((err && err.message) || err) });
     }

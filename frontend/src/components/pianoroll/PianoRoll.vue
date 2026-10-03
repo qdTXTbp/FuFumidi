@@ -49,6 +49,7 @@ const noteW = ref(props.beatWidth);  // 每拍像素（缩放）
 const scrollX = ref(0);
 const canvas = ref(null);
 const wrap = ref(null);
+const rootEl = ref(null);
 const ctxOpen = ref(false);
 const ctxX = ref(0), ctxY = ref(0), ctxOnNote = ref(false);
 const ctxNoteId = ref(null);
@@ -361,8 +362,9 @@ function onCtx(e) {
   ctxOnNote.value = !!h;
   ctxNoteId.value = h ? h.n.id : null;
   if (h && !props.selectedIds.includes(h.n.id)) props.api.setSelection([h.n.id], h.n.id);
-  const r = wrap.value.getBoundingClientRect();
-  ctxX.value = e.clientX - r.left; ctxY.value = e.clientY - r.top + wrap.value.scrollTop;
+  // 菜单是 .pr 的直接 absolute 子元素，坐标必须相对 .pr，而不是滚动容器 wrap
+  const r = (rootEl.value && rootEl.value.getBoundingClientRect) ? rootEl.value.getBoundingClientRect() : wrap.value.getBoundingClientRect();
+  ctxX.value = e.clientX - r.left; ctxY.value = e.clientY - r.top;
   ctxOpen.value = true;
 }
 function closeCtx() { ctxOpen.value = false; }
@@ -692,7 +694,7 @@ defineExpose({
 </script>
 
 <template>
-  <div class="pr">
+  <div ref="rootEl" class="pr">
     <!-- 工具栏（宿主自带工具条时可关掉） -->
     <div v-if="showToolbar" class="pr-bar">
       <div class="pr-tools">

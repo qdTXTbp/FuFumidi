@@ -18,8 +18,13 @@ const routes: RouteRecordRaw[] = [
   { path: '/resources', name: 'resources', component: () => import('./views/ViewResources.vue') },
   { path: '/models', redirect: { path: '/resources', query: { tab: 'model' } } },
   { path: '/soundfonts', redirect: { path: '/resources', query: { tab: 'soundfonts' } } },
-  { path: '/utau', name: 'utau', component: () => import('./views/ViewUtau.vue') },
-  { path: '/diffsinger', name: 'diffsinger', component: () => import('./views/ViewDiffSinger.vue') },
+  { path: '/singer', name: 'singer', component: () => import('./views/ViewSing.vue') },
+  // 声库：UTAU 声库制作与 DiffSinger 组件/声库的统一入口
+  { path: '/banks', name: 'banks', component: () => import('./views/ViewBanks.vue') },
+  // UTAU 与 DiffSinger 已合并为「歌声合成」板块：旧地址重定向过去并带上对应引擎，
+  // 老书签 / 外部链接继续可用（?tab=utau|diffsinger）
+  { path: '/utau', redirect: { path: '/singer', query: { tab: 'utau' } } },
+  { path: '/diffsinger', redirect: { path: '/singer', query: { tab: 'diffsinger' } } },
   { path: '/:pathMatch(.*)*', redirect: '/home' },
 ];
 

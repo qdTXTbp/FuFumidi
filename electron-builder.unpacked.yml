@@ -1,0 +1,72 @@
+# 仅用于产出 `win-unpacked`（免安装目录）的临时配置。
+#
+# 与 `electron-builder.yml` 的唯一差别：**去掉 `extraFiles`**。
+# `extraFiles` 要 `release/update/FuFumidi.update.exe`（增量更新器，由
+# `scripts/build-updater.js` 生成）；只做免安装目录验证时那个文件常常还没有，
+# electron-builder 会因 `from` 路径不存在而直接失败 —— 所以这里显式置空。
+#
+# 正式出包（`npm run dist:win`）请用 `electron-builder.yml`，不要用本文件。
+extends: ./electron-builder.yml
+
+extraFiles: []
+
+# ★ 本文件是**测试专用**配置：这里显式列出全部 53 种语言，
+#   目的是让 electron-builder **不要**执行"删除未选中的语言包"那一步。
+#   原因：裁剪要删 50+ 个文件，会触发环境的「单轮批量删除 ≥50 项」守卫，
+#   而守卫的判定权在用户 —— 打包流程不该自行放行。
+#   代价：测试包多约 34MB（语言包未裁剪）。
+#   ★ 正式出包（npm run dist:win，用 electron-builder.yml）**仍按原配置裁剪到 4 种语言**。
+electronLanguages:
+  - af
+  - am
+  - ar
+  - bg
+  - bn
+  - ca
+  - cs
+  - da
+  - de
+  - el
+  - en-GB
+  - en-US
+  - es
+  - et
+  - fa
+  - fi
+  - fr
+  - gu
+  - he
+  - hi
+  - hr
+  - hu
+  - id
+  - it
+  - ja
+  - kn
+  - ko
+  - lt
+  - lv
+  - ml
+  - mr
+  - ms
+  - nb
+  - nl
+  - pl
+  - pt-BR
+  - pt-PT
+  - ro
+  - ru
+  - sk
+  - sl
+  - sr
+  - sv
+  - sw
+  - ta
+  - te
+  - th
+  - tr
+  - uk
+  - ur
+  - vi
+  - zh-CN
+  - zh-TW

@@ -7,6 +7,26 @@
 > **G2p 基础设施** / **`PhonemeBased`+`Monophone`+`LatinDiphone` 基类** / **`ChineseCVV`** /
 > **`ArpabetG2p`** 已补齐
 > 2026-10-03 复核：四项测试 **1,417 项断言全绿**（含 `worldline.dll` 真机端到端）
+> 2026-10-02 追加：**原生库随包分发 + 路径解析**（`openutau/native_lib.py` + `openutau/native/`）
+> —— 补上「搬运成果在发布版里跑不起来」这条断裂；新增 `test_openutau_native_lib.py`（44 项）
+> 2026-10-02 继续：**粤语线两个音素化器**（`CantoneseCVVC` 18 行 / `CantoneseSyo` 358 行）
+> + `base_chinese` 的粤拼段（可注入钩子，等价 C# 的 `Pinyin.Error.Default` 降级）
+> 2026-10-02 继续：**中文 CVV+**（`ChineseCVVPlusPhonemizer` 374 行，含 `zhcvvplus.yaml`
+> 配置模型的读写与 `FlowStyleIntegerSequences` 的 PyYAML 等价物）
+> 2026-10-02 继续：**UTAU 外部工具线（P1-c 前半）**——`Util/Base64` / `Util/OS` /
+> `Util/ProcessRunner` / `Classic/ExeResampler` / `Classic/UnixWavtool`，外加
+> `ResamplerFailedException` 与 `Preferences.WinePath` 两个缺失零件
+> 2026-10-02 继续：**`Classic/ExeWavtool`**（224 行，bat 脚本生成 + `EscapeFlags` 防注入
+> + `ConvertToWindowsPath`）
+> 2026-10-02 继续：**P1-c 收尾** —— `Classic/ToolsManager`(140) + `Classic/VoicebankFiles`(122)，
+> 并把 `ClassicHost` 的五个 `NotImplementedError` **换成真实现**；新增**真宿主端到端**
+> （无替身渲染出 440Hz）。UTAU 外部工具线**闭环**
+> 2026-10-02 审计：新增 `tests/audit_port_gaps.py`（枚举式差异扫描）。**发现 6 个文件的真缺口**：
+> `Ustx/UCurve`（方法全缺 + `CurveSelection` 整类缺）、`Ustx/UMaskedCurve`、`Ustx/UExpression`、
+> `Ustx/UMixFx`、`Format/Ustx`（`.ustx` 版本/默认表达式/Create/AutoSave 未搬 —— 原先标注的
+> "✅ 完成"**不成立**）、`Render/Renderers`（`GetSupportedResamplers`/`GetSupportedWavtools`）。
+> 详见 §4.1
+> 合计 **1,703 项断言全绿**（另加适配器 6 项），音素化器进度 **12 / 51**
 
 ---
 
@@ -92,6 +112,51 @@
 
 ---
 
+# 搬运完成路线（2026-10-02 确立：把 OpenUTAU 整体内嵌进本应用）
+
+**目标**：在 FuFumidi 内嵌一套 OpenUTAU —— 不只是"能渲染 UTAU"，而是
+`声库加载 → 音素化 → 渲染 → .ust 读写 → 插件` 这条链完整可用。
+
+## 体量事实（范围内 = 内嵌真正需要的部分）
+
+| 部分 | 上游 | 已搬 | 剩余 |
+|---|---|---|---|
+| `Plugin.Builtin`（音素化器） | 61 文件 / 27,853 行 | 16 | **45 个** |
+| `Core/Classic` | 37 / 5,743 | 26 | **11 个** |
+| `Core/Ustx` | 10 / 3,045 | 10 | 0（**但有成员级缺口**） |
+| `Core/Render` | 11 / 2,840 | 6 | 5（编辑器侧，内嵌可不做） |
+| `Core/Api` | 11 / 1,120 | 9 | 2（插件安装器，可简化） |
+| `Core/Pipeline` | 4 / 988 | 4 | 0 |
+| `Core/G2p` | 14 / 964 | 1 | **13 个** |
+| `Format/Ustx.cs` + `BaseChinese` | 2 / 249 | 1 | 1（成员缺口） |
+| **合计** | **150 文件 / 42,802 行** | 62 + 16 | **80 文件 + 6 文件的成员缺口** |
+
+> 范围外的 `OpenUtau.Core` 其余部分（UI ViewModels / Analysis / Audio / Commands /
+> DawIntegration / Vogen / MachineLearning / PackageManager 等，合计约 64,000 行）
+> **不属于内嵌引擎所需**，不搬。
+
+**剩余必做 ≈ 28,800 行**：音素化器 25,000（87%）+ Classic 2,570 + G2p 900 + 成员缺口 300。
+
+## 执行顺序（按"解锁能力"排，不按行数排）
+
+| 阶段 | 内容 | 体量 | 解锁什么 |
+|---|---|---|---|
+| **S1** | 补 6 个文件的**成员级缺口**：`Format/Ustx`（版本常量/required/AddDefaultExpressions/Create/AutoSave）、`Ustx/UCurve`（方法 + `CurveSelection` 整类）、`UMaskedCurve`、`UExpression`、`UMixFx`、`Renderers.GetSupportedResamplers/Wavtools` | ~300 行 | ★ **`.ustx` 读写兼容的底座**（现在保存不会盖版本号、新建工程不补默认表达式）；曲线编辑原语 |
+| **S2** | `Core/Classic` 剩余 11 个：`Ust`(522) `UstNote`(394) `Presamp`(731) `VoicebankErrorChecker`(338) `VoicebankInstaller`(132) `VoicebankPublisher`(83) 插件体系 4 个(~252) `Flags/`(68) `PresampWatcher`(44) | ~2,570 行 | **`.ust` 导入/导出**、日文 Presamp 音素化、声库体检与安装、第三方插件 |
+| **S3** | 45 个内置音素化器 + 13 个语言 G2p | ~26,000 行 | 多语种覆盖（**批量体力活**：规则表/字典，单文件可验证，风险最低） |
+| **S4**（可选） | `Render` 编辑器侧 5 个（`RealCurveUpdater` `RenderView` `RenderPriority` `RenderProjection` `WaveformRefresh`） | ~1,200 行 | 曲线编辑交互、波形刷新（本应用已有自己的 UI，可能不需要） |
+
+## 每阶段的完成判据
+
+- **S1**：`.ustx` 往返测试补上"保存后 `ustxVersion` 被盖成 0.10""读到更新版本要拒绝"
+  "新建工程含 `required` 那 8 个表达式"三条断言；`UCurve` 的 `Sample/Set/Simplify/MergeCurves`
+  与 `CurveSelection` 逐个对照上游断言。
+- **S2**：`tests/test_ustx_roundtrip.py` 扩展到真实 `.ust` 样例；Presamp 音素化器端到端出声。
+- **S3**：每个音素化器沿用现有模式（元数据对照 + 常量表逐项 + 关键算式 + 端到端出声）。
+- 每阶段结束跑 `tests/audit_port_gaps.py`，**剩余文件数应同步下降** —— 这是进度是否真实的判据。
+
+---
+
 ## 1. 方针（不可协商的三条）
 
 1. **逐文件对齐 C# 的文件边界**，不做"更合理"的合并或拆分。
@@ -107,13 +172,14 @@
 
 | 子系统 | 上游体量 | 状态 |
 |---|---|---|
-| `.ustx` 工程格式（读写） | ~2,000 行 | ✅ 完成 |
+| `.ustx` 工程格式（读写） | ~2,000 行 | 🟡 读写往返已通，但**审计发现格式层不完整**：`kUstxVersion`(0.10) / `required` / `AddDefaultExpressions` / `Create` / `AutoSave` 未搬（见 §4.1） |
+| `Ustx/UCurve`（曲线编辑原语 + `CurveSelection`） | — | ❌ **未搬**（`UCurve` 的方法全缺、`CurveSelection` 整类缺；`CurveSource.sample` 里有一份重复实现）。审计新发现，见 §4.1 |
 | 乐句渲染输入（`RenderPhrase` / 3 类，含 MOD+） | 663 行 | ✅ 完成（只剩表达式图未搬） |
 | 渲染器接口与注册表 | 146 + 141 行 | ✅ 完成（具体渲染器未搬） |
 | Worldline 纯逻辑 | 780 行中约 400 | ✅ 完成（原生边界另计） |
 | 音素化器基类 / 中文基类 | 250 + 51 行 | ✅ 完成 |
 | `SyllableBasedPhonemizer`(2204) / `PhonemeBased`+`Monophone`(257) | 2204 + 257 行 | ✅ 完成（`SyllableBased` 那条线连同 `YamlWatcher` + `G2pRemapper` 一并搬完；17 个具体子类未搬） |
-| 内置音素化器 | 51 个文件 / 25,707 行 | 🟡 **9 / 51**（JA VCV / JA CVVC / ZH VCV / ZH CVVC / ZH CVV / **FR VCCV / FR CVVC / TR CVVC / EN ARPA**） |
+| 内置音素化器 | 51 个文件 / 25,707 行 | 🟡 **12 / 51**（JA VCV / JA CVVC / ZH VCV / ZH CVVC / ZH CVV / ZH CVV+ / FR VCCV / FR CVVC / TR CVVC / EN ARPA / YUE CVVC / YUE SYO） |
 | **★ 全链路** | 歌词 → 音素化 → `UPhoneme` → `PhraseSource` → 渲染 → 样本 | 🟢 **端到端已打通**（`test_workflow_end_to_end`，真 ClassicSinger + 真 worldline.dll，440Hz 判据） |
 | Classic 参数层 | 188 + 57 行 | ✅ 完成 |
 | Classic 执行层 · 底座（WAV / 接口 / 清单） | 173 + 25 + 11 + 28 行 | ✅ 完成 |
@@ -124,10 +190,11 @@
 | Classic 声库加载（`character.txt` / `oto.ini` / `prefix.map`） | 549 行 | ✅ 完成（`FileTrace` + `Voicebank` 一并补齐） |
 | Classic 歌手（`ClassicSinger` + `OtoWatcher` + `ClassicSingerLoader`） | 243 + 42 + 30 行 | ✅ 完成 |
 | Worldline 的 `PhraseSynthV2` | 780 行中约 240 | ✅ 完成（v10 全通；R1.1 缺 hnsep 模型） |
-| Classic 执行层 · 外部工具进程 | ~700 行 | ❌ 未开始 |
+| Classic 执行层 · 外部工具进程 | ~700 行 | ✅ 完成（`Util/Base64` / `Util/OS` / `Util/ProcessRunner` + `Classic/ExeResampler` / `ExeWavtool` / `UnixWavtool` / `ToolsManager` / `VoicebankFiles`；`ClassicHost` 已接真实现） |
 | `WorldlineRenderer` | 276 行 | 🟡 v10 全通（真机验证）；v11/v20 缺外部依赖，入口报错 |
 | Pipeline（乐句切分 / 快照 / 后台构建） | 548 + 162 + 216 行 | ✅ 完成 |
 | G2p（字素→音素） | 387 行（基座）+ 771 行（具体语言） | 🟡 基座 + **`ArpabetG2p`** 完成；其余 9 个语言 G2p 未搬 |
+| **原生库分发与解析** | 无 C# 对应物（.NET 的 `DllImport` 解析机制） | ✅ 完成（`native_lib.py` + `native/<rid>/` 6 平台） |
 | 编辑器侧 | — | ❌ 未开始（M3） |
 
 ---
@@ -199,10 +266,36 @@
 | `openutau/plugin_builtin/french_cvvc.py` | `Plugin.Builtin/FrenchCVVCPhonemizer.cs`（757 行；同法语家族第二个真实用户） |
 | `openutau/plugin_builtin/turkish_cvvc.py` | `Plugin.Builtin/TurkishCVVCPhonemizer.cs`（356 行；直接继承 `Phonemizer`） |
 | `openutau/plugin_builtin/arpasing.py` | `Plugin.Builtin/ArpasingPhonemizer.cs`（62 行；`LatinDiphone` 子类）+ `Data/arpasing.template.yaml`（内嵌模板） |
+| `openutau/plugin_builtin/cantonese_cvvc.py` | `Plugin.Builtin/CantoneseCVVCPhonemizer.cs`（18 行；**`ChineseCVVC` 子类，全文件只重写 `Romanize`** 改用粤拼） |
+| `openutau/plugin_builtin/cantonese_syo.py` | `Plugin.Builtin/CantoneseSyoPhonemizer.cs`（358 行；直接继承 `Phonemizer`，自带声母/韵母/替代三张表 + 内嵌 `JyutpingConversion`） |
+| `openutau/plugin_builtin/chinese_cvv_plus.py` | `Plugin.Builtin/ChineseCVVPlusPhonemizer.cs`（374 行；含 `zhcvvplus.yaml` 配置模型 `ChineseCVVPlusConfigYaml` + 内嵌 `FlowStyleIntegerSequences` 的 PyYAML 等价物；★ yaml 键名含上游拼错的 `Timimg`） |
+| `openutau/base64_util.py` | `Util/Base64.cs`（UTAU 的 12 位音高编码 + `#N#` 行程压缩；**改名**避免与标准库 `base64` 同名） |
+| `openutau/os_util.py` | `Util/OS.cs`（平台判定 / `WhereIs` / 打开文件夹网页；**改名**避免与标准库 `os` 同名） |
+| `openutau/process_runner.py` | `Util/ProcessRunner.cs`（外部工具进程执行：非零退出码不抛、超时杀进程树、强制 `LANG=ja_JP.utf8`） |
+| `openutau/classic/exe_resampler.py` | `Classic/ExeResampler.cs`（外部 resampler 的命令行契约 + `moreconfig.txt` 补丁 + wine 分支） |
+| `openutau/classic/unix_wavtool.py` | `Classic/UnixWavtool.cs`（Unix 外部 wavtool；每条 item 单跑一次 + whd/dat 两段式合并） |
+| `openutau/classic/exe_wavtool.py` | `Classic/ExeWavtool.cs`（Windows 外部 wavtool；生成 `temp.bat` + `temp_helper.bat`，含 `EscapeFlags` 防注入与 `ConvertToWindowsPath` 的 wine 路径转换） |
+| `openutau/classic/tools_manager.py` | `Classic/ToolsManager.cs`（内置 Worldline + SharpWavtool×2、外部工具按扩展名分派扫描、按名取用与回落） |
+| `openutau/classic/voicebank_files.py` | `Classic/VoicebankFiles.cs`（源文件解码到缓存、13 对元文件搬运、7 天过期清理） |
+| `openutau/classic/voicebank_loader.py` 的 `cs_get_extension` | **无 C# 对应物的载体差异**：.NET `Path.GetExtension` 与 `os.path.splitext` 在 `.bashrc`（整段算扩展名）与 `a.`（尾点无扩展名）两处不同，而 `ToolsManager` 靠扩展名分派工具，所以照 .NET 语义单独实现 |
+| `openutau/renderer.py` 的 `ResamplerFailedException` | `Render/IRenderer.cs` 里同一文件定义的那个异常（补上，供 ExeResampler 抛） |
+| `openutau/base_chinese.py` 的粤拼段 | **无 C# 对应物的载体差异**：C# 用 NuGet `csharp-pinyin` 的 `Pinyin.Jyutping`；Python 侧做成可注入钩子 `set_jyutping_converter`，未注入时惰性探测 `ToJyutping` / `pycantonese`，都没有则原样返回（等价 `Pinyin.Error.Default`） |
 | `openutau/phonemizer_runner.py` | `Api/PhonemizerRunner.cs`（261 行）的 `Phonemize` 核心（同步版；线程/调度/UI 属 M3） |
 | `openutau/part_validate.py` | `Ustx/UNote.cs` 的 `Validate`/`ToPhonemizerNote` + `Ustx/UPart.cs` 音素化段（组构建/响应落表/覆写/夹紧） |
 
 每个模块的 `__init__.py` 里维护着一份"已照搬 / 未照搬"清单，与上表同步。
+
+### 3.1 无 C# 对应物的三块（载体差异）
+
+| Python | 说明 |
+|---|---|
+| `openutau/native_lib.py` + `openutau/native/<rid>/` | **不是照搬**：C# 的 `[DllImport("worldline")]` 由 CLR 自动解析 `runtimes/<rid>/native/`，而 `ctypes.CDLL('worldline')` 只搜系统路径。这里补上「随包分发 + 路径解析」，搜索顺序与 .NET 同构（显式 → `FUFUMIDI_WORLDLINE` → `FUFUMIDI_NATIVE_DIR` → 包内 → 引擎根 → `OPENUTAU_REF`）。**显式路径是「优先尝试」而不是硬覆盖**（一条过期的排障路径不该把整条链路弄坏）；硬覆盖走 `WorldlineNative(path)`。 |
+| `classic/nwaves_filter.py` | NWaves 三段（`IirPeak` / `TransferFunction.Zi` / `ZiFilter.ZeroPhase`）的逐行转写，第三方库替换。 |
+| `openutau/binary_writer.py` / `xxhash.py` | `System.IO.BinaryWriter` 与 `K4os.Hash.xxHash` 的字节布局复刻（缓存键用），BCL / NuGet 替换。 |
+
+★ 原生库那块出问题的症状**极隐蔽**：一致性测试显式指向 `_ref/OpenUtau/runtimes/...` 的绝对路径，
+于是测试全绿、而打包后的应用里变调链路整个不可用。`test_openutau_native_lib.py` 就是钉这条线的
+（含「分发的二进制与上游逐字节一致」与「MIT 许可证随二进制分发」两条合规断言）。
 
 ---
 
@@ -212,11 +305,13 @@
 cd engine/tests
 python test_ustx_schema_matches_source.py        # 19 passed
 python test_ustx_roundtrip.py                    # 59 passed
-python test_openutau_core_matches_source.py      # 1339 passed ← 含 worldline.dll 真机端到端
+python test_openutau_core_matches_source.py      # 1581 passed ← 含 worldline.dll 真机端到端 + **真宿主端到端**
+python test_openutau_native_lib.py               # 44 passed ← 原生库分发 / 解析 / 真机可用
 python -m pytest test_singing_adapters.py -q     # 6 passed
+python tests/audit_port_gaps.py                  # 枚举式差异扫描（不是判据，输出需人工归类）
 ```
 
-合计 **1,417 项断言，全绿**。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
+合计 **1,703 项断言，全绿**（另加适配器 6 项）。参考源码缺失时自动 SKIP（`OPENUTAU_REF` 环境变量可指定路径），
 整套测试**可离线运行**。
 
 `worldline.dll` 真机测试的 SKIP 条件是"找不到 `/d/FuFuMIDI/_ref/OpenUtau/runtimes/win-x64/native/worldline.dll`
@@ -232,6 +327,41 @@ python -m pytest test_singing_adapters.py -q     # 6 passed
 > 列表推导永远不会是 `None`。要不要改成真判空属于 M2-b 的事，别顺手改。）
 
 ---
+
+## 4.1 照搬审计（`tests/audit_port_gaps.py`）
+
+`test_openutau_core_matches_source.py` 是**逐项断言**——它只覆盖写断言的人想到的地方。
+`engine/tests/audit_port_gaps.py` 补另一面：**枚举式差异扫描**，用来找"断言没覆盖到"的缺口。
+
+```bash
+cd engine
+python tests/audit_port_gaps.py          # 全量
+python tests/audit_port_gaps.py Classic  # 只看名字含 Classic 的
+```
+
+它做两件事：
+1. **文件级**：搬运范围内的哪些 `.cs` 还没有任何 Python 对应物（带范围过滤，
+   不把 Analysis / Audio / Commands / DAW / DiffSinger 这些**不在引擎范围内**的目录算进来）；
+2. **成员级**：已搬模块里，C# 的哪些公开成员在 Python 侧找不到名字对应的东西
+   （归一化到 snake_case / 原名 / 大写常量 / camelCase / 去 `k` 前缀；`ToString`↔`__str__`）。
+
+> **它是启发式扫描、不是判据**：输出必须人工过一遍（C# 的嵌套类型、全局单例、
+> 有意不搬的死代码都会命中）。它的价值是"不遗漏"，不是"自动判错"。
+
+### 2026-10-02 审计结果（范围内 62 个 `.cs` 找到对应物，**6 个文件有真缺口**）
+
+| 类别 | 结论 |
+|---|---|
+| 文件级 | 范围内还有 **80 个 `.cs`** 无对应物：39 个内置音素化器 + 12 个语言 G2p（**已知 P3 待办**）；`Classic/` 8 项（Presamp 731、Ust 522、UstNote 394、VoicebankErrorChecker 338、Installer 132、Publisher 83、Plugin 体系 4、Flags 2、PresampWatcher 44）；`Render/` 5 项与 `Api/` 2 项（**M3 编辑器侧**）；`Resources.Designer` 2 项（有意不搬） |
+| 成员级 · **真缺口（本次新发现，共 6 个文件）** | ★ **`Ustx/UCurve.cs`**：`UCurve` 的方法**全未搬**（`Add` / `Clear` / `Clone` / `IsEmpty` / `IsEmptyBetween` / `Sample` / `Set` / `Simplify` / `MergeCurves` / `GetWholeCurveAndSelection` / `GetSelectedRange` / `interval` / `realXs` / `realYs`），**`CurveSelection` 整个类未搬**。其中 `Sample` 已被 `CurveSource.sample` **重复实现**（漂移风险）<br>★ **`Format/Ustx.cs`**：`.ustx` 层不完整（与第 2 节原先的"✅ 完成"**不符**）—— `kUstxVersion`(0.10) / `required` / `AddDefaultExpressions` / `Create` / `AutoSave` 均未搬，于是"保存时把工程版本盖成 0.10""新建工程补齐默认表达式""读到更新版本要拒绝"三条行为都缺失<br>★ **`Render/Renderers.cs`**：`GetSupportedResamplers(IWavtool?)` / `GetSupportedWavtools(IResampler?)` 未搬（编辑器选工具时的配对过滤；`ToolsManager` 已就位，可搬）<br>· **`Ustx/UMaskedCurve.cs`**：`Clear` / `Clone` / `IsEmpty` / `Set` / `SetSteps` / `SetValues` / `Snap` / `ToSteps` / `TrySample` / `interval` 未搬<br>· **`Ustx/UExpression.cs`**：`Clone` / `Create` / `Equals` 未搬<br>· **`Ustx/UMixFx.cs`**：`Clone` 未搬<br>· `Classic/Ini.cs` 的 `ToString` → `__str__`（次要） |
+| 成员级 · 已知待办（在册） | `RenderEngine` 除 `Progress` 外的成员、`PhonemizerRunner` 的 `Push`/`WaitFinish`/`Dispose`（**M3**）；`Worldline.DecodeMgc`/`DecodeBap`（**R1.1**） |
+| 成员级 · 已核实误报 | `VoicebankLoader` 的 `kCharTxt`/`kOtoIni`…（改名成无 `k` 前缀的 `CHAR_TXT`/`OTO_INI`，脚本已把 `k` 前缀纳入归一化）；`ClassicSinger.OtoData.Empty` → `OTO_DATA_EMPTY` 常量；`Format/Ustx.cs` 的 `Load`/`Save` → `ustx/io.py`；`VoicebankConfig.cs` 的 `Subbank.*` → 按第 7 节决策落在 `oto.py`；`MusicMath.KeyColor` → 嵌套**枚举**（按约定存字符串名）；`Core/Ustx/{UNote,UPart,UProject,UTrack,USinger,UPhoneme,TimeAxis}.cs` → 逻辑**有意挪到按职责命名的模块**（`part_validate.py` / `pipeline_source.py` …），或属编辑器侧；类名/嵌套类型（`Renderers` / `Worldline` / `Item` / `In` / `Out` / `Base64` / `OS` / `Yaml` / `JyutpingConversion` …） |
+
+> 脚本里 `KNOWN_NON_PORT`（已核实的非缺口）与 `SKIP_MEMBER_CHECK`（成员级扫描无意义的文件）
+> **每一条都写了理由**，加项必须写明 —— 否则这个清单会变成"把噪声藏起来"的地方。
+> `SKIP_EXCEPT` 用来把"不该跳过"的文件（曲线原语，本次正是靠它保住了 `UCurve` 的发现）拉回输出。
+
+
 
 ## 5. 方法：源码一致性测试
 
@@ -453,16 +583,36 @@ tone 69 变调，输出主频用**过零率**实测 ≈ 440Hz（±10% 内）。
 > 仍未接的是 R1.1 的谐波分支：`HnAnalysisF0In` 绑定 + `Core/Analysis/Hnsep`（ONNX）
 > + `SynthSegment` 的 `sp_env_harmonic` 传递。
 
-### P1-c —— 外部工具线（独立可选）
+### ~~P1-c —— 外部工具线~~ ✅ 已完成
 
-`Util/Base64.cs`(77) + `Util/ProcessRunner.cs`(95) + `OS.cs`(119) +
-`Classic/ExeResampler.cs`(141) / `ExeWavtool.cs`(224) / `UnixWavtool.cs` /
-`ToolsManager.cs`(140) / `VoicebankFiles.cs`(122)。
+| 项 | 行数 | 状态 |
+|---|---|---|
+| `Util/Base64.cs` | 77 | ✅ `openutau/base64_util.py` |
+| `Util/OS.cs` | 119 | ✅ `openutau/os_util.py` |
+| `Util/ProcessRunner.cs` | 95 | ✅ `openutau/process_runner.py` |
+| `Classic/ExeResampler.cs` | 141 | ✅ `classic/exe_resampler.py` |
+| `Classic/UnixWavtool.cs` | 110 | ✅ `classic/unix_wavtool.py` |
+| `Classic/ExeWavtool.cs` | 224 | ✅ `classic/exe_wavtool.py` |
+| `Classic/ToolsManager.cs` | 140 | ✅ `classic/tools_manager.py` |
+| `Classic/VoicebankFiles.cs` | 122 | ✅ `classic/voicebank_files.py` |
 
 > 只服务"用户自备 resampler/wavtool"（OpenUTAU 的原生用法）。`ToolsManager` 里
-> `SearchWavtools` 会构造 `SharpWavtool(true/false)`，所以它必须排在 P1-a 之后
-> （现在已满足）。`ExeWavtool` 还顺带决定了"外部路径下谁跑 resampler"这件事
+> `SearchWavtools` 会构造 `SharpWavtool(true/false)`，所以它必须排在 P1-a 之后。
+> `ExeWavtool` 还顺带决定了"外部路径下谁跑 resampler"这件事
 > （见第 6 节陷阱 22）。
+>
+> ★ **`ClassicHost` 的五个方法已全部换成真实现** —— 这是「UTAU 模块完整性」的关键一步：
+> - `get_resampler` → `ToolsManager.GetResampler`（回落 `worldline`）
+> - `get_wavtool` → `ToolsManager.GetWavtool`（回落 `convergence`）
+> - `get_source_temp_path` / `copy_source_temp` / `copy_back_meta_files` → `VoicebankFiles`
+>
+> 新增的**真宿主端到端**用例证明：把 `ClassicHost` 的 `DataPath` / `RootPath` / `CachePath`
+> 配好之后，`ClassicRenderer` **不需要任何替身**就能渲染出 440Hz 样本
+> （`GetResampler` 回落出的 `WorldlineResampler` + `GetWavtool` 回落出的 `SharpWavtool`）。
+>
+> `ClassicHost.resamplers_path` / `wavtools_path` 按 C# 的**表达式属性**
+> （`Path.Combine(DataPath, "Resamplers")`）推导，而不是留空 —— 留空会让
+> `ToolsManager.SearchResamplers` 走进上游那个"扫描失败即清空整张表"的分支。
 
 ### ~~P2 —— 声库与 .frq~~ ✅ 已完成
 
@@ -498,7 +648,7 @@ tone 69 变调，输出主频用**过零率**实测 ≈ 440Hz（±10% 内）。
   `character.txt` 的键识别与死代码 quirk / 判型（配置优先 + 遗留 dsconfig）/ `ApplyConfig`
   的引用语义 / `prefix.map` 去重与音域分段 / `SearchAll` 的深/浅两档。
 
-### P3 —— 更多音素化器（当前 9 / 51）
+### P3 —— 更多音素化器（当前 12 / 51）
 
 **两条基类线现在都就位了**（`SyllableBased` 2204 / `PhonemeBased`+`Monophone`+`LatinDiphone` 292），
 所以下面这些基本是"照着 C# 逐个转写 + 配一致性测试"的体力活。优先级建议：

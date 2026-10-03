@@ -53,6 +53,7 @@ const { registerGpuIpc } = require('./main/gpu-ipc');
 const { createRustService } = require('./main/rust');
 const { createDbService } = require('./main/db');
 const { registerLibraryIpc } = require('./main/library');
+const { registerProjectIpc } = require('./main/project');
 const { registerWallpaperIpc } = require('./main/wallpaper');
 const { registerUtauIpc } = require('./main/utau');
 const { registerDiffsingerIpc } = require('./main/diffsinger');
@@ -123,6 +124,8 @@ if (!gotLock) {
       rustInvoke: (args, timeoutMs) => RustService.invoke(args, timeoutMs),
     });
     registerSettingsIpc({ ipcMain, readSettings, writeSettings, db: DbService });
+    // 歌声工程文件（.fufumidi 自包含包）：保存/打开都在这里，音频字节不过 IPC
+    registerProjectIpc({ ipcMain, dialog, path, fs });
     registerWallpaperIpc({ ipcMain, app, fs, net, runEngineInline, parsePyJson });
     registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawnEngine });
     // DiffSinger 模块化集成：默认关闭；启用后才按需下载推理依赖与通用声码器（模块内自检）
@@ -185,13 +188,16 @@ function setupTray({ win, app, readSettings, rootDir }) {
     console.warn('[tray] 托盘初始化失败（关闭将直接退出）:', e && e.message);
     _tray = null;
   }
-  // 关闭/最小化拦截与 Tray 创建解耦：仅在托盘就绪时隐藏到托盘，
-  // 托盘失败时放行默认行为（避免窗口消失后无法找回）
+  // 关闭拦截与 Tray 创建解耦：仅在托盘就绪时隐藏到托盘，
+  // 托盘失败时放行默认行为（避免窗口消失后无法找回）。
+  //
+  // 语义约定（与「最小化到任务栏」保持一致，避免用户误判「窗口被关掉了」）：
+  //   · 最小化 → 走系统默认，保留任务栏图标，可随时点回来；
+  //   · 关闭   → 隐藏到托盘继续后台播放，点托盘「退出」才真正退出。
+  // 早期版本把 minimize 也拦成 win.hide()，导致最小化后任务栏图标消失、
+  // 只剩托盘入口，体验上等同于「窗口被关掉」。这里只保留 close 拦截。
   win.on('close', (e) => {
     if (!app.isQuiting && _tray && toTrayOn()) { e.preventDefault(); win.hide(); }
-  });
-  win.on('minimize', (e) => {
-    if (_tray && toTrayOn()) { e.preventDefault(); win.hide(); }
   });
   app.on('before-quit', () => { app.isQuiting = true; });
 }

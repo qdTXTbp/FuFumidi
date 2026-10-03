@@ -1101,13 +1101,16 @@ def test_resampler_item():
         check('ResamplerItem.ApplyEnvelope: 尾样本落在包络终点后 → 增益 0',
               samples[-1] == 0.0, 'got %r' % samples[-1])
 
-        # 未配置 host 时应明确报错（不静默给错路径）
+        # 未配置 host（没有 data_path）时仍应明确失败 ——
+        # ★ 现在不是 NotImplementedError 了：ClassicHost 已接上真实现，失败形态变成
+        #   "工具表为空 → KeyError"（与 C# 的 KeyNotFoundException 同类型）。
         RI.host = old_host
         try:
             RI.ResamplerItem(rp, rp.phones[0])
-            check('ResamplerItem: 未配置 host 时抛 NotImplementedError', False, '没有抛错')
-        except NotImplementedError:
-            check('ResamplerItem: 未配置 host 时抛 NotImplementedError', True)
+            check('★ ResamplerItem: host 未配置 data_path 时明确报错（工具表为空 → KeyError）',
+                  False, '没有抛错')
+        except KeyError:
+            check('★ ResamplerItem: host 未配置 data_path 时明确报错（工具表为空 → KeyError）', True)
     finally:
         RI.host = old_host
 
@@ -5572,11 +5575,21 @@ def test_g2p():
     calls = []
 
     class _FakeSession:
-        def run(self, feeds):
-            calls.append((list(feeds['src'][0]), list(feeds['tgt'][0]), feeds['t'][0]))
+        # ★ 签名必须与真实 `onnxruntime.InferenceSession.run` 一致：
+        #   `run(output_names, input_feed, run_options=None)` —— 第一个位置参数
+        #   是**输出名**（C# 那边是「只给输入、返回全部输出」的重载，所以不传）。
+        #   这里收下 output_names 但忽略它（真实模型只有一个输出 pred）。
+        def run(self, output_names, feeds, run_options=None):
+            # ★ 也要模拟真实模型的输入 dtype 要求：int32
+            assert feeds['src'].dtype.name == 'int32', feeds['src'].dtype
+            assert feeds['tgt'].dtype.name == 'int32', feeds['tgt'].dtype
+            assert feeds['t'].dtype.name == 'int32', feeds['t'].dtype
+            calls.append((list(feeds['src'][0]), list(feeds['tgt'][0]), int(feeds['t'][0])))
             # 依次吐出 3 个符号（下标 3/4/5），然后吐 2（结束符）
             n = len(feeds['tgt'][0]) - 1
-            return [[[3 + n if n < 3 else 2]]]
+            # ★ 真实输出 shape 是 [1]，所以只取一层
+            import numpy as _np
+            return [_np.array([3 + n if n < 3 else 2], dtype=_np.int32)]
 
     set_onnx_session_factory(lambda blob: _FakeSession())
     g2 = _ArpabetLike(data)
@@ -7815,6 +7828,1373 @@ def _workflow_project(tmp):
     return project, track, part, src
 
 
+def test_cantonese_cvvc_phonemizer():
+    """`Plugin.Builtin/CantoneseCVVCPhonemizer.cs`（18 行）—— 粤语 CVVC。
+
+    全文件只做一件事：继承 `ChineseCVVCPhonemizer` 并重写 `Romanize`，
+    把「汉字 → 拼音」换成「汉字 → 粤拼」。所以用例重点是
+    ①元数据/继承面与 C# 逐项一致；②`Romanize` 的**替换判据**与中文版同形；
+    ③没有粤拼表时原样返回（与 C# 的 `Pinyin.Error.Default` 同义）。
+    """
+    from singing.openutau import Note, PhonemeAttributes, registered
+    from singing.openutau.base_chinese import (BaseChinesePhonemizer, jyutping_available,
+                                               set_jyutping_converter)
+    from singing.openutau.plugin_builtin import CantoneseCVVCPhonemizer
+    from singing.openutau.plugin_builtin.chinese_cvvc import ChineseCVVCPhonemizer
+
+    romanize_jyutping = BaseChinesePhonemizer.romanize_jyutping
+
+    cs = open(os.path.join(os.path.dirname(REF), 'OpenUtau.Plugin.Builtin',
+                           'CantoneseCVVCPhonemizer.cs'), encoding='utf-8-sig').read()
+    cs = cs.replace('\r\n', '\n')
+
+    m = re.search(r'\[Phonemizer\("([^"]*)",\s*"([^"]*)",\s*"([^"]*)"(?:,\s*language\s*:\s*"([^"]*)")?\)\]', cs)
+    check('YUE CVVC: [Phonemizer] 的 name/tag/author/language 与 C# 一致',
+          m is not None and (m.group(1), m.group(2), m.group(3), m.group(4)) == (
+              CantoneseCVVCPhonemizer.name, CantoneseCVVCPhonemizer.tag,
+              CantoneseCVVCPhonemizer.author, CantoneseCVVCPhonemizer.language),
+          'C#=%r' % (m.groups() if m else None,))
+    check('YUE CVVC: 继承 ChineseCVVCPhonemizer',
+          'class CantoneseCVVCPhonemizer : ChineseCVVCPhonemizer' in cs)
+    check('YUE CVVC: 源码里只有**一个** override（只重写 Romanize）',
+          cs.count('protected override') == 1 and 'protected override string[] Romanize(' in cs,
+          'count=%d' % cs.count('protected override'))
+    check('YUE CVVC: 走 Jyutping 入口 + 无声调(NORMAL) + Error.Default',
+          'Pinyin.Jyutping.Instance.HanziToPinyin' in cs
+          and 'CanTone.Style.NORMAL' in cs and 'Pinyin.Error.Default' in cs)
+    check('YUE CVVC: 已注册，且不与中文 CVVC 的 tag 冲突',
+          registered().get('ZH-YUE CVVC') is CantoneseCVVCPhonemizer
+          and registered().get('ZH CVVC') is ChineseCVVCPhonemizer)
+
+    # ---------------- 行为：Romanize 的替换判据（注入转换器，模拟本机有粤拼表）
+    set_jyutping_converter(lambda s: {'你': 'nei', '好': 'hou'}.get(s, s))
+    try:
+        out = romanize_jyutping(['你', '好', 'nei5', '你好'])
+        check('YUE CVVC.Romanize: 单字汉字逐项换成粤拼',
+              out[0] == 'nei' and out[1] == 'hou', 'got %r' % out)
+        check('YUE CVVC.Romanize: 已是粤拼的歌词原样保留', out[2] == 'nei5', 'got %r' % out)
+        check('YUE CVVC.Romanize: 多字汉字串原样保留（只换 Length==1 的）', out[3] == '你好',
+              'got %r' % out)
+
+        ph = CantoneseCVVCPhonemizer()
+        attrs = [PhonemeAttributes(index=0)]
+        # groups 的形态是「若干分组，每组若干音符」；这里一个分组、一个音符
+        g = [[Note(lyric='你', tone=60, position=10, duration=480, phoneme_attributes=attrs)]]
+        old_head = g[0][0]
+        ph.romanize_notes(g)
+        check('YUE CVVC.RomanizeNotes: 首音符被换成**新对象**且歌词已转换',
+              g[0][0] is not old_head and g[0][0].lyric == 'nei', 'got %r' % g[0][0].lyric)
+        check('YUE CVVC.RomanizeNotes: tone/position/duration/phonemeAttributes 一并搬过去',
+              g[0][0].tone == 60 and g[0][0].position == 10 and g[0][0].duration == 480
+              and g[0][0].phoneme_attributes is attrs)
+    finally:
+        set_jyutping_converter(None)
+
+    # ---------------- 降级：没有粤拼表 → 原样返回（同 C# 的 Error.Default）
+    try:
+        out2 = romanize_jyutping(['你'])
+        ok = (out2 == ['你']) if not jyutping_available() else (len(out2) == 1)
+        check('YUE CVVC.Romanize: 无粤拼表时原样返回 / 有表时不抛异常', ok, 'got %r' % out2)
+    except Exception as e:                                   # noqa: BLE001
+        check('YUE CVVC.Romanize: 无粤拼表时原样返回 / 有表时不抛异常', False, repr(e))
+
+
+def test_cantonese_syo_phonemizer():
+    """`Plugin.Builtin/CantoneseSyoPhonemizer.cs`（358 行）—— 粤语 Syo 式。
+
+    直接继承 `Phonemizer`，自己做「声母/韵母切分 → 韵尾插入 → oto 查询」。
+    覆盖：元数据与四张表逐项一致、声母判定的三段顺序（含 `ng` 特例）、
+    ★ 两个 oto 查询函数**语义不同**（上游有意的差异），以及三条返回路径。
+    """
+    from singing.openutau import Note, registered
+    from singing.openutau.plugin_builtin import CantoneseSyoPhonemizer
+    from singing.openutau.plugin_builtin import cantonese_syo as S
+
+    cs = open(os.path.join(os.path.dirname(REF), 'OpenUtau.Plugin.Builtin',
+                           'CantoneseSyoPhonemizer.cs'), encoding='utf-8-sig').read()
+    cs = cs.replace('\r\n', '\n')
+
+    # ---------------- 源码一致性
+    m = re.search(r'\[Phonemizer\("([^"]*)",\s*"([^"]*)",\s*"([^"]*)"(?:,\s*language\s*:\s*"([^"]*)")?\)\]', cs)
+    check('YUE SYO: [Phonemizer] 的 name/tag/author/language 与 C# 一致',
+          m is not None and (m.group(1), m.group(2), m.group(3), m.group(4)) == (
+              CantoneseSyoPhonemizer.name, CantoneseSyoPhonemizer.tag,
+              CantoneseSyoPhonemizer.author, CantoneseSyoPhonemizer.language),
+          'C#=%r' % (m.groups() if m else None,))
+    check('YUE SYO: 直接继承 Phonemizer 且已注册',
+          'class CantoneseSyoPhonemizer : Phonemizer' in cs
+          and registered().get('ZH-YUE SYO') is CantoneseSyoPhonemizer)
+
+    mm = re.search(r'consonants = "([^"]*)"', cs)
+    check('YUE SYO: consonants 表逐字符一致',
+          mm is not None and mm.group(1) == S._CONSONANTS,
+          'C#=%r' % (mm.group(1) if mm else None))
+    mv = re.search(r'vowels = "([^"]*)"', cs)
+    check('YUE SYO: vowels 表逐字符一致',
+          mv is not None and mv.group(1) == S._VOWELS,
+          'C#=%r' % (mv.group(1) if mv else None))
+
+    def _arr(name):
+        a = re.search(r'%s = new string\[\] \{([^}]*)\}' % name, cs)
+        return re.findall(r'"([^"]*)"', a.group(1)) if a else None
+
+    check('YUE SYO: substitution 表逐项一致', _arr('substitution') == S._SUBSTITUTION,
+          'C#=%r' % (_arr('substitution'),))
+    check('YUE SYO: finalSub 表逐项一致', _arr('finalSub') == S._FINAL_SUB,
+          'C#=%r' % (_arr('finalSub'),))
+    check('YUE SYO: SetUp 里调用了 JyutpingConversion.RomanizeNotes',
+          'JyutpingConversion.RomanizeNotes(groups);' in cs)
+    check('YUE SYO: phoneme0 初值是整条歌词（查不到时原样返回）',
+          'string phoneme0 = lyric;' in cs)
+    check('YUE SYO: 单字母声母分支显式排除 ng',
+          'lyric != "ng"' in cs and 'lyric.Length > 1' in cs)
+    check('YUE SYO: 源码里"任意命中"与"必须颜色匹配"两种查询各存在一处',
+          cs.count('if (otos.Count > 0)') == 2
+          and 'if (oto != null) {\n                    return true;' in cs.replace('\r\n', '\n'))
+
+    # ---------------- 行为（替身歌手 + 替身 oto）
+    class _Oto:
+        def __init__(self, alias, color_match=True):
+            self.alias = alias
+            self._cm = color_match
+
+        def is_color_match(self, color):
+            return self._cm
+
+    def _mk(alias_map):
+        otos = dict((a, _Oto(a, cm)) for a, cm in alias_map.items())
+
+        class _S:
+            found = True
+            loaded = True
+            location = ''
+            id = 'yue-syo-test'
+
+            @property
+            def is_loaded(self):
+                return True
+
+            def try_get_mapped_oto(self, p, tone, color=None):
+                return (p in otos), otos.get(p)
+
+        return _S()
+
+    def _ph(alias_map):
+        p = CantoneseSyoPhonemizer()
+        p.set_singer(_mk(alias_map))
+        return p
+
+    def _unpack(res):
+        return [(x.phoneme, x.position) for x in res.phonemes]
+
+    # (1) 双字母声母 gw + 韵母 ong，句末有 `ong -` → 两个音素，韵尾 60 tick
+    r1 = _ph({'gwo': True, 'ong -': True}).process(
+        [Note(lyric='gwong', tone=60, position=0, duration=480)], None, None, None, None, [])
+    check('YUE SYO: gwong 切出 gw + ong，句末插入 `ong -`（position=480-60）',
+          _unpack(r1) == [('gwo', 0), ('ong -', 420)], 'got %r' % _unpack(r1))
+
+    # (2) 句末没有 `xx -` → 回落到韵尾本体，用 length1=120
+    r2 = _ph({'gwo': True, 'o ng': True}).process(
+        [Note(lyric='gwong', tone=60, position=0, duration=480)], None, None, None, None, [])
+    check('YUE SYO: 句末无 `ong -` 时回落到 `o ng`（position=480-120）',
+          _unpack(r2) == [('gwo', 0), ('o ng', 360)], 'got %r' % _unpack(r2))
+
+    # (3) `ng` 特例：不当声母，整条当韵母 → 走"开音节"那段，最终单音素
+    r3 = _ph({'ng': True}).process(
+        [Note(lyric='ng', tone=60, position=0, duration=240)], None, None, None, None, [])
+    check('YUE SYO: ng 不被当成声母（`lyric != "ng"` 那支），最终单音素 ng',
+          _unpack(r3) == [('ng', 0)], 'got %r' % _unpack(r3))
+
+    # (4) 纯歌词、不拆分：声库没有韵尾 → 单音素
+    r4 = _ph({'hello': True}).process(
+        [Note(lyric='hello', tone=60, position=0, duration=480)], None, None, None, None, [])
+    check('YUE SYO: 无韵尾可插时不拆分，返回单音素 hello',
+          _unpack(r4) == [('hello', 0)], 'got %r' % _unpack(r4))
+
+    # (5) ★ 两个查询函数的语义差异：颜色不匹配时
+    #     `_check_oto_until_hit` 回落取第一个（True）；`..._final` 必须颜色匹配（False）
+    p5 = _ph({'X': False})
+    hit_a, oto_a = p5._check_oto_until_hit(['X'], Note(lyric='X', tone=60, duration=100))
+    hit_b, oto_b = p5._check_oto_until_hit_final(['X'], Note(lyric='X', tone=60, duration=100))
+    check('YUE SYO: 颜色不匹配时 checkOtoUntilHit 仍命中（回落第一个）',
+          hit_a is True and oto_a is not None and oto_a.alias == 'X', 'got %r' % ((hit_a, oto_a),))
+    check('YUE SYO: 颜色不匹配时 checkOtoUntilHitFinal 不命中（两种语义确实不同）',
+          hit_b is False and oto_b is None, 'got %r' % ((hit_b, oto_b),))
+
+    # (6) 前邻是入声（-p/-t/-k 结尾）→ 走"词首格式"那支
+    r6 = _ph({'- gwong': True}).process(
+        [Note(lyric='gwong', tone=60, position=0, duration=480)],
+        Note(lyric='ap', tone=60, duration=240), None,
+        Note(lyric='ap', tone=60, duration=240), None, [])
+    check('YUE SYO: 前邻以 p/t/k 结尾 → 先试 `- lyric` 词首格式',
+          _unpack(r6)[0] == ('- gwong', 0), 'got %r' % _unpack(r6))
+
+
+def test_chinese_cvv_plus_phonemizer():
+    """`Plugin.Builtin/ChineseCVVPlusPhonemizer.cs`（374 行）—— 中文 CVV+。
+
+    含 `zhcvvplus.yaml` 配置模型 + 内嵌 `FlowStyleIntegerSequences`。零外部依赖。
+    覆盖：配置默认值与 yaml 键名（含上游拼错的 `Timimg`）、`Consonants` 长度降序、
+    `TailVowels` 合并的重复键语义、`GetLyricVowel` 的剥离顺序与 `yu/y/w` 替换顺序、
+    三段式 oto 查询、以及四条返回路径 + `ERROR` 兜底。
+    """
+    import tempfile
+
+    from singing.openutau import Note, registered
+    from singing.openutau.plugin_builtin import ChineseCVVPlusPhonemizer
+    from singing.openutau.plugin_builtin import chinese_cvv_plus as CP
+
+    cs = open(os.path.join(os.path.dirname(REF), 'OpenUtau.Plugin.Builtin',
+                           'ChineseCVVPlusPhonemizer.cs'), encoding='utf-8-sig').read()
+    cs = cs.replace('\r\n', '\n')
+
+    # ---------------- 源码一致性：元数据 / 继承
+    m = re.search(r'\[Phonemizer\("([^"]*)",\s*"([^"]*)",\s*"([^"]*)"(?:,\s*language\s*:\s*"([^"]*)")?\)\]', cs)
+    check('ZH CVV+: [Phonemizer] 的 name/tag/author/language 与 C# 一致',
+          m is not None and (m.group(1), m.group(2), m.group(3), m.group(4)) == (
+              ChineseCVVPlusPhonemizer.name, ChineseCVVPlusPhonemizer.tag,
+              ChineseCVVPlusPhonemizer.author, ChineseCVVPlusPhonemizer.language),
+          'C#=%r' % (m.groups() if m else None,))
+    check('ZH CVV+: 继承 BaseChinesePhonemizer 且已注册',
+          'class ChineseCVVPlusPhonemizer : BaseChinesePhonemizer' in cs
+          and registered().get('ZH CVV+') is ChineseCVVPlusPhonemizer)
+
+    # ---------------- 源码一致性：配置默认值
+    cfg = CP.ChineseCVVPlusConfigYaml()
+    check('ZH CVV+: VowelTailPrefix 默认 "_"', cfg.vowel_tail_prefix == '_'
+          and 'public string VowelTailPrefix = "_";' in cs)
+    check('ZH CVV+: 三个 bool 默认 false',
+          'public bool UseSingleNasalVowel = false;' in cs
+          and 'public bool UseSingleMultipleVowel = false;' in cs
+          and 'public bool UseRetan = false;' in cs)
+    check('ZH CVV+: SupportedTailBreath 默认 ["-"]',
+          cfg.supported_tail_breath == ['-'] and 'public string[] SupportedTailBreath = { "-" };' in cs)
+    check('ZH CVV+: FastTailVowelTimingTick 默认 100 / SingleVowels...Tick 默认 480' ' ',
+          cfg.fast_tail_vowel_timing_tick == 100 and cfg.single_vowels_reference_timimg_tick == 480)
+    check('★ ZH CVV+: 上游把 Timing 拼成了 Timimg —— yaml 键也照抄',
+          'SingleVowelsReferenceTimimgTick' in cs
+          and 'SingleVowelsReferenceTimimgTick' in CP._YAML_KEY.values())
+
+    def _cs_arr(field):
+        a = re.search(r'public string\[\] %s = \{([^}]*)\}' % field, cs)
+        return re.findall(r'"([^"]*)"', a.group(1)) if a else None
+
+    check('ZH CVV+: ConsonantDict 逐项一致', _cs_arr('ConsonantDict') == cfg.consonant_dict,
+          'C#=%r' % (_cs_arr('ConsonantDict'),))
+    check('ZH CVV+: SingleVowelDict 逐项一致', _cs_arr('SingleVowelDict') == cfg.single_vowel_dict,
+          'C#=%r' % (_cs_arr('SingleVowelDict'),))
+    check('ZH CVV+: NasalVowelDict 逐项一致', _cs_arr('NasalVowelDict') == cfg.nasal_vowel_dict,
+          'C#=%r' % (_cs_arr('NasalVowelDict'),))
+    check('ZH CVV+: MultipleVowelDict 逐项一致',
+          _cs_arr('MultipleVowelDict') == cfg.multiple_vowel_dict,
+          'C#=%r' % (_cs_arr('MultipleVowelDict'),))
+
+    # ---------------- Consonants：长度降序 + 稳定
+    order = cfg.consonants
+    check('ZH CVV+: Consonants 按长度降序（zh/ch/sh 在 z/c/s 之前）',
+          order[0:3] == ['zh', 'ch', 'sh'], 'got %r' % order[:6])
+    check('ZH CVV+: Consonants 等长元素保持原声明次序（稳定排序）',
+          order[3:] == [c for c in cfg.consonant_dict if len(c) == 1], 'got %r' % order[3:])
+    check('ZH CVV+: 源码确实用 OrderByDescending(c => c.Length)',
+          'ConsonantDict.OrderByDescending(c => c.Length).ToArray()' in cs)
+
+    # ---------------- TailVowels：快表在前 + 重复键抛错
+    tv = cfg.tail_vowels
+    check('ZH CVV+: TailVowels = 快表 + 慢表（26 慢 + 5 快 = 31 项）',
+          len(tv) == len(cfg.fast_tail_vowel_dict) + len(cfg.slow_tail_vowel_dict) == 31,
+          'got %d' % len(tv))
+    check('ZH CVV+: TailVowels 的映射值取自各自表（iao→ao / ia→ia）',
+          tv.get('iao') == 'ao' and tv.get('ia') == 'ia')
+    dup = CP.ChineseCVVPlusConfigYaml(fast_tail_vowel_dict={'ai': 'ai'})
+    try:
+        dup.tail_vowels
+        check('★ ZH CVV+: 快慢表键重复时抛错（ToDictionary 语义，不是静默覆盖）', False)
+    except ValueError:
+        check('★ ZH CVV+: 快慢表键重复时抛错（ToDictionary 语义，不是静默覆盖）', True)
+
+    # ---------------- yaml 往返
+    text = CP.config_to_yaml()
+    check('ZH CVV+: 写出的 yaml 用 PascalCase 键（与 C# 序列化一致）',
+          'VowelTailPrefix: _' in text and 'FastTailVowelDict:' in text)
+    check('ZH CVV+: 标量序列写成行内样式（FlowStyleIntegerSequences 的等价物）',
+          re.search(r'SupportedTailBreath: \[.*\]', text) is not None,
+          [ln for ln in text.split('\n') if 'SupportedTailBreath' in ln])
+    back = CP.config_from_yaml(text)
+    check('ZH CVV+: 默认配置 yaml 往返后完全相等',
+          back is not None and all(getattr(back, f) == getattr(cfg, f) for f in CP._YAML_KEY))
+    check('ZH CVV+: 未知键被忽略（IgnoreUnmatchedProperties）',
+          CP.config_from_yaml('VowelTailPrefix: plus\nNoSuchKey: 1\n').vowel_tail_prefix == 'plus')
+    check('ZH CVV+: 空文本 / 非映射 → None（对应反序列化得到 null）',
+          CP.config_from_yaml('') is None and CP.config_from_yaml('- a\n- b\n') is None)
+
+    # ---------------- 替身歌手
+    class _Oto:
+        def __init__(self, alias):
+            self.alias = alias
+
+        def is_color_match(self, color):
+            return True
+
+    def _ph(aliases, cfg_obj=None):
+        otos = dict((a, _Oto(a)) for a in aliases)
+
+        class _S:
+            found = True
+            loaded = True
+            location = ''
+            id = 'cvvplus-test'
+
+            @property
+            def is_loaded(self):
+                return True
+
+            def try_get_mapped_oto(self, p, tone, color=None):
+                return (p in otos), otos.get(p)
+
+        p = ChineseCVVPlusPhonemizer()
+        # 直接注入歌手与配置：不走 set_singer，避免在测试工作目录里写配置文件
+        p.singer = _S()
+        p.config = cfg_obj or CP.ChineseCVVPlusConfigYaml()
+        return p
+
+    def _unpack(res):
+        return [(x.phoneme, x.position) for x in res.phonemes]
+
+    # ---------------- GetLyricVowel
+    p = _ph([])
+    check('ZH CVV+: GetLyricVowel("qian") → ian（qi 剥掉 q 后与后缀 an 合并）',
+          p.get_lyric_vowel('qian') == 'ian', p.get_lyric_vowel('qian'))
+    check('ZH CVV+: GetLyricVowel("zhang") → ang', p.get_lyric_vowel('zhang') == 'ang')
+    check('ZH CVV+: GetLyricVowel("- qian") → "- ian"（前导非字母被保留）',
+          p.get_lyric_vowel('- qian') == '- ian', repr(p.get_lyric_vowel('- qian')))
+    check('ZH CVV+: GetLyricVowel("ian") → ian（只剥前两位，不吃掉韵母）',
+          p.get_lyric_vowel('ian') == 'ian')
+    check('★ ZH CVV+: GetLyricVowel("yi") → ii（y→i 在 yu→v **之后**，故 yu 不受影响）',
+          p.get_lyric_vowel('yi') == 'ii' and p.get_lyric_vowel('yu') == 'v',
+          '%r / %r' % (p.get_lyric_vowel('yi'), p.get_lyric_vowel('yu')))
+    check('ZH CVV+: GetLyricVowel("wu") → uu（w→u）', p.get_lyric_vowel('wu') == 'uu')
+    check('ZH CVV+: GetLyricVowel("---") → 全非字母时返回空串',
+          p.get_lyric_vowel('---') == '')
+    try:
+        p.get_lyric_vowel('')
+        check('ZH CVV+: GetLyricVowel("") 抛错（C# 的 lyric.First() 同理）', False)
+    except IndexError:
+        check('ZH CVV+: GetLyricVowel("") 抛错（C# 的 lyric.First() 同理）', True)
+
+    # ---------------- 三段式 oto 查询
+    p2 = _ph(['a', '- a'])
+    note = Note(lyric='a', tone=60, duration=480)
+    check('ZH CVV+: getOtoAlias 命中时返回 oto 的 alias',
+          p2.get_oto_alias('a', note) == 'a')
+    check('ZH CVV+: getOtoAlias 全落空时返回入参本身',
+          p2.get_oto_alias('zzz', note) == 'zzz')
+    check('ZH CVV+: isExistPhonemeInOto 空串直接 false',
+          p2.is_exist_phoneme_in_oto('', note) is False
+          and p2.is_exist_phoneme_in_oto('a', note) is True)
+
+    # ---------------- Process 四条路径
+    # (1) phoneticHint：按逗号切分 + 位置均分
+    r = _ph(['a', 'b']).process([Note(lyric='x', phonetic_hint='a , b', tone=60, duration=480)],
+                                None, None, None, None, [])
+    check('ZH CVV+: phoneticHint 分支切分 + Trim + 位置均分（480 → 0 / 240）',
+          _unpack(r) == [('a', 0), ('b', 240)], 'got %r' % _unpack(r))
+
+    # (2) 句末换气
+    r = _ph(['ian -']).process([Note(lyric='-', tone=60, duration=480)], None, None,
+                               Note(lyric='qian', tone=60, duration=480), None, [])
+    check('ZH CVV+: 句末换气 → "{前邻韵母} {歌词}" = "ian -"',
+          _unpack(r) == [('ian -', 0)], 'got %r' % _unpack(r))
+
+    # (3) 尾韵母（慢表，位置 = 总长 - 总长/3）
+    r = _ph(['ai', '_ai']).process([Note(lyric='ai', tone=60, duration=480)],
+                                   None, None, None, None, [])
+    check('ZH CVV+: 慢尾韵母 ai → 位置 480-160=320',
+          _unpack(r) == [('ai', 0), ('_ai', 320)], 'got %r' % _unpack(r))
+
+    # (4) 快尾韵母（ia 在快表里 → 位置取 FastTailVowelTimingTick=100）
+    r = _ph(['ia', '_ia']).process([Note(lyric='ia', tone=60, duration=480)],
+                                   None, None, None, None, [])
+    check('ZH CVV+: 快尾韵母 ia → 位置取配置值 100（不是 1/3 处）',
+          _unpack(r) == [('ia', 0), ('_ia', 100)], 'got %r' % _unpack(r))
+
+    # (5) 鼻韵母默认（UseSingleNasalVowel=false → 走第三支）
+    r = _ph(['an', '_an']).process([Note(lyric='an', tone=60, duration=480)],
+                                   None, None, None, None, [])
+    check('ZH CVV+: 鼻韵母默认也插尾韵母（!UseSingleNasalVowel 那一支）',
+          _unpack(r) == [('an', 0), ('_an', 320)], 'got %r' % _unpack(r))
+
+    # (6) ★ UseSingleNasalVowel 的边界：条件是 `totalDuration <= tick`
+    #     —— 只有**长于** 480 的音符才走"长鼻韵母不拆分"；恰好 480 仍然要插尾韵母
+    cfg_single = CP.ChineseCVVPlusConfigYaml(use_single_nasal_vowel=True)
+    r_long = _ph(['an'], cfg_single).process([Note(lyric='an', tone=60, duration=960)],
+                                             None, None, None, None, [])
+    check('ZH CVV+: UseSingleNasalVowel=true 且音符**长于** 480 → 不插尾韵母（单音素）',
+          _unpack(r_long) == [('an', 0)], 'got %r' % _unpack(r_long))
+    r_edge = _ph(['an', '_an'], cfg_single).process([Note(lyric='an', tone=60, duration=480)],
+                                                    None, None, None, None, [])
+    check('★ ZH CVV+: 边界是 `<=` —— 恰好 480 仍然插尾韵母',
+          _unpack(r_edge) == [('an', 0), ('_an', 320)], 'got %r' % _unpack(r_edge))
+    check('ZH CVV+: 源码里确实是 totalDuration <= SingleVowelsReferenceTimimgTick',
+          'totalDuration <= Config.SingleVowelsReferenceTimimgTick' in cs)
+
+    # (7) 不在尾韵母表里 → 单音素
+    r = _ph(['v']).process([Note(lyric='v', tone=60, duration=480)], None, None, None, None, [])
+    check('ZH CVV+: 不在 TailVowels 里的韵母 → 单音素', _unpack(r) == [('v', 0)],
+          'got %r' % _unpack(r))
+
+    # (8) ★ 任何异常 → ERROR 音素
+    r = _ph(['a']).process([Note(lyric='', tone=60, duration=480)], None, None, None, None, [])
+    check('★ ZH CVV+: 歌词为空 → 外层 catch 变成单音素 "ERROR"',
+          _unpack(r) == [('ERROR', 0)], 'got %r' % _unpack(r))
+    p_noconfig = _ph([])
+    p_noconfig.config = None                       # 对应 C# 未 SetSinger 时的 NRE
+    r = p_noconfig.process([Note(lyric='a', tone=60, duration=480)], None, None, None, None, [])
+    check('★ ZH CVV+: config 为 None（未 SetSinger）→ 也被兜成 "ERROR"',
+          _unpack(r) == [('ERROR', 0)], 'got %r' % _unpack(r))
+
+    # ---------------- SetSinger：缺配置时写一份默认的
+    tmp = tempfile.mkdtemp(prefix='fufumidi-cvvplus-')
+
+    class _SingerWithDir:
+        found = True
+        loaded = True
+        id = 'cvvplus-write'
+
+        def __init__(self, loc):
+            self.location = loc
+
+    p3 = ChineseCVVPlusPhonemizer()
+    p3.set_singer(_SingerWithDir(tmp))
+    written = os.path.join(tmp, 'zhcvvplus.yaml')
+    check('ZH CVV+: SetSinger 在缺配置时写出 zhcvvplus.yaml',
+          os.path.isfile(written))
+    if os.path.isfile(written):
+        reread = CP.config_from_yaml(open(written, encoding='utf-8').read())
+        check('ZH CVV+: 写出的配置读回来与默认值一致（可被 OpenUTAU 直接读）',
+              reread is not None and reread.vowel_tail_prefix == '_'
+              and reread.fast_tail_vowel_timing_tick == 100)
+    check('ZH CVV+: 写完后 config 已就绪（非 None）', p3.config is not None)
+    check('ZH CVV+: SetSinger(null) 直接返回、不覆盖已有 Config',
+          (lambda: (p3.set_singer(None), p3.config is not None)[1])())
+    try:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+    except Exception:                              # noqa: BLE001
+        pass
+
+
+def test_base64_util():
+    """`Util/Base64.cs`（77 行）—— UTAU 的 12 位音高编码（resampler 命令行的最后一个参数）。"""
+    from singing.openutau import base64_util as B
+
+    cs = _read('Util/Base64.cs')
+    if cs is None:
+        print('  SKIP 找不到 Util/Base64.cs')
+        return
+
+    m = re.search(r'intToBase64 = "([^"]*)"', cs)
+    check('Base64: intToBase64 字母表逐字符一致（64 项，不是标准 base64）',
+          m is not None and m.group(1) == B.INT_TO_BASE64, 'C#=%r' % (m.group(1) if m else None))
+    check('Base64: 字母表长度 64', len(B.INT_TO_BASE64) == 64)
+    check('Base64: 源码是 12 位两字符编码（>>6 & 0x3F / & 0x3F）',
+          'intToBase64[(data >> 6) & 0x003F]' in cs and 'intToBase64[data & 0x003F]' in cs)
+    check('Base64: 负数处理是 `+= 4096`（不是按位与）', 'data += 4096;' in cs)
+
+    # 单值边界
+    check('Base64: encode_int12(0) == "AA"', B.encode_int12(0) == 'AA', B.encode_int12(0))
+    check('Base64: encode_int12(-1) == "//"（-1+4096=4095，两位都是 63）',
+          B.encode_int12(-1) == '//', B.encode_int12(-1))
+    check('Base64: encode_int12(1) == "AB"', B.encode_int12(1) == 'AB', B.encode_int12(1))
+    check('Base64: encode_int12(4095) == "//"（与 -1 同码）',
+          B.encode_int12(4095) == '//', B.encode_int12(4095))
+    check('Base64: encode_int12(64) == "BA"（高 6 位进位）',
+          B.encode_int12(64) == 'BA', B.encode_int12(64))
+
+    # 行程压缩
+    check('Base64: 全不重复 → 原样拼接', B.encode_int12_list([0, 1, 2]) == 'AAABAC',
+          B.encode_int12_list([0, 1, 2]))
+    check('Base64: [0,0,0] → "AA#2#"（首项 + 两次重复）',
+          B.encode_int12_list([0, 0, 0]) == 'AA#2#', B.encode_int12_list([0, 0, 0]))
+    check('Base64: [0,1,1,2] → "AAAB#1#AC"（中间段重复）',
+          B.encode_int12_list([0, 1, 1, 2]) == 'AAAB#1#AC', B.encode_int12_list([0, 1, 1, 2]))
+    check('Base64: 结尾仍在重复要再补一次 `#N#`',
+          B.encode_int12_list([0, 1, 1]) == 'AAAB#1#', B.encode_int12_list([0, 1, 1]))
+    check('Base64: 空输入 → 空串', B.encode_int12_list([]) == '')
+
+
+def test_os_util():
+    """`Util/OS.cs`（119 行）—— 平台探测与"打开文件夹/网页"。"""
+    from singing.openutau import native_lib as NL
+    from singing.openutau import os_util as O
+
+    cs = _read('Util/OS.cs')
+    if cs is None:
+        print('  SKIP 找不到 Util/OS.cs')
+        return
+
+    check('OS: 三个平台判定互斥（当前机器恰好命中一个）',
+          sum([O.is_windows(), O.is_macos(), O.is_linux()]) == 1,
+          'win=%s mac=%s linux=%s' % (O.is_windows(), O.is_macos(), O.is_linux()))
+    check('OS: linuxOpeners 与 C# 顺序一致',
+          re.search(r'linuxOpeners = \{([^}]*)\}', cs).group(1).count('"') == 8
+          and list(O.LINUX_OPENERS) == ['xdg-open', 'mimeopen', 'gnome-open', 'open'])
+
+    rid = O.get_updater_rid()
+    check('OS: GetUpdaterRid 给出平台 RID', rid in ('win-x64', 'win-arm64', 'win-x86',
+                                                   'osx-x64', 'osx-arm64',
+                                                   'linux-x64', 'linux-arm64'), rid)
+    check('OS: 更新器 RID 与原生库 RID 在小写平台上一致（macOS 例外，上游只有通用 osx）',
+          rid.startswith('win') == NL.platform_rid().startswith('win'))
+
+    p = O.where_is('definitely-not-a-real-binary-xyz')
+    check('OS: WhereIs 找不到返回 None（不抛）', p is None)
+    found = O.where_is('cmd.exe') if O.is_windows() else O.where_is('sh')
+    check('OS: WhereIs 命中时返回绝对路径', found is None or os.path.isabs(found), str(found))
+
+    check('OS: GetWrappedPath 在 Windows 上不加引号',
+          (not O.is_windows()) or O.get_wrapped_path('a b') == 'a b')
+    check('OS: 非 Windows 上加引号（当前平台对应断言）',
+          O.is_windows() or O.get_wrapped_path('a b') == '"a b"')
+    check('OS: GetOpener 在 Windows 上是 explorer.exe / macOS 是 open',
+          (not O.is_windows() and not O.is_macos()) or O.get_opener() in ('explorer.exe', 'open'),
+          O.get_opener())
+
+
+def test_process_runner():
+    """`Util/ProcessRunner.cs`（95 行）—— 外部工具进程执行（真机跑）。"""
+    import logging
+    import sys as _sys
+
+    from singing.openutau import process_runner as P
+
+    cs = _read('Util/ProcessRunner.cs')
+    if cs is None:
+        print('  SKIP 找不到 Util/ProcessRunner.cs')
+        return
+
+    check('ProcessRunner: 源码里非零退出码**不抛**（只 Append Exit code）',
+          'output.Append("Exit code ").Append(proc.ExitCode);' in cs)
+    check('ProcessRunner: 超时会杀整棵进程树并追加 Killed due to timeout.',
+          'Kill(entireProcessTree: true)' in cs and 'Killed due to timeout.' in cs)
+    check('ProcessRunner: 环境里强制 LANG=ja_JP.utf8', '"LANG", "ja_JP.utf8"' in cs)
+    check('ProcessRunner: exe 不存在时抛 FileNotFoundException',
+          'throw new FileNotFoundException' in cs)
+
+    log = logging.getLogger('openutau.test')
+
+    # exe 不存在 → 抛
+    try:
+        P.run('X:/definitely-not-here/none.exe', '', log)
+        check('ProcessRunner: exe 不存在时抛 FileNotFoundError', False)
+    except FileNotFoundError:
+        check('ProcessRunner: exe 不存在时抛 FileNotFoundError', True)
+
+    exe = _sys.executable
+    # 正常退出
+    out = P.run(exe, '-c "print(\'hello-from-runner\')"', log, timeout_ms=60000)
+    check('ProcessRunner: stdout 被收进返回文本', 'hello-from-runner' in out, repr(out[:200]))
+    check('ProcessRunner: 正常退出时末尾是 "Exit code 0"', out.rstrip('\n').endswith('Exit code 0'),
+          repr(out[-40:]))
+
+    # 非零退出码：**不抛**，把码写进文本
+    out2 = P.run(exe, '-c "import sys; sys.exit(3)"', log, timeout_ms=60000)
+    check('★ ProcessRunner: 非零退出码不抛异常，只写 "Exit code 3"',
+          out2.rstrip('\n').endswith('Exit code 3'), repr(out2[-40:]))
+
+    # stderr 也进返回文本
+    out3 = P.run(exe, '-c "import sys; sys.stderr.write(\'err-line\\n\')"', log, timeout_ms=60000)
+    check('ProcessRunner: stderr 的行**也**进返回文本', 'err-line' in out3, repr(out3[:200]))
+
+    # 超时 → 杀掉
+    t0 = __import__('time').time()
+    out4 = P.run(exe, '-c "import time; time.sleep(30)"', log, timeout_ms=800)
+    elapsed = __import__('time').time() - t0
+    check('★ ProcessRunner: 超时被中断且返回 Killed due to timeout.',
+          'Killed due to timeout.' in out4, repr(out4[-60:]))
+    check('ProcessRunner: 超时后**没有**等满 30 秒（真被杀了）', elapsed < 15, '%.1fs' % elapsed)
+
+
+class _FakeEnvPt:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+
+class _FakePhone:
+    def __init__(self, **kw):
+        self.duration = 480
+        self.adjusted_tempo = 120.0
+        self.duration_ms = 250.0
+        self.direct = False
+        self.envelope = [_FakeEnvPt(0.0, 0.0), _FakeEnvPt(20.0, 0.0), _FakeEnvPt(100.0, 100.0),
+                         _FakeEnvPt(200.0, 100.0), _FakeEnvPt(250.0, 0.0)]
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+
+class _FakeResampler:
+    """`IResampler` 的最小替身（只带 ExeWavtool / UnixWavtool 要读的两项）。"""
+
+    def __init__(self, file_path='r.exe', no_wrapper_script=False):
+        self.file_path = file_path
+        self.no_wrapper_script = no_wrapper_script
+
+
+class _FakeItem:
+    """`ResamplerItem` 的最小替身（只带 ExeResampler / UnixWavtool / ExeWavtool 要读的字段）。"""
+
+    def __init__(self, **kw):
+        self.input_temp = 'in.wav'
+        self.output_file = 'out.wav'
+        self.tone = 60
+        self.velocity = 100
+        self.volume = 100
+        self.modulation = 0
+        self.offset = 0.0
+        self.preutter = 0.0
+        self.dur_required = 500.0
+        self.consonant = 0.0
+        self.cutoff = 0.0
+        self.overlap = 0.0
+        self.skip_over = 10.0
+        self.dur_correction = 0.0
+        self.tempo = 120.0
+        self.pitches = [0, 0, 0]
+        self.phone = _FakePhone()
+        self.resampler = _FakeResampler()
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+    def get_flags_string(self):
+        return 'g0B0'
+
+
+def test_exe_resampler():
+    """`Classic/ExeResampler.cs`（141 行）—— 外部 resampler 的调用与命令行契约。"""
+    from singing.openutau import base64_util as B
+    from singing.openutau import music_math as MM
+    from singing.openutau import process_runner as P
+    from singing.openutau.classic import ExeResampler
+    from singing.openutau.singer import Preferences
+
+    cs = _read('Classic/ExeResampler.cs')
+    if cs is None:
+        print('  SKIP 找不到 Classic/ExeResampler.cs')
+        return
+
+    check('ExeResampler: NoWrapperScript = ext != .exe && ext != .bat（原生工具为真）',
+          'NoWrapperScript = ext != ".exe" && ext != ".bat";' in cs)
+    check('ExeResampler: useWine = winePath 非空 && !NoWrapperScript',
+          '!string.IsNullOrEmpty(winePath) && !NoWrapperScript' in cs)
+    check('ExeResampler: moreconfig 那一行是 "resampler-compatibility on"',
+          '"resampler-compatibility on"' in cs)
+    check('ExeResampler: 没产出输出文件时抛 ResamplerFailedException',
+          'throw new Core.Render.ResamplerFailedException' in cs)
+    check('ExeResampler: 命令行用 Base64EncodeInt12(pitches) 收尾',
+          'Base64.Base64EncodeInt12(args.pitches)' in cs)
+
+    # ---- 文件不存在：字段仍算出（见 docstring 第 1/2 条）
+    r = ExeResampler('X:/nope/resample.exe', 'X:/nope')
+    check('★ ExeResampler: 文件不存在时 file_path 为 None、is_legal_plugin 为假，'
+          '但 no_wrapper_script 仍按扩展名算出',
+          r.file_path is None and r.is_legal_plugin is False and r.no_wrapper_script is False)
+    r2 = ExeResampler('X:/nope/resample.sh', 'X:/nope')
+    check('★ ExeResampler: .sh → NoWrapperScript 为真（"不是 Windows 可执行文件"）',
+          r2.no_wrapper_script is True)
+    check('ExeResampler: 非合法插件时 do_resampler_returns_file 直接返回 None',
+          r.do_resampler_returns_file(_FakeItem(), __import__('logging').getLogger('x')) is None)
+
+    # ---- 命令行契约（拦下 process_runner，只看参数串）
+    import logging
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix='fufumidi-exeres-')
+    exe = os.path.join(tmp, 'resample.exe')
+    open(exe, 'wb').close()
+    rr = ExeResampler(exe, tmp)
+    check('ExeResampler: 存在时 is_legal_plugin 为真且名称是相对路径',
+          rr.is_legal_plugin is True and str(rr) == 'resample.exe', str(rr))
+
+    captured = {}
+
+    def _fake_run(file, args, logger, work_dir=None, timeout_ms=60000):
+        captured['file'] = file
+        captured['args'] = args
+        with open(captured_item.output_file, 'w') as f:
+            f.write('x')
+        return 'ok'
+
+    old_run = P.run
+    import singing.openutau.classic.exe_resampler as ER
+    old_er = ER.run_process
+    ER.run_process = _fake_run
+    try:
+        captured_item = _FakeItem(output_file=os.path.join(tmp, 'out.wav'))
+        got = rr.do_resampler_returns_file(captured_item, logging.getLogger('x'))
+        check('ExeResampler: 产出存在时返回输出路径', got == captured_item.output_file)
+
+        m = re.match(
+            r'^"([^"]*)" "([^"]*)" (\S+) (\d+) "([^"]*)" (\S+) (\S+) (\S+) (\S+) (\d+) (\d+) !(\S+) (\S+)$',
+            captured['args'])
+        check('ExeResampler: 命令行形态 = "in" "out" ToneName velocity "flags" '
+              'offset durReq consonant cutoff volume modulation !tempo base64Pitches',
+              m is not None, repr(captured['args']))
+        if m:
+            check('ExeResampler: 前两个参数是带引号的输入/输出路径',
+                  m.group(1) == 'in.wav' and m.group(2) == captured_item.output_file)
+            check('ExeResampler: 第三个参数是音名（MusicMath.GetToneName(tone)）',
+                  m.group(3) == MM.MusicMath.get_tone_name(60), m.group(3))
+            check('ExeResampler: flags 是带引号的 GetFlagsString()', m.group(5) == 'g0B0')
+            check('ExeResampler: 倒数第二项是 !tempo', m.group(12) == '120', m.group(12))
+            check('ExeResampler: 最后一项是 pitches 的 12 位编码',
+                  m.group(13) == B.encode_int12_list([0, 0, 0]), m.group(13))
+    finally:
+        ER.run_process = old_er
+        P.run = old_run
+
+    # ---- moreconfig 的三种情形
+    more = os.path.join(tmp, 'moreconfig.txt')
+    rr.fix_more_config(more)
+    check('ExeResampler.fixMoreConfig: 文件不存在 → 创建并追加 compat 行',
+          os.path.isfile(more) and open(more).read().strip() == 'resampler-compatibility on')
+    with open(more, 'w') as f:
+        f.write('resampler-compatibility off\nother=1\n')
+    rr.fix_more_config(more)
+    check('ExeResampler.fixMoreConfig: 已有错值 → 就地改成 on 且保留其它行',
+          open(more).read() == 'resampler-compatibility on\nother=1\n')
+    with open(more, 'w') as f:
+        f.write('resampler-compatibility on\n')
+    rr.fix_more_config(more)
+    check('ExeResampler.fixMoreConfig: 已经正确 → 不动（内容与 mtime 都不该变）',
+          open(more).read() == 'resampler-compatibility on\n')
+
+    # ---- wine 语义
+    old_wine = Preferences.wine_path
+    try:
+        Preferences.wine_path = '/usr/bin/wine'
+        r_exe = ExeResampler(exe, tmp)
+        r_sh = os.path.join(tmp, 'resample.sh')
+        open(r_sh, 'w').close()
+        r_sh_obj = ExeResampler(r_sh, tmp)
+        check('★ ExeResampler: 配了 wine 时 .exe 走 wine、原生脚本**不走**',
+              r_exe._use_wine is True and r_sh_obj._use_wine is False)
+    finally:
+        Preferences.wine_path = old_wine
+
+    # ---- 清单缺失 → 空清单 → supports_flag 一律认
+    check('ExeResampler: 清单缺失时 supports_flag 一律为真（expressionFilter 默认 false）',
+          rr.supports_flag('g') is True and rr.manifest is not None)
+
+    import shutil
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_unix_wavtool():
+    """`Classic/UnixWavtool.cs`（110 行）—— Unix 上的外部 wavtool。"""
+    from singing.openutau.classic import UnixWavtool
+    from singing.openutau.classic.voicebank_loader import cs_double
+
+    cs = _read('Classic/UnixWavtool.cs')
+    if cs is None:
+        print('  SKIP 找不到 Classic/UnixWavtool.cs')
+        return
+
+    check('UnixWavtool: 每条 item **单独**跑一次 wavtool（与 ExeWavtool 的"一个 bat 跑完"不同）',
+          cs.count('ProcessRunner.Run(filePath, parameters') == 1)
+    check('UnixWavtool: 调用前 File.Delete(tempPath)',
+          'File.Delete(tempPath);' in cs)
+    check('UnixWavtool: 只有在输出文件不存在时才补跑 resampler（且在同一把缓存锁下）',
+          'if(!File.Exists(item.outputFile)){' in cs
+          and 'lock (Renderers.GetCacheLock(item.outputFile))' in cs)
+    check('UnixWavtool: whd + dat 按序合并（UTAU 两段式容器）',
+          'whdFile, datFile' in cs)
+    check('★ UnixWavtool: 信封里有**两个恒 0 占位**（env0.x-env0.x、env4.x-env4.x）',
+          'env[0].X - env[0].X' in cs and 'env[4].X - env[4].X' in cs)
+
+    w = UnixWavtool('/tmp/tool.sh', '/tmp')
+    check('UnixWavtool: __str__ 是相对路径', str(w) == 'tool.sh', str(w))
+
+    # ---- 信封（11 个数，两个恒 0）
+    env = w.get_envelope(_FakeItem())
+    check('UnixWavtool.getEnvelope: 11 个数且首/第九个恒为 0',
+          env.split(' ') == ['0', '20', '50', '0', '0', '100', '0', '0', '0', '80', '100'],
+          env)
+
+    # ---- 参数（非 direct）
+    p1 = w.generate_parameters(_FakeItem(), 'temp.wav')
+    expect_env = '0 20 50 0 0 100 0 0 0 80 100'
+    check('UnixWavtool.generateParameters: 非 direct → "temp" "out" skipOver dur env',
+          p1 == '"temp.wav" "out.wav" 10 480@120+0 %s' % expect_env, p1)
+
+    # ---- 参数（direct：用 durationMs 的 F1）
+    p2 = w.generate_parameters(_FakeItem(phone=_FakePhone(direct=True)), 'temp.wav')
+    check('UnixWavtool.generateParameters: direct → 用 durationMs（F1 一位小数）',
+          p2 == '"temp.wav" "out.wav" 0 250.0 %s' % expect_env, p2)
+
+    # ---- durCorrection 的符号与格式（C# 是无格式 double.ToString()）
+    p3 = w.generate_parameters(_FakeItem(dur_correction=-5.5), 'temp.wav')
+    check('★ UnixWavtool: durCorrection 负数时**不带**加号，且 0.0 写成 "0" 而不是 "0.0"',
+          '480@120-5.5' in p3 and '480@120+0' in p1, p3)
+    check('UnixWavtool: 与 cs_double 的格式化一致（单一实现）',
+          cs_double(0.0) == '0' and cs_double(-5.5) == '-5.5')
+
+    # ---- 取消
+    import threading
+    ev = threading.Event()
+    ev.set()
+    check('UnixWavtool: 已取消时直接返回 None（不碰文件系统）',
+          w.concatenate([], 'X:/definitely/not/here.wav', ev) is None)
+
+
+def test_exe_wavtool():
+    """`Classic/ExeWavtool.cs`（224 行）—— Windows 外部 wavtool（生成 `temp.bat`）。"""
+    from singing.openutau.classic import ExeWavtool
+    from singing.openutau.classic import exe_wavtool as EW
+    from singing.openutau import Wave
+    from singing.openutau.singer import Preferences
+
+    cs = _read('Classic/ExeWavtool.cs')
+    if cs is None:
+        print('  SKIP 找不到 Classic/ExeWavtool.cs')
+        return
+
+    check('ExeWavtool: useWine = **仅** !IsNullOrEmpty(winePath)（与 ExeResampler 的不对称）',
+          'useWine = !string.IsNullOrEmpty(winePath);' in cs
+          and '!string.IsNullOrEmpty(winePath) && !NoWrapperScript' not in cs)
+    check('★ ExeWavtool: 只有 NoWrapperScript 的 resampler 在这里先直接跑',
+          'if(item.resampler.NoWrapperScript && !cancellation.IsCancellationRequested '
+          '&& !File.Exists(item.outputFile)){' in cs)
+    check('★ ExeWavtool: samples 写死 44100（与声库采样率无关）',
+          '@set samples={44100}' in cs or 'samples={' in cs and '44100' in cs)
+    check('★ ExeWavtool: EscapeFlags 的正则字符类后面**还跟着一个 `.`**（删特殊字符+后一个字符）',
+          r'@"[&/\\|<>\""' in cs and r'\n\t]."' in cs)
+    check('ExeWavtool: 后缀表 24 项且顺序一致',
+          len(EW._FLAG_EXTENSIONS) == 24 and EW._FLAG_EXTENSIONS[0] == '.exe'
+          and EW._FLAG_EXTENSIONS[-1] == '.msh2xml', str(EW._FLAG_EXTENSIONS))
+    check('ExeWavtool: CheckPermissions 是空实现（Windows 无执行位）',
+          re.search(r'public void CheckPermissions\(\) \{ \}', cs) is not None)
+    check('ExeWavtool: 进度条宽度 40', 'const int kWidth = 40;' in cs)
+
+    # ---------------- escape_flags（含那个尾随 `.` 的行为）
+    E = EW.escape_flags
+    check('EscapeFlags: 普通 flags 原样保留', E('g0B0') == 'g0B0', E('g0B0'))
+    check('★ EscapeFlags: "abc&def" → "abcef"（& 与紧随的 d 一起被删）',
+          E('abc&def') == 'abcef', E('abc&def'))
+    check('★ EscapeFlags: 末尾的特殊字符**删不掉**（后面没有字符给 `.` 匹配）',
+          E('ok&') == 'ok&', E('ok&'))
+    check('EscapeFlags: "a|b" → "a"、"a#b" → "a"（特殊字符+后一个字符）',
+          E('a|b') == 'a' and E('a#b') == 'a', '%r / %r' % (E('a|b'), E('a#b')))
+    check('EscapeFlags: 未知后缀 ".txt" 不删', E('x.txt') == 'x.txt', E('x.txt'))
+    check('EscapeFlags: ".exe" 后缀被剥掉（大小写不敏感）',
+          E('x.exe') == 'x' and E('x.EXE') == 'x', '%r / %r' % (E('x.exe'), E('x.EXE')))
+    check('EscapeFlags: "-foo.exe" → "-foo"（连字符不在字符类里，保留）',
+          E('-foo.exe') == '-foo', E('-foo.exe'))
+    check('★ EscapeFlags: "https://evil" → "httpsvil" —— 正则会先吃掉 "//" 再吃掉 ":e"，'
+          '所以 http(s) 前缀那段其实够不到',
+          E('https://evil') == 'httpsvil', E('https://evil'))
+
+    # ---------------- convert_to_windows_path
+    check('ConvertToWindowsPath: 绝对路径加 Z: 前缀并把 / 换成 \\',
+          EW.convert_to_windows_path('/a/b') == 'Z:\\a\\b',
+          repr(EW.convert_to_windows_path('/a/b')))
+    check('ConvertToWindowsPath: 相对路径不加前缀',
+          EW.convert_to_windows_path('a/b') == 'a\\b',
+          repr(EW.convert_to_windows_path('a/b')))
+    check('★ ConvertToWindowsPath: 删掉"反斜杠+空格"里的反斜杠',
+          EW.convert_to_windows_path('a\\ b') == 'a b',
+          repr(EW.convert_to_windows_path('a\\ b')))
+    try:
+        EW.convert_to_windows_path('')
+        check('ConvertToWindowsPath: 空串抛 IndexError（C# 同样在 path[0] 上抛）', False)
+    except IndexError:
+        check('ConvertToWindowsPath: 空串抛 IndexError（C# 同样在 path[0] 上抛）', True)
+
+    # ---------------- 进度条
+    check('MakeProgressBar: (1,4) → 10 个 # + 30 个 - + (1/4)',
+          ExeWavtool.make_progress_bar(1, 4) == '#' * 10 + '-' * 30 + '(1/4)',
+          ExeWavtool.make_progress_bar(1, 4))
+
+    # ---------------- bat 内容
+    w = ExeWavtool('/cache/tool.exe', '/cache')
+    check('ExeWavtool: __str__ 是相对路径', str(w) == 'tool.exe', str(w))
+    check('ExeWavtool: 信封与 UnixWavtool 同形（11 个数，两个恒 0）',
+          w.get_envelope(_FakeItem()) == '0 20 50 0 0 100 0 0 0 80 100',
+          w.get_envelope(_FakeItem()))
+    check('ExeWavtool: CheckPermissions 是空实现（不抛）', w.check_permissions() is None)
+
+    import io as _io
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix='fufumidi-exewt-')
+    buf = _io.StringIO()
+
+    class _W(_io.StringIO):
+        def write(self, s):                                  # 用 \n 归一，便于断言
+            return super().write(s.replace('\r\n', '\n'))
+
+    buf = _W()
+    w.write_set_up(buf, [_FakeItem()], os.path.join(tmp, 'out.wav'), tmp)
+    setup = buf.getvalue()
+    check('WriteSetUp: tempo 走 cs_double（120.0 → "120" 而不是 "120.0"）',
+          '@set tempo=120\n' in setup, setup.split('\n')[2])
+    check('WriteSetUp: samples 写死 44100', '@set samples=44100\n' in setup)
+    check('WriteSetUp: output 用的是**相对** cachePath 的路径',
+          '@set output=out.wav\n' in setup, [l for l in setup.split('\n') if 'output' in l])
+    check('WriteSetUp: flag 是空字符串（globalFlags 恒空）', '@set flag=""\n' in setup)
+    check('WriteSetUp: 收尾是 @del "%output%" 与 @mkdir "%cachedir%"',
+          '@del "%output%" 2>nul\n' in setup and '@mkdir "%cachedir%" 2>nul\n' in setup)
+
+    buf = _W()
+    w.write_item(buf, _FakeItem(), 0, 2, tmp)
+    item_txt = buf.getvalue()
+    check('WriteItem: params 用 "!tempo base64pitches" 形态',
+          '@set params=100 0 !120 AA#2#\n' in item_txt, item_txt)
+    check('WriteItem: temp 是 "%cachedir%\\<相对输出>"',
+          '@set temp="%cachedir%\\out.wav"\n' in item_txt, item_txt)
+    check('WriteItem: 非 direct 走 @call %helper% 且参数以 index 收尾',
+          '@call %helper% "%oto%\\in.wav" ' in item_txt and item_txt.rstrip('\n').endswith('0'),
+          item_txt.rstrip('\n').split('\n')[-1])
+    check('WriteItem: dur 的 durCorrection 为 0.0 时写成 "+0"',
+          '480@120+0' in item_txt, item_txt)
+
+    buf = _W()
+    w.write_item(buf, _FakeItem(phone=_FakePhone(direct=True)), 0, 1, tmp)
+    direct_txt = buf.getvalue()
+    check('WriteItem: direct 走 @"%tool%" 且用 durationMs（F1）',
+          '@"%tool%" "%output%" "%oto%\\in.wav" 0 250.0 %env%' in direct_txt, direct_txt)
+
+    buf = _W()
+    ExeWavtool.write_tear_down(buf)
+    check('WriteTearDown: whd/dat 两段式 copy /Y 合并',
+          'copy /Y "%output%.whd" /B + "%output%.dat" /B "%output%"' in buf.getvalue()
+          and buf.getvalue().rstrip('\n').endswith(':E'))
+
+    check('WriteHelper: temp_helper.bat 的四行与 C# 一致',
+          ExeWavtool._helper_lines() == [
+              '@if exist %temp% goto A',
+              '@"%resamp%" %1 %temp% %2 %vel% %flag% %5 %6 %7 %8 %params%',
+              ':A',
+              '@"%tool%" "%output%" %temp% %stp% %3 %env%',
+          ])
+
+    # ---------------- concatenate：真生成 bat 并核对内容（拦下真进程）
+    import logging
+    import singing.openutau.classic.exe_wavtool as _ew
+    from singing.openutau.classic import resampler_item as _ri
+
+    ran = {}
+
+    def _fake_run(file, args, logger, work_dir=None, timeout_ms=60000):
+        ran['file'] = file
+        ran['args'] = args
+        ran['bat'] = open(os.path.join(tmp, 'temp.bat'), encoding='utf-8').read()
+        # 写一个**真实合法**的 wav：这样后面的解码也是真跑的
+        Wave.write_mono16_wav(os.path.join(tmp, 'out.wav'), [0.25] * 441)
+        return ''
+
+    class _Host:
+        cache_path = tmp
+
+    item = _FakeItem(resampler=_FakeResampler('/cache/r.exe'))
+    old_host, old_run = _ri.host, _ew.run_process
+    _ri.host, _ew.run_process = _Host(), _fake_run
+    try:
+        _ri.host.cache_path = tmp
+        res = w.concatenate([item], os.path.join(tmp, 'out.wav'))
+        check('ExeWavtool.concatenate: 生成了 temp.bat 与 temp_helper.bat',
+              os.path.isfile(os.path.join(tmp, 'temp.bat'))
+              and os.path.isfile(os.path.join(tmp, 'temp_helper.bat')))
+        check('ExeWavtool.concatenate: bat 里有 setUp / item / tearDown 三段',
+              '@set tempo=' in ran.get('bat', '') and '@call %helper%' in ran.get('bat', '')
+              and ':E' in ran.get('bat', ''))
+        check('ExeWavtool.concatenate: 非 wine 时跑的是 bat 本身（args 为空）',
+              ran.get('file') == os.path.join(tmp, 'temp.bat') and ran.get('args') == '',
+              '%r / %r' % (ran.get('file'), ran.get('args')))
+        check('ExeWavtool.concatenate: 输出存在时解码出样本（真读 wav）',
+              isinstance(res, list) and len(res) == 441,
+              'len=%s' % (len(res) if isinstance(res, list) else res))
+    finally:
+        _ri.host, _ew.run_process = old_host, old_run
+
+    # wine 分支
+    old_wine = Preferences.wine_path
+    try:
+        Preferences.wine_path = '/usr/bin/wine'
+        w2 = ExeWavtool('/cache/tool.exe', '/cache')
+        check('★ ExeWavtool: 配了 wine 时 useWine 为真（**不看** NoWrapperScript）',
+              w2._use_wine is True)
+    finally:
+        Preferences.wine_path = old_wine
+
+    import shutil
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_tools_manager():
+    """`Classic/ToolsManager.cs`（140 行）—— 内置工具 + 外部工具扫描与按名取用。"""
+    import tempfile
+    import threading as _th
+
+    from singing.openutau.classic import ExeResampler, ExeWavtool, SharpWavtool, ToolsManager
+    from singing.openutau.classic.worldline_resampler import WorldlineResampler
+
+    cs = _read('Classic/ToolsManager.cs')
+    if cs is None:
+        print('  SKIP 找不到 Classic/ToolsManager.cs')
+        return
+
+    check('ToolsManager: GetResampler 名对不上回落 WorldlineResampler.name',
+          'resamplersMap[WorldlineResampler.name]' in cs)
+    check('ToolsManager: GetWavtool 名对不上回落 SharpWavtool.nameConvergence',
+          'wavtoolsMap[SharpWavtool.nameConvergence]' in cs)
+    check('★ ToolsManager: 扫描异常时 Clear()（连内置项一起清掉）—— 两张表各有 2 处 Clear'
+          '（开头一次 + catch 里一次）',
+          cs.count('resamplers.Clear();') == 2 and cs.count('wavtools.Clear();') == 2)
+    check('ToolsManager: 内置项先入表（Worldline / SharpWavtool×2）',
+          'resamplers.Add(new WorldlineResampler());' in cs
+          and 'wavtools.Add(new SharpWavtool(true));' in cs
+          and 'wavtools.Add(new SharpWavtool(false));' in cs)
+    check('ToolsManager: 分派判据 (Win||Wine)&&(.exe|.bat)',
+          '(OS.IsWindows() || !string.IsNullOrEmpty(Preferences.Default.WinePath)) '
+          '&& (ext == ".exe" || ext == ".bat")' in cs)
+
+    # ---------------- 未 Initialize 的空表
+    tm0 = ToolsManager()
+    check('ToolsManager: 新实例未 Initialize 时两张表都是空', tm0.resamplers == [] and tm0.wavtools == [])
+
+    tmp = tempfile.mkdtemp(prefix='fufumidi-tm-')
+    data = os.path.join(tmp, 'Data')
+
+    # ---------------- Initialize（配好 DataPath）
+    from singing.openutau.classic import ClassicHost, resampler_item as _ri
+    old_host = _ri.host
+    old_default = __import__('singing.openutau.classic.tools_manager', fromlist=['x'])._default
+    # 用**真 ClassicHost**：这样 resamplers_path / wavtools_path 会走
+    # 与 `PathManager.Inst` 一致的推导（DataPath/Resamplers 等），而不是空串
+    h = ClassicHost()
+    h.data_path = data
+    h.cache_path = os.path.join(data, 'Cache')
+    h.root_path = tmp
+    _ri.host = h
+    try:
+        tm = ToolsManager()
+        tm.initialize()
+        check('ToolsManager: Initialize 后 resamplers = ["worldline"]',
+              [str(x) for x in tm.resamplers] == ['worldline'],
+              str([str(x) for x in tm.resamplers]))
+        check('ToolsManager: Initialize 后 wavtools = ["convergence","simple"]（顺序一致）',
+              [str(x) for x in tm.wavtools] == ['convergence', 'simple'],
+              str([str(x) for x in tm.wavtools]))
+        check('ToolsManager: Initialize 建出了 Data/Resamplers 与 Data/Wavtools 目录',
+              os.path.isdir(os.path.join(data, 'Resamplers'))
+              and os.path.isdir(os.path.join(data, 'Wavtools')))
+        check('ToolsManager: 名对不上时回落（而不是抛）',
+              isinstance(tm.get_resampler('不存在'), WorldlineResampler)
+              and isinstance(tm.get_resampler(None), WorldlineResampler)
+              and str(tm.get_wavtool('不存在')) == SharpWavtool.NAME_CONVERGENCE)
+        check('ToolsManager: 显式名字命中时返回那个工具（内置的 convergence）',
+              str(tm.get_wavtool('simple')) == SharpWavtool.NAME_SIMPLE)
+
+        # ---------------- 外部工具被扫进来
+        open(os.path.join(data, 'Resamplers', 'resample.exe'), 'wb').close()
+        open(os.path.join(data, 'Resamplers', 'note.txt'), 'w').close()
+        open(os.path.join(data, 'Wavtools', 'wavtool.exe'), 'wb').close()
+        tm.initialize()
+        names = [str(x) for x in tm.resamplers]
+        check('ToolsManager: 扫到外部 resample.exe（.exe 在 Windows 上归 ExeResampler）',
+              'resample.exe' in names, str(names))
+        check('ToolsManager: 非工具扩展名 .txt 不入表',
+              'note.txt' not in names, str(names))
+        check('ToolsManager: 扫到外部 wavtool.exe（归 ExeWavtool）',
+              'wavtool.exe' in [str(x) for x in tm.wavtools], str([str(x) for x in tm.wavtools]))
+        ex = next((x for x in tm.resamplers if str(x) == 'resample.exe'), None)
+        wv = next((x for x in tm.wavtools if str(x) == 'wavtool.exe'), None)
+        check('ToolsManager: 外部工具的实例类型正确',
+              isinstance(ex, ExeResampler) and isinstance(wv, ExeWavtool))
+        check('ToolsManager: 按名字取到外部工具本身',
+              tm.get_resampler('resample.exe') is ex and tm.get_wavtool('wavtool.exe') is wv)
+
+        # ---------------- load_* 的分派表
+        check('ToolsManager.loadResampler: 不存在的文件返回 None',
+              tm.load_resampler(os.path.join(tmp, 'nope.exe'), tmp) is None)
+        check('ToolsManager.loadResampler: .txt 不在任何分派分支里 → None',
+              tm.load_resampler(os.path.join(data, 'Resamplers', 'note.txt'), data) is None)
+
+        # ---------------- resamplers 属性返回副本
+        snap = tm.resamplers
+        snap.append('polluted')
+        check('ToolsManager: resamplers 返回**副本**（改它不影响内部表，对应 ToList()）',
+              'polluted' not in [str(x) for x in tm.resamplers])
+        check('ToolsManager: wavtools 也返回副本', len(tm.wavtools) == 3)
+
+        # ---------------- ★ 同线程嵌套加锁（Initialize 内部还会再加一次）
+        done = []
+
+        def _nested():
+            with tm._locker:
+                tm.initialize()
+            done.append(True)
+
+        th = _th.Thread(target=_nested, daemon=True)
+        th.start()
+        th.join(5)
+        check('★ ToolsManager: 同线程嵌套加锁不会自锁死（_locker 是可重入锁）',
+              done == [True], 'done=%r' % done)
+    finally:
+        _ri.host = old_host
+        __import__('singing.openutau.classic.tools_manager', fromlist=['x'])._default = old_default
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # ---------------- ★ 宿主没配 DataPath → 走上游"清表"分支
+    tm2 = ToolsManager()
+    h2 = ClassicHost()          # 三个路径字段全空 → resamplers_path 推导为空串
+    old_host = _ri.host
+    _ri.host = h2
+    try:
+        tm2.initialize()
+        check('★ ToolsManager: 工具目录为空时整张表被清空（连内置项也没了）',
+              tm2.resamplers == [] and tm2.wavtools == [])
+        try:
+            tm2.get_resampler('anything')
+            check('★ ToolsManager: 表空时 GetResampler 抛 KeyError（C# 是 KeyNotFoundException）', False)
+        except KeyError:
+            check('★ ToolsManager: 表空时 GetResampler 抛 KeyError（C# 是 KeyNotFoundException）', True)
+    finally:
+        _ri.host = old_host
+
+
+def test_voicebank_files():
+    """`Classic/VoicebankFiles.cs`（122 行）—— 声库源文件的临时缓存与元文件搬运。"""
+    import tempfile
+
+    from singing.openutau import Wave
+    from singing.openutau.classic import VoicebankFiles
+    from singing.openutau.classic import resampler_item as _ri
+    from singing.openutau.xxhash import digest_of32
+
+    cs = _read('Classic/VoicebankFiles.cs')
+    if cs is None:
+        print('  SKIP 找不到 Classic/VoicebankFiles.cs')
+        return
+
+    check('VoicebankFiles: 缓存名用 XXH32 的 8 位小写十六进制（:x8）',
+          'XXH32.DigestOf(Encoding.UTF8.GetBytes(s)):x8' in cs)
+    check('VoicebankFiles: 缓存名前缀 src- 且三段哈希用 - 连接',
+          'src-{HashHex(singerId)}-{HashHex(oto.Set)}-{HashHex(oto.File)}{ext}' in cs)
+    check('VoicebankFiles: 元文件表 13 对（上游把 .lessaudio 那对注释掉了）',
+          cs.count('Tuple.Create(') == 14 and '//Tuple.Create(noExt + ".lessaudio"' in cs)
+    check('★ VoicebankFiles: tempNoExt 用的是 **source 的 ext 长度**（与 tempFrqExt 取法不一致）',
+          'string tempNoExt = sourceTemp.Substring(0, sourceTemp.Length - ext.Length);' in cs)
+    check('VoicebankFiles: ReleaseSourceTemp 清 7 天前的顶层文件',
+          'TimeSpan.FromDays(7)' in cs and 'SearchOption.TopDirectoryOnly' in cs)
+    check('VoicebankFiles: CopySourceTemp 里 CopyOrStamp 传 false',
+          'metaFiles.ForEach(t => CopyOrStamp(t.Item1, t.Item2, false));' in cs
+          and 'metaFiles.ForEach(t => CopyOrStamp(t.Item2, t.Item1, false));' in cs)
+
+    vf = VoicebankFiles()
+
+    # ---------------- 三段哈希
+    class _O:
+        oto_set = 'main'
+        file = '/vb/ka.wav'
+
+    name = vf.get_source_temp_path('singer1', _O())
+    want = 'src-%08x-%08x-%08x.wav' % (digest_of32(b'singer1'), digest_of32(b'main'),
+                                       digest_of32(b'/vb/ka.wav'))
+    check('VoicebankFiles.getSourceTempPath: 三段哈希与 XXH32 逐位一致',
+          os.path.basename(name) == want, '%s vs %s' % (os.path.basename(name), want))
+    check('VoicebankFiles.getSourceTempPath: ext 缺省时取 oto.File 的扩展名',
+          os.path.basename(vf.get_source_temp_path('singer1', _O(), '')) == want)
+    check('VoicebankFiles.getSourceTempPath: ext 为 None 时同样取 oto.File 的扩展名',
+          os.path.basename(vf.get_source_temp_path('singer1', _O(), None)) == want)
+    check('VoicebankFiles.getSourceTempPath: 显式 ext 覆盖',
+          os.path.basename(vf.get_source_temp_path('s', _O(), '.raw')).endswith('.raw'))
+
+    # ---------------- Frq / Mrq
+    check('VoicebankFiles.getFrqFile: a.wav → a_wav.frq',
+          vf.get_frq_file('/vb/a.wav') == '/vb/a_wav.frq', vf.get_frq_file('/vb/a.wav'))
+    check('VoicebankFiles.getMrqFile: 固定是同级目录的 desc.mrq',
+          vf.get_mrq_file('/vb/a.wav') == os.path.join('/vb', 'desc.mrq'))
+
+    # ---------------- 元文件表
+    pairs = vf.get_meta_files('/vb/a.wav', '/c/s.wav')
+    check('VoicebankFiles.getMetaFiles: 13 对',
+          len(pairs) == 13, str(len(pairs)))
+    check('VoicebankFiles.getMetaFiles: 第 1 对是 _wav.frq',
+          os.path.basename(pairs[0][0]) == 'a_wav.frq' and os.path.basename(pairs[0][1]) == 's_wav.frq',
+          str(pairs[0]))
+    check('VoicebankFiles.getMetaFiles: 后缀类元文件直接用 source/temp 原名加后缀',
+          pairs[1] == ('/vb/a.wav.llsm', '/c/s.wav.llsm')
+          and pairs[8] == ('/vb/a.wav.vs4ufrq', '/c/s.wav.vs4ufrq'))
+    check('VoicebankFiles.getMetaFiles: 末尾是 a.hifi.npz（noExt + 后缀，用的是**点**）',
+          pairs[-1] == ('/vb/a.hifi.npz', '/c/s.hifi.npz'), str(pairs[-1]))
+    check('VoicebankFiles.getMetaFiles: 没有 .lessaudio 那一对（上游注释掉了）',
+          not any('lessaudio' in p[0] for p in pairs))
+    # ★ 暴露"tempNoExt 用 source 的 ext 长度"那个 quirk
+    q = vf.get_meta_files('/vb/a.llsm', '/c/s.wav')
+    check('★ VoicebankFiles.getMetaFiles: 两边扩展名长度不同时 tempNoExt 会被截错（上游 quirk）',
+          os.path.basename(q[0][1]) == '_wav.frq', str(q[0]))
+
+    # ---------------- CopyOrStamp 四态
+    tmp = tempfile.mkdtemp(prefix='fufumidi-vbf-')
+    src = os.path.join(tmp, 'a.llsm')
+    dst = os.path.join(tmp, 'b.llsm')
+    vf.copy_or_stamp(src, dst, False)
+    check('VoicebankFiles.copyOrStamp: 源不存在 + required=False → 静默跳过',
+          not os.path.exists(dst))
+    try:
+        vf.copy_or_stamp(src, dst, True)
+        check('VoicebankFiles.copyOrStamp: 源不存在 + required=True → 抛 FileNotFoundError', False)
+    except FileNotFoundError:
+        check('VoicebankFiles.copyOrStamp: 源不存在 + required=True → 抛 FileNotFoundError', True)
+    with open(src, 'w') as f:
+        f.write('x')
+    vf.copy_or_stamp(src, dst, True)
+    check('VoicebankFiles.copyOrStamp: 源存在且目标不存在 → 复制', os.path.isfile(dst))
+    with open(src, 'w') as f:
+        f.write('changed')
+    vf.copy_or_stamp(src, dst, True)
+    check('VoicebankFiles.copyOrStamp: 目标已存在 → **不覆盖**（stamp 语义）',
+          open(dst).read() == 'x')
+
+    # ---------------- DecodeOrStamp
+    wav_src = os.path.join(tmp, 'src.wav')
+    Wave.write_mono16_wav(wav_src, [0.5] * 100)
+    stamp = os.path.join(tmp, 'stamp.wav')
+    vf.decode_or_stamp(wav_src, stamp)
+    check('VoicebankFiles.decodeOrStamp: .wav 直接复制（内容逐字节一致）',
+          open(stamp, 'rb').read() == open(wav_src, 'rb').read())
+    try:
+        vf.decode_or_stamp(os.path.join(tmp, 'nope.wav'), os.path.join(tmp, 'o.wav'))
+        check('VoicebankFiles.decodeOrStamp: 源不存在 → 抛 FileNotFoundError', False)
+    except FileNotFoundError:
+        check('VoicebankFiles.decodeOrStamp: 源不存在 → 抛 FileNotFoundError', True)
+    # 非 .wav 扩展名 → 走解码（这里放的是合法 wav 内容，默认后端能认）
+    ogg = os.path.join(tmp, 'a.ogg')
+    import shutil as _sh
+    _sh.copyfile(wav_src, ogg)
+    out = os.path.join(tmp, 'decoded.wav')
+    vf.decode_or_stamp(ogg, out)
+    check('VoicebankFiles.decodeOrStamp: 非 .wav → 解码后写出 wav',
+          os.path.isfile(out) and len(Wave.get_samples(out)) == 100,
+          str(len(Wave.get_samples(out)) if os.path.isfile(out) else 'missing'))
+
+    # ---------------- ReleaseSourceTemp：不碰新文件与目录
+    cache = os.path.join(tmp, 'cache')
+    os.makedirs(cache, exist_ok=True)
+    fresh = os.path.join(cache, 'fresh.wav')
+    Wave.write_mono16_wav(fresh, [0.0] * 10)
+    sub = os.path.join(cache, 'sub')
+    os.makedirs(sub, exist_ok=True)
+    old_host = _ri.host
+    _ri.host = type('H', (), {'data_path': tmp, 'cache_path': cache, 'root_path': tmp,
+                              'singers_paths': []})()
+    try:
+        vf.release_source_temp()
+        check('VoicebankFiles.releaseSourceTemp: 7 天内的文件不动',
+              os.path.isfile(fresh))
+        check('VoicebankFiles.releaseSourceTemp: 目录不动',
+              os.path.isdir(sub))
+    finally:
+        _ri.host = old_host
+
+    # ---------------- ClassicHost 已接上真实现
+    check('★ ClassicHost 的五个方法已接真实现（源码里不再有 raise NotImplementedError）',
+          'raise NotImplementedError' not in open(
+              os.path.join(ENGINE, 'singing', 'openutau', 'classic', 'resampler_item.py'),
+              encoding='utf-8').read())
+
+    import shutil
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_tools_manager_real_host_end_to_end():
+    """★ **真宿主端到端**：不装任何替身，让 `ClassicRenderer` 从
+    `ToolsManager` / `VoicebankFiles` 的**真实现**里取工具并渲染出样本。
+
+    这条是 P1-c 的收敛判据：在它之前，`resampler_item.ClassicHost` 的五个方法
+    全是 `NotImplementedError`，端到端测试只能靠 `_test_classic_host` 这个替身
+    （替身与真实现不一致正是计划文档反复踩的那类坑）。现在宿主配置好
+    `DataPath` / `RootPath` / `CachePath` 之后，`GetResampler` 会回落出真的
+    `WorldlineResampler`、`GetWavtool` 会回落出真的 `SharpWavtool`。
+
+    缺 `worldline.dll` 时 SKIP。
+    """
+    import tempfile
+
+    from singing.openutau import Progress
+    from singing.openutau import worldline as W
+    from singing.openutau.classic import (ClassicHost, ClassicRenderer, SharpWavtool, ToolsManager,
+                                          VoicebankFiles, WorldlineResampler,
+                                          resampler_item as _ri, set_tools_manager,
+                                          set_voicebank_files)
+
+    dll = os.path.join(REF_ROOT, 'runtimes', 'win-x64', 'native', 'worldline.dll')
+    if not os.path.isfile(dll):
+        print('  SKIP 找不到预编译 worldline.dll（%s）' % dll)
+        return
+    native = W.get_native(dll)
+    if not native.available:
+        print('  SKIP worldline.dll 加载失败：%s' % native.error)
+        return
+
+    tmp = tempfile.mkdtemp(prefix='fufumidi-realhost-')
+    old_host = _ri.host
+    old_tm = __import__('singing.openutau.classic.tools_manager', fromlist=['x'])._default
+    old_vf = __import__('singing.openutau.classic.voicebank_files', fromlist=['x'])._default
+    try:
+        project, track, part, phrase = _render_fixture(tmp)
+        cache = os.path.join(tmp, 'Cache')
+        os.makedirs(cache, exist_ok=True)
+
+        # ---- 真宿主（只有路径字段，没有任何方法覆写）
+        h = ClassicHost()
+        h.data_path = tmp
+        h.root_path = tmp
+        h.cache_path = cache
+        _ri.host = h
+        set_tools_manager(None)          # 强制用新宿主重新扫描
+        set_voicebank_files(None)
+
+        check('真宿主: GetResampler 回落出真的 WorldlineResampler',
+              isinstance(h.get_resampler(None), WorldlineResampler),
+              str(type(h.get_resampler(None))))
+        check('真宿主: GetWavtool 回落出真的 SharpWavtool(convergence)',
+              isinstance(h.get_wavtool(None), SharpWavtool)
+              and str(h.get_wavtool(None)) == SharpWavtool.NAME_CONVERGENCE,
+              str(h.get_wavtool(None)))
+        check('真宿主: GetSourceTempPath 真的算出了 src- 缓存名',
+              os.path.basename(h.get_source_temp_path('sid', type('O', (), {
+                  'oto_set': 'main', 'file': os.path.join(tmp, 'a.wav')})()))
+              .startswith('src-'))
+
+        renderer = ClassicRenderer()
+        check('真宿主: ClassicRenderer 拿到的就是那个宿主', renderer.classic_host is h)
+
+        progress = Progress(len(phrase.phones))
+        result = _run(renderer.render(phrase, progress, track_no=0))
+
+        check('★ 真宿主端到端: 产出非空样本（全程无替身）',
+              result.samples is not None and len(result.samples) > 0,
+              'got %r' % (None if result.samples is None else len(result.samples)))
+        peak = max(abs(v) for v in result.samples) if result.samples else 0.0
+        check('★ 真宿主端到端: 样本有限且不静音', math.isfinite(peak) and peak > 1e-3,
+              'peak=%r' % peak)
+        mid = result.samples[len(result.samples) // 4:len(result.samples) * 3 // 4]
+        crossings = sum(1 for i in range(1, len(mid)) if (mid[i - 1] < 0) != (mid[i] < 0))
+        measured = crossings / 2.0 / (len(mid) / 44100.0)
+        check('★ 真宿主端到端: 输出主频 ≈ 440Hz（源 300Hz → 变调真生效）',
+              abs(measured - 440.0) < 44.0, 'got %.1f Hz' % measured)
+        check('★ 真宿主端到端: 自包含路径**没有**产生 src-* 解码临时文件'
+              '（Worldline 直接读原音，不经过 VoicebankFiles）',
+              not any(n.startswith('src-') for n in os.listdir(cache)))
+    finally:
+        _ri.host = old_host
+        __import__('singing.openutau.classic.tools_manager', fromlist=['x'])._default = old_tm
+        __import__('singing.openutau.classic.voicebank_files', fromlist=['x'])._default = old_vf
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_workflow_end_to_end():
     """★ **整套工作流**：工程/音符 → 音素化（真 ClassicSinger + JA VCV 音素化器）→
     `UPhoneme` 校验 → `PhraseSource` → `ClassicRenderer`（真机 worldline.dll）→ 样本。
@@ -8043,6 +9423,30 @@ def main():
     test_classic_renderer_internal_end_to_end()
     test_classic_renderer_external_path()
     test_classic_renderer_resample_failure()
+    print('--- Plugin.Builtin/CantoneseCVVC ---')
+    test_cantonese_cvvc_phonemizer()
+    print('--- Plugin.Builtin/CantoneseSyo ---')
+    test_cantonese_syo_phonemizer()
+    print('--- Plugin.Builtin/ChineseCVVPlus ---')
+    test_chinese_cvv_plus_phonemizer()
+    print('--- Util/Base64 ---')
+    test_base64_util()
+    print('--- Util/OS ---')
+    test_os_util()
+    print('--- Util/ProcessRunner ---')
+    test_process_runner()
+    print('--- Classic/ExeResampler ---')
+    test_exe_resampler()
+    print('--- Classic/UnixWavtool ---')
+    test_unix_wavtool()
+    print('--- Classic/ExeWavtool ---')
+    test_exe_wavtool()
+    print('--- Classic/ToolsManager ---')
+    test_tools_manager()
+    print('--- Classic/VoicebankFiles ---')
+    test_voicebank_files()
+    print('--- 真宿主端到端（无替身）---')
+    test_tools_manager_real_host_end_to_end()
     print('\n结果: %d passed, %d failed' % (len(_PASS), len(_FAIL)))
     return 1 if _FAIL else 0
 

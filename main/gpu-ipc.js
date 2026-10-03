@@ -8,6 +8,9 @@
 'use strict';
 const Paths = require('./paths');
 const DS = require('./download-source');
+// ★ 统一走 fast-download：多源测速 + Range 分段（8 段 × 4 并发）+ 断点续传 + 慢源自动轮换。
+//   原先这里是内联的 `net.fetch` 单连接流，分卷之间还串行，实测合计只有 3.2 Mbps。
+const createFastDownload = require('./fast-download');
 
 /** 从 GitHub Release 资产地址里取出 tag：.../releases/download/<tag>/<file> */
 function ghReleaseTagOf(url) {
@@ -279,56 +282,74 @@ function registerGpuIpc({
       const isSplit = files.length > 1 || /.part\d+$|\.zip\.\d{3}$/i.test(files[0].name || '');
       const totalAll = files.reduce((sum, f) => sum + (f.size || 0), 0);
       let receivedAll = 0;
-      const paths = [];
-      for (const f of files) {
+      // ★ 分卷并发 + 每卷多连接。
+      //   原先这里是内联的 `net.fetch` 单连接流，且分卷之间 `for...of await` **串行**，
+      //   无断点续传、无测速选源 —— 实测组件 + 加速包合计只有 3.2 Mbps。
+      //   现在：每卷交给 fast-download（多源测速 + Range 8 段 × 4 并发 + 续传 + 慢源轮换），
+      //   卷与卷之间再开 PART_CONCURRENCY 路并发。
+      const FastDL = createFastDownload({ net, fs, path });
+      const PART_CONCURRENCY = 3;          // 卷间并发（卷内 fast-download 已是 8 段 × 4 并发）
+      const jobs = files.map((f) => {
         if (!f || !f.url) throw new Error('missing file url');
         const name = f.name || decodeURIComponent((new URL(f.url).pathname.split('/').pop() || 'part'));
-        const outPath = path.join(dlDir, name);
         // 候选源：自有 CNB 镜像（按下载源偏好排前/排后）+ GitHub 各加速镜像。
         // GPU 包体积远超 CNB 的两个体积上限（git 推送 256 MiB / git raw 读取 100 MiB），
         // 所以镜像只能落在 CNB Release 资产上（对象存储），地址形如
         // /-/releases/download/<tag>/<file>；tag 与 GitHub 侧保持一致。
         const cnbUrl = ghReleaseTagOf(f.url) ? DS.cnbRepoReleaseUrl(DS.CNB_MIRROR_REPOS.fufumidi, ghReleaseTagOf(f.url), name) : null;
-        const mirrors = DS.orderUrls(cnbUrl, DS.githubMirrorCandidates(f.url));
-        let okDl = false;
-        for (const u of mirrors) {
-          if (_gpuCanceled) break;
-          const out = fs.createWriteStream(outPath);
-          // 必须挂一个空的 error 监听：WriteStream 的打开是异步的，若此时目录被清理
-          // （下面 catch 里的 rmSync）/ 磁盘满 / 无权限，会 emit 'error'；没人接就是
-          // 未处理事件 → 直接崩掉主进程。真正的写失败由下面 out.write 的回调上报并捕获。
-          out.on('error', () => {});
+        return {
+          name,
+          outPath: path.join(dlDir, name),
+          urls: DS.orderUrls(cnbUrl, DS.githubMirrorCandidates(f.url)),
+          // 声明体积已知时用它当"过小"下限的一半，避免代理拦截的半截文件被当成成功
+          minSize: (f.size || 0) > 0 ? Math.max(1024, Math.min(f.size, 200000)) : 200000,
+          done: 0,
+        };
+      });
+      let lastSpeed = 0;
+      const emitProgress = () => {
+        receivedAll = 0;
+        for (const j of jobs) receivedAll += j.done;
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('gpu:progress', {
+            received: receivedAll, total: totalAll,
+            percent: totalAll ? Math.min(99, Math.round(receivedAll / totalAll * 100)) : 0,
+            speed: lastSpeed,
+          });
+        }
+      };
+      let cursor = 0;
+      const worker = async () => {
+        for (;;) {
+          if (_gpuCanceled) return;
+          const i = cursor++;
+          if (i >= jobs.length) return;
+          const j = jobs[i];
           try {
-            const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.16' }, signal: ctl.signal });
-            if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
-            const reader = res.body.getReader();
-            let received = 0, lastSend = 0;
-            while (true) {
-              if (_gpuCanceled) { try { reader.cancel(); } catch (e) {} break; }
-              const { done, value } = await reader.read();
-              if (done) break;
-              received += value.length; receivedAll += value.length;
-              const now = Date.now();
-              if (now - lastSend > 300) {
-                lastSend = now;
-                if (win && !win.isDestroyed()) win.webContents.send('gpu:progress', { received: receivedAll, total: totalAll, percent: totalAll ? Math.min(99, Math.round(receivedAll/totalAll*100)) : 0 });
-              }
-              await new Promise((res2, rej2) => out.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
-            }
-            await new Promise((res2, rej2) => out.end(err => (err ? rej2(err) : res2())));
-            okDl = !_gpuCanceled;
-            if (okDl) break;
-            throw new Error('canceled');
+            await FastDL.downloadFast({
+              urls: j.urls,
+              dest: j.outPath,
+              minSize: j.minSize,
+              headers: { 'user-agent': 'FuFumidi' },
+              // fast-download 的取消判据是 `.aborted` / `.isUserAbort`
+              isUserAbort: { get aborted() { return _gpuCanceled; } },
+              ctrl: ctl,
+              onProgress: (p) => {
+                if (p && typeof p.received === 'number') j.done = p.received;
+                if (p && p.speed) lastSpeed = p.speed;
+                emitProgress();
+              },
+            });
           } catch (e) {
+            // 取消不算错误：交给下面 `if (_gpuCanceled)` 分支统一收尾
+            if (e && e.cancelled) return;
             lastErr = e;
-            try { out.destroy(); } catch (_) {}
-            if (_gpuCanceled) break;
+            throw e;
           }
         }
-        if (_gpuCanceled) break;
-        if (!okDl) throw lastErr || new Error('download failed');
-        paths.push(outPath);
-      }
+      };
+      await Promise.all(Array.from({ length: Math.max(1, Math.min(PART_CONCURRENCY, jobs.length)) }, () => worker()));
+      const paths = jobs.map((j) => j.outPath);
       if (_gpuCanceled) {
         try { fs.rmSync(dlDir, { recursive: true, force: true }); } catch (e) {}
         return { ok: false, canceled: true, error: '已取消下载' };

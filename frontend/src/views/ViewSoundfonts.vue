@@ -21,6 +21,7 @@ const activePath = ref('internal');   // 当前启用的音色来源（'internal
 const prog = reactive({});            // 下载进度 { id: { percent, active, error } }
 let offProg = null;
 const previewBuf = reactive({});      // 预览按钮忙碌态
+const canceling = reactive({});       // 已请求取消的 id：用于忽略后续进度事件
 
 function fmtSize(b) {
   if (!b) return '—';
@@ -65,6 +66,12 @@ function isActive(item) {
 // 启用某音色（立即生效 + 持久化）；失败自动重试一次（大 sf2 首载偶发失败）
 async function enable(item) {
   if (!item || !item.path) { toast(t('该音色尚未就绪，请先下载或导入'), 'warn'); return; }
+  // ★ 超限的音色**加载器读不进来**（`file:readSoundFont` 上限 512MB），
+  //   提前拦住并说清原因，别让用户等到"无法读取音色文件"这种无从下手的报错。
+  if (item.overLimit) {
+    toast(t('该音色超出加载上限（512MB），暂不支持启用'), 'warn');
+    return;
+  }
   busySf.value = true;
   try {
     let r = await setActiveSoundfontRef(item.path);
@@ -112,12 +119,37 @@ async function download(item) {
   } catch (e) {
     prog[item.id] = { percent: 0, active: false, error: String(e.message || e) };
     toast(t('下载失败：') + String(e.message || e), 'error');
+  } finally {
+    delete canceling[item.id];
   }
 }
 
+/**
+ * 取消下载。
+ *
+ * ★ **不要立刻把 UI 清掉** —— 早先是 `prog[id] = {percent:0, active:false}` 直接清，
+ *   万一主进程那边没真取消（`ctrl` 还是 null 时 abort 是空操作），
+ *   下一批进度事件又会把进度条点亮 → 用户看到"取消失败 + 闪动"。
+ *   现在：立 `canceling` 标记挡住后续事件 → 通知主进程 → 由 `download()` 的
+ *   返回值（`cancelled`）来收尾。
+ */
 async function cancelDownload(item) {
-  if (bridge && bridge.sfWorkshop) { try { await bridge.sfWorkshop.cancel(item.id); } catch (e) {} }
-  prog[item.id] = { percent: 0, active: false };
+  if (!item || !item.id) return;
+  canceling[item.id] = true;
+  const cur = prog[item.id] || {};
+  prog[item.id] = { ...cur, active: true, notice: t('正在取消…') };
+  try {
+    const r = bridge && bridge.sfWorkshop ? await bridge.sfWorkshop.cancel(item.id) : null;
+    if (r && r.ok === false) {
+      // 主进程说没有进行中的下载 —— 如实告知，并恢复按钮
+      delete canceling[item.id];
+      prog[item.id] = { percent: 0, active: false, error: '' };
+      toast((r && r.error) || t('该音色当前没有进行中的下载'), 'warn');
+    }
+  } catch (e) {
+    delete canceling[item.id];
+    toast(t('取消失败：') + String(e.message || e), 'error');
+  }
 }
 
 async function importLocal() {
@@ -184,10 +216,28 @@ onMounted(() => {
   refresh();
   if (bridge && bridge.sfWorkshop && bridge.sfWorkshop.onProgress) {
     offProg = bridge.sfWorkshop.onProgress((p) => {
-      if (p && p.id) {
-        if (p.done) prog[p.id] = { percent: 100, active: false };
-        else if (p.error) prog[p.id] = { percent: 0, active: false, error: p.error };
-        else prog[p.id] = { percent: p.percent || 0, active: true, error: '' };
+      if (!p || !p.id) return;
+      // ★ 已请求取消后，**忽略后续进度事件** —— 否则后台还在跑的那一轮
+      //   会把进度条又点亮，看着像"取消没生效"。
+      if (canceling[p.id]) return;
+      if (p.done) {
+        prog[p.id] = { percent: 100, active: false, error: '' };
+      } else if (p.retrying) {
+        // ★ 换源/续传是**正常过程**，不是失败：进度条原地保留 + 单独一行提示。
+        //   早先这里按 `error` 处理，把 percent 清成 0、active 置 false，
+        //   下一轮事件又点亮 → 就是用户看到的"进度条闪动"。
+        const cur = prog[p.id] || {};
+        prog[p.id] = {
+          percent: typeof p.percent === 'number' ? p.percent : (cur.percent || 0),
+          active: true, error: '',
+          notice: (p.round && p.rounds)
+            ? t('第 ') + p.round + '/' + p.rounds + t(' 轮未完成，正在换源/续传…')
+            : (p.notice || ''),
+        };
+      } else if (p.error) {
+        prog[p.id] = { percent: 0, active: false, error: p.error };
+      } else {
+        prog[p.id] = { percent: p.percent || 0, active: true, error: '' };
       }
     });
   }
@@ -257,15 +307,23 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
             <div class="sf-tile-fill" :style="{ width: (prog[item.id].percent || 0) + '%' }"></div>
           </div>
           <div class="sf-tile-err" v-else-if="prog[item.id] && prog[item.id].error">{{ prog[item.id].error }}</div>
+          <div class="sf-tile-note" v-else-if="prog[item.id] && prog[item.id].notice">{{ prog[item.id].notice }}</div>
+          <div class="sf-tile-note" v-else-if="prog[item.id] && prog[item.id].notice">{{ prog[item.id].notice }}</div>
           <div class="sf-tile-actions">
             <template v-if="prog[item.id] && prog[item.id].active">
               <span class="sf-pct">{{ prog[item.id].percent || 0 }}%</span>
               <button class="btn sm ghost" @click="cancelDownload(item)">{{ t('取消') }}</button>
             </template>
             <template v-else>
-              <button v-if="!item.downloaded && item.manual" class="btn sm primary" @click="openOfficial(item)" :title="t('受许可条款限制，请从官网下载解压后导入')">{{ t('前往官网') }}</button>
-              <button v-if="!item.downloaded && !item.manual" class="btn sm primary" @click="download(item)" :disabled="!bridge">{{ t('下载') }}</button>
-              <button v-if="item.downloaded" class="btn sm primary" :class="{ on: isActive(item) }" @click="enable(item)" :disabled="busySf">{{ isActive(item) ? t('使用中') : t('启用') }}</button>
+              <!-- ★ 超出加载上限：既不给下载（下了也用不了）也不给启用，直接说明原因 -->
+              <span v-if="item.overLimit" class="sf-overlimit" :title="t('立体声合成的单文件加载上限为 512MB')">
+                {{ t('暂不支持（超出音色加载上限）') }}
+              </span>
+              <template v-else>
+                <button v-if="!item.downloaded && item.manual" class="btn sm primary" @click="openOfficial(item)" :title="t('受许可条款限制，请从官网下载解压后导入')">{{ t('前往官网') }}</button>
+                <button v-if="!item.downloaded && !item.manual" class="btn sm primary" @click="download(item)" :disabled="!bridge">{{ t('下载') }}</button>
+                <button v-if="item.downloaded && !item.overLimit" class="btn sm primary" :class="{ on: isActive(item) }" @click="enable(item)" :disabled="busySf">{{ isActive(item) ? t('使用中') : t('启用') }}</button>
+              </template>
               <button v-if="item.downloaded && !isActive(item)" class="btn sm ghost" :disabled="previewBuf[item.id]" @click="preview(item)">{{ previewBuf[item.id] ? t('试听…') : t('试听') }}</button>
               <button v-if="item.downloaded && !item.builtin" class="btn sm ghost danger" @click="removeItem(item)">{{ t('删除') }}</button>
             </template>
@@ -337,4 +395,7 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 .sf-busy-box { display: flex; align-items: center; gap: 10px; background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 600; padding: 14px 20px; border-radius: 12px; border: 1px solid var(--hairline); box-shadow: 0 8px 30px rgba(0,0,0,0.14); animation: sf-busy-pulse 1.2s ease-in-out infinite; }
 @keyframes sf-busy-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
+.sf-overlimit { font-size: 11.5px; color: var(--stone); align-self: center; }
+.sf-tile-note { font-size: 11.5px; color: var(--stone); }
+.sf-tile-note { font-size: 11.5px; color: var(--stone); }
 </style>

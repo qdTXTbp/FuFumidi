@@ -81,6 +81,12 @@ extraResources:
     to: vcredist
   - from: "resources/models"
     to: models
+  # G2p 神经网络模型（13 个 g2p-*.zip，共 25MB）：歌词 → 音素的多音字消歧。
+  # 来自 OpenUtau.Core/G2p/Data/（上游是 .NET 内嵌资源，我们是磁盘文件）。
+  # 路径由 engine/singing/openutau/g2p/models.py 解析：它按
+  # 「sys.executable 同级的 g2p/」找 —— 打包后正是 <app>/resources/g2p/。
+  - from: "resources/g2p"
+    to: g2p
   # 可选 Rust 核心（scripts/build-rust.ps1 产物）：缺失时 main/rust.js 自动降级为纯 JS 路径
   - from: "resources/rust-core"
     to: rust-core

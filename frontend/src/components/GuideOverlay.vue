@@ -67,10 +67,11 @@ const WELCOME_STEPS = computed(() => [
     ],
   },
   {
-    ic: 'utau', title: t('UTAU：音MAD 制作'),
+    ic: 'utau', title: t('歌声合成：一个编辑器，两种引擎'),
     body: [
-      t('声库制作：上传音频自动切分音节、自动标注、导出 oto.ini 音源。'),
-      t('曲谱与调声：把 MIDI 音符映射到音节；合成渲染：导出成品音频。'),
+      t('引擎是「轨道」的属性，不是页面模式：同一条工程里 UTAU 轨与 DiffSinger 轨可以混排。'),
+      t('每轨左侧选歌手与语言；点「渲染本轨」会按该轨的引擎自动分派，不需要来回切页面。'),
+      t('声库（UTAU 的 oto 制作 / DiffSinger 的组件与声库）统一在侧边栏「声库」里做，编辑器只负责选歌手。'),
     ],
   },
   {
@@ -222,19 +223,30 @@ const CHAPTERS = computed(() => [
     ],
   },
   {
-    id: 'utau', ic: 'utau', name: t('UTAU 音MAD'), desc: t('声库制作 → 调声 → 合成渲染'),
+    id: 'utau', ic: 'utau', name: t('歌声合成'), desc: t('轨道级引擎 · 导入 · 统一渲染'),
     steps: [
-      { parent: 'utau', selector: '[data-guide="utau-tab-voicebank"]', title: t('声库制作'), desc: t('三步走的起点：先做出声库，再调声，最后合成渲染。三个页签在这里切换。'), manual: true,
-        // 页签是「记忆」的：上一轮停在哪个页签，重新进入这一章就还停在哪儿，而后面的步骤
-        // 全都长在声库页签上。这里先把它切回声库页签（已经在该页签时点击是空操作），
-        // 免得用户按着引导走却看不到下一步要讲的东西。
-        onEnter: () => { const b = document.querySelector('[data-guide="utau-tab-voicebank"]'); if (b) b.click(); } },
-      { parent: 'utau', selector: '.vb-toolbar', title: t('上传音频或录音'), desc: t('点「上传音频切分」选一个音源文件，也可以直接用麦克风录音。这是后面几步的前提。'), manual: true },
-      { parent: 'utau', selector: '.vb-params', title: t('切分参数'), desc: t('按最小静音 / 最小音节 / 静音阈值自动切分；参数改动后可点「重新切分」。'), manual: true },
-      { parent: 'utau', selector: '.vb-segs', title: t('片段列表与波形编辑器'), desc: t('切好后每个音节一块：点选后右侧出现波形，拖动 offset / overlap / preutterance / consonant / blank 五个标记校准边界。'), manual: true, requires: 'audio' },
-      { parent: 'utau', selector: '.vb-head-actions', title: t('自动标注与导出音源'), desc: t('「自动标注全部」批量填好 oto 参数；「导出音源」生成 oto.ini 与 wav 目录，或「导出压缩包」一次打包。'), manual: true, requires: 'audio' },
-      { parent: 'utau', selector: '[data-guide="utau-tab-score"]', title: t('曲谱与调声'), desc: t('左侧调声、右侧曲谱同屏：把 MIDI 音符映射到音节，逐音调整音高与时长。'), action: true },
-      { parent: 'utau', selector: '[data-guide="utau-tab-render"]', title: t('合成渲染'), desc: t('按当前声库与调声结果合成音频并导出成品。'), action: true },
+      { parent: 'singer', selector: '[data-guide="sing-tracks"]', title: t('轨道列表'),
+        desc: t('左侧就是工程的全部轨道。每轨自带引擎（UTAU / DiffSinger）、歌手与语言 —— 引擎在轨道上选，不是页面级切换。'), manual: true },
+      { parent: 'singer', selector: '[data-guide="sing-project"]', title: t('工程文件'),
+        desc: t('.fufumidi 是自包含工程包：伴奏等外部文件一起打进包里，所以换台机器打开不会断链（包内不存本机绝对路径）。'), manual: true },
+      { parent: 'singer', selector: '[data-guide="sing-import-midi"]', title: t('导入 MIDI'),
+        desc: t('从 MIDI 拿到旋律：多轨时会让您挑一条，音符落进当前声部轨（歌词留空，接着填）。'), manual: true },
+      { parent: 'singer', selector: '[data-guide="sing-import-audio"]', title: t('导入音频（伴奏）'),
+        desc: t('伴奏作为一条独立的音频轨加进来，与声部轨并列 —— 编辑时能听着伴奏对齐歌词，导出时混入。'), manual: true },
+      { parent: 'singer', selector: '[data-guide="sing-render"]', title: t('渲染本轨'),
+        desc: t('一个按钮，按该轨引擎自动分派（UTAU 走音源拼接，DiffSinger 走 AI 声学模型）。'), action: true },
+      { parent: 'singer', selector: '[data-guide="sing-render-all"]', title: t('渲染全部轨'),
+        desc: t('串行渲染每一条声部轨（结果按轨保存，渲第二条不会顶掉第一条），渲完一起播放。一条几十秒，进度会显示到第几条。'), action: true },
+      { parent: 'singer', selector: '[data-guide="sing-transport"]', title: t('同时播放'),
+        desc: t('伴奏与**所有已渲染的声部轨**共用一个时钟同时起播（采样级同步）；每条轨可单独静音。'), manual: true },
+      { parent: 'singer', selector: '[data-guide="sing-track-props"]', title: t('轨道属性'),
+        desc: t('三块：参数（UTAU 的重采样器/波源工具，DiffSinger 的采样深度与步数）、效果链（本轨独享，从上到下就是信号流）、自动化子轨（PIT 与 DYN/BRE/GEN 改了要重渲，VOL/PAN 播放时实时生效）。'), manual: true },
+      { parent: 'banks', selector: '[data-guide="banks-installed"]', title: t('声库（两类混排）'),
+        desc: t('UTAU 声库与 DiffSinger 声库在同一张列表里，类型只作标签 —— 正在被轨道使用的会标注「使用中」。'), manual: true },
+      { parent: 'banks', selector: '[data-guide="banks-make"]', title: t('UTAU 声库制作'),
+        desc: t('选一个音源文件自动切分成音节、批量标注 oto 参数，再导出 oto.ini 或压缩包。'), manual: true },
+      { parent: 'banks', selector: '[data-guide="banks-ds"]', title: t('DiffSinger 推理组件'),
+        desc: t('启用模块后才下载组件（未启用零占用）；GPU 加速也在这里一键安装。'), manual: true },
     ],
   },
   {

@@ -74,6 +74,87 @@ def hanzi_to_pinyin(s: str) -> str:
     return result[0][0]
 
 
+# ---------------------------------------------------------------- 粤拼（Cantonese）
+# C# 的粤语音素化器用的是 NuGet `csharp-pinyin` 的 `Pinyin.Jyutping.Instance`
+# （自带粤拼表）。Python 侧没有等价的标准库，按项目既有套路
+# （`classic_singer.set_romaji_converter` 处理 WanaKanaNet 那次）做成**可注入钩子**：
+#   ① 注入了转换器 → 用它；
+#   ② 否则惰性探测常见粤拼库（ToJyutping / pycantonese）；
+#   ③ 都没有 → **原样返回**。
+# 第 ③ 条正是 C# 里 `Pinyin.Error.Default` 的语义（转不出来就保留原样），
+# 所以不是行为差异，只是"这台机器上没有粤拼表"——与 pypinyin 缺失时的降级一致。
+_JYUTPING_CONVERTER = None
+_JYUTPING_AUTO = None
+_JYUTPING_TRIED = False
+
+
+def set_jyutping_converter(fn) -> None:
+    """注入「汉字 → 无声调粤拼」转换器（`fn(str) -> str`）。传 `None` 清除注入。
+
+    与 `classic_singer.set_romaji_converter` 同一套路：宿主能力而不是引擎逻辑。
+    """
+    global _JYUTPING_CONVERTER
+    _JYUTPING_CONVERTER = fn
+
+
+def _auto_jyutping():
+    """惰性探测可用的粤拼库，返回 `fn(hanzi) -> str` 或 `None`（只探测一次）。"""
+    global _JYUTPING_AUTO, _JYUTPING_TRIED
+    if _JYUTPING_TRIED:
+        return _JYUTPING_AUTO
+    _JYUTPING_TRIED = True
+    try:                                    # pip install ToJyutping
+        import ToJyutping                    # type: ignore
+
+        def _conv_tojyutping(s, _m=ToJyutping):
+            res = _m.get_jyutping(s)
+            # 形态：[(字, 粤拼 或 None), ...]
+            if isinstance(res, list) and res:
+                first = res[0]
+                if isinstance(first, (list, tuple)) and len(first) >= 2 and first[1]:
+                    return str(first[1])
+            return s
+
+        _JYUTPING_AUTO = _conv_tojyutping
+        return _JYUTPING_AUTO
+    except Exception:
+        pass
+    try:                                    # pip install pycantonese
+        import pycantonese                   # type: ignore
+
+        def _conv_pycantonese(s, _m=pycantonese):
+            res = _m.characters_to_jyutping(s)
+            if res and isinstance(res[0], (list, tuple)) and len(res[0]) >= 2 and res[0][1]:
+                return str(res[0][1])
+            return s
+
+        _JYUTPING_AUTO = _conv_pycantonese
+        return _JYUTPING_AUTO
+    except Exception:
+        pass
+    _JYUTPING_AUTO = None
+    return None
+
+
+def jyutping_available() -> bool:
+    """当前能否做汉字→粤拼（注入过，或本机装了受支持的粤拼库）。"""
+    return (_JYUTPING_CONVERTER is not None) or (_auto_jyutping() is not None)
+
+
+def hanzi_to_jyutping(s: str) -> str:
+    """单个汉字 → 无声调粤拼；转不出来**原样返回**（同 C# 的 `Error.Default`）。"""
+    if not s:
+        return s
+    conv = _JYUTPING_CONVERTER or _auto_jyutping()
+    if conv is None:
+        return s
+    try:
+        out = conv(s)
+    except Exception:
+        return s
+    return out or s
+
+
 class BaseChinesePhonemizer:
     """对应 `BaseChinesePhonemizer`。
 
@@ -112,6 +193,29 @@ class BaseChinesePhonemizer:
             if len(lyrics_array[i]) == 1 and is_hanzi(lyrics_array[i]):
                 lyrics_array[i] = pinyin_result[pinyin_index]
                 pinyin_index += 1
+        return lyrics_array
+
+    @staticmethod
+    def romanize_jyutping(lyrics: Iterable[str]) -> List[str]:
+        """`CantoneseCVVCPhonemizer.Romanize` 的对应实现（用**粤拼**而非拼音）。
+
+        结构与 `romanize` 逐句对应（先收集、再按 `Length == 1 && IsHanzi` 替换），
+        只把转换器换成 `hanzi_to_jyutping`。
+
+        ★ 照搬保留：C# 那条 `if (jyutpingResult == null) return lyricsArray;` 同样是
+        **死分支**（`HanziToPinyin(...).ToStrList()` 不会返回 null）—— 见 `romanize`
+        里同款守卫的说明，别"顺手修好"。
+        """
+        lyrics_array = list(lyrics)
+        hanzi_lyrics = [s for s in lyrics_array if is_hanzi(s)]
+        jyutping_result = [hanzi_to_jyutping(s) for s in hanzi_lyrics]
+        if jyutping_result is None:
+            return lyrics_array
+        jyutping_index = 0
+        for i in range(len(lyrics_array)):
+            if len(lyrics_array[i]) == 1 and is_hanzi(lyrics_array[i]):
+                lyrics_array[i] = jyutping_result[jyutping_index]
+                jyutping_index += 1
         return lyrics_array
 
     @staticmethod

@@ -24,11 +24,23 @@
   - `voicebank_config.py`      `character.yaml` 的配置模型（Classic/VoicebankConfig.cs）
   - `voicebank_loader.py`      声库加载：character.txt / character.yaml / oto.ini /
                                prefix.map（Classic/VoicebankLoader.cs）
+  - `ust_note.py`             .ust 单个音符块读写（Classic/UstNote.cs）
+  - `ust.py`                  .ust 工程读写与插件 diff（Classic/Ust.cs）
+  - `plugin.py`               UTAU 旧插件体系（IPlugin/Plugin/PluginLoader/PluginRunner/ExeInstaller）
+  - `voicebank_error_checker.py` 声库体检（Classic/VoicebankErrorChecker.cs）
+  - `presamp.py`              presamp.ini 解析（Classic/Presamp.cs；数据表在 _presamp_data.py，由 _gen_presamp_data.py 生成）
+  - `ust_flag.py`             UST flag 解析（Classic/Flags/UstFlag.cs + UstFlagParser.cs；.ust 导入的前置）
+  - `exe_resampler.py`         外部 resampler（Classic/ExeResampler.cs）
+  - `unix_wavtool.py`          Unix 外部 wavtool（Classic/UnixWavtool.cs）
+  - `exe_wavtool.py`           Windows 外部 wavtool（Classic/ExeWavtool.cs；生成 bat）
+  - `tools_manager.py`         工具管理器：内置 Worldline + SharpWavtool 与外部工具扫描
+                               （Classic/ToolsManager.cs）
+  - `voicebank_files.py`       声库源文件的临时缓存与元文件搬运（Classic/VoicebankFiles.cs）
 
 未照搬（后续）：
-  - `ExeResampler` / `ExeWavtool` / `UnixWavtool` / `ToolsManager` / `VoicebankFiles`
-    （外部工具进程那一整片；还需要 `Util/Base64.cs`、`Util/ProcessRunner.cs`、`OS.cs`）
-  - `Presamp`(731) / `Ust` / `UstNote` / `PluginLoader` / `VoicebankErrorChecker`
+  - `PresampWatcher`(44)
+  - `Plugin` / `IPlugin` / `PluginLoader` / `PluginRunner` / `ExeInstaller`
+  - `VoicebankInstaller` / `VoicebankPublisher` / `VoicebankErrorChecker`
   - `EnunuSinger` / `DiffSingerSinger` / `VoicevoxSinger`（`ClassicSingerLoader` 里
     留了 `register_singer_factory` 注册点，未注册时回落到 `ClassicSinger`）
 """
@@ -64,6 +76,29 @@ from .worldline_renderer import (  # noqa: F401
 )
 from .worldline_resampler import WorldlineResampler  # noqa: F401
 
+from .exe_resampler import ExeResampler  # noqa: F401
+from .ust_flag import SINGLE_CHARACTER_FLAGS, UstFlag, UstFlagParser  # noqa: F401
+from .ust_note import FileFormatError, UstNote, parse_float  # noqa: F401
+from . import ust  # noqa: F401
+from .presamp import (Presamp, PresampAliasRules, PresampConsonant,  # noqa: F401
+                      PresampPhoneme, PresampVowel)
+from .voicebank_error_checker import (VoicebankError,  # noqa: F401
+                                    VoicebankErrorChecker)
+from .plugin import (ExeInstaller, IPlugin, Plugin, PluginErrorEventArgs,  # noqa: F401
+                     PluginLoader, PluginRunner, ReplaceNoteEventArgs)
+from .exe_wavtool import ExeWavtool  # noqa: F401
+from .tools_manager import (  # noqa: F401
+    ToolsManager,
+    get_tools_manager,
+    set_tools_manager,
+)
+from .unix_wavtool import UnixWavtool  # noqa: F401
+from .voicebank_files import (  # noqa: F401
+    VoicebankFiles,
+    get_voicebank_files,
+    set_voicebank_files,
+)
+
 # 让 `Renderers.CreateRenderer(...)` 拿得到实例（C# 是 switch 里 `new`）
 register_classic_renderer()
 register_worldline_renderers()
@@ -79,4 +114,9 @@ __all__ = [
     'IFrqFiles', 'Frq', 'Mrq', 'OtoFrq',
     'VoicebankConfig', 'SymbolSet', 'SymbolSetPreset', 'SingerTypeValues',
     'VoicebankLoader', 'FileTrace',
+    'ExeResampler', 'UnixWavtool', 'ExeWavtool',
+    'UstFlag', 'UstFlagParser', 'SINGLE_CHARACTER_FLAGS',
+    'UstNote', 'FileFormatError', 'parse_float',
+    'ToolsManager', 'get_tools_manager', 'set_tools_manager',
+    'VoicebankFiles', 'get_voicebank_files', 'set_voicebank_files',
 ]

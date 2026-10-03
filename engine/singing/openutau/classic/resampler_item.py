@@ -30,7 +30,7 @@
 
 import math
 import os
-from typing import List
+from typing import List, Optional
 
 from ..binary_writer import BinaryWriter
 from ..music_math import MusicMath, fdiv
@@ -42,36 +42,93 @@ class ClassicHost:
     """C# 三个单例（`ToolsManager` / `VoicebankFiles` / `PathManager`）的替身。
 
     C# 里 `ResamplerItem` 的构造函数直接从这三个全局单例取东西；Python 侧没有全局单例，
-    这里用一个可替换的宿主对象顶替，方法/字段名与 C# 用法一一对应。
+    这里用一个可替换的宿主对象顶替，字段/方法名与 C# 用法一一对应。
     这是**载体差异，不是行为差异**。
 
-    未配置时会抛 `NotImplementedError`（而不是静默给错路径），避免"文件找不到"
-    这类问题被伪装成其他错误。
+    五个方法现在都**转发到真实现**（`tools_manager.get_tools_manager()` /
+    `voicebank_files.get_voicebank_files()`，都是可注入的模块级实例）。
+    子类仍可覆写它们来注入替身（测试里的 `_test_classic_host` 就是这么做）。
     """
 
-    #: 对应 `PathManager.Inst.CachePath`（resampler/wavtool 的临时文件都落在这里）
-    cache_path: str = ''
     #: 对应 `PathManager.Inst.RootPath`（随包分发的 `worldline.dll` 就在这一层；
     #: 它也是 `Preferences.Inst` 之类的同级目录）
     root_path: str = ''
+    #: 对应 `PathManager.Inst.DataPath`（`Resamplers` / `Wavtools` 都挂在它下面）。
+    #: **必须配**：不配的话下面两个工具目录会算成空串，`ToolsManager` 扫描时
+    #: `CreateDirectory("")` 抛错 → 走上游那个"清空整张表"的分支（见其 docstring 第 2 条）。
+    data_path: str = ''
+    #: 对应 `PathManager.Inst.CachePath`（resampler/wavtool 的临时文件都落在这里）
+    cache_path: str = ''
     #: 对应 `PathManager.Inst.SingersPaths`：声库搜索根目录列表。
     #: 默认空列表 —— 对应"一个搜索路径都没配"，于是 `find_all_singers()` 返回空表
     #: （这是**真实答案**，不是错误，所以不抛 `NotImplementedError`）。
     singers_paths: List[str] = []
 
+    #: 显式覆盖外部工具目录（测试注入用）；留空则按 C# 的表达式属性推导。
+    resamplers_path_override: str = ''
+    wavtools_path_override: str = ''
+    plugins_path_override: str = ''
+
+    @property
+    def resamplers_path(self) -> str:
+        """对应 `PathManager.Inst.ResamplersPath => Path.Combine(DataPath, "Resamplers")`。
+
+        ★ C# 里它是**表达式属性**（永远能算出一个真实目录），不是可空字段。
+        所以这里也在 `data_path` 有值时按同一规则推导，而不是留空 ——
+        留空会让 `ToolsManager.SearchResamplers` 走进"清表"分支。
+        """
+        if self.resamplers_path_override:
+            return self.resamplers_path_override
+        return os.path.join(self.data_path, 'Resamplers') if self.data_path else ''
+
+    @resamplers_path.setter
+    def resamplers_path(self, value: str) -> None:
+        self.resamplers_path_override = value or ''
+
+    @property
+    def wavtools_path(self) -> str:
+        """对应 `PathManager.Inst.WavtoolsPath => Path.Combine(DataPath, "Wavtools")`。"""
+        if self.wavtools_path_override:
+            return self.wavtools_path_override
+        return os.path.join(self.data_path, 'Wavtools') if self.data_path else ''
+
+    @wavtools_path.setter
+    def wavtools_path(self, value: str) -> None:
+        self.wavtools_path_override = value or ''
+
+    @property
+    def plugins_path(self) -> str:
+        """对应 `PathManager.Inst.PluginsPath`（`PhonemizerInstaller` 往这儿拷 .dll）。
+
+        ★ C# 里它同样是**表达式属性** `Path.Combine(DataPath, "Plugins")`，
+          所以这里也按同一规则推导，不留空（`PhonemizerInstaller` 依赖它）。
+        """
+        if self.plugins_path_override:
+            return self.plugins_path_override
+        return os.path.join(self.data_path, 'Plugins') if self.data_path else ''
+
+    @plugins_path.setter
+    def plugins_path(self, value: str) -> None:
+        self.plugins_path_override = value or ''
+
     def get_resampler(self, name: str):
         """对应 `ToolsManager.Inst.GetResampler(name)`。
 
-        返回的对象需满足 C# `IResampler` 里被本品用到的三项：
-        `supports_flag(abbr) -> bool`、`__str__()`（进哈希与文件名前缀判定）。
+        返回的对象满足 C# `IResampler` 里被本品用到的几项：
+        `supports_flag(abbr) -> bool`、`no_wrapper_script`、`file_path`、
+        `do_resampler_returns_file(...)`、`__str__()`（进哈希与文件名前缀判定）。
         """
-        raise NotImplementedError(
-            'ClassicHost.get_resampler 未配置：需要工具管理器（Classic/ExeResampler 等尚未照搬）')
+        from .tools_manager import get_tools_manager
+        return get_tools_manager().get_resampler(name)
 
-    def get_source_temp_path(self, singer_id: str, oto, ext: str) -> str:
-        """对应 `VoicebankFiles.Inst.GetSourceTempPath(singerId, oto, ext)`。"""
-        raise NotImplementedError(
-            'ClassicHost.get_source_temp_path 未配置：需要 VoicebankFiles（尚未照搬）')
+    def get_source_temp_path(self, singer_id: str, oto, ext: Optional[str] = None) -> str:
+        """对应 `VoicebankFiles.Inst.GetSourceTempPath(singerId, oto, ext)`。
+
+        ★ `ext` 在 C# 里是**可选参数**（`string ext = null`，缺省时取 `oto.File` 的扩展名），
+        所以这里也给了默认值。
+        """
+        from .voicebank_files import get_voicebank_files
+        return get_voicebank_files().get_source_temp_path(singer_id, oto, ext)
 
     def get_wavtool(self, name: str):
         """对应 `ToolsManager.Inst.GetWavtool(name)`。
@@ -79,8 +136,8 @@ class ClassicHost:
         ★ C# 里 `name` 对不上时**回落**到 `wavtoolsMap[SharpWavtool.nameConvergence]`，
         而不是返回 null；所以返回的对象必须永远可用。
         """
-        raise NotImplementedError(
-            'ClassicHost.get_wavtool 未配置：需要工具管理器（Classic/ToolsManager 尚未照搬）')
+        from .tools_manager import get_tools_manager
+        return get_tools_manager().get_wavtool(name)
 
     def copy_source_temp(self, source: str, temp: str) -> None:
         """对应 `VoicebankFiles.Inst.CopySourceTemp(source, temp)`。
@@ -88,15 +145,14 @@ class ClassicHost:
         ★ 只在**外部 resampler** 那条路上被调用（C# 用
         `!(item.resampler is WorldlineResampler)` 守卫）：外部程序要一个解码成
         WAV 的临时输入文件，而自带的 Worldline 直接读原音，不需要这一趟拷贝。
-        默认抛 `NotImplementedError` —— 自包含路径永远不会走到。
         """
-        raise NotImplementedError(
-            'ClassicHost.copy_source_temp 未配置：需要 VoicebankFiles（尚未照搬）')
+        from .voicebank_files import get_voicebank_files
+        get_voicebank_files().copy_source_temp(source, temp)
 
     def copy_back_meta_files(self, source: str, temp: str) -> None:
         """对应 `VoicebankFiles.Inst.CopyBackMetaFiles(source, temp)`（同上，仅外部路径用）。"""
-        raise NotImplementedError(
-            'ClassicHost.copy_back_meta_files 未配置：需要 VoicebankFiles（尚未照搬）')
+        from .voicebank_files import get_voicebank_files
+        get_voicebank_files().copy_back_meta_files(source, temp)
 
 
 #: 当前宿主（对应 C# 的全局单例）。测试/主程序在启动时替换它。

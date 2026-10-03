@@ -4,11 +4,11 @@
 // 所有条目都从作者或上游项目公开托管的仓库按需拉取，使用条款随条目展示。
 import { ref, computed, onMounted, onActivated, onBeforeUnmount } from 'vue';
 import Icon from '../Icon.vue';
-import { useUtauStore } from '../../stores/utau';
+import { useSingerStore } from '../../stores/singer';
 import { t } from '../../core/i18n.js';
 
 const emit = defineEmits(['installed']);
-const store = useUtauStore();
+const store = useSingerStore();
 const bridge = window.fuBridge;
 const isDesktop = !!(bridge && bridge.utauVoicebankRegistry);
 
@@ -44,13 +44,9 @@ async function load() {
   finally { loading.value = false; }
 }
 
-// 声库目录变化后同步给全局 store（让 UTAU 工作台的声库列表立刻可见）
-async function syncStore(activateDir) {
-  try {
-    const r = await bridge.utauListVoicebanks();
-    if (r && r.ok) store.setVoicebanks(r.list || []);
-  } catch (e) {}
-  if (activateDir) store.setVoicebank(activateDir);
+// 声库目录变化后刷新**统一**声库列表（singer store 是唯一来源）
+async function syncStore() {
+  try { await store.loadBanks(); } catch (e) { /* 列表刷新失败不阻塞制作流程 */ }
 }
 
 async function install(it) {
@@ -85,9 +81,19 @@ async function cancel(it) {
   try { await bridge.utauCancelVoicebankDownload(it.id); } catch (e) {}
 }
 
+/**
+ * 「使用」= 把这条声库挂到**当前轨道**上。
+ *
+ * ★ 引擎是轨道级属性，所以没有「全局当前声库」这回事 ——
+ *   切到哪条轨，就把它设成那条轨的歌手。
+ */
 function use(it) {
-  store.setVoicebank(it.dir);
-  msg.value = t('已设为当前声库：') + t(it.name);
+  const tr = store.activeTrack;
+  if (!tr) { msg.value = t('没有可用的轨道'); return; }
+  store.patchTrack(tr.id, {
+    engine: 'utau', singer: it.dir, singerName: it.name,
+  });
+  msg.value = t('已挂到当前轨道：') + t(it.name);
 }
 
 async function remove(it) {
@@ -95,10 +101,9 @@ async function remove(it) {
   try {
     const r = await bridge.utauDeleteVoicebank(it.dir);
     if (r && r.ok) {
-      if (store.voicebankDir === it.dir) store.setVoicebank('');
       msg.value = t('已删除声库：') + t(it.name);
       await load();
-      await syncStore('');
+      await syncStore();
     } else {
       err.value = t('删除失败：') + ((r && r.error) || 'unknown');
     }

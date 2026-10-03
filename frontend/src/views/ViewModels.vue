@@ -139,10 +139,14 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
       </button>
     </div>
 
-    <!-- 醒目提示：新模型下载后需补全依赖 -->
+    <!-- 醒目提示：新模型下载后需补全依赖 + 下载慢可换源 -->
     <div v-if="curTab !== 'diffsinger'" class="vm-dep-tip">
       <span class="vm-dep-ic"><Icon name="zap" :size="14" /></span>
       <span>{{ t('下载新模型后请去「资源管理」里补全依赖，否则模型可能无法使用') }}</span>
+    </div>
+    <div class="vm-dep-tip vm-src-tip">
+      <span class="vm-dep-ic"><Icon name="globe" :size="14" /></span>
+      <span>{{ t('下载速度慢，请在设置页里切换下载源') }}</span>
     </div>
 
     <!-- DiffSinger 声库目录（独立板块，非模型卡片的 kind 分组） -->
@@ -229,6 +233,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 /*** 页签：与全局 .btn/.tab 一致的轻量 pill 风格，去掉厚重渐变与强投影 ***/
 .vm-tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
 
+.vm-src-tip { margin-top: -4px; }
 /* ===== 依赖补全醒目提示 ===== */
 .vm-dep-tip { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; padding: 9px 14px; border-radius: var(--radius-lg); border: 1px solid color-mix(in srgb, var(--brand-coral) 38%, transparent); background: color-mix(in srgb, var(--brand-coral) 11%, var(--surface)); color: var(--ink); font-size: 12.5px; font-weight: 700; line-height: 1.5; }
 .vm-dep-ic { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; border-radius: 50%; background: color-mix(in srgb, var(--brand-coral) 18%, transparent); color: var(--brand-coral); flex: none; }

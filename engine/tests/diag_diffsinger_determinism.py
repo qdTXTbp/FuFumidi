@@ -7,7 +7,11 @@ DiffSinger 的 v2 流水线由多段 ONNX 组成（linguistic → dur → varian
 本工具给所有 `run_*` 阶段挂 spy，打印每阶段的「输入指纹 / 输出指纹」——
 **跨进程跑两次、diff 输出，第一个 out= 不同的阶段就是分歧源头。**
 
-已知结论（2026-10-01 实测）：源头是 `run_variance`（方差预测）。
+已知结论（2026-10-01 实测）：源头是**旧实现**的方差预测阶段。
+★ 2026-10-03 起管线已重写为与上游 OpenUtau 对齐的版本（`diffsinger/` 包），
+  旧的自造「v2 五段式」（含 run_variance / run_dur / run_pitch_stage）已删除；
+  渲染不再经过任何时长/音高模型（f0 只来自谱面曲线）。本脚本仅用于检查
+  **同一份音符两次渲染的确定性**，对声库/模型版本无假设。
 同进程内两次渲染逐位一致，跨进程才不一致；已排除 PYTHONHASHSEED、模型内随机算子、
 线程数（intra/inter=1 + ORT_SEQUENTIAL）、图优化（DISABLE_ALL / ENABLE_BASIC）、
 以及**扩散步数**（`steps=1` 仍逐次不同）—— 所以不是"多步扩散放大"，
@@ -95,9 +99,17 @@ def main():
         return 2
 
     trace = []
-    names = sorted(n for n in dir(ed) if n.startswith('run_') and callable(getattr(ed, n)))
+    # ★ 2026-10-03：旧的 `run_dur` / `run_pitch_stage` / `run_variance` /
+    #   `run_acoustic_v2` 已随自造五段式一起删除，`names` 会变成空列表。
+    #   改为盯 `diffsinger.session.run_session` —— 它是**每一次 ONNX 调用**的唯一入口，
+    #   因此与管线版本无关、粒度更细（dsdur linguistic / dsdur / dsvariance / acoustic /
+    #   vocoder / dspitch 各一次），且同样能看出输入输出是否逐次一致。
+    # ★ 猴补丁要打在**真正持有该函数**的模块上（`engine_diffsinger` 只是转发门面），
+    #   但 `render_phrase` 仍要从门面调 —— 所以分成两个变量。
+    import diffsinger.session as _sess
+    target, names = _sess, ['run_session']
     for n in names:
-        _orig = getattr(ed, n)
+        _orig = getattr(target, n)
 
         def make(_o=_orig, _n=n):
             def wrapper(*a, **k):
@@ -107,13 +119,24 @@ def main():
                 return out
             return wrapper
 
-        setattr(ed, n, make())
+        setattr(target, n, make())
 
     print('VOICEBANK %s' % os.path.basename(vb))
     print('SPIED %s' % ','.join(names))
     ed.render_phrase({'voicebank': vb, 'notes': NOTES, 'bpm': 120.0, 'device': 'cpu', 'out': ''})
     for i, (n, di, do) in enumerate(trace):
         print('STAGE %02d %-18s in=%-64s out=%s' % (i, n, di[:64], do))
+    same = sum(1 for _, di, do in trace if di == do)
+    print()
+    print('ONNX 调用 %d 次；其中输入摘要==输出摘要的 %d 次' % (len(trace), same))
+    print('★ 判定：同一份音符**连续两次**渲染的每个模型输入摘要应完全一致；')
+    print('  波形本身因声码器激励相位不同而不可逐样本比较（既有结论，见文件头）。')
+    if len(trace) <= 2:
+        print()
+        print('⚠ 只追到 %d 次调用 —— 因为 `run_session` 只是 A 层（dsdur）的入口；' % len(trace))
+        print('  B 层（dsvariance / acoustic / vocoder）在 renderer.py 里是直接')
+        print('  `make_session` + `session.run`，不走这个包装。要覆盖全链路，')
+        print('  需要在 `diffsinger.session.make_session` 上打补丁。')
     return 0
 
 

@@ -39,6 +39,8 @@ from .pack import G2pPack, is_all_punct, set_onnx_session_factory  # noqa: F401
 from .remapper import G2pRemapper  # noqa: F401
 
 __all__ = [
+    # 模型装载（models.py）与 G2p 子类
+    "models", "JapaneseMonophoneG2p",
     'IG2p', 'IG2pSymbols',
     'G2pDictionaryData', 'SymbolData',
     'G2pDictionary', 'TrieNode',
@@ -47,3 +49,7 @@ __all__ = [
     'G2pPack', 'set_onnx_session_factory', 'is_all_punct',
     'ArpabetG2p', 'set_data_dir', 'build_grapheme_indexes',
 ]
+
+# ---- 模型装载 + 各语种 G2p（子类）
+from . import models  # noqa: F401
+from .japanese_monophone import JapaneseMonophoneG2p  # noqa: F401

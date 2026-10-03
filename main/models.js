@@ -6,6 +6,7 @@
 const { spawn } = require('child_process');
 const AdmZip = require('adm-zip');
 const Paths = require('./paths');
+const { safeExtractAllTo } = require('./zip-safe');
 const MSST_CATALOG = require('./models-msst-catalog');
 const DS = require('./download-source');
 
@@ -361,7 +362,9 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     const ext = path.extname(file).toLowerCase();
     if (ext === '.zip') {
       const zip = new AdmZip(file);
-      zip.extractAllTo(outDir, true);
+      const _zsafe = safeExtractAllTo(zip, outDir);
+
+      if (!_zsafe.ok) throw new Error('压缩包安全校验未通过：' + _zsafe.error);
       return;
     }
     if (ext === '.7z') {

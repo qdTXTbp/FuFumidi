@@ -1,0 +1,17 @@
+{
+  "id": "auto-key-cmajor",
+  "name": "自动转 C 大调",
+  "version": "1.0.0",
+  "author": "FuFumidi",
+  "description": "自动识别 MIDI 调性并转到 C 大调。采用自然音级映射而非简单加减半音，转调后音名拼写也正确（F# 大调转 C 后记为 Gb）。原文件不改动，结果写入同目录新文件。",
+  "entry": "index.js",
+  "renderer": "ui.js",
+  "license": "MIT",
+  "keywords": ["移调", "调性", "MIDI", "C大调", "转调"],
+  "commands": [
+    "auto-key-cmajor:scriptPath",
+    "auto-key-cmajor:analyze",
+    "auto-key-cmajor:transpose",
+    "auto-key-cmajor:toCMajor"
+  ]
+}

@@ -18,7 +18,9 @@
 // ============================================================
 'use strict';
 const Paths = require('./paths');
+const { safeExtractAllTo } = require('./zip-safe');
 const DS = require('./download-source');
+const createFastDownload = require('./fast-download');
 
 function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawn, spawnEngine, resolvePython, engineEnv, readSettings, writeSettings }) {
 
@@ -68,7 +70,11 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
   ];
 
   /* ---------------- 小工具 ---------------- */
-  const enabled = () => !!((readSettings && readSettings().diffsinger_enabled));
+  // ★ 模块**默认启用、不再需要手动点一次「启用模块」**。
+  //   这里恒为 true：老用户 settings.json 里可能存着 diffsinger_enabled=false，
+  //   若还按它拦截，那些人升级后会突然"AI 歌声合成不可用" —— 所以彻底不再据此拦截。
+  //   `diffsinger:setEnabled` 仍保留（前端还有「禁用」开关），但它只影响显式关闭。
+  const enabled = () => true;
   function readRuntime() {
     try { return JSON.parse(fs.readFileSync(runtimeFile(), 'utf8')); } catch (e) { return {}; }
   }
@@ -247,74 +253,30 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
 
   const hostOf = (u) => { try { return new URL(u).host; } catch (e) { return ''; } };
 
-  /* ---------------- 通用下载器（多源轮换 + 断点续传 + 停滞看门狗） ---------------- */
-  async function downloadWithMirrors({ urls, out, minSize, onProgress, isUserAbort }) {
-    const STALL_MS = 25000;
-    const MAX_ROUNDS = 10;
-    const part = out + '.part';
-    let ws = null, lastErr = null;
-    for (let round = 0; round < MAX_ROUNDS; round++) {
-      const url = urls[round % urls.length];
-      const ctrl = new AbortController();
-      _dlAborts.set(out, { ctrl, isUserAbort });
-      try {
-        let have = 0;
-        try { have = fs.statSync(part).size; } catch (e) {}
-        const headers = { 'user-agent': 'FuFumidi' };
-        if (have > 0) headers['range'] = 'bytes=' + have + '-';
-        const r = await net.fetch(url, { headers, signal: ctrl.signal, redirect: 'follow' });
-        if (r.status === 416) {
-          try { fs.rmSync(part, { force: true }); } catch (e2) {}
-          throw new Error('断点越界已重置');
-        }
-        if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
-        const clen = parseInt(r.headers.get('content-length') || '0', 10);
-        const resumable = r.status === 206 && have > 0;
-        if (!resumable && have > 0) { try { fs.rmSync(part, { force: true }); } catch (e2) {} have = 0; }
-        const total = clen ? have + clen : 0;
-        ws = fs.createWriteStream(part, { flags: resumable ? 'a' : 'w' });
-        ws.on('error', () => {});
-        const reader = r.body.getReader();
-        let lastData = Date.now();
-        const watchdog = setInterval(() => {
-          if (Date.now() - lastData > STALL_MS) {
-            try { reader.cancel('stalled'); } catch (e2) {}
-            try { ctrl.abort(); } catch (e2) {}
-          }
-        }, 3000);
-        let got = 0;
-        try {
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            lastData = Date.now();
-              got += value.length;
-              const received = have + got;
-              onProgress && onProgress({ received, total, host: hostOf(url) });
-              await new Promise((res2, rej2) => ws.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
-          }
-        } finally { clearInterval(watchdog); }
-        await new Promise((res2, rej2) => ws.end(err => (err ? rej2(err) : res2())));
-        ws = null;
-        const st = fs.statSync(part);
-        if (st.size < (minSize || 200000)) { lastErr = new Error('下载文件过小（' + st.size + ' B），可能被代理拦截'); continue; }
-        try { fs.rmSync(out, { force: true }); } catch (e2) {}
-        fs.renameSync(part, out);
-        return { size: st.size };
-      } catch (e) {
-        lastErr = e;
-        try { if (ws) ws.destroy(); } catch (e2) {}
-        ws = null;
-        if (isUserAbort && isUserAbort.aborted) return { cancelled: true };
-        onProgress && onProgress({ retry: round + 1, host: hostOf(url), error: '第 ' + (round + 1) + ' 轮失败，自动换源/续传…' });
-        if (round === MAX_ROUNDS - 1) {
-          throw new Error('下载失败（已多源轮换 ' + MAX_ROUNDS + ' 轮）：' + ((lastErr && lastErr.message) || '网络不可达'));
-        }
-      }
-    }
-    throw lastErr || new Error('下载失败');
-  }
+  /* ---------------- 通用下载器（多源测速选最快 + 分段并发 + 断点续传） ----------------
+     实现见 main/fast-download.js，与「模型下载」共用同一条链路。
+
+     为什么换掉旧实现：旧版是「按固定顺序单连接 + 25 秒无字节才换源」，在真实网络下
+     表现为「有时 50MB/s、有时几百 KB」—— 只要排在第一位的源只是**慢**（而不是断），
+     看门狗永远不触发，于是一路以几百 KB/s 爬完整个上百 MB 的声库包。
+     现在改为：① 各候选源先用一小段实测速度，按速度选最快的；② 支持 Range 的源
+     切 4 段并发下载（对象存储/Release 单连接普遍被限速）；③ 单连接兜底路径里再加
+     「低速轮换」，慢源会被主动放弃并换到下一个（已下字节通过 .part 续传）。 */
   const _dlAborts = new Map();
+  const FastDL = createFastDownload({ net, fs, path });
+
+  async function downloadWithMirrors({ urls, out, minSize, onProgress, isUserAbort }) {
+    const entry = isUserAbort || {};
+    return await FastDL.downloadFast({
+      urls,
+      dest: out,
+      minSize,
+      headers: { 'user-agent': 'FuFumidi' },
+      isUserAbort: entry,
+      ctrl: entry.ctrl || null,
+      onProgress,
+    });
+  }
 
   /* ---------------- 状态查询 ---------------- */
   // 依赖检测结果短缓存：避免每次进入页面都起一个 Python 子进程
@@ -344,10 +306,13 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     });
   }
 
-  ipcMain.handle('diffsinger:status', async () => {
+  ipcMain.handle('diffsinger:status', async (_evt, opts) => {
     try {
       const enabledNow = enabled();
-      const deps = enabledNow ? await checkDeps(false) : { ok: false, missing: DS_PY_DEPS, installed: [], skipped: true };
+      // force：跳过 30s 短缓存重新探测。GPU 增强包安装/卸载后必须用它，
+      // 否则「推理后端」会继续显示安装前的 provider 列表（用户以为没生效）。
+      const force = !!(opts && opts.force);
+      const deps = enabledNow ? await checkDeps(force) : { ok: false, missing: DS_PY_DEPS, installed: [], skipped: true };
       const rt = readRuntime();
       const vocoderInstalled = (() => {
         try {
@@ -396,12 +361,17 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
   //   1) pip 安装推理依赖（onnxruntime / pyyaml），流式输出安装日志；
   //   2) 下载通用 NSF-HiFiGAN 声码器（多源 + 断点续传 + 进度）。
   const _runtimeBusy = { active: false };
+  // 组件安装的中止信号：旧实现只用 _runtimeBusy.active 当「忙碌」标志，
+  // 而下载器读的是 .aborted —— 两边对不上，导致「取消安装」对声码器下载完全无效。
+  const _runtimeAbort = { aborted: false, ctrl: null };
   ipcMain.handle('diffsinger:installRuntime', async (evt) => {
     if (!enabled()) return { ok: false, error: '请先启用 DiffSinger 模块' };
     if (_runtimeBusy.active) return { ok: false, error: '组件安装已在进行中' };
     const win = BrowserWindow.fromWebContents(evt.sender);
     const send = (p) => { if (win && !win.isDestroyed()) win.webContents.send('diffsinger:runtimeProgress', p); };
     _runtimeBusy.active = true;
+    _runtimeAbort.aborted = false;
+    _runtimeAbort.ctrl = new AbortController();
     try {
       // ---- 步骤 1：Python 依赖 ----
       send({ phase: 'deps', percent: 0, text: '正在检查 Python 推理依赖…', done: false });
@@ -464,23 +434,30 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         fs.mkdirSync(dlDir, { recursive: true });
         const zipPath = path.join(dlDir, 'vocoder.zip');
         const vUrls = assetUrls(VOCODER_SPEC);
-        await downloadWithMirrors({
-          urls: vUrls,
-          out: zipPath,
-          minSize: 1e6,
-          isUserAbort: _runtimeBusy,
-          onProgress: (p) => send({
-            phase: 'vocoder', percent: p.total ? Math.min(96, Math.round(p.received / p.total * 96)) : 0,
-            received: p.received, total: p.total, host: p.host, text: p.error || ('当前源：' + sourceLabelOf(vUrls)), done: false,
-          }),
-        });
+        _dlAborts.set(zipPath, _runtimeAbort);
+        try {
+          await downloadWithMirrors({
+            urls: vUrls,
+            out: zipPath,
+            minSize: 1e6,
+            isUserAbort: _runtimeAbort,
+            onProgress: (p) => send({
+              phase: 'vocoder', percent: p.total ? Math.min(96, Math.round(p.received / p.total * 96)) : 0,
+              received: p.received, total: p.total, host: p.host,
+              text: p.text || p.error || ('当前源：' + sourceLabelOf(vUrls)),
+              speed: p.speed || 0, done: false,
+            }),
+          });
+        } finally { _dlAborts.delete(zipPath); }
         send({ phase: 'vocoder', percent: 97, text: '正在解压声码器…', done: false });
         const AdmZip = require('adm-zip');
         const zip = new AdmZip(zipPath);
         const stage = path.join(dlDir, 'vocoder-extract');
         try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
         fs.mkdirSync(stage, { recursive: true });
-        zip.extractAllTo(stage, true);
+        const _zsafe = safeExtractAllTo(zip, stage);
+
+        if (!_zsafe.ok) throw new Error('压缩包安全校验未通过：' + _zsafe.error);
         // 找 onnx（可能在子目录），连同配置一起归一化到 vocoder/
         const files = [];
         const walk = (d) => {
@@ -508,16 +485,20 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       return { ok: true };
     } catch (err) {
       const msg = String((err && err.message) || err);
-      send({ phase: 'error', percent: 0, text: msg, done: true });
-      return { ok: false, error: msg };
+      const canceled = !!(err && err.cancelled) || _runtimeAbort.aborted;
+      send({ phase: canceled ? 'canceled' : 'error', percent: 0, text: canceled ? '已取消安装' : msg, done: true });
+      return { ok: false, error: canceled ? '' : msg, canceled };
     } finally {
       _runtimeBusy.active = false;
+      _runtimeAbort.aborted = false;
+      _runtimeAbort.ctrl = null;
       _dlAborts.delete(path.join(Paths.tempDir(), 'diffsinger-dl', 'vocoder.zip'));
     }
   });
 
   ipcMain.handle('diffsinger:cancelRuntimeInstall', async () => {
-    _runtimeBusy.active = false; // 标记用户中止（pip 子进程无法安全强杀时自然收尾）
+    _runtimeAbort.aborted = true;   // 让下载器（而不是只看 active 标志）真正感知中止
+    _runtimeBusy.active = false;
     const keys = [..._dlAborts.keys()];
     for (const k of keys) {
       const ent = _dlAborts.get(k);
@@ -596,7 +577,9 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         const dlDir = path.join(Paths.tempDir(), 'diffsinger-dl');
         fs.mkdirSync(dlDir, { recursive: true });
         stage = path.join(dlDir, 'import-' + Date.now());
-        zip.extractAllTo(stage, true);
+        const _zsafe = safeExtractAllTo(zip, stage);
+
+        if (!_zsafe.ok) throw new Error('压缩包安全校验未通过：' + _zsafe.error);
         cleanupStage = true;
       } else {
         stage = picked;
@@ -733,7 +716,8 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     const dlDir = path.join(Paths.tempDir(), 'diffsinger-dl');
     fs.mkdirSync(dlDir, { recursive: true });
     const zipPath = path.join(dlDir, it.id + '.zip');
-    const entry = { isUserAbort: false };
+    const entry = { isUserAbort: false, aborted: false, ctrl: new AbortController() };
+    _dlAborts.set(zipPath, entry);
     try {
       const vUrls = assetUrls(it);
       await downloadWithMirrors({
@@ -744,7 +728,9 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         onProgress: (p) => send({
           id, phase: 'download',
           percent: p.total ? Math.min(88, Math.round(p.received / p.total * 88)) : 0,
-          received: p.received, total: p.total, done: false, error: p.error || '', host: p.host,
+          received: p.received, total: p.total, done: false,
+          error: p.error || '', host: p.host, speed: p.speed || 0,
+          text: p.text || (p.error ? '' : (p.host ? ('来源 ' + p.host) : '')),
         }),
       });
       send({ id, phase: 'extract', percent: 90, done: false });
@@ -753,7 +739,9 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       const stage = path.join(dlDir, it.id + '-extract');
       try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
       fs.mkdirSync(stage, { recursive: true });
-      zip.extractAllTo(stage, true);
+      const _zsafe = safeExtractAllTo(zip, stage);
+
+      if (!_zsafe.ok) throw new Error('压缩包安全校验未通过：' + _zsafe.error);
       const cfgDir = findInTree(stage, 'dsconfig.yaml', 4);
       if (!cfgDir) throw new Error('声库包里没有 dsconfig.yaml（包结构可能已变更）');
       const finalDir = path.join(vbRoot(), it.dirName);
@@ -766,8 +754,12 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       send({ id, phase: 'done', percent: 100, done: true });
       return { ok: true, name: it.name, dir: finalDir, size: dirBytes(finalDir) };
     } catch (err) {
-      send({ id, phase: 'error', percent: 0, done: true, error: String((err && err.message) || err) });
-      return { ok: false, error: String((err && err.message) || err) };
+      const canceled = !!(err && err.cancelled) || entry.aborted;
+      const msg = canceled ? '' : String((err && err.message) || err);
+      send({ id, phase: canceled ? 'canceled' : 'error', percent: 0, done: true, error: msg, canceled });
+      return { ok: false, error: msg, canceled };
+    } finally {
+      _dlAborts.delete(zipPath);
     }
   });
 
@@ -776,7 +768,8 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     if (!it) return { ok: false, error: '未知声库' };
     const key = path.join(Paths.tempDir(), 'diffsinger-dl', it.id + '.zip');
     const ent = _dlAborts.get(key);
-    if (ent) { ent.isUserAbort = true; try { ent.ctrl.abort(); } catch (e) {} }
+    // ent 就是下载器持有的那个 entry，标记 + abort 都能被立刻感知
+    if (ent) { ent.isUserAbort = true; ent.aborted = true; try { ent.ctrl.abort(); } catch (e) {} }
     return { ok: true };
   });
 
@@ -867,6 +860,11 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       }, 400);
     };
     const stopCompressTicker = () => { if (compressTimer) { clearInterval(compressTimer); compressTimer = null; } };
+    // ★ `zipPath` / `entry` 必须在 `try` **之外**声明：下面的 `finally` 要引用它们。
+    //   放在 `try` 里的 `const` 对 `finally` 不可见 → 每次跑到 `finally` 必抛
+    //   "zipPath is not defined"，并把**已经成功的结果一起顶掉**（表现为下载完却报错）。
+    let zipPath = '';
+    let entry = null;
     try {
       if (!MSCat) return { ok: false, error: '声库目录数据缺失（请重新构建应用）' };
       const rec = MSCat.BY_PATH.get(String((cfg && cfg.path) || ''));
@@ -876,34 +874,30 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
 
       const dlDir = path.join(Paths.tempDir(), 'diffsinger-dl');
       fs.mkdirSync(dlDir, { recursive: true });
-      const zipPath = path.join(dlDir, 'ms-' + id + '.zip');
-      const entry = { isUserAbort: false };
+      zipPath = path.join(dlDir, 'ms-' + id + '.zip');
+      entry = { isUserAbort: false, aborted: false, ctrl: new AbortController() };
+      _dlAborts.set(zipPath, entry);
       // 直连官方地址；不追加任何镜像候选，保证全球同源一致
       const url = rec.url || MSCat.msFileUrl(rec.path);
-      const host = hostOf(url);
       const totalHint = Number(rec.size) || 0;
       send({ phase: 'download', percent: 0, received: 0, total: totalHint, text: '正在连接 ModelScope 官方源…', done: false });
       sendG({ received: 0, total: totalHint, percent: 0, done: false, text: 'ModelScope 官方源 · ' + (rec.category || ''), speed: 0 });
 
-      // 实时测速：downloadWithMirrors 只回字节数，速度在这里按 300ms 窗口自行计算
-      let lastT = 0, lastR = 0, speed = 0;
+      // 速度由下载器直接给出（多源测速 / 分段并发都在下载器内部完成，这里不再自算）
       await downloadWithMirrors({
         urls: [url],
         out: zipPath,
         minSize: 1e5,
         isUserAbort: entry,
         onProgress: (p) => {
-          const now = Date.now();
-          if (lastT && now - lastT >= 300) { speed = ((p.received - lastR) / (now - lastT)) * 1000; lastT = now; lastR = p.received; }
-          else if (!lastT) { lastT = now; lastR = p.received; }
           const pct = p.total ? Math.min(88, Math.round((p.received / p.total) * 88)) : 0;
           send({
             phase: 'download', percent: pct, received: p.received, total: p.total || totalHint,
-            speed, text: p.error || '', done: false, host: p.host,
+            speed: p.speed || 0, text: p.text || p.error || '', done: false, host: p.host,
           });
           sendG({
             received: p.received, total: p.total || totalHint, percent: pct, done: false,
-            speed, text: p.error || (p.host ? ('来源 ' + p.host) : ''), host: p.host,
+            speed: p.speed || 0, text: p.text || p.error || (p.host ? ('来源 ' + p.host) : ''), host: p.host,
           });
         },
       });
@@ -913,7 +907,9 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       const stage = path.join(dlDir, 'ms-' + id + '-extract');
       try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
       fs.mkdirSync(stage, { recursive: true });
-      zip.extractAllTo(stage, true);
+      const _zsafe = safeExtractAllTo(zip, stage);
+
+      if (!_zsafe.ok) throw new Error('压缩包安全校验未通过：' + _zsafe.error);
       send({ phase: 'extract', percent: 94, text: '正在校验声库结构…', done: false });
       const cfgDir = findInTree(stage, 'dsconfig.yaml', 4);
       if (!cfgDir) throw new Error('声库包里没有 dsconfig.yaml（包结构可能已变更）');
@@ -933,11 +929,13 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       return { ok: true, name: id, dir: finalDir, size: dirBytes(finalDir), source: 'modelscope' };
     } catch (err) {
       stopCompressTicker();
-      const msg = String((err && err.message) || err);
-      const canceled = !!(entry && entry.isUserAbort);
-      send({ phase: canceled ? 'canceled' : 'error', percent: 0, done: true, error: canceled ? '' : msg });
-      sendG({ received: 0, total: 0, percent: 0, done: true, error: canceled ? '' : msg, canceled, speed: 0 });
+      const canceled = !!(err && err.cancelled) || !!(entry && (entry.isUserAbort || entry.aborted));
+      const msg = canceled ? '' : String((err && err.message) || err);
+      send({ phase: canceled ? 'canceled' : 'error', percent: 0, done: true, error: msg });
+      sendG({ received: 0, total: 0, percent: 0, done: true, error: msg, canceled, speed: 0 });
       return { ok: false, error: msg, canceled };
+    } finally {
+      _dlAborts.delete(zipPath);
     }
   });
 
@@ -945,7 +943,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     const id = String(name || '');
     const key = path.join(Paths.tempDir(), 'diffsinger-dl', 'ms-' + id + '.zip');
     const ent = _dlAborts.get(key);
-    if (ent) { ent.isUserAbort = true; try { ent.ctrl.abort(); } catch (e) {} }
+    if (ent) { ent.isUserAbort = true; ent.aborted = true; try { ent.ctrl.abort(); } catch (e) {} }
     return { ok: true };
   });
 
@@ -958,6 +956,30 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     }
     return { ok: true };
   }
+
+  // 歌词输入建议（仿 SV2 的「输入即候选」）。
+  // cfg = { text, language, voicebank }
+  // ★ language 是**轨道级**设置（照搬新版上游 USingerTrack.Language），
+  //   不从歌词自动判断 —— 与 OpenUtau 一致。
+  ipcMain.handle('diffsinger:suggestLyric', (evt, cfg) => new Promise((resolve) => {
+    const c = cfg || {};
+    const args = ['suggest', String(c.text == null ? '' : c.text)];
+    if (c.language) args.push('--language', String(c.language));
+    if (c.voicebank) args.push('--voicebank', String(c.voicebank));
+    args.push('--limit', String(c.limit || 12));
+    try {
+      spawnEngine(args, {
+        script: 'engine_diffsinger.py',
+        onDone: (code, r) => {
+          if (r && r.result && r.result.ok) return resolve(r.result);
+          resolve({ ok: false, items: [], error: (r && r.result && r.result.error) || ('引擎退出码 ' + code) });
+        },
+        onError: (e) => resolve({ ok: false, items: [], error: String(e) }),
+      });
+    } catch (err) {
+      resolve({ ok: false, items: [], error: String((err && err.message) || err) });
+    }
+  }));
 
   ipcMain.handle('diffsinger:inspectVoicebank', (evt, cfg) => new Promise((resolve) => {
     const { voicebank } = cfg || {};

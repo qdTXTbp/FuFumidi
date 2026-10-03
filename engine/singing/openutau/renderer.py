@@ -28,6 +28,15 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 
+class ResamplerFailedException(Exception):
+    """对应 `IRenderer.cs` 里的 `ResamplerFailedException`（同一个文件里定义的）。
+
+    外部 resampler 跑完却没有产出输出文件时抛它，消息里带该进程的完整输出
+    （见 `Classic/ExeResampler.cs`）。★ C# 里它继承 `Exception`，不是
+    `MessageCustomizableException` —— 所以渲染器按类型分支时不会把它当"可翻译文案"。
+    """
+
+
 @dataclass
 class RenderResult:
     """一个乐句的渲染结果（对应 C# `RenderResult`）。"""

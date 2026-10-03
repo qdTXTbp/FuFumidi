@@ -13,6 +13,13 @@
 #   CPU 版（默认，体积小）：默认 PyPI 索引
 #   CUDA 版（--torch cuda）：走 PyTorch 官方 cu121 索引
 
+# ---- 中文歌声合成（DiffSinger / 经典 UTAU 的汉字音素化）----
+# ★ singing/openutau/base_chinese.py 的 Romanize 用它把汉字转成无声调拼音。
+#   缺了它汉字歌词会**静默失效**（hanzi_to_pinyin 返回 None → romanize 原样返回），
+#   而不报错 —— 很难排查。DiffSinger 声库的 dictionary-zh.txt 是「拼音→音素」，
+#   所以没有这一步就完全没法唱中文。
+pypinyin>=0.51
+
 # ---- 通用转录引擎（任意歌曲/人声/乐器）----
 basic-pitch>=0.4.0
 mir-eval>=0.6

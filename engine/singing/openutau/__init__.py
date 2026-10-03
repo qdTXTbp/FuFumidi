@@ -20,36 +20,49 @@
   - `openutau/xxhash.py`      XXH32/XXH64（K4os.Hash.xxHash.XXH32/XXH64）
   - `openutau/binary_writer.py`  `System.IO.BinaryWriter` 的字节布局复刻（缓存键用）
   - `openutau/wave.py`        音频容器读写（Format/Wave.cs；解码后端可注入）
-  - `openutau/classic/`        `OpenUtau.Classic` 命名空间（ResamplerItem 等）
-  - `openutau/plugin_builtin/` `OpenUtau.Plugin.Builtin` 内置音素化器（JA VCV 已搬）
+  - `openutau/classic/`        `OpenUtau.Classic` 命名空间（**17 个模块全部已搬**：
+                               resampler_item / i_resampler / i_wavtool / resampler_manifest /
+                               sharp_wavtool / nwaves_filter / frq / worldline_resampler /
+                               classic_renderer / worldline_renderer / oto_watcher / yaml_watcher /
+                               classic_singer / classic_singer_loader / ini /
+                               voicebank_config / voicebank_loader）
+  - `openutau/plugin_builtin/` `OpenUtau.Plugin.Builtin`：基类 4（syllable_based /
+                               phoneme_based / monophone / latin_diphone）+ 具体 9
+                               （JA VCV·CVVC、ZH VCV·CVVC·CVV、FR VCCV·CVVC、TR CVVC、ARPA）
+  - `openutau/g2p/`            G2p 基座（i_g2p / dictionary_data / dictionary / fallbacks /
+                               pack / remapper）+ `ArpabetG2p`（Api/IG2p.cs 等 + G2p/ArpabetG2p.cs）
   - `openutau/pipeline_source.py` 渲染输入契约 + 取快照/切乐句（Pipeline/PhraseSource.cs）
+  - `openutau/pipeline_identities.py` 值语义标识与影响范围（Pipeline/Identities.cs）
   - `openutau/pipeline_builder.py` 乐句快照的后台构建（Pipeline/PhraseSourceBuilder.cs）
   - `openutau/pipeline_snapshots.py` 文档快照与增量失效（Pipeline/Snapshots.cs）
-  - `openutau/render_phrase.py`   RenderNote/RenderPhone/RenderPhrase（Render/RenderPhrase.cs）
+  - `openutau/render_phrase.py`   RenderNote/RenderPhone/RenderPhrase（Render/RenderPhrase.cs，含 MOD+）
+  - `openutau/render_engine.py`   渲染引擎的 `Progress`（Render/RenderEngine.cs 的一部分）
+  - `openutau/part_validate.py`   UNote.Validate/ToPhonemizerNote + UPart 的音素化段
+  - `openutau/phonemizer_runner.py` PhonemizerRunner.Phonemize 核心（Api/PhonemizerRunner.cs）
+  - `openutau/base_chinese.py`  BaseChinesePhonemizer（BaseChinesePhonemizer.cs）
   - `openutau/oto.py`         原音模型（Ustx/USinger.cs 的 UOto + Classic/VoiceBank.cs）
   - `openutau/singer.py`      USinger 基类（Ustx/USinger.cs）
   - `openutau/phoneme.py`     UPhoneme（Ustx/UPhoneme.cs）
   - `openutau/renderers.py`   渲染器注册表 + ApplyDynamics（Render/Renderers.cs）
   - `openutau/worldline.py`   Worldline.cs 的纯逻辑 + `SynthSegment`/`Resample` + ctypes 绑定
-  - `openutau/classic/frq.py`  `.frq` / `.mrq` 基频缓存与 `OtoFrq`（Classic/Frq.cs）
-  - `openutau/classic/worldline_resampler.py` 自带的变调器（Classic/WorldlineResampler.cs）
-  - `openutau/classic/voicebank_config.py` `character.yaml` 配置模型（Classic/VoicebankConfig.cs）
+  - `openutau/native_lib.py` + `openutau/native/<rid>/`
+                              **无 C# 对应物**：worldline 原生库的随包分发与路径解析。
+                              C# 靠 `[DllImport]` 让 CLR 解析 `runtimes/<rid>/native/`，
+                              ctypes 只搜系统路径 —— 不补这一层，打包后变调链路整个不可用。
 
 未照搬（后续）：
-  - `Classic/ClassicRenderer.cs` / `Classic/WorldlineRenderer.cs`（把 resampler 与
-    wavtool 串成一条乐句；两端都已就位，缺中间那段"逐音素调 resampler → 交给 wavtool"）
-  - `Render/Worldline.cs` 的 `PhraseSynthV2`（含 R1.1 的 `Hnsep` 分析与
-    `SynthContinuousNoise`；需补 `DecodeMgc` / `DecodeBap` / `HnAnalysisF0In` /
-    `WorldSynthesisContinuousNoise` 四个绑定）—— 只被 `WorldlineRenderer` 用
-  - `Classic/ExeResampler.cs` / `ExeWavtool.cs` / `UnixWavtool.cs` / `ToolsManager.cs`
-    / `VoicebankFiles.cs`（用户自备工具那条支线，需要 `Util/Base64.cs`、
-    `Util/ProcessRunner.cs`、`Util/OS.cs`）
-  - `Classic/ClassicSinger.cs` / `Ustx/UOtoFrq.cs`（MOD+ 依赖；`.frq` 本身已搬）
-  - `UPart.UpdatePhrases()`（音素化→取快照→投递那条链路，需要音素化器的
-    "是否最新"判定；管线的三段 `FromPart`/`BuildPhrases`/`PhraseSourceBuilder`
-    已就位，`UPart.ApplyPhraseSourceResult` 也已就位）
-  - `ExpressionGraph/*`（表达式图；`RenderPhrase` 里对应的分支恒跳过）
-  - `OpenUtau.Plugin.Builtin/*Phonemizer.cs` 的具体实现（M2-b 主体）
+  - `OpenUtau.Plugin.Builtin/*Phonemizer.cs` 的**其余 42 个**具体实现（M2-b 主体，当前 9/51）
+  - `Render/Worldline.cs` 的 R1.1 / R2 分支：`Hnsep`（ONNX 谐波分离）与程序集内嵌 mel 资源
+    —— `WorldlineRenderer` 的 v11/v20 在**入口处精确报错**（v10 已真机跑通）
+  - `ExpressionGraph/*`（表达式图；`RenderPhrase` 里对应分支恒跳过）
+  - `UPart.UpdatePhrases()`（音素化→取快照→投递那条链路，需要音素化器的"是否最新"判定）
+  - `Classic/ExeResampler.cs` / `ExeWavtool.cs` / `UnixWavtool.cs` / `Presamp.cs`(731)
+    / `ToolsManager.cs` / `VoicebankFiles.cs`（用户自备工具那条支线，需要 `Util/Base64.cs`、
+    `Util/ProcessRunner.cs`、`OS.cs`）；`ClassicSingerLoader` 的 Enunu / DiffSinger / Voicevox
+    工厂**已留注册点**，未注册时回落 ClassicSinger
+  - `Render/RenderEngine.cs`(542) / `RealCurveUpdater.cs`(214) / `RenderView.cs`(185)（M3 编辑器侧）
+
+> 完整的「Python ↔ C# 文件对照」与逐轮进展见 `docs/openutau-port-plan.md`，本清单只列概要。
 """
 
 from .format import Ustx  # noqa: F401

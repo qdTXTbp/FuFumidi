@@ -83,6 +83,7 @@ from typing import Any, List, Optional, Sequence, Tuple
 
 from .music_math import MusicMath, as_float32
 from .wave import Wave
+from . import native_lib
 
 # ---------------------------------------------------------------- 常量
 
@@ -710,10 +711,20 @@ default_native: Optional[WorldlineNative] = None
 
 
 def get_native(library_path: Optional[str] = None) -> WorldlineNative:
-    """取（并缓存）原生库绑定。"""
+    """取（并缓存）原生库绑定。
+
+    `library_path` 为 **None** 时按「随包分发的布局」解析（见 `native_lib`）：
+    C# 是 `[DllImport("worldline")]`，CLR 会自动找 `runtimes/<rid>/native/`，
+    而 `ctypes.CDLL('worldline')` 只搜系统路径 —— 打包后必然找不到，
+    于是变调链路在发布版里直接不可用（一致性测试因为**直接指向** `_ref` 的
+    绝对路径，所以照样全绿，这个坑一直没暴露）。
+
+    显式传参仍然优先（排障 / 测试注入用），语义与原来一致。
+    """
     global default_native
-    if default_native is None or (library_path and not default_native.available):
-        default_native = WorldlineNative(library_path)
+    path = library_path if library_path is not None else native_lib.resolve_worldline()
+    if default_native is None or (path and not default_native.available):
+        default_native = WorldlineNative(path)
     return default_native
 
 

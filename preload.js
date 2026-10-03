@@ -142,7 +142,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   utauCancelVoicebankDownload: (id) => ipcRenderer.invoke('utau:cancelVoicebankDownload', id),
   onVoicebankProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('utau:voicebankProgress', w); return () => ipcRenderer.removeListener('utau:voicebankProgress', w); },
   // DiffSinger 模块化集成：启用开关 / 组件安装 / 声库管理 / 渲染（未启用时零下载）
-  diffsingerStatus: () => ipcRenderer.invoke('diffsinger:status'),
+  diffsingerStatus: (opts) => ipcRenderer.invoke('diffsinger:status', opts),
   diffsingerSetEnabled: (on) => ipcRenderer.invoke('diffsinger:setEnabled', on),
   diffsingerInstallRuntime: () => ipcRenderer.invoke('diffsinger:installRuntime'),
   diffsingerCancelRuntimeInstall: () => ipcRenderer.invoke('diffsinger:cancelRuntimeInstall'),
@@ -199,6 +199,11 @@ contextBridge.exposeInMainWorld('fuBridge', {
     rescan: () => ipcRenderer.invoke('plugins:rescan'),
     openDocs: () => ipcRenderer.invoke('plugins:openDocs'),
     openDir: () => ipcRenderer.invoke('plugins:openDir'),
+    // 插件市场安装：两段式，download 只落缓存并返回包内清单，确认后才 install
+    installFromPlatform: (slug, version) => ipcRenderer.invoke('plugins:installFromPlatform', slug, version),
+    confirmInstall: (token, overwrite) => ipcRenderer.invoke('plugins:confirmInstall', token, overwrite),
+    cancelInstall: (token) => ipcRenderer.invoke('plugins:cancelInstall', token),
+    installedList: () => ipcRenderer.invoke('plugins:installedList'),
     onUi: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('plugins:ui', w); return () => ipcRenderer.removeListener('plugins:ui', w); },
     onLog: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('plugins:log', w); return () => ipcRenderer.removeListener('plugins:log', w); },
     onScript: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('plugins:script', w); return () => ipcRenderer.removeListener('plugins:script', w); },
@@ -239,4 +244,9 @@ contextBridge.exposeInMainWorld('fuBridge', {
   dbCloudSongDir: () => ipcRenderer.invoke('db:cloud-song:dir'),
   // 应用事件通知（song-loaded / view-changed 等 → 插件事件钩子）
   notify: (ev, payload) => ipcRenderer.send('app:event', ev, payload),
+  // 歌声工程文件（.fufumidi 自包含包）：只传清单与源路径，音频字节由主进程读盘
+  project: {
+    save: (payload) => ipcRenderer.invoke('project:save', payload),
+    open: () => ipcRenderer.invoke('project:open'),
+  },
 });

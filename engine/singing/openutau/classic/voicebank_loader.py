@@ -216,6 +216,32 @@ def _cs_double(v: float) -> str:
     return s[:-2] if s.endswith('.0') else s
 
 
+#: 公开别名：`ExeWavtool` / `UnixWavtool` 的 `:G999` 参数格式化也要用同一个实现。
+#: 理由与 `music_math.as_float32` 一样 —— **只留一份**，否则两处格式化会悄悄漂移，
+#: 而它们写出来的是要交给外部 resampler/wavtool 的命令行，差一个字符就可能被拒。
+cs_double = _cs_double
+
+
+def cs_get_extension(path: str) -> str:
+    """对应 .NET 的 `Path.GetExtension`。
+
+    ★ 与 `os.path.splitext` 有**两处**差异，都会影响 `ToolsManager` 判"这是不是
+    可执行工具"（它按扩展名分派 Exe/Unix/Linux 三种加载器）：
+
+    | 输入 | `Path.GetExtension` | `os.path.splitext` |
+    |---|---|---|
+    | `.bashrc` | `.bashrc`（**整段算扩展名**） | `''` |
+    | `a.` | `''`（尾点是空扩展名） | `'.'` |
+
+    所以这里不复用 `splitext`，而是照 .NET 的"从末尾找点、点在最后则无扩展名"实现。
+    """
+    base = os.path.basename(path or '')
+    i = base.rfind('.')
+    if i < 0 or i == len(base) - 1:
+        return ''
+    return base[i:]
+
+
 def parse_double(s: Optional[str]) -> Tuple[bool, float]:
     """对应 `ParseDouble(s, out value)`（`NumberStyles.Float` + `InvariantCulture`）。
 

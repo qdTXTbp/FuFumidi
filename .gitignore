@@ -7,6 +7,7 @@ release-ci/
 # 本地测试用的构建输出目录（内含 win-unpacked，产物数百文件）
 release-beta/
 release-test/
+release-test2/
 release-unpacked/
 gpu-package/
 gpu-package.packbak/
@@ -45,3 +46,6 @@ scripts/cdp/*-report.txt
 # WorkBuddy / Trae 等编辑器工具的本地项目数据（不入库）
 .workbuddy/
 .trae/
+
+# 调试用的一次性产物（渲染样例 wav 等，几 MB 的二进制，不入库）
+_artifacts/

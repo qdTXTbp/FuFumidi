@@ -27,7 +27,10 @@ param(
   [int]$Cpus        = 4,
   [int]$DiskGB      = 80,
   [string]$UserName = 'tester',
-  [string]$Password = 'FuFumidi!2026',
+  # ★ 口令**不再写死**（仓库安全扫描长期报这条高危）。从环境变量取，取不到就直接失败 ——
+  #   宁可让人多设一个环境变量，也不要让口令进 git 历史。
+  [string]$Password = $(if ($env:FUFUMIDI_VM_PASSWORD) { $env:FUFUMIDI_VM_PASSWORD }
+                        else { throw '缺少环境变量 FUFUMIDI_VM_PASSWORD（口令不要写进脚本或仓库）' }),
   [switch]$Manual,
   [switch]$DryRun
 )

@@ -30,7 +30,11 @@ const DEFAULT_SETTINGS = {
   data_root: '',  // 数据根目录（模型 / 依赖 / 缓存 / 临时文件的落点）；留空 = 自动（工具目录旁的 FuFumidiData）
   update_channel: 'stable',  // 更新通道：'stable'=正式版（默认），'beta'=测试版（提前收到 X.Y.Z-beta.N / -rc.N）
   download_source: 'auto',   // 下载源：'auto'=自动（优先国内 CNB，失败回退 GitHub），'cnb'=国内优先，'github'=全球优先
-  diffsinger_enabled: false, // DiffSinger 模块开关：默认关闭。启用后才允许下载推理依赖与声码器（模块化集成，未启用零占用）
+  // UTAU 渲染引擎：'openutau'=照搬 OpenUTAU 的核心（engine/singing，默认），
+  // 'legacy'=早期自研的 engine_utau.py。首选失败时主进程会自动回落到另一个引擎。
+  utau_engine: 'openutau',
+  diffsinger_enabled: true, // DiffSinger 模块开关：**默认启用**，不再要求用户先手动点一次「启用模块」。
+                          // 置 false 仍可显式关闭（保留字段仅为兼容旧 settings.json；主进程已不再据此拦截）。
 };
 
 function settingsPath() {

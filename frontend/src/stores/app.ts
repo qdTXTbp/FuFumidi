@@ -14,8 +14,11 @@ export const VIEWS = [
   { id: 'views', label: '视图', ic: 'viz' },
   { id: 'transcode', label: '转译', ic: 'convert' },
   { id: 'resources', label: '资源中心', ic: 'box' },
-  { id: 'utau', label: 'UTAU', ic: 'utau' },
-  { id: 'diffsinger', label: 'DiffSinger', ic: 'utau' },
+  // UTAU 与 DiffSinger 合并为同一板块：同一条产品线的两种合成引擎，
+  // 内部用引擎切换（?tab=utau|diffsinger），顶栏不再占两个入口。
+  { id: 'singer', label: '歌声合成', ic: 'utau' },
+  // 声库：两类引擎的声库都在这里做（编辑器里只负责「选歌手」）
+  { id: 'banks', label: '声库', ic: 'box' },
 ];
 
 // 旧子视图 ID → 所属分组父视图，保留内部跳转（如“同步到乐谱”“打开播放”）
@@ -23,6 +26,10 @@ export const OLD_VIEW_TO_PARENT: Record<string, string> = {
   play: 'music', lyrics: 'music', edit: 'music',
   viz: 'views', analyze: 'views', score: 'views',
   transcribe: 'transcode', convert: 'transcode',
+  // 合并前的两个独立视图 → 统一落到「歌声合成」。
+  // 老跳转（setView('utau'|'diffsinger')）继续有效：统一编辑器会用 ?engine=
+  // 决定「首次进入时选中哪条轨 / 新建哪种轨」。
+  utau: 'singer', diffsinger: 'singer',
 };
 
 export function viewParentOf(v: string): string {
@@ -303,6 +310,45 @@ export const useAppStore = defineStore('app', {
       if (kind === 'prompt') r(null);
       else if (kind === 'alert') r(undefined);
       else r(false);
+    },
+    /* ---------------- GPU 加速（全局共享状态机） ----------------
+       设置页与应用内各功能页（如 DiffSinger「模块与声库」）共用同一套入口：
+       进度统一写 gpuInstall，由 App.vue 的常驻浮层订阅 gpu:progress 展示，
+       因此从哪个页面触发安装都能看到同一个进度条。 */
+    /** 打开「设置 → GPU」页 */
+    openGpuSettings() {
+      this.ui.settingsTab = 'gpu';
+      this.ui.settingsOpen = true;
+    },
+    /** 一键检测显卡并安装对应 GPU 加速包；成功返回 ''，失败/取消返回提示文案 */
+    async installGpuAccel(): Promise<string> {
+      const b: any = bridge;
+      if (!b || typeof b.gpuInstallAuto !== 'function') return t('当前环境不支持安装 GPU 加速');
+      if (this.gpuInstall.active) return t('GPU 加速正在安装中，请稍候');
+      const gi = this.gpuInstall;
+      gi.active = true; gi.done = false; gi.ok = false;
+      gi.error = ''; gi.percent = 0; gi.text = t('正在检测显卡…');
+      gi.ts = Date.now(); gi.dismissed = false;   // 新一轮安装：恢复浮层显示
+      try {
+        const r = await b.gpuInstallAuto();
+        if (r && r.ok) {
+          gi.ok = true; gi.percent = 100;
+          gi.kind = r.kind || gi.kind;
+          gi.text = r.already ? t('GPU 加速已安装（无需重复安装）') : t('GPU 加速安装完成');
+          return '';
+        }
+        if (r && r.canceled) {
+          gi.error = t('已取消安装');
+          return t('已取消 GPU 加速安装');
+        }
+        gi.error = (r && r.error) || t('安装失败');
+        return gi.error;
+      } catch (e: any) {
+        gi.error = String((e && e.message) || e);
+        return gi.error;
+      } finally {
+        gi.active = false; gi.done = true; gi.ts = Date.now();
+      }
     },
     async importFiles(items: any[], target?: string, opts?: { keepPlaying?: boolean }) {
       // target: 歌单 id | 'all'（仅加入资料库/全部曲目，不归入任何歌单）

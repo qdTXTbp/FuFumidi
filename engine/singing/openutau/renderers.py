@@ -114,6 +114,35 @@ def get_supported_renderers(singer_type) -> tuple:
     return NO_RENDERERS
 
 
+def get_supported_resamplers(wavtool=None) -> list:
+    """对应 C# `GetSupportedResamplers(IWavtool? wavtool)`。
+
+    ★ 判据是 **wavtool 的类型**，不是它的名字：
+      wavtool 是 `SharpWavtool`（内置拼接器）→ 全部 resampler 都可用；
+      否则（外部 wavtool / ExeWavtool / UnixWavtool）→ **排除 WorldlineResampler**。
+
+    原因见上游注释：外部 wavtool 只能从 bat / 脚本里调起变调器，
+    而 Worldline 是原生库、从脚本里调不起来（与 `ExeWavtool` 里那段逻辑呼应）。
+    """
+    from .classic.sharp_wavtool import SharpWavtool
+    from .classic.tools_manager import get_tools_manager
+    resamplers = get_tools_manager().resamplers
+    if isinstance(wavtool, SharpWavtool):
+        return list(resamplers)
+    from .classic.worldline_resampler import WorldlineResampler
+    return [r for r in resamplers if not isinstance(r, WorldlineResampler)]
+
+
+def get_supported_wavtools(resampler=None) -> list:
+    """对应 C# `GetSupportedWavtools(IResampler? resampler)`。
+
+    ★ 上游**忽略** `resampler` 参数、无条件返回全部 wavtool（形参只是为了对称）。
+      照搬这个"看起来奇怪但确实是上游行为"的写法。
+    """
+    from .classic.tools_manager import get_tools_manager
+    return get_tools_manager().wavtools
+
+
 def get_renderer_options() -> List[str]:
     """对应 C# `getRendererOptions()`：给用户看的选项名，每次返回**新列表**。"""
     return list(RENDERER_OPTIONS)

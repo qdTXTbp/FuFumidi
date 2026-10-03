@@ -4,6 +4,7 @@
 import { defineStore } from 'pinia';
 import { bridge, isDesktop } from '../api';
 import { parseMidi, buildSong } from '../core/midi.js';
+import type { DiffsingerLyricSuggestion } from '../types/ipc';
 
 export interface DsNote {
   id: string;
@@ -21,24 +22,7 @@ export interface DsNote {
 export const DS_NOTE_DEFAULTS = { vibrato: false, vibDepth: 25, vibFreq: 5.5, vibFade: 0, pitchOffset: 0 };
 
 /** 撤销快照：音符列表 + 选区 + 音高曲线（可视化谱面用）。DsNote 是扁平结构，浅拷贝逐项即可。 */
-interface Snap { notes: DsNote[]; selectedId: string | null; selectedIds: string[]; pitchCurve: { beat: number; cents: number }[] }
 
-const LS_KEY = 'fufumidi_diffsinger_project_v1';
-let _nid = 1;
-const nid = () => 'd' + (++_nid).toString(36) + Date.now().toString(36).slice(-4);
-
-function readProject(): { bpm: number; voicebankDir: string; notes: DsNote[]; pitchCurve: { beat: number; cents: number }[] } {
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (raw) {
-      const d = JSON.parse(raw);
-      if (d && Array.isArray(d.notes)) {
-        return { bpm: d.bpm || 120, voicebankDir: d.voicebankDir || '', notes: d.notes, pitchCurve: Array.isArray(d.pitchCurve) ? d.pitchCurve : [] };
-      }
-    }
-  } catch (e) {}
-  return { bpm: 120, voicebankDir: '', notes: [], pitchCurve: [] };
-}
 
 /* 从曲库曲目读取 MIDI 字节：内存缓存 → IndexedDB → 磁盘镜像 */
 async function readSongBytes(song: any): Promise<Uint8Array | null> {
@@ -74,7 +58,7 @@ export function getLastWavBytes(): Uint8Array | null { return _lastWavBytes; }
 export const useDiffsingerStore = defineStore('diffsinger', {
   state: () => ({
     /* 模块状态（主进程为准） */
-    enabled: false,
+    enabled: true,   // ★ 默认启用：不再要求用户先手动点「启用模块」
     ready: false,
     depsOk: false,
     depsMissing: [] as string[],
@@ -93,87 +77,43 @@ export const useDiffsingerStore = defineStore('diffsinger', {
     /* 声库 */
     voicebanks: [] as { name: string; dir: string; size?: number }[],
     registry: [] as any[],
-    vbProgress: {} as Record<string, { percent: number; phase?: string; done?: boolean; error?: string }>,
+    vbProgress: {} as Record<string, { percent: number; phase?: string; done?: boolean; error?: string; speed?: number; received?: number; total?: number; host?: string; text?: string; canceled?: boolean }>,
     voicebankInfo: null as any,
     inspecting: false,
 
     /* 工程 */
-    bpm: 120,
-    notes: [] as DsNote[],
-    selectedId: null as string | null,
-    selectedIds: [] as string[],     // 多选（可视化谱面：框选 / Shift 点选）
-    undoStack: [] as Snap[],
-    redoStack: [] as Snap[],
-    pitchCurve: [] as { beat: number; cents: number }[],  // 音高微调曲线（拍 → 音分 -200..200）
-    voicebankDir: '',
-    sourceName: '',   // 从曲库导入的 MIDI 曲目名
-    sourceId: '',
+    /** ★ 轨道级语言（照搬新版上游 USingerTrack.Language）。
+     *  OpenUtau 是在轨道上选歌手语言的，**不从歌词自动判断** ——
+     *  多语言声库（en/ja/ko/zh）用哪套词典由此决定。 */
 
     /* 渲染 */
-    rendering: false,
-    renderPct: 0,
-    renderText: '',
-    renderUrl: '',
-    renderWarnings: [] as string[],
-    lastDurationMs: 0,
 
     /* 范围渲染预览 —— 只合成选区内音符（可带前后文） */
-    rangeEnabled: false,
-    rangeStartBeat: 0,
-    rangeEndBeat: 4,
-    rangeContextSec: 0.5,
     /** 上次范围渲染返回的选区元信息（秒） */
-    lastRange: null as any,
     /** 上次渲染使用的推理链路与后端 */
-    lastPipeline: '',
-    lastDevice: null as { provider: string; requested: string } | null,
     /** 推理后端偏好：auto / cpu / cuda / dml */
-    device: 'auto' as string,
     /** 推理后端信息（来自 status.gpu） */
     gpu: null as any,
   }),
   getters: {
-    selected(state): DsNote | null {
-      return state.notes.find(n => n.id === state.selectedId) || null;
-    },
-    sortedNotes(state): DsNote[] {
-      return state.notes.slice().sort((a, b) => a.startBeat - b.startBeat);
-    },
-    totalBeats(state): number {
-      let m = 0;
-      for (const n of state.notes) m = Math.max(m, n.startBeat + n.durBeat);
-      return m;
-    },
     hasBridge(): boolean {
       return isDesktop && !!bridge && typeof (bridge as any).diffsingerStatus === 'function';
     },
   },
   actions: {
-    persist() {
-      try {
-        const { notes, bpm, voicebankDir, pitchCurve } = this.$state as any;
-        localStorage.setItem(LS_KEY, JSON.stringify({ notes, bpm, voicebankDir, pitchCurve }));
-      } catch (e) {}
-    },
-    init() {
-      const p = readProject();
-      this.bpm = p.bpm; this.voicebankDir = p.voicebankDir; this.notes = p.notes;
-      this.pitchCurve = p.pitchCurve;
-    },
+    /* ---------------- 持久化 ---------------- */
+    // ★ 歌曲数据（bpm / notes / 声库 / 音高曲线）已迁到 `stores/singer.ts`，
+    //   本 store 只持模块状态，不再落盘工程内容。
+    persist() { /* 模块状态由主进程 status 权威，无需本地缓存 */ },
+    init() { /* no-op：保留调用点，避免宿主初始化顺序变化 */ },
 
-    /** 音高微调曲线：整表替换（可视化谱面的音高工具用） */
-    setPitchCurve(points: { beat: number; cents: number }[]) {
-      this.pitchCurve = points.map(p => ({ beat: Math.max(0, p.beat), cents: Math.max(-200, Math.min(200, p.cents)) }));
-      this.persist();
-    },
-    clearPitchCurve() { this.pitchCurve = []; this.persist(); },
 
-    /* ---------------- 模块状态 ---------------- */
-    async loadStatus() {
+    /** force=true 跳过主进程 30s 依赖缓存强制重探（GPU 增强包安装/卸载后调用） */
+    async loadStatus(force = false) {
       if (!this.hasBridge) return;
       this.checking = true;
       try {
-        const s = await (bridge as any).diffsingerStatus();
+        const s = await (bridge as any).diffsingerStatus(force ? { force: true } : undefined);
         if (s && s.ok) {
           this.enabled = !!s.enabled;
           this.ready = !!s.ready;
@@ -202,7 +142,6 @@ export const useDiffsingerStore = defineStore('diffsinger', {
     /* ---------------- 组件安装（启用后才允许） ---------------- */
     async installRuntime(): Promise<string> {
       if (!this.hasBridge) return '桌面版不可用';
-      if (!this.enabled) return '请先启用 DiffSinger 模块';
       if (this.runtimeInstalling) return '组件安装已在进行中';
       this.runtimeInstalling = true;
       this.runtimePct = 0;
@@ -245,12 +184,9 @@ export const useDiffsingerStore = defineStore('diffsinger', {
       if (!this.hasBridge) return;
       try {
         const r = await (bridge as any).diffsingerListVoicebanks();
+        // ★ 只维护「已装列表」——「当前用哪个声库」是**轨道**的事（`singer.ts`），
+        //   本 store 不再持有 selected 语义。
         this.voicebanks = (r && r.list) || [];
-        if (this.voicebankDir && !this.voicebanks.some(v => v.dir === this.voicebankDir)) {
-          this.voicebankDir = this.voicebanks.length ? (this.voicebanks[0].dir || '') : '';
-          this.persist();
-        }
-        if (!this.voicebankDir && this.voicebanks.length) this.voicebankDir = this.voicebanks[0].dir || '';
       } catch (e) {}
     },
     async refreshRegistry() {
@@ -281,16 +217,23 @@ export const useDiffsingerStore = defineStore('diffsinger', {
     },
     async downloadVoicebank(id: string): Promise<string> {
       if (!this.hasBridge) return '桌面版不可用';
-      if (!this.enabled) return '请先启用 DiffSinger 模块';
       let off = () => {};
       this.vbProgress = { ...this.vbProgress, [id]: { percent: 0, phase: 'download' } };
       try {
         off = (bridge as any).onDiffsingerVoicebankProgress((p: any) => {
           if (!p || p.id !== id) return;
-          this.vbProgress = { ...this.vbProgress, [id]: { percent: p.percent || 0, phase: p.phase, done: p.done, error: p.error || '' } };
+          this.vbProgress = {
+            ...this.vbProgress,
+            [id]: {
+              percent: p.percent || 0, phase: p.phase, done: p.done, error: p.error || '',
+              speed: Number(p.speed) || 0, received: Number(p.received) || 0,
+              total: Number(p.total) || 0, host: p.host || '', text: p.text || '', canceled: !!p.canceled,
+            },
+          };
         });
         const r = await (bridge as any).diffsingerDownloadVoicebank(id);
         if (r && r.ok) { await this.refreshVoicebanks(); return ''; }
+        if (r && r.canceled) return '';   // 用户主动取消：不是错误，不弹失败提示
         return (r && r.error) || '下载失败';
       } catch (e) {
         return String((e as any) && (e as any).message || e);
@@ -302,11 +245,12 @@ export const useDiffsingerStore = defineStore('diffsinger', {
       if (this.hasBridge) { try { await (bridge as any).diffsingerCancelVoicebankDownload(id); } catch (e) {} }
       this.vbProgress = { ...this.vbProgress, [id]: { percent: 0, phase: 'done', done: true } };
     },
-    async inspect(): Promise<string> {
-      if (!this.hasBridge || !this.voicebankDir) { this.voicebankInfo = null; return ''; }
+    /** 解析一个声库（目录由调用方给 —— 原来读 `this.voicebankDir`）。 */
+    async inspect(dir: string): Promise<string> {
+      if (!this.hasBridge || !dir) { this.voicebankInfo = null; return ''; }
       this.inspecting = true;
       try {
-        const r = await (bridge as any).diffsingerInspectVoicebank({ voicebank: this.voicebankDir });
+        const r = await (bridge as any).diffsingerInspectVoicebank({ voicebank: dir });
         this.voicebankInfo = r && r.ok ? r : null;
         return (r && r.ok) ? '' : ((r && r.error) || '声库解析失败');
       } catch (e) {
@@ -316,273 +260,28 @@ export const useDiffsingerStore = defineStore('diffsinger', {
         this.inspecting = false;
       }
     },
-    setVoicebank(dir: string) {
-      this.voicebankDir = dir || '';
-      this.voicebankInfo = null;
-      this.persist();
-      void this.inspect();
-    },
-    setBpm(v: number) { this.bpm = Math.max(20, Math.min(400, Number(v) || 120)); this.persist(); },
-
-    /* ---------------- 音符编辑 ---------------- */
-    addNote(startBeat: number, pitch: number): string {
-      const note: DsNote = {
-        id: nid(), startBeat: Math.max(0, startBeat), durBeat: 1, pitch,
-        lyric: '啊', ...DS_NOTE_DEFAULTS,
-      };
-      this.notes.push(note);
-      this.selectedId = note.id;
-      this.persist();
-      return note.id;
-    },
-    _makeNote(it: Partial<DsNote>): DsNote {
-      return {
-        id: nid(), startBeat: Math.max(0, it.startBeat ?? 0),
-        durBeat: Math.max(0.125, it.durBeat ?? 1),
-        pitch: Math.max(0, Math.min(127, it.pitch ?? 60)),
-        lyric: it.lyric ?? '啊',
-        vibrato: it.vibrato ?? DS_NOTE_DEFAULTS.vibrato,
-        vibDepth: it.vibDepth ?? DS_NOTE_DEFAULTS.vibDepth,
-        vibFreq: it.vibFreq ?? DS_NOTE_DEFAULTS.vibFreq,
-        vibFade: it.vibFade ?? DS_NOTE_DEFAULTS.vibFade,
-        pitchOffset: it.pitchOffset ?? DS_NOTE_DEFAULTS.pitchOffset,
-      };
-    },
     /** 导入基底旋律（从曲库 MIDI）：replace=true 先清空现有音符 */
-    importNotes(items: Partial<DsNote>[], replace = false, sourceName = '', sourceId = ''): number {
-      if (!items.length) return 0;
-      if (replace) this.notes = [];
-      for (const it of items) this.notes.push(this._makeNote(it));
-      this.selectedId = this.notes.length ? this.notes[this.notes.length - 1].id : null;
-      this.sourceName = sourceName;
-      this.sourceId = sourceId;
-      this.persist();
-      return items.length;
-    },
-    updateNote(id: string, patch: Partial<DsNote>) {
-      const n = this.notes.find(x => x.id === id);
-      if (!n) return;
-      Object.assign(n, patch);
-      this.persist();
-    },
-    removeNote(id: string) {
-      this.notes = this.notes.filter(n => n.id !== id);
-      if (this.selectedId === id) this.selectedId = this.notes.length ? this.notes[this.notes.length - 1].id : null;
-      this.selectedIds = this.selectedIds.filter(x => x !== id);
-      this.persist();
-    },
+    /** 正在取候选的歌词（null = 无输入框激活） */
+    suggestFor: null as null | { id: string; text: string },
+    suggestItems: [] as DiffsingerLyricSuggestion[],
+    suggestOpen: false,
+    /** 请求候选。`language` 取**轨道级**设置，不是从歌词猜的。 */
+    /** 点选候选 → 写进该音符的歌词 */
 
-    /* ---------------- 撤销 / 重做（可视化谱面用） ---------------- */
+
     /** 在每次会改变音符的操作**之前**调用，压入当前快照 */
-    pushUndo() {
-      this.undoStack.push({
-        notes: this.notes.map(n => ({ ...n })),
-        selectedId: this.selectedId,
-        selectedIds: [...this.selectedIds],
-        pitchCurve: this.pitchCurve.map(p => ({ ...p })),
-      });
-      if (this.undoStack.length > 100) this.undoStack.shift();
-      this.redoStack = [];
-    },
-    _snapshot(): Snap {
-      return {
-        notes: this.notes.map(n => ({ ...n })),
-        selectedId: this.selectedId,
-        selectedIds: [...this.selectedIds],
-        pitchCurve: this.pitchCurve.map(p => ({ ...p })),
-      };
-    },
-    _restore(s: Snap) {
-      this.notes = s.notes;
-      this.selectedId = s.selectedId;
-      this.selectedIds = [...s.selectedIds];
-      this.pitchCurve = s.pitchCurve.map(p => ({ ...p }));
-      this.persist();
-    },
-    undo() {
-      const s = this.undoStack.pop();
-      if (!s) return;
-      this.redoStack.push(this._snapshot());
-      this._restore(s);
-    },
-    redo() {
-      const s = this.redoStack.pop();
-      if (!s) return;
-      this.undoStack.push(this._snapshot());
-      this._restore(s);
-    },
 
-    /* ---------------- 选区（多选） ---------------- */
     /** primary 传 null 时保留当前主选（若仍在选区内），否则取第一个 */
-    setSelection(ids: string[], primary: string | null = null) {
-      this.selectedIds = [...new Set(ids)];
-      if (primary !== null) this.selectedId = primary;
-      else if (!this.selectedId || !this.selectedIds.includes(this.selectedId)) this.selectedId = this.selectedIds[0] ?? null;
-    },
-    selectOne(id: string | null) { this.selectedId = id; this.selectedIds = id ? [id] : []; },
-    selectAll() { this.setSelection(this.notes.map(n => n.id), this.notes.length ? this.notes[0]!.id : null); },
-    clearSelection() { this.selectedIds = []; this.selectedId = null; },
 
-    /* ---------------- 批量编辑（拖拽 / 方向键） ---------------- */
     /** 按相对量平移：起点与音高同时变化（多选整体拖动） */
-    moveNotes(ids: string[], dBeat: number, dPitch: number) {
-      const set = new Set(ids);
-      for (const n of this.notes) {
-        if (!set.has(n.id)) continue;
-        n.startBeat = Math.max(0, n.startBeat + dBeat);
-        n.pitch = Math.max(0, Math.min(127, n.pitch + dPitch));
-      }
-      this.persist();
-    },
     /** 按绝对量设置时长（右缘拖拽；多选取新的统一时长） */
-    setNotesDuration(ids: string[], durBeat: number) {
-      const set = new Set(ids);
-      for (const n of this.notes) if (set.has(n.id)) n.durBeat = Math.max(0.125, durBeat);
-      this.persist();
-    },
-    removeNotes(ids: string[]) {
-      const set = new Set(ids);
-      this.notes = this.notes.filter(n => !set.has(n.id));
-      this.selectedIds = this.selectedIds.filter(id => !set.has(id));
-      if (!this.selectedId || set.has(this.selectedId)) {
-        this.selectedId = this.selectedIds[0] ?? (this.notes.length ? this.notes[this.notes.length - 1]!.id : null);
-      }
-      this.persist();
-    },
-    clear() {
-      this.notes = [];
-      this.selectedId = null;
-      this.sourceName = '';
-      this.sourceId = '';
-      this.persist();
-    },
 
     /**
      * 从曲库曲目导入 MIDI：解析全部轨道，返回轨道摘要供 UI 选择；
      * 选定后由 applyMidiTrack 落音符。失败返回错误字符串。
      */
-    async loadSongTracks(song: any): Promise<{ error: string; tracks?: any[]; bpm?: number; tpb?: number }> {
-      const bytes = await readSongBytes(song);
-      if (!bytes || !bytes.length) return { error: '无法读取曲目字节（曲目文件可能缺失）' };
-      try {
-        const mid = parseMidi(bytes);
-        const song2 = buildSong(mid, {});
-        const tracks = (song2.tracks || [])
-          .filter((t: any) => !t.isDrum && t.notes && t.notes.length)
-          .map((t: any) => ({
-            index: t.index,
-            name: t.name || ('Track ' + (t.index + 1)),
-            noteCount: t.notes.length,
-            minPitch: Math.min(...t.notes.map((n: any) => n.midi)),
-            maxPitch: Math.max(...t.notes.map((n: any) => n.midi)),
-            notes: t.notes,
-          }));
-        if (!tracks.length) return { error: '该 MIDI 没有可用的旋律轨道（非鼓轨且含音符）' };
-        tracks.sort((a: any, b: any) => b.noteCount - a.noteCount);
-        return { error: '', tracks, bpm: song2.initialBpm || 120, tpb: song2.tpb || 480 };
-      } catch (e) {
-        return { error: 'MIDI 解析失败：' + String((e as any) && (e as any).message || e) };
-      }
-    },
     /** 把选中轨道的音符落进工程（tick → 拍） */
-    applyMidiTrack(track: any, bpm: number, songName: string, songId: string, tpb: number, replace = true): number {
-      const spq = tpb || 480; // ticks per quarter note
-      const items = (track.notes || []).map((n: any) => ({
-        startBeat: n.start / spq,
-        durBeat: Math.max(0.125, (n.end - n.start) / spq),
-        pitch: n.midi,
-        lyric: '啊',
-      }));
-      this.bpm = Math.max(20, Math.min(400, bpm || 120));
-      return this.importNotes(items, replace, songName, songId);
-    },
 
-    /* ---------------- 渲染 ---------------- */
-    async render(): Promise<string> {
-      if (!this.hasBridge) return '桌面版不可用';
-      if (!this.enabled) return '请先启用 DiffSinger 模块';
-      if (!this.ready) return '组件未就绪：请先在「模块与声库」安装推理组件';
-      if (!this.voicebankDir) return '请先选择声库';
-      if (!this.notes.length) return '没有音符可渲染';
-      // 范围渲染：只在开启且选区合法时生效
-      let range: any = null;
-      if (this.rangeEnabled) {
-        const s = Number(this.rangeStartBeat), e = Number(this.rangeEndBeat);
-        if (!(e > s)) return '选区无效：结束拍必须大于起始拍';
-        const hit = this.notes.filter(n => n.startBeat < e && n.startBeat + n.durBeat > s);
-        if (!hit.length) return '选区内没有音符：请把选区对准音符所在的拍位';
-        range = { startBeat: s, endBeat: e, contextSec: Number(this.rangeContextSec) || 0 };
-      }
-      this.rendering = true;
-      this.renderPct = 0;
-      this.renderText = '';
-      let off = () => {};
-      try {
-        off = (bridge as any).onDiffsingerRenderProgress((p: any) => {
-          if (!p) return;
-          if (typeof p.percent === 'number') this.renderPct = p.percent;
-          if (p.text) this.renderText = String(p.text);
-        });
-        const notes = this.sortedNotes.map(n => ({
-          startBeat: n.startBeat, durBeat: n.durBeat, pitch: n.pitch, lyric: n.lyric,
-          vibrato: n.vibrato, vibDepth: n.vibDepth, vibFreq: n.vibFreq, vibFade: n.vibFade,
-          pitchOffset: n.pitchOffset,
-        }));
-        // 必须显式摊平成普通对象再传 —— this.pitchCurve 来自 Pinia state，
-        // 是响应式数组（Proxy）。ipcRenderer.invoke 走结构化克隆，而 V8 序列化器
-        // 对 Proxy 一律拒绝：**即使是空数组**也抛 "An object could not be cloned"，
-        // 请求根本到不了主进程，所以「渲染歌声」每次必然失败（与此前 GPU 分卷清单同因）。
-        const plainPitchCurve = Array.isArray(this.pitchCurve)
-          ? this.pitchCurve.map(p => ({ beat: p.beat, cents: p.cents }))
-          : [];
-        const r = await (bridge as any).diffsingerRender({
-          voicebank: this.voicebankDir, notes, bpm: this.bpm,
-          range, device: this.device || 'auto',
-          pitchCurve: plainPitchCurve,
-        });
-        if (r && r.ok && r.bytes) {
-          const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes as any);
-          _lastWavBytes = bytes;
-          if (this.renderUrl) { try { URL.revokeObjectURL(this.renderUrl); } catch (e) {} }
-          const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'audio/wav' });
-          this.renderUrl = URL.createObjectURL(blob);
-          this.renderWarnings = r.warnings || [];
-          this.lastDurationMs = r.duration_ms || 0;
-          this.lastRange = r.range || null;
-          this.lastPipeline = r.pipeline || '';
-          this.lastDevice = r.device || null;
-          return '';
-        }
-        return (r && r.error) || '渲染失败';
-      } catch (e) {
-        return String((e as any) && (e as any).message || e);
-      } finally {
-        off();
-        this.rendering = false;
-      }
-    },
     /** 把选区设为「某个音符」或「全部音符」的便捷入口 */
-    setRangeToNote(id: string) {
-      const n = this.notes.find(x => x.id === id);
-      if (!n) return;
-      this.rangeEnabled = true;
-      this.rangeStartBeat = n.startBeat;
-      this.rangeEndBeat = n.startBeat + n.durBeat;
-    },
-    setRangeFull() {
-      this.rangeEnabled = false;
-      this.rangeStartBeat = 0;
-      this.rangeEndBeat = this.totalBeats || 4;
-    },
-    clearRender() {
-      if (this.renderUrl) { try { URL.revokeObjectURL(this.renderUrl); } catch (e) {} }
-      this.renderUrl = '';
-      this.renderWarnings = [];
-      this.lastDurationMs = 0;
-      this.lastRange = null;
-      this.lastPipeline = '';
-      this.lastDevice = null;
-      _lastWavBytes = null;
-    },
   },
 });

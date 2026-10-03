@@ -208,9 +208,18 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
       name: 'Salamander Grand Piano',
       version: '3+20200602',
       desc: '单件三角钢琴多力度采样音色（Yamaha C5，16 力度层），专为钢琴曲目设计，音色纯净自然。',
-      size: 310000000,
+      // ★ 真实大小 1.18GB（见本文件顶部清单注释与 `core/synth.js:512`）。
+      //   早先错写成 310MB —— 那个数字**小于** `file:readSoundFont` 的 512MB 上限，
+      //   于是界面不会提示"超限"，用户下完 1.18GB 才在「启用」时撞上
+      //   「无法读取音色文件」，看不出真实原因。
+      size: 1180000000,
       license: 'CC BY 3.0（使用需署名原钢琴录音艺术家）',
-      minSize: 1.2e8,
+      // ★ minSize 也要跟着改：1.2e8（120MB）对 1.18GB 的文件太低，
+      //   截断到 200MB 的坏文件也会被判成"已下载完整"。
+      minSize: 1100000000,
+      // ★ 超出立体声合成的加载上限 → 界面据此**明确禁用**「启用」并说明原因，
+      //   而不是让用户点下去只看到一句无从下手的报错。
+      overLimit: true,
       fromRepo: null,
       repoFile: null,
       bundledPath: null,
@@ -391,6 +400,8 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
         sources: (githubRawCandidates(it).length ? ['github'] : []) ,
         category: it.category || '内置精选',
         slow: !!it.slow,
+        // ★ 超出加载上限的条目：界面据此禁用「启用」并说明原因
+        overLimit: !!it.overLimit,
       });
     }
     // 用户自定义 SF2（拷贝到 userData/fufumidi/soundfonts，非注册表项）
@@ -431,7 +442,9 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
     //  - 用户取消走 ctrl.abort()（isUserAbort 标记），与停滞中止区分
     const STALL_MS = 25000;
     const MAX_ROUNDS = 10;
-    const entry = { ctrl: null, isUserAbort: false };
+    // ★ `cancelRequested` 单独记：取消可能早于第一轮 `net.fetch` 到达，
+    //   那时 `ctrl` 还是 null，只 abort 等于什么都没做（却返回 ok）。
+    const entry = { ctrl: null, isUserAbort: false, cancelRequested: false };
     _aborts.set(id, entry);
     let ws = null, lastErr = null;
 
@@ -441,6 +454,7 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
 
     try {
       for (let round = 0; round < MAX_ROUNDS; round++) {
+        if (entry.cancelRequested) return { ok: false, cancelled: true, error: '已取消' };
         const url = candidates[round % candidates.length];
         const ctrl = new AbortController();
         entry.ctrl = ctrl;
@@ -493,9 +507,20 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
           lastErr = e;
           try { if (ws) ws.destroy(); } catch (_) {}
           ws = null;
-          if (entry.isUserAbort) return { ok: false, cancelled: true, error: '已取消' };
+          if (entry.isUserAbort || entry.cancelRequested) {
+            return { ok: false, cancelled: true, error: '已取消' };
+          }
+          // ★ 换源/续传是**正常过程**，不是"出错" —— 用 `retrying` 而不是 `error` 上报，
+          //   否则前端会把进度条清成 0 再点亮（表现为"进度条闪动"）。
+          //   同时带上 `received/total`，让进度条**原地保留**而不是归零。
           const have = await statFile(out + '.part');
-          sendProg(have, it.size, false, '第 ' + (round + 1) + ' 轮失败（' + ((e && e.message) || e) + '），自动换源/续传…');
+          const total = it.size || 0;
+          send({
+            id, received: have, total: total || undefined,
+            percent: total ? Math.min(99, Math.round(have / total * 100)) : 0,
+            done: false, retrying: true, round: round + 1, rounds: MAX_ROUNDS,
+            notice: '第 ' + (round + 1) + ' 轮未完成（' + ((e && e.message) || e) + '），正在换源/续传…',
+          });
         }
       }
       // 全部轮次失败：.part 保留，用户重试可续传
@@ -510,8 +535,16 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
   });
 
   ipcMain.handle('sf-workshop:cancel', async (_e, id) => {
-    try { const c = _aborts.get(id); if (c) { c.isUserAbort = true; c.ctrl.abort(); } } catch (e) {}
-    return { ok: true };
+    const c = _aborts.get(id);
+    if (!c) return { ok: false, error: '该音色当前没有进行中的下载' };
+    // ★ 先立标记（下载循环在每轮开始前会看它），再尽量中断当前流。
+    //   `ctrl` 可能是 null（取消早于第一轮 fetch）—— 那种情况靠标记兜住，
+    //   不能因为 abort 不了就谎报 `ok: true`。
+    c.isUserAbort = true;
+    c.cancelRequested = true;
+    let aborted = false;
+    try { if (c.ctrl) { c.ctrl.abort(); aborted = true; } } catch (e) {}
+    return { ok: true, aborted };
   });
 
   // 导入本地 .sf2：原生文件对话框 → 拷贝到 userData soundfonts 目录

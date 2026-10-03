@@ -75,6 +75,10 @@ class Preferences:
     #: 对应 C# `Preferences.Default.LoadDeepFolderSinger`（**默认 true**）：
     #: `VoicebankLoader.SearchAll` 据此决定是递归找 character.txt 还是只看一级子目录。
     load_deep_folder_singer: bool = True
+    #: 对应 C# `Preferences.Default.WinePath`（默认空串）。
+    #: 非 Windows 上用它跑 `.exe`/`.bat` 外部工具（`ToolsManager.LoadResampler` 判
+    #: 「非空即允许加载 exe」，`ExeResampler`/`ExeWavtool` 用它决定走不走 wine）。
+    wine_path: str = ''
 
 
 class USinger:

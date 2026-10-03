@@ -433,6 +433,28 @@ export interface DiffsingerMsProgress {
   host?: string;
 }
 
+/** 歌词输入建议的一条候选（diffsinger:suggestLyric） */
+export interface DiffsingerLyricSuggestion {
+  /** 候选文本（音素 / 音节 / 声母 / 韵母），点选后直接写进歌词 */
+  text: string;
+  /** 候选类型，供 UI 分组与着色 */
+  kind: 'phoneme' | 'syllable' | 'initial' | 'final' | 'term' | 'alias';
+  /** 排序分数（越大越靠前） */
+  score: number;
+  /** 人类可读的来源说明 */
+  note?: string;
+}
+
+/** 歌词输入建议结果（diffsinger:suggestLyric） */
+export interface DiffsingerSuggestResult {
+  ok: boolean;
+  text?: string;
+  /** ★ 轨道级语言（zh/ja/ko/en），不从歌词自动判断 */
+  language?: string;
+  items?: DiffsingerLyricSuggestion[];
+  error?: string;
+}
+
 /** 声库 inspect 结果（diffsinger:inspectVoicebank） */
 export interface DiffsingerVoicebankInfo {
   ok: boolean;
@@ -443,11 +465,20 @@ export interface DiffsingerVoicebankInfo {
   phonemes?: string[];
   hasAcoustic?: boolean;
   hasVariance?: boolean;
-  /** 声库自带声码器路径（为空 = 依赖通用组件位） */
+  /** 声码器 onnx 文件名 */
   vocoder?: string;
+  /** 声库自带 dsvocoder/（否则用通用组件位） */
   builtinVocoder?: boolean;
+  /** 实际加载的那份词典的词条数（dsdict-<lang>.yaml 的 entries 条数） */
   dictionaryWords?: number;
+  /** 实际加载的词典文件名，如 `dsdict-zh.yaml` */
+  dictionaryFile?: string;
   sampleRate?: number;
+  hopSize?: number;
+  /** 声库是否自带 dsdur/（缺了就不是可用的 DiffSinger 声库） */
+  hasDur?: boolean;
+  /** 是否有 dspitch/（仅编辑功能用，渲染不需要） */
+  hasPitchPredictor?: boolean;
   error?: string;
 }
 
@@ -500,7 +531,12 @@ export interface DiffsingerRenderResult {
   duration_ms?: number;
   warnings?: string[];
   engineVersion?: string;
-  /** 实际使用的推理链路：v2（五段式）/ classic（简化） */
+  /**
+   * 实际使用的推理链路：
+   * - `upstream` —— 与上游 OpenUtau 对齐（dsdur 时长模型在音素化阶段，
+   *   渲染只用 acoustic + vocoder；`dspitch` 不参与渲染）
+   * - `classic` —— 旧的自造五段式/简化链路，已废弃
+   */
   pipeline?: string;
   /** 实际生效的推理后端 */
   device?: { provider: string; requested: string } | null;
@@ -548,6 +584,43 @@ export interface RustInvokeResult {
  * 由 preload 注入到 renderer 的完整桥接口。
  * 后续 preload 端应严格按此类型实现。
  */
+/** 待打包进 `files/` 的资产（主进程按 `srcPath` 自己读盘，字节不过 IPC） */
+export interface ProjectAssetSource {
+  id: string;
+  srcPath: string;
+  fileName: string;
+}
+
+export interface ProjectSaveRequest {
+  /** `serializeProject()` 产出的清单 */
+  json: any;
+  assets?: ProjectAssetSource[];
+  /** 给了就直接覆盖写（"保存"），不给就弹"另存为"对话框 */
+  filePath?: string;
+  suggestName?: string;
+}
+
+export interface ProjectSaveResult {
+  ok: boolean;
+  cancelled?: boolean;
+  error?: string;
+  filePath?: string;
+  /** 源文件读不到的资产名 —— 保存仍然成功，但伴奏不会被打包进去 */
+  missing?: string[];
+}
+
+export interface ProjectOpenResult {
+  ok: boolean;
+  cancelled?: boolean;
+  error?: string;
+  filePath?: string;
+  /** 包里的 `project.json`（由前端 `parseProject()` 校验后再用） */
+  json?: any;
+  /** assetId → 解包后的本地路径 */
+  resolved?: Record<string, string>;
+  cacheDir?: string;
+}
+
 export interface FuBridge {
   onOpenFile(cb: (bytes: Uint8Array, name: string) => void): () => void;
 
@@ -602,7 +675,8 @@ export interface FuBridge {
   onVoicebankProgress(cb: (p: VoicebankProgress) => void): () => void;
 
   // DiffSinger 模块化集成（未启用模块时 status 返回 enabled=false，组件零下载）
-  diffsingerStatus(): Promise<DiffsingerStatus>;
+  // opts.force：跳过主进程 30s 依赖缓存强制重探（GPU 增强包安装/卸载后调用）
+  diffsingerStatus(opts?: { force?: boolean }): Promise<DiffsingerStatus>;
   diffsingerSetEnabled(on: boolean): Promise<GeneralResult & { enabled?: boolean }>;
   diffsingerInstallRuntime(): Promise<GeneralResult>;
   diffsingerCancelRuntimeInstall(): Promise<GeneralResult>;
@@ -617,6 +691,8 @@ export interface FuBridge {
   diffsingerMsDownload(cfg: { name: string; path: string }): Promise<GeneralResult & { canceled?: boolean; name?: string; dir?: string; size?: number; source?: string }>;
   diffsingerMsCancelDownload(name: string): Promise<GeneralResult>;
   diffsingerInspectVoicebank(cfg: { voicebank: string }): Promise<DiffsingerVoicebankInfo>;
+  /** 歌词输入建议。`language` 为**轨道级**语言设置，不从歌词自动判断。 */
+  diffsingerSuggestLyric(cfg: { text: string; language?: string; voicebank?: string; limit?: number }): Promise<DiffsingerSuggestResult>;
   diffsingerRender(cfg: {
     voicebank: string;
     notes: DiffsingerNote[];
@@ -625,6 +701,13 @@ export interface FuBridge {
     range?: DiffsingerRenderSelection | null;
     /** 推理后端：auto（默认，GPU 优先）/ cpu / cuda / dml */
     device?: string;
+    /**
+     * ★ 轨道级渲染参数。
+     * - `language`：**歌手语言**（zh/ja/ko/en），决定用哪套词典与音素表
+     *   （照搬上游 `USingerTrack.Language`，**不从歌词自动判断**）
+     * - `depth` / `steps`：DiffSinger 采样参数，进缓存文件名故不进 hash
+     */
+    params?: { language?: string; depth?: number; steps?: number };
     /**
      * P3 音高曲线：[{beat, cents}]，beat 为绝对拍位，cents 为音分偏移。
      * 必须传**纯对象数组**：store 里的响应式数组是 Proxy，
@@ -758,4 +841,10 @@ export interface FuBridge {
   // app events
   notify(ev: string, payload: any): void;
   openEditGuide(): Promise<GeneralResult>;
+
+  /** 歌声工程文件（`.fufumidi` 自包含包） */
+  project: {
+    save(payload: ProjectSaveRequest): Promise<ProjectSaveResult>;
+    open(): Promise<ProjectOpenResult>;
+  };
 }

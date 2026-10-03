@@ -24,10 +24,17 @@
                          **直接继承 `Phonemizer`**，自己实现歌词分段与 VC 计算）
   - `arpasing.py`       English Arpasing Phonemizer（ArpasingPhonemizer.cs 62 行；
                          `LatinDiphone` 子类，arpasing.yaml 模板已内嵌）
+  - `cantonese_cvvc.py` Cantonese CVVC Phonemizer（CantoneseCVVCPhonemizer.cs 18 行；
+                         **`ChineseCVVC` 子类，只重写 `Romanize` 改用粤拼**）
+  - `cantonese_syo.py`  Cantonese Syo-Style Phonemizer（CantoneseSyoPhonemizer.cs 358 行；
+                         直接继承 `Phonemizer`，自己实现声母/韵母切分与韵尾插入）
+  - `chinese_cvv_plus.py` Chinese CVV Plus（ChineseCVVPlusPhonemizer.cs 374 行；
+                         含 `zhcvvplus.yaml` 配置模型 + 内嵌 `FlowStyleIntegerSequences`
+                         的 PyYAML 等价物）
 
 未照搬（后续）：
-  - `SyllableBasedPhonemizer` 家族的其余 15 个具体子类（EnglishVCCV / EnglishCVVC 等）
-  - `ChineseCVVPlusPhonemizer.cs` / `ArpasingPhonemizer.cs`(62) 等其余内置 phonemizer
+  - `SyllableBasedPhonemizer` 家族的其余具体子类（EnglishVCCV / EnXSampa / GermanVCCV 等）
+  - `JapanesePresampPhonemizer.cs` / 韩语与越南语系列 / `ArpasingPlusPhonemizer.cs`
   - `OpenUtau.Plugin.Builtin` 下的字典类（Presamp / VCV 等）
 
 导入本包即完成注册（对应 C# 的 `[Phonemizer(...)]` 特性在程序集加载时注册）。
@@ -36,8 +43,14 @@
 from . import chinese_cvvc  # noqa: F401
 from . import chinese_vcv  # noqa: F401
 from . import chinese_cvv  # noqa: F401
+from . import chinese_cvv_plus  # noqa: F401
 from . import japanese_cvvc  # noqa: F401
+from . import cantonese_cvvc  # noqa: F401
+from . import cantonese_syo  # noqa: F401
 from .arpasing import ArpasingPhonemizer  # noqa: F401
+from .cantonese_cvvc import CantoneseCVVCPhonemizer  # noqa: F401
+from .cantonese_syo import CantoneseSyoPhonemizer  # noqa: F401
+from .chinese_cvv_plus import ChineseCVVPlusPhonemizer  # noqa: F401
 from .french_cvvc import FrenchCVVCPhonemizer  # noqa: F401
 from .french_vccv import FrenchVCCVPhonemizer  # noqa: F401
 from .latin_diphone import LatinDiphonePhonemizer  # noqa: F401
@@ -48,6 +61,8 @@ from . import japanese_vcv  # noqa: F401
 from .turkish_cvvc import TurkishCVVCPhonemizer  # noqa: F401
 
 __all__ = ['japanese_vcv', 'chinese_vcv', 'chinese_cvvc', 'japanese_cvvc', 'chinese_cvv',
+           'cantonese_cvvc', 'cantonese_syo', 'chinese_cvv_plus',
            'PhonemeBasedPhonemizer', 'MonophonePhonemizer', 'LatinDiphonePhonemizer',
            'SyllableBasedPhonemizer', 'FrenchVCCVPhonemizer', 'FrenchCVVCPhonemizer',
-           'TurkishCVVCPhonemizer', 'ArpasingPhonemizer']
+           'TurkishCVVCPhonemizer', 'ArpasingPhonemizer',
+           'CantoneseCVVCPhonemizer', 'CantoneseSyoPhonemizer', 'ChineseCVVPlusPhonemizer']

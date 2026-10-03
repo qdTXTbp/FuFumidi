@@ -160,6 +160,7 @@ class G2pPack(IG2p):
 
     def predict(self, grapheme: str) -> List[str]:
         """对应 `Predict`：自回归解码。`session is None` 时返回空数组（照搬 C#）。"""
+        import numpy as np
         src = self.encode_word(grapheme)
         if len(src[0]) == 0 or self.session is None:
             return []
@@ -167,8 +168,30 @@ class G2pPack(IG2p):
         tgt = [_TGT_START]
         t = 0
         while t < src_len and len(tgt) < _MAX_PRED_LEN:
-            outputs = self.session.run({'src': src, 'tgt': [tgt], 't': [t]})
-            pred = int(outputs[0][0][0])
+            # ★★ 三个「不真跑模型就发现不了」的载体坑，都记在这里：
+            #
+            # 1) C# 调的是 `Session.Run(inputs)` —— IInferenceSession 有一个
+            #    「只给输入、返回**全部**输出」的重载，所以它不传输出名。
+            #    Python 的 `run(output_names, input_feed, ...)` 第一个位置参数
+            #    **是输出名且必填**，直接 `run(feed)` 会抛
+            #    「missing 1 required positional argument: 'input_feed'」。
+            #    传 `None` 等价于"全部输出"（模型只有一个输出 `pred`）。
+            #
+            # 2) ★ dtype 必须是 **int32**。C# 的 `Tensor<int>`/`DenseTensor<int>`
+            #    映射到 onnxruntime 就是 int32；而 numpy 默认 int64，直接喂
+            #    Python list 会得到
+            #    「INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(int64)),
+            #     expected: (tensor(int32))」。所以三个输入都要显式指定 dtype。
+            #
+            # 3) ★ 输出 shape 是 **[1]**（不是标量也不是二维），所以只取 `[0][0]`。
+            #    C# 那边 `AsTensor<int>()[0]` 同样只取一层 —— 一致。
+            feed = {
+                'src': np.array([src[0]], dtype=np.int32),
+                'tgt': np.array([tgt], dtype=np.int32),
+                't': np.array([t], dtype=np.int32),
+            }
+            outputs = self.session.run(None, feed)
+            pred = int(np.asarray(outputs[0]).ravel()[0])
             if pred != _TGT_START:
                 tgt.append(pred)
             else:
