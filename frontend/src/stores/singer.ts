@@ -262,6 +262,9 @@ export function makeNote(track: SingTrack, startBeat: number, pitch: number): Si
 
 let _lastBytes: Uint8Array | null = null;
 
+/** 撤销栈深度上限：50 步足够覆盖一次编辑会话，也不会让快照吃内存（纯 JSON 字符串）。 */
+const HISTORY_MAX = 50;
+
 /** 取最近一次渲染的 wav 字节（导出用）。 */
 export function getLastWavBytes(): Uint8Array | null { return _lastBytes; }
 
@@ -308,9 +311,18 @@ export const useSingerStore = defineStore('singer', {
     renderWarnings: [] as string[],
     lastDurationMs: 0 as number,
     lastPipeline: '' as string,
+
+    /* ---- 撤销栈（页面级，覆盖音符 / 轨 / 效果 / 自动化 / 轨名 / 语言 / 模板）----
+       ★ 为什么不放在 PianoRoll 里：卷帘只能看见音符。改音量、效果链、自动化、轨名、
+         歌词、渲染设置同样会写坏工程，却一直没有撤销入口。这里做成**整页共用**的一栈。 */
+    history: [] as string[],
+    future: [] as string[],
   }),
 
   getters: {
+    /** 是否可撤销 / 可重做（工具条按钮的禁用态用） */
+    canUndo(state): boolean { return state.history.length > 0; },
+    canRedo(state): boolean { return state.future.length > 0; },
     activeTrack(state): SingTrack | null {
       return state.tracks.find(t => t.id === state.activeTrackId) || null;
     },
@@ -351,13 +363,72 @@ export const useSingerStore = defineStore('singer', {
 
   actions: {
     /* ---------------- 轨道 ---------------- */
+    /* ---------------- 撤销栈 ---------------- */
+
+    /** 快照：只存**会写进工程文件**的东西（渲染字节、banks 之类是缓存，不进历史）。
+     *  跟节流无关 —— 拖拽是「交互开始推一次」，所以这里不需要合并逻辑。 */
+    _snapshot() {
+      return JSON.stringify({
+        tracks: this.tracks,
+        bpm: this.bpm,
+        meta: this.meta,
+        sampleNote: this.sampleNote,
+        device: this.device,
+        activeTrackId: this.activeTrackId,
+      });
+    },
+    /** 在**做修改之前**调用；清空重做栈（与浏览器/编辑器的通用语义一致） */
+    pushUndo() {
+      try {
+        this.history.push(this._snapshot());
+        if (this.history.length > HISTORY_MAX) this.history.shift();
+        this.future = [];
+      } catch (e) { /* 快照失败不该挡住编辑 */ }
+    },
+    _applySnapshot(json: string): boolean {
+      try {
+        const s = JSON.parse(json);
+        if (!s || !Array.isArray(s.tracks)) return false;
+        this.tracks = s.tracks;
+        this.bpm = s.bpm ?? this.bpm;
+        this.meta = s.meta ?? this.meta;
+        this.sampleNote = s.sampleNote ?? this.sampleNote;
+        this.device = s.device ?? this.device;
+        this.activeTrackId = s.activeTrackId ?? (this.tracks[0] ? this.tracks[0].id : null);
+        // 音符被整体替换过，旧的选中 id 可能已经不存在
+        const ids = new Set<string>();
+        for (const t0 of this.tracks) for (const nn of t0.notes) ids.add(nn.id);
+        if (this.selectedId && !ids.has(this.selectedId)) this.selectedId = null;
+        this.selectedIds = this.selectedIds.filter((i) => ids.has(i));
+        return true;
+      } catch (e) { return false; }
+    },
+    undo(): boolean {
+      if (!this.history.length) return false;
+      const cur = this._snapshot();
+      const prev = this.history.pop() as string;
+      if (!this._applySnapshot(prev)) return false;
+      this.future.push(cur);
+      return true;
+    },
+    redo(): boolean {
+      if (!this.future.length) return false;
+      const cur = this._snapshot();
+      const next = this.future.pop() as string;
+      if (!this._applySnapshot(next)) return false;
+      this.history.push(cur);
+      return true;
+    },
+
     addTrack(engine: Engine = 'utau'): string {
+      this.pushUndo();
       const t = makeTrack(engine);
       this.tracks.push(t);
       this.activeTrackId = t.id;
       return t.id;
     },
     removeTrack(id: string) {
+      this.pushUndo();
       if (this.tracks.length <= 1) return;         // 至少留一条
       const i = this.tracks.findIndex(t => t.id === id);
       if (i < 0) return;
@@ -371,12 +442,14 @@ export const useSingerStore = defineStore('singer', {
     },
     /** 加一条音频轨（伴奏）。`durationMs` 由调用方用 <audio> 探到。 */
     addAudioTrack(path: string, fileName: string, durationMs: number): string {
+      this.pushUndo();
       const t = makeAudioTrack(path, fileName, durationMs);
       this.tracks.unshift(t);            // 伴奏通常放最上，对齐时好看
       this.activeTrackId = t.id;
       return t.id;
     },
     patchAudio(id: string, patch: Partial<AudioClip>) {
+      this.pushUndo();
       const t = this.tracks.find(x => x.id === id);
       if (t && t.audio) Object.assign(t.audio, patch);
     },
@@ -410,6 +483,7 @@ export const useSingerStore = defineStore('singer', {
      * 「先压限再混响」和「先混响再压限」听感完全不同。
      */
     addFx(id: string, type: string) {
+      this.pushUndo();
       const t = this.tracks.find(x => x.id === id);
       if (!t) return;
       const f = makeFx(type);
@@ -417,11 +491,13 @@ export const useSingerStore = defineStore('singer', {
       t.fx = [...(t.fx || []), f];
     },
     removeFx(id: string, fxId: string) {
+      this.pushUndo();
       const t = this.tracks.find(x => x.id === id);
       if (t) t.fx = (t.fx || []).filter(f => f.id !== fxId);
     },
     /** 上移（-1）/ 下移（+1）：越界不动（按钮会在 UI 上置灰） */
     moveFx(id: string, fxId: string, delta: number) {
+      this.pushUndo();
       const t = this.tracks.find(x => x.id === id);
       if (!t || !t.fx) return;
       const i = t.fx.findIndex(f => f.id === fxId);
@@ -467,6 +543,7 @@ export const useSingerStore = defineStore('singer', {
      *   不镜像就会出现"子轨画了线、渲出来没变化"这种最难查的错位。
      */
     setCurve(id: string, abbr: string, points: { beat: number; value: number }[]) {
+      this.pushUndo();
       const t = this.tracks.find(x => x.id === id);
       if (!t) return;
       const norm = normalizeCurve({ abbr, points });
@@ -479,6 +556,7 @@ export const useSingerStore = defineStore('singer', {
       }
     },
     clearCurve(id: string, abbr: string) {
+      this.pushUndo();
       const t = this.tracks.find(x => x.id === id);
       if (!t) return;
       t.curves = (t.curves || []).filter(c => c.abbr !== abbr);
@@ -487,6 +565,7 @@ export const useSingerStore = defineStore('singer', {
 
     /* ---------------- 音符 ---------------- */
     addNote(startBeat: number, pitch: number): string | null {
+      this.pushUndo();
       const tr = this.activeTrack;
       if (!tr) return null;
       const n = makeNote(tr, startBeat, pitch);
@@ -508,6 +587,7 @@ export const useSingerStore = defineStore('singer', {
       }
     },
     removeNote(id: string) {
+      this.pushUndo();
       for (const tr of this.tracks) {
         const i = tr.notes.findIndex(x => x.id === id);
         if (i >= 0) {
@@ -518,6 +598,7 @@ export const useSingerStore = defineStore('singer', {
       if (this.selectedId === id) { this.selectedId = null; this.selectedIds = []; }
     },
     clearTrack(id: string) {
+      this.pushUndo();
       const tr = this.tracks.find(x => x.id === id);
       if (tr) { tr.notes = []; tr.pitchCurve = []; }
       this.selectedId = null;
@@ -538,6 +619,7 @@ export const useSingerStore = defineStore('singer', {
      *   只改一边会出现"钢琴卷帘里拉了曲线、存出来的工程没有"这种错位。
      */
     setPitchCurve(pts: PitchPoint[]) {
+      this.pushUndo();
       const tr = this.activeTrack;
       if (!tr) return;
       const sorted = pts.slice().sort((a, b) => a.beat - b.beat);
@@ -545,6 +627,7 @@ export const useSingerStore = defineStore('singer', {
       this.setCurve(tr.id, 'PIT', sorted.map(p => ({ beat: p.beat, value: p.cents })));
     },
     clearPitchCurve() {
+      this.pushUndo();
       const tr = this.activeTrack;
       if (!tr) return;
       tr.pitchCurve = [];
@@ -590,6 +673,7 @@ export const useSingerStore = defineStore('singer', {
                    bpm?: number, replace = true): number {
       const tr = this.tracks.find(t => t.id === trackId);
       if (!tr) return 0;
+      this.pushUndo();
       const spq = tpb || 480;                       // ticks per quarter note
       const items = (midiTrack.notes || []).map((n: any) => ({
         startBeat: n.start / spq,
@@ -624,6 +708,9 @@ export const useSingerStore = defineStore('singer', {
       this.selectedId = null;
       this.selectedIds = [];
       this.renderByTrack = {};
+      // 整盘换掉 = 新起点：历史里留着上一批快照，Ctrl+Z 会把旧曲目"复活"
+      this.history = [];
+      this.future = [];
     },
 
     /* ---------------- 工程文件（.fufumidi 自包含包） ---------------- */
@@ -639,6 +726,9 @@ export const useSingerStore = defineStore('singer', {
       this.createdAt = '';
       this.meta = { title: '', comment: '', artist: '' };
       this.missingAudio = [];
+      // 空工程 = 新会话：历史里留着上一个工程的快照只会让 Ctrl+Z 变味
+      this.history = [];
+      this.future = [];
     },
 
     /**
@@ -894,30 +984,50 @@ export const useSingerStore = defineStore('singer', {
       const dyn = curveOf(tr, 'DYN');
       const bre = curveOf(tr, 'BRE');
       const gen = curveOf(tr, 'GEN');
+      const vol = curveOf(tr, 'VOL');
       const notes = tr.notes.map(n => {
-        // ★ 每音符表达式：OpenUTAU 走「表达式体系」（vol/vel/dyn/atk/dec/shft/clr），
-        //   不解析旧引擎的 flags 字符串。只把**用户真正设过**的键发下去，
-        //   没设的留空 —— 引擎那边查不到就回落轨道默认值，老工程行为不变。
+        /* ★★ 两个引擎的默认值口径不同，所以**没设过的参数一律不发**，
+              让引擎用它自己的原生默认值（legacy: velocity/volume=100、gender=50、breath=0；
+              openutau: vol/vel/atk/dec 描述符默认 100、shft 0）。
+           旧实现无条件发 `volume: n.volume ?? 0`、`gender: n.gender ?? 0` —— 那是把
+           「界面里的 0」当成「用户要 0」，legacy 引擎会按 volume=0 直乘 → **整轨静音**，
+           GENC=0 又会被按"最男声"渲染（它 0..100、50 才是不变）。 */
         const expressions: Record<string, number> = {};
-        if (typeof n.velocity === 'number') expressions.vel = n.velocity;
-        if (typeof n.volume === 'number') expressions.vol = n.volume;
-        if (typeof n.dyn === 'number') expressions.dyn = n.dyn;
-        if (typeof n.atk === 'number') expressions.atk = n.atk;
-        if (typeof n.dec === 'number') expressions.dec = n.dec;
-        if (typeof n.shft === 'number') expressions.shft = n.shft;
-        if (typeof n.clr === 'number') expressions.clr = n.clr;
-        return {
+        const raw: Record<string, any> = {
           startBeat: n.startBeat, durBeat: n.durBeat, pitch: n.pitch,
           // UTAU 的 wavtool 需要一个 alias；空歌词会让引擎取不到采样
           lyric: n.lyric || this.sampleNote || 'a',
           vibrato: !!n.vibrato, vibDepth: n.vibDepth, vibFreq: n.vibFreq,
           vibFade: n.vibFade || 0,
-          velocity: dyn ? valueForNote(dyn.points, n.startBeat, n.durBeat, 'DYN') : (n.velocity ?? 100),
-          volume: n.volume ?? 0,
-          gender: gen ? valueForNote(gen.points, n.startBeat, n.durBeat, 'GEN') : (n.gender ?? 0),
-          breath: bre ? valueForNote(bre.points, n.startBeat, n.durBeat, 'BRE') : (n.breath ?? 0),
-          ...(Object.keys(expressions).length ? { expressions } : {}),
         };
+
+        /* 力度 / 音量 / 性别 / 气声：
+           - 有对应自动化子轨（DYN/VOL/GEN/BRE）→ 按音符中点取值（自动化优先级最高）
+           - 否则只在音符上**真设过**时才发；没设过就整个键不发 */
+        const velocity = dyn ? valueForNote(dyn.points, n.startBeat, n.durBeat, 'DYN') : n.velocity;
+        if (typeof velocity === 'number') { raw.velocity = velocity; expressions.vel = velocity; }
+        const volume = vol ? valueForNote(vol.points, n.startBeat, n.durBeat, 'VOL') : n.volume;
+        if (typeof volume === 'number') { raw.volume = volume; expressions.vol = volume; }
+        const breath = bre ? valueForNote(bre.points, n.startBeat, n.durBeat, 'BRE') : n.breath;
+        if (typeof breath === 'number') { raw.breath = breath; expressions.bre = breath; }
+        const genderUi = gen ? valueForNote(gen.points, n.startBeat, n.durBeat, 'GEN') : n.gender;
+        if (typeof genderUi === 'number') {
+          /* 界面 GENC 是 -100..100（0 = 不变），legacy 引擎要 0..100（50 = 不变）：
+             这里做显式映射，负值压到 0（legacy 没有"更暗"的区间，夹住而不是乱翻）。 */
+          const mapped = Math.max(0, Math.min(100, 50 + genderUi / 2));
+          raw.gender = mapped;
+          expressions.gen = mapped;
+        }
+
+        // OpenUTAU 表达式（每音符；未设不发 → 用描述符默认值）
+        if (typeof n.dyn === 'number') expressions.dyn = n.dyn;
+        if (typeof n.atk === 'number') expressions.atk = n.atk;
+        if (typeof n.dec === 'number') expressions.dec = n.dec;
+        if (typeof n.shft === 'number') expressions.shft = n.shft;
+        if (typeof n.clr === 'number') expressions.clr = n.clr;
+
+        if (Object.keys(expressions).length) raw.expressions = expressions;
+        return raw;
       });
       const r = await (bridge as any).utauRenderTrack({
         voicebank: tr.singer,

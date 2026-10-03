@@ -6,7 +6,7 @@
  * 引擎（UTAU / DiffSinger）是**轨道上的属性**，不是页面级的模式 ——
  * 所以一个工程里两种轨可以混排，渲染时按各自引擎分派。
  */
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import PianoRoll from '../components/pianoroll/PianoRoll.vue';
@@ -144,7 +144,20 @@ function onSingerPath(id, e) {
 function onEngine(id, e) { store.patchTrack(id, { engine: e.target.value }); }
 
 /* ------------------------------------------------------------ 音符 */
+/**
+ * 交给钢琴卷帘的适配器。
+ *
+ * ★ 这里必须**完整实现 PianoRoll 文档里那份契约**（addNote / updateNote / moveNotes /
+ *   setNotesDuration / removeNotes / setSelection / selectAll / pushUndo / undo / redo）。
+ *   旧实现只给了 addNote/updateNote/removeNote/select/selectMany —— 于是箭头微调、
+ *   Delete、Ctrl+A、Ctrl+Z、右键撤销这些操作在卷帘里**全部静默失效**
+ *   （调用不存在的函数直接抛 TypeError，界面毫无变化）。
+ *
+ * 撤销语义：卷帘自己会在一次交互开始时调 `pushUndo()`，其余写入走 store；
+ * 所以 store 侧的变更方法里**不**再重复入栈（拖拽一次 = 一步）。
+ */
 function rollApi() {
+  const noteIds = () => (tr.value?.notes || []).map((n) => n.id);
   return {
     bpm: () => store.bpm,
     notes: () => tr.value?.notes || [],
@@ -153,9 +166,52 @@ function rollApi() {
     addNote: (b, p) => store.addNote(b, p),
     updateNote: (id, patch) => store.updateNote(id, patch),
     removeNote: (id) => store.removeNote(id),
+    removeNotes: (ids) => { (ids || []).forEach((id) => store.removeNote(id)); },
+    moveNotes: (ids, dBeat, dPitch) => {
+      for (const id of ids || []) {
+        const n = (tr.value?.notes || []).find((x) => x.id === id);
+        if (!n) continue;
+        store.updateNote(id, {
+          startBeat: Math.max(0, n.startBeat + dBeat),
+          pitch: Math.max(0, Math.min(127, n.pitch + dPitch)),
+        });
+      }
+    },
+    setNotesDuration: (ids, durBeat) => {
+      for (const id of ids || []) store.updateNote(id, { durBeat: Math.max(0.125, durBeat) });
+    },
     select: (id, add) => store.select(id, add),
     selectMany: (ids) => store.selectMany(ids),
+    setSelection: (ids, primary) => {
+      store.selectMany(ids || []);
+      store.select(primary ?? (ids && ids.length ? ids[0] : null));
+    },
+    selectAll: () => store.selectMany(noteIds()),
+    getPitchPoints: () => (tr.value?.pitchCurve || []).map((p) => ({ beat: p.beat, cents: p.cents })),
+    setPitchPoints: (pts) => store.setPitchCurve((pts || []).map((p) => ({ beat: p.beat, cents: p.cents }))),
+    pushUndo: () => store.pushUndo(),
+    undo: () => store.undo(),
+    redo: () => store.redo(),
   };
+}
+
+/** 页面级快捷键：卷帘有焦点时它自己处理，这里负责"没点进卷帘也能用"的那部分 */
+function onSingKey(e: KeyboardEvent) {
+  const el = e.target as HTMLElement | null;
+  const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && !typing && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    if (e.shiftKey) store.redo(); else store.undo();
+    return;
+  }
+  if (mod && !typing && e.key.toLowerCase() === 'y') { e.preventDefault(); store.redo(); return; }
+  if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); void saveProject(false); return; }
+  if (typing) return;
+  if (e.key === ' ') { e.preventDefault(); void tplay(); return; }
+  if (e.key === 'Enter') { e.preventDefault(); if (!renderBlocked.value) void doRender(); return; }
+  if (e.key === '[') { setTab('editor'); return; }
+  if (e.key === ']') { setTab('banks'); return; }
 }
 
 function onLyric(note, e) {
@@ -186,6 +242,32 @@ function pickCand(id, text) {
   store.updateNote(id, { lyric: text });
   cands.value = [];
 }
+
+/* ------------------------------------------------------------ 空态 / 渲染门禁 */
+
+/**
+ * 渲染按钮为什么点不动 —— 直接把原因写在按钮上。
+ * 旧界面在"没选歌手 / 没音符"时按钮是灰的，但**不说为什么**，用户只能猜。
+ */
+const renderReason = computed<string>(() => {
+  if (store.busy) return t('正在渲染…');
+  const t0 = tr.value;
+  if (!t0) return t('先在左侧新建或选中一条轨道');
+  if (t0.kind === 'audio') return t('伴奏轨不需要渲染');
+  if (!t0.notes.length) return t('这条轨还没有音符：导入 MIDI 或用画笔在卷帘上画');
+  if (!t0.singer) return t('还没有选歌手：在顶栏的声库选择器里挑一个');
+  return '';
+});
+const renderBlocked = computed(() => !!renderReason.value);
+
+/** 编辑器空态：新工程（一条空声部轨、没渲染过任何东西）时给"三步走"而不是一片空白。
+ *  ★ 不能用 `tracks.length === 0`：`clearAll()`/新建工程都会预置一条空 DiffSinger 轨。 */
+const isEmptyProject = computed(() =>
+  store.tracks.length === 1
+  && store.tracks[0].kind === 'voice'
+  && store.tracks[0].notes.length === 0
+  && Object.keys(store.renderByTrack).length === 0
+  && !store.projectPath);
 
 /* ------------------------------------------------------------ 导入 */
 
@@ -380,6 +462,10 @@ function tseek(e: Event) {
 /** 渲染完成后自动重装传输器，这样"渲完就能听" */
 watch(() => store.renderUrl, () => { void reloadTransport(); });
 
+/* 页面级快捷键只在「调教」页挂载期间生效（切走即摘掉） */
+onMounted(() => window.addEventListener('keydown', onSingKey));
+onBeforeUnmount(() => window.removeEventListener('keydown', onSingKey));
+
 const fmtMs = (ms: number) => {
   const s0 = Math.max(0, ms) / 1000;
   return Math.floor(s0 / 60) + ':' + String(Math.floor(s0 % 60)).padStart(2, '0')
@@ -507,6 +593,24 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
       <span class="sp" />
     </div>
 
+    <!-- 空态：没有任何轨道时给"三步走"，而不是让用户对着空白猜按钮 -->
+    <div v-if="tab === 'editor' && isEmptyProject && !store.busy" class="sing-empty">
+      <Icon name="utau" :size="26" />
+      <b>{{ t('还没有轨道') }}</b>
+      <ol>
+        <li>{{ t('新建一条声部轨（UTAU 或 DiffSinger），或直接打开一个 .fufumidi 工程') }}</li>
+        <li>{{ t('导入 MIDI 拿旋律，或用画笔在卷帘上画音符') }}</li>
+        <li>{{ t('在顶栏选好声库，点「渲染本轨」，渲完就能和伴奏一起试听') }}</li>
+      </ol>
+      <div class="se-acts">
+        <button class="btn primary" @click="addTrack('diffsinger')"><Icon name="spark" :size="13" /> {{ t('新建 DiffSinger 轨') }}</button>
+        <button class="btn" @click="addTrack('utau')"><Icon name="mic" :size="13" /> {{ t('新建 UTAU 轨') }}</button>
+        <button class="btn" @click="openProject"><Icon name="folder" :size="13" /> {{ t('打开工程') }}</button>
+        <button class="btn" @click="importMidi"><Icon name="upload" :size="13" /> {{ t('导入 MIDI') }}</button>
+        <button class="btn" @click="setTab('banks')"><Icon name="box" :size="13" /> {{ t('去声库页签装声库') }}</button>
+      </div>
+    </div>
+
     <div class="sing" v-show="tab === 'editor'">
     <!-- ==================== 左：轨道列表 ==================== -->
     <aside class="trk">
@@ -625,20 +729,19 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <span v-else class="muted small">{{ t('左侧选一条轨道') }}</span>
 
         <span class="sp" />
-        <select class="dev" :value="store.device" :title="t('推理后端')"
-                @change="store.device = sval($event)">
-          <option value="auto">{{ t('自动') }}</option>
-          <option value="cpu">CPU</option>
-          <option value="cuda">CUDA</option>
-          <option value="dml">DirectML</option>
-        </select>
-        <input v-if="isUtau" class="smp" :value="store.sampleNote" :title="t('UTAU 采样音（alias）')"
-               @change="store.sampleNote = sval($event)" />
+        <!-- 撤销 / 重做：覆盖音符、轨道、效果链、自动化、轨名（页面级，见 store.history） -->
+        <button class="ib" :disabled="!store.canUndo" :title="t('撤销 Ctrl+Z')" @click="store.undo()">
+          <Icon name="undo" :size="13" />
+        </button>
+        <button class="ib" :disabled="!store.canRedo" :title="t('重做 Ctrl+Shift+Z')" @click="store.redo()">
+          <Icon name="redo" :size="13" />
+        </button>
         <button class="btn" data-guide="sing-track-props" :disabled="!tr" @click="propsOpen = !propsOpen">
           <Icon name="sliders" :size="13" /> {{ t('轨道属性') }}
         </button>
-        <button v-if="!isAudio" class="btn" data-guide="sing-render" :disabled="!tr" @click="doRender"
-                :title="t('按该轨的引擎自动分派')">
+        <!-- 主动作：渲染本轨。禁用时把**原因**写在按钮上，不让用户猜 -->
+        <button v-if="!isAudio" class="btn primary" data-guide="sing-render"
+                :disabled="renderBlocked" :title="renderReason || t('按该轨的引擎自动分派')" @click="doRender">
           <Icon name="play" :size="13" /> {{ t('渲染本轨') }}
         </button>
         <button class="btn" data-guide="sing-render-all" :disabled="store.busy" @click="doRenderAll"
@@ -649,6 +752,10 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
       <div v-if="store.busy" class="edt-prog"><i :style="{ width: store.progress + '%' }" /></div>
       <p v-if="msg" class="edt-msg small">{{ msg }}</p>
+      <!-- 渲染门禁原因：只在"想渲但渲不了"时显示，平时不占位 -->
+      <p v-else-if="renderReason && !store.busy && !isAudio" class="edt-msg small hint">
+        {{ renderReason }}
+      </p>
 
       <!-- 传输栏：伴奏与渲染结果**同时播放**（Web Audio 单时钟，采样级同步） -->
       <div class="xport" data-guide="sing-transport">
@@ -696,7 +803,18 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
         <!-- ── 参数 ── -->
         <div v-if="propsTab === 'params'" class="props small">
+          <!-- 推理后端 / 采样音属于"这条轨怎么渲"，从顶栏下沉到这里 -->
+          <label :title="t('推理后端：优先用哪个计算设备')">{{ t('推理后端') }}
+            <select :value="store.device" @change="store.device = sval($event)">
+              <option value="auto">{{ t('自动') }}</option>
+              <option value="cpu">CPU</option>
+              <option value="cuda">CUDA</option>
+              <option value="dml">DirectML</option>
+            </select>
+          </label>
           <template v-if="isUtau">
+            <label :title="t('UTAU 采样音（alias）：歌词为空时用它兜底')">{{ t('采样音') }}
+              <input :value="store.sampleNote" @change="store.sampleNote = sval($event)" /></label>
             <label>{{ t('重采样器') }}<input :value="tr.resampler || ''"
               @change="store.patchTrack(tr.id, { resampler: sval($event) })" /></label>
             <label>{{ t('波源工具') }}<input :value="tr.wavtool || ''"
@@ -710,9 +828,10 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           </template>
           <label>{{ t('BPM') }}<input type="number" min="1" :value="store.bpm"
             @change="store.bpm = nval($event, 120)" /></label>
-          <label>{{ t('音量') }}<input type="number" step="0.5" min="-60" max="6"
-            :value="isAudio ? (tr.audio?.gainDb ?? 0) : (tr.gainDb ?? 0)"
-            @change="onGainDb($event)" /><span class="muted">dB</span></label>
+          <label :title="t('整条轨的增益（dB）：0 = 原样，负值衰减')">{{ t('轨增益') }}
+            <input type="number" step="0.5" min="-60" max="6"
+              :value="isAudio ? (tr.audio?.gainDb ?? 0) : (tr.gainDb ?? 0)"
+              @change="onGainDb($event)" /><span class="muted">dB</span></label>
         </div>
 
         <!-- ── 效果链（本轨独享，顺序 = 信号流） ── -->
@@ -847,12 +966,19 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           @change="store.updateNote(sel.id, { vibFreq: nval($event, 5.5) })" /></label>
         <label v-if="isDs"><span>{{ t('音分偏移') }}</span><input type="number" min="-100" max="100" :value="sel.pitchOffset || 0"
           @change="store.updateNote(sel.id, { pitchOffset: nval($event, 0) })" /></label>
-        <label v-if="isUtau"><span>{{ t('音量') }}</span><input type="number" min="0" max="100" :value="sel.velocity ?? 100"
-          @change="store.updateNote(sel.id, { velocity: nval($event, 100) })" /></label>
-        <label v-if="isUtau"><span>{{ t('GENC') }}</span><input type="number" min="-100" max="100" :value="sel.gender || 0"
-          @change="store.updateNote(sel.id, { gender: nval($event, 0) })" /></label>
-        <label v-if="isUtau"><span>{{ t('气声') }}</span><input type="number" min="0" max="100" :value="sel.breath || 0"
-          @change="store.updateNote(sel.id, { breath: nval($event, 0) })" /></label>
+        <!-- 留空 = 用引擎默认值。占位符直接显示那个默认值，免得用户以为"0 是默认" -->
+        <label v-if="isUtau" :title="t('力度（0 ~ 100，默认 100）：影响辅音速度与音量，越小越柔')"><span>{{ t('力度') }}</span>
+          <input type="number" min="0" max="100" placeholder="100" :value="sel.velocity ?? ''"
+            @change="store.updateNote(sel.id, { velocity: nval($event, 100) })" /></label>
+        <label v-if="isUtau" :title="t('GENC（-100 ~ 100，默认 0 = 不变）：正值更亮（偏女声），负值更暗')"><span>{{ t('GENC') }}</span>
+          <input type="number" min="-100" max="100" placeholder="0" :value="sel.gender ?? ''"
+            @change="store.updateNote(sel.id, { gender: nval($event, 0) })" /></label>
+        <label v-if="isUtau" :title="t('气声（0 ~ 100，默认 0）')"><span>{{ t('气声') }}</span>
+          <input type="number" min="0" max="100" placeholder="0" :value="sel.breath ?? ''"
+            @change="store.updateNote(sel.id, { breath: nval($event, 0) })" /></label>
+        <label v-if="isUtau" :title="t('音量（表情级 0 ~ 100，默认 100 = 原样；不是衰减量）')"><span>{{ t('音量') }}</span>
+          <input type="number" min="0" max="100" placeholder="100" :value="sel.volume ?? ''"
+            @change="store.updateNote(sel.id, { volume: nval($event, 100) })" /></label>
 
         <!-- OpenUTAU 表达式（每音符，作用于该音符首个音素；不填 = 用轨道默认值） -->
         <template v-if="isUtau">
@@ -914,6 +1040,13 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .sn-tab i { font-style: normal; font-size: 10.5px; opacity: .75; }
 .sn-tab:hover { border-color: var(--brand); color: var(--ink); }
 .sn-tab.on { border-color: var(--accent); background: var(--brand-soft); color: var(--ink); font-weight: 600; }
+/* 空态：整页居中一张卡，不挡页签 */
+.sing-empty { margin: 22px auto; max-width: 620px; padding: 22px 24px; border: 1px solid var(--border);
+              border-radius: 14px; background: var(--surface); display: flex; flex-direction: column; gap: 10px; }
+.sing-empty > b { font-size: 15px; }
+.sing-empty ol { margin: 0; padding-left: 20px; color: var(--slate); font-size: 12.5px; line-height: 1.9; }
+.se-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.edt-msg.hint { color: var(--stone); }
 .sing { flex: 1; min-height: 0; display: flex; }
 .sing-banks { flex: 1; min-height: 0; }
 
