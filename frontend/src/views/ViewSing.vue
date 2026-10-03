@@ -628,19 +628,17 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
     <!-- 空态：没有任何轨道时给"三步走"，而不是让用户对着空白猜按钮 -->
     <div v-if="tab === 'editor' && isEmptyProject && !store.busy" class="sing-empty">
-      <Icon name="utau" :size="26" />
-      <b>{{ t('还没有轨道') }}</b>
-      <ol>
-        <li>{{ t('新建一条声部轨（UTAU 或 DiffSinger），或直接打开一个 .fufumidi 工程') }}</li>
-        <li>{{ t('导入 MIDI 拿旋律，或用画笔在卷帘上画音符') }}</li>
-        <li>{{ t('在顶栏选好声库，点「渲染本轨」，渲完就能和伴奏一起试听') }}</li>
-      </ol>
+      <div class="se-main">
+        <Icon name="utau" :size="18" />
+        <b>{{ t('还没有轨道') }}</b>
+        <span class="muted small">{{ t('新建声部轨 → 导入 MIDI 或用画笔写音符 → 选好声库点「渲染本轨」') }}</span>
+      </div>
       <div class="se-acts">
-        <button class="btn primary" @click="addTrack('diffsinger')"><Icon name="spark" :size="13" /> {{ t('新建 DiffSinger 轨') }}</button>
-        <button class="btn" @click="addTrack('utau')"><Icon name="mic" :size="13" /> {{ t('新建 UTAU 轨') }}</button>
-        <button class="btn" @click="openProject"><Icon name="folder" :size="13" /> {{ t('打开工程') }}</button>
-        <button class="btn" @click="importMidi"><Icon name="upload" :size="13" /> {{ t('导入 MIDI') }}</button>
-        <button class="btn" @click="setTab('banks')"><Icon name="box" :size="13" /> {{ t('去声库页签装声库') }}</button>
+        <button class="btn sm primary" @click="addTrack('diffsinger')"><Icon name="spark" :size="12" /> {{ t('新建 DiffSinger 轨') }}</button>
+        <button class="btn sm" @click="addTrack('utau')"><Icon name="mic" :size="12" /> {{ t('新建 UTAU 轨') }}</button>
+        <button class="btn sm" @click="openProject"><Icon name="folder" :size="12" /> {{ t('打开工程') }}</button>
+        <button class="btn sm" @click="importMidi"><Icon name="upload" :size="12" /> {{ t('导入 MIDI') }}</button>
+        <button class="btn sm" @click="setTab('banks')"><Icon name="box" :size="12" /> {{ t('装声库') }}</button>
       </div>
     </div>
 
@@ -1091,12 +1089,15 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .sn-tab i { font-style: normal; font-size: 10.5px; opacity: .75; }
 .sn-tab:hover { border-color: var(--brand); color: var(--ink); }
 .sn-tab.on { border-color: var(--accent); background: var(--brand-soft); color: var(--ink); font-weight: 600; }
-/* 空态：整页居中一张卡，不挡页签 */
-.sing-empty { margin: 22px auto; max-width: 620px; padding: 22px 24px; border: 1px solid var(--border);
-              border-radius: 14px; background: var(--surface); display: flex; flex-direction: column; gap: 10px; }
-.sing-empty > b { font-size: 15px; }
-.sing-empty ol { margin: 0; padding-left: 20px; color: var(--slate); font-size: 12.5px; line-height: 1.9; }
-.se-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+/* 空态：**一条横向提示条**（此前是竖向大卡片：大图标 + 标题 + 三行有序列表 + 两行按钮，
+   在 1600×900 下占了近半屏，密度低又抢视线）。现在压成一行提示 + 一行动作。 */
+.sing-empty { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+              margin: 10px 14px 0; padding: 9px 14px; border: 1px solid var(--border);
+              border-radius: 10px; background: var(--surface); }
+.se-main { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1 1 340px; }
+.se-main > b { font-size: 13px; white-space: nowrap; }
+.se-main > .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.se-acts { display: flex; gap: 6px; flex-wrap: wrap; }
 .edt-msg.hint { color: var(--stone); }
 .edt-prog-wrap { display: flex; align-items: center; gap: 10px; padding: 4px 2px; }
 .edt-prog-wrap .edt-prog { flex: 1; }

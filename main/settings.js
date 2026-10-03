@@ -35,6 +35,9 @@ const DEFAULT_SETTINGS = {
   utau_engine: 'openutau',
   diffsinger_enabled: true, // DiffSinger 模块开关：**默认启用**，不再要求用户先手动点一次「启用模块」。
                           // 置 false 仍可显式关闭（保留字段仅为兼容旧 settings.json；主进程已不再据此拦截）。
+  // 操作系统级全局热键：{ 动作id: { accel, enabled } }。
+  // ★ 默认空 = **一个都不注册** —— 系统级热键会和其他软件抢键，必须由用户在设置里显式录制并启用。
+  global_hotkeys: {},
 };
 
 function settingsPath() {

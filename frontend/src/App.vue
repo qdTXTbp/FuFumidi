@@ -299,6 +299,9 @@ function onKey(e) {
   }
   // 忽略输入框内的快捷键
   if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  // 系统级全局热键触发时，主进程会顺手发一个同名的合成按键事件；
+  // 这里放行，避免同一次按键被处理两遍（播放/暂停、上一首/下一首会跳两次）。
+  if (e.__fromGlobalHotkey) return;
   if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
   else if (e.key === 'ArrowLeft') seekRatio(Math.max(0, state.progress - 0.02));
   else if (e.key === 'ArrowRight') seekRatio(Math.min(1, state.progress + 0.02));
@@ -329,10 +332,38 @@ async function playNeighbor(dir) {
   await app.playSongById(id);
 }
 
+/* ---------------- 操作系统级全局热键（用户自己录制，默认不注册） ----------------
+   主进程 globalShortcut 触发 → 这里执行动作；同时补发一个带标记的合成按键，
+   让所有页面的既有 onKey 监听（视觉反馈等）保持一致，但被上面的 __fromGlobalHotkey 拦一次。 */
+let _hotkeyOff = null;
+function setupGlobalHotkeys() {
+  const b = window.fuBridge;
+  if (!b || typeof b.onHotkeyAction !== 'function') return;
+  _hotkeyOff = b.onHotkeyAction((act) => {
+    try {
+      if (act === 'toggle') { togglePlay(); synthesizeKey(' '); }
+      else if (act === 'next') { void playNeighbor(1); synthesizeKey('n'); }
+      else if (act === 'prev') { void playNeighbor(-1); synthesizeKey('p'); }
+      else if (act === 'cycleMode') { state.cyclePlayMode(); synthesizeKey('o'); }
+    } catch (e) { /* 全局热键不该因为某个动作报错就死掉 */ }
+  });
+}
+
+function synthesizeKey(k) {
+  try {
+    const ev = new KeyboardEvent('keydown', { key: k, code: k === ' ' ? 'Space' : 'Key' + k.toUpperCase(), bubbles: true });
+    ev.__fromGlobalHotkey = true;
+    window.dispatchEvent(ev);
+  } catch (e) {}
+}
+
 function onBeforeUnload() {
   // 尽力冲刷 SQLite 写队列；主进程退出前还有宽限期兜底
   playlistStore.flushDb();
 }
+
+onMounted(() => setupGlobalHotkeys());
+onBeforeUnmount(() => { if (_hotkeyOff) { try { _hotkeyOff(); } catch (e) {} _hotkeyOff = null; } });
 
 /* ---------------- GPU 安装常驻通知条 ---------------- */
 let offGpuProg = null;

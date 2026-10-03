@@ -25,6 +25,8 @@ const cloud = useCloudStore();
 // 立即同步：先弹选择框，让用户决定以本机还是云端存档为准
 const syncChoiceOpen = ref(false);
 onMounted(() => cloud.init());
+// 全局热键：进设置页读一次已保存的绑定，并挂上录制用的键盘监听（capture 阶段，优先于其它监听）
+onMounted(() => { void hkLoad(); window.addEventListener('keydown', hkOnKeydown, true); });
 
 const TABS = computed(() => [
   { id: 'appearance', label: t('外观'), icon: 'palette' },
@@ -700,6 +702,105 @@ async function pruneLibrary() {
 
 /* ---------------- 快捷键 ---------------- */
 function resetKeys() { toast(t('恢复默认快捷键')); }
+/* ---------------- 操作系统级全局热键（用户自己录制） ----------------
+   与应用内快捷键（上面的 KEYMAP，窗口有焦点才生效）不同：这一组走主进程
+   globalShortcut 注册到操作系统，应用在后台/失焦时照样触发。
+   ★ 默认一个都不注册 —— 系统级热键会和别的软件抢键，必须用户显式录制并开启。 */
+const hkActions = ref([]);                 // [{id,label,fallback}]
+const hkMap = reactive({});               // actionId -> { accel, enabled }
+const hkActive = ref({});                 // 注册成功的：actionId -> accel
+const hkFailed = ref({});                 // 注册失败的：actionId -> 原因（通常是被占用）
+const hkRecording = ref('');              // 正在录制的 actionId
+const hkBusy = ref(false);
+
+/** 键盘事件 → Electron accelerator 字符串（globalShortcut 用的就是这套写法） */
+function accelFromEvent(e) {
+  const k = e.key;
+  if (['Control', 'Shift', 'Alt', 'Meta', 'CapsLock', 'Dead'].includes(k)) return '';
+  if (k === 'Escape') return '';                     // Esc = 取消录制
+  const parts = [];
+  if (e.ctrlKey) parts.push('Control');
+  if (e.altKey) parts.push('Alt');
+  if (e.shiftKey) parts.push('Shift');
+  if (e.metaKey) parts.push('Super');
+  let key = k;
+  if (k === ' ') key = 'Space';
+  else if (k === 'ArrowUp') key = 'Up';
+  else if (k === 'ArrowDown') key = 'Down';
+  else if (k === 'ArrowLeft') key = 'Left';
+  else if (k === 'ArrowRight') key = 'Right';
+  else if (k.length === 1) key = k.toUpperCase();
+  else if (/^F\d{1,2}$/.test(k)) key = k;
+  else if (k === '+' || k === '=') key = 'Plus';
+  else if (k === '-') key = '-';
+  else if (/^[a-zA-Z]+$/.test(k)) key = k[0].toUpperCase() + k.slice(1);
+  else return '';                                    // 不认识的键直接忽略
+  // 没有修饰键的普通字母/数字容易被别的软件抢，也容易误触，要求至少一个修饰键（F 系列除外）
+  const isFn = /^F\d{1,2}$/.test(k);
+  if (!parts.length && !isFn && !/^Media/.test(key)) return '';
+  parts.push(key);
+  return parts.join('+');
+}
+
+function hkStartRecord(id) {
+  if (!window.fuBridge || typeof window.fuBridge.hotkeysApply !== 'function') {
+    toast(t('当前版本不支持系统级热键'));
+    return;
+  }
+  hkRecording.value = id;
+}
+
+function hkOnKeydown(e) {
+  const id = hkRecording.value;
+  if (!id) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.key === 'Escape') { hkRecording.value = ''; return; }
+  const accel = accelFromEvent(e);
+  if (!accel) return;                                // 只按了修饰键：继续等
+  hkMap[id] = { accel, enabled: true };
+  hkRecording.value = '';
+  void hkApply();
+}
+
+async function hkLoad() {
+  const b = window.fuBridge;
+  if (!b || typeof b.hotkeysGet !== 'function') return;
+  try {
+    const r = await b.hotkeysGet();
+    hkActions.value = (r && r.actions) || [];
+    const saved = (r && r.map) || {};
+    for (const a of hkActions.value) {
+      hkMap[a.id] = { accel: (saved[a.id] && saved[a.id].accel) || '', enabled: !(saved[a.id] && saved[a.id].enabled === false) };
+    }
+    hkActive.value = (r && r.active) || {};
+    hkFailed.value = (r && r.failed) || {};
+  } catch (e) { /* 浏览器环境没有这套 API */ }
+}
+
+async function hkApply() {
+  const b = window.fuBridge;
+  if (!b || typeof b.hotkeysApply !== 'function') return;
+  hkBusy.value = true;
+  try {
+    const payload = {};
+    for (const a of hkActions.value) {
+      const it = hkMap[a.id] || {};
+      if (it.accel) payload[a.id] = { accel: it.accel, enabled: it.enabled !== false };
+    }
+    const r = await b.hotkeysApply(payload);
+    hkActive.value = (r && r.active) || {};
+    hkFailed.value = (r && r.failed) || {};
+    const bad = Object.keys(hkFailed.value).length;
+    toast(bad ? t('有 ') + bad + t(' 个组合键被其他程序占用，未生效') : t('全局热键已更新'));
+  } finally { hkBusy.value = false; }
+}
+
+function hkClear(id) {
+  hkMap[id] = { accel: '', enabled: false };
+  void hkApply();
+}
+
 
 /* ---------------- 可选 Rust 核心 ---------------- */
 async function loadRust() {
@@ -819,7 +920,8 @@ onMounted(() => {
   if (bridge && bridge.onFolderWatch) offWatch = bridge.onFolderWatch(onFolderWatch);
   if (bridge && bridge.plugins && bridge.plugins.onLog) offPlgLog = bridge.plugins.onLog(onPluginLog);
 });
-onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPlgLog && offPlgLog(); } catch (e) {} });
+onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPlgLog && offPlgLog(); } catch (e) {} 
+  window.removeEventListener('keydown', hkOnKeydown, true); });
 </script>
 
 <template>
@@ -1102,7 +1204,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
 
         <!-- ============ 快捷键 ============ -->
         <div v-else-if="tab === 'keys'">
-          <p class="ov-note">{{ t('点击右侧快捷键可重新录制；按 Esc 取消，修改自动保存。') }}</p>
+          <p class="ov-note">{{ t('下面是应用内快捷键（窗口有焦点时生效）；系统级全局热键在页面下方单独设置。') }}</p>
           <div class="kbd-row" v-for="k in KEYMAP" :key="k.keys.join('+')">
             <b>{{ k.label }}</b>
             <div class="kbd-keys">
@@ -1111,6 +1213,32 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
           </div>
           <div style="display:flex;gap:6px;margin-top:12px">
             <button class="btn sm" @click="resetKeys">{{ t('恢复默认快捷键') }}</button>
+          </div>
+
+          <!-- ============ 操作系统级全局热键（用户自己录制） ============ -->
+          <div class="hk-sec">
+            <div class="hk-head">
+              <Icon name="kbd" :size="15" />
+              <b>{{ t('全局热键（系统级）') }}</b>
+              <span class="sp" />
+              <span class="muted small">{{ t('应用在后台/最小化时同样生效；默认不注册，需自己录制') }}</span>
+            </div>
+            <p class="ov-note">{{ t('点「录制」后按组合键（需带 Ctrl / Alt / Shift，F1~F12 可单按）；Esc 取消，× 清除。录制后立即生效，无需重启。') }}</p>
+            <div class="hk-row" v-for="a in hkActions" :key="a.id">
+              <b class="hk-lb">{{ t(a.label) }}</b>
+              <div class="hk-val">
+                <template v-if="hkRecording === a.id">
+                  <span class="kbd-key rec">{{ t('请按组合键…') }}</span>
+                </template>
+                <template v-else-if="hkMap[a.id] && hkMap[a.id].accel">
+                  <span class="kbd-key" :class="{ ok: hkActive[a.id], bad: hkFailed[a.id] }" v-for="key in hkMap[a.id].accel.split('+')" :key="key">{{ key }}</span>
+                  <span v-if="hkFailed[a.id]" class="hk-bad">{{ t('被占用，未生效') }}</span>
+                </template>
+                <span v-else class="muted small">{{ t('未设置') }}</span>
+              </div>
+              <button class="btn sm" :disabled="hkBusy" @click="hkStartRecord(a.id)">{{ t('录制') }}</button>
+              <button class="btn sm ghost" :disabled="hkBusy || !(hkMap[a.id] && hkMap[a.id].accel)" :title="t('清除')" @click="hkClear(a.id)">×</button>
+            </div>
           </div>
         </div>
 
@@ -1312,3 +1440,20 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
     <CloudSyncChoiceDialog :open="syncChoiceOpen" @close="syncChoiceOpen = false" />
   </div>
 </template>
+
+<style scoped>
+/* ---- 操作系统级全局热键（用户自己录制） ---- */
+.hk-sec { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+.hk-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.hk-head b { font-size: 13px; }
+.hk-head .sp { flex: 1; }
+.hk-row { display: flex; align-items: center; gap: 10px; padding: 7px 0;
+          border-bottom: 1px dashed var(--border); }
+.hk-row:last-child { border-bottom: none; }
+.hk-lb { flex: none; width: 108px; font-size: 12.5px; }
+.hk-val { flex: 1; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
+.hk-val .kbd-key.ok { border-color: var(--success-text, #22c55e); color: var(--ink); }
+.hk-val .kbd-key.bad { border-color: var(--brand-coral); color: var(--brand-coral); }
+.hk-val .kbd-key.rec { border-style: dashed; border-color: var(--accent); color: var(--brand-text); }
+.hk-bad { font-size: 11px; color: var(--brand-coral); }
+</style>

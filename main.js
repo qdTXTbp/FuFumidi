@@ -57,6 +57,7 @@ const { registerProjectIpc } = require('./main/project');
 const { registerWallpaperIpc } = require('./main/wallpaper');
 const { registerUtauIpc } = require('./main/utau');
 const { registerDiffsingerIpc } = require('./main/diffsinger');
+const { createHotkeys, HOTKEY_ACTIONS } = require('./main/hotkeys');
 const { registerSoundfontWorkshopIpc } = require('./main/soundfonts');
 const { createWindow, configureSession, openFileFromArgv, openPath } = require('./main/window');
 const { pyLit, parsePyJson } = require('./main/py-util');
@@ -145,6 +146,24 @@ if (!gotLock) {
     });
     const mainWin = createWindow({ BrowserWindow, shell, pluginHost, rootDir: __dirname });
     setupTray({ win: mainWin, app, readSettings, rootDir: __dirname });
+
+    /* ---------- 操作系统级全局热键 ----------
+       默认**一个都不注册**（设置里 global_hotkeys 为空）：系统级热键会和其他软件抢键，
+       必须由用户在「设置 → 快捷键 → 全局热键」里显式录制并启用。
+       渲染进程通过 hotkeys:apply 改键，改完立即生效；注册失败会如实回传「被占用」。 */
+    const hotkeys = createHotkeys({
+      readSettings,
+      writeSettings,
+      getWindow: () => mainWin,
+    });
+    hotkeys.init();
+    ipcMain.handle('hotkeys:get', () => ({
+      actions: HOTKEY_ACTIONS,
+      ...hotkeys.getState(),
+      map: hotkeys.getState().map || hotkeys.readMap(),
+    }));
+    ipcMain.handle('hotkeys:apply', (_e, map) => hotkeys.apply(map, { persist: true }));
+    app.on('will-quit', () => hotkeys.dispose());
     Menu.setApplicationMenu(null); // 隐藏默认菜单栏，界面更清爽
 
     // 启动参数里带上 .mid/.midi 时（例如：双击文件 / 命令行调用）自动打开

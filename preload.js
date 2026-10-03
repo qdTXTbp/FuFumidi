@@ -96,6 +96,11 @@ contextBridge.exposeInMainWorld('fuBridge', {
   verifyMidi: () => ipcRenderer.invoke('library:verify'),
   dupeMidi: () => ipcRenderer.invoke('library:dupes'),
   // 托盘控制（播放/暂停、下一首）
+  /* ---- 操作系统级全局热键（设置 → 快捷键 → 全局热键）：用户自己录制 ---- */
+  hotkeysGet: () => ipcRenderer.invoke('hotkeys:get'),
+  hotkeysApply: (map) => ipcRenderer.invoke('hotkeys:apply', map),
+  onHotkeyAction: (cb) => { const w = (_e, act) => cb(act); ipcRenderer.on('hotkey:action', w); return () => ipcRenderer.removeListener('hotkey:action', w); },
+  onHotkeysState: (cb) => { const w = (_e, st) => cb(st); ipcRenderer.on('hotkeys:state', w); return () => ipcRenderer.removeListener('hotkeys:state', w); },
   onTrayControl: (cb) => { const w = (_e, act) => cb(act); ipcRenderer.on('tray:control', w); return () => ipcRenderer.removeListener('tray:control', w); },
   // 读取与指定音频/ midi 文件同目录的同名 .lrc 歌词（base64 传输，渲染端自解码）
   readSidecarLyrics: (filePath) => ipcRenderer.invoke('sys:readSidecarLyrics', filePath),
