@@ -3009,6 +3009,17 @@ export const I18N_MAP = {
   '切换播放模式': 'Cycle play mode',
   '上一个歌单': 'Previous playlist',
   '音符改过，渲染结果已过期 —— 点「渲染本轨」重渲才听得到': 'Notes changed — the rendered audio is stale. Re-render this track to hear it',
+  '未命名轨（双击改名）': 'Untitled track (double-click to rename)',
+  '拖动排序': 'Drag to reorder',
+  '静音（M）': 'Mute (M)',
+  '独奏：只留这一条出声（再点恢复）': 'Solo: only this track is heard (click again to restore)',
+  '轨道名称': 'Track name',
+  ' 副本': ' copy',
+  '重命名': 'Rename',
+  '复制这条轨': 'Duplicate this track',
+  '清空音符': 'Clear notes',
+  '删除这条轨': 'Delete this track',
+
 
   '下一个歌单': 'Next playlist',
 

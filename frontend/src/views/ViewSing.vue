@@ -137,6 +137,44 @@ function autoDelPoint(pts: { beat: number; value: number }[], i: number) {
 
 /* ------------------------------------------------------------ 轨道 */
 function addTrack(engine) { store.addTrack(engine); msg.value = ''; }
+
+/* ---- 轨列表：拖拽排序 / 静音 / 双击改名 / 右键菜单 ---- */
+const dragId = ref('');
+const dragOver = ref('');
+function onTrackDragStart(id: string) { dragId.value = id; }
+function onTrackDragEnd() { dragId.value = ''; dragOver.value = ''; }
+function onTrackDrop(toId: string) {
+  if (dragId.value && dragId.value !== toId) store.moveTrack(dragId.value, toId);
+  onTrackDragEnd();
+}
+async function toggleMute(x: any) {
+  store.patchTrack(x.id, { muted: !x.muted });
+  await reloadTransport();          // 静音要立刻听得见：lane 是 load 时生成的
+}
+function renameTrack(x: any) {
+  const next = window.prompt(t('轨道名称'), x.name || '');
+  if (next == null) return;
+  store.patchTrack(x.id, { name: String(next).trim() });
+}
+const trackMenu = ref<{ x: number; y: number; track: any } | null>(null);
+function openTrackMenu(e: MouseEvent, x: any) {
+  trackMenu.value = { x: e.clientX, y: e.clientY, track: x };
+  store.selectTrack(x.id);
+}
+function closeTrackMenu() { trackMenu.value = null; }
+function menuDuplicate(x: any) {
+  // 复制轨：新 id + 深拷贝音符（引用共享会让两条轨编辑互相影响）
+  const src = JSON.parse(JSON.stringify({ engine: x.engine, name: x.name, singer: x.singer, singerName: x.singerName,
+    language: x.language, notes: x.notes, fx: x.fx, curves: x.curves, pitchCurve: x.pitchCurve, gainDb: x.gainDb }));
+  store.pushUndo();
+  const id = store.addTrack(src.engine);
+  store.patchTrack(id, {
+    name: (src.name || '') + t(' 副本'), singer: src.singer, singerName: src.singerName,
+    language: src.language, gainDb: src.gainDb, pitchCurve: src.pitchCurve,
+    notes: src.notes.map((n: any) => ({ ...n })), fx: src.fx, curves: src.curves,
+  });
+  closeTrackMenu();
+}
 /** 该引擎下已安装的声库（点选用）。空列表时给"去声库页签装"的提示。 */
 function banksFor(engine: string) {
   return store.banks.filter((b) => b.engine === engine);
@@ -374,6 +412,7 @@ function applyPicked(midiTrack: any, tpb: number, bpm: number) {
  *   （两个 <audio> 各自 play() 会有几十毫秒偏差且随时间漂移，对齐歌词时很难受。）
  */
 const tpos = ref(0);                 // 播放位置 ms
+const rate = ref(1);                 // 变速试听倍率（不改工程 BPM）
 const tplaying = ref(false);
 const tpending = ref(false);         // 正在解码
 
@@ -433,6 +472,8 @@ async function reloadTransport(): Promise<string> {
   tpending.value = true;
   try {
     const n = await transport.load(items);
+    // 装载后把当前倍率带回：新解出的 lane 还没起播，setRate 只改状态不会重起
+    transport.setRate(rate.value);
     tpos.value = 0;
     return n ? '' : t('音频解码失败（可能是浏览器不支持的编码）');
   } finally {
@@ -458,6 +499,18 @@ async function reloadThenPlay() {
   tplaying.value = transport.playing;
 }
 
+
+/** 变速：装载中的 lane 需要按新倍率重起（源节点的 playbackRate 是起播时定死的） */
+async function setPlayRate(v: number) {
+  const r = Math.max(0.25, Math.min(2, Number(v) || 1));
+  rate.value = r;
+  if (!transport.lanes.length) return;
+  const wasPlaying = transport.playing;
+  const at = transport.positionMs;
+  await reloadTransport();          // 用新的 rate 重新装载（reloadTransport 会沿用 transport.rate）
+  transport.seek(at);
+  if (wasPlaying) { transport.play(); tplaying.value = transport.playing; }
+}
 
 function tstop() {
   transport.stop();
@@ -626,6 +679,16 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
       <span class="sp" />
     </div>
 
+    <!-- 轨列表右键菜单（复制 / 清空 / 删除） -->
+    <div v-if="trackMenu" class="tk-menu-mask" @click="closeTrackMenu" @contextmenu.prevent="closeTrackMenu"></div>
+    <div v-if="trackMenu" class="tk-menu" :style="{ left: trackMenu.x + 'px', top: trackMenu.y + 'px' }" @click.stop>
+      <b>{{ trackMenu.track.name || t('未命名轨') }}</b>
+      <button @click="renameTrack(trackMenu.track); closeTrackMenu()">{{ t('重命名') }}</button>
+      <button @click="menuDuplicate(trackMenu.track)">{{ t('复制这条轨') }}</button>
+      <button @click="store.clearTrack(trackMenu.track.id); closeTrackMenu()">{{ t('清空音符') }}</button>
+      <button class="danger" @click="store.removeTrack(trackMenu.track.id); closeTrackMenu()">{{ t('删除这条轨') }}</button>
+    </div>
+
     <!-- 空态：没有任何轨道时给"三步走"，而不是让用户对着空白猜按钮 -->
     <div v-if="tab === 'editor' && isEmptyProject && !store.busy" class="sing-empty">
       <div class="se-main">
@@ -669,16 +732,31 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
       <div class="trk-list" data-guide="sing-tracks">
         <div
-          v-for="x in store.tracks" :key="x.id"
-          class="trk-item" :class="{ on: x.id === store.activeTrackId }"
+          v-for="(x, xi) in store.tracks" :key="x.id"
+          class="trk-item" :class="{ on: x.id === store.activeTrackId, dragging: dragId === x.id }"
+          :draggable="true"
           @click="store.selectTrack(x.id)"
+          @dragstart="onTrackDragStart(x.id)"
+          @dragover.prevent="dragOver = x.id"
+          @dragleave="dragOver = (dragOver === x.id ? '' : dragOver)"
+          @drop.prevent="onTrackDrop(x.id)"
+          @dragend="onTrackDragEnd"
+          @contextmenu.prevent="openTrackMenu($event, x)"
+          @dblclick="renameTrack(x)"
         >
           <div class="trk-row1">
+            <span class="tk-drag" :title="t('拖动排序')"><Icon name="drag" :size="11" /></span>
             <select class="eng" :value="x.engine" @click.stop @change="onEngine(x.id, $event)">
               <option v-for="e in ENGINES" :key="e.id" :value="e.id">{{ e.id === 'utau' ? 'UTAU' : 'DS' }}</option>
             </select>
-            <input class="nm" :value="x.name" :placeholder="t('未命名轨')"
+            <input class="nm" :value="x.name" :placeholder="t('未命名轨（双击改名）')"
                    @click.stop @input="store.patchTrack(x.id, { name: sval($event) })" />
+            <button class="ib" :class="{ on: !!x.muted }" :title="t('静音（M）')" @click.stop="toggleMute(x)">
+              <Icon name="volume" :size="11" />
+            </button>
+            <button class="ib" :title="t('独奏：只留这一条出声（再点恢复）')" @click.stop="store.toggleSolo(x.id)">
+              S
+            </button>
             <button class="ib del" :title="t('删除轨')" @click.stop="store.removeTrack(x.id)">
               <Icon name="trash" :size="11" />
             </button>
@@ -826,6 +904,16 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
                 @click="reloadTransport">
           <Icon name="refresh" :size="12" />
         </button>
+        <!-- 变速试听：慢放核对咬字、快放通听全曲（与播放器里的变速互不影响） -->
+        <select class="dev" :value="rate" :title="t('变速试听（不改工程 BPM）')"
+                @change="setPlayRate(nval($event, 1))">
+          <option :value="0.5">0.5×</option>
+          <option :value="0.75">0.75×</option>
+          <option :value="1">1.0×</option>
+          <option :value="1.25">1.25×</option>
+          <option :value="1.5">1.5×</option>
+          <option :value="2">2.0×</option>
+        </select>
         <span v-if="transport.lanes.length" class="muted small">
           {{ transport.lanes.length }} {{ t('条同时播放') }}
         </span>
@@ -1104,6 +1192,19 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .edt-msg.hint { color: var(--stone); }
 .edt-prog-wrap { display: flex; align-items: center; gap: 10px; padding: 4px 2px; }
 .trk-item .rdy.stale { color: var(--brand-coral); font-weight: 700; }
+/* 拖拽排序 / 静音 / 独奏 / 右键菜单 */
+.trk-item.dragging { opacity: .45; }
+.trk-item .tk-drag { flex: none; color: var(--stone); cursor: grab; display: inline-flex; align-items: center; }
+.trk-item .ib.on { color: var(--brand-coral); }
+.tk-menu-mask { position: fixed; inset: 0; z-index: 60; }
+.tk-menu { position: fixed; z-index: 61; min-width: 168px; padding: 6px;
+           border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+           box-shadow: 0 10px 28px rgba(0,0,0,.22); display: flex; flex-direction: column; gap: 2px; }
+.tk-menu b { font-size: 11.5px; color: var(--stone); padding: 4px 8px 6px; }
+.tk-menu button { text-align: left; padding: 6px 9px; border: 0; border-radius: 6px;
+                  background: transparent; color: var(--ink); font-size: 12.5px; cursor: pointer; }
+.tk-menu button:hover { background: var(--surface-muted); }
+.tk-menu button.danger { color: var(--brand-coral); }
 .edt-prog-wrap .edt-prog { flex: 1; }
 .sing { flex: 1; min-height: 0; display: flex; }
 .sing-banks { flex: 1; min-height: 0; }

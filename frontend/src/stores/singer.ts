@@ -337,6 +337,8 @@ export const useSingerStore = defineStore('singer', {
     future: [] as string[],
     /** 「渲染全部轨」的停止请求标记（见 cancelRender）；不进工程文件 */
     _cancelled: false as boolean,
+    /** 独奏时被顺带静音的轨 id（退出独奏要按这份名单还原，见 toggleSolo） */
+    _soloMuted: [] as string[],
   }),
 
   getters: {
@@ -487,6 +489,34 @@ export const useSingerStore = defineStore('singer', {
       this.pushUndo();
       const t = this.tracks.find(x => x.id === id);
       if (t && t.audio) Object.assign(t.audio, patch);
+    },
+
+    /** 拖拽排序：把 fromId 移到 toId 的位置（toId 之后或之前均可，保持其余顺序） */
+    moveTrack(fromId: string, toId: string) {
+      const from = this.tracks.findIndex((t) => t.id === fromId);
+      const to = this.tracks.findIndex((t) => t.id === toId);
+      if (from < 0 || to < 0 || from === to) return;
+      this.pushUndo();
+      const [t0] = this.tracks.splice(from, 1);
+      this.tracks.splice(to, 0, t0);
+    },
+
+    /**
+     * 独奏：开启时把**其它轨全部静音**（并记住原本就没静音的那些），
+     * 关闭时只恢复"被独奏顺带静音"的轨 —— 不覆盖用户自己的静音设置。
+     */
+    toggleSolo(id: string) {
+      const t0 = this.tracks.find((x) => x.id === id);
+      if (!t0) return;
+      this.pushUndo();
+      if (!this._soloMuted.length) {
+        this._soloMuted = this.tracks.filter((x) => x.id !== id && !x.muted).map((x) => x.id);
+        for (const x of this.tracks) x.muted = x.id !== id;
+      } else {
+        const back = new Set(this._soloMuted);
+        for (const x of this.tracks) if (back.has(x.id)) x.muted = false;
+        this._soloMuted = [];
+      }
     },
 
     selectTrack(id: string) {

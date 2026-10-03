@@ -76,6 +76,8 @@ export class SingTransport {
     this._offsetMs = 0;
     /** ctx.currentTime 里"工程 0"对应的时刻 */
     this._originAt = 0;
+    /** 播放倍率（0.25 ~ 2）：变速试听。1 = 原速。见 setRate()。 */
+    this._rate = 1;
     this.playing = false;
     /** 变更通知（UI 用来刷新进度条） */
     this.onTick = null;
@@ -92,9 +94,30 @@ export class SingTransport {
   get positionMs() {
     if (!this.ctx) return this._offsetMs;
     if (!this.playing) return this._offsetMs;
+    // ★ 变速：位置按 **倍率缩放** 走 —— 1.5× 时 1 秒墙钟 = 1.5 秒工程时间
     return Math.max(0, Math.min(this.durationMs,
-      (this.ctx.currentTime - this._originAt) * 1000));
+      (this.ctx.currentTime - this._originAt) * 1000 * this._rate));
   }
+
+  /**
+   * 播放倍率（0.25 ~ 2）：变速试听用。
+   * ★ 播放中改倍率要**先停车再按当前位置重起** —— 只改 `playbackRate` 的话，
+   *   `_originAt` 还是旧倍率下的时间原点，进度会瞬间跳一段。
+   */
+  setRate(r) {
+    const v = Math.max(0.25, Math.min(2, Number(r) || 1));
+    if (v === this._rate) return this._rate;
+    const wasPlaying = this.playing;
+    const at = this.positionMs;
+    if (wasPlaying) this._kill();
+    this._rate = v;
+    this._offsetMs = at;
+    if (wasPlaying) this.play(at);
+    else this._notify();
+    return v;
+  }
+
+  get rate() { return this._rate; }
 
   /**
    * 装载一批轨道。**重复调用会整体替换**（清空旧 lane）。
@@ -218,11 +241,15 @@ export class SingTransport {
       }
       tail.connect(ctx.destination);
 
-      src.start(when, offsetSec, durSec);
+      // 变速：buffer 播放速率 = rate，此时源时长要除以 rate，否则变速后会提前/延后收尾
+      try { src.playbackRate.value = this._rate; } catch (_) { /* 老实现只读，忽略 */ }
+      src.start(when, offsetSec, durSec / this._rate);
       this._srcs.push(src);
     }
     this.playing = this._srcs.length > 0;
     if (this.playing) this._pump();
+    // 重新装载后保持当前倍率（load 前可能已经设过 1.5×，不该被重置回 1×）
+    if (this._rate !== 1 && this.playing) this.setRate(this._rate);
     return this.playing;
   }
 
