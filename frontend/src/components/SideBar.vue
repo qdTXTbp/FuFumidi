@@ -665,7 +665,7 @@ const showAuth = ref(false);
           </button>
         </div>
       </div>
-      <div class="pl-hint muted small">{{ t('右键歌单可管理') }}</div>
+      <div class="pl-hint muted small">{{ t('右键歌单可管理 · 按数字 1~9 快速切换歌单') }}</div>
       <div v-if="plCreating" class="pl-new">
         <input v-model="newPlName" class="text-input" style="flex:1;padding:4px 8px;font-size:12px" :placeholder="t('歌单名')" @keydown.enter="onNewPlKey" @keydown.esc="onNewPlKey" autofocus />
         <button class="btn sm" style="padding:3px 10px" @click="createPl()">{{ t('确定') }}</button>
@@ -686,7 +686,9 @@ const showAuth = ref(false);
           <Icon name="zap" :size="13" /><span>{{ t('最常播放') }}</span>
         </div>
       </div>
-      <div class="pl-item" v-for="pl in playlist.playlists" :key="pl.id"
+      <!-- 数字 1..9 = 切到第 N 个歌单（与 App.vue 的数字键处理一一对应，编号直接画在这里） -->
+      <div class="pl-item" v-for="(pl, plIdx) in playlist.playlists" :key="pl.id"
+           :title="plIdx < 9 ? t('快捷键 ') + (plIdx + 1) : ''"
            :class="{ on: playlist.activePlaylistId === pl.id, dragging: plDragId === pl.id, dragTarget: plOverId === pl.id, dragable: canReorderPlaylists }"
            :draggable="canReorderPlaylists"
            @dragstart="plDragStart(pl)"
@@ -697,6 +699,7 @@ const showAuth = ref(false);
            @contextmenu.prevent="openPlMenu($event, pl)"
            @click="playlist.select(pl.id)">
         <span v-if="canReorderPlaylists" class="pl-drag"><Icon name="drag" :size="12" /></span>
+        <span v-if="plIdx < 9" class="pl-key">{{ plIdx + 1 }}</span>
         <Icon name="folder" :size="13" /><span class="pl-name" :title="pl.name">{{ pl.name }}</span><em>{{ pl.songIds.length }}</em>
       </div>
       </template>
@@ -982,6 +985,10 @@ const showAuth = ref(false);
 .pl-item:hover { background: var(--surface-soft); color: var(--ink); }
 .pl-item.on { background: color-mix(in srgb, var(--brand-blue-200) 58%, transparent); color: var(--brand-blue-deep); font-weight: 600; }
 .pl-item .pl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 歌单的快捷键编号：小而未选中时低调，选中时高亮 */
+.pl-item .pl-key { flex: none; width: 15px; text-align: center; font-size: 10px; line-height: 15px;
+                   border-radius: 4px; border: 1px solid var(--hairline); color: var(--stone); }
+.pl-item.on .pl-key { border-color: var(--brand-blue); color: var(--brand-blue-deep); }
 .pl-item em { font-style: normal; font-size: 11px; color: var(--stone); font-variant-numeric: tabular-nums; }
 .pl-item.on em { color: var(--brand-blue-deep); }
 .pl-item .pl-tools { display: flex; gap: 2px; opacity: 0; transition: opacity 0.14s; }

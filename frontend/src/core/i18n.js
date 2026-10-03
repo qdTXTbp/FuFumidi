@@ -2989,6 +2989,14 @@ export const I18N_MAP = {
   '去声库页签装声库': 'Install voicebanks in the Voicebanks tab',
   '力度（0 ~ 100，默认 100）：影响辅音速度与音量，越小越柔': 'Velocity (0-100, default 100): affects consonant speed and loudness; lower is softer',
   '停止后续渲染': 'Stop remaining renders',
+  '右键歌单可管理 · 按数字 1~9 快速切换歌单': 'Right-click a playlist to manage · press 1-9 to switch playlists',
+  '快捷键 ': 'Shortcut ',
+  '下一首（任意页面都可用）': 'Next track (works on any page)',
+  '上一首（任意页面都可用）': 'Previous track (works on any page)',
+  '切换播放模式（顺序/随机/单曲/列表）': 'Cycle play mode (order / shuffle / repeat one / loop all)',
+  '切换第 N 个歌单（侧栏歌单上有编号）': 'Switch to the Nth playlist (numbers shown in the sidebar)',
+
+
   '正在渲染的这一条不会被打断，它跑完即停': 'The track currently rendering will not be interrupted; it stops after finishing',
   '刷新声库列表': 'Refresh voicebank list',
   '该轨使用哪个声库': 'Voicebank used by this track',

@@ -306,6 +306,27 @@ function onKey(e) {
   else if (e.key === 'm' || e.key === 'M') toggleMetro();
   else if (e.key === '=' || e.key === '+') setTempo(state.tempo + 0.05);
   else if (e.key === '-' || e.key === '_') setTempo(state.tempo - 0.05);
+  /* ---- 后台/前台通用的播放控制（不依赖底部播放栏，任何页面都能用）---- */
+  else if (e.key === 'N' || e.key === 'n') { e.preventDefault(); void playNeighbor(1); }
+  else if (e.key === 'P' || e.key === 'p') { e.preventDefault(); void playNeighbor(-1); }
+  else if (e.key === 'o' || e.key === 'O') { e.preventDefault(); app.cyclePlayMode(); }
+  /* ---- 歌单快捷键：数字 1..9 切到第 N 个歌单（侧栏里标了编号）---- */
+  else if (/^[1-9]$/.test(e.key)) {
+    const pl = playlistStore.playlists[parseInt(e.key, 10) - 1];
+    if (pl) {
+      e.preventDefault();
+      playlistStore.select(pl.id);
+      // 切歌单要看得见：顺手落到曲库页（虚拟视图除外，它本来就属于曲库）
+      app.setView('music');
+    }
+  }
+}
+
+/** 上一首 / 下一首：走 store 的邻居选择（已按播放模式处理随机/单曲/列表循环） */
+async function playNeighbor(dir) {
+  const id = app.pickNeighborId(dir);
+  if (!id) return;
+  await app.playSongById(id);
 }
 
 function onBeforeUnload() {

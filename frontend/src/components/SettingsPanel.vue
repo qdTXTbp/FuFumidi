@@ -121,6 +121,10 @@ const pluginLog = ref('');
 const KEYMAP = computed(() => [
   { keys: ['Space'], label: t('播放 / 暂停') },
   { keys: ['←', '→'], label: t('快退 / 快进') },
+  { keys: ['N'], label: t('下一首（任意页面都可用）') },
+  { keys: ['P'], label: t('上一首（任意页面都可用）') },
+  { keys: ['O'], label: t('切换播放模式（顺序/随机/单曲/列表）') },
+  { keys: ['1-9'], label: t('切换第 N 个歌单（侧栏歌单上有编号）') },
   { keys: ['L'], label: t('切换循环') },
   { keys: ['M'], label: t('切换节拍器') },
   { keys: ['+', '−'], label: t('加速 / 减速') },
