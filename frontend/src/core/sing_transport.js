@@ -78,6 +78,12 @@ export class SingTransport {
     this._originAt = 0;
     /** 播放倍率（0.25 ~ 2）：变速试听。1 = 原速。见 setRate()。 */
     this._rate = 1;
+    /* 循环区间（工程 ms，P1-6）：A 起点 / B 终点 / 开关。
+       ★ 放在传输器里而不是页面里，是因为"到 B 回 A"必须发生在**时钟**那一层 ——
+       靠 UI 定时器去 seek 会有肉眼可见的漂移与爆音。 */
+    this._loopA = 0;
+    this._loopB = 0;
+    this._loopOn = false;
     this.playing = false;
     /** 变更通知（UI 用来刷新进度条） */
     this.onTick = null;
@@ -118,6 +124,27 @@ export class SingTransport {
   }
 
   get rate() { return this._rate; }
+
+  /** 循环区间状态（只读快照，UI 直接 v-bind 用） */
+  get loop() { return { a: this._loopA, b: this._loopB, on: this._loopOn }; }
+
+  /**
+   * 设置循环区间。a/b 单位 ms，自动排序并夹在 [0, durationMs] 内。
+   * 传入 on 可同时开关；不传则保留原开关状态。
+   */
+  setLoop(a, b, on) {
+    const d = this.durationMs || 0;
+    const clamp = (v) => Math.max(0, Math.min(d || Number.MAX_SAFE_INTEGER, Number(v) || 0));
+    const x = clamp(a), y = clamp(b);
+    this._loopA = Math.min(x, y);
+    this._loopB = Math.max(x, y);
+    if (on != null) this._loopOn = !!on;
+    if (this._loopB - this._loopA < 20) this._loopOn = false;   // 区间太小＝没意义，直接关掉
+    this._notify();
+    return this.loop;
+  }
+
+  clearLoop() { this._loopA = 0; this._loopB = 0; this._loopOn = false; this._notify(); }
 
   /**
    * 装载一批轨道。**重复调用会整体替换**（清空旧 lane）。
@@ -288,8 +315,16 @@ export class SingTransport {
   }
 
   _pump() {
+    if (this._raf) { caf(this._raf); this._raf = 0; }
     const step = () => {
       if (!this.playing) return;
+      /* 循环区间：到 B 立刻回到 A。seek() 会重建源并再次 _pump()，
+         所以这里**必须直接 return**，否则同一个 rAF 链会分裂成两条。 */
+      const bEff = Math.min(this._loopB, this.durationMs);
+      if (this._loopOn && bEff - this._loopA > 20 && this.positionMs >= bEff) {
+        this.seek(this._loopA);
+        return;
+      }
       if (this.positionMs >= this.durationMs - 1) {   // 播完
         this._kill();
         this._offsetMs = this.durationMs;

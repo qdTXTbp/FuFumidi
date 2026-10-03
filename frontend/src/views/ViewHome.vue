@@ -30,7 +30,7 @@ const QUICK = [
   // 「调教」= 编辑器（选歌手 / 画音符 / 渲染）+ 声库（UTAU / DiffSinger / 组件）同页两页签。
   { ic: 'utau', title: t('调教'), sub: t('歌声合成 · 声库 · 渲染'), view: 'singer', soon: false },
   // 插件中心入口（应用内打开，不跳浏览器）
-  { ic: 'box', title: t('插件中心'), sub: t('浏览 · 一键安装'), view: 'plugins', soon: false },
+  { ic: 'extension', title: t('插件中心'), sub: t('浏览 · 一键安装'), view: 'plugins', soon: false },
 ];
 
 function go(v) { setView(v); }

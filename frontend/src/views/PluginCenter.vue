@@ -9,7 +9,7 @@
     必须在解压前把清单摊给用户看。所以这里只取**目录数据**，下载与安装仍走主进程。
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import Icon from '../components/Icon.vue';
 import { t } from '../core/i18n.js';
 import { useAppStore } from '../stores/app';
@@ -25,6 +25,10 @@ const channel = ref<'stable' | 'beta'>('stable');
 const busySlug = ref('');
 const confirm = ref<any>(null);          // 待确认的安装（含包内清单）
 const installed = ref<any[]>([]);
+/* 两个页签：插件中心（平台目录）/ 已安装（原来的「设置 → 插件」页，整页搬到这里） */
+const tab = ref<'store' | 'installed'>('store');
+const localPlugins = ref<any[]>([]);     // 本地插件宿主列表（含内置）
+const pluginLog = ref('');
 
 const bridge = window.fuBridge as any;
 
@@ -95,36 +99,102 @@ function cancel() {
   confirm.value = null;
 }
 
-onMounted(load);
+/* ---------------- 已安装（原「设置 → 插件」页） ---------------- */
+async function loadLocal() {
+  if (!bridge || !bridge.plugins) return;
+  try { localPlugins.value = await bridge.plugins.list() || []; } catch (e) { localPlugins.value = []; }
+}
+async function togglePlugin(p: any) {
+  try { await bridge.plugins.setEnabled(p.id, p.enabled); } catch (e) { p.enabled = !p.enabled; }
+}
+async function rescanPlugins() {
+  try { localPlugins.value = await bridge.plugins.rescan() || []; } catch (e) { /* 忽略 */ }
+  toast(t('已重新扫描插件目录'), 'ok');
+}
+function openPluginDir() { if (bridge.plugins.openDir) bridge.plugins.openDir(); }
+function openDocs() { if (bridge.plugins.openDocs) bridge.plugins.openDocs(); }
+
+let offLog: any = null;
+onMounted(async () => {
+  await Promise.all([load(), loadLocal()]);
+  // 插件日志：原来的设置页里也有，搬过来一起显示
+  if (bridge.plugins.onLog) {
+    offLog = bridge.plugins.onLog((p: any) => {
+      const line = p && p.line != null ? String(p.line) : JSON.stringify(p || '');
+      pluginLog.value = (pluginLog.value ? pluginLog.value + '\n' : '') + line;
+      if (pluginLog.value.length > 8000) pluginLog.value = pluginLog.value.slice(-8000);
+    });
+  }
+});
+onBeforeUnmount(() => { if (offLog) { try { offLog(); } catch (e) {} offLog = null; } });
 </script>
 
 <template>
   <div class="pc">
     <div class="pc-head">
-      <Icon name="box" :size="16" />
+      <Icon name="extension" :size="16" />
       <b>{{ t('插件中心') }}</b>
       <span class="muted small">{{ t('从官方插件平台浏览并一键安装；下载后由应用解压到插件目录并立即启用') }}</span>
       <span class="sp" />
-      <select class="pc-ch" :value="channel" @change="channel = ($event.target as HTMLSelectElement).value as any; load()">
-        <option value="stable">{{ t('正式通道') }}</option>
-        <option value="beta">{{ t('测试通道') }}</option>
-      </select>
-      <button class="btn sm" :disabled="loading" @click="load">
-        <Icon name="refresh" :size="12" /> {{ loading ? t('加载中…') : t('刷新') }}
+      <template v-if="tab === 'store'">
+        <select class="pc-ch" :value="channel" @change="channel = ($event.target as HTMLSelectElement).value as any; load()">
+          <option value="stable">{{ t('正式通道') }}</option>
+          <option value="beta">{{ t('测试通道') }}</option>
+        </select>
+        <button class="btn sm" :disabled="loading" @click="load">
+          <Icon name="refresh" :size="12" /> {{ loading ? t('加载中…') : t('刷新') }}
+        </button>
+      </template>
+      <template v-else>
+        <button class="btn sm" @click="openPluginDir">{{ t('打开插件目录') }}</button>
+        <a class="pc-docs" @click="openDocs">{{ t('开发者文档') }} ↗</a>
+        <button class="btn sm" @click="rescanPlugins">{{ t('重新扫描') }}</button>
+      </template>
+    </div>
+
+    <!-- 页签：插件中心 / 已安装（原「设置 → 插件」页整页搬来，设置里不再重复） -->
+    <div class="pc-tabs">
+      <button class="pc-tab" :class="{ on: tab === 'store' }" @click="tab = 'store'">
+        <Icon name="extension" :size="13" /> {{ t('插件中心') }}
+      </button>
+      <button class="pc-tab" :class="{ on: tab === 'installed' }" @click="tab = 'installed'">
+        <Icon name="box" :size="13" /> {{ t('已安装') }}（{{ localPlugins.length }}）
       </button>
     </div>
 
-    <p v-if="err" class="pc-err small">
+    <!-- ============ 已安装：本地插件开关 / 日志 / 目录入口 ============ -->
+    <template v-if="tab === 'installed'">
+      <p class="muted small pc-note">
+        {{ t('插件目录：') }}<b>{{ t('用户目录/fufumidi/plugins/<插件名>/') }}</b>
+        {{ t('，内含 plugin.json 与入口脚本；开关立即生效。插件等同本地可信代码。') }}
+      </p>
+      <div v-if="!localPlugins.length" class="pc-empty">{{ t('还没有安装任何插件') }}</div>
+      <div v-for="p in localPlugins" :key="p.id" class="pc-inst">
+        <div class="pc-inst-info">
+          <b>{{ p.name }} <span class="muted small">v{{ p.version }}</span></b>
+          <small>{{ p.description || p.id }}</small>
+        </div>
+        <span class="pc-badge" :class="{ on: p.enabled }">{{ p.enabled ? t('已启用') : t('已禁用') }}</span>
+        <label class="pc-switch">
+          <input type="checkbox" :checked="p.enabled" @change="(e) => { p.enabled = (e.target as HTMLInputElement).checked; togglePlugin(p); }" />
+          <span></span>
+        </label>
+      </div>
+      <div class="pc-log-head">{{ t('插件日志') }}</div>
+      <div class="pc-log">{{ pluginLog || t('无') }}</div>
+    </template>
+
+    <p v-if="tab === 'store' && err" class="pc-err small">
       <Icon name="info" :size="13" /> {{ err }}
       <span v-if="url" class="muted">（{{ url }}）</span>
     </p>
-    <p v-else-if="!loading && !plugins.length" class="pc-err small muted">{{ t('插件中心目前没有上架的插件') }}</p>
+    <p v-else-if="tab === 'store' && !loading && !plugins.length" class="pc-err small muted">{{ t('插件中心目前没有上架的插件') }}</p>
 
-    <div class="pc-grid">
+    <div v-if="tab === 'store'" class="pc-grid">
       <div v-for="p in plugins" :key="p.slug" class="pc-card">
         <div class="pc-ic">
           <img v-if="p.icon" :src="p.icon" alt="" />
-          <Icon v-else name="box" :size="20" />
+          <Icon v-else name="extension" :size="20" />
         </div>
         <div class="pc-body">
           <div class="pc-name">
@@ -194,6 +264,35 @@ onMounted(load);
 .pc-badge.on { border-color: var(--success-text, #22c55e); color: var(--success-text, #22c55e); }
 .pc-sum { font-size: 12px; color: var(--slate); margin-top: 2px; }
 .pc-meta { margin-top: 3px; }
+/* ---- 页签与「已安装」面板（原设置页的插件页样式搬过来） ---- */
+.pc-tabs { display: flex; gap: 6px; margin-top: 12px; }
+.pc-tab { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 13px; cursor: pointer;
+          border: 1px solid var(--border); background: var(--surface); color: var(--slate);
+          border-radius: 9px; font-size: 12.5px; }
+.pc-tab:hover { color: var(--ink); }
+.pc-tab.on { background: var(--surface-soft); color: var(--ink); border-color: var(--hairline); font-weight: 600; }
+.pc-note { margin: 12px 0 0; line-height: 1.8; }
+.pc-note b { font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
+.pc-empty { margin-top: 14px; padding: 26px; text-align: center; color: var(--stone); font-size: 12.5px;
+            border: 1px dashed var(--border); border-radius: 12px; }
+.pc-inst { display: flex; align-items: center; gap: 12px; margin-top: 10px; padding: 11px 14px;
+           border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.pc-inst-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pc-inst-info b { font-size: 13px; }
+.pc-inst-info small { color: var(--slate); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-switch { position: relative; width: 36px; height: 20px; flex: none; cursor: pointer; }
+.pc-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.pc-switch span { position: absolute; inset: 0; border-radius: 20px; background: var(--hairline); transition: background .15s; }
+.pc-switch span::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+                         background: var(--canvas); transition: transform .15s; }
+.pc-switch input:checked + span { background: var(--brand-coral); }
+.pc-switch input:checked + span::after { transform: translateX(16px); }
+.pc-log-head { margin: 16px 0 6px; font-size: 12.5px; font-weight: 600; }
+.pc-log { max-height: 180px; overflow: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
+          background: var(--surface-soft); color: var(--slate); font-family: var(--mono); font-size: 11.5px;
+          line-height: 1.7; white-space: pre-wrap; word-break: break-all; }
+.pc-docs { font-size: 12px; color: var(--brand-coral); cursor: pointer; }
+.pc-docs:hover { text-decoration: underline; }
 .pc-mask { position: fixed; inset: 0; background: rgba(8, 10, 16, .45); z-index: 120; display: grid; place-items: center; padding: 24px; }
 .pc-dlg { width: 460px; max-width: 94vw; background: var(--canvas); border: 1px solid var(--border);
           border-radius: 14px; box-shadow: 0 24px 60px rgba(0,0,0,.3); overflow: hidden; }

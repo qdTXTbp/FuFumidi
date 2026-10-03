@@ -43,7 +43,8 @@ async function readSongBytes(song: any): Promise<Uint8Array | null> {
   if (isDesktop && bridge && typeof bridge.readBinary === 'function' && song.meta && song.meta.path) {
     try {
       const r = await bridge.readBinary(song.meta.path);
-      if (r && r.ok && r.bytes) return new Uint8Array(r.bytes as any);
+      const rr = r as any;                  // Uint8Array | {ok,bytes} 两种返回形态
+      if (rr && rr.ok && rr.bytes) return new Uint8Array(rr.bytes);
     } catch (e) {}
   }
   return null;

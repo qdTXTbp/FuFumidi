@@ -19,7 +19,7 @@ export const VIEWS = [
   // 所以合成**一个**入口；页内在「编辑器 / 声库」两个页签之间切换（?tab=banks）。
   { id: 'singer', label: '调教', ic: 'utau' },
   // 插件中心：官方插件平台的应用内入口（下载后由主进程解压安装并立即启用）
-  { id: 'plugins', label: '插件中心', ic: 'box' },
+  { id: 'plugins', label: '插件中心', ic: 'extension' },
 ];
 
 // 旧子视图 ID → 所属分组父视图，保留内部跳转（如“同步到乐谱”“打开播放”）
@@ -270,11 +270,29 @@ export const useAppStore = defineStore('app', {
     },
   },
   actions: {
-    toast(msg: string, type = 'info') {
-      this.toastMsg = { msg, type };
+    /**
+     * 统一提示（P1-4）：全应用只有一个提示出口。
+     *  - 普通信息：白胶囊，2.8s 自动消失
+     *  - 富提示（带 hint 下一步 / detail 详情 / action 按钮）：卡片式，6s，可展开、可关闭
+     * 千万别再往页面里塞自己的 msg 条 —— 那样用户永远不知道提示会出现在哪。
+     */
+    toast(msg: string, type = 'info', opts: any = {}) {
+      const o = opts || {};
+      const rich = !!(o.hint || o.detail || o.action);
+      this.toastMsg = { msg, type, hint: o.hint || '', detail: o.detail || '', action: o.action || null, expanded: false, rich };
       clearTimeout(_toastTimer);
-      _toastTimer = setTimeout(() => (this.toastMsg = ''), 2800);
+      const ms = o.ms != null ? o.ms : (rich ? 6000 : 2800);
+      _toastTimer = setTimeout(() => { this.toastMsg = ''; }, ms);
     },
+    /** 展开/收起详情：展开时暂停自动消失，收起后给 2.4s */
+    toastExpand() {
+      const t = this.toastMsg;
+      if (!t || typeof t !== 'object') return;
+      t.expanded = !t.expanded;
+      clearTimeout(_toastTimer);
+      if (!t.expanded) _toastTimer = setTimeout(() => { this.toastMsg = ''; }, 2400);
+    },
+    toastDismiss() { clearTimeout(_toastTimer); this.toastMsg = ''; },
     /* ---------------- 全局 Web 弹窗（取代 window.confirm/alert/prompt） ---------------- */
     confirmDialog(cfg: any = {}): Promise<boolean> {
       return new Promise((resolve) => {

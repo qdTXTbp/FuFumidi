@@ -13,14 +13,31 @@ import PianoRoll from '../components/pianoroll/PianoRoll.vue';
 import VoicebankPanel from '../components/sing/VoicebankPanel.vue';
 import { t } from '../core/i18n.js';
 import { ENGINES, LANGUAGES, useSingerStore } from '../stores/singer';
+import { useAppStore } from '../stores/app';
 import { getTransport } from '../core/sing_transport.js';
 import { FX_TYPES, FX_ORDER } from '../core/track_fx.js';
 import { CURVE_TARGETS, curveOf, defaultFor, targetsFor } from '../core/track_automation.js';
 
 const store = useSingerStore();
+const app = useAppStore();
 const route = useRoute();
 const router = useRouter();
-const msg = ref('');
+
+/*
+ * P1-4 统一提示：整个页面**只有一个**提示出口（app.toast）。
+ * 早先这里有一条自己的 msg 条（编辑区顶部），错误还会各处 inline ——
+ * 用户永远不知道提示会从哪儿冒出来。现在：
+ *   say(...)    普通结果（ok/info/warn）
+ *   sayErr(...) 失败 + **下一步该做什么**（hint）+ 可展开详情（detail）
+ * 常驻的「为什么渲不了」不放 toast（它不该 6 秒后消失），仍留在渲染按钮旁。
+ */
+function say(m: string, kind: 'info' | 'ok' | 'warn' | 'error' = 'ok', opts: any = {}) {
+  app.toast(m, kind, opts);
+}
+function sayErr(m: string, hint = '', detail = '') {
+  if (!m) return;
+  app.toast(m, 'error', { hint, detail });
+}
 
 /* ---------------------------------------------------------- 页签名
  * 「调教」页把原来的「歌声合成」与「声库」两页并成一个：编辑器（选歌手 / 画音符 / 渲染）
@@ -136,7 +153,7 @@ function autoDelPoint(pts: { beat: number; value: number }[], i: number) {
 }
 
 /* ------------------------------------------------------------ 轨道 */
-function addTrack(engine) { store.addTrack(engine); msg.value = ''; }
+function addTrack(engine) { store.addTrack(engine); }
 
 /* ---- 轨列表：拖拽排序 / 静音 / 双击改名 / 右键菜单 ---- */
 const dragId = ref('');
@@ -240,7 +257,180 @@ function rollApi() {
     pushUndo: () => store.pushUndo(),
     undo: () => store.undo(),
     redo: () => store.redo(),
+    /* 卷帘里的"轻提示"（比如剪贴板是空的）也走统一出口，别让它静默失败 */
+    hint: (m: string) => say(m, 'info'),
+    /* 播放头拍位：切分/粘贴以它为准（与传输栏的时间码同一个钟） */
+    playheadBeat: () => playheadBeat.value,
   };
+}
+
+/* ------------------------------------------------------------ 工程级参数（P2-3） */
+/** 对齐偏移的**待应用**值（真正落盘的是 store.meta.alignMs） */
+const alignMs = ref(Number(store.meta.alignMs) || 0);
+/** 拍号：只驱动卷帘的小节线，不改数据 */
+const beatsPerBar = computed(() => {
+  const s = String(store.meta.timeSig || '4/4');
+  const m = s.match(/^(\d+)\s*\/\s*(\d+)$/);
+  if (!m) return 4;
+  const num = Number(m[1]);
+  // 6/8 这类"以八分音符为一拍"的拍号：卷帘的时间单位是四分音符，
+  // 所以一个小节 = num * 4/den 个四分音符（6/8 → 3 个四分音符），而不是 6 个。
+  const den = Number(m[2]) || 4;
+  const beats = num * (4 / den);
+  return beats >= 1 && beats <= 16 ? Math.round(beats) : 4;
+});
+function onTimeSig(e: Event) {
+  const v = (e.target as HTMLSelectElement).value;
+  store.meta = Object.assign({}, store.meta, { timeSig: v });
+  say(t('拍号已改为 ') + v + t('（只影响小节线，音符没动）'), 'info');
+}
+/** 把当前轨的音符整体平移 alignMs 毫秒（按当前 BPM 折算成拍），可撤销 */
+function applyAlign() {
+  const track = tr.value;
+  if (!track || track.kind !== 'voice') { sayErr(t('先选中一条声部轨'), t('伴奏轨是音频，挪了就对不上拍子。')); return; }
+  const n = store.shiftNotesByMs(alignMs.value, track.id);
+  if (!n) { say(t('偏移量为 0，什么都没改'), 'info'); return; }
+  say(t('已把 ') + String(n) + t(' 个音符整体平移 ') + String(alignMs.value) + t(' ms'), 'ok',
+    { hint: t('Ctrl+Z 可以撤销。'), action: { label: t('撤销'), run: () => store.undo() } });
+}
+
+/* ------------------------------------------------------------ 多选批量操作（P2-1）
+ * 卷帘负责"几何"（复制/切分/合并/拖动），这里负责"内容"：批量填词与力度斜坡。
+ * 两者都要求先有多选，否则提示怎么多选 —— 不静默失败。 */
+const selNotes = computed<any[]>(() => {
+  const ids = store.selectedIds;
+  return (tr.value?.notes || []).filter((n: any) => ids.includes(n.id))
+    .slice().sort((a: any, b: any) => a.startBeat - b.startBeat);
+});
+function needMulti(): boolean {
+  if (selNotes.value.length >= 2) return true;
+  sayErr(t('这个操作需要先选中 2 个以上音符'), t('在卷帘里框选，或按 Ctrl+A 全选。'));
+  return false;
+}
+/** 批量填词：空格分词 → 按音符顺序依次填；只有一个词时所有音符都用它 */
+async function batchLyric() {
+  if (!needMulti()) return;
+  const list = selNotes.value;
+  const s = await app.promptDialog({
+    title: t('批量填词'),
+    msg: t('用空格分词，按音符先后依次填。只填一个词时所有音符都用这个词。'),
+    value: '',
+    okText: t('填词'),
+  });
+  if (s == null) return;
+  const words = String(s).trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return;
+  store.pushUndo();
+  list.forEach((n: any, i: number) => {
+    store.updateNote(n.id, { lyric: words.length === 1 ? words[0] : words[Math.min(i, words.length - 1)] });
+  });
+  if (words.length > 1 && words.length < list.length) {
+    say(t('已填词，但词比音符少：后面 ') + String(list.length - words.length) + t(' 个音符沿用了最后一个词'), 'warn');
+  } else {
+    say(t('已批量填词：') + String(words.length) + t(' 个词 → ') + String(list.length) + t(' 个音符'), 'ok');
+  }
+}
+/**
+ * 力度斜坡：渐强 20→100 / 渐弱 100→20。
+ * UTAU 走 velocity（0..100），DiffSinger 走 dyn（-240..120，0 为默认）——
+ * 两条引擎的"力度"语义完全不同，所以映射写在这里而不是让用户自己算。
+ */
+function rampVelocity(dir: 1 | -1) {
+  if (!needMulti()) return;
+  const list = selNotes.value;
+  const n = list.length;
+  store.pushUndo();
+  list.forEach((note: any, i: number) => {
+    const k = n <= 1 ? 1 : i / (n - 1);
+    const v = dir > 0 ? 20 + 80 * k : 100 - 80 * k;
+    if (isUtau.value) store.updateNote(note.id, { velocity: Math.round(v) });
+    else store.updateNote(note.id, { dyn: Math.round(-120 + (v / 100) * 240) });
+  });
+  say(dir > 0 ? t('已按音符顺序渐强（20 → 100）') : t('已按音符顺序渐弱（100 → 20）'), 'ok');
+}
+
+/* ------------------------------------------------------------ 声库别名可用性（P2-5）
+ * 渲染引擎只有在渲完之后才把"这个词不在声库别名表里"塞进 warnings ——
+ * 那时已经等了几十秒。这里把**同一个别名表**提前取来（主进程的 utau:aliases），
+ * 一边打字一边标红，并给出相近别名建议。
+ * ★ 取不到别名表（engine 缺失 / 非 UTAU 轨）时**什么都不显示**，绝不误报。 */
+const aliasSet = ref<Set<string> | null>(null);
+const aliasFor = ref('');                 // 别名集对应的声库目录（换歌手要重取）
+let aliasBusy = false;
+watch([() => tr.value?.singer, () => tr.value?.engine], async ([dir, eng]) => {
+  aliasSet.value = null; aliasFor.value = '';
+  const b = window.fuBridge as any;
+  if (!dir || eng !== 'utau' || !b || typeof b.utauAliases !== 'function' || aliasBusy) return;
+  aliasBusy = true;
+  try {
+    const r = await b.utauAliases({ voicebank: dir, limit: 2000 });
+    if (r && r.ok && Array.isArray(r.aliases)) {
+      aliasSet.value = new Set(r.aliases.map((x: string) => String(x).toLowerCase()));
+      aliasFor.value = dir;
+    }
+  } catch (_) { /* 拿不到就不提示：这是增强功能，不该挡住编辑 */ }
+  finally { aliasBusy = false; }
+}, { immediate: true });
+
+/** 本轨里"歌词不在别名表里"的音符（空歌词不算，引擎会用默认元音） */
+const missingLyrics = computed<any[]>(() => {
+  const set = aliasSet.value;
+  const t0 = tr.value;
+  if (!set || !t0 || t0.kind !== 'voice' || t0.engine !== 'utau') return [];
+  return (t0.notes || []).filter((n: any) => n.lyric && !set.has(String(n.lyric).toLowerCase()));
+});
+const selLyricMissing = computed(() => {
+  const set = aliasSet.value;
+  const n = sel.value;
+  if (!set || !n || !n.lyric) return false;
+  return !set.has(String(n.lyric).toLowerCase());
+});
+/** 相近别名（前缀互含 + 去掉音高后缀后相同）：够用且不引入编辑距离的复杂度 */
+function suggestAliases(text: string, limit = 6): string[] {
+  const set = aliasSet.value;
+  if (!set || !text) return [];
+  const low = String(text).toLowerCase();
+  const bare = low.replace(/[_,-]?[a-g]#?-?\d?$/i, '');
+  const out: string[] = [];
+  for (const a of set) {
+    if (a === low) continue;
+    if (a.startsWith(low) || low.startsWith(a) || (bare && a.replace(/[_,-]?[a-g]#?-?\d?$/i, '') === bare)) {
+      out.push(a);
+      if (out.length >= limit) break;
+    }
+  }
+  return out;
+}
+function gotoFirstMissing() {
+  const first = missingLyrics.value[0];
+  if (!first) return;
+  store.select(first.id);
+  say(t('已选中第一个待修音符：') + (first.lyric || ''), 'info', { hint: t('可以点下面的相近别名直接替换，或改成声库里有的发音。') });
+}
+
+/* ------------------------------------------------------------ 播放头 / 音阶高亮（P2-1）
+ * 播放头是"当前时刻在时间轴上的位置"，卷帘拿它画竖线，并以它为切分/粘贴的落点。
+ * 换算用工程 BPM：拍 = 秒 × BPM / 60。 */
+const playheadBeat = computed(() => Math.max(0, (tpos.value / 1000) * (store.bpm / 60)));
+
+/**
+ * 音阶高亮（P2-1）：只做视觉分区，不改数据。
+ * 默认按工程调（store.meta.key 若有），没有就关闭 —— 不做"猜调"这种事。
+ */
+const scale = ref<{ root: number; type: string } | null>(null);
+try {
+  const raw = localStorage.getItem('fufumidi_sing_scale');
+  if (raw && raw !== 'off') scale.value = JSON.parse(raw);
+} catch (_) { /* 脏值忽略 */ }
+function onRollScale(type: string) {
+  if (!type || type === 'off') scale.value = null;
+  else scale.value = { root: scale.value ? scale.value.root : 0, type };
+  try { localStorage.setItem('fufumidi_sing_scale', scale.value ? JSON.stringify(scale.value) : 'off'); } catch (_) {}
+}
+function onRollScaleRoot(root: number) {
+  if (!scale.value) return;
+  scale.value = { root: Number(root) || 0, type: scale.value.type };
+  try { localStorage.setItem('fufumidi_sing_scale', JSON.stringify(scale.value)); } catch (_) {}
 }
 
 /** 页面级快捷键：卷帘有焦点时它自己处理，这里负责"没点进卷帘也能用"的那部分 */
@@ -260,6 +450,11 @@ function onSingKey(e: KeyboardEvent) {
   if (e.key === 'Enter') { e.preventDefault(); if (!renderBlocked.value) void doRender(); return; }
   if (e.key === '[') { setTab('editor'); return; }
   if (e.key === ']') { setTab('banks'); return; }
+  /* P1-6：循环区间与跟随播放也要能用键盘 —— 一边听一边标点位时手不离键 */
+  if (e.key.toLowerCase() === 'l') { e.preventDefault(); toggleLoop(); return; }
+  if (e.key === ',') { e.preventDefault(); markLoop('a'); return; }
+  if (e.key === '.') { e.preventDefault(); markLoop('b'); return; }
+  if (e.key.toLowerCase() === 'f') { e.preventDefault(); toggleFollow(); return; }
 }
 
 function onLyric(note, e) {
@@ -339,7 +534,7 @@ function probeDuration(path: string): Promise<number> {
 /** 导入音频 → 新建一条**伴奏轨**（对应上游 `UWavePart`） */
 async function importAudio() {
   const b = window.fuBridge;
-  if (!b || typeof b.pickAudio !== 'function') { msg.value = t('桌面版才能导入音频'); return; }
+  if (!b || typeof b.pickAudio !== 'function') { sayErr(t('桌面版才能导入音频'), t('这是浏览器预览环境；请用 FuFumidi 桌面版打开。')); return; }
   busyImport.value = true;
   try {
     const path = await b.pickAudio();
@@ -347,11 +542,11 @@ async function importAudio() {
     const fileName = String(path).split(/[\\/]/).pop() || 'audio';
     const durMs = await probeDuration(path);
     store.addAudioTrack(path, fileName, durMs);
-    msg.value = durMs > 0
-      ? t('已导入伴奏：') + fileName
-      : t('已导入伴奏（时长未探到，可能是浏览器不支持的编码）：') + fileName;
+    if (durMs > 0) say(t('已导入伴奏：') + fileName, 'ok');
+    else say(t('已导入伴奏（时长未探到，可能是浏览器不支持的编码）：') + fileName, 'warn',
+      { hint: t('能播放，但进度条总长不准；换成 wav/mp3 再导一次即可。') });
   } catch (e) {
-    msg.value = String((e as any)?.message || e);
+    sayErr(String((e as any)?.message || e), t('检查这个音频文件能否被系统播放器打开。'));
   } finally {
     busyImport.value = false;
   }
@@ -360,7 +555,7 @@ async function importAudio() {
 /** 导入 MIDI → 选轨 → 落进当前（或新建的）声部轨 */
 async function importMidi() {
   const b = window.fuBridge;
-  if (!b || typeof b.pickFile !== 'function') { msg.value = t('桌面版才能导入 MIDI'); return; }
+  if (!b || typeof b.pickFile !== 'function') { sayErr(t('桌面版才能导入 MIDI'), t('这是浏览器预览环境；请用 FuFumidi 桌面版打开。')); return; }
   busyImport.value = true;
   try {
     const path = await b.pickFile({
@@ -369,12 +564,12 @@ async function importMidi() {
     });
     if (!path) return;
     const bytes = await b.readBinary(path);
-    if (!bytes) { msg.value = t('读取文件失败'); return; }
+    if (!bytes) { sayErr(t('读取文件失败'), t('文件可能被占用或没有读取权限，换一个位置再试。')); return; }
     const { parseMidi, buildSong } = await import('../core/midi.js');
     const r = store.parseMidiTracks(
       bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
       buildSong, parseMidi);
-    if (r.error) { msg.value = r.error; return; }
+    if (r.error) { sayErr(r.error, t('确认它是标准 MIDI（.mid）；损坏或纯音频文件解析不了。')); return; }
     const list = r.tracks || [];
     if (list.length === 1) {                       // 只有一条就不弹窗了
       applyPicked(list[0], r.tpb || 480, r.bpm || 120);
@@ -382,7 +577,7 @@ async function importMidi() {
     }
     midiPick.value = { tracks: list, tpb: r.tpb || 480, bpm: r.bpm || 120 };
   } catch (e) {
-    msg.value = String((e as any)?.message || e);
+    sayErr(String((e as any)?.message || e), t('确认它是标准 MIDI（.mid）；损坏或纯音频文件解析不了。'));
   } finally {
     busyImport.value = false;
   }
@@ -395,11 +590,11 @@ function applyPicked(midiTrack: any, tpb: number, bpm: number) {
     const id = store.addTrack('diffsinger');
     target = store.tracks.find(x => x.id === id) || null;
   }
-  if (!target) { msg.value = t('无法创建轨道'); return; }
+  if (!target) { sayErr(t('无法创建轨道'), t('先去左侧「新建轨」建一条声部轨，再导入 MIDI。')); return; }
   const n = store.applyMidiTrack(target.id, midiTrack, tpb, bpm, true);
   store.patchTrack(target.id, { name: target.name || midiTrack.name || '' });
   midiPick.value = null;
-  msg.value = t('已导入 ') + String(n) + t(' 个音符');
+  say(t('已导入 ') + String(n) + t(' 个音符'), 'ok', { hint: t('下一步：选歌手 → 渲染。') });
 }
 
 /* ------------------------------------------------------------ 播放 */
@@ -417,7 +612,100 @@ const tplaying = ref(false);
 const tpending = ref(false);         // 正在解码
 
 const transport = getTransport();
-transport.onTick = (ms, playing) => { tpos.value = ms; tplaying.value = playing; };
+/* 循环区间 / 跟随播放 / 时间码跳转 —— P1-6 传输栏补的常用件 */
+const loopOn = ref(false);
+const loopA = ref(0);
+const loopB = ref(0);
+const follow = ref(localStorage.getItem('fufumidi_sing_follow') !== '0');
+const prRef = ref<any>(null);        // 卷帘组件实例（只为读它暴露的 xOf / scrollEl）
+
+transport.onTick = (ms, playing) => {
+  tpos.value = ms;
+  tplaying.value = playing;
+  followTick(ms);                    // 跟随播放：把播放头留在可视区
+};
+
+/** 循环区间在进度条上的位置（百分比），没设区间就不画 */
+const loopStyle = computed(() => {
+  void tpos.value;   // 时长要装载后才知道；装载后必然开始推 tick，借它触发重算
+  const d = transport.durationMs || 0;
+  if (!d || loopB.value - loopA.value < 20) return null;
+  const l = Math.max(0, Math.min(100, (loopA.value / d) * 100));
+  const r = Math.max(0, Math.min(100, (loopB.value / d) * 100));
+  return { left: l + '%', width: Math.max(0.4, r - l) + '%' };
+});
+
+function pushLoop() {
+  transport.setLoop(loopA.value, loopB.value, loopOn.value);
+  // 夹回真实时长后的值同步回 UI（拖动过长度、或时长为 0 时尤其重要）
+  const l = transport.loop;
+  loopA.value = l.a; loopB.value = l.b; loopOn.value = l.on;
+}
+/** A/B 取**当前播放位置** —— 一边听一边标，是设循环最省事的做法 */
+function markLoop(which: 'a' | 'b') {
+  const at = Math.round(tpos.value);
+  if (which === 'a') loopA.value = at; else loopB.value = at;
+  if (loopB.value - loopA.value >= 20) loopOn.value = true;
+  pushLoop();
+  if (which === 'a' && loopB.value <= loopA.value) say(t('A 点已设在 ') + fmtMs(loopA.value) + t('，再点「B」设终点'), 'info');
+  else say(t('循环区间：') + fmtMs(loopA.value) + ' ~ ' + fmtMs(loopB.value), 'ok');
+}
+function toggleLoop() {
+  if (loopB.value - loopA.value < 20) {
+    sayErr(t('还没有可循环的区间'), t('先播到起点按「A」，再播到终点按「B」。'));
+    return;
+  }
+  loopOn.value = !loopOn.value;
+  pushLoop();
+}
+function clearLoopRegion() { loopA.value = 0; loopB.value = 0; loopOn.value = false; pushLoop(); }
+
+function toggleFollow() {
+  follow.value = !follow.value;
+  try { localStorage.setItem('fufumidi_sing_follow', follow.value ? '1' : '0'); } catch (_) { /* 隐私模式忽略 */ }
+  if (follow.value) followTick(tpos.value, true);
+}
+/**
+ * 跟随播放：播放头靠近视口边缘时把卷帘滚过去。
+ * ★ 像素换算交给卷帘自己（它暴露 `xOf(beat)`），这里只负责"什么时候滚"，
+ *   免得两处各算一套小时宽然后对不上。
+ */
+function followTick(ms: number, force = false) {
+  if (!follow.value && !force) return;
+  if (!transport.playing && !force) return;
+  const pr = prRef.value;
+  const el = pr && pr.scrollEl;
+  if (!el || typeof pr.xOf !== 'function') return;
+  const beat = (ms / 1000) * (store.bpm / 60);
+  const x = pr.xOf(beat);
+  const pad = Math.max(60, el.clientWidth * 0.18);
+  if (x < el.scrollLeft + pad || x > el.scrollLeft + el.clientWidth - pad) {
+    el.scrollLeft = Math.max(0, x - el.clientWidth * 0.35);
+  }
+}
+
+/** 时间码跳转：点时间显示 → 输入 m:ss.s */
+function parseTimecode(s: string): number | null {
+  const v = String(s || '').trim();
+  if (!v) return null;
+  const m = v.match(/^(\d+):([0-5]?\d(?:\.\d+)?)$/);
+  if (m) return (Number(m[1]) * 60 + Number(m[2])) * 1000;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, n * 1000) : null;
+}
+async function jumpToTime() {
+  const s = await app.promptDialog({
+    title: t('跳转到时间'),
+    msg: t('格式 m:ss.s（例如 1:23.4），也可以直接填秒数。'),
+    value: fmtMs(tpos.value),
+    okText: t('跳转'),
+  });
+  if (s == null) return;
+  const ms = parseTimecode(s);
+  if (ms == null) { sayErr(t('时间格式看不懂：') + s, t('用 m:ss.s，例如 1:23.4；或直接填 83.4 表示 83.4 秒。')); return; }
+  transport.seek(ms);
+  tpos.value = transport.positionMs;
+}
 
 /**
  * 一条轨要交给传输器的东西。
@@ -485,7 +773,7 @@ async function tplay() {
   if (transport.playing) { transport.pause(); return; }
   if (!transport.lanes.length) {
     const err = await reloadTransport();
-    if (err) { msg.value = err; return; }
+    if (err) { sayErr(err, t('先渲染一次，或导入一个伴奏；也可以点传输栏的「重新装载」。')); return; }
   }
   transport.play();
   tplaying.value = transport.playing;
@@ -493,7 +781,7 @@ async function tplay() {
 /** 重装后从头播（音频轨上的 ▶ 用） */
 async function reloadThenPlay() {
   const err = await reloadTransport();
-  if (err) { msg.value = err; return; }
+  if (err) { sayErr(err, t('先渲染一次，或导入一个伴奏；也可以点传输栏的「重新装载」。')); return; }
   transport.seek(0);
   transport.play();
   tplaying.value = transport.playing;
@@ -570,17 +858,18 @@ function curveSet(i, e) {
  */
 async function playAfterRender() {
   const err = await reloadTransport();
-  if (err) { msg.value = err; return; }
+  if (err) { sayErr(err, t('渲染出的音频装载失败；点传输栏的「重新装载」再试。')); return; }
   transport.seek(0);
   transport.play();
   tplaying.value = transport.playing;
 }
 
 async function doRender() {
-  msg.value = '';
   const err = await store.renderTrack();
-  msg.value = err;
-  if (!err) await playAfterRender();
+  if (err) { sayErr(err, t('看下面的渲染日志；常见原因是没选歌手、声库缺文件或引擎组件未装。'), store.renderWarnings.join('\n')); return; }
+  // 渲完就能听：给「导出 WAV」一个动作按钮，省掉再找按钮这一步（P1-2）
+  say(t('渲染完成，正在试听'), 'ok', { action: { label: t('导出 WAV'), run: () => doSave() } });
+  await playAfterRender();
 }
 
 /**
@@ -590,10 +879,10 @@ async function doRender() {
  * 所以这里全程显示"正在渲染 i/n"（进度与分条文案都在 store 里），别让用户以为卡死了。
  */
 async function doRenderAll() {
-  msg.value = '';
   const err = await store.renderAll();
-  msg.value = err || store.msg;
-  if (!err) await playAfterRender();   // 全部渲完一次性装进传输器并起播
+  if (err) { sayErr(err, t('看下面的渲染日志；常见原因是没选歌手、声库缺文件或引擎组件未装。'), store.renderWarnings.join('\n')); return; }
+  say(store.msg || t('全部轨渲染完成，正在试听'), 'ok', { action: { label: t('导出 WAV'), run: () => doSave() } });
+  await playAfterRender();   // 全部渲完一次性装进传输器并起播
 }
 
 /** 静音要立刻听得见：改的是 lane 上的状态，而 lane 是 load() 时生成的 → 必须重装 */
@@ -608,7 +897,7 @@ async function onMuteAudio(x: any, e: Event) {
 
 function doSave() {
   const b = store.exportBytes();
-  if (!b) { msg.value = t('还没有可导出的音频'); return; }
+  if (!b) { sayErr(t('还没有可导出的音频'), t('先点「渲染本轨」（Enter）或「渲染全部轨」，再导出。')); return; }
   const url = URL.createObjectURL(new Blob([b.buffer as ArrayBuffer], { type: 'audio/wav' }));
   const a = document.createElement('a');
   a.href = url;
@@ -625,17 +914,18 @@ function doSave() {
  * 换台机器必然断链。工程包把伴奏一起打进 `files/`，轨道上只留 asset id。
  */
 async function saveProject(saveAs: boolean) {
-  msg.value = await store.saveProject(saveAs);
+  const err = await store.saveProject(saveAs);
+  if (err) sayErr(err, t('换一个有写入权限的位置（例如桌面）再保存。'));
+  else say(t('工程已保存：') + String(store.projectPath || '').split(/[\\/]/).pop(), 'ok');
 }
 async function openProject() {
   const err = await store.openProject();
-  msg.value = err;
+  if (err) sayErr(err, t('工程包里的伴奏可能已损坏；也可以只导入 MIDI 重建工程。'));
   // 伴奏换成了包里解出来的那份 —— 传输器还握着旧字节，必须重装
   if (store.projectPath) await reloadTransport();
 }
 function newProject() {
   store.newProject();
-  msg.value = '';
 }
 function onTitle(e: Event) {
   store.meta = Object.assign({}, store.meta, { title: sval(e) });
@@ -830,6 +1120,30 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <button class="btn" :title="t('换一个文件保存')" @click="saveProject(true)">
           <Icon name="copy" :size="12" /> {{ t('另存为') }}
         </button>
+        <!-- 工程级参数（P2-3）：BPM / 拍号 / 对齐偏移。三个都是**整个工程**的属性，
+             所以放在工程条上，而不是藏在某条轨的属性里。 -->
+        <label class="proj-field" :title="t('工程 BPM：音符位置存的是拍，改 BPM 时音符相对小节不动，只有时间长度变')">
+          {{ t('BPM') }}
+          <input type="number" min="1" max="400" :value="store.bpm" @change="store.bpm = nval($event, 120)" />
+        </label>
+        <label class="proj-field" :title="t('拍号：只改卷帘的小节线与编号，不动任何音符')">
+          {{ t('拍号') }}
+          <select :value="store.meta.timeSig || '4/4'" @change="onTimeSig($event)">
+            <option value="2/4">2/4</option>
+            <option value="3/4">3/4</option>
+            <option value="4/4">4/4</option>
+            <option value="6/8">6/8</option>
+          </select>
+        </label>
+        <label class="proj-field" :title="t('对齐偏移：把音符整体平移 n 毫秒（负数=提前）。治“整首歌都抢一点/拖一点”')">
+          {{ t('对齐偏移') }}
+          <input class="al-ms" type="number" step="5" :value="alignMs" @change="alignMs = nval($event, 0)" />
+          <span class="muted">ms</span>
+        </label>
+        <button class="btn" :disabled="!alignMs" :title="t('把这条轨的音符整体平移这么多毫秒（可撤销；伴奏轨不动）')"
+                @click="applyAlign">
+          {{ t('应用') }}
+        </button>
         <span class="sp" />
         <span class="ppath muted small" :title="store.projectPath || t('还没有保存过')">
           {{ store.projectPath ? String(store.projectPath).split(/[\\/]/).pop() : t('未保存') }}
@@ -881,10 +1195,15 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           {{ t('停止后续渲染') }}
         </button>
       </div>
-      <p v-if="msg" class="edt-msg small">{{ msg }}</p>
-      <!-- 渲染门禁原因：只在"想渲但渲不了"时显示，平时不占位 -->
-      <p v-else-if="renderReason && !store.busy && !isAudio" class="edt-msg small hint">
+      <!-- 渲染门禁原因：只在"想渲但渲不了"时显示，平时不占位（提示本身走 app.toast，见 P1-4） -->
+      <p v-if="renderReason && !store.busy && !isAudio" class="edt-msg small hint">
         {{ renderReason }}
+      </p>
+      <!-- P2-5：渲染前就把"歌词不在声库"标出来，别等渲完几十秒才在 warnings 里看到 -->
+      <p v-if="missingLyrics.length" class="edt-msg small bad">
+        <Icon name="info" :size="12" />
+        {{ t('本轨有 ') }}{{ missingLyrics.length }}{{ t(' 个歌词不在声库别名表里（渲染时会被跳过或静音）') }}
+        <button class="btn sm" @click="gotoFirstMissing">{{ t('定位第一个') }}</button>
       </p>
 
       <!-- 传输栏：伴奏与渲染结果**同时播放**（Web Audio 单时钟，采样级同步） -->
@@ -895,11 +1214,29 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <button class="btn" :title="t('停止（回到 0）')" @click="tstop">
           <Icon name="square" :size="12" />
         </button>
-        <input
-          class="xbar" type="range" min="0" :max="Math.max(1, transport.durationMs)"
-          :value="tpos" @input="tseek" :disabled="tpending"
-        />
-        <span class="xtime small">{{ fmtMs(tpos) }} / {{ fmtMs(transport.durationMs) }}</span>
+        <!-- 进度条上叠一层循环区间色块：A/B 设在哪一眼可见 -->
+        <div class="xbar-wrap">
+          <i v-if="loopStyle" class="xbar-loop" :style="loopStyle" :class="{ on: loopOn }" />
+          <input
+            class="xbar" type="range" min="0" :max="Math.max(1, transport.durationMs)"
+            :value="tpos" @input="tseek" :disabled="tpending"
+          />
+        </div>
+        <!-- 时间码点一下就能跳（长曲里拖进度条很难对准） -->
+        <button class="xtime small" :title="t('点击输入时间跳转')" @click="jumpToTime">
+          {{ fmtMs(tpos) }} / {{ fmtMs(transport.durationMs) }}
+        </button>
+        <!-- 循环区间：A/B 都取当前播放位置；开着循环时到 B 自动回 A -->
+        <button class="btn sm" :class="{ on: loopOn }" :title="t('循环区间开关（A/B 之间反复听）')" @click="toggleLoop">
+          <Icon name="loop" :size="12" /> {{ t('循环') }}
+        </button>
+        <button class="btn sm" :title="t('把当前播放位置设为循环起点 A')" @click="markLoop('a')">A</button>
+        <button class="btn sm" :title="t('把当前播放位置设为循环终点 B')" @click="markLoop('b')">B</button>
+        <button v-if="loopB - loopA >= 20" class="btn sm ghost" :title="t('清除循环区间')" @click="clearLoopRegion">×</button>
+        <!-- 跟随播放：播放头跑出可视区就自动滚过去 -->
+        <button class="btn sm" :class="{ on: follow }" :title="t('跟随播放滚动卷帘')" @click="toggleFollow">
+          <Icon name="target" :size="12" />
+        </button>
         <button class="btn" :disabled="tpending" :title="t('重新装载伴奏与渲染结果')"
                 @click="reloadTransport">
           <Icon name="refresh" :size="12" />
@@ -1069,16 +1406,35 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
       <!-- 共用钢琴卷帘 -->
       <PianoRoll
         v-if="tr && !isAudio"
+        ref="prRef"
         class="edt-roll"
         :notes="tr.notes"
         :selected-id="store.selectedId"
         :selected-ids="store.selectedIds"
         :bpm="store.bpm"
         :api="rollApi()"
+        :playhead-beat="playheadBeat"
+        :beats-per-bar="beatsPerBar"
+        :scale="scale"
         @edit-lyric="(id) => store.select(id)"
+        @set-scale="onRollScale"
+        @set-scale-root="onRollScaleRoot"
       />
 
       <!-- 选中音符的详细编辑（两边共用一套，引擎特有项按轨道显示） -->
+      <!-- 多选批量工具（P2-1）：选中 2 个以上音符才出现，平时不占地方 -->
+      <div v-if="!isAudio && selNotes.length > 1" class="bulk small">
+        <b>{{ t('已选 ') }}{{ selNotes.length }}{{ t(' 个音符') }}</b>
+        <button class="btn sm" @click="batchLyric"><Icon name="edit" :size="12" /> {{ t('批量填词') }}</button>
+        <button class="btn sm" @click="rampVelocity(1)" :title="t('按音符先后做 20 → 100 的力度递增')">
+          <Icon name="cresc" :size="12" /> {{ t('渐强') }}
+        </button>
+        <button class="btn sm" @click="rampVelocity(-1)" :title="t('按音符先后做 100 → 20 的力度递减')">
+          <Icon name="dim" :size="12" /> {{ t('渐弱') }}
+        </button>
+        <span class="muted">{{ t('复制 / 切分 / 合并：卷帘里右键，或 Ctrl+C / Ctrl+E / Ctrl+M') }}</span>
+      </div>
+
       <div v-if="sel && !isAudio" class="det">
         <label class="ly">
           <span>{{ t('歌词') }}</span>
@@ -1092,6 +1448,13 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             </span>
           </span>
         </label>
+        <!-- P2-5：这个词不在声库别名表里 —— 行内标红 + 相近别名一键替换 -->
+        <div v-if="selLyricMissing" class="ly-bad small">
+          <Icon name="info" :size="12" />
+          <span>{{ t('「') }}{{ sel.lyric }}{{ t('」不在当前声库的别名表里，渲染时会静音或被跳过') }}</span>
+          <button v-for="a in suggestAliases(sel.lyric)" :key="a" class="chip-btn" :title="t('替换成这个别名')"
+                  @click="store.updateNote(sel.id, { lyric: a })">{{ a }}</button>
+        </div>
         <label><span>{{ t('起点') }}</span><input type="number" step="0.125" min="0" :value="sel.startBeat"
           @change="store.updateNote(sel.id, { startBeat: nval($event, 0) })" /></label>
         <label><span>{{ t('时长') }}</span><input type="number" step="0.125" min="0.125" :value="sel.durBeat"
@@ -1190,6 +1553,20 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .se-main > .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .se-acts { display: flex; gap: 6px; flex-wrap: wrap; }
 .edt-msg.hint { color: var(--stone); }
+/* 多选批量工具行（P2-1）与歌词告警（P2-5） */
+/* 工程条上的小控件（P2-3） */
+.proj-field { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--slate); }
+.proj-field input, .proj-field select { height: 24px; border: 1px solid var(--hairline); border-radius: 7px;
+  background: var(--surface); color: var(--ink); font-size: 12px; }
+.proj-field .al-ms { width: 62px; }
+.bulk { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 12px 0; padding: 7px 10px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); }
+.bulk b { font-size: 12.5px; }
+.bulk .muted { margin-left: auto; font-size: 11px; }
+.edt-msg.bad { display: flex; align-items: center; gap: 8px; color: var(--brand-coral); }
+.ly-bad { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; grid-column: 1 / -1;
+  margin: 2px 0 4px; color: var(--brand-coral); }
+.ly-bad .chip-btn { font-size: 11px; }
 .edt-prog-wrap { display: flex; align-items: center; gap: 10px; padding: 4px 2px; }
 .trk-item .rdy.stale { color: var(--brand-coral); font-weight: 700; }
 /* 拖拽排序 / 静音 / 独奏 / 右键菜单 */
@@ -1260,7 +1637,15 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .xport { display: flex; align-items: center; gap: 8px; padding: 6px 12px;
          border-bottom: 1px solid var(--border); }
 .xport .xbar { flex: 1; min-width: 120px; }
-.xport .xtime { min-width: 92px; text-align: right; font-variant-numeric: tabular-nums; }
+.xport .xtime { min-width: 92px; text-align: right; font-variant-numeric: tabular-nums;
+  font-family: var(--mono); color: var(--slate); cursor: pointer; background: none; border: none; }
+.xport .xtime:hover { color: var(--brand-text); text-decoration: underline; }
+.xbar-wrap { position: relative; flex: 1; min-width: 120px; display: flex; align-items: center; }
+.xbar-wrap .xbar { width: 100%; position: relative; z-index: 1; background: transparent; }
+.xbar-loop { position: absolute; top: 50%; height: 8px; transform: translateY(-50%); border-radius: 4px;
+  background: color-mix(in srgb, var(--brand-coral) 32%, transparent); pointer-events: none; }
+.xbar-loop.on { background: color-mix(in srgb, var(--brand-coral) 62%, transparent); }
+.xport .btn.on { border-color: var(--brand-coral); color: var(--brand-text); background: var(--surface-soft); }
 .warn { margin: 4px 12px; color: var(--stone); }
 
 .trk-import { display: flex; flex-direction: column; gap: 4px; padding: 6px; border-bottom: 1px solid var(--border); }

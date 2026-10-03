@@ -407,6 +407,12 @@ watch(() => state.gpuInstall.done, (v) => {
   clearTimeout(gpuBarTimer);
   gpuBarTimer = setTimeout(() => { state.gpuInstall.done = false; }, 10000);
 });
+/* 富提示里的动作按钮：点完就收起提示（动作本身可能切视图/开设置） */
+function runToastAction() {
+  const a = state.toastMsg && state.toastMsg.action;
+  state.toastDismiss();
+  if (a && typeof a.run === 'function') { try { a.run(); } catch (e) { /* 动作失败不影响提示收起 */ } }
+}
 function openGpuSettings() {
   state.ui.settingsTab = 'gpu';
   state.ui.settingsOpen = true;
@@ -533,8 +539,20 @@ onBeforeUnmount(() => {
     <Transition name="pb">
       <PlayerBar v-if="state.playerbarOpen" />
     </Transition>
+    <!-- 全应用唯一的提示出口（P1-4）：普通提示是胶囊，带「下一步/详情/动作」时是卡片 -->
     <div class="toast-wrap" v-if="state.toastMsg && state.toastMsg.msg" role="status" aria-live="polite">
-      <div class="toast" :class="state.toastMsg.type">{{ state.toastMsg.msg }}</div>
+      <div class="toast" :class="[state.toastMsg.type, { rich: state.toastMsg.rich }]">
+        <div class="toast-body">
+          <div class="toast-line">
+            <span>{{ state.toastMsg.msg }}</span>
+            <button v-if="state.toastMsg.action" class="toast-act" @click="runToastAction">{{ state.toastMsg.action.label }}</button>
+            <button v-if="state.toastMsg.detail" class="toast-more" @click="state.toastExpand()">{{ state.toastMsg.expanded ? t('收起') : t('详情') }}</button>
+            <button v-if="state.toastMsg.rich" class="toast-x" :title="t('关闭')" @click="state.toastDismiss()">×</button>
+          </div>
+          <div v-if="state.toastMsg.hint" class="toast-hint">{{ state.toastMsg.hint }}</div>
+          <pre v-if="state.toastMsg.expanded && state.toastMsg.detail" class="toast-detail">{{ state.toastMsg.detail }}</pre>
+        </div>
+      </div>
     </div>
 
     <!-- GPU 安装常驻通知条：任意页面可见，点击跳转设置 → GPU -->

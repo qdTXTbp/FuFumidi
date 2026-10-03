@@ -33,7 +33,6 @@ const TABS = computed(() => [
   { id: 'gpu', label: 'GPU', icon: 'zap' },
   { id: 'feature', label: t('功能'), icon: 'folder' },
   { id: 'keys', label: t('快捷键'), icon: 'kbd' },
-  { id: 'plugins', label: t('插件'), icon: 'spark' },
   { id: 'cloud', label: t('云同步'), icon: 'cloud' },
   { id: 'update', label: t('更新'), icon: 'download' },
 ]);
@@ -115,10 +114,6 @@ const themeOpts = computed(() => {
 
 const rustInfo = ref({ available: false, version: '', binary: null });
 
-/* ---------------- 插件 ---------------- */
-const plugins = ref([]);
-const pluginLog = ref('');
-
 /* ---------------- 快捷键（只读展示，computed 以随语言切换刷新） ---------------- */
 const KEYMAP = computed(() => [
   { keys: ['Space'], label: t('播放 / 暂停') },
@@ -150,6 +145,16 @@ const KEYMAP = computed(() => [
   { keys: ['Alt', '拖拽'], label: t('编辑器调整力度') },
   { keys: ['Shift', '拖拽'], label: t('吸附到音符（歌词/编辑器）') },
   { keys: ['Ctrl', '拖拽'], label: t('吸附到网格') },
+  /* ---- 调教页（歌声合成编辑器）：P1-3 页面键 + P1-6 循环/跟随 + P2-1 卷帘编辑 ---- */
+  { keys: ['Space'], label: t('播放 / 暂停（调教页）') },
+  { keys: ['Enter'], label: t('渲染本轨（调教页）') },
+  { keys: ['Ctrl', 'S'], label: t('保存工程（调教页）') },
+  { keys: ['L'], label: t('循环区间开关（调教页）') },
+  { keys: [',', '.'], label: t('设循环起点 A / 终点 B（调教页）') },
+  { keys: ['F'], label: t('跟随播放滚动（调教页）') },
+  { keys: ['Ctrl', 'C/X/V/D'], label: t('复制 / 剪切 / 粘贴 / 重复（卷帘）') },
+  { keys: ['Ctrl', 'E'], label: t('在播放头切分（卷帘）') },
+  { keys: ['Ctrl', 'M'], label: t('合并同音高（卷帘）') },
 ]);
 
 /* ---------------- 初始化 ---------------- */
@@ -184,7 +189,6 @@ async function load() {
   // 完整性：每次打开设置都重新检查（而非仅在首次 state.integrity===null 时），
   // 避免开机/更新瞬间的瞬时误报被缓存锁死——修复后或 asar 已恢复也能即时反映，不再“一直报错”。
   runIntegrity();
-  loadPlugins();
   loadRust();
   initGpu();
 }
@@ -812,31 +816,6 @@ async function loadRust() {
   }
 }
 
-/* ---------------- 插件 ---------------- */
-async function loadPlugins() {
-  if (!bridge || !bridge.plugins) return;
-  try { plugins.value = await bridge.plugins.list() || []; } catch (e) { plugins.value = []; }
-}
-async function togglePlugin(p) {
-  if (!bridge || !bridge.plugins) return;
-  try { await bridge.plugins.setEnabled(p.id, p.enabled); } catch (e) { p.enabled = !p.enabled; }
-}
-async function rescanPlugins() {
-  if (!bridge || !bridge.plugins) return;
-  try { plugins.value = await bridge.plugins.rescan() || []; } catch (e) {}
-}
-function openDocs() { if (bridge && bridge.plugins && bridge.plugins.openDocs) bridge.plugins.openDocs(); }
-/** 打开应用内的插件中心（切视图，不唤起浏览器） */
-function openPluginCenter() {
-  state.ui.settingsOpen = false;
-  state.setView('plugins');
-}
-function openPluginDir() { if (bridge && bridge.plugins && bridge.plugins.openDir) bridge.plugins.openDir(); }
-function onPluginLog(p) {
-  const line = p && p.line != null ? String(p.line) : JSON.stringify(p || '');
-  pluginLog.value = line + '\n' + pluginLog.value;
-  if (pluginLog.value.length > 4000) pluginLog.value = pluginLog.value.slice(0, 4000);
-}
 function onFolderWatch(full) {
   toast(t('监视到新文件：') + String(full || '').split(/[\\/]/).pop());
 }
@@ -918,14 +897,13 @@ function cancel() { state.ui.settingsOpen = false; }
 watch(() => state.ui.settingsTab, v => {
   if (TABS.value.some(t => t.id === v)) tab.value = v;
 });
-let offWatch = null, offPlgLog = null;
+let offWatch = null;
 onMounted(() => {
   load();
   moveInd();
   if (bridge && bridge.onFolderWatch) offWatch = bridge.onFolderWatch(onFolderWatch);
-  if (bridge && bridge.plugins && bridge.plugins.onLog) offPlgLog = bridge.plugins.onLog(onPluginLog);
 });
-onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPlgLog && offPlgLog(); } catch (e) {} 
+onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} 
   window.removeEventListener('keydown', hkOnKeydown, true); });
 </script>
 
@@ -1247,46 +1225,6 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
           </div>
         </div>
 
-        <!-- ============ 插件 ============ -->
-        <div v-else-if="tab === 'plugins'">
-          <p class="ov-note">
-            {{ t('插件用于扩展 FuFumidi 功能：将插件目录放入') }} <b>{{ t('用户目录/fufumidi/plugins/<插件名>/') }}</b>
-            {{ t('，内含 plugin.json 清单与入口脚本，重载后即可在此启用。插件由你主动安装并运行，等同于本地可信代码。') }}
-          </p>
-          <!-- 插件中心：应用内打开（不唤起浏览器），下载后由主进程解压安装并立即启用 -->
-          <div class="plg-store">
-            <div class="plg-store-txt">
-              <b>{{ t('插件中心') }}</b>
-              <small>{{ t('浏览官方插件平台，点一下即可下载安装并启用；无需手动放目录。') }}</small>
-            </div>
-            <button class="btn sm primary" @click="openPluginCenter">
-              <Icon name="box" :size="13" /> {{ t('打开插件中心') }}
-            </button>
-          </div>
-          <div class="plg-head">
-            <span>{{ t('已安装插件') }}（{{ plugins.length }}）</span>
-            <button class="btn sm" @click="rescanPlugins">{{ t('重新扫描') }}</button>
-          </div>
-          <div v-if="!plugins.length" class="state-box">{{ t('无') }}</div>
-          <div class="plg-item" v-for="p in plugins" :key="p.id">
-            <div class="plg-info">
-              <b>{{ p.name }} <span class="muted small">v{{ p.version }}</span></b>
-              <small>{{ p.description || p.id }}</small>
-            </div>
-            <span :class="['plg-tag', p.enabled ? 'on' : 'off']">{{ p.enabled ? t('已启用') : t('已禁用') }}</span>
-            <label class="switch-row">
-              <input type="checkbox" :checked="p.enabled" @change="e => { p.enabled = e.target.checked; togglePlugin(p); }" />
-              <span></span>
-            </label>
-          </div>
-          <div class="plg-head">{{ t('插件日志') }}</div>
-          <div class="plg-log">{{ pluginLog || t('无') }}</div>
-          <div style="display:flex;gap:8px;margin-top:8px">
-            <button class="btn sm" @click="openPluginDir">{{ t('打开插件目录') }}</button>
-            <a class="plg-docs" @click="openDocs">{{ t('开发者文档') }} ↗</a>
-          </div>
-        </div>
-
         <!-- ============ 更新 ============ -->
         <div v-else-if="tab === 'update'">
           <p class="ov-note">{{ t('检查更新：发现新版本后弹窗询问，确认后增量下载并自动替换。') }}</p>
@@ -1459,12 +1397,6 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
 <style scoped>
 /* ---- 操作系统级全局热键（用户自己录制） ---- */
 .hk-sec { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
-/* 插件中心入口条 */
-.plg-store { display: flex; align-items: center; gap: 12px; margin: 10px 0 14px; padding: 10px 14px;
-             border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
-.plg-store-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.plg-store-txt b { font-size: 13px; }
-.plg-store-txt small { color: var(--stone); font-size: 11.5px; }
 .hk-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .hk-head b { font-size: 13px; }
 .hk-head .sp { flex: 1; }

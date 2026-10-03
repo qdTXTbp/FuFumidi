@@ -352,3 +352,62 @@ test('静音轨不写自动化曲线（省得白算）', async () => {
   assert.equal(ctx._curves.length, 0, '静音轨不该写自动化曲线');
   assert.equal(t.lanes[0].volPoints.length, 2, '但数据要留着，取消静音后立刻能用');
 });
+
+/* ---------------- 循环区间（P1-6） ----------------
+ * 行为契约：
+ *   1) setLoop 会把 a/b 排序并夹进 [0, duration]，区间过小直接关掉（不做无意义的抖动循环）
+ *   2) 播放中到 B 点 → 回到 A 点**重起源**（seek 重建，不是靠 UI 定时器）
+ *   3) 关掉循环后仍然正常播到结尾停止
+ */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test('setLoop：a/b 自动排序、区间过小自动关闭', async () => {
+  const ctx = makeFakeCtx();
+  const t = newTransport(ctx);
+  queue(ctx, 10);
+  await t.load([{ label: 'a', bytes: fakeBytes(10) }]);
+  const l1 = t.setLoop(2000, 1000, true);
+  assert.equal(l1.a, 1000, '起点取小的那个');
+  assert.equal(l1.b, 2000, '终点取大的那个');
+  assert.equal(l1.on, true);
+  const l2 = t.setLoop(1000, 1005, true);          // 5ms 的区间没有意义
+  assert.equal(l2.on, false, '区间小于 20ms 直接关掉，避免每帧重起爆音');
+  assert.equal(t.loop.on, false);
+  t.clearLoop();
+  assert.equal(t.loop.on, false);
+  assert.equal(t.loop.b, 0);
+});
+
+test('★ 播放到 B 点回到 A 点（重起源，而不是走完）', async () => {
+  const ctx = makeFakeCtx();
+  const t = newTransport(ctx);
+  queue(ctx, 10);
+  await t.load([{ label: 'a', bytes: fakeBytes(10) }]);
+  t.setLoop(1000, 2000, true);
+  ctx._started.length = 0;
+  t.play(1500);                                    // 从区间中段起播
+  assert.ok(ctx._started.length >= 1, '先有源在播');
+  ctx.advance(0.8);                                // 越过 B（位置≈2300ms）
+  await sleep(60);                                 // 等下一次 pump 周期
+  assert.ok(t.playing, '循环时不该停播');
+  const pos = t.positionMs;
+  assert.ok(pos >= 900 && pos < 1500, '回到 A 点附近（实际 ' + Math.round(pos) + 'ms）');
+  const last = ctx._started[ctx._started.length - 1];
+  assert.ok(Math.abs(last.offset - 1.0) < 0.2, '新源的 offset 应落在 A 点附近，实际 ' + last.offset);
+  t.stop();
+});
+
+test('关掉循环后照旧播到结尾停止', async () => {
+  const ctx = makeFakeCtx();
+  const t = newTransport(ctx);
+  queue(ctx, 1);
+  await t.load([{ label: 'a', bytes: fakeBytes(1) }]);
+  t.setLoop(100, 500, false);                      // 设了区间但开关是关的
+  let ended = false;
+  t.onTick = (_ms, playing) => { if (!playing) ended = true; };
+  t.play(0);
+  ctx.advance(1.2);
+  await sleep(60);
+  assert.equal(t.playing, false, '播到结尾要停');
+  assert.ok(ended, 'onTick 要收到一次 playing=false');
+});

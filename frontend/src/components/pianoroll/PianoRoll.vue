@@ -36,8 +36,14 @@ const props = defineProps({
   pitchLo: { type: Number, default: null },  // 指定则固定音域（如 UTAU 的 C2..C7）
   pitchHi: { type: Number, default: null },
   showToolbar: { type: Boolean, default: true },
+  /* ---- P2-1：播放头（宿主给拍位，卷帘只负责画线与"在播放头切分/粘贴"）---- */
+  playheadBeat: { type: Number, default: -1 },
+  /* ---- P2-1：音阶高亮 { root: 0..11, type: 'major'|'minor'|'chromatic' }，null = 关 ---- */
+  scale: { type: Object, default: null },
+  /* ---- P2-3：每小节几拍（由工程拍号换算而来；只影响小节线与编号）---- */
+  beatsPerBar: { type: Number, default: 4 },
 });
-const emit = defineEmits(['edit-lyric']);
+const emit = defineEmits(['edit-lyric', 'set-scale', 'set-scale-root', 'edit-phoneme']);
 
 /* ---------------- 布局 ---------------- */
 // 键盘列宽 / 顶部留白以 props 为准（挂载期固定，不随运行时变）
@@ -96,6 +102,28 @@ function noteGeo(n) {
 /* ---------------- 吸附 ---------------- */
 const snapOn = ref(true);
 const snapDiv = ref(4);   // 1/4 拍
+/* ---------------- 音阶高亮（P2-1） ----------------
+   写旋律时最常犯的错是"手滑画到调外音"，而半音行本身很难一眼分辨。
+   这里只做**视觉分区**（调内行提亮、调外行压暗），不改任何数据。 */
+const SCALE_SETS = {
+  major: [0, 2, 4, 5, 7, 9, 11],
+  minor: [0, 2, 3, 5, 7, 8, 10],
+  chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+};
+const scaleSet = computed(() => {
+  const s = props.scale;
+  if (!s || !s.type) return null;
+  const set = SCALE_SETS[s.type];
+  if (!set) return null;
+  const root = ((Number(s.root) || 0) % 12 + 12) % 12;
+  return new Set(set.map((x) => (x + root) % 12));
+});
+function inScale(pitch) {
+  const set = scaleSet.value;
+  if (!set) return true;
+  return set.has(((pitch % 12) + 12) % 12);
+}
+
 function snapBeat(b) {
   if (!snapOn.value) return Math.max(0, b);
   const step = 1 / snapDiv.value;
@@ -104,6 +132,9 @@ function snapBeat(b) {
 
 /* ---------------- 工具 ---------------- */
 const tool = ref('select');  // select | pen
+
+/** 每小节几拍（P2-3）：三处小节线必须用同一个值，否则上下会对不齐 */
+function perBarFor(v) { return Math.max(1, Math.round(Number(v)) || 4); }
 
 /* ---------------- 绘制 ---------------- */
 function V(name) {
@@ -161,19 +192,25 @@ function draw() {
     }
     g.strokeStyle = border; g.lineWidth = 1;
     g.beginPath(); g.moveTo(0, y + rowH.value + 0.5); g.lineTo(cw, y + rowH.value + 0.5); g.stroke();
+    // 调外音行压暗（音阶高亮，P2-1）：只影响音符区，键盘列不动
+    if (scaleSet.value && !inScale(p)) {
+      g.fillStyle = 'rgba(20,20,28,0.10)';
+      g.fillRect(LEFT, y, cw - LEFT, rowH.value);
+    }
   }
 
   // 拍线
   const beats = Math.ceil(totalBeats.value);
+  const perBar = perBarFor(props.beatsPerBar);
   for (let b = 0; b <= beats; b++) {
     const x = xOf(b);
-    const isBar = b % 4 === 0;
+    const isBar = b % perBar === 0;
     g.strokeStyle = isBar ? border : grid;
     g.lineWidth = isBar ? 1.2 : 0.6;
     g.beginPath(); g.moveTo(x + 0.5, TOP); g.lineTo(x + 0.5, ch); g.stroke();
     if (isBar) {
       g.fillStyle = muted; g.font = '9px system-ui, sans-serif'; g.textAlign = 'left';
-      g.fillText(String(b / 4 + 1), x + 3, TOP - 5);
+      g.fillText(String(b / perBar + 1), x + 3, TOP - 5);
     }
   }
 
@@ -212,6 +249,19 @@ function draw() {
     g.fillStyle = 'rgba(127,127,127,0.12)';
     g.fillRect(x0, y0, bw, bh); g.strokeRect(x0 + 0.5, y0 + 0.5, bw, bh);
     g.restore();
+  }
+
+  // 播放头（P2-1）：一条竖线标出"现在播到哪/将从哪开始"，切分与粘贴都以它为准
+  if (props.playheadBeat >= 0) {
+    const phx = xOf(props.playheadBeat);
+    if (phx >= LEFT - 1 && phx <= cw) {
+      g.save();
+      g.strokeStyle = V('--brand-coral'); g.lineWidth = 1.4;
+      g.beginPath(); g.moveTo(phx + 0.5, TOP); g.lineTo(phx + 0.5, ch); g.stroke();
+      g.fillStyle = V('--brand-coral');
+      g.beginPath(); g.moveTo(phx - 4, TOP); g.lineTo(phx + 4, TOP); g.lineTo(phx, TOP + 6); g.closePath(); g.fill();
+      g.restore();
+    }
   }
 
   // 音素条带与音符层同源重绘，保证始终对齐
@@ -380,16 +430,140 @@ function onWheel(e) {
   }
 }
 
+/* ---------------- 剪贴板 / 切分 / 合并（P2-1） ----------------
+   OpenUTAU 里"复制一小节再挪到下一段"是最常用的编辑动作，而此前卷帘只能一个一个
+   音符改 —— 这里把整套补齐：Ctrl+C/X/V/D 复制/剪切/粘贴/重复，Ctrl+E 在播放头切分，
+   Ctrl+M 合并同音高相邻音符。所有写入都先 pushUndo()，一次操作 = 一步撤销。 */
+const clip = ref([]);                 // 剪贴板（相对最小 startBeat 的偏移量）
+const CLIP_KEYS = ['pitch', 'durBeat', 'lyric', 'velocity', 'volume', 'flags', 'params',
+  'gender', 'breath', 'dyn', 'atk', 'dec', 'shft', 'clr', 'pitchOffset',
+  'vibrato', 'vibDepth', 'vibFreq', 'vibFade', 'phExpressions'];
+
+function selIds() {
+  return props.selectedIds.length ? props.selectedIds : (props.selectedId ? [props.selectedId] : []);
+}
+/** 把选中的音符拷进剪贴板（坐标归一到最早的起点，粘贴时再按目标位置落） */
+function copySelection(cut = false) {
+  const ids = selIds();
+  const picked = props.notes.filter((n) => ids.includes(n.id));
+  if (!picked.length) return 0;
+  const base = Math.min(...picked.map((n) => n.startBeat));
+  clip.value = picked.map((n) => {
+    const o = { _beat: n.startBeat - base };
+    for (const k of CLIP_KEYS) if (n[k] !== undefined) o[k] = JSON.parse(JSON.stringify(n[k]));
+    return o;
+  });
+  if (cut) { props.api.pushUndo(); props.api.removeNotes(ids); }
+  return clip.value.length;
+}
+/** 粘贴到播放头（没有播放头就贴在原处再往右挪一个剪贴板宽度） */
+function pasteClipboard(atBeat) {
+  const items = clip.value;
+  if (!items.length) return 0;
+  const span = Math.max(...items.map((o) => o._beat + (o.durBeat || 1)));
+  let base = atBeat;
+  if (base == null) base = Math.max(...props.notes.map((n) => n.startBeat + n.durBeat), 0);
+  props.api.pushUndo();
+  const made = [];
+  for (const o of items) {
+    const id = props.api.addNote(base + o._beat, o.pitch);
+    const patch = {};
+    for (const k of CLIP_KEYS) if (o[k] !== undefined) patch[k] = o[k];
+    props.api.updateNote(id, patch);
+    made.push(id);
+  }
+  if (made.length) props.api.setSelection(made, made[0]);
+  return made.length;
+}
+/** 重复：紧跟在选区末尾再放一份（切分走临时剪贴板，不覆盖用户已复制的内容） */
+function duplicateSelection() {
+  const keep = clip.value;
+  const n = copySelection(false);
+  if (!n) { clip.value = keep; return 0; }
+  const ids = selIds();
+  const picked = props.notes.filter((z) => ids.includes(z.id));
+  const end = Math.max(...picked.map((z) => z.startBeat + z.durBeat));
+  const made = pasteClipboard(end);
+  clip.value = keep;                 // 用户的剪贴板原样还回去
+  return made;
+}
+/**
+ * 在播放头切分选中的音符：左半保留原 id（歌词/表达式跟着走），右半是新音符。
+ * 播放头不在音符内部时跳过它 —— 静默切一半比不切更让人困惑。
+ */
+function splitSelection(atBeat) {
+  const ids = selIds();
+  if (atBeat == null || atBeat < 0) return 0;
+  let n = 0;
+  props.api.pushUndo();
+  for (const id of ids) {
+    const note = props.notes.find((z) => z.id === id);
+    if (!note) continue;
+    const s = note.startBeat, e = s + note.durBeat;
+    if (atBeat <= s + 0.02 || atBeat >= e - 0.02) continue;
+    const newId = props.api.addNote(atBeat, note.pitch);
+    const patch = {};
+    for (const k of CLIP_KEYS) if (note[k] !== undefined && k !== 'durBeat') patch[k] = JSON.parse(JSON.stringify(note[k]));
+    patch.durBeat = e - atBeat;
+    props.api.updateNote(newId, patch);
+    props.api.updateNote(id, { durBeat: atBeat - s });
+    n++;
+  }
+  if (n) draw();
+  return n;
+}
+/** 合并：同音高的选中音符首尾相接成一条（歌词取最早那条的） */
+function mergeSelection() {
+  const ids = selIds();
+  const picked = props.notes.filter((n) => ids.includes(n.id)).slice()
+    .sort((a, b) => a.startBeat - b.startBeat);
+  if (picked.length < 2) return 0;
+  const byPitch = new Map();
+  for (const n of picked) {
+    const k = String(n.pitch);
+    if (!byPitch.has(k)) byPitch.set(k, []);
+    byPitch.get(k).push(n);
+  }
+  let merged = 0;
+  const survivors = [];
+  props.api.pushUndo();
+  for (const grp of byPitch.values()) {
+    if (grp.length < 2) { survivors.push(...grp.map((n) => n.id)); continue; }
+    const first = grp[0];
+    const end = Math.max(...grp.map((n) => n.startBeat + n.durBeat));
+    props.api.updateNote(first.id, { durBeat: Math.max(0.125, end - first.startBeat) });
+    props.api.removeNotes(grp.slice(1).map((n) => n.id));
+    survivors.push(first.id);
+    merged += grp.length - 1;
+  }
+  props.api.setSelection(survivors, survivors[0] ?? null);
+  draw();
+  return merged;
+}
+
 /* ---------------- 快捷键 ---------------- */
 function onKey(e) {
   const tag = (e.target && e.target.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA') return;
   const api = props.api;
-  const ids = props.selectedIds.length ? props.selectedIds : (props.selectedId ? [props.selectedId] : []);
+  const ids = selIds();
   const mod = e.ctrlKey || e.metaKey;
-  if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? api.redo() : api.undo(); return; }
-  if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); api.redo(); return; }
-  if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); api.selectAll(); return; }
+  const k = (e.key || '').toLowerCase();
+  if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? api.redo() : api.undo(); return; }
+  if (mod && k === 'y') { e.preventDefault(); api.redo(); return; }
+  if (mod && k === 'a') { e.preventDefault(); api.selectAll(); return; }
+  /* P2-1 编辑快捷键：即使没有选中音符，粘贴也要能用（剪贴板里可能有东西） */
+  if (mod && k === 'c') { if (ids.length) { e.preventDefault(); copySelection(false); } return; }
+  if (mod && k === 'x') { if (ids.length) { e.preventDefault(); copySelection(true); } return; }
+  if (mod && k === 'v') {
+    e.preventDefault();
+    const n = pasteClipboard(props.playheadBeat >= 0 ? props.playheadBeat : null);
+    if (!n) apiHint(t('剪贴板是空的：先选中音符按 Ctrl+C'));
+    return;
+  }
+  if (mod && k === 'd') { if (ids.length) { e.preventDefault(); duplicateSelection(); } return; }
+  if (mod && k === 'e') { if (ids.length) { e.preventDefault(); if (!splitSelection(props.playheadBeat)) apiHint(t('播放头不在选中的音符里：先把播放头拖到要切的位置')); } return; }
+  if (mod && k === 'm') { if (ids.length) { e.preventDefault(); if (!mergeSelection()) apiHint(t('合并需要选中同一音高的 2 个以上音符')); } return; }
   if (!ids.length) return;
   if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); api.pushUndo(); api.removeNotes(ids); return; }
   const step = 1 / snapDiv.value;
@@ -397,6 +571,23 @@ function onKey(e) {
   else if (e.key === 'ArrowRight') { e.preventDefault(); api.pushUndo(); api.moveNotes(ids, step, 0); }
   else if (e.key === 'ArrowUp') { e.preventDefault(); api.pushUndo(); api.moveNotes(ids, 0, 1); }
   else if (e.key === 'ArrowDown') { e.preventDefault(); api.pushUndo(); api.moveNotes(ids, 0, -1); }
+}
+
+/* 音阶选择：组件不持有状态，改的是宿主的 props（emit 上去） */
+function onScalePick(e) { emit('set-scale', e.target.value); }
+function onScaleRoot(e) { emit('set-scale-root', Number(e.target.value)); }
+
+/* 右键菜单用的包装：模板里只写函数名，语句块留在 script 侧 */
+function ctxCopy(cut) { copySelection(!!cut); closeCtx(); }
+function ctxPaste() { pasteClipboard(props.playheadBeat >= 0 ? props.playheadBeat : null); closeCtx(); }
+function ctxDuplicate() { duplicateSelection(); closeCtx(); }
+function ctxSplit() { if (!splitSelection(props.playheadBeat)) apiHint(t('播放头不在选中的音符里：先把播放头拖到要切的位置')); closeCtx(); }
+function ctxMerge() { if (!mergeSelection()) apiHint(t('合并需要选中同一音高的 2 个以上音符')); closeCtx(); }
+
+/** 卷帘内的轻提示：宿主没给 toast 通道时退化成控制台，绝不静默 */
+function apiHint(msg) {
+  if (typeof props.api.hint === 'function') props.api.hint(msg);
+  else console.warn('[PianoRoll]', msg);
 }
 
 /* ---------------- 音素条带（P2） ----------------
@@ -434,8 +625,9 @@ function drawPhoneme() {
   g.fillText(t('音素'), LEFT - 6, PH_H / 2 + 3);
 
   // 拍线（与音符区一致，便于对齐阅读）
+  const perBarPh = perBarFor(props.beatsPerBar);
   for (let b = 0; b <= Math.ceil(totalBeats.value); b++) {
-    const x = xOf(b); const isBar = b % 4 === 0;
+    const x = xOf(b); const isBar = b % perBarPh === 0;
     g.strokeStyle = isBar ? border : grid; g.lineWidth = isBar ? 1.2 : 0.6;
     g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, PH_H); g.stroke();
   }
@@ -571,7 +763,7 @@ function drawPitch() {
     g.fillText(String(cval), LEFT - 3, y + 3);
   }
   for (let b = 0; b <= Math.ceil(totalBeats.value); b++) {
-    const x = xOf(b); const isBar = b % 4 === 0;
+    const x = xOf(b); const isBar = b % perBarFor(props.beatsPerBar) === 0;
     g.strokeStyle = isBar ? border : grid; g.lineWidth = isBar ? 1 : 0.5;
     g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, PI_H); g.stroke();
   }
@@ -673,6 +865,11 @@ const lyricRev = computed(() => {
 });
 watch([rev, selRev, lyricRev, () => props.bpm, pitchSpan], () => nextTick(draw));
 watch([noteW, rowH, showPhoneme, pitchOn], () => nextTick(() => { setupCanvas(); draw(); }));
+// 播放头每帧都在动：只重绘音符层，不做 setupCanvas（重建画布会把滚动位置抖掉）
+watch(() => props.playheadBeat, () => draw());
+// 音阶高亮与剪贴板可用性也会改变画面
+watch(() => (props.scale && props.scale.type) + ':' + (props.scale && props.scale.root), () => draw());
+watch(() => props.beatsPerBar, () => draw());
 watch(pitchRev, () => { loadPitch(); nextTick(drawPitch); });
 watch(showPhoneme, v => { try { localStorage.setItem('fufumidi_roll_phoneme', v ? '1' : '0'); } catch (e) {} });
 
@@ -716,6 +913,18 @@ defineExpose({
       <label class="pr-ad" :title="t('底部车道显示音高微调曲线（手绘/直线/正弦/平滑）')">
         <input type="checkbox" v-model="pitchOn" /> {{ t('音高') }}
       </label>
+      <!-- 音阶高亮（P2-1）：只压暗调外音行，不动任何数据 -->
+      <label class="pr-ad" :title="t('高亮当前调式：调外音行压暗，写旋律时一眼看出跑调的音')">
+        {{ t('音阶') }}
+        <select :value="(scale && scale.type) || 'off'" @change="onScalePick($event)">
+          <option value="off">{{ t('关闭') }}</option>
+          <option value="major">{{ t('大调') }}</option>
+          <option value="minor">{{ t('小调') }}</option>
+        </select>
+        <select v-if="scale && scale.type" :value="String(scale.root ?? 0)" @change="onScaleRoot($event)">
+          <option v-for="(nm, i) in NOTE_NAMES" :key="i" :value="String(i)">{{ nm }}</option>
+        </select>
+      </label>
       <span class="pr-zoom">
         <button class="pr-mini" :title="t('缩小')" @click="noteW = Math.max(12, noteW * 0.85)">−</button>
         <button class="pr-mini" :title="t('放大')" @click="noteW = Math.min(120, noteW * 1.18)">+</button>
@@ -756,6 +965,14 @@ defineExpose({
         <button class="pr-ctx-i" @click="api.redo(); closeCtx()"><Icon name="redo" :size="13" /> {{ t('重做') }}</button>
         <div class="pr-ctx-sep"></div>
         <button class="pr-ctx-i" :disabled="!ctxOnNote" @click="emit('edit-lyric', notes.find(n => n.id === ctxNoteId)); closeCtx()">{{ t('编辑歌词') }}</button>
+        <div class="pr-ctx-sep"></div>
+        <button class="pr-ctx-i" :disabled="!selIds().length" @click="ctxCopy(false)">{{ t('复制') }}<span class="pr-ctx-k">Ctrl+C</span></button>
+        <button class="pr-ctx-i" :disabled="!selIds().length" @click="ctxCopy(true)">{{ t('剪切') }}<span class="pr-ctx-k">Ctrl+X</span></button>
+        <button class="pr-ctx-i" :disabled="!clip.length" @click="ctxPaste()">{{ t('粘贴到播放头') }}<span class="pr-ctx-k">Ctrl+V</span></button>
+        <button class="pr-ctx-i" :disabled="!selIds().length" @click="ctxDuplicate()">{{ t('重复一份') }}<span class="pr-ctx-k">Ctrl+D</span></button>
+        <button class="pr-ctx-i" :disabled="!selIds().length" @click="ctxSplit()">{{ t('在播放头切分') }}<span class="pr-ctx-k">Ctrl+E</span></button>
+        <button class="pr-ctx-i" :disabled="selIds().length < 2" @click="ctxMerge()">{{ t('合并同音高') }}<span class="pr-ctx-k">Ctrl+M</span></button>
+        <div class="pr-ctx-sep"></div>
         <button class="pr-ctx-i" :disabled="!ctxOnNote" @click="api.pushUndo(); api.removeNotes(selectedIds.length ? selectedIds : [ctxNoteId]); closeCtx()">{{ t('删除') }}</button>
       </div>
     </Transition>
@@ -784,6 +1001,7 @@ defineExpose({
 .pr-ctx-i { display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font-size: 12.5px; text-align: left; cursor: pointer; }
 .pr-ctx-i:hover:not(:disabled) { background: var(--surface-muted); }
 .pr-ctx-i:disabled { opacity: .4; cursor: not-allowed; }
+.pr-ctx-k { margin-left: auto; color: var(--text-muted); font-size: 10.5px; font-family: var(--mono); }
 .pr-ctx-sep { height: 1px; margin: 4px 2px; background: var(--border); }
 .ctxmenu-enter-active, .ctxmenu-leave-active { transition: opacity .1s, transform .1s; }
 .ctxmenu-enter-from, .ctxmenu-leave-to { opacity: 0; transform: scale(.96); }

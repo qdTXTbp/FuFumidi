@@ -177,6 +177,8 @@ export interface SingTrack {
   curves?: AutomationCurve[];
   /** 本轨独享的效果链（顺序即信号流顺序） */
   fx?: FxNode[];
+  /** 渲染这一版时的音符指纹（用于"渲染已过期"提示，见 staleRenderIds getter） */
+  renderSig?: string;
 
   /* ---- 混音（多轨同时播放时按轨生效；音频轨的同类字段在 `audio` 上）---- */
   /** 静音（仍保留渲染结果，只是不发声） */
@@ -310,14 +312,18 @@ export const useSingerStore = defineStore('singer', {
     sampleNote: 'a' as string,
     /** 渲染产物的可播放 URL（两个引擎共用） */
     renderUrl: '' as string,
-    /** 渲染当时该轨的音符指纹（用于"渲染已过期"提示，见 staleRenderIds） */
-    renderSig: '' as string,
     /* ---- 工程文件（.fufumidi 自包含包）---- */
     /** 当前工程路径；空 = 还没保存过（此时"保存"会走另存为对话框） */
     projectPath: '' as string,
     createdAt: '' as string,
-    meta: { title: '', comment: '', artist: '' } as
-      { title: string; comment: string; artist: string },
+    /**
+     * 工程级参数（P2-3）。除了标题，还带拍号与"对齐偏移"的**当前值**：
+     *   拍号    —— 只影响卷帘的小节线与编号（4/4、3/4…），不改音符
+     *   对齐偏移 —— 上一次整体平移的毫秒数（记录用，真正的平移写在音符上）
+     * 两样都随工程文件走，所以类型上放宽成可选，老工程没有也能打开。
+     */
+    meta: { title: '', comment: '', artist: '', timeSig: '4/4', alignMs: 0 } as
+      { title: string; comment: string; artist: string; timeSig?: string; alignMs?: number },
     /** 打开工程后没落到本地的伴奏（包里缺文件 / 解包失败） */
     missingAudio: [] as { trackId: string; fileName: string; asset: string }[],
     /**
@@ -491,6 +497,32 @@ export const useSingerStore = defineStore('singer', {
       if (t && t.audio) Object.assign(t.audio, patch);
     },
 
+    /**
+     * 工程级对齐偏移（P2-3）：把音符整体平移 n 毫秒。
+     *
+     * ★ 为什么要它：歌词听感整体"抢"或"拖"时（换气点、伴奏前奏长度不同），
+     *   一个个音符挪是折磨。这里按当前 BPM 换算成拍，一次挪完，并可撤销。
+     * 负数 = 提前，正数 = 延后；只挪声部轨的音符，伴奏轨不动（伴奏是音频，挪了就对不上）。
+     */
+    shiftNotesByMs(ms: number, trackId?: string) {
+      const dBeat = (Number(ms) || 0) / 1000 * (this.bpm / 60);
+      if (!dBeat) return 0;
+      const targets = this.tracks.filter((t) => t.kind === 'voice' && (!trackId || t.id === trackId));
+      if (!targets.length) return 0;
+      this.pushUndo();
+      let n = 0;
+      for (const t0 of targets) {
+        for (const note of t0.notes) {
+          note.startBeat = Math.max(0, Math.round((note.startBeat + dBeat) * 32) / 32);
+          n += 1;
+        }
+        t0.notes.sort((a, b) => a.startBeat - b.startBeat);   // 与 updateNote 的约定一致
+      }
+      // meta 与 notes 都是响应式 state，直接写即可（卷帘的 rev 指纹会自己变）
+      this.meta = Object.assign({}, this.meta, { alignMs: Math.round(Number(ms) || 0) });
+      return n;
+    },
+
     /** 拖拽排序：把 fromId 移到 toId 的位置（toId 之后或之前均可，保持其余顺序） */
     moveTrack(fromId: string, toId: string) {
       const from = this.tracks.findIndex((t) => t.id === fromId);
@@ -498,6 +530,7 @@ export const useSingerStore = defineStore('singer', {
       if (from < 0 || to < 0 || from === to) return;
       this.pushUndo();
       const [t0] = this.tracks.splice(from, 1);
+      if (!t0) return;                       // 理论上取不到；取不到就原样放回（不丢轨）
       this.tracks.splice(to, 0, t0);
     },
 
@@ -789,7 +822,7 @@ export const useSingerStore = defineStore('singer', {
       this.clearAll();
       this.projectPath = '';
       this.createdAt = '';
-      this.meta = { title: '', comment: '', artist: '' };
+      this.meta = { title: '', comment: '', artist: '', timeSig: '4/4', alignMs: 0 };
       this.missingAudio = [];
       // 空工程 = 新会话：历史里留着上一个工程的快照只会让 Ctrl+Z 变味
       this.history = [];
@@ -871,7 +904,7 @@ export const useSingerStore = defineStore('singer', {
       this.device = proj.device;
       this.sampleNote = proj.sampleNote;
       this.activeTrackId = proj.activeTrackId || (tracks[0]?.id || '');
-      this.meta = proj.meta;
+      this.meta = Object.assign({ title: '', comment: '', artist: '', timeSig: '4/4', alignMs: 0 }, proj.meta || {});
       this.createdAt = proj.createdAt || '';
       this.projectPath = r.filePath || '';
       this.selectedId = null;
@@ -971,8 +1004,10 @@ export const useSingerStore = defineStore('singer', {
       this._cancelled = false;
       const failed: string[] = [];
       let stopped = false;
+      /* ★ i 必须声明在 try 外：下面"已停止"分支要用它算成功条数，
+         写在 try 里会在中断路径上直接 ReferenceError。 */
+      let i = 0;
       try {
-        let i = 0;
         // ★ 用 for-of 而不是下标：`noUncheckedIndexedAccess` 下 `todo[i]` 是
         //   `SingTrack | undefined`，下标写法要到处加判空
         for (const t of todo) {
