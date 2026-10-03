@@ -6,6 +6,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import DiffSingerCatalog from './DiffSingerCatalog.vue';
+import UtauVoicebankStore from '../components/utau/UtauVoicebankStore.vue';
 import { useAppStore } from '../stores/app';
 import { useVoicebankStore } from '../stores/voicebank';
 import { t } from '../core/i18n.js';
@@ -21,6 +22,9 @@ const TABS = computed(() => [
   { id: 'separate', label: t('人声分离'), ic: 'mic' },
   { id: 'other', label: t('修复·VR'), ic: 'box' },
   { id: 'diffsinger', label: t('DiffSinger 声库'), ic: 'spark' },
+  // UTAU 声库（开源 / 免费，一键下载安装）：声库属于「资源」，统一收在模型管理里，
+  // 不再散落在资源管理页 —— 用户找声库只需要记住一个地方。
+  { id: 'utau', label: t('UTAU 声库'), ic: 'mic' },
 ]);
 const curTab = ref('transcribe');
 
@@ -35,6 +39,8 @@ const tabbedList = computed(() => list.value.filter(m => m.kind === curTab.value
 // 未加载完成前显示「…」而非 0，避免误报「可下载声库数量为 0」。
 function countFor(tb) {
   if (tb === 'diffsinger') return vbStore.dsLoaded ? vbStore.dsAvailable : null;
+  // UTAU 声库来自独立注册表（UtauVoicebankStore 自己拉），这里不给数字，避免误报 0
+  if (tb === 'utau') return null;
   return list.value.filter(m => m.kind === tb).length;
 }
 function cnt(n) { return n == null ? '…' : String(n); }
@@ -139,18 +145,20 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
       </button>
     </div>
 
-    <!-- 醒目提示：新模型下载后需补全依赖 + 下载慢可换源 -->
+    <!-- 醒目提示：下载依赖补全 + 下载慢换源，合并成**一条**（两条提示占了两行，
+         信息密度低、还各带一个图标，视觉上比内容更抢眼） -->
     <div v-if="curTab !== 'diffsinger'" class="vm-dep-tip">
       <span class="vm-dep-ic"><Icon name="zap" :size="14" /></span>
-      <span>{{ t('下载新模型后请去「资源管理」里补全依赖，否则模型可能无法使用') }}</span>
-    </div>
-    <div class="vm-dep-tip vm-src-tip">
-      <span class="vm-dep-ic"><Icon name="globe" :size="14" /></span>
-      <span>{{ t('下载速度慢，请在设置页里切换下载源') }}</span>
+      <span>{{ t('下载后请到「资源管理」补全依赖（否则模型可能无法使用）；下载慢可在设置页切换下载源') }}</span>
     </div>
 
     <!-- DiffSinger 声库目录（独立板块，非模型卡片的 kind 分组） -->
     <DiffSingerCatalog v-if="curTab === 'diffsinger'" />
+
+    <!-- UTAU 声库（开源 / 免费）：一键下载安装，装完可在「调教」里直接选来唱 -->
+    <div v-else-if="curTab === 'utau'" class="vm-utau">
+      <UtauVoicebankStore />
+    </div>
 
     <!-- 卡片网格 -->
     <Transition v-else name="vmfade" mode="out-in">
@@ -228,12 +236,13 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 
 <style scoped>
 .vm-page { }
+/* UTAU 声库页签：声库卡片网格自带样式，这里只给一层容器间距 */
+.vm-utau { margin-top: 4px; }
 
 /* ===== 页签 ===== */
 /*** 页签：与全局 .btn/.tab 一致的轻量 pill 风格，去掉厚重渐变与强投影 ***/
 .vm-tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
 
-.vm-src-tip { margin-top: -4px; }
 /* ===== 依赖补全醒目提示 ===== */
 .vm-dep-tip { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; padding: 9px 14px; border-radius: var(--radius-lg); border: 1px solid color-mix(in srgb, var(--brand-coral) 38%, transparent); background: color-mix(in srgb, var(--brand-coral) 11%, var(--surface)); color: var(--ink); font-size: 12.5px; font-weight: 700; line-height: 1.5; }
 .vm-dep-ic { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; border-radius: 50%; background: color-mix(in srgb, var(--brand-coral) 18%, transparent); color: var(--brand-coral); flex: none; }

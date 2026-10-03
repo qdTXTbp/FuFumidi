@@ -9,7 +9,6 @@ import { useRoute, useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import ViewModels from './ViewModels.vue';
 import ViewSoundfonts from './ViewSoundfonts.vue';
-import UtauVoicebankStore from '../components/utau/UtauVoicebankStore.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
 import { t } from '../core/i18n.js';
@@ -619,11 +618,8 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
       <div v-if="lib.err" class="lib-err">{{ lib.err }}</div>
     </div>
 
-    <!-- ============ UTAU 声库资源（开源 / 免费，一键安装） ============ -->
-    <div class="card res-sec">
-      <div class="res-sec-head"><Icon name="mic" :size="15" /> {{ t('UTAU 声库资源') }}</div>
-      <UtauVoicebankStore />
-    </div>
+    <!-- UTAU 声库资源已移到「资源中心 → 模型管理 → UTAU 声库」页签：
+         声库属于资源，和模型放在同一处，用户只需要记住一个入口。 -->
 
     <!-- ============ 诊断与配置 ============ -->
     <div class="card res-sec">

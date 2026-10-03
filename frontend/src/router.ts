@@ -18,13 +18,13 @@ const routes: RouteRecordRaw[] = [
   { path: '/resources', name: 'resources', component: () => import('./views/ViewResources.vue') },
   { path: '/models', redirect: { path: '/resources', query: { tab: 'model' } } },
   { path: '/soundfonts', redirect: { path: '/resources', query: { tab: 'soundfonts' } } },
+  // 调教：编辑器（选歌手 / 画音符 / 渲染）与声库（做 / 装 / 管）同页两页签。
   { path: '/singer', name: 'singer', component: () => import('./views/ViewSing.vue') },
-  // 声库：UTAU 声库制作与 DiffSinger 组件/声库的统一入口
-  { path: '/banks', name: 'banks', component: () => import('./views/ViewBanks.vue') },
-  // UTAU 与 DiffSinger 已合并为「歌声合成」板块：旧地址重定向过去并带上对应引擎，
-  // 老书签 / 外部链接继续可用（?tab=utau|diffsinger）
-  { path: '/utau', redirect: { path: '/singer', query: { tab: 'utau' } } },
-  { path: '/diffsinger', redirect: { path: '/singer', query: { tab: 'diffsinger' } } },
+  // 声库原为独立页，已并入「调教」；旧地址保留为重定向，老书签 / 外部链接继续可用。
+  { path: '/banks', redirect: { path: '/singer', query: { tab: 'banks' } } },
+  // UTAU 与 DiffSinger 早已合并为同一板块：旧地址重定向过去并带上对应引擎
+  { path: '/utau', redirect: { path: '/singer', query: { tab: 'editor' } } },
+  { path: '/diffsinger', redirect: { path: '/singer', query: { tab: 'editor' } } },
   { path: '/:pathMatch(.*)*', redirect: '/home' },
 ];
 

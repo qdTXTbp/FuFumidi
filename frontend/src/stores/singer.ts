@@ -106,6 +106,20 @@ export interface SingNote {
   gender?: number;       // -100..100（GENC）
   breath?: number;       // 0..100
 
+  /* ---- OpenUTAU 表达式（每音符，作用于该音符首个音素）----
+     取值口径与 OpenUTAU 的表达式表一致（engine_openutau.py 的 _EXPRESSION_SPECS）：
+       dyn  -240..120（音量曲线，默认 0）
+       atk  0..100（起音，默认 100）
+       dec  0..100（衰减，默认 100）
+       shft 0..100（音高偏移，默认 0）
+       clr  语音色选项下标，默认 0
+     不设 = 沿用轨道默认值，所以老工程不会被改味。 */
+  dyn?: number;
+  atk?: number;
+  dec?: number;
+  shft?: number;
+  clr?: number;
+
   /* ---- DiffSinger 侧 ---- */
   pitchOffset?: number;  // 音分偏移
 }
@@ -880,17 +894,31 @@ export const useSingerStore = defineStore('singer', {
       const dyn = curveOf(tr, 'DYN');
       const bre = curveOf(tr, 'BRE');
       const gen = curveOf(tr, 'GEN');
-      const notes = tr.notes.map(n => ({
-        startBeat: n.startBeat, durBeat: n.durBeat, pitch: n.pitch,
-        // UTAU 的 wavtool 需要一个 alias；空歌词会让引擎取不到采样
-        lyric: n.lyric || this.sampleNote || 'a',
-        vibrato: !!n.vibrato, vibDepth: n.vibDepth, vibFreq: n.vibFreq,
-        vibFade: n.vibFade || 0,
-        velocity: dyn ? valueForNote(dyn.points, n.startBeat, n.durBeat, 'DYN') : (n.velocity ?? 100),
-        volume: n.volume ?? 0,
-        gender: gen ? valueForNote(gen.points, n.startBeat, n.durBeat, 'GEN') : (n.gender ?? 0),
-        breath: bre ? valueForNote(bre.points, n.startBeat, n.durBeat, 'BRE') : (n.breath ?? 0),
-      }));
+      const notes = tr.notes.map(n => {
+        // ★ 每音符表达式：OpenUTAU 走「表达式体系」（vol/vel/dyn/atk/dec/shft/clr），
+        //   不解析旧引擎的 flags 字符串。只把**用户真正设过**的键发下去，
+        //   没设的留空 —— 引擎那边查不到就回落轨道默认值，老工程行为不变。
+        const expressions: Record<string, number> = {};
+        if (typeof n.velocity === 'number') expressions.vel = n.velocity;
+        if (typeof n.volume === 'number') expressions.vol = n.volume;
+        if (typeof n.dyn === 'number') expressions.dyn = n.dyn;
+        if (typeof n.atk === 'number') expressions.atk = n.atk;
+        if (typeof n.dec === 'number') expressions.dec = n.dec;
+        if (typeof n.shft === 'number') expressions.shft = n.shft;
+        if (typeof n.clr === 'number') expressions.clr = n.clr;
+        return {
+          startBeat: n.startBeat, durBeat: n.durBeat, pitch: n.pitch,
+          // UTAU 的 wavtool 需要一个 alias；空歌词会让引擎取不到采样
+          lyric: n.lyric || this.sampleNote || 'a',
+          vibrato: !!n.vibrato, vibDepth: n.vibDepth, vibFreq: n.vibFreq,
+          vibFade: n.vibFade || 0,
+          velocity: dyn ? valueForNote(dyn.points, n.startBeat, n.durBeat, 'DYN') : (n.velocity ?? 100),
+          volume: n.volume ?? 0,
+          gender: gen ? valueForNote(gen.points, n.startBeat, n.durBeat, 'GEN') : (n.gender ?? 0),
+          breath: bre ? valueForNote(bre.points, n.startBeat, n.durBeat, 'BRE') : (n.breath ?? 0),
+          ...(Object.keys(expressions).length ? { expressions } : {}),
+        };
+      });
       const r = await (bridge as any).utauRenderTrack({
         voicebank: tr.singer,
         notes,

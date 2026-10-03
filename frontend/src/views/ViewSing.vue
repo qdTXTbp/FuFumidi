@@ -7,9 +7,10 @@
  * 所以一个工程里两种轨可以混排，渲染时按各自引擎分派。
  */
 import { computed, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import PianoRoll from '../components/pianoroll/PianoRoll.vue';
+import VoicebankPanel from '../components/sing/VoicebankPanel.vue';
 import { t } from '../core/i18n.js';
 import { ENGINES, LANGUAGES, useSingerStore } from '../stores/singer';
 import { getTransport } from '../core/sing_transport.js';
@@ -18,7 +19,31 @@ import { CURVE_TARGETS, curveOf, defaultFor, targetsFor } from '../core/track_au
 
 const store = useSingerStore();
 const route = useRoute();
+const router = useRouter();
 const msg = ref('');
+
+/* ---------------------------------------------------------- 页签名
+ * 「调教」页把原来的「歌声合成」与「声库」两页并成一个：编辑器（选歌手 / 画音符 / 渲染）
+ * 与声库（做 / 装 / 管）本就是同一条工作流的两半，不再各占一个顶栏入口。
+ *
+ * ?tab= 取值（面板永远只有「编辑器 / 声库」两个页签）：
+ *   banks                → 声库页签（原 /banks 页）
+ *   utau / diffsinger    → 编辑器页签，并选中/新建该引擎的轨（合并前的旧深链）
+ *   其它 / 缺省 / editor → 编辑器页签 */
+type SingTab = 'editor' | 'banks';
+const tab = ref<SingTab>(route.query.tab === 'banks' ? 'banks' : 'editor');
+
+watch(() => route.query.tab, (v) => {
+  const want: SingTab = v === 'banks' ? 'banks' : 'editor';
+  if (want !== tab.value) tab.value = want;
+});
+
+function setTab(v: SingTab) {
+  tab.value = v;
+  // 用 path + query 直接替换：交给顶层 /:pathMatch 兜底，不依赖具体路由名
+  try { void router.replace({ path: '/singer', query: v === 'banks' ? { tab: 'banks' } : {} }); }
+  catch (_) { /* 路由不可用时忽略 */ }
+}
 const propsOpen = ref(false);
 const cands = ref([]);
 const candFor = ref('');
@@ -466,7 +491,23 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 </script>
 
 <template>
-  <div class="sing">
+  <div class="sing-page">
+    <!-- ==================== 页签：编辑器 / 声库 ====================
+         两页合并后入口只有一个（顶栏「调教」），这里切工作台的两半。
+         用 v-show 保留编辑器状态（卷帘滚动位置、选中音符）；声库面板按需挂载，进页即拉列表。 -->
+    <div class="sing-nav">
+      <button class="sn-tab" :class="{ on: tab === 'editor' }" data-guide="sing-tab-editor" @click="setTab('editor')">
+        <Icon name="edit" :size="13" /> {{ t('编辑器') }}
+        <i>{{ t('选歌手 · 画音符 · 渲染') }}</i>
+      </button>
+      <button class="sn-tab" :class="{ on: tab === 'banks' }" data-guide="sing-tab-banks" @click="setTab('banks')">
+        <Icon name="box" :size="13" /> {{ t('声库') }}
+        <i>{{ t('UTAU · DiffSinger · 组件') }}</i>
+      </button>
+      <span class="sp" />
+    </div>
+
+    <div class="sing" v-show="tab === 'editor'">
     <!-- ==================== 左：轨道列表 ==================== -->
     <aside class="trk">
       <div class="trk-head">
@@ -812,6 +853,25 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           @change="store.updateNote(sel.id, { gender: nval($event, 0) })" /></label>
         <label v-if="isUtau"><span>{{ t('气声') }}</span><input type="number" min="0" max="100" :value="sel.breath || 0"
           @change="store.updateNote(sel.id, { breath: nval($event, 0) })" /></label>
+
+        <!-- OpenUTAU 表达式（每音符，作用于该音符首个音素；不填 = 用轨道默认值） -->
+        <template v-if="isUtau">
+          <label :title="t('起音：音符开头的咬字力度，越小越柔和')"><span>{{ t('起音 ATK') }}</span>
+            <input type="number" min="0" max="100" placeholder="100" :value="sel.atk ?? ''"
+              @change="store.updateNote(sel.id, { atk: nval($event, 100) })" /></label>
+          <label :title="t('衰减：音符尾部的收束，越小收得越快')"><span>{{ t('衰减 DEC') }}</span>
+            <input type="number" min="0" max="100" placeholder="100" :value="sel.dec ?? ''"
+              @change="store.updateNote(sel.id, { dec: nval($event, 100) })" /></label>
+          <label :title="t('音量曲线偏移（-240 ~ 120），对应 OpenUTAU 的 dyn')"><span>{{ t('力度曲线 DYN') }}</span>
+            <input type="number" min="-240" max="120" placeholder="0" :value="sel.dyn ?? ''"
+              @change="store.updateNote(sel.id, { dyn: nval($event, 0) })" /></label>
+          <label :title="t('音高偏移量（0 ~ 100），对应 OpenUTAU 的 shft')"><span>{{ t('音高偏移 SHFT') }}</span>
+            <input type="number" min="0" max="100" placeholder="0" :value="sel.shft ?? ''"
+              @change="store.updateNote(sel.id, { shft: nval($event, 0) })" /></label>
+          <label :title="t('语音色选项下标（0 起），对应 OpenUTAU 的 clr；声库没有多语音色时保持 0')"><span>{{ t('语音色 CLR') }}</span>
+            <input type="number" min="0" step="1" placeholder="0" :value="sel.clr ?? ''"
+              @change="store.updateNote(sel.id, { clr: nval($event, 0) })" /></label>
+        </template>
       </div>
 
       <!-- 音高曲线（两边共用） -->
@@ -833,11 +893,29 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <p v-else class="muted small">{{ t('还没有曲线点。') }}</p>
       </div>
     </section>
+    </div>
+
+    <!-- ==================== 声库（原独立页并入同一入口） ==================== -->
+    <VoicebankPanel v-if="tab === 'banks'" class="sing-banks" />
   </div>
 </template>
 
 <style scoped>
-.sing { display: flex; height: 100%; min-height: 0; }
+/* ★ 实心底：壁纸开启时 .app-main 是透明的，这里必须自己铺不透明底 —— 否则乐谱/卷帘/
+   声库这些密集文字会直接压在动态壁纸上（改版前「声库页透明、读不清」的根因）。 */
+.sing-page { height: 100%; display: flex; flex-direction: column; min-height: 0;
+             background: var(--canvas); }
+.sing-nav { display: flex; align-items: center; gap: 8px; padding: 8px 14px; flex: none;
+            border-bottom: 1px solid var(--border); background: var(--canvas); }
+.sing-nav .sp { flex: 1; }
+.sn-tab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 13px; cursor: pointer;
+          border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+          color: var(--steel); font-size: 12.5px; }
+.sn-tab i { font-style: normal; font-size: 10.5px; opacity: .75; }
+.sn-tab:hover { border-color: var(--brand); color: var(--ink); }
+.sn-tab.on { border-color: var(--accent); background: var(--brand-soft); color: var(--ink); font-weight: 600; }
+.sing { flex: 1; min-height: 0; display: flex; }
+.sing-banks { flex: 1; min-height: 0; }
 
 /* ---- 左：轨道列表 ---- */
 .trk { width: 264px; flex: none; display: flex; flex-direction: column;

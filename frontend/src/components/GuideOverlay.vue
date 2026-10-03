@@ -67,11 +67,11 @@ const WELCOME_STEPS = computed(() => [
     ],
   },
   {
-    ic: 'utau', title: t('歌声合成：一个编辑器，两种引擎'),
+    ic: 'utau', title: t('调教：一个页面，编辑器 + 声库'),
     body: [
       t('引擎是「轨道」的属性，不是页面模式：同一条工程里 UTAU 轨与 DiffSinger 轨可以混排。'),
       t('每轨左侧选歌手与语言；点「渲染本轨」会按该轨的引擎自动分派，不需要来回切页面。'),
-      t('声库（UTAU 的 oto 制作 / DiffSinger 的组件与声库）统一在侧边栏「声库」里做，编辑器只负责选歌手。'),
+      t('同一页里两个页签：「编辑器」负责选歌手 / 画音符 / 渲染，「声库」负责做 / 装 / 管声库与推理组件 —— 边调边换歌手，不用跳页。'),
     ],
   },
   {
@@ -223,8 +223,10 @@ const CHAPTERS = computed(() => [
     ],
   },
   {
-    id: 'utau', ic: 'utau', name: t('歌声合成'), desc: t('轨道级引擎 · 导入 · 统一渲染'),
+    id: 'utau', ic: 'utau', name: t('调教'), desc: t('编辑器 + 声库 · 轨道级引擎 · 统一渲染'),
     steps: [
+      { parent: 'singer', selector: '[data-guide="sing-tab-editor"]', title: t('两个页签'),
+        desc: t('「调教」把编辑器与声库合成了一页：编辑器选歌手 / 画音符 / 渲染，声库做 / 装 / 管声库与推理组件。点这个页签随时来回切。'), manual: true },
       { parent: 'singer', selector: '[data-guide="sing-tracks"]', title: t('轨道列表'),
         desc: t('左侧就是工程的全部轨道。每轨自带引擎（UTAU / DiffSinger）、歌手与语言 —— 引擎在轨道上选，不是页面级切换。'), manual: true },
       { parent: 'singer', selector: '[data-guide="sing-project"]', title: t('工程文件'),
@@ -241,12 +243,12 @@ const CHAPTERS = computed(() => [
         desc: t('伴奏与**所有已渲染的声部轨**共用一个时钟同时起播（采样级同步）；每条轨可单独静音。'), manual: true },
       { parent: 'singer', selector: '[data-guide="sing-track-props"]', title: t('轨道属性'),
         desc: t('三块：参数（UTAU 的重采样器/波源工具，DiffSinger 的采样深度与步数）、效果链（本轨独享，从上到下就是信号流）、自动化子轨（PIT 与 DYN/BRE/GEN 改了要重渲，VOL/PAN 播放时实时生效）。'), manual: true },
-      { parent: 'banks', selector: '[data-guide="banks-installed"]', title: t('声库（两类混排）'),
-        desc: t('UTAU 声库与 DiffSinger 声库在同一张列表里，类型只作标签 —— 正在被轨道使用的会标注「使用中」。'), manual: true },
-      { parent: 'banks', selector: '[data-guide="banks-make"]', title: t('UTAU 声库制作'),
+      { parent: 'singer', tab: 'banks', selector: '[data-guide="banks-installed"]', title: t('声库（两类混排）'),
+        desc: t('切到「声库」页签：UTAU 声库与 DiffSinger 声库在同一张列表里，类型只作标签 —— 正在被轨道使用的会标注「使用中」。'), manual: true },
+      { parent: 'singer', tab: 'banks', selector: '[data-guide="banks-make"]', title: t('UTAU 声库制作'),
         desc: t('选一个音源文件自动切分成音节、批量标注 oto 参数，再导出 oto.ini 或压缩包。'), manual: true },
-      { parent: 'banks', selector: '[data-guide="banks-ds"]', title: t('DiffSinger 推理组件'),
-        desc: t('启用模块后才下载组件（未启用零占用）；GPU 加速也在这里一键安装。'), manual: true },
+      { parent: 'singer', tab: 'banks', selector: '[data-guide="banks-ds"]', title: t('DiffSinger 推理组件'),
+        desc: t('启用模块后才下载组件（未启用零占用）；GPU 加速也在这里一键安装。做完切回「编辑器」页签继续调教。'), manual: true },
     ],
   },
   {

@@ -244,6 +244,9 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 }
 .app-shell.wallpaper-on .app-main { background: transparent; }
 .app-shell.wallpaper-on { background: transparent; }
+/* 壁纸开启时 .app-main 透明：**下拉框的选项弹层**由浏览器自行绘制、不继承页面样式，
+   透明底会直接压在动态壁纸上、选项读不清。这里给原生控件一份实心兜底色。 */
+.app-shell.wallpaper-on select option { background: var(--canvas); color: var(--ink); }
 
 .app-main {
   grid-area: main;

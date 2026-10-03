@@ -25,10 +25,10 @@ const QUICK = [
   { ic: 'viz', title: t('视图'), sub: t('可视化 · 分析 · 乐谱'), view: 'views', soon: false },
   { ic: 'convert', title: t('转译'), sub: t('转录 · 转换'), view: 'transcode', soon: false },
   { ic: 'box', title: t('资源中心'), sub: t('模型 · 音色 · 资源'), view: 'resources', soon: false },
-  // ★ 下载进行中的进度弹窗会压在顶部导航上，从首页直接进这两个页面，
+  // ★ 下载进行中的进度弹窗会压在顶部导航上，从首页直接进这一页，
   //   就不必"先关弹窗再切页"。
-  { ic: 'utau', title: t('歌声合成'), sub: t('轨道 · 调教 · 渲染'), view: 'singer', soon: false },
-  { ic: 'mic', title: t('声库'), sub: t('UTAU · DiffSinger · 组件'), view: 'banks', soon: false },
+  // 「调教」= 编辑器（选歌手 / 画音符 / 渲染）+ 声库（UTAU / DiffSinger / 组件）同页两页签。
+  { ic: 'utau', title: t('调教'), sub: t('歌声合成 · 声库 · 渲染'), view: 'singer', soon: false },
 ];
 
 function go(v) { setView(v); }

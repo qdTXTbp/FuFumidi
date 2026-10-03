@@ -14,11 +14,10 @@ export const VIEWS = [
   { id: 'views', label: '视图', ic: 'viz' },
   { id: 'transcode', label: '转译', ic: 'convert' },
   { id: 'resources', label: '资源中心', ic: 'box' },
-  // UTAU 与 DiffSinger 合并为同一板块：同一条产品线的两种合成引擎，
-  // 内部用引擎切换（?tab=utau|diffsinger），顶栏不再占两个入口。
-  { id: 'singer', label: '歌声合成', ic: 'utau' },
-  // 声库：两类引擎的声库都在这里做（编辑器里只负责「选歌手」）
-  { id: 'banks', label: '声库', ic: 'box' },
+  // 调教：UTAU 与 DiffSinger 是同一条产品线的两种合成引擎（引擎是**轨道属性**），
+  // 声库（做 / 装 / 管）与编辑器（选歌手 / 画音符 / 渲染）也是同一条工作流的两半，
+  // 所以合成**一个**入口；页内在「编辑器 / 声库」两个页签之间切换（?tab=banks）。
+  { id: 'singer', label: '调教', ic: 'utau' },
 ];
 
 // 旧子视图 ID → 所属分组父视图，保留内部跳转（如“同步到乐谱”“打开播放”）
@@ -26,10 +25,10 @@ export const OLD_VIEW_TO_PARENT: Record<string, string> = {
   play: 'music', lyrics: 'music', edit: 'music',
   viz: 'views', analyze: 'views', score: 'views',
   transcribe: 'transcode', convert: 'transcode',
-  // 合并前的两个独立视图 → 统一落到「歌声合成」。
-  // 老跳转（setView('utau'|'diffsinger')）继续有效：统一编辑器会用 ?engine=
-  // 决定「首次进入时选中哪条轨 / 新建哪种轨」。
-  utau: 'singer', diffsinger: 'singer',
+  // 合并前的三个独立视图 → 统一落到「调教」。
+  // 老跳转（setView('utau'|'diffsinger'|'banks')）继续有效：调教页按 ?tab= 落到
+  // 编辑器或声库页签（banks → 声库；utau / diffsinger → 编辑器）。
+  utau: 'singer', diffsinger: 'singer', banks: 'singer',
 };
 
 export function viewParentOf(v: string): string {
@@ -1132,9 +1131,11 @@ export const useAppStore = defineStore('app', {
         try { const { player } = ensureAudio(); player.bumpAhead(); } catch (e) {}
       }
       this.view = viewParentOf(v);
-      // v 为旧子视图 id（play/lyrics/edit/viz/analyze/score/transcribe/convert）时，
-      // tab 应为该子视图 id 本身；OLD_VIEW_TO_PARENT 的值是父视图名，不能当 tab 用
-      const tab = OLD_VIEW_TO_PARENT[v] ? v : '';
+      // v 为旧子视图 id（play/lyrics/edit/viz/analyze/score/transcribe/convert，以及
+      // banks）时，tab 应为该子视图 id 本身；OLD_VIEW_TO_PARENT 的值是父视图名，不能当 tab 用。
+      // banks 是唯一「父视图名 ≠ tab 名」的特例：父视图叫 singer，tab 仍叫 banks，
+      // 调教页据此落在「声库」页签（见 ViewSing 的 tab 状态）。
+      const tab = v === 'banks' ? 'banks' : (OLD_VIEW_TO_PARENT[v] ? v : '');
       this.syncHash(tab);
     },
     setSidebarWidth(w: number) {

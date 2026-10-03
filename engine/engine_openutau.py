@@ -256,8 +256,21 @@ def build_part(project, track, notes, tpb=480):
     ★ UTAU 的 `flags`（`g`/`B`/`b`/`p`…）是**旧引擎自己的旋钮**，OpenUTAU 走的是
       表达式体系；这里**不解析** flags（照搬渲染链路，不做语义映射），需要时走音素化器
       或音高曲线表达。
+
+    ## 每音符表达式（对齐 OpenUTAU 的 Note.phonemeExpressions）
+
+    应用侧可以给每个音符带 `expressions`（`{abbr: 数值}`），取值对应 OpenUTAU 的表达式表
+    （`vol / vel / dyn / atk / dec / shft / clr`，见 `build_project` 里的 `_EXPRESSION_SPECS`）。
+    这些值落到**该音符的每个音素**上 —— 与上游一致：`UPhoneme.GetExpression` 先查
+    `note.phoneme_expressions` 里 `index == 该音素下标` 的项，查不到才回落到轨道默认值。
+
+    ★ 下标取值与上游一致：OpenUTAU 里**每个音符的音素下标从 0 开始**，宿主给的音符级
+      数值落在 index 0（首个音素，通常是元音）上 —— 见
+      `test_openutau_core_matches_source.py` 里 `part.notes[*].phoneme_indexes == [0]` 的断言。
+      本函数在音素化**之前**执行，所以按 `n['phoneme_indexes']` 预置该下标，缺省用 0；
+      调用方要精细到某个音素，传自己的下标列表即可。这样 `render_track` 之后不必再回填。
     """
-    from singing.ustx import (PitchPoint, UCurve, UNote, UPitch, UVibrato, UVoicePart)
+    from singing.ustx import (PitchPoint, UCurve, UExpression, UNote, UPitch, UVibrato, UVoicePart)
 
     axis = project.time_axis
     part = UVoicePart(track_no=0, position=0)
@@ -267,7 +280,7 @@ def build_part(project, track, notes, tpb=480):
 
     out = []
     cursor_ms = 0.0
-    for n in notes or []:
+    for note_i, n in enumerate(notes or []):
         if not isinstance(n, dict):
             continue
 
@@ -333,10 +346,32 @@ def build_part(project, track, notes, tpb=480):
         except Exception:                                   # noqa: BLE001
             vib = UVibrato()
 
+        # ---- 每音符表达式 → 该音符每个音素的 phoneme_expressions
+        #      识别不了的键静默跳过：表达式表由工程决定，前端多传了不该让整轨渲染失败。
+        exp_list = []
+        raw_exp = n.get('expressions')
+        if isinstance(raw_exp, dict):
+            raw_idx = n.get('phoneme_indexes')
+            # 缺省 0：上游每个音符的音素下标都从 0 起（宿主给的音符级数值落在首个音素上）
+            indexes = [int(i) for i in raw_idx] if isinstance(raw_idx, (list, tuple)) and raw_idx \
+                else [0]
+            for abbr, val in raw_exp.items():
+                desc = project.expressions.get(str(abbr))
+                if desc is None:
+                    continue
+                try:
+                    fv = float(val)
+                except (TypeError, ValueError):
+                    continue
+                for idx in indexes:
+                    exp_list.append(UExpression(index=int(idx), abbr=str(abbr),
+                                                descriptor=desc, _value=fv))
+
         out.append(UNote(position=position, duration=duration, tone=tone,
                          lyric=str(n.get('lyric') or ''),
                          pitch=UPitch(data=[PitchPoint(x=x, y=y) for x, y in pts]),
-                         vibrato=vib))
+                         vibrato=vib,
+                         phoneme_expressions=exp_list))
     part.notes.extend(out)
     return part
 
