@@ -10,7 +10,7 @@ export async function getAppVersion() {
       if (v) { _cached = 'v' + String(v).replace(/^v/i, ''); return _cached; }
     }
   } catch (e) { /* 忽略，走回退 */ }
-  _cached = 'v5.0.0-beta.1';
+  _cached = 'v5.0.0-beta.2';
   return _cached;
 }
 
