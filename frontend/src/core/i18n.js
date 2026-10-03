@@ -3007,6 +3007,10 @@ export const I18N_MAP = {
   '下一首': 'Next track',
   '上一首': 'Previous track',
   '切换播放模式': 'Cycle play mode',
+  '上一个歌单': 'Previous playlist',
+  '音符改过，渲染结果已过期 —— 点「渲染本轨」重渲才听得到': 'Notes changed — the rendered audio is stale. Re-render this track to hear it',
+
+  '下一个歌单': 'Next playlist',
 
   '右键歌单可管理 · 按数字 1~9 快速切换歌单': 'Right-click a playlist to manage · press 1-9 to switch playlists',
   '快捷键 ': 'Shortcut ',

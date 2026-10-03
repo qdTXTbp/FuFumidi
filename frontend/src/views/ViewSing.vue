@@ -703,7 +703,10 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
                       @change="store.patchTrack(x.id, { language: sval($event) })">
                 <option v-for="L in LANGUAGES" :key="L.code" :value="L.code">{{ L.label }}</option>
               </select>
-              <span v-if="store.renderByTrack[x.id]" class="rdy"
+              <!-- 渲染状态：已渲染 ● / 已过期 ⚠（音符改过，听到的还是上一版） -->
+              <span v-if="store.renderByTrack[x.id] && store.staleRenderIds.includes(x.id)" class="rdy stale"
+                    :title="t('音符改过，渲染结果已过期 —— 点「渲染本轨」重渲才听得到')">⚠</span>
+              <span v-else-if="store.renderByTrack[x.id]" class="rdy"
                     :title="t('已渲染，播放时会一起响')">●</span>
               <label class="ck" :title="t('静音')">
                 <input type="checkbox" :checked="!!x.muted" @change="onMuteVoice(x, $event)" />
@@ -1100,6 +1103,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .se-acts { display: flex; gap: 6px; flex-wrap: wrap; }
 .edt-msg.hint { color: var(--stone); }
 .edt-prog-wrap { display: flex; align-items: center; gap: 10px; padding: 4px 2px; }
+.trk-item .rdy.stale { color: var(--brand-coral); font-weight: 700; }
 .edt-prog-wrap .edt-prog { flex: 1; }
 .sing { flex: 1; min-height: 0; display: flex; }
 .sing-banks { flex: 1; min-height: 0; }

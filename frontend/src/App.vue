@@ -345,8 +345,23 @@ function setupGlobalHotkeys() {
       else if (act === 'next') { void playNeighbor(1); synthesizeKey('n'); }
       else if (act === 'prev') { void playNeighbor(-1); synthesizeKey('p'); }
       else if (act === 'cycleMode') { state.cyclePlayMode(); synthesizeKey('o'); }
+      else if (act === 'plPrev') stepPlaylist(-1);
+      else if (act === 'plNext') stepPlaylist(1);
     } catch (e) { /* 全局热键不该因为某个动作报错就死掉 */ }
   });
+}
+
+/** 在自建歌单之间走一步（全局热键用）；虚拟视图（全部曲目/收藏…）下从第一个歌单开始 */
+function stepPlaylist(dir) {
+  const list = playlistStore.playlists || [];
+  if (!list.length) return;
+  const cur = list.findIndex((p) => p.id === playlistStore.activePlaylistId);
+  const next = cur < 0
+    ? (dir > 0 ? 0 : list.length - 1)
+    : (cur + dir + list.length) % list.length;
+  playlistStore.select(list[next].id);
+  app.setView('music');
+  app.toast(list[next].name, 'ok');
 }
 
 function synthesizeKey(k) {

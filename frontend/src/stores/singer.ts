@@ -265,6 +265,22 @@ let _lastBytes: Uint8Array | null = null;
 /** 撤销栈深度上限：50 步足够覆盖一次编辑会话，也不会让快照吃内存（纯 JSON 字符串）。 */
 const HISTORY_MAX = 50;
 
+/**
+ * 音符指纹 —— 判断"渲染结果是否已过期"。
+ * 只看**会影响声音**的字段（起止/音高/歌词/颤音/表情），改轨名、静音这类不算。
+ * 不追求密码学强度：它只用来提示"要不要重渲"，不是校验和。
+ */
+function noteSignature(notes: any[]): string {
+  let h = 0;
+  for (const n of notes || []) {
+    const s = [n.startBeat, n.durBeat, n.pitch, n.lyric || '', n.velocity ?? '', n.volume ?? '',
+      n.gender ?? '', n.breath ?? '', n.dyn ?? '', n.atk ?? '', n.dec ?? '', n.shft ?? '', n.clr ?? '',
+      n.vibrato ? 1 : 0, n.vibDepth ?? '', n.vibFreq ?? ''].join('|');
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  }
+  return notes.length + ':' + (h >>> 0);
+}
+
 /** 取最近一次渲染的 wav 字节（导出用）。 */
 export function getLastWavBytes(): Uint8Array | null { return _lastBytes; }
 
@@ -294,6 +310,8 @@ export const useSingerStore = defineStore('singer', {
     sampleNote: 'a' as string,
     /** 渲染产物的可播放 URL（两个引擎共用） */
     renderUrl: '' as string,
+    /** 渲染当时该轨的音符指纹（用于"渲染已过期"提示，见 staleRenderIds） */
+    renderSig: '' as string,
     /* ---- 工程文件（.fufumidi 自包含包）---- */
     /** 当前工程路径；空 = 还没保存过（此时"保存"会走另存为对话框） */
     projectPath: '' as string,
@@ -322,6 +340,21 @@ export const useSingerStore = defineStore('singer', {
   }),
 
   getters: {
+    /**
+     * 渲染结果是否**已过期**（音符/歌词在渲染之后被改过）。
+     *
+     * 以前没有任何标记：改了音符再播放，听到的还是上一次渲染的音频，
+     * 用户只会觉得"调了没反应"。这里按"渲染当时的音符指纹"比对。
+     */
+    staleRenderIds(state): string[] {
+      const out: string[] = [];
+      for (const t0 of state.tracks) {
+        if (!state.renderByTrack[t0.id]) continue;
+        if (t0.renderSig && t0.renderSig !== noteSignature(t0.notes)) out.push(t0.id);
+      }
+      return out;
+    },
+
     /** 是否可撤销 / 可重做（工具条按钮的禁用态用） */
     canUndo(state): boolean { return state.history.length > 0; },
     canRedo(state): boolean { return state.future.length > 0; },
@@ -961,7 +994,12 @@ export const useSingerStore = defineStore('singer', {
           ? r.bytes : new Uint8Array(r.bytes as any);
         _lastBytes = bytes;
         // ★ 按轨道留一份 —— 多轨同时播放就靠这里（只留"最后一份"等于渲一条顶一条）
-        if (trackId) this.renderByTrack[trackId] = bytes;
+        if (trackId) {
+          this.renderByTrack[trackId] = bytes;
+          // 记下"这一版是拿什么音符渲出来的"，之后改音符就能提示"渲染已过期"
+          const t0 = this.tracks.find((x) => x.id === trackId);
+          if (t0) t0.renderSig = noteSignature(t0.notes);
+        }
         if (this.renderUrl) { try { URL.revokeObjectURL(this.renderUrl); } catch (_) { /* 已失效 */ } }
         this.renderUrl = URL.createObjectURL(
           new Blob([bytes.buffer as ArrayBuffer], { type: 'audio/wav' }));

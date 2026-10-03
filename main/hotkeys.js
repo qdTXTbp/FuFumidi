@@ -20,6 +20,9 @@ const HOTKEY_ACTIONS = [
   { id: 'next', label: '下一首', fallback: 'MediaNextTrack' },
   { id: 'prev', label: '上一首', fallback: 'MediaPreviousTrack' },
   { id: 'cycleMode', label: '切换播放模式', fallback: 'MediaStop' },
+  // 歌单切换：在用户的歌单之间循环（与数字键 1~9 直达互补）
+  { id: 'plPrev', label: '上一个歌单', fallback: 'Control+Alt+Left' },
+  { id: 'plNext', label: '下一个歌单', fallback: 'Control+Alt+Right' },
 ];
 
 /** 设置里持久化的形状：{ [actionId]: { accel: string, enabled: boolean } } */
