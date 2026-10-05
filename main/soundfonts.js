@@ -30,7 +30,7 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
   //   "raw file size xxx MiB exceeded 100 MiB"）
   // 所以凡是需要 raw 直读的文件都必须 ≤100 MiB；超限的一律作为 Release 资产（对象存储）分发。
   const CNB_SF_RELEASE_FILES = new Set([
-    'Salamander_Grand_Piano_SF2_V3_20200602.sf2',   // 1.18GB
+    'Salamander_Grand_Piano_SF2_V3_20200602_6L.sf2', // 449.7MB（6 力度层精简版）
     'FluidR3_GM.sf2',                                // 141.5MB
     'Arachno_SoundFont_Version_1.0.sf2',             // 148.2MB
   ]);
@@ -204,29 +204,32 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
     {
       // Salamander：上游 FreePats 只分发 tar.xz 压缩包（工具内无法解包）且无 GitHub 托管的
       // 裸 SF2 → 解包后随自家 soundfonts-v1 Release（prerelease）分发，CC-BY-3.0 允许再分发。
+      //
+      // ★ 为什么是 6 力度层而不是原始 16 层（2026-10-04）：
+      //   原始 SF2 是 1.18GB。本应用的合成器是 libfluidsynth 的 **wasm** 构建，
+      //   emscripten 把堆上限写死在 2GiB（vendor 里的 getHeapMax），而载入一个大音色
+      //   需要同时容纳：MEMFS 副本 + FluidSynth 解码后的采样数据 —— 1.18GB 无论如何塞不进，
+      //   所以它在应用里**结构上不可用**（不是上限设小了）。
+      //   用 scripts/sf2-subset.py 保留全部 30 个采样键（覆盖 88 键音域）与 48kHz/16bit
+      //   原始采样，只把 16 个力度层抽成 6 个，并把丢掉力度区间并给相邻保留层
+      //   （1..127 每个力度都有声音）。体积降到 449.7MB，实测在 wasm 里 0.9 秒载入、
+      //   实时播放与离线导出都正常。
       id: 'salamander',
       name: 'Salamander Grand Piano',
-      version: '3+20200602',
-      desc: '单件三角钢琴多力度采样音色（Yamaha C5，16 力度层），专为钢琴曲目设计，音色纯净自然。',
-      // ★ 真实大小 1.18GB（见本文件顶部清单注释与 `core/synth.js:512`）。
-      //   早先错写成 310MB —— 那个数字**小于** `file:readSoundFont` 的 512MB 上限，
-      //   于是界面不会提示"超限"，用户下完 1.18GB 才在「启用」时撞上
-      //   「无法读取音色文件」，看不出真实原因。
-      size: 1180000000,
+      version: '3+20200602 (6 力度层)',
+      desc: '单件三角钢琴多力度采样音色（Yamaha C5，原始 16 力度层精简为 6 层，48kHz 采样未改动），专为钢琴曲目设计，音色纯净自然。',
+      // 真实大小 471,555,050 B（449.7MB）；上限 512MB，留了余量
+      size: 471555050,
+      // minSize 取略小于真实值的整数：截断到 400MB 的坏文件不该被判成“已下载完整”
+      minSize: 440000000,
       license: 'CC BY 3.0（使用需署名原钢琴录音艺术家）',
-      // ★ minSize 也要跟着改：1.2e8（120MB）对 1.18GB 的文件太低，
-      //   截断到 200MB 的坏文件也会被判成"已下载完整"。
-      minSize: 1100000000,
-      // ★ 超出立体声合成的加载上限 → 界面据此**明确禁用**「启用」并说明原因，
-      //   而不是让用户点下去只看到一句无从下手的报错。
-      overLimit: true,
       fromRepo: null,
       repoFile: null,
       bundledPath: null,
       urls: [
-        'https://gh.jasonzeng.dev/https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Salamander_Grand_Piano_SF2_V3_20200602.sf2',
-        'https://ghfast.top/https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Salamander_Grand_Piano_SF2_V3_20200602.sf2',
-        'https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Salamander_Grand_Piano_SF2_V3_20200602.sf2',
+        'https://gh.jasonzeng.dev/https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Salamander_Grand_Piano_SF2_V3_20200602_6L.sf2',
+        'https://ghfast.top/https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Salamander_Grand_Piano_SF2_V3_20200602_6L.sf2',
+        'https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Salamander_Grand_Piano_SF2_V3_20200602_6L.sf2',
       ],
     },
 

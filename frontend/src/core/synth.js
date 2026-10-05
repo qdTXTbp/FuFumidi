@@ -509,8 +509,11 @@ export class Synth {
     const buf = await this._readSf2Buffer(source);
     if (!buf) { this.clearSf2(); return { ok: false, using: 'internal', error: t('无法读取音色文件') }; }
     // 大音色解析时会在主线程占用一小段时间；上限与主进程 file:readSoundFont 一致(512MB)。
-    // 覆盖店内可下载的 FluidR3/Arachno(~141MB)、SGM(~300MB)；更大的（如 1.2GB Salamander）
-    // 会在读取阶段被主进程拒掉（buf 为 null 走上方“无法读取音色文件”），不会整包塞进 JS 合成器。
+    // 覆盖店内可下载的 FluidR3/Arachno(~141MB)、SGM(~300MB) 与 6 力度层的 Salamander(449.7MB)。
+    // ★ 这个上限的真正原因是 FluidSynth 是 wasm 构建、堆上限 2GiB：更大的音色在 FluidSynth
+    //   解码采样时就会爆堆（MEMFS 副本 + 解码数据 ≈ 2 倍文件体积），在音频线程上会直接崩。
+    //   所以宁可在这里明确拒绝，也不要塞进合成器后崩；要发更大的音色必须先做子集（见
+    //   scripts/sf2-subset.py，Salamander 就是这么从 1.18GB 降到 449.7MB 的）。
     const MAX_SF2 = 512 * 1024 * 1024;
     if (buf.byteLength > MAX_SF2) {
       this.clearSf2();
