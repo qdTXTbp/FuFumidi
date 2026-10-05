@@ -158,14 +158,17 @@ def load_singer(vb_dir):
     char_txt = os.path.join(vb_dir, 'character.txt')
     bank = Voicebank()
     bank.base_path = vb_dir
-    if os.path.isfile(char_txt):
-        bank.file = char_txt
-        VoicebankLoader.load_info(bank, char_txt, vb_dir)
-        VoicebankLoader.load_subbanks(bank)
-        VoicebankLoader.load_oto_sets(bank, vb_dir)
-    else:
-        bank.file = ''
-        VoicebankLoader.load_oto_sets(bank, vb_dir)
+    # ★ 统一入口（2026-10-06）：`bank.file` 一律指向 character.txt，**存不存在都走同一条路**。
+    #   旧实现给不存在的分支留了 `bank.file = ''`，于是 `ClassicSinger.reload()` →
+    #   `Voicebank.reload()` → `load_info('')` 抛 FileNotFoundError，最后报成
+    #   「声库加载失败（oto 表为空？）」—— 没有 character.txt 的声库直接不可用。
+    #   缺文件的情况由 `parse_character_txt` 兜底（只跳过读文件）。
+    bank.file = char_txt
+    VoicebankLoader.load_info(bank, char_txt, vb_dir)
+    VoicebankLoader.load_subbanks(bank)
+    VoicebankLoader.load_oto_sets(bank, vb_dir)
+    if not (bank.name or '').strip():
+        bank.name = os.path.basename(os.path.normpath(vb_dir))   # 无 character.txt 时用目录名当显示名
     singer = adjust_singer_type(bank)
     if singer is None:
         raise ValueError('声库无法识别歌手类型：%s' % vb_dir)

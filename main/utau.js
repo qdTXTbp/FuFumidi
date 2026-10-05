@@ -163,7 +163,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
     const { voicebank, query, limit } = cfg || {};
     try {
       if (!voicebank) return resolve({ ok: false, error: '未选择声库' });
-      const args = ['aliases', '--voicebank', String(voicebank), '--limit', String(Math.max(1, Math.min(2000, Number(limit) || 300)))];
+      const args = ['aliases', '--voicebank', String(voicebank), '--limit', String(Math.max(1, Math.min(5000, Number(limit) || 300)))];
       if (query) args.push('--query', String(query));
       spawnEngine(args, {
         script: 'engine_utau.py',
@@ -171,6 +171,32 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
           if (r && r.result && r.result.ok) return resolve(r.result);
           const err = (r && r.result && r.result.error)
             || (r && (r.err || r.out || '').slice(-400))
+            || `引擎退出码 ${code}`;
+          resolve({ ok: false, error: err });
+        },
+        onError: (e) => resolve({ ok: false, error: String(e) }),
+      });
+    } catch (err) {
+      resolve({ ok: false, error: String((err && err.message) || err) });
+    }
+  }));
+
+  // 汉字 → 拼音（P1-15）：UTAU 中文声库的别名就是拼音，工具里必须有这一步，
+  // 否则用户得自己把「不爱的」转成「bu ai de」再填 —— 实测就是这么过来的。
+  ipcMain.handle('sing:toPinyin', (evt, cfg) => new Promise((resolve) => {
+    const tokens = (cfg && Array.isArray(cfg.tokens)) ? cfg.tokens.map((x) => String(x)) : null;
+    const text = (cfg && typeof cfg.text === 'string') ? cfg.text : null;
+    if (!tokens && text === null) return resolve({ ok: false, error: '缺少 tokens / text' });
+    if (tokens && tokens.length > 4000) return resolve({ ok: false, error: '一次最多 4000 个 token' });
+    try {
+      const args = tokens ? ['--tokens', JSON.stringify(tokens)] : ['--text', text];
+      spawnEngine(args, {
+        script: 'engine_pinyin.py',
+        timeoutMs: 60 * 1000,
+        onDone: (code, r) => {
+          if (r && r.result && r.result.ok) return resolve(r.result);
+          const err = (r && r.result && r.result.error)
+            || (r && (r.err || r.out || '').slice(-300))
             || `引擎退出码 ${code}`;
           resolve({ ok: false, error: err });
         },

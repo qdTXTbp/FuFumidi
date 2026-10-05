@@ -59,6 +59,9 @@ const TOP = props.top;
 
 const rowH = ref(props.rowHeight);   // 行高（音高半音），可被工具栏 ↕ 切换
 const noteW = ref(props.beatWidth);  // 每拍像素（缩放）
+/* 缩放上下限：下限要能装下整首歌的总览（见 fitView），上限够看清 1/32 音符 */
+const MIN_NOTE_W = 1.2;
+const MAX_NOTE_W = 160;
 const scrollX = ref(0);
 const canvas = ref(null);
 const wrap = ref(null);
@@ -430,7 +433,7 @@ function closeCtx() { ctxOpen.value = false; }
 function onWheel(e) {
   if (e.ctrlKey || e.metaKey) {
     e.preventDefault();
-    noteW.value = Math.max(12, Math.min(120, noteW.value * (e.deltaY < 0 ? 1.12 : 0.89)));
+    noteW.value = Math.max(MIN_NOTE_W, Math.min(MAX_NOTE_W, noteW.value * (e.deltaY < 0 ? 1.12 : 0.89)));
     nextTick(draw);
   } else if (e.shiftKey) {
     e.preventDefault();
@@ -1075,11 +1078,32 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKey); });
 
 /* 供宿主（如 UTAU 工作台的自定义车道）对齐几何与滚动：
    车道画布用 xOf/beatOf 换算、读 wrap 同步横向滚动即可 */
+/**
+ * 适应窗口：横向把全曲塞进可视宽度、纵向把音域铺满可视高度。
+ *
+ * ★ 为什么需要：卷帘默认 noteW 是固定值，一首 4 分钟的歌画出来有 13000+ px 宽，
+ *   而视口只有 1200 多 px —— 导入后用户看到的是「音符不全」（其实是要横向滚 10 屏），
+ *   旧工具栏只有 −/＋ 两个按钮，没有任何「一键看全」的入口。
+ */
+function fitView() {
+  const el = wrap.value;
+  if (!el) return;
+  const availW = Math.max(160, el.clientWidth - LEFT - 12);
+  /* 下限放到 1.2 px/拍：4 分钟的歌有近 400 拍，6 px/拍下限会让「适应窗口」根本装不下
+     （实测 390 拍 × 6 = 2340 px，视口只有 625 px）。缩到 1~2 px/拍是**总览**该有的密度。 */
+  noteW.value = Math.max(MIN_NOTE_W, Math.min(MAX_NOTE_W, availW / Math.max(1, totalBeats.value)));
+  const availH = Math.max(60, el.clientHeight - TOP - 10);
+  rowH.value = Math.max(5, Math.min(22, availH / Math.max(1, rows.value)));
+  el.scrollLeft = 0;
+  nextTick(() => { setupCanvas(); draw(); });
+}
+
 defineExpose({
   draw, setupCanvas,
   noteW, rowH, pitchSpan, totalBeats,
   xOf, beatOf, yOf, pitchOf,
   scrollEl: wrap,
+  fitView,
 });
 </script>
 
@@ -1119,9 +1143,10 @@ defineExpose({
         </select>
       </label>
       <span class="pr-zoom">
-        <button class="pr-mini" :title="t('缩小')" @click="noteW = Math.max(12, noteW * 0.85)">−</button>
-        <button class="pr-mini" :title="t('放大')" @click="noteW = Math.min(120, noteW * 1.18)">+</button>
+        <button class="pr-mini" :title="t('缩小')" @click="noteW = Math.max(MIN_NOTE_W, noteW * 0.85)">−</button>
+        <button class="pr-mini" :title="t('放大')" @click="noteW = Math.min(MAX_NOTE_W, noteW * 1.18)">+</button>
         <button class="pr-mini" :title="t('行高')" @click="rowH = rowH >= 18 ? 12 : rowH + 3">↕</button>
+        <button class="pr-mini" :title="t('适应窗口（全曲入画）')" @click="fitView">⤢</button>
       </span>
       <span class="pr-hint">{{ t('滚轮+Ctrl 缩放 · Shift+滚轮 平移 · 双击改歌词 · 方向键微调 · Ctrl+Z 撤销') }}</span>
     </div>

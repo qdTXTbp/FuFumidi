@@ -113,7 +113,11 @@ class OtoEntry:
     def __init__(self, filename, alias, offset, consonant, blank,
                  preutterance, overlap):
         self.filename = filename
-        self.alias = alias or filename
+        # ★ 别名缺省 = 文件名**去掉扩展名**（UTAU 的约定）。
+        #   旧实现用 `alias or filename` → 别名变成 "a.wav"，于是：
+        #   1) 界面拿 aliases 列表去校验歌词时，"a" 全被判成"不在别名表里"（整轨误报）；
+        #   2) 用户照抄 "a.wav" 当歌词时，渲染出来的音节也对不上。
+        self.alias = alias or os.path.splitext(filename)[0]
         self.offset = offset
         self.consonant = consonant
         self.blank = blank
@@ -924,6 +928,59 @@ def _cons_scale(velocity, flags):
     return s
 
 
+_MIDI_NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+
+
+def midi_to_note_name(midi) -> str:
+    """MIDI 音高号 → 音名（60 → C4）。"""
+    m = int(round(float(midi)))
+    return "%s%d" % (_MIDI_NOTE_NAMES[m % 12], m // 12 - 1)
+
+
+def normalize_track_notes(notes, bpm: float = 120.0):
+    """把音符归一成引擎原生 schema（音名 + 毫秒），返回 (音符列表, warnings)。
+
+    两种 schema 都接受：
+      * 原生：``{lyric, note: "C4", length_ms, vibrato: {...}, ...}``
+      * 拍系：``{lyric, pitch: 60, startBeat, durBeat, vibrato: true, vibDepth, vibFreq}``
+        —— 调教页下发的就是这个（配合 ``--bpm`` 换算时长）。
+
+    ★ 为什么要在这里做：调教页只发拍系字段，旧引擎只认音名/毫秒，
+      两边不一致时回落引擎会直接 ``KeyError: 'note'`` —— 也就是
+      「主引擎失败自动回落」那条路从来没通过。归一放在引擎入口，
+      不管哪个调用方来都能兜住。
+    """
+    out = []
+    warnings = []
+    spb = 60.0 / max(1.0, float(bpm or 120.0))          # 每拍秒数
+    saw_positions = False
+    for nd in notes:
+        if not isinstance(nd, dict):
+            raise ValueError("音符应为对象：%r" % (nd,))
+        n = dict(nd)
+        if "note" not in n:
+            if n.get("pitch") is None:
+                raise ValueError("音符缺少 note / pitch 字段：%r" % (sorted(nd),))
+            n["note"] = midi_to_note_name(n["pitch"])
+        if "length_ms" not in n:
+            if n.get("durBeat") is not None:
+                n["length_ms"] = max(1.0, float(n["durBeat"]) * spb * 1000.0)
+            else:
+                n["length_ms"] = 500.0
+        if n.get("startBeat") is not None:
+            saw_positions = True
+        vib = n.get("vibrato")
+        if isinstance(vib, bool):                       # 调教页：bool + vibDepth/vibFreq/vibFade
+            n["vibrato"] = ({"depth_cent": float(n.get("vibDepth", 35.0)),
+                             "freq_hz": float(n.get("vibFreq", 5.5)),
+                             "fade_ms": float(n.get("vibFade", 0.0))} if vib else None)
+        out.append(n)
+    if saw_positions:
+        warnings.append("本引擎按顺序拼接音符、不保留 startBeat：休止与复音会被压成依次演唱；"
+                        "需要严格对齐请用 OpenUTAU 引擎")
+    return out, warnings
+
+
 def render_track(vb, notes, sample_note="C4", sr=SAMPLE_RATE, strict=False):
     """渲染多音节音轨：按 preutterance 对齐音符起点 + overlap 等功率交叉淡化拼接。
 
@@ -1197,8 +1254,10 @@ def cmd_render_track(args):
         if not isinstance(notes, list) or not notes:
             raise ValueError("音符列表为空或格式错误（应为 JSON 数组）")
 
+        notes, schema_warnings = normalize_track_notes(notes, args.bpm)
         buf, warnings = render_track(vb, notes, sample_note=args.sample_note,
                                      strict=args.strict)
+        warnings = schema_warnings + list(warnings)
 
         import soundfile as sf
         os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
@@ -1355,6 +1414,8 @@ def build_parser():
 
     t = sub.add_parser("render-track", help="渲染多音节音轨为 WAV")
     t.add_argument("--voicebank", required=True, help="音源目录（含 oto.ini）")
+    t.add_argument("--bpm", type=float, default=120.0,
+                   help="每分钟拍数（音符用 startBeat/durBeat 表示时用于换算时长）")
     t.add_argument("--notes", required=True,
                    help="音符 JSON 数组（或以 @ 开头的 JSON 文件路径）")
     t.add_argument("--sample-note", default="C4", help="音源录制音高")

@@ -263,7 +263,11 @@ export function makeNote(track: SingTrack, startBeat: number, pitch: number): Si
   };
   if (track.engine === 'utau') {
     base.velocity = 100;
-    base.volume = 0;
+    /* ★ volume 默认必须是 100（引擎的"不改变"值），不能是 0：
+       0 会被引擎当成"音量乘 0" → **整轨静音**。
+       实测：导入 275 个音符、渲染成功（ok:true）却得到 244 秒纯静音，
+       根因就是这里默认 0 + 下发时把 0 一起发给了引擎。 */
+    base.volume = 100;
     base.params = {};
   } else {
     base.pitchOffset = 0;
@@ -1183,7 +1187,9 @@ export const useSingerStore = defineStore('singer', {
         const velocity = dyn ? valueForNote(dyn.points, n.startBeat, n.durBeat, 'DYN') : n.velocity;
         if (typeof velocity === 'number') { raw.velocity = velocity; expressions.vel = velocity; }
         const volume = vol ? valueForNote(vol.points, n.startBeat, n.durBeat, 'VOL') : n.volume;
-        if (typeof volume === 'number') { raw.volume = volume; expressions.vol = volume; }
+        /* ★ volume=0 一律当成"没设"：0 是"乘 0"（静音），而界面里 0 只是"没调过"的占位。
+           老工程里存着 volume:0 的音符因此也能正常出声。 */
+        if (typeof volume === 'number' && volume > 0) { raw.volume = volume; expressions.vol = volume; }
         const breath = bre ? valueForNote(bre.points, n.startBeat, n.durBeat, 'BRE') : n.breath;
         if (typeof breath === 'number') { raw.breath = breath; expressions.bre = breath; }
         const genderUi = gen ? valueForNote(gen.points, n.startBeat, n.durBeat, 'GEN') : n.gender;

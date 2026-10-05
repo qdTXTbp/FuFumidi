@@ -532,12 +532,16 @@ function onSingKey(e: KeyboardEvent) {
   const el = e.target as HTMLElement | null;
   const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
   const mod = e.ctrlKey || e.metaKey;
-  if (mod && !typing && e.key.toLowerCase() === 'z') {
+  /* ★ 卷帘自己也监听 window.keydown（PianoRoll.onKey），撤销/重做两边都会响应 →
+     一次 Ctrl+Z 走两步历史：实测「导入 713 音符 → 批量填词 → Ctrl+Z」直接变成 0 音符。
+     这里让出这几组键：焦点在卷帘里时归卷帘管，其余情况归本页管。 */
+  const inRoll = !!el && typeof (el as any).closest === 'function' && !!(el as any).closest('.pr');
+  if (mod && !typing && !inRoll && e.key.toLowerCase() === 'z') {
     e.preventDefault();
     if (e.shiftKey) store.redo(); else store.undo();
     return;
   }
-  if (mod && !typing && e.key.toLowerCase() === 'y') { e.preventDefault(); store.redo(); return; }
+  if (mod && !typing && !inRoll && e.key.toLowerCase() === 'y') { e.preventDefault(); store.redo(); return; }
   if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); void saveProject(false); return; }
   if (typing) return;
   if (e.key === ' ') { e.preventDefault(); void tplay(); return; }
@@ -685,10 +689,256 @@ function applyPicked(midiTrack: any, tpb: number, bpm: number) {
     target = store.tracks.find(x => x.id === id) || null;
   }
   if (!target) { sayErr(t('无法创建轨道'), t('先去左侧「新建轨」建一条声部轨，再导入 MIDI。')); return; }
-  const n = store.applyMidiTrack(target.id, midiTrack, tpb, bpm, true);
+  const useTrack = monoPick.value && overlapCount(midiTrack) > 0
+    ? { ...midiTrack, notes: monophonic(midiTrack.notes) }
+    : midiTrack;
+  const n = store.applyMidiTrack(target.id, useTrack, tpb, bpm, true);
   store.patchTrack(target.id, { name: target.name || midiTrack.name || '' });
   midiPick.value = null;
   say(t('已导入 ') + String(n) + t(' 个音符'), 'ok', { hint: t('下一步：选歌手 → 渲染。') });
+  fitRollSoon();
+}
+
+/* ------------------------------------------------------------ 单音化（P1-6） */
+
+/**
+ * MIDI 导入时「只取最高音」。
+ *
+ * ★ 实测教训：`烦恼歌.mid` 里名为 voice 的轨其实是柱式和弦（713 音符、465 处同时发声），
+ *   原样导入后每个 tick 上有 3~4 个音同时唱一个歌词 —— 必然糊。旋律线通常在最高声部，
+ *   所以给一个一键单音化；默认开（复音轨本来就不该直接拿去唱）。
+ */
+const monoPick = ref(true);
+
+/** 同一 tick 同时响的"多余"音符数（>0 即说明这是复音轨） */
+function overlapCount(mt: any): number {
+  const seen = new Set<number>();
+  let dup = 0;
+  for (const n of (mt && mt.notes) || []) {
+    if (seen.has(n.start)) dup++; else seen.add(n.start);
+  }
+  return dup;
+}
+
+/** 单音化：同一 start 只留最高音，再按时间排序 */
+function monophonic(notes: any[]): any[] {
+  const best = new Map<number, any>();
+  for (const n of notes || []) {
+    const cur = best.get(n.start);
+    if (!cur || n.midi > cur.midi) best.set(n.start, n);
+  }
+  return [...best.values()].sort((a, b) => a.start - b.start);
+}
+
+/** 导入后把卷帘缩放到"全曲入画"，否则 4 分钟的歌要横向滚十几屏（用户报的"音符显示不全"） */
+function fitRollSoon() {
+  setTimeout(() => {
+    try { prRef.value?.fitView?.(); } catch (_) { /* 卷帘还没挂载就算了 */ }
+  }, 120);
+}
+
+/* ------------------------------------------------------------ 批量填词对话框（P1-7/8） */
+
+type LyricMode = 'auto' | 'char' | 'space' | 'line';
+type FillMode = 'seq' | 'loop' | 'trim';
+const lyricDlg = ref<{ text: string; mode: LyricMode; fill: FillMode } | null>(null);
+const pinyinBusy = ref(false);
+
+const CJK_RE = /[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/;
+const isWordChar = (c: string) => /[0-9A-Za-z\u00C0-\u024F\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/.test(c);
+
+/**
+ * 歌词分词。
+ *
+ * ★ 旧实现只有 `split(/\\s+/)` 一条规则：把中文歌词整段粘进去 = **一个词**，
+ *   于是 713 个音符每个都被填上整段歌词（实测提示「已批量填词：1 个词 → 713 个音符」）；
+ *   粘整首（带换行）则是每行一个词。中文歌词必须能逐字切。
+ */
+function tokenizeLyrics(text: string, mode: LyricMode): string[] {
+  const s = String(text || '');
+  if (mode === 'space') return s.trim().split(/\s+/).filter(Boolean);
+  if (mode === 'line') return s.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  if (mode === 'char') return [...s].filter((c) => !/\s/.test(c) && isWordChar(c));
+  // auto：中日韩逐字、拉丁按词、标点与空白当分隔符
+  const out: string[] = [];
+  let buf = '';
+  const flush = () => { if (buf) { out.push(buf); buf = ''; } };
+  for (const ch of s) {
+    if (CJK_RE.test(ch)) { flush(); out.push(ch); }
+    else if (isWordChar(ch)) buf += ch;
+    else flush();
+  }
+  flush();
+  return out;
+}
+const lyricTokens = computed(() => tokenizeLyrics(lyricDlg.value?.text || '', lyricDlg.value?.mode || 'auto'));
+
+function openLyricDialog(prefill = '') {
+  if (!selNotes.value.length) {
+    sayErr(t('先选中音符再填词'), t('在卷帘里框选，或先按 Ctrl+A 全选。'));
+    return;
+  }
+  lyricDlg.value = { text: prefill, mode: 'auto', fill: 'seq' };
+}
+
+function applyLyricDialog() {
+  const d = lyricDlg.value;
+  if (!d) return;
+  const list = selNotes.value;
+  const words = lyricTokens.value;
+  if (!words.length) { sayErr(t('没有可用的词'), t('换个分词方式，或先把歌词粘进来。')); return; }
+  store.pushUndo();
+  let blank = 0;
+  list.forEach((n: any, i: number) => {
+    let w = '';
+    if (i < words.length) w = words[i];
+    else if (d.fill === 'loop') w = words[i % words.length];
+    else if (d.fill === 'seq') w = words[words.length - 1];
+    if (!w) blank++;
+    store.updateNote(n.id, { lyric: w });
+  });
+  const extra = words.length > list.length ? words.length - list.length : 0;
+  if (d.fill === 'seq' && words.length < list.length) {
+    say(t('已填词，但词比音符少：后面 ') + String(list.length - words.length) + t(' 个音符沿用了最后一个词'),
+        'warn', { hint: t('想让歌词循环填满就选「循环填」，想留空就选「只填到用完」。') });
+  } else if (blank) {
+    say(t('已填词：') + String(list.length - blank) + t(' 个音符有词，') + String(blank) + t(' 个留空'), 'ok');
+  } else {
+    say(t('已填词：') + String(words.length) + t(' 个词 → ') + String(list.length) + t(' 个音符')
+        + (extra ? t('（多出的 ') + String(extra) + t(' 个词没用上）') : ''), 'ok');
+  }
+  lyricDlg.value = null;
+}
+
+/** 汉字 → 拼音（UTAU 中文声库要的是拼音别名；DS 引擎内部自己会转） */
+async function toPinyin() {
+  const d = lyricDlg.value;
+  if (!d) return;
+  const b = window.fuBridge as any;
+  if (!b || typeof b.singToPinyin !== 'function') { sayErr(t('当前环境不支持转拼音'), t('请使用桌面版。')); return; }
+  pinyinBusy.value = true;
+  try {
+    const r = await b.singToPinyin({ tokens: lyricTokens.value });
+    if (!r || !r.ok) { sayErr(t('转拼音失败：') + ((r && r.error) || t('未知原因'))); return; }
+    const syls: string[] = (r.syllables || []).filter(Boolean);
+    d.text = syls.join(' ');
+    d.mode = 'space';
+    say(t('已转拼音：') + String(syls.length) + t(' 个音节'), 'ok',
+        { hint: t('多音字（不/了/着/得…）请对着歌词改一下，再点「填入」。') });
+  } finally { pinyinBusy.value = false; }
+}
+
+/* ------------------------------------------------------------ 发音表（P1-14） */
+
+const aliasDlg = ref<{ dir: string; all: string[]; q: string; loading: boolean; err: string } | null>(null);
+
+async function openAliasDialog() {
+  const b = window.fuBridge as any;
+  const cur = tr.value;
+  if (!cur || cur.engine !== 'utau') {
+    sayErr(t('发音表只适用于 UTAU 声库'), t('DiffSinger 用声库自带的音素词典，不走别名表。'));
+    return;
+  }
+  const dir = String(cur.singer || '');
+  if (!dir) { sayErr(t('先选一个歌手'), t('在顶栏的声库选择器里挑一个。')); return; }
+  aliasDlg.value = { dir, all: [], q: '', loading: true, err: '' };
+  try {
+    const r = await b.utauAliases({ voicebank: dir, limit: 5000 });
+    if (aliasDlg.value) {
+      if (r && r.ok && Array.isArray(r.aliases)) aliasDlg.value.all = r.aliases.map((x: string) => String(x));
+      else aliasDlg.value.err = (r && r.error) || t('读取失败');
+    }
+  } catch (e: any) {
+    if (aliasDlg.value) aliasDlg.value.err = String(e?.message || e);
+  } finally {
+    if (aliasDlg.value) aliasDlg.value.loading = false;
+  }
+}
+
+const aliasFiltered = computed(() => {
+  const d = aliasDlg.value;
+  if (!d) return [] as string[];
+  const q = d.q.trim().toLowerCase();
+  const arr = q ? d.all.filter((a) => a.toLowerCase().includes(q)) : d.all;
+  return arr.slice(0, 800);
+});
+
+/** 点别名：有选中音符就填给它，填词对话框开着就追加，否则复制到剪贴板 */
+function useAlias(a: string) {
+  const n = sel.value;
+  if (n) {
+    store.pushUndo();
+    store.updateNote(n.id, { lyric: a });
+    say(t('已把当前音符改成「') + a + t('」'), 'ok');
+    return;
+  }
+  if (lyricDlg.value) {
+    const d = lyricDlg.value;
+    d.text = (d.text ? d.text.replace(/\s+$/, '') + ' ' : '') + a;
+    d.mode = 'space';
+    return;
+  }
+  void navigator.clipboard?.writeText(a).catch(() => {});
+  say(t('已复制到剪贴板：') + a, 'info');
+}
+
+/* ------------------------------------------------------------ 歌词文件导入（P1-9） */
+
+async function importLyricsFile() {
+  const b = window.fuBridge as any;
+  if (!b || typeof b.pickFile !== 'function') { sayErr(t('桌面版才能导入歌词文件'), t('这是浏览器预览环境。')); return; }
+  const path = await b.pickFile({
+    title: t('选择歌词文件'),
+    filters: [{ name: '歌词', extensions: ['txt', 'lrc'] }],
+  });
+  if (!path) return;
+  const bytes = await b.readBinary(path);
+  if (!bytes) { sayErr(t('读取文件失败'), t('文件可能被占用或没有读取权限。')); return; }
+  const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let text = '';
+  for (const enc of ['utf-8', 'gbk', 'shift_jis']) {
+    try { text = new TextDecoder(enc, { fatal: true }).decode(buf); break; } catch (_) { /* 换下一种编码 */ }
+  }
+  if (!text) text = new TextDecoder('utf-8').decode(buf);
+  if (/\[\d{1,2}:\d{2}([.:]\d{1,3})?\]/.test(text)) { fillFromLrc(text); return; }
+  openLyricDialog(text);
+  say(t('已读入歌词文件') + '：' + t('确认分词与填充方式后点「填入」'), 'ok');
+}
+
+/** LRC：按时间戳把每一行分给该时间窗内的音符（自动对轴，省掉整首手填） */
+function fillFromLrc(text: string) {
+  const cur = tr.value;
+  if (!cur || cur.kind !== 'voice') { sayErr(t('当前不是声部轨')); return; }
+  const entries: { sec: number; line: string }[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const stamps = [...raw.matchAll(/\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g)];
+    if (!stamps.length) continue;
+    const body = raw.replace(/\[[^\]]*\]/g, '').trim();
+    if (!body) continue;
+    for (const m of stamps) {
+      const frac = m[3] ? Number(('0.' + m[3])) : 0;
+      entries.push({ sec: Number(m[1]) * 60 + Number(m[2]) + frac, line: body });
+    }
+  }
+  if (!entries.length) { sayErr(t('没解析出 LRC 时间戳'), t('确认是 [mm:ss.xx] 开头的歌词文件。')); return; }
+  entries.sort((a, b) => a.sec - b.sec);
+  const spb = 60 / Math.max(20, store.bpm || 120);
+  const notes = [...(cur.notes || [])].sort((a, b) => a.startBeat - b.startBeat);
+  store.pushUndo();
+  let filled = 0;
+  for (let i = 0; i < entries.length; i++) {
+    const from = entries[i].sec / spb;
+    const to = i + 1 < entries.length ? entries[i + 1].sec / spb : Infinity;
+    const words = tokenizeLyrics(entries[i].line, 'auto');
+    const inWin = notes.filter((n) => n.startBeat >= from - 0.01 && n.startBeat < to);
+    inWin.forEach((n, k) => {
+      const w = words[k] || '';
+      if (w) filled++;
+      store.updateNote(n.id, { lyric: w });
+    });
+  }
+  say(t('已按 LRC 时间轴填词：') + String(filled) + t(' 个音符'), 'ok',
+      { hint: t('对不齐的话，用「对齐偏移」整体平移，或手动改个别音符。') });
 }
 
 /* ------------------------------------------------------------ 播放 */
@@ -1160,6 +1410,12 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             <button class="ib" :title="t('刷新声库列表')" @click.stop="store.loadBanks()">
               <Icon name="refresh" :size="11" />
             </button>
+            <!-- 发音表：放在轨道行里（而不是只在"已选 2 个音符"才出现的批量工具行），
+                 因为"这个声库能唱哪些音"恰恰是**还没填词时**最需要查的 -->
+            <button v-if="x.engine === 'utau'" class="ib" :title="t('发音表（这个声库支持哪些发音）')"
+                    @click.stop="store.selectTrack(x.id); openAliasDialog()">
+              <Icon name="music" :size="11" />
+            </button>
             <div class="trk-row2" @click.stop>
               <select class="lang" :value="x.language" @click.stop
                       @change="store.patchTrack(x.id, { language: sval($event) })">
@@ -1487,6 +1743,9 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
       <div v-if="midiPick" class="pick small">
         <div class="pick-head">
           <b>{{ t('这个 MIDI 有 ') }}{{ midiPick.tracks.length }}{{ t(' 条旋律轨，选一条：') }}</b>
+          <label class="mono-chk" :title="t('同一时刻只留最高音（旋律线）；复音轨直接唱会每拍叠好几个音节') ">
+            <input type="checkbox" v-model="monoPick" /> {{ t('只取最高音（单音化）') }}
+          </label>
           <span class="sp" />
           <button class="btn" @click="midiPick = null">{{ t('取消') }}</button>
         </div>
@@ -1494,11 +1753,80 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <li v-for="mt in midiPick.tracks" :key="mt.index">
             <span class="nm">{{ mt.name }}</span>
             <span class="muted">{{ mt.noteCount }} {{ t('音符') }} · {{ mt.minPitch }}–{{ mt.maxPitch }}</span>
+            <span v-if="overlapCount(mt)" class="ovl" :title="t('同一时刻有多个音在响（复音轨）')">
+              {{ t('复音 ') }}{{ overlapCount(mt) }}
+            </span>
             <button class="btn" @click="applyPicked(mt, midiPick?.tpb || 480, midiPick?.bpm || 120)">
               {{ t('用这条') }}
             </button>
           </li>
         </ul>
+      </div>
+
+      <!-- 批量填词（P1-7/8）：中文逐字分词 + 填充模式 + 预览 + 转拼音 + 读歌词文件 -->
+      <div v-if="lyricDlg" class="singdlg small">
+        <div class="singdlg-head">
+          <b>{{ t('批量填词') }}</b>
+          <span class="muted">{{ t('作用于选中的 ') }}{{ selNotes.length }}{{ t(' 个音符') }}</span>
+          <span class="sp" />
+          <button class="btn" @click="lyricDlg = null">{{ t('取消') }}</button>
+        </div>
+        <textarea class="singdlg-ta" v-model="lyricDlg.text"
+                  :placeholder="t('把歌词粘进来：中文会自动逐字切分，也可以写成空格分隔的音节。')"></textarea>
+        <div class="singdlg-row">
+          <label>{{ t('分词') }}
+            <select v-model="lyricDlg.mode">
+              <option value="auto">{{ t('自动（中文逐字）') }}</option>
+              <option value="char">{{ t('逐字') }}</option>
+              <option value="space">{{ t('按空白') }}</option>
+              <option value="line">{{ t('按行') }}</option>
+            </select>
+          </label>
+          <label>{{ t('填充') }}
+            <select v-model="lyricDlg.fill">
+              <option value="seq">{{ t('顺序（不够时沿用最后一个）') }}</option>
+              <option value="loop">{{ t('循环（从头重复）') }}</option>
+              <option value="trim">{{ t('只填到用完（其余留空）') }}</option>
+            </select>
+          </label>
+          <button class="btn sm" :disabled="pinyinBusy" @click="toPinyin">
+            {{ pinyinBusy ? t('转换中…') : t('汉字→拼音') }}
+          </button>
+          <button class="btn sm" @click="importLyricsFile">{{ t('读歌词文件') }}</button>
+        </div>
+        <div class="singdlg-prev">
+          <span class="muted">{{ t('识别到 ') }}{{ lyricTokens.length }}{{ t(' 个词 → ') }}{{ selNotes.length }}{{ t(' 个音符') }}</span>
+          <span class="chips">
+            <i v-for="(w, i) in lyricTokens.slice(0, 24)" :key="i">{{ w }}</i>
+            <em v-if="lyricTokens.length > 24">…</em>
+          </span>
+        </div>
+        <div class="singdlg-foot">
+          <span class="muted">{{ t('UTAU 中文声库要先转拼音（引擎只认别名）；DiffSinger 直接用汉字。') }}</span>
+          <span class="sp" />
+          <button class="btn primary" @click="applyLyricDialog">{{ t('填入') }}</button>
+        </div>
+      </div>
+
+      <!-- 发音表（P1-14）：这个声库到底能唱哪些音 -->
+      <div v-if="aliasDlg" class="singdlg small">
+        <div class="singdlg-head">
+          <b>{{ t('发音表') }}</b>
+          <span class="muted">{{ aliasDlg.dir }}</span>
+          <span class="sp" />
+          <button class="btn" @click="aliasDlg = null">{{ t('关闭') }}</button>
+        </div>
+        <div class="singdlg-row">
+          <input class="singdlg-q" v-model="aliasDlg.q" :placeholder="t('搜索发音（如 ai / bu / hao）')" />
+          <span class="muted">{{ aliasDlg.loading ? t('读取中…') : String(aliasFiltered.length) + ' / ' + String(aliasDlg.all.length) }}</span>
+        </div>
+        <p v-if="aliasDlg.err" class="edt-msg small bad">{{ aliasDlg.err }}</p>
+        <div class="singdlg-chips">
+          <button v-for="a in aliasFiltered" :key="a" class="chip-btn" @click="useAlias(a)">{{ a }}</button>
+        </div>
+        <div class="singdlg-foot">
+          <span class="muted">{{ t('点一个发音：有选中音符就填给它，否则复制到剪贴板。') }}</span>
+        </div>
       </div>
 
       <!-- 共用钢琴卷帘 -->
@@ -1528,7 +1856,13 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
       <!-- 多选批量工具（P2-1）：选中 2 个以上音符才出现，平时不占地方 -->
       <div v-if="!isAudio && selNotes.length > 1" class="bulk small">
         <b>{{ t('已选 ') }}{{ selNotes.length }}{{ t(' 个音符') }}</b>
-        <button class="btn sm" @click="batchLyric"><Icon name="edit" :size="12" /> {{ t('批量填词') }}</button>
+        <button class="btn sm" @click="openLyricDialog()"><Icon name="edit" :size="12" /> {{ t('批量填词') }}</button>
+        <button class="btn sm" @click="importLyricsFile" :title="t('读入 .txt / .lrc：txt 走分词填入，lrc 按时间轴自动对轴')">
+          <Icon name="upload" :size="12" /> {{ t('导入歌词') }}
+        </button>
+        <button class="btn sm" @click="openAliasDialog" :title="t('看这个声库支持哪些发音，点一下就能填')">
+          <Icon name="music" :size="12" /> {{ t('发音表') }}
+        </button>
         <button class="btn sm" @click="rampVelocity(1)" :title="t('按音符先后做 20 → 100 的力度递增')">
           <Icon name="cresc" :size="12" /> {{ t('渐强') }}
         </button>
@@ -1790,6 +2124,18 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .warn { margin: 4px 12px; color: var(--stone); }
 
 .trk-import { display: flex; flex-direction: column; gap: 4px; padding: 6px; border-bottom: 1px solid var(--border); }
+/* 批量填词 / 发音表对话框（P1-7/8/14）：不依赖全局弹窗，长文本要能多行编辑 */
+.singdlg { margin: 8px 0; padding: 10px; border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; gap: 8px; }
+.singdlg-head, .singdlg-row, .singdlg-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.singdlg-head .sp, .singdlg-foot .sp { flex: 1; }
+.singdlg-ta { width: 100%; min-height: 92px; resize: vertical; font: inherit; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: inherit; }
+.singdlg-q { flex: 1; min-width: 180px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: inherit; }
+.singdlg-prev { display: flex; flex-direction: column; gap: 4px; }
+.singdlg-prev .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.singdlg-prev .chips i { font-style: normal; padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; font-size: 11.5px; }
+.singdlg-chips { display: flex; flex-wrap: wrap; gap: 4px; max-height: 220px; overflow: auto; }
+.mono-chk { display: inline-flex; align-items: center; gap: 4px; }
+.ovl { font-size: 11.5px; color: var(--warn-text, var(--stone)); }
 .ib.wide { width: 100%; justify-content: center; display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; padding: 4px 6px; }
 .trk-item .ck { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; }
 .trk-item .ck input { width: auto; }

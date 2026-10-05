@@ -111,7 +111,10 @@ def render_phrase(cfg: Dict, on_progress=None,
     singer = load_singer(voicebank, cfg.get('vocoder') and None or None)
     if cfg.get('vocoder'):
         warnings.append('暂不支持 --vocoder 覆盖声码器（上游支持，本项目未实现）')
-    g2p, dict_name = load_ds_g2p(singer.dur.root, 'zh', warnings)
+    # ★ 语言来自轨道（cfg.language），不再硬编码 'zh'：
+    #   多语声库（如 花火 带 zh/ja/ko/en 四本词典）用日文/韩文歌词时必须能切换。
+    lang = str(cfg.get('language') or 'zh')
+    g2p, dict_name = load_ds_g2p(singer.dur.root, lang, warnings)
 
     # ---- 谱面 → TimeAxis
     _prog(on_progress, 12, '构建时间轴…')
@@ -124,7 +127,7 @@ def render_phrase(cfg: Dict, on_progress=None,
     # ★ 传**真正的 UNote 对象**（`process_part` 要读 `.position` / `.duration` / `.tone` / `.lyric`），
     #   不是 CLI 给的 dict。
     grouped = _group_notes(part.notes)
-    phones = process_part(singer, grouped, axis, g2p, 'zh', providers, warnings)
+    phones = process_part(singer, grouped, axis, g2p, lang, providers, warnings)
     if not phones:
         raise RenderError('音素化没有产出任何音素（歌词是否为空？）')
 

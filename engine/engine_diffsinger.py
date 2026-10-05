@@ -292,6 +292,9 @@ def cmd_render(args):
             "full": getattr(args, "full", False),
             "device": args.device,
             "out": args.out,
+            "language": getattr(args, "language", None) or 'zh',
+            "depth": getattr(args, "depth", None),
+            "steps": getattr(args, "steps", None),
         }, on_progress=emit_progress)
         emit_result({k: v for k, v in res.items() if k != "wav"})
     except Exception as e:  # noqa: BLE001
@@ -435,6 +438,12 @@ def main():
                         '"pitch":60,"lyric":"啊"}]；整曲建议 @<临时 json 文件>，'
                         '避免命令行超长')
     r.add_argument("--bpm", type=float, default=120.0, help="速度（BPM，拍→秒换算）")
+    # ★ 语言/采样参数：前端一直在发（singer.ts 的 params），但这条命令以前不认，
+    #   于是多语声库永远按 zh 走、depth/steps 也被丢掉。
+    r.add_argument("--language", default="zh",
+                   help="歌词语言（zh/ja/ko/en…，对应 dsdict-<lang>.yaml）")
+    r.add_argument("--depth", type=float, default=None, help="采样深度（默认用引擎默认值）")
+    r.add_argument("--steps", type=int, default=None, help="采样步数（默认用引擎默认值）")
     r.add_argument("--vocoder", default=None,
                    help="声码器 onnx 或目录（声库未自带时使用）")
     r.add_argument("--out", default="", help="输出 WAV 路径")
