@@ -34,10 +34,16 @@ export const I18N_MAP = {
   "暂不支持（超出音色加载上限）": "Not supported (exceeds the soundfont load limit)",
   "立体声合成的单文件加载上限为 512MB": "Single-file load limit for the synth is 512MB",
   "该音色超出加载上限（512MB），暂不支持启用": "This soundfont exceeds the 512MB load limit and cannot be enabled yet.",
+  /* ---- 磁盘上是旧版/不合格的音色文件 ---- */
+  "检测到旧版文件（": "Older file detected (",
+  "），需重新下载": "), please download again",
   /* ---- 音色库加载上限 ---- */
   "暂不支持（超出音色加载上限）": "Not supported (exceeds the soundfont load limit)",
   "立体声合成的单文件加载上限为 512MB": "Single-file load limit for the synth is 512MB",
   "该音色超出加载上限（512MB），暂不支持启用": "This soundfont exceeds the 512MB load limit and cannot be enabled yet.",
+  /* ---- 磁盘上是旧版/不合格的音色文件 ---- */
+  "检测到旧版文件（": "Older file detected (",
+  "），需重新下载": "), please download again",
   "下载速度慢，请在设置页里切换下载源": "Downloads are slow? Switch the download source in Settings.",
   "下载后请到「资源管理」补全依赖（否则模型可能无法使用）；下载慢可在设置页切换下载源": "After downloading, complete the dependencies under “Resources” (otherwise the model may not work); if downloads are slow, switch the download source in Settings.",
   "下载速度慢，请在设置页里切换下载源": "Downloads are slow? Switch the download source in Settings.",

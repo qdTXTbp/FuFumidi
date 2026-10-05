@@ -302,7 +302,9 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
           <div class="sf-tile-desc">{{ item.desc }}</div>
           <div class="sf-tile-meta"><span class="sf-cat">{{ item.category }}</span>{{ fmtSize(item.expected) }} · {{ item.license }}</div>
           <div v-if="item.slow" class="sf-tile-slow">{{ t('该音色源较慢，下载可能需数分钟，请耐心等待') }}</div>
-          <div v-if="item.size" class="sf-tile-meta" style="color:var(--success-text)">{{ t('本地 ') + fmtSize(item.size) }}</div>
+          <div v-if="item.downloaded" class="sf-tile-meta" style="color:var(--success-text)">{{ t('本地 ') + fmtSize(item.size) }}</div>
+          <!-- ★ 磁盘上有文件但不合格（旧版本/截断/过大）：说清要重新下载，别让「启用」点下去才失败 -->
+          <div v-if="item.stale" class="sf-tile-note">{{ t('检测到旧版文件（') + fmtSize(item.size) + t('），需重新下载') }}</div>
           <div class="sf-tile-bar" v-if="prog[item.id] && prog[item.id].active">
             <div class="sf-tile-fill" :style="{ width: (prog[item.id].percent || 0) + '%' }"></div>
           </div>
@@ -325,7 +327,7 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
                 <button v-if="item.downloaded && !item.overLimit" class="btn sm primary" :class="{ on: isActive(item) }" @click="enable(item)" :disabled="busySf">{{ isActive(item) ? t('使用中') : t('启用') }}</button>
               </template>
               <button v-if="item.downloaded && !isActive(item)" class="btn sm ghost" :disabled="previewBuf[item.id]" @click="preview(item)">{{ previewBuf[item.id] ? t('试听…') : t('试听') }}</button>
-              <button v-if="item.downloaded && !item.builtin" class="btn sm ghost danger" @click="removeItem(item)">{{ t('删除') }}</button>
+              <button v-if="(item.downloaded || item.stale) && !item.builtin" class="btn sm ghost danger" @click="removeItem(item)">{{ t('删除') }}</button>
             </template>
           </div>
         </div>
@@ -349,8 +351,11 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
           <div class="sf-tile-desc">{{ item.desc }}</div>
           <div class="sf-tile-meta">{{ fmtSize(item.size) }}</div>
           <div class="sf-tile-actions">
-            <button class="btn sm primary" :class="{ on: isActive(item) }" @click="enable(item)" :disabled="busySf">{{ isActive(item) ? t('使用中') : t('启用') }}</button>
-            <button v-if="!isActive(item)" class="btn sm ghost" :disabled="previewBuf[item.id]" @click="preview(item)">{{ previewBuf[item.id] ? t('试听…') : t('试听') }}</button>
+            <!-- ★ 自定义音色同样可能超过 512MB 读取上限（例如手动导入的 1.18GB Salamander）：
+                 直接说明原因，别给一个必然失败的「启用」 -->
+            <span v-if="item.overLimit" class="sf-overlimit" :title="t('立体声合成的单文件加载上限为 512MB')">{{ t('暂不支持（超出音色加载上限）') }}</span>
+            <button v-else class="btn sm primary" :class="{ on: isActive(item) }" @click="enable(item)" :disabled="busySf">{{ isActive(item) ? t('使用中') : t('启用') }}</button>
+            <button v-if="!isActive(item) && !item.overLimit" class="btn sm ghost" :disabled="previewBuf[item.id]" @click="preview(item)">{{ previewBuf[item.id] ? t('试听…') : t('试听') }}</button>
             <button class="btn sm ghost danger" @click="removeItem(item)">{{ t('删除') }}</button>
           </div>
         </div>

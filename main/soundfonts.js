@@ -29,6 +29,10 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
   //   git raw 读取上限 100 MiB（推得上去但读不出来：errcode 2000033
   //   "raw file size xxx MiB exceeded 100 MiB"）
   // 所以凡是需要 raw 直读的文件都必须 ≤100 MiB；超限的一律作为 Release 资产（对象存储）分发。
+  // ★ 单文件加载上限：`file:readSoundFont`（main/dialogs.js）与前端 `MAX_SF2`
+  //   （frontend/src/core/synth.js）都是 512MB —— 超限的文件在渲染进程里读不进来，
+  //   界面上必须据此**禁用启用**并说明原因，而不是让用户点下去只看到“加载失败”。
+  const SF2_LOAD_LIMIT = 512 * 1024 * 1024;
   const CNB_SF_RELEASE_FILES = new Set([
     'Salamander_Grand_Piano_SF2_V3_20200602_6L.sf2', // 449.7MB（6 力度层精简版）
     'FluidR3_GM.sf2',                                // 141.5MB
@@ -222,6 +226,12 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
       size: 471555050,
       // minSize 取略小于真实值的整数：截断到 400MB 的坏文件不该被判成“已下载完整”
       minSize: 440000000,
+      // ★ 本地文件名带上 6L：beta.1 时代下载的是**同名**的 1.18GB 文件（`Salamander Grand Piano.sf2`），
+      //   沿用同名会让旧文件顶掉新文件 —— 界面上「下载」按钮直接消失，用户以为已经装好了。
+      fileName: 'Salamander Grand Piano 6L.sf2',
+      // ★ 上界：只判 `size >= minSize` 时，1.18GB 的旧文件同样会被判成“已下载完整”，
+      //   于是点「启用」才撞上 512MB 读取上限（正是这条音色过去不可用的表象）。
+      maxSize: 500000000,   // 471,555,050 < 500,000,000 < 512MB 读取上限
       license: 'CC BY 3.0（使用需署名原钢琴录音艺术家）',
       fromRepo: null,
       repoFile: null,
@@ -373,6 +383,14 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
     return item.name.replace(/[^a-zA-Z0-9._ -]/g, '').trim() + '.sf2';
   }
 
+  // ★ 完成判定要同时看上下界：过期/过大/截断的文件都不能算“已下载完整”。
+  //   `maxSize` 缺省时只判下界（老条目的行为不变）。
+  function isCompleteSf(it, size) {
+    if (!(size >= it.minSize)) return false;
+    if (it.maxSize && size > it.maxSize) return false;
+    return true;
+  }
+
   async function statFile(p) {
     try {
       const st = await fs.promises.stat(p);
@@ -396,8 +414,10 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
       out.push({
         id: it.id, name: it.name, version: it.version, desc: it.desc,
         size, expected: it.size, license: it.license,
-        downloaded: size >= it.minSize,
-        builtin: !!it.bundledPath && size >= it.minSize,
+        downloaded: isCompleteSf(it, size),
+        builtin: !!it.bundledPath && isCompleteSf(it, size),
+        // ★ 磁盘上有文件但不合格（旧版本 / 截断 / 过大）：界面据此提示“需重新下载”并放开「删除」。
+        stale: size > 0 && !isCompleteSf(it, size),
         manual: !!it.manual, officialUrl: it.officialUrl || '',
         path: p,
         sources: (githubRawCandidates(it).length ? ['github'] : []) ,
@@ -415,7 +435,7 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
         if (!/\.(sf2|sf3)$/i.test(f)) continue;
         const p = path.join(sfDir(), f);
         const size = await statFile(p);
-        customs.push({ id: 'custom:' + f, name: f.replace(/\.[^.]+$/, ''), desc: '用户导入的音色库', size, downloaded: size > 0, builtin: false, category: '我的音色', custom: true, path: p });
+        customs.push({ id: 'custom:' + f, name: f.replace(/\.[^.]+$/, ''), desc: '用户导入的音色库', size, downloaded: size > 0, builtin: false, category: '我的音色', custom: true, path: p, overLimit: size > SF2_LOAD_LIMIT });
       }
     } catch (e) {}
     return { registry: out, customs, dir: sfDir() };
@@ -432,8 +452,13 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
     const win = BrowserWindow.fromWebContents(_e.sender);
     const send = (p) => { if (win && !win.isDestroyed()) win.webContents.send('sf-workshop:progress', p); };
     // 已存在完整 → 直接返回
-    const cur = await statFile(localFilePath(it));
-    if (cur >= it.minSize) { send({ id, received: cur, total: cur, percent: 100, done: true }); return { ok: true, existed: true }; }
+    let cur = await statFile(localFilePath(it));
+    if (isCompleteSf(it, cur)) { send({ id, received: cur, total: cur, percent: 100, done: true }); return { ok: true, existed: true }; }
+    // ★ 不合格的旧文件（如 beta.1 的 1.18GB Salamander）先删掉再下：
+    //   留着它只会让列表继续显示“本地 1.2GB”，而新文件也写不进去。
+    if (cur > 0) {
+      try { fs.rmSync(localFilePath(it), { force: true }); cur = 0; } catch (e) { /* 删不掉就继续，落盘时会被覆盖 */ }
+    }
     fs.mkdirSync(sfDir(), { recursive: true });
     const out = localFilePath(it);
     // 候选 URL 列表：仓库 raw 镜像 + 自有 Release 镜像（按下载源偏好排序，国内优先时 CNB 打头）
@@ -501,7 +526,7 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
           } finally { clearInterval(watchdog); }
           await new Promise((res2, rej2) => ws.end(err => (err ? rej2(err) : res2())));
           const st = await fs.promises.stat(out + '.part');
-          if (st.size < it.minSize) { lastErr = new Error('文件不完整（' + st.size + ' < ' + it.minSize + '）'); sendProg(st.size, it.size, false, lastErr.message); continue; }
+          if (!isCompleteSf(it, st.size)) { lastErr = new Error('文件不完整（' + st.size + ' 不在 ' + it.minSize + '..' + (it.maxSize || '∞') + ' 之间）'); sendProg(st.size, it.size, false, lastErr.message); continue; }
           await fs.promises.rename(out + '.part', out);
           const fin = await statFile(out);
           sendProg(fin, fin, true);
