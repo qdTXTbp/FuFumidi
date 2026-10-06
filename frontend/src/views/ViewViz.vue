@@ -20,18 +20,24 @@ const immersive = ref(false);
    image       自定义图片（可模糊 + 暗化）—— 参照 SeeMusic / Synthesia 的"背景图"玩法
    transparent 真·透明（导出的 PNG/视频直接当叠加层，不再是一块白底）                */
 const BG_KEY = 'fufumidi.viz.bg';
+/* ★ 改默认值 / 改结构时把 BG_VER +1：老数据直接忽略，否则「新默认值」对老用户永远不生效
+   （这次就把默认从「主题」改成「透明」，顺便清掉之前调试留下的图片档）。 */
+const BG_VER = 2;
+const BG_DEFAULTS = { v: BG_VER, mode: 'transparent', color: '#0b1020', blur: 12, dim: 0.35, path: '' };
 /* ★ 只持久化**文件路径**，不存 blob: URL —— blob URL 是「本次会话」的，重启后必然失效。
    早先存了 blob URL，结果重启应用后档位还写着「图片」、画面却是主题底（用户看到的"图片没了"）。 */
-const bg = ref({ mode: 'theme', color: '#0b1020', blur: 12, dim: 0.35, path: '' });
+const bg = ref({ ...BG_DEFAULTS });
 const bgImage = ref(null);          // 已解码的 HTMLImageElement（传给渲染器）
 const bgMore = ref(false);
 let bgObjUrl = '';                  // 本次会话的 objectURL，换图/卸载时释放
 try {
   const s = JSON.parse(localStorage.getItem(BG_KEY) || 'null');
-  if (s && typeof s === 'object') bg.value = { ...bg.value, ...s, path: s.path || '' };
+  if (s && typeof s === 'object' && s.v === BG_VER) {
+    bg.value = { ...BG_DEFAULTS, ...s, v: BG_VER, path: s.path || '' };
+  }
 } catch (e) { /* 存储坏了就用默认值 */ }
 function saveBg() {
-  try { localStorage.setItem(BG_KEY, JSON.stringify(bg.value)); } catch (e) { /* 隐私模式忽略 */ }
+  try { localStorage.setItem(BG_KEY, JSON.stringify({ ...bg.value, v: BG_VER })); } catch (e) { /* 隐私模式忽略 */ }
 }
 function loadBgImage(src) {
   if (!src) { bgImage.value = null; return; }
@@ -74,6 +80,11 @@ function setBgMode(m) {
 }
 // 启动时把上次选过的图读回来（路径有效才用；图没了就退回主题，不留"假图片档"）
 onMounted(() => {
+  // 老格式（没有 v）的数据一律丢弃并把新默认写回去 —— 否则那条陈旧记录会一直躺在 localStorage 里
+  try {
+    const raw = JSON.parse(localStorage.getItem(BG_KEY) || 'null');
+    if (!raw || raw.v !== BG_VER) saveBg();
+  } catch (e) { saveBg(); }
   const p = bg.value.path;
   if (!p) return;
   void loadBgFromPath(p).then((ok) => {
@@ -381,7 +392,9 @@ onBeforeUnmount(() => {
           </button>
           <span class="muted small" style="margin-left:10px">{{ t('Synthesia · 播放同步') }}</span>
         </div>
-        <div v-if="bgMore" class="viz-bg-bar">
+        <!-- ★ 沉浸模式不显示这条：沉浸态的 .vc-head 是绝对定位浮层，设置条留在文档流里会与它重叠，
+             而且浅色控件压在满屏画面上很突兀。退出沉浸后设置条原样回来。 -->
+        <div v-if="bgMore && !immersive" class="viz-bg-bar">
           <span class="muted small">{{ t('音符瀑布背景') }}</span>
           <button class="chip-btn" :class="{ active: bg.mode === 'theme' }" @click="setBgMode('theme')">{{ t('主题') }}</button>
           <button class="chip-btn" :class="{ active: bg.mode === 'solid' }" @click="setBgMode('solid')">{{ t('纯色') }}</button>
@@ -397,7 +410,9 @@ onBeforeUnmount(() => {
           </template>
         </div>
         <div class="vc-body">
-          <canvas id="vizRoll"></canvas>
+          <!-- ★ 画布自己有一层 CSS 底色（.vc-body canvas 的 background）—— 透明档只 clearRect
+               是没用的，元素底色照样透不出来。所以透明档必须把画布元素的底色也去掉。 -->
+          <canvas id="vizRoll" :class="{ 'cv-transparent': bg.mode === 'transparent' }"></canvas>
           <div v-if="immersive" class="viz-hud" :class="{ 'hud-hidden': !hudOn }">
             <button class="hud-btn" :title="app.playing ? t('暂停') : t('播放')" @click="app.togglePlay()">
               <Icon :name="app.playing ? 'pause' : 'play'" :size="18" />
@@ -449,7 +464,8 @@ onBeforeUnmount(() => {
 .vc-body canvas { width: 100%; height: 100%; display: block; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--canvas); }
 .chip-btn.active { background: var(--accent); color: #fff; }
 /* 背景设置条：低调的一行，不抢画面 */
-.viz-bg-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 12px 2px; font-size: 12px; }
+.viz-bg-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 12px 8px; font-size: 12px;
+              border-bottom: 1px solid var(--hairline); margin-bottom: 2px; }
 .viz-bg-bar input[type=range] { accent-color: var(--accent); }
 .viz-bg-color { width: 28px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: transparent; }
 .viz-page.waterfall .viz-grid { display: none; }
@@ -458,10 +474,13 @@ onBeforeUnmount(() => {
 .viz-page.waterfall .viz-hero .vc-body { flex: 1; height: auto; min-height: 300px; }
 
 /* ---- 沉浸模式：去掉卡片壳，画面铺满主区，控件浮在画面上并自动淡出 ---- */
-.viz-page.immersive { padding: 0; max-width: none; }
+/* ★ 底下必须给一层深色：画布默认是**透明**的，浅色页面会把白色的沉浸态 HUD
+   （白字 + 半透明白 chip）彻底吃掉 —— 实测就是「控件看不见」。 */
+.viz-page.immersive { padding: 0; max-width: none; background: #0b1020; }
 .viz-page.immersive .viz-hero {
   border: 0; border-radius: 0; background: transparent; box-shadow: none; padding: 0;
 }
+.vc-body canvas.cv-transparent { background: transparent; }
 .viz-page.immersive .vc-body canvas { border: 0; border-radius: 0; }
 .viz-page.immersive .vc-head {
   position: absolute; top: 0; left: 0; right: 0; z-index: 3;
