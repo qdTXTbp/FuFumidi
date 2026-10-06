@@ -205,6 +205,61 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
     }
   }));
 
+  /**
+   * 读 oto.ini 的**原始字节**（M8f 声库管理 2.0：别名表可编辑）。
+   *
+   * ★ 不在这里解析、也不在这里判编码：渲染进程有完整的 CP932 编解码器
+   *   （core/shift_jis.js，上一轮实测过字节级正确），解析/判码/写回都在那边做，
+   *   主进程只负责"把字节读出来 / 把字节写回去 + 备份"这一件事。
+   */
+  ipcMain.handle('utau:readOto', (_e, cfg) => {
+    try {
+      const dir = cfg && cfg.voicebank ? String(cfg.voicebank) : '';
+      if (!dir) return { ok: false, error: '未指定声库目录' };
+      const root = path.resolve(dir);
+      if (!fs.existsSync(root)) return { ok: false, error: '声库目录不存在' };
+      const target = path.join(root, 'oto.ini');
+      if (!fs.existsSync(target)) return { ok: false, error: '该声库没有 oto.ini' };
+      const buf = fs.readFileSync(target);
+      return {
+        ok: true, path: target, base64: buf.toString('base64'),
+        size: buf.length, mtimeMs: fs.statSync(target).mtimeMs,
+      };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+
+  /**
+   * 写回 oto.ini。字节**由渲染进程按原编码编好**（Shift-JIS / UTF-8 原样保留），
+   * 这里只落盘，并先备份一份 `oto.ini.bak`（改坏了能退回去 —— 用户的原音设定比什么都贵）。
+   */
+  ipcMain.handle('utau:saveOto', (_e, cfg) => {
+    try {
+      const dir = cfg && cfg.voicebank ? String(cfg.voicebank) : '';
+      const base64 = cfg && typeof cfg.base64 === 'string' ? cfg.base64 : '';
+      if (!dir) return { ok: false, error: '未指定声库目录' };
+      if (!base64) return { ok: false, error: '内容为空' };
+      const root = path.resolve(dir);
+      if (!fs.existsSync(root)) return { ok: false, error: '声库目录不存在' };
+      const target = path.join(root, 'oto.ini');
+      // 只允许写声库根目录下的 oto.ini（防目录穿越）
+      if (path.dirname(target) !== root) return { ok: false, error: '路径不合法' };
+      const buf = Buffer.from(base64, 'base64');
+      if (!buf.length) return { ok: false, error: '内容为空' };
+      if (buf.length > 8 * 1024 * 1024) return { ok: false, error: 'oto.ini 过大（>8MB）' };
+      let backup = '';
+      if (fs.existsSync(target)) {
+        backup = target + '.bak';
+        fs.copyFileSync(target, backup);
+      }
+      fs.writeFileSync(target, buf);
+      return { ok: true, path: target, backup, bytes: buf.length };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+
   // 汉字 → 拼音（P1-15）：UTAU 中文声库的别名就是拼音，工具里必须有这一步，
   // 否则用户得自己把「不爱的」转成「bu ai de」再填 —— 实测就是这么过来的。
   ipcMain.handle('sing:toPinyin', (evt, cfg) => new Promise((resolve) => {

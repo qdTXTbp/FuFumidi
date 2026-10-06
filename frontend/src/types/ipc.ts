@@ -665,6 +665,10 @@ export interface FuBridge {
   utauExportVoicebankZip(opts: { files: { name: string; data: string }[] }): Promise<GeneralResult & { canceled?: boolean; path?: string; count?: number }>;
   utauRenderTrack(cfg: { voicebank: string; notes: any[]; sampleNote: string; bpm?: number }): Promise<GeneralResult & { out?: string; bytes?: Uint8Array | number[]; duration_ms?: number; warnings?: string[]; engineVersion?: string }>;
   utauAliases(cfg: { voicebank: string; query?: string; limit?: number }): Promise<{ ok: boolean; aliases?: string[]; count?: number; total?: number; error?: string }>;
+  /** M8f：oto.ini 原始字节（解析/判编码在渲染进程，见 core/oto.js） */
+  utauReadOto(cfg: { voicebank: string }): Promise<{ ok: boolean; path?: string; base64?: string; size?: number; mtimeMs?: number; error?: string }>;
+  /** M8f：写回 oto.ini（字节由渲染进程按原编码编好；主进程先备份 oto.ini.bak） */
+  utauSaveOto(cfg: { voicebank: string; base64: string }): Promise<{ ok: boolean; path?: string; backup?: string; bytes?: number; error?: string }>;
   utauFlags(): Promise<{ ok: boolean; engine_version?: string; supported?: { flag: string; default: number | null; min: number | null; max: number | null; desc: string }[]; unsupported?: { flag: string; desc: string }[]; example?: string; error?: string }>;
   utauListVoicebanks(): Promise<{ ok: boolean; list?: { name: string; dir: string }[]; error?: string }>;
   utauImportVoicebankZip(): Promise<{ ok: boolean; canceled?: boolean; name?: string; dir?: string; error?: string }>;

@@ -14,11 +14,25 @@ import Icon from '../Icon.vue';
 import { t } from '../../core/i18n.js';
 import { useDiffsingerStore } from '../../stores/diffsinger';
 import { useSingerStore } from '../../stores/singer';
+import {
+  parseOto, formatOto, decodeOtoFile, encodeOtoFile, diffOto, b64ToBytes, bytesToB64, detectEol,
+} from '../../core/oto.js';
 
 const ds = useDiffsingerStore();
 const singerStore = useSingerStore();
 
-onMounted(() => { void singerStore.loadBanks(); });
+onMounted(() => {
+  void singerStore.loadBanks();
+  /* 验收桥（与其它页同一套开关）：别名表的读/改/存/试听在 CDP 里要能直接驱动 */
+  if (localStorage.getItem('fufumidi_debug') === '1') {
+    (window as any).__vbPanelDebug = {
+      oto, otoQuery, otoShown, audition, auditionPitch,
+      openOto, saveOto, restoreOto, closeOto, addOtoRow, removeOtoRow, markDirty,
+      auditionAlias, auditionBatch, stopAudition, playBytes,
+      parseOto, formatOto, decodeOtoFile, encodeOtoFile, diffOto, b64ToBytes, bytesToB64,
+    };
+  }
+});
 
 const busy = ref(false);
 const msg = ref('');
@@ -79,6 +93,201 @@ async function run(fn: () => Promise<any>) {
   catch (e) { msg.value = String((e && (e as any).message) || e); }
   finally { busy.value = false; }
 }
+
+/* ============================================================
+   M8f 声库管理 2.0：别名表可编辑 + 试听
+   ------------------------------------------------------------
+   §0.2⑤ 列的两条："声库不能试听、别名表不可编辑"。
+   读/判码/解析/写回全在渲染进程做（core/oto.js + core/shift_jis.js），
+   主进程只负责把字节读出来 / 写回去并备份 —— 于是"编辑一个别名"不会把整库的编码换掉。
+   ============================================================ */
+
+type OtoState = {
+  dir: string; name: string; busy: boolean; error: string;
+  encoding: 'utf8' | 'sjis'; eol: '\r\n' | '\n'; entries: any[]; passthrough: string[]; loose: string[];
+  original: any; dirty: boolean; stat: { changed: number; added: number; removed: number } | null;
+};
+const oto = ref<OtoState | null>(null);
+const otoQuery = ref('');
+const auditionPitch = ref(60);
+const audition = ref<{ alias: string; busy: boolean; info: string } | null>(null);
+const batchOn = ref(false);
+let batchStop = false;
+let audioEl: HTMLAudioElement | null = null;
+let audioUrl = '';
+
+const otoShown = computed(() => {
+  const list = (oto.value && oto.value.entries) || [];
+  const q = otoQuery.value.trim().toLowerCase();
+  if (!q) return list;
+  return list.filter((e: any) =>
+    String(e.alias).toLowerCase().includes(q) || String(e.file).toLowerCase().includes(q));
+});
+
+function stopAudio() {
+  if (audioEl) { try { audioEl.pause(); } catch (e) { /* 已结束 */ } }
+  if (audioUrl) { try { URL.revokeObjectURL(audioUrl); } catch (e) { /* 已释放 */ } }
+  audioUrl = '';
+}
+
+function playBytes(bytes: Uint8Array): Promise<void> {
+  stopAudio();
+  return new Promise((resolve) => {
+    audioUrl = URL.createObjectURL(new Blob([bytes as any], { type: 'audio/wav' }));
+    const a = new Audio(audioUrl);
+    audioEl = a;
+    a.onended = () => resolve();
+    a.onerror = () => resolve();
+    a.play().catch(() => resolve());
+  });
+}
+
+async function openOto(b: any) {
+  const bridge = (window as any).fuBridge;
+  if (!bridge || typeof bridge.utauReadOto !== 'function') {
+    msg.value = t('当前环境不支持读取 oto.ini（请使用桌面版）');
+    return;
+  }
+  stopAudio();
+  oto.value = {
+    dir: b.dir, name: b.name, busy: true, error: '', encoding: 'sjis', eol: '\n',
+    entries: [], passthrough: [], loose: [], original: null, dirty: false, stat: null,
+  };
+  try {
+    const r = await bridge.utauReadOto({ voicebank: b.dir });
+    if (!r || !r.ok) {
+      if (oto.value) { oto.value.busy = false; oto.value.error = (r && r.error) || t('读取失败'); }
+      return;
+    }
+    const dec = decodeOtoFile(b64ToBytes(r.base64 || ''));
+    const parsed = parseOto(dec.text);
+    if (oto.value) {
+      oto.value.busy = false;
+      oto.value.encoding = dec.encoding;
+      oto.value.eol = detectEol(dec.text);      // 写回时按原样：只改数字，不把整个文件的换行符换掉
+      oto.value.entries = parsed.entries;
+      oto.value.passthrough = parsed.passthrough;
+      oto.value.loose = parsed.loose;
+      oto.value.original = parseOto(dec.text);
+    }
+  } catch (e: any) {
+    if (oto.value) { oto.value.busy = false; oto.value.error = String((e && e.message) || e); }
+  }
+}
+
+function markDirty() {
+  const cur = oto.value;
+  if (!cur) return;
+  cur.dirty = true;
+  cur.stat = diffOto(cur.original, { entries: cur.entries });
+}
+
+function restoreOto() {
+  const cur = oto.value;
+  if (!cur || !cur.original) return;
+  cur.entries = JSON.parse(JSON.stringify(cur.original.entries || []));
+  cur.dirty = false;
+  cur.stat = null;
+  cur.error = '';
+}
+
+function addOtoRow() {
+  const cur = oto.value;
+  if (!cur) return;
+  cur.entries.unshift({ file: '', alias: '', offset: 0, consonant: 0, blank: 0, preutterance: 0, overlap: 0, extra: [] });
+  markDirty();
+}
+
+function removeOtoRow(e: any) {
+  const cur = oto.value;
+  if (!cur) return;
+  const i = cur.entries.indexOf(e);
+  if (i >= 0) cur.entries.splice(i, 1);
+  markDirty();
+}
+
+async function saveOto() {
+  const cur = oto.value;
+  if (!cur) return;
+  const bridge = (window as any).fuBridge;
+  if (!bridge || typeof bridge.utauSaveOto !== 'function') {
+    msg.value = t('当前环境不支持写回 oto.ini（请使用桌面版）');
+    return;
+  }
+  const text = formatOto({ entries: cur.entries, passthrough: cur.passthrough, loose: cur.loose }, cur.eol);
+  const bytes = encodeOtoFile(text, cur.encoding);
+  cur.busy = true;
+  cur.error = '';
+  try {
+    const r = await bridge.utauSaveOto({ voicebank: cur.dir, base64: bytesToB64(bytes) });
+    if (!r || !r.ok) { cur.error = (r && r.error) || t('保存失败'); return; }
+    cur.dirty = false;
+    cur.stat = null;
+    msg.value = t('已保存 oto.ini（原文件已备份为 oto.ini.bak）');
+    await singerStore.loadBanks();
+  } catch (e: any) {
+    cur.error = String((e && e.message) || e);
+  } finally {
+    cur.busy = false;
+  }
+}
+
+function closeOto() {
+  batchStop = true;
+  batchOn.value = false;
+  stopAudio();
+  oto.value = null;
+}
+
+/** 试听一个别名：走真实引擎渲染一个长音（改完 oto 再听，差别是听得出来的） */
+async function auditionAlias(alias: string) {
+  const cur = oto.value;
+  const bridge = (window as any).fuBridge;
+  if (!cur || !bridge || typeof bridge.utauRenderTrack !== 'function') return;
+  audition.value = { alias, busy: true, info: '' };
+  try {
+    const r = await bridge.utauRenderTrack({
+      voicebank: cur.dir,
+      notes: [{ startBeat: 0, durBeat: 2, pitch: auditionPitch.value, lyric: alias }],
+      sampleNote: 'C4',
+      bpm: 120,
+    });
+    if (!r || !r.ok) {
+      audition.value = { alias, busy: false, info: (r && r.error) || t('试听失败') };
+      return;
+    }
+    const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes || []);
+    audition.value = {
+      alias, busy: false,
+      info: t('已渲染 ') + bytes.length + t(' 字节 · ') + Math.round(r.duration_ms || 0) + ' ms',
+    };
+    await playBytes(bytes);
+  } catch (e: any) {
+    audition.value = { alias, busy: false, info: String((e && e.message) || e) };
+  }
+}
+
+/** 连播前 N 个（按当前筛选），装库后快速过一遍听感 */
+async function auditionBatch(n = 8) {
+  const list = otoShown.value.slice(0, n);
+  if (!list.length) return;
+  batchStop = false;
+  batchOn.value = true;
+  try {
+    for (const e of list) {
+      if (batchStop) break;
+      await auditionAlias(e.alias);
+    }
+  } finally {
+    batchOn.value = false;
+  }
+}
+
+function stopAudition() {
+  batchStop = true;
+  batchOn.value = false;
+  stopAudio();
+}
 </script>
 
 <template>
@@ -123,6 +332,9 @@ async function run(fn: () => Promise<any>) {
           <button class="btn" :disabled="probe && probe.busy"
                   :title="t('体检：目录/编码/别名/缺采样/歌词覆盖一次算清')"
                   @click="runProbe(b)"><Icon name="target" :size="12" /> {{ t('体检') }}</button>
+          <button v-if="b.engine === 'utau'" class="btn"
+                  :title="t('打开别名表：改原音设定 / 逐条试听（写回前自动备份 oto.ini.bak）')"
+                  @click="openOto(b)"><Icon name="edit" :size="12" /> {{ t('别名表') }}</button>
           <button v-if="b.engine === 'diffsinger'" class="btn danger"
                   :disabled="busy || usedIn(b.dir)"
                   @click="run(() => ds.deleteVoicebank(b.dir))"><Icon name="trash" :size="12" /> {{ t('删除') }}</button>
@@ -149,6 +361,80 @@ async function run(fn: () => Promise<any>) {
         </ul>
         <p v-if="probe.stats" class="muted small">
           {{ t('统计：') }}{{ JSON.stringify(probe.stats) }}
+        </p>
+      </div>
+      </Transition>
+
+      <!-- ============ M8f 别名表：可编辑 + 逐条试听 ============ -->
+      <Transition name="vbp-drop">
+      <div v-if="oto" class="vbp-probe" data-guide="banks-oto">
+        <div class="vbp-probe-head">
+          <b>{{ t('别名表：') }}{{ oto.name }}</b>
+          <span class="tag" :title="t('写回时保持原编码与行尾')">{{ oto.encoding === 'utf8' ? 'UTF-8' : 'Shift-JIS' }} · {{ oto.eol === '\r\n' ? 'CRLF' : 'LF' }}</span>
+          <span class="muted small">{{ oto.entries.length }}{{ t(' 条原音设定') }}</span>
+          <span v-if="oto.dirty" class="dirty">
+            {{ t('未保存') }}<template v-if="oto.stat">（{{ t('改 ') }}{{ oto.stat.changed }}/{{ t('增 ') }}{{ oto.stat.added }}/{{ t('删 ') }}{{ oto.stat.removed }}）</template>
+          </span>
+          <span class="sp" />
+          <label class="muted small vbp-pitch" :title="t('试听用的音高（MIDI 音符号，60 = C4）')">
+            {{ t('试听音高') }}
+            <input type="number" class="text-input oto-num" v-model.number="auditionPitch" min="12" max="108" />
+          </label>
+          <button class="btn" :disabled="!otoShown.length || batchOn" @click="auditionBatch(8)">
+            <Icon name="play2" :size="12" /> {{ t('连播前 8 个') }}
+          </button>
+          <button v-if="batchOn" class="btn danger" @click="stopAudition">
+            <Icon name="stop" :size="12" /> {{ t('停止') }}
+          </button>
+          <button class="btn" :disabled="oto.busy || !oto.dirty" @click="restoreOto">
+            <Icon name="refresh" :size="12" /> {{ t('还原') }}
+          </button>
+          <button class="btn primary" :disabled="oto.busy || !oto.dirty" @click="saveOto">
+            <Icon name="save" :size="12" /> {{ t('保存 oto.ini') }}
+          </button>
+          <button class="btn" @click="closeOto"><Icon name="close" :size="12" /> {{ t('关闭') }}</button>
+        </div>
+        <p v-if="oto.error" class="edt-msg small bad">{{ oto.error }}</p>
+        <p v-if="audition" class="muted small vbp-audition">
+          {{ t('试听：') }}{{ audition.alias }} — {{ audition.busy ? t('正在渲染…') : audition.info }}
+        </p>
+        <div class="vbp-oto-tools">
+          <input class="text-input vbp-oto-search" :placeholder="t('搜索别名 / 文件名')" v-model="otoQuery" />
+          <span class="muted small">{{ otoShown.length }} / {{ oto.entries.length }}</span>
+          <button class="btn sm" @click="addOtoRow"><Icon name="plus" :size="12" /> {{ t('加一条') }}</button>
+          <span class="muted small">{{ t('改完点「保存 oto.ini」；引擎读的是磁盘上的文件，改完再试听就是新的。') }}</span>
+        </div>
+        <div class="vbp-oto-wrap">
+          <table class="vbp-oto">
+            <thead>
+              <tr>
+                <th>{{ t('别名') }}</th>
+                <th>offset</th><th>consonant</th><th>blank</th><th>preutterance</th><th>overlap</th>
+                <th>{{ t('文件') }}</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="e in otoShown" :key="e.file + '|' + e.alias">
+                <td><input class="text-input oto-alias" v-model="e.alias" @change="markDirty" /></td>
+                <td><input type="number" class="text-input oto-num" v-model.number="e.offset" step="0.5" @change="markDirty" /></td>
+                <td><input type="number" class="text-input oto-num" v-model.number="e.consonant" step="0.5" @change="markDirty" /></td>
+                <td><input type="number" class="text-input oto-num" v-model.number="e.blank" step="0.5" @change="markDirty" /></td>
+                <td><input type="number" class="text-input oto-num" v-model.number="e.preutterance" step="0.5" @change="markDirty" /></td>
+                <td><input type="number" class="text-input oto-num" v-model.number="e.overlap" step="0.5" @change="markDirty" /></td>
+                <td class="muted small oto-file" :title="e.file">{{ e.file }}</td>
+                <td>
+                  <!-- ★ 必须套一层 inline-flex：.icon-btn 是 display:grid，直接放 td 里会竖排（上一轮的坑） -->
+                  <span class="vb-tools">
+                    <button class="icon-btn" :title="t('试听这个别名')" @click="auditionAlias(e.alias)"><Icon name="play2" :size="12" /></button>
+                    <button class="icon-btn" :title="t('删除这一条')" @click="removeOtoRow(e)"><Icon name="trash" :size="12" /></button>
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-if="oto.loose.length" class="muted small">
+          {{ t('有 ') }}{{ oto.loose.length }}{{ t(' 行不是标准 oto 格式，保存时会原样写回。') }}
         </p>
       </div>
       </Transition>
@@ -255,4 +541,24 @@ async function run(fn: () => Promise<any>) {
 .tag.e-utau { background: rgba(80, 190, 120, .18); }
 .tag.e-diffsinger { background: rgba(64, 140, 255, .18); }
 .vbp-list .inuse { font-size: 10.5px; color: var(--brand-text); flex: none; }
+
+/* ---- M8f 别名表 ---- */
+.vbp-oto-tools { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
+.vbp-oto-search { width: 200px; }
+.vbp-oto-wrap { max-height: 46vh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.vbp-oto { width: 100%; border-collapse: collapse; font-size: 12px; }
+.vbp-oto th { position: sticky; top: 0; z-index: 1; background: var(--surface-muted);
+              border-bottom: 1px solid var(--border); padding: 4px 6px; text-align: left;
+              white-space: nowrap; font-weight: 600; }
+.vbp-oto td { border-bottom: 1px solid var(--border); padding: 2px 6px; }
+.vbp-oto tr:hover td { background: color-mix(in srgb, var(--brand-soft) 45%, transparent); }
+.vbp-oto .oto-num { width: 62px; padding: 2px 4px; font-size: 12px; }
+.vbp-oto .oto-alias { width: 92px; padding: 2px 4px; font-size: 12px; }
+.vbp-oto .oto-file { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vbp-oto .vb-tools { display: inline-flex; gap: 2px; }
+.vbp-pitch { display: inline-flex; align-items: center; gap: 5px; }
+.vbp-pitch .oto-num { width: 54px; padding: 2px 4px; font-size: 12px; }
+.vbp-audition { margin: 4px 0; }
+.vbp-probe .dirty { font-size: 11.5px; color: var(--warn-text, #d9a300); }
+.vbp-probe .tag { font-size: 10px; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border); }
 </style>

@@ -149,6 +149,9 @@ contextBridge.exposeInMainWorld('fuBridge', {
   utauFlags: () => ipcRenderer.invoke('utau:flags'),
   // 声库可用别名（P1-4 发音/别名替换）
   utauAliases: (cfg) => ipcRenderer.invoke('utau:aliases', cfg),
+  // M8f：别名表可编辑 —— 读原始字节 / 写回（写回前主进程自动备份 oto.ini.bak）
+  utauReadOto: (cfg) => ipcRenderer.invoke('utau:readOto', cfg),
+  utauSaveOto: (cfg) => ipcRenderer.invoke('utau:saveOto', cfg),
   // 汉字 → 拼音（调教页 · 中文 UTAU 声库）：token 数组进、音节数组出
   singToPinyin: (cfg) => ipcRenderer.invoke('sing:toPinyin', cfg),
   // 声库体检（调教页 · 声库面板）：目录/编码/别名/缺采样/歌词覆盖一次算清
