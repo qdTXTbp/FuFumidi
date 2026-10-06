@@ -10,6 +10,8 @@ const currentSong = computed(() => app.currentSong);
 import { KEY_NAME, noteName, clamp } from '../core/util.js';
 import { t } from '../core/i18n.js';
 import { snapToPcs, scalePitchClasses } from '../core/scale.js';
+// 乐谱视图要用「按音符分布猜调号」（与乐谱页同一套）
+import { detectSf } from '../core/score.js';
 
 const props = defineProps({
   tool: { type: String, default: 'select' },      // select | pencil | erase
@@ -27,6 +29,13 @@ const props = defineProps({
   ccMode: { type: String, default: 'free' },      // free | line | curve
   defaultVelocity: { type: Number, default: 80 }, // 新音符默认力度
   colorMode: { type: String, default: 'track' },  // track | pitch | velocity | selection
+  /**
+   * 渲染/编辑模式：piano=钢琴卷帘（默认） / score=五线谱。
+   *
+   * ★ 乐谱不是「另一个页面」而是**同一份数据的另一种视图**：选择、撤销栈、吸附、
+   *   播放头、量化/移调/删除这些操作全部复用，所以两个视图里改的都是同一批音符对象。
+   */
+  view: { type: String, default: 'piano' },
 });
 const emit = defineEmits(['select', 'modify', 'zoom', 'ctxmenu']);
 
@@ -377,6 +386,165 @@ function duplicateSelected() {
 }
 
 /* ---------------- 绘制 ---------------- */
+/* ---------------------------------------------------------------- 五线谱绘制 */
+function drawScore(g, W, HK) {
+  const lay = scoreLayout(W, HK);
+  if (!lay) return;
+  const pal = themeColors();
+  const { tr, gap, staffH, lineY0, leftPad, barW, barsPerSystem, bars, systes: _x } = lay;
+  const sharp = lay.sharps;
+  const keyAcc = (letter) => {
+    // 调号里每个字母的升降：升号顺序 F C G D A E B，降号反过来
+    const order = sharp ? [3, 0, 4, 1, 5, 2, 6] : [6, 2, 5, 1, 4, 0, 3];
+    const n = Math.abs(lay.sf);
+    for (let i = 0; i < n; i++) if (order[i] === letter) return sharp ? 1 : -1;
+    return 0;
+  };
+  const ink = pal.steel || '#333';
+  const line = pal.hair || 'rgba(0,0,0,.25)';
+  const accent = pal.accent || '#3d8bfd';
+  const selSet = selection;
+  for (let sys = 0; sys < lay.systems; sys++) {
+    const y0 = 8 + sys * lay.systemH - scoreScrollY.value;
+    if (y0 + lay.systemH < -20 || y0 > HK + 20) continue;
+    const top = y0 + lineY0, bottom = top + staffH, midY = top + staffH / 2;
+    // 五线谱线
+    g.strokeStyle = line; g.lineWidth = 1;
+    for (let i = 0; i < 5; i++) {
+      const y = Math.round(top + i * gap) + 0.5;
+      g.beginPath(); g.moveTo(leftPad - 26, y); g.lineTo(W - 8, y); g.stroke();
+    }
+    // 谱号（用 Unicode 音乐符号：𝄞 / 𝄢；字体链里带上符号字体）
+    g.fillStyle = ink;
+    g.font = (gap * 4.6) + 'px "Segoe UI Symbol", "Cambria Math", "Noto Music", serif';
+    g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+    g.fillText(lay.clef === 'bass' ? '\uD834\uDD22' : '\uD834\uDD1E', leftPad - 24, midY + gap * 1.55);
+    // 调号（♯/♭）
+    g.font = (gap * 2.1) + 'px "Segoe UI Symbol", "Cambria Math", serif';
+    const order = sharp ? [3, 0, 4, 1, 5, 2, 6] : [6, 2, 5, 1, 4, 0, 3];
+    const octOf = sharp ? [5, 5, 5, 5, 4, 4, 4] : [4, 4, 4, 4, 3, 3, 3];
+    for (let i = 0; i < Math.min(7, Math.abs(lay.sf)); i++) {
+      const letter = order[i];
+      const dia = octOf[i] * 7 + letter;
+      const midDia = scoreSpell(lay.clef === 'bass' ? 50 : 71, true).diatonic;
+      const y = midY - ((dia - midDia) * gap) / 2;
+      g.fillText(sharp ? '\u266F' : '\u266D', leftPad - 8 + i * (gap * 0.72), y + gap * 0.72);
+    }
+    // 拍号
+    g.font = 'bold ' + (gap * 2.0) + 'px system-ui, sans-serif';
+    g.textAlign = 'center';
+    g.fillText(String(lay.sig.num), leftPad + 12, top + gap * 1.9);
+    g.fillText(String(lay.sig.den), leftPad + 12, top + gap * 3.9);
+    // 小节线（行内 barsThis 条）
+    const firstBar = sys * barsPerSystem;
+    const barsThis = Math.min(barsPerSystem, bars - firstBar);
+    for (let b = 0; b <= barsThis; b++) {
+      const x = Math.round(leftPad + b * barW) + 0.5;
+      if (b === barsThis && firstBar + b < bars) continue;      // 行尾不画（下一行的开头画）
+      g.strokeStyle = (b === 0) ? ink : line;
+      g.lineWidth = (b === 0) ? 1.6 : 1;
+      g.beginPath(); g.moveTo(x, top); g.lineTo(x, bottom); g.stroke();
+    }
+    // 空小节：画一个全休止方块
+    g.fillStyle = line;
+    for (let b = 0; b < barsThis; b++) {
+      const t0 = (firstBar + b) * lay.barTicks, t1 = t0 + lay.barTicks;
+      let has = false;
+      for (const n of tr.notes) { if (n.end > t0 && n.start < t1) { has = true; break; } }
+      if (has) continue;
+      const x = leftPad + b * barW + barW / 2;
+      g.fillRect(x - gap * 0.7, top + staffH * 0.22, gap * 1.4, gap * 0.5);
+    }
+    // 音符
+    for (const n of tr.notes) {
+      const bar = Math.floor(n.start / lay.barTicks);
+      if (bar < firstBar || bar >= firstBar + barsThis) continue;
+      const xRaw = scoreXOf(lay, n.start);
+      const x = Math.round(xRaw) + 0.5;
+      const y = Math.round(y0 + scoreYOf(lay, n)) + 0.5;
+      drawScoreNote(g, lay, n, x, y, midY, top, bottom, { ink, line, accent, selSet, keyAcc, sharp });
+    }
+    // 行号（小节号）
+    g.fillStyle = pal.stone || '#888';
+    g.font = '10px system-ui, sans-serif'; g.textAlign = 'left';
+    g.fillText(String(firstBar + 1), leftPad + 2, y0 + 10);
+  }
+  // 播放头：按 tick 找行，画一条竖线
+  const pt = playTick.value;
+  if (pt != null && pt >= 0) {
+    const bar = Math.floor(pt / lay.barTicks);
+    const sys = Math.floor(bar / barsPerSystem);
+    const y0 = 8 + sys * lay.systemH - scoreScrollY.value;
+    if (y0 > -20 && y0 < HK + 20) {
+      const x = Math.round(scoreXOf(lay, pt)) + 0.5;
+      g.strokeStyle = accent; g.lineWidth = 1.4;
+      g.beginPath(); g.moveTo(x, y0 + 4); g.lineTo(x, y0 + lay.systemH - 4); g.stroke();
+    }
+  }
+}
+
+/** 单个音符：符头 / 符干 / 符尾 / 符点 / 临时记号 / 加线 */
+function drawScoreNote(g, lay, n, x, y, midY, top, bottom, ctxInfo) {
+  const { ink, line, accent, selSet, keyAcc, sharp } = ctxInfo;
+  const gap = lay.gap;
+  const sp = scoreSpell(n.midi, sharp);
+  const acc = sp.acc - keyAcc(sp.letter);
+  const isSel = selSet.has(n);
+  // 时值 → 符头形状与符尾数量
+  const quarters = (n.end - n.start) / lay.tpb;
+  let base = 1, dot = false;
+  for (const q of [4, 2, 1, 0.5, 0.25, 0.125]) {
+    if (Math.abs(quarters - q) < 0.02) { base = q; break; }
+    if (Math.abs(quarters - q * 1.5) < 0.02) { base = q; dot = true; break; }
+  }
+  if (Math.abs(quarters - 1.5) < 0.02) { base = 1; dot = true; }
+  const hollow = base >= 2;
+  const noStem = base >= 4;
+  const flags = base === 0.5 ? 1 : base === 0.25 ? 2 : base === 0.125 ? 3 : 0;
+  // 加线
+  g.strokeStyle = line; g.lineWidth = 1;
+  const step = gap / 2;
+  for (let yy = top - step; yy >= y - 1; yy -= gap) { g.beginPath(); g.moveTo(x - gap * 0.9, Math.round(yy) + 0.5); g.lineTo(x + gap * 0.9, Math.round(yy) + 0.5); g.stroke(); }
+  for (let yy = bottom + step; yy <= y + 1; yy += gap) { g.beginPath(); g.moveTo(x - gap * 0.9, Math.round(yy) + 0.5); g.lineTo(x + gap * 0.9, Math.round(yy) + 0.5); g.stroke(); }
+  // 临时记号
+  if (acc !== 0) {
+    g.fillStyle = ink;
+    g.font = (gap * 2.0) + 'px "Segoe UI Symbol", "Cambria Math", serif';
+    g.textAlign = 'center';
+    g.fillText(acc > 0 ? '\u266F' : (acc < 0 ? '\u266D' : '\u266E'), x - gap * 1.5, y + gap * 0.7);
+  }
+  // 符头
+  g.beginPath();
+  g.ellipse(x, y, gap * 0.62, gap * 0.44, -0.35, 0, Math.PI * 2);
+  if (isSel) { g.fillStyle = accent; g.fill(); }
+  else if (hollow) { g.fillStyle = pal_canvas(g); g.fill(); g.strokeStyle = ink; g.lineWidth = 1.6; g.stroke(); }
+  else { g.fillStyle = ink; g.fill(); }
+  // 符干 + 符尾
+  if (!noStem) {
+    const up = y >= midY;
+    const sx = up ? x + gap * 0.58 : x - gap * 0.58;
+    const sy2 = up ? y - gap * 3.2 : y + gap * 3.2;
+    g.strokeStyle = isSel ? accent : ink; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(sx, y); g.lineTo(sx, sy2); g.stroke();
+    for (let f = 0; f < flags; f++) {
+      const fy = sy2 + (up ? f * gap * 0.6 : -f * gap * 0.6);
+      g.beginPath();
+      if (up) { g.moveTo(sx, fy); g.quadraticCurveTo(sx + gap * 0.9, fy + gap * 0.5, sx + gap * 0.15, fy + gap * 1.1); }
+      else { g.moveTo(sx, fy); g.quadraticCurveTo(sx - gap * 0.9, fy - gap * 0.5, sx - gap * 0.15, fy - gap * 1.1); }
+      g.stroke();
+    }
+  }
+  if (dot) { g.fillStyle = isSel ? accent : ink; g.beginPath(); g.arc(x + gap * 1.05, y, gap * 0.16, 0, Math.PI * 2); g.fill(); }
+  // 歌词（MIDI 里有词时画在谱下）
+  if (n.lyric) {
+    g.fillStyle = pal_stone(g);
+    g.font = '11px "Segoe UI", "Microsoft YaHei", sans-serif';
+    g.textAlign = 'center';
+    g.fillText(String(n.lyric), x, bottom + gap * 2.2);
+  }
+}
+function pal_canvas(g) { const p = themeColors(); return p.canvas || '#fff'; }
+function pal_stone(g) { const p = themeColors(); return p.stone || '#888'; }
 function draw() {
   const cv = canvas.value, wEl = wrap.value;
   if (!cv || !wEl) return;
@@ -400,6 +568,7 @@ function draw() {
   g.addColorStop(0, bgTop); g.addColorStop(1, bgBottom);
   ctx2d.fillStyle = g; ctx2d.fillRect(0, 0, W, HK);
   if (!s) return;
+  if (props.view === 'score') { drawScore(ctx2d, W, HK); return; }
 
   const lo = viewTop.value - Math.ceil(HK / rowH.value);
   const hi = viewTop.value;
@@ -700,7 +869,193 @@ function ccPaint(e) {
 }
 
 /* ---------------- 交互 ---------------- */
+/* ================================================================
+ * 五线谱视图（view === 'score'）
+ * ----------------------------------------------------------------
+ * 自己刻谱而不是引第三方库（VexFlow/OSMD）：
+ *   1. 引擎侧已经有 abcjs/Verovio 只读刻本（乐谱页），但它们是 SVG、不可编辑；
+ *   2. 编辑需要「像素 ↔ 音高/时值」双向映射与命中测试，自己刻反而短；
+ *   3. 离线包不引入新依赖。
+ * 只做单声部旋律谱（这是「改 MIDI」的常见诉求）：五线谱 + 谱号 + 调号 + 拍号 + 小节线，
+ * 音符含符干/符尾/符点/临时记号/加线；不画连桁与休止符（空小节给全休止方块）。
+ * ================================================================ */
+const scoreScrollY = ref(0);
+const scoreClef = ref('auto');            // auto | treble | bass
+const insertTicks = ref(0);               // 画笔插入时用的时值（0 = 用一拍）
+const insertDot = ref(false);
+const SCORE_LETTER_SEMI = [0, 2, 4, 5, 7, 9, 11];
+const SCORE_PC_TO_LETTER = [0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6];   // 升号拼写
+const SCORE_FLAT_MAP = [[0, 0], [1, -1], [1, 0], [2, -1], [2, 0], [3, 0], [3, 1], [4, 0], [5, -1], [5, 0], [6, -1], [6, 0]];
+const SCORE_GLYPH = { 0: 'w', 1: 'h', 2: 'q', 3: 'e', 4: 's', 5: 't' };   // 由「四分音符数」反查时值
+
+/** 音高拼写：升号优先（keySf < 0 时用降号） */
+function scoreSpell(midi, sharps) {
+  const pc = ((midi % 12) + 12) % 12;
+  let letter, acc;
+  if (sharps) { letter = SCORE_PC_TO_LETTER[pc]; acc = pc - SCORE_LETTER_SEMI[letter]; }
+  else { const f = SCORE_FLAT_MAP[pc]; letter = f[0]; acc = f[1]; }
+  const octave = Math.floor(midi / 12) - 1;
+  return { letter, acc, octave, diatonic: octave * 7 + letter };
+}
+
+/** 由「全音阶序号 + 变音记号」还原 MIDI 音高 */
+function scorePitchOf(diatonic, acc) {
+  const letter = ((diatonic % 7) + 7) % 7;
+  const octave = Math.floor(diatonic / 7);
+  const midi = SCORE_LETTER_SEMI[letter] + acc + 12 * (octave + 1);
+  return Math.max(0, Math.min(127, midi));
+}
+
+/** 调号：优先用曲目的 keySig，没有就按音符分布猜（core/score.js 的 detectSf） */
+function scoreKeySf(tr) {
+  const s = song();
+  if (s && s.keySig && typeof s.keySig.sf === 'number') return s.keySig.sf;
+  try { return detectSf((tr && tr.notes) || []); } catch (e) { return 0; }
+}
+
+/** 谱号：旋律整体偏低自动换低音谱号（也可由工具栏强制） */
+function scoreClefNow(tr) {
+  if (scoreClef.value !== 'auto') return scoreClef.value;
+  const ns = (tr && tr.notes) || [];
+  if (!ns.length) return 'treble';
+  let sum = 0;
+  for (const n of ns) sum += n.midi;
+  return (sum / ns.length) < 59 ? 'bass' : 'treble';
+}
+
+/** 谱面几何：每行几小节、音符画在哪（绘制与命中测试共用同一份布局） */
+function scoreLayout(W, HK) {
+  const s = song(), tr = curTrack();
+  if (!s || !tr) return null;
+  const tpb = s.tpb || 480;
+  const sig = (s.sigMap && s.sigMap.length) ? s.sigMap[0] : { num: 4, den: 4 };
+  const beatsPerBar = Math.max(1, sig.num * (4 / (sig.den || 4)));
+  const barTicks = beatsPerBar * tpb;
+  const sf = scoreKeySf(tr);
+  const sharps = sf >= 0;
+  const clef = scoreClefNow(tr);
+  const gap = Math.max(5, Math.round(5 * Math.min(1.8, Math.max(0.7, zoom.value))));   // 线间距
+  const lineY0 = 30;                                     // 第一行五线谱的顶线（相对行内）
+  const staffH = gap * 4;
+  const systemH = staffH + gap * 5.5;                    // 一行占的高度（上下留白）
+  const leftPad = 66;                                    // 谱号 + 调号 + 拍号
+  const rightPad = 10;
+  const beatPx = Math.max(9, pxPerBeat.value * 0.85);
+  const barW = Math.max(96, beatsPerBar * beatPx);
+  const barsPerSystem = Math.max(1, Math.floor((W - leftPad - rightPad) / barW));
+  const lastTick = Math.max(barTicks, maxTickOf(tr));
+  const bars = Math.max(1, Math.ceil(lastTick / barTicks));
+  const systems = Math.max(1, Math.ceil(bars / barsPerSystem));
+  return { s, tr, tpb, sig, beatsPerBar, barTicks, sf, sharps, clef, gap, lineY0, staffH, systemH,
+           leftPad, rightPad, barW, barsPerSystem, bars, systems, W, HK };
+}
+function maxTickOf(tr) { let m = 0; for (const n of tr.notes || []) m = Math.max(m, n.end); return m; }
+
+/** 音符在谱面上的 y（全音阶序号 → 像素）。五线谱 E4=0 线序的换算在这里集中 */
+function scoreYOf(lay, n) {
+  const midB = lay.clef === 'bass' ? 50 : 71;          // 低音谱号中线 D3=50；高音谱号中线 B4=71
+  const midDia = scoreSpell(midB, true).diatonic;
+  const dia = scoreSpell(n.midi, lay.sharps).diatonic;
+  const midY = lay.lineY0 + lay.staffH / 2;
+  return midY - ((dia - midDia) * lay.gap) / 2;
+}
+
+/** 音符 x：按 tick 线性映射（与卷帘同一个 pxPerBeat 语义，缩放一致） */
+function scoreXOf(lay, tick) {
+  const bar = Math.floor(tick / lay.barTicks);
+  const inBar = tick - bar * lay.barTicks;
+  const barIdx = bar % lay.barsPerSystem;
+  return lay.leftPad + barIdx * lay.barW + (inBar / lay.barTicks) * (lay.barW - 12);
+}
+function scoreSystemY(lay, tick) {
+  const bar = Math.floor(tick / lay.barTicks);
+  return 8 + Math.floor(bar / lay.barsPerSystem) * lay.systemH - scoreScrollY.value;
+}
+function scoreTickAt(lay, x, y) {
+  const row = Math.floor((y - 8 + scoreScrollY.value) / lay.systemH);
+  const localX = x - lay.leftPad;
+  const barIdx = Math.max(0, Math.min(lay.barsPerSystem - 1, Math.floor(localX / lay.barW)));
+  const frac = Math.max(0, Math.min(1, (localX - barIdx * lay.barW) / (lay.barW - 12)));
+  const bar = row * lay.barsPerSystem + barIdx;
+  return Math.round((bar * lay.barTicks + frac * lay.barTicks) / 5) * 5;
+}
+/** 由 y 反推该处的音高（保留原音符的变音记号） */
+function scorePitchAt(lay, y, acc) {
+  const midB = lay.clef === 'bass' ? 50 : 71;
+  const midDia = scoreSpell(midB, true).diatonic;
+  const midY = lay.lineY0 + lay.staffH / 2;
+  const dia = midDia + Math.round(((midY - y) * 2) / lay.gap);
+  return scorePitchOf(dia, acc);
+}
+
+/** 乐谱命中：符头附近（半径 ≈ 一个线间距）算命中 */
+function scoreHit(x, y) {
+  const lay = scoreLayout(wrap.value ? wrap.value.clientWidth : 600, H.value);
+  if (!lay) return null;
+  const r = Math.max(8, lay.gap * 1.2);
+  let best = null, bestD = 1e9;
+  for (const n of lay.tr.notes) {
+    const ny = scoreSystemY(lay, n.start) + scoreYOf(lay, n);
+    const nx = scoreXOf(lay, n.start);
+    const d = Math.hypot(nx - x, ny - y);
+    if (d <= r && d < bestD) { bestD = d; best = n; }
+  }
+  return best;
+}
+
+/** 乐谱视图里按下鼠标：选中 / 画笔插入 / 竖直拖动改音高 */
+function scoreDown(e, x, y, multi) {
+  const lay = scoreLayout(wrap.value ? wrap.value.clientWidth : 600, H.value);
+  if (!lay) return;
+  const hitNote = scoreHit(x, y);
+  if (props.tool === 'pencil' && !hitNote) {
+    const tick = snapTick(scoreTickAt(lay, x, y));
+    const midi = scorePitchAt(lay, y, 0);
+    const len = Math.max(30, insertTicks.value || (insertDot.value ? Math.round(lay.tpb * 1.5) : lay.tpb));
+    const note = { start: Math.max(0, tick), end: Math.max(0, tick) + len, midi, vel: props.defaultVelocity, ch: (curTrack() && curTrack().ch) || 0 };
+    pushState();
+    lay.tr.notes.push(note);
+    sortNotes(lay.tr.notes);
+    selection.clear(); selection.add(note);
+    dragState.value = { type: 'score-move', notes: [note], startX: x, startY: y,
+                        orig: [{ n: note, midi: note.midi, start: note.start, end: note.end }], moved: false };
+    afterEdit(); emit('modify'); emit('select'); draw();
+    return;
+  }
+  if (!hitNote) { if (!multi) selection.clear(); emit('select'); draw(); return; }
+  if (!multi && !selection.has(hitNote)) { selection.clear(); selection.add(hitNote); }
+  else if (multi && selection.has(hitNote)) selection.delete(hitNote);
+  else if (multi) selection.add(hitNote);
+  if (!selection.has(hitNote)) { dragState.value = null; draw(); return; }
+  pushState();
+  dragState.value = { type: 'score-move', notes: [...selection], startX: x, startY: y,
+                      orig: [...selection].map((n) => ({ n, midi: n.midi, start: n.start, end: n.end })), moved: false };
+  emit('select'); draw();
+}
+
+/** 乐谱视图里的拖动：竖直按**全音阶**换音高（保留变音记号），水平按拍移动 */
+function scoreMove(x, y) {
+  const d = dragState.value;
+  const lay = scoreLayout(wrap.value ? wrap.value.clientWidth : 600, H.value);
+  if (!d || !lay) return;
+  const step = Math.max(2, lay.gap / 2);
+  const diaSteps = Math.round((d.startY - y) / step);
+  const tickPerPx = lay.barTicks / Math.max(1, lay.barW - 12);
+  const dTickRaw = (x - d.startX) * tickPerPx;
+  const dTick = snapTick(Math.abs(dTickRaw)) * (dTickRaw < 0 ? -1 : 1);
+  for (const o of d.orig) {
+    const sp = scoreSpell(o.midi, lay.sharps);
+    o.n.midi = scorePitchOf(sp.diatonic + diaSteps, sp.acc);
+    o.n.start = Math.max(0, Math.round(o.start + dTick));
+    o.n.end = Math.max(o.n.start + 1, Math.round(o.end + dTick));
+  }
+  d.moved = d.moved || diaSteps !== 0 || dTick !== 0;
+  if (d.moved) emit('modify');
+  draw();
+}
+
 function hitTest(x, y) {
+  if (props.view === 'score') return scoreHit(x, y);
   const tr = curTrack(); if (!tr) return null;
   const hi = viewTop.value;
   const midi = yToMidi(y);
@@ -719,6 +1074,11 @@ function onDown(e) {
   const rect = canvas.value.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
   const multi = e.ctrlKey || e.metaKey || e.shiftKey;
+  if (props.view === 'score') {
+    scoreDown(e, x, y, multi);
+    try { canvas.value.setPointerCapture(e.pointerId); } catch (err) {}
+    return;
+  }
   if (props.tool === 'pencil') {
     const tick = snapTick(xToTick(x)), midi = yToMidi(y);
     if (tick < 0 || midi < 0 || midi > 127) return;
@@ -760,6 +1120,7 @@ function onMove(e) {
   const d = dragState.value; if (!d) return;
   const rect = canvas.value.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  if (d.type === 'score-move') { scoreMove(x, y); return; }
   if (d.type === 'marquee') {
     d.box = { x: Math.min(d.x0, x), y: Math.min(d.y0, y), w: Math.abs(x - d.x0), h: Math.abs(y - d.y0) };
     if (d.x0 >= 0) {
@@ -806,6 +1167,13 @@ function onUp() {
   const d = dragState.value;
   if (!d) return;
   const tr = curTrack();
+  if (d.type === 'score-move') {
+    // 拖动期间已就地改过数据（撤销栈在 onDown 里入栈），这里只做收尾与重排
+    if (d.moved) { afterEdit(); emit('modify'); }
+    dragState.value = null;
+    draw();
+    return;
+  }
   if ((d.type === 'move' || d.type === 'resize' || d.type === 'resize-left') && d.notes.length && tr) {
     // 位置/长度已在拖拽中直接修改；状态在 onDown 时已入撤销栈
     if (d.type === 'move' && props.scaleMode === 'constrain') {
@@ -844,6 +1212,19 @@ function onWheel(e) {
   e.preventDefault();
   const rect = canvas.value.getBoundingClientRect();
   const mx = e.clientX - rect.left;
+  if (props.view === 'score') {
+    // 谱面是「一行一行往下排」，所以滚轮滚的是可见行（Ctrl 才缩放）
+    if (e.ctrlKey || e.metaKey) {
+      const nz = clamp(zoom.value * (e.deltaY < 0 ? 1.15 : 0.87), 0.4, 2.5);
+      zoom.value = nz; emit('zoom', zoom.value);
+    } else {
+      const lay = scoreLayout(rect.width, H.value);
+      const maxY = lay ? Math.max(0, lay.systems * lay.systemH + 16 - H.value) : 0;
+      scoreScrollY.value = Math.max(0, Math.min(maxY, scoreScrollY.value + e.deltaY));
+    }
+    draw();
+    return;
+  }
   if (e.ctrlKey || e.metaKey) {
     const before = xToTick(mx);
     const nz = clamp(zoom.value * (e.deltaY < 0 ? 1.15 : 0.87), 0.4, 2.5);
@@ -874,8 +1255,26 @@ function fit() {
 function focusSelection() {
   if (!selection.size) return;
   const first = [...selection].sort((a, b) => a.start - b.start)[0];
+  if (props.view === 'score') {
+    const lay = scoreLayout(wrap.value ? wrap.value.clientWidth : 600, H.value);
+    if (lay) {
+      const bar = Math.floor(first.start / lay.barTicks);
+      const sys = Math.floor(bar / lay.barsPerSystem);
+      const y = sys * lay.systemH;
+      if (y < scoreScrollY.value || y + lay.systemH > scoreScrollY.value + H.value) {
+        scoreScrollY.value = Math.max(0, y - lay.systemH * 0.5);
+      }
+    }
+    draw();
+    return;
+  }
   viewTick.value = Math.max(0, first.start - (song()?.tpb || 480) * 2);
   draw();
+}
+/* 乐谱：画笔插入用的时值（拍数 → tick，附点再 ×1.5） */
+function setInsert(ticks, dot) {
+  if (ticks != null) insertTicks.value = Math.max(0, Math.round(ticks));
+  if (dot != null) insertDot.value = !!dot;
 }
 function deleteSelected() { if (selection.size) deleteNotes([...selection]); }
 function quantizeSelected(ratio) { if (selection.size) quantize([...selection], ratio); }
@@ -1089,6 +1488,8 @@ defineExpose({
   addPedal, delPedal, selSpan, addNote, deleteNotes, pushStateForTrack, notifyExternalEdit,
   undo, redo, canUndo, canRedo, clearHistory, historySnapshots,
   snapSelToAudio,
+  // 乐谱视图（五线谱）对外：滚动/谱号/插入时值/重绘
+  scoreScrollY, scoreClef, insertTicks, insertDot, setInsert, draw,
 });
 
 /* ---------------- 生命周期 ---------------- */
@@ -1122,6 +1523,8 @@ function stopLoop() { if (raf) { cancelAnimationFrame(raf); raf = 0; } }
 watch(() => currentSong.value, () => { selection.clear(); _autoScale = null; resetView(); markDirty(); draw(); });
 watch(() => props.trackIndex, () => { selection.clear(); markDirty(); draw(); if (props.ccEnabled) ccDrawLane(); });
 watch(() => props.tool, () => { dragState.value = null; markDirty(); draw(); });
+// 视图切换（卷帘 ↔ 五线谱）：绘制是按需重绘的，不标脏就不会自己画
+watch(() => props.view, () => { dragState.value = null; scoreScrollY.value = 0; markDirty(); nextTick(draw); });
 watch(() => props.ccNumber, () => ccDrawLane());
 watch(() => props.cc2Number, () => ccDrawLane());
 watch(() => props.cc2Enabled, (v) => { if (!v) ccDrawing.value = false; markDirty(); ccDrawLane(); });

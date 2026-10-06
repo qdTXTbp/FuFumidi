@@ -358,11 +358,42 @@ const DRUM_PITCHES = [35,36,38,40,41,43,45,47,48,50,51,53,55,57,59,60,61,63,65,6
 const DRUM_NAMES = {35:'Acoustic Bass Drum',36:'Bass Drum 1',38:'Acoustic Snare',40:'Electric Snare',41:'Floor Tom 2',43:'Floor Tom 1',45:'Low Tom',47:'Low-Mid Tom',48:'Hi-Mid Tom',50:'High Tom',51:'Ride Cymbal 1',53:'Ride Bell',55:'Splash Cymbal',57:'Crash Cymbal 2',59:'Ride Cymbal 2',60:'Hi Bongo',61:'Low Bongo',63:'High Conga',65:'Low Conga',66:'High Timbale',67:'Low Timbale',69:'Cowbell',71:'High Agogo',72:'Low Agogo',73:'Maracas',75:'Claves',76:'Hi Wood Block',77:'Low Wood Block',79:'Open Cuica',81:'Open Hi-Hat'};
 const drumTracks = computed(() => song.value ? song.value.tracks.map((t, i) => ({ i, t })) : []);
 
-/** 三视图切换：钢琴卷帘 / 鼓组网格 / 乐谱（乐谱跳转到乐谱页） */
+/**
+ * 三视图切换：钢琴卷帘 / 鼓组网格 / **五线谱（就地编辑）**。
+ *
+ * ★ 乐谱以前是「跳转到乐谱页」——那是只读的刻版视图（abcjs/Verovio），看完还得跳回来改。
+ *   现在乐谱是**同一份数据的另一种编辑器视图**：选中/撤销/吸附/播放头与卷帘共用，
+ *   在谱面上直接点选、拖动改音高、画笔插音符、改时值，改的就是 MIDI。
+ *   只读的精排谱（带排版/导出 PDF/PNG）仍然在「乐谱」页。
+ */
 function setEditorView(v) {
-  if (v === 'score') { setView('score'); return; }
   if (v === 'drum') { openDrumEditor(); return; }
-  viewMode.value = 'piano';
+  if (!song.value) { toast(t('请先载入 MIDI'), 'warn'); return; }
+  viewMode.value = (v === 'score') ? 'score' : 'piano';
+  if (v === 'score') nextTick(() => editor.value?.focusSelection());
+}
+
+/* ---------------- 乐谱视图工具（时值/附点/谱号） ---------------- */
+const scoreDot = ref(false);
+const scoreClefUi = ref('auto');
+const SCORE_DURS = [
+  { q: 4, label: '全' }, { q: 2, label: '二分' }, { q: 1, label: '四分' },
+  { q: 0.5, label: '八分' }, { q: 0.25, label: '十六分' },
+];
+/** 点一下时值：既设为「画笔插入的时值」，也改当前选中的音符 */
+function pickScoreDur(q) {
+  const tpb = (song.value && song.value.tpb) || 480;
+  const tks = Math.round(q * tpb * (scoreDot.value ? 1.5 : 1));
+  editor.value?.setInsert(tks, scoreDot.value);
+  if (editor.value && editor.value.selCount() > 0) { editor.value.setSelLen(tks); refreshSel(); }
+}
+function toggleScoreDot() {
+  scoreDot.value = !scoreDot.value;
+  editor.value?.setInsert(null, scoreDot.value);
+}
+function pickClef(c) {
+  scoreClefUi.value = c;
+  if (editor.value && editor.value.scoreClef) { editor.value.scoreClef.value = c; editor.value.draw(); }
 }
 function openDrumEditor() {
   if (!song.value) { toast(t('请先载入 MIDI'), 'warn'); return; }
@@ -1259,7 +1290,7 @@ onBeforeUnmount(() => {
         <div class="et-group ed-view-switch">
           <button class="et-btn" :class="{ active: viewMode === 'piano' }" :title="t('钢琴卷帘视图')" @click="setEditorView('piano')"><Icon name="music" :size="14" />{{ t('钢琴') }}</button>
           <button class="et-btn" :class="{ active: viewMode === 'drum' }" :title="t('鼓组网格视图')" @click="setEditorView('drum')"><Icon name="drum" :size="14" />{{ t('鼓组') }}</button>
-          <button class="et-btn" :title="t('同步到乐谱：在五线谱查看当前编辑结果')" @click="setEditorView('score')"><Icon name="score" :size="14" />{{ t('乐谱') }}</button>
+          <button class="et-btn" :class="{ active: viewMode === 'score' }" :title="t('乐谱编辑（可改 MIDI）：在五线谱上点选/拖动/插音符')" @click="setEditorView('score')"><Icon name="score" :size="14" />{{ t('乐谱') }}</button>
         </div>
         <span class="et-sep"></span>
         <button class="et-btn" :title="t('撤销 Ctrl+Z')" @click="undo"><Icon name="undo" :size="14" />{{ t('撤销') }}</button>
@@ -1439,6 +1470,20 @@ onBeforeUnmount(() => {
         <div v-show="inspOpen" class="ed-split" :title="t('拖动调整检查器宽度')" @pointerdown.prevent="startInspResize"></div>
 
         <section class="ed-stage">
+        <!-- 乐谱工具条：独一条横排（放在主工具条里会把工具栏撑到 256px 高，音符区只剩 187px）。
+             时值按钮既改选中音符、也决定画笔插入的长度。 -->
+        <div v-if="viewMode === 'score'" class="card ed-scorebar">
+          <span class="et-label">{{ t('时值') }}</span>
+          <button v-for="d in SCORE_DURS" :key="d.q" class="et-btn" :title="t('设为这个时值（改选中音符，也决定画笔插入的长度）')"
+                  @click="pickScoreDur(d.q)">{{ t(d.label) }}</button>
+          <button class="et-btn" :class="{ active: scoreDot }" :title="t('附点（时值 ×1.5）')" @click="toggleScoreDot">·</button>
+          <span class="et-sep"></span>
+          <span class="et-label">{{ t('谱号') }}</span>
+          <button v-for="c in [['auto','自动'],['treble','高音'],['bass','低音']]" :key="c[0]" class="et-btn"
+                  :class="{ active: scoreClefUi === c[0] }" @click="pickClef(c[0])">{{ t(c[1]) }}</button>
+          <span class="et-sep"></span>
+          <span class="muted small">{{ t('拖动音符改音高/位置；画笔工具在空白处点一下插音符') }}</span>
+        </div>
       <!-- 迷你图 + 缩放 -->
       <div class="ed-nav" ref="miniWrap">
         <canvas ref="miniEl" class="ed-mini" style="height:34px" @click="miniClick"></canvas>
@@ -1464,9 +1509,10 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- 钢琴卷帘（用 v-show 保活：切到鼓组再切回不会丢撤销历史与视图位置） -->
-      <div v-show="viewMode === 'piano'" class="ed-wrap-rel">
+      <div v-show="viewMode !== 'drum'" class="ed-wrap-rel">
         <EditorCanvas ref="editor" :tool="tool" :snap-ratio="snapRatio" :track-index="trackIndex"
-                      :cc-enabled="ccEnabled" :cc-number="ccNumber"
+                      :view="viewMode === 'score' ? 'score' : 'piano'"
+                      :cc-enabled="ccEnabled && viewMode === 'piano'" :cc-number="ccNumber"
                       :scale-spec="scaleSpec" :scale-mode="scaleMode" :chord-track="chordSpec" :ks-map="ksMap" :audio="audioData"
                       :cc2-enabled="cc2Enabled" :cc2-number="cc2Number" :cc-mode="ccMode"
                       :default-velocity="defaultVelocity" :color-mode="colorMode"
@@ -1475,7 +1521,7 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- 鼓组网格（打击乐专用视图） -->
-      <div v-show="viewMode !== 'piano'" class="ed-wrap-rel ed-drum">
+      <div v-show="viewMode === 'drum'" class="ed-wrap-rel ed-drum">
         <div class="ed-drum-bar">
           <select class="select-input" v-model="drumTrack">
             <option v-for="d in drumTracks" :key="d.i" :value="d.i">{{ d.t.name }}{{ t('（') }}{{ d.t.notes.length }}{{ t('）') }}</option>
@@ -1978,6 +2024,11 @@ onBeforeUnmount(() => {
   max-height: min(62vh, 520px);
 }
 .ed-wrap-rel { position: relative; flex: 1; min-height: 0; }
+/* 乐谱工具条：一条横排、可横向滚动，不换行（换行会吃掉音符区高度） */
+.ed-scorebar { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; overflow-x: auto;
+  flex: none; padding: 4px 8px; margin-bottom: 6px; border-radius: 10px; }
+.ed-scorebar .et-label { flex: none; font-size: 11.5px; color: var(--stone); margin: 0 2px; }
+.ed-scorebar .muted { flex: none; white-space: nowrap; }
 .ed-video-overlay { position: absolute; top: 4px; right: 4px; width: 300px; max-width: 34%; border-radius: 8px; z-index: 20; background: #000; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
 
 /* P1-2 和弦轨 */

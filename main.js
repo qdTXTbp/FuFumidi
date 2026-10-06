@@ -99,7 +99,7 @@ if (!gotLock) {
     configureSession({ session, dialog, app });
     registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app, fs, spawnEngine, dialog });
     registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, readSettings });
-    registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline });
+    registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, spawnEngine });
     registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, pluginHost, readSettings, resolveSeparateModel: (id) => (ModelsService ? ModelsService.resolveSeparateModel(id) : null) });
     registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, parsePyJson });
     registerPresetsIpc({ ipcMain, runEngineInline, parsePyJson, pyLit });
