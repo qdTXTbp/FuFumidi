@@ -57,6 +57,17 @@ export function parseOto(text) {
       preutterance: num(rest[4]),
       overlap: rest.length > 5 ? num(rest[5]) : 0,
       extra: rest.slice(6),
+      /* ★ 原始文本：有些库（实测 Iona_Beta）写的是 `0.0 / 404.9` 这种浮点串。
+         若不保留原文，保存一次就会把整个文件的数字重排一遍（0.0 → 0）——
+         用户只改了一个格子，diff 却是整份文件。这里记下来，没动过的字段原样吐回。 */
+      raw: {
+        alias: rest[0] == null ? '' : String(rest[0]),
+        offset: rest.length > 1 ? String(rest[1]) : '',
+        consonant: rest.length > 2 ? String(rest[2]) : '',
+        blank: rest.length > 3 ? String(rest[3]) : '',
+        preutterance: rest.length > 4 ? String(rest[4]) : '',
+        overlap: rest.length > 5 ? String(rest[5]) : '',
+      },
     });
   }
   return out;
@@ -83,11 +94,22 @@ export function detectEol(text) {
  */
 export function formatOto(file, eol) {
   const sep = eol === '\r\n' ? '\r\n' : '\n';
+  /** 数值没被改过 → 用原文（保住 0.0 / 404.9 这类写法）；改过 → 用当前数值 */
+  const pick = (e, key) => {
+    const rawv = e.raw && e.raw[key];
+    if (rawv != null && String(rawv).trim() !== '' && Number(rawv) === Number(e[key])) return String(rawv).trim();
+    return String(e[key]);
+  };
+  const pickAlias = (e) => {
+    const rawv = e.raw && e.raw.alias;
+    if (rawv != null && String(rawv).trim() === String(e.alias)) return String(rawv).trim();
+    return String(e.alias);
+  };
   const lines = [];
   for (const p of (file && file.passthrough) || []) lines.push(p);
   for (const e of (file && file.entries) || []) {
     const tail = (e.extra && e.extra.length) ? ',' + e.extra.join(',') : '';
-    lines.push(`${e.file}=${e.alias},${e.offset},${e.consonant},${e.blank},${e.preutterance},${e.overlap}${tail}`);
+    lines.push(`${e.file}=${pickAlias(e)},${pick(e, 'offset')},${pick(e, 'consonant')},${pick(e, 'blank')},${pick(e, 'preutterance')},${pick(e, 'overlap')}${tail}`);
   }
   for (const l of (file && file.loose) || []) lines.push(l);
   return lines.length ? lines.join(sep) + sep : '';
