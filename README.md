@@ -389,6 +389,87 @@ Coding conventions are documented in `.github/CODING_GUIDELINES.md`; repository 
 and their dispositions in `docs/HYGIENE.md`.
 
 
+## Acknowledgements
+
+FuFumidi is built on a lot of other people's work. Below is what ships in, or is downloaded by, this
+application, grouped by what it does. Licences are those of the upstream projects — the authoritative
+texts for the bundled components are next to the files they cover and are listed in
+[LICENSE](LICENSE); versions and SHA-256 hashes of the vendored binaries live in
+[docs/VENDOR.md](docs/VENDOR.md).
+
+### Application shell and interface
+
+- [Electron](https://github.com/electron/electron) + Chromium — the desktop shell
+- [Vue 3](https://github.com/vuejs/core), [Vite](https://github.com/vitejs/vite),
+  [Pinia](https://github.com/vuejs/pinia), [Vue Router](https://github.com/vuejs/router) — the renderer
+- [pdf.js](https://github.com/mozilla/pdf.js) — PDF rendering for the score importer
+
+### Sound and soundfonts
+
+- [js-synthesizer](https://github.com/surikov/js-synthesizer) and
+  [FluidSynth](https://github.com/FluidSynth/fluidsynth) (`libfluidsynth`) — SoundFont playback
+- [GeneralUser GS](https://schristiancollins.com/generaluser.php) by S. Christian Collins — the bundled default soundfont (CC BY 3.0)
+- [FluidR3_GM](https://member.keymusician.com/Member/FluidR3_GM/index.html) (MIT),
+  [Salamander Grand Piano](https://sfzinstruments.github.io/pianos/salamander) by Alexander Holm (CC BY 3.0),
+  [Arachno SoundFont](https://www.arachnosoft.com/main/soundfont.php),
+  [Aspirin-DX Soundbank](https://github.com/NeoSoundFonts/Aspirin-DX-Soundbank) (NeoSoundFonts),
+  SGM-V2.01, Timbres of Heaven, FM/GM and GIGA FM — the additional soundfonts in the workshop
+
+### Scores and optical recognition
+
+- [Verovio](https://github.com/rism-digital/verovio) — MusicXML engraving (staff / tablature views)
+- [Audiveris](https://github.com/Audiveris/audiveris) — the optional OMR backend, downloaded on demand
+
+### Transcription, separation and analysis models
+
+- [basic-pitch](https://github.com/spotify/basic-pitch) (Spotify) — general audio-to-MIDI, bundled ONNX model
+- [piano-transcription-inference](https://github.com/qiuqiangkong/piano_transcription_inference) / the CRNN model
+  published on [Zenodo](https://zenodo.org/record/4034264) — the piano-specific transcriber
+- [MuScriptor](https://github.com/muscriptor/muscriptor) — the MuScriptor model family
+- [Aria-AMT](https://github.com/EleutherAI/aria-amt) (EleutherAI) and `aria-utils` — the Aria chain
+- [Transkun](https://github.com/Yujia-Yan/TransKun) — the transkun transcriber
+- [Demucs](https://github.com/facebookresearch/demucs) (Meta) — vocal / accompaniment separation
+- [MSST](https://github.com/ZFTurbo/Music-Source-Separation-Training) via [pymss](https://pypi.org/project/pymss/) —
+  the extra separation models (BS-RoFormer, Mel-Band-RoFormer, HTDemucs, MDX23C, SCNet, Bandit, Swin-UperNet configs)
+- [Beat This!](https://github.com/CPJKU/beat_this) — beat grid detection
+
+### Singing synthesis
+
+- [OpenUtau](https://github.com/stakira/OpenUtau) (MIT) — the UTAU-compatible engine this project ports,
+  together with the WORLD / `worldline` native runtimes it ships
+- [DiffSinger](https://github.com/openvpi/DiffSinger) ecosystem (openvpi) and the
+  [NSF-HiFiGAN vocoder](https://github.com/openvpi/vocoders) — AI singing synthesis
+- [pypinyin](https://github.com/mozillazg/python-pinyin) — Chinese lyrics to phonemes
+- Community voicebank and model releases linked from the in-app catalogue (for example
+  [Ria](https://github.com/RibosomeK/RiaDiffSinger), [utsu](https://github.com/titinko/utsu),
+  [HowHow-UTAU](https://github.com/EarlySpringCommitee/HowHow-UTAU)) — downloaded by the user, not bundled
+
+### Python runtime and scientific stack
+
+- CPython, and [NumPy](https://github.com/numpy/numpy), [SciPy](https://github.com/scipy/scipy),
+  [librosa](https://github.com/librosa/librosa), [soundfile](https://github.com/bastibe/python-soundfile),
+  [pretty_midi](https://github.com/craffel/pretty-midi), [mido](https://github.com/mido/mido),
+  [PyYAML](https://github.com/yaml/pyyaml), [Pillow](https://github.com/python-pillow/Pillow),
+  [tqdm](https://github.com/tqdm/tqdm), [einops](https://github.com/arogozhnikov/einops),
+  [OmegaConf](https://github.com/omry/omegaconf), [ml_collections](https://github.com/google/ml_collections),
+  [beartype](https://github.com/beartype/beartype), [pydub](https://github.com/jiaaro/pydub),
+  [mir_eval](https://github.com/craffel/mir_eval), [resampy](https://github.com/bmcfee/resampy)
+- [ONNX Runtime](https://github.com/microsoft/onnxruntime) and [ONNX](https://github.com/onnx/onnx) — model inference
+- [PyTorch](https://github.com/pytorch/pytorch) + torchaudio — used by the GPU acceleration packs
+- [FFmpeg](https://ffmpeg.org/) (via [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg)) — audio / video encoding
+
+### Storage, packaging and hosting
+
+- [SQLite](https://sqlite.org/) via [sql.js](https://github.com/sql-js/sql.js) — the local library database;
+  [adm-zip](https://github.com/cthackers/adm-zip) — archive handling
+- [electron-builder](https://github.com/electron-userland/electron-builder) and [NSIS](https://nsis.sourceforge.io/) — installers
+- [GitHub Actions](https://github.com/features/actions) — CI
+- [Cloudflare Workers](https://workers.cloudflare.com/), D1, R2 and Turnstile — the optional cloud sync service
+  (`cloud-sync/`, which you deploy yourself)
+
+If you believe something used here is missing from this list or attributed incorrectly, please open an issue —
+we would rather fix the credit than keep an incomplete list.
+
 ## Credits
 
 Thanks to OrbisAI Security for providing automated security auditing.

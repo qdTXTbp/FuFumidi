@@ -387,6 +387,84 @@ FuFumidi 支持以插件形式扩展第三方能力，无需改动主程序。�
 编码规范见 `.github/CODING_GUIDELINES.md`，仓库卫生的审计结论与理由见 `docs/HYGIENE.md`。
 
 
+## 致谢
+
+FuFumidi 站在很多人的肩膀上。下面是本工具**随包分发**或**按需下载**用到的开源项目与开源模型，按用途分组。
+许可证以各上游项目为准 —— 随包分发的第三方许可证正文就放在对应资源旁边，清单见 [LICENSE](LICENSE)；
+内置二进制的版本与 SHA-256 记录在 [docs/VENDOR.md](docs/VENDOR.md)。
+
+### 外壳与界面
+
+- [Electron](https://github.com/electron/electron) + Chromium —— 桌面外壳
+- [Vue 3](https://github.com/vuejs/core)、[Vite](https://github.com/vitejs/vite)、
+  [Pinia](https://github.com/vuejs/pinia)、[Vue Router](https://github.com/vuejs/router) —— 渲染层
+- [pdf.js](https://github.com/mozilla/pdf.js) —— 变谱导入时的 PDF 渲染
+
+### 音源与音色库
+
+- [js-synthesizer](https://github.com/surikov/js-synthesizer) 与
+  [FluidSynth](https://github.com/FluidSynth/fluidsynth)（`libfluidsynth`）—— SoundFont 播放
+- [GeneralUser GS](https://schristiancollins.com/generaluser.php)（S. Christian Collins）—— 随包内置的默认音色（CC BY 3.0）
+- [FluidR3_GM](https://member.keymusician.com/Member/FluidR3_GM/index.html)（MIT）、
+  [Salamander Grand Piano](https://sfzinstruments.github.io/pianos/salamander)（Alexander Holm，CC BY 3.0）、
+  [Arachno SoundFont](https://www.arachnosoft.com/main/soundfont.php)、
+  [Aspirin-DX Soundbank](https://github.com/NeoSoundFonts/Aspirin-DX-Soundbank)（NeoSoundFonts）、
+  SGM-V2.01、Timbres of Heaven、FM/GM 与 GIGA FM —— 音色工坊里可下载的其余音色
+
+### 乐谱与识谱
+
+- [Verovio](https://github.com/rism-digital/verovio) —— MusicXML 刻版（五线谱 / 六线谱等记谱）
+- [Audiveris](https://github.com/Audiveris/audiveris) —— 可选的光学识谱后端，按需下载安装
+
+### 转录 / 分离 / 分析模型
+
+- [basic-pitch](https://github.com/spotify/basic-pitch)（Spotify）—— 通用音频转 MIDI，ONNX 模型随包内置
+- [piano-transcription-inference](https://github.com/qiuqiangkong/piano_transcription_inference) 与发布在
+  [Zenodo](https://zenodo.org/record/4034264) 的 CRNN 模型 —— 钢琴专用转录
+- [MuScriptor](https://github.com/muscriptor/muscriptor) —— MuScriptor 系列模型
+- [Aria-AMT](https://github.com/EleutherAI/aria-amt)（EleutherAI）与 `aria-utils` —— Aria 链路
+- [Transkun](https://github.com/Yujia-Yan/TransKun) —— transkun 转录引擎
+- [Demucs](https://github.com/facebookresearch/demucs)（Meta）—— 人声 / 伴奏分离
+- [MSST](https://github.com/ZFTurbo/Music-Source-Separation-Training)（经 [pymss](https://pypi.org/project/pymss/)）——
+  额外分离模型（BS-RoFormer、Mel-Band-RoFormer、HTDemucs、MDX23C、SCNet、Bandit、Swin-UperNet 等配置）
+- [Beat This!](https://github.com/CPJKU/beat_this) —— 节拍网格检测
+
+### 歌声合成
+
+- [OpenUtau](https://github.com/stakira/OpenUtau)（MIT）—— 本项目移植的 UTAU 兼容引擎，以及它附带的
+  WORLD / `worldline` 本地库
+- [DiffSinger](https://github.com/openvpi/DiffSinger) 生态（openvpi）与
+  [NSF-HiFiGAN 声码器](https://github.com/openvpi/vocoders) —— AI 歌声合成
+- [pypinyin](https://github.com/mozillazg/python-pinyin) —— 中文歌词转音素
+- 应用内目录里链接的社区声库与模型（例如 [Ria](https://github.com/RibosomeK/RiaDiffSinger)、
+  [utsu](https://github.com/titinko/utsu)、[HowHow-UTAU](https://github.com/EarlySpringCommitee/HowHow-UTAU)）——
+  由用户自行下载，不随包分发
+
+### Python 运行时与科学计算
+
+- CPython，以及 [NumPy](https://github.com/numpy/numpy)、[SciPy](https://github.com/scipy/scipy)、
+  [librosa](https://github.com/librosa/librosa)、[soundfile](https://github.com/bastibe/python-soundfile)、
+  [pretty_midi](https://github.com/craffel/pretty-midi)、[mido](https://github.com/mido/mido)、
+  [PyYAML](https://github.com/yaml/pyyaml)、[Pillow](https://github.com/python-pillow/Pillow)、
+  [tqdm](https://github.com/tqdm/tqdm)、[einops](https://github.com/arogozhnikov/einops)、
+  [OmegaConf](https://github.com/omry/omegaconf)、[ml_collections](https://github.com/google/ml_collections)、
+  [beartype](https://github.com/beartype/beartype)、[pydub](https://github.com/jiaaro/pydub)、
+  [mir_eval](https://github.com/craffel/mir_eval)、[resampy](https://github.com/bmcfee/resampy)
+- [ONNX Runtime](https://github.com/microsoft/onnxruntime) 与 [ONNX](https://github.com/onnx/onnx) —— 模型推理
+- [PyTorch](https://github.com/pytorch/pytorch) + torchaudio —— GPU 加速包使用
+- [FFmpeg](https://ffmpeg.org/)（经 [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg)）—— 音视频编码
+
+### 存储、打包与托管
+
+- [SQLite](https://sqlite.org/)（经 [sql.js](https://github.com/sql-js/sql.js)）—— 本地曲库数据库；
+  [adm-zip](https://github.com/cthackers/adm-zip) —— 压缩包处理
+- [electron-builder](https://github.com/electron-userland/electron-builder) 与 [NSIS](https://nsis.sourceforge.io/) —— 安装包
+- [GitHub Actions](https://github.com/features/actions) —— 持续集成
+- [Cloudflare Workers](https://workers.cloudflare.com/)、D1、R2 与 Turnstile —— 可选的云同步服务
+  （`cloud-sync/`，由你自己部署）
+
+如果这里漏了某个用到的项目，或者署名有误，欢迎提 issue —— 我们宁可改署名，也不想留一份不全的清单。
+
 ## Credits
 
 感谢 OrbisAI Security 提供的自动化安全审计。
