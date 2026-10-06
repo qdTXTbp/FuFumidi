@@ -10,7 +10,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import PianoRoll from '../components/pianoroll/PianoRoll.vue';
-import { trackColorOf, newNoteId } from '../stores/singer';
+import { trackColorOf, newNoteId, colorblindMode, setColorblindMode } from '../stores/singer';
 import VoicebankPanel from '../components/sing/VoicebankPanel.vue';
 import CurveCanvas from '../components/sing/CurveCanvas.vue';
 import ViewVoicebank from './ViewVoicebank.vue';
@@ -747,6 +747,10 @@ function stepNote(dir: number) {
    组 = 「一组轨 + 组名」，成员轨的数据一个字段都不动（渲染/导出/撤销都不用改）。
    点组 → 切到首成员并把其余成员作为幽灵音符叠出来（复用既有的多轨叠置）。 */
 const groups = computed<any[]>(() => (store.meta && (store.meta as any).groups) || []);
+/** 色盲友好配色开关（M9c）：读的是模块级状态，改完让它参与响应式（下面的 rev 会带动重绘） */
+const cbOn = computed(() => colorblindMode());
+const cbRev = ref(0);
+watch(cbOn, () => { cbRev.value += 1; });
 function makeGroup() {
   const pick = voiceTracks.value.filter((x: any) => x.kind === 'voice').map((x: any) => x.id);
   const ids = store.activeTrackId && pick.includes(store.activeTrackId) ? [store.activeTrackId] : (pick.slice(0, 1));
@@ -789,6 +793,11 @@ function groupTranspose(g: any, d: number) {
 function groupQuantize(g: any) {
   const n = store.quantizeGroup(g.id, 0.25);
   say(n ? (t('本组已量化 ') + n + t(' 个音符到 1/16 网格')) : t('本组音符已经都在网格上'), n ? 'ok' : 'warn');
+}
+/* 色盲友好配色（M9c）：整体换板 + 让所有用到轨道色的地方重算（靠 trackRev 触发重绘） */
+function toggleColorblind() {
+  const on = setColorblindMode(!colorblindMode());
+  say(on ? t('已切换到色盲友好配色（Okabe–Ito 八色）') : t('已切回默认配色'), 'ok');
 }
 function groupSolo(g: any) {
   const n = store.applyGroup(g.id, { solo: !g.solo });
@@ -2480,6 +2489,8 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <span class="rs-hint muted small" :title="t('点别的轨的音符即可切过去编辑')" v-if="rollOverlay && voiceTracks.length > 1">ⓘ</span>
         <span class="rs-sep" />
         <!-- 和声组（M8a）：成组 / 改名 / 加成员 / 切到组 -->
+        <button class="chip-btn" :title="t('色盲友好配色：整体换成 Okabe–Ito 八色，红绿色盲下也能分辨轨道')"
+                @click="toggleColorblind" :class="{ on: cbOn }"><Icon name="eye" :size="12" />{{ t('配色') }}</button>
         <button class="chip-btn" :title="t('把当前声部轨建成一个和声组')" @click="makeGroup"><Icon name="plus" :size="12" />{{ t('成组') }}</button>
         <span v-for="g in groups" :key="g.id" class="rs-group" :title="t('点一下切到组内首轨并把其余成员叠出来')">
           <input class="rs-group-name" :value="g.name" @click.stop @change="renameGroup(g, $event)" />

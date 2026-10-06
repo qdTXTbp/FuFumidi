@@ -241,12 +241,37 @@ export function newNoteId(): string { return nid(); }
 export const TRACK_PALETTE = ['#3d8bfd', '#ff7a45', '#36b37e', '#b37feb',
   '#f2b705', '#22b8cf', '#f06595', '#7f8c8d'];
 
+/**
+ * 色盲友好配色板（M9c）：**Okabe–Ito** 八色。
+ *
+ * ★ 为什么是这一套：它是色觉障碍研究里最通用的一套定性配色（蓝/朱红/青绿/橙/紫红/天蓝/黄/黑），
+ *   对红绿色盲（最常见）也保持可分辨，而且明度拉开、投影仪/打印都不塌。
+ *   原来那套里 #36b37e（绿）与 #ff7a45（橙红）、#f06595（粉）与 #b37feb（紫）在红绿色盲下会糊在一起。
+ */
+export const TRACK_PALETTE_CB = ['#0072B2', '#D55E00', '#009E73', '#CC79A7',
+  '#E69F00', '#56B4E9', '#F0E442', '#000000'];
+
+const CB_KEY = 'fufumidi_cb_palette';
+/* ★ 必须是 **ref** 而不是普通变量：trackColorOf() 被模板与 computed 调用，
+   普通变量不参与响应式 —— 实测过"开关写进 localStorage 了、但轨道色块纹丝不动、按钮高亮也不变"。 */
+const _cbMode = ref(false);
+try { _cbMode.value = localStorage.getItem(CB_KEY) === '1'; } catch (e) {}
+/** 当前生效的配色板（色盲友好开关会整体换板） */
+export function activePalette(): string[] { return _cbMode.value ? TRACK_PALETTE_CB : TRACK_PALETTE; }
+export function colorblindMode(): boolean { return _cbMode.value; }
+export function setColorblindMode(on: boolean): boolean {
+  _cbMode.value = !!on;
+  try { localStorage.setItem(CB_KEY, _cbMode.value ? '1' : '0'); } catch (e) {}
+  return _cbMode.value;
+}
+
 /** 轨道颜色：轨道自带优先，否则按索引取板上的颜色 */
 export function trackColorOf(track: { color?: string } | null | undefined, index = 0): string {
   const own = track && track.color;
   if (typeof own === 'string' && /^#[0-9a-f]{3,8}$/i.test(own)) return own;
-  const n = TRACK_PALETTE.length;
-  return TRACK_PALETTE[(((index | 0) % n) + n) % n];
+  const pal = activePalette();
+  const n = pal.length;
+  return pal[(((index | 0) % n) + n) % n];
 }
 
 /** 新建一个空声部轨 */
@@ -557,10 +582,11 @@ export const useSingerStore = defineStore('singer', {
     cycleTrackColor(id: string) {
       const i = this.tracks.findIndex(t => t.id === id);
       if (i < 0) return;
+      const pal = activePalette();
       const cur = trackColorOf(this.tracks[i], i);
-      const k = TRACK_PALETTE.indexOf(cur);
+      const k = pal.indexOf(cur);
       this.pushUndo();
-      this.tracks[i].color = TRACK_PALETTE[(k + 1) % TRACK_PALETTE.length];
+      this.tracks[i].color = pal[(k + 1) % pal.length];
     },
     /** 加一条音频轨（伴奏）。`durationMs` 由调用方用 <audio> 探到。 */
     addAudioTrack(path: string, fileName: string, durationMs: number): string {
