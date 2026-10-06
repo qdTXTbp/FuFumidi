@@ -4,6 +4,8 @@ import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { t } from '../core/i18n.js';
+/* 手写笔 / 触控（M9 收尾）：oto 标记线一根一根拖，掌侧误触与第二根手指都会把线拽歪 */
+import { claimPointer, isPrimaryPointer, releasePointer } from '../core/pointer.js';
 import {
   splitSyllables, autoOtoParams, encodeWav16, decodeAudioData, bytesToBase64,
 } from '../core/utau_tools';
@@ -308,6 +310,7 @@ function drawWave() {
 
 let dragKey = null;
 function onPointerDown(e) {
+  if (!claimPointer(e)) return;
   const cv = waveCanvas.value;
   const s = selSeg.value;
   if (!cv || !s || !s.oto) return;
@@ -326,6 +329,7 @@ function onPointerDown(e) {
   updateDrag(x, w, dur);
 }
 function onPointerMove(e) {
+  if (!isPrimaryPointer(e)) return;
   if (!dragKey) return;
   const cv = waveCanvas.value;
   if (!cv) return;
@@ -346,7 +350,7 @@ function updateDrag(x, w, dur) {
   }
   drawWave();
 }
-function onPointerUp() { dragKey = null; }
+function onPointerUp(e) { releasePointer(e); dragKey = null; }
 
 function onOtoNum(k, e) {
   const s = selSeg.value;

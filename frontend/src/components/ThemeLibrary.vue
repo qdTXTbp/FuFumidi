@@ -9,13 +9,14 @@ import { t } from '../core/i18n.js';
 const app = useAppStore();
 const state = app;
 const toast = (m, t) => app.toast(m, t);
-import { THEMES, themeById, themePreviewPal, saveTheme, saveCustomHue, loadCustomHue, extractAccentFromImage, loadMode } from '../core/theme.js';
+import { THEMES, themeById, themePreviewPal, saveTheme, saveCustomHue, loadCustomHue, extractAccentFromImage, loadMode, resolveMode } from '../core/theme.js';
 
 const bridge = window.fuBridge;
 
 const fileInput = ref(null);
 const current = ref('fufu');
-const curMode = ref('light');
+const curMode = ref('light');        // 实际生效的明暗（高亮用）
+const curModeRaw = ref('light');     // 用户选的，可能是 'auto'（保存时用它）
 const customAccent = ref('');
 const customHue = ref(213);
 
@@ -53,7 +54,11 @@ function isActive(th) {
 
 onMounted(async () => {
   // 当前主题高亮：localStorage 优先，settings 兜底
-  curMode.value = loadMode();
+  /* 高亮比较的是「实际生效的明暗」。用户的模式可能是 'auto' —— 直接比较字符串会让
+     当前主题永远不亮（'auto' 不等于 'dark'/'light' 任何一个），所以这里先解析一次；
+     原始模式单独存着，保存自定义主题时要用它，别把 auto 写没了。 */
+  curModeRaw.value = loadMode();
+  curMode.value = resolveMode(curModeRaw.value);
   try { customAccent.value = localStorage.getItem('fufumidi_accent') || ''; } catch (e) {}
   customHue.value = loadCustomHue();
   let lsTheme = null;
@@ -81,7 +86,7 @@ async function onImage(e) {
     customHue.value = Array.isArray(hue) ? (hue[0] || 0) : 213;
     saveCustomHue(customHue.value);
     current.value = 'custom';
-    saveTheme('custom', accentHex, curMode.value);
+    saveTheme('custom', accentHex, curModeRaw.value);
     toast(t('已生成自定义主题'));
   } catch (err) {
     toast(t('生成失败：') + String(err.message || err), 'error');

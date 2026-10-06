@@ -12,6 +12,8 @@ import { t } from '../core/i18n.js';
 import { snapToPcs, scalePitchClasses } from '../core/scale.js';
 // 乐谱视图要用「按音符分布猜调号」（与乐谱页同一套）
 import { detectSf } from '../core/score.js';
+/* 手写笔 / 触控（M9 收尾）：掌侧误触、第二根手指、长按=右键、笔压当力度 */
+import { claimPointer, isPrimaryPointer, releasePointer, penPressure, makeLongPress } from '../core/pointer.js';
 
 const props = defineProps({
   tool: { type: String, default: 'select' },      // select | pencil | erase
@@ -887,6 +889,7 @@ function ccYToVal(y) {
   return clamp(Math.round((H2 - 4 - y) / (H2 - 12) * 127), 0, 127);
 }
 function ccDown(e) {
+  if (!claimPointer(e)) return;              // 笔/单指：CC 泳道同样要挡掌侧与第二根手指
   const tr = curTrack(); if (!tr) return;
   const target = e.target === ccCanvas2.value ? props.cc2Number : props.ccNumber;
   pushState();
@@ -895,8 +898,8 @@ function ccDown(e) {
   ccTarget.value = target;
   ccPaint(e);
 }
-function ccMove(e) { if (ccDrawing.value) ccPaint(e); }
-function ccUp() { ccDrawing.value = false; ccLast.value = null; }
+function ccMove(e) { if (!isPrimaryPointer(e)) return; if (ccDrawing.value) ccPaint(e); }
+function ccUp(e) { releasePointer(e); ccDrawing.value = false; ccLast.value = null; }
 const ccTarget = ref(props.ccNumber);
 function ccPaint(e) {
   const cv = e.target && e.target.tagName === 'CANVAS' ? e.target : ccCanvas.value;
@@ -1143,6 +1146,12 @@ function hitTest(x, y) {
   return null;
 }
 function onDown(e) {
+  /* 手写笔/触控第一道闸：笔在附近时挡掉手指（掌侧误触），已经在拖拽时挡掉第二根手指。
+     必须放在最前面 —— 后面的分支会重接拖拽状态，接上了就是"两指一碰音符跳走"。 */
+  if (!claimPointer(e)) return;
+  pushMark = undoStack.length;
+  longPress.cancel(); longPressCancelled = false;
+  longPress.down(e);
   const s = song(), tr = curTrack();
   if (!s || !tr) return;
   const rect = canvas.value.getBoundingClientRect();
@@ -1160,7 +1169,7 @@ function onDown(e) {
     const len = Math.max(30, Math.round(props.stepTicks || 120));
     const st = Math.max(0, Math.round(stepCursor.value));
     pushState();
-    const note = { start: st, end: st + len, midi: clamp(scaleSnapPitch(midi, st), 0, 127), vel: clamp(Math.round(props.defaultVelocity), 1, 127) };
+    const note = { start: st, end: st + len, midi: clamp(scaleSnapPitch(midi, st), 0, 127), vel: velFromPointer(e) };
     tr.notes.push(note);
     selection.clear(); selection.add(note);
     stepCursor.value = st + len;
@@ -1173,7 +1182,7 @@ function onDown(e) {
     const tick = snapTick(xToTick(x)), midi = yToMidi(y);
     if (tick < 0 || midi < 0 || midi > 127) return;
     const len = Math.max(s.tpb, 120);
-    dragState.value = { type: 'create', startTick: tick, startMidi: midi, len, note: null, rawEnd: tick + len };
+    dragState.value = { type: 'create', startTick: tick, startMidi: midi, len, note: null, rawEnd: tick + len, press: penPressure(e) };
     try { canvas.value.setPointerCapture(e.pointerId); } catch (err) {}
   } else if (props.tool === 'erase') {
     const n = hitTest(x, y);
@@ -1214,6 +1223,8 @@ function onDown(e) {
   draw();
 }
 function onMove(e) {
+  if (!isPrimaryPointer(e)) return;          // 第二根手指的移动必须丢
+  longPress.move(e);                          // 位移超过 8px → 长按取消
   const d = dragState.value; if (!d) return;
   const rect = canvas.value.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
@@ -1266,8 +1277,13 @@ function onMove(e) {
     draw();
   }
 }
-function onUp() {
+function onUp(e) {
+  releasePointer(e);                          // 无参调用（pointerleave）= 无条件释放
+  const wasLong = longPress.up() || longPressCancelled;
+  longPressCancelled = false;
   const d = dragState.value;
+  /* 长按已经转成右键菜单：这一次交互不再提交（画笔就不该插音符、拖拽不该落位） */
+  if (wasLong) { dragState.value = null; draw(); return; }
   if (!d) return;
   const tr = curTrack();
   if (d.type === 'score-move') {
@@ -1288,7 +1304,7 @@ function onUp() {
     const len = Math.max(d.len || Math.max(song()?.tpb || 480, 120), 60);
     const st = Math.round(d.startTick);
     const en = Math.round(st + len);
-    tr.notes.push({ start: st, end: en, midi: clamp(scaleSnapPitch(Math.round(d.startMidi), st), 0, 127), vel: clamp(Math.round(props.defaultVelocity), 1, 127) });
+    tr.notes.push({ start: st, end: en, midi: clamp(scaleSnapPitch(Math.round(d.startMidi), st), 0, 127), vel: (d.press ? pressToVel(d.press) : clamp(Math.round(props.defaultVelocity), 1, 127)) });
     afterEdit();
   } else if (d.type === 'marquee' && d.box) {
     emit('select');
@@ -1358,6 +1374,29 @@ function selectHover() {
   selection.clear(); selection.add(n);
   emit('select'); draw();
   return 1;
+}
+
+/* ---- 手写笔 / 触控（M9 收尾）----
+   触控屏没有右键，而画布是 touch-action:none（否则手指一拖就滚页面），
+   浏览器也就不再自己发 contextmenu —— 不自己记时的话，触控屏上永远打不开画布菜单。 */
+let pushMark = -1;                 // 本次交互开始时的撤销栈深度（长按取消时要还原）
+let longPressCancelled = false;
+const longPress = makeLongPress((e) => {
+  /* 长按只在「还没移动」时成立：把这次交互整个撤掉再弹菜单 ——
+     否则松手时 onUp 会把零长度的拖拽当成一次点击提交（画笔工具就会插一个音符）。 */
+  if (pushMark >= 0 && undoStack.length > pushMark) undoStack.pop();
+  longPressCancelled = true;
+  dragState.value = null;
+  draw();
+  onCtxMenu(e);
+});
+
+/* 笔有真实压力（鼠标恒为 0.5 —— 那是「按下」不是压力）：用它当新音符的力度，是笔最自然的用法。
+   拿不到笔压（鼠标/手指）时保持原来的默认力度，这些设备的体验一点不变。 */
+function pressToVel(p) { return clamp(Math.round(20 + p * 107), 1, 127); }
+function velFromPointer(e) {
+  const p = penPressure(e);
+  return p ? pressToVel(p) : clamp(Math.round(props.defaultVelocity), 1, 127);
 }
 
 /* 右键菜单：命中音符时先选中它，再把坐标交给上层（ViewEdit）弹菜单 */
@@ -1862,7 +1901,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="ed-canvas-wrap" ref="wrap" data-guide="edit-canvas" @wheel.prevent="onWheel" @contextmenu.prevent="onCtxMenu">
-    <canvas ref="canvas" :style="{ height: H + 'px' }" @pointerdown="onDown" @pointermove="onMove($event); onHoverMove($event)" @pointerup="onUp" @pointerleave="onUp(); onHoverLeave()"></canvas>
+    <canvas ref="canvas" :style="{ height: H + 'px' }" @pointerdown="onDown" @pointermove="onMove($event); onHoverMove($event)" @pointerup="onUp" @pointercancel="onUp" @pointerleave="onUp(); onHoverLeave()"></canvas>
     <div v-if="ccEnabled" class="cc-lane" :style="{ height: CC_LANE_H + 'px' }">
       <canvas ref="ccCanvas" class="cc-lane-canvas" @pointerdown="ccDown" @pointermove="ccMove" @pointerup="ccUp" @pointerleave="ccUp"></canvas>
     </div>

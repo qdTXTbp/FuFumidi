@@ -568,6 +568,11 @@ export const useSingerStore = defineStore('singer', {
         activeTrackId: this.activeTrackId,
       });
     },
+    /** 交互被取消时（长按转右键、指针被抢走）把刚入栈的那一步丢掉：
+        否则撤销栈里会留下「按一次没反应」的空步。只在确认没有写入时调用。 */
+    dropUndo() {
+      try { if (this.history.length) this.history.pop(); } catch (e) { /* 忽略 */ }
+    },
     /** 在**做修改之前**调用；清空重做栈（与浏览器/编辑器的通用语义一致） */
     pushUndo() {
       try {

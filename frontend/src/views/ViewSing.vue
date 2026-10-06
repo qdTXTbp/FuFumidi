@@ -334,6 +334,8 @@ function rollApi() {
     getPitchPoints: () => (tr.value?.pitchCurve || []).map((p) => ({ beat: p.beat, cents: p.cents })),
     setPitchPoints: (pts) => store.setPitchCurve((pts || []).map((p) => ({ beat: p.beat, cents: p.cents }))),
     pushUndo: () => store.pushUndo(),
+    /* 卷帘长按转右键时把刚入栈的空步丢掉（M9 收尾：触控屏上的右键） */
+    dropUndo: () => store.dropUndo(),
     undo: () => store.undo(),
     redo: () => store.redo(),
     /* 卷帘里的"轻提示"（比如剪贴板是空的）也走统一出口，别让它静默失败 */

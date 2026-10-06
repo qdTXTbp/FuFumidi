@@ -256,9 +256,18 @@ export function loadTheme() {
   return { name, accent, mode };
 }
 
-// 读取界面明暗模式（默认浅色）
+/* 读取界面明暗模式（默认浅色）：'light' | 'dark' | 'auto'
+   ★ 这里曾经只认 'dark'，别的值一律返回 'light' —— 于是「跟随系统」存进去以后：
+     ① 下面的系统偏好监听器（onPref）拿到的永远是 'light'，系统切深色时直接 return，
+        设置页里那个"系统变了会自动跟上"的承诺根本没生效；
+     ② 设置面板打开时 form.mode 被写成 'light'，用户选的「跟随系统」看着就变成了「浅色」，
+        再保存一次就真的被覆盖掉。
+     现在原样返回 'auto'，由 resolveMode() 在应用主题时落地成实际明暗。 */
 export function loadMode() {
-  try { return localStorage.getItem(LS_MODE) === 'dark' ? 'dark' : 'light'; } catch (e) { return 'light'; }
+  try {
+    const m = localStorage.getItem(LS_MODE);
+    return (m === 'dark' || m === 'auto') ? m : 'light';
+  } catch (e) { return 'light'; }
 }
 // 切换明暗模式：应用 + 持久化
 export function setMode(mode) {

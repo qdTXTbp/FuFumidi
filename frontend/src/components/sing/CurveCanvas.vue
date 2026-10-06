@@ -12,6 +12,8 @@
 //   （store.setPitchCurve 每次调用都会 pushUndo，逐帧提交会把撤销栈冲爆。）
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { t } from '../../core/i18n.js';
+/* 手写笔 / 触控（M9 收尾）：掌侧误触与第二根手指（曲线是"一路画过去"，被抢指针就会断线） */
+import { claimPointer, isPrimaryPointer, releasePointer } from '../../core/pointer.js';
 
 const props = defineProps({
   points: { type: Array, default: () => [] },
@@ -194,6 +196,7 @@ function lineFrom(anchor: { beat: number; value: number }, to: { beat: number; v
   local.value = arr;
 }
 function onDown(e: PointerEvent) {
+  if (!claimPointer(e)) return;
   if (props.locked) return;
   const p = pos(e);
   const beat = beatAt(p.x), value = valAt(p.y);
@@ -208,6 +211,7 @@ function onDown(e: PointerEvent) {
   draw();
 }
 function onMove(e: PointerEvent) {
+  if (!isPrimaryPointer(e)) return;
   const p = pos(e);
   if (props.locked) {
     // 锁定时仍然给读数（可以量、不能改）
@@ -224,7 +228,8 @@ function onMove(e: PointerEvent) {
   emit('preview', clone(local.value));
   draw();
 }
-function onUp() {
+function onUp(e?: PointerEvent) {
+  releasePointer(e);
   if (!dragging) return;
   dragging = false; lineAnchor = null;
   emit('commit', clone(local.value));

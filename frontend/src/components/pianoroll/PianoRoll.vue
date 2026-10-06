@@ -18,6 +18,8 @@ import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import Icon from '../Icon.vue';
 import { t } from '../../core/i18n.js';
 import { derivePhonemes } from '../../core/phoneme.js';
+/* 手写笔 / 触控（M9 收尾）：掌侧误触、第二根手指、长按=右键 */
+import { claimPointer, isPrimaryPointer, releasePointer, palmRejected, makeLongPress } from '../../core/pointer.js';
 
 const props = defineProps({
   notes: { type: Array, default: () => [] },
@@ -495,6 +497,11 @@ function decideDown(x, y) {
 }
 
 function onDown(e) {
+  /* 手写笔/触控第一道闸：笔在附近挡掉手指（掌侧误触），已在拖拽挡掉第二根手指。
+     必须放在最前 —— 后面的分支会重接 drag，接上了就是"两指一碰音符跳走"。 */
+  if (!claimPointer(e)) return;
+  longPress.cancel();
+  longPress.down(e);
   if (!props.canEdit) return;
   closeCtx();
   const { x, y } = toXY(e);
@@ -571,6 +578,8 @@ function onDown(e) {
 }
 
 function onMove(e) {
+  if (!isPrimaryPointer(e)) return;       // 第二根手指的移动必须丢
+  longPress.move(e);                       // 位移超过 8px → 长按取消
   const { x, y } = toXY(e);
   if (!drag) {
     const h = hit(x, y);
@@ -610,7 +619,10 @@ function onMove(e) {
   }
 }
 
-function onUp() {
+function onUp(e) {
+  releasePointer(e);
+  /* 长按已经转成右键菜单：这一次交互不再提交（框选/拖动都不该落位） */
+  if (longPress.up()) { drag = null; draw(); return; }
   if (drag && drag.mode === 'box') {
     /* 框选走共用逻辑 boxIds()：当前轨 + （叠加显示打开时的）幽灵音符。
        验收钩子 selectBox() 走的是**同一个函数**，所以这里能被确定性地测到（附录 U）。 */
@@ -645,6 +657,18 @@ function onCtx(e) {
   ctxOpen.value = true;
 }
 function closeCtx() { ctxOpen.value = false; }
+
+/* ---- 手写笔 / 触控（M9 收尾）----
+   触摸屏没有右键；画布又是 touch-action:none（否则手指一拖就滚页面），
+   浏览器因此不再自己发 contextmenu —— 不自己记时，触控屏上永远打不开这个菜单。 */
+const longPress = makeLongPress((e) => {
+  /* 长按只在「还没移动」时成立。onDown 里已经 pushUndo() 过一次，这里把空的那一步丢掉，
+     否则撤销栈里会留下"按一次没反应"的空步。 */
+  try { if (props.api && props.api.dropUndo) props.api.dropUndo(); } catch (err) {}
+  drag = null;
+  draw();
+  onCtx(e);
+});
 
 function onWheel(e) {
   if (e.ctrlKey || e.metaKey) {
@@ -915,6 +939,7 @@ function drawPhoneme() {
  * 点空白处发 null，宿主据此收起面板（比"点了没反应"清楚）。
  */
 function phDown(e) {
+  if (palmRejected(e)) return;             // 音素条带是"点一下就完事"，不占主指针，只挡掌侧
   if (!props.canEdit || !phonemeCanvas.value) return;
   const rect = phonemeCanvas.value.getBoundingClientRect();
   const x = e.clientX - rect.left;
@@ -1045,6 +1070,7 @@ function autoHit(x, y, spec) {
 function emitAuto(pts) { emit('set-automation', pts); }
 
 function aDown(e) {
+  if (!claimPointer(e)) return;            // 自动化车道：拖拽前先抢主指针
   const spec = autoSpec();
   if (!spec || !props.canEdit) return;
   const { x, y } = autoXY(e);
@@ -1071,6 +1097,7 @@ function aDown(e) {
   nextTick(drawAuto);
 }
 function aMove(e) {
+  if (!isPrimaryPointer(e)) return;
   if (!autoDrag) return;
   const spec = autoSpec();
   if (!spec) return;
@@ -1084,7 +1111,7 @@ function aMove(e) {
   emitAuto(pts);
   nextTick(drawAuto);
 }
-function aUp() { autoDrag = null; nextTick(drawAuto); }
+function aUp(e) { releasePointer(e); autoDrag = null; nextTick(drawAuto); }
 /* ---------------- 音高车道（P3） ----------------
    参考 OpenUTAU 的曲线车道：车道内是「拍 → 音分」的控制点折线，工具齐全
    （手绘 / 直线 / 正弦 / 平滑 / 移动控制点）。与音符、音素同处一个滚动容器，天然对齐。 */
@@ -1220,6 +1247,7 @@ function drawPitch() {
 }
 
 function pDown(e) {
+  if (!claimPointer(e)) return;            // 音高车道：同上
   if (!pitchOn.value || !props.canEdit) return;
   const r = pitchCanvas.value.getBoundingClientRect();
   const x = e.clientX - r.left, y = e.clientY - r.top;
@@ -1242,6 +1270,7 @@ function pDown(e) {
   drawPitch();
 }
 function pMove(e) {
+  if (!isPrimaryPointer(e)) return;
   if (!pDrag) return;
   const r = pitchCanvas.value.getBoundingClientRect();
   const x = e.clientX - r.left, y = e.clientY - r.top;
@@ -1252,7 +1281,8 @@ function pMove(e) {
   else { pDrag.b1 = b; pDrag.c1 = c; }
   drawPitch();
 }
-function pUp() {
+function pUp(e) {
+  releasePointer(e);
   if (!pDrag) return;
   if (pDrag.tool === 'line' || pDrag.tool === 'sine') applyLineOrSine(pDrag);
   pDrag = null;
@@ -1558,9 +1588,12 @@ defineExpose({
 /* fill：卷帘自己撑满父容器，滚动区吃掉工具栏之外的全部高度（行高由 JS 自适应） */
 .pr.pr-fill { height: 100%; min-height: 0; }
 .pr.pr-fill .pr-scroll { flex: 1 1 auto; min-height: 0; }
-.pr-canvas { display: block; }
+/* 手写笔/触控（M9 收尾）：这两块画布是要拖的 —— 不写 touch-action:none 的话，
+   手指/笔一拖，浏览器先把它当成滚动手势，拖到一半还会发 pointercancel 把编辑打断。
+   自动化的 .pr-auto-canvas 早就写了，主卷帘与音高车道以前漏了。 */
+.pr-canvas { display: block; touch-action: none; }
 /* 音素条带：贴住音符区底部，横向随同一滚动容器对齐 */
-.pr-ph-canvas { border-top: 1px solid var(--border); }
+.pr-ph-canvas { border-top: 1px solid var(--border); touch-action: none; }
 .pr-auto-canvas { touch-action: none; }
 .pr-ctx { position: absolute; z-index: 40; min-width: 132px; padding: 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); box-shadow: 0 8px 24px rgba(0,0,0,.28); }
 .pr-ctx-i { display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font-size: 12.5px; text-align: left; cursor: pointer; }
