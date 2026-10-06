@@ -81,6 +81,7 @@ export const I18N_MAP = {
   "谱线间距": "Staff spacing",
   "识别对照图": "Recognition overlay",
   "识别引擎": "Recognition engine",
+  "界面缩放：": "UI scale: ",
   "密度：": "Density: ",
   "紧凑": "Compact",
   "标准": "Normal",

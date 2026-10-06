@@ -17,6 +17,7 @@ export interface Layout {
   rollH: number;          // 卷帘区最小高度（px）
   viewMode: ViewMode;
   density: Density;
+  scale: number;          // 全局 UI 缩放 0.9 ~ 1.3（M9b）
 }
 
 export const LAYOUT_PRESETS: { id: PresetId; label: string; hint: string; layout: Layout }[] = [
@@ -28,7 +29,9 @@ export const LAYOUT_PRESETS: { id: PresetId; label: string; hint: string; layout
 
 const KEY = 'fufumidi.workspace';
 const KEY_PRESET = 'fufumidi.workspace.preset';
-const BASE: Layout = { inspOpen: true, inspW: 0, rollH: 380, viewMode: 'piano', density: 'normal' };
+const BASE: Layout = { inspOpen: true, inspW: 0, rollH: 380, viewMode: 'piano', density: 'normal', scale: 1 };
+/** UI 缩放可用档位（M9b）。界面全是 px 布局，所以用 CSS zoom 整体缩放最省事也最一致。 */
+export const SCALES = [0.9, 1, 1.15, 1.3];
 
 function num(v: any, d: number): number {
   const n = Number(v);
@@ -47,6 +50,7 @@ function readLayout(): Layout {
         rollH: num(j.rollH, out.rollH),
         viewMode: (['piano', 'drum', 'score'].includes(j.viewMode) ? j.viewMode : out.viewMode) as ViewMode,
         density: (['compact', 'normal', 'roomy'].includes(j.density) ? j.density : out.density) as Density,
+        scale: Math.max(0.9, Math.min(1.3, num(j.scale, out.scale))),
       });
       return out;
     }

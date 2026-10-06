@@ -4,7 +4,7 @@ import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, onActivated
 import Icon from '../components/Icon.vue';
 import EditorCanvas from '../components/EditorCanvas.vue';
 import { useAppStore } from '../stores/app';
-import { useWorkspace } from '../stores/workspace';
+import { useWorkspace, SCALES } from '../stores/workspace';
 import EditorMenuBar from '../components/editor/EditorMenuBar.vue';
 import MidiToolPanel from '../components/editor/MidiToolPanel.vue';
 import CommandPalette from '../components/editor/CommandPalette.vue';
@@ -385,6 +385,13 @@ function setDensity(v) {
   toast(t('界面密度：') + t((DENSITIES.find((d) => d[0] === v) || [])[1] || ''), 'ok');
 }
 
+/** 全局 UI 缩放（M9b）：写进工作区，由 App.vue 统一施加到根节点 */
+function setScale(v) {
+  ws.layout.scale = v;
+  ws.save();
+  toast(t('界面缩放：') + Math.round(v * 100) + '%', 'ok');
+}
+
 function applyPreset(id) {
   ws.applyPreset(id);
   const p = ws.presets.find((x) => x.id === id);
@@ -435,6 +442,7 @@ const menuGroups = computed(() => {
       { label: tempoLane.value ? t('隐藏速度轨') : t('显示速度轨'), hint: t('速度自动化'), run: () => { tempoLane.value = !tempoLane.value; } },
       { sep: true },
       ...DENSITIES.map((d) => ({ label: t('密度：') + t(d[1]), hint: ws.layout.density === d[0] ? '✓' : '', run: () => setDensity(d[0]) })),
+      ...SCALES.map((s) => ({ label: t('界面缩放：') + Math.round(s * 100) + '%', hint: Math.abs((ws.layout.scale || 1) - s) < 1e-6 ? '✓' : '', run: () => setScale(s) })),
       { label: multiEditOn.value ? t('退出跨轨编辑') : t('跨轨编辑…'), hint: multiEditOn.value ? t('已选 ') + editTracks.length + t(' 轨') : t('在检查器「轨道」里勾选'), run: () => { ws.layout.inspOpen = true; inspTab.value = 'track'; if (multiEditOn.value) clearEditTracks(); } },
       { label: fullscreenOn.value ? t('退出全屏') : t('全屏编辑'), run: toggleFullscreen },
       { sep: true },

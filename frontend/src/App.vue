@@ -12,7 +12,18 @@ import CommandPalette from './components/CommandPalette.vue';
 import GuideOverlay from './components/GuideOverlay.vue';
 import ChangeLogOverlay from './components/ChangeLogOverlay.vue';
 import { ref, computed, reactive } from 'vue';
+
+/* 全局 UI 缩放（M9b）：界面全是 px 布局，用 CSS zoom 整体缩放最省事、也最一致
+   （改 font-size 对 px 尺寸无效；逐个组件换 rem 是另一个量级的改造）。
+   zoom 由 Chromium 实现，画布的 getBoundingClientRect 会跟着缩放，重绘逻辑不用改。 */
+const ws = useWorkspace();
+watch(() => ws.layout.scale, (v) => {
+  const s = Math.max(0.9, Math.min(1.3, Number(v) || 1));
+  document.documentElement.style.zoom = String(s);
+  try { document.documentElement.setAttribute('data-ui-scale', String(s)); } catch (e) {}
+}, { immediate: true });
 import { useAppStore, VIEWS, viewParentOf } from './stores/app';
+import { useWorkspace } from './stores/workspace';
 import { usePlaylistStore } from './stores/playlist';
 import { useSettingsStore } from './stores/settings';
 import { setLang, t, browserLang } from './core/i18n.js';
