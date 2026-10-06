@@ -22,6 +22,8 @@ $sk = "$env:USERPROFILE\.dsh\skills\repo-hygiene-bundle\scripts\hygiene.py"
 - 时间与版本：2026-10-06，`package.json` 5.0.0-beta.2，工作树 HEAD `dd7e2b2`。
 - 规模：680 个入库文件（`git ls-files`），pack 体积 46.4 MiB。
 - 结果：**0 high / 25 medium / 6 low**（首次运行）。
+- 本轮修完后复跑：**0 high / 7 medium / 2 low**（687 个入库文件）。剩下的 7 条 medium 全是 `HYG-LARGE`，
+  2 条 low 是 `HYG-GENERATED` 的误报与 `HYG-COC` —— 三条都在下面写明了为什么接受。
 - 明确**没有**检查：已知漏洞（CVE）、依赖许可证树、git 历史里的密钥。这三项不在这个脚本的能力范围内。
 
 ## 处理结论
@@ -103,9 +105,12 @@ $crlf = 0; for ($i=0; $i -lt $b.Length-1; $i++) { if ($b[$i] -eq 13 -and $b[$i+1
 "CRLF=$crlf"
 ```
 
-- CRLF（全文件统一）：`main.js`、`package.json`、`.gitignore`、`.github/workflows/*.yml`、
-  `engine/engine_basic.py`、`rust-core/Cargo.toml`、`docs/TESTING.md`、`README.md`。
-- LF：`docs/FOUNDATION.md`、`AGENTS.md`、`scripts/deploy-installed.cjs`。
+- **仓库里存的是 LF**。`git config --system --get core.autocrlf` 是 `true`，所以提交时 git 把行尾归一化成 LF、
+  检出到工作区时再写成 CRLF。同一份工作树里 `main.js` / `README.md` 是 CRLF 而新写的 `docs/FOUNDATION.md`
+  还是 LF，不是谁写错了，是「已入库并被检出过」与「刚写、还没过 git」的差别。
+- 因此 `.editorconfig` 声明的全局行尾是 **`lf`（入库形态）**，并且新增了 `.gitattributes`：
+  把「存 LF / `*.ps1` 与 `*.bat` 等 Windows 脚本在工作区用 CRLF / 二进制后缀禁止任何转换」写进仓库，
+  不再依赖某一台机器的 system 级 git 配置。换机器结果一致，这是构建可复现的一部分。
 - **`*.ps1` 必须是 UTF-8 with BOM**：Windows PowerShell 5.1 否则按 ANSI 解码，中文注释变乱码并直接报语法错（本机实测）。
 
 ## 与其它约定文档的关系

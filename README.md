@@ -371,12 +371,22 @@ Each plugin runs in its own worker with a scoped `ctx` object that exposes `comm
 
 ## Continuous Integration
 
-- `.github/workflows/ci.yml` - lint and test.
-- `.github/workflows/build.yml` - builds the frontend and the asar on Windows, macOS and Linux.
-- `.github/workflows/build-installers.yml` - produces the platform installers.
-- `.github/workflows/test-installers.yml` - installs the produced installers and runs a smoke test.
+- `.github/workflows/ci.yml` - the gate that runs on `master` / `main`: `npm ci`, build the frontend,
+  run the UI tests and the plugin-sandbox tests, then pack and verify the asar.
+- `.github/workflows/build.yml` - manual (`workflow_dispatch`): installs the Python and Node
+  dependencies, runs the engine probe and packs the asar on Windows, macOS and Linux.
+- `.github/workflows/build-installers.yml` - manual: produces Linux and macOS installers.
+- `.github/workflows/test-installers.yml` - manual: downloads a release and smoke-tests
+  install / launch / uninstall. It takes a `tag` input and needs that release to actually carry
+  Linux or macOS assets.
 
-Coding conventions are documented in `.github/CODING_GUIDELINES.md`.
+Releases currently ship **Windows installers only**. `FuFumidi-Setup-<version>.exe` is built on the
+machine that holds the `resources/` tree (Python runtime, models) - it is not in this repository, so
+the release job cannot run on a hosted runner. The three `workflow_dispatch` workflows are
+cross-platform verification paths, not release jobs.
+
+Coding conventions are documented in `.github/CODING_GUIDELINES.md`; repository hygiene findings
+and their dispositions in `docs/HYGIENE.md`.
 
 
 ## Credits

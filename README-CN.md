@@ -372,12 +372,19 @@ FuFumidi 支持以插件形式扩展第三方能力，无需改动主程序。�
 
 ## 持续集成
 
-- `.github/workflows/ci.yml` - 代码检查与测试。
-- `.github/workflows/build.yml` - 在 Windows / macOS / Linux 上构建前端与 asar。
-- `.github/workflows/build-installers.yml` - 生成各平台安装包。
-- `.github/workflows/test-installers.yml` - 安装产物并跑冒烟测试。
+- `.github/workflows/ci.yml` - 守在 `master` / `main` 上的门禁：`npm ci`、构建前端、
+  跑 UI 测试与插件沙箱测试，最后打包并核对 asar 内容。
+- `.github/workflows/build.yml` - 手动触发：装 Python / Node 依赖、跑引擎探针，
+  在 Windows / macOS / Linux 上把 asar 打出来。
+- `.github/workflows/build-installers.yml` - 手动触发：生成 Linux / macOS 安装包。
+- `.github/workflows/test-installers.yml` - 手动触发：下载某个 Release 的安装包，
+  跑安装 / 启动 / 卸载冒烟。需要传入 `tag`，且该 Release 里确实要有对应平台的产物。
 
-编码规范见 `.github/CODING_GUIDELINES.md`。
+当前发布通道**只上传 Windows 安装包**。`FuFumidi-Setup-<版本>.exe` 在持有 `resources/`
+（Python 运行时、模型）的机器上构建 —— 那份资源不在仓库里，所以发布这一步跑不了托管 runner。
+上面三个手动工作流是跨平台验证路径，不是发布任务。
+
+编码规范见 `.github/CODING_GUIDELINES.md`，仓库卫生的审计结论与理由见 `docs/HYGIENE.md`。
 
 
 ## Credits
