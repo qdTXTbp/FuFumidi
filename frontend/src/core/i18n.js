@@ -42,6 +42,8 @@ export const I18N_MAP = {
   "透明": "Transparent",
   "模糊": "Blur",
   "暗化": "Darken",
+  "与「可视化」页共用同一套设置": "Shared with the Visualizer page",
+  "透明档：MP4 没有透明通道，导出后是黑底（可作叠加层的相加/滤色素材）": "Transparent: MP4 has no alpha channel, so the export is black-backed (use it as an additive/screen overlay).",
   "切开长音符（一字不丢）": "Split long notes (keep every syllable)",
   "顺序=一个字一个音符；按比例/按乐句会把字铺满全曲（字多时跳过一些字）；切开长音符=把长音切开，一个字都不丢": "Sequential = one syllable per note; proportional/by-phrase spreads syllables across the song (skipping some when there are too many); split-long-notes cuts notes apart so nothing is dropped",
   "字数与音符数差得多：顺序填会从中间开始错位；想一个字都不丢就选「切开长音符」。": "Syllable and note counts differ a lot: sequential filling drifts out of sync — pick “Split long notes” to keep every syllable.",

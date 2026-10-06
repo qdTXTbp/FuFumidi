@@ -208,6 +208,49 @@ function pixelScale(ctx) {
   } catch (e) { return 1; }
 }
 
+/**
+ * 画音符瀑布的背景（`主题 / 纯色 / 图片 / 透明`）—— **可视化页与视频导出共用这一个实现**。
+ *
+ * ★ 抽出来是为了让导出与实时预览**逐像素同源**：导出页以前自己 fillRect 一个 bgColor，
+ *   跟可视化页选的图片/透明档/模糊暗化完全无关（用户看到的和导出的是两幅画）。
+ * ★ `mode === 'keep'` 表示**不动背景**（调用方已经自己铺过一整帧了）—— 导出的仪表盘模板
+ *   要先把背景铺满整帧、再在上下两块区域分别画瀑布，不能让瀑布再清一次自己那块。
+ * ★ 千万不要 setTransform(1,0,0,1,0,0)：调用方已经把 dpr 缩放设在 ctx 上，
+ *   而传进来的 w/h 是 **CSS 像素**。重置成 identity 只会铺满左上角 1/dpr 的区域。
+ */
+export function paintVizBg(ctx, w, h, bgOpt = {}) {
+  const mode = bgOpt.mode || 'theme';
+  if (mode === 'keep') return;
+  const blur = Math.max(0, Number(bgOpt.blur) || 0);
+  const dim = Math.max(0, Math.min(0.9, Number(bgOpt.dim) || 0));
+  ctx.save();
+  if (mode === 'transparent') {
+    // 真的清成透明：导出 PNG / 视频后才能当叠加层用
+    ctx.clearRect(0, 0, w, h);
+  } else if (mode === 'solid') {
+    ctx.fillStyle = bgOpt.color || cssVar('--canvas', '#0b1020');
+    ctx.fillRect(0, 0, w, h);
+  } else if (mode === 'image' && bgOpt.image && bgOpt.image.width) {
+    const im = bgOpt.image;
+    // cover：填满、不拉伸变形。模糊会把边缘「吃」掉（blur 会采到画布外的透明像素），
+    // 所以按模糊半径外扩一点再画 —— 实测不扩的话四边会透出底色。
+    const pad = blur > 0 ? blur * 3 : 0;
+    const scale = Math.max((w + pad * 2) / im.width, (h + pad * 2) / im.height);
+    const dw = im.width * scale, dh = im.height * scale;
+    ctx.filter = blur > 0 ? 'blur(' + blur + 'px)' : 'none';
+    ctx.drawImage(im, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    ctx.filter = 'none';
+    if (dim > 0) { ctx.fillStyle = 'rgba(0,0,0,' + dim + ')'; ctx.fillRect(0, 0, w, h); }
+  } else {
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, cssVar('--canvas', '#ffffff'));
+    g.addColorStop(1, cssVar('--surface', '#f7f8fa'));
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    if (dim > 0) { ctx.fillStyle = 'rgba(0,0,0,' + dim + ')'; ctx.fillRect(0, 0, w, h); }
+  }
+  ctx.restore();
+}
+
 // 抽离自 ViewViz.drawRoll：绘制竖向音符瀑布到 ctx（w x h）
 export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
   patchRoundRect();
@@ -227,40 +270,9 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
   const sc = pixelScale(ctx);
   const snapY = (yv) => Math.round(yv * sc) / sc;
   // ---- 背景：主题渐变 / 纯色 / 真透明（OBS 叠加层）/ 自定义图片（可模糊 + 暗化）----
-  // opts.bg = { mode:'theme'|'solid'|'transparent'|'image', color, image, blur, dim }
-  const bgOpt = opts.bg || {};
-  const bgMode = bgOpt.mode || 'theme';
-  const bgBlur = Math.max(0, Number(bgOpt.blur) || 0);
-  const bgDim = Math.max(0, Math.min(0.9, Number(bgOpt.dim) || 0));
-  ctx.save();
-  // ★ 千万不要 setTransform(1,0,0,1,0,0)：调用方（ViewViz.clearCanvas）已经把
-  //   dpr 缩放设在 ctx 上，而传进来的 w/h 是 **CSS 像素**。重置成 identity 只会铺满
-  //   画布左上角 1/dpr 的区域 —— 实测就是这个「灰块 / 图片只盖住一角」的 bug。
-  if (bgMode === 'transparent') {
-    // 真的清成透明：导出 PNG / 视频后才能当叠加层用
-    ctx.clearRect(0, 0, w, h);
-  } else if (bgMode === 'solid') {
-    ctx.fillStyle = bgOpt.color || cssVar('--canvas', '#0b1020');
-    ctx.fillRect(0, 0, w, h);
-  } else if (bgMode === 'image' && bgOpt.image && bgOpt.image.width) {
-    const im = bgOpt.image;
-    // cover：填满、不拉伸变形。模糊会把边缘「吃」掉（blur 会采到画布外的透明像素），
-    // 所以按模糊半径外扩一点再画 —— 实测不扩的话四边会透出底色。
-    const pad = bgBlur > 0 ? bgBlur * 3 : 0;
-    const scale = Math.max((w + pad * 2) / im.width, (h + pad * 2) / im.height);
-    const dw = im.width * scale, dh = im.height * scale;
-    ctx.filter = bgBlur > 0 ? 'blur(' + bgBlur + 'px)' : 'none';
-    ctx.drawImage(im, (w - dw) / 2, (h - dh) / 2, dw, dh);
-    ctx.filter = 'none';
-    if (bgDim > 0) { ctx.fillStyle = 'rgba(0,0,0,' + bgDim + ')'; ctx.fillRect(0, 0, w, h); }
-  } else {
-    const bg = ctx.createLinearGradient(0, 0, 0, h);
-    bg.addColorStop(0, cssVar('--canvas', '#ffffff'));
-    bg.addColorStop(1, cssVar('--surface', '#f7f8fa'));
-    ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
-    if (bgDim > 0) { ctx.fillStyle = 'rgba(0,0,0,' + bgDim + ')'; ctx.fillRect(0, 0, w, h); }
-  }
-  ctx.restore();
+  // opts.bg = { mode:'theme'|'solid'|'transparent'|'image'|'keep', color, image, blur, dim }
+  // ★ 实现在 paintVizBg（导出侧调同一个函数，两边逐像素同源）
+  paintVizBg(ctx, w, h, opts.bg || {});
 
   let d = 0, curTempo = (song && song.initialBpm) || 120, curSig = { num: 4 };
   if (song) {
@@ -290,7 +302,11 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
 
   // ---- 音乐能量驱动的背景光晕（能量由调用方传入，实时与导出同算法）----
   const energy = clamp01(opts.energy || 0);
-  if (energy > 0.01 && wN > 0 && bgMode !== 'transparent') {
+  // ★ 光晕是「加在背景上」的：透明档（OBS 叠加层）不能有它，否则导出层自带一块亮斑。
+  //   档位从 opts.bg 现取 —— 抽走 paintVizBg 之后这里的 bgMode 已不在作用域里
+  //   （踩过：引用残留变量 → 导出抛 'bgMode is not defined'，预览又被 try/catch 吞掉）。
+  const bgModeNow = (opts.bg || {}).mode || 'theme';
+  if (energy > 0.01 && wN > 0 && bgModeNow !== 'transparent') {
     const glow = ctx.createLinearGradient(0, wN, 0, 0);
     glow.addColorStop(0, cssVar('--accent', '#4f94e0'));
     glow.addColorStop(1, 'rgba(0,0,0,0)');

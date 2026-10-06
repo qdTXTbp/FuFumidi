@@ -2,13 +2,15 @@
 import { ref, computed, reactive, watch, nextTick, onMounted } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
+import { useVizBgStore, BG_MODES } from '../stores/vizbg';
 import { t } from '../core/i18n.js';
 
 const app = useAppStore();
 const currentSong = computed(() => app.currentSong);
 const toast = (m, t) => app.toast(m, t);
 import { clamp } from '../core/util.js';
-import { drawVizWaterfall, drawVizSpectrum, drawVizScope, drawVizChord, rmsAt, smoothEnergy } from '../core/viz.js';
+// ★ paintVizBg：与「可视化」页**同一个**背景绘制函数（主题/纯色/图片/透明）
+import { drawVizWaterfall, paintVizBg, drawVizSpectrum, drawVizScope, drawVizChord, rmsAt, smoothEnergy } from '../core/viz.js';
 import { playVoice, presetFromMode } from '../core/synth.js';
 import { renderSongWithSf2 } from '../core/sf2render.js';
 
@@ -215,10 +217,16 @@ async function downloadWav(buf, name, g) {
 const VE = reactive({
   format: 'mp4', template: 'landscape', res: '1280x720', fps: 30, quality: 'medium',
   dur: 30, durMode: 'full', durCustom: 30, visual: 'mix', track: 'all', range: 'all', start: 0, end: 30,
-  bitrate: 8, bgColor: '#0a0e15', showProgress: true, showChord: true, showTimecode: false,
-  showLyrics: true, showWatermark: false, watermarkOpacity: 50, bgImage: null, watermark: null,
+  bitrate: 8, showProgress: true, showChord: true, showTimecode: false,
+  // ★ 背景不在 VE 里：它跟「可视化」页共用 stores/vizbg（同一份 + 同一绘制函数）。
+  //   以前这里是 bgColor/bgImage 一套私有设置，导出画面跟用户看到的瀑布流对不上。
+  showLyrics: true, showWatermark: false, watermarkOpacity: 50, watermark: null,
   veBusy: false, veProgress: 0, veStage: '', veCancel: false,
 });
+// ★ 视频导出的背景 = 「可视化」页的背景（同一个 store / 同一个 localStorage 键）。
+//   任何一边改动，两边的预览与成片立刻一致。
+const vizBg = useVizBgStore();
+const bg = vizBg.bg;
 const veResCustom = ref(false);
 const vePreviewEl = ref(null);
 function previewWH() {
@@ -235,11 +243,17 @@ function drawVideoPreview() {
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext('2d');
   const vf = { winSec: 8, melodyTrack: 0, lyricAt: '', pct: 0 };
-  try { drawVideoFrame(ctx, w, h, s.secToTick ? s.secToTick(0) : 0, s, null, vf, 0); } catch (e) {}
+  // ★ 以前这里静默吞异常：绘制中途抛错（实测踩过 'bgMode is not defined'）时预览只剩背景，
+  //   看着「像」正常，导出才报错。现在至少把原因打到控制台。
+  try { drawVideoFrame(ctx, w, h, s.secToTick ? s.secToTick(0) : 0, s, null, vf, 0); }
+  catch (e) { console.warn('[video] 预览绘制失败：', e); }
 }
-watch(() => [VE.template, VE.bgColor, VE.visual, VE.showProgress, VE.showChord, VE.showTimecode, VE.showLyrics, VE.showWatermark, VE.res, VE.fps, VE.quality, VE.track], () => nextTick(drawVideoPreview), { deep: true });
-onMounted(() => nextTick(drawVideoPreview));
-function vePickBgImage() { vePickImage((d) => { VE.bgImage = d; }); }
+watch(() => [VE.template, bg.mode, bg.color, bg.blur, bg.dim, VE.visual, VE.showProgress, VE.showChord, VE.showTimecode, VE.showLyrics, VE.showWatermark, VE.res, VE.fps, VE.quality, VE.track], () => nextTick(drawVideoPreview), { deep: true });
+onMounted(() => {
+  nextTick(drawVideoPreview);
+  // 图片解码是异步的：读完再重绘一次，否则首帧拿到的是 null（画成主题底）
+  void vizBg.init().then(() => nextTick(drawVideoPreview));
+});
 function vePickWatermark() { vePickImage((d) => { VE.watermark = d; }); }
 function vePickImage(cb) {
   const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
@@ -273,8 +287,9 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
   const cvar = (n, fb) => { try { return getComputedStyle(document.documentElement).getPropertyValue(n).trim() || fb; } catch (e) { return fb; } };
   const mode = VE.visual || 'mix';
   const pad = 14, panelH = 178, rollH = Math.max(120, H - panelH - pad);
-  ctx.fillStyle = VE.bgColor || cvar('--canvas', '#0a0f18');
-  ctx.fillRect(0, 0, W, H);
+  // ★ 背景 = 「可视化」页选的那一份（主题渐变 / 纯色 / 图片 + 模糊暗化 / 真透明）。
+  //   用同一个 paintVizBg 铺**整帧**：仪表盘模板下面还有卡片区，瀑布只盖上半块。
+  paintVizBg(ctx, W, H, vizBg.drawOpts());
   const activeNotes = [];
   for (const tr of s.tracks) {
     if (VE.track === 'melody' && !tr.isDrum && tr.index !== vf.melodyTrack) continue;
@@ -289,6 +304,9 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
     state: st,
     zoom: 1,
     colorScheme: 0,
+    // 背景已经在上面铺满整帧了，瀑布只画音符（'keep' = 不动背景），
+    // 否则它会在自己那块区域再清一次/再铺一次，仪表盘的下半块就跟上半块断层。
+    bg: { mode: 'keep' },
     showLyrics: !!VE.showLyrics,
     lyricAt: vf.lyricAt || '',
     activeNotes,
@@ -398,12 +416,16 @@ async function renderVideo() {
     VE.veProgress = 10;
     const wavBytes = await audioBufferToWavBytesAsync(buf, (p) => { VE.veProgress = Math.min(100, 10 + Math.round(p * 10)); });
     VE.veStage = t('后台录制中（可继续使用应用）…');
-    // 2) 离屏画布录制：必须挂载到 DOM 并移出视口，让 canvas 进入合成器管线，
-    //    否则 MediaRecorder 抓不到已 GPU 加速的离屏画布内容 → 视频黑屏（且无需 CUDA/硬件加速）
+    // 2) 录制画布：必须挂载到 DOM 并**留在视口里**，否则合成器不把它当可见图层：
+    //    * 抓到的是空内容 → 黑屏（早先移出视口就是为了这个，靠手动 requestFrame 救回来）；
+    //    * 更要命的是 requestFrame 会被合成器丢帧：实测 3 秒 @30fps 请求 90 帧、
+    //      只有 ~75 帧进流，而成片时长 = 进流帧数/fps → **比目标短一截、还与音频错位**。
+    //    现在把它放在右下角、2×2 CSS 像素、几乎全透明：参与合成（延迟≈1 帧），用户看不见。
+    //    注意 captureStream 抓的是画布的**像素缓冲**（W×H），不是这 2px 的显示尺寸。
     const cv = document.createElement('canvas');
     const dpr = 1;
     cv.width = W; cv.height = H;
-    cv.style.cssText = 'position:fixed;left:-100000px;top:0;width:' + W + 'px;height:' + H + 'px;z-index:-1;pointer-events:none;';
+    cv.style.cssText = 'position:fixed;right:0;bottom:0;width:2px;height:2px;opacity:0.01;z-index:-1;pointer-events:none;';
     document.body.appendChild(cv);
     const ctx = cv.getContext('2d');
     // 手动帧捕获（captureStream(0) + requestFrame）：移出视口的 canvas 合成呈现延迟可达
@@ -434,31 +456,49 @@ async function renderVideo() {
     rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
     rec.onerror = (e) => { console.warn('[video] MediaRecorder error', e); };
     const stopped = new Promise((res) => { rec.onstop = res; });
-    rec.start(500);
     // 每次导出都从干净的帧间状态起笔（粒子 / 能量包络 / 上次绘制时刻）。
     // 否则预览或其他导出遗留的粒子会让同一份工程两次导出的画面不一致。
     drawVideoFrame._state = null;
+    rec.start(500);
+    // ★★ 录制器 start() 之后有一段**还没开始收帧**的冷启动窗口（本机实测约 0.6 秒）：
+    //    这期间画的帧根本不进流。之前内容时钟从 start() 那刻算起，于是「钟跑了 3 秒、
+    //    流里只有 2.4 秒」——成片比目标短一截，而且音频是从 0 开始的，画面整体后移。
+    //    现在等冷启动过去（第一个 dataavailable 或 800ms 兜底）再起钟、再画第 0 帧，
+    //    成片首帧就是内容 0、时长就是目标时长，音画同起点。
+    //    （试过在 start() 之前先画一帧「打底」：那会让首帧被录进流、后面停 0.8 秒，
+    //     成片反而多出 0.8 秒静帧，被 -shortest 剪掉尾巴 —— 不要这么做。）
+    await new Promise((res) => {
+      let done = false;
+      const fin = () => { if (done) return; done = true; try { rec.removeEventListener('dataavailable', fin); } catch (e) {} res(); };
+      try { rec.addEventListener('dataavailable', fin); } catch (e) {}
+      setTimeout(fin, 800);
+    });
     const start = performance.now();
     const stopRec = () => { try { if (rec.state !== 'inactive') rec.stop(); } catch (e) {} setTimeout(() => { try { stream.getTracks().forEach((t2) => t2.stop()); } catch (e) {} }, 300); };
     let cancelFlag = false;
     const melodyTrack = s.tracks.findIndex((tr) => tr.isDrum === false && !/bass|贝斯|低音/.test(tr.name || ''));
     const ivMs = Math.max(16, Math.round(1000 / fps));
     await new Promise((resolve) => {
-      let drawDurEst = 16; // 绘制耗时估计(ms)：帧内容应与「捕获时刻」对齐，预补偿绘制占用的时间
+      let delivered = 0;   // 已交付给录制器的帧数
+      let drawDurEst = 16; // 绘制耗时估计(ms)：内容时间要按「捕获时刻」算，预补偿本帧绘制耗时
+      // ★ 尾部保护：录制器在 stop() 之前还会丢掉最后 ~0.3 秒的帧（合成器/编码器延迟），
+      //   实测「3 秒」只录到 2.72 秒。多跑这一小段，让成片被 -shortest 按**音频长度**
+      //   （= 目标时长）截断 —— 正好截在内容 sec 处，一秒不少也不多。
+      const TAIL_PAD = 0.6;
       const step = () => {
         const t0 = performance.now();
         const elRaw = (t0 - start) / 1000;
-        if (VE.veCancel || elRaw >= sec) {
+        // 内容时间 = 起笔时刻 + 绘制耗时（帧在绘制完成后立即 requestFrame，时间戳≈起笔+绘制耗时）
+        const el = elRaw + drawDurEst / 1000;
+        if (VE.veCancel || el >= sec + TAIL_PAD) {
           if (VE.veTimer) { clearInterval(VE.veTimer); VE.veTimer = null; }
           stopRec(); resolve(); return;
         }
-        // 内容时间 = 起笔时刻 + 绘制耗时（帧在绘制完成后立即 requestFrame，时间戳≈起笔+绘制耗时）
-        const el = elRaw + drawDurEst / 1000;
         const tick = s.secToTick(Math.min(startSec + el, Math.max(0.001, s.totalSec - 0.001)));
         const vf = { winSec: 8, melodyTrack, lyricAt: lyricAtTick(s, tick), pct: (el / sec) };
         // 音频已按片段归一化（从 0 起），频谱/波形用 el；瀑布 tick 用全曲坐标 startSec+el
         drawVideoFrame(ctx, W, H, tick, s, buf, vf, el);
-        if (canManual) { try { vtrack.requestFrame(); } catch (e) {} }
+        if (canManual) { try { vtrack.requestFrame(); } catch (e) {} delivered++; }
         drawDurEst = Math.min(400, drawDurEst * 0.7 + (performance.now() - t0) * 0.3);
         VE.veProgress = Math.min(97, 10 + (elRaw / sec) * 87);
       };
@@ -633,14 +673,28 @@ async function renderVideo() {
             <input type="number" min="0" step="0.1" class="num-input" v-model.number="VE.end" style="flex:1" />
           </div>
         </div>
+        <!-- ★ 背景跟「可视化」页共用一份（stores/vizbg）：这里改，瀑布流那边立刻变；
+             反之亦然。导出前先在可视化页把背景调好，这里就是所见即所得。 -->
         <div class="field-row">
-          <label>{{ t('背景色') }}</label>
-          <input type="color" v-model="VE.bgColor" style="width:100%;height:30px;padding:0;border:1px solid var(--hairline);border-radius:6px;background:none;cursor:pointer" />
-        </div>
-        <div class="field-row">
-          <label>{{ t('背景图片') }}</label>
-          <button class="btn sm" @click="vePickBgImage">{{ VE.bgImage ? t('更换') : t('选择') }}</button>
-          <span v-if="VE.bgImage" class="muted small" @click="VE.bgImage = null" style="cursor:pointer">✕ {{ t('移除') }}</span>
+          <label>{{ t('背景') }}</label>
+          <div class="ve-bg-modes">
+            <button v-for="m in BG_MODES" :key="m.k" class="chip-btn" :class="{ active: bg.mode === m.k }"
+                    :title="m.k === 'transparent' ? t('真·透明：导出的画面可当叠加层') : ''"
+                    @click="vizBg.setMode(m.k)">{{ t(m.label) }}</button>
+            <input v-if="bg.mode === 'solid'" type="color" :value="bg.color"
+                   @input="vizBg.setColor($event.target.value)"
+                   style="width:38px;height:24px;padding:0;border:1px solid var(--hairline);border-radius:6px;background:none;cursor:pointer" />
+            <button v-if="bg.mode === 'image'" class="btn sm" @click="vizBg.pickImage()">
+              <Icon name="folder" :size="12" />{{ bg.path ? t('更换') : t('选择') }}</button>
+          </div>
+          <div v-if="bg.mode === 'image' || bg.mode === 'theme'" class="ve-bg-sliders">
+            <span class="muted small">{{ t('模糊') }}</span>
+            <input type="range" min="0" max="40" step="1" :value="bg.blur" @input="vizBg.setBlur($event.target.value)" />
+            <span class="muted small">{{ t('暗化') }}</span>
+            <input type="range" min="0" max="80" step="5" :value="Math.round(bg.dim * 100)" @input="vizBg.setDim((+$event.target.value) / 100)" />
+          </div>
+          <div class="muted small">{{ t('与「可视化」页共用同一套设置') }}</div>
+          <div v-if="bg.mode === 'transparent'" class="muted small">{{ t('透明档：MP4 没有透明通道，导出后是黑底（可作叠加层的相加/滤色素材）') }}</div>
         </div>
         <div class="field-row">
           <label>{{ t('水印') }}</label>
@@ -701,6 +755,10 @@ async function renderVideo() {
 .ve-preview-wrap.ve-tpl-subtitle { aspect-ratio: 16 / 10; }
 .ve-preview-canvas { width: 100%; height: 100%; display: block; }
 .ve-preview-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--stone); font-size: 12px; pointer-events: none; }
+/* 背景控件：跟「可视化」页的 .viz-bg-bar 同一套语言（chip-btn + 细滑杆） */
+.ve-bg-modes { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ve-bg-sliders { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.ve-bg-sliders input[type=range] { flex: 1; min-width: 60px; accent-color: var(--accent); }
 .ve-opts { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--slate); }
 .ve-opts label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .ve-opts input[type=checkbox] { accent-color: var(--ink); }

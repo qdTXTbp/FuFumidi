@@ -62,6 +62,9 @@ import traceback
 # ============================================================
 # 转发层 —— 真正的实现在 diffsinger/ 包里
 # ============================================================
+# ★ onnxruntime 兼容自愈：显卡增强包里的 onnxruntime 建会话时段错误时，
+#   原地重启自己并改用应用自带的 CPU 版运行时（见 ort_compat.py 的模块说明）。
+import ort_compat                                                 # noqa: E402
 from diffsinger import RenderError                                # noqa: E402
 from diffsinger.pipeline import (                                # noqa: E402
     ENGINE_VERSION,
@@ -280,6 +283,8 @@ def cmd_render(args):
     注意与旧实现的等价性：失败时是 `emit_result(ok:false)` 后**正常返回**（退出码 0），
     不是 `sys.exit(1)` —— 保持同样语义，避免主进程的解析逻辑发生变化。
     """
+    # ★ 这一句可能在**原地重启**后不返回（见 ort_compat）：重启后的进程会拿到说明文字
+    ort_note = ort_compat.bootstrap(args.voicebank, sys.argv)
     try:
         res = render_phrase({
             "voicebank": args.voicebank,
@@ -296,6 +301,8 @@ def cmd_render(args):
             "depth": getattr(args, "depth", None),
             "steps": getattr(args, "steps", None),
         }, on_progress=emit_progress)
+        if ort_note:
+            res["warnings"] = [ort_note] + list(res.get("warnings") or [])
         emit_result({k: v for k, v in res.items() if k != "wav"})
     except Exception as e:  # noqa: BLE001
         emit_result({"ok": False, "error": str(e)})
@@ -316,6 +323,8 @@ def cmd_sing_render(args):
     `--cache-dir` 是关键：给了才会命中缓存，实时预览才有意义。
     `--notes` 的约定与 `render` 一致（JSON 串或 `@文件`）。
     """
+    # ★ 同 render：增强包里的 onnxruntime 建会话崩溃时先自愈（可能原地重启，不返回）
+    ort_note = ort_compat.bootstrap(args.voicebank, sys.argv)
     try:
         from singing.openutau.diffsinger.session import render_notes
         notes = _parse_notes_arg(args.notes)
@@ -341,8 +350,9 @@ def cmd_sing_render(args):
             from diffsinger.pipeline import write_wav
             write_wav(args.out, [float(x) for x in samples], int(r['sample_rate']))
             wrote = args.out
+        _warns = ([ort_note] if ort_note else [])
         emit_result({
-            'ok': True, 'out': wrote,
+            'ok': True, 'out': wrote, 'warnings': _warns,
             'duration_ms': r['duration_ms'], 'sample_rate': r['sample_rate'],
             'phrases': r['phrases'], 'rendered': r['rendered'],
             'samples_count': int(len(samples)),

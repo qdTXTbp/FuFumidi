@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue';
 import { useAppStore } from '../stores/app';
+import { useVizBgStore } from '../stores/vizbg';
 import { getSynth, ensureAudio, getPlayer } from '../audio.js';
 
 const app = useAppStore();
@@ -15,87 +16,23 @@ const colorScheme = ref(0);
 const immersive = ref(false);
 
 /* ---------------- 音符瀑布的背景 ----------------
-   theme       主题渐变（默认）
-   solid       纯色（深色底更适合投影/OBS）
-   image       自定义图片（可模糊 + 暗化）—— 参照 SeeMusic / Synthesia 的"背景图"玩法
-   transparent 真·透明（导出的 PNG/视频直接当叠加层，不再是一块白底）                */
-const BG_KEY = 'fufumidi.viz.bg';
-/* ★ 改默认值 / 改结构时把 BG_VER +1：老数据直接忽略，否则「新默认值」对老用户永远不生效
-   （这次就把默认从「主题」改成「透明」，顺便清掉之前调试留下的图片档）。 */
-const BG_VER = 2;
-const BG_DEFAULTS = { v: BG_VER, mode: 'transparent', color: '#0b1020', blur: 12, dim: 0.35, path: '' };
-/* ★ 只持久化**文件路径**，不存 blob: URL —— blob URL 是「本次会话」的，重启后必然失效。
-   早先存了 blob URL，结果重启应用后档位还写着「图片」、画面却是主题底（用户看到的"图片没了"）。 */
-const bg = ref({ ...BG_DEFAULTS });
-const bgImage = ref(null);          // 已解码的 HTMLImageElement（传给渲染器）
-const bgMore = ref(false);
-let bgObjUrl = '';                  // 本次会话的 objectURL，换图/卸载时释放
-try {
-  const s = JSON.parse(localStorage.getItem(BG_KEY) || 'null');
-  if (s && typeof s === 'object' && s.v === BG_VER) {
-    bg.value = { ...BG_DEFAULTS, ...s, v: BG_VER, path: s.path || '' };
-  }
-} catch (e) { /* 存储坏了就用默认值 */ }
-function saveBg() {
-  try { localStorage.setItem(BG_KEY, JSON.stringify({ ...bg.value, v: BG_VER })); } catch (e) { /* 隐私模式忽略 */ }
-}
-function loadBgImage(src) {
-  if (!src) { bgImage.value = null; return; }
-  const im = new Image();
-  im.onload = () => { bgImage.value = im; };
-  im.onerror = () => { bgImage.value = null; };
-  im.src = src;
-}
-function mimeOf(p) {
-  return /\.png$/i.test(p) ? 'image/png'
-    : (/\.gif$/i.test(p) ? 'image/gif'
-      : (/\.webp$/i.test(p) ? 'image/webp'
-        : (/\.bmp$/i.test(p) ? 'image/bmp' : 'image/jpeg')));
-}
-/** 从磁盘路径读图并解码；返回是否成功 */
-async function loadBgFromPath(p) {
-  const b = window.fuBridge;
-  if (!p || !b || typeof b.readBinary !== 'function') return false;
-  const ab = await b.readBinary(p);
-  if (!ab) return false;
-  if (bgObjUrl) { try { URL.revokeObjectURL(bgObjUrl); } catch (e) { /* 忽略 */ } }
-  bgObjUrl = URL.createObjectURL(new Blob([ab], { type: mimeOf(p) }));
-  loadBgImage(bgObjUrl);
-  return true;
-}
-async function pickBgImage() {
-  const b = window.fuBridge;
-  if (!b || typeof b.pickFile !== 'function') { app.toast(t('当前环境不支持选择图片'), 'warn'); return; }
-  const p = await b.pickFile({ filters: [{ name: t('图片'), extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }] });
-  if (!p) return;
-  if (!(await loadBgFromPath(p))) { app.toast(t('读取图片失败'), 'error'); return; }
-  bg.value = { ...bg.value, path: p, mode: 'image' };
-  saveBg();
-}
-function setBgMode(m) {
-  if (m === 'image' && !bg.value.path) { void pickBgImage(); return; }
-  bg.value = { ...bg.value, mode: m };
-  saveBg();
-  if (m === 'image' && bg.value.path && !bgImage.value) void loadBgFromPath(bg.value.path);
-}
-// 启动时把上次选过的图读回来（路径有效才用；图没了就退回主题，不留"假图片档"）
-onMounted(() => {
-  // 老格式（没有 v）的数据一律丢弃并把新默认写回去 —— 否则那条陈旧记录会一直躺在 localStorage 里
-  try {
-    const raw = JSON.parse(localStorage.getItem(BG_KEY) || 'null');
-    if (!raw || raw.v !== BG_VER) saveBg();
-  } catch (e) { saveBg(); }
-  const p = bg.value.path;
-  if (!p) return;
-  void loadBgFromPath(p).then((ok) => {
-    if (!ok && bg.value.mode === 'image') {
-      bg.value = { ...bg.value, mode: 'theme', path: '' };
-      saveBg();
-      app.toast(t('上次的自定义背景图已找不到，已切回主题'), 'warn');
-    }
-  });
-});
-
+   ★ 状态住在 stores/vizbg.ts：**导出视频页读的是同一份**（同一 localStorage 键、
+     同一绘制函数 core/viz.js 的 paintVizBg）。以前两边各存一份，用户在瀑布流里挑的
+     图片、透明档、模糊/暗化，导出的成片一概不认 —— 看到的和导出的不是一幅画。
+    theme       主题渐变
+    solid       纯色（深色底更适合投影/OBS）
+    image       自定义图片（可模糊 + 暗化）—— 参照 SeeMusic / Synthesia 的背景图玩法
+    transparent 真·透明（导出的 PNG/视频直接当叠加层，不再是一块白底）—— 默认档 */
+const vizBg = useVizBgStore();
+const bg = vizBg.bg;                // reactive，模板与绘制都直接读它
+const bgMore = ref(false);          // 设置条是否展开：纯 UI 状态，不进 store
+// 模板里的 @input 是「先改 bg 再存」两步（颜色/模糊/暗化都直接改 reactive 字段），
+// 所以保留一个薄壳；读写都在 store 里，导出页读到的是同一份。
+function saveBg() { vizBg.save(); }
+function setBgMode(m) { vizBg.setMode(m); }
+function pickBgImage() { void vizBg.pickImage(); }
+// 启动时把上次选过的图读回来（路径有效才用；图没了就退回主题，不留假图片档）
+onMounted(() => { void vizBg.init(); });
 // 沉浸模式下仪表盘那三张卡片没有意义，直接按瀑布流布局铺满
 const isWaterfall = computed(() => mode.value === 'waterfall' || immersive.value);
 
@@ -228,7 +165,7 @@ function drawRoll(ctx2d, c, u, syn, song, player) {
     activeNotes: syn && syn.activeNow ? syn.activeNow() : [],
     energy: rollState.energy || 0,
     // 背景只作用于音符瀑布（频谱/示波器/和弦仍是主题底）
-    bg: { mode: bg.value.mode, color: bg.value.color, blur: bg.value.blur, dim: bg.value.dim, image: bgImage.value },
+    bg: vizBg.drawOpts(),
   });
 }
 

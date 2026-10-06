@@ -329,3 +329,99 @@ torch 2.9.1+cu128   torch.cuda.get_arch_list() = [sm_70, sm_75, sm_80, sm_86, sm
 3. `--vocoder` 覆盖未实现（每次渲染一条 warning）。
 4. 多音字没有候选列表。
 5. 源 MIDI 在 60–90s 没有旋律（素材问题，不是工具问题）。
+
+## 10. 第六轮：多语声库（Ria）能唱了；视频导出与「可视化」页共用一套背景
+
+### 10.1 多语声库：`use_lang_id` 的 `languages` 输入（四处，全部照搬上游）
+
+Ria 是多语言声库（`dsconfig.yaml` 里 `use_lang_id: true` + `languages: ria-multi-dict.languages.json`），
+此前渲染到 A 层就**直接抛**「多语声库暂时渲不了」。上游 OpenUTAU 在**四个阶段**都喂一个与 `tokens`
+等长的 `languages` 张量，逐个对齐实现：
+
+| 阶段 | 上游位置 | 取值 | 语言表 |
+|---|---|---|---|
+| dsdur linguistic | `DiffSingerBasePhonemizer.cs:417-425` | 逐音素 `p.Language()`（符号前缀 `zh/aa`→`zh`） | `dsdur/dsconfig.yaml` |
+| acoustic | `DiffSingerRenderer.cs:312-321` | `PaddedLanguageIds`（head/tail/间隙 SP 记 0） | **根** `dsconfig.yaml`（`DiffSingerSinger.cs:130-137`） |
+| dsvariance linguistic | `DiffSingerVariance.cs:161-169` | 同上 | `dsvariance/dsconfig.yaml` |
+| dspitch linguistic | `DiffSingerPitch.cs:150-158` | 同上 | `dspitch/dsconfig.yaml` |
+
+改动：`voicebank.py`（`load_language_ids` 兼容四种配置风格 + `stage_language_ids` + `DsSinger.acoustic_language_ids`）、
+`phonemizer.py`、`renderer.py`、`variance.py`、`pitch_edit.py`。只在 `use_lang_id` 为真时才加这个输入
+（`Onnx.VerifyInputNames` 双向严格：单语声库多给一个 `languages` 会直接抛「多余」）。
+
+**旁证**：Ria 的 `fs2.lang_embed.weight` 是 `[4, 256]` —— 合法语言 id 只有 0..3，正好对上
+`ria-multi-dict.languages.json` 的 `ja=1 / yue=2 / zh=3`，0 留给无前缀音素（SP/AP/CL）与填充段。
+
+新增 `engine/tests/test_diffsinger_multilang.py`（32 条判据）：语言表读取两种风格、`stage_language_ids`
+的取舍、linguistic 的 languages 形状/取值/长度校验、真实声库的对照（Ria 有表、花火两张表都空），
+以及一次**真实渲染**里用 `run_session` 探针抓下三个阶段实际收到的 `languages`（值域 `{0,3}` ✔、与 tokens 等长 ✔、
+vocoder 不喂 ✔）。
+
+实测（安装版，走应用自己的 `diffsinger:render` IPC）：Ria 中文 3 音符 → `ok` / 1.799s / 7 音素，
+而改动前是 `ok:false`「多语声库尚未实现」。
+
+### 10.2 顺带挖出的真问题：显卡增强包里的 onnxruntime **建会话就段错误**
+
+装上 Ria 后第一次在安装版里渲染，得到的是 `引擎退出码 3221225477`（= `0xC0000005` 访问冲突）。
+逐模型二分（同一解释器、只换 PYTHONPATH）后定位：
+
+| 模型 | 增强包 `onnxruntime-gpu 1.20.2` | 随包 `onnxruntime 1.30.0` |
+|---|---|---|
+| Ria `ria-multi-dict.onnx` | **崩溃** | 正常 |
+| Ria `dsvariance/vari.variance.onnx` | **崩溃** | 正常 |
+| Ria dsdur / vari.linguistic / 花火全部 | 正常 | 正常 |
+
+那是**进程级崩溃**，`try/except` 抓不到，上层只看到一句「引擎退出码 3221225477」。
+新增 `engine/ort_compat.py` 做自愈：只在 `FUFUMIDI_GPU_KINDS` 非空（引擎正用增强包）时，
+对声库里的每个 `.onnx` 起**子进程**建一次会话（子进程崩了父进程毫发无损），结论按
+「解释器 + ORT 版本 + 模型路径/大小/时间戳」缓存到 `$FUFUMIDI_CACHE_DIR/ort-compat.json`；
+有任何一个加载不了，就用「解释器自带 site-packages 优先」的 PYTHONPATH **起子进程重跑自己**
+（实测 `os.execve` 在 Windows 上会让新进程一启动就 0xC0000005，所以走子进程 + 转发 stdio + 透传退出码），
+并把中文警告写进渲染结果的 `warnings`。
+
+实测（安装版）：首次 81.3s（含一轮 5 个模型的子进程探测）→ 第二次 24.0s（命中缓存），
+两次都 `ok` 并带警告「显卡增强包里的 onnxruntime 加载不了这个声库的模型（进程级崩溃），已自动改用应用自带的 CPU 版 onnxruntime」。
+新增 `engine/tests/test_ort_fallback.py`（25 条判据，探针用注入的 runner，不需要真崩溃）。
+
+### 10.3 视频导出与「可视化」页**共用一套背景**（本轮第二项）
+
+以前导出页自带 `VE.bgColor` / `VE.bgImage`，跟可视化页的背景设置毫无关系 —— 用户在瀑布流里挑的图片、
+透明档、模糊/暗化，导出的成片一概不认。现在：
+
+- 新增 `frontend/src/stores/vizbg.ts`（Pinia）：档位（主题/纯色/图片/透明）、颜色、模糊、暗化、图片**路径**
+  与解码后的图片都住在这里，两页读写同一份 + 同一个 localStorage 键 `fufumidi.viz.bg`。
+- `core/viz.js` 抽出 `paintVizBg(ctx, w, h, bgOpt)`（主题/纯色/图片/透明 + 新增 `keep` 档 = 不动背景），
+  `drawVizWaterfall` 与视频导出的 `drawVideoFrame` **调同一个函数**，逐像素同源。
+- 导出页的「背景色 / 背景图片」两行换成与可视化页同款的四档 chip + 颜色 + 模糊/暗化，并标注
+  「与『可视化』页共用同一套设置」；透明档额外提示 MP4 没有透明通道。
+
+实测（安装版，CDP 取像素 + 真导出成片）：可视化页设 `#ff00ff` → 导出页预览角像素 `[255,0,255,255]`；
+在导出页改成 `#00ff00` → 预览立刻 `[0,255,0,255]`，切回可视化页也是绿色（双向同步）；
+导出的 MP4 抽帧（ffmpeg）角像素 `(250,0,253)`、含 1.7 万种颜色（音符都画上了）。
+
+### 10.4 顺带修掉的三个「视频时间」问题（都靠成片数字定位）
+
+1. **录制画布被移出视口**（`left:-100000px`）→ 合成器按不可见图层对待，`requestFrame` 大量丢帧：
+   实测「3 秒 @30fps」请求 90 帧、只有 75 帧进流，而成片时长 = 进流帧数/fps → **导出 2 秒得 1.28 秒**、
+   3 秒得 2.42 秒，且与音频整体错位。改为放在视口右下角 **2×2 CSS 像素、`opacity:0.01`**
+   （`captureStream` 抓的是画布像素缓冲 W×H，不是这 2px 的显示尺寸）。
+2. **录制器 `start()` 后有约 0.6 秒还没开始收帧**的冷启动窗口，这段画的帧根本不进流，
+   而内容时钟从 `start()` 起算 → 成片比目标短、且音频（从 0 起）整体领先画面。
+   改为等第一个 `dataavailable`（或 800ms 兜底）再起钟、再画第 0 帧。
+3. **`stop()` 之前还会丢最后约 0.3 秒的帧**：加 0.6 秒「尾部保护」，多跑一段让 `-shortest`
+   按音频长度（= 目标时长）截断。
+
+| 导出目标 | 修前成片 | 修后成片 | 帧数 |
+|---|---|---|---|
+| 2 秒 | 1.28s | — | 41 |
+| 3 秒 | 2.42s | **3.13s** | 97（帧间隔 23–54ms，无空洞） |
+
+### 10.5 本轮验证与遗留
+
+- 引擎测试：**154 passed / 2 skipped**（新增 `test_diffsinger_multilang.py`、`test_ort_fallback.py`）；
+  前端 `npm --prefix frontend run build` 通过；i18n 审计「新串 EN 缺 0 / JA 缺 0」。
+- 全部改动都已 `node scripts/deploy-installed.cjs` 覆盖到安装版（asar 83.6 MB），并在**安装版里**实测。
+- 遗留：
+  1. 视频导出的**头 0.6 秒冷启动**期间不画内容（现在是空等），长片可忽略、短片按比例偏慢一点；
+  2. 若增强包里的 onnxruntime 将来修好，`ort-compat.json` 缓存会因 ORT 版本变化自动失效（无需手工清）；
+  3. 多语声库仍按**轨道语言**选词典（与上游一致）：一条轨唱不了两种语言，同一首歌要换语言得换轨。
