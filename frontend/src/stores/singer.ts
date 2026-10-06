@@ -730,6 +730,36 @@ export const useSingerStore = defineStore('singer', {
       this.select(n.id);
       return n.id;
     },
+    /**
+     * 用一批音符整体替换某条轨的音符（会改变音符**个数**）。
+     *
+     * 用途：批量填词的「切开长音符」模式 —— 字比音符多时把长音符对半切开，
+     * 让每个字都有自己的音符。老实现只能逐条 updateNote，改不了个数。
+     * 传进来的项可以带 id（原有音符）或不带（新切出来的片段，这里分配）。
+     */
+    replaceNotes(trackId: string, items: any[]): number {
+      const tr = this.tracks.find((x) => x.id === trackId);
+      if (!tr) return 0;
+      this.pushUndo();
+      const base = makeNote(tr, 0, 60);
+      tr.notes = (items || []).map((it, i) => {
+        const n: SingNote = {
+          ...base,
+          ...it,
+          id: it && it.id ? it.id : 'sn' + Date.now().toString(36) + i.toString(36),
+          startBeat: Math.max(0, Number(it && it.startBeat) || 0),
+          durBeat: Math.max(0.02, Number(it && it.durBeat) || 0.25),
+          pitch: Math.round(Number(it && it.pitch) || 60),
+          lyric: String((it && it.lyric) != null ? it.lyric : ''),
+        };
+        return n;
+      });
+      tr.notes.sort((a, b) => a.startBeat - b.startBeat);
+      tr.renderSig = '';            // 音符变了 → 之前的渲染标为过期
+      this.selectedIds = [];
+      this.selectedId = '';
+      return tr.notes.length;
+    },
     updateNote(id: string, patch: Partial<SingNote>) {
       for (const tr of this.tracks) {
         const n = tr.notes.find(x => x.id === id);

@@ -11,6 +11,7 @@ import { useRoute, useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import PianoRoll from '../components/pianoroll/PianoRoll.vue';
 import VoicebankPanel from '../components/sing/VoicebankPanel.vue';
+import ViewVoicebank from './ViewVoicebank.vue';
 import { t } from '../core/i18n.js';
 import { ENGINES, LANGUAGES, useSingerStore } from '../stores/singer';
 import { useAppStore } from '../stores/app';
@@ -18,7 +19,7 @@ import { getTransport } from '../core/sing_transport.js';
 import { FX_TYPES, FX_ORDER } from '../core/track_fx.js';
 import { CURVE_TARGETS, curveOf, defaultFor, targetsFor } from '../core/track_automation.js';
 import { notePhonemes } from '../core/phoneme.js';
-import { alignLyrics, splitLyricLines } from '../core/sing_align.js';
+import { alignLyrics, splitLyricLines, splitNotesToFit } from '../core/sing_align.js';
 
 const store = useSingerStore();
 const app = useAppStore();
@@ -49,18 +50,19 @@ function sayErr(m: string, hint = '', detail = '') {
  *   banks                → 声库页签（原 /banks 页）
  *   utau / diffsinger    → 编辑器页签，并选中/新建该引擎的轨（合并前的旧深链）
  *   其它 / 缺省 / editor → 编辑器页签 */
-type SingTab = 'editor' | 'banks';
-const tab = ref<SingTab>(route.query.tab === 'banks' ? 'banks' : 'editor');
+type SingTab = 'editor' | 'banks' | 'maker';
+const asTab = (v: any): SingTab => (v === 'banks' ? 'banks' : (v === 'maker' ? 'maker' : 'editor'));
+const tab = ref<SingTab>(asTab(route.query.tab));
 
 watch(() => route.query.tab, (v) => {
-  const want: SingTab = v === 'banks' ? 'banks' : 'editor';
+  const want = asTab(v);
   if (want !== tab.value) tab.value = want;
 });
 
 function setTab(v: SingTab) {
   tab.value = v;
   // 用 path + query 直接替换：交给顶层 /:pathMatch 兜底，不依赖具体路由名
-  try { void router.replace({ path: '/singer', query: v === 'banks' ? { tab: 'banks' } : {} }); }
+  try { void router.replace({ path: '/singer', query: v === 'editor' ? {} : { tab: v } }); }
   catch (_) { /* 路由不可用时忽略 */ }
 }
 const propsOpen = ref(false);
@@ -788,7 +790,7 @@ function fitRollSoon() {
 type LyricMode = 'auto' | 'char' | 'space' | 'line';
 type FillMode = 'seq' | 'loop' | 'trim';
 /** 对齐方式：seq=顺序（老行为）；spread=整首按比例；phrases=按乐句（P1：字数≠音符数时的正解） */
-type AlignMode = 'seq' | 'spread' | 'phrases';
+type AlignMode = 'seq' | 'spread' | 'phrases' | 'split';
 const lyricDlg = ref<{ text: string; mode: LyricMode; fill: FillMode; align: AlignMode; gap: number } | null>(null);
 const pinyinBusy = ref(false);
 
@@ -840,6 +842,22 @@ function applyLyricDialog() {
   /* ★ 对齐方式（P1-8）：
      顺序填在「字数 ≠ 音符数」时一定错位 —— 实测烦恼歌 441 字 / 275 音符，顺序填只能唱到
      第 166 个字（副歌整段没词）。spread / phrases 把字按比例铺满全曲，首尾永远对得上。 */
+  /* ★ 切开长音符：字比音符多时把长音对半切开，**一个字都不丢**（会改变音符个数）。
+     实测《烦恼歌》441 字 / 275 音符：按乐句铺开会丢 166 个字且丢在句中
+     （「不爱的不断打扰」→「不 的 断 打 你」），唱出来直接错词。 */
+  if (d.align === 'split') {
+    const ordered = [...list].sort((a: any, b: any) => (a.startBeat - b.startBeat));
+    const r = splitNotesToFit(ordered, words, Math.max(0.125, Number(d.gap) || 1));
+    const n = store.replaceNotes(tr.value!.id, r.pieces);
+    say(t('按乐句切开长音符：') + String(r.phrases) + t(' 个乐句')
+      + String(words.length) + t(' 个字 → ') + String(n) + t(' 个音符')
+      + (r.added ? t('（切开 ') + String(r.added) + t(' 处）') : '')
+      + (r.dropped ? t('（有 ') + String(r.dropped) + t(' 个字实在放不下，已跳过）') : ''),
+      r.dropped ? 'warn' : 'ok',
+      { hint: t('旋律节奏会因切分略有变化；想还原就按 Ctrl+Z。') });
+    lyricDlg.value = null;
+    return;
+  }
   if (d.align !== 'seq') {
     const ordered = [...list].sort((a: any, b: any) => (a.startBeat - b.startBeat));
     const r = alignLyrics(ordered, words, d.align, Math.max(0.125, Number(d.gap) || 1));
@@ -1445,6 +1463,12 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <Icon name="box" :size="13" /> {{ t('声库') }}
         <i>{{ t('UTAU · DiffSinger · 组件') }}</i>
       </button>
+      <!-- 声库制作原本是独立路由（/voicebank），现在与编辑器/声库并列成第三个页签：
+           「做声库 / 装声库 / 用声库」本来就是同一条工作流。 -->
+      <button class="sn-tab" :class="{ on: tab === 'maker' }" data-guide="sing-tab-maker" @click="setTab('maker')">
+        <Icon name="mic" :size="13" /> {{ t('声库制作') }}
+        <i>{{ t('切片 · 标注 · 导出') }}</i>
+      </button>
       <span class="sp" />
     </div>
 
@@ -1954,14 +1978,15 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             </select>
           </label>
           <!-- ★ 对齐方式：字数与音符数不一致时（实测 441 字 / 275 音符），顺序填一定会错位 -->
-          <label :title="t('顺序=一个字一个音符；按比例/按乐句会把字铺满全曲，首尾对齐')">{{ t('对齐') }}
+          <label :title="t('顺序=一个字一个音符；按比例/按乐句会把字铺满全曲（字多时跳过一些字）；切开长音符=把长音切开，一个字都不丢')">{{ t('对齐') }}
             <select v-model="lyricDlg.align">
               <option value="seq">{{ t('顺序') }}</option>
               <option value="spread">{{ t('整首按比例') }}</option>
               <option value="phrases">{{ t('按乐句') }}</option>
+              <option value="split">{{ t('切开长音符（一字不丢）') }}</option>
             </select>
           </label>
-          <label v-if="lyricDlg.align === 'phrases'" :title="t('两个音符之间空多久算换句')">
+          <label v-if="lyricDlg.align === 'phrases' || lyricDlg.align === 'split'" :title="t('两个音符之间空多久算换句')">
             {{ t('换句休止') }}
             <input type="number" min="0.125" step="0.25" style="width:64px" v-model.number="lyricDlg.gap" /> {{ t('拍') }}
           </label>
@@ -1974,7 +1999,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <span class="muted">{{ t('识别到 ') }}{{ lyricTokens.length }}{{ t(' 个词 → ') }}{{ selNotes.length }}{{ t(' 个音符') }}</span>
           <span v-if="lyricDlg.align === 'seq' && Math.abs(lyricTokens.length - selNotes.length) > Math.max(4, selNotes.length * 0.25)"
                 class="mismatch">
-            {{ t('字数与音符数差得多：顺序填会从中间开始错位，建议选「整首按比例」或「按乐句」。') }}
+            {{ t('字数与音符数差得多：顺序填会从中间开始错位；想一个字都不丢就选「切开长音符」。') }}
           </span>
           <span class="chips">
             <i v-for="(w, i) in lyricTokens.slice(0, 24)" :key="i">{{ w }}</i>
@@ -2168,6 +2193,11 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
     <!-- ==================== 声库（原独立页并入同一入口） ==================== -->
     <VoicebankPanel v-if="tab === 'banks'" class="sing-banks" />
+
+    <!-- ==================== 声库制作（原独立路由 /voicebank） ==================== -->
+    <div v-show="tab === 'maker'" class="sing-maker">
+      <ViewVoicebank />
+    </div>
   </div>
 </template>
 
@@ -2240,6 +2270,9 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .edt-prog-wrap .edt-prog { flex: 1; }
 .sing { flex: 1; min-height: 0; display: flex; }
 .sing-banks { flex: 1; min-height: 0; }
+/* 声库制作页签：整块撑开（内部是 flex 布局：工具栏 + 片段列表/波形） */
+.sing-maker { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px 18px; background: var(--canvas); }
+.sing-maker > * { min-height: 100%; }
 
 /* ---- 左：轨道列表 ---- */
 .trk { width: 264px; flex: none; display: flex; flex-direction: column;

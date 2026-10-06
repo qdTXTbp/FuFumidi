@@ -245,7 +245,7 @@ const CHAPTERS = computed(() => [
         desc: t('三块：参数（UTAU 的重采样器/波源工具，DiffSinger 的采样深度与步数）、效果链（本轨独享，从上到下就是信号流）、自动化子轨（PIT 与 DYN/BRE/GEN 改了要重渲，VOL/PAN 播放时实时生效）。'), manual: true },
       { parent: 'singer', tab: 'banks', selector: '[data-guide="banks-installed"]', title: t('声库（两类混排）'),
         desc: t('切到「声库」页签：UTAU 声库与 DiffSinger 声库在同一张列表里，类型只作标签 —— 正在被轨道使用的会标注「使用中」。'), manual: true },
-      { parent: 'singer', tab: 'banks', selector: '[data-guide="banks-make"]', title: t('UTAU 声库制作'),
+      { parent: 'singer', tab: 'maker', selector: '[data-guide="sing-tab-maker"]', title: t('UTAU 声库制作'),
         desc: t('选一个音源文件自动切分成音节、批量标注 oto 参数，再导出 oto.ini 或压缩包。'), manual: true },
       { parent: 'singer', tab: 'banks', selector: '[data-guide="banks-ds"]', title: t('DiffSinger 推理组件'),
         desc: t('启用模块后才下载组件（未启用零占用）；GPU 加速也在这里一键安装。做完切回「编辑器」页签继续调教。'), manual: true },

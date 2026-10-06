@@ -91,6 +91,62 @@ export function spreadSyllables(syllables, notes) {
 }
 
 /**
+ * 「切开长音符」：字比音符多时，把长音符切成多份，让**每个字都有自己的音符**。
+ *
+ * 为什么需要：实测《烦恼歌》441 字 / 275 音符。按乐句铺开只能丢掉 166 个字，
+ * 而且丢在句中（「不爱的不断打扰」→「不 的 断 打 你」），唱出来直接错词。
+ * 宁可把长音符切短（旋律节奏略变），也不丢字 —— 这是填词场景的取舍，所以做成一个
+ * 显式选项，不改变原有三种模式的行为。
+ *
+ * @returns {{ pieces: Array, dropped: number, added: number, phrases: number }}
+ *          pieces 里每一项都带 startBeat/durBeat/pitch/lyric，原有音符保留 `id`，
+ *          新切出来的片段 `id` 为 undefined（由调用方落库时分配）。
+ */
+export function splitNotesToFit(notes, syllables, gapBeats = 1) {
+  const list = (notes || []).filter(Boolean)
+    .slice()
+    .sort((a, b) => (Number(a.startBeat) - Number(b.startBeat)) || (Number(a.pitch) - Number(b.pitch)));
+  const syl = (syllables || []).map((s) => String(s == null ? '' : s)).filter((s) => s.length);
+  if (!list.length) return { pieces: [], dropped: 0, added: 0, phrases: 0 };
+  const phrases = segmentPhrases(list, gapBeats);
+  const segs = splitByWeights(syl, phrases.map((p) => p.length));
+  const pieces = [];
+  let dropped = 0;
+  let added = 0;
+  phrases.forEach((ph, pi) => {
+    const words = segs[pi] || [];
+    if (!words.length) { for (const n of ph) pieces.push({ ...n, lyric: '' }); return; }
+    if (words.length <= ph.length) {
+      // 字不比音符多：与 phrases 模式一致，按比例铺开，不切音符
+      const lyr = spreadSyllables(words, ph);
+      ph.forEach((n, i) => pieces.push({ ...n, lyric: lyr[i] }));
+      return;
+    }
+    // 字比音符多：先一人一个字，再把「最长的那一段」对半切，直到装得下所有字
+    const parts = ph.map((n) => ({
+      ...n,
+      startBeat: Number(n.startBeat) || 0,
+      durBeat: Math.max(0.05, Number(n.durBeat) || 1),
+    }));
+    while (parts.length < words.length) {
+      let bi = 0;
+      for (let i = 1; i < parts.length; i++) if (parts[i].durBeat > parts[bi].durBeat) bi = i;
+      const a = parts[bi];
+      if (a.durBeat < 0.16) break;                 // 再切就唱不出字了，剩下的字只能丢
+      const half = Math.round((a.durBeat / 2) * 1e4) / 1e4;
+      parts.splice(bi, 1,
+        { ...a, durBeat: half },
+        { ...a, id: undefined, startBeat: Math.round((a.startBeat + half) * 1e4) / 1e4, durBeat: Math.round((a.durBeat - half) * 1e4) / 1e4 });
+      added += 1;
+    }
+    parts.forEach((p, i) => pieces.push({ ...p, lyric: String(words[i] == null ? '' : words[i]) }));
+    if (words.length > parts.length) dropped += words.length - parts.length;
+  });
+  pieces.sort((a, b) => a.startBeat - b.startBeat);
+  return { pieces, dropped, added, phrases: phrases.length };
+}
+
+/**
  * 主入口：给音符序列和音节序列，返回等长的歌词数组。
  * @param notes     按时间排序的音符
  * @param syllables 音节（已分词）
@@ -133,10 +189,15 @@ export function selfCheck() {
   const r2 = alignLyrics(notes, ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'], 'spread', 1);
   const r3 = alignLyrics(notes, ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'], 'phrases', 2);
   const ph = segmentPhrases(notes, 2);
+  // 切开模式：4 个音符装 6 个字 → 应该切出 6 段、一个字不丢
+  const sp = splitNotesToFit(notes.slice(0, 4), ['a', 'b', 'c', 'd', 'e', 'f'], 1);
+  const spLyrics = sp.pieces.map((p) => p.lyric).join('');
+  const spOk = sp.pieces.length === 6 && spLyrics === 'abcdef' && sp.dropped === 0 &&
+    Math.abs(sp.pieces.reduce((a, p) => a + p.durBeat, 0) - 4) < 0.01;   // 总时长不变
   const ok =
     r1.lyrics.length === 10 && r1.lyrics[0] === 'a' && r1.lyrics[9] === 'c' &&
     r2.lyrics[0] === 'a' && r2.lyrics[9] === 'j' &&
-    ph.length === 2 &&
+    ph.length === 2 && spOk &&
     r3.lyrics[3] === 'd' && r3.lyrics[4] === 'e' && r3.lyrics[9] === 'j';
-  return { ok, phrases: ph.length, first: r1.lyrics, spread: r2.lyrics, byPhrase: r3.lyrics };
+  return { ok, phrases: ph.length, first: r1.lyrics, spread: r2.lyrics, byPhrase: r3.lyrics, splitOk: spOk, split: spLyrics };
 }
