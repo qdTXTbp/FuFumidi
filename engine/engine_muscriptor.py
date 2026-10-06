@@ -123,6 +123,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         _log(log_cb, f"加载 MuScriptor-{size}（HuggingFace，需授权）…")
         load_arg = size
 
+    gpu_reason = ""
     if device and device != "auto":
         dev = device
     else:
@@ -131,9 +132,20 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         dev = None
         try:
             from engine_gpu import torch_device as _torch_device
+            from engine_gpu import detect as _gpu_detect
             _d = _torch_device()
+            _g = _gpu_detect() or {}
             if _d in ("cuda", "mps"):
                 dev = _d
+            elif _g.get("cuda") and _g.get("arch_supported") is False:
+                # ★ issue #20：显卡在、但算力不在 CUDA 包的支持范围（GTX 10 系及更早）。
+                #   这里必须**显式**传 cpu —— 传 None 会让 muscriptor 自己按"有 CUDA"挑回 GPU，
+                #   然后在推理中途抛 `no kernel image is available`。
+                dev = "cpu"
+                gpu_reason = str(_g.get("arch_reason") or "")
+            elif _g.get("cuda_usable") is False and _g.get("arch_reason"):
+                dev = "cpu"
+                gpu_reason = str(_g.get("arch_reason") or "")
         except Exception:
             dev = None
     try:
@@ -147,6 +159,9 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         _log(log_cb, "使用 GPU（Apple Metal）推理")
     else:
         _log(log_cb, "使用 CPU 推理（较慢）")
+        if gpu_reason:
+            _log(log_cb, "原因：" + gpu_reason + "；若想用 GPU 请更新显卡驱动或改用支持该算力的版本，"
+                              "（本次已自动改用 CPU，转录结果不受影响，只是更慢）")
 
     # 批量推理仅在 CUDA / MPS 上有意义：CPU 批量吞吐无收益且更吃内存，
     # DirectML 设备不被 muscriptor 支持。非 GPU 设备强制回串行（质量最优）。
@@ -220,6 +235,8 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         batch = int(params.get("muscriptor_batch") or 0)
         t0 = time.perf_counter()
         data = None
+        # ★ CUDA 运行期错误只重试一次 CPU（issue #20 的兜底：算力/驱动问题不该让整次转录失败）
+        cuda_fallback_done = False
         while data is None:
             try:
                 if batch >= 2:
@@ -231,6 +248,36 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             except Exception as e:
                 # 显存溢出自动降级：batch ≥2 → 减半重试 → 串行兜底，绝不因此转录失败
                 oom = "out of memory" in str(e).lower() or "OutOfMemoryError" in type(e).__name__
+                # ★ CUDA 运行期错误（no kernel image / 设备断言 / 非法访存…）→ 自动改用 CPU 重跑一次。
+                #   实测 issue #20：`CUDA error: no kernel image is available for execution on the device`
+                #   以前原样抛给用户、整次转录失败；现在换 CPU 继续，并在日志里说明原因。
+                _ck = ""
+                try:
+                    from engine_gpu import cuda_error_kind as _kind, cuda_error_hint as _hint
+                    _ck = _kind(e)
+                except Exception:
+                    _ck = ""
+                if _ck and _ck != "oom" and not cuda_fallback_done and (
+                        _dev_type in ("cuda", "mps") or str(dev or "").startswith(("cuda", "mps"))):
+                    cuda_fallback_done = True
+                    try:
+                        _h = _hint(_ck)
+                    except Exception:
+                        _h = ""
+                    _log(log_cb, "GPU 推理失败：%s（%s）" % (_ck, str(e).strip().splitlines()[0][:200]))
+                    if _h:
+                        _log(log_cb, _h)
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                    model = TranscriptionModel.load_model(load_arg, device="cpu")
+                    dev = "cpu"
+                    batch = 0
+                    _log(log_cb, "已改用 CPU 重跑本次转录（慢一些，但结果可用）…")
+                    continue
                 if oom and batch >= 2:
                     batch = batch // 2
                     _log(log_cb, f"GPU 显存不足，自动降低批量至 batch_size={batch} 重试…")

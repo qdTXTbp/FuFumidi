@@ -15,6 +15,25 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  "详情": "Details",
+  "没有可用的轨道": "No available tracks",
+  "已挂到当前轨道：": "Attached to the current track: ",
+  "当前环境不支持声库列表": "Listing voicebanks is not supported in this environment",
+  "加载声库失败": "Failed to load voicebanks",
+  "AI 声库": "AI voicebanks",
+  "UTAU 声库": "UTAU voicebanks",
+  "未选择": "Not selected",
+  "尚无 AI 声库，去「资源中心 → 模型管理 → DiffSinger 声库」下载": "No AI voicebanks yet — download some from Resources → Model manager → DiffSinger voicebanks",
+  "加载失败": "Failed to load",
+  "正在解压…": "Extracting…",
+  "正在下载…": "Downloading…",
+  "显卡算力支持": "GPU compute capability support",
+  "当前 CUDA 推理包不含本机显卡可用的内核": "The current CUDA runtime package has no kernel for this GPU",
+  "，将自动改用 CPU 转录（功能不受影响，只是更慢）": ", so transcription will automatically use the CPU (same results, just slower)",
+  "用 CPU": "Uses CPU",
+  "显卡算力不受支持，已自动改用 CPU 转录": "GPU compute capability unsupported — using the CPU for transcription",
+  "本机显卡算力不在当前 CUDA 推理包支持范围内": "This GPU's compute capability is not supported by the current CUDA runtime package",
+  " —— 转录/分离会自动改用 CPU（功能不受影响，只是更慢）。": " — transcription and separation will automatically use the CPU (same results, just slower).",
   /* ---- 调教页：曲库导入 / 歌词对齐 / 发音表 / 声库体检（2026-10-06 补） ---- */
   "这首曲目没有对应的 MIDI 文件": "This library item has no MIDI file on disk",
   "可以在「资源管理」里跑一次曲库自检重建。": "Run the library self-check under Resources to rebuild it.",

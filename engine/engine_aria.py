@@ -40,7 +40,18 @@ def _resolve_model_dir():
 def transcribe_aria(audio_path, output_midi, params=None, log_cb=None,
                     num_threads=None, **kwargs):
     params = params or {}
-    device = str(params.get("device") or "cuda")
+    # ★ issue #20：不再默认硬写 "cuda"。显卡算力不在 CUDA 包支持范围内时，
+    #   engine_gpu 已把 device 判成 cpu（torch_device()），这里跟着走；
+    #   aria-amt 只认 cuda / cpu 两种。
+    device = str(params.get("device") or "").strip()
+    if not device:
+        try:
+            from engine_gpu import torch_device as _torch_device
+            device = _torch_device()
+        except Exception:
+            device = "cpu"
+    if not device.startswith("cuda"):
+        device = "cpu"
     variant = str(params.get("variant") or "medium-double")
     model_dir = _resolve_model_dir()
     if model_dir:
@@ -81,12 +92,34 @@ def transcribe_aria(audio_path, output_midi, params=None, log_cb=None,
             cmd.append("-compile")
         _log(log_cb, "运行 " + "aria-amt transcribe …")
         before = set(os.listdir(out_dir))
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
+        # 设备为本机 GPU 不可用时，用环境变量强制子进程看不见显卡 ——
+        # aria-amt 的 CLI 没有设备开关，这是唯一可靠的「只用 CPU」手段。
+        env = None
+        if not device.startswith("cuda"):
+            env = dict(os.environ)
+            env["CUDA_VISIBLE_DEVICES"] = ""
+            env["FUFUMIDI_FORCE_CPU"] = "1"
+            try:
+                from engine_gpu import detect as _gpu_detect
+                _reason = (_gpu_detect() or {}).get("arch_reason")
+            except Exception:
+                _reason = None
+            _log(log_cb, "Aria-AMT 将使用 CPU 推理（较慢）" + ("；原因：" + _reason if _reason else ""))
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=7200, env=env)
         # 诊断：无论成败，把 stdout/stderr 尾部透出（原 capture 吞掉，rc==0 且无产物时无从定位）
         tail = (r.stdout or "")[-400:].strip()
         err_tail = (r.stderr or "")[-400:].strip()
         if r.returncode != 0:
-            raise RuntimeError((r.stderr or r.stdout or "").strip()[-500:])
+            _out = (r.stderr or r.stdout or "").strip()
+            # ★ issue #20：算力不匹配的兜底说明（自检没拦住时至少让用户知道下一步怎么做）
+            try:
+                from engine_gpu import cuda_error_kind as _kind, cuda_error_hint as _hint
+                _k = _kind(_out)
+                if _k and _k != "oom":
+                    _out += "\n" + _hint(_k)
+            except Exception:
+                pass
+            raise RuntimeError(_out[-600:])
 
         mid = _pick_new_midi(out_dir, before)
         if not mid:

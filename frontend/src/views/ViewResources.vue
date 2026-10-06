@@ -4,7 +4,7 @@
 // - 模型运行时：模型推理所需包（piano / separate / muscriptor / aria / transkun 组）+ Rust 核心
 // - 模型文件：内置模型清单（权重状态 + 运行时包状态，缺包可一键安装）
 // - 诊断与配置：诊断包导出、配置导入导出
-import { ref, reactive, watch, onMounted, onBeforeUnmount } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import ViewModels from './ViewModels.vue';
@@ -393,7 +393,10 @@ function fmtSize(b) {
 }
 
 /* ---------------- GPU 加速状态 ---------------- */
-const gpuInfo = reactive({ available: false, backend: '', name: '', blackwell: false, need_cu128: false, loaded: false });
+const gpuInfo = reactive({ available: false, backend: '', name: '', blackwell: false, need_cu128: false, arch_supported: null, arch_reason: '', loaded: false });
+// 显卡在、但算力不在 CUDA 包支持范围内（issue #20：GTX 10 系及更早）→ 实际会跑 CPU，
+// 界面上就不能再显示「已启用」（否则用户以为在用 GPU，实际既慢又对不上预期）。
+const gpuReady = computed(() => !!gpuInfo.available && gpuInfo.arch_supported !== false);
 async function loadGpu() {
   if (bridge && bridge.probe) {
     try {
@@ -404,6 +407,8 @@ async function loadGpu() {
       gpuInfo.name = g.name || '';
       gpuInfo.blackwell = !!g.blackwell;
       gpuInfo.need_cu128 = !!g.need_cu128;
+      gpuInfo.arch_supported = (g.arch_supported === undefined ? null : g.arch_supported);
+      gpuInfo.arch_reason = g.arch_reason || '';
     } catch (e) {}
     gpuInfo.loaded = true;
   }
@@ -554,11 +559,20 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
       <div class="field-row">
         <div>
           <div class="fr-label">{{ t('推理加速') }}</div>
-          <div class="fr-hint">{{ gpuInfo.loaded ? (gpuInfo.available ? (gpuInfo.name + ' · ' + (gpuInfo.backend === 'cuda' ? 'CUDA' : gpuInfo.backend || '')) : t('未启用（可在设置 → GPU 中下载增强包）')) : t('检测中…') }}</div>
+          <div class="fr-hint">{{ gpuInfo.loaded ? (gpuReady ? (gpuInfo.name + ' · ' + (gpuInfo.backend === 'cuda' ? 'CUDA' : gpuInfo.backend || '')) : (gpuInfo.arch_supported === false ? t('显卡算力不受支持，已自动改用 CPU 转录') : t('未启用（可在设置 → GPU 中下载增强包）'))) : t('检测中…') }}</div>
         </div>
         <div class="fr-ctl">
-          <span v-if="gpuInfo.available" :class="['plg-tag', 'on']">{{ t('已启用') }}</span>
+          <span v-if="gpuReady" :class="['plg-tag', 'on']">{{ t('已启用') }}</span>
           <span v-else :class="['plg-tag', 'off']">{{ t('未启用') }}</span>
+        </div>
+      </div>
+      <div v-if="gpuInfo.arch_supported === false" class="field-row">
+        <div>
+          <div class="fr-label">{{ t('显卡算力支持') }}</div>
+          <div class="fr-hint">{{ gpuInfo.arch_reason || t('当前 CUDA 推理包不含本机显卡可用的内核') }}{{ t('，将自动改用 CPU 转录（功能不受影响，只是更慢）') }}</div>
+        </div>
+        <div class="fr-ctl">
+          <span class="plg-tag off">{{ t('用 CPU') }}</span>
         </div>
       </div>
       <div v-if="gpuInfo.blackwell" class="field-row">

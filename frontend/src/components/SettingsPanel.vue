@@ -482,7 +482,7 @@ async function gpuLoadDetect() {
   try {
     const r = await bridge.probe();
     const g = (r && r.gpu) || {};
-    gpu.detect = { vendor: g.vendor || null, name: g.name || '', blackwell: !!g.blackwell, needCu128: !!g.need_cu128, available: !!g.available, backend: g.backend || '' };
+    gpu.detect = { vendor: g.vendor || null, name: g.name || '', blackwell: !!g.blackwell, needCu128: !!g.need_cu128, available: !!g.available, backend: g.backend || '', archSupported: (g.arch_supported === undefined ? null : g.arch_supported), archReason: g.arch_reason || '' };
   } catch (e) { gpu.detect = null; }
 }
 async function gpuAutoInstall() {
@@ -894,9 +894,11 @@ function apply() {
 function cancel() { state.ui.settingsOpen = false; }
 
 /* ---------------- 生命周期 ---------------- */
+// immediate：设置面板是「打开时才挂载」的，而调用方（如转录页的「GPU 加速」按钮）会先写
+// state.ui.settingsTab 再打开面板 —— 不 immediate 的话挂载时这次变更已经发生，面板永远停在「外观」。
 watch(() => state.ui.settingsTab, v => {
   if (TABS.value.some(t => t.id === v)) tab.value = v;
-});
+}, { immediate: true });
 let offWatch = null;
 onMounted(() => {
   load();
@@ -1037,6 +1039,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <div class="gpu-row"><span class="gpu-k">{{ t('安装状态') }}</span><span class="gpu-v">{{ gpu.installed }}</span></div>
               <div v-if="gpu.currentPython" class="gpu-row"><span class="gpu-k">{{ t('引擎运行时') }}</span><span class="gpu-v">Python {{ gpu.currentPython }}</span></div>
               <div v-if="gpu.detect && gpu.detect.needCu128" class="gpu-warn">{{ t('检测到 RTX 50 系（Blackwell）显卡，将自动安装 CUDA 12.8（cu128）加速包') }}</div>
+              <div v-if="gpu.detect && gpu.detect.archSupported === false" class="gpu-warn">{{ gpu.detect.archReason || t('本机显卡算力不在当前 CUDA 推理包支持范围内') }}{{ t(' —— 转录/分离会自动改用 CPU（功能不受影响，只是更慢）。') }}</div>
               <div v-if="gpu.needsPython312" class="gpu-warn">{{ t('ROCm 增强包已安装，但当前引擎运行时是 Python 3.11 —— ROCm 只有 3.12（cp312）的轮子，需装好 Python 3.12 引擎运行时后才会生效（已安装但未启用）。') }}</div>
               <div v-else-if="gpu.rocmActive" class="gpu-warn ok">{{ t('ROCm 加速已生效（AMD 较新 Radeon）。') }}</div>
             </div>

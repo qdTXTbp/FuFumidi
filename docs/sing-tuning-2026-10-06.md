@@ -35,7 +35,7 @@
 ## 2. 验证方式（可复现）
 
 ```powershell
-# 引擎层：116 个用例（含 7 个新回归用例）
+# 引擎层：148 个用例全绿（含本轮新增的 23 个算力守卫用例）
 $env:PYTHONUTF8=1; python -m pytest engine/tests -q
 
 # 端到端：走应用自身的 IPC（CDP 驱动）
@@ -131,3 +131,66 @@ oto 引用但缺失的 wav、character.txt 有无、以及**当前工程歌词�
 - 主进程：`main/utau.js`、`main/diffsinger.js`、`preload.js`
 - 前端：`frontend/src/views/ViewSing.vue`、`frontend/src/components/pianoroll/PianoRoll.vue`、`frontend/src/stores/singer.ts`
 - 测试：`engine/tests/test_sing_regression_fixes.py`(新，7 个用例)
+
+## 7. 第三轮：修 GitHub issue #20（转录一直失败：CUDA「no kernel image」）
+
+> 原始 issue（`qdTXTbp/FuFumidi#20`，Windows 10 / v4.4.1）：「使用转译-转录功能时总是提示失败」，
+> 日志里是一句 `CUDA error: no kernel image is available for execution on the device`。
+> 复查当前源码：**问题仍在** —— 全仓库没有一处比对过「显卡算力」与「CUDA 包里编进去的算力」。
+
+### 7.1 根因
+
+torch 的 CUDA 轮子是**编译期把算力焊死的**。本机装的 cu128 实测：
+
+```
+torch 2.9.1+cu128   torch.cuda.get_arch_list() = [sm_70, sm_75, sm_80, sm_86, sm_90, sm_100, sm_120]
+```
+
+比这个范围更老的卡（Kepler / Maxwell / **Pascal，即 GTX 10 系及更早**）：
+
+1. 驱动层照样认卡 → `torch.cuda.is_available()` 是 **True**（安装后的自检、界面状态全部“正常”）；
+2. 一到真正跑 kernel 才炸，而且是**异步**抛在推理中途 → 用户只看到一句英文 CUDA 报错，整次转录失败；
+3. 原来的兜底只认 OOM（显存不足自动降 batch），算力不匹配这条路径完全没接。
+
+### 7.2 修在哪（6 处）
+
+| # | 位置 | 改动 |
+|---|---|---|
+| 1 | `engine/engine_gpu.py` | 新增算力判定：`_parse_arch` / `arch_supported` / `min_supported_arch` / `cuda_error_kind` / `cuda_error_hint`。`_probe()` 现在读 `torch.cuda.get_arch_list()` 与设备算力比对，不匹配就**显式** `device=cpu` + `cuda_usable=False` + `arch_reason`（一句能读的中文），并让 onnxruntime 退回 `CPUExecutionProvider`。 |
+| 2 | `engine/engine_muscriptor.py` | 选设备时消费上面的结论：算力不匹配就**显式传 cpu**（传 None 会让 muscriptor 自己按“有 CUDA”挑回 GPU）。推理循环新增兜底：任何 CUDA 运行期错误（no kernel image / 设备断言 / 非法访存 …）**自动改用 CPU 重跑一次**并写日志说明原因。 |
+| 3 | `engine/engine_msst.py` | pymss 的 `device="auto"` 只看 `torch.cuda.is_available()`（不匹配时仍为 True）→ 改为跟随 `engine_gpu.torch_device()`；`separate()` 失败时附一句可操作的话。 |
+| 4 | `engine/engine_aria.py` | 设备默认不再硬写 `"cuda"`；判成 CPU 时给子进程 `CUDA_VISIBLE_DEVICES=""`（aria-amt 的 CLI 没有设备开关）。 |
+| 5 | `main/gpu-ipc.js` | 安装后的自检从「`is_available()` 通过就算成功」升级为「再比一次算力」；不支持时返回 `archUnsupported`，文案明确说「增强包已装好，但这张卡用不上，会自动走 CPU」，不再误导用户去重装/换镜像。 |
+| 6 | `frontend/src/views/ViewResources.vue`、`frontend/src/components/SettingsPanel.vue` | 新增「显卡算力支持」一行（+ 设置页警示条）；「推理加速」在算力不匹配时不再显示“已启用”，改为「未启用 / 用 CPU」。 |
+
+### 7.3 验证
+
+| 项 | 结果 |
+|---|---|
+| 单元测试 | 新增 `engine/tests/test_gpu_arch_guard.py`，**23 个用例**：算力兼容规则 16 例（sm_61/sm_52/sm_37 → 不支持；sm_70/75/80/86/89/120 → 支持；compute_90 PTX → 支持；空列表 → 不下结论）、错误分类、`_probe()` 在伪装 sm_61 时降级到 cpu、真实机器**不被误降级**、MuScriptor 的 CUDA 报错自动改用 CPU（假模型注入）、OOM 仍走减半老路径。 |
+| 真实转录回归 | 本机（RTX 5070 Ti / sm_120）用 medium 权重跑 8 秒音频：`device=cuda, arch_supported=true` → 日志「使用 GPU（CUDA）推理」→ 15.8 s 出 14 个音符。**没有把好机器一起降级。** |
+| 自检代码 | 直接跑 `main/gpu-ipc.js` 生成的那段 Python：本机返回 `ok:true, arch_supported:true`；把算力伪装成 6.1 时返回 `ok:false, arch_unsupported:true` + 中文原因。 |
+| 界面（伪装 sm_61 实测） | 资源管理 → GPU 加速：「显卡算力不受支持，已自动改用 CPU 转录」+ 新增行「显卡算力 sm_61 不在当前 CUDA 推理包支持范围内（该包最低支持 sm_70），将自动改用 CPU 转录（功能不受影响，只是更慢）」+ 标签「用 CPU」；设置 → GPU：警示条同文案。 |
+| 引擎测试 | `engine/tests` 全绿：**148 项 / 0 失败 / 0 错误 / 2 项按设计跳过**（含本轮新增 23 项）。 |
+| 前端构建 | `npm run build` 通过。 |
+
+> 没法验证的一环：本机只有 sm_120 的卡，**没有真实的 Pascal/Maxwell 硬件**。上表的 sm_61 全部是
+> 伪装算力（monkeypatch / 临时环境钩子，验证后已删除）跑出来的 —— 逻辑与界面都对，但“真机上那句报错
+> 不再出现”只能等有 GTX 10 系的用户回报。
+
+### 7.4 顺手修掉的三件事
+
+1. **设置面板打不开指定页签**：调用方（转录页「GPU 加速」按钮）先写 `state.ui.settingsTab='gpu'` 再 `settingsOpen=true`，
+   而面板是「打开时才挂载」且 watcher 没有 `immediate` → 永远停在「外观」。现加 `immediate: true`（应用内实测已落在 GPU 页）。
+2. **引擎测试与生产环境的编码口径不一致**：`main.js` 调引擎一定会带 `PYTHONIOENCODING=utf-8`，
+   测试却是裸 `subprocess.run(..., encoding='utf-8')` —— Windows 下子进程 stdout 走 GBK，管道按 UTF-8 解码抛
+   `UnicodeDecodeError`，`p.stdout` 变 `None`，14 个用例假失败。现测试统一带上与生产相同的 env。
+3. **12 条漏翻文案**（「详情」「AI 声库」「未选择」等）补齐 en/ja；审计脚本同时修了两处自身缺陷
+   （词表单引号/双引号混用、键里的转义换行没认），现在 **缺 EN 0 / 缺 JA 0**（2453 条中文 `t()` 全量反查）。
+
+### 7.5 本轮文件
+
+- 引擎：`engine/engine_gpu.py`、`engine/engine_muscriptor.py`、`engine/engine_msst.py`、`engine/engine_aria.py`
+- 主进程：`main/gpu-ipc.js`
+- 前端：`frontend/src/views/ViewResources.vue`、`frontend/src/components/SettingsPanel.vue`、`frontend/src/core/i18n.js`、`frontend/src/core/i18n_ja.js`
+- 测试：`engine/tests/test_gpu_arch_guard.py`(新，23 个用例)、`engine/tests/test_utau_engine.py`(环境变量对齐生产)

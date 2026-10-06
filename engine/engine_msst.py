@@ -255,15 +255,30 @@ def separate(audio_path, out_dir, params=None, log_cb=None, progress_cb=None):
     _PASS_TOTAL = 3 if use_tta else 1
     _CaptureBar._created = 0
 
+    # ★ issue #20：pymss 的 device="auto" 只看 `torch.cuda.is_available()`，而**算力不匹配**
+    #   的机器上它照样为 True（驱动认卡），于是 pymss 会挑 cuda:0，再在推理中途抛
+    #   `no kernel image is available`。engine_gpu.torch_device() 已经把这种情况判成 cpu，
+    #   这里显式跟随。（只认 cuda / mps，其余一律 cpu —— 与 pymss 的合法取值一致；
+    #   拿不到 engine_gpu 时保留 "auto" 的旧行为，避免误伤正常 GPU 机器。）
+    _sep_dev = "auto"
+    try:
+        from engine_gpu import torch_device as _torch_device
+        _d = _torch_device()
+        _sep_dev = _d if _d in ("cuda", "mps") else "cpu"
+    except Exception:
+        _sep_dev = "auto"
+
     restore = None
     start = time.time()
     try:
         _log(log_cb, f"加载 MSST 模型（{arch} / {os.path.basename(model_path)}）…")
+        if _sep_dev == "cpu":
+            _log(log_cb, "分离将使用 CPU（未检测到可用的 GPU 加速，速度较慢）")
         separator = MSSeparator(
             model_type=model_type,
             model_path=model_path,
             config_path=config_path,
-            device="auto",
+            device=_sep_dev,
             device_ids=[0],
             output_format=output_format,
             use_tta=use_tta,
@@ -297,7 +312,18 @@ def separate(audio_path, out_dir, params=None, log_cb=None, progress_cb=None):
             mix = np_mean_channels(mix)
 
         # 若前端传了 stems，仅分离并保留这些音轨
-        results = separator.separate(mix, pbar=True, stems=selected)
+        try:
+            results = separator.separate(mix, pbar=True, stems=selected)
+        except Exception as _sep_err:
+            # 运行期 CUDA 报错（算力/驱动/显存）→ 附一句可操作的话，别让用户只看到英文原始错误
+            try:
+                from engine_gpu import cuda_error_kind as _kind, cuda_error_hint as _hint
+                _k = _kind(_sep_err)
+                if _k and _k != "oom":
+                    _log(log_cb, _hint(_k) + "（GPU 加速可在「设置 → GPU」中关闭，关闭后本次分离会改用 CPU）")
+            except Exception:
+                pass
+            raise
 
         base = os.path.splitext(os.path.basename(audio_path))[0]
         outputs = []
