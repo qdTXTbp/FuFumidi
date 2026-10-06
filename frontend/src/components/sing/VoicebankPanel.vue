@@ -10,8 +10,8 @@
 -->
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { useRouter } from 'vue-router';
 import Icon from '../Icon.vue';
+import ViewVoicebank from '../../views/ViewVoicebank.vue';
 import { t } from '../../core/i18n.js';
 import { useDiffsingerStore } from '../../stores/diffsinger';
 import { useSingerStore } from '../../stores/singer';
@@ -21,14 +21,14 @@ const singerStore = useSingerStore();
 
 onMounted(() => { void singerStore.loadBanks(); });
 
-const router = useRouter();
 const busy = ref(false);
 const msg = ref('');
-
-/** 打开「声库制作」页（上传音频切分 / 录音 / oto 标注 / 导出声库）——
- *  它本来就是个独立视图（ViewVoicebank.vue），只是合并板块后没有路由入口。 */
+/** 声库制作直接**内嵌**在调教页里（用户要求：制作页放进调教）——
+ *  原来是独立路由 `/voicebank`，但「做声库」本来就是调教工作流的一半，
+ *  让人跳出去再跳回来没有道理。/voicebank 路由仍保留（老书签/外链能用）。 */
+const showMaker = ref(false);
 function openMaker() {
-  void router.push('/voicebank');
+  showMaker.value = !showMaker.value;
 }
 
 /* ---- 声库体检（P2-16）：装库时就把「能不能用」算清楚，别等渲染失败 ---- */
@@ -165,7 +165,7 @@ async function run(fn: () => Promise<any>) {
              以前错接了 UtauVoicebankStore，用户点了「打开制作工具」看到的是一串可下载声库，
              于是「UTAU 声库制作」这个功能看起来根本不存在。 -->
         <button class="btn" @click="openMaker">
-          <Icon name="mic" :size="12" /> {{ t('打开制作工具') }}
+          <Icon :name="showMaker ? 'chevron' : 'mic'" :size="12" /> {{ showMaker ? t('收起') : t('打开制作工具') }}
         </button>
       </div>
       <p class="muted small">
@@ -174,6 +174,10 @@ async function run(fn: () => Promise<any>) {
       <p class="muted small">
         {{ t('在制作工具里：上传一段按音节录制的音频（或直接录音）→ 自动切分 → 自动标注 oto → 导出声库文件夹 / 压缩包。') }}
       </p>
+      <!-- 制作工具就地展开：不跳页，做完直接回到声库列表 -->
+      <div v-if="showMaker" class="vbp-maker">
+        <ViewVoicebank />
+      </div>
     </section>
 
     <!-- ============ DiffSinger 推理组件 ============ -->
@@ -229,6 +233,9 @@ async function run(fn: () => Promise<any>) {
 .vbp-list li { display: flex; align-items: center; gap: 8px; padding: 5px 0;
                border-bottom: 1px solid var(--border); }
 .vbp-list li:last-child { border-bottom: none; }
+/* 内嵌的声库制作：给它一个确定的高度，内部是 flex 布局（波形 + 片段列表） */
+.vbp-maker { height: min(72vh, 640px); margin-top: 8px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--canvas); }
+.vbp-maker > * { height: 100%; }
 .vbp-probe { margin-top: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--canvas); }
 .vbp-probe-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .vbp-probe-head .sp { flex: 1; }
