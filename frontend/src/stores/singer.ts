@@ -466,13 +466,21 @@ export const useSingerStore = defineStore('singer', {
       }
       return null;
     },
-    /** 当前轨道里选中的音符（可能多选） */
+    /**
+     * 选中的音符（多选，**跨轨道**）。
+     *
+     * ★ M8d（跨轨选区第一步）：以前这里只筛 `activeTrack`，于是"在别的轨上点一个音符"永远进不了选区，
+     *   批量工具（渐强/渐弱/移调/量化…）也就只能作用在当前轨。现在按 id 跨轨收集 ——
+     *   这让"和声组内统一编辑"有了数据基础，也让卷帘里点幽灵音符可以直接加进选区。
+     *   顺序按轨道顺序返回，保证批量操作的结果可预期。
+     */
     selectedNotes(): SingNote[] {
-      const tr = this.activeTrack;
-      if (!tr) return [];
       const ids = new Set(this.selectedIds);
       if (this.selectedId) ids.add(this.selectedId);
-      return tr.notes.filter(n => ids.has(n.id));
+      if (!ids.size) return [];
+      const out: SingNote[] = [];
+      for (const tr of this.tracks) for (const n of tr.notes) if (ids.has(n.id)) out.push(n);
+      return out;
     },
     totalNotes(state): number {
       return state.tracks.reduce((a, t) => a + t.notes.length, 0);
