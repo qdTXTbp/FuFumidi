@@ -409,9 +409,10 @@ onBeforeUnmount(() => {
             <input type="range" min="0" max="80" step="5" :value="Math.round(bg.dim * 100)" @input="bg.dim = (+$event.target.value) / 100; saveBg()" style="width:88px" />
           </template>
         </div>
-        <div class="vc-body">
+        <div class="vc-body" :class="{ 'bd-canvas': bg.mode === 'transparent' }">
           <!-- ★ 画布自己有一层 CSS 底色（.vc-body canvas 的 background）—— 透明档只 clearRect
-               是没用的，元素底色照样透不出来。所以透明档必须把画布元素的底色也去掉。 -->
+               是没用的，元素底色照样透不出来。所以透明档必须把画布元素的底色也去掉，
+               并由容器铺 --canvas（否则透出的是卡片那层半透明白，和沉浸态不一致）。 -->
           <canvas id="vizRoll" :class="{ 'cv-transparent': bg.mode === 'transparent' }"></canvas>
           <div v-if="immersive" class="viz-hud" :class="{ 'hud-hidden': !hudOn }">
             <button class="hud-btn" :title="app.playing ? t('暂停') : t('播放')" @click="app.togglePlay()">
@@ -474,13 +475,15 @@ onBeforeUnmount(() => {
 .viz-page.waterfall .viz-hero .vc-body { flex: 1; height: auto; min-height: 300px; }
 
 /* ---- 沉浸模式：去掉卡片壳，画面铺满主区，控件浮在画面上并自动淡出 ---- */
-/* ★ 底下必须给一层深色：画布默认是**透明**的，浅色页面会把白色的沉浸态 HUD
-   （白字 + 半透明白 chip）彻底吃掉 —— 实测就是「控件看不见」。 */
-.viz-page.immersive { padding: 0; max-width: none; background: #0b1020; }
+/* ★ 沉浸态的底色必须与非沉浸的透明档**完全一致**（用户实测：两边背景不一样）。
+   统一用 --canvas：非沉浸那边由 .vc-body.bd-canvas 铺同色，两边看起来才是同一个背景。
+   HUD 的可读性靠它自己的深色渐变 + 深色 chip 解决，不靠整块改底色。 */
+.viz-page.immersive { padding: 0; max-width: none; background: var(--canvas); }
 .viz-page.immersive .viz-hero {
   border: 0; border-radius: 0; background: transparent; box-shadow: none; padding: 0;
 }
 .vc-body canvas.cv-transparent { background: transparent; }
+.vc-body.bd-canvas { background: var(--canvas); }
 .viz-page.immersive .vc-body canvas { border: 0; border-radius: 0; }
 .viz-page.immersive .vc-head {
   position: absolute; top: 0; left: 0; right: 0; z-index: 3;
@@ -490,12 +493,13 @@ onBeforeUnmount(() => {
   transition: opacity .3s ease;
 }
 /* 沉浸态的控件压在画面之上：统一改成白色系，深浅主题下都能读 */
+/* 沉浸态底色可能是浅色（--canvas）：chip 用**深色半透明** + 白字，浅底深底都读得清 */
 .viz-page.immersive .vc-head .chip-btn {
-  background: rgba(255, 255, 255, .16);
-  border-color: rgba(255, 255, 255, .24);
+  background: rgba(0, 0, 0, .45);
+  border-color: rgba(255, 255, 255, .22);
   color: #fff;
 }
-.viz-page.immersive .vc-head .chip-btn:hover { background: rgba(255, 255, 255, .26); }
+.viz-page.immersive .vc-head .chip-btn:hover { background: rgba(0, 0, 0, .62); }
 .viz-page.immersive .vc-head .chip-btn.active { background: #fff; color: #0a0a0a; }
 .viz-page.immersive .vc-head .muted,
 .viz-page.immersive .vc-head .vc-zoom { color: rgba(255, 255, 255, .82); }
