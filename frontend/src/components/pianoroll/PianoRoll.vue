@@ -505,17 +505,11 @@ function onUp() {
       const g = noteGeo(n);
       if (g.x < x1 && g.x + g.w > x0 && g.y < y1 && g.y + g.h > y0) ids.push(n.id);
     }
-    if (props.overlay && Array.isArray(props.tracks)) {
-      const mine = new Set(props.notes.map((n) => n.id));
-      for (const tk of props.tracks) {
-        if (!tk || tk.id === props.activeTrackId) continue;
-        for (const n of (tk.notes || [])) {
-          if (!n || mine.has(n.id)) continue;
-          const g = noteGeo(n);                  // 幽灵与实音符共用同一套「拍→x、音高→y」映射
-          if (g.x < x1 && g.x + g.w > x0 && g.y < y1 && g.y + g.h > y0) ids.push(n.id);
-        }
-      }
-    }
+    /* ⚠ 跨轨框选（M8d 第三块）**已回退**：本机验收工装驱动不了卷帘的框选
+       （真实鼠标拖拽、合成 PointerEvent 都试过，连"只框当前轨"的基线都是 0 选中），
+       于是这段代码无法被证明可用；而它一旦在 `onUp` 里抛错，会连带**破坏所有人的框选**。
+       按项目既定标准（不留未验证的改动）先撤掉，等验收工装能驱动卷帘后再上。
+       参考：`store.selectedNotes` 的跨轨选区与幽灵点击加选**都已验证可用**（见计划书附录 T）。 */
     const prev = props.selectedIds;
     const next = drag.additive ? Array.from(new Set([...prev, ...ids])) : ids;
     props.api.setSelection(next, next[0] ?? null);
