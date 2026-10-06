@@ -1512,10 +1512,12 @@ defineExpose({
       <span class="pr-zoom">
         <button class="pr-mini" :title="t('缩小')" @click="noteW = Math.max(MIN_NOTE_W, noteW * 0.85)">−</button>
         <button class="pr-mini" :title="t('放大')" @click="noteW = Math.min(MAX_NOTE_W, noteW * 1.18)">+</button>
-        <button class="pr-mini" :title="t('行高')" @click="rowH = rowH >= 18 ? 12 : rowH + 3">↕</button>
-        <button class="pr-mini" :title="t('适应窗口（全曲入画）')" @click="fitView">⤢</button>
+        <button class="pr-mini pr-mini-wide" :title="t('行高')" @click="rowH = rowH >= 18 ? 12 : rowH + 3">↕ {{ t('行高') }}</button>
+        <button class="pr-mini pr-mini-wide" :title="t('适应窗口（全曲入画）')" @click="fitView">⤢ {{ t('适应') }}</button>
       </span>
-      <span class="pr-hint">{{ t('滚轮+Ctrl 缩放 · Shift+滚轮 平移 · 双击改歌词 · 方向键微调 · Ctrl+Z 撤销') }}</span>
+      <!-- 快捷键原来是一整句常驻在卷帘正上方（占掉一行黄金位置）；收进一个 ⓘ 的 title 里 -->
+      <button class="pr-hint-btn" :title="t('滚轮+Ctrl 缩放 · Shift+滚轮 平移 · 双击改歌词 · 方向键微调 · Ctrl+Z 撤销')"
+              :aria-label="t('卷帘操作提示')">?</button>
     </div>
 
     <!-- 音高工具行（仅在打开音高车道时显示） -->
@@ -1584,6 +1586,10 @@ defineExpose({
 .pr-mini { width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--stone); cursor: pointer; line-height: 1; }
 .pr-mini:hover { background: var(--surface); color: var(--ink); }
 .pr-hint { margin-left: auto; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pr-hint-btn { margin-left: auto; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--border);
+  background: transparent; color: var(--text-muted); font-size: 11px; line-height: 1; cursor: help; flex: none; }
+.pr-hint-btn:hover { color: var(--ink); border-color: var(--brand); }
+.pr-mini-wide { width: auto; padding: 0 6px; font-size: 11px; }
 .pr-scroll { position: relative; overflow: auto; background: var(--surface); }
 /* fill：卷帘自己撑满父容器，滚动区吃掉工具栏之外的全部高度（行高由 JS 自适应） */
 .pr.pr-fill { height: 100%; min-height: 0; }

@@ -847,6 +847,8 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
   font-weight: 500;
 }
 .tag.accent { color: var(--brand-blue-deep); border-color: var(--brand-blue-200); background: var(--brand-blue-200); }
+/* 版本号那种「一整串不能断开」的短标签：窄侧栏下不许折行（曾折成 v5.0.0- / beta.2 两行） */
+.ver-tag { white-space: nowrap; }
 
 .fade-enter-active, .fade-leave-active { transition: opacity 0.16s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }

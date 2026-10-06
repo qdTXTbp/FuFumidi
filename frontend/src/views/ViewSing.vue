@@ -1740,7 +1740,11 @@ function curveClear() { store.clearPitchCurve(); }
    以前只能「加点 + 敲两个数字」，现在可以在网格上直接画。
    落库走 store.setPitchCurve（它会镜像 PIT 子轨并 pushUndo），所以：
    拖动期间只 emit preview 更新本地副本，**抬手才 commit** —— 一次拖拽 = 一个撤销点。 */
-const CURVE_TOOLS: [string, string][] = [['draw', '画笔'], ['line', '直线'], ['erase', '橡皮']];
+/* ★ 工具名不能和主工具栏的「画笔」同名：一个是画音符、一个是画曲线，同名不同作用域最容易误操作
+   （本轮 UX 复核第 10 条）。这里统一成「画曲线 / 直线 / 擦点」。 */
+const CURVE_TOOLS: [string, string][] = [['draw', '画曲线'], ['line', '直线'], ['erase', '擦点']];
+/** 工具按钮的统一标题：把作用域说清楚（参数曲线 / 音高曲线，不是画音符） */
+const CURVE_TOOL_TIP = '曲线工具：在曲线上画点/拉直线/擦点；这里的曲线作用于整条轨，与主工具栏的「画笔」（画音符）不是一回事';
 const curveTool = ref('draw');
 const curveCanvas = ref<any>(null);
 /** 画布横轴的总拍数：跟着内容走，末尾留 4 拍余量 */
@@ -2053,13 +2057,14 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             : t('导入 MIDI、从曲库选一首，或用画笔在卷帘上写音符；选好声库后点「渲染本轨」') }}
         </span>
       </div>
+      <!-- ★ 这里只留**一个**主操作 + 一句指路：导入音频/MIDI/曲库选曲在左侧面板里已经各有一个，
+           横幅再平铺一遍就是"同文案同功能到处都有"（本轮 UX 复核第 9 条）。 -->
       <div class="se-acts">
         <button class="btn sm primary" @click="openProject"><Icon name="folder" :size="12" /> {{ t('打开工程') }}</button>
-        <button class="btn sm" @click="importMidi"><Icon name="import" :size="12" /> {{ t('导入 MIDI') }}</button>
-        <button class="btn sm" @click="openLibraryDialog"><Icon name="folder" :size="12" /> {{ t('从曲库选') }}</button>
         <button class="btn sm" data-guide="sing-new-track" @click="newTrackOpen = !newTrackOpen">
           <Icon name="plus" :size="12" /> {{ t('新建声部轨…') }}
         </button>
+        <span class="muted small se-go">{{ t('或从左侧「导入 MIDI / 从曲库选」开始') }}</span>
       </div>
       <div v-if="newTrackOpen" class="se-acts se-new">
         <button class="btn sm" @click="addTrack('diffsinger')"><Icon name="spark" :size="12" /> DiffSinger</button>
@@ -2116,7 +2121,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             <select class="eng" :value="x.engine" @click.stop @change="onEngine(x.id, $event)">
               <option v-for="e in ENGINES" :key="e.id" :value="e.id">{{ e.id === 'utau' ? 'UTAU' : 'DS' }}</option>
             </select>
-            <input class="nm" :value="x.name" :placeholder="t('未命名轨（双击改名）')"
+            <input class="nm" :value="x.name" :placeholder="t('未命名轨')" :title="t('双击改名')"
                    @click.stop @input="store.patchTrack(x.id, { name: sval($event) })" />
             <button class="ib" :class="{ on: !!x.muted }" :title="t('静音（M）')" @click.stop="toggleMute(x)">
               <Icon name="volume" :size="11" />
@@ -2340,14 +2345,15 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         </button>
         <button class="btn sm" :title="t('把当前播放位置设为循环起点 A')" @click="markLoop('a')">A</button>
         <button class="btn sm" :title="t('把当前播放位置设为循环终点 B')" @click="markLoop('b')">B</button>
-        <button v-if="loopB - loopA >= 20" class="btn sm ghost" :title="t('清除循环区间')" @click="clearLoopRegion">×</button>
+        <button v-if="loopB - loopA >= 20" class="btn sm ghost" :title="t('清除循环区间')" @click="clearLoopRegion">{{ t('清区间') }}</button>
         <!-- 跟随播放：播放头跑出可视区就自动滚过去 -->
+        <!-- 图标按钮一律带文字：静态截图里 ◎ / ↻ 这种符号认不出来（本轮 UX 复核第 13 条） -->
         <button class="btn sm" :class="{ on: follow }" :title="t('跟随播放滚动卷帘')" @click="toggleFollow">
-          <Icon name="target" :size="12" />
+          <Icon name="target" :size="12" /> {{ t('跟随') }}
         </button>
         <button class="btn" :disabled="tpending" :title="t('重新装载伴奏与渲染结果')"
                 @click="reloadTransport">
-          <Icon name="refresh" :size="12" />
+          <Icon name="refresh" :size="12" /> {{ t('重载') }}
         </button>
         <!-- 变速试听：慢放核对咬字、快放通听全曲（与播放器里的变速互不影响） -->
         <select class="dev" :value="rate" :title="t('变速试听（不改工程 BPM）')"
@@ -2521,8 +2527,9 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <!-- M6b：这条参数也能直接画了（画笔/直线/橡皮/平滑/量化），落库走 store.setCurve -->
           <div class="curves-head small">
             <span class="curve-tools">
-              <button v-for="tl in CURVE_TOOLS" :key="tl[0]" class="btn" :class="{ primary: curveTool === tl[0] }"
-                      @click="curveTool = tl[0]">{{ t(tl[1]) }}</button>
+              <span class="curve-tools-label">{{ t('曲线工具') }}</span>
+              <button v-for="tl in CURVE_TOOLS" :key="tl[0]" class="chip-btn" :class="{ on: curveTool === tl[0] }"
+                      :title="t(CURVE_TOOL_TIP)" @click="curveTool = tl[0]">{{ t(tl[1]) }}</button>
             </span>
             <button class="btn" @click="curveCanvasAuto?.smooth()">{{ t('平滑') }}</button>
             <button class="btn" @click="curveCanvasAuto?.quantize(0.25)">{{ t('量化 1/16') }}</button>
@@ -2947,12 +2954,16 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
                   @click="curveOpen = !curveOpen">
             <Icon name="chevron" :size="12" :style="{ transform: curveOpen ? '' : 'rotate(-90deg)' }" />
             <b>{{ t('音高曲线') }}</b>
-            <span class="muted">{{ curveCents }}{{ t(' 个点 · 单位：音分（cent），作用于整条轨') }}</span>
+            <span class="muted">{{ curveCents }}{{ t(' 个点') }}</span>
+            <!-- 作用域是**关键信息**，以前排成普通灰字被弱化；现在是一个徽章 -->
+            <span class="scope-chip">{{ t('作用于整条轨') }}</span>
+            <span class="info-dot" :title="t('音分（cent）是音高的百分之一半音：100 音分 = 1 个半音，1200 音分 = 1 个八度。这条曲线作用于整条轨（不区分音符），范围 ±1200 音分。')">ⓘ</span>
           </button>
           <template v-if="curveOpen">
           <span class="curve-tools">
-            <button v-for="tl in CURVE_TOOLS" :key="tl[0]" class="btn" :class="{ primary: curveTool === tl[0] }"
-                    :title="t('曲线工具')" @click="curveTool = tl[0]">{{ t(tl[1]) }}</button>
+            <span class="curve-tools-label">{{ t('曲线工具') }}</span>
+            <button v-for="tl in CURVE_TOOLS" :key="tl[0]" class="chip-btn" :class="{ on: curveTool === tl[0] }"
+                    :title="t(CURVE_TOOL_TIP)" @click="curveTool = tl[0]">{{ t(tl[1]) }}</button>
           </span>
           <button class="btn" :title="t('对曲线做一次三点平滑')" @click="curveCanvas?.smooth()">{{ t('平滑') }}</button>
           <button class="btn" :title="t('把曲线点吸附到 1/16 拍')" @click="curveCanvas?.quantize(0.25)">{{ t('量化 1/16') }}</button>
@@ -3357,6 +3368,15 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .curves-toggle:hover { background: var(--surface-soft); }
 .curves-toggle.on { border-color: var(--border); background: var(--surface-soft); }
 .curves-toggle .muted { font-size: 11px; }
+.curve-tools-label { font-size: 11px; color: var(--stone); margin-right: 2px; }
+/* 作用域徽章：比灰字重一档，一眼看到"这条曲线管整条轨" */
+.scope-chip {
+  font-size: 10.5px; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--hairline));
+  color: var(--brand-text); background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.info-dot { font-size: 11px; color: var(--stone); cursor: help; }
+.se-go { flex: 1 1 auto; }
 .curves-grid { display: flex; flex-direction: column; gap: 4px; }
 .curve-row { display: flex; align-items: center; gap: 6px; }
 .curve-row input { width: 84px; }

@@ -546,7 +546,7 @@ watch([() => playlist.activePlaylistId, () => playlist.search, libSort], () => {
 const emptyHint = computed(() => {
   if (playlist.search && !visibleSongs.value.length) return t('未找到匹配的曲目');
   if (isFavView.value) return t('收藏为空，点击歌曲右侧 ♥ 收藏。');
-  if (isAllView.value) return t('暂无曲目。') + t('点击上方「导入 MIDI」或直接拖入文件。');
+  if (isAllView.value) return t('暂无曲目。') + t('点击上方「导入到曲库」或直接拖入文件。');
   return t('歌单为空，点击歌曲右侧「＋」加入。');
 });
 
@@ -629,7 +629,7 @@ const showAuth = ref(false);
     <div class="sidebar-body">
       <div style="display:flex;gap:6px">
         <button class="btn sm" data-guide="sidebar-import" style="flex:1;min-width:0;justify-content:center" @click="onPick">
-          <Icon name="import" :size="14" /> {{ t('导入 MIDI') }}
+          <Icon name="import" :size="14" /> {{ t('导入到曲库') }}
         </button>
         <button class="btn sm" style="flex:1;min-width:0;justify-content:center" @click="onPickFolder">
           <Icon name="folder" :size="13" /> {{ t('导入文件夹') }}
@@ -767,7 +767,8 @@ const showAuth = ref(false);
     </div>
 
     <div style="padding:10px 14px;border-top:1px solid var(--border)" class="small muted row">
-      <span class="tag">{{ appVersion }}</span>
+      <!-- 版本号不折行：窄侧栏下「v5.0.0-beta.2」曾被折成两行（UX 复核第 6 条） -->
+      <span class="tag ver-tag">{{ appVersion }}</span>
       <button class="cloud-user" style="margin-left:auto;display:flex;align-items:center;gap:8px;background:none;border:none;color:inherit;cursor:pointer;padding:3px 6px;border-radius:9px"
               :title="t('账号与云同步')" :aria-label="t('账号与云同步')" @click="showAuth = true">
         <span class="cloud-avatar">
@@ -776,7 +777,8 @@ const showAuth = ref(false);
             <path d="M7 36a13 13 0 0 1 26 0z" fill="#9aa0a6"/>
           </svg>
         </span>
-        <span class="cloud-uname" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:110px">{{ cloud.account ? cloud.account.email : t('未登录用户') }}</span>
+        <span class="cloud-uname" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:110px"
+              :title="cloud.account ? cloud.account.email : t('未登录用户')">{{ cloud.account ? cloud.account.email : t('未登录用户') }}</span>
       </button>
     </div>
 
