@@ -2078,7 +2078,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
     <aside class="trk">
       <div class="trk-head">
         <Icon name="layers" :size="14" />
-        <b>{{ t('轨道') }}</b>
+        <b :title="t('声部轨 = 一条人声轨，用声库唱出来；伴奏轨是音频，只跟着播放不参与合成')">{{ t('轨道') }}</b>
         <span class="sp" />
         <button class="ib" :title="t('新建 UTAU 轨')" @click="addTrack('utau')">
           <Icon name="mic" :size="12" />
@@ -2090,14 +2090,16 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
       <!-- 导入：音频（伴奏轨，对应上游 UWavePart）与 MIDI -->
       <div class="trk-import">
-        <button class="ib wide" data-guide="sing-import-audio" :disabled="busyImport" @click="importAudio">
+        <button class="ib wide" data-guide="sing-import-audio" :disabled="busyImport"
+                :title="t('伴奏轨：导入一段音频（伴奏 / 干声），只跟着播放，不参与声库合成')" @click="importAudio">
           <Icon name="music" :size="12" /> {{ t('导入音频（伴奏）') }}
         </button>
         <button class="ib wide" data-guide="sing-import-midi" :disabled="busyImport" @click="importMidi">
           <Icon name="import" :size="12" /> {{ t('导入 MIDI') }}
         </button>
         <!-- 曲库里的 MIDI 本来就在数据目录里，没必要再走一次系统文件对话框 -->
-        <button class="ib wide" data-guide="sing-import-library" :disabled="busyImport" @click="openLibraryDialog">
+        <button class="ib wide" data-guide="sing-import-library" :disabled="busyImport"
+                :title="t('曲库 = 在「音乐」页导入的 MIDI 资料库（这里选一首直接建轨）')" @click="openLibraryDialog">
           <Icon name="folder" :size="12" /> {{ t('从曲库选') }}
         </button>
       </div>

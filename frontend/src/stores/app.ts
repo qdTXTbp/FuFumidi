@@ -8,18 +8,21 @@ import { usePlaylistStore } from './playlist';
 import { bridge } from '../api';
 import { t } from '../core/i18n';
 
+/* hint = 悬停解释。用户复核里点名「调教 / 声部轨 / 曲库 / 对齐偏移」这类圈内术语没有解释 ——
+   导航是最需要解释的一层（新用户第一眼看到的就是它）。 */
 export const VIEWS = [
-  { id: 'home', label: '首页', ic: 'home' },
-  { id: 'music', label: '音乐', ic: 'music' },
-  { id: 'views', label: '视图', ic: 'viz' },
-  { id: 'transcode', label: '转译', ic: 'convert' },
-  { id: 'resources', label: '资源中心', ic: 'box' },
+  { id: 'home', label: '首页', ic: 'home', hint: '总览与快捷入口' },
+  { id: 'music', label: '音乐', ic: 'music', hint: '曲库（导入的 MIDI 资料库）与播放' },
+  { id: 'views', label: '视图', ic: 'viz', hint: '同一份音乐的其它看法：乐谱 / 分析 / 可视化' },
+  { id: 'transcode', label: '转译', ic: 'convert', hint: '把别的东西变成 MIDI：转录 / 转换 / 变谱（识谱）' },
+  { id: 'resources', label: '资源中心', ic: 'box', hint: '模型、音色、识谱引擎、依赖与诊断' },
   // 调教：UTAU 与 DiffSinger 是同一条产品线的两种合成引擎（引擎是**轨道属性**），
   // 声库（做 / 装 / 管）与编辑器（选歌手 / 画音符 / 渲染）也是同一条工作流的两半，
   // 所以合成**一个**入口；页内在「编辑器 / 声库」两个页签之间切换（?tab=banks）。
-  { id: 'singer', label: '调教', ic: 'utau' },
+  { id: 'singer', label: '调教', ic: 'utau',
+    hint: '调教 = 让声库把音符唱出来：选歌手、填词、画音高/参数曲线、渲染成音频（声部轨 = 一条人声轨；UTAU / DiffSinger 是两种合成引擎）' },
   // 插件中心：官方插件平台的应用内入口（下载后由主进程解压安装并立即启用）
-  { id: 'plugins', label: '插件中心', ic: 'extension' },
+  { id: 'plugins', label: '插件中心', ic: 'extension', hint: '扩展功能：下载后由主进程安装并立即启用' },
 ];
 
 // 旧子视图 ID → 所属分组父视图，保留内部跳转（如“同步到乐谱”“打开播放”）
