@@ -18,6 +18,7 @@ import { t } from '../core/i18n.js';
 import { ENGINES, LANGUAGES, useSingerStore } from '../stores/singer';
 import { useAppStore } from '../stores/app';
 import { getTransport } from '../core/sing_transport.js';
+import { ensureAudio } from '../audio.js';
 import { FX_TYPES, FX_ORDER } from '../core/track_fx.js';
 import { CURVE_TARGETS, curveOf, defaultFor, targetsFor } from '../core/track_automation.js';
 import { notePhonemes } from '../core/phoneme.js';
@@ -388,6 +389,92 @@ const phCur = computed<any>(() => (phIndex.value >= 0 ? phItems.value[phIndex.va
 /* 音素时间表（M7b）：条带上是"看得见"，这里给"读得出" —— 每个音素的起止（拍）与时长（ms）。
    ★ 边界是按歌词**估算**的（引擎真正的切分以声库 oto 为准），所以这里明确标注"估算"；
      要能拖动边界，需要引擎支持"逐音素时长"，那是跨前后端的改动（见计划书 §4.3）。 */
+/* ---------------- 音素工作区的波形与试听（M7b-2，计划书 §4.3） ----------------
+   ★ 数据来源是**已经渲染好的那一份音频**（store.renderByTrack[轨] 里的 WAV 字节），
+     所以这一块不需要再动引擎，也天然「所见即所听」：波形画的就是会发出来的声音。
+     没渲染过时给明确指引，而不是画一条假波形。 */
+const waveBuf = ref<any>(null);
+let waveKey: any = null;
+const waveMsg = ref('');
+async function ensureWave(): Promise<any> {
+  const bytes = store.activeTrackId ? (store.renderByTrack as any)[store.activeTrackId] : null;
+  if (!bytes || !bytes.length) { waveMsg.value = t('这条轨还没有渲染结果：先渲染一次，才能看波形与秒级试听'); return null; }
+  if (waveBuf.value && waveKey === bytes) return waveBuf.value;
+  try {
+    const { ctx } = ensureAudio();
+    const copy = bytes.slice ? bytes.slice() : new Uint8Array(bytes);
+    const ab = await ctx.decodeAudioData(copy.buffer.slice(copy.byteOffset, copy.byteOffset + copy.byteLength));
+    waveBuf.value = ab; waveKey = bytes; waveMsg.value = '';
+    return ab;
+  } catch (e) { waveMsg.value = t('渲染结果无法解码（文件可能损坏）'); return null; }
+}
+const waveCv = ref<HTMLCanvasElement | null>(null);
+/** 画「当前音符」这一段的波形 + 音素边界（横轴就是这个音符，纵轴是包络） */
+function drawWave() {
+  const cv = waveCv.value, ab = waveBuf.value, n = phNote.value;
+  if (!cv) return;
+  const w = cv.clientWidth || 320, h = 46;
+  const dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  const g = cv.getContext('2d'); if (!g) return;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const css = (k: string, fb: string) => (getComputedStyle(document.documentElement).getPropertyValue(k).trim() || fb);
+  g.strokeStyle = css('--hairline', '#e6e6e6'); g.beginPath(); g.moveTo(0, Math.round(h / 2) + 0.5); g.lineTo(w, Math.round(h / 2) + 0.5); g.stroke();
+  if (!ab || !n) {
+    g.fillStyle = css('--stone', '#9aa0a6'); g.font = '11px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(waveMsg.value || t('选中一个音符即可看它这一段的波形与音素边界'), w / 2, h / 2);
+    return;
+  }
+  const secPerBeat = 60 / (Number(store.bpm) || 120);
+  const t0 = Number(n.startBeat) * secPerBeat, t1 = (Number(n.startBeat) + Number(n.durBeat)) * secPerBeat;
+  const data = ab.getChannelData(0), sr = ab.sampleRate || 44100;
+  const i0 = Math.max(0, Math.floor(t0 * sr)), i1 = Math.min(data.length, Math.ceil(t1 * sr));
+  const cols = Math.max(1, Math.round(w));
+  g.fillStyle = css('--accent', '#ff5530'); g.globalAlpha = 0.55;
+  const per = Math.max(1, Math.floor((i1 - i0) / cols));
+  for (let x = 0; x < cols; x++) {
+    const a = i0 + x * per, b = Math.min(i1, a + per);
+    let peak = 0;
+    for (let i = a; i < b; i++) { const v = data[i] < 0 ? -data[i] : data[i]; if (v > peak) peak = v; }
+    const ph = Math.max(1, peak * (h / 2 - 2));
+    g.fillRect(x, h / 2 - ph, 1, ph * 2);
+  }
+  g.globalAlpha = 1;
+  const span = Math.max(1e-6, Number(n.durBeat));
+  phItems.value.forEach((it: any, i: number) => {
+    const x = (Number(it.t0) / span) * w;
+    g.strokeStyle = i === phIndex.value ? css('--accent', '#ff5530') : css('--stone', '#9aa0a6');
+    g.lineWidth = i === phIndex.value ? 2 : 1;
+    g.beginPath(); g.moveTo(Math.round(x) + 0.5, 0); g.lineTo(Math.round(x) + 0.5, h); g.stroke();
+  });
+}
+/** 秒级试听：整音 / 当前音素。回放的是渲染结果里对应的那一段，不再走引擎 */
+let auditionSrc: any = null;
+async function audition(scope: 'note' | 'phoneme') {
+  const ab = await ensureWave();
+  const n = phNote.value;
+  if (!ab || !n) { say(waveMsg.value || t('没有可试听的音频'), 'warn'); return; }
+  const secPerBeat = 60 / (Number(store.bpm) || 120);
+  const it = phCur.value;
+  const a = Number(n.startBeat) + (scope === 'phoneme' && it ? Number(it.t0) : 0);
+  const b = Number(n.startBeat) + (scope === 'phoneme' && it ? Number(it.t1) : Number(n.durBeat));
+  const off = Math.max(0, a * secPerBeat);
+  const dur = Math.max(0.03, (b - a) * secPerBeat);
+  try {
+    const { ctx } = ensureAudio();
+    if (auditionSrc) { try { auditionSrc.stop(); } catch (e) {} }
+    const src = ctx.createBufferSource();
+    src.buffer = ab; src.connect(ctx.destination);
+    const at = Math.min(off, Math.max(0, ab.duration - 0.02));
+    const len = Math.max(0.03, Math.min(dur, Math.max(0.03, ab.duration - at)));
+    src.start(0, at, len);
+    auditionSrc = src;
+    say((scope === 'phoneme' ? t('试听音素 ') : t('试听整音 ')) + Math.round(len * 1000) + ' ms', 'ok');
+  } catch (e) { say(t('试听失败：') + (e as any).message, 'error'); }
+}
+watch([() => store.activeTrackId, () => (store.renderByTrack as any)[store.activeTrackId || ''], () => (phNote.value ? phNote.value.id : ''), () => phIndex.value],
+  () => { void ensureWave().then(() => nextTick(drawWave)); }, { immediate: true });
 function fmtBeat(v: number): string { return (Math.round(Number(v) * 1000) / 1000).toFixed(3); }
 function phMs(it: any): number {
   const bpm = Number(store.bpm) || 120;
@@ -2511,6 +2598,13 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <span v-if="phOverrideCount" class="muted">{{ t('本音素已覆盖 ') }}{{ phOverrideCount }}{{ t(' 项') }}</span>
           <button class="btn sm" :disabled="!phOverrideCount" @click="clearPhExpr"><Icon name="erase" :size="12" /> {{ t('清除本音素覆盖') }}</button>
         </div>
+        <div class="ph-wave-wrap">
+          <canvas ref="waveCv" class="ph-wave" height="46"></canvas>
+          <div class="ph-wave-btns">
+            <button class="btn sm" :title="t('播放这个音符对应的那一段渲染结果')" @click="audition('note')"><Icon name="play" :size="12" /> {{ t('试听整音') }}</button>
+            <button class="btn sm" :disabled="phIndex < 0" :title="t('只播放当前音素那一段（秒级）')" @click="audition('phoneme')"><Icon name="play" :size="12" /> {{ t('试听音素') }}</button>
+          </div>
+        </div>
         <div class="ph-times small">
           <div v-for="(it, i) in phItems" :key="'pt' + i" class="ph-time" :class="{ on: i === phIndex }"
                :title="t('点一下编辑这个音素')" @click="pickPhonemeIndex(i)">
@@ -2847,6 +2941,11 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 /* 提示行与分区标题（M7a）：把一长排 label 分组，扫读时不用逐个认 */
 .det-hint { flex: 0 0 100%; display: flex; align-items: center; gap: 6px; color: var(--stone);
   background: var(--surface-soft); border: 1px solid var(--hairline); border-radius: 8px; padding: 4px 8px; }
+/* 波形 + 试听（M7b-2）：波形画的是**渲染结果里这个音符的那一段**，音素边界叠在上面 */
+.ph-wave-wrap { display: flex; align-items: center; gap: 8px; margin: 4px 0 2px; }
+.ph-wave { flex: 1; min-width: 0; height: 46px; display: block; border: 1px solid var(--hairline); border-radius: 8px; background: var(--canvas); }
+.ph-wave-btns { display: flex; flex-direction: column; gap: 4px; flex: none; }
+
 /* 音素时间表（M7b）：一行一个音素，起止与时长可直接读，点行即选中 */
 .ph-times { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 2px; }
 .ph-time { display: flex; align-items: baseline; gap: 8px; padding: 2px 6px; border-radius: 6px; cursor: pointer; font-size: 11.5px; color: var(--slate); }
