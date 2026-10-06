@@ -8,6 +8,8 @@ export type PerfMode = 'quality' | 'balanced' | 'fast';
 export type GpuKind = 'cuda' | 'directml' | 'rocm';
 
 export interface ConvertRequest {
+  /** MuScriptor 乐器组约束：'auto' 或不约束为空；否则是组名列表（如 'voice,drums'，硬约束） */
+  muscriptor_instruments?: string;
   audio: string;
   out?: string | null;
   id?: string | number;
@@ -628,8 +630,6 @@ export interface FuBridge {
 
   // engine
   convert(cfg: ConvertRequest): Promise<ConvertResult>;
-  /** 统一旋律音色：把已有曲目里跳来跳去的旋律收进一种音色（不重新转录） */
-  unifyMelody(opts: { bytes: Uint8Array | ArrayBuffer | number[]; name?: string; id?: string }): Promise<{ ok: boolean; bytes?: Uint8Array; report?: any; logs?: string[]; error?: string }>;
   cancel(id: string | number): Promise<GeneralResult>;
   onEngineLog(cb: (p: any) => void): () => void;
   probe(): Promise<EngineProbeResult>;

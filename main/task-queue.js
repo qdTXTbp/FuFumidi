@@ -57,6 +57,9 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
       }
       if (cfg.model) args.push('--model', cfg.model);
       if (cfg.model_size) args.push('--model-size', cfg.model_size);
+      // 乐器组约束（MuScriptor 硬约束）：worker 路径走 engine.js 的 map，
+      // 这条 spawn 路径要显式补参数，否则「回退到命令行」时约束会丢。
+      if (cfg.muscriptor_instruments) args.push('--muscriptor-instruments', String(cfg.muscriptor_instruments));
       const send = (line) => {
         if (win && !win.isDestroyed()) win.webContents.send('engine:log', { id: cfg.id, line });
       };
@@ -172,53 +175,6 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
   }));
 
   // 取消转录 / 修正（终止对应 jobId 的引擎子进程）
-  // 统一旋律音色（不重新转录）：对已有曲目的字节跑一遍 instrument_groups.smart_finish。
-  // 走临时文件 + spawnEngine('unify')，主进程只做搬运，判定逻辑全在引擎侧（可单测）。
-  ipcMain.handle('engine:unifyMelody', async (evt, opts) => {
-    const win = BrowserWindow.fromWebContents(evt.sender);
-    const o = opts || {};
-    const raw = o.bytes;
-    const bytes = raw instanceof Uint8Array ? raw
-      : raw instanceof ArrayBuffer ? new Uint8Array(raw)
-      : ArrayBuffer.isView(raw) ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)
-      : Array.isArray(raw) ? Uint8Array.from(raw)
-      : null;
-    if (!bytes || !bytes.length) return { ok: false, error: '没有曲目字节' };
-    const dir = path.join(Paths.tempDir(), 'fufumidi');
-    const tag = 'unify_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
-    const inPath = path.join(dir, tag + '.mid');
-    const outPath = path.join(dir, tag + '.out.mid');
-    try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(inPath, Buffer.from(bytes)); }
-    catch (e) { return { ok: false, error: '临时文件写入失败：' + String((e && e.message) || e) }; }
-    const cleanup = () => { for (const p of [inPath, outPath]) { try { fs.unlinkSync(p); } catch (_) {} } };
-    return await new Promise((resolve) => {
-      const logs = [];
-      const send = (line) => {
-        logs.push(line);
-        if (win && !win.isDestroyed()) win.webContents.send('engine:log', { id: o.id, line });
-      };
-      try {
-        spawnEngine(['unify', inPath, '-o', outPath], {
-          onLog: send,
-          timeoutMs: 5 * 60 * 1000,
-          onDone: (code, r) => {
-            const report = r && r.result;
-            let outBytes = null;
-            try { outBytes = fs.readFileSync(outPath); } catch (_) { outBytes = null; }
-            cleanup();
-            if (report && report.ok && outBytes && outBytes.length) {
-              resolve({ ok: true, bytes: outBytes, report, logs });
-            } else {
-              resolve({ ok: false, report: report || null, logs,
-                        error: (report && report.error) || (r && (r.err || r.out) || '').slice(-300) || '统一旋律音色失败' });
-            }
-          },
-          onError: (e) => { cleanup(); resolve({ ok: false, error: String(e), logs }); },
-        });
-      } catch (e) { cleanup(); resolve({ ok: false, error: String((e && e.message) || e), logs }); }
-    });
-  });
-
   ipcMain.handle('engine:cancel', (_e, id) => {
     const c = convertChildren.get(id);
     if (c) { try { c.kill(); } catch {} convertChildren.delete(id); return { ok: true }; }

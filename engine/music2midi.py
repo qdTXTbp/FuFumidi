@@ -379,11 +379,10 @@ def build_parser():
                "  python music2midi.py                          # 打开图形界面\n"
                "  python music2midi.py convert 歌曲.mp3         # 单文件转换\n"
                "  python music2midi.py convert 歌曲.mp3 --mode piano\n"
-               "  python music2midi.py batch                    # 批量转换 input/ 文件夹\n"
-        "  python music2midi.py unify 歌曲.mid            # 已有 MIDI：统一主旋律音色（不重新转录）",
+               "  python music2midi.py batch                    # 批量转换 input/ 文件夹",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("mode", nargs="?", choices=["convert", "batch", "probe", "gui", "worker", "separate", "unify"],
+    parser.add_argument("mode", nargs="?", choices=["convert", "batch", "probe", "gui", "worker", "separate"],
                         default="gui", help="运行模式（默认 gui）")
     parser.add_argument("input", nargs="?", help="[convert] 输入音频文件")
     parser.add_argument("-o", "--output", help="[convert] 输出 MIDI 路径（默认与输入同名同目录）")
@@ -556,47 +555,6 @@ def cmd_worker():
     return 0
 
 
-def cmd_unify(args):
-    """[unify] 对**已有** MIDI 跑一遍主旋律归并（不重新转录）。
-
-    用途：修复「修复之前」转录出来的曲目 —— 那些曲目的主旋律仍会在几种音色之间跳。
-    参数：unify <in.mid> [-o <out.mid>]；不传 -o 则原地改写。
-    输出：日志行 + ###RESULT {json}（与 convert 同一协议，主进程直接解析）。
-    """
-    import json as _json
-    import shutil
-
-    src = getattr(args, "input", None)
-    if not src:
-        print("[错误] unify 模式需要指定 MIDI 文件，例如：python music2midi.py unify 歌曲.mid")
-        return 1
-    src = os.path.abspath(src)
-    if not os.path.exists(src):
-        print("###RESULT " + _json.dumps({"ok": False, "error": "文件不存在：" + src}, ensure_ascii=False))
-        return 1
-    out = os.path.abspath(args.output) if getattr(args, "output", None) else src
-    try:
-        if out != src:
-            os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-            shutil.copyfile(src, out)
-        import instrument_groups
-        res = instrument_groups.smart_finish(out, mode="auto", log=lambda m: print(m, flush=True))
-        import pretty_midi
-        pm = pretty_midi.PrettyMIDI(out)
-        tracks = [{"name": (i.name or ""), "program": int(i.program),
-                   "notes": len(i.notes), "drum": bool(i.is_drum)} for i in pm.instruments]
-        payload = {"ok": True, "out": out,
-                   "merged": bool(res.get("merged")),
-                   "unified": res.get("unified") or {},
-                   "tracks": tracks,
-                   "note_count": sum(t["notes"] for t in tracks)}
-    except Exception as e:
-        print("###RESULT " + _json.dumps({"ok": False, "error": str(e)[:400]}, ensure_ascii=False))
-        return 1
-    print("###RESULT " + _json.dumps(payload, ensure_ascii=False))
-    return 0
-
-
 def main():
     args = build_parser().parse_args()
 
@@ -619,9 +577,6 @@ def main():
 
     if args.mode == "worker":
         return cmd_worker()
-
-    if args.mode == "unify":
-        return cmd_unify(args)
 
     if args.mode == "convert" and not args.input:
         print("[错误] convert 模式需要指定音频文件，例如:")

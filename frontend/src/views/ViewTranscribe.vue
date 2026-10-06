@@ -24,34 +24,37 @@ const perf = ref('quality');             // quality | balanced | fast
 const perfHint = ref('');
 const bassBoost = ref(false);            // 低音增强（仅 basic 子模型）：关闭 melodia trick 以保留低音声部
 const beatGrid = ref(false);             // 节拍网格检测（仅 MuScriptor）：默认关，勾选才加载；未下载/失败自动跳过
-// 旋律乐器组（仅 MuScriptor）：MuScriptor 是多乐器模型，不给约束时它会在同一首歌里改判
-// 乐器（实测《甩葱歌》：同一条旋律 24s→organ、33s→synth lead、43s→flutes、96s→voice），
-// 于是同一段旋律每隔几小节换一次音色。'auto'=出结果后智能识别主导组并归并；
-// 指定组名=作为硬约束交给模型（一次推理即锁定音色）；''=不干预（旧行为）。
-const msInstr = ref('auto');
-// 统一旋律音色（已有曲目）：对**已经转录好**的曲目再跑一遍主旋律归并 —— 修的是
-// 「旧转录结果里同一段旋律每隔几小节换一次音色」。结果作为新曲目入库，原曲目不动，便于对比。
-const unifying = ref(false);
-async function unifyCurrentSong() {
-  const cur = app.currentSong;
-  if (!cur || !cur.song) { toast(t('请先选一首 MIDI 曲目'), 'warn'); return; }
-  const rec = (app.songs || []).find((x) => x.id === cur.id) || cur;
-  const bytes = rec.__bytes || cur.__bytes;
-  if (!bytes || !bytes.length) { toast(t('读不到这首曲目的 MIDI 数据'), 'warn'); return; }
-  if (!bridge || typeof bridge.unifyMelody !== 'function') { toast(t('当前版本不支持该操作'), 'warn'); return; }
-  unifying.value = true;
-  try {
-    const r = await bridge.unifyMelody({ bytes, name: rec.name || cur.name });
-    if (!r || !r.ok) { toast(t('统一旋律音色失败：') + ((r && r.error) || ''), 'warn'); return; }
-    const base = String(rec.name || cur.name || 'song').replace(/\.(mid|midi)$/i, '');
-    await importFiles([{ name: base + t('（统一音色）') + '.mid', bytes: new Uint8Array(r.bytes) }]);
-    const u = (r.report && r.report.unified) || {};
-    toast(t('已把 {n} 个音符收进「{inst}」，已作为新曲目入库')
-      .replace('{n}', String(u.moved_notes || 0)).replace('{inst}', String(u.kept_track || '?')));
-  } catch (e) {
-    toast(t('统一旋律音色失败：') + String((e && e.message) || e), 'warn');
-  } finally { unifying.value = false; }
+// 乐器组约束（仅 MuScriptor）：MuScriptor 是**多乐器**模型，逐音符判定乐器组 —— 不给约束时
+// 它会在同一首歌里改判（实测《甩葱歌》：同一条旋律 24s→organ、33s→synth lead、43s→flutes、
+// 96s→voice），于是同一段旋律每隔几小节换一次音色。
+//   auto  —— 不约束，出结果后按识别到的主导组归并（默认）
+//   limit —— **硬约束**：只允许勾选的乐器组发声（引擎把其它组的 token 全部禁掉）
+//   ''    —— 完全不干预
+const msMode = ref('auto');
+const msGroups = ref(['voice', 'drums']);          // 限定模式下允许的乐器组
+function toggleMsGroup(id) {
+  const i = msGroups.value.indexOf(id);
+  if (i >= 0) { if (msGroups.value.length > 1) msGroups.value.splice(i, 1); return; }  // 至少留一组
+  msGroups.value.push(id);
 }
+// MuScriptor 的全部乐器组（= 模型 tokenizer 的 MT3_FULL_PLUS_GROUP_NAMES，35 组）
+const MS_GROUPS = [
+  { id: 'voice', cn: '人声' }, { id: 'acoustic_piano', cn: '钢琴' }, { id: 'electric_piano', cn: '电钢琴' },
+  { id: 'acoustic_guitar', cn: '原声吉他' }, { id: 'clean_electric_guitar', cn: '清音电吉他' },
+  { id: 'distorted_electric_guitar', cn: '失真电吉他' }, { id: 'electric_bass', cn: '电贝斯' },
+  { id: 'acoustic_bass', cn: '原声贝斯' }, { id: 'string_ensemble', cn: '弦乐组' }, { id: 'violin', cn: '小提琴' },
+  { id: 'viola', cn: '中提琴' }, { id: 'cello', cn: '大提琴' }, { id: 'contrabass', cn: '低音提琴' },
+  { id: 'orchestral_harp', cn: '管弦竖琴' }, { id: 'flutes', cn: '长笛' }, { id: 'organ', cn: '风琴' },
+  { id: 'synth_lead', cn: '合成主音' }, { id: 'synth_pad', cn: '合成铺底' }, { id: 'synth_strings', cn: '合成弦乐' },
+  { id: 'brass_section', cn: '铜管组' }, { id: 'trumpet', cn: '小号' }, { id: 'trombone', cn: '长号' },
+  { id: 'tuba', cn: '大号' }, { id: 'french_horn', cn: '圆号' }, { id: 'soprano_and_alto_sax', cn: '萨克斯' },
+  { id: 'tenor_sax', cn: '次中音萨克斯' }, { id: 'baritone_sax', cn: '上低音萨克斯' }, { id: 'oboe', cn: '双簧管' },
+  { id: 'english_horn', cn: '英国管' }, { id: 'clarinet', cn: '单簧管' }, { id: 'bassoon', cn: '巴松管' },
+  { id: 'drums', cn: '鼓' }, { id: 'timpani', cn: '定音鼓' }, { id: 'chromatic_percussion', cn: '色彩打击乐' },
+  { id: 'orchestra_hit', cn: '管弦齐奏' },
+];
+/** 传给引擎的取值：'auto' / '人声,鼓' 这样的组名列表 / ''（不干预） */
+const msInstrValue = computed(() => (msMode.value === 'limit' ? msGroups.value.join(',') : (msMode.value || '')));
 const busy = ref(false);
 const done = ref(false);
 const progress = ref(0);
@@ -713,8 +716,9 @@ function collectParams() {
     if (umodel.value === 'muscriptor') {
       cfg.model_size = msSize.value;
       cfg.beat_grid = beatGrid.value;
-      // 旋律乐器组：漏了这一行，界面选了「人声」也传不进引擎（worker 请求体里也不认）
-      if (msInstr.value) cfg.muscriptor_instruments = msInstr.value;
+      // 乐器组约束：'auto' / '人声,鼓' 这样的组名列表 / 空。
+      // 注意这条链路有三跳（渲染端 → 主进程 worker 请求体 → 引擎），少任何一跳界面选了都不生效。
+      if (msInstrValue.value) cfg.muscriptor_instruments = msInstrValue.value;
       // MuScriptor 批量推理：GPU 上串行 chunk（batch=1）利用率仅 ~65%，批量可提至
       // 2-4× 实时。质量档保持串行 + prelude_forcing（边界延续质量最优）；
       // 均衡/高性能档用批量吞吐（prelude_forcing 关闭，边界质量略降）。
@@ -1270,29 +1274,23 @@ onBeforeUnmount(() => {
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>
               <span>
-                <b>{{ t('旋律音色') }}</b>
-                <small>{{ t('MuScriptor 会逐段判定乐器，同一段旋律可能被写成好几种音色；这里定死一种，或让它自己认') }}</small>
+                <b>{{ t('乐器组') }}</b>
+                <small>{{ t('MuScriptor 逐段判定乐器，同一段旋律可能被写成好几种音色；限定乐器组 = 模型侧硬约束，只允许勾选的组发声') }}</small>
               </span>
-              <select v-model="msInstr">
-                <option value="auto">{{ t('自动识别（推荐）') }}</option>
-                <option value="voice">{{ t('人声') }}</option>
-                <option value="piano">{{ t('钢琴') }}</option>
-                <option value="clean_electric_guitar">{{ t('吉他') }}</option>
-                <option value="synth_lead">{{ t('合成主音') }}</option>
-                <option value="flutes">{{ t('长笛') }}</option>
-                <option value="organ">{{ t('风琴') }}</option>
-                <option value="">{{ t('不限定（旧行为）') }}</option>
+              <select v-model="msMode">
+                <option value="auto">{{ t('自动识别并归并（推荐）') }}</option>
+                <option value="limit">{{ t('限定乐器组（硬约束）') }}</option>
+                <option value="">{{ t('不限定（模型自由判定）') }}</option>
               </select>
             </label>
           </div>
-          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label>
-              <span>
-                <b>{{ t('统一旋律音色（已有曲目）') }}</b>
-                <small>{{ t('对已经转录好的曲目再跑一遍主旋律归并：把跳来跳去的旋律收进一种音色，不重新转录') }}</small>
-              </span>
-              <button class="btn sm" :disabled="unifying" @click="unifyCurrentSong">{{ unifying ? t('处理中…') : t('执行') }}</button>
-            </label>
+          <div class="tr-switch" style="display:block" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'limit'">
+            <div style="display:flex;flex-wrap:wrap;gap:6px;max-height:150px;overflow:auto;padding:2px 0">
+              <button v-for="g in MS_GROUPS" :key="g.id" type="button" class="tr-pill"
+                      :class="{ active: msGroups.includes(g.id) }" :title="g.id"
+                      @click="toggleMsGroup(g.id)">{{ t(g.cn) }}</button>
+            </div>
+            <small style="display:block;margin-top:6px">{{ t('已选 {n} 组：模型只会输出这些乐器（可多选，例如 人声 + 鼓）').replace('{n}', String(msGroups.length)) }}</small>
           </div>
           <div class="tr-switch" v-if="mode === 'separate'">
             <label><span><b>{{ t('输出鼓组节奏轨') }}</b><small>{{ t('同时转录鼓点 / 打击乐节奏') }}</small></span><input type="checkbox" v-model="drums"></label>
