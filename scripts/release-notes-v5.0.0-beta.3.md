@@ -98,4 +98,4 @@
 | `FuFumidi.Install.5.0.0-beta.3.exe` | 带版本号离线包（留档） |
 | `FuFumidi.update.exe` | 增量更新器（随包分发） |
 
-SHA-256（完整安装包）：`b190a2ebc3a36bdb9e08d91a24e6e3ce1f084c165c6906ebcaa2a0f8bd470b77`
+SHA-256（完整安装包）：`6be024221b5c321b2e4bba355b0fdd2f8605efbc09bfe644aa17641a65eca290`
