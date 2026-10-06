@@ -6,7 +6,7 @@
  * 引擎（UTAU / DiffSinger）是**轨道上的属性**，不是页面级的模式 ——
  * 所以一个工程里两种轨可以混排，渲染时按各自引擎分派。
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import PianoRoll from '../components/pianoroll/PianoRoll.vue';
@@ -1400,6 +1400,56 @@ const curveCents = computed(() => (tr.value && tr.value.pitchCurve ? tr.value.pi
 function onCurveCommit(pts: { beat: number; value: number }[]) {
   store.setPitchCurve(pts.map((p) => ({ beat: p.beat, cents: p.value })));
 }
+/* ---- 自动化子轨也用同一块画布（M6b）：于是每条引擎参数都能直接画，不再只能敲数字 ---- */
+const curveCanvasAuto = ref<any>(null);
+function onAutoCurveCommit(pts: { beat: number; value: number }[]) {
+  const t0 = tr.value; if (!t0) return;
+  store.setCurve(t0.id, curAbbr.value, pts.map((p) => ({ beat: p.beat, value: p.value })));
+}
+/* ---------------- 颤音包络预览（M6b，计划书 §4.2） ----------------
+   画的是这个音的颤音包络：振幅按 淡入(vibFade) 渐入、中间保持、末尾同样渐出，
+   频率 vibFreq 是「每拍几次」—— 图上按音的时值 durBeat 换算成实际波数，所见即所听。 */
+const vibCv = ref<HTMLCanvasElement | null>(null);
+function vibVal(k: 'vibDepth' | 'vibFreq' | 'vibFade'): number {
+  const n = sel.value ? Number((sel.value as any)[k]) : NaN;
+  if (Number.isFinite(n)) return n;
+  return k === 'vibDepth' ? 35 : (k === 'vibFreq' ? 5.5 : 0.25);
+}
+function drawVib() {
+  const cv = vibCv.value; if (!cv) return;
+  const w = cv.clientWidth || 320, h = 46;
+  const dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  const g = cv.getContext('2d'); if (!g) return;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const css = (n: string, fb: string) => (getComputedStyle(document.documentElement).getPropertyValue(n).trim() || fb);
+  g.strokeStyle = css('--hairline', '#e6e6e6'); g.beginPath();
+  g.moveTo(0, Math.round(h / 2) + 0.5); g.lineTo(w, Math.round(h / 2) + 0.5); g.stroke();
+  if (!sel.value || !sel.value.vibrato) {
+    g.fillStyle = css('--stone', '#9aa0a6'); g.font = '11px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(t('颤音已关闭（勾上「颤音」即按下面的深度/速率/淡入生效）'), w / 2, h / 2);
+    return;
+  }
+  const depth = Math.max(0, Math.min(100, vibVal('vibDepth'))) / 100;
+  const freq = Math.max(0, vibVal('vibFreq'));
+  const fade = Math.max(0, Math.min(0.9, vibVal('vibFade')));
+  const dur = Math.max(0.125, Number(sel.value.durBeat) || 1);
+  const cycles = Math.max(0.5, freq * dur);
+  const amp = (h / 2 - 4) * depth;
+  g.strokeStyle = css('--accent', '#ff5530'); g.lineWidth = 1.6; g.beginPath();
+  for (let i = 0; i <= 200; i++) {
+    const x = (i / 200) * w;
+    // 淡入 / 淡出（两端各按 fade 比例）
+    const k = i / 200;
+    const env = Math.min(1, fade > 0 ? k / fade : 1, fade > 0 ? (1 - k) / fade : 1);
+    const y = h / 2 - Math.sin(k * cycles * Math.PI * 2) * amp * Math.max(0, env);
+    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.stroke();
+}
+watch([() => (sel.value ? sel.value.id : ''), () => vibVal('vibDepth'), () => vibVal('vibFreq'), () => vibVal('vibFade'), () => (sel.value ? sel.value.vibrato : false) || false],
+  () => { nextTick(drawVib); }, { immediate: true });
 function curveSet(i, e) {
   const t0 = tr.value;
   if (!t0) return;
@@ -2019,7 +2069,23 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <p class="muted auto-hint">
             {{ t('下面的车道可以直接拖：空白处按下加点并拖动，Alt+点或右键点删除。表格用于精确输入。') }}
           </p>
-          <div v-if="curCurve && curCurve.points.length" class="auto-grid">
+          <!-- M6b：这条参数也能直接画了（画笔/直线/橡皮/平滑/量化），落库走 store.setCurve -->
+          <div class="curves-head small">
+            <span class="curve-tools">
+              <button v-for="tl in CURVE_TOOLS" :key="tl[0]" class="btn" :class="{ primary: curveTool === tl[0] }"
+                      @click="curveTool = tl[0]">{{ t(tl[1]) }}</button>
+            </span>
+            <button class="btn" @click="curveCanvasAuto?.smooth()">{{ t('平滑') }}</button>
+            <button class="btn" @click="curveCanvasAuto?.quantize(0.25)">{{ t('量化 1/16') }}</button>
+            <span class="muted">{{ (curCurve && curCurve.points.length) || 0 }}{{ t(' 个点') }}</span>
+          </div>
+          <CurveCanvas ref="curveCanvasAuto" :points="(curCurve && curCurve.points) || []"
+                       :min="curTarget ? curTarget.min : -1200" :max="curTarget ? curTarget.max : 1200"
+                       :beats="curveBeats" :beats-per-bar="beatsPerBar" :tool="curveTool"
+                       :unit="(curTarget && curTarget.unit) || ''" @commit="onAutoCurveCommit" />
+          <details v-if="curCurve && curCurve.points.length" class="curve-nums">
+            <summary class="muted small">{{ t('数值表（精确输入）') }}</summary>
+          <div class="auto-grid">
             <div v-for="(p, i) in curCurve.points" :key="i" class="curve-row">
               <span class="ci">{{ i + 1 }}</span>
               <input type="number" step="0.25" :value="p.beat"
@@ -2030,6 +2096,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
               <button class="ib del" :title="t('删除')" @click="autoDelPoint(curCurve.points, i)">×</button>
             </div>
           </div>
+          </details>
           <p v-else class="muted">{{ t('还没有点，整条轨用默认值。') }}</p>
         </div>
       </div>
@@ -2297,12 +2364,27 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           @change="store.updateNote(sel.id, { durBeat: Math.max(0.125, nval($event, 1)) })" /></label>
         <label><span>{{ t('音高') }}</span><input type="number" min="0" max="127" :value="sel.pitch"
           @change="store.updateNote(sel.id, { pitch: Math.max(0, Math.min(127, nval($event, 60))) })" /></label>
-        <label class="ck"><input type="checkbox" :checked="sel.vibrato"
-          @change="store.updateNote(sel.id, { vibrato: $event.target.checked })" /><span>{{ t('颤音') }}</span></label>
-        <label><span>{{ t('深度') }}</span><input type="number" min="0" max="100" :value="sel.vibDepth"
-          @change="store.updateNote(sel.id, { vibDepth: nval($event, 35) })" /></label>
-        <label><span>{{ t('频率') }}</span><input type="number" step="0.5" min="0" max="12" :value="sel.vibFreq"
-          @change="store.updateNote(sel.id, { vibFreq: nval($event, 5.5) })" /></label>
+        <!-- 颤音（M6b，计划书 §4.2）：布尔开关 + 三条参数升级成「能看见包络」的一块 -->
+        <div class="vib-block">
+          <div class="vib-head">
+            <label class="ck"><input type="checkbox" :checked="sel.vibrato"
+              @change="store.updateNote(sel.id, { vibrato: $event.target.checked })" /><span>{{ t('颤音') }}</span></label>
+            <span class="muted small">{{ t('下面画的是这个音的颤音包络：起音渐入 → 保持 → 收尾渐出') }}</span>
+          </div>
+          <label class="vib-row"><span>{{ t('深度') }}</span>
+            <input type="range" min="0" max="100" step="1" :value="vibVal('vibDepth')" :disabled="!sel.vibrato"
+                   @input="store.updateNote(sel.id, { vibDepth: nval($event, 35) })" />
+            <em>{{ vibVal('vibDepth') }}</em></label>
+          <label class="vib-row"><span>{{ t('速率') }}</span>
+            <input type="range" min="0" max="12" step="0.1" :value="vibVal('vibFreq')" :disabled="!sel.vibrato"
+                   @input="store.updateNote(sel.id, { vibFreq: nval($event, 5.5) })" />
+            <em>{{ Number(vibVal('vibFreq')).toFixed(1) }} Hz</em></label>
+          <label class="vib-row"><span>{{ t('淡入') }}</span>
+            <input type="range" min="0" max="0.9" step="0.05" :value="vibVal('vibFade')" :disabled="!sel.vibrato"
+                   @input="store.updateNote(sel.id, { vibFade: nval($event, 0.25) })" />
+            <em>{{ Math.round(Number(vibVal('vibFade')) * 100) }}%</em></label>
+          <canvas ref="vibCv" class="vib-cv" height="46"></canvas>
+        </div>
         <label v-if="isDs"><span>{{ t('音分偏移') }}</span><input type="number" min="-100" max="100" :value="sel.pitchOffset || 0"
           @change="store.updateNote(sel.id, { pitchOffset: nval($event, 0) })" /></label>
         <!-- 留空 = 用引擎默认值。占位符直接显示那个默认值，免得用户以为"0 是默认" -->
@@ -2656,6 +2738,16 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .tag-m { font-size: 10.5px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); }
 .tag-m.re { background: rgba(220,160,60,.20); }
 .tag-m.pb { background: rgba(80,190,120,.18); }
+/* 颤音块（M6b）：一排滑杆 + 一条包络预览 */
+.vib-block { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface-soft); }
+.vib-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.vib-row { display: flex; align-items: center; gap: 8px; }
+.vib-row > span { flex: none; width: 42px; font-size: 11.5px; color: var(--stone); }
+.vib-row input[type="range"] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.vib-row em { flex: none; width: 54px; text-align: right; font-style: normal; font-family: var(--mono); font-size: 11px; color: var(--slate); }
+.vib-cv { width: 100%; height: 46px; display: block; border: 1px solid var(--hairline); border-radius: 8px; background: var(--canvas); }
+.curve-tools { display: inline-flex; gap: 4px; }
+
 .auto-grid { display: flex; flex-direction: column; gap: 4px; }
 .auto-grid input { width: 84px; }
 
