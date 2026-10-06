@@ -30,6 +30,11 @@ import {
   missingAssets, parseProject, resolveAssetPaths, serializeProject,
 } from '../core/song_project.js';
 import { makeFx, normalizeFx } from '../core/track_fx.js';
+import { normalizeSampleNote } from '../core/utau_tools.js';
+import {
+  splitPhrases, phraseSignature, phraseWindows, parseWav, sliceSegment, composeSegments,
+  PHRASE_GAP_BEATS,
+} from '../core/phrase_render.js';
 import {
   curveOf, normalizeCurve, normalizeCurves, targetsFor, valueForNote,
 } from '../core/track_automation.js';
@@ -37,6 +42,38 @@ import {
 /* ------------------------------------------------------------------ 类型 */
 
 export type Engine = 'utau' | 'diffsinger';
+
+/* ---- §4.6 乐句级增量渲染的缓存结构 ---- */
+
+/** 一个乐句在时间轴上的切片（bytes 是**已按窗口裁好**的 WAV，拼接时按 startMs 放回去） */
+export interface PhraseSeg {
+  /** 这句实际下发的 payload + 上下文串的指纹；一样就说明音频没变 */
+  hash: string;
+  startMs: number;
+  endMs: number;
+  bytes: Uint8Array;
+}
+
+/** 一条轨的乐句缓存 */
+export interface TrackPhraseCache {
+  /** 上下文串（歌手/BPM/采样基准音/引擎参数…）；变了整份缓存作废 */
+  key: string;
+  /** 尾音时长（引擎总时长 - 最后一个音符结束），用来推整轨时长 */
+  tailMs: number;
+  sr: number;
+  totalMs: number;
+  phrases: PhraseSeg[];
+}
+
+/** 上一次渲染的统计（给界面显示"复用了几句、新渲了几句"） */
+export interface PhraseRenderStats {
+  trackId: string;
+  phrases: number;
+  reused: number;
+  rendered: number;
+  calls: number;
+  ms: number;
+}
 
 /**
  * 轨道类型。
@@ -391,8 +428,8 @@ export const useSingerStore = defineStore('singer', {
     banksLoading: false,
     /** 推理后端偏好：auto / cpu / cuda / dml */
     device: 'auto' as 'auto' | 'cpu' | 'cuda' | 'dml',
-    /** UTAU 侧要一个采样音（wavtool 的 reference note） */
-    sampleNote: 'a' as string,
+    /** UTAU 侧的采样**基准音**（音名，如 C4）：引擎拿它算变调比。★ 不是别名 */
+    sampleNote: 'C4' as string,
     /** 渲染产物的可播放 URL（两个引擎共用） */
     renderUrl: '' as string,
     /* ---- 工程文件（.fufumidi 自包含包）---- */
@@ -416,6 +453,20 @@ export const useSingerStore = defineStore('singer', {
      *   键是轨道 id；删轨 / 新建 / 打开工程时清空对应项。
      */
     renderByTrack: {} as Record<string, Uint8Array>,
+    /**
+     * ★ §4.6 乐句级增量渲染缓存：trackId → 每句的字节 + 指纹。
+     *   只活在内存里（渲染结果本身就是内存态），不进工程文件。
+     */
+    _phraseCache: {} as Record<string, TrackPhraseCache>,
+    /** 最近一次渲染的"复用/新渲"统计（界面上给一句实话，别让人以为每次都在重算） */
+    _phraseStats: null as PhraseRenderStats | null,
+    /** A/B 对比里的 A = **上一版渲染结果**（按轨存） */
+    renderPrevByTrack: {} as Record<string, Uint8Array>,
+    /** A/B 两条 Blob URL（切换播放靠换 renderUrl，传输器监听它） */
+    renderUrlA: '' as string,
+    renderUrlB: '' as string,
+    /** 当前在听哪一版 */
+    abWhich: 'B' as 'A' | 'B',
     renderWarnings: [] as string[],
     lastDurationMs: 0 as number,
     lastPipeline: '' as string,
@@ -580,6 +631,8 @@ export const useSingerStore = defineStore('singer', {
         this.activeTrackId = next ? next.id : '';
       }
       delete this.renderByTrack[id];      // 轨没了，它的渲染结果也没人认领
+      delete this._phraseCache[id];       // 乐句缓存同理（换 id 重建轨不会误命中）
+      delete this.renderPrevByTrack[id];
     },
     /** 多轨叠置：切换某条轨在卷帘里是否显示（纯显示，不影响发声/渲染） */
     toggleRollHidden(id: string) {
@@ -1100,6 +1153,8 @@ export const useSingerStore = defineStore('singer', {
       this.selectedId = null;
       this.selectedIds = [];
       this.renderByTrack = {};
+      this._phraseCache = {};
+      this.renderPrevByTrack = {};
       // 整盘换掉 = 新起点：历史里留着上一批快照，Ctrl+Z 会把旧曲目"复活"
       this.history = [];
       this.future = [];
@@ -1193,6 +1248,11 @@ export const useSingerStore = defineStore('singer', {
 
       // 渲染结果属于"上一份工程"，不能跟着新工程一起带过来
       this.renderByTrack = {};
+      this._phraseCache = {};          // 乐句缓存同理（新工程的音符与旧缓存毫无关系）
+      this.renderPrevByTrack = {};
+      this.renderUrlA = '';
+      this.renderUrlB = '';
+      this.abWhich = 'B';
       this.tracks = tracks;
       this.bpm = proj.bpm;
       this.device = proj.device;
@@ -1277,12 +1337,21 @@ export const useSingerStore = defineStore('singer', {
       return () => { try { off(); } catch (e) { /* 已卸载 */ } };
     },
 
-    async renderTrack(trackId?: string): Promise<string> {
+    /**
+     * 渲染一条轨。
+     *
+     * @param trackId 目标轨（不传 = 当前轨）
+     * @param opts.full 整轨重渲：丢掉乐句缓存，**所有**乐句都重新下发引擎。
+     *   默认走 §4.6 增量（只重渲改动过的乐句）。需要"和整轨重渲逐位一致"时用 full ——
+     *   乐句单独渲染时引擎的起音/过渡与整轨渲染有细微差别（实测平均 0.22%，见计划书附录 W）。
+     */
+    async renderTrack(trackId?: string, opts?: { full?: boolean }): Promise<string> {
       const tr = trackId ? this.tracks.find(t => t.id === trackId) : this.activeTrack;
       if (!tr) return '没有可渲染的轨道';
       if (tr.kind === 'audio') return '音频轨不参与渲染（它在导出时混入）';
       if (!tr.singer) return '该轨道还没有选歌手';
       if (!tr.notes.length) return '该轨道没有音符';
+      if (opts && opts.full) delete this._phraseCache[tr.id];
       this.busy = true;
       this.progress = 0;
       this.msg = '';
@@ -1369,10 +1438,54 @@ export const useSingerStore = defineStore('singer', {
       return await this._renderUtau(tr);
     },
 
-    /** 丢掉渲染结果（不传则全部清空） */
+    /** 丢掉渲染结果（不传则全部清空）；乐句缓存与 A/B 的 A 也一起丢 */
     clearRender(trackId?: string) {
-      if (trackId) delete this.renderByTrack[trackId];
-      else this.renderByTrack = {};
+      if (trackId) {
+        delete this.renderByTrack[trackId];
+        delete this._phraseCache[trackId];
+        delete this.renderPrevByTrack[trackId];
+        return;
+      }
+      this.renderByTrack = {};
+      this._phraseCache = {};
+      this.renderPrevByTrack = {};
+      for (const u of [this.renderUrlA, this.renderUrlB]) {
+        if (u) { try { URL.revokeObjectURL(u); } catch (_) { /* 已失效 */ } }
+      }
+      this.renderUrlA = '';
+      this.renderUrlB = '';
+      this.abWhich = 'B';
+    },
+
+    /**
+     * A/B 对比（§4.6）：在「上一版（A）」和「最新一版（B）」之间切声源。
+     * 传输器监听 `renderUrl`，所以换 URL = 换声源，播放头不动，直接听差别。
+     */
+    toggleAB(which?: 'A' | 'B') {
+      const want = which || (this.abWhich === 'A' ? 'B' : 'A');
+      if (want === 'A' && !this.renderUrlA) return;
+      if (want === 'B' && !this.renderUrlB) return;
+      this.abWhich = want;
+      this.renderUrl = want === 'A' ? this.renderUrlA : this.renderUrlB;
+    },
+
+    /**
+     * 采纳 A：把上一版拿回来当当前结果（"还是上一版好听"时的退路）。
+     * 乐句缓存随之作废 —— 它对应的是被换下去的那一版，不能再拿来复用。
+     */
+    adoptA(trackId?: string) {
+      const id = trackId || this.activeTrackId;
+      const prev = id ? this.renderPrevByTrack[id] : null;
+      if (!id || !prev || !prev.length) return;
+      const cur = this.renderByTrack[id];
+      this.renderByTrack[id] = prev;
+      if (cur && cur.length) this.renderPrevByTrack[id] = cur;
+      else delete this.renderPrevByTrack[id];
+      const ua = this.renderUrlA;
+      this.renderUrlA = this.renderUrlB;
+      this.renderUrlB = ua;
+      this.renderUrl = this.abWhich === 'A' ? this.renderUrlA : this.renderUrlB;
+      delete this._phraseCache[id];
     },
 
     /**
@@ -1389,14 +1502,24 @@ export const useSingerStore = defineStore('singer', {
         _lastBytes = bytes;
         // ★ 按轨道留一份 —— 多轨同时播放就靠这里（只留"最后一份"等于渲一条顶一条）
         if (trackId) {
+          const prev = this.renderByTrack[trackId];
           this.renderByTrack[trackId] = bytes;
           // 记下"这一版是拿什么音符渲出来的"，之后改音符就能提示"渲染已过期"
           const t0 = this.tracks.find((x) => x.id === trackId);
           if (t0) t0.renderSig = noteSignature(t0.notes);
+          /* ★ A/B 对比（§4.6）：把**上一版**留成 A。新开一条 URL 给 A ——
+             紧接着 revoke 掉的是旧的 renderUrl（它指向的正是这一版旧音频），不会误伤。 */
+          if (prev && prev.length) {
+            this.renderPrevByTrack[trackId] = prev;
+            if (this.renderUrlA) { try { URL.revokeObjectURL(this.renderUrlA); } catch (_) { /* 已失效 */ } }
+            this.renderUrlA = URL.createObjectURL(new Blob([prev as any], { type: 'audio/wav' }));
+          }
         }
         if (this.renderUrl) { try { URL.revokeObjectURL(this.renderUrl); } catch (_) { /* 已失效 */ } }
         this.renderUrl = URL.createObjectURL(
           new Blob([bytes.buffer as ArrayBuffer], { type: 'audio/wav' }));
+        this.renderUrlB = this.renderUrl;
+        this.abWhich = 'B';
       }
       this.renderWarnings = r.warnings || [];
       this.lastDurationMs = r.duration_ms || 0;
@@ -1427,8 +1550,11 @@ export const useSingerStore = defineStore('singer', {
       return this._acceptResult(r, 'DiffSinger', tr.id);
     },
 
-    async _renderUtau(tr: SingTrack): Promise<string> {
-      if (!isDesktop || !bridge) return '网页端暂不支持 UTAU 渲染';
+    /**
+     * UTAU 的每音符 payload。**顺序与 `tr.notes` 一一对应** —— 乐句切分靠这个下标对齐
+     * （splitPhrases 返回的 idx 就是这里的下标）。
+     */
+    _utauPayload(tr: SingTrack): any[] {
       // ★ 有子轨时由子轨说话：取音符**中点**的值，没有子轨才沿用音符自身参数。
       //   （只 UTAU 有 DYN/BRE/GEN —— DiffSinger 引擎没有对应的每音符输入，
       //    别假装生效，那只会变成"调了没反应"的坑。）
@@ -1436,7 +1562,7 @@ export const useSingerStore = defineStore('singer', {
       const bre = curveOf(tr, 'BRE');
       const gen = curveOf(tr, 'GEN');
       const vol = curveOf(tr, 'VOL');
-      const notes = tr.notes.map(n => {
+      return tr.notes.map(n => {
         /* ★★ 两个引擎的默认值口径不同，所以**没设过的参数一律不发**，
               让引擎用它自己的原生默认值（legacy: velocity/volume=100、gender=50、breath=0；
               openutau: vol/vel/atk/dec 描述符默认 100、shft 0）。
@@ -1446,8 +1572,9 @@ export const useSingerStore = defineStore('singer', {
         const expressions: Record<string, number> = {};
         const raw: Record<string, any> = {
           startBeat: n.startBeat, durBeat: n.durBeat, pitch: n.pitch,
-          // UTAU 的 wavtool 需要一个 alias；空歌词会让引擎取不到采样
-          lyric: n.lyric || this.sampleNote || 'a',
+          // UTAU 的 wavtool 需要一个 alias；空歌词会让引擎取不到采样。
+          // ★ 这里**不能**退回 sampleNote：那是音名（C4），不是别名。
+          lyric: n.lyric || 'a',
           vibrato: !!n.vibrato, vibDepth: n.vibDepth, vibFreq: n.vibFreq,
           vibFade: n.vibFade || 0,
         };
@@ -1502,13 +1629,90 @@ export const useSingerStore = defineStore('singer', {
         }
         return raw;
       });
-      const r = await (bridge as any).utauRenderTrack({
-        voicebank: tr.singer,
-        notes,
-        sampleNote: this.sampleNote || 'a',
-        bpm: this.bpm,
-      });
-      return this._acceptResult(r, 'UTAU', tr.id);
+    },
+
+    /** 渲染上下文串：这些设置一变，所有乐句缓存作废（换歌手/换引擎/改 BPM 都不能复用旧音频） */
+    _renderCtxKey(tr: SingTrack): string {
+      return [
+        'utau', tr.singer || '', String(this.bpm),
+        normalizeSampleNote(this.sampleNote), tr.language || '',
+        tr.resampler || '', tr.wavtool || '',
+      ].join('|');
+    },
+
+    /**
+     * UTAU 渲染 —— §4.6 **乐句级增量**。
+     *
+     * 只有指纹变了的乐句会重新下发（合成**一次**引擎调用），没变的直接用缓存拼回去；
+     * 什么都没改时**一次引擎调用都不发**（引擎启动 ~0.6s 是这里的大头）。
+     */
+    async _renderUtau(tr: SingTrack): Promise<string> {
+      if (!isDesktop || !bridge) return '网页端暂不支持 UTAU 渲染';
+      const t0 = performance.now();
+      const notes = this._utauPayload(tr);
+      const ctxKey = this._renderCtxKey(tr);
+      const phrases = splitPhrases(tr.notes, PHRASE_GAP_BEATS);
+      if (!phrases.length) return '该轨道没有音符';
+      let entry = this._phraseCache[tr.id];
+      if (!entry || entry.key !== ctxKey) {
+        entry = { key: ctxKey, tailMs: 0, sr: 44100, totalMs: 0, phrases: [] };
+        this._phraseCache[tr.id] = entry;
+      }
+      const cache: TrackPhraseCache = entry;
+      const beatMs = 60000 / Math.max(1, this.bpm);
+      const lastEndMs = phrases.reduce((mx, p) => Math.max(mx, p.endBeat * beatMs), 0);
+      const sigs = phrases.map((p) => phraseSignature(p.idx.map((i) => notes[i]), ctxKey));
+      const hits = phrases.map((p, i) => !!cache.phrases[i] && cache.phrases[i].hash === sigs[i]);
+      const missIdx = phrases.map((p, i) => i).filter((i) => !hits[i]);
+      let calls = 0, rendered = 0, warnings: string[] = this.renderWarnings;
+      if (missIdx.length) {
+        // 只下发**变了的**乐句。payload 带绝对拍位 → 返回的音频仍与整轨时间轴对齐，
+        // 于是可以按各自的窗口切出来（窗口切点在静音中点，切了听不出来）。
+        const missNotes = missIdx.flatMap((i) => phrases[i].idx.map((k) => notes[k]));
+        const r = await (bridge as any).utauRenderTrack({
+          voicebank: tr.singer,
+          notes: missNotes,
+          // 老工程里可能存着 'a'（当年当成别名用）→ 渲染前归一化成音名，否则整轨渲染直接报"无法解析音名"
+          sampleNote: normalizeSampleNote(this.sampleNote),
+          bpm: this.bpm,
+        });
+        calls = 1;
+        if (!r || !r.ok) return (r && r.error) || '渲染失败';
+        warnings = r.warnings || [];
+        const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes || []);
+        const wav = parseWav(bytes);
+        cache.sr = wav.sr || 44100;
+        if (missIdx.length === phrases.length) {
+          // 整轨都在这一次里 → 顺便重新量"尾音"（引擎给的时长 - 最后一个音符结束）
+          const dur = Number(r.duration_ms) || (wav.frames / wav.sr) * 1000;
+          cache.tailMs = Math.max(0, dur - lastEndMs);
+        }
+        cache.totalMs = Math.max(1, lastEndMs + cache.tailMs + 120);
+        const wins = phraseWindows(phrases, this.bpm, cache.totalMs);
+        for (const i of missIdx) {
+          const w = sliceSegment(wav, wins[i].startMs, wins[i].endMs);
+          cache.phrases[i] = { hash: sigs[i], startMs: w.startMs, endMs: w.endMs, bytes: w.bytes };
+          rendered += 1;
+        }
+        // 命中的句子：字节可复用，窗口照新的写（窗口只有在邻居变了时才会动，那时邻居也在 miss 里）
+        for (let i = 0; i < phrases.length; i++) {
+          if (hits[i] && cache.phrases[i]) {
+            cache.phrases[i].startMs = wins[i].startMs;
+            cache.phrases[i].endMs = wins[i].endMs;
+          }
+        }
+      }
+      const totalMs = cache.totalMs || Math.max(1, lastEndMs + cache.tailMs + 120);
+      const mixed = composeSegments(cache.phrases, totalMs, cache.sr);
+      this._phraseStats = {
+        trackId: tr.id, phrases: phrases.length,
+        reused: phrases.length - missIdx.length, rendered, calls,
+        ms: Math.round(performance.now() - t0),
+      };
+      return this._acceptResult(
+        { ok: true, bytes: mixed, duration_ms: totalMs, pipeline: 'UTAU', warnings },
+        'UTAU', tr.id,
+      );
     },
   },
 });

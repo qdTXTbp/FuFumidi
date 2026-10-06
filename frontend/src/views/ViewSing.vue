@@ -22,6 +22,7 @@ import { ensureAudio } from '../audio.js';
 import { FX_TYPES, FX_ORDER } from '../core/track_fx.js';
 import { CURVE_TARGETS, curveOf, defaultFor, targetsFor } from '../core/track_automation.js';
 import { notePhonemes } from '../core/phoneme.js';
+import { normalizeSampleNote } from '../core/utau_tools.js';
 import { alignLyrics, splitLyricLines, splitNotesToFit } from '../core/sing_align.js';
 
 const store = useSingerStore();
@@ -908,6 +909,11 @@ const renderReason = computed<string>(() => {
   return '';
 });
 const renderBlocked = computed(() => !!renderReason.value);
+/* §4.6 增量渲染统计：只显示**当前轨**的，别的轨的数字挂在这里没有意义 */
+const renderStats = computed(() => {
+  const s = store._phraseStats;
+  return s && s.trackId === (store.activeTrackId || '') ? s : null;
+});
 
 /** 编辑器空态：新工程（一条空声部轨、没渲染过任何东西）时给"三步走"而不是一片空白。
  *  ★ 不能用 `tracks.length === 0`：`clearAll()`/新建工程都会预置一条空 DiffSinger 轨。 */
@@ -1707,8 +1713,13 @@ async function playAfterRender() {
   tplaying.value = transport.playing;
 }
 
-async function doRender() {
-  const err = await store.renderTrack();
+/**
+ * 渲染当前轨。**按住 Shift 点** = 整轨重渲（丢掉乐句缓存）——
+ * 默认是 §4.6 增量渲染：只把改动过的乐句送引擎。
+ */
+async function doRender(e) {
+  const full = !!(e && e.shiftKey);
+  const err = await store.renderTrack(undefined, { full });
   if (err) { sayErr(err, t('看下面的渲染日志；常见原因是没选歌手、声库缺文件或引擎组件未装。'), store.renderWarnings.join('\n')); return; }
   // 渲完就能听：给「导出 WAV」一个动作按钮，省掉再找按钮这一步（P1-2）
   say(t('渲染完成，正在试听'), 'ok', { action: { label: t('导出 WAV'), run: () => doSave() } });
@@ -2104,13 +2115,33 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         </button>
         <!-- 主动作：渲染本轨。禁用时把**原因**写在按钮上，不让用户猜 -->
         <button v-if="!isAudio" class="btn primary" data-guide="sing-render"
-                :disabled="renderBlocked" :title="renderReason || t('按该轨的引擎自动分派')" @click="doRender">
+                :disabled="renderBlocked"
+                :title="renderReason || t('按该轨的引擎自动分派；只重渲改动过的乐句。按住 Shift 点 = 整轨重渲')"
+                @click="doRender">
           <Icon name="play" :size="13" /> {{ t('渲染本轨') }}
         </button>
         <button class="btn" data-guide="sing-render-all" :disabled="store.busy" @click="doRenderAll"
                 :title="t('渲染所有声部轨，渲完一起播放')">
           <Icon name="zap" :size="13" /> {{ t('渲染全部轨') }}
         </button>
+
+        <!-- §4.6 增量渲染：只把改动过的乐句送引擎。这里如实显示"复用了几句"，别让人以为每次都在重算 -->
+        <span v-if="renderStats" class="rs-badge" data-guide="sing-render-stats"
+              :title="t('只有改动过的乐句会重新送引擎；一点没改就一次都不发')">
+          {{ t('本轨 ') }}{{ renderStats.phrases }}{{ t(' 句：复用 ') }}{{ renderStats.reused }}{{ t(' / 新渲 ') }}{{ renderStats.rendered }}
+          <span class="muted">· {{ renderStats.ms }} ms</span>
+        </span>
+
+        <!-- §4.6 A/B 对比：A = 上一版，B = 最新一版。换的是声源，播放头不动 -->
+        <span v-if="store.renderUrlA && store.renderUrlB" class="ab-group" data-guide="sing-ab">
+          <span class="muted small">{{ t('对比') }}</span>
+          <button class="btn sm" :class="{ primary: store.abWhich === 'A' }"
+                  :title="t('听上一版渲染结果')" @click="store.toggleAB('A')">A {{ t('上一版') }}</button>
+          <button class="btn sm" :class="{ primary: store.abWhich === 'B' }"
+                  :title="t('听最新一版渲染结果')" @click="store.toggleAB('B')">B {{ t('最新') }}</button>
+          <button v-if="store.abWhich === 'A'" class="btn sm" :title="t('把上一版作为当前结果（乐句缓存随之作废）')"
+                  @click="store.adoptA()">{{ t('采用 A') }}</button>
+        </span>
       </div>
 
       <!-- 渲染进行中：进度条 + 分条文案 + 取消入口（不然长曲只能干等） -->
@@ -2216,8 +2247,11 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             </select>
           </label>
           <template v-if="isUtau">
-            <label :title="t('UTAU 采样音（alias）：歌词为空时用它兜底')">{{ t('采样音') }}
-              <input :value="store.sampleNote" @change="store.sampleNote = sval($event)" /></label>
+            <!-- ★ 这是采样**基准音**（音名），不是别名：引擎用 note_to_hz(sampleNote) 算变调比。
+                 写成别名（老版本默认 'a'）会让整轨渲染以「无法解析音名」失败。 -->
+            <label :title="t('声库样本录制时的音高（音名，如 C4）。引擎按它算变调比 —— 填别名会让整轨渲染失败。')">{{ t('采样基准音') }}
+              <input :value="store.sampleNote" placeholder="C4"
+                     @change="store.sampleNote = normalizeSampleNote(sval($event))" /></label>
             <label>{{ t('重采样器') }}<input :value="tr.resampler || ''"
               @change="store.patchTrack(tr.id, { resampler: sval($event) })" /></label>
             <label>{{ t('波源工具') }}<input :value="tr.wavtool || ''"
@@ -3095,4 +3129,12 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .curve-row { display: flex; align-items: center; gap: 6px; }
 .curve-row input { width: 84px; }
 .curve-row .ci { width: 18px; color: var(--stone); }
+
+/* ---- §4.6 增量渲染统计 + A/B 对比 ---- */
+.rs-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px;
+            border: 1px solid var(--border); background: var(--surface-muted); color: var(--stone); font-size: 11.5px;
+            white-space: nowrap; }
+.ab-group { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 999px;
+            border: 1px solid var(--border); background: var(--surface-muted); }
+.ab-group .btn.sm { padding: 1px 8px; font-size: 11.5px; }
 </style>

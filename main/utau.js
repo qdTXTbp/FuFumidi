@@ -2,11 +2,35 @@
 // UTAU 声库制作 IPC：声库导出 + 人声渲染 + 现成声库导入
 // ============================================================
 'use strict';
+const crypto = require('crypto');
 const Paths = require('./paths');
 const { safeExtractAllTo } = require('./zip-safe');
 // 直接 require 而不是走 `registerUtauIpc` 的入参：本模块的注册参数里没有 readSettings，
 // 而引擎选择要读设置。Node 模块缓存保证拿到的是同一个 settings 单例。
 const { readSettings } = require('./settings');
+
+/**
+ * 只保留最近 `keep` 份 payload 缓存目录（每份里是 OpenUtau 的乐句缓存，几十 MB 级）。
+ * 见 `utau:renderTrack` 里"缓存按 payload 隔离"的说明。
+ */
+function pruneOuCacheDirs(root, current, keep = 8) {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const items = fs.readdirSync(root, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && path.join(root, e.name) !== current)
+      .map((e) => {
+        const p = path.join(root, e.name);
+        let mtime = 0;
+        try { mtime = fs.statSync(p).mtimeMs; } catch (err) { mtime = 0; }
+        return { p, mtime };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    for (const it of items.slice(Math.max(0, keep - 1))) {
+      try { fs.rmSync(it.p, { recursive: true, force: true }); } catch (err) { /* 正被占用就算了 */ }
+    }
+  } catch (err) { /* 目录不存在等：不影响渲染 */ }
+}
 
 function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawnEngine }) {
   // 声库是体积较大的模型类资产：统一放在数据根目录（默认工具目录旁），不挤占 C 盘
@@ -288,9 +312,21 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
       if (!voicebank || !notes || !Array.isArray(notes) || !notes.length) {
         return resolve({ ok: false, error: '缺少声库目录或音符' });
       }
-      // 中间产物统一落在数据根目录 temp/（原先落系统 Temp，会持续占用 C 盘）
-      const out = path.join(Paths.tempDir(), 'fufumidi', `utau_render_${Date.now()}.wav`);
-      fs.mkdirSync(path.dirname(out), { recursive: true });
+      /* 中间产物统一落在数据根目录 temp/（原先落系统 Temp，会持续占用 C 盘）。
+         ★★ 输出放在**按 payload 哈希隔离的子目录**里：OpenUtau 的乐句缓存目录是从
+            out 的同级推导的（engine_openutau.py: `<out 的目录>/_ou_cache`），而它的缓存
+            在"只改了一个音的音高"时会命中旧的：
+              实测（同一缓存目录）[67,69,71] 与 [67,69,74] 渲染出**同一份字节**；
+              把两次渲染分别放进各自的空目录后，两者才不同。
+            表现就是用户最恼火的那种"改了音高，渲染出来没变"。
+            这里让缓存按内容隔离：payload 一样 → 复用同一份缓存（快）；payload 变了 → 换目录（准）。 */
+      const payloadKey = crypto.createHash('sha1')
+        .update(JSON.stringify({ voicebank, notes, sampleNote: sampleNote || 'C4', bpm: bpm || 120 }))
+        .digest('hex').slice(0, 16);
+      const ouDir = path.join(Paths.tempDir(), 'fufumidi', 'ou', payloadKey);
+      fs.mkdirSync(ouDir, { recursive: true });
+      pruneOuCacheDirs(path.dirname(ouDir), ouDir);
+      const out = path.join(ouDir, 'render.wav');
       // 音符序列走「@临时文件」：整轨数百音符的 JSON 会撞 Windows 32K 命令行上限
       // （spawn ENAMETOOLONG）。两个引擎都原生支持 @file 约定。
       notesJson = path.join(Paths.tempDir(), 'fufumidi', `utau_notes_${Date.now()}_${process.pid}.json`);

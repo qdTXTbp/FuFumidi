@@ -27,6 +27,8 @@
  * 宁可明确报错，也不要拿半懂的数据去覆盖用户的工程。
  */
 
+import { normalizeSampleNote } from './utau_tools.js';
+
 /** 清单里的格式标识（拒绝别的格式误当工程打开） */
 export const FORMAT_ID = 'fufumidi-song';
 /** 当前写入的版本号 */
@@ -264,7 +266,9 @@ export function serializeProject(state) {
     },
     bpm: clamp(num(s.bpm, 120), 20, 400),
     device: ['auto', 'cpu', 'cuda', 'dml'].indexOf(s.device) >= 0 ? s.device : 'auto',
-    sampleNote: str(s.sampleNote, 'a').slice(0, 16) || 'a',
+    // ★ 采样基准音是**音名**（C4）；老工程里存过 'a'（当年被当成别名）→ 统一归一化，
+    //   否则打开老工程后一点「渲染本轨」就会以「无法解析音名：a」整体失败
+    sampleNote: normalizeSampleNote(str(s.sampleNote, '')),
     activeTrackId: str(s.activeTrackId),
     tracks,
     assets: assets.reduce((m, a) => { m[a.id] = { name: a.fileName }; return m; }, {}),
@@ -410,7 +414,7 @@ export function parseProject(json) {
     },
     bpm: clamp(num(json.bpm, 120), 20, 400),
     device: ['auto', 'cpu', 'cuda', 'dml'].indexOf(json.device) >= 0 ? json.device : 'auto',
-    sampleNote: str(json.sampleNote, 'a').slice(0, 16) || 'a',
+    sampleNote: normalizeSampleNote(str(json.sampleNote, '')),
     activeTrackId: str(json.activeTrackId),
     tracks,
   };

@@ -150,6 +150,27 @@ export async function decodeAudioData(arrayBuffer) {
   }
 }
 
+/**
+ * 采样基准音（引擎的 `sample_note`）。
+ *
+ * ★ 它是**音高**（样本录制时唱的音，如 C4），引擎用 `note_to_hz(sample_note)` 算变调比。
+ *   UI 里原来把它当"别名"用（默认 'a'、提示写"歌词为空时兜底"）——两者语义完全不同：
+ *   `note_to_hz('a')` 直接抛 ValueError「无法解析音名：a」，**默认设置下整轨渲染必然失败**。
+ *   （engine_utau.py 的 `render_track(vb, notes, sample_note="C4")` 默认值就是音名。）
+ */
+export const DEFAULT_SAMPLE_NOTE = 'C4';
+
+/** C4 / G#4 / Bb3 / F♯5 这类音名才算合法 */
+export function isValidSampleNote(v) {
+  return typeof v === 'string' && /^[A-Ga-g][#b♯♭]?-?\d{1,2}$/.test(v.trim());
+}
+
+/** 非法值（老工程里存着 'a'）一律落回 C4 —— 否则渲染会以"无法解析音名"整体失败 */
+export function normalizeSampleNote(v) {
+  const s = String(v == null ? '' : v).trim();
+  return isValidSampleNote(s) ? s : DEFAULT_SAMPLE_NOTE;
+}
+
 /** Uint8Array → base64（分块避免栈溢出）。 */
 export function bytesToBase64(bytes) {
   let bin = '';
