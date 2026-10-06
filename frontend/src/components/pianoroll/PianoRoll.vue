@@ -496,10 +496,25 @@ function onUp() {
   if (drag && drag.mode === 'box') {
     const x0 = Math.min(drag.x0, drag.x1), y0 = Math.min(drag.y0, drag.y1);
     const x1 = Math.max(drag.x0, drag.x1), y1 = Math.max(drag.y0, drag.y1);
+    /* 框选（M8d）：以前只遍历当前轨的 `props.notes` —— 于是"跨轨框选"根本不存在。
+       现在叠加显示（overlay）打开时，**幽灵音符也在框选范围内**：框到的别的轨音符会被加进选区，
+       随后就能用批量工具一起处理（选区数据层已经跨轨，见 stores/singer.ts 的 selectedNotes）。
+       拖动仍不支持跨轨（编辑 api 按当前轨注入），但"选中后批量改"这条路已经通了。 */
     const ids = [];
     for (const n of props.notes) {
       const g = noteGeo(n);
       if (g.x < x1 && g.x + g.w > x0 && g.y < y1 && g.y + g.h > y0) ids.push(n.id);
+    }
+    if (props.overlay && Array.isArray(props.tracks)) {
+      const mine = new Set(props.notes.map((n) => n.id));
+      for (const tk of props.tracks) {
+        if (!tk || tk.id === props.activeTrackId) continue;
+        for (const n of (tk.notes || [])) {
+          if (!n || mine.has(n.id)) continue;
+          const g = noteGeo(n);                  // 幽灵与实音符共用同一套「拍→x、音高→y」映射
+          if (g.x < x1 && g.x + g.w > x0 && g.y < y1 && g.y + g.h > y0) ids.push(n.id);
+        }
+      }
     }
     const prev = props.selectedIds;
     const next = drag.additive ? Array.from(new Set([...prev, ...ids])) : ids;
