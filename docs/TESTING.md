@@ -187,8 +187,45 @@ $env:EXPR_FILE='.\expr-dense-fix.js';        node cdp-eval.cjs    # 极密曲目
 > `expr-spatial-channels.js` 判「居中信号不变」用的是**同源同相同频**的 L/R，
 > 用两路不同频率的振荡器测「居中」是无效的（L-R 本来就不为 0）。
 
----
+### 2.8 静默安装 / 卸载（2026-10-06 实测，两个坑）
 
+自动化跑安装卸载时用这两条命令：
+
+```powershell
+# 安装：必须带 /currentuser
+guestcontrol <vm> run --username tester --password <pw> --exe "C:\Users\tester\Desktop\setup.exe" `
+  --wait-stdout --wait-stderr -- /S /currentuser
+
+# 卸载：先关掉应用，再跑注册表里那个 QuietUninstallString
+taskkill /IM FuFumidi.exe /F
+"%LOCALAPPDATA%\Programs\FuFumidi\Uninstall FuFumidi.exe" /currentuser /S
+```
+
+**坑一：只写 `/S` 会永久卡住。** 这个安装器是 electron-builder 的 assisted 安装器，静默模式下不带
+`/currentuser` 时它会走「所有用户」分支 → 拉起一个提权副本（落在 **session 0**）→ UAC 提示出现在
+安全桌面上，没人能点 → 安装停在半路：文件已经铺好，但**卸载器、注册表项、快捷方式全都没有**，
+而且那个进程会一直挂着。实测第一次等了十分钟以上，进程仍在。加 `/currentuser` 后一次成功。
+判据：静静装完必须同时有 `Uninstall FuFumidi.exe`、HKCU 卸载项、桌面与开始菜单快捷方式。
+
+**坑二：卸载器会把「自己」挪走。** NSIS 的卸载器先把自己复制到 `%TEMP%` 再从那里运行，
+原地的 `Uninstall FuFumidi.exe` 很早就被删掉 —— 于是第二次调用会报「不是内部或外部命令」，
+而第一次调用其实正在干活。所以：卸载命令只发一次，然后等；不要在几十秒内重复发。
+另外卸载前必须先关应用，否则它会一直等应用退出。
+
+**静默卸载会保留用户数据**（`nsis-custom.nsh` 里 `${if} ${Silent}` 直接按「保留」处理）：
+卸载完成后安装目录里只剩 `FuFumidiData`，这是设计行为，不是没卸干净。
+
+**顺带一条「基础依赖和模型」的判据**（干净系统里直接跑，不需要开界面）：
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\FuFumidi\resources\python\python.exe" `
+  "$env:LOCALAPPDATA\Programs\FuFumidi\resources\app.asar.unpacked\engine\deps.py" check
+# 期望：###RESULT 里 universal / piano / separate / muscriptor / aria / transkun 六组全 ok
+```
+
+> 送脚本进 guest 请用 `guest-run.ps1`（见 2.5），不要用裸 `guestcontrol -- powershell -Command`。
+
+---
 ## 3. 干净虚拟机全功能测试清单（发布闸门）
 
 每轮测试按顺序执行，逐项勾选并记录结果（含截图/日志路径与失败现象）。
