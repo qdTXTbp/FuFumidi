@@ -67,8 +67,8 @@ def _candidates(explicit=None):
         out.append(os.path.join(r, "FuFumidi", "omr", "audiveris", "Audiveris", "Audiveris.exe"))
     # 安装版数据根目录的常见写法
     out.append(r"E:\Midi\FuFumidi\FuFumidiData\omr\audiveris\Audiveris\Audiveris.exe")
-    # 开发机
-    out.append(r"E:\Midi\_sing_tmp\audiveris\app\Audiveris\Audiveris.exe")
+    # 开发机（E:\Midi 根目录整理后，一次性探针目录已移入 _attic）
+    out.append(r"E:\Midi\_attic\_sing_tmp\audiveris\app\Audiveris\Audiveris.exe")
     out.append(os.path.join(HERE, "..", "omr", "audiveris", "Audiveris", "Audiveris.exe"))
     return [os.path.abspath(p) for p in out]
 

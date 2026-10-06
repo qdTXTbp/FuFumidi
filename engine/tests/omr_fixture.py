@@ -157,5 +157,5 @@ def build(path):
 
 
 if __name__ == "__main__":
-    p, m = build(r"E:\Midi\_sing_tmp\omr\synthetic.png")
+    p, m = build(r"E:\Midi\_attic\_sing_tmp\omr\synthetic.png")
     print(p, len(m["expect"]), "notes")
