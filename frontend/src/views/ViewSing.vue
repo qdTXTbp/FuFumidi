@@ -639,6 +639,15 @@ function onRollScaleRoot(root: number) {
   try { localStorage.setItem('fufumidi_sing_scale', JSON.stringify(scale.value)); } catch (_) {}
 }
 
+/** 选中相邻音符（按 startBeat 排序）：键盘流里 ←→ / Tab 用它（M7a） */
+function stepNote(dir: number) {
+  const t0 = store.activeTrack; if (!t0 || !t0.notes.length) return;
+  const arr = [...t0.notes].sort((a: any, b: any) => a.startBeat - b.startBeat || a.pitch - b.pitch);
+  const i = arr.findIndex((x: any) => x.id === store.selectedId);
+  const j = Math.max(0, Math.min(arr.length - 1, (i < 0 ? 0 : i + dir)));
+  const n = arr[j]; if (n) store.select(n.id);
+}
+
 /** 页面级快捷键：卷帘有焦点时它自己处理，这里负责"没点进卷帘也能用"的那部分 */
 function onSingKey(e: KeyboardEvent) {
   const el = e.target as HTMLElement | null;
@@ -656,6 +665,25 @@ function onSingKey(e: KeyboardEvent) {
   if (mod && !typing && !inRoll && e.key.toLowerCase() === 'y') { e.preventDefault(); store.redo(); return; }
   if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); void saveProject(false); return; }
   if (typing) return;
+  /* ---- 音符属性键盘流（M7a，计划书 §4.4）：选中一个音之后手不离键 ----
+     ↑↓ 半音、Ctrl+↑↓ 八度、←→ 上一个/下一个音、Tab 切换、数字键 1-6 改时值。
+     卷帘里让给卷帘自己（那里有自己的方向键语义），这里只处理"焦点不在卷帘"的情况。 */
+  const cur = store.activeNote;
+  if (cur && !inRoll) {
+    /* ★ 只补卷帘**没有**的那几组：普通 ↑↓ 与 ←→ 归卷帘（它是 window 级监听，
+       而且 ←→ 在那边是"按吸附步长移动"，语义不同，重复处理会一次动两下）。 */
+    if (mod && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      const step = 12 * (e.key === 'ArrowUp' ? 1 : -1);
+      store.updateNote(cur.id, { pitch: Math.max(0, Math.min(127, cur.pitch + step)) });
+      return;
+    }
+    if (!mod && e.key === 'Tab') { e.preventDefault(); stepNote(e.shiftKey ? -1 : 1); return; }
+    if (!mod) {
+      const dur: Record<string, number> = { '1': 0.125, '2': 0.25, '3': 0.5, '4': 1, '5': 2, '6': 4 };
+      if (dur[e.key]) { e.preventDefault(); store.updateNote(cur.id, { durBeat: dur[e.key] }); return; }
+    }
+  }
   if (e.key === ' ') { e.preventDefault(); void tplay(); return; }
   if (e.key === 'Enter') { e.preventDefault(); if (!renderBlocked.value) void doRender(); return; }
   if (e.key === '[') { setTab('editor'); return; }
@@ -2374,6 +2402,10 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
       </div>
 
       <div v-if="detailOpen && sel && !isAudio" class="det">
+        <div class="det-hint small">
+          <Icon name="kbd" :size="12" />
+          <span>{{ t('键盘：↑↓ 半音 · Ctrl+↑↓ 八度 · Tab 切换音符 · 数字键 1~6 = 1/32~4 拍') }}</span>
+        </div>
         <label class="ly">
           <span>{{ t('歌词') }}</span>
           <span class="ly-wrap">
@@ -2393,6 +2425,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <button v-for="a in suggestAliases(sel.lyric)" :key="a" class="chip-btn" :title="t('替换成这个别名')"
                   @click="store.updateNote(sel.id, { lyric: a })">{{ a }}</button>
         </div>
+        <div class="det-sec">{{ t('音高与时值') }}</div>
         <label><span>{{ t('起点') }}</span><input type="number" step="0.125" min="0" :value="sel.startBeat"
           @change="store.updateNote(sel.id, { startBeat: nval($event, 0) })" /></label>
         <label><span>{{ t('时长') }}</span><input type="number" step="0.125" min="0.125" :value="sel.durBeat"
@@ -2422,6 +2455,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         </div>
         <label v-if="isDs"><span>{{ t('音分偏移') }}</span><input type="number" min="-100" max="100" :value="sel.pitchOffset || 0"
           @change="store.updateNote(sel.id, { pitchOffset: nval($event, 0) })" /></label>
+        <div class="det-sec">{{ t('发声与音色') }}</div>
         <!-- 留空 = 用引擎默认值。占位符直接显示那个默认值，免得用户以为"0 是默认" -->
         <label v-if="isUtau" :title="t('力度（0 ~ 100，默认 100）：影响辅音速度与音量，越小越柔')"><span>{{ t('力度') }}</span>
           <input type="number" min="0" max="100" placeholder="100" :value="sel.velocity ?? ''"
@@ -2791,6 +2825,11 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
   border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); color: var(--slate); }
 .det-mini b { color: var(--ink); }
 .det-mini .sp { flex: 1; }
+/* 提示行与分区标题（M7a）：把一长排 label 分组，扫读时不用逐个认 */
+.det-hint { flex: 0 0 100%; display: flex; align-items: center; gap: 6px; color: var(--stone);
+  background: var(--surface-soft); border: 1px solid var(--hairline); border-radius: 8px; padding: 4px 8px; }
+.det-sec { flex: 0 0 100%; display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 11.5px; font-weight: 700; margin-top: 2px; }
+.det-sec::after { content: ''; flex: 1; height: 1px; background: var(--hairline); }
 .det { display: flex; flex-wrap: wrap; gap: 10px; padding: 8px 12px;
        border-top: 1px solid var(--border); }
 .det label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }

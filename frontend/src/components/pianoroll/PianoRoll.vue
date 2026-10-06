@@ -679,7 +679,11 @@ function onKey(e) {
   if (mod && k === 'm') { if (ids.length) { e.preventDefault(); if (!mergeSelection()) apiHint(t('合并需要选中同一音高的 2 个以上音符')); } return; }
   if (!ids.length) return;
   if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); api.pushUndo(); api.removeNotes(ids); return; }
+  /* ★ 方向键必须让开带修饰键的组合（M7a）：本组件是 **window** 级监听，
+     宿主页面的 Ctrl+↑↓（八度）也会走到这里 —— 不挡住就会"按一次八度，实际移了 13 个半音"。
+     实测过：60 → Ctrl+↑ → 75（页面 +12 与本组件 +1 叠加），加 !mod 后是 72。 */
   const step = 1 / snapDiv.value;
+  if (mod) return;
   if (e.key === 'ArrowLeft') { e.preventDefault(); api.pushUndo(); api.moveNotes(ids, -step, 0); }
   else if (e.key === 'ArrowRight') { e.preventDefault(); api.pushUndo(); api.moveNotes(ids, step, 0); }
   else if (e.key === 'ArrowUp') { e.preventDefault(); api.pushUndo(); api.moveNotes(ids, 0, 1); }
