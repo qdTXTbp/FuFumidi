@@ -117,11 +117,23 @@ export function themePreviewPal(th, mode) {
 }
 
 // 应用主题：把调色板写成 CSS 变量（含原令牌里的强调色族）——纯应用，不做持久化
+/* 跟随系统（M9d）：mode 增加 'auto' —— 读系统的浅/深偏好。
+   ★ 有了它，"白天浅色、晚上深色"不用用户每天手动切；系统偏好变化时也会自动跟上。 */
+export function systemPrefersDark() {
+  try { return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches); } catch (e) { return true; }
+}
+/** 把存储的模式解析成实际生效的 'light' | 'dark' */
+export function resolveMode(mode) {
+  if (mode === 'auto') return systemPrefersDark() ? 'dark' : 'light';
+  return mode === 'dark' ? 'dark' : 'light';
+}
+
 export function applyTheme(name, accent, mode) {
   if (typeof document === 'undefined') return;
   const R = document.documentElement.style;
-  const lightMode = (mode || 'light') === 'light';
-  const pal = paletteFor(name, accent, mode);
+  const eff = resolveMode(mode);                 // 'auto' 在这里落地
+  const lightMode = eff === 'light';
+  const pal = paletteFor(name, accent, eff);
   // 深底主题：hc / studio 固定深色，其余由明暗模式决定
   const dark = name === 'hc' || name === 'studio' || (!lightMode && name !== 'light');
 
@@ -220,6 +232,23 @@ export function saveTheme(name, accent, mode) {
   }
 }
 
+/* 系统浅/深偏好变化 → 若用户选的是「跟随系统」，立刻重新应用（M9d）。
+   监听装在模块作用域：任何 import 了 theme.js 的入口都自动获得这个能力，不用各自记得挂。 */
+try {
+  if (typeof window !== 'undefined' && window.matchMedia) {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onPref = () => {
+      try {
+        if (loadMode() !== 'auto') return;
+        const lt = loadTheme();
+        applyTheme(lt.name, lt.accent, 'auto');
+      } catch (e) {}
+    };
+    if (mq.addEventListener) mq.addEventListener('change', onPref);
+    else if (mq.addListener) mq.addListener(onPref);
+  }
+} catch (e) {}
+
 // 读取当前主题（localStorage 优先，作为启动防闪烁的第一来源）
 export function loadTheme() {
   let name = 'fufu', accent = '', mode = 'light';
@@ -233,7 +262,7 @@ export function loadMode() {
 }
 // 切换明暗模式：应用 + 持久化
 export function setMode(mode) {
-  const m = mode === 'dark' ? 'dark' : 'light';
+  const m = mode === 'dark' ? 'dark' : (mode === 'auto' ? 'auto' : 'light');
   try { localStorage.setItem(LS_MODE, m); } catch (e) {}
   const { name, accent } = loadTheme();
   applyTheme(name, accent, m);

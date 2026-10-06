@@ -206,7 +206,7 @@ function onThemeChange() {
 }
 function onModeChange() {
   setMode(form.mode);
-  toast(t('已切换为') + (form.mode === 'dark' ? t('深色模式') : t('浅色模式')), 'ok');
+  toast(t('已切换为') + (form.mode === 'auto' ? t('跟随系统') : (form.mode === 'dark' ? t('深色模式') : t('浅色模式'))), 'ok');
 }
 function onAccentInput(e) { applyTheme(form.theme, e.target.value, form.mode); }
 function resetAccent() { form.accent = ''; applyTheme(form.theme, '', form.mode); }
@@ -948,12 +948,14 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
           <div class="field-row">
             <div>
               <div class="fr-label">{{ t('界面模式') }}</div>
-              <div class="fr-hint">{{ t('浅色明亮 · 深色护眼') }}</div>
+              <div class="fr-hint">{{ t('浅色明亮 · 深色护眼 · 跟随系统按系统偏好自动切换') }}</div>
             </div>
             <div class="fr-ctl">
               <div class="radio-pill">
                 <span :class="{ on: form.mode === 'light' }" @click="form.mode = 'light'; onModeChange()">{{ t('浅色') }}</span>
                 <span :class="{ on: form.mode === 'dark' }" @click="form.mode = 'dark'; onModeChange()">{{ t('深色') }}</span>
+          <span :class="{ on: form.mode === 'auto' }" :title="t('跟随系统的浅色/深色偏好，系统变了会自动跟上')"
+                @click="form.mode = 'auto'; onModeChange()">{{ t('跟随系统') }}</span>
               </div>
             </div>
           </div>
