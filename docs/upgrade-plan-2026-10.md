@@ -577,6 +577,47 @@ Inspector「参数」分页：每条曲线一行、可折叠、可 Solo、可锁
 - **边界拖拽**：仍受引擎契约限制（见附录 M.2），已升级为跨前后端任务；
 - **增量渲染 + A/B**（§4.6）：同样要动 engine 契约，建议与边界拖拽排在一起做。
 
+## 附录 O：M8 现状核对（2026-10-06 第十五轮，为下一轮铺路）
+
+这轮没写功能代码，而是把 M8 的两块（**多轨和声组** §4.5、**oto.ini 编辑器** §4.7）先在代码里核了一遍，
+免得下一轮凭计划书的措辞去做已经存在的东西。
+
+### O.1 §4.7 oto.ini 编辑器：**大头已经存在**
+
+`frontend/src/views/ViewVoicebank.vue` 里已经有：
+
+| 已有 | 位置 |
+| --- | --- |
+| 片段列表（改名 / 时长 / 试听 / 自动标注 / 删除） | `.vb-segs` 模板段 |
+| **波形 + 可拖拽标记**（offset / overlap / preutterance / consonant 四条线，`pointerdown/move/up` → 触控笔天然可用） | `.vb-wave` 画布 + `paramX/applyDrag` |
+| 逐片段参数表单（含 blank），改完即时重画 | `.vb-oto-grid` |
+| 自动标注 `autoOtoParams()`、导出 oto.ini + 逐片段 WAV、导出 zip | `labelSeg / exportVoicebank / exportVoicebankZip` |
+
+**真正缺的三件**（下一轮直接做这三件，不要重做上面那些）：
+
+1. **参数一览表**：现在只能"点一个片段、改一组参数"，没法一屏核对/批量改所有片段的
+   offset / consonant / blank / preutterance / overlap；
+2. **编码切换（Shift-JIS / UTF-8）**：现在三处导出**硬编码 UTF-8**（`new TextEncoder()`）——
+   UTAU 传统声库要 Shift-JIS，导 UTF-8 在 UTAU 里是乱码。渲染进程没有 Shift-JIS 编码器，
+   可行路径有两条：**主进程调 .NET**（`[Text.Encoding]::GetEncoding(932)`，项目里已有 pwsh 通道）
+   或**随包 Python**（`str.encode('shift_jis')`，项目里已带 Python）。这条要连写盘路径一起改，是个跨进程小工程；
+3. **频谱底图**（§4.3 也列了）：时域能看到切分，频域能把辅音/元音差别看清。
+
+### O.2 §4.5 多轨与和声组：**完全没做**
+
+调教页现在只有"轨道"这一层（`store.tracks`），没有"组"的概念：`singer.ts` 里没有 group 字段，
+`ViewSing` 的轨条也只列单轨。要做的（建议下一轮按此顺序）：
+
+1. 数据：`meta.groups = [{ id, name, trackIds[], gainDb?, muted?, solo? }]`（进工程文件，要过 `song_project.js` 的读写）；
+2. UI：轨条上多选 → 成组 / 解组 / 组名；组折叠显示成员；
+3. 行为：**组级参数覆盖**（组的 gain/静音/独奏叠加在成员之上）+ **组内统一编辑**（选中组＝把成员轨加入跨轨编辑的 `editTracks`——这套机制 M5b 已经做好，直接复用即可，这是最省力的一步）。
+
+### O.3 为什么不在这轮直接开写
+
+这一轮剩余的验证预算不够：oto 参数一览要能造出片段才验得了，编码切换要改跨进程写盘路径，
+和声组要动工程文件读写（`song_project.js`）——**三者都属于"改完必须真机验证"的类型**。
+按本项目一直执行的标准（每轮都在安装版上实测过才算完成），宁可不写，也不留没验证过的改动。
+
 ## 8. 风险与取舍
 1. 工作台重构面大 → 增量重构（先插 Shell 与分页，再迁移「更多」里的动作），每步可回滚可部署。
 2. 曲线性能 → 沿用现有 rAF + 只重绘数据层的画布架构。
