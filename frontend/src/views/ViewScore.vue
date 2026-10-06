@@ -37,9 +37,7 @@ const splitOpen = ref(false);
 const splitContent = ref(null);
 
 let scoreVerovio = null;
-let abcjsLoaded = false;
-let abcjsLoading = null;
-let tune = null;        // 渲染完成标记（Verovio 不使用 abcjs TuneObject）
+let tune = null;        // 渲染完成标记（Verovio 用 timemap 定位，不产出 abcjs 的 TuneObject）
 let noteEvents = [];    // [{ ms, tick, elements: [...] }]
 let flow = [];          // 视觉流向（按行阅读顺序）
 let lineTops = [], lineBottoms = [];
@@ -65,22 +63,10 @@ const trackSel = computed({
 const selTrack = computed(() => tracks.value[trackSel.value]?.tr || null);
 const selTrackIdx = computed(() => tracks.value[trackSel.value]?.idx ?? 0);
 
-/* ---------------- abcjs 动态加载（本地 vendor，离线可用） ---------------- */
-function loadAbcjs() {
-  if (abcjsLoaded) return Promise.resolve();
-  if (abcjsLoading) return abcjsLoading;
-  abcjsLoading = new Promise((resolve, reject) => {
-    if (typeof window.ABCJS !== 'undefined') { abcjsLoaded = true; resolve(); return; }
-    const s = document.createElement('script');
-    s.src = './vendor/abcjs-min.js';
-    s.onload = () => { abcjsLoaded = true; resolve(); };
-    s.onerror = () => { reject(new Error(t('abcjs 组件加载失败'))); };
-    document.head.appendChild(s);
-  });
-  return abcjsLoading;
-}
-
 /* ---------------- 状态 ---------------- */
+// 乐谱只有一个渲染器：Verovio（见下方 loadVerovio / renderStaff）。
+// 这里原来还挂着 abcjs 的加载函数，但它没有任何调用点，abcjs 也已从 vendor 删除 ——
+// 保留一个永远不会被调用的「备用渲染器」只会让人以为有第二条路径。
 function setStatus(x) { status.value = x; }
 function cssVar(name, fb) {
   try {

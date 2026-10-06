@@ -92,7 +92,14 @@ node E:\Midi\_attic\_sing_tmp\i18n-list.mjs
 ## 6. 已知的边界模糊处（诚实清单，动它们前先想清楚）
 
 1. `resources/` 有 1.5 GB 运行时与模型，**不在 git 里**，靠 README 里的准备步骤重建 —— 换机器/进虚拟机时最容易漏。
-2. `src-tauri/` 与 Electron 主路径并存，但**发布只走 Electron**；改动前先确认目标外壳。
+2. `src-tauri/` —— **已冻结，不是备用外壳**（2026-10-06 结论）。它是 Electron 主进程的分阶段移植，
+   每个模块头部都写着「移植自 main/x.js」；76 条 Tauri 命令 vs 主进程 157 条 `ipcMain.handle`，
+   版本停在 `Cargo.toml` 的 3.1.8（应用是 5.0.0-beta.2），`models.rs` / `plugins.rs` / `db.rs` 自己
+   声明了未移植的部分，CI、`package.json`、打包流程里对它的引用数为 **0**
+   （`electron-builder.yml` 明确 `!src-tauri/**`）。因此：**不许**在它上面加功能，也**不许**把它的改动
+   当作应用改动；要复活 Tauri 方案，先由人拍板并把版本追上（这是架构决定，见第 4 节）。
+   唯一还在生效的线索是 `frontend/src/bridge/tauri.js`：它按 `window.__TAURI_INTERNALS__` 判断，Electron 下
+   整段不执行，只是白占约 2 KB 的入口 chunk。
 3. `engine/` 274 个文件里有若干历史模块（`linked_list.py`、`zip_pngs.py` 等）与主链路关系不明 —— 清理前必须先用 `grep` 证明没有调用方。
 4. `renderer/dist`、`release/`、`gpu-package*` 都是产物目录，已被 `.gitignore` 排除；不要把产物当源码改。
 5. 本地探针 / venv / 历史备份现在统一放在 `E:\Midi\_attic`（见该目录 README）——引用它们时用**绝对路径**，别假设在仓库里。

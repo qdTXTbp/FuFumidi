@@ -1,5 +1,9 @@
 # AudioMuse v2.2 - Python 依赖
 #
+# ★ 遗留清单，**不是 Electron 版的依赖**：这里含 PySide6/Qt6 桌面界面（第 14 行），
+#   而 Electron 只调用 music2midi.py 的 convert / refine / probe，永远不走 run_gui()。
+#   应用实际使用的清单是 engine/requirements-bundle.txt（由 scripts/bundle-python.js 安装），
+#   CI 也已改为安装那一份。保留本文件只为追溯历史 —— 不要往这里加新依赖。#
 # 界面:    PySide6 (Qt6, 原生 Windows 11 Fluent 风格)
 # 通用:    basic-pitch (Spotify, 任意歌曲/人声/乐器, ONNX 无需 TensorFlow)
 # 钢琴:    piano-transcription-inference (ByteDance, 纯钢琴高精度)

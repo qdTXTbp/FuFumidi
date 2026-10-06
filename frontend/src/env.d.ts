@@ -13,5 +13,4 @@ declare module '*.png' {
 
 interface Window {
   fuBridge?: import('./types/ipc').FuBridge;
-  ABCJS?: any;
 }

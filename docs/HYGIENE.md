@@ -45,22 +45,34 @@ $sk = "$env:USERPROFILE\.dsh\skills\repo-hygiene-bundle\scripts\hygiene.py"
 
 ## 大文件（`HYG-LARGE`）
 
-这些是**故意入库**的运行时资源，不是构建产物：
+### 已删除（2026-10-06：逐个做过「零引用」核对，见下）
 
-| 文件 | 体积 | 为什么在仓库里 |
+| 文件 | 体积 | 为什么可以删（证据） |
 | --- | --- | --- |
-| `renderer/vendor/soundfonts/GeneralUser.sf2` | 29.8 MB | 默认音色，离线可用；文件旁边有 `GeneralUser.LICENSE.txt` |
-| `renderer/vendor/verovio-toolkit-wasm.js` | 7.0 MB | 乐谱渲染（WASM），离线可用 |
-| `renderer/fonts/HYWenHei.ttf` | 6.9 MB | 界面字体，缺了中文排版会掉字 |
-| `frontend/public/vendor/verovio-toolkit-wasm.js` | 7.0 MB | **重复**：与 `renderer/vendor/` 同名同大小（见下） |
-| `frontend/public/vendor/js-synth/libfluidsynth-2.4.6-with-libsndfile.js` | 2.3 MB | **重复**：与 `renderer/vendor/jssynth/` 同名同大小 |
-| `renderer/vendor/jssynth/libfluidsynth-2.4.6-with-libsndfile.js` | 2.3 MB | 合成器（WASM），离线可用 |
-| `engine/singing/openutau/native/osx/libworldline.dylib` | 1.8 MB | macOS 侧 OpenUtau 依赖，已在 `docs/` 标注来源 |
+| `renderer/fonts/HYWenHei.ttf` + `licence.txt` | 6.9 MB | 全仓库对 `HYWenHei` / `.ttf` / `@font-face` 的引用数为 **0**（构建后的 CSS 里也是 0）；`styles.css` 用的是 DM Sans / PingFang SC / 微软雅黑。它旁边那份 `licence.txt` 还是**汉仪商用字体**授权（仅限个人非商业），放在 MIT 仓库里分发是实打实的法律风险 |
+| `renderer/vendor/verovio-toolkit-wasm.js` | 7.0 MB | 与 `frontend/public/vendor/verovio-toolkit-wasm.js` **逐字节相同**；渲染进程按 `./vendor/verovio-toolkit-wasm.js` 从 `renderer/dist/vendor/` 加载（`main/window.js` 加载的是 `renderer/dist/index.html`），`renderer/vendor/` 这一份没有任何加载点 |
+| `renderer/vendor/vexflow-min.js` | 0.75 MB | 全仓库 `vexflow` 命中数为 **0**（只在它自己文件里）；`EditorCanvas.vue:949` 的注释还专门写了「没有采用 VexFlow」 |
+| `renderer/vendor/abcjs-min.js` + `frontend/public/vendor/abcjs-min.js` | 1.0 MB | `ViewScore.vue` 里的 `loadAbcjs()` 定义后**从未被调用**（全仓库仅此一处命中），Rollup 也把它 tree-shake 掉了；乐谱只有 Verovio 一条渲染路径 |
+| `renderer/vendor/jssynth/*` | 2.4 MB | 与 `frontend/public/vendor/js-synth/*` 重复；`main/` 只读 `renderer/vendor/soundfonts/`（`soundfonts.js:84/:371`、`dialogs.js:75`），从不读 `renderer/vendor/jssynth/`。`LICENSE.js-synthesizer.txt` 已挪到 `frontend/public/vendor/js-synth/` 保留 |
+| `frontend/public/vendor/js-synth/libfluidsynth-2.4.6.js` | 0.57 MB | 不带 libsndfile 的变体，`synth.js` / `sf2render.js` 加载的一律是 `-with-libsndfile` 版本，零加载点 |
 
-处理方式：**不引入 Git LFS**（LFS 让 clone 需要额外步骤，而这是离线可用的前提）。
-两份 `frontend/public/vendor/*` 与 `renderer/vendor/*` 的重复是有意的：
-`frontend/public/` 会被 Vite 原样拷进 `renderer/dist/`，`renderer/vendor/` 是 Electron 侧直接读取的副本；
-两边都要有，删任何一边都会让其中一条加载路径 404。核对方式与体积账见 `docs/FOUNDATION.md` 的分层一节。
+合计约 **19 MB**，同时把安装版 asar 里的一份重复（sf2 与 js-synth 既内联又 unpacked，36.9 MB）一并消掉。
+
+### 保留（体积大但确实在用）
+
+| 文件 | 体积 | 为什么必须在 |
+| --- | --- | --- |
+| `renderer/vendor/soundfonts/GeneralUser.sf2` | 29.8 MB | 默认音色，离线可用。它是**唯一**一份：渲染进程走 `../vendor/soundfonts/GeneralUser.sf2`（`synth.js:646`、`sf2render.js:51`），Node 侧走 `main/soundfonts.js`。删了就没有内置音色 |
+| `frontend/public/vendor/verovio-toolkit-wasm.js` | 7.0 MB | 乐谱渲染（WASM），运行时按 `./vendor/...` 从 `renderer/dist/vendor/` 加载 |
+| `frontend/public/vendor/js-synth/libfluidsynth-2.4.6-with-libsndfile.js` | 2.3 MB | 合成器运行时（AudioWorklet 与 `<script>` 两条路径都指向它） |
+| `engine/singing/openutau/native/**` | 4.8 MB | OpenUtau 的本地库；只有当前 RID 的那份会被 `native_lib.py` 用到，但跨平台构建需要各自的文件。来源与逐文件映射见 `engine/singing/openutau/native/README.md` |
+
+处理方式：**不引入 Git LFS** —— LFS 让 clone 多一步（要装 git-lfs 并联网拉取），
+而「离线可用」是这个项目的卖点。这些文件随仓库分发是有意的。
+
+★ 上一版这一节把 `HYWenHei.ttf` 写成「界面字体，缺了中文排版会掉字」、把两份 vendor 说成「删任何一边都会让某条路径 404」——
+两句都是**没核对就写下的**，与实测相反（见上表证据）。这条教训写在这里：
+「某个文件看起来该在用」不等于在用，判据只有一个 —— 全仓库引用数。
 
 ## CI 里发现的死代码（脚本查不出来，读 workflow 才看得见）
 

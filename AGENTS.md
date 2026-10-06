@@ -1,12 +1,13 @@
 # AGENTS.md —— 在这个仓库里工作的第一步
 
-四份约定，按顺序读：
+五份约定，按顺序读：
 
 1. **[docs/FOUNDATION.md](docs/FOUNDATION.md)** —— 架构分层、依赖方向、契约（桥 / 引擎 JSON / 持久化 / i18n）、
    新文件落点、变更规则、**每次都要跑的门禁命令**。
 2. **[.github/CODING_GUIDELINES.md](.github/CODING_GUIDELINES.md)** —— 分支、提交信息、PR、发布与上传流程。
 3. **[docs/TESTING.md](docs/TESTING.md)** —— 测试清单与"什么算验过"。
 4. **[docs/HYGIENE.md](docs/HYGIENE.md)** —— 仓库卫生审计的结论与理由（许可证、lockfile、CI 配置、体积例外）。
+5. **[docs/VENDOR.md](docs/VENDOR.md)** —— 内置第三方二进制（verovio / js-synthesizer / 音色库 / OpenUtau native）的版本、来源与 SHA-256；改 vendor 必须同时改它。
 
 几条最容易忘的硬规则：
 

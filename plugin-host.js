@@ -32,12 +32,9 @@ const { Worker } = require('worker_threads');
 const ID_RE = /^[a-z0-9][a-z0-9_-]*$/i;
 
 
-const SANDBOX_ALLOWED_BUILTINS = new Set([
-  'path', 'util', 'events', 'url', 'querystring', 'assert', 'os', 'crypto', 'buffer',
-]);
-const SANDBOX_DENIED_BUILTINS = new Set([
-  'fs', 'child_process', 'net', 'http', 'https', 'dns', 'tls', 'worker_threads', 'cluster', 'repl', 'v8',
-]);
+// 白名单/黑名单与沙箱全局对象只有一处定义（plugin-sandbox-context.js）：
+// 这里原来是抄的一份，与 plugin-worker.js 的副本已经漂移过（structuredClone 只在 host 侧）。
+const { createSandboxGlobals, SANDBOX_ALLOWED_BUILTINS, SANDBOX_DENIED_BUILTINS } = require('./plugin-sandbox-context');
 
 /**
  * 在受限 vm 上下文中加载插件 CommonJS 入口，并给插件一个白名单 require。
@@ -45,27 +42,7 @@ const SANDBOX_DENIED_BUILTINS = new Set([
  * fs/net/child_process 等高风险内置模块一律拒绝。
  */
 function loadPluginModule(entryPath, pluginRoot) {
-  const sandboxContext = vm.createContext({
-    console,
-    setTimeout, clearTimeout, setInterval, clearInterval,
-    setImmediate, clearImmediate,
-    queueMicrotask,
-    Buffer,
-    TextEncoder, TextDecoder,
-    URL, URLSearchParams,
-    structuredClone,
-    JSON,
-    Math,
-    Date,
-    process: {
-      platform: process.platform,
-      arch: process.arch,
-      env: {},
-      versions: {},
-      version: 'sandbox',
-      pid: 0,
-    },
-  });
+  const sandboxContext = vm.createContext(createSandboxGlobals({ version: 'sandbox' }));
   const cache = new Map();
 
   function load(request, parentFile) {

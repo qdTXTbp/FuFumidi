@@ -80,7 +80,13 @@ if (mode === 'full') {
   const out = path.join(dist, 'FuFumidi-source.7z');
   if (fs.existsSync(dist)) fs.rmSync(dist, { recursive: true, force: true });
   fs.mkdirSync(dist, { recursive: true });
-  const excludes = ['.git', 'node_modules', 'dist', 'release', 'release-base', 'gpu-package', '.github', 'build.log', 'build.err.log', 'build-base.log', 'build-base.err.log'].map(x => '-xr!' + x).join(' ');
+  // src-tauri/：已冻结的 Tauri 移植（见 docs/FOUNDATION.md §6），不进源码包；
+  // resources/ models/：运行期大体积资源（1.5GB+，按 README 单独准备），源码包不该带；
+  // FuFumidiData/：开发机的曲库与模型缓存（私有大文件）；release-*/：构建产物。
+  const excludes = ['.git', 'node_modules', 'dist', 'release', 'release-base', 'release-test', 'release-test2',
+    'release-beta', 'release-ci', 'release-unpacked', 'gpu-package', 'gpu-package-out', 'gpu-package-rocm',
+    'src-tauri', 'resources', 'models', 'FuFumidiData', 'soundfonts-dist', '.github',
+    'build.log', 'build.err.log', 'build-base.log', 'build-base.err.log'].map(x => '-xr!' + x).join(' ');
   console.log('[source] compressing with 7z -mx9 ...');
   execSync('"' + sevenZip + '" a -t7z -mx9 "' + out + '" "' + path.join(root, '*') + '" ' + excludes, { stdio: 'inherit', cwd: root });
   console.log('[ok] ' + out + ' (' + fs.statSync(out).size + ' bytes)');

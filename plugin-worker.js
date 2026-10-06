@@ -6,21 +6,12 @@ const path = require('path');
 const fs = require('fs');
 const vm = require('vm');
 
-const SANDBOX_ALLOWED_BUILTINS = new Set(['path','util','events','url','querystring','assert','os','crypto','buffer']);
-const SANDBOX_DENIED_BUILTINS = new Set(['fs','child_process','net','http','https','dns','tls','worker_threads','cluster','repl','v8']);
+// 与 plugin-host.js 共用同一份白名单/黑名单与沙箱全局对象（见 plugin-sandbox-context.js）。
+// 抽出来之前这里少给了 structuredClone，导致同一个插件在 worker 模式下行为不同。
+const { createSandboxGlobals, SANDBOX_ALLOWED_BUILTINS, SANDBOX_DENIED_BUILTINS } = require('./plugin-sandbox-context');
 
 function loadPluginModule(entryPath, pluginRoot) {
-  const sandboxContext = vm.createContext({
-    console,
-    setTimeout, clearTimeout, setInterval, clearInterval,
-    setImmediate, clearImmediate,
-    queueMicrotask,
-    Buffer,
-    TextEncoder, TextDecoder,
-    URL, URLSearchParams,
-    JSON, Math, Date,
-    process: { platform: process.platform, arch: process.arch, env: {}, versions: {}, version: 'worker-sandbox', pid: 0 },
-  });
+  const sandboxContext = vm.createContext(createSandboxGlobals({ version: 'worker-sandbox' }));
   const cache = new Map();
   function load(request, parentFile) {
     if (request.startsWith('.') || path.isAbsolute(request)) {

@@ -231,9 +231,14 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
       const { release: rel, channel: hit } = await resolveRelease(channel);
       const asset = assetForPlatform(rel);
       const ver = (rel.tag_name || '').replace(/^v/i, '');
+      // 下载源：**直连优先**。以前这里无条件把资源地址套上 ghfast.top ——
+      // 等于让所有用户的更新都经过一个第三方代理（代理挂了就更新不了，代理也能改包）。
+      // 现在只把代理当兜底：downloadInstallPackage 本来就是多源回退（见本文件上方），
+      // 直连失败会自动落到镜像链。
+      const directUrl = asset ? asset.browser_download_url : null;
       const mirrorUrl = DS.preferCnb(pref())
         ? DS.cnbLatestUrl('FuFumidi.Install.exe')
-        : (asset ? ('https://ghfast.top/' + asset.browser_download_url) : null);
+        : directUrl;
       return { ok: true, current: app.getVersion(), latest: ver, tag: rel.tag_name, channel: hit, notes: (rel.body || '').slice(0, 500), url: asset ? asset.browser_download_url : null, name: asset ? asset.name : null, mirror: mirrorUrl, source: pref() };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });

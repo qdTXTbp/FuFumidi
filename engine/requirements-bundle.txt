@@ -57,7 +57,19 @@ orjson>=3.10
 
 # ---- MIDI 处理 ----
 pretty_midi>=0.2.10
+# mido：engine.py / engine_omr.py 直接 import（47 处）。它以前只是 pretty_midi 的传递依赖 ——
+# 上游哪天换实现就会静默消失，所以显式声明。
+mido>=1.3
 
+# ---- 渲染与配置解析（2026-10 补齐的「隐式依赖」）----
+# 这三组一直是「装了能用、没装报错但没人知道该装什么」的状态：
+#   PyYAML   ：diffsinger/g2p.py、voicebank.py、singing/ustx/io.py 顶层 import yaml
+#   Pillow   ：engine_omr.py、engine_omr_backends.py 顶层 from PIL import（OMR 乐谱识别）
+#   muscriptor：deps.py 的 REQUIRED + DEEP_PROBE 列表里，却不在任何 requirements 文件里
+# 它们此前靠 librosa→matplotlib 之类的传递依赖侥幸存在 —— 显式写下来。
+PyYAML>=6.0
+Pillow>=10.0
+muscriptor>=0.1
 # ---- 数值与信号（通用依赖，随上面包自动解析，这里显式钉住）----
 numpy>=1.24
 scipy>=1.10
