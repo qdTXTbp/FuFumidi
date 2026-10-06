@@ -1653,6 +1653,75 @@ function toggleFullscreen() {
   if (el) el.classList.toggle('ed-fullscreen', fullscreenOn.value);
 }
 
+/* ---- 识谱校对底图（M0 收尾，§6.4）：原谱页图半透明垫在网格下面 ---- */
+const ulPath = ref(localStorage.getItem('fufumidi_underlay_path') || '');
+const ulEl = ref(null);
+const ulOpacity = ref(Number(localStorage.getItem('fufumidi_underlay_op') || 0.35));
+const ulDx = ref(Number(localStorage.getItem('fufumidi_underlay_dx') || 0));
+const ulDy = ref(Number(localStorage.getItem('fufumidi_underlay_dy') || 0));
+const ulBeats = ref(Number(localStorage.getItem('fufumidi_underlay_beats') || 16));
+const ulOpen = ref(false);
+const ulMsg = ref('');
+const underlayProp = computed(() => (ulEl.value
+  ? { el: ulEl.value, opacity: ulOpacity.value, dx: ulDx.value, dy: ulDy.value, beats: ulBeats.value }
+  : null));
+watch([ulOpacity, ulDx, ulDy, ulBeats], () => {
+  try {
+    localStorage.setItem('fufumidi_underlay_op', String(ulOpacity.value));
+    localStorage.setItem('fufumidi_underlay_dx', String(ulDx.value));
+    localStorage.setItem('fufumidi_underlay_dy', String(ulDy.value));
+    localStorage.setItem('fufumidi_underlay_beats', String(ulBeats.value));
+  } catch (e) { /* 隐私模式等，忽略 */ }
+});
+/** 载入一张图片当底图：path 可以是文件路径（桌面版）或 data:/blob: URL（变谱页交接过来的页图） */
+function setUnderlayFromUrl(src, remember = true) {
+  return new Promise((resolve) => {
+    if (!src) { resolve(false); return; }
+    const url = /^(data:|blob:|file:)/.test(src) ? src : 'file://' + String(src).replace(/\\/g, '/');
+    const img = new Image();
+    img.onload = () => {
+      ulEl.value = img;
+      ulMsg.value = '';
+      if (remember) {
+        ulPath.value = src;
+        try { localStorage.setItem('fufumidi_underlay_path', src); } catch (e) { /* 忽略 */ }
+      }
+      editor.value?.notifyExternalEdit?.();
+      resolve(true);
+    };
+    img.onerror = () => { ulMsg.value = t('这张图读不出来（换一张试试）'); resolve(false); };
+    img.src = url;
+  });
+}
+async function pickUnderlay() {
+  if (!bridge || !bridge.pickFile) { toast(t('请使用桌面版选择图片'), 'warn'); return; }
+  const p = await bridge.pickFile({ title: t('选择原谱图片'), filters: [{ name: t('图片'), extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }] });
+  if (!p) return;
+  await setUnderlayFromUrl(p);
+}
+async function clearUnderlay() {
+  ulEl.value = null;
+  ulPath.value = '';
+  try { localStorage.removeItem('fufumidi_underlay_path'); } catch (e) { /* 忽略 */ }
+  editor.value?.notifyExternalEdit?.();
+}
+/* 变谱页「在工作台校对」把页图塞在这里再跳过来（两个页面之间的一次性交接）。
+   ★ 工作台是 KeepAlive 缓存的：第二次从变谱页过来时 onMounted 不会再跑，
+     所以 onActivated 也必须收一次，否则「点一次有效、再点没反应」。 */
+function takeUnderlayHandoff() {
+  const handoff = window.__fufumidiUnderlay;
+  if (!handoff) return false;
+  window.__fufumidiUnderlay = '';
+  void setUnderlayFromUrl(String(handoff));
+  ulOpen.value = true;
+  return true;
+}
+onMounted(() => {
+  if (takeUnderlayHandoff()) return;
+  if (ulPath.value) void setUnderlayFromUrl(ulPath.value, false);
+});
+onActivated(() => { takeUnderlayHandoff(); });
+
 /* ---- 视频轨道嵌入（影视配乐对齐） ---- */
 const videoUrl = ref('');
 async function loadVideo() {
@@ -1930,6 +1999,11 @@ onBeforeUnmount(() => {
         <button class="et-btn" :class="{ active: !inspOpen }" :title="t('收起右侧检查器，把宽度让给音符视图')"
                 @click="inspOpen = !inspOpen"><Icon name="panel" :size="14" />{{ inspOpen ? t('收起检查器') : t('检查器') }}</button>
         <button class="et-btn" :class="{ active: fullscreenOn }" :title="t('全屏编辑，最大化钢琴卷帘')" @click="toggleFullscreen"><Icon name="expand" :size="14" />{{ t('全屏') }}</button>
+        <!-- M0 收尾（§6.4）：识谱校对底图 —— 原谱页图半透明垫在网格下，用新版工作台直接改音 -->
+        <button class="et-btn" data-guide="edit-underlay-btn" :class="{ active: ulOpen }"
+                :title="t('把原谱页图半透明垫在网格下，对着谱面改音符')" @click="ulOpen = !ulOpen">
+          <Icon name="wallpaper" :size="14" />{{ t('谱面底图') }}
+        </button>
         <span class="et-sep"></span>
         <button class="et-btn et-more" data-guide="edit-more" :class="{ active: advOpen }" @click="advOpen = !advOpen">
           <Icon name="chevron" :size="13" :style="{ transform: advOpen ? 'rotate(180deg)' : '' }" /> {{ t('更多') }}
@@ -1938,7 +2012,21 @@ onBeforeUnmount(() => {
 
       <!-- 高级工具区（折叠，按用途分组） -->
       <div v-if="advOpen" class="card ed-adv">
+        <!-- 视图开关在「更多」里也放一份：主工具条在窄窗口会横向溢出，
+             最右边的这几个开关会滑出可视区（实测 1585px 宽时「全屏」已看不见）。 -->
         <div class="adv-row">
+          <span class="et-label">{{ t('视图') }}</span>
+          <button class="et-btn" data-guide="edit-underlay-btn-adv" :class="{ active: ulOpen }"
+                  :title="t('把原谱页图半透明垫在网格下，对着谱面改音符')" @click="ulOpen = !ulOpen">
+            <Icon name="wallpaper" :size="14" />{{ t('谱面底图') }}
+          </button>
+          <button class="et-btn" :class="{ active: !inspOpen }" :title="t('收起右侧检查器，把宽度让给音符视图')" @click="inspOpen = !inspOpen">
+            <Icon name="panel" :size="14" />{{ inspOpen ? t('收起检查器') : t('检查器') }}
+          </button>
+          <button class="et-btn" :class="{ active: fullscreenOn }" :title="t('全屏编辑，最大化钢琴卷帘')" @click="toggleFullscreen">
+            <Icon name="expand" :size="14" />{{ t('全屏') }}
+          </button>
+          <span class="et-sep"></span>
           <span class="et-label">{{ t('剪贴板') }}</span>
           <button class="et-btn" :title="t('复制 Ctrl+C')" @click="copy"><Icon name="copy" :size="14" />{{ t('复制') }}</button>
           <button class="et-btn" :title="t('粘贴到播放头 Ctrl+V')" @click="paste"><Icon name="paste" :size="14" />{{ t('粘贴') }}</button>
@@ -2204,6 +2292,26 @@ onBeforeUnmount(() => {
         <button class="btn sm ghost" @click="clearChordBars">{{ t('隐藏') }}</button>
       </div>
 
+      <!-- 识谱校对底图（M0 收尾，§6.4）：原谱页图半透明垫在网格下，边看边改 -->
+      <div v-if="ulOpen" class="card ul-panel" data-guide="edit-underlay">
+        <span class="art-lane-label">{{ t('谱面底图') }}</span>
+        <button class="btn sm" @click="pickUnderlay"><Icon name="import" :size="12" />{{ t('选择图片…') }}</button>
+        <label class="ul-f">{{ t('不透明度') }}
+          <input type="range" min="0.05" max="0.9" step="0.05" v-model.number="ulOpacity" />
+          <em>{{ Math.round(ulOpacity * 100) }}%</em></label>
+        <label class="ul-f">{{ t('宽度(拍)') }}
+          <input class="num-input" type="number" min="1" max="512" step="1" v-model.number="ulBeats" style="width:64px" /></label>
+        <label class="ul-f">{{ t('左右') }}
+          <input class="num-input" type="number" step="2" v-model.number="ulDx" style="width:64px" /></label>
+        <label class="ul-f">{{ t('上下') }}
+          <input class="num-input" type="number" step="2" v-model.number="ulDy" style="width:64px" /></label>
+        <span class="muted small">{{ ulEl ? t('拖动网格/缩放到与谱面重合，再对着改音符') : t('还没选图：选一张原谱页图当底图') }}</span>
+        <span v-if="ulMsg" class="muted small bad">{{ ulMsg }}</span>
+        <span class="sp" />
+        <button class="btn sm ghost" :disabled="!ulEl" @click="clearUnderlay">{{ t('移除') }}</button>
+        <button class="btn sm ghost" @click="ulOpen = false">{{ t('隐藏') }}</button>
+      </div>
+
       <!-- 技法条（M5）：把低音区的 Key Switch 读成「技法段」，一眼看出每段在用什么演奏法 -->
       <div v-if="artLane" class="card art-lane">
         <span class="art-lane-label">{{ t('技法') }}</span>
@@ -2259,7 +2367,8 @@ onBeforeUnmount(() => {
                       :cc2-enabled="cc2Enabled" :cc2-number="cc2Number" :cc-mode="ccMode"
                       :default-velocity="defaultVelocity" :color-mode="colorMode"
                       @select="refreshSel" @modify="onModified" @zoom="onZoom" @ctxmenu="openCtxMenu" @hover="onHover" @step="onStep"
-                      :step-on="stepOn" :step-ticks="stepTicks" :edit-tracks="editTracks" />
+                      :step-on="stepOn" :step-ticks="stepTicks" :edit-tracks="editTracks"
+                      :underlay="underlayProp" />
         <video v-if="videoUrl" :src="videoUrl" controls playsinline class="ed-video-overlay"></video>
         <!-- 悬停工具条（M3）：压到音符上就地出现，鼠标移到条上不消失 -->
         <div v-if="hoverInfo && !midiToolOpen" class="hv-bar" :style="hoverBarStyle"
@@ -3007,6 +3116,13 @@ onBeforeUnmount(() => {
 .chord-cell em { font-style: normal; font-size: 9px; color: var(--stone); line-height: 1.1; }
 .chord-cell b { font-size: 11px; color: var(--ink); line-height: 1.2; }
 .chord-cell.manual { border-color: var(--accent); }
+
+/* M0 收尾（§6.4）：谱面底图控制条 */
+.ul-panel { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 4px 8px; margin-bottom: 6px; border-radius: 8px; }
+.ul-f { display: inline-flex; align-items: center; gap: 5px; color: var(--stone); flex: none; font-size: 11px; }
+.ul-f input[type="range"] { width: 96px; }
+.ul-f em { font-style: normal; color: var(--ink); font-family: var(--mono); min-width: 34px; text-align: right; }
+.ul-panel .sp { flex: 1; }
 
 /* 钢琴卷帘右键菜单 */
 .ctx-mask { position: fixed; inset: 0; z-index: var(--z-ctx); }

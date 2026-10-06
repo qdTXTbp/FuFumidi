@@ -263,6 +263,43 @@ async function findDupes() {
 }
 function revealLibDir() { try { bridge && bridge.openDataRoot && bridge.openDataRoot('midi'); } catch (e) {} }
 
+/* ---------------- 识谱引擎（Audiveris）----------------
+   Plan §6.2：识谱引擎属于「资源」，用户要能在资源中心一眼看到状态、装上、打开目录、卸掉。
+   以前只有「变谱」页那张提示卡能装，用户在资源中心找不到入口，也不知道自己装没装。 */
+const omr = reactive({ st: null, busy: false, text: '', err: '' });
+let offOmrProg = null;
+/** 主进程推的是阶段代码，文案在渲染层翻（否则英文/日文界面里会冒出中文进度）。 */
+const OMR_PHASE = { download: '下载识谱引擎…', extract: '解包识谱引擎…', done: '识谱引擎就绪' };
+async function loadOmr() {
+  try { omr.st = (bridge && bridge.omrEngine) ? await bridge.omrEngine.status() : null; }
+  catch (e) { omr.st = null; }
+}
+async function installOmr() {
+  if (!bridge || !bridge.omrEngine || omr.busy) return;
+  omr.busy = true; omr.err = '';
+  try {
+    const r = await bridge.omrEngine.install();
+    if (r && r.ok && r.installed) { omr.st = r; toast(t('识谱引擎已安装')); }
+    else { omr.err = String((r && r.error) || t('安装失败')); toast(t('安装失败：') + omr.err, 'warn'); }
+  } catch (e) { omr.err = String((e && e.message) || e); toast(t('安装失败：') + omr.err, 'warn'); }
+  finally { omr.busy = false; omr.text = ''; }
+}
+// 卸载是不可逆的资源删除，和「删除模型」用同一种确认方式
+async function removeOmr() {
+  if (!bridge || !bridge.omrEngine || omr.busy) return;
+  if (!window.confirm(t('卸载识谱引擎？之后图片 / PDF 识谱会退回内置引擎（离线可用，但变化音与节奏精度低）。'))) return;
+  try {
+    const r = await bridge.omrEngine.remove();
+    if (r && r.ok === false) { toast(t('卸载失败：') + String(r.error || ''), 'warn'); return; }
+    omr.st = r || null; toast(t('已卸载识谱引擎'));
+  } catch (e) { toast(t('卸载失败：') + String((e && e.message) || e), 'warn'); }
+}
+function openOmrDir() { try { bridge && bridge.omrEngine && bridge.omrEngine.openDir(); } catch (e) {} }
+const omrSize = computed(() => {
+  const b = (omr.st && omr.st.bytes) || 0;
+  return b ? (b / 1024 / 1024).toFixed(1) + ' MB' : '—';
+});
+
 /* ---------------- 诊断与配置 ---------------- */
 async function exportDiag() {
   if (!bridge || !bridge.diagExport) return;
@@ -421,6 +458,14 @@ onMounted(() => {
   loadGpu();
   loadHfToken();
   loadLibStats();
+  loadOmr();
+  if (bridge && bridge.omrEngine && bridge.omrEngine.onProgress) {
+    offOmrProg = bridge.omrEngine.onProgress((p) => {
+      if (!p) return;
+      const label = OMR_PHASE[p.phase] ? t(OMR_PHASE[p.phase]) : '';
+      omr.text = label + (p.percent ? ' ' + p.percent + '%' : '');
+    });
+  }
   if (bridge && bridge.onModelProgress) {
     offModelProg = bridge.onModelProgress((p) => {
       if (p && p.id) {
@@ -431,7 +476,10 @@ onMounted(() => {
     });
   }
 });
-onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {} offModelProg = null; } });
+onBeforeUnmount(() => {
+  if (offModelProg) { try { offModelProg(); } catch (e) {} offModelProg = null; }
+  if (offOmrProg) { try { offOmrProg(); } catch (e) {} offOmrProg = null; }
+});
 </script>
 
 <template>
@@ -635,6 +683,31 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
     <!-- UTAU 声库资源已移到「资源中心 → 模型管理 → UTAU 声库」页签：
          声库属于资源，和模型放在同一处，用户只需要记住一个入口。 -->
 
+    <!-- ============ 识谱引擎（变谱页的光学识谱增强包，Plan §6.2） ============ -->
+    <div class="card res-sec" data-guide="res-omr">
+      <div class="res-sec-head"><Icon name="score" :size="15" /> {{ t('识谱引擎') }}</div>
+      <div class="field-row">
+        <div>
+          <div class="fr-label">Audiveris</div>
+          <div class="fr-hint">{{ t('图片与 PDF 的识谱默认用内置引擎（离线可用）；装上 Audiveris（约 81 MB）后，变化音、节拍与小节结构都会明显更准。') }}</div>
+          <div class="fr-hint" v-if="omr.st">
+            <b>{{ omr.st.installed ? t('已安装') : t('未安装') }}</b>
+            <span v-if="omr.st.installed"> · v{{ omr.st.version }} · {{ omrSize }} · {{ omr.st.exe }}</span>
+            <span v-if="omr.busy" class="omr-run"> · {{ omr.text || t('安装中…') }}</span>
+            <span v-if="omr.err" class="omr-bad"> · {{ omr.err }}</span>
+          </div>
+          <div class="fr-hint" v-else>{{ t('当前环境不支持识谱引擎（请使用桌面版）') }}</div>
+        </div>
+        <div class="fr-ctl">
+          <button class="btn sm primary" v-if="omr.st && !omr.st.installed" :disabled="omr.busy" @click="installOmr">
+            <Icon name="download" :size="12" /> {{ omr.busy ? t('安装中…') : t('安装识谱引擎') }}
+          </button>
+          <button class="btn sm" v-if="omr.st && omr.st.installed" @click="openOmrDir">{{ t('打开目录') }}</button>
+          <button class="btn sm ghost" v-if="omr.st && omr.st.installed" :disabled="omr.busy" @click="removeOmr">{{ t('卸载') }}</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ============ 诊断与配置 ============ -->
     <div class="card res-sec">
       <div class="res-sec-head"><Icon name="save" :size="15" /> {{ t('诊断与配置') }}</div>
@@ -733,4 +806,8 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
 .lib-result b.bad { color: var(--error); }
 .lib-bad { font-family: var(--mono); font-size: 10.5px; color: var(--stone); word-break: break-all; margin-top: 2px; }
 .lib-err { margin-top: 8px; font-size: 11.5px; color: var(--error); word-break: break-all; }
+/* 识谱引擎（Audiveris）：路径很长，必须能换行，否则整卡被撑宽 */
+.omr-run { color: var(--accent); font-variant-numeric: tabular-nums; }
+.omr-bad { color: var(--error); }
+.res-sec[data-guide="res-omr"] .fr-hint { word-break: break-all; }
 </style>

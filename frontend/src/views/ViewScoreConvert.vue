@@ -27,7 +27,8 @@ const info = ref<any>(null);
 const midiBytes = ref<Uint8Array | null>(null);
 const tracks = ref<any[]>([]);
 const previewEl = ref<HTMLCanvasElement | null>(null);
-const overlays = ref<string[]>([]);        // 对照图 objectURL
+const overlays = ref<string[]>([]);        // 对照图 objectURL（带红圈/彩框，用来验收识别质量）
+const pages = ref<string[]>([]);            // 同顺序的**未标注**原谱页图路径（§6.4 拿它当工作台底图）
 const files = ref<string[]>([]);            // 本次转换吃进去的文件（多选/拖拽时是多个）
 // 识谱增强引擎（Audiveris）：没装就在卡片下方给一条「装了会好一个量级」的可操作提示
 const omrEngine = ref<any>(null);
@@ -198,6 +199,7 @@ async function convert(inputs: any[], label?: string) {
       drawPreview();
     } catch (e) { /* 预览失败不影响导入 */ }
     if (r.overlays && r.overlays.length) await loadOverlays(r.overlays);
+    pages.value = (r.pages && r.pages.length) ? r.pages.slice() : [];
     if (r.names && r.names.length) files.value = r.names.slice();
     progress.value = 100;
     const n = (r.info && (r.info.notes || r.info.noteCount)) || 0;
@@ -287,6 +289,20 @@ const durSec = computed(() => {
   const ms = (info.value && info.value.durationMs) || 0;
   return ms ? (ms / 1000).toFixed(1) + 's' : '—';
 });
+
+/** §6.4 校对：把原谱页图交给编辑页当半透明底图，并把这个 MIDI 载入工作台。
+ *  交接走 window.__fufumidiUnderlay（一次性），编辑页在 onMounted/onActivated 里取走。 */
+async function proofreadInWorkbench() {
+  if (!midiBytes.value || !srcName.value) { app.toast(t('请先转换出一份 MIDI'), 'warn'); return; }
+  const page = pages.value[ovIndex.value] || pages.value[0] || overlays.value[ovIndex.value] || overlays.value[0] || '';
+  if (!page) { app.toast(t('这次没留下页图：请用图片或 PDF 转换后再校对'), 'warn'); return; }
+  (window as any).__fufumidiUnderlay = page;
+  try {
+    await app.importFiles([{ name: srcName.value.replace(/\.[^.]+$/, '') + '.mid', bytes: midiBytes.value }]);
+  } catch (e: any) { app.toast(t('导入失败：') + String((e && e.message) || e), 'warn'); return; }
+  app.setView('edit');
+  app.toast(t('已把谱面页图垫到工作台底图'), 'ok');
+}
 
 async function importToLibrary() {
   if (!midiBytes.value || !srcName.value) return;
@@ -440,6 +456,9 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
 
       <div class="sc-actions">
         <button class="btn primary" @click="importToLibrary"><Icon name="music" :size="14" /> {{ t('导入曲库并打开') }}</button>
+        <button class="btn" data-guide="sc-proofread" :title="t('把原谱页图半透明垫到工作台的钢琴卷帘下，对着谱面逐音校对')" @click="proofreadInWorkbench">
+          <Icon name="wallpaper" :size="14" /> {{ t('在工作台校对') }}
+        </button>
         <button class="btn" @click="saveAs"><Icon name="save" :size="14" /> {{ t('另存为 MIDI…') }}</button>
       </div>
     </div>

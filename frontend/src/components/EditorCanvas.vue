@@ -40,6 +40,12 @@ const props = defineProps({
    *   播放头、量化/移调/删除这些操作全部复用，所以两个视图里改的都是同一批音符对象。
    */
   view: { type: String, default: 'piano' },
+  /**
+   * 识谱校对底图（M0 收尾，§6.4）：把**原谱页图**半透明垫在网格下面，
+   * 让"认出来的音符"和"谱面上印的音符"肉眼对齐，边看边改。
+   * `{ el: HTMLImageElement, opacity: 0..1, dx, dy: px, beats: 图片宽度占多少拍 }`
+   */
+  underlay: { type: Object, default: null },
 });
 const emit = defineEmits(['select', 'modify', 'zoom', 'ctxmenu', 'hover', 'step']);
 
@@ -603,6 +609,17 @@ function draw() {
   const g = ctx2d.createLinearGradient(0, 0, 0, HK);
   g.addColorStop(0, bgTop); g.addColorStop(1, bgBottom);
   ctx2d.fillStyle = g; ctx2d.fillRect(0, 0, W, HK);
+  /* 校对底图垫在**最底层**（网格、音符都压在上面）：宽度按拍算，于是缩放/滚动自动跟着走 */
+  const ul = props.underlay;
+  if (ul && ul.el && ul.el.naturalWidth) {
+    const bw = Math.max(0.5, Number(ul.beats) || 16);
+    const iw = bw * pxPerBeat.value;
+    const ih = iw * (ul.el.naturalHeight / ul.el.naturalWidth);
+    ctx2d.save();
+    ctx2d.globalAlpha = Math.max(0.04, Math.min(1, ul.opacity == null ? 0.35 : Number(ul.opacity)));
+    ctx2d.drawImage(ul.el, tickToX(0) + (Number(ul.dx) || 0), Number(ul.dy) || 0, iw, ih);
+    ctx2d.restore();
+  }
   if (!s) return;
   if (props.view === 'score') { drawScore(ctx2d, W, HK); return; }
 
@@ -1801,6 +1818,8 @@ watch(() => [props.colorMode, props.stepOn, props.stepTicks, props.defaultVeloci
 watch(() => props.chordTrack, () => { markDirty(); draw(); }, { deep: true });
 watch(() => props.audio, () => { _onsetsCache = null; markDirty(); draw(); });
 watch(() => props.ksMap, () => { markDirty(); draw(); }, { deep: true });
+/* 校对底图：换图 / 调不透明度 / 微调偏移 / 改宽度都要立刻重绘（否则又是"点了没反应"） */
+watch(() => props.underlay, () => { markDirty(); draw(); }, { deep: true });
 // 播放中由 state.playing 兜底每帧重绘；暂停时拖动进度条 / 定位也要跟着走
 watch(() => state.curSec, () => { if (!state.playing) markDirty(); });
 

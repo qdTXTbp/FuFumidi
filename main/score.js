@@ -206,7 +206,14 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
       // 多选相关的如实回报（界面按 code 翻译）
       if (multiOnlyFirst) { res.warnings = (res.warnings || []).concat([{ code: 'only-first', n: items.length }]); }
       if (truncated) { res.warnings = (res.warnings || []).concat([{ code: 'page-cap', n: MAXP }]); }
-      resolve({ ok: true, kind, info: res, bytes, overlays, sourcePath: (feed[0] || ''), fileName: name, names });
+      /* pages = **未标注**的原谱页图（overlays 是同尺寸的「识别对照图」，带红圈/彩框）。
+         §6.4 的「在工作台校对」要的是原谱页图当半透明底图 —— 标注图会把符头糊掉。
+         两者按同一顺序一一对应（引擎按输入页顺序出 overlay-01/02…）。 */
+      let pages = [];
+      if (kind === 'raster') {
+        pages = inputs.filter((p) => { try { return fs.existsSync(p); } catch (e) { return false; } });
+      }
+      resolve({ ok: true, kind, info: res, bytes, overlays, pages, sourcePath: (feed[0] || ''), fileName: name, names });
     })().catch((e) => resolve({ ok: false, error: String((e && e.message) || e) }));
   }));
 }
