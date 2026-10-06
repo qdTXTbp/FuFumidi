@@ -6,14 +6,16 @@
 //   - 分组：作品（原神 / 崩坏：星穹铁道）→ 目录（地区 / 部分）→ 角色；
 //   - 搜索：模型名称 / 分类 / 说明 全字段匹配；筛选：作品 + 目录 + 状态；
 //   - 下载：直连 ModelScope 官方地址（全球同源），完成后自动解压注册。
-import { ref, reactive, computed, onMounted, onActivated, onBeforeUnmount } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onActivated, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useVoicebankStore } from '../stores/voicebank';
+import { useDiffsingerStore } from '../stores/diffsinger';
 import { t } from '../core/i18n.js';
 
 const app = useAppStore();
 const vbStore = useVoicebankStore();
+const ds = useDiffsingerStore();
 const toast = (m, type) => app.toast(m, type);
 const bridge = window.fuBridge;
 
@@ -25,6 +27,8 @@ const workFilter = ref('all');
 const catFilter = ref('all');
 const stateFilter = ref('all');   // all | available | installed | placeholder
 
+/* 进度只做**这一份**：真正的主人是 diffsinger store（下载在后台继续、切页签也不丢），
+   这里保留一个 reactive 镜像只是为了模板写法不变；卸载重挂时从 store 恢复。 */
 const prog = reactive({});        // name -> {active, percent, received, total, error}
 
 /* ---------------- 数据加载 ---------------- */
@@ -128,45 +132,33 @@ function startDownload(m) {
   if (!bridge || !bridge.diffsingerMsDownload) return;
   if (m.placeholder) { toast(t('该声库上游尚未上传权重，暂不可下载'), 'warn'); return; }
   if (isBusy(m.name)) return;
-  prog[m.name] = { active: true, percent: 0, received: 0, total: m.size || 0, error: '' };
+  ds.initMsProgress();
+  // ★ 写 store（本地 prog 由 watch 镜像）—— 组件卸载后进度仍在
+  ds.msSet(m.name, { active: true, percent: 0, received: 0, total: m.size || 0, error: '', done: false, phase: 'download' });
   bridge.diffsingerMsDownload({ name: m.name, path: m.path }).then((r) => {
     if (r && r.ok) {
-      prog[m.name] = { active: false, percent: 100, done: true, received: 0, total: 0, error: '' };
+      ds.msSet(m.name, { active: false, percent: 100, done: true, received: 0, total: 0, error: '', phase: 'done' });
       toast(t('已安装：') + m.name, 'ok');
       refresh();
     } else if (r && r.canceled) {
-      prog[m.name] = { active: false, percent: 0, received: 0, total: 0, error: '' };
+      ds.msSet(m.name, { active: false, percent: 0, done: false, received: 0, total: 0, error: '', phase: 'canceled' });
     } else {
-      prog[m.name] = { active: false, percent: 0, received: 0, total: 0, error: (r && r.error) || t('下载失败') };
-      toast(prog[m.name].error, 'warn');
+      const msg = (r && r.error) || t('下载失败');
+      ds.msSet(m.name, { active: false, percent: 0, done: false, received: 0, total: 0, error: msg, phase: 'error' });
+      toast(msg, 'warn');
     }
   }).catch((e) => {
-    prog[m.name] = { active: false, percent: 0, received: 0, total: 0, error: String((e && e.message) || e) };
+    ds.msSet(m.name, { active: false, percent: 0, done: false, received: 0, total: 0, error: String((e && e.message) || e), phase: 'error' });
   });
 }
 function cancelDownload(name) {
   if (bridge && bridge.diffsingerMsCancelDownload) bridge.diffsingerMsCancelDownload(name);
 }
 
-function onProgress(p) {
-  if (!p || !p.id) return;
-  const cur = prog[p.id] || {};
-  const next = {
-    ...cur,
-    percent: p.percent || 0,
-    received: p.received || 0,
-    total: p.total || cur.total || 0,
-    speed: p.speed || 0,
-    phase: p.phase || cur.phase || '',
-    text: p.text || '',
-    error: p.error || '',
-  };
-  if (p.done || p.phase === 'done') { next.active = false; next.percent = 100; next.done = true; next.phase = 'done'; }
-  else if (p.phase === 'error') { next.active = false; next.error = p.error || t('下载失败'); }
-  else if (p.phase === 'canceled') { next.active = false; next.percent = 0; }
-  else next.active = true;
-  prog[p.id] = next;
-  if (p.phase === 'done') refresh();
+/** 把 store 里的进度镜像到本地（切页签回来立刻能看到真实进度） */
+function syncFromStore() {
+  for (const k of Object.keys(ds.msProgress)) prog[k] = ds.msProgress[k];
+  for (const k of Object.keys(prog)) if (!(k in ds.msProgress)) delete prog[k];
 }
 
 /** 阶段文案：下载 / 解压 / 安装（与全局通知条进度语义一致） */
@@ -183,12 +175,15 @@ function fmtSpeed(bps) {
   return bps >= 1e6 ? (bps / 1e6).toFixed(1) + ' MB/s' : (bps / 1e3).toFixed(0) + ' KB/s';
 }
 
-let off = null;
+let stopWatch = null;
 onMounted(async () => {
+  // ★ 订阅在 store 里（幂等），组件只做镜像 —— 组件卸载不再让进度"消失"
+  ds.initMsProgress();
+  syncFromStore();
+  stopWatch = watch(() => ds.msProgress, () => syncFromStore(), { deep: true });
   await refresh();
-  if (bridge && bridge.onDiffsingerMsProgress) off = bridge.onDiffsingerMsProgress(onProgress);
 });
-onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
+onBeforeUnmount(() => { if (stopWatch) { try { stopWatch(); } catch (e) {} stopWatch = null; } });
 // KeepAlive 保活：视图被缓存，切回来不会重跑 onMounted。别处（导入 zip / 删除声库）
 // 改过声库目录后，这里的「已安装」标记与体积会停在旧值 —— 激活时重拉一次目录。
 // 加 loading 守卫，避免和进行中的请求叠加。

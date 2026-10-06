@@ -1046,6 +1046,31 @@ export const useSingerStore = defineStore('singer', {
      * ★ **一个入口，按 `track.engine` 分派** —— 这是「统一」的核心：
      *   用户不需要先切引擎，点渲染即可。
      */
+    /**
+     * 订阅引擎的渲染进度。
+     *
+     * ★ 引擎侧**一直在发**：`engine_diffsinger.py` 会打 `###PROG {"percent","text"}`，
+     *   `main/diffsinger.js` 收下来转成 `diffsinger:renderProgress`，preload 也早暴露了
+     *   `onDiffsingerRenderProgress` —— 但渲染进程里**没有任何地方订阅它**，
+     *   所以 4 分钟的歌进度条从头到尾停在 0（用户实测反馈）。
+     *
+     * @param base 本段进度在总进度里的起点（渲染全部轨时按轨分摊）
+     * @param span 本段占的百分比宽度
+     */
+    _watchRenderProgress(base = 0, span = 100): () => void {
+      const b = window.fuBridge as any;
+      if (!b || typeof b.onDiffsingerRenderProgress !== 'function') return () => {};
+      const off = b.onDiffsingerRenderProgress((p: any) => {
+        if (!p) return;
+        const pct = Number(p.percent);
+        if (Number.isFinite(pct)) {
+          this.progress = Math.max(0, Math.min(100, Math.round(base + (pct / 100) * span)));
+        }
+        if (p.text) this.msg = String(p.text);
+      });
+      return () => { try { off(); } catch (e) { /* 已卸载 */ } };
+    },
+
     async renderTrack(trackId?: string): Promise<string> {
       const tr = trackId ? this.tracks.find(t => t.id === trackId) : this.activeTrack;
       if (!tr) return '没有可渲染的轨道';
@@ -1055,9 +1080,11 @@ export const useSingerStore = defineStore('singer', {
       this.busy = true;
       this.progress = 0;
       this.msg = '';
+      const offProg = tr.engine === 'diffsinger' ? this._watchRenderProgress(0, 100) : () => {};
       try {
         return await this._renderOne(tr);
       } finally {
+        offProg();
         this.busy = false;
         this.progress = 100;
       }
@@ -1104,7 +1131,15 @@ export const useSingerStore = defineStore('singer', {
           const who = t.name || t.singerName || (t.engine === 'utau' ? 'UTAU' : 'DiffSinger');
           this.msg = '正在渲染 ' + i + '/' + todo.length + '：' + who;
           this.progress = Math.round((i - 1) / todo.length * 100);
-          const err = await this._renderOne(t);
+          const offProg = t.engine === 'diffsinger'
+            ? this._watchRenderProgress((i - 1) / todo.length * 100, 100 / todo.length)
+            : () => {};
+          let err = '';
+          try {
+            err = await this._renderOne(t);
+          } finally {
+            offProg();
+          }
           if (err) failed.push(who + '（' + err + '）');
         }
       } finally {
