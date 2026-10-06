@@ -128,9 +128,18 @@ def render_phrase(cfg: Dict, on_progress=None,
     warnings: List[str] = []
 
     _prog(on_progress, 5, '加载声库配置…')
-    singer = load_singer(voicebank, cfg.get('vocoder') and None or None)
-    if cfg.get('vocoder'):
-        warnings.append('暂不支持 --vocoder 覆盖声码器（上游支持，本项目未实现）')
+    # ★ 以前这里写的是 `cfg.get('vocoder') and None or None`（恒为 None）：覆盖参数从来没生效，
+    #   却每次都报一条「暂不支持」—— 实际上通用声码器是**能用**的，没有 dsvocoder 的声库正需要它。
+    _voc = cfg.get('vocoder') or None
+    singer = load_singer(voicebank, _voc)
+    if _voc:
+        _name = os.path.basename(str(_voc).rstrip('\\/'))
+        try:
+            _used = os.path.abspath(os.path.dirname(str(_voc))) == os.path.abspath(singer.vocoder.root)
+        except Exception:
+            _used = False
+        warnings.append(('声码器：使用外部通用声码器（%s）' % _name) if _used
+                        else ('声码器：使用声库自带（已忽略外部 %s）' % _name))
     # ★ 语言来自轨道（cfg.language），不再硬编码 'zh'：
     #   多语声库（如 花火 带 zh/ja/ko/en 四本词典）用日文/韩文歌词时必须能切换。
     lang = str(cfg.get('language') or 'zh')

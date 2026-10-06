@@ -791,7 +791,31 @@ type LyricMode = 'auto' | 'char' | 'space' | 'line';
 type FillMode = 'seq' | 'loop' | 'trim';
 /** 对齐方式：seq=顺序（老行为）；spread=整首按比例；phrases=按乐句（P1：字数≠音符数时的正解） */
 type AlignMode = 'seq' | 'spread' | 'phrases' | 'split';
-const lyricDlg = ref<{ text: string; mode: LyricMode; fill: FillMode; align: AlignMode; gap: number } | null>(null);
+const lyricDlg = ref<{ text: string; mode: LyricMode; fill: FillMode; align: AlignMode; gap: number;
+                            alts?: string[][]; altsFrom?: string[] } | null>(null);
+
+/** 多音字候选：与转换后的音节一一对应（长度 >1 的才是多音字） */
+const heteroList = computed(() => {
+  const d = lyricDlg.value;
+  if (!d || !d.alts || !d.alts.length) return [];
+  const toks = d.text.split(/\s+/).filter(Boolean);
+  const out: { index: number; ch: string; current: string; options: string[] }[] = [];
+  d.alts.forEach((opts, i) => {
+    if (!opts || opts.length < 2) return;
+    out.push({ index: i, ch: (d.altsFrom && d.altsFrom[i]) || '', current: toks[i] || '', options: opts.slice(0, 4) });
+  });
+  return out.slice(0, 16);
+});
+/** 点候选：替换第 index 个音节（不动其它字，用户可反复换） */
+function pickPinyin(index: number, syl: string) {
+  const d = lyricDlg.value;
+  if (!d) return;
+  const toks = d.text.split(/\s+/).filter(Boolean);
+  if (index < 0 || index >= toks.length) return;
+  toks[index] = syl;
+  d.text = toks.join(' ');
+  d.mode = 'space';
+}
 const pinyinBusy = ref(false);
 
 const CJK_RE = /[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/;
@@ -905,13 +929,19 @@ async function toPinyin() {
   if (!b || typeof b.singToPinyin !== 'function') { sayErr(t('当前环境不支持转拼音'), t('请使用桌面版。')); return; }
   pinyinBusy.value = true;
   try {
-    const r = await b.singToPinyin({ tokens: lyricTokens.value });
+    const from = lyricTokens.value.slice();
+    // alternatives：pypinyin 的 heteronym 结果 —— 多音字给「换成…」候选，不用手打拼音
+    const r = await b.singToPinyin({ tokens: lyricTokens.value, alternatives: true });
     if (!r || !r.ok) { sayErr(t('转拼音失败：') + ((r && r.error) || t('未知原因'))); return; }
     const syls: string[] = (r.syllables || []).filter(Boolean);
     d.text = syls.join(' ');
     d.mode = 'space';
-    say(t('已转拼音：') + String(syls.length) + t(' 个音节'), 'ok',
-        { hint: t('多音字（不/了/着/得…）请对着歌词改一下，再点「填入」。') });
+    d.alts = Array.isArray(r.alternatives) ? r.alternatives : [];
+    d.altsFrom = from;
+    const nHetero = d.alts.filter((a: string[]) => a && a.length > 1).length;
+    say(t('已转拼音：') + String(syls.length) + t(' 个音节')
+        + (nHetero ? t('（其中 ') + String(nHetero) + t(' 个多音字可用下面的候选改）') : ''),
+        'ok', { hint: nHetero ? t('多音字默认取最常见读音；不对就点候选。') : t('再点「填入」把拼音填给音符。') });
   } finally { pinyinBusy.value = false; }
 }
 
@@ -2006,6 +2036,16 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             <em v-if="lyricTokens.length > 24">…</em>
           </span>
         </div>
+        <!-- 多音字候选：不/了/着/得… 自动转换必然有一半是错的，给个一键换 -->
+        <div v-if="heteroList.length" class="singdlg-py">
+          <span class="muted">{{ t('多音字：') }}</span>
+          <span v-for="h in heteroList" :key="h.index" class="py-item">
+            <b>{{ h.ch }}</b>
+            <button v-for="o in h.options" :key="o" class="chip-btn"
+                    :class="{ on: o === h.current }" @click="pickPinyin(h.index, o)">{{ o }}</button>
+          </span>
+          <span v-if="heteroList.length >= 16" class="muted small">{{ t('（只列出前 16 个）') }}</span>
+        </div>
         <div class="singdlg-foot">
           <span class="muted">{{ t('UTAU 中文声库要先转拼音（引擎只认别名）；DiffSinger 直接用汉字。') }}</span>
           <span class="sp" />
@@ -2343,6 +2383,10 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .singdlg-head .sp, .singdlg-foot .sp { flex: 1; }
 .singdlg-ta { width: 100%; min-height: 92px; resize: vertical; font: inherit; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: inherit; }
 .singdlg-q { flex: 1; min-width: 180px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: inherit; }
+.singdlg-py { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 2px 2px;
+              border-top: 1px dashed var(--hairline); margin-top: 6px; font-size: 12px; }
+.singdlg-py .py-item { display: inline-flex; align-items: center; gap: 4px; }
+.singdlg-py .py-item b { font-weight: 600; }
 .singdlg-prev { display: flex; flex-direction: column; gap: 4px; }
 .singdlg-prev .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .singdlg-prev .mismatch { color: var(--warn-text, var(--stone)); }

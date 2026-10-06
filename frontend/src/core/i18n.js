@@ -15,6 +15,12 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  "多音字：": "Heteronyms: ",
+  "（其中 ": " (",
+  " 个多音字可用下面的候选改）": " heteronyms can be changed below)",
+  "多音字默认取最常见读音；不对就点候选。": "Heteronyms default to the most common reading; click a candidate if it is wrong.",
+  "再点「填入」把拼音填给音符。": "Then press Fill to assign the pinyin to the notes.",
+  "（只列出前 16 个）": "(showing the first 16)",
   "上次的自定义背景图已找不到，已切回主题": "The custom background image could not be found; switched back to the theme.",
   "在制作工具里：上传一段按音节录制的音频（或直接录音）→ 自动切分 → 自动标注 oto → 导出声库文件夹 / 压缩包。": "In the maker: upload a per-syllable recording (or record directly) → auto-split → auto-label oto → export the voicebank folder / zip.",
   "换源重试中… ": "Retrying another mirror… ",

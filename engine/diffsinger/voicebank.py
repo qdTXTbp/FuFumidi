@@ -169,12 +169,22 @@ def load_vocoder(acoustic: DsAcousticConfig, dependency_dir: Optional[str] = Non
                  ) -> DsVocoderConfig:
     """对应 `DiffSingerSinger.getVocoder()`（:200-211）。
 
-    ★ **声库自带 `dsvocoder/` 优先**，否则去 `Dependency/<dsconfig.vocoder>`。
+    ★ **声库自带 `dsvocoder/` 优先**；没有时用调用方给的**通用声码器**（`dependency_dir` 指向
+      含 `vocoder.yaml` 的目录，或该目录里的某个 .onnx —— 主进程传的就是 onnx 路径）；
+      再退到上游语义的 `Dependency/<dsconfig.vocoder>`。
       `pitch_controllable` 在**这里**（vocoder.yaml），不在 dsconfig。
     """
     local = os.path.join(acoustic.root, 'dsvocoder')
+    # 调用方给的覆盖：目录，或目录里的文件（取父目录）
+    ov_dir = None
+    if dependency_dir:
+        ov_dir = dependency_dir if os.path.isdir(dependency_dir) else os.path.dirname(dependency_dir)
     if os.path.isfile(os.path.join(local, 'vocoder.yaml')):
-        root = local
+        root = local                      # 声库自带的最准，覆盖请求在这里被忽略（调用方会提示）
+    elif ov_dir and os.path.isfile(os.path.join(ov_dir, 'vocoder.yaml')):
+        # ★ 通用声码器（如 nsf_hifigan_44.1k_hop512_128bin_2024.02）：没有 dsvocoder 的声库靠它才渲染得出来。
+        #   以前调用方把覆盖参数写成了恒 None，于是这类声库直接报"无法定位声码器"。
+        root = ov_dir
     else:
         if not dependency_dir:
             raise RenderError(

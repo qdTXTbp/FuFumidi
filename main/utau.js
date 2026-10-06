@@ -190,6 +190,8 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
     if (tokens && tokens.length > 4000) return resolve({ ok: false, error: '一次最多 4000 个 token' });
     try {
       const args = tokens ? ['--tokens', JSON.stringify(tokens)] : ['--text', text];
+      // 多音字候选：pypinyin 的 heteronym 结果（界面用来给「换成…」）
+      if (cfg && cfg.alternatives) args.push('--alternatives');
       spawnEngine(args, {
         script: 'engine_pinyin.py',
         timeoutMs: 60 * 1000,

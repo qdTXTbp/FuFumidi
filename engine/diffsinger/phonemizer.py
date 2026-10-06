@@ -207,8 +207,8 @@ def build_linguistic_inputs(singer: DsSinger, tokens: Sequence[int],
         'word_dur': np.asarray([list(word_dur)], dtype=np.int64),
     }
     if singer.dur.use_lang_id:
-        raise RenderError('use_lang_id=true 的 linguistic 还需要 languages 输入，'
-                          '当前未实现（该声库 use_lang_id=false）')
+        raise RenderError('该声库是多语言（use_lang_id=true）声库：linguistic 还需要按音符传 languages，'
+                          '本项目尚未实现（Ria 这类多语声库暂时渲不了；单语声库不受影响）')
     return feeds
 
 
