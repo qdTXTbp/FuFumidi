@@ -18,6 +18,10 @@ organ / electric_piano / clean_electric_guitar …），再由 muscriptor 的 mi
   2. `merge_melody()`：只有当这些候选**在时间上基本互斥**（同一时刻只有一条在响，说明是
      「一条线换乐器」而不是「两种乐器同时在演奏」）时，才把它们合并成一条轨、统一用主导组
      的音色 —— 这样旋律的音色就稳定下来，音符本身一个不动。
+  3. `unify_lead()`：第二遍，按**音**处理。实测《甩葱歌》的 `clean electric guitar` 轨
+     既弹伴奏又弹旋律（自复调 0.6+，第一遍盖不住），归并后主旋律仍在 guitar/voice 之间
+     每 0.25s 跳一次。这一遍把「此刻起音最高、且自己在同轨里不是和弦音」的音收进主导组；
+     同簇 >=3 个音高的和弦织体一律不拆。
 
 刻意不做的事：不做第二次推理（那会把转录时间翻倍）；音符时值/力度/时间一律保持原样。
 """
@@ -33,6 +37,18 @@ MAX_OVERLAP_RATIO = 0.25
 # 自复调上限：旋律候选必须是「基本单声部」的线（和弦/琶音伴奏轨不参与判定）。
 # 实测《甩葱歌》伴奏钢琴轨的自复调明显高于此值，旋律各组接近 0。
 MAX_SELF_POLYPHONY = 0.35
+# —— 第二遍（主旋律线统一）用的常数 ——
+# 主导组的时间跨度前后各放宽多少秒，作为「主旋律活动区」。区外（前奏/尾奏）不动。
+LEAD_REGION_PAD = 1.5
+# 同一时刻（±45ms 内起音）的判定窗口：用来分「同一簇里的多个音」。
+CHORD_WINDOW = 0.045
+# 同一条轨在同一簇里有 >= 这么多个不同音高 = 柱式和弦/织体，整簇保留不拆。
+# 实测《甩葱歌》吉他轨是「高音旋律 + 低音」两音一簇（2 个音高）→ 旋律音要能搬走；
+# 钢琴伴奏是 3-5 个音一簇的和弦 → 必须原样保留，否则伴奏被拆散。
+CHORD_MIN_VOICES = 3
+# 与目标轨已有音符重合到这个程度（时间 ±30ms、音高 ±1 半音）时，判为重复音：丢掉而不是搬过去。
+DUP_WINDOW = 0.03
+# 主旋律线统一这一遍的说明见 unify_lead()。
 
 
 def _notes_of(inst):
@@ -186,8 +202,124 @@ def merge_melody(path, out_path=None, info=None):
             "out": os.path.basename(out), "info": info}
 
 
+def unify_lead(path, out_path=None, info=None, log=None):
+    """把「主旋律线」统一到主导组的音色（第二遍）。
+
+    第一遍 merge_melody() 只能合并**基本单声部**的候选轨；实测《甩葱歌》里
+    clean electric guitar（306 音）既弹伴奏又弹旋律（高音旋律 + 低音两音一簇），
+    自复调 0.6 以上，进不了候选，于是归并后主旋律仍在 guitar / voice 之间来回跳
+    （24-28s、102-110s 实测每 0.25s 换一次音色）。
+
+    这一遍按**音**处理，不按轨处理：
+      · 只在主导组的时间跨度内动手（前奏/尾奏保持原样）；
+      · 只搬「此刻起音最高（±45ms 窗内别的轨没有更高的音）」的那一粒；
+      · 同轨同簇 >=3 个音高（和弦/柱式织体）整簇保留 —— 伴奏不会被拆散；
+      · 目标轨已有同音时判为重复音，直接丢掉（避免变成齐奏双音）。
+    搬移不改音高/起止/力度，因此不会改变节奏与表情。
+    """
+    say = log or (lambda *_a, **_k: None)
+    info = info or detect_melody_group(path)
+    name = (info.get("group") or "").strip()
+    if not name:
+        return {"unified": False, "reason": "no-melody-group", "info": info}
+    import bisect
+    import pretty_midi
+
+    pm = pretty_midi.PrettyMIDI(path)
+    tgt_idx = None
+    for i, inst in enumerate(pm.instruments):
+        if (inst.name or "").strip() == name and _notes_of(inst):
+            tgt_idx = i
+            break
+    if tgt_idx is None:
+        return {"unified": False, "reason": "target-track-missing", "group": name, "info": info}
+    target = pm.instruments[tgt_idx]
+    t0 = min(n.start for n in target.notes)
+    t1 = max(n.end for n in target.notes)
+    lo, hi = t0 - LEAD_REGION_PAD, t1 + LEAD_REGION_PAD
+    # 全场所有非鼓轨的「起音时刻 → 音高」索引：判断「这一粒此刻是不是最高音」。
+    # 只看起音（不看延续音）：听感上的主旋律由「谁在此刻起音最高」决定，
+    # 若按延续音算，钢琴一个长音就会把后面所有旋律音都判成"不是最高音"（实测踩过）。
+    onsets = sorted((n.start, n.pitch, i) for i, inst in enumerate(pm.instruments)
+                    if _notes_of(inst) and not getattr(inst, "is_drum", False)
+                    for n in _notes_of(inst))
+    onset_times = [x[0] for x in onsets]
+    moved = 0
+    dropped = 0
+    moved_by = {}
+    skipped = {"below_register": 0, "out_of_region": 0, "chord": 0, "not_top": 0}
+    skipped_by = {}
+    for i, inst in enumerate(pm.instruments):
+        if i == tgt_idx or getattr(inst, "is_drum", False) or not _notes_of(inst):
+            continue
+        notes = inst.notes
+        ordered = sorted(notes, key=lambda x: x.start)
+        starts = [x.start for x in ordered]
+        pitches = [x.pitch for x in ordered]
+        keep = []
+        for n in notes:
+            if n.pitch < MELODY_MIN_PITCH or n.start < lo or n.start > hi:
+                skipped["below_register" if n.pitch < MELODY_MIN_PITCH else "out_of_region"] += 1
+                keep.append(n)
+                continue
+            # 同轨同簇的音高集合：>=3 个不同音高 = 和弦/柱式织体 → 整簇保留
+            j = bisect.bisect_left(starts, n.start - CHORD_WINDOW)
+            voices = set()
+            while j < len(starts) and starts[j] <= n.start + CHORD_WINDOW:
+                voices.add(pitches[j])
+                j += 1
+            if len(voices) >= CHORD_MIN_VOICES:
+                skipped["chord"] += 1
+                skipped_by.setdefault("chord", {})[inst.name or ("track%d" % i)] = \
+                    skipped_by.setdefault("chord", {}).get(inst.name or ("track%d" % i), 0) + 1
+                keep.append(n)
+                continue
+            # 此刻（±45ms 起音窗）别的轨有没有更高的音？有 → 它不是主旋律线，留下当伴奏
+            k = bisect.bisect_left(onset_times, n.start - CHORD_WINDOW)
+            is_top = True
+            while k < len(onset_times) and onset_times[k] <= n.start + CHORD_WINDOW:
+                st, pc, ti = onsets[k]
+                if ti != i and pc > n.pitch:
+                    is_top = False
+                    break
+                k += 1
+            if not is_top:
+                skipped["not_top"] += 1
+                skipped_by.setdefault("not_top", {})[inst.name or ("track%d" % i)] = \
+                    skipped_by.setdefault("not_top", {}).get(inst.name or ("track%d" % i), 0) + 1
+                keep.append(n)
+                continue
+            if any(abs(t.start - n.start) <= DUP_WINDOW and abs(t.pitch - n.pitch) <= 1 for t in target.notes):
+                dropped += 1
+                continue
+            target.notes.append(n)
+            key = inst.name or ("track%d" % i)
+            moved_by[key] = moved_by.get(key, 0) + 1
+            moved += 1
+        inst.notes = keep
+    if not moved and not dropped:
+        return {"unified": False, "reason": "single-lead-already", "group": name, "info": info}
+    target.notes.sort(key=lambda n: (n.start, n.pitch))
+    pm.instruments = [x for x in pm.instruments if _notes_of(x) or getattr(x, "is_drum", False)]
+    out = out_path or path
+    pm.write(out)
+    say("[识别] 主旋律线统一到「%s」：搬移 %d 个音符、去重 %d 个（%s），跨度 %.1f-%.1fs" % (
+        name, moved, dropped, " / ".join("%s×%d" % (k, v) for k, v in sorted(moved_by.items(), key=lambda x: -x[1])),
+        t0, t1))
+    return {"unified": True, "moved_notes": moved, "dropped_dups": dropped, "moved_by": moved_by,
+            "skipped": skipped, "skipped_by": skipped_by,
+            "kept_track": name, "t0": round(t0, 2), "t1": round(t1, 2), "out": os.path.basename(out)}
+
+
 def smart_finish(path, mode="auto", log=None):
-    """转录收尾入口：mode=auto 时按识别结果归并；其它值原样返回。"""
+    """转录收尾入口：mode=auto 时做两遍处理；其它值原样返回。
+
+    第一遍 merge_melody()  —— 把「同一条旋律被判成多种乐器」的单声部候选轨并成一条；
+    第二遍 unify_lead()    —— 把复调轨（吉他/钢琴）里那些「此刻最高音」的旋律音也收进
+                              主导组，解决第一遍盖不住的"来回换音色"（实测《甩葱歌》
+                              归并后仍在 guitar/voice 之间每 0.25s 跳一次）。
+    任何一遍失败都不能让整次转录失败（调用方还会再兜一层 try）。
+    """
     say = log or (lambda *_a, **_k: None)
     if str(mode or "").strip().lower() not in ("auto", "smart", ""):
         return {"merged": False, "reason": "manual-instruments"}
@@ -196,12 +328,20 @@ def smart_finish(path, mode="auto", log=None):
         return {"merged": False, "reason": "no-melody-candidate", "info": info}
     say("[识别] 旋律乐器组：%s（覆盖 %.0f%% 旋律时长，候选 %d 个，时间重叠 %.2f）" % (
         info["group"] or "?", info["confidence"] * 100, info["fragments"], info["overlap"]))
-    if not info["should_merge"]:
-        say("[识别] 候选之间时间重叠较大（%.2f），判断为多条乐器同时演奏，保持原样" % info["overlap"])
-        return {"merged": False, "reason": "polyphonic", "info": info}
-    res = merge_melody(path, info=info)
-    if res.get("merged"):
-        say("[识别] 同一旋律被判成 %d 种乐器（%s），已归并到「%s」，音色统一 · 搬移 %d 个音符" % (
-            info["fragments"], " / ".join(c["name"] or "?" for c in info["candidates"]),
-            res["kept_track"], res["moved_notes"]))
+    res = {"merged": False, "reason": "polyphonic", "info": info}
+    if info["should_merge"]:
+        res = merge_melody(path, info=info)
+        if res.get("merged"):
+            say("[识别] 同一旋律被判成 %d 种乐器（%s），已归并到「%s」，音色统一 · 搬移 %d 个音符" % (
+                info["fragments"], " / ".join(c["name"] or "?" for c in info["candidates"]),
+                res["kept_track"], res["moved_notes"]))
+    else:
+        say("[识别] 候选之间时间重叠较大（%.2f），按多条乐器同时演奏处理，不做整轨归并" % info["overlap"])
+    # 第二遍：整轨归并盖不住的复调轨里的旋律音（吉他/钢琴既弹伴奏又弹旋律）
+    try:
+        uni = unify_lead(path, info=info, log=say)
+        res["unified"] = uni
+    except Exception as e:
+        say("[识别] 主旋律线统一跳过：" + str(e)[:160])
+        res["unified"] = {"unified": False, "error": str(e)[:160]}
     return res
