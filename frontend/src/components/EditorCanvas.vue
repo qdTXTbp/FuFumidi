@@ -22,6 +22,7 @@ const props = defineProps({
   // 步进输入（M4）：开启后画笔不在「点哪落哪」，而是落在**步进指针**上并自动前进
   stepOn: { type: Boolean, default: false },
   stepTicks: { type: Number, default: 120 },   // 每步长度（tick）
+  editTracks: { type: Array, default: () => [] },  // 跨轨编辑：额外的轨道下标（当前轨始终参与）
   scaleSpec: { type: Object, default: null },     // { root, type, custom } 调内编辑用的音阶；空则按曲目自动判断
   scaleMode: { type: String, default: 'off' },    // off | highlight（高亮调内音） | constrain（约束到调内音）
   chordTrack: { type: Array, default: () => [] }, // P1-2 和弦轨 [{ tick, endTick, pcs }]；约束时并入当前小节的调内音
@@ -48,7 +49,7 @@ const ccCanvas = ref(null);
 const ccCanvas2 = ref(null);
 let ctx2d = null;
 const CC_LANE_H = 96;
-const CC_NAMES = { 1: 'Modulation', 7: 'Volume', 10: 'Pan', 11: 'Expression', 64: 'Sustain' };
+const CC_NAMES = { 1: 'Modulation', 2: 'Breath', 4: 'Foot', 5: 'Portamento', 7: 'Volume', 8: 'Balance', 10: 'Pan', 11: 'Expression', 64: 'Sustain', 65: 'Sostenuto', 66: 'Sostenuto2', 67: 'Soft', 68: 'Legato', 71: 'Resonance', 74: 'Brightness', 91: 'Reverb', 93: 'Chorus' };
 
 /* ---------------- 视图状态 ---------------- */
 const zoom = ref(1);            // 缩放倍率
@@ -73,6 +74,17 @@ function curTrack() {
   const s = song(); if (!s) return null;
   return s.tracks[props.trackIndex] || null;
 }
+/* ---------------- 跨轨编辑（M5b） ----------------
+   勾选若干轨后，这些轨的音符一起显示、一起命中、一起选中、一起被批量工具处理。
+   撤销必须走**全量快照**（ti = -1）：普通快照只存当前轨，跨轨改动会漏。
+   乐谱视图仍是单轨（谱面排版本来就按一轨一行），这里只管卷帘/鼓组。 */
+function editTrackList() {
+  const s = song(); if (!s) return [];
+  const idx = [props.trackIndex];
+  for (const i of (props.editTracks || [])) if (i !== props.trackIndex) idx.push(i);
+  return idx.filter((i) => s.tracks[i]).map((i) => s.tracks[i]);
+}
+function isMultiEdit() { return (props.editTracks || []).length > 0; }
 /* 初始显示音域：跟随曲目内容，避免高音音符落在画布外 */
 function computeRange() {
   const s = song();
@@ -207,6 +219,7 @@ function tempoRestore(s, arr) {
 }
 function pushState() {
   const tr = curTrack(); if (!tr) return;
+  if (isMultiEdit()) { pushStateForTrack(-1); return; }   // 跨轨：存全量，撤销才盖得住
   undoStack.push({ ti: props.trackIndex, tempo: tempoSnap(), notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
   if (undoStack.length > 80) undoStack.shift();
   redoStack.length = 0;
@@ -216,8 +229,7 @@ function afterEdit() {
   if (!s || !item) return;
   // 维持「notes 按 start 升序」不变量：draw() 的视口裁剪用二分查找定位可见区间，
   // 新建/粘贴/拖动如果打乱顺序，新音符会落在窗口之外而整段画不出来（大文件尤其明显）。
-  const ct = curTrack();
-  if (ct) sortNotes(ct.notes);
+  for (const tr of s.tracks) sortNotes(tr.notes);   // 跨轨编辑时别的轨也可能被改乱序
   // 重算曲长
   let totalTicks = 0;
   for (const tr of s.tracks) for (const n of tr.notes) totalTicks = Math.max(totalTicks, n.end);
@@ -239,9 +251,11 @@ function afterEdit() {
   draw();
 }
 function clearGhostSelection() {
+  const s = song(); if (!s) return;
   for (const n of [...selection]) {
-    const tr = curTrack(); if (!tr) continue;
-    if (!tr.notes.includes(n)) selection.delete(n);
+    let alive = false;
+    for (const tr of s.tracks) if (tr.notes.includes(n)) { alive = true; break; }
+    if (!alive) selection.delete(n);
   }
 }
 function undo() {
@@ -681,6 +695,8 @@ function draw() {
   const winTic = viewT1 - viewT0;
   // 「按音阶」着色（M4）：每帧只算一次调内音集合（逐音符算会在大文件上炸）
   const scaleSet = props.colorMode === 'scale' ? constrainPcsAt(null) : null;
+  // 跨轨编辑：参与的轨道都按本色画并可选，其余仍旧压灰（保持「在编辑哪几条轨」的层级）
+  const editIdx = new Set(editTrackList().map((x) => x.index));
   for (const tr of s.tracks) {
     const col = noteColor(tr.index, pal);
     const ns = tr.notes;
@@ -691,16 +707,17 @@ function draw() {
     // 下界：start >= viewT0 - 一个屏幕宽
     let a = 0, b = uLo, t0lo = viewT0 - winTic;
     while (a < b) { const m = (a + b) >> 1; if (ns[m].start < t0lo) a = m + 1; else b = m; }
-    const isCur = tr === curTrack();
+    const isCur = tr.index === props.trackIndex;
+    const inEdit = editIdx.has(tr.index);
     for (let k = a; k < uLo; k++) {
       const n = ns[k];
       const x = tickToX(n.start), w2 = Math.max(2, tickToX(n.end) - x);
       const y = (hi - n.midi) * rowH.value;
       if (x > W || x + w2 < 0) continue;
-      const sel = isCur && selection.has(n);
+      const sel = inEdit && selection.has(n);
       // 着色方案：非当前轨道一律灰（保持「正在编辑哪条轨」的视觉层级）
       let fill = steel;
-      if (isCur) {
+      if (inEdit) {
         if (props.colorMode === 'pitch') fill = pitchColor(n.midi, pal);
         else if (props.colorMode === 'velocity') fill = velColor(n.vel, pal);
         else if (props.colorMode === 'selection') fill = sel ? pal.sel : steel;
@@ -708,8 +725,8 @@ function draw() {
         else if (props.colorMode === 'scale') fill = (!scaleSet || !scaleSet.size) ? col : (scaleSet.has(((n.midi % 12) + 12) % 12) ? col : pal.sel);
         else fill = col;
       }
-      // 静音音符半透明显示（不发声，但仍可编辑）
-      ctx2d.globalAlpha = n.muted ? 0.35 : 0.85;
+      // 静音音符半透明显示（不发声，但仍可编辑）；跨轨编辑里非当前轨再淡一档，便于分辨主次
+      ctx2d.globalAlpha = n.muted ? 0.35 : (isCur ? 0.85 : 0.68);
       ctx2d.fillStyle = fill;
       ctx2d.fillRect(x, y + 1, w2, rowH.value - 2);
       ctx2d.globalAlpha = 1;
@@ -1093,15 +1110,18 @@ function scoreMove(x, y) {
 
 function hitTest(x, y) {
   if (props.view === 'score') return scoreHit(x, y);
-  const tr = curTrack(); if (!tr) return null;
+  const list = editTrackList(); if (!list.length) return null;
   const hi = viewTop.value;
   const midi = yToMidi(y);
   const tick = xToTick(x);
   const thresh = 4;
+  // 当前轨优先（同一像素位置重叠时，动的是「正在编辑的那条轨」）
+  for (const tr of list) {
   for (const n of tr.notes) {
     const nx = tickToX(n.start), nx2 = tickToX(n.end);
     const ny = (hi - n.midi) * rowH.value;
     if (Math.abs((nx + nx2) / 2 - x) < Math.max(6, (nx2 - nx) / 2 + 4) && Math.abs(ny + rowH.value / 2 - y) < rowH.value / 2 + thresh) return n;
+  }
   }
   return null;
 }
@@ -1188,8 +1208,7 @@ function onMove(e) {
       const t0 = xToTick(d.box.x), t1 = xToTick(d.box.x + d.box.w);
       const hi = viewTop.value;
       const m0 = yToMidi(d.box.y + d.box.h), m1 = yToMidi(d.box.y);
-      const tr = curTrack();
-      if (tr) for (const n of tr.notes) {
+      for (const tr of editTrackList()) for (const n of tr.notes) {
         if (n.start <= t1 && n.end >= t0 && n.midi >= m0 && n.midi <= m1) selection.add(n);
       }
     }
@@ -1412,8 +1431,9 @@ function quantizeSelected(ratio) { if (selection.size) quantize([...selection], 
 function transposeSelected(d) { if (selection.size) transpose([...selection], d); }
 function velRampSelected(dir) { if (selection.size) velRamp([...selection], dir); }
 function selectAll() {
-  const tr = curTrack(); if (!tr) return;
-  selection.clear(); for (const n of tr.notes) selection.add(n);
+  const list = editTrackList(); if (!list.length) return;
+  selection.clear();
+  for (const tr of list) for (const n of tr.notes) selection.add(n);   // 跨轨编辑时＝所有参与轨
   draw(); emit('select');
 }
 function selectNone() { selection.clear(); draw(); emit('select'); }
@@ -1483,8 +1503,8 @@ function selRef() {
 /* 按数组替换当前选中集合 */
 function selectNotes(arr) {
   selection.clear();
-  const tr = curTrack();
-  if (tr && Array.isArray(arr)) for (const n of arr) if (tr.notes.includes(n)) selection.add(n);
+  const list = editTrackList();
+  if (Array.isArray(arr)) for (const n of arr) { for (const tr of list) if (tr.notes.includes(n)) { selection.add(n); break; } }
   draw(); emit('select');
 }
 /* 列表编辑器保存：按选中顺序写回草稿值 */

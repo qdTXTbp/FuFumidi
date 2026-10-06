@@ -77,7 +77,15 @@ const listDraft = ref([]);
 // CC 泳道
 const ccEnabled = ref(false);
 const ccNumber = ref(11);
-const CC_OPTIONS = [[1, t('CC1 颤音')], [7, t('CC7 音量')], [10, t('CC10 声像')], [11, t('CC11 表情')], [64, t('CC64 延音')]];
+/* CC 泳道可选目标（M5b：从 5 个扩到常用的一套）。
+   管弦乐/表情写法最常用的几个：CC1 调制、CC2 呼吸、CC11 表情、CC7 音量、CC10 声像，
+   加上踏板与演奏法开关类（CC64/66/67/68）——以前只有 5 个，想画 CC2 都选不到。 */
+const CC_OPTIONS = [
+  [1, t('CC1 调制（颤音）')], [2, t('CC2 呼吸')], [4, t('CC4 脚控')], [5, t('CC5 滑音时间')],
+  [7, t('CC7 音量')], [8, t('CC8 平衡')], [10, t('CC10 声像')], [11, t('CC11 表情')],
+  [64, t('CC64 延音踏板')], [65, t('CC65 弱音器')], [66, t('CC66 持续音')], [67, t('CC67 弱音踏板')],
+  [68, t('CC68 连奏')], [71, t('CC71 共鸣')], [74, t('CC74 亮度')], [91, t('CC91 混响')], [93, t('CC93 合唱')],
+];
 
 const sel = reactive({ count: 0, midi: null, name: '', vel: null, start: null, len: null });
 
@@ -170,6 +178,21 @@ function resetTempo() {
   commitTempo((tm) => { tm.length = 0; tm.push({ tick: 0, us, sec: 0 }); });
   toast(t('已清空速度点，回到单一速度'), 'ok');
 }
+
+/* ---------------- 跨轨编辑（M5b，借 Cubase / Studio One 的 multi-track edit） ----------------
+   勾选若干轨后：这些轨的音符一起显示、一起命中、一起被框选，批量工具（参数工具/移调/量化…）
+   直接作用于跨轨选区；撤销走**全量快照**，一次 Ctrl+Z 把所有被改的轨一起还原。 */
+const editTracks = ref([]);           // 额外参与编辑的轨道下标（当前轨始终参与）
+const multiEditOn = computed(() => editTracks.value.length > 0);
+function toggleEditTrack(i) {
+  const cur = editTracks.value;
+  editTracks.value = cur.includes(i) ? cur.filter((x) => x !== i) : [...cur, i];
+  editor.value?.selectNone();
+  refreshSel();
+}
+function clearEditTracks() { editTracks.value = []; refreshSel(); }
+/** 参与编辑的轨道数（含当前轨） */
+const editTrackCount = computed(() => 1 + editTracks.value.filter((i) => i !== trackIndex.value).length);
 
 /* ---------------- 技法条（M5，借 Cubase 的 articulation lane） ----------------
    演奏法在 MIDI 里就是**低音区的一个 Key Switch 音符**（midi 0..24，具体键位由 ksMap 决定）。
@@ -402,6 +425,7 @@ const menuGroups = computed(() => {
       { label: ws.layout.inspOpen ? t('收起检查器') : t('显示检查器'), run: () => { inspOpen.value = !inspOpen.value; } },
       { label: artLane.value ? t('隐藏技法条') : t('显示技法条'), hint: t('演奏法'), run: () => { artLane.value = !artLane.value; } },
       { label: tempoLane.value ? t('隐藏速度轨') : t('显示速度轨'), hint: t('速度自动化'), run: () => { tempoLane.value = !tempoLane.value; } },
+      { label: multiEditOn.value ? t('退出跨轨编辑') : t('跨轨编辑…'), hint: multiEditOn.value ? t('已选 ') + editTracks.length + t(' 轨') : t('在检查器「轨道」里勾选'), run: () => { ws.layout.inspOpen = true; inspTab.value = 'track'; if (multiEditOn.value) clearEditTracks(); } },
       { label: fullscreenOn.value ? t('退出全屏') : t('全屏编辑'), run: toggleFullscreen },
       { sep: true },
       ...ws.presets.map((p) => ({ label: t('工作区：') + t(p.label), hint: ws.preset === p.id ? '✓' : '', run: () => applyPreset(p.id) })),
@@ -1959,6 +1983,19 @@ onBeforeUnmount(() => {
             <select v-model.number="timbre" class="select-input" style="width:100%" @change="timbreChange">
               <option v-for="(nm, p) in GM_NAMES" :key="p" :value="Number(p)">{{ p }} {{ nm }}</option>
             </select>
+            <div class="insp-h" style="margin-top:6px">
+              <Icon name="layers" :size="12" />{{ t('跨轨编辑') }}
+              <span class="muted small">{{ editTrackCount }}{{ t(' 轨') }}</span>
+              <button v-if="multiEditOn" class="link-btn" style="margin-left:auto" @click="clearEditTracks">{{ t('清除') }}</button>
+            </div>
+            <div class="et-list">
+              <label v-for="(tr, i) in song.tracks" :key="i" class="et-item" :class="{ cur: i === trackIndex }">
+                <input type="checkbox" :checked="i === trackIndex || editTracks.includes(i)" :disabled="i === trackIndex"
+                       @change="toggleEditTrack(i)" />
+                <span class="et-name">{{ tr.name }}</span>
+                <span class="muted small">{{ tr.notes.length }}</span>
+              </label>
+            </div>
             <div class="insp-btns">
               <button class="btn sm" :class="{ primary: timbreFavs.has(Number(timbre)) }" :title="t('收藏/取消收藏当前音色')" @click="toggleTimbreFav">♡ {{ t('收藏') }}</button>
               <button class="btn sm" :title="t('把当前音色应用到全部非鼓轨')" @click="timbreAll">{{ t('全部') }}</button>
@@ -2082,7 +2119,7 @@ onBeforeUnmount(() => {
                       :cc2-enabled="cc2Enabled" :cc2-number="cc2Number" :cc-mode="ccMode"
                       :default-velocity="defaultVelocity" :color-mode="colorMode"
                       @select="refreshSel" @modify="onModified" @zoom="onZoom" @ctxmenu="openCtxMenu" @hover="onHover" @step="onStep"
-                      :step-on="stepOn" :step-ticks="stepTicks" />
+                      :step-on="stepOn" :step-ticks="stepTicks" :edit-tracks="editTracks" />
         <video v-if="videoUrl" :src="videoUrl" controls playsinline class="ed-video-overlay"></video>
         <!-- 悬停工具条（M3）：压到音符上就地出现，鼠标移到条上不消失 -->
         <div v-if="hoverInfo && !midiToolOpen" class="hv-bar" :style="hoverBarStyle"
@@ -2127,6 +2164,7 @@ onBeforeUnmount(() => {
         <span class="st-i">BPM <b>{{ bpmText }}</b></span>
         <span class="st-i">{{ t('轨道') }} <b>{{ curTrackInfo?.name || '—' }}</b></span>
         <span class="st-i">{{ t('选中') }} <b>{{ sel.count }}</b></span>
+        <span v-if="multiEditOn" class="st-i" :title="t('跨轨编辑：这些轨的音符一起选中、一起处理')">{{ t('跨轨') }} <b>{{ editTrackCount }}</b></span>
         <span class="st-grow"></span>
         <span class="st-i">{{ t('视图') }} <b>{{ viewLabel }}</b></span>
         <span class="st-i">{{ t('吸附') }} <b>{{ snapLabel }}</b></span>
@@ -2727,6 +2765,14 @@ onBeforeUnmount(() => {
 .insp-tab.on { background: var(--canvas); color: var(--ink); box-shadow: 0 1px 3px rgba(16,24,40,.10); }
 .insp-pane { display: flex; flex-direction: column; gap: 8px; animation: inspPaneIn .22s cubic-bezier(.2,.7,.3,1); }
 @keyframes inspPaneIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+/* 跨轨编辑的轨道勾选列表（M5b） */
+.et-list { display: flex; flex-direction: column; gap: 2px; max-height: 168px; overflow-y: auto; border: 1px solid var(--hairline); border-radius: 8px; padding: 4px; }
+.et-item { display: flex; align-items: center; gap: 6px; padding: 3px 5px; border-radius: 6px; font-size: 11.5px; color: var(--slate); cursor: pointer; }
+.et-item:hover { background: var(--surface-soft); }
+.et-item.cur { background: var(--surface-soft); color: var(--ink); font-weight: 600; }
+.et-item .et-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-btn { border: 0; background: transparent; color: var(--accent); font-size: 10.5px; cursor: pointer; padding: 0 2px; }
+
 /* 技法条（M5）：横向可滚的一排「技法段」 */
 .art-lane { display: flex; align-items: center; gap: 6px; flex: none; padding: 4px 8px; margin-bottom: 6px; border-radius: 10px; }
 .art-lane-label { font-size: 11px; color: var(--stone); flex: none; }
