@@ -1482,7 +1482,7 @@ defineExpose({
         <button class="pr-tool" :class="{ on: tool === 'select' }" :title="t('选择 / 框选 / 拖动')" @click="tool = 'select'"><Icon name="edit" :size="13" /> {{ t('选择') }}</button>
         <button class="pr-tool" :class="{ on: tool === 'pen' }" :title="t('在空白处拖出音符')" @click="tool = 'pen'"><Icon name="plus" :size="13" /> {{ t('画笔') }}</button>
       </div>
-      <label class="pr-ad">
+      <label class="pr-ad" :title="t('吸附 = 拖动 / 插入时把位置与长度贴到网格（右边选分割：1/16 = 十六分音符）')">
         <input type="checkbox" v-model="snapOn" /> {{ t('吸附') }}
         <select v-model.number="snapDiv" :disabled="!snapOn">
           <option :value="1">1/4</option>
@@ -1491,14 +1491,14 @@ defineExpose({
           <option :value="8">1/32</option>
         </select>
       </label>
-      <label class="pr-ad" :title="t('底部条带显示音素切分（辅音 → 元音）')">
+      <label class="pr-ad" :title="t('音素 = 一个音节在声库里的发音段（辅音 → 元音）；打开后底部条带显示切分，可逐个音素改')">
         <input type="checkbox" v-model="showPhoneme" /> {{ t('音素') }}
       </label>
-      <label class="pr-ad" :title="t('底部车道显示音高微调曲线（手绘/直线/正弦/平滑）')">
+      <label class="pr-ad" :title="t('音高车道 = 音分级的微调曲线（100 音分 = 1 个半音）；可手绘 / 拉直线 / 正弦 / 平滑')">
         <input type="checkbox" v-model="pitchOn" /> {{ t('音高') }}
       </label>
       <!-- 音阶高亮（P2-1）：只压暗调外音行，不动任何数据 -->
-      <label class="pr-ad" :title="t('高亮当前调式：调外音行压暗，写旋律时一眼看出跑调的音')">
+      <label class="pr-ad" :title="t('音阶 = 当前调式；打开后调外音的行会压暗，写旋律时一眼看出跑调的音')">
         {{ t('音阶') }}
         <select :value="(scale && scale.type) || 'off'" @change="onScalePick($event)">
           <option value="off">{{ t('关闭') }}</option>

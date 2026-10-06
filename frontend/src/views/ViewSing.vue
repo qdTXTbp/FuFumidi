@@ -2017,17 +2017,20 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
          两页合并后入口只有一个（顶栏「调教」），这里切工作台的两半。
          用 v-show 保留编辑器状态（卷帘滚动位置、选中音符）；声库面板按需挂载，进页即拉列表。 -->
     <div class="sing-nav">
-      <button class="sn-tab" :class="{ on: tab === 'editor' }" data-guide="sing-tab-editor" @click="setTab('editor')">
+      <button class="sn-tab" :class="{ on: tab === 'editor' }" data-guide="sing-tab-editor"
+              :title="t('编辑器：给音符选歌手、填词、画音高/参数曲线，然后“渲染”成人声')" @click="setTab('editor')">
         <Icon name="edit" :size="13" /> {{ t('编辑器') }}
         <i>{{ t('选歌手 · 画音符 · 渲染') }}</i>
       </button>
-      <button class="sn-tab" :class="{ on: tab === 'banks' }" data-guide="sing-tab-banks" @click="setTab('banks')">
+      <button class="sn-tab" :class="{ on: tab === 'banks' }" data-guide="sing-tab-banks"
+              :title="t('声库 = 录好的音节样本集合（UTAU 用 oto.ini 标边界，DiffSinger 用模型）；一条轨选了声库才唱得出来')" @click="setTab('banks')">
         <Icon name="box" :size="13" /> {{ t('声库') }}
         <i>{{ t('UTAU · DiffSinger · 组件') }}</i>
       </button>
       <!-- 声库制作原本是独立路由（/voicebank），现在与编辑器/声库并列成第三个页签：
            「做声库 / 装声库 / 用声库」本来就是同一条工作流。 -->
-      <button class="sn-tab" :class="{ on: tab === 'maker' }" data-guide="sing-tab-maker" @click="setTab('maker')">
+      <button class="sn-tab" :class="{ on: tab === 'maker' }" data-guide="sing-tab-maker"
+              :title="t('声库制作：上传按音节录的音频 → 自动切片 → 标注 oto（offset/overlap/preutterance/consonant）→ 导出声库')" @click="setTab('maker')">
         <Icon name="mic" :size="13" /> {{ t('声库制作') }}
         <i>{{ t('切片 · 标注 · 导出') }}</i>
       </button>
@@ -2266,20 +2269,21 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <button class="ib" :disabled="!store.canRedo" :title="t('重做 Ctrl+Shift+Z')" @click="store.redo()">
           <Icon name="redo" :size="13" />
         </button>
-        <button class="btn" data-guide="sing-track-props" :disabled="!tr" @click="propsOpen = !propsOpen">
+        <button class="btn" data-guide="sing-track-props" :disabled="!tr"
+                :title="t('这条轨怎么唱：引擎参数 / 效果链 / 自动化（后两块只作用于本轨）')" @click="propsOpen = !propsOpen">
           <Icon name="sliders" :size="13" /> {{ t('轨道属性') }}
         </button>
         <!-- 主动作：渲染本轨。前置条件不满足时**按钮本身就变样并说明为什么**（不只是变淡），
              原因同时挂 title 与下方那行提示，不让用户猜（UX 复核第 4 条）。 -->
         <button v-if="!isAudio" class="btn primary" :class="{ blocked: renderBlocked }" data-guide="sing-render"
                 :disabled="renderBlocked"
-                :title="renderReason || t('按该轨的引擎自动分派；只重渲改动过的乐句。按住 Shift 点 = 整轨重渲')"
+                :title="renderReason || t('渲染 = 用声库把音符唱成音频（不是实时合成）。只重渲改动过的乐句；按住 Shift 点 = 整轨重渲')"
                 @click="doRender">
           <Icon :name="renderBlocked ? 'info' : 'play'" :size="13" />
           {{ renderBlocked ? t('还不能渲染') : t('渲染本轨') }}
         </button>
         <button class="btn" data-guide="sing-render-all" :disabled="store.busy" @click="doRenderAll"
-                :title="t('渲染所有声部轨，渲完一起播放')">
+                :title="t('渲染全部声部轨（同样用声库合成成音频），渲完一起播放')">
           <Icon name="zap" :size="13" /> {{ t('渲染全部轨') }}
         </button>
 
@@ -2381,13 +2385,16 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
       <!-- 轨道属性：参数 / 效果链 / 自动化（后两者都是**本轨独享**的） -->
       <div v-if="propsOpen && tr" class="tprops">
         <div class="tabs small">
-          <button class="tab" :class="{ on: propsTab === 'params' }" @click="propsTab = 'params'">
+          <button class="tab" :class="{ on: propsTab === 'params' }"
+                  :title="t('参数 = 这条轨怎么发声：推理后端、采样音，以及 PIT（音高）/ VOL（音量）/ PAN（声像）等引擎参数')" @click="propsTab = 'params'">
             <Icon name="gear" :size="12" /> {{ t('参数') }}
           </button>
-          <button class="tab" :class="{ on: propsTab === 'fx' }" @click="propsTab = 'fx'">
+          <button class="tab" :class="{ on: propsTab === 'fx' }"
+                  :title="t('效果链 = 按顺序挂在这条轨音频上的处理（EQ / 压缩 / 混响…），只影响本轨的播放')" @click="propsTab = 'fx'">
             <Icon name="spark" :size="12" /> {{ t('效果链') }}<span v-if="fxList.length" class="cnt">{{ fxList.length }}</span>
           </button>
-          <button class="tab" :class="{ on: propsTab === 'auto' }" @click="propsTab = 'auto'">
+          <button class="tab" :class="{ on: propsTab === 'auto' }"
+                  :title="t('自动化 = 随时间变化的参数曲线（音量 / 声像 / 颤音…）；写进工程，播放时按曲线走')" @click="propsTab = 'auto'">
             <Icon name="cclane" :size="12" /> {{ t('自动化') }}<span v-if="tr.curves && tr.curves.length" class="cnt">{{ tr.curves.length }}</span>
           </button>
           <span class="sp" />
@@ -2853,7 +2860,8 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <!-- 颤音（M6b，计划书 §4.2）：布尔开关 + 三条参数升级成「能看见包络」的一块 -->
         <div class="vib-block">
           <div class="vib-head">
-            <label class="ck"><input type="checkbox" :checked="sel.vibrato"
+            <label class="ck" :title="t('颤音 = 音高按周期微微起伏（人声自然的波动）：深度 = 幅度，速率 = 每秒几次，淡入 = 从平直渐入')">
+              <input type="checkbox" :checked="sel.vibrato"
               @change="store.updateNote(sel.id, { vibrato: $event.target.checked })" /><span>{{ t('颤音') }}</span></label>
             <span class="muted small">{{ t('下面画的是这个音的颤音包络：起音渐入 → 保持 → 收尾渐出') }}</span>
           </div>
@@ -2911,7 +2919,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
       <!-- 音素级编辑（P2-2）：条带上点一个音素，或点下面的音素芯片 -->
       <div v-if="detailOpen && !isAudio && phNote && phItems.length" class="ph-panel">
         <div class="ph-head small">
-          <b>{{ t('音素级编辑') }}</b>
+          <b :title="t('音素 = 一个音节在声库里的发音段（辅音 + 元音）。这里按下标单独覆盖某个音素；引擎真正的切分以声库 oto.ini 为准')">{{ t('音素级编辑') }}</b>
           <span class="muted">{{ t('音符「') }}{{ phNote.lyric || '—' }}{{ t('」的音素（辅音 → 元音）：') }}</span>
           <button v-for="(it, i) in phItems" :key="i" class="chip-btn"
                   :class="{ on: i === phIndex, has: !!(phNote.phExpressions && phNote.phExpressions[String(i)]) }"
