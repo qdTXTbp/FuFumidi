@@ -15,6 +15,7 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  "上次的自定义背景图已找不到，已切回主题": "The custom background image could not be found; switched back to the theme.",
   "在制作工具里：上传一段按音节录制的音频（或直接录音）→ 自动切分 → 自动标注 oto → 导出声库文件夹 / 压缩包。": "In the maker: upload a per-syllable recording (or record directly) → auto-split → auto-label oto → export the voicebank folder / zip.",
   "换源重试中… ": "Retrying another mirror… ",
   "正在混音（伴奏 + 已渲染声部）…": "Mixing the backing track and rendered vocal tracks…",

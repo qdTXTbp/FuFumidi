@@ -233,7 +233,9 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
   const bgBlur = Math.max(0, Number(bgOpt.blur) || 0);
   const bgDim = Math.max(0, Math.min(0.9, Number(bgOpt.dim) || 0));
   ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // ★ 千万不要 setTransform(1,0,0,1,0,0)：调用方（ViewViz.clearCanvas）已经把
+  //   dpr 缩放设在 ctx 上，而传进来的 w/h 是 **CSS 像素**。重置成 identity 只会铺满
+  //   画布左上角 1/dpr 的区域 —— 实测就是这个「灰块 / 图片只盖住一角」的 bug。
   if (bgMode === 'transparent') {
     // 真的清成透明：导出 PNG / 视频后才能当叠加层用
     ctx.clearRect(0, 0, w, h);
@@ -242,7 +244,10 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
     ctx.fillRect(0, 0, w, h);
   } else if (bgMode === 'image' && bgOpt.image && bgOpt.image.width) {
     const im = bgOpt.image;
-    const scale = Math.max(w / im.width, h / im.height);   // cover：填满、不拉伸变形
+    // cover：填满、不拉伸变形。模糊会把边缘「吃」掉（blur 会采到画布外的透明像素），
+    // 所以按模糊半径外扩一点再画 —— 实测不扩的话四边会透出底色。
+    const pad = bgBlur > 0 ? bgBlur * 3 : 0;
+    const scale = Math.max((w + pad * 2) / im.width, (h + pad * 2) / im.height);
     const dw = im.width * scale, dh = im.height * scale;
     ctx.filter = bgBlur > 0 ? 'blur(' + bgBlur + 'px)' : 'none';
     ctx.drawImage(im, (w - dw) / 2, (h - dh) / 2, dw, dh);

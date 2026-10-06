@@ -20,12 +20,15 @@ const immersive = ref(false);
    image       自定义图片（可模糊 + 暗化）—— 参照 SeeMusic / Synthesia 的"背景图"玩法
    transparent 真·透明（导出的 PNG/视频直接当叠加层，不再是一块白底）                */
 const BG_KEY = 'fufumidi.viz.bg';
-const bg = ref({ mode: 'theme', color: '#0b1020', blur: 12, dim: 0.35, src: '' });
+/* ★ 只持久化**文件路径**，不存 blob: URL —— blob URL 是「本次会话」的，重启后必然失效。
+   早先存了 blob URL，结果重启应用后档位还写着「图片」、画面却是主题底（用户看到的"图片没了"）。 */
+const bg = ref({ mode: 'theme', color: '#0b1020', blur: 12, dim: 0.35, path: '' });
 const bgImage = ref(null);          // 已解码的 HTMLImageElement（传给渲染器）
 const bgMore = ref(false);
+let bgObjUrl = '';                  // 本次会话的 objectURL，换图/卸载时释放
 try {
   const s = JSON.parse(localStorage.getItem(BG_KEY) || 'null');
-  if (s && typeof s === 'object') bg.value = { ...bg.value, ...s };
+  if (s && typeof s === 'object') bg.value = { ...bg.value, ...s, path: s.path || '' };
 } catch (e) { /* 存储坏了就用默认值 */ }
 function saveBg() {
   try { localStorage.setItem(BG_KEY, JSON.stringify(bg.value)); } catch (e) { /* 隐私模式忽略 */ }
@@ -37,23 +40,50 @@ function loadBgImage(src) {
   im.onerror = () => { bgImage.value = null; };
   im.src = src;
 }
-watch(() => bg.value.src, (v) => loadBgImage(v), { immediate: true });
+function mimeOf(p) {
+  return /\.png$/i.test(p) ? 'image/png'
+    : (/\.gif$/i.test(p) ? 'image/gif'
+      : (/\.webp$/i.test(p) ? 'image/webp'
+        : (/\.bmp$/i.test(p) ? 'image/bmp' : 'image/jpeg')));
+}
+/** 从磁盘路径读图并解码；返回是否成功 */
+async function loadBgFromPath(p) {
+  const b = window.fuBridge;
+  if (!p || !b || typeof b.readBinary !== 'function') return false;
+  const ab = await b.readBinary(p);
+  if (!ab) return false;
+  if (bgObjUrl) { try { URL.revokeObjectURL(bgObjUrl); } catch (e) { /* 忽略 */ } }
+  bgObjUrl = URL.createObjectURL(new Blob([ab], { type: mimeOf(p) }));
+  loadBgImage(bgObjUrl);
+  return true;
+}
 async function pickBgImage() {
   const b = window.fuBridge;
   if (!b || typeof b.pickFile !== 'function') { app.toast(t('当前环境不支持选择图片'), 'warn'); return; }
   const p = await b.pickFile({ filters: [{ name: t('图片'), extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }] });
   if (!p) return;
-  const ab = await b.readBinary(p);
-  if (!ab) { app.toast(t('读取图片失败'), 'error'); return; }
-  const mime = /\.png$/i.test(p) ? 'image/png' : (/\.gif$/i.test(p) ? 'image/gif' : (/\.webp$/i.test(p) ? 'image/webp' : 'image/jpeg'));
-  bg.value = { ...bg.value, src: URL.createObjectURL(new Blob([ab], { type: mime })), mode: 'image' };
+  if (!(await loadBgFromPath(p))) { app.toast(t('读取图片失败'), 'error'); return; }
+  bg.value = { ...bg.value, path: p, mode: 'image' };
   saveBg();
 }
 function setBgMode(m) {
-  if (m === 'image' && !bg.value.src) { void pickBgImage(); return; }
+  if (m === 'image' && !bg.value.path) { void pickBgImage(); return; }
   bg.value = { ...bg.value, mode: m };
   saveBg();
+  if (m === 'image' && bg.value.path && !bgImage.value) void loadBgFromPath(bg.value.path);
 }
+// 启动时把上次选过的图读回来（路径有效才用；图没了就退回主题，不留"假图片档"）
+onMounted(() => {
+  const p = bg.value.path;
+  if (!p) return;
+  void loadBgFromPath(p).then((ok) => {
+    if (!ok && bg.value.mode === 'image') {
+      bg.value = { ...bg.value, mode: 'theme', path: '' };
+      saveBg();
+      app.toast(t('上次的自定义背景图已找不到，已切回主题'), 'warn');
+    }
+  });
+});
 
 // 沉浸模式下仪表盘那三张卡片没有意义，直接按瀑布流布局铺满
 const isWaterfall = computed(() => mode.value === 'waterfall' || immersive.value);
