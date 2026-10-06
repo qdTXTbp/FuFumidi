@@ -979,6 +979,24 @@ export class Synth {
     const set = new Set(drop);
     this.live = this.live.filter(x => !set.has(x));
   }
+  // 全通道 panic（CC120 + CC123）。两条路径都发，因为两边的 note-off 都不在手里：
+  //   音序器路径：note-off 住在音频线程的调度队列里，清队列时会连它一起清掉；
+  //   直连回退路径：note-off 在主线程 setTimeout 里，可能已被 clearTimeout 掉。
+  // 只补发「逐个音符的 note-off」不够 —— activeNotes 只记录了发过 note-on 的音，
+  // 预排窗口里还没触发的音（可能已经进合成器）不在其中，panic 是唯一兜得住的。
+  _panicAllChannels() {
+    const tick = this._seqTickFor(this.ctx.currentTime);
+    for (let ch = 0; ch < 16; ch++) {
+      if (this.sf2Seq) {
+        try { this.sf2Seq.sendEventAt({ type: 'controlchange', channel: ch, control: 120, value: 0 }, tick, true); } catch (e) {}
+        try { this.sf2Seq.sendEventAt({ type: 'controlchange', channel: ch, control: 123, value: 0 }, tick, true); } catch (e) {}
+      }
+      if (this.sf2) {
+        try { this.sf2.midiControl(ch, 120, 0); } catch (e) {}
+        try { this.sf2.midiControl(ch, 123, 0); } catch (e) {}
+      }
+    }
+  }
   allStop() {
     const t = this.ctx.currentTime;
     for (const x of this.live) { if (x.tStop > t) { try { x.o.stop(); } catch (e) {} } }
@@ -989,6 +1007,14 @@ export class Synth {
     if (this.sf2Seq && this._sf2SeqClient != null) {
       try { this.sf2Seq.removeAllEventsFromClient(this._sf2SeqClient); } catch (e) {}
     }
+    // ★ 紧接着必须显式 panic —— 顺序不能反：
+    //   上面那一步会把「已经在响、note-off 还没到点」的音符的 note-off 一起清掉，
+    //   而这些音的时值是按 duration 交给音序器分发的（见 _playSf2Seq 的 sendEventAt note），
+    //   本地没有对应的定时器可以补发 —— 于是它们永远收不到 note-off，
+    //   暂停 / 停止 / 拖进度条之后会一直响（实测：暂停后长音不消）。
+    //   所以清完队列立刻全通道发 CC120(All Sound Off)+CC123(All Notes Off)：
+    //   这两条是此刻新排的事件，不会被上面那次清理带走。
+    this._panicAllChannels();
     for (const a of this.activeNotes) { if (a.timer) { try { clearTimeout(a.timer); } catch (e) {} } if (a.sf2 && a.ch != null) { try { this.sf2 && this.sf2.midiNoteOff(a.ch, a.midi); } catch (e) {} } }
     this.live = [];
     this.activeNotes = [];
