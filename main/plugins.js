@@ -129,6 +129,28 @@ function createPluginService({ app, path, fs, shell, ipcMain, BrowserWindow, rea
     ipcMain.handle('plugins:openDir', () => {
       try { fs.mkdirSync(PLUGINS_USER_DIR(), { recursive: true }); shell.openPath(PLUGINS_USER_DIR()); return { ok: true }; } catch (e) { return { ok: false, error: String(e) }; }
     });
+    // 「插件网」入口：给第三方作者一个直达发布/管理页面的按钮。
+    // 只允许打开本平台上的相对路径（白名单形式），不接收任意 URL ——
+    // 渲染进程能传什么就开什么的话，等于把 shell.openExternal 暴露给页面。
+    ipcMain.handle('plugins:openPlatform', (_e, rel) => {
+      try {
+        const base = platformBase().replace(/\/+$/, '');
+        let p = String(rel || '/');
+        if (!p.startsWith('/')) p = '/' + p;
+        if (p.length > 120 || /[\s"'<>]/.test(p)) p = '/';
+        const url = base + p;
+        shell.openExternal(url);
+        return { ok: true, url, base };
+      } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+    });
+
+    ipcMain.handle('plugins:platformInfo', () => {
+      try {
+        const base = platformBase().replace(/\/+$/, '');
+        return { ok: true, base, host: base.replace(/^https?:\/\//, '') };
+      } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+    });
+
     ipcMain.handle('plugins:openDocs', () => {
       try {
         const srcPath = path.join(__dirname, '..', 'plugins', 'plugin-dev.html');

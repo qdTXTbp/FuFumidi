@@ -470,7 +470,9 @@ function drawScore(g, W, HK) {
     g.fillText(String(firstBar + 1), leftPad + 2, y0 + 10);
   }
   // 播放头：按 tick 找行，画一条竖线
-  const pt = playTick.value;
+  // ★ 这里原来写的是 playTick.value —— 那个名字在本文件里根本没定义，
+  //   一进乐谱视图就抛 ReferenceError（实测）。播放头位置跟迷你条用同一个来源。
+  const pt = (() => { const sg = song(); return sg ? sg.secToTick(state.curSec / state.tempo) : null; })();
   if (pt != null && pt >= 0) {
     const bar = Math.floor(pt / lay.barTicks);
     const sys = Math.floor(bar / barsPerSystem);

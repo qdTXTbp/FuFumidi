@@ -283,7 +283,7 @@ function draw() {
   for (const t of ghostTracks.value) {
     const col = t.color || V('--note-fill');
     g.save();
-    g.globalAlpha = 0.30;
+    g.globalAlpha = 0.30 * ghostFade.value;
     g.fillStyle = col;
     g.strokeStyle = col;
     g.lineWidth = 1;
@@ -1165,6 +1165,23 @@ const ghostRev = computed(() => {
     if (t.notes) for (const n of t.notes) s += n.startBeat * 3 + n.pitch * 5 + n.durBeat * 7;
   }
   return s + String(props.activeTrackId || '');
+});
+/* 打开「多轨叠置」时幽灵音符淡入一次：直接跳出来会让人以为是自己轨上的音符。
+   画布是每帧重绘的，所以这里只维护一个 0→1 的系数，rAF 里推它。 */
+const ghostFade = ref(1);
+let ghostRaf = 0;
+watch(() => props.overlay, (on) => {
+  cancelAnimationFrame(ghostRaf);
+  if (!on) { ghostFade.value = 1; return; }
+  const t0 = performance.now();
+  ghostFade.value = 0;
+  const step = () => {
+    const k = Math.min(1, (performance.now() - t0) / 260);
+    ghostFade.value = k * k * (3 - 2 * k);          // smoothstep
+    draw();
+    if (k < 1) ghostRaf = requestAnimationFrame(step);
+  };
+  ghostRaf = requestAnimationFrame(step);
 });
 watch(ghostRev, () => nextTick(() => { setupCanvas(); draw(); }));
 watch([noteW, rowH, showPhoneme, pitchOn], () => nextTick(() => { setupCanvas(); draw(); }));

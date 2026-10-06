@@ -69,6 +69,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   transcodeVideo: (data, audio, opts) => ipcRenderer.invoke('video:transcode', { data, audio, ...(opts || {}) }),
   // 「变谱」：乐谱（MusicXML/MXL）→ MIDI（返回 base64 字节 + 统计信息）
   scoreToMidi: (cfg) => ipcRenderer.invoke('score:toMidi', cfg || {}),
+  onScoreProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('score:progress', w); return () => ipcRenderer.removeListener('score:progress', w); },
   modelList: () => ipcRenderer.invoke('model:list'),
   depCheck: () => ipcRenderer.invoke('dep:check'),
   diagExport: () => ipcRenderer.invoke('diag:export'),
@@ -209,6 +210,9 @@ contextBridge.exposeInMainWorld('fuBridge', {
     invoke: (id, cmd, payload) => ipcRenderer.invoke('plugins:invoke', id, cmd, payload),
     rescan: () => ipcRenderer.invoke('plugins:rescan'),
     openDocs: () => ipcRenderer.invoke('plugins:openDocs'),
+    // 插件网（第三方作者发布插件的地方）
+    openPlatform: (rel) => ipcRenderer.invoke('plugins:openPlatform', rel),
+    platformInfo: () => ipcRenderer.invoke('plugins:platformInfo'),
     openDir: () => ipcRenderer.invoke('plugins:openDir'),
     // 插件市场安装：两段式，download 只落缓存并返回包内清单，确认后才 install
     // 插件中心目录（主进程代取，避免渲染进程直连撞 CSP/CORS）

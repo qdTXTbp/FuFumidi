@@ -366,10 +366,25 @@ const drumTracks = computed(() => song.value ? song.value.tracks.map((t, i) => (
  *   在谱面上直接点选、拖动改音高、画笔插音符、改时值，改的就是 MIDI。
  *   只读的精排谱（带排版/导出 PDF/PNG）仍然在「乐谱」页。
  */
+/* 视图切换的过渡：画布用 v-show 保活（不能重建，否则丢撤销历史与视图位置），
+   所以这里只做一次「淡入 + 轻微上浮」的闪动，提示画面内容换了。 */
+const viewFlash = ref(false);
+let viewFlashTimer = 0;
+function flashView() {
+  viewFlash.value = false;
+  clearTimeout(viewFlashTimer);
+  nextTick(() => {
+    viewFlash.value = true;
+    viewFlashTimer = window.setTimeout(() => { viewFlash.value = false; }, 300);
+  });
+}
+
 function setEditorView(v) {
-  if (v === 'drum') { openDrumEditor(); return; }
+  if (v === 'drum') { openDrumEditor(); flashView(); return; }
   if (!song.value) { toast(t('请先载入 MIDI'), 'warn'); return; }
-  viewMode.value = (v === 'score') ? 'score' : 'piano';
+  const next = (v === 'score') ? 'score' : 'piano';
+  if (next !== viewMode.value) flashView();
+  viewMode.value = next;
   if (v === 'score') nextTick(() => editor.value?.focusSelection());
 }
 
@@ -1414,7 +1429,7 @@ onBeforeUnmount(() => {
 
       <!-- ② 工作区：左侧检查器 + 右侧多车道舞台 -->
       <div class="ed-main" :style="mainStyle" :class="{ 'insp-off': !inspOpen }">
-        <aside class="ed-insp" v-show="inspOpen">
+        <aside class="ed-insp" v-show="inspOpen" :class="{ 'ed-insp-in': inspOpen }">
           <div class="insp-sec">
             <div class="insp-h"><Icon name="cursor" :size="12" />{{ t('音符检查器') }}</div>
             <div class="insp-row"><span>{{ t('选中') }}</span><b>{{ sel.count }}</b></div>
@@ -1472,6 +1487,7 @@ onBeforeUnmount(() => {
         <section class="ed-stage">
         <!-- 乐谱工具条：独一条横排（放在主工具条里会把工具栏撑到 256px 高，音符区只剩 187px）。
              时值按钮既改选中音符、也决定画笔插入的长度。 -->
+        <Transition name="ed-pop">
         <div v-if="viewMode === 'score'" class="card ed-scorebar">
           <span class="et-label">{{ t('时值') }}</span>
           <button v-for="d in SCORE_DURS" :key="d.q" class="et-btn" :title="t('设为这个时值（改选中音符，也决定画笔插入的长度）')"
@@ -1484,6 +1500,7 @@ onBeforeUnmount(() => {
           <span class="et-sep"></span>
           <span class="muted small">{{ t('拖动音符改音高/位置；画笔工具在空白处点一下插音符') }}</span>
         </div>
+        </Transition>
       <!-- 迷你图 + 缩放 -->
       <div class="ed-nav" ref="miniWrap">
         <canvas ref="miniEl" class="ed-mini" style="height:34px" @click="miniClick"></canvas>
@@ -1509,7 +1526,7 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- 钢琴卷帘（用 v-show 保活：切到鼓组再切回不会丢撤销历史与视图位置） -->
-      <div v-show="viewMode !== 'drum'" class="ed-wrap-rel">
+      <div v-show="viewMode !== 'drum'" class="ed-wrap-rel" :class="{ 'ed-flash': viewFlash }">
         <EditorCanvas ref="editor" :tool="tool" :snap-ratio="snapRatio" :track-index="trackIndex"
                       :view="viewMode === 'score' ? 'score' : 'piano'"
                       :cc-enabled="ccEnabled && viewMode === 'piano'" :cc-number="ccNumber"
@@ -1521,7 +1538,7 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- 鼓组网格（打击乐专用视图） -->
-      <div v-show="viewMode === 'drum'" class="ed-wrap-rel ed-drum">
+      <div v-show="viewMode === 'drum'" class="ed-wrap-rel ed-drum" :class="{ 'ed-flash': viewFlash }">
         <div class="ed-drum-bar">
           <select class="select-input" v-model="drumTrack">
             <option v-for="d in drumTracks" :key="d.i" :value="d.i">{{ d.t.name }}{{ t('（') }}{{ d.t.notes.length }}{{ t('）') }}</option>
@@ -2024,6 +2041,15 @@ onBeforeUnmount(() => {
   max-height: min(62vh, 520px);
 }
 .ed-wrap-rel { position: relative; flex: 1; min-height: 0; }
+/* 视图切换闪动：只动透明度与极小位移，不碰画布尺寸（画布是活的，重排会抖） */
+.ed-wrap-rel.ed-flash { animation: edFlash 0.3s cubic-bezier(0.22, 0.7, 0.24, 1); }
+@keyframes edFlash { from { opacity: 0.35; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.ed-insp.ed-insp-in { animation: edInspIn 0.26s cubic-bezier(0.22, 0.7, 0.24, 1); }
+@keyframes edInspIn { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
+.ed-pop-enter-active { transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.22, 0.7, 0.24, 1); }
+.ed-pop-leave-active { transition: opacity 0.16s ease, transform 0.16s ease; }
+.ed-pop-enter-from { opacity: 0; transform: translateY(-6px); }
+.ed-pop-leave-to { opacity: 0; transform: translateY(-4px); }
 /* 乐谱工具条：一条横排、可横向滚动，不换行（换行会吃掉音符区高度） */
 .ed-scorebar { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; overflow-x: auto;
   flex: none; padding: 4px 8px; margin-bottom: 6px; border-radius: 10px; }

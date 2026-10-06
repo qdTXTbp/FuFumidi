@@ -113,10 +113,24 @@ async function rescanPlugins() {
 }
 function openPluginDir() { if (bridge.plugins.openDir) bridge.plugins.openDir(); }
 function openDocs() { if (bridge.plugins.openDocs) bridge.plugins.openDocs(); }
+/* 插件网（第三方作者的发布入口）：只允许打开平台域名下的相对路径，主进程侧也做了白名单 */
+const platformHost = ref('');
+async function openPlatform(rel: string) {
+  try {
+    const r = bridge.plugins.openPlatform ? await bridge.plugins.openPlatform(rel) : null;
+    if (!r || !r.ok) toast(t('打开插件网失败'), 'bad');
+  } catch (e: any) { toast(String((e && e.message) || e), 'bad'); }
+}
+async function loadPlatformInfo() {
+  try {
+    const r = bridge.plugins.platformInfo ? await bridge.plugins.platformInfo() : null;
+    if (r && r.ok && r.host) platformHost.value = String(r.host);
+  } catch (e) { /* 拿不到就不显示 */ }
+}
 
 let offLog: any = null;
 onMounted(async () => {
-  await Promise.all([load(), loadLocal()]);
+  await Promise.all([load(), loadLocal(), loadPlatformInfo()]);
   // 插件日志：原来的设置页里也有，搬过来一起显示
   if (bridge.plugins.onLog) {
     offLog = bridge.plugins.onLog((p: any) => {
@@ -184,6 +198,20 @@ onBeforeUnmount(() => { if (offLog) { try { offLog(); } catch (e) {} offLog = nu
       <div class="pc-log">{{ pluginLog || t('无') }}</div>
     </template>
 
+    <!-- ============ 插件网入口：第三方作者在这里上传 / 维护插件 ============ -->
+    <div v-if="tab === 'store'" class="pc-net">
+      <div class="pc-net-ic"><Icon name="extension" :size="16" /></div>
+      <div class="pc-net-tx">
+        <b>{{ t('插件网') }}</b>
+        <small>{{ t('第三方作者在这里上传、更新与维护插件；上架后就会出现在下面的列表里，用户一键安装。') }}</small>
+        <small v-if="platformHost" class="pc-net-host">{{ platformHost }}</small>
+      </div>
+      <div class="pc-net-act">
+        <button class="btn sm primary" @click="openPlatform('/upload')"><Icon name="import" :size="12" /> {{ t('上传插件 ↗') }}</button>
+        <button class="btn sm" @click="openPlatform('/')">{{ t('打开插件网 ↗') }}</button>
+      </div>
+    </div>
+
     <p v-if="tab === 'store' && err" class="pc-err small">
       <Icon name="info" :size="13" /> {{ err }}
       <span v-if="url" class="muted">（{{ url }}）</span>
@@ -244,6 +272,19 @@ onBeforeUnmount(() => { if (offLog) { try { offLog(); } catch (e) {} offLog = nu
 </template>
 
 <style scoped>
+/* 插件网入口：一条横幅，别抢「插件中心」列表的注意力 */
+.pc-net { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin: 10px 0 4px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: linear-gradient(100deg, color-mix(in srgb, #5ac8fa 12%, transparent), transparent 62%);
+  animation: pcNetIn 0.34s cubic-bezier(0.22, 0.7, 0.24, 1) both; }
+@keyframes pcNetIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+.pc-net-ic { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
+  background: color-mix(in srgb, #5ac8fa 20%, transparent); color: #7fd4ff; flex: none; }
+.pc-net-tx { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pc-net-tx b { font-size: 13px; color: var(--text); }
+.pc-net-tx small { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.pc-net-host { font-family: ui-monospace, Consolas, monospace; opacity: 0.75; }
+.pc-net-act { margin-left: auto; display: flex; gap: 8px; flex: none; }
 .pc { height: 100%; overflow: auto; background: var(--canvas); padding: 12px 16px 18px; }
 .pc-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
 .pc-head b { font-size: 14px; }
