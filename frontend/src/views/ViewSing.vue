@@ -2720,9 +2720,15 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <span class="rs-ib" :title="t('在卷帘里显示/隐藏')" @click.stop="store.toggleRollHidden(tk.id)">
             <Icon :name="store.rollHidden.includes(tk.id) ? 'eye-off' : 'eye'" :size="11" /></span>
         </button>
-        <button class="chip-btn" :class="{ on: !detailOpen }" :title="t('收起下方的歌词/音素/曲线面板，把高度全给音符区')"
+        <!-- 这是一**个状态开关**（详情面板开/关），不是两个不同的命令：
+             以前同一位置随状态改文案（显示详情 ↔ 放大音符区），看上去像两个动作、也没有开合指示。
+             现在标签固定 + 箭头随状态翻转 + aria-pressed，悬停说清"点下去会发生什么"。 -->
+        <button class="chip-btn" :class="{ on: detailOpen }" :aria-pressed="detailOpen ? 'true' : 'false'"
+                data-guide="sing-detail-toggle"
+                :title="detailOpen ? t('收起下方的歌词 / 音素 / 曲线面板，把高度全给音符区') : t('展开下方的歌词 / 音素 / 曲线面板（选中音符才有内容）')"
                 @click="detailOpen = !detailOpen">
-          <Icon name="expand" :size="12" />{{ detailOpen ? t('放大音符区') : t('显示详情') }}</button>
+          <Icon name="chevron" :size="12" :style="{ transform: detailOpen ? 'rotate(180deg)' : '' }" />
+          {{ t('详情面板') }}</button>
         <span class="rs-hint muted small" :title="t('点别的轨的音符即可切过去编辑')" v-if="rollOverlay && voiceTracks.length > 1">ⓘ</span>
         <span class="rs-sep" />
         <!-- 和声组（M8a）：成组 / 改名 / 加成员 / 切到组 -->
