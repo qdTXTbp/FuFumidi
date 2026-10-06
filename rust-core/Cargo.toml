@@ -2,6 +2,7 @@
 name = "fufumidi-core"
 version = "0.2.0"
 edition = "2021"
+license = "MIT"
 
 [dependencies]
 sha2 = "0.10"

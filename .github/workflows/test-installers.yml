@@ -1,7 +1,17 @@
 name: Test Linux & macOS Installers
 
+# 手动触发。参数是要测的 Release tag；只有该 Release 里确实带
+# Linux（AppImage / deb）或 macOS（dmg）产物时才跑得通 ——
+# 当前发布通道只上传 Windows 安装包，所以默认会在这两个 job 的第一步失败。
+# 原先这里把 v2.0.0 与产物名硬编码在四个地方，版本一动就全错（见 docs/HYGIENE.md）。
+
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to test, for example v5.0.0-beta.3"
+        required: true
+        default: "v5.0.0-beta.3"
 
 permissions:
   contents: read
@@ -11,17 +21,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download Linux installers
-        run: |
-          gh release download v2.0.0 -R qdTXTbp/FuFumidi -p 'FuFumidi-2.0.0.AppImage' -p 'fufumidi_2.0.0_amd64.deb' --clobber
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euxo pipefail
+          VERSION="${TAG#v}"
+          gh release download "$TAG" -R qdTXTbp/FuFumidi -p "FuFumidi-${VERSION}.AppImage" -p "fufumidi_${VERSION}_amd64.deb" --clobber
       - name: Install xvfb
         run: sudo apt-get update && sudo apt-get install -y xvfb
       - name: Test AppImage
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
           set -euxo pipefail
-          chmod +x FuFumidi-2.0.0.AppImage
-          ./FuFumidi-2.0.0.AppImage --appimage-extract >/dev/null
+          VERSION="${TAG#v}"
+          chmod +x "FuFumidi-${VERSION}.AppImage"
+          "./FuFumidi-${VERSION}.AppImage" --appimage-extract >/dev/null
           APP_BIN="$(find squashfs-root -maxdepth 2 -type f \( -name 'AppRun' -o -name 'fufumidi' -o -name 'FuFumidi' \) | head -n1)"
           echo "APP_BIN=$APP_BIN"
           Xvfb :99 -screen 0 1280x800x24 >/tmp/xvfb-appimage.log 2>&1 &
@@ -39,9 +55,12 @@ jobs:
           wait $PID || true
           echo "AppImage OK"
       - name: Test deb install/start/uninstall
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
           set -euxo pipefail
-          sudo dpkg -i fufumidi_2.0.0_amd64.deb || sudo apt-get -f install -y
+          VERSION="${TAG#v}"
+          sudo dpkg -i "fufumidi_${VERSION}_amd64.deb" || sudo apt-get -f install -y
           BIN="$(find /opt/FuFumidi -maxdepth 1 -type f \( -name 'fufumidi' -o -name 'FuFumidi' \) -perm -111 | head -n1)"
           if [ -z "$BIN" ]; then BIN="$(command -v fufumidi || true)"; fi
           if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then echo "Cannot find installed binary"; exit 1; fi
@@ -68,13 +87,20 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Download macOS dmg
-        run: gh release download v2.0.0 -R qdTXTbp/FuFumidi -p 'FuFumidi-2.0.0.dmg' --clobber
         env:
           GH_TOKEN: ${{ github.token }}
-      - name: Mount and install app
+          TAG: ${{ inputs.tag }}
         run: |
           set -euxo pipefail
-          hdiutil attach FuFumidi-2.0.0.dmg -nobrowse -mountpoint /tmp/fufu_mnt
+          VERSION="${TAG#v}"
+          gh release download "$TAG" -R qdTXTbp/FuFumidi -p "FuFumidi-${VERSION}.dmg" --clobber
+      - name: Mount and install app
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euxo pipefail
+          VERSION="${TAG#v}"
+          hdiutil attach "FuFumidi-${VERSION}.dmg" -nobrowse -mountpoint /tmp/fufu_mnt
           ls -la /tmp/fufu_mnt
           APP_PATH="$(find /tmp/fufu_mnt -maxdepth 1 -name '*.app' | head -n1)"
           echo "APP_PATH=$APP_PATH"

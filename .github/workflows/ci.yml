@@ -1,5 +1,13 @@
 name: CI
 
+# 本仓库的守门工作流：只在 master/main 上跑，Windows runner。
+#
+# 说明：原文件里还有一个 package job（if: push && refs/tags/v），但它**永远不会执行** ——
+# 上面 on.push 只列了分支，tag 推送根本不会触发本工作流（实测 v5.0.0-beta.1 / beta.2
+# 两个 tag 在 GitHub 上都是 0 次运行）。发布用的 Windows 安装包在本机构建，
+# 因为 electron-builder.yml 的 extraResources 需要仓库外的 resources/（python / models / g2p），
+# 见 README 的「构建」一节。这个死 job 已删除，见 docs/HYGIENE.md。
+
 on:
   pull_request:
     branches:
@@ -19,23 +27,23 @@ jobs:
   test:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
       - name: Install root dependencies
-        run: npm install
+        run: npm ci
 
       - name: Install frontend dependencies
-        run: npm --prefix frontend install
+        run: npm --prefix frontend ci
 
       - name: Build frontend
         run: npm --prefix frontend run build
@@ -56,27 +64,3 @@ jobs:
 
       - name: Verify asar contents
         run: npx --yes @electron/asar list dist/fufumidi-full.asar | findstr /C:"main.js" /C:"engine\music2midi.py" /C:"frontend\src\views\ViewResources.vue"
-
-  package:
-    if: github.event_name == 'push' && contains(github.ref, 'refs/tags/v')
-    runs-on: windows-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - name: Install dependencies
-        run: npm install
-      - name: Install frontend dependencies
-        run: npm --prefix frontend install
-      - name: Build frontend
-        run: npm --prefix frontend run build
-      - name: Build NSIS installer
-        run: npx electron-builder --win nsis --x64 --publish never
-      - name: Upload installer artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: FuFumidi-Setup-${{ github.ref_name }}
-          path: release/FuFumidi Setup *.exe
