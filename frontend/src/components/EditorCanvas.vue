@@ -19,6 +19,9 @@ const props = defineProps({
   trackIndex: { type: Number, default: 0 },
   ccEnabled: { type: Boolean, default: false },   // 是否显示 CC 泳道
   ccNumber: { type: Number, default: 11 },        // CC 控制器编号
+  // 步进输入（M4）：开启后画笔不在「点哪落哪」，而是落在**步进指针**上并自动前进
+  stepOn: { type: Boolean, default: false },
+  stepTicks: { type: Number, default: 120 },   // 每步长度（tick）
   scaleSpec: { type: Object, default: null },     // { root, type, custom } 调内编辑用的音阶；空则按曲目自动判断
   scaleMode: { type: String, default: 'off' },    // off | highlight（高亮调内音） | constrain（约束到调内音）
   chordTrack: { type: Array, default: () => [] }, // P1-2 和弦轨 [{ tick, endTick, pcs }]；约束时并入当前小节的调内音
@@ -28,7 +31,7 @@ const props = defineProps({
   cc2Number: { type: Number, default: 1 },
   ccMode: { type: String, default: 'free' },      // free | line | curve
   defaultVelocity: { type: Number, default: 80 }, // 新音符默认力度
-  colorMode: { type: String, default: 'track' },  // track | pitch | velocity | selection
+  colorMode: { type: String, default: 'track' },  // track | pitch | velocity | selection | scale
   /**
    * 渲染/编辑模式：piano=钢琴卷帘（默认） / score=五线谱。
    *
@@ -37,7 +40,7 @@ const props = defineProps({
    */
   view: { type: String, default: 'piano' },
 });
-const emit = defineEmits(['select', 'modify', 'zoom', 'ctxmenu', 'hover']);
+const emit = defineEmits(['select', 'modify', 'zoom', 'ctxmenu', 'hover', 'step']);
 
 const wrap = ref(null);
 const canvas = ref(null);
@@ -659,6 +662,8 @@ function draw() {
   // 注意：此处二分变量不得命名为 lo/hi —— 外层 lo/hi 是音域（draw 开头声明），
   // 遮蔽会导致下方 y=(hi-midi)*rowH 用「音符数」当「最高音」，音符全部画到画布外不可见。
   const winTic = viewT1 - viewT0;
+  // 「按音阶」着色（M4）：每帧只算一次调内音集合（逐音符算会在大文件上炸）
+  const scaleSet = props.colorMode === 'scale' ? constrainPcsAt(null) : null;
   for (const tr of s.tracks) {
     const col = noteColor(tr.index, pal);
     const ns = tr.notes;
@@ -682,6 +687,8 @@ function draw() {
         if (props.colorMode === 'pitch') fill = pitchColor(n.midi, pal);
         else if (props.colorMode === 'velocity') fill = velColor(n.vel, pal);
         else if (props.colorMode === 'selection') fill = sel ? pal.sel : steel;
+        // 调外音用高亮色标出来 —— 校对「转谱结果里有没有跑调的音」时比看音高更快
+        else if (props.colorMode === 'scale') fill = (!scaleSet || !scaleSet.size) ? col : (scaleSet.has(((n.midi % 12) + 12) % 12) ? col : pal.sel);
         else fill = col;
       }
       // 静音音符半透明显示（不发声，但仍可编辑）
@@ -736,6 +743,17 @@ function draw() {
     ctx2d.fillRect(x, y + 1, w2, rowH.value - 2);
     ctx2d.strokeStyle = pal.curve; ctx2d.lineWidth = 1.2;
     ctx2d.strokeRect(x - 1, y, w2 + 2, rowH.value);
+  }
+  // 步进指针（M4）：当前这一格的整条竖带 + 顶边把手，看得见「下一个音落哪」
+  if (props.stepOn) {
+    const len = Math.max(30, Math.round(props.stepTicks || 120));
+    const sx = tickToX(stepCursor.value);
+    const sw = Math.max(2, tickToX(stepCursor.value + len) - sx);
+    ctx2d.fillStyle = pal.tintStrong;
+    ctx2d.fillRect(sx, 0, sw, HK);
+    ctx2d.strokeStyle = pal.curve; ctx2d.lineWidth = 1.2;
+    ctx2d.strokeRect(sx + 0.5, 0.5, sw - 1, HK - 1);
+    ctx2d.fillStyle = pal.curve; ctx2d.fillRect(sx, 0, sw, 3);
   }
   // 播放头
   const curTick = s.secToTick(state.curSec / state.tempo);
@@ -1081,6 +1099,22 @@ function onDown(e) {
     try { canvas.value.setPointerCapture(e.pointerId); } catch (err) {}
     return;
   }
+  if (props.tool === 'pencil' && props.stepOn) {
+    // 步进：音高来自点击位置，**位置来自指针**，落完整步前进
+    const midi = yToMidi(y);
+    if (midi < 0 || midi > 127) return;
+    const len = Math.max(30, Math.round(props.stepTicks || 120));
+    const st = Math.max(0, Math.round(stepCursor.value));
+    pushState();
+    const note = { start: st, end: st + len, midi: clamp(scaleSnapPitch(midi, st), 0, 127), vel: clamp(Math.round(props.defaultVelocity), 1, 127) };
+    tr.notes.push(note);
+    selection.clear(); selection.add(note);
+    stepCursor.value = st + len;
+    emit('step', stepCursor.value);
+    afterEdit();
+    emit('select');
+    return;
+  }
   if (props.tool === 'pencil') {
     const tick = snapTick(xToTick(x)), midi = yToMidi(y);
     if (tick < 0 || midi < 0 || midi > 127) return;
@@ -1209,6 +1243,14 @@ function onUp() {
   }
   dragState.value = null;
 }
+/* ---------------- 步进输入（M4） ----------------
+   Cubase/Logic 的 Step Input：画笔不在「点哪落哪」，而是落在**指针**上，落完自动前进一格。
+   指针位置用 emit('step') 回报给上层（工具条要显示它在第几拍），也支持 ← → 手动走。 */
+const stepCursor = ref(0);
+function setStepCursor(v) { stepCursor.value = Math.max(0, Math.round(v || 0)); emit('step', stepCursor.value); draw(); }
+function stepBy(n) { const d = Math.max(30, Math.round(props.stepTicks || 120)); setStepCursor(stepCursor.value + n * d); }
+function stepAt() { return stepCursor.value; }
+
 /* ---------------- 悬停工具条（M3） ----------------
    鼠标压到音符上时通知上层弹一条就地工具条（FL / Studio One 的做法）。
    只在**命中的音符发生变化**时才 emit：pointermove 一秒几十次，无脑 emit 会把 Vue 刷爆。 */
@@ -1448,10 +1490,14 @@ function applyDraft(arr) {
    撤销栈也只多一条（commit 时才把基线压进去），Esc 能把整段预览一次还原。
    只记字段、不换对象：选中集合是对象引用的 Set，换成新对象会让选择当场失效。 */
 let previewBase = null;
-function beginPreview() {
+/** order：可选，指定预览基线的顺序（列表编辑器要把「表格第 i 行」稳定映射到音符，
+    所以传它自己那份按 start 排序的引用数组）。不传就用选择集合的插入顺序。 */
+function beginPreview(order) {
   const tr = curTrack();
   if (!tr || !selection.size) { previewBase = null; return 0; }
-  previewBase = [...selection].map((n) => ({ n, start: n.start, end: n.end, midi: n.midi, vel: n.vel, muted: !!n.muted }));
+  const arr = (Array.isArray(order) && order.length) ? order.filter((n) => tr.notes.includes(n)) : [...selection];
+  if (!arr.length) { previewBase = null; return 0; }
+  previewBase = arr.map((n) => ({ n, start: n.start, end: n.end, midi: n.midi, vel: n.vel, muted: !!n.muted }));
   return previewBase.length;
 }
 function previewing() { return !!previewBase; }
@@ -1619,6 +1665,8 @@ defineExpose({
   beginPreview, previewing, previewCount, applyPreviewNow, commitPreview, cancelPreview,
   // 悬停工具条（M3）
   hoverAction, selectHover, hitAt,
+  // 步进输入（M4）
+  setStepCursor, stepBy, stepAt,
   undo, redo, canUndo, canRedo, clearHistory, historySnapshots,
   snapSelToAudio,
   // 乐谱视图（五线谱）对外：滚动/谱号/插入时值/重绘
@@ -1665,6 +1713,10 @@ watch(() => props.ccMode, () => markDirty());
 watch(() => props.ccEnabled, (v) => { if (!v) ccDrawing.value = false; markDirty(); ccDrawLane(); });
 watch(() => props.scaleMode, () => { markDirty(); draw(); });
 watch(() => props.scaleSpec, () => { markDirty(); draw(); }, { deep: true });
+/* 着色方案、默认力度、步进参数都是「只影响绘制」的 prop：没有这个 watch，
+   改了色卡要等下一次交互（鼠标移动/选择）才重绘 —— 用户看到的就是「点了没反应」。 */
+watch(() => [props.colorMode, props.stepOn, props.stepTicks, props.defaultVelocity, props.ccMode],
+  () => { markDirty(); draw(); });
 watch(() => props.chordTrack, () => { markDirty(); draw(); }, { deep: true });
 watch(() => props.audio, () => { _onsetsCache = null; markDirty(); draw(); });
 watch(() => props.ksMap, () => { markDirty(); draw(); }, { deep: true });

@@ -25,8 +25,8 @@ const INSP_TABS = [['note', '音符', 'cursor'], ['track', '轨道', 'music'], [
 
 /* 快捷键一览（M1）：以前只写在按钮 title 里，等于没有。只列**代码里真实存在**的手势。 */
 const SHORTCUT_GROUPS = [
-  { name: '工具与绘制', rows: [['V', '选择工具'], ['B', '画笔工具'], ['E', '橡皮工具'], ['拖拽音符', '移动（上下改音高、左右改位置）'], ['拖音符边缘', '拉伸时值'], ['空白处点击', '画笔工具下插入音符'], ['悬停音符', '就地工具条：力度 / 时值 / 静音 / 删除 / 参数工具']] },
-  { name: '修饰键（画布）', rows: [['Alt+拖拽', '改力度（2px ≈ 1 级）'], ['Shift+拖拽', '锁定音高，只改时间位置'], ['Ctrl / Shift + 点击', '加选 / 减选'], ['Ctrl+滚轮', '缩放'], ['Shift+滚轮', '横向平移']] },
+  { name: '工具与绘制', rows: [['V', '选择工具'], ['B', '画笔工具'], ['E', '橡皮工具'], ['拖拽音符', '移动（上下改音高、左右改位置）'], ['拖音符边缘', '拉伸时值'], ['空白处点击', '画笔工具下插入音符'], ['悬停音符', '就地工具条：力度 / 时值 / 静音 / 删除 / 参数工具'], ['步进输入', '点一下落一个音并自动前进（← → 走指针，Esc 退出）']] },
+  { name: '修饰键（画布）', rows: [['← / →', '步进模式下走指针（一步 = 当前步长）'], ['Alt+拖拽', '改力度（2px ≈ 1 级）'], ['Shift+拖拽', '锁定音高，只改时间位置'], ['Ctrl / Shift + 点击', '加选 / 减选'], ['Ctrl+滚轮', '缩放'], ['Shift+滚轮', '横向平移']] },
   { name: '选择', rows: [['拖拽空白', '框选音符'], ['右键音符', '上下文菜单（含参数工具直达）']] },
   { name: '编辑', rows: [['Ctrl+Shift+P', '命令面板（搜索所有命令）'], ['Ctrl+Z', '撤销'], ['Ctrl+Y', '重做'], ['Ctrl+C', '复制选中'], ['Ctrl+V', '粘贴到播放头'], ['Ctrl+A', '全选'], ['Delete', '删除选中'], ['Ctrl+S', '导出 MIDI']] },
   { name: '视图与走带', rows: [['滚轮', '上下滚动音高'], ['Ctrl+滚轮', '缩放'], ['Shift+滚轮', '横向平移'], ['状态栏右下', '工作区预设：编曲 / 调教 / 校对 / 混音']] },
@@ -116,6 +116,36 @@ const curTrackInfo = computed(() => {
   return s.tracks[trackIndex.value] || null;
 });
 const selMutedNow = computed(() => (editor.value && sel.count ? editor.value.selMuted() : false));
+
+/* ---------------- 步进输入（M4） ----------------
+   开启后画笔落在「步进指针」上并自动前进；← → 手动走，工具条显示指针所在的小节:拍。 */
+const stepOn = ref(false);
+const stepBeats = ref(0.25);
+const stepCursorTick = ref(0);
+const STEP_OPTS = [[0.125, '1/32'], [0.25, '1/16'], [1 / 3, '1/8T'], [0.5, '1/8'], [1, '1/4']];
+const stepTicks = computed(() => Math.max(30, Math.round(stepBeats.value * ((song.value && song.value.tpb) || 480))));
+const stepCursorText = computed(() => {
+  const s = song.value; if (!s) return '1:1';
+  const tpb = s.tpb || 480;
+  const per = tpb * ((s.sigMap && s.sigMap[0]) ? s.sigMap[0].num : 4);
+  const tk = stepCursorTick.value;
+  return (Math.floor(tk / per) + 1) + ':' + (Math.floor((tk % per) / tpb) + 1);
+});
+function onStep(tick) { stepCursorTick.value = tick || 0; }
+function toggleStep() {
+  stepOn.value = !stepOn.value;
+  if (stepOn.value) {
+    if (tool.value !== 'pencil') tool.value = 'pencil';
+    const s = song.value;
+    // 打开时把指针放到播放头，用户一进来就知道「下一个音落在哪」
+    if (s) editor.value?.setStepCursor(Math.max(0, Math.round(s.secToTick(state.curSec / (state.tempo || 1)))));
+    toast(t('步进输入：点击音符区按步长依次落音（← → 走指针，Esc 退出）'), 'ok');
+  }
+}
+function stepToPlayhead() {
+  const s = song.value; if (!s) return;
+  editor.value?.setStepCursor(Math.max(0, Math.round(s.secToTick(state.curSec / (state.tempo || 1)))));
+}
 
 /* ---------------- 参数化 MIDI 工具（M2） ----------------
    面板本身与具体工具解耦：工具表在 core/midi-tools.js，预览在 EditorCanvas 里，
@@ -252,6 +282,7 @@ const menuGroups = computed(() => {
     { label: t('工具'), items: [
       { label: t('量化到吸附网格'), disabled: !hasSel, run: quantize },
       { label: t('参数化工具（拖动即预览）'), hint: t('需先选中'), disabled: !hasSel, run: openMidiTools },
+      { label: stepOn ? t('退出步进输入') : t('步进输入'), hint: stepOn ? t('当前已开启') : t('← → 走指针'), run: toggleStep },
       { label: t('智能量化（网格 + Groove）'), disabled: !hasSong, run: openSmartQuantize },
       { label: t('力度曲线（绘制包络）'), disabled: !hasSel, run: openVelCurve },
       { label: t('列表编辑器（精确数值）'), disabled: !hasSel, run: openList },
@@ -500,10 +531,39 @@ function applyVelCurve() {
 
 /* ---------------- 列表编辑器 ---------------- */
 function openList() {
-  const notes = editor.value?.selNotes();
-  if (!notes || !notes.length) { toast(t('请先在钢琴卷帘中选择音符'), 'warn'); return; }
-  listDraft.value = notes.map(n => ({ start: n.start, end: n.end, midi: n.midi, vel: n.vel }));
+  const refs = editor.value?.selRef();          // 实时引用，按 start 排序
+  if (!refs || !refs.length) { toast(t('请先在钢琴卷帘中选择音符'), 'warn'); return; }
+  if (!editor.value.beginPreview(refs)) { toast(t('请先在钢琴卷帘中选择音符'), 'warn'); return; }
+  listDraft.value = refs.map(n => ({ start: n.start, end: n.end, midi: n.midi, vel: n.vel }));
   listOpen.value = true;
+}
+/* 列表编辑器改成**即时生效**（M4）：打开时进预览态，改哪一格画布上立刻变，
+   确定才落成一个撤销点，取消/Esc 一次还原。
+   顺序很关键：草稿按 start 排序生成，预览基线也用同一份 selRef()（同样按 start 排序）——
+   于是「下标 ↔ 音符」是稳定映射，用户把某个音拖到别的位置时表格不会跳行。 */
+function applyListDraft() {
+  const arr = listDraft.value;
+  editor.value?.applyPreviewNow((notes) => {
+    notes.forEach((n, i) => {
+      const d = arr[i]; if (!d) return;
+      n.start = Math.max(0, Math.round(d.start));
+      n.end = Math.max(n.start + 1, Math.round(d.end));
+      n.midi = clamp(Math.round(d.midi), 0, 127);
+      n.vel = clamp(Math.round(d.vel), 1, 127);
+    });
+    return notes.length;
+  });
+}
+function applyList() {
+  const n = editor.value?.commitPreview() || 0;
+  listOpen.value = false;
+  toast(t('已应用 ') + n + t(' 个音符的修改'), 'ok');
+  refreshSel(); onModified();
+}
+function cancelList() {
+  editor.value?.cancelPreview();
+  listOpen.value = false;
+  refreshSel();
 }
 function saveList() {
   editor.value?.applyDraft(listDraft.value);
@@ -546,6 +606,28 @@ const drumCv = ref(null);
 const DRUM_PITCHES = [35,36,38,40,41,43,45,47,48,50,51,53,55,57,59,60,61,63,65,66,67,69,71,72,73,75,76,77,79,81];
 const DRUM_NAMES = {35:'Acoustic Bass Drum',36:'Bass Drum 1',38:'Acoustic Snare',40:'Electric Snare',41:'Floor Tom 2',43:'Floor Tom 1',45:'Low Tom',47:'Low-Mid Tom',48:'Hi-Mid Tom',50:'High Tom',51:'Ride Cymbal 1',53:'Ride Bell',55:'Splash Cymbal',57:'Crash Cymbal 2',59:'Ride Cymbal 2',60:'Hi Bongo',61:'Low Bongo',63:'High Conga',65:'Low Conga',66:'High Timbale',67:'Low Timbale',69:'Cowbell',71:'High Agogo',72:'Low Agogo',73:'Maracas',75:'Claves',76:'Hi Wood Block',77:'Low Wood Block',79:'Open Cuica',81:'Open Hi-Hat'};
 const drumTracks = computed(() => song.value ? song.value.tracks.map((t, i) => ({ i, t })) : []);
+/* 鼓组命名（M4，借 REAPER 的 note name map）：GM 名字只是默认值，
+   用户自己的鼓机/音源映射经常不一样（36 是 Kick 还是别的），所以允许逐音改名并持久化。 */
+const DRUM_NAME_KEY = 'fufumidi_drum_names';
+const drumNames = ref((() => { try { return JSON.parse(localStorage.getItem(DRUM_NAME_KEY) || '{}') || {}; } catch (e) { return {}; } })());
+const drumNameOpen = ref(false);
+const drumNameDraft = ref({});
+function drumName(midi) { return drumNames.value[midi] || DRUM_NAMES[midi] || String(midi); }
+function openDrumNames() {
+  drumNameDraft.value = {};
+  for (const p of DRUM_PITCHES) drumNameDraft.value[p] = drumNames.value[p] || '';
+  drumNameOpen.value = true;
+}
+function saveDrumNames() {
+  const out = {};
+  for (const p of DRUM_PITCHES) { const v = String(drumNameDraft.value[p] || '').trim(); if (v) out[p] = v; }
+  drumNames.value = out;
+  try { localStorage.setItem(DRUM_NAME_KEY, JSON.stringify(out)); } catch (e) {}
+  drumNameOpen.value = false;
+  nextTick(drawDrum);
+  toast(t('鼓组命名已保存'), 'ok');
+}
+function resetDrumNames() { drumNameDraft.value = {}; }
 
 /**
  * 三视图切换：钢琴卷帘 / 鼓组网格 / **五线谱（就地编辑）**。
@@ -629,7 +711,7 @@ function drawDrum() {
     if (i % 2) { g.fillStyle = cssVar('--row-alt', 'rgba(10,10,10,0.03)'); g.fillRect(0, y, w, rowH); }
     g.strokeStyle = hair; g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke();
     g.fillStyle = slate; g.font = '9px monospace'; g.textAlign = 'left'; g.textBaseline = 'middle';
-    g.fillText(String(DRUM_NAMES[DRUM_PITCHES[i]] || DRUM_PITCHES[i]).slice(0, 14), 4, y + rowH / 2);
+    g.fillText(String(drumName(DRUM_PITCHES[i])).slice(0, 14), 4, y + rowH / 2);
   }
   for (let b = 0; b < beats; b++) {
     const x = b * colW;
@@ -767,7 +849,7 @@ const ccMode = ref('free');
 const editPrefs = (() => { try { return JSON.parse(localStorage.getItem('fufumidi_edit_prefs') || '{}') || {}; } catch (e) { return {}; } })();
 const defaultVelocity = ref(typeof editPrefs.defaultVelocity === 'number' ? editPrefs.defaultVelocity : 80);
 const colorMode = ref(editPrefs.colorMode || 'track');
-const COLOR_MODES = [['track', t('按轨道')], ['pitch', t('按音高')], ['velocity', t('按力度')], ['selection', t('按选中')]];
+const COLOR_MODES = [['track', t('按轨道')], ['pitch', t('按音高')], ['velocity', t('按力度')], ['selection', t('按选中')], ['scale', t('按音阶')]];
 watch([defaultVelocity, colorMode], () => {
   try { localStorage.setItem('fufumidi_edit_prefs', JSON.stringify({ defaultVelocity: defaultVelocity.value, colorMode: colorMode.value })); } catch (e) {}
 });
@@ -1402,6 +1484,8 @@ function onKey(e) {
   if (mod && e.key === 'v') { e.preventDefault(); paste(); return; }
   if (mod && e.key === 's') { e.preventDefault(); exportMidi(); return; }
   if (e.key === 'Delete' || e.key === 'Backspace') { del(); return; }
+  if (stepOn.value && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) { e.preventDefault(); editor.value?.stepBy(e.key === 'ArrowRight' ? 1 : -1); return; }
+  if (stepOn.value && e.key === 'Escape') { stepOn.value = false; return; }
   if (e.key === '?' || e.key === 'F1') { e.preventDefault(); shortcutsOpen.value = !shortcutsOpen.value; return; }
   if (mod && e.shiftKey && (e.key === 'p' || e.key === 'P')) { e.preventDefault(); palOpen.value = true; return; }
   const k = e.key.toLowerCase();
@@ -1454,7 +1538,7 @@ onMounted(async () => {
      正常用户永远不会命中这条分支。 */
   try {
     if (localStorage.getItem('fufumidi_debug') === '1' || /[?&]debug=1/.test(location.hash)) {
-      window.__fufumidiDebug = { editor: () => editor.value, app, ws, hoverInfo, midiToolOpen, palOpen };
+      window.__fufumidiDebug = { editor: () => editor.value, app, ws, hoverInfo, midiToolOpen, palOpen, drumNames, stepOn, stepCursorTick, listOpen, listDraft, viewMode, sel };
     }
   } catch (e) {}
   await nextTick();
@@ -1516,6 +1600,23 @@ onBeforeUnmount(() => {
           <button class="et-btn" :class="{ active: tool === 'pencil' }" :title="t('画笔 B')" @click="tool = 'pencil'"><Icon name="pencil" :size="14" />{{ t('画笔') }}</button>
           <button class="et-btn" :class="{ active: tool === 'erase' }" :title="t('橡皮 E')" @click="tool = 'erase'"><Icon name="erase" :size="14" />{{ t('橡皮') }}</button>
           <button class="et-btn" :class="{ active: tool === 'mute' }" :title="t('静音：点击音符切换发声/静音（不删除、不改力度）')" @click="tool = 'mute'"><Icon name="minus" :size="14" />{{ t('静音') }}</button>
+        </div>
+        <span class="et-sep"></span>
+        <!-- 步进输入（M4）：Cubase/Logic 的 Step Input —— 落音由指针决定并自动前进 -->
+        <div class="et-group ed-step-group">
+          <button class="et-btn" :class="{ active: stepOn }" data-guide="edit-step"
+                  :title="t('步进输入：点击音符区按步长依次落音（← → 走指针，Esc 退出）')" @click="toggleStep">
+            <Icon name="quantize" :size="14" />{{ t('步进') }}
+          </button>
+          <template v-if="stepOn">
+            <select v-model.number="stepBeats" class="select-input" style="width:auto" :title="t('步长')">
+              <option v-for="s in STEP_OPTS" :key="s[1]" :value="s[0]">{{ s[1] }}</option>
+            </select>
+            <span class="et-label ed-step-pos" :title="t('步进指针所在位置')">{{ stepCursorText }}</span>
+            <button class="et-btn" :title="t('指针回到播放头')" @click="stepToPlayhead"><Icon name="target" :size="13" /></button>
+            <button class="et-btn" :title="t('后退一步（←）')" @click="editor?.stepBy(-1)">←</button>
+            <button class="et-btn" :title="t('前进一步（→）')" @click="editor?.stepBy(1)">→</button>
+          </template>
         </div>
         <span class="et-sep"></span>
         <div class="et-group ed-view-switch">
@@ -1796,7 +1897,8 @@ onBeforeUnmount(() => {
                       :scale-spec="scaleSpec" :scale-mode="scaleMode" :chord-track="chordSpec" :ks-map="ksMap" :audio="audioData"
                       :cc2-enabled="cc2Enabled" :cc2-number="cc2Number" :cc-mode="ccMode"
                       :default-velocity="defaultVelocity" :color-mode="colorMode"
-                      @select="refreshSel" @modify="onModified" @zoom="onZoom" @ctxmenu="openCtxMenu" @hover="onHover" />
+                      @select="refreshSel" @modify="onModified" @zoom="onZoom" @ctxmenu="openCtxMenu" @hover="onHover" @step="onStep"
+                      :step-on="stepOn" :step-ticks="stepTicks" />
         <video v-if="videoUrl" :src="videoUrl" controls playsinline class="ed-video-overlay"></video>
         <!-- 悬停工具条（M3）：压到音符上就地出现，鼠标移到条上不消失 -->
         <div v-if="hoverInfo && !midiToolOpen" class="hv-bar" :style="hoverBarStyle"
@@ -1823,6 +1925,8 @@ onBeforeUnmount(() => {
             <option v-for="d in drumTracks" :key="d.i" :value="d.i">{{ d.t.name }}{{ t('（') }}{{ d.t.notes.length }}{{ t('）') }}</option>
           </select>
           <span class="et-label">{{ t('点击格子添加 / 删除鼓点') }}</span>
+          <button class="btn sm" :title="t('逐音改名：GM 名字只是默认值，鼓机映射不一样时改这里（本地保存）')" @click="openDrumNames">
+            <Icon name="edit" :size="12" />{{ t('鼓组命名') }}</button>
           <button class="btn sm danger" style="margin-left:auto" @click="drumClear">{{ t('清除当前轨道鼓点') }}</button>
         </div>
         <canvas ref="drumCv" class="drum-canvas" @click="drumClick"></canvas>
@@ -1895,13 +1999,36 @@ onBeforeUnmount(() => {
     </div>
     </Transition>
 
-    <!-- 列表编辑器弹窗 -->
+    <!-- 鼓组命名（M4）：GM 名字只是默认值 -->
     <Transition name="ov">
-    <div v-if="listOpen" class="ed-modal-mask" @click.self="listOpen = false">
+    <div v-if="drumNameOpen" class="ed-modal-mask" @click.self="drumNameOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head">
-          <b>{{ t('列表编辑器') }}</b><span class="muted small">{{ t('精确修改选中 ') }}{{ listDraft.length }}{{ t(' 个音符（单位：tick）') }}</span>
-          <button class="icon-btn" style="margin-left:auto" @click="listOpen = false"><Icon name="minus" :size="14" /></button>
+          <b>{{ t('鼓组命名') }}</b><span class="muted small">{{ t('留空则用 GM 默认名；只保存在本机') }}</span>
+          <button class="icon-btn" style="margin-left:auto" @click="drumNameOpen = false"><Icon name="minus" :size="14" /></button>
+        </div>
+        <div class="drum-name-grid">
+          <label v-for="p in DRUM_PITCHES" :key="p" class="drum-name-row">
+            <span class="drum-name-p">{{ p }}</span>
+            <input class="text-input" v-model="drumNameDraft[p]" :placeholder="DRUM_NAMES[p] || String(p)" />
+          </label>
+        </div>
+        <div class="ed-modal-foot">
+          <button class="btn sm" @click="resetDrumNames">{{ t('恢复默认') }}</button>
+          <button class="btn sm" @click="drumNameOpen = false">{{ t('取消') }}</button>
+          <button class="btn sm primary" @click="saveDrumNames">{{ t('保存') }}</button>
+        </div>
+      </div>
+    </div>
+    </Transition>
+
+    <!-- 列表编辑器弹窗 -->
+    <Transition name="ov">
+    <div v-if="listOpen" class="ed-modal-mask" @click.self="cancelList">
+      <div class="ed-modal" @keydown.esc.stop="cancelList" @keydown.enter.stop="applyList">
+        <div class="ed-modal-head">
+          <b>{{ t('列表编辑器') }}</b><span class="muted small">{{ t('精确修改选中 ') }}{{ listDraft.length }}{{ t(' 个音符（单位：tick）· 改动即时生效，回车应用，Esc 还原') }}</span>
+          <button class="icon-btn" style="margin-left:auto" :title="t('取消并还原')" @click="cancelList"><Icon name="minus" :size="14" /></button>
         </div>
         <div class="ed-list-scroll">
           <table class="ed-list-table">
@@ -1909,18 +2036,18 @@ onBeforeUnmount(() => {
             <tbody>
               <tr v-for="(r, i) in listDraft" :key="i">
                 <td>{{ i + 1 }}</td>
-                <td><input type="number" class="num-input" v-model.number="r.start" step="1" min="0" /></td>
-                <td><input type="number" class="num-input" v-model.number="r.end" step="1" min="1" /></td>
-                <td><input type="number" class="num-input" v-model.number="r.midi" step="1" min="0" max="127" /></td>
-                <td><input type="number" class="num-input" v-model.number="r.vel" step="1" min="1" max="127" /></td>
+                <td><input type="number" class="num-input" v-model.number="r.start" step="1" min="0" @input="applyListDraft" /></td>
+                <td><input type="number" class="num-input" v-model.number="r.end" step="1" min="1" @input="applyListDraft" /></td>
+                <td><input type="number" class="num-input" v-model.number="r.midi" step="1" min="0" max="127" @input="applyListDraft" /></td>
+                <td><input type="number" class="num-input" v-model.number="r.vel" step="1" min="1" max="127" @input="applyListDraft" /></td>
                 <td class="muted small">{{ r.end - r.start }}</td>
               </tr>
             </tbody>
           </table>
         </div>
         <div class="ed-modal-foot">
-          <button class="btn sm" @click="listOpen = false">{{ t('取消') }}</button>
-          <button class="btn sm primary" @click="saveList">{{ t('保存修改') }}</button>
+          <button class="btn sm" @click="cancelList">{{ t('取消并还原') }}</button>
+          <button class="btn sm primary" @click="applyList">{{ t('应用（回车）') }}</button>
         </div>
       </div>
     </div>
@@ -2397,6 +2524,13 @@ onBeforeUnmount(() => {
 /* 上下文任务条：选中后原地出现高频操作。高度固定 32px，不随选择状态抖动 */
 .ed-taskbar { display: flex; align-items: center; gap: 5px; flex-wrap: nowrap; overflow-x: auto; flex: none; padding: 4px 8px; margin-bottom: 6px; min-height: 34px; }
 .ed-taskbar .et-btn { height: 24px; min-height: 24px; padding: 0 8px; font-size: 11.5px; }
+.ed-step-group .select-input { height: 24px; padding: 0 22px 0 7px; font-size: 11.5px; }
+.ed-step-pos { font-family: var(--mono); font-size: 11px; color: var(--ink); min-width: 34px; text-align: center; }
+/* 鼓组命名表：两列、行高压到 24px，一屏看全 30 个音 */
+.drum-name-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; max-height: 52vh; overflow-y: auto; }
+.drum-name-row { display: flex; align-items: center; gap: 8px; }
+.drum-name-p { flex: none; width: 26px; text-align: right; font-family: var(--mono); font-size: 11px; color: var(--stone); }
+.drum-name-row .text-input { flex: 1; min-width: 0; height: 24px; padding: 0 7px; font-size: 11.5px; }
 /* 标签在窄条里被压成两行（「移调」竖着断成两截），必须 nowrap + 不参与收缩 */
 .ed-taskbar .et-label { flex: none; white-space: nowrap; }
 .tb-badge { font-size: 11.5px; font-weight: 700; color: #fff; background: var(--accent); border-radius: 7px; padding: 3px 8px; flex: none; font-variant-numeric: tabular-nums; }
