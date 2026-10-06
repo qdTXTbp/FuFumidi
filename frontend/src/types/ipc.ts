@@ -648,6 +648,10 @@ export interface FuBridge {
   pickAudioFiles(): Promise<string[] | null>;
   listAudioFiles(dir: string): Promise<string[]>;
   pickImage(): Promise<string | null>;
+  /* 专辑封面（preload 的 sys:pickCover → main/system-ipc.js）。
+     ★ 契约漂移实例：桥与主进程 2026 年就实现了它，类型表里一直没写，
+       于是 app.ts 里两处调用报 TS2339 —— 类型漏一个成员 = 调用方永远"看不见"这个能力。 */
+  pickCover(): Promise<{ ok?: boolean; canceled?: boolean; dataUrl?: string; error?: string }>;
   pickFile(opts: any): Promise<string | null>;
   pickDirectory(): Promise<string | null>;
   readSoundFont(p: string): Promise<Uint8Array | null>;

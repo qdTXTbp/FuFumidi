@@ -309,7 +309,9 @@ export function trackColorOf(track: { color?: string } | null | undefined, index
   if (typeof own === 'string' && /^#[0-9a-f]{3,8}$/i.test(own)) return own;
   const pal = activePalette();
   const n = pal.length;
-  return pal[(((index | 0) % n) + n) % n];
+  const fallback = '#8b83f0';
+  if (!n) return fallback;                        // 调色板为空（理论上不会）：给个确定值，别返回 undefined
+  return pal[(((index | 0) % n) + n) % n] ?? pal[0] ?? fallback;
 }
 
 /** 新建一个空声部轨 */
@@ -444,7 +446,10 @@ export const useSingerStore = defineStore('singer', {
      */
     /** 和声组（M8a）：组只是"一组轨 + 组级覆盖"，成员轨本身不变 —— 于是导出/渲染链路都不用动。 */
   meta: { title: '', comment: '', artist: '', timeSig: '4/4', alignMs: 0, groups: [] as { id: string; name: string; trackIds: string[] }[] } as
-      { title: string; comment: string; artist: string; timeSig?: string; alignMs?: number },
+      { title: string; comment: string; artist: string; timeSig?: string; alignMs?: number;
+        /** 和声组（M8a）。类型以前漏了这个字段 —— 运行时有、类型里没有，
+         *  于是所有读 meta.groups 的地方都报 TS2339（9 处），是"类型债"不是逻辑债。 */
+        groups?: { id: string; name: string; trackIds: string[] }[] },
     /** 打开工程后没落到本地的伴奏（包里缺文件 / 解包失败） */
     missingAudio: [] as { trackId: string; fileName: string; asset: string }[],
     /**
@@ -649,11 +654,14 @@ export const useSingerStore = defineStore('singer', {
     cycleTrackColor(id: string) {
       const i = this.tracks.findIndex(t => t.id === id);
       if (i < 0) return;
+      const tr0 = this.tracks[i];
+      if (!tr0) return;
       const pal = activePalette();
-      const cur = trackColorOf(this.tracks[i], i);
+      const cur = trackColorOf(tr0, i);
       const k = pal.indexOf(cur);
       this.pushUndo();
-      this.tracks[i].color = pal[(k + 1) % pal.length];
+      const next = pal.length ? pal[(k + 1) % pal.length] : undefined;
+      tr0.color = next ?? cur;                    // 取不到就保持不变，别把颜色写成 undefined
     },
     /** 加一条音频轨（伴奏）。`durationMs` 由调用方用 <audio> 探到。 */
     addAudioTrack(path: string, fileName: string, durationMs: number): string {
@@ -1716,7 +1724,8 @@ export const useSingerStore = defineStore('singer', {
       if (missIdx.length) {
         // 只下发**变了的**乐句。payload 带绝对拍位 → 返回的音频仍与整轨时间轴对齐，
         // 于是可以按各自的窗口切出来（窗口切点在静音中点，切了听不出来）。
-        const missNotes = missIdx.flatMap((i) => phrases[i].idx.map((k) => notes[k]));
+        // 索引越界时宁可少送一个音符，也不要把 undefined 塞进 payload（引擎会解析失败）
+        const missNotes = missIdx.flatMap((i) => (phrases[i]?.idx || []).map((k) => notes[k]).filter(Boolean));
         const r = await (bridge as any).utauRenderTrack({
           voicebank: tr.singer,
           notes: missNotes,
@@ -1738,15 +1747,20 @@ export const useSingerStore = defineStore('singer', {
         cache.totalMs = Math.max(1, lastEndMs + cache.tailMs + 120);
         const wins = phraseWindows(phrases, this.bpm, cache.totalMs);
         for (const i of missIdx) {
-          const w = sliceSegment(wav, wins[i].startMs, wins[i].endMs);
-          cache.phrases[i] = { hash: sigs[i], startMs: w.startMs, endMs: w.endMs, bytes: w.bytes };
+          const win = wins[i];
+          const sig = sigs[i];
+          if (!win || !sig) continue;             // 窗口/签名算不出来（乐句表与索引不同步）→ 跳过这一句
+          const w = sliceSegment(wav, win.startMs, win.endMs);
+          cache.phrases[i] = { hash: sig, startMs: w.startMs, endMs: w.endMs, bytes: w.bytes };
           rendered += 1;
         }
         // 命中的句子：字节可复用，窗口照新的写（窗口只有在邻居变了时才会动，那时邻居也在 miss 里）
         for (let i = 0; i < phrases.length; i++) {
-          if (hits[i] && cache.phrases[i]) {
-            cache.phrases[i].startMs = wins[i].startMs;
-            cache.phrases[i].endMs = wins[i].endMs;
+          const cp = cache.phrases[i];
+          const win = wins[i];
+          if (hits[i] && cp && win) {
+            cp.startMs = win.startMs;
+            cp.endMs = win.endMs;
           }
         }
       }

@@ -8,6 +8,12 @@ import { usePlaylistStore } from './playlist';
 import { bridge } from '../api';
 import { t } from '../core/i18n';
 
+/* 音频曲目（播客 / 有声书）的播放元素与 objectURL。
+   ★ 放**模块级**而不是 store state：它们是 DOM 节点与浏览器对象，塞进 reactive 会被 Proxy 包一层，
+     既没必要也容易出怪问题（`instanceof`、方法接收者）。全仓库只有本文件用它们（grep 过）。 */
+let audioEl: HTMLAudioElement | null = null;
+let audioUrl = '';
+
 /* hint = 悬停解释。用户复核里点名「调教 / 声部轨 / 曲库 / 对齐偏移」这类圈内术语没有解释 ——
    导航是最需要解释的一层（新用户第一眼看到的就是它）。 */
 export const VIEWS = [
@@ -239,8 +245,9 @@ export const useAppStore = defineStore('app', {
       return fmtTime(state.curSec);
     },
     /* 当前视图下的播放队列：全部曲目 / 收藏 / 智能列表 / 歌单，并按搜索过滤 */
-    isAudio(state): boolean {
-      return !!(state.currentSong && state.currentSong.kind === 'audio');
+    isAudio(): boolean {
+      // currentSong 是**同一 store 的 getter**：在 getter 里要走 this，state 上不存在（TS2339 就是这么来的）
+      return !!(this.currentSong && this.currentSong.kind === 'audio');
     },
     queueSongs(state): any[] {
       const pl = usePlaylistStore();
@@ -253,12 +260,12 @@ export const useAppStore = defineStore('app', {
         list = state.songs.filter(s => favs.has(s.id));
       } else if (pl.activePlaylistId === 'recent') {
         const st = stats();
-        list = state.songs.filter(s => st[s.id] && st[s.id].last)
-          .slice().sort((a, b) => (st[b.id].last || 0) - (st[a.id].last || 0)).slice(0, 100);
+        list = state.songs.filter(s => st[s.id] && st[s.id]?.last)
+          .slice().sort((a, b) => (st[b.id]?.last || 0) - (st[a.id]?.last || 0)).slice(0, 100);
       } else if (pl.activePlaylistId === 'most') {
         const st = stats();
-        list = state.songs.filter(s => st[s.id] && st[s.id].c > 0)
-          .slice().sort((a, b) => (st[b.id].c || 0) - (st[a.id].c || 0)).slice(0, 100);
+        list = state.songs.filter(s => (st[s.id]?.c || 0) > 0)
+          .slice().sort((a, b) => (st[b.id]?.c || 0) - (st[a.id]?.c || 0)).slice(0, 100);
       } else {
         const ids = pl.songIds;
         const order = new Map(ids.map((id, idx) => [id, idx]));
@@ -581,7 +588,7 @@ export const useAppStore = defineStore('app', {
       // 曲目对应的真实 .mid 文件：只有「删除」语义才删磁盘文件，「移除」只解除歌单归属
       if (opts && opts.deleteFile) {
         const p = item && item.meta && item.meta.path;
-        if (p) { try { await bridge.deleteMidi(p); } catch (e) {} }
+        if (p && bridge) { try { await bridge.deleteMidi(p); } catch (e) {} }
       }
       // 同步清理歌单与收藏中的引用：否则会残留悬空 id，歌单显示数大于实际曲目数
       try {
@@ -692,7 +699,7 @@ export const useAppStore = defineStore('app', {
     },
     // 音频曲目播放元素：接入合成器效果链（EQ/空间声对音频同样生效）
     ensureAudioEl(): any {
-      if (this.audioEl) return this.audioEl;
+      if (audioEl) return audioEl;
       const el = new Audio();
       el.preload = 'auto';
       try {
@@ -701,7 +708,7 @@ export const useAppStore = defineStore('app', {
         src.connect(synth.fxIn);
       } catch (e) {}
       try { el.volume = this.volume; } catch (e) {}
-      this.audioEl = el;
+      audioEl = el;
       return el;
     },
     async selectSong(id: string) {
@@ -729,11 +736,11 @@ export const useAppStore = defineStore('app', {
           if (!bytes) { const r = await idbGet(STORE_SONGS, id); if (r && r.bytes) { bytes = new Uint8Array(r.bytes); item.__bytes = bytes; } }
           if (!bytes) { try { const all = await dbSongsAll(); const r = all.find((x: any) => x.id === id); if (r && r.bytes) { bytes = new Uint8Array(r.bytes); item.__bytes = bytes; } } catch (e) {} }
           if (bytes) {
-            try { if (this._audioUrl) URL.revokeObjectURL(this._audioUrl); } catch (e) {}
-            this._audioUrl = URL.createObjectURL(new Blob([bytes]));
-            el.src = this._audioUrl;
+            try { if (audioUrl) URL.revokeObjectURL(audioUrl); } catch (e) {}
+            audioUrl = URL.createObjectURL(new Blob([bytes]));
+            el.src = audioUrl;
           }
-          el.onended = () => { try { window.__fufumidiAutoNext(); } catch (e) {} };
+          el.onended = () => { try { window.__fufumidiAutoNext?.(); } catch (e) {} };
         })();
         try {
           const rp = JSON.parse(localStorage.getItem('fufumidi_resume') || '{}');
@@ -763,7 +770,7 @@ export const useAppStore = defineStore('app', {
         if (!item.song) { const all = await dbSongsAll(); const r = all.find((x: any) => x.id === id); if (r && r.bytes) tryParse(r.bytes); }
         // 4) 磁盘上的真实 .mid 文件（每个曲目都必须有；索引字节丢失时靠它救回）
         if (!item.song && item.meta && item.meta.path) {
-          try { const b = await bridge.readBinary(item.meta.path); if (b) tryParse(b); } catch (e) {}
+          try { const b = await bridge?.readBinary(item.meta.path); if (b) tryParse(b); } catch (e) {}
         }
         if (!item.song) this.toast(t('无法解析已保存的 MIDI：') + ((lastErr as any)?.message || ''), 'warn');
       }
@@ -842,7 +849,7 @@ export const useAppStore = defineStore('app', {
       }
     },
     stopPlay() {
-      if (this.isAudio && this.audioEl) { this.audioEl.pause(); this.audioEl.currentTime = 0; this.playing = false; this.curSec = 0; this.progress = 0; this.clearResumePos(this.currentId); return; }
+      if (this.isAudio && audioEl) { audioEl.pause(); audioEl.currentTime = 0; this.playing = false; this.curSec = 0; this.progress = 0; this.clearResumePos(this.currentId); return; }
       const { player } = ensureAudio();
       player.stop();
       this.playing = false;
@@ -937,7 +944,7 @@ export const useAppStore = defineStore('app', {
     async handleTrackEnd() {
       const q = this.queueSongs;
       const mode = this.playMode;
-      if (mode === 'repeatOne') { await this.playSongById(this.currentId); return; }
+      if (mode === 'repeatOne') { if (this.currentId) await this.playSongById(this.currentId); return; }
       const idx = q.findIndex((s: any) => s.id === this.currentId);
       if (mode === 'shuffle') {
         if (q.length === 1) { await this.playSongById(q[0].id); return; }
@@ -965,9 +972,11 @@ export const useAppStore = defineStore('app', {
       if (!s || pos < 30 || (s.totalSec && pos > s.totalSec * 0.95)) { this.clearResumePos(this.currentId); return; }
       try { const m = this.resumeMap(); m[this.currentId] = pos; localStorage.setItem('fufumidi_resume', JSON.stringify(m)); } catch (e) {}
     },
-    clearResumePos(id: string) { try { const m = this.resumeMap(); if (m[id]) { delete m[id]; localStorage.setItem('fufumidi_resume', JSON.stringify(m)); } } catch (e) {} },
+    /** id 允许为空（调用点常常就是 this.currentId）—— 空值直接当"没有断点"处理，不抛也不写盘 */
+    clearResumePos(id: string | null | undefined) { try { if (!id) return; const m = this.resumeMap(); if (m[id]) { delete m[id]; localStorage.setItem('fufumidi_resume', JSON.stringify(m)); } } catch (e) {} },
     bookmarksFor(): any[] {
-      try { const m = JSON.parse(localStorage.getItem('fufumidi_bookmarks') || '{}'); return Array.isArray(m[this.currentId]) ? m[this.currentId] : []; } catch (e) { return []; }
+      const id = this.currentId; if (!id) return [];
+      try { const m = JSON.parse(localStorage.getItem('fufumidi_bookmarks') || '{}'); return Array.isArray(m[id]) ? m[id] : []; } catch (e) { return []; }
     },
     addBookmark(label?: string) {
       if (!this.currentId) { this.toast(t('请先播放一首 MIDI'), 'warn'); return; }
@@ -983,10 +992,11 @@ export const useAppStore = defineStore('app', {
     },
     removeBookmark(idx: number) {
       try {
+        const id = this.currentId; if (!id) return;
         const m = JSON.parse(localStorage.getItem('fufumidi_bookmarks') || '{}');
-        const arr = m[this.currentId] || [];
+        const arr = m[id] || [];
         arr.splice(idx, 1);
-        m[this.currentId] = arr;
+        m[id] = arr;
         localStorage.setItem('fufumidi_bookmarks', JSON.stringify(m));
       } catch (e) {}
     },
@@ -1001,7 +1011,7 @@ export const useAppStore = defineStore('app', {
           clearInterval(this.sleepTimer); this.sleepTimer = null; this.sleepUntil = 0;
           try { window.__fufumidiSleepFade = false; } catch (e) {}
           try { const { player } = ensureAudio(); player.pause(); } catch (e) {}
-          try { if (this.isAudio && this.audioEl) this.audioEl.pause(); } catch (e) {} // 音频曲目同样停止
+          try { if (this.isAudio && audioEl) audioEl.pause(); } catch (e) {} // 音频曲目同样停止
           this.playing = false;
           this.setVolume(this.volume);
           this.toast(t('睡眠定时到，已停止播放'), 'ok');
@@ -1050,10 +1060,10 @@ export const useAppStore = defineStore('app', {
     },
     seekRatio(r: number) {
       // 音频曲目：直接设置 currentTime
-      if (this.isAudio && this.audioEl) {
-        const d = this.audioEl.duration || 0;
-        if (d) this.audioEl.currentTime = Math.max(0, Math.min(d * 0.999, r * d));
-        this.curSec = this.audioEl.currentTime; this.progress = r;
+      if (this.isAudio && audioEl) {
+        const d = audioEl.duration || 0;
+        if (d) audioEl.currentTime = Math.max(0, Math.min(d * 0.999, r * d));
+        this.curSec = audioEl.currentTime; this.progress = r;
         return;
       }
       const s = this.currentSong && this.currentSong.song;

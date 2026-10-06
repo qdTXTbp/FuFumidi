@@ -20,7 +20,11 @@ export interface Layout {
   scale: number;          // 全局 UI 缩放 0.9 ~ 1.3（M9b）
 }
 
-export const LAYOUT_PRESETS: { id: PresetId; label: string; hint: string; layout: Layout }[] = [
+/** 预设只描述**布局**，不含 UI 缩放：缩放是外观设置，
+    切预设不该把用户调好的缩放重置回 100%（`Object.assign` 不会动缺省的键 —— 运行时行为本来就是这样，
+    这份类型只是把它写清楚，之前 4 个 TS2741 就是"类型要求 scale、预设没给"造成的）。 */
+export type LayoutPreset = Omit<Layout, 'scale'> & { scale?: number };
+export const LAYOUT_PRESETS: { id: PresetId; label: string; hint: string; layout: LayoutPreset }[] = [
   { id: 'arrange', label: '编曲', hint: '卷帘最大、检查器收起', layout: { inspOpen: false, inspW: 0, rollH: 420, viewMode: 'piano', density: 'normal' } },
   { id: 'sing', label: '调教', hint: '检查器常开、卷帘偏高', layout: { inspOpen: true, inspW: 320, rollH: 420, viewMode: 'piano', density: 'normal' } },
   { id: 'proof', label: '校对', hint: '乐谱视图 + 检查器（识谱校对用）', layout: { inspOpen: true, inspW: 300, rollH: 320, viewMode: 'score', density: 'normal' } },

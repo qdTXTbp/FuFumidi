@@ -96,3 +96,34 @@ node E:\Midi\_attic\_sing_tmp\i18n-list.mjs
 3. `engine/` 274 个文件里有若干历史模块（`linked_list.py`、`zip_pngs.py` 等）与主链路关系不明 —— 清理前必须先用 `grep` 证明没有调用方。
 4. `renderer/dist`、`release/`、`gpu-package*` 都是产物目录，已被 `.gitignore` 排除；不要把产物当源码改。
 5. 本地探针 / venv / 历史备份现在统一放在 `E:\Midi\_attic`（见该目录 README）——引用它们时用**绝对路径**，别假设在仓库里。
+
+## 7. 门禁现状（2026-10 首次清零）与两条硬规则
+
+第 5 节那几条命令在 2026-10 之前**并不是全绿的**，只是没人跑：
+
+| 门禁 | 清零前 | 现在 |
+| --- | --- | --- |
+| `npm --prefix frontend run build` | ✅ 一直绿 | ✅ |
+| `npm run typecheck` | ❌ **71 个类型错误**（stores 三个文件） | ✅ **0** |
+| `npm run test:ui` | ❌ 137 个里挂 2 个（`ctx.save is not a function`） | ✅ **137/137** |
+
+类型错误全部是**类型债**（运行时没坏）：Pinia getter 里走 `state.currentSong`（getter 不在 state 上）、
+`Record` 索引未做可选访问、`window.__fufumidi*` 这类内部钩子没声明、DOM 节点/objectURL 挂进 store 却不在 state 类型里、
+以及一处真正的**契约漂移**（`fuBridge.pickCover` 桥与主进程都实现了、`types/ipc.ts` 里一直没写 → 调用方"看不见"这个能力）。
+`test:ui` 的两处失败是**替身没跟上被测代码**：`viz.js` 后来加了 `ctx.save()/restore()/clearRect()/drawImage()`，测试里的假 ctx 没补。
+
+两条硬规则（都来自这次的实测）：
+
+1. **门禁必须全绿，红着就不算完成。** 一个红了很久的门禁等于没有门禁 —— 它会掩盖新引入的错误。
+   跑不了的门禁要在 PR/报告里**明说没跑**，不能默认它绿。
+2. **替身（测试用假对象）必须镜像被测代码真正用到的 API。** 改绘制代码后，用
+   `grep -o "ctx\.[a-zA-Z]*(" frontend/src/core/viz.js | sort -u` 对一遍假 ctx 的方法清单；
+   这类失败只会在"用到新方法"的那条路径上出现，构建与其它测试全绿，很容易漏。
+
+顺带定下两条约定：
+
+- **渲染进程的内部全局钩子**（`window.__fufumidi*`、调试桥 `window.__*Debug`）统一声明在
+  `frontend/src/types/globals.d.ts`。新增钩子必须写进去 —— 既消噪音，也让"谁在用什么全局"变成可 grep 的事实。
+  对外能力一律走 `window.fuBridge`，不许用全局钩子当 API。
+- **DOM 节点与 objectURL 不放 store state**（`audioEl` / `audioUrl` 现在是 `stores/app.ts` 的模块级变量）：
+  塞进 reactive 会被 Proxy 包一层，既没必要（单实例）也容易踩 `instanceof`/接收者的坑。
