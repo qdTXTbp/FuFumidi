@@ -1372,6 +1372,63 @@ function applyDraft(arr) {
   });
   afterEdit();
 }
+/* ---------------- 参数化工具的实时预览（M2） ----------------
+   预览期间**不碰撤销栈**：beginPreview 存一份「选中音符的字段基线」，
+   每次 applyPreviewNow 先把字段恢复成基线、再从基线重算 —— 于是拖动滑杆 200 次
+   撤销栈也只多一条（commit 时才把基线压进去），Esc 能把整段预览一次还原。
+   只记字段、不换对象：选中集合是对象引用的 Set，换成新对象会让选择当场失效。 */
+let previewBase = null;
+function beginPreview() {
+  const tr = curTrack();
+  if (!tr || !selection.size) { previewBase = null; return 0; }
+  previewBase = [...selection].map((n) => ({ n, start: n.start, end: n.end, midi: n.midi, vel: n.vel, muted: !!n.muted }));
+  return previewBase.length;
+}
+function previewing() { return !!previewBase; }
+function previewCount() { return previewBase ? previewBase.length : 0; }
+function restorePreviewBase() {
+  for (const b of previewBase) {
+    const { n } = b;
+    n.start = b.start; n.end = b.end; n.midi = b.midi; n.vel = b.vel;
+    if (b.muted) n.muted = true; else n.muted = false;
+  }
+}
+/** 从基线重算一次：fn(notes) 直接改 note 对象，返回改动条数 */
+function applyPreviewNow(fn) {
+  if (!previewBase) return 0;
+  restorePreviewBase();
+  let changed = 0;
+  try { changed = fn(previewBase.map((b) => b.n)) || 0; } catch (e) { changed = 0; }
+  const tr = curTrack(); if (tr) sortNotes(tr.notes);
+  emit('modify');
+  draw();
+  return changed;
+}
+function commitPreview() {
+  if (!previewBase) return 0;
+  const after = previewBase.map((b) => ({ start: b.n.start, end: b.n.end, midi: b.n.midi, vel: b.n.vel, muted: !!b.n.muted }));
+  restorePreviewBase();
+  pushState();                       // 存的是「预览之前」的轨道，撤销一次回到预览前
+  previewBase.forEach((b, i) => {
+    const a = after[i];
+    b.n.start = a.start; b.n.end = a.end; b.n.midi = a.midi; b.n.vel = a.vel; b.n.muted = a.muted;
+  });
+  const n = previewBase.length;
+  previewBase = null;
+  afterEdit();
+  return n;
+}
+function cancelPreview() {
+  if (!previewBase) return 0;
+  restorePreviewBase();
+  const n = previewBase.length;
+  previewBase = null;
+  const tr = curTrack(); if (tr) sortNotes(tr.notes);
+  emit('modify');
+  draw();
+  return n;
+}
+
 /* 踏板：选区/整轨起止处添加 CC64 延音（down→127，up→0）；删除区间内 CC64 */
 function selSpan() {
   const tr = curTrack(); if (!tr) return null;
@@ -1488,6 +1545,8 @@ defineExpose({
   setSelVel, setSelMidi, setSelStart, setSelLen, applyVelCurve, replaceNotes, selNotes, selRef, selectNotes, applyDraft,
   toggleMute, setSelMuted, selMuted,
   addPedal, delPedal, selSpan, addNote, deleteNotes, pushStateForTrack, notifyExternalEdit,
+  // 参数化工具的实时预览（M2）
+  beginPreview, previewing, previewCount, applyPreviewNow, commitPreview, cancelPreview,
   undo, redo, canUndo, canRedo, clearHistory, historySnapshots,
   snapSelToAudio,
   // 乐谱视图（五线谱）对外：滚动/谱号/插入时值/重绘

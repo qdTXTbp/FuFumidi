@@ -6,6 +6,7 @@ import EditorCanvas from '../components/EditorCanvas.vue';
 import { useAppStore } from '../stores/app';
 import { useWorkspace } from '../stores/workspace';
 import EditorMenuBar from '../components/editor/EditorMenuBar.vue';
+import MidiToolPanel from '../components/editor/MidiToolPanel.vue';
 import { ensureAudio } from '../audio.js';
 
 const app = useAppStore();
@@ -34,7 +35,7 @@ const setView = (v) => app.setView(v);
 import { encodeMidi } from '../core/midi.js';
 import { noteName, clamp, KEY_NAME, removeNotes } from '../core/util.js';
 import { MACRO_DOC, macroToCmd, applyMacroScript, parseMacroScript } from '../core/macro.js';
-import { SCALE_TYPES, parseCustomDegrees } from '../core/scale.js';
+import { SCALE_TYPES, parseCustomDegrees, scalePitchClasses } from '../core/scale.js';
 import { detectKeySpec, detectChordTrack, chordPcsByName } from '../core/analysis.js';
 import { listArticulations, applyArticulation, upsertUserArticulation, removeUserArticulation } from '../core/articulations.js';
 import { t } from '../core/i18n.js';
@@ -113,6 +114,40 @@ const curTrackInfo = computed(() => {
 });
 const selMutedNow = computed(() => (editor.value && sel.count ? editor.value.selMuted() : false));
 
+/* ---------------- 参数化 MIDI 工具（M2） ----------------
+   面板本身与具体工具解耦：工具表在 core/midi-tools.js，预览在 EditorCanvas 里，
+   这里只负责「传上下文 + 开关 + 结果提示」。 */
+const midiToolOpen = ref(false);
+const toolCtx = computed(() => {
+  const s = song.value;
+  let spec = scaleSpec.value;
+  if (!spec && s) {
+    // 没显式设调时按曲目自动判断（与画布 autoScale 同一套：detectKeySpec）
+    try {
+      const all = [];
+      for (const tr of s.tracks) for (const n of tr.notes) all.push(n);
+      const k = all.length ? detectKeySpec(all) : null;
+      if (k && k.root != null) spec = { root: k.root, type: k.mode || 'major', custom: [] };
+    } catch (e) { /* 判断失败就不约束 */ }
+  }
+  let pcs = [];
+  try { pcs = spec ? scalePitchClasses(spec) : []; } catch (e) { pcs = []; }
+  return { tpb: (s && s.tpb) || 480, scalePcs: pcs, track: curTrackInfo.value };
+});
+function openMidiTools() {
+  if (!song.value) { toast(t('请先载入 MIDI'), 'warn'); return; }
+  if (!sel.count) { toast(t('请先选中要处理的音符'), 'warn'); return; }
+  midiToolOpen.value = true;
+}
+function onToolPanelClose(e) {
+  midiToolOpen.value = false;
+  if (e && e.applied) {
+    toast(t('已应用「') + (e.tool || '') + t('」：') + e.changed + t(' 个音符'), 'ok');
+    onModified();
+  }
+  refreshSel();
+}
+
 /* 工作区预设：一键换布局（M1）。以前「卷帘太小 / 检查器太窄」只能手动拖，拖完还不记得。 */
 const VIEW_NAMES = { piano: '钢琴卷帘', drum: '鼓组网格', score: '乐谱' };
 const viewLabel = computed(() => t(VIEW_NAMES[viewMode.value] || '钢琴卷帘'));
@@ -172,6 +207,7 @@ const menuGroups = computed(() => {
     ] },
     { label: t('工具'), items: [
       { label: t('量化到吸附网格'), disabled: !hasSel, run: quantize },
+      { label: t('参数化工具（拖动即预览）'), hint: t('需先选中'), disabled: !hasSel, run: openMidiTools },
       { label: t('智能量化（网格 + Groove）'), disabled: !hasSong, run: openSmartQuantize },
       { label: t('力度曲线（绘制包络）'), disabled: !hasSel, run: openVelCurve },
       { label: t('列表编辑器（精确数值）'), disabled: !hasSel, run: openList },
@@ -1436,6 +1472,9 @@ onBeforeUnmount(() => {
         <button class="et-btn danger" :title="t('删除 Del')" @click="del"><Icon name="trash" :size="14" />{{ t('删除') }}</button>
         <span class="et-sep"></span>
         <button class="et-btn" :title="t('量化到吸附网格')" @click="quantize"><Icon name="quantize" :size="14" />{{ t('量化') }}</button>
+        <!-- M2：参数化工具（拖动即预览）——放在量化旁边，因为它就是「量化」的泛化 -->
+        <button class="et-btn" data-guide="edit-miditools" :title="t('参数化工具：移调/力度/时值/节奏/生成，拖动即预览，回车应用')"
+                @click="openMidiTools"><Icon name="sliders" :size="14" />{{ t('参数工具') }}</button>
         <span class="et-sep"></span>
         <!-- 视图开关放主工具条：以前「全屏」藏在「更多」里，谁也没发现；
              这两个是「把音符区变大」的直接开关，必须一眼可见 -->
@@ -1567,6 +1606,7 @@ onBeforeUnmount(() => {
           <button class="et-btn" :title="t('选区力度 -20')" @click="ctxVel(-20)">-20</button>
           <span class="et-sep"></span>
           <button class="et-btn" :title="t('量化到吸附网格')" @click="quantize"><Icon name="quantize" :size="13" />{{ t('量化') }}</button>
+          <button class="et-btn" :title="t('参数化工具：拖动即预览，回车应用')" @click="openMidiTools"><Icon name="sliders" :size="13" />{{ t('参数工具') }}</button>
           <button class="et-btn" :title="t('列表编辑器：精确修改数值')" @click="openList"><Icon name="list" :size="13" />{{ t('列表') }}</button>
           <button class="et-btn" :title="t('复制')" @click="copy"><Icon name="copy" :size="13" />{{ t('复制') }}</button>
           <button class="et-btn" :title="t('克隆选区到其后')" @click="dup"><Icon name="plus" :size="13" />{{ t('克隆') }}</button>
@@ -1734,6 +1774,9 @@ onBeforeUnmount(() => {
         <span class="st-i st-tip">{{ t('Ctrl+滚轮 缩放 · Shift+滚轮 平移 · ? 看全部快捷键') }}</span>
       </div>
     </template>
+
+    <!-- 参数化 MIDI 工具（M2）：拖动即预览 / Esc 还原 / 回车应用 -->
+    <MidiToolPanel :open="midiToolOpen" :editor="editor" :ctx="toolCtx" :sel-count="sel.count" @close="onToolPanelClose" />
 
     <!-- 快捷键一览（M1）：以前只藏在按钮 title 里，等于没有 -->
     <Transition name="ov">
