@@ -620,7 +620,7 @@ function onMove(e) {
 }
 
 function onUp(e) {
-  releasePointer(e);
+  if (!releasePointer(e)) return;             // 被挡掉的指针抬起不收尾（否则打断正在进行的拖拽）
   /* 长按已经转成右键菜单：这一次交互不再提交（框选/拖动都不该落位） */
   if (longPress.up()) { drag = null; draw(); return; }
   if (drag && drag.mode === 'box') {
@@ -1111,7 +1111,7 @@ function aMove(e) {
   emitAuto(pts);
   nextTick(drawAuto);
 }
-function aUp(e) { releasePointer(e); autoDrag = null; nextTick(drawAuto); }
+function aUp(e) { if (!releasePointer(e)) return; autoDrag = null; nextTick(drawAuto); }
 /* ---------------- 音高车道（P3） ----------------
    参考 OpenUTAU 的曲线车道：车道内是「拍 → 音分」的控制点折线，工具齐全
    （手绘 / 直线 / 正弦 / 平滑 / 移动控制点）。与音符、音素同处一个滚动容器，天然对齐。 */
@@ -1282,7 +1282,7 @@ function pMove(e) {
   drawPitch();
 }
 function pUp(e) {
-  releasePointer(e);
+  if (!releasePointer(e)) return;
   if (!pDrag) return;
   if (pDrag.tool === 'line' || pDrag.tool === 'sine') applyLineOrSine(pDrag);
   pDrag = null;

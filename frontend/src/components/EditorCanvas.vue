@@ -1278,7 +1278,8 @@ function onMove(e) {
   }
 }
 function onUp(e) {
-  releasePointer(e);                          // 无参调用（pointerleave）= 无条件释放
+  /* 不是主指针（掌侧 / 第二根手指）抬起 → 直接忽略：收尾会把还在进行的笔拖拽打断 */
+  if (!releasePointer(e)) return;             // 无参调用（pointerleave）= 无条件释放
   const wasLong = longPress.up() || longPressCancelled;
   longPressCancelled = false;
   const d = dragState.value;

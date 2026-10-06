@@ -229,7 +229,7 @@ function onMove(e: PointerEvent) {
   draw();
 }
 function onUp(e?: PointerEvent) {
-  releasePointer(e);
+  if (!releasePointer(e)) return;             // 被挡掉的指针抬起不收尾
   if (!dragging) return;
   dragging = false; lineAnchor = null;
   emit('commit', clone(local.value));

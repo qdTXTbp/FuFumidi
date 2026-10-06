@@ -399,6 +399,12 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 .btn.danger:hover { background: rgba(212, 86, 86, 0.08); border-color: var(--error); }
 .btn.sm { padding: 5px 12px; font-size: 12px; min-height: 28px; }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+/* 主按钮被禁用时要**看得出是"还不能点"**，而不只是淡一点 ——
+   淡一点在彩色主按钮上仍然像可点（本轮 UX 复核第 4 条：渲染本轨在"没音符/没选歌手"时看着常亮可点）。
+   去掉饱和度与阴影之后，它和旁边真正可点的按钮一眼能分开。 */
+.btn.primary:disabled, .btn.primary.blocked:disabled {
+  opacity: 0.5; filter: grayscale(0.9); box-shadow: none; border-style: dashed;
+}
 
 .icon-btn {
   width: 34px; height: 34px;

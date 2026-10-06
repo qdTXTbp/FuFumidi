@@ -49,10 +49,15 @@ export function palmRejected(e, palmMs = 1500) {
 export function isPrimaryPointer(e) {
   return primaryId === null || e.pointerId === primaryId;
 }
-/** 收尾：主指针抬起才释放；**无参调用**（pointerleave 等收尾路径）= 无条件释放。
-    宁可多放一次，也不能把槽位漏占 —— 漏占的后果是画布从此点不动。 */
+/**
+ * 收尾：主指针抬起才释放；**无参调用**（pointerleave 等收尾路径）= 无条件释放。
+ * 返回 true 表示"这次抬起属于主指针"。★ 调用方必须据此决定要不要收尾拖拽 ——
+ * 被挡掉的第二根手指 / 掌侧抬起时**不能**收尾，否则笔还在拖、拖拽状态已经被清掉了
+ * （实测：oto 标记用笔拖到一半停住，就是因为掌侧那一下的 pointerup 把 dragKey 清了）。
+ */
 export function releasePointer(e) {
-  if (!e || e.pointerId === primaryId) { primaryId = null; primaryType = 'mouse'; }
+  if (!e || e.pointerId === primaryId) { primaryId = null; primaryType = 'mouse'; return true; }
+  return false;
 }
 /** 当前主指针是不是笔（给「笔才启用」的行为用，例如压力当力度） */
 export function primaryIsPen() { return primaryType === 'pen'; }

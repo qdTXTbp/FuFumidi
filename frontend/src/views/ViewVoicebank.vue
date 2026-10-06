@@ -350,7 +350,7 @@ function updateDrag(x, w, dur) {
   }
   drawWave();
 }
-function onPointerUp(e) { releasePointer(e); dragKey = null; }
+function onPointerUp(e) { if (!releasePointer(e)) return; dragKey = null; }
 
 function onOtoNum(k, e) {
   const s = selSeg.value;

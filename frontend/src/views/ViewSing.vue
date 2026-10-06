@@ -230,6 +230,12 @@ function autoDelPoint(pts: { beat: number; value: number }[], i: number) {
 
 /* ------------------------------------------------------------ 轨道 */
 function addTrack(engine) { store.addTrack(engine); }
+/** 语言显示名的**唯一来源**：轨道卡片的下拉与上方摘要用同一个标签，
+    不再一处显示 "ZH"、另一处显示 "中文"（UX 复核第 2 条）。 */
+function langLabel(code: string) {
+  const hit = LANGUAGES.find((l) => l.code === code);
+  return hit ? t(hit.label) : (String(code || '').toUpperCase() || '—');
+}
 
 /* ---- 轨列表：拖拽排序 / 静音 / 双击改名 / 右键菜单 ---- */
 const dragId = ref('');
@@ -346,8 +352,13 @@ function rollApi() {
 }
 
 /* ------------------------------------------------------------ 工程级参数（P2-3） */
-/** 对齐偏移的**待应用**值（真正落盘的是 store.meta.alignMs） */
+/* 对齐偏移（工程级参数）。
+   ★ 提交模型统一成「即时生效」：数字一改，立刻按**增量**平移当前声部轨的音符，并写进 meta.alignMs。
+     增量而不是"再挪一次总量"—— 5 改成 50 只补 45ms，最终累计值就是输入框里的数，语义唯一。
+     以前是"填数字 + 点应用（还有独立的应用按钮）"，同一排里的 BPM/拍号却是即时生效的，
+     三种提交语义混在一起，用户没法预期（本轮 UX 复核的第 7 条）。 */
 const alignMs = ref(Number(store.meta.alignMs) || 0);
+watch(() => store.meta.alignMs, (v) => { alignMs.value = Number(v) || 0; });
 /** 拍号：只驱动卷帘的小节线，不改数据 */
 const beatsPerBar = computed(() => {
   const s = String(store.meta.timeSig || '4/4');
@@ -365,13 +376,21 @@ function onTimeSig(e: Event) {
   store.meta = Object.assign({}, store.meta, { timeSig: v });
   say(t('拍号已改为 ') + v + t('（只影响小节线，音符没动）'), 'info');
 }
-/** 把当前轨的音符整体平移 alignMs 毫秒（按当前 BPM 折算成拍），可撤销 */
-function applyAlign() {
+/** 对齐偏移：改了立刻按**增量**平移（不是再挪一次总量），可撤销 */
+function onAlignMs(e: Event) {
+  const v = Math.round(Number(nval(e, 0)) || 0);
+  const prev = Math.round(Number(store.meta.alignMs) || 0);
+  const d = v - prev;
+  if (!d) { alignMs.value = v; return; }
   const track = tr.value;
-  if (!track || track.kind !== 'voice') { sayErr(t('先选中一条声部轨'), t('伴奏轨是音频，挪了就对不上拍子。')); return; }
-  const n = store.shiftNotesByMs(alignMs.value, track.id);
-  if (!n) { say(t('偏移量为 0，什么都没改'), 'info'); return; }
-  say(t('已把 ') + String(n) + t(' 个音符整体平移 ') + String(alignMs.value) + t(' ms'), 'ok',
+  if (!track || track.kind !== 'voice') {
+    sayErr(t('先选中一条声部轨'), t('伴奏轨是音频，挪了就对不上拍子。'));
+    alignMs.value = prev;                       // 输入框回滚，别让界面和实际状态不一致
+    return;
+  }
+  const n = store.shiftNotesByMs(d, track.id);  // 内部会写 meta.alignMs = 累计值
+  alignMs.value = v;
+  say(t('已把 ') + String(n) + t(' 个音符整体平移 ') + String(d) + t(' ms（累计 ') + String(v) + t(' ms）'), 'ok',
     { hint: t('Ctrl+Z 可以撤销。'), action: { label: t('撤销'), run: () => store.undo() } });
 }
 
@@ -975,14 +994,34 @@ const renderStats = computed(() => {
   return s && s.trackId === (store.activeTrackId || '') ? s : null;
 });
 
-/** 编辑器空态：新工程（一条空声部轨、没渲染过任何东西）时给"三步走"而不是一片空白。
- *  ★ 不能用 `tracks.length === 0`：`clearAll()`/新建工程都会预置一条空 DiffSinger 轨。 */
-const isEmptyProject = computed(() =>
-  store.tracks.length === 1
-  && store.tracks[0].kind === 'voice'
-  && store.tracks[0].notes.length === 0
-  && Object.keys(store.renderByTrack).length === 0
-  && !store.projectPath);
+/**
+ * 编辑器空态。**判据只有一个入口**（以前横幅的条件是 isEmptyProject，文案却写"还没有轨道"，
+ * 而新建工程本来就预置一条空轨 —— 于是"还没有轨道"和左边的「DS 未命名轨」卡片同屏出现，
+ * 自相矛盾。本轮 UX 复核第 1 条）。
+ *   no-track   ：真的一条轨都没有（极少见）
+ *   empty-track：有一条空声部轨、什么都还没做（新建工程的常态）
+ */
+const emptyKind = computed<'no-track' | 'empty-track' | ''>(() => {
+  if (store.busy) return '';
+  if (!store.tracks.length) return 'no-track';
+  if (store.tracks.length === 1
+    && store.tracks[0].kind === 'voice'
+    && store.tracks[0].notes.length === 0
+    && Object.keys(store.renderByTrack).length === 0
+    && !store.projectPath) return 'empty-track';
+  return '';
+});
+const isEmptyProject = computed(() => !!emptyKind.value);
+/** 空态里的「新建声部轨…」二级：引擎选型不占主按钮位（UX 复核第 4 条） */
+const newTrackOpen = ref(false);
+/* 音高曲线面板：**默认收起**。
+   ★ 以前它跟着「详情」一起展开，一屏里卷帘只剩两个八度，而 0 个点的曲线还占着一大块空白
+     （本轮 UX 复核第 2 条）。现在折叠状态独立记忆，轨上已经有曲线点时默认展开（别把用户的数据藏起来）。 */
+const curveOpen = ref(false);
+watch([() => store.activeTrackId, () => ((tr.value && tr.value.pitchCurve) || []).length], () => {
+  const pts = ((tr.value && tr.value.pitchCurve) || []).length;
+  if (pts > 0) curveOpen.value = true;
+}, { immediate: true });
 
 /* ------------------------------------------------------------ 导入 */
 
@@ -1908,19 +1947,36 @@ async function doSave() {
  * 编辑器状态原本只在内存里，关掉就没了；伴奏轨存的又是本机绝对路径，
  * 换台机器必然断链。工程包把伴奏一起打进 `files/`，轨道上只留 asset id。
  */
+/* 工程状态徽标（未保存 / 文件名的单一来源）。
+   ★ 脏标记用**撤销栈深度**当指纹：store 的约定是"任何修改前先 pushUndo"，
+     所以栈深度变了 = 有改动；保存/打开/新建时记一次基准。
+     比每次渲染都算一遍全量 JSON 便宜得多（工程动辄几千个音符）。 */
+const savedHistoryAt = ref(store.history.length);
+const dirty = computed(() => store.history.length !== savedHistoryAt.value);
+const projectFile = computed(() => (store.projectPath ? String(store.projectPath).split(/[\\/]/).pop() : ''));
+const projectState = computed(() => {
+  if (!store.projectPath) return { text: t('未保存到文件'), kind: 'none' };
+  if (dirty.value) return { text: projectFile.value + t(' · 有未保存改动'), kind: 'dirty' };
+  return { text: projectFile.value, kind: 'saved' };
+});
+function markSaved() { savedHistoryAt.value = store.history.length; }
+
 async function saveProject(saveAs: boolean) {
   const err = await store.saveProject(saveAs);
   if (err) sayErr(err, t('换一个有写入权限的位置（例如桌面）再保存。'));
-  else say(t('工程已保存：') + String(store.projectPath || '').split(/[\\/]/).pop(), 'ok');
+  else { markSaved(); say(t('工程已保存：') + String(store.projectPath || '').split(/[\\/]/).pop(), 'ok'); }
 }
 async function openProject() {
   const err = await store.openProject();
   if (err) sayErr(err, t('工程包里的伴奏可能已损坏；也可以只导入 MIDI 重建工程。'));
+  else markSaved();
   // 伴奏换成了包里解出来的那份 —— 传输器还握着旧字节，必须重装
   if (store.projectPath) await reloadTransport();
 }
 function newProject() {
   store.newProject();
+  markSaved();
+  newTrackOpen.value = false;
 }
 function onTitle(e: Event) {
   store.meta = Object.assign({}, store.meta, { title: sval(e) });
@@ -1980,20 +2036,31 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
       <button class="danger" @click="store.removeTrack(trackMenu.track.id); closeTrackMenu()"><Icon name="trash" :size="13" /> {{ t('删除这条轨') }}</button>
     </div>
 
-    <!-- 空态：没有任何轨道时给"三步走"，而不是让用户对着空白猜按钮 -->
-    <div v-if="tab === 'editor' && isEmptyProject && !store.busy" class="sing-empty">
+    <!-- 空态：主按钮是「打开工程 / 导入 MIDI」这类**开始做事**的动作；
+         引擎选型（DiffSinger / UTAU）是技术选型，收进「新建声部轨…」二级里，不占主位。
+         （本轮 UX 复核第 4 条：对空工程来说，把"新建 DiffSinger 轨"当唯一主按钮过重。） -->
+    <div v-if="tab === 'editor' && emptyKind" class="sing-empty" data-guide="sing-empty">
       <div class="se-main">
-        <Icon name="utau" :size="18" />
-        <b>{{ t('还没有轨道') }}</b>
-        <span class="muted small">{{ t('新建声部轨 → 导入 MIDI 或用画笔写音符 → 选好声库点「渲染本轨」') }}</span>
+        <Icon :name="emptyKind === 'no-track' ? 'utau' : 'spark'" :size="18" />
+        <b>{{ emptyKind === 'no-track' ? t('还没有轨道') : t('这条声部轨还是空的') }}</b>
+        <span class="muted small">
+          {{ emptyKind === 'no-track'
+            ? t('先新建一条声部轨，或打开一个工程 / 导入 MIDI')
+            : t('导入 MIDI、从曲库选一首，或用画笔在卷帘上写音符；选好声库后点「渲染本轨」') }}
+        </span>
       </div>
       <div class="se-acts">
-        <button class="btn sm primary" @click="addTrack('diffsinger')"><Icon name="spark" :size="12" /> {{ t('新建 DiffSinger 轨') }}</button>
-        <button class="btn sm" @click="addTrack('utau')"><Icon name="mic" :size="12" /> {{ t('新建 UTAU 轨') }}</button>
-        <button class="btn sm" @click="openProject"><Icon name="folder" :size="12" /> {{ t('打开工程') }}</button>
+        <button class="btn sm primary" @click="openProject"><Icon name="folder" :size="12" /> {{ t('打开工程') }}</button>
         <button class="btn sm" @click="importMidi"><Icon name="import" :size="12" /> {{ t('导入 MIDI') }}</button>
         <button class="btn sm" @click="openLibraryDialog"><Icon name="folder" :size="12" /> {{ t('从曲库选') }}</button>
-        <button class="btn sm" @click="setTab('banks')"><Icon name="box" :size="12" /> {{ t('装声库') }}</button>
+        <button class="btn sm" data-guide="sing-new-track" @click="newTrackOpen = !newTrackOpen">
+          <Icon name="plus" :size="12" /> {{ t('新建声部轨…') }}
+        </button>
+      </div>
+      <div v-if="newTrackOpen" class="se-acts se-new">
+        <button class="btn sm" @click="addTrack('diffsinger')"><Icon name="spark" :size="12" /> DiffSinger</button>
+        <button class="btn sm" @click="addTrack('utau')"><Icon name="mic" :size="12" /> UTAU</button>
+        <button class="btn sm ghost" @click="setTab('banks')"><Icon name="box" :size="12" /> {{ t('装声库') }}</button>
       </div>
     </div>
 
@@ -2126,12 +2193,6 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <button class="btn" :title="t('打开 .fufumidi 工程')" @click="openProject">
           <Icon name="folder" :size="12" /> {{ t('打开') }}
         </button>
-        <button class="btn" :title="t('保存到当前工程文件')" @click="saveProject(false)">
-          <Icon name="save" :size="12" /> {{ t('保存') }}
-        </button>
-        <button class="btn" :title="t('换一个文件保存')" @click="saveProject(true)">
-          <Icon name="copy" :size="12" /> {{ t('另存为') }}
-        </button>
         <!-- 工程级参数（P2-3）：BPM / 拍号 / 对齐偏移。三个都是**整个工程**的属性，
              所以放在工程条上，而不是藏在某条轨的属性里。 -->
         <label class="proj-field" :title="t('工程 BPM：音符位置存的是拍，改 BPM 时音符相对小节不动，只有时间长度变')">
@@ -2147,19 +2208,28 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             <option value="6/8">6/8</option>
           </select>
         </label>
-        <label class="proj-field" :title="t('对齐偏移：把音符整体平移 n 毫秒（负数=提前）。治“整首歌都抢一点/拖一点”')">
+        <!-- 对齐偏移：**即时生效**（改了立刻按增量平移，可撤销）。
+             以前是"填数字 + 点应用"，而同一排的 BPM / 拍号却是即时生效 —— 三种提交语义混着，
+             用户没法预期（UX 复核第 7 条）。现在参数一律即时，动作只有"保存到文件"这一种显式提交。 -->
+        <label class="proj-field" :title="t('对齐偏移：改了立刻把当前声部轨的音符整体平移这么多毫秒（负数=提前），可撤销；伴奏轨不动')">
           {{ t('对齐偏移') }}
-          <input class="al-ms" type="number" step="5" :value="alignMs" @change="alignMs = nval($event, 0)" />
+          <input class="al-ms" type="number" step="5" data-guide="sing-align" :value="alignMs" @change="onAlignMs" />
           <span class="muted">ms</span>
         </label>
-        <button class="btn" :disabled="!alignMs" :title="t('把这条轨的音符整体平移这么多毫秒（可撤销；伴奏轨不动）')"
-                @click="applyAlign">
-          <Icon name="target" :size="12" /> {{ t('应用') }}
-        </button>
         <span class="sp" />
-        <span class="ppath muted small" :title="store.projectPath || t('还没有保存过')">
-          {{ store.projectPath ? String(store.projectPath).split(/[\\/]/).pop() : t('未保存') }}
+        <!-- 工程状态徽标贴着保存按钮：它是**保存**这件事的状态，挂在条子最右边等于放错了地方 -->
+        <span class="pstate" :class="projectState.kind" data-guide="sing-project-state"
+              :title="store.projectPath || t('还没有保存过（保存后会生成 .fufumidi 工程包）')">
+          <Icon :name="projectState.kind === 'dirty' ? 'edit' : (projectState.kind === 'saved' ? 'check' : 'info')" :size="11" />
+          {{ projectState.text }}
         </span>
+        <!-- 显式提交只有这里一处：写工程文件（参数改动都是即时生效的） -->
+        <button class="btn" :class="{ primary: dirty }" data-guide="sing-save" :title="t('保存到当前工程文件（Ctrl+S）')" @click="saveProject(false)">
+          <Icon name="save" :size="12" /> {{ t('保存') }}
+        </button>
+        <button class="btn" :title="t('换一个文件保存')" @click="saveProject(true)">
+          <Icon name="copy" :size="12" /> {{ t('另存为') }}
+        </button>
       </div>
       <ul v-if="store.missingAudio.length" class="warn small">
         <li v-for="m in store.missingAudio" :key="m.trackId">
@@ -2173,7 +2243,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             {{ isAudio ? t('伴奏') : (tr.engine === 'utau' ? 'UTAU' : 'DiffSinger') }}
           </span>
           <span class="who">{{ isAudio ? (tr.audio?.fileName || tr.name) : (tr.singerName || tr.singer || t('未选歌手')) }}</span>
-          <span v-if="!isAudio" class="muted small">{{ tr.language.toUpperCase() }} · {{ tr.notes.length }} {{ t('音符') }}</span>
+          <span v-if="!isAudio" class="muted small" :title="t('语言：决定歌词怎么转发音')">{{ langLabel(tr.language) }} · {{ tr.notes.length }} {{ t('音符') }}</span>
         </template>
         <span v-else class="muted small">{{ t('左侧选一条轨道') }}</span>
 
@@ -2188,12 +2258,14 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <button class="btn" data-guide="sing-track-props" :disabled="!tr" @click="propsOpen = !propsOpen">
           <Icon name="sliders" :size="13" /> {{ t('轨道属性') }}
         </button>
-        <!-- 主动作：渲染本轨。禁用时把**原因**写在按钮上，不让用户猜 -->
-        <button v-if="!isAudio" class="btn primary" data-guide="sing-render"
+        <!-- 主动作：渲染本轨。前置条件不满足时**按钮本身就变样并说明为什么**（不只是变淡），
+             原因同时挂 title 与下方那行提示，不让用户猜（UX 复核第 4 条）。 -->
+        <button v-if="!isAudio" class="btn primary" :class="{ blocked: renderBlocked }" data-guide="sing-render"
                 :disabled="renderBlocked"
                 :title="renderReason || t('按该轨的引擎自动分派；只重渲改动过的乐句。按住 Shift 点 = 整轨重渲')"
                 @click="doRender">
-          <Icon name="play" :size="13" /> {{ t('渲染本轨') }}
+          <Icon :name="renderBlocked ? 'info' : 'play'" :size="13" />
+          {{ renderBlocked ? t('还不能渲染') : t('渲染本轨') }}
         </button>
         <button class="btn" data-guide="sing-render-all" :disabled="store.busy" @click="doRenderAll"
                 :title="t('渲染所有声部轨，渲完一起播放')">
@@ -2228,8 +2300,8 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         </button>
       </div>
       <!-- 渲染门禁原因：只在"想渲但渲不了"时显示，平时不占位（提示本身走 app.toast，见 P1-4） -->
-      <p v-if="renderReason && !store.busy && !isAudio" class="edt-msg small hint">
-        {{ renderReason }}
+      <p v-if="renderReason && !store.busy && !isAudio" class="edt-msg small hint" data-guide="sing-render-why">
+        <Icon name="info" :size="12" /> {{ renderReason }}
       </p>
       <!-- P2-5：渲染前就把"歌词不在声库"标出来，别等渲完几十秒才在 warnings 里看到 -->
       <p v-if="missingLyrics.length" class="edt-msg small bad">
@@ -2863,10 +2935,17 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         </p>
       </div>
 
-      <!-- 音高曲线（两边共用） -->
-      <div v-if="detailOpen && !isAudio" class="curves">
+      <!-- 音高曲线（两边共用）：默认收起，把纵向空间还给卷帘 -->
+      <div v-if="detailOpen && !isAudio" class="curves" :class="{ folded: !curveOpen }">
         <div class="curves-head small">
-          <b>{{ t('音高曲线') }}</b>
+          <button class="curves-toggle" data-guide="sing-curve-toggle" :class="{ on: curveOpen }"
+                  :title="t('展开/收起音高曲线面板（收起时纵向空间全部给钢琴卷帘）')"
+                  @click="curveOpen = !curveOpen">
+            <Icon name="chevron" :size="12" :style="{ transform: curveOpen ? '' : 'rotate(-90deg)' }" />
+            <b>{{ t('音高曲线') }}</b>
+            <span class="muted">{{ curveCents }}{{ t(' 个点 · 单位：音分（cent），作用于整条轨') }}</span>
+          </button>
+          <template v-if="curveOpen">
           <span class="curve-tools">
             <button v-for="tl in CURVE_TOOLS" :key="tl[0]" class="btn" :class="{ primary: curveTool === tl[0] }"
                     :title="t('曲线工具')" @click="curveTool = tl[0]">{{ t(tl[1]) }}</button>
@@ -2880,8 +2959,9 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             <option value="">{{ t('参考轨…') }}</option>
             <option v-for="x in copyTargets" :key="x.id" :value="x.id">{{ x.name || t('未命名轨') }}</option>
           </select>
-          <span class="muted">{{ curveCents }}{{ t(' 个点 · 单位：音分（cent），作用于整条轨') }}</span>
+          </template>
         </div>
+        <template v-if="curveOpen">
         <CurveCanvas ref="curveCanvas" :points="(tr && tr.pitchCurve) || []" :min="-1200" :max="1200"
                      :beats="curveBeats" :beats-per-bar="beatsPerBar" :tool="curveTool" unit="cent"
                      :ghost-points="ghostPitch" :ghost-label="ghostLabel"
@@ -2897,6 +2977,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           </div>
         </div>
         </details>
+        </template>
       </div>
     </section>
     </div>
@@ -2937,11 +3018,13 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .se-main > b { font-size: 13px; white-space: nowrap; }
 .se-main > .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .se-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+/* 「新建声部轨…」展开后的引擎二选一：单独一行、稍微缩进，表明它是二级选择 */
+.se-new { flex-basis: 100%; padding-left: 26px; opacity: .96; }
 .edt-msg.hint { color: var(--stone); }
 /* 多选批量工具行（P2-1）与歌词告警（P2-5） */
 /* 音素级编辑面板（P2-2） */
 .auto-hint { margin: 6px 0 0; line-height: 1.7; }
-.ph-panel { margin: 8px 12px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
+.ph-panel { flex: none; margin: 8px 12px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
   /* 面板高度封顶：它们是「按需看」的，不该把音符区挤没（超出自己滚） */
   max-height: 200px; overflow: auto;
   background: var(--surface); }
@@ -3022,6 +3105,14 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
 /* ---- 右：编辑器 ---- */
 .edt { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: auto; }
+.pstate {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  padding: 3px 9px; border-radius: 999px; font-size: 11px;
+  border: 1px solid var(--border); background: var(--surface-muted); color: var(--stone);
+}
+.pstate.saved { color: var(--brand-text); border-color: var(--border); }
+.pstate.dirty { color: var(--brand-coral); border-color: var(--brand-coral); background: transparent; }
+.pstate.none { color: var(--stone); }
 .proj { display: flex; align-items: center; gap: 6px; padding: 3px 12px;
         border-bottom: 1px solid var(--border); }
 .proj .ptitle { flex: 0 1 200px; font-size: 12.5px; }
@@ -3209,7 +3300,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
 .det-sec { flex: 0 0 100%; display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 11.5px; font-weight: 700; margin-top: 2px; }
 .det-sec::after { content: ''; flex: 1; height: 1px; background: var(--hairline); }
-.det { display: flex; flex-wrap: wrap; gap: 10px; padding: 8px 12px;
+.det { flex: none; display: flex; flex-wrap: wrap; gap: 10px; padding: 8px 12px;
        border-top: 1px solid var(--border); }
 .det label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
 .det label > span:first-child { color: var(--stone); }
@@ -3244,8 +3335,22 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           border: 1px solid var(--border); background: var(--canvas); color: var(--stone); }
 .chip-s.on { border-color: var(--accent); background: var(--brand-soft); color: var(--brand-text); font-weight: 700; }
 
-.curves { padding: 8px 12px; border-top: 1px solid var(--border); max-height: 180px; overflow: auto; }
-.curves-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+/* ★ flex: none 必须写：.edt 是**可滚动的 flex 列**，默认 flex-shrink:1 会把放不下的子项压扁 ——
+   实测展开音高曲线时面板被压到 **17px**（内容 250px），曲线画布整个看不见（本轮 UX 复核第 2 条顺带挖出来的）。
+   给成 flex:none 后，面板保持自然高度，超出的部分由 .edt 自己滚动。 */
+.curves { flex: none; padding: 8px 12px; border-top: 1px solid var(--border); max-height: 180px; overflow: auto; }
+/* 收起态：只剩一行可点的标题（纵向空间全给卷帘）—— 0 个点时不该占一大块空白 */
+.curves.folded { padding: 4px 12px; max-height: none; overflow: visible; }
+.curves-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.curves.folded .curves-head { margin-bottom: 0; }
+.curves-toggle {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 6px;
+  border: 1px solid transparent; border-radius: 999px; background: transparent;
+  color: var(--ink); font-size: 12px; cursor: pointer;
+}
+.curves-toggle:hover { background: var(--surface-soft); }
+.curves-toggle.on { border-color: var(--border); background: var(--surface-soft); }
+.curves-toggle .muted { font-size: 11px; }
 .curves-grid { display: flex; flex-direction: column; gap: 4px; }
 .curve-row { display: flex; align-items: center; gap: 6px; }
 .curve-row input { width: 84px; }
