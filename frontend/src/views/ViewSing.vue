@@ -166,6 +166,46 @@ function onEditNoteFromRoll(id: string) {
 const curveLocked = ref(localStorage.getItem('fufumidi_curve_locked') === '1');
 watch(curveLocked, (v) => { try { localStorage.setItem('fufumidi_curve_locked', v ? '1' : '0'); } catch (e) {} });
 /** 复制当前参数曲线到别的轨（同引擎的轨才有同一个目标表） */
+/* ---- M6c 收尾：参数行（可折叠 / Solo） + 叠加参考轨 ---- */
+/** 每行是否展开。默认只展开**当前聚焦**那一行，否则一进来就是七八张画布 */
+const rowOpen = ref<Record<string, boolean>>({});
+/** Solo：只看这一条（点第二次取消） */
+const soloAbbr = ref('');
+/** 工具条（平滑/量化）作用于**聚焦行**的画布 —— 动态 ref：只有当前聚焦行的画布挂到 curveCanvasAuto */
+function setRowCanvas(a: string, el: any) {
+  if (a === curAbbr.value) curveCanvasAuto.value = el;
+}
+function rowExpanded(a: string) {
+  if (soloAbbr.value) return soloAbbr.value === a;
+  const v = rowOpen.value[a];
+  return v === undefined ? a === curAbbr.value : !!v;
+}
+function toggleRow(a: string) {
+  const cur = rowExpanded(a);
+  rowOpen.value = { ...rowOpen.value, [a]: !cur };
+  if (soloAbbr.value === a) soloAbbr.value = '';
+}
+function toggleSolo(a: string) {
+  soloAbbr.value = soloAbbr.value === a ? '' : a;
+  if (soloAbbr.value) curAbbr.value = a;    // Solo 同时把编辑焦点带过去，工具条才不会打空
+}
+/** 叠加参考轨：把另一条轨的同名曲线画成灰线 */
+const refTrackId = ref('');
+const refTrack = computed<any>(() => store.tracks.find((x: any) => x.id === refTrackId.value) || null);
+/** 某条参数在参考轨上的同名曲线（没有就返回空数组） */
+function ghostFor(abbr: string, tr0?: any) {
+  const r = tr0 || refTrack.value;
+  if (!r) return [];
+  const c: any = curveOf(r, abbr);
+  return ((c && c.points) || []).map((p: any) => ({ beat: p.beat, value: p.value }));
+}
+/** 音高曲线那条（PIT 的镜像 pitchCurve）在参考轨上的点 */
+const ghostPitch = computed(() => {
+  const r = refTrack.value;
+  if (!r) return [];
+  return ((r.pitchCurve || []) as any[]).map((p: any) => ({ beat: p.beat, value: p.cents }));
+});
+const ghostLabel = computed(() => (refTrack.value ? (refTrack.value.name || t('未命名轨')) : ''));
 const copyToId = ref('');
 /* 只列出「这条参数它也用得了」的轨：UTAU 专属的 DYN 复制到 DiffSinger 轨会被 normalizeCurves 丢掉，
    与其让用户点了个没反应，不如根本不给选。 */
@@ -1617,6 +1657,10 @@ onMounted(() => {
         roll: () => prRef.value, singer: store, api: () => rollApi(),
         // 音素工作区（频谱底图验收用）
         phWave: () => waveCv.value, phSpecOn, drawWave, phItems, phIndex, phNote, waveBuf,
+        // M6c：参数行（折叠/Solo）+ 叠加参考轨
+        autoTargets, curAbbr, rowOpen, soloAbbr, rowExpanded, toggleRow, toggleSolo,
+        refTrackId, refTrack, ghostFor, ghostPitch, ghostLabel,
+        curveCanvasAuto, curveOf,
         noteSpectrogram: (i0: number, i1: number, key: string) => {
           const ab = waveBuf.value;
           if (!ab) return null;
@@ -2343,11 +2387,30 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
         <!-- ── 自动化子轨 ── -->
         <div v-else class="autopane small">
-          <div class="auto-bar">
-            <button v-for="a in autoTargets" :key="a" class="chip"
-                    :class="{ on: a === curAbbr }" :title="t(curTgt(a).label)" @click="curAbbr = a">
-              {{ a }}
-            </button>
+          <!-- 参数行（M6c）：每行 = 一条参数曲线，可折叠、可 Solo；聚焦行才是工具条的目标 -->
+          <div class="auto-rows">
+            <div v-for="a in autoTargets" :key="a" class="auto-row" :class="{ on: a === curAbbr, solo: soloAbbr === a }">
+              <div class="auto-row-head" :title="t(curTgt(a).label)" @click="curAbbr = a">
+                <button class="ib" :title="rowExpanded(a) ? t('折叠这一行') : t('展开这一行')"
+                        @click.stop="toggleRow(a)"><Icon name="chevron" :size="11"
+                        :style="{ transform: rowExpanded(a) ? 'none' : 'rotate(-90deg)' }" /></button>
+                <b>{{ a }}</b>
+                <span class="muted small">{{ t(curTgt(a).label) }}</span>
+                <span class="muted small">{{ (ghostFor(a, tr).length ? t('本轨 ') : '') }}{{ ((curveOf(tr, a) || {}).points || []).length }}{{ t(' 点') }}</span>
+                <span class="sp" />
+                <button class="chip-s" :class="{ on: soloAbbr === a }" :title="t('只看这一条（再点一次取消）')"
+                        @click.stop="toggleSolo(a)">S</button>
+              </div>
+              <div v-if="rowExpanded(a)" class="auto-row-body">
+                <CurveCanvas :ref="(el: any) => setRowCanvas(a, el)"
+                             :points="((curveOf(tr, a) || {}).points) || []"
+                             :min="curTgt(a).min ?? -1200" :max="curTgt(a).max ?? 1200"
+                             :beats="curveBeats" :beats-per-bar="beatsPerBar" :tool="curveTool"
+                             :unit="curTgt(a).unit || ''" :locked="curveLocked"
+                             :ghost-points="ghostFor(a)" :ghost-label="a === curAbbr ? ghostLabel : ''"
+                             @commit="onAutoCurveCommit" />
+              </div>
+            </div>
           </div>
           <div v-if="curTarget" class="auto-head">
             <b>{{ curAbbr }}</b>
@@ -2366,6 +2429,12 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             </select>
             <button class="btn" :disabled="!copyToId" @click="copyCurveTo(copyToId)">{{ t('复制') }}</button>
             <button class="btn" :disabled="!copyTargets.length" @click="copyCurveToAll">{{ t('复制到全部轨') }}</button>
+            <!-- 叠加参考轨（M6c）：把另一条轨的同名曲线画成灰线，看着别人的调自己的 -->
+            <select v-model="refTrackId" class="select-input" style="width:auto;max-width:140px"
+                    :title="t('叠加参考轨：把这条轨的同名曲线画成灰线做对照')">
+              <option value="">{{ t('参考轨…') }}</option>
+              <option v-for="x in copyTargets" :key="x.id" :value="x.id">{{ x.name || t('未命名轨') }}</option>
+            </select>
           </div>
           <!-- P2-4：表格用于精确输入，车道用于"凭耳朵拖" —— 两条路都留着 -->
           <p class="muted auto-hint">
@@ -2381,10 +2450,8 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             <button class="btn" @click="curveCanvasAuto?.quantize(0.25)">{{ t('量化 1/16') }}</button>
             <span class="muted">{{ (curCurve && curCurve.points.length) || 0 }}{{ t(' 个点') }}</span>
           </div>
-          <CurveCanvas ref="curveCanvasAuto" :points="(curCurve && curCurve.points) || []"
-                       :min="curTarget ? curTarget.min : -1200" :max="curTarget ? curTarget.max : 1200"
-                       :beats="curveBeats" :beats-per-bar="beatsPerBar" :tool="curveTool"
-                       :unit="(curTarget && curTarget.unit) || ''" :locked="curveLocked" @commit="onAutoCurveCommit" />
+          <!-- ★ 单张画布已由上面的「参数行」取代（每行一张，可折叠/Solo）——
+               工具条通过动态 ref 作用在**聚焦行**的画布上（见 setRowCanvas）。 -->
           <details v-if="curCurve && curCurve.points.length" class="curve-nums">
             <summary class="muted small">{{ t('数值表（精确输入）') }}</summary>
           <div class="auto-grid">
@@ -2806,10 +2873,16 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <button class="btn" :title="t('把曲线点吸附到 1/16 拍')" @click="curveCanvas?.quantize(0.25)">{{ t('量化 1/16') }}</button>
           <button class="btn" @click="curveAdd"><Icon name="plus" :size="12" /> {{ t('加点') }}</button>
           <button class="btn" @click="curveClear"><Icon name="erase" :size="12" /> {{ t('清空') }}</button>
+          <select v-model="refTrackId" class="select-input" style="width:auto;max-width:140px"
+                  :title="t('叠加参考轨：把这条轨的同名曲线画成灰线做对照')">
+            <option value="">{{ t('参考轨…') }}</option>
+            <option v-for="x in copyTargets" :key="x.id" :value="x.id">{{ x.name || t('未命名轨') }}</option>
+          </select>
           <span class="muted">{{ curveCents }}{{ t(' 个点 · 单位：音分（cent），作用于整条轨') }}</span>
         </div>
         <CurveCanvas ref="curveCanvas" :points="(tr && tr.pitchCurve) || []" :min="-1200" :max="1200"
                      :beats="curveBeats" :beats-per-bar="beatsPerBar" :tool="curveTool" unit="cent"
+                     :ghost-points="ghostPitch" :ghost-label="ghostLabel"
                      @commit="onCurveCommit" />
         <details v-if="tr && tr.pitchCurve.length" class="curve-nums">
           <summary class="muted small">{{ t('数值表（精确输入）') }}</summary>
@@ -3156,6 +3229,19 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .cand.k-initial, .cand.k-final { color: var(--stone); }
 
 /* ---- 曲线 ---- */
+/* 参数行（M6c）：折叠 / Solo —— 每行一张画布，未展开的行只留一条窄表头 */
+.auto-rows { display: flex; flex-direction: column; gap: 3px; margin: 4px 0 6px; }
+.auto-row { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.auto-row.on { border-color: var(--brand); }
+.auto-row.solo { box-shadow: inset 0 0 0 1px var(--accent); }
+.auto-row-head { display: flex; align-items: center; gap: 6px; padding: 2px 6px; cursor: pointer; font-size: 11.5px; }
+.auto-row-head b { min-width: 34px; }
+.auto-row-head .sp { flex: 1; }
+.auto-row-body { padding: 0 4px 4px; }
+.chip-s { width: 20px; height: 18px; padding: 0; border-radius: 5px; font-size: 10.5px; cursor: pointer;
+          border: 1px solid var(--border); background: var(--canvas); color: var(--stone); }
+.chip-s.on { border-color: var(--accent); background: var(--brand-soft); color: var(--brand-text); font-weight: 700; }
+
 .curves { padding: 8px 12px; border-top: 1px solid var(--border); max-height: 180px; overflow: auto; }
 .curves-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .curves-grid { display: flex; flex-direction: column; gap: 4px; }

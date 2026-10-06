@@ -24,6 +24,10 @@ const props = defineProps({
   height: { type: Number, default: 150 },
   snap: { type: Number, default: 0 },           // >0 时落点吸附到这个拍长（0 = 不吸）
   locked: { type: Boolean, default: false },    // 锁定后只读（防「只是想看看」时误改）
+  /* 叠加参考轨（M6c 收尾）：把**另一条轨的同名曲线**画成灰线做对照。
+     只读、不参与命中判定 —— 于是"看着别人的曲线调自己的"不会误改参考轨。 */
+  ghostPoints: { type: Array, default: () => [] },
+  ghostLabel: { type: String, default: '' },
 });
 const emit = defineEmits(['preview', 'commit']);
 
@@ -40,6 +44,7 @@ function clone(pts: any[]) {
     .sort((a, b) => a.beat - b.beat);
 }
 watch(() => props.points, (v) => { if (!dragging) local.value = clone(v); }, { deep: true });
+watch(() => props.ghostPoints, () => { draw(); }, { deep: true });
 onMounted(() => { local.value = clone(props.points); if (typeof ResizeObserver !== 'undefined' && wrap.value) { ro = new ResizeObserver(() => draw()); ro.observe(wrap.value); } nextTick(draw); });
 onBeforeUnmount(() => { if (ro) { ro.disconnect(); ro = null; } });
 
@@ -88,6 +93,33 @@ function draw() {
   g.fillStyle = stone; g.font = '10px monospace'; g.textAlign = 'left'; g.textBaseline = 'top';
   g.fillText(String(props.max) + ' ' + props.unit, 4, 3);
   g.fillText(String(props.min), 4, h - 12);
+  /* 参考轨（灰线）画在主曲线**之前**：它是背景对照，不该压住正在编辑的那条。
+     同样走"二次贝塞尔取中点"的平滑，保持这套视觉语言的连续性要求。 */
+  const ghost = clone(props.ghostPoints || []);
+  if (ghost.length) {
+    const gx = (b: number) => xOf(b), gy = (v: number) => yOf(v);
+    g.globalAlpha = 0.55; g.strokeStyle = stone; g.lineWidth = 1.6;
+    g.lineJoin = 'round'; g.lineCap = 'round';
+    g.beginPath();
+    if (ghost.length === 1) { g.arc(gx(ghost[0].beat), gy(ghost[0].value), 2, 0, Math.PI * 2); g.fillStyle = stone; g.fill(); }
+    else {
+      g.moveTo(gx(ghost[0].beat), gy(ghost[0].value));
+      for (let i = 1; i < ghost.length - 1; i++) {
+        const x1 = gx(ghost[i].beat), y1 = gy(ghost[i].value);
+        const x2 = gx(ghost[i + 1].beat), y2 = gy(ghost[i + 1].value);
+        g.quadraticCurveTo(x1, y1, (x1 + x2) / 2, (y1 + y2) / 2);
+      }
+      const gl = ghost[ghost.length - 1];
+      g.lineTo(gx(gl.beat), gy(gl.value));
+      g.stroke();
+    }
+    g.globalAlpha = 1;
+    if (props.ghostLabel) {
+      g.fillStyle = stone; g.font = '10px monospace'; g.textAlign = 'right'; g.textBaseline = 'top';
+      g.fillText(t('参考：') + props.ghostLabel, w - 4, 3);
+      g.textAlign = 'left';
+    }
+  }
   // 曲线：二次贝塞尔取中点（**不许用 lineTo 连折线**，连续性是这套视觉语言的硬要求）
   const pts = local.value;
   if (pts.length) {
