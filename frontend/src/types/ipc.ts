@@ -8,6 +8,8 @@ export type PerfMode = 'quality' | 'balanced' | 'fast';
 export type GpuKind = 'cuda' | 'directml' | 'rocm';
 
 export interface ConvertRequest {
+  /** MuScriptor 乐器组约束：'auto' 或不约束为空；否则是组名列表（如 'voice,drums'，硬约束） */
+  muscriptor_instruments?: string;
   audio: string;
   out?: string | null;
   id?: string | number;

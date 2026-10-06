@@ -131,14 +131,17 @@ def detect_recommended():
         score += 2
 
     if score >= 5:
-        # 高配置：GPU（CUDA/MPS）机器默认推荐「均衡」——GPU 批量推理实测约 2.3×
-        # 提速且边界质量损失极小；「最高质量」（MuScriptor 串行+prelude_forcing）
-        # 保留给愿意以数倍耗时换取极致边界质量的用户，可手动切换。
+        # 高配置：以前默认推「均衡」，理由是「GPU 批量推理 2.3× 提速且边界质量损失极小」。
+        # 实测推翻了这个前提：批量推理必须关闭 prelude_forcing，而它正是"跨段延续的音符按
+        # 原乐器续上"的机制 —— 同一首歌实测（batch=1 vs 4）：相邻 5s 分块换乐器组 1 次 → 16 次、
+        # 音符 2531 → 1962（少 22%）、非鼓轨 5 条 → 9 条，听感就是"同一段旋律每隔几秒换音色"。
+        # 因此默认改为「最高质量」；批量推理变成转录页上的显式开关，由用户知情后取舍。
         if gpu_backend in ("cuda", "mps"):
-            res["recommended"] = "balanced"
+            res["recommended"] = "quality"
             res["reasons"].append(
-                "高配置 + GPU：默认推荐「均衡」档（GPU 批量推理，长音频约 2.3× 提速）；"
-                "追求极致质量可手动选「最高质量」（串行，耗时数倍）")
+                "高配置 + GPU：默认「最高质量」（串行推理，跨段音色一致）；"
+                "需要更快可在转录页打开「批量推理」（约 2.3× 提速，代价是跨段延续的音符"
+                "可能被重新判定乐器）")
         else:
             res["recommended"] = "quality"
             res["reasons"].append(
