@@ -1,18 +1,23 @@
 # -*- coding: utf-8 -*-
-"""转录前的**乐器组预分析**：让模型先粗听几段，再决定整曲锁定哪些乐器组。
+"""乐器组探测：让模型先粗听几段，看它会把这首歌判成哪些乐器 —— **独立分析工具**。
 
-## 为什么需要它
+## 它做什么
 
-MuScriptor 是 MT3 系的多乐器模型，逐音符判定乐器组。整曲自由判定时，它的乐器头会在同一首歌里
-改判（实测《初音ミク-甩葱歌》：同一条旋律 24s→organ、33s→synth lead、43s→flutes、96s→voice），
-于是同一段旋律每隔几小节换一次音色；而"完全不限定"和"自动识别"如果都不约束模型，结果自然一样。
+挑几段有代表性的音频各做一次短推理（默认 3 段 × 20s），按**音符数**统计模型实际用到的乐器组，
+给出"这首歌主要有哪些乐器 + 各占多少"的结论。用法：
 
-手工用 DSP 特征猜"这首歌有哪些乐器"既不准也难维护（音色分类器与模型的 35 个组并不对齐）。
-这里换成**两段式推理**：先挑几段有代表性的音频各做一次短推理（默认 3 段 × 20s），
-统计模型**自己**实际用到的乐器组和时长占比，再把占比够大的那几组作为**硬约束**喂给整曲转录。
+    python instrument_probe.py 歌曲.flac --json
 
-代价约等于 K 段 × 20s 的推理（整曲的 20~30%）；收益是整曲只在"这首歌真的有的乐器"里选，
-长尾组（竖琴/大管/定音鼓/管弦齐奏…）被排除，不会为了一两个音换一次音色。
+用途是**排查与调参**：转录结果里出现了奇怪乐器时，先用它看看模型到底听到了什么；
+也用来对照「限定乐器组」该勾哪几组。
+
+## 它不做什么（重要）
+
+它**不再**参与转录流水线。曾经有一档「自动识别」= 转录前跑这个探测、把结果作为整曲硬约束；
+实测收益只有"剪掉长尾杂音"（长笛/圆号/萨克斯那种为几个音冒出来的轨），
+而"同一段旋律隔几秒换一次音色"的真正原因是分块边界的 prelude_forcing
+（批量推理会关掉它，详见 engine_muscriptor.py 的说明）—— 预分析救不了那个问题，
+所以那一档已从界面移除，本模块改成独立工具保留。
 """
 
 import json
@@ -86,24 +91,21 @@ def pick_windows(y, sr, count=PROBE_COUNT, win=PROBE_WINDOW):
 
 
 def parse_mode(raw):
-    """把界面的取值解析成 (mode, groups)：
+    """把界面/CLI 的取值解析成 (mode, groups)：
 
-      None / '' / 'auto' / 'smart' → ('auto', [])   先预分析再锁定（默认）
-      'none' / 'off' / 'free' / '-' → ('none', [])  完全不干预：不预分析、不约束（模型自由判定）
-      "voice,drums"               → ('limit', ['voice', 'drums'])  手动硬约束
+      None / '' / 'none' / 'off' / 'free' / '-' → ('none', [])   不限定：不预分析、不约束（默认）
+      "voice,drums"                             → ('limit', ['voice', 'drums'])  手动硬约束
 
-    历史坑：界面「不限定」以前是**不发这个字段**，引擎又把"没给"当成 auto，
-    于是"不限定"和"自动识别"跑出来一模一样。现在不限定用显式哨兵值 none。
+    'auto'/'smart' 是**已退役**的取值（曾经是"转录前预分析再锁定"那一档，界面已去掉）：
+    这里按"不限定"处理，免得老预设或脚本拿它当组名，被 forbidden_token_ids 当成非法乐器报错。
     """
     if isinstance(raw, (list, tuple)):
         groups = [str(x).strip() for x in raw if str(x).strip()]
     else:
         groups = [s.strip() for s in str(raw or "").split(",") if s.strip()]
     if not groups:
-        return ("auto", [])
-    if len(groups) == 1 and groups[0].lower() in ("auto", "smart"):
-        return ("auto", [])
-    if len(groups) == 1 and groups[0].lower() in ("none", "off", "free", "-"):
+        return ("none", [])
+    if len(groups) == 1 and groups[0].lower() in ("auto", "smart", "none", "off", "free", "-"):
         return ("none", [])
     return ("limit", groups)
 

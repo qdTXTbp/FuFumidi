@@ -27,10 +27,9 @@ const beatGrid = ref(false);             // 节拍网格检测（仅 MuScriptor�
 // 乐器组约束（仅 MuScriptor）：MuScriptor 是**多乐器**模型，逐音符判定乐器组 —— 不给约束时
 // 它会在同一首歌里改判（实测《甩葱歌》：同一条旋律 24s→organ、33s→synth lead、43s→flutes、
 // 96s→voice），于是同一段旋律每隔几小节换一次音色。
-//   auto  —— 不约束，出结果后按识别到的主导组归并（默认）
 //   limit —— **硬约束**：只允许勾选的乐器组发声（引擎把其它组的 token 全部禁掉）
-//   ''    —— 完全不干预
-const msMode = ref('auto');
+//   none  —— 不干预，模型自由判定（默认）
+const msMode = ref('none');
 const msGroups = ref(['voice', 'drums']);          // 限定模式下允许的乐器组
 // 批量推理（MuScriptor）：关闭 prelude_forcing 换取 ~2.3× 吞吐。**默认关** ——
 // 实测（同一首歌、同一模型）：开批量后相邻 5s 分块的乐器组变化 1 次 → 16 次、音符少 22%、
@@ -58,14 +57,10 @@ const MS_GROUPS = [
   { id: 'drums', cn: '鼓' }, { id: 'timpani', cn: '定音鼓' }, { id: 'chromatic_percussion', cn: '色彩打击乐' },
   { id: 'orchestra_hit', cn: '管弦齐奏' },
 ];
-/** 传给引擎的取值：'auto'（预分析后锁定）/ 'voice,drums'（手动硬约束）/ 'none'（完全不干预）。
- *  注意 'none' 必须显式送出去：以前「不限定」是不发这个字段，引擎把"没给"当 auto，
- *  于是"不限定"和"自动识别"跑出来一模一样（用户实测发现）。 */
-const msInstrValue = computed(() => {
-  if (msMode.value === 'limit') return msGroups.value.join(',');
-  if (msMode.value === 'auto') return 'auto';
-  return 'none';
-});
+/** 传给引擎的取值：'voice,drums'（手动硬约束）或 'none'（不限定）。
+ *  'none' 必须显式送出去，不能靠"不发这个字段"表示不限定 —— 引擎的缺省语义是"不限制"，
+ *  但历史上把"没给"当成过 auto，显式送值才不会再出歧义。 */
+const msInstrValue = computed(() => (msMode.value === 'limit' ? msGroups.value.join(',') : 'none'));
 const busy = ref(false);
 const done = ref(false);
 const progress = ref(0);
@@ -1287,12 +1282,11 @@ onBeforeUnmount(() => {
             <label>
               <span>
                 <b>{{ t('乐器组') }}</b>
-                <small>{{ t('MuScriptor 逐段判定乐器，同一段旋律可能被写成好几种音色。自动识别 = 转录前先挑几段让模型试听，锁定这首歌真正用到的乐器组；限定乐器组 = 手动指定（模型侧硬约束）') }}</small>
+                <small>{{ t('MuScriptor 逐段判定乐器，同一段旋律可能被写成好几种音色。不限定 = 模型自己决定用哪些乐器；限定乐器组 = 只允许勾选的组发声（模型侧硬约束）') }}</small>
               </span>
               <select v-model="msMode">
-                <option value="auto">{{ t('自动识别乐器组（先试听分析，推荐）') }}</option>
-                <option value="limit">{{ t('限定乐器组（硬约束）') }}</option>
                 <option value="none">{{ t('不限定（模型自由判定）') }}</option>
+                <option value="limit">{{ t('限定乐器组（硬约束）') }}</option>
               </select>
             </label>
           </div>

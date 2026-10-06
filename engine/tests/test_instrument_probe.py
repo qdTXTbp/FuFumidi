@@ -55,18 +55,16 @@ def write_wav(tmp_path, seconds=60.0, sr=22050, silent_until=0.0, loud=0.3):
 
 # ---------------------------------------------------------------- 取值解析
 
-def test_parse_mode_defaults_to_auto():
-    assert ip.parse_mode(None) == ("auto", [])
-    assert ip.parse_mode("") == ("auto", [])
-    assert ip.parse_mode("auto") == ("auto", [])
-    assert ip.parse_mode("SMART") == ("auto", [])
-
-
-def test_parse_mode_none_means_unrestricted():
-    # 界面「不限定」送的就是这个值；以前不发字段 → 引擎当 auto → 两种模式永远一样（实测 bug）
+def test_parse_mode_defaults_to_unrestricted():
+    # 不传 / 空 / none 一律按"不限定"（界面默认档）
+    assert ip.parse_mode(None) == ("none", [])
+    assert ip.parse_mode("") == ("none", [])
     assert ip.parse_mode("none") == ("none", [])
     assert ip.parse_mode("off") == ("none", [])
     assert ip.parse_mode("free") == ("none", [])
+    # 'auto' 是已退役的档：不能让老预设把它当组名送去 forbidden_token_ids（会报非法乐器）
+    assert ip.parse_mode("auto") == ("none", [])
+    assert ip.parse_mode("SMART") == ("none", [])
 
 
 def test_parse_mode_explicit_group_list():

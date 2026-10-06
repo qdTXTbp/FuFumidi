@@ -244,29 +244,19 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         # 于是同一段旋律每隔几小节换一次音色。muscriptor 的 transcribe() 支持硬约束
         # （transcription_model.py: "instruments ... is a hard constraint"，内部用
         # forbidden_token_ids 禁止采样其它乐器组）。三种取值：
-        #   'auto'        —— **预分析**：挑几段代表性子样本让模型自己粗听一遍，统计它实际用到的
-        #                    乐器组，再把占比较大的那几组作为硬约束喂给整曲（instrument_probe.py）。
-        #                    这样「自动识别」与「不限定」才有实质差别。
-        #   'voice,piano' —— 直接作为硬约束（界面「限定乐器组（硬约束）」）。
-        #   ''            —— 完全不干预，模型自由判定。
+        #   'voice,piano' —— 作为硬约束（界面「限定乐器组（硬约束）」）。
+        #   其它/不传      —— 不限定，模型自由判定（界面默认；也是引擎缺省语义）。
+        #
+        # 说明：曾经有过 'auto'（转录前用 instrument_probe 预分析几段再锁定）这一档，
+        # 实测收益只有"剪掉长尾杂音"（圆号/萨克斯那种为几个音冒出来的轨），而"换音色"的真正
+        # 原因是分块边界（prelude_forcing，见上面的批量推理说明），预分析救不了它，
+        # 因此界面已去掉这一档。instrument_probe.py 仍保留为**独立分析工具**
+        # （python instrument_probe.py 歌曲.flac --json，看模型会把这首歌判成哪些乐器）。
         import instrument_probe
         _mode, _groups = instrument_probe.parse_mode(params.get("muscriptor_instruments"))
-        auto_mode = (_mode == "auto")
         constrain = _groups if _mode == "limit" else None
-        if _mode == "none":
+        if not constrain:
             _log(log_cb, "未限定乐器组：模型自由判定（同一段旋律可能被写成多种音色）")
-        if auto_mode and not params.get("muscriptor_no_probe"):
-            # 预分析失败一律退回"不限定" —— 它只是提质量，绝不能拖垮转录
-            try:
-                pres = instrument_probe.probe(
-                    model, wav_tmp, log=lambda m: _log(log_cb, m),
-                    count=int(params.get("muscriptor_probe_count") or instrument_probe.PROBE_COUNT))
-                if pres.get("groups"):
-                    constrain = pres["groups"]
-                else:
-                    _log(log_cb, "预分析未得出乐器组（%s），本次不限定" % (pres.get("reason") or "unknown"))
-            except Exception as e:
-                _log(log_cb, "预分析跳过：" + str(e)[:160])
         if constrain:
             _log(log_cb, "旋律乐器组已锁定：" + " / ".join(constrain) + "（模型不会输出其它乐器）")
         t0 = time.perf_counter()
