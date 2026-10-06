@@ -1188,6 +1188,17 @@ def _print_result(res):
     print(f"###RESULT {json.dumps(res, ensure_ascii=False)}")
 
 
+def emit_progress(percent, text=''):
+    """进度行（与 engine_openutau.py 同协议 `###PROG`）：主进程会转发给界面。
+
+    ★ 这个函数原本只有 OpenUTAU 引擎有；legacy 引擎一直没有进度输出，
+      于是"分析 400+ 个采样"这类长任务在界面上只能干等。补上，两边协议一致。
+    """
+    sys.stdout.write('###PROG ' + json.dumps({'percent': int(percent), 'text': text},
+                                            ensure_ascii=False) + '\n')
+    sys.stdout.flush()
+
+
 def cmd_render(args):
     try:
         vb = Voicebank(args.voicebank)
@@ -1315,6 +1326,112 @@ def cmd_aliases(args):
         sys.exit(1)
 
 
+def _frq_f0(wav_path):
+    """读 UTAU 的 `.frq`（resampler 自己的基频轨迹）→ (f0 中位数 Hz, 有声帧数)。
+
+    命名规则：`a.wav` → `a_wav.frq`。文件结构：8 字节 `FREQ0003` + 4 字节 hop + 4 字节保留，
+    之后是 float64 的逐帧基频（0 = 无声帧）。
+    ★ 优先用它是**因为它就是引擎实际用的那条轨迹**（比我们重新分析更权威），而且快得多。
+    解析失败一律返回 (0, 0)，调用方回退到采样分析。
+    """
+    frq = os.path.splitext(wav_path)[0] + "_wav.frq"
+    if not os.path.isfile(frq):
+        return 0.0, 0
+    try:
+        with open(frq, "rb") as f:
+            raw = f.read()
+        if len(raw) < 40 or raw[:4] != b"FREQ":
+            return 0.0, 0
+        n = (len(raw) - 16) // 8
+        if n <= 0:
+            return 0.0, 0
+        arr = np.frombuffer(raw[16:16 + n * 8], dtype="<f8")
+        voiced = arr[(arr > 60.0) & (arr < 1200.0)]
+        if len(voiced) < 5:
+            return 0.0, 0
+        return float(np.median(voiced)), int(len(voiced))
+    except Exception:
+        return 0.0, 0
+
+
+def cmd_alias_range(args):
+    """每个别名的**录制音高**（M8 音域热力图）。
+
+    两个来源，按可靠性排序：
+      1. `.frq`（resampler 用的基频轨迹，最权威、最快）；
+      2. 没有 .frq 时**分析采样本身**：按 oto 的 offset 起、跨过固定段(consonant)、
+         再取一小段有声区，用引擎自己的逐帧自相关基音检测（_frame_f0），
+         并且用第 1 步得到的中位音高当 hint 收紧搜索范围（避免八度误判）。
+    前端据此画「别名 × 音高」热力图，并判断某个音高离录制音高有多远
+    （±12 半音内视为可用：UTAU 类拼接引擎的常规变调余量）。
+    """
+    try:
+        vb = Voicebank(args.voicebank)
+        aliases = vb.aliases()
+        if args.query:
+            aliases = [a for a in aliases if args.query in a]
+        limit = int(args.limit or 0)
+        if limit > 0:
+            aliases = aliases[:limit]
+        total = len(aliases)
+        items = []
+        pending = []            # 没有 .frq 的条目，等第 2 步分析
+        for i, alias in enumerate(aliases):
+            entry = vb.by_alias.get(alias)
+            if entry is None:
+                continue
+            wav_path = os.path.join(vb.vb_dir, entry.filename)
+            f0, voiced = _frq_f0(wav_path)
+            if f0 > 0:
+                items.append({
+                    "alias": alias, "file": entry.filename, "source": "frq",
+                    "f0_hz": round(f0, 2),
+                    "note": float(np.round(69 + 12 * np.log2(f0 / 440.0), 2)),
+                    "voiced": voiced, "ms": None, "offset": entry.offset,
+                })
+            else:
+                pending.append({"alias": alias, "file": entry.filename, "offset": entry.offset})
+            if total and i and i % 25 == 0:
+                emit_progress(int(5 + 55 * i / total), "读 .frq %d/%d" % (i + 1, total))
+
+        # 第 2 步：没有 .frq 的用采样分析；hint 取已有结果的中位音高
+        f0s = [x["f0_hz"] for x in items if x["f0_hz"] > 0]
+        hint = float(np.median(f0s)) if len(f0s) >= 5 else None
+        for j, pend in enumerate(pending):
+            entry = vb.by_alias.get(pend["alias"])
+            try:
+                # ★ load_sample 返回**单个数组**（不是 (data, sr)）——采样率统一到 SAMPLE_RATE
+                data = vb.load_sample(entry)
+                sr = SAMPLE_RATE
+            except Exception as e:
+                # 缺采样 / 读不了：如实标出来，不让整批失败（热力图上标成"未分析"）
+                items.append({"alias": pend["alias"], "file": pend["file"], "error": str(e)[:120]})
+                continue
+            a = max(0, int(entry.offset / 1000.0 * sr))
+            b = min(len(data), a + int((entry.consonant + entry.preutterance + 220.0) / 1000.0 * sr))
+            seg = data[a:b] if b > a else data
+            f0, voiced = _frame_f0(seg, sr, hint=hint)
+            items.append({
+                "alias": pend["alias"], "file": pend["file"], "source": "analysis",
+                "f0_hz": round(float(f0), 2),
+                "note": (float(np.round(69 + 12 * np.log2(f0 / 440.0), 2)) if f0 > 0 else None),
+                "voiced": round(float(voiced), 3),
+                "ms": round(len(seg) / sr * 1000.0, 1), "offset": entry.offset,
+            })
+            if pending and j and j % 20 == 0:
+                emit_progress(int(60 + 35 * j / len(pending)),
+                              "分析采样 %d/%d" % (j + 1, len(pending)))
+        notes = [x["note"] for x in items if x.get("note")]
+        _print_result({
+            "ok": True, "count": len(items), "items": items,
+            "median_note": (float(np.round(np.median(notes), 2)) if notes else None),
+            "hint_hz": hint, "engine_version": VERSION,
+        })
+    except Exception as e:
+        _print_result({"ok": False, "error": f"{type(e).__name__}: {e}"})
+        sys.exit(1)
+
+
 def cmd_segment(args):
     """上传音频 → 静音切分音节段（CV 式录音）。"""
     try:
@@ -1432,6 +1549,12 @@ def build_parser():
     a.add_argument("--query", default=None, help="关键字过滤（子串匹配）")
     a.add_argument("--limit", type=int, default=300, help="最多返回条数")
     a.set_defaults(func=cmd_aliases)
+
+    ar = sub.add_parser("alias-range", help="估算每个别名的录制音高（音域热力图用）")
+    ar.add_argument("--voicebank", required=True, help="音源目录（含 oto.ini）")
+    ar.add_argument("--query", default=None, help="关键字过滤（子串匹配）")
+    ar.add_argument("--limit", type=int, default=0, help="最多分析条数（0 = 全部）")
+    ar.set_defaults(func=cmd_alias_range)
 
     s = sub.add_parser("segment", help="按静音间隙切分音频为音节段（CV 式）")
     s.add_argument("--input", required=True, help="音频文件（任意格式）")

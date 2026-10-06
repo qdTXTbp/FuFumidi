@@ -151,6 +151,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
   utauAliases: (cfg) => ipcRenderer.invoke('utau:aliases', cfg),
   // M8f：别名表可编辑 —— 读原始字节 / 写回（写回前主进程自动备份 oto.ini.bak）
   utauReadOto: (cfg) => ipcRenderer.invoke('utau:readOto', cfg),
+  /** M8 音域热力图：每个别名的录制音高 */
+  utauAliasRange: (cfg) => ipcRenderer.invoke('utau:aliasRange', cfg),
   utauSaveOto: (cfg) => ipcRenderer.invoke('utau:saveOto', cfg),
   // 汉字 → 拼音（调教页 · 中文 UTAU 声库）：token 数组进、音节数组出
   singToPinyin: (cfg) => ipcRenderer.invoke('sing:toPinyin', cfg),

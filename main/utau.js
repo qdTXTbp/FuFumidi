@@ -206,6 +206,36 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
   }));
 
   /**
+   * 每个别名的录制音高（M8 音域热力图）。
+   *
+   * 441 个别名的库要逐个读采样 + 逐帧自相关，实测秒级到十几秒，所以超时给足 10 分钟；
+   * 引擎那边每分析 20 条会 emit_progress，界面拿它显示进度。
+   */
+  ipcMain.handle('utau:aliasRange', (evt, cfg) => new Promise((resolve) => {
+    const { voicebank, query, limit } = cfg || {};
+    if (!voicebank) return resolve({ ok: false, error: '未选择声库' });
+    try {
+      const args = ['alias-range', '--voicebank', String(voicebank),
+        '--limit', String(Math.max(0, Math.min(5000, Number(limit) || 0)))];
+      if (query) args.push('--query', String(query));
+      spawnEngine(args, {
+        script: 'engine_utau.py',
+        timeoutMs: 10 * 60 * 1000,
+        onDone: (code, r) => {
+          if (r && r.result && r.result.ok) return resolve(r.result);
+          const err = (r && r.result && r.result.error)
+            || (r && (r.err || r.out || '').slice(-400))
+            || `引擎退出码 ${code}`;
+          resolve({ ok: false, error: err });
+        },
+        onError: (e) => resolve({ ok: false, error: String(e) }),
+      });
+    } catch (err) {
+      resolve({ ok: false, error: String((err && err.message) || err) });
+    }
+  }));
+
+  /**
    * 读 oto.ini 的**原始字节**（M8f 声库管理 2.0：别名表可编辑）。
    *
    * ★ 不在这里解析、也不在这里判编码：渲染进程有完整的 CP932 编解码器

@@ -9,7 +9,7 @@
     如果这里也用 glass/半透明，密集文字会压在壁纸上看不清 —— 这正是改版前的实测问题。
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import Icon from '../Icon.vue';
 import { t } from '../../core/i18n.js';
 import { useDiffsingerStore } from '../../stores/diffsinger';
@@ -29,6 +29,9 @@ onMounted(() => {
       oto, otoQuery, otoShown, audition, auditionPitch,
       openOto, saveOto, restoreOto, closeOto, addOtoRow, removeOtoRow, markDirty,
       auditionAlias, auditionBatch, stopAudition, playBytes,
+      // M8 音域热力图
+      range, rangeQuery, rangeRows, rangeCols, rangeHover, RANGE_SPAN, CELL_W, CELL_H, GUTTER, RULER,
+      openRange, closeRange, drawRange, rangeCell, noteName, onRangeMove, onRangeClick,
       parseOto, formatOto, decodeOtoFile, encodeOtoFile, diffOto, b64ToBytes, bytesToB64,
     };
   }
@@ -240,15 +243,16 @@ function closeOto() {
 }
 
 /** 试听一个别名：走真实引擎渲染一个长音（改完 oto 再听，差别是听得出来的） */
-async function auditionAlias(alias: string) {
-  const cur = oto.value;
+async function auditionAlias(alias: string, pitchOverride?: number) {
+  const cur = oto.value || (range.value ? { dir: range.value.dir } : null);
   const bridge = (window as any).fuBridge;
   if (!cur || !bridge || typeof bridge.utauRenderTrack !== 'function') return;
+  const pitch = Number.isFinite(pitchOverride as number) ? (pitchOverride as number) : auditionPitch.value;
   audition.value = { alias, busy: true, info: '' };
   try {
     const r = await bridge.utauRenderTrack({
       voicebank: cur.dir,
-      notes: [{ startBeat: 0, durBeat: 2, pitch: auditionPitch.value, lyric: alias }],
+      notes: [{ startBeat: 0, durBeat: 2, pitch, lyric: alias }],
       sampleNote: 'C4',
       bpm: 120,
     });
@@ -287,6 +291,220 @@ function stopAudition() {
   batchStop = true;
   batchOn.value = false;
   stopAudio();
+}
+
+/* ============================================================
+   M8 音域热力图（§0.2⑤ 第三条）
+   ------------------------------------------------------------
+   每个别名的"录制音高"来自引擎：优先读 `.frq`（resampler 自己用的基频轨迹，最权威），
+   没有 .frq 的采样再现场分析。横轴是音高（C4 = 中央 C），一格 = 一个半音；
+   颜色越深表示离该别名的录制音高越近（±12 半音内算可用，这是拼接引擎的常规变调余量）。
+   点格子 = 用那个音高试听那个别名 —— 于是"这个库唱得到 E5 吗"可以直接听。
+   ============================================================ */
+const RANGE_SPAN = 14;          // 横轴：录制音高中位数 ±14 半音
+const CELL_W = 18, CELL_H = 16, GUTTER = 150, RULER = 18;
+const range = ref<{
+  dir: string; name: string; busy: boolean; error: string; items: any[];
+  medianNote: number | null; ms: number; hintHz: number | null;
+} | null>(null);
+const rangeQuery = ref('');
+const rangeCanvas = ref<HTMLCanvasElement | null>(null);
+const rangeHover = ref<{ alias: string; pitch: number; note: number | null; f0: number; delta: number; lit: boolean } | null>(null);
+let rangeBase: HTMLCanvasElement | null = null;   // 底图缓存：鼠标移动只重贴一次 + 画高亮框
+
+const rangeRows = computed(() => {
+  const list = (range.value && range.value.items) || [];
+  const q = rangeQuery.value.trim().toLowerCase();
+  const hit = q ? list.filter((x: any) => String(x.alias).toLowerCase().includes(q)) : list.slice();
+  return hit.sort((a: any, b: any) => {
+    const na = a.note == null ? -1 : a.note, nb = b.note == null ? -1 : b.note;
+    if (na !== nb) return na - nb;
+    return String(a.alias).localeCompare(String(b.alias));
+  });
+});
+/* 横轴范围：取音高的 2%~98% 分位再各留 ±RANGE_SPAN 半音。
+   ★ 用分位数而不是"中位数 ±14"：个别离谱的别名（实测有两个落在 68/75）会把整条轴拉长，
+     而中位数±14 又会让这些行连自己的中心格子都看不见。分位数两头都照顾到了。 */
+const rangeCols = computed(() => {
+  const list = rangeRows.value;
+  const notes = list.map((x: any) => x.note).filter((n: any) => n != null).map(Number).sort((a: number, b: number) => a - b);
+  if (!notes.length) return [] as number[];
+  const pick = (q: number) => notes[Math.min(notes.length - 1, Math.max(0, Math.round((notes.length - 1) * q)))];
+  const lo = Math.max(21, Math.round(pick(0.02) - RANGE_SPAN));
+  const hi = Math.min(108, Math.round(pick(0.98) + RANGE_SPAN));
+  const out: number[] = [];
+  for (let p = lo; p <= hi; p++) out.push(p);
+  return out;
+});
+/** 某个别名在某个音高上的格子状态（渲染与断言共用这一份判定） */
+function rangeCell(item: any, pitch: number) {
+  const note = item && item.note != null ? Number(item.note) : null;
+  if (note == null) return { lit: false, alpha: 0, center: false };
+  const d = Math.abs(pitch - note);
+  const center = Math.round(note) === pitch;
+  if (d > 12) return { lit: false, alpha: 0, center };
+  return { lit: true, alpha: Math.max(0.12, 1 - d / 13), center };
+}
+function noteName(p: number) {
+  const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  return names[((p % 12) + 12) % 12] + (Math.floor(p / 12) - 1);
+}
+
+async function openRange(b: any) {
+  const bridge = (window as any).fuBridge;
+  if (!bridge || typeof bridge.utauAliasRange !== 'function') {
+    msg.value = t('当前环境不支持音域分析（请使用桌面版）');
+    return;
+  }
+  stopAudio();
+  range.value = { dir: b.dir, name: b.name, busy: true, error: '', items: [], medianNote: null, ms: 0, hintHz: null };
+  const t0 = performance.now();
+  try {
+    const r = await bridge.utauAliasRange({ voicebank: b.dir });
+    if (!r || !r.ok) {
+      if (range.value) { range.value.busy = false; range.value.error = (r && r.error) || t('分析失败'); }
+      return;
+    }
+    if (range.value) {
+      range.value.busy = false;
+      range.value.items = r.items || [];
+      range.value.medianNote = r.median_note == null ? null : Number(r.median_note);
+      range.value.hintHz = r.hint_hz == null ? null : Number(r.hint_hz);
+      range.value.ms = Math.round(performance.now() - t0);
+    }
+    await nextTick();
+    drawRange();
+  } catch (e: any) {
+    if (range.value) { range.value.busy = false; range.value.error = String((e && e.message) || e); }
+  }
+}
+
+function closeRange() {
+  range.value = null;
+  rangeHover.value = null;
+  rangeBase = null;
+  stopAudio();
+}
+
+function drawRange() {
+  const cv = rangeCanvas.value;
+  const cur = range.value;
+  if (!cv || !cur) return;
+  const rows = rangeRows.value;
+  const cols = rangeCols.value;
+  if (!rows.length || !cols.length) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = GUTTER + cols.length * CELL_W + 8;
+  const h = RULER + rows.length * CELL_H + 4;
+  cv.width = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
+  cv.style.width = w + 'px';
+  cv.style.height = h + 'px';
+  const ctx = cv.getContext('2d');
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const base = rangeBase && rangeBase.width === cv.width && rangeBase.height === cv.height
+    ? rangeBase : document.createElement('canvas');
+  base.width = cv.width; base.height = cv.height;
+  rangeBase = base;
+  const bctx = base.getContext('2d');
+  if (!bctx) return;
+  bctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  bctx.clearRect(0, 0, w, h);
+
+  const brand = (getComputedStyle(document.documentElement).getPropertyValue('--brand') || '#4B3FE3').trim() || '#4B3FE3';
+  const accent = (getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#E8463A').trim() || '#E8463A';
+  const stone = (getComputedStyle(document.documentElement).getPropertyValue('--stone') || '#8a8f98').trim() || '#8a8f98';
+  const ink = (getComputedStyle(document.documentElement).getPropertyValue('--ink') || '#222').trim() || '#222';
+
+  // 顶部音名标尺
+  bctx.font = '10px ui-monospace, monospace';
+  bctx.textBaseline = 'top';
+  cols.forEach((p, i) => {
+    const x = GUTTER + i * CELL_W;
+    if (p % 12 === 0) {
+      bctx.fillStyle = stone;
+      bctx.fillRect(x, RULER - 4, 1, 4);
+      bctx.fillText(noteName(p), x + 1, 2);
+    }
+  });
+  // 每行
+  rows.forEach((item: any, r: number) => {
+    const y = RULER + r * CELL_H;
+    const label = String(item.alias || item.file || '?');
+    bctx.fillStyle = item.error ? '#c0392b' : (item.note == null ? stone : ink);
+    bctx.font = '10px ui-monospace, monospace';
+    bctx.fillText(label.length > 20 ? label.slice(0, 19) + '…' : label, 4, y + 3);
+    if (item.note == null) {
+      bctx.fillStyle = stone;
+      bctx.fillText(t('未分析'), GUTTER - 46, y + 3);
+    }
+    cols.forEach((p, i) => {
+      const cell = rangeCell(item, p);
+      if (!cell.lit) return;
+      const x = GUTTER + i * CELL_W;
+      bctx.globalAlpha = cell.alpha;
+      bctx.fillStyle = cell.center ? accent : brand;
+      bctx.fillRect(x, y + 1, CELL_W - 1, CELL_H - 2);
+      bctx.globalAlpha = 1;
+      if (cell.center) {
+        bctx.strokeStyle = accent;
+        bctx.lineWidth = 1;
+        bctx.strokeRect(x + 0.5, y + 1.5, CELL_W - 2, CELL_H - 3);
+      }
+    });
+  });
+  ctx.drawImage(base, 0, 0, w, h);
+  drawRangeHover(ctx);
+}
+
+function drawRangeHover(ctx: CanvasRenderingContext2D) {
+  const hv = rangeHover.value;
+  const cols = rangeCols.value;
+  if (!hv || !cols.length) return;
+  const i = cols.indexOf(hv.pitch);
+  const r = rangeRows.value.findIndex((x: any) => String(x.alias) === hv.alias);
+  if (i < 0 || r < 0) return;
+  const x = GUTTER + i * CELL_W, y = RULER + r * CELL_H;
+  ctx.save();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x - 1, y, CELL_W, CELL_H - 1);
+  ctx.strokeStyle = '#000000';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x - 1, y, CELL_W, CELL_H - 1);
+  ctx.restore();
+}
+
+function onRangeMove(e: MouseEvent) {
+  const cv = rangeCanvas.value;
+  if (!cv) return;
+  const rect = cv.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  const i = Math.floor((x - GUTTER) / CELL_W);
+  const r = Math.floor((y - RULER) / CELL_H);
+  const rows = rangeRows.value, cols = rangeCols.value;
+  if (i < 0 || r < 0 || i >= cols.length || r >= rows.length) { rangeHover.value = null; drawRange(); return; }
+  const item: any = rows[r];
+  const pitch = cols[i];
+  const note = item.note == null ? null : Number(item.note);
+  rangeHover.value = {
+    alias: String(item.alias), pitch, note, f0: Number(item.f0_hz) || 0,
+    delta: note == null ? 0 : Math.round((pitch - note) * 10) / 10,
+    lit: rangeCell(item, pitch).lit,
+  };
+  drawRange();
+}
+
+function onRangeLeave() {
+  if (rangeHover.value) { rangeHover.value = null; drawRange(); }
+}
+
+function onRangeClick() {
+  const hv = rangeHover.value;
+  if (hv) void auditionAlias(hv.alias, hv.pitch);
 }
 </script>
 
@@ -335,6 +553,9 @@ function stopAudition() {
           <button v-if="b.engine === 'utau'" class="btn"
                   :title="t('打开别名表：改原音设定 / 逐条试听（写回前自动备份 oto.ini.bak）')"
                   @click="openOto(b)"><Icon name="edit" :size="12" /> {{ t('别名表') }}</button>
+          <button v-if="b.engine === 'utau'" class="btn"
+                  :title="t('音域热力图：每个别名的录制音高 × 可用音高，点格子直接试听那个音高')"
+                  @click="openRange(b)"><Icon name="chart" :size="12" /> {{ t('音域') }}</button>
           <button v-if="b.engine === 'diffsinger'" class="btn danger"
                   :disabled="busy || usedIn(b.dir)"
                   @click="run(() => ds.deleteVoicebank(b.dir))"><Icon name="trash" :size="12" /> {{ t('删除') }}</button>
@@ -436,6 +657,48 @@ function stopAudition() {
         <p v-if="oto.loose.length" class="muted small">
           {{ t('有 ') }}{{ oto.loose.length }}{{ t(' 行不是标准 oto 格式，保存时会原样写回。') }}
         </p>
+      </div>
+      </Transition>
+
+      <!-- ============ M8 音域热力图 ============ -->
+      <Transition name="vbp-drop">
+      <div v-if="range" class="vbp-probe" data-guide="banks-range">
+        <div class="vbp-probe-head">
+          <b>{{ t('音域热力图：') }}{{ range.name }}</b>
+          <span v-if="range.busy" class="muted small">{{ t('分析中…') }}</span>
+          <template v-else>
+            <span class="muted small">
+              {{ t('共 ') }}{{ range.items.length }}{{ t(' 个别名 · 录制音高中位数 ') }}
+              {{ range.medianNote == null ? '—' : noteName(Math.round(range.medianNote)) }}
+              （{{ range.ms }} ms）
+            </span>
+          </template>
+          <span class="sp" />
+          <label class="muted small vbp-pitch" :title="t('试听用的音高（MIDI 音符号，60 = C4）')">
+            {{ t('试听音高') }}
+            <input type="number" class="text-input oto-num" v-model.number="auditionPitch" min="12" max="108" />
+          </label>
+          <input class="text-input vbp-oto-search" :placeholder="t('搜索别名')" v-model="rangeQuery" @input="drawRange" />
+          <button class="btn" :disabled="range.busy" @click="drawRange"><Icon name="refresh" :size="12" /> {{ t('重绘') }}</button>
+          <button class="btn" @click="closeRange"><Icon name="close" :size="12" /> {{ t('关闭') }}</button>
+        </div>
+        <p v-if="range.error" class="edt-msg small bad">{{ range.error }}</p>
+        <p class="muted small vbp-range-hint">
+          {{ t('横轴 = 音高（C4 = 中央 C），一格一个半音；颜色越深表示离该别名的录制音高越近，±12 半音内算可用。点格子 = 用那个音高试听那个别名。') }}
+        </p>
+        <p v-if="rangeHover" class="vbp-range-readout small">
+          <b>{{ rangeHover.alias }}</b>
+          · {{ t('录制 ') }}{{ rangeHover.note == null ? '—' : noteName(Math.round(rangeHover.note)) }}
+          <span class="muted">（{{ rangeHover.f0.toFixed(1) }} Hz）</span>
+          · {{ t('试听音高 ') }}{{ noteName(rangeHover.pitch) }}
+          · {{ rangeHover.delta === 0 ? t('就是录制音高') : (rangeHover.delta > 0 ? '+' : '') + rangeHover.delta + t(' 半音') }}
+          <span v-if="!rangeHover.lit" class="bad">{{ t('（超出 ±12 半音，可能已经不像了）') }}</span>
+        </p>
+        <p v-else class="muted small vbp-range-readout">{{ t('把鼠标移到格子上看详情；点一下就用该音高试听。') }}</p>
+        <div class="vbp-range-wrap">
+          <canvas ref="rangeCanvas" class="vbp-range"
+                  @mousemove="onRangeMove" @mouseleave="onRangeLeave" @click="onRangeClick"></canvas>
+        </div>
       </div>
       </Transition>
     </section>
@@ -560,5 +823,13 @@ function stopAudition() {
 .vbp-pitch .oto-num { width: 54px; padding: 2px 4px; font-size: 12px; }
 .vbp-audition { margin: 4px 0; }
 .vbp-probe .dirty { font-size: 11.5px; color: var(--warn-text, #d9a300); }
+
+/* ---- M8 音域热力图 ---- */
+.vbp-range-wrap { max-height: 52vh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.vbp-range { display: block; cursor: crosshair; }
+.vbp-range-hint { margin: 4px 0 2px; line-height: 1.6; }
+.vbp-range-readout { margin: 2px 0 6px; min-height: 18px; }
+.vbp-range-readout b { color: var(--brand-text); }
+.vbp-range-readout .bad { color: var(--danger-text, #e05252); }
 .vbp-probe .tag { font-size: 10px; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border); }
 </style>
