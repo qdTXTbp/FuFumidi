@@ -32,7 +32,10 @@ const ASAR_BIN = path.join(ROOT, 'node_modules', '.bin', 'asar.cmd');
 // 这些目录不在 app 代码里：junction（FuFumidiData）、打包产物（release*/dist）、
 // 依赖（node_modules）、引擎（engine 走 unpacked 单独同步）、Rust/Tauri 产物
 const SKIP_DIRS = new Set(['node_modules', 'engine', '.git', 'FuFumidiData', 'release', 'release-base',
-  'dist', 'gpu-package', 'rust-core', 'src-tauri', 'frontend', 'test', 'tools', 'cloud-sync']);
+  'dist', 'gpu-package', 'rust-core', 'src-tauri', 'frontend', 'test', 'tools', 'cloud-sync',
+  // ★ resources/ 是运行期资源（python、模型，实测 1.6GB）：它以 unpacked 形式单独存在，
+  //   绝不能进 app.asar —— 否则 asar 从 85MB 变 1.7GB（实测踩过）。
+  'resources']);
 
 if (!fs.existsSync(BASE)) { console.error('找不到干净基线：' + BASE + '（先跑一次 electron-builder --dir）'); process.exit(1); }
 if (!fs.existsSync(RES)) { console.error('找不到安装版：' + RES); process.exit(1); }
@@ -63,6 +66,11 @@ function overlay(relDir) {
   if (!fs.existsSync(src)) return;
   for (const e of fs.readdirSync(src, { withFileTypes: true })) {
     if (e.isSymbolicLink()) continue;                        // junction/软链（如 FuFumidiData）不是文件
+    // ★ 保险丝：打包产物与超大文件一律不进 asar（实测漏掉 resources/ 时 asar 从 85MB 涨到 1.7GB）
+    if (e.isFile()) {
+      if (/\.(asar|zip|exe|msi|7z|gz)$/i.test(e.name)) continue;
+      try { if (fs.statSync(path.join(ROOT, relDir, e.name)).size > 30 * 1024 * 1024) continue; } catch (err) {}
+    }
     const rel = path.join(relDir, e.name);
     if (e.isDirectory()) {
       if (relDir === '' && SKIP_DIRS.has(e.name)) continue;
@@ -72,7 +80,17 @@ function overlay(relDir) {
     } else {
       const full = path.join(ROOT, rel);                     // ★ 一定要注意是 full，不是 src（src 是父目录）
       const dst = path.join(TMP, rel);
-      if (!fs.existsSync(dst)) continue;                     // 只覆盖基线里已有的文件
+      if (!fs.existsSync(dst)) {
+        // ★ 新增的源文件也要进 asar：只覆盖「基线里已有」的文件会让新模块永远部署不上去
+        //   （实测 main/omr.js 丢失 → 安装版启动即弹 "Cannot find module './main/omr'"）。
+        try {
+          fs.mkdirSync(path.dirname(dst), { recursive: true });
+          fs.copyFileSync(full, dst);
+          changed.push(rel + '(new)');
+          copied++;
+        } catch (e) { skipped.push(rel + '(new-failed)'); }
+        continue;
+      }
       let sst = null, st = null;
       try { sst = fs.statSync(full); st = fs.statSync(dst); } catch (e) { continue; }
       if (!sst.isFile()) { skipped.push(rel + '(src-dir)'); continue; }

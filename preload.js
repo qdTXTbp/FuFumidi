@@ -70,6 +70,14 @@ contextBridge.exposeInMainWorld('fuBridge', {
   // 「变谱」：乐谱（MusicXML/MXL）→ MIDI（返回 base64 字节 + 统计信息）
   scoreToMidi: (cfg) => ipcRenderer.invoke('score:toMidi', cfg || {}),
   onScoreProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('score:progress', w); return () => ipcRenderer.removeListener('score:progress', w); },
+  // 识谱增强引擎（Audiveris）安装 / 检测
+  omrEngine: {
+    status: () => ipcRenderer.invoke('omr:status'),
+    install: () => ipcRenderer.invoke('omr:install'),
+    remove: () => ipcRenderer.invoke('omr:remove'),
+    openDir: () => ipcRenderer.invoke('omr:openDir'),
+    onProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('omr:progress', w); return () => ipcRenderer.removeListener('omr:progress', w); },
+  },
   modelList: () => ipcRenderer.invoke('model:list'),
   depCheck: () => ipcRenderer.invoke('dep:check'),
   diagExport: () => ipcRenderer.invoke('diag:export'),

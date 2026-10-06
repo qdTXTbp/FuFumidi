@@ -156,26 +156,21 @@ def detect_staves(ink):
         else:
             groups.append([int(y)])
     lines = [(float(np.mean(gr)), len(gr)) for gr in groups]
-    # 5 条一组聚类
-    staves = []
-    cur = [lines[0]]
-    for y, th in lines[1:]:
-        gaps = [cur[i + 1][0] - cur[i][0] for i in range(len(cur) - 1)]
-        sp = float(np.median(gaps)) if gaps else None
-        ok = sp is None or (abs((y - cur[-1][0]) - sp) <= max(1.4, 0.30 * sp))
-        if ok and len(cur) < 5:
-            cur.append((y, th))
-        else:
-            staves.append(cur)
-            cur = [(y, th)]
-    staves.append(cur)
+    # ★ 滑动窗找「5 条等间距的线」：贪心聚类只要前面混进一条符杠/加线，
+    #   后面整条谱表就会错位成 4 条线 —— 实测第 2、6 页因此小节线全丢、
+    #   节奏网格崩掉（导出 MIDI 里出现 30 拍的空洞）。滑动窗不会「一错到底」。
     out = []
-    for grp in staves:
-        if len(grp) < 4:
-            continue
-        ys_ = [g[0] for g in grp]
-        sp = (ys_[-1] - ys_[0]) / (len(ys_) - 1)
-        out.append({"lines": ys_, "spacing": float(sp), "top": float(ys_[0]), "bottom": float(ys_[-1])})
+    i = 0
+    while i + 4 < len(lines):
+        grp = lines[i:i + 5]
+        gaps = [grp[k + 1][0] - grp[k][0] for k in range(4)]
+        sp = float(np.median(gaps))
+        if sp >= 2.0 and all(abs(g - sp) <= max(1.0, 0.20 * sp) for g in gaps):
+            ys_ = [g[0] for g in grp]
+            out.append({"lines": ys_, "spacing": float(sp), "top": float(ys_[0]), "bottom": float(ys_[-1])})
+            i += 5
+        else:
+            i += 1
     # 谱表左右边界：取中间那条线的长游程
     for st in out:
         y = int(round(st["lines"][len(st["lines"]) // 2]))
@@ -214,14 +209,28 @@ def detect_barlines(ink, staff):
             grp = [int(x)]
     barlines.append(int(np.mean(grp)))
     # 去掉符干误判：符干在谱表外还有很长一段墨迹
-    keep = []
-    for x in barlines:
-        # 符干会明显伸出谱表之外；小节线不会（上下各留 2 个间距的观察窗）
-        above = ink[max(0, y0 - int(round(2.0 * sp))):y0, max(0, x - 1):x + 2].sum()
-        below = ink[y1:min(h, y1 + int(round(2.0 * sp))), max(0, x - 1):x + 2].sum()
-        if above <= 1.6 * sp and below <= 1.6 * sp:
-            keep.append(x)
-    return keep
+    return barlines
+
+
+def merge_cols(cols, tol=2):
+    if len(cols) == 0:
+        return []
+    out = [[int(cols[0])]]
+    for x in cols[1:]:
+        if x - out[-1][-1] <= tol:
+            out[-1].append(int(x))
+        else:
+            out.append([int(x)])
+    return [int(np.mean(g)) for g in out]
+
+
+def bars_overlap(a, b, tol):
+    """两组小节线 x 的重合度。钢琴谱上下两行共用同一条竖线 ——
+    实测这是「哪两行属于同一系统」最可靠的信号（比谱号规则和间距都稳）。"""
+    if not a or not b:
+        return 0.0
+    hit = sum(1 for x in a if any(abs(x - y) <= tol for y in b))
+    return hit / float(min(len(a), len(b)))
 
 
 def detect_system_barlines(ink, system):
@@ -254,7 +263,25 @@ def detect_system_barlines(ink, system):
     return out
 
 
-def group_systems(staves):
+def pair_bars(ink, a, b, sp):
+    """两行谱表「合成一个系统」的判据：把两行之间的空档也算进去，
+    看有没有 ≥2 条竖线在整段（上线到下线）上连续 —— 钢琴谱的小节线就是这么连写的。"""
+    y0 = max(0, int(round(a["top"])))
+    y1 = min(ink.shape[0], int(round(b["bottom"])) + 1)
+    if y1 - y0 < 4:
+        return []
+    cov = ink[y0:y1, :].mean(axis=0)
+    cols = np.flatnonzero(cov >= 0.92)
+    out = []
+    for x in merge_cols(cols):
+        above = ink[max(0, y0 - int(round(1.5 * sp))):y0, max(0, x - 1):x + 2].sum()
+        below = ink[y1:min(ink.shape[0], y1 + int(round(1.5 * sp))), max(0, x - 1):x + 2].sum()
+        if above <= 1.2 * sp and below <= 1.2 * sp:
+            out.append(x)
+    return out
+
+
+def group_systems(staves, ink=None):
     """把小节线横向对齐的相邻谱表归为同一系统（钢琴大谱表就是两行一组）。"""
     systems = []
     i = 0
@@ -266,14 +293,22 @@ def group_systems(staves):
             gap = b["top"] - a["bottom"]
             dx = abs(a.get("x0", 0) - b.get("x0", 0))
             ca, cb = a.get("clef"), b.get("clef")
-            # 高音谱表下面紧跟低音谱表 = 同一系统（钢琴大谱表）；
-            # 「低音 -> 高音」一定是换系统了。同谱号的继续用间距判断。
-            if ca == "treble" and cb == "bass":
-                same = gap < 9.0 * a["spacing"] and dx < 6 * a["spacing"] + 8
+            ov = bars_overlap(a.get("bars_raw") or [], b.get("bars_raw") or [], max(2.0, 0.5 * a["spacing"]))
+            pair = pair_bars(ink, a, b, a["spacing"]) if ink is not None else []
+            # ① 两行之间有成对的连写小节线（≥2 条）→ 同一系统（最可靠）
+            if len(pair) >= 2 and gap < 9.0 * a["spacing"] and dx < 6 * a["spacing"] + 8:
+                same = True
+            # ①' 或者各自的小节线 x 高度重合
+            elif ov >= 0.6 and gap < 9.0 * a["spacing"] and dx < 6 * a["spacing"] + 8:
+                same = True
+            # ② 「低音 -> 高音」一定是换系统了
             elif ca == "bass" and cb == "treble":
                 same = False
+            # ③ 高音谱表下紧跟低音谱表 = 同一系统（钢琴大谱表）
+            elif ca == "treble" and cb == "bass":
+                same = gap < 9.0 * a["spacing"] and dx < 6 * a["spacing"] + 8
             else:
-                same = gap < 4.2 * a["spacing"] and dx < 6 * a["spacing"] + 8
+                same = gap < 3.6 * a["spacing"] and dx < 6 * a["spacing"] + 8
             if same:
                 cur.append(b)
                 j += 1
@@ -359,9 +394,9 @@ def detect_noteheads(ink, staff, thr=0.45, skip_head=1.2, ink_det=None):
     picked = []
     for k in order:
         y, x, v = int(ys[k]), int(xs[k]), float(vals[k])
-        # 去重：同一个符头会打出两个峰（差半个音级）。
-        # 刻版里同一个 x 上不会有两个音（和弦的相邻音级会左右错开），所以按 x 归并。
-        if all(abs(x - px) > 0.45 * sp for py, px, _ in picked):
+        # 去重：同一个符头会打出两个峰（差半个音级 = 0.5 间距）。
+        # 刻版里同一 x 上不会有两个音（和弦的相邻音级会左右错开），所以按「x 近 + y 在一个音级内」归并。
+        if all((abs(x - px) > 0.75 * sp) or (abs(y - py) > 0.62 * sp) for py, px, _ in picked):
             picked.append((y, x, v))
     for (y, x, v) in sorted(cand_extra, key=lambda p: -p[2]):
         if all(abs(x - px) > 0.45 * sp or abs(y - py) > 1.2 * sp for py, px, _ in picked):
@@ -472,7 +507,9 @@ def accept_local(feat, step_res):
     # 这类音必须走单独的通路，否则会被 vr 下限挡掉（实测整条低音二分音符全丢）。
     # 空心符头的竖游程在「洞」处断成 0~1 个像素，所以这里**不能**要求 vr 下限；
     # 谱线/符杠靠在 outer（外环窗口）上排除：它们中心有墨但外环很空。
-    open_pat = feat["center"] <= 0.78 and feat["outer"] >= 0.28
+    # 阈值放得比较松：空心符头的外环窗口里墨本来就少（8~12 像素的环 / 15x21 的窗 ≈ 0.26），
+    # 卡到 0.28 会让「差一点」的二分音符整条丢掉 —— 实测合成谱里两个二分音符就是这么没的。
+    open_pat = feat["center"] <= 0.85 and feat["outer"] >= 0.14 and core <= 0.88
     if not (near_bar or 0.42 <= vr <= 1.95 or open_pat):
         return False, "vrun"             # 谱线(0.1) / 符干(2.5+) 都不在这个区间
     if core >= 0.60:
@@ -656,15 +693,32 @@ def analyze_page(gray, opts, page_index):
     for st in staves:
         st["ink_nolines"] = remove_staff_lines(ink, st)
         st["ink_clean"] = repair_vertical(st["ink_nolines"], max(1, int(round(st["spacing"] * 0.30))))
-        st["barlines"] = detect_barlines(ink, st)
+        # 单行谱表的小节线候选：**保留一个宽松的越界过滤**，否则谱号竖笔、符干都会被算成小节线，
+        # 小节被切碎成十几段，量化网格随之错位（实测合成谱里最后三个十六分音符被推到 4.0 拍）。
+        y0s, y1s = int(round(st["top"])), int(round(st["bottom"])) + 1
+        cols_ = np.flatnonzero(ink[y0s:y1s, :].mean(axis=0) >= 0.90)
+        raw = []
+        for x in merge_cols(cols_):
+            above = ink[max(0, y0s - int(round(2.5 * st["spacing"]))):y0s, max(0, x - 1):x + 2].sum()
+            below = ink[y1s:min(ink.shape[0], y1s + int(round(2.5 * st["spacing"]))), max(0, x - 1):x + 2].sum()
+            if above <= 2.0 * st["spacing"] and below <= 2.0 * st["spacing"]:
+                raw.append(x)
+        st["bars_raw"] = raw
+        st["barlines"] = list(st["bars_raw"])
     # ★ 先认谱号再分组：分系统靠的就是「高音谱表下跟低音谱表」这条规则，
     #   顺序反了（先分组后认谱号）每组都会退化成单行谱表 —— 实测小节线因此全丢。
     for st in staves:
         st["clef"], st["clef_box"] = guess_clef_box(ink, st, st["ink_clean"])
-    systems = group_systems(staves)
+    systems = group_systems(staves, ink)
     # 系统级小节线（钢琴谱上下两行共用一条竖线）；找不到就保留单行结果
     for sys_ in systems:
         sb = detect_system_barlines(ink, sys_)
+        if len(sb) < 2:
+            # 系统级找不到（不连写的排版）：用组内各谱表小节线的并集
+            merged = []
+            for st in sys_:
+                merged.extend(st.get("bars_raw") or [])
+            sb = merge_cols(sorted(set(merged)), max(2, int(round(sys_[0]["spacing"] * 0.6))))
         if len(sb) >= 2:
             for st in sys_:
                 st["barlines"] = sb
@@ -815,7 +869,44 @@ def beam_count(ink, y, x, sp, up, max_beams=4):
     return min(layers, max_beams)
 
 
-def assign_pitch_time(page, opts):
+def pick_meter(pages, opts, candidates=(2, 4, 3)):
+    """拍号自动判定：对每个候选拍数跑一次网格拟合，看「音符把小节填满了多少」。
+
+    ★ 只看残差是分不开 2/4 与 4/4 的：两种网格都能量化得不错，但 4/4 下八个十六分音符
+      只占满小节前半，后半全是空白。所以判据是「最后一音结束位置 / 拍数」是否接近 1。
+      实测：用户按界面默认 4/4 转 2/4 的谱子，导出 MIDI 里出现 60 拍的空洞、时值全错。
+    """
+    scored = []
+    for b in candidates:
+        o = argparse.Namespace(**vars(opts))
+        o.beats = b
+        fills, errs = [], []
+        for pg in pages:
+            try:
+                assign_pitch_time(pg, o)
+            except Exception:
+                continue
+            for st in pg["staves"]:
+                if st.get("fill") is not None:
+                    fills.append(st["fill"])
+                if st.get("fitErr") is not None:
+                    errs.append(st["fitErr"])
+        if not fills:
+            continue
+        fill = float(np.mean(fills))
+        err = float(np.mean(errs)) if errs else 1.0
+        # 填满度接近 1 最好（**不要单边截断**：4/4 下音符只填到 0.56、2/4 下 1.1，
+        #  两边取绝对差才分得开 —— 截断成 min(1,fill) 会让 1.1 和 1.9 打平，实测就选错了拍号）。
+        scored.append((abs(fill - 1.0), err, b, fill))
+    if not scored:
+        return opts.beats, []
+    # 罚分接近时优先小拍号（2/4 的谱按 4/4 解读会整体慢一倍）
+    scored.sort(key=lambda t: (round(t[0], 2), t[2]))
+    best = scored[0]
+    return best[2], [["%d/4" % s[2], round(s[3], 2), round(s[0], 3)] for s in scored]
+
+
+def assign_pitch_time(page, opts, _fit_only=False):
     """把版面几何变成音符事件：音高（含变化音）+ 起始拍 + 时值。"""
     ink = page["ink"]
     notes = []
@@ -914,12 +1005,22 @@ def assign_pitch_time(page, opts):
             for k, n in enumerate(raw):
                 err += abs((n["x"] - offs[n["measure"]]) - q[k] * s)
             norm = err / max(1, len(raw))
+            # 残差按「每拍像素数」归一化：不同拍号的 s 量纲不同，直接比绝对值不公平
+            norm = norm / max(1e-6, s)
             # 每拍像素数不能比「小节宽/拍数」还大太多（那就是把留白也算进拍了）
             if s > base_s * 1.02:
                 norm += 50.0
             if best is None or norm < best[0]:
                 best = (norm, list(q))
         q = best[1]
+        st["fitErr"] = best[0]
+        # 「小节被填满的程度」：最后一音的结束位置 / 拍数（自动拍号用）
+        if raw:
+            last_q = max(q)
+            last_dur = max(n["dur"] for n in raw)
+            st["fill"] = min(1.4, (last_q + last_dur) / max(0.25, beats))
+        else:
+            st["fill"] = None
         for n, qq in zip(raw, q):
             n["q"] = qq
             if n["q"] >= beats:
@@ -949,6 +1050,36 @@ def assign_pitch_time(page, opts):
     return notes, warnings
 
 
+def extract_melody(notes):
+    """把复调结果压成一条旋律线：每个起始拍挑一个音 —— 优先「离上一个音最近」的那个。
+
+    ★ 为什么不直接取最高音：识谱的假阳性经常出现在更高八度（符干/符杠被打成符头），
+      取最高音会被这些噪声带跑；而旋律在十六分跑动里是级进的，
+      「离上一个音最近」既跟得住跑动，又天然压掉八度与和弦噪声。
+    """
+    by_onset = {}
+    for n in notes:
+        by_onset.setdefault(round(n["onset"], 3), []).append(n)
+    out = []
+    prev = None
+    for onset in sorted(by_onset):
+        cands = sorted(by_onset[onset], key=lambda n: n["midi"])
+        if prev is None:
+            pick = cands[len(cands) // 2]          # 第一个音取中位，避免一上来就被极端值带偏
+        else:
+            pick = min(cands, key=lambda n: (abs(n["midi"] - prev), -n["midi"]))
+        pick = dict(pick)
+        pick["melody"] = True
+        out.append(pick)
+        prev = pick["midi"]
+    # 时值：单声部里「到下一个音的距离」就是它的实际长度（跑动段落正合适）
+    for i, n in enumerate(out):
+        if i + 1 < len(out):
+            gap = out[i + 1]["onset"] - n["onset"]
+            n["dur"] = max(0.125, min(max(n["dur"], 0.125), gap))
+    return out
+
+
 def write_midi(notes, out_path, opts):
     """写类型 1 MIDI：0 号轨速度，之后按谱表（高音/低音）分轨。"""
     import mido
@@ -964,6 +1095,8 @@ def write_midi(notes, out_path, opts):
         clef = n["staff"]["clef"]
         key = "Right Hand" if clef == "treble" else "Left Hand"   # MIDI meta 文本是 latin-1
         per_track.setdefault(key, []).append(n)
+    if notes and notes[0].get("melody"):
+        per_track = {"Melody": notes}
     for key in sorted(per_track):
         tr = mido.MidiTrack()
         mid.tracks.append(tr)
@@ -1019,8 +1152,9 @@ def main(argv=None):
     ap.add_argument("--overlay", default="")
     ap.add_argument("--report", default="")
     ap.add_argument("--debug", action="store_true")
-    ap.add_argument("--beats", type=int, default=4)
+    ap.add_argument("--beats", default="auto")          # auto | 2 | 3 | 4 | 6
     ap.add_argument("--beat-type", type=int, default=4)
+    ap.add_argument("--mode", default="auto")           # auto | piano | melody
     ap.add_argument("--tempo", type=float, default=120.0)
     args = ap.parse_args(argv)
 
@@ -1043,28 +1177,68 @@ def main(argv=None):
         prog(35 + 40 * (i + 1) / len(pages), "识别第 %d/%d 页" % (i + 1, len(pages)))
         results.append(analyze_page(gray, args, i))
 
-    # 跨页接小节号：每页的音符整体后移「前面各页该谱号累计的小节数」
+    # ---- 拍号：auto 时用「小节被填满的程度」反推（2/4 的谱子按 4/4 量化会整段错位）
+    meter_info = []
+    if str(args.beats).lower() in ("auto", "", "0"):
+        prog(28, "判定拍号")
+        beats_n, meter_info = pick_meter(results, args)
+    else:
+        try:
+            beats_n = max(1, min(16, int(args.beats)))
+        except Exception:
+            beats_n = 4
+    args.beats = beats_n
     beats = float(args.beats) * 4.0 / float(args.beat_type)
-    offsets = {"treble": 0.0, "bass": 0.0}
+
+    # ---- 每页起始时间：接着上一页**最后结束的拍**往上取整（小节对齐），保证单调、不留空洞
     all_notes = []
     per_page = []
+    cursor = 0.0
     for pg in results:
         notes, warn = assign_pitch_time(pg, args)
         warnings.extend(warn)
-        # 每页要往后挪的是「本页该谱号所有系统的小节数之和」（不是最大值）——
-        # 写成 max 会让整页只前进一个小节，六页挤在 18 秒里。
-        span = {"treble": 0.0, "bass": 0.0}
-        for st in pg["staves"]:
-            span[st["clef"]] = span.get(st["clef"], 0.0) + float(len(st.get("measures") or []))
         for n in notes:
-            clef = n["staff"]["clef"]
-            n["onset"] += offsets.get(clef, 0.0) * beats
-            for k in ("measure",):
-                pass
+            n["onset"] += cursor
+        # ★ 下一页的起点要按**本页的小节数**推进，不能按「最后一个识别到的音」——
+        #   末页末尾漏几个音就会让整页提前结束，六页挤成 24 秒（实测踩过）。
+        # 本页该谱号链上的小节总数 = 该谱号所有系统的小节数之和（不是单个谱表的最大值）
+        by_clef = {"treble": 0.0, "bass": 0.0}
+        for st in pg["staves"]:
+            by_clef[st["clef"]] = by_clef.get(st["clef"], 0.0) + float(len(st.get("measures") or []))
+        page_span = max(by_clef.values()) if by_clef else 0.0
+        # ★ 下一页起点按「实测每小节多少拍」推进，而不是按设定的拍号 ——
+        #   拍号猜错时（4/4 套 2/4 的谱）按拍号推进会一次跳两倍，实测出现 90 拍的空洞。
+        # 直接按**本页实际内容跨度**推进：小节数一旦多算（小节线误检）按小节推进就会翻倍，
+        # 而内容跨度是实测值，最坏情况只是下一页早一点开始，不会出现几十拍的空洞。
+        content = 0.0
+        if notes:
+            content = max(n["onset"] + n["dur"] for n in notes) - min(n["onset"] for n in notes)
+        # 至少推进「一个小节」，避免整页只推 0.x 拍造成重叠
+        cursor = cursor + max(content, beats * 0.5)
+        if notes:
+            end = max(n["onset"] + n["dur"] for n in notes)
+            cursor = max(cursor, float(np.ceil(end / max(0.25, beats) - 1e-6)) * beats)
         all_notes.extend(notes)
         per_page.append(len(notes))
-        for k in span:
-            offsets[k] = offsets.get(k, 0.0) + span[k]
+    # ---- 去重：同一个起始拍上的同一个音高只留一个（同一个符头会被匹配滤波打出两个峰）
+    seen = set()
+    dedup = []
+    for n in sorted(all_notes, key=lambda n: (n["onset"], n["midi"])):
+        key = (round(n["onset"], 3), int(n["midi"]), n["staff"]["clef"])
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup.append(n)
+    dup_removed = len(all_notes) - len(dedup)
+    all_notes = dedup
+
+    # ---- 单声部旋律模式：每个起始拍只留一个音（挑最接近上一个音的，压掉八度误检与和弦噪声）
+    melody_used = False
+    if str(args.mode) == "melody" or (str(args.mode) == "auto" and not any(
+            st["clef"] == "bass" for pg in results for st in pg["staves"])):
+        all_notes = extract_melody(all_notes)
+        melody_used = True
+
     prog(80, "写入 MIDI")
     if not all_notes:
         emit("RESULT", {"ok": False, "error": "没有识别到音符。可能是扫描质量过低，或页面里没有五线谱。"})
@@ -1116,6 +1290,8 @@ def main(argv=None):
         "overlays": overlays,
         "warnings": warnings,
         "engine": "omr-classic",
+        "mode": str(args.mode),
+        "meters": meter_info,
     }
     emit("RESULT", stats)
     if args.report:

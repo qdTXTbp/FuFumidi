@@ -40,6 +40,7 @@ const { createEngineService } = require('./main/engine');
 const { DEFAULT_SETTINGS, SETTINGS_PATH, readSettings, writeSettings } = require('./main/settings');
 const { registerUpdateIpc } = require('./main/update');
 const { registerScoreIpc } = require('./main/score');
+const { registerOmrIpc } = require('./main/omr');
 const { createPluginService } = require('./main/plugins');
 const { registerTaskQueueIpc } = require('./main/task-queue');
 const { registerVideoIpc } = require('./main/video');
@@ -100,6 +101,7 @@ if (!gotLock) {
     registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app, fs, spawnEngine, dialog });
     registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, readSettings });
     registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, spawnEngine });
+    registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net });
     registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, pluginHost, readSettings, resolveSeparateModel: (id) => (ModelsService ? ModelsService.resolveSeparateModel(id) : null) });
     registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, parsePyJson });
     registerPresetsIpc({ ipcMain, runEngineInline, parsePyJson, pyLit });

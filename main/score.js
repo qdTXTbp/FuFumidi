@@ -174,7 +174,14 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
         args.push('--beat-type', String([2, 4, 8, 16].includes(Number(opts.beatType)) ? Number(opts.beatType) : 4));
         args.push('--tempo', String(Math.max(20, Math.min(300, Number(opts.tempo) || 120))));
       }
-      const script = kind === 'raster' ? 'engine_omr.py' : 'engine_score2midi.py';
+      // 栅格一律走多后端调度层：装着 Audiveris 就用它（质量高一个量级），没装自动降级到自带经典识谱
+      const script = kind === 'raster' ? 'engine_omr_backends.py' : 'engine_score2midi.py';
+      if (kind === 'raster') {
+        args.push('--backend', String(opts.backend || 'auto'));
+        args.push('--mode', String(opts.mode || 'auto'));
+        const avExe = path.join(Paths.dataRoot(), 'omr', 'audiveris', 'Audiveris', 'Audiveris.exe');
+        if (fs.existsSync(avExe)) args.push('--audiveris', avExe);
+      }
       const res = await new Promise((done) => {
         let settled = false;
         const finish = (v) => { if (!settled) { settled = true; done(v); } };

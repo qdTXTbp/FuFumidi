@@ -29,6 +29,24 @@ const tracks = ref<any[]>([]);
 const previewEl = ref<HTMLCanvasElement | null>(null);
 const overlays = ref<string[]>([]);        // 对照图 objectURL
 const files = ref<string[]>([]);            // 本次转换吃进去的文件（多选/拖拽时是多个）
+// 识谱增强引擎（Audiveris）：没装就在卡片下方给一条「装了会好一个量级」的可操作提示
+const omrEngine = ref<any>(null);
+const omrBusy = ref(false);
+const omrText = ref('');
+let offOmr: null | (() => void) = null;
+async function refreshOmr() {
+  try { omrEngine.value = await bridge().omrEngine?.status(); } catch (e) { omrEngine.value = null; }
+}
+async function installOmr() {
+  if (omrBusy.value) return;
+  omrBusy.value = true; omrText.value = t('准备下载…');
+  try {
+    const r = await bridge().omrEngine.install();
+    if (r && r.ok && r.installed) { app.toast(t('识谱引擎已安装'), 'ok'); omrEngine.value = r; }
+    else { app.toast(t('安装失败：') + String((r && r.error) || ''), 'warn'); }
+  } catch (e: any) { app.toast(t('安装失败：') + String((e && e.message) || e), 'warn'); }
+  finally { omrBusy.value = false; omrText.value = ''; }
+}
 const dropOn = ref(false);                  // 拖拽悬停高亮
 const ovIndex = ref(0);
 const progress = ref(0);
@@ -234,6 +252,13 @@ function drawPreview() {
 }
 
 const isRaster = computed(() => kind.value === 'raster' || kind.value === 'pdf');
+/** 识别引擎显示名：Audiveris 是外部增强引擎，classical 是自带离线识谱。 */
+const engineName = computed(() => {
+  const b = String((info.value && (info.value.backend || info.value.engine)) || '');
+  if (b === 'audiveris') return 'Audiveris';
+  if (b === 'classical') return t('内置识谱');
+  return b || '—';
+});
 /** parseMidi 回的 notes 是数组，引擎回的 tracks[].notes 是数字 —— 两种都要能显示。 */
 function noteCountOf(tr: any): number {
   if (!tr) return 0;
@@ -250,6 +275,10 @@ const warnings = computed<string[]>(() => {
     if (w && w.code === 'no-accidentals') return t('没有识别到变化音记号：如果原谱有升/降号，请调高分辨率后重试。');
     if (w && w.code === 'only-first') return t('一次只能转换一个这种文件，只用了第一个（共选了 ') + w.n + t(' 个）。');
     if (w && w.code === 'page-cap') return t('页数超过上限，只取了前 ') + w.n + t(' 页。');
+    if (w && w.code === 'backend-missing') return t('没装识谱增强引擎（Audiveris），已用内置识谱；可在「资源中心 → 识谱引擎」安装后重试。');
+    if (w && w.code === 'classical-fallback') return t('已回退到内置识谱：离线可用，但变化音与节奏精度低于增强引擎。');
+    if (w && w.code === 'audiveris-failed') return t('识谱增强引擎失败，已回退内置识谱。');
+    if (w && w.code === 'page-failed') return t('第 ') + w.page + t(' 页识别失败，已跳过。');
     return String((w && w.code) || w || '');
   });
 });
@@ -282,6 +311,10 @@ async function saveAs() {
 
 onMounted(() => {
   const b = bridge();
+  refreshOmr();
+  if (b && b.omrEngine && typeof b.omrEngine.onProgress === 'function') {
+    offOmr = b.omrEngine.onProgress((p: any) => { if (p && p.text) omrText.value = String(p.text) + (p.percent ? ' ' + p.percent + '%' : ''); });
+  }
   if (b && typeof b.onScoreProgress === 'function') {
     offProgress = b.onScoreProgress((p: any) => {
       if (!p) return;
@@ -290,7 +323,7 @@ onMounted(() => {
     });
   }
 });
-onBeforeUnmount(() => { if (offProgress) offProgress(); for (const u of overlayUrls) URL.revokeObjectURL(u); });
+onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); for (const u of overlayUrls) URL.revokeObjectURL(u); });
 </script>
 
 <template>
@@ -327,6 +360,22 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); for (const u of overlayU
         {{ t('图片与 PDF 走光学识谱：分辨率越高越准，建议每页宽度 1200 像素以上、五线谱占满页面。') }}
         {{ t('可以多选：一次选多张图片，或把多个文件直接拖进来。') }}
       </div>
+      <div v-if="omrEngine && !omrEngine.installed" class="sc-engine">
+        <Icon name="spark" :size="14" />
+        <div class="sc-engine-tx">
+          <b>{{ t('装上「识谱增强引擎」会好一个量级') }}</b>
+          <span>{{ t('图片与 PDF 的识谱默认用内置引擎（离线可用）；装上 Audiveris（约 81 MB）后，变化音、节拍与小节结构都会明显更准。') }}</span>
+          <span v-if="omrBusy" class="sc-engine-prog">{{ omrText }}</span>
+        </div>
+        <button class="btn sm primary" :disabled="omrBusy" @click="installOmr">
+          <Icon name="download" :size="12" /> {{ omrBusy ? t('安装中…') : t('安装识谱引擎') }}
+        </button>
+      </div>
+      <div v-else-if="omrEngine && omrEngine.installed" class="sc-engine on">
+        <Icon name="spark" :size="13" />
+        <span>{{ t('识谱增强引擎已就绪：Audiveris') }} {{ omrEngine.version }}</span>
+      </div>
+
       <div class="sc-opts">
         <label class="sc-opt">
           <span>{{ t('拍号') }}</span>
@@ -356,6 +405,7 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); for (const u of overlayU
         <span v-if="info.tracks"><b>{{ info.tracks.length }}</b>{{ t(' 个声部') }}</span>
         <span><b>{{ noteTotal }}</b>{{ t(' 个音符') }}</span>
         <span>{{ t('时长') }} <b>{{ durSec }}</b></span>
+        <span v-if="info.backend || info.engine">{{ t('识别引擎') }} <b>{{ engineName }}</b></span>
         <span v-if="info.accidentals !== undefined">{{ t('变化音') }} <b>{{ info.accidentals }}</b></span>
         <span v-if="info.spacing">{{ t('谱线间距') }} <b>{{ info.spacing }}px</b></span>
         <span v-if="info.tempoChanges > 1" class="muted">{{ t('速度变化 ') }}{{ info.tempoChanges }}{{ t(' 次') }}</span>
@@ -427,6 +477,16 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); for (const u of overlayU
 .sc-file-enter-from { opacity: 0; transform: translateY(-6px) scale(.96); }
 .sc-file-leave-to { opacity: 0; transform: scale(.96); }
 .sc-file-move { transition: transform .24s cubic-bezier(.2,.7,.3,1); }
+.sc-engine { margin-top: 10px; display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, #5ac8fa 45%, var(--line)); border-radius: 9px;
+  background: linear-gradient(100deg, color-mix(in srgb, #5ac8fa 12%, transparent), transparent 70%);
+  animation: scIn .3s cubic-bezier(.2,.7,.3,1) both; }
+.sc-engine.on { border-color: var(--line); background: none; font-size: 11.5px; color: var(--muted); }
+.sc-engine-tx { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sc-engine-tx b { font-size: 12.5px; color: var(--text); }
+.sc-engine-tx span { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.sc-engine-prog { font-variant-numeric: tabular-nums; color: #7fd4ff !important; }
+.sc-engine .btn { margin-left: auto; flex: none; }
 .sc-opts { margin-top: 10px; display: flex; gap: 16px; flex-wrap: wrap; }
 .sc-opt { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .sc-opt select, .sc-opt input { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font-size: 12px; }
