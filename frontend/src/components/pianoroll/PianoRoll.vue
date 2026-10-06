@@ -1188,16 +1188,16 @@ defineExpose({
         <button class="pr-ctx-i" @click="api.undo(); closeCtx()"><Icon name="undo" :size="13" /> {{ t('撤销') }}</button>
         <button class="pr-ctx-i" @click="api.redo(); closeCtx()"><Icon name="redo" :size="13" /> {{ t('重做') }}</button>
         <div class="pr-ctx-sep"></div>
-        <button class="pr-ctx-i" :disabled="!ctxOnNote" @click="emit('edit-lyric', notes.find(n => n.id === ctxNoteId)); closeCtx()">{{ t('编辑歌词') }}</button>
+        <button class="pr-ctx-i" :disabled="!ctxOnNote" @click="emit('edit-lyric', notes.find(n => n.id === ctxNoteId)); closeCtx()"><Icon name="edit" :size="13" /> {{ t('编辑歌词') }}</button>
         <div class="pr-ctx-sep"></div>
-        <button class="pr-ctx-i" :disabled="!selIds().length" @click="ctxCopy(false)">{{ t('复制') }}<span class="pr-ctx-k">Ctrl+C</span></button>
-        <button class="pr-ctx-i" :disabled="!selIds().length" @click="ctxCopy(true)">{{ t('剪切') }}<span class="pr-ctx-k">Ctrl+X</span></button>
-        <button class="pr-ctx-i" :disabled="!clip.length" @click="ctxPaste()">{{ t('粘贴到播放头') }}<span class="pr-ctx-k">Ctrl+V</span></button>
-        <button class="pr-ctx-i" :disabled="!selIds().length" @click="ctxDuplicate()">{{ t('重复一份') }}<span class="pr-ctx-k">Ctrl+D</span></button>
-        <button class="pr-ctx-i" :disabled="!selIds().length" @click="ctxSplit()">{{ t('在播放头切分') }}<span class="pr-ctx-k">Ctrl+E</span></button>
-        <button class="pr-ctx-i" :disabled="selIds().length < 2" @click="ctxMerge()">{{ t('合并同音高') }}<span class="pr-ctx-k">Ctrl+M</span></button>
+        <button class="pr-ctx-i" :disabled="!selIds().length" @click="ctxCopy(false)"><Icon name="copy" :size="13" /> {{ t('复制') }}<span class="pr-ctx-k">Ctrl+C</span></button>
+        <button class="pr-ctx-i" :disabled="!selIds().length" @click="ctxCopy(true)"><Icon name="cut" :size="13" /> {{ t('剪切') }}<span class="pr-ctx-k">Ctrl+X</span></button>
+        <button class="pr-ctx-i" :disabled="!clip.length" @click="ctxPaste()"><Icon name="paste" :size="13" /> {{ t('粘贴到播放头') }}<span class="pr-ctx-k">Ctrl+V</span></button>
+        <button class="pr-ctx-i" :disabled="!selIds().length" @click="ctxDuplicate()"><Icon name="copy" :size="13" /> {{ t('重复一份') }}<span class="pr-ctx-k">Ctrl+D</span></button>
+        <button class="pr-ctx-i" :disabled="!selIds().length" @click="ctxSplit()"><Icon name="split" :size="13" /> {{ t('在播放头切分') }}<span class="pr-ctx-k">Ctrl+E</span></button>
+        <button class="pr-ctx-i" :disabled="selIds().length < 2" @click="ctxMerge()"><Icon name="merge" :size="13" /> {{ t('合并同音高') }}<span class="pr-ctx-k">Ctrl+M</span></button>
         <div class="pr-ctx-sep"></div>
-        <button class="pr-ctx-i" :disabled="!ctxOnNote" @click="api.pushUndo(); api.removeNotes(selectedIds.length ? selectedIds : [ctxNoteId]); closeCtx()">{{ t('删除') }}</button>
+        <button class="pr-ctx-i" :disabled="!ctxOnNote" @click="api.pushUndo(); api.removeNotes(selectedIds.length ? selectedIds : [ctxNoteId]); closeCtx()"><Icon name="trash" :size="13" /> {{ t('删除') }}</button>
       </div>
     </Transition>
   </div>

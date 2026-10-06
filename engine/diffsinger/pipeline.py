@@ -93,6 +93,26 @@ def write_wav(path: str, samples: Sequence[float], sample_rate: int) -> None:
     return n
 
 
+def _pad_leading_silence(samples, sr, position_ms, warnings=None):
+    """给渲染结果补上「从 0 到本句起点」的静音。
+
+    ★ 为什么必须有：DiffSinger 的渲染器只产出**这一句**的样点，句首在整首歌里的位置
+      由 `phrase.position_ms` 决定；上层（OpenUTAU 的合成器）负责把它摆到时间轴上。
+      本 CLI 直接写 WAV，就必须自己补 —— 不补的话整条人声整体提前
+      （实测《烦恼歌》96BPM：提前 0.82s，恰好等于第一个音素的位置），叠上伴奏全程抢拍。
+    """
+    try:
+        import numpy as _np
+        lead = int(round(float(position_ms) / 1000.0 * float(sr)))
+        if lead > 0:
+            return _np.concatenate([_np.zeros(lead, dtype=_np.asarray(samples).dtype),
+                                    _np.asarray(samples)])
+    except Exception as e:  # noqa: BLE001 —— 补静音失败不该让整次渲染失败
+        if warnings is not None:
+            warnings.append('前置静音补齐失败（结果可能整体提前 %sms）：%s' % (position_ms, e))
+    return samples
+
+
 def render_phrase(cfg: Dict, on_progress=None,
                   axis=None, project=None) -> Dict:
     """渲染入口。`cfg` 的键与旧实现一致（见模块 docstring）。"""
@@ -138,7 +158,9 @@ def render_phrase(cfg: Dict, on_progress=None,
         axis=axis, part_position=part.position,
         position=phones[0].position, leading=0,
         position_ms=axis.tick_pos_to_ms_pos(phones[0].position),
-        duration_ms=axis.ms_between_tick_pos(phones[0].position, phones[-1].end_ms),
+        # ★ phones[-1].end_ms 已经是**毫秒**，不能再喂给 ms_between_tick_pos(按 tick 解释) ——
+        #   那样算出来的时长会偏大（实测 243.9s 的歌唱出 316.8s 的"时长"）。
+        duration_ms=float(phones[-1].end_ms) - axis.tick_pos_to_ms_pos(phones[0].position),
         phones=phones,
         need_energy=acoustic.use_energy_embed,
         need_breathiness=acoustic.use_breathiness_embed,
@@ -165,6 +187,10 @@ def render_phrase(cfg: Dict, on_progress=None,
                          steps=int(cfg.get('steps') or DEFAULT_STEPS),
                          variance_cfg=variance_cfg, on_progress=on_progress,
                          progress_range=(55, 100))
+
+    # ★★ 渲染出来的只是**这一句**的样点，它在整首歌里的位置由 phrase.position_ms 决定 ——
+    #   前面的留白必须自己补（见 _pad_leading_silence）。
+    samples = _pad_leading_silence(samples, sr, phrase.position_ms, warnings)
 
     out = cfg.get('out')
     if out:
@@ -200,11 +226,16 @@ def _group_notes(unotes: Sequence) -> List[List]:
 def _make_axis(cfg: Dict, notes: Sequence[Dict]):
     """造一个最小的 UProject + TimeAxis（CLI 没有工程上下文时用）。"""
     from singing.ustx.format import add_default_expressions
-    from singing.ustx.model import UNote, UProject, UTrack, UVoicePart
+    from singing.ustx.model import UNote, UProject, UTempo, UTrack, UVoicePart
 
     p = UProject()
     p.name = 'render'
     p.bpm = float(cfg.get('bpm') or 120)
+    # ★★ 只设 p.bpm 是不够的：TimeAxis.build_segments() 读的是 **p.tempos**，
+    #   而 UProject.tempos 默认是 [UTempo(position=0, bpm=120)]。不同步的话整首歌按 120 BPM
+    #   换算「拍 → 秒」—— 实测《烦恼歌》96 BPM：4 分 04 秒的歌渲成 3 分 15 秒（快 25%），
+    #   和伴奏根本对不上。音符位置/时长都是拍，所以这一步错了，整首歌的时序全错。
+    p.tempos = [UTempo(position=0, bpm=p.bpm)]
     p.file_path = os.path.join(os.environ.get('TEMP', '.'), '_diffsinger_cli.ustx')
     add_default_expressions(p)
     tr = UTrack(p)
@@ -275,7 +306,9 @@ def _pitch_edit_entry(voicebank: str, notes, bpm: float, device: str,
     phrase = Phrase(
         axis=axis, part_position=part.position, position=phones[0].position, leading=0,
         position_ms=axis.tick_pos_to_ms_pos(phones[0].position),
-        duration_ms=axis.ms_between_tick_pos(phones[0].position, phones[-1].end_ms),
+        # ★ phones[-1].end_ms 已经是**毫秒**，不能再喂给 ms_between_tick_pos(按 tick 解释) ——
+        #   那样算出来的时长会偏大（实测 243.9s 的歌唱出 316.8s 的"时长"）。
+        duration_ms=float(phones[-1].end_ms) - axis.tick_pos_to_ms_pos(phones[0].position),
         phones=phones)
     phrase.pitches = build_pitches(part.notes, axis, part.position,
                                    phrase.position, phrase.leading)

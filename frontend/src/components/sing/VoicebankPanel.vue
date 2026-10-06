@@ -120,10 +120,10 @@ async function run(fn: () => Promise<any>) {
           <span v-if="usedIn(b.dir)" class="inuse">{{ t('使用中') }}</span>
           <button class="btn" :disabled="probe && probe.busy"
                   :title="t('体检：目录/编码/别名/缺采样/歌词覆盖一次算清')"
-                  @click="runProbe(b)">{{ t('体检') }}</button>
+                  @click="runProbe(b)"><Icon name="target" :size="12" /> {{ t('体检') }}</button>
           <button v-if="b.engine === 'diffsinger'" class="btn danger"
                   :disabled="busy || usedIn(b.dir)"
-                  @click="run(() => ds.deleteVoicebank(b.dir))">{{ t('删除') }}</button>
+                  @click="run(() => ds.deleteVoicebank(b.dir))"><Icon name="trash" :size="12" /> {{ t('删除') }}</button>
           <span v-else class="muted small">{{ t('在 UTAU 声库管理器里删除') }}</span>
         </li>
       </ul>
@@ -134,7 +134,7 @@ async function run(fn: () => Promise<any>) {
           <b>{{ t('体检：') }}{{ probe.name }}</b>
           <span v-if="probe.busy" class="muted small">{{ t('检查中…') }}</span>
           <span class="sp" />
-          <button class="btn" @click="probe = null">{{ t('关闭') }}</button>
+          <button class="btn" @click="probe = null"><Icon name="close" :size="12" /> {{ t('关闭') }}</button>
         </div>
         <p v-if="probe.error" class="edt-msg small bad">{{ probe.error }}</p>
         <ul class="vbp-checks">
@@ -156,7 +156,7 @@ async function run(fn: () => Promise<any>) {
         <Icon name="mic" :size="13" /> {{ t('UTAU 声库制作') }}
         <span class="sp" />
         <button class="btn" @click="showStore = !showStore">
-          {{ showStore ? t('收起') : t('打开制作工具') }}
+          <Icon :name="showStore ? 'chevron' : 'box'" :size="12" /> {{ showStore ? t('收起') : t('打开制作工具') }}
         </button>
       </div>
       <p class="muted small">
@@ -172,7 +172,7 @@ async function run(fn: () => Promise<any>) {
         <span class="sp" />
         <button class="btn" :class="{ primary: !ds.enabled }" :disabled="busy"
                 @click="run(() => ds.setEnabled(!ds.enabled))">
-          {{ ds.enabled ? t('停用模块') : t('启用模块') }}
+          <Icon :name="ds.enabled ? 'minus' : 'zap'" :size="12" /> {{ ds.enabled ? t('停用模块') : t('启用模块') }}
         </button>
       </div>
       <p class="muted small">{{ t('停用会保留已下载的组件；未启用时零占用。') }}</p>
@@ -185,7 +185,7 @@ async function run(fn: () => Promise<any>) {
           </p>
           <p v-else class="muted small">{{ ds.depsError || (t('缺失：') + ds.depsMissing.join(', ')) }}</p>
           <button v-if="!ds.depsOk" class="btn" :disabled="busy" @click="run(() => ds.installRuntime())">
-            {{ t('安装') }}
+            <Icon name="download" :size="12" /> {{ t('安装') }}
           </button>
         </div>
         <div class="vbp-st" :class="{ ok: ds.vocoderInstalled }">

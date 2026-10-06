@@ -1308,13 +1308,32 @@ async function onMuteAudio(x: any, e: Event) {
   await reloadTransport();
 }
 
-function doSave() {
-  const b = store.exportBytes();
+/**
+ * 导出当前轨的渲染结果（WAV）。
+ *
+ * ★ 实测两个坑（2026-10-06）：
+ *   1. `exportBytes` 是 Pinia 的 **getter**，原来写成 `store.exportBytes()` 会直接抛
+ *      `TypeError: store.exportBytes is not a function` —— 点「导出 WAV」毫无反应、也没有任何提示。
+ *   2. 桌面版不能再走 `<a download>`：Electron 33 的下载子系统已失效
+ *      （见 main/dialogs.js 的说明），应用里其他导出（MIDI / 视频 / 配置 / 乐谱）早就改走
+ *      `file:saveBinary`，只有这里漏了。现在与它们统一。
+ */
+async function doSave() {
+  const b = store.exportBytes;
   if (!b) { sayErr(t('还没有可导出的音频'), t('先点「渲染本轨」（Enter）或「渲染全部轨」，再导出。')); return; }
+  const name = (tr.value?.name || 'render') + '.wav';
+  const b2 = window.fuBridge as any;
+  if (b2 && typeof b2.saveBinary === 'function') {
+    // 直接传 Uint8Array（结构化克隆），避免 Array.from 生成数千万元素的数组
+    const r = await b2.saveBinary({ name, data: b });
+    if (r && r.ok) say(t('已保存到：') + String(r.path || name), 'ok');
+    else if (!(r && r.canceled)) sayErr(t('保存失败：') + ((r && r.error) || t('未知原因')));
+    return;
+  }
   const url = URL.createObjectURL(new Blob([b.buffer as ArrayBuffer], { type: 'audio/wav' }));
   const a = document.createElement('a');
   a.href = url;
-  a.download = (tr.value?.name || 'render') + '.wav';
+  a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
@@ -1386,10 +1405,10 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
     <div v-if="trackMenu" class="tk-menu-mask" @click="closeTrackMenu" @contextmenu.prevent="closeTrackMenu"></div>
     <div v-if="trackMenu" class="tk-menu" :style="{ left: trackMenu.x + 'px', top: trackMenu.y + 'px' }" @click.stop>
       <b>{{ trackMenu.track.name || t('未命名轨') }}</b>
-      <button @click="renameTrack(trackMenu.track); closeTrackMenu()">{{ t('重命名') }}</button>
-      <button @click="menuDuplicate(trackMenu.track)">{{ t('复制这条轨') }}</button>
-      <button @click="store.clearTrack(trackMenu.track.id); closeTrackMenu()">{{ t('清空音符') }}</button>
-      <button class="danger" @click="store.removeTrack(trackMenu.track.id); closeTrackMenu()">{{ t('删除这条轨') }}</button>
+      <button @click="renameTrack(trackMenu.track); closeTrackMenu()"><Icon name="edit" :size="13" /> {{ t('重命名') }}</button>
+      <button @click="menuDuplicate(trackMenu.track)"><Icon name="copy" :size="13" /> {{ t('复制这条轨') }}</button>
+      <button @click="store.clearTrack(trackMenu.track.id); closeTrackMenu()"><Icon name="erase" :size="13" /> {{ t('清空音符') }}</button>
+      <button class="danger" @click="store.removeTrack(trackMenu.track.id); closeTrackMenu()"><Icon name="trash" :size="13" /> {{ t('删除这条轨') }}</button>
     </div>
 
     <!-- 空态：没有任何轨道时给"三步走"，而不是让用户对着空白猜按钮 -->
@@ -1566,7 +1585,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         </label>
         <button class="btn" :disabled="!alignMs" :title="t('把这条轨的音符整体平移这么多毫秒（可撤销；伴奏轨不动）')"
                 @click="applyAlign">
-          {{ t('应用') }}
+          <Icon name="target" :size="12" /> {{ t('应用') }}
         </button>
         <span class="sp" />
         <span class="ppath muted small" :title="store.projectPath || t('还没有保存过')">
@@ -1616,7 +1635,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <div class="edt-prog"><i :style="{ width: store.progress + '%' }" /></div>
         <span class="muted small">{{ store.msg || t('正在渲染…') }}</span>
         <button class="btn sm" :title="t('正在渲染的这一条不会被打断，它跑完即停')" @click="store.cancelRender">
-          {{ t('停止后续渲染') }}
+          <Icon name="stop" :size="12" /> {{ t('停止后续渲染') }}
         </button>
       </div>
       <!-- 渲染门禁原因：只在"想渲但渲不了"时显示，平时不占位（提示本身走 app.toast，见 P1-4） -->
@@ -1627,7 +1646,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
       <p v-if="missingLyrics.length" class="edt-msg small bad">
         <Icon name="info" :size="12" />
         {{ t('本轨有 ') }}{{ missingLyrics.length }}{{ t(' 个歌词不在声库别名表里（渲染时会被跳过或静音）') }}
-        <button class="btn sm" @click="gotoFirstMissing">{{ t('定位第一个') }}</button>
+        <button class="btn sm" @click="gotoFirstMissing"><Icon name="search" :size="12" /> {{ t('定位第一个') }}</button>
       </p>
 
       <!-- 传输栏：伴奏与渲染结果**同时播放**（Web Audio 单时钟，采样级同步） -->
@@ -1690,13 +1709,13 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
       <div v-if="propsOpen && tr" class="tprops">
         <div class="tabs small">
           <button class="tab" :class="{ on: propsTab === 'params' }" @click="propsTab = 'params'">
-            {{ t('参数') }}
+            <Icon name="gear" :size="12" /> {{ t('参数') }}
           </button>
           <button class="tab" :class="{ on: propsTab === 'fx' }" @click="propsTab = 'fx'">
-            {{ t('效果链') }}<span v-if="fxList.length" class="cnt">{{ fxList.length }}</span>
+            <Icon name="spark" :size="12" /> {{ t('效果链') }}<span v-if="fxList.length" class="cnt">{{ fxList.length }}</span>
           </button>
           <button class="tab" :class="{ on: propsTab === 'auto' }" @click="propsTab = 'auto'">
-            {{ t('自动化') }}<span v-if="tr.curves && tr.curves.length" class="cnt">{{ tr.curves.length }}</span>
+            <Icon name="cclane" :size="12" /> {{ t('自动化') }}<span v-if="tr.curves && tr.curves.length" class="cnt">{{ tr.curves.length }}</span>
           </button>
           <span class="sp" />
           <button class="ib" :title="t('收起')" @click="propsOpen = false">×</button>
@@ -1745,7 +1764,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             <span class="muted">{{ t('从上到下就是信号流顺序') }}</span>
             <span class="sp" />
             <button class="btn" :title="t('重新装载后播放才带新效果')" @click="reloadTransport">
-              {{ t('应用') }}
+              <Icon name="refresh" :size="12" /> {{ t('应用') }}
             </button>
           </div>
           <p v-if="!fxList.length" class="muted">{{ t('这条轨还没有效果。') }}</p>
@@ -1792,7 +1811,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             <span v-else class="tag-m pb">{{ t('播放时实时生效') }}</span>
             <span class="sp" />
             <button class="btn" @click="autoAddPoint"><Icon name="plus" :size="12" /> {{ t('加点') }}</button>
-            <button class="btn" @click="store.clearCurve(tr.id, curAbbr)">{{ t('清空') }}</button>
+            <button class="btn" @click="store.clearCurve(tr.id, curAbbr)"><Icon name="erase" :size="12" /> {{ t('清空') }}</button>
           </div>
           <!-- P2-4：表格用于精确输入，车道用于"凭耳朵拖" —— 两条路都留着 -->
           <p class="muted auto-hint">
@@ -1831,7 +1850,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
               {{ t('复音 ') }}{{ overlapCount(mt) }}
             </span>
             <button class="btn" @click="applyPicked(mt, midiPick?.tpb || 480, midiPick?.bpm || 120)">
-              {{ t('用这条') }}
+              <Icon name="check" :size="12" /> {{ t('用这条') }}
             </button>
           </li>
         </ul>
@@ -1900,9 +1919,9 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             <input type="number" min="0.125" step="0.25" style="width:64px" v-model.number="lyricDlg.gap" /> {{ t('拍') }}
           </label>
           <button class="btn sm" :disabled="pinyinBusy" @click="toPinyin">
-            {{ pinyinBusy ? t('转换中…') : t('汉字→拼音') }}
+            <Icon name="convert" :size="12" /> {{ pinyinBusy ? t('转换中…') : t('汉字→拼音') }}
           </button>
-          <button class="btn sm" @click="importLyricsFile">{{ t('读歌词文件') }}</button>
+          <button class="btn sm" @click="importLyricsFile"><Icon name="import" :size="12" /> {{ t('读歌词文件') }}</button>
         </div>
         <div class="singdlg-prev">
           <span class="muted">{{ t('识别到 ') }}{{ lyricTokens.length }}{{ t(' 个词 → ') }}{{ selNotes.length }}{{ t(' 个音符') }}</span>
@@ -1918,7 +1937,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <div class="singdlg-foot">
           <span class="muted">{{ t('UTAU 中文声库要先转拼音（引擎只认别名）；DiffSinger 直接用汉字。') }}</span>
           <span class="sp" />
-          <button class="btn primary" @click="applyLyricDialog">{{ t('填入') }}</button>
+          <button class="btn primary" @click="applyLyricDialog"><Icon name="check" :size="12" /> {{ t('填入') }}</button>
         </div>
       </div>
 
@@ -1928,7 +1947,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <b>{{ t('发音表') }}</b>
           <span class="muted">{{ aliasDlg.dir }}</span>
           <span class="sp" />
-          <button class="btn" @click="aliasDlg = null">{{ t('关闭') }}</button>
+          <button class="btn" @click="aliasDlg = null"><Icon name="close" :size="12" /> {{ t('关闭') }}</button>
         </div>
         <div class="singdlg-row">
           <input class="singdlg-q" v-model="aliasDlg.q" :placeholder="t('搜索发音（如 ai / bu / hao）')" />
@@ -2065,7 +2084,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
                   @click="pickPhonemeIndex(i)">{{ it.text }}</button>
           <span class="sp" />
           <span v-if="phOverrideCount" class="muted">{{ t('本音素已覆盖 ') }}{{ phOverrideCount }}{{ t(' 项') }}</span>
-          <button class="btn sm" :disabled="!phOverrideCount" @click="clearPhExpr">{{ t('清除本音素覆盖') }}</button>
+          <button class="btn sm" :disabled="!phOverrideCount" @click="clearPhExpr"><Icon name="erase" :size="12" /> {{ t('清除本音素覆盖') }}</button>
         </div>
         <div class="ph-grid small">
           <label v-for="e in PH_EXPRS" :key="e.abbr" :title="t(e.hint) + t('；留空 = 用音符/轨道的值')">
@@ -2084,7 +2103,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <div class="curves-head small">
           <b>{{ t('音高曲线') }}</b>
           <button class="btn" @click="curveAdd"><Icon name="plus" :size="12" /> {{ t('加点') }}</button>
-          <button class="btn" @click="curveClear">{{ t('清空') }}</button>
+          <button class="btn" @click="curveClear"><Icon name="erase" :size="12" /> {{ t('清空') }}</button>
           <span class="muted">{{ t('单位：音分（cent），作用于整条轨') }}</span>
         </div>
         <div v-if="tr && tr.pitchCurve.length" class="curves-grid small">
@@ -2167,7 +2186,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
            border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
            box-shadow: 0 10px 28px rgba(0,0,0,.22); display: flex; flex-direction: column; gap: 2px; }
 .tk-menu b { font-size: 11.5px; color: var(--stone); padding: 4px 8px 6px; }
-.tk-menu button { text-align: left; padding: 6px 9px; border: 0; border-radius: 6px;
+.tk-menu button { display: flex; align-items: center; gap: 8px; text-align: left; padding: 6px 9px; border: 0; border-radius: 6px;
                   background: transparent; color: var(--ink); font-size: 12.5px; cursor: pointer; }
 .tk-menu button:hover { background: var(--surface-muted); }
 .tk-menu button.danger { color: var(--brand-coral); }
@@ -2270,7 +2289,8 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 /* ---- 轨道属性：三栏（参数 / 效果链 / 自动化） ---- */
 .tprops { border-bottom: 1px solid var(--border); }
 .tprops .tabs { display: flex; align-items: center; gap: 4px; padding: 5px 12px 0; }
-.tprops .tab { border: 1px solid transparent; border-bottom: none; background: transparent;
+.tprops .tab { display: inline-flex; align-items: center; gap: 6px;
+               border: 1px solid transparent; border-bottom: none; background: transparent;
                color: var(--stone); cursor: pointer; border-radius: 6px 6px 0 0;
                padding: 3px 10px; font-size: 12px; }
 .tprops .tab:hover { color: var(--brand-text); }

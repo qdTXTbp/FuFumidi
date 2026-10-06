@@ -70,6 +70,10 @@ const P = {
   modeOrder: '<line x1="3" y1="6" x2="15" y2="6"/><line x1="3" y1="12" x2="13" y2="12"/><line x1="3" y1="18" x2="11" y2="18"/><polyline points="15 14 21 18 15 22"/>',
   repeat1: '<path d="M21 12a9 9 0 1 1-3.2-6.9"/><polyline points="21 2.5 21 5.5 18 5.5"/><line x1="12" y1="8.5" x2="12" y2="15.5"/>',
   refresh: '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/>',
+  check: '<polyline points="20 6.5 9.5 17 4 11.5"/>',
+  cut: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/>',
+  split: '<line x1="12" y1="2.5" x2="12" y2="21.5" stroke-dasharray="3 3"/><polyline points="7.5 8 3.5 12 7.5 16"/><polyline points="16.5 8 20.5 12 16.5 16"/>',
+  merge: '<line x1="12" y1="2.5" x2="12" y2="21.5" stroke-dasharray="3 3"/><polyline points="3.5 8 7.5 12 3.5 16"/><polyline points="20.5 8 16.5 12 20.5 16"/>',
 };
 </script>
 
