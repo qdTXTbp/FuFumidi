@@ -2,14 +2,6 @@
 // 图标集与原始仓库保持一致（FuFumidi.html 中的 ICONS，viewBox 24×24、stroke 1.8 圆头圆角）
 import { watchEffect } from 'vue';
 const props = defineProps({ name: { type: String, required: true }, size: { type: Number, default: 16 } });
-const _warned = new Set();
-watchEffect(() => {
-  const n = props.name;
-  if (n && n !== '__missing' && !P[n] && !_warned.has(n)) {
-    _warned.add(n);
-    console.warn('[Icon] 未定义的图标名：' + n + '（渲染成空白，检查拼写）');
-  }
-});
 const P = {
   // ★ 名字写错（如 stop 写成 square）时 v-html 会渲染成空白 —— 按钮就变成「点了没图标」，
   //   而且完全不报错。开发期直接喊出来，别让它悄悄上线。
@@ -96,6 +88,21 @@ const P = {
   sliders: '<line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="16" x2="20" y2="16"/><circle cx="9" cy="8" r="2.6" fill="var(--canvas, #fff)"/><circle cx="15" cy="16" r="2.6" fill="var(--canvas, #fff)"/>',
   cloud: '<path d="M17.5 19a4.5 4.5 0 0 0 .5-8.97A6 6 0 0 0 6.2 11.2 3.9 3.9 0 0 0 7 19h10.5z"/>',
 };
+
+/* ⚠ 这个检查必须放在 P **之后**：watchEffect 的回调是**立即执行**的，
+   放在 P 之前会在 TDZ 里读 P → 每次 Icon 组件 setup 都抛
+   "Cannot access 'P' before initialization"，而 Vue 只会把 setup 的异常
+   记进 console 并**丢掉整个 setup 的返回值** —— 后果是所有图标渲染成空、
+   并且挂在这个组件上的钩子（含 onMounted）全部不注册。
+   这一处是本次「声库制作页验收桥挂不上」的真凶（本轮实测定位）。 */
+const _warned = new Set();
+watchEffect(() => {
+  const n = props.name;
+  if (n && n !== '__missing' && !P[n] && !_warned.has(n)) {
+    _warned.add(n);
+    console.warn('[Icon] 未定义的图标名：' + n + '（渲染成空白，检查拼写）');
+  }
+});
 </script>
 
 <template>
