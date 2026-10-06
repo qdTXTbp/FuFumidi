@@ -193,6 +193,8 @@ export interface Settings {
   ui_mode?: 'light' | 'dark';
   font_size?: string;
   density?: string;
+  /** 全局 UI 缩放（M9）：0.9 ~ 1.3，缺省 1 */
+  ui_scale?: number;
   perf_mode?: PerfMode;
   engine_path?: string;
   engine_mode?: EngineMode;

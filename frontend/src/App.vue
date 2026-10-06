@@ -27,6 +27,7 @@ import { useWorkspace } from './stores/workspace';
 import { usePlaylistStore } from './stores/playlist';
 import { useSettingsStore } from './stores/settings';
 import { setLang, t, browserLang } from './core/i18n.js';
+import { applyDisplayPrefs as applyDisplayPrefsShared, loadDisplayPrefs } from './core/display.js';
 import { getAppVersion, cmpVersion, getUpdateChannel } from './core/version.js';
 import { getBuiltinChangeLogs, fetchRemoteChangeLog } from './core/changelog.js';
 import { applyTheme, loadTheme } from './core/theme.js';
@@ -101,12 +102,9 @@ const toggleMetro = () => app.toggleMetro();
 
 const bridge = window.fuBridge;
 
-// 字号 / 密度即时应用
-function applyDisplayPrefs(s) {
-  const fsMap = { standard: '', large: '15px', xlarge: '17px' };
-  document.body.style.fontSize = fsMap[s.font_size === 'large' || s.font_size === 'xlarge' ? s.font_size : 'standard'] || '';
-  document.body.dataset.density = s.density === 'compact' ? 'compact' : 'comfortable';
-}
+/* 字号 / 密度 / 全局缩放：取值域与落点都在 core/display.js（设置面板用的是同一份），
+   这里只负责"启动时先按 localStorage 应用一次"（防闪烁）。 */
+function applyDisplayPrefs(s) { applyDisplayPrefsShared(s); }
 
 // 启动初始化：主题（防闪烁）→ 语言/字号/密度（settings 兜底）→ 完整性检验 → 新手引导
 async function initGlobal() {
@@ -140,7 +138,13 @@ async function initGlobal() {
     density = localStorage.getItem('fufumidi_density');
   } catch (e) { lang = (s && s.lang) || 'zh'; }
   setLang(lang);
-  applyDisplayPrefs({ font_size: font || s.font_size, density: density || s.density });
+  /* 三件一起应用：localStorage 优先、settings 兜底（缩放同理，见 core/display.js） */
+  const dp = loadDisplayPrefs();
+  applyDisplayPrefs({
+    font_size: font || s.font_size || dp.font_size,
+    density: density || s.density || dp.density,
+    ui_scale: dp.ui_scale || s.ui_scale,
+  });
 
   // 3) 完整性检验（后台静默，由设置面板警告条展示 + 一键修复）
   if (bridge && bridge.checkIntegrity) {

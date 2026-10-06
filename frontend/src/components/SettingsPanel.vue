@@ -16,6 +16,11 @@ const appVersion = ref('v3.1.8');
 import { getAppVersion, cmpVersion, getUpdateChannel, setUpdateChannel, normalizeUpdateChannel, getDownloadSource, setDownloadSource, normalizeDownloadSource } from '../core/version.js';
 getAppVersion().then(v => { appVersion.value = v; });
 import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';
+/* 外观三件（字号 / 密度 / 全局缩放）的取值域与落点：与 App.vue 启动时用的是同一份 */
+import {
+  applyDisplayPrefs, loadDisplayPrefs, saveFontSize, saveDensity, saveUiScale,
+  UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_STEP,
+} from '../core/display.js';
 
 const bridge = window.fuBridge;
 const settingsStore = useSettingsStore();
@@ -89,7 +94,7 @@ watch(tab, moveInd);
 /* ---------------- 表单 ---------------- */
 const form = reactive({
   theme: 'fufu', accent: '', mode: 'light',
-  font_size: 'standard', density: 'comfortable', lang: 'zh',
+  font_size: 'standard', density: 'comfortable', ui_scale: 1, lang: 'zh',
   engine_path: '', engine_mode: 'universal', perf_mode: 'quality', batch_concurrency: 'auto',
   output_dir: '', name_rule: '', watch_dir: '', watch_enabled: false, file_assoc: true,
 });
@@ -166,8 +171,10 @@ async function load() {
   form.theme = lsTheme || s.theme || 'fufu';
   form.accent = lsAccent || s.accent || '';
   form.mode = loadMode();
-  form.font_size = s.font_size || 'standard';
-  form.density = s.density || 'comfortable';
+  const dp = loadDisplayPrefs();
+  form.font_size = dp.font_size || s.font_size || 'standard';
+  form.density = dp.density || s.density || 'comfortable';
+  form.ui_scale = dp.ui_scale != null ? dp.ui_scale : (s.ui_scale != null ? s.ui_scale : 1);
   form.lang = getLang();
   form.engine_path = s.engine_path || '';
   form.engine_mode = s.engine_mode || 'universal';
@@ -194,11 +201,13 @@ async function load() {
 }
 
 /* ---------------- 外观 ---------------- */
-function applyDisplay(font, density) {
+function applyDisplay(font, density, scale) {
   if (typeof document === 'undefined') return;
-  const fsMap = { standard: '', large: '15px', xlarge: '17px' };
-  document.body.style.fontSize = fsMap[font] || '';
-  document.body.dataset.density = density === 'compact' ? 'compact' : 'comfortable';
+  /* 三件一起走 core/display.js：这样"改一下立即看到"和"启动时应用"永远是同一套规则 */
+  applyDisplayPrefs({ font_size: font, density, ui_scale: scale });
+  saveFontSize(font);
+  saveDensity(density);
+  saveUiScale(scale);
 }
 function onThemeChange() {
   applyTheme(form.theme, form.accent, form.mode);
@@ -210,8 +219,10 @@ function onModeChange() {
 }
 function onAccentInput(e) { applyTheme(form.theme, e.target.value, form.mode); }
 function resetAccent() { form.accent = ''; applyTheme(form.theme, '', form.mode); }
-function onFontSize() { applyDisplay(form.font_size, form.density); }
-function onDensity() { applyDisplay(form.font_size, form.density); }
+function onFontSize() { applyDisplay(form.font_size, form.density, form.ui_scale); }
+function onDensity() { applyDisplay(form.font_size, form.density, form.ui_scale); }
+function onUiScale() { applyDisplay(form.font_size, form.density, form.ui_scale); }
+function resetUiScale() { form.ui_scale = 1; onUiScale(); }
 function onLang() {
   setLang(form.lang);
   try { localStorage.setItem('fufumidi_lang', form.lang); } catch (e) {}
@@ -860,16 +871,12 @@ const integrityOk = computed(() => !!(state.integrity && state.integrity.ok));
 /* ---------------- 保存 / 取消 ---------------- */
 function apply() {
   saveTheme(form.theme, form.accent, form.mode);
-  applyDisplay(form.font_size, form.density);
+  applyDisplay(form.font_size, form.density, form.ui_scale);
   setLang(form.lang);
-  try {
-    localStorage.setItem('fufumidi_lang', form.lang);
-    localStorage.setItem('fufumidi_font', form.font_size);
-    localStorage.setItem('fufumidi_density', form.density);
-  } catch (e) {}
+  try { localStorage.setItem('fufumidi_lang', form.lang); } catch (e) {}
   const payload = {
     theme: form.theme, accent: form.accent, ui_mode: form.mode,
-    font_size: form.font_size, density: form.density, lang: form.lang,
+    font_size: form.font_size, density: form.density, ui_scale: form.ui_scale, lang: form.lang,
     engine_path: form.engine_path, engine_mode: form.engine_mode,
     perf_mode: form.perf_mode, batch_concurrency: form.batch_concurrency,
     batch_concurrency_manual: form.batch_concurrency !== 'auto',
@@ -1006,13 +1013,27 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
           <div class="field-row">
             <div>
               <div class="fr-label">{{ t('界面密度') }}</div>
-              <div class="fr-hint">{{ t('控件与间距紧凑度') }}</div>
+              <div class="fr-hint">{{ t('控件与间距紧凑度：紧凑 / 舒适 / 宽松') }}</div>
             </div>
             <div class="fr-ctl">
               <div class="radio-pill">
                 <span :class="{ on: form.density === 'compact' }" @click="form.density = 'compact'; onDensity()">{{ t('紧凑') }}</span>
                 <span :class="{ on: form.density === 'comfortable' }" @click="form.density = 'comfortable'; onDensity()">{{ t('舒适') }}</span>
+                <span :class="{ on: form.density === 'relaxed' }" :title="t('卡片与列表留白更多，长时间看谱不累')"
+                      @click="form.density = 'relaxed'; onDensity()">{{ t('宽松') }}</span>
               </div>
+            </div>
+          </div>
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('界面缩放') }}</div>
+              <div class="fr-hint">{{ t('全局放大或缩小整个界面（0.9 ~ 1.3）：连画布一起缩放，不会糊也不会重叠') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <input class="ov-range" type="range" :min="UI_SCALE_MIN" :max="UI_SCALE_MAX" :step="UI_SCALE_STEP"
+                     v-model.number="form.ui_scale" @input="onUiScale" :aria-label="t('界面缩放')" />
+              <span class="ui-scale-val">{{ Math.round(form.ui_scale * 100) }}%</span>
+              <button class="btn sm" :disabled="Math.abs(form.ui_scale - 1) < 0.001" @click="resetUiScale">{{ t('还原 100%') }}</button>
             </div>
           </div>
           <div class="field-row">

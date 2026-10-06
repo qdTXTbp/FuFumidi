@@ -1069,6 +1069,13 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .radio-pill span:hover { color: var(--ink); }
 .radio-pill span.on { background: var(--accent); color: #fff; font-weight: 600; }
 
+/* 界面缩放滑杆（M9）：和单选胶囊同一套观感（细轨 + 圆形滑块 + 旁边一个百分比读数） */
+.fr-ctl .ov-range { width: 190px; height: 20px; accent-color: var(--accent); cursor: pointer; background: transparent; }
+.ui-scale-val {
+  min-width: 46px; text-align: right; font-size: 12px; color: var(--ink);
+  font-variant-numeric: tabular-nums; font-family: var(--mono);
+}
+
 /* 开关 */
 .switch-row { display: inline-flex; align-items: center; cursor: pointer; }
 .switch-row input { display: none; }
@@ -1302,13 +1309,24 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 }
 .guide-foot .guide-btn:hover { background: var(--surface-soft); color: var(--ink); transform: none; box-shadow: none; }
 
-/* ---------- 密度（紧凑模式收紧主要间距） ---------- */
-body[data-density="compact"] { --card-pad: 13px; }
+/* ---------- 密度三档（M9：紧凑 / 舒适 / 宽松） ----------
+   ★ 只动**间距**：容器内边距、页面留白、列表行距。
+     **不动控件高度**（--ctl-h）—— 全站不少表格/工具栏是按它排出来的，动它会连锁破版；
+     紧凑档从一开始就是这个原则，宽松档照抄。（舒适 = 默认，什么都不覆盖。） */
+body[data-density="compact"] { --card-pad: 13px; --page-pad-x: 18px; --page-pad-y: 14px; --page-pad-b: 28px; }
 body[data-density="compact"] .page { padding: 14px 18px 28px; }
 body[data-density="compact"] .nav-item { padding: 6px 10px; }
 body[data-density="compact"] .song-item { padding: 7px 10px; }
 body[data-density="compact"] .btn { padding: 7px 14px; }
 body[data-density="compact"] .topbar { padding: 0 8px; }
+/* 宽松：长时间看谱 / 调曲线的人需要的呼吸感 */
+body[data-density="relaxed"] { --card-pad: 20px; --page-pad-x: 30px; --page-pad-y: 26px; --page-pad-b: 44px; }
+body[data-density="relaxed"] .page { padding: 26px 30px 44px; }
+body[data-density="relaxed"] .nav-item { padding: 12px 14px; }
+body[data-density="relaxed"] .song-item { padding: 12px 14px; }
+body[data-density="relaxed"] .btn { padding: 11px 19px; }
+body[data-density="relaxed"] .topbar { padding: 0 16px; }
+body[data-density="relaxed"] .card { border-radius: var(--radius-lg); }
 
 /* ============================================================
    交互动效增强：每一次交互都有明确反馈

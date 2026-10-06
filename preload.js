@@ -1,9 +1,21 @@
 // Preload 桥接：主进程 ↔ 渲染进程（fuBridge）
-const { contextBridge, ipcRenderer, webUtils } = require('electron');
+const { contextBridge, ipcRenderer, webUtils, webFrame } = require('electron');
 // 拖拽文件 → 本地路径（UTAU 声库 zip 拖拽导入用）
 function filePathFor(f) { try { return webUtils.getPathForFile(f); } catch (e) { return null; } }
 
 contextBridge.exposeInMainWorld('fuBridge', {
+  /* 全局 UI 缩放（M9）：走 Chromium 自己的缩放因子，而不是 CSS transform ——
+     transform 只改画面不改排版（会重叠），而缩放因子会真的重排，
+     并且 devicePixelRatio 跟着变，画布的 devicePixel 尺寸自动跟着走（不会糊）。
+     范围与设置页一致：0.9 ~ 1.3。 */
+  setZoomFactor: (f) => {
+    try {
+      const v = Math.min(1.3, Math.max(0.9, Number(f) || 1));
+      webFrame.setZoomFactor(v);
+      return webFrame.getZoomFactor();
+    } catch (e) { return 1; }
+  },
+  getZoomFactor: () => { try { return webFrame.getZoomFactor(); } catch (e) { return 1; } },
   // 打开文件（双击 .mid 关联）
   onOpenFile: (cb) => {
     const w = (_e, bytes, name) => cb(new Uint8Array(bytes), name);
