@@ -228,10 +228,16 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             _log(log_cb, "已关闭节拍网格检测")
 
         # muscriptor 0.3+ 的 transcribe_to_midi 返回 MIDI 字节（非写文件）。
-        # 批量推理开关：prelude_forcing=False + batch_size>1 可提速 2-4×
-        # （长音频 chunk 串行是大瓶颈），代价是 chunk 边界延续音符质量略降。
-        # 默认关闭（batch=1 + prelude_forcing=True，边界质量最优）。
-        # 实测（RTX 5070 Ti，medium，120s 音频）：batch=1 57s → batch=4 25s → batch=8 23s。
+        # 批量推理开关：prelude_forcing=False + batch_size>1 可提速 2-4×（长音频 chunk 串行是
+        # 大瓶颈）。**代价不是"边界质量略降"那么轻** —— prelude_forcing 的作用正是把"上一块
+        # 未结束的音"按原乐器 teacher-force 进下一块的 tie 段；关掉后模型会自己猜，于是每 5s
+        # 一次的分块边界上，延音会被重新判定乐器（muscriptor 自己的文档原话：
+        # "instead of letting the model guess (and occasionally re-enter with the wrong
+        # instruments)"）。实测《甩葱歌》同一首歌、同一模型：
+        #   batch=1（prelude ON）：非鼓轨 5 条、2531 音、相邻分块换组 1 次
+        #   batch=4（prelude OFF）：非鼓轨 9 条、1962 音（少 22%）、相邻分块换组 16 次
+        # 所以它不是默认项，而是界面上一个写明代价的开关（默认关）。
+        # 测速参考（RTX 5070 Ti，medium，120s）：batch=1 57s → batch=4 25s → batch=8 23s。
         batch = int(params.get("muscriptor_batch") or 0)
         # 乐器组：MuScriptor 是多乐器模型，逐音符判定乐器组；不约束时它会在同一首歌里改判
         # （实测：同一条旋律 24s 判成 organ、33s 判成 synth lead、96s 变成 voice），
@@ -270,7 +276,8 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         while data is None:
             try:
                 if batch >= 2:
-                    _log(log_cb, f"批量推理：batch_size={batch}（prelude_forcing 关闭，边界质量略降）…")
+                    _log(log_cb, "批量推理：batch_size=%d（prelude_forcing 关闭 → 跨段延续的音符会被重新判定"
+                                  "乐器，同一段旋律可能每隔几秒换一次音色；要音色一致请关闭「批量推理」）…" % batch)
                     events = model.transcribe(wav_tmp, batch_size=batch, prelude_forcing=False, instruments=constrain)
                 else:
                     events = model.transcribe(wav_tmp, instruments=constrain)
