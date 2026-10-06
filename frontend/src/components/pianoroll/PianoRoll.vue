@@ -494,22 +494,9 @@ function onMove(e) {
 
 function onUp() {
   if (drag && drag.mode === 'box') {
-    const x0 = Math.min(drag.x0, drag.x1), y0 = Math.min(drag.y0, drag.y1);
-    const x1 = Math.max(drag.x0, drag.x1), y1 = Math.max(drag.y0, drag.y1);
-    /* 框选（M8d）：以前只遍历当前轨的 `props.notes` —— 于是"跨轨框选"根本不存在。
-       现在叠加显示（overlay）打开时，**幽灵音符也在框选范围内**：框到的别的轨音符会被加进选区，
-       随后就能用批量工具一起处理（选区数据层已经跨轨，见 stores/singer.ts 的 selectedNotes）。
-       拖动仍不支持跨轨（编辑 api 按当前轨注入），但"选中后批量改"这条路已经通了。 */
-    const ids = [];
-    for (const n of props.notes) {
-      const g = noteGeo(n);
-      if (g.x < x1 && g.x + g.w > x0 && g.y < y1 && g.y + g.h > y0) ids.push(n.id);
-    }
-    /* ⚠ 跨轨框选（M8d 第三块）**已回退**：本机验收工装驱动不了卷帘的框选
-       （真实鼠标拖拽、合成 PointerEvent 都试过，连"只框当前轨"的基线都是 0 选中），
-       于是这段代码无法被证明可用；而它一旦在 `onUp` 里抛错，会连带**破坏所有人的框选**。
-       按项目既定标准（不留未验证的改动）先撤掉，等验收工装能驱动卷帘后再上。
-       参考：`store.selectedNotes` 的跨轨选区与幽灵点击加选**都已验证可用**（见计划书附录 T）。 */
+    /* 框选走共用逻辑 boxIds()：当前轨 + （叠加显示打开时的）幽灵音符。
+       验收钩子 selectBox() 走的是**同一个函数**，所以这里能被确定性地测到（附录 U）。 */
+    const ids = boxIds(drag.x0, drag.y0, drag.x1, drag.y1);
     const prev = props.selectedIds;
     const next = drag.additive ? Array.from(new Set([...prev, ...ids])) : ids;
     props.api.setSelection(next, next[0] ?? null);
@@ -1265,13 +1252,14 @@ function fitView() {
      这里把**同样的逻辑**以函数形式暴露出去：命中判定与框选各一个入口，
      让验收能确定性地驱动它们（和音乐编辑器那边的 `hitAt` 一个思路）。
      只读/只走既有逻辑，不新增行为。 */
-function hitAt(x, y) {
-  const h = hit(x, y);
-  if (!h) return null;
-  return { noteId: h.n && h.n.id, ghost: !!h.ghost, trackId: h.trackId || props.activeTrackId, side: h.side || null };
-}
-/** 用与 `onUp` 里**完全相同**的判定逻辑做一次框选（不给指针事件，直接给框） */
-function selectBox(x0, y0, x1, y1, additive = false) {
+/**
+ * 框选命中的音符 id（**onUp 与验收钩子 selectBox 共用这一份**，避免两处逻辑漂移）。
+ *
+ * M8d：多轨叠置打开时，**幽灵音符也在框选范围内** —— 框到别的轨的音符会加进选区，
+ * 随后就能用批量工具一起处理（选区数据层跨轨，见 stores/singer.ts 的 selectedNotes）。
+ * 跨轨**拖动**仍不支持：编辑 api 按当前轨注入，这是原设计（跨轨先选、要拖再切轨）。
+ */
+function boxIds(x0, y0, x1, y1) {
   const ax = Math.min(x0, x1), ay = Math.min(y0, y1);
   const bx = Math.max(x0, x1), by = Math.max(y0, y1);
   const ids = [];
@@ -1279,6 +1267,28 @@ function selectBox(x0, y0, x1, y1, additive = false) {
     const g = noteGeo(n);
     if (g.x < bx && g.x + g.w > ax && g.y < by && g.y + g.h > ay) ids.push(n.id);
   }
+  if (props.overlay && Array.isArray(props.tracks)) {
+    const mine = new Set(props.notes.map((n) => n.id));
+    for (const tk of props.tracks) {
+      if (!tk || tk.id === props.activeTrackId) continue;
+      for (const n of (tk.notes || [])) {
+        if (!n || mine.has(n.id)) continue;
+        const g = noteGeo(n);              // 幽灵与实音符共用同一套「拍 → x、音高 → y」映射
+        if (g.x < bx && g.x + g.w > ax && g.y < by && g.y + g.h > ay) ids.push(n.id);
+      }
+    }
+  }
+  return ids;
+}
+
+function hitAt(x, y) {
+  const h = hit(x, y);
+  if (!h) return null;
+  return { noteId: h.n && h.n.id, ghost: !!h.ghost, trackId: h.trackId || props.activeTrackId, side: h.side || null };
+}
+/** 用与 `onUp` 里**完全相同**的判定逻辑做一次框选（不给指针事件，直接给框） */
+function selectBox(x0, y0, x1, y1, additive = false) {
+  const ids = boxIds(x0, y0, x1, y1);
   const prev = props.selectedIds;
   const next = additive ? Array.from(new Set([...prev, ...ids])) : ids;
   props.api.setSelection(next, next[0] ?? null);
