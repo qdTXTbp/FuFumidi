@@ -389,15 +389,120 @@ function hit(x, y) {
   }
   return null;
 }
+/**
+ * 在**任意轨**上按 id 找音符（M8h 跨轨拖动的基础）。
+ * 先当前轨，再逐条幽灵轨 —— 与 Canvas 的绘制顺序一致。
+ */
+function findNoteAny(id) {
+  const mine = props.notes.find(n => n && n.id === id);
+  if (mine) return { trackId: props.activeTrackId, n: mine };
+  for (const tk of (props.tracks || [])) {
+    if (!tk || tk.id === props.activeTrackId) continue;
+    const n = (tk.notes || []).find(x => x && x.id === id);
+    if (n) return { trackId: tk.id, n };
+  }
+  return null;
+}
+
+/**
+ * 当前选区（**含主选**）。
+ *
+ * ★ store 里选区分两个字段：`selectedIds`（集合）与 `selectedId`（主选）。
+ *   而"点一下幽灵音符"走的是 `select(id, true)`：id 进 `selectedId`、**不进** `selectedIds`。
+ *   只认 `selectedIds` 的话，点完幽灵再拖会发现"它不在选区里"，跨轨拖动根本起不来。
+ */
+function currentSelection() {
+  const out = props.selectedIds.slice();
+  if (props.selectedId && !out.includes(props.selectedId)) out.push(props.selectedId);
+  return out;
+}
+
+/** 选区 → 带轨信息的原位表（拖拽开始时拍一次快照；之后只用它算增量） */
+function crossOrig(ids) {
+  const out = [];
+  for (const id of ids || []) {
+    const hit = findNoteAny(id);
+    if (!hit) continue;
+    out.push({ id, trackId: hit.trackId, b0: hit.n.startBeat, p0: hit.n.pitch, d0: hit.n.durBeat });
+  }
+  return out;
+}
+
+/**
+ * 把一次拖拽的增量写回。跨轨时走宿主的 `moveNotesById`（一次调用、一个撤销点）；
+ * 宿主没实现时**只动当前轨** —— 宁可少动，也不能把幽灵的坐标算到别人身上。
+ */
+function applyMove(orig, dBeat, dPitch) {
+  if (!orig || !orig.length) return 0;
+  const cross = orig.some(o => (o.trackId || props.activeTrackId) !== props.activeTrackId);
+  if (!cross) {
+    for (const o of orig) {
+      props.api.updateNote(o.id, {
+        startBeat: Math.max(0, o.b0 + dBeat),
+        pitch: Math.max(0, Math.min(127, o.p0 + dPitch)),
+      });
+    }
+    return orig.length;
+  }
+  const moves = orig.map(o => ({
+    trackId: o.trackId || props.activeTrackId,
+    noteId: o.id,
+    startBeat: Math.max(0, o.b0 + dBeat),
+    pitch: Math.max(0, Math.min(127, o.p0 + dPitch)),
+  }));
+  if (typeof props.api.moveNotesById === 'function') {
+    props.api.moveNotesById(moves);
+    return moves.length;
+  }
+  let n = 0;
+  for (const o of orig) {
+    if ((o.trackId || props.activeTrackId) !== props.activeTrackId) continue;
+    props.api.updateNote(o.id, {
+      startBeat: Math.max(0, o.b0 + dBeat),
+      pitch: Math.max(0, Math.min(127, o.p0 + dPitch)),
+    });
+    n += 1;
+  }
+  return n;
+}
+
+/**
+ * 指针按下时的**决策**（纯函数，不动数据）。
+ * ★ onDown 与验收钩子 probeDown() 共用这一份 —— 上一轮（附录 U）的教训：
+ *   判定逻辑写两份时，"能测到的那条"和"用户走的那条"会悄悄分叉。
+ * @returns {{action:'none'|'create'|'pick-note'|'box'|'move'|'rresize'|'lresize', ghost?:boolean, trackId?:string, noteId?:string, ids?:string[], crossTrack?:boolean, hit?:any}}
+ */
+function decideDown(x, y) {
+  if (!props.canEdit || x < LEFT || y < TOP) return { action: 'none' };
+  const h = hit(x, y);
+  if (tool.value === 'pen' && !h) return { action: 'create' };
+  if (!h) return { action: 'box' };
+  if (h.ghost) {
+    /* ★ 幽灵音符：**已经在跨轨选区里**就直接起拖（整组一起走，跨轨也一起走）；
+       不在选区里才走"点一下 = 选中它"的老路。 */
+    return currentSelection().includes(h.n.id)
+      ? { action: 'move', ghost: true, trackId: h.trackId, noteId: h.n.id, crossTrack: true, hit: h }
+      : { action: 'pick-note', ghost: true, trackId: h.trackId, noteId: h.n.id, hit: h };
+  }
+  const prev = currentSelection();
+  const orig = crossOrig(prev.includes(h.n.id) ? prev : [h.n.id]);
+  return {
+    action: h.side === 'r' ? 'rresize' : h.side === 'l' ? 'lresize' : 'move',
+    ghost: false, trackId: props.activeTrackId, noteId: h.n.id, hit: h,
+    ids: orig.map((o) => o.id), orig,
+    crossTrack: orig.some((o) => (o.trackId || props.activeTrackId) !== props.activeTrackId),
+  };
+}
+
 function onDown(e) {
   if (!props.canEdit) return;
   closeCtx();
   const { x, y } = toXY(e);
-  if (x < LEFT || y < TOP) return;
-  const hitRes = hit(x, y);
+  const d = decideDown(x, y);
+  if (d.action === 'none') return;
 
   // 画笔工具：空白处拖出音符
-  if (tool.value === 'pen' && !hitRes) {
+  if (d.action === 'create') {
     props.api.pushUndo();
     const id = props.api.addNote(snapBeat(beatOf(x)), pitchOf(y));
     props.api.setSelection([id], id);
@@ -407,19 +512,37 @@ function onDown(e) {
     return;
   }
 
-  if (hitRes && hitRes.ghost) {
-    // ★ 多轨叠置下「点别人的音符」= 我要编辑那条轨：切过去并把该音符选上。
-    //   不在这里直接改数据 —— 当前轨的 api 只认自己的音符 id，跨轨编辑必须宿主先换轨。
-    emit('pick-note', { trackId: hitRes.trackId, noteId: hitRes.n.id });
+  if (d.action === 'pick-note') {
+    // 多轨叠置下「点别人的音符」= 选中它（宿主决定是否顺手切轨）；拖动要再按一次
+    emit('pick-note', { trackId: d.trackId, noteId: d.noteId });
     return;
   }
 
-  if (hitRes) {
-    const { n, side } = hitRes;
+  if (d.action === 'box') {
+    drag = { mode: 'box', x0: x, y0: y, x1: x, y1: y, additive: e.shiftKey };
+    try { canvas.value.setPointerCapture(e.pointerId); } catch (err) {}
+    draw();
+    return;
+  }
+
+  if (d.ghost) {
+    // 幽灵在选区里 → 整组（跨轨）拖动
+    props.api.pushUndo();
+    const sel = currentSelection();
+    drag = {
+      mode: 'move', ids: sel, x0: x, y0: y,
+      orig: crossOrig(sel),
+    };
+    try { canvas.value.setPointerCapture(e.pointerId); } catch (err) {}
+    draw();
+    return;
+  }
+
+  if (d.hit) {
+    const { n, side } = d.hit;
     const additive = e.shiftKey || e.ctrlKey || e.metaKey;
     // 先算好本次拖拽要作用的集合：props 要到下一帧才更新，不能 setSelection 后立刻回读
-    const prev = props.selectedIds.length ? props.selectedIds
-      : (props.selectedId ? [props.selectedId] : []);
+    const prev = currentSelection();
     let use, primary = n.id;
     if (additive) {
       use = prev.includes(n.id) ? prev.filter(i => i !== n.id) : [...prev, n.id];
@@ -430,21 +553,18 @@ function onDown(e) {
     }
     props.api.setSelection(use, use.length ? primary : null);
     if (!use.length) { draw(); return; }   // 只是取消了唯一选中，不起拖拽
+    /* ★ 跨轨（M8h）：选区里可能混着别的轨的音符 —— 原位置表要**按轨**取，
+       否则别的轨的音符会被当成当前轨的几何来算，一拖就跳。 */
+    const orig = crossOrig(use);
     props.api.pushUndo();
     drag = {
       mode: side === 'r' ? 'rresize' : side === 'l' ? 'lresize' : 'move',
       ids: use, x0: x, y0: y,
-      orig: use.map(id => {
-        const cur = props.notes.find(z => z.id === id) || n;
-        return { id, b0: cur.startBeat, p0: cur.pitch, d0: cur.durBeat };
-      }),
-      snapshot: use.map(id => {
-        const cur = props.notes.find(z => z.id === id) || n;
-        return { id, b0: cur.startBeat, d0: cur.durBeat };
-      }),
+      orig,
+      // 左右边缘拉伸只对**当前轨**有效（每轨的时长语义要自己的 api），cross-track 不参与
+      snapshot: orig.filter(o => (o.trackId || props.activeTrackId) === props.activeTrackId)
+        .map(o => ({ id: o.id, b0: o.b0, d0: o.d0 })),
     };
-  } else {
-    drag = { mode: 'box', x0: x, y0: y, x1: x, y1: y, additive: e.shiftKey };
   }
   try { canvas.value.setPointerCapture(e.pointerId); } catch (err) {}
   draw();
@@ -455,7 +575,10 @@ function onMove(e) {
   if (!drag) {
     const h = hit(x, y);
     cursor.value = !h ? (tool.value === 'pen' ? 'crosshair' : 'default')
-      : (h.ghost ? 'pointer' : (h.side === 'body' ? 'move' : 'ew-resize'));
+      : (h.ghost
+        // 已经选中的幽灵 = 可以直接拖（整组跨轨移动）；没选中就是"点一下选中"
+        ? (currentSelection().includes(h.n.id) ? 'move' : 'pointer')
+        : (h.side === 'body' ? 'move' : 'ew-resize'));
     return;
   }
   if (drag.mode === 'box') { drag.x1 = x; drag.y1 = y; return draw(); }
@@ -467,12 +590,7 @@ function onMove(e) {
   if (drag.mode === 'move') {
     const dBeat = snapBeat(drag.orig[0].b0 + beatOf(x) - beatOf(drag.x0)) - drag.orig[0].b0;
     const dPitch = pitchOf(y) - pitchOf(drag.y0);
-    for (const o of drag.orig) {
-      props.api.updateNote(o.id, {
-        startBeat: Math.max(0, o.b0 + dBeat),
-        pitch: Math.max(0, Math.min(127, o.p0 + dPitch)),
-      });
-    }
+    applyMove(drag.orig, dBeat, dPitch);
     return draw();
   }
   if (drag.mode === 'rresize') {
@@ -1295,9 +1413,30 @@ function selectBox(x0, y0, x1, y1, additive = false) {
   return next.length;
 }
 
+/**
+ * 验收钩子：按在这里**会发生什么**（与 onDown 共用 decideDown，纯查询、不动数据）。
+ * ★ 上一版这里漏了函数体只有名字（defineExpose 里写了 probeDown 却没定义）——
+ *   对象字面量求值直接 ReferenceError，整个 setup 崩掉、卷帘渲染成注释节点。
+ *   靠"注入错误捕获 + 断言页面真的挂上了"才抓到（构建全绿、控制台不看就发现不了）。
+ */
+function probeDown(x, y) { return decideDown(x, y); }
+
+/**
+ * 验收钩子：按给定的拍/音高增量移动**当前选区**（可跨轨）。
+ * 与真实拖拽共用 `applyMove` —— 于是"能测到的"和"手指走的"是同一条路径。
+ * @returns 实际移动的音符条数
+ */
+function moveSelectionBy(dBeat, dPitch) {
+  const ids = currentSelection();
+  if (!ids.length) return 0;
+  const orig = crossOrig(ids);
+  props.api.pushUndo();                 // 与拖拽一致：一次交互 = 一个撤销点
+  return applyMove(orig, dBeat, dPitch);
+}
+
 defineExpose({
   draw, setupCanvas,
-  hitAt, selectBox,
+  hitAt, selectBox, probeDown, moveSelectionBy, findNoteAny, crossOrig, decideDown,
   noteW, rowH, pitchSpan, totalBeats,
   xOf, beatOf, yOf, pitchOf,
   scrollEl: wrap,

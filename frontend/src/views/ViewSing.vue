@@ -269,16 +269,12 @@ function rollApi() {
     updateNote: (id, patch) => store.updateNote(id, patch),
     removeNote: (id) => store.removeNote(id),
     removeNotes: (ids) => { (ids || []).forEach((id) => store.removeNote(id)); },
-    moveNotes: (ids, dBeat, dPitch) => {
-      for (const id of ids || []) {
-        const n = (tr.value?.notes || []).find((x) => x.id === id);
-        if (!n) continue;
-        store.updateNote(id, {
-          startBeat: Math.max(0, n.startBeat + dBeat),
-          pitch: Math.max(0, Math.min(127, n.pitch + dPitch)),
-        });
-      }
-    },
+    /* ★ 跨轨（M8h）：id 可能属于**别的轨**（跨轨选区里就有幽灵音符）。
+       以前这里只在当前轨里找 —— 于是"跨轨选中后按方向键"什么都不动。
+       现在交给 store 按 id 在哪条轨就在哪条轨上改。 */
+    moveNotes: (ids, dBeat, dPitch) => store.nudgeNotes(ids || [], dBeat, dPitch),
+    /** 跨轨拖动用：按绝对目标一次写回多条轨（卷帘已经在拖拽开始时 pushUndo，这里不再入栈） */
+    moveNotesById: (moves) => store.applyNoteMoves(moves || []),
     setNotesDuration: (ids, durBeat) => {
       for (const id of ids || []) store.updateNote(id, { durBeat: Math.max(0.125, durBeat) });
     },
@@ -1593,7 +1589,9 @@ onMounted(() => {
      正常用户不会命中这条分支。 */
   try {
     if (localStorage.getItem('fufumidi_debug') === '1') {
-      window.__singDebug = { roll: () => prRef.value, singer: store };
+      /* ★ 把卷帘用的**同一个 api 对象**也挂出来：验收时调 api().moveNotes(...) 走的就是
+         方向键/批量微调那条真实路径，不用再另写一份等价逻辑。 */
+      window.__singDebug = { roll: () => prRef.value, singer: store, api: () => rollApi() };
     }
   } catch (e) {}
   // 进页即拉声库列表：歌手选择器是**点选**的，列表为空就等于没法选歌手

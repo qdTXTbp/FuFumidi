@@ -1438,6 +1438,49 @@ export const useSingerStore = defineStore('singer', {
       return await this._renderUtau(tr);
     },
 
+    /**
+     * 跨轨移动音符（M8h 跨轨拖动）：一条 `moves` 里可以混着**不同轨**的音符，
+     * 每条按自己的轨写回 —— 于是"跨轨选中之后一起拖"是**一个撤销点**（撤销点由调用方负责）。
+     * @returns 实际改动的条数
+     */
+    applyNoteMoves(moves: { trackId: string; noteId: string; startBeat?: number; pitch?: number; durBeat?: number }[]) {
+      const seen = new Set<string>();
+      let n = 0;
+      for (const mv of moves || []) {
+        if (!mv || !mv.trackId || !mv.noteId) continue;
+        const key = mv.trackId + '|' + mv.noteId;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const tr = this.tracks.find((t) => t.id === mv.trackId);
+        const note = tr && tr.notes.find((x) => x.id === mv.noteId);
+        if (!note) continue;
+        if (mv.startBeat != null && Number.isFinite(mv.startBeat)) note.startBeat = Math.max(0, mv.startBeat);
+        if (mv.durBeat != null && Number.isFinite(mv.durBeat)) note.durBeat = Math.max(0.0625, mv.durBeat);
+        if (mv.pitch != null && Number.isFinite(mv.pitch)) note.pitch = Math.max(0, Math.min(127, Math.round(mv.pitch)));
+        n += 1;
+      }
+      return n;
+    },
+
+    /**
+     * 按**增量**移动若干音符，id 可以属于任意轨（键盘方向键 / 批量微调走这条）。
+     * 与 applyNoteMoves 的分工：拖拽知道自己每条音符的原位（绝对写回），键盘只知道"往右一格"。
+     */
+    nudgeNotes(ids: string[], dBeat: number, dPitch: number) {
+      let n = 0;
+      for (const id of ids || []) {
+        for (const tr of this.tracks) {
+          const note = tr.notes.find((x) => x.id === id);
+          if (!note) continue;
+          note.startBeat = Math.max(0, note.startBeat + dBeat);
+          note.pitch = Math.max(0, Math.min(127, Math.round(note.pitch + dPitch)));
+          n += 1;
+          break;
+        }
+      }
+      return n;
+    },
+
     /** 丢掉渲染结果（不传则全部清空）；乐句缓存与 A/B 的 A 也一起丢 */
     clearRender(trackId?: string) {
       if (trackId) {
