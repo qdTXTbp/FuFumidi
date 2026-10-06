@@ -53,8 +53,14 @@ const MS_GROUPS = [
   { id: 'drums', cn: '鼓' }, { id: 'timpani', cn: '定音鼓' }, { id: 'chromatic_percussion', cn: '色彩打击乐' },
   { id: 'orchestra_hit', cn: '管弦齐奏' },
 ];
-/** 传给引擎的取值：'auto' / '人声,鼓' 这样的组名列表 / ''（不干预） */
-const msInstrValue = computed(() => (msMode.value === 'limit' ? msGroups.value.join(',') : (msMode.value || '')));
+/** 传给引擎的取值：'auto'（预分析后锁定）/ 'voice,drums'（手动硬约束）/ 'none'（完全不干预）。
+ *  注意 'none' 必须显式送出去：以前「不限定」是不发这个字段，引擎把"没给"当 auto，
+ *  于是"不限定"和"自动识别"跑出来一模一样（用户实测发现）。 */
+const msInstrValue = computed(() => {
+  if (msMode.value === 'limit') return msGroups.value.join(',');
+  if (msMode.value === 'auto') return 'auto';
+  return 'none';
+});
 const busy = ref(false);
 const done = ref(false);
 const progress = ref(0);
@@ -718,7 +724,7 @@ function collectParams() {
       cfg.beat_grid = beatGrid.value;
       // 乐器组约束：'auto' / '人声,鼓' 这样的组名列表 / 空。
       // 注意这条链路有三跳（渲染端 → 主进程 worker 请求体 → 引擎），少任何一跳界面选了都不生效。
-      if (msInstrValue.value) cfg.muscriptor_instruments = msInstrValue.value;
+      cfg.muscriptor_instruments = msInstrValue.value;
       // MuScriptor 批量推理：GPU 上串行 chunk（batch=1）利用率仅 ~65%，批量可提至
       // 2-4× 实时。质量档保持串行 + prelude_forcing（边界延续质量最优）；
       // 均衡/高性能档用批量吞吐（prelude_forcing 关闭，边界质量略降）。
@@ -1275,12 +1281,12 @@ onBeforeUnmount(() => {
             <label>
               <span>
                 <b>{{ t('乐器组') }}</b>
-                <small>{{ t('MuScriptor 逐段判定乐器，同一段旋律可能被写成好几种音色；限定乐器组 = 模型侧硬约束，只允许勾选的组发声') }}</small>
+                <small>{{ t('MuScriptor 逐段判定乐器，同一段旋律可能被写成好几种音色。自动识别 = 转录前先挑几段让模型试听，锁定这首歌真正用到的乐器组；限定乐器组 = 手动指定（模型侧硬约束）') }}</small>
               </span>
               <select v-model="msMode">
-                <option value="auto">{{ t('自动识别并归并（推荐）') }}</option>
+                <option value="auto">{{ t('自动识别乐器组（先试听分析，推荐）') }}</option>
                 <option value="limit">{{ t('限定乐器组（硬约束）') }}</option>
-                <option value="">{{ t('不限定（模型自由判定）') }}</option>
+                <option value="none">{{ t('不限定（模型自由判定）') }}</option>
               </select>
             </label>
           </div>

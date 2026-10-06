@@ -426,9 +426,10 @@ def build_parser():
     g.add_argument("--beat-grid", action="store_true",
                    help="[muscriptor] 加载 Beat This! 权重做节拍网格检测（未下载/失败时自动跳过）")
     g.add_argument("--muscriptor-instruments", dest="muscriptor_instruments", default=None,
-                   help="[muscriptor] 旋律乐器组：auto=智能识别并归并（默认），或逗号分隔的组名"
-                        "（voice / piano / guitar / clean_electric_guitar / synth_lead / flutes / organ …）"
-                        "；不传=不干预（模型自由判定）")
+                   help="[muscriptor] 乐器组：auto=转录前先预分析几段音频再锁定乐器组（默认），"
+                        "或逗号分隔的组名（voice / acoustic_piano / clean_electric_guitar / synth_lead /"
+                        " flutes / organ / drums …，见 muscriptor list-instruments）；"
+                        "不传=不干预（模型自由判定，同一段旋律可能被写成多种音色）")
     g.add_argument("--tempo", type=int, default=None, help="MIDI 速度 BPM（默认 120）")
     g.add_argument("--with-drums", action="store_true",
                    help="[separate] 同时输出鼓组节奏轨")

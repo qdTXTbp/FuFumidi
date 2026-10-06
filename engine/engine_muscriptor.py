@@ -233,21 +233,34 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         # 默认关闭（batch=1 + prelude_forcing=True，边界质量最优）。
         # 实测（RTX 5070 Ti，medium，120s 音频）：batch=1 57s → batch=4 25s → batch=8 23s。
         batch = int(params.get("muscriptor_batch") or 0)
-        # 旋律乐器组：MuScriptor 是多乐器模型，不给约束时它会在同一首歌里改判乐器
+        # 乐器组：MuScriptor 是多乐器模型，逐音符判定乐器组；不约束时它会在同一首歌里改判
         # （实测：同一条旋律 24s 判成 organ、33s 判成 synth lead、96s 变成 voice），
-        # 于是同一条旋律每隔几小节换一次音色。muscriptor 的 transcribe() 支持硬约束
+        # 于是同一段旋律每隔几小节换一次音色。muscriptor 的 transcribe() 支持硬约束
         # （transcription_model.py: "instruments ... is a hard constraint"，内部用
         # forbidden_token_ids 禁止采样其它乐器组）。三种取值：
-        #   'auto'    —— 先不约束，出结果后由 instrument_groups 识别主导组并归并（默认）
-        #   'voice,piano' —— 直接把它作为硬约束交给模型（单次推理即锁定音色）
-        #   ''        —— 完全不干预（保持旧行为）
-        raw_instr = params.get("muscriptor_instruments")
-        if isinstance(raw_instr, (list, tuple)):
-            instr_list = [str(x).strip() for x in raw_instr if str(x).strip()]
-        else:
-            instr_list = [s.strip() for s in str(raw_instr or "").split(",") if s.strip()]
-        auto_mode = (not instr_list) or (len(instr_list) == 1 and instr_list[0].lower() in ("auto", "smart"))
-        constrain = None if auto_mode else instr_list
+        #   'auto'        —— **预分析**：挑几段代表性子样本让模型自己粗听一遍，统计它实际用到的
+        #                    乐器组，再把占比较大的那几组作为硬约束喂给整曲（instrument_probe.py）。
+        #                    这样「自动识别」与「不限定」才有实质差别。
+        #   'voice,piano' —— 直接作为硬约束（界面「限定乐器组（硬约束）」）。
+        #   ''            —— 完全不干预，模型自由判定。
+        import instrument_probe
+        _mode, _groups = instrument_probe.parse_mode(params.get("muscriptor_instruments"))
+        auto_mode = (_mode == "auto")
+        constrain = _groups if _mode == "limit" else None
+        if _mode == "none":
+            _log(log_cb, "未限定乐器组：模型自由判定（同一段旋律可能被写成多种音色）")
+        if auto_mode and not params.get("muscriptor_no_probe"):
+            # 预分析失败一律退回"不限定" —— 它只是提质量，绝不能拖垮转录
+            try:
+                pres = instrument_probe.probe(
+                    model, wav_tmp, log=lambda m: _log(log_cb, m),
+                    count=int(params.get("muscriptor_probe_count") or instrument_probe.PROBE_COUNT))
+                if pres.get("groups"):
+                    constrain = pres["groups"]
+                else:
+                    _log(log_cb, "预分析未得出乐器组（%s），本次不限定" % (pres.get("reason") or "unknown"))
+            except Exception as e:
+                _log(log_cb, "预分析跳过：" + str(e)[:160])
         if constrain:
             _log(log_cb, "旋律乐器组已锁定：" + " / ".join(constrain) + "（模型不会输出其它乐器）")
         t0 = time.perf_counter()
@@ -312,15 +325,9 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     with open(output_midi, "wb") as f:
         f.write(data)
 
-    # 智能识别（auto 模式）：从这一遍的结果里认出主旋律乐器组；
-    # 若同一条旋律被判成了多种乐器且它们在时间上互斥，就归并成一条轨、统一音色。
-    # 手动锁定乐器组时模型已经只输出该组，无需再归并。
-    if auto_mode:
-        try:
-            from instrument_groups import smart_finish
-            smart_finish(output_midi, mode="auto", log=lambda m: _log(log_cb, m))
-        except Exception as e:  # 识别失败绝不能让整次转录失败
-            _log(log_cb, "[识别] 旋律乐器组识别跳过：" + str(e)[:160])
+    # 说明：以前这里还会对转录结果做一遍「按音搬移、把主旋律收进一个音色」的事后归并。
+    # 实测对用户听感几乎没帮助（可动的范围常常只有几十秒），已改为在**模型之前**用
+    # instrument_probe 预分析并锁定乐器组 —— 一次推理就给出正确的组，不再事后搬音符。
 
     # 音符数统计（pretty_midi）
     n = _count_notes(output_midi)
