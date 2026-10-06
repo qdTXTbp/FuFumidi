@@ -1259,8 +1259,35 @@ function fitView() {
   nextTick(() => { setupCanvas(); draw(); });
 }
 
+/* ---------------- 验收钩子（M8d 前置） ----------------
+   ★ 为什么需要：卷帘的框选/命中都在指针事件里，本机验收工装驱动不了（真实鼠标与合成事件都试过，
+     连"只框当前轨"的基线都选不中）——于是"跨轨框选"写完了却证明不了，只能回退。
+     这里把**同样的逻辑**以函数形式暴露出去：命中判定与框选各一个入口，
+     让验收能确定性地驱动它们（和音乐编辑器那边的 `hitAt` 一个思路）。
+     只读/只走既有逻辑，不新增行为。 */
+function hitAt(x, y) {
+  const h = hit(x, y);
+  if (!h) return null;
+  return { noteId: h.n && h.n.id, ghost: !!h.ghost, trackId: h.trackId || props.activeTrackId, side: h.side || null };
+}
+/** 用与 `onUp` 里**完全相同**的判定逻辑做一次框选（不给指针事件，直接给框） */
+function selectBox(x0, y0, x1, y1, additive = false) {
+  const ax = Math.min(x0, x1), ay = Math.min(y0, y1);
+  const bx = Math.max(x0, x1), by = Math.max(y0, y1);
+  const ids = [];
+  for (const n of props.notes) {
+    const g = noteGeo(n);
+    if (g.x < bx && g.x + g.w > ax && g.y < by && g.y + g.h > ay) ids.push(n.id);
+  }
+  const prev = props.selectedIds;
+  const next = additive ? Array.from(new Set([...prev, ...ids])) : ids;
+  props.api.setSelection(next, next[0] ?? null);
+  return next.length;
+}
+
 defineExpose({
   draw, setupCanvas,
+  hitAt, selectBox,
   noteW, rowH, pitchSpan, totalBeats,
   xOf, beatOf, yOf, pitchOf,
   scrollEl: wrap,

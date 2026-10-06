@@ -284,8 +284,13 @@ function rollApi() {
     select: (id, add) => store.select(id, add),
     selectMany: (ids) => store.selectMany(ids),
     setSelection: (ids, primary) => {
-      store.selectMany(ids || []);
-      store.select(primary ?? (ids && ids.length ? ids[0] : null));
+      /* ★ 修一个真 bug（M8d 验收钩子查出来的）：原来 selectMany(ids) 之后再 select(primary)，
+         而 select 是**非加选**语义 —— 它会把 selectedIds 清空，
+         于是卷帘里的框选 / Shift 加选**永远只剩一个音符**，调教页那排批量工具（要求选中 ≥2 个）
+         因此从来没出现过。这里改成"一次写完"，不再让 select 覆盖集合。 */
+      const list = ids || [];
+      store.selectMany(list);
+      store.selectedId = primary ?? (list.length ? list[0] : null);
     },
     selectAll: () => store.selectMany(noteIds()),
     getPitchPoints: () => (tr.value?.pitchCurve || []).map((p) => ({ beat: p.beat, cents: p.cents })),
@@ -1577,6 +1582,14 @@ watch(() => store.renderUrl, () => { void reloadTransport(); });
 /* 页面级快捷键只在「调教」页挂载期间生效（切走即摘掉） */
 onMounted(() => {
   window.addEventListener('keydown', onSingKey);
+  /* 验收桥（M8d 前置）：生产包里拿不到组件实例，所以像音乐编辑器那样留一个显式开关
+     （localStorage.fufumidi_debug = '1'），把卷帘实例与 store 挂到 window 供 CDP 验收使用。
+     正常用户不会命中这条分支。 */
+  try {
+    if (localStorage.getItem('fufumidi_debug') === '1') {
+      window.__singDebug = { roll: () => prRef.value, singer: store };
+    }
+  } catch (e) {}
   // 进页即拉声库列表：歌手选择器是**点选**的，列表为空就等于没法选歌手
   void store.loadBanks();
 });
