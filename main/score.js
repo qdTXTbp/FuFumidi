@@ -77,12 +77,19 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
     const win = BrowserWindow.fromWebContents(evt.sender);
     (async () => {
       const opts = cfg || {};
-      let src = opts.path || '';
-      let pages = Array.isArray(opts.pages) ? opts.pages.filter((x) => typeof x === 'string' && x.length > 32) : [];
-      if (!src && !pages.length) {
+      // ★ 多选：cfg.inputs 是**有序**的 [{path} | {pages}]（PDF 由渲染进程栅格化后回填 pages）。
+      //   兼容旧的单个 path / pages 写法。
+      let items = Array.isArray(opts.inputs) ? opts.inputs.filter((x) => x && (x.path || (x.pages && x.pages.length))) : [];
+      if (!items.length) {
+        const src0 = opts.path || '';
+        const pages0 = Array.isArray(opts.pages) ? opts.pages.filter((x) => typeof x === 'string' && x.length > 32) : [];
+        if (src0) items = [{ path: src0 }];
+        else if (pages0.length) items = [{ pages: pages0 }];
+      }
+      if (!items.length) {
         const picked = await dialog.showOpenDialog(win, {
-          title: '选择谱面（MusicXML / PDF / 图片 / MIDI）',
-          properties: ['openFile'],
+          title: '选择谱面（可多选：MusicXML / PDF / 图片 / MIDI）',
+          properties: ['openFile', 'multiSelections'],
           filters: [
             { name: '全部支持的谱面', extensions: [...SCORE_EXT, 'pdf', ...RASTER_EXT, ...MIDI_EXT] },
             { name: '乐谱（MusicXML / MXL）', extensions: SCORE_EXT },
@@ -93,50 +100,74 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
           ],
         });
         if (picked.canceled || !picked.filePaths || !picked.filePaths.length) return resolve({ ok: false, canceled: true });
-        src = picked.filePaths[0];
+        items = picked.filePaths.map((p) => ({ path: p }));
       }
-      if (src && !fs.existsSync(src)) return resolve({ ok: false, error: '找不到文件：' + src });
+      for (const it of items) {
+        if (it.path && !fs.existsSync(it.path)) return resolve({ ok: false, error: '找不到文件：' + it.path });
+      }
       if (!spawnEngine) return resolve({ ok: false, error: '引擎不可用（spawnEngine 未注入）' });
 
       const work = path.join(Paths.tempDir(), 'fufumidi', 'score2midi_' + Date.now());
       fs.mkdirSync(work, { recursive: true });
       const out = path.join(work, 'out.mid');
       const overlayDir = path.join(work, 'overlay');
-      const name = opts.name || (src ? path.basename(src) : 'score.pdf');
-      const ext = extOf(src || name);
-      const kind = pages.length ? 'raster' : (MIDI_EXT.includes(ext) ? 'midi' : (RASTER_EXT.includes(ext) || ext === 'pdf' ? 'raster' : 'score'));
+      const names = items.map((it) => (it.path ? path.basename(it.path) : 'page.png'));
+      const name = opts.name || names[0] || 'score.pdf';
+      const kindOf = (it) => {
+        if (it.pages && it.pages.length) return 'raster';
+        const e = extOf(it.path);
+        if (MIDI_EXT.includes(e)) return 'midi';
+        if (RASTER_EXT.includes(e) || e === 'pdf') return 'raster';
+        return 'score';
+      };
+      const kinds = [...new Set(items.map(kindOf))];
+      if (kinds.length > 1) {
+        return resolve({ ok: false, error: '不要混着选：图片 / PDF 是一类，MusicXML 是一类，MIDI 是一类。', errorCode: 'mixed', kind: kinds[0] });
+      }
+      const kind = kinds[0];
 
       // PDF：主进程没有栅格化能力（Electron 的 PDF 插件翻页拿不到），
-      // 交回渲染进程用 pdf.js 渲染成 PNG 再调一次。
-      if (kind === 'raster' && !pages.length && ext === 'pdf') {
-        return resolve({ ok: false, needRaster: true, sourcePath: src, fileName: name, kind: 'pdf' });
+      // 交回渲染进程用 pdf.js 渲染成 PNG 再调一次（多选时逐个 PDF 都要渲）。
+      if (kind === 'raster' && items.some((it) => !it.pages && extOf(it.path) === 'pdf')) {
+        return resolve({ ok: false, needRaster: true, inputs: items, fileName: name, names, kind: 'pdf' });
       }
 
-      // MIDI：本来就是 MIDI，直接回字节
+      // MIDI：本来就是 MIDI，直接回字节（多选只取第一个）
       if (kind === 'midi') {
         try {
-          const bytes = fs.readFileSync(src).toString('base64');
-          return resolve({ ok: true, kind: 'midi', passthrough: true, bytes, sourcePath: src, fileName: name,
-                           info: { ok: true, kind: 'midi', noteCount: 0, tracks: [] } });
+          const bytes = fs.readFileSync(items[0].path).toString('base64');
+          const info = { ok: true, kind: 'midi', noteCount: 0, tracks: [], warnings: [] };
+          if (items.length > 1) info.warnings.push({ code: 'only-first', n: items.length });
+          return resolve({ ok: true, kind: 'midi', passthrough: true, bytes, sourcePath: items[0].path, fileName: name,
+                           names, info });
         } catch (e) { return resolve({ ok: false, error: '读取 MIDI 失败：' + String(e) }); }
       }
 
-      // 栅格页（PDF 由渲染进程栅格化后送过来）：落成 PNG 文件
-      let inputs = [];
-      if (pages.length) {
-        const MAXP = 60;
-        pages = pages.slice(0, MAXP);
-        for (let i = 0; i < pages.length; i++) {
-          const p = path.join(work, 'page-' + String(i + 1).padStart(3, '0') + '.png');
-          fs.writeFileSync(p, Buffer.from(pages[i], 'base64'));
-          inputs.push(p);
+      // 栅格页（PDF 由渲染进程栅格化后送过来）：落成 PNG 文件，保持用户选择的先后顺序
+      const inputs = [];
+      let pageNo = 0;
+      let truncated = false;
+      const MAXP = 60;
+      for (const it of items) {
+        if (it.pages && it.pages.length) {
+          for (const b64 of it.pages) {
+            if (pageNo >= MAXP) { truncated = true; break; }
+            pageNo += 1;
+            const p = path.join(work, 'page-' + String(pageNo).padStart(3, '0') + '.png');
+            fs.writeFileSync(p, Buffer.from(b64, 'base64'));
+            inputs.push(p);
+          }
+        } else {
+          inputs.push(it.path);
         }
-      } else {
-        inputs = [src];
+        if (truncated) break;
       }
+      // MusicXML 解析器一次只吃一个文件：多选时只转第一个并如实回报
+      const multiOnlyFirst = kind === 'score' && items.length > 1;
 
       const args = ['to-midi'];
-      for (const p of inputs) args.push('--in', p);
+      const feed = kind === 'score' ? inputs.slice(0, 1) : inputs;
+      for (const p of feed) args.push('--in', p);
       args.push('--out', out, '--overlay', overlayDir);
       if (kind === 'raster') {
         args.push('--beats', String(Math.max(1, Math.min(16, Number(opts.beats) || 4))));
@@ -158,14 +189,17 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
           onError: (e) => finish({ ok: false, error: String(e) }),
         });
       });
-      if (!res || !res.ok) return resolve({ ok: false, error: (res && res.error) || '转换失败', sourcePath: src, fileName: name, kind });
+      if (!res || !res.ok) return resolve({ ok: false, error: (res && res.error) || '转换失败', inputs: items, fileName: name, names, kind });
       let bytes = null;
       try { bytes = fs.readFileSync(out).toString('base64'); } catch (e) { return resolve({ ok: false, error: '读回 MIDI 失败：' + String(e) }); }
       let overlays = [];
       try {
         overlays = (res.overlays || []).filter((p) => { try { return fs.existsSync(p); } catch (e) { return false; } });
       } catch (e) {}
-      resolve({ ok: true, kind, info: res, bytes, overlays, sourcePath: src || '', fileName: name });
+      // 多选相关的如实回报（界面按 code 翻译）
+      if (multiOnlyFirst) { res.warnings = (res.warnings || []).concat([{ code: 'only-first', n: items.length }]); }
+      if (truncated) { res.warnings = (res.warnings || []).concat([{ code: 'page-cap', n: MAXP }]); }
+      resolve({ ok: true, kind, info: res, bytes, overlays, sourcePath: (feed[0] || ''), fileName: name, names });
     })().catch((e) => resolve({ ok: false, error: String((e && e.message) || e) }));
   }));
 }

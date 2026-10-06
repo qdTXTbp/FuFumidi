@@ -93,10 +93,12 @@ async function run(fn: () => Promise<any>) {
       </button>
     </div>
 
-    <p v-if="msg" class="vbp-msg small">{{ msg }}</p>
+    <Transition name="fade">
+      <p v-if="msg" class="vbp-msg small">{{ msg }}</p>
+    </Transition>
 
     <!-- ============ 已装声库：一份混排列表 ============ -->
-    <section class="vbp-card" data-guide="banks-installed">
+    <section class="vbp-card vbp-card-in" style="--i: 0" data-guide="banks-installed">
       <div class="vbp-title">
         <Icon name="mic" :size="13" /> {{ t('已装声库') }}
         <span class="sp" />
@@ -113,7 +115,7 @@ async function run(fn: () => Promise<any>) {
 
       <p v-if="!shown.length" class="muted small">{{ t('还没有声库。') }}</p>
       <ul v-else class="vbp-list">
-        <li v-for="b in shown" :key="b.engine + b.dir">
+        <li v-for="(b, i) in shown" :key="b.engine + b.dir" class="vbp-row" :style="{ '--i': i }">
           <span class="tag" :class="'e-' + b.engine">{{ b.engine === 'utau' ? 'UTAU' : 'DS' }}</span>
           <span class="nm">{{ b.name }}</span>
           <span class="dir muted small" :title="b.dir">{{ b.dir }}</span>
@@ -129,6 +131,7 @@ async function run(fn: () => Promise<any>) {
       </ul>
 
       <!-- 体检结果：一行一条，error 红、warn 黄，附可执行建议 -->
+      <Transition name="vbp-drop">
       <div v-if="probe" class="vbp-probe">
         <div class="vbp-probe-head">
           <b>{{ t('体检：') }}{{ probe.name }}</b>
@@ -138,7 +141,7 @@ async function run(fn: () => Promise<any>) {
         </div>
         <p v-if="probe.error" class="edt-msg small bad">{{ probe.error }}</p>
         <ul class="vbp-checks">
-          <li v-for="c in probe.checks" :key="c.id" :class="c.level">
+          <li v-for="(c, i) in probe.checks" :key="c.id" :class="c.level" class="vbp-check" :style="{ '--i': i }">
             <i>{{ c.level === 'ok' ? '✓' : (c.level === 'warn' ? '!' : '×') }}</i>
             <span class="txt">{{ c.text }}</span>
             <span v-if="c.fix" class="fix muted small">{{ c.fix }}</span>
@@ -148,11 +151,12 @@ async function run(fn: () => Promise<any>) {
           {{ t('统计：') }}{{ JSON.stringify(probe.stats) }}
         </p>
       </div>
+      </Transition>
     </section>
 
 
     <!-- ============ DiffSinger 推理组件 ============ -->
-    <section class="vbp-card" data-guide="banks-ds">
+    <section class="vbp-card vbp-card-in" style="--i: 1" data-guide="banks-ds">
       <div class="vbp-title">
         <Icon name="gear" :size="13" /> {{ t('DiffSinger 推理组件') }}
         <span class="sp" />
@@ -223,6 +227,31 @@ async function run(fn: () => Promise<any>) {
 .seg button.on { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-text); }
 .vbp-list .tag { font-size: 10px; padding: 1px 5px; border-radius: 4px;
                  border: 1px solid var(--border); flex: none; }
+
+/* ---------------- 动效：跟全局一套（0.2~0.34s + cubic-bezier(.2,.7,.3,1)） ----------------
+   ★ 这一页原来一个过渡都没有：切到「声库」页签是整页硬切，列表、体检结果都是「啪」地出现。 */
+/* 两块卡片：入页时错位滑入 */
+.vbp-card-in { animation: vbpCardIn .3s cubic-bezier(.2, .7, .3, 1) both;
+               animation-delay: calc(var(--i, 0) * 60ms); }
+@keyframes vbpCardIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+/* 声库行：逐行入场 + 悬停高亮（行多时延迟封顶，不然最后一行要等一秒） */
+.vbp-row { animation: vbpRowIn .28s cubic-bezier(.2, .7, .3, 1) both;
+           animation-delay: calc(min(var(--i, 0), 12) * 26ms);
+           border-radius: 6px; transition: background .18s ease, transform .18s ease; }
+.vbp-row:hover { background: color-mix(in srgb, var(--brand-soft) 60%, transparent); transform: translateX(2px); }
+@keyframes vbpRowIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* 体检面板：高度 + 透明度一起过渡（max-height 给足余量，内容多了也不会被裁） */
+.vbp-drop-enter-active, .vbp-drop-leave-active {
+  transition: opacity .24s cubic-bezier(.2,.7,.3,1), transform .24s cubic-bezier(.2,.7,.3,1), max-height .3s cubic-bezier(.2,.7,.3,1);
+  overflow: hidden; max-height: 1200px; }
+.vbp-drop-enter-from, .vbp-drop-leave-to { opacity: 0; transform: translateY(-6px); max-height: 0; }
+/* 体检结果逐条入场 */
+.vbp-check { animation: vbpCheckIn .24s cubic-bezier(.2, .7, .3, 1) both;
+             animation-delay: calc(min(var(--i, 0), 16) * 22ms); }
+@keyframes vbpCheckIn { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }
+/* 分段筛选 / 卡片状态：状态变化平滑过渡，不要瞬间跳色 */
+.seg button { transition: border-color .18s ease, background .18s ease, color .18s ease; }
+.vbp-st { transition: border-color .28s cubic-bezier(.2,.7,.3,1), background .28s ease; }
 .tag.e-utau { background: rgba(80, 190, 120, .18); }
 .tag.e-diffsinger { background: rgba(64, 140, 255, .18); }
 .vbp-list .inuse { font-size: 10.5px; color: var(--brand-text); flex: none; }

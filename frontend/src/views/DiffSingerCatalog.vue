@@ -249,7 +249,7 @@ onActivated(() => { if (!loading.value) refresh(); });
 
     <!-- 分组列表：作品 → 目录 → 模型卡片 -->
     <div v-else class="ds-groups">
-      <section v-for="w in filteredWorks" :key="w.id" class="ds-work">
+      <section v-for="(w, wi) in filteredWorks" :key="w.id" class="ds-work" :style="{ '--wi': wi }">
         <div class="ds-work-head">
           <span class="ds-work-ic"><Icon name="music" :size="15" /></span>
           <b>{{ w.label }}</b>
@@ -265,10 +265,11 @@ onActivated(() => { if (!loading.value) refresh(); });
           </div>
           <div class="ds-grid">
             <div
-              v-for="m in c.models"
+              v-for="(m, mi) in c.models"
               :key="m.path"
               class="ds-card"
               :class="{ ph: m.placeholder, inst: m.installed, down: isBusy(m.name) }"
+              :style="{ '--i': mi }"
             >
               <div class="ds-card-top">
                 <span class="ds-name" :title="m.name">{{ m.name }}</span>
@@ -368,6 +369,19 @@ onActivated(() => { if (!loading.value) refresh(); });
 .ds-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 9px; }
 .ds-card { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 10px 11px; border: 1px solid var(--hairline); border-radius: 11px; background: var(--surface); overflow: hidden; transition: border-color .15s, background .15s; }
 .ds-card:hover { border-color: color-mix(in srgb, var(--brand-coral) 30%, var(--hairline)); }
+/* ---------- 动效（与全局同一套：0.2~0.34s + cubic-bezier(.2,.7,.3,1)） ----------
+   目录页原来只有进度条在动：切页签整块硬出现、卡片没有任何反馈。 */
+.ds-work { animation: dsWorkIn .3s cubic-bezier(.2,.7,.3,1) both; animation-delay: calc(min(var(--wi, 0), 6) * 55ms); }
+@keyframes dsWorkIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+/* 卡片：逐个入场 + 悬停抬升（同屏几十张，延迟封顶 14 张，免得最后一张等半秒） */
+.ds-card { animation: dsCardIn .28s cubic-bezier(.2,.7,.3,1) both;
+           animation-delay: calc(min(var(--i, 0), 14) * 22ms);
+           transition: transform .18s cubic-bezier(.2,.7,.3,1), box-shadow .2s ease, border-color .18s ease, background .2s ease; }
+@keyframes dsCardIn { from { opacity: 0; transform: translateY(6px) scale(.985); } to { opacity: 1; transform: none; } }
+.ds-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-sm, 0 4px 14px rgba(0,0,0,.08)); }
+.ds-wchip { transition: background .18s ease, color .18s ease, border-color .18s ease, transform .18s ease; }
+.ds-wchip:hover { transform: translateY(-1px); }
+.ds-wchip.active { transition: background .24s cubic-bezier(.2,.7,.3,1), border-color .24s cubic-bezier(.2,.7,.3,1); }
 .ds-card.inst { background: color-mix(in srgb, var(--brand-coral) 4%, var(--surface)); border-color: color-mix(in srgb, var(--brand-coral) 22%, var(--hairline)); }
 .ds-card.ph { opacity: .62; }
 .ds-card.down { border-color: color-mix(in srgb, var(--brand-coral) 45%, var(--hairline)); }

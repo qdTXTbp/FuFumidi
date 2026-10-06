@@ -2365,11 +2365,14 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
     </section>
     </div>
 
-    <!-- ==================== 声库（原独立页并入同一入口） ==================== -->
-    <VoicebankPanel v-if="tab === 'banks'" class="sing-banks" />
+    <!-- ==================== 声库（原独立页并入同一入口） ====================
+         页签切换加一次淡入上浮（全局 .view-* 那套）：原来声库面板是整块硬切进来的。 -->
+    <Transition name="view" mode="out-in">
+      <VoicebankPanel v-if="tab === 'banks'" class="sing-banks" key="banks" />
+    </Transition>
 
     <!-- ==================== 声库制作（原独立路由 /voicebank） ==================== -->
-    <div v-show="tab === 'maker'" class="sing-maker">
+    <div v-show="tab === 'maker'" class="sing-maker" :class="{ 'sing-in': tab === 'maker' }">
       <ViewVoicebank />
     </div>
   </div>
@@ -2449,6 +2452,9 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 /* 声库制作页签：整块撑开（内部是 flex 布局：工具栏 + 片段列表/波形） */
 .sing-maker { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px 18px; background: var(--canvas); }
 .sing-maker > * { min-height: 100%; }
+/* 声库制作页切进来时一次性淡入（v-show 不会触发 Transition，用动画类代替） */
+.sing-maker.sing-in { animation: singMakerIn .28s cubic-bezier(.2, .7, .3, 1) both; }
+@keyframes singMakerIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 /* ---- 左：轨道列表 ---- */
 .trk { width: 264px; flex: none; display: flex; flex-direction: column;

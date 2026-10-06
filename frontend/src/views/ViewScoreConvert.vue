@@ -28,6 +28,8 @@ const midiBytes = ref<Uint8Array | null>(null);
 const tracks = ref<any[]>([]);
 const previewEl = ref<HTMLCanvasElement | null>(null);
 const overlays = ref<string[]>([]);        // 对照图 objectURL
+const files = ref<string[]>([]);            // 本次转换吃进去的文件（多选/拖拽时是多个）
+const dropOn = ref(false);                  // 拖拽悬停高亮
 const ovIndex = ref(0);
 const progress = ref(0);
 const progressText = ref('');
@@ -120,30 +122,51 @@ async function run(cfg: any) {
   return await b.scoreToMidi(cfg);
 }
 
-async function pick() {
+/** 单选/多选/拖拽都汇到这里：inputs 是**有序**的 [{path} | {pages}]。 */
+async function convert(inputs: any[], label?: string) {
   const b = bridge();
   if (!b || typeof b.scoreToMidi !== 'function') { err.value = t('桌面版才能用「变谱」'); return; }
   busy.value = true; err.value = ''; info.value = null; midiBytes.value = null; tracks.value = [];
   progress.value = 0; progressText.value = t('读取文件…');
+  files.value = (inputs || []).map((it: any) => it.name || String(it.path || '').split(/[\\/]/).pop() || 'page');
   await loadOverlays([]);
   try {
     const base = { beats: beats.value, beatType: beatType.value, tempo: tempo.value };
-    let r = await run({ ...base });
+    let r = await run({ ...base, inputs });
     if (!r || r.canceled) return;
-    // PDF：渲染进程先栅格化，再把页图送回去
-    if (!r.ok && r.needRaster && r.sourcePath) {
+    // PDF：渲染进程逐页栅格化（多选时每个 PDF 都要渲），再把页图按原顺序送回去
+    if (!r.ok && r.needRaster && Array.isArray(r.inputs)) {
       srcName.value = r.fileName || '';
-      const pages = await rasterizePdf(r.sourcePath);
+      files.value = (r.names && r.names.length) ? r.names.slice() : files.value;
+      const total = r.inputs.filter((it: any) => !it.pages && /\.pdf$/i.test(String(it.path || ''))).length;
+      let donePdf = 0;
+      const filled: any[] = [];
+      for (const it of r.inputs) {
+        if (!it.pages && /\.pdf$/i.test(String(it.path || ''))) {
+          donePdf += 1;
+          progressText.value = t('渲染 PDF ') + donePdf + '/' + total;
+          filled.push({ ...it, pages: await rasterizePdf(it.path) });
+        } else {
+          filled.push(it);
+        }
+      }
       progress.value = 62; progressText.value = t('识谱中…');
-      r = await run({ ...base, path: r.sourcePath, pages, name: r.fileName });
+      r = await run({ ...base, inputs: filled, name: r.fileName });
     }
-    // 图片：引擎读不了（例如 AVIF）就退回 Chromium 解码再送回来
-    if (!r.ok && !r.canceled && r.kind === 'raster' && r.sourcePath) {
-      const pages = await rasterizeImage(r.sourcePath);
+    // 图片：引擎读不了（例如 AVIF）就整批退回 Chromium 解码再送回来
+    if (!r.ok && !r.canceled && r.kind === 'raster' && Array.isArray(r.inputs)) {
+      const filled: any[] = [];
+      for (const it of r.inputs) {
+        if (it.pages && it.pages.length) { filled.push(it); continue; }
+        filled.push({ pages: await rasterizeImage(it.path) });
+      }
       progress.value = 62; progressText.value = t('识谱中…');
-      r = await run({ ...base, path: r.sourcePath, pages, name: r.fileName });
+      r = await run({ ...base, inputs: filled, name: r.fileName });
     }
-    if (!r || !r.ok) { err.value = String((r && r.error) || t('转换失败')); return; }
+    if (!r || !r.ok) {
+      err.value = r && r.errorCode === 'mixed' ? t('不要混着选：图片 / PDF 是一类，MusicXML 是一类，MIDI 是一类。') : String((r && r.error) || t('转换失败'));
+      return;
+    }
     kind.value = r.kind || '';
     const bytes = b64ToBytes(r.bytes || '');
     midiBytes.value = bytes;
@@ -157,15 +180,31 @@ async function pick() {
       drawPreview();
     } catch (e) { /* 预览失败不影响导入 */ }
     if (r.overlays && r.overlays.length) await loadOverlays(r.overlays);
+    if (r.names && r.names.length) files.value = r.names.slice();
     progress.value = 100;
     const n = (r.info && (r.info.notes || r.info.noteCount)) || 0;
     app.toast(t('已转换：') + String(n) + t(' 个音符'), 'ok');
+    if (label) srcName.value = label;
   } catch (e: any) {
     err.value = String((e && e.message) || e);
   } finally {
     busy.value = false;
     progressText.value = '';
   }
+}
+
+async function pick() { await convert([]); }
+
+/** 拖拽导入：Electron 里 File 对象拿不到路径，走 preload 的 webUtils 桥。 */
+async function onDrop(e: DragEvent) {
+  e.preventDefault();
+  dropOn.value = false;
+  const b = bridge();
+  const list = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+  if (!list.length) return;
+  const inputs = list.map((f) => ({ path: b.pathForFile ? b.pathForFile(f) : '', name: f.name })).filter((x) => x.path);
+  if (!inputs.length) { err.value = t('拖进来的文件拿不到路径'); return; }
+  await convert(inputs);
 }
 
 /** 试看：把所有声部画成一条紧凑的钢琴卷帘（按声部着色） */
@@ -209,6 +248,8 @@ const warnings = computed<string[]>(() => {
     if (w && w.code === 'lowres') return t('页面分辨率偏低（谱线间距 ') + w.spacing + t(' 像素）：变化音记号可能识别不全，建议每页宽度 1200 像素以上。');
     if (w && w.code === 'no-barlines') return t('没有识别到小节线，节奏只能按整页平均估算。');
     if (w && w.code === 'no-accidentals') return t('没有识别到变化音记号：如果原谱有升/降号，请调高分辨率后重试。');
+    if (w && w.code === 'only-first') return t('一次只能转换一个这种文件，只用了第一个（共选了 ') + w.n + t(' 个）。');
+    if (w && w.code === 'page-cap') return t('页数超过上限，只取了前 ') + w.n + t(' 页。');
     return String((w && w.code) || w || '');
   });
 });
@@ -256,10 +297,12 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); for (const u of overlayU
   <div class="sc-wrap">
     <div class="sc-head">
       <div class="sc-title"><Icon name="score" :size="16" /> {{ t('变谱') }}</div>
-      <div class="sc-sub">{{ t('任何形态的谱面，直接变成可编辑的 MIDI 工程。') }}</div>
+      <div class="sc-sub">{{ t('任何形态的谱面，直接变成可编辑的 MIDI 工程；支持多选与拖拽。') }}</div>
     </div>
 
-    <div class="sc-card sc-in">
+    <div class="sc-card sc-in" :class="{ 'sc-drop': dropOn }"
+         @dragenter.prevent="dropOn = true" @dragover.prevent="dropOn = true"
+         @dragleave="dropOn = false" @drop="onDrop">
       <div class="sc-row">
         <button class="btn primary sc-main" :disabled="busy" @click="pick">
           <Icon name="import" :size="14" />
@@ -275,8 +318,14 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); for (const u of overlayU
       <div class="sc-prog" v-if="busy">
         <div class="sc-prog-bar" :style="{ width: Math.max(4, progress) + '%' }"></div>
       </div>
+      <TransitionGroup v-if="files.length" name="sc-file" tag="ul" class="sc-files">
+        <li v-for="(f, i) in files" :key="f + i">
+          <Icon name="score" :size="11" /> <span>{{ f }}</span>
+        </li>
+      </TransitionGroup>
       <div class="sc-hint">
         {{ t('图片与 PDF 走光学识谱：分辨率越高越准，建议每页宽度 1200 像素以上、五线谱占满页面。') }}
+        {{ t('可以多选：一次选多张图片，或把多个文件直接拖进来。') }}
       </div>
       <div class="sc-opts">
         <label class="sc-opt">
@@ -353,7 +402,7 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); for (const u of overlayU
 .sc-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; color: var(--text); }
 .sc-sub { margin-top: 4px; font-size: 12.5px; color: var(--muted); }
 .sc-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
-.sc-in { animation: scIn 0.26s cubic-bezier(0.22, 0.7, 0.24, 1) both; }
+.sc-in { animation: scIn 0.28s cubic-bezier(.2,.7,.3,1) both; }
 @keyframes scIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .sc-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .sc-main { min-width: 168px; }
@@ -363,6 +412,21 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); for (const u of overlayU
 .sc-prog-bar { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #5ac8fa, #bf5af2, #5ac8fa); background-size: 200% 100%; animation: scFlow 1.1s linear infinite; transition: width 0.3s ease; }
 @keyframes scFlow { from { background-position: 0 0; } to { background-position: 200% 0; } }
 .sc-hint { margin-top: 10px; font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+/* 拖拽悬停：整卡描边亮起（时长/缓动跟全局一致：0.2~0.34s + cubic-bezier(.2,.7,.3,1)） */
+.sc-card.sc-drop { border-color: color-mix(in srgb, #5ac8fa 60%, var(--line));
+  background: color-mix(in srgb, #5ac8fa 8%, var(--panel));
+  transition: border-color .2s cubic-bezier(.2,.7,.3,1), background .2s cubic-bezier(.2,.7,.3,1); }
+/* 文件列表：多选/拖拽进来的文件逐个滑入 */
+.sc-files { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.sc-files li { display: inline-flex; align-items: center; gap: 5px; max-width: 260px;
+  padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg);
+  font-size: 11px; color: var(--muted); }
+.sc-files li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-file-enter-active { transition: opacity .24s cubic-bezier(.2,.7,.3,1), transform .24s cubic-bezier(.2,.7,.3,1); }
+.sc-file-leave-active { transition: opacity .16s ease, transform .16s ease; position: absolute; }
+.sc-file-enter-from { opacity: 0; transform: translateY(-6px) scale(.96); }
+.sc-file-leave-to { opacity: 0; transform: scale(.96); }
+.sc-file-move { transition: transform .24s cubic-bezier(.2,.7,.3,1); }
 .sc-opts { margin-top: 10px; display: flex; gap: 16px; flex-wrap: wrap; }
 .sc-opt { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .sc-opt select, .sc-opt input { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font-size: 12px; }
@@ -385,6 +449,7 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); for (const u of overlayU
 .sc-ov-box { margin-top: 8px; max-height: 460px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .sc-ov-img { display: block; width: 100%; animation: scFade 0.22s ease both; }
 @keyframes scFade { from { opacity: 0; } to { opacity: 1; } }
+.sc-ov-tabs button:hover { border-color: color-mix(in srgb, #5ac8fa 55%, var(--line)); color: var(--text); }
 .sc-ov-legend { margin-top: 6px; display: flex; gap: 14px; font-size: 11px; color: var(--muted); }
 .lg::before { content: ''; display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
 .lg-note::before { background: #e62828; }
