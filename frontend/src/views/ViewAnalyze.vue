@@ -169,7 +169,10 @@ function jumpToBar(bar) {
   toast(t('已跳转到第 ') + bar + t(' 小节'), 'ok');
 }
 
-const cards = [
+// ★ 不要在模块作用域里调 t()：模块在「应用语言」之前就 import 完了，翻译会被
+//   冻结在启动语言上 —— 实测切到 English 后整页仍是中文（语言切换只重渲染，
+//   不会重新执行模块）。所以这类表一律写成函数，在渲染时求值。
+const cards = () => [
   ['key', t('调性'), t('智能估计')],
   ['bpm', t('速度'), t('BPM（起始）')],
   ['sig', t('拍号'), t('拍')],
@@ -242,7 +245,7 @@ onBeforeUnmount(() => {
       <div class="az-summary card">{{ summaryText() }}</div>
 
       <div class="stat-grid">
-        <div class="stat-card" v-for="([k, label, sub], i) in cards" :key="k">
+        <div class="stat-card" v-for="([k, label, sub], i) in cards()" :key="k">
           <div class="sc-label">{{ label }}</div>
           <div class="sc-value" :class="{ alt: i % 2 }">{{ cardValue(data, k) }}</div>
           <div class="sc-sub">{{ sub }}</div>

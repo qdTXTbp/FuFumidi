@@ -947,7 +947,10 @@ const scaleRoot = ref(Number.isFinite(Number(scaleCfg.root)) ? Number(scaleCfg.r
 const scaleType = ref(scaleCfg.type || 'major');
 const customDegText = ref(scaleCfg.customText || '0,2,4,7,9');
 const ROOT_OPTIONS = KEY_NAME.map((n, i) => [i, n]);
-const SCALE_MODE_OPTIONS = [['off', t('关闭')], ['highlight', t('高亮调内音')], ['constrain', t('约束到音阶')]];
+// ★ 不要在模块作用域里调 t()：模块在「应用语言」之前就 import 完了，翻译会被
+//   冻结在启动语言上 —— 实测切到 English 后整页仍是中文（语言切换只重渲染，
+//   不会重新执行模块）。所以这类表一律写成函数，在渲染时求值。
+const SCALE_MODE_OPTIONS = () => [['off', t('关闭')], ['highlight', t('高亮调内音')], ['constrain', t('约束到音阶')]];
 /** 传给画布的显式音阶；主音选「自动」时返回 null，由画布按曲目判断 */
 const scaleSpec = computed(() => (scaleRoot.value < 0
   ? null
@@ -1022,7 +1025,7 @@ const ccMode = ref('free');
 const editPrefs = (() => { try { return JSON.parse(localStorage.getItem('fufumidi_edit_prefs') || '{}') || {}; } catch (e) { return {}; } })();
 const defaultVelocity = ref(typeof editPrefs.defaultVelocity === 'number' ? editPrefs.defaultVelocity : 80);
 const colorMode = ref(editPrefs.colorMode || 'track');
-const COLOR_MODES = [['track', t('按轨道')], ['pitch', t('按音高')], ['velocity', t('按力度')], ['selection', t('按选中')], ['scale', t('按音阶')]];
+const COLOR_MODES = () => [['track', t('按轨道')], ['pitch', t('按音高')], ['velocity', t('按力度')], ['selection', t('按选中')], ['scale', t('按音阶')]];
 watch([defaultVelocity, colorMode], () => {
   try { localStorage.setItem('fufumidi_edit_prefs', JSON.stringify({ defaultVelocity: defaultVelocity.value, colorMode: colorMode.value })); } catch (e) {}
 });
@@ -2063,7 +2066,7 @@ onBeforeUnmount(() => {
           <input v-if="scaleType === 'custom'" v-model="customDegText" class="text-input" style="width:110px"
                  :placeholder="t('音级 0,2,4,7,9')" :title="t('自定义音级（相对主音的半音，逗号分隔）')" />
           <select class="select-input" v-model="scaleMode" style="width:auto" :title="t('调内编辑模式：高亮调内音 / 拖拽与新建只落在调内音')">
-            <option v-for="m in SCALE_MODE_OPTIONS" :key="m[0]" :value="m[0]">{{ m[1] }}</option>
+            <option v-for="m in SCALE_MODE_OPTIONS()" :key="m[0]" :value="m[0]">{{ m[1] }}</option>
           </select>
           <button class="et-btn" :title="t('按曲目分析结果自动设调')" @click="scaleFromAnalysis"><Icon name="zap" :size="14" />{{ t('按分析设调') }}</button>
         </div>
@@ -2241,7 +2244,7 @@ onBeforeUnmount(() => {
               </select></div>
             <div class="insp-row"><span>{{ t('着色') }}</span>
               <select class="select-input" v-model="colorMode" :title="t('音符着色方案')">
-                <option v-for="c in COLOR_MODES" :key="c[0]" :value="c[0]">{{ c[1] }}</option>
+                <option v-for="c in COLOR_MODES()" :key="c[0]" :value="c[0]">{{ c[1] }}</option>
               </select></div>
             <div class="insp-row"><span>{{ t('默认力度') }}</span>
               <input class="num-input" type="number" min="1" max="127" step="1" v-model.number="defaultVelocity" :title="t('画笔新建音符时使用的力度')" /></div>

@@ -124,8 +124,10 @@ const chunkSec = computed({
   set: v => { msChunk.value = Math.max(1, Math.round(v || 1)) * 44100; },
 });
 
-const SEP_STEM_LABELS = { vocals: t('人声'), other: t('伴奏'), drums: t('鼓组'), bass: t('贝斯'), guitar: t('吉他'), piano: t('钢琴') };
-function sepStemLabel(s) { return SEP_STEM_LABELS[s] || s; }
+// ★ 模块作用域里的 t() 会被冻结在启动语言上（语言切换只重渲染，不重跑模块）。
+//   这类表一律写成函数，渲染时求值 —— 下同（MODE_NAMES / PERF_NAMES / WEB_BUILTIN_PRESETS）。
+const SEP_STEM_LABELS = () => ({ vocals: t('人声'), other: t('伴奏'), drums: t('鼓组'), bass: t('贝斯'), guitar: t('吉他'), piano: t('钢琴') });
+function sepStemLabel(s) { return SEP_STEM_LABELS()[s] || s; }
 function sepArchStems(arch) {
   const a = String(arch || '').toLowerCase();
   if (a.includes('drumsep')) return ['drums', 'other'];
@@ -267,13 +269,13 @@ const tplIdx = ref(-1);
 // 智能修正
 const rf = reactive({ audio: '', midi: '', mode: 'auto', stem: true, busy: false, jobId: 0, progress: 0, logs: [], info: '' });
 
-const MODE_NAMES = { universal: t('通用识别'), piano: t('钢琴专用'), separate: t('音频处理') };
-const PERF_NAMES = { quality: t('最高质量'), balanced: t('均衡'), fast: t('高性能') };
-const MODE_DEFAULT_PRESET = { universal: t('通用·标准'), piano: t('钢琴：最优'), separate: t('人声：最优') };
+const MODE_NAMES = () => ({ universal: t('通用识别'), piano: t('钢琴专用'), separate: t('音频处理') });
+const PERF_NAMES = () => ({ quality: t('最高质量'), balanced: t('均衡'), fast: t('高性能') });
+const MODE_DEFAULT_PRESET = () => ({ universal: t('通用·标准'), piano: t('钢琴：最优'), separate: t('人声：最优') });
 
 // 网页版内置预设（与引擎 presets.py 的 _builtin_presets 保持一致，仅取界面可应用的键）：
 // 无桥接时 loadPresets 用这份数据填充，避免「应用预设」因列表为空而失效。
-const WEB_BUILTIN_PRESETS = [
+const WEB_BUILTIN_PRESETS = () => [
   { name: t('人声：最优'), mode: 'separate', params: { onset_threshold: 0.05, frame_threshold: 0.25, minimum_note_length: 100, include_drums: true, denoise: true, normalize: true, auto_bpm: true } },
   { name: t('钢琴：最优'), mode: 'piano', params: { onset_threshold: 0.05, frame_threshold: 0.06, min_note_ms: 20, merge_gap_ms: 0, include_pedal: true, denoise: true, normalize: true } },
   { name: t('通用·标准'), mode: 'universal', params: {} },
@@ -490,7 +492,7 @@ async function probeEngine() {
     const p = await bridge.probe();
     if (!perfUserSet && p && p.perf && p.perf.recommended) {
       perf.value = p.perf.recommended;
-      perfHint.value = t('自动推荐：') + (PERF_NAMES[p.perf.recommended] || p.perf.recommended);
+      perfHint.value = t('自动推荐：') + (PERF_NAMES()[p.perf.recommended] || p.perf.recommended);
     }
     if (p && p.gpu) {
       const g = p.gpu;
@@ -509,8 +511,8 @@ async function loadPresets() {
   let list = [], builtins = [];
   if (local) {
     // 网页版无桥接：用前端内置预设，保证「应用预设」可用（保存/删除仅桌面版支持）
-    list = WEB_BUILTIN_PRESETS.map(p => ({ name: p.name, mode: p.mode, params: p.params }));
-    builtins = WEB_BUILTIN_PRESETS.map(p => p.name);
+    list = WEB_BUILTIN_PRESETS().map(p => ({ name: p.name, mode: p.mode, params: p.params }));
+    builtins = WEB_BUILTIN_PRESETS().map(p => p.name);
   } else {
     try {
       const r = await bridge.presets.list();
@@ -520,12 +522,12 @@ async function loadPresets() {
       } else {
         // 桌面端后端预设意外为空/失败时兜底前端内置，避免预设列表空导致「应用」无反应
         toast(t('加载预设失败：') + ((r && r.error) || t('返回空列表')) + t('，已使用内置预设'), 'warn');
-        list = WEB_BUILTIN_PRESETS.map(p => ({ name: p.name, mode: p.mode, params: p.params }));
-        builtins = WEB_BUILTIN_PRESETS.map(p => p.name);
+        list = WEB_BUILTIN_PRESETS().map(p => ({ name: p.name, mode: p.mode, params: p.params }));
+        builtins = WEB_BUILTIN_PRESETS().map(p => p.name);
       }
     } catch (e) {
-      list = WEB_BUILTIN_PRESETS.map(p => ({ name: p.name, mode: p.mode, params: p.params }));
-      builtins = WEB_BUILTIN_PRESETS.map(p => p.name);
+      list = WEB_BUILTIN_PRESETS().map(p => ({ name: p.name, mode: p.mode, params: p.params }));
+      builtins = WEB_BUILTIN_PRESETS().map(p => p.name);
     }
   }
   presets.list.splice(0, presets.list.length, ...list);
@@ -557,7 +559,7 @@ function applySelectedPreset() {
   if (applyPreset(presetSel.value)) toast(t('已应用预设：') + presetSel.value, 'ok');
 }
 function applyDefaultForMode(m) {
-  const def = MODE_DEFAULT_PRESET[m];
+  const def = MODE_DEFAULT_PRESET()[m];
   if (!def || !presets.list.some(x => x.name === def)) return;
   if (presetSel.value === def) return;
   applyPreset(def);
@@ -654,7 +656,7 @@ function delTemplate(idx) {
   taskTemplates.splice(idx, 1); saveTaskTemplates();
   toast(t('模板已删除'), 'ok');
 }
-const tplPreview = (tpl) => tpl ? (MODE_NAMES[tpl.mode] || '') + ' · ' + (PERF_NAMES[tpl.perf] || '') + ' · ' + (tpl.refine ? t('修正') : t('无修正')) + ' · ' + (tpl.exportStems ? t('分轨') : t('不分轨')) : '';
+const tplPreview = (tpl) => tpl ? (MODE_NAMES()[tpl.mode] || '') + ' · ' + (PERF_NAMES()[tpl.perf] || '') + ' · ' + (tpl.refine ? t('修正') : t('无修正')) + ' · ' + (tpl.exportStems ? t('分轨') : t('不分轨')) : '';
 
 /* ---------------- 参数收集 ---------------- */
 function collectParams() {
@@ -840,7 +842,7 @@ async function runBatch() {
 async function startTranscribe() {
   if (busy.value) return;
   const est = estSec();
-  const msg = t('确认开始转录？\n文件：') + queue.find(i => i.status === 'pending')?.name + t('\n模式：') + (MODE_NAMES[mode.value] || mode.value) + t('\n质量：') + (PERF_NAMES[perf.value] || perf.value) + (est ? t('\n预计耗时：约 ') + fmtTime(est) : '');
+  const msg = t('确认开始转录？\n文件：') + queue.find(i => i.status === 'pending')?.name + t('\n模式：') + (MODE_NAMES()[mode.value] || mode.value) + t('\n质量：') + (PERF_NAMES()[perf.value] || perf.value) + (est ? t('\n预计耗时：约 ') + fmtTime(est) : '');
   const ok = await app.confirmDialog({ title: t('开始转录'), msg, okText: t('开始') });
   if (!ok) return;
   runBatch();
@@ -1149,7 +1151,7 @@ onBeforeUnmount(() => {
           <div class="row" style="gap:6px;flex-wrap:wrap">
             <select class="select-input" v-model="msPresetSel" style="min-width:130px">
               <option value="" disabled>{{ t('选择已保存预设') }}</option>
-              <option v-for="p in msPresetOptions" :key="p.name" :value="p.name">{{ p.name }}</option>
+              <option v-for="p in msPresetOptions" :key="p.name" :value="p.name">{{ t(p.name) }}</option>
             </select>
             <button class="btn sm" @click="applyMsPreset">{{ t('应用') }}</button>
             <button class="btn sm" @click="saveMsPreset"><Icon name="plus" :size="13" />{{ t('保存预设') }}</button>
@@ -1254,7 +1256,7 @@ onBeforeUnmount(() => {
             <label class="fb-label" style="margin:0">{{ t('参数预设') }}</label>
             <div class="row" style="gap:6px">
               <select class="select-input" v-model="presetSel" :title="t('选择预设并应用')" style="min-width:138px">
-                <option v-for="p in presets.list" :key="p.name" :value="p.name">{{ p.name }}{{ presets.builtins.includes(p.name) ? '' : ' ✎' }}</option>
+                <option v-for="p in presets.list" :key="p.name" :value="p.name">{{ t(p.name) }}{{ presets.builtins.includes(p.name) ? '' : ' ✎' }}</option>
               </select>
               <button class="btn sm" @click="applySelectedPreset()">{{ t('应用') }}</button>
               <button class="btn sm" @click="savePreset"><Icon name="plus" :size="13" />{{ t('保存') }}</button>
@@ -1286,7 +1288,7 @@ onBeforeUnmount(() => {
 
       <!-- 摘要 + 开始 -->
       <div v-if="queue.some(i => i.status === 'pending' || i.status === 'error')" class="tr-sum">
-        {{ t('即将转录：') }}<b>{{ queue.find(i => i.status === 'pending' || i.status === 'error')?.name || '—' }}</b> · {{ t('引擎：') }}<b>{{ MODE_NAMES[mode] }}</b> · {{ t('预计耗时：') }}<b>{{ sumTime || '—' }}</b>
+        {{ t('即将转录：') }}<b>{{ queue.find(i => i.status === 'pending' || i.status === 'error')?.name || '—' }}</b> · {{ t('引擎：') }}<b>{{ MODE_NAMES()[mode] }}</b> · {{ t('预计耗时：') }}<b>{{ sumTime || '—' }}</b>
       </div>
       <div class="tr-par" style="display:flex;align-items:center;gap:8px;margin-top:12px">
         <span style="font-size:12.5px;color:var(--steel)">{{ t('并行数') }}</span>
@@ -1379,7 +1381,7 @@ onBeforeUnmount(() => {
           <div v-for="p in presets.list" :key="p.name" class="preset-mgr-row"
                draggable="true" @dragstart="presetDragStart(p)" @dragover.prevent @drop.prevent="presetDrop(p)" @dragend="presetDragName = ''">
             <span class="pm-handle" :title="t('拖动排序')">⋮⋮</span>
-            <span class="pm-name" @click="mgrApply(p.name)" :title="t('点击应用')">{{ p.name }}</span>
+            <span class="pm-name" @click="mgrApply(p.name)" :title="t('点击应用')">{{ t(p.name) }}</span>
             <span class="pm-mode">{{ p.mode }}</span>
             <button class="btn sm ghost danger" :title="t('删除')" @click="mgrDelete(p.name)">{{ t('删除') }}</button>
           </div>

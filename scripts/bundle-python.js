@@ -160,6 +160,19 @@ if (!checkOnly) {
   }
 }
 
+console.log('== 3.5/4 裁剪运行时（调试符号 / 静态库 / 测试套件 / 头文件）==');
+// 内置运行时是安装包体积的大头（实测 1.48GB）。其中约 265MB 是运行期完全用不到的东西：
+// *.pdb 调试符号、*.lib 链接期导入库、__pycache__、测试套件、CPython 头文件。
+// 必须在下面的 deps.py 自检**之前**裁剪 —— 这样自检本身就是「裁剪没裁坏」的验证。
+try {
+  spawnSync('node "' + path.join(__dirname, 'prune-python-bundle.cjs') + '"', {
+    shell: true, stdio: 'inherit', env: Object.assign({}, process.env, { FUFUMIDI_PY: pythonDir }),
+  });
+} catch (e) {
+  console.error('[错误] 裁剪运行时失败：' + (e && e.message));
+  process.exit(1);
+}
+
 console.log('== 4/4 自检 engine/deps.py check ==');
 // deps.py 对 torch / onnxruntime / muscriptor 等做真实 import（DEEP_PROBE），
 // 因此缺 VC++ 运行库这类「文件在但加载失败」的问题会被判成 broken 而不是 ok。
