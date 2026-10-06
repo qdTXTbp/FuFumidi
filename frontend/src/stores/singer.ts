@@ -684,6 +684,28 @@ export const useSingerStore = defineStore('singer', {
       return n;
     },
     /**
+     * 组内统一量化（M8c 续）：把成员轨所有音符的起点吸附到 grid 拍网格上（一次撤销点）。
+     * 与 transposeGroup 同一套路数 —— 批量写回、单撤销点，用户能立刻在每个成员轨上看到结果。
+     */
+    quantizeGroup(id: string, grid: number): number {
+      const g = (this.meta.groups || []).find((x) => x.id === id);
+      const step = Number(grid);
+      if (!g || !(step > 0)) return 0;
+      const members = new Set(g.trackIds);
+      const targets = this.tracks.filter((t) => members.has(t.id));
+      if (!targets.length) return 0;
+      this.pushUndo();
+      let n = 0;
+      for (const t of targets) {
+        for (const note of t.notes) {
+          const q = Math.round((Number(note.startBeat) || 0) / step) * step;
+          if (Math.abs(q - (Number(note.startBeat) || 0)) > 1e-6) { note.startBeat = Math.max(0, Math.round(q * 1e4) / 1e4); n += 1; }
+        }
+        t.notes.sort((a, b) => a.startBeat - b.startBeat);
+      }
+      return n;
+    },
+    /**
      * 组级参数覆盖（M8b，计划书 §4.5）：**批量写回成员轨**，而不是在混音时叠加。
      *
      * ★ 为什么选批量写回：混音链路上再插一层"组增益"要动播放/导出两处，而批量写回

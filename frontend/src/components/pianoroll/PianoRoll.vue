@@ -662,8 +662,14 @@ function onKey(e) {
   const ids = selIds();
   const mod = e.ctrlKey || e.metaKey;
   const k = (e.key || '').toLowerCase();
-  if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? api.redo() : api.undo(); return; }
-  if (mod && k === 'y') { e.preventDefault(); api.redo(); return; }
+  /* ★ 撤销/重做必须**让位给宿主页面**（M8c 实测踩到）：本组件是 window 级监听，
+     而调教页也实现了自己的撤销/重做（并在焦点位于卷帘内时让给本组件）。
+     两边都没有"焦点归属"判断时，一次 Ctrl+Z 会走两步历史 —— 实测：
+     组内量化后按一次 Ctrl+Z，量化和"建音符"各退一步。所以这里只在焦点确实在卷帘内时接管。 */
+  const el = e.target;
+  const inRoll = !!(el && typeof el.closest === 'function' && el.closest('.pr'));
+  if (mod && k === 'z' && inRoll) { e.preventDefault(); e.shiftKey ? api.redo() : api.undo(); return; }
+  if (mod && k === 'y' && inRoll) { e.preventDefault(); api.redo(); return; }
   if (mod && k === 'a') { e.preventDefault(); api.selectAll(); return; }
   /* P2-1 编辑快捷键：即使没有选中音符，粘贴也要能用（剪贴板里可能有东西） */
   if (mod && k === 'c') { if (ids.length) { e.preventDefault(); copySelection(false); } return; }
