@@ -153,6 +153,33 @@ function autoSetPoint(pts: { beat: number; value: number }[], i: number, field: 
   }
   store.setCurve(tr.value.id, curAbbr.value, next);
 }
+/** 卷帘里双击音符：选中它，并把详情面板打开 —— 颤音/音素/曲线都在那里面（M6c） */
+function onEditNoteFromRoll(id: string) {
+  store.select(id);
+  if (!detailOpen.value) detailOpen.value = true;
+}
+/* ---------------- 曲线的复制与锁定（M6c，计划书 §4.1 曲线工具条的剩余项） ---------------- */
+/** 锁定：锁上以后画布只读，避免「只是想看看」时误改 */
+const curveLocked = ref(localStorage.getItem('fufumidi_curve_locked') === '1');
+watch(curveLocked, (v) => { try { localStorage.setItem('fufumidi_curve_locked', v ? '1' : '0'); } catch (e) {} });
+/** 复制当前参数曲线到别的轨（同引擎的轨才有同一个目标表） */
+const copyToId = ref('');
+/* 只列出「这条参数它也用得了」的轨：UTAU 专属的 DYN 复制到 DiffSinger 轨会被 normalizeCurves 丢掉，
+   与其让用户点了个没反应，不如根本不给选。 */
+const copyTargets = computed(() => store.tracks.filter((x: any) =>
+  x.id !== (tr.value && tr.value.id) && x.kind === 'voice' && targetsFor(x.engine, x.kind).indexOf(curAbbr.value) >= 0));
+function copyCurveTo(trackId: string) {
+  const t0 = tr.value; if (!t0 || !trackId) return;
+  const c = curCurve.value; if (!c || !c.points.length) { say(t('这条曲线还没有点')); return; }
+  store.setCurve(trackId, curAbbr.value, c.points.map((p: any) => ({ beat: p.beat, value: p.value })));
+  say(t('已把 ') + curAbbr.value + t(' 曲线复制到目标轨'), 'ok');
+}
+function copyCurveToAll() {
+  const c = curCurve.value; if (!c || !c.points.length) { say(t('这条曲线还没有点')); return; }
+  let n = 0;
+  for (const x of copyTargets.value) { store.setCurve(x.id, curAbbr.value, c.points.map((p: any) => ({ beat: p.beat, value: p.value }))); n++; }
+  say(t('已复制到 ') + n + t(' 条轨'), n ? 'ok' : 'warn');
+}
 function autoDelPoint(pts: { beat: number; value: number }[], i: number) {
   if (!tr.value) return;
   store.setCurve(tr.value.id, curAbbr.value, pts.filter((_, k) => k !== i));
@@ -2064,6 +2091,14 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             <span class="sp" />
             <button class="btn" @click="autoAddPoint"><Icon name="plus" :size="12" /> {{ t('加点') }}</button>
             <button class="btn" @click="store.clearCurve(tr.id, curAbbr)"><Icon name="erase" :size="12" /> {{ t('清空') }}</button>
+            <button class="btn" :class="{ primary: curveLocked }" :title="t('锁定后画布只读，避免「只是想看看」时误改')"
+                    @click="curveLocked = !curveLocked"><Icon :name="curveLocked ? 'lock' : 'unlock'" :size="12" /> {{ curveLocked ? t('已锁定') : t('锁定') }}</button>
+            <select v-model="copyToId" class="select-input" style="width:auto;max-width:140px" :title="t('把这条曲线复制到哪条轨')">
+              <option value="">{{ t('复制到…') }}</option>
+              <option v-for="x in copyTargets" :key="x.id" :value="x.id">{{ x.name || t('未命名轨') }}</option>
+            </select>
+            <button class="btn" :disabled="!copyToId" @click="copyCurveTo(copyToId)">{{ t('复制') }}</button>
+            <button class="btn" :disabled="!copyTargets.length" @click="copyCurveToAll">{{ t('复制到全部轨') }}</button>
           </div>
           <!-- P2-4：表格用于精确输入，车道用于"凭耳朵拖" —— 两条路都留着 -->
           <p class="muted auto-hint">
@@ -2082,7 +2117,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <CurveCanvas ref="curveCanvasAuto" :points="(curCurve && curCurve.points) || []"
                        :min="curTarget ? curTarget.min : -1200" :max="curTarget ? curTarget.max : 1200"
                        :beats="curveBeats" :beats-per-bar="beatsPerBar" :tool="curveTool"
-                       :unit="(curTarget && curTarget.unit) || ''" @commit="onAutoCurveCommit" />
+                       :unit="(curTarget && curTarget.unit) || ''" :locked="curveLocked" @commit="onAutoCurveCommit" />
           <details v-if="curCurve && curCurve.points.length" class="curve-nums">
             <summary class="muted small">{{ t('数值表（精确输入）') }}</summary>
           <div class="auto-grid">
@@ -2293,7 +2328,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         :active-track-id="store.activeTrackId"
         :overlay="rollOverlay"
         :ghost-labels="rollGhostLabels"
-        @edit-lyric="(id) => store.select(id)"
+        @edit-lyric="onEditNoteFromRoll"
         @automation-begin="store.pushUndo()"
         @set-automation="onAutoLane"
         @set-scale="onRollScale"

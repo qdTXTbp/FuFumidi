@@ -23,6 +23,7 @@ const props = defineProps({
   unit: { type: String, default: 'cent' },
   height: { type: Number, default: 150 },
   snap: { type: Number, default: 0 },           // >0 时落点吸附到这个拍长（0 = 不吸）
+  locked: { type: Boolean, default: false },    // 锁定后只读（防「只是想看看」时误改）
 });
 const emit = defineEmits(['preview', 'commit']);
 
@@ -161,6 +162,7 @@ function lineFrom(anchor: { beat: number; value: number }, to: { beat: number; v
   local.value = arr;
 }
 function onDown(e: PointerEvent) {
+  if (props.locked) return;
   const p = pos(e);
   const beat = beatAt(p.x), value = valAt(p.y);
   dragging = true;
@@ -175,6 +177,12 @@ function onDown(e: PointerEvent) {
 }
 function onMove(e: PointerEvent) {
   const p = pos(e);
+  if (props.locked) {
+    // 锁定时仍然给读数（可以量、不能改）
+    hover.value = { beat: beatAt(p.x), value: valAt(p.y) };
+    draw();
+    return;
+  }
   const beat = beatAt(p.x), value = valAt(p.y);
   hover.value = { beat, value };
   if (!dragging) { draw(); return; }
@@ -214,7 +222,7 @@ defineExpose({ smooth, quantize, revert, pointCount: () => local.value.length })
 
 <template>
   <div class="cc-wrap">
-    <canvas ref="wrap" class="cc-canvas" :style="{ height: height + 'px' }"
+    <canvas ref="wrap" class="cc-canvas" :class="{ locked: locked }" :style="{ height: height + 'px' }"
             @pointerdown="onDown" @pointermove="onMove" @pointerup="onUp" @pointerleave="onLeave"></canvas>
   </div>
 </template>
@@ -222,4 +230,5 @@ defineExpose({ smooth, quantize, revert, pointCount: () => local.value.length })
 <style scoped>
 .cc-wrap { width: 100%; }
 .cc-canvas { width: 100%; display: block; border: 1px solid var(--hairline); border-radius: 10px; cursor: crosshair; touch-action: none; background: var(--surface-soft); }
+.cc-canvas.locked { cursor: not-allowed; opacity: .92; }
 </style>
