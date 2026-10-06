@@ -385,6 +385,14 @@ const phIndex = computed<number>(() => {
   return phItems.value.length ? 0 : -1;
 });
 const phCur = computed<any>(() => (phIndex.value >= 0 ? phItems.value[phIndex.value] : null));
+/* 音素时间表（M7b）：条带上是"看得见"，这里给"读得出" —— 每个音素的起止（拍）与时长（ms）。
+   ★ 边界是按歌词**估算**的（引擎真正的切分以声库 oto 为准），所以这里明确标注"估算"；
+     要能拖动边界，需要引擎支持"逐音素时长"，那是跨前后端的改动（见计划书 §4.3）。 */
+function fmtBeat(v: number): string { return (Math.round(Number(v) * 1000) / 1000).toFixed(3); }
+function phMs(it: any): number {
+  const bpm = Number(store.bpm) || 120;
+  return Math.max(0, Math.round((Number(it.t1) - Number(it.t0)) * 60000 / bpm));
+}
 /** 当前音素上已设的覆盖值 */
 const phVals = computed<Record<string, number>>(() => {
   const n = phNote.value;
@@ -2503,6 +2511,17 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <span v-if="phOverrideCount" class="muted">{{ t('本音素已覆盖 ') }}{{ phOverrideCount }}{{ t(' 项') }}</span>
           <button class="btn sm" :disabled="!phOverrideCount" @click="clearPhExpr"><Icon name="erase" :size="12" /> {{ t('清除本音素覆盖') }}</button>
         </div>
+        <div class="ph-times small">
+          <div v-for="(it, i) in phItems" :key="'pt' + i" class="ph-time" :class="{ on: i === phIndex }"
+               :title="t('点一下编辑这个音素')" @click="pickPhonemeIndex(i)">
+            <span class="pt-i">{{ i + 1 }}</span>
+            <b>{{ it.text }}</b>
+            <span class="pt-range">{{ fmtBeat(it.t0) }} → {{ fmtBeat(it.t1) }}</span>
+            <em>{{ phMs(it) }} ms</em>
+            <span class="pt-tag" :class="it.cons ? 'c' : 'v'">{{ it.cons ? t('辅音') : t('元音') }}</span>
+          </div>
+          <p class="muted small ph-note">{{ t('边界为按歌词估算（引擎以声库 oto 为准）。拖动边界改时长需要引擎支持逐音素时长，见计划书 §4.3。') }}</p>
+        </div>
         <div class="ph-grid small">
           <label v-for="e in PH_EXPRS" :key="e.abbr" :title="t(e.hint) + t('；留空 = 用音符/轨道的值')">
             <span>{{ t(e.label) }}</span>
@@ -2828,6 +2847,19 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 /* 提示行与分区标题（M7a）：把一长排 label 分组，扫读时不用逐个认 */
 .det-hint { flex: 0 0 100%; display: flex; align-items: center; gap: 6px; color: var(--stone);
   background: var(--surface-soft); border: 1px solid var(--hairline); border-radius: 8px; padding: 4px 8px; }
+/* 音素时间表（M7b）：一行一个音素，起止与时长可直接读，点行即选中 */
+.ph-times { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 2px; }
+.ph-time { display: flex; align-items: baseline; gap: 8px; padding: 2px 6px; border-radius: 6px; cursor: pointer; font-size: 11.5px; color: var(--slate); }
+.ph-time:hover { background: var(--surface-soft); }
+.ph-time.on { background: var(--surface-soft); color: var(--ink); }
+.ph-time .pt-i { flex: none; width: 14px; text-align: right; color: var(--stone); font-family: var(--mono); font-size: 10px; }
+.ph-time b { flex: none; min-width: 40px; color: var(--ink); }
+.ph-time .pt-range { flex: 1; font-family: var(--mono); font-size: 11px; }
+.ph-time em { flex: none; width: 62px; text-align: right; font-style: normal; font-family: var(--mono); font-size: 11px; color: var(--slate); }
+.ph-time .pt-tag { flex: none; font-size: 10px; padding: 0 4px; border-radius: 5px; border: 1px solid var(--hairline); }
+.ph-time .pt-tag.c { color: var(--accent); }
+.ph-time .pt-tag.v { color: var(--stone); }
+
 .det-sec { flex: 0 0 100%; display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 11.5px; font-weight: 700; margin-top: 2px; }
 .det-sec::after { content: ''; flex: 1; height: 1px; background: var(--hairline); }
 .det { display: flex; flex-wrap: wrap; gap: 10px; padding: 8px 12px;
