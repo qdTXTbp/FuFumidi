@@ -25,6 +25,43 @@ const busy = ref(false);
 const msg = ref('');
 const showStore = ref(false);
 
+/* ---- 声库体检（P2-16）：装库时就把「能不能用」算清楚，别等渲染失败 ---- */
+type ProbeCheck = { id: string; level: 'ok' | 'warn' | 'error'; text: string; fix?: string };
+const probe = ref<{ dir: string; name: string; busy: boolean; error: string; checks: ProbeCheck[]; stats: any } | null>(null);
+
+/** 拿当前工程里正在用的歌词一起查覆盖（有轨在用这个库时才传） */
+function lyricsFor(dir: string): string[] {
+  const out: string[] = [];
+  for (const tk of singerStore.tracks || []) {
+    if (tk.kind !== 'voice' || tk.singer !== dir) continue;
+    for (const n of tk.notes || []) if (n.lyric) out.push(String(n.lyric));
+  }
+  return out;
+}
+
+async function runProbe(b: any) {
+  const bridge = (window as any).fuBridge;
+  if (!bridge || typeof bridge.probeVoicebank !== 'function') {
+    msg.value = t('当前环境不支持声库体检（请使用桌面版）');
+    return;
+  }
+  probe.value = { dir: b.dir, name: b.name, busy: true, error: '', checks: [], stats: null };
+  try {
+    const r = await bridge.probeVoicebank({ voicebank: b.dir, engine: b.engine, lyrics: lyricsFor(b.dir) });
+    if (!r || !r.ok) {
+      if (probe.value) { probe.value.busy = false; probe.value.error = (r && r.error) || t('体检失败'); }
+      return;
+    }
+    if (probe.value) {
+      probe.value.busy = false;
+      probe.value.checks = r.checks || [];
+      probe.value.stats = r.stats || null;
+    }
+  } catch (e: any) {
+    if (probe.value) { probe.value.busy = false; probe.value.error = String((e && e.message) || e); }
+  }
+}
+
 /** 声库列表只有**一个**来源（singer store 的 `banks`），不按引擎分区。 */
 const filter = ref<'all' | 'utau' | 'diffsinger'>('all');
 const allBanks = computed(() => singerStore.banks);
@@ -81,12 +118,36 @@ async function run(fn: () => Promise<any>) {
           <span class="nm">{{ b.name }}</span>
           <span class="dir muted small" :title="b.dir">{{ b.dir }}</span>
           <span v-if="usedIn(b.dir)" class="inuse">{{ t('使用中') }}</span>
+          <button class="btn" :disabled="probe && probe.busy"
+                  :title="t('体检：目录/编码/别名/缺采样/歌词覆盖一次算清')"
+                  @click="runProbe(b)">{{ t('体检') }}</button>
           <button v-if="b.engine === 'diffsinger'" class="btn danger"
                   :disabled="busy || usedIn(b.dir)"
                   @click="run(() => ds.deleteVoicebank(b.dir))">{{ t('删除') }}</button>
           <span v-else class="muted small">{{ t('在 UTAU 声库管理器里删除') }}</span>
         </li>
       </ul>
+
+      <!-- 体检结果：一行一条，error 红、warn 黄，附可执行建议 -->
+      <div v-if="probe" class="vbp-probe">
+        <div class="vbp-probe-head">
+          <b>{{ t('体检：') }}{{ probe.name }}</b>
+          <span v-if="probe.busy" class="muted small">{{ t('检查中…') }}</span>
+          <span class="sp" />
+          <button class="btn" @click="probe = null">{{ t('关闭') }}</button>
+        </div>
+        <p v-if="probe.error" class="edt-msg small bad">{{ probe.error }}</p>
+        <ul class="vbp-checks">
+          <li v-for="c in probe.checks" :key="c.id" :class="c.level">
+            <i>{{ c.level === 'ok' ? '✓' : (c.level === 'warn' ? '!' : '×') }}</i>
+            <span class="txt">{{ c.text }}</span>
+            <span v-if="c.fix" class="fix muted small">{{ c.fix }}</span>
+          </li>
+        </ul>
+        <p v-if="probe.stats" class="muted small">
+          {{ t('统计：') }}{{ JSON.stringify(probe.stats) }}
+        </p>
+      </div>
     </section>
 
     <!-- ============ UTAU 声库制作（写 oto/alias） ============ -->
@@ -157,6 +218,17 @@ async function run(fn: () => Promise<any>) {
 .vbp-list li { display: flex; align-items: center; gap: 8px; padding: 5px 0;
                border-bottom: 1px solid var(--border); }
 .vbp-list li:last-child { border-bottom: none; }
+.vbp-probe { margin-top: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--canvas); }
+.vbp-probe-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.vbp-probe-head .sp { flex: 1; }
+.vbp-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.vbp-checks li { display: flex; align-items: baseline; gap: 6px; font-size: 12px; }
+.vbp-checks li i { font-style: normal; width: 12px; text-align: center; }
+.vbp-checks li.ok i { color: var(--success-text, #4caf50); }
+.vbp-checks li.warn i { color: var(--warn-text, #d9a300); }
+.vbp-checks li.error i { color: var(--danger-text, #e05252); }
+.vbp-checks li .txt { flex: 0 1 auto; }
+.vbp-checks li .fix { flex: 1 1 180px; }
 .vbp-list .nm { font-size: 12.5px; flex: none; }
 .vbp-list .dir { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .seg { display: inline-flex; gap: 4px; }

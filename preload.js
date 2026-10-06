@@ -140,6 +140,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
   utauAliases: (cfg) => ipcRenderer.invoke('utau:aliases', cfg),
   // 汉字 → 拼音（调教页 · 中文 UTAU 声库）：token 数组进、音节数组出
   singToPinyin: (cfg) => ipcRenderer.invoke('sing:toPinyin', cfg),
+  // 声库体检（调教页 · 声库面板）：目录/编码/别名/缺采样/歌词覆盖一次算清
+  probeVoicebank: (cfg) => ipcRenderer.invoke('sing:probeVoicebank', cfg),
   // 已导入声库列表 / 导入现成声库 zip
   utauListVoicebanks: () => ipcRenderer.invoke('utau:listVoicebanks'),
   utauImportVoicebankZip: (directPath) => ipcRenderer.invoke('utau:importVoicebankZip', directPath),

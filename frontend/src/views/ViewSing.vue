@@ -18,6 +18,7 @@ import { getTransport } from '../core/sing_transport.js';
 import { FX_TYPES, FX_ORDER } from '../core/track_fx.js';
 import { CURVE_TARGETS, curveOf, defaultFor, targetsFor } from '../core/track_automation.js';
 import { notePhonemes } from '../core/phoneme.js';
+import { alignLyrics, splitLyricLines } from '../core/sing_align.js';
 
 const store = useSingerStore();
 const app = useAppStore();
@@ -663,19 +664,64 @@ async function importMidi() {
     if (!path) return;
     const bytes = await b.readBinary(path);
     if (!bytes) { sayErr(t('读取文件失败'), t('文件可能被占用或没有读取权限，换一个位置再试。')); return; }
-    const { parseMidi, buildSong } = await import('../core/midi.js');
-    const r = store.parseMidiTracks(
-      bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
-      buildSong, parseMidi);
-    if (r.error) { sayErr(r.error, t('确认它是标准 MIDI（.mid）；损坏或纯音频文件解析不了。')); return; }
-    const list = r.tracks || [];
-    if (list.length === 1) {                       // 只有一条就不弹窗了
-      applyPicked(list[0], r.tpb || 480, r.bpm || 120);
-      return;
-    }
-    midiPick.value = { tracks: list, tpb: r.tpb || 480, bpm: r.bpm || 120 };
+    await openMidiBytes(bytes);
   } catch (e) {
     sayErr(String((e as any)?.message || e), t('确认它是标准 MIDI（.mid）；损坏或纯音频文件解析不了。'));
+  } finally {
+    busyImport.value = false;
+  }
+}
+
+/**
+ * MIDI 字节 → 解析 → 选轨（导入 MIDI 与「从曲库选」共用这一段）。
+ *
+ * 抽出来的原因：曲库里的 115 首本来就已经在数据目录里了，却只能走系统文件对话框
+ * 重新找一遍文件 —— 实测时为了导入一首库里的歌，得先把它复制成 ASCII 路径再驱动对话框。
+ */
+async function openMidiBytes(bytes: any) {
+  const { parseMidi, buildSong } = await import('../core/midi.js');
+  const r = store.parseMidiTracks(
+    bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
+    buildSong, parseMidi);
+  if (r.error) { sayErr(r.error, t('确认它是标准 MIDI（.mid）；损坏或纯音频文件解析不了。')); return; }
+  const list = r.tracks || [];
+  if (list.length === 1) {                       // 只有一条就不弹窗了
+    applyPicked(list[0], r.tpb || 480, r.bpm || 120);
+    return;
+  }
+  midiPick.value = { tracks: list, tpb: r.tpb || 480, bpm: r.bpm || 120 };
+}
+
+/* ------------------------------------------------------------ 从曲库选 MIDI（P1-12） */
+
+const libDlg = ref<{ q: string } | null>(null);
+/** 曲库里的 MIDI 曲目（app.songs 是唯一来源；每首都有 meta.path 指向真实 .mid 文件） */
+const libSongs = computed<any[]>(() => {
+  const q = (libDlg.value?.q || '').trim().toLowerCase();
+  return ((app as any).songs || [])
+    .filter((s: any) => (s.kind || 'midi') === 'midi')
+    .filter((s: any) => !q || String(s.name || '').toLowerCase().includes(q))
+    .slice(0, 400);
+});
+
+function openLibraryDialog() {
+  libDlg.value = { q: '' };
+}
+
+async function importFromLibrary(song: any) {
+  const b = window.fuBridge as any;
+  const path = song && song.meta && song.meta.path;
+  if (!path) { sayErr(t('这首曲目没有对应的 MIDI 文件'), t('可以在「资源管理」里跑一次曲库自检重建。')); return; }
+  if (!b || typeof b.readBinary !== 'function') { sayErr(t('桌面版才能导入 MIDI')); return; }
+  busyImport.value = true;
+  try {
+    const bytes = await b.readBinary(path);
+    if (!bytes) { sayErr(t('读取文件失败') + '：' + path); return; }
+    libDlg.value = null;
+    await openMidiBytes(bytes);
+    say(t('已从曲库载入「') + String(song.name || '') + t('」'), 'ok', { hint: t('下一步：选一条轨 → 选歌手 → 渲染。') });
+  } catch (e: any) {
+    sayErr(String((e && e.message) || e));
   } finally {
     busyImport.value = false;
   }
@@ -741,7 +787,9 @@ function fitRollSoon() {
 
 type LyricMode = 'auto' | 'char' | 'space' | 'line';
 type FillMode = 'seq' | 'loop' | 'trim';
-const lyricDlg = ref<{ text: string; mode: LyricMode; fill: FillMode } | null>(null);
+/** 对齐方式：seq=顺序（老行为）；spread=整首按比例；phrases=按乐句（P1：字数≠音符数时的正解） */
+type AlignMode = 'seq' | 'spread' | 'phrases';
+const lyricDlg = ref<{ text: string; mode: LyricMode; fill: FillMode; align: AlignMode; gap: number } | null>(null);
 const pinyinBusy = ref(false);
 
 const CJK_RE = /[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/;
@@ -778,7 +826,7 @@ function openLyricDialog(prefill = '') {
     sayErr(t('先选中音符再填词'), t('在卷帘里框选，或先按 Ctrl+A 全选。'));
     return;
   }
-  lyricDlg.value = { text: prefill, mode: 'auto', fill: 'seq' };
+  lyricDlg.value = { text: prefill, mode: 'auto', fill: 'seq', align: 'seq', gap: 1 };
 }
 
 function applyLyricDialog() {
@@ -789,6 +837,27 @@ function applyLyricDialog() {
   if (!words.length) { sayErr(t('没有可用的词'), t('换个分词方式，或先把歌词粘进来。')); return; }
   store.pushUndo();
   let blank = 0;
+  /* ★ 对齐方式（P1-8）：
+     顺序填在「字数 ≠ 音符数」时一定错位 —— 实测烦恼歌 441 字 / 275 音符，顺序填只能唱到
+     第 166 个字（副歌整段没词）。spread / phrases 把字按比例铺满全曲，首尾永远对得上。 */
+  if (d.align !== 'seq') {
+    const ordered = [...list].sort((a: any, b: any) => (a.startBeat - b.startBeat));
+    const r = alignLyrics(ordered, words, d.align, Math.max(0.125, Number(d.gap) || 1));
+    ordered.forEach((n: any, i: number) => {
+      const w = r.lyrics[i] || '';
+      if (!w) blank++;
+      store.updateNote(n.id, { lyric: w });
+    });
+    const how = d.align === 'phrases'
+      ? t('按乐句对齐：') + String(r.phrases) + t(' 个乐句')
+      : t('整首按比例铺开：');
+    say(how + String(words.length) + t(' 个字 → ') + String(ordered.length) + t(' 个音符')
+        + (r.skipped ? t('（字数多，跳过 ') + String(r.skipped) + t(' 个字）') : '')
+        + (r.repeated ? t('（音符多，重复 ') + String(r.repeated) + t(' 个字）') : ''),
+        'ok', { hint: t('首尾已对齐；个别字想改，双击音符直接编辑。') });
+    lyricDlg.value = null;
+    return;
+  }
   list.forEach((n: any, i: number) => {
     let w = '';
     if (i < words.length) w = words[i];
@@ -1335,6 +1404,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <button class="btn sm" @click="addTrack('utau')"><Icon name="mic" :size="12" /> {{ t('新建 UTAU 轨') }}</button>
         <button class="btn sm" @click="openProject"><Icon name="folder" :size="12" /> {{ t('打开工程') }}</button>
         <button class="btn sm" @click="importMidi"><Icon name="upload" :size="12" /> {{ t('导入 MIDI') }}</button>
+        <button class="btn sm" @click="openLibraryDialog"><Icon name="folder" :size="12" /> {{ t('从曲库选') }}</button>
         <button class="btn sm" @click="setTab('banks')"><Icon name="box" :size="12" /> {{ t('装声库') }}</button>
       </div>
     </div>
@@ -1361,6 +1431,10 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         </button>
         <button class="ib wide" data-guide="sing-import-midi" :disabled="busyImport" @click="importMidi">
           <Icon name="upload" :size="12" /> {{ t('导入 MIDI') }}
+        </button>
+        <!-- 曲库里的 MIDI 本来就在数据目录里，没必要再走一次系统文件对话框 -->
+        <button class="ib wide" data-guide="sing-import-library" :disabled="busyImport" @click="openLibraryDialog">
+          <Icon name="folder" :size="12" /> {{ t('从曲库选') }}
         </button>
       </div>
 
@@ -1763,6 +1837,30 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         </ul>
       </div>
 
+      <!-- 从曲库选 MIDI（P1-12）：曲目已经在 <数据目录>/midi 里，直接读字节，不弹系统对话框 -->
+      <div v-if="libDlg" class="singdlg small">
+        <div class="singdlg-head">
+          <b>{{ t('从曲库选 MIDI') }}</b>
+          <span class="muted">{{ t('曲库里的曲目（数据目录 midi/）') }}</span>
+          <span class="sp" />
+          <button class="btn" @click="libDlg = null">{{ t('取消') }}</button>
+        </div>
+        <div class="singdlg-row">
+          <input class="singdlg-q" v-model="libDlg.q" :placeholder="t('搜索曲名')" />
+          <span class="muted">{{ libSongs.length }}</span>
+        </div>
+        <ul class="lib-list">
+          <li v-for="s in libSongs" :key="s.id">
+            <button class="lib-item" :disabled="busyImport" @click="importFromLibrary(s)">
+              <span class="nm">{{ s.name }}</span>
+              <span class="muted small">
+                {{ s.meta && s.meta.tracks ? s.meta.tracks + t(' 轨 · ') : '' }}{{ s.meta && s.meta.dur ? Math.round(s.meta.dur) + 's' : '' }}
+              </span>
+            </button>
+          </li>
+        </ul>
+      </div>
+
       <!-- 批量填词（P1-7/8）：中文逐字分词 + 填充模式 + 预览 + 转拼音 + 读歌词文件 -->
       <div v-if="lyricDlg" class="singdlg small">
         <div class="singdlg-head">
@@ -1782,12 +1880,24 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
               <option value="line">{{ t('按行') }}</option>
             </select>
           </label>
-          <label>{{ t('填充') }}
+          <label v-if="lyricDlg.align === 'seq'">{{ t('填充') }}
             <select v-model="lyricDlg.fill">
               <option value="seq">{{ t('顺序（不够时沿用最后一个）') }}</option>
               <option value="loop">{{ t('循环（从头重复）') }}</option>
               <option value="trim">{{ t('只填到用完（其余留空）') }}</option>
             </select>
+          </label>
+          <!-- ★ 对齐方式：字数与音符数不一致时（实测 441 字 / 275 音符），顺序填一定会错位 -->
+          <label :title="t('顺序=一个字一个音符；按比例/按乐句会把字铺满全曲，首尾对齐')">{{ t('对齐') }}
+            <select v-model="lyricDlg.align">
+              <option value="seq">{{ t('顺序') }}</option>
+              <option value="spread">{{ t('整首按比例') }}</option>
+              <option value="phrases">{{ t('按乐句') }}</option>
+            </select>
+          </label>
+          <label v-if="lyricDlg.align === 'phrases'" :title="t('两个音符之间空多久算换句')">
+            {{ t('换句休止') }}
+            <input type="number" min="0.125" step="0.25" style="width:64px" v-model.number="lyricDlg.gap" /> {{ t('拍') }}
           </label>
           <button class="btn sm" :disabled="pinyinBusy" @click="toPinyin">
             {{ pinyinBusy ? t('转换中…') : t('汉字→拼音') }}
@@ -1796,6 +1906,10 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         </div>
         <div class="singdlg-prev">
           <span class="muted">{{ t('识别到 ') }}{{ lyricTokens.length }}{{ t(' 个词 → ') }}{{ selNotes.length }}{{ t(' 个音符') }}</span>
+          <span v-if="lyricDlg.align === 'seq' && Math.abs(lyricTokens.length - selNotes.length) > Math.max(4, selNotes.length * 0.25)"
+                class="mismatch">
+            {{ t('字数与音符数差得多：顺序填会从中间开始错位，建议选「整首按比例」或「按乐句」。') }}
+          </span>
           <span class="chips">
             <i v-for="(w, i) in lyricTokens.slice(0, 24)" :key="i">{{ w }}</i>
             <em v-if="lyricTokens.length > 24">…</em>
@@ -2132,8 +2246,13 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .singdlg-q { flex: 1; min-width: 180px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: inherit; }
 .singdlg-prev { display: flex; flex-direction: column; gap: 4px; }
 .singdlg-prev .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.singdlg-prev .mismatch { color: var(--warn-text, var(--stone)); }
 .singdlg-prev .chips i { font-style: normal; padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; font-size: 11.5px; }
 .singdlg-chips { display: flex; flex-wrap: wrap; gap: 4px; max-height: 220px; overflow: auto; }
+.lib-list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.lib-item { width: 100%; display: flex; align-items: baseline; gap: 8px; padding: 5px 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+.lib-item:hover { border-color: var(--border); background: var(--surface); }
+.lib-item .nm { flex: 1; }
 .mono-chk { display: inline-flex; align-items: center; gap: 4px; }
 .ovl { font-size: 11.5px; color: var(--warn-text, var(--stone)); }
 .ib.wide { width: 100%; justify-content: center; display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; padding: 4px 6px; }

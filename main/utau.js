@@ -207,6 +207,34 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
     }
   }));
 
+  // 声库体检（P2-16）：装进来的声库到底能不能用，别等渲染失败才知道。
+  // 实测踩过的坑：没有 character.txt 的库整库不可用、空别名让界面误报整轨歌词不合法 ——
+  // 这两类事实在装库/选库时就能算出来。
+  ipcMain.handle('sing:probeVoicebank', (evt, cfg) => new Promise((resolve) => {
+    const dir = cfg && cfg.voicebank ? String(cfg.voicebank) : '';
+    if (!dir) return resolve({ ok: false, error: '未指定声库目录' });
+    const engine = (cfg && cfg.engine) === 'diffsinger' ? 'diffsinger' : 'utau';
+    const lyrics = (cfg && Array.isArray(cfg.lyrics)) ? cfg.lyrics.map((x) => String(x)).slice(0, 4000) : [];
+    try {
+      const args = ['--voicebank', dir, '--engine', engine];
+      if (lyrics.length) args.push('--lyrics', ...lyrics);
+      spawnEngine(args, {
+        script: 'engine_vbcheck.py',
+        timeoutMs: 90 * 1000,
+        onDone: (code, r) => {
+          if (r && r.result && r.result.ok) return resolve(r.result);
+          const err = (r && r.result && r.result.error)
+            || (r && (r.err || r.out || '').slice(-300))
+            || `引擎退出码 ${code}`;
+          resolve({ ok: false, error: err });
+        },
+        onError: (e) => resolve({ ok: false, error: String(e) }),
+      });
+    } catch (err) {
+      resolve({ ok: false, error: String((err && err.message) || err) });
+    }
+  }));
+
   // 引擎支持的 flags 一览（含默认值/范围/说明）：UI 直接展示引擎真实规格，避免文档漂移
   ipcMain.handle('utau:flags', () => new Promise((resolve) => {
     try {

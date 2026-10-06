@@ -136,5 +136,48 @@ def test_diffsinger_render_cli_accepts_language_depth_steps():
         assert flag in r.stdout, flag
 
 
+# ---------------------------------------------------------------- 6. 声库体检
+
+def test_vbcheck_reports_missing_character_and_lyrics(tmp_path):
+    """体检要能把「缺 character.txt」「歌词不在别名表」这两类事实算出来。"""
+    from test_singing_adapters import make_voicebank
+    vb = make_voicebank(str(tmp_path / 'vb'))
+    char = os.path.join(vb, 'character.txt')
+    if os.path.isfile(char):
+        os.remove(char)
+    r = subprocess.run([PY, os.path.join(ENGINE, 'engine_vbcheck.py'), '--voicebank', vb,
+                        '--engine', 'utau', '--lyrics', 'a', 'zzz'],
+                       capture_output=True, text=True, encoding='utf-8', errors='replace')
+    assert r.returncode == 0, r.stdout + r.stderr
+    import json as _json
+    line = [l for l in r.stdout.splitlines() if l.startswith('###RESULT')][-1]
+    res = _json.loads(line.split(' ', 1)[1])
+    assert res['ok'] is True
+    ids = {c['id']: c for c in res['checks']}
+    assert ids['character']['level'] == 'warn', ids.get('character')
+    assert ids['lyrics']['level'] == 'warn' and 'zzz' in ids['lyrics']['text']
+    assert res['stats']['alias_count'] >= 1
+
+
+# ---------------------------------------------------------------- 7. 歌词对齐（前端纯函数）
+
+def test_sing_align_js_selfcheck():
+    """`frontend/src/core/sing_align.js` 自带自检：字数≠音符数时必须首尾对齐。"""
+    root = os.path.dirname(ENGINE)                       # 仓库根（ENGINE = <repo>/engine）
+    mod = os.path.join(root, 'frontend', 'src', 'core', 'sing_align.js')
+    if not os.path.isfile(mod):
+        pytest.skip('找不到 sing_align.js')
+    js = "import('%s').then(m => { const r = m.selfCheck(); console.log(JSON.stringify(r)); })" % (
+        'file:///' + mod.replace('\\', '/'))
+    r = subprocess.run(['node', '--input-type=module', '-e', js],
+                       capture_output=True, text=True, encoding='utf-8', errors='replace')
+    if r.returncode != 0 or 'ok' not in r.stdout:
+        pytest.skip('本机没有可用的 node：' + (r.stderr or '')[:120])
+    import json as _json
+    res = _json.loads(r.stdout.strip().splitlines()[-1])
+    assert res['ok'] is True, res
+    assert res['phrases'] == 2
+    assert res['spread'][0] == 'a' and res['spread'][-1] == 'j'
+
 if __name__ == '__main__':
     sys.exit(pytest.main([__file__, '-q']))
