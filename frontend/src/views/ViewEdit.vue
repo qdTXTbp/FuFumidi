@@ -41,6 +41,10 @@ import { MACRO_DOC, macroToCmd, applyMacroScript, parseMacroScript } from '../co
 import { SCALE_TYPES, parseCustomDegrees, scalePitchClasses } from '../core/scale.js';
 import { detectKeySpec, detectChordTrack, chordPcsByName } from '../core/analysis.js';
 import { listArticulations, applyArticulation, upsertUserArticulation, removeUserArticulation } from '../core/articulations.js';
+import {
+  loadExprMap, saveExprMap, setExprAction, sanitizeExprMap, applyExprPreset, EXPR_PRESETS,
+  exportExprMapJson, importExprMapJson, augmentTracks, articulationPlan,
+} from '../core/expression-map.js';
 import { t } from '../core/i18n.js';
 
 const bridge = window.fuBridge;
@@ -1335,8 +1339,82 @@ function delCustomMacro(i) {
   const arr = loadCustomMacros(); arr.splice(i, 1); saveCustomMacros(arr); customMacros.value = arr;
 }
 
-/* ---- Key Switch ---- */
-function openKSMap() { reloadArticulations(); ksDraft.value = { ...ksMap.value }; ksPreset.value = ''; ksLibName.value = ''; ksOpen.value = true; }
+/* ---- Key Switch + 技法动作（§3.7 表达映射：键位 / PC / CC / 力度系数） ---- */
+const exprMap = ref(loadExprMap());
+const exprDraft = ref({});
+const exprPreset = ref('');
+/** 编辑中的草稿动作（弹窗里每个 KS 行读它；没有就是空对象，输入框为空） */
+function exprRow(midi) {
+  const k = String(midi);
+  if (!exprDraft.value[k]) exprDraft.value[k] = {};
+  return exprDraft.value[k];
+}
+function setExprField(midi, field, raw) {
+  const row = { ...exprRow(midi) };
+  const v = raw === '' || raw == null ? null : Number(raw);
+  if (field === 'pc') row.pc = v;
+  else if (field === 'ccn' || field === 'ccv') {
+    const cur = { ...(row.cc || {}) };
+    if (field === 'ccn') cur.n = v; else cur.v = v;
+    row.cc = cur.n == null || cur.v == null ? null : cur;
+  } else if (field === 'vel') row.vel = v;
+  else if (field === 'ch') row.ch = v;
+  exprDraft.value = { ...exprDraft.value, [String(midi)]: row };
+}
+function applyExprPresetToDraft() {
+  if (!exprPreset.value) return;
+  exprDraft.value = applyExprPreset(exprDraft.value, exprPreset.value);
+  const p = EXPR_PRESETS.find(x => x.id === exprPreset.value);
+  toast(t('已套用技法动作预设：') + (p ? p.name : ''), 'ok');
+}
+/** 动作表导出 / 导入（JSON，描述"音源怎么用"，不进工程文件） */
+function exportExprMap() {
+  try {
+    const blob = new Blob([exportExprMapJson(exprDraft.value)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'expression-map.json'; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast(t('已导出技法动作表'), 'ok');
+  } catch (e) { toast(t('导出失败：') + ((e && e.message) || e), 'warn'); }
+}
+function importExprMap() {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = '.json,application/json';
+  inp.onchange = () => {
+    const f = inp.files && inp.files[0];
+    if (!f) return;
+    f.text().then((txt) => {
+      const m = importExprMapJson(txt);
+      if (!m) { toast(t('动作表解析失败（应为 JSON）'), 'warn'); return; }
+      exprDraft.value = m;
+      toast(t('已导入技法动作表'), 'ok');
+    });
+  };
+  inp.click();
+}
+function openKSMap() {
+  reloadArticulations();
+  ksDraft.value = { ...ksMap.value };
+  exprDraft.value = JSON.parse(JSON.stringify(exprMap.value || {}));
+  ksPreset.value = ''; exprPreset.value = ''; ksLibName.value = '';
+  ksOpen.value = true;
+}
+
+/**
+ * 把技法动作并进"当前歌曲"的轨道数据 —— 导出与**播放**共用这一份。
+ * 播放侧：player.prepare() 会读 song.ksMap / song.exprMap 自己展开（见 core/player.js），
+ * 所以这里只负责给导出用；两份口径由 articulationPlan() 保证一致。
+ */
+function tracksForExport() {
+  const s = song.value;
+  if (!s) return [];
+  return augmentTracks(s.tracks, ksMap.value, exprMap.value);
+}
+/** 当前轨的技法切换与动作展开（检查器/验收用） */
+const artPlan = computed(() => {
+  const tr = song.value?.tracks[trackIndex.value];
+  return tr ? articulationPlan(tr, ksMap.value, exprMap.value) : null;
+});
 /** 应用某个库（内置或用户）到草稿 */
 function applyKSPreset() {
   if (!ksPreset.value) return;
@@ -1371,9 +1449,25 @@ function saveKSMap() {
   const map = {};
   for (const m of Object.keys(ksDraft.value)) if (ksDraft.value[m] && +m <= 24) map[+m] = ksDraft.value[m];
   ksMap.value = map; saveKS(map);
+  // 动作表：只留有名字或至少有一项动作的键位（名字删了、动作还在 = 用户就是想只发 CC/PC）
+  const acts = {};
+  for (const m of Object.keys(exprDraft.value || {})) {
+    if (+m > 24) continue;
+    const clean = setExprAction({}, +m, exprDraft.value[m])[+m];
+    if (clean) acts[+m] = clean;
+  }
+  exprMap.value = sanitizeExprMap(acts);
+  saveExprMap(exprMap.value);
   ksOpen.value = false;
-  toast(t('Key Switch 映射已保存'), 'ok');
+  toast(t('Key Switch 映射与技法动作已保存'), 'ok');
 }
+/* 把动作表挂到歌曲对象上：player.load(song) 的每个调用点都自动带上（换音色/改 BPM/重载…） */
+watch([ksMap, exprMap], () => {
+  const s = song.value;
+  if (!s) return;
+  s.ksMap = ksMap.value;
+  s.exprMap = exprMap.value;
+}, { deep: true });
 // 切换轨道：若该轨绑定了演奏法库，自动套用（不覆盖手动映射时用户可再手动保存）
 watch(trackIndex, () => {
   const s = song.value, tr = s && s.tracks[trackIndex.value];
@@ -1580,7 +1674,9 @@ async function exportMidi() {
   const s = song.value;
   if (!s) { toast(t('请先载入 MIDI'), 'warn'); return; }
   try {
-    const bytes = encodeMidi(s.tracks, { division: s.tpb, tempoMap: s.tempoMap, sigMap: s.sigMap });
+    /* ★ 技法动作（§3.7）：导出前把每条轨的 PC / CC / 力度系数展开进去。
+       不改 song.value 本身（纯函数），所以反复导出/试听不会叠加事件。 */
+    const bytes = encodeMidi(tracksForExport(), { division: s.tpb, tempoMap: s.tempoMap, sigMap: s.sigMap });
     if (bridge && bridge.saveBinary) {
       const r = await bridge.saveBinary({ name: s.name + '.mid', data: Array.from(bytes) });
       if (r && r.ok) toast(t('已导出 MIDI'), 'ok');
@@ -1707,7 +1803,32 @@ onMounted(async () => {
      正常用户永远不会命中这条分支。 */
   try {
     if (localStorage.getItem('fufumidi_debug') === '1' || /[?&]debug=1/.test(location.hash)) {
-      window.__fufumidiDebug = { editor: () => editor.value, app, ws, hoverInfo, midiToolOpen, palOpen, drumNames, stepOn, stepCursorTick, listOpen, listDraft, viewMode, sel };
+      window.__fufumidiDebug = {
+        editor: () => editor.value, app, ws, hoverInfo, midiToolOpen, palOpen, drumNames,
+        stepOn, stepCursorTick, listOpen, listDraft, viewMode, sel,
+        // 表达映射（§3.7）验收用：动作表 / 展开结果 / 导出字节（不落盘）
+        song: () => song.value, ksMap, exprMap, exprDraft, artPlan, tracksForExport, articulationPlan,
+        newMidi, openKSMap, saveKSMap,
+        exportBytes: () => {
+          const s = song.value;
+          if (!s) return null;
+          return encodeMidi(tracksForExport(), { division: s.tpb, tempoMap: s.tempoMap, sigMap: s.sigMap });
+        },
+        // 播放侧证据：player.events（每个音符的 prog/vel）与 player.ctlEvents（通道事件）
+        playerState: () => {
+          const { player } = ensureAudio();
+          return {
+            events: (player.events || []).map((e) => ({ midi: e.midi, start: e.start, prog: e.prog, vel: e.vel, ch: e.ch })),
+            ctl: (player.ctlEvents || []).map((c) => ({ start: c.start, kind: c.kind, ch: c.ch, cc: c.cc, val: c.val })),
+          };
+        },
+        loadPlayer: () => {
+          const { player } = ensureAudio();
+          const s = song.value;
+          if (s) { s.ksMap = ksMap.value; s.exprMap = exprMap.value; player.load(s); }
+          return !!s;
+        },
+      };
     }
   } catch (e) {}
   await nextTick();
@@ -2418,10 +2539,40 @@ onBeforeUnmount(() => {
           <input v-model="ksLibName" class="num-input" :placeholder="t('库名称（另存当前映射）')" style="flex:1" />
           <button class="btn sm primary" @click="saveArticulationLib">{{ t('另存为库') }}</button>
         </div>
+        <!-- 技法动作（§3.7）：键位名 + PC + CC + 力度系数。真实音源除了键位还要收 PC/CC，
+             否则"选了技法却不出正确奏法"。 -->
+        <div class="row ks-act-preset" style="gap:6px;align-items:center">
+          <select v-model="exprPreset" class="select-input" style="min-width:170px">
+            <option value="">{{ t('选择技法动作预设') }}</option>
+            <option v-for="p in EXPR_PRESETS" :key="p.id" :value="p.id">{{ p.name }}</option>
+          </select>
+          <button class="btn sm" @click="applyExprPresetToDraft">{{ t('套用动作') }}</button>
+          <button class="btn sm ghost" @click="exportExprMap">{{ t('导出动作表') }}</button>
+          <button class="btn sm ghost" @click="importExprMap">{{ t('导入动作表') }}</button>
+        </div>
+        <div class="ks-head muted small">
+          <span class="ks-label">MIDI</span>
+          <span class="ks-h-name">{{ t('技法名') }}</span>
+          <span class="ks-h-num" :title="t('技法切换时发 Program Change（音色号 0-127）')">PC</span>
+          <span class="ks-h-num" :title="t('技法切换时发一条 CC：控制器号')">CC</span>
+          <span class="ks-h-num" :title="t('CC 的值（0-127）')">{{ t('值') }}</span>
+          <span class="ks-h-num" :title="t('力度系数：这次切换到下次切换之间的音符速度乘它（0.1~2）')">{{ t('力度×') }}</span>
+          <span class="ks-h-num" :title="t('动作走哪条通道（0-15，留空 = 跟音符）')">{{ t('通道') }}</span>
+        </div>
         <div class="ks-list">
           <div v-for="m in 25" :key="m - 1" class="ks-row">
             <span class="ks-label">MIDI {{ m - 1 }}</span>
             <input v-model="ksDraft[m - 1]" class="num-input" :placeholder="t('技法名（如 Legato）')" style="flex:1" />
+            <input class="num-input ks-num" type="number" min="0" max="127" :placeholder="t('无')"
+                   :value="exprDraft[m - 1]?.pc ?? ''" @change="setExprField(m - 1, 'pc', $event.target.value)" />
+            <input class="num-input ks-num" type="number" min="0" max="127" :placeholder="t('无')"
+                   :value="exprDraft[m - 1]?.cc?.n ?? ''" @change="setExprField(m - 1, 'ccn', $event.target.value)" />
+            <input class="num-input ks-num" type="number" min="0" max="127" :placeholder="t('无')"
+                   :value="exprDraft[m - 1]?.cc?.v ?? ''" @change="setExprField(m - 1, 'ccv', $event.target.value)" />
+            <input class="num-input ks-num" type="number" min="0.1" max="2" step="0.05" :placeholder="t('1.0')"
+                   :value="exprDraft[m - 1]?.vel ?? ''" @change="setExprField(m - 1, 'vel', $event.target.value)" />
+            <input class="num-input ks-num" type="number" min="0" max="15" :placeholder="t('跟音符')"
+                   :value="exprDraft[m - 1]?.ch ?? ''" @change="setExprField(m - 1, 'ch', $event.target.value)" />
           </div>
         </div>
         <div class="ed-modal-foot"><button class="btn sm primary" @click="saveKSMap">{{ t('保存') }}</button></div>
@@ -2721,6 +2872,12 @@ onBeforeUnmount(() => {
 .ks-row { display: flex; align-items: center; gap: 8px; padding: 2px 6px; border-radius: 6px; }
 .ks-row:nth-child(odd) { background: var(--surface-soft); }
 .ks-label { width: 64px; font-size: 11px; color: var(--stone); flex: none; }
+/* 技法动作列（§3.7）：PC / CC / 值 / 力度× / 通道 —— 都比技法名窄 */
+.ks-num { width: 52px; flex: none; padding: 2px 4px; font-size: 11px; }
+.ks-head { display: flex; align-items: center; gap: 8px; padding: 2px 12px 4px; }
+.ks-head .ks-h-name { flex: 1; }
+.ks-head .ks-h-num { width: 52px; flex: none; text-align: center; }
+.ks-act-preset { margin: 6px 0 2px; flex-wrap: wrap; }
 .help-scroll { max-height: 60vh; overflow: auto; display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--slate); line-height: 1.7; }
 .help-sec b { display: block; color: var(--ink); }
 .ed-fullscreen .page-head { display: none; }
