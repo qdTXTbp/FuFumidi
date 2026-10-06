@@ -479,7 +479,6 @@ async function renderVideo() {
     const melodyTrack = s.tracks.findIndex((tr) => tr.isDrum === false && !/bass|贝斯|低音/.test(tr.name || ''));
     const ivMs = Math.max(16, Math.round(1000 / fps));
     await new Promise((resolve) => {
-      let delivered = 0;   // 已交付给录制器的帧数
       let drawDurEst = 16; // 绘制耗时估计(ms)：内容时间要按「捕获时刻」算，预补偿本帧绘制耗时
       // ★ 尾部保护：录制器在 stop() 之前还会丢掉最后 ~0.3 秒的帧（合成器/编码器延迟），
       //   实测「3 秒」只录到 2.72 秒。多跑这一小段，让成片被 -shortest 按**音频长度**
@@ -498,7 +497,7 @@ async function renderVideo() {
         const vf = { winSec: 8, melodyTrack, lyricAt: lyricAtTick(s, tick), pct: (el / sec) };
         // 音频已按片段归一化（从 0 起），频谱/波形用 el；瀑布 tick 用全曲坐标 startSec+el
         drawVideoFrame(ctx, W, H, tick, s, buf, vf, el);
-        if (canManual) { try { vtrack.requestFrame(); } catch (e) {} delivered++; }
+        if (canManual) { try { vtrack.requestFrame(); } catch (e) {} }
         drawDurEst = Math.min(400, drawDurEst * 0.7 + (performance.now() - t0) * 0.3);
         VE.veProgress = Math.min(97, 10 + (elRaw / sec) * 87);
       };
