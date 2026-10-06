@@ -23,6 +23,7 @@
  * 引擎读不到自己用不到的字段（各自只取所需），所以不需要拆表。
  */
 
+import { ref } from 'vue';
 import { defineStore } from 'pinia';
 import { bridge, isDesktop } from '../api';
 import {
