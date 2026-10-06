@@ -24,6 +24,11 @@ const perf = ref('quality');             // quality | balanced | fast
 const perfHint = ref('');
 const bassBoost = ref(false);            // 低音增强（仅 basic 子模型）：关闭 melodia trick 以保留低音声部
 const beatGrid = ref(false);             // 节拍网格检测（仅 MuScriptor）：默认关，勾选才加载；未下载/失败自动跳过
+// 旋律乐器组（仅 MuScriptor）：MuScriptor 是多乐器模型，不给约束时它会在同一首歌里改判
+// 乐器（实测《甩葱歌》：同一条旋律 24s→organ、33s→synth lead、43s→flutes、96s→voice），
+// 于是同一段旋律每隔几小节换一次音色。'auto'=出结果后智能识别主导组并归并；
+// 指定组名=作为硬约束交给模型（一次推理即锁定音色）；''=不干预（旧行为）。
+const msInstr = ref('auto');
 const busy = ref(false);
 const done = ref(false);
 const progress = ref(0);
@@ -685,6 +690,8 @@ function collectParams() {
     if (umodel.value === 'muscriptor') {
       cfg.model_size = msSize.value;
       cfg.beat_grid = beatGrid.value;
+      // 旋律乐器组：漏了这一行，界面选了「人声」也传不进引擎（worker 请求体里也不认）
+      if (msInstr.value) cfg.muscriptor_instruments = msInstr.value;
       // MuScriptor 批量推理：GPU 上串行 chunk（batch=1）利用率仅 ~65%，批量可提至
       // 2-4× 实时。质量档保持串行 + prelude_forcing（边界延续质量最优）；
       // 均衡/高性能档用批量吞吐（prelude_forcing 关闭，边界质量略降）。
@@ -1236,6 +1243,24 @@ onBeforeUnmount(() => {
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label><span><b>{{ t('节拍网格检测') }}</b><small>{{ t('对齐音符时值；未下载或失败时自动跳过，不影响转录') }}</small></span><input type="checkbox" v-model="beatGrid"></label>
+          </div>
+          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
+            <label>
+              <span>
+                <b>{{ t('旋律音色') }}</b>
+                <small>{{ t('MuScriptor 会逐段判定乐器，同一段旋律可能被写成好几种音色；这里定死一种，或让它自己认') }}</small>
+              </span>
+              <select v-model="msInstr">
+                <option value="auto">{{ t('自动识别（推荐）') }}</option>
+                <option value="voice">{{ t('人声') }}</option>
+                <option value="piano">{{ t('钢琴') }}</option>
+                <option value="clean_electric_guitar">{{ t('吉他') }}</option>
+                <option value="synth_lead">{{ t('合成主音') }}</option>
+                <option value="flutes">{{ t('长笛') }}</option>
+                <option value="organ">{{ t('风琴') }}</option>
+                <option value="">{{ t('不限定（旧行为）') }}</option>
+              </select>
+            </label>
           </div>
           <div class="tr-switch" v-if="mode === 'separate'">
             <label><span><b>{{ t('输出鼓组节奏轨') }}</b><small>{{ t('同时转录鼓点 / 打击乐节奏') }}</small></span><input type="checkbox" v-model="drums"></label>

@@ -233,6 +233,23 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         # 默认关闭（batch=1 + prelude_forcing=True，边界质量最优）。
         # 实测（RTX 5070 Ti，medium，120s 音频）：batch=1 57s → batch=4 25s → batch=8 23s。
         batch = int(params.get("muscriptor_batch") or 0)
+        # 旋律乐器组：MuScriptor 是多乐器模型，不给约束时它会在同一首歌里改判乐器
+        # （实测：同一条旋律 24s 判成 organ、33s 判成 synth lead、96s 变成 voice），
+        # 于是同一条旋律每隔几小节换一次音色。muscriptor 的 transcribe() 支持硬约束
+        # （transcription_model.py: "instruments ... is a hard constraint"，内部用
+        # forbidden_token_ids 禁止采样其它乐器组）。三种取值：
+        #   'auto'    —— 先不约束，出结果后由 instrument_groups 识别主导组并归并（默认）
+        #   'voice,piano' —— 直接把它作为硬约束交给模型（单次推理即锁定音色）
+        #   ''        —— 完全不干预（保持旧行为）
+        raw_instr = params.get("muscriptor_instruments")
+        if isinstance(raw_instr, (list, tuple)):
+            instr_list = [str(x).strip() for x in raw_instr if str(x).strip()]
+        else:
+            instr_list = [s.strip() for s in str(raw_instr or "").split(",") if s.strip()]
+        auto_mode = (not instr_list) or (len(instr_list) == 1 and instr_list[0].lower() in ("auto", "smart"))
+        constrain = None if auto_mode else instr_list
+        if constrain:
+            _log(log_cb, "旋律乐器组已锁定：" + " / ".join(constrain) + "（模型不会输出其它乐器）")
         t0 = time.perf_counter()
         data = None
         # ★ CUDA 运行期错误只重试一次 CPU（issue #20 的兜底：算力/驱动问题不该让整次转录失败）
@@ -241,9 +258,9 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             try:
                 if batch >= 2:
                     _log(log_cb, f"批量推理：batch_size={batch}（prelude_forcing 关闭，边界质量略降）…")
-                    events = model.transcribe(wav_tmp, batch_size=batch, prelude_forcing=False)
+                    events = model.transcribe(wav_tmp, batch_size=batch, prelude_forcing=False, instruments=constrain)
                 else:
-                    events = model.transcribe(wav_tmp)
+                    events = model.transcribe(wav_tmp, instruments=constrain)
                 data = model.events_to_midi_bytes(_events_with_progress(events), beat_grid=beat_grid)
             except Exception as e:
                 # 显存溢出自动降级：batch ≥2 → 减半重试 → 串行兜底，绝不因此转录失败
@@ -294,6 +311,16 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         audio_io.remove_temp(wav_tmp)
     with open(output_midi, "wb") as f:
         f.write(data)
+
+    # 智能识别（auto 模式）：从这一遍的结果里认出主旋律乐器组；
+    # 若同一条旋律被判成了多种乐器且它们在时间上互斥，就归并成一条轨、统一音色。
+    # 手动锁定乐器组时模型已经只输出该组，无需再归并。
+    if auto_mode:
+        try:
+            from instrument_groups import smart_finish
+            smart_finish(output_midi, mode="auto", log=lambda m: _log(log_cb, m))
+        except Exception as e:  # 识别失败绝不能让整次转录失败
+            _log(log_cb, "[识别] 旋律乐器组识别跳过：" + str(e)[:160])
 
     # 音符数统计（pretty_midi）
     n = _count_notes(output_midi)

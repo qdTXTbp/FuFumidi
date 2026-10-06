@@ -1616,6 +1616,11 @@ export const I18N_MAP = {
   '自定义': 'Custom',
   '低音增强': 'Bass boost',
   '节拍网格检测': 'Beat grid',
+  // 旋律音色（仅 MuScriptor）：多乐器模型会把同一段旋律判成好几种乐器，这里给出约束/自动识别
+  '旋律音色': 'Melody instrument',
+  'MuScriptor 会逐段判定乐器，同一段旋律可能被写成好几种音色；这里定死一种，或让它自己认': 'MuScriptor labels the instrument segment by segment, so one melody can end up split across several timbres. Pin it to one instrument here, or let the app work it out.',
+  '自动识别（推荐）': 'Detect automatically (recommended)',
+  '不限定（旧行为）': 'Unrestricted (previous behaviour)',
   '对齐音符时值；未下载或失败时自动跳过，不影响转录': 'Align note timing; auto-skips if missing or failed, without blocking transcription.',
   '空间声': 'Spatial',
   '提示：开启「启用音效」后调节实时生效，设置自动保存。': 'Turn on "Enable effects" to apply changes live. Settings are saved automatically.',
