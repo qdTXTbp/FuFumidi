@@ -252,6 +252,12 @@ export function serializeProject(state) {
       title: str(s.meta && s.meta.title).slice(0, 255),
       comment: str(s.meta && s.meta.comment).slice(0, 4096),
       artist: str(s.meta && s.meta.artist).slice(0, 255),
+      // 和声组（M8a）：只存「组名 + 成员轨 id」，成员轨数据本身不在这里
+      groups: (Array.isArray(s.meta && s.meta.groups) ? s.meta.groups : []).slice(0, 64).map((g) => ({
+        id: str(g && g.id).slice(0, 32),
+        name: str(g && g.name).slice(0, 60),
+        trackIds: (Array.isArray(g && g.trackIds) ? g.trackIds : []).map((x) => str(x).slice(0, 32)).slice(0, 64),
+      })).filter((g) => g.id && g.trackIds.length),
     },
     bpm: clamp(num(s.bpm, 120), 20, 400),
     device: ['auto', 'cpu', 'cuda', 'dml'].indexOf(s.device) >= 0 ? s.device : 'auto',
@@ -390,6 +396,11 @@ export function parseProject(json) {
       title: str(meta.title).slice(0, 255),
       comment: str(meta.comment).slice(0, 4096),
       artist: str(meta.artist).slice(0, 255),
+      groups: (Array.isArray(meta.groups) ? meta.groups : []).slice(0, 64).map((g) => ({
+        id: str(g && g.id).slice(0, 32),
+        name: str(g && g.name).slice(0, 60),
+        trackIds: (Array.isArray(g && g.trackIds) ? g.trackIds : []).map((x) => str(x).slice(0, 32)).slice(0, 64),
+      })).filter((g) => g.id && g.trackIds.length),
     },
     bpm: clamp(num(json.bpm, 120), 20, 400),
     device: ['auto', 'cpu', 'cuda', 'dml'].indexOf(json.device) >= 0 ? json.device : 'auto',

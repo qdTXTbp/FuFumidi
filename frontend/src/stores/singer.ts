@@ -379,7 +379,8 @@ export const useSingerStore = defineStore('singer', {
      *   对齐偏移 —— 上一次整体平移的毫秒数（记录用，真正的平移写在音符上）
      * 两样都随工程文件走，所以类型上放宽成可选，老工程没有也能打开。
      */
-    meta: { title: '', comment: '', artist: '', timeSig: '4/4', alignMs: 0 } as
+    /** 和声组（M8a）：组只是"一组轨 + 组级覆盖"，成员轨本身不变 —— 于是导出/渲染链路都不用动。 */
+  meta: { title: '', comment: '', artist: '', timeSig: '4/4', alignMs: 0, groups: [] as { id: string; name: string; trackIds: string[] }[] } as
       { title: string; comment: string; artist: string; timeSig?: string; alignMs?: number },
     /** 打开工程后没落到本地的伴奏（包里缺文件 / 解包失败） */
     missingAudio: [] as { trackId: string; fileName: string; asset: string }[],
@@ -634,6 +635,30 @@ export const useSingerStore = defineStore('singer', {
       // meta 与 notes 都是响应式 state，直接写即可（卷帘的 rev 指纹会自己变）
       this.meta = Object.assign({}, this.meta, { alignMs: Math.round(Number(ms) || 0) });
       return n;
+    },
+
+    /* ---------------- 和声组（M8a，计划书 §4.5） ----------------
+       组是**视图层概念**：只记「哪几条轨属于一组 + 组名」，成员轨的数据一个字段都不改 ——
+       这样渲染、导出、撤销栈全都不用跟着动，风险最低。组级参数覆盖留给下一步。 */
+    addGroup(trackIds?: string[], name?: string) {
+      const ids = (trackIds && trackIds.length ? trackIds : (this.activeTrackId ? [this.activeTrackId] : []))
+        .filter((id) => this.tracks.some((t) => t.id === id));
+      if (!ids.length) return null;
+      const g = { id: 'grp' + Math.random().toString(36).slice(2, 9), name: (name || '').trim() || ('组 ' + ((this.meta.groups || []).length + 1)), trackIds: ids };
+      this.meta = Object.assign({}, this.meta, { groups: [...(this.meta.groups || []), g] });
+      return g.id;
+    },
+    renameGroup(id: string, name: string) {
+      const groups = (this.meta.groups || []).map((g) => (g.id === id ? { ...g, name: String(name || '').slice(0, 60) } : g));
+      this.meta = Object.assign({}, this.meta, { groups });
+    },
+    setGroupMembers(id: string, trackIds: string[]) {
+      const ids = (trackIds || []).filter((x) => this.tracks.some((t) => t.id === x));
+      const groups = (this.meta.groups || []).map((g) => (g.id === id ? { ...g, trackIds: ids } : g));
+      this.meta = Object.assign({}, this.meta, { groups });
+    },
+    removeGroup(id: string) {
+      this.meta = Object.assign({}, this.meta, { groups: (this.meta.groups || []).filter((g) => g.id !== id) });
     },
 
     /** 拖拽排序：把 fromId 移到 toId 的位置（toId 之后或之前均可，保持其余顺序） */
@@ -976,7 +1001,7 @@ export const useSingerStore = defineStore('singer', {
       this.clearAll();
       this.projectPath = '';
       this.createdAt = '';
-      this.meta = { title: '', comment: '', artist: '', timeSig: '4/4', alignMs: 0 };
+      this.meta = { title: '', comment: '', artist: '', timeSig: '4/4', alignMs: 0, groups: [] };
       this.missingAudio = [];
       // 空工程 = 新会话：历史里留着上一个工程的快照只会让 Ctrl+Z 变味
       this.history = [];
@@ -1058,7 +1083,7 @@ export const useSingerStore = defineStore('singer', {
       this.device = proj.device;
       this.sampleNote = proj.sampleNote;
       this.activeTrackId = proj.activeTrackId || (tracks[0]?.id || '');
-      this.meta = Object.assign({ title: '', comment: '', artist: '', timeSig: '4/4', alignMs: 0 }, proj.meta || {});
+      this.meta = Object.assign({ title: '', comment: '', artist: '', timeSig: '4/4', alignMs: 0, groups: [] }, proj.meta || {});
       this.createdAt = proj.createdAt || '';
       this.projectPath = r.filePath || '';
       this.selectedId = null;

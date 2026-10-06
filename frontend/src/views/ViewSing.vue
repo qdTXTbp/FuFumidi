@@ -743,6 +743,32 @@ function stepNote(dir: number) {
   const n = arr[j]; if (n) store.select(n.id);
 }
 
+/* ---------------- 和声组（M8a，计划书 §4.5） ----------------
+   组 = 「一组轨 + 组名」，成员轨的数据一个字段都不动（渲染/导出/撤销都不用改）。
+   点组 → 切到首成员并把其余成员作为幽灵音符叠出来（复用既有的多轨叠置）。 */
+const groups = computed<any[]>(() => (store.meta && (store.meta as any).groups) || []);
+function makeGroup() {
+  const pick = voiceTracks.value.filter((x: any) => x.kind === 'voice').map((x: any) => x.id);
+  const ids = store.activeTrackId && pick.includes(store.activeTrackId) ? [store.activeTrackId] : (pick.slice(0, 1));
+  const id = store.addGroup(ids);
+  if (!id) { say(t('先选中一条声部轨再成组'), 'warn'); return; }
+  say(t('已建组；在组名上点一下可改名，点 ⊕ 把当前轨加进去'), 'ok');
+}
+function renameGroup(g: any, e: Event) { store.renameGroup(g.id, (e.target as HTMLInputElement).value); }
+function addCurrentToGroup(g: any) {
+  if (!store.activeTrackId) return;
+  if (g.trackIds.includes(store.activeTrackId)) { say(t('当前轨已经在这个组里'), 'warn'); return; }
+  store.setGroupMembers(g.id, [...g.trackIds, store.activeTrackId]);
+  say(t('已加入该组'), 'ok');
+}
+function useGroup(g: any) {
+  const first = g.trackIds.find((id: string) => store.tracks.some((x: any) => x.id === id));
+  if (first) store.selectTrack(first);
+  rollOverlay.value = true;
+  say(t('已切到组内首轨，其余成员以幽灵音符显示'), 'ok');
+}
+function dropGroup(g: any) { store.removeGroup(g.id); }
+
 /** 页面级快捷键：卷帘有焦点时它自己处理，这里负责"没点进卷帘也能用"的那部分 */
 function onSingKey(e: KeyboardEvent) {
   const el = e.target as HTMLElement | null;
@@ -2426,6 +2452,16 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
                 @click="detailOpen = !detailOpen">
           <Icon name="expand" :size="12" />{{ detailOpen ? t('放大音符区') : t('显示详情') }}</button>
         <span class="rs-hint muted small" :title="t('点别的轨的音符即可切过去编辑')" v-if="rollOverlay && voiceTracks.length > 1">ⓘ</span>
+        <span class="rs-sep" />
+        <!-- 和声组（M8a）：成组 / 改名 / 加成员 / 切到组 -->
+        <button class="chip-btn" :title="t('把当前声部轨建成一个和声组')" @click="makeGroup"><Icon name="plus" :size="12" />{{ t('成组') }}</button>
+        <span v-for="g in groups" :key="g.id" class="rs-group" :title="t('点一下切到组内首轨并把其余成员叠出来')">
+          <input class="rs-group-name" :value="g.name" @click.stop @change="renameGroup(g, $event)" />
+          <span class="rs-group-n">{{ g.trackIds.length }}</span>
+          <span class="rs-ib" :title="t('把当前轨加进这个组')" @click.stop="addCurrentToGroup(g)">+</span>
+          <span class="rs-ib" :title="t('切到这个组')" @click.stop="useGroup(g)">→</span>
+          <span class="rs-ib" :title="t('解散这个组（不动成员轨）')" @click.stop="dropGroup(g)">✕</span>
+        </span>
       </div>
 
       <!-- 共用钢琴卷帘 -->
@@ -2939,6 +2975,11 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .det-mini b { color: var(--ink); }
 .det-mini .sp { flex: 1; }
 /* 提示行与分区标题（M7a）：把一长排 label 分组，扫读时不用逐个认 */
+/* 和声组（M8a）：组名可直接改，右侧三个小动作 = 加成员 / 切过去 / 解散 */
+.rs-group { display: inline-flex; align-items: center; gap: 3px; padding: 1px 4px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface-soft); }
+.rs-group-name { width: 74px; border: 0; background: transparent; color: var(--ink); font-size: 11.5px; outline: none; }
+.rs-group-n { font-size: 10px; color: var(--stone); font-family: var(--mono); }
+
 .det-hint { flex: 0 0 100%; display: flex; align-items: center; gap: 6px; color: var(--stone);
   background: var(--surface-soft); border: 1px solid var(--hairline); border-radius: 8px; padding: 4px 8px; }
 /* 波形 + 试听（M7b-2）：波形画的是**渲染结果里这个音符的那一段**，音素边界叠在上面 */
