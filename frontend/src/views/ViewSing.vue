@@ -12,6 +12,7 @@ import Icon from '../components/Icon.vue';
 import PianoRoll from '../components/pianoroll/PianoRoll.vue';
 import { trackColorOf, newNoteId } from '../stores/singer';
 import VoicebankPanel from '../components/sing/VoicebankPanel.vue';
+import CurveCanvas from '../components/sing/CurveCanvas.vue';
 import ViewVoicebank from './ViewVoicebank.vue';
 import { t } from '../core/i18n.js';
 import { ENGINES, LANGUAGES, useSingerStore } from '../stores/singer';
@@ -1380,6 +1381,25 @@ function curveAdd() {
   store.setPitchCurve(pts);
 }
 function curveClear() { store.clearPitchCurve(); }
+/* ---------------- 音高曲线画布（M6，计划书 4.1 的头号项） ----------------
+   以前只能「加点 + 敲两个数字」，现在可以在网格上直接画。
+   落库走 store.setPitchCurve（它会镜像 PIT 子轨并 pushUndo），所以：
+   拖动期间只 emit preview 更新本地副本，**抬手才 commit** —— 一次拖拽 = 一个撤销点。 */
+const CURVE_TOOLS: [string, string][] = [['draw', '画笔'], ['line', '直线'], ['erase', '橡皮']];
+const curveTool = ref('draw');
+const curveCanvas = ref<any>(null);
+/** 画布横轴的总拍数：跟着内容走，末尾留 4 拍余量 */
+const curveBeats = computed(() => {
+  const t0 = tr.value; if (!t0) return 16;
+  let m = 16;
+  for (const n of (t0.notes || [])) m = Math.max(m, (Number(n.startBeat) || 0) + (Number(n.durBeat) || 1));
+  for (const p of (t0.pitchCurve || [])) m = Math.max(m, (Number(p.beat) || 0) + 2);
+  return Math.ceil(m + 4);
+});
+const curveCents = computed(() => (tr.value && tr.value.pitchCurve ? tr.value.pitchCurve.length : 0));
+function onCurveCommit(pts: { beat: number; value: number }[]) {
+  store.setPitchCurve(pts.map((p) => ({ beat: p.beat, cents: p.value })));
+}
 function curveSet(i, e) {
   const t0 = tr.value;
   if (!t0) return;
@@ -2348,11 +2368,22 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
       <div v-if="detailOpen && !isAudio" class="curves">
         <div class="curves-head small">
           <b>{{ t('音高曲线') }}</b>
+          <span class="curve-tools">
+            <button v-for="tl in CURVE_TOOLS" :key="tl[0]" class="btn" :class="{ primary: curveTool === tl[0] }"
+                    :title="t('曲线工具')" @click="curveTool = tl[0]">{{ t(tl[1]) }}</button>
+          </span>
+          <button class="btn" :title="t('对曲线做一次三点平滑')" @click="curveCanvas?.smooth()">{{ t('平滑') }}</button>
+          <button class="btn" :title="t('把曲线点吸附到 1/16 拍')" @click="curveCanvas?.quantize(0.25)">{{ t('量化 1/16') }}</button>
           <button class="btn" @click="curveAdd"><Icon name="plus" :size="12" /> {{ t('加点') }}</button>
           <button class="btn" @click="curveClear"><Icon name="erase" :size="12" /> {{ t('清空') }}</button>
-          <span class="muted">{{ t('单位：音分（cent），作用于整条轨') }}</span>
+          <span class="muted">{{ curveCents }}{{ t(' 个点 · 单位：音分（cent），作用于整条轨') }}</span>
         </div>
-        <div v-if="tr && tr.pitchCurve.length" class="curves-grid small">
+        <CurveCanvas ref="curveCanvas" :points="(tr && tr.pitchCurve) || []" :min="-1200" :max="1200"
+                     :beats="curveBeats" :beats-per-bar="beatsPerBar" :tool="curveTool" unit="cent"
+                     @commit="onCurveCommit" />
+        <details v-if="tr && tr.pitchCurve.length" class="curve-nums">
+          <summary class="muted small">{{ t('数值表（精确输入）') }}</summary>
+        <div class="curves-grid small">
           <div v-for="(p, i) in tr.pitchCurve" :key="i" class="curve-row">
             <span class="ci">{{ i + 1 }}</span>
             <input :value="p.beat" step="0.25" :data-f="'beat'" @change="curveSet(i, $event)" />
@@ -2360,7 +2391,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             <span class="muted">beat / cent</span>
           </div>
         </div>
-        <p v-else class="muted small">{{ t('还没有曲线点。') }}</p>
+        </details>
       </div>
     </section>
     </div>
