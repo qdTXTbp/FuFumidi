@@ -18,6 +18,7 @@ const props = defineProps({
   editor: { type: Object, default: null },   // EditorCanvas 暴露出来的对象
   ctx: { type: Object, default: () => ({}) },// { tpb, scalePcs, track }
   selCount: { type: Number, default: 0 },
+  initialTool: { type: String, default: '' },   // 从命令面板 / 右键菜单直达某条工具
 });
 const emit = defineEmits(['close']);
 
@@ -90,7 +91,7 @@ watch(() => props.open, (v) => {
     const ed = props.editor;
     const n = ed && ed.beginPreview ? ed.beginPreview() : 0;
     if (!n) { emit('close', { applied: false, changed: 0, tool: '' }); return; }
-    toolId.value = MIDI_TOOLS[0].id;
+    toolId.value = toolById(props.initialTool) ? props.initialTool : MIDI_TOOLS[0].id;
     params.value = defaultParams(cur.value);
     changed.value = 0;
     preview();

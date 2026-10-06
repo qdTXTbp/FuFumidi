@@ -7,6 +7,8 @@ import { useAppStore } from '../stores/app';
 import { useWorkspace } from '../stores/workspace';
 import EditorMenuBar from '../components/editor/EditorMenuBar.vue';
 import MidiToolPanel from '../components/editor/MidiToolPanel.vue';
+import CommandPalette from '../components/editor/CommandPalette.vue';
+import { MIDI_TOOLS } from '../core/midi-tools.js';
 import { ensureAudio } from '../audio.js';
 
 const app = useAppStore();
@@ -23,9 +25,10 @@ const INSP_TABS = [['note', '音符', 'cursor'], ['track', '轨道', 'music'], [
 
 /* 快捷键一览（M1）：以前只写在按钮 title 里，等于没有。只列**代码里真实存在**的手势。 */
 const SHORTCUT_GROUPS = [
-  { name: '工具与绘制', rows: [['V', '选择工具'], ['B', '画笔工具'], ['E', '橡皮工具'], ['拖拽音符', '移动（上下改音高、左右改位置）'], ['拖音符边缘', '拉伸时值'], ['空白处点击', '画笔工具下插入音符']] },
-  { name: '选择', rows: [['拖拽空白', '框选音符'], ['Ctrl / Shift + 点击', '加选 / 减选']] },
-  { name: '编辑', rows: [['Ctrl+Z', '撤销'], ['Ctrl+Y', '重做'], ['Ctrl+C', '复制选中'], ['Ctrl+V', '粘贴到播放头'], ['Ctrl+A', '全选'], ['Delete', '删除选中'], ['Ctrl+S', '导出 MIDI']] },
+  { name: '工具与绘制', rows: [['V', '选择工具'], ['B', '画笔工具'], ['E', '橡皮工具'], ['拖拽音符', '移动（上下改音高、左右改位置）'], ['拖音符边缘', '拉伸时值'], ['空白处点击', '画笔工具下插入音符'], ['悬停音符', '就地工具条：力度 / 时值 / 静音 / 删除 / 参数工具']] },
+  { name: '修饰键（画布）', rows: [['Alt+拖拽', '改力度（2px ≈ 1 级）'], ['Shift+拖拽', '锁定音高，只改时间位置'], ['Ctrl / Shift + 点击', '加选 / 减选'], ['Ctrl+滚轮', '缩放'], ['Shift+滚轮', '横向平移']] },
+  { name: '选择', rows: [['拖拽空白', '框选音符'], ['右键音符', '上下文菜单（含参数工具直达）']] },
+  { name: '编辑', rows: [['Ctrl+Shift+P', '命令面板（搜索所有命令）'], ['Ctrl+Z', '撤销'], ['Ctrl+Y', '重做'], ['Ctrl+C', '复制选中'], ['Ctrl+V', '粘贴到播放头'], ['Ctrl+A', '全选'], ['Delete', '删除选中'], ['Ctrl+S', '导出 MIDI']] },
   { name: '视图与走带', rows: [['滚轮', '上下滚动音高'], ['Ctrl+滚轮', '缩放'], ['Shift+滚轮', '横向平移'], ['状态栏右下', '工作区预设：编曲 / 调教 / 校对 / 混音']] },
 ];
 const currentSong = computed(() => app.currentSong);
@@ -118,6 +121,46 @@ const selMutedNow = computed(() => (editor.value && sel.count ? editor.value.sel
    面板本身与具体工具解耦：工具表在 core/midi-tools.js，预览在 EditorCanvas 里，
    这里只负责「传上下文 + 开关 + 结果提示」。 */
 const midiToolOpen = ref(false);
+const midiToolPreset = ref('');   // 从命令面板/右键菜单直达某条工具
+/* ---- 悬停工具条（M3）：鼠标压到音符上就地弹一条，移开或进拖拽就收 ---- */
+const hoverInfo = ref(null);
+let hoverTimer = 0;
+function cancelHoverHide() { if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = 0; } }
+function scheduleHoverHide() { cancelHoverHide(); hoverTimer = window.setTimeout(() => { hoverInfo.value = null; hoverTimer = 0; }, 200); }
+function onHover(e) { cancelHoverHide(); if (e) hoverInfo.value = e; else scheduleHoverHide(); }
+const hoverBarStyle = computed(() => {
+  const h = hoverInfo.value; if (!h) return {};
+  const w = 330;
+  const left = Math.min(Math.max(8, h.x + 14), Math.max(8, window.innerWidth - w - 8));
+  const top = Math.max(8, h.y - 42);
+  return { left: left + 'px', top: top + 'px' };
+});
+function hoverAct(kind) {
+  const n = editor.value?.hoverAction(kind) || 0;
+  if (n) { hoverInfo.value = null; refreshSel(); onModified(); toast(t('已处理 ') + n + t(' 个音符'), 'ok'); }
+}
+function hoverMore() {
+  if (!editor.value?.selectHover()) return;
+  hoverInfo.value = null;
+  refreshSel();
+  openMidiTools('');
+}
+/* ---- 命令面板（M3，Ctrl+Shift+P）：动作表就是菜单条那一份 ---- */
+const palOpen = ref(false);
+const commands = computed(() => {
+  const out = [];
+  for (const g of menuGroups.value) {
+    for (const it of g.items) {
+      if (it.sep) continue;
+      out.push({ group: g.label, label: it.label, hint: it.hint || '', disabled: !!it.disabled, run: it.run });
+    }
+  }
+  for (const tool of MIDI_TOOLS) {
+    out.push({ group: t('参数工具'), label: t(tool.name), hint: t(tool.group), disabled: !sel.count, run: () => openMidiTools(tool.id) });
+  }
+  for (const p of ws.presets) out.push({ group: t('工作区'), label: t('工作区：') + t(p.label), hint: '', run: () => applyPreset(p.id) });
+  return out;
+});
 const toolCtx = computed(() => {
   const s = song.value;
   let spec = scaleSpec.value;
@@ -134,9 +177,10 @@ const toolCtx = computed(() => {
   try { pcs = spec ? scalePitchClasses(spec) : []; } catch (e) { pcs = []; }
   return { tpb: (s && s.tpb) || 480, scalePcs: pcs, track: curTrackInfo.value };
 });
-function openMidiTools() {
+function openMidiTools(toolId) {
   if (!song.value) { toast(t('请先载入 MIDI'), 'warn'); return; }
   if (!sel.count) { toast(t('请先选中要处理的音符'), 'warn'); return; }
+  midiToolPreset.value = toolId || '';
   midiToolOpen.value = true;
 }
 function onToolPanelClose(e) {
@@ -281,6 +325,9 @@ function openCtxMenu(p) {
   nextTick(refreshSel);
 }
 function closeCtxMenu() { ctxMenu.value = null; ctxSub.value = ''; }
+/* M3：右键菜单里直达某条参数工具 / 命令面板 */
+function ctxRunTool(id) { closeCtxMenu(); openMidiTools(id); }
+function openPalette() { closeCtxMenu(); palOpen.value = true; }
 function ctxMenuStyle() {
   const m = ctxMenu.value;
   if (!m) return {};
@@ -1356,6 +1403,7 @@ function onKey(e) {
   if (mod && e.key === 's') { e.preventDefault(); exportMidi(); return; }
   if (e.key === 'Delete' || e.key === 'Backspace') { del(); return; }
   if (e.key === '?' || e.key === 'F1') { e.preventDefault(); shortcutsOpen.value = !shortcutsOpen.value; return; }
+  if (mod && e.shiftKey && (e.key === 'p' || e.key === 'P')) { e.preventDefault(); palOpen.value = true; return; }
   const k = e.key.toLowerCase();
   if (k === 'v') tool.value = 'select';
   else if (k === 'b') tool.value = 'pencil';
@@ -1400,6 +1448,15 @@ watch(trackIndex, () => {
 
 onMounted(async () => {
   window.addEventListener('keydown', onKey);
+  /* 调试桥（M3 起）：本项目的验收方式是「装好的应用 + CDP 驱动」，而生产包里拿不到
+     组件实例（__vueParentComponent 只在 dev 有）。所以留一个显式开关：
+     localStorage.fufumidi_debug = '1'（或 hash 里带 debug=1）时把画布 API 挂到 window。
+     正常用户永远不会命中这条分支。 */
+  try {
+    if (localStorage.getItem('fufumidi_debug') === '1' || /[?&]debug=1/.test(location.hash)) {
+      window.__fufumidiDebug = { editor: () => editor.value, app, ws, hoverInfo, midiToolOpen, palOpen };
+    }
+  } catch (e) {}
   await nextTick();
   // 布局尺寸变化（侧栏/播放栏开合、窗口缩放、检查器收窄）时重画舞台缩略图
   if (typeof ResizeObserver !== 'undefined' && miniWrap.value) {
@@ -1739,8 +1796,24 @@ onBeforeUnmount(() => {
                       :scale-spec="scaleSpec" :scale-mode="scaleMode" :chord-track="chordSpec" :ks-map="ksMap" :audio="audioData"
                       :cc2-enabled="cc2Enabled" :cc2-number="cc2Number" :cc-mode="ccMode"
                       :default-velocity="defaultVelocity" :color-mode="colorMode"
-                      @select="refreshSel" @modify="onModified" @zoom="onZoom" @ctxmenu="openCtxMenu" />
+                      @select="refreshSel" @modify="onModified" @zoom="onZoom" @ctxmenu="openCtxMenu" @hover="onHover" />
         <video v-if="videoUrl" :src="videoUrl" controls playsinline class="ed-video-overlay"></video>
+        <!-- 悬停工具条（M3）：压到音符上就地出现，鼠标移到条上不消失 -->
+        <div v-if="hoverInfo && !midiToolOpen" class="hv-bar" :style="hoverBarStyle"
+             @pointerenter="cancelHoverHide" @pointerleave="scheduleHoverHide">
+          <span class="hv-name">{{ hoverInfo.name }}</span>
+          <span class="hv-vel" :title="t('力度')">v{{ hoverInfo.vel }}</span>
+          <button class="hv-btn" :title="t('力度 -5')" @click="hoverAct('velDown')">−</button>
+          <button class="hv-btn" :title="t('力度 +5')" @click="hoverAct('velUp')">+</button>
+          <span class="hv-sep"></span>
+          <button class="hv-btn" :title="t('时值减半')" @click="hoverAct('half')">½</button>
+          <button class="hv-btn" :title="t('时值加倍')" @click="hoverAct('double')">×2</button>
+          <span class="hv-sep"></span>
+          <button class="hv-btn" :class="{ on: hoverInfo.muted }" :title="t('静音 / 取消静音')" @click="hoverAct('mute')">{{ t('静音') }}</button>
+          <button class="hv-btn" :title="t('更多参数工具')" @click="hoverMore"><Icon name="sliders" :size="12" /></button>
+          <button class="hv-btn danger" :title="t('删除 Del')" @click="hoverAct('del')"><Icon name="trash" :size="12" /></button>
+          <span v-if="hoverInfo.count > 1" class="hv-multi">{{ t('作用于 ') }}{{ hoverInfo.count }}{{ t(' 个选中音符') }}</span>
+        </div>
       </div>
 
       <!-- 鼓组网格（打击乐专用视图） -->
@@ -1776,7 +1849,11 @@ onBeforeUnmount(() => {
     </template>
 
     <!-- 参数化 MIDI 工具（M2）：拖动即预览 / Esc 还原 / 回车应用 -->
-    <MidiToolPanel :open="midiToolOpen" :editor="editor" :ctx="toolCtx" :sel-count="sel.count" @close="onToolPanelClose" />
+    <MidiToolPanel :open="midiToolOpen" :editor="editor" :ctx="toolCtx" :sel-count="sel.count"
+                   :initial-tool="midiToolPreset" @close="onToolPanelClose" />
+
+    <!-- 命令面板（M3，Ctrl+Shift+P） -->
+    <CommandPalette :open="palOpen" :commands="commands" @close="palOpen = false" />
 
     <!-- 快捷键一览（M1）：以前只藏在按钮 title 里，等于没有 -->
     <Transition name="ov">
@@ -2066,6 +2143,15 @@ onBeforeUnmount(() => {
           <button class="ctx-item" @click="ctxDup"><span>{{ t('重复') }}</span></button>
           <div class="ctx-sep"></div>
 
+          <!-- M3：右键直达参数工具（不用先开面板再找工具） -->
+          <button class="ctx-item" @click="ctxRunTool('transpose')"><span>{{ t('参数工具：移调') }}</span><span class="ctx-k">{{ t('拖动即预览') }}</span></button>
+          <button class="ctx-item" @click="ctxRunTool('quantize')"><span>{{ t('参数工具：量化') }}</span></button>
+          <button class="ctx-item" @click="ctxRunTool('velHumanize')"><span>{{ t('参数工具：力度人性化') }}</span></button>
+          <button class="ctx-item" @click="ctxRunTool('swing')"><span>{{ t('参数工具：摇摆') }}</span></button>
+          <button class="ctx-item" @click="ctxRunTool('thin')"><span>{{ t('参数工具：稀疏化') }}</span></button>
+          <button class="ctx-item" @click="openPalette"><span>{{ t('全部命令…') }}</span><span class="ctx-k">Ctrl+Shift+P</span></button>
+          <div class="ctx-sep"></div>
+
           <div class="ctx-sub-wrap" @mouseenter="ctxSub = 'quantize'">
             <button class="ctx-item" :class="{ on: ctxSub === 'quantize' }"><span>{{ t('量化') }}</span><span class="ctx-arrow">▸</span></button>
             <div v-if="ctxSub === 'quantize'" class="ctx-menu ctx-sub" :class="{ flip: ctxSubFlip }">
@@ -2322,6 +2408,22 @@ onBeforeUnmount(() => {
 .insp-tab.on { background: var(--canvas); color: var(--ink); box-shadow: 0 1px 3px rgba(16,24,40,.10); }
 .insp-pane { display: flex; flex-direction: column; gap: 8px; animation: inspPaneIn .22s cubic-bezier(.2,.7,.3,1); }
 @keyframes inspPaneIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+/* 悬停工具条（M3）：fixed 定位，不参与舞台布局（卷帘高度不会因为它抖动） */
+.hv-bar { position: fixed; z-index: var(--z-overlay); display: flex; align-items: center; gap: 3px; padding: 3px 5px;
+  background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-lg);
+  animation: hvIn .16s cubic-bezier(.2,.7,.3,1); }
+@keyframes hvIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.hv-name { font-size: 11px; font-weight: 700; color: var(--ink); font-family: var(--mono); padding: 0 2px; }
+.hv-vel { font-size: 10.5px; color: var(--stone); font-family: var(--mono); }
+.hv-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 5px;
+  border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--slate); font-size: 11px; cursor: pointer;
+  transition: background .13s ease, color .13s ease; }
+.hv-btn:hover { background: var(--surface-soft); color: var(--ink); }
+.hv-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.hv-btn.danger { color: var(--error); }
+.hv-sep { width: 1px; height: 15px; background: var(--hairline); margin: 0 2px; }
+.hv-multi { font-size: 10px; color: var(--stone); padding-left: 4px; }
+
 /* 状态栏右侧的小按钮 */
 .st-btn { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border: 1px solid var(--hairline); border-radius: 6px; background: var(--canvas); color: var(--slate); font-size: 10.5px; cursor: pointer; transition: background .14s ease, color .14s ease; }
 .st-btn:hover { color: var(--ink); background: var(--surface-soft); }

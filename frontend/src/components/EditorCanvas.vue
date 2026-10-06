@@ -37,7 +37,7 @@ const props = defineProps({
    */
   view: { type: String, default: 'piano' },
 });
-const emit = defineEmits(['select', 'modify', 'zoom', 'ctxmenu']);
+const emit = defineEmits(['select', 'modify', 'zoom', 'ctxmenu', 'hover']);
 
 const wrap = ref(null);
 const canvas = ref(null);
@@ -1106,10 +1106,17 @@ function onDown(e) {
       pushState(); // 操作前记录，保证撤销能还原
       // 边缘命中 → 拉伸长度（右边缘改 end，左边缘改 start 并保持 end 不动）
       const nx = tickToX(n.start), nx2 = tickToX(n.end);
-      let type = 'move';
-      if (Math.abs(nx2 - x) < 7) type = 'resize';
-      else if (Math.abs(x - nx) < 7) type = 'resize-left';
-      dragState.value = { type, notes: [n], startX: x, startY: y, orig: [{ start: n.start, end: n.end, midi: n.midi }] };
+      // M3 修饰键：Alt+拖拽 = 改力度（画布上最常用的「手感」参数）。
+      // 命中音符若已在多选集合里，就对整个选区生效，否则只动这一个。
+      if (e.altKey) {
+        const targets = selection.has(n) && selection.size > 1 ? [...selection] : [n];
+        dragState.value = { type: 'vel', notes: targets, startX: x, startY: y, orig: targets.map((m) => ({ vel: m.vel })), hit: n };
+      } else {
+        let type = 'move';
+        if (Math.abs(nx2 - x) < 7) type = 'resize';
+        else if (Math.abs(x - nx) < 7) type = 'resize-left';
+        dragState.value = { type, notes: [n], startX: x, startY: y, orig: [{ start: n.start, end: n.end, midi: n.midi }] };
+      }
     } else {
       if (!multi) selection.clear();
       dragState.value = { type: 'marquee', x0: x, y0: y, box: null };
@@ -1135,9 +1142,16 @@ function onMove(e) {
         if (n.start <= t1 && n.end >= t0 && n.midi >= m0 && n.midi <= m1) selection.add(n);
       }
     }
+  } else if (d.type === 'vel') {
+    // 竖直拖动改力度：约 2px = 1 级，够细也够快
+    const dv = (d.startY - y) * 0.5;
+    d.notes.forEach((n, i) => { n.vel = clamp(Math.round(d.orig[i].vel + dv), 1, 127); });
+    draw();
+    return;
   } else if (d.type === 'move') {
     const dTick = (x - d.startX) / pxPerTick.value;
-    const dMidi = (d.startY - y) / rowH.value;
+    // M3 修饰键：Shift+拖拽 = 锁定音高，只改时间位置
+    const dMidi = e.shiftKey ? 0 : (d.startY - y) / rowH.value;
     const orig = d.orig || [];
     d.notes.forEach((n, i) => {
       const o = orig[i];
@@ -1176,7 +1190,7 @@ function onUp() {
     draw();
     return;
   }
-  if ((d.type === 'move' || d.type === 'resize' || d.type === 'resize-left') && d.notes.length && tr) {
+  if ((d.type === 'move' || d.type === 'resize' || d.type === 'resize-left' || d.type === 'vel') && d.notes.length && tr) {
     // 位置/长度已在拖拽中直接修改；状态在 onDown 时已入撤销栈
     if (d.type === 'move' && props.scaleMode === 'constrain') {
       for (const n of d.notes) n.midi = clamp(snapToPcs(n.midi, constrainPcsAt(n.start)), 0, 127);
@@ -1195,6 +1209,62 @@ function onUp() {
   }
   dragState.value = null;
 }
+/* ---------------- 悬停工具条（M3） ----------------
+   鼠标压到音符上时通知上层弹一条就地工具条（FL / Studio One 的做法）。
+   只在**命中的音符发生变化**时才 emit：pointermove 一秒几十次，无脑 emit 会把 Vue 刷爆。 */
+let hoverNote = null;
+function onHoverMove(e) {
+  if (dragState.value) { if (hoverNote) { hoverNote = null; emit('hover', null); } return; }
+  const rect = canvas.value.getBoundingClientRect();
+  const n = hitTest(e.clientX - rect.left, e.clientY - rect.top);
+  if (n === hoverNote) return;
+  hoverNote = n;
+  if (!n) { emit('hover', null); return; }
+  emit('hover', {
+    x: e.clientX, y: e.clientY, midi: n.midi, name: noteName(n.midi), vel: n.vel,
+    muted: !!n.muted, sel: selection.has(n), count: selection.has(n) ? selection.size : 1,
+    len: Math.round(n.end - n.start),
+  });
+}
+function onHoverLeave() { if (hoverNote) { hoverNote = null; emit('hover', null); } }
+/** 画布内坐标命中的音符（测试与外部工具用；坐标为画布左上角起算的 CSS px） */
+function hitAt(x, y) {
+  const n = hitTest(x, y);
+  if (!n) return null;
+  return { midi: n.midi, name: noteName(n.midi), vel: n.vel, start: n.start, len: Math.round(n.end - n.start), muted: !!n.muted };
+}
+/** 悬停工具条上的就地操作：命中音符在多选里就作用于整个选区，否则只动它 */
+function hoverAction(kind) {
+  const tr = curTrack(); const n = hoverNote;
+  if (!tr || !n || !tr.notes.includes(n)) return 0;
+  const targets = (selection.has(n) && selection.size > 1) ? [...selection] : [n];
+  pushState();
+  for (const x of targets) {
+    if (kind === 'velUp') x.vel = clamp(x.vel + 5, 1, 127);
+    else if (kind === 'velDown') x.vel = clamp(x.vel - 5, 1, 127);
+    else if (kind === 'half') x.end = x.start + Math.max(30, Math.round((x.end - x.start) / 2));
+    else if (kind === 'double') x.end = x.start + Math.max(30, Math.round((x.end - x.start) * 2));
+    else if (kind === 'mute') x.muted = !x.muted;
+    else if (kind === 'del') { /* 删除在下面统一处理（要动数组） */ }
+  }
+  if (kind === 'del') {
+    for (const x of targets) { const i = tr.notes.indexOf(x); if (i >= 0) tr.notes.splice(i, 1); }
+    for (const x of targets) selection.delete(x);
+    hoverNote = null;
+    emit('hover', null);
+  }
+  afterEdit();
+  return targets.length;
+}
+/** 把悬停的音符设为当前选中（供「更多工具」这类需要选区的入口用） */
+function selectHover() {
+  const n = hoverNote; const tr = curTrack();
+  if (!n || !tr || !tr.notes.includes(n)) return 0;
+  selection.clear(); selection.add(n);
+  emit('select'); draw();
+  return 1;
+}
+
 /* 右键菜单：命中音符时先选中它，再把坐标交给上层（ViewEdit）弹菜单 */
 function onCtxMenu(e) {
   const s = song(), tr = curTrack();
@@ -1547,6 +1617,8 @@ defineExpose({
   addPedal, delPedal, selSpan, addNote, deleteNotes, pushStateForTrack, notifyExternalEdit,
   // 参数化工具的实时预览（M2）
   beginPreview, previewing, previewCount, applyPreviewNow, commitPreview, cancelPreview,
+  // 悬停工具条（M3）
+  hoverAction, selectHover, hitAt,
   undo, redo, canUndo, canRedo, clearHistory, historySnapshots,
   snapSelToAudio,
   // 乐谱视图（五线谱）对外：滚动/谱号/插入时值/重绘
@@ -1638,7 +1710,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="ed-canvas-wrap" ref="wrap" data-guide="edit-canvas" @wheel.prevent="onWheel" @contextmenu.prevent="onCtxMenu">
-    <canvas ref="canvas" :style="{ height: H + 'px' }" @pointerdown="onDown" @pointermove="onMove" @pointerup="onUp" @pointerleave="onUp"></canvas>
+    <canvas ref="canvas" :style="{ height: H + 'px' }" @pointerdown="onDown" @pointermove="onMove($event); onHoverMove($event)" @pointerup="onUp" @pointerleave="onUp(); onHoverLeave()"></canvas>
     <div v-if="ccEnabled" class="cc-lane" :style="{ height: CC_LANE_H + 'px' }">
       <canvas ref="ccCanvas" class="cc-lane-canvas" @pointerdown="ccDown" @pointermove="ccMove" @pointerup="ccUp" @pointerleave="ccUp"></canvas>
     </div>
