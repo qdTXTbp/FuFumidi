@@ -81,6 +81,7 @@ export const I18N_MAP = {
   "谱线间距": "Staff spacing",
   "识别对照图": "Recognition overlay",
   "识别引擎": "Recognition engine",
+  "技法名": "Technique",
   "选择技法动作预设": "Pick an action preset",
   "套用动作": "Apply actions",
   "导出动作表": "Export actions",
