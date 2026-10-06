@@ -23,6 +23,7 @@ import { FX_TYPES, FX_ORDER } from '../core/track_fx.js';
 import { CURVE_TARGETS, curveOf, defaultFor, targetsFor } from '../core/track_automation.js';
 import { notePhonemes } from '../core/phoneme.js';
 import { normalizeSampleNote } from '../core/utau_tools.js';
+import { computeSpectrogram, drawSpectrogram } from '../core/spectrogram.js';
 import { alignLyrics, splitLyricLines, splitNotesToFit } from '../core/sing_align.js';
 
 const store = useSingerStore();
@@ -411,13 +412,28 @@ async function ensureWave(): Promise<any> {
   } catch (e) { waveMsg.value = t('渲染结果无法解码（文件可能损坏）'); return null; }
 }
 const waveCv = ref<HTMLCanvasElement | null>(null);
+/* ★ §4.3 收尾：频域底图（与声库页共用 core/spectrogram.js）。
+   时域包络看得出"哪里有声/边界在哪"，频域才分得清辅音与元音 —— 这一格正好是音素工作区最需要的。
+   一个音符通常 0.3~1 秒，STFT 只有几毫秒，直接在重绘里算；按"音符 + 渲染字节"缓存。 */
+const phSpecOn = ref(localStorage.getItem('fufumidi_ph_spec') !== '0');
+watch(phSpecOn, (v) => { try { localStorage.setItem('fufumidi_ph_spec', v ? '1' : '0'); } catch (e) {} });
+let phSpecCache: { key: string; spec: any } = { key: '', spec: null };
+function noteSpectrogram(data: Float32Array, sr: number, i0: number, i1: number, key: string) {
+  if (phSpecCache.key === key) return phSpecCache.spec;
+  const spec = computeSpectrogram(data.subarray(i0, i1), sr, { fft: 512, hop: 128, maxFrames: 600 });
+  phSpecCache = { key, spec };
+  return spec;
+}
 /** 画「当前音符」这一段的波形 + 音素边界（横轴就是这个音符，纵轴是包络） */
 function drawWave() {
   const cv = waveCv.value, ab = waveBuf.value, n = phNote.value;
   if (!cv) return;
-  const w = cv.clientWidth || 320, h = 46;
+  const w = cv.clientWidth || 320, h = phSpecOn.value ? 58 : 46;
   const dpr = window.devicePixelRatio || 1;
-  if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  /* ★ 宽高都要比：原来只比宽度 → 高度永远停在第一次的尺寸。
+     频域底图开着时画布是 58px、关掉是 46px，只比宽度的话两者会互相挤压（实测画出来是变形的）。 */
+  const needW = Math.round(w * dpr), needH = Math.round(h * dpr);
+  if (cv.width !== needW || cv.height !== needH) { cv.width = needW; cv.height = needH; }
   const g = cv.getContext('2d'); if (!g) return;
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, w, h);
@@ -433,7 +449,13 @@ function drawWave() {
   const data = ab.getChannelData(0), sr = ab.sampleRate || 44100;
   const i0 = Math.max(0, Math.floor(t0 * sr)), i1 = Math.min(data.length, Math.ceil(t1 * sr));
   const cols = Math.max(1, Math.round(w));
-  g.fillStyle = css('--accent', '#ff5530'); g.globalAlpha = 0.55;
+  // 频域底图（低频在下）：辅音/元音的差别在时域里看不出来，频域里一眼能分
+  if (phSpecOn.value && i1 - i0 > 512) {
+    const spec = noteSpectrogram(data, sr, i0, i1, (n.id || '') + '|' + i0 + '|' + i1);
+    if (spec && spec.frames) drawSpectrogram(g, spec, 0, 0, w, h, { grid: false });
+  }
+  // 时域包络压在频谱上：不透明一点，保证"哪里有声"仍然读得出来
+  g.fillStyle = css('--accent', '#ff5530'); g.globalAlpha = phSpecOn.value ? 0.85 : 0.55;
   const per = Math.max(1, Math.floor((i1 - i0) / cols));
   for (let x = 0; x < cols; x++) {
     const a = i0 + x * per, b = Math.min(i1, a + per);
@@ -475,7 +497,7 @@ async function audition(scope: 'note' | 'phoneme') {
     say((scope === 'phoneme' ? t('试听音素 ') : t('试听整音 ')) + Math.round(len * 1000) + ' ms', 'ok');
   } catch (e) { say(t('试听失败：') + (e as any).message, 'error'); }
 }
-watch([() => store.activeTrackId, () => (store.renderByTrack as any)[store.activeTrackId || ''], () => (phNote.value ? phNote.value.id : ''), () => phIndex.value],
+watch([() => store.activeTrackId, () => (store.renderByTrack as any)[store.activeTrackId || ''], () => (phNote.value ? phNote.value.id : ''), () => phIndex.value, () => phSpecOn.value],
   () => { void ensureWave().then(() => nextTick(drawWave)); }, { immediate: true });
 function fmtBeat(v: number): string { return (Math.round(Number(v) * 1000) / 1000).toFixed(3); }
 function phMs(it: any): number {
@@ -1591,7 +1613,16 @@ onMounted(() => {
     if (localStorage.getItem('fufumidi_debug') === '1') {
       /* ★ 把卷帘用的**同一个 api 对象**也挂出来：验收时调 api().moveNotes(...) 走的就是
          方向键/批量微调那条真实路径，不用再另写一份等价逻辑。 */
-      window.__singDebug = { roll: () => prRef.value, singer: store, api: () => rollApi() };
+      window.__singDebug = {
+        roll: () => prRef.value, singer: store, api: () => rollApi(),
+        // 音素工作区（频谱底图验收用）
+        phWave: () => waveCv.value, phSpecOn, drawWave, phItems, phIndex, phNote, waveBuf,
+        noteSpectrogram: (i0: number, i1: number, key: string) => {
+          const ab = waveBuf.value;
+          if (!ab) return null;
+          return noteSpectrogram(ab.getChannelData(0), ab.sampleRate || 44100, i0, i1, key);
+        },
+      };
     }
   } catch (e) {}
   // 进页即拉声库列表：歌手选择器是**点选**的，列表为空就等于没法选歌手
@@ -2731,10 +2762,13 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <button class="btn sm" :disabled="!phOverrideCount" @click="clearPhExpr"><Icon name="erase" :size="12" /> {{ t('清除本音素覆盖') }}</button>
         </div>
         <div class="ph-wave-wrap">
-          <canvas ref="waveCv" class="ph-wave" height="46"></canvas>
+          <canvas ref="waveCv" class="ph-wave" :style="{ height: (phSpecOn ? 58 : 46) + 'px' }"></canvas>
           <div class="ph-wave-btns">
             <button class="btn sm" :title="t('播放这个音符对应的那一段渲染结果')" @click="audition('note')"><Icon name="play" :size="12" /> {{ t('试听整音') }}</button>
             <button class="btn sm" :disabled="phIndex < 0" :title="t('只播放当前音素那一段（秒级）')" @click="audition('phoneme')"><Icon name="play" :size="12" /> {{ t('试听音素') }}</button>
+            <label class="ph-spec small" :title="t('频域底图：辅音与元音的差别在时域里看不出来，频域一眼能分')">
+              <input type="checkbox" v-model="phSpecOn" /> {{ t('频域底图') }}
+            </label>
           </div>
         </div>
         <div class="ph-times small">
@@ -3083,6 +3117,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .ph-wave-wrap { display: flex; align-items: center; gap: 8px; margin: 4px 0 2px; }
 .ph-wave { flex: 1; min-width: 0; height: 46px; display: block; border: 1px solid var(--hairline); border-radius: 8px; background: var(--canvas); }
 .ph-wave-btns { display: flex; flex-direction: column; gap: 4px; flex: none; }
+.ph-spec { display: inline-flex; align-items: center; gap: 4px; color: var(--stone); white-space: nowrap; }
 
 /* 音素时间表（M7b）：一行一个音素，起止与时长可直接读，点行即选中 */
 .ph-times { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 2px; }

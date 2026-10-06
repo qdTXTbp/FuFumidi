@@ -81,6 +81,7 @@ export const I18N_MAP = {
   "谱线间距": "Staff spacing",
   "识别对照图": "Recognition overlay",
   "识别引擎": "Recognition engine",
+  "频域底图：辅音与元音的差别在时域里看不出来，频域一眼能分": "Spectrogram: the difference between consonants and vowels is invisible in the time domain but obvious in the frequency domain",
   "打开别名表：改原音设定 / 逐条试听（写回前自动备份 oto.ini.bak）": "Open the alias table: edit oto settings and audition each entry (oto.ini.bak is created before saving)",
   "音域": "Range",
   "音域热力图：每个别名的录制音高 × 可用音高，点格子直接试听那个音高": "Pitch-range heatmap: each alias's recorded pitch × usable pitches; click a cell to audition that pitch",
