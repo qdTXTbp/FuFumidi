@@ -594,11 +594,18 @@ function colorOf(t: any) {
  */
 function onPickGhostNote(e: any) {
   if (!e || !e.trackId) return;
+  /* M8d：点幽灵音符 = **把它加进选区**（跨轨选区），不再强制切轨。
+     切轨有轨条那条主路径（点色块），而"选一个别的轨的音"以前根本做不到 ——
+     于是批量工具（渐强/渐弱/移调…）无法跨轨。拖动仍不支持跨轨（编辑 api 按当前轨注入），
+     这一点保留原设计：跨轨先选、要拖再切轨。 */
+  if (e.noteId) { store.select(e.noteId, true); return; }
   if (e.trackId !== store.activeTrackId) store.selectTrack(e.trackId);
-  if (e.noteId) store.select(e.noteId);
 }
 
 const selNotes = computed<any[]>(() => {
+  // M8d：跨轨（用 store 的选择集合，而不是"当前轨 ∩ 选中 id"）—— 否则批量工具永远只能作用在当前轨
+  const cross = store.selectedNotes as any[];
+  if (cross && cross.length) return cross;
   const ids = store.selectedIds;
   return (tr.value?.notes || []).filter((n: any) => ids.includes(n.id))
     .slice().sort((a: any, b: any) => a.startBeat - b.startBeat);

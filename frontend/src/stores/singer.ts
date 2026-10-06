@@ -986,7 +986,17 @@ export const useSingerStore = defineStore('singer', {
       this.selectedId = null;
       this.selectedIds = [];
     },
+    /**
+     * 选中一个音符。`additive` = 加选（M8d：卷帘里点幽灵音符就是这条路径）。
+     *
+     * ★ 以前 additive 只做到"不清空 selectedIds"，**没把原来那个 selectedId 收进集合** ——
+     *   于是 `select(a)` 再 `select(b, true)`，选中的仍然只有 b（a 丢了）。
+     *   加选要真的累加，就得先把旧的那个并入集合。
+     */
     select(id: string | null, additive = false) {
+      if (additive && this.selectedId && this.selectedId !== id && !this.selectedIds.includes(this.selectedId)) {
+        this.selectedIds = [...this.selectedIds, this.selectedId];
+      }
       this.selectedId = id;
       if (!additive) this.selectedIds = [];
     },
