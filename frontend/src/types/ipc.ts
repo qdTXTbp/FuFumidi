@@ -628,6 +628,8 @@ export interface FuBridge {
 
   // engine
   convert(cfg: ConvertRequest): Promise<ConvertResult>;
+  /** 统一旋律音色：把已有曲目里跳来跳去的旋律收进一种音色（不重新转录） */
+  unifyMelody(opts: { bytes: Uint8Array | ArrayBuffer | number[]; name?: string; id?: string }): Promise<{ ok: boolean; bytes?: Uint8Array; report?: any; logs?: string[]; error?: string }>;
   cancel(id: string | number): Promise<GeneralResult>;
   onEngineLog(cb: (p: any) => void): () => void;
   probe(): Promise<EngineProbeResult>;

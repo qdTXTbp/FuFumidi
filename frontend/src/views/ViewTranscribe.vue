@@ -29,6 +29,29 @@ const beatGrid = ref(false);             // 节拍网格检测（仅 MuScriptor�
 // 于是同一段旋律每隔几小节换一次音色。'auto'=出结果后智能识别主导组并归并；
 // 指定组名=作为硬约束交给模型（一次推理即锁定音色）；''=不干预（旧行为）。
 const msInstr = ref('auto');
+// 统一旋律音色（已有曲目）：对**已经转录好**的曲目再跑一遍主旋律归并 —— 修的是
+// 「旧转录结果里同一段旋律每隔几小节换一次音色」。结果作为新曲目入库，原曲目不动，便于对比。
+const unifying = ref(false);
+async function unifyCurrentSong() {
+  const cur = app.currentSong;
+  if (!cur || !cur.song) { toast(t('请先选一首 MIDI 曲目'), 'warn'); return; }
+  const rec = (app.songs || []).find((x) => x.id === cur.id) || cur;
+  const bytes = rec.__bytes || cur.__bytes;
+  if (!bytes || !bytes.length) { toast(t('读不到这首曲目的 MIDI 数据'), 'warn'); return; }
+  if (!bridge || typeof bridge.unifyMelody !== 'function') { toast(t('当前版本不支持该操作'), 'warn'); return; }
+  unifying.value = true;
+  try {
+    const r = await bridge.unifyMelody({ bytes, name: rec.name || cur.name });
+    if (!r || !r.ok) { toast(t('统一旋律音色失败：') + ((r && r.error) || ''), 'warn'); return; }
+    const base = String(rec.name || cur.name || 'song').replace(/\.(mid|midi)$/i, '');
+    await importFiles([{ name: base + t('（统一音色）') + '.mid', bytes: new Uint8Array(r.bytes) }]);
+    const u = (r.report && r.report.unified) || {};
+    toast(t('已把 {n} 个音符收进「{inst}」，已作为新曲目入库')
+      .replace('{n}', String(u.moved_notes || 0)).replace('{inst}', String(u.kept_track || '?')));
+  } catch (e) {
+    toast(t('统一旋律音色失败：') + String((e && e.message) || e), 'warn');
+  } finally { unifying.value = false; }
+}
 const busy = ref(false);
 const done = ref(false);
 const progress = ref(0);
@@ -1260,6 +1283,15 @@ onBeforeUnmount(() => {
                 <option value="organ">{{ t('风琴') }}</option>
                 <option value="">{{ t('不限定（旧行为）') }}</option>
               </select>
+            </label>
+          </div>
+          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
+            <label>
+              <span>
+                <b>{{ t('统一旋律音色（已有曲目）') }}</b>
+                <small>{{ t('对已经转录好的曲目再跑一遍主旋律归并：把跳来跳去的旋律收进一种音色，不重新转录') }}</small>
+              </span>
+              <button class="btn sm" :disabled="unifying" @click="unifyCurrentSong">{{ unifying ? t('处理中…') : t('执行') }}</button>
             </label>
           </div>
           <div class="tr-switch" v-if="mode === 'separate'">

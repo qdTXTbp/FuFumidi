@@ -201,3 +201,28 @@ def test_smart_finish_runs_both_passes(tmp_path):
     assert any("主旋律线统一" in m for m in logs), logs
     # 手动锁定乐器组时不干预（模型已经只输出该组）
     assert ig.smart_finish(path, mode="voice") == {"merged": False, "reason": "manual-instruments"}
+
+def test_unify_lead_never_drops_out_of_region_notes(tmp_path):
+    """不变量：搬移只改「音符属于哪条轨」，总数只会因为去重而减少。
+
+    实测踩过的坑：区域外的主旋律音曾经被直接丢掉（一次丢了 55 个音），
+    单测因为「什么都没搬 → 提前返回、没写文件」而看不出来。这里两者都要发生。
+    """
+    path = _write(tmp_path, [
+        # 主导组唱两句（间隔 8s > PHRASE_GAP，是两个乐句）
+        ("voice", 52, False, lambda i: (_melody(i, [72, 74, 76], 0.0), _melody(i, [72, 74, 76], 10.0))),
+        # 吉他：一句在主导组的乐句里（该搬），一句离得很远（必须原样留着）
+        ("clean electric guitar", 26, False,
+         lambda i: (_two_voice_melody(i, [79, 81], 10.5), _two_voice_melody(i, [79, 81], 30.0))),
+    ])
+    before = sum(r["notes"] for r in ig.analyze(path)[1])
+    info = ig.detect_melody_group(path)
+    res = ig.unify_lead(path, info=info)
+    after = sum(r["notes"] for r in ig.analyze(path)[1])
+    assert res["unified"] is True, res
+    assert res["moved_notes"] == 2, res                      # 10.5s 那句搬走
+    assert res["skipped"]["out_of_region"] == 2, res         # 30s 那句原样留着
+    assert after == before - res.get("dropped_dups", 0), (before, after, res)
+    rows = {r["name"]: r for r in ig.analyze(path)[1]}
+    # 吉他：8 个音 - 被搬走的 2 个高音 = 6（两句的低音声部都留着，30s 那句的高音也留着）
+    assert rows["clean electric guitar"]["notes"] == 6, rows["clean electric guitar"]

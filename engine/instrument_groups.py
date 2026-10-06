@@ -48,6 +48,9 @@ CHORD_WINDOW = 0.045
 CHORD_MIN_VOICES = 3
 # 与目标轨已有音符重合到这个程度（时间 ±30ms、音高 ±1 半音）时，判为重复音：丢掉而不是搬过去。
 DUP_WINDOW = 0.03
+# 主旋律线上两个音相隔多少秒之内算「同一句」：用来把主导组参与过的乐句连成区域。
+# 实测旧转录（Melody 遍布全曲）能连成 1-2 句；而前奏/尾奏与主歌间隔通常 > 4s，不会被卷进来。
+PHRASE_GAP = 4.0
 # 主旋律线统一这一遍的说明见 unify_lead()。
 
 
@@ -202,18 +205,78 @@ def merge_melody(path, out_path=None, info=None):
             "out": os.path.basename(out), "info": info}
 
 
+def _skyline_notes(pm, tgt_idx):
+    """挑出「主旋律线」上的音：此刻起音最高、且自己在同轨里不是和弦音。
+
+    返回 (per_track_skyline, phrase_spans)：
+      · per_track_skyline：轨号 -> 属于主旋律线的音符列表（保持时间序）
+      · phrase_spans：把主旋律线按「间隔 <= PHRASE_GAP」连成乐句，给出 (t0, t1, 是否含主导组)
+    只看起音不看延续音：听感上的主旋律由「谁在此刻起音最高」决定；按延续音算的话，
+    钢琴一个长音就会把后面所有旋律音都判成「不是最高音」（实测踩过这个坑）。
+    """
+    import bisect
+
+    onsets = sorted((n.start, n.pitch, i) for i, inst in enumerate(pm.instruments)
+                    if _notes_of(inst) and not getattr(inst, "is_drum", False)
+                    for n in _notes_of(inst))
+    onset_times = [x[0] for x in onsets]
+    per_track = {}
+    marks = []
+    for i, inst in enumerate(pm.instruments):
+        if getattr(inst, "is_drum", False) or not _notes_of(inst):
+            continue
+        ordered = sorted(inst.notes, key=lambda x: x.start)
+        starts = [x.start for x in ordered]
+        pitches = [x.pitch for x in ordered]
+        sky = []
+        for n in ordered:
+            if n.pitch < MELODY_MIN_PITCH:
+                continue
+            # 同轨同簇 >=3 个不同音高 = 和弦/柱式织体，不是单声旋律
+            j = bisect.bisect_left(starts, n.start - CHORD_WINDOW)
+            voices = set()
+            while j < len(starts) and starts[j] <= n.start + CHORD_WINDOW:
+                voices.add(pitches[j])
+                j += 1
+            if len(voices) >= CHORD_MIN_VOICES:
+                continue
+            # 此刻（±45ms 起音窗）别的轨有没有更高的音？有 → 它不是主旋律线
+            k = bisect.bisect_left(onset_times, n.start - CHORD_WINDOW)
+            top = True
+            while k < len(onset_times) and onset_times[k] <= n.start + CHORD_WINDOW:
+                st, pc, ti = onsets[k]
+                if ti != i and pc > n.pitch:
+                    top = False
+                    break
+                k += 1
+            if not top:
+                continue
+            sky.append(n)
+            marks.append((n.start, i == tgt_idx))
+        per_track[i] = sky
+    marks.sort()
+    spans = []
+    for (t, is_tgt) in marks:
+        if spans and t - spans[-1][1] <= PHRASE_GAP:
+            spans[-1][1] = t
+            spans[-1][2] = spans[-1][2] or is_tgt
+        else:
+            spans.append([t, t, is_tgt])
+    return per_track, spans
+
+
 def unify_lead(path, out_path=None, info=None, log=None):
     """把「主旋律线」统一到主导组的音色（第二遍）。
 
-    第一遍 merge_melody() 只能合并**基本单声部**的候选轨；实测《甩葱歌》里
+    第一遍 merge_melody() 只能合并**基本单声部**的候选轨；实测《初音ミク-甩葱歌》里
     clean electric guitar（306 音）既弹伴奏又弹旋律（高音旋律 + 低音两音一簇），
     自复调 0.6 以上，进不了候选，于是归并后主旋律仍在 guitar / voice 之间来回跳
     （24-28s、102-110s 实测每 0.25s 换一次音色）。
 
     这一遍按**音**处理，不按轨处理：
-      · 只在主导组的时间跨度内动手（前奏/尾奏保持原样）；
-      · 只搬「此刻起音最高（±45ms 窗内别的轨没有更高的音）」的那一粒；
-      · 同轨同簇 >=3 个音高（和弦/柱式织体）整簇保留 —— 伴奏不会被拆散；
+      · 只搬「此刻起音最高、且自己在同轨里不是和弦音」的音（和弦/柱式织体整簇保留）；
+      · 只搬主导组参与的那些乐句（间隔 <= PHRASE_GAP 连成一句）—— 前奏/尾奏里
+        与主导组无关的段落保持原样，不会把伴奏旋律也卷进来；
       · 目标轨已有同音时判为重复音，直接丢掉（避免变成齐奏双音）。
     搬移不改音高/起止/力度，因此不会改变节奏与表情。
     """
@@ -222,7 +285,6 @@ def unify_lead(path, out_path=None, info=None, log=None):
     name = (info.get("group") or "").strip()
     if not name:
         return {"unified": False, "reason": "no-melody-group", "info": info}
-    import bisect
     import pretty_midi
 
     pm = pretty_midi.PrettyMIDI(path)
@@ -236,57 +298,48 @@ def unify_lead(path, out_path=None, info=None, log=None):
     target = pm.instruments[tgt_idx]
     t0 = min(n.start for n in target.notes)
     t1 = max(n.end for n in target.notes)
-    lo, hi = t0 - LEAD_REGION_PAD, t1 + LEAD_REGION_PAD
-    # 全场所有非鼓轨的「起音时刻 → 音高」索引：判断「这一粒此刻是不是最高音」。
-    # 只看起音（不看延续音）：听感上的主旋律由「谁在此刻起音最高」决定，
-    # 若按延续音算，钢琴一个长音就会把后面所有旋律音都判成"不是最高音"（实测踩过）。
-    onsets = sorted((n.start, n.pitch, i) for i, inst in enumerate(pm.instruments)
-                    if _notes_of(inst) and not getattr(inst, "is_drum", False)
-                    for n in _notes_of(inst))
-    onset_times = [x[0] for x in onsets]
+    skyline, spans = _skyline_notes(pm, tgt_idx)
+    # 区域 = 主导组参与过的乐句（并集）；一个都没有时退回主导组自身跨度
+    regions = [(s[0], s[1]) for s in spans if s[2]]
+    if not regions:
+        regions = [(t0 - LEAD_REGION_PAD, t1 + LEAD_REGION_PAD)]
+    # 相邻乐句之间也补上（间隔不大时没必要来回切区域边界）
+    merged = []
+    for a, b in sorted(regions):
+        if merged and a - merged[-1][1] <= PHRASE_GAP:
+            merged[-1][1] = b
+        else:
+            merged.append([a, b])
+    regions = merged
+
+    def in_region(t):
+        for a, b in regions:
+            if a - LEAD_REGION_PAD <= t <= b + LEAD_REGION_PAD:
+                return True
+        return False
+
     moved = 0
     dropped = 0
     moved_by = {}
-    skipped = {"below_register": 0, "out_of_region": 0, "chord": 0, "not_top": 0}
-    skipped_by = {}
+    # 记账：区域外原样保留的音 + 主旋律线上的音总数（用于排查「音符有没有丢」）
+    skipped = {"out_of_region": 0,
+               "skyline_notes": sum(len(v) for k, v in skyline.items() if k != tgt_idx)}
+    moved_by_region = {}
     for i, inst in enumerate(pm.instruments):
-        if i == tgt_idx or getattr(inst, "is_drum", False) or not _notes_of(inst):
+        if getattr(inst, "is_drum", False) or not _notes_of(inst):
             continue
-        notes = inst.notes
-        ordered = sorted(notes, key=lambda x: x.start)
-        starts = [x.start for x in ordered]
-        pitches = [x.pitch for x in ordered]
+        sky = skyline.get(i) or []
+        if i == tgt_idx:
+            continue
         keep = []
-        for n in notes:
-            if n.pitch < MELODY_MIN_PITCH or n.start < lo or n.start > hi:
-                skipped["below_register" if n.pitch < MELODY_MIN_PITCH else "out_of_region"] += 1
+        sky_ids = {id(n) for n in sky}
+        for n in inst.notes:
+            if id(n) not in sky_ids:
                 keep.append(n)
                 continue
-            # 同轨同簇的音高集合：>=3 个不同音高 = 和弦/柱式织体 → 整簇保留
-            j = bisect.bisect_left(starts, n.start - CHORD_WINDOW)
-            voices = set()
-            while j < len(starts) and starts[j] <= n.start + CHORD_WINDOW:
-                voices.add(pitches[j])
-                j += 1
-            if len(voices) >= CHORD_MIN_VOICES:
-                skipped["chord"] += 1
-                skipped_by.setdefault("chord", {})[inst.name or ("track%d" % i)] = \
-                    skipped_by.setdefault("chord", {}).get(inst.name or ("track%d" % i), 0) + 1
-                keep.append(n)
-                continue
-            # 此刻（±45ms 起音窗）别的轨有没有更高的音？有 → 它不是主旋律线，留下当伴奏
-            k = bisect.bisect_left(onset_times, n.start - CHORD_WINDOW)
-            is_top = True
-            while k < len(onset_times) and onset_times[k] <= n.start + CHORD_WINDOW:
-                st, pc, ti = onsets[k]
-                if ti != i and pc > n.pitch:
-                    is_top = False
-                    break
-                k += 1
-            if not is_top:
-                skipped["not_top"] += 1
-                skipped_by.setdefault("not_top", {})[inst.name or ("track%d" % i)] = \
-                    skipped_by.setdefault("not_top", {}).get(inst.name or ("track%d" % i), 0) + 1
+            if not in_region(n.start):
+                # 区域外的主旋律音：原样留在本轨（那是与主导组无关的段落，不能动、更不能丢）
+                skipped["out_of_region"] += 1
                 keep.append(n)
                 continue
             if any(abs(t.start - n.start) <= DUP_WINDOW and abs(t.pitch - n.pitch) <= 1 for t in target.notes):
@@ -298,18 +351,22 @@ def unify_lead(path, out_path=None, info=None, log=None):
             moved += 1
         inst.notes = keep
     if not moved and not dropped:
-        return {"unified": False, "reason": "single-lead-already", "group": name, "info": info}
+        return {"unified": False, "reason": "single-lead-already", "group": name,
+                "regions": [[round(a, 2), round(b, 2)] for a, b in regions],
+                "skipped": skipped, "info": info}
     target.notes.sort(key=lambda n: (n.start, n.pitch))
     pm.instruments = [x for x in pm.instruments if _notes_of(x) or getattr(x, "is_drum", False)]
     out = out_path or path
     pm.write(out)
-    say("[识别] 主旋律线统一到「%s」：搬移 %d 个音符、去重 %d 个（%s），跨度 %.1f-%.1fs" % (
-        name, moved, dropped, " / ".join("%s×%d" % (k, v) for k, v in sorted(moved_by.items(), key=lambda x: -x[1])),
-        t0, t1))
+    say("[识别] 主旋律线统一到「%s」：搬移 %d 个音符、去重 %d 个（%s）· %d 个乐句 %s" % (
+        name, moved, dropped,
+        " / ".join("%s×%d" % (k, v) for k, v in sorted(moved_by.items(), key=lambda x: -x[1])),
+        len(regions),
+        " ".join("%.0f-%.0fs" % (a, b) for a, b in regions[:6])))
     return {"unified": True, "moved_notes": moved, "dropped_dups": dropped, "moved_by": moved_by,
-            "skipped": skipped, "skipped_by": skipped_by,
-            "kept_track": name, "t0": round(t0, 2), "t1": round(t1, 2), "out": os.path.basename(out)}
-
+            "skipped": skipped, "kept_track": name,
+            "regions": [[round(a, 2), round(b, 2)] for a, b in regions],
+            "t0": round(t0, 2), "t1": round(t1, 2), "out": os.path.basename(out)}
 
 def smart_finish(path, mode="auto", log=None):
     """转录收尾入口：mode=auto 时做两遍处理；其它值原样返回。

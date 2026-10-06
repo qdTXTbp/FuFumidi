@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
   },
   // 转录引擎
   convert: (cfg) => ipcRenderer.invoke('engine:convert', cfg),
+  // 统一旋律音色（对已有曲目的字节跑一遍主旋律归并，不重新转录）
+  unifyMelody: (opts) => ipcRenderer.invoke('engine:unifyMelody', opts),
   cancel: (id) => ipcRenderer.invoke('engine:cancel', id),
   onEngineLog: (cb) => {
     const w = (_e, p) => cb(p);
