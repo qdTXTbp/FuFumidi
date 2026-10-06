@@ -226,10 +226,36 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
   // 纵向吸附到设备像素：所有会随播放移动的纵向坐标都过它，保证整场滚动步进一致、边缘不忽清忽虚
   const sc = pixelScale(ctx);
   const snapY = (yv) => Math.round(yv * sc) / sc;
-  const bg = ctx.createLinearGradient(0, 0, 0, h);
-  bg.addColorStop(0, cssVar('--canvas', '#ffffff'));
-  bg.addColorStop(1, cssVar('--surface', '#f7f8fa'));
-  ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+  // ---- 背景：主题渐变 / 纯色 / 真透明（OBS 叠加层）/ 自定义图片（可模糊 + 暗化）----
+  // opts.bg = { mode:'theme'|'solid'|'transparent'|'image', color, image, blur, dim }
+  const bgOpt = opts.bg || {};
+  const bgMode = bgOpt.mode || 'theme';
+  const bgBlur = Math.max(0, Number(bgOpt.blur) || 0);
+  const bgDim = Math.max(0, Math.min(0.9, Number(bgOpt.dim) || 0));
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (bgMode === 'transparent') {
+    // 真的清成透明：导出 PNG / 视频后才能当叠加层用
+    ctx.clearRect(0, 0, w, h);
+  } else if (bgMode === 'solid') {
+    ctx.fillStyle = bgOpt.color || cssVar('--canvas', '#0b1020');
+    ctx.fillRect(0, 0, w, h);
+  } else if (bgMode === 'image' && bgOpt.image && bgOpt.image.width) {
+    const im = bgOpt.image;
+    const scale = Math.max(w / im.width, h / im.height);   // cover：填满、不拉伸变形
+    const dw = im.width * scale, dh = im.height * scale;
+    ctx.filter = bgBlur > 0 ? 'blur(' + bgBlur + 'px)' : 'none';
+    ctx.drawImage(im, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    ctx.filter = 'none';
+    if (bgDim > 0) { ctx.fillStyle = 'rgba(0,0,0,' + bgDim + ')'; ctx.fillRect(0, 0, w, h); }
+  } else {
+    const bg = ctx.createLinearGradient(0, 0, 0, h);
+    bg.addColorStop(0, cssVar('--canvas', '#ffffff'));
+    bg.addColorStop(1, cssVar('--surface', '#f7f8fa'));
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+    if (bgDim > 0) { ctx.fillStyle = 'rgba(0,0,0,' + bgDim + ')'; ctx.fillRect(0, 0, w, h); }
+  }
+  ctx.restore();
 
   let d = 0, curTempo = (song && song.initialBpm) || 120, curSig = { num: 4 };
   if (song) {
@@ -259,7 +285,7 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
 
   // ---- 音乐能量驱动的背景光晕（能量由调用方传入，实时与导出同算法）----
   const energy = clamp01(opts.energy || 0);
-  if (energy > 0.01 && wN > 0) {
+  if (energy > 0.01 && wN > 0 && bgMode !== 'transparent') {
     const glow = ctx.createLinearGradient(0, wN, 0, 0);
     glow.addColorStop(0, cssVar('--accent', '#4f94e0'));
     glow.addColorStop(1, 'rgba(0,0,0,0)');

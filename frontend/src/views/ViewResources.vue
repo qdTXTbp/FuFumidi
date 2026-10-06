@@ -456,7 +456,7 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
       <ViewModels />
 
       <div class="card res-sec" data-guide="vm-download-settings">
-        <div class="res-sec-head"><Icon name="settings" :size="15" /> {{ t('模型下载设置') }}</div>
+        <div class="res-sec-head"><Icon name="gear" :size="15" /> {{ t('模型下载设置') }}</div>
         <div class="field-row top">
           <div>
             <div class="fr-label">HuggingFace Token</div>

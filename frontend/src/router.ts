@@ -24,6 +24,10 @@ const routes: RouteRecordRaw[] = [
   { path: '/plugins', name: 'plugins', component: () => import('./views/PluginCenter.vue') },
   // 声库原为独立页，已并入「调教」；旧地址保留为重定向，老书签 / 外部链接继续可用。
   { path: '/banks', redirect: { path: '/singer', query: { tab: 'banks' } } },
+  // 声库制作（上传音频切分 / 录音 / oto 标注 / 导出声库）：
+  // ★ 组件 ViewVoicebank.vue 一直都在，但合并板块后**没有任何路由指向它** ——
+  //   调教页「UTAU 声库制作」的按钮又错接到了「下载声库」的列表上，于是功能看起来"缺失"。
+  { path: '/voicebank', name: 'voicebank', component: () => import('./views/ViewVoicebank.vue') },
   // UTAU 与 DiffSinger 早已合并为同一板块：旧地址重定向过去并带上对应引擎
   { path: '/utau', redirect: { path: '/singer', query: { tab: 'editor' } } },
   { path: '/diffsinger', redirect: { path: '/singer', query: { tab: 'editor' } } },

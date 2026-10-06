@@ -1318,24 +1318,71 @@ async function onMuteAudio(x: any, e: Event) {
  *      （见 main/dialogs.js 的说明），应用里其他导出（MIDI / 视频 / 配置 / 乐谱）早就改走
  *      `file:saveBinary`，只有这里漏了。现在与它们统一。
  */
+/** AudioBuffer → 16bit PCM WAV 字节（导出成品用；单轨导出直接给引擎回传的原始字节） */
+function bufferToWav(buf: AudioBuffer): Uint8Array {
+  const ch = Math.min(2, buf.numberOfChannels || 1);
+  const n = buf.length;
+  const bytes = new Uint8Array(44 + n * ch * 2);
+  const dv = new DataView(bytes.buffer);
+  const ws = (o: number, s: string) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, 'RIFF'); dv.setUint32(4, 36 + n * ch * 2, true); ws(8, 'WAVEfmt ');
+  dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, ch, true);
+  dv.setUint32(24, buf.sampleRate, true); dv.setUint32(28, buf.sampleRate * ch * 2, true);
+  dv.setUint16(32, ch * 2, true); dv.setUint16(34, 16, true);
+  ws(36, 'data'); dv.setUint32(40, n * ch * 2, true);
+  const data: Float32Array[] = [];
+  for (let c = 0; c < ch; c++) data.push(buf.getChannelData(c));
+  let o = 44;
+  for (let i = 0; i < n; i++) {
+    for (let c = 0; c < ch; c++) {
+      const v = Math.max(-1, Math.min(1, data[c][i]));
+      dv.setInt16(o, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+      o += 2;
+    }
+  }
+  return bytes;
+}
+
+/** 「导出 WAV」：
+ *  - 有伴奏轨 / 有多条已渲染声部轨 → 导出**成品混音**（与播放听到的完全一致）；
+ *  - 只有一条轨 → 仍然导出引擎回传的原始字节（不二次编码）。
+ *  ★ 以前无论什么情况都只给「当前这一条轨」，用户要成品只能自己去外面混。
+ */
 async function doSave() {
   const b = store.exportBytes;
-  if (!b) { sayErr(t('还没有可导出的音频'), t('先点「渲染本轨」（Enter）或「渲染全部轨」，再导出。')); return; }
-  const name = (tr.value?.name || 'render') + '.wav';
   const b2 = window.fuBridge as any;
-  if (b2 && typeof b2.saveBinary === 'function') {
-    // 直接传 Uint8Array（结构化克隆），避免 Array.from 生成数千万元素的数组
-    const r = await b2.saveBinary({ name, data: b });
-    if (r && r.ok) say(t('已保存到：') + String(r.path || name), 'ok');
-    else if (!(r && r.canceled)) sayErr(t('保存失败：') + ((r && r.error) || t('未知原因')));
-    return;
+  const save = async (name: string, data: Uint8Array): Promise<void> => {
+    if (b2 && typeof b2.saveBinary === 'function') {
+      // 直接传 Uint8Array（结构化克隆），避免 Array.from 生成数千万元素的数组
+      const r = await b2.saveBinary({ name, data });
+      if (r && r.ok) say(t('已保存到：') + String(r.path || name), 'ok');
+      else if (!(r && r.canceled)) sayErr(t('保存失败：') + ((r && r.error) || t('未知原因')));
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([data.buffer as ArrayBuffer], { type: 'audio/wav' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  };
+  const hasAudio = store.tracks.some(x => x.kind === 'audio' && x.audio && !x.audio.muted);
+  const rendered = store.renderedTrackIds.length;
+  if (hasAudio || rendered > 1) {
+    say(t('正在混音（伴奏 + 已渲染声部）…'), 'info');
+    try {
+      const err = await reloadTransport();
+      if (err) { sayErr(err); return; }
+      const buf = await (transport as any).renderOffline();
+      if (!buf) { sayErr(t('混音失败'), t('先渲染一次，或导入一个伴奏。')); return; }
+      await save((store.meta?.title || tr.value?.name || 'render') + '_mix.wav', bufferToWav(buf));
+      return;
+    } catch (e: any) {
+      sayErr(t('混音失败：') + String((e && e.message) || e), t('已改回导出当前轨。'));
+    }
   }
-  const url = URL.createObjectURL(new Blob([b.buffer as ArrayBuffer], { type: 'audio/wav' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  if (!b) { sayErr(t('还没有可导出的音频'), t('先点「渲染本轨」（Enter）或「渲染全部轨」，再导出。')); return; }
+  await save(((tr.value?.name || 'render') + '.wav'), b);
 }
 
 /* ------------------------------------------------------------ 工程文件 */
@@ -1422,7 +1469,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <button class="btn sm primary" @click="addTrack('diffsinger')"><Icon name="spark" :size="12" /> {{ t('新建 DiffSinger 轨') }}</button>
         <button class="btn sm" @click="addTrack('utau')"><Icon name="mic" :size="12" /> {{ t('新建 UTAU 轨') }}</button>
         <button class="btn sm" @click="openProject"><Icon name="folder" :size="12" /> {{ t('打开工程') }}</button>
-        <button class="btn sm" @click="importMidi"><Icon name="upload" :size="12" /> {{ t('导入 MIDI') }}</button>
+        <button class="btn sm" @click="importMidi"><Icon name="import" :size="12" /> {{ t('导入 MIDI') }}</button>
         <button class="btn sm" @click="openLibraryDialog"><Icon name="folder" :size="12" /> {{ t('从曲库选') }}</button>
         <button class="btn sm" @click="setTab('banks')"><Icon name="box" :size="12" /> {{ t('装声库') }}</button>
       </div>
@@ -1449,7 +1496,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <Icon name="music" :size="12" /> {{ t('导入音频（伴奏）') }}
         </button>
         <button class="ib wide" data-guide="sing-import-midi" :disabled="busyImport" @click="importMidi">
-          <Icon name="upload" :size="12" /> {{ t('导入 MIDI') }}
+          <Icon name="import" :size="12" /> {{ t('导入 MIDI') }}
         </button>
         <!-- 曲库里的 MIDI 本来就在数据目录里，没必要再走一次系统文件对话框 -->
         <button class="ib wide" data-guide="sing-import-library" :disabled="busyImport" @click="openLibraryDialog">
@@ -1655,7 +1702,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <Icon :name="tplaying ? 'pause' : 'play'" :size="13" />
         </button>
         <button class="btn" :title="t('停止（回到 0）')" @click="tstop">
-          <Icon name="square" :size="12" />
+          <Icon name="stop" :size="12" />
         </button>
         <!-- 进度条上叠一层循环区间色块：A/B 设在哪一眼可见 -->
         <div class="xbar-wrap">
@@ -1991,7 +2038,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <b>{{ t('已选 ') }}{{ selNotes.length }}{{ t(' 个音符') }}</b>
         <button class="btn sm" @click="openLyricDialog()"><Icon name="edit" :size="12" /> {{ t('批量填词') }}</button>
         <button class="btn sm" @click="importLyricsFile" :title="t('读入 .txt / .lrc：txt 走分词填入，lrc 按时间轴自动对轴')">
-          <Icon name="upload" :size="12" /> {{ t('导入歌词') }}
+          <Icon name="import" :size="12" /> {{ t('导入歌词') }}
         </button>
         <button class="btn sm" @click="openAliasDialog" :title="t('看这个声库支持哪些发音，点一下就能填')">
           <Icon name="music" :size="12" /> {{ t('发音表') }}

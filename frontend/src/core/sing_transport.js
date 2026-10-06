@@ -280,6 +280,60 @@ export class SingTransport {
     return this.playing;
   }
 
+  /**
+   * 离线混音导出：把当前所有 lane（伴奏 + **每一条**已渲染的声部轨）按播放时同一套
+   * 增益 / 音量自动化 / 声像 / 效果链混成一个 AudioBuffer。
+   *
+   * ★ 以前「导出 WAV」只给**当前这一条轨**，用户想听成品得自己去外面混 ——
+   *   传声器里明明已经在把伴奏和人声混着放了，导出没有理由不给成品。
+   */
+  async renderOffline() {
+    const lanes = (this.lanes || []).filter(
+      (l) => l && l.buf && !l.muted && l.buf.duration > (l.skipMs || 0) / 1000);
+    if (!lanes.length) return null;
+    const Off = typeof window !== 'undefined'
+      && (window.OfflineAudioContext || window.webkitOfflineAudioContext);
+    if (!Off) return null;
+    const sr = lanes[0].buf.sampleRate || 44100;
+    const rate = this._rate || 1;
+    const totalSec = Math.max(...lanes.map((l) => (l.buf.duration - (l.skipMs || 0) / 1000) / rate)) + 0.3;
+    const ctx = new Off(2, Math.max(1, Math.ceil(totalSec * sr)), sr);
+    for (const lane of lanes) {
+      const skip = Math.max(0, (lane.skipMs || 0) / 1000);
+      const bufDur = lane.buf.duration - skip;
+      if (bufDur <= 0.001) continue;
+      const outDur = bufDur / rate;              // 变速后这条 lane 在时间轴上占多长
+      const src = ctx.createBufferSource();
+      src.buffer = lane.buf;
+      let head = src;
+      const chain = lane.fx && lane.fx.length ? buildFxChain(ctx, lane.fx) : null;
+      if (chain && chain.input && chain.output) { src.connect(chain.input); head = chain.output; }
+      const g = ctx.createGain();
+      g.gain.value = SingTransport._gain(lane.gainDb);
+      if (lane.volPoints && lane.volPoints.length) {
+        try {
+          g.gain.setValueCurveAtTime(
+            envelopeFrom(lane.volPoints, lane.bpm, 0, outDur, 256, 'VOL'), 0, outDur);
+        } catch (_) { /* 不支持就退回固定增益 */ }
+      }
+      head.connect(g);
+      let tail = g;
+      if (ctx.createStereoPanner && lane.panPoints && lane.panPoints.length) {
+        const p = ctx.createStereoPanner();
+        try {
+          p.pan.setValueCurveAtTime(
+            envelopeFrom(lane.panPoints, lane.bpm, 0, outDur, 256, 'PAN'), 0, outDur);
+        } catch (_) { /* 同上，退回居中 */ }
+        g.connect(p);
+        tail = p;
+      }
+      tail.connect(ctx.destination);
+      try { src.playbackRate.value = rate; } catch (_) { /* 只读时忽略 */ }
+      src.start(0, skip, bufDur);                // 第 3 个参数是**缓冲区时间**
+    }
+    return await ctx.startRendering();
+  }
+
   pause() {
     if (!this.playing) return;
     this._offsetMs = this.positionMs;              // 先记位置再停

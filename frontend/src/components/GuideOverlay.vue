@@ -140,7 +140,7 @@ const CHAPTERS = computed(() => [
     ],
   },
   {
-    id: 'analyze', ic: 'analyze', name: t('数据分析'), desc: t('调性、速度、和弦与各类分布'),
+    id: 'analyze', ic: 'chart', name: t('数据分析'), desc: t('调性、速度、和弦与各类分布'),
     steps: [
       { parent: 'views', tab: 'analyze', selector: '.stat-grid', title: t('九张统计卡'), desc: t('调性、速度 BPM、拍号、音符总数、音域、最大复音、音符密度、音轨数、时长。'), manual: true, needSong: true },
       { parent: 'views', tab: 'analyze', selector: '.chord-chips', title: t('和弦统计'), desc: t('按小节统计最常用的和弦；点一个和弦会跳到编辑页对应位置。'), manual: true, needSong: true },

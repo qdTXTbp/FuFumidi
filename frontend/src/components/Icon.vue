@@ -1,7 +1,19 @@
 <script setup>
 // 图标集与原始仓库保持一致（FuFumidi.html 中的 ICONS，viewBox 24×24、stroke 1.8 圆头圆角）
+import { watchEffect } from 'vue';
 const props = defineProps({ name: { type: String, required: true }, size: { type: Number, default: 16 } });
+const _warned = new Set();
+watchEffect(() => {
+  const n = props.name;
+  if (n && n !== '__missing' && !P[n] && !_warned.has(n)) {
+    _warned.add(n);
+    console.warn('[Icon] 未定义的图标名：' + n + '（渲染成空白，检查拼写）');
+  }
+});
 const P = {
+  // ★ 名字写错（如 stop 写成 square）时 v-html 会渲染成空白 —— 按钮就变成「点了没图标」，
+  //   而且完全不报错。开发期直接喊出来，别让它悄悄上线。
+  __missing: '',
   home: '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
   play2: '<polygon points="5 3 19 12 5 21 5 3"/>',
   music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
@@ -74,6 +86,10 @@ const P = {
   cut: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/>',
   split: '<line x1="12" y1="2.5" x2="12" y2="21.5" stroke-dasharray="3 3"/><polyline points="7.5 8 3.5 12 7.5 16"/><polyline points="16.5 8 20.5 12 16.5 16"/>',
   merge: '<line x1="12" y1="2.5" x2="12" y2="21.5" stroke-dasharray="3 3"/><polyline points="3.5 8 7.5 12 3.5 16"/><polyline points="20.5 8 16.5 12 20.5 16"/>',
+  list: '<line x1="8.5" y1="6" x2="21" y2="6"/><line x1="8.5" y1="12" x2="21" y2="12"/><line x1="8.5" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1.3" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1.3" fill="currentColor" stroke="none"/>',
+  layers: '<polygon points="12 2.5 22 7.5 12 12.5 2 7.5"/><polyline points="2 12 12 17 22 12"/><polyline points="2 16.5 12 21.5 22 16.5"/>',
+  sliders: '<line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="16" x2="20" y2="16"/><circle cx="9" cy="8" r="2.6" fill="var(--canvas, #fff)"/><circle cx="15" cy="16" r="2.6" fill="var(--canvas, #fff)"/>',
+  cloud: '<path d="M17.5 19a4.5 4.5 0 0 0 .5-8.97A6 6 0 0 0 6.2 11.2 3.9 3.9 0 0 0 7 19h10.5z"/>',
 };
 </script>
 

@@ -476,6 +476,9 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
     const entry = { ctrl: null, isUserAbort: false };
     _vbAborts.set(it.id, entry);
     let ws = null, lastErr = null;
+    // ★ 进度只增不减：多源轮换时如果按「本轮字节」重算，进度条会被打回 0 再涨回去，
+    //   用户看到的就是「抽搐」。失败换源时保留高水位，另发 phase:'retry' 说明原因。
+    let hiPct = 0;
 
     try {
       for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -515,7 +518,9 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
               lastData = Date.now();
               got += value.length;
               const received = have + got;
-              send({ id, phase: 'download', received, total, percent: total ? Math.min(84, Math.round(received / total * 84)) : 0, done: false });
+              const pct = total ? Math.min(84, Math.round(received / total * 84)) : 0;
+              if (pct > hiPct) hiPct = pct;
+              send({ id, phase: 'download', received, total, percent: hiPct, done: false });
               await new Promise((res2, rej2) => ws.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
             }
           } finally { clearInterval(watchdog); }
@@ -532,7 +537,9 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
           try { if (ws) ws.destroy(); } catch (e2) {}
           ws = null;
           if (entry.isUserAbort) return { ok: false, cancelled: true, error: '已取消' };
-          send({ id, phase: 'download', percent: 0, done: false, error: '第 ' + (round + 1) + ' 轮失败，自动换源/续传…' });
+          // ★ 不要把 percent 打回 0（那样进度条会来回跳）；保留高水位，另发 retry 相位让界面解释一句
+          send({ id, phase: 'retry', percent: hiPct, done: false, retry: round + 1,
+                 error: '第 ' + (round + 1) + ' 轮失败，自动换源/续传…' });
           if (round === MAX_ROUNDS - 1) {
             return { ok: false, error: '下载失败（已多源轮换 ' + MAX_ROUNDS + ' 轮）：' + ((lastErr && lastErr.message) || '网络不可达') };
           }

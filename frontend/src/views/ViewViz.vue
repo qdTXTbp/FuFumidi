@@ -14,6 +14,47 @@ const wfZoom = ref(1);
 const colorScheme = ref(0);
 const immersive = ref(false);
 
+/* ---------------- 音符瀑布的背景 ----------------
+   theme       主题渐变（默认）
+   solid       纯色（深色底更适合投影/OBS）
+   image       自定义图片（可模糊 + 暗化）—— 参照 SeeMusic / Synthesia 的"背景图"玩法
+   transparent 真·透明（导出的 PNG/视频直接当叠加层，不再是一块白底）                */
+const BG_KEY = 'fufumidi.viz.bg';
+const bg = ref({ mode: 'theme', color: '#0b1020', blur: 12, dim: 0.35, src: '' });
+const bgImage = ref(null);          // 已解码的 HTMLImageElement（传给渲染器）
+const bgMore = ref(false);
+try {
+  const s = JSON.parse(localStorage.getItem(BG_KEY) || 'null');
+  if (s && typeof s === 'object') bg.value = { ...bg.value, ...s };
+} catch (e) { /* 存储坏了就用默认值 */ }
+function saveBg() {
+  try { localStorage.setItem(BG_KEY, JSON.stringify(bg.value)); } catch (e) { /* 隐私模式忽略 */ }
+}
+function loadBgImage(src) {
+  if (!src) { bgImage.value = null; return; }
+  const im = new Image();
+  im.onload = () => { bgImage.value = im; };
+  im.onerror = () => { bgImage.value = null; };
+  im.src = src;
+}
+watch(() => bg.value.src, (v) => loadBgImage(v), { immediate: true });
+async function pickBgImage() {
+  const b = window.fuBridge;
+  if (!b || typeof b.pickFile !== 'function') { app.toast(t('当前环境不支持选择图片'), 'warn'); return; }
+  const p = await b.pickFile({ filters: [{ name: t('图片'), extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }] });
+  if (!p) return;
+  const ab = await b.readBinary(p);
+  if (!ab) { app.toast(t('读取图片失败'), 'error'); return; }
+  const mime = /\.png$/i.test(p) ? 'image/png' : (/\.gif$/i.test(p) ? 'image/gif' : (/\.webp$/i.test(p) ? 'image/webp' : 'image/jpeg'));
+  bg.value = { ...bg.value, src: URL.createObjectURL(new Blob([ab], { type: mime })), mode: 'image' };
+  saveBg();
+}
+function setBgMode(m) {
+  if (m === 'image' && !bg.value.src) { void pickBgImage(); return; }
+  bg.value = { ...bg.value, mode: m };
+  saveBg();
+}
+
 // 沉浸模式下仪表盘那三张卡片没有意义，直接按瀑布流布局铺满
 const isWaterfall = computed(() => mode.value === 'waterfall' || immersive.value);
 
@@ -145,6 +186,8 @@ function drawRoll(ctx2d, c, u, syn, song, player) {
     lyricAt: '',
     activeNotes: syn && syn.activeNow ? syn.activeNow() : [],
     energy: rollState.energy || 0,
+    // 背景只作用于音符瀑布（频谱/示波器/和弦仍是主题底）
+    bg: { mode: bg.value.mode, color: bg.value.color, blur: bg.value.blur, dim: bg.value.dim, image: bgImage.value },
   });
 }
 
@@ -294,6 +337,11 @@ onBeforeUnmount(() => {
           <button class="chip-btn" :class="{ 'active': mode === 'dash' }" data-guide="viz-modes" @click="mode = 'dash'">{{ t('仪表盘') }}</button>
           <button class="chip-btn" :class="{ 'active': mode === 'waterfall' }" data-guide="viz-waterfall" @click="mode = 'waterfall'">{{ t('瀑布流') }}</button>
           <button class="chip-btn" @click="colorScheme = (colorScheme + 1) % 4" :title="t('切换瀑布流配色')">{{ t('配色') }}</button>
+          <!-- 背景：主题 / 纯色 / 图片 / 透明（叠加层）。SeeMusic 那类软件把"背景图 + 模糊"
+               当成主要观感开关，这里补上；透明档配合导出即可当 OBS 叠加层。 -->
+          <button class="chip-btn" :class="{ active: bgMore }" :title="t('音符瀑布背景（主题/纯色/图片/透明）')" @click="bgMore = !bgMore">
+            <Icon name="eye" :size="12" />{{ t('背景') }}
+          </button>
           <span style="flex:1"></span>
           <button class="chip-btn" @click="wfZoom = Math.max(0.4, +(wfZoom - 0.1).toFixed(2))">−</button>
           <span class="vc-zoom">{{ Math.round(wfZoom * 100) }}%</span>
@@ -302,6 +350,21 @@ onBeforeUnmount(() => {
             <Icon name="expand" :size="13" />{{ t('沉浸模式') }}
           </button>
           <span class="muted small" style="margin-left:10px">{{ t('Synthesia · 播放同步') }}</span>
+        </div>
+        <div v-if="bgMore" class="viz-bg-bar">
+          <span class="muted small">{{ t('音符瀑布背景') }}</span>
+          <button class="chip-btn" :class="{ active: bg.mode === 'theme' }" @click="setBgMode('theme')">{{ t('主题') }}</button>
+          <button class="chip-btn" :class="{ active: bg.mode === 'solid' }" @click="setBgMode('solid')">{{ t('纯色') }}</button>
+          <input v-if="bg.mode === 'solid'" type="color" class="viz-bg-color" :value="bg.color" @input="bg.color = $event.target.value; saveBg()" />
+          <button class="chip-btn" :class="{ active: bg.mode === 'image' }" @click="setBgMode('image')">{{ t('图片') }}</button>
+          <button class="chip-btn" :title="t('选择背景图片') " @click="pickBgImage"><Icon name="folder" :size="12" />{{ t('选择…') }}</button>
+          <button class="chip-btn" :class="{ active: bg.mode === 'transparent' }" :title="t('真·透明：导出的画面可当叠加层')" @click="setBgMode('transparent')">{{ t('透明') }}</button>
+          <template v-if="bg.mode === 'image' || bg.mode === 'theme'">
+            <span class="muted small">{{ t('模糊') }}</span>
+            <input type="range" min="0" max="40" step="1" :value="bg.blur" @input="bg.blur = +$event.target.value; saveBg()" style="width:88px" />
+            <span class="muted small">{{ t('暗化') }}</span>
+            <input type="range" min="0" max="80" step="5" :value="Math.round(bg.dim * 100)" @input="bg.dim = (+$event.target.value) / 100; saveBg()" style="width:88px" />
+          </template>
         </div>
         <div class="vc-body">
           <canvas id="vizRoll"></canvas>
@@ -355,6 +418,10 @@ onBeforeUnmount(() => {
 .vc-head .vc-zoom { font-size: 11px; min-width: 44px; text-align: center; font-weight: 500; }
 .vc-body canvas { width: 100%; height: 100%; display: block; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--canvas); }
 .chip-btn.active { background: var(--accent); color: #fff; }
+/* 背景设置条：低调的一行，不抢画面 */
+.viz-bg-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 12px 2px; font-size: 12px; }
+.viz-bg-bar input[type=range] { accent-color: var(--accent); }
+.viz-bg-color { width: 28px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: transparent; }
 .viz-page.waterfall .viz-grid { display: none; }
 .viz-page.waterfall .viz-hero { flex: 1; }
 /* 全屏瀑布流：不写死 vh 魔法数，直接吃掉剩余高度（窗口变化时自适应） */

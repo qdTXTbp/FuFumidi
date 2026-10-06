@@ -10,8 +10,8 @@
 -->
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import Icon from '../Icon.vue';
-import UtauVoicebankStore from '../utau/UtauVoicebankStore.vue';
 import { t } from '../../core/i18n.js';
 import { useDiffsingerStore } from '../../stores/diffsinger';
 import { useSingerStore } from '../../stores/singer';
@@ -21,9 +21,15 @@ const singerStore = useSingerStore();
 
 onMounted(() => { void singerStore.loadBanks(); });
 
+const router = useRouter();
 const busy = ref(false);
 const msg = ref('');
-const showStore = ref(false);
+
+/** 打开「声库制作」页（上传音频切分 / 录音 / oto 标注 / 导出声库）——
+ *  它本来就是个独立视图（ViewVoicebank.vue），只是合并板块后没有路由入口。 */
+function openMaker() {
+  void router.push('/voicebank');
+}
 
 /* ---- 声库体检（P2-16）：装库时就把「能不能用」算清楚，别等渲染失败 ---- */
 type ProbeCheck = { id: string; level: 'ok' | 'warn' | 'error'; text: string; fix?: string };
@@ -155,14 +161,19 @@ async function run(fn: () => Promise<any>) {
       <div class="vbp-title">
         <Icon name="mic" :size="13" /> {{ t('UTAU 声库制作') }}
         <span class="sp" />
-        <button class="btn" @click="showStore = !showStore">
-          <Icon :name="showStore ? 'chevron' : 'box'" :size="12" /> {{ showStore ? t('收起') : t('打开制作工具') }}
+        <!-- ★ 这里必须开**制作工具**（ViewVoicebank），不是「下载声库」的列表：
+             以前错接了 UtauVoicebankStore，用户点了「打开制作工具」看到的是一串可下载声库，
+             于是「UTAU 声库制作」这个功能看起来根本不存在。 -->
+        <button class="btn" @click="openMaker">
+          <Icon name="mic" :size="12" /> {{ t('打开制作工具') }}
         </button>
       </div>
       <p class="muted small">
         {{ t('把 wav 切片并写 alias（oto）。这是「做声库」，与选歌手无关，所以放在这里。') }}
       </p>
-      <UtauVoicebankStore v-if="showStore" @installed="showStore = false" />
+      <p class="muted small">
+        {{ t('在制作工具里：上传一段按音节录制的音频（或直接录音）→ 自动切分 → 自动标注 oto → 导出声库文件夹 / 压缩包。') }}
+      </p>
     </section>
 
     <!-- ============ DiffSinger 推理组件 ============ -->
