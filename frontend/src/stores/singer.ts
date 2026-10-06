@@ -660,6 +660,29 @@ export const useSingerStore = defineStore('singer', {
     removeGroup(id: string) {
       this.meta = Object.assign({}, this.meta, { groups: (this.meta.groups || []).filter((g) => g.id !== id) });
     },
+    /**
+     * 组级参数覆盖（M8b，计划书 §4.5）：**批量写回成员轨**，而不是在混音时叠加。
+     *
+     * ★ 为什么选批量写回：混音链路上再插一层"组增益"要动播放/导出两处，而批量写回
+     *   走的就是既有的 patchTrack 语义（渲染、导出、撤销栈都不用改），行为也更好解释：
+     *   「点了组的 M，成员轨就都静音了」——用户能在每条轨上直接看到结果。
+     *   muted = 成员静音；solo = 只留成员（其余全部静音）。
+     */
+    applyGroup(id: string, patch: { muted?: boolean; solo?: boolean }): number {
+      const g = (this.meta.groups || []).find((x) => x.id === id);
+      if (!g) return 0;
+      const members = new Set(g.trackIds);
+      let n = 0;
+      for (const t of this.tracks) {
+        if (t.kind === 'audio') continue;
+        const isMember = members.has(t.id);
+        if (patch.muted !== undefined && isMember) { t.muted = !!patch.muted; n++; }
+        else if (patch.solo !== undefined) { t.muted = patch.solo ? !isMember : false; n++; }
+      }
+      const groups = (this.meta.groups || []).map((x) => (x.id === id ? { ...x, ...patch } : x));
+      this.meta = Object.assign({}, this.meta, { groups });
+      return n;
+    },
 
     /** 拖拽排序：把 fromId 移到 toId 的位置（toId 之后或之前均可，保持其余顺序） */
     moveTrack(fromId: string, toId: string) {

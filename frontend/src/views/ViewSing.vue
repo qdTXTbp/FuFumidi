@@ -768,6 +768,15 @@ function useGroup(g: any) {
   say(t('已切到组内首轨，其余成员以幽灵音符显示'), 'ok');
 }
 function dropGroup(g: any) { store.removeGroup(g.id); }
+/** 组级静音 / 只听本组（M8b）：批量写回成员轨，用户能在每条轨上直接看到结果 */
+function groupMute(g: any) {
+  const n = store.applyGroup(g.id, { muted: !g.muted });
+  say((g.muted ? t('已取消本组静音（') : t('已静音本组（')) + n + t(' 条轨）'), 'ok');
+}
+function groupSolo(g: any) {
+  const n = store.applyGroup(g.id, { solo: !g.solo });
+  say((g.solo ? t('已退出独奏：全部轨道恢复发声') : t('只听本组：') + n + t(' 条轨发声')), 'ok');
+}
 
 /** 页面级快捷键：卷帘有焦点时它自己处理，这里负责"没点进卷帘也能用"的那部分 */
 function onSingKey(e: KeyboardEvent) {
@@ -2458,6 +2467,8 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <span v-for="g in groups" :key="g.id" class="rs-group" :title="t('点一下切到组内首轨并把其余成员叠出来')">
           <input class="rs-group-name" :value="g.name" @click.stop @change="renameGroup(g, $event)" />
           <span class="rs-group-n">{{ g.trackIds.length }}</span>
+          <span class="rs-ib" :class="{ on: g.muted }" :title="t('静音/取消静音本组全部成员（批量写回成员轨）')" @click.stop="groupMute(g)">M</span>
+          <span class="rs-ib" :class="{ on: g.solo }" :title="t('只听本组：其余轨道全部静音')" @click.stop="groupSolo(g)">S</span>
           <span class="rs-ib" :title="t('把当前轨加进这个组')" @click.stop="addCurrentToGroup(g)">+</span>
           <span class="rs-ib" :title="t('切到这个组')" @click.stop="useGroup(g)">→</span>
           <span class="rs-ib" :title="t('解散这个组（不动成员轨）')" @click.stop="dropGroup(g)">✕</span>
