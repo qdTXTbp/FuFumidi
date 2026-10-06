@@ -661,6 +661,29 @@ export const useSingerStore = defineStore('singer', {
       this.meta = Object.assign({}, this.meta, { groups: (this.meta.groups || []).filter((g) => g.id !== id) });
     },
     /**
+     * 组内统一编辑 v1（M8c）：对**所有成员轨的全部音符**做一次批量移调。
+     *
+     * ★ 为什么先做这个而不是"多轨选区"：调教页卷帘是单轨编辑（`selectedNotes` 只认活动轨），
+     *   要支持跨轨选区得动 PianoRoll 的核心模型；而"组内统一移调/八度"是编和声时最常用的批量动作，
+     *   用一次 pushUndo 包住即可撤销，风险小、收益直接。跨轨选区留给后续（复用音乐编辑器的 editTracks）。
+     */
+    transposeGroup(id: string, semitones: number): number {
+      const g = (this.meta.groups || []).find((x) => x.id === id);
+      if (!g || !semitones) return 0;
+      const members = new Set(g.trackIds);
+      const targets = this.tracks.filter((t) => members.has(t.id));
+      if (!targets.length) return 0;
+      this.pushUndo();
+      let n = 0;
+      for (const t of targets) {
+        for (const note of t.notes) {
+          note.pitch = Math.max(0, Math.min(127, (Number(note.pitch) || 0) + semitones));
+          n += 1;
+        }
+      }
+      return n;
+    },
+    /**
      * 组级参数覆盖（M8b，计划书 §4.5）：**批量写回成员轨**，而不是在混音时叠加。
      *
      * ★ 为什么选批量写回：混音链路上再插一层"组增益"要动播放/导出两处，而批量写回

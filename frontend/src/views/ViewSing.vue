@@ -779,6 +779,12 @@ function groupGain(g: any, e: Event) {
   const n = store.applyGroup(g.id, { gainDb: Number.isFinite(v) ? v : 0 });
   say(t('本组音量已设为 ') + (Number.isFinite(v) ? v : 0) + t(' dB（') + n + t(' 条轨）'), 'ok');
 }
+/** 组内统一编辑 v1（M8c）：整组移调（一次撤销点） */
+function groupTranspose(g: any, d: number) {
+  const n = store.transposeGroup(g.id, d);
+  if (!n) { say(t('这个组里还没有音符'), 'warn'); return; }
+  say(t('本组 ') + n + t(' 个音符已移调 ') + (d > 0 ? '+' : '') + d + t(' 半音'), 'ok');
+}
 function groupSolo(g: any) {
   const n = store.applyGroup(g.id, { solo: !g.solo });
   say((g.solo ? t('已退出独奏：全部轨道恢复发声') : t('只听本组：') + n + t(' 条轨发声')), 'ok');
@@ -2477,6 +2483,8 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
                  :title="t('组内统一音量（dB）：改一次，所有成员轨一起改')" @click.stop @change="groupGain(g, $event)" />
           <span class="rs-ib" :class="{ on: g.muted }" :title="t('静音/取消静音本组全部成员（批量写回成员轨）')" @click.stop="groupMute(g)">M</span>
           <span class="rs-ib" :class="{ on: g.solo }" :title="t('只听本组：其余轨道全部静音')" @click.stop="groupSolo(g)">S</span>
+          <span class="rs-ib" :title="t('组内统一编辑：整组降半音（一次撤销点）')" @click.stop="groupTranspose(g, -1)">♭</span>
+          <span class="rs-ib" :title="t('组内统一编辑：整组升半音（一次撤销点）')" @click.stop="groupTranspose(g, 1)">♯</span>
           <span class="rs-ib" :title="t('把当前轨加进这个组')" @click.stop="addCurrentToGroup(g)">+</span>
           <span class="rs-ib" :title="t('切到这个组')" @click.stop="useGroup(g)">→</span>
           <span class="rs-ib" :title="t('解散这个组（不动成员轨）')" @click.stop="dropGroup(g)">✕</span>
