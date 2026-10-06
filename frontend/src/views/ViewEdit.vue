@@ -377,6 +377,14 @@ const snapLabel = computed(() => {
   const hit = SNAPS.find((s) => Math.abs(Number(s[0]) - Number(snapRatio.value)) < 1e-6);
   return hit ? hit[1] : t('关');
 });
+/** 密度三档（M9）：紧凑 / 标准 / 宽松 —— 只改控件高度与留白，不动布局结构 */
+const DENSITIES = [['compact', '紧凑'], ['normal', '标准'], ['roomy', '宽松']];
+function setDensity(v) {
+  ws.layout.density = v;
+  ws.save();
+  toast(t('界面密度：') + t((DENSITIES.find((d) => d[0] === v) || [])[1] || ''), 'ok');
+}
+
 function applyPreset(id) {
   ws.applyPreset(id);
   const p = ws.presets.find((x) => x.id === id);
@@ -425,6 +433,8 @@ const menuGroups = computed(() => {
       { label: ws.layout.inspOpen ? t('收起检查器') : t('显示检查器'), run: () => { inspOpen.value = !inspOpen.value; } },
       { label: artLane.value ? t('隐藏技法条') : t('显示技法条'), hint: t('演奏法'), run: () => { artLane.value = !artLane.value; } },
       { label: tempoLane.value ? t('隐藏速度轨') : t('显示速度轨'), hint: t('速度自动化'), run: () => { tempoLane.value = !tempoLane.value; } },
+      { sep: true },
+      ...DENSITIES.map((d) => ({ label: t('密度：') + t(d[1]), hint: ws.layout.density === d[0] ? '✓' : '', run: () => setDensity(d[0]) })),
       { label: multiEditOn.value ? t('退出跨轨编辑') : t('跨轨编辑…'), hint: multiEditOn.value ? t('已选 ') + editTracks.length + t(' 轨') : t('在检查器「轨道」里勾选'), run: () => { ws.layout.inspOpen = true; inspTab.value = 'track'; if (multiEditOn.value) clearEditTracks(); } },
       { label: fullscreenOn.value ? t('退出全屏') : t('全屏编辑'), run: toggleFullscreen },
       { sep: true },
@@ -1713,7 +1723,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page edit-view">
+  <!-- 密度三档（M9）：工作区里早就存着 density，但一直没有消费它 —— 现在真的改变控件高度与留白 -->
+  <div class="page edit-view" :class="'ed-density-' + (ws.layout.density || 'normal')">
     <div class="page-head">
       <div class="page-ic"><Icon name="edit" :size="20" /></div>
       <div class="grow">
@@ -2781,6 +2792,18 @@ onBeforeUnmount(() => {
 .art-cell em { font-style: normal; font-size: 9.5px; color: var(--stone); white-space: nowrap; }
 .art-cell .select-input { height: 22px; padding: 0 20px 0 6px; font-size: 11px; width: auto; max-width: 132px; }
 .hv-art { font-size: 10px; color: var(--accent); border: 1px solid var(--hairline); border-radius: 5px; padding: 0 4px; }
+
+/* 密度三档（M9）：紧凑 / 标准 / 宽松。只调控件高度与内边距 —— 布局结构不动，
+   所以三档之间切换不会引起重排抖动（画布尺寸不变）。 */
+.ed-density-compact .et-btn { height: 23px; min-height: 23px; padding: 0 7px; font-size: 11.5px; }
+.ed-density-compact .card.ed-toolbar { padding: 2px 6px; }
+.ed-density-compact .ed-taskbar { min-height: 30px; padding: 2px 6px; }
+.ed-density-compact .ed-status { gap: 10px; }
+.ed-density-compact .ed-menubar-card { padding: 1px 6px; }
+.ed-density-roomy .et-btn { height: 30px; min-height: 30px; padding: 0 11px; font-size: 12.5px; }
+.ed-density-roomy .card.ed-toolbar { padding: 7px 10px; }
+.ed-density-roomy .ed-taskbar { min-height: 40px; padding: 6px 10px; }
+.ed-density-roomy .ed-status { gap: 18px; }
 
 /* 悬停工具条（M3）：fixed 定位，不参与舞台布局（卷帘高度不会因为它抖动） */
 .hv-bar { position: fixed; z-index: var(--z-overlay); display: flex; align-items: center; gap: 3px; padding: 3px 5px;
