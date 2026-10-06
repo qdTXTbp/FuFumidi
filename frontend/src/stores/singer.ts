@@ -668,7 +668,7 @@ export const useSingerStore = defineStore('singer', {
      *   「点了组的 M，成员轨就都静音了」——用户能在每条轨上直接看到结果。
      *   muted = 成员静音；solo = 只留成员（其余全部静音）。
      */
-    applyGroup(id: string, patch: { muted?: boolean; solo?: boolean }): number {
+    applyGroup(id: string, patch: { muted?: boolean; solo?: boolean; gainDb?: number }): number {
       const g = (this.meta.groups || []).find((x) => x.id === id);
       if (!g) return 0;
       const members = new Set(g.trackIds);
@@ -678,6 +678,8 @@ export const useSingerStore = defineStore('singer', {
         const isMember = members.has(t.id);
         if (patch.muted !== undefined && isMember) { t.muted = !!patch.muted; n++; }
         else if (patch.solo !== undefined) { t.muted = patch.solo ? !isMember : false; n++; }
+        // 组内统一音量：把组的增益一次性写到每条成员轨（-24 ~ +24 dB）
+        if (patch.gainDb !== undefined && isMember) { t.gainDb = Math.max(-24, Math.min(24, Number(patch.gainDb) || 0)); n++; }
       }
       const groups = (this.meta.groups || []).map((x) => (x.id === id ? { ...x, ...patch } : x));
       this.meta = Object.assign({}, this.meta, { groups });

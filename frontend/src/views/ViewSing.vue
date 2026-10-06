@@ -773,6 +773,12 @@ function groupMute(g: any) {
   const n = store.applyGroup(g.id, { muted: !g.muted });
   say((g.muted ? t('已取消本组静音（') : t('已静音本组（')) + n + t(' 条轨）'), 'ok');
 }
+/** 组内统一音量（M8b）：一次把增益写到每条成员轨 —— 和声组平衡靠这一个旋钮 */
+function groupGain(g: any, e: Event) {
+  const v = Number((e.target as HTMLInputElement).value);
+  const n = store.applyGroup(g.id, { gainDb: Number.isFinite(v) ? v : 0 });
+  say(t('本组音量已设为 ') + (Number.isFinite(v) ? v : 0) + t(' dB（') + n + t(' 条轨）'), 'ok');
+}
 function groupSolo(g: any) {
   const n = store.applyGroup(g.id, { solo: !g.solo });
   say((g.solo ? t('已退出独奏：全部轨道恢复发声') : t('只听本组：') + n + t(' 条轨发声')), 'ok');
@@ -2467,6 +2473,8 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <span v-for="g in groups" :key="g.id" class="rs-group" :title="t('点一下切到组内首轨并把其余成员叠出来')">
           <input class="rs-group-name" :value="g.name" @click.stop @change="renameGroup(g, $event)" />
           <span class="rs-group-n">{{ g.trackIds.length }}</span>
+          <input class="rs-group-gain" type="number" step="1" min="-24" max="24" :value="g.gainDb || 0"
+                 :title="t('组内统一音量（dB）：改一次，所有成员轨一起改')" @click.stop @change="groupGain(g, $event)" />
           <span class="rs-ib" :class="{ on: g.muted }" :title="t('静音/取消静音本组全部成员（批量写回成员轨）')" @click.stop="groupMute(g)">M</span>
           <span class="rs-ib" :class="{ on: g.solo }" :title="t('只听本组：其余轨道全部静音')" @click.stop="groupSolo(g)">S</span>
           <span class="rs-ib" :title="t('把当前轨加进这个组')" @click.stop="addCurrentToGroup(g)">+</span>
@@ -2990,6 +2998,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .rs-group { display: inline-flex; align-items: center; gap: 3px; padding: 1px 4px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface-soft); }
 .rs-group-name { width: 74px; border: 0; background: transparent; color: var(--ink); font-size: 11.5px; outline: none; }
 .rs-group-n { font-size: 10px; color: var(--stone); font-family: var(--mono); }
+.rs-group-gain { width: 40px; height: 18px; padding: 0 3px; border: 1px solid var(--hairline); border-radius: 5px; background: var(--canvas); color: var(--ink); font-size: 10.5px; font-family: var(--mono); text-align: right; }
 
 .det-hint { flex: 0 0 100%; display: flex; align-items: center; gap: 6px; color: var(--stone);
   background: var(--surface-soft); border: 1px solid var(--hairline); border-radius: 8px; padding: 4px 8px; }
