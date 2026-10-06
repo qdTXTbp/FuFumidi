@@ -10,6 +10,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import PianoRoll from '../components/pianoroll/PianoRoll.vue';
+import { trackColorOf, newNoteId } from '../stores/singer';
 import VoicebankPanel from '../components/sing/VoicebankPanel.vue';
 import ViewVoicebank from './ViewVoicebank.vue';
 import { t } from '../core/i18n.js';
@@ -192,7 +193,9 @@ function menuDuplicate(x: any) {
   store.patchTrack(id, {
     name: (src.name || '') + t(' 副本'), singer: src.singer, singerName: src.singerName,
     language: src.language, gainDb: src.gainDb, pitchCurve: src.pitchCurve,
-    notes: src.notes.map((n: any) => ({ ...n })), fx: src.fx, curves: src.curves,
+    // ★ 复制出来的音符要**换新 id**：沿用原 id 会让两条轨的 id 撞车，
+    //   而 updateNote 是按 id 找第一条匹配的 → 编辑副本会改到原轨
+    notes: src.notes.map((n: any) => ({ ...n, id: newNoteId() })), fx: src.fx, curves: src.curves,
   });
   closeTrackMenu();
 }
@@ -394,6 +397,84 @@ function clearPhExpr() {
 /* ------------------------------------------------------------ 多选批量操作（P2-1）
  * 卷帘负责"几何"（复制/切分/合并/拖动），这里负责"内容"：批量填词与力度斜坡。
  * 两者都要求先有多选，否则提示怎么多选 —— 不静默失败。 */
+/* ------------------------------------------------------------ 多轨叠置（卷帘） */
+/**
+ * 卷帘里要不要同时显示其它声部（ghost notes）。
+ *
+ * ★ 为什么需要：和声/叠唱是「对着另一条轨写」的活。以前卷帘只画当前轨，
+ *   第二条轨一选中，第一条就整条消失 —— 对不上拍、对不上字全靠耳朵记。
+ *   现在默认叠置（与 FL Studio 的 ghost notes、Ableton 多片段编辑同一个思路）。
+ */
+/*
+ * ★ 音符区默认**吃掉编辑区的剩余高度**（原来固定 320px，在 1440p 上只占一小块，
+ *   用户反馈「音符视图面积太小」）。这里给两档：
+ *   · 自动（默认）：flex:1 铺满剩余空间，行高由卷帘自己按可用高度自适应；
+ *   · 手动：用户拖过分隔条之后按像素固定（存 localStorage），双击分隔条恢复自动。
+ */
+const rollManualH = ref(Number(localStorage.getItem('fufumidi_roll_h')) || 0);
+const rollBoxStyle = computed(() => (rollManualH.value >= 160 ? { flex: 'none', height: rollManualH.value + 'px' } : {}));
+/*
+ * 详情面板（歌词/音素/曲线）默认**收起**：它们加起来 350px+，全展开时会把音符区挤到
+ * 只剩一条缝（实测固定高度时甚至压到 2px —— 卷帘直接看不见）。
+ * 收起后音符区吃满编辑区；选中音符时下面给一条单行「已选音符」摘要，点「显示详情」再展开。
+ */
+const detailOpen = ref(localStorage.getItem('fufumidi_sing_detail') === '1');
+watch(detailOpen, (v) => { try { localStorage.setItem('fufumidi_sing_detail', v ? '1' : '0'); } catch (e) {} });
+/** 拖分隔条：往上拖 = 音符区更高。拖过就算手动档，双击恢复自动 */
+function startRollResize(e: PointerEvent) {
+  const box = document.querySelector('.roll-box') as HTMLElement | null;
+  if (!box) return;
+  const startY = e.clientY, startH = box.getBoundingClientRect().height;
+  const move = (ev: PointerEvent) => {
+    const h = Math.round(Math.max(160, Math.min(window.innerHeight - 160, startH + (ev.clientY - startY))));
+    rollManualH.value = h;
+    rollH.value = h;
+  };
+  const up = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    try { localStorage.setItem('fufumidi_roll_h', String(rollManualH.value)); } catch (err) {}
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+}
+function resetRollHeight() {
+  rollManualH.value = 0;
+  try { localStorage.removeItem('fufumidi_roll_h'); } catch (e) {}
+}
+
+const rollOverlay = ref(localStorage.getItem('fufumidi_roll_overlay') !== '0');
+watch(rollOverlay, (v) => { try { localStorage.setItem('fufumidi_roll_overlay', v ? '1' : '0'); } catch (e) {} });
+const rollGhostLabels = ref(localStorage.getItem('fufumidi_roll_ghostlyric') !== '0');
+watch(rollGhostLabels, (v) => { try { localStorage.setItem('fufumidi_roll_ghostlyric', v ? '1' : '0'); } catch (e) {} });
+
+/** 声部轨（叠置只对声部有意义；伴奏轨没有音符） */
+const voiceTracks = computed<any[]>(() => (store.tracks || []).filter(t => t.kind !== 'audio'));
+/** 传给卷帘的轨道表：含当前轨，顺序与左侧轨列表一致 */
+/** 卷帘的像素高度：只有「手动档」才给具体值（自动档走 fill） */
+const rollH = ref(rollManualH.value || 0);
+watch(rollManualH, (v) => { rollH.value = v || 0; });
+
+const rollTracks = computed<any[]>(() => voiceTracks.value.map((t, i) => ({
+  id: t.id, name: t.name, color: trackColorOf(t, i), notes: t.notes || [],
+  hidden: store.rollHidden.includes(t.id),
+})));
+function colorOf(t: any) {
+  const i = voiceTracks.value.indexOf(t);
+  return trackColorOf(t, i < 0 ? 0 : i);
+}
+/**
+ * 卷帘里点到了别的轨的音符：把那条轨切成当前轨、并把这个音符选上。
+ *
+ * ★ 不在卷帘里跨轨改数据：编辑 api 是「按当前轨」注入的（`rollApi()` 只认 tr 的音符），
+ *   跨轨拖动必须换轨后由新的 api 接手 —— 这样撤销栈、渲染过期标记也都跟着走对的那条轨。
+ */
+function onPickGhostNote(e: any) {
+  if (!e || !e.trackId) return;
+  if (e.trackId !== store.activeTrackId) store.selectTrack(e.trackId);
+  if (e.noteId) store.select(e.noteId);
+}
+
 const selNotes = computed<any[]>(() => {
   const ids = store.selectedIds;
   return (tr.value?.notes || []).filter((n: any) => ids.includes(n.id))
@@ -2074,11 +2155,43 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         </div>
       </div>
 
+      <!-- 多轨叠置条：一眼看清有哪几条声部、各自什么颜色、现在在编辑哪条 -->
+      <!-- ★ 以前没有这一条：卷帘只画当前轨，用户在第二条轨上工作时看不到第一条，
+           和声/对词只能靠记。点色块＝切轨，点眼睛＝临时藏起来，点圆点＝换色。 -->
+      <div v-if="tr && !isAudio && voiceTracks.length" class="roll-strip">
+        <button class="chip-btn" :class="{ on: rollOverlay }" :title="t('把其它声部的音符画成半透明幽灵，方便对拍对词')"
+                @click="rollOverlay = !rollOverlay"><Icon name="layers" :size="12" />{{ t('多轨叠置') }}</button>
+        <button v-if="rollOverlay" class="chip-btn" :class="{ on: rollGhostLabels }" :title="t('幽灵音符上也显示歌词，便于对齐字位')"
+                @click="rollGhostLabels = !rollGhostLabels"><Icon name="edit" :size="12" />{{ t('显示歌词') }}</button>
+        <span class="rs-sep" />
+        <button v-for="(tk, i) in voiceTracks" :key="tk.id" class="rs-track"
+                :class="{ on: tk.id === store.activeTrackId, off: store.rollHidden.includes(tk.id) }"
+                :title="t('点一下切到这条轨编辑；点圆点换颜色；点眼睛临时隐藏')"
+                @click="store.selectTrack(tk.id)">
+          <i class="rs-dot" :style="{ background: colorOf(tk) }" @click.stop="store.cycleTrackColor(tk.id)" />
+          <span class="rs-name">{{ tk.name || tk.singerName || t('未命名轨') }}</span>
+          <span class="rs-cnt">{{ (tk.notes || []).length }}</span>
+          <span class="rs-ib" :title="t('渲染结果')" v-if="store.renderByTrack[tk.id]">●</span>
+          <span class="rs-ib" :class="{ on: tk.muted }" :title="t('静音')" @click.stop="store.patchTrack(tk.id, { muted: !tk.muted })">M</span>
+          <span class="rs-ib" :title="t('独奏')" @click.stop="store.toggleSolo(tk.id)">S</span>
+          <span class="rs-ib" :title="t('在卷帘里显示/隐藏')" @click.stop="store.toggleRollHidden(tk.id)">
+            <Icon :name="store.rollHidden.includes(tk.id) ? 'eye-off' : 'eye'" :size="11" /></span>
+        </button>
+        <button class="chip-btn" :class="{ on: !detailOpen }" :title="t('收起下方的歌词/音素/曲线面板，把高度全给音符区')"
+                @click="detailOpen = !detailOpen">
+          <Icon name="expand" :size="12" />{{ detailOpen ? t('放大音符区') : t('显示详情') }}</button>
+        <span class="rs-hint muted small" :title="t('点别的轨的音符即可切过去编辑')" v-if="rollOverlay && voiceTracks.length > 1">ⓘ</span>
+      </div>
+
       <!-- 共用钢琴卷帘 -->
+      <!-- ★ 卷帘放在吃满剩余高度的盒子里（fill）：原来固定 320px，大屏上只占一小块。
+           拖动下面的分隔条可手动定高，双击恢复「自动铺满」。 -->
+      <div v-if="tr && !isAudio" class="roll-box" :style="rollBoxStyle">
       <PianoRoll
-        v-if="tr && !isAudio"
         ref="prRef"
         class="edt-roll"
+        fill
+        :height="rollH || 320"
         :notes="tr.notes"
         :selected-id="store.selectedId"
         :selected-ids="store.selectedIds"
@@ -2089,17 +2202,27 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         :scale="scale"
         :sel-phoneme="selPh"
         :automation="autoLane"
+        :tracks="rollTracks"
+        :active-track-id="store.activeTrackId"
+        :overlay="rollOverlay"
+        :ghost-labels="rollGhostLabels"
         @edit-lyric="(id) => store.select(id)"
         @automation-begin="store.pushUndo()"
         @set-automation="onAutoLane"
         @set-scale="onRollScale"
         @set-scale-root="onRollScaleRoot"
         @edit-phoneme="onPickPhoneme"
+        @pick-note="onPickGhostNote"
       />
+      </div>
+      <div v-if="tr && !isAudio" class="roll-resizer" :title="t('拖动调整音符区高度；双击恢复自动铺满')"
+           @pointerdown.prevent="startRollResize" @dblclick="resetRollHeight">
+        <span class="rr-grip"></span>
+      </div>
 
       <!-- 选中音符的详细编辑（两边共用一套，引擎特有项按轨道显示） -->
       <!-- 多选批量工具（P2-1）：选中 2 个以上音符才出现，平时不占地方 -->
-      <div v-if="!isAudio && selNotes.length > 1" class="bulk small">
+      <div v-if="detailOpen && !isAudio && selNotes.length > 1" class="bulk small">
         <b>{{ t('已选 ') }}{{ selNotes.length }}{{ t(' 个音符') }}</b>
         <button class="btn sm" @click="openLyricDialog()"><Icon name="edit" :size="12" /> {{ t('批量填词') }}</button>
         <button class="btn sm" @click="importLyricsFile" :title="t('读入 .txt / .lrc：txt 走分词填入，lrc 按时间轴自动对轴')">
@@ -2117,7 +2240,18 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <span class="muted">{{ t('复制 / 切分 / 合并：卷帘里右键，或 Ctrl+C / Ctrl+E / Ctrl+M') }}</span>
       </div>
 
-      <div v-if="sel && !isAudio" class="det">
+      <!-- 详情收起时的单行摘要：不展开面板也能看到选中音符的关键字段 -->
+      <div v-if="!detailOpen && sel && !isAudio" class="det-mini small">
+        <b>{{ t('已选音符') }}</b>
+        <span>{{ t('歌词') }}「{{ sel.lyric || t('（空）') }}」</span>
+        <span>{{ t('音高') }} {{ sel.pitch }}</span>
+        <span>{{ t('起点') }} {{ Number(sel.startBeat).toFixed(2) }}</span>
+        <span>{{ t('时长') }} {{ Number(sel.durBeat).toFixed(2) }}</span>
+        <span class="sp" />
+        <button class="btn sm" @click="detailOpen = true"><Icon name="edit" :size="12" /> {{ t('显示详情') }}</button>
+      </div>
+
+      <div v-if="detailOpen && sel && !isAudio" class="det">
         <label class="ly">
           <span>{{ t('歌词') }}</span>
           <span class="ly-wrap">
@@ -2186,7 +2320,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
       </div>
 
       <!-- 音素级编辑（P2-2）：条带上点一个音素，或点下面的音素芯片 -->
-      <div v-if="!isAudio && phNote && phItems.length" class="ph-panel">
+      <div v-if="detailOpen && !isAudio && phNote && phItems.length" class="ph-panel">
         <div class="ph-head small">
           <b>{{ t('音素级编辑') }}</b>
           <span class="muted">{{ t('音符「') }}{{ phNote.lyric || '—' }}{{ t('」的音素（辅音 → 元音）：') }}</span>
@@ -2211,7 +2345,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
       </div>
 
       <!-- 音高曲线（两边共用） -->
-      <div v-if="!isAudio" class="curves">
+      <div v-if="detailOpen && !isAudio" class="curves">
         <div class="curves-head small">
           <b>{{ t('音高曲线') }}</b>
           <button class="btn" @click="curveAdd"><Icon name="plus" :size="12" /> {{ t('加点') }}</button>
@@ -2269,6 +2403,8 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 /* 音素级编辑面板（P2-2） */
 .auto-hint { margin: 6px 0 0; line-height: 1.7; }
 .ph-panel { margin: 8px 12px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
+  /* 面板高度封顶：它们是「按需看」的，不该把音符区挤没（超出自己滚） */
+  max-height: 200px; overflow: auto;
   background: var(--surface); }
 .ph-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ph-head .sp { flex: 1; }
@@ -2344,11 +2480,11 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
 /* ---- 右：编辑器 ---- */
 .edt { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: auto; }
-.proj { display: flex; align-items: center; gap: 6px; padding: 6px 12px;
+.proj { display: flex; align-items: center; gap: 6px; padding: 3px 12px;
         border-bottom: 1px solid var(--border); }
 .proj .ptitle { flex: 0 1 200px; font-size: 12.5px; }
 .proj .ppath { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.edt-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+.edt-bar { display: flex; align-items: center; gap: 8px; padding: 4px 12px;
            border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .edt-bar .who { font-size: 13px; }
 .edt-bar .tag { font-size: 10.5px; padding: 1px 6px; border-radius: 4px;
@@ -2358,7 +2494,37 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .edt-prog { height: 3px; background: var(--surface-muted); }
 .edt-prog i { display: block; height: 100%; background: var(--brand); transition: width .2s; }
 .edt-msg { margin: 6px 12px; color: var(--brand-text); }
-.edt-roll { margin: 8px 12px; }
+/* 音符区：默认吃满编辑区剩余高度（flex:1），手动拖过则固定像素（见 rollBoxStyle） */
+/*
+ * 音符区的下限给到 320px：编辑区底下的歌词/音素/曲线面板加起来能有 350px+，
+ * 没有下限时它们会把卷帘挤成一条缝（实测固定 320px 时卷帘被压到 2px，完全看不见）。
+ * 超出的部分由编辑区整体滚动，或用「放大音符区」一键把下面三块收起来。
+ */
+.roll-box { flex: 1 1 auto; min-height: 380px; display: flex; margin: 4px 12px 0; }
+.roll-box .edt-roll { flex: 1 1 auto; min-width: 0; margin: 0; }
+/* 分隔条：上下拖动改变音符区高度；双击恢复自动 */
+.roll-resizer { flex: none; height: 10px; margin: 0 12px; display: flex; align-items: center;
+  cursor: ns-resize; touch-action: none; }
+.roll-resizer:hover .rr-grip { background: var(--brand); }
+.rr-grip { display: block; width: 100%; height: 3px; border-radius: 3px; background: var(--border); transition: background .15s; }
+/* 多轨叠置条（卷帘上方）：色块=切轨 / 圆点=换色 / 眼睛=临时隐藏 / M,S=静音独奏 */
+.roll-strip { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 12px 0;
+  padding: 3px 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); }
+.roll-strip .rs-sep { width: 1px; height: 18px; background: var(--border); }
+.roll-strip .rs-track { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--slate);
+  font-size: 11.5px; line-height: 1.6; }
+.roll-strip .rs-track:hover { border-color: var(--brand); color: var(--ink); }
+.roll-strip .rs-track.on { border-color: var(--brand); background: var(--brand-soft); color: var(--ink); font-weight: 600; }
+.roll-strip .rs-track.off .rs-name, .roll-strip .rs-track.off .rs-cnt { opacity: .45; text-decoration: line-through; }
+.roll-strip .rs-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; box-shadow: 0 0 0 1px rgba(0,0,0,.18) inset; }
+.roll-strip .rs-name { max-width: 116px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.roll-strip .rs-cnt { font-size: 10.5px; color: var(--stone); }
+.roll-strip .rs-ib { display: inline-flex; align-items: center; justify-content: center; min-width: 13px;
+  font-size: 10px; color: var(--stone); }
+.roll-strip .rs-ib:hover { color: var(--brand-text); }
+.roll-strip .rs-ib.on { color: var(--brand-coral); font-weight: 700; }
+.roll-strip .rs-hint { margin-left: auto; }
 
 .edt-bar .dev, .edt-bar .smp { font-size: 11.5px; }
 .edt-bar .smp { width: 48px; }
@@ -2457,6 +2623,10 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .auto-grid input { width: 84px; }
 
 /* ---- 音符详情 ---- */
+.det-mini { display: flex; align-items: center; gap: 10px; margin: 4px 12px 0; padding: 4px 10px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); color: var(--slate); }
+.det-mini b { color: var(--ink); }
+.det-mini .sp { flex: 1; }
 .det { display: flex; flex-wrap: wrap; gap: 10px; padding: 8px 12px;
        border-top: 1px solid var(--border); }
 .det label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
@@ -2479,7 +2649,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .cand.k-initial, .cand.k-final { color: var(--stone); }
 
 /* ---- 曲线 ---- */
-.curves { padding: 8px 12px; border-top: 1px solid var(--border); }
+.curves { padding: 8px 12px; border-top: 1px solid var(--border); max-height: 180px; overflow: auto; }
 .curves-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .curves-grid { display: flex; flex-direction: column; gap: 4px; }
 .curve-row { display: flex; align-items: center; gap: 6px; }

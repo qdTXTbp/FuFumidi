@@ -164,6 +164,14 @@ export interface AutomationCurve {
 export interface SingTrack {
   id: string;
   name: string;
+  /**
+   * 轨道配色（`#rrggbb`）。
+   *
+   * ★ 存在轨道上而不是「按索引现算」：多轨叠置时颜色是用户认轨的唯一线索，
+   *   按索引算的话删一条轨/换一下顺序，所有颜色就全串了。
+   *   老工程没有这个字段 → 由 `trackColorOf()` 按索引补一个（不写回文件，除非用户改过）。
+   */
+  color?: string;
   /** 声部轨 / 音频轨（伴奏） */
   kind: TrackKind;
   /** ★ 引擎是**轨道级**属性 —— 这是与上游一致的关键。音频轨此字段无意义 */
@@ -213,6 +221,32 @@ let _seq = 0;
 function nid(): string {
   _seq += 1;
   return 'n' + Date.now().toString(36) + _seq.toString(36);
+}
+
+/**
+ * 给外部（复制轨、导入等）用的唯一音符 id 生成器。
+ *
+ * ★ 音符 id 必须**全局唯一**，不能只在一条轨里唯一：
+ *   多轨叠置时点了 A 轨的音符却要落到 B 轨上，`updateNote` 又是「按 id 找第一个匹配」，
+ *   两条轨撞 id 就会改错人（实测踩过：同一毫秒给两条轨填词，id 一模一样）。
+ */
+export function newNoteId(): string { return nid(); }
+
+/**
+ * 轨道配色板。
+ *
+ * 八个色相拉开距离、明度都在中间调：浅色主题与深色主题下都能与底色分开，
+ * 半透明画成「幽灵音符」时也还能认出是哪条轨（参考 FL Studio 的 ghost notes 用法）。
+ */
+export const TRACK_PALETTE = ['#3d8bfd', '#ff7a45', '#36b37e', '#b37feb',
+  '#f2b705', '#22b8cf', '#f06595', '#7f8c8d'];
+
+/** 轨道颜色：轨道自带优先，否则按索引取板上的颜色 */
+export function trackColorOf(track: { color?: string } | null | undefined, index = 0): string {
+  const own = track && track.color;
+  if (typeof own === 'string' && /^#[0-9a-f]{3,8}$/i.test(own)) return own;
+  const n = TRACK_PALETTE.length;
+  return TRACK_PALETTE[(((index | 0) % n) + n) % n];
 }
 
 /** 新建一个空声部轨 */
@@ -368,6 +402,11 @@ export const useSingerStore = defineStore('singer', {
     _cancelled: false as boolean,
     /** 独奏时被顺带静音的轨 id（退出独奏要按这份名单还原，见 toggleSolo） */
     _soloMuted: [] as string[],
+    /**
+     * 卷帘里**临时隐藏**的轨 id（多轨叠置时按需只看几条）。
+     * 只是显示开关：不影响发声、不写进工程文件。
+     */
+    rollHidden: [] as string[],
   }),
 
   getters: {
@@ -489,6 +528,7 @@ export const useSingerStore = defineStore('singer', {
     addTrack(engine: Engine = 'utau'): string {
       this.pushUndo();
       const t = makeTrack(engine);
+      t.color = TRACK_PALETTE[this.tracks.length % TRACK_PALETTE.length];
       this.tracks.push(t);
       this.activeTrackId = t.id;
       return t.id;
@@ -505,6 +545,21 @@ export const useSingerStore = defineStore('singer', {
         this.activeTrackId = next ? next.id : '';
       }
       delete this.renderByTrack[id];      // 轨没了，它的渲染结果也没人认领
+    },
+    /** 多轨叠置：切换某条轨在卷帘里是否显示（纯显示，不影响发声/渲染） */
+    toggleRollHidden(id: string) {
+      const i = this.rollHidden.indexOf(id);
+      if (i >= 0) this.rollHidden.splice(i, 1);
+      else this.rollHidden.push(id);
+    },
+    /** 点轨道色块：在调色板上轮换一个颜色（写进工程文件） */
+    cycleTrackColor(id: string) {
+      const i = this.tracks.findIndex(t => t.id === id);
+      if (i < 0) return;
+      const cur = trackColorOf(this.tracks[i], i);
+      const k = TRACK_PALETTE.indexOf(cur);
+      this.pushUndo();
+      this.tracks[i].color = TRACK_PALETTE[(k + 1) % TRACK_PALETTE.length];
     },
     /** 加一条音频轨（伴奏）。`durationMs` 由调用方用 <audio> 探到。 */
     addAudioTrack(path: string, fileName: string, durationMs: number): string {
@@ -742,11 +797,18 @@ export const useSingerStore = defineStore('singer', {
       if (!tr) return 0;
       this.pushUndo();
       const base = makeNote(tr, 0, 60);
+      /* ★ id 全局唯一：以前是 `'sn' + Date.now() + i` —— 同一毫秒给两条轨各填一次词，
+         两条轨就会拿到一模一样的 id（实测：多轨叠置下点 A 轨的音符、改的却是 B 轨）。
+         传进来的 id 只在本轨内没重复过时保留（原有音符要保 id，切分出的新片段不带 id）。 */
+      const used = new Set<string>();
       tr.notes = (items || []).map((it, i) => {
+        const want = it && typeof it.id === 'string' ? it.id : '';
+        const keepId = want && !used.has(want) ? want : nid();
+        used.add(keepId);
         const n: SingNote = {
           ...base,
           ...it,
-          id: it && it.id ? it.id : 'sn' + Date.now().toString(36) + i.toString(36),
+          id: keepId,
           startBeat: Math.max(0, Number(it && it.startBeat) || 0),
           durBeat: Math.max(0.02, Number(it && it.durBeat) || 0.25),
           pitch: Math.round(Number(it && it.pitch) || 60),
@@ -761,7 +823,11 @@ export const useSingerStore = defineStore('singer', {
       return tr.notes.length;
     },
     updateNote(id: string, patch: Partial<SingNote>) {
-      for (const tr of this.tracks) {
+      // 先在**当前轨**里找：多轨叠置时编辑的一定是当前轨的音符
+      // （万一旧工程里有撞 id 的音符，这个顺序也保证改的是看得见的那条）
+      const first = this.activeTrack;
+      const order = first ? [first, ...this.tracks.filter(t => t.id !== first.id)] : this.tracks;
+      for (const tr of order) {
         const n = tr.notes.find(x => x.id === id);
         if (n) {
           Object.assign(n, patch);

@@ -1035,6 +1035,31 @@ function smartTimbre() {
   toast(t('智能音色：') + (GM_NAMES[p] || p), 'ok');
 }
 
+/* ------------------------------------------------------------ 检查器宽度 / 折叠
+ * ★ 右侧检查器固定 232px，占的是音符视图的宽度 —— 用户反馈「音符视图面积太小」。
+ *   这里给两个自由度：可以拖分隔条改宽窄，也可以整块收起来（收起后舞台独享全宽）。 */
+const inspOpen = ref(localStorage.getItem('fufumidi_edit_insp') !== '0');
+const inspW = ref(Number(localStorage.getItem('fufumidi_edit_insp_w')) || 0);
+const mainStyle = computed(() => (inspW.value >= 140 ? { '--inspector-w': inspW.value + 'px' } : {}));
+watch(inspOpen, (v) => { try { localStorage.setItem('fufumidi_edit_insp', v ? '1' : '0'); } catch (e) {} });
+// ★ 这个 SFC 是**普通 JS**（没有 lang="ts"），别写类型标注 —— 会直接编译失败
+function startInspResize(e) {
+  const aside = document.querySelector('.ed-insp');
+  if (!aside) return;
+  const startX = e.clientX;
+  const startW = aside.getBoundingClientRect().width;
+  const move = (ev) => {
+    inspW.value = Math.round(Math.max(150, Math.min(window.innerWidth - 420, startW - (ev.clientX - startX))));
+  };
+  const up = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    try { localStorage.setItem('fufumidi_edit_insp_w', String(inspW.value)); } catch (err) {}
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+}
+
 /* ---- 全屏编辑 ---- */
 function toggleFullscreen() {
   fullscreenOn.value = !fullscreenOn.value;
@@ -1243,6 +1268,12 @@ onBeforeUnmount(() => {
         <span class="et-sep"></span>
         <button class="et-btn" :title="t('量化到吸附网格')" @click="quantize"><Icon name="quantize" :size="14" />{{ t('量化') }}</button>
         <span class="et-sep"></span>
+        <!-- 视图开关放主工具条：以前「全屏」藏在「更多」里，谁也没发现；
+             这两个是「把音符区变大」的直接开关，必须一眼可见 -->
+        <button class="et-btn" :class="{ active: !inspOpen }" :title="t('收起右侧检查器，把宽度让给音符视图')"
+                @click="inspOpen = !inspOpen"><Icon name="panel" :size="14" />{{ inspOpen ? t('收起检查器') : t('检查器') }}</button>
+        <button class="et-btn" :class="{ active: fullscreenOn }" :title="t('全屏编辑，最大化钢琴卷帘')" @click="toggleFullscreen"><Icon name="expand" :size="14" />{{ t('全屏') }}</button>
+        <span class="et-sep"></span>
         <button class="et-btn et-more" data-guide="edit-more" :class="{ active: advOpen }" @click="advOpen = !advOpen">
           <Icon name="chevron" :size="13" :style="{ transform: advOpen ? 'rotate(180deg)' : '' }" /> {{ t('更多') }}
         </button>
@@ -1344,16 +1375,15 @@ onBeforeUnmount(() => {
           <button v-if="videoUrl" class="et-btn" :title="t('移除视频轨道')" @click="removeVideo"><Icon name="trash" :size="14" />{{ t('移除视频') }}</button>
         </div>
         <div class="adv-row">
-          <span class="et-label">{{ t('视图') }}</span>
-          <button class="et-btn" :title="t('全屏编辑，最大化钢琴卷帘')" @click="toggleFullscreen"><Icon name="expand" :size="14" />{{ t('全屏') }}</button>
+          <span class="et-label">{{ t('帮助') }}</span>
           <button class="et-btn" :title="t('编辑功能介绍')" @click="helpOpen = true"><Icon name="info" :size="14" />{{ t('说明') }}</button>
         </div>
       </div>
       </div>
 
       <!-- ② 工作区：左侧检查器 + 右侧多车道舞台 -->
-      <div class="ed-main">
-        <aside class="ed-insp">
+      <div class="ed-main" :style="mainStyle" :class="{ 'insp-off': !inspOpen }">
+        <aside class="ed-insp" v-show="inspOpen">
           <div class="insp-sec">
             <div class="insp-h"><Icon name="cursor" :size="12" />{{ t('音符检查器') }}</div>
             <div class="insp-row"><span>{{ t('选中') }}</span><b>{{ sel.count }}</b></div>
@@ -1405,6 +1435,8 @@ onBeforeUnmount(() => {
               <input class="num-input" type="number" min="1" max="127" step="1" v-model.number="defaultVelocity" :title="t('画笔新建音符时使用的力度')" /></div>
           </div>
         </aside>
+
+        <div v-show="inspOpen" class="ed-split" :title="t('拖动调整检查器宽度')" @pointerdown.prevent="startInspResize"></div>
 
         <section class="ed-stage">
       <!-- 迷你图 + 缩放 -->
@@ -1792,6 +1824,10 @@ onBeforeUnmount(() => {
 .ed-view-switch .et-btn { height: 22px; min-height: 22px; padding: 0 10px; }
 .ed-main { display: flex; gap: 10px; flex: 1; min-height: 0; }
 .ed-insp { width: var(--inspector-w); flex: none; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+/* 检查器与舞台之间的拖拽分隔条 */
+.ed-split { flex: none; width: 7px; margin: 0 -4px; cursor: ew-resize; position: relative; touch-action: none; }
+.ed-split::after { content: ''; position: absolute; inset: 0 3px; border-radius: 3px; background: transparent; transition: background .15s; }
+.ed-split:hover::after { background: var(--brand); }
 /* 窄窗口：逐级收窄检查器，把宽度让给卷帘（默认窗口下保持 232px 不动） */
 @media (max-width: 1120px) { .edit-view { --inspector-w: 200px; } }
 @media (max-width: 1000px) { .edit-view { --inspector-w: 176px; } }
@@ -1932,6 +1968,9 @@ onBeforeUnmount(() => {
 .ed-fullscreen .ed-status { display: flex; }
 /* 全屏时收起左侧检查器，把宽度全部让给卷帘 */
 .ed-fullscreen .ed-insp { display: none; }
+/* 全屏就是「把一切都让给卷帘」：连 34px 的迷你总览也收掉（需要时按 Esc 退出） */
+.ed-fullscreen .ed-nav { display: none; }
+.ed-fullscreen .chord-lane { display: none; }
 .ed-fullscreen .ed-toolbar { display: flex; }
 /* 全屏模式屏幕更高：每栏放宽，展示高度也放宽（仍是悬浮卡片网格） */
 .ed-fullscreen .ed-adv {

@@ -26,7 +26,15 @@ const props = defineProps({
   bpm: { type: Number, default: 120 },
   api: { type: Object, required: true },
   noteLabel: { type: Function, default: (n) => n.lyric || '' },
+  /**
+   * 卷帘可视高度（px）。`fill: true` 时忽略它，改为**跟着父容器**长。
+   *
+   * ★ 为什么要 fill：固定 320px 在 1440p 屏上只占编辑区的一小块（用户实测反馈
+   *   「音符视图面积太小」），而编辑器给卷帘留的高度是随窗口/面板变化的。
+   */
   height: { type: Number, default: 320 },
+  /** 占满父容器（父容器必须有确定高度，例如 flex:1 的盒子）；行高按可用高度自适应 */
+  fill: { type: Boolean, default: false },
   canEdit: { type: Boolean, default: true },
   /* ---- 几何（供宿主对齐自带车道用，默认即通用编辑器的自适应布局） ---- */
   left: { type: Number, default: 46 },       // 左侧键盘列宽
@@ -44,13 +52,33 @@ const props = defineProps({
   beatsPerBar: { type: Number, default: 4 },
   /* ---- P2-2：当前选中的音素 { noteId, index }，用于在条带上高亮 ---- */
   selPhoneme: { type: Object, default: null },
+  /* ---- 多轨叠置（ghost notes）----
+     `tracks`: [{ id, name, color, notes, hidden }]，**含当前轨**；顺序即绘制顺序。
+     `activeTrackId` 那条轨正常绘制（可编辑），其余画成半透明「幽灵音符」——
+     对着别的声部写和声/对词时，这是唯一能看清「我这条跟它对没对上」的办法
+     （FL Studio 的 ghost notes、Ableton 的多片段编辑都是这个思路）。
+     `overlay=false` 时只画当前轨（老行为）。 */
+  tracks: { type: Array, default: () => [] },
+  activeTrackId: { type: String, default: '' },
+  overlay: { type: Boolean, default: true },
+  /** 幽灵音符上是否也画歌词（对词时有用；窄音符自动省略） */
+  ghostLabels: { type: Boolean, default: true },
   /* ---- P2-4：参数车道（自动化曲线）
      { abbr, label, unit, min, max, def, points: [{beat, value}] }；null = 不显示车道。
      宿主决定"什么时候给"（例如只在打开自动化页签时给），组件不猜。 */
   automation: { type: Object, default: null },
 });
 const emit = defineEmits(['edit-lyric', 'set-scale', 'set-scale-root', 'edit-phoneme',
-  'set-automation', 'automation-begin']);
+  'set-automation', 'automation-begin',
+  // 点到了别的轨的音符：宿主据此把那条轨切成当前轨，并把该音符选上
+  'pick-note']);
+
+/** 幽灵层：除当前轨以外、可见且有音符的那些轨 */
+const ghostTracks = computed(() => {
+  if (!props.overlay) return [];
+  return (props.tracks || []).filter((t) => t && t.id !== props.activeTrackId
+    && !t.hidden && Array.isArray(t.notes) && t.notes.length);
+});
 
 /* ---------------- 布局 ---------------- */
 // 键盘列宽 / 顶部留白以 props 为准（挂载期固定，不随运行时变）
@@ -79,10 +107,14 @@ const pitchSpan = computed(() => {
   if (props.pitchLo != null && props.pitchHi != null && props.pitchHi > props.pitchLo) {
     return { lo: props.pitchLo, hi: props.pitchHi };
   }
+  // ★ 叠置时音域要**连同幽灵轨一起**算：只按当前轨自适应的话，别的声部会被画到画布外
+  //   （看起来像「叠置没生效」）。
   const list = props.notes;
-  if (!list.length) return { lo: 48, hi: 72 };
+  const ghosts = ghostTracks.value;
+  if (!list.length && !ghosts.length) return { lo: 48, hi: 72 };
   let lo = 127, hi = 0;
   for (const n of list) { lo = Math.min(lo, n.pitch); hi = Math.max(hi, n.pitch); }
+  for (const t of ghosts) for (const n of t.notes) { lo = Math.min(lo, n.pitch); hi = Math.max(hi, n.pitch); }
   lo = Math.max(0, lo - 6); hi = Math.min(127, hi + 6);
   while (hi - lo < 36) { if (lo > 0) lo--; else if (hi < 127) hi++; else break; }
   return { lo, hi };
@@ -91,9 +123,29 @@ const rows = computed(() => pitchSpan.value.hi - pitchSpan.value.lo + 1);
 const totalBeats = computed(() => {
   let m = 0;
   for (const n of props.notes) m = Math.max(m, n.startBeat + n.durBeat);
+  // 叠置时按最长的轨算总长（同理：别把别的声部截掉）
+  for (const t of ghostTracks.value) for (const n of t.notes) m = Math.max(m, n.startBeat + n.durBeat);
   return Math.max(m + 8, 32);
 });
 const viewH = computed(() => TOP + rows.value * rowH.value + 8);
+
+/* ---------------- 占满父容器（fill） ----------------
+   ★ 关键取舍：纵向**不无条件铺满**。音域可能是 5 个八度（60 行），硬铺满会把行高压到
+     2~3px，音符变成一条线；所以行高在 [ROW_MIN, ROW_MAX] 之间自适应，超出就照常纵向滚动。 */
+const ROW_MIN = 9;   // 低于 9px 就分不清上下邻音了
+const ROW_MAX = 34;
+const fluid = computed(() => props.fill || props.height <= 0);
+let ro = null;
+function applyFluidHeight() {
+  if (!fluid.value) return;
+  const el = wrap.value;
+  if (!el) return;
+  const avail = Math.max(80, el.clientHeight - TOP - 8);
+  const next = Math.max(ROW_MIN, Math.min(ROW_MAX, avail / Math.max(1, rows.value)));
+  if (Math.abs(next - rowH.value) < 0.01) return;
+  rowH.value = next;
+  nextTick(() => { setupCanvas(); draw(); });
+}
 const viewW = computed(() => LEFT + totalBeats.value * noteW.value + 8);
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
@@ -224,6 +276,34 @@ function draw() {
     }
   }
 
+  // ---- 幽灵音符（其它声部）--------------------------------------------------
+  // 画在当前轨**下面**、网格**上面**：半透明 + 细描边，够看清对齐关系，又不会
+  // 抢当前轨的注意力。不画选中态、不画把手 —— 它们不可直接编辑（点一下会切轨）。
+  const gx0 = scrollX.value - 40, gx1 = scrollX.value + (wrap.value ? wrap.value.clientWidth : cw) + 40;
+  for (const t of ghostTracks.value) {
+    const col = t.color || V('--note-fill');
+    g.save();
+    g.globalAlpha = 0.30;
+    g.fillStyle = col;
+    g.strokeStyle = col;
+    g.lineWidth = 1;
+    for (const n of t.notes) {
+      const { x, y, w, h } = noteGeo(n);
+      if (x + w < gx0 || x > gx1) continue;
+      roundRect(g, x, y, w, h, 3); g.fill(); g.stroke();
+      if (props.ghostLabels && w > 14) {
+        const lab = props.noteLabel ? props.noteLabel(n) : '';
+        if (lab) {
+          g.save(); g.beginPath(); g.rect(x + 1, y, w - 2, h); g.clip();
+          g.globalAlpha = 0.75; g.fillStyle = V('--text');
+          g.font = '10px system-ui, sans-serif'; g.textAlign = 'left';
+          g.fillText(String(lab), x + 3, y + h / 2 + 3.5); g.restore();
+        }
+      }
+    }
+    g.restore();
+  }
+
   // 音符
   const selSet = new Set(props.selectedIds);
   for (const n of props.notes) {
@@ -295,6 +375,18 @@ function hit(x, y) {
       return { n, side: x >= geo.x + geo.w - edge ? 'r' : (x <= geo.x + edge ? 'l' : 'body') };
     }
   }
+  // 幽灵层：**后画的在上面**，所以倒着找；命中只用来切轨，不进入编辑拖拽
+  const ghosts = ghostTracks.value;
+  for (let ti = ghosts.length - 1; ti >= 0; ti--) {
+    const t = ghosts[ti];
+    for (let i = t.notes.length - 1; i >= 0; i--) {
+      const n = t.notes[i];
+      const geo = noteGeo(n);
+      if (x >= geo.x && x <= geo.x + geo.w && y >= geo.y && y <= geo.y + geo.h) {
+        return { n, side: 'body', ghost: true, trackId: t.id };
+      }
+    }
+  }
   return null;
 }
 function onDown(e) {
@@ -312,6 +404,13 @@ function onDown(e) {
     drag = { mode: 'create', id, b0: snapBeat(beatOf(x)), x0: x };
     try { canvas.value.setPointerCapture(e.pointerId); } catch (err) {}
     draw();
+    return;
+  }
+
+  if (hitRes && hitRes.ghost) {
+    // ★ 多轨叠置下「点别人的音符」= 我要编辑那条轨：切过去并把该音符选上。
+    //   不在这里直接改数据 —— 当前轨的 api 只认自己的音符 id，跨轨编辑必须宿主先换轨。
+    emit('pick-note', { trackId: hitRes.trackId, noteId: hitRes.n.id });
     return;
   }
 
@@ -356,7 +455,7 @@ function onMove(e) {
   if (!drag) {
     const h = hit(x, y);
     cursor.value = !h ? (tool.value === 'pen' ? 'crosshair' : 'default')
-      : (h.side === 'body' ? 'move' : 'ew-resize');
+      : (h.ghost ? 'pointer' : (h.side === 'body' ? 'move' : 'ew-resize'));
     return;
   }
   if (drag.mode === 'box') { drag.x1 = x; drag.y1 = y; return draw(); }
@@ -411,6 +510,9 @@ function onUp() {
 }
 
 function onDbl(e) {
+  const g0 = toXY(e);
+  const gh = g0.x >= LEFT && g0.y >= TOP ? hit(g0.x, g0.y) : null;
+  if (gh && gh.ghost) { emit('pick-note', { trackId: gh.trackId, noteId: gh.n.id }); return; }
   const { x, y } = toXY(e);
   const h = hit(x, y);
   if (h) { props.api.setSelection([h.n.id], h.n.id); emit('edit-lyric', h.n); return; }
@@ -1055,6 +1157,16 @@ const lyricRev = computed(() => {
   return s;
 });
 watch([rev, selRev, lyricRev, () => props.bpm, pitchSpan], () => nextTick(draw));
+// 叠置：幽灵轨的音符/颜色/显隐、开关本身、当前轨切换都要重画
+const ghostRev = computed(() => {
+  let s = props.overlay ? 1 : 0;
+  for (const t of props.tracks || []) {
+    s += (t.hidden ? 1 : 0) + String(t.color || '').length + (t.notes ? t.notes.length : 0) * 17;
+    if (t.notes) for (const n of t.notes) s += n.startBeat * 3 + n.pitch * 5 + n.durBeat * 7;
+  }
+  return s + String(props.activeTrackId || '');
+});
+watch(ghostRev, () => nextTick(() => { setupCanvas(); draw(); }));
 watch([noteW, rowH, showPhoneme, pitchOn], () => nextTick(() => { setupCanvas(); draw(); }));
 // 播放头每帧都在动：只重绘音符层，不做 setupCanvas（重建画布会把滚动位置抖掉）
 watch(() => props.playheadBeat, () => draw());
@@ -1073,8 +1185,17 @@ onMounted(() => {
   setupCanvas(); draw();
   loadPitch();
   window.addEventListener('keydown', onKey);
+  // fill 模式：容器尺寸一变就重新分配行高（窗口缩放、面板折叠、详情展开都走这里）
+  if (typeof ResizeObserver !== 'undefined') {
+    ro = new ResizeObserver(() => applyFluidHeight());
+    if (wrap.value) ro.observe(wrap.value);
+  }
+  nextTick(applyFluidHeight);
 });
-onBeforeUnmount(() => { window.removeEventListener('keydown', onKey); });
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKey);
+  if (ro) { try { ro.disconnect(); } catch (e) {} ro = null; }
+});
 
 /* 供宿主（如 UTAU 工作台的自定义车道）对齐几何与滚动：
    车道画布用 xOf/beatOf 换算、读 wrap 同步横向滚动即可 */
@@ -1092,8 +1213,12 @@ function fitView() {
   /* 下限放到 1.2 px/拍：4 分钟的歌有近 400 拍，6 px/拍下限会让「适应窗口」根本装不下
      （实测 390 拍 × 6 = 2340 px，视口只有 625 px）。缩到 1~2 px/拍是**总览**该有的密度。 */
   noteW.value = Math.max(MIN_NOTE_W, Math.min(MAX_NOTE_W, availW / Math.max(1, totalBeats.value)));
-  const availH = Math.max(60, el.clientHeight - TOP - 10);
-  rowH.value = Math.max(5, Math.min(22, availH / Math.max(1, rows.value)));
+  if (fluid.value) {
+    // 纵向由 applyFluidHeight 负责（这里只管横向铺满）
+  } else {
+    const availH = Math.max(60, el.clientHeight - TOP - 10);
+    rowH.value = Math.max(5, Math.min(22, availH / Math.max(1, rows.value)));
+  }
   el.scrollLeft = 0;
   nextTick(() => { setupCanvas(); draw(); });
 }
@@ -1108,7 +1233,7 @@ defineExpose({
 </script>
 
 <template>
-  <div ref="rootEl" class="pr">
+  <div ref="rootEl" class="pr" :class="{ 'pr-fill': fluid }">
     <!-- 工具栏（宿主自带工具条时可关掉） -->
     <div v-if="showToolbar" class="pr-bar">
       <div class="pr-tools">
@@ -1165,7 +1290,7 @@ defineExpose({
     </div>
 
     <!-- 画布 -->
-    <div ref="wrap" class="pr-scroll" :style="{ height: height + 'px' }" @pointerdown="closeCtx" @wheel="onWheel">
+    <div ref="wrap" class="pr-scroll" :style="fluid ? null : { height: height + 'px' }" @pointerdown="closeCtx" @wheel="onWheel">
       <canvas ref="canvas" class="pr-canvas" :style="{ cursor }"
         @pointerdown="onDown" @pointermove="onMove" @pointerup="onUp" @pointercancel="onUp"
         @dblclick="onDbl" @contextmenu="onCtx"></canvas>
@@ -1218,6 +1343,9 @@ defineExpose({
 .pr-mini:hover { background: var(--surface); color: var(--ink); }
 .pr-hint { margin-left: auto; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pr-scroll { position: relative; overflow: auto; background: var(--surface); }
+/* fill：卷帘自己撑满父容器，滚动区吃掉工具栏之外的全部高度（行高由 JS 自适应） */
+.pr.pr-fill { height: 100%; min-height: 0; }
+.pr.pr-fill .pr-scroll { flex: 1 1 auto; min-height: 0; }
 .pr-canvas { display: block; }
 /* 音素条带：贴住音符区底部，横向随同一滚动容器对齐 */
 .pr-ph-canvas { border-top: 1px solid var(--border); }

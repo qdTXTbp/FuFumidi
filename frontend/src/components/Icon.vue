@@ -47,6 +47,8 @@ const P = {
   palette: '<path d="M12 21a9 9 0 1 1 9-9c0 1.66-1.34 3-3 3h-1.5a1.5 1.5 0 0 0-1.06 2.56c.4.4.56 1 .31 1.56A1.5 1.5 0 0 1 14.5 21H12z"/><circle cx="7.5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="7.5" r="1.2" fill="currentColor"/><circle cx="16.5" cy="10.5" r="1.2" fill="currentColor"/>',
   spark: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
   eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+  // 多轨叠置里表示「这条轨在卷帘里被藏起来了」；不画这个的话眼睛图标按下去了也没区别
+  'eye-off': '<path d="M17.94 17.94A10.6 10.6 0 0 1 12 20c-7 0-11-8-11-8a18.5 18.5 0 0 1 5.06-5.94M9.9 4.24A9.1 9.1 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
   zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
   logo: '<path d="M10 18V5l9-2v11" fill="none" stroke="currentColor" stroke-width="2.4"/><ellipse cx="10" cy="18" rx="2.7" ry="3.3" fill="currentColor" stroke="none"/><ellipse cx="19" cy="14" rx="2.7" ry="3.3" fill="currentColor" stroke="none"/>',
   cursor: '<path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/>',

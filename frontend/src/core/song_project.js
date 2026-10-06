@@ -165,6 +165,12 @@ function serializeCurves(list) {
   return out;
 }
 
+/** 只认 `#rgb` / `#rrggbb`（可选 4/8 位带 alpha）；其余一律当成「没设过」 */
+function safeColor(v) {
+  const s = str(v).trim();
+  return /^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(s) ? s.toLowerCase() : '';
+}
+
 function serializeTrack(t) {
   if (!t || typeof t !== 'object') return null;
   const o = {
@@ -179,6 +185,8 @@ function serializeTrack(t) {
     return o;
   }
   o.engine = t.engine === 'diffsinger' ? 'diffsinger' : 'utau';
+  // 轨道配色（多轨叠置时认轨的唯一线索）；没设过就不写，读的时候按索引补
+  if (t.color) o.color = safeColor(t.color);
   o.singer = str(t.singer);
   if (t.singerName) o.singerName = str(t.singerName).slice(0, 255);
   o.language = str(t.language, 'zh').slice(0, 16) || 'zh';
@@ -322,6 +330,8 @@ function parseTrack(t) {
     return o;
   }
   o.singer = str(t.singer);
+  const col = safeColor(t.color);
+  if (col) o.color = col;
   if (t.singerName) o.singerName = str(t.singerName).slice(0, 255);
   o.language = str(t.language, 'zh').slice(0, 16) || 'zh';
   o.notes = (Array.isArray(t.notes) ? t.notes : []).map(parseNote).filter(Boolean);
