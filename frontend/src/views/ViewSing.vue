@@ -1687,6 +1687,10 @@ watch(() => store.renderUrl, () => { void reloadTransport(); });
 /* 页面级快捷键只在「调教」页挂载期间生效（切走即摘掉） */
 onMounted(() => {
   window.addEventListener('keydown', onSingKey);
+  /* 一条轨都没选中时自动选第一条：新建工程的预置轨就在那儿，但 activeTrackId 是空的 ——
+     于是整页自相矛盾（左边有轨卡片、空态说"这条声部轨还是空的"、渲染按钮却说"先新建或选中一条轨道"）。
+     选中它之后，"还不能渲染"的原因才会落到真正缺的那件事上（没音符 / 没选歌手）。 */
+  if (!store.activeTrackId && store.tracks.length) store.selectTrack(store.tracks[0].id);
   /* 验收桥（M8d 前置）：生产包里拿不到组件实例，所以像音乐编辑器那样留一个显式开关
      （localStorage.fufumidi_debug = '1'），把卷帘实例与 store 挂到 window 供 CDP 验收使用。
      正常用户不会命中这条分支。 */
@@ -3038,7 +3042,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
   background: var(--surface-soft); color: var(--ink); font-size: 12px; text-align: right; }
 .ph-note { margin: 8px 0 0; line-height: 1.7; }
 /* 工程条上的小控件（P2-3） */
-.proj-field { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--slate); }
+.proj-field { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--slate); white-space: nowrap; flex: none; }
 .proj-field input, .proj-field select { height: 24px; border: 1px solid var(--hairline); border-radius: 7px;
   background: var(--surface); color: var(--ink); font-size: 12px; }
 .proj-field .al-ms { width: 62px; }
@@ -3113,9 +3117,11 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .pstate.saved { color: var(--brand-text); border-color: var(--border); }
 .pstate.dirty { color: var(--brand-coral); border-color: var(--brand-coral); background: transparent; }
 .pstate.none { color: var(--stone); }
-.proj { display: flex; align-items: center; gap: 6px; padding: 3px 12px;
+/* 工程条：**必须能换行**。参数（BPM/拍号/对齐偏移）加上状态徽标与保存动作之后，
+   一条放不下时右端的「保存」会被裁掉（实测 1268px 窗口下真的裁了）—— 换行比裁掉好。 */
+.proj { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 3px 12px;
         border-bottom: 1px solid var(--border); }
-.proj .ptitle { flex: 0 1 200px; font-size: 12.5px; }
+.proj .ptitle { flex: 0 1 160px; font-size: 12.5px; }
 .proj .ppath { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .edt-bar { display: flex; align-items: center; gap: 8px; padding: 4px 12px;
            border-bottom: 1px solid var(--border); flex-wrap: wrap; }
