@@ -192,9 +192,22 @@ function scaleSnapPitch(midi, tick) {
 /* ---------------- 撤销 / 重做 ---------------- */
 const undoStack = [];
 const redoStack = [];
+/* 速度轨（M5）：tempoMap 不在 notes/ccs 快照里，所以快照要单独带一份 —— 否则改速度不可撤销。
+   注意 secToTick/baseSec 是**闭包捕获了 tempoMap 那个数组对象**的，恢复时必须原地改数组
+   （tm.length = 0 + push），换数组引用等于没改。 */
+function tempoSnap() {
+  const s = song();
+  return (s && s.tempoMap) ? s.tempoMap.map((p) => ({ tick: p.tick, us: p.us, sec: p.sec })) : null;
+}
+function tempoRestore(s, arr) {
+  if (!s || !arr || !s.tempoMap) return;
+  const tm = s.tempoMap;
+  tm.length = 0;
+  for (const p of arr) tm.push({ ...p });
+}
 function pushState() {
   const tr = curTrack(); if (!tr) return;
-  undoStack.push({ ti: props.trackIndex, notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
+  undoStack.push({ ti: props.trackIndex, tempo: tempoSnap(), notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
   if (undoStack.length > 80) undoStack.shift();
   redoStack.length = 0;
 }
@@ -236,19 +249,21 @@ function undo() {
   if (st.ti < 0) {
     // 全量快照：恢复所有轨道（智能伴奏等新增/删除轨道场景）
     const s = song(); if (!s) return;
-    redoStack.push({ ti: -1, all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
+    redoStack.push({ ti: -1, tempo: tempoSnap(), all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
     for (let i = 0; i < s.tracks.length; i++) {
       if (st.all && st.all[i]) { s.tracks[i].notes = st.all[i].notes; s.tracks[i].ccs = st.all[i].ccs || []; }
       else { s.tracks[i].notes = []; s.tracks[i].ccs = []; }
     }
+    tempoRestore(s, st.tempo);
     selection.clear();
     afterEdit();
     return;
   }
   const tr = song()?.tracks[st.ti]; if (!tr) return;
-  redoStack.push({ ti: st.ti, notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
+  redoStack.push({ ti: st.ti, tempo: tempoSnap(), notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
   tr.notes = st.notes;
   tr.ccs = st.ccs || [];
+  tempoRestore(song(), st.tempo);
   selection.clear();
   afterEdit();
 }
@@ -256,19 +271,21 @@ function redo() {
   const st = redoStack.pop(); if (!st) return;
   if (st.ti < 0) {
     const s = song(); if (!s) return;
-    undoStack.push({ ti: -1, all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
+    undoStack.push({ ti: -1, tempo: tempoSnap(), all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
     for (let i = 0; i < s.tracks.length; i++) {
       if (st.all && st.all[i]) { s.tracks[i].notes = st.all[i].notes; s.tracks[i].ccs = st.all[i].ccs || []; }
       else { s.tracks[i].notes = []; s.tracks[i].ccs = []; }
     }
+    tempoRestore(s, st.tempo);
     selection.clear();
     afterEdit();
     return;
   }
   const tr = song()?.tracks[st.ti]; if (!tr) return;
-  undoStack.push({ ti: st.ti, notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
+  undoStack.push({ ti: st.ti, tempo: tempoSnap(), notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
   tr.notes = st.notes;
   tr.ccs = st.ccs || [];
+  tempoRestore(song(), st.tempo);
   selection.clear();
   afterEdit();
 }
@@ -1263,7 +1280,7 @@ function onHoverMove(e) {
   hoverNote = n;
   if (!n) { emit('hover', null); return; }
   emit('hover', {
-    x: e.clientX, y: e.clientY, midi: n.midi, name: noteName(n.midi), vel: n.vel,
+    x: e.clientX, y: e.clientY, midi: n.midi, name: noteName(n.midi), vel: n.vel, tick: n.start,
     muted: !!n.muted, sel: selection.has(n), count: selection.has(n) ? selection.size : 1,
     len: Math.round(n.end - n.start),
   });
@@ -1545,6 +1562,48 @@ function cancelPreview() {
   return n;
 }
 
+/* ---------------- 外部轨道级编辑（M5） ----------------
+   技法条 / 速度轨这类「不是选区操作、但也要进撤销栈」的编辑，走这三个入口：
+   它们自己找轨道、自己做快照（跨轨时用全量快照），调用方不用碰 pushState。 */
+/** 改某个音符的字段（按它实际所在的轨道做快照，跨轨也安全） */
+function editNote(note, patch) {
+  const s = song(); if (!s || !note || !patch) return 0;
+  for (let i = 0; i < s.tracks.length; i++) {
+    const tr = s.tracks[i];
+    if (!tr.notes.includes(note)) continue;
+    pushStateForTrack(i);
+    Object.assign(note, patch);
+    afterEdit();
+    return 1;
+  }
+  return 0;
+}
+/** 删除某个音符（同上） */
+function deleteNoteExternal(note) {
+  const s = song(); if (!s || !note) return 0;
+  for (let i = 0; i < s.tracks.length; i++) {
+    const tr = s.tracks[i];
+    const k = tr.notes.indexOf(note);
+    if (k < 0) continue;
+    pushStateForTrack(i);
+    tr.notes.splice(k, 1);
+    selection.delete(note);
+    afterEdit();
+    return 1;
+  }
+  return 0;
+}
+/** 在指定 tick 插入一个 Key Switch 音符（技法切换）：midi 0..24 */
+function insertKeySwitch(midi, tick, len) {
+  const tr = curTrack(), s = song();
+  if (!tr || !s) return 0;
+  pushState();
+  const st = Math.max(0, Math.round(tick || 0));
+  tr.notes.push({ start: st, end: st + Math.max(30, Math.round(len || (s.tpb / 2))), midi: clamp(Math.round(midi), 0, 24), vel: 100 });
+  afterEdit();
+  return 1;
+}
+
 /* 踏板：选区/整轨起止处添加 CC64 延音（down→127，up→0）；删除区间内 CC64 */
 function selSpan() {
   const tr = curTrack(); if (!tr) return null;
@@ -1640,13 +1699,13 @@ function snapSelToAudio() {
 function pushStateForTrack(ti) {
   const s = song(); if (!s) return;
   if (ti < 0) {
-    undoStack.push({ ti: -1, all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
+    undoStack.push({ ti: -1, tempo: tempoSnap(), all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
     if (undoStack.length > 80) undoStack.shift();
     redoStack.length = 0;
     return;
   }
   if (!s.tracks[ti]) return;
-  undoStack.push({ ti, notes: JSON.parse(JSON.stringify(s.tracks[ti].notes)), ccs: JSON.parse(JSON.stringify(s.tracks[ti].ccs || [])) });
+  undoStack.push({ ti, tempo: tempoSnap(), notes: JSON.parse(JSON.stringify(s.tracks[ti].notes)), ccs: JSON.parse(JSON.stringify(s.tracks[ti].ccs || [])) });
   if (undoStack.length > 80) undoStack.shift();
   redoStack.length = 0;
 }
@@ -1667,6 +1726,8 @@ defineExpose({
   hoverAction, selectHover, hitAt,
   // 步进输入（M4）
   setStepCursor, stepBy, stepAt,
+  // 轨道级外部编辑（M5）
+  editNote, deleteNoteExternal, insertKeySwitch,
   undo, redo, canUndo, canRedo, clearHistory, historySnapshots,
   snapSelToAudio,
   // 乐谱视图（五线谱）对外：滚动/谱号/插入时值/重绘

@@ -117,6 +117,127 @@ const curTrackInfo = computed(() => {
 });
 const selMutedNow = computed(() => (editor.value && sel.count ? editor.value.selMuted() : false));
 
+/* ---------------- 速度轨（M5，借 Cubase 的 tempo track） ----------------
+   tempoMap 的每一项是 { tick, us, sec }，其中 sec 是**到该点的累计秒数**（播放换算用它）。
+   所以任何一次改动后都必须整表重算 sec，而且要**原地改那个数组** ——
+   core/midi.js 的 secToTick/baseSec 是闭包捕获了它的，换引用等于没改。 */
+const tempoLane = ref(false);
+const tempoPoints = computed(() => (((song.value && song.value.tempoMap) || [])).map((p) => ({ tick: p.tick, bpm: Math.round(60000000 / p.us * 10) / 10 })));
+function rebuildTempoMap(s) {
+  const tm = s.tempoMap;
+  if (!tm || !tm.length) return;
+  tm.sort((a, b) => a.tick - b.tick);
+  if (tm[0].tick !== 0) tm.unshift({ tick: 0, us: tm[0].us, sec: 0 });
+  let sec = 0;
+  for (let i = 0; i < tm.length; i++) {
+    if (i > 0) sec = tm[i - 1].sec + (tm[i].tick - tm[i - 1].tick) * tm[i - 1].us / 1e6 / (s.tpb || 480);
+    tm[i].sec = sec;
+  }
+  s.initialBpm = Math.round(60000000 / tm[0].us);
+}
+/** 速度改动统一入口：快照 → 原地改 tempoMap → 重算 sec → 刷新播放器 */
+function commitTempo(mutate) {
+  const s = song.value; if (!s || !s.tempoMap) return;
+  editor.value?.pushStateForTrack(-1);
+  mutate(s.tempoMap);
+  rebuildTempoMap(s);
+  editor.value?.notifyExternalEdit();
+}
+function setTempoPoint(i, e) {
+  const bpm = Math.max(20, Math.min(400, Number(e && e.target ? e.target.value : e) || 120));
+  commitTempo((tm) => { if (tm[i]) tm[i].us = Math.round(60000000 / bpm); });
+  toast(t('速度已改为 ') + bpm + ' BPM', 'ok');
+}
+function addTempoPoint() {
+  const s = song.value; if (!s) return;
+  const tick = Math.max(0, Math.round(s.secToTick(state.curSec / (state.tempo || 1))));
+  const cur = tempoPoints.value.find((p) => p.tick === tick);
+  if (cur) { toast(t('该位置已经有速度点'), 'warn'); return; }
+  commitTempo((tm) => {
+    let us = tm[0] ? tm[0].us : 500000;
+    for (const p of tm) if (p.tick <= tick) us = p.us;
+    tm.push({ tick, us, sec: 0 });
+  });
+  toast(t('已在播放头加入速度点'), 'ok');
+}
+function delTempoPoint(i) {
+  if (tempoPoints.value.length < 2) { toast(t('至少要保留一个速度点'), 'warn'); return; }
+  commitTempo((tm) => { tm.splice(i, 1); });
+}
+function resetTempo() {
+  const s = song.value; if (!s) return;
+  const us = s.tempoMap && s.tempoMap[0] ? s.tempoMap[0].us : 500000;
+  commitTempo((tm) => { tm.length = 0; tm.push({ tick: 0, us, sec: 0 }); });
+  toast(t('已清空速度点，回到单一速度'), 'ok');
+}
+
+/* ---------------- 技法条（M5，借 Cubase 的 articulation lane） ----------------
+   演奏法在 MIDI 里就是**低音区的一个 Key Switch 音符**（midi 0..24，具体键位由 ksMap 决定）。
+   技法条把它读成「从这次切换开始、到下一次切换为止」的一段，于是：
+     · 一眼看出这一段在用什么技法（以前只能去钢琴卷帘最底下那几个小格子里找）；
+     · 直接在条上换技法（改那个 KS 音符的音高）；
+     · 选区起点一键插技法。
+   演奏法本身**不是**音符字段（换音源不需要重做数据），这是刻意的。 */
+const artLane = ref(false);
+const newArtMidi = ref(1);
+const KS_KEYS = Array.from({ length: 25 }, (_, i) => i);
+const ksName = (m) => ksMap.value[m] || ('KS ' + m);
+/** 只有**映射表里有的键**才算技法切换。否则一首钢琴曲低音区的 C1（midi 24）会被误读成技法。 */
+const ksMappedKeys = computed(() => KS_KEYS.filter((k) => ksMap.value[k]));
+const ksEmpty = computed(() => ksMappedKeys.value.length === 0);
+function useDefaultKsMap() {
+  const next = applyArticulation(ksMap.value, 'spitfire');
+  ksMap.value = next;
+  saveKS(next);
+  reloadArticulations();
+  toast(t('已套用 Spitfire 技法映射（可在「映射表」里改）'), 'ok');
+}
+const ksSegments = computed(() => {
+  const s = song.value, tr = curTrackInfo.value;
+  if (!s || !tr) return [];
+  const ks = tr.notes.filter((n) => n.midi <= 24 && ksMap.value[n.midi]).sort((a, b) => a.start - b.start);
+  const total = s.totalTicks || 0;
+  return ks.map((n, i) => ({
+    note: n, start: n.start, midi: n.midi, name: ksName(n.midi),
+    end: i + 1 < ks.length ? ks[i + 1].start : total,
+  }));
+});
+/** 某个 tick 处生效的技法名（悬停条/状态栏用） */
+function artAt(tick) {
+  let hit = null;
+  for (const seg of ksSegments.value) { if (seg.start <= tick) hit = seg; else break; }
+  return hit ? hit.name : '';
+}
+function setSegArticulation(seg, e) {
+  const m = Number(e && e.target ? e.target.value : e);
+  if (!Number.isFinite(m) || m === seg.midi) return;
+  editor.value?.editNote(seg.note, { midi: Math.max(0, Math.min(24, Math.round(m))) });
+  refreshSel(); onModified();
+}
+function delKsSeg(seg) {
+  editor.value?.deleteNoteExternal(seg.note);
+  refreshSel(); onModified();
+}
+function addArticulationHere() {
+  const s = song.value;
+  if (!s) { toast(t('请先载入 MIDI'), 'warn'); return; }
+  // 下拉在某些状态下会给出空值（v-model.number → NaN），这里兜一下，别插出音高是 NaN 的音符
+  const raw = Number(newArtMidi.value);
+  const m = Number.isFinite(raw) ? Math.max(0, Math.min(24, Math.round(raw))) : 0;
+  const sel = editor.value?.selRef();
+  const tick = (sel && sel.length) ? Math.min(...sel.map((n) => n.start))
+    : Math.max(0, Math.round(s.secToTick(state.curSec / (state.tempo || 1))));
+  editor.value?.insertKeySwitch(m, tick, Math.round(s.tpb / 2));
+  artLane.value = true;
+  refreshSel(); onModified();
+  toast(t('已在选区起插入技法：') + ksName(newArtMidi.value), 'ok');
+}
+function tickBar(tick) {
+  const s = song.value; if (!s) return '1';
+  const per = (s.tpb || 480) * ((s.sigMap && s.sigMap[0]) ? s.sigMap[0].num : 4);
+  return String(Math.floor((tick || 0) / per) + 1);
+}
+
 /* ---------------- 步进输入（M4） ----------------
    开启后画笔落在「步进指针」上并自动前进；← → 手动走，工具条显示指针所在的小节:拍。 */
 const stepOn = ref(false);
@@ -157,7 +278,11 @@ const hoverInfo = ref(null);
 let hoverTimer = 0;
 function cancelHoverHide() { if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = 0; } }
 function scheduleHoverHide() { cancelHoverHide(); hoverTimer = window.setTimeout(() => { hoverInfo.value = null; hoverTimer = 0; }, 200); }
-function onHover(e) { cancelHoverHide(); if (e) hoverInfo.value = e; else scheduleHoverHide(); }
+function onHover(e) {
+  cancelHoverHide();
+  if (!e) { scheduleHoverHide(); return; }
+  hoverInfo.value = { ...e };   // 技法名由模板里的 artAt(hoverInfo.tick) 现算：改完技法不用再晃一下鼠标才更新
+}
 const hoverBarStyle = computed(() => {
   const h = hoverInfo.value; if (!h) return {};
   const w = 330;
@@ -275,6 +400,8 @@ const menuGroups = computed(() => {
       { label: t('乐谱编辑'), disabled: !hasSong, run: () => setEditorView('score') },
       { sep: true },
       { label: ws.layout.inspOpen ? t('收起检查器') : t('显示检查器'), run: () => { inspOpen.value = !inspOpen.value; } },
+      { label: artLane.value ? t('隐藏技法条') : t('显示技法条'), hint: t('演奏法'), run: () => { artLane.value = !artLane.value; } },
+      { label: tempoLane.value ? t('隐藏速度轨') : t('显示速度轨'), hint: t('速度自动化'), run: () => { tempoLane.value = !tempoLane.value; } },
       { label: fullscreenOn.value ? t('退出全屏') : t('全屏编辑'), run: toggleFullscreen },
       { sep: true },
       ...ws.presets.map((p) => ({ label: t('工作区：') + t(p.label), hint: ws.preset === p.id ? '✓' : '', run: () => applyPreset(p.id) })),
@@ -1741,6 +1868,17 @@ onBeforeUnmount(() => {
           <button v-if="videoUrl" class="et-btn" :title="t('移除视频轨道')" @click="removeVideo"><Icon name="trash" :size="14" />{{ t('移除视频') }}</button>
         </div>
         <div class="adv-row">
+          <span class="et-label">{{ t('速度轨') }}</span>
+          <button class="et-btn" :class="{ active: tempoLane }" :title="t('速度轨：逐点设置速度，播放与导出都按它走')" @click="tempoLane = !tempoLane"><Icon name="clock" :size="14" />{{ tempoLane ? t('隐藏速度轨') : t('显示速度轨') }}</button>
+          <button class="et-btn" :title="t('在播放头处插入速度点')" @click="addTempoPoint"><Icon name="plus" :size="14" />{{ t('加点') }}</button>
+        </div>
+        <div class="adv-row">
+          <span class="et-label">{{ t('演奏法') }}</span>
+          <button class="et-btn" :class="{ active: artLane }" :title="t('技法条：按小节显示/切换演奏法（Key Switch）')" @click="artLane = !artLane"><Icon name="kbd" :size="14" />{{ artLane ? t('隐藏技法条') : t('技法条') }}</button>
+          <button class="et-btn" :title="t('演奏法映射表（Key Switch 键位 ↔ 技法名）')" @click="openKSMap"><Icon name="list" :size="14" />{{ t('映射表') }}</button>
+          <button class="et-btn" :title="t('在选区起点（没有选区则用播放头）插入技法切换')" @click="addArticulationHere"><Icon name="plus" :size="14" />{{ t('插入技法') }}</button>
+        </div>
+        <div class="adv-row">
           <span class="et-label">{{ t('帮助') }}</span>
           <button class="et-btn" :title="t('编辑功能介绍')" @click="helpOpen = true"><Icon name="info" :size="14" />{{ t('说明') }}</button>
         </div>
@@ -1889,6 +2027,52 @@ onBeforeUnmount(() => {
         <button class="btn sm ghost" @click="clearChordBars">{{ t('隐藏') }}</button>
       </div>
 
+      <!-- 技法条（M5）：把低音区的 Key Switch 读成「技法段」，一眼看出每段在用什么演奏法 -->
+      <div v-if="artLane" class="card art-lane">
+        <span class="art-lane-label">{{ t('技法') }}</span>
+        <div class="art-cells">
+          <div v-for="(seg, i) in ksSegments" :key="i" class="art-cell">
+            <em>{{ t('第 ') }}{{ tickBar(seg.start) }}{{ t(' 小节') }}</em>
+            <select class="select-input" :value="seg.midi" :title="t('这一段用的演奏法（改的是 Key Switch 音符的音高）')"
+                    @change="setSegArticulation(seg, $event)">
+              <option v-for="k in (ksEmpty ? KS_KEYS : ksMappedKeys)" :key="k" :value="k">{{ ksName(k) }}</option>
+            </select>
+            <button class="icon-btn" :title="t('删除这次技法切换')" @click="delKsSeg(seg)"><Icon name="minus" :size="12" /></button>
+          </div>
+          <template v-if="!ksSegments.length">
+            <span class="muted small">
+              {{ ksEmpty
+                ? t('演奏法映射表还是空的：先套用一套键位（Spitfire / VSL / EastWest），或到「映射表」里自定义。')
+                : t('这一轨还没有技法切换：在下面选一个演奏法，点「插入技法」会在选区起点（或播放头）放一个 Key Switch 音符。') }}
+            </span>
+            <button v-if="ksEmpty" class="btn sm" @click="useDefaultKsMap"><Icon name="spark" :size="12" />{{ t('套用 Spitfire 映射') }}</button>
+          </template>
+        </div>
+        <select v-model.number="newArtMidi" class="select-input" style="width:auto;flex:none" :title="t('要插入的演奏法')">
+          <option v-for="k in (ksEmpty ? KS_KEYS : ksMappedKeys)" :key="k" :value="k">{{ ksName(k) }}</option>
+        </select>
+        <button class="btn sm" :title="t('在选区起点（没有选区则用播放头）插入技法切换')" @click="addArticulationHere">
+          <Icon name="plus" :size="12" />{{ t('插入技法') }}</button>
+        <button class="btn sm ghost" :title="t('演奏法映射表（Key Switch 键位 ↔ 技法名）')" @click="openKSMap"><Icon name="kbd" :size="12" />{{ t('映射表') }}</button>
+        <button class="btn sm ghost" @click="artLane = false">{{ t('隐藏') }}</button>
+      </div>
+
+      <!-- 速度轨（M5）：逐点速度，播放与导出都按 tempoMap 走 -->
+      <div v-if="tempoLane" class="card art-lane">
+        <span class="art-lane-label">{{ t('速度') }}</span>
+        <div class="art-cells">
+          <div v-for="(p, i) in tempoPoints" :key="i" class="art-cell">
+            <em>{{ t('第 ') }}{{ tickBar(p.tick) }}{{ t(' 小节') }}</em>
+            <input class="num-input" type="number" min="20" max="400" step="1" :value="p.bpm"
+                   style="width:62px" :title="t('这一段的速度（BPM）')" @change="setTempoPoint(i, $event)" />
+            <button class="icon-btn" :title="t('删除这个速度点')" @click="delTempoPoint(i)"><Icon name="minus" :size="12" /></button>
+          </div>
+        </div>
+        <button class="btn sm" :title="t('在播放头处插入速度点（沿用当前速度）')" @click="addTempoPoint"><Icon name="plus" :size="12" />{{ t('在播放头加点') }}</button>
+        <button class="btn sm ghost" :title="t('清空所有速度点，回到单一速度')" @click="resetTempo">{{ t('清空') }}</button>
+        <button class="btn sm ghost" @click="tempoLane = false">{{ t('隐藏') }}</button>
+      </div>
+
       <!-- 钢琴卷帘（用 v-show 保活：切到鼓组再切回不会丢撤销历史与视图位置） -->
       <div v-show="viewMode !== 'drum'" class="ed-wrap-rel" :class="{ 'ed-flash': viewFlash }">
         <EditorCanvas ref="editor" :tool="tool" :snap-ratio="snapRatio" :track-index="trackIndex"
@@ -1904,6 +2088,7 @@ onBeforeUnmount(() => {
         <div v-if="hoverInfo && !midiToolOpen" class="hv-bar" :style="hoverBarStyle"
              @pointerenter="cancelHoverHide" @pointerleave="scheduleHoverHide">
           <span class="hv-name">{{ hoverInfo.name }}</span>
+          <span v-if="artLane && hoverInfo.tick != null && artAt(hoverInfo.tick)" class="hv-art" :title="t('这一段的演奏法')">{{ artAt(hoverInfo.tick) }}</span>
           <span class="hv-vel" :title="t('力度')">v{{ hoverInfo.vel }}</span>
           <button class="hv-btn" :title="t('力度 -5')" @click="hoverAct('velDown')">−</button>
           <button class="hv-btn" :title="t('力度 +5')" @click="hoverAct('velUp')">+</button>
@@ -2542,6 +2727,15 @@ onBeforeUnmount(() => {
 .insp-tab.on { background: var(--canvas); color: var(--ink); box-shadow: 0 1px 3px rgba(16,24,40,.10); }
 .insp-pane { display: flex; flex-direction: column; gap: 8px; animation: inspPaneIn .22s cubic-bezier(.2,.7,.3,1); }
 @keyframes inspPaneIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+/* 技法条（M5）：横向可滚的一排「技法段」 */
+.art-lane { display: flex; align-items: center; gap: 6px; flex: none; padding: 4px 8px; margin-bottom: 6px; border-radius: 10px; }
+.art-lane-label { font-size: 11px; color: var(--stone); flex: none; }
+.art-cells { display: flex; align-items: center; gap: 4px; overflow-x: auto; flex: 1; min-width: 0; padding-bottom: 2px; }
+.art-cell { display: inline-flex; align-items: center; gap: 3px; flex: none; padding: 2px 4px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--canvas); }
+.art-cell em { font-style: normal; font-size: 9.5px; color: var(--stone); white-space: nowrap; }
+.art-cell .select-input { height: 22px; padding: 0 20px 0 6px; font-size: 11px; width: auto; max-width: 132px; }
+.hv-art { font-size: 10px; color: var(--accent); border: 1px solid var(--hairline); border-radius: 5px; padding: 0 4px; }
+
 /* 悬停工具条（M3）：fixed 定位，不参与舞台布局（卷帘高度不会因为它抖动） */
 .hv-bar { position: fixed; z-index: var(--z-overlay); display: flex; align-items: center; gap: 3px; padding: 3px 5px;
   background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-lg);
