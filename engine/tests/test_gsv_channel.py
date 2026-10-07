@@ -48,7 +48,12 @@ def _voice(tmp_path, name='gsv_x', gpt='gpt.ckpt', sovits='sovits.pth', ref='ref
 def test_find_runtime_by_env_and_json(tmp_path, monkeypatch):
     root = _runtime(tmp_path)
     monkeypatch.delenv('FUFUMIDI_GSV_ROOT', raising=False)
+    # ★ 目录必须先建出来：data_root() 只在 FUFUMIDI_DATA_DIR **存在**时才认它，
+    #   否则会退到 FUFUMIDI_MODELS_DIR 推出来的真实数据根 —— 那儿要是有一份
+    #   runtime.json（本机就有一份），这个「应该找不到」的断言就会莫名其妙地挂。
+    (tmp_path / 'data').mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv('FUFUMIDI_DATA_DIR', str(tmp_path / 'data'))
+    monkeypatch.delenv('FUFUMIDI_MODELS_DIR', raising=False)
     assert gsv_env.find_runtime() == ''
     monkeypatch.setenv('FUFUMIDI_GSV_ROOT', root)
     assert gsv_env.find_runtime() == os.path.abspath(root)
