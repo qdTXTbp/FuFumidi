@@ -50,6 +50,21 @@ const CATALOG = [
     '社区微调音色 · 约 230MB · 含参考音',
     [{ path: 'LongShouRen/gpt.ckpt', size: 155090000 }, { path: 'LongShouRen/sovits.pth', size: 84900000 },
      { path: 'LongShouRen/ref.wav', size: 200000 }, { path: 'LongShouRen/config.json', size: 2000 }]),
+  // ★ 同一个仓库里其实有 6 个音色 —— 早先只挂了 3 个，用户看到的「下载不全」就是这来的。
+  //   清单用 hf-mirror 的 /api/models/<repo>/tree/main?recursive=true 核对过（每个目录都是
+  //   gpt.ckpt + sovits.pth + ref.wav 三件套，可直接下载）。
+  voice('gsv_maimai', 'MaiMai（GPT-SoVITS）', 'shibing624/parrots-gpt-sovits-speaker', 'MaiMai',
+    '社区微调音色 · 约 230MB · 含参考音',
+    [{ path: 'MaiMai/gpt.ckpt', size: 155090000 }, { path: 'MaiMai/sovits.pth', size: 84900000 },
+     { path: 'MaiMai/ref.wav', size: 700000 }, { path: 'MaiMai/config.json', size: 2000 }]),
+  voice('gsv_xingtong', 'XingTong（GPT-SoVITS）', 'shibing624/parrots-gpt-sovits-speaker', 'XingTong',
+    '社区微调音色 · 约 230MB · 含参考音',
+    [{ path: 'XingTong/gpt.ckpt', size: 155090000 }, { path: 'XingTong/sovits.pth', size: 84900000 },
+     { path: 'XingTong/ref.wav', size: 300000 }, { path: 'XingTong/config.json', size: 2000 }]),
+  voice('gsv_xuanshen', 'XuanShen（GPT-SoVITS）', 'shibing624/parrots-gpt-sovits-speaker', 'XuanShen',
+    '社区微调音色 · 约 230MB · 含参考音',
+    [{ path: 'XuanShen/gpt.ckpt', size: 155090000 }, { path: 'XuanShen/sovits.pth', size: 84900000 },
+     { path: 'XuanShen/ref.wav', size: 500000 }, { path: 'XuanShen/config.json', size: 2000 }]),
 ];
 
 function voicesRoot(dataRoot) { return require('path').join(dataRoot, 'gpt-sovits', 'voices'); }
