@@ -429,6 +429,13 @@ def do_gsv(notes, lyrics, voc, outdir, name, voice, bpm, device='auto', gsv_root
     if align:
         cmd.append('--align')
     env = dict(os.environ)
+    # ★ GPT-SoVITS 解释器必须跑在**干净**的 Python 环境里：应用侧会把 PYTHONPATH 指向
+    #   GPU 增强包的 site-packages（cp311），被 conda 环境继承后 numpy 的 C 扩展就加载失败
+    #   —— 实测：界面点「开始翻唱」→ “Importing the numpy C-extensions failed”。
+    #   （main.js 的 engineEnv 对自带 python 也是同一套处理。）
+    for _k in [k for k in env if k.upper().startswith('PYTHON')]:
+        if _k.upper() not in ('PYTHONIOENCODING', 'PYTHONUTF8', 'PYTHONUNBUFFERED'):
+            env.pop(_k, None)
     env.setdefault('USERNAME', 'fufumidi')
     env.setdefault('PYTHONIOENCODING', 'utf-8')
     env.setdefault('PYTHONUNBUFFERED', '1')

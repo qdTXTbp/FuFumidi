@@ -186,7 +186,10 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
 
     const win = BrowserWindow.fromWebContents(evt.sender);
     const id = 'cover' + (++seq);
-    const args = [o.audio, '--outdir', o.outdir];
+    // ★ 子命令必须在前：engine_cover.py 是 `{analyze,render,mix,all}` 子命令式 CLI，
+    //   少了这个 all，argparse 会把音频路径当成子命令名直接报错
+    //   （实测：界面点「开始翻唱」弹 “argument cmd: invalid choice: '…flac'”）。
+    const args = ['all', o.audio, '--outdir', o.outdir];
     if (o.name) args.push('--name', String(o.name));
     if (singer.kind === 'gsv') {
       args.push('--gsv-voice', singer.path);
