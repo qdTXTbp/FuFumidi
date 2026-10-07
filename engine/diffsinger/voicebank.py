@@ -18,7 +18,7 @@ import io
 import json
 import os
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 import yaml
 
@@ -266,6 +266,15 @@ def verify_vocoder_matches(voc: DsVocoderConfig, acoustic: DsAcousticConfig) -> 
             raise RenderError('声码器的 %s 必须是 %s 之一，实际 %r' % (name, ' / '.join(allowed), value))
 
 
+#: 模型字节 hash 的**进程内缓存**：键 = (真实路径, 大小, mtime_ns)。
+#  为什么必须有：acoustic 有 200MB+，而 `xxhash.xxh64` 是纯 Python 实现
+#  （签名要求与 C# 的 XXH64.DigestOf 同值），读满一个声库要 20~30 秒。
+#  渲染器是**每个乐句**调一次 `load_singer`，12 个乐句 = 12 次全量哈希 ——
+#  实测表现为「进度不动、CPU 满载」的假死（见 issue：长曲渲染卡住）。
+#  上游 C# 是加载时算一次；这里按同一语义缓存，声库文件变了（大小/mtime）自动失效。
+_HASH_CACHE: Dict[Tuple[str, int, int], int] = {}
+
+
 def model_hash(path: str) -> int:
     """模型字节的 XXH64 —— 对应上游 `singer.acousticHash` / `vocoder.hash`
     （`DiffSingerCache.cs` 的 `identifier`）。
@@ -276,6 +285,15 @@ def model_hash(path: str) -> int:
       dsdur/dsvariance 侧的 `linguisticHash`/`varianceHash` 同理。
     """
     from singing.openutau import xxhash
+    try:
+        st = os.stat(path)
+        key = (os.path.realpath(path), int(st.st_size), int(st.st_mtime_ns))
+    except OSError:
+        key = None
+    if key is not None:
+        hit = _HASH_CACHE.get(key)
+        if hit is not None:
+            return hit
     h = 0
     with open(path, 'rb') as f:
         while True:
@@ -283,6 +301,8 @@ def model_hash(path: str) -> int:
             if not chunk:
                 break
             h = xxhash.xxh64(chunk, h)
+    if key is not None:
+        _HASH_CACHE[key] = h
     return h
 
 
@@ -324,8 +344,44 @@ class DsSinger:
         raise KeyError(which)
 
 
+#: 已加载声库的进程内缓存：键 = (真实路径, dependency_dir, 文件签名)。
+#  渲染器对**每个乐句**调一次 load_singer；不缓存的话每个乐句都要重新读
+#  全部 YAML/JSON 并重算 6 个模型 hash（实测 27 秒/次）。声库文件一改，签名就变，
+#  自动重新加载 —— 与「改了声库要重启」相比，这里是更省事且更安全的失效策略。
+_SINGER_CACHE: Dict[Tuple[str, str, Tuple], DsSinger] = {}
+
+
+def _singer_signature(singer_dir: str, dependency_dir: Optional[str]) -> Tuple:
+    """声库目录里所有配置/模型文件的 (相对路径, 大小, mtime_ns) 签名。"""
+    items = []
+    for root, dirs, files in os.walk(singer_dir):
+        dirs[:] = sorted(d for d in dirs if not d.startswith('.'))
+        for name in sorted(files):
+            if not name.lower().endswith(('.onnx', '.yaml', '.yml', '.json', '.txt')):
+                continue
+            fp = os.path.join(root, name)
+            try:
+                st = os.stat(fp)
+            except OSError:
+                continue
+            items.append((os.path.relpath(fp, singer_dir).replace('\\', '/'), st.st_size, st.st_mtime_ns))
+    return (os.path.realpath(singer_dir), dependency_dir or '', tuple(items))
+
+
 def load_singer(singer_dir: str, dependency_dir: Optional[str] = None) -> DsSinger:
-    """一次性把 A 层（dsdur）与 B 层（根 dsconfig + vocoder）的配置都读出来。"""
+    """一次性把 A 层（dsdur）与 B 层（根 dsconfig + vocoder）的配置都读出来。
+
+    ★ 结果按「声库文件签名」缓存：同一进程里多次调用（渲染器每个乐句一次）
+      不会重复读配置、更不会重复算模型 hash。
+    """
+    try:
+        sig = _singer_signature(singer_dir, dependency_dir)
+    except OSError:
+        sig = None
+    if sig is not None:
+        cached = _SINGER_CACHE.get(sig)
+        if cached is not None:
+            return cached
     dur = load_ds_dur(singer_dir)
     acoustic = load_acoustic(singer_dir)
     vocoder = load_vocoder(acoustic, dependency_dir)
@@ -375,4 +431,6 @@ def load_singer(singer_dir: str, dependency_dir: Optional[str] = None) -> DsSing
                     sg.hashes[which] = model_hash(p)
                 except OSError:
                     pass
+    if sig is not None:
+        _SINGER_CACHE[sig] = sg
     return sg
