@@ -4202,6 +4202,10 @@ export const I18N_MAP = {
   /* 模型管理：GPT-SoVITS 音色分类页签 */
   'GPT-SoVITS 音色': 'GPT-SoVITS voices',
 
+  '已记住 GPT-SoVITS 运行时': 'GPT-SoVITS runtime saved',
+  '已记住解释器': 'Interpreter saved',
+  '选择': 'Choose',
+
   /* 翻唱工作流（ViewCover.vue 与导航） —— 与「音频处理」面板之间的交接 */
   '已带入音频处理面板的分离结果，可直接开始翻唱': 'Loaded the stems from Audio Processing — you can start the cover right away',
   '复用分离结果': 'Reuse stems',

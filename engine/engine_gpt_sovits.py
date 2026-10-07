@@ -157,8 +157,10 @@ def cmd_say(a):
 #: ★ GPT-SoVITS 对参考音有**硬性**要求：3~10 秒。超了直接抛
 #:   「参考音频在3~10秒范围外，请更换！」（实测踩过）—— 所以参考音窗口要单独算，
 #:   不能拿「这一句的演唱跨度」当窗口（短句会 <3s，长句会 >10s）。
-MIN_REF_SEC = 3.0
-MAX_REF_SEC = 10.0
+#: ★ 取 3.3 / 9.5 而不是 3.0 / 10.0：它内部要把参考音**重采样**再判长度，
+#:   卡在边界上的 3.000 秒会被判成「3 秒以外」（实测 ref_010 = 3.000s 被拒、10.000s 侥幸通过）。
+MIN_REF_SEC = 3.3
+MAX_REF_SEC = 9.5
 
 
 def _line_ref(vocals, sr, start: float, end: float, pad: float = 0.20, prev_end: float = 0.0):
@@ -284,9 +286,11 @@ def cmd_sing(a):
                 m['metrics_error'] = str(e)[:120]
         report.append(m)
         emit_prog(5 + 90.0 * (i + 1) / len(lines), '合成', {'part': idx, 'parts': len(lines)})
-        log('句 %d/%d %.2fs~%.2fs 完成%s f0=%s' % (
+        log('句 %d/%d %.2fs~%.2fs 完成%s f0=%s/%s' % (
             i + 1, len(lines), start, end, '（复用）' if m['reused'] else '',
-            (m.get('f0_corr') if a.metrics else '-')))
+            (m.get('f0_corr') if a.metrics else '-'),
+            (m.get('f0_shape') if a.metrics else '-')))
+        #    ↑ 前一个是逐帧相关、后一个是时间归一化后的（判据用后者，见 gsv_align.norm_curve）
     dry = a.dry_out or os.path.join(outdir, 'dry.wav')
     A.save_mono(dry, bed, 44100)
     warns = []

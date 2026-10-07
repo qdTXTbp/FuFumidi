@@ -113,6 +113,19 @@ async function pickDir() {
   if (r && r.ok) outdir.value = r.path;
 }
 
+/** 选一次 GPT-SoVITS 目录就够：主进程写进 runtime.json，以后自动带出来 */
+async function pickGsvRoot() {
+  if (!bridge.coverPickGsvRoot) return;
+  const r = await bridge.coverPickGsvRoot();
+  if (r && r.ok) { gsvRoot.value = r.root || ''; if (r.python) gsvPython.value = r.python; toast(t('已记住 GPT-SoVITS 运行时'), 'ok'); }
+  else if (r && r.error) toast(r.error, 'warn');
+}
+async function pickGsvPython() {
+  if (!bridge.coverPickGsvPython) return;
+  const r = await bridge.coverPickGsvPython();
+  if (r && r.ok) { gsvPython.value = r.python || ''; toast(t('已记住解释器'), 'ok'); }
+}
+
 function switchKind(k) {
   singerKind.value = k;
   const list = currentList.value;
@@ -230,10 +243,12 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
           <div class="cv-row">
             <span class="cv-label">{{ t('运行时') }}</span>
             <input class="text-input" v-model="gsvRoot" style="flex:1;min-width:220px" :placeholder="t('GPT-SoVITS 目录（含 GPT_SoVITS/）')" @change="saveOpts" />
+            <button class="btn sm" @click="pickGsvRoot"><Icon name="folder" :size="13" /> {{ t('选择') }}</button>
           </div>
           <div class="cv-row">
             <span class="cv-label">{{ t('解释器') }}</span>
             <input class="text-input" v-model="gsvPython" style="flex:1;min-width:220px" :placeholder="t('装好 torch 的 python.exe')" @change="saveOpts" />
+            <button class="btn sm" @click="pickGsvPython"><Icon name="folder" :size="13" /> {{ t('选择') }}</button>
           </div>
           <div class="muted small" v-if="!gsvReady">
             {{ t('没找到 GPT-SoVITS 运行时：指向一份已有安装，或把路径写进 数据目录/gpt-sovits/runtime.json。') }}

@@ -787,6 +787,10 @@ export interface FuBridge {
   coverSingers(): Promise<{ ok: boolean; diffsinger?: CoverSinger[]; gsv?: CoverSinger[]; error?: string }>;
   coverPickAudio(): Promise<{ ok?: boolean; canceled?: boolean; path?: string }>;
   coverPickDir(): Promise<{ ok?: boolean; canceled?: boolean; path?: string }>;
+  /** 选 GPT-SoVITS 运行时目录（会记进 <数据根>/gpt-sovits/runtime.json） */
+  coverPickGsvRoot(): Promise<{ ok?: boolean; canceled?: boolean; root?: string; python?: string; error?: string }>;
+  /** 选跑 GPT-SoVITS 的 python.exe（同上，记进 runtime.json） */
+  coverPickGsvPython(): Promise<{ ok?: boolean; canceled?: boolean; python?: string; error?: string }>;
   coverRun(opts: CoverRunOptions): Promise<{ ok: boolean; id?: string; error?: string }>;
   coverCancel(): Promise<GeneralResult & { canceled?: boolean }>;
   coverOpen(p: string): Promise<GeneralResult>;

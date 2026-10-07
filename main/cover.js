@@ -87,6 +87,21 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
     return { found: false, root: '', python: '', source: '' };
   }
 
+  /** 写 <数据根>/gpt-sovits/runtime.json（引擎侧 gsv_env.find_runtime 读它）。
+   *  合并写：只改传进来的字段，不把已有的 root/python 抹掉。 */
+  function writeGsvConfig(patch) {
+    const dir = path.join(Paths.dataRoot(), 'gpt-sovits');
+    const file = path.join(dir, 'runtime.json');
+    let cur = {};
+    try { cur = JSON.parse(fs.readFileSync(file, 'utf8')) || {}; } catch (e) { cur = {}; }
+    const next = { ...cur, ...patch };
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(next, null, 1), 'utf8');
+    } catch (e) { /* 写不进去也不阻断（用户手填的路径仍然有效） */ }
+    return next;
+  }
+
   /* ---------------- IPC ---------------- */
 
   ipcMain.handle('cover:env', async () => {
@@ -119,6 +134,32 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
       title: '选择输出目录', properties: ['openDirectory', 'createDirectory'] });
     if (r.canceled || !r.filePaths.length) return { canceled: true };
     return { ok: true, path: r.filePaths[0] };
+  });
+
+  /** 选 GPT-SoVITS 运行时目录 → **记进 runtime.json**（下次不用再填）。
+   *  只认「含 GPT_SoVITS/TTS_infer_pack/TTS.py」的目录，选错立刻说清楚。 */
+  ipcMain.handle('cover:pickGsvRoot', async (evt) => {
+    const win = BrowserWindow.fromWebContents(evt.sender);
+    const r = await dialog.showOpenDialog(win, {
+      title: '选择 GPT-SoVITS 目录（含 GPT_SoVITS/）', properties: ['openDirectory'] });
+    if (r.canceled || !r.filePaths.length) return { canceled: true };
+    const root = r.filePaths[0];
+    if (!hasFile(path.join(root, 'GPT_SoVITS', 'TTS_infer_pack', 'TTS.py'))) {
+      return { ok: false, error: '这个目录里没有 GPT_SoVITS/TTS_infer_pack/TTS.py，看起来不是 GPT-SoVITS 目录' };
+    }
+    writeGsvConfig({ root });
+    return { ok: true, root, python: gsvRuntime().python };
+  });
+
+  /** 选 GPT-SoVITS 的解释器（装好 torch 的那个 python.exe）→ 同样记进 runtime.json */
+  ipcMain.handle('cover:pickGsvPython', async (evt) => {
+    const win = BrowserWindow.fromWebContents(evt.sender);
+    const r = await dialog.showOpenDialog(win, {
+      title: '选择跑 GPT-SoVITS 的 python.exe', properties: ['openFile'],
+      filters: [{ name: 'python', extensions: ['exe'] }, { name: '全部文件', extensions: ['*'] }] });
+    if (r.canceled || !r.filePaths.length) return { canceled: true };
+    writeGsvConfig({ python: r.filePaths[0] });
+    return { ok: true, python: r.filePaths[0] };
   });
 
   ipcMain.handle('cover:cancel', async () => {

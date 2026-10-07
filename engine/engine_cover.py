@@ -526,7 +526,10 @@ def write_readme(outdir, name, info):
         ('时长', '%s 秒' % info.get('seconds', '')),
         ('BPM', info.get('bpm', '')),
         ('歌词来源', info.get('lyrics_from') or '（无，哼哼模式）'),
-        ('声库', info.get('voicebank', '')),
+        # ★ 两条音色通道：DiffSinger 走 --voicebank，GPT-SoVITS 走 --gsv-voice；
+        #   说明.md 里必须写清**这次到底是哪个音色**（否则两份成品分不出来）。
+        ('音色', info.get('singer') or info.get('voicebank', '')),
+        ('声库目录', info.get('voicebank', '') or '（GPT-SoVITS 音色）'),
         ('音符数', info.get('notes', '')),
         ('原曲 人声/伴奏 能量比', info.get('orig_vocal_over_inst', '')),
         ('成品配平', '%s dB（其中清晰度 %s dB）' % (info.get('level_match_db', ''), info.get('clarity_boost_db', ''))),

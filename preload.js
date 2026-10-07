@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
   coverSingers: () => ipcRenderer.invoke('cover:singers'),
   coverPickAudio: () => ipcRenderer.invoke('cover:pickAudio'),
   coverPickDir: () => ipcRenderer.invoke('cover:pickDir'),
+  coverPickGsvRoot: () => ipcRenderer.invoke('cover:pickGsvRoot'),
+  coverPickGsvPython: () => ipcRenderer.invoke('cover:pickGsvPython'),
   coverRun: (opts) => ipcRenderer.invoke('cover:run', opts),
   coverCancel: () => ipcRenderer.invoke('cover:cancel'),
   coverOpen: (p) => ipcRenderer.invoke('cover:open', p),
