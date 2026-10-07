@@ -81,6 +81,17 @@ def mix_song(dry_paths, inst_path, orig_vocal_path, out_wav, sung_regions,
         pad = np.zeros(n); pad[:len(d)] = d; dry += pad
     inst = np.pad(inst, (0, max(0, n - len(inst))))
     orig = np.pad(orig, (0, max(0, n - len(orig))))
+    # ★ 句间静音闸：逐句合成的干声在**句子之间**也有低电平底噪（模型输出 + 分离残留），
+    #   而后面的压缩（×1.25）、吐字 EQ（3.5kHz +2.5dB）与混响会把它一起抬起来 ——
+    #   听感就是「一直有电流声/沙沙声」。演唱区间是已知的，把区间外压掉即可（20ms 淡入淡出）。
+    if len(sung_regions):
+        keep = np.zeros(n, dtype=np.float32)
+        for a, b in sung_regions:
+            keep[max(0, int((float(a) - 0.05) * SR)):min(n, int((float(b) + 0.18) * SR))] = 1.0
+        ramp = int(0.02 * SR)
+        if ramp > 1:
+            keep = np.convolve(keep, np.ones(ramp, dtype=np.float32) / ramp, mode='same')
+        dry = dry * np.clip(keep, 0.0, 1.0)
 
     def rms_regions(x):
         parts = [x[int(a * SR):int(b * SR)] for a, b in sung_regions if int(b * SR) <= len(x)]
