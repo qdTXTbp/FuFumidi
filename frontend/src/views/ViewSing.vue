@@ -1642,9 +1642,27 @@ async function reloadTransport(): Promise<string> {
 
 async function tplay() {
   if (transport.playing) { transport.pause(); return; }
-  if (!transport.lanes.length) {
-    const err = await reloadTransport();
-    if (err) { sayErr(err, t('先渲染一次，或导入一个伴奏；也可以点传输栏的「重新装载」。')); return; }
+  // ★ OpenUTAU 语义：播放 = **全轨一起响**。没渲过 / 渲完又改过音符的声部轨
+  //   先自动补渲染（store.renderAll 串行执行、带进度；失败不阻塞已渲染的轨），
+  //   不再要求"先手动点渲染全部轨"。没绑声库的轨 renderAll 会自动跳过。
+  const stale = store.tracks.filter((t0: any) => t0.kind === 'voice'
+    && !!t0.singer && t0.notes.length > 0
+    && (!store.renderByTrack[t0.id] || store.staleRenderIds.includes(t0.id)));
+  const needReload = stale.length > 0 || !transport.lanes.length;
+  if (stale.length) {
+    const err = await store.renderAll();
+    if (err) {
+      sayErr(t('部分轨未能渲染，这次先播已渲染的轨。'), err, store.renderWarnings.join('\n'));
+    }
+    const noSinger = store.tracks.filter((t0: any) => t0.kind === 'voice'
+      && !t0.singer && t0.notes.length > 0).length;
+    if (noSinger) {
+      say(t('还有 ' + noSinger + ' 条轨没绑声库，本次不会发声（选中轨道后在右侧选择歌手）。'));
+    }
+  }
+  if (needReload) {
+    const err2 = await reloadTransport();   // 重装 = 拿到最新渲染结果
+    if (err2) { sayErr(err2, t('先渲染一次，或导入一个伴奏；也可以点传输栏的「重新装载」。')); return; }
   }
   transport.play();
   tplaying.value = transport.playing;
