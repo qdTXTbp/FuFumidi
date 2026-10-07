@@ -245,6 +245,9 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
   ipcMain.handle('model:list', async () => {
     const dir = modelsDir();
     const items = [];
+    // ★ 兜底：清单里任何一处抛都会让界面显示「模型全没了」（renderer 拿到 reject 就当空数组）。
+    //   条目本身出问题只该跳过它自己 —— 所以整个收集过程包在 try 里，有多少返回多少。
+    const guard = (fn) => { try { return fn(); } catch (e) { try { console.warn('[models] 列条目失败:', e && e.message); } catch (_) {} } };
     try { await ensureMsstModels(); } catch (e) {}
     const push = (name, p, note, extra) => {
       try {
@@ -259,6 +262,11 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     for (const k of Object.keys(MODEL_REGISTRY)) {
       if (k === 'piano_transcription') continue;
       const m = MODEL_REGISTRY[k];
+      // ★ 外部门户没有本地落点（没有 dest）——这里必须跳过：
+      //   path.join(dir, undefined) 会直接抛，而它在 try 之外，**整份模型清单会变成空的**
+      //   （实测：资源中心 6 个分类的计数全变成 0）。它们单独在下面 push。
+      if (m.type === 'link') continue;
+      if (!m.dest) continue;   // 没有落点的条目（历史遗留）直接跳过，不许拖垮整份清单
       const dest = path.join(dir, m.dest);
       // 目录总大小（排除临时隐藏目录，如 .parts），用于展示
       const dirSize = (() => { try { let s = 0; const walk = (p) => { const st = fs.statSync(p); if (st.isFile()) s += st.size; else for (const f of fs.readdirSync(p)) { if (f === '.parts') continue; walk(path.join(p, f)); } }; walk(dest); return s; } catch (e) { return 0; } })();
@@ -282,6 +290,14 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         downloadable: true, note: m.note, kind: m.kind, arch: m.arch, use: m.use, type: m.type, repo: m.repo, gated: !!m.gated, runtime: m.runtime,
         group: (m.type === 'gsv' || m.type === 'link') ? 'gsv' : undefined,
         url: m.url || undefined, external: !!m.external,
+      });
+    }
+    // 外部门户（论坛 / 网盘 / Spaces）：不可下载，但在资源中心里要看得见
+    for (const v of GSV.EXTERNAL) {
+      items.push({
+        id: v.id, name: v.name, path: '', size: 0, exists: false, downloadable: false,
+        note: v.note, kind: 'tts', arch: 'GPT-SoVITS', use: v.note, type: 'link',
+        runtime: 'gpt-sovits', group: 'gsv', url: v.url, external: true,
       });
     }
     // MSST 分离模型（动态注册的全部分类）
