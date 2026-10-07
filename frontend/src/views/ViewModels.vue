@@ -25,6 +25,9 @@ const TABS = computed(() => [
   // UTAU 声库（开源 / 免费，一键下载安装）：声库属于「资源」，统一收在模型管理里，
   // 不再散落在资源管理页 —— 用户找声库只需要记住一个地方。
   { id: 'utau', label: t('UTAU 声库'), ic: 'mic' },
+  // GPT-SoVITS 社区微调音色（资源中心下载，落点 <模型目录>/gpt-sovits/voices/）：
+  // 与 DiffSinger 声库并列 —— 它也是「一个音色」，只是唱法走逐句参考重合成（见「翻唱」页）。
+  { id: 'tts', label: t('GPT-SoVITS 音色'), ic: 'mic' },
 ]);
 const curTab = ref('transcribe');
 
@@ -45,7 +48,7 @@ function countFor(tb) {
 }
 function cnt(n) { return n == null ? '…' : String(n); }
 
-function kindIcon(m) { return (m.kind === 'separate') ? 'mic' : (m.kind === 'transcribe') ? 'music' : 'box'; }
+function kindIcon(m) { return (m.kind === 'separate' || m.kind === 'tts') ? 'mic' : (m.kind === 'transcribe') ? 'music' : 'box'; }
 
 function human(n) {
   if (!n) return '—';
@@ -265,6 +268,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 .vm-top.k-transcribe { background: linear-gradient(90deg, #f093fb, #f5576c); }
 .vm-top.k-separate { background: linear-gradient(90deg, #4facfe, #00f2fe); }
 .vm-top.k-other { background: linear-gradient(90deg, #43e97b, #38f9d7); }
+.vm-top.k-tts { background: linear-gradient(90deg, #a18cd1, #fbc2eb); }
 .vm-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
 .vm-ic { display: inline-flex; width: 26px; height: 26px; align-items: center; justify-content: center; border-radius: 8px; background: var(--surface-soft); color: var(--brand-coral); font-size: 15px; }
 .vm-arch { font-size: 10.5px; font-weight: 600; color: var(--stone); text-transform: uppercase; letter-spacing: .2px; font-family: var(--mono); transition: color .15s; }

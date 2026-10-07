@@ -166,6 +166,10 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
     if (o.sepModel) args.push('--sep-model', String(o.sepModel));
     if (o.sepConfig) args.push('--sep-config', String(o.sepConfig));
     if (o.sepArch) args.push('--sep-arch', String(o.sepArch));
+    // 复用「音频处理」面板刚分离出来的音轨（用户在那里分离完可以直接过来翻唱）
+    if (hasFile(o.vocals) && hasFile(o.instrumental)) {
+      args.push('--vocals', String(o.vocals), '--instrumental', String(o.instrumental));
+    }
 
     send(win, { id, phase: 'start', percent: 0, text: '开始…', done: false });
     const logs = [];

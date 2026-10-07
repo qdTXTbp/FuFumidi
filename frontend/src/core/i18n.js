@@ -4199,6 +4199,16 @@ export const I18N_MAP = {
   /* 引导：轨道属性（三块） */
   '三块：参数（UTAU 的重采样器/波源工具，DiffSinger 的采样深度与步数）、效果链（本轨独享，从上到下就是信号流）、自动化子轨（PIT 与 DYN/BRE/GEN 改了要重渲，VOL/PAN 播放时实时生效）。': 'Three sections: Params (UTAU resampler/wavtool, DiffSinger sampling depth and steps), FX chain (per-track; top to bottom is the signal path), automation sub-tracks (PIT and DYN/BRE/GEN need a re-render, VOL/PAN apply live during playback).',
 
+  /* 模型管理：GPT-SoVITS 音色分类页签 */
+  'GPT-SoVITS 音色': 'GPT-SoVITS voices',
+
+  /* 翻唱工作流（ViewCover.vue 与导航） —— 与「音频处理」面板之间的交接 */
+  '已带入音频处理面板的分离结果，可直接开始翻唱': 'Loaded the stems from Audio Processing — you can start the cover right away',
+  '复用分离结果': 'Reuse stems',
+  '清除': 'Clear',
+  '用分离结果做翻唱': 'Make a cover from these stems',
+  '这里需要同时有「人声」和「伴奏」两条轨': 'Both a vocals and an accompaniment track are required here',
+
   /* 翻唱工作流（ViewCover.vue 与导航） */
   '翻唱': 'Cover',
   '一首歌 → 分离人声 → 扒谱（音符 + 歌词）→ 用你选的音色唱出来 → 混音成成品': 'One song → separate the vocal → transcribe (notes + lyrics) → sing it with the voice you pick → mix the final track',

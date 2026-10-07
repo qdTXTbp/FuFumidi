@@ -694,6 +694,10 @@ export interface CoverRunOptions {
   clarityDb?: number;
   /** auto / .lrc 路径 */
   lyrics?: string;
+  /** 复用已分离好的人声轨（「音频处理」面板刚导出的结果） */
+  vocals?: string;
+  /** 复用已分离好的伴奏轨 */
+  instrumental?: string;
   /** 不复用上次的中间结果 */
   noResume?: boolean;
   gsvRoot?: string;

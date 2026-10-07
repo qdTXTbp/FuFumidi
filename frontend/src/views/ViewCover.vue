@@ -26,6 +26,9 @@ const lyrics = ref('auto');
 const gsvRoot = ref('');
 const gsvPython = ref('');
 const env = ref(null);
+// 「音频处理」面板分离完可以直接过来：那边把音轨路径写进 localStorage，这里接手
+const preVocals = ref('');
+const preInst = ref('');
 
 const running = ref(false);
 const percent = ref(0);
@@ -59,6 +62,17 @@ async function load() {
       env.value = e2;
       if (!gsvRoot.value && e2.gsv && e2.gsv.root) gsvRoot.value = e2.gsv.root;
       if (!gsvPython.value && e2.gsv && e2.gsv.python) gsvPython.value = e2.gsv.python;
+    }
+  } catch (e) {}
+  try {
+    const pre = JSON.parse(localStorage.getItem('fufumidi_cover_prefill') || '{}');
+    if (pre && (pre.vocals || pre.instrumental)) {
+      preVocals.value = pre.vocals || '';
+      preInst.value = pre.instrumental || '';
+      if (pre.audio) audio.value = pre.audio;
+      if (pre.outdir) outdir.value = pre.outdir;
+      localStorage.removeItem('fufumidi_cover_prefill');
+      toast(t('已带入音频处理面板的分离结果，可直接开始翻唱'), 'ok');
     }
   } catch (e) {}
   try {
@@ -116,6 +130,7 @@ async function run() {
     singer: { kind: singer.kind, path: singer.dir, id: singer.id },
     device: device.value, clarityDb: Number(clarityDb.value) || 0,
     lyrics: lyrics.value, noResume: noResume.value,
+    vocals: preVocals.value || undefined, instrumental: preInst.value || undefined,
     gsvRoot: gsvRoot.value, gsvPython: gsvPython.value,
   };
   try {
@@ -178,6 +193,11 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
         <div class="cv-row">
           <button class="btn" @click="pickAudio"><Icon name="import" :size="14" /> {{ t('选择音频') }}</button>
           <span class="muted small cv-ellipsis">{{ audio || t('支持 flac / wav / mp3 / m4a / ogg') }}</span>
+        </div>
+        <div class="cv-row" v-if="preVocals || preInst">
+          <span class="cv-label">{{ t('复用分离结果') }}</span>
+          <span class="muted small cv-ellipsis">{{ preVocals || '—' }} / {{ preInst || '—' }}</span>
+          <button class="btn sm ghost" @click="preVocals = ''; preInst = ''">{{ t('清除') }}</button>
         </div>
         <div class="cv-row">
           <span class="cv-label">{{ t('歌词') }}</span>
