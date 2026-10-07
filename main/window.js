@@ -21,7 +21,12 @@ function createWindow({ BrowserWindow, shell, pluginHost, rootDir }) {
       preload: path.join(rootDir, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      // 沙箱曾默认开启。部分机器（多虚拟显示适配器 / 第三方注入驱动的环境）上
+      // 开启后 GPU 进程与渲染进程一启动就以 0xC0000005 崩溃，Chromium 连续崩溃后
+      // 触发 "GPU process isn't usable" FATAL，整个应用直接退出
+      // （症状：窗口不出现，或窗口全黑）。这里关闭沙箱；
+      // 隔离性由 contextIsolation + nodeIntegration:false + preload 桥保证。
+      sandbox: false,
       backgroundThrottling: false,
     },
   });
