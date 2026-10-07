@@ -69,12 +69,30 @@ app.setAppUserModelId(APP_ID);
 // ---------- GPU 加速开关（须在 app ready 前设置）----------
 // 动态壁纸等全屏视频渲染：启用硬件视频解码 + GPU 光栅化 + 零拷贝，
 // 把解码/合成从 CPU 主线程卸载到 GPU，降低 CPU 占用。
-app.commandLine.appendSwitch('enable-gpu-rasterization');
-app.commandLine.appendSwitch('enable-zero-copy');
-app.commandLine.appendSwitch('enable-accelerated-video-decode');
-app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport,HardwareMediaKeyHandling');
-// 视情况启用 angle 后端
-app.commandLine.appendSwitch('use-angle', 'default');
+// SAFE_GPU=1：安全渲染模式（关闭上述激进开关 + 关闭硬件加速）。
+// 某些显卡/虚拟显示驱动组合下 GPU 进程会一启动就 0xC0000005，
+// Chromium 在连续崩溃后触发 "GPU process isn't usable" 并 FATAL 结束整个应用
+// （表现为：窗口不出现 / 窗口全黑）。此时用本模式兜底。
+const SAFE_GPU = process.env.FUFUMIDI_SAFE_GPU === '1';
+if (SAFE_GPU) {
+  // 仅关闭硬件加速。不要再叠加 --disable-gpu（实测会让应用直接退出）。
+  app.disableHardwareAcceleration();
+  console.warn('[FuFumidi] SAFE_GPU=1：已关闭硬件加速');
+} else {
+  app.commandLine.appendSwitch('enable-gpu-rasterization');
+  app.commandLine.appendSwitch('enable-zero-copy');
+  app.commandLine.appendSwitch('enable-accelerated-video-decode');
+  app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport,HardwareMediaKeyHandling');
+  // 视情况启用 angle 后端
+  app.commandLine.appendSwitch('use-angle', 'default');
+}
+// 关闭 GPU 子进程沙箱：与 renderer 沙箱同源问题——装有虚拟显示适配器
+// （向日葵/Oray IDD、MuMu 等）或第三方注入驱动的机器上，GPU 进程在沙箱内
+// 一启动就以 0xC0000005 崩溃，表现为窗口不出现或全黑。
+app.commandLine.appendSwitch('disable-gpu-sandbox');
+// GPU 进程崩溃次数达到上限后 Chromium 会 FATAL 退出整个应用。
+// 去掉这个上限：宁可退化为软件渲染，也不要整个应用起不来。
+app.commandLine.appendSwitch('disable-gpu-process-crash-limit');
 // Chromium 的磁盘缓存（Cache / Code Cache / GPUCache）同样不留在 C 盘用户目录。
 // 只重定向「磁盘缓存」，不动 sessionData —— IndexedDB / LocalStorage 里存着曲库字节与歌单，
 // 改 sessionData 等于换用户目录，会丢数据。必须在 app ready 之前设置。
@@ -367,7 +385,9 @@ async function prepareDataRoot() {
     splash = new BrowserWindow({
       width: 460, height: 180, frame: false, resizable: false, movable: false, maximizable: false,
       minimizable: false, alwaysOnTop: true, skipTaskbar: true, show: false, backgroundColor: '#12151b',
-      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, devTools: false },
+      // sandbox 置 false：见 main/window.js 同名注释——部分机器上开启沙箱会让
+      // GPU/渲染子进程一启动就 0xC0000005，进而拖垮整个应用。
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: false, devTools: false },
     });
     splash.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(dataRootSplashHtml()));
     splash.once('ready-to-show', () => { try { splash.show(); } catch (_) {} });
