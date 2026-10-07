@@ -4199,6 +4199,8 @@ export const I18N_MAP = {
   /* 引导：轨道属性（三块） */
   '三块：参数（UTAU 的重采样器/波源工具，DiffSinger 的采样深度与步数）、效果链（本轨独享，从上到下就是信号流）、自动化子轨（PIT 与 DYN/BRE/GEN 改了要重渲，VOL/PAN 播放时实时生效）。': 'Three sections: Params (UTAU resampler/wavtool, DiffSinger sampling depth and steps), FX chain (per-track; top to bottom is the signal path), automation sub-tracks (PIT and DYN/BRE/GEN need a re-render, VOL/PAN apply live during playback).',
 
+  '外部来源': 'External source',
+  '打开来源': 'Open source page',
   /* 模型管理：GPT-SoVITS 音色分类页签 */
   'GPT-SoVITS 音色': 'GPT-SoVITS voices',
 

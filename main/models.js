@@ -223,6 +223,12 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
   }
   // GPT-SoVITS 社区音色：并入同一个模型注册表，界面与下载流程完全复用
   for (const v of GSV.CATALOG) MODEL_REGISTRY[v.id] = v;
+  // 外部门户（论坛 / 网盘 / Spaces）：**不可一键下载**，但在资源中心里要看得见 ——
+  // 「打开来源」把用户送去该去的地方，而不是假装能下。
+  for (const v of GSV.EXTERNAL) MODEL_REGISTRY[v.id] = Object.assign({}, v, {
+    type: 'link', runtime: 'gpt-sovits', kind: 'tts', downloadable: false, external: true,
+    arch: 'GPT-SoVITS', use: v.note, group: 'gsv',
+  });
 
   // HuggingFace 渠道：官方 / hf-mirror
   const HF_HOSTS = { huggingface: 'huggingface.co', 'hf-mirror': 'hf-mirror.com' };
@@ -261,6 +267,9 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         // 分卷下载：以最终合并产物为准，避免下载中的 .parts 被误判为「已就绪」
         const finalFile = path.join(dest, m.splitCat ? (m.outName || '') : 'model.safetensors');
         if (fs.existsSync(finalFile)) { size = fs.statSync(finalFile).size; exists = size >= m.minSize; }
+      } else if (m.type === 'link') {
+        // 外部门户：没有本地落点，永远显示「未安装」，卡片上给「打开来源」
+        exists = false; size = 0;
       } else if (m.type === 'gsv') {
         // GPT-SoVITS 音色：两个权重 + 参考音都在才算就绪
         const st = GSV.voiceState(m, dest);
@@ -271,7 +280,8 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       items.push({
         id: m.id, name: m.name, path: dest, size, exists, active: _activeDownloads.has(m.id),
         downloadable: true, note: m.note, kind: m.kind, arch: m.arch, use: m.use, type: m.type, repo: m.repo, gated: !!m.gated, runtime: m.runtime,
-        group: m.type === 'gsv' ? 'gsv' : undefined,
+        group: (m.type === 'gsv' || m.type === 'link') ? 'gsv' : undefined,
+        url: m.url || undefined, external: !!m.external,
       });
     }
     // MSST 分离模型（动态注册的全部分类）

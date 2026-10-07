@@ -67,6 +67,43 @@ const CATALOG = [
      { path: 'XuanShen/ref.wav', size: 500000 }, { path: 'XuanShen/config.json', size: 2000 }]),
 ];
 
+
+//: ★ 只有「门户/网盘/论坛/Spaces」的社区音色：没有稳定直链，**不假装能一键下载**，
+//:   但在资源中心里列出来并给一个「打开来源」——否则用户根本不知道有这些地方。
+//:   （能自动下载的都进 CATALOG，见上面。）
+const EXTERNAL = [
+  { id: 'ext_aihobbyist', name: 'AI Hobbyist 交流社区',
+    note: '官方文档推荐的模型分享社区（蔚蓝档案 / 明日方舟 等）；需注册后在帖子/网盘取模型',
+    url: 'https://www.ai-hobbyist.com/forum.php' },
+  { id: 'ext_genshin_space', name: '《原神》全角色（HF Spaces · 白菜工厂1145）',
+    note: 'A-L / M-Q / S-Z 三个在线推理 Space，作者同时给度盘与 123 盘下载；在线推理较慢',
+    url: 'https://huggingface.co/spaces/baicai1145/Genshin_A-L' },
+  { id: 'ext_genshin_pan', name: '《原神》模型网盘（提取码 1145）',
+    note: '同上作者的度盘合集；网盘链接需要手动下载后导入音色目录',
+    url: 'https://pan.baidu.com/s/1x_THJNAZU-aExdAKfCUdbg?pwd=1145' },
+  { id: 'ext_owvoice', name: '《守望先锋》OwVoice',
+    note: '守望先锋角色本地语音合成工具（用 GPT-SoVITS 推理），仓库里带音色与参考音',
+    url: 'https://github.com/Zed2047/OwVoice' },
+  { id: 'ext_paperwitch', name: '《纸上魔法使》全角色（提取码 1234）',
+    note: 'B 站分享的合集，走网盘；下载后把 .ckpt/.pth/参考音放进音色目录即可',
+    url: 'https://pan.baidu.com/s/1Ml_wwonPP7s6zykC5lIhkw?pwd=1234' },
+  { id: 'ext_yumene', name: '《梦限大》全员（提取码 7cen）',
+    note: 'B 站分享的合集，走网盘',
+    url: 'https://pan.baidu.com/s/1DzzRUCYglmAUMYhG3mgvLA?pwd=7cen' },
+  { id: 'ext_gsvi', name: 'GPT-SoVITS 推理特化包 GSVI',
+    note: '推理向整合包：角色与参考音选择更省事（第三方项目，非本工具组件）',
+    url: 'https://github.com/X-T-E-R/TTS-for-GPT-soVITS' },
+  { id: 'ext_liuying', name: 'GPT-SoVITS TTS 模型库（liuying）',
+    note: '综合模型仓库，模型放在 Releases 里，需要手动下载',
+    url: 'https://github.com/ikun14514/liuying_GPT-SoVITS' },
+  { id: 'ext_blog4000', name: '4000+ 角色模型合集（推理特化包博客）',
+    note: '涵盖原神 / 星铁 / 崩三 / 绝区零 / 蔚蓝档案 / 明日方舟 / NIKKE 等，持续更新；以网盘为主',
+    url: 'https://blog.050905.xyz' },
+  { id: 'ext_official', name: '官方 GPT-SoVITS（预训练模型 / 整合包）',
+    note: '训练与推理的基础模型（V1/V2/V3/V4）；本工具的运行时就是它',
+    url: 'https://huggingface.co/lj1995/GPT-SoVITS/tree/main' },
+];
+
 function voicesRoot(dataRoot) { return require('path').join(dataRoot, 'gpt-sovits', 'voices'); }
 
 /** 候选下载地址：hf-mirror 优先（国内直连可用），再回落官方 */
@@ -125,4 +162,4 @@ function voiceState(spec, destDir) {
   return { exists: have === spec.files.length && size >= spec.minSize, size, files: have };
 }
 
-module.exports = { CATALOG, voicesRoot, fileUrls, downloadVoice, voiceState, HF_MIRROR, HF_DIRECT };
+module.exports = { CATALOG, EXTERNAL, voicesRoot, fileUrls, downloadVoice, voiceState, HF_MIRROR, HF_DIRECT };

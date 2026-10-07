@@ -196,7 +196,7 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
       if (root) args.push('--gsv-root', String(root));
       if (py) args.push('--gsv-python', String(py));
       if (o.version) args.push('--gsv-version', String(o.version));
-      if (o.align === false) args.push('--no-gsv-align');
+      if (o.align === true) args.push('--gsv-align');   // 默认不做 WORLD 校正（见 docs/COVER.md）
     } else {
       args.push('--voicebank', singer.path);
     }

@@ -361,10 +361,14 @@ def main(argv=None):
     g.add_argument('--device', default='auto')
     g.add_argument('--version', default='')
     g.add_argument('--gsv-root', default='')
-    g.add_argument('--no-align', dest='align', action='store_false', help='不做 WORLD F0 校正')
+    # ★ WORLD F0 校正**默认关**：实测它是「电流声 / 沙哑」的主要来源
+    #   （5ms 帧合成 + 大幅替换有声帧，中位偏移能到 6 个半音），而它带来的音准收益
+    #   还没有证据（每句都会记下校正前/后的 f0_shape，可对比）。要校正就显式加这个开关。
+    g.add_argument('--align', dest='align', action='store_true',
+                   help='做 WORLD F0 校正（默认关，见 docs/COVER.md）')
     g.add_argument('--no-metrics', dest='metrics', action='store_false', help='不算客观量（省时间）')
     g.add_argument('--no-reuse', dest='reuse', action='store_false', help='不复用已合成的句子')
-    g.set_defaults(func=cmd_sing, align=True, metrics=True, reuse=True)
+    g.set_defaults(func=cmd_sing, align=False, metrics=True, reuse=True)
 
     a = ap.parse_args(argv)
     try:

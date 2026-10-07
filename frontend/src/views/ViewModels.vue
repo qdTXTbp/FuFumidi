@@ -49,6 +49,11 @@ function countFor(tb) {
 function cnt(n) { return n == null ? '…' : String(n); }
 
 function kindIcon(m) { return (m.kind === 'separate' || m.kind === 'tts') ? 'mic' : (m.kind === 'transcribe') ? 'music' : 'box'; }
+/** 外部门户（论坛 / 网盘 / Spaces）：不能一键下载，只把用户送去该去的地方 */
+function openExternal(m) {
+  if (!m || !m.url) return;
+  try { if (bridge.openExternal) bridge.openExternal(m.url); else window.open(m.url, '_blank'); } catch (e) {}
+}
 
 function human(n) {
   if (!n) return '—';
@@ -175,8 +180,14 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
           <div class="vm-name-line"><div class="vm-name">{{ m.name }}</div><span v-if="m.best" class="vm-best" :title="t('该领域效果最佳')">👑 {{ m.best }}</span></div>
           <div class="vm-use">{{ m.use || m.note || '' }}</div>
           <div class="vm-foot">
-            <span class="pill" :class="m.exists ? 'on' : (prog[m.id] && prog[m.id].active ? 'run' : 'off')">{{ m.exists ? t('已安装') : (prog[m.id] && prog[m.id].active ? (prog[m.id].percent || 0) + '%' : t('未安装')) }}</span>
-            <span class="vm-size">{{ human(prog[m.id] && prog[m.id].received || m.size) }}</span>
+            <template v-if="m.external">
+              <span class="pill">{{ t('外部来源') }}</span>
+              <button class="btn sm" @click.stop="openExternal(m)">{{ t('打开来源') }}</button>
+            </template>
+            <template v-else>
+              <span class="pill" :class="m.exists ? 'on' : (prog[m.id] && prog[m.id].active ? 'run' : 'off')">{{ m.exists ? t('已安装') : (prog[m.id] && prog[m.id].active ? (prog[m.id].percent || 0) + '%' : t('未安装')) }}</span>
+              <span class="vm-size">{{ human(prog[m.id] && prog[m.id].received || m.size) }}</span>
+            </template>
           </div>
           <div v-if="prog[m.id] && prog[m.id].active" class="mini-bar"><i :style="{ width: (prog[m.id].percent || 0) + '%' }"></i></div>
         </div>
@@ -225,7 +236,10 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
           </div>
 
           <div class="vm-drawer-foot">
-            <div v-if="!(prog[detail.id] && prog[detail.id].active)" class="df-group">
+            <div v-if="detail.external" class="df-group">
+              <button class="btn sm primary" @click="openExternal(detail)">{{ t('打开来源') }}</button>
+            </div>
+            <div v-else-if="!(prog[detail.id] && prog[detail.id].active)" class="df-group">
               <button v-if="detail.exists" class="btn sm ghost danger" @click="deleteModel(detail)">{{ t('删除') }}</button>
               <button class="btn sm primary" @click="startDownload(detail)">{{ detail.exists ? t('重新下载') : t('下载') }}</button>
             </div>

@@ -402,7 +402,7 @@ def gsv_lines(notes, lyrics, bpm, gap=0.7, min_sec=0.5):
 
 
 def do_gsv(notes, lyrics, voc, outdir, name, voice, bpm, device='auto', gsv_root='',
-           gsv_python='', version='', align=True, log=print):
+           gsv_python='', version='', align=False, log=print):
     """用 GPT-SoVITS 音色唱（路线 A+：**逐句拿原唱当参考**重合成）。
 
     ★ 推理必须在**有 torch + GPT-SoVITS 的解释器**里跑（应用自带的 python 没有），
@@ -426,8 +426,8 @@ def do_gsv(notes, lyrics, voc, outdir, name, voice, bpm, device='auto', gsv_root
            '--outdir', gdir, '--dry-out', dry, '--device', device]
     if version:
         cmd += ['--version', version]
-    if not align:
-        cmd.append('--no-align')
+    if align:
+        cmd.append('--align')
     env = dict(os.environ)
     env.setdefault('USERNAME', 'fufumidi')
     env.setdefault('PYTHONIOENCODING', 'utf-8')
@@ -579,9 +579,9 @@ def main():
         s.add_argument('--gsv-root', default='', help='GPT-SoVITS 运行时目录')
         s.add_argument('--gsv-python', default='', help='跑 GPT-SoVITS 的解释器')
         s.add_argument('--gsv-version', default='', help='v1/v2/v3/v4…（默认按音色探测）')
-        s.add_argument('--no-gsv-align', dest='gsv_align', action='store_false',
-                       help='GPT-SoVITS 通道不做 WORLD F0 校正')
-        s.set_defaults(gsv_align=True)
+        s.add_argument('--gsv-align', dest='gsv_align', action='store_true',
+                       help='GPT-SoVITS 通道做 WORLD F0 校正（默认关：它是电流声的主要来源）')
+        s.set_defaults(gsv_align=False)
     a = ap.parse_args()
     outdir = os.path.abspath(a.outdir)
     os.makedirs(outdir, exist_ok=True)
