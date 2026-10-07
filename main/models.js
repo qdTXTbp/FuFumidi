@@ -10,6 +10,7 @@ const { safeExtractAllTo } = require('./zip-safe');
 const MSST_CATALOG = require('./models-msst-catalog');
 const DS = require('./download-source');
 const createFastDownload = require('./fast-download');
+const GSV = require('./gpt-sovits');
 
 function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings }) {
   const _folderWatchers = new Map();
@@ -220,6 +221,9 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       }
     }
   }
+  // GPT-SoVITS 社区音色：并入同一个模型注册表，界面与下载流程完全复用
+  for (const v of GSV.CATALOG) MODEL_REGISTRY[v.id] = v;
+
   // HuggingFace 渠道：官方 / hf-mirror
   const HF_HOSTS = { huggingface: 'huggingface.co', 'hf-mirror': 'hf-mirror.com' };
   const _modelCancels = new Set();
@@ -257,12 +261,17 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         // 分卷下载：以最终合并产物为准，避免下载中的 .parts 被误判为「已就绪」
         const finalFile = path.join(dest, m.splitCat ? (m.outName || '') : 'model.safetensors');
         if (fs.existsSync(finalFile)) { size = fs.statSync(finalFile).size; exists = size >= m.minSize; }
+      } else if (m.type === 'gsv') {
+        // GPT-SoVITS 音色：两个权重 + 参考音都在才算就绪
+        const st = GSV.voiceState(m, dest);
+        exists = st.exists; size = st.size || dirSize;
       } else {
         exists = dirSize >= m.minSize; size = dirSize;
       }
       items.push({
         id: m.id, name: m.name, path: dest, size, exists, active: _activeDownloads.has(m.id),
         downloadable: true, note: m.note, kind: m.kind, arch: m.arch, use: m.use, type: m.type, repo: m.repo, gated: !!m.gated, runtime: m.runtime,
+        group: m.type === 'gsv' ? 'gsv' : undefined,
       });
     }
     // MSST 分离模型（动态注册的全部分类）
@@ -757,6 +766,32 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     // 同一模型已在下载中：阻止重复开启（页面切换/刷新后再进入也不会开第二份）
     if (_activeDownloads.has(id)) return { ok: false, error: '模型下载已在进行中，请稍候', active: true };
     _activeDownloads.add(id);
+    // GPT-SoVITS 音色（社区微调）：两个权重 + 参考音，逐文件走统一高速入口
+    if (spec.type === 'gsv') {
+      const destDir = path.join(modelsDir(), spec.dest);
+      const st0 = GSV.voiceState(spec, destDir);
+      if (st0.exists) {
+        _activeDownloads.delete(id);
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: st0.size, total: st0.size, percent: 100, done: true });
+        return { ok: true, path: destDir, size: st0.size, existed: true };
+      }
+      _modelCancels.delete(id); _modelPause.delete(id);
+      const ctrl = new AbortController(); _modelAborts.set(id, ctrl);
+      try {
+        const r = await GSV.downloadVoice(spec, destDir, FastDL, {
+          headers: { 'user-agent': 'FuFumidi' }, ctrl, isUserAbort: guardOf(id),
+          onProgress: (p) => { if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: p.received, total: p.total, percent: p.percent, speed: p.speed, done: false, text: '正在下载 ' + (spec.name || id) }); },
+        });
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: r.size, total: r.size, percent: 100, done: true, speed: 0 });
+        return { ok: true, path: r.path, size: r.size };
+      } catch (e) {
+        const msg = String((e && e.message) || e);
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, error: msg, canceled: _modelCancels.has(id), paused: _modelPause.has(id) });
+        return { ok: false, error: msg, canceled: _modelCancels.has(id), paused: _modelPause.has(id) };
+      } finally {
+        _modelAborts.delete(id); _modelCancels.delete(id); _modelPause.delete(id); _activeDownloads.delete(id);
+      }
+    }
     // HuggingFace 整仓下载（MuScriptor / Aria-AMT）
     if (spec.type === 'hf') {
       const destDir = path.join(modelsDir(), spec.dest);
