@@ -336,6 +336,7 @@ function engineProject(over) {
         trackNo: 0, kind: 'voice', name: 'PartTeto',
         engine: 'utau', singer: '足立レイver3.1.2', singerName: '足立レイver3.1.2',
         language: 'ja', muted: false, volume: -3.5, pan: 0, color: 'Blue', fx: [],
+        partStarts: [960],
         notes: [
           // position 为工程绝对 tick；480 tick = 1 拍
           { position: 480, duration: 240, tone: 65, lyric: 'え',
@@ -386,6 +387,10 @@ test('导入：tick→拍、颤音字段映射、R 音符剔除', () => {
   assert.equal(t.notes[1].vibrato, false, '无颤音音符给默认值');
   assert.equal(t.notes[1].lyric, 'が');
   assert.equal(t.notes[1].startBeat, 2);
+
+  // part 边界（tick→拍）：编排时间线按它画块
+  assert.equal(t.partStarts.length, 1);
+  assert.equal(t.partStarts[0], 2, '960 tick ÷ 480 = 2 拍');
 
   // 弯音 → 轨道级 pitchCurve（绝对拍 + 绝对音分）
   assert.deepEqual(t.pitchCurve, [

@@ -639,6 +639,12 @@ export function convertExternalProject(p) {
       fx: Array.isArray(t.fx) ? t.fx : [],
       muted: !!t.muted,
       gainDb: clamp(num(t.volume, 0), -60, 24),
+      // ★ part 边界（拍）：OpenUTAU 的 part 容器边界，编排时间线按它画块；
+      //   引擎侧是 tick（工程绝对），这里转拍。缺省时时间线按音符间隙聚类。
+      partStarts: (Array.isArray(t.partStarts) ? t.partStarts : [])
+        .map((s) => Math.max(0, num(s, -1) / resolution))
+        .filter((s) => Number.isFinite(s))
+        .map((s) => Math.round(s * 1000) / 1000),
     };
     for (const n of (Array.isArray(t.notes) ? t.notes : [])) {
       // ★ 休止（R）不进编辑器（ustx 语义里休止就是音符间隙）；引擎侧已剔除，

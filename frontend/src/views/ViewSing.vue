@@ -12,6 +12,8 @@ import Icon from '../components/Icon.vue';
 import PianoRoll from '../components/pianoroll/PianoRoll.vue';
 import { trackColorOf, newNoteId, colorblindMode, setColorblindMode } from '../stores/singer';
 import VoicebankPanel from '../components/sing/VoicebankPanel.vue';
+import ArrangeView from '../components/sing/ArrangeView.vue';
+import { shiftRange, shiftCurveRange, shiftBoundsRange } from '../core/arrange.js';
 import CurveCanvas from '../components/sing/CurveCanvas.vue';
 import ViewVoicebank from './ViewVoicebank.vue';
 import { t } from '../core/i18n.js';
@@ -671,6 +673,59 @@ function colorOf(t: any) {
   const i = voiceTracks.value.indexOf(t);
   return trackColorOf(t, i < 0 ? 0 : i);
 }
+
+/* ------------------------------------------------------------ 编排时间线（对齐 OpenUTAU） */
+
+const arrangeOpen = ref(true);
+
+/** 交给编排时间线的轨道表：声部轨 + 伴奏轨（音频块宽度由时长换拍） */
+const arrangeTracks = computed<any[]>(() => (store.tracks || []).map((t: any, i: number) => ({
+  id: t.id,
+  name: t.name,
+  kind: t.kind,
+  engine: t.engine,
+  color: t.kind === 'audio' ? '#8a93a6' : colorOf(t),
+  notes: t.kind === 'audio' ? [] : (t.notes || []),
+  partStarts: t.kind === 'audio' ? [] : (t.partStarts || []),
+  hidden: store.rollHidden.includes(t.id),
+  muted: !!t.muted,
+  audioBeats: t.kind === 'audio'
+    ? ((t.audio?.durationMs || 0) / 1000) * (store.bpm / 60)
+    : 0,
+})));
+
+function onArrPick(trackId: string) {
+  if (trackId && trackId !== store.activeTrackId) store.selectTrack(trackId);
+}
+
+/** 双击 part 块：切轨 + 卷帘横向聚焦到这段（放开头留 40px 边距） */
+function onArrOpen(e: any) {
+  if (!e || !e.trackId) return;
+  onArrPick(e.trackId);
+  if (store.rollHidden.includes(e.trackId)) store.toggleRollHidden(e.trackId);
+  nextTick(() => {
+    const pr = prRef.value;
+    if (pr && typeof pr.xOf === 'function' && pr.scrollEl) {
+      pr.scrollEl.scrollLeft = Math.max(0, pr.xOf(e.part.from) - 40);
+    }
+  });
+}
+
+/** 拖动 part 块 = 平移区间内的音符 + 曲线点 + part 边界（一次撤销点）。
+ *  ★ 音高曲线只平移 pitchCurve（手画的音高编辑线）；PIT 镜像子轨的同步沿用
+ *    setPitchCurve 的职责，这里不动 curves（拖 part 的人极少同时画了 PIT 曲线）。 */
+function onArrMove(e: any) {
+  if (!e || !e.trackId || !e.delta) return;
+  const t0 = store.tracks.find((x: any) => x.id === e.trackId);
+  if (!t0) return;
+  store.pushUndo();
+  store.patchTrack(e.trackId, {
+    notes: shiftRange(t0.notes, e.from, e.to, e.delta),
+    pitchCurve: shiftCurveRange(t0.pitchCurve, e.from, e.to, e.delta),
+    partStarts: shiftBoundsRange(t0.partStarts, e.from, e.to, e.delta),
+  });
+}
+
 /**
  * 卷帘里点到了别的轨的音符：把那条轨切成当前轨、并把这个音符选上。
  *
@@ -2264,6 +2319,20 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <Icon name="copy" :size="12" /> {{ t('另存为') }}
         </button>
       </div>
+      <!-- ★ 编排时间线（对齐 OpenUTAU 的「轨道行 → part 块」）：每轨一行铺 part 块，
+           拖动块 = 平移整段音符，双击块 = 切到该轨并让卷帘聚焦到这段。可折叠。 -->
+      <div class="arr-head">
+        <button class="btn" :title="t('多轨时间线：每条轨一行，part 块铺在时间轴上（对齐 OpenUTAU）')"
+                @click="arrangeOpen = !arrangeOpen">
+          <Icon :name="arrangeOpen ? 'chevron' : 'chevron'" :size="12"
+                :style="{ transform: arrangeOpen ? 'rotate(180deg)' : 'none' }" /> {{ t('时间线') }}
+        </button>
+      </div>
+      <ArrangeView v-if="arrangeOpen" class="arrv" :tracks="arrangeTracks"
+                   :bpm="store.bpm" :beats-per-bar="beatsPerBar"
+                   :playhead-beat="playheadBeat"
+                   :active-track-id="store.activeTrackId"
+                   @pick-track="onArrPick" @open-part="onArrOpen" @move-part="onArrMove" />
       <ul v-if="store.missingAudio.length" class="warn small">
         <li v-for="m in store.missingAudio" :key="m.trackId">
           {{ t('伴奏文件缺失（工程包里没有或解包失败）：') }}{{ m.fileName }}
@@ -3186,6 +3255,9 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
  * 超出的部分由编辑区整体滚动，或用「放大音符区」一键把下面三块收起来。
  */
 .roll-box { flex: 1 1 auto; /* 百分比保底：底部面板再多也挤不扁卷帘（max 同时满足小屏 380px 下限） */ min-height: max(380px, 45%); display: flex; margin: 4px 12px 0; }
+/* ---- 编排时间线（对齐 OpenUTAU 的轨道行 → part 块）---- */
+.arr-head { margin: 6px 12px 0; display: flex; align-items: center; }
+.arrv { margin: 4px 12px 0; max-height: 46vh; overflow-y: auto; }
 .roll-box .edt-roll { flex: 1 1 auto; min-width: 0; margin: 0; }
 /* 分隔条：上下拖动改变音符区高度；双击恢复自动 */
 .roll-resizer { flex: none; height: 10px; margin: 0 12px; display: flex; align-items: center;

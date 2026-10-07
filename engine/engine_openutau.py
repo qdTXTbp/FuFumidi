@@ -885,6 +885,7 @@ def export_project_json(proj, project_dir: str) -> dict:
             axis.tick_pos_to_ms_pos(note_abs_tick) + float(offset_ms))
 
     out_tracks = []
+    voice_parts_by_track: Dict[int, list] = {}
     for i, t in enumerate(proj.tracks):
         fx = []
         fxm = getattr(t, 'mix_fx', None)
@@ -918,6 +919,7 @@ def export_project_json(proj, project_dir: str) -> dict:
             'notes': [],
             'pitchCurve': [],
             'curves': [],
+            'partStarts': [],
         })
 
     audio_tracks = []
@@ -925,6 +927,8 @@ def export_project_json(proj, project_dir: str) -> dict:
         if isinstance(part, UVoicePart):
             if not (0 <= part.track_no < len(out_tracks)):
                 continue
+            # part 边界（tick，工程绝对）：时间线视图的块状容器
+            voice_parts_by_track.setdefault(part.track_no, []).append(part.position)
             tr = out_tracks[part.track_no]
             vel_by_note = {}
             for n in part.notes:
@@ -985,7 +989,9 @@ def export_project_json(proj, project_dir: str) -> dict:
             })
 
     # 曲线里的空点、缺字段的 note 收个尾（velocity 为 None 就不输出）
-    for tr in out_tracks:
+    for i, tr in enumerate(out_tracks):
+        starts = sorted(set(voice_parts_by_track.get(i) or []))
+        tr['partStarts'] = starts
         tr['notes'] = [{k: v for k, v in n.items() if v is not None}
                        for n in tr['notes']]
         tr['notes'].sort(key=lambda x: x['position'])
