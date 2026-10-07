@@ -1960,15 +1960,17 @@ async function doSave() {
    ★ 脏标记用**撤销栈深度**当指纹：store 的约定是"任何修改前先 pushUndo"，
      所以栈深度变了 = 有改动；保存/打开/新建时记一次基准。
      比每次渲染都算一遍全量 JSON 便宜得多（工程动辄几千个音符）。 */
-const savedHistoryAt = ref(store.history.length);
-const dirty = computed(() => store.history.length !== savedHistoryAt.value);
+// ★ 撤销栈在 store 里是 createHistory 实例（_hist，非响应式），对外只暴露 histRev 计数器。
+//   这里以前读 store.history.length —— 那个数组字段在合并中已删除，会在 setup 阶段直接抛异常。
+const savedHistoryAt = ref(store.histRev);
+const dirty = computed(() => store.histRev !== savedHistoryAt.value);
 const projectFile = computed(() => (store.projectPath ? String(store.projectPath).split(/[\\/]/).pop() : ''));
 const projectState = computed(() => {
   if (!store.projectPath) return { text: t('未保存到文件'), kind: 'none' };
   if (dirty.value) return { text: projectFile.value + t(' · 有未保存改动'), kind: 'dirty' };
   return { text: projectFile.value, kind: 'saved' };
 });
-function markSaved() { savedHistoryAt.value = store.history.length; }
+function markSaved() { savedHistoryAt.value = store.histRev; }
 
 async function saveProject(saveAs: boolean) {
   const err = await store.saveProject(saveAs);
@@ -2263,7 +2265,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <span v-else class="muted small">{{ t('左侧选一条轨道') }}</span>
 
         <span class="sp" />
-        <!-- 撤销 / 重做：覆盖音符、轨道、效果链、自动化、轨名（页面级，见 store.history） -->
+        <!-- 撤销 / 重做：覆盖音符、轨道、效果链、自动化、轨名（页面级；栈在 store._hist，计数器 histRev） -->
         <button class="ib" :disabled="!store.canUndo" :title="t('撤销 Ctrl+Z')" @click="store.undo()">
           <Icon name="undo" :size="13" />
         </button>

@@ -523,8 +523,8 @@ export const useSingerStore = defineStore('singer', {
     /* ---- 撤销栈（页面级，覆盖音符 / 轨 / 效果 / 自动化 / 轨名 / 语言 / 模板）----
        ★ 为什么不放在 PianoRoll 里：卷帘只能看见音符。改音量、效果链、自动化、轨名、
          歌词、渲染设置同样会写坏工程，却一直没有撤销入口。这里做成**整页共用**的一栈。 */
-    history: [] as string[],
-    future: [] as string[],
+    /** 撤销栈版本号：_hist 本身不是响应式对象，靠它让按钮禁用态重算 */
+    histRev: 0 as number,
     /** 「渲染全部轨」的停止请求标记（见 cancelRender）；不进工程文件 */
     _cancelled: false as boolean,
     /** 独奏时被顺带静音的轨 id（退出独奏要按这份名单还原，见 toggleSolo） */
@@ -553,8 +553,8 @@ export const useSingerStore = defineStore('singer', {
     },
 
     /** 是否可撤销 / 可重做（工具条按钮的禁用态用） */
-    canUndo(state): boolean { return state.history.length > 0; },
-    canRedo(state): boolean { return state.future.length > 0; },
+    canUndo(state): boolean { void state.histRev; return !!(state._hist && state._hist.canUndo); },
+    canRedo(state): boolean { void state.histRev; return !!(state._hist && state._hist.canRedo); },
     activeTrack(state): SingTrack | null {
       return state.tracks.find(t => t.id === state.activeTrackId) || null;
     },
@@ -604,66 +604,6 @@ export const useSingerStore = defineStore('singer', {
   actions: {
     /* ---------------- 轨道 ---------------- */
     /* ---------------- 撤销栈 ---------------- */
-
-    /** 快照：只存**会写进工程文件**的东西（渲染字节、banks 之类是缓存，不进历史）。
-     *  跟节流无关 —— 拖拽是「交互开始推一次」，所以这里不需要合并逻辑。 */
-    _snapshot() {
-      return JSON.stringify({
-        tracks: this.tracks,
-        bpm: this.bpm,
-        meta: this.meta,
-        sampleNote: this.sampleNote,
-        device: this.device,
-        activeTrackId: this.activeTrackId,
-      });
-    },
-    /** 交互被取消时（长按转右键、指针被抢走）把刚入栈的那一步丢掉：
-        否则撤销栈里会留下「按一次没反应」的空步。只在确认没有写入时调用。 */
-    dropUndo() {
-      try { if (this.history.length) this.history.pop(); } catch (e) { /* 忽略 */ }
-    },
-    /** 在**做修改之前**调用；清空重做栈（与浏览器/编辑器的通用语义一致） */
-    pushUndo() {
-      try {
-        this.history.push(this._snapshot());
-        if (this.history.length > HISTORY_MAX) this.history.shift();
-        this.future = [];
-      } catch (e) { /* 快照失败不该挡住编辑 */ }
-    },
-    _applySnapshot(json: string): boolean {
-      try {
-        const s = JSON.parse(json);
-        if (!s || !Array.isArray(s.tracks)) return false;
-        this.tracks = s.tracks;
-        this.bpm = s.bpm ?? this.bpm;
-        this.meta = s.meta ?? this.meta;
-        this.sampleNote = s.sampleNote ?? this.sampleNote;
-        this.device = s.device ?? this.device;
-        this.activeTrackId = s.activeTrackId ?? (this.tracks[0] ? this.tracks[0].id : null);
-        // 音符被整体替换过，旧的选中 id 可能已经不存在
-        const ids = new Set<string>();
-        for (const t0 of this.tracks) for (const nn of t0.notes) ids.add(nn.id);
-        if (this.selectedId && !ids.has(this.selectedId)) this.selectedId = null;
-        this.selectedIds = this.selectedIds.filter((i) => ids.has(i));
-        return true;
-      } catch (e) { return false; }
-    },
-    undo(): boolean {
-      if (!this.history.length) return false;
-      const cur = this._snapshot();
-      const prev = this.history.pop() as string;
-      if (!this._applySnapshot(prev)) return false;
-      this.future.push(cur);
-      return true;
-    },
-    redo(): boolean {
-      if (!this.future.length) return false;
-      const cur = this._snapshot();
-      const next = this.future.pop() as string;
-      if (!this._applySnapshot(next)) return false;
-      this.history.push(cur);
-      return true;
-    },
 
     addTrack(engine: Engine = 'utau'): string {
       this.pushUndo();
@@ -1099,6 +1039,7 @@ export const useSingerStore = defineStore('singer', {
       }
     },
     pushUndo() {
+      this.histRev++;
       if (!this._hist) {
         this._hist = createHistory({
           snapshot: () => this._snapshotNotes(),
@@ -1107,13 +1048,16 @@ export const useSingerStore = defineStore('singer', {
       }
       this._hist.push();
     },
-    undo() { if (this._hist) this._hist.undo(); },
-    redo() { if (this._hist) this._hist.redo(); },
-    /** 供 UI 禁用按钮用（写成方法而非 getter —— Pinia actions 对象里不能放 getter） */
-    canUndo(): boolean { return !!(this._hist && this._hist.canUndo); },
-    canRedo(): boolean { return !!(this._hist && this._hist.canRedo); },
+    /** 交互被取消时丢掉刚入栈的那一步（卷帘长按转右键），撤销栈里不留空步 */
+    dropUndo() {
+      try { if (this._hist) this._hist.drop(); } catch (e) { /* 忽略 */ }
+      this.histRev++;
+    },
+    undo() { if (this._hist) this._hist.undo(); this.histRev++; },
+    redo() { if (this._hist) this._hist.redo(); this.histRev++; },
+    /** 注：canUndo / canRedo 是上面的 getters（UI 直接读 store.canUndo 当布尔用），这里不再重复定义同名方法 */
     /** 载入新工程 / 导入时清栈（不能 undo 到别的工程去） */
-    clearHistory() { if (this._hist) this._hist.clear(); },
+    clearHistory() { if (this._hist) this._hist.clear(); this.histRev++; },
 
     selectAll() {
       const t = this.activeTrack;
@@ -1269,8 +1213,7 @@ export const useSingerStore = defineStore('singer', {
       this._phraseCache = {};
       this.renderPrevByTrack = {};
       // 整盘换掉 = 新起点：历史里留着上一批快照，Ctrl+Z 会把旧曲目"复活"
-      this.history = [];
-      this.future = [];
+      this.clearHistory();
     },
 
     /* ---------------- 工程文件（.fufumidi 自包含包） ---------------- */
@@ -1290,8 +1233,7 @@ export const useSingerStore = defineStore('singer', {
       this.keySf = 0;
       this.missingAudio = [];
       // 空工程 = 新会话：历史里留着上一个工程的快照只会让 Ctrl+Z 变味
-      this.history = [];
-      this.future = [];
+      this.clearHistory();
     },
 
     /**
@@ -1986,7 +1928,7 @@ export const useSingerStore = defineStore('singer', {
      * 只有指纹变了的乐句会重新下发（合成**一次**引擎调用），没变的直接用缓存拼回去；
      * 什么都没改时**一次引擎调用都不发**（引擎启动 ~0.6s 是这里的大头）。
      */
-    async _renderUtau(tr: SingTrack): Promise<string> {
+    async _renderUtau(tr: SingTrack, outPath?: string): Promise<string> {
       if (!isDesktop || !bridge) return '网页端暂不支持 UTAU 渲染';
       const t0 = performance.now();
       const notes = this._utauPayload(tr);
@@ -2012,7 +1954,8 @@ export const useSingerStore = defineStore('singer', {
         const missNotes = missIdx.flatMap((i) => (phrases[i]?.idx || []).map((k) => notes[k]).filter(Boolean));
         const r = await (bridge as any).utauRenderTrack({
           voicebank: tr.singer,
-          notes: missNotes,
+          notes: outPath ? notes : missNotes,
+          ...(outPath ? { outPath } : {}),
           // 老工程里可能存着 'a'（当年当成别名用）→ 渲染前归一化成音名，否则整轨渲染直接报"无法解析音名"
           sampleNote: normalizeSampleNote(this.sampleNote),
           bpm: this.bpm,
@@ -2030,6 +1973,7 @@ export const useSingerStore = defineStore('singer', {
         });
         calls = 1;
         if (!r || !r.ok) return (r && r.error) || '渲染失败';
+        if (outPath) return this._acceptResult(r, 'UTAU', undefined);
         warnings = r.warnings || [];
         const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes || []);
         const wav = parseWav(bytes);
