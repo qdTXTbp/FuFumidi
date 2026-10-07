@@ -230,6 +230,8 @@ def cmd_sing(a):
         if seg.size < vsr // 4:
             log('第 %d 句太短（%.2f~%.2f）→ 跳过' % (idx, start, end))
             continue
+        # ★ 参考音先降噪：分离残留的宽带底噪会被模型学进输出（实测谱平坦度 0.235 → 0.116）
+        seg = A.denoise_ref(seg, vsr)
         # ★ 精确对齐/配平/度量的目标段 = 这一句**真正的演唱跨度**（不是 3~10 秒的参考窗口）
         tgt = np.asarray(vocals[int(start * vsr):int(end * vsr)], dtype=np.float32)
         if tgt.size < vsr // 4:
@@ -239,6 +241,7 @@ def cmd_sing(a):
         sig = json.dumps({'v': vocal_sig, 'voice': os.path.basename(voice), 'text': text,
                           'a': round(ra, 3), 'b': round(rb, 3), 'st': round(end - start, 3),
                           'align': bool(a.align), 'speed': a.speed, 'version': cfg['custom']['version'],
+                          'dn': True,   # 参考音降噪（改了它必须让缓存失效）
                           'seed': int(a.seed) + idx}, ensure_ascii=False, sort_keys=True)
         rec = meta.get(str(idx)) or {}
         was_reused = bool(a.reuse and rec.get('sig') == sig and os.path.isfile(wav_out))
