@@ -712,19 +712,69 @@ function onArrOpen(e: any) {
 }
 
 /** 拖动 part 块 = 平移区间内的音符 + 曲线点 + part 边界（一次撤销点）。
+ *  ★ 跨轨（对齐 PartMoveEditState 的 deltaTrack）：toTrackId 不同于源轨时，
+ *    把区间内的音符/曲线点/边界**整体迁到目标轨**（音符 id 保留，渲染缓存各自失效）。
  *  ★ 音高曲线只平移 pitchCurve（手画的音高编辑线）；PIT 镜像子轨的同步沿用
- *    setPitchCurve 的职责，这里不动 curves（拖 part 的人极少同时画了 PIT 曲线）。 */
+ *    setPitchCurve 的职责，这里不动 curves。 */
 function onArrMove(e: any) {
   if (!e || !e.trackId || !e.delta) return;
-  const t0 = store.tracks.find((x: any) => x.id === e.trackId);
-  if (!t0) return;
+  const src = store.tracks.find((x: any) => x.id === e.trackId);
+  if (!src) return;
+  const sameTrack = !e.toTrackId || e.toTrackId === e.trackId;
+  if (sameTrack) {
+    store.pushUndo();
+    store.patchTrack(e.trackId, {
+      notes: shiftRange(src.notes, e.from, e.to, e.delta),
+      pitchCurve: shiftCurveRange(src.pitchCurve, e.from, e.to, e.delta),
+      partStarts: shiftBoundsRange(src.partStarts, e.from, e.to, e.delta),
+    });
+    return;
+  }
+  const dst = store.tracks.find((x: any) => x.id === e.toTrackId);
+  if (!dst || dst.kind === 'audio' || src.kind === 'audio') return;
   store.pushUndo();
+  // 源轨：摘掉区间内的内容
+  const movedNotes = src.notes.filter((n: any) => n && n.startBeat >= e.from && n.startBeat < e.to)
+    .map((n: any) => Object.assign({}, n, { startBeat: n.startBeat + e.delta }));
+  const keptNotes = src.notes.filter((n: any) => !(n && n.startBeat >= e.from && n.startBeat < e.to));
+  const movedCurve = (src.pitchCurve || []).filter((p: any) => p && p.beat >= e.from && p.beat < e.to)
+    .map((p: any) => Object.assign({}, p, { beat: p.beat + e.delta }));
+  const keptCurve = (src.pitchCurve || []).filter((p: any) => !(p && p.beat >= e.from && p.beat < e.to));
+  const movedBounds = (src.partStarts || []).filter((s: number) => s >= e.from && s < e.to)
+    .map((s: number) => s + e.delta);
+  const keptBounds = (src.partStarts || []).filter((s: number) => !(s >= e.from && s < e.to));
   store.patchTrack(e.trackId, {
-    notes: shiftRange(t0.notes, e.from, e.to, e.delta),
-    pitchCurve: shiftCurveRange(t0.pitchCurve, e.from, e.to, e.delta),
-    partStarts: shiftBoundsRange(t0.partStarts, e.from, e.to, e.delta),
+    notes: keptNotes,
+    pitchCurve: keptCurve,
+    partStarts: keptBounds,
   });
+  store.patchTrack(e.toTrackId, {
+    notes: [...(dst.notes || []), ...movedNotes].sort((a: any, b: any) => a.startBeat - b.startBeat),
+    pitchCurve: [...(dst.pitchCurve || []), ...movedCurve].sort((a: any, b: any) => a.beat - b.beat),
+    partStarts: [...(dst.partStarts || []), ...movedBounds]
+      .map((s: number) => Math.round(s * 1000) / 1000)
+      .sort((a: number, b: number) => a - b),
+  });
+  store.activeTrackId = e.toTrackId;
 }
+
+/* ---- 卷帘可视区间（拍）→ 时间线上画白色视口框（对齐 PartControl 的 PianoRollView* 联动）---- */
+const rollViewport = ref<{ fromBeat: number; toBeats: number } | null>(null);
+function updateRollViewport() {
+  const pr = prRef.value;
+  if (!pr || !pr.scrollEl || typeof pr.beatOf !== 'function') { rollViewport.value = null; return; }
+  const from = Math.max(0, pr.beatOf(pr.scrollEl.scrollLeft));
+  const noteW = (typeof pr.noteW === 'object' && pr.noteW !== null && 'value' in pr.noteW)
+    ? pr.noteW.value : 34;
+  rollViewport.value = { fromBeat: from, toBeats: from + pr.scrollEl.clientWidth / noteW };
+}
+watch(prRef, (pr) => {
+  if (pr?.scrollEl) {
+    pr.scrollEl.addEventListener('scroll', updateRollViewport, { passive: true });
+    updateRollViewport();
+  }
+});
+watch(() => store.activeTrackId, updateRollViewport);
 
 /**
  * 卷帘里点到了别的轨的音符：把那条轨切成当前轨、并把这个音符选上。
@@ -2332,6 +2382,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
                    :bpm="store.bpm" :beats-per-bar="beatsPerBar"
                    :playhead-beat="playheadBeat"
                    :active-track-id="store.activeTrackId"
+                   :roll-viewport="rollViewport"
                    @pick-track="onArrPick" @open-part="onArrOpen" @move-part="onArrMove" />
       <ul v-if="store.missingAudio.length" class="warn small">
         <li v-for="m in store.missingAudio" :key="m.trackId">

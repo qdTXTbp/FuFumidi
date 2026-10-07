@@ -25,6 +25,9 @@ const props = defineProps({
   activeTrackId: { type: String, default: '' },
   /** 横向像素/拍（独立于卷帘的缩放） */
   pxPerBeat: { type: Number, default: 10 },
+  /** ★ 卷帘当前可视区间（拍）——对齐 PartControl.cs:243-257：在活动轨的块上
+   *  画白色视口框，时间线上能看出"卷帘正在看哪一段" */
+  rollViewport: { type: Object, default: null },   // { fromBeat, toBeat }
 });
 const emit = defineEmits(['pick-track', 'open-part', 'move-part']);
 
@@ -143,9 +146,21 @@ function draw() {
     const cl = clustersByTrack.value[i];
     const drag = (dragState && dragState.trackId === t.id) ? dragState : null;
     for (const p of (cl ? cl.parts : [])) {
-      const x0 = xOfBeat(p.from) + (drag ? drag.dBeat * px : 0);
-      const x1 = xOfBeat(p.to) + (drag ? drag.dBeat * px : 0);
-      drawPart(t, x0, x1, y, css, drag);
+      const isDragged = !!(drag && drag.moved && p.from === drag.from && p.to === drag.to);
+      if (isDragged) {
+        // ★ 跨轨拖动：原位画虚影，块画到目标行（对齐 OpenUTAU 的移动观感）
+        ctx.save();
+        ctx.globalAlpha = 0.25;
+        drawPart(t, xOfBeat(p.from), xOfBeat(p.to), y, css, null);
+        ctx.restore();
+        const ty = y + drag.dTrack * ROW_H;
+        drawPart(t, xOfBeat(p.from) + drag.dBeat * px, xOfBeat(p.to) + drag.dBeat * px,
+                 ty, css, drag);
+      } else {
+        const vp = (t.id === props.activeTrackId && props.rollViewport)
+          ? props.rollViewport : null;
+        drawPart(t, xOfBeat(p.from), xOfBeat(p.to), y, css, null, vp);
+      }
     }
     if (t.kind === 'audio' && !cl?.parts.length && t.audioBeats > 0) {
       drawPart(t, xOfBeat(0), xOfBeat(t.audioBeats), y, css, null);
@@ -172,7 +187,7 @@ function draw() {
   ctx.restore();
 }
 
-function drawPart(t, x0, x1, y, css, drag) {
+function drawPart(t, x0, x1, y, css, drag, viewport = null) {
   if (x1 <= HEAD_W || x0 >= ctx.canvas.clientWidth) return;
   const h = ROW_H - 12;
   const yy = y + 4;
@@ -193,9 +208,14 @@ function drawPart(t, x0, x1, y, css, drag) {
   const notes = (t.notes || []).filter((n) => n && Number.isFinite(n.startBeat)
     && n.startBeat >= fromBeat - 0.01 && n.startBeat < fromBeat + spanBeats + 0.01);
   if (notes.length && w > 12) {
+    // ★ 对齐 PartControl.cs:228-234：音高跨度不足 **52 半音**时向两侧平均扩展，
+    //   保证不同歌段的迷你预览纵向比例一致（不是我们自创的 ±3）。
     let lo = 127, hi = 0;
     for (const n of notes) { lo = Math.min(lo, n.pitch); hi = Math.max(hi, n.pitch); }
-    if (hi - lo < 6) { lo -= 3; hi += 3; }
+    if (hi - lo < 52) {
+      const add = Math.floor((52 - (hi - lo)) / 2);
+      lo -= add; hi += add;
+    }
     ctx.globalAlpha *= 0.9;
     ctx.fillStyle = '#ffffff';
     const pad = 4;
@@ -206,6 +226,20 @@ function drawPart(t, x0, x1, y, css, drag) {
       const nh = Math.max(2, h * 0.09);
       const ny = yy + pad + (hi - n.pitch) / Math.max(1, hi - lo) * (h - pad * 2 - nh);
       ctx.fillRect(nx, ny, Math.min(nw, 30), nh);
+    }
+  }
+  // ★ 卷帘视口联动框（PartControl.cs:243-257）：白色半透明矩形标出卷帘正看到的区间
+  if (viewport && Number.isFinite(viewport.fromBeat) && Number.isFinite(viewport.toBeats)) {
+    const vx0 = Math.max(x0, xOfBeat(viewport.fromBeat));
+    const vx1 = Math.min(x1, xOfBeat(viewport.toBeats));
+    if (vx1 > vx0 + 1) {
+      const inset = 1;
+      ctx.fillStyle = 'rgba(255,255,255,0.11)';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      roundRect(x0 + inset + (vx0 - x0), yy + inset, vx1 - vx0, h - inset * 2, 3);
+      ctx.fill();
+      ctx.stroke();
     }
   }
   if (drag) {   // 拖动中的块加高亮描边
@@ -249,7 +283,7 @@ function hitTest(x, y) {
   return null;
 }
 
-let dragState = null;   // { trackId, from, to, dBeat, x0 }
+let dragState = null;   // { trackId, trackIdx, from, to, dBeat, dTrack, x0, y0 }
 let moved = false;
 
 function onDown(e) {
@@ -258,7 +292,9 @@ function onDown(e) {
   const hit = hitTest(x, y);
   emit('pick-track', hit ? hit.trackId : (props.tracks[rowOfY(y)]?.id || ''));
   if (!hit) return;
-  dragState = { trackId: hit.trackId, from: hit.part.from, to: hit.part.to, dBeat: 0, x0: x };
+  // ★ 对齐 PartMoveEditState：拖动支持**跨轨**（deltaTrack，clamp 到轨集合边界）
+  dragState = { trackId: hit.trackId, trackIdx: hit.trackIdx, from: hit.part.from,
+                to: hit.part.to, dBeat: 0, dTrack: 0, x0: x, y0: y };
   moved = false;
   cv.value.setPointerCapture(e.pointerId);
 }
@@ -266,18 +302,28 @@ function onDown(e) {
 function onMove(e) {
   if (!dragState) return;
   const rect = cv.value.getBoundingClientRect();
-  const dBeat = Math.round((e.clientX - rect.left - dragState.x0) / props.pxPerBeat);
-  if (!moved && Math.abs(e.clientX - rect.left - dragState.x0) < 4) return;
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  if (!moved && Math.abs(x - dragState.x0) < 4 && Math.abs(y - dragState.y0) < 4) return;
   // 不允许拖出左边界
-  dragState.dBeat = Math.max(-dragState.from, dBeat);
-  moved = dragState.dBeat !== 0;
+  dragState.dBeat = Math.max(-dragState.from, Math.round((x - dragState.x0) / props.pxPerBeat));
+  // ★ 跨轨（PartMoveEditState.cs:115-125）：deltaTrack clamp 到边界；只允许
+  //   voice 块搬到 voice 行（我们的 audio 轨是另一类轨，不能混放）
+  let dTrack = rowOfY(y) - dragState.trackIdx;
+  const voiceIdx = props.tracks.map((t, i) => (t.kind !== 'audio' ? i : -1)).filter((i) => i >= 0);
+  const minI = voiceIdx.indexOf(dragState.trackIdx);
+  if (minI < 0) dTrack = 0;
+  else dTrack = Math.min(Math.max(dTrack, -minI), voiceIdx.length - 1 - minI);
+  dragState.dTrack = dTrack;
+  moved = dragState.dBeat !== 0 || dragState.dTrack !== 0;
   draw();
 }
 
 function onUp() {
   if (dragState && moved) {
+    const targetIdx = dragState.trackIdx + dragState.dTrack;
     emit('move-part', {
       trackId: dragState.trackId,
+      toTrackId: props.tracks[targetIdx]?.id || dragState.trackId,
       from: dragState.from, to: dragState.to,
       delta: dragState.dBeat,
     });
