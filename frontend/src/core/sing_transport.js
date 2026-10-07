@@ -76,6 +76,14 @@ export class SingTransport {
     this._offsetMs = 0;
     /** ctx.currentTime 里"工程 0"对应的时刻 */
     this._originAt = 0;
+    /** 播放倍率（0.25 ~ 2）：变速试听。1 = 原速。见 setRate()。 */
+    this._rate = 1;
+    /* 循环区间（工程 ms，P1-6）：A 起点 / B 终点 / 开关。
+       ★ 放在传输器里而不是页面里，是因为"到 B 回 A"必须发生在**时钟**那一层 ——
+       靠 UI 定时器去 seek 会有肉眼可见的漂移与爆音。 */
+    this._loopA = 0;
+    this._loopB = 0;
+    this._loopOn = false;
     this.playing = false;
     /** 变更通知（UI 用来刷新进度条） */
     this.onTick = null;
@@ -92,9 +100,51 @@ export class SingTransport {
   get positionMs() {
     if (!this.ctx) return this._offsetMs;
     if (!this.playing) return this._offsetMs;
+    // ★ 变速：位置按 **倍率缩放** 走 —— 1.5× 时 1 秒墙钟 = 1.5 秒工程时间
     return Math.max(0, Math.min(this.durationMs,
-      (this.ctx.currentTime - this._originAt) * 1000));
+      (this.ctx.currentTime - this._originAt) * 1000 * this._rate));
   }
+
+  /**
+   * 播放倍率（0.25 ~ 2）：变速试听用。
+   * ★ 播放中改倍率要**先停车再按当前位置重起** —— 只改 `playbackRate` 的话，
+   *   `_originAt` 还是旧倍率下的时间原点，进度会瞬间跳一段。
+   */
+  setRate(r) {
+    const v = Math.max(0.25, Math.min(2, Number(r) || 1));
+    if (v === this._rate) return this._rate;
+    const wasPlaying = this.playing;
+    const at = this.positionMs;
+    if (wasPlaying) this._kill();
+    this._rate = v;
+    this._offsetMs = at;
+    if (wasPlaying) this.play(at);
+    else this._notify();
+    return v;
+  }
+
+  get rate() { return this._rate; }
+
+  /** 循环区间状态（只读快照，UI 直接 v-bind 用） */
+  get loop() { return { a: this._loopA, b: this._loopB, on: this._loopOn }; }
+
+  /**
+   * 设置循环区间。a/b 单位 ms，自动排序并夹在 [0, durationMs] 内。
+   * 传入 on 可同时开关；不传则保留原开关状态。
+   */
+  setLoop(a, b, on) {
+    const d = this.durationMs || 0;
+    const clamp = (v) => Math.max(0, Math.min(d || Number.MAX_SAFE_INTEGER, Number(v) || 0));
+    const x = clamp(a), y = clamp(b);
+    this._loopA = Math.min(x, y);
+    this._loopB = Math.max(x, y);
+    if (on != null) this._loopOn = !!on;
+    if (this._loopB - this._loopA < 20) this._loopOn = false;   // 区间太小＝没意义，直接关掉
+    this._notify();
+    return this.loop;
+  }
+
+  clearLoop() { this._loopA = 0; this._loopB = 0; this._loopOn = false; this._notify(); }
 
   /**
    * 装载一批轨道。**重复调用会整体替换**（清空旧 lane）。
@@ -220,12 +270,70 @@ export class SingTransport {
       }
       tail.connect(ctx.destination);
 
-      src.start(when, offsetSec, durSec);
+      // 变速：buffer 播放速率 = rate，此时源时长要除以 rate，否则变速后会提前/延后收尾
+      try { src.playbackRate.value = this._rate; } catch (_) { /* 老实现只读，忽略 */ }
+      src.start(when, offsetSec, durSec / this._rate);
       this._srcs.push(src);
     }
     this.playing = this._srcs.length > 0;
     if (this.playing) this._pump();
+    // 重新装载后保持当前倍率（load 前可能已经设过 1.5×，不该被重置回 1×）
+    if (this._rate !== 1 && this.playing) this.setRate(this._rate);
     return this.playing;
+  }
+
+  /**
+   * 离线混音导出：把当前所有 lane（伴奏 + **每一条**已渲染的声部轨）按播放时同一套
+   * 增益 / 音量自动化 / 声像 / 效果链混成一个 AudioBuffer。
+   *
+   * ★ 以前「导出 WAV」只给**当前这一条轨**，用户想听成品得自己去外面混 ——
+   *   传声器里明明已经在把伴奏和人声混着放了，导出没有理由不给成品。
+   */
+  async renderOffline() {
+    const lanes = (this.lanes || []).filter(
+      (l) => l && l.buf && !l.muted && l.buf.duration > (l.skipMs || 0) / 1000);
+    if (!lanes.length) return null;
+    const Off = typeof window !== 'undefined'
+      && (window.OfflineAudioContext || window.webkitOfflineAudioContext);
+    if (!Off) return null;
+    const sr = lanes[0].buf.sampleRate || 44100;
+    const rate = this._rate || 1;
+    const totalSec = Math.max(...lanes.map((l) => (l.buf.duration - (l.skipMs || 0) / 1000) / rate)) + 0.3;
+    const ctx = new Off(2, Math.max(1, Math.ceil(totalSec * sr)), sr);
+    for (const lane of lanes) {
+      const skip = Math.max(0, (lane.skipMs || 0) / 1000);
+      const bufDur = lane.buf.duration - skip;
+      if (bufDur <= 0.001) continue;
+      const outDur = bufDur / rate;              // 变速后这条 lane 在时间轴上占多长
+      const src = ctx.createBufferSource();
+      src.buffer = lane.buf;
+      let head = src;
+      const chain = lane.fx && lane.fx.length ? buildFxChain(ctx, lane.fx) : null;
+      if (chain && chain.input && chain.output) { src.connect(chain.input); head = chain.output; }
+      const g = ctx.createGain();
+      g.gain.value = SingTransport._gain(lane.gainDb);
+      if (lane.volPoints && lane.volPoints.length) {
+        try {
+          g.gain.setValueCurveAtTime(
+            envelopeFrom(lane.volPoints, lane.bpm, 0, outDur, 256, 'VOL'), 0, outDur);
+        } catch (_) { /* 不支持就退回固定增益 */ }
+      }
+      head.connect(g);
+      let tail = g;
+      if (ctx.createStereoPanner && lane.panPoints && lane.panPoints.length) {
+        const p = ctx.createStereoPanner();
+        try {
+          p.pan.setValueCurveAtTime(
+            envelopeFrom(lane.panPoints, lane.bpm, 0, outDur, 256, 'PAN'), 0, outDur);
+        } catch (_) { /* 同上，退回居中 */ }
+        g.connect(p);
+        tail = p;
+      }
+      tail.connect(ctx.destination);
+      try { src.playbackRate.value = rate; } catch (_) { /* 只读时忽略 */ }
+      src.start(0, skip, bufDur);                // 第 3 个参数是**缓冲区时间**
+    }
+    return await ctx.startRendering();
   }
 
   pause() {
@@ -277,8 +385,16 @@ export class SingTransport {
   }
 
   _pump() {
+    if (this._raf) { caf(this._raf); this._raf = 0; }
     const step = () => {
       if (!this.playing) return;
+      /* 循环区间：到 B 立刻回到 A。seek() 会重建源并再次 _pump()，
+         所以这里**必须直接 return**，否则同一个 rAF 链会分裂成两条。 */
+      const bEff = Math.min(this._loopB, this.durationMs);
+      if (this._loopOn && bEff - this._loopA > 20 && this.positionMs >= bEff) {
+        this.seek(this._loopA);
+        return;
+      }
       if (this.positionMs >= this.durationMs - 1) {   // 播完
         this._kill();
         this._offsetMs = this.durationMs;

@@ -43,7 +43,8 @@ async function readSongBytes(song: any): Promise<Uint8Array | null> {
   if (isDesktop && bridge && typeof bridge.readBinary === 'function' && song.meta && song.meta.path) {
     try {
       const r = await bridge.readBinary(song.meta.path);
-      if (r && r.ok && r.bytes) return new Uint8Array(r.bytes as any);
+      const rr = r as any;                  // Uint8Array | {ok,bytes} 两种返回形态
+      if (rr && rr.ok && rr.bytes) return new Uint8Array(rr.bytes);
     } catch (e) {}
   }
   return null;
@@ -80,6 +81,9 @@ export const useDiffsingerStore = defineStore('diffsinger', {
     vbProgress: {} as Record<string, { percent: number; phase?: string; done?: boolean; error?: string; speed?: number; received?: number; total?: number; host?: string; text?: string; canceled?: boolean }>,
     voicebankInfo: null as any,
     inspecting: false,
+    /** ModelScope 声库下载进度（跨页签存活；见 initMsProgress 的说明） */
+    msProgress: {} as Record<string, any>,
+    _msOff: null as null | (() => void),
 
     /* 工程 */
     /** ★ 轨道级语言（照搬新版上游 USingerTrack.Language）。
@@ -222,10 +226,12 @@ export const useDiffsingerStore = defineStore('diffsinger', {
       try {
         off = (bridge as any).onDiffsingerVoicebankProgress((p: any) => {
           if (!p || p.id !== id) return;
+          // ★ 百分比只增不减：换源/续传时若真的从头下，进度条也不该往回跳（与声库下载同一口径）
+          const prevPct = Number((this.vbProgress[id] || {}).percent) || 0;
           this.vbProgress = {
             ...this.vbProgress,
             [id]: {
-              percent: p.percent || 0, phase: p.phase, done: p.done, error: p.error || '',
+              percent: p.done ? 100 : Math.max(prevPct, Number(p.percent) || 0), phase: p.phase, done: p.done, error: p.error || '',
               speed: Number(p.speed) || 0, received: Number(p.received) || 0,
               total: Number(p.total) || 0, host: p.host || '', text: p.text || '', canceled: !!p.canceled,
             },
@@ -241,6 +247,43 @@ export const useDiffsingerStore = defineStore('diffsinger', {
         off();
       }
     },
+    /* ---------------- ModelScope 声库下载进度（共享） ----------------
+     * ★ 以前这套状态和监听都放在 DiffSingerCatalog 组件里，而它是 `v-if="curTab === 'diffsinger'"`
+     *   挂载的 —— **下到一半切页签，组件卸载 = 监听和进度一起消失**，回来就什么也看不到，
+     *   用户看到的就是「下载弹窗没了」（下载其实还在后台跑）。
+     *   现在状态与监听都放在 store：组件卸载不影响，切回来立刻能看到真实进度。
+     */
+    initMsProgress() {
+      if (this._msOff || !this.hasBridge) return;
+      try {
+        const off = (bridge as any).onDiffsingerMsProgress((p: any) => this.msApply(p));
+        this._msOff = typeof off === 'function' ? off : null;
+      } catch (e) { this._msOff = null; }
+    },
+    /** 合并一条进度事件（**只增不减**：换源/重试时百分比不回跳） */
+    msApply(p: any) {
+      if (!p || !p.id) return;
+      const cur = this.msProgress[p.id] || {};
+      const next: any = {
+        ...cur,
+        percent: Math.max(Number(cur.percent) || 0, Number(p.percent) || 0),
+        received: Number(p.received) || 0,
+        total: Number(p.total) || Number(cur.total) || 0,
+        speed: Number(p.speed) || 0,
+        phase: p.phase || cur.phase || '',
+        text: p.text || '',
+        error: p.error || '',
+      };
+      if (p.done || p.phase === 'done') { next.active = false; next.percent = 100; next.done = true; next.phase = 'done'; }
+      else if (p.phase === 'error') { next.active = false; next.error = p.error || '下载失败'; }
+      else if (p.phase === 'canceled') { next.active = false; next.percent = 0; }
+      else next.active = true;
+      this.msProgress = { ...this.msProgress, [p.id]: next };
+    },
+    msSet(name: string, patch: any) {
+      this.msProgress = { ...this.msProgress, [name]: { ...(this.msProgress[name] || {}), ...patch } };
+    },
+
     async cancelVoicebankDownload(id: string) {
       if (this.hasBridge) { try { await (bridge as any).diffsingerCancelVoicebankDownload(id); } catch (e) {} }
       this.vbProgress = { ...this.vbProgress, [id]: { percent: 0, phase: 'done', done: true } };

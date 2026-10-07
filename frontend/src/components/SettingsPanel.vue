@@ -16,6 +16,11 @@ const appVersion = ref('v3.1.8');
 import { getAppVersion, cmpVersion, getUpdateChannel, setUpdateChannel, normalizeUpdateChannel, getDownloadSource, setDownloadSource, normalizeDownloadSource } from '../core/version.js';
 getAppVersion().then(v => { appVersion.value = v; });
 import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';
+/* 外观三件（字号 / 密度 / 全局缩放）的取值域与落点：与 App.vue 启动时用的是同一份 */
+import {
+  applyDisplayPrefs, loadDisplayPrefs, saveFontSize, saveDensity, saveUiScale,
+  UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_STEP,
+} from '../core/display.js';
 
 const bridge = window.fuBridge;
 const settingsStore = useSettingsStore();
@@ -25,13 +30,14 @@ const cloud = useCloudStore();
 // 立即同步：先弹选择框，让用户决定以本机还是云端存档为准
 const syncChoiceOpen = ref(false);
 onMounted(() => cloud.init());
+// 全局热键：进设置页读一次已保存的绑定，并挂上录制用的键盘监听（capture 阶段，优先于其它监听）
+onMounted(() => { void hkLoad(); window.addEventListener('keydown', hkOnKeydown, true); });
 
 const TABS = computed(() => [
   { id: 'appearance', label: t('外观'), icon: 'palette' },
   { id: 'gpu', label: 'GPU', icon: 'zap' },
   { id: 'feature', label: t('功能'), icon: 'folder' },
   { id: 'keys', label: t('快捷键'), icon: 'kbd' },
-  { id: 'plugins', label: t('插件'), icon: 'spark' },
   { id: 'cloud', label: t('云同步'), icon: 'cloud' },
   { id: 'update', label: t('更新'), icon: 'download' },
 ]);
@@ -88,7 +94,7 @@ watch(tab, moveInd);
 /* ---------------- 表单 ---------------- */
 const form = reactive({
   theme: 'fufu', accent: '', mode: 'light',
-  font_size: 'standard', density: 'comfortable', lang: 'zh',
+  font_size: 'standard', density: 'comfortable', ui_scale: 1, lang: 'zh',
   engine_path: '', engine_mode: 'universal', perf_mode: 'quality', batch_concurrency: 'auto',
   output_dir: '', name_rule: '', watch_dir: '', watch_enabled: false, file_assoc: true,
 });
@@ -113,14 +119,14 @@ const themeOpts = computed(() => {
 
 const rustInfo = ref({ available: false, version: '', binary: null });
 
-/* ---------------- 插件 ---------------- */
-const plugins = ref([]);
-const pluginLog = ref('');
-
 /* ---------------- 快捷键（只读展示，computed 以随语言切换刷新） ---------------- */
 const KEYMAP = computed(() => [
   { keys: ['Space'], label: t('播放 / 暂停') },
   { keys: ['←', '→'], label: t('快退 / 快进') },
+  { keys: ['N'], label: t('下一首（任意页面都可用）') },
+  { keys: ['P'], label: t('上一首（任意页面都可用）') },
+  { keys: ['O'], label: t('切换播放模式（顺序/随机/单曲/列表）') },
+  { keys: ['1-9'], label: t('切换第 N 个歌单（侧栏歌单上有编号）') },
   { keys: ['L'], label: t('切换循环') },
   { keys: ['M'], label: t('切换节拍器') },
   { keys: ['+', '−'], label: t('加速 / 减速') },
@@ -144,6 +150,16 @@ const KEYMAP = computed(() => [
   { keys: ['Alt', '拖拽'], label: t('编辑器调整力度') },
   { keys: ['Shift', '拖拽'], label: t('吸附到音符（歌词/编辑器）') },
   { keys: ['Ctrl', '拖拽'], label: t('吸附到网格') },
+  /* ---- 调教页（歌声合成编辑器）：P1-3 页面键 + P1-6 循环/跟随 + P2-1 卷帘编辑 ---- */
+  { keys: ['Space'], label: t('播放 / 暂停（调教页）') },
+  { keys: ['Enter'], label: t('渲染本轨（调教页）') },
+  { keys: ['Ctrl', 'S'], label: t('保存工程（调教页）') },
+  { keys: ['L'], label: t('循环区间开关（调教页）') },
+  { keys: [',', '.'], label: t('设循环起点 A / 终点 B（调教页）') },
+  { keys: ['F'], label: t('跟随播放滚动（调教页）') },
+  { keys: ['Ctrl', 'C/X/V/D'], label: t('复制 / 剪切 / 粘贴 / 重复（卷帘）') },
+  { keys: ['Ctrl', 'E'], label: t('在播放头切分（卷帘）') },
+  { keys: ['Ctrl', 'M'], label: t('合并同音高（卷帘）') },
 ]);
 
 /* ---------------- 初始化 ---------------- */
@@ -155,8 +171,10 @@ async function load() {
   form.theme = lsTheme || s.theme || 'fufu';
   form.accent = lsAccent || s.accent || '';
   form.mode = loadMode();
-  form.font_size = s.font_size || 'standard';
-  form.density = s.density || 'comfortable';
+  const dp = loadDisplayPrefs();
+  form.font_size = dp.font_size || s.font_size || 'standard';
+  form.density = dp.density || s.density || 'comfortable';
+  form.ui_scale = dp.ui_scale != null ? dp.ui_scale : (s.ui_scale != null ? s.ui_scale : 1);
   form.lang = getLang();
   form.engine_path = s.engine_path || '';
   form.engine_mode = s.engine_mode || 'universal';
@@ -178,17 +196,18 @@ async function load() {
   // 完整性：每次打开设置都重新检查（而非仅在首次 state.integrity===null 时），
   // 避免开机/更新瞬间的瞬时误报被缓存锁死——修复后或 asar 已恢复也能即时反映，不再“一直报错”。
   runIntegrity();
-  loadPlugins();
   loadRust();
   initGpu();
 }
 
 /* ---------------- 外观 ---------------- */
-function applyDisplay(font, density) {
+function applyDisplay(font, density, scale) {
   if (typeof document === 'undefined') return;
-  const fsMap = { standard: '', large: '15px', xlarge: '17px' };
-  document.body.style.fontSize = fsMap[font] || '';
-  document.body.dataset.density = density === 'compact' ? 'compact' : 'comfortable';
+  /* 三件一起走 core/display.js：这样"改一下立即看到"和"启动时应用"永远是同一套规则 */
+  applyDisplayPrefs({ font_size: font, density, ui_scale: scale });
+  saveFontSize(font);
+  saveDensity(density);
+  saveUiScale(scale);
 }
 function onThemeChange() {
   applyTheme(form.theme, form.accent, form.mode);
@@ -196,12 +215,14 @@ function onThemeChange() {
 }
 function onModeChange() {
   setMode(form.mode);
-  toast(t('已切换为') + (form.mode === 'dark' ? t('深色模式') : t('浅色模式')), 'ok');
+  toast(t('已切换为') + (form.mode === 'auto' ? t('跟随系统') : (form.mode === 'dark' ? t('深色模式') : t('浅色模式'))), 'ok');
 }
 function onAccentInput(e) { applyTheme(form.theme, e.target.value, form.mode); }
 function resetAccent() { form.accent = ''; applyTheme(form.theme, '', form.mode); }
-function onFontSize() { applyDisplay(form.font_size, form.density); }
-function onDensity() { applyDisplay(form.font_size, form.density); }
+function onFontSize() { applyDisplay(form.font_size, form.density, form.ui_scale); }
+function onDensity() { applyDisplay(form.font_size, form.density, form.ui_scale); }
+function onUiScale() { applyDisplay(form.font_size, form.density, form.ui_scale); }
+function resetUiScale() { form.ui_scale = 1; onUiScale(); }
 function onLang() {
   setLang(form.lang);
   try { localStorage.setItem('fufumidi_lang', form.lang); } catch (e) {}
@@ -472,7 +493,7 @@ async function gpuLoadDetect() {
   try {
     const r = await bridge.probe();
     const g = (r && r.gpu) || {};
-    gpu.detect = { vendor: g.vendor || null, name: g.name || '', blackwell: !!g.blackwell, needCu128: !!g.need_cu128, available: !!g.available, backend: g.backend || '' };
+    gpu.detect = { vendor: g.vendor || null, name: g.name || '', blackwell: !!g.blackwell, needCu128: !!g.need_cu128, available: !!g.available, backend: g.backend || '', archSupported: (g.arch_supported === undefined ? null : g.arch_supported), archReason: g.arch_reason || '' };
   } catch (e) { gpu.detect = null; }
 }
 async function gpuAutoInstall() {
@@ -696,6 +717,105 @@ async function pruneLibrary() {
 
 /* ---------------- 快捷键 ---------------- */
 function resetKeys() { toast(t('恢复默认快捷键')); }
+/* ---------------- 操作系统级全局热键（用户自己录制） ----------------
+   与应用内快捷键（上面的 KEYMAP，窗口有焦点才生效）不同：这一组走主进程
+   globalShortcut 注册到操作系统，应用在后台/失焦时照样触发。
+   ★ 默认一个都不注册 —— 系统级热键会和别的软件抢键，必须用户显式录制并开启。 */
+const hkActions = ref([]);                 // [{id,label,fallback}]
+const hkMap = reactive({});               // actionId -> { accel, enabled }
+const hkActive = ref({});                 // 注册成功的：actionId -> accel
+const hkFailed = ref({});                 // 注册失败的：actionId -> 原因（通常是被占用）
+const hkRecording = ref('');              // 正在录制的 actionId
+const hkBusy = ref(false);
+
+/** 键盘事件 → Electron accelerator 字符串（globalShortcut 用的就是这套写法） */
+function accelFromEvent(e) {
+  const k = e.key;
+  if (['Control', 'Shift', 'Alt', 'Meta', 'CapsLock', 'Dead'].includes(k)) return '';
+  if (k === 'Escape') return '';                     // Esc = 取消录制
+  const parts = [];
+  if (e.ctrlKey) parts.push('Control');
+  if (e.altKey) parts.push('Alt');
+  if (e.shiftKey) parts.push('Shift');
+  if (e.metaKey) parts.push('Super');
+  let key = k;
+  if (k === ' ') key = 'Space';
+  else if (k === 'ArrowUp') key = 'Up';
+  else if (k === 'ArrowDown') key = 'Down';
+  else if (k === 'ArrowLeft') key = 'Left';
+  else if (k === 'ArrowRight') key = 'Right';
+  else if (k.length === 1) key = k.toUpperCase();
+  else if (/^F\d{1,2}$/.test(k)) key = k;
+  else if (k === '+' || k === '=') key = 'Plus';
+  else if (k === '-') key = '-';
+  else if (/^[a-zA-Z]+$/.test(k)) key = k[0].toUpperCase() + k.slice(1);
+  else return '';                                    // 不认识的键直接忽略
+  // 没有修饰键的普通字母/数字容易被别的软件抢，也容易误触，要求至少一个修饰键（F 系列除外）
+  const isFn = /^F\d{1,2}$/.test(k);
+  if (!parts.length && !isFn && !/^Media/.test(key)) return '';
+  parts.push(key);
+  return parts.join('+');
+}
+
+function hkStartRecord(id) {
+  if (!window.fuBridge || typeof window.fuBridge.hotkeysApply !== 'function') {
+    toast(t('当前版本不支持系统级热键'));
+    return;
+  }
+  hkRecording.value = id;
+}
+
+function hkOnKeydown(e) {
+  const id = hkRecording.value;
+  if (!id) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.key === 'Escape') { hkRecording.value = ''; return; }
+  const accel = accelFromEvent(e);
+  if (!accel) return;                                // 只按了修饰键：继续等
+  hkMap[id] = { accel, enabled: true };
+  hkRecording.value = '';
+  void hkApply();
+}
+
+async function hkLoad() {
+  const b = window.fuBridge;
+  if (!b || typeof b.hotkeysGet !== 'function') return;
+  try {
+    const r = await b.hotkeysGet();
+    hkActions.value = (r && r.actions) || [];
+    const saved = (r && r.map) || {};
+    for (const a of hkActions.value) {
+      hkMap[a.id] = { accel: (saved[a.id] && saved[a.id].accel) || '', enabled: !(saved[a.id] && saved[a.id].enabled === false) };
+    }
+    hkActive.value = (r && r.active) || {};
+    hkFailed.value = (r && r.failed) || {};
+  } catch (e) { /* 浏览器环境没有这套 API */ }
+}
+
+async function hkApply() {
+  const b = window.fuBridge;
+  if (!b || typeof b.hotkeysApply !== 'function') return;
+  hkBusy.value = true;
+  try {
+    const payload = {};
+    for (const a of hkActions.value) {
+      const it = hkMap[a.id] || {};
+      if (it.accel) payload[a.id] = { accel: it.accel, enabled: it.enabled !== false };
+    }
+    const r = await b.hotkeysApply(payload);
+    hkActive.value = (r && r.active) || {};
+    hkFailed.value = (r && r.failed) || {};
+    const bad = Object.keys(hkFailed.value).length;
+    toast(bad ? t('有 ') + bad + t(' 个组合键被其他程序占用，未生效') : t('全局热键已更新'));
+  } finally { hkBusy.value = false; }
+}
+
+function hkClear(id) {
+  hkMap[id] = { accel: '', enabled: false };
+  void hkApply();
+}
+
 
 /* ---------------- 可选 Rust 核心 ---------------- */
 async function loadRust() {
@@ -707,26 +827,6 @@ async function loadRust() {
   }
 }
 
-/* ---------------- 插件 ---------------- */
-async function loadPlugins() {
-  if (!bridge || !bridge.plugins) return;
-  try { plugins.value = await bridge.plugins.list() || []; } catch (e) { plugins.value = []; }
-}
-async function togglePlugin(p) {
-  if (!bridge || !bridge.plugins) return;
-  try { await bridge.plugins.setEnabled(p.id, p.enabled); } catch (e) { p.enabled = !p.enabled; }
-}
-async function rescanPlugins() {
-  if (!bridge || !bridge.plugins) return;
-  try { plugins.value = await bridge.plugins.rescan() || []; } catch (e) {}
-}
-function openDocs() { if (bridge && bridge.plugins && bridge.plugins.openDocs) bridge.plugins.openDocs(); }
-function openPluginDir() { if (bridge && bridge.plugins && bridge.plugins.openDir) bridge.plugins.openDir(); }
-function onPluginLog(p) {
-  const line = p && p.line != null ? String(p.line) : JSON.stringify(p || '');
-  pluginLog.value = line + '\n' + pluginLog.value;
-  if (pluginLog.value.length > 4000) pluginLog.value = pluginLog.value.slice(0, 4000);
-}
 function onFolderWatch(full) {
   toast(t('监视到新文件：') + String(full || '').split(/[\\/]/).pop());
 }
@@ -771,16 +871,12 @@ const integrityOk = computed(() => !!(state.integrity && state.integrity.ok));
 /* ---------------- 保存 / 取消 ---------------- */
 function apply() {
   saveTheme(form.theme, form.accent, form.mode);
-  applyDisplay(form.font_size, form.density);
+  applyDisplay(form.font_size, form.density, form.ui_scale);
   setLang(form.lang);
-  try {
-    localStorage.setItem('fufumidi_lang', form.lang);
-    localStorage.setItem('fufumidi_font', form.font_size);
-    localStorage.setItem('fufumidi_density', form.density);
-  } catch (e) {}
+  try { localStorage.setItem('fufumidi_lang', form.lang); } catch (e) {}
   const payload = {
     theme: form.theme, accent: form.accent, ui_mode: form.mode,
-    font_size: form.font_size, density: form.density, lang: form.lang,
+    font_size: form.font_size, density: form.density, ui_scale: form.ui_scale, lang: form.lang,
     engine_path: form.engine_path, engine_mode: form.engine_mode,
     perf_mode: form.perf_mode, batch_concurrency: form.batch_concurrency,
     batch_concurrency_manual: form.batch_concurrency !== 'auto',
@@ -805,17 +901,19 @@ function apply() {
 function cancel() { state.ui.settingsOpen = false; }
 
 /* ---------------- 生命周期 ---------------- */
+// immediate：设置面板是「打开时才挂载」的，而调用方（如转录页的「GPU 加速」按钮）会先写
+// state.ui.settingsTab 再打开面板 —— 不 immediate 的话挂载时这次变更已经发生，面板永远停在「外观」。
 watch(() => state.ui.settingsTab, v => {
   if (TABS.value.some(t => t.id === v)) tab.value = v;
-});
-let offWatch = null, offPlgLog = null;
+}, { immediate: true });
+let offWatch = null;
 onMounted(() => {
   load();
   moveInd();
   if (bridge && bridge.onFolderWatch) offWatch = bridge.onFolderWatch(onFolderWatch);
-  if (bridge && bridge.plugins && bridge.plugins.onLog) offPlgLog = bridge.plugins.onLog(onPluginLog);
 });
-onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPlgLog && offPlgLog(); } catch (e) {} });
+onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} 
+  window.removeEventListener('keydown', hkOnKeydown, true); });
 </script>
 
 <template>
@@ -857,12 +955,14 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
           <div class="field-row">
             <div>
               <div class="fr-label">{{ t('界面模式') }}</div>
-              <div class="fr-hint">{{ t('浅色明亮 · 深色护眼') }}</div>
+              <div class="fr-hint">{{ t('浅色明亮 · 深色护眼 · 跟随系统按系统偏好自动切换') }}</div>
             </div>
             <div class="fr-ctl">
               <div class="radio-pill">
                 <span :class="{ on: form.mode === 'light' }" @click="form.mode = 'light'; onModeChange()">{{ t('浅色') }}</span>
                 <span :class="{ on: form.mode === 'dark' }" @click="form.mode = 'dark'; onModeChange()">{{ t('深色') }}</span>
+          <span :class="{ on: form.mode === 'auto' }" :title="t('跟随系统的浅色/深色偏好，系统变了会自动跟上')"
+                @click="form.mode = 'auto'; onModeChange()">{{ t('跟随系统') }}</span>
               </div>
             </div>
           </div>
@@ -913,13 +1013,27 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
           <div class="field-row">
             <div>
               <div class="fr-label">{{ t('界面密度') }}</div>
-              <div class="fr-hint">{{ t('控件与间距紧凑度') }}</div>
+              <div class="fr-hint">{{ t('控件与间距紧凑度：紧凑 / 舒适 / 宽松') }}</div>
             </div>
             <div class="fr-ctl">
               <div class="radio-pill">
                 <span :class="{ on: form.density === 'compact' }" @click="form.density = 'compact'; onDensity()">{{ t('紧凑') }}</span>
                 <span :class="{ on: form.density === 'comfortable' }" @click="form.density = 'comfortable'; onDensity()">{{ t('舒适') }}</span>
+                <span :class="{ on: form.density === 'relaxed' }" :title="t('卡片与列表留白更多，长时间看谱不累')"
+                      @click="form.density = 'relaxed'; onDensity()">{{ t('宽松') }}</span>
               </div>
+            </div>
+          </div>
+          <div class="field-row">
+            <div>
+              <div class="fr-label">{{ t('界面缩放') }}</div>
+              <div class="fr-hint">{{ t('全局放大或缩小整个界面（0.9 ~ 1.3）：连画布一起缩放，不会糊也不会重叠') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <input class="ov-range" type="range" :min="UI_SCALE_MIN" :max="UI_SCALE_MAX" :step="UI_SCALE_STEP"
+                     v-model.number="form.ui_scale" @input="onUiScale" :aria-label="t('界面缩放')" />
+              <span class="ui-scale-val">{{ Math.round(form.ui_scale * 100) }}%</span>
+              <button class="btn sm" :disabled="Math.abs(form.ui_scale - 1) < 0.001" @click="resetUiScale">{{ t('还原 100%') }}</button>
             </div>
           </div>
           <div class="field-row">
@@ -948,6 +1062,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
               <div class="gpu-row"><span class="gpu-k">{{ t('安装状态') }}</span><span class="gpu-v">{{ gpu.installed }}</span></div>
               <div v-if="gpu.currentPython" class="gpu-row"><span class="gpu-k">{{ t('引擎运行时') }}</span><span class="gpu-v">Python {{ gpu.currentPython }}</span></div>
               <div v-if="gpu.detect && gpu.detect.needCu128" class="gpu-warn">{{ t('检测到 RTX 50 系（Blackwell）显卡，将自动安装 CUDA 12.8（cu128）加速包') }}</div>
+              <div v-if="gpu.detect && gpu.detect.archSupported === false" class="gpu-warn">{{ gpu.detect.archReason || t('本机显卡算力不在当前 CUDA 推理包支持范围内') }}{{ t(' —— 转录/分离会自动改用 CPU（功能不受影响，只是更慢）。') }}</div>
               <div v-if="gpu.needsPython312" class="gpu-warn">{{ t('ROCm 增强包已安装，但当前引擎运行时是 Python 3.11 —— ROCm 只有 3.12（cp312）的轮子，需装好 Python 3.12 引擎运行时后才会生效（已安装但未启用）。') }}</div>
               <div v-else-if="gpu.rocmActive" class="gpu-warn ok">{{ t('ROCm 加速已生效（AMD 较新 Radeon）。') }}</div>
             </div>
@@ -1098,7 +1213,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
 
         <!-- ============ 快捷键 ============ -->
         <div v-else-if="tab === 'keys'">
-          <p class="ov-note">{{ t('点击右侧快捷键可重新录制；按 Esc 取消，修改自动保存。') }}</p>
+          <p class="ov-note">{{ t('下面是应用内快捷键（窗口有焦点时生效）；系统级全局热键在页面下方单独设置。') }}</p>
           <div class="kbd-row" v-for="k in KEYMAP" :key="k.keys.join('+')">
             <b>{{ k.label }}</b>
             <div class="kbd-keys">
@@ -1108,35 +1223,31 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
           <div style="display:flex;gap:6px;margin-top:12px">
             <button class="btn sm" @click="resetKeys">{{ t('恢复默认快捷键') }}</button>
           </div>
-        </div>
 
-        <!-- ============ 插件 ============ -->
-        <div v-else-if="tab === 'plugins'">
-          <p class="ov-note">
-            {{ t('插件用于扩展 FuFumidi 功能：将插件目录放入') }} <b>{{ t('用户目录/fufumidi/plugins/<插件名>/') }}</b>
-            {{ t('，内含 plugin.json 清单与入口脚本，重载后即可在此启用。插件由你主动安装并运行，等同于本地可信代码。') }}
-          </p>
-          <div class="plg-head">
-            <span>{{ t('已安装插件') }}（{{ plugins.length }}）</span>
-            <button class="btn sm" @click="rescanPlugins">{{ t('重新扫描') }}</button>
-          </div>
-          <div v-if="!plugins.length" class="state-box">{{ t('无') }}</div>
-          <div class="plg-item" v-for="p in plugins" :key="p.id">
-            <div class="plg-info">
-              <b>{{ p.name }} <span class="muted small">v{{ p.version }}</span></b>
-              <small>{{ p.description || p.id }}</small>
+          <!-- ============ 操作系统级全局热键（用户自己录制） ============ -->
+          <div class="hk-sec">
+            <div class="hk-head">
+              <Icon name="kbd" :size="15" />
+              <b>{{ t('全局热键（系统级）') }}</b>
+              <span class="sp" />
+              <span class="muted small">{{ t('应用在后台/最小化时同样生效；默认不注册，需自己录制') }}</span>
             </div>
-            <span :class="['plg-tag', p.enabled ? 'on' : 'off']">{{ p.enabled ? t('已启用') : t('已禁用') }}</span>
-            <label class="switch-row">
-              <input type="checkbox" :checked="p.enabled" @change="e => { p.enabled = e.target.checked; togglePlugin(p); }" />
-              <span></span>
-            </label>
-          </div>
-          <div class="plg-head">{{ t('插件日志') }}</div>
-          <div class="plg-log">{{ pluginLog || t('无') }}</div>
-          <div style="display:flex;gap:8px;margin-top:8px">
-            <button class="btn sm" @click="openPluginDir">{{ t('打开插件目录') }}</button>
-            <a class="plg-docs" @click="openDocs">{{ t('开发者文档') }} ↗</a>
+            <p class="ov-note">{{ t('点「录制」后按组合键（需带 Ctrl / Alt / Shift，F1~F12 可单按）；Esc 取消，× 清除。录制后立即生效，无需重启。') }}</p>
+            <div class="hk-row" v-for="a in hkActions" :key="a.id">
+              <b class="hk-lb">{{ t(a.label) }}</b>
+              <div class="hk-val">
+                <template v-if="hkRecording === a.id">
+                  <span class="kbd-key rec">{{ t('请按组合键…') }}</span>
+                </template>
+                <template v-else-if="hkMap[a.id] && hkMap[a.id].accel">
+                  <span class="kbd-key" :class="{ ok: hkActive[a.id], bad: hkFailed[a.id] }" v-for="key in hkMap[a.id].accel.split('+')" :key="key">{{ key }}</span>
+                  <span v-if="hkFailed[a.id]" class="hk-bad">{{ t('被占用，未生效') }}</span>
+                </template>
+                <span v-else class="muted small">{{ t('未设置') }}</span>
+              </div>
+              <button class="btn sm" :disabled="hkBusy" @click="hkStartRecord(a.id)">{{ t('录制') }}</button>
+              <button class="btn sm ghost" :disabled="hkBusy || !(hkMap[a.id] && hkMap[a.id].accel)" :title="t('清除')" @click="hkClear(a.id)">×</button>
+            </div>
           </div>
         </div>
 
@@ -1308,3 +1419,20 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {} try { offPl
     <CloudSyncChoiceDialog :open="syncChoiceOpen" @close="syncChoiceOpen = false" />
   </div>
 </template>
+
+<style scoped>
+/* ---- 操作系统级全局热键（用户自己录制） ---- */
+.hk-sec { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+.hk-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.hk-head b { font-size: 13px; }
+.hk-head .sp { flex: 1; }
+.hk-row { display: flex; align-items: center; gap: 10px; padding: 7px 0;
+          border-bottom: 1px dashed var(--border); }
+.hk-row:last-child { border-bottom: none; }
+.hk-lb { flex: none; width: 108px; font-size: 12.5px; }
+.hk-val { flex: 1; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
+.hk-val .kbd-key.ok { border-color: var(--success-text, #22c55e); color: var(--ink); }
+.hk-val .kbd-key.bad { border-color: var(--brand-coral); color: var(--brand-coral); }
+.hk-val .kbd-key.rec { border-style: dashed; border-color: var(--accent); color: var(--brand-text); }
+.hk-bad { font-size: 11px; color: var(--brand-coral); }
+</style>

@@ -55,7 +55,7 @@ async function install(it) {
   busyId.value = it.id;
   err.value = '';
   msg.value = '';
-  prog.value = { ...prog.value, [it.id]: { percent: 0, phase: 'download' } };
+  prog.value = { ...prog.value, [it.id]: { percent: 0, phase: 'download', retry: 0, error: '', active: true } };
   try {
     const r = await bridge.utauDownloadVoicebank(it.id);
     if (r && r.ok) {
@@ -73,7 +73,7 @@ async function install(it) {
   } finally {
     busyId.value = '';
     const p = prog.value[it.id];
-    if (p) prog.value = { ...prog.value, [it.id]: { ...p, phase: 'done' } };
+    if (p) prog.value = { ...prog.value, [it.id]: { ...p, phase: 'done', active: false } };
   }
 }
 
@@ -122,7 +122,19 @@ onMounted(() => {
   if (bridge && bridge.onVoicebankProgress) {
     offProgress = bridge.onVoicebankProgress((p) => {
       if (!p || !p.id) return;
-      prog.value = { ...prog.value, [p.id]: { percent: p.percent || 0, phase: p.phase || 'download', error: p.error || '' } };
+      const prev = prog.value[p.id] || {};
+      // ★ 进度只增不减：主进程换源/续传时若真的从 0 重来，也不让进度条往回跳。
+      const pct = Math.max(Number(prev.percent) || 0, Number(p.percent) || 0);
+      prog.value = {
+        ...prog.value,
+        [p.id]: {
+          percent: p.done ? 100 : pct,
+          phase: p.phase || 'download',
+          error: p.error || '',
+          retry: p.retry || 0,
+          active: !p.done && !p.error ? true : (p.done ? false : !!prev.active),
+        },
+      };
     });
   }
 });
@@ -170,10 +182,14 @@ onBeforeUnmount(() => { if (offProgress) { try { offProgress(); } catch (e) {} o
         <div class="vbs-desc">{{ t(it.desc) }}</div>
         <div class="vbs-license" :title="t(it.license)">{{ t('使用条款：') }}{{ t(it.license) }}</div>
 
-        <div v-if="prog[it.id] && busyId === it.id" class="vbs-prog">
+        <!-- ★ 进度条挂在 prog.active 上，而不是 busyId === it.id：
+             列表刷新 / 组件保活切页 / 一次换源，都不该让「正在下载」的进度凭空消失。 -->
+        <div v-if="prog[it.id] && (prog[it.id].active || busyId === it.id)" class="vbs-prog">
           <div class="vbs-prog-bar"><i :style="{ width: (prog[it.id].percent || 0) + '%' }"></i></div>
           <span class="vbs-prog-txt">
-            {{ prog[it.id].phase === 'extract' ? t('正在解包安装…') : t('下载中 ') + (prog[it.id].percent || 0) + '%' }}
+            {{ prog[it.id].phase === 'extract' ? t('正在解包安装…')
+               : (prog[it.id].phase === 'retry' ? t('换源重试中… ') + (prog[it.id].percent || 0) + '%'
+                                                 : t('下载中 ') + (prog[it.id].percent || 0) + '%') }}
           </span>
         </div>
 

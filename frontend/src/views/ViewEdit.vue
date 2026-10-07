@@ -4,10 +4,33 @@ import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, onActivated
 import Icon from '../components/Icon.vue';
 import EditorCanvas from '../components/EditorCanvas.vue';
 import { useAppStore } from '../stores/app';
+import { useWorkspace, SCALES } from '../stores/workspace';
+import EditorMenuBar from '../components/editor/EditorMenuBar.vue';
+import MidiToolPanel from '../components/editor/MidiToolPanel.vue';
+import CommandPalette from '../components/editor/CommandPalette.vue';
+import { MIDI_TOOLS } from '../core/midi-tools.js';
 import { ensureAudio } from '../audio.js';
 
 const app = useAppStore();
 const state = app;
+/* ---------------- 工作台骨架（M1）：工作区布局 / 菜单条 / 检查器分页 / 状态栏 ----------------
+   布局以前散在几份 localStorage 里各写各的，现在统一走 stores/workspace.ts（键名沿用，老设置不丢）。 */
+const ws = useWorkspace();
+const inspTab = ref('note');
+const shortcutsOpen = ref(false);
+
+/* 检查器分页（M1）：三块面板原先竖着堆在 260~320px 宽的栏里，窄屏要滚三屏才找得到
+   「网格与显示」。分页后一屏一类信息，带 0.22s 进入动画。 */
+const INSP_TABS = [['note', '音符', 'cursor'], ['track', '轨道', 'music'], ['view', '视图', 'quantize']];
+
+/* 快捷键一览（M1）：以前只写在按钮 title 里，等于没有。只列**代码里真实存在**的手势。 */
+const SHORTCUT_GROUPS = [
+  { name: '工具与绘制', rows: [['V', '选择工具'], ['B', '画笔工具'], ['E', '橡皮工具'], ['拖拽音符', '移动（上下改音高、左右改位置）'], ['拖音符边缘', '拉伸时值'], ['空白处点击', '画笔工具下插入音符'], ['悬停音符', '就地工具条：力度 / 时值 / 静音 / 删除 / 参数工具'], ['步进输入', '点一下落一个音并自动前进（← → 走指针，Esc 退出）']] },
+  { name: '修饰键（画布）', rows: [['← / →', '步进模式下走指针（一步 = 当前步长）'], ['Alt+拖拽', '改力度（2px ≈ 1 级）'], ['Shift+拖拽', '锁定音高，只改时间位置'], ['Ctrl / Shift + 点击', '加选 / 减选'], ['Ctrl+滚轮', '缩放'], ['Shift+滚轮', '横向平移']] },
+  { name: '选择', rows: [['拖拽空白', '框选音符'], ['右键音符', '上下文菜单（含参数工具直达）']] },
+  { name: '编辑', rows: [['Ctrl+Shift+P', '命令面板（搜索所有命令）'], ['Ctrl+Z', '撤销'], ['Ctrl+Y', '重做'], ['Ctrl+C', '复制选中'], ['Ctrl+V', '粘贴到播放头'], ['Ctrl+A', '全选'], ['Delete', '删除选中'], ['Ctrl+S', '导出 MIDI']] },
+  { name: '视图与走带', rows: [['滚轮', '上下滚动音高'], ['Ctrl+滚轮', '缩放'], ['Shift+滚轮', '横向平移'], ['状态栏右下', '工作区预设：编曲 / 调教 / 校对 / 混音']] },
+];
 const currentSong = computed(() => app.currentSong);
 const toast = (m, t) => app.toast(m, t);
 const importFiles = (items) => app.importFiles(items);
@@ -15,9 +38,13 @@ const setView = (v) => app.setView(v);
 import { encodeMidi } from '../core/midi.js';
 import { noteName, clamp, KEY_NAME, removeNotes } from '../core/util.js';
 import { MACRO_DOC, macroToCmd, applyMacroScript, parseMacroScript } from '../core/macro.js';
-import { SCALE_TYPES, parseCustomDegrees } from '../core/scale.js';
+import { SCALE_TYPES, parseCustomDegrees, scalePitchClasses } from '../core/scale.js';
 import { detectKeySpec, detectChordTrack, chordPcsByName } from '../core/analysis.js';
 import { listArticulations, applyArticulation, upsertUserArticulation, removeUserArticulation } from '../core/articulations.js';
+import {
+  loadExprMap, saveExprMap, setExprAction, sanitizeExprMap, applyExprPreset, EXPR_PRESETS,
+  exportExprMapJson, importExprMapJson, augmentTracks, articulationPlan,
+} from '../core/expression-map.js';
 import { t } from '../core/i18n.js';
 
 const bridge = window.fuBridge;
@@ -54,7 +81,15 @@ const listDraft = ref([]);
 // CC 泳道
 const ccEnabled = ref(false);
 const ccNumber = ref(11);
-const CC_OPTIONS = [[1, t('CC1 颤音')], [7, t('CC7 音量')], [10, t('CC10 声像')], [11, t('CC11 表情')], [64, t('CC64 延音')]];
+/* CC 泳道可选目标（M5b：从 5 个扩到常用的一套）。
+   管弦乐/表情写法最常用的几个：CC1 调制、CC2 呼吸、CC11 表情、CC7 音量、CC10 声像，
+   加上踏板与演奏法开关类（CC64/66/67/68）——以前只有 5 个，想画 CC2 都选不到。 */
+const CC_OPTIONS = [
+  [1, t('CC1 调制（颤音）')], [2, t('CC2 呼吸')], [4, t('CC4 脚控')], [5, t('CC5 滑音时间')],
+  [7, t('CC7 音量')], [8, t('CC8 平衡')], [10, t('CC10 声像')], [11, t('CC11 表情')],
+  [64, t('CC64 延音踏板')], [65, t('CC65 弱音器')], [66, t('CC66 持续音')], [67, t('CC67 弱音踏板')],
+  [68, t('CC68 连奏')], [71, t('CC71 共鸣')], [74, t('CC74 亮度')], [91, t('CC91 混响')], [93, t('CC93 合唱')],
+];
 
 const sel = reactive({ count: 0, midi: null, name: '', vel: null, start: null, len: null });
 
@@ -93,6 +128,361 @@ const curTrackInfo = computed(() => {
   return s.tracks[trackIndex.value] || null;
 });
 const selMutedNow = computed(() => (editor.value && sel.count ? editor.value.selMuted() : false));
+
+/* ---------------- 速度轨（M5，借 Cubase 的 tempo track） ----------------
+   tempoMap 的每一项是 { tick, us, sec }，其中 sec 是**到该点的累计秒数**（播放换算用它）。
+   所以任何一次改动后都必须整表重算 sec，而且要**原地改那个数组** ——
+   core/midi.js 的 secToTick/baseSec 是闭包捕获了它的，换引用等于没改。 */
+const tempoLane = ref(false);
+const tempoPoints = computed(() => (((song.value && song.value.tempoMap) || [])).map((p) => ({ tick: p.tick, bpm: Math.round(60000000 / p.us * 10) / 10 })));
+function rebuildTempoMap(s) {
+  const tm = s.tempoMap;
+  if (!tm || !tm.length) return;
+  tm.sort((a, b) => a.tick - b.tick);
+  if (tm[0].tick !== 0) tm.unshift({ tick: 0, us: tm[0].us, sec: 0 });
+  let sec = 0;
+  for (let i = 0; i < tm.length; i++) {
+    if (i > 0) sec = tm[i - 1].sec + (tm[i].tick - tm[i - 1].tick) * tm[i - 1].us / 1e6 / (s.tpb || 480);
+    tm[i].sec = sec;
+  }
+  s.initialBpm = Math.round(60000000 / tm[0].us);
+}
+/** 速度改动统一入口：快照 → 原地改 tempoMap → 重算 sec → 刷新播放器 */
+function commitTempo(mutate) {
+  const s = song.value; if (!s || !s.tempoMap) return;
+  editor.value?.pushStateForTrack(-1);
+  mutate(s.tempoMap);
+  rebuildTempoMap(s);
+  editor.value?.notifyExternalEdit();
+}
+function setTempoPoint(i, e) {
+  const bpm = Math.max(20, Math.min(400, Number(e && e.target ? e.target.value : e) || 120));
+  commitTempo((tm) => { if (tm[i]) tm[i].us = Math.round(60000000 / bpm); });
+  toast(t('速度已改为 ') + bpm + ' BPM', 'ok');
+}
+function addTempoPoint() {
+  const s = song.value; if (!s) return;
+  const tick = Math.max(0, Math.round(s.secToTick(state.curSec / (state.tempo || 1))));
+  const cur = tempoPoints.value.find((p) => p.tick === tick);
+  if (cur) { toast(t('该位置已经有速度点'), 'warn'); return; }
+  commitTempo((tm) => {
+    let us = tm[0] ? tm[0].us : 500000;
+    for (const p of tm) if (p.tick <= tick) us = p.us;
+    tm.push({ tick, us, sec: 0 });
+  });
+  toast(t('已在播放头加入速度点'), 'ok');
+}
+function delTempoPoint(i) {
+  if (tempoPoints.value.length < 2) { toast(t('至少要保留一个速度点'), 'warn'); return; }
+  commitTempo((tm) => { tm.splice(i, 1); });
+}
+function resetTempo() {
+  const s = song.value; if (!s) return;
+  const us = s.tempoMap && s.tempoMap[0] ? s.tempoMap[0].us : 500000;
+  commitTempo((tm) => { tm.length = 0; tm.push({ tick: 0, us, sec: 0 }); });
+  toast(t('已清空速度点，回到单一速度'), 'ok');
+}
+
+/* ---------------- 跨轨编辑（M5b，借 Cubase / Studio One 的 multi-track edit） ----------------
+   勾选若干轨后：这些轨的音符一起显示、一起命中、一起被框选，批量工具（参数工具/移调/量化…）
+   直接作用于跨轨选区；撤销走**全量快照**，一次 Ctrl+Z 把所有被改的轨一起还原。 */
+const editTracks = ref([]);           // 额外参与编辑的轨道下标（当前轨始终参与）
+const multiEditOn = computed(() => editTracks.value.length > 0);
+function toggleEditTrack(i) {
+  const cur = editTracks.value;
+  editTracks.value = cur.includes(i) ? cur.filter((x) => x !== i) : [...cur, i];
+  editor.value?.selectNone();
+  refreshSel();
+}
+function clearEditTracks() { editTracks.value = []; refreshSel(); }
+/** 参与编辑的轨道数（含当前轨） */
+const editTrackCount = computed(() => 1 + editTracks.value.filter((i) => i !== trackIndex.value).length);
+
+/* ---------------- 技法条（M5，借 Cubase 的 articulation lane） ----------------
+   演奏法在 MIDI 里就是**低音区的一个 Key Switch 音符**（midi 0..24，具体键位由 ksMap 决定）。
+   技法条把它读成「从这次切换开始、到下一次切换为止」的一段，于是：
+     · 一眼看出这一段在用什么技法（以前只能去钢琴卷帘最底下那几个小格子里找）；
+     · 直接在条上换技法（改那个 KS 音符的音高）；
+     · 选区起点一键插技法。
+   演奏法本身**不是**音符字段（换音源不需要重做数据），这是刻意的。 */
+const artLane = ref(false);
+const newArtMidi = ref(1);
+const KS_KEYS = Array.from({ length: 25 }, (_, i) => i);
+const ksName = (m) => ksMap.value[m] || ('KS ' + m);
+/** 只有**映射表里有的键**才算技法切换。否则一首钢琴曲低音区的 C1（midi 24）会被误读成技法。 */
+const ksMappedKeys = computed(() => KS_KEYS.filter((k) => ksMap.value[k]));
+const ksEmpty = computed(() => ksMappedKeys.value.length === 0);
+function useDefaultKsMap() {
+  const next = applyArticulation(ksMap.value, 'spitfire');
+  ksMap.value = next;
+  saveKS(next);
+  reloadArticulations();
+  toast(t('已套用 Spitfire 技法映射（可在「映射表」里改）'), 'ok');
+}
+const ksSegments = computed(() => {
+  const s = song.value, tr = curTrackInfo.value;
+  if (!s || !tr) return [];
+  const ks = tr.notes.filter((n) => n.midi <= 24 && ksMap.value[n.midi]).sort((a, b) => a.start - b.start);
+  const total = s.totalTicks || 0;
+  return ks.map((n, i) => ({
+    note: n, start: n.start, midi: n.midi, name: ksName(n.midi),
+    end: i + 1 < ks.length ? ks[i + 1].start : total,
+  }));
+});
+/** 某个 tick 处生效的技法名（悬停条/状态栏用） */
+function artAt(tick) {
+  let hit = null;
+  for (const seg of ksSegments.value) { if (seg.start <= tick) hit = seg; else break; }
+  return hit ? hit.name : '';
+}
+function setSegArticulation(seg, e) {
+  const m = Number(e && e.target ? e.target.value : e);
+  if (!Number.isFinite(m) || m === seg.midi) return;
+  editor.value?.editNote(seg.note, { midi: Math.max(0, Math.min(24, Math.round(m))) });
+  refreshSel(); onModified();
+}
+function delKsSeg(seg) {
+  editor.value?.deleteNoteExternal(seg.note);
+  refreshSel(); onModified();
+}
+function addArticulationHere() {
+  const s = song.value;
+  if (!s) { toast(t('请先载入 MIDI'), 'warn'); return; }
+  // 下拉在某些状态下会给出空值（v-model.number → NaN），这里兜一下，别插出音高是 NaN 的音符
+  const raw = Number(newArtMidi.value);
+  const m = Number.isFinite(raw) ? Math.max(0, Math.min(24, Math.round(raw))) : 0;
+  const sel = editor.value?.selRef();
+  const tick = (sel && sel.length) ? Math.min(...sel.map((n) => n.start))
+    : Math.max(0, Math.round(s.secToTick(state.curSec / (state.tempo || 1))));
+  editor.value?.insertKeySwitch(m, tick, Math.round(s.tpb / 2));
+  artLane.value = true;
+  refreshSel(); onModified();
+  toast(t('已在选区起插入技法：') + ksName(newArtMidi.value), 'ok');
+}
+function tickBar(tick) {
+  const s = song.value; if (!s) return '1';
+  const per = (s.tpb || 480) * ((s.sigMap && s.sigMap[0]) ? s.sigMap[0].num : 4);
+  return String(Math.floor((tick || 0) / per) + 1);
+}
+
+/* ---------------- 步进输入（M4） ----------------
+   开启后画笔落在「步进指针」上并自动前进；← → 手动走，工具条显示指针所在的小节:拍。 */
+const stepOn = ref(false);
+const stepBeats = ref(0.25);
+const stepCursorTick = ref(0);
+const STEP_OPTS = [[0.125, '1/32'], [0.25, '1/16'], [1 / 3, '1/8T'], [0.5, '1/8'], [1, '1/4']];
+const stepTicks = computed(() => Math.max(30, Math.round(stepBeats.value * ((song.value && song.value.tpb) || 480))));
+const stepCursorText = computed(() => {
+  const s = song.value; if (!s) return '1:1';
+  const tpb = s.tpb || 480;
+  const per = tpb * ((s.sigMap && s.sigMap[0]) ? s.sigMap[0].num : 4);
+  const tk = stepCursorTick.value;
+  return (Math.floor(tk / per) + 1) + ':' + (Math.floor((tk % per) / tpb) + 1);
+});
+function onStep(tick) { stepCursorTick.value = tick || 0; }
+function toggleStep() {
+  stepOn.value = !stepOn.value;
+  if (stepOn.value) {
+    if (tool.value !== 'pencil') tool.value = 'pencil';
+    const s = song.value;
+    // 打开时把指针放到播放头，用户一进来就知道「下一个音落在哪」
+    if (s) editor.value?.setStepCursor(Math.max(0, Math.round(s.secToTick(state.curSec / (state.tempo || 1)))));
+    toast(t('步进输入：点击音符区按步长依次落音（← → 走指针，Esc 退出）'), 'ok');
+  }
+}
+function stepToPlayhead() {
+  const s = song.value; if (!s) return;
+  editor.value?.setStepCursor(Math.max(0, Math.round(s.secToTick(state.curSec / (state.tempo || 1)))));
+}
+
+/* ---------------- 参数化 MIDI 工具（M2） ----------------
+   面板本身与具体工具解耦：工具表在 core/midi-tools.js，预览在 EditorCanvas 里，
+   这里只负责「传上下文 + 开关 + 结果提示」。 */
+const midiToolOpen = ref(false);
+const midiToolPreset = ref('');   // 从命令面板/右键菜单直达某条工具
+/* ---- 悬停工具条（M3）：鼠标压到音符上就地弹一条，移开或进拖拽就收 ---- */
+const hoverInfo = ref(null);
+let hoverTimer = 0;
+function cancelHoverHide() { if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = 0; } }
+function scheduleHoverHide() { cancelHoverHide(); hoverTimer = window.setTimeout(() => { hoverInfo.value = null; hoverTimer = 0; }, 200); }
+function onHover(e) {
+  cancelHoverHide();
+  if (!e) { scheduleHoverHide(); return; }
+  hoverInfo.value = { ...e };   // 技法名由模板里的 artAt(hoverInfo.tick) 现算：改完技法不用再晃一下鼠标才更新
+}
+const hoverBarStyle = computed(() => {
+  const h = hoverInfo.value; if (!h) return {};
+  const w = 330;
+  const left = Math.min(Math.max(8, h.x + 14), Math.max(8, window.innerWidth - w - 8));
+  const top = Math.max(8, h.y - 42);
+  return { left: left + 'px', top: top + 'px' };
+});
+function hoverAct(kind) {
+  const n = editor.value?.hoverAction(kind) || 0;
+  if (n) { hoverInfo.value = null; refreshSel(); onModified(); toast(t('已处理 ') + n + t(' 个音符'), 'ok'); }
+}
+function hoverMore() {
+  if (!editor.value?.selectHover()) return;
+  hoverInfo.value = null;
+  refreshSel();
+  openMidiTools('');
+}
+/* ---- 命令面板（M3，Ctrl+Shift+P）：动作表就是菜单条那一份 ---- */
+const palOpen = ref(false);
+const commands = computed(() => {
+  const out = [];
+  for (const g of menuGroups.value) {
+    for (const it of g.items) {
+      if (it.sep) continue;
+      out.push({ group: g.label, label: it.label, hint: it.hint || '', disabled: !!it.disabled, run: it.run });
+    }
+  }
+  for (const tool of MIDI_TOOLS) {
+    out.push({ group: t('参数工具'), label: t(tool.name), hint: t(tool.group), disabled: !sel.count, run: () => openMidiTools(tool.id) });
+  }
+  for (const p of ws.presets) out.push({ group: t('工作区'), label: t('工作区：') + t(p.label), hint: '', run: () => applyPreset(p.id) });
+  return out;
+});
+const toolCtx = computed(() => {
+  const s = song.value;
+  let spec = scaleSpec.value;
+  if (!spec && s) {
+    // 没显式设调时按曲目自动判断（与画布 autoScale 同一套：detectKeySpec）
+    try {
+      const all = [];
+      for (const tr of s.tracks) for (const n of tr.notes) all.push(n);
+      const k = all.length ? detectKeySpec(all) : null;
+      if (k && k.root != null) spec = { root: k.root, type: k.mode || 'major', custom: [] };
+    } catch (e) { /* 判断失败就不约束 */ }
+  }
+  let pcs = [];
+  try { pcs = spec ? scalePitchClasses(spec) : []; } catch (e) { pcs = []; }
+  return { tpb: (s && s.tpb) || 480, scalePcs: pcs, track: curTrackInfo.value };
+});
+function openMidiTools(toolId) {
+  if (!song.value) { toast(t('请先载入 MIDI'), 'warn'); return; }
+  if (!sel.count) { toast(t('请先选中要处理的音符'), 'warn'); return; }
+  midiToolPreset.value = toolId || '';
+  midiToolOpen.value = true;
+}
+function onToolPanelClose(e) {
+  midiToolOpen.value = false;
+  if (e && e.applied) {
+    toast(t('已应用「') + (e.tool || '') + t('」：') + e.changed + t(' 个音符'), 'ok');
+    onModified();
+  }
+  refreshSel();
+}
+
+/* 工作区预设：一键换布局（M1）。以前「卷帘太小 / 检查器太窄」只能手动拖，拖完还不记得。 */
+const VIEW_NAMES = { piano: '钢琴卷帘', drum: '鼓组网格', score: '乐谱' };
+const viewLabel = computed(() => t(VIEW_NAMES[viewMode.value] || '钢琴卷帘'));
+const snapLabel = computed(() => {
+  const hit = SNAPS.find((s) => Math.abs(Number(s[0]) - Number(snapRatio.value)) < 1e-6);
+  return hit ? hit[1] : t('关');
+});
+/** 密度三档（M9）：紧凑 / 标准 / 宽松 —— 只改控件高度与留白，不动布局结构 */
+const DENSITIES = [['compact', '紧凑'], ['normal', '标准'], ['roomy', '宽松']];
+function setDensity(v) {
+  ws.layout.density = v;
+  ws.save();
+  toast(t('界面密度：') + t((DENSITIES.find((d) => d[0] === v) || [])[1] || ''), 'ok');
+}
+
+/** 全局 UI 缩放（M9b）：写进工作区，由 App.vue 统一施加到根节点 */
+function setScale(v) {
+  ws.layout.scale = v;
+  ws.save();
+  toast(t('界面缩放：') + Math.round(v * 100) + '%', 'ok');
+}
+
+function applyPreset(id) {
+  ws.applyPreset(id);
+  const p = ws.presets.find((x) => x.id === id);
+  const vm = ws.layout.viewMode === 'drum' ? 'piano' : ws.layout.viewMode;
+  if (vm !== viewMode.value) { viewMode.value = vm; flashView(); }
+  toast(t('工作区已切换：') + t(p ? p.label : ''), 'ok');
+}
+
+/* ---------------- 菜单条（M1）：DAW 式的稳定位置 ----------------
+   低频动作原先全塞在工具条的「更多 ▾」浮层里（两屏高的面板），找一次成本极高。
+   这里把它们按「文件 / 编辑 / 视图 / 工具 / 帮助」重新归类，工具条只留高频动作。
+   只挂**已经存在**的函数，不新增未实现的动作。 */
+const menuGroups = computed(() => {
+  const hasSong = !!song.value;
+  const hasSel = sel.count > 0;
+  return [
+    { label: t('文件'), items: [
+      { label: t('新建曲目'), run: newMidi },
+      { label: t('导入 MIDI / 转谱…'), run: () => setView('import') },
+      { sep: true },
+      { label: t('载入参考音频…'), run: loadAudio },
+      { label: t('载入视频轨道…'), run: loadVideo },
+      { label: t('移除视频轨道'), disabled: !videoUrl.value, run: removeVideo },
+      { sep: true },
+      { label: t('导出 MIDI'), hint: 'Ctrl+S', run: exportMidi },
+    ] },
+    { label: t('编辑'), items: [
+      { label: t('撤销'), hint: 'Ctrl+Z', run: undo },
+      { label: t('重做'), hint: 'Ctrl+Y', run: redo },
+      { sep: true },
+      { label: t('复制'), hint: 'Ctrl+C', disabled: !hasSel, run: copy },
+      { label: t('粘贴到播放头'), hint: 'Ctrl+V', disabled: !hasSong, run: paste },
+      { label: t('克隆选区到其后'), disabled: !hasSel, run: dup },
+      { sep: true },
+      { label: t('全选'), hint: 'Ctrl+A', disabled: !hasSong, run: selectAll },
+      { label: t('取消选择'), disabled: !hasSel, run: () => { editor.value?.selectNone(); refreshSel(); } },
+      { label: t('同音高批量选择'), disabled: !hasSel, run: samePitch },
+      { sep: true },
+      { label: t('删除选中'), hint: 'Del', disabled: !hasSel, run: del },
+    ] },
+    { label: t('视图'), items: [
+      { label: t('钢琴卷帘'), disabled: !hasSong, run: () => setEditorView('piano') },
+      { label: t('鼓组网格'), disabled: !hasSong, run: () => setEditorView('drum') },
+      { label: t('乐谱编辑'), disabled: !hasSong, run: () => setEditorView('score') },
+      { sep: true },
+      { label: ws.layout.inspOpen ? t('收起检查器') : t('显示检查器'), run: () => { inspOpen.value = !inspOpen.value; } },
+      { label: artLane.value ? t('隐藏技法条') : t('显示技法条'), hint: t('演奏法'), run: () => { artLane.value = !artLane.value; } },
+      { label: tempoLane.value ? t('隐藏速度轨') : t('显示速度轨'), hint: t('速度自动化'), run: () => { tempoLane.value = !tempoLane.value; } },
+      { sep: true },
+      ...DENSITIES.map((d) => ({ label: t('密度：') + t(d[1]), hint: ws.layout.density === d[0] ? '✓' : '', run: () => setDensity(d[0]) })),
+      ...SCALES.map((s) => ({ label: t('界面缩放：') + Math.round(s * 100) + '%', hint: Math.abs((ws.layout.scale || 1) - s) < 1e-6 ? '✓' : '', run: () => setScale(s) })),
+      { label: multiEditOn.value ? t('退出跨轨编辑') : t('跨轨编辑…'), hint: multiEditOn.value ? t('已选 ') + editTracks.length + t(' 轨') : t('在检查器「轨道」里勾选'), run: () => { ws.layout.inspOpen = true; inspTab.value = 'track'; if (multiEditOn.value) clearEditTracks(); } },
+      { label: fullscreenOn.value ? t('退出全屏') : t('全屏编辑'), run: toggleFullscreen },
+      { sep: true },
+      ...ws.presets.map((p) => ({ label: t('工作区：') + t(p.label), hint: ws.preset === p.id ? '✓' : '', run: () => applyPreset(p.id) })),
+    ] },
+    { label: t('工具'), items: [
+      { label: t('量化到吸附网格'), disabled: !hasSel, run: quantize },
+      { label: t('参数化工具（拖动即预览）'), hint: t('需先选中'), disabled: !hasSel, run: openMidiTools },
+      { label: stepOn ? t('退出步进输入') : t('步进输入'), hint: stepOn ? t('当前已开启') : t('← → 走指针'), run: toggleStep },
+      { label: t('智能量化（网格 + Groove）'), disabled: !hasSong, run: openSmartQuantize },
+      { label: t('力度曲线（绘制包络）'), disabled: !hasSel, run: openVelCurve },
+      { label: t('列表编辑器（精确数值）'), disabled: !hasSel, run: openList },
+      { sep: true },
+      { label: t('逻辑编辑器（批量规则）'), disabled: !hasSong, run: openLogicEditor },
+      { label: t('宏面板'), disabled: !hasSong, run: openMacroPanel },
+      { label: t('Key Switch 映射'), disabled: !hasSong, run: openKSMap },
+      { label: t('撤销历史'), disabled: !hasSong, run: openHistory },
+      { sep: true },
+      { label: t('分析逐小节和弦'), disabled: !hasSong, run: analyzeChordTrack },
+      { label: t('智能伴奏'), disabled: !hasSong, run: addAccompaniment },
+      { label: t('CC 事件列表'), disabled: !hasSong, run: openCCList },
+      { label: t('添加延音踏板（CC64）'), disabled: !hasSong, run: addPedal },
+      { sep: true },
+      { label: t('删除过短音符（<80ms）'), disabled: !hasSong, run: deleteShortNotes },
+      { label: t('整轨响度 -10%'), disabled: !hasSong, run: () => loudScale(0.9) },
+      { label: t('整轨响度 +10%'), disabled: !hasSong, run: () => loudScale(1.1) },
+    ] },
+    { label: t('帮助'), items: [
+      { label: t('快捷键一览'), hint: '?', run: () => { shortcutsOpen.value = true; } },
+      { label: t('编辑功能介绍'), run: () => { helpOpen.value = true; } },
+      { sep: true },
+      { label: t('转到转谱页'), run: () => setView('score') },
+      { label: t('转到调教页'), run: () => setView('sing') },
+    ] },
+  ];
+});
 
 function refreshSel() {
   const info = editor.value ? editor.value.selInfo() : null;
@@ -139,6 +529,9 @@ function openCtxMenu(p) {
   nextTick(refreshSel);
 }
 function closeCtxMenu() { ctxMenu.value = null; ctxSub.value = ''; }
+/* M3：右键菜单里直达某条参数工具 / 命令面板 */
+function ctxRunTool(id) { closeCtxMenu(); openMidiTools(id); }
+function openPalette() { closeCtxMenu(); palOpen.value = true; }
 function ctxMenuStyle() {
   const m = ctxMenu.value;
   if (!m) return {};
@@ -311,10 +704,39 @@ function applyVelCurve() {
 
 /* ---------------- 列表编辑器 ---------------- */
 function openList() {
-  const notes = editor.value?.selNotes();
-  if (!notes || !notes.length) { toast(t('请先在钢琴卷帘中选择音符'), 'warn'); return; }
-  listDraft.value = notes.map(n => ({ start: n.start, end: n.end, midi: n.midi, vel: n.vel }));
+  const refs = editor.value?.selRef();          // 实时引用，按 start 排序
+  if (!refs || !refs.length) { toast(t('请先在钢琴卷帘中选择音符'), 'warn'); return; }
+  if (!editor.value.beginPreview(refs)) { toast(t('请先在钢琴卷帘中选择音符'), 'warn'); return; }
+  listDraft.value = refs.map(n => ({ start: n.start, end: n.end, midi: n.midi, vel: n.vel }));
   listOpen.value = true;
+}
+/* 列表编辑器改成**即时生效**（M4）：打开时进预览态，改哪一格画布上立刻变，
+   确定才落成一个撤销点，取消/Esc 一次还原。
+   顺序很关键：草稿按 start 排序生成，预览基线也用同一份 selRef()（同样按 start 排序）——
+   于是「下标 ↔ 音符」是稳定映射，用户把某个音拖到别的位置时表格不会跳行。 */
+function applyListDraft() {
+  const arr = listDraft.value;
+  editor.value?.applyPreviewNow((notes) => {
+    notes.forEach((n, i) => {
+      const d = arr[i]; if (!d) return;
+      n.start = Math.max(0, Math.round(d.start));
+      n.end = Math.max(n.start + 1, Math.round(d.end));
+      n.midi = clamp(Math.round(d.midi), 0, 127);
+      n.vel = clamp(Math.round(d.vel), 1, 127);
+    });
+    return notes.length;
+  });
+}
+function applyList() {
+  const n = editor.value?.commitPreview() || 0;
+  listOpen.value = false;
+  toast(t('已应用 ') + n + t(' 个音符的修改'), 'ok');
+  refreshSel(); onModified();
+}
+function cancelList() {
+  editor.value?.cancelPreview();
+  listOpen.value = false;
+  refreshSel();
 }
 function saveList() {
   editor.value?.applyDraft(listDraft.value);
@@ -357,12 +779,80 @@ const drumCv = ref(null);
 const DRUM_PITCHES = [35,36,38,40,41,43,45,47,48,50,51,53,55,57,59,60,61,63,65,66,67,69,71,72,73,75,76,77,79,81];
 const DRUM_NAMES = {35:'Acoustic Bass Drum',36:'Bass Drum 1',38:'Acoustic Snare',40:'Electric Snare',41:'Floor Tom 2',43:'Floor Tom 1',45:'Low Tom',47:'Low-Mid Tom',48:'Hi-Mid Tom',50:'High Tom',51:'Ride Cymbal 1',53:'Ride Bell',55:'Splash Cymbal',57:'Crash Cymbal 2',59:'Ride Cymbal 2',60:'Hi Bongo',61:'Low Bongo',63:'High Conga',65:'Low Conga',66:'High Timbale',67:'Low Timbale',69:'Cowbell',71:'High Agogo',72:'Low Agogo',73:'Maracas',75:'Claves',76:'Hi Wood Block',77:'Low Wood Block',79:'Open Cuica',81:'Open Hi-Hat'};
 const drumTracks = computed(() => song.value ? song.value.tracks.map((t, i) => ({ i, t })) : []);
+/* 鼓组命名（M4，借 REAPER 的 note name map）：GM 名字只是默认值，
+   用户自己的鼓机/音源映射经常不一样（36 是 Kick 还是别的），所以允许逐音改名并持久化。 */
+const DRUM_NAME_KEY = 'fufumidi_drum_names';
+const drumNames = ref((() => { try { return JSON.parse(localStorage.getItem(DRUM_NAME_KEY) || '{}') || {}; } catch (e) { return {}; } })());
+const drumNameOpen = ref(false);
+const drumNameDraft = ref({});
+function drumName(midi) { return drumNames.value[midi] || DRUM_NAMES[midi] || String(midi); }
+function openDrumNames() {
+  drumNameDraft.value = {};
+  for (const p of DRUM_PITCHES) drumNameDraft.value[p] = drumNames.value[p] || '';
+  drumNameOpen.value = true;
+}
+function saveDrumNames() {
+  const out = {};
+  for (const p of DRUM_PITCHES) { const v = String(drumNameDraft.value[p] || '').trim(); if (v) out[p] = v; }
+  drumNames.value = out;
+  try { localStorage.setItem(DRUM_NAME_KEY, JSON.stringify(out)); } catch (e) {}
+  drumNameOpen.value = false;
+  nextTick(drawDrum);
+  toast(t('鼓组命名已保存'), 'ok');
+}
+function resetDrumNames() { drumNameDraft.value = {}; }
 
-/** 三视图切换：钢琴卷帘 / 鼓组网格 / 乐谱（乐谱跳转到乐谱页） */
+/**
+ * 三视图切换：钢琴卷帘 / 鼓组网格 / **五线谱（就地编辑）**。
+ *
+ * ★ 乐谱以前是「跳转到乐谱页」——那是只读的刻版视图（abcjs/Verovio），看完还得跳回来改。
+ *   现在乐谱是**同一份数据的另一种编辑器视图**：选中/撤销/吸附/播放头与卷帘共用，
+ *   在谱面上直接点选、拖动改音高、画笔插音符、改时值，改的就是 MIDI。
+ *   只读的精排谱（带排版/导出 PDF/PNG）仍然在「乐谱」页。
+ */
+/* 视图切换的过渡：画布用 v-show 保活（不能重建，否则丢撤销历史与视图位置），
+   所以这里只做一次「淡入 + 轻微上浮」的闪动，提示画面内容换了。 */
+const viewFlash = ref(false);
+let viewFlashTimer = 0;
+function flashView() {
+  viewFlash.value = false;
+  clearTimeout(viewFlashTimer);
+  nextTick(() => {
+    viewFlash.value = true;
+    viewFlashTimer = window.setTimeout(() => { viewFlash.value = false; }, 300);
+  });
+}
+
 function setEditorView(v) {
-  if (v === 'score') { setView('score'); return; }
-  if (v === 'drum') { openDrumEditor(); return; }
-  viewMode.value = 'piano';
+  if (v === 'drum') { openDrumEditor(); flashView(); return; }
+  if (!song.value) { toast(t('请先载入 MIDI'), 'warn'); return; }
+  const next = (v === 'score') ? 'score' : 'piano';
+  if (next !== viewMode.value) flashView();
+  viewMode.value = next;
+  if (v === 'score') nextTick(() => editor.value?.focusSelection());
+}
+
+/* ---------------- 乐谱视图工具（时值/附点/谱号） ---------------- */
+const scoreDot = ref(false);
+const scoreClefUi = ref('auto');
+const SCORE_DURS = [
+  { q: 4, label: '全' }, { q: 2, label: '二分' }, { q: 1, label: '四分' },
+  { q: 0.5, label: '八分' }, { q: 0.25, label: '十六分' },
+];
+/** 点一下时值：既设为「画笔插入的时值」，也改当前选中的音符 */
+function pickScoreDur(q) {
+  const tpb = (song.value && song.value.tpb) || 480;
+  const tks = Math.round(q * tpb * (scoreDot.value ? 1.5 : 1));
+  editor.value?.setInsert(tks, scoreDot.value);
+  if (editor.value && editor.value.selCount() > 0) { editor.value.setSelLen(tks); refreshSel(); }
+}
+function toggleScoreDot() {
+  scoreDot.value = !scoreDot.value;
+  editor.value?.setInsert(null, scoreDot.value);
+}
+function pickClef(c) {
+  scoreClefUi.value = c;
+  if (editor.value && editor.value.scoreClef) { editor.value.scoreClef.value = c; editor.value.draw(); }
 }
 function openDrumEditor() {
   if (!song.value) { toast(t('请先载入 MIDI'), 'warn'); return; }
@@ -394,7 +884,7 @@ function drawDrum() {
     if (i % 2) { g.fillStyle = cssVar('--row-alt', 'rgba(10,10,10,0.03)'); g.fillRect(0, y, w, rowH); }
     g.strokeStyle = hair; g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke();
     g.fillStyle = slate; g.font = '9px monospace'; g.textAlign = 'left'; g.textBaseline = 'middle';
-    g.fillText(String(DRUM_NAMES[DRUM_PITCHES[i]] || DRUM_PITCHES[i]).slice(0, 14), 4, y + rowH / 2);
+    g.fillText(String(drumName(DRUM_PITCHES[i])).slice(0, 14), 4, y + rowH / 2);
   }
   for (let b = 0; b < beats; b++) {
     const x = b * colW;
@@ -457,7 +947,10 @@ const scaleRoot = ref(Number.isFinite(Number(scaleCfg.root)) ? Number(scaleCfg.r
 const scaleType = ref(scaleCfg.type || 'major');
 const customDegText = ref(scaleCfg.customText || '0,2,4,7,9');
 const ROOT_OPTIONS = KEY_NAME.map((n, i) => [i, n]);
-const SCALE_MODE_OPTIONS = [['off', t('关闭')], ['highlight', t('高亮调内音')], ['constrain', t('约束到音阶')]];
+// ★ 不要在模块作用域里调 t()：模块在「应用语言」之前就 import 完了，翻译会被
+//   冻结在启动语言上 —— 实测切到 English 后整页仍是中文（语言切换只重渲染，
+//   不会重新执行模块）。所以这类表一律写成函数，在渲染时求值。
+const SCALE_MODE_OPTIONS = () => [['off', t('关闭')], ['highlight', t('高亮调内音')], ['constrain', t('约束到音阶')]];
 /** 传给画布的显式音阶；主音选「自动」时返回 null，由画布按曲目判断 */
 const scaleSpec = computed(() => (scaleRoot.value < 0
   ? null
@@ -532,7 +1025,7 @@ const ccMode = ref('free');
 const editPrefs = (() => { try { return JSON.parse(localStorage.getItem('fufumidi_edit_prefs') || '{}') || {}; } catch (e) { return {}; } })();
 const defaultVelocity = ref(typeof editPrefs.defaultVelocity === 'number' ? editPrefs.defaultVelocity : 80);
 const colorMode = ref(editPrefs.colorMode || 'track');
-const COLOR_MODES = [['track', t('按轨道')], ['pitch', t('按音高')], ['velocity', t('按力度')], ['selection', t('按选中')]];
+const COLOR_MODES = () => [['track', t('按轨道')], ['pitch', t('按音高')], ['velocity', t('按力度')], ['selection', t('按选中')], ['scale', t('按音阶')]];
 watch([defaultVelocity, colorMode], () => {
   try { localStorage.setItem('fufumidi_edit_prefs', JSON.stringify({ defaultVelocity: defaultVelocity.value, colorMode: colorMode.value })); } catch (e) {}
 });
@@ -849,8 +1342,82 @@ function delCustomMacro(i) {
   const arr = loadCustomMacros(); arr.splice(i, 1); saveCustomMacros(arr); customMacros.value = arr;
 }
 
-/* ---- Key Switch ---- */
-function openKSMap() { reloadArticulations(); ksDraft.value = { ...ksMap.value }; ksPreset.value = ''; ksLibName.value = ''; ksOpen.value = true; }
+/* ---- Key Switch + 技法动作（§3.7 表达映射：键位 / PC / CC / 力度系数） ---- */
+const exprMap = ref(loadExprMap());
+const exprDraft = ref({});
+const exprPreset = ref('');
+/** 编辑中的草稿动作（弹窗里每个 KS 行读它；没有就是空对象，输入框为空） */
+function exprRow(midi) {
+  const k = String(midi);
+  if (!exprDraft.value[k]) exprDraft.value[k] = {};
+  return exprDraft.value[k];
+}
+function setExprField(midi, field, raw) {
+  const row = { ...exprRow(midi) };
+  const v = raw === '' || raw == null ? null : Number(raw);
+  if (field === 'pc') row.pc = v;
+  else if (field === 'ccn' || field === 'ccv') {
+    const cur = { ...(row.cc || {}) };
+    if (field === 'ccn') cur.n = v; else cur.v = v;
+    row.cc = cur.n == null || cur.v == null ? null : cur;
+  } else if (field === 'vel') row.vel = v;
+  else if (field === 'ch') row.ch = v;
+  exprDraft.value = { ...exprDraft.value, [String(midi)]: row };
+}
+function applyExprPresetToDraft() {
+  if (!exprPreset.value) return;
+  exprDraft.value = applyExprPreset(exprDraft.value, exprPreset.value);
+  const p = EXPR_PRESETS.find(x => x.id === exprPreset.value);
+  toast(t('已套用技法动作预设：') + (p ? p.name : ''), 'ok');
+}
+/** 动作表导出 / 导入（JSON，描述"音源怎么用"，不进工程文件） */
+function exportExprMap() {
+  try {
+    const blob = new Blob([exportExprMapJson(exprDraft.value)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'expression-map.json'; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast(t('已导出技法动作表'), 'ok');
+  } catch (e) { toast(t('导出失败：') + ((e && e.message) || e), 'warn'); }
+}
+function importExprMap() {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = '.json,application/json';
+  inp.onchange = () => {
+    const f = inp.files && inp.files[0];
+    if (!f) return;
+    f.text().then((txt) => {
+      const m = importExprMapJson(txt);
+      if (!m) { toast(t('动作表解析失败（应为 JSON）'), 'warn'); return; }
+      exprDraft.value = m;
+      toast(t('已导入技法动作表'), 'ok');
+    });
+  };
+  inp.click();
+}
+function openKSMap() {
+  reloadArticulations();
+  ksDraft.value = { ...ksMap.value };
+  exprDraft.value = JSON.parse(JSON.stringify(exprMap.value || {}));
+  ksPreset.value = ''; exprPreset.value = ''; ksLibName.value = '';
+  ksOpen.value = true;
+}
+
+/**
+ * 把技法动作并进"当前歌曲"的轨道数据 —— 导出与**播放**共用这一份。
+ * 播放侧：player.prepare() 会读 song.ksMap / song.exprMap 自己展开（见 core/player.js），
+ * 所以这里只负责给导出用；两份口径由 articulationPlan() 保证一致。
+ */
+function tracksForExport() {
+  const s = song.value;
+  if (!s) return [];
+  return augmentTracks(s.tracks, ksMap.value, exprMap.value);
+}
+/** 当前轨的技法切换与动作展开（检查器/验收用） */
+const artPlan = computed(() => {
+  const tr = song.value?.tracks[trackIndex.value];
+  return tr ? articulationPlan(tr, ksMap.value, exprMap.value) : null;
+});
 /** 应用某个库（内置或用户）到草稿 */
 function applyKSPreset() {
   if (!ksPreset.value) return;
@@ -885,9 +1452,25 @@ function saveKSMap() {
   const map = {};
   for (const m of Object.keys(ksDraft.value)) if (ksDraft.value[m] && +m <= 24) map[+m] = ksDraft.value[m];
   ksMap.value = map; saveKS(map);
+  // 动作表：只留有名字或至少有一项动作的键位（名字删了、动作还在 = 用户就是想只发 CC/PC）
+  const acts = {};
+  for (const m of Object.keys(exprDraft.value || {})) {
+    if (+m > 24) continue;
+    const clean = setExprAction({}, +m, exprDraft.value[m])[+m];
+    if (clean) acts[+m] = clean;
+  }
+  exprMap.value = sanitizeExprMap(acts);
+  saveExprMap(exprMap.value);
   ksOpen.value = false;
-  toast(t('Key Switch 映射已保存'), 'ok');
+  toast(t('Key Switch 映射与技法动作已保存'), 'ok');
 }
+/* 把动作表挂到歌曲对象上：player.load(song) 的每个调用点都自动带上（换音色/改 BPM/重载…） */
+watch([ksMap, exprMap], () => {
+  const s = song.value;
+  if (!s) return;
+  s.ksMap = ksMap.value;
+  s.exprMap = exprMap.value;
+}, { deep: true });
 // 切换轨道：若该轨绑定了演奏法库，自动套用（不覆盖手动映射时用户可再手动保存）
 watch(trackIndex, () => {
   const s = song.value, tr = s && s.tracks[trackIndex.value];
@@ -1035,12 +1618,112 @@ function smartTimbre() {
   toast(t('智能音色：') + (GM_NAMES[p] || p), 'ok');
 }
 
+/* ------------------------------------------------------------ 检查器宽度 / 折叠
+ * ★ 右侧检查器固定 232px，占的是音符视图的宽度 —— 用户反馈「音符视图面积太小」。
+ *   这里给两个自由度：可以拖分隔条改宽窄，也可以整块收起来（收起后舞台独享全宽）。 */
+// 检查器开关/宽度现在由工作区统一持有（stores/workspace.ts），旧键在它内部做过迁移
+const inspOpen = computed({
+  get: () => ws.layout.inspOpen,
+  set: (v) => { ws.layout.inspOpen = !!v; },
+});
+const inspW = computed({
+  get: () => ws.layout.inspW,
+  set: (v) => { ws.layout.inspW = Math.max(0, Math.round(v || 0)); },
+});
+const mainStyle = computed(() => (inspW.value >= 140 ? { '--inspector-w': inspW.value + 'px' } : {}));
+// ★ 这个 SFC 是**普通 JS**（没有 lang="ts"），别写类型标注 —— 会直接编译失败
+function startInspResize(e) {
+  const aside = document.querySelector('.ed-insp');
+  if (!aside) return;
+  const startX = e.clientX;
+  const startW = aside.getBoundingClientRect().width;
+  const move = (ev) => {
+    inspW.value = Math.round(Math.max(150, Math.min(window.innerWidth - 420, startW - (ev.clientX - startX))));
+  };
+  const up = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    ws.save();
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+}
+
 /* ---- 全屏编辑 ---- */
 function toggleFullscreen() {
   fullscreenOn.value = !fullscreenOn.value;
   const el = document.querySelector('.edit-view');
   if (el) el.classList.toggle('ed-fullscreen', fullscreenOn.value);
 }
+
+/* ---- 识谱校对底图（M0 收尾，§6.4）：原谱页图半透明垫在网格下面 ---- */
+const ulPath = ref(localStorage.getItem('fufumidi_underlay_path') || '');
+const ulEl = ref(null);
+const ulOpacity = ref(Number(localStorage.getItem('fufumidi_underlay_op') || 0.35));
+const ulDx = ref(Number(localStorage.getItem('fufumidi_underlay_dx') || 0));
+const ulDy = ref(Number(localStorage.getItem('fufumidi_underlay_dy') || 0));
+const ulBeats = ref(Number(localStorage.getItem('fufumidi_underlay_beats') || 16));
+const ulOpen = ref(false);
+const ulMsg = ref('');
+const underlayProp = computed(() => (ulEl.value
+  ? { el: ulEl.value, opacity: ulOpacity.value, dx: ulDx.value, dy: ulDy.value, beats: ulBeats.value }
+  : null));
+watch([ulOpacity, ulDx, ulDy, ulBeats], () => {
+  try {
+    localStorage.setItem('fufumidi_underlay_op', String(ulOpacity.value));
+    localStorage.setItem('fufumidi_underlay_dx', String(ulDx.value));
+    localStorage.setItem('fufumidi_underlay_dy', String(ulDy.value));
+    localStorage.setItem('fufumidi_underlay_beats', String(ulBeats.value));
+  } catch (e) { /* 隐私模式等，忽略 */ }
+});
+/** 载入一张图片当底图：path 可以是文件路径（桌面版）或 data:/blob: URL（变谱页交接过来的页图） */
+function setUnderlayFromUrl(src, remember = true) {
+  return new Promise((resolve) => {
+    if (!src) { resolve(false); return; }
+    const url = /^(data:|blob:|file:)/.test(src) ? src : 'file://' + String(src).replace(/\\/g, '/');
+    const img = new Image();
+    img.onload = () => {
+      ulEl.value = img;
+      ulMsg.value = '';
+      if (remember) {
+        ulPath.value = src;
+        try { localStorage.setItem('fufumidi_underlay_path', src); } catch (e) { /* 忽略 */ }
+      }
+      editor.value?.notifyExternalEdit?.();
+      resolve(true);
+    };
+    img.onerror = () => { ulMsg.value = t('这张图读不出来（换一张试试）'); resolve(false); };
+    img.src = url;
+  });
+}
+async function pickUnderlay() {
+  if (!bridge || !bridge.pickFile) { toast(t('请使用桌面版选择图片'), 'warn'); return; }
+  const p = await bridge.pickFile({ title: t('选择原谱图片'), filters: [{ name: t('图片'), extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }] });
+  if (!p) return;
+  await setUnderlayFromUrl(p);
+}
+async function clearUnderlay() {
+  ulEl.value = null;
+  ulPath.value = '';
+  try { localStorage.removeItem('fufumidi_underlay_path'); } catch (e) { /* 忽略 */ }
+  editor.value?.notifyExternalEdit?.();
+}
+/* 变谱页「在工作台校对」把页图塞在这里再跳过来（两个页面之间的一次性交接）。
+   ★ 工作台是 KeepAlive 缓存的：第二次从变谱页过来时 onMounted 不会再跑，
+     所以 onActivated 也必须收一次，否则「点一次有效、再点没反应」。 */
+function takeUnderlayHandoff() {
+  const handoff = window.__fufumidiUnderlay;
+  if (!handoff) return false;
+  window.__fufumidiUnderlay = '';
+  void setUnderlayFromUrl(String(handoff));
+  ulOpen.value = true;
+  return true;
+}
+onMounted(() => {
+  if (takeUnderlayHandoff()) return;
+  if (ulPath.value) void setUnderlayFromUrl(ulPath.value, false);
+});
+onActivated(() => { takeUnderlayHandoff(); });
 
 /* ---- 视频轨道嵌入（影视配乐对齐） ---- */
 const videoUrl = ref('');
@@ -1063,7 +1746,9 @@ async function exportMidi() {
   const s = song.value;
   if (!s) { toast(t('请先载入 MIDI'), 'warn'); return; }
   try {
-    const bytes = encodeMidi(s.tracks, { division: s.tpb, tempoMap: s.tempoMap, sigMap: s.sigMap });
+    /* ★ 技法动作（§3.7）：导出前把每条轨的 PC / CC / 力度系数展开进去。
+       不改 song.value 本身（纯函数），所以反复导出/试听不会叠加事件。 */
+    const bytes = encodeMidi(tracksForExport(), { division: s.tpb, tempoMap: s.tempoMap, sigMap: s.sigMap });
     if (bridge && bridge.saveBinary) {
       const r = await bridge.saveBinary({ name: s.name + '.mid', data: Array.from(bytes) });
       if (r && r.ok) toast(t('已导出 MIDI'), 'ok');
@@ -1136,6 +1821,10 @@ function onKey(e) {
   if (mod && e.key === 'v') { e.preventDefault(); paste(); return; }
   if (mod && e.key === 's') { e.preventDefault(); exportMidi(); return; }
   if (e.key === 'Delete' || e.key === 'Backspace') { del(); return; }
+  if (stepOn.value && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) { e.preventDefault(); editor.value?.stepBy(e.key === 'ArrowRight' ? 1 : -1); return; }
+  if (stepOn.value && e.key === 'Escape') { stepOn.value = false; return; }
+  if (e.key === '?' || e.key === 'F1') { e.preventDefault(); shortcutsOpen.value = !shortcutsOpen.value; return; }
+  if (mod && e.shiftKey && (e.key === 'p' || e.key === 'P')) { e.preventDefault(); palOpen.value = true; return; }
   const k = e.key.toLowerCase();
   if (k === 'v') tool.value = 'select';
   else if (k === 'b') tool.value = 'pencil';
@@ -1180,6 +1869,40 @@ watch(trackIndex, () => {
 
 onMounted(async () => {
   window.addEventListener('keydown', onKey);
+  /* 调试桥（M3 起）：本项目的验收方式是「装好的应用 + CDP 驱动」，而生产包里拿不到
+     组件实例（__vueParentComponent 只在 dev 有）。所以留一个显式开关：
+     localStorage.fufumidi_debug = '1'（或 hash 里带 debug=1）时把画布 API 挂到 window。
+     正常用户永远不会命中这条分支。 */
+  try {
+    if (localStorage.getItem('fufumidi_debug') === '1' || /[?&]debug=1/.test(location.hash)) {
+      window.__fufumidiDebug = {
+        editor: () => editor.value, app, ws, hoverInfo, midiToolOpen, palOpen, drumNames,
+        stepOn, stepCursorTick, listOpen, listDraft, viewMode, sel,
+        // 表达映射（§3.7）验收用：动作表 / 展开结果 / 导出字节（不落盘）
+        song: () => song.value, ksMap, exprMap, exprDraft, artPlan, tracksForExport, articulationPlan,
+        newMidi, openKSMap, saveKSMap,
+        exportBytes: () => {
+          const s = song.value;
+          if (!s) return null;
+          return encodeMidi(tracksForExport(), { division: s.tpb, tempoMap: s.tempoMap, sigMap: s.sigMap });
+        },
+        // 播放侧证据：player.events（每个音符的 prog/vel）与 player.ctlEvents（通道事件）
+        playerState: () => {
+          const { player } = ensureAudio();
+          return {
+            events: (player.events || []).map((e) => ({ midi: e.midi, start: e.start, prog: e.prog, vel: e.vel, ch: e.ch })),
+            ctl: (player.ctlEvents || []).map((c) => ({ start: c.start, kind: c.kind, ch: c.ch, cc: c.cc, val: c.val })),
+          };
+        },
+        loadPlayer: () => {
+          const { player } = ensureAudio();
+          const s = song.value;
+          if (s) { s.ksMap = ksMap.value; s.exprMap = exprMap.value; player.load(s); }
+          return !!s;
+        },
+      };
+    }
+  } catch (e) {}
   await nextTick();
   // 布局尺寸变化（侧栏/播放栏开合、窗口缩放、检查器收窄）时重画舞台缩略图
   if (typeof ResizeObserver !== 'undefined' && miniWrap.value) {
@@ -1201,15 +1924,14 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page edit-view">
+  <!-- 密度三档（M9）：工作区里早就存着 density，但一直没有消费它 —— 现在真的改变控件高度与留白 -->
+  <div class="page edit-view" :class="'ed-density-' + (ws.layout.density || 'normal')">
     <div class="page-head">
       <div class="page-ic"><Icon name="edit" :size="20" /></div>
       <div class="grow">
         <div class="page-title">{{ t('编辑器') }}</div>
         <div class="page-sub">{{ t('钢琴卷帘 · 画笔点击添加 · 拖拽移动 · 边缘拉伸') }}</div>
       </div>
-      <button class="btn sm" @click="selectAll"><Icon name="target" :size="13" />{{ t('全选') }}</button>
-      <button class="btn sm" @click="newMidi"><Icon name="plus" :size="13" /> {{ t('新建') }}</button>
       <button class="btn sm primary" @click="exportMidi"><Icon name="save" :size="13" />{{ t('导出 MIDI') }}</button>
     </div>
 
@@ -1222,6 +1944,18 @@ onBeforeUnmount(() => {
     <template v-else>
       <!-- 工具栏 + 「更多」面板：面板改为浮层（绝对定位在工具栏下方），
            不再挤压下方钢琴卷帘的高度 —— 展开后卷帘高度保持不变 -->
+      <!-- 菜单条（M1）：把「更多」里那些低频动作搬到稳定的菜单位置。
+           工作区预设放在同一行的右端（Ableton 的 Views 位置）：不占舞台高度，也不挤 page-head -->
+      <div class="card ed-menubar-card">
+        <EditorMenuBar :groups="menuGroups" />
+        <span class="mb-grow"></span>
+        <div class="ed-presets" :title="t('工作区预设：一键切换面板布局（也能在「视图」菜单里切）')">
+          <button v-for="p in ws.presets" :key="p.id" class="ps-chip" :class="{ on: ws.preset === p.id }"
+                  :title="t(p.hint)" @click="applyPreset(p.id)">{{ t(p.label) }}</button>
+        </div>
+        <button class="st-btn" :title="t('快捷键一览（?）')" @click="shortcutsOpen = true"><Icon name="info" :size="12" />{{ t('快捷键') }}</button>
+      </div>
+
       <div class="ed-toolbar-wrap">
       <div class="card ed-toolbar">
         <div class="et-group">
@@ -1231,10 +1965,27 @@ onBeforeUnmount(() => {
           <button class="et-btn" :class="{ active: tool === 'mute' }" :title="t('静音：点击音符切换发声/静音（不删除、不改力度）')" @click="tool = 'mute'"><Icon name="minus" :size="14" />{{ t('静音') }}</button>
         </div>
         <span class="et-sep"></span>
+        <!-- 步进输入（M4）：Cubase/Logic 的 Step Input —— 落音由指针决定并自动前进 -->
+        <div class="et-group ed-step-group">
+          <button class="et-btn" :class="{ active: stepOn }" data-guide="edit-step"
+                  :title="t('步进输入：点击音符区按步长依次落音（← → 走指针，Esc 退出）')" @click="toggleStep">
+            <Icon name="quantize" :size="14" />{{ t('步进') }}
+          </button>
+          <template v-if="stepOn">
+            <select v-model.number="stepBeats" class="select-input" style="width:auto" :title="t('步长')">
+              <option v-for="s in STEP_OPTS" :key="s[1]" :value="s[0]">{{ s[1] }}</option>
+            </select>
+            <span class="et-label ed-step-pos" :title="t('步进指针所在位置')">{{ stepCursorText }}</span>
+            <button class="et-btn" :title="t('指针回到播放头')" @click="stepToPlayhead"><Icon name="target" :size="13" /></button>
+            <button class="et-btn" :title="t('后退一步（←）')" @click="editor?.stepBy(-1)">←</button>
+            <button class="et-btn" :title="t('前进一步（→）')" @click="editor?.stepBy(1)">→</button>
+          </template>
+        </div>
+        <span class="et-sep"></span>
         <div class="et-group ed-view-switch">
           <button class="et-btn" :class="{ active: viewMode === 'piano' }" :title="t('钢琴卷帘视图')" @click="setEditorView('piano')"><Icon name="music" :size="14" />{{ t('钢琴') }}</button>
           <button class="et-btn" :class="{ active: viewMode === 'drum' }" :title="t('鼓组网格视图')" @click="setEditorView('drum')"><Icon name="drum" :size="14" />{{ t('鼓组') }}</button>
-          <button class="et-btn" :title="t('同步到乐谱：在五线谱查看当前编辑结果')" @click="setEditorView('score')"><Icon name="score" :size="14" />{{ t('乐谱') }}</button>
+          <button class="et-btn" :class="{ active: viewMode === 'score' }" :title="t('乐谱编辑（可改 MIDI）：在五线谱上点选/拖动/插音符')" @click="setEditorView('score')"><Icon name="score" :size="14" />{{ t('乐谱') }}</button>
         </div>
         <span class="et-sep"></span>
         <button class="et-btn" :title="t('撤销 Ctrl+Z')" @click="undo"><Icon name="undo" :size="14" />{{ t('撤销') }}</button>
@@ -1242,6 +1993,20 @@ onBeforeUnmount(() => {
         <button class="et-btn danger" :title="t('删除 Del')" @click="del"><Icon name="trash" :size="14" />{{ t('删除') }}</button>
         <span class="et-sep"></span>
         <button class="et-btn" :title="t('量化到吸附网格')" @click="quantize"><Icon name="quantize" :size="14" />{{ t('量化') }}</button>
+        <!-- M2：参数化工具（拖动即预览）——放在量化旁边，因为它就是「量化」的泛化 -->
+        <button class="et-btn" data-guide="edit-miditools" :title="t('参数化工具：移调/力度/时值/节奏/生成，拖动即预览，回车应用')"
+                @click="openMidiTools"><Icon name="sliders" :size="14" />{{ t('参数工具') }}</button>
+        <span class="et-sep"></span>
+        <!-- 视图开关放主工具条：以前「全屏」藏在「更多」里，谁也没发现；
+             这两个是「把音符区变大」的直接开关，必须一眼可见 -->
+        <button class="et-btn" :class="{ active: !inspOpen }" :title="t('收起右侧检查器，把宽度让给音符视图')"
+                @click="inspOpen = !inspOpen"><Icon name="panel" :size="14" />{{ inspOpen ? t('收起检查器') : t('检查器') }}</button>
+        <button class="et-btn" :class="{ active: fullscreenOn }" :title="t('全屏编辑，最大化钢琴卷帘')" @click="toggleFullscreen"><Icon name="expand" :size="14" />{{ t('全屏') }}</button>
+        <!-- M0 收尾（§6.4）：识谱校对底图 —— 原谱页图半透明垫在网格下，用新版工作台直接改音 -->
+        <button class="et-btn" data-guide="edit-underlay-btn" :class="{ active: ulOpen }"
+                :title="t('把原谱页图半透明垫在网格下，对着谱面改音符')" @click="ulOpen = !ulOpen">
+          <Icon name="wallpaper" :size="14" />{{ t('谱面底图') }}
+        </button>
         <span class="et-sep"></span>
         <button class="et-btn et-more" data-guide="edit-more" :class="{ active: advOpen }" @click="advOpen = !advOpen">
           <Icon name="chevron" :size="13" :style="{ transform: advOpen ? 'rotate(180deg)' : '' }" /> {{ t('更多') }}
@@ -1251,7 +2016,21 @@ onBeforeUnmount(() => {
       <!-- 高级工具区（折叠，按用途分组） -->
       <Transition name="fade">
       <div v-if="advOpen" class="card ed-adv">
+        <!-- 视图开关在「更多」里也放一份：主工具条在窄窗口会横向溢出，
+             最右边的这几个开关会滑出可视区（实测 1585px 宽时「全屏」已看不见）。 -->
         <div class="adv-row">
+          <span class="et-label">{{ t('视图') }}</span>
+          <button class="et-btn" data-guide="edit-underlay-btn-adv" :class="{ active: ulOpen }"
+                  :title="t('把原谱页图半透明垫在网格下，对着谱面改音符')" @click="ulOpen = !ulOpen">
+            <Icon name="wallpaper" :size="14" />{{ t('谱面底图') }}
+          </button>
+          <button class="et-btn" :class="{ active: !inspOpen }" :title="t('收起右侧检查器，把宽度让给音符视图')" @click="inspOpen = !inspOpen">
+            <Icon name="panel" :size="14" />{{ inspOpen ? t('收起检查器') : t('检查器') }}
+          </button>
+          <button class="et-btn" :class="{ active: fullscreenOn }" :title="t('全屏编辑，最大化钢琴卷帘')" @click="toggleFullscreen">
+            <Icon name="expand" :size="14" />{{ t('全屏') }}
+          </button>
+          <span class="et-sep"></span>
           <span class="et-label">{{ t('剪贴板') }}</span>
           <button class="et-btn" :title="t('复制 Ctrl+C')" @click="copy"><Icon name="copy" :size="14" />{{ t('复制') }}</button>
           <button class="et-btn" :title="t('粘贴到播放头 Ctrl+V')" @click="paste"><Icon name="paste" :size="14" />{{ t('粘贴') }}</button>
@@ -1288,7 +2067,7 @@ onBeforeUnmount(() => {
           <input v-if="scaleType === 'custom'" v-model="customDegText" class="text-input" style="width:110px"
                  :placeholder="t('音级 0,2,4,7,9')" :title="t('自定义音级（相对主音的半音，逗号分隔）')" />
           <select class="select-input" v-model="scaleMode" style="width:auto" :title="t('调内编辑模式：高亮调内音 / 拖拽与新建只落在调内音')">
-            <option v-for="m in SCALE_MODE_OPTIONS" :key="m[0]" :value="m[0]">{{ m[1] }}</option>
+            <option v-for="m in SCALE_MODE_OPTIONS()" :key="m[0]" :value="m[0]">{{ m[1] }}</option>
           </select>
           <button class="et-btn" :title="t('按曲目分析结果自动设调')" @click="scaleFromAnalysis"><Icon name="zap" :size="14" />{{ t('按分析设调') }}</button>
         </div>
@@ -1345,17 +2124,66 @@ onBeforeUnmount(() => {
           <button v-if="videoUrl" class="et-btn" :title="t('移除视频轨道')" @click="removeVideo"><Icon name="trash" :size="14" />{{ t('移除视频') }}</button>
         </div>
         <div class="adv-row">
-          <span class="et-label">{{ t('视图') }}</span>
-          <button class="et-btn" :title="t('全屏编辑，最大化钢琴卷帘')" @click="toggleFullscreen"><Icon name="expand" :size="14" />{{ t('全屏') }}</button>
+          <span class="et-label">{{ t('速度轨') }}</span>
+          <button class="et-btn" :class="{ active: tempoLane }" :title="t('速度轨：逐点设置速度，播放与导出都按它走')" @click="tempoLane = !tempoLane"><Icon name="clock" :size="14" />{{ tempoLane ? t('隐藏速度轨') : t('显示速度轨') }}</button>
+          <button class="et-btn" :title="t('在播放头处插入速度点')" @click="addTempoPoint"><Icon name="plus" :size="14" />{{ t('加点') }}</button>
+        </div>
+        <div class="adv-row">
+          <span class="et-label">{{ t('演奏法') }}</span>
+          <button class="et-btn" :class="{ active: artLane }" :title="t('技法条：按小节显示/切换演奏法（Key Switch）')" @click="artLane = !artLane"><Icon name="kbd" :size="14" />{{ artLane ? t('隐藏技法条') : t('技法条') }}</button>
+          <button class="et-btn" :title="t('演奏法映射表（Key Switch 键位 ↔ 技法名）')" @click="openKSMap"><Icon name="list" :size="14" />{{ t('映射表') }}</button>
+          <button class="et-btn" :title="t('在选区起点（没有选区则用播放头）插入技法切换')" @click="addArticulationHere"><Icon name="plus" :size="14" />{{ t('插入技法') }}</button>
+        </div>
+        <div class="adv-row">
+          <span class="et-label">{{ t('帮助') }}</span>
           <button class="et-btn" :title="t('编辑功能介绍')" @click="helpOpen = true"><Icon name="info" :size="14" />{{ t('说明') }}</button>
         </div>
       </div>
       </Transition>
       </div>
 
+      <!-- 上下文任务条（M1）：选中音符后就地出现高频操作。
+           以前这些散在「更多」面板的两屏高度里，选中后还要去展开面板才能改力度。 -->
+      <div class="card ed-taskbar">
+        <template v-if="sel.count">
+          <span class="tb-badge">{{ t('已选 ') }}{{ sel.count }}</span>
+          <span class="et-label">{{ t('移调') }}</span>
+          <button class="et-btn" :title="t('降半音')" @click="trDown">-1</button>
+          <button class="et-btn" :title="t('升半音')" @click="trUp">+1</button>
+          <button class="et-btn" :title="t('降八度')" @click="octDown">-12</button>
+          <button class="et-btn" :title="t('升八度')" @click="octUp">+12</button>
+          <span class="et-sep"></span>
+          <span class="et-label">{{ t('力度') }}</span>
+          <button class="et-btn" :title="t('选区力度渐弱')" @click="velDown">-3</button>
+          <button class="et-btn" :title="t('选区力度渐强')" @click="velUp">+3</button>
+          <button class="et-btn" :title="t('选区力度 -20')" @click="ctxVel(-20)">-20</button>
+          <span class="et-sep"></span>
+          <button class="et-btn" :title="t('量化到吸附网格')" @click="quantize"><Icon name="quantize" :size="13" />{{ t('量化') }}</button>
+          <button class="et-btn" :title="t('参数化工具：拖动即预览，回车应用')" @click="openMidiTools"><Icon name="sliders" :size="13" />{{ t('参数工具') }}</button>
+          <button class="et-btn" :title="t('列表编辑器：精确修改数值')" @click="openList"><Icon name="list" :size="13" />{{ t('列表') }}</button>
+          <button class="et-btn" :title="t('复制')" @click="copy"><Icon name="copy" :size="13" />{{ t('复制') }}</button>
+          <button class="et-btn" :title="t('克隆选区到其后')" @click="dup"><Icon name="plus" :size="13" />{{ t('克隆') }}</button>
+          <button class="et-btn" :class="{ active: selMutedNow === true }" :title="t('静音选中的音符')" @click="editor?.setSelMuted(true)"><Icon name="minus" :size="13" />{{ t('静音') }}</button>
+          <button class="et-btn danger" :title="t('删除 Del')" @click="del"><Icon name="trash" :size="13" />{{ t('删除') }}</button>
+          <span class="st-grow"></span>
+          <button class="et-btn" :title="t('取消选择')" @click="editor?.selectNone(); refreshSel()">{{ t('取消选择') }}</button>
+        </template>
+        <template v-else>
+          <span class="tb-hint">{{ t('未选中音符 · 拖拽框选或点击音符，这里会出现就地操作（移调 / 力度 / 量化 / 列表 / 复制 / 删除）') }}</span>
+          <span class="st-grow"></span>
+          <span class="tb-hint" v-if="recording">{{ t('宏录制中 · 已捕获 ') }}{{ recordLines.length }}{{ t(' 条') }}</span>
+        </template>
+      </div>
+
       <!-- ② 工作区：左侧检查器 + 右侧多车道舞台 -->
-      <div class="ed-main">
-        <aside class="ed-insp">
+      <div class="ed-main" :style="mainStyle" :class="{ 'insp-off': !inspOpen }">
+        <aside class="ed-insp" v-show="inspOpen" :class="{ 'ed-insp-in': inspOpen }">
+          <!-- 分页（M1）：三块面板原先竖着堆，窄屏要滚三屏才找到「网格与显示」 -->
+          <div class="insp-tabs">
+            <button v-for="tb in INSP_TABS" :key="tb[0]" class="insp-tab" :class="{ on: inspTab === tb[0] }"
+                    :title="t(tb[1])" @click="inspTab = tb[0]"><Icon :name="tb[2]" :size="12" />{{ t(tb[1]) }}</button>
+          </div>
+          <div v-if="inspTab === 'note'" class="insp-pane">
           <div class="insp-sec">
             <div class="insp-h"><Icon name="cursor" :size="12" />{{ t('音符检查器') }}</div>
             <div class="insp-row"><span>{{ t('选中') }}</span><b>{{ sel.count }}</b></div>
@@ -1375,7 +2203,9 @@ onBeforeUnmount(() => {
               <button class="btn sm" :class="{ primary: selMutedNow === false }" :disabled="!sel.count" @click="editor?.setSelMuted(false)">{{ t('取消静音') }}</button>
             </div>
           </div>
+          </div>
 
+          <div v-if="inspTab === 'track'" class="insp-pane">
           <div class="insp-sec">
             <div class="insp-h"><Icon name="music" :size="12" />{{ t('轨道') }}</div>
             <select class="select-input" v-model="trackIndex" style="width:100%">
@@ -1386,13 +2216,28 @@ onBeforeUnmount(() => {
             <select v-model.number="timbre" class="select-input" style="width:100%" @change="timbreChange">
               <option v-for="(nm, p) in GM_NAMES" :key="p" :value="Number(p)">{{ p }} {{ nm }}</option>
             </select>
+            <div class="insp-h" style="margin-top:6px">
+              <Icon name="layers" :size="12" />{{ t('跨轨编辑') }}
+              <span class="muted small">{{ editTrackCount }}{{ t(' 轨') }}</span>
+              <button v-if="multiEditOn" class="link-btn" style="margin-left:auto" @click="clearEditTracks">{{ t('清除') }}</button>
+            </div>
+            <div class="et-list">
+              <label v-for="(tr, i) in song.tracks" :key="i" class="et-item" :class="{ cur: i === trackIndex }">
+                <input type="checkbox" :checked="i === trackIndex || editTracks.includes(i)" :disabled="i === trackIndex"
+                       @change="toggleEditTrack(i)" />
+                <span class="et-name">{{ tr.name }}</span>
+                <span class="muted small">{{ tr.notes.length }}</span>
+              </label>
+            </div>
             <div class="insp-btns">
               <button class="btn sm" :class="{ primary: timbreFavs.has(Number(timbre)) }" :title="t('收藏/取消收藏当前音色')" @click="toggleTimbreFav">♡ {{ t('收藏') }}</button>
               <button class="btn sm" :title="t('把当前音色应用到全部非鼓轨')" @click="timbreAll">{{ t('全部') }}</button>
               <button class="btn sm" :title="t('按轨道音域/密度/名称智能选择音色')" @click="smartTimbre">{{ t('智能') }}</button>
             </div>
           </div>
+          </div>
 
+          <div v-if="inspTab === 'view'" class="insp-pane">
           <div class="insp-sec">
             <div class="insp-h"><Icon name="quantize" :size="12" />{{ t('网格与显示') }}</div>
             <div class="insp-row"><span>{{ t('吸附') }}</span>
@@ -1401,14 +2246,33 @@ onBeforeUnmount(() => {
               </select></div>
             <div class="insp-row"><span>{{ t('着色') }}</span>
               <select class="select-input" v-model="colorMode" :title="t('音符着色方案')">
-                <option v-for="c in COLOR_MODES" :key="c[0]" :value="c[0]">{{ c[1] }}</option>
+                <option v-for="c in COLOR_MODES()" :key="c[0]" :value="c[0]">{{ c[1] }}</option>
               </select></div>
             <div class="insp-row"><span>{{ t('默认力度') }}</span>
               <input class="num-input" type="number" min="1" max="127" step="1" v-model.number="defaultVelocity" :title="t('画笔新建音符时使用的力度')" /></div>
           </div>
+          </div>
         </aside>
 
+        <div v-show="inspOpen" class="ed-split" :title="t('拖动调整检查器宽度')" @pointerdown.prevent="startInspResize"></div>
+
         <section class="ed-stage">
+        <!-- 乐谱工具条：独一条横排（放在主工具条里会把工具栏撑到 256px 高，音符区只剩 187px）。
+             时值按钮既改选中音符、也决定画笔插入的长度。 -->
+        <Transition name="ed-pop">
+        <div v-if="viewMode === 'score'" class="card ed-scorebar">
+          <span class="et-label">{{ t('时值') }}</span>
+          <button v-for="d in SCORE_DURS" :key="d.q" class="et-btn" :title="t('设为这个时值（改选中音符，也决定画笔插入的长度）')"
+                  @click="pickScoreDur(d.q)">{{ t(d.label) }}</button>
+          <button class="et-btn" :class="{ active: scoreDot }" :title="t('附点（时值 ×1.5）')" @click="toggleScoreDot">·</button>
+          <span class="et-sep"></span>
+          <span class="et-label">{{ t('谱号') }}</span>
+          <button v-for="c in [['auto','自动'],['treble','高音'],['bass','低音']]" :key="c[0]" class="et-btn"
+                  :class="{ active: scoreClefUi === c[0] }" @click="pickClef(c[0])">{{ t(c[1]) }}</button>
+          <span class="et-sep"></span>
+          <span class="muted small">{{ t('拖动音符改音高/位置；画笔工具在空白处点一下插音符') }}</span>
+        </div>
+        </Transition>
       <!-- 迷你图 + 缩放 -->
       <div class="ed-nav" ref="miniWrap">
         <canvas ref="miniEl" class="ed-mini" style="height:34px" @click="miniClick"></canvas>
@@ -1435,24 +2299,112 @@ onBeforeUnmount(() => {
       </div>
       </Transition>
 
+      <!-- 识谱校对底图（M0 收尾，§6.4）：原谱页图半透明垫在网格下，边看边改 -->
+      <div v-if="ulOpen" class="card ul-panel" data-guide="edit-underlay">
+        <span class="art-lane-label">{{ t('谱面底图') }}</span>
+        <button class="btn sm" @click="pickUnderlay"><Icon name="import" :size="12" />{{ t('选择图片…') }}</button>
+        <label class="ul-f">{{ t('不透明度') }}
+          <input type="range" min="0.05" max="0.9" step="0.05" v-model.number="ulOpacity" />
+          <em>{{ Math.round(ulOpacity * 100) }}%</em></label>
+        <label class="ul-f">{{ t('宽度(拍)') }}
+          <input class="num-input" type="number" min="1" max="512" step="1" v-model.number="ulBeats" style="width:64px" /></label>
+        <label class="ul-f">{{ t('左右') }}
+          <input class="num-input" type="number" step="2" v-model.number="ulDx" style="width:64px" /></label>
+        <label class="ul-f">{{ t('上下') }}
+          <input class="num-input" type="number" step="2" v-model.number="ulDy" style="width:64px" /></label>
+        <span class="muted small">{{ ulEl ? t('拖动网格/缩放到与谱面重合，再对着改音符') : t('还没选图：选一张原谱页图当底图') }}</span>
+        <span v-if="ulMsg" class="muted small bad">{{ ulMsg }}</span>
+        <span class="sp" />
+        <button class="btn sm ghost" :disabled="!ulEl" @click="clearUnderlay">{{ t('移除') }}</button>
+        <button class="btn sm ghost" @click="ulOpen = false">{{ t('隐藏') }}</button>
+      </div>
+
+      <!-- 技法条（M5）：把低音区的 Key Switch 读成「技法段」，一眼看出每段在用什么演奏法 -->
+      <div v-if="artLane" class="card art-lane">
+        <span class="art-lane-label">{{ t('技法') }}</span>
+        <div class="art-cells">
+          <div v-for="(seg, i) in ksSegments" :key="i" class="art-cell">
+            <em>{{ t('第 ') }}{{ tickBar(seg.start) }}{{ t(' 小节') }}</em>
+            <select class="select-input" :value="seg.midi" :title="t('这一段用的演奏法（改的是 Key Switch 音符的音高）')"
+                    @change="setSegArticulation(seg, $event)">
+              <option v-for="k in (ksEmpty ? KS_KEYS : ksMappedKeys)" :key="k" :value="k">{{ ksName(k) }}</option>
+            </select>
+            <button class="icon-btn" :title="t('删除这次技法切换')" @click="delKsSeg(seg)"><Icon name="minus" :size="12" /></button>
+          </div>
+          <template v-if="!ksSegments.length">
+            <span class="muted small">
+              {{ ksEmpty
+                ? t('演奏法映射表还是空的：先套用一套键位（Spitfire / VSL / EastWest），或到「映射表」里自定义。')
+                : t('这一轨还没有技法切换：在下面选一个演奏法，点「插入技法」会在选区起点（或播放头）放一个 Key Switch 音符。') }}
+            </span>
+            <button v-if="ksEmpty" class="btn sm" @click="useDefaultKsMap"><Icon name="spark" :size="12" />{{ t('套用 Spitfire 映射') }}</button>
+          </template>
+        </div>
+        <select v-model.number="newArtMidi" class="select-input" style="width:auto;flex:none" :title="t('要插入的演奏法')">
+          <option v-for="k in (ksEmpty ? KS_KEYS : ksMappedKeys)" :key="k" :value="k">{{ ksName(k) }}</option>
+        </select>
+        <button class="btn sm" :title="t('在选区起点（没有选区则用播放头）插入技法切换')" @click="addArticulationHere">
+          <Icon name="plus" :size="12" />{{ t('插入技法') }}</button>
+        <button class="btn sm ghost" :title="t('演奏法映射表（Key Switch 键位 ↔ 技法名）')" @click="openKSMap"><Icon name="kbd" :size="12" />{{ t('映射表') }}</button>
+        <button class="btn sm ghost" @click="artLane = false">{{ t('隐藏') }}</button>
+      </div>
+
+      <!-- 速度轨（M5）：逐点速度，播放与导出都按 tempoMap 走 -->
+      <div v-if="tempoLane" class="card art-lane">
+        <span class="art-lane-label">{{ t('速度') }}</span>
+        <div class="art-cells">
+          <div v-for="(p, i) in tempoPoints" :key="i" class="art-cell">
+            <em>{{ t('第 ') }}{{ tickBar(p.tick) }}{{ t(' 小节') }}</em>
+            <input class="num-input" type="number" min="20" max="400" step="1" :value="p.bpm"
+                   style="width:62px" :title="t('这一段的速度（BPM）')" @change="setTempoPoint(i, $event)" />
+            <button class="icon-btn" :title="t('删除这个速度点')" @click="delTempoPoint(i)"><Icon name="minus" :size="12" /></button>
+          </div>
+        </div>
+        <button class="btn sm" :title="t('在播放头处插入速度点（沿用当前速度）')" @click="addTempoPoint"><Icon name="plus" :size="12" />{{ t('在播放头加点') }}</button>
+        <button class="btn sm ghost" :title="t('清空所有速度点，回到单一速度')" @click="resetTempo">{{ t('清空') }}</button>
+        <button class="btn sm ghost" @click="tempoLane = false">{{ t('隐藏') }}</button>
+      </div>
+
       <!-- 钢琴卷帘（用 v-show 保活：切到鼓组再切回不会丢撤销历史与视图位置） -->
-      <div v-show="viewMode === 'piano'" class="ed-wrap-rel">
+      <div v-show="viewMode !== 'drum'" class="ed-wrap-rel" :class="{ 'ed-flash': viewFlash }">
         <EditorCanvas ref="editor" :tool="tool" :snap-ratio="snapRatio" :track-index="trackIndex"
-                      :cc-enabled="ccEnabled" :cc-number="ccNumber"
+                      :view="viewMode === 'score' ? 'score' : 'piano'"
+                      :cc-enabled="ccEnabled && viewMode === 'piano'" :cc-number="ccNumber"
                       :scale-spec="scaleSpec" :scale-mode="scaleMode" :chord-track="chordSpec" :ks-map="ksMap" :audio="audioData"
                       :cc2-enabled="cc2Enabled" :cc2-number="cc2Number" :cc-mode="ccMode"
                       :default-velocity="defaultVelocity" :color-mode="colorMode"
-                      @select="refreshSel" @modify="onModified" @zoom="onZoom" @ctxmenu="openCtxMenu" />
+                      @select="refreshSel" @modify="onModified" @zoom="onZoom" @ctxmenu="openCtxMenu" @hover="onHover" @step="onStep"
+                      :step-on="stepOn" :step-ticks="stepTicks" :edit-tracks="editTracks"
+                      :underlay="underlayProp" />
         <video v-if="videoUrl" :src="videoUrl" controls playsinline class="ed-video-overlay"></video>
+        <!-- 悬停工具条（M3）：压到音符上就地出现，鼠标移到条上不消失 -->
+        <div v-if="hoverInfo && !midiToolOpen" class="hv-bar" :style="hoverBarStyle"
+             @pointerenter="cancelHoverHide" @pointerleave="scheduleHoverHide">
+          <span class="hv-name">{{ hoverInfo.name }}</span>
+          <span v-if="artLane && hoverInfo.tick != null && artAt(hoverInfo.tick)" class="hv-art" :title="t('这一段的演奏法')">{{ artAt(hoverInfo.tick) }}</span>
+          <span class="hv-vel" :title="t('力度')">v{{ hoverInfo.vel }}</span>
+          <button class="hv-btn" :title="t('力度 -5')" @click="hoverAct('velDown')">−</button>
+          <button class="hv-btn" :title="t('力度 +5')" @click="hoverAct('velUp')">+</button>
+          <span class="hv-sep"></span>
+          <button class="hv-btn" :title="t('时值减半')" @click="hoverAct('half')">½</button>
+          <button class="hv-btn" :title="t('时值加倍')" @click="hoverAct('double')">×2</button>
+          <span class="hv-sep"></span>
+          <button class="hv-btn" :class="{ on: hoverInfo.muted }" :title="t('静音 / 取消静音')" @click="hoverAct('mute')">{{ t('静音') }}</button>
+          <button class="hv-btn" :title="t('更多参数工具')" @click="hoverMore"><Icon name="sliders" :size="12" /></button>
+          <button class="hv-btn danger" :title="t('删除 Del')" @click="hoverAct('del')"><Icon name="trash" :size="12" /></button>
+          <span v-if="hoverInfo.count > 1" class="hv-multi">{{ t('作用于 ') }}{{ hoverInfo.count }}{{ t(' 个选中音符') }}</span>
+        </div>
       </div>
 
       <!-- 鼓组网格（打击乐专用视图） -->
-      <div v-show="viewMode !== 'piano'" class="ed-wrap-rel ed-drum">
+      <div v-show="viewMode === 'drum'" class="ed-wrap-rel ed-drum" :class="{ 'ed-flash': viewFlash }">
         <div class="ed-drum-bar">
           <select class="select-input" v-model="drumTrack">
             <option v-for="d in drumTracks" :key="d.i" :value="d.i">{{ d.t.name }}{{ t('（') }}{{ d.t.notes.length }}{{ t('）') }}</option>
           </select>
           <span class="et-label">{{ t('点击格子添加 / 删除鼓点') }}</span>
+          <button class="btn sm" :title="t('逐音改名：GM 名字只是默认值，鼓机映射不一样时改这里（本地保存）')" @click="openDrumNames">
+            <Icon name="edit" :size="12" />{{ t('鼓组命名') }}</button>
           <button class="btn sm danger" style="margin-left:auto" @click="drumClear">{{ t('清除当前轨道鼓点') }}</button>
         </div>
         <canvas ref="drumCv" class="drum-canvas" @click="drumClick"></canvas>
@@ -1468,11 +2420,45 @@ onBeforeUnmount(() => {
         <span class="st-i">BPM <b>{{ bpmText }}</b></span>
         <span class="st-i">{{ t('轨道') }} <b>{{ curTrackInfo?.name || '—' }}</b></span>
         <span class="st-i">{{ t('选中') }} <b>{{ sel.count }}</b></span>
+        <span v-if="multiEditOn" class="st-i" :title="t('跨轨编辑：这些轨的音符一起选中、一起处理')">{{ t('跨轨') }} <b>{{ editTrackCount }}</b></span>
         <span class="st-grow"></span>
+        <span class="st-i">{{ t('视图') }} <b>{{ viewLabel }}</b></span>
+        <span class="st-i">{{ t('吸附') }} <b>{{ snapLabel }}</b></span>
         <span class="st-i">{{ t('缩放') }} <b>{{ zoomPct }}%</b></span>
-        <span class="st-i st-tip">{{ t('Ctrl+滚轮 缩放 · Shift+滚轮 平移 · Alt+拖拽 力度 · 单位 tick') }}</span>
+        <button class="st-btn" :class="{ on: inspOpen }" :title="t('显示 / 收起右侧检查器')" @click="inspOpen = !inspOpen"><Icon name="panel" :size="12" />{{ t('检查器') }}</button>
+        <button class="st-btn" :title="t('快捷键一览（?）')" @click="shortcutsOpen = true">?</button>
+        <span class="st-i st-tip">{{ t('Ctrl+滚轮 缩放 · Shift+滚轮 平移 · ? 看全部快捷键') }}</span>
       </div>
     </template>
+
+    <!-- 参数化 MIDI 工具（M2）：拖动即预览 / Esc 还原 / 回车应用 -->
+    <MidiToolPanel :open="midiToolOpen" :editor="editor" :ctx="toolCtx" :sel-count="sel.count"
+                   :initial-tool="midiToolPreset" @close="onToolPanelClose" />
+
+    <!-- 命令面板（M3，Ctrl+Shift+P） -->
+    <CommandPalette :open="palOpen" :commands="commands" @close="palOpen = false" />
+
+    <!-- 快捷键一览（M1）：以前只藏在按钮 title 里，等于没有 -->
+    <Transition name="ov">
+    <div v-if="shortcutsOpen" class="ed-modal-mask" @click.self="shortcutsOpen = false">
+      <div class="ed-modal ed-keys">
+        <div class="ed-modal-head">
+          <b>{{ t('快捷键一览') }}</b><span class="muted small">{{ t('编辑工作台 · 按 ? 或 F1 开关 · Esc 关闭') }}</span>
+          <button class="icon-btn" style="margin-left:auto" @click="shortcutsOpen = false"><Icon name="minus" :size="14" /></button>
+        </div>
+        <div class="keys-grid">
+          <div v-for="g in SHORTCUT_GROUPS" :key="g.name" class="keys-sec">
+            <div class="keys-h">{{ t(g.name) }}</div>
+            <div v-for="k in g.rows" :key="k[0]" class="keys-row"><kbd>{{ k[0] }}</kbd><span>{{ t(k[1]) }}</span></div>
+          </div>
+        </div>
+        <div class="ed-modal-foot">
+          <span class="muted small" style="margin-right:auto">{{ t('工作区预设与检查器分页在状态栏右下角') }}</span>
+          <button class="btn sm primary" @click="shortcutsOpen = false">{{ t('知道了') }}</button>
+        </div>
+      </div>
+    </div>
+    </Transition>
 
     <!-- 力度曲线弹窗 -->
     <Transition name="ov">
@@ -1492,13 +2478,36 @@ onBeforeUnmount(() => {
     </div>
     </Transition>
 
-    <!-- 列表编辑器弹窗 -->
+    <!-- 鼓组命名（M4）：GM 名字只是默认值 -->
     <Transition name="ov">
-    <div v-if="listOpen" class="ed-modal-mask" @click.self="listOpen = false">
+    <div v-if="drumNameOpen" class="ed-modal-mask" @click.self="drumNameOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head">
-          <b>{{ t('列表编辑器') }}</b><span class="muted small">{{ t('精确修改选中 ') }}{{ listDraft.length }}{{ t(' 个音符（单位：tick）') }}</span>
-          <button class="icon-btn" style="margin-left:auto" @click="listOpen = false"><Icon name="minus" :size="14" /></button>
+          <b>{{ t('鼓组命名') }}</b><span class="muted small">{{ t('留空则用 GM 默认名；只保存在本机') }}</span>
+          <button class="icon-btn" style="margin-left:auto" @click="drumNameOpen = false"><Icon name="minus" :size="14" /></button>
+        </div>
+        <div class="drum-name-grid">
+          <label v-for="p in DRUM_PITCHES" :key="p" class="drum-name-row">
+            <span class="drum-name-p">{{ p }}</span>
+            <input class="text-input" v-model="drumNameDraft[p]" :placeholder="DRUM_NAMES[p] || String(p)" />
+          </label>
+        </div>
+        <div class="ed-modal-foot">
+          <button class="btn sm" @click="resetDrumNames">{{ t('恢复默认') }}</button>
+          <button class="btn sm" @click="drumNameOpen = false">{{ t('取消') }}</button>
+          <button class="btn sm primary" @click="saveDrumNames">{{ t('保存') }}</button>
+        </div>
+      </div>
+    </div>
+    </Transition>
+
+    <!-- 列表编辑器弹窗 -->
+    <Transition name="ov">
+    <div v-if="listOpen" class="ed-modal-mask" @click.self="cancelList">
+      <div class="ed-modal" @keydown.esc.stop="cancelList" @keydown.enter.stop="applyList">
+        <div class="ed-modal-head">
+          <b>{{ t('列表编辑器') }}</b><span class="muted small">{{ t('精确修改选中 ') }}{{ listDraft.length }}{{ t(' 个音符（单位：tick）· 改动即时生效，回车应用，Esc 还原') }}</span>
+          <button class="icon-btn" style="margin-left:auto" :title="t('取消并还原')" @click="cancelList"><Icon name="minus" :size="14" /></button>
         </div>
         <div class="ed-list-scroll">
           <table class="ed-list-table">
@@ -1506,18 +2515,18 @@ onBeforeUnmount(() => {
             <tbody>
               <tr v-for="(r, i) in listDraft" :key="i">
                 <td>{{ i + 1 }}</td>
-                <td><input type="number" class="num-input" v-model.number="r.start" step="1" min="0" /></td>
-                <td><input type="number" class="num-input" v-model.number="r.end" step="1" min="1" /></td>
-                <td><input type="number" class="num-input" v-model.number="r.midi" step="1" min="0" max="127" /></td>
-                <td><input type="number" class="num-input" v-model.number="r.vel" step="1" min="1" max="127" /></td>
+                <td><input type="number" class="num-input" v-model.number="r.start" step="1" min="0" @input="applyListDraft" /></td>
+                <td><input type="number" class="num-input" v-model.number="r.end" step="1" min="1" @input="applyListDraft" /></td>
+                <td><input type="number" class="num-input" v-model.number="r.midi" step="1" min="0" max="127" @input="applyListDraft" /></td>
+                <td><input type="number" class="num-input" v-model.number="r.vel" step="1" min="1" max="127" @input="applyListDraft" /></td>
                 <td class="muted small">{{ r.end - r.start }}</td>
               </tr>
             </tbody>
           </table>
         </div>
         <div class="ed-modal-foot">
-          <button class="btn sm" @click="listOpen = false">{{ t('取消') }}</button>
-          <button class="btn sm primary" @click="saveList">{{ t('保存修改') }}</button>
+          <button class="btn sm" @click="cancelList">{{ t('取消并还原') }}</button>
+          <button class="btn sm primary" @click="applyList">{{ t('应用（回车）') }}</button>
         </div>
       </div>
     </div>
@@ -1646,10 +2655,40 @@ onBeforeUnmount(() => {
           <input v-model="ksLibName" class="num-input" :placeholder="t('库名称（另存当前映射）')" style="flex:1" />
           <button class="btn sm primary" @click="saveArticulationLib">{{ t('另存为库') }}</button>
         </div>
+        <!-- 技法动作（§3.7）：键位名 + PC + CC + 力度系数。真实音源除了键位还要收 PC/CC，
+             否则"选了技法却不出正确奏法"。 -->
+        <div class="row ks-act-preset" style="gap:6px;align-items:center">
+          <select v-model="exprPreset" class="select-input" style="min-width:170px">
+            <option value="">{{ t('选择技法动作预设') }}</option>
+            <option v-for="p in EXPR_PRESETS" :key="p.id" :value="p.id">{{ p.name }}</option>
+          </select>
+          <button class="btn sm" @click="applyExprPresetToDraft">{{ t('套用动作') }}</button>
+          <button class="btn sm ghost" @click="exportExprMap">{{ t('导出动作表') }}</button>
+          <button class="btn sm ghost" @click="importExprMap">{{ t('导入动作表') }}</button>
+        </div>
+        <div class="ks-head muted small">
+          <span class="ks-label">MIDI</span>
+          <span class="ks-h-name">{{ t('技法名') }}</span>
+          <span class="ks-h-num" :title="t('技法切换时发 Program Change（音色号 0-127）')">PC</span>
+          <span class="ks-h-num" :title="t('技法切换时发一条 CC：控制器号')">CC</span>
+          <span class="ks-h-num" :title="t('CC 的值（0-127）')">{{ t('值') }}</span>
+          <span class="ks-h-num" :title="t('力度系数：这次切换到下次切换之间的音符速度乘它（0.1~2）')">{{ t('力度×') }}</span>
+          <span class="ks-h-num" :title="t('动作走哪条通道（0-15，留空 = 跟音符）')">{{ t('通道') }}</span>
+        </div>
         <div class="ks-list">
           <div v-for="m in 25" :key="m - 1" class="ks-row">
             <span class="ks-label">MIDI {{ m - 1 }}</span>
             <input v-model="ksDraft[m - 1]" class="num-input" :placeholder="t('技法名（如 Legato）')" style="flex:1" />
+            <input class="num-input ks-num" type="number" min="0" max="127" :placeholder="t('无')"
+                   :value="exprDraft[m - 1]?.pc ?? ''" @change="setExprField(m - 1, 'pc', $event.target.value)" />
+            <input class="num-input ks-num" type="number" min="0" max="127" :placeholder="t('无')"
+                   :value="exprDraft[m - 1]?.cc?.n ?? ''" @change="setExprField(m - 1, 'ccn', $event.target.value)" />
+            <input class="num-input ks-num" type="number" min="0" max="127" :placeholder="t('无')"
+                   :value="exprDraft[m - 1]?.cc?.v ?? ''" @change="setExprField(m - 1, 'ccv', $event.target.value)" />
+            <input class="num-input ks-num" type="number" min="0.1" max="2" step="0.05" :placeholder="t('1.0')"
+                   :value="exprDraft[m - 1]?.vel ?? ''" @change="setExprField(m - 1, 'vel', $event.target.value)" />
+            <input class="num-input ks-num" type="number" min="0" max="15" :placeholder="t('跟音符')"
+                   :value="exprDraft[m - 1]?.ch ?? ''" @change="setExprField(m - 1, 'ch', $event.target.value)" />
           </div>
         </div>
         <div class="ed-modal-foot"><button class="btn sm primary" @click="saveKSMap">{{ t('保存') }}</button></div>
@@ -1740,6 +2779,15 @@ onBeforeUnmount(() => {
           <button class="ctx-item" @click="ctxDup"><span>{{ t('重复') }}</span></button>
           <div class="ctx-sep"></div>
 
+          <!-- M3：右键直达参数工具（不用先开面板再找工具） -->
+          <button class="ctx-item" @click="ctxRunTool('transpose')"><span>{{ t('参数工具：移调') }}</span><span class="ctx-k">{{ t('拖动即预览') }}</span></button>
+          <button class="ctx-item" @click="ctxRunTool('quantize')"><span>{{ t('参数工具：量化') }}</span></button>
+          <button class="ctx-item" @click="ctxRunTool('velHumanize')"><span>{{ t('参数工具：力度人性化') }}</span></button>
+          <button class="ctx-item" @click="ctxRunTool('swing')"><span>{{ t('参数工具：摇摆') }}</span></button>
+          <button class="ctx-item" @click="ctxRunTool('thin')"><span>{{ t('参数工具：稀疏化') }}</span></button>
+          <button class="ctx-item" @click="openPalette"><span>{{ t('全部命令…') }}</span><span class="ctx-k">Ctrl+Shift+P</span></button>
+          <div class="ctx-sep"></div>
+
           <div class="ctx-sub-wrap" @mouseenter="ctxSub = 'quantize'">
             <button class="ctx-item" :class="{ on: ctxSub === 'quantize' }"><span>{{ t('量化') }}</span><span class="ctx-arrow">▸</span></button>
             <div v-if="ctxSub === 'quantize'" class="ctx-menu ctx-sub" :class="{ flip: ctxSubFlip }">
@@ -1788,7 +2836,14 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.edit-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; padding: 12px var(--page-pad-x) 0; }
+/* min-width:0 是必须的：本页是一个 flex 项，自动最小尺寸 = 内容的 min-content，
+   而钢琴卷帘 canvas 的固有宽度会把 min-content 顶到 1200+，整页于是溢出到视口外被
+   .app-main 的 overflow-x:hidden 裁掉（工具条右侧的「更多」、状态栏右侧、右上角小地图
+   全都在视口外——「看不到」的根因就在这里）。 */
+/* 另外三行是同一个坑的另一半：全局 .page 用 margin:0 auto + max-width 居中，
+   而**交叉轴上的 auto 外边距会让 stretch 失效**，于是本页按 max-content 撑到 1233px、
+   被外层裁掉；width:100% + margin:0 才是工作台页该有的行为（要铺满，不居中）。 */
+.edit-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; min-width: 0; width: 100%; max-width: none; margin: 0; padding: 12px var(--page-pad-x) 0; }
 .ed-toolbar-wrap { position: relative; flex: none; }
 .ed-toolbar { padding: 5px 10px; display: flex; align-items: center; gap: 3px; flex-wrap: nowrap; overflow-x: auto; flex: none; margin-bottom: 8px; border-radius: 12px; }
 .ed-view-switch { background: var(--surface-soft); border-radius: 9px; padding: 2px; gap: 2px; }
@@ -1796,6 +2851,10 @@ onBeforeUnmount(() => {
 .ed-view-switch .et-btn { height: 22px; min-height: 22px; padding: 0 10px; }
 .ed-main { display: flex; gap: 10px; flex: 1; min-height: 0; }
 .ed-insp { width: var(--inspector-w); flex: none; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+/* 检查器与舞台之间的拖拽分隔条 */
+.ed-split { flex: none; width: 7px; margin: 0 -4px; cursor: ew-resize; position: relative; touch-action: none; }
+.ed-split::after { content: ''; position: absolute; inset: 0 3px; border-radius: 3px; background: transparent; transition: background .15s; }
+.ed-split:hover::after { background: var(--brand); }
 /* 窄窗口：逐级收窄检查器，把宽度让给卷帘（默认窗口下保持 232px 不动） */
 @media (max-width: 1120px) { .edit-view { --inspector-w: 200px; } }
 @media (max-width: 1000px) { .edit-view { --inspector-w: 176px; } }
@@ -1809,11 +2868,11 @@ onBeforeUnmount(() => {
 .insp-btns { display: flex; gap: 5px; flex-wrap: wrap; }
 .insp-btns .btn { flex: 1; min-width: 0; padding: 3px 6px; font-size: 11px; justify-content: center; }
 .ed-stage { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.ed-status { display: flex; align-items: center; gap: 14px; height: var(--statusbar-h); padding: 0 6px; margin-top: 6px; border-top: 1px solid var(--hairline); font-size: 11px; color: var(--stone); flex: none; overflow: hidden; }
-.st-i { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.ed-status { display: flex; align-items: center; gap: 14px; height: var(--statusbar-h); padding: 0 6px; margin-top: 6px; border-top: 1px solid var(--hairline); font-size: 11px; color: var(--stone); min-width: 0; overflow: hidden; flex: none; overflow: hidden; }
+.st-i { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; flex: none; }
 .st-i b { color: var(--ink); font-family: var(--mono); font-weight: 600; font-variant-numeric: tabular-nums; }
 .st-grow { flex: 1; }
-.st-tip { color: var(--muted); }
+.st-tip { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ed-drum { display: flex; flex-direction: column; gap: 6px; }
 .ed-drum-bar { display: flex; align-items: center; gap: 8px; flex: none; }
 .ed-drum-bar .select-input { min-width: 170px; }
@@ -1929,6 +2988,12 @@ onBeforeUnmount(() => {
 .ks-row { display: flex; align-items: center; gap: 8px; padding: 2px 6px; border-radius: 6px; }
 .ks-row:nth-child(odd) { background: var(--surface-soft); }
 .ks-label { width: 64px; font-size: 11px; color: var(--stone); flex: none; }
+/* 技法动作列（§3.7）：PC / CC / 值 / 力度× / 通道 —— 都比技法名窄 */
+.ks-num { width: 52px; flex: none; padding: 2px 4px; font-size: 11px; }
+.ks-head { display: flex; align-items: center; gap: 8px; padding: 2px 12px 4px; }
+.ks-head .ks-h-name { flex: 1; }
+.ks-head .ks-h-num { width: 52px; flex: none; text-align: center; }
+.ks-act-preset { margin: 6px 0 2px; flex-wrap: wrap; }
 .help-scroll { max-height: 60vh; overflow: auto; display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--slate); line-height: 1.7; }
 .help-sec b { display: block; color: var(--ink); }
 .ed-fullscreen .page-head { display: none; }
@@ -1936,6 +3001,9 @@ onBeforeUnmount(() => {
 .ed-fullscreen .ed-status { display: flex; }
 /* 全屏时收起左侧检查器，把宽度全部让给卷帘 */
 .ed-fullscreen .ed-insp { display: none; }
+/* 全屏就是「把一切都让给卷帘」：连 34px 的迷你总览也收掉（需要时按 Esc 退出） */
+.ed-fullscreen .ed-nav { display: none; }
+.ed-fullscreen .chord-lane { display: none; }
 .ed-fullscreen .ed-toolbar { display: flex; }
 /* 全屏模式屏幕更高：每栏放宽，展示高度也放宽（仍是悬浮卡片网格） */
 .ed-fullscreen .ed-adv {
@@ -1943,7 +3011,108 @@ onBeforeUnmount(() => {
   max-height: min(62vh, 520px);
 }
 .ed-wrap-rel { position: relative; flex: 1; min-height: 0; }
+/* 视图切换闪动：只动透明度与极小位移，不碰画布尺寸（画布是活的，重排会抖） */
+.ed-wrap-rel.ed-flash { animation: edFlash 0.3s cubic-bezier(0.22, 0.7, 0.24, 1); }
+@keyframes edFlash { from { opacity: 0.35; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.ed-insp.ed-insp-in { animation: edInspIn 0.26s cubic-bezier(0.22, 0.7, 0.24, 1); }
+@keyframes edInspIn { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
+.ed-pop-enter-active { transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.22, 0.7, 0.24, 1); }
+.ed-pop-leave-active { transition: opacity 0.16s ease, transform 0.16s ease; }
+.ed-pop-enter-from { opacity: 0; transform: translateY(-6px); }
+.ed-pop-leave-to { opacity: 0; transform: translateY(-4px); }
+/* 乐谱工具条：一条横排、可横向滚动，不换行（换行会吃掉音符区高度） */
+.ed-scorebar { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; overflow-x: auto;
+  flex: none; padding: 4px 8px; margin-bottom: 6px; border-radius: 10px; }
+.ed-scorebar .et-label { flex: none; font-size: 11.5px; color: var(--stone); margin: 0 2px; }
+.ed-scorebar .muted { flex: none; white-space: nowrap; }
 .ed-video-overlay { position: absolute; top: 4px; right: 4px; width: 300px; max-width: 34%; border-radius: 8px; z-index: 20; background: #000; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+
+/* ---------------- M1 骨架：菜单条 / 工作区预设 / 任务条 / 检查器分页 / 快捷键表 ---------------- */
+/* position+z-index 是必须的：.card 带 backdrop-filter（自成层叠上下文），
+   兄弟卡片按 DOM 顺序绘制 → 菜单弹层会被下面的工具条盖住。抬高菜单条这一层即可。 */
+.ed-menubar-card { display: flex; align-items: center; gap: 8px; padding: 3px 8px; margin-bottom: 6px; flex: none; min-width: 0; position: relative; z-index: 40; }
+.mb-grow { flex: 1; min-width: 0; }
+.ed-presets { display: flex; gap: 2px; padding: 2px; background: var(--surface-soft); border: 1px solid var(--hairline); border-radius: 9px; }
+.ps-chip { font-size: 11.5px; line-height: 1; padding: 5px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--slate); cursor: pointer; transition: background .16s ease, color .16s ease; }
+.ps-chip:hover { color: var(--ink); background: var(--canvas); }
+.ps-chip.on { background: var(--accent); color: #fff; }
+/* 上下文任务条：选中后原地出现高频操作。高度固定 32px，不随选择状态抖动 */
+.ed-taskbar { display: flex; align-items: center; gap: 5px; flex-wrap: nowrap; overflow-x: auto; flex: none; padding: 4px 8px; margin-bottom: 6px; min-height: 34px; }
+.ed-taskbar .et-btn { height: 24px; min-height: 24px; padding: 0 8px; font-size: 11.5px; }
+.ed-step-group .select-input { height: 24px; padding: 0 22px 0 7px; font-size: 11.5px; }
+.ed-step-pos { font-family: var(--mono); font-size: 11px; color: var(--ink); min-width: 34px; text-align: center; }
+/* 鼓组命名表：两列、行高压到 24px，一屏看全 30 个音 */
+.drum-name-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; max-height: 52vh; overflow-y: auto; }
+.drum-name-row { display: flex; align-items: center; gap: 8px; }
+.drum-name-p { flex: none; width: 26px; text-align: right; font-family: var(--mono); font-size: 11px; color: var(--stone); }
+.drum-name-row .text-input { flex: 1; min-width: 0; height: 24px; padding: 0 7px; font-size: 11.5px; }
+/* 标签在窄条里被压成两行（「移调」竖着断成两截），必须 nowrap + 不参与收缩 */
+.ed-taskbar .et-label { flex: none; white-space: nowrap; }
+.tb-badge { font-size: 11.5px; font-weight: 700; color: #fff; background: var(--accent); border-radius: 7px; padding: 3px 8px; flex: none; font-variant-numeric: tabular-nums; }
+.tb-hint { font-size: 11.5px; color: var(--stone); white-space: nowrap; }
+/* 检查器分页 */
+.insp-tabs { display: flex; gap: 2px; padding: 2px; background: var(--surface-soft); border: 1px solid var(--hairline); border-radius: 9px; flex: none; }
+.insp-tab { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 24px; border: 0; border-radius: 7px; background: transparent; color: var(--slate); font-size: 11.5px; cursor: pointer; transition: background .16s ease, color .16s ease, box-shadow .16s ease; }
+.insp-tab:hover { color: var(--ink); }
+.insp-tab.on { background: var(--canvas); color: var(--ink); box-shadow: 0 1px 3px rgba(16,24,40,.10); }
+.insp-pane { display: flex; flex-direction: column; gap: 8px; animation: inspPaneIn .22s cubic-bezier(.2,.7,.3,1); }
+@keyframes inspPaneIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+/* 跨轨编辑的轨道勾选列表（M5b） */
+.et-list { display: flex; flex-direction: column; gap: 2px; max-height: 168px; overflow-y: auto; border: 1px solid var(--hairline); border-radius: 8px; padding: 4px; }
+.et-item { display: flex; align-items: center; gap: 6px; padding: 3px 5px; border-radius: 6px; font-size: 11.5px; color: var(--slate); cursor: pointer; }
+.et-item:hover { background: var(--surface-soft); }
+.et-item.cur { background: var(--surface-soft); color: var(--ink); font-weight: 600; }
+.et-item .et-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-btn { border: 0; background: transparent; color: var(--accent); font-size: 10.5px; cursor: pointer; padding: 0 2px; }
+
+/* 技法条（M5）：横向可滚的一排「技法段」 */
+.art-lane { display: flex; align-items: center; gap: 6px; flex: none; padding: 4px 8px; margin-bottom: 6px; border-radius: 10px; }
+.art-lane-label { font-size: 11px; color: var(--stone); flex: none; }
+.art-cells { display: flex; align-items: center; gap: 4px; overflow-x: auto; flex: 1; min-width: 0; padding-bottom: 2px; }
+.art-cell { display: inline-flex; align-items: center; gap: 3px; flex: none; padding: 2px 4px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--canvas); }
+.art-cell em { font-style: normal; font-size: 9.5px; color: var(--stone); white-space: nowrap; }
+.art-cell .select-input { height: 22px; padding: 0 20px 0 6px; font-size: 11px; width: auto; max-width: 132px; }
+.hv-art { font-size: 10px; color: var(--accent); border: 1px solid var(--hairline); border-radius: 5px; padding: 0 4px; }
+
+/* 密度三档（M9）：紧凑 / 标准 / 宽松。只调控件高度与内边距 —— 布局结构不动，
+   所以三档之间切换不会引起重排抖动（画布尺寸不变）。 */
+.ed-density-compact .et-btn { height: 23px; min-height: 23px; padding: 0 7px; font-size: 11.5px; }
+.ed-density-compact .card.ed-toolbar { padding: 2px 6px; }
+.ed-density-compact .ed-taskbar { min-height: 30px; padding: 2px 6px; }
+.ed-density-compact .ed-status { gap: 10px; }
+.ed-density-compact .ed-menubar-card { padding: 1px 6px; }
+.ed-density-roomy .et-btn { height: 30px; min-height: 30px; padding: 0 11px; font-size: 12.5px; }
+.ed-density-roomy .card.ed-toolbar { padding: 7px 10px; }
+.ed-density-roomy .ed-taskbar { min-height: 40px; padding: 6px 10px; }
+.ed-density-roomy .ed-status { gap: 18px; }
+
+/* 悬停工具条（M3）：fixed 定位，不参与舞台布局（卷帘高度不会因为它抖动） */
+.hv-bar { position: fixed; z-index: var(--z-overlay); display: flex; align-items: center; gap: 3px; padding: 3px 5px;
+  background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-lg);
+  animation: hvIn .16s cubic-bezier(.2,.7,.3,1); }
+@keyframes hvIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.hv-name { font-size: 11px; font-weight: 700; color: var(--ink); font-family: var(--mono); padding: 0 2px; }
+.hv-vel { font-size: 10.5px; color: var(--stone); font-family: var(--mono); }
+.hv-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 5px;
+  border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--slate); font-size: 11px; cursor: pointer;
+  transition: background .13s ease, color .13s ease; }
+.hv-btn:hover { background: var(--surface-soft); color: var(--ink); }
+.hv-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.hv-btn.danger { color: var(--error); }
+.hv-sep { width: 1px; height: 15px; background: var(--hairline); margin: 0 2px; }
+.hv-multi { font-size: 10px; color: var(--stone); padding-left: 4px; }
+
+/* 状态栏右侧的小按钮 */
+.st-btn { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border: 1px solid var(--hairline); border-radius: 6px; background: var(--canvas); color: var(--slate); font-size: 10.5px; cursor: pointer; transition: background .14s ease, color .14s ease; }
+.st-btn:hover { color: var(--ink); background: var(--surface-soft); }
+.st-btn.on { color: var(--ink); border-color: var(--accent); }
+/* 快捷键一览 */
+/* 两列（不 auto-fit）：四组正好 2×2，不会出现「第三列空着、第四组掉到第二行」 */
+.ed-keys { width: min(700px, 94vw); }
+.keys-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 22px; max-height: 62vh; overflow-y: auto; }
+.keys-h { font-size: 11px; font-weight: 700; color: var(--stone); letter-spacing: .02em; margin-bottom: 4px; }
+.keys-row { display: flex; align-items: baseline; gap: 8px; font-size: 12px; color: var(--slate); padding: 2px 0; }
+.keys-row kbd { flex: none; min-width: 96px; text-align: center; font-family: var(--mono); font-size: 10.5px; color: var(--ink); background: var(--surface-soft); border: 1px solid var(--hairline); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; }
 
 /* P1-2 和弦轨 */
 .chord-lane { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
@@ -1954,6 +3123,13 @@ onBeforeUnmount(() => {
 .chord-cell em { font-style: normal; font-size: 9px; color: var(--stone); line-height: 1.1; }
 .chord-cell b { font-size: 11px; color: var(--ink); line-height: 1.2; }
 .chord-cell.manual { border-color: var(--accent); }
+
+/* M0 收尾（§6.4）：谱面底图控制条 */
+.ul-panel { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 4px 8px; margin-bottom: 6px; border-radius: 8px; }
+.ul-f { display: inline-flex; align-items: center; gap: 5px; color: var(--stone); flex: none; font-size: 11px; }
+.ul-f input[type="range"] { width: 96px; }
+.ul-f em { font-style: normal; color: var(--ink); font-family: var(--mono); min-width: 34px; text-align: right; }
+.ul-panel .sp { flex: 1; }
 
 /* 钢琴卷帘右键菜单 */
 .ctx-mask { position: fixed; inset: 0; z-index: var(--z-ctx); }

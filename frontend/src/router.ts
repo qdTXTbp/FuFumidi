@@ -18,13 +18,19 @@ const routes: RouteRecordRaw[] = [
   { path: '/resources', name: 'resources', component: () => import('./views/ViewResources.vue') },
   { path: '/models', redirect: { path: '/resources', query: { tab: 'model' } } },
   { path: '/soundfonts', redirect: { path: '/resources', query: { tab: 'soundfonts' } } },
+  // 调教：编辑器（选歌手 / 画音符 / 渲染）与声库（做 / 装 / 管）同页两页签。
   { path: '/singer', name: 'singer', component: () => import('./views/ViewSing.vue') },
-  // 声库：UTAU 声库制作与 DiffSinger 组件/声库的统一入口
-  { path: '/banks', name: 'banks', component: () => import('./views/ViewBanks.vue') },
-  // UTAU 与 DiffSinger 已合并为「歌声合成」板块：旧地址重定向过去并带上对应引擎，
-  // 老书签 / 外部链接继续可用（?tab=utau|diffsinger）
-  { path: '/utau', redirect: { path: '/singer', query: { tab: 'utau' } } },
-  { path: '/diffsinger', redirect: { path: '/singer', query: { tab: 'diffsinger' } } },
+  // 插件中心：应用内浏览/安装官方平台上的插件（不唤起浏览器）
+  { path: '/plugins', name: 'plugins', component: () => import('./views/PluginCenter.vue') },
+  // 声库原为独立页，已并入「调教」；旧地址保留为重定向，老书签 / 外部链接继续可用。
+  { path: '/banks', redirect: { path: '/singer', query: { tab: 'banks' } } },
+  // 声库制作（上传音频切分 / 录音 / oto 标注 / 导出声库）：
+  // ★ 组件 ViewVoicebank.vue 一直都在，但合并板块后**没有任何路由指向它** ——
+  //   调教页「UTAU 声库制作」的按钮又错接到了「下载声库」的列表上，于是功能看起来"缺失"。
+  { path: '/voicebank', name: 'voicebank', component: () => import('./views/ViewVoicebank.vue') },
+  // UTAU 与 DiffSinger 早已合并为同一板块：旧地址重定向过去并带上对应引擎
+  { path: '/utau', redirect: { path: '/singer', query: { tab: 'editor' } } },
+  { path: '/diffsinger', redirect: { path: '/singer', query: { tab: 'editor' } } },
   { path: '/:pathMatch(.*)*', redirect: '/home' },
 ];
 

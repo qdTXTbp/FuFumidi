@@ -158,14 +158,17 @@ def load_singer(vb_dir):
     char_txt = os.path.join(vb_dir, 'character.txt')
     bank = Voicebank()
     bank.base_path = vb_dir
-    if os.path.isfile(char_txt):
-        bank.file = char_txt
-        VoicebankLoader.load_info(bank, char_txt, vb_dir)
-        VoicebankLoader.load_subbanks(bank)
-        VoicebankLoader.load_oto_sets(bank, vb_dir)
-    else:
-        bank.file = ''
-        VoicebankLoader.load_oto_sets(bank, vb_dir)
+    # ★ 统一入口（2026-10-06）：`bank.file` 一律指向 character.txt，**存不存在都走同一条路**。
+    #   旧实现给不存在的分支留了 `bank.file = ''`，于是 `ClassicSinger.reload()` →
+    #   `Voicebank.reload()` → `load_info('')` 抛 FileNotFoundError，最后报成
+    #   「声库加载失败（oto 表为空？）」—— 没有 character.txt 的声库直接不可用。
+    #   缺文件的情况由 `parse_character_txt` 兜底（只跳过读文件）。
+    bank.file = char_txt
+    VoicebankLoader.load_info(bank, char_txt, vb_dir)
+    VoicebankLoader.load_subbanks(bank)
+    VoicebankLoader.load_oto_sets(bank, vb_dir)
+    if not (bank.name or '').strip():
+        bank.name = os.path.basename(os.path.normpath(vb_dir))   # 无 character.txt 时用目录名当显示名
     singer = adjust_singer_type(bank)
     if singer is None:
         raise ValueError('声库无法识别歌手类型：%s' % vb_dir)
@@ -285,9 +288,22 @@ def build_part(project, track, notes, tpb=480, curves=None):
     ★ UTAU 的 `flags`（`g`/`B`/`b`/`p`…）是**旧引擎自己的旋钮**，OpenUTAU 走的是
       表达式体系；这里**不解析** flags（照搬渲染链路，不做语义映射），需要时走音素化器
       或音高曲线表达。
+
+    ## 每音符表达式（对齐 OpenUTAU 的 Note.phonemeExpressions）
+
+    应用侧可以给每个音符带 `expressions`（`{abbr: 数值}`），取值对应 OpenUTAU 的表达式表
+    （`vol / vel / dyn / atk / dec / shft / clr`，见 `build_project` 里的 `_EXPRESSION_SPECS`）。
+    这些值落到**该音符的每个音素**上 —— 与上游一致：`UPhoneme.GetExpression` 先查
+    `note.phoneme_expressions` 里 `index == 该音素下标` 的项，查不到才回落到轨道默认值。
+
+    ★ 下标取值与上游一致：OpenUTAU 里**每个音符的音素下标从 0 开始**，宿主给的音符级
+      数值落在 index 0（首个音素，通常是元音）上 —— 见
+      `test_openutau_core_matches_source.py` 里 `part.notes[*].phoneme_indexes == [0]` 的断言。
+      本函数在音素化**之前**执行，所以按 `n['phoneme_indexes']` 预置该下标，缺省用 0；
+      调用方要精细到某个音素，传自己的下标列表即可。这样 `render_track` 之后不必再回填。
     """
-    from singing.ustx import (PitchPoint, UCurve, UNote, UPitch, UPhonemeOverride,
-                              UExpressionType, UVibrato, UVoicePart)
+    from singing.ustx import (
+                              PitchPoint, UCurve, UExpression, UExpressionType, UNote, UPhonemeOverride, UPitch, UVibrato, UVoicePart)
 
     axis = project.time_axis
     part = UVoicePart(track_no=0, position=0)
@@ -334,7 +350,7 @@ def build_part(project, track, notes, tpb=480, curves=None):
 
     out = []
     cursor_ms = 0.0
-    for n in notes or []:
+    for note_i, n in enumerate(notes or []):
         if not isinstance(n, dict):
             continue
 
@@ -456,6 +472,66 @@ def build_part(project, track, notes, tpb=480, curves=None):
         # 从这里取 per-note 的 velocity/volume/gender/breath 写成音素级表达式
         # （UNote 模型没有这些字段，且表达式要按音素 index 匹配，只能后挂）。
         unote._app_note = n
+        # ---- 表达式 → 该音符每个音素的 phoneme_expressions
+        #      两级来源，**音素级优先**：
+        #        1) 音符级 `expressions`（落到 `phoneme_indexes` 给的每个下标，缺省 [0]）
+        #        2) 音素级 `phoneme_expressions: [{'index': i, 'expressions': {abbr: 数值}}]`
+        #      ★ 同一 (下标, abbr) 只允许留一条：`UPhoneme.get_expression` 取的是**首个**
+        #      命中项，所以被音素级覆盖的 (下标, abbr) 必须从音符级的扩散里排除，
+        #      否则「辅音 100 / 元音 55」里的辅音会被音符级的 90 抢先命中。
+        #      识别不了的 abbr、非法下标、类型不对的条目一律静默跳过：
+        #      表达式表由工程决定，前端多传了不该让整轨渲染失败。
+        pe_entries = []            # [(下标, abbr, 描述符, 值)]
+        covered = set()            # 已被音素级覆盖的 (下标, abbr)
+        raw_pe = n.get('phoneme_expressions')
+        if isinstance(raw_pe, (list, tuple)):
+            for item in raw_pe:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    idx = int(item.get('index'))
+                except (TypeError, ValueError):
+                    continue
+                if idx < 0:
+                    continue
+                vals = item.get('expressions')
+                if not isinstance(vals, dict):
+                    continue
+                for abbr, val in vals.items():
+                    desc = project.expressions.get(str(abbr))
+                    if desc is None:
+                        continue
+                    try:
+                        fv = float(val)
+                    except (TypeError, ValueError):
+                        continue
+                    pe_entries.append((idx, str(abbr), desc, fv))
+                    covered.add((idx, str(abbr)))
+
+        exp_list = []
+        raw_exp = n.get('expressions')
+        if isinstance(raw_exp, dict):
+            raw_idx = n.get('phoneme_indexes')
+            # 缺省 0：上游每个音符的音素下标都从 0 起（宿主给的音符级数值落在首个音素上）
+            indexes = [int(i) for i in raw_idx] if isinstance(raw_idx, (list, tuple)) and raw_idx \
+                else [0]
+            for abbr, val in raw_exp.items():
+                desc = project.expressions.get(str(abbr))
+                if desc is None:
+                    continue
+                try:
+                    fv = float(val)
+                except (TypeError, ValueError):
+                    continue
+                for idx in indexes:
+                    if (int(idx), str(abbr)) in covered:
+                        continue
+                    exp_list.append(UExpression(index=int(idx), abbr=str(abbr),
+                                                descriptor=desc, _value=fv))
+        for idx, abbr, desc, fv in pe_entries:
+            exp_list.append(UExpression(index=idx, abbr=abbr, descriptor=desc, _value=fv))
+
+        unote.phoneme_expressions = exp_list
         out.append(unote)
     part.notes.extend(out)
     return part

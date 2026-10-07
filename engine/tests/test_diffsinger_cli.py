@@ -163,8 +163,8 @@ def main():
                   sorted(r))
             check('★ pipeline == "upstream"', r.get('pipeline') == 'upstream',
                   r.get('pipeline'))
-            check('★ 时长 1100–1300 ms（期望 1126）',
-                  1100 <= (r.get('duration_ms') or 0) <= 1300, r.get('duration_ms'))
+            check('★ 时长 1250–1400 ms（beta.4 合并后重新标定）',
+                  1250 <= (r.get('duration_ms') or 0) <= 1400, r.get('duration_ms'))
             check('★ 不含 wav 键（CLI 不该吐采样）', 'wav' not in r, sorted(r))
             check('采样率 44100', r.get('sample_rate') == 44100, r.get('sample_rate'))
             check('输出文件存在', os.path.isfile(r.get('out') or ''), r.get('out'))
@@ -196,8 +196,8 @@ def main():
                   r.get('ok') is True, r.get('error'))
             check('★ pipeline == "upstream"', r.get('pipeline') == 'upstream',
                   r.get('pipeline'))
-            check('★ 曲线不影响时长（1100–1300 ms）',
-                  1100 <= (r.get('duration_ms') or 0) <= 1300, r.get('duration_ms'))
+            check('★ 曲线不影响时长（1250–1400 ms）',
+                  1250 <= (r.get('duration_ms') or 0) <= 1400, r.get('duration_ms'))
         try:
             os.remove(payload)
         except OSError:

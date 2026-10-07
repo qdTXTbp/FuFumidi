@@ -6,21 +6,70 @@
  * 引擎（UTAU / DiffSinger）是**轨道上的属性**，不是页面级的模式 ——
  * 所以一个工程里两种轨可以混排，渲染时按各自引擎分派。
  */
-import { computed, ref, watch, onActivated } from 'vue';
-import { useRoute } from 'vue-router';
+import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import PianoRoll from '../components/pianoroll/PianoRoll.vue';
+import { trackColorOf, newNoteId, colorblindMode, setColorblindMode } from '../stores/singer';
+import VoicebankPanel from '../components/sing/VoicebankPanel.vue';
+import CurveCanvas from '../components/sing/CurveCanvas.vue';
+import ViewVoicebank from './ViewVoicebank.vue';
 import { t } from '../core/i18n.js';
 import { ENGINES, LANGUAGES, useSingerStore } from '../stores/singer';
+import { useAppStore } from '../stores/app';
 import { getTransport } from '../core/sing_transport.js';
+import { ensureAudio } from '../audio.js';
 import { FX_TYPES, FX_ORDER } from '../core/track_fx.js';
-import { CURVE_TARGETS, curveOf, defaultFor, targetsFor, secToBeat } from '../core/track_automation.js';
-import { listMidiInputs, selectMidiInput } from '../core/midiin.js';
-import { ensureAudio, getCtx } from '../audio.js';
+import { CURVE_TARGETS, curveOf, defaultFor, targetsFor } from '../core/track_automation.js';
+import { notePhonemes } from '../core/phoneme.js';
+import { normalizeSampleNote } from '../core/utau_tools.js';
+import { computeSpectrogram, drawSpectrogram } from '../core/spectrogram.js';
+import { alignLyrics, splitLyricLines, splitNotesToFit } from '../core/sing_align.js';
 
 const store = useSingerStore();
+const app = useAppStore();
 const route = useRoute();
-const msg = ref('');
+const router = useRouter();
+
+/*
+ * P1-4 统一提示：整个页面**只有一个**提示出口（app.toast）。
+ * 早先这里有一条自己的 msg 条（编辑区顶部），错误还会各处 inline ——
+ * 用户永远不知道提示会从哪儿冒出来。现在：
+ *   say(...)    普通结果（ok/info/warn）
+ *   sayErr(...) 失败 + **下一步该做什么**（hint）+ 可展开详情（detail）
+ * 常驻的「为什么渲不了」不放 toast（它不该 6 秒后消失），仍留在渲染按钮旁。
+ */
+function say(m: string, kind: 'info' | 'ok' | 'warn' | 'error' = 'ok', opts: any = {}) {
+  app.toast(m, kind, opts);
+}
+function sayErr(m: string, hint = '', detail = '') {
+  if (!m) return;
+  app.toast(m, 'error', { hint, detail });
+}
+
+/* ---------------------------------------------------------- 页签名
+ * 「调教」页把原来的「歌声合成」与「声库」两页并成一个：编辑器（选歌手 / 画音符 / 渲染）
+ * 与声库（做 / 装 / 管）本就是同一条工作流的两半，不再各占一个顶栏入口。
+ *
+ * ?tab= 取值（面板永远只有「编辑器 / 声库」两个页签）：
+ *   banks                → 声库页签（原 /banks 页）
+ *   utau / diffsinger    → 编辑器页签，并选中/新建该引擎的轨（合并前的旧深链）
+ *   其它 / 缺省 / editor → 编辑器页签 */
+type SingTab = 'editor' | 'banks' | 'maker';
+const asTab = (v: any): SingTab => (v === 'banks' ? 'banks' : (v === 'maker' ? 'maker' : 'editor'));
+const tab = ref<SingTab>(asTab(route.query.tab));
+
+watch(() => route.query.tab, (v) => {
+  const want = asTab(v);
+  if (want !== tab.value) tab.value = want;
+});
+
+function setTab(v: SingTab) {
+  tab.value = v;
+  // 用 path + query 直接替换：交给顶层 /:pathMatch 兜底，不依赖具体路由名
+  try { void router.replace({ path: '/singer', query: v === 'editor' ? {} : { tab: v } }); }
+  catch (_) { /* 路由不可用时忽略 */ }
+}
 const propsOpen = ref(false);
 const cands = ref([]);
 const candFor = ref('');
@@ -107,13 +156,136 @@ function autoSetPoint(pts: { beat: number; value: number }[], i: number, field: 
   }
   store.setCurve(tr.value.id, curAbbr.value, next);
 }
+/** 卷帘里双击音符：选中它，并把详情面板打开 —— 颤音/音素/曲线都在那里面（M6c） */
+function onEditNoteFromRoll(id: string) {
+  store.select(id);
+  if (!detailOpen.value) detailOpen.value = true;
+}
+/* ---------------- 曲线的复制与锁定（M6c，计划书 §4.1 曲线工具条的剩余项） ---------------- */
+/** 锁定：锁上以后画布只读，避免「只是想看看」时误改 */
+const curveLocked = ref(localStorage.getItem('fufumidi_curve_locked') === '1');
+watch(curveLocked, (v) => { try { localStorage.setItem('fufumidi_curve_locked', v ? '1' : '0'); } catch (e) {} });
+/** 复制当前参数曲线到别的轨（同引擎的轨才有同一个目标表） */
+/* ---- M6c 收尾：参数行（可折叠 / Solo） + 叠加参考轨 ---- */
+/** 每行是否展开。默认只展开**当前聚焦**那一行，否则一进来就是七八张画布 */
+const rowOpen = ref<Record<string, boolean>>({});
+/** Solo：只看这一条（点第二次取消） */
+const soloAbbr = ref('');
+/** 工具条（平滑/量化）作用于**聚焦行**的画布 —— 动态 ref：只有当前聚焦行的画布挂到 curveCanvasAuto */
+function setRowCanvas(a: string, el: any) {
+  if (a === curAbbr.value) curveCanvasAuto.value = el;
+}
+function rowExpanded(a: string) {
+  if (soloAbbr.value) return soloAbbr.value === a;
+  const v = rowOpen.value[a];
+  return v === undefined ? a === curAbbr.value : !!v;
+}
+function toggleRow(a: string) {
+  const cur = rowExpanded(a);
+  rowOpen.value = { ...rowOpen.value, [a]: !cur };
+  if (soloAbbr.value === a) soloAbbr.value = '';
+}
+function toggleSolo(a: string) {
+  soloAbbr.value = soloAbbr.value === a ? '' : a;
+  if (soloAbbr.value) curAbbr.value = a;    // Solo 同时把编辑焦点带过去，工具条才不会打空
+}
+/** 叠加参考轨：把另一条轨的同名曲线画成灰线 */
+const refTrackId = ref('');
+const refTrack = computed<any>(() => store.tracks.find((x: any) => x.id === refTrackId.value) || null);
+/** 某条参数在参考轨上的同名曲线（没有就返回空数组） */
+function ghostFor(abbr: string, tr0?: any) {
+  const r = tr0 || refTrack.value;
+  if (!r) return [];
+  const c: any = curveOf(r, abbr);
+  return ((c && c.points) || []).map((p: any) => ({ beat: p.beat, value: p.value }));
+}
+/** 音高曲线那条（PIT 的镜像 pitchCurve）在参考轨上的点 */
+const ghostPitch = computed(() => {
+  const r = refTrack.value;
+  if (!r) return [];
+  return ((r.pitchCurve || []) as any[]).map((p: any) => ({ beat: p.beat, value: p.cents }));
+});
+const ghostLabel = computed(() => (refTrack.value ? (refTrack.value.name || t('未命名轨')) : ''));
+const copyToId = ref('');
+/* 只列出「这条参数它也用得了」的轨：UTAU 专属的 DYN 复制到 DiffSinger 轨会被 normalizeCurves 丢掉，
+   与其让用户点了个没反应，不如根本不给选。 */
+const copyTargets = computed(() => store.tracks.filter((x: any) =>
+  x.id !== (tr.value && tr.value.id) && x.kind === 'voice' && targetsFor(x.engine, x.kind).indexOf(curAbbr.value) >= 0));
+function copyCurveTo(trackId: string) {
+  const t0 = tr.value; if (!t0 || !trackId) return;
+  const c = curCurve.value; if (!c || !c.points.length) { say(t('这条曲线还没有点')); return; }
+  store.setCurve(trackId, curAbbr.value, c.points.map((p: any) => ({ beat: p.beat, value: p.value })));
+  say(t('已把 ') + curAbbr.value + t(' 曲线复制到目标轨'), 'ok');
+}
+function copyCurveToAll() {
+  const c = curCurve.value; if (!c || !c.points.length) { say(t('这条曲线还没有点')); return; }
+  let n = 0;
+  for (const x of copyTargets.value) { store.setCurve(x.id, curAbbr.value, c.points.map((p: any) => ({ beat: p.beat, value: p.value }))); n++; }
+  say(t('已复制到 ') + n + t(' 条轨'), n ? 'ok' : 'warn');
+}
 function autoDelPoint(pts: { beat: number; value: number }[], i: number) {
   if (!tr.value) return;
   store.setCurve(tr.value.id, curAbbr.value, pts.filter((_, k) => k !== i));
 }
 
 /* ------------------------------------------------------------ 轨道 */
-function addTrack(engine) { store.addTrack(engine); msg.value = ''; }
+function addTrack(engine) { store.addTrack(engine); }
+/** 语言显示名的**唯一来源**：轨道卡片的下拉与上方摘要用同一个标签，
+    不再一处显示 "ZH"、另一处显示 "中文"（UX 复核第 2 条）。 */
+function langLabel(code: string) {
+  const hit = LANGUAGES.find((l) => l.code === code);
+  return hit ? t(hit.label) : (String(code || '').toUpperCase() || '—');
+}
+
+/* ---- 轨列表：拖拽排序 / 静音 / 双击改名 / 右键菜单 ---- */
+const dragId = ref('');
+const dragOver = ref('');
+function onTrackDragStart(id: string) { dragId.value = id; }
+function onTrackDragEnd() { dragId.value = ''; dragOver.value = ''; }
+function onTrackDrop(toId: string) {
+  if (dragId.value && dragId.value !== toId) store.moveTrack(dragId.value, toId);
+  onTrackDragEnd();
+}
+async function toggleMute(x: any) {
+  store.patchTrack(x.id, { muted: !x.muted });
+  await reloadTransport();          // 静音要立刻听得见：lane 是 load 时生成的
+}
+function renameTrack(x: any) {
+  const next = window.prompt(t('轨道名称'), x.name || '');
+  if (next == null) return;
+  store.patchTrack(x.id, { name: String(next).trim() });
+}
+const trackMenu = ref<{ x: number; y: number; track: any } | null>(null);
+function openTrackMenu(e: MouseEvent, x: any) {
+  trackMenu.value = { x: e.clientX, y: e.clientY, track: x };
+  store.selectTrack(x.id);
+}
+function closeTrackMenu() { trackMenu.value = null; }
+function menuDuplicate(x: any) {
+  // 复制轨：新 id + 深拷贝音符（引用共享会让两条轨编辑互相影响）
+  const src = JSON.parse(JSON.stringify({ engine: x.engine, name: x.name, singer: x.singer, singerName: x.singerName,
+    language: x.language, notes: x.notes, fx: x.fx, curves: x.curves, pitchCurve: x.pitchCurve, gainDb: x.gainDb }));
+  store.pushUndo();
+  const id = store.addTrack(src.engine);
+  store.patchTrack(id, {
+    name: (src.name || '') + t(' 副本'), singer: src.singer, singerName: src.singerName,
+    language: src.language, gainDb: src.gainDb, pitchCurve: src.pitchCurve,
+    // ★ 复制出来的音符要**换新 id**：沿用原 id 会让两条轨的 id 撞车，
+    //   而 updateNote 是按 id 找第一条匹配的 → 编辑副本会改到原轨
+    notes: src.notes.map((n: any) => ({ ...n, id: newNoteId() })), fx: src.fx, curves: src.curves,
+  });
+  closeTrackMenu();
+}
+/** 该引擎下已安装的声库（点选用）。空列表时给"去声库页签装"的提示。 */
+function banksFor(engine: string) {
+  return store.banks.filter((b) => b.engine === engine);
+}
+function onSingerPick(id: string, e: Event) {
+  const dir = String((e.target as HTMLSelectElement).value || '');
+  const hit = store.banks.find((b) => b.dir === dir);
+  store.patchTrack(id, { singer: dir, singerName: hit ? hit.name : (dir ? String(dir).split(/[\\/]/).pop() || '' : '') });
+}
+
 function onSingerPath(id, e) {
   const d = e.target.value.trim();
   store.patchTrack(id, { singer: d, singerName: d ? d.split(/[\\/]/).pop() : '' });
@@ -121,7 +293,20 @@ function onSingerPath(id, e) {
 function onEngine(id, e) { store.patchTrack(id, { engine: e.target.value }); }
 
 /* ------------------------------------------------------------ 音符 */
+/**
+ * 交给钢琴卷帘的适配器。
+ *
+ * ★ 这里必须**完整实现 PianoRoll 文档里那份契约**（addNote / updateNote / moveNotes /
+ *   setNotesDuration / removeNotes / setSelection / selectAll / pushUndo / undo / redo）。
+ *   旧实现只给了 addNote/updateNote/removeNote/select/selectMany —— 于是箭头微调、
+ *   Delete、Ctrl+A、Ctrl+Z、右键撤销这些操作在卷帘里**全部静默失效**
+ *   （调用不存在的函数直接抛 TypeError，界面毫无变化）。
+ *
+ * 撤销语义：卷帘自己会在一次交互开始时调 `pushUndo()`，其余写入走 store；
+ * 所以 store 侧的变更方法里**不**再重复入栈（拖拽一次 = 一步）。
+ */
 function rollApi() {
+  const noteIds = () => (tr.value?.notes || []).map((n) => n.id);
   return {
     bpm: () => store.bpm,
     notes: () => tr.value?.notes || [],
@@ -130,46 +315,638 @@ function rollApi() {
     addNote: (b, p) => store.addNote(b, p),
     updateNote: (id, patch) => store.updateNote(id, patch),
     removeNote: (id) => store.removeNote(id),
+    removeNotes: (ids) => { (ids || []).forEach((id) => store.removeNote(id)); },
+    /* ★ 跨轨（M8h）：id 可能属于**别的轨**（跨轨选区里就有幽灵音符）。
+       以前这里只在当前轨里找 —— 于是"跨轨选中后按方向键"什么都不动。
+       现在交给 store 按 id 在哪条轨就在哪条轨上改。 */
+    moveNotes: (ids, dBeat, dPitch) => store.nudgeNotes(ids || [], dBeat, dPitch),
+    /** 跨轨拖动用：按绝对目标一次写回多条轨（卷帘已经在拖拽开始时 pushUndo，这里不再入栈） */
+    moveNotesById: (moves) => store.applyNoteMoves(moves || []),
+    setNotesDuration: (ids, durBeat) => {
+      for (const id of ids || []) store.updateNote(id, { durBeat: Math.max(0.125, durBeat) });
+    },
     select: (id, add) => store.select(id, add),
     selectMany: (ids) => store.selectMany(ids),
-    // ---- 撤销/重做 + 批量操作（PianoRoll 快捷键与画布编辑依赖）----
-    // ★ 之前 pushUndo/undo/redo/selectAll/moveNotes 从未提供：PianoRoll 所有
-    //   编辑入口的 pushUndo 全部判空跳过 = 没有撤销；Ctrl+A 直接 TypeError。
+    setSelection: (ids, primary) => {
+      /* ★ 修一个真 bug（M8d 验收钩子查出来的）：原来 selectMany(ids) 之后再 select(primary)，
+         而 select 是**非加选**语义 —— 它会把 selectedIds 清空，
+         于是卷帘里的框选 / Shift 加选**永远只剩一个音符**，调教页那排批量工具（要求选中 ≥2 个）
+         因此从来没出现过。这里改成"一次写完"，不再让 select 覆盖集合。 */
+      const list = ids || [];
+      store.selectMany(list);
+      store.selectedId = primary ?? (list.length ? list[0] : null);
+    },
+    selectAll: () => store.selectMany(noteIds()),
+    getPitchPoints: () => (tr.value?.pitchCurve || []).map((p) => ({ beat: p.beat, cents: p.cents })),
+    setPitchPoints: (pts) => store.setPitchCurve((pts || []).map((p) => ({ beat: p.beat, cents: p.cents }))),
     pushUndo: () => store.pushUndo(),
+    /* 卷帘长按转右键时把刚入栈的空步丢掉（M9 收尾：触控屏上的右键） */
+    dropUndo: () => store.dropUndo(),
     undo: () => store.undo(),
     redo: () => store.redo(),
-    selectAll: () => store.selectAll(),
-    moveNotes: (ids, dBeat, dPitch) => store.moveNotes(ids, dBeat, dPitch),
-    // ★ PianoRoll 全部选择入口（点选/框选/加选/取消）都走 setSelection ——
-    //   之前没提供，第一次点击就 TypeError，选择工具整个不可用。
-    setSelection: (ids: string[], primary: string | null) => {
-      store.selectMany(ids);
-      if (primary != null) store.selectedId = primary;
-    },
-    // ---- 曲线泳道（PIT/DYN/BRE/GEN）----
-    // ★ 之前 getPitchPoints/setPitchPoints 只在 PianoRoll 里被调用、从未有
-    //   实现 —— 泳道读恒空、写静默丢。统一走 curveOf/setCurve：
-    //   PIT 会镜像到 pitchCurve（渲染链路读它），DYN/BRE/GEN 进渲染曲线通路。
-    getEngine: () => tr.value?.engine || 'utau',
-    getCurvePoints: (abbr: string) =>
-      (tr.value ? (curveOf(tr.value, abbr)?.points || []) : []) as { beat: number; value: number }[],
-    setCurvePoints: (abbr: string, points: { beat: number; value: number }[]) => {
-      if (tr.value) store.setCurve(tr.value.id, abbr, points);
-    },
+    /* 卷帘里的"轻提示"（比如剪贴板是空的）也走统一出口，别让它静默失败 */
+    hint: (m: string) => say(m, 'info'),
+    /* 播放头拍位：切分/粘贴以它为准（与传输栏的时间码同一个钟） */
+    playheadBeat: () => playheadBeat.value,
   };
+}
+
+/* ------------------------------------------------------------ 工程级参数（P2-3） */
+/* 对齐偏移（工程级参数）。
+   ★ 提交模型统一成「即时生效」：数字一改，立刻按**增量**平移当前声部轨的音符，并写进 meta.alignMs。
+     增量而不是"再挪一次总量"—— 5 改成 50 只补 45ms，最终累计值就是输入框里的数，语义唯一。
+     以前是"填数字 + 点应用（还有独立的应用按钮）"，同一排里的 BPM/拍号却是即时生效的，
+     三种提交语义混在一起，用户没法预期（本轮 UX 复核的第 7 条）。 */
+const alignMs = ref(Number(store.meta.alignMs) || 0);
+watch(() => store.meta.alignMs, (v) => { alignMs.value = Number(v) || 0; });
+/** 拍号：只驱动卷帘的小节线，不改数据 */
+const beatsPerBar = computed(() => {
+  const s = String(store.meta.timeSig || '4/4');
+  const m = s.match(/^(\d+)\s*\/\s*(\d+)$/);
+  if (!m) return 4;
+  const num = Number(m[1]);
+  // 6/8 这类"以八分音符为一拍"的拍号：卷帘的时间单位是四分音符，
+  // 所以一个小节 = num * 4/den 个四分音符（6/8 → 3 个四分音符），而不是 6 个。
+  const den = Number(m[2]) || 4;
+  const beats = num * (4 / den);
+  return beats >= 1 && beats <= 16 ? Math.round(beats) : 4;
+});
+function onTimeSig(e: Event) {
+  const v = (e.target as HTMLSelectElement).value;
+  store.meta = Object.assign({}, store.meta, { timeSig: v });
+  say(t('拍号已改为 ') + v + t('（只影响小节线，音符没动）'), 'info');
+}
+/** 对齐偏移：改了立刻按**增量**平移（不是再挪一次总量），可撤销 */
+function onAlignMs(e: Event) {
+  const v = Math.round(Number(nval(e, 0)) || 0);
+  const prev = Math.round(Number(store.meta.alignMs) || 0);
+  const d = v - prev;
+  if (!d) { alignMs.value = v; return; }
+  const track = tr.value;
+  if (!track || track.kind !== 'voice') {
+    sayErr(t('先选中一条声部轨'), t('伴奏轨是音频，挪了就对不上拍子。'));
+    alignMs.value = prev;                       // 输入框回滚，别让界面和实际状态不一致
+    return;
+  }
+  const n = store.shiftNotesByMs(d, track.id);  // 内部会写 meta.alignMs = 累计值
+  alignMs.value = v;
+  say(t('已把 ') + String(n) + t(' 个音符整体平移 ') + String(d) + t(' ms（累计 ') + String(v) + t(' ms）'), 'ok',
+    { hint: t('Ctrl+Z 可以撤销。'), action: { label: t('撤销'), run: () => store.undo() } });
+}
+
+/* ------------------------------------------------------------ 参数车道（P2-4）
+ * 表格加点保留（精确输入用），同时把它画成可拖拽车道：只在打开「自动化」页签时给车道，
+ * 免得平时白占一条 70px 的高度。 */
+const autoLane = computed<any>(() => {
+  const t0 = tr.value;
+  if (!t0 || propsTab.value !== 'auto') return null;
+  const tgt: any = curTarget.value || {};
+  const curve: any = curCurve.value;
+  return {
+    abbr: curAbbr.value,
+    label: (tgt.label || curAbbr.value) + (tgt.unit ? ' (' + tgt.unit + ')' : ''),
+    min: Number.isFinite(tgt.min) ? tgt.min : 0,
+    max: Number.isFinite(tgt.max) ? tgt.max : 100,
+    def: Number.isFinite(tgt.def) ? tgt.def : defaultFor(curAbbr.value),
+    unit: tgt.unit || '',
+    points: ((curve && curve.points) || []).map((p: any) => ({ beat: p.beat, value: p.value })),
+  };
+});
+/** 车道拖拽结果落库：排序与钳制交给 store 的 normalizeCurve */
+function onAutoLane(pts: any[]) {
+  const t0 = tr.value;
+  if (!t0) return;
+  store.setCurve(t0.id, curAbbr.value, (pts || []).map((p: any) => ({ beat: p.beat, value: p.value })));
+}
+
+/* ------------------------------------------------------------ 音素级编辑（P2-2）
+ * 条带上点一个音素 → 这里改**那一个音素**的表达式。
+ *
+ * ★ 与音符级字段的分工：音符级值会落到该音符的每个音素；这里按下标单独覆盖，
+ *   引擎侧（build_part）让音素级优先。所以「辅音轻、元音亮」可以同时成立。
+ * ★ 下标来自 core/phoneme.js 的派生（与条带绘制同一套），是**估计**：
+ *   引擎真正的音素切分以声库 oto 为准；下标越界时引擎会忽略，不会渲染失败。
+ */
+const PH_EXPRS: { abbr: string; label: string; min: number; max: number; def: number; hint: string }[] = [
+  { abbr: 'vol', label: '音量 VOL', min: 0, max: 100, def: 100, hint: '表情级音量（100 = 原样，不是衰减量）' },
+  { abbr: 'vel', label: '力度 VEL', min: 0, max: 100, def: 100, hint: '辅音速度与力度，越小越柔' },
+  { abbr: 'dyn', label: '力度曲线 DYN', min: -240, max: 120, def: 0, hint: '音量曲线偏移（-240 ~ 120）' },
+  { abbr: 'atk', label: '起音 ATK', min: 0, max: 100, def: 100, hint: '音符开头的咬字力度' },
+  { abbr: 'dec', label: '衰减 DEC', min: 0, max: 100, def: 100, hint: '越小收得越快' },
+  { abbr: 'shft', label: '音高偏移 SHFT', min: 0, max: 100, def: 0, hint: '音高偏移量（0 ~ 100）' },
+  { abbr: 'clr', label: '语音色 CLR', min: 0, max: 99, def: 0, hint: '语音色选项下标；声库没有多语音色时保持 0' },
+];
+const selPh = ref<{ noteId: string; index: number; text: string } | null>(null);
+/** 面板当前作用的音符：优先用条带上点选的那个，否则跟随卷帘选中的音符 */
+const phNote = computed<any>(() => {
+  const id = (selPh.value && selPh.value.noteId) || store.selectedId;
+  return (tr.value?.notes || []).find((n: any) => n.id === id) || null;
+});
+/** 该音符的音素列表（与条带同一套派生） */
+const phItems = computed<any[]>(() => { const n = phNote.value; return n ? notePhonemes(n) : []; });
+/** 当前下标；没点过条带时默认第一个音素 */
+const phIndex = computed<number>(() => {
+  if (selPh.value && phNote.value && selPh.value.noteId === phNote.value.id) return selPh.value.index;
+  return phItems.value.length ? 0 : -1;
+});
+const phCur = computed<any>(() => (phIndex.value >= 0 ? phItems.value[phIndex.value] : null));
+/* 音素时间表（M7b）：条带上是"看得见"，这里给"读得出" —— 每个音素的起止（拍）与时长（ms）。
+   ★ 边界是按歌词**估算**的（引擎真正的切分以声库 oto 为准），所以这里明确标注"估算"；
+     要能拖动边界，需要引擎支持"逐音素时长"，那是跨前后端的改动（见计划书 §4.3）。 */
+/* ---------------- 音素工作区的波形与试听（M7b-2，计划书 §4.3） ----------------
+   ★ 数据来源是**已经渲染好的那一份音频**（store.renderByTrack[轨] 里的 WAV 字节），
+     所以这一块不需要再动引擎，也天然「所见即所听」：波形画的就是会发出来的声音。
+     没渲染过时给明确指引，而不是画一条假波形。 */
+const waveBuf = ref<any>(null);
+let waveKey: any = null;
+const waveMsg = ref('');
+async function ensureWave(): Promise<any> {
+  const bytes = store.activeTrackId ? (store.renderByTrack as any)[store.activeTrackId] : null;
+  if (!bytes || !bytes.length) { waveMsg.value = t('这条轨还没有渲染结果：先渲染一次，才能看波形与秒级试听'); return null; }
+  if (waveBuf.value && waveKey === bytes) return waveBuf.value;
+  try {
+    const { ctx } = ensureAudio();
+    const copy = bytes.slice ? bytes.slice() : new Uint8Array(bytes);
+    const ab = await ctx.decodeAudioData(copy.buffer.slice(copy.byteOffset, copy.byteOffset + copy.byteLength));
+    waveBuf.value = ab; waveKey = bytes; waveMsg.value = '';
+    return ab;
+  } catch (e) { waveMsg.value = t('渲染结果无法解码（文件可能损坏）'); return null; }
+}
+const waveCv = ref<HTMLCanvasElement | null>(null);
+/* ★ §4.3 收尾：频域底图（与声库页共用 core/spectrogram.js）。
+   时域包络看得出"哪里有声/边界在哪"，频域才分得清辅音与元音 —— 这一格正好是音素工作区最需要的。
+   一个音符通常 0.3~1 秒，STFT 只有几毫秒，直接在重绘里算；按"音符 + 渲染字节"缓存。 */
+const phSpecOn = ref(localStorage.getItem('fufumidi_ph_spec') !== '0');
+watch(phSpecOn, (v) => { try { localStorage.setItem('fufumidi_ph_spec', v ? '1' : '0'); } catch (e) {} });
+let phSpecCache: { key: string; spec: any } = { key: '', spec: null };
+function noteSpectrogram(data: Float32Array, sr: number, i0: number, i1: number, key: string) {
+  if (phSpecCache.key === key) return phSpecCache.spec;
+  const spec = computeSpectrogram(data.subarray(i0, i1), sr, { fft: 512, hop: 128, maxFrames: 600 });
+  phSpecCache = { key, spec };
+  return spec;
+}
+/** 画「当前音符」这一段的波形 + 音素边界（横轴就是这个音符，纵轴是包络） */
+function drawWave() {
+  const cv = waveCv.value, ab = waveBuf.value, n = phNote.value;
+  if (!cv) return;
+  const w = cv.clientWidth || 320, h = phSpecOn.value ? 58 : 46;
+  const dpr = window.devicePixelRatio || 1;
+  /* ★ 宽高都要比：原来只比宽度 → 高度永远停在第一次的尺寸。
+     频域底图开着时画布是 58px、关掉是 46px，只比宽度的话两者会互相挤压（实测画出来是变形的）。 */
+  const needW = Math.round(w * dpr), needH = Math.round(h * dpr);
+  if (cv.width !== needW || cv.height !== needH) { cv.width = needW; cv.height = needH; }
+  const g = cv.getContext('2d'); if (!g) return;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const css = (k: string, fb: string) => (getComputedStyle(document.documentElement).getPropertyValue(k).trim() || fb);
+  g.strokeStyle = css('--hairline', '#e6e6e6'); g.beginPath(); g.moveTo(0, Math.round(h / 2) + 0.5); g.lineTo(w, Math.round(h / 2) + 0.5); g.stroke();
+  if (!ab || !n) {
+    g.fillStyle = css('--stone', '#9aa0a6'); g.font = '11px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(waveMsg.value || t('选中一个音符即可看它这一段的波形与音素边界'), w / 2, h / 2);
+    return;
+  }
+  const secPerBeat = 60 / (Number(store.bpm) || 120);
+  const t0 = Number(n.startBeat) * secPerBeat, t1 = (Number(n.startBeat) + Number(n.durBeat)) * secPerBeat;
+  const data = ab.getChannelData(0), sr = ab.sampleRate || 44100;
+  const i0 = Math.max(0, Math.floor(t0 * sr)), i1 = Math.min(data.length, Math.ceil(t1 * sr));
+  const cols = Math.max(1, Math.round(w));
+  // 频域底图（低频在下）：辅音/元音的差别在时域里看不出来，频域里一眼能分
+  if (phSpecOn.value && i1 - i0 > 512) {
+    const spec = noteSpectrogram(data, sr, i0, i1, (n.id || '') + '|' + i0 + '|' + i1);
+    if (spec && spec.frames) drawSpectrogram(g, spec, 0, 0, w, h, { grid: false });
+  }
+  // 时域包络压在频谱上：不透明一点，保证"哪里有声"仍然读得出来
+  g.fillStyle = css('--accent', '#ff5530'); g.globalAlpha = phSpecOn.value ? 0.85 : 0.55;
+  const per = Math.max(1, Math.floor((i1 - i0) / cols));
+  for (let x = 0; x < cols; x++) {
+    const a = i0 + x * per, b = Math.min(i1, a + per);
+    let peak = 0;
+    for (let i = a; i < b; i++) { const v = data[i] < 0 ? -data[i] : data[i]; if (v > peak) peak = v; }
+    const ph = Math.max(1, peak * (h / 2 - 2));
+    g.fillRect(x, h / 2 - ph, 1, ph * 2);
+  }
+  g.globalAlpha = 1;
+  const span = Math.max(1e-6, Number(n.durBeat));
+  phItems.value.forEach((it: any, i: number) => {
+    const x = (Number(it.t0) / span) * w;
+    g.strokeStyle = i === phIndex.value ? css('--accent', '#ff5530') : css('--stone', '#9aa0a6');
+    g.lineWidth = i === phIndex.value ? 2 : 1;
+    g.beginPath(); g.moveTo(Math.round(x) + 0.5, 0); g.lineTo(Math.round(x) + 0.5, h); g.stroke();
+  });
+}
+/** 秒级试听：整音 / 当前音素。回放的是渲染结果里对应的那一段，不再走引擎 */
+let auditionSrc: any = null;
+async function audition(scope: 'note' | 'phoneme') {
+  const ab = await ensureWave();
+  const n = phNote.value;
+  if (!ab || !n) { say(waveMsg.value || t('没有可试听的音频'), 'warn'); return; }
+  const secPerBeat = 60 / (Number(store.bpm) || 120);
+  const it = phCur.value;
+  const a = Number(n.startBeat) + (scope === 'phoneme' && it ? Number(it.t0) : 0);
+  const b = Number(n.startBeat) + (scope === 'phoneme' && it ? Number(it.t1) : Number(n.durBeat));
+  const off = Math.max(0, a * secPerBeat);
+  const dur = Math.max(0.03, (b - a) * secPerBeat);
+  try {
+    const { ctx } = ensureAudio();
+    if (auditionSrc) { try { auditionSrc.stop(); } catch (e) {} }
+    const src = ctx.createBufferSource();
+    src.buffer = ab; src.connect(ctx.destination);
+    const at = Math.min(off, Math.max(0, ab.duration - 0.02));
+    const len = Math.max(0.03, Math.min(dur, Math.max(0.03, ab.duration - at)));
+    src.start(0, at, len);
+    auditionSrc = src;
+    say((scope === 'phoneme' ? t('试听音素 ') : t('试听整音 ')) + Math.round(len * 1000) + ' ms', 'ok');
+  } catch (e) { say(t('试听失败：') + (e as any).message, 'error'); }
+}
+watch([() => store.activeTrackId, () => (store.renderByTrack as any)[store.activeTrackId || ''], () => (phNote.value ? phNote.value.id : ''), () => phIndex.value, () => phSpecOn.value],
+  () => { void ensureWave().then(() => nextTick(drawWave)); }, { immediate: true });
+function fmtBeat(v: number): string { return (Math.round(Number(v) * 1000) / 1000).toFixed(3); }
+function phMs(it: any): number {
+  const bpm = Number(store.bpm) || 120;
+  return Math.max(0, Math.round((Number(it.t1) - Number(it.t0)) * 60000 / bpm));
+}
+/** 当前音素上已设的覆盖值 */
+const phVals = computed<Record<string, number>>(() => {
+  const n = phNote.value;
+  if (!n || phIndex.value < 0) return {};
+  return (n.phExpressions || {})[String(phIndex.value)] || {};
+});
+const phOverrideCount = computed(() => Object.keys(phVals.value).length);
+/** 条带上点选音素（组件发上来的事件；点空白发 null） */
+function onPickPhoneme(p: any) {
+  selPh.value = p && p.noteId != null
+    ? { noteId: p.noteId, index: Number(p.index) || 0, text: String(p.text || '') }
+    : null;
+}
+function pickPhonemeIndex(i: number) {
+  const n = phNote.value;
+  if (!n) return;
+  const it = phItems.value[i];
+  store.select(n.id);
+  selPh.value = { noteId: n.id, index: i, text: (it && it.text) || '' };
+}
+function setPhExpr(abbr: string, e: Event) {
+  const n = phNote.value;
+  if (!n) return;
+  const el = e.target as HTMLInputElement;
+  const raw = String(el.value).trim();
+  if (!raw) { store.setPhonemeExpression(n.id, phIndex.value, abbr, null); return; }
+  const val = Number(raw);
+  if (!Number.isFinite(val)) { el.value = String(phVals.value[abbr] ?? ''); return; }
+  store.setPhonemeExpression(n.id, phIndex.value, abbr, val);
+}
+function clearPhExpr() {
+  const n = phNote.value;
+  if (!n) return;
+  store.clearPhonemeExpressions(n.id, phIndex.value);
+  say(t('已清空该音素的覆盖，回到音符/轨道默认值'), 'ok');
+}
+
+/* ------------------------------------------------------------ 多选批量操作（P2-1）
+ * 卷帘负责"几何"（复制/切分/合并/拖动），这里负责"内容"：批量填词与力度斜坡。
+ * 两者都要求先有多选，否则提示怎么多选 —— 不静默失败。 */
+/* ------------------------------------------------------------ 多轨叠置（卷帘） */
+/**
+ * 卷帘里要不要同时显示其它声部（ghost notes）。
+ *
+ * ★ 为什么需要：和声/叠唱是「对着另一条轨写」的活。以前卷帘只画当前轨，
+ *   第二条轨一选中，第一条就整条消失 —— 对不上拍、对不上字全靠耳朵记。
+ *   现在默认叠置（与 FL Studio 的 ghost notes、Ableton 多片段编辑同一个思路）。
+ */
+/*
+ * ★ 音符区默认**吃掉编辑区的剩余高度**（原来固定 320px，在 1440p 上只占一小块，
+ *   用户反馈「音符视图面积太小」）。这里给两档：
+ *   · 自动（默认）：flex:1 铺满剩余空间，行高由卷帘自己按可用高度自适应；
+ *   · 手动：用户拖过分隔条之后按像素固定（存 localStorage），双击分隔条恢复自动。
+ */
+const rollManualH = ref(Number(localStorage.getItem('fufumidi_roll_h')) || 0);
+const rollBoxStyle = computed(() => (rollManualH.value >= 160 ? { flex: 'none', height: rollManualH.value + 'px' } : {}));
+/*
+ * 详情面板（歌词/音素/曲线）默认**收起**：它们加起来 350px+，全展开时会把音符区挤到
+ * 只剩一条缝（实测固定高度时甚至压到 2px —— 卷帘直接看不见）。
+ * 收起后音符区吃满编辑区；选中音符时下面给一条单行「已选音符」摘要，点「显示详情」再展开。
+ */
+const detailOpen = ref(localStorage.getItem('fufumidi_sing_detail') === '1');
+watch(detailOpen, (v) => { try { localStorage.setItem('fufumidi_sing_detail', v ? '1' : '0'); } catch (e) {} });
+/** 拖分隔条：往上拖 = 音符区更高。拖过就算手动档，双击恢复自动 */
+function startRollResize(e: PointerEvent) {
+  const box = document.querySelector('.roll-box') as HTMLElement | null;
+  if (!box) return;
+  const startY = e.clientY, startH = box.getBoundingClientRect().height;
+  const move = (ev: PointerEvent) => {
+    const h = Math.round(Math.max(160, Math.min(window.innerHeight - 160, startH + (ev.clientY - startY))));
+    rollManualH.value = h;
+    rollH.value = h;
+  };
+  const up = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    try { localStorage.setItem('fufumidi_roll_h', String(rollManualH.value)); } catch (err) {}
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+}
+function resetRollHeight() {
+  rollManualH.value = 0;
+  try { localStorage.removeItem('fufumidi_roll_h'); } catch (e) {}
+}
+
+const rollOverlay = ref(localStorage.getItem('fufumidi_roll_overlay') !== '0');
+watch(rollOverlay, (v) => { try { localStorage.setItem('fufumidi_roll_overlay', v ? '1' : '0'); } catch (e) {} });
+const rollGhostLabels = ref(localStorage.getItem('fufumidi_roll_ghostlyric') !== '0');
+watch(rollGhostLabels, (v) => { try { localStorage.setItem('fufumidi_roll_ghostlyric', v ? '1' : '0'); } catch (e) {} });
+
+/** 声部轨（叠置只对声部有意义；伴奏轨没有音符） */
+const voiceTracks = computed<any[]>(() => (store.tracks || []).filter(t => t.kind !== 'audio'));
+/** 传给卷帘的轨道表：含当前轨，顺序与左侧轨列表一致 */
+/** 卷帘的像素高度：只有「手动档」才给具体值（自动档走 fill） */
+const rollH = ref(rollManualH.value || 0);
+watch(rollManualH, (v) => { rollH.value = v || 0; });
+
+const rollTracks = computed<any[]>(() => voiceTracks.value.map((t, i) => ({
+  id: t.id, name: t.name, color: trackColorOf(t, i), notes: t.notes || [],
+  hidden: store.rollHidden.includes(t.id),
+})));
+function colorOf(t: any) {
+  const i = voiceTracks.value.indexOf(t);
+  return trackColorOf(t, i < 0 ? 0 : i);
+}
+/**
+ * 卷帘里点到了别的轨的音符：把那条轨切成当前轨、并把这个音符选上。
+ *
+ * ★ 不在卷帘里跨轨改数据：编辑 api 是「按当前轨」注入的（`rollApi()` 只认 tr 的音符），
+ *   跨轨拖动必须换轨后由新的 api 接手 —— 这样撤销栈、渲染过期标记也都跟着走对的那条轨。
+ */
+function onPickGhostNote(e: any) {
+  if (!e || !e.trackId) return;
+  /* M8d：点幽灵音符 = **把它加进选区**（跨轨选区），不再强制切轨。
+     切轨有轨条那条主路径（点色块），而"选一个别的轨的音"以前根本做不到 ——
+     于是批量工具（渐强/渐弱/移调…）无法跨轨。拖动仍不支持跨轨（编辑 api 按当前轨注入），
+     这一点保留原设计：跨轨先选、要拖再切轨。 */
+  if (e.noteId) { store.select(e.noteId, true); return; }
+  if (e.trackId !== store.activeTrackId) store.selectTrack(e.trackId);
+}
+
+const selNotes = computed<any[]>(() => {
+  // M8d：跨轨（用 store 的选择集合，而不是"当前轨 ∩ 选中 id"）—— 否则批量工具永远只能作用在当前轨
+  const cross = store.selectedNotes as any[];
+  if (cross && cross.length) return cross;
+  const ids = store.selectedIds;
+  return (tr.value?.notes || []).filter((n: any) => ids.includes(n.id))
+    .slice().sort((a: any, b: any) => a.startBeat - b.startBeat);
+});
+function needMulti(): boolean {
+  if (selNotes.value.length >= 2) return true;
+  sayErr(t('这个操作需要先选中 2 个以上音符'), t('在卷帘里框选，或按 Ctrl+A 全选。'));
+  return false;
+}
+/** 批量填词：空格分词 → 按音符顺序依次填；只有一个词时所有音符都用它 */
+async function batchLyric() {
+  if (!needMulti()) return;
+  const list = selNotes.value;
+  const s = await app.promptDialog({
+    title: t('批量填词'),
+    msg: t('用空格分词，按音符先后依次填。只填一个词时所有音符都用这个词。'),
+    value: '',
+    okText: t('填词'),
+  });
+  if (s == null) return;
+  const words = String(s).trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return;
+  store.pushUndo();
+  list.forEach((n: any, i: number) => {
+    store.updateNote(n.id, { lyric: words.length === 1 ? words[0] : words[Math.min(i, words.length - 1)] });
+  });
+  if (words.length > 1 && words.length < list.length) {
+    say(t('已填词，但词比音符少：后面 ') + String(list.length - words.length) + t(' 个音符沿用了最后一个词'), 'warn');
+  } else {
+    say(t('已批量填词：') + String(words.length) + t(' 个词 → ') + String(list.length) + t(' 个音符'), 'ok');
+  }
+}
+/**
+ * 力度斜坡：渐强 20→100 / 渐弱 100→20。
+ * UTAU 走 velocity（0..100），DiffSinger 走 dyn（-240..120，0 为默认）——
+ * 两条引擎的"力度"语义完全不同，所以映射写在这里而不是让用户自己算。
+ */
+function rampVelocity(dir: 1 | -1) {
+  if (!needMulti()) return;
+  const list = selNotes.value;
+  const n = list.length;
+  store.pushUndo();
+  list.forEach((note: any, i: number) => {
+    const k = n <= 1 ? 1 : i / (n - 1);
+    const v = dir > 0 ? 20 + 80 * k : 100 - 80 * k;
+    if (isUtau.value) store.updateNote(note.id, { velocity: Math.round(v) });
+    else store.updateNote(note.id, { dyn: Math.round(-120 + (v / 100) * 240) });
+  });
+  say(dir > 0 ? t('已按音符顺序渐强（20 → 100）') : t('已按音符顺序渐弱（100 → 20）'), 'ok');
+}
+
+/* ------------------------------------------------------------ 声库别名可用性（P2-5）
+ * 渲染引擎只有在渲完之后才把"这个词不在声库别名表里"塞进 warnings ——
+ * 那时已经等了几十秒。这里把**同一个别名表**提前取来（主进程的 utau:aliases），
+ * 一边打字一边标红，并给出相近别名建议。
+ * ★ 取不到别名表（engine 缺失 / 非 UTAU 轨）时**什么都不显示**，绝不误报。 */
+const aliasSet = ref<Set<string> | null>(null);
+const aliasFor = ref('');                 // 别名集对应的声库目录（换歌手要重取）
+let aliasBusy = false;
+watch([() => tr.value?.singer, () => tr.value?.engine], async ([dir, eng]) => {
+  aliasSet.value = null; aliasFor.value = '';
+  const b = window.fuBridge as any;
+  if (!dir || eng !== 'utau' || !b || typeof b.utauAliases !== 'function' || aliasBusy) return;
+  aliasBusy = true;
+  try {
+    const r = await b.utauAliases({ voicebank: dir, limit: 2000 });
+    if (r && r.ok && Array.isArray(r.aliases)) {
+      aliasSet.value = new Set(r.aliases.map((x: string) => String(x).toLowerCase()));
+      aliasFor.value = dir;
+    }
+  } catch (_) { /* 拿不到就不提示：这是增强功能，不该挡住编辑 */ }
+  finally { aliasBusy = false; }
+}, { immediate: true });
+
+/** 本轨里"歌词不在别名表里"的音符（空歌词不算，引擎会用默认元音） */
+const missingLyrics = computed<any[]>(() => {
+  const set = aliasSet.value;
+  const t0 = tr.value;
+  if (!set || !t0 || t0.kind !== 'voice' || t0.engine !== 'utau') return [];
+  return (t0.notes || []).filter((n: any) => n.lyric && !set.has(String(n.lyric).toLowerCase()));
+});
+const selLyricMissing = computed(() => {
+  const set = aliasSet.value;
+  const n = sel.value;
+  if (!set || !n || !n.lyric) return false;
+  return !set.has(String(n.lyric).toLowerCase());
+});
+/** 相近别名（前缀互含 + 去掉音高后缀后相同）：够用且不引入编辑距离的复杂度 */
+function suggestAliases(text: string, limit = 6): string[] {
+  const set = aliasSet.value;
+  if (!set || !text) return [];
+  const low = String(text).toLowerCase();
+  const bare = low.replace(/[_,-]?[a-g]#?-?\d?$/i, '');
+  const out: string[] = [];
+  for (const a of set) {
+    if (a === low) continue;
+    if (a.startsWith(low) || low.startsWith(a) || (bare && a.replace(/[_,-]?[a-g]#?-?\d?$/i, '') === bare)) {
+      out.push(a);
+      if (out.length >= limit) break;
+    }
+  }
+  return out;
+}
+function gotoFirstMissing() {
+  const first = missingLyrics.value[0];
+  if (!first) return;
+  store.select(first.id);
+  say(t('已选中第一个待修音符：') + (first.lyric || ''), 'info', { hint: t('可以点下面的相近别名直接替换，或改成声库里有的发音。') });
+}
+
+/* ------------------------------------------------------------ 播放头 / 音阶高亮（P2-1）
+ * 播放头是"当前时刻在时间轴上的位置"，卷帘拿它画竖线，并以它为切分/粘贴的落点。
+ * 换算用工程 BPM：拍 = 秒 × BPM / 60。 */
+const playheadBeat = computed(() => Math.max(0, (tpos.value / 1000) * (store.bpm / 60)));
+
+/**
+ * 音阶高亮（P2-1）：只做视觉分区，不改数据。
+ * 默认按工程调（store.meta.key 若有），没有就关闭 —— 不做"猜调"这种事。
+ */
+const scale = ref<{ root: number; type: string } | null>(null);
+try {
+  const raw = localStorage.getItem('fufumidi_sing_scale');
+  if (raw && raw !== 'off') scale.value = JSON.parse(raw);
+} catch (_) { /* 脏值忽略 */ }
+function onRollScale(type: string) {
+  if (!type || type === 'off') scale.value = null;
+  else scale.value = { root: scale.value ? scale.value.root : 0, type };
+  try { localStorage.setItem('fufumidi_sing_scale', scale.value ? JSON.stringify(scale.value) : 'off'); } catch (_) {}
+}
+function onRollScaleRoot(root: number) {
+  if (!scale.value) return;
+  scale.value = { root: Number(root) || 0, type: scale.value.type };
+  try { localStorage.setItem('fufumidi_sing_scale', JSON.stringify(scale.value)); } catch (_) {}
+}
+
+/** 选中相邻音符（按 startBeat 排序）：键盘流里 ←→ / Tab 用它（M7a） */
+function stepNote(dir: number) {
+  const t0 = store.activeTrack; if (!t0 || !t0.notes.length) return;
+  const arr = [...t0.notes].sort((a: any, b: any) => a.startBeat - b.startBeat || a.pitch - b.pitch);
+  const i = arr.findIndex((x: any) => x.id === store.selectedId);
+  const j = Math.max(0, Math.min(arr.length - 1, (i < 0 ? 0 : i + dir)));
+  const n = arr[j]; if (n) store.select(n.id);
+}
+
+/* ---------------- 和声组（M8a，计划书 §4.5） ----------------
+   组 = 「一组轨 + 组名」，成员轨的数据一个字段都不动（渲染/导出/撤销都不用改）。
+   点组 → 切到首成员并把其余成员作为幽灵音符叠出来（复用既有的多轨叠置）。 */
+const groups = computed<any[]>(() => (store.meta && (store.meta as any).groups) || []);
+/** 色盲友好配色开关（M9c）：读的是模块级状态，改完让它参与响应式（下面的 rev 会带动重绘） */
+const cbOn = computed(() => colorblindMode());
+const cbRev = ref(0);
+watch(cbOn, () => { cbRev.value += 1; });
+function makeGroup() {
+  const pick = voiceTracks.value.filter((x: any) => x.kind === 'voice').map((x: any) => x.id);
+  const ids = store.activeTrackId && pick.includes(store.activeTrackId) ? [store.activeTrackId] : (pick.slice(0, 1));
+  const id = store.addGroup(ids);
+  if (!id) { say(t('先选中一条声部轨再成组'), 'warn'); return; }
+  say(t('已建组；在组名上点一下可改名，点 ⊕ 把当前轨加进去'), 'ok');
+}
+function renameGroup(g: any, e: Event) { store.renameGroup(g.id, (e.target as HTMLInputElement).value); }
+function addCurrentToGroup(g: any) {
+  if (!store.activeTrackId) return;
+  if (g.trackIds.includes(store.activeTrackId)) { say(t('当前轨已经在这个组里'), 'warn'); return; }
+  store.setGroupMembers(g.id, [...g.trackIds, store.activeTrackId]);
+  say(t('已加入该组'), 'ok');
+}
+function useGroup(g: any) {
+  const first = g.trackIds.find((id: string) => store.tracks.some((x: any) => x.id === id));
+  if (first) store.selectTrack(first);
+  rollOverlay.value = true;
+  say(t('已切到组内首轨，其余成员以幽灵音符显示'), 'ok');
+}
+function dropGroup(g: any) { store.removeGroup(g.id); }
+/** 组级静音 / 只听本组（M8b）：批量写回成员轨，用户能在每条轨上直接看到结果 */
+function groupMute(g: any) {
+  const n = store.applyGroup(g.id, { muted: !g.muted });
+  say((g.muted ? t('已取消本组静音（') : t('已静音本组（')) + n + t(' 条轨）'), 'ok');
+}
+/** 组内统一音量（M8b）：一次把增益写到每条成员轨 —— 和声组平衡靠这一个旋钮 */
+function groupGain(g: any, e: Event) {
+  const v = Number((e.target as HTMLInputElement).value);
+  const n = store.applyGroup(g.id, { gainDb: Number.isFinite(v) ? v : 0 });
+  say(t('本组音量已设为 ') + (Number.isFinite(v) ? v : 0) + t(' dB（') + n + t(' 条轨）'), 'ok');
+}
+/** 组内统一编辑 v1（M8c）：整组移调（一次撤销点） */
+function groupTranspose(g: any, d: number) {
+  const n = store.transposeGroup(g.id, d);
+  if (!n) { say(t('这个组里还没有音符'), 'warn'); return; }
+  say(t('本组 ') + n + t(' 个音符已移调 ') + (d > 0 ? '+' : '') + d + t(' 半音'), 'ok');
+}
+/** 组内统一量化（M8c 续）：把整组音符的起点吸到 1/16 网格 */
+function groupQuantize(g: any) {
+  const n = store.quantizeGroup(g.id, 0.25);
+  say(n ? (t('本组已量化 ') + n + t(' 个音符到 1/16 网格')) : t('本组音符已经都在网格上'), n ? 'ok' : 'warn');
+}
+/* 色盲友好配色（M9c）：整体换板 + 让所有用到轨道色的地方重算（靠 trackRev 触发重绘） */
+function toggleColorblind() {
+  const on = setColorblindMode(!colorblindMode());
+  say(on ? t('已切换到色盲友好配色（Okabe–Ito 八色）') : t('已切回默认配色'), 'ok');
+}
+function groupSolo(g: any) {
+  const n = store.applyGroup(g.id, { solo: !g.solo });
+  say((g.solo ? t('已退出独奏：全部轨道恢复发声') : t('只听本组：') + n + t(' 条轨发声')), 'ok');
+}
+
+/** 页面级快捷键：卷帘有焦点时它自己处理，这里负责"没点进卷帘也能用"的那部分 */
+function onSingKey(e: KeyboardEvent) {
+  const el = e.target as HTMLElement | null;
+  const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+  const mod = e.ctrlKey || e.metaKey;
+  /* ★ 卷帘自己也监听 window.keydown（PianoRoll.onKey），撤销/重做两边都会响应 →
+     一次 Ctrl+Z 走两步历史：实测「导入 713 音符 → 批量填词 → Ctrl+Z」直接变成 0 音符。
+     这里让出这几组键：焦点在卷帘里时归卷帘管，其余情况归本页管。 */
+  const inRoll = !!el && typeof (el as any).closest === 'function' && !!(el as any).closest('.pr');
+  if (mod && !typing && !inRoll && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    if (e.shiftKey) store.redo(); else store.undo();
+    return;
+  }
+  if (mod && !typing && !inRoll && e.key.toLowerCase() === 'y') { e.preventDefault(); store.redo(); return; }
+  if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); void saveProject(false); return; }
+  if (typing) return;
+  /* ---- 音符属性键盘流（M7a，计划书 §4.4）：选中一个音之后手不离键 ----
+     ↑↓ 半音、Ctrl+↑↓ 八度、←→ 上一个/下一个音、Tab 切换、数字键 1-6 改时值。
+     卷帘里让给卷帘自己（那里有自己的方向键语义），这里只处理"焦点不在卷帘"的情况。 */
+  const cur = store.activeNote;
+  if (cur && !inRoll) {
+    /* ★ 只补卷帘**没有**的那几组：普通 ↑↓ 与 ←→ 归卷帘（它是 window 级监听，
+       而且 ←→ 在那边是"按吸附步长移动"，语义不同，重复处理会一次动两下）。 */
+    if (mod && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      const step = 12 * (e.key === 'ArrowUp' ? 1 : -1);
+      store.updateNote(cur.id, { pitch: Math.max(0, Math.min(127, cur.pitch + step)) });
+      return;
+    }
+    if (!mod && e.key === 'Tab') { e.preventDefault(); stepNote(e.shiftKey ? -1 : 1); return; }
+    if (!mod) {
+      const dur: Record<string, number> = { '1': 0.125, '2': 0.25, '3': 0.5, '4': 1, '5': 2, '6': 4 };
+      if (dur[e.key]) { e.preventDefault(); store.updateNote(cur.id, { durBeat: dur[e.key] }); return; }
+    }
+  }
+  if (e.key === ' ') { e.preventDefault(); void tplay(); return; }
+  if (e.key === 'Enter') { e.preventDefault(); if (!renderBlocked.value) void doRender(); return; }
+  if (e.key === '[') { setTab('editor'); return; }
+  if (e.key === ']') { setTab('banks'); return; }
+  /* P1-6：循环区间与跟随播放也要能用键盘 —— 一边听一边标点位时手不离键 */
+  if (e.key.toLowerCase() === 'l') { e.preventDefault(); toggleLoop(); return; }
+  if (e.key === ',') { e.preventDefault(); markLoop('a'); return; }
+  if (e.key === '.') { e.preventDefault(); markLoop('b'); return; }
+  if (e.key.toLowerCase() === 'f') { e.preventDefault(); toggleFollow(); return; }
 }
 
 function onLyric(note, e) {
   const text = e.target.value;
   store.updateNote(note.id, { lyric: text });
   void askCands(note.id, text);
-}
-
-/** 属性面板的提交式编辑：@change（commit 时机）先入撤销栈再应用。
- *  歌词框是 @input（每字符），撤销点放在 @focus（进入编辑前整段入栈）。 */
-function commitNote(sel: any, patch: any) {
-  store.pushUndo();
-  store.updateNote(sel.id, patch);
 }
 
 async function askCands(noteId, text) {
@@ -195,6 +972,57 @@ function pickCand(id, text) {
   cands.value = [];
 }
 
+/* ------------------------------------------------------------ 空态 / 渲染门禁 */
+
+/**
+ * 渲染按钮为什么点不动 —— 直接把原因写在按钮上。
+ * 旧界面在"没选歌手 / 没音符"时按钮是灰的，但**不说为什么**，用户只能猜。
+ */
+const renderReason = computed<string>(() => {
+  if (store.busy) return t('正在渲染…');
+  const t0 = tr.value;
+  if (!t0) return t('先在左侧新建或选中一条轨道');
+  if (t0.kind === 'audio') return t('伴奏轨不需要渲染');
+  if (!t0.notes.length) return t('这条轨还没有音符：导入 MIDI 或用画笔在卷帘上画');
+  if (!t0.singer) return t('还没有选歌手：在顶栏的声库选择器里挑一个');
+  return '';
+});
+const renderBlocked = computed(() => !!renderReason.value);
+/* §4.6 增量渲染统计：只显示**当前轨**的，别的轨的数字挂在这里没有意义 */
+const renderStats = computed(() => {
+  const s = store._phraseStats;
+  return s && s.trackId === (store.activeTrackId || '') ? s : null;
+});
+
+/**
+ * 编辑器空态。**判据只有一个入口**（以前横幅的条件是 isEmptyProject，文案却写"还没有轨道"，
+ * 而新建工程本来就预置一条空轨 —— 于是"还没有轨道"和左边的「DS 未命名轨」卡片同屏出现，
+ * 自相矛盾。本轮 UX 复核第 1 条）。
+ *   no-track   ：真的一条轨都没有（极少见）
+ *   empty-track：有一条空声部轨、什么都还没做（新建工程的常态）
+ */
+const emptyKind = computed<'no-track' | 'empty-track' | ''>(() => {
+  if (store.busy) return '';
+  if (!store.tracks.length) return 'no-track';
+  if (store.tracks.length === 1
+    && store.tracks[0].kind === 'voice'
+    && store.tracks[0].notes.length === 0
+    && Object.keys(store.renderByTrack).length === 0
+    && !store.projectPath) return 'empty-track';
+  return '';
+});
+const isEmptyProject = computed(() => !!emptyKind.value);
+/** 空态里的「新建声部轨…」二级：引擎选型不占主按钮位（UX 复核第 4 条） */
+const newTrackOpen = ref(false);
+/* 音高曲线面板：**默认收起**。
+   ★ 以前它跟着「详情」一起展开，一屏里卷帘只剩两个八度，而 0 个点的曲线还占着一大块空白
+     （本轮 UX 复核第 2 条）。现在折叠状态独立记忆，轨上已经有曲线点时默认展开（别把用户的数据藏起来）。 */
+const curveOpen = ref(false);
+watch([() => store.activeTrackId, () => ((tr.value && tr.value.pitchCurve) || []).length], () => {
+  const pts = ((tr.value && tr.value.pitchCurve) || []).length;
+  if (pts > 0) curveOpen.value = true;
+}, { immediate: true });
+
 /* ------------------------------------------------------------ 导入 */
 
 const busyImport = ref(false);
@@ -217,7 +1045,7 @@ function probeDuration(path: string): Promise<number> {
 /** 导入音频 → 新建一条**伴奏轨**（对应上游 `UWavePart`） */
 async function importAudio() {
   const b = window.fuBridge;
-  if (!b || typeof b.pickAudio !== 'function') { msg.value = t('桌面版才能导入音频'); return; }
+  if (!b || typeof b.pickAudio !== 'function') { sayErr(t('桌面版才能导入音频'), t('这是浏览器预览环境；请用 FuFumidi 桌面版打开。')); return; }
   busyImport.value = true;
   try {
     const path = await b.pickAudio();
@@ -225,11 +1053,11 @@ async function importAudio() {
     const fileName = String(path).split(/[\\/]/).pop() || 'audio';
     const durMs = await probeDuration(path);
     store.addAudioTrack(path, fileName, durMs);
-    msg.value = durMs > 0
-      ? t('已导入伴奏：') + fileName
-      : t('已导入伴奏（时长未探到，可能是浏览器不支持的编码）：') + fileName;
+    if (durMs > 0) say(t('已导入伴奏：') + fileName, 'ok');
+    else say(t('已导入伴奏（时长未探到，可能是浏览器不支持的编码）：') + fileName, 'warn',
+      { hint: t('能播放，但进度条总长不准；换成 wav/mp3 再导一次即可。') });
   } catch (e) {
-    msg.value = String((e as any)?.message || e);
+    sayErr(String((e as any)?.message || e), t('检查这个音频文件能否被系统播放器打开。'));
   } finally {
     busyImport.value = false;
   }
@@ -238,7 +1066,7 @@ async function importAudio() {
 /** 导入 MIDI → 选轨 → 落进当前（或新建的）声部轨 */
 async function importMidi() {
   const b = window.fuBridge;
-  if (!b || typeof b.pickFile !== 'function') { msg.value = t('桌面版才能导入 MIDI'); return; }
+  if (!b || typeof b.pickFile !== 'function') { sayErr(t('桌面版才能导入 MIDI'), t('这是浏览器预览环境；请用 FuFumidi 桌面版打开。')); return; }
   busyImport.value = true;
   try {
     const path = await b.pickFile({
@@ -247,20 +1075,65 @@ async function importMidi() {
     });
     if (!path) return;
     const bytes = await b.readBinary(path);
-    if (!bytes) { msg.value = t('读取文件失败'); return; }
-    const { parseMidi, buildSong } = await import('../core/midi.js');
-    const r = store.parseMidiTracks(
-      bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
-      buildSong, parseMidi);
-    if (r.error) { msg.value = r.error; return; }
-    const list = r.tracks || [];
-    if (list.length === 1) {                       // 只有一条就不弹窗了
-      applyPicked(list[0], r.tpb || 480, r.bpm || 120);
-      return;
-    }
-    midiPick.value = { tracks: list, tpb: r.tpb || 480, bpm: r.bpm || 120 };
+    if (!bytes) { sayErr(t('读取文件失败'), t('文件可能被占用或没有读取权限，换一个位置再试。')); return; }
+    await openMidiBytes(bytes);
   } catch (e) {
-    msg.value = String((e as any)?.message || e);
+    sayErr(String((e as any)?.message || e), t('确认它是标准 MIDI（.mid）；损坏或纯音频文件解析不了。'));
+  } finally {
+    busyImport.value = false;
+  }
+}
+
+/**
+ * MIDI 字节 → 解析 → 选轨（导入 MIDI 与「从曲库选」共用这一段）。
+ *
+ * 抽出来的原因：曲库里的 115 首本来就已经在数据目录里了，却只能走系统文件对话框
+ * 重新找一遍文件 —— 实测时为了导入一首库里的歌，得先把它复制成 ASCII 路径再驱动对话框。
+ */
+async function openMidiBytes(bytes: any) {
+  const { parseMidi, buildSong } = await import('../core/midi.js');
+  const r = store.parseMidiTracks(
+    bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
+    buildSong, parseMidi);
+  if (r.error) { sayErr(r.error, t('确认它是标准 MIDI（.mid）；损坏或纯音频文件解析不了。')); return; }
+  const list = r.tracks || [];
+  if (list.length === 1) {                       // 只有一条就不弹窗了
+    applyPicked(list[0], r.tpb || 480, r.bpm || 120);
+    return;
+  }
+  midiPick.value = { tracks: list, tpb: r.tpb || 480, bpm: r.bpm || 120 };
+}
+
+/* ------------------------------------------------------------ 从曲库选 MIDI（P1-12） */
+
+const libDlg = ref<{ q: string } | null>(null);
+/** 曲库里的 MIDI 曲目（app.songs 是唯一来源；每首都有 meta.path 指向真实 .mid 文件） */
+const libSongs = computed<any[]>(() => {
+  const q = (libDlg.value?.q || '').trim().toLowerCase();
+  return ((app as any).songs || [])
+    .filter((s: any) => (s.kind || 'midi') === 'midi')
+    .filter((s: any) => !q || String(s.name || '').toLowerCase().includes(q))
+    .slice(0, 400);
+});
+
+function openLibraryDialog() {
+  libDlg.value = { q: '' };
+}
+
+async function importFromLibrary(song: any) {
+  const b = window.fuBridge as any;
+  const path = song && song.meta && song.meta.path;
+  if (!path) { sayErr(t('这首曲目没有对应的 MIDI 文件'), t('可以在「资源管理」里跑一次曲库自检重建。')); return; }
+  if (!b || typeof b.readBinary !== 'function') { sayErr(t('桌面版才能导入 MIDI')); return; }
+  busyImport.value = true;
+  try {
+    const bytes = await b.readBinary(path);
+    if (!bytes) { sayErr(t('读取文件失败') + '：' + path); return; }
+    libDlg.value = null;
+    await openMidiBytes(bytes);
+    say(t('已从曲库载入「') + String(song.name || '') + t('」'), 'ok', { hint: t('下一步：选一条轨 → 选歌手 → 渲染。') });
+  } catch (e: any) {
+    sayErr(String((e && e.message) || e));
   } finally {
     busyImport.value = false;
   }
@@ -273,11 +1146,326 @@ function applyPicked(midiTrack: any, tpb: number, bpm: number) {
     const id = store.addTrack('diffsinger');
     target = store.tracks.find(x => x.id === id) || null;
   }
-  if (!target) { msg.value = t('无法创建轨道'); return; }
-  const n = store.applyMidiTrack(target.id, midiTrack, tpb, bpm, true);
+  if (!target) { sayErr(t('无法创建轨道'), t('先去左侧「新建轨」建一条声部轨，再导入 MIDI。')); return; }
+  const useTrack = monoPick.value && overlapCount(midiTrack) > 0
+    ? { ...midiTrack, notes: monophonic(midiTrack.notes) }
+    : midiTrack;
+  const n = store.applyMidiTrack(target.id, useTrack, tpb, bpm, true);
   store.patchTrack(target.id, { name: target.name || midiTrack.name || '' });
   midiPick.value = null;
-  msg.value = t('已导入 ') + String(n) + t(' 个音符');
+  say(t('已导入 ') + String(n) + t(' 个音符'), 'ok', { hint: t('下一步：选歌手 → 渲染。') });
+  fitRollSoon();
+}
+
+/* ------------------------------------------------------------ 单音化（P1-6） */
+
+/**
+ * MIDI 导入时「只取最高音」。
+ *
+ * ★ 实测教训：`烦恼歌.mid` 里名为 voice 的轨其实是柱式和弦（713 音符、465 处同时发声），
+ *   原样导入后每个 tick 上有 3~4 个音同时唱一个歌词 —— 必然糊。旋律线通常在最高声部，
+ *   所以给一个一键单音化；默认开（复音轨本来就不该直接拿去唱）。
+ */
+const monoPick = ref(true);
+
+/** 同一 tick 同时响的"多余"音符数（>0 即说明这是复音轨） */
+function overlapCount(mt: any): number {
+  const seen = new Set<number>();
+  let dup = 0;
+  for (const n of (mt && mt.notes) || []) {
+    if (seen.has(n.start)) dup++; else seen.add(n.start);
+  }
+  return dup;
+}
+
+/** 单音化：同一 start 只留最高音，再按时间排序 */
+function monophonic(notes: any[]): any[] {
+  const best = new Map<number, any>();
+  for (const n of notes || []) {
+    const cur = best.get(n.start);
+    if (!cur || n.midi > cur.midi) best.set(n.start, n);
+  }
+  return [...best.values()].sort((a, b) => a.start - b.start);
+}
+
+/** 导入后把卷帘缩放到"全曲入画"，否则 4 分钟的歌要横向滚十几屏（用户报的"音符显示不全"） */
+function fitRollSoon() {
+  setTimeout(() => {
+    try { prRef.value?.fitView?.(); } catch (_) { /* 卷帘还没挂载就算了 */ }
+  }, 120);
+}
+
+/* ------------------------------------------------------------ 批量填词对话框（P1-7/8） */
+
+type LyricMode = 'auto' | 'char' | 'space' | 'line';
+type FillMode = 'seq' | 'loop' | 'trim';
+/** 对齐方式：seq=顺序（老行为）；spread=整首按比例；phrases=按乐句（P1：字数≠音符数时的正解） */
+type AlignMode = 'seq' | 'spread' | 'phrases' | 'split';
+const lyricDlg = ref<{ text: string; mode: LyricMode; fill: FillMode; align: AlignMode; gap: number;
+                            alts?: string[][]; altsFrom?: string[] } | null>(null);
+
+/** 多音字候选：与转换后的音节一一对应（长度 >1 的才是多音字） */
+const heteroList = computed(() => {
+  const d = lyricDlg.value;
+  if (!d || !d.alts || !d.alts.length) return [];
+  const toks = d.text.split(/\s+/).filter(Boolean);
+  const out: { index: number; ch: string; current: string; options: string[] }[] = [];
+  d.alts.forEach((opts, i) => {
+    if (!opts || opts.length < 2) return;
+    out.push({ index: i, ch: (d.altsFrom && d.altsFrom[i]) || '', current: toks[i] || '', options: opts.slice(0, 4) });
+  });
+  return out.slice(0, 16);
+});
+/** 点候选：替换第 index 个音节（不动其它字，用户可反复换） */
+function pickPinyin(index: number, syl: string) {
+  const d = lyricDlg.value;
+  if (!d) return;
+  const toks = d.text.split(/\s+/).filter(Boolean);
+  if (index < 0 || index >= toks.length) return;
+  toks[index] = syl;
+  d.text = toks.join(' ');
+  d.mode = 'space';
+}
+const pinyinBusy = ref(false);
+
+const CJK_RE = /[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/;
+const isWordChar = (c: string) => /[0-9A-Za-z\u00C0-\u024F\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/.test(c);
+
+/**
+ * 歌词分词。
+ *
+ * ★ 旧实现只有 `split(/\\s+/)` 一条规则：把中文歌词整段粘进去 = **一个词**，
+ *   于是 713 个音符每个都被填上整段歌词（实测提示「已批量填词：1 个词 → 713 个音符」）；
+ *   粘整首（带换行）则是每行一个词。中文歌词必须能逐字切。
+ */
+function tokenizeLyrics(text: string, mode: LyricMode): string[] {
+  const s = String(text || '');
+  if (mode === 'space') return s.trim().split(/\s+/).filter(Boolean);
+  if (mode === 'line') return s.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  if (mode === 'char') return [...s].filter((c) => !/\s/.test(c) && isWordChar(c));
+  // auto：中日韩逐字、拉丁按词、标点与空白当分隔符
+  const out: string[] = [];
+  let buf = '';
+  const flush = () => { if (buf) { out.push(buf); buf = ''; } };
+  for (const ch of s) {
+    if (CJK_RE.test(ch)) { flush(); out.push(ch); }
+    else if (isWordChar(ch)) buf += ch;
+    else flush();
+  }
+  flush();
+  return out;
+}
+const lyricTokens = computed(() => tokenizeLyrics(lyricDlg.value?.text || '', lyricDlg.value?.mode || 'auto'));
+
+function openLyricDialog(prefill = '') {
+  if (!selNotes.value.length) {
+    sayErr(t('先选中音符再填词'), t('在卷帘里框选，或先按 Ctrl+A 全选。'));
+    return;
+  }
+  lyricDlg.value = { text: prefill, mode: 'auto', fill: 'seq', align: 'seq', gap: 1 };
+}
+
+function applyLyricDialog() {
+  const d = lyricDlg.value;
+  if (!d) return;
+  const list = selNotes.value;
+  const words = lyricTokens.value;
+  if (!words.length) { sayErr(t('没有可用的词'), t('换个分词方式，或先把歌词粘进来。')); return; }
+  store.pushUndo();
+  let blank = 0;
+  /* ★ 对齐方式（P1-8）：
+     顺序填在「字数 ≠ 音符数」时一定错位 —— 实测烦恼歌 441 字 / 275 音符，顺序填只能唱到
+     第 166 个字（副歌整段没词）。spread / phrases 把字按比例铺满全曲，首尾永远对得上。 */
+  /* ★ 切开长音符：字比音符多时把长音对半切开，**一个字都不丢**（会改变音符个数）。
+     实测《烦恼歌》441 字 / 275 音符：按乐句铺开会丢 166 个字且丢在句中
+     （「不爱的不断打扰」→「不 的 断 打 你」），唱出来直接错词。 */
+  if (d.align === 'split') {
+    const ordered = [...list].sort((a: any, b: any) => (a.startBeat - b.startBeat));
+    const r = splitNotesToFit(ordered, words, Math.max(0.125, Number(d.gap) || 1));
+    const n = store.replaceNotes(tr.value!.id, r.pieces);
+    say(t('按乐句切开长音符：') + String(r.phrases) + t(' 个乐句')
+      + String(words.length) + t(' 个字 → ') + String(n) + t(' 个音符')
+      + (r.added ? t('（切开 ') + String(r.added) + t(' 处）') : '')
+      + (r.dropped ? t('（有 ') + String(r.dropped) + t(' 个字实在放不下，已跳过）') : ''),
+      r.dropped ? 'warn' : 'ok',
+      { hint: t('旋律节奏会因切分略有变化；想还原就按 Ctrl+Z。') });
+    lyricDlg.value = null;
+    return;
+  }
+  if (d.align !== 'seq') {
+    const ordered = [...list].sort((a: any, b: any) => (a.startBeat - b.startBeat));
+    const r = alignLyrics(ordered, words, d.align, Math.max(0.125, Number(d.gap) || 1));
+    ordered.forEach((n: any, i: number) => {
+      const w = r.lyrics[i] || '';
+      if (!w) blank++;
+      store.updateNote(n.id, { lyric: w });
+    });
+    const how = d.align === 'phrases'
+      ? t('按乐句对齐：') + String(r.phrases) + t(' 个乐句')
+      : t('整首按比例铺开：');
+    say(how + String(words.length) + t(' 个字 → ') + String(ordered.length) + t(' 个音符')
+        + (r.skipped ? t('（字数多，跳过 ') + String(r.skipped) + t(' 个字）') : '')
+        + (r.repeated ? t('（音符多，重复 ') + String(r.repeated) + t(' 个字）') : ''),
+        'ok', { hint: t('首尾已对齐；个别字想改，双击音符直接编辑。') });
+    lyricDlg.value = null;
+    return;
+  }
+  list.forEach((n: any, i: number) => {
+    let w = '';
+    if (i < words.length) w = words[i];
+    else if (d.fill === 'loop') w = words[i % words.length];
+    else if (d.fill === 'seq') w = words[words.length - 1];
+    if (!w) blank++;
+    store.updateNote(n.id, { lyric: w });
+  });
+  const extra = words.length > list.length ? words.length - list.length : 0;
+  if (d.fill === 'seq' && words.length < list.length) {
+    say(t('已填词，但词比音符少：后面 ') + String(list.length - words.length) + t(' 个音符沿用了最后一个词'),
+        'warn', { hint: t('想让歌词循环填满就选「循环填」，想留空就选「只填到用完」。') });
+  } else if (blank) {
+    say(t('已填词：') + String(list.length - blank) + t(' 个音符有词，') + String(blank) + t(' 个留空'), 'ok');
+  } else {
+    say(t('已填词：') + String(words.length) + t(' 个词 → ') + String(list.length) + t(' 个音符')
+        + (extra ? t('（多出的 ') + String(extra) + t(' 个词没用上）') : ''), 'ok');
+  }
+  lyricDlg.value = null;
+}
+
+/** 汉字 → 拼音（UTAU 中文声库要的是拼音别名；DS 引擎内部自己会转） */
+async function toPinyin() {
+  const d = lyricDlg.value;
+  if (!d) return;
+  const b = window.fuBridge as any;
+  if (!b || typeof b.singToPinyin !== 'function') { sayErr(t('当前环境不支持转拼音'), t('请使用桌面版。')); return; }
+  pinyinBusy.value = true;
+  try {
+    const from = lyricTokens.value.slice();
+    // alternatives：pypinyin 的 heteronym 结果 —— 多音字给「换成…」候选，不用手打拼音
+    const r = await b.singToPinyin({ tokens: lyricTokens.value, alternatives: true });
+    if (!r || !r.ok) { sayErr(t('转拼音失败：') + ((r && r.error) || t('未知原因'))); return; }
+    const syls: string[] = (r.syllables || []).filter(Boolean);
+    d.text = syls.join(' ');
+    d.mode = 'space';
+    d.alts = Array.isArray(r.alternatives) ? r.alternatives : [];
+    d.altsFrom = from;
+    const nHetero = d.alts.filter((a: string[]) => a && a.length > 1).length;
+    say(t('已转拼音：') + String(syls.length) + t(' 个音节')
+        + (nHetero ? t('（其中 ') + String(nHetero) + t(' 个多音字可用下面的候选改）') : ''),
+        'ok', { hint: nHetero ? t('多音字默认取最常见读音；不对就点候选。') : t('再点「填入」把拼音填给音符。') });
+  } finally { pinyinBusy.value = false; }
+}
+
+/* ------------------------------------------------------------ 发音表（P1-14） */
+
+const aliasDlg = ref<{ dir: string; all: string[]; q: string; loading: boolean; err: string } | null>(null);
+
+async function openAliasDialog() {
+  const b = window.fuBridge as any;
+  const cur = tr.value;
+  if (!cur || cur.engine !== 'utau') {
+    sayErr(t('发音表只适用于 UTAU 声库'), t('DiffSinger 用声库自带的音素词典，不走别名表。'));
+    return;
+  }
+  const dir = String(cur.singer || '');
+  if (!dir) { sayErr(t('先选一个歌手'), t('在顶栏的声库选择器里挑一个。')); return; }
+  aliasDlg.value = { dir, all: [], q: '', loading: true, err: '' };
+  try {
+    const r = await b.utauAliases({ voicebank: dir, limit: 5000 });
+    if (aliasDlg.value) {
+      if (r && r.ok && Array.isArray(r.aliases)) aliasDlg.value.all = r.aliases.map((x: string) => String(x));
+      else aliasDlg.value.err = (r && r.error) || t('读取失败');
+    }
+  } catch (e: any) {
+    if (aliasDlg.value) aliasDlg.value.err = String(e?.message || e);
+  } finally {
+    if (aliasDlg.value) aliasDlg.value.loading = false;
+  }
+}
+
+const aliasFiltered = computed(() => {
+  const d = aliasDlg.value;
+  if (!d) return [] as string[];
+  const q = d.q.trim().toLowerCase();
+  const arr = q ? d.all.filter((a) => a.toLowerCase().includes(q)) : d.all;
+  return arr.slice(0, 800);
+});
+
+/** 点别名：有选中音符就填给它，填词对话框开着就追加，否则复制到剪贴板 */
+function useAlias(a: string) {
+  const n = sel.value;
+  if (n) {
+    store.pushUndo();
+    store.updateNote(n.id, { lyric: a });
+    say(t('已把当前音符改成「') + a + t('」'), 'ok');
+    return;
+  }
+  if (lyricDlg.value) {
+    const d = lyricDlg.value;
+    d.text = (d.text ? d.text.replace(/\s+$/, '') + ' ' : '') + a;
+    d.mode = 'space';
+    return;
+  }
+  void navigator.clipboard?.writeText(a).catch(() => {});
+  say(t('已复制到剪贴板：') + a, 'info');
+}
+
+/* ------------------------------------------------------------ 歌词文件导入（P1-9） */
+
+async function importLyricsFile() {
+  const b = window.fuBridge as any;
+  if (!b || typeof b.pickFile !== 'function') { sayErr(t('桌面版才能导入歌词文件'), t('这是浏览器预览环境。')); return; }
+  const path = await b.pickFile({
+    title: t('选择歌词文件'),
+    filters: [{ name: '歌词', extensions: ['txt', 'lrc'] }],
+  });
+  if (!path) return;
+  const bytes = await b.readBinary(path);
+  if (!bytes) { sayErr(t('读取文件失败'), t('文件可能被占用或没有读取权限。')); return; }
+  const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let text = '';
+  for (const enc of ['utf-8', 'gbk', 'shift_jis']) {
+    try { text = new TextDecoder(enc, { fatal: true }).decode(buf); break; } catch (_) { /* 换下一种编码 */ }
+  }
+  if (!text) text = new TextDecoder('utf-8').decode(buf);
+  if (/\[\d{1,2}:\d{2}([.:]\d{1,3})?\]/.test(text)) { fillFromLrc(text); return; }
+  openLyricDialog(text);
+  say(t('已读入歌词文件') + '：' + t('确认分词与填充方式后点「填入」'), 'ok');
+}
+
+/** LRC：按时间戳把每一行分给该时间窗内的音符（自动对轴，省掉整首手填） */
+function fillFromLrc(text: string) {
+  const cur = tr.value;
+  if (!cur || cur.kind !== 'voice') { sayErr(t('当前不是声部轨')); return; }
+  const entries: { sec: number; line: string }[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const stamps = [...raw.matchAll(/\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g)];
+    if (!stamps.length) continue;
+    const body = raw.replace(/\[[^\]]*\]/g, '').trim();
+    if (!body) continue;
+    for (const m of stamps) {
+      const frac = m[3] ? Number(('0.' + m[3])) : 0;
+      entries.push({ sec: Number(m[1]) * 60 + Number(m[2]) + frac, line: body });
+    }
+  }
+  if (!entries.length) { sayErr(t('没解析出 LRC 时间戳'), t('确认是 [mm:ss.xx] 开头的歌词文件。')); return; }
+  entries.sort((a, b) => a.sec - b.sec);
+  const spb = 60 / Math.max(20, store.bpm || 120);
+  const notes = [...(cur.notes || [])].sort((a, b) => a.startBeat - b.startBeat);
+  store.pushUndo();
+  let filled = 0;
+  for (let i = 0; i < entries.length; i++) {
+    const from = entries[i].sec / spb;
+    const to = i + 1 < entries.length ? entries[i + 1].sec / spb : Infinity;
+    const words = tokenizeLyrics(entries[i].line, 'auto');
+    const inWin = notes.filter((n) => n.startBeat >= from - 0.01 && n.startBeat < to);
+    inWin.forEach((n, k) => {
+      const w = words[k] || '';
+      if (w) filled++;
+      store.updateNote(n.id, { lyric: w });
+    });
+  }
+  say(t('已按 LRC 时间轴填词：') + String(filled) + t(' 个音符'), 'ok',
+      { hint: t('对不齐的话，用「对齐偏移」整体平移，或手动改个别音符。') });
 }
 
 /* ------------------------------------------------------------ 播放 */
@@ -290,123 +1478,105 @@ function applyPicked(midiTrack: any, tpb: number, bpm: number) {
  *   （两个 <audio> 各自 play() 会有几十毫秒偏差且随时间漂移，对齐歌词时很难受。）
  */
 const tpos = ref(0);                 // 播放位置 ms
+const rate = ref(1);                 // 变速试听倍率（不改工程 BPM）
 const tplaying = ref(false);
 const tpending = ref(false);         // 正在解码
 
 const transport = getTransport();
-transport.onTick = (ms, playing) => { tpos.value = ms; tplaying.value = playing; };
+/* 循环区间 / 跟随播放 / 时间码跳转 —— P1-6 传输栏补的常用件 */
+const loopOn = ref(false);
+const loopA = ref(0);
+const loopB = ref(0);
+const follow = ref(localStorage.getItem('fufumidi_sing_follow') !== '0');
+const prRef = ref<any>(null);        // 卷帘组件实例（只为读它暴露的 xOf / scrollEl）
 
-/* ---- MIDI 键盘实时输入（录音：弹的音 → 工程音符）----
- * 插入点：播放中=播放头，否则最后选中音符尾，否则 0 拍。
- * 试听 v1 = 简易双振荡器音色（SF2 试听域打通后替换）——按住出声、松手收尾。 */
-const midiIns = ref<{ id: string; name: string }[]>([]);
-const midiInOn = ref(false);
-const pendingMidi = new Map<number, { id: string; startMs: number }>();
-const midiStops = new Map<number, (ms: number) => void>();
+transport.onTick = (ms, playing) => {
+  tpos.value = ms;
+  tplaying.value = playing;
+  followTick(ms);                    // 跟随播放：把播放头留在可视区
+};
 
-function previewBeat(): number {
-  if (tplaying.value && tpos.value > 0) {
-    return Math.max(0, secToBeat(tpos.value / 1000, store.tempoMap, store.bpm));
+/** 循环区间在进度条上的位置（百分比），没设区间就不画 */
+const loopStyle = computed(() => {
+  void tpos.value;   // 时长要装载后才知道；装载后必然开始推 tick，借它触发重算
+  const d = transport.durationMs || 0;
+  if (!d || loopB.value - loopA.value < 20) return null;
+  const l = Math.max(0, Math.min(100, (loopA.value / d) * 100));
+  const r = Math.max(0, Math.min(100, (loopB.value / d) * 100));
+  return { left: l + '%', width: Math.max(0.4, r - l) + '%' };
+});
+
+function pushLoop() {
+  transport.setLoop(loopA.value, loopB.value, loopOn.value);
+  // 夹回真实时长后的值同步回 UI（拖动过长度、或时长为 0 时尤其重要）
+  const l = transport.loop;
+  loopA.value = l.a; loopB.value = l.b; loopOn.value = l.on;
+}
+/** A/B 取**当前播放位置** —— 一边听一边标，是设循环最省事的做法 */
+function markLoop(which: 'a' | 'b') {
+  const at = Math.round(tpos.value);
+  if (which === 'a') loopA.value = at; else loopB.value = at;
+  if (loopB.value - loopA.value >= 20) loopOn.value = true;
+  pushLoop();
+  if (which === 'a' && loopB.value <= loopA.value) say(t('A 点已设在 ') + fmtMs(loopA.value) + t('，再点「B」设终点'), 'info');
+  else say(t('循环区间：') + fmtMs(loopA.value) + ' ~ ' + fmtMs(loopB.value), 'ok');
+}
+function toggleLoop() {
+  if (loopB.value - loopA.value < 20) {
+    sayErr(t('还没有可循环的区间'), t('先播到起点按「A」，再播到终点按「B」。'));
+    return;
   }
-  const sel = store.selectedId && tr.value
-    ? tr.value.notes.find(n => n.id === store.selectedId)
-    : null;
-  if (sel) return sel.startBeat + sel.durBeat;
-  return 0;
+  loopOn.value = !loopOn.value;
+  pushLoop();
+}
+function clearLoopRegion() { loopA.value = 0; loopB.value = 0; loopOn.value = false; pushLoop(); }
+
+function toggleFollow() {
+  follow.value = !follow.value;
+  try { localStorage.setItem('fufumidi_sing_follow', follow.value ? '1' : '0'); } catch (_) { /* 隐私模式忽略 */ }
+  if (follow.value) followTick(tpos.value, true);
+}
+/**
+ * 跟随播放：播放头靠近视口边缘时把卷帘滚过去。
+ * ★ 像素换算交给卷帘自己（它暴露 `xOf(beat)`），这里只负责"什么时候滚"，
+ *   免得两处各算一套小时宽然后对不上。
+ */
+function followTick(ms: number, force = false) {
+  if (!follow.value && !force) return;
+  if (!transport.playing && !force) return;
+  const pr = prRef.value;
+  const el = pr && pr.scrollEl;
+  if (!el || typeof pr.xOf !== 'function') return;
+  const beat = (ms / 1000) * (store.bpm / 60);
+  const x = pr.xOf(beat);
+  const pad = Math.max(60, el.clientWidth * 0.18);
+  if (x < el.scrollLeft + pad || x > el.scrollLeft + el.clientWidth - pad) {
+    el.scrollLeft = Math.max(0, x - el.clientWidth * 0.35);
+  }
 }
 
-/** 简易试听音色：返回「停止函数」（传入额外延迟 ms）；失败返回 null（不出声但不报错） */
-function previewTone(pitch: number, stopAfterMs: number): ((ms: number) => void) | null {
-  try {
-    let ctx = getCtx();
-    if (!ctx) { ensureAudio(); ctx = getCtx(); }
-    if (!ctx) return null;
-    const o1 = ctx.createOscillator(); o1.type = 'triangle';
-    const o2 = ctx.createOscillator(); o2.type = 'sine';
-    const g = ctx.createGain();
-    const f = 440 * Math.pow(2, (pitch - 69) / 12);
-    o1.frequency.value = f; o2.frequency.value = f * 2;
-    const t0 = ctx.currentTime;
-    g.gain.setValueAtTime(0, t0);
-    g.gain.linearRampToValueAtTime(0.16, t0 + 0.012);
-    o1.connect(g); o2.connect(g); g.connect(ctx.destination);
-    o1.start(t0); o2.start(t0);
-    const stop = (extraMs: number) => {
-      try {
-        const t1 = t0 + Math.max(0.03, extraMs / 1000);
-        g.gain.setTargetAtTime(0, t1, 0.04);
-        o1.stop(t1 + 0.25); o2.stop(t1 + 0.25);
-      } catch (_) {}
-    };
-    if (stopAfterMs > 0) stop(stopAfterMs);
-    return stop;
-  } catch (_) { return null; }
+/** 时间码跳转：点时间显示 → 输入 m:ss.s */
+function parseTimecode(s: string): number | null {
+  const v = String(s || '').trim();
+  if (!v) return null;
+  const m = v.match(/^(\d+):([0-5]?\d(?:\.\d+)?)$/);
+  if (m) return (Number(m[1]) * 60 + Number(m[2])) * 1000;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, n * 1000) : null;
 }
-
-async function applyMidiIn(id: string) {
-  const ok = await selectMidiInput(id, {
-    onNoteOn: (note: number) => {
-      if (!tr.value) return;
-      store.pushUndo();
-      const nid = store.addNote(previewBeat(), note);
-      if (nid) pendingMidi.set(note, { id: nid, startMs: performance.now() });
-      const stop = previewTone(note, 0);
-      if (stop) midiStops.set(note, stop);
-    },
-    onNoteOff: (note: number) => {
-      const p = pendingMidi.get(note);
-      if (p) {
-        // 按住时长（秒）→ 拍；钳 1/8..16 拍
-        const dur = Math.min(16, Math.max(0.125, (performance.now() - p.startMs) / 1000 * store.bpm / 60));
-        store.updateNote(p.id, { durBeat: dur });
-        pendingMidi.delete(note);
-      }
-      const stop = midiStops.get(note);
-      if (stop) { stop(0); midiStops.delete(note); }
-    },
+async function jumpToTime() {
+  const s = await app.promptDialog({
+    title: t('跳转到时间'),
+    msg: t('格式 m:ss.s（例如 1:23.4），也可以直接填秒数。'),
+    value: fmtMs(tpos.value),
+    okText: t('跳转'),
   });
-  midiInOn.value = !!ok && !!id;
+  if (s == null) return;
+  const ms = parseTimecode(s);
+  if (ms == null) { sayErr(t('时间格式看不懂：') + s, t('用 m:ss.s，例如 1:23.4；或直接填 83.4 表示 83.4 秒。')); return; }
+  transport.seek(ms);
+  tpos.value = transport.positionMs;
 }
-async function onMidiInSelect(e: Event) {
-  const id = (e.target as HTMLSelectElement).value;
-  try { localStorage.setItem('fufumidi_midiin', id); } catch (_) {}
-  await applyMidiIn(id);
-}
-/* 歌手下拉的数据源（已扫描的 UTAU/DS 声库列表）。
-   ★ KeepAlive 缓存本视图：只在 setup 拉一次的话，在声库页/模型页装完声库
-   切回来下拉永远是旧的 —— onActivated 每次激活（含首次挂载）都重扫一次。
-   loadBanks 只刷目录清单、不碰轨道状态，激活时调用是安全的。 */
-onActivated(() => { void store.loadBanks(); });
-if (store.banks.length === 0) void store.loadBanks();
-void listMidiInputs().then((list) => {
-  midiIns.value = list;
-  try {
-    const saved = localStorage.getItem('fufumidi_midiin');
-    if (saved && list.some(d => d.id === saved)) void applyMidiIn(saved);
-  } catch (_) {}
-});
-
-/* ---- 音频输出设备选择（setSinkId）---- */
-const sinks = ref<{ deviceId: string; label: string }[]>([]);
-async function loadSinks() {
-  try {
-    const md = (navigator as any).mediaDevices;
-    const list = md && typeof md.enumerateDevices === 'function' ? await md.enumerateDevices() : [];
-    sinks.value = (list || []).filter((d: any) => d.kind === 'audiooutput');
-  } catch (_) { /* 权限/不支持：只留默认输出 */ }
-}
-async function onSink(e: Event) {
-  const id = (e.target as HTMLSelectElement).value;
-  try { localStorage.setItem('fufumidi_sink', id); } catch (_) {}
-  await transport.setSink(id);
-}
-/** 应用持久化的输出设备（ctx 可能尚未创建 —— transport.setSink 内部会判空） */
-void loadSinks().then(() => {
-  try {
-    const saved = localStorage.getItem('fufumidi_sink');
-    if (saved) void transport.setSink(saved);
-  } catch (_) {}
-});
 
 /**
  * 一条轨要交给传输器的东西。
@@ -419,8 +1589,6 @@ function laneOf(t0: any): any {
   return {
     fx: (t0.fx || []).slice(),
     bpm: store.bpm || 120,
-    // 多点变速（[{beat,bpm}]，拍单位）：VOL/PAN 自动化沿段换算 sec→beat 要用
-    tempoMap: (store.tempoMap || []).map((p: any) => ({ beat: p.beat, bpm: p.bpm })),
     volPoints: (curveOf(t0, 'VOL')?.points || []).slice(),
     panPoints: (curveOf(t0, 'PAN')?.points || []).slice(),
   };
@@ -463,6 +1631,8 @@ async function reloadTransport(): Promise<string> {
   tpending.value = true;
   try {
     const n = await transport.load(items);
+    // 装载后把当前倍率带回：新解出的 lane 还没起播，setRate 只改状态不会重起
+    transport.setRate(rate.value);
     tpos.value = 0;
     return n ? '' : t('音频解码失败（可能是浏览器不支持的编码）');
   } finally {
@@ -474,7 +1644,7 @@ async function tplay() {
   if (transport.playing) { transport.pause(); return; }
   if (!transport.lanes.length) {
     const err = await reloadTransport();
-    if (err) { msg.value = err; return; }
+    if (err) { sayErr(err, t('先渲染一次，或导入一个伴奏；也可以点传输栏的「重新装载」。')); return; }
   }
   transport.play();
   tplaying.value = transport.playing;
@@ -482,12 +1652,24 @@ async function tplay() {
 /** 重装后从头播（音频轨上的 ▶ 用） */
 async function reloadThenPlay() {
   const err = await reloadTransport();
-  if (err) { msg.value = err; return; }
+  if (err) { sayErr(err, t('先渲染一次，或导入一个伴奏；也可以点传输栏的「重新装载」。')); return; }
   transport.seek(0);
   transport.play();
   tplaying.value = transport.playing;
 }
 
+
+/** 变速：装载中的 lane 需要按新倍率重起（源节点的 playbackRate 是起播时定死的） */
+async function setPlayRate(v: number) {
+  const r = Math.max(0.25, Math.min(2, Number(v) || 1));
+  rate.value = r;
+  if (!transport.lanes.length) return;
+  const wasPlaying = transport.playing;
+  const at = transport.positionMs;
+  await reloadTransport();          // 用新的 rate 重新装载（reloadTransport 会沿用 transport.rate）
+  transport.seek(at);
+  if (wasPlaying) { transport.play(); tplaying.value = transport.playing; }
+}
 
 function tstop() {
   transport.stop();
@@ -502,6 +1684,42 @@ function tseek(e: Event) {
 /** 渲染完成后自动重装传输器，这样"渲完就能听" */
 watch(() => store.renderUrl, () => { void reloadTransport(); });
 
+/* 页面级快捷键只在「调教」页挂载期间生效（切走即摘掉） */
+onMounted(() => {
+  window.addEventListener('keydown', onSingKey);
+  /* 一条轨都没选中时自动选第一条：新建工程的预置轨就在那儿，但 activeTrackId 是空的 ——
+     于是整页自相矛盾（左边有轨卡片、空态说"这条声部轨还是空的"、渲染按钮却说"先新建或选中一条轨道"）。
+     选中它之后，"还不能渲染"的原因才会落到真正缺的那件事上（没音符 / 没选歌手）。 */
+  if (!store.activeTrackId && store.tracks.length) store.selectTrack(store.tracks[0].id);
+  /* 验收桥（M8d 前置）：生产包里拿不到组件实例，所以像音乐编辑器那样留一个显式开关
+     （localStorage.fufumidi_debug = '1'），把卷帘实例与 store 挂到 window 供 CDP 验收使用。
+     正常用户不会命中这条分支。 */
+  try {
+    if (localStorage.getItem('fufumidi_debug') === '1') {
+      /* ★ 把卷帘用的**同一个 api 对象**也挂出来：验收时调 api().moveNotes(...) 走的就是
+         方向键/批量微调那条真实路径，不用再另写一份等价逻辑。 */
+      window.__singDebug = {
+        roll: () => prRef.value, singer: store, api: () => rollApi(),
+        // 音素工作区（频谱底图验收用）
+        phWave: () => waveCv.value, phSpecOn, drawWave, phItems, phIndex, phNote, waveBuf,
+        // M6c：参数行（折叠/Solo）+ 叠加参考轨
+        autoTargets, curAbbr, rowOpen, soloAbbr, rowExpanded, toggleRow, toggleSolo,
+        refTrackId, refTrack, ghostFor, ghostPitch, ghostLabel,
+        curveCanvasAuto, curveOf,
+        noteSpectrogram: (i0: number, i1: number, key: string) => {
+          const ab = waveBuf.value;
+          if (!ab) return null;
+          return noteSpectrogram(ab.getChannelData(0), ab.sampleRate || 44100, i0, i1, key);
+        },
+      };
+    }
+  } catch (e) {}
+  // 进页即拉声库列表：歌手选择器是**点选**的，列表为空就等于没法选歌手
+  void store.loadBanks();
+});
+onActivated(() => { void store.loadBanks(); });
+onBeforeUnmount(() => window.removeEventListener('keydown', onSingKey));
+
 const fmtMs = (ms: number) => {
   const s0 = Math.max(0, ms) / 1000;
   return Math.floor(s0 / 60) + ':' + String(Math.floor(s0 % 60)).padStart(2, '0')
@@ -509,8 +1727,6 @@ const fmtMs = (ms: number) => {
 };
 
 /* ------------------------------------------------------------ 音高曲线 */
-/** 点列表面板折叠：点再多也只是收成一行头，卷帘空间随时可以拿回来 */
-const curvesOpen = ref(true);
 function curveAdd() {
   const t0 = tr.value;
   if (!t0) return;
@@ -521,6 +1737,79 @@ function curveAdd() {
   store.setPitchCurve(pts);
 }
 function curveClear() { store.clearPitchCurve(); }
+/* ---------------- 音高曲线画布（M6，计划书 4.1 的头号项） ----------------
+   以前只能「加点 + 敲两个数字」，现在可以在网格上直接画。
+   落库走 store.setPitchCurve（它会镜像 PIT 子轨并 pushUndo），所以：
+   拖动期间只 emit preview 更新本地副本，**抬手才 commit** —— 一次拖拽 = 一个撤销点。 */
+/* ★ 工具名不能和主工具栏的「画笔」同名：一个是画音符、一个是画曲线，同名不同作用域最容易误操作
+   （本轮 UX 复核第 10 条）。这里统一成「画曲线 / 直线 / 擦点」。 */
+const CURVE_TOOLS: [string, string][] = [['draw', '画曲线'], ['line', '直线'], ['erase', '擦点']];
+/** 工具按钮的统一标题：把作用域说清楚（参数曲线 / 音高曲线，不是画音符） */
+const CURVE_TOOL_TIP = '曲线工具：在曲线上画点/拉直线/擦点；这里的曲线作用于整条轨，与主工具栏的「画笔」（画音符）不是一回事';
+const curveTool = ref('draw');
+const curveCanvas = ref<any>(null);
+/** 画布横轴的总拍数：跟着内容走，末尾留 4 拍余量 */
+const curveBeats = computed(() => {
+  const t0 = tr.value; if (!t0) return 16;
+  let m = 16;
+  for (const n of (t0.notes || [])) m = Math.max(m, (Number(n.startBeat) || 0) + (Number(n.durBeat) || 1));
+  for (const p of (t0.pitchCurve || [])) m = Math.max(m, (Number(p.beat) || 0) + 2);
+  return Math.ceil(m + 4);
+});
+const curveCents = computed(() => (tr.value && tr.value.pitchCurve ? tr.value.pitchCurve.length : 0));
+function onCurveCommit(pts: { beat: number; value: number }[]) {
+  store.setPitchCurve(pts.map((p) => ({ beat: p.beat, cents: p.value })));
+}
+/* ---- 自动化子轨也用同一块画布（M6b）：于是每条引擎参数都能直接画，不再只能敲数字 ---- */
+const curveCanvasAuto = ref<any>(null);
+function onAutoCurveCommit(pts: { beat: number; value: number }[]) {
+  const t0 = tr.value; if (!t0) return;
+  store.setCurve(t0.id, curAbbr.value, pts.map((p) => ({ beat: p.beat, value: p.value })));
+}
+/* ---------------- 颤音包络预览（M6b，计划书 §4.2） ----------------
+   画的是这个音的颤音包络：振幅按 淡入(vibFade) 渐入、中间保持、末尾同样渐出，
+   频率 vibFreq 是「每拍几次」—— 图上按音的时值 durBeat 换算成实际波数，所见即所听。 */
+const vibCv = ref<HTMLCanvasElement | null>(null);
+function vibVal(k: 'vibDepth' | 'vibFreq' | 'vibFade'): number {
+  const n = sel.value ? Number((sel.value as any)[k]) : NaN;
+  if (Number.isFinite(n)) return n;
+  return k === 'vibDepth' ? 35 : (k === 'vibFreq' ? 5.5 : 0.25);
+}
+function drawVib() {
+  const cv = vibCv.value; if (!cv) return;
+  const w = cv.clientWidth || 320, h = 46;
+  const dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  const g = cv.getContext('2d'); if (!g) return;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const css = (n: string, fb: string) => (getComputedStyle(document.documentElement).getPropertyValue(n).trim() || fb);
+  g.strokeStyle = css('--hairline', '#e6e6e6'); g.beginPath();
+  g.moveTo(0, Math.round(h / 2) + 0.5); g.lineTo(w, Math.round(h / 2) + 0.5); g.stroke();
+  if (!sel.value || !sel.value.vibrato) {
+    g.fillStyle = css('--stone', '#9aa0a6'); g.font = '11px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(t('颤音已关闭（勾上「颤音」即按下面的深度/速率/淡入生效）'), w / 2, h / 2);
+    return;
+  }
+  const depth = Math.max(0, Math.min(100, vibVal('vibDepth'))) / 100;
+  const freq = Math.max(0, vibVal('vibFreq'));
+  const fade = Math.max(0, Math.min(0.9, vibVal('vibFade')));
+  const dur = Math.max(0.125, Number(sel.value.durBeat) || 1);
+  const cycles = Math.max(0.5, freq * dur);
+  const amp = (h / 2 - 4) * depth;
+  g.strokeStyle = css('--accent', '#ff5530'); g.lineWidth = 1.6; g.beginPath();
+  for (let i = 0; i <= 200; i++) {
+    const x = (i / 200) * w;
+    // 淡入 / 淡出（两端各按 fade 比例）
+    const k = i / 200;
+    const env = Math.min(1, fade > 0 ? k / fade : 1, fade > 0 ? (1 - k) / fade : 1);
+    const y = h / 2 - Math.sin(k * cycles * Math.PI * 2) * amp * Math.max(0, env);
+    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.stroke();
+}
+watch([() => (sel.value ? sel.value.id : ''), () => vibVal('vibDepth'), () => vibVal('vibFreq'), () => vibVal('vibFade'), () => (sel.value ? sel.value.vibrato : false) || false],
+  () => { nextTick(drawVib); }, { immediate: true });
 function curveSet(i, e) {
   const t0 = tr.value;
   if (!t0) return;
@@ -533,19 +1822,44 @@ function curveSet(i, e) {
 }
 
 /* ------------------------------------------------------------ 渲染 */
-async function doRender() { msg.value = await store.renderTrack(); }
+/**
+ * 渲染 → **自动装载并试听**。
+ *
+ * 旧流程渲完只丢出一句话，用户还要自己找播放键、再等一次解码 ——
+ * 一次"渲一下听听"要三步。现在渲完直接把传输器装满并起播（失败才只报错）。
+ */
+async function playAfterRender() {
+  const err = await reloadTransport();
+  if (err) { sayErr(err, t('渲染出的音频装载失败；点传输栏的「重新装载」再试。')); return; }
+  transport.seek(0);
+  transport.play();
+  tplaying.value = transport.playing;
+}
+
+/**
+ * 渲染当前轨。**按住 Shift 点** = 整轨重渲（丢掉乐句缓存）——
+ * 默认是 §4.6 增量渲染：只把改动过的乐句送引擎。
+ */
+async function doRender(e) {
+  const full = !!(e && e.shiftKey);
+  const err = await store.renderTrack(undefined, { full });
+  if (err) { sayErr(err, t('看下面的渲染日志；常见原因是没选歌手、声库缺文件或引擎组件未装。'), store.renderWarnings.join('\n')); return; }
+  // 渲完就能听：给「导出 WAV」一个动作按钮，省掉再找按钮这一步（P1-2）
+  say(t('渲染完成，正在试听'), 'ok', { action: { label: t('导出 WAV'), run: () => doSave() } });
+  await playAfterRender();
+}
 
 /**
  * 渲染所有声部轨。
  *
  * 渲染是串行的（两条 DiffSinger 同时跑会打满显存），一条几十秒，
- * 所以这里全程显示"正在渲染 i/n"，别让用户以为卡死了。
+ * 所以这里全程显示"正在渲染 i/n"（进度与分条文案都在 store 里），别让用户以为卡死了。
  */
 async function doRenderAll() {
-  msg.value = '';
   const err = await store.renderAll();
-  msg.value = err;
-  await reloadTransport();          // 全部渲完再一次性装进传输器
+  if (err) { sayErr(err, t('看下面的渲染日志；常见原因是没选歌手、声库缺文件或引擎组件未装。'), store.renderWarnings.join('\n')); return; }
+  say(store.msg || t('全部轨渲染完成，正在试听'), 'ok', { action: { label: t('导出 WAV'), run: () => doSave() } });
+  await playAfterRender();   // 全部渲完一次性装进传输器并起播
 }
 
 /** 静音要立刻听得见：改的是 lane 上的状态，而 lane 是 load() 时生成的 → 必须重装 */
@@ -558,15 +1872,81 @@ async function onMuteAudio(x: any, e: Event) {
   await reloadTransport();
 }
 
-function doSave() {
-  const b = store.exportBytes();
-  if (!b) { msg.value = t('还没有可导出的音频'); return; }
-  const url = URL.createObjectURL(new Blob([b.buffer as ArrayBuffer], { type: 'audio/wav' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = (tr.value?.name || 'render') + '.wav';
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
+/**
+ * 导出当前轨的渲染结果（WAV）。
+ *
+ * ★ 实测两个坑（2026-10-06）：
+ *   1. `exportBytes` 是 Pinia 的 **getter**，原来写成 `store.exportBytes()` 会直接抛
+ *      `TypeError: store.exportBytes is not a function` —— 点「导出 WAV」毫无反应、也没有任何提示。
+ *   2. 桌面版不能再走 `<a download>`：Electron 33 的下载子系统已失效
+ *      （见 main/dialogs.js 的说明），应用里其他导出（MIDI / 视频 / 配置 / 乐谱）早就改走
+ *      `file:saveBinary`，只有这里漏了。现在与它们统一。
+ */
+/** AudioBuffer → 16bit PCM WAV 字节（导出成品用；单轨导出直接给引擎回传的原始字节） */
+function bufferToWav(buf: AudioBuffer): Uint8Array {
+  const ch = Math.min(2, buf.numberOfChannels || 1);
+  const n = buf.length;
+  const bytes = new Uint8Array(44 + n * ch * 2);
+  const dv = new DataView(bytes.buffer);
+  const ws = (o: number, s: string) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, 'RIFF'); dv.setUint32(4, 36 + n * ch * 2, true); ws(8, 'WAVEfmt ');
+  dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, ch, true);
+  dv.setUint32(24, buf.sampleRate, true); dv.setUint32(28, buf.sampleRate * ch * 2, true);
+  dv.setUint16(32, ch * 2, true); dv.setUint16(34, 16, true);
+  ws(36, 'data'); dv.setUint32(40, n * ch * 2, true);
+  const data: Float32Array[] = [];
+  for (let c = 0; c < ch; c++) data.push(buf.getChannelData(c));
+  let o = 44;
+  for (let i = 0; i < n; i++) {
+    for (let c = 0; c < ch; c++) {
+      const v = Math.max(-1, Math.min(1, data[c][i]));
+      dv.setInt16(o, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+      o += 2;
+    }
+  }
+  return bytes;
+}
+
+/** 「导出 WAV」：
+ *  - 有伴奏轨 / 有多条已渲染声部轨 → 导出**成品混音**（与播放听到的完全一致）；
+ *  - 只有一条轨 → 仍然导出引擎回传的原始字节（不二次编码）。
+ *  ★ 以前无论什么情况都只给「当前这一条轨」，用户要成品只能自己去外面混。
+ */
+async function doSave() {
+  const b = store.exportBytes;
+  const b2 = window.fuBridge as any;
+  const save = async (name: string, data: Uint8Array): Promise<void> => {
+    if (b2 && typeof b2.saveBinary === 'function') {
+      // 直接传 Uint8Array（结构化克隆），避免 Array.from 生成数千万元素的数组
+      const r = await b2.saveBinary({ name, data });
+      if (r && r.ok) say(t('已保存到：') + String(r.path || name), 'ok');
+      else if (!(r && r.canceled)) sayErr(t('保存失败：') + ((r && r.error) || t('未知原因')));
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([data.buffer as ArrayBuffer], { type: 'audio/wav' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  };
+  const hasAudio = store.tracks.some(x => x.kind === 'audio' && x.audio && !x.audio.muted);
+  const rendered = store.renderedTrackIds.length;
+  if (hasAudio || rendered > 1) {
+    say(t('正在混音（伴奏 + 已渲染声部）…'), 'info');
+    try {
+      const err = await reloadTransport();
+      if (err) { sayErr(err); return; }
+      const buf = await (transport as any).renderOffline();
+      if (!buf) { sayErr(t('混音失败'), t('先渲染一次，或导入一个伴奏。')); return; }
+      await save((store.meta?.title || tr.value?.name || 'render') + '_mix.wav', bufferToWav(buf));
+      return;
+    } catch (e: any) {
+      sayErr(t('混音失败：') + String((e && e.message) || e), t('已改回导出当前轨。'));
+    }
+  }
+  if (!b) { sayErr(t('还没有可导出的音频'), t('先点「渲染本轨」（Enter）或「渲染全部轨」，再导出。')); return; }
+  await save(((tr.value?.name || 'render') + '.wav'), b);
 }
 
 /* ------------------------------------------------------------ 工程文件 */
@@ -576,34 +1956,36 @@ function doSave() {
  * 编辑器状态原本只在内存里，关掉就没了；伴奏轨存的又是本机绝对路径，
  * 换台机器必然断链。工程包把伴奏一起打进 `files/`，轨道上只留 asset id。
  */
+/* 工程状态徽标（未保存 / 文件名的单一来源）。
+   ★ 脏标记用**撤销栈深度**当指纹：store 的约定是"任何修改前先 pushUndo"，
+     所以栈深度变了 = 有改动；保存/打开/新建时记一次基准。
+     比每次渲染都算一遍全量 JSON 便宜得多（工程动辄几千个音符）。 */
+const savedHistoryAt = ref(store.history.length);
+const dirty = computed(() => store.history.length !== savedHistoryAt.value);
+const projectFile = computed(() => (store.projectPath ? String(store.projectPath).split(/[\\/]/).pop() : ''));
+const projectState = computed(() => {
+  if (!store.projectPath) return { text: t('未保存到文件'), kind: 'none' };
+  if (dirty.value) return { text: projectFile.value + t(' · 有未保存改动'), kind: 'dirty' };
+  return { text: projectFile.value, kind: 'saved' };
+});
+function markSaved() { savedHistoryAt.value = store.history.length; }
+
 async function saveProject(saveAs: boolean) {
-  msg.value = await store.saveProject(saveAs);
+  const err = await store.saveProject(saveAs);
+  if (err) sayErr(err, t('换一个有写入权限的位置（例如桌面）再保存。'));
+  else { markSaved(); say(t('工程已保存：') + String(store.projectPath || '').split(/[\\/]/).pop(), 'ok'); }
 }
 async function openProject() {
   const err = await store.openProject();
-  msg.value = err;
+  if (err) sayErr(err, t('工程包里的伴奏可能已损坏；也可以只导入 MIDI 重建工程。'));
+  else markSaved();
   // 伴奏换成了包里解出来的那份 —— 传输器还握着旧字节，必须重装
   if (store.projectPath) await reloadTransport();
 }
-/**
- * OpenUtau `.ustx` 互转（与上游交换工程用）。
- * 导入/导出都有损（音素级参数、曲线），引擎会把细节以 warnings 拼进提示串。
- */
-async function importUstx() {
-  msg.value = await store.importUstx();
-  if (!msg.value.startsWith('已导入')) return;
-  await reloadTransport();     // 伴奏路径变了（来自 ustx 旁目录），传输器重装
-}
-async function exportUstx() {
-  msg.value = await store.exportUstx();
-}
-/** 逐轨导出（stems）：每条轨各一份 WAV，走直写渲染（字节不过 IPC） */
-async function exportStems() {
-  msg.value = await store.exportStems();
-}
 function newProject() {
   store.newProject();
-  msg.value = '';
+  markSaved();
+  newTrackOpen.value = false;
 }
 function onTitle(e: Event) {
   store.meta = Object.assign({}, store.meta, { title: sval(e) });
@@ -631,12 +2013,76 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 </script>
 
 <template>
-  <div class="sing">
+  <div class="sing-page">
+    <!-- ==================== 页签：编辑器 / 声库 ====================
+         两页合并后入口只有一个（顶栏「调教」），这里切工作台的两半。
+         用 v-show 保留编辑器状态（卷帘滚动位置、选中音符）；声库面板按需挂载，进页即拉列表。 -->
+    <div class="sing-nav">
+      <button class="sn-tab" :class="{ on: tab === 'editor' }" data-guide="sing-tab-editor"
+              :title="t('编辑器：给音符选歌手、填词、画音高/参数曲线，然后“渲染”成人声')" @click="setTab('editor')">
+        <Icon name="edit" :size="13" /> {{ t('编辑器') }}
+        <i>{{ t('选歌手 · 画音符 · 渲染') }}</i>
+      </button>
+      <button class="sn-tab" :class="{ on: tab === 'banks' }" data-guide="sing-tab-banks"
+              :title="t('声库 = 录好的音节样本集合（UTAU 用 oto.ini 标边界，DiffSinger 用模型）；一条轨选了声库才唱得出来')" @click="setTab('banks')">
+        <Icon name="box" :size="13" /> {{ t('声库') }}
+        <i>{{ t('UTAU · DiffSinger · 组件') }}</i>
+      </button>
+      <!-- 声库制作原本是独立路由（/voicebank），现在与编辑器/声库并列成第三个页签：
+           「做声库 / 装声库 / 用声库」本来就是同一条工作流。 -->
+      <button class="sn-tab" :class="{ on: tab === 'maker' }" data-guide="sing-tab-maker"
+              :title="t('声库制作：上传按音节录的音频 → 自动切片 → 标注 oto（offset/overlap/preutterance/consonant）→ 导出声库')" @click="setTab('maker')">
+        <Icon name="mic" :size="13" /> {{ t('声库制作') }}
+        <i>{{ t('切片 · 标注 · 导出') }}</i>
+      </button>
+      <span class="sp" />
+    </div>
+
+    <!-- 轨列表右键菜单（复制 / 清空 / 删除） -->
+    <div v-if="trackMenu" class="tk-menu-mask" @click="closeTrackMenu" @contextmenu.prevent="closeTrackMenu"></div>
+    <div v-if="trackMenu" class="tk-menu" :style="{ left: trackMenu.x + 'px', top: trackMenu.y + 'px' }" @click.stop>
+      <b>{{ trackMenu.track.name || t('未命名轨') }}</b>
+      <button @click="renameTrack(trackMenu.track); closeTrackMenu()"><Icon name="edit" :size="13" /> {{ t('重命名') }}</button>
+      <button @click="menuDuplicate(trackMenu.track)"><Icon name="copy" :size="13" /> {{ t('复制这条轨') }}</button>
+      <button @click="store.clearTrack(trackMenu.track.id); closeTrackMenu()"><Icon name="erase" :size="13" /> {{ t('清空音符') }}</button>
+      <button class="danger" @click="store.removeTrack(trackMenu.track.id); closeTrackMenu()"><Icon name="trash" :size="13" /> {{ t('删除这条轨') }}</button>
+    </div>
+
+    <!-- 空态：主按钮是「打开工程 / 导入 MIDI」这类**开始做事**的动作；
+         引擎选型（DiffSinger / UTAU）是技术选型，收进「新建声部轨…」二级里，不占主位。
+         （本轮 UX 复核第 4 条：对空工程来说，把"新建 DiffSinger 轨"当唯一主按钮过重。） -->
+    <div v-if="tab === 'editor' && emptyKind" class="sing-empty" data-guide="sing-empty">
+      <div class="se-main">
+        <Icon :name="emptyKind === 'no-track' ? 'utau' : 'spark'" :size="18" />
+        <b>{{ emptyKind === 'no-track' ? t('还没有轨道') : t('这条声部轨还是空的') }}</b>
+        <span class="muted small">
+          {{ emptyKind === 'no-track'
+            ? t('先新建一条声部轨，或打开一个工程 / 导入 MIDI')
+            : t('导入 MIDI、从曲库选一首，或用画笔在卷帘上写音符；选好声库后点「渲染本轨」') }}
+        </span>
+      </div>
+      <!-- ★ 这里只留**一个**主操作 + 一句指路：导入音频/MIDI/曲库选曲在左侧面板里已经各有一个，
+           横幅再平铺一遍就是"同文案同功能到处都有"（本轮 UX 复核第 9 条）。 -->
+      <div class="se-acts">
+        <button class="btn sm primary" @click="openProject"><Icon name="folder" :size="12" /> {{ t('打开工程') }}</button>
+        <button class="btn sm" data-guide="sing-new-track" @click="newTrackOpen = !newTrackOpen">
+          <Icon name="plus" :size="12" /> {{ t('新建声部轨…') }}
+        </button>
+        <span class="muted small se-go">{{ t('或从左侧「导入 MIDI / 从曲库选」开始') }}</span>
+      </div>
+      <div v-if="newTrackOpen" class="se-acts se-new">
+        <button class="btn sm" @click="addTrack('diffsinger')"><Icon name="spark" :size="12" /> DiffSinger</button>
+        <button class="btn sm" @click="addTrack('utau')"><Icon name="mic" :size="12" /> UTAU</button>
+        <button class="btn sm ghost" @click="setTab('banks')"><Icon name="box" :size="12" /> {{ t('装声库') }}</button>
+      </div>
+    </div>
+
+    <div class="sing" v-show="tab === 'editor'">
     <!-- ==================== 左：轨道列表 ==================== -->
     <aside class="trk">
       <div class="trk-head">
         <Icon name="layers" :size="14" />
-        <b>{{ t('轨道') }}</b>
+        <b :title="t('声部轨 = 一条人声轨，用声库唱出来；伴奏轨是音频，只跟着播放不参与合成')">{{ t('轨道') }}</b>
         <span class="sp" />
         <button class="ib" :title="t('新建 UTAU 轨')" @click="addTrack('utau')">
           <Icon name="mic" :size="12" />
@@ -648,53 +2094,81 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
       <!-- 导入：音频（伴奏轨，对应上游 UWavePart）与 MIDI -->
       <div class="trk-import">
-        <button class="ib wide" data-guide="sing-import-audio" :disabled="busyImport" @click="importAudio">
+        <button class="ib wide" data-guide="sing-import-audio" :disabled="busyImport"
+                :title="t('伴奏轨：导入一段音频（伴奏 / 干声），只跟着播放，不参与声库合成')" @click="importAudio">
           <Icon name="music" :size="12" /> {{ t('导入音频（伴奏）') }}
         </button>
         <button class="ib wide" data-guide="sing-import-midi" :disabled="busyImport" @click="importMidi">
-          <Icon name="upload" :size="12" /> {{ t('导入 MIDI') }}
+          <Icon name="import" :size="12" /> {{ t('导入 MIDI') }}
+        </button>
+        <!-- 曲库里的 MIDI 本来就在数据目录里，没必要再走一次系统文件对话框 -->
+        <button class="ib wide" data-guide="sing-import-library" :disabled="busyImport"
+                :title="t('曲库 = 在「音乐」页导入的 MIDI 资料库（这里选一首直接建轨）')" @click="openLibraryDialog">
+          <Icon name="folder" :size="12" /> {{ t('从曲库选') }}
         </button>
       </div>
 
-      <TransitionGroup class="trk-list" name="fade" tag="div" data-guide="sing-tracks">
+      <div class="trk-list" data-guide="sing-tracks">
         <div
-          v-for="x in store.tracks" :key="x.id"
-          class="trk-item" :class="{ on: x.id === store.activeTrackId }"
+          v-for="(x, xi) in store.tracks" :key="x.id"
+          class="trk-item" :class="{ on: x.id === store.activeTrackId, dragging: dragId === x.id }"
+          :draggable="true"
           @click="store.selectTrack(x.id)"
+          @dragstart="onTrackDragStart(x.id)"
+          @dragover.prevent="dragOver = x.id"
+          @dragleave="dragOver = (dragOver === x.id ? '' : dragOver)"
+          @drop.prevent="onTrackDrop(x.id)"
+          @dragend="onTrackDragEnd"
+          @contextmenu.prevent="openTrackMenu($event, x)"
+          @dblclick="renameTrack(x)"
         >
           <div class="trk-row1">
+            <span class="tk-drag" :title="t('拖动排序')"><Icon name="drag" :size="11" /></span>
             <select class="eng" :value="x.engine" @click.stop @change="onEngine(x.id, $event)">
               <option v-for="e in ENGINES" :key="e.id" :value="e.id">{{ e.id === 'utau' ? 'UTAU' : 'DS' }}</option>
             </select>
-            <input class="nm" :value="x.name" :placeholder="t('未命名轨')"
+            <input class="nm" :value="x.name" :placeholder="t('未命名轨')" :title="t('双击改名')"
                    @click.stop @input="store.patchTrack(x.id, { name: sval($event) })" />
+            <button class="ib" :class="{ on: !!x.muted }" :title="t('静音（M）')" @click.stop="toggleMute(x)">
+              <Icon name="volume" :size="11" />
+            </button>
+            <button class="ib" :title="t('独奏：只留这一条出声（再点恢复）')" @click.stop="store.toggleSolo(x.id)">
+              S
+            </button>
             <button class="ib del" :title="t('删除轨')" @click.stop="store.removeTrack(x.id)">
               <Icon name="trash" :size="11" />
             </button>
-            <span v-if="(x.partStarts?.length || 0) > 1" class="seg-cnt"
-                  :title="t('这条轨有多个片段（对齐 OpenUtau 的 Part 模型）')">
-              {{ x.partStarts!.length }}{{ t('段') }}
-            </span>
           </div>
           <!-- 声部轨：选歌手 + 语言；音频轨：文件信息 + 静音 -->
           <template v-if="x.kind === 'voice'">
-            <!-- 歌手 = 列表选择（已扫描声库），不再手输路径；点击同时切换到该轨道 -->
-            <select class="pth" :value="x.singer" :title="x.singer || t('默认歌手（未指定）')"
-                    @change="onSingerPath(x.id, $event)">
-              <option value="">{{ t('默认歌手（未指定）') }}</option>
-              <option v-for="b in store.banks.filter(bk => bk.engine === x.engine)" :key="b.dir" :value="b.dir">
-                {{ b.name }}
+            <!-- 歌手选择：**点选**而不是手打路径。声库列表来自 store.banks（两类混排的同一份来源），
+                 只列与该轨引擎匹配的那些；路径不在列表里时补一个"（原路径）"选项，避免静默清空。 -->
+            <select class="pth" :value="x.singer || ''" :title="t('该轨使用哪个声库')"
+                    @click.stop @change="onSingerPick(x.id, $event)">
+              <option value="">{{ t('（未选歌手）') }}</option>
+              <option v-if="x.singer && !banksFor(x.engine).includes(x.singer)" :value="x.singer">
+                {{ x.singerName || String(x.singer).split(/[\\/]/).pop() }}
               </option>
-              <option v-if="x.singer && !store.banks.some(bk => bk.dir === x.singer)" :value="x.singer">
-                {{ String(x.singer).split(/[\\/]/).pop() }}（{{ t('自定义目录') }}）
-              </option>
+              <option v-for="b in banksFor(x.engine)" :key="b.dir" :value="b.dir">{{ b.name }}</option>
             </select>
+            <button class="ib" :title="t('刷新声库列表')" @click.stop="store.loadBanks()">
+              <Icon name="refresh" :size="11" />
+            </button>
+            <!-- 发音表：放在轨道行里（而不是只在"已选 2 个音符"才出现的批量工具行），
+                 因为"这个声库能唱哪些音"恰恰是**还没填词时**最需要查的 -->
+            <button v-if="x.engine === 'utau'" class="ib" :title="t('发音表（这个声库支持哪些发音）')"
+                    @click.stop="store.selectTrack(x.id); openAliasDialog()">
+              <Icon name="music" :size="11" />
+            </button>
             <div class="trk-row2" @click.stop>
               <select class="lang" :value="x.language" @click.stop
                       @change="store.patchTrack(x.id, { language: sval($event) })">
                 <option v-for="L in LANGUAGES" :key="L.code" :value="L.code">{{ L.label }}</option>
               </select>
-              <span v-if="store.renderByTrack[x.id]" class="rdy"
+              <!-- 渲染状态：已渲染 ● / 已过期 ⚠（音符改过，听到的还是上一版） -->
+              <span v-if="store.renderByTrack[x.id] && store.staleRenderIds.includes(x.id)" class="rdy stale"
+                    :title="t('音符改过，渲染结果已过期 —— 点「渲染本轨」重渲才听得到')">⚠</span>
+              <span v-else-if="store.renderByTrack[x.id]" class="rdy"
                     :title="t('已渲染，播放时会一起响')">●</span>
               <label class="ck" :title="t('静音')">
                 <input type="checkbox" :checked="!!x.muted" @change="onMuteVoice(x, $event)" />
@@ -719,7 +2193,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             </div>
           </template>
         </div>
-      </TransitionGroup>
+      </div>
     </aside>
 
     <!-- ==================== 右：共用编辑器 ==================== -->
@@ -734,25 +2208,43 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <button class="btn" :title="t('打开 .fufumidi 工程')" @click="openProject">
           <Icon name="folder" :size="12" /> {{ t('打开') }}
         </button>
-        <button class="btn" :title="t('导入 OpenUtau 工程 (.ustx)')" @click="importUstx">
-          <Icon name="folder" :size="12" /> {{ t('导入 ustx') }}
-        </button>
-        <button class="btn" :title="t('导出为 OpenUtau 工程 (.ustx)')" @click="exportUstx">
-          <Icon name="save" :size="12" /> {{ t('导出 ustx') }}
-        </button>
-        <button class="btn" :title="t('每条轨各导出一份 WAV（分轨）')" :disabled="store.busy" @click="exportStems">
-          <Icon name="save" :size="12" /> {{ t('导出分轨') }}
-        </button>
-        <button class="btn" :title="t('保存到当前工程文件')" @click="saveProject(false)">
+        <!-- 工程级参数（P2-3）：BPM / 拍号 / 对齐偏移。三个都是**整个工程**的属性，
+             所以放在工程条上，而不是藏在某条轨的属性里。 -->
+        <label class="proj-field" :title="t('工程 BPM：音符位置存的是拍，改 BPM 时音符相对小节不动，只有时间长度变')">
+          {{ t('BPM') }}
+          <input type="number" min="1" max="400" :value="store.bpm" @change="store.bpm = nval($event, 120)" />
+        </label>
+        <label class="proj-field" :title="t('拍号：只改卷帘的小节线与编号，不动任何音符')">
+          {{ t('拍号') }}
+          <select :value="store.meta.timeSig || '4/4'" @change="onTimeSig($event)">
+            <option value="2/4">2/4</option>
+            <option value="3/4">3/4</option>
+            <option value="4/4">4/4</option>
+            <option value="6/8">6/8</option>
+          </select>
+        </label>
+        <!-- 对齐偏移：**即时生效**（改了立刻按增量平移，可撤销）。
+             以前是"填数字 + 点应用"，而同一排的 BPM / 拍号却是即时生效 —— 三种提交语义混着，
+             用户没法预期（UX 复核第 7 条）。现在参数一律即时，动作只有"保存到文件"这一种显式提交。 -->
+        <label class="proj-field" :title="t('对齐偏移：改了立刻把当前声部轨的音符整体平移这么多毫秒（负数=提前），可撤销；伴奏轨不动')">
+          {{ t('对齐偏移') }}
+          <input class="al-ms" type="number" step="5" data-guide="sing-align" :value="alignMs" @change="onAlignMs" />
+          <span class="muted">ms</span>
+        </label>
+        <span class="sp" />
+        <!-- 工程状态徽标贴着保存按钮：它是**保存**这件事的状态，挂在条子最右边等于放错了地方 -->
+        <span class="pstate" :class="projectState.kind" data-guide="sing-project-state"
+              :title="store.projectPath || t('还没有保存过（保存后会生成 .fufumidi 工程包）')">
+          <Icon :name="projectState.kind === 'dirty' ? 'edit' : (projectState.kind === 'saved' ? 'check' : 'info')" :size="11" />
+          {{ projectState.text }}
+        </span>
+        <!-- 显式提交只有这里一处：写工程文件（参数改动都是即时生效的） -->
+        <button class="btn" :class="{ primary: dirty }" data-guide="sing-save" :title="t('保存到当前工程文件（Ctrl+S）')" @click="saveProject(false)">
           <Icon name="save" :size="12" /> {{ t('保存') }}
         </button>
         <button class="btn" :title="t('换一个文件保存')" @click="saveProject(true)">
           <Icon name="copy" :size="12" /> {{ t('另存为') }}
         </button>
-        <span class="sp" />
-        <span class="ppath muted small" :title="store.projectPath || t('还没有保存过')">
-          {{ store.projectPath ? String(store.projectPath).split(/[\\/]/).pop() : t('未保存') }}
-        </span>
       </div>
       <ul v-if="store.missingAudio.length" class="warn small">
         <li v-for="m in store.missingAudio" :key="m.trackId">
@@ -766,39 +2258,73 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             {{ isAudio ? t('伴奏') : (tr.engine === 'utau' ? 'UTAU' : 'DiffSinger') }}
           </span>
           <span class="who">{{ isAudio ? (tr.audio?.fileName || tr.name) : (tr.singerName || tr.singer || t('未选歌手')) }}</span>
-          <span v-if="!isAudio" class="muted small">{{ tr.language.toUpperCase() }} · {{ tr.notes.length }} {{ t('音符') }}</span>
+          <span v-if="!isAudio" class="muted small" :title="t('语言：决定歌词怎么转发音')">{{ langLabel(tr.language) }} · {{ tr.notes.length }} {{ t('音符') }}</span>
         </template>
         <span v-else class="muted small">{{ t('左侧选一条轨道') }}</span>
 
         <span class="sp" />
-        <select class="dev" :value="store.device" :title="t('推理后端')"
-                @change="store.device = sval($event)">
-          <option value="auto">{{ t('自动') }}</option>
-          <option value="cpu">CPU</option>
-          <option value="cuda">CUDA</option>
-          <option value="dml">DirectML</option>
-        </select>
-        <input v-if="isUtau" class="smp num-input" :value="store.sampleNote" :title="t('UTAU 采样音（alias）')"
-               @change="store.sampleNote = sval($event)" />
-        <button class="btn" data-guide="sing-track-props" :disabled="!tr" @click="propsOpen = !propsOpen">
+        <!-- 撤销 / 重做：覆盖音符、轨道、效果链、自动化、轨名（页面级，见 store.history） -->
+        <button class="ib" :disabled="!store.canUndo" :title="t('撤销 Ctrl+Z')" @click="store.undo()">
+          <Icon name="undo" :size="13" />
+        </button>
+        <button class="ib" :disabled="!store.canRedo" :title="t('重做 Ctrl+Shift+Z')" @click="store.redo()">
+          <Icon name="redo" :size="13" />
+        </button>
+        <button class="btn" data-guide="sing-track-props" :disabled="!tr"
+                :title="t('这条轨怎么唱：引擎参数 / 效果链 / 自动化（后两块只作用于本轨）')" @click="propsOpen = !propsOpen">
           <Icon name="sliders" :size="13" /> {{ t('轨道属性') }}
         </button>
-        <button v-if="!isAudio" class="btn" data-guide="sing-render" :disabled="!tr" @click="doRender"
-                :title="t('按该轨的引擎自动分派')">
-          <Icon name="play" :size="13" /> {{ t('渲染本轨') }}
+        <!-- 主动作：渲染本轨。前置条件不满足时**按钮本身就变样并说明为什么**（不只是变淡），
+             原因同时挂 title 与下方那行提示，不让用户猜（UX 复核第 4 条）。 -->
+        <button v-if="!isAudio" class="btn primary" :class="{ blocked: renderBlocked }" data-guide="sing-render"
+                :disabled="renderBlocked"
+                :title="renderReason || t('渲染 = 用声库把音符唱成音频（不是实时合成）。只重渲改动过的乐句；按住 Shift 点 = 整轨重渲')"
+                @click="doRender">
+          <Icon :name="renderBlocked ? 'info' : 'play'" :size="13" />
+          {{ renderBlocked ? t('还不能渲染') : t('渲染本轨') }}
         </button>
         <button class="btn" data-guide="sing-render-all" :disabled="store.busy" @click="doRenderAll"
-                :title="t('渲染所有声部轨，渲完一起播放')">
+                :title="t('渲染全部声部轨（同样用声库合成成音频），渲完一起播放')">
           <Icon name="zap" :size="13" /> {{ t('渲染全部轨') }}
         </button>
+
+        <!-- §4.6 增量渲染：只把改动过的乐句送引擎。这里如实显示"复用了几句"，别让人以为每次都在重算 -->
+        <span v-if="renderStats" class="rs-badge" data-guide="sing-render-stats"
+              :title="t('只有改动过的乐句会重新送引擎；一点没改就一次都不发')">
+          {{ t('本轨 ') }}{{ renderStats.phrases }}{{ t(' 句：复用 ') }}{{ renderStats.reused }}{{ t(' / 新渲 ') }}{{ renderStats.rendered }}
+          <span class="muted">· {{ renderStats.ms }} ms</span>
+        </span>
+
+        <!-- §4.6 A/B 对比：A = 上一版，B = 最新一版。换的是声源，播放头不动 -->
+        <span v-if="store.renderUrlA && store.renderUrlB" class="ab-group" data-guide="sing-ab">
+          <span class="muted small">{{ t('对比') }}</span>
+          <button class="btn sm" :class="{ primary: store.abWhich === 'A' }"
+                  :title="t('听上一版渲染结果')" @click="store.toggleAB('A')">A {{ t('上一版') }}</button>
+          <button class="btn sm" :class="{ primary: store.abWhich === 'B' }"
+                  :title="t('听最新一版渲染结果')" @click="store.toggleAB('B')">B {{ t('最新') }}</button>
+          <button v-if="store.abWhich === 'A'" class="btn sm" :title="t('把上一版作为当前结果（乐句缓存随之作废）')"
+                  @click="store.adoptA()">{{ t('采用 A') }}</button>
+        </span>
       </div>
 
-      <Transition name="fade">
-        <div v-if="store.busy" class="edt-prog"><i :style="{ width: store.progress + '%' }" /></div>
-      </Transition>
-      <Transition name="fade">
-        <p v-if="msg" class="edt-msg small">{{ msg }}</p>
-      </Transition>
+      <!-- 渲染进行中：进度条 + 分条文案 + 取消入口（不然长曲只能干等） -->
+      <div v-if="store.busy" class="edt-prog-wrap">
+        <div class="edt-prog"><i :style="{ width: store.progress + '%' }" /></div>
+        <span class="muted small">{{ store.msg || t('正在渲染…') }}</span>
+        <button class="btn sm" :title="t('正在渲染的这一条不会被打断，它跑完即停')" @click="store.cancelRender">
+          <Icon name="stop" :size="12" /> {{ t('停止后续渲染') }}
+        </button>
+      </div>
+      <!-- 渲染门禁原因：只在"想渲但渲不了"时显示，平时不占位（提示本身走 app.toast，见 P1-4） -->
+      <p v-if="renderReason && !store.busy && !isAudio" class="edt-msg small hint" data-guide="sing-render-why">
+        <Icon name="info" :size="12" /> {{ renderReason }}
+      </p>
+      <!-- P2-5：渲染前就把"歌词不在声库"标出来，别等渲完几十秒才在 warnings 里看到 -->
+      <p v-if="missingLyrics.length" class="edt-msg small bad">
+        <Icon name="info" :size="12" />
+        {{ t('本轨有 ') }}{{ missingLyrics.length }}{{ t(' 个歌词不在声库别名表里（渲染时会被跳过或静音）') }}
+        <button class="btn sm" @click="gotoFirstMissing"><Icon name="search" :size="12" /> {{ t('定位第一个') }}</button>
+      </p>
 
       <!-- 传输栏：伴奏与渲染结果**同时播放**（Web Audio 单时钟，采样级同步） -->
       <div class="xport" data-guide="sing-transport">
@@ -806,52 +2332,71 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <Icon :name="tplaying ? 'pause' : 'play'" :size="13" />
         </button>
         <button class="btn" :title="t('停止（回到 0）')" @click="tstop">
-          <Icon name="square" :size="12" />
+          <Icon name="stop" :size="12" />
         </button>
-        <input
-          class="xbar" type="range" min="0" :max="Math.max(1, transport.durationMs)"
-          :value="tpos" @input="tseek" :disabled="tpending"
-        />
-        <span class="xtime small">{{ fmtMs(tpos) }} / {{ fmtMs(transport.durationMs) }}</span>
+        <!-- 进度条上叠一层循环区间色块：A/B 设在哪一眼可见 -->
+        <div class="xbar-wrap">
+          <i v-if="loopStyle" class="xbar-loop" :style="loopStyle" :class="{ on: loopOn }" />
+          <input
+            class="xbar" type="range" min="0" :max="Math.max(1, transport.durationMs)"
+            :value="tpos" @input="tseek" :disabled="tpending"
+          />
+        </div>
+        <!-- 时间码点一下就能跳（长曲里拖进度条很难对准） -->
+        <button class="xtime small" :title="t('点击输入时间跳转')" @click="jumpToTime">
+          {{ fmtMs(tpos) }} / {{ fmtMs(transport.durationMs) }}
+        </button>
+        <!-- 循环区间：A/B 都取当前播放位置；开着循环时到 B 自动回 A -->
+        <button class="btn sm" :class="{ on: loopOn }" :title="t('循环区间开关（A/B 之间反复听）')" @click="toggleLoop">
+          <Icon name="loop" :size="12" /> {{ t('循环') }}
+        </button>
+        <button class="btn sm" :title="t('把当前播放位置设为循环起点 A')" @click="markLoop('a')">A</button>
+        <button class="btn sm" :title="t('把当前播放位置设为循环终点 B')" @click="markLoop('b')">B</button>
+        <button v-if="loopB - loopA >= 20" class="btn sm ghost" :title="t('清除循环区间')" @click="clearLoopRegion">{{ t('清区间') }}</button>
+        <!-- 跟随播放：播放头跑出可视区就自动滚过去 -->
+        <!-- 图标按钮一律带文字：静态截图里 ◎ / ↻ 这种符号认不出来（本轮 UX 复核第 13 条） -->
+        <button class="btn sm" :class="{ on: follow }" :title="t('跟随播放滚动卷帘')" @click="toggleFollow">
+          <Icon name="target" :size="12" /> {{ t('跟随') }}
+        </button>
         <button class="btn" :disabled="tpending" :title="t('重新装载伴奏与渲染结果')"
                 @click="reloadTransport">
-          <Icon name="refresh" :size="12" />
+          <Icon name="refresh" :size="12" /> {{ t('重载') }}
         </button>
+        <!-- 变速试听：慢放核对咬字、快放通听全曲（与播放器里的变速互不影响） -->
+        <select class="dev" :value="rate" :title="t('变速试听（不改工程 BPM）')"
+                @change="setPlayRate(nval($event, 1))">
+          <option :value="0.5">0.5×</option>
+          <option :value="0.75">0.75×</option>
+          <option :value="1">1.0×</option>
+          <option :value="1.25">1.25×</option>
+          <option :value="1.5">1.5×</option>
+          <option :value="2">2.0×</option>
+        </select>
         <span v-if="transport.lanes.length" class="muted small">
           {{ transport.lanes.length }} {{ t('条同时播放') }}
         </span>
         <button v-if="store.renderUrl" class="btn" @click="doSave">
           <Icon name="save" :size="12" /> {{ t('导出 WAV') }}
         </button>
-        <!-- 音频输出设备（setSinkId；换设备立即生效，偏好持久化） -->
-        <select class="sel select-input" :title="t('音频输出设备')" @change="onSink($event)">
-          <option value="">{{ t('默认输出') }}</option>
-          <option v-for="d in sinks" :key="d.deviceId" :value="d.deviceId">
-            {{ d.label || t('输出设备') + ' ' + d.deviceId.slice(0, 8) }}
-          </option>
-        </select>
-        <!-- MIDI 输入设备（录音：弹的音 → 工程音符，按住时长 = 音符长度） -->
-        <select class="sel select-input" :title="t('MIDI 输入设备（弹奏录音）')" @change="onMidiInSelect($event)">
-          <option value="">{{ t('无 MIDI 输入') }}</option>
-          <option v-for="d in midiIns" :key="d.id" :value="d.id">{{ d.name }}</option>
-        </select>
       </div>
       <ul v-if="store.renderWarnings.length" class="warn small">
         <li v-for="(w, i) in store.renderWarnings" :key="i">{{ w }}</li>
       </ul>
 
       <!-- 轨道属性：参数 / 效果链 / 自动化（后两者都是**本轨独享**的） -->
-      <Transition name="fade">
       <div v-if="propsOpen && tr" class="tprops">
         <div class="tabs small">
-          <button class="tab" :class="{ on: propsTab === 'params' }" @click="propsTab = 'params'">
-            {{ t('参数') }}
+          <button class="tab" :class="{ on: propsTab === 'params' }"
+                  :title="t('参数 = 这条轨怎么发声：推理后端、采样音，以及 PIT（音高）/ VOL（音量）/ PAN（声像）等引擎参数')" @click="propsTab = 'params'">
+            <Icon name="gear" :size="12" /> {{ t('参数') }}
           </button>
-          <button class="tab" :class="{ on: propsTab === 'fx' }" @click="propsTab = 'fx'">
-            {{ t('效果链') }}<span v-if="fxList.length" class="cnt">{{ fxList.length }}</span>
+          <button class="tab" :class="{ on: propsTab === 'fx' }"
+                  :title="t('效果链 = 按顺序挂在这条轨音频上的处理（EQ / 压缩 / 混响…），只影响本轨的播放')" @click="propsTab = 'fx'">
+            <Icon name="spark" :size="12" /> {{ t('效果链') }}<span v-if="fxList.length" class="cnt">{{ fxList.length }}</span>
           </button>
-          <button class="tab" :class="{ on: propsTab === 'auto' }" @click="propsTab = 'auto'">
-            {{ t('自动化') }}<span v-if="tr.curves && tr.curves.length" class="cnt">{{ tr.curves.length }}</span>
+          <button class="tab" :class="{ on: propsTab === 'auto' }"
+                  :title="t('自动化 = 随时间变化的参数曲线（音量 / 声像 / 颤音…）；写进工程，播放时按曲线走')" @click="propsTab = 'auto'">
+            <Icon name="cclane" :size="12" /> {{ t('自动化') }}<span v-if="tr.curves && tr.curves.length" class="cnt">{{ tr.curves.length }}</span>
           </button>
           <span class="sp" />
           <button class="ib" :title="t('收起')" @click="propsOpen = false">×</button>
@@ -859,23 +2404,38 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
         <!-- ── 参数 ── -->
         <div v-if="propsTab === 'params'" class="props small">
+          <!-- 推理后端 / 采样音属于"这条轨怎么渲"，从顶栏下沉到这里 -->
+          <label :title="t('推理后端：优先用哪个计算设备')">{{ t('推理后端') }}
+            <select :value="store.device" @change="store.device = sval($event)">
+              <option value="auto">{{ t('自动') }}</option>
+              <option value="cpu">CPU</option>
+              <option value="cuda">CUDA</option>
+              <option value="dml">DirectML</option>
+            </select>
+          </label>
           <template v-if="isUtau">
-            <label>{{ t('重采样器') }}<input class="text-input" :value="tr.resampler || ''"
+            <!-- ★ 这是采样**基准音**（音名），不是别名：引擎用 note_to_hz(sampleNote) 算变调比。
+                 写成别名（老版本默认 'a'）会让整轨渲染以「无法解析音名」失败。 -->
+            <label :title="t('声库样本录制时的音高（音名，如 C4）。引擎按它算变调比 —— 填别名会让整轨渲染失败。')">{{ t('采样基准音') }}
+              <input :value="store.sampleNote" placeholder="C4"
+                     @change="store.sampleNote = normalizeSampleNote(sval($event))" /></label>
+            <label>{{ t('重采样器') }}<input :value="tr.resampler || ''"
               @change="store.patchTrack(tr.id, { resampler: sval($event) })" /></label>
-            <label>{{ t('波源工具') }}<input class="text-input" :value="tr.wavtool || ''"
+            <label>{{ t('波源工具') }}<input :value="tr.wavtool || ''"
               @change="store.patchTrack(tr.id, { wavtool: sval($event) })" /></label>
           </template>
           <template v-if="isDs">
-            <label>{{ t('深度') }}<input class="num-input" type="number" step="0.05" min="0" max="1" :value="tr.depth ?? 1"
+            <label>{{ t('深度') }}<input type="number" step="0.05" min="0" max="1" :value="tr.depth ?? 1"
               @change="store.patchTrack(tr.id, { depth: nval($event, 1) })" /></label>
-            <label>{{ t('采样步数') }}<input class="num-input" type="number" min="1" :value="tr.steps ?? 20"
+            <label>{{ t('采样步数') }}<input type="number" min="1" :value="tr.steps ?? 20"
               @change="store.patchTrack(tr.id, { steps: nval($event, 20) })" /></label>
           </template>
-          <label>{{ t('BPM') }}<input class="num-input" type="number" min="1" :value="store.bpm"
+          <label>{{ t('BPM') }}<input type="number" min="1" :value="store.bpm"
             @change="store.bpm = nval($event, 120)" /></label>
-          <label>{{ t('音量') }}<input class="num-input" type="number" step="0.5" min="-60" max="6"
-            :value="isAudio ? (tr.audio?.gainDb ?? 0) : (tr.gainDb ?? 0)"
-            @change="onGainDb($event)" /><span class="muted">dB</span></label>
+          <label :title="t('整条轨的增益（dB）：0 = 原样，负值衰减')">{{ t('轨增益') }}
+            <input type="number" step="0.5" min="-60" max="6"
+              :value="isAudio ? (tr.audio?.gainDb ?? 0) : (tr.gainDb ?? 0)"
+              @change="onGainDb($event)" /><span class="muted">dB</span></label>
         </div>
 
         <!-- ── 效果链（本轨独享，顺序 = 信号流） ── -->
@@ -888,7 +2448,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             <span class="muted">{{ t('从上到下就是信号流顺序') }}</span>
             <span class="sp" />
             <button class="btn" :title="t('重新装载后播放才带新效果')" @click="reloadTransport">
-              {{ t('应用') }}
+              <Icon name="refresh" :size="12" /> {{ t('应用') }}
             </button>
           </div>
           <p v-if="!fxList.length" class="muted">{{ t('这条轨还没有效果。') }}</p>
@@ -921,11 +2481,30 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
         <!-- ── 自动化子轨 ── -->
         <div v-else class="autopane small">
-          <div class="auto-bar">
-            <button v-for="a in autoTargets" :key="a" class="chip"
-                    :class="{ on: a === curAbbr }" :title="t(curTgt(a).label)" @click="curAbbr = a">
-              {{ a }}
-            </button>
+          <!-- 参数行（M6c）：每行 = 一条参数曲线，可折叠、可 Solo；聚焦行才是工具条的目标 -->
+          <div class="auto-rows">
+            <div v-for="a in autoTargets" :key="a" class="auto-row" :class="{ on: a === curAbbr, solo: soloAbbr === a }">
+              <div class="auto-row-head" :title="t(curTgt(a).label)" @click="curAbbr = a">
+                <button class="ib" :title="rowExpanded(a) ? t('折叠这一行') : t('展开这一行')"
+                        @click.stop="toggleRow(a)"><Icon name="chevron" :size="11"
+                        :style="{ transform: rowExpanded(a) ? 'none' : 'rotate(-90deg)' }" /></button>
+                <b>{{ a }}</b>
+                <span class="muted small">{{ t(curTgt(a).label) }}</span>
+                <span class="muted small">{{ (ghostFor(a, tr).length ? t('本轨 ') : '') }}{{ ((curveOf(tr, a) || {}).points || []).length }}{{ t(' 点') }}</span>
+                <span class="sp" />
+                <button class="chip-s" :class="{ on: soloAbbr === a }" :title="t('只看这一条（再点一次取消）')"
+                        @click.stop="toggleSolo(a)">S</button>
+              </div>
+              <div v-if="rowExpanded(a)" class="auto-row-body">
+                <CurveCanvas :ref="(el: any) => setRowCanvas(a, el)"
+                             :points="((curveOf(tr, a) || {}).points) || []"
+                             :min="curTgt(a).min ?? -1200" :max="curTgt(a).max ?? 1200"
+                             :beats="curveBeats" :beats-per-bar="beatsPerBar" :tool="curveTool"
+                             :unit="curTgt(a).unit || ''" :locked="curveLocked"
+                             :ghost-points="ghostFor(a)" :ghost-label="a === curAbbr ? ghostLabel : ''"
+                             @commit="onAutoCurveCommit" />
+              </div>
+            </div>
           </div>
           <div v-if="curTarget" class="auto-head">
             <b>{{ curAbbr }}</b>
@@ -935,29 +2514,64 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             <span v-else class="tag-m pb">{{ t('播放时实时生效') }}</span>
             <span class="sp" />
             <button class="btn" @click="autoAddPoint"><Icon name="plus" :size="12" /> {{ t('加点') }}</button>
-            <button class="btn" @click="store.clearCurve(tr.id, curAbbr)">{{ t('清空') }}</button>
+            <button class="btn" @click="store.clearCurve(tr.id, curAbbr)"><Icon name="erase" :size="12" /> {{ t('清空') }}</button>
+            <button class="btn" :class="{ primary: curveLocked }" :title="t('锁定后画布只读，避免「只是想看看」时误改')"
+                    @click="curveLocked = !curveLocked"><Icon :name="curveLocked ? 'lock' : 'unlock'" :size="12" /> {{ curveLocked ? t('已锁定') : t('锁定') }}</button>
+            <select v-model="copyToId" class="select-input" style="width:auto;max-width:140px" :title="t('把这条曲线复制到哪条轨')">
+              <option value="">{{ t('复制到…') }}</option>
+              <option v-for="x in copyTargets" :key="x.id" :value="x.id">{{ x.name || t('未命名轨') }}</option>
+            </select>
+            <button class="btn" :disabled="!copyToId" @click="copyCurveTo(copyToId)">{{ t('复制') }}</button>
+            <button class="btn" :disabled="!copyTargets.length" @click="copyCurveToAll">{{ t('复制到全部轨') }}</button>
+            <!-- 叠加参考轨（M6c）：把另一条轨的同名曲线画成灰线，看着别人的调自己的 -->
+            <select v-model="refTrackId" class="select-input" style="width:auto;max-width:140px"
+                    :title="t('叠加参考轨：把这条轨的同名曲线画成灰线做对照')">
+              <option value="">{{ t('参考轨…') }}</option>
+              <option v-for="x in copyTargets" :key="x.id" :value="x.id">{{ x.name || t('未命名轨') }}</option>
+            </select>
           </div>
-          <div v-if="curCurve && curCurve.points.length" class="auto-grid">
+          <!-- P2-4：表格用于精确输入，车道用于"凭耳朵拖" —— 两条路都留着 -->
+          <p class="muted auto-hint">
+            {{ t('下面的车道可以直接拖：空白处按下加点并拖动，Alt+点或右键点删除。表格用于精确输入。') }}
+          </p>
+          <!-- M6b：这条参数也能直接画了（画笔/直线/橡皮/平滑/量化），落库走 store.setCurve -->
+          <div class="curves-head small">
+            <span class="curve-tools">
+              <span class="curve-tools-label">{{ t('曲线工具') }}</span>
+              <button v-for="tl in CURVE_TOOLS" :key="tl[0]" class="chip-btn" :class="{ on: curveTool === tl[0] }"
+                      :title="t(CURVE_TOOL_TIP)" @click="curveTool = tl[0]">{{ t(tl[1]) }}</button>
+            </span>
+            <button class="btn" @click="curveCanvasAuto?.smooth()">{{ t('平滑') }}</button>
+            <button class="btn" @click="curveCanvasAuto?.quantize(0.25)">{{ t('量化 1/16') }}</button>
+            <span class="muted">{{ (curCurve && curCurve.points.length) || 0 }}{{ t(' 个点') }}</span>
+          </div>
+          <!-- ★ 单张画布已由上面的「参数行」取代（每行一张，可折叠/Solo）——
+               工具条通过动态 ref 作用在**聚焦行**的画布上（见 setRowCanvas）。 -->
+          <details v-if="curCurve && curCurve.points.length" class="curve-nums">
+            <summary class="muted small">{{ t('数值表（精确输入）') }}</summary>
+          <div class="auto-grid">
             <div v-for="(p, i) in curCurve.points" :key="i" class="curve-row">
               <span class="ci">{{ i + 1 }}</span>
-              <input class="num-input" type="number" step="0.25" :value="p.beat"
+              <input type="number" step="0.25" :value="p.beat"
                      @change="autoSetPoint(curCurve.points, i, 'beat', $event)" />
-              <input class="num-input" type="number" :step="curTarget.step || 1" :value="p.value"
+              <input type="number" :step="curTarget.step || 1" :value="p.value"
                      @change="autoSetPoint(curCurve.points, i, 'value', $event)" />
               <span class="muted">beat / {{ curTarget.unit || '' }}</span>
               <button class="ib del" :title="t('删除')" @click="autoDelPoint(curCurve.points, i)">×</button>
             </div>
           </div>
+          </details>
           <p v-else class="muted">{{ t('还没有点，整条轨用默认值。') }}</p>
         </div>
       </div>
-      </Transition>
 
       <!-- MIDI 多轨时选一条 -->
-      <Transition name="fade">
-        <div v-if="midiPick" class="pick small">
+      <div v-if="midiPick" class="pick small">
         <div class="pick-head">
           <b>{{ t('这个 MIDI 有 ') }}{{ midiPick.tracks.length }}{{ t(' 条旋律轨，选一条：') }}</b>
+          <label class="mono-chk" :title="t('同一时刻只留最高音（旋律线）；复音轨直接唱会每拍叠好几个音节') ">
+            <input type="checkbox" v-model="monoPick" /> {{ t('只取最高音（单音化）') }}
+          </label>
           <span class="sp" />
           <button class="btn" @click="midiPick = null">{{ t('取消') }}</button>
         </div>
@@ -965,34 +2579,263 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <li v-for="mt in midiPick.tracks" :key="mt.index">
             <span class="nm">{{ mt.name }}</span>
             <span class="muted">{{ mt.noteCount }} {{ t('音符') }} · {{ mt.minPitch }}–{{ mt.maxPitch }}</span>
+            <span v-if="overlapCount(mt)" class="ovl" :title="t('同一时刻有多个音在响（复音轨）')">
+              {{ t('复音 ') }}{{ overlapCount(mt) }}
+            </span>
             <button class="btn" @click="applyPicked(mt, midiPick?.tpb || 480, midiPick?.bpm || 120)">
-              {{ t('用这条') }}
+              <Icon name="check" :size="12" /> {{ t('用这条') }}
             </button>
           </li>
         </ul>
-        </div>
-      </Transition>
+      </div>
 
-      <!-- 共用钢琴卷帘（fill：吃满剩余空间，面板/泳道不把它挤下屏） -->
+      <!-- 从曲库选 MIDI（P1-12）：曲目已经在 <数据目录>/midi 里，直接读字节，不弹系统对话框 -->
+      <div v-if="libDlg" class="singdlg small">
+        <div class="singdlg-head">
+          <b>{{ t('从曲库选 MIDI') }}</b>
+          <span class="muted">{{ t('曲库里的曲目（数据目录 midi/）') }}</span>
+          <span class="sp" />
+          <button class="btn" @click="libDlg = null">{{ t('取消') }}</button>
+        </div>
+        <div class="singdlg-row">
+          <input class="singdlg-q" v-model="libDlg.q" :placeholder="t('搜索曲名')" />
+          <span class="muted">{{ libSongs.length }}</span>
+        </div>
+        <ul class="lib-list">
+          <li v-for="s in libSongs" :key="s.id">
+            <button class="lib-item" :disabled="busyImport" @click="importFromLibrary(s)">
+              <span class="nm">{{ s.name }}</span>
+              <span class="muted small">
+                {{ s.meta && s.meta.tracks ? s.meta.tracks + t(' 轨 · ') : '' }}{{ s.meta && s.meta.dur ? Math.round(s.meta.dur) + 's' : '' }}
+              </span>
+            </button>
+          </li>
+        </ul>
+      </div>
+
+      <!-- 批量填词（P1-7/8）：中文逐字分词 + 填充模式 + 预览 + 转拼音 + 读歌词文件 -->
+      <div v-if="lyricDlg" class="singdlg small">
+        <div class="singdlg-head">
+          <b>{{ t('批量填词') }}</b>
+          <span class="muted">{{ t('作用于选中的 ') }}{{ selNotes.length }}{{ t(' 个音符') }}</span>
+          <span class="sp" />
+          <button class="btn" @click="lyricDlg = null">{{ t('取消') }}</button>
+        </div>
+        <textarea class="singdlg-ta" v-model="lyricDlg.text"
+                  :placeholder="t('把歌词粘进来：中文会自动逐字切分，也可以写成空格分隔的音节。')"></textarea>
+        <div class="singdlg-row">
+          <label>{{ t('分词') }}
+            <select v-model="lyricDlg.mode">
+              <option value="auto">{{ t('自动（中文逐字）') }}</option>
+              <option value="char">{{ t('逐字') }}</option>
+              <option value="space">{{ t('按空白') }}</option>
+              <option value="line">{{ t('按行') }}</option>
+            </select>
+          </label>
+          <label v-if="lyricDlg.align === 'seq'">{{ t('填充') }}
+            <select v-model="lyricDlg.fill">
+              <option value="seq">{{ t('顺序（不够时沿用最后一个）') }}</option>
+              <option value="loop">{{ t('循环（从头重复）') }}</option>
+              <option value="trim">{{ t('只填到用完（其余留空）') }}</option>
+            </select>
+          </label>
+          <!-- ★ 对齐方式：字数与音符数不一致时（实测 441 字 / 275 音符），顺序填一定会错位 -->
+          <label :title="t('顺序=一个字一个音符；按比例/按乐句会把字铺满全曲（字多时跳过一些字）；切开长音符=把长音切开，一个字都不丢')">{{ t('对齐') }}
+            <select v-model="lyricDlg.align">
+              <option value="seq">{{ t('顺序') }}</option>
+              <option value="spread">{{ t('整首按比例') }}</option>
+              <option value="phrases">{{ t('按乐句') }}</option>
+              <option value="split">{{ t('切开长音符（一字不丢）') }}</option>
+            </select>
+          </label>
+          <label v-if="lyricDlg.align === 'phrases' || lyricDlg.align === 'split'" :title="t('两个音符之间空多久算换句')">
+            {{ t('换句休止') }}
+            <input type="number" min="0.125" step="0.25" style="width:64px" v-model.number="lyricDlg.gap" /> {{ t('拍') }}
+          </label>
+          <button class="btn sm" :disabled="pinyinBusy" @click="toPinyin">
+            <Icon name="convert" :size="12" /> {{ pinyinBusy ? t('转换中…') : t('汉字→拼音') }}
+          </button>
+          <button class="btn sm" @click="importLyricsFile"><Icon name="import" :size="12" /> {{ t('读歌词文件') }}</button>
+        </div>
+        <div class="singdlg-prev">
+          <span class="muted">{{ t('识别到 ') }}{{ lyricTokens.length }}{{ t(' 个词 → ') }}{{ selNotes.length }}{{ t(' 个音符') }}</span>
+          <span v-if="lyricDlg.align === 'seq' && Math.abs(lyricTokens.length - selNotes.length) > Math.max(4, selNotes.length * 0.25)"
+                class="mismatch">
+            {{ t('字数与音符数差得多：顺序填会从中间开始错位；想一个字都不丢就选「切开长音符」。') }}
+          </span>
+          <span class="chips">
+            <i v-for="(w, i) in lyricTokens.slice(0, 24)" :key="i">{{ w }}</i>
+            <em v-if="lyricTokens.length > 24">…</em>
+          </span>
+        </div>
+        <!-- 多音字候选：不/了/着/得… 自动转换必然有一半是错的，给个一键换 -->
+        <div v-if="heteroList.length" class="singdlg-py">
+          <span class="muted">{{ t('多音字：') }}</span>
+          <span v-for="h in heteroList" :key="h.index" class="py-item">
+            <b>{{ h.ch }}</b>
+            <button v-for="o in h.options" :key="o" class="chip-btn"
+                    :class="{ on: o === h.current }" @click="pickPinyin(h.index, o)">{{ o }}</button>
+          </span>
+          <span v-if="heteroList.length >= 16" class="muted small">{{ t('（只列出前 16 个）') }}</span>
+        </div>
+        <div class="singdlg-foot">
+          <span class="muted">{{ t('UTAU 中文声库要先转拼音（引擎只认别名）；DiffSinger 直接用汉字。') }}</span>
+          <span class="sp" />
+          <button class="btn primary" @click="applyLyricDialog"><Icon name="check" :size="12" /> {{ t('填入') }}</button>
+        </div>
+      </div>
+
+      <!-- 发音表（P1-14）：这个声库到底能唱哪些音 -->
+      <div v-if="aliasDlg" class="singdlg small">
+        <div class="singdlg-head">
+          <b>{{ t('发音表') }}</b>
+          <span class="muted">{{ aliasDlg.dir }}</span>
+          <span class="sp" />
+          <button class="btn" @click="aliasDlg = null"><Icon name="close" :size="12" /> {{ t('关闭') }}</button>
+        </div>
+        <div class="singdlg-row">
+          <input class="singdlg-q" v-model="aliasDlg.q" :placeholder="t('搜索发音（如 ai / bu / hao）')" />
+          <span class="muted">{{ aliasDlg.loading ? t('读取中…') : String(aliasFiltered.length) + ' / ' + String(aliasDlg.all.length) }}</span>
+        </div>
+        <p v-if="aliasDlg.err" class="edt-msg small bad">{{ aliasDlg.err }}</p>
+        <div class="singdlg-chips">
+          <button v-for="a in aliasFiltered" :key="a" class="chip-btn" @click="useAlias(a)">{{ a }}</button>
+        </div>
+        <div class="singdlg-foot">
+          <span class="muted">{{ t('点一个发音：有选中音符就填给它，否则复制到剪贴板。') }}</span>
+        </div>
+      </div>
+
+      <!-- 多轨叠置条：一眼看清有哪几条声部、各自什么颜色、现在在编辑哪条 -->
+      <!-- ★ 以前没有这一条：卷帘只画当前轨，用户在第二条轨上工作时看不到第一条，
+           和声/对词只能靠记。点色块＝切轨，点眼睛＝临时藏起来，点圆点＝换色。 -->
+      <div v-if="tr && !isAudio && voiceTracks.length" class="roll-strip">
+        <button class="chip-btn" :class="{ on: rollOverlay }" :title="t('把其它声部的音符画成半透明幽灵，方便对拍对词')"
+                @click="rollOverlay = !rollOverlay"><Icon name="layers" :size="12" />{{ t('多轨叠置') }}</button>
+        <button v-if="rollOverlay" class="chip-btn" :class="{ on: rollGhostLabels }" :title="t('幽灵音符上也显示歌词，便于对齐字位')"
+                @click="rollGhostLabels = !rollGhostLabels"><Icon name="edit" :size="12" />{{ t('显示歌词') }}</button>
+        <span class="rs-sep" />
+        <button v-for="(tk, i) in voiceTracks" :key="tk.id" class="rs-track"
+                :class="{ on: tk.id === store.activeTrackId, off: store.rollHidden.includes(tk.id) }"
+                :title="t('点一下切到这条轨编辑；点圆点换颜色；点眼睛临时隐藏')"
+                @click="store.selectTrack(tk.id)">
+          <i class="rs-dot" :style="{ background: colorOf(tk) }" @click.stop="store.cycleTrackColor(tk.id)" />
+          <span class="rs-name">{{ tk.name || tk.singerName || t('未命名轨') }}</span>
+          <span class="rs-cnt">{{ (tk.notes || []).length }}</span>
+          <span class="rs-ib" :title="t('渲染结果')" v-if="store.renderByTrack[tk.id]">●</span>
+          <span class="rs-ib" :class="{ on: tk.muted }" :title="t('静音')" @click.stop="store.patchTrack(tk.id, { muted: !tk.muted })">M</span>
+          <span class="rs-ib" :title="t('独奏')" @click.stop="store.toggleSolo(tk.id)">S</span>
+          <span class="rs-ib" :title="t('在卷帘里显示/隐藏')" @click.stop="store.toggleRollHidden(tk.id)">
+            <Icon :name="store.rollHidden.includes(tk.id) ? 'eye-off' : 'eye'" :size="11" /></span>
+        </button>
+        <!-- 这是一**个状态开关**（详情面板开/关），不是两个不同的命令：
+             以前同一位置随状态改文案（显示详情 ↔ 放大音符区），看上去像两个动作、也没有开合指示。
+             现在标签固定 + 箭头随状态翻转 + aria-pressed，悬停说清"点下去会发生什么"。 -->
+        <button class="chip-btn" :class="{ on: detailOpen }" :aria-pressed="detailOpen ? 'true' : 'false'"
+                data-guide="sing-detail-toggle"
+                :title="detailOpen ? t('收起下方的歌词 / 音素 / 曲线面板，把高度全给音符区') : t('展开下方的歌词 / 音素 / 曲线面板（选中音符才有内容）')"
+                @click="detailOpen = !detailOpen">
+          <Icon name="chevron" :size="12" :style="{ transform: detailOpen ? 'rotate(180deg)' : '' }" />
+          {{ t('详情面板') }}</button>
+        <span class="rs-hint muted small" :title="t('点别的轨的音符即可切过去编辑')" v-if="rollOverlay && voiceTracks.length > 1">ⓘ</span>
+        <span class="rs-sep" />
+        <!-- 和声组（M8a）：成组 / 改名 / 加成员 / 切到组 -->
+        <button class="chip-btn" :title="t('色盲友好配色：整体换成 Okabe–Ito 八色，红绿色盲下也能分辨轨道')"
+                @click="toggleColorblind" :class="{ on: cbOn }"><Icon name="eye" :size="12" />{{ t('配色') }}</button>
+        <button class="chip-btn" :title="t('把当前声部轨建成一个和声组')" @click="makeGroup"><Icon name="plus" :size="12" />{{ t('成组') }}</button>
+        <span v-for="g in groups" :key="g.id" class="rs-group" :title="t('点一下切到组内首轨并把其余成员叠出来')">
+          <input class="rs-group-name" :value="g.name" @click.stop @change="renameGroup(g, $event)" />
+          <span class="rs-group-n">{{ g.trackIds.length }}</span>
+          <input class="rs-group-gain" type="number" step="1" min="-24" max="24" :value="g.gainDb || 0"
+                 :title="t('组内统一音量（dB）：改一次，所有成员轨一起改')" @click.stop @change="groupGain(g, $event)" />
+          <span class="rs-ib" :class="{ on: g.muted }" :title="t('静音/取消静音本组全部成员（批量写回成员轨）')" @click.stop="groupMute(g)">M</span>
+          <span class="rs-ib" :class="{ on: g.solo }" :title="t('只听本组：其余轨道全部静音')" @click.stop="groupSolo(g)">S</span>
+          <span class="rs-ib" :title="t('组内统一编辑：整组降半音（一次撤销点）')" @click.stop="groupTranspose(g, -1)">♭</span>
+          <span class="rs-ib" :title="t('组内统一编辑：整组升半音（一次撤销点）')" @click.stop="groupTranspose(g, 1)">♯</span>
+          <span class="rs-ib" :title="t('组内统一编辑：整组量化到 1/16 网格（一次撤销点）')" @click.stop="groupQuantize(g)">量</span>
+          <span class="rs-ib" :title="t('把当前轨加进这个组')" @click.stop="addCurrentToGroup(g)">+</span>
+          <span class="rs-ib" :title="t('切到这个组')" @click.stop="useGroup(g)">→</span>
+          <span class="rs-ib" :title="t('解散这个组（不动成员轨）')" @click.stop="dropGroup(g)">✕</span>
+        </span>
+      </div>
+
+      <!-- 共用钢琴卷帘 -->
+      <!-- ★ 卷帘放在吃满剩余高度的盒子里（fill）：原来固定 320px，大屏上只占一小块。
+           拖动下面的分隔条可手动定高，双击恢复「自动铺满」。 -->
+      <div v-if="tr && !isAudio" class="roll-box" :style="rollBoxStyle">
       <PianoRoll
-        v-if="tr && !isAudio"
+        ref="prRef"
         class="edt-roll"
         fill
+        :height="rollH || 320"
         :notes="tr.notes"
         :selected-id="store.selectedId"
         :selected-ids="store.selectedIds"
         :bpm="store.bpm"
         :api="rollApi()"
-        @edit-lyric="(id) => store.select(id)"
+        :playhead-beat="playheadBeat"
+        :beats-per-bar="beatsPerBar"
+        :scale="scale"
+        :sel-phoneme="selPh"
+        :automation="autoLane"
+        :tracks="rollTracks"
+        :active-track-id="store.activeTrackId"
+        :overlay="rollOverlay"
+        :ghost-labels="rollGhostLabels"
+        @edit-lyric="onEditNoteFromRoll"
+        @automation-begin="store.pushUndo()"
+        @set-automation="onAutoLane"
+        @set-scale="onRollScale"
+        @set-scale-root="onRollScaleRoot"
+        @edit-phoneme="onPickPhoneme"
+        @pick-note="onPickGhostNote"
       />
+      </div>
+      <div v-if="tr && !isAudio" class="roll-resizer" :title="t('拖动调整音符区高度；双击恢复自动铺满')"
+           @pointerdown.prevent="startRollResize" @dblclick="resetRollHeight">
+        <span class="rr-grip"></span>
+      </div>
 
       <!-- 选中音符的详细编辑（两边共用一套，引擎特有项按轨道显示） -->
-      <Transition name="fade">
-      <div v-if="sel && !isAudio" class="det">
+      <!-- 多选批量工具（P2-1）：选中 2 个以上音符才出现，平时不占地方 -->
+      <div v-if="detailOpen && !isAudio && selNotes.length > 1" class="bulk small">
+        <b>{{ t('已选 ') }}{{ selNotes.length }}{{ t(' 个音符') }}</b>
+        <button class="btn sm" @click="openLyricDialog()"><Icon name="edit" :size="12" /> {{ t('批量填词') }}</button>
+        <button class="btn sm" @click="importLyricsFile" :title="t('读入 .txt / .lrc：txt 走分词填入，lrc 按时间轴自动对轴')">
+          <Icon name="import" :size="12" /> {{ t('导入歌词') }}
+        </button>
+        <button class="btn sm" @click="openAliasDialog" :title="t('看这个声库支持哪些发音，点一下就能填')">
+          <Icon name="music" :size="12" /> {{ t('发音表') }}
+        </button>
+        <button class="btn sm" @click="rampVelocity(1)" :title="t('按音符先后做 20 → 100 的力度递增')">
+          <Icon name="cresc" :size="12" /> {{ t('渐强') }}
+        </button>
+        <button class="btn sm" @click="rampVelocity(-1)" :title="t('按音符先后做 100 → 20 的力度递减')">
+          <Icon name="dim" :size="12" /> {{ t('渐弱') }}
+        </button>
+        <span class="muted">{{ t('复制 / 切分 / 合并：卷帘里右键，或 Ctrl+C / Ctrl+E / Ctrl+M') }}</span>
+      </div>
+
+      <!-- 详情收起时的单行摘要：不展开面板也能看到选中音符的关键字段 -->
+      <div v-if="!detailOpen && sel && !isAudio" class="det-mini small">
+        <b>{{ t('已选音符') }}</b>
+        <span>{{ t('歌词') }}「{{ sel.lyric || t('（空）') }}」</span>
+        <span>{{ t('音高') }} {{ sel.pitch }}</span>
+        <span>{{ t('起点') }} {{ Number(sel.startBeat).toFixed(2) }}</span>
+        <span>{{ t('时长') }} {{ Number(sel.durBeat).toFixed(2) }}</span>
+        <span class="sp" />
+        <button class="btn sm" @click="detailOpen = true"><Icon name="edit" :size="12" /> {{ t('显示详情') }}</button>
+      </div>
+
+      <div v-if="detailOpen && sel && !isAudio" class="det">
+        <div class="det-hint small">
+          <Icon name="kbd" :size="12" />
+          <span>{{ t('键盘：↑↓ 半音 · Ctrl+↑↓ 八度 · Tab 切换音符 · 数字键 1~6 = 1/32~4 拍') }}</span>
+        </div>
         <label class="ly">
           <span>{{ t('歌词') }}</span>
           <span class="ly-wrap">
-            <input class="text-input" :value="sel.lyric" @focus="store.pushUndo()" @input="onLyric(sel, $event)" />
+            <input :value="sel.lyric" @input="onLyric(sel, $event)" />
             <span v-if="cands.length && candFor === sel.id" class="cands">
               <button v-for="c in cands" :key="c.kind + c.text" class="cand"
                       :class="'k-' + c.kind" :title="c.note" @click="pickCand(sel.id, c.text)">
@@ -1001,73 +2844,268 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             </span>
           </span>
         </label>
-        <label><span>{{ t('起点') }}</span><input class="num-input" type="number" step="0.125" min="0" :value="sel.startBeat"
-          @change="commitNote(sel, { startBeat: nval($event, 0) })" /></label>
-        <label><span>{{ t('时长') }}</span><input class="num-input" type="number" step="0.125" min="0.125" :value="sel.durBeat"
-          @change="commitNote(sel, { durBeat: Math.max(0.125, nval($event, 1)) })" /></label>
-        <label><span>{{ t('音高') }}</span><input class="num-input" type="number" min="0" max="127" :value="sel.pitch"
-          @change="commitNote(sel, { pitch: Math.max(0, Math.min(127, nval($event, 60))) })" /></label>
-        <label class="ck"><input type="checkbox" :checked="sel.vibrato"
-          @change="commitNote(sel, { vibrato: $event.target.checked })" /><span>{{ t('颤音') }}</span></label>
-        <label><span>{{ t('深度') }}</span><input class="num-input" type="number" min="0" max="100" :value="sel.vibDepth"
-          @change="commitNote(sel, { vibDepth: nval($event, 35) })" /></label>
-        <label><span>{{ t('频率') }}</span><input class="num-input" type="number" step="0.5" min="0" max="12" :value="sel.vibFreq"
-          @change="commitNote(sel, { vibFreq: nval($event, 5.5) })" /></label>
-        <!-- 颤音扩展参（对应上游 UVibrato 的 in/out/shift/drift；vibFade 是旧的 in/out 合体） -->
-        <template v-if="sel.vibrato">
-          <label :title="t('颤音起音占比 %（0-100）')"><span>{{ t('起音') }}</span>
-            <input class="num-input" type="number" min="0" max="100" :value="sel.vibIn ?? sel.vibFade ?? 0"
-              @change="commitNote(sel, { vibIn: nval($event, 0) })" /></label>
-          <label :title="t('颤音收音占比 %（0-100）')"><span>{{ t('收音') }}</span>
-            <input class="num-input" type="number" min="0" max="100" :value="sel.vibOut ?? sel.vibFade ?? 0"
-              @change="commitNote(sel, { vibOut: nval($event, 0) })" /></label>
-          <label :title="t('颤音相位偏移（-100-100，正值提前起振）')"><span>{{ t('相位') }}</span>
-            <input class="num-input" type="number" min="-100" max="100" :value="sel.vibShift ?? 0"
-              @change="commitNote(sel, { vibShift: nval($event, 0) })" /></label>
-          <label :title="t('音高漂移（-100-100，颤音上的随机波动）')"><span>{{ t('漂移') }}</span>
-            <input class="num-input" type="number" min="-100" max="100" :value="sel.vibDrift ?? 0"
-              @change="commitNote(sel, { vibDrift: nval($event, 0) })" /></label>
-        </template>
-        <label v-if="isDs"><span>{{ t('音分偏移') }}</span><input class="num-input" type="number" min="-100" max="100" :value="sel.pitchOffset || 0"
-          @change="commitNote(sel, { pitchOffset: nval($event, 0) })" /></label>
-        <label v-if="isUtau"><span>{{ t('音量') }}</span><input class="num-input" type="number" min="0" max="100" :value="sel.velocity ?? 100"
-          @change="commitNote(sel, { velocity: nval($event, 100) })" /></label>
-        <label v-if="isUtau"><span>{{ t('GENC') }}</span><input class="num-input" type="number" min="-100" max="100" :value="sel.gender || 0"
-          @change="commitNote(sel, { gender: nval($event, 0) })" /></label>
-        <label v-if="isUtau"><span>{{ t('气声') }}</span><input class="num-input" type="number" min="0" max="100" :value="sel.breath || 0"
-          @change="commitNote(sel, { breath: nval($event, 0) })" /></label>
-      </div>
-      </Transition>
-
-      <!-- 音高曲线（两边共用）。头部可整栏折叠：点再多也只收成一行，不占卷帘空间 -->
-      <div v-if="!isAudio" class="curves">
-        <div class="curves-head small" role="button" @click="curvesOpen = !curvesOpen">
-          <span class="curves-caret">{{ curvesOpen ? '▾' : '▸' }}</span>
-          <b>{{ t('音高曲线') }}</b>
-          <span v-if="tr && tr.pitchCurve.length" class="muted">{{ tr.pitchCurve.length }} pt</span>
-          <template v-if="curvesOpen">
-            <button class="btn" @click.stop="curveAdd"><Icon name="plus" :size="12" /> {{ t('加点') }}</button>
-            <button class="btn" @click.stop="curveClear">{{ t('清空') }}</button>
-            <span class="muted">{{ t('单位：音分（cent），作用于整条轨') }}</span>
-          </template>
-          <span v-else class="muted">{{ t('（已折叠，点头部展开）') }}</span>
+        <!-- P2-5：这个词不在声库别名表里 —— 行内标红 + 相近别名一键替换 -->
+        <div v-if="selLyricMissing" class="ly-bad small">
+          <Icon name="info" :size="12" />
+          <span>{{ t('「') }}{{ sel.lyric }}{{ t('」不在当前声库的别名表里，渲染时会静音或被跳过') }}</span>
+          <button v-for="a in suggestAliases(sel.lyric)" :key="a" class="chip-btn" :title="t('替换成这个别名')"
+                  @click="store.updateNote(sel.id, { lyric: a })">{{ a }}</button>
         </div>
-        <div v-if="curvesOpen && tr && tr.pitchCurve.length" class="curves-grid small">
+        <div class="det-sec">{{ t('音高与时值') }}</div>
+        <label><span>{{ t('起点') }}</span><input type="number" step="0.125" min="0" :value="sel.startBeat"
+          @change="store.updateNote(sel.id, { startBeat: nval($event, 0) })" /></label>
+        <label><span>{{ t('时长') }}</span><input type="number" step="0.125" min="0.125" :value="sel.durBeat"
+          @change="store.updateNote(sel.id, { durBeat: Math.max(0.125, nval($event, 1)) })" /></label>
+        <label><span>{{ t('音高') }}</span><input type="number" min="0" max="127" :value="sel.pitch"
+          @change="store.updateNote(sel.id, { pitch: Math.max(0, Math.min(127, nval($event, 60))) })" /></label>
+        <!-- 颤音（M6b，计划书 §4.2）：布尔开关 + 三条参数升级成「能看见包络」的一块 -->
+        <div class="vib-block">
+          <div class="vib-head">
+            <label class="ck" :title="t('颤音 = 音高按周期微微起伏（人声自然的波动）：深度 = 幅度，速率 = 每秒几次，淡入 = 从平直渐入')">
+              <input type="checkbox" :checked="sel.vibrato"
+              @change="store.updateNote(sel.id, { vibrato: $event.target.checked })" /><span>{{ t('颤音') }}</span></label>
+            <span class="muted small">{{ t('下面画的是这个音的颤音包络：起音渐入 → 保持 → 收尾渐出') }}</span>
+          </div>
+          <label class="vib-row"><span>{{ t('深度') }}</span>
+            <input type="range" min="0" max="100" step="1" :value="vibVal('vibDepth')" :disabled="!sel.vibrato"
+                   @input="store.updateNote(sel.id, { vibDepth: nval($event, 35) })" />
+            <em>{{ vibVal('vibDepth') }}</em></label>
+          <label class="vib-row"><span>{{ t('速率') }}</span>
+            <input type="range" min="0" max="12" step="0.1" :value="vibVal('vibFreq')" :disabled="!sel.vibrato"
+                   @input="store.updateNote(sel.id, { vibFreq: nval($event, 5.5) })" />
+            <em>{{ Number(vibVal('vibFreq')).toFixed(1) }} Hz</em></label>
+          <label class="vib-row"><span>{{ t('淡入') }}</span>
+            <input type="range" min="0" max="0.9" step="0.05" :value="vibVal('vibFade')" :disabled="!sel.vibrato"
+                   @input="store.updateNote(sel.id, { vibFade: nval($event, 0.25) })" />
+            <em>{{ Math.round(Number(vibVal('vibFade')) * 100) }}%</em></label>
+          <canvas ref="vibCv" class="vib-cv" height="46"></canvas>
+        </div>
+        <label v-if="isDs"><span>{{ t('音分偏移') }}</span><input type="number" min="-100" max="100" :value="sel.pitchOffset || 0"
+          @change="store.updateNote(sel.id, { pitchOffset: nval($event, 0) })" /></label>
+        <div class="det-sec">{{ t('发声与音色') }}</div>
+        <!-- 留空 = 用引擎默认值。占位符直接显示那个默认值，免得用户以为"0 是默认" -->
+        <label v-if="isUtau" :title="t('力度（0 ~ 100，默认 100）：影响辅音速度与音量，越小越柔')"><span>{{ t('力度') }}</span>
+          <input type="number" min="0" max="100" placeholder="100" :value="sel.velocity ?? ''"
+            @change="store.updateNote(sel.id, { velocity: nval($event, 100) })" /></label>
+        <label v-if="isUtau" :title="t('GENC（-100 ~ 100，默认 0 = 不变）：正值更亮（偏女声），负值更暗')"><span>{{ t('GENC') }}</span>
+          <input type="number" min="-100" max="100" placeholder="0" :value="sel.gender ?? ''"
+            @change="store.updateNote(sel.id, { gender: nval($event, 0) })" /></label>
+        <label v-if="isUtau" :title="t('气声（0 ~ 100，默认 0）')"><span>{{ t('气声') }}</span>
+          <input type="number" min="0" max="100" placeholder="0" :value="sel.breath ?? ''"
+            @change="store.updateNote(sel.id, { breath: nval($event, 0) })" /></label>
+        <label v-if="isUtau" :title="t('音量（表情级 0 ~ 100，默认 100 = 原样；不是衰减量）')"><span>{{ t('音量') }}</span>
+          <input type="number" min="0" max="100" placeholder="100" :value="sel.volume ?? ''"
+            @change="store.updateNote(sel.id, { volume: nval($event, 100) })" /></label>
+
+        <!-- OpenUTAU 表达式（每音符，作用于该音符首个音素；不填 = 用轨道默认值） -->
+        <template v-if="isUtau">
+          <label :title="t('起音：音符开头的咬字力度，越小越柔和')"><span>{{ t('起音 ATK') }}</span>
+            <input type="number" min="0" max="100" placeholder="100" :value="sel.atk ?? ''"
+              @change="store.updateNote(sel.id, { atk: nval($event, 100) })" /></label>
+          <label :title="t('衰减：音符尾部的收束，越小收得越快')"><span>{{ t('衰减 DEC') }}</span>
+            <input type="number" min="0" max="100" placeholder="100" :value="sel.dec ?? ''"
+              @change="store.updateNote(sel.id, { dec: nval($event, 100) })" /></label>
+          <label :title="t('音量曲线偏移（-240 ~ 120），对应 OpenUTAU 的 dyn')"><span>{{ t('力度曲线 DYN') }}</span>
+            <input type="number" min="-240" max="120" placeholder="0" :value="sel.dyn ?? ''"
+              @change="store.updateNote(sel.id, { dyn: nval($event, 0) })" /></label>
+          <label :title="t('音高偏移量（0 ~ 100），对应 OpenUTAU 的 shft')"><span>{{ t('音高偏移 SHFT') }}</span>
+            <input type="number" min="0" max="100" placeholder="0" :value="sel.shft ?? ''"
+              @change="store.updateNote(sel.id, { shft: nval($event, 0) })" /></label>
+          <label :title="t('语音色选项下标（0 起），对应 OpenUTAU 的 clr；声库没有多语音色时保持 0')"><span>{{ t('语音色 CLR') }}</span>
+            <input type="number" min="0" step="1" placeholder="0" :value="sel.clr ?? ''"
+              @change="store.updateNote(sel.id, { clr: nval($event, 0) })" /></label>
+        </template>
+      </div>
+
+      <!-- 音素级编辑（P2-2）：条带上点一个音素，或点下面的音素芯片 -->
+      <div v-if="detailOpen && !isAudio && phNote && phItems.length" class="ph-panel">
+        <div class="ph-head small">
+          <b :title="t('音素 = 一个音节在声库里的发音段（辅音 + 元音）。这里按下标单独覆盖某个音素；引擎真正的切分以声库 oto.ini 为准')">{{ t('音素级编辑') }}</b>
+          <span class="muted">{{ t('音符「') }}{{ phNote.lyric || '—' }}{{ t('」的音素（辅音 → 元音）：') }}</span>
+          <button v-for="(it, i) in phItems" :key="i" class="chip-btn"
+                  :class="{ on: i === phIndex, has: !!(phNote.phExpressions && phNote.phExpressions[String(i)]) }"
+                  :title="t('编辑这个音素（下标 ') + i + t('）；带圆点表示已单独设过') "
+                  @click="pickPhonemeIndex(i)">{{ it.text }}</button>
+          <span class="sp" />
+          <span v-if="phOverrideCount" class="muted">{{ t('本音素已覆盖 ') }}{{ phOverrideCount }}{{ t(' 项') }}</span>
+          <button class="btn sm" :disabled="!phOverrideCount" @click="clearPhExpr"><Icon name="erase" :size="12" /> {{ t('清除本音素覆盖') }}</button>
+        </div>
+        <div class="ph-wave-wrap">
+          <canvas ref="waveCv" class="ph-wave" :style="{ height: (phSpecOn ? 58 : 46) + 'px' }"></canvas>
+          <div class="ph-wave-btns">
+            <button class="btn sm" :title="t('播放这个音符对应的那一段渲染结果')" @click="audition('note')"><Icon name="play" :size="12" /> {{ t('试听整音') }}</button>
+            <button class="btn sm" :disabled="phIndex < 0" :title="t('只播放当前音素那一段（秒级）')" @click="audition('phoneme')"><Icon name="play" :size="12" /> {{ t('试听音素') }}</button>
+            <label class="ph-spec small" :title="t('频域底图：辅音与元音的差别在时域里看不出来，频域一眼能分')">
+              <input type="checkbox" v-model="phSpecOn" /> {{ t('频域底图') }}
+            </label>
+          </div>
+        </div>
+        <div class="ph-times small">
+          <div v-for="(it, i) in phItems" :key="'pt' + i" class="ph-time" :class="{ on: i === phIndex }"
+               :title="t('点一下编辑这个音素')" @click="pickPhonemeIndex(i)">
+            <span class="pt-i">{{ i + 1 }}</span>
+            <b>{{ it.text }}</b>
+            <span class="pt-range">{{ fmtBeat(it.t0) }} → {{ fmtBeat(it.t1) }}</span>
+            <em>{{ phMs(it) }} ms</em>
+            <span class="pt-tag" :class="it.cons ? 'c' : 'v'">{{ it.cons ? t('辅音') : t('元音') }}</span>
+          </div>
+          <p class="muted small ph-note">{{ t('边界为按歌词估算（引擎以声库 oto 为准）。拖动边界改时长需要引擎支持逐音素时长，见计划书 §4.3。') }}</p>
+        </div>
+        <div class="ph-grid small">
+          <label v-for="e in PH_EXPRS" :key="e.abbr" :title="t(e.hint) + t('；留空 = 用音符/轨道的值')">
+            <span>{{ t(e.label) }}</span>
+            <input type="number" :min="e.min" :max="e.max" :placeholder="String(e.def)"
+                   :value="phVals[e.abbr] ?? ''" @change="setPhExpr(e.abbr, $event)" />
+          </label>
+        </div>
+        <p class="muted small ph-note">
+          {{ t('只改这一个音素；留空即沿用音符级/轨道默认值。音素切分是按歌词估计的，引擎以声库 oto 为准，下标越界会被忽略。') }}
+        </p>
+      </div>
+
+      <!-- 音高曲线（两边共用）：默认收起，把纵向空间还给卷帘 -->
+      <div v-if="detailOpen && !isAudio" class="curves" :class="{ folded: !curveOpen }">
+        <div class="curves-head small">
+          <button class="curves-toggle" data-guide="sing-curve-toggle" :class="{ on: curveOpen }"
+                  :title="t('展开/收起音高曲线面板（收起时纵向空间全部给钢琴卷帘）')"
+                  @click="curveOpen = !curveOpen">
+            <Icon name="chevron" :size="12" :style="{ transform: curveOpen ? '' : 'rotate(-90deg)' }" />
+            <b>{{ t('音高曲线') }}</b>
+            <span class="muted">{{ curveCents }}{{ t(' 个点') }}</span>
+            <!-- 作用域是**关键信息**，以前排成普通灰字被弱化；现在是一个徽章 -->
+            <span class="scope-chip">{{ t('作用于整条轨') }}</span>
+            <span class="info-dot" :title="t('音分（cent）是音高的百分之一半音：100 音分 = 1 个半音，1200 音分 = 1 个八度。这条曲线作用于整条轨（不区分音符），范围 ±1200 音分。')">ⓘ</span>
+          </button>
+          <template v-if="curveOpen">
+          <span class="curve-tools">
+            <span class="curve-tools-label">{{ t('曲线工具') }}</span>
+            <button v-for="tl in CURVE_TOOLS" :key="tl[0]" class="chip-btn" :class="{ on: curveTool === tl[0] }"
+                    :title="t(CURVE_TOOL_TIP)" @click="curveTool = tl[0]">{{ t(tl[1]) }}</button>
+          </span>
+          <button class="btn" :title="t('对曲线做一次三点平滑')" @click="curveCanvas?.smooth()">{{ t('平滑') }}</button>
+          <button class="btn" :title="t('把曲线点吸附到 1/16 拍')" @click="curveCanvas?.quantize(0.25)">{{ t('量化 1/16') }}</button>
+          <button class="btn" @click="curveAdd"><Icon name="plus" :size="12" /> {{ t('加点') }}</button>
+          <button class="btn" @click="curveClear"><Icon name="erase" :size="12" /> {{ t('清空') }}</button>
+          <select v-model="refTrackId" class="select-input" style="width:auto;max-width:140px"
+                  :title="t('叠加参考轨：把这条轨的同名曲线画成灰线做对照')">
+            <option value="">{{ t('参考轨…') }}</option>
+            <option v-for="x in copyTargets" :key="x.id" :value="x.id">{{ x.name || t('未命名轨') }}</option>
+          </select>
+          </template>
+        </div>
+        <template v-if="curveOpen">
+        <CurveCanvas ref="curveCanvas" :points="(tr && tr.pitchCurve) || []" :min="-1200" :max="1200"
+                     :beats="curveBeats" :beats-per-bar="beatsPerBar" :tool="curveTool" unit="cent"
+                     :ghost-points="ghostPitch" :ghost-label="ghostLabel"
+                     @commit="onCurveCommit" />
+        <details v-if="tr && tr.pitchCurve.length" class="curve-nums">
+          <summary class="muted small">{{ t('数值表（精确输入）') }}</summary>
+        <div class="curves-grid small">
           <div v-for="(p, i) in tr.pitchCurve" :key="i" class="curve-row">
             <span class="ci">{{ i + 1 }}</span>
-            <input class="num-input" :value="p.beat" step="0.25" :data-f="'beat'" @change="curveSet(i, $event)" />
-            <input class="num-input" :value="p.cents" step="5" :data-f="'cents'" @change="curveSet(i, $event)" />
+            <input :value="p.beat" step="0.25" :data-f="'beat'" @change="curveSet(i, $event)" />
+            <input :value="p.cents" step="5" :data-f="'cents'" @change="curveSet(i, $event)" />
             <span class="muted">beat / cent</span>
           </div>
         </div>
-        <p v-else-if="curvesOpen" class="muted small">{{ t('还没有曲线点。') }}</p>
+        </details>
+        </template>
       </div>
     </section>
+    </div>
+
+    <!-- ==================== 声库（原独立页并入同一入口） ====================
+         页签切换加一次淡入上浮（全局 .view-* 那套）：原来声库面板是整块硬切进来的。 -->
+    <Transition name="view" mode="out-in">
+      <VoicebankPanel v-if="tab === 'banks'" class="sing-banks" key="banks" />
+    </Transition>
+
+    <!-- ==================== 声库制作（原独立路由 /voicebank） ==================== -->
+    <div v-show="tab === 'maker'" class="sing-maker" :class="{ 'sing-in': tab === 'maker' }">
+      <ViewVoicebank />
+    </div>
   </div>
 </template>
 
 <style scoped>
-.sing { display: flex; height: 100%; min-height: 0; }
+/* ★ 实心底：壁纸开启时 .app-main 是透明的，这里必须自己铺不透明底 —— 否则乐谱/卷帘/
+   声库这些密集文字会直接压在动态壁纸上（改版前「声库页透明、读不清」的根因）。 */
+.sing-page { height: 100%; display: flex; flex-direction: column; min-height: 0;
+             background: var(--canvas); }
+.sing-nav { display: flex; align-items: center; gap: 8px; padding: 8px 14px; flex: none;
+            border-bottom: 1px solid var(--border); background: var(--canvas); }
+.sing-nav .sp { flex: 1; }
+.sn-tab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 13px; cursor: pointer;
+          border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+          color: var(--steel); font-size: 12.5px; }
+.sn-tab i { font-style: normal; font-size: 10.5px; opacity: .75; }
+.sn-tab:hover { border-color: var(--brand); color: var(--ink); }
+.sn-tab.on { border-color: var(--accent); background: var(--brand-soft); color: var(--ink); font-weight: 600; }
+/* 空态：**一条横向提示条**（此前是竖向大卡片：大图标 + 标题 + 三行有序列表 + 两行按钮，
+   在 1600×900 下占了近半屏，密度低又抢视线）。现在压成一行提示 + 一行动作。 */
+.sing-empty { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+              margin: 10px 14px 0; padding: 9px 14px; border: 1px solid var(--border);
+              border-radius: 10px; background: var(--surface); }
+.se-main { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1 1 340px; }
+.se-main > b { font-size: 13px; white-space: nowrap; }
+.se-main > .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.se-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+/* 「新建声部轨…」展开后的引擎二选一：单独一行、稍微缩进，表明它是二级选择 */
+.se-new { flex-basis: 100%; padding-left: 26px; opacity: .96; }
+.edt-msg.hint { color: var(--stone); }
+/* 多选批量工具行（P2-1）与歌词告警（P2-5） */
+/* 音素级编辑面板（P2-2） */
+.auto-hint { margin: 6px 0 0; line-height: 1.7; }
+.ph-panel { flex: none; margin: 8px 12px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
+  /* 面板高度封顶：它们是「按需看」的，不该把音符区挤没（超出自己滚） */
+  max-height: 200px; overflow: auto;
+  background: var(--surface); }
+.ph-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ph-head .sp { flex: 1; }
+.ph-head .chip-btn.has { box-shadow: inset 0 0 0 1.5px var(--brand-coral); }
+.ph-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px 10px; margin-top: 8px; }
+.ph-grid label { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.ph-grid label span { color: var(--slate); font-size: 11.5px; }
+.ph-grid input { width: 74px; height: 24px; border: 1px solid var(--hairline); border-radius: 7px;
+  background: var(--surface-soft); color: var(--ink); font-size: 12px; text-align: right; }
+.ph-note { margin: 8px 0 0; line-height: 1.7; }
+/* 工程条上的小控件（P2-3） */
+.proj-field { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--slate); white-space: nowrap; flex: none; }
+.proj-field input, .proj-field select { height: 24px; border: 1px solid var(--hairline); border-radius: 7px;
+  background: var(--surface); color: var(--ink); font-size: 12px; }
+.proj-field .al-ms { width: 62px; }
+.bulk { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 12px 0; padding: 7px 10px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); }
+.bulk b { font-size: 12.5px; }
+.bulk .muted { margin-left: auto; font-size: 11px; }
+.edt-msg.bad { display: flex; align-items: center; gap: 8px; color: var(--brand-coral); }
+.ly-bad { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; grid-column: 1 / -1;
+  margin: 2px 0 4px; color: var(--brand-coral); }
+.ly-bad .chip-btn { font-size: 11px; }
+.edt-prog-wrap { display: flex; align-items: center; gap: 10px; padding: 4px 2px; }
+.trk-item .rdy.stale { color: var(--brand-coral); font-weight: 700; }
+/* 拖拽排序 / 静音 / 独奏 / 右键菜单 */
+.trk-item.dragging { opacity: .45; }
+.trk-item .tk-drag { flex: none; color: var(--stone); cursor: grab; display: inline-flex; align-items: center; }
+.trk-item .ib.on { color: var(--brand-coral); }
+.tk-menu-mask { position: fixed; inset: 0; z-index: 60; }
+.tk-menu { position: fixed; z-index: 61; min-width: 168px; padding: 6px;
+           border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+           box-shadow: 0 10px 28px rgba(0,0,0,.22); display: flex; flex-direction: column; gap: 2px; }
+.tk-menu b { font-size: 11.5px; color: var(--stone); padding: 4px 8px 6px; }
+.tk-menu button { display: flex; align-items: center; gap: 8px; text-align: left; padding: 6px 9px; border: 0; border-radius: 6px;
+                  background: transparent; color: var(--ink); font-size: 12.5px; cursor: pointer; }
+.tk-menu button:hover { background: var(--surface-muted); }
+.tk-menu button.danger { color: var(--brand-coral); }
+.edt-prog-wrap .edt-prog { flex: 1; }
+.sing { flex: 1; min-height: 0; display: flex; }
+.sing-banks { flex: 1; min-height: 0; }
+/* 声库制作页签：整块撑开（内部是 flex 布局：工具栏 + 片段列表/波形） */
+.sing-maker { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px 18px; background: var(--canvas); }
+.sing-maker > * { min-height: 100%; }
+/* 声库制作页切进来时一次性淡入（v-show 不会触发 Transition，用动画类代替） */
+.sing-maker.sing-in { animation: singMakerIn .28s cubic-bezier(.2, .7, .3, 1) both; }
+@keyframes singMakerIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 /* ---- 左：轨道列表 ---- */
 .trk { width: 264px; flex: none; display: flex; flex-direction: column;
@@ -1084,11 +3122,10 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .trk-row1 { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
 .trk-row2 { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .trk-item .nm { flex: 1; min-width: 0; }
-.trk-item .pth { width: 100%; font-size: 11px; padding: 0 4px; height: 22px; }
+.trk-item .pth { width: 100%; min-width: 0; font-size: 11.5px; height: 24px; }
+.trk-item .pth { width: 100%; font-size: 11px; }
 .trk-item .eng { font-size: 10.5px; padding: 1px 3px; border-radius: 4px;
                  border: 1px solid var(--border); }
-.trk-item .seg-cnt { font-size: 10px; color: var(--stone); border: 1px solid var(--border);
-  border-radius: 4px; padding: 0 4px; white-space: nowrap; }
 .eng.e-utau { background: rgba(80,190,120,.18); }
 .eng.e-diffsinger { background: rgba(64,140,255,.18); }
 .trk-item .lang { font-size: 11px; }
@@ -1099,14 +3136,22 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .ib.del:hover { border-color: #c66; color: #c66; }
 
 /* ---- 右：编辑器 ---- */
-/* 卷帘占满剩余空间（对齐上游 Height="*"）：edt 不再整区滚动，
-   固定块（工具栏/警告/面板）自然排列，剩余全部给卷帘。 */
-.edt { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
-.proj { display: flex; align-items: center; gap: 6px; padding: 6px 12px;
+.edt { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: auto; }
+.pstate {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  padding: 3px 9px; border-radius: 999px; font-size: 11px;
+  border: 1px solid var(--border); background: var(--surface-muted); color: var(--stone);
+}
+.pstate.saved { color: var(--brand-text); border-color: var(--border); }
+.pstate.dirty { color: var(--brand-coral); border-color: var(--brand-coral); background: transparent; }
+.pstate.none { color: var(--stone); }
+/* 工程条：**必须能换行**。参数（BPM/拍号/对齐偏移）加上状态徽标与保存动作之后，
+   一条放不下时右端的「保存」会被裁掉（实测 1268px 窗口下真的裁了）—— 换行比裁掉好。 */
+.proj { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 3px 12px;
         border-bottom: 1px solid var(--border); }
-.proj .ptitle { flex: 0 1 200px; font-size: 12.5px; }
+.proj .ptitle { flex: 0 1 160px; font-size: 12.5px; }
 .proj .ppath { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.edt-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+.edt-bar { display: flex; align-items: center; gap: 8px; padding: 4px 12px;
            border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .edt-bar .who { font-size: 13px; }
 .edt-bar .tag { font-size: 10.5px; padding: 1px 6px; border-radius: 4px;
@@ -1116,20 +3161,76 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .edt-prog { height: 3px; background: var(--surface-muted); }
 .edt-prog i { display: block; height: 100%; background: var(--brand); transition: width .2s; }
 .edt-msg { margin: 6px 12px; color: var(--brand-text); }
-/* 卷帘保底 = 编辑区高度的 45%：底部面板（轨道属性 320 / 音符详情 260 / 音高曲线 200）
-   全部展开也**只能分走剩余空间**，曲线点再多卷帘也不会被挤扁。
-   用 .edt > 提高优先级压过 PianoRoll 里 .pr-fill 的 min-height:0（两组样式的注入顺序不定）。 */
-.edt > .edt-roll { flex: 1 1 0%; min-height: 45%; margin: 8px 12px; }
+/* 音符区：默认吃满编辑区剩余高度（flex:1），手动拖过则固定像素（见 rollBoxStyle） */
+/*
+ * 音符区的下限给到 320px：编辑区底下的歌词/音素/曲线面板加起来能有 350px+，
+ * 没有下限时它们会把卷帘挤成一条缝（实测固定 320px 时卷帘被压到 2px，完全看不见）。
+ * 超出的部分由编辑区整体滚动，或用「放大音符区」一键把下面三块收起来。
+ */
+.roll-box { flex: 1 1 auto; /* 百分比保底：底部面板再多也挤不扁卷帘（max 同时满足小屏 380px 下限） */ min-height: max(380px, 45%); display: flex; margin: 4px 12px 0; }
+.roll-box .edt-roll { flex: 1 1 auto; min-width: 0; margin: 0; }
+/* 分隔条：上下拖动改变音符区高度；双击恢复自动 */
+.roll-resizer { flex: none; height: 10px; margin: 0 12px; display: flex; align-items: center;
+  cursor: ns-resize; touch-action: none; }
+.roll-resizer:hover .rr-grip { background: var(--brand); }
+.rr-grip { display: block; width: 100%; height: 3px; border-radius: 3px; background: var(--border); transition: background .15s; }
+/* 多轨叠置条（卷帘上方）：色块=切轨 / 圆点=换色 / 眼睛=临时隐藏 / M,S=静音独奏 */
+.roll-strip { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 12px 0;
+  padding: 3px 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); }
+.roll-strip .rs-sep { width: 1px; height: 18px; background: var(--border); }
+.roll-strip .rs-track { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--slate);
+  font-size: 11.5px; line-height: 1.6; }
+.roll-strip .rs-track:hover { border-color: var(--brand); color: var(--ink); }
+.roll-strip .rs-track.on { border-color: var(--brand); background: var(--brand-soft); color: var(--ink); font-weight: 600; }
+.roll-strip .rs-track.off .rs-name, .roll-strip .rs-track.off .rs-cnt { opacity: .45; text-decoration: line-through; }
+.roll-strip .rs-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; box-shadow: 0 0 0 1px rgba(0,0,0,.18) inset; }
+.roll-strip .rs-name { max-width: 116px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.roll-strip .rs-cnt { font-size: 10.5px; color: var(--stone); }
+.roll-strip .rs-ib { display: inline-flex; align-items: center; justify-content: center; min-width: 13px;
+  font-size: 10px; color: var(--stone); }
+.roll-strip .rs-ib:hover { color: var(--brand-text); }
+.roll-strip .rs-ib.on { color: var(--brand-coral); font-weight: 700; }
+.roll-strip .rs-hint { margin-left: auto; }
 
 .edt-bar .dev, .edt-bar .smp { font-size: 11.5px; }
 .edt-bar .smp { width: 48px; }
 .xport { display: flex; align-items: center; gap: 8px; padding: 6px 12px;
          border-bottom: 1px solid var(--border); }
 .xport .xbar { flex: 1; min-width: 120px; }
-.xport .xtime { min-width: 92px; text-align: right; font-variant-numeric: tabular-nums; }
+.xport .xtime { min-width: 92px; text-align: right; font-variant-numeric: tabular-nums;
+  font-family: var(--mono); color: var(--slate); cursor: pointer; background: none; border: none; }
+.xport .xtime:hover { color: var(--brand-text); text-decoration: underline; }
+.xbar-wrap { position: relative; flex: 1; min-width: 120px; display: flex; align-items: center; }
+.xbar-wrap .xbar { width: 100%; position: relative; z-index: 1; background: transparent; }
+.xbar-loop { position: absolute; top: 50%; height: 8px; transform: translateY(-50%); border-radius: 4px;
+  background: color-mix(in srgb, var(--brand-coral) 32%, transparent); pointer-events: none; }
+.xbar-loop.on { background: color-mix(in srgb, var(--brand-coral) 62%, transparent); }
+.xport .btn.on { border-color: var(--brand-coral); color: var(--brand-text); background: var(--surface-soft); }
 .warn { margin: 4px 12px; color: var(--stone); }
 
 .trk-import { display: flex; flex-direction: column; gap: 4px; padding: 6px; border-bottom: 1px solid var(--border); }
+/* 批量填词 / 发音表对话框（P1-7/8/14）：不依赖全局弹窗，长文本要能多行编辑 */
+.singdlg { margin: 8px 0; padding: 10px; border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; gap: 8px; }
+.singdlg-head, .singdlg-row, .singdlg-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.singdlg-head .sp, .singdlg-foot .sp { flex: 1; }
+.singdlg-ta { width: 100%; min-height: 92px; resize: vertical; font: inherit; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: inherit; }
+.singdlg-q { flex: 1; min-width: 180px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: inherit; }
+.singdlg-py { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 2px 2px;
+              border-top: 1px dashed var(--hairline); margin-top: 6px; font-size: 12px; }
+.singdlg-py .py-item { display: inline-flex; align-items: center; gap: 4px; }
+.singdlg-py .py-item b { font-weight: 600; }
+.singdlg-prev { display: flex; flex-direction: column; gap: 4px; }
+.singdlg-prev .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.singdlg-prev .mismatch { color: var(--warn-text, var(--stone)); }
+.singdlg-prev .chips i { font-style: normal; padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; font-size: 11.5px; }
+.singdlg-chips { display: flex; flex-wrap: wrap; gap: 4px; max-height: 220px; overflow: auto; }
+.lib-list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.lib-item { width: 100%; display: flex; align-items: baseline; gap: 8px; padding: 5px 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+.lib-item:hover { border-color: var(--border); background: var(--surface); }
+.lib-item .nm { flex: 1; }
+.mono-chk { display: inline-flex; align-items: center; gap: 4px; }
+.ovl { font-size: 11.5px; color: var(--warn-text, var(--stone)); }
 .ib.wide { width: 100%; justify-content: center; display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; padding: 4px 6px; }
 .trk-item .ck { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; }
 .trk-item .ck input { width: auto; }
@@ -1141,14 +3242,12 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .pick-list li { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
 .pick-list .nm { min-width: 120px; }
 .pick-list .btn { margin-left: auto; }
-/* 音频输出设备选择（工具栏内，与 .btn 视觉对齐） */
-.edt-bar select.sel { height: 26px; max-width: 160px; padding: 0 4px; }
 
 /* ---- 轨道属性：三栏（参数 / 效果链 / 自动化） ---- */
-/* 面板封顶内部滚动：自动化点再多也不会把卷帘挤下屏 */
-.tprops { border-bottom: 1px solid var(--border); max-height: 320px; overflow-y: auto; }
+.tprops { border-bottom: 1px solid var(--border); }
 .tprops .tabs { display: flex; align-items: center; gap: 4px; padding: 5px 12px 0; }
-.tprops .tab { border: 1px solid transparent; border-bottom: none; background: transparent;
+.tprops .tab { display: inline-flex; align-items: center; gap: 6px;
+               border: 1px solid transparent; border-bottom: none; background: transparent;
                color: var(--stone); cursor: pointer; border-radius: 6px 6px 0 0;
                padding: 3px 10px; font-size: 12px; }
 .tprops .tab:hover { color: var(--brand-text); }
@@ -1187,12 +3286,55 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .tag-m { font-size: 10.5px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); }
 .tag-m.re { background: rgba(220,160,60,.20); }
 .tag-m.pb { background: rgba(80,190,120,.18); }
+/* 颤音块（M6b）：一排滑杆 + 一条包络预览 */
+.vib-block { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface-soft); }
+.vib-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.vib-row { display: flex; align-items: center; gap: 8px; }
+.vib-row > span { flex: none; width: 42px; font-size: 11.5px; color: var(--stone); }
+.vib-row input[type="range"] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.vib-row em { flex: none; width: 54px; text-align: right; font-style: normal; font-family: var(--mono); font-size: 11px; color: var(--slate); }
+.vib-cv { width: 100%; height: 46px; display: block; border: 1px solid var(--hairline); border-radius: 8px; background: var(--canvas); }
+.curve-tools { display: inline-flex; gap: 4px; }
+
 .auto-grid { display: flex; flex-direction: column; gap: 4px; }
 .auto-grid input { width: 84px; }
 
 /* ---- 音符详情 ---- */
-.det { display: flex; flex-wrap: wrap; gap: 10px; padding: 8px 12px;
-  max-height: 260px; overflow-y: auto;
+.det-mini { display: flex; align-items: center; gap: 10px; margin: 4px 12px 0; padding: 4px 10px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); color: var(--slate); }
+.det-mini b { color: var(--ink); }
+.det-mini .sp { flex: 1; }
+/* 提示行与分区标题（M7a）：把一长排 label 分组，扫读时不用逐个认 */
+/* 和声组（M8a）：组名可直接改，右侧三个小动作 = 加成员 / 切过去 / 解散 */
+.rs-group { display: inline-flex; align-items: center; gap: 3px; padding: 1px 4px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface-soft); }
+.rs-group-name { width: 74px; border: 0; background: transparent; color: var(--ink); font-size: 11.5px; outline: none; }
+.rs-group-n { font-size: 10px; color: var(--stone); font-family: var(--mono); }
+.rs-group-gain { width: 40px; height: 18px; padding: 0 3px; border: 1px solid var(--hairline); border-radius: 5px; background: var(--canvas); color: var(--ink); font-size: 10.5px; font-family: var(--mono); text-align: right; }
+
+.det-hint { flex: 0 0 100%; display: flex; align-items: center; gap: 6px; color: var(--stone);
+  background: var(--surface-soft); border: 1px solid var(--hairline); border-radius: 8px; padding: 4px 8px; }
+/* 波形 + 试听（M7b-2）：波形画的是**渲染结果里这个音符的那一段**，音素边界叠在上面 */
+.ph-wave-wrap { display: flex; align-items: center; gap: 8px; margin: 4px 0 2px; }
+.ph-wave { flex: 1; min-width: 0; height: 46px; display: block; border: 1px solid var(--hairline); border-radius: 8px; background: var(--canvas); }
+.ph-wave-btns { display: flex; flex-direction: column; gap: 4px; flex: none; }
+.ph-spec { display: inline-flex; align-items: center; gap: 4px; color: var(--stone); white-space: nowrap; }
+
+/* 音素时间表（M7b）：一行一个音素，起止与时长可直接读，点行即选中 */
+.ph-times { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 2px; }
+.ph-time { display: flex; align-items: baseline; gap: 8px; padding: 2px 6px; border-radius: 6px; cursor: pointer; font-size: 11.5px; color: var(--slate); }
+.ph-time:hover { background: var(--surface-soft); }
+.ph-time.on { background: var(--surface-soft); color: var(--ink); }
+.ph-time .pt-i { flex: none; width: 14px; text-align: right; color: var(--stone); font-family: var(--mono); font-size: 10px; }
+.ph-time b { flex: none; min-width: 40px; color: var(--ink); }
+.ph-time .pt-range { flex: 1; font-family: var(--mono); font-size: 11px; }
+.ph-time em { flex: none; width: 62px; text-align: right; font-style: normal; font-family: var(--mono); font-size: 11px; color: var(--slate); }
+.ph-time .pt-tag { flex: none; font-size: 10px; padding: 0 4px; border-radius: 5px; border: 1px solid var(--hairline); }
+.ph-time .pt-tag.c { color: var(--accent); }
+.ph-time .pt-tag.v { color: var(--stone); }
+
+.det-sec { flex: 0 0 100%; display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 11.5px; font-weight: 700; margin-top: 2px; }
+.det-sec::after { content: ''; flex: 1; height: 1px; background: var(--hairline); }
+.det { flex: none; display: flex; flex-wrap: wrap; gap: 10px; padding: 8px 12px;
        border-top: 1px solid var(--border); }
 .det label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
 .det label > span:first-child { color: var(--stone); }
@@ -1214,13 +3356,54 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .cand.k-initial, .cand.k-final { color: var(--stone); }
 
 /* ---- 曲线 ---- */
-.curves { padding: 8px 12px; border-top: 1px solid var(--border); }
-.curves-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
-               cursor: pointer; user-select: none; }
-.curves-caret { width: 13px; flex: none; color: var(--stone); }
-/* 点列表封顶内部滚动：音高曲线点再多也只在这里滚，不把卷帘挤下屏 */
+/* 参数行（M6c）：折叠 / Solo —— 每行一张画布，未展开的行只留一条窄表头 */
+.auto-rows { display: flex; flex-direction: column; gap: 3px; margin: 4px 0 6px; }
+.auto-row { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.auto-row.on { border-color: var(--brand); }
+.auto-row.solo { box-shadow: inset 0 0 0 1px var(--accent); }
+.auto-row-head { display: flex; align-items: center; gap: 6px; padding: 2px 6px; cursor: pointer; font-size: 11.5px; }
+.auto-row-head b { min-width: 34px; }
+.auto-row-head .sp { flex: 1; }
+.auto-row-body { padding: 0 4px 4px; }
+.chip-s { width: 20px; height: 18px; padding: 0; border-radius: 5px; font-size: 10.5px; cursor: pointer;
+          border: 1px solid var(--border); background: var(--canvas); color: var(--stone); }
+.chip-s.on { border-color: var(--accent); background: var(--brand-soft); color: var(--brand-text); font-weight: 700; }
+
+/* ★ flex: none 必须写：.edt 是**可滚动的 flex 列**，默认 flex-shrink:1 会把放不下的子项压扁 ——
+   实测展开音高曲线时面板被压到 **17px**（内容 250px），曲线画布整个看不见（本轮 UX 复核第 2 条顺带挖出来的）。
+   给成 flex:none 后，面板保持自然高度，超出的部分由 .edt 自己滚动。 */
+.curves { flex: none; padding: 8px 12px; border-top: 1px solid var(--border); max-height: 180px; overflow: auto; }
+/* 收起态：只剩一行可点的标题（纵向空间全给卷帘）—— 0 个点时不该占一大块空白 */
+.curves.folded { padding: 4px 12px; max-height: none; overflow: visible; }
+.curves-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.curves.folded .curves-head { margin-bottom: 0; }
+.curves-toggle {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 6px;
+  border: 1px solid transparent; border-radius: 999px; background: transparent;
+  color: var(--ink); font-size: 12px; cursor: pointer;
+}
+.curves-toggle:hover { background: var(--surface-soft); }
+.curves-toggle.on { border-color: var(--border); background: var(--surface-soft); }
+.curves-toggle .muted { font-size: 11px; }
+.curve-tools-label { font-size: 11px; color: var(--stone); margin-right: 2px; }
+/* 作用域徽章：比灰字重一档，一眼看到"这条曲线管整条轨" */
+.scope-chip {
+  font-size: 10.5px; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--hairline));
+  color: var(--brand-text); background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.info-dot { font-size: 11px; color: var(--stone); cursor: help; }
+.se-go { flex: 1 1 auto; }
 .curves-grid { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
 .curve-row { display: flex; align-items: center; gap: 6px; }
 .curve-row input { width: 84px; }
 .curve-row .ci { width: 18px; color: var(--stone); }
+
+/* ---- §4.6 增量渲染统计 + A/B 对比 ---- */
+.rs-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px;
+            border: 1px solid var(--border); background: var(--surface-muted); color: var(--stone); font-size: 11.5px;
+            white-space: nowrap; }
+.ab-group { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 999px;
+            border: 1px solid var(--border); background: var(--surface-muted); }
+.ab-group .btn.sm { padding: 1px 8px; font-size: 11.5px; }
 </style>

@@ -20,6 +20,7 @@ r"""DiffSinger 的 g2p（词典 + 音素符号决策）—— **照搬**
 
 import io
 import os
+import re
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import yaml
@@ -132,6 +133,10 @@ def parse_phonetic_hint(hint: str, g2p: G2pDictionary, tokens: Dict[str, int],
 
 # ---------------------------------------------------------------- 音素决策
 
+#: 汉字（含扩展 A/B 与兼容区）。假名/谚文不在此列：它们的词典本来就是假名/谚文。
+_CJK_RE = re.compile(r'[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]')
+
+
 def get_symbols(g2p: G2pDictionary, tokens: Dict[str, int], lyric: str,
                 phonetic_hint: Optional[str], lang_code: str
                 ) -> Tuple[List[str], List[str]]:
@@ -147,6 +152,39 @@ def get_symbols(g2p: G2pDictionary, tokens: Dict[str, int], lyric: str,
     if phonetic_hint:
         out = parse_phonetic_hint(phonetic_hint, g2p, tokens, lang_code)
         return out, [p for p in phonetic_hint.split() if p not in out]
+
+    # ★ 汉字 → 拼音（**本仓库补上的一步**，2026-10-06）
+    #
+    #   DiffSinger 的中文词典（`dsdict-zh.yaml` / `dictionary-zh.txt`）的 grapheme 是**拼音**：
+    #   `a → zh/a`、`bu → zh/bu`…… 汉字必须先转拼音才可能命中。
+    #   上游这一步在 `BaseChinesePhonemizer.Romanize` 里，本仓库的 `render` / `sing-render`
+    #   两条路径都**没接**上，于是：中文声库 + 汉字歌词 → `Query('不')` 恒为 None →
+    #   「音素化没有产出任何音素（歌词是否为空？）」/「没有可渲染的音素」，用户完全看不懂。
+    #   实测声库：花火（中文，dsdict-zh.yaml 正常）。
+    if lyric and _CJK_RE.search(lyric):
+        try:
+            syls = [s for s in romanize([lyric]) if s]
+        except Exception:                       # noqa: BLE001 —— 转不了就退回老路径
+            syls = []
+        if syls:
+            expanded: List[str] = []
+            ok_all = True
+            for syl in syls:
+                # ★ `query` 命中但音素被过滤空（符号登记晚于条目）时返回的是**空表**，
+                #   不是 None —— 两者都要当"没查到"处理，否则会静默产出 0 个音素。
+                r = g2p.query(syl)
+                if not r:
+                    r = g2p.query(syl.lower())
+                if not r:
+                    by_hint = parse_phonetic_hint(syl, g2p, tokens, lang_code)
+                    if not by_hint:
+                        ok_all = False
+                        break
+                    expanded.extend(by_hint)
+                else:
+                    expanded.extend(r)
+            if ok_all and expanded:
+                return expanded, rejected
 
     result = g2p.query(lyric)
     if result is None:

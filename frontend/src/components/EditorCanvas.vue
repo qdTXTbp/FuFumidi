@@ -10,6 +10,10 @@ const currentSong = computed(() => app.currentSong);
 import { KEY_NAME, noteName, clamp } from '../core/util.js';
 import { t } from '../core/i18n.js';
 import { snapToPcs, scalePitchClasses } from '../core/scale.js';
+// 乐谱视图要用「按音符分布猜调号」（与乐谱页同一套）
+import { detectSf } from '../core/score.js';
+/* 手写笔 / 触控（M9 收尾）：掌侧误触、第二根手指、长按=右键、笔压当力度 */
+import { claimPointer, isPrimaryPointer, releasePointer, penPressure, makeLongPress } from '../core/pointer.js';
 
 const props = defineProps({
   tool: { type: String, default: 'select' },      // select | pencil | erase
@@ -17,6 +21,10 @@ const props = defineProps({
   trackIndex: { type: Number, default: 0 },
   ccEnabled: { type: Boolean, default: false },   // 是否显示 CC 泳道
   ccNumber: { type: Number, default: 11 },        // CC 控制器编号
+  // 步进输入（M4）：开启后画笔不在「点哪落哪」，而是落在**步进指针**上并自动前进
+  stepOn: { type: Boolean, default: false },
+  stepTicks: { type: Number, default: 120 },   // 每步长度（tick）
+  editTracks: { type: Array, default: () => [] },  // 跨轨编辑：额外的轨道下标（当前轨始终参与）
   scaleSpec: { type: Object, default: null },     // { root, type, custom } 调内编辑用的音阶；空则按曲目自动判断
   scaleMode: { type: String, default: 'off' },    // off | highlight（高亮调内音） | constrain（约束到调内音）
   chordTrack: { type: Array, default: () => [] }, // P1-2 和弦轨 [{ tick, endTick, pcs }]；约束时并入当前小节的调内音
@@ -26,9 +34,22 @@ const props = defineProps({
   cc2Number: { type: Number, default: 1 },
   ccMode: { type: String, default: 'free' },      // free | line | curve
   defaultVelocity: { type: Number, default: 80 }, // 新音符默认力度
-  colorMode: { type: String, default: 'track' },  // track | pitch | velocity | selection
+  colorMode: { type: String, default: 'track' },  // track | pitch | velocity | selection | scale
+  /**
+   * 渲染/编辑模式：piano=钢琴卷帘（默认） / score=五线谱。
+   *
+   * ★ 乐谱不是「另一个页面」而是**同一份数据的另一种视图**：选择、撤销栈、吸附、
+   *   播放头、量化/移调/删除这些操作全部复用，所以两个视图里改的都是同一批音符对象。
+   */
+  view: { type: String, default: 'piano' },
+  /**
+   * 识谱校对底图（M0 收尾，§6.4）：把**原谱页图**半透明垫在网格下面，
+   * 让"认出来的音符"和"谱面上印的音符"肉眼对齐，边看边改。
+   * `{ el: HTMLImageElement, opacity: 0..1, dx, dy: px, beats: 图片宽度占多少拍 }`
+   */
+  underlay: { type: Object, default: null },
 });
-const emit = defineEmits(['select', 'modify', 'zoom', 'ctxmenu']);
+const emit = defineEmits(['select', 'modify', 'zoom', 'ctxmenu', 'hover', 'step']);
 
 const wrap = ref(null);
 const canvas = ref(null);
@@ -36,7 +57,7 @@ const ccCanvas = ref(null);
 const ccCanvas2 = ref(null);
 let ctx2d = null;
 const CC_LANE_H = 96;
-const CC_NAMES = { 1: 'Modulation', 7: 'Volume', 10: 'Pan', 11: 'Expression', 64: 'Sustain' };
+const CC_NAMES = { 1: 'Modulation', 2: 'Breath', 4: 'Foot', 5: 'Portamento', 7: 'Volume', 8: 'Balance', 10: 'Pan', 11: 'Expression', 64: 'Sustain', 65: 'Sostenuto', 66: 'Sostenuto2', 67: 'Soft', 68: 'Legato', 71: 'Resonance', 74: 'Brightness', 91: 'Reverb', 93: 'Chorus' };
 
 /* ---------------- 视图状态 ---------------- */
 const zoom = ref(1);            // 缩放倍率
@@ -61,6 +82,17 @@ function curTrack() {
   const s = song(); if (!s) return null;
   return s.tracks[props.trackIndex] || null;
 }
+/* ---------------- 跨轨编辑（M5b） ----------------
+   勾选若干轨后，这些轨的音符一起显示、一起命中、一起选中、一起被批量工具处理。
+   撤销必须走**全量快照**（ti = -1）：普通快照只存当前轨，跨轨改动会漏。
+   乐谱视图仍是单轨（谱面排版本来就按一轨一行），这里只管卷帘/鼓组。 */
+function editTrackList() {
+  const s = song(); if (!s) return [];
+  const idx = [props.trackIndex];
+  for (const i of (props.editTracks || [])) if (i !== props.trackIndex) idx.push(i);
+  return idx.filter((i) => s.tracks[i]).map((i) => s.tracks[i]);
+}
+function isMultiEdit() { return (props.editTracks || []).length > 0; }
 /* 初始显示音域：跟随曲目内容，避免高音音符落在画布外 */
 function computeRange() {
   const s = song();
@@ -180,9 +212,23 @@ function scaleSnapPitch(midi, tick) {
 /* ---------------- 撤销 / 重做 ---------------- */
 const undoStack = [];
 const redoStack = [];
+/* 速度轨（M5）：tempoMap 不在 notes/ccs 快照里，所以快照要单独带一份 —— 否则改速度不可撤销。
+   注意 secToTick/baseSec 是**闭包捕获了 tempoMap 那个数组对象**的，恢复时必须原地改数组
+   （tm.length = 0 + push），换数组引用等于没改。 */
+function tempoSnap() {
+  const s = song();
+  return (s && s.tempoMap) ? s.tempoMap.map((p) => ({ tick: p.tick, us: p.us, sec: p.sec })) : null;
+}
+function tempoRestore(s, arr) {
+  if (!s || !arr || !s.tempoMap) return;
+  const tm = s.tempoMap;
+  tm.length = 0;
+  for (const p of arr) tm.push({ ...p });
+}
 function pushState() {
   const tr = curTrack(); if (!tr) return;
-  undoStack.push({ ti: props.trackIndex, notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
+  if (isMultiEdit()) { pushStateForTrack(-1); return; }   // 跨轨：存全量，撤销才盖得住
+  undoStack.push({ ti: props.trackIndex, tempo: tempoSnap(), notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
   if (undoStack.length > 80) undoStack.shift();
   redoStack.length = 0;
 }
@@ -191,8 +237,7 @@ function afterEdit() {
   if (!s || !item) return;
   // 维持「notes 按 start 升序」不变量：draw() 的视口裁剪用二分查找定位可见区间，
   // 新建/粘贴/拖动如果打乱顺序，新音符会落在窗口之外而整段画不出来（大文件尤其明显）。
-  const ct = curTrack();
-  if (ct) sortNotes(ct.notes);
+  for (const tr of s.tracks) sortNotes(tr.notes);   // 跨轨编辑时别的轨也可能被改乱序
   // 重算曲长
   let totalTicks = 0;
   for (const tr of s.tracks) for (const n of tr.notes) totalTicks = Math.max(totalTicks, n.end);
@@ -214,9 +259,11 @@ function afterEdit() {
   draw();
 }
 function clearGhostSelection() {
+  const s = song(); if (!s) return;
   for (const n of [...selection]) {
-    const tr = curTrack(); if (!tr) continue;
-    if (!tr.notes.includes(n)) selection.delete(n);
+    let alive = false;
+    for (const tr of s.tracks) if (tr.notes.includes(n)) { alive = true; break; }
+    if (!alive) selection.delete(n);
   }
 }
 function undo() {
@@ -224,19 +271,21 @@ function undo() {
   if (st.ti < 0) {
     // 全量快照：恢复所有轨道（智能伴奏等新增/删除轨道场景）
     const s = song(); if (!s) return;
-    redoStack.push({ ti: -1, all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
+    redoStack.push({ ti: -1, tempo: tempoSnap(), all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
     for (let i = 0; i < s.tracks.length; i++) {
       if (st.all && st.all[i]) { s.tracks[i].notes = st.all[i].notes; s.tracks[i].ccs = st.all[i].ccs || []; }
       else { s.tracks[i].notes = []; s.tracks[i].ccs = []; }
     }
+    tempoRestore(s, st.tempo);
     selection.clear();
     afterEdit();
     return;
   }
   const tr = song()?.tracks[st.ti]; if (!tr) return;
-  redoStack.push({ ti: st.ti, notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
+  redoStack.push({ ti: st.ti, tempo: tempoSnap(), notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
   tr.notes = st.notes;
   tr.ccs = st.ccs || [];
+  tempoRestore(song(), st.tempo);
   selection.clear();
   afterEdit();
 }
@@ -244,19 +293,21 @@ function redo() {
   const st = redoStack.pop(); if (!st) return;
   if (st.ti < 0) {
     const s = song(); if (!s) return;
-    undoStack.push({ ti: -1, all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
+    undoStack.push({ ti: -1, tempo: tempoSnap(), all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
     for (let i = 0; i < s.tracks.length; i++) {
       if (st.all && st.all[i]) { s.tracks[i].notes = st.all[i].notes; s.tracks[i].ccs = st.all[i].ccs || []; }
       else { s.tracks[i].notes = []; s.tracks[i].ccs = []; }
     }
+    tempoRestore(s, st.tempo);
     selection.clear();
     afterEdit();
     return;
   }
   const tr = song()?.tracks[st.ti]; if (!tr) return;
-  undoStack.push({ ti: st.ti, notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
+  undoStack.push({ ti: st.ti, tempo: tempoSnap(), notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
   tr.notes = st.notes;
   tr.ccs = st.ccs || [];
+  tempoRestore(song(), st.tempo);
   selection.clear();
   afterEdit();
 }
@@ -377,6 +428,167 @@ function duplicateSelected() {
 }
 
 /* ---------------- 绘制 ---------------- */
+/* ---------------------------------------------------------------- 五线谱绘制 */
+function drawScore(g, W, HK) {
+  const lay = scoreLayout(W, HK);
+  if (!lay) return;
+  const pal = themeColors();
+  const { tr, gap, staffH, lineY0, leftPad, barW, barsPerSystem, bars, systes: _x } = lay;
+  const sharp = lay.sharps;
+  const keyAcc = (letter) => {
+    // 调号里每个字母的升降：升号顺序 F C G D A E B，降号反过来
+    const order = sharp ? [3, 0, 4, 1, 5, 2, 6] : [6, 2, 5, 1, 4, 0, 3];
+    const n = Math.abs(lay.sf);
+    for (let i = 0; i < n; i++) if (order[i] === letter) return sharp ? 1 : -1;
+    return 0;
+  };
+  const ink = pal.steel || '#333';
+  const line = pal.hair || 'rgba(0,0,0,.25)';
+  const accent = pal.accent || '#3d8bfd';
+  const selSet = selection;
+  for (let sys = 0; sys < lay.systems; sys++) {
+    const y0 = 8 + sys * lay.systemH - scoreScrollY.value;
+    if (y0 + lay.systemH < -20 || y0 > HK + 20) continue;
+    const top = y0 + lineY0, bottom = top + staffH, midY = top + staffH / 2;
+    // 五线谱线
+    g.strokeStyle = line; g.lineWidth = 1;
+    for (let i = 0; i < 5; i++) {
+      const y = Math.round(top + i * gap) + 0.5;
+      g.beginPath(); g.moveTo(leftPad - 26, y); g.lineTo(W - 8, y); g.stroke();
+    }
+    // 谱号（用 Unicode 音乐符号：𝄞 / 𝄢；字体链里带上符号字体）
+    g.fillStyle = ink;
+    g.font = (gap * 4.6) + 'px "Segoe UI Symbol", "Cambria Math", "Noto Music", serif';
+    g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+    g.fillText(lay.clef === 'bass' ? '\uD834\uDD22' : '\uD834\uDD1E', leftPad - 24, midY + gap * 1.55);
+    // 调号（♯/♭）
+    g.font = (gap * 2.1) + 'px "Segoe UI Symbol", "Cambria Math", serif';
+    const order = sharp ? [3, 0, 4, 1, 5, 2, 6] : [6, 2, 5, 1, 4, 0, 3];
+    const octOf = sharp ? [5, 5, 5, 5, 4, 4, 4] : [4, 4, 4, 4, 3, 3, 3];
+    for (let i = 0; i < Math.min(7, Math.abs(lay.sf)); i++) {
+      const letter = order[i];
+      const dia = octOf[i] * 7 + letter;
+      const midDia = scoreSpell(lay.clef === 'bass' ? 50 : 71, true).diatonic;
+      const y = midY - ((dia - midDia) * gap) / 2;
+      g.fillText(sharp ? '\u266F' : '\u266D', leftPad - 8 + i * (gap * 0.72), y + gap * 0.72);
+    }
+    // 拍号
+    g.font = 'bold ' + (gap * 2.0) + 'px system-ui, sans-serif';
+    g.textAlign = 'center';
+    g.fillText(String(lay.sig.num), leftPad + 12, top + gap * 1.9);
+    g.fillText(String(lay.sig.den), leftPad + 12, top + gap * 3.9);
+    // 小节线（行内 barsThis 条）
+    const firstBar = sys * barsPerSystem;
+    const barsThis = Math.min(barsPerSystem, bars - firstBar);
+    for (let b = 0; b <= barsThis; b++) {
+      const x = Math.round(leftPad + b * barW) + 0.5;
+      if (b === barsThis && firstBar + b < bars) continue;      // 行尾不画（下一行的开头画）
+      g.strokeStyle = (b === 0) ? ink : line;
+      g.lineWidth = (b === 0) ? 1.6 : 1;
+      g.beginPath(); g.moveTo(x, top); g.lineTo(x, bottom); g.stroke();
+    }
+    // 空小节：画一个全休止方块
+    g.fillStyle = line;
+    for (let b = 0; b < barsThis; b++) {
+      const t0 = (firstBar + b) * lay.barTicks, t1 = t0 + lay.barTicks;
+      let has = false;
+      for (const n of tr.notes) { if (n.end > t0 && n.start < t1) { has = true; break; } }
+      if (has) continue;
+      const x = leftPad + b * barW + barW / 2;
+      g.fillRect(x - gap * 0.7, top + staffH * 0.22, gap * 1.4, gap * 0.5);
+    }
+    // 音符
+    for (const n of tr.notes) {
+      const bar = Math.floor(n.start / lay.barTicks);
+      if (bar < firstBar || bar >= firstBar + barsThis) continue;
+      const xRaw = scoreXOf(lay, n.start);
+      const x = Math.round(xRaw) + 0.5;
+      const y = Math.round(y0 + scoreYOf(lay, n)) + 0.5;
+      drawScoreNote(g, lay, n, x, y, midY, top, bottom, { ink, line, accent, selSet, keyAcc, sharp });
+    }
+    // 行号（小节号）
+    g.fillStyle = pal.stone || '#888';
+    g.font = '10px system-ui, sans-serif'; g.textAlign = 'left';
+    g.fillText(String(firstBar + 1), leftPad + 2, y0 + 10);
+  }
+  // 播放头：按 tick 找行，画一条竖线
+  // ★ 这里原来写的是 playTick.value —— 那个名字在本文件里根本没定义，
+  //   一进乐谱视图就抛 ReferenceError（实测）。播放头位置跟迷你条用同一个来源。
+  const pt = (() => { const sg = song(); return sg ? sg.secToTick(state.curSec / state.tempo) : null; })();
+  if (pt != null && pt >= 0) {
+    const bar = Math.floor(pt / lay.barTicks);
+    const sys = Math.floor(bar / barsPerSystem);
+    const y0 = 8 + sys * lay.systemH - scoreScrollY.value;
+    if (y0 > -20 && y0 < HK + 20) {
+      const x = Math.round(scoreXOf(lay, pt)) + 0.5;
+      g.strokeStyle = accent; g.lineWidth = 1.4;
+      g.beginPath(); g.moveTo(x, y0 + 4); g.lineTo(x, y0 + lay.systemH - 4); g.stroke();
+    }
+  }
+}
+
+/** 单个音符：符头 / 符干 / 符尾 / 符点 / 临时记号 / 加线 */
+function drawScoreNote(g, lay, n, x, y, midY, top, bottom, ctxInfo) {
+  const { ink, line, accent, selSet, keyAcc, sharp } = ctxInfo;
+  const gap = lay.gap;
+  const sp = scoreSpell(n.midi, sharp);
+  const acc = sp.acc - keyAcc(sp.letter);
+  const isSel = selSet.has(n);
+  // 时值 → 符头形状与符尾数量
+  const quarters = (n.end - n.start) / lay.tpb;
+  let base = 1, dot = false;
+  for (const q of [4, 2, 1, 0.5, 0.25, 0.125]) {
+    if (Math.abs(quarters - q) < 0.02) { base = q; break; }
+    if (Math.abs(quarters - q * 1.5) < 0.02) { base = q; dot = true; break; }
+  }
+  if (Math.abs(quarters - 1.5) < 0.02) { base = 1; dot = true; }
+  const hollow = base >= 2;
+  const noStem = base >= 4;
+  const flags = base === 0.5 ? 1 : base === 0.25 ? 2 : base === 0.125 ? 3 : 0;
+  // 加线
+  g.strokeStyle = line; g.lineWidth = 1;
+  const step = gap / 2;
+  for (let yy = top - step; yy >= y - 1; yy -= gap) { g.beginPath(); g.moveTo(x - gap * 0.9, Math.round(yy) + 0.5); g.lineTo(x + gap * 0.9, Math.round(yy) + 0.5); g.stroke(); }
+  for (let yy = bottom + step; yy <= y + 1; yy += gap) { g.beginPath(); g.moveTo(x - gap * 0.9, Math.round(yy) + 0.5); g.lineTo(x + gap * 0.9, Math.round(yy) + 0.5); g.stroke(); }
+  // 临时记号
+  if (acc !== 0) {
+    g.fillStyle = ink;
+    g.font = (gap * 2.0) + 'px "Segoe UI Symbol", "Cambria Math", serif';
+    g.textAlign = 'center';
+    g.fillText(acc > 0 ? '\u266F' : (acc < 0 ? '\u266D' : '\u266E'), x - gap * 1.5, y + gap * 0.7);
+  }
+  // 符头
+  g.beginPath();
+  g.ellipse(x, y, gap * 0.62, gap * 0.44, -0.35, 0, Math.PI * 2);
+  if (isSel) { g.fillStyle = accent; g.fill(); }
+  else if (hollow) { g.fillStyle = pal_canvas(g); g.fill(); g.strokeStyle = ink; g.lineWidth = 1.6; g.stroke(); }
+  else { g.fillStyle = ink; g.fill(); }
+  // 符干 + 符尾
+  if (!noStem) {
+    const up = y >= midY;
+    const sx = up ? x + gap * 0.58 : x - gap * 0.58;
+    const sy2 = up ? y - gap * 3.2 : y + gap * 3.2;
+    g.strokeStyle = isSel ? accent : ink; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(sx, y); g.lineTo(sx, sy2); g.stroke();
+    for (let f = 0; f < flags; f++) {
+      const fy = sy2 + (up ? f * gap * 0.6 : -f * gap * 0.6);
+      g.beginPath();
+      if (up) { g.moveTo(sx, fy); g.quadraticCurveTo(sx + gap * 0.9, fy + gap * 0.5, sx + gap * 0.15, fy + gap * 1.1); }
+      else { g.moveTo(sx, fy); g.quadraticCurveTo(sx - gap * 0.9, fy - gap * 0.5, sx - gap * 0.15, fy - gap * 1.1); }
+      g.stroke();
+    }
+  }
+  if (dot) { g.fillStyle = isSel ? accent : ink; g.beginPath(); g.arc(x + gap * 1.05, y, gap * 0.16, 0, Math.PI * 2); g.fill(); }
+  // 歌词（MIDI 里有词时画在谱下）
+  if (n.lyric) {
+    g.fillStyle = pal_stone(g);
+    g.font = '11px "Segoe UI", "Microsoft YaHei", sans-serif';
+    g.textAlign = 'center';
+    g.fillText(String(n.lyric), x, bottom + gap * 2.2);
+  }
+}
+function pal_canvas(g) { const p = themeColors(); return p.canvas || '#fff'; }
+function pal_stone(g) { const p = themeColors(); return p.stone || '#888'; }
 function draw() {
   const cv = canvas.value, wEl = wrap.value;
   if (!cv || !wEl) return;
@@ -399,7 +611,19 @@ function draw() {
   const g = ctx2d.createLinearGradient(0, 0, 0, HK);
   g.addColorStop(0, bgTop); g.addColorStop(1, bgBottom);
   ctx2d.fillStyle = g; ctx2d.fillRect(0, 0, W, HK);
+  /* 校对底图垫在**最底层**（网格、音符都压在上面）：宽度按拍算，于是缩放/滚动自动跟着走 */
+  const ul = props.underlay;
+  if (ul && ul.el && ul.el.naturalWidth) {
+    const bw = Math.max(0.5, Number(ul.beats) || 16);
+    const iw = bw * pxPerBeat.value;
+    const ih = iw * (ul.el.naturalHeight / ul.el.naturalWidth);
+    ctx2d.save();
+    ctx2d.globalAlpha = Math.max(0.04, Math.min(1, ul.opacity == null ? 0.35 : Number(ul.opacity)));
+    ctx2d.drawImage(ul.el, tickToX(0) + (Number(ul.dx) || 0), Number(ul.dy) || 0, iw, ih);
+    ctx2d.restore();
+  }
   if (!s) return;
+  if (props.view === 'score') { drawScore(ctx2d, W, HK); return; }
 
   const lo = viewTop.value - Math.ceil(HK / rowH.value);
   const hi = viewTop.value;
@@ -488,6 +712,10 @@ function draw() {
   // 注意：此处二分变量不得命名为 lo/hi —— 外层 lo/hi 是音域（draw 开头声明），
   // 遮蔽会导致下方 y=(hi-midi)*rowH 用「音符数」当「最高音」，音符全部画到画布外不可见。
   const winTic = viewT1 - viewT0;
+  // 「按音阶」着色（M4）：每帧只算一次调内音集合（逐音符算会在大文件上炸）
+  const scaleSet = props.colorMode === 'scale' ? constrainPcsAt(null) : null;
+  // 跨轨编辑：参与的轨道都按本色画并可选，其余仍旧压灰（保持「在编辑哪几条轨」的层级）
+  const editIdx = new Set(editTrackList().map((x) => x.index));
   for (const tr of s.tracks) {
     const col = noteColor(tr.index, pal);
     const ns = tr.notes;
@@ -498,23 +726,26 @@ function draw() {
     // 下界：start >= viewT0 - 一个屏幕宽
     let a = 0, b = uLo, t0lo = viewT0 - winTic;
     while (a < b) { const m = (a + b) >> 1; if (ns[m].start < t0lo) a = m + 1; else b = m; }
-    const isCur = tr === curTrack();
+    const isCur = tr.index === props.trackIndex;
+    const inEdit = editIdx.has(tr.index);
     for (let k = a; k < uLo; k++) {
       const n = ns[k];
       const x = tickToX(n.start), w2 = Math.max(2, tickToX(n.end) - x);
       const y = (hi - n.midi) * rowH.value;
       if (x > W || x + w2 < 0) continue;
-      const sel = isCur && selection.has(n);
+      const sel = inEdit && selection.has(n);
       // 着色方案：非当前轨道一律灰（保持「正在编辑哪条轨」的视觉层级）
       let fill = steel;
-      if (isCur) {
+      if (inEdit) {
         if (props.colorMode === 'pitch') fill = pitchColor(n.midi, pal);
         else if (props.colorMode === 'velocity') fill = velColor(n.vel, pal);
         else if (props.colorMode === 'selection') fill = sel ? pal.sel : steel;
+        // 调外音用高亮色标出来 —— 校对「转谱结果里有没有跑调的音」时比看音高更快
+        else if (props.colorMode === 'scale') fill = (!scaleSet || !scaleSet.size) ? col : (scaleSet.has(((n.midi % 12) + 12) % 12) ? col : pal.sel);
         else fill = col;
       }
-      // 静音音符半透明显示（不发声，但仍可编辑）
-      ctx2d.globalAlpha = n.muted ? 0.35 : 0.85;
+      // 静音音符半透明显示（不发声，但仍可编辑）；跨轨编辑里非当前轨再淡一档，便于分辨主次
+      ctx2d.globalAlpha = n.muted ? 0.35 : (isCur ? 0.85 : 0.68);
       ctx2d.fillStyle = fill;
       ctx2d.fillRect(x, y + 1, w2, rowH.value - 2);
       ctx2d.globalAlpha = 1;
@@ -565,6 +796,17 @@ function draw() {
     ctx2d.fillRect(x, y + 1, w2, rowH.value - 2);
     ctx2d.strokeStyle = pal.curve; ctx2d.lineWidth = 1.2;
     ctx2d.strokeRect(x - 1, y, w2 + 2, rowH.value);
+  }
+  // 步进指针（M4）：当前这一格的整条竖带 + 顶边把手，看得见「下一个音落哪」
+  if (props.stepOn) {
+    const len = Math.max(30, Math.round(props.stepTicks || 120));
+    const sx = tickToX(stepCursor.value);
+    const sw = Math.max(2, tickToX(stepCursor.value + len) - sx);
+    ctx2d.fillStyle = pal.tintStrong;
+    ctx2d.fillRect(sx, 0, sw, HK);
+    ctx2d.strokeStyle = pal.curve; ctx2d.lineWidth = 1.2;
+    ctx2d.strokeRect(sx + 0.5, 0.5, sw - 1, HK - 1);
+    ctx2d.fillStyle = pal.curve; ctx2d.fillRect(sx, 0, sw, 3);
   }
   // 播放头
   const curTick = s.secToTick(state.curSec / state.tempo);
@@ -647,6 +889,7 @@ function ccYToVal(y) {
   return clamp(Math.round((H2 - 4 - y) / (H2 - 12) * 127), 0, 127);
 }
 function ccDown(e) {
+  if (!claimPointer(e)) return;              // 笔/单指：CC 泳道同样要挡掌侧与第二根手指
   const tr = curTrack(); if (!tr) return;
   const target = e.target === ccCanvas2.value ? props.cc2Number : props.ccNumber;
   pushState();
@@ -655,8 +898,8 @@ function ccDown(e) {
   ccTarget.value = target;
   ccPaint(e);
 }
-function ccMove(e) { if (ccDrawing.value) ccPaint(e); }
-function ccUp() { ccDrawing.value = false; ccLast.value = null; }
+function ccMove(e) { if (!isPrimaryPointer(e)) return; if (ccDrawing.value) ccPaint(e); }
+function ccUp(e) { releasePointer(e); ccDrawing.value = false; ccLast.value = null; }
 const ccTarget = ref(props.ccNumber);
 function ccPaint(e) {
   const cv = e.target && e.target.tagName === 'CANVAS' ? e.target : ccCanvas.value;
@@ -700,30 +943,246 @@ function ccPaint(e) {
 }
 
 /* ---------------- 交互 ---------------- */
+/* ================================================================
+ * 五线谱视图（view === 'score'）
+ * ----------------------------------------------------------------
+ * 自己刻谱而不是引第三方库（VexFlow/OSMD）：
+ *   1. 引擎侧已经有 abcjs/Verovio 只读刻本（乐谱页），但它们是 SVG、不可编辑；
+ *   2. 编辑需要「像素 ↔ 音高/时值」双向映射与命中测试，自己刻反而短；
+ *   3. 离线包不引入新依赖。
+ * 只做单声部旋律谱（这是「改 MIDI」的常见诉求）：五线谱 + 谱号 + 调号 + 拍号 + 小节线，
+ * 音符含符干/符尾/符点/临时记号/加线；不画连桁与休止符（空小节给全休止方块）。
+ * ================================================================ */
+const scoreScrollY = ref(0);
+const scoreClef = ref('auto');            // auto | treble | bass
+const insertTicks = ref(0);               // 画笔插入时用的时值（0 = 用一拍）
+const insertDot = ref(false);
+const SCORE_LETTER_SEMI = [0, 2, 4, 5, 7, 9, 11];
+const SCORE_PC_TO_LETTER = [0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6];   // 升号拼写
+const SCORE_FLAT_MAP = [[0, 0], [1, -1], [1, 0], [2, -1], [2, 0], [3, 0], [3, 1], [4, 0], [5, -1], [5, 0], [6, -1], [6, 0]];
+const SCORE_GLYPH = { 0: 'w', 1: 'h', 2: 'q', 3: 'e', 4: 's', 5: 't' };   // 由「四分音符数」反查时值
+
+/** 音高拼写：升号优先（keySf < 0 时用降号） */
+function scoreSpell(midi, sharps) {
+  const pc = ((midi % 12) + 12) % 12;
+  let letter, acc;
+  if (sharps) { letter = SCORE_PC_TO_LETTER[pc]; acc = pc - SCORE_LETTER_SEMI[letter]; }
+  else { const f = SCORE_FLAT_MAP[pc]; letter = f[0]; acc = f[1]; }
+  const octave = Math.floor(midi / 12) - 1;
+  return { letter, acc, octave, diatonic: octave * 7 + letter };
+}
+
+/** 由「全音阶序号 + 变音记号」还原 MIDI 音高 */
+function scorePitchOf(diatonic, acc) {
+  const letter = ((diatonic % 7) + 7) % 7;
+  const octave = Math.floor(diatonic / 7);
+  const midi = SCORE_LETTER_SEMI[letter] + acc + 12 * (octave + 1);
+  return Math.max(0, Math.min(127, midi));
+}
+
+/** 调号：优先用曲目的 keySig，没有就按音符分布猜（core/score.js 的 detectSf） */
+function scoreKeySf(tr) {
+  const s = song();
+  if (s && s.keySig && typeof s.keySig.sf === 'number') return s.keySig.sf;
+  try { return detectSf((tr && tr.notes) || []); } catch (e) { return 0; }
+}
+
+/** 谱号：旋律整体偏低自动换低音谱号（也可由工具栏强制） */
+function scoreClefNow(tr) {
+  if (scoreClef.value !== 'auto') return scoreClef.value;
+  const ns = (tr && tr.notes) || [];
+  if (!ns.length) return 'treble';
+  let sum = 0;
+  for (const n of ns) sum += n.midi;
+  return (sum / ns.length) < 59 ? 'bass' : 'treble';
+}
+
+/** 谱面几何：每行几小节、音符画在哪（绘制与命中测试共用同一份布局） */
+function scoreLayout(W, HK) {
+  const s = song(), tr = curTrack();
+  if (!s || !tr) return null;
+  const tpb = s.tpb || 480;
+  const sig = (s.sigMap && s.sigMap.length) ? s.sigMap[0] : { num: 4, den: 4 };
+  const beatsPerBar = Math.max(1, sig.num * (4 / (sig.den || 4)));
+  const barTicks = beatsPerBar * tpb;
+  const sf = scoreKeySf(tr);
+  const sharps = sf >= 0;
+  const clef = scoreClefNow(tr);
+  const gap = Math.max(5, Math.round(5 * Math.min(1.8, Math.max(0.7, zoom.value))));   // 线间距
+  const lineY0 = 30;                                     // 第一行五线谱的顶线（相对行内）
+  const staffH = gap * 4;
+  const systemH = staffH + gap * 5.5;                    // 一行占的高度（上下留白）
+  const leftPad = 66;                                    // 谱号 + 调号 + 拍号
+  const rightPad = 10;
+  const beatPx = Math.max(9, pxPerBeat.value * 0.85);
+  const barW = Math.max(96, beatsPerBar * beatPx);
+  const barsPerSystem = Math.max(1, Math.floor((W - leftPad - rightPad) / barW));
+  const lastTick = Math.max(barTicks, maxTickOf(tr));
+  const bars = Math.max(1, Math.ceil(lastTick / barTicks));
+  const systems = Math.max(1, Math.ceil(bars / barsPerSystem));
+  return { s, tr, tpb, sig, beatsPerBar, barTicks, sf, sharps, clef, gap, lineY0, staffH, systemH,
+           leftPad, rightPad, barW, barsPerSystem, bars, systems, W, HK };
+}
+function maxTickOf(tr) { let m = 0; for (const n of tr.notes || []) m = Math.max(m, n.end); return m; }
+
+/** 音符在谱面上的 y（全音阶序号 → 像素）。五线谱 E4=0 线序的换算在这里集中 */
+function scoreYOf(lay, n) {
+  const midB = lay.clef === 'bass' ? 50 : 71;          // 低音谱号中线 D3=50；高音谱号中线 B4=71
+  const midDia = scoreSpell(midB, true).diatonic;
+  const dia = scoreSpell(n.midi, lay.sharps).diatonic;
+  const midY = lay.lineY0 + lay.staffH / 2;
+  return midY - ((dia - midDia) * lay.gap) / 2;
+}
+
+/** 音符 x：按 tick 线性映射（与卷帘同一个 pxPerBeat 语义，缩放一致） */
+function scoreXOf(lay, tick) {
+  const bar = Math.floor(tick / lay.barTicks);
+  const inBar = tick - bar * lay.barTicks;
+  const barIdx = bar % lay.barsPerSystem;
+  return lay.leftPad + barIdx * lay.barW + (inBar / lay.barTicks) * (lay.barW - 12);
+}
+function scoreSystemY(lay, tick) {
+  const bar = Math.floor(tick / lay.barTicks);
+  return 8 + Math.floor(bar / lay.barsPerSystem) * lay.systemH - scoreScrollY.value;
+}
+function scoreTickAt(lay, x, y) {
+  const row = Math.floor((y - 8 + scoreScrollY.value) / lay.systemH);
+  const localX = x - lay.leftPad;
+  const barIdx = Math.max(0, Math.min(lay.barsPerSystem - 1, Math.floor(localX / lay.barW)));
+  const frac = Math.max(0, Math.min(1, (localX - barIdx * lay.barW) / (lay.barW - 12)));
+  const bar = row * lay.barsPerSystem + barIdx;
+  return Math.round((bar * lay.barTicks + frac * lay.barTicks) / 5) * 5;
+}
+/** 由 y 反推该处的音高（保留原音符的变音记号） */
+function scorePitchAt(lay, y, acc) {
+  const midB = lay.clef === 'bass' ? 50 : 71;
+  const midDia = scoreSpell(midB, true).diatonic;
+  const midY = lay.lineY0 + lay.staffH / 2;
+  const dia = midDia + Math.round(((midY - y) * 2) / lay.gap);
+  return scorePitchOf(dia, acc);
+}
+
+/** 乐谱命中：符头附近（半径 ≈ 一个线间距）算命中 */
+function scoreHit(x, y) {
+  const lay = scoreLayout(wrap.value ? wrap.value.clientWidth : 600, H.value);
+  if (!lay) return null;
+  const r = Math.max(8, lay.gap * 1.2);
+  let best = null, bestD = 1e9;
+  for (const n of lay.tr.notes) {
+    const ny = scoreSystemY(lay, n.start) + scoreYOf(lay, n);
+    const nx = scoreXOf(lay, n.start);
+    const d = Math.hypot(nx - x, ny - y);
+    if (d <= r && d < bestD) { bestD = d; best = n; }
+  }
+  return best;
+}
+
+/** 乐谱视图里按下鼠标：选中 / 画笔插入 / 竖直拖动改音高 */
+function scoreDown(e, x, y, multi) {
+  const lay = scoreLayout(wrap.value ? wrap.value.clientWidth : 600, H.value);
+  if (!lay) return;
+  const hitNote = scoreHit(x, y);
+  if (props.tool === 'pencil' && !hitNote) {
+    const tick = snapTick(scoreTickAt(lay, x, y));
+    const midi = scorePitchAt(lay, y, 0);
+    const len = Math.max(30, insertTicks.value || (insertDot.value ? Math.round(lay.tpb * 1.5) : lay.tpb));
+    const note = { start: Math.max(0, tick), end: Math.max(0, tick) + len, midi, vel: props.defaultVelocity, ch: (curTrack() && curTrack().ch) || 0 };
+    pushState();
+    lay.tr.notes.push(note);
+    sortNotes(lay.tr.notes);
+    selection.clear(); selection.add(note);
+    dragState.value = { type: 'score-move', notes: [note], startX: x, startY: y,
+                        orig: [{ n: note, midi: note.midi, start: note.start, end: note.end }], moved: false };
+    afterEdit(); emit('modify'); emit('select'); draw();
+    return;
+  }
+  if (!hitNote) { if (!multi) selection.clear(); emit('select'); draw(); return; }
+  if (!multi && !selection.has(hitNote)) { selection.clear(); selection.add(hitNote); }
+  else if (multi && selection.has(hitNote)) selection.delete(hitNote);
+  else if (multi) selection.add(hitNote);
+  if (!selection.has(hitNote)) { dragState.value = null; draw(); return; }
+  pushState();
+  dragState.value = { type: 'score-move', notes: [...selection], startX: x, startY: y,
+                      orig: [...selection].map((n) => ({ n, midi: n.midi, start: n.start, end: n.end })), moved: false };
+  emit('select'); draw();
+}
+
+/** 乐谱视图里的拖动：竖直按**全音阶**换音高（保留变音记号），水平按拍移动 */
+function scoreMove(x, y) {
+  const d = dragState.value;
+  const lay = scoreLayout(wrap.value ? wrap.value.clientWidth : 600, H.value);
+  if (!d || !lay) return;
+  const step = Math.max(2, lay.gap / 2);
+  const diaSteps = Math.round((d.startY - y) / step);
+  const tickPerPx = lay.barTicks / Math.max(1, lay.barW - 12);
+  const dTickRaw = (x - d.startX) * tickPerPx;
+  const dTick = snapTick(Math.abs(dTickRaw)) * (dTickRaw < 0 ? -1 : 1);
+  for (const o of d.orig) {
+    const sp = scoreSpell(o.midi, lay.sharps);
+    o.n.midi = scorePitchOf(sp.diatonic + diaSteps, sp.acc);
+    o.n.start = Math.max(0, Math.round(o.start + dTick));
+    o.n.end = Math.max(o.n.start + 1, Math.round(o.end + dTick));
+  }
+  d.moved = d.moved || diaSteps !== 0 || dTick !== 0;
+  if (d.moved) emit('modify');
+  draw();
+}
+
 function hitTest(x, y) {
-  const tr = curTrack(); if (!tr) return null;
+  if (props.view === 'score') return scoreHit(x, y);
+  const list = editTrackList(); if (!list.length) return null;
   const hi = viewTop.value;
   const midi = yToMidi(y);
   const tick = xToTick(x);
   const thresh = 4;
+  // 当前轨优先（同一像素位置重叠时，动的是「正在编辑的那条轨」）
+  for (const tr of list) {
   for (const n of tr.notes) {
     const nx = tickToX(n.start), nx2 = tickToX(n.end);
     const ny = (hi - n.midi) * rowH.value;
     if (Math.abs((nx + nx2) / 2 - x) < Math.max(6, (nx2 - nx) / 2 + 4) && Math.abs(ny + rowH.value / 2 - y) < rowH.value / 2 + thresh) return n;
   }
+  }
   return null;
 }
 function onDown(e) {
+  /* 手写笔/触控第一道闸：笔在附近时挡掉手指（掌侧误触），已经在拖拽时挡掉第二根手指。
+     必须放在最前面 —— 后面的分支会重接拖拽状态，接上了就是"两指一碰音符跳走"。 */
+  if (!claimPointer(e)) return;
+  pushMark = undoStack.length;
+  longPress.cancel(); longPressCancelled = false;
+  longPress.down(e);
   const s = song(), tr = curTrack();
   if (!s || !tr) return;
   const rect = canvas.value.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
   const multi = e.ctrlKey || e.metaKey || e.shiftKey;
+  if (props.view === 'score') {
+    scoreDown(e, x, y, multi);
+    try { canvas.value.setPointerCapture(e.pointerId); } catch (err) {}
+    return;
+  }
+  if (props.tool === 'pencil' && props.stepOn) {
+    // 步进：音高来自点击位置，**位置来自指针**，落完整步前进
+    const midi = yToMidi(y);
+    if (midi < 0 || midi > 127) return;
+    const len = Math.max(30, Math.round(props.stepTicks || 120));
+    const st = Math.max(0, Math.round(stepCursor.value));
+    pushState();
+    const note = { start: st, end: st + len, midi: clamp(scaleSnapPitch(midi, st), 0, 127), vel: velFromPointer(e) };
+    tr.notes.push(note);
+    selection.clear(); selection.add(note);
+    stepCursor.value = st + len;
+    emit('step', stepCursor.value);
+    afterEdit();
+    emit('select');
+    return;
+  }
   if (props.tool === 'pencil') {
     const tick = snapTick(xToTick(x)), midi = yToMidi(y);
     if (tick < 0 || midi < 0 || midi > 127) return;
     const len = Math.max(s.tpb, 120);
-    dragState.value = { type: 'create', startTick: tick, startMidi: midi, len, note: null, rawEnd: tick + len };
+    dragState.value = { type: 'create', startTick: tick, startMidi: midi, len, note: null, rawEnd: tick + len, press: penPressure(e) };
     try { canvas.value.setPointerCapture(e.pointerId); } catch (err) {}
   } else if (props.tool === 'erase') {
     const n = hitTest(x, y);
@@ -744,10 +1203,17 @@ function onDown(e) {
       pushState(); // 操作前记录，保证撤销能还原
       // 边缘命中 → 拉伸长度（右边缘改 end，左边缘改 start 并保持 end 不动）
       const nx = tickToX(n.start), nx2 = tickToX(n.end);
-      let type = 'move';
-      if (Math.abs(nx2 - x) < 7) type = 'resize';
-      else if (Math.abs(x - nx) < 7) type = 'resize-left';
-      dragState.value = { type, notes: [n], startX: x, startY: y, orig: [{ start: n.start, end: n.end, midi: n.midi }] };
+      // M3 修饰键：Alt+拖拽 = 改力度（画布上最常用的「手感」参数）。
+      // 命中音符若已在多选集合里，就对整个选区生效，否则只动这一个。
+      if (e.altKey) {
+        const targets = selection.has(n) && selection.size > 1 ? [...selection] : [n];
+        dragState.value = { type: 'vel', notes: targets, startX: x, startY: y, orig: targets.map((m) => ({ vel: m.vel })), hit: n };
+      } else {
+        let type = 'move';
+        if (Math.abs(nx2 - x) < 7) type = 'resize';
+        else if (Math.abs(x - nx) < 7) type = 'resize-left';
+        dragState.value = { type, notes: [n], startX: x, startY: y, orig: [{ start: n.start, end: n.end, midi: n.midi }] };
+      }
     } else {
       if (!multi) selection.clear();
       dragState.value = { type: 'marquee', x0: x, y0: y, box: null };
@@ -757,9 +1223,12 @@ function onDown(e) {
   draw();
 }
 function onMove(e) {
+  if (!isPrimaryPointer(e)) return;          // 第二根手指的移动必须丢
+  longPress.move(e);                          // 位移超过 8px → 长按取消
   const d = dragState.value; if (!d) return;
   const rect = canvas.value.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  if (d.type === 'score-move') { scoreMove(x, y); return; }
   if (d.type === 'marquee') {
     d.box = { x: Math.min(d.x0, x), y: Math.min(d.y0, y), w: Math.abs(x - d.x0), h: Math.abs(y - d.y0) };
     if (d.x0 >= 0) {
@@ -767,14 +1236,20 @@ function onMove(e) {
       const t0 = xToTick(d.box.x), t1 = xToTick(d.box.x + d.box.w);
       const hi = viewTop.value;
       const m0 = yToMidi(d.box.y + d.box.h), m1 = yToMidi(d.box.y);
-      const tr = curTrack();
-      if (tr) for (const n of tr.notes) {
+      for (const tr of editTrackList()) for (const n of tr.notes) {
         if (n.start <= t1 && n.end >= t0 && n.midi >= m0 && n.midi <= m1) selection.add(n);
       }
     }
+  } else if (d.type === 'vel') {
+    // 竖直拖动改力度：约 2px = 1 级，够细也够快
+    const dv = (d.startY - y) * 0.5;
+    d.notes.forEach((n, i) => { n.vel = clamp(Math.round(d.orig[i].vel + dv), 1, 127); });
+    draw();
+    return;
   } else if (d.type === 'move') {
     const dTick = (x - d.startX) / pxPerTick.value;
-    const dMidi = (d.startY - y) / rowH.value;
+    // M3 修饰键：Shift+拖拽 = 锁定音高，只改时间位置
+    const dMidi = e.shiftKey ? 0 : (d.startY - y) / rowH.value;
     const orig = d.orig || [];
     d.notes.forEach((n, i) => {
       const o = orig[i];
@@ -802,11 +1277,24 @@ function onMove(e) {
     draw();
   }
 }
-function onUp() {
+function onUp(e) {
+  /* 不是主指针（掌侧 / 第二根手指）抬起 → 直接忽略：收尾会把还在进行的笔拖拽打断 */
+  if (!releasePointer(e)) return;             // 无参调用（pointerleave）= 无条件释放
+  const wasLong = longPress.up() || longPressCancelled;
+  longPressCancelled = false;
   const d = dragState.value;
+  /* 长按已经转成右键菜单：这一次交互不再提交（画笔就不该插音符、拖拽不该落位） */
+  if (wasLong) { dragState.value = null; draw(); return; }
   if (!d) return;
   const tr = curTrack();
-  if ((d.type === 'move' || d.type === 'resize' || d.type === 'resize-left') && d.notes.length && tr) {
+  if (d.type === 'score-move') {
+    // 拖动期间已就地改过数据（撤销栈在 onDown 里入栈），这里只做收尾与重排
+    if (d.moved) { afterEdit(); emit('modify'); }
+    dragState.value = null;
+    draw();
+    return;
+  }
+  if ((d.type === 'move' || d.type === 'resize' || d.type === 'resize-left' || d.type === 'vel') && d.notes.length && tr) {
     // 位置/长度已在拖拽中直接修改；状态在 onDown 时已入撤销栈
     if (d.type === 'move' && props.scaleMode === 'constrain') {
       for (const n of d.notes) n.midi = clamp(snapToPcs(n.midi, constrainPcsAt(n.start)), 0, 127);
@@ -817,7 +1305,7 @@ function onUp() {
     const len = Math.max(d.len || Math.max(song()?.tpb || 480, 120), 60);
     const st = Math.round(d.startTick);
     const en = Math.round(st + len);
-    tr.notes.push({ start: st, end: en, midi: clamp(scaleSnapPitch(Math.round(d.startMidi), st), 0, 127), vel: clamp(Math.round(props.defaultVelocity), 1, 127) });
+    tr.notes.push({ start: st, end: en, midi: clamp(scaleSnapPitch(Math.round(d.startMidi), st), 0, 127), vel: (d.press ? pressToVel(d.press) : clamp(Math.round(props.defaultVelocity), 1, 127)) });
     afterEdit();
   } else if (d.type === 'marquee' && d.box) {
     emit('select');
@@ -825,6 +1313,93 @@ function onUp() {
   }
   dragState.value = null;
 }
+/* ---------------- 步进输入（M4） ----------------
+   Cubase/Logic 的 Step Input：画笔不在「点哪落哪」，而是落在**指针**上，落完自动前进一格。
+   指针位置用 emit('step') 回报给上层（工具条要显示它在第几拍），也支持 ← → 手动走。 */
+const stepCursor = ref(0);
+function setStepCursor(v) { stepCursor.value = Math.max(0, Math.round(v || 0)); emit('step', stepCursor.value); draw(); }
+function stepBy(n) { const d = Math.max(30, Math.round(props.stepTicks || 120)); setStepCursor(stepCursor.value + n * d); }
+function stepAt() { return stepCursor.value; }
+
+/* ---------------- 悬停工具条（M3） ----------------
+   鼠标压到音符上时通知上层弹一条就地工具条（FL / Studio One 的做法）。
+   只在**命中的音符发生变化**时才 emit：pointermove 一秒几十次，无脑 emit 会把 Vue 刷爆。 */
+let hoverNote = null;
+function onHoverMove(e) {
+  if (dragState.value) { if (hoverNote) { hoverNote = null; emit('hover', null); } return; }
+  const rect = canvas.value.getBoundingClientRect();
+  const n = hitTest(e.clientX - rect.left, e.clientY - rect.top);
+  if (n === hoverNote) return;
+  hoverNote = n;
+  if (!n) { emit('hover', null); return; }
+  emit('hover', {
+    x: e.clientX, y: e.clientY, midi: n.midi, name: noteName(n.midi), vel: n.vel, tick: n.start,
+    muted: !!n.muted, sel: selection.has(n), count: selection.has(n) ? selection.size : 1,
+    len: Math.round(n.end - n.start),
+  });
+}
+function onHoverLeave() { if (hoverNote) { hoverNote = null; emit('hover', null); } }
+/** 画布内坐标命中的音符（测试与外部工具用；坐标为画布左上角起算的 CSS px） */
+function hitAt(x, y) {
+  const n = hitTest(x, y);
+  if (!n) return null;
+  return { midi: n.midi, name: noteName(n.midi), vel: n.vel, start: n.start, len: Math.round(n.end - n.start), muted: !!n.muted };
+}
+/** 悬停工具条上的就地操作：命中音符在多选里就作用于整个选区，否则只动它 */
+function hoverAction(kind) {
+  const tr = curTrack(); const n = hoverNote;
+  if (!tr || !n || !tr.notes.includes(n)) return 0;
+  const targets = (selection.has(n) && selection.size > 1) ? [...selection] : [n];
+  pushState();
+  for (const x of targets) {
+    if (kind === 'velUp') x.vel = clamp(x.vel + 5, 1, 127);
+    else if (kind === 'velDown') x.vel = clamp(x.vel - 5, 1, 127);
+    else if (kind === 'half') x.end = x.start + Math.max(30, Math.round((x.end - x.start) / 2));
+    else if (kind === 'double') x.end = x.start + Math.max(30, Math.round((x.end - x.start) * 2));
+    else if (kind === 'mute') x.muted = !x.muted;
+    else if (kind === 'del') { /* 删除在下面统一处理（要动数组） */ }
+  }
+  if (kind === 'del') {
+    for (const x of targets) { const i = tr.notes.indexOf(x); if (i >= 0) tr.notes.splice(i, 1); }
+    for (const x of targets) selection.delete(x);
+    hoverNote = null;
+    emit('hover', null);
+  }
+  afterEdit();
+  return targets.length;
+}
+/** 把悬停的音符设为当前选中（供「更多工具」这类需要选区的入口用） */
+function selectHover() {
+  const n = hoverNote; const tr = curTrack();
+  if (!n || !tr || !tr.notes.includes(n)) return 0;
+  selection.clear(); selection.add(n);
+  emit('select'); draw();
+  return 1;
+}
+
+/* ---- 手写笔 / 触控（M9 收尾）----
+   触控屏没有右键，而画布是 touch-action:none（否则手指一拖就滚页面），
+   浏览器也就不再自己发 contextmenu —— 不自己记时的话，触控屏上永远打不开画布菜单。 */
+let pushMark = -1;                 // 本次交互开始时的撤销栈深度（长按取消时要还原）
+let longPressCancelled = false;
+const longPress = makeLongPress((e) => {
+  /* 长按只在「还没移动」时成立：把这次交互整个撤掉再弹菜单 ——
+     否则松手时 onUp 会把零长度的拖拽当成一次点击提交（画笔工具就会插一个音符）。 */
+  if (pushMark >= 0 && undoStack.length > pushMark) undoStack.pop();
+  longPressCancelled = true;
+  dragState.value = null;
+  draw();
+  onCtxMenu(e);
+});
+
+/* 笔有真实压力（鼠标恒为 0.5 —— 那是「按下」不是压力）：用它当新音符的力度，是笔最自然的用法。
+   拿不到笔压（鼠标/手指）时保持原来的默认力度，这些设备的体验一点不变。 */
+function pressToVel(p) { return clamp(Math.round(20 + p * 107), 1, 127); }
+function velFromPointer(e) {
+  const p = penPressure(e);
+  return p ? pressToVel(p) : clamp(Math.round(props.defaultVelocity), 1, 127);
+}
+
 /* 右键菜单：命中音符时先选中它，再把坐标交给上层（ViewEdit）弹菜单 */
 function onCtxMenu(e) {
   const s = song(), tr = curTrack();
@@ -844,6 +1419,19 @@ function onWheel(e) {
   e.preventDefault();
   const rect = canvas.value.getBoundingClientRect();
   const mx = e.clientX - rect.left;
+  if (props.view === 'score') {
+    // 谱面是「一行一行往下排」，所以滚轮滚的是可见行（Ctrl 才缩放）
+    if (e.ctrlKey || e.metaKey) {
+      const nz = clamp(zoom.value * (e.deltaY < 0 ? 1.15 : 0.87), 0.4, 2.5);
+      zoom.value = nz; emit('zoom', zoom.value);
+    } else {
+      const lay = scoreLayout(rect.width, H.value);
+      const maxY = lay ? Math.max(0, lay.systems * lay.systemH + 16 - H.value) : 0;
+      scoreScrollY.value = Math.max(0, Math.min(maxY, scoreScrollY.value + e.deltaY));
+    }
+    draw();
+    return;
+  }
   if (e.ctrlKey || e.metaKey) {
     const before = xToTick(mx);
     const nz = clamp(zoom.value * (e.deltaY < 0 ? 1.15 : 0.87), 0.4, 2.5);
@@ -874,16 +1462,35 @@ function fit() {
 function focusSelection() {
   if (!selection.size) return;
   const first = [...selection].sort((a, b) => a.start - b.start)[0];
+  if (props.view === 'score') {
+    const lay = scoreLayout(wrap.value ? wrap.value.clientWidth : 600, H.value);
+    if (lay) {
+      const bar = Math.floor(first.start / lay.barTicks);
+      const sys = Math.floor(bar / lay.barsPerSystem);
+      const y = sys * lay.systemH;
+      if (y < scoreScrollY.value || y + lay.systemH > scoreScrollY.value + H.value) {
+        scoreScrollY.value = Math.max(0, y - lay.systemH * 0.5);
+      }
+    }
+    draw();
+    return;
+  }
   viewTick.value = Math.max(0, first.start - (song()?.tpb || 480) * 2);
   draw();
+}
+/* 乐谱：画笔插入用的时值（拍数 → tick，附点再 ×1.5） */
+function setInsert(ticks, dot) {
+  if (ticks != null) insertTicks.value = Math.max(0, Math.round(ticks));
+  if (dot != null) insertDot.value = !!dot;
 }
 function deleteSelected() { if (selection.size) deleteNotes([...selection]); }
 function quantizeSelected(ratio) { if (selection.size) quantize([...selection], ratio); }
 function transposeSelected(d) { if (selection.size) transpose([...selection], d); }
 function velRampSelected(dir) { if (selection.size) velRamp([...selection], dir); }
 function selectAll() {
-  const tr = curTrack(); if (!tr) return;
-  selection.clear(); for (const n of tr.notes) selection.add(n);
+  const list = editTrackList(); if (!list.length) return;
+  selection.clear();
+  for (const tr of list) for (const n of tr.notes) selection.add(n);   // 跨轨编辑时＝所有参与轨
   draw(); emit('select');
 }
 function selectNone() { selection.clear(); draw(); emit('select'); }
@@ -953,8 +1560,8 @@ function selRef() {
 /* 按数组替换当前选中集合 */
 function selectNotes(arr) {
   selection.clear();
-  const tr = curTrack();
-  if (tr && Array.isArray(arr)) for (const n of arr) if (tr.notes.includes(n)) selection.add(n);
+  const list = editTrackList();
+  if (Array.isArray(arr)) for (const n of arr) { for (const tr of list) if (tr.notes.includes(n)) { selection.add(n); break; } }
   draw(); emit('select');
 }
 /* 列表编辑器保存：按选中顺序写回草稿值 */
@@ -971,6 +1578,109 @@ function applyDraft(arr) {
   });
   afterEdit();
 }
+/* ---------------- 参数化工具的实时预览（M2） ----------------
+   预览期间**不碰撤销栈**：beginPreview 存一份「选中音符的字段基线」，
+   每次 applyPreviewNow 先把字段恢复成基线、再从基线重算 —— 于是拖动滑杆 200 次
+   撤销栈也只多一条（commit 时才把基线压进去），Esc 能把整段预览一次还原。
+   只记字段、不换对象：选中集合是对象引用的 Set，换成新对象会让选择当场失效。 */
+let previewBase = null;
+/** order：可选，指定预览基线的顺序（列表编辑器要把「表格第 i 行」稳定映射到音符，
+    所以传它自己那份按 start 排序的引用数组）。不传就用选择集合的插入顺序。 */
+function beginPreview(order) {
+  const tr = curTrack();
+  if (!tr || !selection.size) { previewBase = null; return 0; }
+  const arr = (Array.isArray(order) && order.length) ? order.filter((n) => tr.notes.includes(n)) : [...selection];
+  if (!arr.length) { previewBase = null; return 0; }
+  previewBase = arr.map((n) => ({ n, start: n.start, end: n.end, midi: n.midi, vel: n.vel, muted: !!n.muted }));
+  return previewBase.length;
+}
+function previewing() { return !!previewBase; }
+function previewCount() { return previewBase ? previewBase.length : 0; }
+function restorePreviewBase() {
+  for (const b of previewBase) {
+    const { n } = b;
+    n.start = b.start; n.end = b.end; n.midi = b.midi; n.vel = b.vel;
+    if (b.muted) n.muted = true; else n.muted = false;
+  }
+}
+/** 从基线重算一次：fn(notes) 直接改 note 对象，返回改动条数 */
+function applyPreviewNow(fn) {
+  if (!previewBase) return 0;
+  restorePreviewBase();
+  let changed = 0;
+  try { changed = fn(previewBase.map((b) => b.n)) || 0; } catch (e) { changed = 0; }
+  const tr = curTrack(); if (tr) sortNotes(tr.notes);
+  emit('modify');
+  draw();
+  return changed;
+}
+function commitPreview() {
+  if (!previewBase) return 0;
+  const after = previewBase.map((b) => ({ start: b.n.start, end: b.n.end, midi: b.n.midi, vel: b.n.vel, muted: !!b.n.muted }));
+  restorePreviewBase();
+  pushState();                       // 存的是「预览之前」的轨道，撤销一次回到预览前
+  previewBase.forEach((b, i) => {
+    const a = after[i];
+    b.n.start = a.start; b.n.end = a.end; b.n.midi = a.midi; b.n.vel = a.vel; b.n.muted = a.muted;
+  });
+  const n = previewBase.length;
+  previewBase = null;
+  afterEdit();
+  return n;
+}
+function cancelPreview() {
+  if (!previewBase) return 0;
+  restorePreviewBase();
+  const n = previewBase.length;
+  previewBase = null;
+  const tr = curTrack(); if (tr) sortNotes(tr.notes);
+  emit('modify');
+  draw();
+  return n;
+}
+
+/* ---------------- 外部轨道级编辑（M5） ----------------
+   技法条 / 速度轨这类「不是选区操作、但也要进撤销栈」的编辑，走这三个入口：
+   它们自己找轨道、自己做快照（跨轨时用全量快照），调用方不用碰 pushState。 */
+/** 改某个音符的字段（按它实际所在的轨道做快照，跨轨也安全） */
+function editNote(note, patch) {
+  const s = song(); if (!s || !note || !patch) return 0;
+  for (let i = 0; i < s.tracks.length; i++) {
+    const tr = s.tracks[i];
+    if (!tr.notes.includes(note)) continue;
+    pushStateForTrack(i);
+    Object.assign(note, patch);
+    afterEdit();
+    return 1;
+  }
+  return 0;
+}
+/** 删除某个音符（同上） */
+function deleteNoteExternal(note) {
+  const s = song(); if (!s || !note) return 0;
+  for (let i = 0; i < s.tracks.length; i++) {
+    const tr = s.tracks[i];
+    const k = tr.notes.indexOf(note);
+    if (k < 0) continue;
+    pushStateForTrack(i);
+    tr.notes.splice(k, 1);
+    selection.delete(note);
+    afterEdit();
+    return 1;
+  }
+  return 0;
+}
+/** 在指定 tick 插入一个 Key Switch 音符（技法切换）：midi 0..24 */
+function insertKeySwitch(midi, tick, len) {
+  const tr = curTrack(), s = song();
+  if (!tr || !s) return 0;
+  pushState();
+  const st = Math.max(0, Math.round(tick || 0));
+  tr.notes.push({ start: st, end: st + Math.max(30, Math.round(len || (s.tpb / 2))), midi: clamp(Math.round(midi), 0, 24), vel: 100 });
+  afterEdit();
+  return 1;
+}
+
 /* 踏板：选区/整轨起止处添加 CC64 延音（down→127，up→0）；删除区间内 CC64 */
 function selSpan() {
   const tr = curTrack(); if (!tr) return null;
@@ -1066,13 +1776,13 @@ function snapSelToAudio() {
 function pushStateForTrack(ti) {
   const s = song(); if (!s) return;
   if (ti < 0) {
-    undoStack.push({ ti: -1, all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
+    undoStack.push({ ti: -1, tempo: tempoSnap(), all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
     if (undoStack.length > 80) undoStack.shift();
     redoStack.length = 0;
     return;
   }
   if (!s.tracks[ti]) return;
-  undoStack.push({ ti, notes: JSON.parse(JSON.stringify(s.tracks[ti].notes)), ccs: JSON.parse(JSON.stringify(s.tracks[ti].ccs || [])) });
+  undoStack.push({ ti, tempo: tempoSnap(), notes: JSON.parse(JSON.stringify(s.tracks[ti].notes)), ccs: JSON.parse(JSON.stringify(s.tracks[ti].ccs || [])) });
   if (undoStack.length > 80) undoStack.shift();
   redoStack.length = 0;
 }
@@ -1087,8 +1797,18 @@ defineExpose({
   setSelVel, setSelMidi, setSelStart, setSelLen, applyVelCurve, replaceNotes, selNotes, selRef, selectNotes, applyDraft,
   toggleMute, setSelMuted, selMuted,
   addPedal, delPedal, selSpan, addNote, deleteNotes, pushStateForTrack, notifyExternalEdit,
+  // 参数化工具的实时预览（M2）
+  beginPreview, previewing, previewCount, applyPreviewNow, commitPreview, cancelPreview,
+  // 悬停工具条（M3）
+  hoverAction, selectHover, hitAt,
+  // 步进输入（M4）
+  setStepCursor, stepBy, stepAt,
+  // 轨道级外部编辑（M5）
+  editNote, deleteNoteExternal, insertKeySwitch,
   undo, redo, canUndo, canRedo, clearHistory, historySnapshots,
   snapSelToAudio,
+  // 乐谱视图（五线谱）对外：滚动/谱号/插入时值/重绘
+  scoreScrollY, scoreClef, insertTicks, insertDot, setInsert, draw,
 });
 
 /* ---------------- 生命周期 ---------------- */
@@ -1122,6 +1842,8 @@ function stopLoop() { if (raf) { cancelAnimationFrame(raf); raf = 0; } }
 watch(() => currentSong.value, () => { selection.clear(); _autoScale = null; resetView(); markDirty(); draw(); });
 watch(() => props.trackIndex, () => { selection.clear(); markDirty(); draw(); if (props.ccEnabled) ccDrawLane(); });
 watch(() => props.tool, () => { dragState.value = null; markDirty(); draw(); });
+// 视图切换（卷帘 ↔ 五线谱）：绘制是按需重绘的，不标脏就不会自己画
+watch(() => props.view, () => { dragState.value = null; scoreScrollY.value = 0; markDirty(); nextTick(draw); });
 watch(() => props.ccNumber, () => ccDrawLane());
 watch(() => props.cc2Number, () => ccDrawLane());
 watch(() => props.cc2Enabled, (v) => { if (!v) ccDrawing.value = false; markDirty(); ccDrawLane(); });
@@ -1129,9 +1851,15 @@ watch(() => props.ccMode, () => markDirty());
 watch(() => props.ccEnabled, (v) => { if (!v) ccDrawing.value = false; markDirty(); ccDrawLane(); });
 watch(() => props.scaleMode, () => { markDirty(); draw(); });
 watch(() => props.scaleSpec, () => { markDirty(); draw(); }, { deep: true });
+/* 着色方案、默认力度、步进参数都是「只影响绘制」的 prop：没有这个 watch，
+   改了色卡要等下一次交互（鼠标移动/选择）才重绘 —— 用户看到的就是「点了没反应」。 */
+watch(() => [props.colorMode, props.stepOn, props.stepTicks, props.defaultVelocity, props.ccMode],
+  () => { markDirty(); draw(); });
 watch(() => props.chordTrack, () => { markDirty(); draw(); }, { deep: true });
 watch(() => props.audio, () => { _onsetsCache = null; markDirty(); draw(); });
 watch(() => props.ksMap, () => { markDirty(); draw(); }, { deep: true });
+/* 校对底图：换图 / 调不透明度 / 微调偏移 / 改宽度都要立刻重绘（否则又是"点了没反应"） */
+watch(() => props.underlay, () => { markDirty(); draw(); }, { deep: true });
 // 播放中由 state.playing 兜底每帧重绘；暂停时拖动进度条 / 定位也要跟着走
 watch(() => state.curSec, () => { if (!state.playing) markDirty(); });
 
@@ -1174,7 +1902,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="ed-canvas-wrap" ref="wrap" data-guide="edit-canvas" @wheel.prevent="onWheel" @contextmenu.prevent="onCtxMenu">
-    <canvas ref="canvas" :style="{ height: H + 'px' }" @pointerdown="onDown" @pointermove="onMove" @pointerup="onUp" @pointerleave="onUp"></canvas>
+    <canvas ref="canvas" :style="{ height: H + 'px' }" @pointerdown="onDown" @pointermove="onMove($event); onHoverMove($event)" @pointerup="onUp" @pointercancel="onUp" @pointerleave="onUp(); onHoverLeave()"></canvas>
     <div v-if="ccEnabled" class="cc-lane" :style="{ height: CC_LANE_H + 'px' }">
       <canvas ref="ccCanvas" class="cc-lane-canvas" @pointerdown="ccDown" @pointermove="ccMove" @pointerup="ccUp" @pointerleave="ccUp"></canvas>
     </div>

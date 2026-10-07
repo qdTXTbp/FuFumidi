@@ -106,19 +106,37 @@ def load_phoneme_tokens(cfg: DsDurConfig) -> Dict[str, int]:
     return result
 
 
-def load_language_ids(cfg: DsDurConfig) -> Dict[str, int]:
+def load_language_ids(cfg) -> Dict[str, int]:
     """对应 `LoadLanguageIds`（`:386-389`）。
 
     ★ 上游只在 `use_lang_id == true` 时调用（`:98-109`）；否则不读文件。
       音素前缀不在表里时默认 0（`GetValueOrDefault(..., 0)`）。
+    ★ `cfg` 可以是**任一阶段**的配置（dsdur / 根 dsconfig / dsvariance / dspitch）：
+      它们都有 `use_lang_id` / `languages` / `path()`，各自读自己那份
+      `<x>.languages.json`（多语声库四个阶段各有一份，值通常相同但不保证）。
     """
     if not cfg.use_lang_id or not cfg.languages:
         return {}
-    path = cfg.path(cfg.languages)
+    # ★ dsdur / 根 dsconfig 有 `path()`，dsvariance / dspitch 只有 `model()` —— 两种都认
+    _path = getattr(cfg, 'path', None)
+    path = _path(cfg.languages) if callable(_path) else os.path.join(cfg.root, cfg.languages)
     if not os.path.isfile(path):
         raise RenderError('use_lang_id 为真但找不到语言表：%s' % path)
     with io.open(path, encoding='utf-8') as f:
         return {str(k): int(v) for k, v in json.load(f).items()}
+
+
+def stage_language_ids(*cfgs) -> Dict[str, int]:
+    """按顺序取**第一个** `use_lang_id: true` 的阶段的语言表。
+
+    ★ 多语声库（Ria）四个阶段各有一份 `*.languages.json`；单语声库
+      （花火/空/芙宁娜）`use_lang_id: false` —— 一个都不读，返回 `{}`，
+      模型也不会有 `languages` 输入（`VerifyInputNames` 双向严格）。
+    """
+    for cfg in cfgs:
+        if cfg is not None and getattr(cfg, 'use_lang_id', False):
+            return load_language_ids(cfg)
+    return {}
 
 
 # ---------------------------------------------------------------- 声学/声码器（B 层）
@@ -169,12 +187,22 @@ def load_vocoder(acoustic: DsAcousticConfig, dependency_dir: Optional[str] = Non
                  ) -> DsVocoderConfig:
     """对应 `DiffSingerSinger.getVocoder()`（:200-211）。
 
-    ★ **声库自带 `dsvocoder/` 优先**，否则去 `Dependency/<dsconfig.vocoder>`。
+    ★ **声库自带 `dsvocoder/` 优先**；没有时用调用方给的**通用声码器**（`dependency_dir` 指向
+      含 `vocoder.yaml` 的目录，或该目录里的某个 .onnx —— 主进程传的就是 onnx 路径）；
+      再退到上游语义的 `Dependency/<dsconfig.vocoder>`。
       `pitch_controllable` 在**这里**（vocoder.yaml），不在 dsconfig。
     """
     local = os.path.join(acoustic.root, 'dsvocoder')
+    # 调用方给的覆盖：目录，或目录里的文件（取父目录）
+    ov_dir = None
+    if dependency_dir:
+        ov_dir = dependency_dir if os.path.isdir(dependency_dir) else os.path.dirname(dependency_dir)
     if os.path.isfile(os.path.join(local, 'vocoder.yaml')):
-        root = local
+        root = local                      # 声库自带的最准，覆盖请求在这里被忽略（调用方会提示）
+    elif ov_dir and os.path.isfile(os.path.join(ov_dir, 'vocoder.yaml')):
+        # ★ 通用声码器（如 nsf_hifigan_44.1k_hop512_128bin_2024.02）：没有 dsvocoder 的声库靠它才渲染得出来。
+        #   以前调用方把覆盖参数写成了恒 None，于是这类声库直接报"无法定位声码器"。
+        root = ov_dir
     else:
         if not dependency_dir:
             raise RenderError(
@@ -267,7 +295,10 @@ class DsSinger:
     acoustic: DsAcousticConfig
     vocoder: DsVocoderConfig
     phoneme_tokens: Dict[str, int]
+    #: dsdur 的语言表（A 层 linguistic 的 `languages` 输入按它取值）
     language_ids: Dict[str, int]
+    #: 根 dsconfig 的语言表（B 层 acoustic 的 `languages` 输入按它取值）
+    acoustic_language_ids: Dict[str, int] = None
     #: 各阶段的模型字节 hash（tensorcache 的 `identifier`）
     hashes: Dict[str, int] = None
 
@@ -306,6 +337,9 @@ def load_singer(singer_dir: str, dependency_dir: Optional[str] = None) -> DsSing
         vocoder=vocoder,
         phoneme_tokens=load_phoneme_tokens(dur),
         language_ids=load_language_ids(dur),
+        # ★ 声学侧的语言表来自**根** dsconfig（`ria-multi-dict.languages.json`），
+        #   不是 dsdur 那份 —— 两者内容通常一样，但声库可以各写一份。
+        acoustic_language_ids=stage_language_ids(acoustic, dur),
     )
     # ★ tensorcache 的 `identifier`：各阶段模型字节的 XXH64（加载时算一次）
     sg.hashes = {}

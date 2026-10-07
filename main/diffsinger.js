@@ -1050,6 +1050,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       fs.writeFileSync(notesJson, JSON.stringify(
         (pitchCurve && pitchCurve.length) ? { notes, pitchCurve } : notes
       ), 'utf8');
+      const params = (cfg && cfg.params) || {};
       const args = [
         'render',
         '--voicebank', String(voicebank),
@@ -1062,6 +1063,11 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         fs.writeFileSync(tempoJson, JSON.stringify(tempoMap), 'utf8');
         args.push('--tempo-map', '@' + tempoJson);
       }
+      // ★ 轨道级参数（前端 singer.ts 一直在发 params）：以前整包丢掉，
+      //   多语声库因此永远按 zh 音素化、采样深度/步数也调不动。
+      if (params.language) args.push('--language', String(params.language));
+      if (Number.isFinite(Number(params.depth))) args.push('--depth', String(Number(params.depth)));
+      if (Number.isFinite(Number(params.steps))) args.push('--steps', String(Math.round(Number(params.steps))));
       // 范围渲染：只合成选区内音符（带前后文），未传或 full 时整曲渲染
       let rangeArg = null;
       if (range && !range.full && range.startBeat != null && range.endBeat != null

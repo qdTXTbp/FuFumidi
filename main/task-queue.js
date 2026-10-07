@@ -57,6 +57,9 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
       }
       if (cfg.model) args.push('--model', cfg.model);
       if (cfg.model_size) args.push('--model-size', cfg.model_size);
+      // 乐器组约束（MuScriptor 硬约束）：worker 路径走 engine.js 的 map，
+      // 这条 spawn 路径要显式补参数，否则「回退到命令行」时约束会丢。
+      if (cfg.muscriptor_instruments) args.push('--muscriptor-instruments', String(cfg.muscriptor_instruments));
       const send = (line) => {
         if (win && !win.isDestroyed()) win.webContents.send('engine:log', { id: cfg.id, line });
       };

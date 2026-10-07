@@ -19,6 +19,11 @@ SR = 44100
 ENGINE = os.path.join(os.path.dirname(__file__), "..", "engine_utau.py")
 PY = sys.executable
 
+# 与应用侧保持一致：main.js 调引擎时一定会带 PYTHONIOENCODING=utf-8 / PYTHONUTF8=1
+# （见 main.js 的 engineEnv）。不带上它，Windows 下子进程 stdout 走 GBK，
+# 管道按 utf-8 解码会抛 UnicodeDecodeError，p.stdout 直接变 None。
+CLI_ENV = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+
 
 # ---------------------------------------------------------------- 合成音源
 def _synth_vowel(f0, dur_s, seed=0):
@@ -79,7 +84,7 @@ def run_render(vb_dir, *args):
     cmd = [PY, os.path.abspath(ENGINE), "render",
            "--voicebank", vb_dir, *args]
     p = subprocess.run(cmd, capture_output=True, text=True,
-                       encoding="utf-8", cwd=os.path.dirname(ENGINE))
+                       encoding="utf-8", env=CLI_ENV, cwd=os.path.dirname(ENGINE))
     result = None
     for line in (p.stdout or "").splitlines():
         if line.startswith("###RESULT "):
@@ -173,7 +178,7 @@ def run_render_track(vb_dir, notes, *args):
     cmd = [PY, os.path.abspath(ENGINE), "render-track",
            "--voicebank", vb_dir, "--notes", json.dumps(notes, ensure_ascii=False), *args]
     p = subprocess.run(cmd, capture_output=True, text=True,
-                       encoding="utf-8", cwd=os.path.dirname(ENGINE))
+                       encoding="utf-8", env=CLI_ENV, cwd=os.path.dirname(ENGINE))
     result = None
     for line in (p.stdout or "").splitlines():
         if line.startswith("###RESULT "):
@@ -425,7 +430,7 @@ def test_aliases_command(tmp_path):
     def run_alias(*args):
         cmd = [PY, os.path.abspath(ENGINE), "aliases", "--voicebank", vb_dir, *args]
         p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                           cwd=os.path.dirname(ENGINE))
+                           env=CLI_ENV, cwd=os.path.dirname(ENGINE))
         result = None
         for line in (p.stdout or "").splitlines():
             if line.startswith("###RESULT "):
@@ -506,7 +511,7 @@ def test_segment_command(tmp_path):
     p = subprocess.run([PY, os.path.abspath(ENGINE), "segment",
                         "--input", inp, "--out-dir", out_dir],
                        capture_output=True, text=True, encoding="utf-8",
-                       cwd=os.path.dirname(ENGINE))
+                       env=CLI_ENV, cwd=os.path.dirname(ENGINE))
     result = None
     for line in (p.stdout or "").splitlines():
         if line.startswith("###RESULT "):
@@ -527,7 +532,7 @@ def test_auto_oto_command(tmp_path):
                         "--voicebank", vb_dir, "--out", out,
                         "--encoding", "utf-8"],
                        capture_output=True, text=True, encoding="utf-8",
-                       cwd=os.path.dirname(ENGINE))
+                       env=CLI_ENV, cwd=os.path.dirname(ENGINE))
     result = None
     for line in (p.stdout or "").splitlines():
         if line.startswith("###RESULT "):
@@ -689,7 +694,7 @@ def test_flags_command(tmp_path):
     """flags CLI：列出受支持与已知不支持项（供 UI 展示说明）。"""
     p = subprocess.run([PY, os.path.abspath(ENGINE), "flags"],
                        capture_output=True, text=True, encoding="utf-8",
-                       cwd=os.path.dirname(ENGINE))
+                       env=CLI_ENV, cwd=os.path.dirname(ENGINE))
     result = None
     for line in (p.stdout or "").splitlines():
         if line.startswith("###RESULT "):

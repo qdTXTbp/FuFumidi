@@ -123,6 +123,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         _log(log_cb, f"加载 MuScriptor-{size}（HuggingFace，需授权）…")
         load_arg = size
 
+    gpu_reason = ""
     if device and device != "auto":
         dev = device
     else:
@@ -131,9 +132,20 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         dev = None
         try:
             from engine_gpu import torch_device as _torch_device
+            from engine_gpu import detect as _gpu_detect
             _d = _torch_device()
+            _g = _gpu_detect() or {}
             if _d in ("cuda", "mps"):
                 dev = _d
+            elif _g.get("cuda") and _g.get("arch_supported") is False:
+                # ★ issue #20：显卡在、但算力不在 CUDA 包的支持范围（GTX 10 系及更早）。
+                #   这里必须**显式**传 cpu —— 传 None 会让 muscriptor 自己按"有 CUDA"挑回 GPU，
+                #   然后在推理中途抛 `no kernel image is available`。
+                dev = "cpu"
+                gpu_reason = str(_g.get("arch_reason") or "")
+            elif _g.get("cuda_usable") is False and _g.get("arch_reason"):
+                dev = "cpu"
+                gpu_reason = str(_g.get("arch_reason") or "")
         except Exception:
             dev = None
     try:
@@ -147,6 +159,9 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         _log(log_cb, "使用 GPU（Apple Metal）推理")
     else:
         _log(log_cb, "使用 CPU 推理（较慢）")
+        if gpu_reason:
+            _log(log_cb, "原因：" + gpu_reason + "；若想用 GPU 请更新显卡驱动或改用支持该算力的版本，"
+                              "（本次已自动改用 CPU，转录结果不受影响，只是更慢）")
 
     # 批量推理仅在 CUDA / MPS 上有意义：CPU 批量吞吐无收益且更吃内存，
     # DirectML 设备不被 muscriptor 支持。非 GPU 设备强制回串行（质量最优）。
@@ -213,24 +228,83 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             _log(log_cb, "已关闭节拍网格检测")
 
         # muscriptor 0.3+ 的 transcribe_to_midi 返回 MIDI 字节（非写文件）。
-        # 批量推理开关：prelude_forcing=False + batch_size>1 可提速 2-4×
-        # （长音频 chunk 串行是大瓶颈），代价是 chunk 边界延续音符质量略降。
-        # 默认关闭（batch=1 + prelude_forcing=True，边界质量最优）。
-        # 实测（RTX 5070 Ti，medium，120s 音频）：batch=1 57s → batch=4 25s → batch=8 23s。
+        # 批量推理开关：prelude_forcing=False + batch_size>1 可提速 2-4×（长音频 chunk 串行是
+        # 大瓶颈）。**代价不是"边界质量略降"那么轻** —— prelude_forcing 的作用正是把"上一块
+        # 未结束的音"按原乐器 teacher-force 进下一块的 tie 段；关掉后模型会自己猜，于是每 5s
+        # 一次的分块边界上，延音会被重新判定乐器（muscriptor 自己的文档原话：
+        # "instead of letting the model guess (and occasionally re-enter with the wrong
+        # instruments)"）。实测《甩葱歌》同一首歌、同一模型：
+        #   batch=1（prelude ON）：非鼓轨 5 条、2531 音、相邻分块换组 1 次
+        #   batch=4（prelude OFF）：非鼓轨 9 条、1962 音（少 22%）、相邻分块换组 16 次
+        # 所以它不是默认项，而是界面上一个写明代价的开关（默认关）。
+        # 测速参考（RTX 5070 Ti，medium，120s）：batch=1 57s → batch=4 25s → batch=8 23s。
         batch = int(params.get("muscriptor_batch") or 0)
+        # 乐器组：MuScriptor 是多乐器模型，逐音符判定乐器组；不约束时它会在同一首歌里改判
+        # （实测：同一条旋律 24s 判成 organ、33s 判成 synth lead、96s 变成 voice），
+        # 于是同一段旋律每隔几小节换一次音色。muscriptor 的 transcribe() 支持硬约束
+        # （transcription_model.py: "instruments ... is a hard constraint"，内部用
+        # forbidden_token_ids 禁止采样其它乐器组）。三种取值：
+        #   'voice,piano' —— 作为硬约束（界面「限定乐器组（硬约束）」）。
+        #   其它/不传      —— 不限定，模型自由判定（界面默认；也是引擎缺省语义）。
+        #
+        # 说明：曾经有过 'auto'（转录前用 instrument_probe 预分析几段再锁定）这一档，
+        # 实测收益只有"剪掉长尾杂音"（圆号/萨克斯那种为几个音冒出来的轨），而"换音色"的真正
+        # 原因是分块边界（prelude_forcing，见上面的批量推理说明），预分析救不了它，
+        # 因此界面已去掉这一档。instrument_probe.py 仍保留为**独立分析工具**
+        # （python instrument_probe.py 歌曲.flac --json，看模型会把这首歌判成哪些乐器）。
+        import instrument_probe
+        _mode, _groups = instrument_probe.parse_mode(params.get("muscriptor_instruments"))
+        constrain = _groups if _mode == "limit" else None
+        if not constrain:
+            _log(log_cb, "未限定乐器组：模型自由判定（同一段旋律可能被写成多种音色）")
+        if constrain:
+            _log(log_cb, "旋律乐器组已锁定：" + " / ".join(constrain) + "（模型不会输出其它乐器）")
         t0 = time.perf_counter()
         data = None
+        # ★ CUDA 运行期错误只重试一次 CPU（issue #20 的兜底：算力/驱动问题不该让整次转录失败）
+        cuda_fallback_done = False
         while data is None:
             try:
                 if batch >= 2:
-                    _log(log_cb, f"批量推理：batch_size={batch}（prelude_forcing 关闭，边界质量略降）…")
-                    events = model.transcribe(wav_tmp, batch_size=batch, prelude_forcing=False)
+                    _log(log_cb, "批量推理：batch_size=%d（prelude_forcing 关闭 → 跨段延续的音符会被重新判定"
+                                  "乐器，同一段旋律可能每隔几秒换一次音色；要音色一致请关闭「批量推理」）…" % batch)
+                    events = model.transcribe(wav_tmp, batch_size=batch, prelude_forcing=False, instruments=constrain)
                 else:
-                    events = model.transcribe(wav_tmp)
+                    events = model.transcribe(wav_tmp, instruments=constrain)
                 data = model.events_to_midi_bytes(_events_with_progress(events), beat_grid=beat_grid)
             except Exception as e:
                 # 显存溢出自动降级：batch ≥2 → 减半重试 → 串行兜底，绝不因此转录失败
                 oom = "out of memory" in str(e).lower() or "OutOfMemoryError" in type(e).__name__
+                # ★ CUDA 运行期错误（no kernel image / 设备断言 / 非法访存…）→ 自动改用 CPU 重跑一次。
+                #   实测 issue #20：`CUDA error: no kernel image is available for execution on the device`
+                #   以前原样抛给用户、整次转录失败；现在换 CPU 继续，并在日志里说明原因。
+                _ck = ""
+                try:
+                    from engine_gpu import cuda_error_kind as _kind, cuda_error_hint as _hint
+                    _ck = _kind(e)
+                except Exception:
+                    _ck = ""
+                if _ck and _ck != "oom" and not cuda_fallback_done and (
+                        _dev_type in ("cuda", "mps") or str(dev or "").startswith(("cuda", "mps"))):
+                    cuda_fallback_done = True
+                    try:
+                        _h = _hint(_ck)
+                    except Exception:
+                        _h = ""
+                    _log(log_cb, "GPU 推理失败：%s（%s）" % (_ck, str(e).strip().splitlines()[0][:200]))
+                    if _h:
+                        _log(log_cb, _h)
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                    model = TranscriptionModel.load_model(load_arg, device="cpu")
+                    dev = "cpu"
+                    batch = 0
+                    _log(log_cb, "已改用 CPU 重跑本次转录（慢一些，但结果可用）…")
+                    continue
                 if oom and batch >= 2:
                     batch = batch // 2
                     _log(log_cb, f"GPU 显存不足，自动降低批量至 batch_size={batch} 重试…")
@@ -247,6 +321,10 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         audio_io.remove_temp(wav_tmp)
     with open(output_midi, "wb") as f:
         f.write(data)
+
+    # 说明：以前这里还会对转录结果做一遍「按音搬移、把主旋律收进一个音色」的事后归并。
+    # 实测对用户听感几乎没帮助（可动的范围常常只有几十秒），已改为在**模型之前**用
+    # instrument_probe 预分析并锁定乐器组 —— 一次推理就给出正确的组，不再事后搬音符。
 
     # 音符数统计（pretty_midi）
     n = _count_notes(output_midi)

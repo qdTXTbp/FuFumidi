@@ -17,7 +17,13 @@ function makeSong(tracks) {
   };
 }
 
-// 假 2D 上下文：只记录 roundRect（音符块与琴键都用它画），并记下调用时的填充色
+/* 假 2D 上下文。
+   ★ 这是一份**替身**，它必须覆盖被测代码真正调用到的每一个 ctx 方法 ——
+     viz.js 后来加了 `ctx.save()/restore()/clearRect()/drawImage()`（背景铺陈那条路径），
+     替身没跟上，两个测试就报 "ctx.save is not a function"（构建/其它测试全绿，只有这里红）。
+     维护办法：改 viz.js 的绘制代码后，用
+       grep -o "ctx\.[a-zA-Z]*(" frontend/src/core/viz.js | sort -u
+     对一遍这份清单。 */
 function fakeCtx() {
   const rects = [];
   const gradient = { addColorStop() {} };
@@ -26,6 +32,9 @@ function fakeCtx() {
     globalAlpha: 1, shadowBlur: 0, shadowColor: null,
     createLinearGradient: () => gradient,
     createRadialGradient: () => gradient,
+    // viz.js 的 pixelScale() 读 getTransform().a（拿不到就退化成 1）
+    getTransform: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }),
+    save() {}, restore() {}, clearRect() {}, drawImage() {},
     fillRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fill() {}, arc() {}, fillText() {},
     roundRect(x, y, w, h) { rects.push({ x, y, w, h, fill: ctx.fillStyle, alpha: ctx.globalAlpha }); },
   };

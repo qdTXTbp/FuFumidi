@@ -56,6 +56,8 @@ VERIFIED_NOT_SERIALIZED = {
 KNOWN_EXTRA = {
     ('UProject', 'resolution'),        # C# 是 => 表达式属性 + 无 set
     ('UTrack', 'singer_obj'), ('UTrack', 'voice_color_exp'), ('UTrack', 'voice_color2_exp'),
+    # 轨道级语言（上游 USingerTrack.Language 的语义落在轨道上；7d41d27 有意添加）
+    ('UTrack', 'language'),
     ('URenderSettings', 'renderer_obj'), ('URenderSettings', 'resampler_obj'),
     ('URenderSettings', 'wavtool_obj'),
     ('UVoicePart', 'render_phrases'),

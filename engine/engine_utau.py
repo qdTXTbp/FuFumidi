@@ -113,7 +113,11 @@ class OtoEntry:
     def __init__(self, filename, alias, offset, consonant, blank,
                  preutterance, overlap):
         self.filename = filename
-        self.alias = alias or filename
+        # ★ 别名缺省 = 文件名**去掉扩展名**（UTAU 的约定）。
+        #   旧实现用 `alias or filename` → 别名变成 "a.wav"，于是：
+        #   1) 界面拿 aliases 列表去校验歌词时，"a" 全被判成"不在别名表里"（整轨误报）；
+        #   2) 用户照抄 "a.wav" 当歌词时，渲染出来的音节也对不上。
+        self.alias = alias or os.path.splitext(filename)[0]
         self.offset = offset
         self.consonant = consonant
         self.blank = blank
@@ -924,6 +928,59 @@ def _cons_scale(velocity, flags):
     return s
 
 
+_MIDI_NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+
+
+def midi_to_note_name(midi) -> str:
+    """MIDI 音高号 → 音名（60 → C4）。"""
+    m = int(round(float(midi)))
+    return "%s%d" % (_MIDI_NOTE_NAMES[m % 12], m // 12 - 1)
+
+
+def normalize_track_notes(notes, bpm: float = 120.0):
+    """把音符归一成引擎原生 schema（音名 + 毫秒），返回 (音符列表, warnings)。
+
+    两种 schema 都接受：
+      * 原生：``{lyric, note: "C4", length_ms, vibrato: {...}, ...}``
+      * 拍系：``{lyric, pitch: 60, startBeat, durBeat, vibrato: true, vibDepth, vibFreq}``
+        —— 调教页下发的就是这个（配合 ``--bpm`` 换算时长）。
+
+    ★ 为什么要在这里做：调教页只发拍系字段，旧引擎只认音名/毫秒，
+      两边不一致时回落引擎会直接 ``KeyError: 'note'`` —— 也就是
+      「主引擎失败自动回落」那条路从来没通过。归一放在引擎入口，
+      不管哪个调用方来都能兜住。
+    """
+    out = []
+    warnings = []
+    spb = 60.0 / max(1.0, float(bpm or 120.0))          # 每拍秒数
+    saw_positions = False
+    for nd in notes:
+        if not isinstance(nd, dict):
+            raise ValueError("音符应为对象：%r" % (nd,))
+        n = dict(nd)
+        if "note" not in n:
+            if n.get("pitch") is None:
+                raise ValueError("音符缺少 note / pitch 字段：%r" % (sorted(nd),))
+            n["note"] = midi_to_note_name(n["pitch"])
+        if "length_ms" not in n:
+            if n.get("durBeat") is not None:
+                n["length_ms"] = max(1.0, float(n["durBeat"]) * spb * 1000.0)
+            else:
+                n["length_ms"] = 500.0
+        if n.get("startBeat") is not None:
+            saw_positions = True
+        vib = n.get("vibrato")
+        if isinstance(vib, bool):                       # 调教页：bool + vibDepth/vibFreq/vibFade
+            n["vibrato"] = ({"depth_cent": float(n.get("vibDepth", 35.0)),
+                             "freq_hz": float(n.get("vibFreq", 5.5)),
+                             "fade_ms": float(n.get("vibFade", 0.0))} if vib else None)
+        out.append(n)
+    if saw_positions:
+        warnings.append("本引擎按顺序拼接音符、不保留 startBeat：休止与复音会被压成依次演唱；"
+                        "需要严格对齐请用 OpenUTAU 引擎")
+    return out, warnings
+
+
 def render_track(vb, notes, sample_note="C4", sr=SAMPLE_RATE, strict=False):
     """渲染多音节音轨：按 preutterance 对齐音符起点 + overlap 等功率交叉淡化拼接。
 
@@ -1131,6 +1188,17 @@ def _print_result(res):
     print(f"###RESULT {json.dumps(res, ensure_ascii=False)}")
 
 
+def emit_progress(percent, text=''):
+    """进度行（与 engine_openutau.py 同协议 `###PROG`）：主进程会转发给界面。
+
+    ★ 这个函数原本只有 OpenUTAU 引擎有；legacy 引擎一直没有进度输出，
+      于是"分析 400+ 个采样"这类长任务在界面上只能干等。补上，两边协议一致。
+    """
+    sys.stdout.write('###PROG ' + json.dumps({'percent': int(percent), 'text': text},
+                                            ensure_ascii=False) + '\n')
+    sys.stdout.flush()
+
+
 def cmd_render(args):
     try:
         vb = Voicebank(args.voicebank)
@@ -1197,8 +1265,10 @@ def cmd_render_track(args):
         if not isinstance(notes, list) or not notes:
             raise ValueError("音符列表为空或格式错误（应为 JSON 数组）")
 
+        notes, schema_warnings = normalize_track_notes(notes, args.bpm)
         buf, warnings = render_track(vb, notes, sample_note=args.sample_note,
                                      strict=args.strict)
+        warnings = schema_warnings + list(warnings)
 
         import soundfile as sf
         os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
@@ -1250,6 +1320,112 @@ def cmd_aliases(args):
             "total": total,
             "aliases": items[:limit],
             "truncated": len(items) > limit,
+        })
+    except Exception as e:
+        _print_result({"ok": False, "error": f"{type(e).__name__}: {e}"})
+        sys.exit(1)
+
+
+def _frq_f0(wav_path):
+    """读 UTAU 的 `.frq`（resampler 自己的基频轨迹）→ (f0 中位数 Hz, 有声帧数)。
+
+    命名规则：`a.wav` → `a_wav.frq`。文件结构：8 字节 `FREQ0003` + 4 字节 hop + 4 字节保留，
+    之后是 float64 的逐帧基频（0 = 无声帧）。
+    ★ 优先用它是**因为它就是引擎实际用的那条轨迹**（比我们重新分析更权威），而且快得多。
+    解析失败一律返回 (0, 0)，调用方回退到采样分析。
+    """
+    frq = os.path.splitext(wav_path)[0] + "_wav.frq"
+    if not os.path.isfile(frq):
+        return 0.0, 0
+    try:
+        with open(frq, "rb") as f:
+            raw = f.read()
+        if len(raw) < 40 or raw[:4] != b"FREQ":
+            return 0.0, 0
+        n = (len(raw) - 16) // 8
+        if n <= 0:
+            return 0.0, 0
+        arr = np.frombuffer(raw[16:16 + n * 8], dtype="<f8")
+        voiced = arr[(arr > 60.0) & (arr < 1200.0)]
+        if len(voiced) < 5:
+            return 0.0, 0
+        return float(np.median(voiced)), int(len(voiced))
+    except Exception:
+        return 0.0, 0
+
+
+def cmd_alias_range(args):
+    """每个别名的**录制音高**（M8 音域热力图）。
+
+    两个来源，按可靠性排序：
+      1. `.frq`（resampler 用的基频轨迹，最权威、最快）；
+      2. 没有 .frq 时**分析采样本身**：按 oto 的 offset 起、跨过固定段(consonant)、
+         再取一小段有声区，用引擎自己的逐帧自相关基音检测（_frame_f0），
+         并且用第 1 步得到的中位音高当 hint 收紧搜索范围（避免八度误判）。
+    前端据此画「别名 × 音高」热力图，并判断某个音高离录制音高有多远
+    （±12 半音内视为可用：UTAU 类拼接引擎的常规变调余量）。
+    """
+    try:
+        vb = Voicebank(args.voicebank)
+        aliases = vb.aliases()
+        if args.query:
+            aliases = [a for a in aliases if args.query in a]
+        limit = int(args.limit or 0)
+        if limit > 0:
+            aliases = aliases[:limit]
+        total = len(aliases)
+        items = []
+        pending = []            # 没有 .frq 的条目，等第 2 步分析
+        for i, alias in enumerate(aliases):
+            entry = vb.by_alias.get(alias)
+            if entry is None:
+                continue
+            wav_path = os.path.join(vb.vb_dir, entry.filename)
+            f0, voiced = _frq_f0(wav_path)
+            if f0 > 0:
+                items.append({
+                    "alias": alias, "file": entry.filename, "source": "frq",
+                    "f0_hz": round(f0, 2),
+                    "note": float(np.round(69 + 12 * np.log2(f0 / 440.0), 2)),
+                    "voiced": voiced, "ms": None, "offset": entry.offset,
+                })
+            else:
+                pending.append({"alias": alias, "file": entry.filename, "offset": entry.offset})
+            if total and i and i % 25 == 0:
+                emit_progress(int(5 + 55 * i / total), "读 .frq %d/%d" % (i + 1, total))
+
+        # 第 2 步：没有 .frq 的用采样分析；hint 取已有结果的中位音高
+        f0s = [x["f0_hz"] for x in items if x["f0_hz"] > 0]
+        hint = float(np.median(f0s)) if len(f0s) >= 5 else None
+        for j, pend in enumerate(pending):
+            entry = vb.by_alias.get(pend["alias"])
+            try:
+                # ★ load_sample 返回**单个数组**（不是 (data, sr)）——采样率统一到 SAMPLE_RATE
+                data = vb.load_sample(entry)
+                sr = SAMPLE_RATE
+            except Exception as e:
+                # 缺采样 / 读不了：如实标出来，不让整批失败（热力图上标成"未分析"）
+                items.append({"alias": pend["alias"], "file": pend["file"], "error": str(e)[:120]})
+                continue
+            a = max(0, int(entry.offset / 1000.0 * sr))
+            b = min(len(data), a + int((entry.consonant + entry.preutterance + 220.0) / 1000.0 * sr))
+            seg = data[a:b] if b > a else data
+            f0, voiced = _frame_f0(seg, sr, hint=hint)
+            items.append({
+                "alias": pend["alias"], "file": pend["file"], "source": "analysis",
+                "f0_hz": round(float(f0), 2),
+                "note": (float(np.round(69 + 12 * np.log2(f0 / 440.0), 2)) if f0 > 0 else None),
+                "voiced": round(float(voiced), 3),
+                "ms": round(len(seg) / sr * 1000.0, 1), "offset": entry.offset,
+            })
+            if pending and j and j % 20 == 0:
+                emit_progress(int(60 + 35 * j / len(pending)),
+                              "分析采样 %d/%d" % (j + 1, len(pending)))
+        notes = [x["note"] for x in items if x.get("note")]
+        _print_result({
+            "ok": True, "count": len(items), "items": items,
+            "median_note": (float(np.round(np.median(notes), 2)) if notes else None),
+            "hint_hz": hint, "engine_version": VERSION,
         })
     except Exception as e:
         _print_result({"ok": False, "error": f"{type(e).__name__}: {e}"})
@@ -1355,6 +1531,8 @@ def build_parser():
 
     t = sub.add_parser("render-track", help="渲染多音节音轨为 WAV")
     t.add_argument("--voicebank", required=True, help="音源目录（含 oto.ini）")
+    t.add_argument("--bpm", type=float, default=120.0,
+                   help="每分钟拍数（音符用 startBeat/durBeat 表示时用于换算时长）")
     t.add_argument("--notes", required=True,
                    help="音符 JSON 数组（或以 @ 开头的 JSON 文件路径）")
     t.add_argument("--sample-note", default="C4", help="音源录制音高")
@@ -1371,6 +1549,12 @@ def build_parser():
     a.add_argument("--query", default=None, help="关键字过滤（子串匹配）")
     a.add_argument("--limit", type=int, default=300, help="最多返回条数")
     a.set_defaults(func=cmd_aliases)
+
+    ar = sub.add_parser("alias-range", help="估算每个别名的录制音高（音域热力图用）")
+    ar.add_argument("--voicebank", required=True, help="音源目录（含 oto.ini）")
+    ar.add_argument("--query", default=None, help="关键字过滤（子串匹配）")
+    ar.add_argument("--limit", type=int, default=0, help="最多分析条数（0 = 全部）")
+    ar.set_defaults(func=cmd_alias_range)
 
     s = sub.add_parser("segment", help="按静音间隙切分音频为音节段（CV 式）")
     s.add_argument("--input", required=True, help="音频文件（任意格式）")

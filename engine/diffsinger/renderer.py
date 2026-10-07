@@ -22,6 +22,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import RenderError
 from .config import compute_speedup, resolve_depth
+from .g2p import lang_id_of
 from .utils import (
     HEAD_FRAMES, TAIL_FRAMES, durations_ms_to_frames, padded_phone_durations,
     padded_segments, sample_curve, tone_to_freq,
@@ -282,7 +283,15 @@ def build_acoustic_inputs(singer, phrase: Phrase, segments, durations: Sequence[
         feeds['speedup'] = np.asarray([int(speedup)], dtype=np.int64)
 
     if cfg.use_lang_id:
-        raise RenderError('use_lang_id=true 的声学模型还需要 languages 输入，当前未实现')
+        # ★ 多语声库（Ria）的 acoustic 多一个 `languages` 输入，形状与 `tokens` 相同：
+        #   逐音素取**符号的语言前缀**（`zh/aa` → 3），AP/CL/SP 之类无前缀的 → 0。
+        #   表用**根** dsconfig 的那份（`singer.acoustic_language_ids`），不是 dsdur 的。
+        _ids = singer.acoustic_language_ids or singer.language_ids or {}
+        langs = [lang_id_of(sym, _ids) for sym, _, _ in segments]
+        if len(langs) != len(tokens):
+            raise RenderError('acoustic 的 languages 与 tokens 不等长：%d vs %d'
+                              % (len(langs), len(tokens)))
+        feeds['languages'] = np.asarray([langs], dtype=np.int64)
 
     # ---- gender（GENC，:327-338）：无曲线时整条 0
     if cfg.use_key_shift_embed:

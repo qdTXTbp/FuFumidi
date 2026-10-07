@@ -417,6 +417,22 @@ function registerGpuIpc({
       isCuda ? "    info['blackwell'] = cap[0] >= 9" : "    info['blackwell'] = False",
       isCuda ? "    try: info['need_cu128'] = bool(info['blackwell'] and (not info['cuda_version'] or float(info['cuda_version']) < 12.8))" : "    info['need_cu128'] = False",
       isCuda ? "    except Exception: info['need_cu128'] = True" : "",
+      // ★ issue #20：`is_available()` 只证明「驱动认卡」，不证明「轮子里有这颗卡的 kernel」。
+      //   GTX 10 系及更早（算力 < 轮子编译时列出的最低 sm）会出现：自检通过 → 一跑就
+      //   `CUDA error: no kernel image is available for execution on the device`。
+      //   所以这里把算力与 torch.cuda.get_arch_list() 比一遍，不匹配就直接判不可用。
+      isCuda ? "    try:" : "",
+      isCuda ? "        from engine_gpu import detect as _gpu_detect" : "",
+      isCuda ? "        _g = _gpu_detect() or {}" : "",
+      isCuda ? "        info['arch_list'] = _g.get('torch_arch_list')" : "",
+      isCuda ? "        info['arch_supported'] = _g.get('arch_supported')" : "",
+      isCuda ? "        if _g.get('arch_supported') is False:" : "",
+      isCuda ? "            info['ok'] = False" : "",
+      isCuda ? "            info['arch_unsupported'] = True" : "",
+      isCuda ? "            info['error'] = _g.get('arch_reason') or '显卡算力不在当前 CUDA 推理包支持范围内'" : "",
+      isCuda ? "            print('###BACKEND ' + json.dumps(info)); raise SystemExit" : "",
+      isCuda ? "    except SystemExit: raise" : "",
+      isCuda ? "    except Exception: pass" : "",
       "    print('###BACKEND ' + json.dumps(info))",
       "except Exception as e:",
       "    print('###BACKEND ' + json.dumps({'ok': False, 'error': str(e)}))",
@@ -524,6 +540,17 @@ function registerGpuIpc({
             };
           }
           // 自检失败：给出可操作的明确指引
+          // ★ issue #20：算力不匹配（GTX 10 系及更早）单独给一条 —— 这不是「装坏了」，
+          //   是这颗卡在当前 CUDA 推理包里没有 kernel，重装/换镜像都不会好。
+          if (verified && (verified.arch_unsupported || verified.arch_supported === false)) {
+            const archMsg = verified.error || '显卡算力不在当前 CUDA 推理包支持范围内';
+            return {
+              ok: false, kind, verified, gpu: gpuDetect, archUnsupported: true,
+              error: archMsg + '。增强包已装好，但本机显卡无法用它加速 —— 应用会自动改用 CPU 转录（功能不受影响，只是更慢）。'
+                + '若希望用 GPU：可等待面向旧算力的构建，或换一台算力较新的显卡。',
+              out: result.out, err: result.err,
+            };
+          }
           const hint = (verified && verified.blackwell)
             ? '检测到 Blackwell（RTX 50 系）显卡，但 CUDA 版本低于 12.8 无法驱动。请更新 NVIDIA 驱动（R570+ 支持 CUDA 12.8）后重新安装。'
             : 'CUDA 增强包已安装但 torch.cuda 不可用。请检查：① NVIDIA 显卡驱动是否已安装且较新；② 网络是否完整下载了 torch cu128 包。仍不行可到 GitHub Release 下载 fufumidi-gpu-cuda 预打包增强包，在「本地导入 ZIP」中安装。';

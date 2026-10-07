@@ -1,9 +1,21 @@
 // Preload 桥接：主进程 ↔ 渲染进程（fuBridge）
-const { contextBridge, ipcRenderer, webUtils } = require('electron');
+const { contextBridge, ipcRenderer, webUtils, webFrame } = require('electron');
 // 拖拽文件 → 本地路径（UTAU 声库 zip 拖拽导入用）
 function filePathFor(f) { try { return webUtils.getPathForFile(f); } catch (e) { return null; } }
 
 contextBridge.exposeInMainWorld('fuBridge', {
+  /* 全局 UI 缩放（M9）：走 Chromium 自己的缩放因子，而不是 CSS transform ——
+     transform 只改画面不改排版（会重叠），而缩放因子会真的重排，
+     并且 devicePixelRatio 跟着变，画布的 devicePixel 尺寸自动跟着走（不会糊）。
+     范围与设置页一致：0.9 ~ 1.3。 */
+  setZoomFactor: (f) => {
+    try {
+      const v = Math.min(1.3, Math.max(0.9, Number(f) || 1));
+      webFrame.setZoomFactor(v);
+      return webFrame.getZoomFactor();
+    } catch (e) { return 1; }
+  },
+  getZoomFactor: () => { try { return webFrame.getZoomFactor(); } catch (e) { return 1; } },
   // 打开文件（双击 .mid 关联）
   onOpenFile: (cb) => {
     const w = (_e, bytes, name) => cb(new Uint8Array(bytes), name);
@@ -67,6 +79,17 @@ contextBridge.exposeInMainWorld('fuBridge', {
   pickMusicXML: () => ipcRenderer.invoke('dialog:pickMusicXML'),
   exportScorePdf: () => ipcRenderer.invoke('score:exportPdf'),
   transcodeVideo: (data, audio, opts) => ipcRenderer.invoke('video:transcode', { data, audio, ...(opts || {}) }),
+  // 「变谱」：乐谱（MusicXML/MXL）→ MIDI（返回 base64 字节 + 统计信息）
+  scoreToMidi: (cfg) => ipcRenderer.invoke('score:toMidi', cfg || {}),
+  onScoreProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('score:progress', w); return () => ipcRenderer.removeListener('score:progress', w); },
+  // 识谱增强引擎（Audiveris）安装 / 检测
+  omrEngine: {
+    status: () => ipcRenderer.invoke('omr:status'),
+    install: () => ipcRenderer.invoke('omr:install'),
+    remove: () => ipcRenderer.invoke('omr:remove'),
+    openDir: () => ipcRenderer.invoke('omr:openDir'),
+    onProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('omr:progress', w); return () => ipcRenderer.removeListener('omr:progress', w); },
+  },
   modelList: () => ipcRenderer.invoke('model:list'),
   depCheck: () => ipcRenderer.invoke('dep:check'),
   diagExport: () => ipcRenderer.invoke('diag:export'),
@@ -96,6 +119,11 @@ contextBridge.exposeInMainWorld('fuBridge', {
   verifyMidi: () => ipcRenderer.invoke('library:verify'),
   dupeMidi: () => ipcRenderer.invoke('library:dupes'),
   // 托盘控制（播放/暂停、下一首）
+  /* ---- 操作系统级全局热键（设置 → 快捷键 → 全局热键）：用户自己录制 ---- */
+  hotkeysGet: () => ipcRenderer.invoke('hotkeys:get'),
+  hotkeysApply: (map) => ipcRenderer.invoke('hotkeys:apply', map),
+  onHotkeyAction: (cb) => { const w = (_e, act) => cb(act); ipcRenderer.on('hotkey:action', w); return () => ipcRenderer.removeListener('hotkey:action', w); },
+  onHotkeysState: (cb) => { const w = (_e, st) => cb(st); ipcRenderer.on('hotkeys:state', w); return () => ipcRenderer.removeListener('hotkeys:state', w); },
   onTrayControl: (cb) => { const w = (_e, act) => cb(act); ipcRenderer.on('tray:control', w); return () => ipcRenderer.removeListener('tray:control', w); },
   // 读取与指定音频/ midi 文件同目录的同名 .lrc 歌词（base64 传输，渲染端自解码）
   readSidecarLyrics: (filePath) => ipcRenderer.invoke('sys:readSidecarLyrics', filePath),
@@ -133,6 +161,15 @@ contextBridge.exposeInMainWorld('fuBridge', {
   utauFlags: () => ipcRenderer.invoke('utau:flags'),
   // 声库可用别名（P1-4 发音/别名替换）
   utauAliases: (cfg) => ipcRenderer.invoke('utau:aliases', cfg),
+  // M8f：别名表可编辑 —— 读原始字节 / 写回（写回前主进程自动备份 oto.ini.bak）
+  utauReadOto: (cfg) => ipcRenderer.invoke('utau:readOto', cfg),
+  /** M8 音域热力图：每个别名的录制音高 */
+  utauAliasRange: (cfg) => ipcRenderer.invoke('utau:aliasRange', cfg),
+  utauSaveOto: (cfg) => ipcRenderer.invoke('utau:saveOto', cfg),
+  // 汉字 → 拼音（调教页 · 中文 UTAU 声库）：token 数组进、音节数组出
+  singToPinyin: (cfg) => ipcRenderer.invoke('sing:toPinyin', cfg),
+  // 声库体检（调教页 · 声库面板）：目录/编码/别名/缺采样/歌词覆盖一次算清
+  probeVoicebank: (cfg) => ipcRenderer.invoke('sing:probeVoicebank', cfg),
   // 已导入声库列表 / 导入现成声库 zip
   utauListVoicebanks: () => ipcRenderer.invoke('utau:listVoicebanks'),
   utauImportVoicebankZip: (directPath) => ipcRenderer.invoke('utau:importVoicebankZip', directPath),
@@ -198,8 +235,13 @@ contextBridge.exposeInMainWorld('fuBridge', {
     invoke: (id, cmd, payload) => ipcRenderer.invoke('plugins:invoke', id, cmd, payload),
     rescan: () => ipcRenderer.invoke('plugins:rescan'),
     openDocs: () => ipcRenderer.invoke('plugins:openDocs'),
+    // 插件网（第三方作者发布插件的地方）
+    openPlatform: (rel) => ipcRenderer.invoke('plugins:openPlatform', rel),
+    platformInfo: () => ipcRenderer.invoke('plugins:platformInfo'),
     openDir: () => ipcRenderer.invoke('plugins:openDir'),
     // 插件市场安装：两段式，download 只落缓存并返回包内清单，确认后才 install
+    // 插件中心目录（主进程代取，避免渲染进程直连撞 CSP/CORS）
+    catalog: (channel) => ipcRenderer.invoke('plugins:catalog', channel),
     installFromPlatform: (slug, version) => ipcRenderer.invoke('plugins:installFromPlatform', slug, version),
     confirmInstall: (token, overwrite) => ipcRenderer.invoke('plugins:confirmInstall', token, overwrite),
     cancelInstall: (token) => ipcRenderer.invoke('plugins:cancelInstall', token),

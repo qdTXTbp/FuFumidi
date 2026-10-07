@@ -152,6 +152,18 @@ def predict(singer, cfg: DsVarianceConfig, phrase, segments, durations: Sequence
     else:
         ling_feeds['ph_dur'] = np.asarray([list(durations)], dtype=np.int64)
 
+    if cfg.use_lang_id:
+        # ★ 多语声库（Ria）的 variance linguistic 也多一个 `languages` 输入（形状同 tokens）：
+        #   逐音素取符号的语言前缀，查 **dsvariance 自己**那份 <x>.languages.json。
+        from .g2p import lang_id_of
+        from .voicebank import load_language_ids
+        _ids = load_language_ids(cfg)
+        langs = [lang_id_of(sym, _ids) for sym, _, _ in segments]
+        if len(langs) != len(tokens):
+            raise RenderError('variance 的 languages 与 tokens 不等长：%d vs %d'
+                              % (len(langs), len(tokens)))
+        ling_feeds['languages'] = np.asarray([langs], dtype=np.int64)
+
     # ★ 按**名字**取 `encoder_out`（:182-185），不按顺序；走 run_session 以启用缓存
     ling_outs = run_session(cfg.model('linguistic'), ling_feeds, providers,
                             'dsvariance linguistic',

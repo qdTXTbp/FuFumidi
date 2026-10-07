@@ -27,6 +27,8 @@
  * 宁可明确报错，也不要拿半懂的数据去覆盖用户的工程。
  */
 
+import { normalizeSampleNote } from './utau_tools.js';
+
 /** 清单里的格式标识（拒绝别的格式误当工程打开） */
 export const FORMAT_ID = 'fufumidi-song';
 /** 当前写入的版本号 */
@@ -255,6 +257,12 @@ function serializeCurves(list) {
   return out;
 }
 
+/** 只认 `#rgb` / `#rrggbb`（可选 4/8 位带 alpha）；其余一律当成「没设过」 */
+function safeColor(v) {
+  const s = str(v).trim();
+  return /^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(s) ? s.toLowerCase() : '';
+}
+
 function serializeTrack(t) {
   if (!t || typeof t !== 'object') return null;
   const o = {
@@ -269,6 +277,8 @@ function serializeTrack(t) {
     return o;
   }
   o.engine = t.engine === 'diffsinger' ? 'diffsinger' : 'utau';
+  // 轨道配色（多轨叠置时认轨的唯一线索）；没设过就不写，读的时候按索引补
+  if (t.color) o.color = safeColor(t.color);
   o.singer = str(t.singer);
   if (t.singerName) o.singerName = str(t.singerName).slice(0, 255);
   o.language = str(t.language, 'zh').slice(0, 16) || 'zh';
@@ -341,6 +351,15 @@ export function serializeProject(state) {
       title: str(s.meta && s.meta.title).slice(0, 255),
       comment: str(s.meta && s.meta.comment).slice(0, 4096),
       artist: str(s.meta && s.meta.artist).slice(0, 255),
+      // 和声组（M8a）：只存「组名 + 成员轨 id」，成员轨数据本身不在这里
+      groups: (Array.isArray(s.meta && s.meta.groups) ? s.meta.groups : []).slice(0, 64).map((g) => ({
+        id: str(g && g.id).slice(0, 32),
+        name: str(g && g.name).slice(0, 60),
+        trackIds: (Array.isArray(g && g.trackIds) ? g.trackIds : []).map((x) => str(x).slice(0, 32)).slice(0, 64),
+        muted: !!(g && g.muted),
+        solo: !!(g && g.solo),
+        gainDb: clamp(num(g && g.gainDb, 0), -24, 24),
+      })).filter((g) => g.id && g.trackIds.length),
     },
     bpm: clamp(num(s.bpm, 120), 20, 400),
     /** 多点变速（拍单位，首点 beat=0，bpm 标量是首点真源）—— 对应 ustx tempos */
@@ -350,7 +369,9 @@ export function serializeProject(state) {
     /** 调号（-7..7，-1=降 B 调方向 … +7=升号方向）—— 对应 ustx key */
     keySf: clamp(Math.round(num(s.keySf, 0)), -7, 7),
     device: ['auto', 'cpu', 'cuda', 'dml'].indexOf(s.device) >= 0 ? s.device : 'auto',
-    sampleNote: str(s.sampleNote, 'a').slice(0, 16) || 'a',
+    // ★ 采样基准音是**音名**（C4）；老工程里存过 'a'（当年被当成别名）→ 统一归一化，
+    //   否则打开老工程后一点「渲染本轨」就会以「无法解析音名：a」整体失败
+    sampleNote: normalizeSampleNote(str(s.sampleNote, '')),
     activeTrackId: str(s.activeTrackId),
     tracks,
     assets: assets.reduce((m, a) => { m[a.id] = { name: a.fileName }; return m; }, {}),
@@ -429,6 +450,8 @@ function parseTrack(t) {
     return o;
   }
   o.singer = str(t.singer);
+  const col = safeColor(t.color);
+  if (col) o.color = col;
   if (t.singerName) o.singerName = str(t.singerName).slice(0, 255);
   o.language = str(t.language, 'zh').slice(0, 16) || 'zh';
   o.notes = (Array.isArray(t.notes) ? t.notes : []).map(parseNote).filter(Boolean);
@@ -492,6 +515,14 @@ export function parseProject(json) {
       title: str(meta.title).slice(0, 255),
       comment: str(meta.comment).slice(0, 4096),
       artist: str(meta.artist).slice(0, 255),
+      groups: (Array.isArray(meta.groups) ? meta.groups : []).slice(0, 64).map((g) => ({
+        id: str(g && g.id).slice(0, 32),
+        name: str(g && g.name).slice(0, 60),
+        trackIds: (Array.isArray(g && g.trackIds) ? g.trackIds : []).map((x) => str(x).slice(0, 32)).slice(0, 64),
+        muted: !!(g && g.muted),
+        solo: !!(g && g.solo),
+        gainDb: clamp(num(g && g.gainDb, 0), -24, 24),
+      })).filter((g) => g.id && g.trackIds.length),
     },
     bpm: tempoMap.length ? tempoMap[0].bpm : clamp(num(json.bpm, 120), 20, 400),
     /** 多点变速 / 拍号 / 调号（旧版工程没有这些字段 → 兜底成默认值） */
@@ -499,7 +530,7 @@ export function parseProject(json) {
     sigMap: serializeSigMap(json.sigMap),
     keySf: clamp(Math.round(num(json.keySf, 0)), -7, 7),
     device: ['auto', 'cpu', 'cuda', 'dml'].indexOf(json.device) >= 0 ? json.device : 'auto',
-    sampleNote: str(json.sampleNote, 'a').slice(0, 16) || 'a',
+    sampleNote: normalizeSampleNote(str(json.sampleNote, '')),
     activeTrackId: str(json.activeTrackId),
     tracks,
   };

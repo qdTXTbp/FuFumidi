@@ -1,7 +1,7 @@
 {
   "name": "fufumidi-frontend",
   "private": true,
-  "version": "5.0.0-beta.1",
+  "version": "5.0.0-beta.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,7 +12,7 @@
     "test:store": "esbuild ./tests/store_undo.bundle.js --bundle --format=esm --platform=node --outfile=./.tmp/store_undo.test.mjs --external:pinia --external:vue && node --test ./.tmp/store_undo.test.mjs"
   },
   "dependencies": {
-    "js-synthesizer": "^1.13.0",
+    "pdfjs-dist": "^4.10.38",
     "pinia": "^4.0.3",
     "vue": "^3.5.13",
     "vue-router": "^4.6.4"

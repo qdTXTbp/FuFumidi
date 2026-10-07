@@ -16,9 +16,9 @@ FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编�
 
 应用基于 Electron 桌面壳 + Vue 3 + TypeScript 渲染层 + 内置 Python 转录运行时，并提供可选的原生 Rust 核心以加速曲库的批量操作。所有音频、模型权重与推理都在本地执行，转录与编辑全程不上传任何数据；只有在你自己开启云同步（可选）时，才会把歌单与 MIDI 曲目上传到你自己的云端账号。
 
-当前版本线：**4.4.1**（[发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v4.4.1)）。
+当前版本线：**5.0.0-beta.2**（[发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v5.0.0-beta.2)，测试版通道）。
 
-4.4.1 要点：修掉「设置 → GPU 加速」里预打包增强包的 CUDA 分卷无法下载的问题——分卷清单在传给主进程时仍带着界面的响应式代理对象，跨进程传输被直接拒绝（报「An object could not be cloned」），请求压根没发出去；DirectML 包不带分卷清单，所以不受影响。同时修正发布流程不会把 CNB 的版本锚点指向新正式版的问题——此前走国内源的用户查到的版本号会一直停在旧版，收不到更新提示且没有任何报错。
+5.0.0-beta.1 要点：**UTAU 与 DiffSinger 真正融合**——「制作音频」顶栏改为统一声库选择器，选好声库点渲染即自动分流到拼接合成或 AI 推理；DiffSinger 工作台新增 **OpenUTAU 式谱面编辑**（通用钢琴卷帘、音素条带、±200 音分音高车道，支持移动/手绘/直线/正弦/平滑六种工具），并且**谱面上画的音高曲线真正参与发声**；曲谱新增「音素视图」开关；声库下载与常规模型共用全局通知条。另修掉整曲渲染的 spawn ENAMETOOLONG、更新通道切换不持久、资源中心声库数量恒为 0，以及打包排除规则缺失导致 app.asar 被撑到 2GB+ 的问题。4.5.0 的功能已并入本大版本，不再单独发布 4.5.0。
 
 ### 核心能力
 
@@ -357,12 +357,14 @@ cd engine && pytest
 
 FuFumidi 支持以插件形式扩展第三方能力，无需改动主程序。一个插件 = 一个目录 + `plugin.json` 清单 + 入口脚本。完整开发文档见 `plugins/plugin-dev.html`，简明索引见 `plugins/README.md`。
 
-内置示例：
+内置插件：
 
-- `plugins/example-hello/` - 最小 hello-world 示例。
-- `plugins/beat-detect/` - 对当前曲目做节拍检测。
-- `plugins/midi-stats/` - 输出当前 MIDI 文件的统计信息。
-- `plugins/batch-rename/` - 批量重命名导入文件。
+- `plugins/auto-key-cmajor/`（**v1.0.0**）- 自动识别 MIDI 调性并转到 C 大调（自然音级映射，转调后音名拼写正确），原文件不改动，结果写入同目录新文件。
+
+> 约定：**只保留 `auto-key-cmajor` 这一个内置插件**。此前的示例插件
+> （`example-hello` / `beat-detect` / `midi-stats` / `batch-rename`）已删除，
+> 后续版本不得再加回来 —— 写插件看 `plugins/plugin-dev.html` 与本文档即可，
+> 不需要在应用里内置示例。
 
 每个插件在独立 worker 中运行，获得一个受限的 `ctx` 对象，暴露 `commands`、`events`、`engine.run`、`settings`、`ui`、`log` 与 `app.getSongMeta`。引擎调用与内置转录共用同一套 Python 运行时，因此插件可以复用 `engine/` 下的任意脚本。
 
@@ -370,13 +372,98 @@ FuFumidi 支持以插件形式扩展第三方能力，无需改动主程序。�
 
 ## 持续集成
 
-- `.github/workflows/ci.yml` - 代码检查与测试。
-- `.github/workflows/build.yml` - 在 Windows / macOS / Linux 上构建前端与 asar。
-- `.github/workflows/build-installers.yml` - 生成各平台安装包。
-- `.github/workflows/test-installers.yml` - 安装产物并跑冒烟测试。
+- `.github/workflows/ci.yml` - 守在 `master` / `main` 上的门禁：`npm ci`、构建前端、
+  跑 UI 测试与插件沙箱测试，最后打包并核对 asar 内容。
+- `.github/workflows/build.yml` - 手动触发：装 Python / Node 依赖、跑引擎探针，
+  在 Windows / macOS / Linux 上把 asar 打出来。
+- `.github/workflows/build-installers.yml` - 手动触发：生成 Linux / macOS 安装包。
+- `.github/workflows/test-installers.yml` - 手动触发：下载某个 Release 的安装包，
+  跑安装 / 启动 / 卸载冒烟。需要传入 `tag`，且该 Release 里确实要有对应平台的产物。
 
-编码规范见 `.github/CODING_GUIDELINES.md`。
+当前发布通道**只上传 Windows 安装包**。`FuFumidi-Setup-<版本>.exe` 在持有 `resources/`
+（Python 运行时、模型）的机器上构建 —— 那份资源不在仓库里，所以发布这一步跑不了托管 runner。
+上面三个手动工作流是跨平台验证路径，不是发布任务。
 
+编码规范见 `.github/CODING_GUIDELINES.md`，仓库卫生的审计结论与理由见 `docs/HYGIENE.md`。
+
+
+## 致谢
+
+FuFumidi 站在很多人的肩膀上。下面是本工具**随包分发**或**按需下载**用到的开源项目与开源模型，按用途分组。
+许可证以各上游项目为准 —— 随包分发的第三方许可证正文就放在对应资源旁边，清单见 [LICENSE](LICENSE)；
+内置二进制的版本与 SHA-256 记录在 [docs/VENDOR.md](docs/VENDOR.md)。
+
+### 外壳与界面
+
+- [Electron](https://github.com/electron/electron) + Chromium —— 桌面外壳
+- [Vue 3](https://github.com/vuejs/core)、[Vite](https://github.com/vitejs/vite)、
+  [Pinia](https://github.com/vuejs/pinia)、[Vue Router](https://github.com/vuejs/router) —— 渲染层
+- [pdf.js](https://github.com/mozilla/pdf.js) —— 变谱导入时的 PDF 渲染
+
+### 音源与音色库
+
+- [js-synthesizer](https://github.com/surikov/js-synthesizer) 与
+  [FluidSynth](https://github.com/FluidSynth/fluidsynth)（`libfluidsynth`）—— SoundFont 播放
+- [GeneralUser GS](https://schristiancollins.com/generaluser.php)（S. Christian Collins）—— 随包内置的默认音色（CC BY 3.0）
+- [FluidR3_GM](https://member.keymusician.com/Member/FluidR3_GM/index.html)（MIT）、
+  [Salamander Grand Piano](https://sfzinstruments.github.io/pianos/salamander)（Alexander Holm，CC BY 3.0）、
+  [Arachno SoundFont](https://www.arachnosoft.com/main/soundfont.php)、
+  [Aspirin-DX Soundbank](https://github.com/NeoSoundFonts/Aspirin-DX-Soundbank)（NeoSoundFonts）、
+  SGM-V2.01、Timbres of Heaven、FM/GM 与 GIGA FM —— 音色工坊里可下载的其余音色
+
+### 乐谱与识谱
+
+- [Verovio](https://github.com/rism-digital/verovio) —— MusicXML 刻版（五线谱 / 六线谱等记谱）
+- [Audiveris](https://github.com/Audiveris/audiveris) —— 可选的光学识谱后端，按需下载安装
+
+### 转录 / 分离 / 分析模型
+
+- [basic-pitch](https://github.com/spotify/basic-pitch)（Spotify）—— 通用音频转 MIDI，ONNX 模型随包内置
+- [piano-transcription-inference](https://github.com/qiuqiangkong/piano_transcription_inference) 与发布在
+  [Zenodo](https://zenodo.org/record/4034264) 的 CRNN 模型 —— 钢琴专用转录
+- [MuScriptor](https://github.com/muscriptor/muscriptor) —— MuScriptor 系列模型
+- [Aria-AMT](https://github.com/EleutherAI/aria-amt)（EleutherAI）与 `aria-utils` —— Aria 链路
+- [Transkun](https://github.com/Yujia-Yan/TransKun) —— transkun 转录引擎
+- [Demucs](https://github.com/facebookresearch/demucs)（Meta）—— 人声 / 伴奏分离
+- [MSST](https://github.com/ZFTurbo/Music-Source-Separation-Training)（经 [pymss](https://pypi.org/project/pymss/)）——
+  额外分离模型（BS-RoFormer、Mel-Band-RoFormer、HTDemucs、MDX23C、SCNet、Bandit、Swin-UperNet 等配置）
+- [Beat This!](https://github.com/CPJKU/beat_this) —— 节拍网格检测
+
+### 歌声合成
+
+- [OpenUtau](https://github.com/stakira/OpenUtau)（MIT）—— 本项目移植的 UTAU 兼容引擎，以及它附带的
+  WORLD / `worldline` 本地库
+- [DiffSinger](https://github.com/openvpi/DiffSinger) 生态（openvpi）与
+  [NSF-HiFiGAN 声码器](https://github.com/openvpi/vocoders) —— AI 歌声合成
+- [pypinyin](https://github.com/mozillazg/python-pinyin) —— 中文歌词转音素
+- 应用内目录里链接的社区声库与模型（例如 [Ria](https://github.com/RibosomeK/RiaDiffSinger)、
+  [utsu](https://github.com/titinko/utsu)、[HowHow-UTAU](https://github.com/EarlySpringCommitee/HowHow-UTAU)）——
+  由用户自行下载，不随包分发
+
+### Python 运行时与科学计算
+
+- CPython，以及 [NumPy](https://github.com/numpy/numpy)、[SciPy](https://github.com/scipy/scipy)、
+  [librosa](https://github.com/librosa/librosa)、[soundfile](https://github.com/bastibe/python-soundfile)、
+  [pretty_midi](https://github.com/craffel/pretty-midi)、[mido](https://github.com/mido/mido)、
+  [PyYAML](https://github.com/yaml/pyyaml)、[Pillow](https://github.com/python-pillow/Pillow)、
+  [tqdm](https://github.com/tqdm/tqdm)、[einops](https://github.com/arogozhnikov/einops)、
+  [OmegaConf](https://github.com/omry/omegaconf)、[ml_collections](https://github.com/google/ml_collections)、
+  [beartype](https://github.com/beartype/beartype)、[pydub](https://github.com/jiaaro/pydub)、
+  [mir_eval](https://github.com/craffel/mir_eval)、[resampy](https://github.com/bmcfee/resampy)
+- [ONNX Runtime](https://github.com/microsoft/onnxruntime) 与 [ONNX](https://github.com/onnx/onnx) —— 模型推理
+- [PyTorch](https://github.com/pytorch/pytorch) + torchaudio —— GPU 加速包使用
+- [FFmpeg](https://ffmpeg.org/)（经 [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg)）—— 音视频编码
+
+### 存储、打包与托管
+
+- [SQLite](https://sqlite.org/)（经 [sql.js](https://github.com/sql-js/sql.js)）—— 本地曲库数据库；
+  [adm-zip](https://github.com/cthackers/adm-zip) —— 压缩包处理
+- [electron-builder](https://github.com/electron-userland/electron-builder) 与 [NSIS](https://nsis.sourceforge.io/) —— 安装包
+- [GitHub Actions](https://github.com/features/actions) —— 持续集成
+- [Cloudflare Workers](https://workers.cloudflare.com/)、D1、R2 与 Turnstile —— 可选的云同步服务
+  （`cloud-sync/`，由你自己部署）
+
+如果这里漏了某个用到的项目，或者署名有误，欢迎提 issue —— 我们宁可改署名，也不想留一份不全的清单。
 
 ## Credits
 

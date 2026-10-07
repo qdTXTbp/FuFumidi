@@ -83,6 +83,90 @@ def _torch_is_cu128():
         return False
 
 
+# ---------------------------------------------------------------- 算力 vs 构建
+# issue #20：`CUDA error: no kernel image is available for execution on the device`；
+# torch 轮子里只有**编译时列进去的算力**（cu128 实测 arch_list = sm_70/75/80/86/90/100/120），
+# 显卡比它老（Kepler / Maxwell / Pascal，即 GTX 10 系及更早）时：
+#   * 驱动层能认出卡 → `torch.cuda.is_available()` 仍为 True（装完的自检照样通过）
+#   * 一到真正跑 kernel 就炸，而且是在推理中途异步报出来，用户只看到一句 CUDA 报错
+# 所以**必须**在选设备之前把两者比一遍。
+
+def _parse_arch(entry):
+    """'sm_86' / 'compute_90' → ('sm'|'compute', 8, 6)；解析不了返回 None。"""
+    try:
+        kind, num = str(entry).split('_', 1)
+        if kind not in ('sm', 'compute') or not num.isdigit() or len(num) < 2:
+            return None
+        return kind, int(num[:-1]), int(num[-1])
+    except Exception:
+        return None
+
+
+def arch_supported(capability, arch_list):
+    """设备算力是否落在 torch 构建的 arch 列表里。
+
+    CUDA 的兼容规则（这段逻辑的依据）：
+      * `sm_XY` 是**已编译的 cubin**：只能在**同一大版本**、且设备小版本 >= X.Y 上运行
+        （sm_86 的 cubin 能在 sm_89 上跑，但跑不了 sm_75 / sm_120）；
+      * `compute_XY` 是 PTX：目标算力 >= X.Y 时可即时编译（含跨大版本）。
+    两者都不命中 → 运行期才会炸 no kernel image，也就是 issue #20。
+    信息不足（拿不到算力或列表为空）时返回 None：调用方按“未知”处理，不下结论。
+    """
+    if not capability or not arch_list:
+        return None
+    try:
+        maj, mnr = int(capability[0]), int(capability[1])
+    except Exception:
+        return None
+    for entry in arch_list:
+        p = _parse_arch(entry)
+        if not p:
+            continue
+        kind, amaj, amnr = p
+        if kind == 'sm' and maj == amaj and mnr >= amnr:
+            return True
+        if kind == 'compute' and (maj, mnr) >= (amaj, amnr):
+            return True
+    return False
+
+
+def min_supported_arch(arch_list):
+    """arch 列表里最低的 sm 版本 → (major, minor)；没有可解析项时返回 None。"""
+    got = []
+    for entry in arch_list or []:
+        p = _parse_arch(entry)
+        if p and p[0] == 'sm':
+            got.append((p[1], p[2]))
+    return min(got) if got else None
+
+
+def cuda_error_kind(exc):
+    """把 CUDA 运行期报错归类，供「自动改用 CPU」与给用户看的说明使用。"""
+    s = str(exc).lower()
+    if 'no kernel image' in s or 'no_kernel_image' in s:
+        return 'no_kernel_image'
+    if 'device-side assert' in s:
+        return 'device_assert'
+    if 'illegal memory access' in s:
+        return 'illegal_memory'
+    if 'out of memory' in s:
+        return 'oom'
+    if 'cuda' in s and ('error' in s or 'failed' in s or 'unsupported' in s):
+        return 'cuda_other'
+    return ''
+
+
+def cuda_error_hint(kind):
+    """按错误类型给一句可操作的话（界面/日志共用）。"""
+    return {
+        'no_kernel_image': '显卡算力不在当前 CUDA 推理包支持范围内（已自动改用 CPU）。',
+        'device_assert': 'GPU 推理触发设备断言（多为驱动/显存问题），已自动改用 CPU 重跑一次。',
+        'illegal_memory': 'GPU 推理出现非法访存（多为驱动问题），已自动改用 CPU 重跑一次。',
+        'cuda_other': 'GPU 推理出错，已自动改用 CPU 重跑一次。',
+        'oom': '显存不足。',
+    }.get(kind, '')
+
+
 def _probe():
     gpu = {"available": False, "backend": None, "device": "cpu", "name": None,
            "vendor": None, "recommended_backend": "cpu",
@@ -144,6 +228,23 @@ def _probe():
                     gpu["capability"] = "%d.%d" % cap
                     gpu["blackwell"] = cap[0] >= 9
                     gpu["need_cu128"] = gpu["blackwell"] and not _torch_is_cu128()
+                    # ★ 反向不匹配（issue #20）：卡比轮子老 → 有卡也跑不了 kernel。
+                    #   必须显式把 device 降到 cpu，否则引擎照样把活派给 GPU。
+                    try:
+                        _archs = [str(x) for x in torch.cuda.get_arch_list()]
+                    except Exception:
+                        _archs = []
+                    gpu["torch_arch_list"] = _archs
+                    _ok = arch_supported(cap, _archs)
+                    gpu["arch_supported"] = _ok
+                    if _ok is False:
+                        gpu["cuda_usable"] = False
+                        _low = min_supported_arch(_archs)
+                        gpu["arch_reason"] = (
+                            "显卡算力 sm_%d%d 不在当前 CUDA 推理包支持范围内（该包最低支持 %s）"
+                            % (cap[0], cap[1],
+                               ("sm_%d%d" % _low) if _low else "更新的算力"))
+                        gpu["device"] = "cpu"
                 except Exception:
                     gpu["capability"] = None
                     gpu["blackwell"] = False
@@ -187,8 +288,14 @@ def _probe():
                 gpu["backend"] = "directml"
                 gpu["device"] = "cpu"            # 非 torch 引擎，torch 仍走 CPU
         elif "CUDAExecutionProvider" in providers:
-            gpu["onnx_gpu"] = True
-            gpu["onnx_provider"] = "CUDAExecutionProvider"
+            # onnxruntime-gpu 与 torch 一样是「编译期定算力」：算力不匹配时同样会失败，
+            # 所以 arch 不匹配就显式退回 CPUExecutionProvider（basic-pitch 走这条）。
+            if gpu.get("arch_supported") is False:
+                gpu["onnx_provider"] = "CPUExecutionProvider"
+                gpu["note"] = gpu.get("arch_reason") or gpu.get("note")
+            else:
+                gpu["onnx_gpu"] = True
+                gpu["onnx_provider"] = "CUDAExecutionProvider"
     except Exception:
         pass
 

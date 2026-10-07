@@ -8,17 +8,27 @@ import { usePlaylistStore } from './playlist';
 import { bridge } from '../api';
 import { t } from '../core/i18n';
 
+/* 音频曲目（播客 / 有声书）的播放元素与 objectURL。
+   ★ 放**模块级**而不是 store state：它们是 DOM 节点与浏览器对象，塞进 reactive 会被 Proxy 包一层，
+     既没必要也容易出怪问题（`instanceof`、方法接收者）。全仓库只有本文件用它们（grep 过）。 */
+let audioEl: HTMLAudioElement | null = null;
+let audioUrl = '';
+
+/* hint = 悬停解释。用户复核里点名「调教 / 声部轨 / 曲库 / 对齐偏移」这类圈内术语没有解释 ——
+   导航是最需要解释的一层（新用户第一眼看到的就是它）。 */
 export const VIEWS = [
-  { id: 'home', label: '首页', ic: 'home' },
-  { id: 'music', label: '音乐', ic: 'music' },
-  { id: 'views', label: '视图', ic: 'viz' },
-  { id: 'transcode', label: '转译', ic: 'convert' },
-  { id: 'resources', label: '资源中心', ic: 'box' },
-  // UTAU 与 DiffSinger 合并为同一板块：同一条产品线的两种合成引擎，
-  // 内部用引擎切换（?tab=utau|diffsinger），顶栏不再占两个入口。
-  { id: 'singer', label: '歌声合成', ic: 'utau' },
-  // 声库：两类引擎的声库都在这里做（编辑器里只负责「选歌手」）
-  { id: 'banks', label: '声库', ic: 'box' },
+  { id: 'home', label: '首页', ic: 'home', hint: '总览与快捷入口' },
+  { id: 'music', label: '音乐', ic: 'music', hint: '曲库（导入的 MIDI 资料库）与播放' },
+  { id: 'views', label: '视图', ic: 'viz', hint: '同一份音乐的其它看法：乐谱 / 分析 / 可视化' },
+  { id: 'transcode', label: '转译', ic: 'convert', hint: '把别的东西变成 MIDI：转录 / 转换 / 变谱（识谱）' },
+  { id: 'resources', label: '资源中心', ic: 'box', hint: '模型、音色、识谱引擎、依赖与诊断' },
+  // 调教：UTAU 与 DiffSinger 是同一条产品线的两种合成引擎（引擎是**轨道属性**），
+  // 声库（做 / 装 / 管）与编辑器（选歌手 / 画音符 / 渲染）也是同一条工作流的两半，
+  // 所以合成**一个**入口；页内在「编辑器 / 声库」两个页签之间切换（?tab=banks）。
+  { id: 'singer', label: '调教', ic: 'utau',
+    hint: '调教 = 让声库把音符唱出来：选歌手、填词、画音高/参数曲线、渲染成音频（声部轨 = 一条人声轨；UTAU / DiffSinger 是两种合成引擎）' },
+  // 插件中心：官方插件平台的应用内入口（下载后由主进程解压安装并立即启用）
+  { id: 'plugins', label: '插件中心', ic: 'extension', hint: '扩展功能：下载后由主进程安装并立即启用' },
 ];
 
 // 旧子视图 ID → 所属分组父视图，保留内部跳转（如“同步到乐谱”“打开播放”）
@@ -26,10 +36,10 @@ export const OLD_VIEW_TO_PARENT: Record<string, string> = {
   play: 'music', lyrics: 'music', edit: 'music',
   viz: 'views', analyze: 'views', score: 'views',
   transcribe: 'transcode', convert: 'transcode',
-  // 合并前的两个独立视图 → 统一落到「歌声合成」。
-  // 老跳转（setView('utau'|'diffsinger')）继续有效：统一编辑器会用 ?engine=
-  // 决定「首次进入时选中哪条轨 / 新建哪种轨」。
-  utau: 'singer', diffsinger: 'singer',
+  // 合并前的三个独立视图 → 统一落到「调教」。
+  // 老跳转（setView('utau'|'diffsinger'|'banks')）继续有效：调教页按 ?tab= 落到
+  // 编辑器或声库页签（banks → 声库；utau / diffsinger → 编辑器）。
+  utau: 'singer', diffsinger: 'singer', banks: 'singer',
 };
 
 export function viewParentOf(v: string): string {
@@ -235,8 +245,9 @@ export const useAppStore = defineStore('app', {
       return fmtTime(state.curSec);
     },
     /* 当前视图下的播放队列：全部曲目 / 收藏 / 智能列表 / 歌单，并按搜索过滤 */
-    isAudio(state): boolean {
-      return !!(state.currentSong && state.currentSong.kind === 'audio');
+    isAudio(): boolean {
+      // currentSong 是**同一 store 的 getter**：在 getter 里要走 this，state 上不存在（TS2339 就是这么来的）
+      return !!(this.currentSong && this.currentSong.kind === 'audio');
     },
     queueSongs(state): any[] {
       const pl = usePlaylistStore();
@@ -249,12 +260,12 @@ export const useAppStore = defineStore('app', {
         list = state.songs.filter(s => favs.has(s.id));
       } else if (pl.activePlaylistId === 'recent') {
         const st = stats();
-        list = state.songs.filter(s => st[s.id] && st[s.id].last)
-          .slice().sort((a, b) => (st[b.id].last || 0) - (st[a.id].last || 0)).slice(0, 100);
+        list = state.songs.filter(s => st[s.id] && st[s.id]?.last)
+          .slice().sort((a, b) => (st[b.id]?.last || 0) - (st[a.id]?.last || 0)).slice(0, 100);
       } else if (pl.activePlaylistId === 'most') {
         const st = stats();
-        list = state.songs.filter(s => st[s.id] && st[s.id].c > 0)
-          .slice().sort((a, b) => (st[b.id].c || 0) - (st[a.id].c || 0)).slice(0, 100);
+        list = state.songs.filter(s => (st[s.id]?.c || 0) > 0)
+          .slice().sort((a, b) => (st[b.id]?.c || 0) - (st[a.id]?.c || 0)).slice(0, 100);
       } else {
         const ids = pl.songIds;
         const order = new Map(ids.map((id, idx) => [id, idx]));
@@ -269,11 +280,29 @@ export const useAppStore = defineStore('app', {
     },
   },
   actions: {
-    toast(msg: string, type = 'info') {
-      this.toastMsg = { msg, type };
+    /**
+     * 统一提示（P1-4）：全应用只有一个提示出口。
+     *  - 普通信息：白胶囊，2.8s 自动消失
+     *  - 富提示（带 hint 下一步 / detail 详情 / action 按钮）：卡片式，6s，可展开、可关闭
+     * 千万别再往页面里塞自己的 msg 条 —— 那样用户永远不知道提示会出现在哪。
+     */
+    toast(msg: string, type = 'info', opts: any = {}) {
+      const o = opts || {};
+      const rich = !!(o.hint || o.detail || o.action);
+      this.toastMsg = { msg, type, hint: o.hint || '', detail: o.detail || '', action: o.action || null, expanded: false, rich };
       clearTimeout(_toastTimer);
-      _toastTimer = setTimeout(() => (this.toastMsg = ''), 2800);
+      const ms = o.ms != null ? o.ms : (rich ? 6000 : 2800);
+      _toastTimer = setTimeout(() => { this.toastMsg = ''; }, ms);
     },
+    /** 展开/收起详情：展开时暂停自动消失，收起后给 2.4s */
+    toastExpand() {
+      const t = this.toastMsg;
+      if (!t || typeof t !== 'object') return;
+      t.expanded = !t.expanded;
+      clearTimeout(_toastTimer);
+      if (!t.expanded) _toastTimer = setTimeout(() => { this.toastMsg = ''; }, 2400);
+    },
+    toastDismiss() { clearTimeout(_toastTimer); this.toastMsg = ''; },
     /* ---------------- 全局 Web 弹窗（取代 window.confirm/alert/prompt） ---------------- */
     confirmDialog(cfg: any = {}): Promise<boolean> {
       return new Promise((resolve) => {
@@ -559,7 +588,7 @@ export const useAppStore = defineStore('app', {
       // 曲目对应的真实 .mid 文件：只有「删除」语义才删磁盘文件，「移除」只解除歌单归属
       if (opts && opts.deleteFile) {
         const p = item && item.meta && item.meta.path;
-        if (p) { try { await bridge.deleteMidi(p); } catch (e) {} }
+        if (p && bridge) { try { await bridge.deleteMidi(p); } catch (e) {} }
       }
       // 同步清理歌单与收藏中的引用：否则会残留悬空 id，歌单显示数大于实际曲目数
       try {
@@ -670,7 +699,7 @@ export const useAppStore = defineStore('app', {
     },
     // 音频曲目播放元素：接入合成器效果链（EQ/空间声对音频同样生效）
     ensureAudioEl(): any {
-      if (this.audioEl) return this.audioEl;
+      if (audioEl) return audioEl;
       const el = new Audio();
       el.preload = 'auto';
       try {
@@ -679,7 +708,7 @@ export const useAppStore = defineStore('app', {
         src.connect(synth.fxIn);
       } catch (e) {}
       try { el.volume = this.volume; } catch (e) {}
-      this.audioEl = el;
+      audioEl = el;
       return el;
     },
     async selectSong(id: string) {
@@ -707,11 +736,11 @@ export const useAppStore = defineStore('app', {
           if (!bytes) { const r = await idbGet(STORE_SONGS, id); if (r && r.bytes) { bytes = new Uint8Array(r.bytes); item.__bytes = bytes; } }
           if (!bytes) { try { const all = await dbSongsAll(); const r = all.find((x: any) => x.id === id); if (r && r.bytes) { bytes = new Uint8Array(r.bytes); item.__bytes = bytes; } } catch (e) {} }
           if (bytes) {
-            try { if (this._audioUrl) URL.revokeObjectURL(this._audioUrl); } catch (e) {}
-            this._audioUrl = URL.createObjectURL(new Blob([bytes]));
-            el.src = this._audioUrl;
+            try { if (audioUrl) URL.revokeObjectURL(audioUrl); } catch (e) {}
+            audioUrl = URL.createObjectURL(new Blob([bytes]));
+            el.src = audioUrl;
           }
-          el.onended = () => { try { window.__fufumidiAutoNext(); } catch (e) {} };
+          el.onended = () => { try { window.__fufumidiAutoNext?.(); } catch (e) {} };
         })();
         try {
           const rp = JSON.parse(localStorage.getItem('fufumidi_resume') || '{}');
@@ -741,7 +770,7 @@ export const useAppStore = defineStore('app', {
         if (!item.song) { const all = await dbSongsAll(); const r = all.find((x: any) => x.id === id); if (r && r.bytes) tryParse(r.bytes); }
         // 4) 磁盘上的真实 .mid 文件（每个曲目都必须有；索引字节丢失时靠它救回）
         if (!item.song && item.meta && item.meta.path) {
-          try { const b = await bridge.readBinary(item.meta.path); if (b) tryParse(b); } catch (e) {}
+          try { const b = await bridge?.readBinary(item.meta.path); if (b) tryParse(b); } catch (e) {}
         }
         if (!item.song) this.toast(t('无法解析已保存的 MIDI：') + ((lastErr as any)?.message || ''), 'warn');
       }
@@ -820,7 +849,7 @@ export const useAppStore = defineStore('app', {
       }
     },
     stopPlay() {
-      if (this.isAudio && this.audioEl) { this.audioEl.pause(); this.audioEl.currentTime = 0; this.playing = false; this.curSec = 0; this.progress = 0; this.clearResumePos(this.currentId); return; }
+      if (this.isAudio && audioEl) { audioEl.pause(); audioEl.currentTime = 0; this.playing = false; this.curSec = 0; this.progress = 0; this.clearResumePos(this.currentId); return; }
       const { player } = ensureAudio();
       player.stop();
       this.playing = false;
@@ -915,7 +944,7 @@ export const useAppStore = defineStore('app', {
     async handleTrackEnd() {
       const q = this.queueSongs;
       const mode = this.playMode;
-      if (mode === 'repeatOne') { await this.playSongById(this.currentId); return; }
+      if (mode === 'repeatOne') { if (this.currentId) await this.playSongById(this.currentId); return; }
       const idx = q.findIndex((s: any) => s.id === this.currentId);
       if (mode === 'shuffle') {
         if (q.length === 1) { await this.playSongById(q[0].id); return; }
@@ -943,9 +972,11 @@ export const useAppStore = defineStore('app', {
       if (!s || pos < 30 || (s.totalSec && pos > s.totalSec * 0.95)) { this.clearResumePos(this.currentId); return; }
       try { const m = this.resumeMap(); m[this.currentId] = pos; localStorage.setItem('fufumidi_resume', JSON.stringify(m)); } catch (e) {}
     },
-    clearResumePos(id: string) { try { const m = this.resumeMap(); if (m[id]) { delete m[id]; localStorage.setItem('fufumidi_resume', JSON.stringify(m)); } } catch (e) {} },
+    /** id 允许为空（调用点常常就是 this.currentId）—— 空值直接当"没有断点"处理，不抛也不写盘 */
+    clearResumePos(id: string | null | undefined) { try { if (!id) return; const m = this.resumeMap(); if (m[id]) { delete m[id]; localStorage.setItem('fufumidi_resume', JSON.stringify(m)); } } catch (e) {} },
     bookmarksFor(): any[] {
-      try { const m = JSON.parse(localStorage.getItem('fufumidi_bookmarks') || '{}'); return Array.isArray(m[this.currentId]) ? m[this.currentId] : []; } catch (e) { return []; }
+      const id = this.currentId; if (!id) return [];
+      try { const m = JSON.parse(localStorage.getItem('fufumidi_bookmarks') || '{}'); return Array.isArray(m[id]) ? m[id] : []; } catch (e) { return []; }
     },
     addBookmark(label?: string) {
       if (!this.currentId) { this.toast(t('请先播放一首 MIDI'), 'warn'); return; }
@@ -961,10 +992,11 @@ export const useAppStore = defineStore('app', {
     },
     removeBookmark(idx: number) {
       try {
+        const id = this.currentId; if (!id) return;
         const m = JSON.parse(localStorage.getItem('fufumidi_bookmarks') || '{}');
-        const arr = m[this.currentId] || [];
+        const arr = m[id] || [];
         arr.splice(idx, 1);
-        m[this.currentId] = arr;
+        m[id] = arr;
         localStorage.setItem('fufumidi_bookmarks', JSON.stringify(m));
       } catch (e) {}
     },
@@ -979,7 +1011,7 @@ export const useAppStore = defineStore('app', {
           clearInterval(this.sleepTimer); this.sleepTimer = null; this.sleepUntil = 0;
           try { window.__fufumidiSleepFade = false; } catch (e) {}
           try { const { player } = ensureAudio(); player.pause(); } catch (e) {}
-          try { if (this.isAudio && this.audioEl) this.audioEl.pause(); } catch (e) {} // 音频曲目同样停止
+          try { if (this.isAudio && audioEl) audioEl.pause(); } catch (e) {} // 音频曲目同样停止
           this.playing = false;
           this.setVolume(this.volume);
           this.toast(t('睡眠定时到，已停止播放'), 'ok');
@@ -1028,10 +1060,10 @@ export const useAppStore = defineStore('app', {
     },
     seekRatio(r: number) {
       // 音频曲目：直接设置 currentTime
-      if (this.isAudio && this.audioEl) {
-        const d = this.audioEl.duration || 0;
-        if (d) this.audioEl.currentTime = Math.max(0, Math.min(d * 0.999, r * d));
-        this.curSec = this.audioEl.currentTime; this.progress = r;
+      if (this.isAudio && audioEl) {
+        const d = audioEl.duration || 0;
+        if (d) audioEl.currentTime = Math.max(0, Math.min(d * 0.999, r * d));
+        this.curSec = audioEl.currentTime; this.progress = r;
         return;
       }
       const s = this.currentSong && this.currentSong.song;
@@ -1132,9 +1164,11 @@ export const useAppStore = defineStore('app', {
         try { const { player } = ensureAudio(); player.bumpAhead(); } catch (e) {}
       }
       this.view = viewParentOf(v);
-      // v 为旧子视图 id（play/lyrics/edit/viz/analyze/score/transcribe/convert）时，
-      // tab 应为该子视图 id 本身；OLD_VIEW_TO_PARENT 的值是父视图名，不能当 tab 用
-      const tab = OLD_VIEW_TO_PARENT[v] ? v : '';
+      // v 为旧子视图 id（play/lyrics/edit/viz/analyze/score/transcribe/convert，以及
+      // banks）时，tab 应为该子视图 id 本身；OLD_VIEW_TO_PARENT 的值是父视图名，不能当 tab 用。
+      // banks 是唯一「父视图名 ≠ tab 名」的特例：父视图叫 singer，tab 仍叫 banks，
+      // 调教页据此落在「声库」页签（见 ViewSing 的 tab 状态）。
+      const tab = v === 'banks' ? 'banks' : (OLD_VIEW_TO_PARENT[v] ? v : '');
       this.syncHash(tab);
     },
     setSidebarWidth(w: number) {

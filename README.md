@@ -16,9 +16,9 @@ FuFumidi is a fully offline desktop workstation for MIDI. It targets musicians, 
 
 The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally; transcription and editing never upload anything. Only when you opt in to cloud sync does your playlist and MIDI library get uploaded to your own cloud account.
 
-Current release line: **4.4.1** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v4.4.1)).
+Current release line: **5.0.0-beta.2** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v5.0.0-beta.2), beta channel).
 
-What's new in 4.4.1: fixes the split CUDA archive in Settings → GPU acceleration being undownloadable — the part list was still carrying the UI framework's reactive proxy objects when handed to the main process, so the cross-process transfer was rejected outright ("An object could not be cloned") and the request never left the renderer; the DirectML package carries no part list and was therefore unaffected. Also fixes the release flow not re-pointing CNB's version anchor at a newly published stable release — users on the China route kept seeing the old version number and never got an update prompt, with no error to signal it.
+What's new in 5.0.0-beta.1: **UTAU and DiffSinger are now genuinely fused** — the "Make Audio" workbench gets a unified voicebank picker, so choosing a voicebank and hitting render dispatches to concatenative synthesis or AI inference automatically. The DiffSinger workbench gains **OpenUTAU-style score editing** (a general piano roll, a phoneme strip, and a ±200-cent pitch lane with move / draw / line / sine / smooth tools), and **pitch curves drawn on the score now actually affect the rendered audio**. The score view adds an optional phoneme display, and voicebank downloads share the same global notification bar as regular models. Also fixed: whole-song renders failing with spawn ENAMETOOLONG, the update-channel toggle not persisting, the resource centre always reporting zero downloadable voicebanks, and missing pack exclusion rules that could bloat app.asar past 2 GB. The 4.5.0 feature set is folded into this major version; there will be no separate 4.5.0 release.
 
 ### What it does
 
@@ -356,12 +356,14 @@ cd engine && pytest
 
 FuFumidi supports plugins as third-party extensions that run without modifying the main program. A plugin is a directory with a `plugin.json` manifest and an entry script. The full developer guide is at `plugins/plugin-dev.html` and the concise index at `plugins/README.md`.
 
-Built-in examples:
+Bundled plugins:
 
-- `plugins/example-hello/` - minimal hello-world plugin.
-- `plugins/beat-detect/` - beat detection against the loaded song.
-- `plugins/midi-stats/` - statistics over the current MIDI file.
-- `plugins/batch-rename/` - bulk renaming of imported files.
+- `plugins/auto-key-cmajor/` (**v1.0.0**) - detects the key of a MIDI file and transposes it to C major using a natural-minor mapping, writing the result to a new file (the original is left untouched).
+
+> Policy: `auto-key-cmajor` is the **only** bundled plugin. The earlier demo plugins
+> (`example-hello` / `beat-detect` / `midi-stats` / `batch-rename`) have been removed and
+> must not be re-added in future releases — `plugins/plugin-dev.html` plus this README are
+> enough to write a plugin without shipping an example inside the app.
 
 Each plugin runs in its own worker with a scoped `ctx` object that exposes `commands`, `events`, `engine.run`, `settings`, `ui`, `log` and `app.getSongMeta`. The engine is invoked through the same Python runtime as the built-in transcriber, so a plugin can call any script under `engine/`.
 
@@ -369,13 +371,104 @@ Each plugin runs in its own worker with a scoped `ctx` object that exposes `comm
 
 ## Continuous Integration
 
-- `.github/workflows/ci.yml` - lint and test.
-- `.github/workflows/build.yml` - builds the frontend and the asar on Windows, macOS and Linux.
-- `.github/workflows/build-installers.yml` - produces the platform installers.
-- `.github/workflows/test-installers.yml` - installs the produced installers and runs a smoke test.
+- `.github/workflows/ci.yml` - the gate that runs on `master` / `main`: `npm ci`, build the frontend,
+  run the UI tests and the plugin-sandbox tests, then pack and verify the asar.
+- `.github/workflows/build.yml` - manual (`workflow_dispatch`): installs the Python and Node
+  dependencies, runs the engine probe and packs the asar on Windows, macOS and Linux.
+- `.github/workflows/build-installers.yml` - manual: produces Linux and macOS installers.
+- `.github/workflows/test-installers.yml` - manual: downloads a release and smoke-tests
+  install / launch / uninstall. It takes a `tag` input and needs that release to actually carry
+  Linux or macOS assets.
 
-Coding conventions are documented in `.github/CODING_GUIDELINES.md`.
+Releases currently ship **Windows installers only**. `FuFumidi-Setup-<version>.exe` is built on the
+machine that holds the `resources/` tree (Python runtime, models) - it is not in this repository, so
+the release job cannot run on a hosted runner. The three `workflow_dispatch` workflows are
+cross-platform verification paths, not release jobs.
 
+Coding conventions are documented in `.github/CODING_GUIDELINES.md`; repository hygiene findings
+and their dispositions in `docs/HYGIENE.md`.
+
+
+## Acknowledgements
+
+FuFumidi is built on a lot of other people's work. Below is what ships in, or is downloaded by, this
+application, grouped by what it does. Licences are those of the upstream projects — the authoritative
+texts for the bundled components are next to the files they cover and are listed in
+[LICENSE](LICENSE); versions and SHA-256 hashes of the vendored binaries live in
+[docs/VENDOR.md](docs/VENDOR.md).
+
+### Application shell and interface
+
+- [Electron](https://github.com/electron/electron) + Chromium — the desktop shell
+- [Vue 3](https://github.com/vuejs/core), [Vite](https://github.com/vitejs/vite),
+  [Pinia](https://github.com/vuejs/pinia), [Vue Router](https://github.com/vuejs/router) — the renderer
+- [pdf.js](https://github.com/mozilla/pdf.js) — PDF rendering for the score importer
+
+### Sound and soundfonts
+
+- [js-synthesizer](https://github.com/surikov/js-synthesizer) and
+  [FluidSynth](https://github.com/FluidSynth/fluidsynth) (`libfluidsynth`) — SoundFont playback
+- [GeneralUser GS](https://schristiancollins.com/generaluser.php) by S. Christian Collins — the bundled default soundfont (CC BY 3.0)
+- [FluidR3_GM](https://member.keymusician.com/Member/FluidR3_GM/index.html) (MIT),
+  [Salamander Grand Piano](https://sfzinstruments.github.io/pianos/salamander) by Alexander Holm (CC BY 3.0),
+  [Arachno SoundFont](https://www.arachnosoft.com/main/soundfont.php),
+  [Aspirin-DX Soundbank](https://github.com/NeoSoundFonts/Aspirin-DX-Soundbank) (NeoSoundFonts),
+  SGM-V2.01, Timbres of Heaven, FM/GM and GIGA FM — the additional soundfonts in the workshop
+
+### Scores and optical recognition
+
+- [Verovio](https://github.com/rism-digital/verovio) — MusicXML engraving (staff / tablature views)
+- [Audiveris](https://github.com/Audiveris/audiveris) — the optional OMR backend, downloaded on demand
+
+### Transcription, separation and analysis models
+
+- [basic-pitch](https://github.com/spotify/basic-pitch) (Spotify) — general audio-to-MIDI, bundled ONNX model
+- [piano-transcription-inference](https://github.com/qiuqiangkong/piano_transcription_inference) / the CRNN model
+  published on [Zenodo](https://zenodo.org/record/4034264) — the piano-specific transcriber
+- [MuScriptor](https://github.com/muscriptor/muscriptor) — the MuScriptor model family
+- [Aria-AMT](https://github.com/EleutherAI/aria-amt) (EleutherAI) and `aria-utils` — the Aria chain
+- [Transkun](https://github.com/Yujia-Yan/TransKun) — the transkun transcriber
+- [Demucs](https://github.com/facebookresearch/demucs) (Meta) — vocal / accompaniment separation
+- [MSST](https://github.com/ZFTurbo/Music-Source-Separation-Training) via [pymss](https://pypi.org/project/pymss/) —
+  the extra separation models (BS-RoFormer, Mel-Band-RoFormer, HTDemucs, MDX23C, SCNet, Bandit, Swin-UperNet configs)
+- [Beat This!](https://github.com/CPJKU/beat_this) — beat grid detection
+
+### Singing synthesis
+
+- [OpenUtau](https://github.com/stakira/OpenUtau) (MIT) — the UTAU-compatible engine this project ports,
+  together with the WORLD / `worldline` native runtimes it ships
+- [DiffSinger](https://github.com/openvpi/DiffSinger) ecosystem (openvpi) and the
+  [NSF-HiFiGAN vocoder](https://github.com/openvpi/vocoders) — AI singing synthesis
+- [pypinyin](https://github.com/mozillazg/python-pinyin) — Chinese lyrics to phonemes
+- Community voicebank and model releases linked from the in-app catalogue (for example
+  [Ria](https://github.com/RibosomeK/RiaDiffSinger), [utsu](https://github.com/titinko/utsu),
+  [HowHow-UTAU](https://github.com/EarlySpringCommitee/HowHow-UTAU)) — downloaded by the user, not bundled
+
+### Python runtime and scientific stack
+
+- CPython, and [NumPy](https://github.com/numpy/numpy), [SciPy](https://github.com/scipy/scipy),
+  [librosa](https://github.com/librosa/librosa), [soundfile](https://github.com/bastibe/python-soundfile),
+  [pretty_midi](https://github.com/craffel/pretty-midi), [mido](https://github.com/mido/mido),
+  [PyYAML](https://github.com/yaml/pyyaml), [Pillow](https://github.com/python-pillow/Pillow),
+  [tqdm](https://github.com/tqdm/tqdm), [einops](https://github.com/arogozhnikov/einops),
+  [OmegaConf](https://github.com/omry/omegaconf), [ml_collections](https://github.com/google/ml_collections),
+  [beartype](https://github.com/beartype/beartype), [pydub](https://github.com/jiaaro/pydub),
+  [mir_eval](https://github.com/craffel/mir_eval), [resampy](https://github.com/bmcfee/resampy)
+- [ONNX Runtime](https://github.com/microsoft/onnxruntime) and [ONNX](https://github.com/onnx/onnx) — model inference
+- [PyTorch](https://github.com/pytorch/pytorch) + torchaudio — used by the GPU acceleration packs
+- [FFmpeg](https://ffmpeg.org/) (via [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg)) — audio / video encoding
+
+### Storage, packaging and hosting
+
+- [SQLite](https://sqlite.org/) via [sql.js](https://github.com/sql-js/sql.js) — the local library database;
+  [adm-zip](https://github.com/cthackers/adm-zip) — archive handling
+- [electron-builder](https://github.com/electron-userland/electron-builder) and [NSIS](https://nsis.sourceforge.io/) — installers
+- [GitHub Actions](https://github.com/features/actions) — CI
+- [Cloudflare Workers](https://workers.cloudflare.com/), D1, R2 and Turnstile — the optional cloud sync service
+  (`cloud-sync/`, which you deploy yourself)
+
+If you believe something used here is missing from this list or attributed incorrectly, please open an issue —
+we would rather fix the credit than keep an incomplete list.
 
 ## Credits
 

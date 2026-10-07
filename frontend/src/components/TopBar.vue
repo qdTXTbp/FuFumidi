@@ -8,7 +8,7 @@ import { getAppVersion } from '../core/version.js';
 const app = useAppStore();
 const state = app;
 const setView = (v) => app.setView(v);
-const ICONS = { home: 'home', music: 'music', views: 'viz', transcode: 'convert', resources: 'box', models: 'box', soundfonts: 'music', singer: 'utau', utau: 'utau', diffsinger: 'utau', play: 'play2', lyrics: 'music', edit: 'edit', viz: 'viz', analyze: 'chart', score: 'score', transcribe: 'transcribe', convert: 'convert' };
+const ICONS = { home: 'home', music: 'music', views: 'viz', transcode: 'convert', resources: 'box', models: 'box', soundfonts: 'music', singer: 'utau', utau: 'utau', diffsinger: 'utau', plugins: 'extension', play: 'play2', lyrics: 'music', edit: 'edit', viz: 'viz', analyze: 'chart', score: 'score', transcribe: 'transcribe', convert: 'convert' };
 const menuOpen = ref(false);
 
 function openSettings() { state.ui.settingsOpen = true; menuOpen.value = false; }
@@ -43,7 +43,8 @@ function about() {
     <button class="icon-btn" :title="t('折叠 / 展开侧边栏')" :aria-label="t('折叠 / 展开侧边栏')" @click="toggleSidebar">
       <Icon name="panel" :size="17" />
     </button>
-    <div class="tab" v-for="v in VIEWS" :key="v.id" :class="{ active: state.view === v.id }" :aria-current="state.view === v.id ? 'page' : null" :data-view="v.id" @click="setView(v.id)">
+    <div class="tab" v-for="v in VIEWS" :key="v.id" :class="{ active: state.view === v.id }" :aria-current="state.view === v.id ? 'page' : null" :data-view="v.id"
+         :title="v.hint ? t(v.hint) : null" @click="setView(v.id)">
       <Icon :name="ICONS[v.id]" :size="14" />
       {{ t(v.label) }}
     </div>

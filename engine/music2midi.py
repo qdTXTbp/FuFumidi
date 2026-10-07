@@ -167,6 +167,10 @@ def _resolve_params(args, mode):
     # 未下载/加载失败时由 engine_muscriptor 自行跳过。必须在这里显式取出——
     # 只放在 worker 的 Namespace 里也不够，参数最终要靠这里进 params。
     if getattr(args, "beat_grid", False): p["beat_grid"] = True
+    # 旋律乐器组（仅 muscriptor 用到）：auto=出结果后智能识别并归并；
+    # 逗号分隔的组名=直接作为硬约束交给模型；不传=不干预。
+    _mi = getattr(args, "muscriptor_instruments", None)
+    if _mi: p["muscriptor_instruments"] = str(_mi)
     return p, mode
 
 
@@ -421,6 +425,10 @@ def build_parser():
     g.add_argument("--no-melodia", action="store_true", help="关闭旋律增强")
     g.add_argument("--beat-grid", action="store_true",
                    help="[muscriptor] 加载 Beat This! 权重做节拍网格检测（未下载/失败时自动跳过）")
+    g.add_argument("--muscriptor-instruments", dest="muscriptor_instruments", default=None,
+                   help="[muscriptor] 乐器组硬约束：逗号分隔的组名（voice / acoustic_piano /"
+                        " clean_electric_guitar / synth_lead / flutes / organ / drums …，"
+                        "见 muscriptor list-instruments）。不传=不限定，模型自由判定")
     g.add_argument("--tempo", type=int, default=None, help="MIDI 速度 BPM（默认 120）")
     g.add_argument("--with-drums", action="store_true",
                    help="[separate] 同时输出鼓组节奏轨")
@@ -490,6 +498,9 @@ def cmd_worker():
                 model=req.get('model'),
                 model_size=req.get('model_size'),
                 muscriptor_batch=req.get('muscriptor_batch'),
+                # 旋律乐器组：漏掉这一项时界面选了「人声」也传不进引擎，
+                # 模型仍会自由改判乐器（甩葱歌那类「同一旋律换音色」的根因）。
+                muscriptor_instruments=req.get('muscriptor_instruments'),
                 # 节拍网格检测开关：漏了这一项时模板/界面勾了也传不进引擎，
                 # 引擎会一直按默认关闭处理（日志固定输出「已关闭节拍网格检测」）。
                 beat_grid=bool(req.get('beat_grid')),

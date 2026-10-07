@@ -137,14 +137,36 @@ def get_encoding(name: str) -> str:
     return codec
 
 
-def _read_text(path: str, encoding_name: str) -> str:
-    """对应 `new StreamReader(File.OpenRead(path), encoding)`（**默认检测 BOM**）。"""
+def _read_text(path: str, encoding_name: Optional[str] = None) -> str:
+    """对应 `new StreamReader(File.OpenRead(path), encoding)`（**默认检测 BOM**）。
+
+    ★ 与上游的**有意差异**（2026-10-06）：
+      1. `encoding_name` 允许为空。上游在没有 character.txt 的声库上会把
+         `voicebank.text_file_encoding`（None）直接交给 `bytes.decode()`，
+         抛 `TypeError: decode() argument 'encoding' must be str, not None`；
+         该异常被 `parse_oto_set` 吞掉后返回 None，最后在 `load_oto_sets`
+         变成 `AttributeError: 'NoneType' object has no attribute 'name'` ——
+         **整库不可用，且报错完全看不懂**。UTAU 声库没有 character.txt 很常见。
+      2. 未显式声明编码时按「UTF-8 → cp932」**严格试解**取第一个能解通的：
+         日文声库的 Shift-JIS 字节通常过不了 UTF-8 严格解码，仍会落到 cp932；
+         而现代中文声库（UTF-8）不会再被 cp932 解成乱码。
+    """
     with open(path, 'rb') as f:
         data = f.read()
     for bom, codec in _BOMS:
         if data.startswith(bom):
             return data.decode(codec, errors='replace')
-    return data.decode(encoding_name, errors='replace')
+    chain: List[str] = []
+    # 显式声明的编码优先；`DEFAULT_ENCODING` 只是兜底，不抢在 UTF-8 前面
+    if encoding_name and encoding_name != DEFAULT_ENCODING:
+        chain.append(encoding_name)
+    chain += ['utf-8', DEFAULT_ENCODING]
+    for enc in chain:
+        try:
+            return data.decode(enc)                     # 严格：能解通才算匹配
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return data.decode(encoding_name or DEFAULT_ENCODING, errors='replace')
 
 
 def _read_lines(text: str) -> List[str]:
@@ -342,6 +364,21 @@ class VoicebankLoader:
         voicebank.base_path = base_path
         voicebank.file = file_path
         voicebank.text_file_encoding = encoding_name
+        # ★ 与上游的**有意差异**（2026-10-06）：没有 character.txt 的声库不该整库不可用。
+        #   上游在这里 `File.OpenRead('')` 直接抛 FileNotFoundError，`ClassicSinger.reload()`
+        #   只记一行日志（`Failed to load X: [Errno 2] ... ''`），`loaded` 永远是 False，
+        #   引擎最终抛「声库加载失败（oto 表为空？）」—— 用户完全看不出真实原因。
+        #   UTAU 声库缺 character.txt 很常见（例如中文 CV 声库 HowHow_CV）。
+        #   这里只跳过“读文件”，base_path/file/编码 仍然照常设置。
+        if not file_path or not os.path.isfile(file_path):
+            # 缺文件时也要把 id / name 补上：`resampler_item` 用 `singer.id` 生成
+            # 缓存文件名（`phrase.singer.id.encode('utf-8')`），id 为 None 会直接崩。
+            # 规则与下面「有文件」时保持一致：id = 相对 base_path 的目录名。
+            voicebank.id = _get_relative_path(
+                base_path, os.path.dirname(file_path) if file_path else base_path)
+            if not voicebank.name:
+                voicebank.name = os.path.basename(os.path.normpath(base_path)) or voicebank.id
+            return
         other_lines: List[str] = []
         for raw in _read_lines(_read_text(file_path, encoding_name)):
             line = raw.strip()
@@ -507,8 +544,15 @@ class VoicebankLoader:
                 oto_file, voicebank.text_file_encoding, voicebank.use_filename_as_alias)
             voicebank_dir = os.path.dirname(voicebank.file)
             name = _get_relative_path(voicebank_dir, dir_path)
-            # 这里不做 None 兜底：`parse_oto_set` 失败会返回 None，随后取 `.name`
-            # 会抛 AttributeError —— 与 C# 的 NullReferenceException 同一结局（fail fast）。
+            # ★ 与上游的有意差异：`parse_oto_set` 失败会返回 None，上游直接在
+            #   下一行取 `.name` 抛 AttributeError（"'NoneType' object has no attribute
+            #   'name'"）—— 用户只看到这一句，完全不知道是哪个文件、什么原因。
+            #   这里保持 fail fast（不静默降级），但把**文件名 + 编码**说清楚。
+            if oto_set is None:
+                raise ValueError(
+                    'oto.ini 解析失败：%s（编码 %s）—— 请检查文件是否为该编码的文本、'
+                    '或在其首行用 `#Charset: utf-8` 声明编码'
+                    % (oto_file, voicebank.text_file_encoding or 'auto'))
             oto_set.name = '' if name == '.' else name
             voicebank.oto_sets.append(oto_set)
         for sub in _list_dirs(dir_path):

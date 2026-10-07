@@ -244,6 +244,9 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 }
 .app-shell.wallpaper-on .app-main { background: transparent; }
 .app-shell.wallpaper-on { background: transparent; }
+/* 壁纸开启时 .app-main 透明：**下拉框的选项弹层**由浏览器自行绘制、不继承页面样式，
+   透明底会直接压在动态壁纸上、选项读不清。这里给原生控件一份实心兜底色。 */
+.app-shell.wallpaper-on select option { background: var(--canvas); color: var(--ink); }
 
 .app-main {
   grid-area: main;
@@ -396,6 +399,12 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 .btn.danger:hover { background: rgba(212, 86, 86, 0.08); border-color: var(--error); }
 .btn.sm { padding: 5px 12px; font-size: 12px; min-height: 28px; }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+/* 主按钮被禁用时要**看得出是"还不能点"**，而不只是淡一点 ——
+   淡一点在彩色主按钮上仍然像可点（本轮 UX 复核第 4 条：渲染本轨在"没音符/没选歌手"时看着常亮可点）。
+   去掉饱和度与阴影之后，它和旁边真正可点的按钮一眼能分开。 */
+.btn.primary:disabled, .btn.primary.blocked:disabled {
+  opacity: 0.5; filter: grayscale(0.9); box-shadow: none; border-style: dashed;
+}
 
 .icon-btn {
   width: 34px; height: 34px;
@@ -783,6 +792,20 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 }
 .toast.warn { background: #b45309; border-color: #b45309; }
 .toast.error { background: var(--error); border-color: var(--error); }
+/* 富提示（P1-4）：带「下一步」提示、可展开详情与动作按钮时改成卡片 */
+.toast.rich { border-radius: 12px; padding: 10px 14px; align-items: stretch; max-width: min(560px, 92vw); }
+.toast-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.toast-line { display: flex; align-items: center; gap: 10px; }
+.toast-line > span { flex: 1; min-width: 0; line-height: 1.55; }
+.toast-hint { font-size: 12px; opacity: .92; line-height: 1.6; }
+.toast-detail { margin: 2px 0 0; padding: 8px 10px; border-radius: 8px; background: rgba(0,0,0,.22);
+                font-family: var(--mono); font-size: 11.5px; line-height: 1.6; white-space: pre-wrap;
+                word-break: break-all; max-height: 180px; overflow: auto; }
+.toast-act, .toast-more, .toast-x { pointer-events: auto; flex: none; cursor: pointer; color: inherit;
+  background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.3); border-radius: 999px;
+  font-size: 11.5px; padding: 2px 10px; line-height: 1.5; }
+.toast-act:hover, .toast-more:hover, .toast-x:hover { background: rgba(255,255,255,.28); }
+.toast-x { padding: 2px 7px; font-size: 13px; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
 
 /* ---------- 占位视图 ---------- */
@@ -824,6 +847,8 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
   font-weight: 500;
 }
 .tag.accent { color: var(--brand-blue-deep); border-color: var(--brand-blue-200); background: var(--brand-blue-200); }
+/* 版本号那种「一整串不能断开」的短标签：窄侧栏下不许折行（曾折成 v5.0.0- / beta.2 两行） */
+.ver-tag { white-space: nowrap; }
 
 .fade-enter-active, .fade-leave-active { transition: opacity 0.16s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
@@ -1061,6 +1086,13 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .radio-pill span:hover { color: var(--ink); }
 .radio-pill span.on { background: var(--accent); color: #fff; font-weight: 600; }
 
+/* 界面缩放滑杆（M9）：和单选胶囊同一套观感（细轨 + 圆形滑块 + 旁边一个百分比读数） */
+.fr-ctl .ov-range { width: 190px; height: 20px; accent-color: var(--accent); cursor: pointer; background: transparent; }
+.ui-scale-val {
+  min-width: 46px; text-align: right; font-size: 12px; color: var(--ink);
+  font-variant-numeric: tabular-nums; font-family: var(--mono);
+}
+
 /* 开关 */
 .switch-row { display: inline-flex; align-items: center; cursor: pointer; }
 .switch-row input { display: none; }
@@ -1294,13 +1326,24 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 }
 .guide-foot .guide-btn:hover { background: var(--surface-soft); color: var(--ink); transform: none; box-shadow: none; }
 
-/* ---------- 密度（紧凑模式收紧主要间距） ---------- */
-body[data-density="compact"] { --card-pad: 13px; }
+/* ---------- 密度三档（M9：紧凑 / 舒适 / 宽松） ----------
+   ★ 只动**间距**：容器内边距、页面留白、列表行距。
+     **不动控件高度**（--ctl-h）—— 全站不少表格/工具栏是按它排出来的，动它会连锁破版；
+     紧凑档从一开始就是这个原则，宽松档照抄。（舒适 = 默认，什么都不覆盖。） */
+body[data-density="compact"] { --card-pad: 13px; --page-pad-x: 18px; --page-pad-y: 14px; --page-pad-b: 28px; }
 body[data-density="compact"] .page { padding: 14px 18px 28px; }
 body[data-density="compact"] .nav-item { padding: 6px 10px; }
 body[data-density="compact"] .song-item { padding: 7px 10px; }
 body[data-density="compact"] .btn { padding: 7px 14px; }
 body[data-density="compact"] .topbar { padding: 0 8px; }
+/* 宽松：长时间看谱 / 调曲线的人需要的呼吸感 */
+body[data-density="relaxed"] { --card-pad: 20px; --page-pad-x: 30px; --page-pad-y: 26px; --page-pad-b: 44px; }
+body[data-density="relaxed"] .page { padding: 26px 30px 44px; }
+body[data-density="relaxed"] .nav-item { padding: 12px 14px; }
+body[data-density="relaxed"] .song-item { padding: 12px 14px; }
+body[data-density="relaxed"] .btn { padding: 11px 19px; }
+body[data-density="relaxed"] .topbar { padding: 0 16px; }
+body[data-density="relaxed"] .card { border-radius: var(--radius-lg); }
 
 /* ============================================================
    交互动效增强：每一次交互都有明确反馈

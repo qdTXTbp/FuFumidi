@@ -1,7 +1,11 @@
 <script setup>
 // 图标集与原始仓库保持一致（FuFumidi.html 中的 ICONS，viewBox 24×24、stroke 1.8 圆头圆角）
+import { watchEffect } from 'vue';
 const props = defineProps({ name: { type: String, required: true }, size: { type: Number, default: 16 } });
 const P = {
+  // ★ 名字写错（如 stop 写成 square）时 v-html 会渲染成空白 —— 按钮就变成「点了没图标」，
+  //   而且完全不报错。开发期直接喊出来，别让它悄悄上线。
+  __missing: '',
   home: '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
   play2: '<polygon points="5 3 19 12 5 21 5 3"/>',
   music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
@@ -31,10 +35,15 @@ const P = {
   info: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
   kbd: '<rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6" y2="14"/><line x1="10" y1="10" x2="10" y2="14"/><line x1="14" y1="10" x2="14" y2="14"/><line x1="18" y1="10" x2="18" y2="14"/>',
   clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  // 曲线锁定（M6c）：锁上 = 画布只读
+  lock: '<rect x="3.5" y="11" width="17" height="10" rx="2"/><path d="M7.5 11V7a4.5 4.5 0 0 1 9 0v4"/>',
+  unlock: '<rect x="3.5" y="11" width="17" height="10" rx="2"/><path d="M7.5 11V7a4.5 4.5 0 0 1 8.6-1.9"/>',
   save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
   palette: '<path d="M12 21a9 9 0 1 1 9-9c0 1.66-1.34 3-3 3h-1.5a1.5 1.5 0 0 0-1.06 2.56c.4.4.56 1 .31 1.56A1.5 1.5 0 0 1 14.5 21H12z"/><circle cx="7.5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="7.5" r="1.2" fill="currentColor"/><circle cx="16.5" cy="10.5" r="1.2" fill="currentColor"/>',
   spark: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
   eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+  // 多轨叠置里表示「这条轨在卷帘里被藏起来了」；不画这个的话眼睛图标按下去了也没区别
+  'eye-off': '<path d="M17.94 17.94A10.6 10.6 0 0 1 12 20c-7 0-11-8-11-8a18.5 18.5 0 0 1 5.06-5.94M9.9 4.24A9.1 9.1 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
   zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
   logo: '<path d="M10 18V5l9-2v11" fill="none" stroke="currentColor" stroke-width="2.4"/><ellipse cx="10" cy="18" rx="2.7" ry="3.3" fill="currentColor" stroke="none"/><ellipse cx="19" cy="14" rx="2.7" ry="3.3" fill="currentColor" stroke="none"/>',
   cursor: '<path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/>',
@@ -53,6 +62,8 @@ const P = {
   drum: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/>',
   drag: '<circle cx="9" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.2" fill="currentColor" stroke="none"/>',
   wallpaper: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
+  /* 插件中心：拼图块（沿用同一套 24×24 / stroke 1.8 圆头圆角语言） */
+  extension: '<path d="M4.6 6.6h3a2.05 2.05 0 0 1 4.1 0h4.7v3.3a2.05 2.05 0 0 1 0 4.1v3.6H4.6z"/>',
   box: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
   panel: '<rect x="3" y="4" width="18" height="16" rx="3"/><line x1="10" y1="4" x2="10" y2="20"/>',
   player: '<rect x="3" y="7" width="18" height="10" rx="3"/><line x1="3" y1="12" x2="21" y2="12"/>',
@@ -68,7 +79,30 @@ const P = {
   modeOrder: '<line x1="3" y1="6" x2="15" y2="6"/><line x1="3" y1="12" x2="13" y2="12"/><line x1="3" y1="18" x2="11" y2="18"/><polyline points="15 14 21 18 15 22"/>',
   repeat1: '<path d="M21 12a9 9 0 1 1-3.2-6.9"/><polyline points="21 2.5 21 5.5 18 5.5"/><line x1="12" y1="8.5" x2="12" y2="15.5"/>',
   refresh: '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/>',
+  check: '<polyline points="20 6.5 9.5 17 4 11.5"/>',
+  cut: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/>',
+  split: '<line x1="12" y1="2.5" x2="12" y2="21.5" stroke-dasharray="3 3"/><polyline points="7.5 8 3.5 12 7.5 16"/><polyline points="16.5 8 20.5 12 16.5 16"/>',
+  merge: '<line x1="12" y1="2.5" x2="12" y2="21.5" stroke-dasharray="3 3"/><polyline points="3.5 8 7.5 12 3.5 16"/><polyline points="20.5 8 16.5 12 20.5 16"/>',
+  list: '<line x1="8.5" y1="6" x2="21" y2="6"/><line x1="8.5" y1="12" x2="21" y2="12"/><line x1="8.5" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1.3" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1.3" fill="currentColor" stroke="none"/>',
+  layers: '<polygon points="12 2.5 22 7.5 12 12.5 2 7.5"/><polyline points="2 12 12 17 22 12"/><polyline points="2 16.5 12 21.5 22 16.5"/>',
+  sliders: '<line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="16" x2="20" y2="16"/><circle cx="9" cy="8" r="2.6" fill="var(--canvas, #fff)"/><circle cx="15" cy="16" r="2.6" fill="var(--canvas, #fff)"/>',
+  cloud: '<path d="M17.5 19a4.5 4.5 0 0 0 .5-8.97A6 6 0 0 0 6.2 11.2 3.9 3.9 0 0 0 7 19h10.5z"/>',
 };
+
+/* ⚠ 这个检查必须放在 P **之后**：watchEffect 的回调是**立即执行**的，
+   放在 P 之前会在 TDZ 里读 P → 每次 Icon 组件 setup 都抛
+   "Cannot access 'P' before initialization"，而 Vue 只会把 setup 的异常
+   记进 console 并**丢掉整个 setup 的返回值** —— 后果是所有图标渲染成空、
+   并且挂在这个组件上的钩子（含 onMounted）全部不注册。
+   这一处是本次「声库制作页验收桥挂不上」的真凶（本轮实测定位）。 */
+const _warned = new Set();
+watchEffect(() => {
+  const n = props.name;
+  if (n && n !== '__missing' && !P[n] && !_warned.has(n)) {
+    _warned.add(n);
+    console.warn('[Icon] 未定义的图标名：' + n + '（渲染成空白，检查拼写）');
+  }
+});
 </script>
 
 <template>

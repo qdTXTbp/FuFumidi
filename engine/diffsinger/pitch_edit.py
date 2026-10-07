@@ -162,6 +162,18 @@ def load_rendered_pitch(singer, cfg: DsPitchConfig, phrase, notes: Sequence,
     else:
         ling_feeds['ph_dur'] = np.asarray([ph_dur], dtype=np.int64)
 
+    if cfg.use_lang_id:
+        # ★ 多语声库（Ria）的 dspitch linguistic 同样要 `languages`（形状同 tokens）：
+        #   逐音素取符号的语言前缀，查 **dspitch 自己**那份 <x>.languages.json。
+        from .g2p import lang_id_of
+        from .voicebank import load_language_ids
+        _ids = load_language_ids(cfg)
+        langs = [lang_id_of(sym, _ids) for sym, _, _ in segments]
+        if len(langs) != len(tokens):
+            raise RenderError('dspitch 的 languages 与 tokens 不等长：%d vs %d'
+                              % (len(langs), len(tokens)))
+        ling_feeds['languages'] = np.asarray([langs], dtype=np.int64)
+
     # ★ 走 run_session 以启用 tensorcache（identifier = dspitch linguistic 的模型 hash）
     ling_names = [o.name for o in make_session(cfg.model('linguistic'),
                                                providers).get_outputs()]

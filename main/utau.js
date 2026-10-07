@@ -2,11 +2,35 @@
 // UTAU 声库制作 IPC：声库导出 + 人声渲染 + 现成声库导入
 // ============================================================
 'use strict';
+const crypto = require('crypto');
 const Paths = require('./paths');
 const { safeExtractAllTo } = require('./zip-safe');
 // 直接 require 而不是走 `registerUtauIpc` 的入参：本模块的注册参数里没有 readSettings，
 // 而引擎选择要读设置。Node 模块缓存保证拿到的是同一个 settings 单例。
 const { readSettings } = require('./settings');
+
+/**
+ * 只保留最近 `keep` 份 payload 缓存目录（每份里是 OpenUtau 的乐句缓存，几十 MB 级）。
+ * 见 `utau:renderTrack` 里"缓存按 payload 隔离"的说明。
+ */
+function pruneOuCacheDirs(root, current, keep = 8) {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const items = fs.readdirSync(root, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && path.join(root, e.name) !== current)
+      .map((e) => {
+        const p = path.join(root, e.name);
+        let mtime = 0;
+        try { mtime = fs.statSync(p).mtimeMs; } catch (err) { mtime = 0; }
+        return { p, mtime };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    for (const it of items.slice(Math.max(0, keep - 1))) {
+      try { fs.rmSync(it.p, { recursive: true, force: true }); } catch (err) { /* 正被占用就算了 */ }
+    }
+  } catch (err) { /* 目录不存在等：不影响渲染 */ }
+}
 
 function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawnEngine, createEngineSession }) {
   // 声库是体积较大的模型类资产：统一放在数据根目录（默认工具目录旁），不挤占 C 盘
@@ -226,7 +250,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
     const { voicebank, query, limit } = cfg || {};
     try {
       if (!voicebank) return resolve({ ok: false, error: '未选择声库' });
-      const args = ['aliases', '--voicebank', String(voicebank), '--limit', String(Math.max(1, Math.min(2000, Number(limit) || 300)))];
+      const args = ['aliases', '--voicebank', String(voicebank), '--limit', String(Math.max(1, Math.min(5000, Number(limit) || 300)))];
       if (query) args.push('--query', String(query));
       spawnEngine(args, {
         script: 'engine_utau.py',
@@ -234,6 +258,147 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
           if (r && r.result && r.result.ok) return resolve(r.result);
           const err = (r && r.result && r.result.error)
             || (r && (r.err || r.out || '').slice(-400))
+            || `引擎退出码 ${code}`;
+          resolve({ ok: false, error: err });
+        },
+        onError: (e) => resolve({ ok: false, error: String(e) }),
+      });
+    } catch (err) {
+      resolve({ ok: false, error: String((err && err.message) || err) });
+    }
+  }));
+
+  /**
+   * 每个别名的录制音高（M8 音域热力图）。
+   *
+   * 441 个别名的库要逐个读采样 + 逐帧自相关，实测秒级到十几秒，所以超时给足 10 分钟；
+   * 引擎那边每分析 20 条会 emit_progress，界面拿它显示进度。
+   */
+  ipcMain.handle('utau:aliasRange', (evt, cfg) => new Promise((resolve) => {
+    const { voicebank, query, limit } = cfg || {};
+    if (!voicebank) return resolve({ ok: false, error: '未选择声库' });
+    try {
+      const args = ['alias-range', '--voicebank', String(voicebank),
+        '--limit', String(Math.max(0, Math.min(5000, Number(limit) || 0)))];
+      if (query) args.push('--query', String(query));
+      spawnEngine(args, {
+        script: 'engine_utau.py',
+        timeoutMs: 10 * 60 * 1000,
+        onDone: (code, r) => {
+          if (r && r.result && r.result.ok) return resolve(r.result);
+          const err = (r && r.result && r.result.error)
+            || (r && (r.err || r.out || '').slice(-400))
+            || `引擎退出码 ${code}`;
+          resolve({ ok: false, error: err });
+        },
+        onError: (e) => resolve({ ok: false, error: String(e) }),
+      });
+    } catch (err) {
+      resolve({ ok: false, error: String((err && err.message) || err) });
+    }
+  }));
+
+  /**
+   * 读 oto.ini 的**原始字节**（M8f 声库管理 2.0：别名表可编辑）。
+   *
+   * ★ 不在这里解析、也不在这里判编码：渲染进程有完整的 CP932 编解码器
+   *   （core/shift_jis.js，上一轮实测过字节级正确），解析/判码/写回都在那边做，
+   *   主进程只负责"把字节读出来 / 把字节写回去 + 备份"这一件事。
+   */
+  ipcMain.handle('utau:readOto', (_e, cfg) => {
+    try {
+      const dir = cfg && cfg.voicebank ? String(cfg.voicebank) : '';
+      if (!dir) return { ok: false, error: '未指定声库目录' };
+      const root = path.resolve(dir);
+      if (!fs.existsSync(root)) return { ok: false, error: '声库目录不存在' };
+      const target = path.join(root, 'oto.ini');
+      if (!fs.existsSync(target)) return { ok: false, error: '该声库没有 oto.ini' };
+      const buf = fs.readFileSync(target);
+      return {
+        ok: true, path: target, base64: buf.toString('base64'),
+        size: buf.length, mtimeMs: fs.statSync(target).mtimeMs,
+      };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+
+  /**
+   * 写回 oto.ini。字节**由渲染进程按原编码编好**（Shift-JIS / UTF-8 原样保留），
+   * 这里只落盘，并先备份一份 `oto.ini.bak`（改坏了能退回去 —— 用户的原音设定比什么都贵）。
+   */
+  ipcMain.handle('utau:saveOto', (_e, cfg) => {
+    try {
+      const dir = cfg && cfg.voicebank ? String(cfg.voicebank) : '';
+      const base64 = cfg && typeof cfg.base64 === 'string' ? cfg.base64 : '';
+      if (!dir) return { ok: false, error: '未指定声库目录' };
+      if (!base64) return { ok: false, error: '内容为空' };
+      const root = path.resolve(dir);
+      if (!fs.existsSync(root)) return { ok: false, error: '声库目录不存在' };
+      const target = path.join(root, 'oto.ini');
+      // 只允许写声库根目录下的 oto.ini（防目录穿越）
+      if (path.dirname(target) !== root) return { ok: false, error: '路径不合法' };
+      const buf = Buffer.from(base64, 'base64');
+      if (!buf.length) return { ok: false, error: '内容为空' };
+      if (buf.length > 8 * 1024 * 1024) return { ok: false, error: 'oto.ini 过大（>8MB）' };
+      let backup = '';
+      if (fs.existsSync(target)) {
+        backup = target + '.bak';
+        fs.copyFileSync(target, backup);
+      }
+      fs.writeFileSync(target, buf);
+      return { ok: true, path: target, backup, bytes: buf.length };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+
+  // 汉字 → 拼音（P1-15）：UTAU 中文声库的别名就是拼音，工具里必须有这一步，
+  // 否则用户得自己把「不爱的」转成「bu ai de」再填 —— 实测就是这么过来的。
+  ipcMain.handle('sing:toPinyin', (evt, cfg) => new Promise((resolve) => {
+    const tokens = (cfg && Array.isArray(cfg.tokens)) ? cfg.tokens.map((x) => String(x)) : null;
+    const text = (cfg && typeof cfg.text === 'string') ? cfg.text : null;
+    if (!tokens && text === null) return resolve({ ok: false, error: '缺少 tokens / text' });
+    if (tokens && tokens.length > 4000) return resolve({ ok: false, error: '一次最多 4000 个 token' });
+    try {
+      const args = tokens ? ['--tokens', JSON.stringify(tokens)] : ['--text', text];
+      // 多音字候选：pypinyin 的 heteronym 结果（界面用来给「换成…」）
+      if (cfg && cfg.alternatives) args.push('--alternatives');
+      spawnEngine(args, {
+        script: 'engine_pinyin.py',
+        timeoutMs: 60 * 1000,
+        onDone: (code, r) => {
+          if (r && r.result && r.result.ok) return resolve(r.result);
+          const err = (r && r.result && r.result.error)
+            || (r && (r.err || r.out || '').slice(-300))
+            || `引擎退出码 ${code}`;
+          resolve({ ok: false, error: err });
+        },
+        onError: (e) => resolve({ ok: false, error: String(e) }),
+      });
+    } catch (err) {
+      resolve({ ok: false, error: String((err && err.message) || err) });
+    }
+  }));
+
+  // 声库体检（P2-16）：装进来的声库到底能不能用，别等渲染失败才知道。
+  // 实测踩过的坑：没有 character.txt 的库整库不可用、空别名让界面误报整轨歌词不合法 ——
+  // 这两类事实在装库/选库时就能算出来。
+  ipcMain.handle('sing:probeVoicebank', (evt, cfg) => new Promise((resolve) => {
+    const dir = cfg && cfg.voicebank ? String(cfg.voicebank) : '';
+    if (!dir) return resolve({ ok: false, error: '未指定声库目录' });
+    const engine = (cfg && cfg.engine) === 'diffsinger' ? 'diffsinger' : 'utau';
+    const lyrics = (cfg && Array.isArray(cfg.lyrics)) ? cfg.lyrics.map((x) => String(x)).slice(0, 4000) : [];
+    try {
+      const args = ['--voicebank', dir, '--engine', engine];
+      if (lyrics.length) args.push('--lyrics', ...lyrics);
+      spawnEngine(args, {
+        script: 'engine_vbcheck.py',
+        timeoutMs: 90 * 1000,
+        onDone: (code, r) => {
+          if (r && r.result && r.result.ok) return resolve(r.result);
+          const err = (r && r.result && r.result.error)
+            || (r && (r.err || r.out || '').slice(-300))
             || `引擎退出码 ${code}`;
           resolve({ ok: false, error: err });
         },
@@ -299,9 +464,21 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
       if (!voicebank || !notes || !Array.isArray(notes) || !notes.length) {
         return resolve({ ok: false, error: '缺少声库目录或音符' });
       }
-      // 中间产物统一落在数据根目录 temp/（原先落系统 Temp，会持续占用 C 盘）
-      const out = path.join(Paths.tempDir(), 'fufumidi', `utau_render_${Date.now()}.wav`);
-      fs.mkdirSync(path.dirname(out), { recursive: true });
+      /* 中间产物统一落在数据根目录 temp/（原先落系统 Temp，会持续占用 C 盘）。
+         ★★ 输出放在**按 payload 哈希隔离的子目录**里：OpenUtau 的乐句缓存目录是从
+            out 的同级推导的（engine_openutau.py: `<out 的目录>/_ou_cache`），而它的缓存
+            在"只改了一个音的音高"时会命中旧的：
+              实测（同一缓存目录）[67,69,71] 与 [67,69,74] 渲染出**同一份字节**；
+              把两次渲染分别放进各自的空目录后，两者才不同。
+            表现就是用户最恼火的那种"改了音高，渲染出来没变"。
+            这里让缓存按内容隔离：payload 一样 → 复用同一份缓存（快）；payload 变了 → 换目录（准）。 */
+      const payloadKey = crypto.createHash('sha1')
+        .update(JSON.stringify({ voicebank, notes, sampleNote: sampleNote || 'C4', bpm: bpm || 120 }))
+        .digest('hex').slice(0, 16);
+      const ouDir = path.join(Paths.tempDir(), 'fufumidi', 'ou', payloadKey);
+      fs.mkdirSync(ouDir, { recursive: true });
+      pruneOuCacheDirs(path.dirname(ouDir), ouDir);
+      const out = path.join(ouDir, 'render.wav');
       // 音符序列走「@临时文件」：整轨数百音符的 JSON 会撞 Windows 32K 命令行上限
       // （spawn ENAMETOOLONG）。两个引擎都原生支持 @file 约定。
       notesJson = path.join(Paths.tempDir(), 'fufumidi', `utau_notes_${Date.now()}_${process.pid}.json`);
@@ -544,6 +721,9 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
     const entry = { ctrl: null, isUserAbort: false };
     _vbAborts.set(it.id, entry);
     let ws = null, lastErr = null;
+    // ★ 进度只增不减：多源轮换时如果按「本轮字节」重算，进度条会被打回 0 再涨回去，
+    //   用户看到的就是「抽搐」。失败换源时保留高水位，另发 phase:'retry' 说明原因。
+    let hiPct = 0;
 
     try {
       for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -583,7 +763,9 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
               lastData = Date.now();
               got += value.length;
               const received = have + got;
-              send({ id, phase: 'download', received, total, percent: total ? Math.min(84, Math.round(received / total * 84)) : 0, done: false });
+              const pct = total ? Math.min(84, Math.round(received / total * 84)) : 0;
+              if (pct > hiPct) hiPct = pct;
+              send({ id, phase: 'download', received, total, percent: hiPct, done: false });
               await new Promise((res2, rej2) => ws.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
             }
           } finally { clearInterval(watchdog); }
@@ -600,7 +782,9 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
           try { if (ws) ws.destroy(); } catch (e2) {}
           ws = null;
           if (entry.isUserAbort) return { ok: false, cancelled: true, error: '已取消' };
-          send({ id, phase: 'download', percent: 0, done: false, error: '第 ' + (round + 1) + ' 轮失败，自动换源/续传…' });
+          // ★ 不要把 percent 打回 0（那样进度条会来回跳）；保留高水位，另发 retry 相位让界面解释一句
+          send({ id, phase: 'retry', percent: hiPct, done: false, retry: round + 1,
+                 error: '第 ' + (round + 1) + ' 轮失败，自动换源/续传…' });
           if (round === MAX_ROUNDS - 1) {
             return { ok: false, error: '下载失败（已多源轮换 ' + MAX_ROUNDS + ' 轮）：' + ((lastErr && lastErr.message) || '网络不可达') };
           }

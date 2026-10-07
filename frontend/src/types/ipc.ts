@@ -8,6 +8,8 @@ export type PerfMode = 'quality' | 'balanced' | 'fast';
 export type GpuKind = 'cuda' | 'directml' | 'rocm';
 
 export interface ConvertRequest {
+  /** MuScriptor 乐器组约束：'auto' 或不约束为空；否则是组名列表（如 'voice,drums'，硬约束） */
+  muscriptor_instruments?: string;
   audio: string;
   out?: string | null;
   id?: string | number;
@@ -193,6 +195,8 @@ export interface Settings {
   ui_mode?: 'light' | 'dark';
   font_size?: string;
   density?: string;
+  /** 全局 UI 缩放（M9）：0.9 ~ 1.3，缺省 1 */
+  ui_scale?: number;
   perf_mode?: PerfMode;
   engine_path?: string;
   engine_mode?: EngineMode;
@@ -679,6 +683,10 @@ export interface FuBridge {
   pickAudioFiles(): Promise<string[] | null>;
   listAudioFiles(dir: string): Promise<string[]>;
   pickImage(): Promise<string | null>;
+  /* 专辑封面（preload 的 sys:pickCover → main/system-ipc.js）。
+     ★ 契约漂移实例：桥与主进程 2026 年就实现了它，类型表里一直没写，
+       于是 app.ts 里两处调用报 TS2339 —— 类型漏一个成员 = 调用方永远"看不见"这个能力。 */
+  pickCover(): Promise<{ ok?: boolean; canceled?: boolean; dataUrl?: string; error?: string }>;
   pickFile(opts: any): Promise<string | null>;
   pickDirectory(): Promise<string | null>;
   readSoundFont(p: string): Promise<Uint8Array | null>;
@@ -698,6 +706,12 @@ export interface FuBridge {
   utauExportVoicebankZip(opts: { files: { name: string; data: string }[] }): Promise<GeneralResult & { canceled?: boolean; path?: string; count?: number }>;
   utauRenderTrack(cfg: { voicebank: string; notes: any[]; sampleNote: string; bpm?: number }): Promise<GeneralResult & { out?: string; bytes?: Uint8Array | number[]; duration_ms?: number; warnings?: string[]; engineVersion?: string }>;
   utauAliases(cfg: { voicebank: string; query?: string; limit?: number }): Promise<{ ok: boolean; aliases?: string[]; count?: number; total?: number; error?: string }>;
+  /** M8 音域热力图：每个别名的录制音高（引擎分析采样得出） */
+  utauAliasRange(cfg: { voicebank: string; query?: string; limit?: number }): Promise<{ ok: boolean; count?: number; items?: { alias: string; file: string; f0_hz?: number; note?: number | null; voiced?: number; ms?: number; offset?: number; error?: string }[]; error?: string }>;
+  /** M8f：oto.ini 原始字节（解析/判编码在渲染进程，见 core/oto.js） */
+  utauReadOto(cfg: { voicebank: string }): Promise<{ ok: boolean; path?: string; base64?: string; size?: number; mtimeMs?: number; error?: string }>;
+  /** M8f：写回 oto.ini（字节由渲染进程按原编码编好；主进程先备份 oto.ini.bak） */
+  utauSaveOto(cfg: { voicebank: string; base64: string }): Promise<{ ok: boolean; path?: string; backup?: string; bytes?: number; error?: string }>;
   utauFlags(): Promise<{ ok: boolean; engine_version?: string; supported?: { flag: string; default: number | null; min: number | null; max: number | null; desc: string }[]; unsupported?: { flag: string; desc: string }[]; example?: string; error?: string }>;
   utauListVoicebanks(): Promise<{ ok: boolean; list?: { name: string; dir: string }[]; error?: string }>;
   utauImportVoicebankZip(): Promise<{ ok: boolean; canceled?: boolean; name?: string; dir?: string; error?: string }>;

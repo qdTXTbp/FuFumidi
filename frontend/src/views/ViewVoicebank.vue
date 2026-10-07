@@ -4,9 +4,15 @@ import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { t } from '../core/i18n.js';
+/* 手写笔 / 触控（M9 收尾）：oto 标记线一根一根拖，掌侧误触与第二根手指都会把线拽歪 */
+import { claimPointer, isPrimaryPointer, releasePointer } from '../core/pointer.js';
 import {
   splitSyllables, autoOtoParams, encodeWav16, decodeAudioData, bytesToBase64,
 } from '../core/utau_tools';
+import {
+  encodeOtoText, decodeOtoBytes, otoUnsupported, sjisTableInfo, OTO_ENCODINGS, isOtoEncoding,
+} from '../core/shift_jis.js';
+import { computeSpectrogram, drawSpectrogram } from '../core/spectrogram.js';
 
 const app = useAppStore();
 const toast = (m, ty) => app.toast(m, ty);
@@ -21,6 +27,24 @@ const segments = ref([]);         // [{ id, name, startMs, endMs, oto, ownData?,
 const selId = ref(null);
 const recOn = ref(false);
 const splitParams = ref({ minSilence: 120, minSyllable: 80, silenceDb: -40 });
+
+/* ---------------- 本轮（M8e）新增的三个视图状态 ----------------
+   1. 右栏两种形态：波形微调（逐片段） / 参数一览表（一屏核对 + 批量改）
+   2. oto.ini 编码：UTAU 传统声库要 Shift-JIS，导 UTF-8 进去是乱码
+   3. 频域底图：时域看切分、频域看辅音/元音差别 */
+const savedEnc = (() => { try { return localStorage.getItem('fufumidi_oto_enc'); } catch (e) { return null; } })();
+const otoEnc = ref(isOtoEncoding(savedEnc) ? savedEnc : 'sjis');
+const savedPane = (() => { try { return localStorage.getItem('fufumidi_vb_pane'); } catch (e) { return null; } })();
+const rightPane = ref(savedPane === 'table' ? 'table' : 'wave');
+const savedSpec = (() => { try { return localStorage.getItem('fufumidi_vb_spec'); } catch (e) { return null; } })();
+const specOn = ref(savedSpec !== '0');
+/** 一览表每列表头的「统一为」输入框 */
+const bulkVal = ref({ offset: 0, overlap: 0, preutterance: 0, consonant: 0, blank: 20 });
+watch(otoEnc, v => { try { localStorage.setItem('fufumidi_oto_enc', v); } catch (e) {} });
+watch(rightPane, v => { try { localStorage.setItem('fufumidi_vb_pane', v); } catch (e) {} });
+watch(specOn, v => { try { localStorage.setItem('fufumidi_vb_spec', v ? '1' : '0'); } catch (e) {} });
+// 提示文案走 i18n：编码名是专有名词，不翻译，但"给谁用"这句话要翻
+const encHint = computed(() => t((OTO_ENCODINGS.find(e => e.id === otoEnc.value) || {}).hint || ''));
 
 const selSeg = computed(() => segments.value.find(s => s.id === selId.value) || null);
 
@@ -198,6 +222,24 @@ function getBrandColor() {
   } catch (e) { return '#4B3FE3'; }
 }
 
+/* 频谱底图缓存：拖标记时每帧重算 STFT 是浪费（片段没换就没必要重算） */
+let specCache = { key: '', spec: null };
+/** 最近一次画出来的谱图信息（帧数 / 频点数）——验收时要能证明"真的算了谱"，而不是只画了波形 */
+let lastSpecInfo = null;
+function segmentSpectrogram(s, start, end) {
+  const key = s.id + '|' + start + '|' + end;
+  if (specCache.key === key) return specCache.spec;
+  const { data, sr } = segSlice(s);
+  const spec = computeSpectrogram(data.subarray(start, end), sr, { fft: 1024, hop: 256 });
+  specCache = { key, spec };
+  return spec;
+}
+function peakDbOf(spec) {
+  let mx = -999;
+  for (let i = 0; i < spec.db.length; i++) if (spec.db[i] > mx) mx = spec.db[i];
+  return mx;
+}
+
 function drawWave() {
   const cv = waveCanvas.value;
   const s = selSeg.value;
@@ -214,8 +256,17 @@ function drawWave() {
   const slice = data.subarray(start, end);
   const n = slice.length;
   const mid = h / 2;
-  // 波形（min/max 柱状）
-  ctx.strokeStyle = getBrandColor();
+  // 频域底图（低频在下）：辅音/元音的差别在时域里看不出来，在频域里一眼能分
+  if (specOn.value && n > 64) {
+    const spec = segmentSpectrogram(s, start, end);
+    if (spec && spec.frames) {
+      drawSpectrogram(ctx, spec, 0, 0, w, h, { grid: true });
+      lastSpecInfo = { frames: spec.frames, bins: spec.bins, sr: spec.sr, peakDb: Math.round(peakDbOf(spec) * 10) / 10 };
+    }
+  } else { lastSpecInfo = null; }
+  // 波形（min/max 柱状）—— 压在频谱上时用亮色描边 + 半透明白芯，保证两条信息都读得出来
+  // 压在频谱上时压到 0.55：0.82 的白色会把频域信息整个盖掉（实测：频谱 3312 色 → 被白块糊成一片）
+  ctx.strokeStyle = specOn.value && n > 64 ? 'rgba(255,255,255,0.55)' : getBrandColor();
   ctx.lineWidth = 1;
   const px = Math.max(1, Math.floor(n / w));
   ctx.beginPath();
@@ -233,23 +284,33 @@ function drawWave() {
 
   if (!s.oto) return;
   const dur = s.endMs - s.startMs;
-  for (const m of MARKERS) {
+  ctx.font = '10px sans-serif';
+  MARKERS.forEach((m, i) => {
     const abs = markAbs(m);
     const x = abs / dur * w;
     ctx.strokeStyle = m.c;
     ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
     ctx.fillStyle = m.c;
-    ctx.fillRect(x - 11, 0, 22, 3);
-    ctx.font = '10px sans-serif';
+    /* 标签分两行交错：五个标记挤在一起时（offset/overlap/preutterance/consonant 常常只差几十毫秒）
+       单行标签会叠成一团 —— 实测 "preutteranceconsonant" 糊在一起。再描一层深色边，
+       压在亮频谱上也读得清。 */
+    const ly = 11 + (i % 2) * 12;
+    ctx.fillRect(x - 11, ly - 9, 22, 3);
     const right = abs > dur * 0.75;
     ctx.textAlign = right ? 'right' : 'left';
-    ctx.fillText(m.label, x + (right ? -4 : 4), 11);
-  }
+    const tx = x + (right ? -4 : 4);
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.strokeText(m.label, tx, ly);
+    ctx.fillStyle = m.c;
+    ctx.fillText(m.label, tx, ly);
+  });
 }
 
 let dragKey = null;
 function onPointerDown(e) {
+  if (!claimPointer(e)) return;
   const cv = waveCanvas.value;
   const s = selSeg.value;
   if (!cv || !s || !s.oto) return;
@@ -268,6 +329,7 @@ function onPointerDown(e) {
   updateDrag(x, w, dur);
 }
 function onPointerMove(e) {
+  if (!isPrimaryPointer(e)) return;
   if (!dragKey) return;
   const cv = waveCanvas.value;
   if (!cv) return;
@@ -288,7 +350,7 @@ function updateDrag(x, w, dur) {
   }
   drawWave();
 }
-function onPointerUp() { dragKey = null; }
+function onPointerUp(e) { if (!releasePointer(e)) return; dragKey = null; }
 
 function onOtoNum(k, e) {
   const s = selSeg.value;
@@ -299,18 +361,65 @@ function onOtoNum(k, e) {
   drawWave();
 }
 
+/* ---------------- 参数一览表（一屏核对 + 批量改） ---------------- */
+// 以前只能"点一个片段、改一组参数"，24 个片段就要点 24 次；一览表把所有片段的
+// offset / overlap / preutterance / consonant / blank 摆成一屏，并且每列都能一次统一。
+function ensureOto(s) {
+  if (!s.oto) s.oto = { ...OTO_DEFAULT };
+  return s.oto;
+}
+function onCell(k, s, e) {
+  const v = parseFloat(e.target.value);
+  if (!Number.isFinite(v)) return;
+  ensureOto(s)[k] = k === 'blank' ? Math.max(5, v) : Math.max(0, v);
+  if (selId.value !== s.id) selId.value = s.id;
+  drawWave();
+}
+/** 把某一列统一成表头那个值（整批录音的 blank/offset 常常要一致） */
+function applyCol(k) {
+  const v = Math.max(k === 'blank' ? 5 : 0, Number(bulkVal.value[k]) || 0);
+  for (const s of segments.value) ensureOto(s)[k] = v;
+  bulkVal.value[k] = v;
+  toast(t('已把全部片段的 ') + k + t(' 统一为 ') + v, 'ok');
+  drawWave();
+}
+function unlabeledCount() { return segments.value.filter(s => !s.oto).length; }
+
+/* ---------------- oto.ini 组装（导出与验收共用同一份） ---------------- */
+// 参数顺序就是 oto.ini 的顺序：offset, consonant, blank, preutterance, overlap
+const OTO_DEFAULT = { offset: 0, consonant: 50, blank: 20, preutterance: 50, overlap: 20 };
+function otoLine(s) {
+  const o = s.oto || OTO_DEFAULT;
+  return `${s.name}.wav=${s.name},${o.offset},${o.consonant},${o.blank},${o.preutterance},${o.overlap}`;
+}
+function buildOtoText() { return segments.value.map(otoLine).join('\n') + '\n'; }
+/** 按选定编码出字节：Shift-JIS 是老 UTAU 认的编码，UTF-8 给 OpenUtau / 现代工具 */
+function buildOtoBytes(enc) { return encodeOtoText(buildOtoText(), enc || otoEnc.value); }
+/** 声库文件清单：oto.ini（按选定编码）+ 每个片段一个 wav */
+function makeVoicebankFiles(enc) {
+  const files = [{ name: 'oto.ini', data: bytesToBase64(buildOtoBytes(enc)) }];
+  for (const s of segments.value) {
+    const { data, sr, start, end } = segSlice(s);
+    if (end <= start) continue;
+    files.push({ name: s.name + '.wav', data: bytesToBase64(encodeWav16(data.subarray(start, end), sr)) });
+  }
+  return files;
+}
+function encLabel() { const e = OTO_ENCODINGS.find(x => x.id === otoEnc.value); return e ? e.label : otoEnc.value; }
+/** Shift-JIS 里没有的字符（例如简体汉字）会变成 '?' —— 先告诉用户，别让他导出后才发现 */
+function warnUnencodable() {
+  if (otoEnc.value !== 'sjis') return;
+  const miss = otoUnsupported(buildOtoText());
+  if (miss.length) toast(t('这些字符在 Shift-JIS 里没有，导出会变成 ?：') + miss.join(' '), 'warn');
+}
+
 /* ---------------- 导出 ---------------- */
 async function exportVoicebank() {
   if (!segments.value.length) { toast(t('请先切分或添加片段'), 'warn'); return; }
-  const otoLines = segments.value.map(s => {
-    const o = s.oto || { offset: 0, consonant: 50, blank: 20, preutterance: 50, overlap: 20 };
-    return `${s.name}.wav=${s.name},${o.offset},${o.consonant},${o.blank},${o.preutterance},${o.overlap}`;
-  });
-  const otoBytes = new TextEncoder().encode(otoLines.join('\n') + '\n');
-
+  warnUnencodable();
   if (!bridge || typeof bridge.utauExportVoicebank !== 'function') {
-    // 网页版兜底：下载 oto.ini 文本
-    const blob = new Blob([otoBytes], { type: 'text/plain;charset=utf-8' });
+    // 网页版兜底：下载 oto.ini 文本（浏览器只能给 UTF-8，桌面版才能出 Shift-JIS）
+    const blob = new Blob([buildOtoBytes('utf8')], { type: 'text/plain;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = 'oto.ini';
@@ -321,14 +430,8 @@ async function exportVoicebank() {
   }
   const dir = await bridge.pickDirectory();
   if (!dir) return;
-  const files = [{ name: 'oto.ini', data: bytesToBase64(otoBytes) }];
-  for (const s of segments.value) {
-    const { data, sr, start, end } = segSlice(s);
-    if (end <= start) continue;
-    files.push({ name: s.name + '.wav', data: bytesToBase64(encodeWav16(data.subarray(start, end), sr)) });
-  }
-  const r = await bridge.utauExportVoicebank({ dir, files });
-  if (r && r.ok) toast(t('已导出音源到 ') + dir, 'ok');
+  const r = await bridge.utauExportVoicebank({ dir, files: makeVoicebankFiles() });
+  if (r && r.ok) toast(t('已导出音源到 ') + dir + ' · oto.ini = ' + encLabel(), 'ok');
   else toast(t('导出失败：') + ((r && r.error) || 'unknown'), 'error');
 }
 
@@ -339,19 +442,9 @@ async function exportVoicebankZip() {
     toast(t('当前环境不支持压缩包导出，请使用桌面版'), 'warn');
     return;
   }
-  const otoLines = segments.value.map(s => {
-    const o = s.oto || { offset: 0, consonant: 50, blank: 20, preutterance: 50, overlap: 20 };
-    return `${s.name}.wav=${s.name},${o.offset},${o.consonant},${o.blank},${o.preutterance},${o.overlap}`;
-  });
-  const otoBytes = new TextEncoder().encode(otoLines.join('\n') + '\n');
-  const files = [{ name: 'oto.ini', data: bytesToBase64(otoBytes) }];
-  for (const s of segments.value) {
-    const { data, sr, start, end } = segSlice(s);
-    if (end <= start) continue;
-    files.push({ name: s.name + '.wav', data: bytesToBase64(encodeWav16(data.subarray(start, end), sr)) });
-  }
-  const r = await bridge.utauExportVoicebankZip({ files });
-  if (r && r.ok) toast(t('已导出压缩包到 ') + (r.path || ''), 'ok');
+  warnUnencodable();
+  const r = await bridge.utauExportVoicebankZip({ files: makeVoicebankFiles() });
+  if (r && r.ok) toast(t('已导出压缩包到 ') + (r.path || '') + ' · oto.ini = ' + encLabel(), 'ok');
   else if (r && r.canceled) { /* 用户取消 */ }
   else toast(t('导出失败：') + ((r && r.error) || 'unknown'), 'error');
 }
@@ -369,7 +462,23 @@ watch([selId, segSignature, () => (audio.value ? audio.value.data.length : 0)],
   () => { requestAnimationFrame(drawWave); });
 function onResize() { requestAnimationFrame(drawWave); }
 
-onMounted(() => { window.addEventListener('resize', onResize); });
+onMounted(() => {
+  window.addEventListener('resize', onResize);
+  /* 验收桥（与音乐编辑器 / 调教页同一套开关）：生产包里也能用，只有 fufumidi_debug=1 时才挂。
+     没有它，这个页面里"造片段 → 导出 → 验字节"这条路完全无法自动化（上传音频要走系统对话框）。 */
+  if (localStorage.getItem('fufumidi_debug') === '1') {
+    window.__vbDebug = {
+      segments, selId, audio, splitParams, otoEnc, rightPane, specOn, bulkVal,
+      autoSplit, labelAll, drawWave, playSeg, applyCol, onCell, ensureOto, unlabeledCount,
+      buildOtoText, buildOtoBytes, makeVoicebankFiles, otoLine,
+      encodeOtoText, decodeOtoBytes, otoUnsupported, sjisTableInfo,
+      specInfo: () => lastSpecInfo,
+      tableRows: () => document.querySelectorAll('.vb-table tbody tr').length,
+      tableUnlabeledRows: () => document.querySelectorAll('.vb-table tbody tr.unlabeled').length,
+      waveCanvas: () => waveCanvas.value,
+    };
+  }
+});
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onResize);
   stopPlay();
@@ -394,6 +503,12 @@ onBeforeUnmount(() => {
       <label>{{ t('最小音节(ms)') }}<input type="number" v-model.number="splitParams.minSyllable" class="text-input vb-num" min="20" step="10" /></label>
       <label>{{ t('静音阈值(dB)') }}<input type="number" v-model.number="splitParams.silenceDb" class="text-input vb-num" min="-80" max="0" step="2" /></label>
       <button class="btn sm" @click="autoSplit" :disabled="!audio">{{ t('重新切分') }}</button>
+      <label class="vb-enc">{{ t('oto.ini 编码') }}
+        <select class="text-input vb-sel" v-model="otoEnc">
+          <option v-for="e in OTO_ENCODINGS" :key="e.id" :value="e.id">{{ e.label }}</option>
+        </select>
+        <span class="muted small">{{ encHint }}</span>
+      </label>
     </div>
 
     <div v-if="audio || segments.length" class="vb-body">
@@ -422,25 +537,83 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div v-if="selSeg" class="vb-right">
+      <div v-if="selSeg || segments.length" class="vb-right">
         <div class="vb-wave-head">
-          <b>{{ t('原音设定微调') }} · {{ selSeg.name }}</b>
-          <span class="muted small">{{ t('拖动波形上的标记调整') }}</span>
+          <b>{{ t('原音设定微调') }} · {{ selSeg ? selSeg.name : t('全部片段') }}</b>
+          <span class="vb-pane-tabs">
+            <button class="btn sm" :class="{ primary: rightPane === 'wave' }" @click="rightPane = 'wave'">
+              <Icon name="viz" :size="12" /> {{ t('波形微调') }}
+            </button>
+            <button class="btn sm" :class="{ primary: rightPane === 'table' }" @click="rightPane = 'table'">
+              <Icon name="chart" :size="12" /> {{ t('参数一览表') }}
+            </button>
+          </span>
+          <label v-if="rightPane === 'wave'" class="vb-spec-toggle">
+            <input type="checkbox" v-model="specOn" /> {{ t('频域底图') }}
+          </label>
+          <span class="muted small">{{ rightPane === 'wave' ? t('拖动波形上的标记调整') : t('一屏核对全部片段，每列都能统一') }}</span>
         </div>
-        <canvas ref="waveCanvas" class="vb-wave"
-                @pointerdown="onPointerDown" @pointermove="onPointerMove"
-                @pointerup="onPointerUp" @pointercancel="onPointerUp"></canvas>
-        <div v-if="selSeg.oto" class="vb-oto-grid">
-          <div v-for="m in MARKERS" :key="m.k" class="vb-oto-item">
-            <span class="vb-dot" :style="{ background: m.c }"></span>
-            <span class="vb-oto-k">{{ m.label }}</span>
-            <input type="number" class="text-input vb-num" :value="selSeg.oto[m.k]"
-                   step="0.5" min="0" @input="onOtoNum(m.k, $event)" />
-            <span class="muted small">ms</span>
+
+        <template v-if="rightPane === 'wave'">
+          <canvas ref="waveCanvas" class="vb-wave"
+                  @pointerdown="onPointerDown" @pointermove="onPointerMove"
+                  @pointerup="onPointerUp" @pointercancel="onPointerUp"></canvas>
+          <div v-if="selSeg && selSeg.oto" class="vb-oto-grid">
+            <div v-for="m in MARKERS" :key="m.k" class="vb-oto-item">
+              <span class="vb-dot" :style="{ background: m.c }"></span>
+              <span class="vb-oto-k">{{ m.label }}</span>
+              <input type="number" class="text-input vb-num" :value="selSeg.oto[m.k]"
+                     step="0.5" min="0" @input="onOtoNum(m.k, $event)" />
+              <span class="muted small">ms</span>
+            </div>
           </div>
-        </div>
-        <div v-else class="muted small vb-empty">
-          {{ t('点击「自动标注」或右侧按钮生成初始参数。') }}
+          <div v-else class="muted small vb-empty">
+            {{ t('点击「自动标注」或右侧按钮生成初始参数。') }}
+          </div>
+        </template>
+
+        <div v-else class="vb-table-wrap">
+          <table class="vb-table">
+            <thead>
+              <tr>
+                <th class="vb-th-idx">#</th>
+                <th>{{ t('片段') }}</th>
+                <th v-for="m in MARKERS" :key="m.k" class="vb-th-param">
+                  <span class="vb-th-name"><span class="vb-dot" :style="{ background: m.c }"></span>{{ m.label }}</span>
+                  <span class="vb-col-apply">
+                    <input type="number" class="text-input vb-num vb-num-sm" v-model.number="bulkVal[m.k]" step="0.5"
+                           :title="t('把这一列全部改成这个值')" />
+                    <button class="icon-btn" :title="t('把这一列全部改成这个值')" @click="applyCol(m.k)"><Icon name="chevron" :size="11" /></button>
+                  </span>
+                </th>
+                <th>{{ t('时长') }}</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(s, i) in segments" :key="s.id" :class="{ on: s.id === selId, unlabeled: !s.oto }" @click="selId = s.id">
+                <td class="vb-td-idx">{{ i + 1 }}</td>
+                <td><input class="text-input vb-name" v-model="s.name" @click.stop /></td>
+                <td v-for="m in MARKERS" :key="m.k">
+                  <input type="number" class="text-input vb-num" :value="s.oto ? s.oto[m.k] : ''"
+                         :placeholder="s.oto ? '' : '—'" step="0.5" min="0"
+                         @click.stop @input="onCell(m.k, s, $event)" />
+                </td>
+                <td class="vb-td-dur">{{ Math.round(s.endMs - s.startMs) }} ms</td>
+                <td class="vb-td-act">
+                  <!-- ★ 必须套一层 inline-flex：.icon-btn 是 display:grid，直接放 td 里会各占一行，
+                       一行 34px × 2 → 整行被撑到 75px（实测），表就变成了"每行一格大空" -->
+                  <span class="vb-tools">
+                    <button class="icon-btn" :title="t('试听')" @click.stop="playSeg(s)"><Icon name="play2" :size="12" /></button>
+                    <button class="icon-btn" :title="t('删除')" @click.stop="delSeg(s.id)"><Icon name="trash" :size="12" /></button>
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-if="unlabeledCount()" class="muted small vb-table-hint">
+            {{ t('虚线的片段还没标注：直接在表里填数就是标注。') }}
+          </div>
         </div>
       </div>
     </div>
@@ -487,4 +660,34 @@ onBeforeUnmount(() => {
 .vb-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 .vb-oto-k { min-width: 78px; color: var(--ink); }
 .vb-welcome { padding: 26px 8px; line-height: 1.9; font-size: 13px; }
+
+/* ---- M8e：编码切换 / 一览表 / 频域底图 ---- */
+.vb-enc { margin-left: auto; gap: 4px; }
+.vb-sel { width: 118px; padding: 3px 6px; font-size: 12px; }
+.vb-pane-tabs { display: inline-flex; gap: 4px; }
+.vb-spec-toggle { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--stone); }
+.vb-table-wrap { overflow: auto; flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: 8px; }
+.vb-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.vb-table th { position: sticky; top: 0; z-index: 1; background: var(--surface-muted); border-bottom: 1px solid var(--border); padding: 5px 6px; text-align: left; font-weight: 600; white-space: nowrap; }
+.vb-table td { border-bottom: 1px solid var(--border); padding: 3px 6px; }
+.vb-table tr.on td { background: var(--brand-soft); }
+/* 没标注过的片段用虚线输入框标出来：一览表里"哪几行还是空的"要一眼看见 */
+.vb-table tr.unlabeled .vb-num { border-style: dashed; }
+.vb-table th { padding: 4px 5px; }
+.vb-table td { padding: 2px 5px; }
+.vb-table .vb-num { width: 58px; padding: 2px 4px; }
+.vb-table .vb-name { width: 52px; padding: 2px 4px; }
+/* 表头两行：第一行参数名，第二行「统一为」输入 + 应用按钮。
+   单行摆（名字 输入 按钮）会把每列撑到 ~190px，5 列参数必然横向裁掉（实测 1042px 塞进 662px）。 */
+.vb-th-param { white-space: nowrap; }
+/* 列宽由表头决定：参数名用 11px，'preutterance' 这种长名字才不会把列撑到 104px */
+.vb-th-name { display: flex; align-items: center; gap: 4px; font-size: 11px; }
+.vb-col-apply { display: flex; align-items: center; gap: 2px; margin-top: 2px; }
+/* ⚠ 要写成 .vb-table .vb-num-sm：上面那条 .vb-table .vb-num（0,2,0）比 .vb-num-sm（0,1,0）更具体，
+   否则表头那个"统一为"输入框仍是 58px，列宽被顶到 104px，5 列参数横向溢出（实测两次） */
+.vb-table .vb-num-sm { width: 40px; padding: 1px 3px; font-size: 11px; }
+.vb-th-idx, .vb-td-idx { width: 18px; color: var(--stone); }
+.vb-td-dur { white-space: nowrap; color: var(--stone); }
+.vb-td-act { width: 72px; }
+.vb-table-hint { padding: 8px 10px; border-top: 1px solid var(--border); }
 </style>

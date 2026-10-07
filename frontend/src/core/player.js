@@ -1,5 +1,6 @@
 // 播放器（lookahead 调度 + 变速 / 循环 / 跳转）——从 legacy FuFumidi.html 抽取
 import { clamp } from './util.js';
+import { articulationPlan } from './expression-map.js';
 
 /* 节拍器咔哒声：返回已排队的振荡器，交给调用方登记以便随时取消 */
 function metroClick(ctx, time, accent, out) {
@@ -44,6 +45,15 @@ export class Player {
   prepare() {
     const arr = [];
     const st = this.song.chanStateAt;
+    /* ★ 技法动作（§3.7）：`song.ksMap` + `song.exprMap` 存在时，
+       PC 变成"该时刻之后的音符音色"，CC 进通道事件表，力度系数直接乘到音符速度上。
+       放在播放器里做，所有 `player.load(song)` 的调用点（换音色、改 BPM、载入…）都自动跟着走。 */
+    const plans = new Map();
+    if (this.song && (this.song.ksMap || this.song.exprMap)) {
+      for (const tr of this.song.tracks) {
+        plans.set(tr, articulationPlan(tr, this.song.ksMap || {}, this.song.exprMap || {}));
+      }
+    }
     for (const tr of this.song.tracks) for (const n of tr.notes) {
       // 编辑器里静音的音符不参与发声（导出 MIDI 仍保留，避免编辑动作丢音符）
       if (n.muted) continue;
@@ -54,11 +64,16 @@ export class Player {
       // program/bank 是通道级状态，也可能写在别的轨里。
       const ch = n.ch != null ? n.ch : (tr.ch != null ? tr.ch : 0);
       const s = st ? st(ch, n.start) : null;
+      const plan = plans.get(tr);
+      const artProg = plan ? plan.progAt(n.start) : null;
+      const velFactor = plan ? plan.velAt(n.start) : 1;
       arr.push({
-        start: n.start, end: n.end, midi: n.midi, vel: n.vel,
+        start: n.start, end: n.end, midi: n.midi,
+        vel: n.vel == null ? n.vel : clamp(Math.round(n.vel * velFactor), 1, 127),
         trk: tr.index,                                   // 仅用于轨道音量/声像路由
         ch,
-        prog: s && s.program != null ? s.program : tr.program,
+        prog: artProg != null ? artProg
+          : (s && s.program != null ? s.program : tr.program),
         bank: s ? s.bank : 0,
         isDrum: ch === 9,
       });
@@ -73,6 +88,14 @@ export class Player {
     const ctlByCh = new Map();
     const bendByCh = new Map();
     for (const tr of this.song.tracks) {
+      const plan0 = plans.get(tr);
+      if (plan0) {
+        for (const c of plan0.ccs) {
+          // 与下面同一条规则：CC0/CC32 是库选择，交给 synth 处理，不在这里当普通 CC 发
+          if (c.cc === 0 || c.cc === 32) continue;
+          ctl.push({ start: c.tick || 0, kind: 'cc', ch: c.ch != null ? (c.ch & 0x0f) : (tr.ch != null ? tr.ch : 0), cc: c.cc, val: c.cv });
+        }
+      }
       for (const c of (tr.ccs || [])) {
         if (!c || c.cc == null || c.ch == null || c.cc === 0 || c.cc === 32) continue;
         ctl.push({ start: c.tick || 0, kind: 'cc', ch: c.ch, cc: c.cc, val: c.cv });

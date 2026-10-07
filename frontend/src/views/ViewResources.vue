@@ -4,12 +4,11 @@
 // - 模型运行时：模型推理所需包（piano / separate / muscriptor / aria / transkun 组）+ Rust 核心
 // - 模型文件：内置模型清单（权重状态 + 运行时包状态，缺包可一键安装）
 // - 诊断与配置：诊断包导出、配置导入导出
-import { ref, reactive, watch, onMounted, onBeforeUnmount } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import ViewModels from './ViewModels.vue';
 import ViewSoundfonts from './ViewSoundfonts.vue';
-import UtauVoicebankStore from '../components/utau/UtauVoicebankStore.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
 import { t } from '../core/i18n.js';
@@ -264,6 +263,43 @@ async function findDupes() {
 }
 function revealLibDir() { try { bridge && bridge.openDataRoot && bridge.openDataRoot('midi'); } catch (e) {} }
 
+/* ---------------- 识谱引擎（Audiveris）----------------
+   Plan §6.2：识谱引擎属于「资源」，用户要能在资源中心一眼看到状态、装上、打开目录、卸掉。
+   以前只有「变谱」页那张提示卡能装，用户在资源中心找不到入口，也不知道自己装没装。 */
+const omr = reactive({ st: null, busy: false, text: '', err: '' });
+let offOmrProg = null;
+/** 主进程推的是阶段代码，文案在渲染层翻（否则英文/日文界面里会冒出中文进度）。 */
+const OMR_PHASE = { download: '下载识谱引擎…', extract: '解包识谱引擎…', done: '识谱引擎就绪' };
+async function loadOmr() {
+  try { omr.st = (bridge && bridge.omrEngine) ? await bridge.omrEngine.status() : null; }
+  catch (e) { omr.st = null; }
+}
+async function installOmr() {
+  if (!bridge || !bridge.omrEngine || omr.busy) return;
+  omr.busy = true; omr.err = '';
+  try {
+    const r = await bridge.omrEngine.install();
+    if (r && r.ok && r.installed) { omr.st = r; toast(t('识谱引擎已安装')); }
+    else { omr.err = String((r && r.error) || t('安装失败')); toast(t('安装失败：') + omr.err, 'warn'); }
+  } catch (e) { omr.err = String((e && e.message) || e); toast(t('安装失败：') + omr.err, 'warn'); }
+  finally { omr.busy = false; omr.text = ''; }
+}
+// 卸载是不可逆的资源删除，和「删除模型」用同一种确认方式
+async function removeOmr() {
+  if (!bridge || !bridge.omrEngine || omr.busy) return;
+  if (!window.confirm(t('卸载识谱引擎？之后图片 / PDF 识谱会退回内置引擎（离线可用，但变化音与节奏精度低）。'))) return;
+  try {
+    const r = await bridge.omrEngine.remove();
+    if (r && r.ok === false) { toast(t('卸载失败：') + String(r.error || ''), 'warn'); return; }
+    omr.st = r || null; toast(t('已卸载识谱引擎'));
+  } catch (e) { toast(t('卸载失败：') + String((e && e.message) || e), 'warn'); }
+}
+function openOmrDir() { try { bridge && bridge.omrEngine && bridge.omrEngine.openDir(); } catch (e) {} }
+const omrSize = computed(() => {
+  const b = (omr.st && omr.st.bytes) || 0;
+  return b ? (b / 1024 / 1024).toFixed(1) + ' MB' : '—';
+});
+
 /* ---------------- 诊断与配置 ---------------- */
 async function exportDiag() {
   if (!bridge || !bridge.diagExport) return;
@@ -394,7 +430,10 @@ function fmtSize(b) {
 }
 
 /* ---------------- GPU 加速状态 ---------------- */
-const gpuInfo = reactive({ available: false, backend: '', name: '', blackwell: false, need_cu128: false, loaded: false });
+const gpuInfo = reactive({ available: false, backend: '', name: '', blackwell: false, need_cu128: false, arch_supported: null, arch_reason: '', loaded: false });
+// 显卡在、但算力不在 CUDA 包支持范围内（issue #20：GTX 10 系及更早）→ 实际会跑 CPU，
+// 界面上就不能再显示「已启用」（否则用户以为在用 GPU，实际既慢又对不上预期）。
+const gpuReady = computed(() => !!gpuInfo.available && gpuInfo.arch_supported !== false);
 async function loadGpu() {
   if (bridge && bridge.probe) {
     try {
@@ -405,6 +444,8 @@ async function loadGpu() {
       gpuInfo.name = g.name || '';
       gpuInfo.blackwell = !!g.blackwell;
       gpuInfo.need_cu128 = !!g.need_cu128;
+      gpuInfo.arch_supported = (g.arch_supported === undefined ? null : g.arch_supported);
+      gpuInfo.arch_reason = g.arch_reason || '';
     } catch (e) {}
     gpuInfo.loaded = true;
   }
@@ -417,6 +458,14 @@ onMounted(() => {
   loadGpu();
   loadHfToken();
   loadLibStats();
+  loadOmr();
+  if (bridge && bridge.omrEngine && bridge.omrEngine.onProgress) {
+    offOmrProg = bridge.omrEngine.onProgress((p) => {
+      if (!p) return;
+      const label = OMR_PHASE[p.phase] ? t(OMR_PHASE[p.phase]) : '';
+      omr.text = label + (p.percent ? ' ' + p.percent + '%' : '');
+    });
+  }
   if (bridge && bridge.onModelProgress) {
     offModelProg = bridge.onModelProgress((p) => {
       if (p && p.id) {
@@ -427,7 +476,10 @@ onMounted(() => {
     });
   }
 });
-onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {} offModelProg = null; } });
+onBeforeUnmount(() => {
+  if (offModelProg) { try { offModelProg(); } catch (e) {} offModelProg = null; }
+  if (offOmrProg) { try { offOmrProg(); } catch (e) {} offOmrProg = null; }
+});
 </script>
 
 <template>
@@ -452,7 +504,7 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
       <ViewModels />
 
       <div class="card res-sec" data-guide="vm-download-settings">
-        <div class="res-sec-head"><Icon name="settings" :size="15" /> {{ t('模型下载设置') }}</div>
+        <div class="res-sec-head"><Icon name="gear" :size="15" /> {{ t('模型下载设置') }}</div>
         <div class="field-row top">
           <div>
             <div class="fr-label">HuggingFace Token</div>
@@ -555,11 +607,20 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
       <div class="field-row">
         <div>
           <div class="fr-label">{{ t('推理加速') }}</div>
-          <div class="fr-hint">{{ gpuInfo.loaded ? (gpuInfo.available ? (gpuInfo.name + ' · ' + (gpuInfo.backend === 'cuda' ? 'CUDA' : gpuInfo.backend || '')) : t('未启用（可在设置 → GPU 中下载增强包）')) : t('检测中…') }}</div>
+          <div class="fr-hint">{{ gpuInfo.loaded ? (gpuReady ? (gpuInfo.name + ' · ' + (gpuInfo.backend === 'cuda' ? 'CUDA' : gpuInfo.backend || '')) : (gpuInfo.arch_supported === false ? t('显卡算力不受支持，已自动改用 CPU 转录') : t('未启用（可在设置 → GPU 中下载增强包）'))) : t('检测中…') }}</div>
         </div>
         <div class="fr-ctl">
-          <span v-if="gpuInfo.available" :class="['plg-tag', 'on']">{{ t('已启用') }}</span>
+          <span v-if="gpuReady" :class="['plg-tag', 'on']">{{ t('已启用') }}</span>
           <span v-else :class="['plg-tag', 'off']">{{ t('未启用') }}</span>
+        </div>
+      </div>
+      <div v-if="gpuInfo.arch_supported === false" class="field-row">
+        <div>
+          <div class="fr-label">{{ t('显卡算力支持') }}</div>
+          <div class="fr-hint">{{ gpuInfo.arch_reason || t('当前 CUDA 推理包不含本机显卡可用的内核') }}{{ t('，将自动改用 CPU 转录（功能不受影响，只是更慢）') }}</div>
+        </div>
+        <div class="fr-ctl">
+          <span class="plg-tag off">{{ t('用 CPU') }}</span>
         </div>
       </div>
       <div v-if="gpuInfo.blackwell" class="field-row">
@@ -619,10 +680,32 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
       <div v-if="lib.err" class="lib-err">{{ lib.err }}</div>
     </div>
 
-    <!-- ============ UTAU 声库资源（开源 / 免费，一键安装） ============ -->
-    <div class="card res-sec">
-      <div class="res-sec-head"><Icon name="mic" :size="15" /> {{ t('UTAU 声库资源') }}</div>
-      <UtauVoicebankStore />
+    <!-- UTAU 声库资源已移到「资源中心 → 模型管理 → UTAU 声库」页签：
+         声库属于资源，和模型放在同一处，用户只需要记住一个入口。 -->
+
+    <!-- ============ 识谱引擎（变谱页的光学识谱增强包，Plan §6.2） ============ -->
+    <div class="card res-sec" data-guide="res-omr">
+      <div class="res-sec-head"><Icon name="score" :size="15" /> {{ t('识谱引擎') }}</div>
+      <div class="field-row">
+        <div>
+          <div class="fr-label">Audiveris</div>
+          <div class="fr-hint">{{ t('图片与 PDF 的识谱默认用内置引擎（离线可用）；装上 Audiveris（约 81 MB）后，变化音、节拍与小节结构都会明显更准。') }}</div>
+          <div class="fr-hint" v-if="omr.st">
+            <b>{{ omr.st.installed ? t('已安装') : t('未安装') }}</b>
+            <span v-if="omr.st.installed"> · v{{ omr.st.version }} · {{ omrSize }} · {{ omr.st.exe }}</span>
+            <span v-if="omr.busy" class="omr-run"> · {{ omr.text || t('安装中…') }}</span>
+            <span v-if="omr.err" class="omr-bad"> · {{ omr.err }}</span>
+          </div>
+          <div class="fr-hint" v-else>{{ t('当前环境不支持识谱引擎（请使用桌面版）') }}</div>
+        </div>
+        <div class="fr-ctl">
+          <button class="btn sm primary" v-if="omr.st && !omr.st.installed" :disabled="omr.busy" @click="installOmr">
+            <Icon name="download" :size="12" /> {{ omr.busy ? t('安装中…') : t('安装识谱引擎') }}
+          </button>
+          <button class="btn sm" v-if="omr.st && omr.st.installed" @click="openOmrDir">{{ t('打开目录') }}</button>
+          <button class="btn sm ghost" v-if="omr.st && omr.st.installed" :disabled="omr.busy" @click="removeOmr">{{ t('卸载') }}</button>
+        </div>
+      </div>
     </div>
 
     <!-- ============ 诊断与配置 ============ -->
@@ -723,4 +806,8 @@ onBeforeUnmount(() => { if (offModelProg) { try { offModelProg(); } catch (e) {}
 .lib-result b.bad { color: var(--error); }
 .lib-bad { font-family: var(--mono); font-size: 10.5px; color: var(--stone); word-break: break-all; margin-top: 2px; }
 .lib-err { margin-top: 8px; font-size: 11.5px; color: var(--error); word-break: break-all; }
+/* 识谱引擎（Audiveris）：路径很长，必须能换行，否则整卡被撑宽 */
+.omr-run { color: var(--accent); font-variant-numeric: tabular-nums; }
+.omr-bad { color: var(--error); }
+.res-sec[data-guide="res-omr"] .fr-hint { word-break: break-all; }
 </style>

@@ -9,7 +9,6 @@ asarUnpack:
   - "**/*.node"
   - "renderer/dist/wallpapers/**"
   - "renderer/vendor/soundfonts/**"
-  - "renderer/vendor/jssynth/**"
   - "renderer/dist/vendor/js-synth/**"
 files:
   - "**/*"
@@ -41,6 +40,26 @@ files:
   # 属开发机内部数据（且不是运行时依赖），打进包会把工作日志随安装包分发出去。
   - "!.workbuddy/**"
   - "!.trae/**"
+  # 服务端 Cloudflare Worker 源码（cloud-sync/worker/）：它是独立部署的组件，不是应用代码。
+  # 排除它是为了让安装版与发布版一致 —— scripts/deploy-installed.cjs 的过滤清单直接读本文件。
+  - "!cloud-sync/**"
+  - "!test/**"
+  # 开发用文件（用户不需要；LICENSE 除外 —— MIT 要求随二进制分发版权声明）
+  - "!AGENTS.md"
+  - "!SECURITY.md"
+  - "!.editorconfig"
+  - "!.gitattributes"
+  - "!.gitignore"
+  - "!package-lock.json"
+  # sql.js 只用到 dist/sql-wasm.js（包 main）+ sql-wasm.wasm（main/db.js:38 locateFile）。
+  # 其余 16 个文件是 asm/browser/debug/zip 变体，实测 23.4MB，一个都加载不到：
+  #   dist 里 18 个文件、仅 2 个可达 —— 逐个排除比「排除整个目录再放行两个」安全，
+  #   不依赖 files 列表里「排除与放行谁赢」的规则。
+  - "!node_modules/sql.js/dist/sql-asm*"
+  - "!node_modules/sql.js/dist/worker.sql-*"
+  - "!node_modules/sql.js/dist/sql-wasm-browser*"
+  - "!node_modules/sql.js/dist/sql-wasm-debug*"
+  - "!node_modules/sql.js/dist/sqljs-*.zip"
   - "!rust-core/**"         # Rust 源码（编译产物经 extraResources 分发到 resources/rust-core）
   - "!.github/**"
   - "!README.md"

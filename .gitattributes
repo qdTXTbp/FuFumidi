@@ -1,0 +1,46 @@
+# 统一行尾与二进制判定，别依赖某台机器的 core.autocrlf。
+# 事实：本机 system 级 core.autocrlf=true（仓库里存 LF，工作区是 CRLF），
+# 换成别的机器就不一定了 —— 这份文件让结果与机器无关。见 docs/HYGIENE.md。
+* text=auto
+
+# Windows 专用脚本：工作区一律 CRLF
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.nsh text eol=crlf
+
+# POSIX 侧脚本与 CI 一律 LF
+*.sh text eol=lf
+
+# 二进制：禁止任何行尾/编码转换（体积大，改一个字节就要重下整包）
+*.exe binary
+*.dll binary
+*.dylib binary
+*.node binary
+*.so binary
+*.asar binary
+*.7z binary
+*.zip binary
+*.png binary
+*.ico binary
+*.webp binary
+*.jpg binary
+*.ttf binary
+*.otf binary
+*.woff2 binary
+*.wasm binary
+*.sf2 binary
+*.sf3 binary
+*.onnx binary
+*.pth binary
+*.npy binary
+*.npz binary
+*.mp3 binary
+*.wav binary
+*.flac binary
+
+# 生成物在 diff 里不值得看，也不该参与合并
+package-lock.json -diff
+frontend/package-lock.json -diff
+cloud-sync/worker/package-lock.json -diff

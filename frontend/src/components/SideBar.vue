@@ -546,7 +546,7 @@ watch([() => playlist.activePlaylistId, () => playlist.search, libSort], () => {
 const emptyHint = computed(() => {
   if (playlist.search && !visibleSongs.value.length) return t('未找到匹配的曲目');
   if (isFavView.value) return t('收藏为空，点击歌曲右侧 ♥ 收藏。');
-  if (isAllView.value) return t('暂无曲目。') + t('点击上方「导入 MIDI」或直接拖入文件。');
+  if (isAllView.value) return t('暂无曲目。') + t('点击上方「导入到曲库」或直接拖入文件。');
   return t('歌单为空，点击歌曲右侧「＋」加入。');
 });
 
@@ -629,7 +629,7 @@ const showAuth = ref(false);
     <div class="sidebar-body">
       <div style="display:flex;gap:6px">
         <button class="btn sm" data-guide="sidebar-import" style="flex:1;min-width:0;justify-content:center" @click="onPick">
-          <Icon name="import" :size="14" /> {{ t('导入 MIDI') }}
+          <Icon name="import" :size="14" /> {{ t('导入到曲库') }}
         </button>
         <button class="btn sm" style="flex:1;min-width:0;justify-content:center" @click="onPickFolder">
           <Icon name="folder" :size="13" /> {{ t('导入文件夹') }}
@@ -665,7 +665,7 @@ const showAuth = ref(false);
           </button>
         </div>
       </div>
-      <div class="pl-hint muted small">{{ t('右键歌单可管理') }}</div>
+      <div class="pl-hint muted small">{{ t('右键歌单可管理 · 按数字 1~9 快速切换歌单') }}</div>
       <div v-if="plCreating" class="pl-new">
         <input v-model="newPlName" class="text-input" style="flex:1;padding:4px 8px;font-size:12px" :placeholder="t('歌单名')" @keydown.enter="onNewPlKey" @keydown.esc="onNewPlKey" autofocus />
         <button class="btn sm" style="padding:3px 10px" @click="createPl()">{{ t('确定') }}</button>
@@ -686,7 +686,9 @@ const showAuth = ref(false);
           <Icon name="zap" :size="13" /><span>{{ t('最常播放') }}</span>
         </div>
       </div>
-      <div class="pl-item" v-for="pl in playlist.playlists" :key="pl.id"
+      <!-- 数字 1..9 = 切到第 N 个歌单（与 App.vue 的数字键处理一一对应，编号直接画在这里） -->
+      <div class="pl-item" v-for="(pl, plIdx) in playlist.playlists" :key="pl.id"
+           :title="plIdx < 9 ? t('快捷键 ') + (plIdx + 1) : ''"
            :class="{ on: playlist.activePlaylistId === pl.id, dragging: plDragId === pl.id, dragTarget: plOverId === pl.id, dragable: canReorderPlaylists }"
            :draggable="canReorderPlaylists"
            @dragstart="plDragStart(pl)"
@@ -697,6 +699,7 @@ const showAuth = ref(false);
            @contextmenu.prevent="openPlMenu($event, pl)"
            @click="playlist.select(pl.id)">
         <span v-if="canReorderPlaylists" class="pl-drag"><Icon name="drag" :size="12" /></span>
+        <span v-if="plIdx < 9" class="pl-key">{{ plIdx + 1 }}</span>
         <Icon name="folder" :size="13" /><span class="pl-name" :title="pl.name">{{ pl.name }}</span><em>{{ pl.songIds.length }}</em>
       </div>
       </template>
@@ -764,7 +767,8 @@ const showAuth = ref(false);
     </div>
 
     <div style="padding:10px 14px;border-top:1px solid var(--border)" class="small muted row">
-      <span class="tag">{{ appVersion }}</span>
+      <!-- 版本号不折行：窄侧栏下「v5.0.0-beta.2」曾被折成两行（UX 复核第 6 条） -->
+      <span class="tag ver-tag">{{ appVersion }}</span>
       <button class="cloud-user" style="margin-left:auto;display:flex;align-items:center;gap:8px;background:none;border:none;color:inherit;cursor:pointer;padding:3px 6px;border-radius:9px"
               :title="t('账号与云同步')" :aria-label="t('账号与云同步')" @click="showAuth = true">
         <span class="cloud-avatar">
@@ -773,7 +777,8 @@ const showAuth = ref(false);
             <path d="M7 36a13 13 0 0 1 26 0z" fill="#9aa0a6"/>
           </svg>
         </span>
-        <span class="cloud-uname" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:110px">{{ cloud.account ? cloud.account.email : t('未登录用户') }}</span>
+        <span class="cloud-uname" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:110px"
+              :title="cloud.account ? cloud.account.email : t('未登录用户')">{{ cloud.account ? cloud.account.email : t('未登录用户') }}</span>
       </button>
     </div>
 
@@ -982,6 +987,10 @@ const showAuth = ref(false);
 .pl-item:hover { background: var(--surface-soft); color: var(--ink); }
 .pl-item.on { background: color-mix(in srgb, var(--brand-blue-200) 58%, transparent); color: var(--brand-blue-deep); font-weight: 600; }
 .pl-item .pl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 歌单的快捷键编号：小而未选中时低调，选中时高亮 */
+.pl-item .pl-key { flex: none; width: 15px; text-align: center; font-size: 10px; line-height: 15px;
+                   border-radius: 4px; border: 1px solid var(--hairline); color: var(--stone); }
+.pl-item.on .pl-key { border-color: var(--brand-blue); color: var(--brand-blue-deep); }
 .pl-item em { font-style: normal; font-size: 11px; color: var(--stone); font-variant-numeric: tabular-nums; }
 .pl-item.on em { color: var(--brand-blue-deep); }
 .pl-item .pl-tools { display: flex; gap: 2px; opacity: 0; transition: opacity 0.14s; }

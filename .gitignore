@@ -24,7 +24,7 @@ build.log
 build.err.log
 build-base.log
 build-base.err.log
-package-lock.json
+# lockfile 必须入库：CI 与发布构建改用 npm ci，安装结果可复现（原先忽略它，同一份源码在不同时间装出不同依赖）
 __pycache__/
 *.pyc
 *.pyo

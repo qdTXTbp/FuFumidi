@@ -197,9 +197,18 @@ def align_positions(phonemes_per_note: Sequence[PhonemesPerNote], duration_frame
 # ---------------------------------------------------------------- 主流程
 
 def build_linguistic_inputs(singer: DsSinger, tokens: Sequence[int],
-                            word_div: Sequence[int], word_dur: Sequence[int]
+                            word_div: Sequence[int], word_dur: Sequence[int],
+                            languages: Optional[Sequence[int]] = None
                             ) -> Dict[str, object]:
-    """组装 `dsdur` linguistic 的输入（:394-426）。"""
+    """组装 `dsdur` linguistic 的输入（:394-426）。
+
+    ★ 多语声库（`use_lang_id: true`，如 Ria）的 linguistic 签名里多一个
+      `languages` 输入，形状与 `tokens` 一致（`[1, n_tokens]`）：
+      每个音素的语言 id 取**符号前缀**（`zh/aa` → 3），无前缀的 AP/CL/SP →
+      0（`GetValueOrDefault(PhonemeLanguage(phoneme), 0)`，:421）。
+      `Onnx.VerifyInputNames` 是**双向严格**的 —— 少给会抛「缺少 languages」，
+      多给会抛「多余 languages」，所以这里必须按 `use_lang_id` 精确开关。
+    """
     import numpy as np
     feeds: Dict[str, object] = {
         'tokens': np.asarray([list(tokens)], dtype=np.int64),
@@ -207,8 +216,12 @@ def build_linguistic_inputs(singer: DsSinger, tokens: Sequence[int],
         'word_dur': np.asarray([list(word_dur)], dtype=np.int64),
     }
     if singer.dur.use_lang_id:
-        raise RenderError('use_lang_id=true 的 linguistic 还需要 languages 输入，'
-                          '当前未实现（该声库 use_lang_id=false）')
+        if languages is None or len(languages) != len(tokens):
+            raise RenderError(
+                '多语声库（use_lang_id=true）需要与音素等长的 languages：'
+                '期望 %d 个，实际 %s' % (len(tokens),
+                                    '未提供' if languages is None else len(languages)))
+        feeds['languages'] = np.asarray([list(languages)], dtype=np.int64)
     return feeds
 
 
@@ -261,10 +274,13 @@ def process_part(singer: DsSinger, phrase_notes: Sequence[Sequence],
 
     # ---- linguistic: :394-443
     tokens = [tokens_map[p.symbol] for n in pp for p in n.phonemes]  # :396-398
+    # ★ 多语声库的语言 id（与 tokens **同序等长**）：取符号的语言前缀，查 dsdur 的语言表
+    languages = [lang_id_of(p.symbol, singer.language_ids)
+                 for n in pp for p in n.phonemes]                 # :421
     word_div = [len(n.phonemes) for n in pp[:-1]]                    # :399-401 Take(N-1)
     word_dur = [frames_between_ticks(axis, a.position, b.position, frame_ms)
                 for a, b in zip(pp, pp[1:])]                         # :403-405
-    feeds = build_linguistic_inputs(singer, tokens, word_div, word_dur)
+    feeds = build_linguistic_inputs(singer, tokens, word_div, word_dur, languages)
     enc_out, x_masks = run_session(singer.model('linguistic'), feeds, providers,
                                    'dsdur linguistic')
 

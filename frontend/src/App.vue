@@ -12,10 +12,22 @@ import CommandPalette from './components/CommandPalette.vue';
 import GuideOverlay from './components/GuideOverlay.vue';
 import ChangeLogOverlay from './components/ChangeLogOverlay.vue';
 import { ref, computed, reactive } from 'vue';
+
+/* 全局 UI 缩放（M9b）：界面全是 px 布局，用 CSS zoom 整体缩放最省事、也最一致
+   （改 font-size 对 px 尺寸无效；逐个组件换 rem 是另一个量级的改造）。
+   zoom 由 Chromium 实现，画布的 getBoundingClientRect 会跟着缩放，重绘逻辑不用改。 */
+const ws = useWorkspace();
+watch(() => ws.layout.scale, (v) => {
+  const s = Math.max(0.9, Math.min(1.3, Number(v) || 1));
+  document.documentElement.style.zoom = String(s);
+  try { document.documentElement.setAttribute('data-ui-scale', String(s)); } catch (e) {}
+}, { immediate: true });
 import { useAppStore, VIEWS, viewParentOf } from './stores/app';
+import { useWorkspace } from './stores/workspace';
 import { usePlaylistStore } from './stores/playlist';
 import { useSettingsStore } from './stores/settings';
 import { setLang, t, browserLang } from './core/i18n.js';
+import { applyDisplayPrefs as applyDisplayPrefsShared, loadDisplayPrefs } from './core/display.js';
 import { getAppVersion, cmpVersion, getUpdateChannel } from './core/version.js';
 import { getBuiltinChangeLogs, fetchRemoteChangeLog } from './core/changelog.js';
 import { applyTheme, loadTheme } from './core/theme.js';
@@ -90,12 +102,9 @@ const toggleMetro = () => app.toggleMetro();
 
 const bridge = window.fuBridge;
 
-// 字号 / 密度即时应用
-function applyDisplayPrefs(s) {
-  const fsMap = { standard: '', large: '15px', xlarge: '17px' };
-  document.body.style.fontSize = fsMap[s.font_size === 'large' || s.font_size === 'xlarge' ? s.font_size : 'standard'] || '';
-  document.body.dataset.density = s.density === 'compact' ? 'compact' : 'comfortable';
-}
+/* 字号 / 密度 / 全局缩放：取值域与落点都在 core/display.js（设置面板用的是同一份），
+   这里只负责"启动时先按 localStorage 应用一次"（防闪烁）。 */
+function applyDisplayPrefs(s) { applyDisplayPrefsShared(s); }
 
 // 启动初始化：主题（防闪烁）→ 语言/字号/密度（settings 兜底）→ 完整性检验 → 新手引导
 async function initGlobal() {
@@ -129,7 +138,13 @@ async function initGlobal() {
     density = localStorage.getItem('fufumidi_density');
   } catch (e) { lang = (s && s.lang) || 'zh'; }
   setLang(lang);
-  applyDisplayPrefs({ font_size: font || s.font_size, density: density || s.density });
+  /* 三件一起应用：localStorage 优先、settings 兜底（缩放同理，见 core/display.js） */
+  const dp = loadDisplayPrefs();
+  applyDisplayPrefs({
+    font_size: font || s.font_size || dp.font_size,
+    density: density || s.density || dp.density,
+    ui_scale: dp.ui_scale || s.ui_scale,
+  });
 
   // 3) 完整性检验（后台静默，由设置面板警告条展示 + 一键修复）
   if (bridge && bridge.checkIntegrity) {
@@ -299,6 +314,9 @@ function onKey(e) {
   }
   // 忽略输入框内的快捷键
   if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  // 系统级全局热键触发时，主进程会顺手发一个同名的合成按键事件；
+  // 这里放行，避免同一次按键被处理两遍（播放/暂停、上一首/下一首会跳两次）。
+  if (e.__fromGlobalHotkey) return;
   if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
   else if (e.key === 'ArrowLeft') seekRatio(Math.max(0, state.progress - 0.02));
   else if (e.key === 'ArrowRight') seekRatio(Math.min(1, state.progress + 0.02));
@@ -306,12 +324,76 @@ function onKey(e) {
   else if (e.key === 'm' || e.key === 'M') toggleMetro();
   else if (e.key === '=' || e.key === '+') setTempo(state.tempo + 0.05);
   else if (e.key === '-' || e.key === '_') setTempo(state.tempo - 0.05);
+  /* ---- 后台/前台通用的播放控制（不依赖底部播放栏，任何页面都能用）---- */
+  else if (e.key === 'N' || e.key === 'n') { e.preventDefault(); void playNeighbor(1); }
+  else if (e.key === 'P' || e.key === 'p') { e.preventDefault(); void playNeighbor(-1); }
+  else if (e.key === 'o' || e.key === 'O') { e.preventDefault(); app.cyclePlayMode(); }
+  /* ---- 歌单快捷键：数字 1..9 切到第 N 个歌单（侧栏里标了编号）---- */
+  else if (/^[1-9]$/.test(e.key)) {
+    const pl = playlistStore.playlists[parseInt(e.key, 10) - 1];
+    if (pl) {
+      e.preventDefault();
+      playlistStore.select(pl.id);
+      // 切歌单要看得见：顺手落到曲库页（虚拟视图除外，它本来就属于曲库）
+      app.setView('music');
+    }
+  }
+}
+
+/** 上一首 / 下一首：走 store 的邻居选择（已按播放模式处理随机/单曲/列表循环） */
+async function playNeighbor(dir) {
+  const id = app.pickNeighborId(dir);
+  if (!id) return;
+  await app.playSongById(id);
+}
+
+/* ---------------- 操作系统级全局热键（用户自己录制，默认不注册） ----------------
+   主进程 globalShortcut 触发 → 这里执行动作；同时补发一个带标记的合成按键，
+   让所有页面的既有 onKey 监听（视觉反馈等）保持一致，但被上面的 __fromGlobalHotkey 拦一次。 */
+let _hotkeyOff = null;
+function setupGlobalHotkeys() {
+  const b = window.fuBridge;
+  if (!b || typeof b.onHotkeyAction !== 'function') return;
+  _hotkeyOff = b.onHotkeyAction((act) => {
+    try {
+      if (act === 'toggle') { togglePlay(); synthesizeKey(' '); }
+      else if (act === 'next') { void playNeighbor(1); synthesizeKey('n'); }
+      else if (act === 'prev') { void playNeighbor(-1); synthesizeKey('p'); }
+      else if (act === 'cycleMode') { state.cyclePlayMode(); synthesizeKey('o'); }
+      else if (act === 'plPrev') stepPlaylist(-1);
+      else if (act === 'plNext') stepPlaylist(1);
+    } catch (e) { /* 全局热键不该因为某个动作报错就死掉 */ }
+  });
+}
+
+/** 在自建歌单之间走一步（全局热键用）；虚拟视图（全部曲目/收藏…）下从第一个歌单开始 */
+function stepPlaylist(dir) {
+  const list = playlistStore.playlists || [];
+  if (!list.length) return;
+  const cur = list.findIndex((p) => p.id === playlistStore.activePlaylistId);
+  const next = cur < 0
+    ? (dir > 0 ? 0 : list.length - 1)
+    : (cur + dir + list.length) % list.length;
+  playlistStore.select(list[next].id);
+  app.setView('music');
+  app.toast(list[next].name, 'ok');
+}
+
+function synthesizeKey(k) {
+  try {
+    const ev = new KeyboardEvent('keydown', { key: k, code: k === ' ' ? 'Space' : 'Key' + k.toUpperCase(), bubbles: true });
+    ev.__fromGlobalHotkey = true;
+    window.dispatchEvent(ev);
+  } catch (e) {}
 }
 
 function onBeforeUnload() {
   // 尽力冲刷 SQLite 写队列；主进程退出前还有宽限期兜底
   playlistStore.flushDb();
 }
+
+onMounted(() => setupGlobalHotkeys());
+onBeforeUnmount(() => { if (_hotkeyOff) { try { _hotkeyOff(); } catch (e) {} _hotkeyOff = null; } });
 
 /* ---------------- GPU 安装常驻通知条 ---------------- */
 let offGpuProg = null;
@@ -340,6 +422,12 @@ watch(() => state.gpuInstall.done, (v) => {
   clearTimeout(gpuBarTimer);
   gpuBarTimer = setTimeout(() => { state.gpuInstall.done = false; }, 10000);
 });
+/* 富提示里的动作按钮：点完就收起提示（动作本身可能切视图/开设置） */
+function runToastAction() {
+  const a = state.toastMsg && state.toastMsg.action;
+  state.toastDismiss();
+  if (a && typeof a.run === 'function') { try { a.run(); } catch (e) { /* 动作失败不影响提示收起 */ } }
+}
 function openGpuSettings() {
   state.ui.settingsTab = 'gpu';
   state.ui.settingsOpen = true;
@@ -466,11 +554,21 @@ onBeforeUnmount(() => {
     <Transition name="pb">
       <PlayerBar v-if="state.playerbarOpen" />
     </Transition>
-    <Transition name="fade">
-      <div class="toast-wrap" v-if="state.toastMsg && state.toastMsg.msg" role="status" aria-live="polite">
-        <div class="toast" :class="state.toastMsg.type">{{ state.toastMsg.msg }}</div>
+    <!-- 全应用唯一的提示出口（P1-4）：普通提示是胶囊，带「下一步/详情/动作」时是卡片 -->
+    <div class="toast-wrap" v-if="state.toastMsg && state.toastMsg.msg" role="status" aria-live="polite">
+      <div class="toast" :class="[state.toastMsg.type, { rich: state.toastMsg.rich }]">
+        <div class="toast-body">
+          <div class="toast-line">
+            <span>{{ state.toastMsg.msg }}</span>
+            <button v-if="state.toastMsg.action" class="toast-act" @click="runToastAction">{{ state.toastMsg.action.label }}</button>
+            <button v-if="state.toastMsg.detail" class="toast-more" @click="state.toastExpand()">{{ state.toastMsg.expanded ? t('收起') : t('详情') }}</button>
+            <button v-if="state.toastMsg.rich" class="toast-x" :title="t('关闭')" @click="state.toastDismiss()">×</button>
+          </div>
+          <div v-if="state.toastMsg.hint" class="toast-hint">{{ state.toastMsg.hint }}</div>
+          <pre v-if="state.toastMsg.expanded && state.toastMsg.detail" class="toast-detail">{{ state.toastMsg.detail }}</pre>
+        </div>
       </div>
-    </Transition>
+    </div>
 
     <!-- GPU 安装常驻通知条：任意页面可见，点击跳转设置 → GPU -->
     <Transition name="ov">

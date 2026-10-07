@@ -1,0 +1,29 @@
+# https://editorconfig.org —— 让编辑器与 CI 对同一份文件得出同一套空白/编码结论。
+# 只声明仓库里已经成立的事实；改这一节等于改全仓库的约定，先读 docs/FOUNDATION.md，
+# 量法与理由见 docs/HYGIENE.md 的「行尾与编码」一节。
+root = true
+
+[*]
+charset = utf-8
+# 仓库里存的是 LF；工作区看到 CRLF 是因为本机 system 级 core.autocrlf=true。
+# 提交时交给 git 归一化，不要靠编辑器各写各的。
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.py]
+indent_size = 4
+
+[*.{rs,toml}]
+indent_size = 4
+
+# PowerShell：文件必须是 UTF-8 with BOM，否则 Windows PowerShell 5.1 按 ANSI 解码，
+# 中文注释变乱码并直接报语法错（本机实测，见根 AGENTS.md 与 _attic/README.md）。
+[*.{ps1,psm1,psd1}]
+charset = utf-8-bom
+indent_size = 4
+
+[Makefile]
+indent_style = tab

@@ -117,11 +117,23 @@ export function themePreviewPal(th, mode) {
 }
 
 // 应用主题：把调色板写成 CSS 变量（含原令牌里的强调色族）——纯应用，不做持久化
+/* 跟随系统（M9d）：mode 增加 'auto' —— 读系统的浅/深偏好。
+   ★ 有了它，"白天浅色、晚上深色"不用用户每天手动切；系统偏好变化时也会自动跟上。 */
+export function systemPrefersDark() {
+  try { return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches); } catch (e) { return true; }
+}
+/** 把存储的模式解析成实际生效的 'light' | 'dark' */
+export function resolveMode(mode) {
+  if (mode === 'auto') return systemPrefersDark() ? 'dark' : 'light';
+  return mode === 'dark' ? 'dark' : 'light';
+}
+
 export function applyTheme(name, accent, mode) {
   if (typeof document === 'undefined') return;
   const R = document.documentElement.style;
-  const lightMode = (mode || 'light') === 'light';
-  const pal = paletteFor(name, accent, mode);
+  const eff = resolveMode(mode);                 // 'auto' 在这里落地
+  const lightMode = eff === 'light';
+  const pal = paletteFor(name, accent, eff);
   // 深底主题：hc / studio 固定深色，其余由明暗模式决定
   const dark = name === 'hc' || name === 'studio' || (!lightMode && name !== 'light');
 
@@ -220,6 +232,23 @@ export function saveTheme(name, accent, mode) {
   }
 }
 
+/* 系统浅/深偏好变化 → 若用户选的是「跟随系统」，立刻重新应用（M9d）。
+   监听装在模块作用域：任何 import 了 theme.js 的入口都自动获得这个能力，不用各自记得挂。 */
+try {
+  if (typeof window !== 'undefined' && window.matchMedia) {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onPref = () => {
+      try {
+        if (loadMode() !== 'auto') return;
+        const lt = loadTheme();
+        applyTheme(lt.name, lt.accent, 'auto');
+      } catch (e) {}
+    };
+    if (mq.addEventListener) mq.addEventListener('change', onPref);
+    else if (mq.addListener) mq.addListener(onPref);
+  }
+} catch (e) {}
+
 // 读取当前主题（localStorage 优先，作为启动防闪烁的第一来源）
 export function loadTheme() {
   let name = 'fufu', accent = '', mode = 'light';
@@ -227,13 +256,22 @@ export function loadTheme() {
   return { name, accent, mode };
 }
 
-// 读取界面明暗模式（默认浅色）
+/* 读取界面明暗模式（默认浅色）：'light' | 'dark' | 'auto'
+   ★ 这里曾经只认 'dark'，别的值一律返回 'light' —— 于是「跟随系统」存进去以后：
+     ① 下面的系统偏好监听器（onPref）拿到的永远是 'light'，系统切深色时直接 return，
+        设置页里那个"系统变了会自动跟上"的承诺根本没生效；
+     ② 设置面板打开时 form.mode 被写成 'light'，用户选的「跟随系统」看着就变成了「浅色」，
+        再保存一次就真的被覆盖掉。
+     现在原样返回 'auto'，由 resolveMode() 在应用主题时落地成实际明暗。 */
 export function loadMode() {
-  try { return localStorage.getItem(LS_MODE) === 'dark' ? 'dark' : 'light'; } catch (e) { return 'light'; }
+  try {
+    const m = localStorage.getItem(LS_MODE);
+    return (m === 'dark' || m === 'auto') ? m : 'light';
+  } catch (e) { return 'light'; }
 }
 // 切换明暗模式：应用 + 持久化
 export function setMode(mode) {
-  const m = mode === 'dark' ? 'dark' : 'light';
+  const m = mode === 'dark' ? 'dark' : (mode === 'auto' ? 'auto' : 'light');
   try { localStorage.setItem(LS_MODE, m); } catch (e) {}
   const { name, accent } = loadTheme();
   applyTheme(name, accent, m);

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue';
 import { useAppStore } from '../stores/app';
+import { useVizBgStore } from '../stores/vizbg';
 import { getSynth, ensureAudio, getPlayer } from '../audio.js';
 
 const app = useAppStore();
@@ -14,6 +15,24 @@ const wfZoom = ref(1);
 const colorScheme = ref(0);
 const immersive = ref(false);
 
+/* ---------------- 音符瀑布的背景 ----------------
+   ★ 状态住在 stores/vizbg.ts：**导出视频页读的是同一份**（同一 localStorage 键、
+     同一绘制函数 core/viz.js 的 paintVizBg）。以前两边各存一份，用户在瀑布流里挑的
+     图片、透明档、模糊/暗化，导出的成片一概不认 —— 看到的和导出的不是一幅画。
+    theme       主题渐变
+    solid       纯色（深色底更适合投影/OBS）
+    image       自定义图片（可模糊 + 暗化）—— 参照 SeeMusic / Synthesia 的背景图玩法
+    transparent 真·透明（导出的 PNG/视频直接当叠加层，不再是一块白底）—— 默认档 */
+const vizBg = useVizBgStore();
+const bg = vizBg.bg;                // reactive，模板与绘制都直接读它
+const bgMore = ref(false);          // 设置条是否展开：纯 UI 状态，不进 store
+// 模板里的 @input 是「先改 bg 再存」两步（颜色/模糊/暗化都直接改 reactive 字段），
+// 所以保留一个薄壳；读写都在 store 里，导出页读到的是同一份。
+function saveBg() { vizBg.save(); }
+function setBgMode(m) { vizBg.setMode(m); }
+function pickBgImage() { void vizBg.pickImage(); }
+// 启动时把上次选过的图读回来（路径有效才用；图没了就退回主题，不留假图片档）
+onMounted(() => { void vizBg.init(); });
 // 沉浸模式下仪表盘那三张卡片没有意义，直接按瀑布流布局铺满
 const isWaterfall = computed(() => mode.value === 'waterfall' || immersive.value);
 
@@ -145,6 +164,8 @@ function drawRoll(ctx2d, c, u, syn, song, player) {
     lyricAt: '',
     activeNotes: syn && syn.activeNow ? syn.activeNow() : [],
     energy: rollState.energy || 0,
+    // 背景只作用于音符瀑布（频谱/示波器/和弦仍是主题底）
+    bg: vizBg.drawOpts(),
   });
 }
 
@@ -294,6 +315,11 @@ onBeforeUnmount(() => {
           <button class="chip-btn" :class="{ 'active': mode === 'dash' }" data-guide="viz-modes" @click="mode = 'dash'">{{ t('仪表盘') }}</button>
           <button class="chip-btn" :class="{ 'active': mode === 'waterfall' }" data-guide="viz-waterfall" @click="mode = 'waterfall'">{{ t('瀑布流') }}</button>
           <button class="chip-btn" @click="colorScheme = (colorScheme + 1) % 4" :title="t('切换瀑布流配色')">{{ t('配色') }}</button>
+          <!-- 背景：主题 / 纯色 / 图片 / 透明（叠加层）。SeeMusic 那类软件把"背景图 + 模糊"
+               当成主要观感开关，这里补上；透明档配合导出即可当 OBS 叠加层。 -->
+          <button class="chip-btn" :class="{ active: bgMore }" :title="t('音符瀑布背景（主题/纯色/图片/透明）')" @click="bgMore = !bgMore">
+            <Icon name="eye" :size="12" />{{ t('背景') }}
+          </button>
           <span style="flex:1"></span>
           <button class="chip-btn" @click="wfZoom = Math.max(0.4, +(wfZoom - 0.1).toFixed(2))">−</button>
           <span class="vc-zoom">{{ Math.round(wfZoom * 100) }}%</span>
@@ -303,8 +329,28 @@ onBeforeUnmount(() => {
           </button>
           <span class="muted small" style="margin-left:10px">{{ t('Synthesia · 播放同步') }}</span>
         </div>
-        <div class="vc-body">
-          <canvas id="vizRoll"></canvas>
+        <!-- ★ 沉浸模式不显示这条：沉浸态的 .vc-head 是绝对定位浮层，设置条留在文档流里会与它重叠，
+             而且浅色控件压在满屏画面上很突兀。退出沉浸后设置条原样回来。 -->
+        <div v-if="bgMore && !immersive" class="viz-bg-bar">
+          <span class="muted small">{{ t('音符瀑布背景') }}</span>
+          <button class="chip-btn" :class="{ active: bg.mode === 'theme' }" @click="setBgMode('theme')">{{ t('主题') }}</button>
+          <button class="chip-btn" :class="{ active: bg.mode === 'solid' }" @click="setBgMode('solid')">{{ t('纯色') }}</button>
+          <input v-if="bg.mode === 'solid'" type="color" class="viz-bg-color" :value="bg.color" @input="bg.color = $event.target.value; saveBg()" />
+          <button class="chip-btn" :class="{ active: bg.mode === 'image' }" @click="setBgMode('image')">{{ t('图片') }}</button>
+          <button class="chip-btn" :title="t('选择背景图片') " @click="pickBgImage"><Icon name="folder" :size="12" />{{ t('选择…') }}</button>
+          <button class="chip-btn" :class="{ active: bg.mode === 'transparent' }" :title="t('真·透明：导出的画面可当叠加层')" @click="setBgMode('transparent')">{{ t('透明') }}</button>
+          <template v-if="bg.mode === 'image' || bg.mode === 'theme'">
+            <span class="muted small">{{ t('模糊') }}</span>
+            <input type="range" min="0" max="40" step="1" :value="bg.blur" @input="bg.blur = +$event.target.value; saveBg()" style="width:88px" />
+            <span class="muted small">{{ t('暗化') }}</span>
+            <input type="range" min="0" max="80" step="5" :value="Math.round(bg.dim * 100)" @input="bg.dim = (+$event.target.value) / 100; saveBg()" style="width:88px" />
+          </template>
+        </div>
+        <div class="vc-body" :class="{ 'bd-canvas': bg.mode === 'transparent' }">
+          <!-- ★ 画布自己有一层 CSS 底色（.vc-body canvas 的 background）—— 透明档只 clearRect
+               是没用的，元素底色照样透不出来。所以透明档必须把画布元素的底色也去掉，
+               并由容器铺 --canvas（否则透出的是卡片那层半透明白，和沉浸态不一致）。 -->
+          <canvas id="vizRoll" :class="{ 'cv-transparent': bg.mode === 'transparent' }"></canvas>
           <div v-if="immersive" class="viz-hud" :class="{ 'hud-hidden': !hudOn }">
             <button class="hud-btn" :title="app.playing ? t('暂停') : t('播放')" @click="app.togglePlay()">
               <Icon :name="app.playing ? 'pause' : 'play'" :size="18" />
@@ -355,16 +401,26 @@ onBeforeUnmount(() => {
 .vc-head .vc-zoom { font-size: 11px; min-width: 44px; text-align: center; font-weight: 500; }
 .vc-body canvas { width: 100%; height: 100%; display: block; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--canvas); }
 .chip-btn.active { background: var(--accent); color: #fff; }
+/* 背景设置条：低调的一行，不抢画面 */
+.viz-bg-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 12px 8px; font-size: 12px;
+              border-bottom: 1px solid var(--hairline); margin-bottom: 2px; }
+.viz-bg-bar input[type=range] { accent-color: var(--accent); }
+.viz-bg-color { width: 28px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: transparent; }
 .viz-page.waterfall .viz-grid { display: none; }
 .viz-page.waterfall .viz-hero { flex: 1; }
 /* 全屏瀑布流：不写死 vh 魔法数，直接吃掉剩余高度（窗口变化时自适应） */
 .viz-page.waterfall .viz-hero .vc-body { flex: 1; height: auto; min-height: 300px; }
 
 /* ---- 沉浸模式：去掉卡片壳，画面铺满主区，控件浮在画面上并自动淡出 ---- */
-.viz-page.immersive { padding: 0; max-width: none; }
+/* ★ 沉浸态的底色必须与非沉浸的透明档**完全一致**（用户实测：两边背景不一样）。
+   统一用 --canvas：非沉浸那边由 .vc-body.bd-canvas 铺同色，两边看起来才是同一个背景。
+   HUD 的可读性靠它自己的深色渐变 + 深色 chip 解决，不靠整块改底色。 */
+.viz-page.immersive { padding: 0; max-width: none; background: var(--canvas); }
 .viz-page.immersive .viz-hero {
   border: 0; border-radius: 0; background: transparent; box-shadow: none; padding: 0;
 }
+.vc-body canvas.cv-transparent { background: transparent; }
+.vc-body.bd-canvas { background: var(--canvas); }
 .viz-page.immersive .vc-body canvas { border: 0; border-radius: 0; }
 .viz-page.immersive .vc-head {
   position: absolute; top: 0; left: 0; right: 0; z-index: 3;
@@ -374,12 +430,13 @@ onBeforeUnmount(() => {
   transition: opacity .3s ease;
 }
 /* 沉浸态的控件压在画面之上：统一改成白色系，深浅主题下都能读 */
+/* 沉浸态底色可能是浅色（--canvas）：chip 用**深色半透明** + 白字，浅底深底都读得清 */
 .viz-page.immersive .vc-head .chip-btn {
-  background: rgba(255, 255, 255, .16);
-  border-color: rgba(255, 255, 255, .24);
+  background: rgba(0, 0, 0, .45);
+  border-color: rgba(255, 255, 255, .22);
   color: #fff;
 }
-.viz-page.immersive .vc-head .chip-btn:hover { background: rgba(255, 255, 255, .26); }
+.viz-page.immersive .vc-head .chip-btn:hover { background: rgba(0, 0, 0, .62); }
 .viz-page.immersive .vc-head .chip-btn.active { background: #fff; color: #0a0a0a; }
 .viz-page.immersive .vc-head .muted,
 .viz-page.immersive .vc-head .vc-zoom { color: rgba(255, 255, 255, .82); }

@@ -100,7 +100,15 @@ export function encodeMidi(tracks, opts = {}) {
     }
     for (const c of (tr.ccs || [])) {
       if (!c || c.cc == null) continue;
-      push(c.tick || 0, [0xb0 | ch, c.cc & 0x7f, c.cv & 0x7f]);
+      const cch = c.ch != null ? (c.ch & 0x0f) : ch;
+      push(c.tick || 0, [0xb0 | cch, c.cc & 0x7f, c.cv & 0x7f]);
+    }
+    /* ★ 技法动作（§3.7）：Program Change 也要能落在**任意 tick**上，不只是 0。
+       以前只有轨首那一个 `tr.program`（tick 0），中途换奏法要换音色的音源就没办法了。 */
+    for (const p of (tr.pcs || [])) {
+      if (!p || p.program == null) continue;
+      const pch = p.ch != null ? (p.ch & 0x0f) : ch;
+      push(p.tick || 0, [0xc0 | pch, p.program & 0x7f]);
     }
     ev.sort((a, b) => a.tick - b.tick || (((a.bytes[0] & 0xf0) === 0x80 ? -1 : 1) - ((b.bytes[0] & 0xf0) === 0x80 ? -1 : 1)));
     let last = 0;
