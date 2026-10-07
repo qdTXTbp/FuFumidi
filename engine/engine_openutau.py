@@ -181,34 +181,40 @@ def load_singer(vb_dir):
 # ---------------------------------------------------------------- 工程
 
 #: UTAU 渲染必需的表达式表（对齐 `engine_utau.py` 与 OpenUTAU 的 `Ustx.AddDefaultExpressions`）
-_EXPRESSION_SPECS = (
-    # name, abbr, type, min, max, default, flag, options
-    ('volume', 'vol', 'NUMERICAL', 0, 100, 100, None, None),
-    ('velocity', 'vel', 'NUMERICAL', 0, 100, 100, 'V', None),
-    ('shift', 'shft', 'NUMERICAL', 0, 100, 0, None, None),
-    ('color', 'clr', 'OPTIONS', 0, 100, 0, None, ['']),
-    ('dynamics', 'dyn', 'CURVE', -240, 120, 0, None, None),
-    ('attack', 'atk', 'NUMERICAL', 0, 100, 100, None, None),
-    ('decay', 'dec', 'NUMERICAL', 0, 100, 100, None, None),
-)
+def build_project(bpm=120.0, tempo_map=None):
+    """造一个带标准表达式表与时间轴的空工程（对应 C# `Ustx.Create()`）。
 
+    `tempo_map` 是应用侧的多点变速 `[{beat, bpm}]`（拍单位）——给了就整体替换
+    tempos（对应 ustx 的 tempos 列表；beat→tick = beat × 480，与 tempo 无关），
+    `bpm` 标量退化为「首点兜底 / 缺省」。
 
-def build_project(bpm=120.0):
-    """造一个带标准表达式表与时间轴的空工程（对应 C# `Ustx.Create()` 去掉版本相关部分）。"""
-    from singing.ustx import UExpressionDescriptor, UExpressionType, UProject
+    ★ 表达式表**必须用 `format.add_default_expressions` 的全套**（26 个描述符，
+      含 genc/brec/pitd/tenc 等全部 CURVE）——旧实现手写了 7 条子集，导致曲线
+      渲染通路里 genc/brec 因找不到描述符被整条丢弃。
+    """
+    from singing.ustx import UProject, UTempo
+    from singing.ustx.format import add_default_expressions
 
     project = UProject()
-    for name, abbr, typ, mn, mx, dv, flag, options in _EXPRESSION_SPECS:
-        t = getattr(UExpressionType, typ)
-        project.expressions[abbr] = UExpressionDescriptor(
-            name=name, abbr=abbr, type=t, min=mn, max=mx, default_value=dv,
-            flag=flag or '', options=options,
-            is_flag=bool(flag) or t == UExpressionType.OPTIONS)
-    if bpm:
+    add_default_expressions(project)
+    points = []
+    for p in (tempo_map or []):
+        if not isinstance(p, dict):
+            continue
         try:
-            project.tempos[0].bpm = float(bpm)
-        except Exception:                                   # noqa: BLE001
-            pass
+            beat = float(p.get('beat'))
+            tbpm = float(p.get('bpm'))
+        except (TypeError, ValueError):
+            continue
+        if beat < 0 or not (20.0 <= tbpm <= 400.0):
+            continue
+        points.append(UTempo(position=int(round(beat * project.resolution)), bpm=tbpm))
+    if not any(t.position == 0 for t in points):
+        points.insert(0, UTempo(position=0, bpm=float(bpm or 120.0)))
+    try:
+        project.tempos = points
+    except Exception:                                       # noqa: BLE001
+        pass
     project.time_axis.build_segments(project)
     return project
 
@@ -221,6 +227,20 @@ def _num(d, *keys, default=0.0):
             except (TypeError, ValueError):
                 continue
     return default
+
+
+def _clamp(v, lo, hi):
+    """区间钳制（build_part 的颤音/表达式映射用）。
+
+    ★ 别删：except 吞掉 NameError 会把「用了未定义函数」这类真 bug
+      静默降级成默认值——旧版颤音哑火就是这条链路。
+    """
+    return lo if v < lo else (hi if v > hi else v)
+
+
+def _ms_delta_to_ticks(axis, pos_tick, delta_ms):
+    """把**相对**毫秒增量换算成 tick —— 实现在 `TimeAxis.ms_delta_to_ticks`。"""
+    return axis.ms_delta_to_ticks(pos_tick, delta_ms)
 
 
 #: 音名 → 音级（`C4` → 60）
@@ -239,7 +259,7 @@ def note_name_to_midi(name, default=60):
     return 12 * (int(m.group(3)) + 1) + pc
 
 
-def build_part(project, track, notes, tpb=480):
+def build_part(project, track, notes, tpb=480, curves=None):
     """把应用侧的音符 JSON 变成一个 `UVoicePart`。
 
     **同时吃两套字段名**，以便和旧引擎 / 一致性测试互通：
@@ -253,16 +273,63 @@ def build_part(project, track, notes, tpb=480):
     | 音高偏差 | `pitch_cents`（音分） | 同左 |
     | 颤音 | `vibrato: {depth_cent, freq_hz, delay_ms, fade_ms}` | `vibrato` + `vibDepth`… |
 
+    `curves`：应用侧自动化子轨 `[{abbr, points: [{beat, value}]}]`（拍单位）——
+    连续曲线值进渲染的关键通路（此前只有逐音符采样值，画了曲线渲染根本不理）。
+    abbr 映射 `DYN→dyn / GEN→genc / BRE→brec`，坐标 beat×tpb（part.position=0）。
+
+    ★ **单位转换（只 DYN 有）**：前端力度是 0..100（100=全音量），ustx 的 dyn
+      曲线是 **0.1dB** 单位、范围 -240..120（0 = 0dB = 全音量，min 视为静音帧）。
+      映射 `ustx = round(v × 2.4) − 240`。GEN 与 genc 同为 -100..100 直传；
+      BRE 前端 0..100 只覆盖 brec 的正半轴（负半轴 UI 暂未暴露），直传。
+
     ★ UTAU 的 `flags`（`g`/`B`/`b`/`p`…）是**旧引擎自己的旋钮**，OpenUTAU 走的是
       表达式体系；这里**不解析** flags（照搬渲染链路，不做语义映射），需要时走音素化器
       或音高曲线表达。
     """
-    from singing.ustx import (PitchPoint, UCurve, UNote, UPitch, UVibrato, UVoicePart)
+    from singing.ustx import (PitchPoint, UCurve, UNote, UPitch, UPhonemeOverride,
+                              UExpressionType, UVibrato, UVoicePart)
 
     axis = project.time_axis
     part = UVoicePart(track_no=0, position=0)
+
+    # ---- 应用侧曲线 → part.curves（渲染链路 render_phrase 从这里采样）
+    #: 前端 abbr → ustx abbr（值域一致才直传；DYN 在下面单独换算）
+    #: PIT = 轨级音高曲线（音分，相对音符音高的偏差）——与 ustx 的 pitd 完全同义，
+    #: render_phrase 会对渲染音高做 `pitches[i] += pitd.sample(...)` 偏差应用。
+    _ABBR_MAP = {'DYN': 'dyn', 'GEN': 'genc', 'BRE': 'brec', 'PIT': 'pitd'}
+    _got_dyn = False
+    for c in (curves or []):
+        if not isinstance(c, dict):
+            continue
+        abbr = _ABBR_MAP.get(str(c.get('abbr') or '').upper())
+        if not abbr:
+            continue
+        desc = project.expressions.get(abbr)
+        if desc is None or desc.type != UExpressionType.CURVE:
+            continue
+        pts = []
+        for p in (c.get('points') or []):
+            if not isinstance(p, dict):
+                continue
+            beat = _num(p, 'beat', default=-1.0)
+            value = _num(p, 'value', default=None)
+            if beat is None or beat < 0 or value is None:
+                continue
+            if abbr == 'dyn':
+                value = round(value * 2.4) - 240          # 0..100 → -240..0（0.1dB）
+            pts.append((int(round(beat * tpb)), value))
+        if not pts:
+            continue
+        pts.sort()
+        part.curves.append(UCurve(xs=[p[0] for p in pts], ys=[p[1] for p in pts],
+                                  abbr=abbr, descriptor=desc))
+        if abbr == 'dyn':
+            _got_dyn = True
+
+    # 占位 dyn 曲线（全 0 = 0dB = 全音量）：只在没有真实 dyn 曲线时挂，
+    # 否则会把用户画的力度曲线顶掉。
     dyn_desc = project.expressions.get('dyn')
-    if dyn_desc is not None:
+    if dyn_desc is not None and not _got_dyn:
         part.curves.append(UCurve(xs=[0], ys=[0], abbr='dyn', descriptor=dyn_desc))
 
     out = []
@@ -287,12 +354,16 @@ def build_part(project, track, notes, tpb=480):
             continue
 
         if 'start' in n or 'startMs' in n:
+            # ms 起点走时间轴换算（多点变速下 axis 分段换算才是对的）
             pos_ms = _num(n, 'start', 'startMs', default=cursor_ms)
+            position = int(round(axis.ms_pos_to_tick_pos(pos_ms)))
         elif 'startBeat' in n:
-            pos_ms = _num(n, 'startBeat', default=0.0) * (60000.0 / max(1.0, project.tempos[0].bpm))
+            # ★ 拍→tick 直换（×tpb），**与 tempo 无关**——旧实现绕道
+            #   `startBeat × 60000/bpm → ms → tick`，单点时数值巧合相等，
+            #   多点变速下所有音符都会错位（diffsinger/pipeline.py 有同样的前车之鉴）。
+            position = int(round(_num(n, 'startBeat', default=0.0) * tpb))
         else:
-            pos_ms = cursor_ms
-        position = int(round(axis.ms_pos_to_tick_pos(pos_ms)))
+            position = int(round(axis.ms_pos_to_tick_pos(cursor_ms)))
         cursor_ms = axis.tick_pos_to_ms_pos(position + duration)
 
         # ---- 音高曲线：两种来源合并（cents 偏移 + 曲线点）
@@ -319,24 +390,73 @@ def build_part(project, track, notes, tpb=480):
             pts = [(0, 0)]
         pts.sort()
 
-        # ---- 颤音
+        # ---- 颤音：完整 8 参（新字段优先，旧 4 参 vibFade 兜底 in=out）。
+        #      ★ 旧实现给 UVibrato 传了不存在的 length_in/length_out 参数，
+        #        dataclass 直接抛 TypeError 被 except 吞掉 → 颤音从未真正构造成功
+        #        （一直是默认 length=0 = 关）。这里一并修掉。
         try:
-            vib = UVibrato(length=0, length_in=0, length_out=0, shift=0.0, drift=0.0)
             v = n.get('vibrato')
             if isinstance(v, dict) and (_num(v, 'depth_cent', 'depthCent', default=0.0) or 0):
-                vib = UVibrato(length=1, length_in=0, length_out=0,
-                               shift=_num(v, 'depth_cent', 'depthCent', default=40.0),
-                               drift=_num(v, 'freq_hz', 'freqHz', default=5.5) * 0.0)
+                # 旧 renderPayload 格式：{depth_cent, freq_hz, delay_ms, fade_ms}
+                # delay/fade 是**毫秒** → 按音符时长换算成 in/out 百分比
+                note_ms = axis.tick_pos_to_ms_pos(position + duration) - axis.tick_pos_to_ms_pos(position)
+                in_pct = _clamp(_num(v, 'delay_ms', default=0.0) / note_ms * 100.0, 0, 100) if note_ms > 0 else 0.0
+                out_pct = _clamp(_num(v, 'fade_ms', default=0.0) / note_ms * 100.0, 0, 100) if note_ms > 0 else 0.0
+                vib = UVibrato(length=100,
+                               period=_clamp(1000.0 / _num(v, 'freq_hz', 'freqHz', default=5.5)
+                                             if _num(v, 'freq_hz', 'freqHz', default=0) > 0 else 175.0, 5, 500),
+                               depth=_clamp(_num(v, 'depth_cent', 'depthCent', default=40.0), 5, 200),
+                               vib_in=in_pct, vib_out=out_pct)
             elif n.get('vibrato'):
-                vib = UVibrato(length=1, length_in=0, length_out=0,
-                               shift=_num(n, 'vibDepth', 'vibShift', default=40.0), drift=0.0)
-        except Exception:                                   # noqa: BLE001
+                freq = _num(n, 'vibFreq', default=5.5)
+                fade = _clamp(_num(n, 'vibFade', default=0.0), 0, 100)
+                vib = UVibrato(
+                    length=100,
+                    period=_clamp(1000.0 / freq if freq > 0 else 175.0, 5, 500),
+                    depth=_clamp(_num(n, 'vibDepth', default=35.0), 5, 200),
+                    vib_in=_clamp(_num(n, 'vibIn', default=fade), 0, 100),
+                    vib_out=_clamp(_num(n, 'vibOut', default=fade), 0, 100),
+                    shift=_clamp(_num(n, 'vibShift', default=0.0), -100, 100),
+                    drift=_clamp(_num(n, 'vibDrift', default=0.0), -100, 100),
+                    vol_link=_clamp(_num(n, 'vibVolLink', default=0.0), -100, 100))
+            else:
+                vib = UVibrato(length=0)
+        except Exception as e:                              # noqa: BLE001
+            # 兜底不该静默：颤音哑火这种 bug 靠它才暴露（见上方注释）
+            warn('颤音构造失败，退回默认（关）：%s' % e)
             vib = UVibrato()
 
-        out.append(UNote(position=position, duration=duration, tone=tone,
-                         lyric=str(n.get('lyric') or ''),
-                         pitch=UPitch(data=[PitchPoint(x=x, y=y) for x, y in pts]),
-                         vibrato=vib))
+        unote = UNote(position=position, duration=duration, tone=tone,
+                      lyric=str(n.get('lyric') or ''),
+                      pitch=UPitch(data=[PitchPoint(x=x, y=y) for x, y in pts]),
+                      vibrato=vib)
+        # ---- 音素覆写（音素级时间微调）：前端单位 ms → 引擎 offset 走 tick
+        #      （phoneme.position += override.offset，见 part_validate.py:291）、
+        #      preutterDelta/overlapDelta 直传（phoneme.preutter 是 ms 域）。
+        for o in (n.get('phonemeOverrides') or []):
+            if not isinstance(o, dict):
+                continue
+            idx = int(_num(o, 'index', default=-1))
+            if idx < 0:
+                continue
+            ov = UPhonemeOverride(index=idx)
+            off_ms = _num(o, 'offset', default=None)
+            if off_ms is not None:
+                ov.offset = _ms_delta_to_ticks(axis, position, off_ms)
+            pd = _num(o, 'preutterDelta', default=None)
+            if pd is not None:
+                ov.preutter_delta = float(pd)
+            od = _num(o, 'overlapDelta', default=None)
+            if od is not None:
+                ov.overlap_delta = float(od)
+            if ov.offset is None and ov.preutter_delta is None and ov.overlap_delta is None:
+                continue          # 只有 index 没有任何值 → 无意义，丢弃
+            unote.phoneme_overrides.append(ov)
+        # 原始 JSON 挂运行时属性：音素化之后 `note_expressions.apply_note_expressions`
+        # 从这里取 per-note 的 velocity/volume/gender/breath 写成音素级表达式
+        # （UNote 模型没有这些字段，且表达式要按音素 index 匹配，只能后挂）。
+        unote._app_note = n
+        out.append(unote)
     part.notes.extend(out)
     return part
 
@@ -475,8 +595,14 @@ def _assemble(results, phrases):
 
 
 def render_track(vb_dir, notes, out_path, sample_note='C4', phonemizer='auto',
-                 tpb=480, bpm=120.0, cache_dir=None):
-    """渲染整条音轨到 `out_path`（WAV）。返回结果 dict。"""
+                 tpb=480, bpm=120.0, cache_dir=None, tempo_map=None, curves=None):
+    """渲染整条音轨到 `out_path`（WAV）。返回结果 dict。
+
+    `tempo_map`：多点变速 `[{beat, bpm}]`（拍单位，应用侧 store.tempoMap 同构）；
+    给了就覆盖单点 bpm —— 音符的 startBeat→tick 与 tempo 无关，tick→ms 由
+    TimeAxis 沿段换算。
+    `curves`：自动化子轨 `[{abbr, points:[{beat,value}]}]`（见 build_part）。
+    """
     import asyncio
 
     from singing.openutau import Progress
@@ -490,7 +616,7 @@ def render_track(vb_dir, notes, out_path, sample_note='C4', phonemizer='auto',
     emit_progress(2, '加载声库…')
     singer = load_singer(vb_dir)
 
-    project = build_project(bpm)
+    project = build_project(bpm, tempo_map)
     track = project.tracks[0]
     track.renderer_settings.renderer = 'CLASSIC'
     track.renderer_settings.renderer_obj = ClassicRenderer()
@@ -498,7 +624,7 @@ def render_track(vb_dir, notes, out_path, sample_note='C4', phonemizer='auto',
     track.renderer_settings.wavtool = 'convergence'
     track.singer_obj = singer
 
-    part = build_part(project, track, notes, tpb)
+    part = build_part(project, track, notes, tpb, curves=curves)
     if not part.notes:
         raise ValueError('没有可渲染的音符')
     project.parts.append(part)
@@ -507,6 +633,13 @@ def render_track(vb_dir, notes, out_path, sample_note='C4', phonemizer='auto',
     ph_tag, ph_count, warns = run_phonemizer(project, track, part, singer, phonemizer)
     if not ph_count:
         raise ValueError('音素化后没有任何音素（歌词是否为空？）')
+
+    # per-note 参数 → 音素级表达式（vel/vol/genc/brec）—— 必须在音素化后
+    # （表达式按音素 index 匹配），RenderPhrase.from_part 之前。
+    from singing.openutau.note_expressions import apply_note_expressions
+    n_exp = apply_note_expressions(project, track, part)
+    if n_exp:
+        emit_progress(10, '应用音符参数（%d 条表达式）' % n_exp)
 
     emit_progress(12, '构建乐句…')
     phrases = RenderPhrase.from_part(project, track, part)
@@ -562,28 +695,52 @@ def render_track(vb_dir, notes, out_path, sample_note='C4', phonemizer='auto',
 # ---------------------------------------------------------------- CLI
 
 def _load_notes(raw):
-    """`--notes` 支持 `@文件`（主进程默认，走临时文件避开 Windows 32K 命令行上限）或 JSON 字面量。"""
+    """`--notes` 支持 `@文件`（主进程默认，走临时文件避开 Windows 32K 命令行上限）或 JSON 字面量。
+
+    dict 形态 `{"notes": [...], "curves": [...]}` 会把 curves 一并取出
+    （应用侧自动化子轨，连续曲线进渲染用），返回 `(notes, curves)`。
+    """
     if not raw:
-        return []
+        return [], None
     if raw.startswith('@'):
         with open(raw[1:], 'r', encoding='utf-8') as f:
             data = json.load(f)
     else:
         data = json.loads(raw)
     if isinstance(data, dict):
-        data = data.get('notes') or []
+        curves = data.get('curves') if isinstance(data.get('curves'), list) else None
+        notes = data.get('notes') or []
+        return (notes if isinstance(notes, list) else []), curves
+    return (data if isinstance(data, list) else []), None
+
+
+def _load_json_list(raw):
+    """`--tempo-map` 等 JSON 列表参数：支持 `@文件` 或 JSON 字面量；坏值一律空列表。"""
+    if not raw:
+        return []
+    try:
+        if raw.startswith('@'):
+            with open(raw[1:], 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        else:
+            data = json.loads(raw)
+    except Exception:                                       # noqa: BLE001
+        warn('tempo-map 解析失败，退回单点变速')
+        return []
     return data if isinstance(data, list) else []
 
 
 def cmd_render_track(args):
     try:
-        notes = _load_notes(args.notes)
+        notes, curves = _load_notes(args.notes)
         if not notes:
             return {'ok': False, 'error': '没有音符'}
         res = render_track(args.voicebank, notes, args.out,
                            sample_note=args.sample_note or 'C4',
                            phonemizer=args.phonemizer or 'auto',
-                           tpb=args.tpb, bpm=args.bpm)
+                           tpb=args.tpb, bpm=args.bpm,
+                           tempo_map=_load_json_list(getattr(args, 'tempo_map', None)),
+                           curves=curves)
         return res
     except Exception as e:                                  # noqa: BLE001
         warn(traceback.format_exc())
@@ -605,7 +762,30 @@ def cmd_probe(args):
         return {'ok': False, 'error': str(e)}
 
 
-def main():
+_N_PHONEMIZERS = [0]   # 进程级登记数（list 包装以便 cmd_deps 引用；serve 下 main 首次执行时填充）
+
+
+def cmd_deps(args):
+    """离线轻量探针（serve 会话健康检查用）：不加载声库/模型。"""
+    return {'ok': True, 'engine_version': VERSION, 'phonemizers': _N_PHONEMIZERS[0]}
+
+
+def cmd_serve(args):
+    """常驻模式（协议见 engine_server.py）：stdin JSON 行循环。
+
+    每个请求会跑一遍 module.main(argv)——进程级初始化（G2p/音素化器）在
+    main 里做了幂等保护，只在首次执行。
+    """
+    try:
+        sys.__stdout__.reconfigure(encoding='utf-8')
+    except Exception:                                       # noqa: BLE001
+        pass
+    import engine_server
+    engine_server.serve_loop(sys.modules[__name__])
+    return 0
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(
         prog='engine_openutau.py',
         description='UTAU 渲染引擎（OpenUTAU 搬运版）')
@@ -620,22 +800,34 @@ def main():
                    help='auto | none | <音素化器 tag，如 "JA VCV"')
     t.add_argument('--tpb', type=float, default=480, help='每拍 tick 数（默认 480）')
     t.add_argument('--bpm', type=float, default=120.0)
+    t.add_argument('--tempo-map', default=None,
+                   help='多点变速 JSON `[{beat,bpm}]`（拍单位），或 @文件路径；给了就覆盖单点 bpm')
     t.set_defaults(func=cmd_render_track)
 
     p = sub.add_parser('probe', help='检查声库能否加载')
     p.add_argument('--voicebank', required=True)
     p.set_defaults(func=cmd_probe)
 
-    args = parser.parse_args()
+    d = sub.add_parser('deps', help='离线依赖检查（serve 健康检查用）')
+    d.set_defaults(func=cmd_deps)
+
+    sv = sub.add_parser('serve', help='常驻模式：stdin 每行一个 {id, argv} 请求')
+    sv.set_defaults(func=cmd_serve)
+
+    args = parser.parse_args(argv)
     try:
         sys.stdout.reconfigure(encoding='utf-8')
     except Exception:                                       # noqa: BLE001
         pass
     # ★ 进程级初始化：G2p 的 ONNX 会话工厂对**每个**子命令都要装
     #   （不装也能跑，只是未登录词退化为纯词典）。放在 args.func 之前。
-    setup_g2p()
-    _n = setup_phonemizers()
-    warn('已登记音素化器 %d 个' % _n)
+    #   serve 模式下 main 会被反复调用 → 幂等保护：只在首次执行。
+    if not getattr(main, '_inited', False):
+        setup_g2p()
+        _n = setup_phonemizers()
+        _N_PHONEMIZERS[0] = _n
+        main._inited = True
+        warn('已登记音素化器 %d 个' % _n)
     emit_result(args.func(args))
     return 0
 

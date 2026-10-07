@@ -61,7 +61,7 @@ def main():
     else:
         payload = {
             'tag_name': a.tag, 'name': a.tag, 'body': '镜像自 GitHub',
-            'prerelease': False, 'make_latest': make_latest,
+            'prerelease': False, 'make_latest': 'true' if make_latest else 'false',
             'target_commitish': a.commitish,
         }
         cr = requests.post(base, headers=hj, json=payload, timeout=60)

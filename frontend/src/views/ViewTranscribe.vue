@@ -1187,14 +1187,18 @@ onBeforeUnmount(() => {
           <span class="muted small">{{ t('已生成 ') }}{{ sepOutputs.length }}{{ t(' 个音轨：') }}</span>
           <button class="btn sm ghost" v-if="sepOutDir" @click="openSepOut"><Icon name="folder" :size="13" /> {{ t('打开输出文件夹') }}</button>
         </div>
+        <Transition name="fade">
         <div v-if="sepOutputs.length" class="ms-out-list">
           <div v-for="o in sepOutputs" :key="o" class="ms-out-item"><Icon name="music" :size="12" /> {{ String(o).replace(/^.*[\\/]/, '') }}</div>
         </div>
+        </Transition>
 
+        <Transition name="fade">
         <div v-if="sepLogs.length" class="tr-log">
           <div class="tr-log-head"><span class="log-title">{{ t('分离日志') }}</span><span class="log-count">{{ sepLogs.length }}{{ t(' 行') }}</span><span style="flex:1"></span><button class="icon-btn" @click="sepLogs = []"><Icon name="trash" :size="13" /></button></div>
           <div class="tr-log-scroll"><div v-for="(l, i) in sepLogs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div></div>
         </div>
+        </Transition>
       </div>
 
       <div v-if="mode !== 'separate'">
@@ -1300,17 +1304,22 @@ onBeforeUnmount(() => {
       </button>
       <button v-if="busy" class="btn ghost" style="width:100%;justify-content:center;margin-top:8px" @click="cancelTranscribe"><Icon name="stop" :size="14" /> {{ t('取消转录') }}</button>
 
+      <Transition name="fade">
       <div v-if="busy || done" class="tr-progress">
         <div class="pfill" :style="{ width: progress + '%' }"></div><span>{{ progress }}%</span>
       </div>
+      </Transition>
       <div v-if="stage" class="tr-stage muted small">{{ stage }}</div>
+      <Transition name="fade">
       <div v-if="done" class="tr-done">
         <button class="btn sm" @click="setView('play')"><Icon name="play2" :size="13" /> {{ t('打开播放') }}</button>
         <button class="btn sm ghost" @click="openOutput"><Icon name="folder" :size="13" /> {{ t('打开输出文件夹') }}</button>
         <span class="muted small">{{ doneInfo }}</span>
       </div>
+      </Transition>
 
       <!-- 运行日志 -->
+      <Transition name="fade">
       <div v-if="logs.length" class="tr-log">
         <div class="tr-log-head">
           <span class="log-title">{{ t('运行日志') }}</span><span class="log-count">{{ logs.length }}{{ t(' 行') }}</span>
@@ -1322,6 +1331,7 @@ onBeforeUnmount(() => {
           <div v-for="(l, i) in logs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div>
         </div>
       </div>
+      </Transition>
       </div>
     </div>
 

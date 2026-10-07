@@ -8,11 +8,52 @@ const { safeExtractAllTo } = require('./zip-safe');
 // 而引擎选择要读设置。Node 模块缓存保证拿到的是同一个 settings 单例。
 const { readSettings } = require('./settings');
 
-function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawnEngine }) {
+function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawnEngine, createEngineSession }) {
   // 声库是体积较大的模型类资产：统一放在数据根目录（默认工具目录旁），不挤占 C 盘
   const vbRoot = () => Paths.voicebanksDir();
 
-  // 已导入声库列表：<数据根目录>/voicebanks 下含 oto.ini 的目录
+  // ---- 常驻引擎会话（惰性创建；仅 openutau 引擎——legacy 没有 serve 子命令）----
+  // 省每次渲染的 Python 启动 + G2p/音素化器初始化开销。请求失败由调用方
+  // 回退一次性 spawn（保留 openutau→legacy 引擎回落链）——功能永远可用。
+  let _openUtauSession = null;
+  const openUtauSession = () => {
+    if (!_openUtauSession && createEngineSession) _openUtauSession = createEngineSession('engine_openutau.py', ['serve']);
+    return _openUtauSession;
+  };
+  const dropOpenUtauSession = () => {
+    if (_openUtauSession) { try { _openUtauSession.kill(); } catch (e) {} _openUtauSession = null; }
+  };
+
+  // ---- 声库根判定与显示名（对齐上游 VoicebankLoader / VoicebankInstaller）----
+  // 上游：声库根 = 顶层有 character.txt 的目录（安装器保证缺时补写），oto.ini 集合从根**递归**加载；
+  // character.yaml 的 name: 覆盖 character.txt 的 name=。
+  // 这里认 character.txt / character.yaml，并保留「顶层 oto.ini」回落（兼容本应用早期
+  // 导入的裸 oto 目录——引擎 load_singer 也支持这种形态）。
+  const isBankRoot = (dir) =>
+    fs.existsSync(path.join(dir, 'character.txt')) ||
+    fs.existsSync(path.join(dir, 'character.yaml')) ||
+    fs.existsSync(path.join(dir, 'oto.ini'));
+
+  /** 显示名：character.yaml 的 name: 覆盖 character.txt 的 name=/名前=（上游 ApplyConfig 顺序），
+   *  全空回落目录名；上游对无名声库显示 "No Name (Id)"。 */
+  const bankDisplayName = (dir) => {
+    let name = '';
+    try {
+      const ct = fs.readFileSync(path.join(dir, 'character.txt'), 'utf8');
+      for (const line of ct.split(/\r?\n/)) {
+        const m = line.trim().match(/^(?:name|名前)\s*[=：:]\s*(.+)$/i);
+        if (m) { name = m[1].trim(); break; }
+      }
+    } catch (e) {}
+    try {
+      const y = fs.readFileSync(path.join(dir, 'character.yaml'), 'utf8');
+      const m = y.match(/^\s*name\s*:\s*(.+?)\s*$/mi);
+      if (m && m[1].trim()) name = m[1].replace(/^["']+|["']+$/g, '').trim();
+    } catch (e) {}
+    return name || '';
+  };
+
+  // 已导入声库列表：<数据根目录>/voicebanks 下每个**声库根**目录（一层，对齐上游 SingersPath）
   ipcMain.handle('utau:listVoicebanks', () => {
     try {
       const root = vbRoot();
@@ -20,8 +61,11 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
       const list = [];
       for (const name of fs.readdirSync(root)) {
         const dir = path.join(root, name);
-        if (!fs.statSync(dir).isDirectory()) continue;
-        if (fs.existsSync(path.join(dir, 'oto.ini'))) list.push({ name, dir });
+        let isDir = false;
+        try { isDir = fs.statSync(dir).isDirectory(); } catch (e) { continue; }
+        if (!isDir) continue;
+        if (!isBankRoot(dir)) continue;
+        list.push({ name: bankDisplayName(dir) || name, dir });
       }
       return { ok: true, list };
     } catch (err) {
@@ -64,33 +108,52 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
       const _zsafe = safeExtractAllTo(zip, dest);
 
       if (!_zsafe.ok) throw new Error('压缩包安全校验未通过：' + _zsafe.error);
-      // 归一化：若解压后只有一层子目录且含 oto.ini，把该层作为声库根
-      const inner = fs.readdirSync(dest).filter(n => fs.statSync(path.join(dest, n)).isDirectory());
-      if (inner.length === 1) {
-        const cand = path.join(dest, inner[0]);
-        if (fs.existsSync(path.join(cand, 'oto.ini'))) {
-          dest = path.join(dest, name); // fallback
-          if (!fs.existsSync(dest)) { fs.renameSync(cand, dest); }
-          else { dest = cand; }
-        }
-      } else {
-        // 顶层即可（oto.ini 平铺在 zip 根）
-      }
-      const vbDir = fs.existsSync(path.join(dest, 'oto.ini')) ? dest : null;
-      if (!vbDir) {
-        // 找 zip 内任意含 oto.ini 的子目录
-        let found = null;
-        const walk = d => {
-          for (const n of fs.readdirSync(d)) {
+      // ---- 定位声库根（对齐上游 VoicebankInstaller.AdjustBasePath + VoicebankLoader）----
+      // 优先 character.txt / character.yaml（上游判定），回落顶层 oto.ini（兼容裸 oto 包）
+      const findRoot = (pred) => {
+        const walk = (d, depth) => {
+          if (depth > 4) return null;
+          if (pred(d)) return d;
+          let entries = [];
+          try { entries = fs.readdirSync(d); } catch (e) { return null; }
+          for (const n of entries) {
             const p = path.join(d, n);
-            if (fs.statSync(p).isDirectory()) { if (fs.existsSync(path.join(p, 'oto.ini'))) { found = p; return; } walk(p); }
+            let isDir = false;
+            try { isDir = fs.statSync(p).isDirectory(); } catch (e) { continue; }
+            if (!isDir) continue;
+            const r = walk(p, depth + 1);
+            if (r) return r;
           }
+          return null;
         };
-        walk(dest);
-        if (found) vbDir = found;
+        return walk(dest, 0);
+      };
+      let outDir = findRoot(isBankRoot) || findRoot(d => fs.existsSync(path.join(d, 'oto.ini'))) || dest;
+      // 挪到 root 下第一层：listVoicebanks（同上游 SingersPath）一层扫一个声库，
+      // 根埋在第二层就永远扫不到——这正是「导入了却选不到」的一类根因
+      {
+        const rel = path.relative(root, outDir);
+        if (rel && rel.split(path.sep).length >= 2) {
+          const base = (path.basename(zipPath, path.extname(zipPath)) || 'voicebank')
+            .replace(/[\\/:*?"<>|\x00-\x1f]/g, '_');
+          let target = path.join(root, base);
+          let i = 2;
+          while (fs.existsSync(target)) target = path.join(root, `${base}_${i++}`);
+          fs.renameSync(outDir, target);
+          outDir = target;
+        }
       }
-      const outDir = vbDir || dest;
-      return { ok: true, name: path.basename(outDir), dir: outDir };
+      // 对齐上游安装器：缺 character.txt 的包补写空 character.txt + character.yaml
+      // （上游靠它做声库根判定并记录文本编码；oto 集合随后从根递归加载）
+      if (!fs.existsSync(path.join(outDir, 'character.txt')) &&
+          !fs.existsSync(path.join(outDir, 'character.yaml')) &&
+          fs.existsSync(path.join(outDir, 'oto.ini'))) {
+        try {
+          fs.writeFileSync(path.join(outDir, 'character.txt'), '\n', 'utf8');
+          fs.writeFileSync(path.join(outDir, 'character.yaml'), 'textFileEncoding: utf-8\n', 'utf8');
+        } catch (e) {}
+      }
+      return { ok: true, name: bankDisplayName(outDir) || path.basename(outDir), dir: outDir };
     } catch (err) {
       return { ok: false, error: String((err && err.message) || err) };
     }
@@ -217,14 +280,18 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
   }
 
   // 渲染 UTAU 工程 → 人声 WAV（调引擎的 render-track，返回字节供预览）
+  // cfg.outPath 给了就走「直写模式」：引擎产物直接落到目标路径、**不回传字节**
+  //（逐轨导出用 —— 几十 MB 的 WAV 过 IPC 会把渲染进程拖卡）。
   ipcMain.handle('utau:renderTrack', (evt, cfg) => new Promise((resolve) => {
-    const { voicebank, notes, sampleNote, bpm } = cfg || {};
+    const { voicebank, notes, sampleNote, bpm, tempoMap, curves, outPath } = cfg || {};
     let notesJson = null;   // notes 落盘文件，出口统一回收
+    let tempoJson = null;   // 多点变速（同走 @文件：列表可能很长）
     let settled = false;
     const done = (r) => {
       if (settled) return undefined;
       settled = true;
       if (notesJson) { try { fs.unlinkSync(notesJson); } catch (e) {} notesJson = null; }
+      if (tempoJson) { try { fs.unlinkSync(tempoJson); } catch (e) {} tempoJson = null; }
       resolve(r);
       return undefined;
     };
@@ -238,7 +305,11 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
       // 音符序列走「@临时文件」：整轨数百音符的 JSON 会撞 Windows 32K 命令行上限
       // （spawn ENAMETOOLONG）。两个引擎都原生支持 @file 约定。
       notesJson = path.join(Paths.tempDir(), 'fufumidi', `utau_notes_${Date.now()}_${process.pid}.json`);
-      fs.writeFileSync(notesJson, JSON.stringify(notes), 'utf8');
+      // 有自动化子轨时载荷升级为 {notes, curves}（引擎兼容裸数组，见 engine_openutau.py）——
+      // 连续曲线值进渲染就靠它（此前曲线只被采样成逐音符值，画了渲染不理）。
+      fs.writeFileSync(notesJson, JSON.stringify(
+        (Array.isArray(curves) && curves.length) ? { notes, curves } : notes
+      ), 'utf8');
       const args = [
         'render-track', '--voicebank', String(voicebank),
         '--notes', '@' + notesJson,
@@ -246,16 +317,67 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
         '--out', out,
       ];
       if (bpm) args.push('--bpm', String(bpm));
+      // 多点变速（[{beat,bpm}]，拍单位）：给了就覆盖单点 bpm —— 导入的 ustx 变速段
+      // 只有走这条路才能在渲染里生效。
+      if (Array.isArray(tempoMap) && tempoMap.length) {
+        tempoJson = path.join(Paths.tempDir(), 'fufumidi', `utau_tempo_${Date.now()}_${process.pid}.json`);
+        fs.writeFileSync(tempoJson, JSON.stringify(tempoMap), 'utf8');
+        args.push('--tempo-map', '@' + tempoJson);
+      }
 
       const primary = utauEngineScript();
       const fallback = primary === UTAU_ENGINES.legacy
         ? UTAU_ENGINES.openutau : UTAU_ENGINES.legacy;
+
+      // ---- 常驻会话优先（仅 openutau；legacy 无 serve，也不值得常驻）----
+      // 会话层失败（崩溃/超时）→ 丢会话 + 走一次性路径（引擎回落链保留）；
+      // 引擎业务错误（ok=false）同样进回落链 —— openutau 失败可能 legacy 能救。
+      if (primary === UTAU_ENGINES.openutau) {
+        const sess = openUtauSession();
+        if (sess) {
+          sess.request(args, { timeoutMs: 15 * 60 * 1000 }).then((r) => {
+            if (r && r.ok && r.out && fs.existsSync(r.out)) {
+              try {
+                if (outPath) {
+                  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+                  try { fs.renameSync(r.out, outPath); }
+                  catch (e) { fs.copyFileSync(r.out, outPath); try { fs.unlinkSync(r.out); } catch (e2) {} }
+                  return done({ ok: true, savedTo: outPath, duration_ms: r.duration_ms, warnings: r.warnings || [] });
+                }
+                const bytes = fs.readFileSync(r.out);
+                return done({
+                  ok: true, out: r.out, duration_ms: r.duration_ms, bytes,
+                  warnings: r.warnings || [],
+                  engineVersion: r.engine_version || '',
+                  engine: 'openutau',
+                });
+              } catch (e) {
+                return done({ ok: true, out: r.out, error: String(e) });
+              }
+            }
+            // 业务错误或异常形状 → 回一次性路径（保留 legacy 回落链）
+            dropOpenUtauSession();
+            spawnWith(primary, false);
+          }).catch(() => {
+            dropOpenUtauSession();
+            spawnWith(primary, false);
+          });
+          return;   // 会话路径接管（两条分支都会 done 或进回退）
+        }
+      }
 
       const spawnWith = (script, isRetry) => spawnEngine(args, {
         script,
         onDone: (code, r) => {
           if (r && r.result && r.result.ok && r.result.out && fs.existsSync(r.result.out)) {
             try {
+              // 直写模式：产物挪到调用方指定的路径，字节不过 IPC
+              if (outPath) {
+                fs.mkdirSync(path.dirname(outPath), { recursive: true });
+                try { fs.renameSync(r.result.out, outPath); }
+                catch (e) { fs.copyFileSync(r.result.out, outPath); try { fs.unlinkSync(r.result.out); } catch (e2) {} }
+                return done({ ok: true, savedTo: outPath, duration_ms: r.result.duration_ms, warnings: r.result.warnings || [] });
+              }
               // 直接回 Buffer（结构化克隆按字节传递）：整轨 WAV 可达数十 MB，
               // 转成 number[] 会有数百 MB 的 JS 数组开销，是长曲渲染的主要瓶颈。
               const bytes = fs.readFileSync(r.result.out);

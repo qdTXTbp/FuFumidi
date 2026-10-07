@@ -169,6 +169,40 @@ def main():
             check('采样率 44100', r.get('sample_rate') == 44100, r.get('sample_rate'))
             check('输出文件存在', os.path.isfile(r.get('out') or ''), r.get('out'))
 
+    # ---------------- 信封载荷（{notes, pitchCurve}）必须可渲染
+    # ★ main/diffsinger.js:1049-1052：轨有 PIT 曲线时主进程把 --notes 载荷改写成
+    #   信封对象。此前新管线不认信封，所有带曲线的轨报「notes 必须是数组」。
+    print('--- render（信封 {notes, pitchCurve}）---')
+    if not os.path.isdir(BANK):
+        print('  跳过：找不到声库')
+    else:
+        import tempfile
+        env_dir = tempfile.mkdtemp(prefix='fufumidi-env-')
+        payload = os.path.join(env_dir, 'notes.json')
+        with open(payload, 'w', encoding='utf-8') as f:
+            json.dump({'notes': notes, 'pitchCurve': [
+                {'beat': 0.375, 'cents': 40}, {'beat': 1.0, 'cents': -25},
+            ]}, f, ensure_ascii=False)
+        out2 = os.path.join(os.environ.get('TEMP', '.'), '_cli_contract_env.wav')
+        p = run('render', '--voicebank', BANK,
+                '--notes', '@' + payload,
+                '--bpm', '120', '--out', out2, '--device', 'cpu')
+        check('★ 退出码 0', p.returncode == 0, p.returncode)
+        res = parse_lines(p.stdout, '###RESULT ')
+        check('有 ###RESULT', len(res) == 1, p.stdout[-300:])
+        if res:
+            r = res[0]
+            check('★ 信封载荷 ok=true（不再是「notes 必须是数组」）',
+                  r.get('ok') is True, r.get('error'))
+            check('★ pipeline == "upstream"', r.get('pipeline') == 'upstream',
+                  r.get('pipeline'))
+            check('★ 曲线不影响时长（1100–1300 ms）',
+                  1100 <= (r.get('duration_ms') or 0) <= 1300, r.get('duration_ms'))
+        try:
+            os.remove(payload)
+        except OSError:
+            pass
+
     # ---------------- 缺 dsdur 的声库必须报错
     print('--- 缺 dsdur/ 的声库（上游强契约）---')
     import tempfile

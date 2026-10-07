@@ -49,3 +49,10 @@ scripts/cdp/*-report.txt
 
 # 调试用的一次性产物（渲染样例 wav 等，几 MB 的二进制，不入库）
 _artifacts/
+
+# 打包产物（按构建轮次编号的解包目录）
+release-unpacked2/
+release-unpacked3/
+release-unpacked4/
+release-unpacked5/
+frontend/.tmp/

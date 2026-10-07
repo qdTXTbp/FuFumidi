@@ -36,7 +36,7 @@ function cacheDirFor(filePath) {
   return Paths.at('project-cache', h);
 }
 
-function registerProjectIpc({ ipcMain, dialog, path, fs }) {
+function registerProjectIpc({ ipcMain, dialog, path, fs, spawnEngine }) {
   /* ---------------------------------------------------------- 保存 */
 
   ipcMain.handle('project:save', async (_e, payload) => {
@@ -149,6 +149,118 @@ function registerProjectIpc({ ipcMain, dialog, path, fs }) {
     }
 
     return { ok: true, filePath: fp, json, resolved, cacheDir: dir };
+  });
+
+  /* ------------------------------------------------ 分轨导出：伴奏源文件复制 */
+  // 逐轨导出时伴奏轨的源文件由主进程直接复制（字节不过 IPC——
+  // 几十 MB 的 WAV 过结构化克隆会把渲染进程拖卡）。
+  ipcMain.handle('project:copyAsset', async (_e, payload) => {
+    const p = payload || {};
+    const src = String(p.src || '');
+    const dest = String(p.dest || '');
+    if (!src || !dest) return { ok: false, error: '缺少源/目标路径' };
+    if (!fs.existsSync(src)) return { ok: false, error: '源文件不存在：' + src };
+    try {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(src, dest);
+      return { ok: true, savedTo: dest };
+    } catch (e) {
+      return { ok: false, error: '复制失败：' + String(e && e.message || e) };
+    }
+  });
+
+  /* --------------------------------------------- OpenUtau .ustx 互转 */
+  //
+  // 转换逻辑在 Python 引擎（engine/engine_ustx.py）：它复用 singing.ustx 的
+  // 读写与一致性测试（模型语义/版本迁移/编码都在那一层保证）。本文件只做
+  // 「选文件 → 喂引擎 → 读回结果」，与 project:save/open 一样**音频字节不过
+  // IPC** —— 伴奏路径以 resolved / audioFiles 的形式传递，读盘永远在主进程。
+
+  /** spawnEngine 的一次性封装：等子进程结束拿 RESULT（引擎 120s 足够，纯 YAML 转换不吃模型） */
+  function runUstxEngine(args) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (r) => { if (!settled) { settled = true; resolve(r); } };
+      try {
+        spawnEngine(args, {
+          script: 'engine_ustx.py',
+          timeoutMs: 120000,
+          onDone: (code, r) => done({ result: r && r.result, err: (r && r.err) || '' }),
+          onError: (e) => done({ error: String(e) }),
+        });
+      } catch (e) { done({ error: String(e) }); }
+    });
+  }
+
+  function firstErrLine(text) {
+    const line = String(text || '').split(/\r?\n/).find((l) => l.trim());
+    return line ? '：' + line : '';
+  }
+
+  ipcMain.handle('project:importUstx', async () => {
+    if (typeof spawnEngine !== 'function') return { ok: false, error: '当前版本不支持 .ustx 导入' };
+    const r = await dialog.showOpenDialog({
+      title: '打开 OpenUtau 工程',
+      properties: ['openFile'],
+      filters: [{ name: 'OpenUtau 工程', extensions: ['ustx'] }],
+    });
+    if (r.canceled || !r.filePaths || !r.filePaths.length) return { ok: false, cancelled: true };
+    const fp = r.filePaths[0];
+
+    const outJson = path.join(Paths.tempDir(), 'fufumidi', `ustx_import_${Date.now()}_${process.pid}.json`);
+    try { fs.mkdirSync(path.dirname(outJson), { recursive: true }); } catch (e) {}
+
+    const run = await runUstxEngine(['import', '--in', fp, '--out', outJson]);
+    const res = run.result;
+    if (!res || !res.ok) {
+      return { ok: false, error: (res && res.error) || ('.ustx 转换失败' + firstErrLine(run.err)) };
+    }
+    let json;
+    try {
+      json = JSON.parse(fs.readFileSync(res.jsonPath || outJson, 'utf8'));
+    } catch (e) {
+      return { ok: false, error: '转换结果读取失败：' + String(e && e.message || e) };
+    }
+    try { fs.unlinkSync(res.jsonPath || outJson); } catch (e) {}
+    return {
+      ok: true,
+      filePath: fp,
+      json,
+      /** assetId → 伴奏源文件的本地绝对路径（运行时回填 audio.path 用，不进工程包） */
+      resolved: res.resolved || {},
+      warnings: res.warnings || [],
+    };
+  });
+
+  ipcMain.handle('project:exportUstx', async (_e, payload) => {
+    if (typeof spawnEngine !== 'function') return { ok: false, error: '当前版本不支持 .ustx 导出' };
+    const p = payload || {};
+    if (!p.json || typeof p.json !== 'object') return { ok: false, error: '没有可导出的工程数据' };
+
+    let target = String(p.filePath || '');
+    if (!target) {
+      const r = await dialog.showSaveDialog({
+        title: '导出 OpenUtau 工程',
+        defaultPath: (p.suggestName || 'untitled') + '.ustx',
+        filters: [{ name: 'OpenUtau 工程', extensions: ['ustx'] }],
+      });
+      if (r.canceled || !r.filePath) return { ok: false, cancelled: true };
+      target = r.filePath;
+    }
+    if (!/\.ustx$/i.test(target)) target += '.ustx';
+
+    // 交换 JSON + 伴奏源路径走 @临时文件（整轨音符 JSON 会撞 Windows 32K 上限）
+    const reqFile = path.join(Paths.tempDir(), 'fufumidi', `ustx_export_${Date.now()}_${process.pid}.json`);
+    try { fs.mkdirSync(path.dirname(reqFile), { recursive: true }); } catch (e) {}
+    fs.writeFileSync(reqFile, JSON.stringify({ project: p.json, audioFiles: p.audioFiles || [] }), 'utf8');
+
+    const run = await runUstxEngine(['export', '--project', '@' + reqFile, '--out', target]);
+    try { fs.unlinkSync(reqFile); } catch (e) {}
+    const res = run.result;
+    if (!res || !res.ok) {
+      return { ok: false, error: (res && res.error) || ('导出 .ustx 失败' + firstErrLine(run.err)) };
+    }
+    return { ok: true, filePath: res.outPath || target, warnings: res.warnings || [] };
   });
 }
 

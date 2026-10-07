@@ -1249,6 +1249,7 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- 高级工具区（折叠，按用途分组） -->
+      <Transition name="fade">
       <div v-if="advOpen" class="card ed-adv">
         <div class="adv-row">
           <span class="et-label">{{ t('剪贴板') }}</span>
@@ -1349,6 +1350,7 @@ onBeforeUnmount(() => {
           <button class="et-btn" :title="t('编辑功能介绍')" @click="helpOpen = true"><Icon name="info" :size="14" />{{ t('说明') }}</button>
         </div>
       </div>
+      </Transition>
       </div>
 
       <!-- ② 工作区：左侧检查器 + 右侧多车道舞台 -->
@@ -1419,6 +1421,7 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- P1-2 和弦轨：逐小节和弦，点击可手改 -->
+      <Transition name="fade">
       <div v-if="chordOpen && chordBars.length" class="chord-lane">
         <span class="chord-lane-label">{{ t('和弦') }}</span>
         <div class="chord-cells">
@@ -1430,6 +1433,7 @@ onBeforeUnmount(() => {
         <span v-if="chordBars.length > 128" class="muted small">{{ t('仅显示前 128 小节') }}</span>
         <button class="btn sm ghost" @click="clearChordBars">{{ t('隐藏') }}</button>
       </div>
+      </Transition>
 
       <!-- 钢琴卷帘（用 v-show 保活：切到鼓组再切回不会丢撤销历史与视图位置） -->
       <div v-show="viewMode === 'piano'" class="ed-wrap-rel">

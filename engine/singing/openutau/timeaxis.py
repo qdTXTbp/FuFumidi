@@ -176,6 +176,18 @@ class TimeAxis:
         seg = self._tempo_segment_at_tick(tick)
         return seg.ms_pos + seg.ms_per_tick * (tick - seg.tick_pos)
 
+    def ms_delta_to_ticks(self, pos_tick, delta_ms):
+        """把**相对**毫秒增量换算成 tick（用 pos_tick 处的局部速率）。
+
+        音素覆写的 `offset` 这类相对量不能用绝对换算（ms_pos_to_tick_pos）——
+        多点变速下各段速率不同，按 pos_tick 所在段的 ms/beat 局部换算才正确。
+        480 = 每拍 tick（resolution 恒定，与 tempo 无关）。
+        """
+        ms1 = self.tick_pos_to_ms_pos(pos_tick)
+        ms2 = self.tick_pos_to_ms_pos(pos_tick + 480)
+        ms_per_beat = max(1e-6, ms2 - ms1)
+        return int(round(float(delta_ms) * 480.0 / ms_per_beat))
+
     def ms_pos_to_non_exact_tick_pos(self, ms):
         seg = self._tempo_segment_at_ms(ms)
         return seg.tick_pos + (ms - seg.ms_pos) * seg.ticks_per_ms

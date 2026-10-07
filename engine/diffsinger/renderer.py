@@ -204,7 +204,14 @@ def _interp_shape(x0, x1, y0, y1, x, shape):
 
 
 def _sample_ustx_curve(curve, tick: int) -> float:
-    """采样 .ustx 曲线（照搬 `UstxCurve.Sample`）。"""
+    """采样 .ustx 曲线（照搬 `UstxCurve.Sample`：命中取点 / 之间线性插值 / 越界回落默认值）。
+
+    ★ 输入是 `UCurve`（xs/ys + descriptor）时必须走 `curve.sample(tick)` ——
+      此前读不存在的 `curve.data`，恒回落 default_value，pitd 曲线等于没加。
+    """
+    sample = getattr(curve, 'sample', None)
+    if callable(sample):
+        return float(sample(tick))
     data = getattr(curve, 'data', None) or []
     if not data:
         return float(getattr(curve, 'default_value', 0) or 0)

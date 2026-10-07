@@ -1,0 +1,23 @@
+# 本轮打包的临时配置：extraResources **去掉 resources/python**（1.5GB / 2.4 万文件）。
+#
+# 原因：electron-builder 的 extraResources 复制在部分 Windows 环境上会卡死
+# （实测 40+ 分钟零进展，卡在大 DLL/杀软实时扫描上）。改为：
+#   1) 本配置只打 asar 与其它资源（秒级~分钟级）
+#   2) 之后用 robocopy /MT 多线程把 resources/python 拷进 win-unpacked/resources/python
+#
+# ★ 仅本地打包用；正式出包仍走 electron-builder.yml（npm run dist:win）。
+extends: ./electron-builder.unpacked.yml
+
+extraResources:
+  - from: "resources/vcredist"
+    to: vcredist
+  - from: "resources/models"
+    to: models
+  - from: "resources/g2p"
+    to: g2p
+  - from: "resources/rust-core"
+    to: rust-core
+  - from: "resources/elevate.exe"
+    to: elevate.exe
+  - from: "build/icon.png"
+    to: icon.png

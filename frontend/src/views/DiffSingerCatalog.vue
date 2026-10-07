@@ -10,10 +10,12 @@ import { ref, reactive, computed, onMounted, onActivated, onBeforeUnmount } from
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useVoicebankStore } from '../stores/voicebank';
+import { useSingerStore } from '../stores/singer';
 import { t } from '../core/i18n.js';
 
 const app = useAppStore();
 const vbStore = useVoicebankStore();
+const singerStore = useSingerStore();
 const toast = (m, type) => app.toast(m, type);
 const bridge = window.fuBridge;
 
@@ -124,6 +126,13 @@ function human(n) {
 /* ---------------- 下载 ---------------- */
 function isBusy(name) { return !!(prog[name] && prog[name].active); }
 
+/** 目录 + 歌手下拉数据源一起刷新：装完/删完声库后，
+ *  歌声合成页（ViewSing）的歌手下拉读的是 singer store 的 banks —— 不刷它就是「装了选不到」。 */
+async function refreshAll() {
+  await refresh();
+  await singerStore.loadBanks();
+}
+
 function startDownload(m) {
   if (!bridge || !bridge.diffsingerMsDownload) return;
   if (m.placeholder) { toast(t('该声库上游尚未上传权重，暂不可下载'), 'warn'); return; }
@@ -133,7 +142,7 @@ function startDownload(m) {
     if (r && r.ok) {
       prog[m.name] = { active: false, percent: 100, done: true, received: 0, total: 0, error: '' };
       toast(t('已安装：') + m.name, 'ok');
-      refresh();
+      refreshAll();
     } else if (r && r.canceled) {
       prog[m.name] = { active: false, percent: 0, received: 0, total: 0, error: '' };
     } else {
@@ -166,7 +175,7 @@ function onProgress(p) {
   else if (p.phase === 'canceled') { next.active = false; next.percent = 0; }
   else next.active = true;
   prog[p.id] = next;
-  if (p.phase === 'done') refresh();
+  if (p.phase === 'done') refreshAll();
 }
 
 /** 阶段文案：下载 / 解压 / 安装（与全局通知条进度语义一致） */

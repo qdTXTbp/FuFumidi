@@ -10,7 +10,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CURVE_TARGETS, CURVE_ORDER, targetsFor, defaultFor,
-  normalizeCurve, normalizeCurves, curveOf, sampleAt, envelope, valueForNote,
+  normalizeCurve, normalizeCurves, curveOf, sampleAt, envelope, envelopeFrom,
+  valueForNote, secToBeat, laneViewOf,
 } from '../src/core/track_automation.js';
 
 /* ------------------------------------------------------------ 目标 */
@@ -166,4 +167,60 @@ test('valueForNote 取音符中点（长音符上的渐强不会被抹平）', (
 test('没有曲线时取该目标的默认值（DYN 满力度、PIT 不偏移）', () => {
   assert.equal(valueForNote([], 3, 1, 'DYN'), 100);
   assert.equal(valueForNote([], 3, 1, 'PIT'), 0);
+});
+
+/* ---------------------------------------------------- 多点变速（sec ⇄ beat） */
+
+test('secToBeat：多点变速沿段换算，无 map 退回恒定 bpm', () => {
+  const map = [{ beat: 0, bpm: 120 }, { beat: 8, bpm: 90 }];
+  assert.equal(secToBeat(0, map, 120), 0);
+  assert.equal(secToBeat(4, map, 120), 8, '4s = 前 8 拍（0.5s/拍）');
+  // 5.3333s = 4s + 1.3333s；降速段 1.3333s × 90/60 = 2 拍 → beat 10
+  assert.equal(Math.round(secToBeat(4000 / 1000 + (2 * 60 / 90), map, 120) * 1e6) / 1e6, 10);
+  assert.equal(secToBeat(2, null, 120), 4, '无 map：2s @120bpm = 4 拍');
+  assert.equal(secToBeat(2, [], 96), 3.2, '空 map 退回 fallbackBpm');
+  // 超出末点按末段速率外推
+  assert.equal(Math.round(secToBeat(10, map, 120) * 1e6) / 1e6, 8 + 6 * 90 / 60);
+});
+
+test('secToBeat：脏数据兜底（坏点丢、同拍后写赢、首点强制 0）', () => {
+  const map = [
+    { beat: -1, bpm: 120 },          // 负拍丢
+    { beat: 0, bpm: 60 }, { beat: 0, bpm: 120 },   // 同拍去重（后写赢）
+    { beat: 4, bpm: 0 },             // bpm 非法丢
+    'x', null,                        // 形状不对丢
+    { beat: 2, bpm: 120 },           // 留下的首个非零点
+  ];
+  // 有效点：{0:120},{2:120} → 恒 120
+  assert.equal(secToBeat(1, map, 96), 2);
+});
+
+test('envelopeFrom：带 tempoMap 时自动化按变速段对齐拍位', () => {
+  const points = [{ beat: 0, value: 0 }, { beat: 8, value: 1 }, { beat: 16, value: 0 }];
+  const map = [{ beat: 0, bpm: 120 }, { beat: 8, bpm: 90 }];
+  // 窗口 [4s, 6.667s]：4s 处 beat=8（value 峰值 1）
+  const env = envelopeFrom(points, 120, 4, 4 + 4 * 60 / 90, 64, 'NONE', map);
+  assert.equal(env[0], 1, '窗口起点 beat 8 = 峰值');
+  // 末点 6.667s → beat = 8 + 2.667s×90/60 = 12 → value 从 1 线性衰减到 (16-12)/8 = 0.5
+  assert.equal(Math.abs(env[63] - 0.5) < 1e-6, true);
+  // 不带 tempoMap：恒定 bpm 行为不变（回归）
+  const env2 = envelopeFrom(points, 120, 4, 8, 64, 'NONE');
+  assert.equal(env2[0], 1);
+});
+
+/* ---------------------------------------------------- 曲线泳道显示配置 */
+
+test('laneViewOf：PIT 显示窗口 ±200，其余全域 + 三刻度', () => {
+  const pit = laneViewOf('PIT');
+  assert.equal(pit.dispMin, -200);
+  assert.equal(pit.dispMax, 200);
+  assert.deepEqual(pit.ticks, [-200, -100, 0, 100, 200]);
+  const dyn = laneViewOf('DYN');
+  assert.equal(dyn.dispMin, 0);
+  assert.equal(dyn.dispMax, 100);
+  assert.deepEqual(dyn.ticks, [0, 50, 100], 'DYN 全域 0..100，中点 50');
+  const gen = laneViewOf('GEN');
+  assert.deepEqual(gen.ticks, [-100, 0, 100]);
+  assert.equal(laneViewOf('VOL'), null, '播放侧目标不给泳道（不进引擎渲染）');
+  assert.equal(laneViewOf('XXX'), null, '未知 abbr → null');
 });

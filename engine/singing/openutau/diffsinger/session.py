@@ -46,19 +46,42 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 
 def build_project(notes: Sequence[Dict[str, Any]], bpm: float,
                   language: str = 'zh',
-                  renderer_name: str = 'DIFFSINGER'):
+                  renderer_name: str = 'DIFFSINGER',
+                  tempos: Optional[Sequence[Dict[str, Any]]] = None):
     """notes（拍）→ `(UProject, UTrack, UVoicePart)`。
 
     ★ **拍 → tick** 在边界上做一次转换（前端用拍，USTX 用 tick），
       内部一律 tick —— 与上游一致，避免两套时间单位在管线里混用。
+
+    `tempos`：多点变速 `[{beat, bpm}]`（拍单位，与前端 store.tempoMap 同构）。
+    给了就整体替换 tempos 列表（`bpm` 退化为首点兜底）；tick→ms 由
+    TimeAxis 沿段换算，**拍→tick 换算本身与 tempo 无关**。
     """
     from singing.ustx.model import (UProject, UTrack, UVoicePart, UNote,
                                     URenderSettings, UTempo, UVibrato)
 
     proj = UProject()
+    # ★ 表达式表必须补全（对应上游 Ustx.Create()）：裸 UProject() 的 expressions
+    #   是空 dict，get_expression 全部回退 0 —— per-note 参数/曲线整条失效。
+    from singing.ustx.format import add_default_expressions
+    add_default_expressions(proj)
     # ★ 不要写 proj.resolution —— 它是只读属性（恒 480）
     proj.bpm = float(bpm or 120)
-    proj.tempos = [UTempo(position=0, bpm=float(bpm or 120))]
+    tempo_points = []
+    for t in (tempos or []):
+        if not isinstance(t, dict):
+            continue
+        try:
+            beat = float(t.get('beat'))
+            tbpm = float(t.get('bpm'))
+        except (TypeError, ValueError):
+            continue
+        if beat < 0 or not (20.0 <= tbpm <= 400.0):
+            continue
+        tempo_points.append(UTempo(position=int(round(beat * DEFAULT_RESOLUTION)), bpm=tbpm))
+    if not any(t.position == 0 for t in tempo_points):
+        tempo_points.insert(0, UTempo(position=0, bpm=float(bpm or 120)))
+    proj.tempos = tempo_points
     proj.tracks = []
     proj.parts = []
 
@@ -76,6 +99,9 @@ def build_project(notes: Sequence[Dict[str, Any]], bpm: float,
     part.track_no = 0
     for n in notes:
         note = UNote()
+        # 原始 JSON 挂运行时属性：音素化后 `note_expressions.apply_note_expressions`
+        # 取 per-note 的 velocity/volume/gender/breath 写成音素级表达式
+        note._app_note = n if isinstance(n, dict) else None
         note.position = int(round(float(n.get('startBeat', 0)) * DEFAULT_RESOLUTION))
         note.duration = max(1, int(round(float(n.get('durBeat', 1)) * DEFAULT_RESOLUTION)))
         note.tone = int(n.get('pitch', 60))
@@ -85,17 +111,58 @@ def build_project(notes: Sequence[Dict[str, Any]], bpm: float,
         #   前端给的是 `vibDepth`(0..100) / `vibFreq`(Hz) / `vibFade`(0..100)，
         #   这里映射成 UVibrato 的 depth / period(ms) / in。
         if n.get('vibrato'):
+            # ★ `UNote.vibrato` 是 `Optional[UVibrato]`（对象），**不是** bool/int。
+            #   直接塞 int 会在 `VibratoSource.of` 里炸（`'int' has no attribute 'length'`）。
+            #   length 是**百分比**（0..100，占音符时长），旧实现塞了 tick 数
+            #   （被 clamp 到 100 碰巧正确）——现在显式写 100。
             vib = UVibrato()
-            vib.length = note.duration
+            vib.length = 100
             vib.depth = _clamp(float(n.get('vibDepth') or 25), 5, 200)
             freq = float(n.get('vibFreq') or 0)
             # period 是**毫秒**，范围 [5,500]（UVibrato 的 setter 会夹紧）
             vib.period = _clamp(1000.0 / freq, 5, 500) if freq > 0 else 175.0
-            vib.vib_in = _clamp(float(n.get('vibFade') or 0), 0, 100)
+            vib.vib_in = _clamp(float(n.get('vibIn') if n.get('vibIn') is not None
+                                      else n.get('vibFade') or 0), 0, 100)
+            vib.vib_out = _clamp(float(n.get('vibOut') if n.get('vibOut') is not None
+                                       else n.get('vibFade') or 0), 0, 100)
+            vib.shift = _clamp(float(n.get('vibShift') or 0), -100, 100)
+            vib.drift = _clamp(float(n.get('vibDrift') or 0), -100, 100)
+            vib.vol_link = _clamp(float(n.get('vibVolLink') or 0), -100, 100)
             note.vibrato = vib
         part.notes.append(note)
     part.notes.sort(key=lambda x: x.position)
     proj.parts.append(part)
+    # ★ tempos 是构造之后替换进去的，必须重建 time_axis，否则 proj.time_axis
+    #   还停留在 __post_init__ 按默认 120bpm 建的旧段（多点变速 / 单点非 120 都错位）
+    proj.build_time_axis()
+    # ---- 音素覆写（音素级时间微调）：offset 前端 ms → tick（局部速率换算）、
+    #      delta 直传 ms 域。必须在 time_axis 重建之后（换算要用新轴）。
+    from singing.ustx.model import UPhonemeOverride
+    for _note in part.notes:
+        _src = getattr(_note, '_app_note', None)
+        if not isinstance(_src, dict):
+            continue
+        for o in (_src.get('phonemeOverrides') or []):
+            if not isinstance(o, dict):
+                continue
+            _raw_idx = o.get('index')
+            # ★ 不能写 `o.get('index') or -1` —— index=0 是 falsy，会被吃掉
+            idx = int(_raw_idx) if isinstance(_raw_idx, (int, float)) and not isinstance(_raw_idx, bool) else -1
+            if idx < 0:
+                continue
+            ov = UPhonemeOverride(index=idx)
+            off = o.get('offset')
+            if isinstance(off, (int, float)):
+                ov.offset = proj.time_axis.ms_delta_to_ticks(_note.position, float(off))
+            pd = o.get('preutterDelta')
+            if isinstance(pd, (int, float)):
+                ov.preutter_delta = float(pd)
+            od = o.get('overlapDelta')
+            if isinstance(od, (int, float)):
+                ov.overlap_delta = float(od)
+            if ov.offset is None and ov.preutter_delta is None and ov.overlap_delta is None:
+                continue          # 只有 index 没有任何值 → 无意义，丢弃
+            _note.phoneme_overrides.append(ov)
     return proj, track, part
 
 
@@ -299,7 +366,8 @@ async def render_notes(notes: Sequence[Dict[str, Any]], voicebank: str,
                        cache_dir: Optional[str] = None,
                        playing: bool = False, playback_start_ms: float = 0.0,
                        focus_tick: int = -1,
-                       device: str = 'auto') -> Dict[str, Any]:
+                       device: str = 'auto',
+                       tempos: Optional[Sequence[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """**主入口**：notes → 混音 samples。
 
     ★ 返回 `{ok, samples, duration_ms, phrases, cached, ...}`，
@@ -317,7 +385,7 @@ async def render_notes(notes: Sequence[Dict[str, Any]], voicebank: str,
     if not voicebank or not os.path.isdir(voicebank):
         return {'ok': False, 'error': '声库目录无效：%s' % voicebank}
 
-    proj, track, part = build_project(notes, bpm, language)
+    proj, track, part = build_project(notes, bpm, language, tempos=tempos)
     singer = VB.load_singer(voicebank)
     if singer is None:
         return {'ok': False, 'error': '声库加载失败'}
@@ -337,6 +405,11 @@ async def render_notes(notes: Sequence[Dict[str, Any]], voicebank: str,
         return {'ok': False, 'error': '音素化失败：%s' % e}
     if not n_ph:
         return {'ok': False, 'error': '没有可渲染的音素（歌词/语言是否匹配声库？）'}
+
+    # per-note 参数 → 音素级表达式（vel/vol/genc/brec）—— 必须在音素化后、
+    # PhraseSource.from_part 之前（表达式按音素 index 匹配）。
+    from singing.openutau.note_expressions import apply_note_expressions
+    apply_note_expressions(proj, track, part)
 
     # ★ 真实的 PhraseSource（不是替身）→ 乐句级缓存才生效
     src = PhraseSource.from_part(proj, track, part, generation=0)

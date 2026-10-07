@@ -216,11 +216,119 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
     for (const c of activeChildren) { try { c.kill(); } catch {} }
   }
 
+  /**
+   * 常驻引擎会话：stdin JSON 行驱动引擎的 `serve` 子命令（engine_server.py）。
+   *
+   * 省 Python 启动 + torch import + 声库/模型加载的固定开销（调参时 3-6s/次）。
+   * 协议：请求 `{id, argv}` → `###RESULT {..., id}`；进度 `###PROG {..., id}`。
+   * ★ 进程崩溃不重试 —— reject 本次请求，由调用方回退一次性 spawn（功能永远
+   *   可用，只是慢）；下一次 request 会自动重启进程。
+   */
+  function createEngineSession(script, serveArgs) {
+    const py = resolvePython();
+    const eng = engineDir();
+    const scriptPath = path.isAbsolute(script) ? script : path.join(eng, script);
+    let child = null;
+    let seq = 0;
+    let buf = '';
+    const pending = new Map();   // 请求 id -> { resolve, reject, timer, onProgress }
+
+    function start() {
+      child = spawn(py, [scriptPath, ...serveArgs], {
+        cwd: eng,
+        windowsHide: true,
+        env: engineEnv(),
+      });
+      activeChildren.add(child);
+      child.stdout.on('data', (d) => {
+        buf += d.toString('utf8');
+        const lines = buf.split(/\r?\n/);
+        buf = lines.pop();
+        for (const l of lines) {
+          const t = l.trim();
+          if (!t) continue;
+          let m = t.match(/^###RESULT\s+(\{.*\})\s*$/);
+          if (m) {
+            let r = null;
+            try { r = JSON.parse(m[1]); } catch (e) {}
+            if (r && r.id != null && pending.has(r.id)) {
+              const p = pending.get(r.id);
+              pending.delete(r.id);
+              clearTimeout(p.timer);
+              p.resolve(r);
+            }
+            continue;
+          }
+          m = t.match(/^###PROG\s+(\{.*\})\s*$/);
+          if (m) {
+            try {
+              const pr = JSON.parse(m[1]);
+              const w = (pr.id != null && pending.get(pr.id)) || null;
+              if (w && w.onProgress) w.onProgress(pr);
+            } catch (e) {}
+            continue;
+          }
+          // 普通日志：常驻会话的输出按请求粒度投递，独立日志行丢弃
+          //（一次性路径才有 onLog 流，避免重复刷屏）
+        }
+      });
+      child.stderr.on('data', () => {});
+      child.on('close', () => {
+        child = null;
+        // 进程死了：所有挂起请求按失败结算（调用方回退一次性路径）
+        for (const [, p] of pending) {
+          clearTimeout(p.timer);
+          p.reject(new Error('engine session closed'));
+        }
+        pending.clear();
+      });
+      child.on('error', () => { /* close 会跟着来，在那里清场 */ });
+    }
+
+    function request(argv, opts = {}) {
+      const { onProgress, timeoutMs = 30 * 60 * 1000 } = opts;
+      return new Promise((resolve, reject) => {
+        if (!child) start();
+        const id = ++seq;
+        const p = {
+          resolve, reject, onProgress,
+          timer: setTimeout(() => {
+            pending.delete(id);
+            reject(new Error('engine session request timeout'));
+          }, timeoutMs),
+        };
+        pending.set(id, p);
+        try {
+          child.stdin.write(JSON.stringify({ id, argv }) + '\n');
+        } catch (e) {
+          pending.delete(id);
+          clearTimeout(p.timer);
+          reject(e);
+        }
+      });
+    }
+
+    function kill() {
+      for (const [, p] of pending) { clearTimeout(p.timer); p.reject(new Error('session killed')); }
+      pending.clear();
+      const c = child;
+      child = null;
+      if (c) {
+        // 先礼貌要退出（给引擎 flush 的机会），2s 后硬杀
+        try { c.stdin.write('{"cmd": "exit"}\n'); } catch (e) {}
+        setTimeout(() => { try { c.kill(); } catch (e) {} }, 2000);
+      }
+    }
+
+    return { request, kill };
+  }
+
   return {
     spawnEngine,
     stopEngineWorker,
     engineWorkerConvert,
     runEngineInline,
+    createEngineSession,
     killAll,
     activeChildren,
   };

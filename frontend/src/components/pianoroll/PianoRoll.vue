@@ -18,6 +18,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import Icon from '../Icon.vue';
 import { t } from '../../core/i18n.js';
 import { derivePhonemes } from '../../core/phoneme.js';
+import { laneViewOf } from '../../core/track_automation.js';
 
 const props = defineProps({
   notes: { type: Array, default: () => [] },
@@ -27,6 +28,8 @@ const props = defineProps({
   api: { type: Object, required: true },
   noteLabel: { type: Function, default: (n) => n.lyric || '' },
   height: { type: Number, default: 320 },
+  /** fill 模式：不写死视口高度，由宿主 flex 容器拉伸（卷帘占满剩余空间） */
+  fill: { type: Boolean, default: false },
   canEdit: { type: Boolean, default: true },
   /* ---- 几何（供宿主对齐自带车道用，默认即通用编辑器的自适应布局） ---- */
   left: { type: Number, default: 46 },       // 左侧键盘列宽
@@ -47,6 +50,7 @@ const TOP = props.top;
 const rowH = ref(props.rowHeight);   // 行高（音高半音），可被工具栏 ↕ 切换
 const noteW = ref(props.beatWidth);  // 每拍像素（缩放）
 const scrollX = ref(0);
+const scrollY = ref(0);
 const canvas = ref(null);
 const wrap = ref(null);
 const rootEl = ref(null);
@@ -55,7 +59,8 @@ const ctxX = ref(0), ctxY = ref(0), ctxOnNote = ref(false);
 const ctxNoteId = ref(null);
 const cursor = ref('default');
 let ctx = null;
-let cw = 0, ch = 0;
+let cw = 0, ch = 0;       // 内容尺寸（绘制坐标语义，保持不变）
+const vw = ref(0), vh = ref(0);   // 视口尺寸（backing 大小；不含滚动条，canvas 不遮挡滚动条）
 
 /* 音高范围：以音符为中心自适应，至少 3 个八度 */
 const pitchSpan = computed(() => {
@@ -79,6 +84,9 @@ const totalBeats = computed(() => {
 });
 const viewH = computed(() => TOP + rows.value * rowH.value + 8);
 const viewW = computed(() => LEFT + totalBeats.value * noteW.value + 8);
+/** 滚动范围总高：音符区 + 音素条带 + 曲线泳道（按开关叠加） */
+const contentH = computed(() =>
+  viewH.value + (showPhoneme.value ? PH_H : 0) + (pitchOn.value ? PI_H : 0));
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 function pitchName(p) { return NOTE_NAMES[((p % 12) + 12) % 12] + (Math.floor(p / 12) - 1); }
@@ -122,10 +130,15 @@ function roundRect(g, x, y, w, h, r) {
 
 function setupCanvas() {
   const c = canvas.value; if (!c) return;
+  const el = wrap.value; if (!el) return;
   const dpr = window.devicePixelRatio || 1;
+  // ★ backing = 视口尺寸（浏览器 canvas 单边 ~65535px 上限，全内容尺寸画布
+  //   在长曲放大到一定程度时会创建失败 → 所有音符消失）。
+  //   绘制仍用内容坐标，draw() 里 translate(-scrollX, -scrollY) 平移。
+  //   clientWidth/Height 不含滚动条 → 滚动条露在外面可拖。
+  vw.value = el.clientWidth; vh.value = el.clientHeight;
   cw = viewW.value; ch = viewH.value;
-  c.width = Math.round(cw * dpr); c.height = Math.round(ch * dpr);
-  c.style.width = cw + 'px'; c.style.height = ch + 'px';
+  c.width = Math.max(1, Math.round(vw.value * dpr)); c.height = Math.max(1, Math.round(vh.value * dpr));
   const g = c.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx = g;
@@ -134,15 +147,16 @@ function setupCanvas() {
 function draw() {
   const c = canvas.value; if (!c) return;
   const dpr = window.devicePixelRatio || 1;
-  // 宽或高任一变化都要重建（行高/音域变化只影响高度，漏判会导致底部残影）
-  if (c.width !== Math.round(viewW.value * dpr) || c.height !== Math.round(viewH.value * dpr)) setupCanvas();
+  // 视口尺寸变化（容器拉伸/换页签）都要重建 backing
+  if (c.width !== Math.max(1, Math.round(vw.value * dpr)) || c.height !== Math.max(1, Math.round(vh.value * dpr))) setupCanvas();
   if (!ctx) return;
   const g = ctx;
   const bg = V('--surface'), surfaceMuted = V('--surface-muted'), border = V('--border');
   const ink = V('--text'), muted = V('--text-muted'), brand = V('--brand'), grid = V('--grid');
   const onNote = V('--on-note'), noteFill = V('--note-fill');
-  g.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
-  g.clearRect(0, 0, cw, ch);
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, vw.value, vh.value);
+  g.translate(-scrollX.value, -scrollY.value);   // 之后全部是内容坐标
   g.fillStyle = bg; g.fillRect(0, 0, cw, ch);
 
   // 键盘列 + 顶部标尺底色
@@ -219,11 +233,15 @@ function draw() {
   drawPitch();
 }
 
-/* ---------------- 交互 ---------------- */
+/* ---------------- 交互 ----------------
+   单画布三层（音符 / 音素条带 / 曲线泳道）：按内容 y 分发到对应层的处理函数。
+   toXY 返回的是**内容坐标**（含滚动偏移），命中/绘制同域。 */
 let drag = null;
+const phTop = () => viewH.value;
+const piTop = () => viewH.value + (showPhoneme.value ? PH_H : 0);
 function toXY(e) {
   const r = canvas.value.getBoundingClientRect();
-  return { x: e.clientX - r.left, y: e.clientY - r.top };
+  return { x: e.clientX - r.left + scrollX.value, y: e.clientY - r.top + scrollY.value };
 }
 function hit(x, y) {
   for (let i = props.notes.length - 1; i >= 0; i--) {
@@ -236,10 +254,19 @@ function hit(x, y) {
   }
   return null;
 }
+/** pointerdown 入口：按内容 y 分发到 音符层 / 音素条带 / 曲线泳道 */
 function onDown(e) {
-  if (!props.canEdit) return;
   closeCtx();
-  const { x, y } = toXY(e);
+  const r = canvas.value.getBoundingClientRect();
+  const vx = e.clientX - r.left, vy = e.clientY - r.top;
+  const cy = vy + scrollY.value;
+  if (pitchOn.value && cy >= piTop()) return pDown(e, vx, cy - piTop());
+  if (showPhoneme.value && cy >= phTop()) return phDown(e, vx);
+  onNoteDown(e, vx, vy);
+}
+function onNoteDown(e, vx, vy) {
+  const x = vx + scrollX.value, y = vy + scrollY.value;
+  if (!props.canEdit) return;
   if (x < LEFT || y < TOP) return;
   const hitRes = hit(x, y);
 
@@ -284,13 +311,25 @@ function onDown(e) {
       }),
     };
   } else {
-    drag = { mode: 'box', x0: x, y0: y, x1: x, y1: y, additive: e.shiftKey };
+    // 上游语义（NoteSelectionEditState）：空白处左键按下 = 先取消全部选择，
+    // 再进入框选；Ctrl/Shift = 追加模式（保留当前选择作为基准）。
+    const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+    const prev = props.selectedIds.length ? props.selectedIds
+      : (props.selectedId ? [props.selectedId] : []);
+    if (!additive) props.api.setSelection([], null);
+    drag = { mode: 'box', x0: x, y0: y, x1: x, y1: y, additive, baseIds: additive ? prev : [] };
   }
   try { canvas.value.setPointerCapture(e.pointerId); } catch (err) {}
   draw();
 }
 
 function onMove(e) {
+  if (phDrag) return phMove(e);
+  if (pDrag) return pMove(e);
+  const r = canvas.value.getBoundingClientRect();
+  const cy = (e.clientY - r.top) + scrollY.value;
+  // 悬停在条带/泳道区：不给音符光标
+  if ((showPhoneme.value || pitchOn.value) && cy >= phTop()) { cursor.value = 'default'; return; }
   const { x, y } = toXY(e);
   if (!drag) {
     const h = hit(x, y);
@@ -298,7 +337,21 @@ function onMove(e) {
       : (h.side === 'body' ? 'move' : 'ew-resize');
     return;
   }
-  if (drag.mode === 'box') { drag.x1 = x; drag.y1 = y; return draw(); }
+  if (drag.mode === 'box') {
+    drag.x1 = x; drag.y1 = y;
+    // 实时预览（上游 TempSelectNotes 语义）：相交命中的音符即时高亮，
+    // 选择不入撤销栈，直接 setSelection 是安全的。
+    const x0 = Math.min(drag.x0, x), y0 = Math.min(drag.y0, y);
+    const x1 = Math.max(drag.x0, x), y1 = Math.max(drag.y0, y);
+    const ids = [];
+    for (const n of props.notes) {
+      const g = noteGeo(n);
+      if (g.x < x1 && g.x + g.w > x0 && g.y < y1 && g.y + g.h > y0) ids.push(n.id);
+    }
+    const next = drag.additive ? Array.from(new Set([...drag.baseIds, ...ids])) : ids;
+    props.api.setSelection(next, next[0] ?? null);
+    return draw();
+  }
   if (drag.mode === 'create') {
     const dur = Math.max(1 / snapDiv.value, snapBeat(drag.b0 + beatOf(x) - beatOf(drag.x0)));
     props.api.setNotesDuration([drag.id], dur);
@@ -332,8 +385,11 @@ function onMove(e) {
   }
 }
 
-function onUp() {
+function onUp(e) {
+  if (phDrag) return phUp();
+  if (pDrag) return pUp();
   if (drag && drag.mode === 'box') {
+    // 与 onMove 的实时预览同一套命中（水平相交），提交最终结果
     const x0 = Math.min(drag.x0, drag.x1), y0 = Math.min(drag.y0, drag.y1);
     const x1 = Math.max(drag.x0, drag.x1), y1 = Math.max(drag.y0, drag.y1);
     const ids = [];
@@ -341,8 +397,7 @@ function onUp() {
       const g = noteGeo(n);
       if (g.x < x1 && g.x + g.w > x0 && g.y < y1 && g.y + g.h > y0) ids.push(n.id);
     }
-    const prev = props.selectedIds;
-    const next = drag.additive ? Array.from(new Set([...prev, ...ids])) : ids;
+    const next = drag.additive ? Array.from(new Set([...(drag.baseIds || []), ...ids])) : ids;
     props.api.setSelection(next, next[0] ?? null);
   }
   drag = null;
@@ -370,15 +425,64 @@ function onCtx(e) {
 function closeCtx() { ctxOpen.value = false; }
 
 function onWheel(e) {
+  // ★ 画布浮在滚动区上，wheel 不会再自然驱动 wrap → 这里手动接管
+  e.preventDefault();
+  const wrapEl = wrap.value; if (!wrapEl) return;
   if (e.ctrlKey || e.metaKey) {
-    e.preventDefault();
-    noteW.value = Math.max(12, Math.min(120, noteW.value * (e.deltaY < 0 ? 1.12 : 0.89)));
-    nextTick(draw);
+    // 以光标为锚缩放：记下光标处的拍，缩放后把同一拍放回同一屏幕位置。
+    const vx = e.clientX - wrapEl.getBoundingClientRect().left;
+    zoomAt(e.deltaY < 0 ? 1.12 : 0.89, vx);
   } else if (e.shiftKey) {
-    e.preventDefault();
-    wrap.value.scrollLeft += e.deltaY;
+    wrapEl.scrollLeft += e.deltaY;
+  } else {
+    wrapEl.scrollTop += e.deltaY;
+    wrapEl.scrollLeft += e.deltaX;
   }
 }
+
+/** 以屏幕位置 anchorVx（相对视口左缘）为锚缩放 noteW。
+ *  同一拍在缩放前后落在同一屏幕 x 上：scrollLeft' = beat·noteW' + LEFT − anchorVx。 */
+function zoomAt(factor, anchorVx) {
+  const wrapEl = wrap.value;
+  if (!wrapEl) return;
+  const oldW = noteW.value;
+  const newW = Math.max(12, Math.min(120, oldW * factor));
+  if (newW === oldW) return;
+  const beat = (wrapEl.scrollLeft + anchorVx - LEFT) / oldW;
+  noteW.value = newW;
+  nextTick(() => {
+    // 先按新宽度重建画布（scrollWidth 才会更新），再校正滚动位置
+    setupCanvas();
+    draw();
+    wrapEl.scrollLeft = Math.max(0, beat * newW + LEFT - anchorVx);
+  });
+}
+/** 工具栏 ± 按钮：以视口中心为锚缩放 */
+function zoomAtCenter(factor) {
+  const wrapEl = wrap.value;
+  zoomAt(factor, wrapEl ? wrapEl.clientWidth / 2 : 0);
+}
+
+/* ---------------- 滚动 / 尺寸联动 ----------------
+   画布是视口尺寸，滚动只改 translate 原点 + 重绘（rAF 合帧） */
+let scrollRaf = 0;
+function onScroll() {
+  const el = wrap.value; if (!el) return;
+  scrollX.value = el.scrollLeft;
+  scrollY.value = el.scrollTop;
+  if (!scrollRaf) {
+    scrollRaf = requestAnimationFrame(() => {
+      scrollRaf = 0;
+      draw();
+    });
+  }
+}
+function onResize() {
+  setupCanvas();
+  draw();
+}
+/** 容器尺寸/滚动条出现与否都会改 clientWidth → 跟踪重建画布 */
+let wrapRO = null;
 
 /* ---------------- 快捷键 ---------------- */
 function onKey(e) {
@@ -406,30 +510,24 @@ function onKey(e) {
 const PH_H = 46;
 const showPhoneme = ref(false);
 try { showPhoneme.value = localStorage.getItem('fufumidi_roll_phoneme') === '1'; } catch (e) {}
-const phonemeCanvas = ref(null);
-let phCtx = null;
-
-function setupPhonemeCanvas() {
-  const c = phonemeCanvas.value; if (!c) return;
-  const dpr = window.devicePixelRatio || 1;
-  c.width = Math.round(cw * dpr); c.height = Math.round(PH_H * dpr);
-  c.style.width = cw + 'px'; c.style.height = PH_H + 'px';
-  phCtx = c.getContext('2d');
-  phCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-}
+/** 音素块命中数据（drawPhoneme 重建）：拖拽水平移动 = 改该音素的 offset */
+let phHit = [];
+let phDrag = null;   // { noteId, idx, startX, startOffMs }
 
 function drawPhoneme() {
-  const c = phonemeCanvas.value;
-  if (!c || !showPhoneme.value) return;
+  if (!showPhoneme.value) return;
+  const c = canvas.value; if (!c) return;
   const dpr = window.devicePixelRatio || 1;
-  if (c.width !== Math.round(cw * dpr) || c.height !== Math.round(PH_H * dpr)) setupPhonemeCanvas();
-  const g = phCtx; if (!g) return;
+  if (c.width !== Math.max(1, Math.round(vw.value * dpr)) || c.height !== Math.max(1, Math.round(vh.value * dpr))) setupCanvas();
+  const g = ctx; if (!g) return;
+  // 画在主画布的音素层（内容顶 = viewH）：视口 backing + 平移到层内容坐标
+  g.save();
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.translate(-scrollX.value, viewH.value - scrollY.value);
   const surf = V('--surface'), muted = V('--surface-muted'), border = V('--border');
   const ink = V('--text'), dim = V('--text-muted'), brand = V('--brand'), grid = V('--grid');
-  g.clearRect(0, 0, cw, PH_H);
-  g.fillStyle = muted; g.fillRect(0, 0, cw, PH_H);
-  g.fillStyle = surf; g.fillRect(0, 0, LEFT, PH_H);
+  g.fillStyle = muted; g.fillRect(scrollX.value, 0, vw.value, PH_H);
+  g.fillStyle = surf; g.fillRect(scrollX.value, 0, LEFT, PH_H);
   g.fillStyle = dim; g.font = '9px system-ui, sans-serif'; g.textAlign = 'right';
   g.fillText(t('音素'), LEFT - 6, PH_H / 2 + 3);
 
@@ -443,22 +541,35 @@ function drawPhoneme() {
   const selSet = new Set(props.selectedIds);
   const bandTop = 5, bandH = PH_H - 16;
   let lastTextEndX = -Infinity, raise = false;
+  // 音素块的命中数据（拖拽改 offset 用；绘制时重建）
+  phHit = [];
+  const noteById = new Map(props.notes.map(n => [n.id, n]));
   for (const row of derivePhonemes(props.notes)) {
     const selected = selSet.has(row.noteId);
-    for (const it of row.items) {
-      const x0 = xOf(row.startBeat + it.t0);
-      const x1 = xOf(row.startBeat + it.t1);
+    const note = noteById.get(row.noteId);
+    const overrides = (note && note.phonemeOverrides) || [];
+    for (let itIdx = 0; itIdx < row.items.length; itIdx++) {
+      const it = row.items[itIdx];
+      // 音素覆写的起点偏移（ms → 拍；拖拽编辑的就是它，拖拽中用预览值）
+      const ov = overrides.find(o => o && o.index === itIdx);
+      let offMs = (ov && ov.offset) || 0;
+      if (phDrag && phDrag.noteId === row.noteId && phDrag.idx === itIdx && phDrag.offMs != null) offMs = phDrag.offMs;
+      const offBeat = (offMs / 1000) * (props.bpm / 60);
+      const x0 = xOf(row.startBeat + it.t0 + offBeat);
+      const x1 = xOf(row.startBeat + it.t1 + offBeat);
       const w = Math.max(2, x1 - x0) - 1;
+      phHit.push({ noteId: row.noteId, idx: itIdx, x0, x1: x0 + w });
       if (x0 + w < scrollX.value - 60 || x0 > scrollX.value + (wrap.value ? wrap.value.clientWidth : cw) + 60) continue;
       // 分段块：辅音用强调底、元音用普通底
       g.fillStyle = selected ? brand : (it.cons ? V('--tint-strong') : V('--note-fill'));
       g.fillRect(x0, bandTop, w, bandH);
       g.strokeStyle = selected ? brand : V('--note-edge'); g.lineWidth = 1;
       g.strokeRect(x0 + 0.5, bandTop + 0.5, w, bandH);
-      // 音素起点竖线（对应 OpenUTAU 的 position 线）
-      g.strokeStyle = selected ? brand : ink; g.globalAlpha = 0.6;
+      // 音素起点竖线（对应 OpenUTAU 的 position 线）；被覆写过的加粗提示
+      g.strokeStyle = selected ? brand : ink;
+      g.globalAlpha = 0.6; g.lineWidth = ov ? 2 : 1;
       g.beginPath(); g.moveTo(x0 + 0.5, bandTop); g.lineTo(x0 + 0.5, bandTop + bandH); g.stroke();
-      g.globalAlpha = 1;
+      g.globalAlpha = 1; g.lineWidth = 1;
 
       // 标签：窄处不画；碰撞则上下交错（复用 OpenUTAU 的 raiseText 思路）
       if (noteW.value > 20 && it.text) {
@@ -474,98 +585,155 @@ function drawPhoneme() {
       }
     }
   }
+  g.restore();
 }
 
-/* ---------------- 音高车道（P3） ----------------
-   参考 OpenUTAU 的曲线车道：车道内是「拍 → 音分」的控制点折线，工具齐全
-   （手绘 / 直线 / 正弦 / 平滑 / 移动控制点）。与音符、音素同处一个滚动容器，天然对齐。 */
+/* ---- 音素时间编辑：水平拖拽音素块 = 改该音素的 offset（ms，存 phonemeOverrides）---- */
+function phDown(e, vx) {
+  if (!showPhoneme.value || !props.canEdit) return;
+  const x = vx + scrollX.value;
+  const hit = phHit.find(h => x >= h.x0 - 2 && x <= h.x1 + 2);
+  if (!hit) return;
+  if (props.api && props.api.pushUndo) props.api.pushUndo();
+  const note = (props.notes || []).find(n => n.id === hit.noteId);
+  const cur = ((note && note.phonemeOverrides) || []).find(o => o && o.index === hit.idx);
+  phDrag = { noteId: hit.noteId, idx: hit.idx, startX: e.clientX, startOffMs: (cur && cur.offset) || 0 };
+  try { canvas.value.setPointerCapture(e.pointerId); } catch (err) {}
+}
+function phMove(e) {
+  if (!phDrag) return;
+  // 像素 → 拍 → ms：拖多少拍换算成毫秒偏移（以当前 BPM）
+  const dBeat = (e.clientX - phDrag.startX) / Math.max(1, noteW.value);
+  const off = Math.round(Math.max(-2000, Math.min(2000, phDrag.startOffMs + dBeat * 60000 / Math.max(1, props.bpm))));
+  if (off !== phDrag.offMs) {
+    phDrag.offMs = off;
+    drawPhoneme();
+  }
+}
+function phUp() {
+  if (!phDrag) return;
+  const d = phDrag; phDrag = null;
+  if (d.offMs == null) return;                       // 没动过
+  const note = (props.notes || []).find(n => n.id === d.noteId);
+  if (!note || !props.api || !props.api.updateNote) return;
+  // 合并进该音符的覆写表；offset 归零且无 delta 的条目直接移除
+  const list = (note.phonemeOverrides || []).filter(o => o && o.index !== d.idx);
+  if (d.offMs !== 0) list.push({ index: d.idx, offset: d.offMs });
+  props.api.updateNote(d.noteId, { phonemeOverrides: list });
+  drawPhoneme();
+}
+
+/* ---------------- 曲线泳道（PIT / DYN / BRE / GEN） ----------------
+   参考 OpenUTAU 的曲线车道：车道内是「拍 → 参数值」的控制点折线，工具齐全
+   （手绘 / 直线 / 正弦 / 平滑 / 移动控制点）。与音符、音素同处一个滚动容器，天然对齐。
+   ★ 值域/刻度从 track_automation.laneViewOf 派生（DYN/BRE/GEN 仅 UTAU 轨可编辑，
+     PIT 两边通用）；读写统一走 api.getCurvePoints / setCurvePoints ——
+     PIT 经 store.setCurve 自动镜像 pitchCurve，渲染链路直接消费。 */
 const PI_H = 92;
-const PITCH_MIN = -200, PITCH_MAX = 200;
+const LANE_DEFS = Object.fromEntries(
+  ['PIT', 'DYN', 'BRE', 'GEN'].map((a) => [a, laneViewOf(a)]),
+);
 const pitchOn = ref(false);
 try { pitchOn.value = localStorage.getItem('fufumidi_roll_pitch') === '1'; } catch (e) {}
 watch(pitchOn, v => { try { localStorage.setItem('fufumidi_roll_pitch', v ? '1' : '0'); } catch (e) {} });
-const pitchCanvas = ref(null);
-let piCtx = null;
+const activeLane = ref('PIT');
+try { const l = localStorage.getItem('fufumidi_roll_lane'); if (LANE_DEFS[l]) activeLane.value = l; } catch (e) {}
+watch(activeLane, v => { try { localStorage.setItem('fufumidi_roll_lane', v); } catch (e) {} });
+/** 当前轨道可用的泳道：DYN/BRE/GEN 只有 UTAU 吃（引擎差异见 CURVE_TARGETS.engines） */
+const laneAvail = computed(() => {
+  const eng = (props.api && props.api.getEngine) ? props.api.getEngine() : 'utau';
+  return eng === 'utau' ? ['PIT', 'DYN', 'BRE', 'GEN'] : ['PIT'];
+});
+watch(laneAvail, (list) => {
+  if (!list.includes(activeLane.value)) activeLane.value = 'PIT';
+});
+const laneDef = computed(() => LANE_DEFS[activeLane.value] || LANE_DEFS.PIT);
 const pitchTool = ref('draw');   // move | draw | line | sine | smooth
 const pCurve = ref([]);
 let pDrag = null;
 let pitchBusy = false;
-
-function setupPitchCanvas() {
-  const c = pitchCanvas.value; if (!c) return;
-  const dpr = window.devicePixelRatio || 1;
-  c.width = Math.round(cw * dpr); c.height = Math.round(PI_H * dpr);
-  c.style.width = cw + 'px'; c.style.height = PI_H + 'px';
-  piCtx = c.getContext('2d');
-  piCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+/** 参数值 → 泳道 y（显示窗口由 laneDef 决定；PIT ±200，其余全域） */
+function yOfVal(v) {
+  const half = PI_H / 2 - 6;
+  const { dispMin, dispMax } = laneDef.value;
+  const c = Math.max(dispMin, Math.min(dispMax, v));
+  return PI_H / 2 - ((c - (dispMin + dispMax) / 2) / ((dispMax - dispMin) / 2)) * half;
 }
-function yOfCents(c) { const half = PI_H / 2 - 6; return PI_H / 2 - (Math.max(PITCH_MIN, Math.min(PITCH_MAX, c)) / PITCH_MAX) * half; }
-function centsOfY(y) { const half = PI_H / 2 - 6; return Math.max(PITCH_MIN, Math.min(PITCH_MAX, Math.round((PI_H / 2 - y) / half * PITCH_MAX))); }
+function valOfY(y) {
+  const half = PI_H / 2 - 6;
+  const { dispMin, dispMax } = laneDef.value;
+  const v = (PI_H / 2 - y) / half * ((dispMax - dispMin) / 2) + (dispMin + dispMax) / 2;
+  return Math.round(Math.max(dispMin, Math.min(dispMax, v)));
+}
 
-function loadPitch() {
+function loadLane() {
   if (pitchBusy) return;
-  const pts = (props.api && props.api.getPitchPoints) ? (props.api.getPitchPoints() || []) : [];
+  const pts = (props.api && props.api.getCurvePoints) ? (props.api.getCurvePoints(activeLane.value) || []) : [];
   pCurve.value = pts.slice().sort((a, b) => a.beat - b.beat);
 }
 const pitchRev = computed(() => {
-  const pts = (props.api && props.api.getPitchPoints) ? (props.api.getPitchPoints() || []) : [];
+  const pts = (props.api && props.api.getCurvePoints) ? (props.api.getCurvePoints(activeLane.value) || []) : [];
   let s = pts.length;
-  for (const p of pts) s += p.beat * 3 + p.cents * 7;
+  for (const p of pts) s += p.beat * 3 + p.value * 7;
   return s;
 });
 
-function upsertPitchPoint(b, c) {
+function upsertLanePoint(b, v) {
   const eps = 1 / 32;
   pCurve.value = pCurve.value.filter(p => Math.abs(p.beat - b) > eps);
-  pCurve.value.push({ beat: b, cents: c });
+  pCurve.value.push({ beat: b, value: v });
   pCurve.value.sort((a, x) => a.beat - x.beat);
   if (pCurve.value.length > 4000) pCurve.value = pCurve.value.filter((_, i) => i % 2 === 0);
 }
 function applyLineOrSine(d) {
   let b0 = Math.min(d.b0, d.b1), b1 = Math.max(d.b0, d.b1);
-  let c0, c1;
-  if (d.b0 <= d.b1) { c0 = d.c0; c1 = d.c1; } else { c0 = d.c1; c1 = d.c0; }
-  if (b1 - b0 < 1 / 32) { upsertPitchPoint(b0, c0); return; }
+  let v0, v1;
+  if (d.b0 <= d.b1) { v0 = d.v0; v1 = d.v1; } else { v0 = d.v1; v1 = d.v0; }
+  if (b1 - b0 < 1 / 32) { upsertLanePoint(b0, v0); return; }
   const eps = 1 / 64;
   pCurve.value = pCurve.value.filter(p => p.beat < b0 - eps || p.beat > b1 + eps);
   const span = b1 - b0, step = 1 / 16;
   const cyc = Math.max(1, Math.round(span * 1.5));
-  const amp = d.tool === 'sine' ? (c1 - c0) * 0.5 : 0;
+  const amp = d.tool === 'sine' ? (v1 - v0) * 0.5 : 0;
   for (let t = 0; t <= span + 1e-9; t += step) {
     const frac = t / span;
-    let c = c0 + (c1 - c0) * frac;
-    if (d.tool === 'sine') c += amp * Math.sin(frac * Math.PI * 2 * cyc);
-    pCurve.value.push({ beat: b0 + t, cents: Math.round(c) });
+    let v = v0 + (v1 - v0) * frac;
+    if (d.tool === 'sine') v += amp * Math.sin(frac * Math.PI * 2 * cyc);
+    pCurve.value.push({ beat: b0 + t, value: Math.round(v) });
   }
   pCurve.value.sort((a, x) => a.beat - x.beat);
 }
-function smoothPitchAt(b) {
+function smoothLaneAt(b) {
   const win = 0.4;
   const pts = pCurve.value;
   for (let i = 1; i < pts.length - 1; i++) {
-    if (Math.abs(pts[i].beat - b) <= win) pts[i].cents = Math.round((pts[i - 1].cents + pts[i].cents + pts[i + 1].cents) / 3);
+    if (Math.abs(pts[i].beat - b) <= win) pts[i].value = Math.round((pts[i - 1].value + pts[i].value + pts[i + 1].value) / 3);
   }
 }
 
 function drawPitch() {
-  const c = pitchCanvas.value;
-  if (!c || !pitchOn.value) return;
+  if (!pitchOn.value) return;
+  const c = canvas.value; if (!c) return;
   const dpr = window.devicePixelRatio || 1;
-  if (c.width !== Math.round(cw * dpr) || c.height !== Math.round(PI_H * dpr)) setupPitchCanvas();
-  const g = piCtx; if (!g) return;
+  if (c.width !== Math.max(1, Math.round(vw.value * dpr)) || c.height !== Math.max(1, Math.round(vh.value * dpr))) setupCanvas();
+  const g = ctx; if (!g) return;
+  // 画在主画布的泳道层（内容顶 = piTop）：视口 backing + 平移到层内容坐标
+  g.save();
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.translate(-scrollX.value, piTop() - scrollY.value);
   const surf = V('--surface'), muted = V('--surface-muted'), border = V('--border');
   const ink = V('--text'), dim = V('--text-muted'), brand = V('--brand'), grid = V('--grid');
-  g.clearRect(0, 0, cw, PI_H);
-  g.fillStyle = muted; g.fillRect(0, 0, cw, PI_H);
+  g.fillStyle = muted; g.fillRect(scrollX.value, 0, vw.value, PI_H);
   g.fillStyle = surf; g.fillRect(0, 0, LEFT, PI_H);
   g.fillStyle = dim; g.font = '9px system-ui, sans-serif'; g.textAlign = 'right';
-  g.fillText(t('音高'), LEFT - 6, PI_H / 2 + 3);
+  g.fillText(t(laneDef.value.label), LEFT - 6, PI_H / 2 + 3);
 
-  // 刻度线：0 / ±100 / ±200 音分
-  for (const cval of [-200, -100, 0, 100, 200]) {
-    const y = yOfCents(cval);
-    g.strokeStyle = cval === 0 ? border : grid; g.lineWidth = cval === 0 ? 1.2 : 0.6;
+  // 刻度线（按泳道值域；0 线加粗）
+  for (const cval of laneDef.value.ticks) {
+    const y = yOfVal(cval);
+    const isMid = cval === (laneDef.value.dispMin + laneDef.value.dispMax) / 2
+      || (laneDef.value.dispMin < 0 && laneDef.value.dispMax > 0 && cval === 0);
+    g.strokeStyle = isMid ? border : grid; g.lineWidth = isMid ? 1.2 : 0.6;
     g.beginPath(); g.moveTo(LEFT, y + 0.5); g.lineTo(cw, y + 0.5); g.stroke();
     g.fillStyle = dim; g.textAlign = 'right'; g.font = '8px system-ui, sans-serif';
     g.fillText(String(cval), LEFT - 3, y + 3);
@@ -580,67 +748,68 @@ function drawPitch() {
   const pts = pCurve.value;
   if (pts.length) {
     g.strokeStyle = brand; g.lineWidth = 1.6; g.beginPath();
-    pts.forEach((p, i) => { const x = xOf(p.beat), y = yOfCents(p.cents); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+    pts.forEach((p, i) => { const x = xOf(p.beat), y = yOfVal(p.value); i ? g.lineTo(x, y) : g.moveTo(x, y); });
     g.stroke();
     g.fillStyle = ink;
-    for (const p of pts) g.fillRect(xOf(p.beat) - 2, yOfCents(p.cents) - 2, 4, 4);
+    for (const p of pts) g.fillRect(xOf(p.beat) - 2, yOfVal(p.value) - 2, 4, 4);
   }
 
   // 直线 / 正弦拖拽预览
   if (pDrag && (pDrag.tool === 'line' || pDrag.tool === 'sine')) {
-    const x0 = xOf(pDrag.b0), y0 = yOfCents(pDrag.c0), x1 = xOf(pDrag.b1), y1 = yOfCents(pDrag.c1);
+    const x0 = xOf(pDrag.b0), y0 = yOfVal(pDrag.v0), x1 = xOf(pDrag.b1), y1 = yOfVal(pDrag.v1);
     g.save(); g.strokeStyle = brand; g.setLineDash([4, 3]); g.lineWidth = 1;
     g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke(); g.setLineDash([]); g.restore();
     if (pDrag.tool === 'sine') {
       let a = Math.min(pDrag.b0, pDrag.b1), bb = Math.max(pDrag.b0, pDrag.b1);
-      let ca = pDrag.b0 <= pDrag.b1 ? pDrag.c0 : pDrag.c1, cb = pDrag.b0 <= pDrag.b1 ? pDrag.c1 : pDrag.c0;
+      let va = pDrag.b0 <= pDrag.b1 ? pDrag.v0 : pDrag.v1, vb = pDrag.b0 <= pDrag.b1 ? pDrag.v1 : pDrag.v0;
       const span = bb - a; if (span >= 1 / 32) {
         const cyc = Math.max(1, Math.round(span * 1.5));
-        const amp = (cb - ca) * 0.5;
+        const amp = (vb - va) * 0.5;
         g.strokeStyle = brand; g.lineWidth = 1; g.beginPath();
-        for (let t = 0; t <= span + 1e-9; t += 1 / 32) {
-          const frac = t / span;
-          const y = yOfCents(ca + (cb - ca) * frac + amp * Math.sin(frac * Math.PI * 2 * cyc));
-          const x = xOf(a + t);
-          t === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+        for (let t2 = 0; t2 <= span + 1e-9; t2 += 1 / 32) {
+          const frac = t2 / span;
+          const y = yOfVal(va + (vb - va) * frac + amp * Math.sin(frac * Math.PI * 2 * cyc));
+          const x = xOf(a + t2);
+          t2 === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
         }
         g.stroke();
       }
     }
   }
+  g.restore();
 }
 
-function pDown(e) {
+function pDown(e, vx, ly) {
   if (!pitchOn.value || !props.canEdit) return;
-  const r = pitchCanvas.value.getBoundingClientRect();
-  const x = e.clientX - r.left, y = e.clientY - r.top;
+  const x = vx + scrollX.value, y = ly;
   if (x < LEFT) return;
   if (props.api && props.api.pushUndo) props.api.pushUndo();
   pitchBusy = true;
-  loadPitch();
-  const b = snapBeat(beatOf(x)), c = centsOfY(y);
+  loadLane();
+  const b = snapBeat(beatOf(x)), v = valOfY(y);
   if (pitchTool.value === 'move') {
     let best = -1, bd = 9;
-    pCurve.value.forEach((p, i) => { const d = Math.hypot(xOf(p.beat) - x, yOfCents(p.cents) - y); if (d < bd) { bd = d; best = i; } });
+    pCurve.value.forEach((p, i) => { const d = Math.hypot(xOf(p.beat) - x, yOfVal(p.value) - y); if (d < bd) { bd = d; best = i; } });
     if (best < 0) { pitchBusy = false; return; }
     pDrag = { tool: 'move', idx: best };
   } else {
-    pDrag = { tool: pitchTool.value, b0: b, c0: c, b1: b, c1: c };
-    if (pitchTool.value === 'draw') upsertPitchPoint(b, c);
-    else if (pitchTool.value === 'smooth') smoothPitchAt(b);
+    pDrag = { tool: pitchTool.value, b0: b, v0: v, b1: b, v1: v };
+    if (pitchTool.value === 'draw') upsertLanePoint(b, v);
+    else if (pitchTool.value === 'smooth') smoothLaneAt(b);
   }
-  try { pitchCanvas.value.setPointerCapture(e.pointerId); } catch (err) {}
+  try { canvas.value.setPointerCapture(e.pointerId); } catch (err) {}
   drawPitch();
 }
 function pMove(e) {
   if (!pDrag) return;
-  const r = pitchCanvas.value.getBoundingClientRect();
-  const x = e.clientX - r.left, y = e.clientY - r.top;
-  const b = snapBeat(beatOf(x)), c = centsOfY(y);
-  if (pDrag.tool === 'draw') upsertPitchPoint(b, c);
-  else if (pDrag.tool === 'smooth') smoothPitchAt(b);
-  else if (pDrag.tool === 'move') { const p = pCurve.value[pDrag.idx]; if (p) { p.beat = b; p.cents = c; pCurve.value.sort((a, z) => a.beat - z.beat); } }
-  else { pDrag.b1 = b; pDrag.c1 = c; }
+  const r = canvas.value.getBoundingClientRect();
+  const x = e.clientX - r.left + scrollX.value;
+  const y = (e.clientY - r.top) + scrollY.value - piTop();
+  const b = snapBeat(beatOf(x)), v = valOfY(y);
+  if (pDrag.tool === 'draw') upsertLanePoint(b, v);
+  else if (pDrag.tool === 'smooth') smoothLaneAt(b);
+  else if (pDrag.tool === 'move') { const p = pCurve.value[pDrag.idx]; if (p) { p.beat = b; p.value = v; pCurve.value.sort((a, z) => a.beat - z.beat); } }
+  else { pDrag.b1 = b; pDrag.v1 = v; }
   drawPitch();
 }
 function pUp() {
@@ -648,13 +817,13 @@ function pUp() {
   if (pDrag.tool === 'line' || pDrag.tool === 'sine') applyLineOrSine(pDrag);
   pDrag = null;
   pitchBusy = false;
-  if (props.api && props.api.setPitchPoints) props.api.setPitchPoints(pCurve.value.slice());
+  if (props.api && props.api.setCurvePoints) props.api.setCurvePoints(activeLane.value, pCurve.value.slice());
   drawPitch();
 }
 function clearPitch() {
   if (props.api && props.api.pushUndo) props.api.pushUndo();
   pCurve.value = [];
-  if (props.api && props.api.setPitchPoints) props.api.setPitchPoints([]);
+  if (props.api && props.api.setCurvePoints) props.api.setCurvePoints(activeLane.value, []);
   drawPitch();
 }
 
@@ -673,15 +842,26 @@ const lyricRev = computed(() => {
 });
 watch([rev, selRev, lyricRev, () => props.bpm, pitchSpan], () => nextTick(draw));
 watch([noteW, rowH, showPhoneme, pitchOn], () => nextTick(() => { setupCanvas(); draw(); }));
-watch(pitchRev, () => { loadPitch(); nextTick(drawPitch); });
+watch(pitchRev, () => { loadLane(); nextTick(drawPitch); });
+watch(activeLane, () => { loadLane(); nextTick(drawPitch); });
 watch(showPhoneme, v => { try { localStorage.setItem('fufumidi_roll_phoneme', v ? '1' : '0'); } catch (e) {} });
 
 onMounted(() => {
   setupCanvas(); draw();
-  loadPitch();
+  loadLane();
   window.addEventListener('keydown', onKey);
+  window.addEventListener('resize', onResize);
+  if (typeof ResizeObserver !== 'undefined' && wrap.value) {
+    wrapRO = new ResizeObserver(() => onResize());
+    wrapRO.observe(wrap.value);
+  }
 });
-onBeforeUnmount(() => { window.removeEventListener('keydown', onKey); });
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKey);
+  window.removeEventListener('resize', onResize);
+  if (wrapRO) { wrapRO.disconnect(); wrapRO = null; }
+  if (scrollRaf) { cancelAnimationFrame(scrollRaf); scrollRaf = 0; }
+});
 
 /* 供宿主（如 UTAU 工作台的自定义车道）对齐几何与滚动：
    车道画布用 xOf/beatOf 换算、读 wrap 同步横向滚动即可 */
@@ -694,7 +874,7 @@ defineExpose({
 </script>
 
 <template>
-  <div ref="rootEl" class="pr">
+  <div ref="rootEl" class="pr" :class="{ 'pr-fill': fill }">
     <!-- 工具栏（宿主自带工具条时可关掉） -->
     <div v-if="showToolbar" class="pr-bar">
       <div class="pr-tools">
@@ -717,46 +897,50 @@ defineExpose({
         <input type="checkbox" v-model="pitchOn" /> {{ t('音高') }}
       </label>
       <span class="pr-zoom">
-        <button class="pr-mini" :title="t('缩小')" @click="noteW = Math.max(12, noteW * 0.85)">−</button>
-        <button class="pr-mini" :title="t('放大')" @click="noteW = Math.min(120, noteW * 1.18)">+</button>
+        <button class="pr-mini" :title="t('缩小')" @click="zoomAtCenter(0.85)">−</button>
+        <button class="pr-mini" :title="t('放大')" @click="zoomAtCenter(1.18)">+</button>
         <button class="pr-mini" :title="t('行高')" @click="rowH = rowH >= 18 ? 12 : rowH + 3">↕</button>
       </span>
       <span class="pr-hint">{{ t('滚轮+Ctrl 缩放 · Shift+滚轮 平移 · 双击改歌词 · 方向键微调 · Ctrl+Z 撤销') }}</span>
     </div>
 
-    <!-- 音高工具行（仅在打开音高车道时显示） -->
+    <!-- 曲线泳道工具行（仅在打开泳道时显示） -->
+    <Transition name="fade">
     <div v-if="showToolbar && pitchOn" class="pr-bar pr-bar-pitch">
-      <span class="pr-ad">{{ t('音高工具') }}</span>
+      <label class="pr-ad" :title="t('选择要编辑的参数曲线')">
+        <select class="select-input" v-model="activeLane">
+          <option v-for="l in laneAvail" :key="l" :value="l">{{ t(LANE_DEFS[l].label) }}</option>
+        </select>
+      </label>
       <div class="pr-tools">
         <button class="pr-tool" :class="{ on: pitchTool === 'move' }" :title="t('拖动控制点')" @click="pitchTool = 'move'">⌖ {{ t('移动') }}</button>
         <button class="pr-tool" :class="{ on: pitchTool === 'draw' }" :title="t('按住拖出曲线')" @click="pitchTool = 'draw'">✎ {{ t('手绘') }}</button>
         <button class="pr-tool" :class="{ on: pitchTool === 'line' }" :title="t('从 A 拖到 B 画直线')" @click="pitchTool = 'line'">╱ {{ t('直线') }}</button>
         <button class="pr-tool" :class="{ on: pitchTool === 'sine' }" :title="t('从 A 拖到 B 画正弦波')" @click="pitchTool = 'sine'">∿ {{ t('正弦') }}</button>
         <button class="pr-tool" :class="{ on: pitchTool === 'smooth' }" :title="t('按住拖动以平滑局部')" @click="pitchTool = 'smooth'">∼ {{ t('平滑') }}</button>
-        <button class="pr-tool" :title="t('清空音高曲线')" @click="clearPitch">✕ {{ t('清空') }}</button>
+        <button class="pr-tool" :title="t('清空当前曲线')" @click="clearPitch">✕ {{ t('清空') }}</button>
       </div>
     </div>
+    </Transition>
 
-    <!-- 画布 -->
-    <div ref="wrap" class="pr-scroll" :style="{ height: height + 'px' }" @pointerdown="closeCtx" @wheel="onWheel">
-      <canvas ref="canvas" class="pr-canvas" :style="{ cursor }"
+    <!-- 画布：spacer 撑出滚动范围，视口尺寸的画布浮在其上（内容坐标经 translate 对齐） -->
+    <div class="pr-body">
+      <div ref="wrap" class="pr-scroll" :style="fill ? {} : { height: height + 'px' }" @scroll="onScroll">
+        <div class="pr-spacer" :style="{ width: viewW + 'px', height: contentH + 'px' }"></div>
+      </div>
+      <canvas ref="canvas" class="pr-vp" :style="{ cursor, width: vw + 'px', height: vh + 'px' }"
         @pointerdown="onDown" @pointermove="onMove" @pointerup="onUp" @pointercancel="onUp"
-        @dblclick="onDbl" @contextmenu="onCtx"></canvas>
-      <!-- 音素条带：与上方音符画布同处一个滚动容器，横向天然对齐 -->
-      <canvas v-if="showPhoneme" ref="phonemeCanvas" class="pr-canvas pr-ph-canvas"></canvas>
-      <!-- 音高车道：曲线与控制点 -->
-      <canvas v-if="pitchOn" ref="pitchCanvas" class="pr-canvas pr-ph-canvas"
-        @pointerdown="pDown" @pointermove="pMove" @pointerup="pUp" @pointercancel="pUp"></canvas>
+        @dblclick="onDbl" @contextmenu="onCtx" @wheel="onWheel"></canvas>
     </div>
 
     <!-- 右键菜单 -->
     <Transition name="ctxmenu">
       <div v-if="ctxOpen" class="pr-ctx" :style="{ left: ctxX + 'px', top: ctxY + 'px' }" @pointerdown.stop @contextmenu.prevent>
-        <button class="pr-ctx-i" @click="api.undo(); closeCtx()"><Icon name="undo" :size="13" /> {{ t('撤销') }}</button>
-        <button class="pr-ctx-i" @click="api.redo(); closeCtx()"><Icon name="redo" :size="13" /> {{ t('重做') }}</button>
+        <button class="pr-ctx-i" :disabled="!ctxOnNote" @click="props.api.undo(); closeCtx()"><Icon name="undo" :size="13" /> {{ t('撤销') }}</button>
+        <button class="pr-ctx-i" :disabled="!ctxOnNote" @click="props.api.redo(); closeCtx()"><Icon name="redo" :size="13" /> {{ t('重做') }}</button>
         <div class="pr-ctx-sep"></div>
         <button class="pr-ctx-i" :disabled="!ctxOnNote" @click="emit('edit-lyric', notes.find(n => n.id === ctxNoteId)); closeCtx()">{{ t('编辑歌词') }}</button>
-        <button class="pr-ctx-i" :disabled="!ctxOnNote" @click="api.pushUndo(); api.removeNotes(selectedIds.length ? selectedIds : [ctxNoteId]); closeCtx()">{{ t('删除') }}</button>
+        <button class="pr-ctx-i" :disabled="!ctxOnNote" @click="props.api.pushUndo(); props.api.removeNotes(selectedIds.length ? selectedIds : [ctxNoteId]); closeCtx()">{{ t('删除') }}</button>
       </div>
     </Transition>
   </div>
@@ -764,22 +948,28 @@ defineExpose({
 
 <style scoped>
 .pr { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface); }
+/* fill 模式（对齐上游 Height="*"）：组件吃掉宿主 flex 容器的剩余空间，泳道内滚动 */
+.pr-fill { flex: 1; min-height: 0; }
+.pr-fill .pr-body { flex: 1; min-height: 60px; }
+.pr-body { position: relative; min-height: 0; }
+.pr-scroll { overflow: auto; background: var(--surface); height: 100%; }
+.pr-spacer { position: relative; }
+/* 视口尺寸画布：浮在滚动区之上，内容坐标经 translate 对齐 */
+.pr-vp { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; }
 .pr-bar { display: flex; align-items: center; gap: 10px; padding: 6px 10px; flex-wrap: wrap; border-bottom: 1px solid var(--border); background: var(--surface-muted); }
 .pr-tools { display: inline-flex; gap: 4px; }
 .pr-tool { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 7px; background: transparent; color: var(--stone); font-size: 12px; cursor: pointer; }
 .pr-tool:hover { background: var(--surface); color: var(--ink); }
 .pr-tool.on { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-text); }
 .pr-ad { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--stone); }
-.pr-ad select { height: 24px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 11.5px; }
+.pr-ad select { height: 24px; font-size: 11.5px; padding: 0 4px; }
 .pr-bar-pitch { padding-top: 0; border-top: 0; }
 .pr-zoom { display: inline-flex; gap: 3px; }
 .pr-mini { width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--stone); cursor: pointer; line-height: 1; }
 .pr-mini:hover { background: var(--surface); color: var(--ink); }
 .pr-hint { margin-left: auto; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pr-scroll { position: relative; overflow: auto; background: var(--surface); }
-.pr-canvas { display: block; }
-/* 音素条带：贴住音符区底部，横向随同一滚动容器对齐 */
-.pr-ph-canvas { border-top: 1px solid var(--border); }
+.pr-scroll { overflow: auto; background: var(--surface); height: 100%; }
+.pr-vp { position: absolute; top: 0; left: 0; display: block; }
 .pr-ctx { position: absolute; z-index: 40; min-width: 132px; padding: 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); box-shadow: 0 8px 24px rgba(0,0,0,.28); }
 .pr-ctx-i { display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font-size: 12.5px; text-align: left; cursor: pointer; }
 .pr-ctx-i:hover:not(:disabled) { background: var(--surface-muted); }

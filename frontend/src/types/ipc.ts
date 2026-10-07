@@ -621,6 +621,39 @@ export interface ProjectOpenResult {
   cacheDir?: string;
 }
 
+/** `.ustx` 导入结果（engine/engine_ustx.py 的 import 方向） */
+export interface UstxImportResult {
+  ok: boolean;
+  cancelled?: boolean;
+  error?: string;
+  /** 源 .ustx 路径（仅提示用；导入后 projectPath 置空，保存走另存为） */
+  filePath?: string;
+  /** 交换 JSON（project.json 形态，含 tempoMap/sigMap/keySf） */
+  json?: any;
+  /** assetId → 伴奏源文件的本地路径（运行时回填，不进工程包） */
+  resolved?: Record<string, string>;
+  /** 引擎侧的有损转换提示（音素级参数未转、多片段已合并等） */
+  warnings?: string[];
+}
+
+/** `.ustx` 导出请求 */
+export interface UstxExportRequest {
+  /** `serializeProject()` 产出的清单（含 tempoMap/sigMap/keySf） */
+  json: any;
+  /** 音频轨源文件（主进程自己读盘拷到 `<名>_assets/`，字节不过 IPC） */
+  audioFiles?: ProjectAssetSource[];
+  suggestName?: string;
+}
+
+export interface UstxExportResult {
+  ok: boolean;
+  cancelled?: boolean;
+  error?: string;
+  filePath?: string;
+  /** 引擎侧提示（伴奏缺失/复制失败等） */
+  warnings?: string[];
+}
+
 export interface FuBridge {
   onOpenFile(cb: (bytes: Uint8Array, name: string) => void): () => void;
 
@@ -846,5 +879,11 @@ export interface FuBridge {
   project: {
     save(payload: ProjectSaveRequest): Promise<ProjectSaveResult>;
     open(): Promise<ProjectOpenResult>;
+    /** 导入 OpenUtau `.ustx`（引擎转换为 project.json 形态） */
+    importUstx(): Promise<UstxImportResult>;
+    /** 导出 OpenUtau `.ustx`（伴奏由主进程读盘拷贝，字节不过 IPC） */
+    exportUstx(payload: UstxExportRequest): Promise<UstxExportResult>;
+    /** 分轨导出：伴奏源文件主进程直拷（字节不过 IPC） */
+    copyAsset(payload: { src: string; dest: string }): Promise<{ ok: boolean; savedTo?: string; error?: string }>;
   };
 }

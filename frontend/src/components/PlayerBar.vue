@@ -216,6 +216,7 @@ function toggleCrossfade() {
       <!-- 书签/睡眠弹层必须 Teleport 到 body：.playerbar 带 overflow:hidden + backdrop-filter，
            留在内部会被裁剪/错位（与下方混音台同理） -->
       <Teleport to="body">
+        <Transition name="mnu">
         <div v-if="bkOpen" class="pb-pop pb-pop-fixed">
           <div v-for="(b, i) in bks" :key="i" class="pb-pop-row">
             <button class="pb-pop-jump" @click="jumpBk(b)"><Icon name="target" :size="12" /> {{ b.label }}</button>
@@ -223,11 +224,14 @@ function toggleCrossfade() {
           </div>
           <div v-if="!bks.length" class="pb-pop-empty">{{ t('暂无书签，点击目标按钮在当前进度添加') }}</div>
         </div>
+        </Transition>
+        <Transition name="mnu">
         <div v-if="sleepOpen" class="pb-pop pb-pop-fixed">
           <button v-for="m in [15, 30, 60, 90]" :key="m" class="pb-pop-jump" @click="setSleepMin(m)">{{ m }} {{ t('分钟') }}</button>
           <button class="pb-pop-jump" @click="setSleepMin(0)">{{ t('关闭定时') }}</button>
           <div v-if="state.sleepUntil" class="pb-pop-empty">{{ t('剩余约 ') + Math.max(0, Math.round((state.sleepUntil - Date.now()) / 60000)) + t(' 分钟') }}</div>
         </div>
+        </Transition>
       </Teleport>
       <div class="pb-title">
         <b>{{ currentSong?.name || t('未选择曲目') }}</b>
@@ -307,6 +311,7 @@ function toggleCrossfade() {
         </div>
 
         <!-- 音色选择浮层（覆盖在混音台卡片内；选择即生效，可反复试听，完成/恢复后关闭） -->
+        <Transition name="ov">
         <div v-if="instrumentFor" class="mx-instr-mask" @click.self="closeInstrument">
           <div class="mx-instr">
             <div class="mx-head">
@@ -335,6 +340,7 @@ function toggleCrossfade() {
             </div>
           </div>
         </div>
+        </Transition>
       </div>
       </div>
     </Transition>

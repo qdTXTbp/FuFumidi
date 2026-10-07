@@ -1,0 +1,89 @@
+# 本地免安装目录（win-unpacked）专用配置——**完全独立**，不 extends 主配置。
+#
+# 为什么独立：electron-builder 的 extends 对数组是「拼接」而非替换，
+# 子配置重定义 extraResources 去不掉主配置里的 resources/python（实测踩坑）。
+#
+# 与 electron-builder.yml 的差别：
+#   1. extraResources **去掉 resources/python**（1.5GB / 2.4 万文件）——
+#      electron-builder 对它的复制+逐 exe 签名在本机实测极慢/卡死（小时级不推进）。
+#      打包完成后用 robocopy /E /MT:32 把 resources/python 拷进
+#      win-unpacked/resources/python（多线程直拷，几分钟）。
+#   2. extraFiles 置空（release/update/FuFumidi.update.exe 常不存在，会直接失败）。
+#   3. output 指向独立目录，避开 safe-delete 守卫对已有目录 unlink 的拦截。
+#   4. 不配 electronLanguages（默认保留全部语言包，不触发裁剪删除）。
+#
+# ★ 仅本地打包用；正式出包（npm run dist:win）走 electron-builder.yml。
+appId: com.fufumidi.app
+electronVersion: 33.4.11
+productName: FuFumidi
+npmRebuild: false
+directories:
+  output: release-unpacked4
+asarUnpack:
+  - "engine/**"
+  - "**/*.node"
+  - "renderer/dist/wallpapers/**"
+  - "renderer/vendor/soundfonts/**"
+  - "renderer/vendor/jssynth/**"
+  - "renderer/dist/vendor/js-synth/**"
+files:
+  - "**/*"
+  - "!dist/**"
+  - "!.git/**"
+  - "!release/**"
+  - "!release-*/**"
+  - "!*-unpacked/**"
+  - "!gpu-package*/**"
+  - "!build.js"
+  - "!electron-builder.yml"
+  - "!electron-builder.base.yml"
+  - "!electron-builder.ci.yml"
+  - "!electron-builder.unpacked.yml"
+  - "!electron-builder.unpacked-nopython.yml"
+  - "!build-gpu-package.js"
+  - "!frontend/**"          # Vue 源码：运行时只用 renderer/dist 构建产物
+  - "!docs/**"
+  - "!scripts/**"
+  - "!tools/**"
+  - "!.workbuddy/**"
+  - "!.trae/**"
+  - "!rust-core/**"         # Rust 源码（产物经 extraResources 分发到 resources/rust-core）
+  - "!.github/**"
+  - "!README.md"
+  - "!README-CN.md"
+  - "!CHANGES.md"
+  - "!UPDATING.md"
+  - "!engine/tests/**"
+  - "!**/__pycache__/**"
+  - "!**/*.pyc"
+  - "!**/.pytest_cache/**"
+  - "!FuFumidiData/**"
+  - "!resources/**"         # resources/** 由 extraResources 单独分发
+  - "!models/**"
+  - "!src-tauri/**"
+  - "!frontend/src/bridge/**"
+  - "!soundfonts-dist/**"
+  - "!.sfdist-tmp/**"
+extraResources:
+  # VC++ 2015-2022 x64 运行库：干净 Windows 不自带，缺了 torch/onnxruntime 直接加载失败
+  - from: "resources/vcredist"
+    to: vcredist
+  - from: "resources/models"
+    to: models
+  # G2p 神经网络模型（13 个 g2p-*.zip，共 25MB）：歌词 → 音素的多音字消歧
+  - from: "resources/g2p"
+    to: g2p
+  # 可选 Rust 核心：缺失时 main/rust.js 自动降级为纯 JS 路径
+  - from: "resources/rust-core"
+    to: rust-core
+  - from: "resources/elevate.exe"
+    to: elevate.exe
+  - from: "build/icon.png"
+    to: icon.png
+extraFiles: []
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico

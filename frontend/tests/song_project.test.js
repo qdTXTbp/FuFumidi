@@ -336,3 +336,143 @@ test('空状态也能保存（不因缺字段抛异常）', () => {
   // 空工程没有轨道 → 打开时被拒，这是设计如此（UI 至少有一条轨）
   assert.equal(parseProject(json).ok, false);
 });
+
+/* ---------------------------------------------------- 多点变速 / 拍号 / 调号 */
+
+test('tempoMap 往返：标量 bpm 回填首点，多点保留', () => {
+  const s = state({ bpm: 96, tempoMap: [
+    { beat: 0, bpm: 999 },        // 非法值：首点必须被标量 96 覆盖
+    { beat: 16, bpm: 72 },
+    { beat: -4, bpm: 60 },        // 非法：负拍丢弃
+    { beat: 16, bpm: 80 },        // 同拍去重（后写的赢）
+  ] });
+  const { json } = serializeProject(s);
+  assert.equal(json.tempoMap[0].beat, 0, '首点强制 beat=0');
+  assert.equal(json.tempoMap[0].bpm, 96);
+  const r = parseProject(json);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.project.bpm, 96, 'parse 后 bpm 应取首点');
+  assert.equal(r.project.tempoMap.length, 2, '负拍丢弃 + 同拍去重后剩 2 点');
+  assert.deepEqual(r.project.tempoMap[1], { beat: 16, bpm: 80 });
+});
+
+test('tempoMap 空表 → 单点兜底（bpm 标量仍生效）', () => {
+  const { json } = serializeProject(state({ bpm: 88 }));
+  assert.deepEqual(json.tempoMap, [{ beat: 0, bpm: 88 }]);
+  const r = parseProject(json);
+  assert.equal(r.project.bpm, 88);
+  // 旧版工程（没有 tempoMap 字段）打开也不炸
+  const old = JSON.parse(JSON.stringify(json));
+  delete old.tempoMap; delete old.sigMap; delete old.keySf;
+  const r2 = parseProject(old);
+  assert.equal(r2.ok, true);
+  assert.equal(r2.project.bpm, 88, '旧工程 bpm 回退到标量');
+  assert.deepEqual(r2.project.sigMap, [{ beat: 0, num: 4, den: 4 }]);
+});
+
+test('sigMap 往返：非法点丢弃、首点强制存在、同拍去重', () => {
+  const s = state({ sigMap: [
+    { beat: 8, num: 3, den: 4 },
+    { beat: 4, num: 0, den: 5 },   // 非法（num<1、den 不在集合）→ 丢
+    { beat: 8, num: 6, den: 8 },   // 同拍去重（后写的赢）
+    { beat: -1, num: 4, den: 4 },  // 负拍 → 丢
+  ] });
+  const { json } = serializeProject(s);
+  assert.deepEqual(json.sigMap[0], { beat: 0, num: 4, den: 4 }, '无首点时补 4/4');
+  const r = parseProject(json);
+  assert.equal(r.ok, true);
+  assert.equal(r.project.sigMap.length, 2, '0 处 4/4 + 8 拍处 6/8');
+  assert.deepEqual(r.project.sigMap[1], { beat: 8, num: 6, den: 8 });
+});
+
+test('keySf 往返与钳制', () => {
+  const { json } = serializeProject(state({ keySf: 3 }));
+  assert.equal(json.keySf, 3);
+  assert.equal(parseProject(json).project.keySf, 3);
+  const over = serializeProject(state({ keySf: 99 }));
+  assert.equal(over.json.keySf, 7);
+  const noKey = serializeProject(state());
+  delete noKey.json.keySf;
+  assert.equal(parseProject(noKey.json).project.keySf, 0, '缺字段兜底 0（C 调）');
+});
+
+/* ---------------------------------------------------- 颤音 8 参 */
+
+test('颤音扩展参往返：in/out/shift/drift/volLink', () => {
+  const vt = voiceTrack();
+  vt.notes[0] = Object.assign(vt.notes[0], {
+    vibIn: 20, vibOut: 10, vibShift: 25, vibDrift: -30, vibVolLink: 10,
+  });
+  const { json } = serializeProject(state({ tracks: [vt] }));
+  const n = parseProject(json).project.tracks[0].notes[0];
+  assert.equal(n.vibIn, 20);
+  assert.equal(n.vibOut, 10);
+  assert.equal(n.vibShift, 25);
+  assert.equal(n.vibDrift, -30);
+  assert.equal(n.vibVolLink, 10);
+});
+
+test('颤音扩展参钳制与缺字段兜底（旧工程兼容）', () => {
+  const vt = voiceTrack();
+  vt.notes[0] = Object.assign(vt.notes[0], {
+    vibIn: 150, vibOut: -5, vibShift: 999, vibDrift: 'x', vibVolLink: 0,
+  });
+  const { json } = serializeProject(state({ tracks: [vt] }));
+  const n = parseProject(json).project.tracks[0].notes[0];
+  assert.equal(n.vibIn, 100, 'in 钳到 100');
+  assert.equal(n.vibOut, 0, 'out 钳到 0');
+  assert.equal(n.vibShift, 100, 'shift 钳到 100');
+  assert.equal(n.vibDrift, 0, '非数值兜底 0（不崩）');
+  assert.equal(n.vibVolLink, 0);
+  // 旧工程音符没有扩展参 → parse 后不带这些键，引擎侧按默认值兜底
+  const old = serializeProject(state()).json;
+  const on = parseProject(old).project.tracks[0].notes[0];
+  assert.equal(on.vibIn, undefined);
+  assert.equal(on.vibOut, undefined);
+});
+
+/* ---------------------------------------------------- 音素覆写 */
+
+test('phonemeOverrides 往返：清洗 + 钳制 + 兼容', () => {
+  const vt = voiceTrack();
+  vt.notes[0].phonemeOverrides = [
+    { index: 0, offset: 120, preutterDelta: -5 },
+    { index: 1, overlapDelta: 30 },
+    { index: -1, offset: 10 },      // 坏 index → 丢
+    { index: 2 },                    // 只有 index 没值 → 丢
+    { index: 3, offset: 99999 },     // 钳 ±2000
+    'x', null,
+  ];
+  const { json } = serializeProject(state({ tracks: [vt] }));
+  const n = parseProject(json).project.tracks[0].notes[0];
+  assert.equal(n.phonemeOverrides.length, 3);
+  assert.deepEqual(n.phonemeOverrides[0], { index: 0, offset: 120, preutterDelta: -5 });
+  assert.equal(n.phonemeOverrides[2].offset, 2000, 'offset 钳到 ±2000ms');
+  // 旧工程没有该字段 → parse 后不带
+  const old = parseProject(serializeProject(state()).json).project.tracks[0].notes[0];
+  assert.equal(old.phonemeOverrides, undefined);
+  // 空数组不落盘
+  const vt2 = voiceTrack();
+  vt2.notes[0].phonemeOverrides = [];
+  const j2 = serializeProject(state({ tracks: [vt2] })).json;
+  assert.equal(j2.tracks[0].notes[0].phonemeOverrides, undefined);
+});
+
+/* ------------------------------------------------------------ 片段模型 */
+
+test('partStarts 往返：升序去重保留；缺省不写', () => {
+  const { json } = serializeProject(state({
+    tracks: [voiceTrack({ partStarts: [4, 0, 2.5, -1, 'x'] })],
+  }));
+  const r = parseProject(json);
+  assert.equal(r.ok, true, r.error);
+  const t = r.project.tracks[0];
+  assert.deepEqual(t.partStarts, [0, 2.5, 4], '非法/负值丢弃、去重升序');
+});
+
+test('partStarts 缺省：旧工程不带该字段', () => {
+  const { json } = serializeProject(state());
+  assert.ok(!('partStarts' in json.tracks[0]), '无片段概念时不写字段');
+  const r = parseProject(json);
+  assert.deepEqual(r.project.tracks[0].partStarts, [], '读旧工程为空数组（= 单段语义）');
+});

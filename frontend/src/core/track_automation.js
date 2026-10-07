@@ -180,6 +180,67 @@ export function envelope(points, bpm, durationSec, steps, abbr) {
 }
 
 /**
+ * 曲线泳道的显示配置（PianoRoll 泳道用，从 CURVE_TARGETS 派生）。
+ *
+ * PIT 的数据域是 ±1200 音分，但泳道显示窗口固定 ±200（唱曲音高偏差的实用范围）；
+ * 其余目标直接用完整数据域。未知 abbr 返回 null（调用方据此隐藏选项）。
+ *
+ * @param {string} abbr
+ * @returns {{label:string, dispMin:number, dispMax:number, ticks:number[]}|null}
+ */
+export function laneViewOf(abbr) {
+  const t = CURVE_TARGETS[abbr];
+  if (!t || t.mode !== 'render') return null;   // 播放侧目标（VOL/PAN）不给泳道
+  if (abbr === 'PIT') {
+    return { label: t.label, dispMin: -200, dispMax: 200, ticks: [-200, -100, 0, 100, 200] };
+  }
+  const mid = (t.min + t.max) / 2;
+  return {
+    label: t.label,
+    dispMin: t.min,
+    dispMax: t.max,
+    ticks: [t.min, mid, t.max].map((v) => Math.round(v)),
+  };
+}
+
+/**
+ * 工程秒 → 拍，沿多点变速段换算。
+ *
+ * `tempoMap` 形如 `[{beat, bpm}]`（首点 beat=0，由 song_project 序列化保证）；
+ * 语义是「从 beat_i 开始速度为 bpm_i」。没给 map 就退回恒定 bpm（旧链路不变）。
+ *
+ * @param {number} sec  工程时间（秒，从 0 起）
+ * @param {{beat:number,bpm:number}[]} [tempoMap]
+ * @param {number} [fallbackBpm]
+ * @returns {number}
+ */
+export function secToBeat(sec, tempoMap, fallbackBpm) {
+  const pts = [];
+  for (const p of (Array.isArray(tempoMap) ? tempoMap : [])) {
+    const beat = num(p && p.beat, NaN);
+    const bpm = num(p && p.bpm, NaN);
+    if (!Number.isFinite(beat) || beat < 0 || !(bpm > 0)) continue;
+    if (pts.length && pts[pts.length - 1].beat === beat) pts[pts.length - 1] = { beat, bpm };
+    else pts.push({ beat, bpm });
+  }
+  if (!pts.length) return (num(sec, 0) / 60) * (num(fallbackBpm, 120) > 0 ? num(fallbackBpm, 120) : 120);
+  pts.sort((a, b) => a.beat - b.beat);
+  if (pts[0].beat > 0) pts.unshift({ beat: 0, bpm: pts[0].bpm });
+  const t = Math.max(0, num(sec, 0));
+  let secAcc = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const { beat, bpm } = pts[i];
+    const nextBeat = i + 1 < pts.length ? pts[i + 1].beat : Infinity;
+    const segSec = (nextBeat - beat) * 60 / bpm;
+    if (t <= secAcc + segSec) return beat + (t - secAcc) * bpm / 60;
+    secAcc += segSec;
+  }
+  // 超出最后一个点：按末段速率外推
+  const last = pts[pts.length - 1];
+  return last.beat + (t - secAcc) * last.bpm / 60;
+}
+
+/**
  * 生成 `setValueCurveAtTime()` 用的包络，**指定时间窗口**。
  *
  * ★ 为什么要窗口版本：播放可以从任意位置起（seek / 暂停续播），
@@ -188,8 +249,9 @@ export function envelope(points, bpm, durationSec, steps, abbr) {
  *
  * @param {number} startSec 窗口起点（**工程时间**，秒）
  * @param {number} endSec   窗口终点
+ * @param {{beat:number,bpm:number}[]} [tempoMap]  多点变速（给了就沿段换算 sec→beat）
  */
-export function envelopeFrom(points, bpm, startSec, endSec, steps, abbr) {
+export function envelopeFrom(points, bpm, startSec, endSec, steps, abbr, tempoMap) {
   const n = Math.max(2, Math.floor(num(steps, 256)));
   const arr = new Float32Array(n);
   const bpm2 = num(bpm, 120) > 0 ? num(bpm, 120) : 120;
@@ -198,7 +260,7 @@ export function envelopeFrom(points, bpm, startSec, endSec, steps, abbr) {
   const def = defaultFor(abbr);
   for (let i = 0; i < n; i++) {
     const sec = a + (i / (n - 1)) * (b - a);
-    const beat = (sec / 60) * bpm2;
+    const beat = secToBeat(sec, tempoMap, bpm2);
     const v = sampleAt(points, beat, def);
     arr[i] = abbr === 'VOL' ? Math.pow(10, clamp(v, -60, 6) / 20) : v;
   }

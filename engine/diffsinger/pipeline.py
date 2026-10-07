@@ -43,14 +43,18 @@ def _prog(cb, percent: int, text: str) -> None:
         cb(percent, text)
 
 
-def parse_notes(raw) -> List[Dict]:
-    """把 `--notes` 的 JSON 解析成音符列表（容忍字符串 / 已解析的 list）。
+def _load_payload(raw):
+    """把 `--notes` 载荷解析成 `(notes, pitch_curve)`。
 
-    ★ 支持 `@文件路径` 形式 —— `main/diffsinger.js:1008-1012` 用它把音符载荷写进
-      临时文件再传路径，**为了绕开 Windows 32K 命令行长度上限**。
+    ★ 兼容两种形态（载荷由 `main/diffsinger.js:1049-1052` 写出）：
+    * 裸 list —— 一直支持；
+    * `{notes, pitchCurve}` 信封 —— 轨有 PIT 曲线时主进程改写的。此前新管线
+      不认信封，导致**所有带音高曲线的轨**渲染报「notes 必须是数组」；
+      且信封在旧引擎也从未被解开（全引擎没有 pitchCurve 消费方）——
+      这里一并补上，曲线交给渲染（对齐 engine_ustx.py:523-537 的 pitd 直传语义）。
     """
     if isinstance(raw, (list, tuple)):
-        return [dict(n) for n in raw]
+        return [dict(n) for n in raw], []
     if isinstance(raw, (bytes, bytearray)):
         raw = raw.decode('utf-8')
     if isinstance(raw, str) and raw.startswith('@'):
@@ -61,9 +65,26 @@ def parse_notes(raw) -> List[Dict]:
         data = json.loads(raw)
     except Exception as e:  # noqa: BLE001
         raise RenderError('notes JSON 解析失败：%s' % e)
+    if isinstance(data, dict):
+        notes = data.get('notes')
+        if not isinstance(notes, list):
+            raise RenderError('notes 必须是数组')
+        curve = data.get('pitchCurve') or []
+        return ([dict(n) for n in notes],
+                [dict(p) for p in curve if isinstance(p, dict)])
     if not isinstance(data, list):
         raise RenderError('notes 必须是数组')
-    return [dict(n) for n in data]
+    return [dict(n) for n in data], []
+
+
+def parse_notes(raw) -> List[Dict]:
+    """把 `--notes` 的 JSON 解析成音符列表（容忍字符串 / 已解析的 list / 信封）。
+
+    ★ 支持 `@文件路径` 形式 —— `main/diffsinger.js:1008-1012` 用它把音符载荷写进
+      临时文件再传路径，**为了绕开 Windows 32K 命令行长度上限**。
+    """
+    notes, _ = _load_payload(raw)
+    return notes
 
 
 def write_wav(path: str, samples: Sequence[float], sample_rate: int) -> None:
@@ -99,7 +120,7 @@ def render_phrase(cfg: Dict, on_progress=None,
     voicebank = cfg.get('voicebank')
     if not voicebank or not os.path.isdir(voicebank):
         raise RenderError('声库目录不存在：%r' % voicebank)
-    notes = parse_notes(cfg.get('notes'))
+    notes, pitch_curve = _load_payload(cfg.get('notes'))
     if not notes:
         raise RenderError('没有音符可渲染')
     device = cfg.get('device') or 'auto'
@@ -143,7 +164,8 @@ def render_phrase(cfg: Dict, on_progress=None,
         need_tension=acoustic.use_tension_embed,
     )
     phrase.pitches = build_pitches(part.notes, axis, part.position,
-                                   phrase.position, phrase.leading)
+                                   phrase.position, phrase.leading,
+                                   pitd_curve=_track_pitd_curve(project, pitch_curve))
     # 用户曲线（.ustx 的 SHFC/GENC/BREC/VOIC/TENC/VELC）；本 CLI 暂不带曲线 → 全默认
     n = max(64, len(phrase.pitches))
     phrase.tone_shift = [0.0] * n
@@ -194,14 +216,69 @@ def _group_notes(unotes: Sequence) -> List[List]:
     return [[n] for n in unotes]
 
 
+def _track_pitd_curve(project, pitch_curve):
+    """轨级音高曲线（应用侧 PIT 泳道：音分@绝对拍）→ pitd `UCurve`。
+
+    ★ 坐标系：`_make_axis` 的 part.position=0，UNote.position 就是工程绝对 tick，
+      所以 `beat × ticks_per_beat` 直接可用（同 engine_ustx.py:523-537 的
+      「pitchCurve → 段内 pitd 曲线、音分直传」语义；pitd 的 default=0 → 区间外为 0）。
+    """
+    if not pitch_curve:
+        return None
+    from singing.ustx.model import UCurve
+    ticks_per_beat = float(project.resolution) * 4.0 / float(project.beat_unit or 4)
+    pts = []
+    for p in pitch_curve:
+        if not isinstance(p, dict):
+            continue
+        try:
+            beat = float(p.get('beat'))
+        except (TypeError, ValueError):
+            continue
+        try:
+            cents = float(p.get('cents') or 0)
+        except (TypeError, ValueError):
+            cents = 0.0
+        pts.append((int(round(max(0.0, beat) * ticks_per_beat)), int(round(cents))))
+    if not pts:
+        return None
+    pts.sort()
+    return UCurve(xs=[x for x, _ in pts], ys=[y for _, y in pts],
+                  abbr='pitd', descriptor=project.expressions.get('pitd'))
+
+
 def _make_axis(cfg: Dict, notes: Sequence[Dict]):
     """造一个最小的 UProject + TimeAxis（CLI 没有工程上下文时用）。"""
     from singing.ustx.format import add_default_expressions
-    from singing.ustx.model import UNote, UProject, UTrack, UVoicePart
+    from singing.ustx.model import UNote, UProject, UTrack, UVoicePart, UTempo
 
     p = UProject()
     p.name = 'render'
     p.bpm = float(cfg.get('bpm') or 120)
+    # ---- 多点变速：cfg['tempos'] = [{beat, bpm}]（拍单位，应用侧 store.tempoMap 同构）。
+    #      拍→tick 与 tempo 无关（见下），多点只影响 tick→ms（TimeAxis 分段换算）。
+    tempos_in = cfg.get('tempos') or []
+    tempos = []
+    for t in tempos_in:
+        if not isinstance(t, dict):
+            continue
+        try:
+            beat = float(t.get('beat'))
+            tbpm = float(t.get('bpm'))
+        except (TypeError, ValueError):
+            continue
+        if beat < 0 or not (20.0 <= tbpm <= 400.0):
+            continue
+        tempos.append(UTempo(position=int(round(beat * p.resolution)), bpm=tbpm))
+    if tempos:
+        if not any(t.position == 0 for t in tempos):
+            tempos.insert(0, UTempo(position=0, bpm=p.bpm))
+        p.tempos = tempos
+    else:
+        # ★ 单点也必须显式写 tempos：`p.bpm` 是 ustx v0.6 的废弃字段，
+        #   TimeAxis.build_segments 只认 tempos —— 旧实现漏了这一步，
+        #   非 120bpm 渲染的 tick→ms 换算全部按默认 120 错位。
+        p.tempos = [UTempo(position=0, bpm=p.bpm)]
     p.file_path = os.path.join(os.environ.get('TEMP', '.'), '_diffsinger_cli.ustx')
     add_default_expressions(p)
     tr = UTrack(p)
@@ -237,7 +314,7 @@ def _make_axis(cfg: Dict, notes: Sequence[Dict]):
 
 
 def _pitch_edit_entry(voicebank: str, notes, bpm: float, device: str,
-                      pitch_steps=None) -> Dict:
+                      pitch_steps=None, tempo_map=None) -> Dict:
     """`pitch-edit` 的实现（编辑功能，**不参与渲染**）。
 
     流程：A 层音素化 → `dspitch` 预测 → 按 `NoteBatchEdits.cs:540-566` 写回 PITD。
@@ -265,7 +342,7 @@ def _pitch_edit_entry(voicebank: str, notes, bpm: float, device: str,
         raise RenderError('该声库没有 dspitch/（无音高预测器）—— '
                           '这是编辑功能，渲染本身不需要它')
 
-    axis, project = _make_axis({'bpm': bpm}, raw_notes)
+    axis, project = _make_axis({'bpm': bpm, 'tempos': tempo_map}, raw_notes)
     part = project.parts[0]
     phones = process_part(singer, _group_notes(part.notes), axis, g2p, 'zh',
                           providers, warnings)

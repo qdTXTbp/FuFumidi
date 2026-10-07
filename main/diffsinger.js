@@ -22,13 +22,25 @@ const { safeExtractAllTo } = require('./zip-safe');
 const DS = require('./download-source');
 const createFastDownload = require('./fast-download');
 
-function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawn, spawnEngine, resolvePython, engineEnv, readSettings, writeSettings }) {
+function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawn, spawnEngine, createEngineSession, resolvePython, engineEnv, readSettings, writeSettings }) {
 
   /* ---------------- 目录与常量 ---------------- */
   const dsRoot = () => Paths.diffsingerRoot();
   const vbRoot = () => Paths.diffsingerVoicebanksDir();
   const vocoderDir = () => path.join(dsRoot(), 'vocoder');
   const runtimeFile = () => path.join(dsRoot(), 'runtime.json');
+
+  // ---- 常驻引擎会话（惰性创建：首次渲染才 spawn，避免拖慢启动/白占内存）----
+  // 省每次渲染的 Python 启动 + torch import + 声库加载固定开销（调参时 3-6s/次）。
+  // 请求失败由调用方回退一次性 spawn —— 功能永远可用，只是慢。
+  let _dsSession = null;
+  const dsSession = () => {
+    if (!_dsSession && createEngineSession) _dsSession = createEngineSession('engine_diffsinger.py', ['serve']);
+    return _dsSession;
+  };
+  const dropSession = () => {
+    if (_dsSession) { try { _dsSession.kill(); } catch (e) {} _dsSession = null; }
+  };
 
   // 通用声码器：openvpi 社区声码器项目（DiffSinger Community Vocoder Project）
   // nsf-hifigan-44.1k-hop512-128bin-2024.02（CC BY-NC-SA 4.0，非商用；许可证随包分发）
@@ -1003,10 +1015,12 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
   }));
 
   // 渲染 DiffSinger 工程 → 人声 WAV。
-  // cfg = { voicebank, notes: [{startBeat, durBeat, pitch, lyric, ...}], bpm, vocoder? }
-  // notes 用「拍」为单位（四分音符=1），引擎侧按 bpm 换算秒。
+  // cfg = { voicebank, notes: [{startBeat, durBeat, pitch, lyric, ...}], bpm, tempoMap?, outPath?, vocoder? }
+  // notes 用「拍」为单位（四分音符=1），引擎侧按 bpm 换算秒；tempoMap 是多点变速
+  //（[{beat,bpm}]，拍单位），给了就覆盖单点 bpm —— 导入的 ustx 变速段靠它生效。
+  // outPath 给了走「直写模式」：引擎产物直接落目标路径、不回传字节（逐轨导出用）。
   ipcMain.handle('diffsinger:render', (evt, cfg) => new Promise((resolve) => {
-    const { voicebank, notes, bpm } = cfg || {};
+    const { voicebank, notes, bpm, tempoMap, outPath } = cfg || {};
     const range = (cfg && cfg.range) || null;
     const device = (cfg && cfg.device) || 'auto';
     const pitchCurve = (cfg && cfg.pitchCurve) || null;   // P3 音高曲线：[{beat, cents}]
@@ -1016,9 +1030,11 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     const win = BrowserWindow.fromWebContents(evt.sender);
     const send = (p) => { if (win && !win.isDestroyed()) win.webContents.send('diffsinger:renderProgress', p); };
     let notesJson = null;   // 长音符序列的临时落盘文件，渲染结束（成功或失败）都要回收
+    let tempoJson = null;   // 多点变速（同走 @文件）
     // 统一出口：清理临时音符文件后再 resolve，避免长曲反复渲染堆积垃圾
     const done = (r) => {
       if (notesJson) { try { fs.unlinkSync(notesJson); } catch (e) {} notesJson = null; }
+      if (tempoJson) { try { fs.unlinkSync(tempoJson); } catch (e) {} tempoJson = null; }
       resolve(r);
       return undefined;
     };
@@ -1041,6 +1057,11 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         '--bpm', String(Math.max(20, Math.min(400, Number(bpm) || 120))),
         '--out', out,
       ];
+      if (Array.isArray(tempoMap) && tempoMap.length) {
+        tempoJson = path.join(Paths.tempDir(), 'fufumidi', `diffsinger_tempo_${Date.now()}_${process.pid}.json`);
+        fs.writeFileSync(tempoJson, JSON.stringify(tempoMap), 'utf8');
+        args.push('--tempo-map', '@' + tempoJson);
+      }
       // 范围渲染：只合成选区内音符（带前后文），未传或 full 时整曲渲染
       let rangeArg = null;
       if (range && !range.full && range.startBeat != null && range.endBeat != null
@@ -1060,6 +1081,46 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
           if (onnx) args.push('--vocoder', path.join(vd, onnx));
         }
       } catch (e) {}
+      // ---- 常驻会话优先（省 Python 启动 + torch import + 声库加载固定开销）----
+      // 会话失败（进程崩溃/超时）→ 丢掉会话、回退一次性 spawn：功能永远可用。
+      // 引擎业务错误（缺声库/无音符等 ok=false）不回退 —— 回退也是同样错误。
+      const sess = dsSession();
+      if (sess) {
+        sess.request(args, { onProgress: send, timeoutMs: 20 * 60 * 1000 }).then((r) => {
+          if (r && r.ok && r.out && fs.existsSync(r.out)) {
+            try {
+              if (outPath) {
+                fs.mkdirSync(path.dirname(outPath), { recursive: true });
+                try { fs.renameSync(r.out, outPath); }
+                catch (e) { fs.copyFileSync(r.out, outPath); try { fs.unlinkSync(r.out); } catch (e2) {} }
+                return done({ ok: true, savedTo: outPath, duration_ms: r.duration_ms, warnings: r.warnings || [] });
+              }
+              const bytes = fs.readFileSync(r.out);
+              return done({
+                ok: true, out: r.out, duration_ms: r.duration_ms, bytes,
+                warnings: r.warnings || [],
+                engineVersion: r.engine_version || '',
+                pipeline: r.pipeline || '',
+                device: r.device || null,
+                range: r.range || null,
+              });
+            } catch (e) {
+              return done({ ok: true, out: r.out, error: String(e) });
+            }
+          }
+          if (r && r.ok === false) {
+            return done({ ok: false, error: r.error || '引擎返回失败', warnings: r.warnings || [] });
+          }
+          // 其它形状（异常结果）→ 落到一次性路径兜底
+          dropSession();
+          runFallback();
+        }).catch(() => {
+          dropSession();   // 会话层失败：杀掉重建，走一次性路径
+          runFallback();
+        });
+        return;   // 会话路径接管（两条分支最终都会 done 或进回退）
+      }
+      function runFallback() {
       spawnEngine(args, {
         script: 'engine_diffsinger.py',
         timeoutMs: 20 * 60 * 1000,
@@ -1067,6 +1128,13 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         onDone: (code, r) => {
           if (r && r.result && r.result.ok && r.result.out && fs.existsSync(r.result.out)) {
             try {
+              // 直写模式：产物挪到调用方指定的路径，字节不过 IPC（逐轨导出）
+              if (outPath) {
+                fs.mkdirSync(path.dirname(outPath), { recursive: true });
+                try { fs.renameSync(r.result.out, outPath); }
+                catch (e) { fs.copyFileSync(r.result.out, outPath); try { fs.unlinkSync(r.result.out); } catch (e2) {} }
+                return done({ ok: true, savedTo: outPath, duration_ms: r.result.duration_ms, warnings: r.result.warnings || [] });
+              }
               const bytes = fs.readFileSync(r.result.out);
               return done({
                 ok: true, out: r.result.out, duration_ms: r.result.duration_ms, bytes,
@@ -1087,6 +1155,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         },
         onError: (e) => done({ ok: false, error: String(e) }),
       });
+      }
     } catch (err) {
       done({ ok: false, error: String((err && err.message) || err) });
     }

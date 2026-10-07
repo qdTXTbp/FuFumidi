@@ -466,9 +466,11 @@ onBeforeUnmount(() => {
     <Transition name="pb">
       <PlayerBar v-if="state.playerbarOpen" />
     </Transition>
-    <div class="toast-wrap" v-if="state.toastMsg && state.toastMsg.msg" role="status" aria-live="polite">
-      <div class="toast" :class="state.toastMsg.type">{{ state.toastMsg.msg }}</div>
-    </div>
+    <Transition name="fade">
+      <div class="toast-wrap" v-if="state.toastMsg && state.toastMsg.msg" role="status" aria-live="polite">
+        <div class="toast" :class="state.toastMsg.type">{{ state.toastMsg.msg }}</div>
+      </div>
+    </Transition>
 
     <!-- GPU 安装常驻通知条：任意页面可见，点击跳转设置 → GPU -->
     <Transition name="ov">

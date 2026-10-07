@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test tests/*.test.js",
+    "test:store": "esbuild ./tests/store_undo.bundle.js --bundle --format=esm --platform=node --outfile=./.tmp/store_undo.test.mjs --external:pinia --external:vue && node --test ./.tmp/store_undo.test.mjs"
   },
   "dependencies": {
     "js-synthesizer": "^1.13.0",

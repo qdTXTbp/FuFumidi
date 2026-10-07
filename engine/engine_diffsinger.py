@@ -84,7 +84,8 @@ def load_voicebank(vb_dir, cache=None):
     return load_singer(vb_dir)
 
 
-def load_rendered_pitd(voicebank, notes, bpm=120.0, device='cpu', pitch_steps=None):
+def load_rendered_pitd(voicebank, notes, bpm=120.0, device='cpu', pitch_steps=None,
+                       tempo_map=None):
     """**编辑功能**：跑 `dspitch` 并把预测音高写回 PITD。
 
     ★ **不参与渲染** —— 上游 `InvokeDiffsinger` 全程不碰音高模型。这是给声乐者
@@ -92,7 +93,8 @@ def load_rendered_pitd(voicebank, notes, bpm=120.0, device='cpu', pitch_steps=No
     返回 `{"ok":True, "points":[[x_tick, y_pitd], ...], ...}`；
     `y` 是**音分差**，`voiced == False` 的帧（head/tail SP、音素间隙）已跳过。
     """
-    return _pitch_edit_entry(voicebank, notes, bpm, device, pitch_steps)
+    return _pitch_edit_entry(voicebank, notes, bpm, device, pitch_steps,
+                             tempo_map=tempo_map)
 
 
 # ============================================================
@@ -285,6 +287,7 @@ def cmd_render(args):
             "voicebank": args.voicebank,
             "notes": args.notes,
             "bpm": args.bpm,
+            "tempos": _parse_tempo_map(getattr(args, "tempo_map", None)),
             "vocoder": getattr(args, "vocoder", None),
             "start_beat": getattr(args, "start_beat", None),
             "end_beat": getattr(args, "end_beat", None),
@@ -328,6 +331,7 @@ def cmd_sing_render(args):
             playback_start_ms=float(args.playhead_ms or 0.0),
             focus_tick=int(args.focus_tick if args.focus_tick is not None else -1),
             device=args.device or 'auto',
+            tempos=_parse_tempo_map(getattr(args, 'tempo_map', None)),
         ))
         if not r.get('ok'):
             emit_result({'ok': False, 'error': r.get('error')})
@@ -359,6 +363,20 @@ def _parse_notes_arg(raw):
         with open(raw[1:], 'r', encoding='utf-8') as f:
             txt = f.read()
     return json.loads(txt) if txt else []
+
+
+def _parse_tempo_map(raw):
+    """`--tempo-map`：多点变速 `[{beat, bpm}]`（拍单位），`@文件` 或 JSON 串。
+
+    坏值一律返回 None（= 退回单点 bpm），**不能让变速数据解析失败拖垮渲染**。
+    """
+    if not raw:
+        return None
+    try:
+        data = _parse_notes_arg(raw)
+    except Exception:                                       # noqa: BLE001
+        return None
+    return data if isinstance(data, list) and data else None
 
 
 def _b64(samples):
@@ -403,7 +421,8 @@ def cmd_suggest(args):
 def cmd_pitch_edit(args):
     try:
         emit_result(load_rendered_pitd(args.voicebank, args.notes, args.bpm,
-                                      args.device, args.pitch_steps))
+                                       args.device, args.pitch_steps,
+                                       tempo_map=_parse_tempo_map(getattr(args, 'tempo_map', None))))
     except Exception as e:  # noqa: BLE001
         emit_result({"ok": False, "error": str(e)})
     return 0
@@ -413,7 +432,14 @@ def cmd_pitch_edit(args):
 # main
 # ================================================================
 
-def main():
+def cmd_serve(args):
+    """常驻模式（见 engine_server.py 的协议注释）：stdin JSON 行循环。"""
+    import engine_server
+    engine_server.serve_loop(sys.modules[__name__])
+    return 0
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description="DiffSinger 歌声合成引擎（与上游 OpenUtau 对齐）")
     sub = parser.add_subparsers(dest="cmd")
@@ -435,6 +461,8 @@ def main():
                         '"pitch":60,"lyric":"啊"}]；整曲建议 @<临时 json 文件>，'
                         '避免命令行超长')
     r.add_argument("--bpm", type=float, default=120.0, help="速度（BPM，拍→秒换算）")
+    r.add_argument("--tempo-map", default=None,
+                   help="多点变速 JSON `[{beat,bpm}]`（拍单位），或 @文件路径；给了就覆盖单点 bpm")
     r.add_argument("--vocoder", default=None,
                    help="声码器 onnx 或目录（声库未自带时使用）")
     r.add_argument("--out", default="", help="输出 WAV 路径")
@@ -454,6 +482,8 @@ def main():
                     help='音符 JSON，或 @文件路径：'
                          '[{"startBeat":0,"durBeat":1,"pitch":60,"lyric":"啊"}]')
     pe.add_argument("--bpm", type=float, default=120.0, help="速度（BPM，拍→秒换算）")
+    pe.add_argument("--tempo-map", default=None,
+                    help="多点变速 JSON `[{beat,bpm}]`，或 @文件路径")
     pe.add_argument("--device", default="auto",
                     help="推理后端：auto / cpu / cuda / dml")
     pe.add_argument("--pitch-steps", type=int, default=None,
@@ -476,6 +506,8 @@ def main():
     sr.add_argument('--notes', required=True,
                     help='音符 JSON，或 @文件路径（约定同 render）')
     sr.add_argument('--bpm', type=float, default=120.0, help='速度')
+    sr.add_argument('--tempo-map', default=None,
+                    help='多点变速 JSON `[{beat,bpm}]`（拍单位），或 @文件路径；给了就覆盖单点 bpm')
     sr.add_argument('--language', default='zh',
                     help='★ 轨道级语言：zh/ja/ko/en（不从歌词自动判断）')
     sr.add_argument('--depth', type=float, default=1.0, help='采样深度（进缓存名）')
@@ -488,7 +520,12 @@ def main():
     sr.add_argument('--focus-tick', type=int, default=-1, help='编辑焦点 tick（按焦点排序）')
     sr.set_defaults(func=cmd_sing_render)
 
-    args = parser.parse_args()
+    # serve：常驻模式（主进程 EngineSession 驱动，stdin JSON 行协议）
+    sv = sub.add_parser('serve', help='常驻模式：stdin 每行一个 {id, argv} 请求，'
+                                       '省 Python 启动 + torch import + 声库加载的固定开销')
+    sv.set_defaults(func=cmd_serve)
+
+    args = parser.parse_args(argv)
     if not getattr(args, "func", None):
         parser.print_help()
         return 0

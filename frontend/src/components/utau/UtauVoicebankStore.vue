@@ -193,7 +193,9 @@ onBeforeUnmount(() => { if (offProgress) { try { offProgress(); } catch (e) {} o
       </div>
     </div>
 
+    <Transition name="fade">
     <div v-if="msg" class="vbs-msg ok">{{ msg }}</div>
+    </Transition>
     <div v-if="err" class="vbs-msg bad">{{ err }}</div>
     <div v-if="isDesktop && installedCount" class="muted small">
       {{ t('已安装 ') }}{{ installedCount }}{{ t(' 个声库，可在「UTAU 工作台 → 曲谱与调声 / 合成渲染」切换。') }}

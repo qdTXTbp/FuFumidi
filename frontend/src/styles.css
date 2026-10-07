@@ -828,6 +828,15 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .fade-enter-active, .fade-leave-active { transition: opacity 0.16s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 
+/* TransitionGroup 列表增删/重排的位移动画（配合 name="fade"） */
+.fade-move { transition: transform 0.22s ease; }
+.fade-enter-active { transition: opacity 0.16s ease, transform 0.16s ease; }
+.fade-enter-from { opacity: 0; transform: translateY(4px); }
+
+/* 下拉弹层（原 TopBar scoped 惯例提升为全局，PlayerBar 等弹层复用） */
+.mnu-enter-active, .mnu-leave-active { transition: opacity 0.15s ease, transform 0.15s ease; transform-origin: top; }
+.mnu-enter-from, .mnu-leave-to { opacity: 0; transform: translateY(-4px) scale(0.98); }
+
 .view-enter-active { transition: opacity 0.22s ease, transform 0.22s ease; }
 .view-enter-from { opacity: 0; transform: translateY(6px); }
 

@@ -37,3 +37,26 @@ export function removeNotes(tracks, doomed) {
 }
 
 export const TRACK_COLORS = ['#ff5530', '#ea5ec1', '#1456f0', '#a855f7', '#3daeff', '#1ba673', '#3b82f6', '#f59e0b', '#d45656', '#17437d'];
+
+/** 文件名清洗：路径非法字符 → 下划线（分轨导出/工程命名用）；清完为空或只剩 `_` 时兜底 */
+export function stemSafeName(s) {
+  const t = String(s || '').replace(/[\\/:*?"<>|]/g, '_').trim().slice(0, 80);
+  return /^_*$/.test(t) ? 'track' : t;
+}
+
+/**
+ * 分轨文件名：`曲名 - 轨名.wav`，大小写不敏感去重（重名加序号）。
+ *
+ * @param {string} base   曲目名
+ * @param {string} name   轨道名 / 源文件名
+ * @param {Set<string>} used  已占用名集合（小写），命中则追加 " (2)" " (3)"…
+ * @returns {string} 含 .wav 扩展名的文件名
+ */
+export function stemFileName(base, name, used) {
+  const n = `${stemSafeName(base)} - ${stemSafeName(name)}`;
+  let cand = n, i = 2;
+  const taken = used || new Set();
+  while (taken.has(cand.toLowerCase())) cand = `${n} (${i++})`;
+  taken.add(cand.toLowerCase());
+  return cand + '.wav';
+}

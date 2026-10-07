@@ -37,6 +37,59 @@ export const PROJECT_EXT = 'fufumidi';
 /** `files/` 里的资产 id：会成为文件名的一部分，所以字符集必须收紧 */
 const ASSET_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
+/** 拍号分母的合法集合（1/2/4/8/16/32 分音符） */
+const SIG_DENS = [1, 2, 4, 8, 16, 32];
+
+/* ------------------------------------------------------------------ 多点变速 / 拍号 */
+//
+// 这两组字段是 `.fufumidi` 与 OpenUtau `.ustx` 互转的「交换面」：
+//   * ustx 的 tempos/timeSignatures 是多点列表（tick 单位）；
+//   * 本工程的时间轴以**拍**为单位（tick = beat × 480，与 tempo 无关）。
+// `bpm` 标量仍是**首点真源**（BPM 输入框改的是它），序列化时强制回填 tempoMap[0]。
+
+/** 清洗多点变速：非法点丢弃、首点强制 beat=0 且 bpm 取标量、同拍去重 */
+function serializeTempoMap(list, scalarBpm) {
+  const out = [];
+  for (const p of (Array.isArray(list) ? list : [])) {
+    const bpm = clamp(num(p && p.bpm, NaN), 20, 400);
+    const beat = num(p && p.beat, NaN);
+    if (!Number.isFinite(bpm) || !Number.isFinite(beat) || beat < 0) continue;
+    out.push({ beat: Math.round(beat * 1000) / 1000, bpm });
+  }
+  const bpm0 = clamp(num(scalarBpm, 120), 20, 400);
+  const first = out.find((p) => p.beat === 0);
+  if (first) first.bpm = bpm0;
+  else out.unshift({ beat: 0, bpm: bpm0 });
+  out.sort((a, b) => a.beat - b.beat);
+  const dedup = [];
+  for (const p of out) {
+    if (dedup.length && dedup[dedup.length - 1].beat === p.beat) dedup[dedup.length - 1] = p;
+    else dedup.push(p);
+  }
+  return dedup;
+}
+
+/** 清洗多点拍号：非法点丢弃、首点强制 beat=0、同拍去重；空表兜底 4/4 */
+function serializeSigMap(list) {
+  const out = [];
+  for (const p of (Array.isArray(list) ? list : [])) {
+    const beat = num(p && p.beat, NaN);
+    const n = Math.round(num(p && p.num, NaN));
+    const d = Math.round(num(p && p.den, NaN));
+    if (!Number.isFinite(beat) || beat < 0) continue;
+    if (!(n >= 1 && n <= 32) || SIG_DENS.indexOf(d) < 0) continue;
+    out.push({ beat: Math.round(beat * 1000) / 1000, num: n, den: d });
+  }
+  if (!out.some((p) => p.beat === 0)) out.unshift({ beat: 0, num: 4, den: 4 });
+  out.sort((a, b) => a.beat - b.beat);
+  const dedup = [];
+  for (const p of out) {
+    if (dedup.length && dedup[dedup.length - 1].beat === p.beat) dedup[dedup.length - 1] = p;
+    else dedup.push(p);
+  }
+  return dedup;
+}
+
 let _seq = 0;
 function genId(prefix) {
   _seq += 1;
@@ -72,6 +125,36 @@ export function assetEntryName(id, fileName) {
 
 /* ------------------------------------------------------------------ 序列化 */
 
+/* ---- 音素覆写（音素级时间微调；时间量 ms，offset/delta 钳 ±2000）---- */
+function normPhonemeOverrides(list) {
+  const out = [];
+  for (const o of (Array.isArray(list) ? list : []).slice(0, 32)) {
+    if (!o || typeof o !== 'object') continue;
+    const idx = Math.round(num(o.index, NaN));
+    if (!Number.isFinite(idx) || idx < 0 || idx > 63) continue;
+    const e = { index: idx };
+    for (const k of ['offset', 'preutterDelta', 'overlapDelta']) {
+      if (o[k] !== undefined) {
+        const v = num(o[k], NaN);
+        if (Number.isFinite(v)) e[k] = clamp(v, -2000, 2000);
+      }
+    }
+    if (Object.keys(e).length > 1) out.push(e);   // 只有 index 没有任何值 → 丢弃
+  }
+  return out;
+}
+
+/** 颤音扩展参（vibIn/vibOut/vibShift/vibDrift/vibVolLink）+ 音素覆写 —— 序列化/解析共用一份钳制逻辑 */
+function copyVibExt(src, dst) {
+  if (src.vibIn !== undefined) dst.vibIn = clamp(num(src.vibIn, 10), 0, 100);
+  if (src.vibOut !== undefined) dst.vibOut = clamp(num(src.vibOut, 10), 0, 100);
+  if (src.vibShift !== undefined) dst.vibShift = clamp(num(src.vibShift, 0), -100, 100);
+  if (src.vibDrift !== undefined) dst.vibDrift = clamp(num(src.vibDrift, 0), -100, 100);
+  if (src.vibVolLink !== undefined) dst.vibVolLink = clamp(num(src.vibVolLink, 0), -100, 100);
+  const ov = normPhonemeOverrides(src.phonemeOverrides);
+  if (ov.length) dst.phonemeOverrides = ov;
+}
+
 function serializeNote(n) {
   if (!n || typeof n !== 'object') return null;
   const o = {
@@ -85,6 +168,13 @@ function serializeNote(n) {
     vibFreq: clamp(num(n.vibFreq, 5.5), 0, 12),
     vibFade: clamp(num(n.vibFade, 0), 0, 100),
   };
+  /* ---- 颤音扩展参（对应上游 UVibrato 的 in/out/shift/drift/volLink；vibFade 是旧字段，保留兼容）----
+   * in/out 有互约束（out ≤ 100 − in，照搬 C# setter），序列化侧先各自钳到 [0,100]，
+   * 引擎侧 UVibrato 构造时天然满足（setter 会互相压）。 */
+  if (n.vibIn !== undefined || n.vibOut !== undefined || n.vibShift !== undefined
+    || n.vibDrift !== undefined || n.vibVolLink !== undefined || n.phonemeOverrides !== undefined) {
+    copyVibExt(n, o);
+  }
   /* ---- UTAU 侧 ---- */
   if (n.velocity !== undefined) o.velocity = clamp(num(n.velocity, 100), 0, 100);
   if (n.volume !== undefined) o.volume = clamp(num(n.volume, 0), 0, 100);
@@ -184,6 +274,12 @@ function serializeTrack(t) {
   o.language = str(t.language, 'zh').slice(0, 16) || 'zh';
   o.notes = (Array.isArray(t.notes) ? t.notes : [])
     .map(serializeNote).filter(Boolean);
+  /* ---- 片段起点（拍，升序）：轨承载多片段（对齐 OpenUtau/传统 DAW）----
+   * 音符仍是轨级绝对拍；partStarts 只记录分段边界，导出 ustx 时按区间切段。 */
+  const starts = (Array.isArray(t.partStarts) ? t.partStarts : [])
+    .map((s) => num(s, -1)).filter((s) => Number.isFinite(s) && s >= 0)
+    .map((s) => Math.round(s * 1000) / 1000);
+  if (starts.length) o.partStarts = Array.from(new Set(starts)).sort((a, b) => a - b);
   o.pitchCurve = (Array.isArray(t.pitchCurve) ? t.pitchCurve : [])
     .map((p) => ({ beat: num(p && p.beat, 0), cents: num(p && p.cents, 0) }))
     .filter((p) => Number.isFinite(p.beat) && Number.isFinite(p.cents));
@@ -204,8 +300,9 @@ function serializeTrack(t) {
 /**
  * 把编辑器状态变成「可写盘」的两份东西。
  *
- * @param {object} state  需要的字段：`tracks / bpm / device / sampleNote /
- *                        activeTrackId / meta`，缺的用默认值补。
+ * @param {object} state  需要的字段：`tracks / bpm / tempoMap / sigMap / keySf /
+ *                        device / sampleNote / activeTrackId / meta`，缺的用默认值补。
+ *                        `bpm` 标量是变速首点的真源（tempoMap[0].bpm 会被它覆盖）。
  * @returns {{json: object, assets: Array<{id:string, srcPath:string, fileName:string}>}}
  *          `assets` 是**待打包**的源文件清单（`srcPath` 只在保存这一刻有效，不进 json）。
  */
@@ -246,6 +343,12 @@ export function serializeProject(state) {
       artist: str(s.meta && s.meta.artist).slice(0, 255),
     },
     bpm: clamp(num(s.bpm, 120), 20, 400),
+    /** 多点变速（拍单位，首点 beat=0，bpm 标量是首点真源）—— 对应 ustx tempos */
+    tempoMap: serializeTempoMap(s.tempoMap, s.bpm),
+    /** 多点拍号 —— 对应 ustx timeSignatures */
+    sigMap: serializeSigMap(s.sigMap),
+    /** 调号（-7..7，-1=降 B 调方向 … +7=升号方向）—— 对应 ustx key */
+    keySf: clamp(Math.round(num(s.keySf, 0)), -7, 7),
     device: ['auto', 'cpu', 'cuda', 'dml'].indexOf(s.device) >= 0 ? s.device : 'auto',
     sampleNote: str(s.sampleNote, 'a').slice(0, 16) || 'a',
     activeTrackId: str(s.activeTrackId),
@@ -272,6 +375,10 @@ function parseNote(n) {
     vibFreq: clamp(num(n.vibFreq, 5.5), 0, 12),
     vibFade: clamp(num(n.vibFade, 0), 0, 100),
   };
+  if (n.vibIn !== undefined || n.vibOut !== undefined || n.vibShift !== undefined
+    || n.vibDrift !== undefined || n.vibVolLink !== undefined || n.phonemeOverrides !== undefined) {
+    copyVibExt(n, o);
+  }
   if (n.velocity !== undefined) o.velocity = clamp(num(n.velocity, 100), 0, 100);
   if (n.volume !== undefined) o.volume = clamp(num(n.volume, 0), 0, 100);
   if (n.flags) o.flags = str(n.flags).slice(0, 256);
@@ -326,6 +433,10 @@ function parseTrack(t) {
   o.language = str(t.language, 'zh').slice(0, 16) || 'zh';
   o.notes = (Array.isArray(t.notes) ? t.notes : []).map(parseNote).filter(Boolean);
   o.notes.sort((a, b) => a.startBeat - b.startBeat);
+  o.partStarts = (Array.isArray(t.partStarts) ? t.partStarts : [])
+    .map((s) => num(s, -1)).filter((s) => Number.isFinite(s) && s >= 0)
+    .map((s) => Math.round(s * 1000) / 1000)
+    .sort((a, b) => a - b);
   o.pitchCurve = (Array.isArray(t.pitchCurve) ? t.pitchCurve : [])
     .map((p) => ({ beat: num(p && p.beat, 0), cents: num(p && p.cents, 0) }))
     .filter((p) => Number.isFinite(p.beat) && Number.isFinite(p.cents))
@@ -373,6 +484,7 @@ export function parseProject(json) {
   }
 
   const meta = (json.meta && typeof json.meta === 'object') ? json.meta : {};
+  const tempoMap = serializeTempoMap(json.tempoMap, json.bpm);
   const project = {
     version: v,
     createdAt: str(json.createdAt),
@@ -381,7 +493,11 @@ export function parseProject(json) {
       comment: str(meta.comment).slice(0, 4096),
       artist: str(meta.artist).slice(0, 255),
     },
-    bpm: clamp(num(json.bpm, 120), 20, 400),
+    bpm: tempoMap.length ? tempoMap[0].bpm : clamp(num(json.bpm, 120), 20, 400),
+    /** 多点变速 / 拍号 / 调号（旧版工程没有这些字段 → 兜底成默认值） */
+    tempoMap,
+    sigMap: serializeSigMap(json.sigMap),
+    keySf: clamp(Math.round(num(json.keySf, 0)), -7, 7),
     device: ['auto', 'cpu', 'cuda', 'dml'].indexOf(json.device) >= 0 ? json.device : 'auto',
     sampleNote: str(json.sampleNote, 'a').slice(0, 16) || 'a',
     activeTrackId: str(json.activeTrackId),

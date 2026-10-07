@@ -29,6 +29,8 @@ import {
   missingAssets, parseProject, resolveAssetPaths, serializeProject,
 } from '../core/song_project.js';
 import { makeFx, normalizeFx } from '../core/track_fx.js';
+import { createHistory } from '../core/song_history.js';
+import { stemFileName, stemSafeName } from '../core/util.js';
 import {
   curveOf, normalizeCurve, normalizeCurves, targetsFor, valueForNote,
 } from '../core/track_automation.js';
@@ -85,6 +87,21 @@ export const LANGUAGES = [
   { code: 'en', label: 'English' },
 ];
 
+/**
+ * 音素覆写（对应上游 `UPhonemeOverride`）—— 音素级时间微调。
+ * 时间量单位 **ms**（引擎边界转换：offset→tick、delta 直传 ms 域）。
+ * `index` 是音符内音素下标（0 起，应用侧按派生分段计数）。
+ */
+export interface PhonemeOverride {
+  index: number;
+  /** 音素起点偏移 ms（正值后移） */
+  offset?: number;
+  /** 前起音增量 ms */
+  preutterDelta?: number;
+  /** 重叠增量 ms */
+  overlapDelta?: number;
+}
+
 export interface SingNote {
   id: string;
   startBeat: number;     // 起点（拍，四分音符 = 1）
@@ -96,7 +113,17 @@ export interface SingNote {
   vibrato: boolean;
   vibDepth: number;      // 0..100
   vibFreq: number;       // Hz
-  vibFade: number;       // 0..100
+  vibFade: number;       // 0..100（旧字段：等于 in/out 取 max，新代码请用 vibIn/vibOut）
+
+  /* ---- 颤音扩展参（对应上游 UVibrato，均可选；缺省时按上游默认值兜底）---- */
+  vibIn?: number;        // 0..100 起音占比
+  vibOut?: number;       // 0..100 收音占比（引擎侧 out ≤ 100 − in 互约束）
+  vibShift?: number;     // -100..100 相位偏移
+  vibDrift?: number;     // -100..100 漂移（音高随机波动）
+  vibVolLink?: number;   // -100..100 音量联动
+
+  /* ---- 音素覆写（音素级时间微调，泳道/条带上拖拽产生）---- */
+  phonemeOverrides?: PhonemeOverride[];
 
   /* ---- UTAU 侧 ---- */
   velocity?: number;     // 0..100
@@ -151,6 +178,12 @@ export interface SingTrack {
   language: string;
 
   notes: SingNote[];
+  /**
+   * 片段起点（拍，升序）：轨承载多片段（对齐 OpenUtau/传统 DAW——轨是混音通道，
+   * 片段是时间线上的内容块）。音符/曲线仍是轨级绝对拍；导出 ustx 时按区间
+   * `[s_i, s_{i+1})` 切回 UVoicePart。缺省视为单段（position 0）。
+   */
+  partStarts?: number[];
   /**
    * 音高曲线。
    *
@@ -280,9 +313,21 @@ export const useSingerStore = defineStore('singer', {
     /* ---- 工程文件（.fufumidi 自包含包）---- */
     /** 当前工程路径；空 = 还没保存过（此时"保存"会走另存为对话框） */
     projectPath: '' as string,
+    /** 编辑历史栈（song_history 实例；非序列化字段，不进工程文件） */
+    _hist: null as any,
     createdAt: '' as string,
     meta: { title: '', comment: '', artist: '' } as
       { title: string; comment: string; artist: string },
+    /**
+     * 多点变速（拍单位，首点 beat=0）。`bpm` 标量仍是首点真源 ——
+     * 序列化时 `song_project.js` 会把标量回填进 tempoMap[0]。
+     * 对应 ustx 的 tempos；目前渲染仍按首点 bpm（多点渲染待引擎支持）。
+     */
+    tempoMap: [] as { beat: number; bpm: number }[],
+    /** 多点拍号（首点 beat=0），对应 ustx 的 timeSignatures */
+    sigMap: [] as { beat: number; num: number; den: number }[],
+    /** 调号（-7..7），对应 ustx 的 key */
+    keySf: 0,
     /** 打开工程后没落到本地的伴奏（包里缺文件 / 解包失败） */
     missingAudio: [] as { trackId: string; fileName: string; asset: string }[],
     /**
@@ -493,6 +538,62 @@ export const useSingerStore = defineStore('singer', {
         }
       }
     },
+
+    /* ---------------- 撤销 / 重做（音符级编辑快照） ----------------
+     * 快照 = 各轨的 notes / curves / pitchCurve（JSON 序列化去响应式）。
+     * PianoRoll 的画布编辑（拖拽/删除/泳道/音素）都会先 pushUndo ——
+     * 之前 rollApi 没提供这些方法、全部判空跳过，等于**没有撤销**。 */
+    _snapshotNotes(): string {
+      return JSON.stringify((this.tracks || []).map((t: any) => ({
+        id: t.id, notes: t.notes, curves: t.curves || [], pitchCurve: t.pitchCurve || [],
+      })));
+    },
+    _restoreNotes(s: string) {
+      const byId = new Map<string, any>((JSON.parse(s) as any[]).map(r => [r.id, r]));
+      for (const t of this.tracks as any[]) {
+        const r = byId.get(t.id);
+        if (!r) continue;
+        t.notes = r.notes;
+        t.curves = r.curves;
+        t.pitchCurve = r.pitchCurve;
+      }
+    },
+    pushUndo() {
+      if (!this._hist) {
+        this._hist = createHistory({
+          snapshot: () => this._snapshotNotes(),
+          restore: (s: string) => this._restoreNotes(s),
+        });
+      }
+      this._hist.push();
+    },
+    undo() { if (this._hist) this._hist.undo(); },
+    redo() { if (this._hist) this._hist.redo(); },
+    /** 供 UI 禁用按钮用（写成方法而非 getter —— Pinia actions 对象里不能放 getter） */
+    canUndo(): boolean { return !!(this._hist && this._hist.canUndo); },
+    canRedo(): boolean { return !!(this._hist && this._hist.canRedo); },
+    /** 载入新工程 / 导入时清栈（不能 undo 到别的工程去） */
+    clearHistory() { if (this._hist) this._hist.clear(); },
+
+    selectAll() {
+      const t = this.activeTrack;
+      if (t && t.notes.length) this.selectMany(t.notes.map((n: any) => n.id));
+    },
+    /** 批量移动（键盘方向键）：dBeat 水平、dPitch 半音 */
+    moveNotes(ids: string[], dBeat: number, dPitch: number) {
+      const set = new Set(ids);
+      if (!set.size) return;
+      for (const tr of this.tracks as any[]) {
+        let changed = false;
+        for (const n of tr.notes) {
+          if (!set.has(n.id)) continue;
+          n.startBeat = Math.max(0, n.startBeat + dBeat);
+          n.pitch = Math.min(127, Math.max(0, n.pitch + Math.round(dPitch)));
+          changed = true;
+        }
+        if (changed) tr.notes.sort((a: any, b: any) => a.startBeat - b.startBeat);
+      }
+    },
     removeNote(id: string) {
       for (const tr of this.tracks) {
         const i = tr.notes.findIndex(x => x.id === id);
@@ -624,6 +725,9 @@ export const useSingerStore = defineStore('singer', {
       this.projectPath = '';
       this.createdAt = '';
       this.meta = { title: '', comment: '', artist: '' };
+      this.tempoMap = [];
+      this.sigMap = [];
+      this.keySf = 0;
       this.missingAudio = [];
     },
 
@@ -644,6 +748,9 @@ export const useSingerStore = defineStore('singer', {
       const { json, assets } = serializeProject({
         tracks: this.tracks as any,
         bpm: this.bpm,
+        tempoMap: this.tempoMap,
+        sigMap: this.sigMap,
+        keySf: this.keySf,
         device: this.device,
         sampleNote: this.sampleNote,
         activeTrackId: this.activeTrackId,
@@ -699,6 +806,9 @@ export const useSingerStore = defineStore('singer', {
       this.renderByTrack = {};
       this.tracks = tracks;
       this.bpm = proj.bpm;
+      this.tempoMap = proj.tempoMap || [];
+      this.sigMap = proj.sigMap || [];
+      this.keySf = proj.keySf || 0;
       this.device = proj.device;
       this.sampleNote = proj.sampleNote;
       this.activeTrackId = proj.activeTrackId || (tracks[0]?.id || '');
@@ -708,9 +818,172 @@ export const useSingerStore = defineStore('singer', {
       this.selectedId = null;
       this.selectedIds = [];
       this.missingAudio = missingAssets(tracks);
+      this.clearHistory();
 
       const n = this.missingAudio.length;
       return n ? '工程已打开，但有 ' + n + ' 个伴奏文件缺失（包里没有或解包失败）' : '';
+    },
+
+    /* ---------------- OpenUtau .ustx 互转 ---------------- */
+    /**
+     * 导入 OpenUtau `.ustx`：选文件 → Python 引擎转换（版本迁移/编码都在引擎层）
+     * → parseProject 校验 → 声库名匹配本地声库 → 灌进 store。
+     *
+     * 有损项（音素级参数、曲线等）由引擎以 warnings 返回，拼进提示串给用户。
+     */
+    async importUstx(): Promise<string> {
+      if (!isDesktop || !bridge) return '桌面版才能导入 .ustx';
+      const b = bridge as any;
+      if (!b.project || typeof b.project.importUstx !== 'function') return '当前版本不支持 .ustx 导入';
+      let r: any;
+      try {
+        r = await b.project.importUstx();
+      } catch (e) {
+        return String((e as any)?.message || e);
+      }
+      if (!r || !r.ok) return (r && r.cancelled) ? '' : ((r && r.error) || '导入失败');
+
+      const p = parseProject(r.json) as any;
+      if (!p.ok) return p.error || '.ustx 解析失败';
+      const proj = p.project as any;
+      const tracks = resolveAssetPaths(proj.tracks, r.resolved || {}) as any as SingTrack[];
+
+      // ---- 声库名 → 本地目录匹配（ustx 里记的是声库名，不是本机路径）
+      await this.loadBanks();
+      const norm = (s: unknown) => String(s || '').trim().toLowerCase();
+      const unmatched = new Set<string>();
+      for (const t of tracks) {
+        if (t.kind !== 'voice') continue;
+        const want = norm((t as any).singerName || '');
+        const hit = this.banks.find(bk => norm(bk.name) === want)
+          || this.banks.find(bk => norm(bk.dir.split(/[\\/]/).pop()) === want);
+        if (hit) {
+          t.singer = hit.dir;
+          t.singerName = hit.name;
+          t.engine = hit.engine;      // 以声库实际类型为准（ustx 的 renderer 提示只作兜底）
+        } else if (want) {
+          unmatched.add((t as any).singerName || '');
+        }
+      }
+
+      this.renderByTrack = {};
+      this.tracks = tracks;
+      this.bpm = proj.bpm;
+      this.tempoMap = proj.tempoMap || [];
+      this.sigMap = proj.sigMap || [];
+      this.keySf = proj.keySf || 0;
+      this.device = proj.device;
+      this.sampleNote = proj.sampleNote;
+      this.activeTrackId = proj.activeTrackId || (tracks[0]?.id || '');
+      this.meta = proj.meta;
+      this.createdAt = proj.createdAt || '';
+      // ★ 导入的 .ustx 不是 .fufumidi —— projectPath 置空，"保存"会走另存为
+      this.projectPath = '';
+      this.selectedId = null;
+      this.selectedIds = [];
+      this.missingAudio = missingAssets(tracks);
+      this.clearHistory();
+
+      const parts: string[] = [];
+      const miss = this.missingAudio.length;
+      if (miss) parts.push(miss + ' 个伴奏文件没找到');
+      if (unmatched.size) parts.push('声库未找到：' + [...unmatched].join('、'));
+      for (const w of (r.warnings || [])) parts.push(w);
+      return parts.length ? '已导入 .ustx（' + parts.join('；') + '）' : '已导入 .ustx';
+    },
+
+    /**
+     * 导出为 OpenUtau `.ustx`：serializeProject（含 tempoMap/sigMap）→
+     * 引擎转 ustx 并写盘；伴奏由主进程拷到 `<名字>_assets/` 旁目录。
+     */
+    async exportUstx(): Promise<string> {
+      if (!isDesktop || !bridge) return '桌面版才能导出 .ustx';
+      const b = bridge as any;
+      if (!b.project || typeof b.project.exportUstx !== 'function') return '当前版本不支持 .ustx 导出';
+      const { json, assets } = serializeProject({
+        tracks: this.tracks as any,
+        bpm: this.bpm,
+        tempoMap: this.tempoMap,
+        sigMap: this.sigMap,
+        keySf: this.keySf,
+        device: this.device,
+        sampleNote: this.sampleNote,
+        activeTrackId: this.activeTrackId,
+        meta: this.meta,
+        createdAt: this.createdAt,
+      });
+      const plain = JSON.parse(JSON.stringify(json));   // 断开响应式 Proxy（结构化克隆不收）
+      try {
+        const r = await b.project.exportUstx({
+          json: plain,
+          audioFiles: assets.map((a: any) => ({ id: a.id, srcPath: a.srcPath, fileName: a.fileName })),
+          suggestName: this.meta.title || 'song',
+        });
+        if (!r || !r.ok) return (r && r.cancelled) ? '' : ((r && r.error) || '导出失败');
+        const w: string[] = r.warnings || [];
+        return w.length ? '已导出 .ustx（' + w.join('；') + '）' : '已导出 ' + (r.filePath || '');
+      } catch (e) {
+        return String((e as any)?.message || e);
+      }
+    },
+
+    /**
+     * 逐轨导出（stems，对应上游 `RenderToFiles`）：每条轨各写一份 WAV 到所选目录。
+     *
+     * 声部轨走**直写渲染**（引擎产物由主进程直接落盘，字节不过 IPC）；
+     * 伴奏轨由主进程直拷源文件。文件名 `曲名 - 轨名.wav`，重名自动加序号。
+     */
+    async exportStems(): Promise<string> {
+      if (!isDesktop || !bridge) return '桌面版才能导出分轨';
+      const b = bridge as any;
+      if (typeof b.pickDirectory !== 'function') return '当前版本不支持分轨导出';
+      const dir = await b.pickDirectory();
+      if (!dir) return '';
+      const base = stemSafeName(this.meta.title || 'song');
+      const dirClean = String(dir).replace(/[\\/]+$/, '');
+      const used = new Set<string>();
+      const fails: string[] = [];
+      let okN = 0;
+      const total = this.tracks.length;
+      this.busy = true;
+      this.progress = 0;
+      try {
+        let doneN = 0;
+        for (const t of this.tracks) {
+          const out = dirClean + '/' + stemFileName(
+            base,
+            t.kind === 'audio' ? (t.audio?.fileName || 'audio') : (t.name || 'track'),
+            used,
+          );
+          try {
+            if (t.kind === 'voice') {
+              const err = t.engine === 'diffsinger'
+                ? await this._renderDiffSinger(t, out)
+                : await this._renderUtau(t, out);
+              if (err) fails.push((t.name || '未命名轨') + '：' + err);
+              else okN += 1;
+            } else if (t.kind === 'audio' && t.audio?.path) {
+              const r = await (typeof b.copyAsset === 'function'
+                ? b.copyAsset({ src: t.audio.path, dest: out })
+                : { ok: false, error: '当前版本不支持伴奏复制' });
+              if (r && r.ok) okN += 1;
+              else fails.push((t.name || '伴奏') + '：' + ((r && r.error) || '复制失败'));
+            } else {
+              fails.push((t.name || '未命名轨') + '：伴奏文件缺失');
+            }
+          } catch (e) {
+            fails.push((t.name || '未命名轨') + '：' + String((e as any)?.message || e));
+          }
+          this.progress = Math.round((++doneN) / Math.max(1, total) * 100);
+        }
+      } finally {
+        this.busy = false;
+        this.progress = 0;
+      }
+      if (!okN && fails.length) return '分轨导出失败：' + fails.join('；');
+      return fails.length
+        ? `已导出 ${okN}/${total} 条分轨（失败：${fails.join('；')}）`
+        : `已导出 ${okN} 条分轨到 ${dir}`;
     },
 
     /* ---------------- 声库（混排） ---------------- */
@@ -849,7 +1122,8 @@ export const useSingerStore = defineStore('singer', {
       return '';
     },
 
-    async _renderDiffSinger(tr: SingTrack): Promise<string> {
+    /** 渲染一条 DiffSinger 轨。`outPath` 给了走直写模式（产物落盘、不回传字节） */
+    async _renderDiffSinger(tr: SingTrack, outPath?: string): Promise<string> {
       if (!isDesktop || !bridge) return '网页端暂不支持 DiffSinger 渲染';
       // ★ 必须摊平成**普通对象**：notes / pitchCurve 来自 Pinia state，是响应式
       //   Proxy，结构化克隆对 Proxy 一律拒绝（抛 "An object could not be cloned"），
@@ -858,6 +1132,9 @@ export const useSingerStore = defineStore('singer', {
         startBeat: n.startBeat, durBeat: n.durBeat, pitch: n.pitch,
         lyric: n.lyric, vibrato: !!n.vibrato, vibDepth: n.vibDepth,
         vibFreq: n.vibFreq, vibFade: n.vibFade || 0,
+        vibIn: n.vibIn, vibOut: n.vibOut, vibShift: n.vibShift,
+        vibDrift: n.vibDrift, vibVolLink: n.vibVolLink,
+        phonemeOverrides: (n.phonemeOverrides || []).map(o => ({ ...o })),
         pitchOffset: n.pitchOffset || 0,
       }));
       const pitchCurve = (tr.pitchCurve || []).map(p => ({ beat: p.beat, cents: p.cents }));
@@ -865,14 +1142,18 @@ export const useSingerStore = defineStore('singer', {
         voicebank: tr.singer,
         notes,
         bpm: this.bpm,
+        // 多点变速（拍单位）：导入的 ustx 变速段在这里进渲染管线
+        tempoMap: this.tempoMap.map(p => ({ beat: p.beat, bpm: p.bpm })),
         device: this.device || 'auto',
         pitchCurve,
         params: { language: tr.language, depth: tr.depth, steps: tr.steps },
+        ...(outPath ? { outPath } : {}),
       });
-      return this._acceptResult(r, 'DiffSinger', tr.id);
+      return this._acceptResult(r, 'DiffSinger', outPath ? undefined : tr.id);
     },
 
-    async _renderUtau(tr: SingTrack): Promise<string> {
+    /** 渲染一条 UTAU 轨。`outPath` 给了走直写模式（产物落盘、不回传字节） */
+    async _renderUtau(tr: SingTrack, outPath?: string): Promise<string> {
       if (!isDesktop || !bridge) return '网页端暂不支持 UTAU 渲染';
       // ★ 有子轨时由子轨说话：取音符**中点**的值，没有子轨才沿用音符自身参数。
       //   （只 UTAU 有 DYN/BRE/GEN —— DiffSinger 引擎没有对应的每音符输入，
@@ -886,6 +1167,9 @@ export const useSingerStore = defineStore('singer', {
         lyric: n.lyric || this.sampleNote || 'a',
         vibrato: !!n.vibrato, vibDepth: n.vibDepth, vibFreq: n.vibFreq,
         vibFade: n.vibFade || 0,
+        vibIn: n.vibIn, vibOut: n.vibOut, vibShift: n.vibShift,
+        vibDrift: n.vibDrift, vibVolLink: n.vibVolLink,
+        phonemeOverrides: (n.phonemeOverrides || []).map(o => ({ ...o })),
         velocity: dyn ? valueForNote(dyn.points, n.startBeat, n.durBeat, 'DYN') : (n.velocity ?? 100),
         volume: n.volume ?? 0,
         gender: gen ? valueForNote(gen.points, n.startBeat, n.durBeat, 'GEN') : (n.gender ?? 0),
@@ -896,8 +1180,21 @@ export const useSingerStore = defineStore('singer', {
         notes,
         sampleNote: this.sampleNote || 'a',
         bpm: this.bpm,
+        // 多点变速（拍单位）：导入的 ustx 变速段在这里进渲染管线
+        tempoMap: this.tempoMap.map(p => ({ beat: p.beat, bpm: p.bpm })),
+        // 自动化子轨（连续曲线值进渲染）：只送 render 模式的曲线（DYN/BRE/GEN），
+        // VOL/PAN 是播放侧的不进引擎。
+        curves: (tr.curves || [])
+          .filter(c => ['DYN', 'BRE', 'GEN'].includes(c.abbr) && c.points.length)
+          .map(c => ({ abbr: c.abbr, points: c.points.map(p => ({ beat: p.beat, value: p.value })) }))
+          // 音高曲线（音分，相对音符音高的偏差）→ ustx 的 pitd——
+          // render_phrase 会对渲染音高做 pitches[i] += pitd.sample(...) 偏差应用。
+          .concat((tr.pitchCurve || []).length
+            ? [{ abbr: 'PIT', points: tr.pitchCurve.map(p => ({ beat: p.beat, value: p.cents })) }]
+            : []),
+        ...(outPath ? { outPath } : {}),
       });
-      return this._acceptResult(r, 'UTAU', tr.id);
+      return this._acceptResult(r, 'UTAU', outPath ? undefined : tr.id);
     },
   },
 });

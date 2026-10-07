@@ -6,7 +6,7 @@
  * 引擎（UTAU / DiffSinger）是**轨道上的属性**，不是页面级的模式 ——
  * 所以一个工程里两种轨可以混排，渲染时按各自引擎分派。
  */
-import { computed, ref, watch } from 'vue';
+import { computed, ref, watch, onActivated } from 'vue';
 import { useRoute } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import PianoRoll from '../components/pianoroll/PianoRoll.vue';
@@ -14,7 +14,9 @@ import { t } from '../core/i18n.js';
 import { ENGINES, LANGUAGES, useSingerStore } from '../stores/singer';
 import { getTransport } from '../core/sing_transport.js';
 import { FX_TYPES, FX_ORDER } from '../core/track_fx.js';
-import { CURVE_TARGETS, curveOf, defaultFor, targetsFor } from '../core/track_automation.js';
+import { CURVE_TARGETS, curveOf, defaultFor, targetsFor, secToBeat } from '../core/track_automation.js';
+import { listMidiInputs, selectMidiInput } from '../core/midiin.js';
+import { ensureAudio, getCtx } from '../audio.js';
 
 const store = useSingerStore();
 const route = useRoute();
@@ -130,6 +132,30 @@ function rollApi() {
     removeNote: (id) => store.removeNote(id),
     select: (id, add) => store.select(id, add),
     selectMany: (ids) => store.selectMany(ids),
+    // ---- 撤销/重做 + 批量操作（PianoRoll 快捷键与画布编辑依赖）----
+    // ★ 之前 pushUndo/undo/redo/selectAll/moveNotes 从未提供：PianoRoll 所有
+    //   编辑入口的 pushUndo 全部判空跳过 = 没有撤销；Ctrl+A 直接 TypeError。
+    pushUndo: () => store.pushUndo(),
+    undo: () => store.undo(),
+    redo: () => store.redo(),
+    selectAll: () => store.selectAll(),
+    moveNotes: (ids, dBeat, dPitch) => store.moveNotes(ids, dBeat, dPitch),
+    // ★ PianoRoll 全部选择入口（点选/框选/加选/取消）都走 setSelection ——
+    //   之前没提供，第一次点击就 TypeError，选择工具整个不可用。
+    setSelection: (ids: string[], primary: string | null) => {
+      store.selectMany(ids);
+      if (primary != null) store.selectedId = primary;
+    },
+    // ---- 曲线泳道（PIT/DYN/BRE/GEN）----
+    // ★ 之前 getPitchPoints/setPitchPoints 只在 PianoRoll 里被调用、从未有
+    //   实现 —— 泳道读恒空、写静默丢。统一走 curveOf/setCurve：
+    //   PIT 会镜像到 pitchCurve（渲染链路读它），DYN/BRE/GEN 进渲染曲线通路。
+    getEngine: () => tr.value?.engine || 'utau',
+    getCurvePoints: (abbr: string) =>
+      (tr.value ? (curveOf(tr.value, abbr)?.points || []) : []) as { beat: number; value: number }[],
+    setCurvePoints: (abbr: string, points: { beat: number; value: number }[]) => {
+      if (tr.value) store.setCurve(tr.value.id, abbr, points);
+    },
   };
 }
 
@@ -137,6 +163,13 @@ function onLyric(note, e) {
   const text = e.target.value;
   store.updateNote(note.id, { lyric: text });
   void askCands(note.id, text);
+}
+
+/** 属性面板的提交式编辑：@change（commit 时机）先入撤销栈再应用。
+ *  歌词框是 @input（每字符），撤销点放在 @focus（进入编辑前整段入栈）。 */
+function commitNote(sel: any, patch: any) {
+  store.pushUndo();
+  store.updateNote(sel.id, patch);
 }
 
 async function askCands(noteId, text) {
@@ -263,6 +296,118 @@ const tpending = ref(false);         // 正在解码
 const transport = getTransport();
 transport.onTick = (ms, playing) => { tpos.value = ms; tplaying.value = playing; };
 
+/* ---- MIDI 键盘实时输入（录音：弹的音 → 工程音符）----
+ * 插入点：播放中=播放头，否则最后选中音符尾，否则 0 拍。
+ * 试听 v1 = 简易双振荡器音色（SF2 试听域打通后替换）——按住出声、松手收尾。 */
+const midiIns = ref<{ id: string; name: string }[]>([]);
+const midiInOn = ref(false);
+const pendingMidi = new Map<number, { id: string; startMs: number }>();
+const midiStops = new Map<number, (ms: number) => void>();
+
+function previewBeat(): number {
+  if (tplaying.value && tpos.value > 0) {
+    return Math.max(0, secToBeat(tpos.value / 1000, store.tempoMap, store.bpm));
+  }
+  const sel = store.selectedId && tr.value
+    ? tr.value.notes.find(n => n.id === store.selectedId)
+    : null;
+  if (sel) return sel.startBeat + sel.durBeat;
+  return 0;
+}
+
+/** 简易试听音色：返回「停止函数」（传入额外延迟 ms）；失败返回 null（不出声但不报错） */
+function previewTone(pitch: number, stopAfterMs: number): ((ms: number) => void) | null {
+  try {
+    let ctx = getCtx();
+    if (!ctx) { ensureAudio(); ctx = getCtx(); }
+    if (!ctx) return null;
+    const o1 = ctx.createOscillator(); o1.type = 'triangle';
+    const o2 = ctx.createOscillator(); o2.type = 'sine';
+    const g = ctx.createGain();
+    const f = 440 * Math.pow(2, (pitch - 69) / 12);
+    o1.frequency.value = f; o2.frequency.value = f * 2;
+    const t0 = ctx.currentTime;
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(0.16, t0 + 0.012);
+    o1.connect(g); o2.connect(g); g.connect(ctx.destination);
+    o1.start(t0); o2.start(t0);
+    const stop = (extraMs: number) => {
+      try {
+        const t1 = t0 + Math.max(0.03, extraMs / 1000);
+        g.gain.setTargetAtTime(0, t1, 0.04);
+        o1.stop(t1 + 0.25); o2.stop(t1 + 0.25);
+      } catch (_) {}
+    };
+    if (stopAfterMs > 0) stop(stopAfterMs);
+    return stop;
+  } catch (_) { return null; }
+}
+
+async function applyMidiIn(id: string) {
+  const ok = await selectMidiInput(id, {
+    onNoteOn: (note: number) => {
+      if (!tr.value) return;
+      store.pushUndo();
+      const nid = store.addNote(previewBeat(), note);
+      if (nid) pendingMidi.set(note, { id: nid, startMs: performance.now() });
+      const stop = previewTone(note, 0);
+      if (stop) midiStops.set(note, stop);
+    },
+    onNoteOff: (note: number) => {
+      const p = pendingMidi.get(note);
+      if (p) {
+        // 按住时长（秒）→ 拍；钳 1/8..16 拍
+        const dur = Math.min(16, Math.max(0.125, (performance.now() - p.startMs) / 1000 * store.bpm / 60));
+        store.updateNote(p.id, { durBeat: dur });
+        pendingMidi.delete(note);
+      }
+      const stop = midiStops.get(note);
+      if (stop) { stop(0); midiStops.delete(note); }
+    },
+  });
+  midiInOn.value = !!ok && !!id;
+}
+async function onMidiInSelect(e: Event) {
+  const id = (e.target as HTMLSelectElement).value;
+  try { localStorage.setItem('fufumidi_midiin', id); } catch (_) {}
+  await applyMidiIn(id);
+}
+/* 歌手下拉的数据源（已扫描的 UTAU/DS 声库列表）。
+   ★ KeepAlive 缓存本视图：只在 setup 拉一次的话，在声库页/模型页装完声库
+   切回来下拉永远是旧的 —— onActivated 每次激活（含首次挂载）都重扫一次。
+   loadBanks 只刷目录清单、不碰轨道状态，激活时调用是安全的。 */
+onActivated(() => { void store.loadBanks(); });
+if (store.banks.length === 0) void store.loadBanks();
+void listMidiInputs().then((list) => {
+  midiIns.value = list;
+  try {
+    const saved = localStorage.getItem('fufumidi_midiin');
+    if (saved && list.some(d => d.id === saved)) void applyMidiIn(saved);
+  } catch (_) {}
+});
+
+/* ---- 音频输出设备选择（setSinkId）---- */
+const sinks = ref<{ deviceId: string; label: string }[]>([]);
+async function loadSinks() {
+  try {
+    const md = (navigator as any).mediaDevices;
+    const list = md && typeof md.enumerateDevices === 'function' ? await md.enumerateDevices() : [];
+    sinks.value = (list || []).filter((d: any) => d.kind === 'audiooutput');
+  } catch (_) { /* 权限/不支持：只留默认输出 */ }
+}
+async function onSink(e: Event) {
+  const id = (e.target as HTMLSelectElement).value;
+  try { localStorage.setItem('fufumidi_sink', id); } catch (_) {}
+  await transport.setSink(id);
+}
+/** 应用持久化的输出设备（ctx 可能尚未创建 —— transport.setSink 内部会判空） */
+void loadSinks().then(() => {
+  try {
+    const saved = localStorage.getItem('fufumidi_sink');
+    if (saved) void transport.setSink(saved);
+  } catch (_) {}
+});
+
 /**
  * 一条轨要交给传输器的东西。
  *
@@ -274,6 +419,8 @@ function laneOf(t0: any): any {
   return {
     fx: (t0.fx || []).slice(),
     bpm: store.bpm || 120,
+    // 多点变速（[{beat,bpm}]，拍单位）：VOL/PAN 自动化沿段换算 sec→beat 要用
+    tempoMap: (store.tempoMap || []).map((p: any) => ({ beat: p.beat, bpm: p.bpm })),
     volPoints: (curveOf(t0, 'VOL')?.points || []).slice(),
     panPoints: (curveOf(t0, 'PAN')?.points || []).slice(),
   };
@@ -362,6 +509,8 @@ const fmtMs = (ms: number) => {
 };
 
 /* ------------------------------------------------------------ 音高曲线 */
+/** 点列表面板折叠：点再多也只是收成一行头，卷帘空间随时可以拿回来 */
+const curvesOpen = ref(true);
 function curveAdd() {
   const t0 = tr.value;
   if (!t0) return;
@@ -436,6 +585,22 @@ async function openProject() {
   // 伴奏换成了包里解出来的那份 —— 传输器还握着旧字节，必须重装
   if (store.projectPath) await reloadTransport();
 }
+/**
+ * OpenUtau `.ustx` 互转（与上游交换工程用）。
+ * 导入/导出都有损（音素级参数、曲线），引擎会把细节以 warnings 拼进提示串。
+ */
+async function importUstx() {
+  msg.value = await store.importUstx();
+  if (!msg.value.startsWith('已导入')) return;
+  await reloadTransport();     // 伴奏路径变了（来自 ustx 旁目录），传输器重装
+}
+async function exportUstx() {
+  msg.value = await store.exportUstx();
+}
+/** 逐轨导出（stems）：每条轨各一份 WAV，走直写渲染（字节不过 IPC） */
+async function exportStems() {
+  msg.value = await store.exportStems();
+}
 function newProject() {
   store.newProject();
   msg.value = '';
@@ -491,7 +656,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         </button>
       </div>
 
-      <div class="trk-list" data-guide="sing-tracks">
+      <TransitionGroup class="trk-list" name="fade" tag="div" data-guide="sing-tracks">
         <div
           v-for="x in store.tracks" :key="x.id"
           class="trk-item" :class="{ on: x.id === store.activeTrackId }"
@@ -506,11 +671,24 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             <button class="ib del" :title="t('删除轨')" @click.stop="store.removeTrack(x.id)">
               <Icon name="trash" :size="11" />
             </button>
+            <span v-if="(x.partStarts?.length || 0) > 1" class="seg-cnt"
+                  :title="t('这条轨有多个片段（对齐 OpenUtau 的 Part 模型）')">
+              {{ x.partStarts!.length }}{{ t('段') }}
+            </span>
           </div>
           <!-- 声部轨：选歌手 + 语言；音频轨：文件信息 + 静音 -->
           <template v-if="x.kind === 'voice'">
-            <input class="pth" :value="x.singer" :placeholder="t('歌手目录（留空则该轨用默认歌手）')"
-                   @click.stop @change="onSingerPath(x.id, $event)" />
+            <!-- 歌手 = 列表选择（已扫描声库），不再手输路径；点击同时切换到该轨道 -->
+            <select class="pth" :value="x.singer" :title="x.singer || t('默认歌手（未指定）')"
+                    @change="onSingerPath(x.id, $event)">
+              <option value="">{{ t('默认歌手（未指定）') }}</option>
+              <option v-for="b in store.banks.filter(bk => bk.engine === x.engine)" :key="b.dir" :value="b.dir">
+                {{ b.name }}
+              </option>
+              <option v-if="x.singer && !store.banks.some(bk => bk.dir === x.singer)" :value="x.singer">
+                {{ String(x.singer).split(/[\\/]/).pop() }}（{{ t('自定义目录') }}）
+              </option>
+            </select>
             <div class="trk-row2" @click.stop>
               <select class="lang" :value="x.language" @click.stop
                       @change="store.patchTrack(x.id, { language: sval($event) })">
@@ -541,7 +719,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             </div>
           </template>
         </div>
-      </div>
+      </TransitionGroup>
     </aside>
 
     <!-- ==================== 右：共用编辑器 ==================== -->
@@ -555,6 +733,15 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         </button>
         <button class="btn" :title="t('打开 .fufumidi 工程')" @click="openProject">
           <Icon name="folder" :size="12" /> {{ t('打开') }}
+        </button>
+        <button class="btn" :title="t('导入 OpenUtau 工程 (.ustx)')" @click="importUstx">
+          <Icon name="folder" :size="12" /> {{ t('导入 ustx') }}
+        </button>
+        <button class="btn" :title="t('导出为 OpenUtau 工程 (.ustx)')" @click="exportUstx">
+          <Icon name="save" :size="12" /> {{ t('导出 ustx') }}
+        </button>
+        <button class="btn" :title="t('每条轨各导出一份 WAV（分轨）')" :disabled="store.busy" @click="exportStems">
+          <Icon name="save" :size="12" /> {{ t('导出分轨') }}
         </button>
         <button class="btn" :title="t('保存到当前工程文件')" @click="saveProject(false)">
           <Icon name="save" :size="12" /> {{ t('保存') }}
@@ -591,7 +778,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <option value="cuda">CUDA</option>
           <option value="dml">DirectML</option>
         </select>
-        <input v-if="isUtau" class="smp" :value="store.sampleNote" :title="t('UTAU 采样音（alias）')"
+        <input v-if="isUtau" class="smp num-input" :value="store.sampleNote" :title="t('UTAU 采样音（alias）')"
                @change="store.sampleNote = sval($event)" />
         <button class="btn" data-guide="sing-track-props" :disabled="!tr" @click="propsOpen = !propsOpen">
           <Icon name="sliders" :size="13" /> {{ t('轨道属性') }}
@@ -606,8 +793,12 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         </button>
       </div>
 
-      <div v-if="store.busy" class="edt-prog"><i :style="{ width: store.progress + '%' }" /></div>
-      <p v-if="msg" class="edt-msg small">{{ msg }}</p>
+      <Transition name="fade">
+        <div v-if="store.busy" class="edt-prog"><i :style="{ width: store.progress + '%' }" /></div>
+      </Transition>
+      <Transition name="fade">
+        <p v-if="msg" class="edt-msg small">{{ msg }}</p>
+      </Transition>
 
       <!-- 传输栏：伴奏与渲染结果**同时播放**（Web Audio 单时钟，采样级同步） -->
       <div class="xport" data-guide="sing-transport">
@@ -632,12 +823,25 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <button v-if="store.renderUrl" class="btn" @click="doSave">
           <Icon name="save" :size="12" /> {{ t('导出 WAV') }}
         </button>
+        <!-- 音频输出设备（setSinkId；换设备立即生效，偏好持久化） -->
+        <select class="sel select-input" :title="t('音频输出设备')" @change="onSink($event)">
+          <option value="">{{ t('默认输出') }}</option>
+          <option v-for="d in sinks" :key="d.deviceId" :value="d.deviceId">
+            {{ d.label || t('输出设备') + ' ' + d.deviceId.slice(0, 8) }}
+          </option>
+        </select>
+        <!-- MIDI 输入设备（录音：弹的音 → 工程音符，按住时长 = 音符长度） -->
+        <select class="sel select-input" :title="t('MIDI 输入设备（弹奏录音）')" @change="onMidiInSelect($event)">
+          <option value="">{{ t('无 MIDI 输入') }}</option>
+          <option v-for="d in midiIns" :key="d.id" :value="d.id">{{ d.name }}</option>
+        </select>
       </div>
       <ul v-if="store.renderWarnings.length" class="warn small">
         <li v-for="(w, i) in store.renderWarnings" :key="i">{{ w }}</li>
       </ul>
 
       <!-- 轨道属性：参数 / 效果链 / 自动化（后两者都是**本轨独享**的） -->
+      <Transition name="fade">
       <div v-if="propsOpen && tr" class="tprops">
         <div class="tabs small">
           <button class="tab" :class="{ on: propsTab === 'params' }" @click="propsTab = 'params'">
@@ -656,20 +860,20 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <!-- ── 参数 ── -->
         <div v-if="propsTab === 'params'" class="props small">
           <template v-if="isUtau">
-            <label>{{ t('重采样器') }}<input :value="tr.resampler || ''"
+            <label>{{ t('重采样器') }}<input class="text-input" :value="tr.resampler || ''"
               @change="store.patchTrack(tr.id, { resampler: sval($event) })" /></label>
-            <label>{{ t('波源工具') }}<input :value="tr.wavtool || ''"
+            <label>{{ t('波源工具') }}<input class="text-input" :value="tr.wavtool || ''"
               @change="store.patchTrack(tr.id, { wavtool: sval($event) })" /></label>
           </template>
           <template v-if="isDs">
-            <label>{{ t('深度') }}<input type="number" step="0.05" min="0" max="1" :value="tr.depth ?? 1"
+            <label>{{ t('深度') }}<input class="num-input" type="number" step="0.05" min="0" max="1" :value="tr.depth ?? 1"
               @change="store.patchTrack(tr.id, { depth: nval($event, 1) })" /></label>
-            <label>{{ t('采样步数') }}<input type="number" min="1" :value="tr.steps ?? 20"
+            <label>{{ t('采样步数') }}<input class="num-input" type="number" min="1" :value="tr.steps ?? 20"
               @change="store.patchTrack(tr.id, { steps: nval($event, 20) })" /></label>
           </template>
-          <label>{{ t('BPM') }}<input type="number" min="1" :value="store.bpm"
+          <label>{{ t('BPM') }}<input class="num-input" type="number" min="1" :value="store.bpm"
             @change="store.bpm = nval($event, 120)" /></label>
-          <label>{{ t('音量') }}<input type="number" step="0.5" min="-60" max="6"
+          <label>{{ t('音量') }}<input class="num-input" type="number" step="0.5" min="-60" max="6"
             :value="isAudio ? (tr.audio?.gainDb ?? 0) : (tr.gainDb ?? 0)"
             @change="onGainDb($event)" /><span class="muted">dB</span></label>
         </div>
@@ -736,9 +940,9 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <div v-if="curCurve && curCurve.points.length" class="auto-grid">
             <div v-for="(p, i) in curCurve.points" :key="i" class="curve-row">
               <span class="ci">{{ i + 1 }}</span>
-              <input type="number" step="0.25" :value="p.beat"
+              <input class="num-input" type="number" step="0.25" :value="p.beat"
                      @change="autoSetPoint(curCurve.points, i, 'beat', $event)" />
-              <input type="number" :step="curTarget.step || 1" :value="p.value"
+              <input class="num-input" type="number" :step="curTarget.step || 1" :value="p.value"
                      @change="autoSetPoint(curCurve.points, i, 'value', $event)" />
               <span class="muted">beat / {{ curTarget.unit || '' }}</span>
               <button class="ib del" :title="t('删除')" @click="autoDelPoint(curCurve.points, i)">×</button>
@@ -747,9 +951,11 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <p v-else class="muted">{{ t('还没有点，整条轨用默认值。') }}</p>
         </div>
       </div>
+      </Transition>
 
       <!-- MIDI 多轨时选一条 -->
-      <div v-if="midiPick" class="pick small">
+      <Transition name="fade">
+        <div v-if="midiPick" class="pick small">
         <div class="pick-head">
           <b>{{ t('这个 MIDI 有 ') }}{{ midiPick.tracks.length }}{{ t(' 条旋律轨，选一条：') }}</b>
           <span class="sp" />
@@ -764,12 +970,14 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             </button>
           </li>
         </ul>
-      </div>
+        </div>
+      </Transition>
 
-      <!-- 共用钢琴卷帘 -->
+      <!-- 共用钢琴卷帘（fill：吃满剩余空间，面板/泳道不把它挤下屏） -->
       <PianoRoll
         v-if="tr && !isAudio"
         class="edt-roll"
+        fill
         :notes="tr.notes"
         :selected-id="store.selectedId"
         :selected-ids="store.selectedIds"
@@ -779,11 +987,12 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
       />
 
       <!-- 选中音符的详细编辑（两边共用一套，引擎特有项按轨道显示） -->
+      <Transition name="fade">
       <div v-if="sel && !isAudio" class="det">
         <label class="ly">
           <span>{{ t('歌词') }}</span>
           <span class="ly-wrap">
-            <input :value="sel.lyric" @input="onLyric(sel, $event)" />
+            <input class="text-input" :value="sel.lyric" @focus="store.pushUndo()" @input="onLyric(sel, $event)" />
             <span v-if="cands.length && candFor === sel.id" class="cands">
               <button v-for="c in cands" :key="c.kind + c.text" class="cand"
                       :class="'k-' + c.kind" :title="c.note" @click="pickCand(sel.id, c.text)">
@@ -792,45 +1001,66 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             </span>
           </span>
         </label>
-        <label><span>{{ t('起点') }}</span><input type="number" step="0.125" min="0" :value="sel.startBeat"
-          @change="store.updateNote(sel.id, { startBeat: nval($event, 0) })" /></label>
-        <label><span>{{ t('时长') }}</span><input type="number" step="0.125" min="0.125" :value="sel.durBeat"
-          @change="store.updateNote(sel.id, { durBeat: Math.max(0.125, nval($event, 1)) })" /></label>
-        <label><span>{{ t('音高') }}</span><input type="number" min="0" max="127" :value="sel.pitch"
-          @change="store.updateNote(sel.id, { pitch: Math.max(0, Math.min(127, nval($event, 60))) })" /></label>
+        <label><span>{{ t('起点') }}</span><input class="num-input" type="number" step="0.125" min="0" :value="sel.startBeat"
+          @change="commitNote(sel, { startBeat: nval($event, 0) })" /></label>
+        <label><span>{{ t('时长') }}</span><input class="num-input" type="number" step="0.125" min="0.125" :value="sel.durBeat"
+          @change="commitNote(sel, { durBeat: Math.max(0.125, nval($event, 1)) })" /></label>
+        <label><span>{{ t('音高') }}</span><input class="num-input" type="number" min="0" max="127" :value="sel.pitch"
+          @change="commitNote(sel, { pitch: Math.max(0, Math.min(127, nval($event, 60))) })" /></label>
         <label class="ck"><input type="checkbox" :checked="sel.vibrato"
-          @change="store.updateNote(sel.id, { vibrato: $event.target.checked })" /><span>{{ t('颤音') }}</span></label>
-        <label><span>{{ t('深度') }}</span><input type="number" min="0" max="100" :value="sel.vibDepth"
-          @change="store.updateNote(sel.id, { vibDepth: nval($event, 35) })" /></label>
-        <label><span>{{ t('频率') }}</span><input type="number" step="0.5" min="0" max="12" :value="sel.vibFreq"
-          @change="store.updateNote(sel.id, { vibFreq: nval($event, 5.5) })" /></label>
-        <label v-if="isDs"><span>{{ t('音分偏移') }}</span><input type="number" min="-100" max="100" :value="sel.pitchOffset || 0"
-          @change="store.updateNote(sel.id, { pitchOffset: nval($event, 0) })" /></label>
-        <label v-if="isUtau"><span>{{ t('音量') }}</span><input type="number" min="0" max="100" :value="sel.velocity ?? 100"
-          @change="store.updateNote(sel.id, { velocity: nval($event, 100) })" /></label>
-        <label v-if="isUtau"><span>{{ t('GENC') }}</span><input type="number" min="-100" max="100" :value="sel.gender || 0"
-          @change="store.updateNote(sel.id, { gender: nval($event, 0) })" /></label>
-        <label v-if="isUtau"><span>{{ t('气声') }}</span><input type="number" min="0" max="100" :value="sel.breath || 0"
-          @change="store.updateNote(sel.id, { breath: nval($event, 0) })" /></label>
+          @change="commitNote(sel, { vibrato: $event.target.checked })" /><span>{{ t('颤音') }}</span></label>
+        <label><span>{{ t('深度') }}</span><input class="num-input" type="number" min="0" max="100" :value="sel.vibDepth"
+          @change="commitNote(sel, { vibDepth: nval($event, 35) })" /></label>
+        <label><span>{{ t('频率') }}</span><input class="num-input" type="number" step="0.5" min="0" max="12" :value="sel.vibFreq"
+          @change="commitNote(sel, { vibFreq: nval($event, 5.5) })" /></label>
+        <!-- 颤音扩展参（对应上游 UVibrato 的 in/out/shift/drift；vibFade 是旧的 in/out 合体） -->
+        <template v-if="sel.vibrato">
+          <label :title="t('颤音起音占比 %（0-100）')"><span>{{ t('起音') }}</span>
+            <input class="num-input" type="number" min="0" max="100" :value="sel.vibIn ?? sel.vibFade ?? 0"
+              @change="commitNote(sel, { vibIn: nval($event, 0) })" /></label>
+          <label :title="t('颤音收音占比 %（0-100）')"><span>{{ t('收音') }}</span>
+            <input class="num-input" type="number" min="0" max="100" :value="sel.vibOut ?? sel.vibFade ?? 0"
+              @change="commitNote(sel, { vibOut: nval($event, 0) })" /></label>
+          <label :title="t('颤音相位偏移（-100-100，正值提前起振）')"><span>{{ t('相位') }}</span>
+            <input class="num-input" type="number" min="-100" max="100" :value="sel.vibShift ?? 0"
+              @change="commitNote(sel, { vibShift: nval($event, 0) })" /></label>
+          <label :title="t('音高漂移（-100-100，颤音上的随机波动）')"><span>{{ t('漂移') }}</span>
+            <input class="num-input" type="number" min="-100" max="100" :value="sel.vibDrift ?? 0"
+              @change="commitNote(sel, { vibDrift: nval($event, 0) })" /></label>
+        </template>
+        <label v-if="isDs"><span>{{ t('音分偏移') }}</span><input class="num-input" type="number" min="-100" max="100" :value="sel.pitchOffset || 0"
+          @change="commitNote(sel, { pitchOffset: nval($event, 0) })" /></label>
+        <label v-if="isUtau"><span>{{ t('音量') }}</span><input class="num-input" type="number" min="0" max="100" :value="sel.velocity ?? 100"
+          @change="commitNote(sel, { velocity: nval($event, 100) })" /></label>
+        <label v-if="isUtau"><span>{{ t('GENC') }}</span><input class="num-input" type="number" min="-100" max="100" :value="sel.gender || 0"
+          @change="commitNote(sel, { gender: nval($event, 0) })" /></label>
+        <label v-if="isUtau"><span>{{ t('气声') }}</span><input class="num-input" type="number" min="0" max="100" :value="sel.breath || 0"
+          @change="commitNote(sel, { breath: nval($event, 0) })" /></label>
       </div>
+      </Transition>
 
-      <!-- 音高曲线（两边共用） -->
+      <!-- 音高曲线（两边共用）。头部可整栏折叠：点再多也只收成一行，不占卷帘空间 -->
       <div v-if="!isAudio" class="curves">
-        <div class="curves-head small">
+        <div class="curves-head small" role="button" @click="curvesOpen = !curvesOpen">
+          <span class="curves-caret">{{ curvesOpen ? '▾' : '▸' }}</span>
           <b>{{ t('音高曲线') }}</b>
-          <button class="btn" @click="curveAdd"><Icon name="plus" :size="12" /> {{ t('加点') }}</button>
-          <button class="btn" @click="curveClear">{{ t('清空') }}</button>
-          <span class="muted">{{ t('单位：音分（cent），作用于整条轨') }}</span>
+          <span v-if="tr && tr.pitchCurve.length" class="muted">{{ tr.pitchCurve.length }} pt</span>
+          <template v-if="curvesOpen">
+            <button class="btn" @click.stop="curveAdd"><Icon name="plus" :size="12" /> {{ t('加点') }}</button>
+            <button class="btn" @click.stop="curveClear">{{ t('清空') }}</button>
+            <span class="muted">{{ t('单位：音分（cent），作用于整条轨') }}</span>
+          </template>
+          <span v-else class="muted">{{ t('（已折叠，点头部展开）') }}</span>
         </div>
-        <div v-if="tr && tr.pitchCurve.length" class="curves-grid small">
+        <div v-if="curvesOpen && tr && tr.pitchCurve.length" class="curves-grid small">
           <div v-for="(p, i) in tr.pitchCurve" :key="i" class="curve-row">
             <span class="ci">{{ i + 1 }}</span>
-            <input :value="p.beat" step="0.25" :data-f="'beat'" @change="curveSet(i, $event)" />
-            <input :value="p.cents" step="5" :data-f="'cents'" @change="curveSet(i, $event)" />
+            <input class="num-input" :value="p.beat" step="0.25" :data-f="'beat'" @change="curveSet(i, $event)" />
+            <input class="num-input" :value="p.cents" step="5" :data-f="'cents'" @change="curveSet(i, $event)" />
             <span class="muted">beat / cent</span>
           </div>
         </div>
-        <p v-else class="muted small">{{ t('还没有曲线点。') }}</p>
+        <p v-else-if="curvesOpen" class="muted small">{{ t('还没有曲线点。') }}</p>
       </div>
     </section>
   </div>
@@ -854,9 +1084,11 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .trk-row1 { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
 .trk-row2 { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .trk-item .nm { flex: 1; min-width: 0; }
-.trk-item .pth { width: 100%; font-size: 11px; }
+.trk-item .pth { width: 100%; font-size: 11px; padding: 0 4px; height: 22px; }
 .trk-item .eng { font-size: 10.5px; padding: 1px 3px; border-radius: 4px;
                  border: 1px solid var(--border); }
+.trk-item .seg-cnt { font-size: 10px; color: var(--stone); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0 4px; white-space: nowrap; }
 .eng.e-utau { background: rgba(80,190,120,.18); }
 .eng.e-diffsinger { background: rgba(64,140,255,.18); }
 .trk-item .lang { font-size: 11px; }
@@ -867,7 +1099,9 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .ib.del:hover { border-color: #c66; color: #c66; }
 
 /* ---- 右：编辑器 ---- */
-.edt { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: auto; }
+/* 卷帘占满剩余空间（对齐上游 Height="*"）：edt 不再整区滚动，
+   固定块（工具栏/警告/面板）自然排列，剩余全部给卷帘。 */
+.edt { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 .proj { display: flex; align-items: center; gap: 6px; padding: 6px 12px;
         border-bottom: 1px solid var(--border); }
 .proj .ptitle { flex: 0 1 200px; font-size: 12.5px; }
@@ -882,7 +1116,10 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .edt-prog { height: 3px; background: var(--surface-muted); }
 .edt-prog i { display: block; height: 100%; background: var(--brand); transition: width .2s; }
 .edt-msg { margin: 6px 12px; color: var(--brand-text); }
-.edt-roll { margin: 8px 12px; }
+/* 卷帘保底 = 编辑区高度的 45%：底部面板（轨道属性 320 / 音符详情 260 / 音高曲线 200）
+   全部展开也**只能分走剩余空间**，曲线点再多卷帘也不会被挤扁。
+   用 .edt > 提高优先级压过 PianoRoll 里 .pr-fill 的 min-height:0（两组样式的注入顺序不定）。 */
+.edt > .edt-roll { flex: 1 1 0%; min-height: 45%; margin: 8px 12px; }
 
 .edt-bar .dev, .edt-bar .smp { font-size: 11.5px; }
 .edt-bar .smp { width: 48px; }
@@ -904,9 +1141,12 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .pick-list li { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
 .pick-list .nm { min-width: 120px; }
 .pick-list .btn { margin-left: auto; }
+/* 音频输出设备选择（工具栏内，与 .btn 视觉对齐） */
+.edt-bar select.sel { height: 26px; max-width: 160px; padding: 0 4px; }
 
 /* ---- 轨道属性：三栏（参数 / 效果链 / 自动化） ---- */
-.tprops { border-bottom: 1px solid var(--border); }
+/* 面板封顶内部滚动：自动化点再多也不会把卷帘挤下屏 */
+.tprops { border-bottom: 1px solid var(--border); max-height: 320px; overflow-y: auto; }
 .tprops .tabs { display: flex; align-items: center; gap: 4px; padding: 5px 12px 0; }
 .tprops .tab { border: 1px solid transparent; border-bottom: none; background: transparent;
                color: var(--stone); cursor: pointer; border-radius: 6px 6px 0 0;
@@ -952,6 +1192,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
 /* ---- 音符详情 ---- */
 .det { display: flex; flex-wrap: wrap; gap: 10px; padding: 8px 12px;
+  max-height: 260px; overflow-y: auto;
        border-top: 1px solid var(--border); }
 .det label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
 .det label > span:first-child { color: var(--stone); }
@@ -974,8 +1215,11 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
 /* ---- 曲线 ---- */
 .curves { padding: 8px 12px; border-top: 1px solid var(--border); }
-.curves-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.curves-grid { display: flex; flex-direction: column; gap: 4px; }
+.curves-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+               cursor: pointer; user-select: none; }
+.curves-caret { width: 13px; flex: none; color: var(--stone); }
+/* 点列表封顶内部滚动：音高曲线点再多也只在这里滚，不把卷帘挤下屏 */
+.curves-grid { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
 .curve-row { display: flex; align-items: center; gap: 6px; }
 .curve-row input { width: 84px; }
 .curve-row .ci { width: 18px; color: var(--stone); }

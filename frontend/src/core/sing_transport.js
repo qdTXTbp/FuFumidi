@@ -67,7 +67,7 @@ export class SingTransport {
     /** @type {AudioContext|undefined} */
     this._ctx = ctx;
     /** @type {{buf: AudioBuffer, gainDb: number, muted: boolean, skipMs: number, label: string,
-     *          fx?: any[], bpm?: number, volPoints?: any[], panPoints?: any[]}[]} */
+     *          fx?: any[], bpm?: number, tempoMap?: any[], volPoints?: any[], panPoints?: any[]}[]} */
     this.lanes = [];
     this._srcs = [];
     /** 每次起播新建的效果/增益节点 —— 停止时要一并断开，否则延迟的反馈环会留尾巴 */
@@ -133,6 +133,8 @@ export class SingTransport {
         /* ---- P1：本轨独享效果链 + 自动化子轨 ---- */
         fx: Array.isArray(it.fx) ? it.fx.slice() : [],
         bpm: it.bpm || 120,
+        /* 多点变速（[{beat,bpm}]，拍单位）：VOL/PAN 自动化的 sec→beat 换算要用 */
+        tempoMap: Array.isArray(it.tempoMap) ? it.tempoMap.slice() : [],
         volPoints: Array.isArray(it.volPoints) ? it.volPoints.slice() : [],
         panPoints: Array.isArray(it.panPoints) ? it.panPoints.slice() : [],
       });
@@ -197,7 +199,7 @@ export class SingTransport {
       if (!lane.muted && lane.volPoints && lane.volPoints.length) {
         try {
           g.gain.setValueCurveAtTime(
-            envelopeFrom(lane.volPoints, lane.bpm, t0, t0 + durSec, 256, 'VOL'),
+            envelopeFrom(lane.volPoints, lane.bpm, t0, t0 + durSec, 256, 'VOL', lane.tempoMap),
             when, durSec);
         } catch (_) { /* 老浏览器不支持 setValueCurveAtTime：退回上面的固定增益 */ }
       }
@@ -209,7 +211,7 @@ export class SingTransport {
         const p = ctx.createStereoPanner();
         try {
           p.pan.setValueCurveAtTime(
-            envelopeFrom(lane.panPoints, lane.bpm, t0, t0 + durSec, 256, 'PAN'),
+            envelopeFrom(lane.panPoints, lane.bpm, t0, t0 + durSec, 256, 'PAN', lane.tempoMap),
             when, durSec);
         } catch (_) { /* 同上，退回 0（居中） */ }
         g.connect(p);
@@ -235,6 +237,20 @@ export class SingTransport {
   stop() {
     this._kill();
     this._offsetMs = 0;
+  }
+
+  /**
+   * 切换音频输出设备（`AudioContext.setSinkId`，Chrome/Chromium 110+）。
+   * 不支持或设备失效时静默保留当前输出 —— 输出设备是偏好不是功能开关。
+   * @param {string} deviceId  空 = 回到系统默认
+   */
+  async setSink(deviceId) {
+    try {
+      const ctx = this.ctx;
+      if (ctx && typeof ctx.setSinkId === 'function') {
+        await ctx.setSinkId(deviceId || '');
+      }
+    } catch (_) { /* 保留当前输出 */ }
   }
 
   seek(ms) {

@@ -248,5 +248,10 @@ contextBridge.exposeInMainWorld('fuBridge', {
   project: {
     save: (payload) => ipcRenderer.invoke('project:save', payload),
     open: () => ipcRenderer.invoke('project:open'),
+    // OpenUtau .ustx 互转（转换在 Python 引擎，见 engine/engine_ustx.py）
+    importUstx: () => ipcRenderer.invoke('project:importUstx'),
+    exportUstx: (payload) => ipcRenderer.invoke('project:exportUstx', payload),
+    // 分轨导出：伴奏源文件主进程直拷（字节不过 IPC）
+    copyAsset: (payload) => ipcRenderer.invoke('project:copyAsset', payload),
   },
 });

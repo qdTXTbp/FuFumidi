@@ -5,7 +5,7 @@
   不再夹带声库管理。上游 OpenUtau 也是这个分工：声库管理与 sing 编辑器分开。
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, onActivated, ref } from 'vue';
 import Icon from '../components/Icon.vue';
 import VoicebankPicker from '../components/utau/VoicebankPicker.vue';
 import UtauVoicebankStore from '../components/utau/UtauVoicebankStore.vue';
@@ -17,6 +17,8 @@ const ds = useDiffsingerStore();
 const singerStore = useSingerStore();
 
 onMounted(() => { void singerStore.loadBanks(); });
+// ★ KeepAlive 保活：在模型页装/删了声库后切回来，「已装声库」列表不能停在旧值
+onActivated(() => { void singerStore.loadBanks(); });
 
 const busy = ref(false);
 const msg = ref('');
@@ -61,7 +63,9 @@ async function run(fn) {
       </button>
     </div>
 
-    <p v-if="msg" class="bk-msg small">{{ msg }}</p>
+    <Transition name="fade">
+      <p v-if="msg" class="bk-msg small">{{ msg }}</p>
+    </Transition>
 
     <!-- ============ 已装声库：一份混排列表 ============ -->
     <section class="bk-card" data-guide="banks-installed">
@@ -88,7 +92,11 @@ async function run(fn) {
           <span v-if="usedIn(b.dir)" class="inuse">{{ t('使用中') }}</span>
           <button v-if="b.engine === 'diffsinger'" class="btn danger"
                   :disabled="busy || usedIn(b.dir)"
-                  @click="run(() => ds.deleteVoicebank(b.dir))">{{ t('删除') }}</button>
+                  @click="run(async () => {
+                    const m = await ds.deleteVoicebank(b.dir);
+                    await singerStore.loadBanks();   // 歌手下拉数据源同步，别处不会看到已删声库
+                    return m;
+                  })">{{ t('删除') }}</button>
           <span v-else class="muted small">{{ t('在 UTAU 声库管理器里删除') }}</span>
         </li>
       </ul>
@@ -106,7 +114,9 @@ async function run(fn) {
       <p class="muted small">
         {{ t('把 wav 切片并写 alias（oto）。这是「做声库」，与选歌手无关，所以放在这里。') }}
       </p>
-      <UtauVoicebankStore v-if="showStore" @installed="showStore = false" />
+      <Transition name="fade">
+        <UtauVoicebankStore v-if="showStore" @installed="showStore = false" />
+      </Transition>
     </section>
 
     <!-- ============ DiffSinger 推理组件 ============ -->
@@ -121,14 +131,25 @@ async function run(fn) {
       </div>
       <p class="muted small">{{ t('停用会保留已下载的组件；未启用时零占用。') }}</p>
 
+      <Transition name="fade">
       <div v-if="ds.enabled" class="bk-grid">
         <div class="bk-st" :class="{ ok: ds.depsOk }">
           <b>{{ t('Python 组件') }}</b>
           <p v-if="ds.depsOk" class="muted small">
             {{ t('就绪：') }}{{ ds.depsMissing.length === 0 ? 'onnxruntime / pyyaml' : '' }}
           </p>
-          <p v-else class="muted small">{{ ds.depsError || (t('缺失：') + ds.depsMissing.join(', ')) }}</p>
-          <button v-if="!ds.depsOk" class="btn" :disabled="busy" @click="run(() => ds.installRuntime())">
+          <!-- 安装进度（主进程 diffsinger:runtimeProgress → store.runtimePct/runtimeText）：
+               没有它，用户只能对着一个禁用的「安装」按钮干等 -->
+          <div v-if="ds.runtimeInstalling" class="ds-prog">
+            <div class="ds-prog-track"><i :style="{ width: Math.max(2, ds.runtimePct) + '%' }" /></div>
+            <span class="muted small ds-prog-text">
+              {{ ds.runtimeText || t('正在安装…') }} {{ Math.round(ds.runtimePct) }}%
+            </span>
+            <button class="btn" @click="ds.cancelRuntimeInstall()">{{ t('取消') }}</button>
+          </div>
+          <p v-else-if="!ds.depsOk" class="muted small">{{ ds.depsError || (t('缺失：') + ds.depsMissing.join(', ')) }}</p>
+          <button v-if="!ds.depsOk && !ds.runtimeInstalling" class="btn" :disabled="busy"
+                  @click="run(() => ds.installRuntime())">
             {{ t('安装') }}
           </button>
         </div>
@@ -139,6 +160,7 @@ async function run(fn) {
           </p>
         </div>
       </div>
+      </Transition>
     </section>
   </div>
 </template>
@@ -164,6 +186,13 @@ async function run(fn) {
 .bk-st { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
 .bk-st.ok { border-color: rgba(80,190,120,.5); }
 .bk-st b { font-size: 12px; }
+/* DS 组件安装进度条（runtimePct/runtimeText） */
+.ds-prog { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.ds-prog-track { flex: 1; min-width: 60px; height: 6px; border-radius: 3px;
+                 background: var(--surface-muted); overflow: hidden; }
+.ds-prog-track i { display: block; height: 100%; background: var(--brand);
+                   transition: width .25s; }
+.ds-prog-text { white-space: nowrap; }
 .bk-list { list-style: none; margin: 0; padding: 0; }
 .bk-list li { display: flex; align-items: center; gap: 8px; padding: 4px 0;
               border-bottom: 1px solid var(--border); }
