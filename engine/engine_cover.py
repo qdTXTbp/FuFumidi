@@ -120,25 +120,92 @@ def default_sep_model():
     return '', '', ''
 
 
-def do_separate(audio, outdir, model='', config='', arch='', use_tta=False, batch_size=1, log=print):
-    import engine_msst
+def cuda_free_gb():
+    """(可用?, 说明)：GPU 被别的进程占满时，不要让分离/渲染死在那儿（实测会静默退出）。"""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return False, 'CUDA 不可用'
+        free, _total = torch.cuda.mem_get_info()
+        gb = free / (1024 ** 3)
+        if gb < 3.0:
+            return False, '空闲显存仅 %.1fGB' % gb
+        return True, '空闲显存 %.1fGB' % gb
+    except Exception as e:            # noqa: BLE001
+        return False, str(e)[:60]
+
+
+def do_separate(audio, outdir, model='', config='', arch='', use_tta=False, batch_size=1,
+                log=print, device='auto'):
+    """分离：**走与「音频处理」面板同一个引擎入口**（music2midi.py separate），不另写一套。
+
+    · 参数由调用方（主进程 main/separate-common.js）传入；只有 CLI 单跑才用默认模型兜底。
+    · GPU 失败 → 自动换 CPU 重跑（必须新进程 + CUDA_VISIBLE_DEVICES='' 才真生效）。
+    """
     sep_dir = os.path.join(outdir, 'sep')
     os.makedirs(sep_dir, exist_ok=True)
     if not model:
         model, config, arch = default_sep_model()
+        if model:
+            log('未指定分离模型 → 用默认 duality 模型')
     if not model:
         raise RuntimeError('找不到分离模型（可显式传 --sep-model/--sep-config/--sep-arch）')
-    params = {'model_path': model, 'config_path': config or None, 'arch': arch,
-              'output_format': 'wav', 'normalize': True, 'use_tta': bool(use_tta),
-              'batch_size': int(batch_size or 1)}
+
+    ok_gpu, why = cuda_free_gb()
+    if device == 'auto':
+        device = 'cuda' if ok_gpu else 'cpu'
+        log('分离设备：%s（%s）' % (device, why))
+    elif device == 'cuda' and not ok_gpu:
+        log('指定 GPU 但%s → 改用 CPU' % why)
+        device = 'cpu'
+
+    args = [sys.executable, os.path.join(_HERE, 'music2midi.py'), 'separate', audio,
+            '--output', sep_dir, '--model', model, '--arch', arch or '',
+            '--format', 'wav', '--normalize', '--batch-size', str(int(batch_size or 1))]
+    if config:
+        args += ['--config', config]
+    if use_tta:
+        args.append('--tta')
+
+    def _run(dev):
+        env = dict(os.environ)
+        if dev == 'cpu':
+            env['CUDA_VISIBLE_DEVICES'] = ''
+        env.setdefault('PYTHONUNBUFFERED', '1')
+        p = subprocess.Popen(args, cwd=_HERE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, encoding='utf-8', errors='ignore', env=env)
+        out_lines = []
+        for line in p.stdout:
+            out_lines.append(line.rstrip())
+            if line.startswith('###PROG'):
+                try:
+                    v = json.loads(line[7:])
+                    emit_prog(2 + float(v.get('percent') or 0) * 0.13, '分离')
+                except Exception:     # noqa: BLE001
+                    pass
+            elif log and line.strip():
+                log('  ' + line.rstrip()[:160])
+        p.wait()
+        return p.returncode, out_lines
+
     t0 = time.time()
-    outputs = engine_msst.separate(audio, sep_dir, params,
-                                   log_cb=lambda m: log('  ' + str(m)),
-                                   progress_cb=lambda p: emit_prog(2 + float(p) * 0.13, '分离'))
-    log('分离完成 %.1fs：%s' % (time.time() - t0, ', '.join(os.path.basename(o) for o in outputs)))
-    voc = next((o for o in outputs if 'vocal' in os.path.basename(o).lower()), '')
-    inst = next((o for o in outputs if 'vocal' not in os.path.basename(o).lower()), '')
-    return voc, inst
+    code, lines_out = _run(device)
+    if code != 0 and device != 'cpu':
+        log('分离在 GPU 上失败（退出码 %s）→ 回退 CPU 重跑' % code)
+        emit_prog(2, '分离（CPU 回退）')
+        code, lines_out = _run('cpu')
+        device = 'cpu'
+    if code != 0:
+        raise RuntimeError('分离失败（退出码 %s）：%s' % (code, (lines_out[-1] if lines_out else '')[:200]))
+    base = os.path.splitext(os.path.basename(audio))[0]
+    voc = os.path.join(sep_dir, base + '_Vocals.wav')
+    inst = os.path.join(sep_dir, base + '_Instrumental.wav')
+    if not (os.path.isfile(voc) and os.path.isfile(inst)):
+        cand = [os.path.join(sep_dir, f) for f in os.listdir(sep_dir)]
+        voc = next((c for c in cand if 'vocal' in os.path.basename(c).lower()), voc)
+        inst = next((c for c in cand if 'vocal' not in os.path.basename(c).lower()), inst)
+    log('分离完成 %.1fs（%s）' % (time.time() - t0, device))
+    return voc, inst, device
 
 
 def do_notes(vocal_wav, outdir, lyrics, lang='zh', bpm=0.0, inst_wav='', log=print):
@@ -197,6 +264,11 @@ def do_render(notes_path, outdir, voicebank, bpm, steps=32, device='cuda', chunk
         t0 = time.time()
         p = subprocess.run(cmd, cwd=_HERE, capture_output=True, text=True,
                            encoding='utf-8', errors='ignore')
+        if (p.returncode != 0 or not os.path.isfile(wav)) and device != 'cpu':
+            log('  段 %d 在 GPU 上失败 → 回退 CPU 重跑' % i)
+            cmd_cpu = [c if c != device else 'cpu' for c in cmd]
+            p = subprocess.run(cmd_cpu, cwd=_HERE, capture_output=True, text=True,
+                               encoding='utf-8', errors='ignore')
         if p.returncode != 0 or not os.path.isfile(wav):
             tail = (p.stderr or p.stdout or '')[-400:]
             raise RuntimeError('第 %d 段渲染失败：%s' % (i, tail))
@@ -268,6 +340,8 @@ def main():
         s.add_argument('--sep-arch', default='')
         s.add_argument('--tta', action='store_true')
         s.add_argument('--clarity-db', type=float, default=2.0)
+        s.add_argument('--vocals', default='', help='已分离好的人声轨（给了就跳过分离）')
+        s.add_argument('--instrumental', default='', help='已分离好的伴奏轨（给了就跳过分离）')
     a = ap.parse_args()
     outdir = os.path.abspath(a.outdir)
     os.makedirs(outdir, exist_ok=True)
@@ -280,7 +354,13 @@ def main():
         sep_dir = os.path.join(outdir, 'sep')
         voc = os.path.join(sep_dir, 'src_Vocals.wav')
         inst = os.path.join(sep_dir, 'src_Instrumental.wav')
-        if a.cmd in ('analyze', 'all') and not (os.path.isfile(voc) and os.path.isfile(inst)):
+        # ① 直接复用调用方给的分离结果（音频处理面板刚导出的音轨 / 之前跑过的结果）
+        if a.vocals and a.instrumental and os.path.isfile(a.vocals) and os.path.isfile(a.instrumental):
+            voc, inst = a.vocals, a.instrumental
+            info['separate'] = '复用已有分离结果（跳过分离）'
+            log_ = print
+            log_('复用已有分离结果，跳过分离')
+        elif a.cmd in ('analyze', 'all') and not (os.path.isfile(voc) and os.path.isfile(inst)):
             src = a.audio
             if not src:
                 emit_result({'ok': False, 'error': '缺少输入音频'})
@@ -289,7 +369,11 @@ def main():
             work = os.path.join(outdir, 'src' + (os.path.splitext(src)[1] or '.wav'))
             if os.path.abspath(src) != os.path.abspath(work):
                 shutil.copyfile(src, work)
-            voc, inst = do_separate(work, outdir, a.sep_model, a.sep_config, a.sep_arch, a.tta)
+            voc, inst, used_dev = do_separate(work, outdir, a.sep_model, a.sep_config, a.sep_arch,
+                                              a.tta, device=a.device)
+            info['separate'] = '已分离（%s）' % used_dev
+        elif os.path.isfile(voc) and os.path.isfile(inst):
+            info['separate'] = '复用本次输出目录里已有的分离结果'
         if a.cmd in ('analyze', 'all'):
             lyrics, src_label = find_lyrics(a.audio or os.path.join(outdir, 'src'), a.lyrics)
             info['lyrics_from'] = src_label
@@ -331,6 +415,12 @@ def main():
         info.update({'seconds': stats['seconds'], 'orig_vocal_over_inst': stats['orig_vocal_over_inst'],
                      'level_match_db': stats['level_match_db'], 'clarity_boost_db': stats['clarity_boost_db']})
         readme = write_readme(outdir, name, info)
+        try:
+            json.dump({'stage': 'done', 'notes': len(notes), 'bpm': bpm, 'info': info,
+                       'out': out_wav, 'dry': stats['dry'], 'readme': readme},
+                      open(os.path.join(outdir, 'state.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
+        except OSError:
+            pass
         emit_prog(100, '完成')
         emit_result({'ok': True, 'stage': 'all', 'out': out_wav, 'dry': stats['dry'], 'readme': readme,
                      'notes': len(notes), 'elapsed_s': round(time.time() - t_all, 1), 'info': info})
