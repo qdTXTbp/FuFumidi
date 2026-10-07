@@ -127,9 +127,15 @@ def session_cache_enabled() -> bool:
 
 
 def clear_session_cache() -> None:
-    """清空会话缓存（测试与「声库被替换」路径用）。"""
+    """清空会话缓存**并把统计归零**（测试与「声库被替换」路径用）。
+
+    ★ 统计也要归零：跑整套测试时进程是共用的，别的用例建过的会话会留在计数里，
+      只清缓存不清计数会让「建了一次就复用」这类断言看到 hit/miss 是上一轮的累计值。
+    """
     with _SESSION_LOCK:
         _SESSION_CACHE.clear()
+        for k in _SESSION_STATS:
+            _SESSION_STATS[k] = 0
 
 
 def session_cache_info() -> Dict[str, int]:

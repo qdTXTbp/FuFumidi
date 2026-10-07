@@ -437,29 +437,65 @@ def do_gsv(notes, lyrics, voc, outdir, name, voice, bpm, device='auto', gsv_root
     env['FUFUMIDI_GSV_PYTHON'] = py
     log('GPT-SoVITS 音色：%s（%d 行）→ %s' % (voice, len(lines), dry))
     log('  解释器：%s' % py)
+    wlog = os.path.join(gdir, 'worker.log')
+
+    def done_lines():
+        try:
+            return len([f for f in os.listdir(gdir)
+                        if f.startswith('line_') and f.endswith('.wav')])
+        except OSError:
+            return 0
+
     t0 = time.time()
-    p = subprocess.Popen(cmd, cwd=_HERE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                         text=True, encoding='utf-8', errors='ignore', env=env)
     res = {}
-    for line in p.stdout:
-        if line.startswith('###PROG'):
+    # ★ 逐句合成的每一步都落盘（line_NNN.wav + lines.meta.json 签名），所以**崩了就从断点续跑**。
+    #   实测踩过：跑到第 5 句时整个进程无声无息消失（没有 traceback、没有 ###RESULT，
+    #   系统事件里也没有崩溃记录）—— 有重试 + 续跑，这种「白跑半小时」才不会再来一次。
+    for attempt in range(1, 5):
+        before = done_lines()
+        with open(wlog, 'a', encoding='utf-8') as wf:
+            wf.write(chr(10) + '===== attempt %d @ %s =====' % (attempt, time.strftime('%H:%M:%S')) + chr(10))
+        res = {}
+        try:
+            p = subprocess.Popen(cmd, cwd=_HERE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, text=True, encoding='utf-8',
+                                 errors='ignore', env=env)
+        except OSError as e:
+            raise RuntimeError('起不了 GPT-SoVITS 解释器（%s）：%s' % (py, e))
+        for line in p.stdout:
             try:
-                v = json.loads(line[7:])
-                emit_prog(20 + float(v.get('percent') or 0) * 0.65, '合成',
-                          {'part': v.get('part'), 'parts': v.get('parts')})
-            except Exception:                     # noqa: BLE001
+                with open(wlog, 'a', encoding='utf-8') as wf:
+                    wf.write(line)
+            except OSError:
                 pass
-        elif line.startswith('###RESULT'):
-            try:
-                res = json.loads(line[9:])
-            except Exception:                     # noqa: BLE001
-                pass
-        elif line.strip():
-            log('  ' + line.rstrip()[:200])
-    p.wait()
-    if not res.get('ok') or not os.path.isfile(dry):
-        raise RuntimeError('GPT-SoVITS 合成失败：%s'
-                           % str(res.get('error') or res.get('trace') or ('退出码 %s' % p.returncode))[:400])
+            if line.startswith('###PROG'):
+                try:
+                    v = json.loads(line[7:])
+                    emit_prog(20 + float(v.get('percent') or 0) * 0.65, '合成',
+                              {'part': v.get('part'), 'parts': v.get('parts')})
+                except Exception:                 # noqa: BLE001
+                    pass
+            elif line.startswith('###RESULT'):
+                try:
+                    res = json.loads(line[9:])
+                except Exception:                 # noqa: BLE001
+                    pass
+            elif line.strip():
+                log('  ' + line.rstrip()[:200])
+        p.wait()
+        if res.get('ok') and os.path.isfile(dry):
+            break
+        why = str(res.get('error') or res.get('trace')
+                  or ('进程退出码 %s' % p.returncode))[:200]
+        now = done_lines()
+        if now <= before:
+            raise RuntimeError('GPT-SoVITS 合成失败（第 %d 次尝试，第 %d 句没有进展）：%s'
+                               % (attempt, now, why))
+        log('⚠ 合成中断（%s）→ 续跑：已完成 %d/%d 句，后面的会复用' % (why, now, len(lines)))
+        emit_prog(20 + 65.0 * now / max(1, len(lines)), '合成（续跑）')
+    else:
+        raise RuntimeError('GPT-SoVITS 连续 4 次中断，最后停在 %d/%d 句（详见 %s）'
+                           % (done_lines(), len(lines), wlog))
     for w in res.get('warnings') or []:
         log('  ⚠ ' + str(w))
     log('合成完成 %.1fs（%s / %s，复用 %s 句）'

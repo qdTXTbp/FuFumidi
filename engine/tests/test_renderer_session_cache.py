@@ -58,6 +58,7 @@ def _model(tmp_path, name, size=1024):
 def test_make_session_reuses_same_object(tmp_path, fake_builder):
     """第二次 make_session 必须**复用同一个会话**，不再碰 onnxruntime。"""
     m = _model(tmp_path, 'acoustic.onnx')
+    assert S.session_cache_info()['hit'] == 0, 'clear_session_cache() 必须把统计也归零'
     s1 = S.make_session(m, ['CPUExecutionProvider'])
     s2 = S.make_session(m, ['CPUExecutionProvider'])
     assert s1 is s2, '同一个模型 + 同一组 provider 必须返回同一个会话对象'
