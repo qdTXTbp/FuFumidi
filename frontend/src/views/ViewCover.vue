@@ -4,7 +4,7 @@
 //   · 音色通道 ①DiffSinger 声库（扒谱出的音符 → 合成）
 //   · 音色通道 ②GPT-SoVITS 音色（逐句拿原唱那一句当参考重合成，音色可复用下载的声库）
 // 两条通道的产出同构（一条整长干声轨），后面的混音完全共用。
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { t } from '../core/i18n.js';
 import { useAppStore } from '../stores/app';
@@ -40,6 +40,16 @@ let off = null;
 
 const currentList = computed(() => (singerKind.value === 'gsv' ? singers.value.gsv : singers.value.diffsinger));
 const currentSinger = computed(() => currentList.value.find((s) => s.id === singerId.value) || null);
+/* ★ 选中项与当前分栏必须始终自洽。
+   以前只在 load() 里选一次，而 localStorage 记住的「上次分栏」是**在列表拉回来之后**才恢复的：
+   于是「上次用的 GPT-SoVITS」重启后，分栏高亮在 GPT-SoVITS，singerId 却还是 DiffSinger 的名字 →
+   下拉框空白、也点不动（用户报的「无法选择资源中心下载的音色」就是这个）。
+   这里改成 watch：分栏或列表一变，选中的 id 不在当前列表里就自动落到第一项。 */
+watch([singerKind, currentList], () => {
+  const list = currentList.value;
+  if (!list.length) { singerId.value = ''; return; }
+  if (!list.some((s) => s.id === singerId.value)) singerId.value = list[0].id;
+}, { immediate: true });
 const gsvReady = computed(() => !!(env.value && env.value.gsv && env.value.gsv.found));
 const canRun = computed(() => !!audio.value && !!currentSinger.value && !!outdir.value && !running.value);
 
@@ -127,9 +137,7 @@ async function pickGsvPython() {
 }
 
 function switchKind(k) {
-  singerKind.value = k;
-  const list = currentList.value;
-  singerId.value = list.length ? list[0].id : '';
+  singerKind.value = k;      // 选中项由上面的 watch 兜底（不在当前列表里就落到第一项）
   saveOpts();
 }
 
