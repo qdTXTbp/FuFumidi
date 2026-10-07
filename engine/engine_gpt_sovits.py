@@ -169,7 +169,12 @@ def _line_ref(vocals, sr, start: float, end: float, pad: float = 0.20, prev_end:
     """
     import numpy as np
     dur = len(vocals) / float(sr)
-    a = max(0.0, min(start - pad, start - (start - prev_end) * 0.35))
+    a = max(0.0, start - pad)
+    # ★ 不许吃进上一句（上一句的尾巴当参考会把它的咬字带进来）；
+    #   注意 prev_end 为 0（第一句 / 调用方没给）时**不能**用它把窗口往前拽
+    #   —— 早先那版写成 start - (start - prev_end) * 0.35，第一句会被拽到 13 秒处（实测）。
+    if prev_end > 0:
+        a = max(a, min(start, prev_end + 0.05))
     b = min(dur, end + pad)
     if b - a < MIN_REF_SEC:                       # 太短：往后借（间奏/气口），不够再往前
         need = MIN_REF_SEC - (b - a)
@@ -244,6 +249,8 @@ def cmd_sing(a):
             y_out, sr_out = synth(tts, text, ref_path, text, a.lang, a.speed, int(a.seed) + idx)
             t_syn = time.time() - t0
             y_out, ratio, _dur = A.fit_duration(y_out, sr_out, end - start)
+            # ★ 校正**前**的旋律相关：用来证明 WORLD 校正到底有没有帮忙（不是信仰）
+            shape_before = A.f0_shape_corr(y_out, sr_out, tgt, vsr)
             info = {'ok': False, 'reason': '未做 F0 校正'}
             if a.align:
                 y_out, info = A.correct_f0(y_out, sr_out, tgt, vsr)
@@ -251,7 +258,7 @@ def cmd_sing(a):
             y_out = A.fade_edges(y_out, sr_out)
             A.save_mono(wav_out, y_out, sr_out)
             rec = {'sig': sig, 'synth_s': round(t_syn, 1), 'stretch': round(ratio, 3),
-                   'level_db': round(db, 2), 'f0': info}
+                   'level_db': round(db, 2), 'f0': info, 'f0_shape_before': round(shape_before, 3)}
             meta[str(idx)] = rec
             with open(meta_path, 'w', encoding='utf-8') as f:
                 json.dump(meta, f, ensure_ascii=False, indent=1)
@@ -266,7 +273,7 @@ def cmd_sing(a):
             'out': wav_out, 'reused': was_reused,
             'seconds': round(len(y_out) / float(sr_out), 3),
             'stretch': rec.get('stretch'), 'level_db': rec.get('level_db'),
-            'f0': rec.get('f0'),
+            'f0': rec.get('f0'), 'f0_shape_before': rec.get('f0_shape_before'),
         }
         if a.metrics:
             try:

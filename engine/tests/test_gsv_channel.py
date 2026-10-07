@@ -207,3 +207,51 @@ def test_f0_corr_detects_different_melodies():
     assert A.f0_corr(up, same) > 0.99
     assert A.f0_corr(up, down) < -0.9
     assert A.f0_corr(np.full(n, np.nan, dtype='float32'), up) == -1.0
+
+# ---------------------------------------------------------------- 参考音窗口（3~10 秒）
+
+def _vocals(seconds=30.0, sr=22050):
+    np = pytest.importorskip('numpy')
+    t = np.arange(int(sr * seconds)) / sr
+    return (0.2 * np.sin(2 * np.pi * 220 * t)).astype('float32'), sr
+
+
+def test_line_ref_meets_3_to_10_second_rule():
+    """★ GPT-SoVITS 硬性要求参考音 3~10 秒，超了直接抛「参考音频在3~10秒范围外」。"""
+    from engine_gpt_sovits import _line_ref, MIN_REF_SEC, MAX_REF_SEC
+    v, sr = _vocals(60.0)
+    # 短句（1.2 秒）→ 借到 >= 3 秒
+    seg, a, b = _line_ref(v, sr, 10.0, 11.2)
+    assert MIN_REF_SEC - 1e-6 <= b - a <= MAX_REF_SEC + 1e-6, (a, b)
+    # 长句（20 秒）→ 截到 <= 10 秒，且**从句首开始**（保住这一句的开头）
+    seg2, a2, b2 = _line_ref(v, sr, 20.0, 40.0)
+    assert b2 - a2 <= MAX_REF_SEC + 1e-6
+    assert abs(a2 - 19.8) < 0.05, a2
+    # 贴着音频开头/结尾也不许越界
+    seg3, a3, b3 = _line_ref(v, sr, 0.0, 0.5)
+    assert a3 >= 0.0 and b3 <= len(v) / sr + 1e-6
+    assert seg3.size > 0
+
+
+def test_line_ref_does_not_swallow_previous_line():
+    """前一句的尾巴只借一点点（默认 20ms pad + 不够 3 秒时才往前借）。"""
+    from engine_gpt_sovits import _line_ref
+    v, sr = _vocals(30.0)
+    _seg, a, _b = _line_ref(v, sr, 10.0, 14.0, prev_end=9.0)
+    assert a >= 9.8 - 1e-6, a          # 4 秒的句子够长了，不该往前吃到 9 秒那儿
+
+
+def test_f0_shape_corr_is_stretch_invariant():
+    """时间归一化后的旋律相关：同一段旋律**快慢不同**也必须判为高度相关。"""
+    np = pytest.importorskip('numpy')
+    A = pytest.importorskip('gsv_align')
+    n = 300
+    base = np.linspace(200.0, 400.0, n)
+    up = np.concatenate([base, base[::-1]])
+    fast = np.interp(np.linspace(0, len(up) - 1, len(up) // 2), np.arange(len(up)), up)
+    assert A.f0_corr(up, fast) < 0.9, '逐帧相关必然被快慢拖低（这就是要归一化的原因）'
+    assert A.f0_corr(A.norm_curve(up), A.norm_curve(fast)) > 0.99
+    asc, desc = base, base[::-1]          # 上行 vs 下行：归一化后必须判成负相关
+    assert A.f0_corr(A.norm_curve(asc), A.norm_curve(desc)) < -0.9
+    # 全静音（没有有声帧）→ None（调用方按无效处理，不许当成 0 相关）
+    assert A.norm_curve(np.full(n, np.nan)) is None

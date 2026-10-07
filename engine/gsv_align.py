@@ -106,6 +106,34 @@ def f0_corr(a, b) -> float:
     return float(np.corrcoef(la, lb)[0, 1])
 
 
+def norm_curve(curve, n: int = 200):
+    """把 F0 曲线在**有声跨度**上重采样成 n 点（时间归一化）。
+
+    ★ 为什么要归一化：整段拉伸（fit_duration）本来就会让两条轮廓在时间轴上错开，
+      逐帧直接相关会把「同一段旋律、只是快慢不同」判成不相关（实测 -0.4）。
+      归一化之后量的是**旋律形状**（相对音高走向），与快慢无关 —— 这才是路线 A 要证的。
+    """
+    c = np.asarray(curve, dtype=np.float64)
+    good = np.isfinite(c) & (c > 0)
+    if int(good.sum()) < 10:
+        return None
+    idx = np.flatnonzero(good)
+    seg = c[idx[0]:idx[-1] + 1]
+    x = np.arange(len(seg))
+    g = np.isfinite(seg) & (seg > 0)
+    v = np.interp(x, x[g], seg[g])
+    return np.interp(np.linspace(0, len(v) - 1, n), x, v)
+
+
+def f0_shape_corr(out, out_sr: int, ref, ref_sr: int, n: int = 200) -> float:
+    """时间归一化后的 F0 相关（拉伸不敏感）。无效 → -1。"""
+    a = norm_curve(f0_curve(resample(out, out_sr, 22050), 22050), n)
+    b = norm_curve(f0_curve(resample(ref, ref_sr, 22050), 22050), n)
+    if a is None or b is None:
+        return -1.0
+    return f0_corr(a, b)
+
+
 def _stretch_curve(curve, n_out: int):
     """把参考 F0 曲线在**有声帧**上线性重采样到 `n_out` 帧（无声段保持 nan）。"""
     curve = np.asarray(curve, dtype=np.float64)
@@ -241,10 +269,13 @@ def metrics(out, out_sr: int, ref, ref_sr: int, voice_ref=None, voice_sr: int = 
     d = {'dur_out': round(len(out) / float(out_sr), 3),
          'dur_ref': round(len(ref) / float(ref_sr), 3)}
     d['f0_corr'] = round(f0_corr(f0_curve(o, 22050), f0_curve(r, 22050)), 3)
+    # ★ 决策看的是**时间归一化**后的相关（见 norm_curve）：拉伸不敏感，量的是旋律形状
+    d['f0_shape'] = round(f0_shape_corr(o, 22050, r, 22050), 3)
     mo, mr = mfcc_mean(o, 22050), mfcc_mean(r, 22050)
     d['mfcc_dist_ref'] = round(mfcc_dist(mo, mr), 2)
     if voice_ref is not None and len(voice_ref):
         v = resample(voice_ref, voice_sr or out_sr, 22050)
         d['mfcc_dist_voice'] = round(mfcc_dist(mo, mfcc_mean(v, 22050)), 2)
-    d['gate'] = ('A' if d['f0_corr'] >= 0.6 else ('B' if d['f0_corr'] < 0.3 else 'A?'))
+    key = d['f0_shape'] if d['f0_shape'] > -1 else d['f0_corr']
+    d['gate'] = ('A' if key >= 0.6 else ('B' if key < 0.3 else 'A?'))
     return d
