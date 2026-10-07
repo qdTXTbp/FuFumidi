@@ -36,6 +36,7 @@ start/end 是**秒**（相对原曲）。text 为空时用「啦」按音符数�
 import argparse
 import json
 import os
+import re
 import sys
 import time
 
@@ -102,7 +103,7 @@ def load_tts(voice_dir: str, device: str = 'auto', version: str = '', is_half=No
 
 
 def synth(tts, text: str, ref_path: str, prompt_text: str, lang: str = 'zh',
-          speed: float = 1.0, seed: int = 42, aux_refs=None):
+          speed: float = 1.0, seed: int = 42, aux_refs=None, split: str = 'cut5'):
     """跑一次推理 → (float32 波形, 采样率)。"""
     import numpy as np
     inputs = {
@@ -111,7 +112,7 @@ def synth(tts, text: str, ref_path: str, prompt_text: str, lang: str = 'zh',
         'ref_audio_path': ref_path,
         'prompt_text': prompt_text,
         'prompt_lang': lang,
-        'text_split_method': 'cut5',
+        'text_split_method': split,
         'batch_size': 1,
         'media_type': 'wav',
         'streaming_mode': False,
@@ -131,6 +132,30 @@ def synth(tts, text: str, ref_path: str, prompt_text: str, lang: str = 'zh',
     if out is None or out.size == 0:
         raise RuntimeError('GPT-SoVITS 没有产出音频（文本=%r）' % text[:40])
     return out, sr
+
+
+#: `text_lang='zh'` 下允许留在文本里的字符：CJK 汉字 + 拉丁字母数字 + 空格。
+#: 韩文/假名/全角标点/省略号一律剔除 —— 它们不在 zh 词典里。
+_KEEP_ZH = re.compile(r'[^\u3400-\u9fff\uf900-\ufaffA-Za-z0-9 ]+')
+_PUNCT = re.compile(r'[\u3000-\u303f\uff00-\uffef…♪～]+')
+
+
+def sanitize_text(t, lang: str = 'zh', max_len: int = 120) -> str:
+    """把歌词清成模型**能 token 化**的文本（空文本 = 空 token 列表 = 直接崩）。
+
+    ★ 实测：`text_lang='zh'` 时，歌词里混进的韩文/假名/全角标点（例如
+      `Absolute focus…끝까지！（k ka-ji！） 绝对专注... 끝까지！`）会让音素序列变成**空**，
+      GPT-SoVITS 在 `torch.cat()` 上抛 `expected a non-empty list of Tensors`，
+      整首翻唱跑到那一句就整个失败（45/71 句全白跑）。
+      这里按语言只保留能发音的字符，再截断到 max_len。
+    """
+    s = str(t or '')
+    if str(lang).lower() in ('zh', 'auto', 'all_zh', ''):
+        s = _KEEP_ZH.sub(' ', s)
+    else:
+        s = _PUNCT.sub(' ', s)
+    s = ' '.join(s.split())
+    return s[:max_len]
 
 
 # ---------------------------------------------------------------- say
@@ -250,8 +275,40 @@ def cmd_sing(a):
             y_out, sr_out = A.load_mono(wav_out)
         else:
             A.save_mono(ref_path, seg, vsr)
+            # ★ 先清洗：混进韩文/假名/全角标点会让音素序列变空，模型直接抛 torch.cat 错误
+            text_syn = sanitize_text(text, a.lang)
+            if not text_syn:
+                text_syn = '啦' * max(1, nsyl or 4)
+            prompt_syn = sanitize_text(text, a.lang) or text_syn
             t0 = time.time()
-            y_out, sr_out = synth(tts, text, ref_path, text, a.lang, a.speed, int(a.seed) + idx)
+            try:
+                y_out, sr_out = synth(tts, text_syn, ref_path, prompt_syn, a.lang, a.speed,
+                                      int(a.seed) + idx)
+            except Exception as e1:                      # noqa: BLE001
+                # ★ 单句失败**不许拖垮整首**：先退化成「啦」再试一次，还不行就跳过这一句。
+                log('句 %d 合成失败（%s）→ 换「不切句」重试' % (idx, str(e1)[:100]))
+                y_out = None
+                try:
+                    # cut5 会按标点切句，切出来的碎片可能一个可 token 的字符都没有
+                    # （空 token 列表正是 torch.cat 报错的原因）→ 先试「整句不切」
+                    y_out, sr_out = synth(tts, text_syn, ref_path, prompt_syn, a.lang,
+                                          a.speed, int(a.seed) + idx, split='cut0')
+                except Exception as e15:                 # noqa: BLE001
+                    log('句 %d 不切句也失败（%s）→ 退化成「啦」' % (idx, str(e15)[:80]))
+                if y_out is None:
+                    try:
+                        y_out, sr_out = synth(tts, '啦' * max(1, nsyl or 4), ref_path,
+                                              prompt_syn, a.lang, a.speed, int(a.seed) + idx)
+                    except Exception as e2:              # noqa: BLE001
+                        # ★ 这一句彻底救不回来：**只跳过它**，保留静音，整首继续。
+                        #   （以前一句失败会让整首 45/71 句全部白跑。）
+                        log('句 %d 仍然失败 → 跳过（保留静音）：%s' % (idx, str(e2)[:120]))
+                        report.append({'index': idx, 'start': round(start, 3),
+                                       'end': round(end, 3), 'text': text,
+                                       'error': str(e2)[:200], 'skipped': True})
+                        emit_prog(5 + 90.0 * (i + 1) / len(lines), '合成',
+                                  {'part': idx, 'parts': len(lines)})
+                        continue
             t_syn = time.time() - t0
             y_out, ratio, _dur = A.fit_duration(y_out, sr_out, end - start)
             # ★ 校正**前**的旋律相关：用来证明 WORLD 校正到底有没有帮忙（不是信仰）
