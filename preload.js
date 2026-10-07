@@ -22,6 +22,19 @@ contextBridge.exposeInMainWorld('fuBridge', {
     ipcRenderer.on('open-file', w);
     return () => ipcRenderer.removeListener('open-file', w);
   },
+  // 翻唱工作流（一首歌 → 分离 → 扒谱 → 合成 → 混音 → 成品）
+  coverEnv: () => ipcRenderer.invoke('cover:env'),
+  coverSingers: () => ipcRenderer.invoke('cover:singers'),
+  coverPickAudio: () => ipcRenderer.invoke('cover:pickAudio'),
+  coverPickDir: () => ipcRenderer.invoke('cover:pickDir'),
+  coverRun: (opts) => ipcRenderer.invoke('cover:run', opts),
+  coverCancel: () => ipcRenderer.invoke('cover:cancel'),
+  coverOpen: (p) => ipcRenderer.invoke('cover:open', p),
+  onCoverProgress: (cb) => {
+    const w = (_e, p) => cb(p);
+    ipcRenderer.on('cover:progress', w);
+    return () => ipcRenderer.removeListener('cover:progress', w);
+  },
   // 转录引擎
   convert: (cfg) => ipcRenderer.invoke('engine:convert', cfg),
   cancel: (id) => ipcRenderer.invoke('engine:cancel', id),

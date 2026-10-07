@@ -58,6 +58,7 @@ const { registerProjectIpc } = require('./main/project');
 const { registerWallpaperIpc } = require('./main/wallpaper');
 const { registerUtauIpc } = require('./main/utau');
 const { registerDiffsingerIpc } = require('./main/diffsinger');
+const { registerCoverIpc } = require('./main/cover');
 const { createHotkeys, HOTKEY_ACTIONS } = require('./main/hotkeys');
 const { registerSoundfontWorkshopIpc } = require('./main/soundfonts');
 const { createWindow, configureSession, openFileFromArgv, openPath } = require('./main/window');
@@ -133,6 +134,9 @@ if (!gotLock) {
     registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawnEngine, createEngineSession: EngineService.createEngineSession });
     // DiffSinger 模块化集成：默认关闭；启用后才按需下载推理依赖与通用声码器（模块内自检）
     registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawn, spawnEngine, createEngineSession: EngineService.createEngineSession, resolvePython, engineEnv, readSettings, writeSettings });
+    // 翻唱工作流（一首歌 → 分离 → 扒谱 → 合成 → 混音 → 成品）：
+    // 引擎是 engine_cover.py；GPT-SoVITS 音色通道的解释器/运行时由环境变量传给引擎。
+    registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spawnEngine, engineEnv, readSettings });
     registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, net });
     registerPluginsIpc();
     registerGpuIpc({

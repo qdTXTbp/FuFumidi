@@ -40,11 +40,15 @@ Write(原始字节)  # Buffer.BlockCopy（小端原样）
 
 import os
 import struct
+import threading
+from collections import OrderedDict
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import RenderError
 
-_PROVIDERS: Optional[Sequence[str]] = None
+#: ★ 按 **device 字符串**缓存 —— 以前只存一个全局值，于是第一次用 auto 解析出 CUDA 之后，
+#: 后面所有 cpu 请求都被悄悄当成 CUDA（--device cpu 形同虚设）。
+_PROVIDERS: Dict[str, List[str]] = {}
 
 #: `DiffSingerCache.cs:14`
 FORMAT_HEADER = 'TENSORCACHE'
@@ -69,9 +73,9 @@ def resolve_providers(device: str = 'auto') -> List[str]:
       `UserWarning: Duplicate provider 'CPUExecutionProvider' encountered`
       （实测踩过 :105-106）。
     """
-    global _PROVIDERS
-    if _PROVIDERS is not None:
-        return list(_PROVIDERS)
+    key = str(device).lower()
+    if key in _PROVIDERS:
+        return list(_PROVIDERS[key])
     try:
         import onnxruntime as ort
     except ImportError:
@@ -89,11 +93,52 @@ def resolve_providers(device: str = 'auto') -> List[str]:
         if p not in seen:
             seen.add(p)
             out.append(p)
-    _PROVIDERS = out
-    return list(_PROVIDERS)
+    _PROVIDERS[key] = out
+    return list(out)
 
 
 # ---------------------------------------------------------------- 会话
+
+#: 会话缓存容量 —— 一首歌同时用到最多 5 个模型（linguistic/dur/variance/acoustic/vocoder），
+#: 留一倍余量给「换个声库再唱一遍」。
+MAX_CACHED_SESSIONS = 8
+
+#: `(realpath, size, mtime_ns, providers)` → InferenceSession，**LRU**（OrderedDict 头部最旧）
+_SESSION_CACHE: 'OrderedDict[tuple, object]' = OrderedDict()
+_SESSION_LOCK = threading.RLock()
+_SESSION_STATS = {'hit': 0, 'miss': 0, 'evict': 0}
+
+
+def _model_key(model_path: str, providers: Sequence[str]):
+    """缓存键：**真实路径 + 文件大小 + mtime_ns + provider 列表**。
+
+    ★ 带 size/mtime 是为了「同一个路径换了模型文件」自动失效；
+      realpath 是为了同一个模型经不同路径（相对路径/symlink）访问时命中同一条。
+    """
+    real = os.path.realpath(model_path)
+    st = os.stat(real)
+    return (real, int(st.st_size), int(st.st_mtime_ns), tuple(providers))
+
+
+def session_cache_enabled() -> bool:
+    """`FUFUMIDI_DS_SESSION_CACHE=0` 可关掉（排查「换了模型却没生效」时用）。"""
+    raw = os.environ.get('FUFUMIDI_DS_SESSION_CACHE', '1').strip().lower()
+    return raw not in ('0', 'false', 'no', 'off')
+
+
+def clear_session_cache() -> None:
+    """清空会话缓存（测试与「声库被替换」路径用）。"""
+    with _SESSION_LOCK:
+        _SESSION_CACHE.clear()
+
+
+def session_cache_info() -> Dict[str, int]:
+    """缓存统计（诊断用：命中率 = hit / (hit + miss)）。"""
+    with _SESSION_LOCK:
+        info = dict(_SESSION_STATS)
+        info['size'] = len(_SESSION_CACHE)
+        return info
+
 
 def verify_input_names(session, feeds: Dict[str, object]) -> None:
     """对应 `Onnx.VerifyInputNames`（:190-207）—— 双向严格比对，缺/多都抛。"""
@@ -108,8 +153,8 @@ def verify_input_names(session, feeds: Dict[str, object]) -> None:
             % (missing or '无', unexpected or '无'))
 
 
-def make_session(model_path: str, providers: Sequence[str]):
-    """建立 `InferenceSession`（对应 `Onnx.getInferenceSession`）。"""
+def _make_session_uncached(model_path: str, providers: Sequence[str]):
+    """真的去建会话（`Onnx.getInferenceSession` 的原样：失败且没指定 CPU 时退回 CPU）。"""
     import onnxruntime as ort
     if not os.path.isfile(model_path):
         raise RenderError('找不到模型：%s' % model_path)
@@ -120,6 +165,35 @@ def make_session(model_path: str, providers: Sequence[str]):
         if 'CPUExecutionProvider' in list(providers):
             raise
         return ort.InferenceSession(model_path, so, providers=['CPUExecutionProvider'])
+
+
+def make_session(model_path: str, providers: Sequence[str]):
+    """建立 `InferenceSession`（对应 `Onnx.getInferenceSession`）—— **带进程内会话缓存**。
+
+    ★ 为什么必须缓存：建会话要把整个 onnx **重新解析计算图 + 分配权重**
+      （acoustic 200MB+，实测一次 3~8 秒），而会话本身**无状态**
+      （ORT 的 `InferenceSession.Run` 是线程安全的）。以前每句、每个模型都新建一次 ——
+      一首 600+ 音符的歌，光建会话就是几分钟，表现为「整首一次渲染一直不出结果」
+      （只好把歌切成 <=140 音符的小段绕开）。
+      上游 C# 也是把 `InferenceSession` memo 在歌手对象上（`Onnx.cs:170-186`）。
+    """
+    if not session_cache_enabled():
+        return _make_session_uncached(model_path, providers)
+    key = _model_key(model_path, providers)
+    with _SESSION_LOCK:
+        hit = _SESSION_CACHE.get(key)
+        if hit is not None:
+            _SESSION_CACHE.move_to_end(key)
+            _SESSION_STATS['hit'] += 1
+            return hit
+        _SESSION_STATS['miss'] += 1
+        # ★ 锁内建会话：并发时只解析一次模型 —— 重复解析既慢，又白占几 GB 内存
+        sess = _make_session_uncached(model_path, providers)
+        _SESSION_CACHE[key] = sess
+        while len(_SESSION_CACHE) > max(1, int(MAX_CACHED_SESSIONS)):
+            _SESSION_CACHE.popitem(last=False)
+            _SESSION_STATS['evict'] += 1
+        return sess
 
 
 # ---------------------------------------------------------------- 字节流

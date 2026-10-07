@@ -1,6 +1,6 @@
 # AGENTS.md —— 在这个仓库里工作的第一步
 
-六份约定，按顺序读：
+七份约定，按顺序读：
 
 1. **[docs/FOUNDATION.md](docs/FOUNDATION.md)** —— 架构分层、依赖方向、契约（桥 / 引擎 JSON / 持久化 / i18n）、
    新文件落点、变更规则、**每次都要跑的门禁命令**。
@@ -9,6 +9,8 @@
 4. **[docs/HYGIENE.md](docs/HYGIENE.md)** —— 仓库卫生审计的结论与理由（许可证、lockfile、CI 配置、体积例外）。
 5. **[docs/VENDOR.md](docs/VENDOR.md)** —— 内置第三方二进制（verovio / js-synthesizer / 音色库 / OpenUtau native）的版本、来源与 SHA-256；改 vendor 必须同时改它。
 6. **[docs/DOWNLOADS.md](docs/DOWNLOADS.md)** —— **资源下载的唯一入口**：所有取文件字节的代码都走 `main/fast-download.js`，能力清单、实测数据、禁止写法、新增下载点的清单。
+7. **[docs/COVER.md](docs/COVER.md)** —— **翻唱工作流**（分离 → 扒谱 → 合成 → 混音）：两条音色通道
+   （DiffSinger 声库 / GPT-SoVITS 音色）、断点续跑、对齐与客观量，以及 GPT-SoVITS 的四个坑。
 
 几条最容易忘的硬规则：
 

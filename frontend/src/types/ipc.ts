@@ -658,6 +658,63 @@ export interface UstxExportResult {
   warnings?: string[];
 }
 
+/** 翻唱工作流：可选音色（DiffSinger 声库 / GPT-SoVITS 音色） */
+export interface CoverSinger {
+  kind: 'diffsinger' | 'gsv';
+  id: string;
+  name: string;
+  /** 声库目录 / 音色目录（直接传给引擎） */
+  dir: string;
+  /** 权重是否齐（不齐的条目 UI 要挡住） */
+  ready: boolean;
+  /** 人话说明（自带声码器 / 参考音文件名 / 缺什么） */
+  note?: string;
+}
+
+/** 翻唱工作流的本地环境（cover:env） */
+export interface CoverEnv {
+  ok: boolean;
+  dataRoot: string;
+  modelsRoot: string;
+  /** GPT-SoVITS 音色目录（资源中心下载落点） */
+  voicesRoot: string;
+  gsv: { found: boolean; root: string; python: string; source: string; voices: number };
+}
+
+/** 翻唱任务参数（cover:run） */
+export interface CoverRunOptions {
+  /** 源音频绝对路径 */
+  audio: string;
+  outdir: string;
+  name?: string;
+  singer: { kind: 'diffsinger' | 'gsv'; path: string; id?: string };
+  /** auto / cuda / cpu */
+  device?: string;
+  /** 吐字清晰度补偿（dB），0 = 关 */
+  clarityDb?: number;
+  /** auto / .lrc 路径 */
+  lyrics?: string;
+  /** 不复用上次的中间结果 */
+  noResume?: boolean;
+  gsvRoot?: string;
+  gsvPython?: string;
+}
+
+/** 翻唱进度（cover:progress 推送；`-1` 表示只带日志/文本） */
+export interface CoverProgress {
+  id: string;
+  percent: number;
+  text?: string;
+  stage?: string;
+  log?: string;
+  done: boolean;
+  ok?: boolean;
+  aborted?: boolean;
+  code?: number;
+  error?: string;
+  result?: any;
+}
+
 export interface FuBridge {
   onOpenFile(cb: (bytes: Uint8Array, name: string) => void): () => void;
 
@@ -720,6 +777,16 @@ export interface FuBridge {
   utauDownloadVoicebank(id: string): Promise<{ ok: boolean; canceled?: boolean; existed?: boolean; name?: string; dir?: string; files?: number; size?: number; error?: string }>;
   utauCancelVoicebankDownload(id: string): Promise<GeneralResult>;
   onVoicebankProgress(cb: (p: VoicebankProgress) => void): () => void;
+
+  // 翻唱工作流（一首歌 → 分离 → 扒谱 → 合成 → 混音 → 成品）：引擎是 engine/engine_cover.py
+  coverEnv(): Promise<CoverEnv>;
+  coverSingers(): Promise<{ ok: boolean; diffsinger?: CoverSinger[]; gsv?: CoverSinger[]; error?: string }>;
+  coverPickAudio(): Promise<{ ok?: boolean; canceled?: boolean; path?: string }>;
+  coverPickDir(): Promise<{ ok?: boolean; canceled?: boolean; path?: string }>;
+  coverRun(opts: CoverRunOptions): Promise<{ ok: boolean; id?: string; error?: string }>;
+  coverCancel(): Promise<GeneralResult & { canceled?: boolean }>;
+  coverOpen(p: string): Promise<GeneralResult>;
+  onCoverProgress(cb: (p: CoverProgress) => void): () => void;
 
   // DiffSinger 模块化集成（未启用模块时 status 返回 enabled=false，组件零下载）
   // opts.force：跳过主进程 30s 依赖缓存强制重探（GPU 增强包安装/卸载后调用）

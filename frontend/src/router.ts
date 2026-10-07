@@ -20,6 +20,8 @@ const routes: RouteRecordRaw[] = [
   { path: '/soundfonts', redirect: { path: '/resources', query: { tab: 'soundfonts' } } },
   // 调教：编辑器（选歌手 / 画音符 / 渲染）与声库（做 / 装 / 管）同页两页签。
   { path: '/singer', name: 'singer', component: () => import('./views/ViewSing.vue') },
+  // 翻唱工作流：分离 → 扒谱 → 合成（DiffSinger 声库 / GPT-SoVITS 音色）→ 混音
+  { path: '/cover', name: 'cover', component: () => import('./views/ViewCover.vue') },
   // 插件中心：应用内浏览/安装官方平台上的插件（不唤起浏览器）
   { path: '/plugins', name: 'plugins', component: () => import('./views/PluginCenter.vue') },
   // 声库原为独立页，已并入「调教」；旧地址保留为重定向，老书签 / 外部链接继续可用。

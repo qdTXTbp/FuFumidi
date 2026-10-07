@@ -35,14 +35,16 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
   }
 
   function spawnEngine(pyArgs, opts = {}) {
-    const { script = 'music2midi.py', onLog, onProgress, onDone, onError, timeoutMs = 30 * 60 * 1000 } = opts;
+    // env：允许调用方覆盖环境变量（翻唱工作流要把 FUFUMIDI_GSV_ROOT / FUFUMIDI_GSV_PYTHON
+    // 传给引擎，让 engine_cover 能找到 GPT-SoVITS 运行时与它的解释器）。
+    const { script = 'music2midi.py', onLog, onProgress, onDone, onError, timeoutMs = 30 * 60 * 1000, env: envOverride } = opts;
     const py = resolvePython();
     const eng = engineDir();
     const scriptPath = path.isAbsolute(script) ? script : path.join(eng, script);
     const child = spawn(py, [scriptPath, ...pyArgs], {
       cwd: eng,
       windowsHide: true,
-      env: engineEnv(),
+      env: envOverride || engineEnv(),
     });
     activeChildren.add(child);
     try { if (process.platform === 'win32') os.setPriority(child.pid, -1); } catch (e) {}
