@@ -107,9 +107,31 @@ function partsLayoutOk(total, parts) {
   return last > 0 && last <= PART_CHUNK;
 }
 
-module.exports = function createFastDownload({ net, fs, path }) {
+module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const _rankCache = new Map();   // key: URL 列表 → { at, ranked }
+
+  // ============================================================
+  // 传输层：Node(undici, HTTP/1.1) 优先，Chromium(net.fetch) 兜底
+  // ------------------------------------------------------------
+  // 实测（Electron 33 主进程，同一批 CNB 分卷、同样 12 路并发）：
+  //   · cnb.cool 的 ALPN 协商结果是 **h2**；
+  //   · Chromium net.fetch 走 HTTP/2 → **0.28 MB/s**（连接零字节、频繁被中止）；
+  //   · Node fetch 走 HTTP/1.1   → **26.01 MB/s**（约 93 倍）。
+  // 这正是「资源中心下载龟速 / 下一半就断」的真身：以前所有下载都走 net.fetch。
+  // 反过来，Node 的 fetch 不读 Windows 系统代理，所以企业代理环境里它可能连不通 ——
+  // 因此保留 Chromium 作为兜底：某条通道连续失败 3 次就把顺序换过来（会话内记住）。
+  // ============================================================
+  const transports = [];
+  const nf = nodeFetch || (typeof globalThis.fetch === 'function' ? globalThis.fetch.bind(globalThis) : null);
+  if (nf) transports.push({ id: 'node', fetch: nf });
+  if (net && typeof net.fetch === 'function') transports.push({ id: 'chromium', fetch: (u, o) => net.fetch(u, o) });
+  if (!transports.length) throw new Error('fast-download 需要至少一个 fetch 实现（Node 或 Chromium）');
+  const _fails = {};
+  let _prefer = transports[0].id;
+  const pickTransports = () => (transports.length < 2 ? transports.slice() : (transports[0].id === _prefer ? transports.slice() : transports.slice().reverse()));
+  const recordOk = (id) => { _fails[id] = 0; if (_prefer !== id) _prefer = id; };
+  const recordFail = (id) => { _fails[id] = (_fails[id] || 0) + 1; if (_fails[id] >= 3) { const other = transports.find((t) => t.id !== id); if (other) _prefer = other.id; } };
 
   function cancelledError() {
     const e = new Error('已取消下载');
@@ -127,29 +149,48 @@ module.exports = function createFastDownload({ net, fs, path }) {
    *   · connectMs：只约束「响应头到达」，正文流不受总时长限制（大文件不会被砍断）
    *   · stallMs：停滞看门狗 —— 按**实际收到字节**判定，收到数据就刷新计时
    */
-  async function fetchGuarded(url, { headers, ctrl, connectMs = 30000, stallMs = 30000 } = {}) {
+  async function fetchOnce(transport, url, { headers, ctrl, connectMs }) {
     const srcCtrl = new AbortController();
     const onUser = () => { try { srcCtrl.abort(); } catch (_) {} };
     if (ctrl) { if (ctrl.signal.aborted) onUser(); else ctrl.signal.addEventListener('abort', onUser); }
     const timer = setTimeout(() => { try { srcCtrl.abort(); } catch (_) {} }, connectMs);
     let r;
     try {
-      r = await net.fetch(url, { headers: headers || {}, signal: srcCtrl.signal });
-    } finally { clearTimeout(timer); }
-    try { if (ctrl) ctrl.signal.removeEventListener('abort', onUser); } catch (_) {}
-    if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
+      r = await transport.fetch(url, { headers: headers || {}, signal: srcCtrl.signal });
+    } finally {
+      clearTimeout(timer);
+      try { if (ctrl) ctrl.signal.removeEventListener('abort', onUser); } catch (_) {}
+    }
+    if (!r || !r.ok || !r.body) throw new Error('HTTP ' + (r && r.status));
+    return { res: r, srcCtrl };
+  }
 
-    const raw = r.body.getReader();
-    let lastData = Date.now();
-    const watchdog = setInterval(() => {
-      if (Date.now() - lastData > stallMs) { try { srcCtrl.abort(); } catch (_) {} }
-    }, 2000);
-    // 包装 reader：每读到数据就刷新停滞计时。
-    const reader = {
-      read: async () => { const o = await raw.read(); if (!o.done) lastData = Date.now(); return o; },
-      cancel: (reason) => raw.cancel(reason),
-    };
-    return { res: r, reader, srcCtrl, cleanup: () => clearInterval(watchdog) };
+  async function fetchGuarded(url, { headers, ctrl, connectMs = 30000, stallMs = 30000 } = {}) {
+    const list = pickTransports();
+    let lastErr = null;
+    for (const t of list) {
+      try {
+        const { res, srcCtrl } = await fetchOnce(t, url, { headers, ctrl, connectMs });
+        recordOk(t.id);
+        const raw = res.body.getReader();
+        let lastData = Date.now();
+        const watchdog = setInterval(() => {
+          if (Date.now() - lastData > stallMs) { try { srcCtrl.abort(); } catch (_) {} }
+        }, 2000);
+        // 包装 reader：每读到数据就刷新停滞计时。
+        const reader = {
+          read: async () => { const o = await raw.read(); if (!o.done) lastData = Date.now(); return o; },
+          cancel: (reason) => raw.cancel(reason),
+        };
+        return { res, reader, srcCtrl, cleanup: () => clearInterval(watchdog), transport: t.id };
+      } catch (e) {
+        lastErr = e;
+        // 用户取消：不再换传输层，直接抛给上层（上层据此判 cancelled）
+        if (ctrl && ctrl.signal.aborted) throw e;
+        recordFail(t.id);
+      }
+    }
+    throw lastErr || new Error('HTTP 请求失败（所有传输通道均不可用）');
   }
 
   /** 多源并发测速：各源读一小段计时 → 按实测速度降序返回（同批文件默认复用缓存） */

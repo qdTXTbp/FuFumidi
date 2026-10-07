@@ -230,6 +230,59 @@ test('downloadMany：多文件并发下载，聚合进度到 100%', async () => 
   } finally { await srv.close(); }
 });
 
+// ---------------------------------------------------------------
+// 六、传输层回退（Node fetch ⇄ Chromium net.fetch）
+//   实测背景：CNB 协商 h2，Chromium 走 h2 只有 0.28MB/s，Node 走 HTTP/1.1 有 26MB/s。
+//   所以默认 Node 优先、Chromium 兜底；两条通道任一不通都必须能自动换。
+// ---------------------------------------------------------------
+test('传输层：Node fetch 不通时自动回退 Chromium net.fetch', async () => {
+  const body = payload(300 * 1024);
+  const srv = await serve(rangeHandler(body));
+  try {
+    const dl = createFastDownload({
+      net: { fetch: (...a) => fetch(...a) },
+      nodeFetch: () => { throw new Error('node 通道不可用'); },
+      fs, path,
+    });
+    const out = dest('tp-chromium.bin');
+    const r = await dl.downloadFast({ urls: [srv.url], dest: out, minSize: 1024, expectSize: body.length });
+    assert.equal(r.size, body.length);
+    assert.deepEqual(fs.readFileSync(out), body, '回退到 Chromium 通道后内容必须正确');
+  } finally { await srv.close(); }
+});
+
+test('传输层：Chromium 不通时用 Node fetch', async () => {
+  const body = payload(300 * 1024);
+  const srv = await serve(rangeHandler(body));
+  try {
+    const dl = createFastDownload({
+      net: { fetch: () => { throw new Error('chromium 通道不可用'); } },
+      nodeFetch: (...a) => fetch(...a),
+      fs, path,
+    });
+    const out = dest('tp-node.bin');
+    const r = await dl.downloadFast({ urls: [srv.url], dest: out, minSize: 1024, expectSize: body.length });
+    assert.equal(r.size, body.length);
+    assert.deepEqual(fs.readFileSync(out), body, 'Node 通道内容必须正确');
+  } finally { await srv.close(); }
+});
+
+test('传输层：两条都不通时抛错，且不是 cancelled', async () => {
+  const body = payload(64 * 1024);
+  const srv = await serve(rangeHandler(body));
+  try {
+    const dl = createFastDownload({
+      net: { fetch: () => { throw new Error('chromium 不通'); } },
+      nodeFetch: () => { throw new Error('node 不通'); },
+      fs, path,
+    });
+    await assert.rejects(
+      () => dl.downloadFast({ urls: [srv.url], dest: dest('tp-none.bin'), minSize: 1024 }),
+      (e) => !e.cancelled && /不通|HTTP/.test(String(e.message)),
+    );
+  } finally { await srv.close(); }
+});
+
 test('checkDiskSpace：空间不够时提前抛错', () => {
   assert.throws(() => FastDL.checkDiskSpace(dest('x.bin'), 1024 ** 5), /磁盘空间不足/);
   assert.doesNotThrow(() => FastDL.checkDiskSpace(dest('x.bin'), 1024));
