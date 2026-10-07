@@ -4,10 +4,13 @@
 'use strict';
 const Paths = require('./paths');
 const DS = require('./download-source');
+const createFastDownload = require('./fast-download');
 
 // 自定义目录（用户上传/下载的 SF2）在数据根目录的 soundfonts/ 下（默认位于工具目录旁，
 // 不挤占 C 盘）；内置随包分发的（如 renderer/vendor/soundfonts/GeneralUser.sf2）由 soundfont:list 单独列出。
 function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, net }) {
+  // 统一高速下载器（规范入口，见 docs/DOWNLOADS.md）
+  const FastDL = createFastDownload({ net, fs, path });
   // ---- 下载源镜像列表：GitHub 仓库搭配代理镜像加速（与模型下载一致的习惯）----
   // hosts[0] 优先尝试；后续为主仓库 / 镜像回退。
   const _ghHosts = [
@@ -464,99 +467,59 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
     // 候选 URL 列表：仓库 raw 镜像 + 自有 Release 镜像（按下载源偏好排序，国内优先时 CNB 打头）
     const candidates = orderSfUrls([...githubRawCandidates(it), ...(it.urls || [])]);
 
-    // 健壮下载：多源轮换 + 断点续传（.part 保留跨轮次/跨调用）+ 停滞看门狗
-    //  - STALL_MS 内没有任何字节到达 → 取消当前流，换下一个源（或同源 Range 续传）
-    //  - 416（Range 越界，.part 过期/损坏）→ 丢弃 .part 重下
-    //  - 用户取消走 ctrl.abort()（isUserAbort 标记），与停滞中止区分
-    const STALL_MS = 25000;
-    const MAX_ROUNDS = 10;
-    // ★ `cancelRequested` 单独记：取消可能早于第一轮 `net.fetch` 到达，
-    //   那时 `ctrl` 还是 null，只 abort 等于什么都没做（却返回 ok）。
+    // 下载字节统一交给 main/fast-download.js：
+    //   多源并发测速 → 分段/单连接 → 断点续传（沿用同名 .part）→ 停滞看门狗 → 低速轮换 → 大小校验。
+    // 旧实现是「按固定顺序单连接 + 25 秒无字节才换源」：只要排第一的源只是**慢**而不是断，
+    // 看门狗永不触发，就会一路以几百 KB/s 爬完几百 MB —— 这正是「有时飞快、有时龟速」的来源。
     const entry = { ctrl: null, isUserAbort: false, cancelRequested: false };
+    const ctrl = new AbortController();
+    entry.ctrl = ctrl;   // 取消可能早于第一轮请求到达，先把控制器挂上
     _aborts.set(id, entry);
-    let ws = null, lastErr = null;
-
-    const sendProg = (received, expectTotal, done, error) => {
-      send({ id, received, total: expectTotal || (it.size * 1.2), percent: done ? 100 : (expectTotal ? Math.min(99, Math.round(received / expectTotal * 100)) : 99), done: !!done, error: error || '' });
-    };
-
+    let lastReceived = await statFile(out + '.part');
     try {
-      for (let round = 0; round < MAX_ROUNDS; round++) {
-        if (entry.cancelRequested) return { ok: false, cancelled: true, error: '已取消' };
-        const url = candidates[round % candidates.length];
-        const ctrl = new AbortController();
-        entry.ctrl = ctrl;
-        let received = 0, expectTotal = 0;
-        try {
-          const have = await statFile(out + '.part');
-          const headers = { 'user-agent': 'FuFumidi' };
-          if (have > 0) headers['range'] = 'bytes=' + have + '-';
-          const r = await net.fetch(url, { headers, signal: ctrl.signal });
-          if (r.status === 416) { // .part 越界（过期/损坏）→ 丢弃重下
-            try { fs.rmSync(out + '.part', { force: true }); } catch (_) {}
-            throw new Error('断点越界已重置');
+      await FastDL.downloadFast({
+        urls: candidates,
+        dest: out,
+        minSize: it.minSize,
+        headers: { 'user-agent': 'FuFumidi' },
+        isUserAbort: entry,
+        ctrl,
+        label: it.name || id,
+        onProgress: (p) => {
+          if (p.done) return;
+          if (p.retry) {
+            // 换源/续传是正常过程，不是「出错」：用 retrying 上报，进度条原地保留不清零
+            const total = it.size || 0;
+            send({
+              id, received: lastReceived, total: total || undefined,
+              percent: total ? Math.min(99, Math.round(lastReceived / total * 100)) : 0,
+              done: false, retrying: true, round: p.retry,
+              notice: '第 ' + p.retry + ' 轮未完成（' + (p.error || '') + '），正在换源/续传…',
+            });
+            return;
           }
-          if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
-          const clen = parseInt(r.headers.get('content-length') || '0', 10);
-          const resumable = r.status === 206 && have > 0;
-          if (!resumable && have > 0) { try { fs.rmSync(out + '.part', { force: true }); } catch (_) {} } // 全量重下
-          received = resumable ? have : 0;
-          expectTotal = clen ? received + clen : 0;
-          ws = fs.createWriteStream(out + '.part', { flags: resumable ? 'a' : 'w' });
-          ws.on('error', () => {});
-          const reader = r.body.getReader();
-          let lastData = Date.now();
-          const watchdog = setInterval(() => {
-            if (Date.now() - lastData > STALL_MS) {
-              try { reader.cancel('stalled'); } catch (_) {}
-              try { ctrl.abort(); } catch (_) {} // 兜底：流不响应 cancel 时强制中断
-            }
-          }, 3000);
-          let got = 0;
-          try {
-            for (;;) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              lastData = Date.now();
-              got += value.length;
-              received = (resumable ? have : 0) + got;
-              sendProg(received, expectTotal, false);
-              await new Promise((res2, rej2) => ws.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
-            }
-          } finally { clearInterval(watchdog); }
-          await new Promise((res2, rej2) => ws.end(err => (err ? rej2(err) : res2())));
-          const st = await fs.promises.stat(out + '.part');
-          if (!isCompleteSf(it, st.size)) { lastErr = new Error('文件不完整（' + st.size + ' 不在 ' + it.minSize + '..' + (it.maxSize || '∞') + ' 之间）'); sendProg(st.size, it.size, false, lastErr.message); continue; }
-          await fs.promises.rename(out + '.part', out);
-          const fin = await statFile(out);
-          sendProg(fin, fin, true);
-          return { ok: true, path: out, size: fin };
-        } catch (e) {
-          lastErr = e;
-          try { if (ws) ws.destroy(); } catch (_) {}
-          ws = null;
-          if (entry.isUserAbort || entry.cancelRequested) {
-            return { ok: false, cancelled: true, error: '已取消' };
-          }
-          // ★ 换源/续传是**正常过程**，不是"出错" —— 用 `retrying` 而不是 `error` 上报，
-          //   否则前端会把进度条清成 0 再点亮（表现为"进度条闪动"）。
-          //   同时带上 `received/total`，让进度条**原地保留**而不是归零。
-          const have = await statFile(out + '.part');
-          const total = it.size || 0;
+          lastReceived = p.received || lastReceived;
+          const total = p.total || it.size || 0;
           send({
-            id, received: have, total: total || undefined,
-            percent: total ? Math.min(99, Math.round(have / total * 100)) : 0,
-            done: false, retrying: true, round: round + 1, rounds: MAX_ROUNDS,
-            notice: '第 ' + (round + 1) + ' 轮未完成（' + ((e && e.message) || e) + '），正在换源/续传…',
+            id, received: lastReceived, total: total || undefined,
+            percent: total ? Math.min(99, Math.round(lastReceived / total * 100)) : 99,
+            done: false,
           });
-        }
+        },
+      });
+      const fin = await statFile(out);
+      // 完整性：注册表给了体积区间，落在区间外的一律当半成品删掉，避免「假音色库」
+      if (!isCompleteSf(it, fin)) {
+        try { fs.rmSync(out, { force: true }); } catch (_) {}
+        return { ok: false, error: '文件不完整（' + fin + ' 字节不在 ' + it.minSize + '..' + (it.maxSize || '∞') + ' 之间），可能被代理拦截，请重试或手动导入' };
       }
-      // 全部轮次失败：.part 保留，用户重试可续传
+      send({ id, received: fin, total: fin, percent: 100, done: true });
+      return { ok: true, path: out, size: fin };
+    } catch (e) {
+      if (entry.isUserAbort || entry.cancelRequested) return { ok: false, cancelled: true, error: '已取消' };
       const have = await statFile(out + '.part');
       const tail = have > 0 ? '。已有 ' + Math.round(have / 1048576) + 'MB 断点，再次点击下载将从断点继续。' : '。也可在「我的音色」手动导入。';
-      return { ok: false, error: '自动下载失败（已多源轮换重试 ' + MAX_ROUNDS + ' 轮）：' + ((lastErr && lastErr.message) || '网络不可达') + tail };
-    } catch (e) {
-      return { ok: false, error: String((e && e.message) || e) };
+      return { ok: false, error: '自动下载失败：' + String((e && e.message) || e) + tail };
     } finally {
       _aborts.delete(id);
     }

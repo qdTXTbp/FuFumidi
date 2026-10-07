@@ -37,7 +37,12 @@
 4. **i18n（owner: `frontend/src/core/i18n.js` + `i18n_ja.js`）**
    - 源码里每一句中文 `t('…')` 都要在英文表与日文表同时有条目；繁体由 `core/zhHant.js` 自动转，不手写。
    - 审计脚本可随时跑（见第 5 节），**缺条目 = 未完成**，不是"以后补"。
-5. **验收钩子**
+5. **资源下载（owner: `main/fast-download.js`）**
+   - 所有"从网络取文件字节"的路径都调这一个模块：多源测速 / 分段并发 / 多文件并发 / 断点续传 /
+     停滞看门狗 / 低速轮换 / 完整性校验 / 磁盘预检 / 取消契约。业务模块只负责"候选地址怎么拼"与"下完怎么装"。
+   - 唯一例外是元数据（manifest、HF tree、Release API 的 JSON）：可用 `net.fetch` 直取，但必须带超时与渠道回退。
+   - 规范与实测数据见 **[docs/DOWNLOADS.md](DOWNLOADS.md)**；新增下载点必须补 `npm run test:download` 用例。
+6. **验收钩子**
    - 需要自动化的界面在 `localStorage.fufumidi_debug === '1'` 时挂 `window.__xxxDebug`，并且只读、不改变默认行为。
 
 ## 3. 命名与落点（新文件放哪）
@@ -73,6 +78,7 @@ npm --prefix frontend run build
 npm run typecheck
 npm run test:ui
 npm run test:plugin
+npm run test:download   # 资源下载：分段/续传/完整性/取消/多文件并发（本地 HTTP，不联网）
 
 # 3) 引擎单测（venv 在 _attic 里，路径按 2026-10 整理后为准）
 E:\Midi\_attic\_sing_tmp\venv\Scripts\python.exe -m pytest tests -q -p no:cacheprovider --ignore=tests/test_openutau_core_matches_source.py   # 在 engine/ 下跑

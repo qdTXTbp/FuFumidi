@@ -1,42 +1,125 @@
 'use strict';
 // ============================================================
-// 通用高速单文件下载器（主进程）
+// 资源下载唯一入口（主进程）
 // ------------------------------------------------------------
-// 背景：应用里原本有两套下载器 —— main/models.js 走「多源并发测速 + 单文件多分段
-// 并行」，而 main/diffsinger.js（声库 / 声码器 / ModelScope 声库）走「固定顺序单连接
-// + 25 秒无字节才换源」。后者在真实网络下的表现就是「有时 50MB/s、有时几百 KB」：
-//   · 候选源里第一个恰好是国内的 CNB → 飞快；
-//   · 第一个是境外直连 / 加速站且只是「慢」而不是「断」 → 25 秒看门狗永不触发，
-//     于是一路以几百 KB/s 爬完整个几百 MB 的包。
+// 【规范 · 不可绕过】FuFumidi 里所有「从网络取文件」的代码都必须走这个模块，
+// 不允许在别处再写 fetch / 流式写盘的下载循环。规范正文见 docs/DOWNLOADS.md，
+// 门禁见 scripts/test-fast-download.mjs —— 新增下载点必须同时补用例。
 //
-// 本模块把 models.js 里已验证的两件事抽出来共用：
-//   ① 多源并发测速：各源先取一小段计时，按实测速度排序，永远从最快的源开始；
-//   ② 单文件多分段并行：源支持 Range 时切 N 段并发下载（对象存储/Release 单连接
-//      普遍被限速，实测 4 段可把 5MB/s 提到 20MB/s），分段各自落盘、天然可续传。
-// 任一条件不满足（源忽略 Range / 拿不到长度 / 文件很小）都自动回退到单连接续传。
+// 为什么收敛成一个入口：历史上每个模块各写一份下载器，每份只解决了自己踩到的
+// 那个坑 —— models.js 有测速没低速轮换、diffsinger.js 有分段没完整性、
+// soundfonts.js 有看门狗没测速、wallpaper.js 连续传都没有。结果就是
+// 「有时 50MB/s、有时几百 KB」「下一半就断」「下完打不开」反复出现。
+// 这一份把九件事一次性做全，调用方只管给 URL 列表和目标路径：
 //
-// 取消契约：调用方传入 `isUserAbort` 标记对象与 `ctrl`（AbortController），
-// 二者任一触发即中止，并抛 `err.cancelled = true`。调用方需自行判定并给出
-// 「已取消」而不是「失败」的提示。
+//   ① 多源并发测速   各候选源先取一小段计时，永远从实测最快的源开始
+//   ② 分段并发       源支持 Range（206）时切 N 段并行；对象存储/Release 单连接普遍被限速
+//   ③ 多文件并发     downloadMany：几十个分卷/文件并行拉（实测 4 路 13.8MB/s → 12 路 25MB/s）
+//   ④ 断点续传       单连接路径保留 .part 用 Range 续；分段路径每段独立落盘，天然可续
+//   ⑤ 停滞看门狗     按「实际收到字节」计时，N 秒无字节即中止当前连接并换源
+//   ⑥ 低速轮换       已过热身仍低于 LOW_BPS 的源被主动放弃 —— 「有时飞快有时龟速」的解法
+//   ⑦ 完整性         期望长度 expectSize / 远端声明长度 / 最小体积 三重校验，
+//                    不符即抛错并丢弃，绝不把半成品当成功
+//   ⑧ 取消 / 暂停    统一 (isUserAbort, ctrl) 契约，中止时抛 err.cancelled = true
+//   ⑨ 磁盘预检       checkDiskSpace：空间不够在动手前就报，不等到 90% 才失败
+//
+// 两条实测得到的事实（写死在常量里，改之前先跑 scripts/bench-download.mjs）：
+//   · CNB 的 git raw 端点**不支持 Range、不返回 content-length**（chunked），
+//     所以走它的单文件只能单连接（~6.7MB/s），提速只能靠「多文件并发」；
+//   · Models 仓库的分卷是**固定 25 MiB 切片**（最后一卷为余数），
+//     因此每卷的期望字节数可由 manifest 的 size/parts 直接推导，见 expectedPartSize()。
 // ============================================================
 
-const UA = 'FuFumidi';
+const UA_DEFAULT = 'FuFumidi';
+
 const SEG_MAX = 8;                        // 最多分段数
 const SEG_MIN_BYTES = 4 * 1024 * 1024;    // 小于 4MB 不值得分段
-const SEG_CONCURRENCY = 4;                // 同时在跑的分段数
+const SEG_CONCURRENCY = 4;                // 分段并发默认值
+const SEG_CONCURRENCY_MAX = 8;            // 分段并发上限
 const PROBE_BYTES = 1536 * 1024;          // 测速采样上限
 const PROBE_MS = 1800;                    // 测速采样最长耗时（避免慢源拖住整体启动）
 const LOW_BPS = 320 * 1024;               // 单连接「低速」阈值：低于它且已过热身 → 换源
 const LOW_WARMUP_MS = 12000;              // 低速判定前的热身时间（避开 TCP 慢启动）
+const RANK_TTL_MS = 5 * 60 * 1000;        // 测速结果缓存时长（同一批文件复用一次测速）
+const PART_CHUNK = 25 * 1024 * 1024;      // 分卷仓库的固定切片（实测）
+const FILE_CONCURRENCY = 4;               // 多文件并发默认值
+const PARTS_CONCURRENCY = 12;             // 分卷并发默认值（实测 12 路 ≈ 25MB/s）
+
+function hostOf(u) { try { return new URL(u).host; } catch (_) { return ''; } }
+
+/** 从响应头解析文件总长度（优先 content-range，兼容 206 / 无 content-length） */
+function totalOfHeaders(headers) {
+  try {
+    const get = (k) => (headers && typeof headers.get === 'function' ? headers.get(k) : (headers || {})[k]);
+    const cr = String(get('content-range') || '');
+    const m = cr.match(/\/(\d+)\s*$/);
+    if (m) return parseInt(m[1], 10) || 0;
+    return parseInt(get('content-length') || '0', 10) || 0;
+  } catch (_) { return 0; }
+}
+
+/**
+ * 纯函数：由「实测速度 + 文件大小」决定分段数与并发数。
+ * 慢源（<12MB/s）多半是单流被限速 → 多开连接；快源单流已接近上限 → 少开，免得被对端限流。
+ */
+function planSegments(total, mbps, opts) {
+  const o = opts || {};
+  const segMax = o.segMax || SEG_MAX;
+  const concMax = o.concurrencyMax || SEG_CONCURRENCY_MAX;
+  const minBytes = o.segMinBytes || SEG_MIN_BYTES;
+  if (!total || total < minBytes) return { segCount: 1, concurrency: 1, reason: '文件过小' };
+  const want = (mbps > 0 && mbps >= 12) ? 4 : 8;
+  const bySize = Math.floor(total / (1024 * 1024));
+  const segCount = Math.max(1, Math.min(segMax, want, bySize));
+  return { segCount, concurrency: Math.max(1, Math.min(concMax, segCount)) };
+}
+
+/** 纯函数：按已测得的 host 速度顺序重排候选 URL（没测到的排最后，保持原相对顺序） */
+function orderByHostRank(urls, hostRank) {
+  const list = [...new Set((urls || []).filter(Boolean))];
+  if (!hostRank || !hostRank.length) return list;
+  const rank = new Map();
+  hostRank.forEach((h, i) => {
+    const k = typeof h === 'string' ? h : (h && h.host);
+    if (k && !rank.has(k)) rank.set(k, i);
+  });
+  return list
+    .map((u, i) => ({ u, i, r: rank.has(hostOf(u)) ? rank.get(hostOf(u)) : 999 }))
+    .sort((a, b) => (a.r - b.r) || (a.i - b.i))
+    .map((x) => x.u);
+}
+
+/**
+ * 纯函数：分卷仓库里第 index 卷（1 起）的期望字节数。
+ * 固定 25 MiB 切片，最后一卷是余数；推导不出（清单不一致）时返回 0 表示「不校验」。
+ */
+function expectedPartSize(total, parts, index) {
+  if (!total || !parts || index < 1 || index > parts) return 0;
+  const remaining = total - (index - 1) * PART_CHUNK;
+  if (remaining <= 0) return 0;
+  return Math.min(PART_CHUNK, remaining);
+}
+
+/** 纯函数：manifest 的 size/parts 是否自洽（自洽才敢用推导值当校验依据） */
+function partsLayoutOk(total, parts) {
+  if (!total || !parts || parts < 1) return false;
+  const last = expectedPartSize(total, parts, parts);
+  return last > 0 && last <= PART_CHUNK;
+}
 
 module.exports = function createFastDownload({ net, fs, path }) {
-  const hostOf = (u) => { try { return new URL(u).host; } catch (_) { return ''; } };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const _rankCache = new Map();   // key: URL 列表 → { at, ranked }
 
   function cancelledError() {
     const e = new Error('已取消下载');
     e.cancelled = true;
     return e;
+  }
+
+  function short(e) {
+    const s = String((e && e.message) || e || '');
+    return s.length > 140 ? s.slice(0, 140) + '…' : s;
   }
 
   /**
@@ -69,25 +152,23 @@ module.exports = function createFastDownload({ net, fs, path }) {
     return { res: r, reader, srcCtrl, cleanup: () => clearInterval(watchdog) };
   }
 
-  /** 从响应头解析文件总长度（优先 content-range，兼容 206） */
-  function totalOf(res) {
-    const cr = res.headers.get('content-range') || '';
-    const m = cr.match(/\/(\d+)\s*$/);
-    if (m) return parseInt(m[1], 10) || 0;
-    return parseInt(res.headers.get('content-length') || '0', 10) || 0;
-  }
-
-  /** 多源并发测速：各源读一小段计时 → 按实测速度降序返回 */
-  async function rankMirrors(urls, ctrl) {
+  /** 多源并发测速：各源读一小段计时 → 按实测速度降序返回（同批文件默认复用缓存） */
+  async function rankMirrors(urls, ctrl, opts) {
+    const o = opts || {};
+    const list = [...new Set((urls || []).filter(Boolean))];
+    if (!list.length) return [];
+    const key = list.join('|');
+    const hit = _rankCache.get(key);
+    if (o.useCache !== false && hit && Date.now() - hit.at < RANK_TTL_MS) return hit.ranked;
     const probe = async (u) => {
       const t0 = Date.now();
       const gd = await fetchGuarded(u, {
-        headers: { 'user-agent': UA, Range: 'bytes=0-' + (PROBE_BYTES - 1) },
+        headers: { 'user-agent': UA_DEFAULT, Range: 'bytes=0-' + (PROBE_BYTES - 1) },
         ctrl, connectMs: 8000, stallMs: 10000,
       });
       try {
         let got = 0;
-        const total = totalOf(gd.res);
+        const total = totalOfHeaders(gd.res.headers);
         const ranged = gd.res.status === 206;
         for (;;) {
           const { done, value } = await gd.reader.read();
@@ -102,19 +183,54 @@ module.exports = function createFastDownload({ net, fs, path }) {
         return { url: u, mbps: (got / ms) * 1000 / 1048576, total, ranged };
       } finally { try { gd.cleanup(); } catch (_) {} }
     };
-    const settled = await Promise.all(urls.map(async (u) => {
+    const settled = await Promise.all(list.map(async (u) => {
       try { return await probe(u); } catch (_) { return { url: u, mbps: 0, total: 0, ranged: false }; }
     }));
-    return settled.filter((r) => r.mbps > 0).sort((a, b) => b.mbps - a.mbps);
+    const ranked = settled.filter((r) => r.mbps > 0).sort((a, b) => b.mbps - a.mbps);
+    if (ranked.length) _rankCache.set(key, { at: Date.now(), ranked });
+    return ranked;
   }
 
   /** 只取远端文件总长度（HEAD 语义，用 1 字节 Range 代替 HEAD） */
   async function remoteSize(u, ctrl) {
     const gd = await fetchGuarded(u, {
-      headers: { 'user-agent': UA, Range: 'bytes=0-0' }, ctrl, connectMs: 8000, stallMs: 8000,
+      headers: { 'user-agent': UA_DEFAULT, Range: 'bytes=0-0' }, ctrl, connectMs: 8000, stallMs: 8000,
     });
-    try { return totalOf(gd.res); }
+    try { return totalOfHeaders(gd.res.headers); }
     finally { try { await gd.reader.cancel(); } catch (_) {} try { gd.cleanup(); } catch (_) {} }
+  }
+
+  /** 测速结果 → host 速度表，供同批其它文件直接复用（省掉每个文件一次测速） */
+  function hostRankOf(ranked) {
+    return (ranked || []).map((r) => ({ host: hostOf(r.url), mbps: r.mbps }));
+  }
+
+  /** 磁盘空间预检：不够就在动手前抛错（含所需/可用，便于用户自己腾地方） */
+  function checkDiskSpace(dest, needBytes) {
+    if (!needBytes || needBytes <= 0) return { ok: true, free: 0 };
+    let free = 0;
+    try {
+      const st = fs.statfsSync(path.dirname(dest));
+      free = Number(st.bavail) * Number(st.bsize);
+    } catch (_) { return { ok: true, free: 0, unknown: true }; }
+    const need = Math.ceil(needBytes * 1.05);
+    if (free < need) {
+      const gb = (n) => (n / 1073741824).toFixed(2) + ' GB';
+      throw new Error('磁盘空间不足：需要约 ' + gb(need) + '，可用 ' + gb(free) + '（' + path.dirname(dest) + '）');
+    }
+    return { ok: true, free };
+  }
+
+  /** 完整性校验：期望长度 / 远端声明长度 / 最小体积 */
+  function verifySize(size, o) {
+    const opt = o || {};
+    const what = opt.label ? '（' + opt.label + '）' : '';
+    if (opt.expectSize && size !== opt.expectSize) {
+      throw new Error('大小不符' + what + '：' + size + '/' + opt.expectSize + '（传输被截断，已丢弃，可重试）');
+    }
+    if (opt.total && size !== opt.total) throw new Error('大小不符' + what + '：' + size + '/' + opt.total);
+    if (opt.minSize && size < opt.minSize) throw new Error('文件过小' + what + '：' + size + ' B（可能被代理拦截）');
+    return true;
   }
 
   /** 只清理分段临时文件（保留已完整的分段，便于续传） */
@@ -137,7 +253,7 @@ module.exports = function createFastDownload({ net, fs, path }) {
   }
 
   /**
-   * 高速下载单文件。
+   * 高速下载单个文件。
    * @returns {Promise<{size:number,total:number,host:string,segments:number}>}
    *          取消时抛出的 Error 带 `.cancelled = true`
    */
@@ -145,13 +261,15 @@ module.exports = function createFastDownload({ net, fs, path }) {
     const {
       urls, dest, headers, minSize = 200000, onProgress,
       isUserAbort, ctrl: outerCtrl, segMax = SEG_MAX, concurrency = SEG_CONCURRENCY,
+      singleStream = false, hostRank = null, expectSize = 0, label = '', noProbe = false,
     } = opts || {};
     const abortObj = isUserAbort || {};
-    const head = { 'user-agent': UA, ...(headers || {}) };
-    const report = (p) => { try { onProgress && onProgress({ host: '', ...p }); } catch (_) {} };
+    const head = { 'user-agent': UA_DEFAULT, ...(headers || {}) };
+    const report = (p) => { try { onProgress && onProgress({ host: '', label, ...p }); } catch (_) {} };
 
     const candidates = [...new Set((urls || []).filter(Boolean))];
     if (!candidates.length) throw new Error('没有可用的下载源');
+    try { fs.mkdirSync(path.dirname(dest), { recursive: true }); } catch (_) {}
 
     // ---- 统一的取消信号 ----
     const ctrl = new AbortController();
@@ -161,29 +279,35 @@ module.exports = function createFastDownload({ net, fs, path }) {
     const stopped = () => ctrl.signal.aborted || userAborted();
     const checkStop = () => { if (stopped()) throw cancelledError(); };
 
-    // ---- ① 多源并发测速 ----
-    report({ phase: 'probe', text: '正在测速选择最快的下载源…' });
-    let ranked = await rankMirrors(candidates, ctrl).catch(() => []);
-    checkStop();
-    if (!ranked.length) {
-      // 探测全失败（可能探测被拦但正文可下）：退回候选顺序，按单连接尝试
-      ranked = candidates.map((u) => ({ url: u, mbps: 0, total: 0, ranged: false }));
+    // ---- ① 源顺序：优先复用同批已测得的 host 速度表，其次实测 ----
+    let ranked;
+    if (hostRank && hostRank.length) {
+      ranked = orderByHostRank(candidates, hostRank).map((u) => ({ url: u, mbps: 0, total: 0, ranged: false }));
+      report({ phase: 'ranked', host: hostOf(ranked[0].url), sources: ranked.length, text: '沿用已测速的源顺序' });
+    } else {
+      report({ phase: 'probe', text: '正在测速选择最快的下载源…' });
+      ranked = await rankMirrors(candidates, ctrl, { useCache: !noProbe }).catch(() => []);
+      checkStop();
+      if (!ranked.length) ranked = candidates.map((u) => ({ url: u, mbps: 0, total: 0, ranged: false }));
+      report({ phase: 'ranked', host: hostOf(ranked[0].url), speed: ranked[0].mbps, sources: ranked.length, ranged: ranked[0].ranged });
     }
     const order = ranked.map((r) => r.url);
-    report({ phase: 'ranked', host: hostOf(order[0]), speed: ranked[0].mbps, sources: ranked.length });
 
-    // ---- ② 定长度 + 决定是否分段 ----
+    // ---- ② 定长度 + 定分段计划 ----
     let total = ranked[0].total || 0;
-    if (!total) { try { total = await remoteSize(order[0], ctrl); } catch (_) {} }
+    if (!total && ranked[0].ranged) { try { total = await remoteSize(order[0], ctrl); } catch (_) {} }
     checkStop();
-    let segCount = 1;
-    if (total >= SEG_MIN_BYTES && ranked[0].ranged) {
-      segCount = Math.min(segMax, Math.max(1, Math.floor(total / (2 * 1024 * 1024))));
+    let plan = { segCount: 1, concurrency: 1 };
+    if (!singleStream && ranked[0].ranged && (total || expectSize)) {
+      plan = planSegments(total || expectSize, ranked[0].mbps, { segMax, concurrencyMax: concurrency });
     }
 
-    if (segCount > 1) {
+    if (plan.segCount > 1) {
       try {
-        return await runSegmented({ order, dest, total, segCount, head, minSize, report, checkStop, stopped, ctrl, concurrency, hostOf });
+        return await runSegmented({
+          order, dest, total, segCount: plan.segCount, concurrency: plan.concurrency,
+          head, minSize, expectSize, label, report, checkStop, stopped, ctrl,
+        });
       } catch (e) {
         if (e && e.cancelled) throw e;
         report({ phase: 'retry', host: hostOf(order[0]), error: '分段下载失败，改用单连接续传：' + short(e) });
@@ -191,19 +315,14 @@ module.exports = function createFastDownload({ net, fs, path }) {
       }
     }
 
-    // ---- ③ 单连接 + 断点续传（兜底 / 小文件）----
-    return await runSingle({ order, dest, total, head, minSize, report, checkStop, stopped, ctrl, hostOf });
-  }
-
-  function short(e) {
-    const s = String((e && e.message) || e || '');
-    return s.length > 120 ? s.slice(0, 120) + '…' : s;
+    // ---- ③ 单连接 + 断点续传（兜底 / 小文件 / 源不支持 Range）----
+    return await runSingle({ order, dest, total, expectSize, label, head, minSize, report, checkStop, stopped, ctrl });
   }
 
   // ============================================================
   // 分段并发下载（源支持 Range 时）
   // ============================================================
-  async function runSegmented({ order, dest, total, segCount, head, minSize, report, checkStop, stopped, ctrl, concurrency, hostOf }) {
+  async function runSegmented({ order, dest, total, segCount, concurrency, head, minSize, expectSize, label, report, checkStop, stopped, ctrl }) {
     const segSize = Math.ceil(total / segCount);
     const segPath = (i) => dest + '.fs' + i;
     const segBytes = (i) => Math.max(0, Math.min(total, (i + 1) * segSize) - i * segSize);
@@ -233,7 +352,7 @@ module.exports = function createFastDownload({ net, fs, path }) {
         else if (now - lastT >= 400) { speed = ((downloaded - lastR) / (now - lastT)) * 1000; lastT = now; lastR = downloaded; }
       }
       const pct = total ? Math.min(99, Math.round(downloaded / total * 100)) : 0;
-      report({ received: downloaded, total, percent: pct, speed, host: lastHost, segmented: segCount, done: !!done });
+      report({ received: downloaded, total, percent: pct, speed, host: lastHost, segmented: segCount, label, done: !!done });
     };
     sendP(false);
 
@@ -241,7 +360,7 @@ module.exports = function createFastDownload({ net, fs, path }) {
       const start = i * segSize;
       const end = Math.min(total, start + segSize) - 1;
       const gd = await fetchGuarded(url, {
-        headers: { ...head, Range: `bytes=${start}-${end}` },
+        headers: { ...head, Range: 'bytes=' + start + '-' + end },
         ctrl: segCtrl, connectMs: 20000, stallMs: 60000,
       });
       // 每次尝试都用唯一临时名：重试同一分段时不会与上一轮残留的文件句柄打架
@@ -285,8 +404,7 @@ module.exports = function createFastDownload({ net, fs, path }) {
     //
     // 这里刻意**不**做「分段均衡分摊到各镜像」：当镜像之间速度差距大时（实测同一
     // 文件在 CNB 可到 50MB/s、某加速站只有 200KB/s），分摊会让最慢的那一段成为
-    // 整个下载的瓶颈 —— 总耗时不取决于最快源，而取决于最慢源，正是「有时飞快、
-    // 有时龟速」的来源。排序已经给出了每源的真实吞吐，直接用它即可。
+    // 整个下载的瓶颈 —— 总耗时不取决于最快源，而取决于最慢源。
     const sourceOrder = order.slice();
     const pickUrl = (i, attempt) => {
       if (attempt === 0) return sourceOrder[0];
@@ -296,7 +414,8 @@ module.exports = function createFastDownload({ net, fs, path }) {
     };
     const runOne = async (i) => {
       let lastErr = null;
-      for (let attempt = 0; attempt < Math.max(3, sourceOrder.length); attempt++) {
+      const maxAttempt = Math.max(3, sourceOrder.length);
+      for (let attempt = 0; attempt < maxAttempt; attempt++) {
         const url = pickUrl(i, attempt);
         checkStop();
         try { await fetchSeg(i, url); return; }
@@ -305,7 +424,7 @@ module.exports = function createFastDownload({ net, fs, path }) {
           if (e && e.cancelled) throw e;
           const msg = String((e && e.message) || e);
           if (/不支持分段/.test(msg) || segCtrl.signal.aborted) throw e;
-          await sleep(400);   // 换源前稍作退避，避免连续触发对端限流
+          await sleep(Math.min(400 * Math.pow(2, attempt), 4000));   // 指数退避，避免连续触发对端限流
         }
       }
       throw new Error('分段 ' + i + ' 下载失败：' + short(lastErr));
@@ -343,7 +462,7 @@ module.exports = function createFastDownload({ net, fs, path }) {
       cleanSegTmp(dest);
       if (stopped()) { releaseOuter(); throw cancelledError(); }
       try {
-        const reranked = await rankMirrors(sourceOrder, ctrl);
+        const reranked = await rankMirrors(sourceOrder, ctrl, { useCache: false });
         if (reranked.length) { sourceOrder.length = 0; sourceOrder.push(...reranked.map((r) => r.url)); }
       } catch (_) {}
       startRound();
@@ -362,6 +481,7 @@ module.exports = function createFastDownload({ net, fs, path }) {
 
     // ---- 合并分段 → .part → 目标 ----
     const part = dest + '.part';
+    try { fs.rmSync(part, { force: true }); } catch (_) {}
     await new Promise((res2, rej2) => {
       const ws = fs.createWriteStream(part, { flags: 'w' });
       ws.on('error', rej2);
@@ -376,10 +496,11 @@ module.exports = function createFastDownload({ net, fs, path }) {
       next();
     });
     const size = fs.statSync(part).size;
-    if (size !== total || size < minSize) {
+    if (size !== total) {
       try { fs.rmSync(part, { force: true }); } catch (_) {}
       throw new Error('合并后大小不符：' + size + '/' + total + '（可能被代理拦截）');
     }
+    verifySize(size, { expectSize, total, minSize, label });
     try { fs.rmSync(dest, { force: true }); } catch (_) {}
     fs.renameSync(part, dest);
     cleanSegments(dest);
@@ -389,7 +510,7 @@ module.exports = function createFastDownload({ net, fs, path }) {
   // ============================================================
   // 单连接 + 断点续传（兜底路径）
   // ============================================================
-  async function runSingle({ order, dest, total, head, minSize, report, checkStop, stopped, ctrl, hostOf }) {
+  async function runSingle({ order, dest, total, expectSize, label, head, minSize, report, checkStop, stopped, ctrl }) {
     const part = dest + '.part';
     const MAX_ROUNDS = Math.max(4, order.length * 2);
     let lastErr = null;
@@ -401,7 +522,12 @@ module.exports = function createFastDownload({ net, fs, path }) {
       try {
         let have = 0;
         try { have = fs.statSync(part).size; } catch (_) {}
-        if (total && have >= total) { fs.renameSync(part, dest); return { size: have, total, host: hostOf(url), segments: 1 }; }
+        if (total && have >= total) {
+          verifySize(have, { expectSize: expectSize || total, minSize, label });
+          try { fs.rmSync(dest, { force: true }); } catch (_) {}
+          fs.renameSync(part, dest);
+          return { size: have, total, host: hostOf(url), segments: 1 };
+        }
         const headers = { ...head };
         if (have > 0) headers.Range = 'bytes=' + have + '-';
 
@@ -410,7 +536,7 @@ module.exports = function createFastDownload({ net, fs, path }) {
           const resumable = gd.res.status === 206 && have > 0;
           if (!resumable && have > 0) { try { fs.rmSync(part, { force: true }); } catch (_) {} have = 0; }
           const clen = parseInt(gd.res.headers.get('content-length') || '0', 10);
-          const totalSize = clen ? have + clen : (total || 0);
+          const totalSize = clen ? have + clen : (total || expectSize || 0);
 
           ws = fs.createWriteStream(part, { flags: resumable ? 'a' : 'w' });
           ws.on('error', () => {});
@@ -427,7 +553,7 @@ module.exports = function createFastDownload({ net, fs, path }) {
             if (stopped()) { try { reader.cancel(); } catch (_) {} throw cancelledError(); }
             got += value.length;
             const received = have + got;
-            report({ received, total: totalSize, speed: 0, host: hostOf(url), segmented: 1 });
+            report({ received, total: totalSize, speed: 0, host: hostOf(url), segmented: 1, label });
 
             const now = Date.now();
             if (now - winT >= 3000) {
@@ -448,8 +574,15 @@ module.exports = function createFastDownload({ net, fs, path }) {
         } finally { try { gd.cleanup(); } catch (_) {} }
 
         const st = fs.statSync(part);
-        if (st.size < (minSize || 200000)) { lastErr = new Error('下载文件过小（' + st.size + ' B），可能被代理拦截'); cleanUpPart(part); continue; }
-        if (total && st.size !== total) { lastErr = new Error('大小不符：' + st.size + '/' + total); continue; }
+        // 完整性优先级：期望长度（调用方给的权威值）> 远端声明长度 > 最小体积
+        try {
+          verifySize(st.size, { expectSize, total, minSize, label });
+        } catch (e) {
+          lastErr = e;
+          // 比期望还大 = 残片已被污染（错误页/串流），必须丢弃；偏小则保留，下一轮用 Range 续传补齐
+          if (expectSize && st.size > expectSize) { try { fs.rmSync(part, { force: true }); } catch (_) {} }
+          continue;
+        }
         try { fs.rmSync(dest, { force: true }); } catch (_) {}
         fs.renameSync(part, dest);
         return { size: st.size, total: total || st.size, host: hostOf(url), segments: 1 };
@@ -459,15 +592,88 @@ module.exports = function createFastDownload({ net, fs, path }) {
         ws = null;
         if (e && e.cancelled) throw e;
         if (stopped()) throw cancelledError();
-        report({ retry: round + 1, host: hostOf(url), error: '第 ' + (round + 1) + ' 轮失败，自动换源/续传…' });
-        if (/下载文件过小|大小不符/.test(String((e && e.message) || ''))) cleanUpPart(part);
+        report({ retry: round + 1, host: hostOf(url), label, error: '第 ' + (round + 1) + ' 轮失败，自动换源/续传…' });
       }
     }
     if (stopped()) throw cancelledError();
     throw new Error('下载失败（已轮换 ' + MAX_ROUNDS + ' 轮）：' + short(lastErr));
   }
 
-  function cleanUpPart(part) { try { fs.rmSync(part, { force: true }); } catch (_) {} }
+  /**
+   * 多文件 / 多分卷并发下载（同一批复用一次测速结果）。
+   * items: [{ urls, dest, expectSize, minSize, label, singleStream, segMax, concurrency, headers }]
+   * 失败默认「快速停止」：已完成的文件/分卷保留在磁盘上，重试从断点继续。
+   */
+  async function downloadMany(items, opts) {
+    const o = opts || {};
+    const list = (items || []).filter(Boolean);
+    if (!list.length) return [];
+    const concurrency = Math.max(1, o.concurrency || FILE_CONCURRENCY);
+    const totalBytes = list.reduce((s, it) => s + (it.expectSize || 0), 0);
+    const prog = new Array(list.length).fill(0);
+    const finished = new Array(list.length).fill(false);
+    const results = new Array(list.length).fill(null);
+    const emit = (i, p, isDone) => {
+      if (isDone) {
+        finished[i] = true;
+        prog[i] = list[i].expectSize || p.size || p.received || prog[i];
+      } else {
+        prog[i] = Math.max(prog[i], p.received || 0);
+      }
+      const sum = prog.reduce((a, b) => a + b, 0);
+      const doneCount = finished.filter(Boolean).length;
+      try {
+        o.onProgress && o.onProgress({
+          index: i, count: list.length, doneCount,
+          bytesDone: sum, bytesTotal: totalBytes,
+          overallPercent: totalBytes ? Math.min(99, Math.round((sum / totalBytes) * 100)) : 0,
+          label: list[i].label || '', done: !!isDone, ...p,
+        });
+      } catch (_) {}
+    };
+    let cursor = 0, firstErr = null, stop = false;
+    const worker = async () => {
+      for (;;) {
+        if (stop) return;
+        const i = cursor++;
+        if (i >= list.length) return;
+        const it = list[i];
+        try {
+          const r = await downloadFast({
+            headers: o.headers, hostRank: o.hostRank, ctrl: o.ctrl, isUserAbort: o.isUserAbort,
+            ...it,
+            onProgress: (p) => emit(i, p, false),
+          });
+          results[i] = r;
+          emit(i, { received: r.size, total: r.size, percent: 100, speed: 0, host: r.host }, true);
+        } catch (e) {
+          results[i] = { error: e };
+          if (e && e.cancelled) { if (!firstErr) firstErr = e; stop = true; return; }
+          if (!firstErr) {
+            const msg = (it.label ? it.label + '：' : '') + short(e);
+            firstErr = new Error(msg);
+          }
+          if (o.stopOnError !== false) { stop = true; return; }
+        }
+      }
+    };
+    await Promise.allSettled(Array.from({ length: Math.min(concurrency, list.length) }, worker));
+    if (firstErr) throw firstErr;
+    return results;
+  }
 
-  return { fetchGuarded, rankMirrors, remoteSize, downloadFast, cleanSegTmp, cleanSegments, hostOf, cancelledError };
+  return {
+    fetchGuarded, rankMirrors, remoteSize, hostRankOf,
+    downloadFast, downloadMany,
+    cleanSegTmp, cleanSegments,
+    hostOf, cancelledError, verifySize, checkDiskSpace, planSegments,
+    expectedPartSize, partsLayoutOk,
+    PART_CHUNK, PARTS_CONCURRENCY, SEG_MAX,
+  };
 };
+
+module.exports.pure = { planSegments, orderByHostRank, expectedPartSize, partsLayoutOk, totalOfHeaders, hostOf };
+module.exports.PART_CHUNK = PART_CHUNK;
+module.exports.PARTS_CONCURRENCY = PARTS_CONCURRENCY;
+module.exports.SEG_MAX = SEG_MAX;
+module.exports.FILE_CONCURRENCY = FILE_CONCURRENCY;

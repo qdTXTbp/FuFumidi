@@ -4,6 +4,7 @@
 'use strict';
 const Paths = require('./paths');
 const DS = require('./download-source');
+const createFastDownload = require('./fast-download');
 
 // ── 更新通道 ────────────────────────────────────────────────────────────────
 // stable：用 GitHub 的 releases/latest 锚点。该端点会自动跳过 prerelease，
@@ -40,6 +41,8 @@ function normChannel(v) { return String(v || '').toLowerCase() === 'beta' ? 'bet
 function sourceIdOf(mirrorId, channel) { return normChannel(channel) === 'beta' ? mirrorId + '-beta' : mirrorId; }
 
 function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, readSettings }) {
+  // 统一高速下载器（规范入口，见 docs/DOWNLOADS.md）
+  const FastDL = createFastDownload({ net, fs, path });
   // 最近一次「检查更新」实际访问成功的源 id（先探测它，命中率高）
   let lastGoodSource = null;
 
@@ -184,34 +187,22 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
       dest = path.join(app.getPath('temp'), 'fufumidi-update', 'FuFumidi.Install.exe');
       fs.mkdirSync(path.dirname(dest), { recursive: true });
     }
-    let lastErr = null;
-    for (const u of mirrors) {
-      try {
-        const res = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi/3.1.16' } });
-        if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
-        const total = parseInt(res.headers.get('content-length') || '0', 10) || 0;
-        const out = fs.createWriteStream(dest + '.part');
-        out.on('error', () => {}); // 消费 'error'，防写入失败（EPERM 等）打崩主进程
-        const reader = res.body.getReader();
-        let received = 0, lastSend = 0;
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          received += value.length;
-          const now = Date.now();
-          if (now - lastSend > 300) { lastSend = now; sendUpdateProgress(win, received, total, false); }
-          await new Promise((res2, rej2) => out.write(Buffer.from(value), err => err ? rej2(err) : res2()));
-        }
-        await new Promise((res2, rej2) => out.end(err => err ? rej2(err) : res2()));
-        // 大小校验：明显小于声明则视为损坏，丢弃并换源重试
-        const sz = fs.statSync(dest + '.part').size;
-        if (total && sz < total * 0.9) throw new Error('下载不完整 ' + sz + '/' + total);
-        fs.renameSync(dest + '.part', dest);
-        sendUpdateProgress(win, sz, total, true);
-        return { ok: true, path: dest, size: sz };
-      } catch (e) { lastErr = e; try { fs.unlinkSync(dest + '.part'); } catch (_) {} }
+    // 安装包百兆起步，单连接要几分钟；统一入口会先测速、再按需分段并发（Release 资产支持 Range）。
+    // 仍然只写 temp 目录，失败/中断不影响当前安装。
+    try {
+      const r = await FastDL.downloadFast({
+        urls: mirrors,
+        dest,
+        minSize: 10 * 1024 * 1024,   // 安装包不可能小于 10MB：过小必是错误页
+        headers: { 'user-agent': 'FuFumidi' },
+        label: 'FuFumidi.Install.exe',
+        onProgress: (p) => { if (!p.done) sendUpdateProgress(win, p.received || 0, p.total || 0, false); },
+      });
+      sendUpdateProgress(win, r.size, r.size, true);
+      return { ok: true, path: dest, size: r.size, segments: r.segments };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
     }
-    return { ok: false, error: String((lastErr && lastErr.message) || lastErr) };
   }
 
   ipcMain.handle('update:list', async () => {
