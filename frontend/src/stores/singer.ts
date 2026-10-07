@@ -28,6 +28,7 @@ import { defineStore } from 'pinia';
 import { bridge, isDesktop } from '../api';
 import {
   missingAssets, parseProject, resolveAssetPaths, serializeProject,
+  convertExternalProject,
 } from '../core/song_project.js';
 import { makeFx, normalizeFx } from '../core/track_fx.js';
 import { createHistory } from '../core/song_history.js';
@@ -1360,10 +1361,21 @@ export const useSingerStore = defineStore('singer', {
       }
       if (!r || !r.ok) return (r && r.cancelled) ? '' : ((r && r.error) || '打开失败');
 
-      const p = parseProject(r.json) as any;
+      // ★ OpenUTAU 工程（.ust/.ustx）：引擎侧给的是 tick/ms 单位的导入数据，
+      //   先转成 `.fufumidi` 形状（拍），再走同一套 parseProject 校验。
+      let rawJson: any = r.json;
+      let resolvedMap: Record<string, string> = r.resolved || {};
+      if (r.external) {
+        const c = convertExternalProject(rawJson);
+        if (!c.ok) return c.error || '导入失败';
+        rawJson = c.json;
+        resolvedMap = c.resolved || {};
+      }
+
+      const p = parseProject(rawJson) as any;
       if (!p.ok) return p.error || '工程解析失败';
       const proj = p.project as any;
-      const tracks = resolveAssetPaths(proj.tracks, r.resolved || {}) as any as SingTrack[];
+      const tracks = resolveAssetPaths(proj.tracks, resolvedMap) as any as SingTrack[];
 
       // 渲染结果属于"上一份工程"，不能跟着新工程一起带过来
       this.renderByTrack = {};
@@ -1382,7 +1394,9 @@ export const useSingerStore = defineStore('singer', {
       this.activeTrackId = proj.activeTrackId || (tracks[0]?.id || '');
       this.meta = Object.assign({ title: '', comment: '', artist: '', timeSig: '4/4', alignMs: 0, groups: [] }, proj.meta || {});
       this.createdAt = proj.createdAt || '';
-      this.projectPath = r.filePath || '';
+      // ★ 导入的 OpenUTAU 工程：projectPath 置空 —— 用户的 .ustx 原文件不能被
+      //   「保存」覆盖（保存会写 zip 包），首次保存时走另存为生成 .fufumidi。
+      this.projectPath = r.external ? '' : (r.filePath || '');
       this.selectedId = null;
       this.selectedIds = [];
       this.missingAudio = missingAssets(tracks);

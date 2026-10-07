@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import {
   FORMAT_ID, FORMAT_VERSION, PROJECT_EXT,
   serializeProject, parseProject, resolveAssetPaths, missingAssets,
-  safeAssetId, extOf, assetEntryName,
+  safeAssetId, extOf, assetEntryName, convertExternalProject,
 } from '../src/core/song_project.js';
 
 function voiceTrack(over) {
@@ -317,6 +317,127 @@ test('missingAssets 挑出没落到本地的伴奏', () => {
   const id = tracks.find((t) => t.kind === 'audio').audio.asset;
   const done = resolveAssetPaths(tracks, { [id]: 'D:\\cache\\x.wav' });
   assert.deepEqual(missingAssets(done), []);
+});
+
+/* ------------------------------------------------------------ OpenUTAU 工程导入 */
+
+/** 引擎 `export-project` 的输出形状（tick/ms 单位，忠实 ustx） */
+function engineProject(over) {
+  return Object.assign({
+    name: 'ENEMy',
+    comment: '测试',
+    ustxVersion: '0.10',
+    resolution: 480,
+    bpm: 135,
+    tempos: [{ position: 0, bpm: 135 }],
+    timeSignatures: [{ barPosition: 0, beatPerBar: 4, beatUnit: 4 }],
+    tracks: [
+      {
+        trackNo: 0, kind: 'voice', name: 'PartTeto',
+        engine: 'utau', singer: '足立レイver3.1.2', singerName: '足立レイver3.1.2',
+        language: 'ja', muted: false, volume: -3.5, pan: 0, color: 'Blue', fx: [],
+        notes: [
+          // position 为工程绝对 tick；480 tick = 1 拍
+          { position: 480, duration: 240, tone: 65, lyric: 'え',
+            vibrato: { length: 50, depth: 60, period: 200, in: 20, out: 30, shift: 10, drift: -5 } },
+          { position: 720, duration: 240, tone: 67, lyric: 'R' },
+          { position: 960, duration: 480, tone: 69, lyric: 'が' },
+        ],
+        pitchCurve: [
+          { tick: 480, cents: 6500 }, { tick: 500, cents: 6550 },
+          { tick: 960, cents: 6900 },
+        ],
+        curves: [{ abbr: 'dyn', points: [{ tick: 0, value: 0 }, { tick: 480, value: 60 }] }],
+      },
+      {
+        kind: 'audio', name: '伴奏',
+        audio: { path: 'D:/music/offvocal.wav', fileName: 'offvocal.wav',
+                 durationMs: 123000, skip: 100, trim: 50, fadeIn: 20, fadeOut: 30 },
+      },
+    ],
+  }, over || {});
+}
+
+test('导入：tick→拍、颤音字段映射、R 音符剔除', () => {
+  const c = convertExternalProject(engineProject());
+  assert.equal(c.ok, true, c.error);
+  const r = parseProject(c.json);
+  assert.equal(r.ok, true, r.error);
+
+  const t = r.project.tracks.find((x) => x.kind === 'voice');
+  assert.equal(t.name, 'PartTeto');
+  assert.equal(t.engine, 'utau');
+  assert.equal(t.language, 'ja');
+  assert.equal(t.singer, '', '声库不绑定（本机未必有同名声库）');
+  assert.equal(t.singerName, '足立レイver3.1.2', '原名保留给用户看');
+  assert.equal(t.gainDb, -3.5, 'ustx volume 是 dB，进 gainDb');
+
+  // R 剔除；tick→拍（÷480）
+  assert.equal(t.notes.length, 2);
+  assert.equal(t.notes[0].startBeat, 1);
+  assert.equal(t.notes[0].durBeat, 0.5);
+  assert.equal(t.notes[0].pitch, 65);
+  assert.equal(t.notes[0].lyric, 'え');
+  // 颤音：depth(音分)→vibDepth(0-100)、period(ms)→vibFreq(Hz)、in→vibFade
+  assert.equal(t.notes[0].vibrato, true);
+  assert.equal(t.notes[0].vibDepth, 60);
+  assert.equal(t.notes[0].vibFreq, 5, '1000/200ms');
+  assert.equal(t.notes[0].vibFade, 20);
+  assert.equal(t.notes[1].vibrato, false, '无颤音音符给默认值');
+  assert.equal(t.notes[1].lyric, 'が');
+  assert.equal(t.notes[1].startBeat, 2);
+
+  // 弯音 → 轨道级 pitchCurve（绝对拍 + 绝对音分）
+  assert.deepEqual(t.pitchCurve, [
+    { beat: 1, cents: 6500 }, { beat: 500 / 480, cents: 6550 }, { beat: 2, cents: 6900 },
+  ]);
+
+  // ★ ustx 曲线不导入：dyn 是 dB 域（-240..120），与前端 DYN（velocity）语义不同
+  assert.equal(t.curves.length, 0);
+
+  assert.equal(r.project.bpm, 135);
+  assert.equal(r.project.meta.title, 'ENEMy');
+});
+
+test('导入：伴奏轨分配 asset 并经 resolveAssetPaths 回填本机路径', () => {
+  const c = convertExternalProject(engineProject());
+  const r = parseProject(c.json);
+  assert.equal(r.ok, true, r.error);
+
+  const audio = r.project.tracks.find((x) => x.kind === 'audio');
+  assert.equal(audio.audio.fileName, 'offvocal.wav');
+  assert.equal(audio.audio.durationMs, 123000);
+  assert.ok(audio.audio.asset, '应分配 asset id');
+
+  const tracks = resolveAssetPaths(r.project.tracks, c.resolved);
+  assert.equal(tracks.find((x) => x.kind === 'audio').audio.path, 'D:/music/offvocal.wav');
+  assert.equal(missingAssets(tracks).length, 0, '回填后不缺资产');
+});
+
+test('导入：没有歌声轨 → 拒绝；脏数据兜底不崩', () => {
+  const noVoice = convertExternalProject({ tracks: [{ kind: 'audio', audio: {} }] });
+  assert.equal(noVoice.ok, false);
+  assert.match(noVoice.error, /没有歌声轨/);
+
+  const c = convertExternalProject(null);
+  assert.equal(c.ok, false);
+
+  const dirty = convertExternalProject(engineProject({
+    tracks: [{ kind: 'voice', name: '', notes: [
+      { position: 'x', duration: null, tone: 999, lyric: 'あ' },
+      null, 'junk',
+    ], pitchCurve: [{ tick: NaN, cents: NaN }, { tick: 10, cents: 20 }] }],
+  }));
+  assert.equal(dirty.ok, true, dirty.error);
+  const r = parseProject(dirty.json);
+  assert.equal(r.ok, true, r.error);
+  const t = r.project.tracks[0];
+  assert.equal(t.notes.length, 1, '非对象音符被丢弃');
+  assert.equal(t.notes[0].pitch, 127, '音高被夹回');
+  assert.equal(t.notes[0].startBeat, 0, '非法 tick 兜底为 0');
+  // num() 把 NaN 视为缺省 → NaN 曲线点兜底成 (0,0) 而不是丢弃（与 parseProject 的脏数据语义一致）
+  assert.equal(t.pitchCurve.length, 2);
+  assert.deepEqual(t.pitchCurve[0], { beat: 0, cents: 0 });
 });
 
 /* ------------------------------------------------------------ 常量 */

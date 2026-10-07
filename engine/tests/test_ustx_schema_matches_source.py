@@ -116,6 +116,7 @@ def yaml_keys_of_cs(path, cls):
       - `[YamlIgnore] public bool Muted { ... }`           → 内联属性，**只忽略本行**
       - `[YamlIgnore]` 独立一行                            → 只忽略下一行
       - `public int End => position + duration;`           → 表达式属性，不序列化
+      - `[YamlMember(Alias = "phonemizer", ...)]`          → 序列化键是**别名**（YamlDotNet 读写都生效）
     """
     src = open(path, encoding='utf-8-sig').read().replace('\r\n', '\n').split('\n')
     start = None
@@ -133,6 +134,7 @@ def yaml_keys_of_cs(path, cls):
 
     keys = set()
     skip_next = False
+    pending_alias = None
     for raw in src[start:end]:
         # 行尾注释要先去：`public int key = 0;//Music key...` 这种会让「以 ; 结尾」的判断失效
         s = re.sub(r'\s*//.*$', '', raw).strip()
@@ -149,6 +151,14 @@ def yaml_keys_of_cs(path, cls):
                     skip_next = True      # 独立属性行 → 忽略下一行
                 s = ''                    # 内联 → 忽略本行
                 break
+            # ★ YamlMember(Alias = "x")：序列化键是别名本身（YamlDotNet 的
+            #   YamlAttributesTypeInspector 把 Alias 当属性名用，读写都生效）。
+            #   如 UNote.PhonemizerOverride 的键是 `phonemizer` 而非
+            #   `phonemizer_override` —— 这条必须机器强制，否则加载 OpenUTAU
+            #   工程时会静默丢字段。
+            ma = re.search(r'Alias\s*=\s*"([^"]+)"', attr)
+            if 'YamlMember' in attr and ma:
+                pending_alias = ma.group(1)
             s = rest
         if not s:
             continue
@@ -159,7 +169,8 @@ def yaml_keys_of_cs(path, cls):
             continue
         name = _member_name(s[len('public '):])
         if name:
-            keys.add(underscored(name))
+            keys.add(pending_alias if pending_alias else underscored(name))
+            pending_alias = None
     return keys
 
 

@@ -2205,7 +2205,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <button class="btn" :title="t('新建一个空工程')" @click="newProject">
           <Icon name="plus" :size="12" /> {{ t('新建') }}
         </button>
-        <button class="btn" :title="t('打开 .fufumidi 工程')" @click="openProject">
+        <button class="btn" :title="t('打开工程（.fufumidi / OpenUTAU .ustx / .ust）')" @click="openProject">
           <Icon name="folder" :size="12" /> {{ t('打开') }}
         </button>
         <!-- 工程级参数（P2-3）：BPM / 拍号 / 对齐偏移。三个都是**整个工程**的属性，

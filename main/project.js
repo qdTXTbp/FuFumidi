@@ -91,10 +91,39 @@ function registerProjectIpc({ ipcMain, dialog, path, fs, spawnEngine }) {
     const r = await dialog.showOpenDialog({
       title: '打开工程',
       properties: ['openFile'],
-      filters: [{ name: 'FuFumidi 工程', extensions: ['fufumidi'] }],
+      // ★ 同时接受 OpenUTAU 工程（.ust / .ustx）—— 走引擎 importProject 转换
+      filters: [
+        { name: '歌声工程', extensions: ['fufumidi', 'ustx', 'ust'] },
+        { name: 'FuFumidi 工程', extensions: ['fufumidi'] },
+        { name: 'OpenUTAU 工程', extensions: ['ustx', 'ust'] },
+      ],
     });
     if (r.canceled || !r.filePaths || !r.filePaths.length) return { ok: false, cancelled: true };
     const fp = r.filePaths[0];
+
+    // ---- OpenUTAU 工程：交给引擎 export-project 转成导入 JSON（tick/ms 单位），
+    //      前端再转成编辑器工程（convertExternalProject）。*.ustx v0.3~v0.10 与
+    //      经典 *.ust（多文件语义取第一个）都由引擎侧 formats.read_project 处理。
+    if (/\.ustx?$/i.test(fp)) {
+      if (!spawnEngine) return { ok: false, error: '当前环境不支持导入 OpenUTAU 工程' };
+      return await new Promise((resolve) => {
+        spawnEngine(['export-project', '--project', fp], {
+          script: 'engine_openutau.py',
+          timeoutMs: 2 * 60 * 1000,
+          onDone: (code, res) => {
+            const result = res && res.result;
+            if (result && result.ok) {
+              return resolve({ ok: true, external: true, json: result.project, filePath: fp });
+            }
+            const err = (result && result.error)
+              || ((res && (res.err || res.out) || '').split('\n').filter(Boolean).pop())
+              || ('引擎退出码 ' + code);
+            resolve({ ok: false, error: '导入 OpenUTAU 工程失败：' + err });
+          },
+          onError: (e) => resolve({ ok: false, error: '导入 OpenUTAU 工程失败：' + String(e) }),
+        });
+      });
+    }
 
     let zip;
     try {

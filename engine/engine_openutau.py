@@ -838,6 +838,183 @@ def cmd_probe(args):
         return {'ok': False, 'error': str(e)}
 
 
+# ---------------------------------------------------------------- 导入：.ust/.ustx → 工程数据 JSON
+
+def _infer_language(phonemizer: str) -> str:
+    """从音素化器全名猜轨道语言（前端轨道级 language 字段的取值域）。"""
+    s = str(phonemizer or '').lower()
+    if 'japanese' in s or 'japan' in s:
+        return 'ja'
+    if 'korean' in s:
+        return 'ko'
+    if 'english' in s or 'arpasing' in s:
+        return 'en'
+    if 'cantonese' in s:
+        return 'yue'
+    return 'zh'
+
+
+def _infer_engine(renderer: str) -> str:
+    """渲染器名 → 前端轨道引擎（diffsinger / utau）。"""
+    s = str(renderer or '').lower()
+    if 'diffsinger' in s or 'vneutron' in s:
+        return 'diffsinger'
+    return 'utau'
+
+
+def export_project_json(proj, project_dir: str) -> dict:
+    """把 UProject 转成**导入用**的工程数据 JSON（tick/ms 单位，前端再转拍）。
+
+    与 ustx 的对应关系都按「照搬」语义保留：
+    * 每条 UTrack → 一条 voice 轨；R 音符剔除（ustx 语义里休止就是音符间隙）。
+    * 音符的 pitch 弯音点（x=ms 相对音符起点，y=0.1 半音）换算成
+      `pitchCurve: [{tick, cents}]`（**绝对**：tick 为工程绝对位置，
+      cents = tone*100 + y*10）；颤音按字段直传。
+    * 曲线 → `curves: [{abbr, points: [{tick, value}]}]`（xs 平移 part.position）。
+    * UWavePart → 独立 audio 轨（`audio.path` 为**本机绝对路径**，仅内存使用；
+      保存进 `.fufumidi` 包时由既有资产机制转存）。
+    """
+    from singing.openutau.timeaxis import TimeAxis
+    from singing.ustx.model import UVoicePart, UWavePart
+
+    axis = TimeAxis()
+    axis.build_segments(proj)
+
+    def ms_to_abs_tick(note_abs_tick: int, offset_ms: float) -> int:
+        return axis.ms_pos_to_tick_pos(
+            axis.tick_pos_to_ms_pos(note_abs_tick) + float(offset_ms))
+
+    out_tracks = []
+    for i, t in enumerate(proj.tracks):
+        fx = []
+        fxm = getattr(t, 'mix_fx', None)
+        if fxm is not None and getattr(fxm, 'enabled', False):
+            fx = [{'type': 'eq', 'enabled': bool(fxm.eq_enabled), 'params': {
+                       'lowDb': fxm.eq_low_db, 'midFreq': fxm.eq_mid_freq,
+                       'midDb': fxm.eq_mid_db, 'highDb': fxm.eq_high_db,
+                       'preset': fxm.eq_preset}},
+                  {'type': 'comp', 'enabled': bool(fxm.comp_enabled), 'params': {
+                       'thresholdDb': fxm.comp_threshold_db, 'ratio': fxm.comp_ratio,
+                       'makeupDb': fxm.comp_makeup_db, 'preset': fxm.comp_preset}},
+                  {'type': 'reverb', 'enabled': bool(fxm.reverb_enabled), 'params': {
+                       'size': fxm.reverb_size, 'damp': fxm.reverb_damp,
+                       'wet': fxm.reverb_wet, 'preDelayMs': fxm.reverb_pre_delay_ms,
+                       'preset': fxm.reverb_preset}}]
+        out_tracks.append({
+            'trackNo': i,
+            'kind': 'voice',
+            'name': t.track_name,
+            'engine': _infer_engine(t.renderer_settings.renderer if t.renderer_settings else ''),
+            # ustx 里的 singer 是 id 字符串，本机未必装了同名声库：
+            # 导入时**不绑定声库**（置空让用户重选），原名存 singerName 供展示。
+            'singer': '',
+            'singerName': t.singer or '',
+            'language': _infer_language(t.phonemizer),
+            'muted': bool(t.mute) and not bool(t.solo),
+            'volume': t.volume,
+            'pan': t.pan,
+            'color': t.track_color,
+            'fx': fx,
+            'notes': [],
+            'pitchCurve': [],
+            'curves': [],
+        })
+
+    audio_tracks = []
+    for part in proj.parts:
+        if isinstance(part, UVoicePart):
+            if not (0 <= part.track_no < len(out_tracks)):
+                continue
+            tr = out_tracks[part.track_no]
+            vel_by_note = {}
+            for n in part.notes:
+                for e in n.phoneme_expressions:
+                    if e.abbr == 'vel' and e.index == 0:
+                        vel_by_note[id(n)] = e.value
+            for n in part.notes:
+                lrc = (n.lyric or '').strip()
+                if not lrc or lrc == 'R':        # 休止 = 音符间隙，不进编辑器
+                    continue
+                note = {
+                    'position': part.position + n.position,
+                    'duration': n.duration,
+                    'tone': n.tone,
+                    'lyric': lrc,
+                    'velocity': vel_by_note.get(id(n)),
+                    'phonemeOverrides': [{
+                        'index': o.index, 'phoneme': o.phoneme, 'offset': o.offset,
+                        'preutterDelta': o.preutter_delta, 'overlapDelta': o.overlap_delta,
+                        'attackTimeDelta': o.attack_time_delta,
+                        'releaseTimeDelta': o.release_time_delta,
+                    } for o in n.phoneme_overrides],
+                }
+                v = n.vibrato
+                if v is not None and v.length:
+                    note['vibrato'] = {
+                        'length': v.length, 'depth': v.depth, 'period': v.period,
+                        'in': v.vib_in, 'out': v.vib_out,
+                        'shift': v.shift, 'drift': v.drift,
+                    }
+                tr['notes'].append(note)
+                # 弯音点 → 绝对 (tick, cents)
+                if n.pitch is not None:
+                    abs_tick = part.position + n.position
+                    for p in n.pitch.data:
+                        tr['pitchCurve'].append({
+                            'tick': ms_to_abs_tick(abs_tick, p.x),
+                            'cents': n.tone * 100 + p.y * 10,
+                        })
+            for c in part.curves:
+                tr['curves'].append({
+                    'abbr': c.abbr,
+                    'points': [{'tick': part.position + x, 'value': y}
+                               for x, y in zip(c.xs, c.ys)],
+                })
+        elif isinstance(part, UWavePart):
+            rel = part.relative_path or ''
+            audio_tracks.append({
+                'kind': 'audio',
+                'name': part.name,
+                'audio': {
+                    'path': os.path.normpath(os.path.join(project_dir, rel)) if rel else '',
+                    'fileName': os.path.basename(rel) or (part.name or 'audio'),
+                    'durationMs': part.file_duration_ms,
+                    'skip': part.skip, 'trim': part.trim,
+                    'fadeIn': part.fadein, 'fadeOut': part.fadeout,
+                },
+            })
+
+    # 曲线里的空点、缺字段的 note 收个尾（velocity 为 None 就不输出）
+    for tr in out_tracks:
+        tr['notes'] = [{k: v for k, v in n.items() if v is not None}
+                       for n in tr['notes']]
+        tr['notes'].sort(key=lambda x: x['position'])
+
+    return {
+        'name': proj.name,
+        'comment': proj.comment,
+        'ustxVersion': str(proj.ustx_version or ''),
+        'resolution': proj.resolution,
+        'bpm': proj.tempos[0].bpm if proj.tempos else 120,
+        'tempos': [{'position': t.position, 'bpm': t.bpm} for t in proj.tempos],
+        'timeSignatures': [{'barPosition': t.bar_position, 'beatPerBar': t.beat_per_bar,
+                            'beatUnit': t.beat_unit} for t in proj.time_signatures],
+        'tracks': out_tracks + audio_tracks,
+    }
+
+
+def cmd_export_project(args):
+    try:
+        from singing.ustx.formats import read_project
+        proj = read_project([args.project])
+        data = export_project_json(
+            proj, os.path.dirname(os.path.abspath(args.project)))
+        return {'ok': True, 'external': True, 'project': data}
+    except Exception as e:                                  # noqa: BLE001
+        warn(traceback.format_exc())
+        return {'ok': False, 'error': str(e)}
+
+
 _N_PHONEMIZERS = [0]   # 进程级登记数（list 包装以便 cmd_deps 引用；serve 下 main 首次执行时填充）
 
 
@@ -862,6 +1039,7 @@ def cmd_serve(args):
 
 
 def main(argv=None):
+
     parser = argparse.ArgumentParser(
         prog='engine_openutau.py',
         description='UTAU 渲染引擎（OpenUTAU 搬运版）')
@@ -883,6 +1061,11 @@ def main(argv=None):
     p = sub.add_parser('probe', help='检查声库能否加载')
     p.add_argument('--voicebank', required=True)
     p.set_defaults(func=cmd_probe)
+
+    ep = sub.add_parser('export-project',
+                        help='导入：读取 .ust/.ustx 工程并输出结构化 JSON')
+    ep.add_argument('--project', required=True, help='工程文件路径')
+    ep.set_defaults(func=cmd_export_project)
 
     d = sub.add_parser('deps', help='离线依赖检查（serve 健康检查用）')
     d.set_defaults(func=cmd_deps)

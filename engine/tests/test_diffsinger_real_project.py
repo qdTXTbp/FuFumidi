@@ -121,8 +121,12 @@ def main():
     groups = []
     for n in notes:
         rom = g2p_ja.query(n.lyric)
+        # ★ query 返回**音素列表**（'が'→['g','a']）——必须全量拼接成音节 'ga'
+        #   再喂 dsdict（key 是音节级罗马字）。只取 rom[0] 会把假名截成辅音。
+        #   拨音 'N' 归一成 'n'（dsdict-ja 的 key 用 'n' → ja/N）。
+        lyric = ''.join('n' if x == 'N' else x for x in rom) if rom else n.lyric
         groups.append([ML(position=n.position, duration=n.duration, tone=n.tone,
-                          lyric=(rom[0] if rom else n.lyric))])
+                          lyric=lyric)])
     t0 = time_now()
     ml = MlPhonemizer(romanize_impl=None)
     produced = {}

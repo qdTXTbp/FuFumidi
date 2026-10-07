@@ -94,7 +94,11 @@ def _convert(tp, v):
 
 
 def from_plain(cls, data):
-    """按数据类声明构造；**未知键忽略**（对应 IgnoreUnmatchedProperties）。"""
+    """按数据类声明构造；**未知键忽略**（对应 IgnoreUnmatchedProperties）。
+
+    字段可声明 `metadata={'legacy_keys': (...)}`：列出旧版本仓库误写出的键名，
+    只在正式键缺失时兜底读取（只读兼容；写出永远用上游真实键名）。
+    """
     if data is None:
         return None
     if not isinstance(data, dict):
@@ -104,7 +108,10 @@ def from_plain(cls, data):
     for f in dataclasses.fields(cls):
         key = _yaml_key(f)
         if key not in data:
-            continue
+            legacy = f.metadata.get('legacy_keys') or ()
+            key = next((k for k in legacy if k in data), None)
+            if key is None:
+                continue
         kwargs[f.name] = _convert(hints.get(f.name, typing.Any), data[key])
     return cls(**kwargs)
 
@@ -134,15 +141,12 @@ def after_save(project: UProject) -> None:
 
 
 def after_load(project: UProject) -> None:
-    """照搬 UProject.AfterLoad：把 voice_parts / wave_parts 并回 parts。"""
-    merged = []
-    if project.voice_parts:
-        merged.extend(project.voice_parts)
-    if project.wave_parts:
-        merged.extend(project.wave_parts)
-    project.parts = merged
-    project.voice_parts = None
-    project.wave_parts = None
+    """照搬 UProject.AfterLoad：并回 parts + 逐 part/note/curve 做 AfterLoad 修整。
+
+    具体的描述符绑定 / 未知曲线剔除 / Duration 修正见 `UProject.after_load`
+    （model.py，逐段对照 C#）。
+    """
+    project.after_load()
 
 
 # ---------------------------------------------------------------- 对外接口

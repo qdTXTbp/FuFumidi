@@ -557,6 +557,148 @@ export function resolveAssetPaths(tracks, resolved) {
   });
 }
 
+/* ------------------------------------------------------------------ 外部工程导入（OpenUTAU .ust / .ustx） */
+
+/**
+ * 把引擎 `export-project` 输出的导入 JSON（**tick/ms 单位**，忠实 ustx）
+ * 转成 `.fufumidi` 的 project.json 形状（**拍**单位），随后走既有
+ * `parseProject` 校验 —— 外部工程与本地工程在编辑器里一视同仁。
+ *
+ * ## 单位与字段映射（tick → 拍：÷480，resolution 固定 480）
+ * - 音符：`position/duration(tick 绝对)` → `startBeat/durBeat`；
+ *   休止（R）已在引擎侧剔除，休止即音符间隙。
+ * - 颤音：ustx `depth` 是音分（5–200）→ 前端 `vibDepth`（0–100，百分比分母不同，
+ *   取 clamp）；`period`(ms) → `vibFreq = 1000/period`(Hz)；`in` → `vibFade`。
+ * - 弯音：引擎已换算成 `pitchCurve: [{tick, cents}]`（**绝对音分** =
+ *   tone*100 + y*10）→ `[{beat, cents}]`。★ 渲染引擎目前不消费该曲线
+ *   （`engine_diffsinger.py` 的 `_load_notes` 丢弃 pitchCurve），数据先进工程不丢。
+ * - 伴奏（UWavePart）：分配临时 asset id，`resolved` 里给本机绝对路径，
+ *   走既有 `resolveAssetPaths` 回填；用户保存工程时会照常打包进 `files/`。
+ * - ★ **不导入**轨道曲线（`curves`）：UTAU 的 dyn 曲线是 dB 域（-240..120），
+ *   与前端 DYN（velocity，0–200）语义不同，错值比缺值更糟（渲染端把 DYN 当
+ *   velocity 用）。原数据仍在 .ustx 文件里，导入不做有损换算。
+ * - 多段 tempo：前端是单 bpm 模型，只取第一段；多 tempo 信息留在原文件。
+ *
+ * @param {object} p  引擎 export-project 的 `project` 字段
+ * @returns {{ok:boolean, error?:string, json?:object, resolved?:object}}
+ */
+export function convertExternalProject(p) {
+  if (!p || typeof p !== 'object') return fail('导入数据无效');
+  const resolution = num(p.resolution, 480) || 480;
+  const tickToBeat = (tick) => num(tick, 0) / resolution;
+
+  const tracks = [];
+  const assets = {};
+  const resolved = {};
+  let audioSeq = 0;
+
+  for (const t of (Array.isArray(p.tracks) ? p.tracks : [])) {
+    if (!t || typeof t !== 'object') continue;
+    if (t.kind === 'audio') {
+      const a = t.audio || {};
+      let id = '';
+      do { id = genId('a'); } while (assets[id]);
+      assets[id] = { name: str(a.fileName, 'audio').slice(0, 255) || 'audio' };
+      resolved[id] = str(a.path, '');
+      tracks.push({
+        id: genId('tr'),
+        name: str(t.name).slice(0, 255) || ('伴奏' + (++audioSeq)),
+        kind: 'audio',
+        engine: 'utau',
+        curves: [],
+        fx: [],
+        audio: {
+          asset: id,
+          fileName: str(a.fileName, 'audio').slice(0, 255) || 'audio',
+          durationMs: Math.max(0, num(a.durationMs, 0)),
+          skip: Math.max(0, num(a.skip, 0)),
+          trim: Math.max(0, num(a.trim, 0)),
+          fadeIn: Math.max(0, num(a.fadeIn, 0)),
+          fadeOut: Math.max(0, num(a.fadeOut, 0)),
+          gainDb: 0,
+          muted: false,
+        },
+        muted: false,
+        gainDb: 0,
+      });
+      continue;
+    }
+    const voice = {
+      id: genId('tr'),
+      name: str(t.name).slice(0, 255) || 'Track',
+      kind: 'voice',
+      engine: t.engine === 'diffsinger' ? 'diffsinger' : 'utau',
+      // ★ 声库不绑定：ustx 里的 singer 是 OpenUTAU 的歌手 id，本机多半没有
+      //   同名目录；singerName 保留原名，用户在界面上重选本机声库。
+      singer: '',
+      singerName: str(t.singerName).slice(0, 255),
+      language: str(t.language, 'zh').slice(0, 16) || 'zh',
+      notes: [],
+      pitchCurve: [],
+      curves: [],
+      fx: Array.isArray(t.fx) ? t.fx : [],
+      muted: !!t.muted,
+      gainDb: clamp(num(t.volume, 0), -60, 24),
+    };
+    for (const n of (Array.isArray(t.notes) ? t.notes : [])) {
+      // ★ 休止（R）不进编辑器（ustx 语义里休止就是音符间隙）；引擎侧已剔除，
+      //   这里再做一层防抖（旧引擎版本 / 手改文件的兜底）。null 条目直接丢。
+      if (!n || typeof n !== 'object') continue;
+      const lrc = str(n.lyric).trim();
+      if (!lrc || lrc === 'R' || lrc === 'r') continue;
+      const o = {
+        id: genId('n'),
+        startBeat: Math.max(0, tickToBeat(n.position)),
+        durBeat: Math.max(0.125, num(n.duration, 480) / resolution),
+        pitch: clamp(Math.round(num(n.tone, 60)), 0, 127),
+        lyric: lrc,
+        vibrato: false,
+        vibDepth: 35,
+        vibFreq: 5.5,
+        vibFade: 0,
+      };
+      const v = n.vibrato;
+      if (v && typeof v === 'object') {
+        o.vibrato = true;
+        o.vibDepth = clamp(num(v.depth, 35), 0, 100);
+        const period = num(v.period, 0);
+        o.vibFreq = period > 0 ? clamp(1000 / period, 0, 12) : 5.5;
+        o.vibFade = clamp(num(v.in, 0), 0, 100);
+      }
+      if (n.velocity !== undefined) o.velocity = clamp(num(n.velocity, 100), 0, 100);
+      voice.notes.push(o);
+    }
+    voice.notes.sort((a, b) => a.startBeat - b.startBeat);
+    voice.pitchCurve = (Array.isArray(t.pitchCurve) ? t.pitchCurve : [])
+      .map((pt) => ({ beat: tickToBeat(pt && pt.tick), cents: num(pt && pt.cents, 0) }))
+      .filter((pt) => Number.isFinite(pt.beat) && Number.isFinite(pt.cents))
+      .sort((a, b) => a.beat - b.beat);
+    tracks.push(voice);
+  }
+
+  if (!tracks.some((t) => t.kind === 'voice')) {
+    return fail('工程里没有歌声轨');
+  }
+  return {
+    ok: true,
+    json: {
+      format: FORMAT_ID,
+      version: FORMAT_VERSION,
+      app: 'FuFumidi',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      meta: { title: str(p.name).slice(0, 255), comment: str(p.comment).slice(0, 4096), artist: '' },
+      bpm: clamp(num(p.bpm, 120), 20, 400),
+      device: 'auto',
+      sampleNote: 'a',
+      activeTrackId: '',
+      tracks,
+      assets,
+    },
+    resolved,
+  };
+}
+
 /**
  * 哪些资产没落到本地（文件丢了 / 解包失败）—— UI 要据此提示，
  * 而不是让用户对着一条静音的伴奏轨发呆。

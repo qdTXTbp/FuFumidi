@@ -49,7 +49,7 @@ def main():
     # ★ 必须与上游 0.ustx 一致（resolution 固定 480，bpm 120），否则所有 ms 值差 2 倍
     p.bpm = 120
     add_default_expressions(p)
-    tr = UTrack(p)
+    tr = UTrack.for_project(p)
     tr.track_no = 0
     p.tracks.append(tr)
     part = UVoicePart(track_no=0, position=0, name='probe')
