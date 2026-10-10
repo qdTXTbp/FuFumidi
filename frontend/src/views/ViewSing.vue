@@ -758,6 +758,12 @@ function onArrMove(e: any) {
   store.activeTrackId = e.toTrackId;
 }
 
+/* 卷帘组件实例（只为读它暴露的 xOf / beatOf / scrollEl）。
+   ★ 必须声明在任何 watch(prRef, …) 之前：const 有暂时性死区（TDZ），
+     声明靠后的话 watch 建立依赖时读 prRef.value 会抛
+     "Cannot access 'prRef' before initialization"，整个调教页 setup 直接挂掉（页面打不开）。 */
+const prRef = ref<any>(null);
+
 /* ---- 卷帘可视区间（拍）→ 时间线上画白色视口框（对齐 PartControl 的 PianoRollView* 联动）---- */
 const rollViewport = ref<{ fromBeat: number; toBeats: number } | null>(null);
 function updateRollViewport() {
@@ -1593,7 +1599,6 @@ const loopOn = ref(false);
 const loopA = ref(0);
 const loopB = ref(0);
 const follow = ref(localStorage.getItem('fufumidi_sing_follow') !== '0');
-const prRef = ref<any>(null);        // 卷帘组件实例（只为读它暴露的 xOf / scrollEl）
 
 transport.onTick = (ms, playing) => {
   tpos.value = ms;
