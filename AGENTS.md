@@ -9,8 +9,8 @@
 4. **[docs/HYGIENE.md](docs/HYGIENE.md)** —— 仓库卫生审计的结论与理由（许可证、lockfile、CI 配置、体积例外）。
 5. **[docs/VENDOR.md](docs/VENDOR.md)** —— 内置第三方二进制（verovio / js-synthesizer / 音色库 / OpenUtau native）的版本、来源与 SHA-256；改 vendor 必须同时改它。
 6. **[docs/DOWNLOADS.md](docs/DOWNLOADS.md)** —— **资源下载的唯一入口**：所有取文件字节的代码都走 `main/fast-download.js`，能力清单、实测数据、禁止写法、新增下载点的清单。
-7. **[docs/COVER.md](docs/COVER.md)** —— **翻唱工作流**（分离 → 扒谱 → 合成 → 混音）：两条音色通道
-   （DiffSinger 声库 / GPT-SoVITS 音色）、断点续跑、对齐与客观量，以及 GPT-SoVITS 的四个坑。
+7. **[docs/COVER-SVC.md](docs/COVER-SVC.md)** —— **翻唱工作流**（分离 → 变声 → 混音）：音色 = 用户导入的
+   SVC 模型（`main/svc.js`）；模型目录快照、导入三种形态、授权（CC-BY-NC-4.0）、`kind=svc` 加速包。
 
 几条最容易忘的硬规则：
 

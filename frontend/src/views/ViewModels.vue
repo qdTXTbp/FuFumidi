@@ -4,10 +4,12 @@
 // - 点击卡片 → 右侧详情抽屉（含下载/删除）
 // - 下载中关闭抽屉 → 全屏弹窗实时显示 速度 + 进度（可取消）
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
+import { useRoute } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import DiffSingerCatalog from './DiffSingerCatalog.vue';
 import ModelCatalog from '../components/models/ModelCatalog.vue';
 import UtauVoicebankStore from '../components/utau/UtauVoicebankStore.vue';
+import SvcModelPanel from '../components/cover/SvcModelPanel.vue';
 import { useAppStore } from '../stores/app';
 import { useVoicebankStore } from '../stores/voicebank';
 import { t } from '../core/i18n.js';
@@ -34,23 +36,31 @@ const TABS = computed(() => [
 const TUNING_SUBS = computed(() => [
   { id: 'ds', label: t('声库 · DiffSinger'), ic: 'spark' },
   { id: 'utau', label: t('声库 · UTAU'), ic: 'mic' },
-  { id: 'voices', label: t('音色 · GPT-SoVITS'), ic: 'mic' },
+  // 翻唱模型（SVC）：用户导入的角色权重 —— 应用不内置也不代下载（CC-BY-NC-4.0）。
+  // 落点 <模型目录>/svc/，翻唱页的音色下拉就读这里；GPT-SoVITS 音色已随路线调整删除。
+  { id: 'svc', label: t('翻唱模型'), ic: 'mic' },
   { id: 'models', label: t('调教模型'), ic: 'box' },
 ]);
-/** 二级分类里哪两个是卡片网格（另外两个是独立目录组件，没有 kind） */
-const SUB_KIND = { voices: 'tts', models: 'tuning' };
+/** 二级分类里哪一个是卡片网格（其余是独立目录组件 / 独立面板，没有 kind） */
+const SUB_KIND = { models: 'tuning' };
+// 深链：?m=<页签或二级 id> 直接落到某个分类（翻唱页「去导入模型」带 ?m=svc 过来）
+const route = useRoute();
 const curTab = ref('transcribe');
 const curSub = ref('ds');
+const deepLink = String(route.query.m || '');
+if (deepLink === 'svc') { curTab.value = 'tuning'; curSub.value = 'svc'; }
+else if (['ds', 'utau', 'models'].includes(deepLink)) { curTab.value = 'tuning'; curSub.value = deepLink; }
 /** 网格实际按哪个 kind 过滤：调教下看二级，其余看顶层 */
 const listKind = computed(() => (curTab.value === 'tuning' ? (SUB_KIND[curSub.value] || '') : curTab.value));
 const showDs = computed(() => curTab.value === 'tuning' && curSub.value === 'ds');
 const showUtau = computed(() => curTab.value === 'tuning' && curSub.value === 'utau');
+const showSvc = computed(() => curTab.value === 'tuning' && curSub.value === 'svc');
 const showGrid = computed(() => (curTab.value === 'tuning' ? !!SUB_KIND[curSub.value] : true));
-/** 「音色」「调教模型」两页用共享目录壳（与两个声库页同形），走 ModelCatalog 而不是通用网格 */
+/** 「调教模型」页用共享目录壳（与两个声库页同形），走 ModelCatalog 而不是通用网格 */
 const isTuningGrid = computed(() => curTab.value === 'tuning' && !!SUB_KIND[curSub.value]);
 /** 二级页 → 用户元数据的 kind（白名单见 main/usermeta.js 的 KINDS）。
     注意不是 SUB_KIND：SUB_KIND 是 model:list 的 kind，这里是「用户改动的归属」。 */
-const META_KIND = { voices: 'voice', models: 'model' };
+const META_KIND = { svc: 'svc', models: 'model' };
 const metaKind = computed(() => META_KIND[curSub.value] || 'model');
 
 /* ---------------- 模型列表与进度 ---------------- */
@@ -72,19 +82,7 @@ function countFor(tb) {
 }
 function cnt(n) { return n == null ? '…' : String(n); }
 
-/** 本地导入 GPT-SoVITS 音色：选一个目录 → 主进程校验 .ckpt/.pth 并拷进音色目录。
- *  社区音色绝大多数没有稳定直链（见 main/gpt-sovits.js 的 EXTERNAL），这是它们的主入口。 */
-async function importGsvVoice() {
-  try {
-    const r = await bridge.modelImportGsvVoice?.();
-    if (!r || r.canceled) return;
-    if (!r.ok) { app.toast((r && r.error) || t('导入失败'), 'error'); return; }
-    app.toast(t('已导入音色：') + (r.name || ''), 'success');
-    await refresh();
-  } catch (e) { app.toast(String((e && e.message) || e), 'error'); }
-}
-
-function kindIcon(m) { return (m.kind === 'separate' || m.kind === 'tts') ? 'mic' : (m.kind === 'transcribe') ? 'music' : 'box'; }
+function kindIcon(m) { return (m.kind === 'separate' || m.kind === 'tts' || m.kind === 'svc') ? 'mic' : (m.kind === 'transcribe') ? 'music' : 'box'; }
 /** kind → 给用户看的分类名（详情抽屉用）。
  *  ★ 新增 kind **必须**来这里加一行 —— 漏了会把它显示成「修复工具」，
  *    分类名写错比不显示更糟。 */
@@ -92,6 +90,7 @@ function kindLabel(k) {
   if (k === 'separate') return t('人声分离');
   if (k === 'transcribe') return t('转录模型');
   if (k === 'tts') return t('音色');
+  if (k === 'svc') return t('翻唱模型');
   if (k === 'tuning') return t('调教模型');
   return t('修复工具');
 }
@@ -224,31 +223,23 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
       <UtauVoicebankStore />
     </div>
 
-    <!-- 音色 / 调教模型：用与两个声库页**同一套**目录壳（来源条 → 搜索筛选 → 分组 → 卡片网格） -->
+    <!-- 翻唱模型（SVC）：导入 / 已导入 / 在线目录，自带面板 -->
+    <div v-else-if="showSvc" class="vm-svc">
+      <SvcModelPanel />
+    </div>
+
+    <!-- 调教模型：与两个声库页**同一套**目录壳（来源条 → 搜索筛选 → 分组 → 卡片网格） -->
     <ModelCatalog v-else-if="isTuningGrid" :items="tabbedList" :prog="prog" group-key="arch" :kind="metaKind"
-                  :icon="listKind === 'tts' ? 'mic' : 'box'"
-                  :title="listKind === 'tts' ? 'GPT-SoVITS 音色' : '调教模型'"
-                  :note="listKind === 'tts'
-                    ? '社区音色绝大多数没有稳定直链，网盘 / 社区下载的包可直接用「导入本地音色目录」安装；这里的条目是从公开仓库一键拉取的那部分。'
-                    : '调教（歌声合成）用到的模型。Worldline v11 的谐波分离模型就在这里下载。'"
-                  :empty-text="listKind === 'tts' ? '没有符合条件的音色' : '没有符合条件的调教模型'"
+                  icon="box"
+                  :title="t('调教模型')"
+                  note="t('调教（歌声合成）用到的模型。Worldline v11 的谐波分离模型就在这里下载。')"
+                  :empty-text="t('没有符合条件的调教模型')"
                   @download="startDownload" @remove="deleteModel"
-                  @cancel="(it) => cancelDownload(it.id)" @openExternal="openExternal">
-      <template #actions>
-        <button v-if="listKind === 'tts'" class="btn sm" @click="importGsvVoice"><Icon name="folder" :size="13" /> {{ t('导入本地音色目录') }}</button>
-      </template>
-    </ModelCatalog>
+                  @cancel="(it) => cancelDownload(it.id)" @openExternal="openExternal" />
 
     <!-- 卡片网格（转录 / 分离 / 修复·VR 沿用） -->
     <Transition v-else-if="showGrid" name="vmfade" mode="out-in">
       <div class="vm-grid" :key="listKind">
-        <!-- 本地导入：调教里的声库 / 音色绝大多数没有稳定直链（BOOTH / BowlRoll / 网盘），
-             所以除了「一键下载」必须给一条本地导入的路。放在网格内、跨整行 ——
-             不要插进 v-if/v-else-if 条件链中间，那样 Vue 会编译失败（踩过）。 -->
-        <div v-if="listKind === 'tts'" class="vm-import">
-          <button class="btn sm" @click="importGsvVoice"><Icon name="folder" :size="13" /> {{ t('导入本地音色目录') }}</button>
-          <span class="muted small">{{ t('从网盘 / 社区下载的音色包解压后可直接导入：目录里要有 .ckpt 与 .pth（参考音可选），不需要有直链') }}</span>
-        </div>
         <div v-for="(m, i) in tabbedList" :key="m.id" class="vm-card" :class="{ inst: m.exists, down: prog[m.id] && prog[m.id].active }" :style="{ animationDelay: (i * 40) + 'ms' }" @click="detail = m">
           <div class="vm-top" :class="'k-' + (m.kind || 'other')"></div>
           <div class="vm-head">
@@ -333,6 +324,8 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 .vm-page { }
 /* UTAU 声库页签：声库卡片网格自带样式，这里只给一层容器间距 */
 .vm-utau { margin-top: 4px; }
+/* 翻唱模型页签：面板自带间距 */
+.vm-svc { margin-top: 4px; }
 
 /* ===== 页签 ===== */
 /*** 页签：与全局 .btn/.tab 一致的轻量 pill 风格，去掉厚重渐变与强投影 ***/
