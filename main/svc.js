@@ -42,7 +42,8 @@ function hasDir(p) { try { return !!p && fs.statSync(p).isDirectory(); } catch (
 function readdir(dir) { try { return fs.readdirSync(dir); } catch (e) { return []; } }
 
 const DEFAULTS = {
-  transpose: 0, indexRate: 0.3, filterRadius: 3, rmsMixRate: 0.25,
+  // ★ 没有 filterRadius：上游当前版本已移除这个老参数（给了也是个点了没反应的旋钮）
+  transpose: 0, indexRate: 0.3, rmsMixRate: 0.25,
   protect: 0.33, f0Method: 'rmvpe', chunkSec: 60, autoPredictF0: false,
 };
 

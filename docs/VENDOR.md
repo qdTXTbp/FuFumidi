@@ -17,6 +17,18 @@
 | `frontend/public/vendor/js-synth/fu-seq-clock.js` | 4,251 | `0a2658fb31608df568aa86b3` | **本项目自有**（AudioWorklet 音序时钟） | — |
 | `renderer/vendor/soundfonts/GeneralUser.sf2` | 31,281,186 | `f45b6b4a68b6bf3d792fcbb6` | GeneralUser GS（S. Christian Collins） | v1.471（许可证 v2.0，见同目录 `GeneralUser.LICENSE.txt`） |
 | `engine/singing/openutau/native/**` | 4.8 MB（6 个平台） | 逐文件映射见 `native/README.md` | [stakira/OpenUtau](https://github.com/stakira/OpenUtau)（MIT） | **未记录 tag/commit** —— 待补 |
+| `engine/svc/vendor/rvc/**` | 约 2.9k 行（10 个 .py） | 逐文件逐字节比对见 `tests/test_svc_rvc_vendor.py` | [RVC-Project/Retrieval-based-Voice-Conversion-WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI)（MIT，`LICENSE.upstream`） | `main` @ `81eed5e8f68b6bed1789f682fe78cdd324495afc`（2026-08-04） |
+
+### SVC vendor：翻唱变声用的上游 RVC 推理代码
+
+- **一行未改**（`tests/test_svc_rvc_vendor.py` 会与 `D:/FuFuMIDI/_ref/RVC` 做**逐字节**比对，
+  上游源码不在时该用例 SKIP 而不是假装通过）。
+- 搬了 `infer/module/*`、`infer/vc/{pipeline,utils}.py`、`infer/hubert.py`、`infer/rmvpe.py`、
+  `tools/cuda_graph.py`；**没搬** `infer/audio.py`（依赖 ffmpeg+PyAV）、`infer/vc/modules.py`（WebUI 耦合）
+  —— 后者的模型加载逻辑由 `engine/svc/rvc.py` 逐行照搬，并由测试与上游源码比对映射表与 pad 取值。
+- 权重（HuBERT/ContentVec、rmvpe.pt）**不是代码、不入库**，随 `kind=svc` 包装；
+  路径由 `FUFUMIDI_SVC_HUBERT` / `FUFUMIDI_SVC_RMVPE` 指向（只改指向，不改上游代码）。
+- 来源与「为什么不能手改」写在 `engine/svc/vendor/rvc/README.md`。
 
 改这一页时用同一条命令重新取指纹：
 

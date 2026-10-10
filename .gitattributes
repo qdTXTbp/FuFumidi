@@ -40,6 +40,10 @@
 *.wav binary
 *.flac binary
 
+# 上游原样搬运的 vendor 代码（RVC 推理）：测试会与上游源码**逐字节**比对
+# （tests/test_svc_rvc_vendor.py），所以不许做任何行尾转换 —— 换台机器 checkout 也不能变。
+engine/svc/vendor/** -text
+
 # 生成物在 diff 里不值得看，也不该参与合并
 package-lock.json -diff
 frontend/package-lock.json -diff

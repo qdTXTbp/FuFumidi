@@ -4248,7 +4248,6 @@ export const I18N_MAP = {
   '分块秒数': 'Chunk seconds',
   '清辅音保护': 'Consonant protection',
   '包络混入': 'Envelope mix',
-  '中值滤波半径': 'Median filter radius',
   '自动预测 f0': 'Auto-predict F0',
   '运行时': 'Runtime',
   '解释器': 'Interpreter',

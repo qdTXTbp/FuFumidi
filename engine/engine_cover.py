@@ -251,7 +251,6 @@ def do_svc(voc, outdir, model_id, device='auto', log=print, resume=True, params=
            '--transpose', str(int(p.get('transpose') or 0)),
            '--f0-method', str(p.get('f0_method') or 'rmvpe'),
            '--index-rate', str(float(p.get('index_rate') if p.get('index_rate') is not None else 0.3)),
-           '--filter-radius', str(int(p.get('filter_radius') or 3)),
            '--rms-mix-rate', str(float(p.get('rms_mix_rate') if p.get('rms_mix_rate') is not None else 0.25)),
            '--protect', str(float(p.get('protect') if p.get('protect') is not None else 0.33)),
            '--chunk-sec', str(float(p.get('chunk_sec') or 60)),
@@ -342,7 +341,6 @@ def main():
         s.add_argument('--transpose', type=int, default=0)
         s.add_argument('--f0-method', default='rmvpe')
         s.add_argument('--index-rate', type=float, default=0.3)
-        s.add_argument('--filter-radius', type=int, default=3)
         s.add_argument('--rms-mix-rate', type=float, default=0.25)
         s.add_argument('--protect', type=float, default=0.33)
         s.add_argument('--chunk-sec', type=float, default=60)
@@ -386,7 +384,7 @@ def main():
             return 0
 
         params = {'transpose': a.transpose, 'f0_method': a.f0_method, 'index_rate': a.index_rate,
-                  'filter_radius': a.filter_radius, 'rms_mix_rate': a.rms_mix_rate,
+                  'rms_mix_rate': a.rms_mix_rate,
                   'protect': a.protect, 'chunk_sec': a.chunk_sec, 'auto_predict_f0': a.auto_predict_f0}
         if a.cmd in ('convert', 'all'):
             if not a.svc_model:

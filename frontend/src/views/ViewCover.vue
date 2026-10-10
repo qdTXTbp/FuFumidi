@@ -30,7 +30,6 @@ const transpose = ref(0);
 const f0Method = ref('rmvpe');
 const indexRate = ref(0.3);
 const advOpen = ref(false);
-const filterRadius = ref(3);
 const rmsMixRate = ref(0.25);
 const protect = ref(0.33);
 const chunkSec = ref(60);
@@ -136,7 +135,6 @@ async function run() {
     transpose: Number(transpose.value) || 0,
     f0Method: f0Method.value,
     indexRate: Number(indexRate.value),
-    filterRadius: Number(filterRadius.value),
     rmsMixRate: Number(rmsMixRate.value),
     protect: Number(protect.value),
     chunkSec: Number(chunkSec.value) || 60,
@@ -240,7 +238,6 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
         <div class="cv-adv">
           <button class="btn sm ghost" @click="advOpen = !advOpen">{{ t('高级') }} {{ advOpen ? '▲' : '▼' }}</button>
           <div v-if="advOpen" class="cv-adv-grid">
-            <label class="cv-field"><span>{{ t('中值滤波半径') }}</span><input class="text-input cv-num" type="number" v-model.number="filterRadius" min="0" max="7" /></label>
             <label class="cv-field"><span>{{ t('包络混入') }}</span><input class="text-input cv-num" type="number" v-model.number="rmsMixRate" step="0.05" min="0" max="1" /></label>
             <label class="cv-field"><span>{{ t('清辅音保护') }}</span><input class="text-input cv-num" type="number" v-model.number="protect" step="0.01" min="0" max="0.5" /></label>
             <label class="cv-field"><span>{{ t('分块秒数') }}</span><input class="text-input cv-num" type="number" v-model.number="chunkSec" step="10" min="10" /></label>

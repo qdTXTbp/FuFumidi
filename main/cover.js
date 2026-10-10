@@ -103,7 +103,6 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
     args.push('--transpose', String(num(o.transpose, 0)));
     if (o.f0Method) args.push('--f0-method', String(o.f0Method));
     args.push('--index-rate', String(num(o.indexRate, 0.3)));
-    args.push('--filter-radius', String(num(o.filterRadius, 3)));
     args.push('--rms-mix-rate', String(num(o.rmsMixRate, 0.25)));
     args.push('--protect', String(num(o.protect, 0.33)));
     args.push('--chunk-sec', String(num(o.chunkSec, 60)));
