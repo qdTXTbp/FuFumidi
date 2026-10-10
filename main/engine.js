@@ -35,8 +35,8 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
   }
 
   function spawnEngine(pyArgs, opts = {}) {
-    // env：允许调用方覆盖环境变量（翻唱工作流要把 FUFUMIDI_GSV_ROOT / FUFUMIDI_GSV_PYTHON
-    // 传给引擎，让 engine_cover 能找到 GPT-SoVITS 运行时与它的解释器）。
+    // env：允许调用方覆盖环境变量（例如把 FUFUMIDI_MODELS_DIR 指过去，
+    // 让 engine_cover / engine_svc 能找到导入的翻唱模型）。
     const { script = 'music2midi.py', onLog, onProgress, onDone, onError, timeoutMs = 30 * 60 * 1000, env: envOverride } = opts;
     const py = resolvePython();
     const eng = engineDir();

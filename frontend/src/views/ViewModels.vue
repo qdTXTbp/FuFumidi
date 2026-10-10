@@ -4,9 +4,11 @@
 // - 点击卡片 → 右侧详情抽屉（含下载/删除）
 // - 下载中关闭抽屉 → 全屏弹窗实时显示 速度 + 进度（可取消）
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
+import { useRoute } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import DiffSingerCatalog from './DiffSingerCatalog.vue';
 import UtauVoicebankStore from '../components/utau/UtauVoicebankStore.vue';
+import SvcModelPanel from '../components/cover/SvcModelPanel.vue';
 import { useAppStore } from '../stores/app';
 import { useVoicebankStore } from '../stores/voicebank';
 import { t } from '../core/i18n.js';
@@ -25,11 +27,14 @@ const TABS = computed(() => [
   // UTAU 声库（开源 / 免费，一键下载安装）：声库属于「资源」，统一收在模型管理里，
   // 不再散落在资源管理页 —— 用户找声库只需要记住一个地方。
   { id: 'utau', label: t('UTAU 声库'), ic: 'mic' },
-  // GPT-SoVITS 社区微调音色（资源中心下载，落点 <模型目录>/gpt-sovits/voices/）：
-  // 与 DiffSinger 声库并列 —— 它也是「一个音色」，只是唱法走逐句参考重合成（见「翻唱」页）。
-  { id: 'tts', label: t('GPT-SoVITS 音色'), ic: 'mic' },
+  // 翻唱模型（SVC）：用户导入的角色权重 —— 应用不内置也不代下载（CC-BY-NC-4.0）。
+  // 落点 <模型目录>/svc/，翻唱页的音色下拉就读这里。
+  { id: 'svc', label: t('翻唱模型'), ic: 'mic' },
 ]);
-const curTab = ref('transcribe');
+// 深链：?m=<页签 id> 直接落到某个分类（翻唱页「去导入模型」带 ?m=svc 过来）
+const route = useRoute();
+const curTab = ref(['transcribe', 'separate', 'other', 'diffsinger', 'utau', 'svc'].includes(String(route.query.m || ''))
+  ? String(route.query.m) : 'transcribe');
 
 /* ---------------- 模型列表与进度 ---------------- */
 const list = ref([]);
@@ -48,7 +53,7 @@ function countFor(tb) {
 }
 function cnt(n) { return n == null ? '…' : String(n); }
 
-function kindIcon(m) { return (m.kind === 'separate' || m.kind === 'tts') ? 'mic' : (m.kind === 'transcribe') ? 'music' : 'box'; }
+function kindIcon(m) { return (m.kind === 'separate' || m.kind === 'tts' || m.kind === 'svc') ? 'mic' : (m.kind === 'transcribe') ? 'music' : 'box'; }
 /** 外部门户（论坛 / 网盘 / Spaces）：不能一键下载，只把用户送去该去的地方 */
 function openExternal(m) {
   if (!m || !m.url) return;
@@ -168,6 +173,11 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
       <UtauVoicebankStore />
     </div>
 
+    <!-- 翻唱模型（SVC）：导入 / 已导入 / 在线目录，自带面板 -->
+    <div v-else-if="curTab === 'svc'" class="vm-svc">
+      <SvcModelPanel />
+    </div>
+
     <!-- 卡片网格 -->
     <Transition v-else name="vmfade" mode="out-in">
       <div class="vm-grid" :key="curTab">
@@ -255,6 +265,8 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 .vm-page { }
 /* UTAU 声库页签：声库卡片网格自带样式，这里只给一层容器间距 */
 .vm-utau { margin-top: 4px; }
+/* 翻唱模型页签：面板自带间距 */
+.vm-svc { margin-top: 4px; }
 
 /* ===== 页签 ===== */
 /*** 页签：与全局 .btn/.tab 一致的轻量 pill 风格，去掉厚重渐变与强投影 ***/

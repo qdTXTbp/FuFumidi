@@ -7,6 +7,10 @@
 //   directml —— AMD / Intel（torch-directml + onnxruntime-directml）
 //   rocm     —— AMD 较新 Radeon（ROCm 7.2；**只提供 cp312 轮子，必须配 Python 3.12 运行时**）
 //
+// 另有一类**不是加速、而是能力包**：
+//   svc      —— 翻唱变声推理（torch + faiss + contentvec/hubert 编码器 + rmvpe 权重 + pyworld）。
+//               不塞进本体（体积大），用户按需在「加速包」页安装；角色权重仍是用户导入的。
+//
 // ★ Python 版本约束：增强包是按某个 CPython 次版本编译的（site-packages 里的
 //   *.pyd 带 ABI tag）。内置运行时是 3.11，而 ROCm 只有 cp312，
 //   所以「启用 ROCm = 把解释器切到 3.12」。见 KIND_PY / requiredPython()。
@@ -17,10 +21,15 @@ const path = require('path');
 const fs = require('fs');
 const Paths = require('./paths');
 
-const GPU_KINDS = ['cuda', 'directml', 'rocm'];
+const GPU_KINDS = ['cuda', 'directml', 'rocm', 'svc'];
 /** 每种增强包所要求的 CPython 次版本（决定用哪个解释器跑引擎） */
-const KIND_PY = { cuda: '3.11', directml: '3.11', rocm: '3.12' };
-const KIND_LABEL = { cuda: 'CUDA', directml: 'DirectML', rocm: 'ROCm' };
+const KIND_PY = { cuda: '3.11', directml: '3.11', rocm: '3.12', svc: '3.11' };
+const KIND_LABEL = { cuda: 'CUDA', directml: 'DirectML', rocm: 'ROCm', svc: 'SVC 推理' };
+/** 哪些是「GPU 加速包」（会切换解释器/显示加速开关），哪些只是能力包 */
+const ACCEL_KINDS = ['cuda', 'directml', 'rocm'];
+function isAccelKind(kind) {
+  return ACCEL_KINDS.indexOf(String(kind || '').toLowerCase()) >= 0;
+}
 
 /** 是否是已知的增强包类型 */
 function isGpuKind(kind) {
@@ -68,6 +77,7 @@ function installedGpuKinds() {
 }
 function inferGpuKind(nameOrUrl) {
   const t = String(nameOrUrl || '').toLowerCase();
+  if (t.indexOf('svc') >= 0 || t.indexOf('rvc') >= 0) return 'svc';
   if (t.indexOf('cuda') >= 0) return 'cuda';
   if (t.indexOf('directml') >= 0 || t.indexOf('dml') >= 0) return 'directml';
   // rocm / hip：ROCm on Windows 的 torch 里 torch.version.hip 有值、version.cuda 为空
@@ -130,6 +140,8 @@ module.exports = {
   GPU_KINDS,
   KIND_PY,
   KIND_LABEL,
+  ACCEL_KINDS,
+  isAccelKind,
   isGpuKind,
   requiredPython,
   fitsPython,

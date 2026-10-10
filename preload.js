@@ -22,13 +22,11 @@ contextBridge.exposeInMainWorld('fuBridge', {
     ipcRenderer.on('open-file', w);
     return () => ipcRenderer.removeListener('open-file', w);
   },
-  // 翻唱工作流（一首歌 → 分离 → 扒谱 → 合成 → 混音 → 成品）
+  // 翻唱工作流（一首歌 → 分离 → 变声 → 混音 → 成品）
   coverEnv: () => ipcRenderer.invoke('cover:env'),
   coverSingers: () => ipcRenderer.invoke('cover:singers'),
   coverPickAudio: () => ipcRenderer.invoke('cover:pickAudio'),
   coverPickDir: () => ipcRenderer.invoke('cover:pickDir'),
-  coverPickGsvRoot: () => ipcRenderer.invoke('cover:pickGsvRoot'),
-  coverPickGsvPython: () => ipcRenderer.invoke('cover:pickGsvPython'),
   coverRun: (opts) => ipcRenderer.invoke('cover:run', opts),
   coverCancel: () => ipcRenderer.invoke('cover:cancel'),
   coverOpen: (p) => ipcRenderer.invoke('cover:open', p),
@@ -37,6 +35,19 @@ contextBridge.exposeInMainWorld('fuBridge', {
     ipcRenderer.on('cover:progress', w);
     return () => ipcRenderer.removeListener('cover:progress', w);
   },
+  // 翻唱模型（SVC）注册表：导入 / 列出 / 删除 / ModelScope 目录
+  svcList: () => ipcRenderer.invoke('svc:list'),
+  svcCatalog: () => ipcRenderer.invoke('svc:catalog'),
+  svcRefreshCatalog: () => ipcRenderer.invoke('svc:refreshCatalog'),
+  svcPickFolder: () => ipcRenderer.invoke('svc:pickFolder'),
+  svcPickFiles: () => ipcRenderer.invoke('svc:pickFiles'),
+  svcPickZip: () => ipcRenderer.invoke('svc:pickZip'),
+  svcImportFolder: (dir, opts) => ipcRenderer.invoke('svc:importFolder', dir, opts),
+  svcImportFiles: (files, opts) => ipcRenderer.invoke('svc:importFiles', files, opts),
+  svcImportZip: (p, opts) => ipcRenderer.invoke('svc:importZip', p, opts),
+  svcRemove: (id) => ipcRenderer.invoke('svc:remove', id),
+  svcProbe: (id) => ipcRenderer.invoke('svc:probe', id),
+  svcOpenCatalogPage: (url) => ipcRenderer.invoke('svc:openCatalogPage', url),
   // 转录引擎
   convert: (cfg) => ipcRenderer.invoke('engine:convert', cfg),
   cancel: (id) => ipcRenderer.invoke('engine:cancel', id),

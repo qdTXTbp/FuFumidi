@@ -1,21 +1,20 @@
 // ============================================================
-// 翻唱工作流（主进程）：一首歌 → 分离 → 扒谱 → 合成 → 混音 → 成品
+// 翻唱工作流（主进程）：一首歌 → 分离 → 变声 → 混音 → 成品
 // ------------------------------------------------------------
 // 引擎侧只有一份实现：engine/engine_cover.py（CLI 与界面走同一条路，
 // 分离又复用「音频处理」面板同一个入口 music2midi.py separate）。
 //
-// 两条音色通道：
-//   · DiffSinger 声库（--voicebank）：扒谱出的音符 → 逐句合成
-//   · GPT-SoVITS 音色（--gsv-voice）：逐句拿原唱那一句当参考重合成（路线 A+）
-// 两者产出同构（一条整长干声轨），后面的混音完全共用。
+// 音色只有一条通道：**导入的 SVC 模型**（engine/engine_svc.py convert）。
+// 旧的两条（GPT-SoVITS 逐句参考重合成、DiffSinger 声库接 RVC）已删除 ——
+// SVC 直接把原唱人声换成目标音色，旋律/节奏/咬字本来就来自原唱，
+// 不需要歌词也不需要音符表（扒谱环节整段去掉）。
 //
-// ★ GPT-SoVITS 推理跑在**另一个解释器**里（应用自带的 python 没有 torch），
-//   由引擎侧 gsv_env.find_python 解析；这里只负责把 FUFUMIDI_GSV_ROOT /
-//   FUFUMIDI_GSV_PYTHON 通过环境变量传下去。
+// 模型不内置、不代下载（CC-BY-NC-4.0），由用户导入：见 main/svc.js。
 // ============================================================
 'use strict';
 
 const Paths = require('./paths');
+const SVC = require('./svc');
 
 function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spawnEngine,
                             engineEnv, readSettings }) {
@@ -23,95 +22,30 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
   let current = null;
   let seq = 0;
 
-  const modelsDir = () => Paths.modelsDir();
-  const voicesRoot = () => path.join(modelsDir(), 'gpt-sovits', 'voices');
-
   function send(win, payload) {
     if (win && !win.isDestroyed()) win.webContents.send('cover:progress', payload);
   }
 
   function hasFile(p) { try { return !!p && fs.statSync(p).isFile(); } catch (e) { return false; } }
-  function hasDir(p) { try { return !!p && fs.statSync(p).isDirectory(); } catch (e) { return false; } }
 
-  /** 列一个目录下的文件（失败返回空数组，不抛） */
-  function readdir(dir) {
-    try { return fs.readdirSync(dir); } catch (e) { return []; }
-  }
-
-  /* ---------------- DiffSinger 声库（用户装的那些） ---------------- */
-  function diffsingerSingers() {
-    const root = Paths.diffsingerVoicebanksDir();
-    const out = [];
-    for (const name of readdir(root)) {
-      const dir = path.join(root, name);
-      if (!hasDir(dir) || !hasFile(path.join(dir, 'dsconfig.yaml'))) continue;
-      const builtinVoc = hasDir(path.join(dir, 'dsvocoder'));
-      out.push({ kind: 'diffsinger', id: name, name, dir,
-        ready: hasDir(path.join(dir, 'dsdur')) && (builtinVoc || true),
-        note: builtinVoc ? '自带声码器' : '通用声码器' });
-    }
-    return out;
-  }
-
-  /* ---------------- GPT-SoVITS 音色（资源中心下载 / 用户导入的） ---------------- */
-  function gsvVoices() {
-    const root = voicesRoot();
-    const out = [];
-    for (const name of readdir(root)) {
-      const dir = path.join(root, name);
-      if (!hasDir(dir)) continue;
-      const files = readdir(dir);
-      const ckpt = files.find((f) => /\.ckpt$/i.test(f));
-      const pth = files.find((f) => /\.pth$/i.test(f));
-      const ref = files.find((f) => /^(ref|reference)\.(wav|mp3|flac)$/i.test(f))
-        || files.find((f) => /\.(wav|mp3|flac)$/i.test(f));
-      out.push({ kind: 'gsv', id: name, name, dir, ready: !!(ckpt && pth),
-        note: (ckpt && pth) ? ('v2 · 参考音 ' + (ref || '缺失')) : '权重不完整（缺 .ckpt/.pth）' });
-    }
-    return out;
-  }
-
-  /* ---------------- GPT-SoVITS 运行时 ---------------- */
-  /** 运行时目录候选：runtime.json（资源中心/用户手写）→ <数据根>/gpt-sovits/runtime */
-  function gsvRuntime() {
-    const cfgFile = path.join(Paths.dataRoot(), 'gpt-sovits', 'runtime.json');
-    let cfg = {};
-    try { cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8')) || {}; } catch (e) { cfg = {}; }
-    const cands = [cfg.root, path.join(Paths.dataRoot(), 'gpt-sovits', 'runtime')].filter(Boolean);
-    for (const root of cands) {
-      if (hasFile(path.join(root, 'GPT_SoVITS', 'TTS_infer_pack', 'TTS.py'))) {
-        const py = [cfg.python, path.join(root, 'python', 'python.exe')].find(hasFile) || '';
-        return { found: true, root, python: py, source: root === cfg.root ? 'runtime.json' : '数据目录' };
-      }
-    }
-    return { found: false, root: '', python: '', source: '' };
-  }
-
-  /** 写 <数据根>/gpt-sovits/runtime.json（引擎侧 gsv_env.find_runtime 读它）。
-   *  合并写：只改传进来的字段，不把已有的 root/python 抹掉。 */
-  function writeGsvConfig(patch) {
-    const dir = path.join(Paths.dataRoot(), 'gpt-sovits');
-    const file = path.join(dir, 'runtime.json');
-    let cur = {};
-    try { cur = JSON.parse(fs.readFileSync(file, 'utf8')) || {}; } catch (e) { cur = {}; }
-    const next = { ...cur, ...patch };
-    try {
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(file, JSON.stringify(next, null, 1), 'utf8');
-    } catch (e) { /* 写不进去也不阻断（用户手填的路径仍然有效） */ }
-    return next;
+  /* ---------------- 音色 = 导入的 SVC 模型 ---------------- */
+  function svcSingers() {
+    return SVC.list().filter((m) => m.engine === 'rvc').map((m) => ({
+      kind: 'svc', id: m.id, name: m.name, dir: m.dir,
+      ready: m.ready, note: SVC.noteLabel(m), arch: SVC.archLabel(m),
+      sr: m.sr || 0, lang: m.lang || '', work: m.work || '',
+    }));
   }
 
   /* ---------------- IPC ---------------- */
 
   ipcMain.handle('cover:env', async () => {
-    const gsv = gsvRuntime();
-    return { ok: true, dataRoot: Paths.dataRoot(), modelsRoot: modelsDir(),
-      voicesRoot: voicesRoot(), gsv: { ...gsv, voices: gsvVoices().length } };
+    return { ok: true, dataRoot: Paths.dataRoot(), modelsRoot: Paths.modelsDir(),
+      svcRoot: SVC.svcRoot(), singers: svcSingers().length };
   });
 
   ipcMain.handle('cover:singers', async () => {
-    try { return { ok: true, diffsinger: diffsingerSingers(), gsv: gsvVoices() }; }
+    try { return { ok: true, svc: svcSingers() }; }
     catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   });
 
@@ -136,32 +70,6 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
     return { ok: true, path: r.filePaths[0] };
   });
 
-  /** 选 GPT-SoVITS 运行时目录 → **记进 runtime.json**（下次不用再填）。
-   *  只认「含 GPT_SoVITS/TTS_infer_pack/TTS.py」的目录，选错立刻说清楚。 */
-  ipcMain.handle('cover:pickGsvRoot', async (evt) => {
-    const win = BrowserWindow.fromWebContents(evt.sender);
-    const r = await dialog.showOpenDialog(win, {
-      title: '选择 GPT-SoVITS 目录（含 GPT_SoVITS/）', properties: ['openDirectory'] });
-    if (r.canceled || !r.filePaths.length) return { canceled: true };
-    const root = r.filePaths[0];
-    if (!hasFile(path.join(root, 'GPT_SoVITS', 'TTS_infer_pack', 'TTS.py'))) {
-      return { ok: false, error: '这个目录里没有 GPT_SoVITS/TTS_infer_pack/TTS.py，看起来不是 GPT-SoVITS 目录' };
-    }
-    writeGsvConfig({ root });
-    return { ok: true, root, python: gsvRuntime().python };
-  });
-
-  /** 选 GPT-SoVITS 的解释器（装好 torch 的那个 python.exe）→ 同样记进 runtime.json */
-  ipcMain.handle('cover:pickGsvPython', async (evt) => {
-    const win = BrowserWindow.fromWebContents(evt.sender);
-    const r = await dialog.showOpenDialog(win, {
-      title: '选择跑 GPT-SoVITS 的 python.exe', properties: ['openFile'],
-      filters: [{ name: 'python', extensions: ['exe'] }, { name: '全部文件', extensions: ['*'] }] });
-    if (r.canceled || !r.filePaths.length) return { canceled: true };
-    writeGsvConfig({ python: r.filePaths[0] });
-    return { ok: true, python: r.filePaths[0] };
-  });
-
   ipcMain.handle('cover:cancel', async () => {
     if (!current) return { ok: true, canceled: false };
     current.aborted = true;
@@ -179,33 +87,29 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
     if (current) return { ok: false, error: '已有一个翻唱任务在跑，先取消它' };
     if (!hasFile(o.audio)) return { ok: false, error: '请先选择源音频' };
     const singer = o.singer || {};
-    if (!singer.kind || !singer.path) return { ok: false, error: '请选择声库或音色' };
+    if (!singer.id) return { ok: false, error: '请选择一个导入的翻唱模型' };
     if (!o.outdir) return { ok: false, error: '请选择输出目录' };
     try { fs.mkdirSync(o.outdir, { recursive: true }); }
     catch (e) { return { ok: false, error: '输出目录不可写：' + (e && e.message) }; }
 
     const win = BrowserWindow.fromWebContents(evt.sender);
     const id = 'cover' + (++seq);
-    // ★ 子命令必须在前：engine_cover.py 是 `{analyze,render,mix,all}` 子命令式 CLI，
+    // ★ 子命令必须在前：engine_cover.py 是 `{analyze,convert,mix,all}` 子命令式 CLI，
     //   少了这个 all，argparse 会把音频路径当成子命令名直接报错
-    //   （实测：界面点「开始翻唱」弹 “argument cmd: invalid choice: '…flac'”）。
-    const args = ['all', o.audio, '--outdir', o.outdir];
+    const args = ['all', o.audio, '--outdir', o.outdir, '--svc-model', String(singer.id)];
     if (o.name) args.push('--name', String(o.name));
-    if (singer.kind === 'gsv') {
-      args.push('--gsv-voice', singer.path);
-      const rt = gsvRuntime();
-      const root = o.gsvRoot || rt.root;
-      const py = o.gsvPython || rt.python;
-      if (root) args.push('--gsv-root', String(root));
-      if (py) args.push('--gsv-python', String(py));
-      if (o.version) args.push('--gsv-version', String(o.version));
-      if (o.align === true) args.push('--gsv-align');   // 默认不做 WORLD 校正（见 docs/COVER.md）
-    } else {
-      args.push('--voicebank', singer.path);
-    }
+    // ---- SVC 参数（常用 + 高级，全部走引擎，界面不自己实现任何 DSP）
+    const num = (v, d) => (v == null || v === '' ? d : Number(v));
+    args.push('--transpose', String(num(o.transpose, 0)));
+    if (o.f0Method) args.push('--f0-method', String(o.f0Method));
+    args.push('--index-rate', String(num(o.indexRate, 0.3)));
+    args.push('--filter-radius', String(num(o.filterRadius, 3)));
+    args.push('--rms-mix-rate', String(num(o.rmsMixRate, 0.25)));
+    args.push('--protect', String(num(o.protect, 0.33)));
+    args.push('--chunk-sec', String(num(o.chunkSec, 60)));
+    if (o.autoPredictF0) args.push('--auto-predict-f0');
     args.push('--device', o.device || 'auto');
     if (o.clarityDb != null) args.push('--clarity-db', String(o.clarityDb));
-    if (o.lyrics && o.lyrics !== 'auto') args.push('--lyrics', String(o.lyrics));
     if (o.noResume) args.push('--no-resume');
     if (o.sepModel) args.push('--sep-model', String(o.sepModel));
     if (o.sepConfig) args.push('--sep-config', String(o.sepConfig));
@@ -217,13 +121,7 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
 
     send(win, { id, phase: 'start', percent: 0, text: '开始…', done: false });
     const logs = [];
-    const rt = gsvRuntime();
-    const env = engineEnv({
-      FUFUMIDI_COVER_VOICEBANK: singer.kind === 'gsv' ? singer.path : '',
-      ...(rt.root ? { FUFUMIDI_GSV_ROOT: String(o.gsvRoot || rt.root) } : {}),
-      ...(rt.python || o.gsvPython ? { FUFUMIDI_GSV_PYTHON: String(o.gsvPython || rt.python) } : {}),
-      ...(o.gsvRoot ? { FUFUMIDI_GSV_ROOT: String(o.gsvRoot) } : {}),
-    });
+    const env = engineEnv({});
     const child = spawnEngine(args, {
       script: 'engine_cover.py',
       timeoutMs: 6 * 60 * 60 * 1000,
@@ -256,7 +154,7 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
     return { ok: true, id };
   });
 
-  return { diffsingerSingers, gsvVoices, gsvRuntime };
+  return { svcSingers };
 }
 
 module.exports = { registerCoverIpc };

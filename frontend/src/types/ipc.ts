@@ -658,17 +658,22 @@ export interface UstxExportResult {
   warnings?: string[];
 }
 
-/** 翻唱工作流：可选音色（DiffSinger 声库 / GPT-SoVITS 音色） */
+/** 翻唱工作流：可选音色 = 导入的 SVC 模型 */
 export interface CoverSinger {
-  kind: 'diffsinger' | 'gsv';
+  kind: 'svc';
   id: string;
   name: string;
-  /** 声库目录 / 音色目录（直接传给引擎） */
+  /** 模型目录（直接传给引擎） */
   dir: string;
   /** 权重是否齐（不齐的条目 UI 要挡住） */
   ready: boolean;
-  /** 人话说明（自带声码器 / 参考音文件名 / 缺什么） */
+  /** 人话说明（引用式导入 / 缺什么 / DDSP 尚未支持） */
   note?: string;
+  /** 架构串（RVC · v2 · 48k） */
+  arch?: string;
+  sr?: number;
+  lang?: string;
+  work?: string;
 }
 
 /** 翻唱工作流的本地环境（cover:env） */
@@ -676,9 +681,9 @@ export interface CoverEnv {
   ok: boolean;
   dataRoot: string;
   modelsRoot: string;
-  /** GPT-SoVITS 音色目录（资源中心下载落点） */
-  voicesRoot: string;
-  gsv: { found: boolean; root: string; python: string; source: string; voices: number };
+  /** 翻唱模型落点 <模型目录>/svc */
+  svcRoot: string;
+  singers: number;
 }
 
 /** 翻唱任务参数（cover:run） */
@@ -687,21 +692,83 @@ export interface CoverRunOptions {
   audio: string;
   outdir: string;
   name?: string;
-  singer: { kind: 'diffsinger' | 'gsv'; path: string; id?: string };
+  singer: { kind: 'svc'; id: string; path?: string };
   /** auto / cuda / cpu */
   device?: string;
   /** 吐字清晰度补偿（dB），0 = 关 */
   clarityDb?: number;
-  /** auto / .lrc 路径 */
-  lyrics?: string;
   /** 复用已分离好的人声轨（「音频处理」面板刚导出的结果） */
   vocals?: string;
   /** 复用已分离好的伴奏轨 */
   instrumental?: string;
   /** 不复用上次的中间结果 */
   noResume?: boolean;
-  gsvRoot?: string;
-  gsvPython?: string;
+  /* ---- SVC 参数（常用 + 高级，全部交给引擎，界面不自己实现 DSP）---- */
+  /** 变调（半音） */
+  transpose?: number;
+  /** rmvpe / pm / harvest / crepe */
+  f0Method?: string;
+  /** faiss 特征检索混入比例 0~1 */
+  indexRate?: number;
+  /** 中值滤波半径（≥3 才启用 index 检索） */
+  filterRadius?: number;
+  /** 包络混入（1 = 完全用原唱包络） */
+  rmsMixRate?: number;
+  /** 清辅音保护 0~0.5 */
+  protect?: number;
+  /** 分块秒数 */
+  chunkSec?: number;
+  autoPredictF0?: boolean;
+}
+
+/* ---------------- 翻唱模型（SVC）注册表 ---------------- */
+export interface SvcModel {
+  id: string;
+  name: string;
+  engine: 'rvc' | 'ddsp' | string;
+  version?: string;
+  /** 模型采样率（32000/40000/48000）；0 = 未知，probe 后回写 */
+  sr?: number;
+  dir: string;
+  files?: Record<string, string>;
+  defaults?: Record<string, number | string | boolean>;
+  source?: 'folder' | 'files' | 'zip';
+  lang?: string;
+  work?: string;
+  size?: number;
+  ready?: boolean;
+  /** 缺失的文件（引用式导入的源目录可能被删） */
+  missing?: string[];
+  /** true = 源目录在应用目录之外（删除只注销条目，不动用户文件） */
+  external?: boolean;
+}
+
+/** ModelScope 目录里的一条模型（只做索引，不含权重） */
+export interface SvcCatalogModel {
+  id: string;
+  name: string;
+  work: string;
+  lang: string;
+  sr: number;
+  gen: string;
+  engine: string;
+  repo: string;
+  pth: string;
+  pthSize: number;
+  index: string;
+  indexSize: number;
+  supported?: boolean;
+}
+
+export interface SvcCatalog {
+  generated: string;
+  note?: string;
+  refreshed?: boolean;
+  repos: { key: string; engine: string; name: string; site: string; license: string;
+           commercial: boolean; credits: string[]; supported: boolean; count: number }[];
+  langs: string[];
+  works: string[];
+  models: SvcCatalogModel[];
 }
 
 /** 翻唱进度（cover:progress 推送；`-1` 表示只带日志/文本） */
@@ -782,9 +849,9 @@ export interface FuBridge {
   utauCancelVoicebankDownload(id: string): Promise<GeneralResult>;
   onVoicebankProgress(cb: (p: VoicebankProgress) => void): () => void;
 
-  // 翻唱工作流（一首歌 → 分离 → 扒谱 → 合成 → 混音 → 成品）：引擎是 engine/engine_cover.py
+  // 翻唱工作流（一首歌 → 分离 → 变声 → 混音 → 成品）：引擎是 engine/engine_cover.py
   coverEnv(): Promise<CoverEnv>;
-  coverSingers(): Promise<{ ok: boolean; diffsinger?: CoverSinger[]; gsv?: CoverSinger[]; error?: string }>;
+  coverSingers(): Promise<{ ok: boolean; svc?: CoverSinger[]; error?: string }>;
   coverPickAudio(): Promise<{ ok?: boolean; canceled?: boolean; path?: string }>;
   coverPickDir(): Promise<{ ok?: boolean; canceled?: boolean; path?: string }>;
   /** 选 GPT-SoVITS 运行时目录（会记进 <数据根>/gpt-sovits/runtime.json） */
@@ -794,6 +861,19 @@ export interface FuBridge {
   coverRun(opts: CoverRunOptions): Promise<{ ok: boolean; id?: string; error?: string }>;
   coverCancel(): Promise<GeneralResult & { canceled?: boolean }>;
   coverOpen(p: string): Promise<GeneralResult>;
+  // 翻唱模型（SVC）注册表：导入 / 列出 / 删除 / ModelScope 目录
+  svcList(): Promise<{ ok: boolean; models?: SvcModel[]; root?: string; error?: string }>;
+  svcCatalog(): Promise<{ ok: boolean; catalog?: SvcCatalog; error?: string }>;
+  svcRefreshCatalog(): Promise<{ ok: boolean; count?: number; generated?: string; error?: string }>;
+  svcPickFolder(): Promise<{ ok?: boolean; canceled?: boolean; dir?: string; detected?: any }>;
+  svcPickFiles(): Promise<{ ok?: boolean; canceled?: boolean; files?: string[] }>;
+  svcPickZip(): Promise<{ ok?: boolean; canceled?: boolean; path?: string }>;
+  svcImportFolder(dir: string, opts?: any): Promise<{ ok: boolean; model?: SvcModel; detected?: any; error?: string }>;
+  svcImportFiles(files: Record<string, string>, opts?: any): Promise<{ ok: boolean; model?: SvcModel; error?: string }>;
+  svcImportZip(p: string, opts?: any): Promise<{ ok: boolean; model?: SvcModel; error?: string }>;
+  svcRemove(id: string): Promise<{ ok: boolean; removedPhysical?: boolean; error?: string }>;
+  svcProbe(id: string): Promise<{ ok: boolean; model?: SvcModel; patched?: Record<string, any>; raw?: any; error?: string }>;
+  svcOpenCatalogPage(url: string): Promise<GeneralResult>;
   onCoverProgress(cb: (p: CoverProgress) => void): () => void;
 
   // DiffSinger 模块化集成（未启用模块时 status 返回 enabled=false，组件零下载）

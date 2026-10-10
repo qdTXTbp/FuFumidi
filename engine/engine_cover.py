@@ -1,22 +1,22 @@
 # -*- coding: utf-8 -*-
-"""翻唱工作流（一键）：一首歌 → 分离 → 扒谱 → 合成 → 混音 → 成品。
+"""翻唱工作流（一键）：一首歌 → 分离 → 变声 → 混音 → 成品。
 
-    python engine_cover.py all <歌曲> --outdir <输出目录> --voicebank <声库目录> [选项]
+    python engine_cover.py all <歌曲> --outdir <输出目录> --svc-model <模型 id> [选项]
 
 分工：
-  cover_notes.py  人声轨 → 带歌词的音符表（pyin + onset + 音节规则）
+  engine_svc.py   变声（导入的 SVC 模型把原唱人声换成目标音色）
   cover_mix.py    干声 + 伴奏 → 成品（原曲能量比配平 + 吐字 EQ + 后期链）
   本文件          串起来 + 进度协议（###PROG）+ 结果协议（###RESULT）
 
+★ 扒谱与歌词环节已整段删除：SVC 是「把原唱的人声换成另一个音色」，旋律、节奏、咬字
+  本来就来自原唱，不需要知道歌词也不需要音符表（cover_notes.py 仍在，调教/扒谱自己用）。
+★ 旧的 GPT-SoVITS 逐句参考重合成与「DiffSinger 声库接 RVC」两条通道已删除。
+
 子命令（便于分步调试 / 前端分步显示）：
-  analyze  只做「分离 + 扒谱」，产出 vocals/instrumental/notes.json
-  render   只做「音符 → 干声」（长曲自动分段，规避引擎在超多音符时的一次性渲染问题）
+  analyze  只做分离，产出 vocals/instrumental
+  convert  只做「原唱人声 → 目标音色干声」
   mix      只做「干声 + 伴奏 → 成品」
   all      全流程
-
-歌词来源（--lyrics）：
-  auto（默认）→ 同目录同名 .lrc → 音频内嵌 LRC 标签（FLAC/ID3）→ 都没有则哼哼模式（每个音符唱 "la"）
-  也可以 --lyrics 指定一个 .lrc/.txt 文件
 """
 import argparse
 import json
@@ -61,19 +61,19 @@ def _file_sig(path):
         return None
 
 
-def _vb_sig(voicebank):
-    """声库指纹：列出声库下所有 onnx 的 (相对路径, 大小, mtime)。
+def _model_sig(model_dir):
+    """模型指纹：模型目录下所有权重/index 的 (相对路径, 大小, mtime)。
 
-    ★ 换声库 / 重下模型 / 换了声码器都必须让渲染缓存失效，否则会拿旧嗓音的结果。
+    ★ 换模型 / 重下权重都必须让变声缓存失效，否则会拿旧音色的结果。
     """
-    if not voicebank or not os.path.isdir(voicebank):
+    if not model_dir or not os.path.isdir(model_dir):
         return None
     items = []
-    for root, _dirs, files in os.walk(voicebank):
+    for root, _dirs, files in os.walk(model_dir):
         for f in sorted(files):
-            if f.lower().endswith(('.onnx', '.ckpt', '.pth')):
+            if f.lower().endswith(('.pth', '.pt', '.index', '.ckpt', '.onnx')):
                 fp = os.path.join(root, f)
-                items.append(_file_sig(fp) + [os.path.relpath(fp, voicebank)])
+                items.append(_file_sig(fp) + [os.path.relpath(fp, model_dir)])
     items.sort()
     return _sig(items)
 
@@ -106,70 +106,6 @@ def save_state(outdir, obj):
     _write_meta(os.path.join(outdir, 'state.json'), obj)
 
 
-def _lrc_from_flac(path):
-    """FLAC Vorbis comment 里的 LYRICS/UNSYNCEDLYRICS 标签。"""
-    try:
-        with open(path, 'rb') as f:
-            if f.read(4) != b'fLaC':
-                return ''
-            while True:
-                head = f.read(4)
-                if len(head) < 4:
-                    return ''
-                last, btype = head[0] & 0x80, head[0] & 0x7f
-                size = int.from_bytes(head[1:4], 'big')
-                body = f.read(size)
-                if btype == 4:
-                    vlen = int.from_bytes(body[0:4], 'little')
-                    q = 4 + vlen
-                    count = int.from_bytes(body[q:q + 4], 'little')
-                    q += 4
-                    for _ in range(count):
-                        ln = int.from_bytes(body[q:q + 4], 'little')
-                        q += 4
-                        kv = body[q:q + ln].decode('utf-8', 'ignore')
-                        q += ln
-                        k, _, v = kv.partition('=')
-                        if k.upper() in ('LYRICS', 'UNSYNCEDLYRICS', 'LYRIC'):
-                            return v
-                if last:
-                    return ''
-    except OSError:
-        return ''
-
-
-def _lrc_from_id3(path):
-    """MP3 的 USLT 帧。"""
-    try:
-        from mutagen.id3 import ID3
-        tags = ID3(path)
-        for k in tags:
-            if k.startswith('USLT'):
-                return str(tags[k].text)
-    except Exception:
-        pass
-    return ''
-
-
-def find_lyrics(audio, explicit):
-    from cover_notes import parse_lrc, read_lyrics_file
-    if explicit and explicit != 'auto':
-        return read_lyrics_file(explicit), os.path.basename(explicit)
-    base = os.path.splitext(audio)[0]
-    for cand in (base + '.lrc', base + '.LRC'):
-        if os.path.isfile(cand):
-            return read_lyrics_file(cand), os.path.basename(cand)
-    raw = _lrc_from_flac(audio) or _lrc_from_id3(audio)
-    if raw:
-        timed = parse_lrc(raw)
-        if timed:
-            return timed, '音频内嵌歌词'
-        lines = [l.strip() for l in raw.splitlines() if l.strip()]
-        if lines:
-            return [(float(i) * 4.0, l) for i, l in enumerate(lines)], '音频内嵌歌词（无时间轴）'
-    return [], ''
-
-
 def default_sep_model():
     """默认分离模型：Models 里的 inst/vox duality v2（配置在 msst_configs）。"""
     root = os.environ.get('FUFUMIDI_MODELS_DIR') or ''
@@ -182,7 +118,7 @@ def default_sep_model():
 
 
 def cuda_free_gb():
-    """(可用?, 说明)：GPU 被别的进程占满时，不要让分离/渲染死在那儿（实测会静默退出）。"""
+    """(可用?, 说明)：GPU 被别的进程占满时，不要让分离/变声死在那儿（实测会静默退出）。"""
     try:
         import torch
         if not torch.cuda.is_available():
@@ -241,7 +177,7 @@ def do_separate(audio, outdir, model='', config='', arch='', use_tta=False, batc
             if line.startswith('###PROG'):
                 try:
                     v = json.loads(line[7:])
-                    emit_prog(2 + float(v.get('percent') or 0) * 0.13, '分离')
+                    emit_prog(2 + float(v.get('percent') or 0) * 0.16, '分离')
                 except Exception:     # noqa: BLE001
                     pass
             elif log and line.strip():
@@ -269,261 +205,90 @@ def do_separate(audio, outdir, model='', config='', arch='', use_tta=False, batc
     return voc, inst, device
 
 
-def do_notes(vocal_wav, outdir, lyrics, lang='zh', bpm=0.0, inst_wav='', log=print):
-    import numpy as np
-    import cover_notes as CN
-    if not bpm:
+def resolve_svc_model(model_id):
+    """模型 id → (模型目录, 清单)。
+
+    两种落点（见 main/svc.js）：
+      · <模型目录>/svc/<id>/model.json  —— zip / 逐个文件导入（文件在应用目录里）
+      · <模型目录>/svc/index.json       —— 文件夹导入（**引用式**，dir 指向用户自己的目录）
+    """
+    root = os.environ.get('FUFUMIDI_MODELS_DIR') or ''
+    base = os.path.join(root, 'svc')
+    d = os.path.join(base, str(model_id))
+    mf = os.path.join(d, 'model.json')
+    if os.path.isfile(mf):
         try:
-            import librosa
-            import soundfile as sf
-            y, sr = sf.read(inst_wav or vocal_wav, always_2d=True)
-            m = y.mean(axis=1).astype('float32')
-            if sr != 22050:
-                m = librosa.resample(m, orig_sr=sr, target_sr=22050)
-            tempo, _ = librosa.beat.beat_track(y=m, sr=22050, hop_length=512)
-            bpm = float(np.atleast_1d(tempo)[0]) or 120.0
-        except Exception:
-            bpm = 120.0
-    dict_path = ''
-    vb = os.environ.get('FUFUMIDI_COVER_VOICEBANK') or ''
-    if vb:
-        for cand in ('dictionary-zh.txt', os.path.join('dsdur', 'dictionary-zh.txt')):
-            p = os.path.join(vb, cand)
-            if os.path.isfile(p):
-                dict_path = p
-                break
-    if not lyrics:
-        notes, _ = CN.extract_notes(vocal_wav, [(0.0, 'la')], bpm, lang=lang, dict_path=dict_path, log=log)
-        notes = [dict(n, lyric='la') for n in notes]
-        log('没有歌词 → 哼哼模式（%d 个音符唱 "la"）' % len(notes))
-    else:
-        notes, _ = CN.extract_notes(vocal_wav, lyrics, bpm, lang=lang, dict_path=dict_path, log=log)
-    path = os.path.join(outdir, 'notes.json')
-    json.dump(notes, open(path, 'w', encoding='utf-8'), ensure_ascii=False)
-    log('音符表：%d 个音符 → %s（BPM %.2f）' % (len(notes), os.path.basename(path), bpm))
-    return notes, path, float(bpm)
+            with open(mf, encoding='utf-8') as f:
+                return d, json.load(f)
+        except (OSError, ValueError):
+            pass
+    idx = _read_meta(os.path.join(base, 'index.json'))
+    m = (idx.get('models') or {}).get(model_id)
+    if m and m.get('dir'):
+        return m['dir'], m
+    raise RuntimeError('找不到翻唱模型「%s」（已导入的模型在 %s）' % (model_id, base))
 
 
-def do_render(notes_path, outdir, voicebank, bpm, steps=32, device='cuda', chunk=140,
-              log=print, resume=True):
-    """音符 → 干声（长曲分段：引擎在音符极多时一次渲染容易长时间没有输出）。
+def do_svc(voc, outdir, model_id, device='auto', log=print, resume=True, params=None):
+    """原唱人声 → 目标音色干声（engine_svc.py convert）。
 
-    ★ 分段结果**可复用**：每段旁边写一份 `chunkN.meta.json`（声库指纹 + BPM + 步数 +
-      该段音符的 hash）。签名一致就跳过 —— 于是「上次渲染到一半断了」再跑一次不是从头再来，
-      改了歌词 / 换了声库才重算。
+    ★ 变声是整首最慢的一步（长歌几十分钟），所以同样写 `*.meta.json` 签名：
+      模型指纹 + 人声轨 + 全部参数都没变就直接用上次的干声。
     """
-    notes = json.load(open(notes_path, encoding='utf-8'))
-    if not notes:
-        raise RuntimeError('音符表为空')
-    rdir = os.path.join(outdir, 'render')
-    os.makedirs(rdir, exist_ok=True)
-    groups = [notes[i:i + chunk] for i in range(0, len(notes), chunk)]
-    base = {'voicebank': _vb_sig(voicebank), 'bpm': round(float(bpm), 4),
-            'steps': int(steps), 'chunk': int(chunk), 'total': len(notes)}
-    outs = []
-    reused = 0
-    log('渲染：%d 个音符分 %d 段（每段 <= %d）—— 引擎在音符极多时一次性渲染会卡住，分段可绕开'
-        % (len(notes), len(groups), chunk))
-    for i, g in enumerate(groups):
-        part = os.path.join(rdir, 'chunk%d.json' % i)
-        wav = os.path.join(rdir, 'chunk%d.wav' % i)
-        meta = os.path.join(rdir, 'chunk%d.meta.json' % i)
-        sig = _sig(dict(base, notes=g))
-        if resume and os.path.isfile(wav) and _read_meta(meta).get('sig') == sig:
-            reused += 1
-            log('  段 %d/%d 复用已有结果' % (i + 1, len(groups)))
-            outs.append(wav)
-            emit_prog(20 + 65.0 * (i + 1) / len(groups), '渲染',
-                      {'part': i + 1, 'parts': len(groups), 'reused': True})
-            continue
-        json.dump(g, open(part, 'w', encoding='utf-8'), ensure_ascii=False)
-        cmd = [sys.executable, os.path.join(_HERE, 'engine_diffsinger.py'), 'sing-render',
-               '--voicebank', voicebank, '--notes', '@' + part, '--bpm', str(bpm),
-               '--language', 'zh', '--steps', str(steps), '--depth', '1.0',
-               '--device', device, '--out', wav]
-        t0 = time.time()
-        p = subprocess.run(cmd, cwd=_HERE, capture_output=True, text=True,
-                           encoding='utf-8', errors='ignore')
-        if (p.returncode != 0 or not os.path.isfile(wav)) and device != 'cpu':
-            log('  段 %d 在 GPU 上失败 → 回退 CPU 重跑' % i)
-            cmd_cpu = [c if c != device else 'cpu' for c in cmd]
-            p = subprocess.run(cmd_cpu, cwd=_HERE, capture_output=True, text=True,
-                               encoding='utf-8', errors='ignore')
-        if p.returncode != 0 or not os.path.isfile(wav):
-            tail = (p.stderr or p.stdout or '')[-400:]
-            raise RuntimeError('第 %d 段渲染失败：%s' % (i, tail))
-        _write_meta(meta, {'sig': sig, 'notes': len(g), 'wav': _file_sig(wav)})
-        log('  段 %d/%d 完成 %.1fs' % (i + 1, len(groups), time.time() - t0))
-        emit_prog(20 + 65.0 * (i + 1) / len(groups), '渲染', {'part': i + 1, 'parts': len(groups)})
-        outs.append(wav)
-    if reused:
-        log('渲染：复用了 %d/%d 段已有结果' % (reused, len(groups)))
-    return outs
-
-
-def gsv_lines(notes, lyrics, bpm, gap=0.7, min_sec=0.5):
-    """音符表 + 歌词 → GPT-SoVITS 的**逐句区间**（秒）。
-
-    · 有歌词：按 LRC 行切，行内取**实际唱到的**音符跨度（不是一路顶到下一行的时间）
-    · 无歌词（哼哼模式）：按音符间的静音间隙切
-    · 文本用歌词原文；音符里的 continuation 音节不重复计入
-    """
-    beat = 60.0 / max(1e-6, float(bpm or 120.0))
-    spans = sorted((n['startBeat'] * beat, (n['startBeat'] + n['durBeat']) * beat) for n in notes)
-    out = []
-    if lyrics:
-        ts = sorted((float(t), str(x).strip()) for t, x in lyrics if str(x).strip())
-        for i, (t0, text) in enumerate(ts):
-            t_next = ts[i + 1][0] if i + 1 < len(ts) else None
-            sel = [(a, b) for a, b in spans
-                   if a >= t0 - 0.12 and (t_next is None or a < t_next - 0.12)]
-            if not sel:
-                continue
-            start = min(a for a, _ in sel)
-            end = max(b for _, b in sel)
-            if t_next is not None:
-                end = min(end, t_next - 0.06)
-            if end - start < min_sec:
-                end = start + min_sec
-            out.append({'index': len(out), 'start': round(start, 3), 'end': round(end, 3),
-                        'text': text, 'syllables': len(sel)})
-    else:
-        groups = []
-        for a, b in spans:
-            if groups and a - groups[-1][1] <= gap:
-                groups[-1][1] = max(groups[-1][1], b)
-                groups[-1][2] += 1
-            else:
-                groups.append([a, b, 1])
-        for a, b, k in groups:
-            out.append({'index': len(out), 'start': round(a, 3),
-                        'end': round(max(b, a + min_sec), 3), 'text': '', 'syllables': k})
-    return out
-
-
-def do_gsv(notes, lyrics, voc, outdir, name, voice, bpm, device='auto', gsv_root='',
-           gsv_python='', version='', align=False, log=print):
-    """用 GPT-SoVITS 音色唱（路线 A+：**逐句拿原唱当参考**重合成）。
-
-    ★ 推理必须在**有 torch + GPT-SoVITS 的解释器**里跑（应用自带的 python 没有），
-      所以这里起子进程跑 engine_gpt_sovits.py，而不是 import 它。
-    ★ 产出是一条**整长干声轨**（每句放在它在原曲里的位置上），混音阶段与 DiffSinger
-      的结果完全同构 —— 于是「分离 → 扒谱 → 合成 → 混音」这条工作流两条音色通道共用。
-    """
-    import gsv_env
-    lines = gsv_lines(notes, lyrics, bpm)
-    if not lines:
-        raise RuntimeError('没有可唱的行（歌词为空且音符表为空？）')
-    gdir = os.path.join(outdir, 'gsv')
-    os.makedirs(gdir, exist_ok=True)
-    lpath = os.path.join(gdir, 'lines.json')
-    with open(lpath, 'w', encoding='utf-8') as f:
-        json.dump(lines, f, ensure_ascii=False, indent=1)
-    dry = os.path.join(gdir, 'dry.wav')
-    py = gsv_env.find_python(gsv_python, gsv_root)
-    cmd = [py, os.path.join(_HERE, 'engine_gpt_sovits.py'), 'sing',
-           '--voice', voice, '--lines', '@' + lpath, '--vocals', voc,
-           '--outdir', gdir, '--dry-out', dry, '--device', device]
-    if version:
-        cmd += ['--version', version]
-    if align:
-        cmd.append('--align')
-    env = dict(os.environ)
-    # ★ GPT-SoVITS 解释器必须跑在**干净**的 Python 环境里：应用侧会把 PYTHONPATH 指向
-    #   GPU 增强包的 site-packages（cp311），被 conda 环境继承后 numpy 的 C 扩展就加载失败
-    #   —— 实测：界面点「开始翻唱」→ “Importing the numpy C-extensions failed”。
-    #   （main.js 的 engineEnv 对自带 python 也是同一套处理。）
-    for _k in [k for k in env if k.upper().startswith('PYTHON')]:
-        if _k.upper() not in ('PYTHONIOENCODING', 'PYTHONUTF8', 'PYTHONUNBUFFERED'):
-            env.pop(_k, None)
-    env.setdefault('USERNAME', 'fufumidi')
-    env.setdefault('PYTHONIOENCODING', 'utf-8')
-    env.setdefault('PYTHONUNBUFFERED', '1')
-    if gsv_root:
-        env['FUFUMIDI_GSV_ROOT'] = gsv_root
-    env['FUFUMIDI_GSV_PYTHON'] = py
-    log('GPT-SoVITS 音色：%s（%d 行）→ %s' % (voice, len(lines), dry))
-    log('  解释器：%s' % py)
-    wlog = os.path.join(gdir, 'worker.log')
-
-    def done_lines():
-        try:
-            return len([f for f in os.listdir(gdir)
-                        if f.startswith('line_') and f.endswith('.wav')])
-        except OSError:
-            return 0
-
-    t0 = time.time()
+    p = params or {}
+    model_dir, manifest = resolve_svc_model(model_id)
+    sdir = os.path.join(outdir, 'svc')
+    os.makedirs(sdir, exist_ok=True)
+    dry = os.path.join(sdir, 'dry.wav')
+    meta = os.path.join(sdir, 'dry.meta.json')
+    sig = _sig({'model': _model_sig(model_dir), 'voc': _file_sig(voc), 'params': p})
+    if resume and os.path.isfile(dry) and _read_meta(meta).get('sig') == sig:
+        log('变声：复用已有干声（模型与人声轨、参数都没变）')
+        emit_prog(60, '变声', {'reused': True})
+        return dry, {'reused': True, 'model': manifest.get('name') or model_id}
+    cmd = [sys.executable, os.path.join(_HERE, 'engine_svc.py'), 'convert', voc,
+           '--model', model_dir, '--out', dry,
+           '--transpose', str(int(p.get('transpose') or 0)),
+           '--f0-method', str(p.get('f0_method') or 'rmvpe'),
+           '--index-rate', str(float(p.get('index_rate') if p.get('index_rate') is not None else 0.3)),
+           '--filter-radius', str(int(p.get('filter_radius') or 3)),
+           '--rms-mix-rate', str(float(p.get('rms_mix_rate') if p.get('rms_mix_rate') is not None else 0.25)),
+           '--protect', str(float(p.get('protect') if p.get('protect') is not None else 0.33)),
+           '--chunk-sec', str(float(p.get('chunk_sec') or 60)),
+           '--device', device]
+    if p.get('auto_predict_f0'):
+        cmd.append('--auto-predict-f0')
+    log('变声：%s（%s）' % (manifest.get('name') or model_id, manifest.get('engine') or 'rvc'))
     res = {}
-    # ★ 逐句合成的每一步都落盘（line_NNN.wav + lines.meta.json 签名），所以**崩了就从断点续跑**。
-    #   实测踩过：跑到第 5 句时整个进程无声无息消失（没有 traceback、没有 ###RESULT，
-    #   系统事件里也没有崩溃记录）—— 有重试 + 续跑，这种「白跑半小时」才不会再来一次。
-    for attempt in range(1, 5):
-        before = done_lines()
-        with open(wlog, 'a', encoding='utf-8') as wf:
-            wf.write(chr(10) + '===== attempt %d @ %s =====' % (attempt, time.strftime('%H:%M:%S')) + chr(10))
-        res = {}
-        try:
-            p = subprocess.Popen(cmd, cwd=_HERE, stdout=subprocess.PIPE,
-                                 stderr=subprocess.STDOUT, text=True, encoding='utf-8',
-                                 errors='ignore', env=env)
-        except OSError as e:
-            raise RuntimeError('起不了 GPT-SoVITS 解释器（%s）：%s' % (py, e))
-        for line in p.stdout:
+    tail = []
+    proc = subprocess.Popen(cmd, cwd=_HERE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, encoding='utf-8', errors='ignore')
+    for line in proc.stdout:
+        if line.startswith('###PROG'):
             try:
-                with open(wlog, 'a', encoding='utf-8') as wf:
-                    wf.write(line)
-            except OSError:
+                v = json.loads(line[7:])
+                emit_prog(20 + float(v.get('percent') or 0) * 0.65, '变声',
+                          {'part': v.get('parts') and (v.get('part') or 1), 'parts': v.get('parts')})
+            except Exception:         # noqa: BLE001
                 pass
-            if line.startswith('###PROG'):
-                try:
-                    v = json.loads(line[7:])
-                    emit_prog(20 + float(v.get('percent') or 0) * 0.65, '合成',
-                              {'part': v.get('part'), 'parts': v.get('parts')})
-                except Exception:                 # noqa: BLE001
-                    pass
-            elif line.startswith('###RESULT'):
-                try:
-                    res = json.loads(line[9:])
-                except Exception:                 # noqa: BLE001
-                    pass
-            elif line.strip():
-                log('  ' + line.rstrip()[:200])
-        p.wait()
-        if res.get('ok') and os.path.isfile(dry):
-            break
-        why = str(res.get('error') or res.get('trace')
-                  or ('进程退出码 %s' % p.returncode))[:200]
-        now = done_lines()
-        if now <= before:
-            raise RuntimeError('GPT-SoVITS 合成失败（第 %d 次尝试，第 %d 句没有进展）：%s'
-                               % (attempt, now, why))
-        log('⚠ 合成中断（%s）→ 续跑：已完成 %d/%d 句，后面的会复用' % (why, now, len(lines)))
-        emit_prog(20 + 65.0 * now / max(1, len(lines)), '合成（续跑）')
-    else:
-        raise RuntimeError('GPT-SoVITS 连续 4 次中断，最后停在 %d/%d 句（详见 %s）'
-                           % (done_lines(), len(lines), wlog))
+        elif line.startswith('###RESULT'):
+            try:
+                res = json.loads(line[9:])
+            except Exception:         # noqa: BLE001
+                pass
+        elif line.strip():
+            tail.append(line.rstrip()[:200])
+            log('  ' + line.rstrip()[:200])
+    proc.wait()
+    if not (res.get('ok') and os.path.isfile(dry)):
+        why = str(res.get('error') or ('进程退出码 %s' % proc.returncode))
+        if tail:
+            why += '｜' + tail[-1]
+        raise RuntimeError('变声失败：%s' % why[:400])
+    _write_meta(meta, {'sig': sig, 'model': model_id, 'params': p, 'wav': _file_sig(dry)})
     for w in res.get('warnings') or []:
         log('  ⚠ ' + str(w))
-    log('合成完成 %.1fs（%s / %s，复用 %s 句）'
-        % (time.time() - t0, res.get('device'), res.get('version'), res.get('reused')))
     return dry, res
-
-
-def sung_regions(notes, bpm, gap=3.0):
-    beat = 60.0 / bpm
-    spans = sorted((n['startBeat'] * beat, (n['startBeat'] + n['durBeat']) * beat) for n in notes)
-    regions, cur = [], None
-    for a, b in spans:
-        if cur and a - cur[1] <= gap:
-            cur[1] = max(cur[1], b)
-        else:
-            if cur:
-                regions.append(tuple(cur))
-            cur = [a, b]
-    if cur:
-        regions.append(tuple(cur))
-    return regions
 
 
 def write_readme(outdir, name, info):
@@ -531,26 +296,24 @@ def write_readme(outdir, name, info):
     rows = [
         ('原曲', info.get('source', '')),
         ('时长', '%s 秒' % info.get('seconds', '')),
-        ('BPM', info.get('bpm', '')),
-        ('歌词来源', info.get('lyrics_from') or '（无，哼哼模式）'),
-        # ★ 两条音色通道：DiffSinger 走 --voicebank，GPT-SoVITS 走 --gsv-voice；
-        #   说明.md 里必须写清**这次到底是哪个音色**（否则两份成品分不出来）。
-        ('音色', info.get('singer') or info.get('voicebank', '')),
-        ('声库目录', info.get('voicebank', '') or '（GPT-SoVITS 音色）'),
-        ('音符数', info.get('notes', '')),
+        ('音色（模型）', info.get('singer', '')),
+        ('引擎', info.get('engine', '')),
+        ('变调', '%s 半音' % info.get('transpose', 0)),
+        ('f0 算法', info.get('f0_method', '')),
+        ('index 检索', info.get('index_rate', '')),
         ('原曲 人声/伴奏 能量比', info.get('orig_vocal_over_inst', '')),
         ('成品配平', '%s dB（其中清晰度 %s dB）' % (info.get('level_match_db', ''), info.get('clarity_boost_db', ''))),
-        ('辅音区 2.5-6k 占比', '合成 %s / 原唱 %s' % (info.get('share_syn', ''), info.get('share_orig', ''))),
+        ('辅音区 2.5-6k 占比', '变声后 %s / 原唱 %s' % (info.get('share_syn', ''), info.get('share_orig', ''))),
     ]
     txt = ['# %s · 翻唱工作流产出' % name, '', '| 项 | 值 |', '| --- | --- |']
     txt += ['| %s | %s |' % r for r in rows]
     txt += ['', '## 文件', '',
-            '- %s.wav —— 成品（合成人声 + 分离伴奏）' % name,
-            '- %s_干声.wav —— 合成人声（未混伴奏）' % name,
+            '- %s.wav —— 成品（变声人声 + 分离伴奏）' % name,
+            '- %s_干声.wav —— 变声后的人声（未混伴奏）' % name,
             '- sep/ —— 分离出的人声轨与伴奏轨',
-            '- notes.json —— 音符表（startBeat/durBeat/pitch/lyric）',
-            '- render/ —— 分段渲染的中间产物', '',
-            '> 由 FuFumidi 翻唱工作流自动生成。']
+            '- svc/ —— 变声的中间产物', '',
+            '> 由 FuFumidi 翻唱工作流自动生成。',
+            '> 模型为社区开源权重（CC-BY-NC-4.0）：禁止商用，须署名训练者。']
     open(p, 'w', encoding='utf-8').write(chr(10).join(txt))
     return p
 
@@ -558,18 +321,13 @@ def write_readme(outdir, name, info):
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest='cmd', required=True)
-    for nm in ('analyze', 'render', 'mix', 'all'):
+    for nm in ('analyze', 'convert', 'mix', 'all'):
         s = sub.add_parser(nm)
         s.add_argument('audio', nargs='?' if nm != 'all' else None)
         s.add_argument('--outdir', required=True)
-        s.add_argument('--voicebank', default='')
+        s.add_argument('--svc-model', default='', help='导入的翻唱模型 id（见 <模型目录>/svc）')
         s.add_argument('--name', default='')
-        s.add_argument('--lyrics', default='auto')
-        s.add_argument('--lang', default='zh')
-        s.add_argument('--bpm', type=float, default=0.0)
-        s.add_argument('--steps', type=int, default=32)
         s.add_argument('--device', default='cuda')
-        s.add_argument('--chunk', type=int, default=140)
         s.add_argument('--sep-model', default='')
         s.add_argument('--sep-config', default='')
         s.add_argument('--sep-arch', default='')
@@ -578,25 +336,24 @@ def main():
         s.add_argument('--vocals', default='', help='已分离好的人声轨（给了就跳过分离）')
         s.add_argument('--instrumental', default='', help='已分离好的伴奏轨（给了就跳过分离）')
         s.add_argument('--no-resume', dest='resume', action='store_false',
-                       help='不复用上次的中间结果（分离/扒谱/渲染全部重算）')
+                       help='不复用上次的中间结果（分离 / 变声全部重算）')
         s.set_defaults(resume=True)
-        # ---- GPT-SoVITS 音色通道（路线 A+：逐句拿原唱当参考重合成）
-        s.add_argument('--gsv-voice', default='',
-                       help='用 GPT-SoVITS 音色唱（音色 id 或目录）；给了就不走 DiffSinger')
-        s.add_argument('--gsv-root', default='', help='GPT-SoVITS 运行时目录')
-        s.add_argument('--gsv-python', default='', help='跑 GPT-SoVITS 的解释器')
-        s.add_argument('--gsv-version', default='', help='v1/v2/v3/v4…（默认按音色探测）')
-        s.add_argument('--gsv-align', dest='gsv_align', action='store_true',
-                       help='GPT-SoVITS 通道做 WORLD F0 校正（默认关：它是电流声的主要来源）')
-        s.set_defaults(gsv_align=False)
+        # ---- SVC 参数（界面「常用 + 高级」直接映射过来，界面不自己实现 DSP）
+        s.add_argument('--transpose', type=int, default=0)
+        s.add_argument('--f0-method', default='rmvpe')
+        s.add_argument('--index-rate', type=float, default=0.3)
+        s.add_argument('--filter-radius', type=int, default=3)
+        s.add_argument('--rms-mix-rate', type=float, default=0.25)
+        s.add_argument('--protect', type=float, default=0.33)
+        s.add_argument('--chunk-sec', type=float, default=60)
+        s.add_argument('--auto-predict-f0', dest='auto_predict_f0', action='store_true')
+        s.set_defaults(auto_predict_f0=False)
     a = ap.parse_args()
     outdir = os.path.abspath(a.outdir)
     os.makedirs(outdir, exist_ok=True)
     name = a.name or os.path.splitext(os.path.basename(a.audio or 'cover'))[0]
-    info = {'source': os.path.basename(a.audio or ''), 'voicebank': os.path.basename(a.voicebank or '')}
+    info = {'source': os.path.basename(a.audio or '')}
     t_all = time.time()
-    if a.voicebank:
-        os.environ['FUFUMIDI_COVER_VOICEBANK'] = a.voicebank
     log_ = print
     try:
         sep_dir = os.path.join(outdir, 'sep')
@@ -624,85 +381,43 @@ def main():
             info['separate'] = '已分离（%s）' % used_dev
         elif os.path.isfile(voc) and os.path.isfile(inst):
             info['separate'] = '复用本次输出目录里已有的分离结果'
-        if a.cmd in ('analyze', 'all'):
-            lyrics, src_label = find_lyrics(a.audio or os.path.join(outdir, 'src'), a.lyrics)
-            info['lyrics_from'] = src_label
-            notes_path = os.path.join(outdir, 'notes.json')
-            notes_meta = os.path.join(outdir, 'notes.meta.json')
-            # ★ 扒谱（pyin）在一首完整歌上要几十秒；人声轨、歌词、语言、BPM 都没变就没必要重算
-            n_sig = _sig({'voc': _file_sig(voc), 'lyrics': lyrics, 'lang': a.lang,
-                          'bpm': float(a.bpm), 'voicebank': os.path.basename(a.voicebank or '')})
-            prev_notes = _read_meta(notes_meta)
-            if a.resume and os.path.isfile(notes_path) and prev_notes.get('sig') == n_sig:
-                notes = json.load(open(notes_path, encoding='utf-8'))
-                bpm = float(prev_notes.get('bpm') or a.bpm or 120.0)
-                info['notes_from'] = '复用已有音符表（人声轨与歌词没变）'
-                log_('复用已有音符表：%d 个音符（BPM %.2f）' % (len(notes), bpm))
-            else:
-                emit_prog(16, '扒谱')
-                notes, notes_path, bpm = do_notes(voc, outdir, lyrics, lang=a.lang, bpm=a.bpm, inst_wav=inst)
-                _write_meta(notes_meta, {'sig': n_sig, 'bpm': round(float(bpm), 4),
-                                         'notes': len(notes), 'from': src_label})
-            info.update({'notes': len(notes), 'bpm': round(bpm, 2)})
-            save_state(outdir, {'stage': 'analyze', 'notes': len(notes), 'bpm': round(bpm, 4),
-                                'info': info, 'vocals': voc, 'instrumental': inst})
-            if a.cmd == 'analyze':
-                emit_result({'ok': True, 'stage': 'analyze', 'notes': notes_path,
-                             'vocals': voc, 'instrumental': inst, 'note_count': len(notes), 'info': info})
-                return 0
-        else:
-            notes_path = os.path.join(outdir, 'notes.json')
-            notes = json.load(open(notes_path, encoding='utf-8'))
-            bpm = a.bpm or 117.0
-        if a.cmd in ('render', 'all'):
-            if not a.voicebank and not a.gsv_voice:
-                emit_result({'ok': False,
-                             'error': '缺少声库目录（--voicebank）或 GPT-SoVITS 音色（--gsv-voice）'})
+        if a.cmd == 'analyze':
+            emit_result({'ok': True, 'stage': 'analyze', 'vocals': voc, 'instrumental': inst, 'info': info})
+            return 0
+
+        params = {'transpose': a.transpose, 'f0_method': a.f0_method, 'index_rate': a.index_rate,
+                  'filter_radius': a.filter_radius, 'rms_mix_rate': a.rms_mix_rate,
+                  'protect': a.protect, 'chunk_sec': a.chunk_sec, 'auto_predict_f0': a.auto_predict_f0}
+        if a.cmd in ('convert', 'all'):
+            if not a.svc_model:
+                emit_result({'ok': False, 'error': '缺少翻唱模型（--svc-model）：先在模型管理里导入一个'})
                 return 1
-            emit_prog(20, '合成')
-            if a.gsv_voice:
-                # ★ GPT-SoVITS 音色通道：逐句拿原唱那一句当参考重合成（路线 A+）
-                lyr = lyrics if a.cmd == 'all' else find_lyrics(
-                    a.audio or os.path.join(outdir, 'src'), a.lyrics)[0]
-                dry, gres = do_gsv(notes, lyr, voc, outdir, name, a.gsv_voice, bpm,
-                                   device=a.device, gsv_root=a.gsv_root,
-                                   gsv_python=a.gsv_python, version=a.gsv_version,
-                                   align=a.gsv_align)
-                drys = [dry]
-                info.update({'singer': 'GPT-SoVITS/' + os.path.basename(a.gsv_voice),
-                             'gsv_lines': gres.get('count'), 'gsv_reused': gres.get('reused'),
-                             'gsv_device': gres.get('device'), 'gsv_version': gres.get('version')})
-                gpath = os.path.join(outdir, 'gsv', 'gsv_lines.json')
-                try:
-                    with open(gpath, 'w', encoding='utf-8') as f:
-                        json.dump({'lines': gres.get('lines') or [],
-                                   'warnings': gres.get('warnings') or []},
-                                  f, ensure_ascii=False, indent=1)
-                except OSError:
-                    pass
-            else:
-                drys = do_render(notes_path, outdir, a.voicebank, bpm, a.steps, a.device, a.chunk,
-                                 resume=a.resume)
-                info['singer'] = 'DiffSinger/' + os.path.basename(a.voicebank)
-            save_state(outdir, {'stage': 'render', 'notes': len(notes), 'bpm': round(bpm, 4),
-                                'dry': drys, 'info': info})
-            if a.cmd == 'render':
-                emit_result({'ok': True, 'stage': 'render', 'dry': drys})
+            emit_prog(20, '变声')
+            dry, sres = do_svc(voc, outdir, a.svc_model, device=a.device, log=log_,
+                               resume=a.resume, params=params)
+            _model_dir, manifest = resolve_svc_model(a.svc_model)
+            info.update({'singer': manifest.get('name') or a.svc_model,
+                         'engine': manifest.get('engine') or 'rvc',
+                         'transpose': a.transpose, 'f0_method': a.f0_method,
+                         'index_rate': a.index_rate, 'svc_reused': bool(sres.get('reused'))})
+            save_state(outdir, {'stage': 'convert', 'dry': dry, 'info': info})
+            if a.cmd == 'convert':
+                emit_result({'ok': True, 'stage': 'convert', 'dry': dry, 'info': info})
                 return 0
         else:
-            # mix：优先用 GPT-SoVITS 通道的整长干声，其次才是 DiffSinger 的分段结果
-            gdry = os.path.join(outdir, 'gsv', 'dry.wav')
-            rdir = os.path.join(outdir, 'render')
-            if os.path.isfile(gdry):
-                drys = [gdry]
-                info['singer'] = info.get('singer') or 'GPT-SoVITS'
-            else:
-                drys = sorted(os.path.join(rdir, f) for f in os.listdir(rdir)
-                              if f.startswith('chunk') and f.endswith('.wav'))
+            dry = os.path.join(outdir, 'svc', 'dry.wav')
+            if not os.path.isfile(dry):
+                emit_result({'ok': False, 'error': '没有变声结果：先跑 convert（或 all）'})
+                return 1
+
         emit_prog(88, '混音')
         out_wav = os.path.join(outdir, name + '.wav')
+        import soundfile as sf
         import cover_mix as CM
-        stats = CM.mix_song(drys, inst, voc, out_wav, sung_regions(notes, bpm),
+        seconds = float(sf.info(dry).duration or 0)
+        # ★ 整轨变声：整条干声都是「演唱区」（没有音符表，不能按句开窗）——
+        #   混音里的句间静音闸因此等效关闭，配平按整轨能量算。
+        stats = CM.mix_song([dry], inst, voc, out_wav, [(0.0, seconds)],
                             vocal_boost_db=a.clarity_db)
         try:
             so, ss = CM.band_shares(voc), CM.band_shares(stats['dry'])
@@ -713,11 +428,11 @@ def main():
         info.update({'seconds': stats['seconds'], 'orig_vocal_over_inst': stats['orig_vocal_over_inst'],
                      'level_match_db': stats['level_match_db'], 'clarity_boost_db': stats['clarity_boost_db']})
         readme = write_readme(outdir, name, info)
-        save_state(outdir, {'stage': 'done', 'notes': len(notes), 'bpm': bpm, 'info': info,
-                            'out': out_wav, 'dry': stats['dry'], 'readme': readme})
+        save_state(outdir, {'stage': 'done', 'info': info, 'out': out_wav,
+                            'dry': stats['dry'], 'readme': readme})
         emit_prog(100, '完成')
         emit_result({'ok': True, 'stage': 'all', 'out': out_wav, 'dry': stats['dry'], 'readme': readme,
-                     'notes': len(notes), 'elapsed_s': round(time.time() - t_all, 1), 'info': info})
+                     'elapsed_s': round(time.time() - t_all, 1), 'info': info})
         return 0
     except Exception as e:
         emit_result({'ok': False, 'error': str(e)})
