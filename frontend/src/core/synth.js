@@ -75,6 +75,10 @@ function voiceEnv(ctx, time, out, o) {
   const g = ctx.createGain();
   // Web Audio 的 AudioParam 时间必须非负（高速跳转/快速变速时可能算出微小的负值）
   time = Math.max(0, time);
+  // ★ 终点必须是**有限**值：NaN/undefined 会让后面两条 ramp 整段抛错 ——
+  //   包络停在 sustain 永不释放，听起来就是「音符结束了还在持续发声」。
+  //   （调用方已尽量兜底，这里是最后一道：宁可当成没有终点，也不要抛错。）
+  if (end != null && !Number.isFinite(end)) end = null;
   const aT = time + a, dT = aT + d;
   g.gain.setValueAtTime(0.0001, time);
   g.gain.linearRampToValueAtTime(peak, aT);
@@ -107,6 +111,12 @@ export function playVoice(ctx, time, midi, vel, preset, out, endTime, live) {
   const v = clamp(vel / 127, 0, 1);
   const peak = 0.11 + v * v * 0.92;
   const freq = midiFreq(midi);
+  // ★ 时值兜底（真正的根因）：note 的时值字段缺失/为 NaN 时，
+  //   tStop = NaN → `o.stop(NaN)` 抛错被 try 吞掉、voiceEnv 的释放段也整段抛错，
+  //   于是振荡器**永远不会停**、包络永远停在 sustain —— 用户听到的就是
+  //   「音符结束了还在持续发声」。这里统一成「至少 20ms、最多 10 分钟」的有限时值。
+  if (!Number.isFinite(endTime)) endTime = time + 0.6;
+  endTime = Math.min(Math.max(endTime, time + 0.02), time + 600);
   const tStop = Math.max(endTime, time + 0.06) + (preset === 'drum' ? 0.32 : 0.2);
   // tStart 记录该节点的预定发声时刻：pruneLive 要靠它区分「已开始发声」与「还排在窗口里」。
   // 本函数内所有节点都以同一个（已钳制的）time 启动，所以这里直接记 time 就是准的。
@@ -850,6 +860,10 @@ export class Synth {
     this._trimThreshold = Math.max(3000, Math.floor(this.activeNotes.length * 1.25));
   }
   noteOn(time, note, endTime) {
+    // ★ 入口统一兜底时值：undefined/NaN 的 endTime 会让 SF2 的 off 定时器变成
+    //   setTimeout(fn, NaN)（立刻触发或永不触发都是错的），内置合成器那边更糟 ——
+    //   振荡器永不停止（见 playVoice 的注释）。这里先钳成有限值。
+    if (!Number.isFinite(endTime)) endTime = (Number.isFinite(time) ? time : this.ctx.currentTime) + 0.6;
     this.ensure(note.trk + 1);
     this._trimActive();
     if (this.sf2Ready && this.sf2) {
@@ -944,7 +958,8 @@ export class Synth {
     let w = 0;
     for (let i = 0; i < live.length; i++) {
       const x = live[i];
-      if (x.tStop <= t) { try { x.o.stop(); } catch (e) {} continue; }
+      // ★ 非有限 tStop（NaN/Infinity）永远不满足 <= t，会一直赖在 live 里且永不 stop
+      if (!Number.isFinite(x.tStop) || x.tStop <= t) { try { x.o.stop(); } catch (e) {} continue; }
       live[w++] = x;
     }
     if (w !== live.length) live.length = w;
@@ -999,7 +1014,11 @@ export class Synth {
   }
   allStop() {
     const t = this.ctx.currentTime;
-    for (const x of this.live) { if (x.tStop > t) { try { x.o.stop(); } catch (e) {} } }
+    // ★ 非有限 tStop 的节点 `x.tStop > t` 恒为真（NaN 比较永远 false → 这里反而漏掉），
+    //   所以显式判断：只要不是「已经过去的有限时刻」，一律停掉。
+    for (const x of this.live) {
+      if (!Number.isFinite(x.tStop) || x.tStop > t) { try { x.o.stop(); } catch (e) {} }
+    }
     // 取消尚未触发的 SF2 note-on（跳转/暂停/停止时，避免 antedated 音符稍后误发声）
     for (const tm of this._sf2Pending) { try { clearTimeout(tm); } catch (e) {} }
     this._sf2Pending = [];
