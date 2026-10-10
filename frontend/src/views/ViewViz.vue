@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue';
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue';
 import { useAppStore } from '../stores/app';
 import { useVizBgStore } from '../stores/vizbg';
 import { getSynth, ensureAudio, getPlayer } from '../audio.js';
@@ -35,6 +35,21 @@ function pickBgImage() { void vizBg.pickImage(); }
 onMounted(() => { void vizBg.init(); });
 // 沉浸模式下仪表盘那三张卡片没有意义，直接按瀑布流布局铺满
 const isWaterfall = computed(() => mode.value === 'waterfall' || immersive.value);
+
+/* 缓存失效就重新查一次：`isConnected === false` 说明这个节点已被 v-if 移除/重建。
+   （只查已缓存的那一个 id；画布不存在时返回 null，调用方负责判空。） */
+function pickCanvas(id, cached) {
+  if (cached && cached.isConnected) return cached;
+  return document.getElementById(id) || null;
+}
+function grabCanvases() {
+  cvs.roll = pickCanvas('vizRoll', null);
+  cvs.spec = pickCanvas('vizSpectrum', null);
+  cvs.scope = pickCanvas('vizScope', null);
+  cvs.chord = pickCanvas('vizChord', null);
+}
+// 切换「仪表盘 ↔ 音符瀑布」会重建节点：等 DOM 更新完再抓一次；tick 里另有兜底
+watch(isWaterfall, () => { nextTick(() => { try { grabCanvases(); } catch (e) {} }); });
 
 function cssVar(name, fb) {
   try {
@@ -194,10 +209,19 @@ function tick(ts) {
   rollState.energy = smoothEnergy(rollState.energy, readEnergy(syn));
   // 诊断钩子：CDP / 控制台读取当前音乐能量（只读用途，与 __fufumidiActivePlayer 同类）
   if (typeof window !== 'undefined') window.__fufumidiVizEnergy = rollState.energy;
-  if (cvs.spec.clientWidth) drawSpectrum(cvs.spec, syn);
-  if (cvs.scope.clientWidth) drawScope(cvs.scope, syn);
-  if (cvs.chord.clientWidth) drawChord(cvs.chord, syn);
-  if (cvs.roll.clientWidth) {
+  // ★ 画布引用必须**每次绘制前校验**：三块卡片画布位于 `v-if="!isWaterfall"` 内，
+  //   而 `cvs` 原来只在 onMounted 取一次 —— 只要挂载时不是仪表盘模式（上次用的音符瀑布 /
+  //   沉浸态），引用就是 null 且永远为 null；切回仪表盘时 Vue 会**重建 canvas 节点**，
+  //   旧引用随即失效。此前直接读 `cvs.spec.clientWidth` 会抛 TypeError，而它在 tick 里、
+  //   raf 已排好下一帧 ⇒ 每帧抛一次，连后面的音符瀑布都不画（用户报的「三块面板都不显示」）。
+  cvs.roll = pickCanvas('vizRoll', cvs.roll);
+  cvs.spec = pickCanvas('vizSpectrum', cvs.spec);
+  cvs.scope = pickCanvas('vizScope', cvs.scope);
+  cvs.chord = pickCanvas('vizChord', cvs.chord);
+  if (cvs.spec && cvs.spec.clientWidth) drawSpectrum(cvs.spec, syn);
+  if (cvs.scope && cvs.scope.clientWidth) drawScope(cvs.scope, syn);
+  if (cvs.chord && cvs.chord.clientWidth) drawChord(cvs.chord, syn);
+  if (cvs.roll && cvs.roll.clientWidth) {
     const { ctx, w, h } = clearCanvas(cvs.roll);
     drawRoll(ctx, w, h, syn, song, player);
   }
@@ -281,19 +305,14 @@ watch([wfZoom, colorScheme, mode], savePrefs);
 onMounted(() => {
   loadPrefs();
   try { ensureAudio(); } catch (e) { /* 不支持 Web Audio 时仅渲染瀑布 */ }
-  cvs = {
-    roll: document.getElementById('vizRoll'),
-    spec: document.getElementById('vizSpectrum'),
-    scope: document.getElementById('vizScope'),
-    chord: document.getElementById('vizChord'),
-  };
+  grabCanvases();
   window.addEventListener('keydown', onKey);
   window.addEventListener('mousemove', onPointerMove);
   raf = requestAnimationFrame(tick);
 });
 // KeepAlive 保活期间停掉循环：频谱/瀑布每帧都要算 FFT 与大量绘制，
 // 离开本页后继续跑会明显拖慢整个应用
-onActivated(() => { if (!raf) raf = requestAnimationFrame(tick); });
+onActivated(() => { grabCanvases(); if (!raf) raf = requestAnimationFrame(tick); });
 onDeactivated(() => { if (raf) { cancelAnimationFrame(raf); raf = null; } setImmersive(false); });
 onBeforeUnmount(() => {
   if (raf) cancelAnimationFrame(raf);
