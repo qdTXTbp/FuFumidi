@@ -474,6 +474,13 @@ def main(argv=None):
                         '"pitch":60,"lyric":"啊"}]；整曲建议 @<临时 json 文件>，'
                         '避免命令行超长')
     r.add_argument("--bpm", type=float, default=120.0, help="速度（BPM，拍→秒换算）")
+    # ★ 语言/采样参数：前端一直在发（singer.ts 的 params），但 render 这条命令以前不认，
+    #   于是多语声库永远按 zh 走、depth/steps 也被丢掉。合并时这三行被吃掉过一次，
+    #   tests/test_sing_regression_fixes.py 就是钉这个的（CLI 必须认这三个参数）。
+    r.add_argument("--language", default="zh",
+                   help="歌词语言（zh/ja/ko/en…，对应 dsdict-<lang>.yaml）")
+    r.add_argument("--depth", type=float, default=None, help="采样深度（默认用引擎默认值）")
+    r.add_argument("--steps", type=int, default=None, help="采样步数（默认用引擎默认值）")
     r.add_argument("--tempo-map", default=None,
                    help="多点变速 JSON `[{beat,bpm}]`（拍单位），或 @文件路径；给了就覆盖单点 bpm")
     r.add_argument("--vocoder", default=None,

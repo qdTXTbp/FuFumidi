@@ -28,6 +28,8 @@ export function createHistory({ snapshot, restore, limit = 50 } = {}) {
       if (undoStack.length > limit) undoStack.shift();
       redoStack = [];
     },
+    /** 丢掉最后一次 push（交互被取消时用：不留「按一次没反应」的空步，也不产生 redo 分支） */
+    drop() { undoStack.pop(); },
     undo() {
       if (!undoStack.length) return false;
       redoStack.push(snapshot());
