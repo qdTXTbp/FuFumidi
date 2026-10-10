@@ -59,7 +59,10 @@ function cssVar(name, fb) {
 }
 
 let raf = null;
-let cvs = null; // { roll, spec, scope, chord }
+// ★ 必须是**对象**而不是 null：grabCanvases() 是给字段赋值（cvs.roll = …），
+//   声明成 null 会在 onMounted 里抛 TypeError，而 `raf = requestAnimationFrame(tick)`
+//   就在它后面 —— 循环永远不启动，仪表盘与瀑布流**一起**全白（用户实测就是这个）。
+let cvs = { roll: null, spec: null, scope: null, chord: null };
 let spec = [];
 // 帧间状态交给 core/viz.js 自己按需补齐字段（块、粒子、能量包络都在里面）
 const rollState = {};
@@ -121,6 +124,20 @@ function drawScope(cv, syn) {
   ctx2d.stroke();
   ctx2d.strokeStyle = cssVar('--hairline', 'rgba(10,10,10,0.08)');
   ctx2d.beginPath(); ctx2d.moveTo(0, h / 2); ctx2d.lineTo(w, h / 2); ctx2d.stroke();
+}
+
+/* 没有音频引擎（syn 还没建起来 / AudioContext 被挂起）时的占位画面。
+   ★ 为什么不干脆什么都不画：那看起来就是「功能坏了」（用户截图里四个白框）。
+   这里画上「播放时显示…」，既说明组件是活的，也告诉用户它需要播放才有数据。 */
+function drawIdle(cv, text) {
+  const { ctx, w, h } = clearCanvas(cv);
+  ctx.fillStyle = cssVar('--canvas', '#ffffff');
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = cssVar('--stone', 'rgba(10,10,10,.55)');
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '11px "Microsoft YaHei", "Segoe UI", sans-serif';
+  ctx.fillText(text, w / 2, h / 2);
 }
 
 function drawChord(cv, syn) {
@@ -197,6 +214,7 @@ function readEnergy(syn) {
 // 高刷屏 rAF 可达 300fps：频谱/瀑布限流到 ~60fps（视觉无差别，省 5 倍 FFT 与绘制）
 const MIN_FRAME_MS = 15;
 let lastPaint = 0;
+let lastAudioTry = 0;   // 音频引擎未就绪时的重试节流
 function tick(ts) {
   raf = requestAnimationFrame(tick);
   const now = ts || performance.now();
@@ -204,11 +222,25 @@ function tick(ts) {
   lastPaint = now;
   const syn = getSynth();
   const song = currentSong.value && currentSong.value.song;
-  if (!syn || !song) return;
   const player = getPlayer();
-  rollState.energy = smoothEnergy(rollState.energy, readEnergy(syn));
-  // 诊断钩子：CDP / 控制台读取当前音乐能量（只读用途，与 __fufumidiActivePlayer 同类）
-  if (typeof window !== 'undefined') window.__fufumidiVizEnergy = rollState.energy;
+  // ★ 这里**不能**再 `if (!syn || !song) return;`：频谱 / 示波器 / 实时和弦三块只需要
+  //   AnalyserNode（syn），跟有没有 MIDI 谱面（song）无关。以前这一行把三块一起挡掉了 ——
+  //   纯音频曲目、或刚启动还没解析谱面时，三块面板永远空白，连 drawChord 里那句
+  //   「播放时显示实时和弦」的占位都不会画（用户截图里四个框全空就是这个）。
+  //   音符瀑布（roll）才真正需要 song/pitches，它单独判。
+  if (!syn) {
+    // 音频引擎还没就绪：至少把三块面板画成占位，并**周期性重试** ensureAudio
+    // （首次挂在启动早期、或 AudioContext 被浏览器挂起时都会走到这里）。
+    cvs.roll = pickCanvas('vizRoll', cvs.roll);
+    cvs.spec = pickCanvas('vizSpectrum', cvs.spec);
+    cvs.scope = pickCanvas('vizScope', cvs.scope);
+    cvs.chord = pickCanvas('vizChord', cvs.chord);
+    if (cvs.spec && cvs.spec.clientWidth) drawIdle(cvs.spec, t('播放时显示频谱'));
+    if (cvs.scope && cvs.scope.clientWidth) drawIdle(cvs.scope, t('播放时显示波形'));
+    if (cvs.chord && cvs.chord.clientWidth) drawIdle(cvs.chord, t('播放时显示实时和弦'));
+    if (now - lastAudioTry > 2000) { lastAudioTry = now; try { ensureAudio(); } catch (e) {} }
+    return;
+  }
   // ★ 画布引用必须**每次绘制前校验**：三块卡片画布位于 `v-if="!isWaterfall"` 内，
   //   而 `cvs` 原来只在 onMounted 取一次 —— 只要挂载时不是仪表盘模式（上次用的音符瀑布 /
   //   沉浸态），引用就是 null 且永远为 null；切回仪表盘时 Vue 会**重建 canvas 节点**，
@@ -218,10 +250,14 @@ function tick(ts) {
   cvs.spec = pickCanvas('vizSpectrum', cvs.spec);
   cvs.scope = pickCanvas('vizScope', cvs.scope);
   cvs.chord = pickCanvas('vizChord', cvs.chord);
+  rollState.energy = smoothEnergy(rollState.energy, readEnergy(syn));
+  // 诊断钩子：CDP / 控制台读取当前音乐能量（只读用途，与 __fufumidiActivePlayer 同类）
+  if (typeof window !== 'undefined') window.__fufumidiVizEnergy = rollState.energy;
   if (cvs.spec && cvs.spec.clientWidth) drawSpectrum(cvs.spec, syn);
   if (cvs.scope && cvs.scope.clientWidth) drawScope(cvs.scope, syn);
   if (cvs.chord && cvs.chord.clientWidth) drawChord(cvs.chord, syn);
-  if (cvs.roll && cvs.roll.clientWidth) {
+  // 音符瀑布需要谱面数据；没有就跳过这一块（三块小面板不受影响）
+  if (cvs.roll && cvs.roll.clientWidth && song) {
     const { ctx, w, h } = clearCanvas(cvs.roll);
     drawRoll(ctx, w, h, syn, song, player);
   }

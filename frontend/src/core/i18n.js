@@ -15,6 +15,8 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  '播放时显示频谱': 'Spectrum appears during playback',
+  '播放时显示波形': 'Waveform appears during playback',
   "多音字：": "Heteronyms: ",
   "（其中 ": " (",
   " 个多音字可用下面的候选改）": " heteronyms can be changed below)",
