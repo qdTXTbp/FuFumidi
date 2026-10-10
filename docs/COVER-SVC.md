@@ -73,7 +73,7 @@ python engine_cover.py all 歌曲.flac --outdir 输出目录 --svc-model <模型
 ```json
 { "id": "rvc-nene", "name": "ねね", "engine": "rvc", "version": "v2", "sr": 40000,
   "dir": "D:/…/下载/ねね", "files": { "model": "nene.pth", "index": "added_IVF….index" },
-  "defaults": { "transpose": 0, "indexRate": 0.3, "filterRadius": 3, "rmsMixRate": 0.25,
+  "defaults": { "transpose": 0, "indexRate": 0.3, "rmsMixRate": 0.25,
                 "protect": 0.33, "f0Method": "rmvpe", "chunkSec": 60 },
   "source": "folder", "lang": "日语", "work": "原神", "importedAt": "…" }
 ```
@@ -89,25 +89,32 @@ python engine_cover.py all 歌曲.flac --outdir 输出目录 --svc-model <模型
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `filterRadius` | 3 | 中值滤波半径（≥3 才启用 index 检索） |
 | `rmsMixRate` | 0.25 | 包络混入（1 = 完全用原唱包络） |
 | `protect` | 0.33 | 保护清辅音/气声（0.5 最保险，低了电音、高了哑） |
 | `chunkSec` | 60 | 分块秒数（长歌分块转换，防显存爆） |
 | `autoPredictF0` | false | 自动预测 f0 曲线（变调时更稳） |
 
+★ **上游没有的参数就不给旋钮**：老版 RVC 的 `filterRadius`（中值滤波半径）在当前上游
+`infer/vc/pipeline.py` 里已经不存在，所以界面/CLI/清单里都**没有**这一项 ——
+留一个点了没反应的参数比不留更糟（`tests/test_svc_rvc_vendor.py` 会盯着上游，
+哪天它回来了我们再补）。
+
 ## 运行环境：新增 `kind=svc` 包
 
-RVC 推理要 torch + faiss + contentvec/hubert 编码器 + rmvpe 权重 + pyworld。
+RVC 推理要 torch + transformers（HuBERT）+ faiss + librosa + scipy + soundfile（+ 选 pm 时的 parselmouth）。
 这些**不塞进本体**，做成第四种包类型（`main/gpu.js`：`GPU_KINDS` 加 `svc`，`KIND_PY.svc='3.11'`，
 `KIND_LABEL.svc='SVC 推理'`），用户在「加速包」页按需安装：
 
-- 包内 `site-packages/` 装 torch 系 + faiss + pyworld；另带 `models/`（contentvec、rmvpe）——
+- 包内 `site-packages/` 装上面那些 Python 依赖；另带 `assets/`（**公共编码器**）：
+  `assets/hubert_base/`（transformers 版 HuBERT/ContentVec）与 `assets/rmvpe.pt`；
   角色权重是用户导入的，**公共编码器随包走**；
-- 模型目录里若自带 `encoder/*.pt` / `rmvpe.pt`，优先用自带的（有的模型绑特定编码器）。
+- 装到别处时用 `FUFUMIDI_SVC_HUBERT` / `FUFUMIDI_SVC_RMVPE` 指过去
+  （上游把路径写死在 `<vendor>/assets/…`，我们**只改指向、不改上游代码**）；
+- 模型目录里若自带 `assets/hubert_base/` 或 `rmvpe.pt`，优先用自带的（有的模型绑特定编码器）。
 
 包没装时，翻唱会**明确报「SVC 推理环境未就绪」并指向加速包页**，不假装能跑。
 
-## 引擎骨架（`engine/engine_svc.py`）
+## 引擎：`engine_svc.py` + `engine/svc/rvc.py` + vendor
 
 ```
 probe   --model <dir>            读权重实际 version / f0 / 采样率
@@ -116,9 +123,17 @@ convert <in.wav> --model <dir> --out <wav> …   整轨变声
 
 进度/结果协议与全引擎一致：`###PROG {json}` / `###RESULT {json}`（失败 = `ok:false` + 退出码 0）。
 
-**当前状态（骨架）**：协议、参数、分块计划、依赖自检、断点签名都已就位；
-RVC 推理照搬上游后落在 `engine/svc/vendor/rvc/`（MIT，保留声明），没就位时 `convert`
-如实返回 `ok:false`，**不为了「看起来能跑」而假装成功**。
+**推理照搬上游**：`engine/svc/vendor/rvc/` 是 RVC 官方仓库 `main @ 81eed5e`（2026-08-04，MIT）
+的**原样副本**（10 个 .py，约 2.9k 行），`engine/svc/rvc.py` 只做薄适配：
+
+1. 参数翻译成上游 `Pipeline.pipeline(...)` 的入参；
+2. 长音频按**低能量点**切段（思路照搬上游 `opt_ts` 的选点方式），避免整首一次性进出显存；
+3. 用 soundfile 做 IO（不搬上游 `infer/audio.py`，它依赖 ffmpeg + PyAV）。
+
+模型加载逐行照搬上游 `get_vc`：`tgt_sr=config[-1]`、`config[-3]=emb_g.weight.shape[0]`、
+`(version, if_f0)` → 四类合成器、`del net_g.enc_q`、`load_state_dict(strict=False)`。
+`tests/test_svc_rvc_vendor.py` 与上游源码**逐字节**比对 vendor 文件，并比对合成器映射表、
+`x_pad/x_query/x_center/x_max` 取值；上游源码不在时 SKIP（不假装通过）。
 
 DDSP 本轮只留接口（清单能存 `engine:"ddsp"`、界面能显示，选了会提示「尚未支持」）。
 
@@ -145,7 +160,8 @@ DDSP 本轮只留接口（清单能存 `engine:"ddsp"`、界面能显示，选�
 |---|---|
 | `engine/engine_cover.py` | 编排 + 进度/结果协议 + 断点续跑 |
 | `engine/engine_svc.py` | SVC 推理（probe / convert，含依赖自检） |
-| `engine/svc/vendor/rvc/` | 上游 RVC 推理代码（MIT，照搬不改写）—— 待接入 |
+| `engine/svc/rvc.py` | 薄适配层：参数翻译 + 低能量点切段 + soundfile IO |
+| `engine/svc/vendor/rvc/` | 上游 RVC 推理代码（MIT，**一行未改**，见同目录 README） |
 | `main/svc.js` | 模型注册表：导入 / 列出 / 删除 / probe / 目录 |
 | `main/svc-catalog.json` | 目录快照（`scripts/build-svc-catalog.js` 生成） |
 | `main/cover.js` | 翻唱 IPC（选歌、跑、取消） |

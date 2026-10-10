@@ -143,7 +143,10 @@ def cmd_probe(a):
 
 
 def cmd_convert(a):
-    """整轨变声：先把分块与进度跑通，推理交给 vendor（未就位就如实报错）。"""
+    """整轨变声：读音频 → 加载模型/HuBERT → 分段合成 → 写出。
+
+    推理全部走 `svc/rvc.py` → vendor 的上游代码；这里只负责协议、进度与**如实报错**。
+    """
     d = deps()
     hint = missing_hint(d)
     if not d.get('torch') or not d.get('soundfile'):
@@ -160,20 +163,37 @@ def cmd_convert(a):
     n = max(1, int(total / chunk) + (1 if total % chunk else 0))
     emit_prog(5, '分块', {'parts': n, 'chunk_sec': chunk})
     if not d.get('vendor_rvc'):
-        # ★ 骨架阶段：协议与分块都跑通了，但推理确实没接 —— 说清楚，别装成功
-        #   （这里的错误必须是「推理未就位」本身，不能拿 faiss 那类降级提示顶替）
-        emit_result({'ok': False, 'error': 'RVC 推理代码未就位（engine/svc/vendor/rvc）：本轮先做骨架，尚未接入实际推理。',
+        # 推理代码没就位 —— 说清楚，别装成功（不能拿 faiss 那类降级提示顶替）
+        emit_result({'ok': False, 'error': 'RVC 推理代码未就位（engine/svc/vendor/rvc）：请先同步上游 vendor 代码。',
                      'deps': d, 'warnings': dep_warnings(d),
                      'planned': {'parts': n, 'chunk_sec': chunk, 'seconds': round(total, 1)}})
         return 0
-    # 推理已就位时的路径（骨架阶段走不到这里）
-    try:
-        sys.path.insert(0, VENDOR_RVC)
-        import svc_rvc                                   # noqa: F401  （vendor 提供的推理入口）
-    except Exception as e:                               # noqa: BLE001
-        emit_result({'ok': False, 'error': '加载 RVC 推理代码失败：%s' % str(e)[:200]})
+    model_dir = a.model
+    pth, index, _cfg = find_weights(model_dir)
+    if not pth:
+        emit_result({'ok': False, 'error': '模型目录里没有权重（.pth / .pt）：%s' % model_dir})
         return 0
-    emit_result({'ok': False, 'error': 'RVC 推理已就位但尚未接线（骨架阶段）', 'deps': d})
+    try:
+        import svc.rvc as RVC
+    except Exception as e:                               # noqa: BLE001
+        emit_result({'ok': False, 'error': '加载 RVC 推理适配层失败：%s' % str(e)[:200], 'deps': d})
+        return 0
+    try:
+        res = RVC.convert(a.input, a.out, pth, index_path=index,
+                          transpose=int(a.transpose or 0), f0_method=str(a.f0_method or 'rmvpe'),
+                          index_rate=float(a.index_rate), rms_mix_rate=float(a.rms_mix_rate),
+                          protect=float(a.protect), chunk_sec=chunk, device=str(a.device or 'auto'),
+                          log=lambda s: emit_prog(-1, '', {'log': str(s)}),
+                          on_progress=lambda pct, stage: emit_prog(pct, stage))
+    except Exception as e:                               # noqa: BLE001
+        emit_result({'ok': False, 'error': '变声失败：%s' % str(e)[:400], 'deps': d})
+        return 0
+    if not os.path.isfile(a.out):
+        emit_result({'ok': False, 'error': '变声没有产出文件（%s）' % a.out})
+        return 0
+    res.update({'warnings': dep_warnings(d), 'planned_parts': n})
+    emit_prog(100, '完成')
+    emit_result(res)
     return 0
 
 
@@ -191,7 +211,6 @@ def main():
     c.add_argument('--transpose', type=int, default=0)
     c.add_argument('--f0-method', default='rmvpe')
     c.add_argument('--index-rate', type=float, default=0.3)
-    c.add_argument('--filter-radius', type=int, default=3)
     c.add_argument('--rms-mix-rate', type=float, default=0.25)
     c.add_argument('--protect', type=float, default=0.33)
     c.add_argument('--chunk-sec', type=float, default=60)
