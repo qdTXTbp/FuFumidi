@@ -2385,7 +2385,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
                 :style="{ transform: arrangeOpen ? 'rotate(180deg)' : 'none' }" /> {{ t('时间线') }}
         </button>
       </div>
-      <ArrangeView v-if="arrangeOpen" class="arrv" :tracks="arrangeTracks"
+      <ArrangeView v-if="arrangeOpen" class="arrv" data-guide="sing-arrange" :tracks="arrangeTracks"
                    :bpm="store.bpm" :beats-per-bar="beatsPerBar"
                    :playhead-beat="playheadBeat"
                    :active-track-id="store.activeTrackId"
@@ -2907,7 +2907,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
       <!-- 共用钢琴卷帘 -->
       <!-- ★ 卷帘放在吃满剩余高度的盒子里（fill）：原来固定 320px，大屏上只占一小块。
            拖动下面的分隔条可手动定高，双击恢复「自动铺满」。 -->
-      <div v-if="tr && !isAudio" class="roll-box" :style="rollBoxStyle">
+      <div v-if="tr && !isAudio" class="roll-box" data-guide="sing-roll" :style="rollBoxStyle">
       <PianoRoll
         ref="prRef"
         class="edt-roll"

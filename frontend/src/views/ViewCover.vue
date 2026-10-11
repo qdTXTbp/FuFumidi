@@ -212,7 +212,7 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
       <div class="card">
         <div class="card-title"><span class="dot"></span>{{ t('① 选歌') }}</div>
         <div class="cv-row">
-          <button class="btn" @click="pickAudio"><Icon name="import" :size="14" /> {{ t('选择音频') }}</button>
+          <button class="btn" data-guide="cover-pick-audio" @click="pickAudio"><Icon name="import" :size="14" /> {{ t('选择音频') }}</button>
           <span class="muted small cv-ellipsis">{{ audio || t('支持 flac / wav / mp3 / m4a / ogg') }}</span>
         </div>
         <div class="cv-row" v-if="preVocals || preInst">
@@ -220,7 +220,7 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
           <span class="muted small cv-ellipsis">{{ preVocals || '—' }} / {{ preInst || '—' }}</span>
           <button class="btn sm ghost" @click="preVocals = ''; preInst = ''">{{ t('清除') }}</button>
         </div>
-        <div class="cv-row">
+        <div class="cv-row" data-guide="cover-lyrics">
           <span class="cv-label">{{ t('歌词') }}</span>
           <select class="text-input" v-model="lyrics" style="max-width:220px">
             <option value="auto">{{ t('自动（同名 .lrc / 音频内嵌 / 没有就哼唱）') }}</option>
@@ -231,7 +231,7 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
 
       <div class="card">
         <div class="card-title"><span class="dot"></span>{{ t('② 选音色') }}</div>
-        <div class="cv-seg">
+        <div class="cv-seg" data-guide="cover-kind">
           <button class="btn sm" :class="{ primary: singerKind === 'diffsinger' }" @click="switchKind('diffsinger')">
             {{ t('DiffSinger 声库') }}（{{ singers.diffsinger.length }}）
           </button>
@@ -294,7 +294,7 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
       <div class="card">
         <div class="card-title"><span class="dot"></span>{{ t('④ 开始') }}</div>
         <div class="cv-row">
-          <button class="btn primary" :disabled="!canRun" @click="run">
+          <button class="btn primary" data-guide="cover-run" :disabled="!canRun" @click="run">
             <Icon name="play2" :size="14" /> {{ t('开始翻唱') }}
           </button>
           <button class="btn danger" v-if="running" @click="cancel">{{ t('取消') }}</button>
