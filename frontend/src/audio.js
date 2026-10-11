@@ -7,6 +7,7 @@ import { t } from './core/i18n.js';
 let ctx = null;
 let synth = null;
 let player = null;
+let __fufumidiCtxWedged = false;   // synth 实测报告「context 被毒化」（见 ensureEngineHealthy）
 
 // 初始化必须整体成功才落到模块变量（见下方 catch 的说明），所以这里用局部名装配。
 export function ensureAudio() {
@@ -59,6 +60,9 @@ export function ensureAudio() {
           setTimeout(() => { try { window.__fufumidiAutoNext(); } catch (e) {} }, 10);
         }
       };
+      // ★ 引擎自愈钩子：SF2 worklet 毒化实测（装载成功但 context 永远 suspended）时，
+      //   synth 会回调这里；audio.js 在下一次 ensureEngineHealthy 里整体重建。
+      s.onContextWedged = () => { __fufumidiCtxWedged = true; };
       // 三件都建好后再落到模块变量：任何一步抛异常都不会留下
       // 「ctx 有值但 synth/player 为 null」的半初始化单例。那种状态下上面这个 if (!ctx)
       // 永远不会再进入、也就永远不会重建，而调用方（如 selectSong 里的 player.stop()）
@@ -99,6 +103,55 @@ export function ensureAudio() {
 export function applySoundfont(source) {
   ensureAudio();
   return synth.setSoundfont(source);
+}
+
+/**
+ * 引擎健康自愈：播放前调用。context 卡死在 suspended（resume 永不返回）时整体重建。
+ * 背景（2026-10-11 曲库全无声事故）：libfluidsynth 的 worklet 胶水在部分环境会把
+ * AudioContext 毒化成「装载一切成功、但永远无声」，且 resume() 的 promise 永不 settle ——
+ * 唯一的解法是换一个全新 AudioContext（实测新建的 context 立即 running）。
+ * 重建会封禁本会话的 worklet 合成路径（sessionStorage 标记，synth 侧读取），
+ * 下一次 setSoundfont 直接走主线程 ScriptProcessor 合成。
+ * 返回 { rebuilt }：rebuilt=true 时旧 player 已废弃，调用方必须重新装载当前曲目。
+ */
+export async function ensureEngineHealthy() {
+  ensureAudio();
+  if (ctx.state === 'running' && !__fufumidiCtxWedged) return { rebuilt: false };
+  if (ctx.state !== 'running') {
+    // SF2 装载若在进行中，等它结束再判断（装载期间 state 可能仍 suspended）
+    try { if (synth && synth.sf2Loading) await Promise.race([synth.sf2Loading, new Promise((r) => setTimeout(r, 3000))]); } catch (e) {}
+    if (ctx.state === 'running' && !__fufumidiCtxWedged) return { rebuilt: false };
+    let ok = false;
+    try {
+      ok = await Promise.race([
+        ctx.resume().then(() => ctx.state === 'running').catch(() => false),
+        new Promise((r) => setTimeout(() => r(false), 1500)),
+      ]);
+    } catch (e) { ok = false; }
+    if (ok && !__fufumidiCtxWedged) return { rebuilt: false };
+  }
+  // ——到这里：context 救不回来 —— 整体重建 ——
+  // ★ 重试循环：本机实测「渲染器刚启动那几秒创建的 AudioContext 会永久卡死在
+  //   suspended（resume 永不返回），稍后创建的正常」—— 所以重建后若仍不 running，
+  //   关掉重试（最多 5 次、间隔 800ms），总能拿到一个健康的 context。
+  console.warn('[audio] AudioContext 无法恢复（启动期创建的 context 已损坏），重建音频引擎');
+  try { sessionStorage.setItem('fufumidi_worklet_banned', '1'); } catch (e) {}
+  let running = false;
+  for (let i = 0; i < 5 && !running; i++) {
+    try { if (ctx && ctx.state !== 'closed') { try { ctx.close(); } catch (e2) {} } } catch (e) {}
+    ctx = null; synth = null; player = null;
+    __fufumidiCtxWedged = false;
+    ensureAudio();
+    try {
+      running = await Promise.race([
+        ctx.resume().then(() => ctx.state === 'running').catch(() => false),
+        new Promise((r) => setTimeout(() => r(false), 1200)),
+      ]);
+    } catch (e) { running = false; }
+    if (!running) await new Promise((r) => setTimeout(r, 800));
+  }
+  if (!running) console.warn('[audio] 重建 5 次仍无健康的 AudioContext（本机音频子系统异常）');
+  return { rebuilt: true };
 }
 // 暴露当前 Synth 供 apply / 查询
 export async function setActiveSoundfontRef(v) {

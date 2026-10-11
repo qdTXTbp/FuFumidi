@@ -499,6 +499,37 @@ export class Synth {
   }
   // 在 AudioWorkletGlobalScope 内加载 libfluidsynth + js-synthesizer 的 worklet 处理器。
   // glue 在 worklet 作用域求值后会导出 AudioWorkletGlobalScope.wasmModule 供处理器使用。
+  _workletSafe = undefined;      // 探测结果缓存：undefined=未测 / true=可用 / false=会毒化 context
+  _workletSafePromise = null;
+  _probeWorkletSafe() {
+    if (this._workletSafe !== undefined) return Promise.resolve(this._workletSafe);
+    if (this._workletSafePromise) return this._workletSafePromise;
+    this._workletSafePromise = (async () => {
+      let safe = false;
+      try {
+        // ★ 在一次性探针 context 上加载同款模块，再验证 context 还能不能进入 running。
+        //   背景（2026-10-11 实测）：libfluidsynth 胶水在某些环境下 addModule **不报错**，
+        //   但 WASM 在 worklet 线程求值会把音频线程卡死 —— context 从此 suspended、
+        //   resume() 永不返回、outputLatency 恒为 0，表现为「曲库全部无声、进度条乱跳」。
+        //   所以不能只看 addModule 是否 reject，必须实测 resume 是否恢复。
+        const probe = new AudioContext({ latencyHint: 'interactive' });
+        try {
+          await probe.audioWorklet.addModule('./vendor/js-synth/libfluidsynth-2.4.6-with-libsndfile.js');
+          await probe.audioWorklet.addModule('./vendor/js-synth/js-synthesizer.worklet.min.js');
+          safe = await Promise.race([
+            probe.resume().then(() => probe.state === 'running').catch(() => false),
+            new Promise((r) => setTimeout(() => r(false), 1500)),
+          ]);
+        } catch (e) { safe = false; }
+        try { await probe.close(); } catch (e) {}
+      } catch (e) { safe = false; }
+      this._workletSafe = !!safe;
+      this._workletSafePromise = null;
+      if (!safe) console.warn('[synth] 本机 AudioWorklet 无法承载 libfluidsynth（加载后 AudioContext 无法运行），SF2 改用主线程合成');
+      return this._workletSafe;
+    })();
+    return this._workletSafePromise;
+  }
   _ensureWorkletModules() {
     if (this._workletModules) return Promise.resolve(true);
     if (this._workletModulesLoading) return this._workletModulesLoading;
@@ -516,6 +547,10 @@ export class Synth {
     return this._workletModulesLoading;
   }
   async _loadSf2From(source) {
+    // ★ .sf3 已重新支持：主进程 file:readSoundFont 会先用引擎侧 sf3tool.py 把 sf3
+    //   解码转成标准 sf2（缓存 <原名>.conv.sf2，源更新自动重转），前端拿到的永远是
+    //   可解码的 sf2。此前「直接拒掉 sf3」是因为 wasm 里的 fluid_stat 是桩、sf3 采样
+    //   解不出来（装载成功但永远无声）——现在在装载前就转换掉了。
     const buf = await this._readSf2Buffer(source);
     if (!buf) { this.clearSf2(); return { ok: false, using: 'internal', error: t('无法读取音色文件') }; }
     // 大音色解析时会在主线程占用一小段时间；上限与主进程 file:readSoundFont 一致(512MB)。
@@ -543,10 +578,16 @@ export class Synth {
     return this._loadSf2ScriptProcessor(buf, source);
   }
   async _loadSf2Worklet(buf, source) {
+    // ★ 会话级封禁：探测漏网/装载后实测发现毒化时由 audio.js 的自愈写入，
+    //   本次会话内不再尝试 worklet 路径（毒化是概率性的，探测通过也不保险）。
+    try { if (sessionStorage.getItem('fufumidi_worklet_banned')) return null; } catch (e) {}
     const loaded = await this._ensureJSSynthLib();
     const JSSynth = (window || {}).JSSynth;
     if (!loaded || !JSSynth || !JSSynth.AudioWorkletNodeSynthesizer) return null;
     if (!this.ctx.audioWorklet) return null;
+    // ★ 先探测本机能否在 worklet 里安全承载 libfluidsynth（不能就走主线程回退）。
+    //   探测用的是一次性 context，绝不污染正在使用的这个。
+    if (!(await this._probeWorkletSafe())) return null;
     await this._ensureWorkletModules();
     this.clearSf2();
     const syn = new JSSynth.AudioWorkletNodeSynthesizer();
@@ -599,7 +640,22 @@ export class Synth {
       this._seqAnchor = null;
       console.warn('[synth] 音序器调度不可用，SF2 音符回退主线程 setTimeout 触发：', e && e.message || e);
     }
+    // ★ 装载完成 ≠ 可用：毒化的 context 上面的步骤全部「成功」，但 context 永远 suspended。
+    //   实测健康度；不健康 → 抛错让调用方回退 ScriptProcessor，并触发 onContextWedged
+    //   （audio.js 据此整体重建引擎并封禁 worklet 路径 —— 同一个 context 救不回来）。
+    if (!(await this._ctxRunningWithin(1500))) {
+      try { if (this.onContextWedged) this.onContextWedged(); } catch (e) {}
+      throw new Error('AudioWorklet 装载后 AudioContext 无法进入 running（本机 worklet 环境不兼容）');
+    }
     return { ok: true, using: 'sf2', mode: 'worklet', source: typeof source === 'string' ? source : 'soundfont' };
+  }
+  // 给定毫秒内 context 能否进入 running（毒化探测：健康的 context resume 立即返回）
+  _ctxRunningWithin(ms) {
+    if (this.ctx.state === 'running') return Promise.resolve(true);
+    return Promise.race([
+      this.ctx.resume().then(() => this.ctx.state === 'running').catch(() => false),
+      new Promise((r) => setTimeout(() => r(false), ms)),
+    ]);
   }
   // AudioContext 时间（秒）→ 音序器 tick（毫秒，绝对）
   _seqTickFor(t) {

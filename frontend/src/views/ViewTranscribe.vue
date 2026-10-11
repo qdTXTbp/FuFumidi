@@ -218,6 +218,19 @@ async function runSeparate() {
   finally { sepBusy.value = false; }
 }
 function openSepOut() { if (sepOutDir.value && bridge.openOutput) bridge.openOutput(sepOutDir.value); else toast(t('请使用桌面版打开输出文件夹'), 'warn'); }
+/* 分离结果 → 翻唱工作流：把音轨路径交给「翻唱」页（那边读 localStorage 接手），
+   省掉「再选一次歌、再分离一遍」。人声/伴奏按文件名认，认不出就不带。 */
+function coverFromSep() {
+  const pick = (re) => (sepOutputs.value || []).find((o) => re.test(String(o).replace(/^.*[\\/]/, ''))) || '';
+  const vocals = pick(/vocal/i);
+  const inst = pick(/other|instrument|accompan|no_vocal/i);
+  if (!vocals || !inst) { toast(t('这里需要同时有「人声」和「伴奏」两条轨'), 'warn'); return; }
+  try {
+    localStorage.setItem('fufumidi_cover_prefill', JSON.stringify({ vocals, instrumental: inst, outdir: sepOutDir.value || '' }));
+  } catch (e) {}
+  const app = useAppStore();
+  app.setView('cover');
+}
 
 /* ---------------- MSST 参数预设（按模型保存 / 还原 / 应用） ---------------- */
 const MS_PRESET_KEY = 'fufumidi_msst_presets';
@@ -1229,6 +1242,7 @@ onBeforeUnmount(() => {
         <div v-if="sepOutputs.length" class="tr-done">
           <span class="muted small">{{ t('已生成 ') }}{{ sepOutputs.length }}{{ t(' 个音轨：') }}</span>
           <button class="btn sm ghost" v-if="sepOutDir" @click="openSepOut"><Icon name="folder" :size="13" /> {{ t('打开输出文件夹') }}</button>
+          <button class="btn sm primary" v-if="sepOutDir" @click="coverFromSep"><Icon name="mic" :size="13" /> {{ t('用分离结果做翻唱') }}</button>
         </div>
         <Transition name="fade">
         <div v-if="sepOutputs.length" class="ms-out-list">

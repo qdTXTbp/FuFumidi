@@ -9,35 +9,15 @@ const Paths = require('./paths');
 const { safeExtractAllTo } = require('./zip-safe');
 const MSST_CATALOG = require('./models-msst-catalog');
 const DS = require('./download-source');
+const createFastDownload = require('./fast-download');
+const GSV = require('./gpt-sovits');
 
 function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings }) {
   const _folderWatchers = new Map();
 
-  // 带防护的下载 fetch：
-  //   - 连接超时（connectMs）只约束到「响应头到达」，正文流不受总时长限制（大文件不再被 120s 砍断）
-  //   - 停滞看门狗（stallMs 内无任何字节）→ abort 使读流抛错，由调用方换源/续传
-  //   - 用户取消（ctrl.signal）始终可中断
-  async function fetchGuarded(url, { headers, ctrl, connectMs = 30000, stallMs = 30000 } = {}) {
-    const srcCtrl = new AbortController();
-    const onUser = () => { try { srcCtrl.abort(); } catch (_) {} };
-    if (ctrl) { if (ctrl.signal.aborted) onUser(); else ctrl.signal.addEventListener('abort', onUser); }
-    const timer = setTimeout(() => { try { srcCtrl.abort(); } catch (_) {} }, connectMs);
-    let r;
-    try {
-      r = await net.fetch(url, { headers: headers || {}, signal: srcCtrl.signal });
-    } finally { clearTimeout(timer); }
-    try {
-      if (ctrl) ctrl.signal.removeEventListener('abort', onUser);
-    } catch (_) {}
-    if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
-    const reader = r.body.getReader();
-    let lastData = Date.now();
-    const watchdog = setInterval(() => {
-      if (Date.now() - lastData > stallMs) { try { srcCtrl.abort(); } catch (_) {} }
-    }, 3000);
-    const cleanup = () => { clearInterval(watchdog); };
-    return { res: r, reader, cleanup, srcCtrl };
-  }
+  // 本模块不再自带下载器：所有「取文件字节」的活统一交给 main/fast-download.js
+  //（多源测速 / 分段并发 / 多文件并发 / 断点续传 / 停滞看门狗 / 低速轮换 / 完整性校验）。
+  // 规范见 docs/DOWNLOADS.md —— 新增下载点必须走 FastDL，不许再写 fetch+写盘循环。
 
   // 内置模型注册表：本地模型清单 + 缺失模型官方源一键下载（带进度/取消）
   // 条目字段：
@@ -241,6 +221,15 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       }
     }
   }
+  // GPT-SoVITS 社区音色：并入同一个模型注册表，界面与下载流程完全复用
+  for (const v of GSV.CATALOG) MODEL_REGISTRY[v.id] = v;
+  // 外部门户（论坛 / 网盘 / Spaces）：**不可一键下载**，但在资源中心里要看得见 ——
+  // 「打开来源」把用户送去该去的地方，而不是假装能下。
+  for (const v of GSV.EXTERNAL) MODEL_REGISTRY[v.id] = Object.assign({}, v, {
+    type: 'link', runtime: 'gpt-sovits', kind: 'tts', downloadable: false, external: true,
+    arch: 'GPT-SoVITS', use: v.note, group: 'gsv',
+  });
+
   // HuggingFace 渠道：官方 / hf-mirror
   const HF_HOSTS = { huggingface: 'huggingface.co', 'hf-mirror': 'hf-mirror.com' };
   const _modelCancels = new Set();
@@ -248,10 +237,17 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
   const _modelPause = new Set();
   // 进行中的下载集合：即便页面关闭/切换也保持，模型清单可据此标记「下载中」
   const _activeDownloads = new Set();
+  // 统一高速下载器（规范入口，见 docs/DOWNLOADS.md）
+  const FastDL = createFastDownload({ net, fs, path });
+  /** 取消 / 暂停的统一契约：FastDL 每读一块都会问一次，用户点了就立刻停 */
+  const guardOf = (id) => ({ get aborted() { return _modelCancels.has(id) || _modelPause.has(id); } });
 
   ipcMain.handle('model:list', async () => {
     const dir = modelsDir();
     const items = [];
+    // ★ 兜底：清单里任何一处抛都会让界面显示「模型全没了」（renderer 拿到 reject 就当空数组）。
+    //   条目本身出问题只该跳过它自己 —— 所以整个收集过程包在 try 里，有多少返回多少。
+    const guard = (fn) => { try { return fn(); } catch (e) { try { console.warn('[models] 列条目失败:', e && e.message); } catch (_) {} } };
     try { await ensureMsstModels(); } catch (e) {}
     const push = (name, p, note, extra) => {
       try {
@@ -266,6 +262,11 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     for (const k of Object.keys(MODEL_REGISTRY)) {
       if (k === 'piano_transcription') continue;
       const m = MODEL_REGISTRY[k];
+      // ★ 外部门户没有本地落点（没有 dest）——这里必须跳过：
+      //   path.join(dir, undefined) 会直接抛，而它在 try 之外，**整份模型清单会变成空的**
+      //   （实测：资源中心 6 个分类的计数全变成 0）。它们单独在下面 push。
+      if (m.type === 'link') continue;
+      if (!m.dest) continue;   // 没有落点的条目（历史遗留）直接跳过，不许拖垮整份清单
       const dest = path.join(dir, m.dest);
       // 目录总大小（排除临时隐藏目录，如 .parts），用于展示
       const dirSize = (() => { try { let s = 0; const walk = (p) => { const st = fs.statSync(p); if (st.isFile()) s += st.size; else for (const f of fs.readdirSync(p)) { if (f === '.parts') continue; walk(path.join(p, f)); } }; walk(dest); return s; } catch (e) { return 0; } })();
@@ -274,12 +275,29 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         // 分卷下载：以最终合并产物为准，避免下载中的 .parts 被误判为「已就绪」
         const finalFile = path.join(dest, m.splitCat ? (m.outName || '') : 'model.safetensors');
         if (fs.existsSync(finalFile)) { size = fs.statSync(finalFile).size; exists = size >= m.minSize; }
+      } else if (m.type === 'link') {
+        // 外部门户：没有本地落点，永远显示「未安装」，卡片上给「打开来源」
+        exists = false; size = 0;
+      } else if (m.type === 'gsv') {
+        // GPT-SoVITS 音色：两个权重 + 参考音都在才算就绪
+        const st = GSV.voiceState(m, dest);
+        exists = st.exists; size = st.size || dirSize;
       } else {
         exists = dirSize >= m.minSize; size = dirSize;
       }
       items.push({
         id: m.id, name: m.name, path: dest, size, exists, active: _activeDownloads.has(m.id),
         downloadable: true, note: m.note, kind: m.kind, arch: m.arch, use: m.use, type: m.type, repo: m.repo, gated: !!m.gated, runtime: m.runtime,
+        group: (m.type === 'gsv' || m.type === 'link') ? 'gsv' : undefined,
+        url: m.url || undefined, external: !!m.external,
+      });
+    }
+    // 外部门户（论坛 / 网盘 / Spaces）：不可下载，但在资源中心里要看得见
+    for (const v of GSV.EXTERNAL) {
+      items.push({
+        id: v.id, name: v.name, path: '', size: 0, exists: false, downloadable: false,
+        note: v.note, kind: 'tts', arch: 'GPT-SoVITS', use: v.note, type: 'link',
+        runtime: 'gpt-sovits', group: 'gsv', url: v.url, external: true,
       });
     }
     // MSST 分离模型（动态注册的全部分类）
@@ -492,39 +510,11 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     if (id) { _modelPause.add(id); try { const c = _modelAborts.get(id); if (c) c.abort(); } catch (e) {} }
     return { ok: true };
   });
-  // 分段并发下载单个大文件（Range 分片 → 各写各的偏移 → 汇总进度）。
-  // 为什么需要：CNB 的 Release 资产（对象存储）单连接实测被限到 ~5MB/s，
-  // 而它支持 Range —— 4 段并发实测 19.8MB/s（3.8 倍），是可观差距。
-  // 前提：源必须真正支持 Range（返回 206）；返回 200 说明被忽略，抛错让调用方回退单连接。
-  async function downloadSegmented(url, out, total, onBytes, ctrl, headers, segs = 4) {
-    const fh = await fs.promises.open(out, 'w');
-    try {
-      const segSize = Math.ceil(total / segs);
-      const worker = async (i) => {
-        const start = i * segSize;
-        const end = Math.min(start + segSize, total) - 1;
-        if (start > end) return;
-        const r = await net.fetch(url, { headers: { ...headers, Range: `bytes=${start}-${end}` }, signal: ctrl.signal });
-        if (r.status !== 206 || !r.body) throw new Error(r.status === 200 ? '源不支持 Range' : 'HTTP ' + r.status);
-        const reader = r.body.getReader();
-        let pos = start;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          await fh.write(Buffer.from(value), 0, value.length, pos);
-          pos += value.length;
-          onBytes(value.length);
-        }
-      };
-      await Promise.all(Array.from({ length: segs }, (_, i) => worker(i)));
-    } finally { try { await fh.close(); } catch (_) {} }
-    const sz = (await fs.promises.stat(out)).size;
-    if (sz !== total) throw new Error('分段下载后大小不符：' + sz + '/' + total);
-  }
-
   // HuggingFace 整仓下载（MuScriptor / Aria-AMT）。
-  // 官方 huggingface.co 在国内常遇网关错误（502/5xx），逐请求按「官方 → hf-mirror」自动回退；
+  // 官方 huggingface.co 在国内常遇网关错误（502/5xx），逐请求按「CNB 镜像 → 官方 → hf-mirror」回退；
   // 401/403（授权类）、取消/暂停不回退。
+  // 文件字节一律交给 FastDL.downloadMany —— 多文件并发 + 断点续传 + 每文件大小校验，
+  // 不再自己写「单文件单连接、逐个串行」的循环（那是整仓下载慢的主因）。
   async function downloadHfRepo(spec, channel, win, ctrl, token) {
     // 渠道序列：用户显式指定则优先该渠道，官方失败自动落到 hf-mirror
     const hosts = channel && HF_HOSTS[channel] && HF_HOSTS[channel] !== HF_HOSTS.huggingface
@@ -579,59 +569,36 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     const tree = await treeRes.res.json();
     const files = (tree || []).filter(f => f.type === 'file' && !/^\./.test(path.basename(f.path)));
     if (!files.length) throw new Error('仓库文件列表为空');
-    const total = files.reduce((s, f) => s + (f.size || 0), 0);
-    let received = 0, lastT = 0, lastR = 0, speed = 0;
-    const reportSpeed = () => {
-      const now = Date.now();
-      if (!lastT) { lastT = now; lastR = received; return; }
-      const dt = now - lastT;
-      if (dt >= 300) { speed = ((received - lastR) / dt) * 1000; lastT = now; lastR = received; }
-    };
-    for (const f of files) {
+    // 每个文件一组候选地址：CNB 镜像（若有）打头，其余按 HF 渠道顺序；FastDL 会实测选最快的
+    const items = files.map((f) => {
       const rel = f.path;
-      const out = path.join(destDir, rel);
-      fs.mkdirSync(path.dirname(out), { recursive: true });
       const enc = rel.split('/').map(encodeURIComponent).join('/');
-      // 命中 CNB 镜像的文件（见 spec.cnbMirror）优先走国内 Release 资产。
-      // 大文件再叠一层分段并发：Release 资产单连接实测被限到 ~5MB/s，分段可到 ~20MB/s。
-      // 分段没拿到（例如源忽略 Range）就删掉半成品，回落下面的 HF 渠道，不影响可用性。
-      const cnbUrl = cnbMirrorUrl(rel);
-      if (cnbUrl && (f.size || 0) > 64 * 1024 * 1024) {
-        try {
-          await downloadSegmented(cnbUrl, out, f.size, (n) => {
-            received += n;
-            reportSpeed();
-            const pct = total ? Math.min(99, Math.round(received / total * 100)) : 0;
-            if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received, total, percent: pct, done: false, speed });
-          }, ctrl, headers);
-          continue;   // 该文件已从 CNB 取完
-        } catch (e) {
-          if (_modelCancels.has(spec.id)) throw new Error('canceled');
-          if (_modelPause.has(spec.id)) throw new Error('paused');
-          try { fs.rmSync(out, { force: true }); } catch (_) {}
-        }
-      }
-      const dl = await fetchFallback(`/${spec.repo}/resolve/main/${enc}`, '下载', cnbUrl ? [cnbUrl] : null);
-      const r = dl.res;
-      if (!r.ok || !r.body) throw new Error('下载失败 HTTP ' + r.status + ' · ' + rel + (r.status === 401 || r.status === 403 ? '（该模型需授权：请填写有效 HF Token 并先在 HF 页面接受协议）' : ''));
-      const ws = fs.createWriteStream(out);
-      // 打开失败（EPERM：杀软锁定/权限）或写入中途出错时，'error' 事件若无人监听会把主进程打崩；
-      // 错误已由下方 write/end 回调捕获并回抛给重试逻辑，这里仅消费事件避免未捕获异常。
-      ws.on('error', () => {});
-      const reader = r.body.getReader();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (_modelCancels.has(spec.id)) { try { reader.cancel(); } catch (e) {} throw new Error('canceled'); }
-        if (_modelPause.has(spec.id)) { try { reader.cancel(); } catch (e) {} throw new Error('paused'); }
-        received += value.length;
-        reportSpeed();
-        const pct = total ? Math.min(99, Math.round(received / total * 100)) : 0;
-        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received, total, percent: pct, done: false, speed });
-        await new Promise((res2, rej2) => ws.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
-      }
-      await new Promise((res2, rej2) => ws.end(err => (err ? rej2(err) : res2())));
-    }
+      const cnb = cnbMirrorUrl(rel);
+      const urls = [
+        ...(cnb ? [cnb] : []),
+        ...hosts.map((h) => 'https://' + h + '/' + spec.repo + '/resolve/main/' + enc),
+      ];
+      // 注意：**不**用 HF 清单里的 f.size 当 expectSize —— LFS 文件报的是指针大小还是实体大小
+      // 各端点不一致，猜错会让本来能下的模型直接判失败。完整性交给两道更可靠的关卡：
+      // downloadFast 内部比对响应 content-length，外层再校验整仓总大小 >= spec.minSize。
+      return { urls, dest: path.join(destDir, rel), expectSize: 0, minSize: 1024, label: rel };
+    });
+    const totalKnown = items.reduce((s, it) => s + (it.expectSize || 0), 0);
+    FastDL.checkDiskSpace(path.join(destDir, 'placeholder'), totalKnown || spec.minSize || 0);
+    await FastDL.downloadMany(items, {
+      concurrency: 3,
+      headers,
+      ctrl,
+      isUserAbort: guardOf(spec.id),
+      onProgress: (p) => {
+        if (!win || win.isDestroyed()) return;
+        win.webContents.send('model:progress', {
+          id: spec.id, received: p.bytesDone, total: p.bytesTotal || totalKnown,
+          percent: p.overallPercent, done: false, speed: p.speed || 0,
+          text: p.label ? ('正在下载 ' + p.label + '（已完成 ' + p.doneCount + '/' + p.count + '）') : '',
+        });
+      },
+    });
     let size = 0;
     const walk = (p) => { const st = fs.statSync(p); if (st.isFile()) size += st.size; else for (const f of fs.readdirSync(p)) walk(path.join(p, f)); };
     walk(destDir);
@@ -639,16 +606,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received: size, total: size, percent: 100, done: true, speed: 0 });
     return { ok: true, path: destDir, size };
   }
-  // ============================================================
-  // 单文件模型的高速下载（Beat This! / 钢琴转录 等）
-  // 相比原来的「单连接 + 多源轮换」，这里加了两件事：
-  //   ① 多源并发测速选最快（含 GitHub 加速镜像，raw 直连作对照）
-  //   ② 单文件多分段并行下载（各分段独立成文件，互不干扰，天然可续传）
-  // 任何一步不满足条件（源不支持 Range / 拿不到长度）都回退到旧的单连接逻辑。
-  // ============================================================
-  const SEG_MAX = 8;              // 最多分段数
-  const SEG_MIN_BYTES = 4 * 1024 * 1024;   // 小于 4MB 不值得分段
-  const SEG_CONCURRENCY = 4;      // 同时在跑的分段数
+
 
   /** 由原始 URL 推导候选下载源（自有 Models 仓库优先 CNB 镜像；GitHub 走加速镜像，其它源原样） */
   function mirrorUrls(spec) {
@@ -676,412 +634,154 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     return [...new Set(out.filter(Boolean))];
   }
 
-  /** 小样本测速：各源取前 512KB 计时，返回按速度降序的候选 */
-  async function rankMirrors(urls, ctrl) {
-    const SAMPLE = 512 * 1024;
-    const probe = async (u) => {
-      const t0 = Date.now();
-      const gd = await fetchGuarded(u, { headers: { 'user-agent': 'FuFumidi/4.1.0', Range: 'bytes=0-' + (SAMPLE - 1) }, ctrl, connectMs: 8000, stallMs: 8000 });
-      try {
-        let got = 0, total = 0;
-        const cr = gd.res.headers.get('content-range') || '';
-        const m = cr.match(/\/(\d+)\s*$/);
-        if (m) total = parseInt(m[1], 10) || 0;
-        if (!total) total = parseInt(gd.res.headers.get('content-length') || '0', 10) || 0;
-        const reader = gd.reader;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          got += value.length;
-          if (got >= SAMPLE) { try { await reader.cancel(); } catch (_) {} break; }
-        }
-        const ms = Math.max(1, Date.now() - t0);
-        return { url: u, mbps: (got / ms) * 1000 / 1048576, total, ranged: gd.res.status === 206 };
-      } finally { try { gd.cleanup(); } catch (_) {} }
-    };
-    const settled = await Promise.all(urls.map(async (u) => {
-      try { return await probe(u); } catch (_) { return { url: u, mbps: 0, total: 0, ranged: false }; }
-    }));
-    return settled.filter(r => r.mbps > 0).sort((a, b) => b.mbps - a.mbps);
-  }
+  // 测速（rankMirrors）、长度探测（remoteSize）、单文件高速下载（downloadSingleFast）
+  // 都已收敛进 main/fast-download.js：本文件只保留「候选地址怎么拼」（mirrorUrls）。
 
-  /** 取远端文件总长度 */
-  async function remoteSize(u, ctrl) {
-    const gd = await fetchGuarded(u, { headers: { 'user-agent': 'FuFumidi/4.1.0', Range: 'bytes=0-0' }, ctrl, connectMs: 8000, stallMs: 8000 });
-    try {
-      const cr = gd.res.headers.get('content-range') || '';
-      const m = cr.match(/\/(\d+)\s*$/);
-      if (m) return parseInt(m[1], 10) || 0;
-      return parseInt(gd.res.headers.get('content-length') || '0', 10) || 0;
-    } finally { try { await gd.reader.cancel(); } catch (_) {} try { gd.cleanup(); } catch (_) {} }
-  }
-
-  async function downloadSingleFast(spec, dest, win, ctrl, id) {
-    const urls = mirrorUrls(spec);
-    const ranked = await rankMirrors(urls, ctrl);
-    if (!ranked.length) throw new Error('所有下载源均不可用');
-    const best = ranked[0];
-    let total = best.total || await remoteSize(best.url, ctrl);
-    if (!total) throw new Error('无法获取文件大小');
-    let segCount = total >= SEG_MIN_BYTES ? Math.min(SEG_MAX, Math.floor(total / (2 * 1024 * 1024))) : 1;
-    if (!best.ranged) segCount = 1;                 // 源不支持 Range → 单分段（等价于单连接）
-    const segSize = Math.ceil(total / segCount);
-    const segPath = (i) => dest + '.fs' + i;
-    const segBytes = (i) => Math.max(0, Math.min(total, (i + 1) * segSize) - i * segSize);
-
-    // 本段下载专用的中断器：任一分段失败就整体停下，避免「一边报错一边还有后台写入」。
-    // 每轮重试都会换成新的控制器（被 abort 过的 controller 不能复用）。
-    let segCtrl = new AbortController();
-    const onOuterAbort = () => { try { segCtrl.abort(); } catch (_) {} };
-    if (ctrl) { if (ctrl.signal.aborted) onOuterAbort(); else ctrl.signal.addEventListener('abort', onOuterAbort); }
-    const releaseOuter = () => { try { if (ctrl) ctrl.signal.removeEventListener('abort', onOuterAbort); } catch (_) {} };
-
-    // 续传：已存在且长度正确的分段跳过
-    let downloaded = 0;
-    const todo = [];
-    for (let i = 0; i < segCount; i++) {
-      let ok = false;
-      try { ok = fs.existsSync(segPath(i)) && fs.statSync(segPath(i)).size === segBytes(i); } catch (_) {}
-      if (ok) downloaded += segBytes(i); else todo.push(i);
-    }
-    let lastSend = 0, lastT = 0, lastR = 0, speed = 0;
-    const sendP = (done) => {
-      const now = Date.now();
-      if (!done && now - lastSend < 300) return;
-      lastSend = now;
-      if (!done) {
-        if (!lastT) { lastT = now; lastR = downloaded; }
-        else if (now - lastT >= 300) { speed = ((downloaded - lastR) / (now - lastT)) * 1000; lastT = now; lastR = downloaded; }
-      }
-      const pct = total ? Math.min(99, Math.round(downloaded / total * 100)) : 0;
-      if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: downloaded, total, percent: pct, done: !!done, speed, segmented: segCount });
-    };
-    sendP(false);
-
-    const fetchSeg = async (i, url) => {
-      const start = i * segSize;
-      const end = Math.min(total, start + segSize) - 1;
-      const gd = await fetchGuarded(url, {
-        headers: { 'user-agent': 'FuFumidi/4.1.0', Range: `bytes=${start}-${end}` },
-        ctrl: segCtrl, connectMs: 20000, stallMs: 60000,
-      });
-      // 每次尝试都用唯一临时名：重试同一分段时不会和上一次残留的文件句柄打架
-      // （Windows 上「先 rm 再以同名 open」经常拿到 EPERM，实测踩过）
-      const fn = segPath(i) + '.' + Date.now().toString(36) + '.tmp';
-      let got = 0;
-      let ws = null;
-      try {
-        // 单分段（源不支持 Range）时允许 200；多分段必须 206，否则该源不可用于分段
-        if (segCount > 1 ? gd.res.status !== 206 : !gd.res.ok) throw new Error('该源不支持分段（Range）');
-        ws = fs.createWriteStream(fn, { flags: 'w' });
-        const errP = new Promise((_res, rej) => ws.on('error', rej));
-        errP.catch(() => {});   // 循环已结束时才报错也不产生未处理的 rejection
-        const reader = gd.reader;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (_modelPause.has(id)) { try { reader.cancel(); } catch (_) {} throw new Error('paused'); }
-          if (_modelCancels.has(id)) { try { reader.cancel(); } catch (_) {} throw new Error('canceled'); }
-          got += value.length;
-          downloaded += value.length;
-          sendP(false);
-          await Promise.race([errP, new Promise((res2, rej2) => ws.write(Buffer.from(value), err => (err ? rej2(err) : res2())))]);
-        }
-        await new Promise((res2, rej2) => ws.end(err => (err ? rej2(err) : res2())));
-        ws = null;
-        if (got !== segBytes(i)) throw new Error('分段长度不符：' + got + '/' + segBytes(i));
-        fs.renameSync(fn, segPath(i));
-      } catch (e) {
-        // 回退本段已计入的进度，避免进度条虚高后卡住
-        downloaded = Math.max(0, downloaded - got);
-        throw e;
-      } finally {
-        // 必须先关掉写入流再删文件：Windows 下文件被占用时删除会静默失败
-        if (ws) { try { ws.destroy(); } catch (_) {} await new Promise(r => setTimeout(r, 30)); }
-        try { fs.rmSync(fn, { force: true }); } catch (_) {}
-        try { gd.cleanup(); } catch (_) {}
-      }
-    };
-
-    // 分段均衡分摊到多个镜像（公共加速站的单连接常被限速，分散开总吞吐更高），
-    // 每段失败后依次换到其它镜像重试
-    const sourceOrder = ranked.map(r => r.url);
-    let cursor = 0;
-    const runOne = async (i) => {
-      let lastErr = null;
-      for (let attempt = 0; attempt < Math.max(3, sourceOrder.length); attempt++) {
-        const url = sourceOrder[(i + attempt) % sourceOrder.length];
-        try { await fetchSeg(i, url); return; }
-        catch (e) {
-          lastErr = e;
-          const msg = String((e && e.message) || e);
-          if (/paused|canceled|不支持分段/.test(msg) || segCtrl.signal.aborted) throw e;
-          await new Promise(r => setTimeout(r, 400));   // 换源前稍作退避，避免连续触发对端限流
-        }
-      }
-      throw new Error('分段 ' + i + ' 下载失败：' + ((lastErr && lastErr.message) || ''));
-    };
-    // 用 allSettled 而不是 all：任一分段失败时其它分段往往只差几秒，
-    // 让它们自然收尾再统一判定，能避免「一个镜像抽风 → 全体被中断 → 报错信息失真」
-    const runRound = async () => {
-      cursor = 0;
-      const workers = Array.from({ length: Math.max(1, Math.min(SEG_CONCURRENCY, todo.length)) }, async () => {
-        for (;;) {
-          if (_modelPause.has(id)) throw new Error('paused');
-          if (_modelCancels.has(id)) throw new Error('canceled');
-          if (segCtrl.signal.aborted) throw new Error('canceled');
-          const idx = cursor++;
-          if (idx >= todo.length) return;
-          await runOne(todo[idx]);
-        }
-      });
-      const settled = await Promise.allSettled(workers);
-      const errs = settled.filter(r => r.status === 'rejected').map(r => r.reason);
-      if (!errs.length) return null;
-      // 取「真实原因」优先：被连带中断的 aborted 错误信息没有价值
-      return errs.find(e => !/aborted/i.test(String((e && e.message) || e))) || errs[0];
-    };
-    const stopRound = () => { try { segCtrl.abort(); } catch (_) {} };
-    const startRound = () => {
-      segCtrl = new AbortController();
-      if (ctrl && ctrl.signal.aborted) { try { segCtrl.abort(); } catch (_) {} }
-    };
-
-    let fail = await runRound();
-    if (fail) {
-      // 整体再试一轮：重新测速排序（网络状况可能已变），已完成的分段自动跳过
-      stopRound();
-      await new Promise(r => setTimeout(r, 800));
-      cleanSegTmp(dest, segCount);
-      const msg = String((fail && fail.message) || fail);
-      if (/paused|canceled/i.test(msg)) { releaseOuter(); throw fail; }
-      const reranked = await rankMirrors(urls, ctrl).catch(() => []);
-      if (reranked.length) { sourceOrder.length = 0; sourceOrder.push(...reranked.map(r => r.url)); }
-      startRound();
-      fail = await runRound();
-    }
-    if (fail) {
-      stopRound();
-      await new Promise(r => setTimeout(r, 250));
-      cleanSegTmp(dest, segCount);
-      releaseOuter();
-      throw new Error('分段下载失败（已重试一轮）：' + ((fail && fail.message) || fail));
-    }
-    releaseOuter();
-    sendP(true);
-
-    // 合并分段 → .part → 目标
-    const part = dest + '.part';
-    await new Promise((res2, rej2) => {
-      const ws = fs.createWriteStream(part, { flags: 'w' });
-      ws.on('error', rej2);
-      let i = 0;
-      const next = () => {
-        if (i >= segCount) { ws.end(() => res2()); return; }
-        const rs = fs.createReadStream(segPath(i++));
-        rs.on('error', rej2);
-        rs.on('end', next);
-        rs.pipe(ws, { end: false });
-      };
-      next();
-    });
-    const size = fs.statSync(part).size;
-    if (size !== total) throw new Error('合并后大小不符：' + size + '/' + total);
-    fs.renameSync(part, dest);
-    for (let i = 0; i < segCount; i++) { try { fs.rmSync(segPath(i), { force: true }); } catch (_) {} }
-    return { size, segments: segCount, speed: ranked[0].mbps };
-  }
-
-  // GitHub Models 仓库分卷下载（MuScriptor：分卷 → 并行下载 → 合并 + SHA256 校验）
-  // 特性：① 下载前对多源自动测速选最快 ② 分卷最多 4 路并行 ③ 按序合并 ④ SHA256 校验
-  // 访问走 gh.jasonzeng.dev 加速，raw 直连 / ghfast / gh-proxy 作回退
-  const SPLIT_CONCURRENCY = 4;
+  // GitHub Models 仓库分卷下载（MuScriptor / MSST 分离模型 / VR 等所有 gsplit 条目）
+  // 流程：清单 → 复用校验过的分卷 → 一次测速 → 并发下载缺失分卷 → 合并 → 大小 + SHA256 校验
+  // 三条硬要求，全部来自实测踩坑：
+  //   ① 每卷的期望字节数是**推导**出来的（仓库固定 25 MiB 切片、末卷为余数，见 fast-download.js）。
+  //      长度不符的分卷一律删掉重下，绝不复用 —— 复用半截分卷会让 SHA 校验在 100% 处失败并无限重来。
+  //   ② 合并前先校验「每卷字节数」（downloadMany 用 expectSize 做），合并后再校验「总大小 == 清单 size」，
+  //      最后才算 SHA256 —— 让错误在最早、最便宜的地方暴露。
+  //   ③ SHA256 失败 = 分卷整体不可信 → 连 .parts 一起丢弃重下；只删成品文件会让用户永远卡在同一处失败。
   async function downloadSplitRepo(spec, win, ctrl) {
     const _cat = spec.splitCat || 'muscriptor';   // 分卷仓库分类：muscriptor / vocal / multi / single / vr
     const base = _cat + '/' + spec.sizeKey;       // 仓库内相对路径（ref 由 modelSrcUrls 统一处理）
     const headers = { 'user-agent': 'FuFumidi' };
     // 1) 分卷清单（manifest.json）：parts 数 / 总大小 / SHA256
-    let manifest = null, lastErr = null;
+    let manifest = null;
     for (const u of modelSrcUrls('manifest.json')) {
       try {
         const r = await net.fetch(u, { headers, signal: ctrl.signal });
         if (r.ok) { manifest = await r.json(); break; }
-      } catch (e) { lastErr = e; }
+      } catch (e) {}
     }
     const meta = manifest && manifest[_cat] && manifest[_cat][spec.sizeKey];
     if (!meta || !meta.parts) throw new Error('分卷清单获取失败：请确认 Models 仓库已发布 ' + spec.sizeKey + ' 分卷（manifest.json）');
     const parts = parseInt(meta.parts, 10) || 0;
     if (!parts) throw new Error('分卷清单缺少 parts');
+    const model = meta.model || 'model.safetensors';
+    const total = meta.size || 0;
     const destDir = path.join(modelsDir(), spec.dest);
     fs.mkdirSync(destDir, { recursive: true });
-    const outFile = path.join(destDir, meta.model || 'model.safetensors');
-    const total = meta.size || 0;
-    // 已存在且完整 → 直接返回（避免重复下载）
+    const outFile = path.join(destDir, model);
+    const partName = (i) => model + '.part' + String(i).padStart(2, '0');
+    const partUrls = (name) => modelSrcUrls(base + '/' + name);
+    const sendP = (p) => { if (win && !win.isDestroyed()) win.webContents.send('model:progress', Object.assign({ id: spec.id }, p)); };
+    // 2) 已存在且完整 → 直接返回（避免重复下载）
     if (fs.existsSync(outFile)) {
       const sz = fs.statSync(outFile).size;
-      if (sz >= (spec.minSize || 0)) {
-        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received: sz, total: sz, percent: 100, done: true, speed: 0 });
-        return { ok: true, path: destDir, size: sz, existed: true };
-      }
-      // 上次中断残留的半成品 → 清理，避免误判已就绪
-      try { fs.unlinkSync(outFile); } catch (_) {}
+      if (sz >= (spec.minSize || 0)) { sendP({ received: sz, total: sz, percent: 100, done: true }); return { ok: true, path: destDir, size: sz, existed: true }; }
+      try { fs.rmSync(outFile, { force: true }); } catch (_) {}   // 上次中断残留的半成品
     }
-    // 清理上次异常留下的临时合并文件
     try { fs.rmSync(outFile + '.tmp', { force: true }); } catch (_) {}
     const partsDir = path.join(destDir, '.parts');
     fs.mkdirSync(partsDir, { recursive: true });
-
-    // 2) 测速：对每个源下载 part01 前 256KB，取最快
-    const partUrls = (name) => modelSrcUrls(`${base}/${name}`);
-    const allUrls = partUrls(partName(meta, 1));
-    const probe = async (u, bytes = 256 * 1024) => {
-      const t0 = Date.now();
-      try {
-        // 只读 256KB 用来排序，8 秒足够（实测 CNB 31MB/s 时约 8ms）。
-        // 这里原本是 90 秒，而候选里含 raw.githubusercontent.com 直连 —— 国内必然连不通，
-        // Promise.all 会一直等到它超时，于是「点下载后要等一分半才出现进度」。
-        const sig = AbortSignal.any ? AbortSignal.any([ctrl.signal, AbortSignal.timeout(8000)]) : ctrl.signal;
-        const r = await net.fetch(u, { headers, signal: sig });
-        if (!r.ok || !r.body) return { url: u, mbps: 0 };
-        const reader = r.body.getReader();
-        let got = 0;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          got += value.length;
-          if (got >= bytes) { try { await reader.cancel(); } catch (e) {} break; }
-        }
-        const ms = Math.max(1, Date.now() - t0);
-        return { url: u, mbps: got / 1024 / 1024 / (ms / 1000) };
-      } catch (e) { return { url: u, mbps: 0 }; }
-    };
-    const speeds = await Promise.all(allUrls.map(u => probe(u)));
-    speeds.sort((a, b) => b.mbps - a.mbps);
-    const primaryUrl = speeds[0].mbps > 0 ? speeds[0].url : allUrls[0];
-    // 明确标出实际选中的源：国内镜像直接写「国内源 CNB」，方便用户确认没退回境外线路
-    let srcLabel = speeds[0].mbps > 0 ? primaryUrl.replace('https://', '') : allUrls[0].replace('https://', '');
-    if (/cnb\.cool/i.test(primaryUrl)) srcLabel = '国内源 CNB（cnb.cool）';
-    if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, text: `测速完成，选用 ${srcLabel}（${speeds[0].mbps.toFixed(1)} MB/s）`, received: 0, total, percent: 0, done: false });
-
-    // 3) 并行下载分卷（并发 SPLIT_CONCURRENCY，全部写入 .parts/）
-    function partName(meta, i) { return (meta.model || 'model.safetensors') + '.part' + String(i).padStart(2, '0'); }
-    const downloadPart = async (i) => {
-      const name = partName(meta, i);
-      const dest = path.join(partsDir, name);
-      // 已完整下载的卷直接复用（断点续传）
-      if (fs.existsSync(dest)) {
-        const sz = fs.statSync(dest).size;
-        if (sz >= (i < parts ? 25 * 1024 * 1024 : 0) && sz > 0) { received += sz; return; }
-      }
-      const tmp = dest + '.part';
-      let ok = false;
-      // 与测速结果保持同一顺序：最快源优先（换成当前分卷的文件名），其余按下载源偏好回退
-      const first = primaryUrl.replace(partName(meta, 1), name);
-      const urls = [first, ...partUrls(name).filter((u) => u !== first)];
-      for (const u of urls) {
-        if (_modelCancels.has(spec.id)) throw new Error('canceled');
-        if (_modelPause.has(spec.id)) throw new Error('paused');
-        let gd = null, ws = null;
-        try {
-          gd = await fetchGuarded(u, { headers, ctrl, connectMs: 30000, stallMs: 30000 });
-          const r = gd.res;
-          ws = fs.createWriteStream(tmp);
-          ws.on('error', () => {}); // 消费 'error' 事件，防 EPERM 等未捕获异常打崩主进程
-          const reader = gd.reader;
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (_modelCancels.has(spec.id)) { try { reader.cancel(); } catch (e) {} throw new Error('canceled'); }
-            if (_modelPause.has(spec.id)) { try { reader.cancel(); } catch (e) {} throw new Error('paused'); }
-            received += value.length;
-            reportSpeed();
-            const pct = total ? Math.min(99, Math.round(received / total * 100)) : 0;
-            if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received, total, percent: pct, done: false, speed });
-            await new Promise((res2, rej2) => ws.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
-          }
-          await new Promise((res2, rej2) => ws.end(err => (err ? rej2(err) : res2())));
-          fs.renameSync(tmp, dest);
-          ok = true;
-          break;
-        } catch (e) {
-          lastErr = e;
-          // 先销毁写入流并等句柄释放，再清理 tmp。否则句柄未关时 unlink 会把文件置为
-          // delete-pending，下一源重试 createWriteStream 同一路径 → EPERM（分卷下载失败主因）
-          if (ws) { try { ws.destroy(); } catch (_) {} }
-          await new Promise(res2 => { let fin = false; const fin2 = () => { if (!fin) { fin = true; res2(); } }; const t = setTimeout(fin2, 400); try { ws.once('close', fin2); } catch (_) { clearTimeout(t); fin2(); } });
-          try { fs.unlinkSync(tmp); } catch (_) {}
-        } finally { try { if (gd) gd.cleanup(); } catch (_) {} }
-      }
-      if (!ok) throw lastErr || new Error('下载分卷失败：' + name);
-    };
-
-    let received = 0, lastT = 0, lastR = 0, speed = 0;
-    const reportSpeed = () => {
-      const now = Date.now();
-      if (!lastT) { lastT = now; lastR = received; return; }
-      const dt = now - lastT;
-      if (dt >= 300) { speed = ((received - lastR) / dt) * 1000; lastT = now; lastR = received; }
-    };
-    const partsList = Array.from({ length: parts }, (_, i) => i + 1);
-    let cursor = 0;
-    let merged = false;
-    try {
-      const workers = Array.from({ length: Math.min(SPLIT_CONCURRENCY, parts) }, async () => {
-        while (cursor < partsList.length) {
-          const i = partsList[cursor++];
-          await downloadPart(i);
-        }
-      });
-      await Promise.all(workers);
-      // 4) 按序合并（先写临时文件再原子重命名，中断不会留下半成品最终文件）
-      const tmpOut = outFile + '.tmp';
-      fs.rmSync(tmpOut, { force: true });
-      const ws = fs.createWriteStream(tmpOut);
-      ws.on('error', () => {}); // 消费 'error' 事件，防未捕获异常打崩主进程
-      for (let i = 1; i <= parts; i++) {
-        const p = path.join(partsDir, partName(meta, i));
-        if (!fs.existsSync(p)) throw new Error('分卷缺失：' + partName(meta, i));
-        await new Promise((resolve, reject) => {
-          const rs = fs.createReadStream(p);
-          rs.on('error', reject);
-          rs.pipe(ws, { end: false });
-          rs.on('end', resolve);
-        });
-      }
-      await new Promise((res2, rej2) => ws.end(err => (err ? rej2(err) : res2())));
-      fs.renameSync(tmpOut, outFile);
-      merged = true; // 合并成功：finally 才允许清理 .parts（失败/暂停/取消保留分卷以续传）
-      // 5) 校验
-      const size = fs.statSync(outFile).size;
-      if (meta.sha256) {
-        const hash = await sha256File(outFile);
-        if (hash !== meta.sha256) { try { fs.unlinkSync(outFile); } catch (e) {} throw new Error('SHA256 校验失败：' + hash.slice(0, 12) + '（分卷可能不完整）'); }
-      }
-      if (size < spec.minSize) throw new Error('下载文件不完整：' + size + ' bytes');
-      // 6) MuScriptor 规格：合并完成后补齐 config.json。
-      //    muscriptor 依赖权重旁的 config.json 确定模型架构；本地路径无法识别规格时
-      //    会默认按 large 构建 → 与 small/medium 权重 state_dict 尺寸不匹配报错。
-      if (spec.id && spec.id.startsWith('muscriptor_')) {
-        const muscriptorConfigs = {
-          small: { dim: 768, num_heads: 12, num_layers: 14, card: 1393 },
-          medium: { dim: 1024, num_heads: 16, num_layers: 24, card: 1395 },
-          large: { dim: 1536, num_heads: 24, num_layers: 48, card: 1395 },
-        };
-        const cfg = muscriptorConfigs[spec.sizeKey];
-        if (cfg) {
-          try { fs.writeFileSync(path.join(destDir, 'config.json'), JSON.stringify(cfg, null, 2), 'utf8'); } catch (e) {}
-        }
-      }
-      if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received: size, total: size, percent: 100, done: true, speed: 0 });
-      return { ok: true, path: destDir, size };
-    } catch (e) {
-      if (!_modelPause.has(spec.id) && !_modelCancels.has(spec.id)) { try { fs.unlinkSync(outFile); } catch (_) {} }
-      try { fs.rmSync(outFile + '.tmp', { force: true }); } catch (_) {}
-      throw e;
-    } finally {
-      // 仅合并成功后清理分卷；失败/暂停/取消保留 .parts，重新下载时按已完整分卷续传
-      if (merged) { try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) {} }
+    // 3) 期望字节数（固定 25 MiB 切片；清单不自洽时退化成「只校验总大小」）
+    const layoutOk = FastDL.partsLayoutOk(total, parts);
+    const expectBytes = (i) => (layoutOk ? FastDL.expectedPartSize(total, parts, i) : 0);
+    // 4) 复用「已下完且长度正确」的分卷；长度不对的一律删掉重下
+    const jobs = [];
+    let reuseBytes = 0, needBytes = 0;
+    for (let i = 1; i <= parts; i++) {
+      const dest = path.join(partsDir, partName(i));
+      const want = expectBytes(i);
+      let have = 0;
+      try { have = fs.statSync(dest).size; } catch (_) {}
+      if (have > 0 && (!want || have === want)) { reuseBytes += have; continue; }
+      if (have > 0) { try { fs.rmSync(dest, { force: true }); } catch (_) {} }
+      jobs.push({ urls: partUrls(partName(i)), dest, expectSize: want, minSize: 1024, label: partName(i), singleStream: true });
+      needBytes += want || (total ? Math.ceil(total / parts) : 0);
     }
+    // 5) 磁盘预检：分卷 + 合并临时文件（不够就在动手前报，别等到 90%）
+    FastDL.checkDiskSpace(outFile, (needBytes || total) * 2 + 64 * 1024 * 1024);
+    // 6) 只测速一次，其余分卷复用同一份源顺序（省掉每卷一次测速）
+    let hostRank = [];
+    try { hostRank = FastDL.hostRankOf(await FastDL.rankMirrors(partUrls(partName(1)), ctrl)); } catch (_) {}
+    const partsConcurrency = Math.min(FastDL.PARTS_CONCURRENCY, Math.max(1, jobs.length));
+    const denom = total || (reuseBytes + needBytes);
+    sendP({
+      received: reuseBytes, total: denom, percent: denom ? Math.min(99, Math.round(reuseBytes / denom * 100)) : 0, done: false, speed: 0,
+      text: '共 ' + parts + ' 个分卷（已就绪 ' + (parts - jobs.length) + ' 个）· 并行 ' + partsConcurrency + ' 路',
+    });
+    // 7) 并发下载缺失分卷（每卷一个连接；CNB 的 git raw 不支持 Range，提速只能靠多卷并行）
+    if (jobs.length) {
+      let spT = 0, spB = 0, spSpeed = 0;
+      const speedOf = (received) => {
+        const now = Date.now();
+        if (!spT) { spT = now; spB = received; return 0; }
+        if (now - spT >= 500) { spSpeed = ((received - spB) / (now - spT)) * 1000; spT = now; spB = received; }
+        return spSpeed;
+      };
+      await FastDL.downloadMany(jobs, {
+        concurrency: partsConcurrency,
+        hostRank,
+        headers,
+        ctrl,
+        isUserAbort: guardOf(spec.id),
+        onProgress: (p) => {
+          const received = reuseBytes + (p.bytesDone || 0);
+          const pct = denom ? Math.min(99, Math.round(received / denom * 100)) : Math.round(((p.doneCount || 0) / Math.max(1, p.count)) * 100);
+          sendP({
+            received, total: denom, percent: pct, done: false, speed: speedOf(received),
+            text: '分卷 ' + Math.min(p.count, (p.doneCount || 0) + 1) + '/' + p.count + ' · 并行 ' + partsConcurrency + ' 路',
+          });
+        },
+      });
+    }
+    // 8) 按序合并（先写临时文件再原子重命名，中断不会留下半成品最终文件）
+    const tmpOut = outFile + '.tmp';
+    try { fs.rmSync(tmpOut, { force: true }); } catch (_) {}
+    const ws = fs.createWriteStream(tmpOut);
+    ws.on('error', () => {});   // 消费 'error'，防 EPERM 等未捕获异常打崩主进程
+    for (let i = 1; i <= parts; i++) {
+      const p = path.join(partsDir, partName(i));
+      if (!fs.existsSync(p)) throw new Error('分卷缺失：' + partName(i));
+      await new Promise((resolve, reject) => {
+        const rs = fs.createReadStream(p);
+        rs.on('error', reject);
+        rs.pipe(ws, { end: false });
+        rs.on('end', resolve);
+      });
+    }
+    await new Promise((res2, rej2) => ws.end((err) => (err ? rej2(err) : res2())));
+    const size = fs.statSync(tmpOut).size;
+    if (total && size !== total) {
+      try { fs.rmSync(tmpOut, { force: true }); } catch (_) {}
+      throw new Error('合并后大小不符：' + size + '/' + total + '（分卷不完整，已丢弃半成品；重试只补缺的卷）');
+    }
+    // 9) SHA256：失败说明分卷整体不可信 → 连 .parts 一起丢弃，避免「每次都卡在同一处」
+    if (meta.sha256) {
+      const hash = await sha256File(tmpOut);
+      if (hash !== meta.sha256) {
+        try { fs.rmSync(tmpOut, { force: true }); } catch (_) {}
+        try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) {}
+        try { fs.rmSync(outFile, { force: true }); } catch (_) {}
+        throw new Error('SHA256 校验失败：' + String(hash).slice(0, 12) + '…（已丢弃全部分卷，重试会重新下载；反复失败请换下载源）');
+      }
+    }
+    try { fs.rmSync(outFile, { force: true }); } catch (_) {}
+    fs.renameSync(tmpOut, outFile);
+    const finalSize = fs.statSync(outFile).size;
+    if (finalSize < (spec.minSize || 0)) throw new Error('下载文件不完整：' + finalSize + ' bytes');
+    // 10) MuScriptor 规格：合并完成后补齐 config.json。
+    //     muscriptor 依赖权重旁的 config.json 确定模型架构；本地路径无法识别规格时
+    //     会默认按 large 构建 → 与 small/medium 权重 state_dict 尺寸不匹配报错。
+    if (spec.id && spec.id.startsWith('muscriptor_')) {
+      const muscriptorConfigs = {
+        small: { dim: 768, num_heads: 12, num_layers: 14, card: 1393 },
+        medium: { dim: 1024, num_heads: 16, num_layers: 24, card: 1395 },
+        large: { dim: 1536, num_heads: 24, num_layers: 48, card: 1395 },
+      };
+      const cfg = muscriptorConfigs[spec.sizeKey];
+      if (cfg) {
+        try { fs.writeFileSync(path.join(destDir, 'config.json'), JSON.stringify(cfg, null, 2), 'utf8'); } catch (e) {}
+      }
+    }
+    try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) {}
+    sendP({ received: finalSize, total: finalSize, percent: 100, done: true, speed: 0 });
+    return { ok: true, path: destDir, size: finalSize };
   }
 
   ipcMain.handle('model:download', async (evt, id, channel) => {
@@ -1092,6 +792,32 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     // 同一模型已在下载中：阻止重复开启（页面切换/刷新后再进入也不会开第二份）
     if (_activeDownloads.has(id)) return { ok: false, error: '模型下载已在进行中，请稍候', active: true };
     _activeDownloads.add(id);
+    // GPT-SoVITS 音色（社区微调）：两个权重 + 参考音，逐文件走统一高速入口
+    if (spec.type === 'gsv') {
+      const destDir = path.join(modelsDir(), spec.dest);
+      const st0 = GSV.voiceState(spec, destDir);
+      if (st0.exists) {
+        _activeDownloads.delete(id);
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: st0.size, total: st0.size, percent: 100, done: true });
+        return { ok: true, path: destDir, size: st0.size, existed: true };
+      }
+      _modelCancels.delete(id); _modelPause.delete(id);
+      const ctrl = new AbortController(); _modelAborts.set(id, ctrl);
+      try {
+        const r = await GSV.downloadVoice(spec, destDir, FastDL, {
+          headers: { 'user-agent': 'FuFumidi' }, ctrl, isUserAbort: guardOf(id),
+          onProgress: (p) => { if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: p.received, total: p.total, percent: p.percent, speed: p.speed, done: false, text: '正在下载 ' + (spec.name || id) }); },
+        });
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: r.size, total: r.size, percent: 100, done: true, speed: 0 });
+        return { ok: true, path: r.path, size: r.size };
+      } catch (e) {
+        const msg = String((e && e.message) || e);
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, error: msg, canceled: _modelCancels.has(id), paused: _modelPause.has(id) });
+        return { ok: false, error: msg, canceled: _modelCancels.has(id), paused: _modelPause.has(id) };
+      } finally {
+        _modelAborts.delete(id); _modelCancels.delete(id); _modelPause.delete(id); _activeDownloads.delete(id);
+      }
+    }
     // HuggingFace 整仓下载（MuScriptor / Aria-AMT）
     if (spec.type === 'hf') {
       const destDir = path.join(modelsDir(), spec.dest);
@@ -1145,157 +871,61 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     }
     _modelCancels.delete(id);
     _modelPause.delete(id);
-    // 先走「多源测速 + 分段并行」的高速路径；任何不满足条件的情况（源不支持 Range、
-    // 拿不到长度、镜像全挂）都会抛错，随后自动回退到下面的单连接续传逻辑
-    let lastFastErr = null;
-    {
-      const fastCtrl = new AbortController();
-      _modelAborts.set(id, fastCtrl);
-      try {
-        const r = await downloadSingleFast(spec, dest, win, fastCtrl, id);
-        if (r.size < spec.minSize) throw new Error('下载文件不完整：' + r.size + ' bytes');
-        if (spec.sha256) {
-          const hash = await sha256File(dest);
-          if (hash !== spec.sha256) { try { fs.unlinkSync(dest); } catch (e) {} throw new Error('SHA256 校验失败：' + hash); }
-        }
-        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: r.size, total: r.size, percent: 100, done: true, speed: 0 });
-        _modelAborts.delete(id);
-        _activeDownloads.delete(id);
-        return { ok: true, path: dest, size: r.size, segmented: r.segments };
-      } catch (e) {
-        const msg = String((e && e.message) || e);
-        console.log('[model] 分段加速路径失败，回退单连接：' + msg);
-        _modelAborts.delete(id);
-        // 取消 / 暂停：按用户意图返回，不再回退重试
-        if (/paused|canceled/i.test(msg)) {
-          _activeDownloads.delete(id);
-          if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, error: msg, canceled: _modelCancels.has(id), paused: _modelPause.has(id) });
-          return { ok: false, error: msg, canceled: _modelCancels.has(id), paused: _modelPause.has(id) };
-        }
-        // 其余情况保留信息，回退单连接逻辑（分段残片与 .part 都会沿用）
-        lastFastErr = e;
-      }
-    }
-    const tmp = dest + '.part';
     const ctrl = new AbortController();
     _modelAborts.set(id, ctrl);
-    let out = null, keepPart = true, lastErr = null;
     try {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       const urls = mirrorUrls(spec);
-      // 多源轮换 + 断点续传轮次：失败保留 .part，Range 续传（停滞/断连不再从零开始）
-      const MAX_ROUNDS = 8;
-      for (let round = 0; round < MAX_ROUNDS; round++) {
-        if (_modelPause.has(id)) throw new Error('paused');
-        if (_modelCancels.has(id)) throw new Error('canceled');
-        let start = fs.existsSync(tmp) ? fs.statSync(tmp).size : 0;
-        const headers = { 'user-agent': 'FuFumidi/3.1.22' };
-        if (start > 0) headers['Range'] = 'bytes=' + start + '-';
-        let gd = null, res = null;
-        for (const u of urls) {
-          try {
-            gd = await fetchGuarded(u, { headers, ctrl, connectMs: 30000, stallMs: 30000 });
-            res = gd.res;
-            if (res.ok && res.body) break;
-            try { if (gd) gd.cleanup(); } catch (_) {}
-            gd = null; res = null;
-          } catch (e) {
-            lastErr = e;
-            try { if (gd) gd.cleanup(); } catch (_) {}
-            gd = null; res = null;
-            if (_modelPause.has(id) || _modelCancels.has(id)) break;
-          }
+      if (!urls.length) throw new Error('该模型没有可用的下载地址');
+      FastDL.checkDiskSpace(dest, spec.size || spec.minSize || 0);
+      // 统一入口：多源测速 + 分段并发 + 断点续传 + 停滞看门狗 + 低速轮换 + 大小校验
+      const r = await FastDL.downloadFast({
+        urls,
+        dest,
+        minSize: spec.minSize,
+        headers: { 'user-agent': 'FuFumidi' },
+        isUserAbort: guardOf(id),
+        ctrl,
+        expectSize: spec.size || 0,
+        label: spec.name || id,
+        onProgress: (p) => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('model:progress', {
+            id, received: p.received || 0, total: p.total || spec.size || 0,
+            percent: p.percent || 0, done: !!p.done, speed: p.speed || 0,
+            segmented: p.segmented || 1, text: p.text || '',
+          });
+        },
+      });
+      if (spec.sha256) {
+        const hash = await sha256File(dest);
+        if (hash !== spec.sha256) {
+          try { fs.rmSync(dest, { force: true }); } catch (_) {}
+          try { FastDL.cleanSegments(dest); } catch (_) {}
+          throw new Error('SHA256 校验失败：' + hash + '（文件已丢弃，请重试或换源）');
         }
-        if (!res || !gd) throw new Error(lastErr ? ('所有下载源均失败：' + lastErr.message) : '所有下载源均失败');
-        const resumable = res.status === 206 && start > 0;
-        if (!resumable && start > 0) { try { fs.rmSync(tmp, { force: true }); } catch (_) {} start = 0; } // 源不支持 Range → 全量重下
-        const total = (parseInt(res.headers.get('content-length') || '0', 10) || 0) + start;
-        out = fs.createWriteStream(tmp, { flags: resumable ? 'a' : 'w' });
-        out.on('error', () => {}); // 消费 'error' 事件，防 EPERM 等未捕获异常打崩主进程
-        const reader = gd.reader;
-        let received = start, lastSend = 0, lastT = 0, lastR = 0, speed = 0;
-        const tickSpeed = () => {
-          const now = Date.now();
-          if (!lastT) { lastT = now; lastR = received; return; }
-          const dt = now - lastT;
-          if (dt >= 300) { speed = ((received - lastR) / dt) * 1000; lastT = now; lastR = received; }
-        };
-        const sendP = (done) => {
-          const now = Date.now();
-          if (!done && now - lastSend < 300) return;
-          lastSend = now;
-          if (!done) tickSpeed();
-          const pct = total ? Math.min(99, Math.round(received / total * 100)) : 0;
-          if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received, total, percent: pct, done: !!done, speed });
-        };
-        let got = 0;
-        try {
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (_modelPause.has(id)) { try { reader.cancel(); } catch (e) {} throw new Error('paused'); }
-            if (_modelCancels.has(id)) { try { reader.cancel(); } catch (e) {} throw new Error('canceled'); }
-            got += value.length;
-            received = start + got;
-            sendP(false);
-            await new Promise((res2, rej2) => out.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
-          }
-          await new Promise((res2, rej2) => out.end(err => (err ? rej2(err) : res2())));
-        } finally { try { gd.cleanup(); } catch (_) {} }
-        sendP(true);
-        if (_modelPause.has(id)) throw new Error('paused');
-        if (_modelCancels.has(id)) throw new Error('canceled');
-        fs.renameSync(tmp, dest);
-        const size = fs.statSync(dest).size;
-        if (size < spec.minSize) throw new Error('下载文件不完整：' + size + ' bytes');
-        if (spec.sha256) {
-          const hash = await sha256File(dest);
-          if (hash !== spec.sha256) { try { fs.unlinkSync(dest); } catch (e) {} throw new Error('SHA256 校验失败：' + hash); }
-        }
-        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: size, total: size, percent: 100, done: true, speed: 0 });
-        return { ok: true, path: dest, size };
       }
-      throw new Error('自动下载失败（已多源轮换重试 ' + MAX_ROUNDS + ' 轮，断点已保留，重试将继续）：'
-        + ((lastErr && lastErr.message) || '网络不可达')
-        + (lastFastErr ? '；分段加速失败：' + (lastFastErr.message || lastFastErr) : ''));
+      if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: r.size, total: r.size, percent: 100, done: true, speed: 0 });
+      return { ok: true, path: dest, size: r.size, segments: r.segments };
     } catch (e) {
-      if (out) { try { out.destroy(); } catch (_) {} }
-      await new Promise(r => setTimeout(r, 150));
       const rawMsg = String((e && e.message) || e);
-      const msg = /aborted/i.test(rawMsg)
-        ? '下载中断（连接被中止或长时间没有数据；断点已保留，可稍后重试续传）'
-        : rawMsg;
-      console.log('[model] 单连接路径失败：' + rawMsg);
       const paused = _modelPause.has(id);
-      keepPart = paused || _modelCancels.has(id) || /paused|canceled/i.test(msg) ? keepPart : true;
-      // .part 一律保留（断点续传）；仅 SHA 失败等由上方清理目标文件
-      if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, error: msg, canceled: _modelCancels.has(id), paused });
-      return { ok: false, error: msg, canceled: _modelCancels.has(id), paused };
+      const canceled = _modelCancels.has(id);
+      const msg = (e && e.cancelled) || /aborted/i.test(rawMsg)
+        ? (paused ? '已暂停（断点已保留，继续时会接着下）' : '下载中断（断点已保留，可稍后重试续传）')
+        : rawMsg;
+      console.log('[model] 单文件下载失败：' + rawMsg);
+      if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, error: msg, canceled, paused });
+      return { ok: false, error: msg, canceled, paused };
     } finally {
-      const wasCanceled = _modelCancels.has(id) || _modelPause.has(id);
+      // 取消 / 暂停不清 .part、不清分段：断点留着，下次点继续就能接着下
       _modelCancels.delete(id);
       _modelAborts.delete(id);
       _modelPause.delete(id);
       _activeDownloads.delete(id);
-      try { if (!keepPart && fs.existsSync(tmp) && !fs.existsSync(dest)) fs.unlinkSync(tmp); } catch (_) {}
-      // 取消/暂停：顺便清掉分段残片，避免数据目录里留一堆 .fsN 垃圾；
-      // 网络类失败则保留（下次可跳过分段续传）
-      if (wasCanceled) cleanSegments(dest);
     }
   });
 
-  /** 清理某目标文件的分段残片（.fsN 与任意 .fsN.*.tmp） */
-  function cleanSegments(dest) { cleanSegTmp(dest, SEG_MAX); for (let i = 0; i < SEG_MAX; i++) { try { fs.rmSync(dest + '.fs' + i, { force: true }); } catch (_) {} } }
-  /** 只清理分段临时文件（保留已完成的分段以便续传） */
-  function cleanSegTmp(dest, segCount) {
-    let names = [];
-    try { names = fs.readdirSync(path.dirname(dest)); } catch (_) { return; }
-    const base = path.basename(dest) + '.fs';
-    for (const n of names) {
-      if (!n.startsWith(base) || !n.endsWith('.tmp')) continue;
-      try { fs.rmSync(path.join(path.dirname(dest), n), { force: true }); } catch (_) {}
-    }
-  }
 
   function closeAll() {
     for (const w of _folderWatchers.values()) { try { w.close(); } catch {} }

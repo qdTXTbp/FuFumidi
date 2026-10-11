@@ -28,7 +28,7 @@ const WELCOME_STEPS = computed(() => [
     ic: 'play2', title: t('欢迎使用 FuFumidi'),
     body: [
       t('转录、修正、编辑、播放、导出，全部在本机完成，不需要联网。'),
-      t('本引导按功能分成 13 个章节，你可以只学需要的章节，之后随时回来继续。'),
+      t('本引导按功能分成 14 个章节，你可以只学需要的章节，之后随时回来继续。'),
     ],
   },
   {
@@ -53,10 +53,10 @@ const WELCOME_STEPS = computed(() => [
     ],
   },
   {
-    ic: 'transcribe', title: t('转译：转录 / 转换'),
+    ic: 'transcribe', title: t('转译：转录 / 转换 / 翻唱'),
     body: [
       t('转录页把音频转成 MIDI（通用识别 / 钢琴专用 / 音频处理三种模式，可批量排队）。'),
-      t('转换页把 MIDI 导出为 WAV，或渲染成带可视化与字幕的 MP4 视频。'),
+      t('转换页把 MIDI 导出为 WAV，或渲染成带可视化与字幕的 MP4 视频；翻唱页则是完整的翻唱工作流：分离、扒谱、合成、混音一条龙。'),
     ],
   },
   {
@@ -71,7 +71,7 @@ const WELCOME_STEPS = computed(() => [
     body: [
       t('引擎是「轨道」的属性，不是页面模式：同一条工程里 UTAU 轨与 DiffSinger 轨可以混排。'),
       t('每轨左侧选歌手与语言；点「渲染本轨」会按该轨的引擎自动分派，不需要来回切页面。'),
-      t('同一页里两个页签：「编辑器」负责选歌手 / 画音符 / 渲染，「声库」负责做 / 装 / 管声库与推理组件 —— 边调边换歌手，不用跳页。'),
+      t('DiffSinger 轨还有谱面编辑：卷帘下方有音素条带与音高车道；顶部编排时间线管理整条工程的渲染片段。支持直接打开 OpenUTAU 的 .ustx / .ust 工程。'),
     ],
   },
   {
@@ -216,8 +216,8 @@ const CHAPTERS = computed(() => [
       { parent: 'resources', tab: 'model', selector: '.vm-tabs', title: t('模型管理'), desc: t('转录模型 / 人声分离 / 修复·VR 三类权重；卡片显示是否已安装、大小与最佳标记。'), manual: true },
       { parent: 'resources', tab: 'model', selector: '.vm-grid', title: t('下载与删除模型'), desc: t('点卡片查看详情后下载，可看进度与速度；装完新模型记得去「资源管理」补依赖。'), manual: true },
       { parent: 'resources', tab: 'model', selector: '[data-guide="vm-download-settings"]', title: t('下载渠道与 Token'), desc: t('下载设置里可选 HuggingFace 官方或 hf-mirror 镜像；下载需授权的模型时需要先填 Token，也能导入本地模型压缩包。'), manual: true },
-      { parent: 'resources', tab: 'soundfonts', selector: '.sf-grid', title: t('音色工坊：内置精选音色'), desc: t('试听后可下载启用某个 SF2 音色库；「使用默认合成器」可切回内置音色。'), manual: true },
-      { parent: 'resources', tab: 'soundfonts', selector: '.sf-card', title: t('当前音色与自定义导入'), desc: t('顶部显示当前使用的音色；「导入 .sf2 音色」可加入自己的音色并在「我的音色」中启用。'), manual: true },
+      { parent: 'resources', tab: 'soundfonts', selector: '.sf-grid', title: t('音色工坊：内置精选音色'), desc: t('试听后可下载启用某个 SF2 / SF3 音色库；「使用默认合成器」可切回内置音色。'), manual: true },
+      { parent: 'resources', tab: 'soundfonts', selector: '.sf-card', title: t('当前音色与自定义导入'), desc: t('顶部显示当前使用的音色；「导入 .sf2 / .sf3 音色」可加入自己的音色并在「我的音色」中启用（.sf3 会自动转换成可用的格式）。'), manual: true },
       { parent: 'resources', tab: 'resources', selector: '.res-sec', title: t('资源管理：依赖与 GPU'), desc: t('检查并补全 Python 依赖与模型运行时；有独显时可在这里查看并安装 GPU 加速包。'), manual: true },
       { parent: 'resources', tab: 'resources', selector: '.res-sec', title: t('曲库体检与诊断'), desc: t('可做曲库文件体检、检测重复文件、清理无主文件；「导出诊断包」便于排查问题，配置也能导出 / 导入。'), manual: true },
     ],
@@ -231,6 +231,10 @@ const CHAPTERS = computed(() => [
         desc: t('左侧就是工程的全部轨道。每轨自带引擎（UTAU / DiffSinger）、歌手与语言 —— 引擎在轨道上选，不是页面级切换。'), manual: true },
       { parent: 'singer', selector: '[data-guide="sing-project"]', title: t('工程文件'),
         desc: t('.fufumidi 是自包含工程包：伴奏等外部文件一起打进包里，所以换台机器打开不会断链（包内不存本机绝对路径）。'), manual: true },
+      { parent: 'singer', selector: '[data-guide="sing-project"]', title: t('OpenUTAU 工程互通'),
+        desc: t('打开工程时选 .ustx / .ust 也可以：轨道、音符、音高曲线完整导入，语言还会按歌词自动判断；编辑完也能导出回 .ustx 交给 OpenUtau 继续用。'), manual: true },
+      { parent: 'singer', selector: '[data-guide="sing-arrange"]', title: t('编排时间线'),
+        desc: t('顶部的时间线把整条工程铺开：每条轨一行，一段段「part 块」就是已渲染的片段。双击聚焦到编辑器对应位置，拖动可整段移动。'), manual: true },
       { parent: 'singer', selector: '[data-guide="sing-import-midi"]', title: t('导入 MIDI'),
         desc: t('从 MIDI 拿到旋律：多轨时会让您挑一条，音符落进当前声部轨（歌词留空，接着填）。'), manual: true },
       { parent: 'singer', selector: '[data-guide="sing-import-audio"]', title: t('导入音频（伴奏）'),
@@ -239,8 +243,10 @@ const CHAPTERS = computed(() => [
         desc: t('一个按钮，按该轨引擎自动分派（UTAU 走音源拼接，DiffSinger 走 AI 声学模型）。'), action: true },
       { parent: 'singer', selector: '[data-guide="sing-render-all"]', title: t('渲染全部轨'),
         desc: t('串行渲染每一条声部轨（结果按轨保存，渲第二条不会顶掉第一条），渲完一起播放。一条几十秒，进度会显示到第几条。'), action: true },
+      { parent: 'singer', selector: '[data-guide="sing-roll"]', title: t('谱面编辑：音素与音高'),
+        desc: t('卷帘下方就是音素条带与音高车道：音素可以单独点选改表达（辅音轻、元音亮），音高车道用多种工具在 ±200 音分内画偏移，随工程保存并纳入撤销。'), manual: true },
       { parent: 'singer', selector: '[data-guide="sing-transport"]', title: t('同时播放'),
-        desc: t('伴奏与**所有已渲染的声部轨**共用一个时钟同时起播（采样级同步）；每条轨可单独静音。'), manual: true },
+        desc: t('按空格直接播：没渲染或已过期的声部轨会自动补渲染再一起响（播放即全轨）。伴奏与所有声部轨共用一个时钟采样级同步，每条轨可单独静音。'), manual: true },
       { parent: 'singer', selector: '[data-guide="sing-track-props"]', title: t('轨道属性'),
         desc: t('三块：参数（UTAU 的重采样器/波源工具，DiffSinger 的采样深度与步数）、效果链（本轨独享，从上到下就是信号流）、自动化子轨（PIT 与 DYN/BRE/GEN 改了要重渲，VOL/PAN 播放时实时生效）。'), manual: true },
       { parent: 'singer', tab: 'banks', selector: '[data-guide="banks-installed"]', title: t('声库（两类混排）'),
@@ -252,6 +258,16 @@ const CHAPTERS = computed(() => [
     ],
   },
   {
+    id: 'cover', ic: 'mic', name: t('翻唱工作流'), desc: t('分离 → 扒谱 → 合成 → 混音，一条龙做翻唱'),
+    steps: [
+      { parent: 'cover', selector: '[data-guide="cover-pick-audio"]', title: t('选一首歌'), desc: t('翻唱走「分离 → 扒谱 → 合成 → 混音」四步：选入一首完整歌曲，应用自动把人声与伴奏分开，把人声转成旋律，再用你选的音色唱出来。'), manual: true },
+      { parent: 'cover', selector: '[data-guide="cover-pick-audio"]', title: t('复用分离结果'), desc: t('如果之前在「音频处理」里分离过这首歌，人声与伴奏会自动带过来，直接跳过分离这一步（省时间）。'), manual: true },
+      { parent: 'cover', selector: '[data-guide="cover-kind"]', title: t('选音色类型'), desc: t('DiffSinger 音色来自声库工坊，即选即用；GPT-SoVITS 音色需要本机运行时（v2pro）与参考音频。两种都能在本地完成合成。'), manual: true },
+      { parent: 'cover', selector: '[data-guide="cover-lyrics"]', title: t('歌词'), desc: t('歌词由扒谱自动生成，也可以手动修改 —— 合成时会按歌词逐字唱。'), manual: true },
+      { parent: 'cover', selector: '[data-guide="cover-run"]', title: t('开始翻唱'), desc: t('选好输出目录后点「开始翻唱」：按段合成再自动混音，支持断点续跑（中断后可继续，或勾选「不复用上次结果」全部重算）。'), manual: true },
+    ],
+  },
+  {
     id: 'settings', ic: 'palette', name: t('设置与个性化'), desc: t('外观、语言、快捷键与维护'),
     steps: [
       { parent: 'home', selector: '[data-guide="topbar-settings"]', title: t('打开设置'), desc: t('顶栏齿轮图标打开设置，也可用 Ctrl+K 搜索「设置」。'), action: true, validate: () => !!state.ui.settingsOpen, onEnter: () => { state.ui.settingsOpen = false; } },
@@ -260,7 +276,7 @@ const CHAPTERS = computed(() => [
       { parent: 'home', selector: '.ov-tab', title: t('语言切换'), desc: t('支持简体中文 / 繁體中文 / English / 日本語，切换后立即生效。'), manual: true, onEnter: () => { state.ui.settingsOpen = true; } },
       { parent: 'home', selector: '.ov-tab', title: t('快捷键一览'), desc: t('「快捷键」页列出全部快捷键，并可将自定义的键位恢复默认。'), manual: true, onEnter: () => { state.ui.settingsOpen = true; } },
       { parent: 'home', selector: '.ov-tab', title: t('功能与维护'), desc: t('「功能」页可设置默认输出目录、MIDI 文件关联、清理失效曲目等维护操作；「插件」页管理扩展。'), manual: true, onEnter: () => { state.ui.settingsOpen = true; } },
-      { parent: 'home', selector: '.tab[data-view="views"]', title: t('完成，收工'), desc: t('你已经走完 FuFumidi 的全部功能分区（共 13 章）。随时按 F1 重新打开本引导，或从首页「新手引导」卡片进入，按需重学某一章。'), manual: true, onEnter: () => { state.ui.settingsOpen = false; } },
+      { parent: 'home', selector: '.tab[data-view="views"]', title: t('完成，收工'), desc: t('你已经走完 FuFumidi 的全部功能分区（共 14 章）。随时按 F1 重新打开本引导，或从首页「新手引导」卡片进入，按需重学某一章。'), manual: true, onEnter: () => { state.ui.settingsOpen = false; } },
     ],
   },
 ]);

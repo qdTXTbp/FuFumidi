@@ -5,6 +5,7 @@
 const crypto = require('crypto');
 const Paths = require('./paths');
 const { safeExtractAllTo } = require('./zip-safe');
+const createFastDownload = require('./fast-download');
 // 直接 require 而不是走 `registerUtauIpc` 的入参：本模块的注册参数里没有 readSettings，
 // 而引擎选择要读设置。Node 模块缓存保证拿到的是同一个 settings 单例。
 const { readSettings } = require('./settings');
@@ -33,6 +34,8 @@ function pruneOuCacheDirs(root, current, keep = 8) {
 }
 
 function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawnEngine, createEngineSession }) {
+  // 统一高速下载器（规范入口，见 docs/DOWNLOADS.md）
+  const FastDL = createFastDownload({ net, fs, path });
   // 声库是体积较大的模型类资产：统一放在数据根目录（默认工具目录旁），不挤占 C 盘
   const vbRoot = () => Paths.voicebanksDir();
 
@@ -716,80 +719,36 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
     const zipPath = path.join(dlDir, it.id + '.zip');
     const part = zipPath + '.part';
 
-    const STALL_MS = 25000;
-    const MAX_ROUNDS = 10;
+    // 下载字节交给统一入口（多源测速 + 分段并发 + 断点续传 + 停滞看门狗 + 低速轮换）
     const entry = { ctrl: null, isUserAbort: false };
+    const ctrl = new AbortController();
+    entry.ctrl = ctrl;              // 取消可能早于第一次请求到达，先把控制器挂上
     _vbAborts.set(it.id, entry);
-    let ws = null, lastErr = null;
     // ★ 进度只增不减：多源轮换时如果按「本轮字节」重算，进度条会被打回 0 再涨回去，
     //   用户看到的就是「抽搐」。失败换源时保留高水位，另发 phase:'retry' 说明原因。
     let hiPct = 0;
 
     try {
-      for (let round = 0; round < MAX_ROUNDS; round++) {
-        const url = urls[round % urls.length];
-        const ctrl = new AbortController();
-        entry.ctrl = ctrl;
-        try {
-          let have = 0;
-          try { have = fs.statSync(part).size; } catch (e) {}
-          const headers = { 'user-agent': 'FuFumidi' };
-          if (have > 0) headers['range'] = 'bytes=' + have + '-';
-          const r = await net.fetch(url, { headers, signal: ctrl.signal, redirect: 'follow' });
-          if (r.status === 416) {
-            try { fs.rmSync(part, { force: true }); } catch (e2) {}
-            throw new Error('断点越界已重置');
+      await FastDL.downloadFast({
+        urls,
+        dest: zipPath,
+        minSize: 200000,             // 归档 zip 至少几百 KB；过小多半是被代理返回的错误页
+        headers: { 'user-agent': 'FuFumidi' },
+        isUserAbort: entry,
+        ctrl,
+        label: it.name || it.id,
+        onProgress: (p) => {
+          if (p.done) return;
+          const total = p.total || 0;
+          const pct = total ? Math.min(84, Math.round((p.received || 0) / total * 84)) : hiPct;
+          if (pct > hiPct) hiPct = pct;
+          if (p.retry) {
+            send({ id, phase: 'retry', percent: hiPct, done: false, retry: p.retry, error: '第 ' + p.retry + ' 轮失败，自动换源/续传…' });
+          } else {
+            send({ id, phase: 'download', received: p.received || 0, total, percent: hiPct, done: false });
           }
-          if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
-          const clen = parseInt(r.headers.get('content-length') || '0', 10);
-          const resumable = r.status === 206 && have > 0;
-          if (!resumable && have > 0) { try { fs.rmSync(part, { force: true }); } catch (e2) {} have = 0; }
-          const total = clen ? have + clen : 0;
-          ws = fs.createWriteStream(part, { flags: resumable ? 'a' : 'w' });
-          ws.on('error', () => {});
-          const reader = r.body.getReader();
-          let lastData = Date.now();
-          const watchdog = setInterval(() => {
-            if (Date.now() - lastData > STALL_MS) {
-              try { reader.cancel('stalled'); } catch (e2) {}
-              try { ctrl.abort(); } catch (e2) {}
-            }
-          }, 3000);
-          let got = 0;
-          try {
-            for (;;) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              lastData = Date.now();
-              got += value.length;
-              const received = have + got;
-              const pct = total ? Math.min(84, Math.round(received / total * 84)) : 0;
-              if (pct > hiPct) hiPct = pct;
-              send({ id, phase: 'download', received, total, percent: hiPct, done: false });
-              await new Promise((res2, rej2) => ws.write(Buffer.from(value), err => (err ? rej2(err) : res2())));
-            }
-          } finally { clearInterval(watchdog); }
-          await new Promise((res2, rej2) => ws.end(err => (err ? rej2(err) : res2())));
-          ws = null;
-          const st = fs.statSync(part);
-          // 归档 zip 至少几百 KB；过小多半是被代理返回的错误页
-          if (st.size < 200000) { lastErr = new Error('归档过小（' + st.size + ' B），可能被代理拦截'); continue; }
-          try { fs.rmSync(zipPath, { force: true }); } catch (e2) {}
-          fs.renameSync(part, zipPath);
-          break;
-        } catch (e) {
-          lastErr = e;
-          try { if (ws) ws.destroy(); } catch (e2) {}
-          ws = null;
-          if (entry.isUserAbort) return { ok: false, cancelled: true, error: '已取消' };
-          // ★ 不要把 percent 打回 0（那样进度条会来回跳）；保留高水位，另发 retry 相位让界面解释一句
-          send({ id, phase: 'retry', percent: hiPct, done: false, retry: round + 1,
-                 error: '第 ' + (round + 1) + ' 轮失败，自动换源/续传…' });
-          if (round === MAX_ROUNDS - 1) {
-            return { ok: false, error: '下载失败（已多源轮换 ' + MAX_ROUNDS + ' 轮）：' + ((lastErr && lastErr.message) || '网络不可达') };
-          }
-        }
-      }
+        },
+      });
 
       // 解包：只取声库目录，剥掉 GitHub 归档的顶层 <repo>-<ref>/ 前缀
       send({ id, phase: 'extract', percent: 88, done: false });

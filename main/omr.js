@@ -12,6 +12,7 @@
 'use strict';
 const { spawn, execFile } = require('child_process');
 const Paths = require('./paths');
+const createFastDownload = require('./fast-download');
 
 const VERSION = '5.11.0';
 const MSI_URL = 'https://github.com/Audiveris/audiveris/releases/download/' + VERSION +
@@ -21,6 +22,8 @@ function engineDir() { return require('path').join(Paths.dataRoot(), 'omr', 'aud
 function exePath() { return require('path').join(engineDir(), 'Audiveris', 'Audiveris.exe'); }
 
 function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net }) {
+  // 统一高速下载器（规范入口，见 docs/DOWNLOADS.md）
+  const FastDL = createFastDownload({ net, fs, path });
   const status = () => {
     const exe = exePath();
     let installed = false, size = 0;
@@ -131,7 +134,24 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net }) {
   }
 
   // 三级回退：Chromium 栈 → Node 直连 → 系统代理（PowerShell）
+  // 下载通道：统一入口优先，其后才是「Chromium 栈 → Node 直连 → 系统代理（PowerShell）」三级回退。
+  // 统一入口带来测速 / 分段并发 / 断点续传 / 停滞看门狗 / 大小校验；
+  // 三级回退保留的原因是企业代理环境里可能只有 PowerShell 走得通。
   async function downloadAny(url, dest, onProgress) {
+    try {
+      const r = await FastDL.downloadFast({
+        urls: [url],
+        dest,
+        minSize: 1024 * 1024,
+        headers: { 'user-agent': 'FuFumidi' },
+        label: 'OMR 组件',
+        onProgress: (p) => { if (!p.done && onProgress) onProgress(Math.min(86, p.percent || 0)); },
+      });
+      return { ok: true, via: 'fastdl', bytes: r.size };
+    } catch (e) {
+      // 落到下面的老通道；失败原因一并带上，便于诊断
+      console.log('[omr] 统一下载器失败，回退老通道：' + String((e && e.message) || e));
+    }
     const tries = [];
     if (net) tries.push(['net', () => downloadNet(url, dest, onProgress)]);
     tries.push(['node', () => downloadNode(url, dest, onProgress)]);

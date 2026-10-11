@@ -2,6 +2,7 @@
 // 主进程任务队列服务：音频转录、智能修正与任务取消
 // ============================================================
 'use strict';
+const SepCommon = require('./separate-common');
 const Paths = require('./paths');
 
 function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, pluginHost, readSettings, resolveSeparateModel }) {
@@ -129,33 +130,12 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
   // 音频处理（MSST 分离）：audio + 分离模型 → 输出所选音轨
   ipcMain.handle('engine:separate', (evt, cfg) => new Promise((resolve, reject) => {
     const win = BrowserWindow.fromWebContents(evt.sender);
-    if (!cfg || !cfg.audio || !cfg.sep_model) { reject(new Error('缺少参数：需要音频文件与处理模型')); return; }
-    if (!resolveSeparateModel) { reject(new Error('音频处理服务未就绪')); return; }
-    const resolved = resolveSeparateModel(cfg.sep_model);
-    if (!resolved) { reject(new Error('未知的分离模型：' + cfg.sep_model)); return; }
-    if (resolved.exists === false) { reject(new Error(resolved.error || '该模型未下载，请先到模型管理下载')); return; }
-    if (!resolved.configPath) { reject(new Error('该模型缺少配置文件，暂不支持此模型')); return; }
-
-    // 输出目录优先级：设置里显式配置的「默认输出目录」> 调用方指定 > 与输入同目录 > 临时目录
-    let dir = cfg.out_dir && String(cfg.out_dir).trim() ? String(cfg.out_dir).trim() : '';
-    if (!dir) {
-      try { const s = readSettings ? readSettings() : {}; dir = (s && s.output_dir && String(s.output_dir).trim()) || ''; } catch (e) { dir = ''; }
-    }
-    if (!dir) {
-      const srcDir = (cfg.audio || '').replace(/[\\/][^\\/]*$/, '');
-      dir = srcDir && srcDir !== (cfg.audio || '') ? srcDir : Paths.tempDir();
-    }
-    try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { dir = Paths.tempDir(); try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} }
-
-    const args = ['separate', cfg.audio, '--output', dir,
-      '--model', resolved.modelPath, '--config', resolved.configPath, '--arch', resolved.arch];
-    if (cfg.chunk_size) args.push('--chunk-size', String(cfg.chunk_size));
-    if (cfg.num_overlap) args.push('--num-overlap', String(cfg.num_overlap));
-    if (cfg.batch_size) args.push('--batch-size', String(cfg.batch_size));
-    if (Array.isArray(cfg.stems) && cfg.stems.length) args.push('--stems', cfg.stems.join(','));
-    if (cfg.format) args.push('--format', String(cfg.format).toLowerCase());
-    if (cfg.tta) args.push('--tta');
-    if (cfg.normalize) args.push('--normalize');
+    // ★ 参数构造集中在 main/separate-common.js —— 音频处理面板与翻唱工作流共用同一份，
+    //   避免「面板出一个文件名、工作流找另一个文件名」这种只在运行时才炸的错。
+    const req = SepCommon.buildSeparateRequest(cfg, { resolveSeparateModel, readSettings, Paths, fs });
+    if (!req.ok) { reject(new Error(req.error)); return; }
+    const dir = req.dir;
+    const args = req.args;
 
     const sendLog = (line) => { if (win && !win.isDestroyed()) win.webContents.send('engine:separate:log', { id: cfg.id, line }); };
     const sendProg = (p) => { if (win && !win.isDestroyed()) win.webContents.send('engine:separate:progress', Object.assign({ id: cfg.id }, p || {})); };

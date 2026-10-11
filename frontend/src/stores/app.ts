@@ -1,7 +1,7 @@
 // Pinia 应用主 Store：播放 / 歌单 / 混音 / UI / 导入恢复
 // 所有组件直接使用 Pinia store，store.js 兼容层已移除
 import { defineStore } from 'pinia';
-import { ensureAudio } from '../audio';
+import { ensureAudio, ensureEngineHealthy } from '../audio';
 import { parseMidi, buildSong } from '../core/midi';
 import { TRACK_COLORS, fmtTime } from '../core/util';
 import { usePlaylistStore } from './playlist';
@@ -27,6 +27,10 @@ export const VIEWS = [
   // 所以合成**一个**入口；页内在「编辑器 / 声库」两个页签之间切换（?tab=banks）。
   { id: 'singer', label: '调教', ic: 'utau',
     hint: '调教 = 让声库把音符唱出来：选歌手、填词、画音高/参数曲线、渲染成音频（声部轨 = 一条人声轨；UTAU / DiffSinger 是两种合成引擎）' },
+  // 翻唱：把「分离 → 扒谱 → 合成 → 混音」串成一条工作流。音色可以是 DiffSinger 声库，
+  // 也可以是资源中心下载的 GPT-SoVITS 音色（逐句拿原唱那一句当参考重合成）。
+  { id: 'cover', label: '翻唱', ic: 'mic',
+    hint: '一首歌 → 分离人声 → 扒谱（音符 + 歌词）→ 用你选的音色唱出来 → 混音成成品' },
   // 插件中心：官方插件平台的应用内入口（下载后由主进程解压安装并立即启用）
   { id: 'plugins', label: '插件中心', ic: 'extension', hint: '扩展功能：下载后由主进程安装并立即启用' },
 ];
@@ -826,7 +830,7 @@ export const useAppStore = defineStore('app', {
         }
       } catch (e) {}
     },
-    togglePlay() {
+    async togglePlay() {
       // 音频曲目：走 <audio>
       if (this.isAudio) {
         const el = this.ensureAudioEl();
@@ -836,13 +840,18 @@ export const useAppStore = defineStore('app', {
         else { el.play(); this.playing = true; this.trackPlay(); }
         return;
       }
-      const { player } = ensureAudio();
       if (!this.currentSong) { this.toast(t('请先导入一首 MIDI'), 'warn'); return; }
       if (this.playing) {
+        const { player } = ensureAudio();
         player.pause();
         this.playing = false;
         this.saveResumePos(); // 暂停即记录断点
       } else {
+        // ★ 播放前体检：context 被毒化（一切装载成功却永远无声，见 audio.js）时
+        //   整体重建引擎；重建后旧 player 作废，必须把当前曲重新装回去再播。
+        const rv = await ensureEngineHealthy();
+        if (rv.rebuilt && this.currentId) { this.playing = false; await this.selectSong(this.currentId); }
+        const { player } = ensureAudio();
         player.play();
         this.playing = true;
         this.trackPlay(); // 播放统计
@@ -887,6 +896,8 @@ export const useAppStore = defineStore('app', {
     },
     // 载入并播放指定曲目（上一首/下一首/自动切歌共用）
     async playSongById(id: string) {
+      // ★ 先体检再选曲：若引擎需要重建，selectSong 会把曲目装进**新** player
+      await ensureEngineHealthy();
       await this.selectSong(id);
       const { player } = ensureAudio();
       player.play();

@@ -854,6 +854,28 @@ def _infer_language(phonemizer: str) -> str:
     return 'zh'
 
 
+_KANA_RE = re.compile(r'[\u3041-\u30ff\u31f0-\u31ff]')
+_HANGUL_RE = re.compile(r'[\uac00-\ud7af\u1100-\u11ff]')
+
+
+def _track_language(t) -> str:
+    """轨道语言：先看音素化器名；DiffSinger 轨的音素化器名不含语言信息
+    （如 `OPENUTAU(DiffSinger)`），推断恒为 zh —— 而语言决定 g2p 词典
+    （dsdict-<lang>.yaml / dictionary-<lang>.txt），猜错就「歌词无法识别：い」。
+    所以音素化器给不出信号时，按歌词文字推断（假名→ja、谚文→ko、其余→zh）。
+    2026-10-11：用户导入的日语 ustx 全部歌词无法识别，正是这条链路断了。"""
+    lang = _infer_language(getattr(t, 'phonemizer', None))
+    if lang != 'zh':
+        return lang
+    lyrics = ' '.join(str(getattr(n, 'lyric', '') or '')
+                      for n in (getattr(t, 'notes', None) or []))
+    if _KANA_RE.search(lyrics):
+        return 'ja'
+    if _HANGUL_RE.search(lyrics):
+        return 'ko'
+    return lang
+
+
 def _infer_engine(renderer: str) -> str:
     """渲染器名 → 前端轨道引擎（diffsinger / utau）。"""
     s = str(renderer or '').lower()
@@ -910,7 +932,7 @@ def export_project_json(proj, project_dir: str) -> dict:
             # 导入时**不绑定声库**（置空让用户重选），原名存 singerName 供展示。
             'singer': '',
             'singerName': t.singer or '',
-            'language': _infer_language(t.phonemizer),
+            'language': _track_language(t),
             'muted': bool(t.mute) and not bool(t.solo),
             'volume': t.volume,
             'pan': t.pan,

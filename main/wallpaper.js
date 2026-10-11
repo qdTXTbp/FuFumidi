@@ -6,46 +6,11 @@ const DS = require('./download-source');
 
 const path = require('path');
 const fs = require('fs');
-const http = require('http');
-const https = require('https');
-const Paths = require('./paths');
 
-function streamDownload(url, dest, onProgress, redirects = 0) {
-  return new Promise((resolve, reject) => {
-    const lib = url.startsWith('https') ? https : http;
-    const req = lib.get(url, { headers: { 'User-Agent': 'FuFumidi' } }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 5) {
-        res.resume();
-        const next = new URL(res.headers.location, url).toString();
-        resolve(streamDownload(next, dest, onProgress, redirects + 1));
-        return;
-      }
-      if (res.statusCode !== 200) { res.resume(); reject(new Error('HTTP ' + res.statusCode)); return; }
-      const total = parseInt(res.headers['content-length'] || '0', 10) || 0;
-      let received = 0;
-      let lastPct = -1;
-      const ws = fs.createWriteStream(dest);
-      // 单 data 监听（不再同时 pipe，避免双监听）；进度按 ~2% 间隔节流，避免高频事件闪烁
-      res.on('data', (chunk) => {
-        received += chunk.length;
-        const pct = total ? Math.round(received / total * 100) : 0;
-        if (onProgress && total > 0 && (pct >= lastPct + 2 || pct === 100)) {
-          lastPct = pct;
-          try { onProgress(Math.max(0, Math.min(1, received / total))); } catch (e) {}
-        }
-        if (!ws.write(chunk)) {
-          res.pause();
-          ws.once('drain', () => res.resume());
-        }
-      });
-      res.on('end', () => { ws.end(); });
-      ws.on('finish', () => { try { if (onProgress) onProgress(1); } catch (e) {} resolve(); });
-      ws.on('error', reject);
-      res.on('error', reject);
-    });
-    req.on('error', reject);
-  });
-}
+const Paths = require('./paths');
+const createFastDownload = require('./fast-download');
+
+
 
 async function fetchThumbData(net, url) {
   try {
@@ -74,6 +39,8 @@ async function fetchThumbDataCached(net, url, cachePath) {
 }
 
 function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parsePyJson }) {
+  // 统一高速下载器（规范入口，见 docs/DOWNLOADS.md）
+  const FastDL = createFastDownload({ net, fs, path });
   // 动态壁纸：发现桌面上的视频文件（mp4/webm/mov），供渲染进程作为壁纸源
   ipcMain.handle('wallpaper:defaults', async () => {
     try {
@@ -282,7 +249,6 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       f.mkdirSync(dir, { recursive: true });
       const safe = String(name || 'wallpaper').replace(/[\\/:*?"<>|]/g, '_');
       const dest = path.join(dir, safe);
-      const tmp = dest + '.part';
       const sendP = (p) => {
         try { if (evt && !evt.sender.isDestroyed()) evt.sender.send('wallpaper:downloadProgress', { name: safe, progress: p }); } catch (e) {}
       };
@@ -293,37 +259,23 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       const candidates = /^https:\/\/cnb\.cool\//i.test(url)
         ? DS.orderUrls(url, gh)
         : DS.orderUrls(cnb, /^https:\/\/media\.githubusercontent\.com\//i.test(url) ? url : gh);
-      let lastErr = null;
-      let got = 0;
-      for (const u of candidates) {
-        try {
-          await streamDownload(u, tmp, (p) => sendP(p));
-          try { got = f.statSync(tmp).size; } catch (e) { got = 0; }
-          if (got > 0) break;
-          throw new Error('下载文件为空');
-        } catch (e) {
-          lastErr = e;
-          try { f.unlinkSync(tmp); } catch (e2) {}
-        }
-      }
-      if (!got) throw lastErr || new Error('所有下载源均失败');
-      // 完整性校验：0 字节 = 下载失败/被拦截，删除残留避免假壁纸
-      let size = 0;
-      try { size = f.statSync(tmp).size; } catch (e) {}
-      if (size <= 0) {
-        try { f.unlinkSync(tmp); } catch (e) {}
-        return { ok: false, error: '下载文件为空（网络受限或文件被拦截），已回退在线壁纸' };
-      }
-      // 改名到正式文件名（原子替换：先删旧再改名），并写完成标记 .ok
-      if (f.existsSync(dest)) { try { f.unlinkSync(dest); } catch (e) {} }
-      f.renameSync(tmp, dest);
+      // 下载字节交给统一入口：多源并发测速 + 分段并发 + 断点续传 + 停滞看门狗 + 完整性校验。
+      // 旧实现自己写 http/https 流 —— 没有测速、没有续传，断了就从 0 重来，被限速也只能一路慢到底。
+      const r = await FastDL.downloadFast({
+        urls: candidates,
+        dest,
+        minSize: 64 * 1024,
+        headers: { 'user-agent': 'FuFumidi' },
+        label: safe,
+        onProgress: (p) => { if (!p.done) sendP(Math.max(0, Math.min(0.99, (p.percent || 0) / 100))); },
+      });
+      const size = r.size;
+      if (size <= 0) return { ok: false, error: '下载文件为空（网络受限或文件被拦截），已回退在线壁纸' };
+      // 完成标记：与视频同名，界面据此判定「已下载」
       try { f.writeFileSync(dest + '.ok', '1', 'utf8'); } catch (e) {}
       sendP(1);
       return { ok: true, path: dest, name: safe, size };
     } catch (e) {
-      const safe = String(name || 'wallpaper').replace(/[\\/:*?"<>|]/g, '_');
-      const tmp = path.join(dir, safe + '.part');
-      try { if (f.existsSync(tmp)) f.unlinkSync(tmp); } catch (e2) {}
       return { ok: false, error: String((e && e.message) || e) };
     }
   });

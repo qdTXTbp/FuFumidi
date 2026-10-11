@@ -58,6 +58,7 @@ const { registerProjectIpc } = require('./main/project');
 const { registerWallpaperIpc } = require('./main/wallpaper');
 const { registerUtauIpc } = require('./main/utau');
 const { registerDiffsingerIpc } = require('./main/diffsinger');
+const { registerCoverIpc } = require('./main/cover');
 const { createHotkeys, HOTKEY_ACTIONS } = require('./main/hotkeys');
 const { registerSoundfontWorkshopIpc } = require('./main/soundfonts');
 const { createWindow, configureSession, openFileFromArgv, openPath } = require('./main/window');
@@ -83,6 +84,11 @@ if (SAFE_GPU) {
   app.commandLine.appendSwitch('enable-zero-copy');
   app.commandLine.appendSwitch('enable-accelerated-video-decode');
   app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport,HardwareMediaKeyHandling');
+  // ★ 音频服务改进程内运行：本机实测（2026-10-11，装着 网易虚拟音频/Voicemeter/Lenovo E03
+  //   等虚拟音频驱动的机器）独立音频服务进程会被反复打断 —— AudioContext 以 running 出生
+  //   却在数秒内被压回 suspended、resume() 的 Promise 永不返回、时钟冻结，任何重建都救不回
+  //   正在坏掉的服务连接。进程内音频绕开这条 RPC 链路，实测 context 可长期保持 running。
+  app.commandLine.appendSwitch('disable-features', 'AudioServiceOutOfProcess');
   // 视情况启用 angle 后端
   app.commandLine.appendSwitch('use-angle', 'default');
 }
@@ -123,7 +129,7 @@ if (!gotLock) {
     registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, pluginHost, readSettings, resolveSeparateModel: (id) => (ModelsService ? ModelsService.resolveSeparateModel(id) : null) });
     registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, parsePyJson });
     registerPresetsIpc({ ipcMain, runEngineInline, parsePyJson, pyLit });
-    registerDialogsIpc({ ipcMain, dialog, path, fs, app });
+    registerDialogsIpc({ ipcMain, dialog, path, fs, app, spawnEngine });
     registerDiagnosticsIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine });
     // 依赖 / 环境 / 模型目录规范化：把旧版散落在 C 盘用户目录下的重型目录
     // 一次性迁移到「工具目录」旁的 FuFumidiData（迁移期间显示进度窗）。
@@ -151,6 +157,9 @@ if (!gotLock) {
     registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawnEngine, createEngineSession: EngineService.createEngineSession });
     // DiffSinger 模块化集成：默认关闭；启用后才按需下载推理依赖与通用声码器（模块内自检）
     registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawn, spawnEngine, createEngineSession: EngineService.createEngineSession, resolvePython, engineEnv, readSettings, writeSettings });
+    // 翻唱工作流（一首歌 → 分离 → 扒谱 → 合成 → 混音 → 成品）：
+    // 引擎是 engine_cover.py；GPT-SoVITS 音色通道的解释器/运行时由环境变量传给引擎。
+    registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spawnEngine, engineEnv, readSettings });
     registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, net });
     registerPluginsIpc();
     registerGpuIpc({

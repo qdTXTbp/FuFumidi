@@ -3,7 +3,7 @@
 // ============================================================
 'use strict';
 
-function registerDialogsIpc({ ipcMain, dialog, path, fs, app }) {
+function registerDialogsIpc({ ipcMain, dialog, path, fs, app, spawnEngine }) {
   // 原生对话框
   ipcMain.handle('dialog:pickAudio', async () => {
     const r = await dialog.showOpenDialog({
@@ -121,11 +121,54 @@ function registerDialogsIpc({ ipcMain, dialog, path, fs, app }) {
     } catch { return null; }
   });
   // 读取 SoundFont（SF2/SF3 通常数十 MB 到数百 MB，单独放宽上限）
+  // ★ SF3 支持：js-synthesizer 的 fluidsynth wasm 里 fluid_stat/fluid_file_test 是桩，
+  //   sf3 的 Ogg 采样解不出来（装载成功但永远无声）。读取前先用引擎侧 sf3tool.py
+  //   把 sf3 解码转成标准 sf2（缓存同名 .conv.sf2，源文件更新自动重转），见 engine/sf3tool.py。
+  const _sf3Converting = new Map();   // cachePath -> Promise（防并发重复转换）
+  async function _ensureSf2Converted(sf3Path, sf3Stat) {
+    const cachePath = sf3Path.replace(/\.sf3$/i, '') + '.conv.sf2';
+    let fresh = false;
+    try {
+      const cst = await fs.promises.stat(cachePath);
+      fresh = cst.mtimeMs >= sf3Stat.mtimeMs;
+    } catch (e) { fresh = false; }
+    if (fresh) return cachePath;
+    let task = _sf3Converting.get(cachePath);
+    if (!task) {
+      task = new Promise((resolve) => {
+        try {
+          spawnEngine(['convert', '--in', sf3Path, '--out', cachePath], {
+            script: 'sf3tool.py',
+            timeoutMs: 300000,
+            onDone: (code, r) => {
+              if (r && r.result && r.result.ok) {
+                console.log('[soundfont] sf3 → sf2 转换完成：', cachePath,
+                  JSON.stringify(r.result));
+                resolve(cachePath);
+              } else {
+                console.warn('[soundfont] sf3 转换失败：', (r && r.result && r.result.error) || (r && r.err) || ('exit ' + code));
+                resolve(null);
+              }
+            },
+            onError: (e) => { console.warn('[soundfont] sf3 转换器启动失败：', String(e)); resolve(null); },
+          });
+        } catch (e) { resolve(null); }
+      });
+      _sf3Converting.set(cachePath, task);
+      task.finally(() => _sf3Converting.delete(cachePath));
+    }
+    return task;
+  }
   ipcMain.handle('file:readSoundFont', async (_e, p) => {
     try {
       const st = await fs.promises.stat(p);
       if (!st.isFile() || st.size > 512 * 1024 * 1024) return null;
-      const buf = await fs.promises.readFile(p);
+      let target = p;
+      if (/\.sf3$/i.test(p)) {
+        target = await _ensureSf2Converted(p, st);
+        if (!target) return null;   // 转换失败 → 前端按「读取失败」回退内置音色
+      }
+      const buf = await fs.promises.readFile(target);
       return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
     } catch { return null; }
   });
