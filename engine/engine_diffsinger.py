@@ -55,9 +55,13 @@ python engine_diffsinger.py pitch-edit --voicebank <声库目录> --notes @notes
 import argparse
 import json
 import os
+import re
 import asyncio
 import sys
 import traceback
+
+# 假名检测（平/片假名）：语言自纠错用 —— 歌词是假名而轨道语言不是 ja 时自动切日语词典
+_KANA_RE = re.compile(r'[\u3041-\u30ff\u31f0-\u31ff]')
 
 # ============================================================
 # 转发层 —— 真正的实现在 diffsinger/ 包里
@@ -331,11 +335,34 @@ def cmd_sing_render(args):
     try:
         from singing.openutau.diffsinger.session import render_notes
         notes = _parse_notes_arg(args.notes)
+        # ★ 语言自纠错：旧版导入的工程轨道语言恒为 zh，而语言决定 g2p 词典 ——
+        #   日文假名歌词 + zh 词典 = 整轨「歌词无法识别」。歌词是假名、声库又带
+        #   日语词典时，自动改用 ja（2026-10-11，liu2_ying2 实测）。
+        lang = args.language or 'zh'
+        if lang != 'ja':
+            try:
+                lyric_text = ''
+                for n in (notes or []):
+                    if isinstance(n, dict):
+                        if n.get('isRest') or n.get('rest'):
+                            continue
+                        lyric_text += str(n.get('lyric') or '')
+                    else:
+                        if not getattr(n, 'is_rest', False):
+                            lyric_text += str(getattr(n, 'lyric', '') or '')
+                if _KANA_RE.search(lyric_text):
+                    vb = args.voicebank or ''
+                    if any(os.path.isfile(os.path.join(vb, f)) for f in
+                           ('dsdict-ja.yaml', 'dictionary-ja.txt')):
+                        print('###PROG {"note": "检测到日文假名歌词，已自动改用日语词典 (ja)"}', flush=True)
+                        lang = 'ja'
+            except Exception:
+                pass
         r = asyncio.run(render_notes(
             notes,
             args.voicebank or '',
             bpm=float(args.bpm or 120),
-            language=args.language or 'zh',
+            language=lang,
             depth=float(args.depth if args.depth is not None else 1.0),
             steps=int(args.steps if args.steps is not None else 20),
             cache_dir=args.cache_dir or None,
