@@ -216,7 +216,7 @@ async function downloadWav(buf, name, g) {
 /* ==================== 视频 / 可视化导出 ==================== */
 const VE = reactive({
   format: 'mp4', template: 'landscape', res: '1280x720', fps: 24, quality: 'medium',
-  dur: 30, durMode: 'full', durCustom: 30, visual: 'mix', track: 'all', range: 'all', start: 0, end: 30,
+  dur: 30, durMode: 'full', durCustom: 30, visual: 'mix', track: 'all',
   bitrate: 8, showProgress: true, showChord: true, showTimecode: false,
   // ★ 背景不在 VE 里：它跟「可视化」页共用 stores/vizbg（同一份 + 同一绘制函数）。
   //   以前这里是 bgColor/bgImage 一套私有设置，导出画面跟用户看到的瀑布流对不上。
@@ -479,12 +479,47 @@ if (typeof window !== 'undefined') {
     return out;
   };
 }
+/* 导出用 H.264 编码配置选择（WebCodecs）。
+ * 候选按 level 从高到低排：**codec 字符串里的 level 必须覆盖分辨率**，否则 isConfigSupported
+ * 直接返回 false —— 实测 avc1.42002A（Level 4.2，上限约 1080p）在 2K/4K 上不支持，
+ * 换成 Level 5.1（…33）之后 4K 也能交给硬件编码器。
+ * 先试 prefer-hardware（GPU / NVENC），再退 no-preference；都不支持返回 null（走 MediaRecorder）。 */
+const AVC_CANDIDATES = ['avc1.640034', 'avc1.640033', 'avc1.4D4033', 'avc1.420033', 'avc1.64002A', 'avc1.42002A'];
+async function pickVideoCodec(W, H, fps, bitrate) {
+  if (typeof VideoEncoder === 'undefined') return null;
+  for (const hardwareAcceleration of ['prefer-hardware', 'no-preference']) {
+    for (const codec of AVC_CANDIDATES) {
+      try {
+        const cfg = { codec, width: W, height: H, bitrate, framerate: fps, hardwareAcceleration, latencyMode: 'quality', avc: { format: 'annexb' } };
+        const r = await VideoEncoder.isConfigSupported(cfg);
+        if (r && r.supported) {
+          // 回填 avc.format：某些实现会把自定义字段从返回的 config 里抹掉，抹掉后输出不是 Annex B
+          const conf = Object.assign({}, r.config, { avc: { format: 'annexb' } });
+          return { config: conf, codec, hardware: (r.config && r.config.hardwareAcceleration) || hardwareAcceleration };
+        }
+      } catch (e) { /* 换下一个候选 */ }
+    }
+  }
+  return null;
+}
+
+/** 等编码器把队列排空（背压）。dequeue 事件不保证送达，加超时兜底避免卡死。 */
+function waitEncoder(enc, timeoutMs) {
+  return new Promise((resolve) => {
+    let done = false;
+    const fin = () => { if (done) return; done = true; try { enc.removeEventListener('dequeue', fin); } catch (e) {} resolve(); };
+    try { enc.addEventListener('dequeue', fin); } catch (e) {}
+    setTimeout(fin, timeoutMs || 300);
+  });
+}
+
 async function renderVideo() {
   const s = song.value;
   const bridge = window.fuBridge;
   if (!s) { toast(t('请先载入 MIDI 文件'), 'warn'); return; }
   if (VE.veBusy) return;
-  if (typeof MediaRecorder === 'undefined' || !HTMLCanvasElement.prototype.captureStream) { toast(t('视频导出不可用（当前内核不支持）'), 'err'); return; }
+  let cv = null;   // 录制画布：finally 里要负责把它从 DOM 摘掉
+    if (typeof MediaRecorder === 'undefined' && typeof VideoEncoder === 'undefined') { toast(t('视频导出不可用（当前内核不支持）'), 'err'); return; }
   VE.veBusy = true; VE.veProgress = 0; VE.veStage = t('准备音频（离线渲染）…'); VE.veCancel = false;
   try {
     let [W, H] = VE.res === 'custom' ? [veResCustom.value ? 1920 : 1920, 1080] : VE.res.split('x').map(Number);
@@ -494,152 +529,203 @@ async function renderVideo() {
     // 视频时长与起始（需在音频切片渲染前确定）
     const fps = VE.fps || 30;
     let sec = VE.durMode === 'custom' ? Math.max(1, VE.durCustom || 30) : Math.max(1, s.totalSec || VE.durCustom || 30);
-    if (sec === 0) sec = Math.min(s.totalSec, 120);
-    if (VE.range === 'custom') sec = Math.max(1, VE.end - VE.start);
     sec = Math.min(sec, s.totalSec || sec);
-    // ★ 硬上限：导出是「实时逐帧绘制 + VP9 编码 + 离线渲染整段音频 + ffmpeg 转码」，
-    //   长片会长时间吃满 CPU/内存（实测有用户机器因此崩溃重启）。
-    //   超长一律截断并明确告知，长片请分段导出。
-    const MAX_EXPORT_SEC = 120;
-    if (sec > MAX_EXPORT_SEC) {
-      toast(t('导出时长超过 120 秒，已自动截断为前 120 秒（长片请分段导出，避免整机负载过高）'), 'warn');
-      sec = MAX_EXPORT_SEC;
-    }
-    const startSec = VE.range === 'custom' ? (VE.start || 0) : 0;
+    // ★ 时长不再设上限（用户明确要求）：新链路是 WebCodecs 逐帧编码 + 流式落盘——
+    //   机器多快就多快，成片不再受实时约束，编码产物也直接写进临时文件，
+    //   不会像旧链路那样把整段视频堆在内存里（10 分钟 4K ≈ 1.2 GB）。
+    // 导出始终从曲首开始（「开始 / 结束（秒）」区间功能已移除）
+    const startSec = 0;
     // 1) 离线渲染音频：按导出范围切片（[startSec, startSec+sec] 归一化），
-    //    与视频长度严格一致，避免整曲渲染后 -shortest 截断导致音乐「被切断/变快」
+    //    与视频长度严格一致，避免整曲渲染后截断导致音乐「被切断/变快」
     const buf = await renderAudioBuffer(s, { rate: 44100, scale: 1, mode: preset.value, startSec, endSec: startSec + sec, onProgress: (p) => { VE.veProgress = Math.min(10, Math.round(p * 10)); } });
     VE.veProgress = 10;
     const wavBytes = await audioBufferToWavBytesAsync(buf, (p) => { VE.veProgress = Math.min(100, 10 + Math.round(p * 10)); });
-    VE.veStage = t('后台录制中（可继续使用应用）…');
-    // 2) 录制画布：必须挂载到 DOM 并**留在视口里**，否则合成器不把它当可见图层：
-    //    * 抓到的是空内容 → 黑屏（早先移出视口就是为了这个，靠手动 requestFrame 救回来）；
-    //    * 更要命的是 requestFrame 会被合成器丢帧：实测 3 秒 @30fps 请求 90 帧、
-    //      只有 ~75 帧进流，而成片时长 = 进流帧数/fps → **比目标短一截、还与音频错位**。
-    //    现在把它放在右下角、2×2 CSS 像素、几乎全透明：参与合成（延迟≈1 帧），用户看不见。
-    //    注意 captureStream 抓的是画布的**像素缓冲**（W×H），不是这 2px 的显示尺寸。
-    const cv = document.createElement('canvas');
-    // 物理缓冲必须等于视频尺寸：录制流与后续 ffmpeg 转码都按 W×H 走，
-    // 一旦这里放大（曾经试过 ×EXPORT_SCALE），导出的流尺寸与转码参数不一致 → 导出失败。
-    // 「导出与实时同尺度」要换别的做法（见 docs/reports/2026-10-07-viz-export-parity.md）。
-    cv.width = W; cv.height = H;
-    cv.style.cssText = 'position:fixed;right:0;bottom:0;width:2px;height:2px;opacity:0.01;z-index:-1;pointer-events:none;';
-    document.body.appendChild(cv);
-    const ctx = cv.getContext('2d');
-    // 预热背景位图缓存：底图（模糊 + cover 裁切）在录制开始前先烘一次。
-    // 否则第一帧要花上百毫秒现烘，而它正好落在录制器最敏感的冷启动窗口里。
-    try {
-      const ds0 = H / VIZ_REF_H;
-      const b0 = vizBg.drawOpts();
-      if (b0 && typeof b0.blur === 'number' && b0.blur > 0) b0.blur = b0.blur * (ds0 / VIZ_REF_DPR);
-      ctx.save(); ctx.scale(ds0, ds0);
-      paintVizBg(ctx, W / ds0, VIZ_REF_H, b0);
-      ctx.restore();
-    } catch (e) { console.warn('[video] 背景预热失败：', e); }
-    // 手动帧捕获（captureStream(0) + requestFrame）：移出视口的 canvas 合成呈现延迟可达
-    // 300ms+，自动捕获会把「时间戳=捕获时刻、内容=δ 之前绘制」的帧写入视频 → 音画不同步
-    // （实测音频领先画面 ~340ms 且随负载漂移）。手动模式下每次 requestFrame() 以当前时刻
-    // 为时间戳捕获刚画完的内容，内容时间与时间戳严格对齐。不支持时回退自动捕获。
-    let stream = cv.captureStream(0);
-    let vtrack = stream.getVideoTracks()[0];
-    const canManual = !!(vtrack && typeof vtrack.requestFrame === 'function');
-    if (!canManual) { stream = cv.captureStream(fps); vtrack = null; }
+    VE.veStage = t('后台渲染中（可继续使用应用）…');
     const bitrate = VE.quality === 'low' ? 4e6 : VE.quality === 'high' ? 16e6 : (VE.quality === 'custom' ? (VE.bitrate * 1e6) : 8e6);
-    // 自动尝试多种编码/码率，避免单一种类不支持导致导出失败
-    const mimeCandidates = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
-    let rec = null, usedMime = null;
-    for (const m of mimeCandidates) {
-      if (!MediaRecorder.isTypeSupported(m)) continue;
-      for (const br of [bitrate, Math.max(1e6, Math.floor(bitrate * 0.6)), 2e6]) {
-        try {
-          rec = new MediaRecorder(stream, { mimeType: m, videoBitsPerSecond: br });
-          usedMime = m;
-          break;
-        } catch (e) {}
-      }
-      if (rec) break;
-    }
-    if (!rec) throw new Error('no supported mime');
-    const chunks = [];
-    rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-    rec.onerror = (e) => { console.warn('[video] MediaRecorder error', e); };
-    const stopped = new Promise((res) => { rec.onstop = res; });
+    // ---- 编码路线：优先 WebCodecs + 硬件编码器（GPU），不支持时回退 MediaRecorder ----
+    // ★ 实测（本机 RTX 5070 Ti）：H.264 硬件编码在 720P/1080P/2K/4K 都可用，
+    //   每帧编码提交仅 0.3~1 ms；整条链路 720P 93.7 fps、1080P 83.2 fps、4K 39.6 fps。
+    //   旧链路是 MediaRecorder 实时录 VP9（纯 CPU 软编），成片多长就得满载多久。
+    //   注意 codec 字符串里的 level 必须覆盖分辨率，否则 isConfigSupported 直接 false ——
+    //   实测 avc1.42002A（Level 4.2）在 4K 上不支持，换 Level 5.1（…33）就支持。
+    const codec = await pickVideoCodec(W, H, fps, bitrate);
+    // 画布：WebCodecs 路径**不必挂进 DOM**（VideoFrame 直接读画布缓冲）；
+    // 只有 MediaRecorder 回退路径需要它参与合成，才放进右下角 2×2 的隐形位置。
+    cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext('2d');
+    const melodyTrack = s.tracks.findIndex((tr) => tr.isDrum === false && !/bass|贝斯|低音/.test(tr.name || ''));
+    const totalFrames = Math.max(1, Math.round(sec * fps));
+    const ds = H / VIZ_REF_H;
+    drawVideoFrame._bgScale = ds / VIZ_REF_DPR;   // 背景模糊随分辨率等比（见 drawVideoFrame）
     // 每次导出都从干净的帧间状态起笔（粒子 / 能量包络 / 上次绘制时刻）。
     // 否则预览或其他导出遗留的粒子会让同一份工程两次导出的画面不一致。
     drawVideoFrame._state = null;
-    rec.start(500);
-    // ★★ 录制器 start() 之后有一段**还没开始收帧**的冷启动窗口（本机实测约 0.6 秒）：
-    //    这期间画的帧根本不进流。之前内容时钟从 start() 那刻算起，于是「钟跑了 3 秒、
-    //    流里只有 2.4 秒」——成片比目标短一截，而且音频是从 0 开始的，画面整体后移。
-    //    现在等冷启动过去（第一个 dataavailable 或 800ms 兜底）再起钟、再画第 0 帧，
-    //    成片首帧就是内容 0、时长就是目标时长，音画同起点。
-    //    （试过在 start() 之前先画一帧「打底」：那会让首帧被录进流、后面停 0.8 秒，
-    //     成片反而多出 0.8 秒静帧，被 -shortest 剪掉尾巴 —— 不要这么做。）
-    await new Promise((res) => {
-      let done = false;
-      const fin = () => { if (done) return; done = true; try { rec.removeEventListener('dataavailable', fin); } catch (e) {} res(); };
-      try { rec.addEventListener('dataavailable', fin); } catch (e) {}
-      setTimeout(fin, 800);
-    });
-    const start = performance.now();
-    const stopRec = () => { try { if (rec.state !== 'inactive') rec.stop(); } catch (e) {} setTimeout(() => { try { stream.getTracks().forEach((t2) => t2.stop()); } catch (e) {} }, 300); };
-    let cancelFlag = false;
-    const melodyTrack = s.tracks.findIndex((tr) => tr.isDrum === false && !/bass|贝斯|低音/.test(tr.name || ''));
-    const ivMs = Math.max(16, Math.round(1000 / fps));
-    await new Promise((resolve) => {
-      let drawDurEst = 16; // 绘制耗时估计(ms)：内容时间要按「捕获时刻」算，预补偿本帧绘制耗时
-      // ★ 尾部保护：录制器在 stop() 之前还会丢掉最后 ~0.3 秒的帧（合成器/编码器延迟），
-      //   实测「3 秒」只录到 2.72 秒。多跑这一小段，让成片被 -shortest 按**音频长度**
-      //   （= 目标时长）截断 —— 正好截在内容 sec 处，一秒不少也不多。
-      const TAIL_PAD = 0.6;
-      const step = () => {
-        const t0 = performance.now();
-        const elRaw = (t0 - start) / 1000;
-        // 内容时间 = 起笔时刻 + 绘制耗时（帧在绘制完成后立即 requestFrame，时间戳≈起笔+绘制耗时）
-        const el = elRaw + drawDurEst / 1000;
-        if (VE.veCancel || el >= sec + TAIL_PAD) {
-          if (VE.veTimer) { clearInterval(VE.veTimer); VE.veTimer = null; }
-          stopRec(); resolve(); return;
-        }
-        const tick = s.secToTick(Math.min(startSec + el, Math.max(0.001, s.totalSec - 0.001)));
-        const vf = { winSec: 8, melodyTrack, lyricAt: lyricAtTick(s, tick), pct: (el / sec) };
-        // 音频已按片段归一化（从 0 起），频谱/波形用 el；瀑布 tick 用全曲坐标 startSec+el
-        // ★ 与实时同尺度（观感差距的**主因**）且**不动物理缓冲**：
-        //   瀑布流里有绝对像素常量（琴键条上限 120、一小节 120px、发光 20、字号 10…），
-        //   只有在「逻辑高度 ≈ 实时画布高度（实测 534）」时才与实时一致。
-        //   导出原来把物理像素当逻辑单位（4K 即 3840×2160）⇒ 琴键条只剩 5% 高、
-        //   一屏塞 36 秒音乐、音符变成细丝 —— 与实时画面完全不是一幅画。
-        //   这里固定逻辑高度 = VIZ_REF_H，用 ctx.scale 映射到物理像素：
-        //   物理缓冲仍是 W×H，录制流与 ffmpeg 转码的分辨率不变
-        //   （直接放大物理缓冲会导出失败 —— 实测踩过）。
-        const dscale = H / VIZ_REF_H;
-        drawVideoFrame._bgScale = dscale / VIZ_REF_DPR;   // 背景模糊随分辨率等比（见 drawVideoFrame）
-        ctx.save();
-        ctx.scale(dscale, dscale);
-        drawVideoFrame(ctx, W / dscale, VIZ_REF_H, tick, s, buf, vf, el);
-        ctx.restore();
-        if (canManual) { try { vtrack.requestFrame(); } catch (e) {} }
-        drawDurEst = Math.min(400, drawDurEst * 0.7 + (performance.now() - t0) * 0.3);
-        VE.veProgress = Math.min(97, 10 + (elRaw / sec) * 87);
+    // 预热背景位图缓存：底图（模糊 + cover 裁切）在第一帧之前先烘一次。
+    try {
+      const b0 = vizBg.drawOpts();
+      if (b0 && typeof b0.blur === 'number' && b0.blur > 0) b0.blur = b0.blur * (ds / VIZ_REF_DPR);
+      ctx.save(); ctx.scale(ds, ds);
+      paintVizBg(ctx, W / ds, VIZ_REF_H, b0);
+      ctx.restore();
+    } catch (e) { console.warn('[video] 背景预热失败：', e); }
+    /** 画一帧。el = 相对导出区间起点的内容秒数（音频已按区间归一化，从 0 起）。
+     *  ★ 与实时同尺度（观感差距的**主因**）且**不动物理缓冲**：
+     *  瀑布流里有绝对像素常量（琴键条上限 120、一小节 120px、发光 20、字号 10…），
+     *  只有在「逻辑高度 ≈ 实时画布高度（实测 534）」时才与实时一致。
+     *  导出原来把物理像素当逻辑单位（4K 即 3840×2160）⇒ 琴键条只剩 5% 高、
+     *  一屏塞 36 秒音乐、音符变成细丝 —— 与实时画面完全不是一幅画。
+     *  这里固定逻辑高度 = VIZ_REF_H，用 ctx.scale 映射到物理像素。 */
+    const drawOne = (el) => {
+      const tSec = Math.min(el, Math.max(0, sec - 1 / (fps * 2)));
+      const tick = s.secToTick(Math.min(startSec + tSec, Math.max(0.001, s.totalSec - 0.001)));
+      const vf = { winSec: 8, melodyTrack, lyricAt: lyricAtTick(s, tick), pct: (el / sec) };
+      ctx.save();
+      ctx.scale(ds, ds);
+      drawVideoFrame(ctx, W / ds, VIZ_REF_H, tick, s, buf, vf, tSec);
+      ctx.restore();
+    };
+    let streamId = null;
+    if (codec && bridge && bridge.videoExportBegin) {
+      // ================= 新链路：GPU 硬件编码 + 流式落盘 =================
+      const begin = await bridge.videoExportBegin({ container: 'h264' });
+      if (!begin || !begin.ok) throw new Error((begin && begin.error) || 'export-begin-failed');
+      streamId = begin.id;
+      VE.veStage = t('GPU 逐帧编码中…');
+      let pending = [], pendingBytes = 0, encErr = null;
+      // 编码产物按 4 MB 一批写盘：既不让内存堆积，也不至于每帧一次 IPC
+      const flushOut = async (force) => {
+        if (!pendingBytes || (!force && pendingBytes < 4 * 1024 * 1024)) return;
+        const out = new Uint8Array(pendingBytes);
+        let off = 0;
+        for (const c of pending) { out.set(c, off); off += c.length; }
+        pending = []; pendingBytes = 0;
+        const w = await bridge.videoExportWrite(streamId, out);
+        if (w && !w.ok) encErr = encErr || new Error(w.error || 'write-failed');
       };
-      VE.veTimer = setInterval(step, ivMs);
-      step();
-    });
-    const webm = new Blob(chunks, { type: 'video/webm' });
-    const data = new Uint8Array(await webm.arrayBuffer());
-    VE.veStage = t('转码为 MP4…');
-    if (bridge && bridge.transcodeVideo) {
-      // 直接传 Uint8Array（结构化克隆），此前 Array.from 会生成数亿元素数组 → 内存爆炸黑屏
-      // ★ name = 曲名：主进程拿它当保存对话框的默认文件名（用户要求「导出的视频名默认为歌曲名」）
-      const r = await bridge.transcodeVideo(data, wavBytes, { name: s.name });
+      const enc = new VideoEncoder({
+        output: (chunk) => { const d = new Uint8Array(chunk.byteLength); chunk.copyTo(d); pending.push(d); pendingBytes += d.length; },
+        error: (e) => { encErr = encErr || e; },
+      });
+      enc.configure(codec.config);
+      const KEY_EVERY = Math.max(1, Math.round(fps * 2));
+      const t0 = performance.now();
+      for (let i = 0; i < totalFrames; i++) {
+        if (VE.veCancel || encErr) break;
+        drawOne(i / fps);
+        const frame = new VideoFrame(cv, { timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6 / fps) });
+        enc.encode(frame, { keyFrame: i % KEY_EVERY === 0 });
+        frame.close();
+        // 背压：编码队列积压时等 dequeue，避免长片把编码器内部队列顶爆
+        if (enc.encodeQueueSize > 8) await waitEncoder(enc, 300);
+        await flushOut(false);
+        if ((i & 15) === 0) {
+          const done = (i + 1) / totalFrames;
+          VE.veProgress = Math.min(97, 10 + done * 87);
+          const el = (performance.now() - t0) / 1000;
+          const eta = done > 0.02 ? Math.round(el / done - el) : 0;
+          VE.veStage = t('GPU 逐帧编码中…') + ' ' + Math.round(done * 100) + '%' + (eta > 1 ? ' · ' + t('剩余约') + ' ' + eta + 's' : '');
+          await new Promise((r) => setTimeout(r, 0));   // 让进度条有机会刷新
+        }
+      }
+      try { await enc.flush(); } catch (e) {}
+      try { enc.close(); } catch (e) {}
+      await flushOut(true);
+      if (VE.veCancel) { try { await bridge.videoExportAbort(streamId); } catch (e) {} streamId = null; VE.veStage = t('已取消'); toast(t('导出已取消'), 'warn'); return; }
+      if (encErr) throw encErr;
+      VE.veProgress = 97;
+      VE.veStage = t('封装为 MP4…');
+      // ★ 编码产物是 Annex B 裸 H.264，主进程用 -c:v copy 直接封装 —— 不再跑 libx264 重编码
+      // duration = 帧数 / 帧率：主进程用它 -t 收尾（不能用 -shortest，见 main/video.js）
+      const r = await bridge.videoExportEnd({ id: streamId, fps, duration: totalFrames / fps, audio: wavBytes, name: s.name });
+      streamId = null;
       if (r && r.ok) toast(t('视频已导出：') + (r.path || ''), 'ok');
       else if (!(r && r.canceled)) toast(t('视频导出失败：') + ((r && r.error) || ''), 'warn');
     } else {
-      const blob = new Blob([webm], { type: 'video/webm' });
-      const a = document.createElement('a');
-      a.download = (s.name || 'FuFumidi-video') + '.webm'; a.href = URL.createObjectURL(blob); a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-      toast(t('已导出 WebM（桌面版可转 MP4）'), 'ok');
+      // ================= 回退链路：MediaRecorder（实时）+ 流式落盘 =================
+      if (typeof MediaRecorder === 'undefined' || !HTMLCanvasElement.prototype.captureStream) throw new Error('no-recorder');
+      // 录制画布必须挂到 DOM 并留在视口里：移出视口时合成器呈现延迟可达 300ms+，
+      // 自动捕获会把「时间戳=捕获时刻、内容=δ 之前绘制」的帧写进视频（实测音频领先画面 ~340ms）。
+      // 放在右下角、2×2 CSS 像素、几乎全透明：参与合成、用户看不见；抓的是像素缓冲 W×H。
+      cv.style.cssText = 'position:fixed;right:0;bottom:0;width:2px;height:2px;opacity:0.01;z-index:-1;pointer-events:none;';
+      document.body.appendChild(cv);
+      let mstream = cv.captureStream(0);
+      let vtrack = mstream.getVideoTracks()[0];
+      const canManual = !!(vtrack && typeof vtrack.requestFrame === 'function');
+      if (!canManual) { mstream = cv.captureStream(fps); vtrack = null; }
+      let rec = null;
+      for (const m of ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']) {
+        if (!MediaRecorder.isTypeSupported(m)) continue;
+        for (const br of [bitrate, Math.max(1e6, Math.floor(bitrate * 0.6)), 2e6]) {
+          try { rec = new MediaRecorder(mstream, { mimeType: m, videoBitsPerSecond: br }); break; } catch (e) {}
+        }
+        if (rec) break;
+      }
+      if (!rec) throw new Error('no supported mime');
+      const begin = (bridge && bridge.videoExportBegin) ? await bridge.videoExportBegin({ container: 'webm' }) : null;
+      streamId = (begin && begin.ok) ? begin.id : null;
+      const blobChunks = [];
+      let writeChain = Promise.resolve();
+      rec.ondataavailable = (e) => {
+        if (!e.data || !e.data.size) return;
+        if (!streamId) { blobChunks.push(e.data); return; }
+        writeChain = writeChain.then(async () => { const b = new Uint8Array(await e.data.arrayBuffer()); await bridge.videoExportWrite(streamId, b); }).catch(() => {});
+      };
+      rec.onerror = (e) => { console.warn('[video] MediaRecorder error', e); };
+      const stopped = new Promise((res) => { rec.onstop = res; });
+      rec.start(500);
+      // 录制器 start() 之后有一段还没开始收帧的冷启动窗口（本机实测约 0.6 秒）。
+      // 等它过去再起钟、再画第 0 帧，成片首帧才是内容 0、时长才是目标时长。
+      await new Promise((res) => {
+        let done = false;
+        const fin = () => { if (done) return; done = true; try { rec.removeEventListener('dataavailable', fin); } catch (e) {} res(); };
+        try { rec.addEventListener('dataavailable', fin); } catch (e) {}
+        setTimeout(fin, 800);
+      });
+      const start = performance.now();
+      const stopRec = () => { try { if (rec.state !== 'inactive') rec.stop(); } catch (e) {} setTimeout(() => { try { mstream.getTracks().forEach((t2) => t2.stop()); } catch (e) {} }, 300); };
+      const ivMs = Math.max(16, Math.round(1000 / fps));
+      await new Promise((resolve) => {
+        let drawDurEst = 16;
+        // 尾部保护：录制器 stop() 之前还会丢掉最后 ~0.3 秒的帧，多跑一小段，
+        // 让成片被 -shortest 按音频长度（= 目标时长）截断 —— 正好截在内容 sec 处。
+        const TAIL_PAD = 0.6;
+        const step = () => {
+          const t1 = performance.now();
+          const elRaw = (t1 - start) / 1000;
+          const el = elRaw + drawDurEst / 1000;
+          if (VE.veCancel || el >= sec + TAIL_PAD) { if (VE.veTimer) { clearInterval(VE.veTimer); VE.veTimer = null; } stopRec(); resolve(); return; }
+          drawOne(Math.min(el, sec));
+          if (canManual) { try { vtrack.requestFrame(); } catch (e) {} }
+          drawDurEst = Math.min(400, drawDurEst * 0.7 + (performance.now() - t1) * 0.3);
+          VE.veProgress = Math.min(97, 10 + (Math.min(elRaw, sec) / sec) * 87);
+        };
+        VE.veTimer = setInterval(step, ivMs);
+        step();
+      });
+      await stopped;
+      await writeChain;
+      VE.veStage = t('转码为 MP4…');
+      if (streamId) {
+        if (VE.veCancel) { try { await bridge.videoExportAbort(streamId); } catch (e) {} streamId = null; VE.veStage = t('已取消'); toast(t('导出已取消'), 'warn'); return; }
+        const r = await bridge.videoExportEnd({ id: streamId, fps, duration: sec, audio: wavBytes, name: s.name });
+        streamId = null;
+        if (r && r.ok) toast(t('视频已导出：') + (r.path || ''), 'ok');
+        else if (!(r && r.canceled)) toast(t('视频导出失败：') + ((r && r.error) || ''), 'warn');
+      } else {
+        const webm = new Blob(blobChunks, { type: 'video/webm' });
+        const data = new Uint8Array(await webm.arrayBuffer());
+        if (bridge && bridge.transcodeVideo) {
+          const r = await bridge.transcodeVideo(data, wavBytes, { name: s.name });
+          if (r && r.ok) toast(t('视频已导出：') + (r.path || ''), 'ok');
+          else if (!(r && r.canceled)) toast(t('视频导出失败：') + ((r && r.error) || ''), 'warn');
+        } else {
+          const a = document.createElement('a');
+          a.download = (s.name || 'FuFumidi-video') + '.webm'; a.href = URL.createObjectURL(webm); a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+          toast(t('已导出 WebM（桌面版可转 MP4）'), 'ok');
+        }
+      }
     }
     VE.veProgress = 100;
     VE.veStage = t('完成');
@@ -756,7 +842,7 @@ async function renderVideo() {
           <select class="select-input" v-model="VE.res">
             <option value="1280x720">720P</option><option value="1920x1080">1080P</option><option value="2560x1440">2K</option><option value="3840x2160">4K</option>
           </select>
-          <div v-if="VE.res === '3840x2160'" class="muted small" style="margin-top:2px">{{ t('4K 是实时逐帧录制 + 编码，CPU 压力最大；长片建议用 1080P') }}</div>
+          <div v-if="VE.res === '3840x2160'" class="muted small" style="margin-top:2px">{{ t('4K：已启用 GPU 硬件编码，成片约 1.2 GB / 10 分钟，长片请留意磁盘空间') }}</div>
         </div>
         <div class="field-row">
           <label>{{ t('帧率') }}</label>
@@ -772,56 +858,49 @@ async function renderVideo() {
         </div>
         <div class="field-row">
           <label>{{ t('码率') }}{{ t('（') }}Mbps{{ t('）') }}</label>
-          <input type="number" min="0.5" step="0.5" class="num-input" v-model.number="VE.bitrate" style="width:100%" />
+          <input type="number" min="0.5" step="0.5" class="num-input" v-model.number="VE.bitrate" />
         </div>
         <div class="field-row">
           <label>{{ t('时长') }}</label>
-          <select class="select-input" v-model="VE.durMode">
-            <option value="full">{{ t('整首') }}</option><option value="custom">{{ t('自定义（秒）') }}</option>
-          </select>
-          <input v-if="VE.durMode === 'custom'" type="number" min="1" step="1" class="num-input" v-model.number="VE.durCustom" style="width:80px" />
+          <div class="fr-inline">
+            <select class="select-input" v-model="VE.durMode">
+              <option value="full">{{ t('整首') }}</option><option value="custom">{{ t('自定义（秒）') }}</option>
+            </select>
+            <input v-if="VE.durMode === 'custom'" type="number" min="1" step="1" class="num-input" v-model.number="VE.durCustom" style="width:84px;flex:0 0 auto" />
+          </div>
         </div>
         <div class="field-row">
-          <label>{{ t('导出范围') }}</label>
-          <select class="select-input" v-model="VE.range">
-            <option value="all">{{ t('整曲') }}</option><option value="custom">{{ t('自定义区间') }}</option>
-          </select>
-        </div>
-        <div class="field-row">
-          <label>{{ t('开始 / 结束（秒）') }}</label>
-          <div style="display:flex;gap:6px;align-items:center">
-            <input type="number" min="0" step="0.1" class="num-input" v-model.number="VE.start" style="flex:1" />
-            <span class="muted">-</span>
-            <input type="number" min="0" step="0.1" class="num-input" v-model.number="VE.end" style="flex:1" />
+          <label>{{ t('水印图片') }}</label>
+          <div class="fr-inline">
+            <button class="btn sm" @click="vePickWatermark">{{ VE.watermark ? t('更换') : t('选择') }}</button>
+            <input v-if="VE.watermark" type="range" min="0" max="100" v-model.number="VE.watermarkOpacity" style="flex:1 1 80px;min-width:0" />
           </div>
         </div>
         <!-- ★ 背景跟「可视化」页共用一份（stores/vizbg）：这里改，瀑布流那边立刻变；
-             反之亦然。导出前先在可视化页把背景调好，这里就是所见即所得。 -->
-        <div class="field-row">
+              反之亦然。导出前先在可视化页把背景调好，这里就是所见即所得。
+              内容比其他格子多（模式 chip + 换图 + 两条滑杆 + 说明），所以整行铺满、内部横向排。 -->
+        <div class="field-row is-wide">
           <label>{{ t('背景') }}</label>
-          <div class="ve-bg-modes">
-            <button v-for="m in BG_MODES" :key="m.k" class="chip-btn" :class="{ active: bg.mode === m.k }"
-                    :title="m.k === 'transparent' ? t('真·透明：导出的画面可当叠加层') : ''"
-                    @click="vizBg.setMode(m.k)">{{ t(m.label) }}</button>
-            <input v-if="bg.mode === 'solid'" type="color" :value="bg.color"
-                   @input="vizBg.setColor($event.target.value)"
-                   style="width:38px;height:24px;padding:0;border:1px solid var(--hairline);border-radius:6px;background:none;cursor:pointer" />
-            <button v-if="bg.mode === 'image'" class="btn sm" @click="vizBg.pickImage()">
-              <Icon name="folder" :size="12" />{{ bg.path ? t('更换') : t('选择') }}</button>
+          <div class="ve-bg-inline">
+            <div class="ve-bg-modes">
+              <button v-for="m in BG_MODES" :key="m.k" class="chip-btn" :class="{ active: bg.mode === m.k }"
+                      :title="m.k === 'transparent' ? t('真·透明：导出的画面可当叠加层') : ''"
+                      @click="vizBg.setMode(m.k)">{{ t(m.label) }}</button>
+              <input v-if="bg.mode === 'solid'" type="color" :value="bg.color"
+                     @input="vizBg.setColor($event.target.value)"
+                     style="width:38px;height:24px;padding:0;border:1px solid var(--hairline);border-radius:6px;background:none;cursor:pointer" />
+              <button v-if="bg.mode === 'image'" class="btn sm" @click="vizBg.pickImage()">
+                <Icon name="folder" :size="12" />{{ bg.path ? t('更换') : t('选择') }}</button>
+            </div>
+            <div v-if="bg.mode === 'image' || bg.mode === 'theme'" class="ve-bg-sliders">
+              <span class="muted small">{{ t('模糊') }}</span>
+              <input type="range" min="0" max="40" step="1" :value="bg.blur" @input="vizBg.setBlur($event.target.value)" />
+              <span class="muted small">{{ t('暗化') }}</span>
+              <input type="range" min="0" max="80" step="5" :value="Math.round(bg.dim * 100)" @input="vizBg.setDim((+$event.target.value) / 100)" />
+            </div>
+            <span class="muted small">{{ t('与「可视化」页共用同一套设置') }}</span>
+            <span v-if="bg.mode === 'transparent'" class="muted small">{{ t('透明档：MP4 没有透明通道，导出后是黑底（可作叠加层的相加/滤色素材）') }}</span>
           </div>
-          <div v-if="bg.mode === 'image' || bg.mode === 'theme'" class="ve-bg-sliders">
-            <span class="muted small">{{ t('模糊') }}</span>
-            <input type="range" min="0" max="40" step="1" :value="bg.blur" @input="vizBg.setBlur($event.target.value)" />
-            <span class="muted small">{{ t('暗化') }}</span>
-            <input type="range" min="0" max="80" step="5" :value="Math.round(bg.dim * 100)" @input="vizBg.setDim((+$event.target.value) / 100)" />
-          </div>
-          <div class="muted small">{{ t('与「可视化」页共用同一套设置') }}</div>
-          <div v-if="bg.mode === 'transparent'" class="muted small">{{ t('透明档：MP4 没有透明通道，导出后是黑底（可作叠加层的相加/滤色素材）') }}</div>
-        </div>
-        <div class="field-row">
-          <label>{{ t('水印') }}</label>
-          <button class="btn sm" @click="vePickWatermark">{{ VE.watermark ? t('更换') : t('选择') }}</button>
-          <input v-if="VE.watermark" type="range" min="0" max="100" v-model.number="VE.watermarkOpacity" style="width:100%" />
         </div>
       </div>
       <div class="ve-opts">
@@ -856,6 +935,20 @@ async function renderVideo() {
 @media (max-width: 720px) { .form-grid { grid-template-columns: 1fr; } }
 .field-row { display: flex; flex-direction: column; gap: 6px; }
 .field-row label { font-size: 12px; color: var(--steel); font-weight: 600; display: flex; align-items: center; gap: 8px; }
+/* ★ 全局 styles.css 的 .field-row 是「设置面板」那一套（label 左 / 控件右 / space-between + 分隔线），
+   会一路继承进这张卡片。一旦某一行被内容更高的邻居撑高（比如「背景」），space-between 就把标签和
+   控件分别顶到行的上下两端 —— 实测 163px 高的行里两者相距 110px，看着像控件飞出去了。
+   下面几条把卡片范围内的 .field-row 重置成「标签在上、控件紧跟其下」。 */
+.ve-card .form-grid { align-items: start; row-gap: 16px; }
+.ve-card .field-row { justify-content: flex-start; align-items: stretch; gap: 6px; padding: 0; border-bottom: 0; }
+.ve-card .field-row:hover { background: none; }
+/* 内容多的格子（背景：模式 chip + 换图 + 两条滑杆 + 说明）整行铺满，内部横向排 */
+.ve-card .field-row.is-wide { grid-column: 1 / -1; }
+.ve-bg-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.ve-bg-inline .ve-bg-sliders { flex: 1 1 280px; min-width: 220px; margin-top: 0; }
+/* 一行内并排的控件（时长 + 秒数、水印按钮 + 不透明度） */
+.fr-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fr-inline .select-input { flex: 1 1 auto; min-width: 0; }
 .gain-row { flex-direction: row; align-items: center; justify-content: space-between; }
 .range { flex: 1; accent-color: var(--ink); }
 .conv-est { display: flex; align-items: center; gap: 10px; background: var(--surface-soft); border-radius: 10px; padding: 8px 14px; font-size: 12px; color: var(--steel); }

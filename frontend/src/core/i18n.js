@@ -15,8 +15,10 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
-  '导出时长超过 120 秒，已自动截断为前 120 秒（长片请分段导出，避免整机负载过高）': 'Export longer than 120 s was truncated to the first 120 s (export long songs in parts to avoid overloading the machine)',
-  '4K 是实时逐帧录制 + 编码，CPU 压力最大；长片建议用 1080P': '4K records and encodes every frame in real time and is the heaviest on the CPU; 1080P is recommended for long songs',
+  'GPU 逐帧编码中…': 'Encoding on the GPU…',
+  '封装为 MP4…': 'Packaging the MP4…',
+  '后台渲染中（可继续使用应用）…': 'Rendering in the background (you can keep using the app)…',
+  '4K：已启用 GPU 硬件编码，成片约 1.2 GB / 10 分钟，长片请留意磁盘空间': '4K: GPU hardware encoding is enabled; expect roughly 1.2 GB per 10 minutes, so watch disk space on long exports',
   '播放时显示频谱': 'Spectrum appears during playback',
   '播放时显示波形': 'Waveform appears during playback',
   "多音字：": "Heteronyms: ",
@@ -1714,9 +1716,7 @@ export const I18N_MAP = {
   '质量': 'Quality',
   '码率': 'Bitrate',
   '时长': 'Duration',
-  '导出范围': 'Export range',
-  '自定义区间': 'Custom range',
-  '开始 / 结束（秒）': 'Start / End (seconds)',
+  '水印图片': 'Watermark image',
   '选择': 'Choose',
   '更换': 'Replace',
   '移除': 'Remove',

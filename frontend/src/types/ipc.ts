@@ -760,6 +760,14 @@ export interface FuBridge {
   /* 视频导出。opts.name = 曲名，主进程拿它当保存对话框的默认文件名（main/video.js 的 safeVideoBase
      会再洗一遍 Windows 非法字符）。旧调用方只传前两个参数仍然有效。 */
   transcodeVideo(data: any, audio: any, opts?: { name?: string; audioOffset?: number }): Promise<GeneralResult>;
+  /* 流式导出（main/video.js 的 video:exportBegin/Write/Abort/End）。
+     begin → 多次 write（data 为编码后的字节片段）→ end（封装 MP4，弹保存对话框）。
+     container: 'h264'（WebCodecs 硬件编码，Annex B）| 'webm'（MediaRecorder 回退路径）。
+     targetPath 仅供自动化冒烟跳过对话框，界面不传。 */
+  videoExportBegin(opts: { container?: 'h264' | 'webm' }): Promise<{ ok: boolean; id?: string; container?: string; path?: string; error?: string }>;
+  videoExportWrite(id: string, data: Uint8Array): Promise<{ ok: boolean; bytes?: number; error?: string }>;
+  videoExportAbort(id: string): Promise<{ ok: boolean }>;
+  videoExportEnd(opts: { id: string; fps?: number; duration?: number; audio?: any; audioOffset?: number; name?: string; targetPath?: string }): Promise<GeneralResult & { bytes?: number; copy?: boolean }>;
   modelList(): Promise<any[]>;
   depCheck(): Promise<GeneralResult>;
   diagExport(): Promise<GeneralResult>;

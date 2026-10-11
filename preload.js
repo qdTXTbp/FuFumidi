@@ -94,6 +94,14 @@ contextBridge.exposeInMainWorld('fuBridge', {
   pickMusicXML: () => ipcRenderer.invoke('dialog:pickMusicXML'),
   exportScorePdf: () => ipcRenderer.invoke('score:exportPdf'),
   transcodeVideo: (data, audio, opts) => ipcRenderer.invoke('video:transcode', { data, audio, ...(opts || {}) }),
+  /* 流式导出：渲染进程用 WebCodecs 逐帧编码，边产边写临时文件，最后一次性封装成 MP4。
+     为什么要流式：① 长片不再把整段视频堆在内存里（10 分钟 4K ≈ 1.2 GB）；② 编码产物是
+     Annex B 裸 H.264，主进程用 -c:v copy 直接封装，不再跑一遍 libx264 重编码。
+     begin → 多次 write → end（或 abort）。 */
+  videoExportBegin: (opts) => ipcRenderer.invoke('video:exportBegin', opts || {}),
+  videoExportWrite: (id, data) => ipcRenderer.invoke('video:exportWrite', { id, data }),
+  videoExportAbort: (id) => ipcRenderer.invoke('video:exportAbort', { id }),
+  videoExportEnd: (opts) => ipcRenderer.invoke('video:exportEnd', opts || {}),
   // 「变谱」：乐谱（MusicXML/MXL）→ MIDI（返回 base64 字节 + 统计信息）
   scoreToMidi: (cfg) => ipcRenderer.invoke('score:toMidi', cfg || {}),
   onScoreProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('score:progress', w); return () => ipcRenderer.removeListener('score:progress', w); },
