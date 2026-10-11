@@ -12,6 +12,8 @@ import Icon from '../components/Icon.vue';
 import PianoRoll from '../components/pianoroll/PianoRoll.vue';
 import { trackColorOf, newNoteId, colorblindMode, setColorblindMode } from '../stores/singer';
 import VoicebankPanel from '../components/sing/VoicebankPanel.vue';
+import ArrangeView from '../components/sing/ArrangeView.vue';
+import { shiftRange, shiftCurveRange, shiftBoundsRange } from '../core/arrange.js';
 import CurveCanvas from '../components/sing/CurveCanvas.vue';
 import ViewVoicebank from './ViewVoicebank.vue';
 import { t } from '../core/i18n.js';
@@ -671,6 +673,109 @@ function colorOf(t: any) {
   const i = voiceTracks.value.indexOf(t);
   return trackColorOf(t, i < 0 ? 0 : i);
 }
+
+/* ------------------------------------------------------------ 编排时间线（对齐 OpenUTAU） */
+
+const arrangeOpen = ref(true);
+
+/** 交给编排时间线的轨道表：声部轨 + 伴奏轨（音频块宽度由时长换拍） */
+const arrangeTracks = computed<any[]>(() => (store.tracks || []).map((t: any, i: number) => ({
+  id: t.id,
+  name: t.name,
+  kind: t.kind,
+  engine: t.engine,
+  color: t.kind === 'audio' ? '#8a93a6' : colorOf(t),
+  notes: t.kind === 'audio' ? [] : (t.notes || []),
+  partStarts: t.kind === 'audio' ? [] : (t.partStarts || []),
+  hidden: store.rollHidden.includes(t.id),
+  muted: !!t.muted,
+  audioBeats: t.kind === 'audio'
+    ? ((t.audio?.durationMs || 0) / 1000) * (store.bpm / 60)
+    : 0,
+})));
+
+function onArrPick(trackId: string) {
+  if (trackId && trackId !== store.activeTrackId) store.selectTrack(trackId);
+}
+
+/** 双击 part 块：切轨 + 卷帘横向聚焦到这段（放开头留 40px 边距） */
+function onArrOpen(e: any) {
+  if (!e || !e.trackId) return;
+  onArrPick(e.trackId);
+  if (store.rollHidden.includes(e.trackId)) store.toggleRollHidden(e.trackId);
+  nextTick(() => {
+    const pr = prRef.value;
+    if (pr && typeof pr.xOf === 'function' && pr.scrollEl) {
+      pr.scrollEl.scrollLeft = Math.max(0, pr.xOf(e.part.from) - 40);
+    }
+  });
+}
+
+/** 拖动 part 块 = 平移区间内的音符 + 曲线点 + part 边界（一次撤销点）。
+ *  ★ 跨轨（对齐 PartMoveEditState 的 deltaTrack）：toTrackId 不同于源轨时，
+ *    把区间内的音符/曲线点/边界**整体迁到目标轨**（音符 id 保留，渲染缓存各自失效）。
+ *  ★ 音高曲线只平移 pitchCurve（手画的音高编辑线）；PIT 镜像子轨的同步沿用
+ *    setPitchCurve 的职责，这里不动 curves。 */
+function onArrMove(e: any) {
+  if (!e || !e.trackId || !e.delta) return;
+  const src = store.tracks.find((x: any) => x.id === e.trackId);
+  if (!src) return;
+  const sameTrack = !e.toTrackId || e.toTrackId === e.trackId;
+  if (sameTrack) {
+    store.pushUndo();
+    store.patchTrack(e.trackId, {
+      notes: shiftRange(src.notes, e.from, e.to, e.delta),
+      pitchCurve: shiftCurveRange(src.pitchCurve, e.from, e.to, e.delta),
+      partStarts: shiftBoundsRange(src.partStarts, e.from, e.to, e.delta),
+    });
+    return;
+  }
+  const dst = store.tracks.find((x: any) => x.id === e.toTrackId);
+  if (!dst || dst.kind === 'audio' || src.kind === 'audio') return;
+  store.pushUndo();
+  // 源轨：摘掉区间内的内容
+  const movedNotes = src.notes.filter((n: any) => n && n.startBeat >= e.from && n.startBeat < e.to)
+    .map((n: any) => Object.assign({}, n, { startBeat: n.startBeat + e.delta }));
+  const keptNotes = src.notes.filter((n: any) => !(n && n.startBeat >= e.from && n.startBeat < e.to));
+  const movedCurve = (src.pitchCurve || []).filter((p: any) => p && p.beat >= e.from && p.beat < e.to)
+    .map((p: any) => Object.assign({}, p, { beat: p.beat + e.delta }));
+  const keptCurve = (src.pitchCurve || []).filter((p: any) => !(p && p.beat >= e.from && p.beat < e.to));
+  const movedBounds = (src.partStarts || []).filter((s: number) => s >= e.from && s < e.to)
+    .map((s: number) => s + e.delta);
+  const keptBounds = (src.partStarts || []).filter((s: number) => !(s >= e.from && s < e.to));
+  store.patchTrack(e.trackId, {
+    notes: keptNotes,
+    pitchCurve: keptCurve,
+    partStarts: keptBounds,
+  });
+  store.patchTrack(e.toTrackId, {
+    notes: [...(dst.notes || []), ...movedNotes].sort((a: any, b: any) => a.startBeat - b.startBeat),
+    pitchCurve: [...(dst.pitchCurve || []), ...movedCurve].sort((a: any, b: any) => a.beat - b.beat),
+    partStarts: [...(dst.partStarts || []), ...movedBounds]
+      .map((s: number) => Math.round(s * 1000) / 1000)
+      .sort((a: number, b: number) => a - b),
+  });
+  store.activeTrackId = e.toTrackId;
+}
+
+/* ---- 卷帘可视区间（拍）→ 时间线上画白色视口框（对齐 PartControl 的 PianoRollView* 联动）---- */
+const rollViewport = ref<{ fromBeat: number; toBeats: number } | null>(null);
+function updateRollViewport() {
+  const pr = prRef.value;
+  if (!pr || !pr.scrollEl || typeof pr.beatOf !== 'function') { rollViewport.value = null; return; }
+  const from = Math.max(0, pr.beatOf(pr.scrollEl.scrollLeft));
+  const noteW = (typeof pr.noteW === 'object' && pr.noteW !== null && 'value' in pr.noteW)
+    ? pr.noteW.value : 34;
+  rollViewport.value = { fromBeat: from, toBeats: from + pr.scrollEl.clientWidth / noteW };
+}
+watch(prRef, (pr) => {
+  if (pr?.scrollEl) {
+    pr.scrollEl.addEventListener('scroll', updateRollViewport, { passive: true });
+    updateRollViewport();
+  }
+});
+watch(() => store.activeTrackId, updateRollViewport);
+
 /**
  * 卷帘里点到了别的轨的音符：把那条轨切成当前轨、并把这个音符选上。
  *
@@ -1642,9 +1747,27 @@ async function reloadTransport(): Promise<string> {
 
 async function tplay() {
   if (transport.playing) { transport.pause(); return; }
-  if (!transport.lanes.length) {
-    const err = await reloadTransport();
-    if (err) { sayErr(err, t('先渲染一次，或导入一个伴奏；也可以点传输栏的「重新装载」。')); return; }
+  // ★ OpenUTAU 语义：播放 = **全轨一起响**。没渲过 / 渲完又改过音符的声部轨
+  //   先自动补渲染（store.renderAll 串行执行、带进度；失败不阻塞已渲染的轨），
+  //   不再要求"先手动点渲染全部轨"。没绑声库的轨 renderAll 会自动跳过。
+  const stale = store.tracks.filter((t0: any) => t0.kind === 'voice'
+    && !!t0.singer && t0.notes.length > 0
+    && (!store.renderByTrack[t0.id] || store.staleRenderIds.includes(t0.id)));
+  const needReload = stale.length > 0 || !transport.lanes.length;
+  if (stale.length) {
+    const err = await store.renderAll();
+    if (err) {
+      sayErr(t('部分轨未能渲染，这次先播已渲染的轨。'), err, store.renderWarnings.join('\n'));
+    }
+    const noSinger = store.tracks.filter((t0: any) => t0.kind === 'voice'
+      && !t0.singer && t0.notes.length > 0).length;
+    if (noSinger) {
+      say(t('还有 ' + noSinger + ' 条轨没绑声库，本次不会发声（选中轨道后在右侧选择歌手）。'));
+    }
+  }
+  if (needReload) {
+    const err2 = await reloadTransport();   // 重装 = 拿到最新渲染结果
+    if (err2) { sayErr(err2, t('先渲染一次，或导入一个伴奏；也可以点传输栏的「重新装载」。')); return; }
   }
   transport.play();
   tplaying.value = transport.playing;
@@ -2207,7 +2330,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <button class="btn" :title="t('新建一个空工程')" @click="newProject">
           <Icon name="plus" :size="12" /> {{ t('新建') }}
         </button>
-        <button class="btn" :title="t('打开 .fufumidi 工程')" @click="openProject">
+        <button class="btn" :title="t('打开工程（.fufumidi / OpenUTAU .ustx / .ust）')" @click="openProject">
           <Icon name="folder" :size="12" /> {{ t('打开') }}
         </button>
         <!-- 工程级参数（P2-3）：BPM / 拍号 / 对齐偏移。三个都是**整个工程**的属性，
@@ -2248,6 +2371,21 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <Icon name="copy" :size="12" /> {{ t('另存为') }}
         </button>
       </div>
+      <!-- ★ 编排时间线（对齐 OpenUTAU 的「轨道行 → part 块」）：每轨一行铺 part 块，
+           拖动块 = 平移整段音符，双击块 = 切到该轨并让卷帘聚焦到这段。可折叠。 -->
+      <div class="arr-head">
+        <button class="btn" :title="t('多轨时间线：每条轨一行，part 块铺在时间轴上（对齐 OpenUTAU）')"
+                @click="arrangeOpen = !arrangeOpen">
+          <Icon :name="arrangeOpen ? 'chevron' : 'chevron'" :size="12"
+                :style="{ transform: arrangeOpen ? 'rotate(180deg)' : 'none' }" /> {{ t('时间线') }}
+        </button>
+      </div>
+      <ArrangeView v-if="arrangeOpen" class="arrv" :tracks="arrangeTracks"
+                   :bpm="store.bpm" :beats-per-bar="beatsPerBar"
+                   :playhead-beat="playheadBeat"
+                   :active-track-id="store.activeTrackId"
+                   :roll-viewport="rollViewport"
+                   @pick-track="onArrPick" @open-part="onArrOpen" @move-part="onArrMove" />
       <ul v-if="store.missingAudio.length" class="warn small">
         <li v-for="m in store.missingAudio" :key="m.trackId">
           {{ t('伴奏文件缺失（工程包里没有或解包失败）：') }}{{ m.fileName }}
@@ -3170,6 +3308,9 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
  * 超出的部分由编辑区整体滚动，或用「放大音符区」一键把下面三块收起来。
  */
 .roll-box { flex: 1 1 auto; /* 百分比保底：底部面板再多也挤不扁卷帘（max 同时满足小屏 380px 下限） */ min-height: max(380px, 45%); display: flex; margin: 4px 12px 0; }
+/* ---- 编排时间线（对齐 OpenUTAU 的轨道行 → part 块）---- */
+.arr-head { margin: 6px 12px 0; display: flex; align-items: center; }
+.arrv { margin: 4px 12px 0; max-height: 46vh; overflow-y: auto; }
 .roll-box .edt-roll { flex: 1 1 auto; min-width: 0; margin: 0; }
 /* 分隔条：上下拖动改变音符区高度；双击恢复自动 */
 .roll-resizer { flex: none; height: 10px; margin: 0 12px; display: flex; align-items: center;

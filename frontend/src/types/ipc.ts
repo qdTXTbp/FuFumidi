@@ -623,6 +623,9 @@ export interface ProjectOpenResult {
   /** assetId → 解包后的本地路径 */
   resolved?: Record<string, string>;
   cacheDir?: string;
+  /** ★ true = OpenUTAU 工程（.ust/.ustx）经引擎 export-project 转出的导入数据，
+   *  需先过 `convertExternalProject()`（tick→拍）再 `parseProject()` */
+  external?: boolean;
 }
 
 /** `.ustx` 导入结果（engine/engine_ustx.py 的 import 方向） */

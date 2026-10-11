@@ -154,7 +154,7 @@ def _load_lines(lines: List[str], file: str) -> UProject:
     add_default_expressions(project)
 
     project.tracks.clear()
-    track = UTrack(project)
+    track = UTrack.for_project(project)  # 对应 C# 的 UTrack(UProject) 重载
     track.track_no = 0
     project.tracks.append(track)
 

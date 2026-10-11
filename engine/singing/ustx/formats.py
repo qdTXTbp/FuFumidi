@@ -106,7 +106,9 @@ def read_project(file_paths: List[str]):
     if fmt is ProjectFormat.USTX:
         return load_ustx(file_paths[0])
     if fmt is ProjectFormat.UST:
-        return classic_ust.load(file_paths[0])
+        # ★ 传**整个列表**：对应 C# `Ust.Load(string[] files)`，支持多文件合并；
+        #   传单个字符串会被当字符序列迭代（静默截成 'C'）。
+        return classic_ust.load(file_paths)
     if fmt is ProjectFormat.MIDI:
         raise NotImplementedError(
             'MIDI 工程由主进程转换后再交给引擎（当前 Python 侧不直接读）')

@@ -189,7 +189,7 @@ def main():
 
     # TrimToCoverage（懒分配）
     proj_ = UProject()
-    track = UTrack(proj_)
+    track = UTrack.for_project(proj_)
     proj_.tracks.append(track)
     part = UVoicePart(track_no=0, position=0)
     proj_.parts.append(part)
@@ -212,7 +212,7 @@ def main():
           RCU.RealCurveUpdater.trim_to_coverage(proj_, other, [(0, 100)]) is False)
 
     # Apply（闸门：phrase hash 必须还在）
-    track2 = UTrack(proj_)
+    track2 = UTrack.for_project(proj_)
     proj2 = UProject()
     proj2.tracks.append(track2)
     # ★ 描述符要注册在**真正被 apply 的那个工程**上（我第一版注册到了 proj_，

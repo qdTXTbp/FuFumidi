@@ -197,7 +197,13 @@ def test_vibrato_and_expression_semantics():
 
 def test_vibrato_expression_roundtrip():
     """in/out 的 YAML 键必须是 in/out（C# 的 @in/@out），且能往返。"""
+    from singing.ustx.model import UExpressionDescriptor
+
     p = UProject()
+    # ★ 工程必须声明表达式：上游 AfterLoad 会**丢弃**绑定不上描述符的音符
+    #   表达式（UNote.AfterLoad），真实 ustx 文件总是自带 expressions 段。
+    p.expressions['dyn'] = UExpressionDescriptor(
+        name='dynamics (curve)', abbr='dyn', min=-240, max=120, default_value=0)
     n = UNote(position=0, duration=480, tone=60, lyric='la',
               vibrato=UVibrato(length=20, vib_in=30, vib_out=40),
               phoneme_expressions=[UExpression(index=0, abbr='dyn', _value=77)])

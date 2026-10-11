@@ -18,6 +18,7 @@
     UPhonemeOverride→UPhoneme.cs · UTempo/UTimeSignature→UProject.cs
 """
 
+import logging
 import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -361,7 +362,15 @@ class UNote:
     phoneme_expressions: List[UExpression] = field(default_factory=list)
     phoneme_overrides: List[UPhonemeOverride] = field(default_factory=list)
     # C# 里是 `public string? PhonemizerOverride { get; set; } = null;`（会被序列化）
-    phonemizer_override: Optional[str] = None
+    # ★ YAML 键是 `phonemizer` 而不是 `phonemizer_override`：C# 标了
+    #   `[YamlMember(Alias = "phonemizer", ApplyNamingConventions = false)]`，
+    #   YamlDotNet 的 Alias 对读和写**都生效**（YamlAttributesTypeInspector 把
+    #   Alias 当属性名用）。照 `phonemizer_override` 读键会把 OpenUTAU 工程
+    #   里的音符级音素化器覆写**静默丢掉**。
+    #   `legacy_keys` 兼容本仓库旧版误写出的 `phonemizer_override:` 键（只读）。
+    phonemizer_override: Optional[str] = field(
+        default=None, metadata={'yaml_name': 'phonemizer',
+                                'legacy_keys': ('phonemizer_override',)})
 
     # ---- 以下均为 C# 里 [YamlIgnore] 的运行时成员，照搬其语义（不参与读写）----
     position_ms: float = field(default=0.0, metadata=NO_YAML)
@@ -1089,12 +1098,13 @@ class UTrack:
     track_expressions: List[UExpressionDescriptor] = field(default_factory=list)
     expression_graph: Optional[str] = None
     voice_color_names: List[str] = field(default_factory=lambda: [''])
-    #: 轨道级语言（照搬新版上游 `USingerTrack.Language`）。
-    #: ★ **语言在轨道上选，不从歌词自动判断** —— 与 OpenUtau 一致：
-    #:   同一个多语言声库（en/ja/ko/zh）用哪套词典/音素表，由轨道决定。
-    #:   取值一般是 `zh` / `ja` / `ko` / `en`；空串表示「不指定」
-    #:   （此时回落到声库的主语言或调用方给的默认值）。
-    language: str = ''
+    #: ★ **不参与 ustx 序列化**（`NO_YAML`）：上游 UTrack **没有** Language 字段
+    #:   （已对照参考源码与上游 master 确认；早先注释里说的 "USingerTrack.Language"
+    #:   并不存在，属于照搬时的错误来源标注，2026-10-07 修正）。
+    #:   这是本项目的运行时轨道语言：DiffSinger 会话（session.py）在内存里
+    #:   设置它来选语言词典/音素表，前端用 song_project.js 自己的格式持久化。
+    #:   之前让它进 YAML 会在保存时多写一个 `language:` 键，破坏与 OpenUTAU 的键集一致。
+    language: str = field(default='', metadata=NO_YAML)
     # [YamlIgnore]：运行时解析出来的实体
     singer_obj: Any = field(default=None, metadata=NO_YAML)
     voice_color_exp: Any = field(default=None, metadata=NO_YAML)
@@ -1102,6 +1112,39 @@ class UTrack:
     #: `[YamlIgnore] public int TrackNo { set; get; }` —— Validate 时由 project.tracks 的
     #: 下标填进来（`TrackNo = project.tracks.IndexOf(this)`），不写盘。
     track_no: int = field(default=0, metadata=NO_YAML)
+
+    def __post_init__(self):
+        # ★ C# 有三个构造重载：UTrack() / UTrack(string trackName) / UTrack(UProject)。
+        #   Python dataclass 只有签名字段，`UTrack(project)` 这种 C# 写法会把
+        #   UProject 对象塞进 `singer` 字段（首字段）——加类型闸门防呆。
+        if not isinstance(self.singer, str):
+            raise TypeError(
+                'UTrack.singer 必须是字符串（C# 的歌手 id 字段）；'
+                '想按工程构造轨道请用 UTrack.for_project(project)'
+                '（对应 C# 的 UTrack(UProject) 重载），拿到的是 %r'
+                % type(self.singer).__name__)
+        if not isinstance(self.track_name, str):
+            raise TypeError('UTrack.track_name 必须是字符串，拿到的是 %r'
+                            % type(self.track_name).__name__)
+
+    @classmethod
+    def for_project(cls, project) -> 'UTrack':
+        """对应 `UTrack(UProject project)` 构造重载：新轨道名取 `Track{N+1}`。
+
+        N = max(各轨道名里 "Track" 后面的数字, 轨道数)（解析不出按 0）。
+        """
+        track_count = 0
+        if project.tracks:
+            numbers = []
+            for t in project.tracks:
+                try:
+                    numbers.append(int(t.track_name.replace('Track', '')))
+                except ValueError:
+                    numbers.append(0)
+            track_count = max(numbers)
+            if len(project.tracks) > track_count:
+                track_count = len(project.tracks)
+        return cls(track_name='Track%d' % (track_count + 1))
 
     def try_get_exp_descriptor(self, project, abbr):
         """照搬 UTrack.cs 的 `TryGetExpDescriptor`：轨道级 → 工程级依次查找。
@@ -1249,3 +1292,60 @@ class UProject:
     def resolution(self) -> int:
         """对应 UProject.resolution —— 固定 480，不写盘。"""
         return 480
+
+    def after_load(self) -> None:
+        """对应 `UProject.AfterLoad()`：读盘后把文件数据修整成可用的运行时状态。
+
+        逐段对照 C#：
+        - `foreach (var track in tracks) track.AfterLoad(this)` —— 那边做
+          音素化器/歌手实体解析（PhonemizerFactory / SingerManager，宿主级注册表），
+          我们的 ustx 包是纯数据模型，这步留给调用方（engine_openutau / session）。
+        - voice_parts / wave_parts 并回 parts（io.after_load 原来做的事，并入这里）。
+        - `part.AfterLoad(this, tracks[part.trackNo])`：
+          · UVoicePart.AfterLoad —— 逐音符补表达式 descriptor（补不上的丢）；
+            曲线同样按轨道补 descriptor，**未知表达式的曲线剔除并告警**；
+            `Duration = max(Duration, GetMinDurTick(project))`（音符被时间轴
+            圆整到下一拍后的最小长度）。
+          · UWavePart.AfterLoad —— 音频文件加载（宿主级 IO），数据模型层只留
+            relativePath 不动。
+        - `ExpressionGraphProgram.LogProblems(this)` —— 表达式图模块未搬，跳过。
+
+        ★ 这步不是可选项：不绑定 descriptor 的曲线在 `UCurve.sample` 里会回落 0
+          （`descriptor is None` 分支），加载 OpenUTAU 工程后音高/力度曲线会静默失效。
+        """
+        if self.voice_parts is not None:
+            self.parts.extend(self.voice_parts)
+            self.voice_parts = None
+        if self.wave_parts is not None:
+            self.parts.extend(self.wave_parts)
+            self.wave_parts = None
+
+        for part in self.parts:
+            track = (self.tracks[part.track_no]
+                     if 0 <= part.track_no < len(self.tracks) else None)
+            if isinstance(part, UVoicePart):
+                for note in part.notes:
+                    note.after_load(self, track, part)
+                # ---- 曲线 descriptor 绑定 + 未知表达式剔除（UVoicePart.AfterLoad）
+                kept_curves = []
+                for curve in part.curves:
+                    descriptor = (track.try_get_exp_descriptor(self, curve.abbr)
+                                  if track is not None else None)
+                    if descriptor is not None:
+                        curve.descriptor = descriptor
+                        kept_curves.append(curve)
+                    else:
+                        # C#：Log.Warning($"Removed curve \"{curve.abbr}\" ...")
+                        logging.getLogger(__name__).warning(
+                            'Removed curve "%s" with unknown expression from part "%s".',
+                            curve.abbr, part.name)
+                part.curves = kept_curves
+                # ---- Duration 修正：Duration = Math.Max(Duration, GetMinDurTick(project))
+                if part.notes:
+                    last = max(part.notes, key=lambda n: n.position)  # SortedSet 末位语义
+                    end_ticks = part.position + last.end
+                else:
+                    end_ticks = part.position + 1
+                bar, beat, _rem = self.time_axis.tick_pos_to_bar_beat(end_ticks)
+                min_dur = self.time_axis.bar_beat_to_tick_pos(bar, beat + 1) - part.position
+                part.duration = max(part.duration, min_dur)

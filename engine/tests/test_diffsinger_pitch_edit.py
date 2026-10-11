@@ -40,7 +40,7 @@ def main():
     p.name = 'p5'
     p.bpm = 120
     add_default_expressions(p)
-    tr = UTrack(p)
+    tr = UTrack.for_project(p)
     tr.track_no = 0
     p.tracks.append(tr)
     part = UVoicePart(track_no=0, position=0, name='p5')

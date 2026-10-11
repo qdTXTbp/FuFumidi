@@ -319,7 +319,7 @@ def _make_axis(cfg: Dict, notes: Sequence[Dict]):
         p.tempos = [UTempo(position=0, bpm=p.bpm)]
     p.file_path = os.path.join(os.environ.get('TEMP', '.'), '_diffsinger_cli.ustx')
     add_default_expressions(p)
-    tr = UTrack(p)
+    tr = UTrack.for_project(p)  # 对应 C# 的 UTrack(UProject) 重载
     tr.track_no = 0
     p.tracks.append(tr)
     part = UVoicePart(track_no=0, position=0, name='render')
