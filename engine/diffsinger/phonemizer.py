@@ -22,12 +22,18 @@ r"""A 层：音素化器 —— **照搬** `OpenUtau.Core/DiffSinger/DiffSingerB
 """
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import RenderError
 from .g2p import get_symbols, lang_id_of
 from .voicebank import DsSinger
+
+#: 日文假名 + 谚文（用于「歌词识别不了但语言选错」的提示）
+_KANA_RE = re.compile(r'[\u3041-\u30ff\u31f0-\u31ff]')
+_HANGUL_RE = re.compile(r'[\uac00-\ud7af\u1100-\u11ff]')
+_LANG_NAME = {'ja': '日语', 'ko': '韩语', 'en': '英语', 'zh': '中文', 'yue': '粤语'}
 
 #: 对应 `:35` `string defaultPause = "SP";` —— 音素化失败时的占位
 DEFAULT_PAUSE = 'SP'
@@ -254,6 +260,19 @@ def process_part(singer: DsSinger, phrase_notes: Sequence[Sequence],
         rejected = list(rejected) + [s for s in raw if s not in tokens_map]
         if rejected:
             warn.append('位置 %d 的歌词无法识别：%s' % (word[0].position, ' '.join(rejected)))
+            # ★ 识别不了的最常见原因：歌词是假名/谚文，但轨道语言选错了（词典跟着语言走）。
+            #   与其刷 40 行「无法识别」，不如给一句能直接照做的提示（每段只提一次）。
+            rejected_text = ' '.join(rejected)
+            wrong_lang = None
+            if lang_code != 'ja' and _KANA_RE.search(rejected_text):
+                wrong_lang = 'ja'
+            elif lang_code != 'ko' and _HANGUL_RE.search(rejected_text):
+                wrong_lang = 'ko'
+            if wrong_lang:
+                hint = ('轨道语言改为 %s（%s）后重新渲染' % (_LANG_NAME.get(wrong_lang, wrong_lang), wrong_lang))
+                if not any(hint in w for w in warn):
+                    warn.append('检测到 %s 歌词但当前词典不含这些字 —— 请把轨道语言改为 %s'
+                                % (_LANG_NAME.get(wrong_lang, wrong_lang), hint))
         if not symbols:
             symbols = [DEFAULT_PAUSE]                     # :378-383
             word_found.append(False)

@@ -1,7 +1,7 @@
 // Pinia 应用主 Store：播放 / 歌单 / 混音 / UI / 导入恢复
 // 所有组件直接使用 Pinia store，store.js 兼容层已移除
 import { defineStore } from 'pinia';
-import { ensureAudio } from '../audio';
+import { ensureAudio, ensureEngineHealthy } from '../audio';
 import { parseMidi, buildSong } from '../core/midi';
 import { TRACK_COLORS, fmtTime } from '../core/util';
 import { usePlaylistStore } from './playlist';
@@ -830,7 +830,7 @@ export const useAppStore = defineStore('app', {
         }
       } catch (e) {}
     },
-    togglePlay() {
+    async togglePlay() {
       // 音频曲目：走 <audio>
       if (this.isAudio) {
         const el = this.ensureAudioEl();
@@ -840,13 +840,18 @@ export const useAppStore = defineStore('app', {
         else { el.play(); this.playing = true; this.trackPlay(); }
         return;
       }
-      const { player } = ensureAudio();
       if (!this.currentSong) { this.toast(t('请先导入一首 MIDI'), 'warn'); return; }
       if (this.playing) {
+        const { player } = ensureAudio();
         player.pause();
         this.playing = false;
         this.saveResumePos(); // 暂停即记录断点
       } else {
+        // ★ 播放前体检：context 被毒化（一切装载成功却永远无声，见 audio.js）时
+        //   整体重建引擎；重建后旧 player 作废，必须把当前曲重新装回去再播。
+        const rv = await ensureEngineHealthy();
+        if (rv.rebuilt && this.currentId) { this.playing = false; await this.selectSong(this.currentId); }
+        const { player } = ensureAudio();
         player.play();
         this.playing = true;
         this.trackPlay(); // 播放统计
@@ -891,6 +896,8 @@ export const useAppStore = defineStore('app', {
     },
     // 载入并播放指定曲目（上一首/下一首/自动切歌共用）
     async playSongById(id: string) {
+      // ★ 先体检再选曲：若引擎需要重建，selectSong 会把曲目装进**新** player
+      await ensureEngineHealthy();
       await this.selectSong(id);
       const { player } = ensureAudio();
       player.play();
