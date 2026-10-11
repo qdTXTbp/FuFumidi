@@ -630,13 +630,14 @@ async function renderVideo() {
     VE.veStage = t('转码为 MP4…');
     if (bridge && bridge.transcodeVideo) {
       // 直接传 Uint8Array（结构化克隆），此前 Array.from 会生成数亿元素数组 → 内存爆炸黑屏
-      const r = await bridge.transcodeVideo(data, wavBytes);
+      // ★ name = 曲名：主进程拿它当保存对话框的默认文件名（用户要求「导出的视频名默认为歌曲名」）
+      const r = await bridge.transcodeVideo(data, wavBytes, { name: s.name });
       if (r && r.ok) toast(t('视频已导出：') + (r.path || ''), 'ok');
       else if (!(r && r.canceled)) toast(t('视频导出失败：') + ((r && r.error) || ''), 'warn');
     } else {
       const blob = new Blob([webm], { type: 'video/webm' });
       const a = document.createElement('a');
-      a.download = s.name + '_video.webm'; a.href = URL.createObjectURL(blob); a.click();
+      a.download = (s.name || 'FuFumidi-video') + '.webm'; a.href = URL.createObjectURL(blob); a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 4000);
       toast(t('已导出 WebM（桌面版可转 MP4）'), 'ok');
     }

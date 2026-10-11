@@ -757,7 +757,9 @@ export interface FuBridge {
   soundfonts: { list(): Promise<SoundFontItem[]> };
   pickMusicXML(): Promise<string | null>;
   exportScorePdf(): Promise<GeneralResult>;
-  transcodeVideo(data: any, audio: any): Promise<GeneralResult>;
+  /* 视频导出。opts.name = 曲名，主进程拿它当保存对话框的默认文件名（main/video.js 的 safeVideoBase
+     会再洗一遍 Windows 非法字符）。旧调用方只传前两个参数仍然有效。 */
+  transcodeVideo(data: any, audio: any, opts?: { name?: string; audioOffset?: number }): Promise<GeneralResult>;
   modelList(): Promise<any[]>;
   depCheck(): Promise<GeneralResult>;
   diagExport(): Promise<GeneralResult>;
