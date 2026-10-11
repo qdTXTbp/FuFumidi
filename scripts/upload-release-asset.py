@@ -35,12 +35,21 @@
 #                       **掐掉后会立刻补一条新流**（换路由重掷），不是只减不补。
 #                       0 = 关闭（默认）。
 #
+#   5) ★ 路径自动选择（默认行为，无需参数）：
+#      直连与系统代理各真传一个 2 MB 探针到 uploads.github.com 测速，
+#      **哪条快走哪条**，并把两条的实测速度都打出来。探针测完即删，
+#      并有 sweep_probes() 按前缀兜底清理。
+#      理由：脚本走的路径完全取决于「系统代理开着没、那个代理此刻健不健康」，
+#      实测同一条代理 0.075 ~ 4.87 MB/s（差 65 倍），而直连是稳定但慢的
+#      0.40 MB/s。写死任何一条都会有一半时间是最差选择。
+#      显式覆盖：--no-proxy（强制直连）/ --proxy URL（指定代理）。
+#
 #      建议口径：
-#        大资产（>= 50 MB）：--race 2 --min-speed 2。既并行又重掷，
-#                            命中快路由就 2 分钟传完；一直命不中就退化成并行兜底。
-#        小资产（< 50 MB）：默认单流即可。
-#      注意：--min-speed 要明显低于「单流峰值」（本机实测 5.75 MB/s），
-#      否则 N 条流分同一条上行时会被一起判慢。开到 2 是安全的。
+#        路径：不用管，默认测速后自动选。
+#        >= 200 MB：优先用 GitHub 网页传（实测 4.87 MB/s，见 CODING_GUIDELINES 11.7）。
+#        50 ~ 200 MB：脚本默认单流（或 --race 3 并行）。
+#        < 50 MB：默认单流即可。
+#        --min-speed 默认关；要开也必须明显低于单流峰值，否则并行时会被一起判慢。
 import sys
 import os
 import time
@@ -50,7 +59,7 @@ import requests
 USAGE = ('usage: upload-release-asset.py <token> <repo> <tag> <local_path> <asset_name> '
          '[--prerelease] [--title T] [--body-file F] [--attempts N] '
          '[--race N] [--min-speed MBps] [--stall-seconds S] [--rolls N] '
-         '[--no-proxy | --proxy URL]')
+         '[--auto-proxy | --no-proxy | --proxy URL]')
 
 MB = 1048576.0
 WARMUP_BYTES = 8 * MB          # 看门狗热身：这段时间内的低速不算数（TCP 慢启动）
@@ -69,6 +78,86 @@ PROXIES = {}                   # {} = 用系统/环境默认；{'http': None, 'h
 def proxy_kw():
     """只在显式指定 --no-proxy / --proxy 时才覆盖 requests 的默认代理解析。"""
     return {'proxies': PROXIES} if PROXIES else {}
+
+
+PROBE_BYTES = 2 * 1024 * 1024  # 探针大小（整数！f.read() 不收 float）：两条路径各真传这么多，测完即删
+
+PROBE_PREFIX = '_speedprobe-'  # 探针资产名前缀，便于兜底清理
+
+
+def probe_upload(repo, rid, h, path, proxies, tag, nbytes=PROBE_BYTES):
+    """往 uploads.github.com 真传一个小文件，量出该路径的上传速度，测完立刻删除。
+
+    为什么不测下载：实测 github.com 直连超时、代理转发到
+    release-assets.githubusercontent.com 也超时 —— 下载路径与上传路径
+    （uploads.github.com）并不是同一组主机，测出来的数没有代表性。
+    真传一个小文件只花 PROBE_BYTES 的流量，却量的正是要用的那条路。
+    """
+    name = PROBE_PREFIX + tag + '.bin'
+    url = 'https://uploads.github.com/repos/%s/releases/%s/assets?name=%s' % (repo, rid, name)
+    api = 'https://api.github.com/repos/%s' % repo
+    kw = {'proxies': proxies} if proxies else {}
+    try:
+        with open(path, 'rb') as f:
+            data = f.read(nbytes)
+    except Exception as e:
+        return None, 'read failed: %s' % str(e)[:60]
+    t0 = time.time()
+    try:
+        r = requests.post(url, headers=dict(h, **{'Content-Type': 'application/octet-stream'}),
+                          data=data, timeout=(15, 240), **kw)
+        dt = max(0.001, time.time() - t0)
+        if r.status_code != 201:
+            return None, 'HTTP %s' % r.status_code
+        try:
+            aid = r.json().get('id')
+        except Exception:
+            aid = None
+        if aid:
+            # 删除也走两条路重试：探针所在的那条路可能正是不健康的一条
+            for tag2, pk in (('same-path', kw), ('default-path', {})):
+                try:
+                    dr = requests.delete('%s/releases/assets/%s' % (api, aid),
+                                         headers=h, timeout=60, **pk)
+                    if dr.status_code in (204, 404):
+                        break
+                    print('    probe cleanup %s -> HTTP %s' % (tag2, dr.status_code))
+                except Exception as e:
+                    print('    probe cleanup %s failed: %s' % (tag2, str(e)[:60]))
+        return len(data) / MB / dt, '%.1f MB / %.1fs' % (len(data) / MB, dt)
+    except Exception as e:
+        return None, '%s: %s' % (type(e).__name__, str(e)[:70])
+
+
+def sweep_probes(repo, rid, h):
+    """兜底：探针若因异常没删干净，这里按前缀清掉。"""
+    api = 'https://api.github.com/repos/%s' % repo
+    try:
+        for a in list_assets(api, rid, h):
+            if a['name'].startswith(PROBE_PREFIX) or a.get('state') != 'uploaded':
+                requests.delete('%s/releases/assets/%s' % (api, a['id']), headers=h, timeout=60)
+                print('  swept leftover asset:', a['name'], a.get('state'))
+    except Exception as e:
+        print('  sweep failed:', str(e)[:80])
+
+
+def auto_pick_proxies(repo, rid, h, path):
+    """★ 默认行为：直连与系统代理各真传一个探针测速，哪条快走哪条。"""
+    print('测速中（两条路径各真传 %.0f MB 到 uploads.github.com，测完即删）…' % (PROBE_BYTES / MB))
+    direct = probe_upload(repo, rid, h, path, {'http': None, 'https': None}, 'direct')
+    proxied = probe_upload(repo, rid, h, path, {}, 'proxy')
+    for label, res in (('直连', direct), ('系统代理', proxied)):
+        print('  %-10s %s' % (label, ('%6.2f MB/s  (%s)' % res) if res[0] else ('失败 —— %s' % res[1])))
+    sweep_probes(repo, rid, h)
+    d, p = direct[0], proxied[0]
+    if d is None and p is None:
+        print('  → 两条都测不通，回退到系统默认解析')
+        return {}
+    if d is not None and (p is None or d >= p):
+        print('  → 选【直连】')
+        return {'http': None, 'https': None}
+    print('  → 选【系统代理】')
+    return {}
 
 
 def describe_proxies():
@@ -267,12 +356,6 @@ def main():
     race = max(1, min(8, race))
 
     global PROXIES
-    if '--no-proxy' in opts:
-        PROXIES = {'http': None, 'https': None}
-    elif '--proxy' in opts:
-        u = opts[opts.index('--proxy') + 1]
-        PROXIES = {'http': u, 'https': u}
-    print('proxy: %s' % describe_proxies())
 
     if not os.path.exists(path):
         print('local file not found:', path)
@@ -305,6 +388,16 @@ def main():
                 print('release %s marked as prerelease' % tag)
         print('release id:', rel['id'])
     rid = rel['id']
+
+    # ★ 路径选择：显式参数优先；否则测速后选快的那条
+    if '--no-proxy' in opts:
+        PROXIES = {'http': None, 'https': None}
+    elif '--proxy' in opts:
+        u = opts[opts.index('--proxy') + 1]
+        PROXIES = {'http': u, 'https': u}
+    else:
+        PROXIES = auto_pick_proxies(repo, rid, h, path)
+    print('proxy: %s' % describe_proxies())
 
     size = os.path.getsize(path)
     print('uploading %s (%.1f MB) race=%d min-speed=%.2f MB/s rolls=%d'
