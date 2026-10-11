@@ -10,7 +10,7 @@ const currentSong = computed(() => app.currentSong);
 const toast = (m, t) => app.toast(m, t);
 import { clamp } from '../core/util.js';
 // ★ paintVizBg：与「可视化」页**同一个**背景绘制函数（主题/纯色/图片/透明）
-import { drawVizWaterfall, paintVizBg, drawVizSpectrum, drawVizScope, drawVizChord, rmsAt, smoothEnergy } from '../core/viz.js';
+import { drawVizWaterfall, paintVizBg, drawVizSpectrum, drawVizScope, drawVizChord, rmsAt, smoothEnergy, smoothEnergyDt, activeNotesAt, VIZ_REF_H, VIZ_REF_DPR } from '../core/viz.js';
 import { playVoice, presetFromMode } from '../core/synth.js';
 import { renderSongWithSf2 } from '../core/sf2render.js';
 
@@ -215,7 +215,7 @@ async function downloadWav(buf, name, g) {
 
 /* ==================== 视频 / 可视化导出 ==================== */
 const VE = reactive({
-  format: 'mp4', template: 'landscape', res: '1280x720', fps: 30, quality: 'medium',
+  format: 'mp4', template: 'landscape', res: '1280x720', fps: 24, quality: 'medium',
   dur: 30, durMode: 'full', durCustom: 30, visual: 'mix', track: 'all', range: 'all', start: 0, end: 30,
   bitrate: 8, showProgress: true, showChord: true, showTimecode: false,
   // ★ 背景不在 VE 里：它跟「可视化」页共用 stores/vizbg（同一份 + 同一绘制函数）。
@@ -245,7 +245,15 @@ function drawVideoPreview() {
   const vf = { winSec: 8, melodyTrack: 0, lyricAt: '', pct: 0 };
   // ★ 以前这里静默吞异常：绘制中途抛错（实测踩过 'bgMode is not defined'）时预览只剩背景，
   //   看着「像」正常，导出才报错。现在至少把原因打到控制台。
-  try { drawVideoFrame(ctx, w, h, s.secToTick ? s.secToTick(0) : 0, s, null, vf, 0); }
+  // ★ 预览与成片必须用**同一套逻辑尺寸**（VIZ_REF_H），否则预览里合适的琴键条/音符密度，
+  //   导出来是另一幅画 —— 这正是用户看到的「预览一个样、成片另一个样」。
+  try {
+    const ps = h / VIZ_REF_H;
+    drawVideoFrame._bgScale = ps / VIZ_REF_DPR;
+    ctx.save(); ctx.scale(ps, ps);
+    drawVideoFrame(ctx, w / ps, VIZ_REF_H, s.secToTick ? s.secToTick(0) : 0, s, null, vf, 0);
+    ctx.restore();
+  }
   catch (e) { console.warn('[video] 预览绘制失败：', e); }
 }
 watch(() => [VE.template, bg.mode, bg.color, bg.blur, bg.dim, VE.visual, VE.showProgress, VE.showChord, VE.showTimecode, VE.showLyrics, VE.showWatermark, VE.res, VE.fps, VE.quality, VE.track], () => nextTick(drawVideoPreview), { deep: true });
@@ -289,21 +297,36 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
   const pad = 14, panelH = 178, rollH = Math.max(120, H - panelH - pad);
   // ★ 背景 = 「可视化」页选的那一份（主题渐变 / 纯色 / 图片 + 模糊暗化 / 真透明）。
   //   用同一个 paintVizBg 铺**整帧**：仪表盘模板下面还有卡片区，瀑布只盖上半块。
-  paintVizBg(ctx, W, H, vizBg.drawOpts());
-  const activeNotes = [];
-  for (const tr of s.tracks) {
-    if (VE.track === 'melody' && !tr.isDrum && tr.index !== vf.melodyTrack) continue;
-    for (const n of tr.notes) if (n.start <= tick && n.end >= tick) activeNotes.push(n);
-  }
+  //   ★ 模糊半径按「物理像素 / 实时 dpr」等比换算：模糊是设备像素量，实时画布是 934×534@2.5，
+  //   照抄 13px 在 4K 帧上会清晰得多 —— 于是「导出比实时更清楚」也是不同一幅画。
+  const bgOpts = vizBg.drawOpts();
+  const bgScale = drawVideoFrame._bgScale;
+  if (bgScale > 0 && bgOpts && typeof bgOpts.blur === 'number' && bgOpts.blur > 0) bgOpts.blur = bgOpts.blur * bgScale;
+  paintVizBg(ctx, W, H, bgOpts);
+  // ★ ④ 与实时统一：只算**真正在发声**的轨（静音轨不点亮），而不是遍历整份谱面
+  const activeNotes = activeNotesAt(s, tick, {
+    mute: (s.tracks || []).filter((tr) => tr.muted).map((tr) => tr.index),
+    solo: VE.track === 'melody' ? (vf.melodyTrack != null ? vf.melodyTrack : -1) : -1,
+  });
   if (!drawVideoFrame._state) drawVideoFrame._state = {};
   // 能量包络与实时视图同算法（viz.rmsAt ↔ viz.rmsFromBytes），这里从已解码的音频缓冲取，
   // 因此导出画面与实时预览的「随音乐脉动」是同一套视觉语言且逐帧可复现。
   const st = drawVideoFrame._state;
-  st.energy = smoothEnergy(st.energy, rmsAt(audioBuf, nowSec));
+  // ★ ③ 按**秒**平滑：dt = 1/fps，与实时的 rAF 间隔同量纲（旧的逐帧系数在两条链路
+  //   上时间常数不同 ⇒ 脉动快慢/幅度对不上）
+  st.energy = smoothEnergyDt(st.energy, rmsAt(audioBuf, nowSec), 1 / (VE.fps || 30));
+  // ★ 读用户同一份偏好（原来写死 zoom:1 / colorScheme:0，导出与实时看到的不是同一套密度与配色）
+  if (!drawVideoFrame._prefs) {
+    try { drawVideoFrame._prefs = JSON.parse(localStorage.getItem('fufumidi_viz') || '{}') || {}; }
+    catch (e) { drawVideoFrame._prefs = {}; }
+  }
+  const prefs = drawVideoFrame._prefs;
   const opts = {
     state: st,
-    zoom: 1,
-    colorScheme: 0,
+    // ★ ⑤ 与实时统一：读「可视化」页持久化的同一份偏好（原来写死 zoom:1 / colorScheme:0，
+    //   用户在瀑布流里调的缩放与配色，导出的成片一概不认）
+    zoom: (typeof prefs.zoom === 'number' && isFinite(prefs.zoom)) ? prefs.zoom : 1,
+    colorScheme: (typeof prefs.colorScheme === 'number') ? prefs.colorScheme : 0,
     // 背景已经在上面铺满整帧了，瀑布只画音符（'keep' = 不动背景），
     // 否则它会在自己那块区域再清一次/再铺一次，仪表盘的下半块就跟上半块断层。
     bg: { mode: 'keep' },
@@ -328,9 +351,18 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
     drawVizWaterfall(ctx, W, H, s, tick, opts);
   } else {
     // 仪表盘：顶部瀑布 + 底部三卡片
+    // ★ ⑥ 与实时统一：实时那边瀑布是画在**卡片**里的（圆角 + 发丝描边 + --canvas 底），
+    //   导出原来直接铺满整帧 ⇒ 对比度、层次、边缘观感都不同。这里把同一层卡片画出来，
+    //   并把绘制原点平移到卡片内（否则内容还是从 0,0 起画，会被裁掉顶部）。
+    const cardR = 12, cx0 = pad, cy0 = pad, cw0 = W - pad * 2, ch0 = rollH - pad;
     ctx.save();
-    ctx.beginPath(); ctx.rect(0, 0, W, rollH); ctx.clip();
-    drawVizWaterfall(ctx, W, rollH, s, tick, opts);
+    ctx.fillStyle = cvar('--canvas', '#0b1220');
+    ctx.beginPath(); roundRect(ctx, cx0, cy0, cw0, ch0, cardR); ctx.fill();
+    ctx.strokeStyle = cvar('--hairline', 'rgba(255,255,255,.08)'); ctx.lineWidth = 1;
+    ctx.beginPath(); roundRect(ctx, cx0, cy0, cw0, ch0, cardR); ctx.stroke();
+    ctx.beginPath(); roundRect(ctx, cx0, cy0, cw0, ch0, cardR); ctx.clip();
+    ctx.translate(cx0, cy0);
+    drawVizWaterfall(ctx, cw0, ch0, s, tick, opts);
     ctx.restore();
     const gy = rollH + pad;
     const ch = panelH - 34;
@@ -391,6 +423,62 @@ function lyricAtTick(s, tick) {
   }
   return hit;
 }
+/* 诊断钩子（只读用途，与 window.__fufumidiVizEnergy 同类）：
+ * 用**导出同一条链路**（同一个 drawVideoFrame / 同一个逻辑尺寸 / 同一份背景缓存）渲染一帧，
+ * 回报绘制耗时与 PNG，供自动化比对「导出画面 vs 实时画面」并量化单帧成本。
+ * 不参与导出逻辑，也不留下状态（画完把 VE.visual 还原）。
+ * 用法：window.__fuVizRender({ w: 3840, h: 2160, sec: 25, reps: 10 }) */
+if (typeof window !== 'undefined') {
+  window.__fuVizRender = (o) => {
+    o = o || {};
+    const s = song.value;
+    if (!s) return { error: 'no-song' };
+    const W = Number(o.w) || 1920, H = Number(o.h) || 1080;
+    const sec = Number(o.sec) || 0;
+    const tick = s.secToTick(sec);
+    // o.canvas：允许调用方指定画布（性能基准要复用导出的那块录制画布，量真实链路）
+    const c2v = o.canvas || document.createElement('canvas');
+    if (c2v.width !== W || c2v.height !== H) { c2v.width = W; c2v.height = H; }
+    const c2 = c2v.getContext('2d');
+    // 假音频缓冲：rmsAt 会返回 normalizeRms(o.rms)，默认 0.10 → 能量约 0.38。
+    // 长度必须覆盖 sec（rmsAt 取的是 [sec, sec+40ms] 这段），否则取到越界一律返回 0，
+    // 看上去像「导出没有能量光晕」，其实是探针自己给的缓冲太短。
+    const rms = (typeof o.rms === 'number') ? o.rms : 0.10;
+    const fakeLen = Math.max(1, Math.ceil(44100 * (sec + 1)));
+    const fake = { sampleRate: 44100, duration: 1e6,
+      getChannelData: () => { const a = new Float32Array(fakeLen); a.fill(rms); return a; } };
+    const vf = { winSec: 8, melodyTrack: 0, lyricAt: o.lyric || '', pct: Number(o.pct) || 0 };
+    const prevVisual = VE.visual;
+    if (o.visual) VE.visual = o.visual;
+    drawVideoFrame._state = null;
+    drawVideoFrame._prefs = null;
+    const ds = H / VIZ_REF_H;
+    drawVideoFrame._bgScale = ds / VIZ_REF_DPR;
+    const doFlush = o.flush !== false;
+    const step = (stateful) => {
+      c2.setTransform(1, 0, 0, 1, 0, 0);
+      c2.save(); c2.scale(ds, ds);
+      drawVideoFrame(c2, W / ds, VIZ_REF_H, tick, s, fake, vf, sec);
+      c2.restore();
+      // ★ Canvas2D 的绘制命令是**延迟执行**的：只包 performance.now() 量到的是「提交命令」
+      //   的时间（4K 只有 0.8ms，看着像不要钱）。getImageData 会把管线冲干净，
+      //   量到的才是真实单帧成本（4K 41ms）。flush:false 用来分离「提交」与「光栅化」。
+      if (doFlush) c2.getImageData(0, 0, 1, 1);
+      if (!stateful) drawVideoFrame._state = null;
+    };
+    step(false);
+    const reps = Math.max(1, Number(o.reps) || 1);
+    const t0 = performance.now();
+    for (let i = 0; i < reps; i++) step(true);
+    const ms = (performance.now() - t0) / reps;
+    const out = { ms: Math.round(ms * 10) / 10, w: W, h: H, tick, sec,
+      logical: [Math.round(W / ds), VIZ_REF_H], visual: o.visual || prevVisual,
+      energy: drawVideoFrame._state && drawVideoFrame._state.energy };
+    VE.visual = prevVisual;
+    if (o.png !== false) out.url = c2v.toDataURL('image/png');
+    return out;
+  };
+}
 async function renderVideo() {
   const s = song.value;
   const bridge = window.fuBridge;
@@ -409,6 +497,14 @@ async function renderVideo() {
     if (sec === 0) sec = Math.min(s.totalSec, 120);
     if (VE.range === 'custom') sec = Math.max(1, VE.end - VE.start);
     sec = Math.min(sec, s.totalSec || sec);
+    // ★ 硬上限：导出是「实时逐帧绘制 + VP9 编码 + 离线渲染整段音频 + ffmpeg 转码」，
+    //   长片会长时间吃满 CPU/内存（实测有用户机器因此崩溃重启）。
+    //   超长一律截断并明确告知，长片请分段导出。
+    const MAX_EXPORT_SEC = 120;
+    if (sec > MAX_EXPORT_SEC) {
+      toast(t('导出时长超过 120 秒，已自动截断为前 120 秒（长片请分段导出，避免整机负载过高）'), 'warn');
+      sec = MAX_EXPORT_SEC;
+    }
     const startSec = VE.range === 'custom' ? (VE.start || 0) : 0;
     // 1) 离线渲染音频：按导出范围切片（[startSec, startSec+sec] 归一化），
     //    与视频长度严格一致，避免整曲渲染后 -shortest 截断导致音乐「被切断/变快」
@@ -423,11 +519,23 @@ async function renderVideo() {
     //    现在把它放在右下角、2×2 CSS 像素、几乎全透明：参与合成（延迟≈1 帧），用户看不见。
     //    注意 captureStream 抓的是画布的**像素缓冲**（W×H），不是这 2px 的显示尺寸。
     const cv = document.createElement('canvas');
-    const dpr = 1;
+    // 物理缓冲必须等于视频尺寸：录制流与后续 ffmpeg 转码都按 W×H 走，
+    // 一旦这里放大（曾经试过 ×EXPORT_SCALE），导出的流尺寸与转码参数不一致 → 导出失败。
+    // 「导出与实时同尺度」要换别的做法（见 docs/reports/2026-10-07-viz-export-parity.md）。
     cv.width = W; cv.height = H;
     cv.style.cssText = 'position:fixed;right:0;bottom:0;width:2px;height:2px;opacity:0.01;z-index:-1;pointer-events:none;';
     document.body.appendChild(cv);
     const ctx = cv.getContext('2d');
+    // 预热背景位图缓存：底图（模糊 + cover 裁切）在录制开始前先烘一次。
+    // 否则第一帧要花上百毫秒现烘，而它正好落在录制器最敏感的冷启动窗口里。
+    try {
+      const ds0 = H / VIZ_REF_H;
+      const b0 = vizBg.drawOpts();
+      if (b0 && typeof b0.blur === 'number' && b0.blur > 0) b0.blur = b0.blur * (ds0 / VIZ_REF_DPR);
+      ctx.save(); ctx.scale(ds0, ds0);
+      paintVizBg(ctx, W / ds0, VIZ_REF_H, b0);
+      ctx.restore();
+    } catch (e) { console.warn('[video] 背景预热失败：', e); }
     // 手动帧捕获（captureStream(0) + requestFrame）：移出视口的 canvas 合成呈现延迟可达
     // 300ms+，自动捕获会把「时间戳=捕获时刻、内容=δ 之前绘制」的帧写入视频 → 音画不同步
     // （实测音频领先画面 ~340ms 且随负载漂移）。手动模式下每次 requestFrame() 以当前时刻
@@ -496,7 +604,20 @@ async function renderVideo() {
         const tick = s.secToTick(Math.min(startSec + el, Math.max(0.001, s.totalSec - 0.001)));
         const vf = { winSec: 8, melodyTrack, lyricAt: lyricAtTick(s, tick), pct: (el / sec) };
         // 音频已按片段归一化（从 0 起），频谱/波形用 el；瀑布 tick 用全曲坐标 startSec+el
-        drawVideoFrame(ctx, W, H, tick, s, buf, vf, el);
+        // ★ 与实时同尺度（观感差距的**主因**）且**不动物理缓冲**：
+        //   瀑布流里有绝对像素常量（琴键条上限 120、一小节 120px、发光 20、字号 10…），
+        //   只有在「逻辑高度 ≈ 实时画布高度（实测 534）」时才与实时一致。
+        //   导出原来把物理像素当逻辑单位（4K 即 3840×2160）⇒ 琴键条只剩 5% 高、
+        //   一屏塞 36 秒音乐、音符变成细丝 —— 与实时画面完全不是一幅画。
+        //   这里固定逻辑高度 = VIZ_REF_H，用 ctx.scale 映射到物理像素：
+        //   物理缓冲仍是 W×H，录制流与 ffmpeg 转码的分辨率不变
+        //   （直接放大物理缓冲会导出失败 —— 实测踩过）。
+        const dscale = H / VIZ_REF_H;
+        drawVideoFrame._bgScale = dscale / VIZ_REF_DPR;   // 背景模糊随分辨率等比（见 drawVideoFrame）
+        ctx.save();
+        ctx.scale(dscale, dscale);
+        drawVideoFrame(ctx, W / dscale, VIZ_REF_H, tick, s, buf, vf, el);
+        ctx.restore();
         if (canManual) { try { vtrack.requestFrame(); } catch (e) {} }
         drawDurEst = Math.min(400, drawDurEst * 0.7 + (performance.now() - t0) * 0.3);
         VE.veProgress = Math.min(97, 10 + (elRaw / sec) * 87);
@@ -634,6 +755,7 @@ async function renderVideo() {
           <select class="select-input" v-model="VE.res">
             <option value="1280x720">720P</option><option value="1920x1080">1080P</option><option value="2560x1440">2K</option><option value="3840x2160">4K</option>
           </select>
+          <div v-if="VE.res === '3840x2160'" class="muted small" style="margin-top:2px">{{ t('4K 是实时逐帧录制 + 编码，CPU 压力最大；长片建议用 1080P') }}</div>
         </div>
         <div class="field-row">
           <label>{{ t('帧率') }}</label>

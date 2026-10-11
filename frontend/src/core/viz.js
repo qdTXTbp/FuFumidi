@@ -24,6 +24,22 @@ const WHITE_MIDI = (() => {
 })();
 const WHITE_TOTAL = WHITE_MIDI.length; // 52
 
+/* ---- 参考逻辑尺寸（导出与实时同尺度的唯一基准）----
+ * 瀑布流的几何里有一批**绝对像素**常量（琴键条高度上限 120、一小节恒 120px、圆角 4、
+ * 发光半径 20、字号 10…）。它们只在「画布逻辑尺寸 ≈ 实时画布」时才正确。
+ * 实测实时画布（瀑布流、1920×1080 窗口）是 934×534 CSS；导出若直接拿物理像素当逻辑单位
+ * （4K 就是 3840×2160），这些常量相对画布就小了 4 倍 —— 琴键条变成一条 5% 高的细缝、
+ * 一屏塞进 36 秒音乐、音符成了一条条细丝，与实时画面「差了十万八千里」（用户原话）。
+ * 所以导出固定按 VIZ_REF_H 的逻辑高度绘制，再用 ctx.scale 映射到物理缓冲。
+ * 仪表盘模板的实时卡片是 934×300，瀑布流是 934×534 —— 取 540 与瀑布流对齐。 */
+export const VIZ_REF_H = 540;
+export const VIZ_REF_W = 960;   // = VIZ_REF_H × 16/9，仅作说明用
+// 实时画布的 devicePixelRatio 基准（本机实测 2.5）。背景模糊半径是**设备像素**
+// （canvas 的 filter 不受 CTM 影响，实测），所以实时看到的是「13 物理 px / 2335 画面宽」，
+// 导出若照抄 13 就变成「13 / 3840」——分辨率越高背景越清晰，两边不是一幅画。
+// 导出按 (物理像素 / 实时 devicePixelRatio) 等比放大模糊半径，任何分辨率下相对模糊都一致。
+export const VIZ_REF_DPR = 2.5;
+
 const LIGHT_KEYS = { wkTop: '#f2f3f5', wkBot: '#e2e4e8', wkLine: 'rgba(10,10,10,0.12)', bkTop: '#3a3d42', bkBot: '#1c1e22' };
 const DARK_KEYS = { wkTop: '#2b303a', wkBot: '#20242c', wkLine: 'rgba(255,255,255,0.10)', bkTop: '#0c0e12', bkBot: '#04050a' };
 
@@ -218,16 +234,12 @@ function pixelScale(ctx) {
  * ★ 千万不要 setTransform(1,0,0,1,0,0)：调用方已经把 dpr 缩放设在 ctx 上，
  *   而传进来的 w/h 是 **CSS 像素**。重置成 identity 只会铺满左上角 1/dpr 的区域。
  */
-export function paintVizBg(ctx, w, h, bgOpt = {}) {
+function paintVizBgDirect(ctx, w, h, bgOpt = {}) {
   const mode = bgOpt.mode || 'theme';
-  if (mode === 'keep') return;
   const blur = Math.max(0, Number(bgOpt.blur) || 0);
   const dim = Math.max(0, Math.min(0.9, Number(bgOpt.dim) || 0));
   ctx.save();
-  if (mode === 'transparent') {
-    // 真的清成透明：导出 PNG / 视频后才能当叠加层用
-    ctx.clearRect(0, 0, w, h);
-  } else if (mode === 'solid') {
+  if (mode === 'solid') {
     ctx.fillStyle = bgOpt.color || cssVar('--canvas', '#0b1020');
     ctx.fillRect(0, 0, w, h);
   } else if (mode === 'image' && bgOpt.image && bgOpt.image.width) {
@@ -248,6 +260,48 @@ export function paintVizBg(ctx, w, h, bgOpt = {}) {
     ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
     if (dim > 0) { ctx.fillStyle = 'rgba(0,0,0,' + dim + ')'; ctx.fillRect(0, 0, w, h); }
   }
+  ctx.restore();
+}
+
+/* ---- 背景位图缓存（性能，逐像素等价）----
+ * 为什么必须有：模糊一张底图是整帧里最贵的一步。4K（3840×2160）下一次 blur + cover 缩放实测
+ * 要 80~150ms，而导出是**实时录制**（单帧预算 = 1/fps，24fps 只有 41ms）—— 每帧都超预算，
+ * 于是持续满负载、丢帧，用户的机器甚至崩溃重启过一次。
+ * 背景参数在一次会话里恒定（模式 / 颜色 / 模糊 / 暗化 / 图片 / 画布设备尺寸），所以缓存一张
+ * **设备分辨率**的离屏位图，之后每帧只做一次 drawImage。
+ * 为什么逐像素等价：缓存是在 ctx.scale(sc, sc) 下画的，模糊与 cover 裁切语义与直画完全一致
+ * —— canvas 的 filter blur 作用在**设备空间**、不受 CTM 影响（实测模糊斜坡宽度不随 scale 变）。
+ * 实时视图同样受益（dpr=2.5 时每帧少一次 2335×1335 的模糊）。 */
+const BG_CACHE = { key: '', cv: null };
+function bgCacheKey(mode, o, pw, ph) {
+  const im = o.image;
+  return [mode, o.color || '', Number(o.blur) || 0, Number(o.dim) || 0,
+    im ? (im.currentSrc || im.src || 'img') + ':' + im.width + 'x' + im.height : '', pw, ph].join('|');
+}
+
+export function paintVizBg(ctx, w, h, bgOpt = {}) {
+  const mode = bgOpt.mode || 'theme';
+  if (mode === 'keep') return;
+  if (mode === 'transparent') {
+    // 真的清成透明：导出 PNG / 视频后才能当叠加层用（本来就只是一次 clearRect，不必缓存）
+    ctx.save(); ctx.clearRect(0, 0, w, h); ctx.restore();
+    return;
+  }
+  if (typeof document === 'undefined') { paintVizBgDirect(ctx, w, h, bgOpt); return; }
+  const sc = pixelScale(ctx) || 1;
+  const pw = Math.max(1, Math.round(w * sc)), ph = Math.max(1, Math.round(h * sc));
+  const key = bgCacheKey(mode, bgOpt, pw, ph);
+  if (BG_CACHE.key !== key || !BG_CACHE.cv) {
+    const cv = document.createElement('canvas');
+    cv.width = pw; cv.height = ph;
+    const c2 = cv.getContext('2d');
+    c2.save(); c2.scale(sc, sc);
+    paintVizBgDirect(c2, w, h, bgOpt);
+    c2.restore();
+    BG_CACHE.key = key; BG_CACHE.cv = cv;
+  }
+  ctx.save();
+  ctx.drawImage(BG_CACHE.cv, 0, 0, w, h);
   ctx.restore();
 }
 
@@ -582,4 +636,38 @@ export function drawVizChord(ctx, w, h, activeNotes) {
     ctx.fillStyle=cssVar('--slate','rgba(10,10,10,.75)'); ctx.font='12px "Microsoft YaHei", sans-serif';
     ctx.fillText(pcs.length ? pcs.map(p=>KEY_NAME[p]).join(' · ') : t('播放时显示实时和弦'), w/2, h*.45);
   }
+}
+/** 按**秒**平滑的能量包络（③ 导出/实时统一）。
+ *  旧的 smoothEnergy(prev, target, attack, release) 是**逐帧**系数：实时 60~144Hz 与导出固定 fps
+ *  的时间常数不同，于是同一个音在两边「脉动」的快慢/幅度不一样。
+ *  这里用 1-exp(-dt/τ) 的形式，dt 由调用方给（实时取 rAF 间隔，导出取 1/fps）。 */
+export function smoothEnergyDt(prev, target, dt, attack = 0.18, release = 0.22) {
+  // ★ 必须和 smoothEnergy 一样兜住非数值：导出每次开录都把 _state 清空，
+  //   第一帧 prev 是 undefined —— 少了这一行，undefined + NaN 会让包络**整段变成 NaN**，
+  //   于是 `energy > 0.01` 永远为假，导出的画面从头到尾没有那层随音乐脉动的背景光晕
+  //   （实时侧有兜底、导出侧没有 ⇒ 两边差一层光）。
+  const p = (typeof prev === 'number' && isFinite(prev)) ? prev : 0;
+  const tg = (typeof target === 'number' && isFinite(target)) ? target : 0;
+  const k = (tg > p ? attack : release);
+  const a = 1 - Math.exp(-Math.max(0, dt) / Math.max(1e-3, k));
+  return p + (tg - p) * a;
+}
+
+/** 某一时刻**真正在发声**的音符（④ 导出与实时统一）：
+ *  导出原来直接遍历谱面 `n.start <= tick && n.end >= tick`，于是**静音轨/独奏外的轨**也会被点亮，
+ *  亮块数量与实时（syn.activeNow() 只报真正在响的）对不上。
+ *  mute = 被静音的轨 index 数组；solo >= 0 时只算该轨（与混音台语义一致）。 */
+export function activeNotesAt(song, tick, opts = {}) {
+  const mute = opts.mute || [];
+  const solo = (typeof opts.solo === 'number') ? opts.solo : -1;
+  const minVel = opts.minVel || 1;
+  const out = [];
+  for (const tr of (song && song.tracks) || []) {
+    if (solo >= 0 ? tr.index !== solo : mute.indexOf(tr.index) >= 0) continue;
+    if (tr.muted && solo < 0) continue;
+    for (const n of tr.notes || []) {
+      if (n.start <= tick && n.end >= tick && (n.vel == null ? 127 : n.vel) >= minVel) out.push(n);
+    }
+  }
+  return out;
 }
