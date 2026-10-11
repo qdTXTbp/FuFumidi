@@ -49,10 +49,38 @@ import requests
 
 USAGE = ('usage: upload-release-asset.py <token> <repo> <tag> <local_path> <asset_name> '
          '[--prerelease] [--title T] [--body-file F] [--attempts N] '
-         '[--race N] [--min-speed MBps] [--stall-seconds S] [--rolls N]')
+         '[--race N] [--min-speed MBps] [--stall-seconds S] [--rolls N] '
+         '[--no-proxy | --proxy URL]')
 
 MB = 1048576.0
 WARMUP_BYTES = 8 * MB          # 看门狗热身：这段时间内的低速不算数（TCP 慢启动）
+
+# ★ 代理是这套脚本最大的隐形变量：
+#   Windows 上 requests 会通过 urllib.request.getproxies() **读注册表里的 WinINET 设置**，
+#   即使没有任何 HTTP_PROXY 环境变量，也会自动把上传导到系统代理上。
+#   实测（2026-10-11，本机系统代理 127.0.0.1:10810）：
+#     直连（--no-proxy）      0.40 MB/s  —— 稳定但慢，是国际链路的硬地板
+#     走系统代理（默认）      2.59 MB/s  —— 快路径，但会随时间剧烈波动
+#     同一代理历史上的实测    0.075 ~ 4.87 MB/s（差 65 倍；浏览器走同一代理拿到 4.87）
+#   所以：**必须把生效的代理打出来**，否则"为什么这次这么慢"永远查不到。
+PROXIES = {}                   # {} = 用系统/环境默认；{'http': None, 'https': None} = 强制直连
+
+
+def proxy_kw():
+    """只在显式指定 --no-proxy / --proxy 时才覆盖 requests 的默认代理解析。"""
+    return {'proxies': PROXIES} if PROXIES else {}
+
+
+def describe_proxies():
+    if not PROXIES:
+        try:
+            got = requests.utils.getproxies()
+        except Exception:
+            got = {}
+        return ('系统默认 %s' % got) if got else '系统默认（无代理）'
+    if PROXIES.get('https', 'x') is None:
+        return '已禁用（--no-proxy，直连）'
+    return '显式指定 %s' % PROXIES
 
 
 class _Abort(Exception):
@@ -93,13 +121,13 @@ class ProgressReader:
 
 
 def list_assets(api, rid, h):
-    ar = requests.get('%s/releases/%s/assets' % (api, rid), headers=h, timeout=60)
+    ar = requests.get('%s/releases/%s/assets' % (api, rid), headers=h, timeout=60, **proxy_kw())
     ar.raise_for_status()
     return ar.json()
 
 
 def delete_asset(api, h, aid, name=None):
-    requests.delete('%s/releases/assets/%s' % (api, aid), headers=h, timeout=60)
+    requests.delete('%s/releases/assets/%s' % (api, aid), headers=h, timeout=60, **proxy_kw())
     if name:
         print('deleted stale asset:', name)
 
@@ -135,7 +163,7 @@ def upload_racy(repo, rid, name, path, h, size, race, min_speed, stall_seconds,
         reader = ProgressReader(path, size, abort_evt, done, sink)
         try:
             r = requests.post(url, headers=dict(h, **{'Content-Type': 'application/octet-stream'}),
-                              data=reader, timeout=(30, 5400))
+                              data=reader, timeout=(30, 5400), **proxy_kw())
             if r.status_code == 201:
                 with lock:
                     if not winner:
@@ -237,6 +265,14 @@ def main():
     stall_seconds = float(opts[opts.index('--stall-seconds') + 1]) if '--stall-seconds' in opts else 45.0
     rolls = int(opts[opts.index('--rolls') + 1]) if '--rolls' in opts else 6
     race = max(1, min(8, race))
+
+    global PROXIES
+    if '--no-proxy' in opts:
+        PROXIES = {'http': None, 'https': None}
+    elif '--proxy' in opts:
+        u = opts[opts.index('--proxy') + 1]
+        PROXIES = {'http': u, 'https': u}
+    print('proxy: %s' % describe_proxies())
 
     if not os.path.exists(path):
         print('local file not found:', path)
