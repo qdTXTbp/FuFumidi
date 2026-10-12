@@ -391,6 +391,22 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                         _dump_fh = _install_token_dump(model, _dump_to, beat_grid)
                         _log(log_cb, "token 流落盘：%s（可用 --replay-tokens 复现解码器缺陷）"
                                       % os.path.basename(_dump_to))
+                        # ③ 崩溃/取消时不白费：落盘句柄是带缓冲的，进程被中断时
+                        # 缓冲区里那几 KB 可能丢。注册 atexit 保证无论如何都刷盘 ——
+                        # 于是「跑到第 80 分钟崩了」至少留下一份可 --replay-tokens 的
+                        # 部分流（约 1 分钟就能出一份「前 N 块」的 MIDI），
+                        # 而不是 148 分钟全部作废。
+                        import atexit as _atexit
+
+                        def _flush_dump(_fh=_dump_fh):
+                            try:
+                                if _fh and not _fh.closed:
+                                    _fh.flush()
+                                    _fh.close()
+                            except Exception:
+                                pass
+
+                        _atexit.register(_flush_dump)
                     events = model.transcribe(wav_tmp, instruments=constrain, **_gen_kw)
                 data = model.events_to_midi_bytes(_events_capped(events), beat_grid=beat_grid)
                 if _cap > 0:
