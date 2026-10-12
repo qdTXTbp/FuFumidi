@@ -198,7 +198,36 @@ $env:PYTHONIOENCODING='utf-8'
 - 拿到 token 流后，第 20–50 分钟偏长的问题可以**离线反复复现**（① 的回放台，约 1 分钟一次），
   不用再重跑 95 分钟。这就是 ① 存在的意义。
 
-**还没做**：② 提速梯队 1（bf16 / 惰性 conditions / SDPA，要重打上游 wheel）· ③ 断点续跑 ·
+### ④ 批 C 勘查结论：**不暴露，理由如下**（勘查完成）
+
+| 模型 | 源码里确实有的参数 | 结论 |
+|---|---|---|
+| Aria-AMT | `device` / `variant` / `ARIA_MODEL_DIR` | `device` 由 `engine_gpu` 自动判定，界面再给一个反而容易打架。
+| | | **`variant` 不能暴露** —— `engine_aria.py:55` 读它、`:85` 把它当 CLI 位置参数传下去，
+| | | 但 `_find_checkpoint()`（:143）是**走目录取第一个 `*.safetensors`**，根本不看 variant。
+| | | 目前 `models\aria_amt\` 里只有 `piano-medium-double-1.0.safetensors`，恰好等于默认值所以没暴露问题；
+| | | 一旦界面让用户改 variant，权重和 variant 就可能对不上（加载错权重、报错或静默出错）。
+| | | → 要做先得把 `_find_checkpoint` 改成按 variant 找，**并且**资源中心支持下载多个 variant。 |
+| Transkun | `device` / `weight`（自定义权重路径） | `weight` 是裸文件路径，直接搬进界面要先做存在性/合法性校验，
+| | | 而「用户自带 Transkun 权重」目前不是受支持的工作流 → 先不做。 |
+
+**顺带一个结论**：`engine_perf.py` 的 quality/balanced/fast **不是提速档，是降速档**
+（`PERF_MODES = {quality: 0（全部核心）, balanced: 4, fast: 2}`）—— 它是给低配机器限线程用的。
+所以用户说的「提速 1/2/3 梯队」不能靠现有这个下拉，得靠 ②/⑤。
+另：钢琴链路 `piano_pt` 的 `perf_mode`（批量前向上限 `_batch_cap`）**已经**由性能档驱动
+（`engine.py:210-212`），`num_threads` 也由它派生 —— 钢琴这块界面无需再加控件。
+
+### ③ 断点续跑：只做到「崩了不白崩」，真正的续跑没做
+
+95 分钟的长跑崩在第 80 分钟，现在不会全部白费：token 流是**边生成边落盘**的，
+中断留下的部分 dump 可以直接 `--replay-tokens` 出一份「前 N 个块」的 MIDI（末尾半行会被跳过，
+`test_read_tolerates_a_truncated_tail` 钉住了这个行为）。
+
+**但真正的「从第 K 块接着生成」没实现**：`prelude_forcing` 的 tie 段依赖上一块的 tracker 状态，
+要续跑就得先把已落盘的 token 重新喂一遍解码器重建 tracker，再从中途接着生成 ——
+那要动 muscriptor 内部（tracker 建在 `_generate_token_stream` 里面），风险与 ② 同级。
+
+**还没做**：② 提速梯队 1（bf16 / 惰性 conditions / SDPA，要重打上游 wheel）· ③ 完整续跑 ·
 ④ 批 C（Aria-AMT / Transkun 先查 CLI）· ⑤ 提速梯队 2。批 A、批 B 已完成并部署验证。
 - [ ] 行为改动有**断言测试**（不靠肉眼看）
 - [ ] 部署后**在安装版上**重跑同一套测试
