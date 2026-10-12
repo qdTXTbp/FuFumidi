@@ -31,6 +31,12 @@ const maxHold = ref(15);                 // 超长音符上限秒（仅 MuScript
 const mergeOverlap = ref(true);          // 合并同音高重叠音符（默认开；关掉 = 引擎收 no_merge）
 const velNorm = ref(true);               // 力度归一化（默认开；关掉 = 引擎收 no_velnorm）
 const exportTempo = ref(0);              // 导出 BPM（0 = 用引擎默认 120 / 自动 BPM 优先）
+// ④ 批 B：MuScriptor 生成参数。默认全部保持「不传」—— 不传时上游走贪婪解码，
+// 结果可复现；调了 temperature / cfg_coef 才自动开采样（采样关着时这两个值是空转）。
+const msTemp = ref(1.0);                 // 采样温度（1.0 = 不传）
+const msCfg = ref(1.0);                  // 引导系数（1.0 = 不传）
+const msBeam = ref(1);                   // 束搜索宽度（1 = 不传）
+const msPrelude = ref(true);             // 跨块延音前置（默认开；关掉才传 false）
 // 乐器组约束（仅 MuScriptor）：MuScriptor 是**多乐器**模型，逐音符判定乐器组 —— 不给约束时
 // 它会在同一首歌里改判（实测《甩葱歌》：同一条旋律 24s→organ、33s→synth lead、43s→flutes、
 // 96s→voice），于是同一段旋律每隔几小节换一次音色。
@@ -756,6 +762,12 @@ function collectParams() {
     if (umodel.value === 'muscriptor') cfg.max_note_hold = maxHold.value;
     if (!mergeOverlap.value) cfg.no_merge = true;
     if (!velNorm.value) cfg.no_velnorm = true;
+    if (umodel.value === 'muscriptor') {
+      if (msTemp.value !== 1.0) cfg.temperature = msTemp.value;
+      if (msCfg.value !== 1.0) cfg.cfg_coef = msCfg.value;
+      if (msBeam.value > 1) cfg.beam_size = msBeam.value;
+      if (!msPrelude.value) cfg.prelude_forcing = false;
+    }
   }
   if (mode.value === 'separate') {
     cfg.with_drums = drums.value;
@@ -1314,6 +1326,25 @@ onBeforeUnmount(() => {
           </div>
           <div class="tr-switch" v-if="mode === 'universal'">
             <label><span><b>{{ t('力度归一化') }}</b><small>{{ t('把力度拉齐到统一强度；关闭后保留模型给出的原始力度') }}</small></span><input type="checkbox" v-model="velNorm"></label>
+          </div>
+          <!-- ④ 批 B：MuScriptor 生成参数（都属「影响质量」，默认保持原行为） -->
+          <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
+            <label>{{ t('采样温度') }}<b>{{ msTemp.toFixed(1) }}</b></label>
+            <input type="range" min="0.1" max="2" step="0.1" v-model.number="msTemp">
+            <small>{{ t('调高＝更随机、更有可能跳出重复；默认 1.0 走贪婪解码，结果可复现') }}</small>
+          </div>
+          <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
+            <label>{{ t('引导系数') }}<b>{{ msCfg.toFixed(1) }}</b></label>
+            <input type="range" min="1" max="5" step="0.1" v-model.number="msCfg">
+            <small>{{ t('调高＝更贴近提示但更容易重复；默认 1.0 = 关闭引导') }}</small>
+          </div>
+          <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
+            <label>{{ t('束搜索宽度') }}<b>{{ msBeam }}</b></label>
+            <input type="range" min="1" max="5" step="1" v-model.number="msBeam">
+            <small>{{ t('同时保留多条候选再挑最好；越大越慢，默认 1 = 关闭') }}</small>
+          </div>
+          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
+            <label><span><b>{{ t('跨块延音前置') }}</b><small>{{ t('把上一块未结束的音符强制喂给下一块，分块边界最稳；关掉会降低边界延续质量（默认开）') }}</small></span><input type="checkbox" v-model="msPrelude"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label><span><b>{{ t('节拍网格检测') }}</b><small>{{ t('对齐音符时值；未下载或失败时自动跳过，不影响转录') }}</small></span><input type="checkbox" v-model="beatGrid"></label>

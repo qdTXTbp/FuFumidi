@@ -341,6 +341,26 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                 beat_grid = _g_grid
                 _log(log_cb, "回放：沿用落盘时的节拍网格，跳过节拍检测")
             _log(log_cb, "回放 token 流（不跑模型、不用 GPU）：%s" % os.path.basename(_replay_from))
+        # ④ 批 B：生成参数（默认一律不传 = 与旧版完全一致的贪婪解码）。
+        # 用户调了 temperature / cfg_coef 才自动打开采样 —— 采样关着时这两个值是被忽略的，
+        # 界面给了滑块却不生效就是坑。
+        _gen_kw = {}
+        for _k, _cast in (("temperature", float), ("cfg_coef", float), ("beam_size", int)):
+            _v = params.get(_k)
+            if _v is not None:
+                try:
+                    _gen_kw[_k] = _cast(_v)
+                except (TypeError, ValueError):
+                    pass
+        if params.get("prelude_forcing") is not None:
+            _gen_kw["prelude_forcing"] = bool(params["prelude_forcing"])
+        # beam_size > 1 时不要再开采样：束搜索要求确定性地逐 token 打分，
+        # 两者同时给上游会互相打架。
+        if _gen_kw.get("beam_size", 1) <= 1 and (
+                _gen_kw.get("temperature", 1.0) != 1.0 or _gen_kw.get("cfg_coef", 1.0) != 1.0):
+            _gen_kw["use_sampling"] = True
+        if _gen_kw:
+            _log(log_cb, "生成参数：" + "，".join("%s=%s" % kv for kv in sorted(_gen_kw.items())))
         while data is None:
             try:
                 if _replay_from:
@@ -355,7 +375,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                         _dump_fh = _install_token_dump(model, _dump_to, beat_grid)
                         _log(log_cb, "token 流落盘：%s（可用 --replay-tokens 复现解码器缺陷）"
                                       % os.path.basename(_dump_to))
-                    events = model.transcribe(wav_tmp, instruments=constrain)
+                    events = model.transcribe(wav_tmp, instruments=constrain, **_gen_kw)
                 data = model.events_to_midi_bytes(_events_capped(events), beat_grid=beat_grid)
                 if _cap > 0:
                     _log(log_cb, "超长音符上限 %.0fs：强制收尾 %d 个音符"

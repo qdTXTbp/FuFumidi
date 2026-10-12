@@ -184,6 +184,12 @@ def _resolve_params(args, mode):
     if _dt: p["dump_tokens"] = str(_dt)
     _rt = getattr(args, "replay_tokens", None)
     if _rt: p["replay_tokens"] = str(_rt)
+    # ④ 批 B：MuScriptor 生成参数（默认不传 = 旧版行为）。
+    for _k in ("temperature", "cfg_coef", "beam_size"):
+        _v = getattr(args, _k, None)
+        if _v is not None: p[_k] = _v
+    _pf = getattr(args, "prelude_forcing", None)
+    if _pf is not None: p["prelude_forcing"] = bool(_pf)
     return p, mode
 
 
@@ -443,6 +449,14 @@ def build_parser():
                         " clean_electric_guitar / synth_lead / flutes / organ / drums …，"
                         "见 muscriptor list-instruments）。不传=不限定，模型自由判定")
     # ① 回放台（诊断/开发用，界面不暴露）——见 engine_muscriptor.py 顶部说明
+    g.add_argument("--temperature", type=float, default=None,
+                   help="[muscriptor] 采样温度（默认 1.0=贪婪解码；设了即自动开启采样）")
+    g.add_argument("--cfg-coef", dest="cfg_coef", type=float, default=None,
+                   help="[muscriptor] 无分类器引导系数（默认 1.0；设了即自动开启采样）")
+    g.add_argument("--beam-size", dest="beam_size", type=int, default=None,
+                   help="[muscriptor] 束搜索宽度（默认 1=关闭；越大越慢）")
+    g.add_argument("--no-prelude-forcing", dest="prelude_forcing", action="store_false", default=None,
+                   help="[muscriptor] 关闭跨块延音前置（会降低分块边界的延续质量）")
     g.add_argument("--dump-tokens", dest="dump_tokens", default=None, metavar="FILE",
                    help="[诊断] 把 MuScriptor token 流落盘（JSONL）")
     g.add_argument("--replay-tokens", dest="replay_tokens", default=None, metavar="FILE",
@@ -528,6 +542,11 @@ def cmd_worker():
                 # 超长音符上限：漏了这一项时主进程设了也到不了引擎（同上面两条的坑），
                 # 引擎会一直用默认 15s。
                 max_note_hold=req.get('max_note_hold'),
+                # ④ 批 B：MuScriptor 生成参数（漏一项界面调了也不生效 —— 同上面几条的坑）
+                temperature=req.get('temperature'),
+                cfg_coef=req.get('cfg_coef'),
+                beam_size=req.get('beam_size'),
+                prelude_forcing=req.get('prelude_forcing'),
             )
             class _LogTee(io.StringIO):
                 """stdout 分流：把转换日志逐行实时转发到真实 stdout（###LOG 协议），
