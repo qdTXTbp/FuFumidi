@@ -227,7 +227,33 @@ $env:PYTHONIOENCODING='utf-8'
 要续跑就得先把已落盘的 token 重新喂一遍解码器重建 tracker，再从中途接着生成 ——
 那要动 muscriptor 内部（tracker 建在 `_generate_token_stream` 里面），风险与 ② 同级。
 
-**还没做**：② 提速梯队 1（bf16 / 惰性 conditions / SDPA，要重打上游 wheel）· ③ 完整续跑 ·
+### ② 提速梯队 1：勘查后发现**三项里两项不用做，第三项不用改 wheel**
+
+| 计划里的手段 | 勘查结论 |
+|---|---|
+| 惰性构建 conditions | **不用做**。日志实测 `[muscriptor] build conditions: 0.01s`（120.5 分钟 / 1447 块全量），
+| | 根本不在关键路径上（生成约 2.8 s/块）。当初以为「一次建 1206 个块的 conditions」是个瓶颈，是看代码想出来的，实测否掉了。 |
+| SDPA / flash 注意力 | **上游已经做了**。`muscriptor/modules/transformer.py:103,106` 就是 `F.scaled_dot_product_attention` |
+| | （因果分支还带 `is_causal=True`）。没有可换的。 |
+| bf16 / fp16 autocast | **不用改 wheel，也不用 autocast 猴补丁** —— `TranscriptionModel.load_model()` 本身就收
+| | `dtype`（`float32`/`float16`/`bfloat16`），上游还专门把 conditioning 管线留在 fp32
+| | （`model.condition_provider.float()`，注释说明「安静段落的 log-mel 在 fp16 下会下溢」），
+| | 在 `LMModel.forward` 边界再 cast 回来。是**一等公民特性**，不是我们要发明的东西。 |
+
+**所以 ② 从「重打上游 wheel + 重传托管 + 改 deps.py 的 SHA256」缩成「`engine_muscriptor.py` 把 dtype 传下去」**
+（`:154/:156` 现在只传了 `device`）。原计划里最贵、最容易出错的那一步没有了。
+
+**本机 CPU**：AMD Ryzen 9 9955HX（Zen 5）· 32 逻辑核 · `capability: AVX512` · `_is_avx512_bf16_supported() == True`
+—— 是少数**真能吃到 bf16** 的消费级 CPU（上游注释说 decode 是 bandwidth-bound，半精度因此理论上划算）。
+torch 是 `2.13.0+cpu`，**没有 CUDA**，所以 GPU 相关的加速手段在这台机器上一律无效，不要写。
+
+**判据（先测后做，两条都过才接）**：
+1. 速度：bf16 比 fp32 快 **≥15%**；
+2. 质量：音符事件指纹（起止时刻 + 音高 + 乐器）与 fp32 **完全一致**。
+   不一致就没资格占「纯提速、零质量风险」的位置（bf16 只是数值精度，本不该改变判定）。
+   侧台脚本：`_attic\_sing_tmp\bench_dtype.py`（small / 每档跑 2 次取最快）。
+
+**还没做**：② 提速梯队 1（bf16 / 惰性 conditions / SDPA）· ③ 完整续跑 ·
 ④ 批 C（Aria-AMT / Transkun 先查 CLI）· ⑤ 提速梯队 2。批 A、批 B 已完成并部署验证。
 - [ ] 行为改动有**断言测试**（不靠肉眼看）
 - [ ] 部署后**在安装版上**重跑同一套测试
