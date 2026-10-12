@@ -37,7 +37,8 @@ function go(v) { setView(v); }
 function openGuide() { state.ui.guideOpen = true; }
 /** 首页 → 调试工具 · 全局体检（settingsTab 用 'gpu'，体检区块就在那个标签页里） */
 function openHealth() {
-  state.ui.settingsTab = 'gpu';
+  // 用户反馈：点首页这张卡应当直接落到「反馈」页（体检 + 反馈 + 诊断包都在那一页）
+  state.ui.settingsTab = 'feedback';
   state.ui.settingsOpen = true;
 }
 function openUpdate() {

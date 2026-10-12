@@ -40,6 +40,7 @@ const TABS = computed(() => [
   { id: 'keys', label: t('快捷键'), icon: 'kbd' },
   { id: 'cloud', label: t('云同步'), icon: 'cloud' },
   { id: 'update', label: t('更新'), icon: 'download' },
+  { id: 'feedback', label: t('反馈'), icon: 'info' },
 ]);
 const tab = ref('appearance');
 
@@ -1145,6 +1146,18 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <button class="btn sm" @click="gpuImportLocal" :disabled="gpu.busy || app.gpuInstall.active">{{ t('本地导入 ZIP') }}</button>
               <button v-if="gpuInstalled" class="btn sm danger" @click="gpuUninstall" :disabled="gpu.busy || app.gpuInstall.active">{{ t('卸载') }}</button>
             </div>
+          </div>
+        </div>
+
+        <!-- ============ 功能 ============ -->
+
+      <!-- 反馈页：体检 + 反馈 + 诊断包，三项放同一页（用户要求「体检和反馈功能一页」「反馈单独成页」） -->
+      <div v-else-if="tab === 'feedback'">
+        <div class="ov-card">
+          <div style="font-size:15px;font-weight:600;margin-bottom:4px">{{ t('遇到问题？先跑一次体检') }}</div>
+          <div style="font-size:12px;color:var(--text-soft);line-height:1.7;margin-bottom:10px">
+            {{ t('体检会把系统、显卡与加速包、运行时依赖、模型资源和最近错误逐条查一遍并给出结论；报告已自动去掉用户名与机器名，可以直接粘贴到反馈里。') }}
+          </div>
             <!-- 调试工具 · 全局体检：一键拿到可粘贴的排障报告 -->
             <div style="margin-top:16px;border-top:1px solid var(--hairline);padding-top:12px">
               <div style="font-size:12px;color:var(--text-soft);margin-bottom:6px">{{ t('调试工具 · 全局体检') }}</div>
@@ -1167,10 +1180,16 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               </div>
               <pre v-if="health.report && health.showRaw" style="margin-top:8px;max-height:340px;overflow:auto;font-size:11px;line-height:1.5;white-space:pre-wrap;border:1px solid var(--hairline);border-radius:6px;padding:8px">{{ health.report.report_text }}</pre>
             </div>
+          <div style="margin-top:14px;border-top:1px solid var(--hairline);padding-top:12px">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <button class="btn sm" @click="reportIssue">{{ t('去 GitHub 反馈') }}</button>
+              <button class="btn sm" @click="openKnownIssues">{{ t('先看看已知问题') }}</button>
+            </div>
+            <div style="font-size:12px;color:var(--text-soft);margin-top:6px">{{ t('点「去 GitHub 反馈」会先把体检报告复制到剪贴板，再打开一个预填好标题与正文的 issue 页面 —— 粘贴即可提交。') }}</div>
           </div>
         </div>
+      </div>
 
-        <!-- ============ 功能 ============ -->
         <div v-else-if="tab === 'feature'">
           <div class="field-row">
             <div>
