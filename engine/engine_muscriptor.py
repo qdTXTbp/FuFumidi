@@ -165,13 +165,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             _log(log_cb, "原因：" + gpu_reason + "；若想用 GPU 请更新显卡驱动或改用支持该算力的版本，"
                               "（本次已自动改用 CPU，转录结果不受影响，只是更慢）")
 
-    # 批量推理仅在 CUDA / MPS 上有意义：CPU 批量吞吐无收益且更吃内存，
-    # DirectML 设备不被 muscriptor 支持。非 GPU 设备强制回串行（质量最优）。
     _dev_type = getattr(getattr(model, "_device", None), "type", "") or ""
-    if int(params.get("muscriptor_batch") or 0) >= 2 and _dev_type not in ("cuda", "mps"):
-        _log(log_cb, f"当前设备为 {_dev_type or 'cpu'}，批量推理仅 GPU 生效，已改回串行（质量最优）")
-        params = dict(params)
-        params["muscriptor_batch"] = 0
 
     _log(log_cb, "推理中（多乐器转录）…")
     out_dir = os.path.dirname(os.path.abspath(output_midi))
@@ -308,7 +302,6 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         #   batch=4（prelude OFF）：非鼓轨 9 条、1962 音（少 22%）、相邻分块换组 16 次
         # 所以它不是默认项，而是界面上一个写明代价的开关（默认关）。
         # 测速参考（RTX 5070 Ti，medium，120s）：batch=1 57s → batch=4 25s → batch=8 23s。
-        batch = int(params.get("muscriptor_batch") or 0)
         # 乐器组：MuScriptor 是多乐器模型，逐音符判定乐器组；不约束时它会在同一首歌里改判
         # （实测：同一条旋律 24s 判成 organ、33s 判成 synth lead、96s 变成 voice），
         # 于是同一段旋律每隔几小节换一次音色。muscriptor 的 transcribe() 支持硬约束
@@ -335,12 +328,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         cuda_fallback_done = False
         while data is None:
             try:
-                if batch >= 2:
-                    _log(log_cb, "批量推理：batch_size=%d（prelude_forcing 关闭 → 跨段延续的音符会被重新判定"
-                                  "乐器，同一段旋律可能每隔几秒换一次音色；要音色一致请关闭「批量推理」）…" % batch)
-                    events = model.transcribe(wav_tmp, batch_size=batch, prelude_forcing=False, instruments=constrain)
-                else:
-                    events = model.transcribe(wav_tmp, instruments=constrain)
+                events = model.transcribe(wav_tmp, instruments=constrain)
                 data = model.events_to_midi_bytes(_events_capped(events), beat_grid=beat_grid)
                 if _cap > 0:
                     _log(log_cb, "超长音符上限 %.0fs：强制收尾 %d 个音符"
@@ -375,18 +363,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                         pass
                     model = TranscriptionModel.load_model(load_arg, device="cpu")
                     dev = "cpu"
-                    batch = 0
                     _log(log_cb, "已改用 CPU 重跑本次转录（慢一些，但结果可用）…")
-                    continue
-                if oom and batch >= 2:
-                    batch = batch // 2
-                    _log(log_cb, f"GPU 显存不足，自动降低批量至 batch_size={batch} 重试…")
-                    try:
-                        import torch
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                    except Exception:
-                        pass
                     continue
                 raise
         _log(log_cb, f"[计时] muscriptor 推理（含解码/分块/解码为 MIDI）：{time.perf_counter() - t0:.1f}s")

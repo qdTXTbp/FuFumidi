@@ -151,23 +151,3 @@ def test_muscriptor_cuda_error_falls_back_to_cpu(monkeypatch, tmp_path):
     assert any("no kernel image" in s for s in logs), logs
     assert any("CPU" in s for s in logs), logs      # 日志说明原因，用户知道发生了什么
 
-
-def test_muscriptor_oom_still_halves_batch(monkeypatch, tmp_path):
-    """OOM 仍然走「批量减半」老路径，不能被新的 CUDA 分支抢走。"""
-    M, load_calls = _fake_muscriptor(monkeypatch, tmp_path, fail_first=False)
-    import muscriptor
-
-    class OomModel(muscriptor.TranscriptionModel):
-        def transcribe(self, path, **kw):
-            if kw.get("batch_size", 1) >= 2:
-                raise RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB")
-            return []
-
-    monkeypatch.setattr(muscriptor, "TranscriptionModel", OomModel)
-    logs = []
-    M.transcribe_muscriptor(str(tmp_path / "in.wav"), str(tmp_path / "o.mid"),
-                            params={"model_size": "medium", "muscriptor_batch": 4},
-                            log_cb=logs.append)
-    assert any("显存不足" in s for s in logs), logs
-    assert not any("改用 CPU" in s for s in logs), logs   # OOM 不该触发 CPU 重跑
-    assert len(load_calls) == 1                           # 没有重新加载模型

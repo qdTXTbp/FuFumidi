@@ -31,11 +31,6 @@ const beatGrid = ref(false);             // 节拍网格检测（仅 MuScriptor�
 //   none  —— 不干预，模型自由判定（默认）
 const msMode = ref('none');
 const msGroups = ref(['voice', 'drums']);          // 限定模式下允许的乐器组
-// 批量推理（MuScriptor）：关闭 prelude_forcing 换取 ~2.3× 吞吐。**默认关** ——
-// 实测（同一首歌、同一模型）：开批量后相邻 5s 分块的乐器组变化 1 次 → 16 次、音符少 22%、
-// 非鼓轨 5 条 → 9 条，听感就是"同一段旋律每隔几秒换一次音色"。
-// 也就是说 prelude_forcing 关掉 = 音色来回切换的真正原因，不能再由"均衡/高性能"档偷偷打开。
-const msBatchInfer = ref(false);
 function toggleMsGroup(id) {
   const i = msGroups.value.indexOf(id);
   if (i >= 0) { if (msGroups.value.length > 1) msGroups.value.splice(i, 1); return; }  // 至少留一组
@@ -348,8 +343,6 @@ function estSec() {
   let f = { universal: 1.5, piano: 4, separate: 10 }[mode.value] || 2;
   if (perf.value === 'fast') f *= 1.5;
   else if (perf.value === 'balanced') f *= 1.15;
-  // MuScriptor 批量推理实测提速（batch=4 ≈ 4.8x 实时 vs 串行 2.1x），预估相应下调
-  if (mode.value === 'universal' && umodel.value === 'muscriptor' && msBatchInfer.value) f *= 0.45;
   return Math.max(2, Math.round(duration.value * f));
 }
 const sumTime = computed(() => {
@@ -746,7 +739,6 @@ function collectParams() {
       // 速度暴跌 5 倍；4→8 仅再快 10%，故 fast 不超过 balanced 两档的显存预算）。
       // 批量推理改成显式开关：它必须关闭 prelude_forcing（muscriptor 的限制，
       // batch_size>1 与 prelude_forcing=True 互斥），代价是跨段延续的音符会被重新判定乐器。
-      if (msBatchInfer.value) cfg.muscriptor_batch = { small: 8, medium: 4, large: 2 }[msSize.value] || 4;
     }
   }
   if (mode.value === 'separate') {
@@ -885,12 +877,6 @@ async function runBatch() {
   if (cancelAll.value && !paused.value) logLine(t('已取消转录队列…'), true);
   // 长音频·质量档提示：串行档在长音频上明显慢于 GPU 批量档，完成后给出可操作建议
   if (dN && !eN && perf.value === 'quality' && mode.value === 'universal' && umodel.value === 'muscriptor') {
-    const totalMin = queue.filter(i => i.status === 'done').reduce((s, i) => s + (i.duration || 0), 0) / 60;
-    if (totalMin >= 20) {
-      const elapsedMin = Math.max(1, Math.round((Date.now() - t0) / 60000));
-      const estFast = Math.max(1, Math.round(elapsedMin / 2.3));
-      logLine(t('长音频提示：本次串行推理（跨段音色一致）耗时约 ') + elapsedMin + t(' 分钟；打开「批量推理」约 ') + estFast + t(' 分钟，但跨段延续的音符会被重新判定乐器，同一段旋律可能每隔几秒换一次音色。'));
-    }
   }
 }
 async function startTranscribe() {
@@ -1315,15 +1301,6 @@ onBeforeUnmount(() => {
                       @click="toggleMsGroup(g.id)">{{ t(g.cn) }}</button>
             </div>
             <small style="display:block;margin-top:6px">{{ t('已选 {n} 组：模型只会输出这些乐器（可多选，例如 人声 + 鼓）').replace('{n}', String(msGroups.length)) }}</small>
-          </div>
-          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label>
-              <span>
-                <b>{{ t('批量推理（约 2.3× 提速）') }}</b>
-                <small>{{ t('开启后跨段延续的音符可能被换成别的乐器（同一段旋律每隔几秒换一次音色）；要音色稳定请保持关闭') }}</small>
-              </span>
-              <input type="checkbox" v-model="msBatchInfer">
-            </label>
           </div>
           <div class="tr-switch" v-if="mode === 'separate'">
             <label><span><b>{{ t('输出鼓组节奏轨') }}</b><small>{{ t('同时转录鼓点 / 打击乐节奏') }}</small></span><input type="checkbox" v-model="drums"></label>
