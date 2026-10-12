@@ -171,6 +171,10 @@ def _resolve_params(args, mode):
     # 逗号分隔的组名=直接作为硬约束交给模型；不传=不干预。
     _mi = getattr(args, "muscriptor_instruments", None)
     if _mi: p["muscriptor_instruments"] = str(_mi)
+    # 超长音符上限（仅 muscriptor 用到）：默认 15 秒由引擎侧兜底；
+    # 这里显式取出，命令行与 worker 两条路径才都能覆盖它。
+    _mh = getattr(args, "max_note_hold", None)
+    if _mh is not None: p["max_note_hold"] = float(_mh)
     return p, mode
 
 
@@ -429,6 +433,9 @@ def build_parser():
                    help="[muscriptor] 乐器组硬约束：逗号分隔的组名（voice / acoustic_piano /"
                         " clean_electric_guitar / synth_lead / flutes / organ / drums …，"
                         "见 muscriptor list-instruments）。不传=不限定，模型自由判定")
+    g.add_argument("--max-note-hold", dest="max_note_hold", type=float, default=None,
+                   help="[muscriptor] 超长音符上限（秒，默认 15，0=关闭）：超过就强制收尾，"
+                        "治长音频转录的僵尸音符（实测 100 分钟录播里出现 4320 秒的音）")
     g.add_argument("--tempo", type=int, default=None, help="MIDI 速度 BPM（默认 120）")
     g.add_argument("--with-drums", action="store_true",
                    help="[separate] 同时输出鼓组节奏轨")
@@ -504,6 +511,9 @@ def cmd_worker():
                 # 节拍网格检测开关：漏了这一项时模板/界面勾了也传不进引擎，
                 # 引擎会一直按默认关闭处理（日志固定输出「已关闭节拍网格检测」）。
                 beat_grid=bool(req.get('beat_grid')),
+                # 超长音符上限：漏了这一项时主进程设了也到不了引擎（同上面两条的坑），
+                # 引擎会一直用默认 15s。
+                max_note_hold=req.get('max_note_hold'),
             )
             class _LogTee(io.StringIO):
                 """stdout 分流：把转换日志逐行实时转发到真实 stdout（###LOG 协议），

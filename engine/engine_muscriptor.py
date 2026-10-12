@@ -188,23 +188,91 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         # 通过日志通道发送 ###PROG 前缀行，前端解析后替代「按时间估算」的假进度。
         import json as _json
         try:
-            from muscriptor.events import ProgressEvent as _ProgressEvent
+            from muscriptor.events import (
+                ProgressEvent as _ProgressEvent,
+                NoteStartEvent as _NoteStartEvent,
+                NoteEndEvent as _NoteEndEvent,
+            )
         except Exception:
-            _ProgressEvent = None
+            _ProgressEvent = _NoteStartEvent = _NoteEndEvent = None
 
-        def _events_with_progress(events):
-            if _ProgressEvent is None:
-                yield from events
-                return
+        # ★ 僵尸音符上限（长音频转录的已知失效模式）
+        #
+        # muscriptor 按 5 秒分块转录，跨块的延音靠「tie 段」维持：块边界只关闭
+        # **不在 tie 段里**的音符（events.py 的 OpenNoteTracker）。而 prelude_forcing
+        # 打开时，tie 段是从「当前还开着的音符」**强制构造**出来的
+        # （transcription_model.py: tie_section_token_ids(tracker.open_keys())）——
+        # 于是「不在 tie 段里」几乎恒为空集：一个音只能靠模型在块内显式吐 note-off
+        # 才结束。实测 100 分钟交响录播（6032 秒 / 1206 块）：模型从某个内容节点起
+        # 开始漏收尾，之后每个音高都被拉成几分钟的长音（最长 4320 秒 = 全曲 72%，
+        # 波形图上是一片实线墙）；>30 秒的音符占 12%。
+        #
+        # 这里在事件流上兜底：任何音持续超过 cap 秒就补一个收尾事件。
+        # 离线模拟（两个坏文件 + 4 个正常文件）：cap=15s 把最长音从 4320.8 压到 15.0，
+        # 而正常文件（最长 12.3s）**一个音符都不动**；cap=8s 会开始误伤。
+        #
+        # ★ 关键陷阱：补了收尾之后必须**吞掉**库随后为同一个 index 发的真实
+        # NoteEndEvent —— events_to_midi_bytes 里是 open_notes.pop(ev.start_event_index)，
+        # 重复收尾会直接 KeyError，把整次转录炸在最后一步。
+        try:
+            _cap = float(params.get("max_note_hold"))
+        except Exception:
+            _cap = None
+        if _cap is None:
+            _cap = 15.0          # 默认开：正常文件的时长上限是 12.3s，留有余量
+        _cap_stats = {"closed": 0}
+
+        def _events_capped(events):
+            """进度透传 + 超长音符强制收尾（cap <= 0 时行为与旧版一致）。"""
+            open_notes = {}
+            force_closed = set()
+
+            def _expired(now):
+                out = []
+                for idx, st in list(open_notes.items()):
+                    if now - st.start_time > _cap:
+                        out.append(_NoteEndEvent(end_time=st.start_time + _cap, start_event=st))
+                        del open_notes[idx]
+                        force_closed.add(idx)
+                        _cap_stats["closed"] += 1
+                return out
+
             for ev in events:
-                if isinstance(ev, _ProgressEvent):
+                if _cap > 0:
+                    t = getattr(ev, "start_time", None)
+                    if t is None:
+                        t = getattr(ev, "end_time", None)
+                    if t is not None:
+                        for _end in _expired(t):
+                            yield _end          # 先收尾，再吐触发它的事件，保持流有序
+                if _ProgressEvent is not None and isinstance(ev, _ProgressEvent):
                     try:
                         if log_cb and getattr(ev, "total", 0):
                             log_cb('###PROG ' + _json.dumps(
                                 {"completed": int(ev.completed), "total": int(ev.total)}))
                     except Exception:
                         pass
+                    yield ev
+                    continue
+                if _NoteStartEvent is not None and isinstance(ev, _NoteStartEvent):
+                    open_notes[ev.index] = ev
+                    yield ev
+                    continue
+                if _NoteEndEvent is not None and isinstance(ev, _NoteEndEvent):
+                    idx = ev.start_event_index
+                    if idx in force_closed:
+                        force_closed.discard(idx)
+                        continue        # ★ 丢弃重复收尾，否则下游 pop 会 KeyError
+                    open_notes.pop(idx, None)
+                    yield ev
+                    continue
                 yield ev
+            # 流末兜底：库保证每个 Start 都有 End，这里只兜住异常情况
+            if _cap > 0:
+                for idx, st in list(open_notes.items()):
+                    yield _NoteEndEvent(end_time=st.start_time + _cap, start_event=st)
+                    del open_notes[idx]
+                    _cap_stats["closed"] += 1
 
         # 节拍网格只检测一次（OOM 降级重试时复用，避免重复解码/检测）。
         # 权重经资源中心下载到 modelsDir/hub/checkpoints/beat_this-final0.ckpt（TORCH_HOME 指向
@@ -271,7 +339,10 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     events = model.transcribe(wav_tmp, batch_size=batch, prelude_forcing=False, instruments=constrain)
                 else:
                     events = model.transcribe(wav_tmp, instruments=constrain)
-                data = model.events_to_midi_bytes(_events_with_progress(events), beat_grid=beat_grid)
+                data = model.events_to_midi_bytes(_events_capped(events), beat_grid=beat_grid)
+                if _cap > 0:
+                    _log(log_cb, "超长音符上限 %.0fs：强制收尾 %d 个音符"
+                                  % (_cap, _cap_stats["closed"]))
             except Exception as e:
                 # 显存溢出自动降级：batch ≥2 → 减半重试 → 串行兜底，绝不因此转录失败
                 oom = "out of memory" in str(e).lower() or "OutOfMemoryError" in type(e).__name__
@@ -330,6 +401,21 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     n = _count_notes(output_midi)
     _log(log_cb, f"保存 MIDI → {os.path.basename(output_midi)}（{n} 音符）")
 
+    # ★ 质量自检：把时长分布打进日志。
+    #
+    # 为什么必须打：长音频转录有两种失效模式，光看「最长」和「音符数」都会漏判 ——
+    #   ① prelude_forcing 开启时：少数音符变僵尸（最长可达 4320s），但整体分布正常；
+    #   ② 关闭后（批量推理）：没有僵尸音了，但**全曲**平均时长从 0.33s 涨到 1.6~1.8s
+    #      （>2s 占比 38%），听起来是一糊片。
+    # 只报「最长」会把 ② 判成健康（最长才 16s），实测就是这么被骗过一次。
+    # 正常参考：中位数 0.2~0.4s、>2s 占比 <5%。
+    _st = _duration_stats(output_midi)
+    if _st:
+        _bad = (_st["median"] > 1.0) or (_st["over2"] > 15.0)
+        _log(log_cb, "[自检] 音符 %d，时长中位数 %.2fs，>2s 占 %.1f%%，最长 %.1f s%s"
+                      % (_st["count"], _st["median"], _st["over2"], _st["max"],
+                         "　← 偏离正常参考（中位数 0.2~0.4s、>2s <5%），建议检查" if _bad else ""))
+
     # 转录完成：卸载模型并释放显存（torch 缓存分配器不会自动归还 VRAM）
     try:
         del model
@@ -344,6 +430,29 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     except Exception:
         pass
     return n
+
+
+def _duration_stats(midi_path):
+    """转录质量自检：音符数 / 时长中位数 / >2s 占比 / 最长时长。
+
+    正常参考（实测 12 首短曲）：中位数 0.2~0.4 s、>2 s 占比 <5%、最长 <15 s。
+    """
+    try:
+        import pretty_midi
+        pm = pretty_midi.PrettyMIDI(midi_path)
+        durs = sorted(note.end - note.start
+                      for inst in pm.instruments for note in inst.notes)
+        if not durs:
+            return None
+        n = len(durs)
+        return {
+            "count": n,
+            "median": durs[n // 2],
+            "over2": sum(1 for d in durs if d > 2.0) * 100.0 / n,
+            "max": durs[-1],
+        }
+    except Exception:
+        return None
 
 
 def _count_notes(midi_path):

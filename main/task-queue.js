@@ -61,6 +61,8 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
       // 乐器组约束（MuScriptor 硬约束）：worker 路径走 engine.js 的 map，
       // 这条 spawn 路径要显式补参数，否则「回退到命令行」时约束会丢。
       if (cfg.muscriptor_instruments) args.push('--muscriptor-instruments', String(cfg.muscriptor_instruments));
+      // 同上：这条 spawn 路径要显式补参数，否则回退到命令行时超长音符上限会丢。
+      if (cfg.max_note_hold != null) args.push('--max-note-hold', String(cfg.max_note_hold));
       const send = (line) => {
         if (win && !win.isDestroyed()) win.webContents.send('engine:log', { id: cfg.id, line });
       };
