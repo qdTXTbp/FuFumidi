@@ -114,6 +114,30 @@ N 大 → 上限在正常工作、模型仍在拖长（要按轨自适应上限�
 
 ### [ ] ④ 选项全量暴露（默认值原则见 §6）
 
+**进度：批 A 已完成并在安装版验证；批 B / 批 C 未做。**
+
+批 A 实际交付（`main/engine.js` + `ViewTranscribe.vue` + `i18n.js` / `i18n_ja.js`）：
+
+| 控件 | 引擎参数 | 默认 | 作用域 |
+|---|---|---|---|
+| 导出速度 | `tempo` → `midi_tempo` | 0 = 引擎默认 | universal |
+| 最高音高 | `max_freq` → `maximum_frequency` | 0 = 不限制 | universal/basic |
+| 超长音符上限 | `max_note_hold` | 15（= 原行为） | universal/muscriptor |
+| 合并重叠音符 | `no_merge`（取反） | 开 | universal |
+| 力度归一化 | `no_velnorm`（取反） | 开 | universal |
+
+**顺手补上一个真漏跳**：`max_freq` 在 worker 那边（`music2midi.py` 的 `maximum_frequency=req.get('max_freq')`）
+和 `_resolve_params` 里都写好了，唯独 `engine.js` 的白名单没有它 —— 界面就算传了也到不了引擎。
+就是文件里注释警告过的那个坑（`muscriptor_instruments` 当年也是漏在这张表里）。已补。
+
+**批 A 还差**：Basic Pitch 的 `merge_gap_ms`、piano 的 `num_threads` / `perf_mode`（钢琴链路其实已经
+实现了批量推理 `_batch_cap` + `_batched_forward`，只是没接界面）—— 这两个属于「提速」范畴，放到 ② 一起做。
+
+**验证方式**（可复用）：构建渲染层 `npm run build:ui`（`electron-builder.yml` 排除了 `frontend/**`，
+运行时只吃 `renderer/dist`，所以改 Vue 必须重新构建才进得了安装版）→ `node scripts/deploy-installed.cjs`
+（含 [7/7] 冒烟）→ CDP 进 `#/transcode` 展开「高级参数」读控件。注意侧边栏那一项叫**「转译」**不是「转录」，
+子模型按钮的 `textContent` 带「已下载/未下载」徽章，匹配要用 `startsWith`。
+
 - **批 A**（工作量小）：Basic Pitch + piano-transcription —— 参数已在，只差界面 + i18n
 - **批 B**（工作量中）：MuScriptor —— `prelude_forcing`（边界质量控制）/ `max_note_hold` / `temperature` / `cfg_coef` / `beam_size` + **乐器探测按钮**（对当前音频跑 `instrument_probe.py`，给建议乐器组）
 - **批 C**（需先勘查）：Aria-AMT / Transkun —— 先查它们 CLI 支持什么

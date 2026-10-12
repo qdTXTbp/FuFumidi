@@ -24,6 +24,13 @@ const perf = ref('quality');             // quality | balanced | fast
 const perfHint = ref('');
 const bassBoost = ref(false);            // 低音增强（仅 basic 子模型）：关闭 melodia trick 以保留低音声部
 const beatGrid = ref(false);             // 节拍网格检测（仅 MuScriptor）：默认关，勾选才加载；未下载/失败自动跳过
+// ④ 批 A：引擎早就有、界面一直没入口的模型选项。默认值一律保持「原来的行为」，
+// 所以不碰这些控件时输出与旧版一致（质量相关的开关默认关，见计划文档 §6）。
+const maxFreq = ref(0);                  // 最高音高 Hz（仅 basic，0 = 不限制）：滤掉高频噪声/镲片串音
+const maxHold = ref(15);                 // 超长音符上限秒（仅 MuScriptor，0 = 关）：长音频僵尸音符的兜底
+const mergeOverlap = ref(true);          // 合并同音高重叠音符（默认开；关掉 = 引擎收 no_merge）
+const velNorm = ref(true);               // 力度归一化（默认开；关掉 = 引擎收 no_velnorm）
+const exportTempo = ref(0);              // 导出 BPM（0 = 用引擎默认 120 / 自动 BPM 优先）
 // 乐器组约束（仅 MuScriptor）：MuScriptor 是**多乐器**模型，逐音符判定乐器组 —— 不给约束时
 // 它会在同一首歌里改判（实测《甩葱歌》：同一条旋律 24s→organ、33s→synth lead、43s→flutes、
 // 96s→voice），于是同一段旋律每隔几小节换一次音色。
@@ -741,6 +748,15 @@ function collectParams() {
       // batch_size>1 与 prelude_forcing=True 互斥），代价是跨段延续的音符会被重新判定乐器。
     }
   }
+  // ④ 批 A：上面三个 if 之外，还有一批「引擎早就有、界面没入口」的选项。
+  // 默认值都保持原行为：不勾不改时发出去的请求与旧版一致。
+  if (mode.value === 'universal') {
+    if (exportTempo.value > 0) cfg.tempo = exportTempo.value;
+    if (umodel.value === 'basic' && maxFreq.value > 0) cfg.max_freq = maxFreq.value;
+    if (umodel.value === 'muscriptor') cfg.max_note_hold = maxHold.value;
+    if (!mergeOverlap.value) cfg.no_merge = true;
+    if (!velNorm.value) cfg.no_velnorm = true;
+  }
   if (mode.value === 'separate') {
     cfg.with_drums = drums.value;
     cfg.export_stems = stemExport.value;
@@ -1255,7 +1271,7 @@ onBeforeUnmount(() => {
       </div>
 
       <details v-if="mode !== 'separate'" class="tr-adv" data-guide="adv-panel">
-        <summary>{{ t('高级参数') }}<span class="adv-cnt">{{ t('阈值 · 踏板 · 降噪') }}</span><span class="adv-arr">▾</span></summary>
+        <summary>{{ t('高级参数') }}<span class="adv-cnt">{{ t('阈值 · 踏板 · 模型选项') }}</span><span class="adv-arr">▾</span></summary>
         <div class="tr-params">
           <div class="tr-slider">
             <label>{{ t('起音阈值') }}<b>{{ onset.toFixed(2) }}</b></label>
@@ -1278,6 +1294,26 @@ onBeforeUnmount(() => {
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'basic'">
             <label><span><b>{{ t('低音增强') }}</b><small>{{ t('弱化主旋律强化，保留贝斯 / 低音声部（旋律密集时更不易丢低音）') }}</small></span><input type="checkbox" v-model="bassBoost"></label>
+          </div>
+          <!-- ④ 批 A：模型选项（引擎早就有，只是界面没入口） -->
+          <div class="tr-slider" v-if="mode === 'universal'">
+            <label>{{ t('导出速度') }}<b>{{ exportTempo > 0 ? exportTempo + ' BPM' : t('默认 120 BPM') }}</b></label>
+            <input type="range" min="0" max="240" step="1" v-model.number="exportTempo">
+          </div>
+          <div class="tr-slider" v-if="mode === 'universal' && umodel === 'basic'">
+            <label>{{ t('最高音高') }}<b>{{ maxFreq > 0 ? maxFreq + ' Hz' : t('不限制') }}</b></label>
+            <input type="range" min="0" max="8000" step="50" v-model.number="maxFreq">
+          </div>
+          <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
+            <label>{{ t('超长音符上限') }}<b>{{ maxHold > 0 ? maxHold + 's' : t('上限已关') }}</b></label>
+            <input type="range" min="0" max="60" step="1" v-model.number="maxHold">
+            <small>{{ t('超过就强制收尾，治长音频的僵尸音符（实测 100 分钟录播出现过 4320 秒的音）。调大＝少干预，调小＝更狠地剪长音；0 = 关') }}</small>
+          </div>
+          <div class="tr-switch" v-if="mode === 'universal'">
+            <label><span><b>{{ t('合并重叠音符') }}</b><small>{{ t('合并同音高重叠音符；关闭后更贴近模型原始判定，但同一音高的重复触发会变多') }}</small></span><input type="checkbox" v-model="mergeOverlap"></label>
+          </div>
+          <div class="tr-switch" v-if="mode === 'universal'">
+            <label><span><b>{{ t('力度归一化') }}</b><small>{{ t('把力度拉齐到统一强度；关闭后保留模型给出的原始力度') }}</small></span><input type="checkbox" v-model="velNorm"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label><span><b>{{ t('节拍网格检测') }}</b><small>{{ t('对齐音符时值；未下载或失败时自动跳过，不影响转录') }}</small></span><input type="checkbox" v-model="beatGrid"></label>
