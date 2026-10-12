@@ -106,7 +106,7 @@ for (let i = 0; i < 24 && !free; i++) {
   catch (e) { execSync('powershell -NoProfile -Command "Start-Sleep -Milliseconds 500"', { stdio: 'ignore' }); }
 }
 if (!free) { console.error('app.asar 仍被占用（安装版没关掉？）'); process.exit(1); }
-console.log('[1/6] 安装版已关闭');
+console.log('[1/7] 安装版已关闭');
 
 // ---- 2) 解包干净基线
 fs.rmSync(TMP, { recursive: true, force: true });
@@ -117,7 +117,7 @@ execSync('"' + ASAR_BIN + '" extract "' + BASE + '" "' + TMP + '"', { stdio: 'in
 // 否则重新打包后 unpacked 树会缩水 —— 安装版会丢掉内置音色库。
 const BASE_UNPACK = BASE + '.unpacked';
 if (fs.existsSync(BASE_UNPACK)) fs.cpSync(BASE_UNPACK, TMP, { recursive: true, force: false });
-console.log('[2/6] 基线解包完成');
+console.log('[2/7] 基线解包完成');
 // ---- 3) 覆盖：renderer/dist 整目录替换；其余按 electron-builder.yml 的过滤逐个覆盖
 const distSrc = path.join(ROOT, 'renderer', 'dist');
 const distDst = path.join(TMP, 'renderer', 'dist');
@@ -169,7 +169,7 @@ function overlay(relDir) {
   }
 }
 overlay('');
-console.log('[3/6] 覆盖 ' + copied + ' 个文件（其中新增 ' + created + '），内容有变化 ' + changed.length + ' 个：' + changed.slice(0, 12).join(', ') + (changed.length > 12 ? ' …' : ''));
+console.log('[3/7] 覆盖 ' + copied + ' 个文件（其中新增 ' + created + '），内容有变化 ' + changed.length + ' 个：' + changed.slice(0, 12).join(', ') + (changed.length > 12 ? ' …' : ''));
 if (skipped.length) console.log('     跳过（基线里不是文件）：' + skipped.slice(0, 8).join(', '));
 
 // ---- 3b) 清理：基线里有、但现在不该有的文件（源码已删除，或被 files 排除）
@@ -199,7 +199,7 @@ function dirSize(dir) {
   return total;
 }
 pruneTmp(TMP);
-console.log('[3b/6] 清理基线残留 ' + pruned + ' 项 / ' + (prunedBytes / 1048576).toFixed(1) + ' MB（源码已删除或被 electron-builder.yml 排除）');
+console.log('[3b/7] 清理基线残留 ' + pruned + ' 项 / ' + (prunedBytes / 1048576).toFixed(1) + ' MB（源码已删除或被 electron-builder.yml 排除）');
 
 // ---- 4) 重新打包：asarUnpack 清单直接来自 electron-builder.yml
 fs.rmSync(OUT, { force: true });
@@ -237,7 +237,7 @@ const unpackExpr = '{' + [...unpackNames].join(',') + '}';
 if (notUnpacked.length) console.log('     注意：以下文件因重名未解包（内联进 asar，功能不受影响）：' + notUnpacked.join(', '));
 execSync('"' + ASAR_BIN + '" pack "' + TMP + '" "' + OUT + '" --unpack-dir=engine --unpack="' + unpackExpr + '"', { stdio: 'inherit' });
 const isUnpacked = (rel) => globMatch('engine/**', rel) || unpackGlobs.some((g) => globMatch(g, rel));
-console.log('[4/6] 新 asar：' + (fs.statSync(OUT).size / 1048576).toFixed(1) + ' MB（asarUnpack：' + UNPACK_PATTERNS.length + ' 条规则）');
+console.log('[4/7] 新 asar：' + (fs.statSync(OUT).size / 1048576).toFixed(1) + ' MB（asarUnpack：' + UNPACK_PATTERNS.length + ' 条规则）');
 
 // 尺寸护栏：内联进 asar 的最大文件逐个列出 —— 上一次 asar 从 200MB 涨到 2GB 就是靠这个发现的
 function biggest(dir, list = []) {
@@ -268,7 +268,7 @@ const srcEngine = path.join(ROOT, 'engine');
 fs.rmSync(dstEngine, { recursive: true, force: true });
 fs.cpSync(srcEngine, dstEngine, { recursive: true, filter: (s) => !s.includes('__pycache__') && !s.includes('.pytest_cache') });
 // 注意：unpacked 与 asar 是配套的，engine 必须两边一致（asar 里 engine 只是占位）
-console.log('[5/6] 已覆盖 app.asar（' + (fs.statSync(ASAR).size / 1048576).toFixed(1) + ' MB）与 app.asar.unpacked');
+console.log('[5/7] 已覆盖 app.asar（' + (fs.statSync(ASAR).size / 1048576).toFixed(1) + ' MB）与 app.asar.unpacked');
 
 // ---- 6) 自检：内联文件里不该再出现「已经在 unpacked 里」的重复
 function countFiles(dir) {
@@ -278,5 +278,19 @@ function countFiles(dir) {
   return { n, bytes };
 }
 const unp = countFiles(UNPACK);
-console.log('[6/6] app.asar.unpacked：' + unp.n + ' 个文件 / ' + (unp.bytes / 1048576).toFixed(1) + ' MB（engine + soundfonts + js-synth）');
-console.log('完成 —— 双击 ' + path.join(INSTALL, 'FuFumidi.exe') + ' 即可看到改动。');
+console.log('[6/7] app.asar.unpacked：' + unp.n + ' 个文件 / ' + (unp.bytes / 1048576).toFixed(1) + ' MB（engine + soundfonts + js-synth）');
+
+// ---- 7) 部署后冒烟：启动一次，断言不是白屏 / preload 在 / 没有未捕获异常
+// 构建绿 ≠ 能用。上面六步只证明「文件拷贝成功」；渲染进程栽在启动路径上时表现就是白屏，
+// 那样会把一个打不开的版本报成「完成」—— 所以这一步失败要当部署失败处理。
+console.log('[7/7] 部署后冒烟：启动安装版一次，断言首屏有内容 / preload 已加载 / 无未捕获异常…');
+try {
+  execSync('node "' + path.join(__dirname, 'cdp', 'cdp-smoke.cjs') + '"', {
+    stdio: 'inherit',
+    env: Object.assign({}, process.env, { FUFUMIDI_INSTALL: INSTALL }),
+  });
+  console.log('完成 —— 冒烟通过，双击 ' + path.join(INSTALL, 'FuFumidi.exe') + ' 即可看到改动。');
+} catch (e) {
+  console.error('部署已拷贝完成，但冒烟失败：安装版起来了却没通过断言，先按上面的 - 逐条查，别当它可用。');
+  process.exit(1);
+}
