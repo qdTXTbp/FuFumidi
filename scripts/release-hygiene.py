@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.request
 
 REPO = 'qdTXTbp/FuFumidi'
@@ -29,24 +30,59 @@ ASSET_CHANNELS = {'beta', 'gpu-v2', 'soundfonts-v1'}
 VERSION_TAG = re.compile(r'^v?\d+\.\d+\.\d+')
 
 
-def req(url, token=None, method='GET', payload=None):
+def _once(url, token, method, payload):
     data = json.dumps(payload).encode('utf-8') if payload is not None else None
     r = urllib.request.Request(url, data=data, method=method)
     r.add_header('Accept', 'application/vnd.github+json')
     r.add_header('User-Agent', 'fufumidi-release-hygiene')
+    # ★ 必须请求 gzip：不压缩时 releases 列表单页约 650 KB，实测**每次都在同一位置**
+    #   被截断（http.client.IncompleteRead: 606148/652715），重试 4 次全一样 ——
+    #   是确定性的响应截断，不是网络抖动。压缩后体积降一个数量级，绕开它。
+    r.add_header('Accept-Encoding', 'gzip')
     if token:
         r.add_header('Authorization', 'token ' + token)
     if data:
         r.add_header('Content-Type', 'application/json')
-    with urllib.request.urlopen(r, timeout=30) as resp:
-        body = resp.read().decode('utf-8')
+    with urllib.request.urlopen(r, timeout=60) as resp:
+        raw = resp.read()
+        enc = (resp.headers.get('Content-Encoding') or '').lower()
+    if 'gzip' in enc:
+        import gzip
+        raw = gzip.decompress(raw)
+    body = raw.decode('utf-8')
     return json.loads(body) if body.strip() else {}
+
+
+def req(url, token=None, method='GET', payload=None, tries=4):
+    """带重试的请求。
+
+    实测直连 api.github.com 时偶发 http.client.IncompleteRead（响应读一半连接断），
+    不重试的话整个脚本会崩在拉列表这一步 —— 而它只是网络抖动，重试就好。
+    """
+    last = None
+    for i in range(tries):
+        try:
+            return _once(url, token, method, payload)
+        except Exception as e:
+            last = e
+            # 4xx 是确定性错误（权限/不存在），重试没意义
+            code = getattr(e, 'code', None)
+            if code and 400 <= int(code) < 500:
+                raise
+            time.sleep(1.5 * (i + 1))
+    raise last
 
 
 def want_title(tag):
     """该 release 应有的名称。版本 tag -> 'FuFumidi vX.Y.Z'（去掉可能的 v 前缀重复）。"""
     m = re.match(r'^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.\-]+)?)$', str(tag))
     return ('FuFumidi v' + m.group(1)) if m else None
+
+
+def _paren_note(name):
+    """取出标题全角/半角括号里的补充说明（如 'FuFumidi 3.2.9（新手引导修复）' -> '新手引导修复'）。"""
+    m = re.search(r'[（(]([^）)]+)[）)]', str(name or ''))
+    return m.group(1).strip() if m else None
 
 
 def main():
@@ -78,11 +114,13 @@ def main():
         if not expect:
             continue
         if (r.get('name') or '') != expect:
-            renames.append((r['id'], r['tag_name'], r.get('name'), expect))
+            renames.append((r, r['tag_name'], r.get('name'), expect))
     print()
     print('--- G3 需要改名的 release：%d 个 ---' % len(renames))
-    for _id, tag, cur, expect in renames:
-        print('  %-16s %-42s -> %s' % (tag, (cur or '(空)')[:40], expect))
+    for _r, tag, cur, expect in renames:
+        note = _paren_note(cur)
+        print('  %-16s %-42s -> %s%s' % (tag, (cur or '(空)')[:40], expect,
+                                          ('   [把「%s」移进 body]' % note) if note else ''))
 
     # ---- G4 清理过期预发行版 ----
     stale = [r for r in rels if r.get('prerelease') and r['tag_name'] not in ASSET_CHANNELS]
@@ -103,9 +141,16 @@ def main():
 
     # ---- 执行 ----
     ok = fail = 0
-    for rid, tag, cur, expect in renames:
+    for r, tag, cur, expect in renames:
         try:
-            req('%s/releases/%d' % (API, rid), args.token, 'PATCH', {'name': expect})
+            payload = {'name': expect}
+            # 旧标题括号里的补充说明别丢掉，移进 body（用户要求改标题，但没要求丢信息）
+            note = _paren_note(cur)
+            if note:
+                body = r.get('body') or ''
+                if note not in body:
+                    payload['body'] = (body + '\n\n> 原标题里的补充说明：' + note).strip()
+            req('%s/releases/%d' % (API, r['id']), args.token, 'PATCH', payload)
             print('[改名] %s -> %s' % (tag, expect))
             ok += 1
         except Exception as e:

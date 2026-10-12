@@ -125,6 +125,35 @@ const KIND_LABEL= { cuda: 'CUDA', directml: 'DirectML', rocm: 'ROCm' };
 
 ---
 
+## 2.5 用户决定（2026-10-12，已按此执行）
+
+| 问题 | 决定 | 状态 |
+|---|---|---|
+| 加速包资产要不要统一命名成 `fufumidi-gpu-<kind>.zip.00N`？ | **不改**（保持 `cuda.zip.001/.002`、`rocm.part1/.part2` 原样） | ✅ 无需动作 |
+| `FuFumidi 3.2.9（新手引导修复）` 这类标题改不改？ | **改**成 `FuFumidi v3.2.9` | ✅ 已执行（括号说明移进 body，不丢信息） |
+| Intel 加速包？ | **方案 B：新增 `xpu` kind（`torch+xpu`）** | ⏳ 待做 |
+| GitHub token | `C:\Users\qdTXTbp\Desktop\work\git\token令牌\新建 文本文档.txt`（40 字符 `ghp_`，账号 qdTXTbp） | ✅ 已验证可用 |
+
+**G3 / G4 执行结果（已用 API 复核）**：
+
+- release 总数 **66 → 60**（删掉 6 个过期的 `v5.0.0-beta.*`；**git tag 全部保留**，只删了 release 对象）
+- 命名仍不符合 `FuFumidi v{x.y.z}` 的正式版：**0 个**（本轮共改名 18 个）
+- 剩余预发行版：**3 个，且正好是必须保留的资产通道** —— `gpu-v2` / `beta` / `soundfonts-v1`
+- 抽查 `v3.2.9`：name = `FuFumidi v3.2.9`，body 末尾 = `> 原标题里的补充说明：新手引导修复` ✅
+
+### 执行中踩到的坑（重要，下次别重踩）
+
+**`urllib` 拉 releases 列表会确定性截断。** 不请求 gzip 时单页约 650 KB，
+实测**每次都断在同一个位置**（`http.client.IncompleteRead: 606148/652715`），
+重试 4 次结果完全一样 —— 是确定性的响应截断，不是网络抖动，加重试没用。
+**修法：加 `Accept-Encoding: gzip` 并解压**，体积降一个数量级就绕开了。
+（同样的数据 `Invoke-RestMethod` 能正常拿到，所以「PowerShell 能取到」不代表 Python 也能。）
+
+另外：**一次跑不完会被 run_code 的时限掐断**，但脚本是幂等的，重跑会接着做剩下的，
+不会重复也不会漏（本轮就是跑了三次才把 18 个改名做完）。
+
+---
+
 ## 3. 决策点：Intel 要不要单独一个 XPU 包？
 
 用户说「还要有英特尔和 amd 显卡的加速包」。**AMD 有两个**（directml / rocm），
