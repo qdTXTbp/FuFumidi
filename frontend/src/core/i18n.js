@@ -1622,6 +1622,8 @@ export const I18N_MAP = {
   '自定义': 'Custom',
   '低音增强': 'Bass boost',
   '节拍网格检测': 'Beat grid',
+  '遇到问题？': 'Something wrong?',
+  '一键体检 · 反馈到 GitHub': 'Run a checkup - report on GitHub',
   '反馈问题': 'Report a problem',
   '已知问题': 'Known issues',
   '[体检反馈] 请把症状补在这里': '[Checkup] describe the symptom here',

@@ -35,6 +35,11 @@ const QUICK = [
 
 function go(v) { setView(v); }
 function openGuide() { state.ui.guideOpen = true; }
+/** 首页 → 调试工具 · 全局体检（settingsTab 用 'gpu'，体检区块就在那个标签页里） */
+function openHealth() {
+  state.ui.settingsTab = 'gpu';
+  state.ui.settingsOpen = true;
+}
 function openUpdate() {
   state.ui.settingsTab = 'update';
   state.ui.settingsOpen = true;
@@ -141,6 +146,12 @@ async function openProject() {
       <button class="home-card" @click="openProject">
         <span class="hc-ic"><Icon name="folder" :size="18" /></span>
         <div><b>{{ t('打开工程') }}</b><small>{{ t('载入 .fufu') }}</small></div>
+      </button>
+      <!-- 问题反馈入口：用户要求「在首页工作区提供入口，方便用户反馈问题」。
+           直接跳到设置里的「调试工具 · 全局体检」，不用用户自己去翻。 -->
+      <button class="home-card" @click="openHealth">
+        <span class="hc-ic"><Icon name="info" :size="18" /></span>
+        <div><b>{{ t('遇到问题？') }}</b><small>{{ t('一键体检 · 反馈到 GitHub') }}</small></div>
       </button>
       <button class="home-card" @click="saveProject" :disabled="!currentSong">
         <span class="hc-ic"><Icon name="save" :size="18" /></span>
