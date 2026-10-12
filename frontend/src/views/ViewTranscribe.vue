@@ -37,6 +37,10 @@ const msTemp = ref(1.0);                 // 采样温度（1.0 = 不传）
 const msCfg = ref(1.0);                  // 引导系数（1.0 = 不传）
 const msBeam = ref(1);                   // 束搜索宽度（1 = 不传）
 const msPrelude = ref(true);             // 跨块延音前置（默认开；关掉才传 false）
+// ② 计算精度：默认 fp32（不传）—— bf16 改数值精度、属影响质量的开关，默认关。
+// 实测：CPU（Zen 5/AVX512-BF16）10 分钟素材待复测、15 秒素材 +43%；GPU 上 ≈0%；
+// 长素材（10 分钟/120 块）质量逐项相同，误差不累积。
+const msPrec = ref('fp32');
 // 乐器组约束（仅 MuScriptor）：MuScriptor 是**多乐器**模型，逐音符判定乐器组 —— 不给约束时
 // 它会在同一首歌里改判（实测《甩葱歌》：同一条旋律 24s→organ、33s→synth lead、43s→flutes、
 // 96s→voice），于是同一段旋律每隔几小节换一次音色。
@@ -767,6 +771,7 @@ function collectParams() {
       if (msCfg.value !== 1.0) cfg.cfg_coef = msCfg.value;
       if (msBeam.value > 1) cfg.beam_size = msBeam.value;
       if (!msPrelude.value) cfg.prelude_forcing = false;
+      if (msPrec.value && msPrec.value !== 'fp32') cfg.precision = msPrec.value;
     }
   }
   if (mode.value === 'separate') {
@@ -1345,6 +1350,19 @@ onBeforeUnmount(() => {
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label><span><b>{{ t('跨块延音前置') }}</b><small>{{ t('把上一块未结束的音符强制喂给下一块，分块边界最稳；关掉会降低边界延续质量（默认开）') }}</small></span><input type="checkbox" v-model="msPrelude"></label>
+          </div>
+          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
+            <label>
+              <span>
+                <b>{{ t('计算精度') }}</b>
+                <small>{{ t('纯 CPU 提速档：bf16 比 fp32 快约 43%（实测），输出与 fp32 逐项一致；但在显卡上几乎无收益。默认 fp32 最稳') }}</small>
+              </span>
+              <select v-model="msPrec">
+                <option value="fp32">{{ t('fp32（默认，最稳）') }}</option>
+                <option value="bf16">{{ t('bf16（纯 CPU 快约 43%）') }}</option>
+                <option value="fp16">{{ t('fp16（更激进，未验证）') }}</option>
+              </select>
+            </label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label><span><b>{{ t('节拍网格检测') }}</b><small>{{ t('对齐音符时值；未下载或失败时自动跳过，不影响转录') }}</small></span><input type="checkbox" v-model="beatGrid"></label>
