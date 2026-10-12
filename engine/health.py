@@ -199,6 +199,20 @@ KEY_DEPS = ("torch", "torchaudio", "onnxruntime", "muscriptor", "piano_transcrip
 
 def runtime_info():
     d = {"python": sys.version.split()[0], "deps": {}}
+    # ★ 解释器身份：必须报出来。
+    #   实测遇到过一次「安装版内置 torch 是 2.13.0+cpu（cuda False），但界面里体检报 cuda 已启用」——
+    #   两者不可能同时为真，说明体检拿到的运行时和安装版实际用的不是同一个。
+    #   没有这几行就无法从报告本身判断它到底在描述哪个环境。
+    d["executable"] = sys.executable
+    d["prefix"] = sys.prefix
+    d["frozen"] = bool(getattr(sys, "frozen", False))
+    d["sys_path_head"] = [p for p in sys.path[:6]]
+    try:
+        import torch as _t
+        d["torch_file"] = getattr(_t, "__file__", "")
+        d["torch_cuda_available"] = bool(_t.cuda.is_available())
+    except Exception as e:
+        d["torch_file"] = "import 失败: " + str(e)[:80]
     for name in KEY_DEPS:
         try:
             m = __import__(name)
@@ -331,8 +345,8 @@ def render_text(rep, redact):
     L.append("应用版本：" + (rep.get("app_version") or "(未知)"))
     L.append("")
     L.append("== 结论 ==")
-    for level, group, msg in rep.get("verdicts", []):
-        L.append("%s %s：%s" % (ICON.get(level, "[?]"), group, msg))
+    for _v in rep.get("verdicts", []):
+        L.append("%s %s：%s" % (ICON.get(_v.get("level"), "[?]"), _v.get("group"), _v.get("msg")))
     L.append("")
     L.append("== 系统 ==")
     si = rep.get("system", {})
@@ -358,6 +372,10 @@ def render_text(rep, redact):
     L.append("")
     L.append("== 运行时 ==")
     L.append("Python " + str(rep.get("runtime", {}).get("python", "?")))
+    # 解释器身份：定位「体检结论与实际运行时不是同一个环境」那类矛盾全靠这几行
+    for _k in ("executable", "prefix", "torch_file", "torch_cuda_available"):
+        if rep.get("runtime", {}).get(_k) not in (None, ""):
+            L.append("  %-18s %s" % (_k, rep["runtime"][_k]))
     for k, x in (rep.get("runtime", {}).get("deps") or {}).items():
         L.append("  %-30s %s" % (k, (x.get("version") if x.get("ok") else "缺失: " + str(x.get("error", ""))[:60])))
     env = rep.get("runtime", {}).get("env") or {}
@@ -386,7 +404,11 @@ def collect():
            "app_version": os.environ.get("FUFUMIDI_APP_VERSION", ""),
            "system": sys_info(), "gpu": gpu_info(), "compute_check": compute_check(),
            "runtime": runtime_info(), "models": model_info(), "recent_errors": recent_errors()}
-    rep["verdicts"] = verdicts(rep)
+    # ★ 必须是 dict，不能直接塞元组：Python 元组序列化成 JSON 是**数组**，
+    #   前端 v.level / v.group / v.msg 全是 undefined，界面上只剩图标没有文字。
+    #   （这个 bug 单测抓不到 —— 单测调的是 verdicts()，拿到的是元组，一切正常；
+    #     只有真跑一次界面才看得出来。）
+    rep["verdicts"] = [{"level": _l, "group": _g, "msg": _m} for (_l, _g, _m) in verdicts(rep)]
     # 落盘前统一过一遍脱敏（路径、环境变量里都可能带用户名）
     rep_json = redact(json.dumps(rep, ensure_ascii=False, default=str))
     rep = json.loads(rep_json)

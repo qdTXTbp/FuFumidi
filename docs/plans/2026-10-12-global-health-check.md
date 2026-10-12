@@ -133,7 +133,29 @@ https://github.com/qdTXTbp/FuFumidi/issues/new?template=bug_report.yml
 **查法**：在 `health.py` 里把 `sys.executable`、`sys.prefix`、`PYTHONPATH`、
 `torch.__file__` 一并报出来（这也是体检该有的信息），然后对比安装版实际启动引擎时用的解释器。
 
-**在查清之前，不要把体检结论对外当权威**。
+**✅ 已查清（2026-10-12）：是我的测试方式污染，不是产品缺陷。**
+
+用**安装版自己的 python** 直接跑 `health.py`，结论完全正确：
+
+```
+executable            E:\Midi\FuFumidi\resources\python\python.exe
+prefix                E:\Midi\FuFumidi\resources\python
+torch_file            ...\resources\python\Lib\site-packages\torch\__init__.py
+torch_cuda_available  False
+torch                 2.13.0+cpu
+note                  检测到 NVIDIA 显卡，但未安装 CUDA 版 torch…
+```
+
+所以体检代码本身是对的。之前的矛盾来自**测试方式**：我是用 `scripts/cdp/cdp-smoke.cjs`
+启动安装版的，而那个 shell 里刚跑过 venv 的 CUDA 命令 —— 环境被 Electron 继承了进去，
+于是引擎侧解释器拿到了 venv 的 CUDA torch。
+
+**留下的教训**：验证「安装版真实行为」时必须**从干净环境启动**（直接双击，或先清掉环境变量），
+否则测的是「安装版 + 我的 shell 环境」的混合体。这也正好说明了为什么体检报告里
+**必须有 `executable` / `torch_file` 这几行** —— 没有它们，连「这份报告描述的是哪个环境」
+都判断不了。已加进报告的 `== 运行时 ==` 段。
+
+**遗留**：还应在**干净环境**下重跑一次安装版体检，确认它报的就是「有 N 卡但没装 CUDA 包」。
 
 ---
 

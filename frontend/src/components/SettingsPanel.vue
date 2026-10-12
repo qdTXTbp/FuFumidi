@@ -595,6 +595,58 @@ async function gpuImportLocal() {
     app.gpuInstall.active = false;
   }
 }
+// ---- 调试工具 · 全局体检 ----
+// 用户要求「把调试工具做成全局体检，方便反馈 bug」：核心是**能一键复制、且已脱敏**，
+// 所以这里不弹保存框，直接复制到剪贴板。
+// 注意：本文件是 <script setup>（**纯 JS，没有 lang="ts"**），不能写 TS 语法 ——
+// `as any` / `catch (e: any)` 这类 tsc 不报错、但 vite 构建会直接失败。
+const health = reactive({ busy: false, report: null, error: '', showRaw: false });
+async function runHealth() {
+  const bridge = window.fuBridge;
+  if (!bridge || !bridge.diagHealth) { health.error = t('当前环境不支持体检'); return; }
+  health.busy = true; health.error = ''; health.report = null;
+  try {
+    const r = await bridge.diagHealth();
+    if (r && r.ok && r.report) { health.report = r.report; }
+    else { health.error = (r && (r.error || r.raw)) || t('体检失败'); }
+  } catch (e) { health.error = String((e && e.message) || e); }
+  finally { health.busy = false; }
+}
+async function copyHealth() {
+  const txt = (health.report && health.report.report_text) || '';
+  if (!txt) return;
+  try { await navigator.clipboard.writeText(txt); }
+  catch (e) {
+    // 剪贴板 API 在部分环境不可用，退回 textarea + execCommand
+    const ta = document.createElement('textarea');
+    ta.value = txt; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (e2) {}
+    document.body.removeChild(ta);
+  }
+}
+const REPO = 'https://github.com/qdTXTbp/FuFumidi';
+/** 反馈问题：先把**已脱敏**的报告放进剪贴板，再打开预填好的 issue 页面。
+ *  URL 有长度上限，所以 body 只带前 6000 字符；超出的部分靠用户自己粘贴 ——
+  这也是「复制到剪贴板」这一步不能省的原因。 */
+async function reportIssue() {
+  await copyHealth();
+  const body = ((health.report && health.report.report_text) || '').slice(0, 6000);
+  const url = REPO + '/issues/new'
+    + '?title=' + encodeURIComponent('[体检反馈] 请把症状补在这里')
+    + '&body=' + encodeURIComponent(body || '（体检报告已复制到剪贴板，请粘贴到这里）');
+  const bridge = window.fuBridge;
+  if (bridge && bridge.openExternal) bridge.openExternal(url);
+}
+function openKnownIssues() {
+  const bridge = window.fuBridge;
+  if (bridge && bridge.openExternal) bridge.openExternal(REPO + '/issues');
+}
+
+async function exportDiag() {
+  const bridge = window.fuBridge;
+  if (bridge && bridge.diagExport) { try { await bridge.diagExport(); } catch (e) {} }
+}
+
 async function gpuUninstall() {
   if (!bridge || !bridge.gpuUninstall) { gpu.status = t('当前环境不支持卸载'); return; }
   const kind = gpu.installedKind || 'directml';
@@ -1092,6 +1144,28 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
             <div class="gpu-extra">
               <button class="btn sm" @click="gpuImportLocal" :disabled="gpu.busy || app.gpuInstall.active">{{ t('本地导入 ZIP') }}</button>
               <button v-if="gpuInstalled" class="btn sm danger" @click="gpuUninstall" :disabled="gpu.busy || app.gpuInstall.active">{{ t('卸载') }}</button>
+            </div>
+            <!-- 调试工具 · 全局体检：一键拿到可粘贴的排障报告 -->
+            <div style="margin-top:16px;border-top:1px solid var(--hairline);padding-top:12px">
+              <div style="font-size:12px;color:var(--text-soft);margin-bottom:6px">{{ t('调试工具 · 全局体检') }}</div>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <button class="btn sm" @click="runHealth" :disabled="health.busy">{{ health.busy ? t('体检中…') : t('开始体检') }}</button>
+                <button class="btn sm" v-if="health.report" @click="copyHealth">{{ t('复制报告') }}</button>
+                <button class="btn sm" v-if="health.report" @click="reportIssue">{{ t('反馈问题') }}</button>
+                <button class="btn sm" @click="openKnownIssues">{{ t('已知问题') }}</button>
+                <button class="btn sm" @click="exportDiag">{{ t('导出诊断包') }}</button>
+                <button class="btn sm" v-if="health.report" @click="health.showRaw = !health.showRaw">{{ health.showRaw ? t('看结论') : t('看完整报告') }}</button>
+              </div>
+              <div style="font-size:12px;color:var(--text-soft);margin-top:4px">{{ t('体检会检查系统、显卡与加速包、运行时依赖、模型资源和最近错误，并逐条给出结论。报告已自动去掉用户名与机器名，可直接粘贴到反馈里。') }}</div>
+              <div v-if="health.error" style="color:#e06c75;font-size:12px;margin-top:6px">{{ health.error }}</div>
+              <div v-if="health.report && !health.showRaw" style="margin-top:8px;max-height:280px;overflow:auto;border:1px solid var(--hairline);border-radius:6px;padding:8px">
+                <div v-for="(v, i) in health.report.verdicts" :key="i" style="display:flex;gap:8px;margin:5px 0;font-size:13px;align-items:baseline">
+                  <span :style="{ color: v.level === 'ok' ? '#5cb85c' : v.level === 'warn' ? '#e0a030' : v.level === 'error' ? '#e06c75' : 'var(--text-soft)', fontWeight: 600 }">{{ v.level === 'ok' ? '✓' : v.level === 'warn' ? '!' : v.level === 'error' ? '✕' : 'i' }}</span>
+                  <span style="color:var(--text-soft);min-width:64px">{{ v.group }}</span>
+                  <span style="flex:1">{{ v.msg }}</span>
+                </div>
+              </div>
+              <pre v-if="health.report && health.showRaw" style="margin-top:8px;max-height:340px;overflow:auto;font-size:11px;line-height:1.5;white-space:pre-wrap;border:1px solid var(--hairline);border-radius:6px;padding:8px">{{ health.report.report_text }}</pre>
             </div>
           </div>
         </div>
