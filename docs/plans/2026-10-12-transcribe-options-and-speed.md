@@ -175,6 +175,31 @@ N 大 → 上限在正常工作、模型仍在拖长（要按轨自适应上限�
 
 - [ ] `npm run typecheck` = 0 · `test:ui` 173 · `test:plugin` 6 · `test:download` 15
 - [ ] 引擎测试（见 §1 的 pytest 命令）全绿
+
+## 9. 进行中（下次接手先看这里）
+
+**长音频实跑（后台作业，未完成）** —— 目标要求的「用星铁 LIVE 测速度和质量」：
+
+```
+cd E:\Midi\FuFumidi-Source
+$env:FUFUMIDI_MODELS_DIR='E:\Midi\FuFumidi\FuFumidiData\models'
+$env:PYTHONIOENCODING='utf-8'
+& 'E:\Midi\FuFumidi\resources\python\python.exe' engine\music2midi.py convert \
+  'C:\Users\qdTXTbp\Music\Hoyo-Mix Music Fair\《崩坏：星穹铁道》「2024星铁LIVE」演唱会官方录播完整版_哔哩哔哩_bilibili1533091283-1-30232.m4s (1).flac' \
+  -o E:\Midi\_attic\_sing_tmp\starrail.mid --engine universal --model muscriptor \
+  --model-size small --dump-tokens E:\Midi\_attic\_sing_tmp\starrail_tokens.jsonl
+```
+
+- 产物：`_attic\_sing_tmp\starrail.mid`（质量）、`starrail_tokens.jsonl`（**回放用，改解码器的燃料**）、`starrail.log`
+- 实测音长 **7230.7 s（120.5 分钟）→ 1447 个 5 秒块**；本机 torch 是 **CPU 版**（`2.13.0+cpu`，安装版内置 python 也是），
+  实测约 **4 s/块** → 全程约 **95 分钟**。所以这条命令必须后台跑，不要在前台等。
+- 跑完要看的正是**一直缺的那两行**：`超长音符上限 15s：强制收尾 N 个音符` 与 `[自检] 音符 … 中位数 … >2s 占 … 最长 …`。
+  N 大 → 上限在干活、模型仍拖长；N=0 → 12.5 s 尖峰另有来源。
+- 拿到 token 流后，第 20–50 分钟偏长的问题可以**离线反复复现**（① 的回放台，约 1 分钟一次），
+  不用再重跑 95 分钟。这就是 ① 存在的意义。
+
+**还没做**：② 提速梯队 1（bf16 / 惰性 conditions / SDPA，要重打上游 wheel）· ③ 断点续跑 ·
+④ 批 C（Aria-AMT / Transkun 先查 CLI）· ⑤ 提速梯队 2。批 A、批 B 已完成并部署验证。
 - [ ] 行为改动有**断言测试**（不靠肉眼看）
 - [ ] 部署后**在安装版上**重跑同一套测试
 - [ ] 界面改动：部署 + 启动 + CDP 断言 DOM 非空 + 截图看一眼
