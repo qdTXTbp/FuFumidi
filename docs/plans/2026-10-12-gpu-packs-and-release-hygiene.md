@@ -154,6 +154,52 @@ const KIND_LABEL= { cuda: 'CUDA', directml: 'DirectML', rocm: 'ROCm' };
 
 ---
 
+## 2.6 ★ 速度的唯一出路就在这里（2026-10-13 结论）
+
+**② 提速梯队 1 已结项：纯软件优化没有余量。**
+
+| 手段 | 实测 |
+|---|---|
+| 惰性 conditions | 全量 0.01s，不在关键路径 → 不做 |
+| SDPA | 上游 `transformer.py:103,106` 已经在用 → 无可换 |
+| bf16 | **CPU 0%（568.8→569.5s）、GPU 0.6%（119.6→118.9s）** → 不是提速档 |
+
+**实测的加速只有一条：GPU ≈ 7 倍**（边际 0.847 s/块 vs CPU 6.14 s/块；
+1447 块 148 分钟 → 约 21 分钟）。而它**卡在分发上**，不在代码上。
+
+### G2 的两条候选路径（执行前先选一条）
+
+**路径 A：用 app 自己的机制装现成的 `gpu-v2` 包（推荐先试）**
+
+- 现成资产：`fufumidi-gpu-cuda.zip.001` + `.002`（合计约 3.0 GB）
+- 内容：`torch==2.9.1+cu128` + `torchaudio==2.9.1+cu128` + `onnxruntime-gpu==1.20.2`
+- **cu128 的 arch_list 含 sm_120**（`engine_gpu.py:88` 注释：实测 sm_70/75/80/86/90/100/120），
+  所以本机 RTX 5070 Ti（sm_120）**应当**能吃下 —— 但**必须由安装后自检确认**，不要靠推断
+- 走 `fast-download`（测速/分段/并发/续传），比手工 curl 可靠
+- **验证判据**：装完后 `engine_gpu.detect()` 的 `cuda_usable == True`、
+  且自检的算力校验通过；然后重跑 90 秒素材，对比 CPU 的 30.5s
+
+**路径 B：重新构建包并把 CUDA 提到 cu130 / torch 2.13.0（与内置版本一致）**
+
+- 需要 `build-gpu-package.js` 改 `requirements-gpu-cuda.txt`，再重新上传替换 `gpu-v2` 资产
+- 上传要用 token（`C:\Users\qdTXTbp\Desktop\work\git\token令牌\新建 文本文档.txt`，已验证可用）
+- **代价**：要重新下载约 3 GB 的 wheel 再上传约 3 GB。而 `download.pytorch.org` 实测只有
+  **313 KB/s**（SJTU 镜像 7.5 MB/s，差 24 倍）—— 构建时必须换镜像，否则光下载就 2.7 小时
+- 收益：版本与内置一致，少一层版本漂移；但**功能上路径 A 已经够用**
+
+### 已实测可用的 CUDA 组合（仅供路径 B 参考）
+
+```
+torch 2.13.0+cu130  ·  cuda True  ·  RTX 5070 Ti Laptop  ·  cap (12,0)
+archs: ['sm_75','sm_80','sm_86','sm_90','sm_100','sm_120']
+来源: https://mirror.sjtu.edu.cn/pytorch-wheels/cu130/torch-2.13.0%2Bcu130-cp311-cp311-win_amd64.whl
+```
+
+坑：**pip 要求标准 wheel 文件名**，改名成 `torch-cu130.whl` 会被拒（`invalid wheel filename`）。
+目录页不可浏览（返回 0 字节），但**直接 curl 具体文件可用**。
+
+---
+
 ## 3. 决策点：Intel 要不要单独一个 XPU 包？
 
 用户说「还要有英特尔和 amd 显卡的加速包」。**AMD 有两个**（directml / rocm），
