@@ -1622,6 +1622,8 @@ export const I18N_MAP = {
   '自定义': 'Custom',
   '低音增强': 'Bass boost',
   '节拍网格检测': 'Beat grid',
+  '（未经实机验证）': ' (not hardware-verified)',
+  'Intel XPU 面向 Intel Arc 独显 / 部分核显（torch+xpu）。本包尚未在 Intel 显卡实机上验证过：安装后会自动在显卡上跑一次矩阵乘并与 CPU 结果对拍，通不过就判为不可用并自动改用 CPU，不会让转录中途出错。': 'Intel XPU targets Intel Arc discrete GPUs and some integrated GPUs (torch+xpu). This pack has not been verified on real Intel hardware: after install it runs a matrix multiply on the GPU and compares it against the CPU result; if that fails it is marked unusable and falls back to CPU, so transcription never breaks midway.',
   '阈值 · 踏板 · 模型选项': 'thresholds · pedal · model options',
   '导出速度': 'Export tempo',
   '默认 120 BPM': 'default 120',

@@ -50,7 +50,8 @@ def transcribe_aria(audio_path, output_midi, params=None, log_cb=None,
             device = _torch_device()
         except Exception:
             device = "cpu"
-    if not device.startswith("cuda"):
+    # xpu（Intel）与 cuda 一样是真正的加速设备，只有其它情况才降回 cpu。
+    if not (device.startswith("cuda") or device.startswith("xpu")):
         device = "cpu"
     variant = str(params.get("variant") or "medium-double")
     model_dir = _resolve_model_dir()

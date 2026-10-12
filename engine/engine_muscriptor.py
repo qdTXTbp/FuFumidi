@@ -137,7 +137,9 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             from engine_gpu import detect as _gpu_detect
             _d = _torch_device()
             _g = _gpu_detect() or {}
-            if _d in ("cuda", "mps"):
+            # xpu：Intel 专供包（torch+xpu）。muscriptor 把 device 原样交给 torch，
+            # torch.device("xpu") 在 xpu 构建里是合法的。
+            if _d in ("cuda", "mps", "xpu"):
                 dev = _d
             elif _g.get("cuda") and _g.get("arch_supported") is False:
                 # ★ issue #20：显卡在、但算力不在 CUDA 包的支持范围（GTX 10 系及更早）。

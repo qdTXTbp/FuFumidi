@@ -396,11 +396,66 @@ function registerGpuIpc({
     { torch: null, pypi: null, label: '官方' },
   ];
 
+  // Intel XPU 的安装后自检 —— 单独一条，因为**它没有 CUDA 那样的 sm 算力模型可比**。
+  //
+  // 用户要求「安装后自检必须给 XPU 走一遍算力校验」。CUDA 那边是拿
+  // get_device_capability() 去比 torch.cuda.get_arch_list()（issue #20 的护栏）；
+  // XPU 没有等价物，所以改用**更强**的办法：真的在设备上跑一次矩阵乘，
+  // 再和 CPU 上的同一运算对拍。
+  //
+  // 这恰好直接命中 issue #20 那个失败模式 —— 「驱动认卡、is_available() 为真，
+  // 但轮子里没有这颗卡的 kernel」：那种情况下这个 matmul 会当场抛错，
+  // 于是在**安装时**就暴露，而不是等用户转录到一半才异步炸出来。
+  async function verifyXpuBackend() {
+    const code = [
+      "import json",
+      "try:",
+      "    import torch",
+      "    ok = bool(hasattr(torch, 'xpu') and torch.xpu.is_available())",
+      "    if not ok:",
+      "        print('###BACKEND ' + json.dumps({'ok': False, 'error': 'backend unavailable'})); raise SystemExit",
+      "    info = {'ok': True, 'torch': torch.__version__, 'xpu': getattr(torch.version, 'xpu', None)}",
+      "    try: info['name'] = torch.xpu.get_device_name(0)",
+      "    except Exception: info['name'] = 'Intel XPU'",
+      "    try: info['device_count'] = torch.xpu.device_count()",
+      "    except Exception: info['device_count'] = None",
+      "    # ★ 算力校验：真跑一次，再和 CPU 对拍",
+      "    try:",
+      "        torch.manual_seed(0)",
+      "        a = torch.randn(256, 256)",
+      "        b = torch.randn(256, 256)",
+      "        ref = a @ b",
+      "        got = (a.to('xpu') @ b.to('xpu')).to('cpu')",
+      "        torch.xpu.synchronize()",
+      "        diff = float((got - ref).abs().max())",
+      "        info['compute_max_diff'] = diff",
+      "        info['compute_ok'] = bool(diff < 1e-2)",
+      "        if not info['compute_ok']:",
+      "            info['ok'] = False",
+      "            info['arch_unsupported'] = True",
+      "            info['error'] = 'XPU 能跑但结果与 CPU 不一致，这颗卡的 kernel 可能不匹配'",
+      "    except Exception as e:",
+      "        info['ok'] = False",
+      "        info['compute_ok'] = False",
+      "        info['arch_unsupported'] = True",
+      "        info['error'] = 'XPU 上跑不动矩阵乘（这颗卡的 kernel 多半不在当前 XPU 包里）：' + str(e)[:200]",
+      "    print('###BACKEND ' + json.dumps(info))",
+      "except Exception as e:",
+      "    print('###BACKEND ' + json.dumps({'ok': False, 'error': str(e)}))",
+    ].join(String.fromCharCode(10));
+    const r = await runEngineInline(code);
+    const m = (r.out || '').match(/###BACKEND\s+(\{.*\})/);
+    if (m) { try { return JSON.parse(m[1]); } catch (e) {} }
+    return { ok: false, error: String((r.out || r.error || '验证输出解析失败')).slice(-300) };
+  }
+
   // 增强包安装后的可用性自检：确保 torch 真的认到对应后端
   //   cuda → torch.cuda.is_available()（Blackwell 需 cu128）
   //   rocm → torch.version.hip 非空
   async function verifyTorchBackend(kind) {
     const isCuda = kind === 'cuda';
+    // XPU 的自检逻辑与 CUDA/ROCm 差别大（没有 sm 算力模型，改用真算一遍对拍），单独一条。
+    if (kind === 'xpu') return verifyXpuBackend();
     const code = [
       "import json",
       "try:",

@@ -4,8 +4,12 @@
 //
 // 三种增强包（kind）：
 //   cuda     —— NVIDIA（torch cu128 + onnxruntime-gpu）
-//   directml —— AMD / Intel（torch-directml + onnxruntime-directml）
+//   directml —— AMD / Intel（torch-directml + onnxruntime-directml）；不装专用包也能用的保底路径
 //   rocm     —— AMD 较新 Radeon（ROCm 7.2；**只提供 cp312 轮子，必须配 Python 3.12 运行时**）
+//   xpu      —— Intel 独显 / 核显（torch+xpu，Intel oneAPI）
+//               ★ 与 cuda **互斥**（xpu 版 torch 不带 CUDA，两个包不能同时挂）；
+//               ★ 本仓库目前**没有 Intel 显卡实机验证过**，自检会照常比算力，
+//                 但界面应标注「未经实机验证」，别让用户以为一定可用。
 //
 // ★ Python 版本约束：增强包是按某个 CPython 次版本编译的（site-packages 里的
 //   *.pyd 带 ABI tag）。内置运行时是 3.11，而 ROCm 只有 cp312，
@@ -17,10 +21,10 @@ const path = require('path');
 const fs = require('fs');
 const Paths = require('./paths');
 
-const GPU_KINDS = ['cuda', 'directml', 'rocm'];
+const GPU_KINDS = ['cuda', 'directml', 'rocm', 'xpu'];
 /** 每种增强包所要求的 CPython 次版本（决定用哪个解释器跑引擎） */
-const KIND_PY = { cuda: '3.11', directml: '3.11', rocm: '3.12' };
-const KIND_LABEL = { cuda: 'CUDA', directml: 'DirectML', rocm: 'ROCm' };
+const KIND_PY = { cuda: '3.11', directml: '3.11', rocm: '3.12', xpu: '3.11' };
+const KIND_LABEL = { cuda: 'CUDA', directml: 'DirectML', rocm: 'ROCm', xpu: 'Intel XPU' };
 
 /** 是否是已知的增强包类型 */
 function isGpuKind(kind) {
@@ -72,6 +76,9 @@ function inferGpuKind(nameOrUrl) {
   if (t.indexOf('directml') >= 0 || t.indexOf('dml') >= 0) return 'directml';
   // rocm / hip：ROCm on Windows 的 torch 里 torch.version.hip 有值、version.cuda 为空
   if (t.indexOf('rocm') >= 0 || t.indexOf('rocmsdk') >= 0 || t.indexOf('-hip') >= 0) return 'rocm';
+  // Intel XPU（torch+xpu）放在最后判：文件名里可能同时出现 xpu 与 dml，
+  // 但 'xpu' 是更具体的专用包，优先认它。
+  if (t.indexOf('xpu') >= 0 || t.indexOf('oneapi') >= 0) return 'xpu';
   return null;
 }
 function writeGpuManifest(kind, meta) {

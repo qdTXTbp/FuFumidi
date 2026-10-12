@@ -172,7 +172,7 @@ def _probe():
            "vendor": None, "recommended_backend": "cpu",
            "cuda": False, "mps": False, "directml": False, "onnx_gpu": False,
            "onnx_provider": "CPUExecutionProvider",
-           "rocm": False, "hip_version": None}
+           "rocm": False, "hip_version": None, "xpu": False}
     disabled = os.environ.get("FUFUMIDI_DISABLE_GPU") == "1"
     if disabled:
         gpu["disabled"] = True
@@ -250,6 +250,23 @@ def _probe():
                     gpu["blackwell"] = False
                     gpu["need_cu128"] = False
         else:
+            # ---- Intel XPU（torch+xpu / oneAPI，Intel Arc 独显与部分核显）----
+            # xpu 版 torch 与 CUDA 版是**互斥**的两个构建（xpu 构建不带 CUDA），
+            # 所以走到这个 else 里才需要看它。torch.xpu 只有 xpu 构建才有这个属性，
+            # 用 hasattr 兜住普通构建，避免 AttributeError。
+            try:
+                if hasattr(torch, "xpu") and torch.xpu.is_available():
+                    gpu["available"] = True
+                    gpu["backend"] = "xpu"
+                    gpu["device"] = "xpu"
+                    gpu["xpu"] = True
+                    gpu["vendor"] = "intel"
+                    try:
+                        gpu["name"] = torch.xpu.get_device_name(0)
+                    except Exception:
+                        gpu["name"] = "Intel XPU"
+            except Exception:
+                pass
             try:
                 if torch.backends.mps.is_available():
                     gpu["available"] = True
@@ -261,6 +278,8 @@ def _probe():
                 pass
     except Exception:
         pass
+    if gpu.get("xpu"):
+        gpu["recommended_backend"] = "xpu"
     # ---- torch-directml：AMD / Intel 显卡用 DirectML 跑 torch 模型 ----
     try:
         import torch_directml  # noqa: F401
@@ -332,7 +351,7 @@ def detect():
                       "name": None, "vendor": None, "recommended_backend": "cpu",
                       "cuda": False, "mps": False, "directml": False,
                       "onnx_gpu": False, "onnx_provider": "CPUExecutionProvider",
-                      "rocm": False, "hip_version": None}
+                      "rocm": False, "hip_version": None, "xpu": False}
     return _cache
 
 

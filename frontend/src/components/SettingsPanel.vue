@@ -419,7 +419,7 @@ async function clearUserData() {
 
 /* ---------------- GPU 加速 ---------------- */
 // 三种增强包：cuda（NVIDIA）/ directml（AMD·Intel）/ rocm（AMD 较新 Radeon，需 Python 3.12）
-const GPU_KIND_LABEL = { cuda: 'CUDA', directml: 'DirectML', rocm: 'ROCm' };
+const GPU_KIND_LABEL = { cuda: 'CUDA', directml: 'DirectML', rocm: 'ROCm', xpu: 'Intel XPU' };
 function gpuKindLabel(k) { return GPU_KIND_LABEL[k] || String(k || '').toUpperCase(); }
 const gpu = reactive({
   detect: null,        // {vendor,name,blackwell,needCu128,available,backend}
@@ -1081,12 +1081,13 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
             <div v-if="gpu.packages.length" style="margin-top:12px;border-top:1px solid var(--hairline);padding-top:12px">
               <div style="font-size:12px;color:var(--text-soft);margin-bottom:6px">{{ t('预打包增强包（自动安装失败时备用）') }}</div>
               <div v-for="p in gpu.packages" :key="p.kind + '|' + p.name" style="display:flex;align-items:center;gap:8px;margin:6px 0">
-                <span style="flex:1;font-size:13px">{{ gpuKindLabel(p.kind) + (p.split ? t('（分卷）') : '') + (p.requiresPython === '3.12' ? t('（需 Python 3.12 运行时）') : '') }}</span>
+                <span style="flex:1;font-size:13px">{{ gpuKindLabel(p.kind) + (p.split ? t('（分卷）') : '') + (p.requiresPython === '3.12' ? t('（需 Python 3.12 运行时）') : '') + (p.kind === 'xpu' ? t('（未经实机验证）') : '') }}</span>
                 <span style="font-size:12px;color:var(--text-soft)">{{ p.sizeText }}</span>
                 <button class="btn sm" @click="gpuDownloadRemote(p)" :disabled="gpu.busy || app.gpuInstall.active || !!gpuPkgBlockedReason(p)" :title="gpuPkgBlockedReason(p)">{{ t('下载并安装') }}</button>
               </div>
               <div style="font-size:12px;color:var(--text-soft);margin-top:4px">{{ t('国内优先走 CNB 镜像，境外走 GitHub。') }}</div>
               <div style="font-size:12px;color:var(--text-soft);margin-top:2px">{{ t('ROCm 仅适用于较新 Radeon（RX 7000/9000 等），且需 Adrenalin 26.1.1+ 驱动。') }}</div>
+              <div style="font-size:12px;color:var(--text-soft);margin-top:2px">{{ t('Intel XPU 面向 Intel Arc 独显 / 部分核显（torch+xpu）。本包尚未在 Intel 显卡实机上验证过：安装后会自动在显卡上跑一次矩阵乘并与 CPU 结果对拍，通不过就判为不可用并自动改用 CPU，不会让转录中途出错。') }}</div>
             </div>
             <div class="gpu-extra">
               <button class="btn sm" @click="gpuImportLocal" :disabled="gpu.busy || app.gpuInstall.active">{{ t('本地导入 ZIP') }}</button>
