@@ -45,9 +45,11 @@ def _require_package():
     except Exception:
         raise RuntimeError(
             "未安装 muscriptor Python 运行时包（应用环境的 Python 里 `import muscriptor` 失败）。"
-            "模型权重虽已下载，但仍需安装该包：请在应用使用的 Python 中执行 "
-            "`python -m pip install muscriptor`（PyPI 0.3.0，含 torch/einops/safetensors 等依赖），"
-            "或在资源中心安装 MuScriptor 运行时。")
+            "模型权重虽已下载，但仍需安装该包：在资源中心点「安装 MuScriptor 运行时」即可。\n"
+            "★ 不要直接 `pip install muscriptor` —— PyPI 上的 0.3.0 有长音频缺陷："
+            "块边界的 tie 逻辑会让模型漏收尾的音符被无限延续，实测 100 分钟录播会产出"
+            "4320 秒（全曲 72%）的超长音符。修复版托管在 "
+            "github.com/monologue82/Models 的 muscriptor-runtime/（0.3.0+fufumidi.1）。")
 
 
 def available_local_sizes():

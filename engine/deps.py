@@ -83,6 +83,24 @@ GIT_NO_DEPS = {"amt"}
 # zip 兜底时仓库默认分支名不统一（main / master），两个都试
 ARCHIVE_REFS = ["main", "master"]
 
+# ★ MuScriptor 必须装「修复版」——不能从 PyPI 按包名装。
+#   上游 0.3.0 的 OpenNoteTracker 在长音频上会产出「僵尸音符」：块边界只关闭不在
+#   tie 段里的音，而 prelude_forcing 把 tie 段构造成「当前还开着的音」，于是块边界
+#   永远关不掉任何音符，模型漏一次收尾就被无限延续 —— 实测 100 分钟交响录播出现
+#   4320 秒（全曲 72%）的音符。修复版 wheel 托管在 monologue82/Models
+#   （见该仓库 muscriptor-runtime/README.md），PyPI 上仍是未修复的 0.3.0。
+#   注意 %2B = 文件名里的 + （PEP 440 本地版本号），别写成裸 +。
+MUSCRIPTOR_WHEEL_PATH = ("monologue82/Models/main/muscriptor-runtime/"
+                         "muscriptor-0.3.0%2Bfufumidi.1-py3-none-any.whl")
+MUSCRIPTOR_SHA256 = "11828351ae24f22024f7a16f5f093a4192f3826165f459a4fcc134ac7224bae6"
+# raw 文件的 GitHub 加速前缀（与 main/models.js 的 RAW 镜像同源）
+RAW_MIRROR_PREFIXES = [
+    "https://gh.jasonzeng.dev/https://raw.githubusercontent.com/",
+    "https://ghfast.top/https://raw.githubusercontent.com/",
+    "https://gh-proxy.com/https://raw.githubusercontent.com/",
+    "https://raw.githubusercontent.com/",
+]
+
 
 def _aria_specs(pkg):
     """aria 组两个 GitHub 包的候选安装目标。
@@ -226,6 +244,24 @@ def install(group=None):
                     _emit({"ok": False, "error": last_err or "安装失败（GitHub 各镜像与官方源均不可达）", "group": g})
                     return 1
             _emit({"ok": True, "installed": missing, "group": g})
+            continue
+        # muscriptor：装我们托管的修复版 wheel（PyPI 上是未修复的 0.3.0）
+        if g == "muscriptor" and missing:
+            ok = False
+            for pre in RAW_MIRROR_PREFIXES:
+                cmd = list(PIP_BASE)
+                if MIRRORS and MIRRORS[0]:
+                    cmd += ["-i", MIRRORS[0]]
+                cmd.append(pre + MUSCRIPTOR_WHEEL_PATH)
+                ok, last_err = _pip_run(cmd)
+                if ok:
+                    break
+            if ok:
+                _emit({"ok": True, "installed": ["muscriptor 0.3.0+fufumidi.1（修复版）"], "group": g})
+            else:
+                _emit({"ok": False, "group": g,
+                       "error": last_err or "下载修复版 muscriptor 失败（GitHub 各镜像均不可达）"})
+                return 1
             continue
         # 常规 pip 安装 + 镜像回退
         installed = False
