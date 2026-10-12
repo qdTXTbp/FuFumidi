@@ -1355,11 +1355,11 @@ onBeforeUnmount(() => {
             <label>
               <span>
                 <b>{{ t('计算精度') }}</b>
-                <small>{{ t('纯 CPU 提速档：bf16 比 fp32 快约 43%（实测），输出与 fp32 逐项一致；但在显卡上几乎无收益。默认 fp32 最稳') }}</small>
+                <small>{{ t('实测在 10 分钟 / 120 块的长素材上，bf16 与 fp32 耗时相同（CPU 569s vs 569s、显卡 119s vs 119s），输出逐项一致。所以它不是一个提速档 —— 保留仅为降低显存/内存占用。默认 fp32') }}</small>
               </span>
               <select v-model="msPrec">
                 <option value="fp32">{{ t('fp32（默认，最稳）') }}</option>
-                <option value="bf16">{{ t('bf16（纯 CPU 快约 43%）') }}</option>
+                <option value="bf16">{{ t('bf16（省显存，实测不更快）') }}</option>
                 <option value="fp16">{{ t('fp16（更激进，未验证）') }}</option>
               </select>
             </label>
