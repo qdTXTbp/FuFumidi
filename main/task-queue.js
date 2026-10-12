@@ -5,7 +5,7 @@
 const SepCommon = require('./separate-common');
 const Paths = require('./paths');
 
-function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, pluginHost, readSettings, resolveSeparateModel }) {
+function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, cancelEngineJob, pluginHost, readSettings, resolveSeparateModel }) {
   const convertChildren = new Map();  // jobId -> 子进程句柄（转录/修正取消用）
 
   // 转录
@@ -160,6 +160,11 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
   ipcMain.handle('engine:cancel', (_e, id) => {
     const c = convertChildren.get(id);
     if (c) { try { c.kill(); } catch {} convertChildren.delete(id); return { ok: true }; }
+    // ★ worker 路径（engine.js 常驻 worker）记的是另一本账，必须也问一次 ——
+    //   否则前端点「取消转录」永远拿到 { ok: false }，正在跑的转录照旧跑完。
+    if (cancelEngineJob) {
+      try { if (cancelEngineJob(id)) return { ok: true }; } catch (e) {}
+    }
     return { ok: false };
   });
 }

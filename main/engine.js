@@ -14,6 +14,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
   const _workerIdle = new Map();   // slot -> 回收定时器
   let _engineWorkerSeq = 0;
   const _engineWorkerPending = new Map();  // 请求 id -> { resolve, reject, win, logId, child }
+  const _sessions = new Set();             // 常驻引擎会话（cancelJob 需要逐个问）
   const WORKER_IDLE_MS = 120000;   // 并行 worker 空闲 2 分钟后退出，释放模型内存
 
   function reapWorker(slot) {
@@ -313,6 +314,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
     }
 
     function kill() {
+      _sessions.delete(handle);
       for (const [, p] of pending) { clearTimeout(p.timer); p.reject(new Error('session killed')); }
       pending.clear();
       const c = child;
@@ -324,12 +326,46 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       }
     }
 
-    return { request, kill };
+    /** 中止该会话里某个在途请求（返回是否命中）。 */
+    function cancel(id) {
+      const p = pending.get(id);
+      if (!p) return false;
+      clearTimeout(p.timer);
+      pending.delete(id);
+      try { p.reject(new Error('canceled')); } catch (e) {}
+      return true;
+    }
+
+    const handle = { request, kill, cancel };
+    _sessions.add(handle);
+    return handle;
+  }
+
+  /**
+   * 取消一个在跑的任务（worker 路径 + 常驻会话路径）。
+   *
+   * ★ 为什么必须在这里做：转录走的是 worker 路径（_engineWorkerPending 记账），
+   *   而 engine:cancel 原来只查 task-queue 的 convertChildren（spawn 路径）——
+   *   两条路径各记各的账，于是「取消转录」对 worker 路径永远返回 { ok: false }，
+   *   前端点了没反应、正在跑的转录照旧跑完。
+   */
+  function cancelJob(id) {
+    let hit = false;
+    const p = _engineWorkerPending.get(id);
+    if (p) {
+      _engineWorkerPending.delete(id);
+      try { p.reject(new Error('canceled')); } catch (e) {}
+      try { if (p.child && !p.child.killed && p.child.exitCode === null) p.child.kill(); } catch (e) {}
+      hit = true;
+    }
+    for (const s of _sessions) { try { if (s.cancel(id)) hit = true; } catch (e) {} }
+    return hit;
   }
 
   return {
     spawnEngine,
     stopEngineWorker,
+    cancelJob,
     engineWorkerConvert,
     runEngineInline,
     createEngineSession,

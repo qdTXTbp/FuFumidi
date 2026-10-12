@@ -126,7 +126,7 @@ if (!gotLock) {
     registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, readSettings });
     registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, spawnEngine });
     registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net });
-    registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, pluginHost, readSettings, resolveSeparateModel: (id) => (ModelsService ? ModelsService.resolveSeparateModel(id) : null) });
+    registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, cancelEngineJob: (...a) => cancelJob(...a), pluginHost, readSettings, resolveSeparateModel: (id) => (ModelsService ? ModelsService.resolveSeparateModel(id) : null) });
     registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, parsePyJson });
     registerPresetsIpc({ ipcMain, runEngineInline, parsePyJson, pyLit });
     registerDialogsIpc({ ipcMain, dialog, path, fs, app, spawnEngine });
@@ -554,7 +554,7 @@ function engineEnv(extra) {
 
 // ---------- 引擎服务（main/engine.js） ----------
 const EngineService = createEngineService({ resolvePython, engineDir, engineEnv });
-const { spawnEngine, stopEngineWorker, runEngineInline, engineWorkerConvert, killAll } = EngineService;
+const { spawnEngine, stopEngineWorker, runEngineInline, engineWorkerConvert, cancelJob, killAll } = EngineService;
 
 // ---------- 插件服务（main/plugins.js） ----------
 const PluginService = createPluginService({ app, path, fs, shell, ipcMain, BrowserWindow, readSettings, writeSettings, spawnEngine });
