@@ -75,9 +75,25 @@ def test_verdicts_ok_for_healthy_cpu_only_machine():
     assert any("没有检测到独立显卡" in x[2] for x in v)
 
 
+def test_collect_returns_dict_verdicts_not_tuples():
+    """★ 前端吃的是 JSON：元组会被序列化成数组，界面就只剩图标没有文字。
+
+    这条断言锁的是「verdicts 的每一项必须是 dict」。
+    """
+    import json
+    rep = health.collect()
+    assert rep["verdicts"], "体检至少要给出一条结论"
+    for v in rep["verdicts"]:
+        assert isinstance(v, dict), "verdicts 项必须是 dict，不能是元组"
+        assert set(v) >= {"level", "group", "msg"}
+    # 整份报告必须能 JSON 往返（前端就是从 JSON 拿的）
+    back = json.loads(json.dumps(rep, ensure_ascii=False, default=str))
+    assert back["verdicts"][0]["msg"]
+
+
 def test_render_text_is_plain_and_contains_sections():
     rep = {"time": "2026-01-01 00:00:00", "app_version": "9.9.9",
-           "verdicts": [("ok", "显卡", "一切正常")],
+           "verdicts": [{"level": "ok", "group": "显卡", "msg": "一切正常"}],
            "system": {"os": "Windows", "arch": "AMD64", "cpu": "X", "cpu_count": 8, "disks": {}},
            "gpu": {}, "compute_check": {}, "runtime": {"python": "3.11", "deps": {}},
            "models": {"items": {}}, "recent_errors": []}

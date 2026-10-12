@@ -30,6 +30,29 @@ export interface ConvertRequest {
   auto_bpm?: boolean;
 }
 
+/** 体检里的一条结论（level 决定图标与配色） */
+export interface DiagVerdict { level: 'ok' | 'warn' | 'error' | 'info'; group: string; msg: string }
+/** 全局体检报告 */
+export interface DiagHealthReport {
+  time: string;
+  app_version?: string;
+  verdicts: DiagVerdict[];
+  system: Record<string, unknown>;
+  gpu: Record<string, unknown>;
+  compute_check: Record<string, unknown>;
+  runtime: Record<string, unknown>;
+  models: Record<string, unknown>;
+  recent_errors: { file: string; line: string }[];
+  /** 已脱敏、可直接粘贴进 issue 的纯文本报告 */
+  report_text: string;
+}
+export interface DiagHealthResult {
+  ok: boolean;
+  report?: DiagHealthReport | null;
+  error?: string | null;
+  raw?: string;
+}
+
 export interface ConvertResult {
   ok: boolean;
   out?: string;
@@ -771,6 +794,8 @@ export interface FuBridge {
   modelList(): Promise<any[]>;
   depCheck(): Promise<GeneralResult>;
   diagExport(): Promise<GeneralResult>;
+  /** 全局体检：主动检查各子系统并下结论（含显卡算力实跑校验，约几秒） */
+  diagHealth(): Promise<DiagHealthResult>;
   exportScorePngZip(opts: any): Promise<GeneralResult>;
   listMidiFiles(dir: string): Promise<string[]>;
   readBinary(p: string): Promise<Uint8Array | null>;

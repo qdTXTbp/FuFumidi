@@ -37,6 +37,22 @@ function registerDiagnosticsIpc({ ipcMain, dialog, BrowserWindow, app, path, fs,
       });
     });
   });
+
+  // 全局体检：主动检查各子系统并**下结论**（不是打包现成文件）。
+  // 其中「算力校验」会真的在显卡上跑一次矩阵乘并与 CPU 对拍，所以要几秒 ——
+  // 这正是 AMD / Intel 用户最需要的一项：装了卡但 kernel 不匹配时，
+  // 只有真算一遍才暴露（issue #20），任何版本号都看不出来。
+  ipcMain.handle('diag:health', () => new Promise((resolve) => {
+    spawnEngine([], {
+      script: 'health.py',
+      onDone: (code, r) => {
+        const res = r.result || {};
+        resolve({ ok: code === 0 && res.ok !== false, report: res.report || null,
+                  error: res.error || null, raw: r.out || r.err });
+      },
+      onError: (e) => resolve({ ok: false, error: String(e) }),
+    });
+  }));
 }
 
 module.exports = { registerDiagnosticsIpc };

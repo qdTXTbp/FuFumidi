@@ -116,6 +116,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   modelList: () => ipcRenderer.invoke('model:list'),
   depCheck: () => ipcRenderer.invoke('dep:check'),
   diagExport: () => ipcRenderer.invoke('diag:export'),
+  diagHealth: () => ipcRenderer.invoke('diag:health'),
   exportScorePngZip: (opts) => ipcRenderer.invoke('score:exportPngZip', opts),
 
   updateCheck: (channel) => ipcRenderer.invoke('update:check', channel),
