@@ -36,6 +36,7 @@
 | `ac2b697` | 修好「取消转录」—— worker 路径与 spawn 路径各记各的账 |
 | `1485026` | `package.json` 的 `description` 乱码还原（快捷方式提示就是它） |
 | `bca0a55` | **移除批量推理功能**（实测纯损失） |
+| 本次 | **① 回放台**：`--dump-tokens` / `--replay-tokens` —— 解码器缺陷不再需要重跑模型（48 分钟 → 1 分钟）+ 8 条回归测试 |
 
 ### 已修好的两个用户可见 bug
 - **任务栏图标空白 + 悬停乱码**：开始菜单快捷方式指向 `F:\1\FuFumidi\FuFumidi.exe`（旧位置，不存在）→ Windows 按 AUMID 配对后用它取图标。已修两个 .lnk（备份 `E:\Midi\_attic\lnk-backup`）
@@ -76,7 +77,7 @@ N 大 → 上限在正常工作、模型仍在拖长（要按轨自适应上限�
 
 ## 5. 执行计划
 
-### [ ] ① 回放台（**前置，必须先做**）
+### [x] ① 回放台（**已完成**，提交见下）
 
 **为什么**：bug 在解码器不在模型。`OpenNoteTracker` 吃的是 token 流、纯 Python 无 torch。
 没有它，一次 A/B 要重转 100 分钟音频（约 48 分钟）；有它是**几秒**。
@@ -85,6 +86,19 @@ N 大 → 上限在正常工作、模型仍在拖长（要按轨自适应上限�
 - 引擎加 `--replay-tokens <file> --out x.mid`：直接跑 `decode_model_tokens` → MIDI，**不用模型/音频/GPU**
 - 落点：`engine/engine_muscriptor.py`（在 `_generate_token_stream` 的产出处包一层 tee）、`engine/music2midi.py`（argparse + params）
 - 配套：`scripts/deploy-installed.cjs` 加**部署后自动冒烟**（启动一次 → CDP 断言 `document.body.innerText.length > 0` + 无未捕获异常），白屏当场抓住
+**完成记录**
+
+- 落盘做法：包 `model._generate_token_stream` 的**实例方法**做 tee —— 照常调用 `transcribe()`，
+  不复制它内部构造 conditions / seek_times 的私有逻辑（复制过就会随上游静默走偏）。
+- 节拍网格随 token 流一起落盘（标量 + `beats` 数组）。两个坑：`asdict()` 会把 `np.ndarray` 带出来让 json 炸；
+  而丢掉 `beats`，`notes_to_midi()` 会现算一个不同的 `onset_delay`，回放出来就不是同一个文件了。回放时连节拍检测一起跳过。
+- 实测（15 秒样例 / small / CPU）：原始 `transcribe total 8.5s` → 回放 `0.0s`，两边 MIDI **SHA256 完全相同**
+  （`79BD3984…`，197 音符）。100 分钟音频因此从约 48 分钟降到约 1 分钟。
+- **过程中抓到一个真 bug**：块边界原先用 `%r` 落盘，末块的 `next_seek_time` 是 `None`，写成 `None`（不是合法 JSON）
+  → 读回时整行被当坏行丢掉 → 末块边界消失，回放比原始**多 1 个音符**（197→198）。改成 `json.dumps`，
+  并在 `test_roundtrip_is_lossless` 里显式钉住 `next_seek_time is None`。**这个 bug 单测抓不到，是端到端跑出来的。**
+- 回归测试：`engine/tests/test_muscriptor_token_replay.py`（8 条，不加载模型、不碰 torch）。
+- **①还剩一件没做**：`scripts/deploy-installed.cjs` 的部署后自动冒烟断言（白屏 / 未捕获异常）。
 
 ### [ ] ② 提速梯队 1（纯提速，零质量风险，默认开，五个模型共用）
 

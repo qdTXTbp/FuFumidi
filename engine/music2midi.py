@@ -175,6 +175,15 @@ def _resolve_params(args, mode):
     # 这里显式取出，命令行与 worker 两条路径才都能覆盖它。
     _mh = getattr(args, "max_note_hold", None)
     if _mh is not None: p["max_note_hold"] = float(_mh)
+    # ① 回放台（仅 muscriptor 用到，开发/诊断用，界面不暴露）：
+    #   --dump-tokens   真实转录时把 token 流顺手落盘（JSONL，几 MB）
+    #   --replay-tokens 从落盘流重跑解码器（不加载模型、不用 GPU）
+    # 为什么需要：僵尸音符那类缺陷出在解码器（tokenizer/notes.py 的 OpenNoteTracker），
+    # 修一次却要重跑 100 分钟音频（实测约 48 分钟）；走回放只要约 1 分钟。
+    _dt = getattr(args, "dump_tokens", None)
+    if _dt: p["dump_tokens"] = str(_dt)
+    _rt = getattr(args, "replay_tokens", None)
+    if _rt: p["replay_tokens"] = str(_rt)
     return p, mode
 
 
@@ -433,6 +442,11 @@ def build_parser():
                    help="[muscriptor] 乐器组硬约束：逗号分隔的组名（voice / acoustic_piano /"
                         " clean_electric_guitar / synth_lead / flutes / organ / drums …，"
                         "见 muscriptor list-instruments）。不传=不限定，模型自由判定")
+    # ① 回放台（诊断/开发用，界面不暴露）——见 engine_muscriptor.py 顶部说明
+    g.add_argument("--dump-tokens", dest="dump_tokens", default=None, metavar="FILE",
+                   help="[诊断] 把 MuScriptor token 流落盘（JSONL）")
+    g.add_argument("--replay-tokens", dest="replay_tokens", default=None, metavar="FILE",
+                   help="[诊断] 从落盘的 token 流重跑解码器（不加载模型/不用 GPU，约 1 分钟）")
     g.add_argument("--max-note-hold", dest="max_note_hold", type=float, default=None,
                    help="[muscriptor] 超长音符上限（秒，默认 15，0=关闭）：超过就强制收尾，"
                         "治长音频转录的僵尸音符（实测 100 分钟录播里出现 4320 秒的音）")

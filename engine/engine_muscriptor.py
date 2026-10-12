@@ -275,7 +275,9 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         # modelsDir，torch.hub 读到同名缓存即复用，离线可用）；未下载或加载失败时自动跳过，
         # 回退为「无节拍网格」的旧调用，绝不阻断转录。
         beat_grid = None
-        beat_enabled = bool(params.get("beat_grid", False))
+        # 回放时不用音频：节拍网格直接用落盘的那份（见 _read_token_dump），
+        # 省掉整首歌的 Beat This! 检测 —— 100 分钟音频那一步本身就要好几分钟。
+        beat_enabled = bool(params.get("beat_grid", False)) and not params.get("replay_tokens")
         if beat_enabled:
             _mdir = os.environ.get("FUFUMIDI_MODELS_DIR", "") or ""
             _ckpt = os.path.join(_mdir, "hub", "checkpoints", "beat_this-final0.ckpt") if _mdir else ""
@@ -326,9 +328,34 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         data = None
         # ★ CUDA 运行期错误只重试一次 CPU（issue #20 的兜底：算力/驱动问题不该让整次转录失败）
         cuda_fallback_done = False
+        # ① 回放台：--dump-tokens 落盘 / --replay-tokens 回放（见本文件上方 _install_token_dump）
+        #    回放不跑模型、不用 GPU，只把 token 流重新过一遍解码器 —— 改解码器逻辑时用它验证。
+        _dump_to = str(params.get("dump_tokens") or "")
+        _replay_from = str(params.get("replay_tokens") or "")
+        _dump_fh = None
+        if _replay_from:
+            if not os.path.isfile(_replay_from):
+                raise RuntimeError("找不到 token 流文件：%s" % _replay_from)
+            _g_grid = _read_token_dump(_replay_from)[1]
+            if _g_grid is not None:
+                beat_grid = _g_grid
+                _log(log_cb, "回放：沿用落盘时的节拍网格，跳过节拍检测")
+            _log(log_cb, "回放 token 流（不跑模型、不用 GPU）：%s" % os.path.basename(_replay_from))
         while data is None:
             try:
-                events = model.transcribe(wav_tmp, instruments=constrain)
+                if _replay_from:
+                    # 解码器只吃 token 流，回放不需要音频/模型/GPU
+                    from muscriptor.events import decode_model_tokens as _decode
+                    _stream, _ = _read_token_dump(_replay_from)
+                    events = _decode(_stream, model._tokenizer._vocab,
+                                     model._instrument_for_program,
+                                     frame_rate=model._tokenizer.frame_rate)
+                else:
+                    if _dump_to and _dump_fh is None:
+                        _dump_fh = _install_token_dump(model, _dump_to, beat_grid)
+                        _log(log_cb, "token 流落盘：%s（可用 --replay-tokens 复现解码器缺陷）"
+                                      % os.path.basename(_dump_to))
+                    events = model.transcribe(wav_tmp, instruments=constrain)
                 data = model.events_to_midi_bytes(_events_capped(events), beat_grid=beat_grid)
                 if _cap > 0:
                     _log(log_cb, "超长音符上限 %.0fs：强制收尾 %d 个音符"
@@ -409,6 +436,107 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     except Exception:
         pass
     return n
+
+
+# ============================================================
+# ① 回放台：token 流落盘 / 回放（长音频解码器实验的加速器）
+# ============================================================
+#
+# 为什么需要：僵尸音符那类缺陷在**解码器**（OpenNoteTracker），不在模型。
+# 但复现它必须先把 100 分钟音频跑一遍模型 —— 实测 1206 个 5 秒块串行约 48 分钟。
+# 而解码器吃的是 token 流（一串 int + ChunkBoundary），纯 Python、不需要 torch。
+# 所以：真实转录时把 token 流顺手落盘（几 MB），之后改解码器逻辑都用回放验证 ——
+# 省掉模型生成，48 分钟 → 约 1 分钟。
+#
+# 落盘格式 JSONL，每行一个对象：
+#   {"g": {...BeatGrid 字段...}}   首行，节拍网格（回放时直接用，省掉检测）
+#   {"b": [seek_time, next_seek_time]}   ChunkBoundary
+#   {"t": <token 索引>}               模型 token
+
+
+def _install_token_dump(model, path, beat_grid=None):
+    """把 model._generate_token_stream 的输出 tee 到文件。
+
+    做法是在**实例上**包一层，然后照常调用 model.transcribe() —— 不去复制
+    transcribe() 内部构造 conditions / seek_times 的那几十行私有逻辑（那种复制
+    一旦上游改了就会静默走偏）。
+    """
+    import json as _json
+    fh = open(path, "w", encoding="utf-8")
+    # 只落盘标量字段 + beats 数组：asdict() 会把 np.ndarray 原样带出来，json 序列化会炸。
+    # beats 必须留 —— notes_to_midi() 在 onset_delay 为 None 时会用 beats 现算，丢了它回放
+    # 出来的 MIDI 会和原始那次不一样（拍位偏移）。
+    _g = None
+    if beat_grid is not None:
+        try:
+            _b = getattr(beat_grid, "beats", None)
+            _g = {
+                "bpm": float(beat_grid.bpm),
+                "beats_per_bar": beat_grid.beats_per_bar,
+                "first_downbeat": float(beat_grid.first_downbeat),
+                "onset_delay": beat_grid.onset_delay,
+                "beats": (None if _b is None else [float(x) for x in _b]),
+            }
+        except Exception:
+            _g = None
+    fh.write(_json.dumps({"g": _g}, ensure_ascii=False) + "\n")
+    orig = model._generate_token_stream
+
+    def teed(*a, **kw):
+        from muscriptor.events import ChunkBoundary as _CB, ProgressEvent as _PE
+        for item in orig(*a, **kw):
+            if isinstance(item, _CB):
+                # 必须用 json.dumps：最后一个块的 next_seek_time 是 None，
+                # %r 会写成 JSON 认不出的 None，读回时整行被当成坏行丢掉 ——
+                # 于是末块的 ChunkBoundary 消失，回放结果会比原始多出几个音符
+                # （实测 15 秒样例：197 → 198）。
+                fh.write(_json.dumps({"b": [item.seek_time, item.next_seek_time]}) + "\n")
+            elif isinstance(item, int):
+                fh.write('{"t": %d}\n' % item)
+            elif isinstance(item, _PE):
+                pass                      # 进度事件不落盘（回放时自行补）
+            yield item
+
+    model._generate_token_stream = teed
+    return fh
+
+
+def _read_token_dump(path):
+    """读回 token 流：返回 (生成器, BeatGrid 或 None)。"""
+    import json as _json
+    from muscriptor.events import ChunkBoundary as _CB
+    with open(path, encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+    grid = None
+    start = 0
+    if lines and lines[0].lstrip().startswith('{"g"'):
+        try:
+            g = _json.loads(lines[0]).get("g")
+            if g:
+                from muscriptor.utils.beats import BeatGrid
+                _b = g.pop("beats", None)
+                if _b is not None:
+                    import numpy as _np
+                    _b = _np.asarray(_b, dtype=float)
+                grid = BeatGrid(beats=_b, **g)
+        except Exception:
+            grid = None
+        start = 1
+
+    def gen():
+        for ln in lines[start:]:
+            if not ln:
+                continue
+            try:
+                o = _json.loads(ln)
+            except Exception:
+                continue
+            if "b" in o:
+                yield _CB(o["b"][0], o["b"][1])
+            elif "t" in o:
+                yield int(o["t"])
+
+    return gen(), grid
 
 
 def _duration_stats(midi_path):
