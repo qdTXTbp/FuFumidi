@@ -184,6 +184,12 @@ def _resolve_params(args, mode):
     if _dt: p["dump_tokens"] = str(_dt)
     _rt = getattr(args, "replay_tokens", None)
     if _rt: p["replay_tokens"] = str(_rt)
+    # ② 计算精度（仅 muscriptor 用到）：不传 = 上游默认 fp32。
+    # bf16 在本机（Zen 5 / AVX512-BF16）实测提速 43% 且事件数一致，
+    # 但它改数值精度、属影响质量的开关，所以由用户显式选。
+    _dt = getattr(args, "precision", None)
+    if _dt and str(_dt).lower() not in ("fp32", "float32", "auto"):
+        p["dtype"] = str(_dt).lower()
     # ④ 批 B：MuScriptor 生成参数（默认不传 = 旧版行为）。
     for _k in ("temperature", "cfg_coef", "beam_size"):
         _v = getattr(args, _k, None)
@@ -457,6 +463,9 @@ def build_parser():
                    help="[muscriptor] 束搜索宽度（默认 1=关闭；越大越慢）")
     g.add_argument("--no-prelude-forcing", dest="prelude_forcing", action="store_false", default=None,
                    help="[muscriptor] 关闭跨块延音前置（会降低分块边界的延续质量）")
+    g.add_argument("--precision", dest="precision", default=None,
+                   choices=["fp32", "bf16", "fp16"],
+                   help="[muscriptor] 计算精度（默认 fp32）。bf16 更快但数值精度不同")
     g.add_argument("--dump-tokens", dest="dump_tokens", default=None, metavar="FILE",
                    help="[诊断] 把 MuScriptor token 流落盘（JSONL）")
     g.add_argument("--replay-tokens", dest="replay_tokens", default=None, metavar="FILE",
@@ -547,6 +556,7 @@ def cmd_worker():
                 cfg_coef=req.get('cfg_coef'),
                 beam_size=req.get('beam_size'),
                 prelude_forcing=req.get('prelude_forcing'),
+                precision=req.get('precision'),
             )
             class _LogTee(io.StringIO):
                 """stdout 分流：把转换日志逐行实时转发到真实 stdout（###LOG 协议），

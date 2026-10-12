@@ -192,7 +192,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
     };
     // 注意：这里漏一个键，渲染端设了也到不了引擎 —— 乐器组约束（muscriptor_instruments）
     // 之前就是漏在这张表里，界面选「人声」完全没有效果。
-    const map = { onset_threshold:'onset_threshold', frame_threshold:'frame_threshold', min_note_length:'min_note_length', min_note_ms:'min_note_ms', merge_gap_ms:'merge_gap_ms', tempo:'tempo', stem_format:'stem_format', model:'model', model_size:'model_size', muscriptor_batch:'muscriptor_batch', muscriptor_instruments:'muscriptor_instruments', min_freq:'min_freq', max_freq:'max_freq', beat_grid:'beat_grid', max_note_hold:'max_note_hold', temperature:'temperature', cfg_coef:'cfg_coef', beam_size:'beam_size', prelude_forcing:'prelude_forcing' };
+    const map = { onset_threshold:'onset_threshold', frame_threshold:'frame_threshold', min_note_length:'min_note_length', min_note_ms:'min_note_ms', merge_gap_ms:'merge_gap_ms', tempo:'tempo', stem_format:'stem_format', model:'model', model_size:'model_size', muscriptor_batch:'muscriptor_batch', muscriptor_instruments:'muscriptor_instruments', min_freq:'min_freq', max_freq:'max_freq', beat_grid:'beat_grid', max_note_hold:'max_note_hold', temperature:'temperature', cfg_coef:'cfg_coef', beam_size:'beam_size', prelude_forcing:'prelude_forcing', precision:'precision' };
     for (const [k, rk] of Object.entries(map)) if (cfg[k] != null) req[rk] = cfg[k];
     for (const k of ['denoise','normalize','auto_bpm','no_merge','no_velnorm','with_drums','export_stems','no_pedal','no_melodia']) if (cfg[k]) req[k] = true;
     const p = new Promise((resolve, reject) => { _engineWorkerPending.set(id, { resolve, reject, win: cfg.__win, logId: cfg.__logId || cfg.id, child }); });

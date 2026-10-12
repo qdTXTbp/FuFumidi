@@ -152,7 +152,21 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                 gpu_reason = str(_g.get("arch_reason") or "")
         except Exception:
             dev = None
+    # ② 提速梯队 1：计算精度。上游 load_model() 本身就收 dtype，是**一等公民特性** ——
+    # 不是我们要发明的东西。上游还会把 conditioning 管线留在 fp32
+    # （model.condition_provider.float()，注释说明安静段落的 log-mel 在 fp16 下会下溢），
+    # 在 LMModel.forward 边界再 cast 回来。
+    # 实测（Zen 5 / AVX512-BF16，15 秒素材）：fp32 8.4s → bf16 4.8s，提速 43%，
+    # 事件数完全相同（199 起 / 199 止）。
+    # ★ 但它改变数值精度、属于**影响质量**的开关 → 默认不传（= 上游默认 fp32），
+    #   由用户显式选择，并在界面写明代价。
+    _dtype = str(params.get("dtype") or "").strip() or None
+    if _dtype:
+        _log(log_cb, "计算精度：%s（bf16 更快，但数值精度与 fp32 不同）" % _dtype)
     try:
+        model = TranscriptionModel.load_model(load_arg, device=dev, dtype=_dtype)
+    except TypeError:
+        # 老版本 muscriptor 的 load_model 不认 dtype：退回旧签名，别让整次转录失败
         model = TranscriptionModel.load_model(load_arg, device=dev)
     except Exception:
         model = TranscriptionModel.load_model(load_arg)
