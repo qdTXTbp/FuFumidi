@@ -98,6 +98,47 @@ const HARD_SKIP_RE = /^(release|gpu-package)/;
 if (!fs.existsSync(BASE)) { console.error('找不到干净基线：' + BASE + '（先跑一次 electron-builder --dir）'); process.exit(1); }
 if (!fs.existsSync(RES)) { console.error('找不到安装版：' + RES); process.exit(1); }
 
+// ---- 0) 前置：前端产物新鲜度
+// 血泪教训（2026-10-12）：SettingsPanel.vue 是 <script setup>（**纯 JS，没有 lang="ts"**），
+// 往里写 TS 语法（`as any` / `catch (e: any)`）时 `tsc --noEmit` 照样报 0，
+// 但 vite 构建直接失败。而本脚本不看构建结果、照旧部署 ——
+// 于是悄悄发了一版「旧前端 + 新引擎」的包，[7/7] 冒烟还照样通过（前端是旧的，当然不白屏）。
+// 所以这里先比一次时间戳：frontend/src 比 renderer/dist 新就拒绝部署。
+// （故意不自动构建：构建失败时自动构建同样会静默沿用旧产物，那正是要防的事。）
+function newestMtime(dir, re) {
+  let newest = 0;
+  const walk = (d) => {
+    let entries = [];
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { walk(p); continue; }
+      if (re && !re.test(e.name)) continue;
+      try { const m = fs.statSync(p).mtimeMs; if (m > newest) newest = m; } catch (err) {}
+    }
+  };
+  walk(dir);
+  return newest;
+}
+{
+  const SRC = path.join(ROOT, 'frontend', 'src');
+  const DIST = path.join(ROOT, 'renderer', 'dist', 'assets');
+  const srcNewest = newestMtime(SRC, null);
+  const distNewest = newestMtime(DIST, /\.js$/);
+  if (!distNewest) {
+    console.error('[前置] 找不到 renderer/dist/assets —— 先跑 `npm run build:ui`。');
+    process.exit(1);
+  }
+  if (srcNewest > distNewest) {
+    const mins = Math.max(1, Math.round((srcNewest - distNewest) / 60000));
+    console.error('[前置] 前端产物过期：frontend/src 比 renderer/dist 新约 ' + mins + ' 分钟。');
+    console.error('       界面改动还没进渲染层，直接部署会发出「旧前端 + 新引擎」的包。');
+    console.error('       请先 `npm run build:ui`（注意看它的退出码），再重新部署。');
+    process.exit(1);
+  }
+  console.log('[前置] 前端产物新鲜（renderer/dist 不旧于 frontend/src）');
+}
+
 // ---- 1) 关掉安装版（asar 被占用就写不进去）
 try { execSync('taskkill /IM FuFumidi.exe /F', { stdio: 'ignore' }); } catch (e) { /* 没在跑 */ }
 let free = false;
