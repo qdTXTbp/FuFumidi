@@ -79,11 +79,13 @@ const propsOpen = ref(false);
 // ★ 与「引擎」（utau_engine）是**两件事**：引擎选哪个程序，渲染器选程序里的哪条合成路线。
 //   CLASSIC = 逐音素（ClassicRenderer + Worldline 变调器）；Worldline = 乐句级 WORLD 合成。
 //   实测同机同段（4.5s 素材）：CLASSIC 6.39× 实时、v10 —— 、v11 1.94× 实时（比 v10 慢 3.29×）。
-//   v11 需要先下载 hnsep 模型（资源中心），没装时引擎会给出可操作的报错。
+//   v11 需要先下载 hnsep 模型（资源中心），v20 需要通用声码器（mel 模型随包）；
+//   没装时引擎都会给出可操作的报错，不静默算错。
 const RENDERER_OPTIONS = [
   { id: 'CLASSIC', cn: '逐音素（默认，最快）' },
   { id: 'WORLDLINE-R', cn: 'Worldline v10（乐句级）' },
   { id: 'WORLDLINE-R1.1', cn: 'Worldline v11（气声更真，慢 3.3×）' },
+  { id: 'WORLDLINE-R2', cn: 'Worldline v20（最新，需通用声码器）' },
 ];
 const rendererId = ref('CLASSIC');
 async function saveRenderer() {
@@ -2444,7 +2446,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
         <!-- 轨道渲染器：放在渲染按钮旁边 —— 它是「点下去会发生什么」的一部分。 -->
         <select v-if="!isAudio" v-model="rendererId" @change="saveRenderer" class="select-input"
                 style="width:auto;min-width:152px;padding:4px 8px;font-size:12px"
-                :title="t('合成路线：逐音素最快；Worldline 是乐句级 WORLD 合成，v11 气声/噪声更真但慢约 3.3 倍，且需先在资源中心下载 hnsep 模型')">
+                :title="t('合成路线：逐音素最快；Worldline 是乐句级 WORLD 合成。v11 气声/噪声更真但慢约 3.3 倍，需先下载 hnsep 模型；v20 是上游最新的 mel + 声码器路线，需先在资源中心装通用声码器')">
           <option v-for="r in RENDERER_OPTIONS" :key="r.id" :value="r.id">{{ t(r.cn) }}</option>
         </select>
         <!-- 主动作：渲染本轨。前置条件不满足时**按钮本身就变样并说明为什么**（不只是变淡），

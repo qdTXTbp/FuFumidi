@@ -258,7 +258,7 @@ export interface Settings {
   watch_enabled?: boolean;
   file_assoc?: boolean;
   lang?: 'zh' | 'zh-Hant' | 'en' | '';
-  /** UTAU 引擎里的合成路线：'CLASSIC'（默认）| 'WORLDLINE-R' | 'WORLDLINE-R1.1' */
+  /** UTAU 引擎里的合成路线：'CLASSIC'（默认）| 'WORLDLINE-R' | 'WORLDLINE-R1.1' | 'WORLDLINE-R2' */
   utau_renderer?: string;
   [key: string]: any;
 }

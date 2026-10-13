@@ -165,7 +165,7 @@ P1-1 → P1-2 → P1-3 → P1-4      预设革新（用户直接感知，且已�
 P5                             删任务模板 + 多队列                                    ✅ 已完成
 P3    → P2-1 → P2-2 → P2-3     先立元数据底座，再修音色工坊的来源区分  ✅ 已完成
 P3    → P4-1 → P4-2 → P4-3     同一底座支撑资源中心                     ✅ 已完成（见 §2.6 的缺口）
-P3    → P4-1 → P4-2 → P4-3     同一底座支撑资源中心
+P6                             v20（Worldline-R2）ONNX 编排                  ✅ 已完成（见 §7）
 ```
 
 **P3 必须排在 P2/P4 之前**：两处都要它，先立一次省得改两遍。
@@ -175,7 +175,7 @@ P3    → P4-1 → P4-2 → P4-3     同一底座支撑资源中心
 ```
 npm run build:ui         exit 0    ← ★ 改 .vue 必须跑，tsc 不查 .vue
 npm run typecheck        exit 0
-npm run test:ui          173
+npm run test:ui          181
 npm run test:plugin      6
 npm run test:download    15
 pytest engine/tests      exit 0（含 OPENUTAU_REF 接上游克隆的对照）
@@ -196,4 +196,28 @@ node scripts/deploy-installed.cjs  → 冒烟通过
 
 `multiple_pitch_bends`（basic-pitch 唯一没转发的用户可见参数）·
 GPT-SoVITS 的 `top_k/top_p/speed` · DiffSinger 的 `vocoder` 覆盖 ·
-多说话人声库 · **要不要实现 v20**（旧计划 §15 已证明 mel.onnx 与声码器都在手上）。
+多说话人声库 · ~~要不要实现 v20~~（**已实现**，见 §7）。
+
+## 7. P6 · v20（Worldline-R2）实现记录（2026-10-14）
+
+用户判定「做」。上游 `Classic/WorldlineRenderer.cs:138-193` **逐行对齐**，四个容易漏的点全部照搬：
+
+| 上游事实 | 我们怎么做 | 漏了会怎样 |
+| --- | --- | --- |
+| 补帧 = `ceil((totalFrames + 12) / 16) * 16`，**左补固定 4 帧** | `r2_pad()` 返回 `(padded, left, ...)` | 只按 `(-T) % 16` 补：T=16/32 时帧数与上游不同 |
+| `f0`/`sp_env` 补 **0**，`ap` 补 **1** | `np.ones` 补 ap | ap 补 0 = 宣称这些帧完全周期，边缘出错 |
+| 出波形后 `Skip(left*512).Take(T*512)` | 裁掉补出来的帧 | 输出前移 4 帧、长度是补齐后的长度 |
+| 首尾各 512 样本线性淡入淡出 | 同样的斜坡（第 0 个样本增益恰为 0） | 乐句拼接处爆音 |
+| mel 会话固定 **CPU**，声码器用默认 | `resolve_providers('cpu')` / 默认 | 85 KB 的模型挪 GPU 不划算 |
+
+**资源**：`mel.onnx`（85,404 B，sha256 `1493ffc8…`，上游 commit `4d26fa51`）**随包** ——
+它是 v20 自足的前提，来源与许可证待办记在 `docs/VENDOR.md` 第 4 条（**发布前必须核实许可证**）。
+声码器是外部的 128bin/512hop PC-NSF-HiFiGAN，资源中心已有「NSF-HiFiGAN 通用声码器」条目，
+缺失时报可行动的错，不静默算错。
+
+**接界面**：`RENDERER_OPTIONS` 加 `WORLDLINE-R2`（文案「最新，需通用声码器」，**不写音质结论**
+—— 本机没有 A/B 过，不编）；三语 i18n、CLI `--renderer` 帮助、`main/settings.js` 注释同步。
+
+**验证**：`engine/tests/test_worldline_r2.py` 9 项（补帧语义 + 端到端形状 + 报错文案 + 空乐句）；
+`test_openutau_core_matches_source.py` 里新增**真机端到端**（真 native WORLD → mel → 声码器，
+判据是过零率主频 ≈ 440 Hz —— 补帧/裁剪错一格它就会偏），并把旧的「v20 是桩」断言换成照搬一致性检查。

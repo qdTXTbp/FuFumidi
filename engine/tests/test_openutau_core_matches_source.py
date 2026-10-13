@@ -5411,12 +5411,22 @@ def test_worldline_renderer():
     except RuntimeError as e:
         check('WorldlineRenderer: v11 未装 hnsep 模型时给出可操作的依赖报错',
               'hnsep_240512' in str(e) and 'set_hnsep' in str(e), 'got %r' % str(e)[:90])
-    try:
-        WorldlineRenderer(20)._synth_r2(None)
-        check('WorldlineRenderer: v20 给出 ONNX 依赖报错（并说清缺哪两件）', False, '没抛错')
-    except NotImplementedError as e:
-        check('WorldlineRenderer: v20 给出 ONNX 依赖报错（并说清缺哪两件）',
-              'Data.Resources.mel' in str(e) and 'pc-nsf-hifigan' in str(e))
+    # ★ v20 **已实现**（2026-10-14）：mel 模型随包（classic/data/mel.onnx），
+    #   只剩声码器是外部资源。这里只做源码一致性 —— 真机数值在 test_worldline_r2.py。
+    _wr_src = open(os.path.join(ENGINE, 'singing', 'openutau', 'classic',
+                                'worldline_renderer.py'), encoding='utf-8').read()
+    _r2_src = _wr_src.split('def _synth_r2')[1].split('\n    def ')[0]
+    check('WorldlineRenderer: v20 不再是 NotImplementedError 桩（已接 ONNX 编排）',
+          'NotImplementedError' not in _r2_src and 'r2_synthesize(' in _r2_src,
+          'got %r' % _r2_src[:120])
+    # 上游 :140-147：paddedLength = (T + 8) 再 +4 取整到 16；左补 4；ap 补 **1**
+    check('WorldlineRenderer: v20 补帧与上游一致（ceil((T+12)/16)*16，左 4，ap 补 1）',
+          'T + 12' in _wr_src and 'left = 4' in _wr_src
+          and 'np.ones((left, sp_size), np.float32)' in _wr_src)
+    check('WorldlineRenderer: v20 出波形后按上游裁掉左补帧 + 首尾 512 淡入淡出',
+          'wave[start:start + want]' in _wr_src and 'HOP_SIZES[20]' in _wr_src)
+    check('WorldlineRenderer: v20 的 mel 会话固定 CPU（上游 OnnxRunnerChoice.CPU）',
+          "resolve_providers('cpu')" in _wr_src)
     check('WorldlineRenderer: register_worldline_renderers 可重复登记',
           (__import__('singing.openutau.classic', fromlist=['x'])
            .register_worldline_renderers()) is None)
@@ -5471,6 +5481,77 @@ def test_worldline_renderer():
               len(result2.samples) == len(result.samples))
         check('WorldlineRenderer e2e: 进度上报到 100（每个音素一次 + 收尾）',
               seen and seen[-1][0] == 100, 'got %r' % seen)
+    finally:
+        if old_host is not None:
+            try:
+                _install_host(old_host)
+            except Exception:
+                pass
+
+
+def test_worldline_r2_end_to_end():
+    """v20 真机端到端：真 native WORLD 特征 → mel ONNX → 声码器 → 波形。
+
+    ★ 判据是**主频**（过零率）。补帧/裁剪只要错一格（左补 4、补到 16 的倍数、再裁回 T 帧），
+    波形的时间轴就整体平移，估出来的主频立刻偏 —— 所以这一条同时盯住补帧与裁剪，
+    不只是「跑出来了」。声码器（55 MB）不在仓库里，找不到就 SKIP。
+    """
+    import tempfile
+
+    from singing.openutau import Progress, RenderPhrase
+    from singing.openutau import worldline as W
+    from singing.openutau.classic import WorldlineRenderer
+    from singing.openutau.classic.worldline_renderer import resolve_r2_vocoder
+
+    dll = os.path.join(REF_ROOT, 'runtimes', 'win-x64', 'native', 'worldline.dll')
+    if not os.path.isfile(dll):
+        print('  SKIP 找不到预编译 worldline.dll')
+        return
+    native = W.get_native(dll)
+    if not native.available:
+        print('  SKIP worldline.dll 加载失败：%s' % native.error)
+        return
+    try:
+        resolve_r2_vocoder()
+    except RuntimeError:
+        # 与 test_worldline_r2.py 同款约定：本机装好的那份
+        cand = (r'E:\Midi\FuFumidi\FuFumidiData\diffsinger\vocoder'
+                r'\nsf_hifigan_44.1k_hop512_128bin_2024.02.onnx')
+        if not os.path.isfile(cand):
+            print('  SKIP 本机没有 128bin/512hop 声码器')
+            return
+        os.environ['FUFUMIDI_R2_VOCODER'] = cand
+
+    tmp = tempfile.mkdtemp(prefix='fufumidi-r2-')
+    old_host = None
+    try:
+        project, track, part, _classic = _render_fixture(tmp)
+        wr20 = WorldlineRenderer(20)
+        track.renderer_settings.renderer_obj = wr20
+        phrases = RenderPhrase.from_part(project, track, part)
+        check('WorldlineRenderer v20 e2e: 能构建出乐句', len(phrases) == 1,
+              'got %d' % len(phrases))
+        phrase = phrases[0]
+        old_host = _install_host(_test_classic_host(tmp, _CountingResampler()))
+        result = _run(wr20.render(phrase, Progress(len(phrase.phones),
+                                                  notify=lambda pct, info: None),
+                                  track_no=0))
+        samples = samples_of(result)
+        check('WorldlineRenderer v20 e2e: 产出非空样本', len(samples) > 0,
+              'got %d' % len(samples))
+        check('WorldlineRenderer v20 e2e: 样本有限且不静音',
+              all(math.isfinite(v) for v in samples)
+              and max(abs(v) for v in samples) > 1e-3,
+              'got peak %r' % (max(abs(v) for v in samples) if samples else None))
+        check('WorldlineRenderer v20 e2e: 样本数是 512 的整数倍（按帧裁剪，没留补出来的帧）',
+              len(samples) % 512 == 0, 'got %d' % len(samples))
+        check('WorldlineRenderer v20 e2e: 主频 ≈ 440Hz（补帧/裁剪对得上，过零率 ±10%%）',
+              _dominant_zero_cross(samples) is not None
+              and abs(_dominant_zero_cross(samples) - 440.0) < 44.0,
+              'got %r' % _dominant_zero_cross(samples))
+        check('WorldlineRenderer v20 e2e: 缓存文件带版本号 wdl-v20-',
+              any('wdl-v20-' in f for f in phrase.cache_files),
+              'got %r' % phrase.cache_files)
     finally:
         if old_host is not None:
             try:

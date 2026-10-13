@@ -1108,9 +1108,9 @@ def main(argv=None):
     t.add_argument('--tempo-map', default=None,
                    help='多点变速 JSON `[{beat,bpm}]`（拍单位），或 @文件路径；给了就覆盖单点 bpm')
     # ★ WP4-5 的"最后一跳"：默认 CLASSIC 与以前完全一致；换成 Worldline 系列才会走
-    #   乐句级 PhraseSynthV2（WORLDLINE-R = v10，WORLDLINE-R1.1 = v11）。
+    #   乐句级 PhraseSynthV2（WORLDLINE-R = v10，WORLDLINE-R1.1 = v11，WORLDLINE-R2 = v20）。
     t.add_argument('--renderer', default='CLASSIC',
-                   help='CLASSIC（默认，逐音素）| WORLDLINE-R | WORLDLINE-R1.1')
+                   help='CLASSIC（默认，逐音素）| WORLDLINE-R | WORLDLINE-R1.1 | WORLDLINE-R2')
     t.set_defaults(func=cmd_render_track)
 
     p = sub.add_parser('probe', help='检查声库能否加载')

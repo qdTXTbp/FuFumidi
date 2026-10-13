@@ -1506,7 +1506,8 @@ export const I18N_MAP = {
   '逐音素（默认，最快）': 'Per-phoneme (default, fastest)',
   'Worldline v10（乐句级）': 'Worldline v10 (phrase-level)',
   'Worldline v11（气声更真，慢 3.3×）': 'Worldline v11 (truer breath, 3.3× slower)',
-  '合成路线：逐音素最快；Worldline 是乐句级 WORLD 合成，v11 气声/噪声更真但慢约 3.3 倍，且需先在资源中心下载 hnsep 模型': 'Synthesis path: per-phoneme is fastest; Worldline is phrase-level WORLD synthesis. v11 renders breath/noise more faithfully but is ~3.3× slower and needs the hnsep model from the resource center first.',
+  'Worldline v20（最新，需通用声码器）': 'Worldline v20 (newest, needs universal vocoder)',
+  '合成路线：逐音素最快；Worldline 是乐句级 WORLD 合成。v11 气声/噪声更真但慢约 3.3 倍，需先下载 hnsep 模型；v20 是上游最新的 mel + 声码器路线，需先在资源中心装通用声码器': 'Synthesis path: per-phoneme is fastest; Worldline is phrase-level WORLD synthesis. v11 renders breath/noise more faithfully but is ~3.3× slower and needs the hnsep model from the resource center first. v20 is the newest upstream mel + vocoder route and needs the universal vocoder installed from the resource center first.',
   '速度组（影响耗时与显存/内存占用）': 'Speed (affects time, VRAM / RAM)',
   // 节拍网格：装了 beat_this 模型后默认开
   '对齐音符时值；未下载或失败时自动跳过，不影响转录（装了模型默认开）': 'Aligns note durations; skipped automatically when not downloaded or on failure, never blocks transcription (on by default once the model is installed)',

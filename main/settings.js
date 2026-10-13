@@ -38,6 +38,9 @@ const DEFAULT_SETTINGS = {
   //   'WORLDLINE-R'      = 乐句级 WORLD 合成（v10）
   //   'WORLDLINE-R1.1'   = v10 + hnsep 谐波/噪声分离（v11）。**需要先下载 hnsep 模型**
   //                        （资源中心），否则渲染时会给出明确报错。
+  //   'WORLDLINE-R2'     = v20：WORLD 特征 → mel ONNX（随包 83.4 KB）→ ONNX 声码器出波形。
+  //                        **需要 128bin/512hop 的通用声码器**（资源中心「NSF-HiFiGAN 通用声码器」），
+  //                        没装时渲染会给出明确报错。
   //   实测同机同段：CLASSIC 6.39× 实时 / v10 —— / v11 1.94× 实时（比 v10 慢 3.29×）。
   utau_renderer: 'CLASSIC',
   diffsinger_enabled: true, // DiffSinger 模块开关：**默认启用**，不再要求用户先手动点一次「启用模块」。

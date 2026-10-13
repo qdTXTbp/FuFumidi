@@ -16,6 +16,7 @@
 | `frontend/public/vendor/js-synth/libfluidsynth-2.4.6-with-libsndfile.js` | 2,371,528 | `8f0cc693731da2d02f13e921` | js-synthesizer 附带的 libfluidsynth 2.4.6 构建（带 libsndfile） | 2.4.6 |
 | `frontend/public/vendor/js-synth/fu-seq-clock.js` | 4,251 | `0a2658fb31608df568aa86b3` | **本项目自有**（AudioWorklet 音序时钟） | — |
 | `renderer/vendor/soundfonts/GeneralUser.sf2` | 31,281,186 | `f45b6b4a68b6bf3d792fcbb6` | GeneralUser GS（S. Christian Collins） | v1.471（许可证 v2.0，见同目录 `GeneralUser.LICENSE.txt`） |
+| `engine/singing/openutau/classic/data/mel.onnx` | 85,404 | `1493ffc868c6fb8b66104e2c` | [stakira/OpenUtau](https://github.com/stakira/OpenUtau)（源路径 `OpenUtau.Core/Classic/Data/mel.onnx`） | 上游 commit `4d26fa51a62effe586e5be036eb46fbe8d550a1b`（2025-11-28「update worldline-r2 model」） |
 | `engine/singing/openutau/native/**` | 4.8 MB（6 个平台） | 逐文件映射见 `native/README.md` | [stakira/OpenUtau](https://github.com/stakira/OpenUtau)（MIT） | commit **`04c4e61005`**（2026-09-27，PR #2468 Rebuild Worldline）—— 2026-10-13 用 blob 比对确定 |
 
 改这一页时用同一条命令重新取指纹：
@@ -72,6 +73,21 @@ https://data.jsdelivr.com/v1/packages/npm/verovio@<版本>?structure=flat
 对 6 个二进制逐个算 `git hash-object`，再遍历改动过该路径的 commit 取 `git rev-parse <sha>:<path>`，
 **blob 哈希相同即字节相同**。结果：6 个文件全部唯一命中 `04c4e61005`（2026-09-27，PR #2468）。
 这也把**移植基线**钉在了 2026-09-27。
+
+### 4. 随包的 mel.onnx：**许可证未核实**（发布前必须处理）
+
+**2026-10-14 记录。** `classic/data/mel.onnx`（85,404 B，见上表）是 **Worldline v20** 的编码器：
+WORLD 特征 → `mel [1,T,128]`，再喂 128bin/512hop 的 PC-NSF-HiFiGAN 声码器出波形。
+它是 v20 唯一必须自带的东西（声码器用户可以从资源中心装），所以**随包**。
+
+- 已验证可加载，签名 `f0 [1,T]` · `sp_env [1,T,1025]` · `ap [1,T,1025]` → `mel [1,T,128]`；
+  帧数补到 16 的倍数后，输出样本数 = 补齐帧数 × 512（`engine/tests/test_worldline_r2.py` 盯着这条）。
+- **待办（发布前）**：其许可证性质**没有查证**。上游仓库整体是 MIT，但这一个模型文件没有单独声明；
+  本机 clone 里只有 `OpenUtau.Core/Analysis/Crepe/LICENSE.txt`，没有根 `LICENSE`，
+  且本机直连 github 不通，无法核对。**发布前必须确认**：
+  若确为 MIT 就照上表保留；若不是，改为**运行时从上游 release 获取**，或把 v20 从渲染器选项里摘掉。
+
+（同一提交 `4d26fa51` 也是上游那版 `WorldlineRenderer.cs:150-175` 的来源，编排照它写。）
 
 ## 与其它文档的关系
 
