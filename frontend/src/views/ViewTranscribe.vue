@@ -318,7 +318,7 @@ const denoise = ref(false);
 const normalize = ref(false);
 const autoBpm = ref(true);   // 默认开启：转写出的 MIDI 按源音频自动测速，播放/导出与原曲速度一致
 
-// 转录队列
+// 转录队列（**当前激活队列**的条目；多队列见下方「多队列」一节）
 const queue = reactive([]);
 let nextId = 1;
 const sort = ref('default');
@@ -342,10 +342,17 @@ const presetMgrOpen = ref(false);
 let presetApplying = false;      // 正在套用预设 → watch 不要再插一脚（防回环）
 let lastModelKey = '';           // 上次的模型键，用来判断"模型真的换了"
 
-// 任务模板
-const taskTemplates = reactive([]);
-const tplName = ref('');
-const tplIdx = ref(-1);
+/* ---------------- 多队列：每个队列各自带一份「模型 + 参数」设置 ----------------
+ * 用户要求（2026-10-14）：转录队列要能建多个，用来区分**用什么模型、用什么参数**。
+ * 设计：队列 = { 名字, 模型选择, 参数快照, 条目 }。
+ *   · 切队列 = 先把当前界面的模型/参数存回旧队列（snapshotIntoQueue），
+ *     再把新队列的设置加载到界面（loadQueueSettings）—— 于是"切队列"就是"切模型与参数"；
+ *   · 参数快照直接用 P1 的 collectPresetParams / applyPresetParams，**不另立一套序列化**；
+ *   · 运行中禁止切/新建/删除队列（半路换设置会让同一批条目用两套参数，结果无法解释）。
+ */
+const QUEUES_KEY = 'fufumidi_queues_v1';
+const queues = reactive([]);
+const activeQid = ref(0);
 
 // 智能修正
 const rf = reactive({ audio: '', midi: '', mode: 'auto', stem: true, busy: false, jobId: 0, progress: 0, logs: [], info: '' });
@@ -433,21 +440,161 @@ function addPaths(paths) {
 function statusTxt(s) {
   return { pending: t('等待'), running: t('转录中'), done: t('完成'), error: t('失败'), canceled: t('已取消') }[s] || s;
 }
-function saveQueue() {
+/* ---------------- 多队列 ---------------- */
+const MODEL_SHORT = () => ({
+  basic: 'Basic Pitch', muscriptor_small: 'MuScriptor Small', muscriptor_medium: 'MuScriptor Medium',
+  muscriptor_large: 'MuScriptor Large', piano_pt: 'piano-transcription', aria: 'Aria-AMT',
+  transkun: 'Transkun', separate: t('音频处理'),
+});
+function currentQueue() { return queues.find((q) => q.id === activeQid.value) || queues[0] || null; }
+/** 队列摘要 —— 用户要的就是"一眼看出这个队列用什么模型、什么参数跑"。 */
+function queueSummary(q) {
+  if (!q) return '';
+  const label = MODEL_SHORT()[q.modelKey] || (MODE_NAMES()[q.mode] || '');
+  return [label, q.preset].filter(Boolean).join(' · ');
+}
+function queueCount(q) { return (q && q.id === activeQid.value) ? queue.length : ((q && q.items) ? q.items.length : 0); }
+
+/** 把当前界面的模型 + 参数 + 条目存回队列对象。所有 saveQueue() 都会先走这一步。 */
+function snapshotIntoQueue(q) {
+  if (!q) return;
+  q.mode = mode.value; q.umodel = umodel.value; q.msSize = msSize.value; q.pmodel = pmodel.value;
+  q.perf = perf.value; q.preset = presetSel.value;
+  q.params = collectPresetParams();       // 与预设共用同一套序列化
+  q.modelKey = currModelKey();
+  q.items = queue.slice();
+}
+
+/** 把队列的模型 + 参数 + 条目加载到界面。 */
+function loadQueueSettings(q) {
+  if (!q) return;
+  presetApplying = true;
   try {
-    localStorage.setItem('fufumidi_batch_queue', JSON.stringify(queue.filter(i => i.status === 'pending' || i.status === 'error').map(i => i.path)));
+    if (q.mode) mode.value = q.mode;
+    if (q.umodel) umodel.value = q.umodel;
+    if (q.msSize) msSize.value = q.msSize;
+    if (q.pmodel) pmodel.value = q.pmodel;
+    if (q.params) applyPresetParams(q.params, { keepModel: true });
+    if (q.preset) presetSel.value = q.preset;
+  } finally { presetApplying = false; }
+  // 队列自带设置 → 别让「切模型自动套默认」再覆盖一遍；没有参数快照（老数据）才交给它套默认。
+  // ★ watch 是异步的，所以这里必须先摆好 lastModelKey，不能只靠 presetApplying。
+  lastModelKey = q.params ? currModelKey() : '';
+  queue.splice(0, queue.length, ...(q.items || []));
+  queue.forEach((it) => { if (it.status === 'running') it.status = 'pending'; });
+  autoApplyForCurrentModel();
+}
+
+function persistQueues() {
+  try {
+    const dump = queues.map((q) => ({
+      id: q.id, name: q.name, mode: q.mode, umodel: q.umodel, msSize: q.msSize, pmodel: q.pmodel,
+      perf: q.perf, preset: q.preset, modelKey: q.modelKey, params: q.params,
+      // 上限 500 条/队列：localStorage 只有几 MB，别让一个超大队列把配额撑爆
+      items: ((q.id === activeQid.value ? queue : (q.items || []))).slice(0, 500).map((it) => ({
+        id: it.id, path: it.path, name: it.name, duration: it.duration || 0,
+        status: it.status === 'done' ? 'done' : (it.status === 'error' ? 'error' : 'pending'),
+        out: it.out || '', note_count: it.note_count || 0, error: it.error || '',
+        progress: it.status === 'done' ? 100 : 0, realPct: 0,
+      })),
+    }));
+    localStorage.setItem(QUEUES_KEY, JSON.stringify({
+      v: 1, active: activeQid.value,
+      nextId,
+      queues: dump,
+    }));
   } catch (e) {}
 }
+
+function saveQueue() { snapshotIntoQueue(currentQueue()); persistQueues(); }
+
+function switchQueue(q) {
+  if (!q || q.id === activeQid.value) return;
+  if (running.value) { toast(t('队列运行中，请先停止再切换'), 'warn'); return; }
+  snapshotIntoQueue(currentQueue());
+  activeQid.value = q.id;
+  loadQueueSettings(q);
+  persistQueues();
+  toast(t('已切换到队列：') + q.name + t('（模型与参数已同步切换）'), 'ok');
+}
+async function addQueue() {
+  if (running.value) { toast(t('队列运行中，请先停止再新建'), 'warn'); return; }
+  const name = await app.promptDialog({ title: t('新建队列'), value: t('队列 ') + (queues.length + 1) });
+  if (!name || !name.trim()) return;
+  snapshotIntoQueue(currentQueue());
+  const q = { id: queues.reduce((m, x) => Math.max(m, (x.id || 0) + 1), 1), name: name.trim(), items: [] };
+  queues.push(q);
+  activeQid.value = q.id;
+  queue.splice(0, queue.length);     // 新队列从空开始（旧队列的条目已经在它自己身上了）
+  snapshotIntoQueue(q);              // 但沿用当前界面的模型/参数 —— 想改直接在界面上改
+  persistQueues();
+  toast(t('已新建队列：') + q.name + t('（当前模型与参数已复制过来）'), 'ok');
+}
+async function renameQueue(q) {
+  if (!q) return;
+  const name = await app.promptDialog({ title: t('重命名队列'), value: q.name });
+  if (!name || !name.trim()) return;
+  q.name = name.trim();
+  persistQueues();
+  toast(t('已重命名队列'), 'ok');
+}
+function duplicateQueue(q) {
+  if (!q) return;
+  if (running.value) { toast(t('队列运行中，请先停止再复制'), 'warn'); return; }
+  if (q.id === activeQid.value) snapshotIntoQueue(q);
+  const copy = { ...q, id: queues.reduce((m, x) => Math.max(m, (x.id || 0) + 1), 1), name: q.name + t(' 副本') };
+  copy.items = (q.items || []).map((it) => ({ ...it, id: nextId++, status: it.status === 'done' ? 'done' : 'pending', progress: it.status === 'done' ? 100 : 0 }));
+  queues.push(copy);
+  persistQueues();
+  toast(t('已复制队列：') + copy.name, 'ok');
+}
+async function removeQueue(q) {
+  if (!q) return;
+  if (running.value) { toast(t('队列运行中，请先停止再删除'), 'warn'); return; }
+  if (queues.length <= 1) { toast(t('至少要保留一个队列'), 'warn'); return; }
+  if (!await app.confirmDialog({ msg: t('删除队列「') + q.name + t('」？队列里的条目会一起删掉。') })) return;
+  const wasActive = q.id === activeQid.value;
+  if (wasActive) snapshotIntoQueue(q);
+  const i = queues.indexOf(q);
+  if (i >= 0) queues.splice(i, 1);
+  if (wasActive) {
+    activeQid.value = queues[Math.min(i, queues.length - 1)].id;
+    loadQueueSettings(currentQueue());
+  }
+  persistQueues();
+  toast(t('队列已删除'), 'ok');
+}
+
 function loadQueue() {
   try {
-    const raw = localStorage.getItem('fufumidi_batch_queue');
-    if (!raw) return;
-    const arr = JSON.parse(raw);
-    if (Array.isArray(arr) && arr.length && !queue.length) {
-      addPaths(arr);
-      toast(t('已恢复上次未完成的转录队列，共 ') + arr.length + t(' 个'), 'ok');
+    const raw = localStorage.getItem(QUEUES_KEY);
+    if (raw) {
+      const d = JSON.parse(raw) || {};
+      const arr = Array.isArray(d.queues) ? d.queues.filter((q) => q && q.name) : [];
+      if (arr.length) {
+        queues.splice(0, queues.length, ...arr.map((q) => ({ ...q, items: Array.isArray(q.items) ? q.items : [] })));
+        activeQid.value = queues.some((q) => q.id === d.active) ? d.active : queues[0].id;
+        nextId = Math.max(d.nextId || 1, 1 + queues.reduce((m, q) => Math.max(m, ...(q.items || []).map((i) => i.id || 0)), 0));
+        loadQueueSettings(currentQueue());
+        const n = queues.reduce((s, q) => s + q.items.length, 0);
+        if (n) toast(t('已恢复 ') + queues.length + t(' 个转录队列，共 ') + n + t(' 个条目'), 'ok');
+        return;
+      }
+    }
+    // 老版本只有「一个队列 + 路径数组」→ 迁移成第一个队列，别把没跑完的东西丢了
+    let paths = [];
+    const legacy = localStorage.getItem('fufumidi_batch_queue');
+    if (legacy) { const a = JSON.parse(legacy); if (Array.isArray(a)) paths = a.filter(Boolean); }
+    const q = { id: 1, name: t('默认队列'), items: [] };
+    queues.push(q);
+    activeQid.value = q.id;
+    queue.splice(0, queue.length);
+    if (paths.length) {
+      addPaths(paths);
+      toast(t('已恢复上次未完成的转录队列，共 ') + paths.length + t(' 个'), 'ok');
     }
     localStorage.removeItem('fufumidi_batch_queue');
+    saveQueue();
   } catch (e) {}
 }
 function removeItem(it) {
@@ -681,6 +828,11 @@ async function loadPresets() {
   if (want) presetSel.value = want;
   else if (presets.list.length) presetSel.value = presets.list[0].name;
   autoApplyForCurrentModel();     // 首次进来就把当前模型的默认预设套上
+  // ★ 预设刚生效 → 当前队列的快照必须跟着刷新。
+  //   否则首次启动时 loadQueue() 早于 loadPresets()，落盘的会是"预设生效前"的那份参数，
+  //   下次启动就会拿旧参数覆盖掉模型默认。
+  snapshotIntoQueue(currentQueue());
+  persistQueues();
 }
 
 /** 预设参数快照：**全量**（与 collectParams 的稀疏 cfg 不同 —— 预设要能完整还原界面）。
@@ -930,32 +1082,6 @@ async function presetDrop(p) {
     else toast(t('排序失败'), 'warn');
   } catch (e) {}
 }
-
-/* ---------------- 任务模板 ---------------- */
-function loadTaskTemplates() {
-  try { taskTemplates.splice(0, taskTemplates.length, ...(JSON.parse(localStorage.getItem('fufumidi_task_templates') || '[]') || [])); } catch (e) {}
-}
-function saveTaskTemplates() { try { localStorage.setItem('fufumidi_task_templates', JSON.stringify(taskTemplates)); } catch (e) {} }
-function saveTemplate() {
-  const name = tplName.value.trim();
-  if (!name) { toast(t('请输入模板名'), 'warn'); return; }
-  const tpl = { name, mode: mode.value, perf: perf.value, refine: rf.stem, exportStems: stemExport.value };
-  const i = taskTemplates.findIndex(x => x.name === name);
-  if (i >= 0) taskTemplates[i] = tpl; else taskTemplates.push(tpl);
-  saveTaskTemplates(); tplName.value = '';
-  toast(t('任务模板已保存'), 'ok');
-}
-function applyTemplate(tpl) {
-  if (!tpl) return;
-  mode.value = tpl.mode; perf.value = tpl.perf;
-  stemExport.value = !!tpl.exportStems; rf.stem = tpl.refine !== false;
-  toast(t('任务模板已应用'), 'ok');
-}
-function delTemplate(idx) {
-  taskTemplates.splice(idx, 1); saveTaskTemplates();
-  toast(t('模板已删除'), 'ok');
-}
-const tplPreview = (tpl) => tpl ? (MODE_NAMES()[tpl.mode] || '') + ' · ' + (PERF_NAMES()[tpl.perf] || '') + ' · ' + (tpl.refine ? t('修正') : t('无修正')) + ' · ' + (tpl.exportStems ? t('分轨') : t('不分轨')) : '';
 
 /* ---------------- 参数收集 ---------------- */
 function collectParams() {
@@ -1239,7 +1365,6 @@ let offLog = null, offRefine = null, offModelProg = null, offSeparate = null, of
 onMounted(() => {
   loadQueue();
   loadPresets();
-  loadTaskTemplates();
   loadMsPresets();
   loadPerfDefault();
   probeEngine();
@@ -1337,6 +1462,20 @@ onBeforeUnmount(() => {
           </select>
           <button class="btn sm danger" @click="clearQueue">{{ t('清空') }}</button>
         </div>
+      </div>
+      <!-- 多队列：切队列 = 切模型与参数（每个队列自带一份设置） -->
+      <div v-if="queues.length" class="tr-queues">
+        <span class="fb-label" style="margin:0">{{ t('队列') }}</span>
+        <button v-for="q in queues" :key="q.id" class="tr-pill" :class="{ active: q.id === activeQid }"
+                :title="t('切换到这个队列（模型与参数一起切）') + ' · ' + queueSummary(q)"
+                @click="switchQueue(q)">
+          {{ q.name }}<i v-if="queueCount(q)" class="tr-q-n">{{ queueCount(q) }}</i>
+        </button>
+        <button class="btn sm ghost" @click="addQueue"><Icon name="plus" :size="13" />{{ t('新建队列') }}</button>
+        <button class="btn sm ghost" :disabled="!currentQueue()" @click="renameQueue(currentQueue())">{{ t('重命名') }}</button>
+        <button class="btn sm ghost" :disabled="!currentQueue()" @click="duplicateQueue(currentQueue())">{{ t('复制') }}</button>
+        <button class="btn sm ghost danger" :disabled="queues.length <= 1 || !currentQueue()" @click="removeQueue(currentQueue())">{{ t('删除队列') }}</button>
+        <span class="fb-hint" v-if="currentQueue()">{{ t('本队列：') }}{{ queueSummary(currentQueue()) }}</span>
       </div>
       <div v-if="queue.length" class="tr-batch-list">
         <div class="tr-batch-item" v-for="it in sortedQueue" :key="it.id">
@@ -1676,24 +1815,9 @@ onBeforeUnmount(() => {
         </div>
       </details>
 
-      <!-- 任务模板（仅转录模式） -->
+      <!-- 任务模板已移除（2026-10-14）："记住一套设置"改由**队列**承担 ——
+           每个队列自带模型与参数，切队列即切设置（用户要求）。 -->
       <div v-if="mode !== 'separate'">
-      <div class="tr-tpl-row">
-        <div>
-          <div class="fb-label">{{ t('任务模板') }}</div>
-          <div class="fb-hint">{{ t('保存当前转录+修正+导出流程') }}</div>
-        </div>
-        <div class="row" style="gap:6px;flex-wrap:wrap">
-          <input v-model="tplName" class="text-input" :placeholder="t('模板名')" style="width:110px;padding:5px 8px" />
-          <button class="btn sm" @click="saveTemplate">{{ t('保存模板') }}</button>
-          <select v-model="tplIdx" class="select-input" style="min-width:120px" @change="tplIdx >= 0 && applyTemplate(taskTemplates[tplIdx])">
-            <option disabled :value="-1">{{ t('选择模板') }}</option>
-            <option v-for="(t, i) in taskTemplates" :key="t.name" :value="i">{{ t.name }}</option>
-          </select>
-          <button class="btn sm ghost" @click="taskTemplates.length && delTemplate(taskTemplates.length - 1)">{{ t('删除') }}</button>
-        </div>
-      </div>
-      <div v-if="taskTemplates.length" class="tr-tpl-preview muted small">{{ tplPreview(taskTemplates[taskTemplates.length - 1]) }}</div>
 
       <!-- 摘要 + 开始 -->
       <div v-if="queue.some(i => i.status === 'pending' || i.status === 'error')" class="tr-sum">
@@ -1876,8 +2000,10 @@ onBeforeUnmount(() => {
 .tr-switch small { color: var(--stone); font-size: 10.5px; }
 .tr-switch input[type=checkbox] { accent-color: var(--ink); }
 .tr-preset-row { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--hairline); }
-.tr-tpl-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
-.tr-tpl-preview { margin-top: 4px; }
+/* 多队列条：切队列 = 切模型与参数 */
+.tr-queues { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 8px; }
+.tr-queues .tr-pill { padding: 4px 12px; font-size: 12px; }
+.tr-queues .tr-q-n { font-style: normal; margin-left: 6px; font-size: 10px; opacity: .72; }
 .tr-sum { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: var(--surface-soft); border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--slate); }
 .tr-sum b { color: var(--ink); font-weight: 600; }
 .tr-progress { position: relative; display: flex; align-items: center; justify-content: flex-end; height: 20px; background: var(--surface-soft); border-radius: 999px; overflow: hidden; margin-top: 8px; }
