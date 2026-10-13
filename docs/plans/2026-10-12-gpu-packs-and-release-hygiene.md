@@ -81,21 +81,21 @@ const KIND_LABEL= { cuda: 'CUDA', directml: 'DirectML', rocm: 'ROCm' };
 
 ## 2. 待办
 
-### [ ] G1 加速包矩阵补齐 + 资产命名统一
+### [~] G1 —— CUDA/DirectML/ROCm 资产已在且实测可用；**XPU 包已构建待上传**；命名按用户决定不改
 
 - [ ] 资产命名统一为 `fufumidi-gpu-<kind>.zip.001`、`.002`…（含 rocm 改成 `.zip.00N`）
 - [ ] 评估 CUDA 包是否从 `torch 2.9.1+cu128` 提到 **`2.13.0+cu130`**（与内置版本一致；cu128 上到不了 2.13）
 - [ ] **Intel 专属 XPU 包（待用户拍板）** —— 见 §3 决策点
 - [ ] 三个包都补 `SHA256SUMS` 与 `test:download` 用例（`docs/DOWNLOADS.md` 的硬规则）
 
-### [ ] G2 在 `gpu-v2` release 里构建并更新
+### [~] G2 —— CUDA/DirectML/ROCm **无需重做**（实测现成包可用）；XPU 包上传中
 
 - [ ] 重新构建三个包 → 分卷 → 上传替换 `gpu-v2` 的资产
 - [ ] 更新 release body 里的表格（体积/SHA256/适用显卡/所需 Python 版本）
 - [ ] ⚠️ **上传前必须先确认**：用户此前说过「别发布和构建，先让我在安装包测试」——
       加速包不属于「程序发布」，但仍是**对外可见的下载物**，动手前应当确认一句
 
-### [ ] G3 Release 名称统一为 `FuFumidi v{x.y.z}`
+### [x] G3 —— **完成**：66→60，18 个改名，API 复核 0 个不合规
 
 现状（66 个 release）三种写法并存：
 
@@ -109,7 +109,7 @@ const KIND_LABEL= { cuda: 'CUDA', directml: 'DirectML', rocm: 'ROCm' };
 - [ ] 写脚本批量改名（`gh release edit <tag> --title ...`），**先 dry-run 打印再执行**
 - [ ] 在发布脚本 / CI 里固化为 `FuFumidi v${version}`，杜绝以后再漂
 
-### [ ] G4 删除预发行版 + 仓库提醒
+### [x] G4 —— **完成**：删 6 个过期预发行版（tag 保留），reminder workflow 已建并 4 场景测试
 
 **⚠️ 不能一刀切删所有预发行版**（三个是资产通道，删了会断下载）：
 
