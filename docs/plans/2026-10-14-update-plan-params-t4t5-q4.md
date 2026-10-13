@@ -289,8 +289,65 @@ pytest engine/tests      exit 0
 **受影响的只有 CLI 与文档** —— 照 help 字面理解的人（比如我）会传子模型名，然后拿到
 「未找到模型文件，请先在模型管理中下载所选模型。」这条**指错方向**的报错。
 
-**CLI 分离基准因此没跑成**：我用 `--model <ckpt 路径> --arch UVR-VR` 仍报同样的错，
-**具体原因尚未查明**（argparse 无重复定义，PowerShell 引号也应无碍）。**不猜，记为待查。**
+**★ 更正（同日查明）**：基准其实**不是**被这条缺陷挡住的 —— **是我把模型路径写错了**。
+
+模型不是平铺在 `models/vr/` 下，而是**每人一个子目录**（对应 `models.js:215` 的 `dest = catOf + '/' + key`）：
+
+```
+models/vr/1_hp_uvr/1_HP-UVR.pth                     120.9 MB
+models/vocal/big_beta5e/big_beta5e.ckpt             1411.2 MB
+models/vocal/bs_roformer_large/BS-Roformer_LargeV1.ckpt  706.0 MB
+models/vocal/melband_roformer_instvox_duality_v2/….ckpt  1639.5 MB
+```
+
+我先前用 `Get-ChildItem -Recurse -File` 列出的是**子目录里面**的文件，
+于是把 `models\vr\1_HP-UVR.pth` 当成了路径（少了一层 `1_hp_uvr\`）→ `os.path.isfile` 为假。
+**「未找到模型文件」这条报错是准确的，指错方向的是我。**
+
+**上面那条 `--model` 双语义的缺陷仍然成立**（同一个标志在转录/分离两种模式下含义不同，
+help 只写了转录那种），只是它**不是**这次基准失败的原因。已按此更正。
+
+**非 VR 架构还需要 config yaml**，位置是 `engine/msst_configs/` + `index.json`
+（`models.js:937–955` 按 `outName` 查表）。实测三条：
+`big_beta5e.ckpt → big_beta5e.yaml`、
+`BS-Roformer_LargeV1.ckpt → config_bsrofoL.yaml`、
+`melband_roformer_instvox_duality_v2.ckpt → config_melbandroformer_instvoc_duality.yaml`。
+`--arch` 会被 `model_type_for` 归一化（只留字母数字再小写）：`BS-Roformer`→`bsroformer`→`bs_roformer`。
+
+### ★★ 跨架构分离实测（WP2-1 的核心产出）—— 结果是**否定**的
+
+同一段 **30 秒 / 44.1kHz 立体声**切片，4 个模型各跑一次：
+
+| 模型 | 架构 | 体积 | 第 1 次分离耗时 | 第 1 次墙钟 |
+|---|---|---|---|---|
+| `1_HP-UVR` | UVR-VR | **121 MB** | **23.4 s** | 26.6 s |
+| `BS-Roformer_LargeV1` | BS-Roformer | 706 MB | 38.6 s | 42.5 s |
+| `big_beta5e` | Mel-Band Roformer | 1411 MB | 16.9 s | 24.6 s |
+| `melband_roformer_instvox_duality_v2` | Mel-Band Roformer | **1640 MB** | **13.0 s** | 18.1 s |
+
+**最重的反而最快、最轻的最慢** —— 我原本的假设「Roformer 类更重更慢」当场被证伪。
+
+#### 反序复测：差异是**冷缓存 + 固定启动成本**造成的
+
+| 模型 | 第 1 次（冷） | 第 2 次（热缓存） |
+|---|---|---|
+| `melband_duality` (1640MB) | 13.0 s | **10.1 s** |
+| `1_HP-UVR` (121MB) | **23.4 s** | **10.3 s**（快了 **2.3×**） |
+
+**热缓存后两者几乎持平（10.1 vs 10.3 秒）。** 说明第一轮的差异主要来自
+「每次进程都要付的加载/初始化 + 冷盘 I/O」，**不是模型算力**。
+
+#### 结论（这条最重要：**不加**）
+
+1. **不给界面加「速度量级」提示。** 架构假设已证伪，实测又被固定成本污染 ——
+   此时写进界面的任何速度标注都是**没有依据的**。宁可没有，也不要一条错的。
+2. 30 秒素材**太短**：固定成本与模型算力项同量级，分不开。
+   要真正排序，需要**更长的素材**（≥3 分钟，让逐秒项压过固定项）并**固定热缓存**，
+   或者干脆在**同一进程内**依次跑各模型（消掉加载项）。
+3. 这条同时给 §3 的顺序提了个醒：**WP2-1 的「界面提示」不做了**，
+   改成只在文档里留这张表 + 说明「未排序，勿据此选型」。
+
+**基准脚本与日志**：`_attic\_sing_tmp\sep_*.log`、`r2_*.log`（可复跑）。
 
 本机可实测的分离模型（后续补基准用）：`vocal/` 下 `big_beta5e`(1411MB)、
 `BS-Roformer_LargeV1`(706MB)、`melband_roformer_instvox_duality_v2`(1640MB)；`vr/` 下 `1_HP-UVR`(121MB)。
