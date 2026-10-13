@@ -171,10 +171,12 @@ def case_real_render():
     seen = []
     orig = S.run_session
 
-    def spy(model_path, feeds, providers, label, identifier=None, cache_dir=None):
+    # ★ **kw：run_session 以后再加参数（例如多说话人的 spk_factory）时，这个抓手不该因此炸掉
+    #   —— 它已经因为加 spk_factory 炸过一次。
+    def spy(model_path, feeds, providers, label, identifier=None, cache_dir=None, **kw):
         seen.append((label, {k: np.asarray(v) for k, v in feeds.items()}))
         # ★ 不带 cache_dir：避免命中旧缓存后看不到真正的输入
-        return orig(model_path, feeds, providers, label, identifier, None)
+        return orig(model_path, feeds, providers, label, identifier, None, **kw)
 
     S.run_session = spy
     try:

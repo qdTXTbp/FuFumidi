@@ -27,6 +27,7 @@ from .utils import (
     HEAD_FRAMES, TAIL_FRAMES, durations_ms_to_frames, padded_phone_durations,
     padded_segments, sample_curve, tone_to_freq,
 )
+from .speaker_embed import frame_tensor_for
 
 #: 上游默认采样步数（`Preferences.cs:190-194`）
 DEFAULT_STEPS = 20
@@ -448,7 +449,9 @@ def render_phrase(singer, phrase: Phrase, providers, depth: float = DEFAULT_DEPT
     #   singer.acousticHash, acousticInputs)`）
     outs = run_session(singer.model('acoustic'), feeds, providers, 'acoustic',
                        identifier=(singer.hashes or {}).get('acoustic'),
-                       cache_dir=cache_dir)
+                       cache_dir=cache_dir,
+                       # ★ 多说话人：acoustic 与 variance 同形（逐帧 spk_embed）
+                       spk_factory=lambda: frame_tensor_for(singer, aux.get('total_frames')))
     mel = np.asarray(outs[0], dtype=np.float32)
     progress(75, '声码器合成…')
     mel = apply_mel_base(mel, singer.vocoder.mel_base, singer.acoustic.mel_base)

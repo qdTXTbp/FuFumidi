@@ -116,3 +116,60 @@ def embeds_by_frame(speakers: Sequence[str], hidden_size: int, total_frames: int
             curves[fid, int(default_spk_by_frame[fid])] += 1.0 - s
     out = curves.dot(embeds.T)
     return out.reshape(1, out.shape[0], int(hidden_size)).astype(np.float32)
+
+
+#: 嵌入矩阵缓存：键 = (root, speakers, hiddenSize)。读盘有成本，而逐句渲染会反复问。
+_MATRIX_CACHE: Dict[tuple, np.ndarray] = {}
+
+
+def matrix_for(root: str, speakers: Sequence[str], hidden_size: int) -> np.ndarray:
+    key = (str(root), tuple(speakers), int(hidden_size))
+    m = _MATRIX_CACHE.get(key)
+    if m is None:
+        m = speakers_matrix(root, speakers, hidden_size)
+        _MATRIX_CACHE[key] = m
+    return m
+
+
+def _singer_speaker_info(singer):
+    """从 singer（或 DsSinger）上取 (root, speakers, hiddenSize)；没有说话人信息则 None。"""
+    ac = getattr(singer, "acoustic", None)
+    if ac is None:
+        return None
+    spk = getattr(ac, "speakers", None)
+    if not spk:
+        return None
+    hidden = int(getattr(ac, "hidden_size", DEFAULT_HIDDEN_SIZE) or DEFAULT_HIDDEN_SIZE)
+    return str(getattr(ac, "root", "") or ""), list(spk), hidden
+
+
+def phone_tensor_for(singer, names: Sequence[str], speaker: str = ""):
+    """给 duration 模型的逐音素嵌入 `[1, T, hidden]`；没有说话人信息 → None。
+
+    `names` 是**每个音素的说话人名**（上游从音符的 subbank 覆写取）。
+    `speaker` 非空时当作"本轨默认说话人"替换掉空名字 —— 这是本项目的过渡做法：
+    音符级 speaker 字段与声部颜色曲线还没接（见文件头的说明）。
+    """
+    info = _singer_speaker_info(singer)
+    if info is None:
+        return None
+    root, spk, hidden = info
+    fallback = speaker or spk[0]
+    use = [n or fallback for n in names]
+    return embeds_by_phone(spk, hidden, use, matrix_for(root, spk, hidden))
+
+
+def frame_tensor_for(singer, total_frames: int, speaker: str = ""):
+    """给 variance / acoustic 的逐帧嵌入 `[1, F, hidden]`；没有说话人信息 → None。
+
+    暂不叠声部颜色曲线（上游 :117-135 那条 `vc1`/`vc2` 通路），所以整段都是默认说话人。
+    """
+    info = _singer_speaker_info(singer)
+    if info is None:
+        return None
+    root, spk, hidden = info
+    want = speaker or spk[0]
+    idx = speaker_index_by_suffix(spk, want)
+    frames = max(0, int(total_frames))
+    return embeds_by_frame(spk, hidden, frames, [idx] * frames, {},
+                           matrix_for(root, spk, hidden))

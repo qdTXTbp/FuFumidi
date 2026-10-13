@@ -28,6 +28,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import RenderError
 from .g2p import get_symbols, lang_id_of
+from .speaker_embed import phone_tensor_for
 from .voicebank import DsSinger
 
 #: 日文假名 + 谚文（用于「歌词识别不了但语言选错」的提示）
@@ -316,7 +317,11 @@ def process_part(singer: DsSinger, phrase_notes: Sequence[Sequence],
         'x_masks': x_masks,
         'ph_midi': _i64_2d(ph_midi),
     }
-    outs = run_session(singer.model('dur'), dur_feeds, providers, 'dsdur dur')
+    # ★ 多说话人：dur 模型要**逐音素**的 spk_embed（上游 :455-464）。
+    #   由 run_session 按模型签名决定加不加 —— 单说话人声库这里什么都不会发生。
+    _spk_names = [p.speaker for n in pp for p in n.phonemes]
+    outs = run_session(singer.model('dur'), dur_feeds, providers, 'dsdur dur',
+                       spk_factory=lambda: phone_tensor_for(singer, _spk_names))
     duration_frames = [float(x) for x in outs[0].reshape(-1)]
 
     # ---- 对齐: :476-496

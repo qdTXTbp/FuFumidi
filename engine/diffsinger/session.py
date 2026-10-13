@@ -413,12 +413,17 @@ class TensorCache:
 
 def run_session(model_path: str, feeds: Dict[str, object], providers: Sequence[str],
                 label: str, identifier: Optional[int] = None,
-                cache_dir: Optional[str] = None):
+                cache_dir: Optional[str] = None, spk_factory=None):
     """跑一次推理 → 输出列表；`identifier` 与 `cache_dir` 都给时走张量缓存。
 
     ★ 对应上游那几处调用点（`DiffSingerRenderer.cs:463/503`、
       `DiffSingerVariance.cs:174/269/279`、`DiffSingerBasePhonemizer.cs:429/467`、
       `DiffSingerPitch.cs:163`）—— 它们都传 `identifier`（模型 hash）。
+
+    `spk_factory`：多说话人声库的嵌入工厂。**只在模型自己声明了 `spk_embed` 时才调用**
+    —— 所以"要不要喂、喂成什么形状"由模型的签名决定，不由我们猜（`verify_input_names`
+    本来就是双向严格比对，少喂一个就抛）。放在这一处而不是四个调用点，是为了不可能漏掉
+    其中任何一跳。工厂返回 None 表示"这个声库没有说话人信息"，就照旧不喂。
     """
     if identifier is not None and cache_dir:
         cache = TensorCache(identifier, feeds)
@@ -426,6 +431,18 @@ def run_session(model_path: str, feeds: Dict[str, object], providers: Sequence[s
         if hit is not None:
             return hit
     session = make_session(model_path, providers)
+    # ★ 多说话人：模型声明了 spk_embed 才加（上游 DiffSingerBasePhonemizer.cs:463）。
+    #   放在这里 = 四处调用点（linguistic/dur/variance/acoustic）自动都覆盖到。
+    if spk_factory is not None and 'spk_embed' not in feeds:
+        try:
+            _want = {i.name for i in session.get_inputs()}
+        except Exception:
+            _want = set()
+        if 'spk_embed' in _want:
+            _t = spk_factory()
+            if _t is not None:
+                feeds = dict(feeds)
+                feeds['spk_embed'] = _t
     verify_input_names(session, feeds)
     try:
         # ★ DirectML 下**同一会话并发 Run 会原生杀进程** —— 必须串行（CPU 下是空操作）

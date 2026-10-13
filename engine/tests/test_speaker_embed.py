@@ -109,3 +109,97 @@ def test_embeds_by_frame_mixes_and_normalizes(tmp_path):
     assert list(half[0, 0]) == pytest.approx([0.5, 0.5])
     over = embeds_by_frame(["a", "b"], 2, 1, [1], {0: np.array([200.0])}, embs)
     assert list(over[0, 0]) == pytest.approx([1.0, 0.0])
+
+
+# ---------------------------------------------------------------- 接进 feed 的钩子
+
+class _FakeSession:
+    """只实现 run_session 用到的那两点：输入签名 + run。"""
+
+    def __init__(self, inputs):
+        self._inputs = list(inputs)
+        self.seen = None
+
+    def get_inputs(self):
+        return [type("I", (), {"name": n})() for n in self._inputs]
+
+    def run(self, _none, feeds):
+        self.seen = dict(feeds)
+        return [b"ok"]
+
+
+def _run(monkeypatch, inputs, feeds, factory, called=None):
+    from diffsinger import session as S
+    fake = _FakeSession(inputs)
+    monkeypatch.setattr(S, "make_session", lambda *a, **k: fake)
+
+    def f():
+        if called is not None:
+            called.append(True)
+        return factory() if callable(factory) else factory
+    out = S.run_session("x.onnx", feeds, ["CPUExecutionProvider"], "test", spk_factory=f)
+    return fake.seen, out
+
+
+def test_hook_adds_spk_embed_only_when_declared(monkeypatch):
+    """★ 模型声明了 spk_embed 才喂 —— 单说话人声库一个字节都不变。"""
+    seen, _ = _run(monkeypatch, ["encoder_out", "spk_embed"], {"encoder_out": 1}, "T")
+    assert seen == {"encoder_out": 1, "spk_embed": "T"}
+    called = []
+    seen2, _ = _run(monkeypatch, ["encoder_out"], {"encoder_out": 1}, "T", called)
+    assert seen2 == {"encoder_out": 1}
+    assert called == [], "模型没声明 spk_embed 时不该去读嵌入文件"
+
+
+def test_hook_raises_when_model_needs_spk_but_no_speaker_info(monkeypatch):
+    """★ 模型要 spk_embed、但声库没有说话人信息（工厂返回 None）→ **必须报错**，
+
+    不许喂一个假的（全零 / 第一个说话人）张量 —— 那会渲染出"能出声但音色不对"的结果，
+    比直接失败难查得多。这正是 verify_input_names 双向严格比对的价值：宁可不响，不要响错。
+    """
+    from diffsinger.session import RenderError
+    with pytest.raises(RenderError) as ei:
+        _run(monkeypatch, ["encoder_out", "spk_embed"], {"encoder_out": 1}, None)
+    assert "多说话人" in str(ei.value)
+
+
+def test_hook_does_not_mutate_caller_feeds(monkeypatch):
+    """不能就地改调用方的 dict —— 那个 feeds 后面还要被别的模型用。"""
+    feeds = {"encoder_out": 1}
+    seen, _ = _run(monkeypatch, ["encoder_out", "spk_embed"], feeds, "T")
+    assert "spk_embed" in seen
+    assert "spk_embed" not in feeds, "调用方的 feeds 被就地改了"
+
+
+# ---------------------------------------------------------------- 工厂
+
+class _Ac:
+    def __init__(self, root, speakers, hidden):
+        self.root, self.speakers, self.hidden_size = root, speakers, hidden
+
+
+class _Singer:
+    def __init__(self, ac):
+        self.acoustic = ac
+
+
+def test_factories_return_none_without_speakers(tmp_path):
+    from diffsinger.speaker_embed import frame_tensor_for, phone_tensor_for
+    s = _Singer(_Ac(str(tmp_path), None, 2))
+    assert phone_tensor_for(s, ["", ""]) is None
+    assert frame_tensor_for(s, 3) is None
+    assert frame_tensor_for(_Singer(None), 3) is None
+
+
+def test_factories_build_upstream_shapes(tmp_path):
+    from diffsinger.speaker_embed import frame_tensor_for, phone_tensor_for
+    write_emb(str(tmp_path / "a.emb"), [1, 0])
+    write_emb(str(tmp_path / "b.emb"), [0, 1])
+    s = _Singer(_Ac(str(tmp_path), ["a", "b"], 2))
+    ph = phone_tensor_for(s, ["", "b", ""])
+    assert ph.shape == (1, 3, 2)
+    assert list(ph[0, 0]) == [1, 0] and list(ph[0, 1]) == [0, 1]
+    fr = frame_tensor_for(s, 4, speaker="b")
+    assert fr.shape == (1, 4, 2)
+    for i in range(4):
+        assert list(fr[0, i]) == [0, 1]
