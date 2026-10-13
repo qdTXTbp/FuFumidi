@@ -182,6 +182,29 @@ def test_autoload_caches_the_miss(tmp_path, monkeypatch):
     _reset()
 
 
+def test_resource_center_entry_matches_engine_layout():
+    """★ 跨语言契约：资源中心那条目的落点必须与引擎找的落点**一致**。
+
+    两边写的是同一件事（`hnsep/hnsep_240512`），任何一边改了另一边不改，
+    就会出现「下载完了，v11 还说没装」—— 而这种不一致**不报错**，最难查。
+    这条断言是唯一能提前拦住它的地方（`main/models.js` 是 JS，引擎侧是 Python，
+    没有任何编译器帮我们看这件事）。
+    """
+    js = os.path.join(os.path.dirname(ENGINE), 'main', 'models.js')
+    if not os.path.isfile(js):
+        pytest.skip('找不到 main/models.js')
+    text = open(js, encoding='utf-8').read()
+    assert "path.join('hnsep', 'hnsep_240512')" == "path.join(%r, %r)" % tuple(
+        hnsep.PACKAGE_DIR_REL.split(os.sep)), '引擎落点变了'
+    assert "path.join('hnsep', hnsep.PACKAGE_ID)" in text \
+        or "path.join('hnsep', 'hnsep_240512')" in text, \
+        '资源中心条目不见了，或落点被改成了别的（引擎会找不到模型）'
+    assert 'hnsep_240512' in text, '资源中心里没有这个条目'
+    # 解包型必须带 unpack 与 marker，否则 .oudep 会被当成"一个文件"下下来
+    assert 'unpack: true' in text and 'unpackMarker' in text, \
+        '.oudep 是压缩包，条目必须声明 unpack/unpackMarker'
+
+
 def test_autoload_with_garbage_model_does_not_raise(tmp_path):
     """走**真的** ONNX 加载路径：占位文件必然被 onnxruntime 拒，但必须被吞掉。"""
     pytest.importorskip('onnxruntime')

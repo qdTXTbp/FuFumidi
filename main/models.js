@@ -139,6 +139,31 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       downloadable: true,
       runtime: 'aria',
     },
+    // Worldline v11（R1.1）的谐波/噪声分离模型。
+    // ★ 它是 `.oudep` —— **内容就是 zip**（实测前 4 字节 50 4B 03 04：hnsep.yaml + model.onnx
+    //   + oudep.yaml + LICENSE）。所以走 `unpack`：下到 <dest>.oudep → 校验 sha256 →
+    //   解包进 dest → 删掉压缩包。落点**必须**与引擎侧一致
+    //   （engine/singing/openutau/hnsep.py 的 PACKAGE_DIR_REL = hnsep/hnsep_240512），
+    //   否则会出现「下载完了 v11 还说没装」—— 这种不一致**不报错**，最难查。
+    //   kind 用 'separate'：资源中心的页签是按 kind 过滤的固定列表，
+    //   hnsep 本身就是个分离器，归「人声分离」页签不需要动前端。
+    hnsep_240512: {
+      id: 'hnsep_240512',
+      name: 'hnsep 谐波分离（Worldline v11）',
+      note: '约 52 MB · MIT（tsurumeso/vocal-remover）',
+      kind: 'separate',
+      arch: 'Hnsep ONNX（STFT 复数掩码）',
+      use: '把原音拆成「谐波 + 噪声」两路，气声与辅音更真。只有「轨道渲染器」选 Worldline v11 时才用得到；没装时 v11 会给出明确报错。',
+      dest: path.join('hnsep', 'hnsep_240512'),
+      unpack: true,
+      unpackMarker: 'hnsep.yaml',
+      url: 'https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/hnsep-v1/hnsep_240512.oudep',
+      sha256: '8f8c1046d0cacd40363e6f71d48bc1663e06a01d4625af0569055648d771ff92',
+      size: 54934878,
+      minSize: 5e7,
+      downloadable: true,
+      runtime: 'worldline-r11',
+    },
   };
   // ===================== MSST 分离模型清单（动态） =====================
   // 数据源：monologue82/Models 仓库 manifest.json（vocal/multi/single/vr 全部分类）+ 本地目录（models-msst-catalog.js，
@@ -378,7 +403,9 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
   }
   function extractLocalArchive(file, outDir) {
     const ext = path.extname(file).toLowerCase();
-    if (ext === '.zip') {
+    // ★ `.oudep` 是 OpenUTAU 的依赖包扩展名，**内容就是 zip**（实测前 4 字节 50 4B 03 04），
+    //   所以按 zip 走同一套安全解包；单独列出来是因为用户在资源中心拿到的就是这个名字。
+    if (ext === '.zip' || ext === '.oudep') {
       const zip = new AdmZip(file);
       const _zsafe = safeExtractAllTo(zip, outDir);
 
@@ -863,6 +890,73 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         _modelCancels.delete(id); _modelPause.delete(id); _activeDownloads.delete(id);
       }
     }
+    // ---- 解包型（.oudep：下下来是压缩包，要解开才算装好）----
+    //    与单文件分支的区别：dest 是**目录**，压缩包是临时的，装好的判据是 unpackMarker。
+    if (spec.unpack) {
+      const destDir = path.join(modelsDir(), spec.dest);
+      const marker = path.join(destDir, spec.unpackMarker || '');
+      if (spec.unpackMarker && fs.existsSync(marker)) {
+        _activeDownloads.delete(id);
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, percent: 100, done: true });
+        return { ok: true, path: destDir, existed: true };
+      }
+      _modelCancels.delete(id); _modelPause.delete(id);
+      const uctrl = new AbortController(); _modelAborts.set(id, uctrl);
+      const archive = destDir + '.oudep';   // 解包后删掉，不留双份
+      try {
+        fs.mkdirSync(destDir, { recursive: true });
+        const urls = mirrorUrls(spec);
+        if (!urls.length) throw new Error('该模型没有可用的下载地址');
+        FastDL.checkDiskSpace(archive, spec.size || spec.minSize || 0);
+        const r = await FastDL.downloadFast({
+          urls,
+          dest: archive,
+          minSize: spec.minSize,
+          headers: { 'user-agent': 'FuFumidi' },
+          isUserAbort: guardOf(id),
+          ctrl: uctrl,
+          expectSize: spec.size || 0,
+          label: spec.name || id,
+          onProgress: (p) => {
+            if (!win || win.isDestroyed()) return;
+            win.webContents.send('model:progress', {
+              id, received: p.received || 0, total: p.total || spec.size || 0,
+              percent: p.percent || 0, done: !!p.done, speed: p.speed || 0,
+              segmented: p.segmented || 1, text: p.text || '',
+            });
+          },
+        });
+        if (spec.sha256) {
+          const hash = await sha256File(archive);
+          if (hash !== spec.sha256) {
+            try { fs.rmSync(archive, { force: true }); } catch (_) {}
+            try { FastDL.cleanSegments(archive); } catch (_) {}
+            throw new Error('SHA256 校验失败：' + hash + '（文件已丢弃，请重试或换源）');
+          }
+        }
+        extractLocalArchive(archive, destDir);
+        try { fs.rmSync(archive, { force: true }); } catch (_) {}
+        try { FastDL.cleanSegments(archive); } catch (_) {}
+        if (spec.unpackMarker && !fs.existsSync(marker)) {
+          throw new Error('解包后没找到 ' + spec.unpackMarker + '（包结构不对，请重试或换源）');
+        }
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: r.size, total: r.size, percent: 100, done: true, speed: 0 });
+        return { ok: true, path: destDir, size: r.size, unpacked: true };
+      } catch (e) {
+        const rawMsg = String((e && e.message) || e);
+        const paused = _modelPause.has(id);
+        const canceled = _modelCancels.has(id);
+        const msg = (e && e.cancelled) || /aborted/i.test(rawMsg)
+          ? (paused ? '已暂停（断点已保留，继续时会接着下）' : '下载中断（断点已保留，可稍后重试续传）')
+          : rawMsg;
+        console.log('[model] 解包型下载失败：' + rawMsg);
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, error: msg, canceled, paused });
+        return { ok: false, error: msg, canceled, paused };
+      } finally {
+        _modelCancels.delete(id); _modelAborts.delete(id); _modelPause.delete(id); _activeDownloads.delete(id);
+      }
+    }
+
     const dest = path.join(modelsDir(), spec.dest);
     if (fs.existsSync(dest) && fs.statSync(dest).size >= spec.minSize) {
       _activeDownloads.delete(id);
