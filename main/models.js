@@ -145,13 +145,14 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     //   解包进 dest → 删掉压缩包。落点**必须**与引擎侧一致
     //   （engine/singing/openutau/hnsep.py 的 PACKAGE_DIR_REL = hnsep/hnsep_240512），
     //   否则会出现「下载完了 v11 还说没装」—— 这种不一致**不报错**，最难查。
-    //   kind 用 'separate'：资源中心的页签是按 kind 过滤的固定列表，
-    //   hnsep 本身就是个分离器，归「人声分离」页签不需要动前端。
+    //   kind 用 'tuning'：★ 2026-10-14 按用户要求，资源中心改成两级分类 ——
+    //   顶层「调教」下面再分 声库 / 音色 / 调教模型。hnsep 只在调教渲染时用得到，
+    //   放「人声分离」会让用户去错地方找（那也是它一开始的归属，已按用户意见修正）。
     hnsep_240512: {
       id: 'hnsep_240512',
       name: 'hnsep 谐波分离（Worldline v11）',
       note: '约 52 MB · MIT（tsurumeso/vocal-remover）',
-      kind: 'separate',
+      kind: 'tuning',
       arch: 'Hnsep ONNX（STFT 复数掩码）',
       use: '把原音拆成「谐波 + 噪声」两路，气声与辅音更真。只有「轨道渲染器」选 Worldline v11 时才用得到；没装时 v11 会给出明确报错。',
       dest: path.join('hnsep', 'hnsep_240512'),

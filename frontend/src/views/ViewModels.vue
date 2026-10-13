@@ -17,19 +17,34 @@ const toast = (m, type) => app.toast(m, type);
 const bridge = window.fuBridge;
 
 /* ---------------- 分类 --------------- */
+/* ---------------- 分类 ----------------
+ * ★ 2026-10-14 按用户要求改成**两级**：顶层 4 类，「调教」下面再分声库 / 音色 / 调教模型。
+ *   理由：声库（DiffSinger/UTAU）、音色（GPT-SoVITS）、hnsep 这些东西的共同点是
+ *   「让工具唱起来」，跟「转录 / 分离」不是一类。原来摊平成 6 个顶层页签时，
+ *   用户得先知道 hnsep 是干什么的才能找到它。
+ */
 const TABS = computed(() => [
   { id: 'transcribe', label: t('转录模型'), ic: 'transcribe' },
   { id: 'separate', label: t('人声分离'), ic: 'mic' },
   { id: 'other', label: t('修复·VR'), ic: 'box' },
-  { id: 'diffsinger', label: t('DiffSinger 声库'), ic: 'spark' },
-  // UTAU 声库（开源 / 免费，一键下载安装）：声库属于「资源」，统一收在模型管理里，
-  // 不再散落在资源管理页 —— 用户找声库只需要记住一个地方。
-  { id: 'utau', label: t('UTAU 声库'), ic: 'mic' },
-  // GPT-SoVITS 社区微调音色（资源中心下载，落点 <模型目录>/gpt-sovits/voices/）：
-  // 与 DiffSinger 声库并列 —— 它也是「一个音色」，只是唱法走逐句参考重合成（见「翻唱」页）。
-  { id: 'tts', label: t('GPT-SoVITS 音色'), ic: 'mic' },
+  { id: 'tuning', label: t('调教'), ic: 'spark' },
 ]);
+/** 调教下面的二级分类。id **不是** kind —— 声库那两类各走自己的目录组件。 */
+const TUNING_SUBS = computed(() => [
+  { id: 'ds', label: t('声库 · DiffSinger'), ic: 'spark' },
+  { id: 'utau', label: t('声库 · UTAU'), ic: 'mic' },
+  { id: 'voices', label: t('音色 · GPT-SoVITS'), ic: 'mic' },
+  { id: 'models', label: t('调教模型'), ic: 'box' },
+]);
+/** 二级分类里哪两个是卡片网格（另外两个是独立目录组件，没有 kind） */
+const SUB_KIND = { voices: 'tts', models: 'tuning' };
 const curTab = ref('transcribe');
+const curSub = ref('ds');
+/** 网格实际按哪个 kind 过滤：调教下看二级，其余看顶层 */
+const listKind = computed(() => (curTab.value === 'tuning' ? (SUB_KIND[curSub.value] || '') : curTab.value));
+const showDs = computed(() => curTab.value === 'tuning' && curSub.value === 'ds');
+const showUtau = computed(() => curTab.value === 'tuning' && curSub.value === 'utau');
+const showGrid = computed(() => (curTab.value === 'tuning' ? !!SUB_KIND[curSub.value] : true));
 
 /* ---------------- 模型列表与进度 ---------------- */
 const list = ref([]);
@@ -37,18 +52,30 @@ const prog = reactive({});            // id -> {active, percent, speed, received
 const loading = ref(false);
 const detail = ref(null);             // 当前选中模型（详情抽屉）
 
-const tabbedList = computed(() => list.value.filter(m => m.kind === curTab.value));
+const tabbedList = computed(() => list.value.filter(m => m.kind === listKind.value));
 // DiffSinger 声库不在 modelList 里，数量从共享 store 取（由 DiffSingerCatalog 拉目录后写入）；
 // 未加载完成前显示「…」而非 0，避免误报「可下载声库数量为 0」。
 function countFor(tb) {
-  if (tb === 'diffsinger') return vbStore.dsLoaded ? vbStore.dsAvailable : null;
-  // UTAU 声库来自独立注册表（UtauVoicebankStore 自己拉），这里不给数字，避免误报 0
+  // 调教 = 声库 + 音色 + 模型，其中 UTAU 声库的数字来自它自己的注册表 ——
+  // 硬凑一个合计数只会给出一个错的数字，不如显示「…」。
+  if (tb === 'tuning') return null;
+  if (tb === 'ds') return vbStore.dsLoaded ? vbStore.dsAvailable : null;
   if (tb === 'utau') return null;
   return list.value.filter(m => m.kind === tb).length;
 }
 function cnt(n) { return n == null ? '…' : String(n); }
 
 function kindIcon(m) { return (m.kind === 'separate' || m.kind === 'tts') ? 'mic' : (m.kind === 'transcribe') ? 'music' : 'box'; }
+/** kind → 给用户看的分类名（详情抽屉用）。
+ *  ★ 新增 kind **必须**来这里加一行 —— 漏了会把它显示成「修复工具」，
+ *    分类名写错比不显示更糟。 */
+function kindLabel(k) {
+  if (k === 'separate') return t('人声分离');
+  if (k === 'transcribe') return t('转录模型');
+  if (k === 'tts') return t('音色');
+  if (k === 'tuning') return t('调教模型');
+  return t('修复工具');
+}
 /** 外部门户（论坛 / 网盘 / Spaces）：不能一键下载，只把用户送去该去的地方 */
 function openExternal(m) {
   if (!m || !m.url) return;
@@ -143,7 +170,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
         <div class="page-title">{{ t('模型管理') }}</div>
         <div class="page-sub">{{ TABS.map(tb => tb.label + ' ' + cnt(countFor(tb.id))).join(' · ') }}</div>
       </div>
-      <button v-if="curTab !== 'diffsinger'" class="btn sm ghost" @click="refresh">{{ t('刷新') }}</button>
+      <button v-if="!showDs" class="btn sm ghost" @click="refresh">{{ t('刷新') }}</button>
     </div>
 
     <!-- 分类页签 -->
@@ -153,24 +180,32 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
       </button>
     </div>
 
+    <!-- 调教的二级分类：声库 / 音色 / 调教模型 -->
+    <div v-if="curTab === 'tuning'" class="vm-subtabs">
+      <button v-for="sb in TUNING_SUBS" :key="sb.id" class="vm-subtab" :data-guide="'vm-sub-' + sb.id"
+              :class="{ active: curSub === sb.id }" @click="curSub = sb.id">
+        <span class="tb-ic"><Icon :name="sb.ic" :size="13" /></span>{{ sb.label }}
+      </button>
+    </div>
+
     <!-- 醒目提示：下载依赖补全 + 下载慢换源，合并成**一条**（两条提示占了两行，
          信息密度低、还各带一个图标，视觉上比内容更抢眼） -->
-    <div v-if="curTab !== 'diffsinger'" class="vm-dep-tip">
+    <div v-if="!showDs" class="vm-dep-tip">
       <span class="vm-dep-ic"><Icon name="zap" :size="14" /></span>
       <span>{{ t('下载后请到「资源管理」补全依赖（否则模型可能无法使用）；下载慢可在设置页切换下载源') }}</span>
     </div>
 
     <!-- DiffSinger 声库目录（独立板块，非模型卡片的 kind 分组） -->
-    <DiffSingerCatalog v-if="curTab === 'diffsinger'" />
+    <DiffSingerCatalog v-if="showDs" />
 
     <!-- UTAU 声库（开源 / 免费）：一键下载安装，装完可在「调教」里直接选来唱 -->
-    <div v-else-if="curTab === 'utau'" class="vm-utau">
+    <div v-else-if="showUtau" class="vm-utau">
       <UtauVoicebankStore />
     </div>
 
     <!-- 卡片网格 -->
-    <Transition v-else name="vmfade" mode="out-in">
-      <div class="vm-grid" :key="curTab">
+    <Transition v-else-if="showGrid" name="vmfade" mode="out-in">
+      <div class="vm-grid" :key="listKind">
         <div v-for="(m, i) in tabbedList" :key="m.id" class="vm-card" :class="{ inst: m.exists, down: prog[m.id] && prog[m.id].active }" :style="{ animationDelay: (i * 40) + 'ms' }" @click="detail = m">
           <div class="vm-top" :class="'k-' + (m.kind || 'other')"></div>
           <div class="vm-head">
@@ -206,7 +241,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
             <span class="dm-ic"><Icon :name="kindIcon(detail)" :size="16" /></span>
             <div class="dm-title">
               <b>{{ detail.name }}</b>
-              <small>{{ detail.arch }} · {{ detail.kind === 'separate' ? t('人声分离') : (detail.kind === 'transcribe' ? t('转录模型') : t('修复工具')) }}</small>
+              <small>{{ detail.arch }} · {{ kindLabel(detail.kind) }}</small>
             </div>
             <button class="icon-btn" style="margin-left:auto" @click="closeDetail"><Icon name="close" :size="15" /></button>
           </div>
@@ -217,7 +252,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
             </div>
             <div class="vm-meta">
               <div class="meta-row"><span class="meta-k">{{ t('架构') }}</span><span>{{ detail.arch || '—' }}</span></div>
-              <div class="meta-row"><span class="meta-k">{{ t('分类') }}</span><span>{{ detail.kind === 'separate' ? t('人声分离') : (detail.kind === 'transcribe' ? t('转录模型') : t('修复工具')) }}</span></div>
+              <div class="meta-row"><span class="meta-k">{{ t('分类') }}</span><span>{{ kindLabel(detail.kind) }}</span></div>
               <div class="meta-row"><span class="meta-k">{{ t('大小') }}</span><span>{{ human(detail.size) }}</span></div>
               <div v-if="detail.repo" class="meta-row"><span class="meta-k">{{ t('来源') }}</span><span class="mono">{{ detail.repo }}</span></div>
               <div v-if="detail.parts" class="meta-row"><span class="meta-k">{{ t('分卷') }}</span><span>{{ detail.parts }} × 25MB</span></div>
@@ -283,6 +318,14 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 .vm-top.k-separate { background: linear-gradient(90deg, #4facfe, #00f2fe); }
 .vm-top.k-other { background: linear-gradient(90deg, #43e97b, #38f9d7); }
 .vm-top.k-tts { background: linear-gradient(90deg, #a18cd1, #fbc2eb); }
+.vm-top.k-tuning { background: linear-gradient(90deg, #f6d365, #fda085); }
+/* 调教的二级页签：比顶层轻一档（胶囊、小一号），避免和顶层抢层级 */
+.vm-subtabs { display: flex; gap: 6px; margin: -6px 0 14px; flex-wrap: wrap; }
+.vm-subtab { display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px; border: 1px solid var(--hairline); border-radius: 999px; background: var(--surface); color: var(--slate); font-size: 11.5px; cursor: pointer; }
+.vm-subtab .tb-ic { display: inline-flex; width: 17px; height: 17px; align-items: center; justify-content: center; }
+.vm-subtab:hover { background: var(--surface-soft); color: var(--ink); }
+.vm-subtab.active { background: color-mix(in srgb, var(--brand-coral) 12%, var(--surface)); border-color: color-mix(in srgb, var(--brand-coral) 42%, var(--hairline)); color: var(--ink); }
+
 .vm-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
 .vm-ic { display: inline-flex; width: 26px; height: 26px; align-items: center; justify-content: center; border-radius: 8px; background: var(--surface-soft); color: var(--brand-coral); font-size: 15px; }
 .vm-arch { font-size: 10.5px; font-weight: 600; color: var(--stone); text-transform: uppercase; letter-spacing: .2px; font-family: var(--mono); transition: color .15s; }

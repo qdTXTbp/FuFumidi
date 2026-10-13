@@ -1472,6 +1472,11 @@ export const I18N_MAP = {
   '最低音高': 'Lowest pitch',
   // WP1-5：高级参数区分组。用户指定按「质量组 / 速度组」分（此前按作用域分的那版作废）。
   '质量组（影响识别与导出结果）': 'Quality (affects detection & export)',
+  // 资源中心两级分类：调教 = 声库 + 音色 + 调教模型
+  '声库 · DiffSinger': 'Voicebank · DiffSinger',
+  '声库 · UTAU': 'Voicebank · UTAU',
+  '音色 · GPT-SoVITS': 'Voice · GPT-SoVITS',
+  '调教模型': 'Tuning models',
   // WP4-5「最后一跳」：轨道渲染器选择
   '逐音素（默认，最快）': 'Per-phoneme (default, fastest)',
   'Worldline v10（乐句级）': 'Worldline v10 (phrase-level)',
