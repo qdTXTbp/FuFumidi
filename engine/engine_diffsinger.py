@@ -224,6 +224,8 @@ def cmd_inspect(args):
         # `vocoder` 是**声码器 onnx 的文件名**（旧版为空串表示"用通用组件位"）
         "vocoder": os.path.basename(singer.model("vocoder")),
         "builtinVocoder": builtin_vocoder,
+        # 多说话人：声库声明的说话人（**嵌入文件基名**，不含 .emb）。>1 时界面才显示选择。
+        "speakers": list(getattr(singer.acoustic, "speakers", None) or []),
         "dictionaryFile": dict_name,
         "dictionaryWords": dictionary_words,
         "sampleRate": singer.sample_rate,

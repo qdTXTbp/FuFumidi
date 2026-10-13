@@ -997,6 +997,54 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
   // ★ 只列**通用**的：数据根 vocoder/ 下的目录与 .onnx、以及通用组件位 Dependency/。
   //   **声库自带的 dsvocoder/ 不列** —— 引擎语义是"自带优先、覆盖只在没自带时生效"，
   //   把它列出来只会让人以为能强行换掉某个声库自带的声码器。
+  // 多说话人声库的说话人**并集**（供界面「默认说话人」下拉）。
+  // ★ 直接读各声库 dsconfig.yaml 的 speakers:，不起 Python —— 只是一次目录扫描。
+  //   条目是**嵌入文件基名**（不含 .emb）；引擎按名字匹配当前声库，匹配不上回落第一个。
+  ipcMain.handle('diffsinger:speakers', async () => {
+    const items = [];
+    const all = new Set();
+    try {
+      const root = Paths.diffsingerVoicebanksDir();
+      if (fs.existsSync(root)) {
+        for (const n of fs.readdirSync(root)) {
+          const dir = path.join(root, n);
+          let st = null;
+          try { st = fs.statSync(dir); } catch (e) { continue; }
+          if (!st.isDirectory()) continue;
+          let txt = '';
+          try { txt = fs.readFileSync(path.join(dir, 'dsconfig.yaml'), 'utf8'); } catch (e) { continue; }
+          const names = [];
+          let inBlock = false;
+          for (const raw of txt.split(/\r?\n/)) {
+            const t = raw.split('#')[0].replace(/\s+$/, '');
+            if (!t.trim()) continue;
+            const m = t.match(/^\s*speakers\s*:\s*(.*)$/);
+            if (m) {
+              const rest = m[1].trim();
+              if (rest.startsWith('[')) {
+                for (const s of rest.replace(/^\[|\]$/g, '').split(',')) {
+                  const q = s.trim().replace(/^["']|["']$/g, '');
+                  if (q) names.push(q);
+                }
+              }
+              inBlock = true;
+              continue;
+            }
+            if (inBlock) {
+              if (/^\s*-/.test(t)) {
+                const q = t.trim().replace(/^-\s*/, '').replace(/^["']|["']$/g, '');
+                if (q) names.push(q);
+              } else if (!/^\s/.test(t)) { inBlock = false; }
+            }
+          }
+          if (names.length) items.push({ dir, name: n, speakers: names });
+          for (const s of names) all.add(s);
+        }
+      }
+    } catch (e) {}
+    return { ok: true, items, speakers: [...all] };
+  });
+
   ipcMain.handle('diffsinger:vocoders', async () => {
     const items = [];
     const push = (p, name) => { if (!items.some((x) => x.path === p)) items.push({ id: p, name, path: p }); };

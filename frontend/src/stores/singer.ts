@@ -1841,6 +1841,10 @@ export const useSingerStore = defineStore('singer', {
       //   那一个默认的。主进程曾经是**写死**的，界面上换不了（见 main/diffsinger.js）。
       //   引擎侧语义：声库自带 dsvocoder/ 时它会被忽略。
       vocoder: (typeof localStorage !== 'undefined' && localStorage.getItem('fufumidi_ds_vocoder')) || '',
+      // ★ 多说话人声库的默认说话人（界面偏好在「声库」面板里选）。空 = 引擎用声明的第一个。
+      //   引擎侧链路：render/sing-render --speaker → render_phrase/render_notes
+      //   → phonemizer.set_default_speaker + singer.acoustic.speaker → spk_embed 张量。
+      speaker: (typeof localStorage !== 'undefined' && localStorage.getItem('fufumidi_ds_speaker')) || '',
     },
         ...(outPath ? { outPath } : {}),
       });

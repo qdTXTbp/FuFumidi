@@ -524,6 +524,8 @@ export interface DiffsingerVoicebankInfo {
   vocoder?: string;
   /** 声库自带 dsvocoder/（否则用通用组件位） */
   builtinVocoder?: boolean;
+  /** 多说话人声库声明的说话人名（嵌入文件基名）；>1 时界面才显示选择 */
+  speakers?: string[];
   /** 实际加载的那份词典的词条数（dsdict-<lang>.yaml 的 entries 条数） */
   dictionaryWords?: number;
   /** 实际加载的词典文件名，如 `dsdict-zh.yaml` */
@@ -883,6 +885,8 @@ export interface FuBridge {
   diffsingerInspectVoicebank(cfg: { voicebank: string }): Promise<DiffsingerVoicebankInfo>;
   /** 通用声码器候选（数据根 vocoder/ 与通用组件位 Dependency/）。**不含**声库自带的 dsvocoder。 */
   diffsingerVocoders(): Promise<{ ok: boolean; items: { id: string; name: string; path: string }[]; dir?: string; error?: string }>;
+  /** 已装声库声明的说话人并集（多说话人声库用；条目是嵌入文件基名） */
+  diffsingerSpeakers(): Promise<{ ok: boolean; items: { dir: string; name: string; speakers: string[] }[]; speakers: string[] }>;
   /** 歌词输入建议。`language` 为**轨道级**语言设置，不从歌词自动判断。 */
   diffsingerSuggestLyric(cfg: { text: string; language?: string; voicebank?: string; limit?: number }): Promise<DiffsingerSuggestResult>;
   diffsingerRender(cfg: {

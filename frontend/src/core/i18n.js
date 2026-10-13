@@ -3206,6 +3206,9 @@ export const I18N_MAP = {
   "多条弯音曲线": "Multiple pitch bends",
   /* 通用声码器覆盖（DiffSinger）：声库未自带 dsvocoder 时生效 */
   "自动（用默认的那一个）": "Automatic (use the default one)",
+  /* 多说话人声库：默认说话人（引擎按 .emb 嵌入合成） */
+  "默认（声库声明的第一个）": "Default (the first one declared by the voicebank)",
+  "多说话人声库：选本轨用哪个说话人（引擎按它的 .emb 嵌入合成；名字不在当前声库里时回落第一个）": "Multi-speaker voicebank: choose which speaker this track uses (the engine synthesises with its .emb embedding; if the name is not in the current voicebank it falls back to the first).",
   "top-k": "top-k",
   "top-p": "top-p",
   "温度": "Temperature",

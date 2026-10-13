@@ -24,6 +24,7 @@ const singerStore = useSingerStore();
 onMounted(() => {
   void singerStore.loadBanks();
   void ds.loadVocoders();      // 通用声码器候选（下拉用）
+  void ds.loadSpeakers();      // 多说话人声库的说话人（下拉用）
 onActivated(() => { void singerStore.loadBanks(); });
   /* 验收桥（与其它页同一套开关）：别名表的读/改/存/试听在 CDP 里要能直接驱动 */
   if (localStorage.getItem('fufumidi_debug') === '1') {
@@ -751,6 +752,15 @@ function onRangeClick() {
               <option v-for="v in ds.vocoders" :key="v.id" :value="v.path">{{ v.name }}</option>
             </select>
             <p class="muted small">{{ t('声库自带 dsvocoder 时这一项会被忽略（自带优先）') }}</p>
+          </div>
+          <!-- 多说话人声库：默认说话人。★ 只在真的存在多说话人声库时才显示 ——
+               单说话人环境下多一个只有一个选项的下拉，纯噪声。 -->
+          <div v-if="ds.speakerOptions.length > 1" class="vbp-voc">
+            <select class="select-input" :value="ds.speakerPick" @change="ds.setSpeaker($event.target.value)">
+              <option value="">{{ t('默认（声库声明的第一个）') }}</option>
+              <option v-for="sp in ds.speakerOptions" :key="sp" :value="sp">{{ sp }}</option>
+            </select>
+            <p class="muted small">{{ t('多说话人声库：选本轨用哪个说话人（引擎按它的 .emb 嵌入合成；名字不在当前声库里时回落第一个）') }}</p>
           </div>
         </div>
       </div>
