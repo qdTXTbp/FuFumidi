@@ -184,17 +184,27 @@ class ResamplerItem:
 
         self.preutter = float(phone.preutter_ms)
         self.overlap = float(phone.overlap_ms)
-        self.offset = phone.oto.offset
         # 辅音伸缩：2^(1 - velocity*0.01)，与 VEL 语义一致（不是线性）
         stretch_ratio = 2 ** (1.0 - self.velocity * 0.01)
-        pitch_leading_ms = phone.oto.preutter * stretch_ratio
-        self.skip_over = phone.oto.preutter * stretch_ratio - phone.leading_ms
+        # ★ 上游 b30d3347「Relax the preutter override cap to the start of the file」
+        #   （2026-10-13 移植）：preutter 超过 oto 的值（按 velocity 缩放后）时，
+        #   **原来被截在 oto 处**（offset 直接用 oto.offset）；现在改为把 offset **往前拉**，
+        #   最多拉到文件开头 —— 与 oto 编辑器显示的一致。
+        #   辅音末端与负 cutoff 在文件中的位置保持不变（所以它们要跟着加上 pulled）。
+        #   · 取整到 3 位小数：避免浮点噪声改变 hash（hash 一变缓存全失效）
+        #   · 上界 `max(0, oto.offset)`：offset 为 0 时就无处可拉
+        pulled_ms = round(phone.leading_ms / stretch_ratio - phone.oto.preutter, 3)
+        pulled_ms = min(max(pulled_ms, 0.0), max(0.0, phone.oto.offset))
+        self.offset = phone.oto.offset - pulled_ms
+        pitch_leading_ms = (phone.oto.preutter + pulled_ms) * stretch_ratio
+        self.skip_over = pitch_leading_ms - phone.leading_ms
+        self.consonant = phone.oto.consonant + pulled_ms
+        # cutoff < 0 表示「从结尾算」，往前拉了就得跟着往前移；>= 0 的保持不变
+        self.cutoff = (phone.oto.cutoff - pulled_ms) if phone.oto.cutoff < 0 else phone.oto.cutoff
         dur_required = phone.end_ms - phone.position_ms + phone.dur_correction_ms + self.skip_over
-        dur_required = max(dur_required, phone.oto.consonant)
+        dur_required = max(dur_required, self.consonant)
         self.dur_required = _ceil(dur_required / 50.0 + 0.5) * 50.0
         self.dur_correction = phone.dur_correction_ms
-        self.consonant = phone.oto.consonant
-        self.cutoff = phone.oto.cutoff
 
         self.tempo = phone.adjusted_tempo
 

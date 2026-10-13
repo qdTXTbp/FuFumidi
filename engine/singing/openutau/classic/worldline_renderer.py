@@ -306,8 +306,9 @@ class WorldlineRenderer(IRenderer):
             samples = Wave.get_samples(phone.oto.file)
             if samples is None:
                 continue
-            offset = int(phone.oto.offset / 1000 * SAMPLE_RATE)
-            cutoff = int(phone.oto.cutoff / 1000 * SAMPLE_RATE)
+            # ★ 上游 b30d3347：同 sharp_wavtool，用 ResamplerItem 算出来的值
+            offset = int(item.offset / 1000 * SAMPLE_RATE)
+            cutoff = int(item.cutoff / 1000 * SAMPLE_RATE)
             length = (len(samples) - offset - cutoff) if cutoff >= 0 else -cutoff
             # C# 的 `Skip(offset).Take(length)`：Take 负数得到空数组（不抛错）
             samples = samples[offset:offset + length] if length > 0 else []

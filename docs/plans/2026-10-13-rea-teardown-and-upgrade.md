@@ -296,6 +296,61 @@ in resampler manifest」加进来的）。
 `worldline_renderer.py:34` 明确写着「**v11**：`PhraseSynthV2(use_hnsep: true)` —— 谐波/噪声分离模型
 `Hnsep` **未搬**」。没搬 Hnsep 就不需要 `_hnsep` 边车文件，**两者是一致的**。
 哪天要跟 Worldline v11，这两个得一起做。
+### 3.6 ✅ Q1 已落地 · 移植上游 `b30d3347`「preutter 上限放宽到文件开头」
+
+上游 `b30d3347`（2026-10-05）改了 4 个文件。提交说明原文：
+
+> A preutter past the oto's (scaled by velocity) used to be capped there.
+> Past it, rendering now moves the offset earlier, as the oto editor does,
+> down to the start of the file. Lengthen crossfade still caps at the oto.
+
+**这是调教正确性修复**：preutter 设得比 oto 值大（按 VEL 缩放后）时，
+原来渲染**把它截在 oto 处**；现在改为把 offset **往前拉**，最多拉到文件开头 ——
+**与 oto 编辑器里显示的一致**。原文强调「拉长交叉淡化仍截在 oto」，即只放宽 preutter 这一项。
+
+#### 核心算法（`ResamplerItem`）
+
+```python
+pulled_ms = round(phone.leading_ms / stretch_ratio - phone.oto.preutter, 3)
+pulled_ms = min(max(pulled_ms, 0.0), max(0.0, phone.oto.offset))   # 上界=文件开头
+self.offset    = phone.oto.offset - pulled_ms
+pitch_leading_ms = (phone.oto.preutter + pulled_ms) * stretch_ratio
+self.skip_over = pitch_leading_ms - phone.leading_ms
+self.consonant = phone.oto.consonant + pulled_ms
+self.cutoff    = (phone.oto.cutoff - pulled_ms) if phone.oto.cutoff < 0 else phone.oto.cutoff
+```
+
+两个细节别丢：
+
+- **取整到 3 位小数** —— 上游注释写明是为了「float noise 不改变 hash」。
+  `ResamplerItem` 的 hash 参与缓存文件名，噪声一变缓存全失效。
+  Python 的 `round()` 与 C# `Math.Round(x, 3)` 同为银行家舍入，**语义一致**。
+- **负 cutoff 要跟着移**：`cutoff < 0` 表示「从结尾算」，往前拉了它也得往前；`>= 0` 的保持不变。
+  辅音末端同理（`consonant + pulled_ms`），这样它们在**文件中的绝对位置**不变。
+
+#### 四处改动
+
+| 文件 | 改动 |
+|---|---|
+| `classic/resampler_item.py` | 上述核心算法 |
+| `classic/sharp_wavtool.py` | `oto.offset/cutoff` → **`item.offset/cutoff`** |
+| `classic/worldline_renderer.py` | 同上 |
+| `phoneme.py` | 新增 `max_file_preutter = (oto.preutter + max(0, oto.offset)) * consonant_stretch` |
+
+**两个 wavtool 那两处是关键**：只改 `ResamplerItem` 而不改它们，`direct`（直通）路径仍按 oto 原值切片，
+就会和 resampler 路径**对不上** —— 这是这类改动最容易漏的地方。
+
+#### 一处**不需要移植**的
+
+上游第 4 个文件 `Commands/NoteCommands.cs` 把 clamp 上限从 `maxOtoPreutter` 换成 `maxFilePreutter`。
+我们这边 `max_oto_preutter` **只定义、从不消费**，说明那个 clamp（钢琴卷帘里拖 preutter 手柄的上限）
+没被移植；而 `preutterDelta` 在 `frontend/src` 里**只出现在一个测试夹具**中，**没有任何 UI 会写它**。
+→ **没有对应物，无需移植。**
+
+#### 验收
+
+- 4 个文件 `ast.parse` 通过
+- `pytest engine/tests` → **exit 0，249 passed / 1 skipped**
 ### 3.3 明确不跟的
 
 - `RenderEngine.cs` 的 **Track Polish 改版**（含 UI 改动，与「UI 不变」冲突）

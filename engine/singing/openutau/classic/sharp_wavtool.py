@@ -92,8 +92,10 @@ class SharpWavtool(IWavtool):
             if item.phone.direct:
                 samples = Wave.get_samples(item.input_file)
                 # C# 是 `(int)` 截断转换（不是四舍五入）
-                offset = int(item.phone.oto.offset / 1000 * SAMPLE_RATE)
-                cutoff = int(item.phone.oto.cutoff / 1000 * SAMPLE_RATE)
+                # ★ 上游 b30d3347：改用 item.offset / item.cutoff（而不是 oto 的原值）——
+                #   preutter 超过 oto 时 ResamplerItem 会把 offset 往前拉，这里必须跟着用。
+                offset = int(item.offset / 1000 * SAMPLE_RATE)
+                cutoff = int(item.cutoff / 1000 * SAMPLE_RATE)
                 length = (len(samples) - offset - cutoff) if cutoff >= 0 else -cutoff
                 # C# 是 `Skip(offset).Take(length)`：length ≤ 0 时取空，不是负索引切片
                 segment.samples = samples[offset:offset + max(0, length)]
