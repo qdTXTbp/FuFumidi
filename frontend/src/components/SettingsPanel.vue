@@ -14,6 +14,8 @@ const toast = (m, t) => app.toast(m, t);
 // 当前版本号（从主进程读取，与 SideBar 左下角一致）
 const appVersion = ref('v3.1.8');
 import { getAppVersion, cmpVersion, getUpdateChannel, setUpdateChannel, normalizeUpdateChannel, getDownloadSource, setDownloadSource, normalizeDownloadSource } from '../core/version.js';
+// 线路测速的呈现层纯函数（格式化 / 按 id 合并流式结果 / 标最快）
+import { pendingRow, markBest, mergeRow, formatLatency, formatSpeed } from '../core/speedtest.js';
 getAppVersion().then(v => { appVersion.value = v; });
 import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';
 import NumSlider from './NumSlider.vue';
@@ -295,6 +297,67 @@ function setSource(src) {
   upd.status = ''; upd.failed = false; upd.launched = false;
   toast(t('已切换下载源：') + sourceLabel(next));
 }
+
+/* ---------------- 线路测速 ---------------- */
+// 参考 BetterGI / FufuLauncher 的选源方式（REA 取证见 docs/REA-installer-and-updater.md）：
+// 把当前通道下的每条线路**列成表**，量「首字节延迟 + 下载速率」，让用户看着数字选，
+// 而不是只知道"国内/全球"两档。测速在主进程做（渲染进程直连会被 CORS 挡），
+// 每条只取 256 KB 就断开 —— 测速不该把 150 MB 的安装包下完。
+const speedRows = ref([]);
+const speedBusy = ref(false);
+const preferredSource = ref('');
+let offSpeed = null;
+
+// 流式结果按 **id** 合并（并发回来顺序 ≠ 列表顺序，按顺序写会串行）
+function mergeRowSafe(rows, row) { return mergeRow(rows, row); }
+
+function kindLabel(kind) {
+  return kind === 'cnb' ? t('国内源') : kind === 'github' ? t('官方直连') : t('国内镜像');
+}
+
+async function loadSpeedSources() {
+  const bridge = window.fuBridge;
+  if (!bridge || !bridge.updateSources) return;
+  try {
+    const list = await bridge.updateSources(getUpdateChannel());
+    speedRows.value = (list || []).map(pendingRow);
+  } catch (e) { speedRows.value = []; }
+}
+
+async function runSpeedtest() {
+  const bridge = window.fuBridge;
+  if (!bridge || !bridge.updateSpeedtest) { toast(t('当前环境不支持线路测速')); return; }
+  if (speedBusy.value) return;
+  speedBusy.value = true;
+  await loadSpeedSources();
+  try {
+    const res = await bridge.updateSpeedtest(getUpdateChannel());
+    if (Array.isArray(res) && res.length) speedRows.value = markBest(res);
+  } catch (e) {
+    toast(t('线路测速失败：') + ((e && e.message) || e));
+  } finally { speedBusy.value = false; }
+}
+
+async function useLine(row) {
+  const bridge = window.fuBridge;
+  if (!bridge || !bridge.updateSetPreferredSource || !row) return;
+  preferredSource.value = row.id;
+  try { settingsStore.save({ update_preferred_source: row.id }); } catch (e) {}
+  try { await bridge.updateSetPreferredSource(row.id); } catch (e) {}
+  toast(t('已设为首选线路：') + row.label + t('（不可达时自动换下一条）'));
+}
+
+onMounted(async () => {
+  try {
+    const st = (await settingsStore.load()) || {};
+    preferredSource.value = String(st.update_preferred_source || '');
+  } catch (e) {}
+  await loadSpeedSources();
+  // 主进程测一条回一条 —— 表格"一条条亮起来"，不是转圈等全部测完
+  const bridge = window.fuBridge;
+  if (bridge && bridge.onSpeedtest) offSpeed = bridge.onSpeedtest(row => { speedRows.value = mergeRowSafe(speedRows.value, row); });
+});
+onBeforeUnmount(() => { try { offSpeed && offSpeed(); } catch (e) {} });
 
 /* ---------------- 卸载 ---------------- */
 // 3.2.7：设置 → 更新页签 → 卸载应用。二次确认后启动 NSIS 卸载器，主程序自动退出。
@@ -1391,6 +1454,33 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
             </div>
           </div>
 
+          <!-- 线路测速：把「国内/全球」两档展开成**每条线路一张表**（延迟 + 速率） -->
+          <div class="field-row" style="margin-top:14px">
+            <div style="width:100%;min-width:0">
+              <div class="fr-label">{{ t('线路测速') }}</div>
+              <div class="fr-hint">{{ t('列出当前通道下的每条线路，测首字节延迟与下载速率。每条只取 256 KB 就断开，不会下载整个安装包。') }}</div>
+              <div class="sp-table">
+                <div class="sp-tr sp-th">
+                  <span>{{ t('线路') }}</span><span>{{ t('类型') }}</span><span>{{ t('延迟') }}</span><span>{{ t('速率') }}</span><span></span>
+                </div>
+                <div v-for="row in speedRows" :key="row.id" class="sp-tr" :class="{ best: row.best, dead: row.ok === false }"
+                     :title="row.ok === false && row.error ? row.error : row.label">
+                  <span class="sp-name">{{ row.label }}<em v-if="row.best">{{ t('最快') }}</em></span>
+                  <span class="sp-kind">{{ kindLabel(row.kind) }}</span>
+                  <span class="sp-num">{{ formatLatency(row) }}</span>
+                  <span class="sp-num">{{ formatSpeed(row) }}</span>
+                  <span class="sp-act">
+                    <button class="sp-use" :disabled="row.ok !== true" @click="useLine(row)">{{ preferredSource === row.id ? t('首选') : t('使用') }}</button>
+                  </span>
+                </div>
+                <div v-if="!speedRows.length" class="sp-empty">{{ t('点「全部测速」开始') }}</div>
+              </div>
+              <div style="margin-top:8px">
+                <button class="btn sm primary" :disabled="speedBusy" @click="runSpeedtest">{{ speedBusy ? t('测速中…') : t('全部测速') }}</button>
+              </div>
+            </div>
+          </div>
+
           <!-- 维护区：开机自启 / 关闭到托盘 / 清除用户数据 / 卸载 -->
           <div class="field-row" style="margin-top:18px;border-top:1px solid var(--hairline);padding-top:14px">
             <div>
@@ -1528,5 +1618,23 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
 .hk-val .kbd-key.ok { border-color: var(--success-text, #22c55e); color: var(--ink); }
 .hk-val .kbd-key.bad { border-color: var(--brand-coral); color: var(--brand-coral); }
 .hk-val .kbd-key.rec { border-style: dashed; border-color: var(--accent); color: var(--brand-text); }
-.hk-bad { font-size: 11px; color: var(--brand-coral); }
+  .hk-bad { font-size: 11px; color: var(--brand-coral); }
+  /* 线路测速表：等宽数字对齐，好横向比较（不是卡片流） */
+  .sp-table { margin-top: 8px; border: 1px solid var(--hairline); border-radius: 8px; overflow: hidden; }
+  .sp-tr { display: grid; grid-template-columns: minmax(120px, 1.4fr) 84px 82px 96px 62px; align-items: center;
+           gap: 8px; padding: 6px 10px; font-size: 12.5px; border-top: 1px solid var(--hairline); }
+  .sp-tr:first-child { border-top: 0; }
+  .sp-th { color: var(--text-soft); font-size: 11.5px; background: color-mix(in srgb, var(--ink) 4%, transparent); }
+  .sp-num { font-variant-numeric: tabular-nums; }
+  .sp-name { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sp-name em { font-style: normal; font-size: 10.5px; padding: 1px 5px; border-radius: 999px;
+                color: var(--brand-text); border: 1px solid var(--accent); }
+  .sp-kind { color: var(--text-soft); }
+  .sp-tr.best { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .sp-tr.dead { opacity: .55; }
+  .sp-act { text-align: right; }
+  .sp-use { font-size: 11.5px; padding: 2px 8px; border-radius: 6px; cursor: pointer;
+            border: 1px solid var(--hairline); background: transparent; color: var(--ink); }
+  .sp-use:disabled { opacity: .4; cursor: default; }
+  .sp-empty { padding: 10px; font-size: 12px; color: var(--text-soft); }
 </style>

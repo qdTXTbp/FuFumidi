@@ -167,6 +167,11 @@ contextBridge.exposeInMainWorld('fuBridge', {
   updateDownload: (url) => ipcRenderer.invoke('update:download', url),
   updateOpen: (p) => ipcRenderer.invoke('update:open', p),
   onUpdateProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('update:progress', w); return () => ipcRenderer.removeListener('update:progress', w); },
+  // 线路测速（列表 / 逐个结果流式回传 / 记下首选线路）
+  updateSources: (channel) => ipcRenderer.invoke('update:sources', channel),
+  updateSpeedtest: (channel) => ipcRenderer.invoke('update:speedtest', channel),
+  updateSetPreferredSource: (id) => ipcRenderer.invoke('update:setPreferredSource', id),
+  onUpdateSpeedtest: (cb) => { const w = (_e, row) => cb(row); ipcRenderer.on('update:speedtest:progress', w); return () => ipcRenderer.removeListener('update:speedtest:progress', w); },
 
   depInstall: (group) => ipcRenderer.invoke('dep:install', group),
 
@@ -278,6 +283,10 @@ contextBridge.exposeInMainWorld('fuBridge', {
     list: () => ipcRenderer.invoke('update:list'),
     openExternal: (url) => ipcRenderer.invoke('update:openExternal', url),
     launchUpdater: (channel) => ipcRenderer.invoke('update:launchUpdater', channel),
+    sources: (channel) => ipcRenderer.invoke('update:sources', channel),
+    speedtest: (channel) => ipcRenderer.invoke('update:speedtest', channel),
+    setPreferredSource: (id) => ipcRenderer.invoke('update:setPreferredSource', id),
+    onSpeedtest: (cb) => { const w = (_e, row) => cb(row); ipcRenderer.on('update:speedtest:progress', w); return () => ipcRenderer.removeListener('update:speedtest:progress', w); },
   },
   plugins: {
     list: () => ipcRenderer.invoke('plugins:list'),

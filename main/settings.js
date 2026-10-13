@@ -30,6 +30,9 @@ const DEFAULT_SETTINGS = {
   data_root: '',  // 数据根目录（模型 / 依赖 / 缓存 / 临时文件的落点）；留空 = 自动（工具目录旁的 FuFumidiData）
   update_channel: 'stable',  // 更新通道：'stable'=正式版（默认），'beta'=测试版（提前收到 X.Y.Z-beta.N / -rc.N）
   download_source: 'auto',   // 下载源：'auto'=自动（优先国内 CNB，失败回退 GitHub），'cnb'=国内优先，'github'=全球优先
+  // 线路测速后选定的具体源 id（如 'ghfast' / 'cnb-beta' / 'github'）；空串 = 没选过，按 download_source 的偏好走。
+  // 只影响**顺序**（提到最前），不可达时仍会沿回退链换源 —— 不是硬绑定。
+  update_preferred_source: '',
   // UTAU 渲染引擎：'openutau'=照搬 OpenUTAU 的核心（engine/singing，默认），
   // 'legacy'=早期自研的 engine_utau.py。首选失败时主进程会自动回落到另一个引擎。
   utau_engine: 'openutau',

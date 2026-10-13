@@ -125,6 +125,12 @@ win:
   icon: build/icon.ico
 nsis:
   oneClick: false
+  # 安装器外观（位图由 scripts/gen-installer-art.py 代码生成后提交，见构建说明）
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeader: build/installerHeader.bmp
+  installerSidebar: build/installerSidebar.bmp
+  uninstallDisplayName: FuFumidi
   perMachine: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true

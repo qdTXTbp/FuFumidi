@@ -25,10 +25,11 @@
     "dist:win": "set NODE_OPTIONS=--use-system-ca&& node scripts/build-updater.js && electron-builder --win nsis --x64",
     "typecheck": "npm --prefix frontend run typecheck",
     "test:ui": "node --test \"frontend/tests/*.test.js\"",
-    "test": "npm run test:rust && npm run test:ui && npm run test:plugin && npm run test:download && npm run test:usermeta",
+    "test": "npm run test:rust && npm run test:ui && npm run test:plugin && npm run test:download && npm run test:usermeta && npm run test:speedtest",
     "test:plugin": "node --test scripts/test-plugin-sandbox.mjs",
     "test:download": "node --test scripts/test-fast-download.mjs",
-    "test:usermeta": "node --test scripts/test-usermeta.mjs"
+    "test:usermeta": "node --test scripts/test-usermeta.mjs",
+    "test:speedtest": "node --test scripts/test-update-speedtest.mjs"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",

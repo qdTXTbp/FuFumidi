@@ -1,4 +1,4 @@
-; ============================================================
+﻿; ============================================================
 ; nsis-custom.nsh —— FuFumidi 安装 / 卸载自定义脚本
 ;
 ; 1) preInit            安装前清理历史作用域残留的卸载注册表项
@@ -34,26 +34,84 @@
   DeleteRegKey HKLM "Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\ee90ae64-4313-5a31-857b-d4c295bf71e7"
 !macroend
 
-; ---------- 2)3) 卸载时保留用户数据 ----------
-; 默认「保留」：删掉不可恢复，保留最多只是占空间。
-; 静默卸载（/S，如脚本化卸载）不弹窗，一律按保留处理。
+; ---------- 2) 卸载首页：把「是否保留数据」做成一个**页面** ----------
+; 这一步替换 electron-builder 默认的卸载欢迎页（assistedInstaller.nsh:67-71：
+; 定义了 customUnWelcomePage 就不再插 MUI_UNPAGE_WELCOME）。
 ;
-; 变量必须声明在宏里（与 electron-builder 的 isDeleteAppData 同理）：
-; 安装器那一遍不插入这两个宏，声明放在文件顶层会报
-; warning 6001「Variable not referenced」，而 electron-builder 把警告当错误。
+; 为什么不再用 MessageBox（原来的做法）：
+;   · 用户看不到自己的数据在哪、多大、删了意味着什么，只有一个是/否；
+;   · 只在"数据目录存在"时才弹，等于把最重要的选择藏在一个条件分支后面。
+; 现在：默认选中「保留」，写明路径，并把选择交给卸载流程。
+;
+; ★ 为什么用 $PLUGINSDIR 里的 ini 传值、而不是全局变量：
+;   nsis-custom.nsh 在**安装器**那一遍也会被 include，顶层 `Var` 会因为没人引用
+;   触发 warning 6001，而 electron-builder 把警告当错误。两个宏各自声明变量、
+;   用文件传递，就都避开了。（这也是原文件里 FU_KEEP_DATA 声明在宏内的原因。）
+!macro customUnWelcomePage
+  UninstPage custom fuUnWelcomeCreate fuUnWelcomeLeave
+!macroend
+
+; 页面本体只在卸载器那一遍里生成（BUILD_UNINSTALLER 由 electron-builder 定义）
+!ifdef BUILD_UNINSTALLER
+  !include nsDialogs.nsh
+  !include LogicLib.nsh
+
+  Var fuKeepRadioKeep
+  Var fuKeepRadioDel
+
+  Function fuUnWelcomeCreate
+    !insertmacro MUI_HEADER_TEXT "卸载 FuFumidi" "先决定已下载的数据怎么办"
+    InitPluginsDir
+    nsDialogs::Create 1018
+    Pop $0
+    ${If} $0 == error
+      Abort
+    ${EndIf}
+
+    ${NSD_CreateLabel} 0 0 100% 22u "卸载会移除程序文件。下面这些是**你自己的**数据，删掉不可恢复："
+    Pop $1
+    ${NSD_CreateLabel} 0 20u 100% 12u "模型 / 声库 / 音色库 / 曲库 / 设置，位置：$INSTDIR\FuFumidiData"
+    Pop $2
+
+    ${NSD_CreateRadioButton} 0 40u 100% 12u "保留我的数据（推荐）—— 重装到同一目录后可继续使用"
+    Pop $fuKeepRadioKeep
+    ${NSD_CreateRadioButton} 0 56u 100% 12u "一并删除 —— 彻底清空，不可恢复"
+    Pop $fuKeepRadioDel
+    ${NSD_Check} $fuKeepRadioKeep
+
+    ${IfNot} ${FileExists} "$INSTDIR\FuFumidiData\*.*"
+      ${NSD_CreateLabel} 0 76u 100% 12u "（当前安装目录下没有找到 FuFumidiData，本页选择不会影响任何数据）"
+      Pop $3
+    ${EndIf}
+
+    nsDialogs::Show
+  FunctionEnd
+
+  Function fuUnWelcomeLeave
+    ; 单选按钮没勾上时默认按「保留」处理 —— 删数据是不可逆的那一侧，
+    ; 默认值必须落在可恢复的一侧。
+    StrCpy $0 "1"
+    ${NSD_GetState} $fuKeepRadioDel $1
+    ${If} $1 == ${BST_CHECKED}
+      StrCpy $0 "0"
+    ${EndIf}
+    WriteINIStr "$PLUGINSDIR\fu-uninstall.ini" "uninstall" "keep" "$0"
+  FunctionEnd
+!endif
+
+; 卸载流程读回页面上的选择。静默卸载（/S）不显示页面 → 文件不存在 → 按「保留」处理。
 !macro customUnInstall
   Var /GLOBAL FU_KEEP_DATA
   StrCpy $FU_KEEP_DATA "1"
-  IfFileExists "$INSTDIR\FuFumidiData\*.*" 0 fu_keep_done
-    ${if} ${Silent}
-      Goto fu_keep_done
-    ${endif}
-    MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 \
-      "是否同时删除已下载的模型 / 声库 / 音色库 / 曲库？$\r$\n$\r$\n选择「否」将保留在 $INSTDIR\FuFumidiData，重装到同一目录后可继续使用。" \
-      IDYES fu_keep_delete IDNO fu_keep_done
-  fu_keep_delete:
+  ReadINIStr $0 "$PLUGINSDIR\fu-uninstall.ini" "uninstall" "keep"
+  ${If} $0 == "0"
     StrCpy $FU_KEEP_DATA "0"
-  fu_keep_done:
+  ${EndIf}
+  ${If} $FU_KEEP_DATA == "1"
+    DetailPrint "已保留用户数据：$INSTDIR\FuFumidiData"
+  ${Else}
+    DetailPrint "将连同用户数据一起删除：$INSTDIR\FuFumidiData"
+  ${EndIf}
 !macroend
 
 !macro customRemoveFiles
