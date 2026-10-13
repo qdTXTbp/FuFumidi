@@ -1054,9 +1054,55 @@ def test_resampler_item():
         # durRequired = (500-0) + 30 + 10 = 540 → ceil(540/50+0.5)*50 = ceil(11.3)*50 = 600
         check('ResamplerItem: durRequired = ceil((540/50)+0.5)*50 = 600',
               abs(item.dur_required - 600.0) < 1e-9, 'got %r' % item.dur_required)
-        check('ResamplerItem: 直接透传 oto 的 offset/consonant/cutoff',
+        # 注意：**仅当 leading ≤ oto.preutter 时**才是直接透传 —— 此时 pulled=0。
+        # 见下面「preutter 超过 oto」那一组。
+        check('ResamplerItem: 直接透传 oto 的 offset/consonant/cutoff（leading ≤ preutter 时）',
               (item.offset, item.consonant, item.cutoff) == (100.0, 50.0, -200.0),
               'got %r' % ((item.offset, item.consonant, item.cutoff),))
+
+        # ---- 上游 b30d3347：preutter 超过 oto 时把 offset 往前拉到文件开头
+        # ★ 关键：`RenderPhone.leading_ms` 取的是 **preutter**（见上面那条断言），不是 `leading`。
+        #   同一套 oto（offset=100, preutter=60, consonant=50, cutoff=-200），velocity=1 → stretch=1：
+        #     preutter=150 → leadingMs=150 → pulled = round(150/1 - 60, 3) = 90（≤100，不夹）
+        #       offset    = 100 - 90 = 10
+        #       pitchLead = (60 + 90) * 1 = 150 → skipOver = 150 - 150 = 0
+        #       consonant = 50 + 90  = 140      （在文件中的绝对位置不变）
+        #       cutoff    = -200 - 90 = -290    （负 cutoff 从结尾算，要跟着移）
+        ph2 = _mk_phoneme(
+            oto=uoto, envelope=env_pts,
+            flags=[('V', 50, 'vel')],
+            velocity=1.0, volume=100.0, modulation=0.0,
+            preutter=150.0, overlap=10.0, tail_intrude=25.0, tail_overlap=5.0,
+            leading=150)
+        _rp2 = RenderPhrase(src, [ph2], 0, 1)
+        item2 = RI.ResamplerItem(_rp2, _rp2.phones[0])
+        check('★ ResamplerItem: preutter 超过 oto 时 offset 往前拉 90ms（100 → 10）',
+              abs(item2.offset - 10.0) < 1e-9, 'got %r' % item2.offset)
+        check('★ ResamplerItem: 前拉后 skipOver 归零（pitchLeading 补齐到 leadingMs）',
+              abs(item2.skip_over - 0.0) < 1e-9, 'got %r' % item2.skip_over)
+        check('★ ResamplerItem: consonant 跟着前拉，保持在文件中的绝对位置',
+              abs(item2.consonant - 140.0) < 1e-9, 'got %r' % item2.consonant)
+        check('★ ResamplerItem: 负 cutoff 跟着前拉（-200 → -290）',
+              abs(item2.cutoff - (-290.0)) < 1e-9, 'got %r' % item2.cutoff)
+
+        # 夹紧上界：preutter 再大也拉不过文件开头 —— pulled 夹在 max(0, oto.offset)=100
+        #   preutter=250 → pulled 名义 190 → 夹到 100
+        #     offset = 100 - 100 = 0，consonant = 50 + 100 = 150，cutoff = -200 - 100 = -300
+        #     skipOver = (60 + 100) * 1 - 250 = -90（为负：pitchLeading 还不够补上 leadingMs）
+        ph3 = _mk_phoneme(
+            oto=uoto, envelope=env_pts,
+            flags=[('V', 50, 'vel')],
+            velocity=1.0, volume=100.0, modulation=0.0,
+            preutter=250.0, overlap=10.0, tail_intrude=25.0, tail_overlap=5.0,
+            leading=250)
+        _rp3 = RenderPhrase(src, [ph3], 0, 1)
+        item3 = RI.ResamplerItem(_rp3, _rp3.phones[0])
+        check('★ ResamplerItem: pulled 夹在 max(0, oto.offset) —— offset 落到 0 就不再往前',
+              abs(item3.offset - 0.0) < 1e-9 and abs(item3.consonant - 150.0) < 1e-9
+              and abs(item3.cutoff - (-300.0)) < 1e-9,
+              'got offset=%r consonant=%r cutoff=%r' % (item3.offset, item3.consonant, item3.cutoff))
+        check('★ ResamplerItem: 夹住后 skipOver 转负（pitchLeading 补不满 leadingMs）',
+              abs(item3.skip_over - (-90.0)) < 1e-9, 'got %r' % item3.skip_over)
         check('ResamplerItem: durCorrection 照抄 RenderPhone 的值',
               item.dur_correction == rp.phones[0].dur_correction_ms)
         check('ResamplerItem: tempo 取 phone.adjustedTempo', item.tempo == 120.0,

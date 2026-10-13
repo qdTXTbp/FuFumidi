@@ -351,6 +351,44 @@ self.cutoff    = (phone.oto.cutoff - pulled_ms) if phone.oto.cutoff < 0 else pho
 
 - 4 个文件 `ast.parse` 通过
 - `pytest engine/tests` → **exit 0，249 passed / 1 skipped**
+### 3.7 ★ 顺带打通了一件基础设施：`test_openutau_core_matches_source.py` 可以真跑了
+
+这个文件是**把「照搬」交给机器强制**的测试：逐条比对 Python 移植与 OpenUTAU 的 **C# 源码**。
+它靠 `OPENUTAU_REF` 环境变量找参考源码，缺了就 SKIP —— 所以一直以来**从没真正执行过**（原本默认指向
+`D:/FuFuMIDI/_ref/OpenUtau/OpenUtau.Core`，本机没有）。
+
+本轮有上游克隆在手，把它接上了：
+
+```powershell
+cd E:\Midi\_attic\openutau-upstream
+git checkout 04c4e61005 -- OpenUtau.Core      # 基线 commit，可能要跑几轮才拉齐 blob
+$env:OPENUTAU_REF = 'E:\Midi\_attic\openutau-upstream\OpenUtau.Core'
+pytest engine/tests/test_openutau_core_matches_source.py -q -s
+```
+
+`Classic/ResamplerItem.cs` 等文件到位后即可跑相关用例。实测 `-k resampler_item`：
+**31 PASS / 0 FAIL**。
+
+> 注意：克隆是 `--filter=blob:none`，`git checkout` 会按需拉 blob，一次拉 400 个文件会超时；
+> **循环重试几轮**即可续上（已拉到的会缓存）。当前到位约 157 个文件。
+
+#### 这条基础设施立刻抓到了我自己的一个错误
+
+我给 Q1 补的断言**第一次全挂**（offset 仍是 100、skip_over 仍是 10）。查下去发现：
+**是我的测试写错了，不是代码错了** —— `RenderPhone.leading_ms` 取的是 **`preutter`**，不是 `leading`
+（该文件第 692 行就写着 `RenderPhone.leading_ms = preutter`）。我把 `leading=100` 传进去，
+`leading_ms` 其实还是 50，`pulled` 自然算成 0。
+改成抬 `preutter` 之后 6 条全过。
+
+**教训**：同名不同义的字段（`leading` vs `leading_ms`、`preutter` vs `preutter_ms`）在移植代码里
+遍地都是，**写断言前必须先确认数据来源**，别按参数名猜。
+
+#### 最终断言（6 条，覆盖前拉与夹紧）
+
+| 场景 | 断言 |
+|---|---|
+| `preutter=150`（> oto 的 60） | offset `100 → 10`、skipOver `→ 0`、consonant `50 → 140`、cutoff `-200 → -290` |
+| `preutter=250`（名义要拉 190） | 夹在 `max(0, oto.offset)=100`：offset `→ 0`、consonant `→ 150`、cutoff `→ -300`、skipOver `→ -90` |
 ### 3.3 明确不跟的
 
 - `RenderEngine.cs` 的 **Track Polish 改版**（含 UI 改动，与「UI 不变」冲突）
