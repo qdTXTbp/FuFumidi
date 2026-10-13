@@ -36,9 +36,12 @@ v20 另缺两个 ONNX 会话。
 - **v11**：代码侧**已全部搬完**（`hnsep.py` + `worldline.`{`hn_analysis_f0_in`,`synth_continuous_noise`}`）。
   现在缺的只是**运行时依赖**：模型包 `hnsep_240512` 还没安装（约 52 MB，走资源中心下载）。
   宿主用 `worldline.set_hnsep()` 注入已加载的实例；没注入就在这里给出可操作的报错。
-- **v20**：需要两个 ONNX 会话 —— mel 模型是 `OpenUtau.Core` **程序集内嵌资源**
-  （`Data.Resources.mel`，仓库里没有对应文件），声码器是**可下载包**
-  `pc-nsf-hifigan`（走 `PackageManager` + `vocoder.yaml`）。两者都不在照搬范围内。
+- **v20**：需要两个 ONNX 会话 —— mel 模型是仓库里的**独立文件**
+  `OpenUtau.Core/Classic/Data/mel.onnx`（83.4 KB；`.resx` 只是 .NET 把它编进程序集的方式，
+  源文件一直都在），声码器是 128bin / 512hop 的 PC-NSF-HiFiGAN
+  （**每个 DiffSinger 声库的 `dsvocoder/` 里就带一个**，资源中心也会下通用声码器）。
+  ★ **两个依赖都在盘上（WP3-3 实测）**：v20 缺的不是模型，而是"这段编排"。
+  别再照着"拿不到 mel 模型"重估 —— 详见 `_synth_r2` 的 docstring。
 """
 
 import asyncio
