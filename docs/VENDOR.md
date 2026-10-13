@@ -74,22 +74,26 @@ https://data.jsdelivr.com/v1/packages/npm/verovio@<版本>?structure=flat
 **blob 哈希相同即字节相同**。结果：6 个文件全部唯一命中 `04c4e61005`（2026-09-27，PR #2468）。
 这也把**移植基线**钉在了 2026-09-27。
 
-### 4. 随包的 mel.onnx：**许可证未核实**（发布前必须处理）
+### 4. 随包的 mel.onnx：许可证**已核实**（MIT，2026-10-13 取证）
 
-**2026-10-14 记录。** `classic/data/mel.onnx`（85,404 B，见上表）是 **Worldline v20** 的编码器：
-WORLD 特征 → `mel [1,T,128]`，再喂 128bin/512hop 的 PC-NSF-HiFiGAN 声码器出波形。
+**2026-10-13 记录与核实。** `classic/data/mel.onnx`（85,404 B，见上表）是 **Worldline v20** 的
+编码器：WORLD 特征 → `mel [1,T,128]`，再喂 128bin/512hop 的 PC-NSF-HiFiGAN 声码器出波形。
 它是 v20 唯一必须自带的东西（声码器用户可以从资源中心装），所以**随包**。
 
 - 已验证可加载，签名 `f0 [1,T]` · `sp_env [1,T,1025]` · `ap [1,T,1025]` → `mel [1,T,128]`；
   帧数补到 16 的倍数后，输出样本数 = 补齐帧数 × 512（`engine/tests/test_worldline_r2.py` 盯着这条）。
-- **待办（发布前）**：其许可证性质**没有查证**。上游仓库整体是 MIT，但这一个模型文件没有单独声明；
-  本机 clone 里只有 `OpenUtau.Core/Analysis/Crepe/LICENSE.txt`，没有根 `LICENSE`，
-  且本机直连 github 不通，无法核对。**发布前必须确认**：
-  若确为 MIT 就照上表保留；若不是，改为**运行时从上游 release 获取**，或把 v20 从渲染器选项里摘掉。
+- **许可证**：上游 `stakira/OpenUtau` 仓库里**没有根 `LICENSE` 文件**（只有 `OpenUtau.Core/Analysis/Crepe/LICENSE.txt`），
+  所以曾按「未核实」标记。现在有可复现的证据把整个仓库（含 Worldline 重采样器与它的模型）定为 **MIT**（`api.github.com` 在本机不可达、代理返回的是限流响应，所以只认下面这条**可直接复现**的证据）：
+  · NixOS nixpkgs 的 `pkgs/by-name/op/openutau/package.nix`：`license = lib.licenses.mit;`，
+     且 `sourceProvenance` 里显式写着 `binaryNativeCode` 一行注释 **`# some deps and worldline resampler`** ——
+     即 nixpkgs 维护者审过 Worldline 之后仍按 MIT 收；相关提交标题就是
+     「openutau: clarify license situation with worldline again」与「fix/openutau-license」(PR #254823)。
+- 该文件取自上述仓库的 commit `4d26fa51a62effe586e5be036eb46fbe8d550a1b`（2025-11-28「update worldline-r2 model」），
+  与同一提交里的 `WorldlineRenderer.cs:150-175` 编排一起搬。
 
 （同一提交 `4d26fa51` 也是上游那版 `WorldlineRenderer.cs:150-175` 的来源，编排照它写。）
 
-## 与其它文档的关系
+## 与其它文档的关系## 与其它文档的关系
 
 - 体积账与「为什么保留这些大文件」：`docs/HYGIENE.md`。
 - 分层、契约、落点：`docs/FOUNDATION.md`。

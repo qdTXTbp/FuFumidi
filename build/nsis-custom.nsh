@@ -48,7 +48,7 @@
 ;   触发 warning 6001，而 electron-builder 把警告当错误。两个宏各自声明变量、
 ;   用文件传递，就都避开了。（这也是原文件里 FU_KEEP_DATA 声明在宏内的原因。）
 !macro customUnWelcomePage
-  UninstPage custom fuUnWelcomeCreate fuUnWelcomeLeave
+  UninstPage custom un.fuUnWelcomeCreate un.fuUnWelcomeLeave
 !macroend
 
 ; 页面本体只在卸载器那一遍里生成（BUILD_UNINSTALLER 由 electron-builder 定义）
@@ -59,8 +59,11 @@
   Var fuKeepRadioKeep
   Var fuKeepRadioDel
 
-  Function fuUnWelcomeCreate
-    !insertmacro MUI_HEADER_TEXT "卸载 FuFumidi" "先决定已下载的数据怎么办"
+  Function un.fuUnWelcomeCreate
+    ; ★ 这里**不能**用 !insertmacro MUI_HEADER_TEXT：electron-builder 把本文件
+    ;   放在 MUI2.nsh **之前** include，卸载器那一遍走到这里时该宏还不存在 ——
+    ;   实测报 "macro named MUI_HEADER_TEXT not found!"，整个 NSIS 装配直接失败。
+    ;   所以标题由本页自己的 label 承担，不依赖 MUI2 的宏。
     InitPluginsDir
     nsDialogs::Create 1018
     Pop $0
@@ -68,26 +71,28 @@
       Abort
     ${EndIf}
 
-    ${NSD_CreateLabel} 0 0 100% 22u "卸载会移除程序文件。下面这些是**你自己的**数据，删掉不可恢复："
+    ${NSD_CreateLabel} 0 0 100% 14u "卸载 FuFumidi —— 先决定已下载的数据怎么办"
     Pop $1
-    ${NSD_CreateLabel} 0 20u 100% 12u "模型 / 声库 / 音色库 / 曲库 / 设置，位置：$INSTDIR\FuFumidiData"
+    ${NSD_CreateLabel} 0 16u 100% 12u "卸载会移除程序文件；下面这些是**你自己的**数据，删掉不可恢复："
+    Pop $R0
+    ${NSD_CreateLabel} 0 30u 100% 12u "模型 / 声库 / 音色库 / 曲库 / 设置，位置：$INSTDIR\FuFumidiData"
     Pop $2
 
-    ${NSD_CreateRadioButton} 0 40u 100% 12u "保留我的数据（推荐）—— 重装到同一目录后可继续使用"
+    ${NSD_CreateRadioButton} 0 50u 100% 12u "保留我的数据（推荐）—— 重装到同一目录后可继续使用"
     Pop $fuKeepRadioKeep
-    ${NSD_CreateRadioButton} 0 56u 100% 12u "一并删除 —— 彻底清空，不可恢复"
+    ${NSD_CreateRadioButton} 0 66u 100% 12u "一并删除 —— 彻底清空，不可恢复"
     Pop $fuKeepRadioDel
     ${NSD_Check} $fuKeepRadioKeep
 
     ${IfNot} ${FileExists} "$INSTDIR\FuFumidiData\*.*"
-      ${NSD_CreateLabel} 0 76u 100% 12u "（当前安装目录下没有找到 FuFumidiData，本页选择不会影响任何数据）"
+      ${NSD_CreateLabel} 0 86u 100% 12u "（当前安装目录下没有找到 FuFumidiData，本页选择不会影响任何数据）"
       Pop $3
     ${EndIf}
 
     nsDialogs::Show
   FunctionEnd
 
-  Function fuUnWelcomeLeave
+  Function un.fuUnWelcomeLeave
     ; 单选按钮没勾上时默认按「保留」处理 —— 删数据是不可逆的那一侧，
     ; 默认值必须落在可恢复的一侧。
     StrCpy $0 "1"
