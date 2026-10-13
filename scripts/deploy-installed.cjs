@@ -276,6 +276,21 @@ const notUnpacked = [];
 })(TMP);
 const unpackExpr = '{' + [...unpackNames].join(',') + '}';
 if (notUnpacked.length) console.log('     注意：以下文件因重名未解包（内联进 asar，功能不受影响）：' + notUnpacked.join(', '));
+// ★★ 必须在打包**之前**把「最终的 engine」放进 TMP。
+//   原因（REA 产物视角查出来的真问题）：asar pack 会为 --unpack 的文件算 integrity 哈希，
+//   而旧流程是「打包 → 覆盖 app.asar → 再用源码 engine 替换 app.asar.unpacked/engine」，
+//   于是**哈希是对 TMP/engine 算的、部署的却是源码 engine**，两者内容不同 → 完整性元数据过期。
+//   REA 实测报出 6 个 integrity 矛盾（engine/deps.py 等），declared 12a4b89b… vs calculated a09d34eb…。
+//   源码视角的审计永远看不到这个 —— 源码里没有 asar 头部这层概念。
+//   现在改成：先把源码 engine 同步进 TMP（含 __pycache__ 过滤），再打包，
+//   第 5 步直接用打包产物，不再二次替换 —— 算哈希的和部署的是同一份字节。
+(function syncEngineIntoTmp() {
+  const dst = path.join(TMP, 'engine');
+  const src = path.join(ROOT, 'engine');
+  fs.rmSync(dst, { recursive: true, force: true });
+  fs.cpSync(src, dst, { recursive: true, filter: (s) => !s.includes('__pycache__') && !s.includes('.pytest_cache') });
+  console.log('[3c/7] 已把源码 engine 同步进打包目录（保证 integrity 哈希与部署内容一致）');
+})();
 execSync('"' + ASAR_BIN + '" pack "' + TMP + '" "' + OUT + '" --unpack-dir=engine --unpack="' + unpackExpr + '"', { stdio: 'inherit' });
 const isUnpacked = (rel) => globMatch('engine/**', rel) || unpackGlobs.some((g) => globMatch(g, rel));
 console.log('[4/7] 新 asar：' + (fs.statSync(OUT).size / 1048576).toFixed(1) + ' MB（asarUnpack：' + UNPACK_PATTERNS.length + ' 条规则）');
@@ -294,20 +309,13 @@ console.log('     asar 里最大的 5 个内联文件：' + listed.map(([s, p]) 
 
 // ---- 5) 覆盖安装版：asar + unpacked 整目录替换（清掉上一轮的陈旧文件）
 fs.copyFileSync(OUT, ASAR);
+// engine 已经在打包前同步进 TMP（见 [3c/7]），这里**直接用打包产物**，
+// 不再二次替换 —— 否则 asar pack 算出的 integrity 又会和部署内容对不上。
 if (fs.existsSync(OUT_UNPACK)) {
-  const keepEngine = path.join(UNPACK, 'engine');
   fs.rmSync(UNPACK, { recursive: true, force: true });
   fs.mkdirSync(UNPACK, { recursive: true });
   fs.cpSync(OUT_UNPACK, UNPACK, { recursive: true });
-  void keepEngine;
-} else {
-  fs.rmSync(path.join(UNPACK, 'engine'), { recursive: true, force: true });
 }
-// engine 以工作区源码为准（Python 改动只在这里生效），排除 __pycache__
-const dstEngine = path.join(UNPACK, 'engine');
-const srcEngine = path.join(ROOT, 'engine');
-fs.rmSync(dstEngine, { recursive: true, force: true });
-fs.cpSync(srcEngine, dstEngine, { recursive: true, filter: (s) => !s.includes('__pycache__') && !s.includes('.pytest_cache') });
 // 注意：unpacked 与 asar 是配套的，engine 必须两边一致（asar 里 engine 只是占位）
 console.log('[5/7] 已覆盖 app.asar（' + (fs.statSync(ASAR).size / 1048576).toFixed(1) + ' MB）与 app.asar.unpacked');
 
