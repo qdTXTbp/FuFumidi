@@ -243,3 +243,56 @@ pytest engine/tests      exit 0
 但紧接着 `:757` 写着「批量推理**改成显式开关**」，而项目早已**移除批量推理**（`bca0a55`）。
 这段注释描述的是**已不存在的旧行为**，应一并更正。
 
+---
+
+## 9. WP1 执行记录（2026-10-14）
+
+### 已完成并部署
+
+| 任务 | 内容 | 验收 |
+|---|---|---|
+| **WP1-6** | 「高性能」→「低配省资源」，加常驻代价说明；同时修 `SettingsPanel`「质量越高耗时越长」与 i18n 引导「档位越高越慢但越细腻」两处**同样反向**的文案。共 5 处 | 安装版 `app.asar` 内实测：`低配省资源`×14、旧文案 **0 处** |
+| **WP1-7** | 更正 `ViewTranscribe.vue` 里描述「已移除的批量推理」的注释 | — |
+| **WP1-2** | 最低音高独立成控件（用户定：**显式控件优先**，勾「低音增强」只设 `no_melodia`） | 独立滑杆 0–2000 Hz |
+| 门禁 | typecheck 0 / test:ui 173 / build:ui 0 / deploy exit 0（冒烟 0 异常） | — |
+
+提交：`01ab017`（WP1 实做）、`9eb994e`（§8 勘误）
+
+### WP2-1 勘查结果（MSST 模型对照）
+
+`main/models-msst-catalog.js` 共 **78 条**（multi 9 / vocal 19 / single 21 / vr 29）。
+**24 个模型文件名里带 SDR**（客观质量指标），降序前几名：
+
+| SDR | 分类 | 架构 | 模型 |
+|---|---|---|---|
+| 27.9959 | single | Mel-Band Roformer | `denoise_mel_band_roformer_aufr33_sdr_27.9959` |
+| 19.1729 | single | Mel-Band Roformer | `dereverb_mel_band_roformer_anvuew_sdr_19.1729` |
+| **12.9755** | **vocal** | **BS-Roformer** | `model_bs_roformer_ep_317_sdr_12.9755` ← **人声分离最高** |
+| 11.4700 | multi | Bandit | `model_bandit_plus_dnr_sdr_11.47` |
+| 10.8059 | multi | MDX23C | `aufr33-jarredou_DrumSep_..._sdr_10.8059` |
+
+架构分布：`UVR-VR` 27 · `Mel-Band Roformer` 21 · `BS-Roformer` 8 · `HTDemucs` 7 · `MDX23C` 5 · 其余 10。
+
+**★ 勘误（本轮第三次栽在同一处）**：我先前说「`best` 推荐标签没渲染」是**错的** ——
+`ViewModels.vue:180` 早就在渲染 `👑 {{ m.best }}` 徽章。原因是 grep 又用了 `.slice(0, 16)` 截断，
+`ViewModels.vue` 的命中排在后面被切掉。**「截断的输出不能用来下结论」这条已连犯三次。**
+
+### 本轮发现的真实缺陷（未修，待定）
+
+**`--model` 在两种模式下语义不同，而 help 只写了其中一种**：
+
+- `music2midi.py:427` 的 `--model`，help 写「**子模型**: universal→basic/muscriptor；piano→piano_pt/aria/transkun」
+- 但 `cmd_separate:309` 把它当**文件路径**：`"model_path": getattr(args, "model", None)`
+- 「音频处理（MSST 分离）参数」组（`:488–494`）有 `--arch`/`--config`，**偏偏没有 `--model`**
+
+**应用侧不受影响**：`main/separate-common.js:69` 传的确实是 `'--model', resolved.modelPath`。
+**受影响的只有 CLI 与文档** —— 照 help 字面理解的人（比如我）会传子模型名，然后拿到
+「未找到模型文件，请先在模型管理中下载所选模型。」这条**指错方向**的报错。
+
+**CLI 分离基准因此没跑成**：我用 `--model <ckpt 路径> --arch UVR-VR` 仍报同样的错，
+**具体原因尚未查明**（argparse 无重复定义，PowerShell 引号也应无碍）。**不猜，记为待查。**
+
+本机可实测的分离模型（后续补基准用）：`vocal/` 下 `big_beta5e`(1411MB)、
+`BS-Roformer_LargeV1`(706MB)、`melband_roformer_instvox_duality_v2`(1640MB)；`vr/` 下 `1_HP-UVR`(121MB)。
+**跨架构实测是给界面加「速度量级」提示的前提** —— 不实测就不加，避免又一条无依据的断言。
+
