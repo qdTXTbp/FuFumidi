@@ -14,12 +14,68 @@ from engine import DEFAULTS, MODES
 
 
 def _base_dir():
+    """引擎所在目录。**只用来找旧位置的预设**，不再作为写入落点。"""
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
 
-PRESETS_FILE = os.path.join(_base_dir(), "presets.json")
+def _data_root():
+    """用户数据根目录 —— 与 gsv_env.data_root() **同一条规则**（见该函数）。
+
+    优先级：FUFUMIDI_DATA_DIR → FUFUMIDI_MODELS_DIR 的上一级 → 引擎目录的上一级。
+    主进程跑引擎时一定会设 FUFUMIDI_MODELS_DIR，所以实战里走的是第二条。
+
+    ★★ 为什么必须搬到这里：原来的落点是引擎目录（见 _base_dir），而引擎装在
+    `<安装目录>/resources/app.asar.unpacked/engine/`。**整包更新会替换 resources/**，
+    于是用户的预设与「上次用的那个」会被静默清空 —— 实测确认过。
+    预设属于用户数据，必须落在数据根（FuFumidiData）里，跟模型/声库同一处。
+    """
+    env = os.environ.get("FUFUMIDI_DATA_DIR")
+    if env and os.path.isdir(env):
+        return os.path.abspath(env)
+    models = os.environ.get("FUFUMIDI_MODELS_DIR") or ""
+    if models:
+        return os.path.abspath(os.path.dirname(models.rstrip("\\/")))
+    return os.path.abspath(os.path.join(_base_dir(), os.pardir))
+
+
+#: 用户预设的**新**落点（数据根下，更新不会碰）
+PRESETS_FILE = os.path.join(_data_root(), "presets.json")
+
+#: **旧**落点（引擎目录内）。只做一次性迁移的来源，**永不删除** —— 留着当回滚路径。
+LEGACY_PRESETS_FILE = os.path.join(_base_dir(), "presets.json")
+
+#: 迁移只在「新文件不存在」时做一次
+_migrated = False
+
+
+def _migrate_legacy_once():
+    """新落点还没有文件、而旧落点有内容 → 抄一份过去。
+
+    只读旧文件、不删不改；拷完即可继续用。这样即便迁移逻辑将来出问题，
+    旧文件仍在原处，用户随时能手工找回。
+    """
+    global _migrated
+    if _migrated:
+        return
+    _migrated = True
+    try:
+        if os.path.exists(PRESETS_FILE) or not os.path.exists(LEGACY_PRESETS_FILE):
+            return
+        with open(LEGACY_PRESETS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict) or not data:
+            return
+        # 旧文件是「空壳」（只有键、没内容）就不迁，免得把空状态固化过去
+        if not (data.get("presets") or data.get("last_used") or data.get("hidden_builtins")
+                or data.get("order")):
+            return
+        os.makedirs(os.path.dirname(PRESETS_FILE) or ".", exist_ok=True)
+        with open(PRESETS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 def _builtin_presets():
@@ -88,6 +144,7 @@ def _builtin_presets():
 
 
 def _read_file():
+    _migrate_legacy_once()
     try:
         with open(PRESETS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -96,8 +153,15 @@ def _read_file():
         return {}
 
 
+#: 数据格式版本。改动结构时**只加迁移分支、不改老分支** —— 这样老用户的文件永远读得进来。
+SCHEMA_VERSION = 2
+
+
 def _write_file(data):
     try:
+        data = dict(data or {})
+        data["schema_version"] = SCHEMA_VERSION
+        os.makedirs(os.path.dirname(PRESETS_FILE) or ".", exist_ok=True)
         with open(PRESETS_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return True

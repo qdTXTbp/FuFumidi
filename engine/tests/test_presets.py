@@ -108,3 +108,45 @@ def test_preset_names_contains_builtin_and_custom(monkeypatch, tmp_path):
     assert isinstance(names, list)
     assert "通用·标准" in names
     assert "追加预设" in names
+
+
+def test_storage_moves_to_data_root_and_migrates(tmp_path, monkeypatch):
+    """★ 回归：用户预设必须落在**数据根**，并从上一次的旧位置一次性迁移。
+
+    旧落点是引擎目录（`<安装目录>/resources/app.asar.unpacked/engine/`）——
+    整包更新会替换 resources/，用户的预设与「上次用的那个」会被静默清空。所以：
+      1) 新落点必须在 FUFUMIDI_DATA_DIR 下；
+      2) 旧位置有内容时抄一份过去，且**旧文件原样保留**（回滚路径）。
+    这条测试用 reload 重新计算模块级常量（PRESETS_FILE 是导入时求值的）。
+    """
+    import importlib
+    import json
+    monkeypatch.setenv('FUFUMIDI_DATA_DIR', str(tmp_path))
+    monkeypatch.delenv('FUFUMIDI_MODELS_DIR', raising=False)
+    mod = importlib.reload(presets)
+    try:
+        assert str(tmp_path) in mod.PRESETS_FILE
+        # 旧位置用临时文件模拟，**不要**去碰真实的 engine/presets.json
+        legacy = tmp_path / 'legacy-presets.json'
+        monkeypatch.setattr(mod, 'LEGACY_PRESETS_FILE', str(legacy))
+        monkeypatch.setattr(mod, '_migrated', False)
+        with open(legacy, 'w', encoding='utf-8') as f:
+            json.dump({'presets': {'我的自定义': {'mode': 'universal', 'params': {'temperature': 1.3}}},
+                       'last_used': '我的自定义', 'hidden_builtins': ['通用·更干净'],
+                       'order': ['我的自定义']}, f, ensure_ascii=False)
+        p, last = mod.load_presets()
+        assert '我的自定义' in p and last == '我的自定义'
+        with open(mod.PRESETS_FILE, encoding='utf-8') as f:
+            wrote = json.load(f)
+        assert wrote['presets']['我的自定义']['params']['temperature'] == 1.3
+        assert wrote['hidden_builtins'] == ['通用·更干净'] and wrote['order'] == ['我的自定义']
+        assert legacy.exists(), '旧文件必须留着当回滚路径'
+        # 写入要带 schema_version（将来只加迁移分支、不改老分支）
+        mod.save_preset('再存一个', 'piano', {'merge_gap_ms': 30})
+        with open(mod.PRESETS_FILE, encoding='utf-8') as f:
+            d2 = json.load(f)
+        assert d2['schema_version'] == mod.SCHEMA_VERSION
+        assert '再存一个' in d2['presets']
+    finally:
+        monkeypatch.undo()
+        importlib.reload(presets)
