@@ -10,8 +10,8 @@
 
 | 文件 | 字节 | SHA-256（前 24 位） | 上游 | 版本 |
 | --- | --- | --- | --- | --- |
-| `frontend/public/vendor/verovio-toolkit-wasm.js` | 7,310,681 | `d794119cd5ea83a3e8358499` | [rism-digital/verovio](https://github.com/rism-digital/verovio) 的 wasm 构建 | **未标注**（文件里没有 banner、也没有版本串）—— 待补 |
-| `frontend/public/vendor/js-synth/js-synthesizer.min.js` | 33,086 | `7b3137eb8ac367e996db95ee` | [json-schema-org/js-synthesizer](https://github.com/surikov/js-synthesizer) 1.13.0 | 1.13.0 |
+| `frontend/public/vendor/verovio-toolkit-wasm.js` | 7,310,681 | `d794119cd5ea83a3e8358499` | [rism-digital/verovio](https://github.com/rism-digital/verovio) 的 wasm 构建 | **6.3.0** —— npm `verovio@6.3.0` 的 `dist/verovio-toolkit-wasm.js`，**逐字节相同**（2026-10-13 确定） |
+| `frontend/public/vendor/js-synth/js-synthesizer.min.js` | 33,086 | `7b3137eb8ac367e996db95ee` | [json-schema-org/js-synthesizer](https://github.com/surikov/js-synthesizer) 1.13.0 | 1.13.0（**代码与上游逐字节相同，只有 CRLF**；见坑 1 末注） |
 | `frontend/public/vendor/js-synth/js-synthesizer.worklet.min.js` | 30,283 | `a2afdec5b6ac793627d80624` | 同上 1.13.0，**本地打过补丁**（见下） | 1.13.0 + 补丁 |
 | `frontend/public/vendor/js-synth/libfluidsynth-2.4.6-with-libsndfile.js` | 2,371,528 | `8f0cc693731da2d02f13e921` | js-synthesizer 附带的 libfluidsynth 2.4.6 构建（带 libsndfile） | 2.4.6 |
 | `frontend/public/vendor/js-synth/fu-seq-clock.js` | 4,251 | `0a2658fb31608df568aa86b3` | **本项目自有**（AudioWorklet 音序时钟） | — |
@@ -38,11 +38,29 @@ Get-ChildItem frontend\public\vendor, renderer\vendor -Recurse -File |
 因此 `js-synthesizer` 已经**从 `frontend/package.json` 移除**：运行时用的是这份打过补丁的 vendor 文件，
 再声明一个 npm 依赖只会让人以为「更新依赖就能更新它」。要升级就手工同步补丁，并在这一页记下新指纹。
 
+**★ 2026-10-13 补充核对（两件事）**：
+
+1. **`js-synthesizer.min.js` 并没有被打补丁** —— 它 33,086 B 对上上游 33,056 B 的那 30 B，
+   **全部是 CRLF vs LF**（banner 30 行，每行多 1 字节）。归一化换行后与上游 1.13.0 **逐字节相同**。
+   所以**按 SHA 核对会误判主文件也被改过**，要连换行一起归一化再比。
+2. **npm 上 js-synthesizer 的最新版就是 1.13.0** —— 「升级到新版就不用打补丁」这条路**不存在**。
+   把它移出 `package.json`、只留 vendor 文件是**正确决定**，不是临时绕过。
+   worklet 的补丁实测是 4 个差异区块，实质一件事：上游 `,O(this._messaging,e.id,e.method,void 0`，
+   我们去掉了 `void`（另有两处 `void ` 也去掉），**让返回值回传**。
+
 ### 2. verovio 没有版本串
 
-`verovio-toolkit-wasm.js` 里既没有 banner 也没有 `VRV_VERSION` 之类的可读版本。
-现在唯一的基线是上面那串 SHA-256。**下次动它之前**：先记下当前指纹与来源（哪个 release 的构建），
-再替换，然后把版本号补进表里。
+**2026-10-13 已闭合。** `verovio-toolkit-wasm.js` 里既没有 banner 也没有 `VRV_VERSION` 之类的可读版本。
+
+**确定方法（不下载 19 个版本也能定位）**：用 jsDelivr 的文件清单 API 一次拿到各版本
+`dist/verovio-toolkit-wasm.js` 的**字节数**，先按大小筛，再只下载命中的那个核 SHA-256。
+结果：**`verovio@6.3.0`**，字节数与哈希全部吻合。
+
+```
+https://data.jsdelivr.com/v1/packages/npm/verovio@<版本>?structure=flat
+```
+
+**下次动它之前**：先记下当前指纹与来源，再替换，然后把版本号补进表里。
 
 ### 3. OpenUtau 只记了「哪来的」，没记「哪一版」
 

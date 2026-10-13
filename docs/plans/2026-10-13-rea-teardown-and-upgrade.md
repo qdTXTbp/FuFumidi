@@ -114,6 +114,51 @@
 **Q4 · WORLDLINE-R1.1 进默认渲染器偏好**
 - 上游 10-08 把新版加进默认偏好 —— 属于**质量默认值**，要评估后再跟。
 
+### 2.5 ✅ T2 · js-synthesizer：补丁是真的，且**无法靠升级去掉**（已闭合）
+
+VENDOR.md 坑 1 说「只有 worklet 那份打过补丁、主文件就是原版 1.13.0」。拉 npm 上 `js-synthesizer@1.13.0`
+逐字节核对，**两句都对，但第一句要补一个字**：
+
+| 文件 | 我们 | 上游 1.13.0 | 归一化换行后 |
+|---|---|---|---|
+| `js-synthesizer.min.js` | 33,086 B `7b3137eb…` | 33,056 B `ea3932ef…` | **★ 完全相同** |
+| `js-synthesizer.worklet.min.js` | 30,283 B `a2afdec5…` | 30,300 B `e9d8ba0d…` | **4 处真实差异** |
+
+**主文件那 30 字节差全是 CRLF vs LF**（banner 30 行，每行多 1 字节）—— 代码一个字都没改。
+**这点 VENDOR.md 没写**，于是「按 SHA 核对」的人会以为主文件也被打过补丁。已在 VENDOR.md 补注。
+
+**worklet 的补丁是真的**，4 个差异区块，实质是一件事：
+
+```
+上游: ,O(this._messaging,e.id,e.method,void 0      ← 丢掉返回值
+我们: O(this._messaging,e.id,e.method,             ← 让返回值回传
+      另外上游还有两处 void ，我们没有
+```
+
+正是 VENDOR.md 坑 1 描述的「把 `doCallFunction(...)` 的返回值回传」，
+`frontend/src/core/synth.js` 的 `callFunction('__fuSeqClockStart')` 依赖它。
+
+**★ 关键结论：npm 上 js-synthesizer 的最新版就是 1.13.0** —— **升级这条路根本不存在**，
+所以 VENDOR.md 把它从 `frontend/package.json` 移除、只留 vendor 文件的决定**是对的**，
+而不是「暂时绕过」。要动它只能手工同步补丁。
+### 2.6 ✅ T3 · verovio = npm `verovio@6.3.0`（VENDOR.md 的第二个自陈缺口闭合）
+
+VENDOR.md 原文：「**未标注**（文件里没有 banner、也没有版本串）—— 待补」，唯一基线是一串 SHA-256。
+
+**方法（低成本，值得复用）**：不要盲下 19 个版本各 7 MB —— 先用 jsDelivr 的文件清单 API
+一次拿到各版本 `dist/verovio-toolkit-wasm.js` 的**字节数**，按大小筛，只下载命中的那个核哈希。
+
+```
+https://data.jsdelivr.com/v1/packages/npm/verovio@<版本>?structure=flat
+```
+
+结果：**只有 `6.3.0` 是 7,310,681 B**，下载后 SHA-256
+`d794119cd5ea83a3e835849945f0289c91ac2bac427f4aa312c7010a800b46bd` **与我们完全一致**。
+
+**→ 逐字节相同，版本确定为 6.3.0。** 已写进 VENDOR.md。
+
+> 顺带修正一条一般性做法：**「文件里没有版本串」不等于「无法定版」**。
+> 上游以包形式发布的东西，用**包清单的尺寸 + 下载核哈希**就能定死，比我原先设想的「从 wasm 里挖构建元数据」可靠得多。
 ### 3.3 明确不跟的
 
 - `RenderEngine.cs` 的 **Track Polish 改版**（含 UI 改动，与「UI 不变」冲突）
