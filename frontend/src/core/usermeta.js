@@ -20,7 +20,14 @@ function bridge() {
 /** 读一次元数据表（并发调用共用同一个请求）。force=true 时强制重读。 */
 export async function loadUserMeta(force) {
   const b = bridge();
-  if (!b || !b.usermeta || !b.usermeta.list) { loaded = true; return table; }
+  if (!b || !b.usermeta || !b.usermeta.list) {
+    // 没有桥 = 根本没有用户元数据（网页版），那就该是**空表**。
+    // 不清空的话，先加载过桌面数据再失去桥的场景会把旧内容留在内存里，
+    // 排序/顶置会按一份"其实不存在"的表生效 —— 语义必须是确定的。
+    for (const k of Object.keys(table)) delete table[k];
+    loaded = true;
+    return table;
+  }
   if (loaded && !force) return table;
   if (inflight && !force) return inflight;
   inflight = (async () => {
