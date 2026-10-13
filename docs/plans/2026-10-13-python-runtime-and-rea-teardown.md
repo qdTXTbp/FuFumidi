@@ -100,6 +100,54 @@ install analysis engines, or add tools to an already-running agent.」**
 
 每条结论必须写成「差异 → 证据 → 改法 → 代价」四段，**先给方案等确认再改代码**。
 
+### ★ 阶段 0 已完成：REA 拆本工具自己的 `app.asar`（实测结果）
+
+命令（`--integrity-policy record-and-continue` 是必需的，原因见下）：
+
+```bash
+npx -y rea-agents@6.4.0 analyze-javascript-application \
+  'E:\Midi\FuFumidi\resources\app.asar' --integrity-policy record-and-continue --format json
+```
+
+产出：**Evidence 对象**（94 MB JSON），`authority: shipped-artifact` / `confidence: derived`，
+自带 `limitations` 158 条 —— 它明确列出自己没能确定什么，这正是结论可信的前提。
+
+`statistics`：解析 98 个 JS 文件 / 14.5 MB 文本 / 101.8 万 AST 节点 / 1685 条 findings / **1 个解析失败**。
+
+#### 交叉验证：产物视角 vs 源码视角
+
+| 指标 | 源码侧（`audit-bridge-contract.cjs`） | 产物侧（REA） | 判读 |
+|---|---|---|---|
+| 渲染端监听数 | `ipcRenderer.on` **26** | `renderer_listeners` **26** | ✅ **完全一致** |
+| 渲染端发送数 | `invoke` 177 + `send` 1 = **178** | `renderer_transmissions` **175** | ✅ 基本一致 |
+| 暴露的桥接成员 | 顶层 158 + 嵌套 50 = **208** | `exposed_api_members` **213** | ⚠️ 差 5，待查 |
+| 主进程 handler | `ipcMain.handle/on` **178** | `main_handlers` **3** | ⚠️ **REA 覆盖不足**，不是 175 个都缺 |
+
+**关键判读**：REA 报 `unpaired_literal_renderer_transmissions: 172`，看着像「172 个 invoke 没有 handler」，
+但源码侧明明是 177 invoke 对 178 handler。结合它自陈的 `preload_entrypoints: 0`、
+`parse_failures: 1`，可以判定：**REA 没能解析主进程那一侧**，那 172 是**覆盖度限制，不是 172 个 bug**。
+skill 里那句「读 limitations，别过度声称」就是防这个。
+
+#### ★ REA 抓到一个我的源码审计**根本看不到**的真问题
+
+`integrity_contradictions` —— **6 个文件的 asar 完整性哈希与产物实际字节不符**：
+
+```
+engine/deps.py · engine/engine_aria.py · engine/engine_gpu.py
+engine/engine_muscriptor.py · engine/engine_transkun.py · engine/music2midi.py
+```
+
+**根因**：`scripts/deploy-installed.cjs` 是「解包基线 asar → 覆盖源码文件 → 重打包」，
+它更新了文件内容，但**没更新 asar 头部里 electron-builder 写入的 integrity 哈希**。
+换句话说：**我每次覆盖安装版，产出的包完整性元数据都是过期的**。
+
+这正是阶段 0 想要的东西 —— 源码视角（`audit-bridge-contract.cjs`）永远发现不了它，
+因为源码里根本没有 asar 头部这层概念。**产物视角价值就在这里。**
+
+⚠️ 风险边界（不要夸大）：Electron 只在启用 `EnableEmbeddedAsarIntegrityValidation` 的
+签署构建上强制校验；当前安装版能正常跑，说明**尚未触发强制**。但这是个隐患：
+一旦将来开启该校验，或做签署发布，就会**直接拒绝加载**。待办：让 deploy 脚本同步更新 integrity。
+
 ### 与「原来的任务」的关系
 
 原任务（XPU 包上传 / Python 3.12 装配 / 尾部安静段异常 / 干净环境重验）**继续跑**，
