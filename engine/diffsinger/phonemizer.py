@@ -82,6 +82,20 @@ class UPhoneme:
 
 # ---------------------------------------------------------------- ProcessWord
 
+#: 轨级默认说话人（多说话人声库用）。由渲染入口设置；空 = 用声库声明的第一个。
+#:
+#: ★ 为什么用模块级变量而不是层层传参：从两个渲染入口（`pipeline.render_phrase` 与
+#:   `session.render_notes`）到这里的 `process_word` 要过 4 个函数，而它只是**一次渲染里的
+#:   常量**。代价是：同进程并发渲染两个不同说话人的轨道会互相覆盖 —— 本应用是串行渲染
+#:   （见 stores/singer.ts 的串行注释），所以成立；将来要并发就得改成传参。
+_DEFAULT_SPEAKER = ['']
+
+
+def set_default_speaker(name) -> None:
+    """设置本次渲染的默认说话人（空 = 用声库 `dsconfig.yaml` 声明的第一个）。"""
+    _DEFAULT_SPEAKER[0] = str(name or '')
+
+
 def process_word(notes: Sequence, symbols: Sequence[str],
                  g2p, speaker_at) -> List[PhonemesPerNote]:
     """对应 `ProcessWord`（:262-304）—— 把一个字的音素分配到它的各个音符上。
@@ -279,13 +293,12 @@ def process_part(singer: DsSinger, phrase_notes: Sequence[Sequence],
             word_found.append(False)
         else:
             word_found.append(True)
-        # ★ WP3-1（2026-10-14 查证）：`speaker_at` 这里**写死返回空串**，也就是
-        #   **多说话人声库目前不支持** —— `DsPhoneme.speaker` 恒为 `''`，
-        #   声库 `dsconfig.yaml` 里的 `speakers:` 列表读进来了却没人用。
-        #   上游 `ProcessWord` 是从**音符级 singer 覆写**取说话人的；要接的话
-        #   需要三件一起做：音符上的 speaker 字段、界面入口、以及按 speaker 选嵌入。
-        #   别看到 `voicebank.speakers` / `DsPhoneme.speaker` 就以为已经支持了。
-        wps = process_word(word, symbols, g2p, lambda n, i: '')
+        # 说话人：**音符级优先，回落轨级默认**（上游 `ProcessWord` 也是按音符取，
+        # 只是它的来源是 singer 覆写的 subbank）。轨级默认由渲染入口经
+        # `set_default_speaker` 设进来；两者都空时交给 `speaker_index_by_suffix`
+        # 回退到声库声明的第一个 —— 与上游 :79-82 的回退一致。
+        wps = process_word(word, symbols, g2p,
+                           lambda n, i: (getattr(n, 'speaker', '') or _DEFAULT_SPEAKER[0]))
         pp[-1].phonemes.extend(wps[0].phonemes)           # :385 首辅音并入上一组
         pp.extend(wps[1:])                                # :386
         note_ph_index.append(note_ph_index[-1]

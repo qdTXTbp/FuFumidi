@@ -140,7 +140,11 @@ def _singer_speaker_info(singer):
     if not spk:
         return None
     hidden = int(getattr(ac, "hidden_size", DEFAULT_HIDDEN_SIZE) or DEFAULT_HIDDEN_SIZE)
-    return str(getattr(ac, "root", "") or ""), list(spk), hidden
+    # ★ 本次渲染选中的说话人由渲染入口写进 `ac.speaker`（见 pipeline.render_phrase /
+    #   session.render_notes）。它必须在这里被读到 —— 不然逐帧嵌入会一直用第一个说话人，
+    #   表现就是「界面选了没反应」。
+    return (str(getattr(ac, "root", "") or ""), list(spk), hidden,
+            str(getattr(ac, "speaker", "") or ""))
 
 
 def phone_tensor_for(singer, names: Sequence[str], speaker: str = ""):
@@ -153,8 +157,8 @@ def phone_tensor_for(singer, names: Sequence[str], speaker: str = ""):
     info = _singer_speaker_info(singer)
     if info is None:
         return None
-    root, spk, hidden = info
-    fallback = speaker or spk[0]
+    root, spk, hidden, picked = info
+    fallback = speaker or picked or spk[0]
     use = [n or fallback for n in names]
     return embeds_by_phone(spk, hidden, use, matrix_for(root, spk, hidden))
 
@@ -167,8 +171,8 @@ def frame_tensor_for(singer, total_frames: int, speaker: str = ""):
     info = _singer_speaker_info(singer)
     if info is None:
         return None
-    root, spk, hidden = info
-    want = speaker or spk[0]
+    root, spk, hidden, picked = info
+    want = speaker or picked or spk[0]
     idx = speaker_index_by_suffix(spk, want)
     frames = max(0, int(total_frames))
     return embeds_by_frame(spk, hidden, frames, [idx] * frames, {},

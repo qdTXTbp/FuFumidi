@@ -1110,6 +1110,8 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       if (device && device !== 'auto') args.push('--device', String(device));
       // 声码器优先级：声库自带 > 通用组件位。
       // ★ 前端给了 params.vocoder 就用它（用户在「通用声码器」里选的）；没给才回落到
+      // 多说话人声库：轨级默认说话人（空 = 引擎侧用声明的第一个）
+      if (params.speaker) args.push('--speaker', String(params.speaker));
       //   数据根里那一个默认的 —— 这一段以前是**写死**的，界面上换不了。
       //   注意引擎侧语义：声库自带 dsvocoder/ 时这个覆盖会被忽略（见 diffsinger/voicebank.py）。
       const vd = vocoderDir();

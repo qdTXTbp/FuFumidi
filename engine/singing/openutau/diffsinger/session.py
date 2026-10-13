@@ -368,7 +368,8 @@ async def render_notes(notes: Sequence[Dict[str, Any]], voicebank: str,
                        focus_tick: int = -1,
                        device: str = 'auto',
                        tempos: Optional[Sequence[Dict[str, Any]]] = None,
-                       vocoder: Optional[str] = None) -> Dict[str, Any]:
+                       vocoder: Optional[str] = None,
+                       speaker: Optional[str] = None) -> Dict[str, Any]:
     """**主入口**：notes → 混音 samples。
 
     `vocoder` = 通用声码器覆盖（onnx 或目录）。语义与 `diffsinger.pipeline` 一致：
@@ -394,6 +395,13 @@ async def render_notes(notes: Sequence[Dict[str, Any]], voicebank: str,
     # ★ 声码器覆盖走 dependency_dir（load_vocoder 的第二个入口）：
     #   声库自带 dsvocoder/ 优先，没有时才用它 —— 与 pipeline.py:154 同一条语义。
     singer = VB.load_singer(voicebank, dependency_dir=vocoder)
+    # ★ 多说话人：轨级默认说话人（空 = 声库声明的第一个）
+    from diffsinger import phonemizer as _PH
+    _PH.set_default_speaker(speaker or '')
+    try:
+        singer.acoustic.speaker = speaker or ''
+    except Exception:
+        pass
     if singer is None:
         return {'ok': False, 'error': '声库加载失败'}
     # ★ 适配成上游 `USinger` 接口（补 `subbanks` / `has_found` / `try_get_oto` …）
