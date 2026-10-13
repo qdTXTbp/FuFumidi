@@ -567,4 +567,84 @@ git -c 'url.https://ghfast.top/https://github.com/.insteadOf=https://github.com/
 
 v11 的代价是 **2.6～3.7×**（2.2× 实时，已经不是「随便开」的档），而客观收益目前**不明确**；
 再加上 §11 那条「v11 在应用里还不可达」——**在听到试听结论之前，不该去接那个界面入口**。
+---
+
+## 14. WP2-3 / WP2-4 / WP2-5 完成（2026-10-14 续）
+
+### WP2-3 · Aria-AMT 定版 + 一个**静默跑错模型**的口子
+
+**定版**。两个包从 GitHub 装且**不带 ref**，`pip` 取的是"默认分支当时的 HEAD"；
+而两个 dist 的版本号都是没用的 `0.0.1` —— 隔一周装就是两份不同代码，出问题查不出区别。
+从**安装版**的 `dist-info/direct_url.json` 读到实际安装的 commit，钉进 `deps.ARIA_PINS`：
+
+| 包 | 定版 commit |
+|---|---|
+| `EleutherAI/aria-amt` | `a1ab73fc901d1759ec3bc173c146b3c6a3040261` |
+| `EleutherAI/aria-utils` | `4ed0749d2d70918610f03a5316bf283479ff9d09` |
+
+同时把 zip 兜底从 `archive/refs/heads/{main,master}.zip` 改成 `archive/<sha>.zip`：
+原来的写法会让 **git 可用与不可用的机器装到不同版本**（`ARCHIVE_REFS` 已删）。
+
+**真问题（不只是"没定版"）**：aria 的 CLI 是 `transcribe <model_name> <checkpoint_path>`，
+两个位置参数**配对** —— `model_name` 决定读 `site-packages/config/models/{name}.json` 的网络结构，
+权重由第二个参数给。包内自带三个配置（`medium-double` / `medium-single` / `medium-triple`），
+而 `_find_checkpoint` 原来是"目录里第一个 `*.safetensors`" —— 拿 A 的结构加载 B 的权重
+**不会报错**，只会静默跑错。资源中心目前只镜像 `piano-medium-double-1.0`，所以一直没露出来。
+
+→ `_find_checkpoint(model_dir, variant)` 改成**按 variant 匹配**（排序保证稳定，找不到才回退），
+并在调用处对"权重名里没有 variant"发一条明确告警。
+
+### WP2-4 · Transkun 定版 + 「不暴露」的理由固化
+
+`transkun>=2.0.1` → `transkun==2.0.1`。它 CLI 一共只有 5 个选项，我们只暴露 2 个：
+
+| transkun 选项 | 我们 | 理由 |
+|---|---|---|
+| `--device` | ✅ 暴露 | |
+| `--weight` | ✅ 暴露 | |
+| `--conf` | ❌ | 模型结构配置。改它就是换模型，不是"调参" |
+| `--segmentHopSize` | ❌ | 内部滑窗步长，默认值写在模型 conf 里 |
+| `--segmentSize` | ❌ | 内部滑窗长度，默认值写在模型 conf 里 |
+
+后两个是"速度/显存"旋钮：调大在长音频上**直接 OOM**，收益只有几十秒，默认值本来就是作者调好的。
+归入 §5「明确不做」。钉死版本同时保证这三项默认值不随上游升级漂移。
+
+### WP2-5 · basic-pitch 后处理对照：**已无遗漏参数**（只差一个，且是判断题）
+
+上游 `basic_pitch.inference.predict` 的签名与我们的 `transcribe_basic` 逐项对照：
+
+| 上游参数 | 默认 | 我们 |
+|---|---|---|
+| `audio_path` | — | ✅（先经内置 ffmpeg 解码成 22050 Hz WAV） |
+| `model_or_model_path` | nmp.onnx | ✅ 传 `make_basic_model(num_threads)`（int8 量化版） |
+| `onset_threshold` | 0.5 | ✅ 已暴露 |
+| `frame_threshold` | 0.3 | ✅ 已暴露 |
+| `minimum_note_length` | 127.7 | ✅ 已暴露（我们默认 128.0） |
+| `minimum_frequency` | None | ✅ 已暴露（WP1-2 的独立「最低音高」+ 低音增强） |
+| `maximum_frequency` | None | ✅ 已暴露 |
+| `melodia_trick` | True | ✅ 已暴露（低音增强那条链路） |
+| `midi_tempo` | 120 | ✅ 已暴露（且支持自动 BPM） |
+| `multiple_pitch_bends` | False | ❌ **唯一没转发的用户可见参数** |
+| `debug_file` | None | ❌ 内部诊断文件，不需要 |
+
+**关于 `multiple_pitch_bends`**：它为 True 时同一条音符可以有**多条**弯音曲线
+（颤音 / 滑音），对**唱腔**素材有用。下游消费者查过了：
+引擎里只有 `midi_edit.py` 会写弯音，`midi_post.apply_post` **不动** `pitch_bends`，
+所以开了就会真的落进导出的 MIDI（播放端 js-synthesizer/libfluidsynth 认弯音）。
+
+→ **这是一条待你定的判断题**，不擅自加控件：它是"质量类、零运行时成本"（符合可暴露的门槛），
+但会改变导出 MIDI 的内容（多出大量弯音事件），而它算不算「工具 UI 变了」由你定。
+记入 §7 待确认。
+
+### 顺带补的测试（这两条此前**零覆盖**）
+
+新增 `engine/tests/test_engine_aria_transkun.py`（6 项）：
+
+- 两个变体同时在目录里时，必须选**与 variant 匹配**的那个（就是上面修掉的那个 bug）
+- 无匹配时的回退**必须稳定**（同一目录两次选同一个文件）
+- 空目录 / 不存在 / 只有隐藏文件 → `None`
+- `ARIA_PINS` 必须是 40 位 commit，且 git+ 与 zip 两条路取**同一个** commit、不含 `refs/heads/`
+- `requirements-bundle.txt` 里必须是 `transkun==2.0.1`（不能是 `>=`）
+- 两个引擎模块可导入、`available()` 返回布尔
+
 

@@ -68,9 +68,15 @@ def transcribe_aria(audio_path, output_midi, params=None, log_cb=None,
         except Exception:
             pass
 
-    ckpt = _find_checkpoint(model_dir)
+    ckpt = _find_checkpoint(model_dir, variant)
     if not ckpt:
         raise RuntimeError("未找到 Aria-AMT 模型权重（*.safetensors），请先在资源中心下载 Aria-AMT 模型")
+    # ★ WP2-3：CLI 的两个位置参数是 (model_name, checkpoint_path)，**配对使用**。
+    #   不匹配时 aria 不会报错，只会静默用错结构 —— 所以这里必须出声。
+    if variant.strip().lower() not in os.path.basename(ckpt).lower():
+        _log(log_cb, "⚠ 权重文件名里找不到 %s，但模型配置用的就是它。"
+                     "若目录里放的是别的变体，请改名或只保留一个 .safetensors"
+                     % variant)
 
     _log(log_cb, "Aria-AMT 推理中（钢琴转录，%s）…" % variant)
     out_dir = os.path.dirname(os.path.abspath(output_midi))
@@ -141,15 +147,34 @@ def transcribe_aria(audio_path, output_midi, params=None, log_cb=None,
     return n
 
 
-def _find_checkpoint(model_dir):
-    """在 aria_amt 模型目录里定位权重（*.safetensors）。"""
+def _find_checkpoint(model_dir, variant=None):
+    """在 aria_amt 模型目录里定位权重（*.safetensors）。
+
+    ★ WP2-3：**优先按 variant 匹配**，不是"目录里第一个 .safetensors"。
+
+    aria-amt 的 CLI 是 `transcribe <model_name> <checkpoint_path>` —— 两个位置参数
+    **配对**：`model_name` 决定读 `site-packages/config/models/{name}.json` 里的网络结构，
+    权重由第二个参数给。拿 A 的结构去加载 B 的权重**不会报错**，只会静默跑错模型。
+    包内自带三个配置（`medium-double` / `medium-single` / `medium-triple`），
+    资源中心目前只镜像 `piano-medium-double-1.0`，所以这个坑一直没露出来；
+    但只要目录里出现第二个 `.safetensors` 就会踩。
+    """
     if not model_dir or not os.path.isdir(model_dir):
         return None
+    found = []
     for root, _, files in os.walk(model_dir):
         for f in files:
             if f.endswith(".safetensors") and not f.startswith("."):
-                return os.path.join(root, f)
-    return None
+                found.append(os.path.join(root, f))
+    if not found:
+        return None
+    found.sort()             # 顺序稳定：同一目录两次跑必须选到同一个文件
+    if variant:
+        want = variant.strip().lower()
+        hit = [p for p in found if want in os.path.basename(p).lower()]
+        if hit:
+            return hit[0]
+    return found[0]
 
 
 def _aria_cli():

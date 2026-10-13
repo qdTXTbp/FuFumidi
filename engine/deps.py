@@ -69,6 +69,16 @@ GIT_SOURCES = {
     "amt": "EleutherAI/aria-amt",
     "ariautils": "EleutherAI/aria-utils",
 }
+
+# ★ WP2-3 定版（2026-10-14）：这两个仓库**必须钉 commit**，不能用"默认分支当时的 HEAD"。
+#   原来的 `git+<镜像><repo>.git` 不带 ref —— 隔一周装就是两份不同的代码；
+#   而两个 dist 的版本号都是没用的 `0.0.1`，出问题没法复现、也没法对比。
+#   下面的 SHA 取自**安装版**里 dist-info/direct_url.json 的实际安装 commit，
+#   也就是当前这套跑通过的组合。升级时改这里，并重跑一次 aria 转录冒烟。
+ARIA_PINS = {
+    "amt": "a1ab73fc901d1759ec3bc173c146b3c6a3040261",
+    "ariautils": "4ed0749d2d70918610f03a5316bf283479ff9d09",
+}
 # 镜像顺序：国内 GitHub 加速优先（gh.jasonzeng.dev 与应用内其它下载源一致）；最后为官方直连兜底
 GIT_MIRROR_PREFIXES = [
     "https://gh.jasonzeng.dev/https://github.com/",
@@ -80,8 +90,10 @@ GIT_MIRROR_PREFIXES = [
 # 必须 --no-deps 装本体，再单独装缺失依赖（torch/torchaudio 已在环境内）
 GIT_NO_DEPS = {"amt"}
 
-# zip 兜底时仓库默认分支名不统一（main / master），两个都试
-ARCHIVE_REFS = ["main", "master"]
+# ⚠ 这里原来还有 `ARCHIVE_REFS = ["main", "master"]`（zip 兜底按分支取）。
+#   定版后 zip 兜底改成按 **commit** 取（GitHub 支持 `/archive/<sha>.zip`），
+#   所以分支名不再需要 —— 而且它本来就是个隐患：分支名会让 zip 那条路和 git+ 那条路
+#   装到**不同**的版本。
 
 # ★ MuScriptor 必须装「修复版」——不能从 PyPI 按包名装。
 #   上游 0.3.0 的 OpenNoteTracker 在长音频上会产出「僵尸音符」：块边界只关闭不在
@@ -111,12 +123,13 @@ def _aria_specs(pkg):
     只需要 HTTPS，不需要 git。
     """
     repo = GIT_SOURCES[pkg]
+    rev = ARIA_PINS[pkg]
     specs = []
     if shutil.which("git"):
-        specs += ["git+" + p + repo + ".git" for p in GIT_MIRROR_PREFIXES]
+        specs += ["git+" + p + repo + ".git@" + rev for p in GIT_MIRROR_PREFIXES]
     for p in GIT_MIRROR_PREFIXES:
-        for ref in ARCHIVE_REFS:
-            specs.append(p + repo + "/archive/refs/heads/" + ref + ".zip")
+        # ★ 两条路钉**同一个 commit**（否则 git 可用与否会装出不同版本）
+        specs.append(p + repo + "/archive/" + rev + ".zip")
     return specs
 
 
