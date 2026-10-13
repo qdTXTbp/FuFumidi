@@ -246,16 +246,8 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         _last_chunk_t = [None]
         _chunk_i = [0]
 
-        def _timing_tee(stream):
-            """包在**原始 token 流**上，逐块打点。
-
-            ★ 为什么必须包在原始流上（踩过一次）：ChunkBoundary **只存在于原始流里** ——
-              实时模式被 `model.transcribe()` 内部消费掉，回放模式被 `decode_model_tokens()`
-              消费掉，`_events_capped` 收到的已经是解码后的音符事件。
-              第一版把打点放在 `_events_capped` 里，结果 `###CHUNKTIME` 一行都没出。
-            """
-            if not _chunk_timing:
-                return stream
+        def _timing_gen(stream):
+            """真正的打点生成器。**只在 _chunk_timing 为真时才被调用**（见 _timing_tee）。"""
             for ev in stream:
                 if _ChunkBoundary is not None and isinstance(ev, _ChunkBoundary):
                     _now = time.perf_counter()
@@ -272,6 +264,33 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                         except Exception:
                             pass
                 yield ev
+
+        def _timing_tee(stream):
+            """包在**原始 token 流**上，逐块打点；**默认关闭时原样返回**。
+
+            ★ 为什么必须包在原始流上（踩过一次）：ChunkBoundary **只存在于原始流里** ——
+              实时模式被 `model.transcribe()` 内部消费掉，回放模式被 `decode_model_tokens()`
+              消费掉，`_events_capped` 收到的已经是解码后的音符事件。
+              第一版把打点放在 `_events_capped` 里，结果 `###CHUNKTIME` 一行都没出。
+
+            ★★ 为什么开关必须在**这个普通函数**里分派，而不能写进生成器（踩过第二次，严重）：
+              函数里只要有 `yield`，它整个就是生成器函数 —— 于是 `return stream`
+              不是「返回 stream」，而是设置 `StopIteration.value`，调用方拿到的是
+              **一个立刻耗尽、什么都不产出**的生成器。
+              后果：计时关掉时（**默认就是关的**）整次转录产出 **0 个音符**。
+              实测同一份回放由 98,288 音符变成 0 才暴露。
+              所以打点逻辑另起 `_timing_gen`，开关在本函数分派。
+            """
+            if not _chunk_timing:
+                return stream
+            return _timing_gen(stream)
+
+        # ★ `open_notes` 规模诊断（#9 用，默认关闭）：设 FUFUMIDI_OPEN_NOTE_PROBE=1。
+        #   为什么量这个：`_expired(now)` 对**每个**带时间的事件都要遍历 open_notes 全部条目，
+        #   即 O(K·E)。僵尸音符的失效模式正是「音符不收尾 → K 无界增长」。
+        #   若 K 在某个时间点台阶式上涨，就能解释逐块耗时的 10 倍台阶。
+        _open_probe = bool(os.environ.get('FUFUMIDI_OPEN_NOTE_PROBE'))
+        _open_peak = [0]
 
         def _events_capped(events):
             """进度透传 + 超长音符强制收尾（cap <= 0 时行为与旧版一致）。"""
@@ -307,6 +326,15 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     continue
                 if _NoteStartEvent is not None and isinstance(ev, _NoteStartEvent):
                     open_notes[ev.index] = ev
+                    if _open_probe and len(open_notes) > _open_peak[0]:
+                        _open_peak[0] = len(open_notes)
+                        try:
+                            log_cb('###OPENNOTES ' + _json.dumps({
+                                'k': len(open_notes),
+                                't': float(getattr(ev, 'start_time', 0.0) or 0.0),
+                            }))
+                        except Exception:
+                            pass
                     yield ev
                     continue
                 if _NoteEndEvent is not None and isinstance(ev, _NoteEndEvent):
