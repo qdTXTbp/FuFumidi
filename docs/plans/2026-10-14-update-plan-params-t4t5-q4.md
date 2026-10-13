@@ -353,3 +353,91 @@ help 只写了转录那种），只是它**不是**这次基准失败的原因�
 `BS-Roformer_LargeV1`(706MB)、`melband_roformer_instvox_duality_v2`(1640MB)；`vr/` 下 `1_HP-UVR`(121MB)。
 **跨架构实测是给界面加「速度量级」提示的前提** —— 不实测就不加，避免又一条无依据的断言。
 
+---
+
+## 10. ★ WP4-1 完成：`hnsep_240512` 包源已找到并**逐字节校验**（2026-10-14）
+
+#### 怎么找到的（可复现路径）
+
+1. `Hnsep.cs:61` 写的是 `PackageManager.Inst.GetInstalledPath("hnsep_240512")`
+   —— 包由 OpenUtau 自己的包管理器安装，**源码里没有硬编码下载地址**
+2. 读 `OpenUtau.Core/PackageManager.cs:66`，得到唯一注册表：
+   `https://openutau.github.io/svs-index/registry/v1/softwares/all.json`
+3. 该注册表只有 **5 条**，其中就有 `hnsep_240512`：
+
+```json
+{
+  "id": "hnsep_240512",
+  "names": { "en": "HN-SEP: Harmonic/Noise Separation" },
+  "category": "host_extension",
+  "developers": ["yxlllc"],
+  "homepage_url": "https://github.com/yxlllc/vocal-remover",
+  "tags": ["oudep"],
+  "versions": [{ "version": "240512", "mirrors": [{
+    "url": "https://github.com/stakira/vocal-remover/releases/download/hnsep_240512-oudep/hnsep_240512.oudep",
+    "hash": "sha256:8f8c1046d0cacd40363e6f71d48bc1663e06a01d4625af0569055648d771ff92"
+  }] }]
+}
+```
+
+#### 下载与校验
+
+| 项 | 值 |
+|---|---|
+| 体积 | **52.39 MB** |
+| 实得 SHA-256 | `8f8c1046…d771ff92` |
+| 官方 SHA-256 | **完全一致** ✓ |
+| 通道 | `ghfast.top` 代理，28.2 秒（≈1.9 MB/s） |
+
+#### 包内容（`.oudep` 实为 zip，前 4 字节 `50 4B 03 04`）
+
+| 文件 | 大小 | 说明 |
+|---|---|---|
+| `hnsep.yaml` | 0.1 KB | 配置 |
+| `model.onnx` | **57,663 KB** | 网络本体 |
+| `oudep.yaml` | 0.2 KB | `id/name/version/class: Hnsep`，描述写明 **used by Worldline-R1.1** |
+| `LICENSE` | 1 KB | **MIT，Copyright (c) 2019 tsurumeso** |
+
+`hnsep.yaml` 与 C# 的 `HnsepConfig` **逐项一致**：
+
+```yaml
+model: model.onnx
+sample_rate: 44100
+n_fft: 2048
+hop_length: 512
+```
+
+#### ★ 结论
+
+**WP4 的关键未知项全部消除**：包源、固定 URL、官方 SHA-256、内容结构、许可证，五项都落实了。
+移植侧因此全是已知量 —— `HnsepConfig` 三项对应 `hnsep.yaml`；ONNX 的输入输出为
+`[1, 2(re,im), n_fft/2+1, frames]`（`Hnsep.cs` 注释：**帧数须为 32 的倍数**）；
+STFT/ISTFT 必须复刻 torch 的 **periodic Hann + center=True（零填充）** 语义。
+
+**许可证无阻碍**：MIT，分发时随包保留 `LICENSE` 即可，与 `docs/VENDOR.md` 的既有做法一致。
+
+#### WP4-4（镜像部分）已完成 —— 自建镜像到 CNB
+
+按你的决定「自建镜像到 CNB」上传（`scripts/cnb-upload.py`）：
+
+```
+创建 CNB release hnsep-v1 (id=2109958363076763648)
+  verify hnsep_240512.oudep -> 200
+上传成功 hnsep_240512.oudep (52.4 MB, 56s) -> FuFuCloud-mirror/Models@hnsep-v1
+```
+
+**公开地址（已独立验证）**：
+
+```
+https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/hnsep-v1/hnsep_240512.oudep
+  HTTP 200 · content-length 54,934,878 (= 52.39 MB，与本地同体积) · content-type application/zip
+```
+
+**踩到的一个坑（记下来）**：`FuFuCloud-mirror/Models` **只有 `main` 分支，没有 `master`** ——
+`cnb-upload.py` 的 `--commitish` 默认是 `master`，首次上传因此报
+`400 invalid commit revision master`。该仓要用 `--commitish main`。
+（对比：`FuFuCloud-mirror/FuFuMIDI` 有 `master` / `release/5.0.0` 等，默认值在那里是对的。）
+
+镜像落在 **`FuFuCloud-mirror/Models`** —— 与 `main/download-source.js:48` 的模型镜像仓一致
+（`models: 'FuFuCloud-mirror/Models'`），不是随便找个仓塞进去。
+
