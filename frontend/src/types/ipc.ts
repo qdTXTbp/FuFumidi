@@ -881,6 +881,8 @@ export interface FuBridge {
   diffsingerMsDownload(cfg: { name: string; path: string }): Promise<GeneralResult & { canceled?: boolean; name?: string; dir?: string; size?: number; source?: string }>;
   diffsingerMsCancelDownload(name: string): Promise<GeneralResult>;
   diffsingerInspectVoicebank(cfg: { voicebank: string }): Promise<DiffsingerVoicebankInfo>;
+  /** 通用声码器候选（数据根 vocoder/ 与通用组件位 Dependency/）。**不含**声库自带的 dsvocoder。 */
+  diffsingerVocoders(): Promise<{ ok: boolean; items: { id: string; name: string; path: string }[]; dir?: string; error?: string }>;
   /** 歌词输入建议。`language` 为**轨道级**语言设置，不从歌词自动判断。 */
   diffsingerSuggestLyric(cfg: { text: string; language?: string; voicebank?: string; limit?: number }): Promise<DiffsingerSuggestResult>;
   diffsingerRender(cfg: {

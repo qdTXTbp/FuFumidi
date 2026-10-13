@@ -305,12 +305,12 @@ def do_notes(vocal_wav, outdir, lyrics, lang='zh', bpm=0.0, inst_wav='', log=pri
 
 
 def do_render(notes_path, outdir, voicebank, bpm, steps=32, device='cuda', chunk=140,
-              log=print, resume=True):
+              log=print, resume=True, vocoder=''):
     """音符 → 干声（长曲分段：引擎在音符极多时一次渲染容易长时间没有输出）。
 
     ★ 分段结果**可复用**：每段旁边写一份 `chunkN.meta.json`（声库指纹 + BPM + 步数 +
-      该段音符的 hash）。签名一致就跳过 —— 于是「上次渲染到一半断了」再跑一次不是从头再来，
-      改了歌词 / 换了声库才重算。
+      **声码器** + 该段音符的 hash）。签名一致就跳过 —— 于是「上次渲染到一半断了」再跑一次
+      不是从头再来，改了歌词 / 换了声库 / 换了声码器才重算。
     """
     notes = json.load(open(notes_path, encoding='utf-8'))
     if not notes:
@@ -318,8 +318,11 @@ def do_render(notes_path, outdir, voicebank, bpm, steps=32, device='cuda', chunk
     rdir = os.path.join(outdir, 'render')
     os.makedirs(rdir, exist_ok=True)
     groups = [notes[i:i + chunk] for i in range(0, len(notes), chunk)]
+    # ★ 声码器覆盖必须进这份签名：不进的话换了声码器会直接复用上次渲好的 chunkN.wav，
+    #   用户看到的就是「换了没反应」（同样的坑在乐句缓存那里也修了一次）。
     base = {'voicebank': _vb_sig(voicebank), 'bpm': round(float(bpm), 4),
-            'steps': int(steps), 'chunk': int(chunk), 'total': len(notes)}
+            'steps': int(steps), 'chunk': int(chunk), 'total': len(notes),
+            'vocoder': str(vocoder or '')}
     outs = []
     reused = 0
     log('渲染：%d 个音符分 %d 段（每段 <= %d）—— 引擎在音符极多时一次性渲染会卡住，分段可绕开'
@@ -341,6 +344,9 @@ def do_render(notes_path, outdir, voicebank, bpm, steps=32, device='cuda', chunk
                '--voicebank', voicebank, '--notes', '@' + part, '--bpm', str(bpm),
                '--language', 'zh', '--steps', str(steps), '--depth', '1.0',
                '--device', device, '--out', wav]
+        # 声码器覆盖：**声库自带 dsvocoder/ 时引擎会忽略它**（见 diffsinger/voicebank.py）
+        if vocoder:
+            cmd += ['--vocoder', str(vocoder)]
         t0 = time.time()
         p = subprocess.run(cmd, cwd=_HERE, capture_output=True, text=True,
                            encoding='utf-8', errors='ignore')
@@ -569,6 +575,8 @@ def main():
         s.add_argument('--bpm', type=float, default=0.0)
         s.add_argument('--steps', type=int, default=32)
         s.add_argument('--device', default='cuda')
+        s.add_argument('--vocoder', default='',
+                        help='通用声码器 onnx 或目录（声库自带 dsvocoder 时忽略；会进分段/乐句缓存键）')
         s.add_argument('--chunk', type=int, default=140)
         s.add_argument('--sep-model', default='')
         s.add_argument('--sep-config', default='')
@@ -682,7 +690,7 @@ def main():
                     pass
             else:
                 drys = do_render(notes_path, outdir, a.voicebank, bpm, a.steps, a.device, a.chunk,
-                                 resume=a.resume)
+                                 resume=a.resume, vocoder=a.vocoder)
                 info['singer'] = 'DiffSinger/' + os.path.basename(a.voicebank)
             save_state(outdir, {'stage': 'render', 'notes': len(notes), 'bpm': round(bpm, 4),
                                 'dry': drys, 'info': info})

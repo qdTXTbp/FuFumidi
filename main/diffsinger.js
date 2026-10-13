@@ -993,6 +993,35 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     }
   }));
 
+  // 通用声码器候选（供「通用声码器」下拉）。
+  // ★ 只列**通用**的：数据根 vocoder/ 下的目录与 .onnx、以及通用组件位 Dependency/。
+  //   **声库自带的 dsvocoder/ 不列** —— 引擎语义是"自带优先、覆盖只在没自带时生效"，
+  //   把它列出来只会让人以为能强行换掉某个声库自带的声码器。
+  ipcMain.handle('diffsinger:vocoders', async () => {
+    const items = [];
+    const push = (p, name) => { if (!items.some((x) => x.path === p)) items.push({ id: p, name, path: p }); };
+    try {
+      const vd = vocoderDir();
+      if (fs.existsSync(vd)) {
+        for (const n of fs.readdirSync(vd)) {
+          const p = path.join(vd, n);
+          let st = null;
+          try { st = fs.statSync(p); } catch (e) { continue; }
+          if (st.isDirectory() && fs.existsSync(path.join(p, 'vocoder.yaml'))) push(p, n);
+          else if (st.isFile() && /\.onnx$/i.test(n)) push(p, n.replace(/\.onnx$/i, ''));
+        }
+      }
+      const dep = path.join(dsRoot(), 'Dependency');
+      if (fs.existsSync(dep)) {
+        for (const n of fs.readdirSync(dep)) {
+          const p = path.join(dep, n);
+          try { if (fs.statSync(p).isDirectory() && fs.existsSync(path.join(p, 'vocoder.yaml'))) push(p, n); } catch (e) {}
+        }
+      }
+    } catch (e) {}
+    return { ok: true, items, dir: vocoderDir() };
+  });
+
   ipcMain.handle('diffsinger:inspectVoicebank', (evt, cfg) => new Promise((resolve) => {
     const { voicebank } = cfg || {};
     const pre = precheck(voicebank);
@@ -1079,14 +1108,21 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       }
       // 推理后端：auto 交给引擎按可用性自动选择（GPU 优先）
       if (device && device !== 'auto') args.push('--device', String(device));
-      // 声码器优先级：声库自带 > 通用组件位
+      // 声码器优先级：声库自带 > 通用组件位。
+      // ★ 前端给了 params.vocoder 就用它（用户在「通用声码器」里选的）；没给才回落到
+      //   数据根里那一个默认的 —— 这一段以前是**写死**的，界面上换不了。
+      //   注意引擎侧语义：声库自带 dsvocoder/ 时这个覆盖会被忽略（见 diffsinger/voicebank.py）。
       const vd = vocoderDir();
-      try {
-        if (fs.existsSync(vd)) {
-          const onnx = fs.readdirSync(vd).find(n => /\.onnx$/i.test(n));
-          if (onnx) args.push('--vocoder', path.join(vd, onnx));
-        }
-      } catch (e) {}
+      if (params.vocoder) {
+        args.push('--vocoder', String(params.vocoder));
+      } else {
+        try {
+          if (fs.existsSync(vd)) {
+            const onnx = fs.readdirSync(vd).find(n => /\.onnx$/i.test(n));
+            if (onnx) args.push('--vocoder', path.join(vd, onnx));
+          }
+        } catch (e) {}
+      }
       // ---- 常驻会话优先（省 Python 启动 + torch import + 声库加载固定开销）----
       // 会话失败（进程崩溃/超时）→ 丢掉会话、回退一次性 spawn：功能永远可用。
       // 引擎业务错误（缺声库/无音符等 ok=false）不回退 —— 回退也是同样错误。

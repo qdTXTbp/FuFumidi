@@ -23,6 +23,7 @@ const singerStore = useSingerStore();
 
 onMounted(() => {
   void singerStore.loadBanks();
+  void ds.loadVocoders();      // 通用声码器候选（下拉用）
 onActivated(() => { void singerStore.loadBanks(); });
   /* 验收桥（与其它页同一套开关）：别名表的读/改/存/试听在 CDP 里要能直接驱动 */
   if (localStorage.getItem('fufumidi_debug') === '1') {
@@ -741,6 +742,16 @@ function onRangeClick() {
           <p class="muted small">
             {{ ds.vocoderInstalled ? t('已安装（NSF-HiFiGAN）') : t('未安装（约 55 MB，下载后本地推理）') }}
           </p>
+          <!-- 通用声码器选择。★ 只在声库**没自带** dsvocoder 时生效（自带优先）—— 文案里说清，
+               否则用户会以为能强行换掉某个声库自带的声码器。 -->
+          <div v-if="ds.vocoderInstalled" class="vbp-voc">
+            <select class="select-input" :value="ds.vocoderPick"
+                    @change="ds.setVocoder($event.target.value)">
+              <option value="">{{ t('自动（用默认的那一个）') }}</option>
+              <option v-for="v in ds.vocoders" :key="v.id" :value="v.path">{{ v.name }}</option>
+            </select>
+            <p class="muted small">{{ t('声库自带 dsvocoder 时这一项会被忽略（自带优先）') }}</p>
+          </div>
         </div>
       </div>
     </section>

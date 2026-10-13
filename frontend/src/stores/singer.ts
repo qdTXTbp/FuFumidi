@@ -1835,7 +1835,13 @@ export const useSingerStore = defineStore('singer', {
         tempoMap: this.tempoMap.map(p => ({ beat: p.beat, bpm: p.bpm })),
         device: this.device || 'auto',
         pitchCurve,
-        params: { language: tr.language, depth: tr.depth, steps: tr.steps },
+        params: {
+      language: tr.language, depth: tr.depth, steps: tr.steps,
+      // ★ 通用声码器覆盖（用户在「声库」面板里选的）。空串 = 让主进程回落到数据根里
+      //   那一个默认的。主进程曾经是**写死**的，界面上换不了（见 main/diffsinger.js）。
+      //   引擎侧语义：声库自带 dsvocoder/ 时它会被忽略。
+      vocoder: (typeof localStorage !== 'undefined' && localStorage.getItem('fufumidi_ds_vocoder')) || '',
+    },
         ...(outPath ? { outPath } : {}),
       });
       return this._acceptResult(r, 'DiffSinger', outPath ? undefined : tr.id);

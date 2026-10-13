@@ -344,6 +344,7 @@ def cmd_sing_render(args):
             focus_tick=int(args.focus_tick if args.focus_tick is not None else -1),
             device=args.device or 'auto',
             tempos=_parse_tempo_map(getattr(args, 'tempo_map', None)),
+            vocoder=getattr(args, 'vocoder', None),
         ))
         if not r.get('ok'):
             emit_result({'ok': False, 'error': r.get('error')})
@@ -533,6 +534,10 @@ def main(argv=None):
     sr.add_argument('--depth', type=float, default=1.0, help='采样深度（进缓存名）')
     sr.add_argument('--steps', type=int, default=20, help='采样步数（进缓存名）')
     sr.add_argument('--device', default='auto', help='auto/cpu/cuda/dml')
+    # 通用声码器覆盖：**声库自带 dsvocoder/ 时会被忽略**（引擎侧语义）。
+    # ★ 它会进乐句缓存名 —— 漏了这一跳就会出现「换了声码器还是上一次的声音」。
+    sr.add_argument('--vocoder', default=None,
+                    help='通用声码器 onnx 或目录（声库自带 dsvocoder 时忽略）')
     sr.add_argument('--out', default='', help='输出 wav 路径')
     sr.add_argument('--cache-dir', default=None, help='乐句 wav 缓存目录（给了才命中缓存）')
     sr.add_argument('--playing', action='store_true', help='按播放头优先级排序')

@@ -138,6 +138,24 @@ def test_diffsinger_render_cli_accepts_language_depth_steps():
 
 # ---------------------------------------------------------------- 6. 声库体检
 
+def test_diffsinger_sing_render_cli_accepts_vocoder():
+    """★ `sing-render` 是应用真正走的那条路（演唱 + 翻唱），它以前**不认** --vocoder ——
+    `--vocoder` 只挂在 `render` 上，于是「声码器覆盖」在界面上根本到不了。
+    这条钉住 CLI 必须认它（同本文件 §5 那三个参数的教训）。"""
+    r = subprocess.run([PY, os.path.join(ENGINE, 'engine_diffsinger.py'), 'sing-render', '--help'],
+                       capture_output=True, text=True, encoding='utf-8', errors='replace')
+    assert r.returncode == 0
+    assert '--vocoder' in r.stdout
+
+
+def test_cover_cli_accepts_vocoder():
+    """翻唱链路（engine_cover.py）也要能把声码器覆盖透下去。"""
+    r = subprocess.run([PY, os.path.join(ENGINE, 'engine_cover.py'), 'all', '--help'],
+                       capture_output=True, text=True, encoding='utf-8', errors='replace')
+    assert r.returncode == 0
+    assert '--vocoder' in r.stdout
+
+
 def test_vbcheck_reports_missing_character_and_lyrics(tmp_path):
     """体检要能把「缺 character.txt」「歌词不在别名表」这两类事实算出来。"""
     from test_singing_adapters import make_voicebank

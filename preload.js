@@ -241,6 +241,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   diffsingerMsDownload: (cfg) => ipcRenderer.invoke('diffsinger:msDownload', cfg),
   diffsingerMsCancelDownload: (name) => ipcRenderer.invoke('diffsinger:msCancelDownload', name),
   diffsingerInspectVoicebank: (cfg) => ipcRenderer.invoke('diffsinger:inspectVoicebank', cfg),
+  diffsingerVocoders: () => ipcRenderer.invoke('diffsinger:vocoders'),
   diffsingerRender: (cfg) => ipcRenderer.invoke('diffsinger:render', cfg),
   // 统一声库清单（UTAU + DiffSinger 融合）：音频制作侧可切换两类声库
   voicebankUnified: () => ipcRenderer.invoke('voicebank:unified'),

@@ -28,6 +28,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Set
 
+from .cache_name import phrase_cache_name
+
 #: 上游 `DiffSingerRealCurveScheduler` 的去抖时长
 DEBOUNCE_MS = 200
 
@@ -47,23 +49,27 @@ class PreviewPlan:
 
 
 def plan_preview(phrases: Sequence, cache_dir: Optional[str],
-                 depth: float = 1.0, steps: int = 20) -> PreviewPlan:
+                 depth: float = 1.0, steps: int = 20,
+                 vocoder: Optional[str] = None) -> PreviewPlan:
     """把一批句分成「要渲的」与「命缓存的」。
 
     缓存文件名与 `DiffsingerIRenderer._cache_path` **必须一致** ——
     这里只做判定，不重复实现渲染；文件名对不上会让缓存永远 miss。
+    两边现在都从 `cache_name.phrase_cache_name` 取名（含声码器覆盖的标签），
+    不再各写一份格式串 —— 那正是「文件名对不上」的根源。
     """
     plan = PreviewPlan()
     for ph in phrases:
-        if cache_dir and _cache_hit(ph, cache_dir, depth, steps):
+        if cache_dir and _cache_hit(ph, cache_dir, depth, steps, vocoder):
             plan.cached.append(ph)
         else:
             plan.pending.append(ph)
     return plan
 
 
-def _cache_hit(phrase, cache_dir: str, depth: float, steps: int) -> bool:
-    name = 'ds-%016x-depth%.2f-steps%d.wav' % (phrase.hash, depth, steps)
+def _cache_hit(phrase, cache_dir: str, depth: float, steps: int,
+               vocoder: Optional[str] = None) -> bool:
+    name = phrase_cache_name(phrase.hash, depth, steps, vocoder)
     return os.path.isfile(os.path.join(cache_dir, name))
 
 
@@ -88,6 +94,8 @@ class PreviewScheduler:
     cache_dir: Optional[str] = None
     depth: float = 1.0
     steps: int = 20
+    #: 通用声码器覆盖（进缓存名；声库自带 dsvocoder 时引擎会忽略它）
+    vocoder: Optional[str] = None
     on_phrase_ready: Optional[Callable] = None
     on_round_done: Optional[Callable] = None
     debounce_ms: int = DEBOUNCE_MS
@@ -171,7 +179,7 @@ class PreviewScheduler:
         cancel = self._cancel
         self.stats['rounds'] += 1
 
-        plan = plan_preview(phrases, self.cache_dir, self.depth, self.steps)
+        plan = plan_preview(phrases, self.cache_dir, self.depth, self.steps, self.vocoder)
         self.stats['cached'] += len(plan.cached)
         # 命中缓存的先通知（它们**立刻可用**，不用等）
         for ph in plan.cached:
