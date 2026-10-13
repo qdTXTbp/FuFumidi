@@ -2191,7 +2191,7 @@ onBeforeUnmount(() => {
             <div class="insp-row"><span>{{ t('音名') }}</span><b>{{ sel.name || '—' }}</b></div>
             <div class="insp-row"><span>{{ t('音高') }}</span><b>{{ sel.midi ?? '—' }}</b></div>
             <div class="insp-row"><span>{{ t('力度') }}</span><b>{{ sel.vel ?? '—' }}</b></div>
-            <NumSlider :model-value="sel.vel ?? 80" @update:model-value="v => { editor?.setSelVel(+v) }" :min="1" :max="127" :disabled="!sel.vel" range-class="insp-range" :input-width="56" />
+            <NumSlider :model-value="sel.vel ?? 80" @update:model-value="v => { editor?.setSelVel(+v) }" :min="1" :max="127" :disabled="!sel.vel" range-class="insp-range" data-guide="velocity-slider" :input-width="56" no-input />
             <div class="insp-row"><span>{{ t('起点') }}</span>
               <input type="number" class="num-input" :value="sel.start ?? 0" step="1" min="0" :disabled="!sel.start"
                      @change="e => editor?.setSelStart(+e.target.value)" /></div>
@@ -2304,7 +2304,7 @@ onBeforeUnmount(() => {
         <span class="art-lane-label">{{ t('谱面底图') }}</span>
         <button class="btn sm" @click="pickUnderlay"><Icon name="import" :size="12" />{{ t('选择图片…') }}</button>
         <label class="ul-f">{{ t('不透明度') }}
-          <NumSlider v-model="ulOpacity" :min="0.05" :max="0.9" :step="0.05" />
+          <NumSlider v-model="ulOpacity" :min="0.05" :max="0.9" :step="0.05" no-input />
           <em>{{ Math.round(ulOpacity * 100) }}%</em></label>
         <label class="ul-f">{{ t('宽度(拍)') }}
           <input class="num-input" type="number" min="1" max="512" step="1" v-model.number="ulBeats" style="width:64px" /></label>
@@ -2547,7 +2547,7 @@ onBeforeUnmount(() => {
               <option value="none">{{ t('无') }}</option><option value="funk">Funk</option><option value="jazz">Jazz</option><option value="rock">Rock</option><option value="latin">Latin</option><option value="custom">{{ t('自定义 Groove') }}</option>
             </select>
           </label>
-          <label class="span2">{{ t('强度') }}<NumSlider v-model="sqStrength" :min="0" :max="100" style="width:100%" /> <span class="muted small">{{ sqStrength }}%</span></label>
+          <label class="span2">{{ t('强度') }}<NumSlider v-model="sqStrength" :min="0" :max="100" style="width:100%" no-input /> <span class="muted small">{{ sqStrength }}%</span></label>
         </div>
         <div class="ed-modal-foot">
           <button class="btn sm" @click="extractGroove">{{ t('提取选中为 Groove') }}</button>

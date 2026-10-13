@@ -29,6 +29,11 @@ const props = defineProps({
   inputId: { type: String, default: '' },
   inputName: { type: String, default: '' },
   ariaLabel: { type: String, default: '' },
+  /* ★ 布局紧的地方**不要数字框**（用户明确要求）。判据是量出来的，不是感觉：
+     竖排推子（EQ 的 writing-mode: vertical-lr）、固定小宽的 range（88px / 96px）、
+     行内本来就有读数（42px 标签 + 54px 读数）、紧凑列表行 —— 再塞一个数字框会把滑块压没。
+     这些位置只保留滑块，行为与改造前完全一致。 */
+  noInput: { type: Boolean, default: false },
 });
 const emit = defineEmits(['update:modelValue', 'change']);
 
@@ -86,9 +91,9 @@ function onKey(e) {
            :aria-label="ariaLabel || null" :style="rangeStyle"
            :min="min" :max="max" :step="step"
            :disabled="disabled" :value="modelValue" @input="onSlide">
-    <input class="numslider-num" type="number" :min="min" :max="max" :step="step"
+    <input v-if="!noInput" class="numslider-num" type="number" :min="min" :max="max" :step="step"
            :disabled="disabled" :value="draft" :style="{ width: inputWidth + 'px' }"
            @input="draft = $event.target.value" @blur="commit" @keydown="onKey">
-    <span v-if="unit" class="numslider-unit">{{ unit }}</span>
+    <span v-if="unit && !noInput" class="numslider-unit">{{ unit }}</span>
   </span>
 </template>
