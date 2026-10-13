@@ -6,6 +6,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import DiffSingerCatalog from './DiffSingerCatalog.vue';
+import ModelCatalog from '../components/models/ModelCatalog.vue';
 import UtauVoicebankStore from '../components/utau/UtauVoicebankStore.vue';
 import { useAppStore } from '../stores/app';
 import { useVoicebankStore } from '../stores/voicebank';
@@ -45,6 +46,8 @@ const listKind = computed(() => (curTab.value === 'tuning' ? (SUB_KIND[curSub.va
 const showDs = computed(() => curTab.value === 'tuning' && curSub.value === 'ds');
 const showUtau = computed(() => curTab.value === 'tuning' && curSub.value === 'utau');
 const showGrid = computed(() => (curTab.value === 'tuning' ? !!SUB_KIND[curSub.value] : true));
+/** 「音色」「调教模型」两页用共享目录壳（与两个声库页同形），走 ModelCatalog 而不是通用网格 */
+const isTuningGrid = computed(() => curTab.value === 'tuning' && !!SUB_KIND[curSub.value]);
 
 /* ---------------- 模型列表与进度 ---------------- */
 const list = ref([]);
@@ -217,7 +220,22 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
       <UtauVoicebankStore />
     </div>
 
-    <!-- 卡片网格 -->
+    <!-- 音色 / 调教模型：用与两个声库页**同一套**目录壳（来源条 → 搜索筛选 → 分组 → 卡片网格） -->
+    <ModelCatalog v-else-if="isTuningGrid" :items="tabbedList" :prog="prog" group-key="arch"
+                  :icon="listKind === 'tts' ? 'mic' : 'box'"
+                  :title="listKind === 'tts' ? 'GPT-SoVITS 音色' : '调教模型'"
+                  :note="listKind === 'tts'
+                    ? '社区音色绝大多数没有稳定直链，网盘 / 社区下载的包可直接用「导入本地音色目录」安装；这里的条目是从公开仓库一键拉取的那部分。'
+                    : '调教（歌声合成）用到的模型。Worldline v11 的谐波分离模型就在这里下载。'"
+                  :empty-text="listKind === 'tts' ? '没有符合条件的音色' : '没有符合条件的调教模型'"
+                  @download="startDownload" @remove="deleteModel"
+                  @cancel="(it) => cancelDownload(it.id)" @openExternal="openExternal">
+      <template #actions>
+        <button v-if="listKind === 'tts'" class="btn sm" @click="importGsvVoice"><Icon name="folder" :size="13" /> {{ t('导入本地音色目录') }}</button>
+      </template>
+    </ModelCatalog>
+
+    <!-- 卡片网格（转录 / 分离 / 修复·VR 沿用） -->
     <Transition v-else-if="showGrid" name="vmfade" mode="out-in">
       <div class="vm-grid" :key="listKind">
         <!-- 本地导入：调教里的声库 / 音色绝大多数没有稳定直链（BOOTH / BowlRoll / 网盘），
