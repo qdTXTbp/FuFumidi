@@ -108,6 +108,67 @@ _SESSION_CACHE: 'OrderedDict[tuple, object]' = OrderedDict()
 _SESSION_LOCK = threading.RLock()
 _SESSION_STATS = {'hit': 0, 'miss': 0, 'evict': 0}
 
+# ------------------------------------------------------------------ DirectML 串行区
+#
+# ★ 上游 799ba8de（PR #2494，2026-10-13 移植）：**Windows 的 DirectML 版 ONNX Runtime
+#   在「会话创建 / Run / 释放」三者重叠时会原生杀进程**（0xC0000005，没有托管异常，
+#   抓不到也记不下）。上游在 RTX 2070 + onnxruntime 1.23.0 + DirectML 1.15.4 上复现：
+#   同一会话**并发 Run**、Run 期间建会话、Run 期间释放会话 —— 三种都在几秒内死。
+#   上游明确写了「**只有创建并发是安全的**」，所以崩溃要的是**重叠**。
+#
+# ★ 本文件原先的注释写着「ORT 的 InferenceSession.Run 是线程安全的」—— 那条假设
+#   **对 CPU provider 成立、对 DirectML 不成立**（正是 PR #2494 推翻的）。
+#
+# ★ 与 C# 的差异（决定移植范围）：C# 那边是 FreeMemory **显式 Dispose()** 掉原生会话，
+#   于是「Run 期间被释放」是真会发生的；Python 里 run_session **持着局部引用**，
+#   引用计数不会让它在调用中途被回收，而本包也没有任何显式释放。
+#   所以这里**只**需要挡住「并发 Run」与「Run 期间建会话」这两条 —— 释放那条不成立。
+_DML_LOCK = threading.RLock()
+#: 一旦用过 DirectML 就**一直**加锁（上游 review 的修正）：只看当前 providers 的话，
+#: 偏好切到 CPU 而 DML 会话还缓存着时，锁会退化成空操作，同样的崩溃只是藏在一次偏好切换后面。
+#: 从没用过 DirectML 的进程依然走空操作 —— **纯 CPU 用户不付任何代价**。
+_DML_EVER_USED = False
+
+
+def _uses_dml(providers) -> bool:
+    return any('Dml' in str(p) for p in (providers or ()))
+
+
+class _DmlScope:
+    """DirectML 串行区：用过 DML 就进锁，否则空操作。"""
+
+    __slots__ = ('_held',)
+
+    def __enter__(self):
+        # ★ 是否持锁必须在**进入时定死**，退出时不能重读 _DML_EVER_USED：
+        #   否则「进入时是 False、退出前被别的线程置 True」会去 release 一把
+        #   从未 acquire 的 RLock，直接抛 RuntimeError。
+        self._held = _DML_EVER_USED
+        if self._held:
+            _DML_LOCK.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        if self._held:
+            _DML_LOCK.release()
+        return False
+
+
+def dml_scope(providers=None):
+    """进入 DirectML 串行区；providers 非空时先记下「用过 DML」。
+
+    锁序固定为 DmlLock -> SessionLock，与上游一致（make_session 里两层嵌套）。
+    """
+    global _DML_EVER_USED
+    if providers is not None and _uses_dml(providers):
+        _DML_EVER_USED = True
+    return _DmlScope()
+
+
+def dml_serialization_engaged() -> bool:
+    """诊断用：DirectML 串行锁是否已启用。"""
+    return _DML_EVER_USED
+
 
 def _model_key(model_path: str, providers: Sequence[str]):
     """缓存键：**真实路径 + 文件大小 + mtime_ns + provider 列表**。
@@ -184,9 +245,11 @@ def make_session(model_path: str, providers: Sequence[str]):
       上游 C# 也是把 `InferenceSession` memo 在歌手对象上（`Onnx.cs:170-186`）。
     """
     if not session_cache_enabled():
-        return _make_session_uncached(model_path, providers)
+        with dml_scope(providers):
+            return _make_session_uncached(model_path, providers)
     key = _model_key(model_path, providers)
-    with _SESSION_LOCK:
+    # 锁序 DmlLock -> SessionLock（与上游一致）：建会话本身在 DML 下也会和 Run 撞
+    with dml_scope(providers), _SESSION_LOCK:
         hit = _SESSION_CACHE.get(key)
         if hit is not None:
             _SESSION_CACHE.move_to_end(key)
@@ -356,7 +419,9 @@ def run_session(model_path: str, feeds: Dict[str, object], providers: Sequence[s
     session = make_session(model_path, providers)
     verify_input_names(session, feeds)
     try:
-        outs = session.run(None, feeds)
+        # ★ DirectML 下**同一会话并发 Run 会原生杀进程** —— 必须串行（CPU 下是空操作）
+        with dml_scope(providers):
+            outs = session.run(None, feeds)
     except Exception as e:                             # noqa: BLE001
         raise RenderError('%s 推理失败：%s' % (label, str(e)[:200]))
     if identifier is not None and cache_dir:

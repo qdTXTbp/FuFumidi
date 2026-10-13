@@ -484,6 +484,67 @@ FAILED test_external_with_same_name_is_not_in_map
 方向与本条一致：**让进程内的 worldline 渲染器进默认偏好**。
 所以 P3 与 Q4 指向同一个动作。但它改的是**默认值**（会影响所有用户的既有工程），
 **必须先量两条路的实际耗时与音质差**再动，本轮不碰。
+### 3.10 ✅ P2 已落地 · DirectML 串行区（防原生崩溃）
+
+上游 `799ba8de`（2026-10-06，PR #2494）—— 这是本轮**价值最高的一个移植**，因为它修的是
+**原生杀进程**（`0xC0000005`，**没有托管异常、抓不到也记不下**）。上游原文：
+
+> The Windows DirectML build of ONNX Runtime kills the process natively whenever
+> **session creation, Run and disposal overlap** on the same device. Reproduced on an
+> RTX 2070 with onnxruntime 1.23.0 + DirectML 1.15.4: concurrent Run on one session,
+> Run while a session is created, and Run while a session is disposed all die in seconds.
+> **Concurrent creation alone is safe**, so the crash needs an overlap.
+
+FuFumidi 的 DirectML 包正是 `onnxruntime-directml`，所以这条**直接适用**。
+
+#### 我们的两处隐患
+
+1. **`session.run` 完全没在锁里**（`session.py`），而旁边的注释写着
+   「ORT 的 `InferenceSession.Run` 是线程安全的」—— **那条假设对 CPU 成立、对 DirectML 不成立**，
+   正是 PR #2494 推翻的。
+2. 会话缓存的 **LRU 淘汰会丢引用**，可能与另一个线程的 Run 重叠。
+
+#### ★ 一个必须判断清楚的语言差异（决定移植范围）
+
+C# 那边是 `FreeMemory` **显式 `Dispose()`** 掉原生会话，所以「**Run 期间被释放**」真会发生；
+而 Python 里 `run_session` **持有局部引用**，引用计数不会让它在调用中途被回收，
+且本包**没有任何显式释放**（`grep free_memory|FreeMemory|dispose|release` → 0 命中）。
+
+→ **只移植「并发 Run」与「Run 期间建会话」两条；「Run 期间被释放」那条在我们这里不成立。**
+照搬上游全部改动会引入无用的复杂度。
+
+#### 实现
+
+- `_DML_LOCK`（RLock）+ **粘性** `_DML_EVER_USED`
+- `dml_scope(providers)`：用过 DML 就进锁，否则空操作 —— **纯 CPU 用户不付任何代价**
+- 锁序固定 **DmlLock -> SessionLock**（与上游一致）：`with dml_scope(providers), _SESSION_LOCK:`
+- 三处：`make_session`（缓存与不缓存两条路）、`run_session` 的 `session.run`
+- **粘性**是上游 review 的修正：只看当前 providers 的话，偏好切回 CPU 而 DML 会话还缓存着时，
+  锁会退化成空操作，同样的崩溃只是藏在一次偏好切换后面
+
+#### ★ 自己引入又自己抓到的竞态
+
+第一版 `_DmlScope.__exit__` **重读** `_DML_EVER_USED` 来决定是否 release ——
+若进入时是 False、退出前被别的线程置 True，就会去 release 一把**从未 acquire** 的 RLock，
+直接抛 `RuntimeError`。改成**进入时把 `_held` 定死**，并补了回归用例。
+
+#### 验收（含变异测试）
+
+新增 `engine/tests/test_dml_serialization.py`（6 条）。**量的是并发度，不是「加了锁」**：
+
+| 用例 | 断言 |
+|---|---|
+| DML 下 6 线程并发 Run | 峰值并发 **== 1**（被串行化） |
+| 纯 CPU 6 线程 | 峰值并发 **> 1**（**不该**被串行化，否则是回归不是优化） |
+| 用过 DML 后再只用 CPU | 峰值并发 **== 1**（粘性生效） |
+| 从没用过 DML | 峰值并发 **> 1**（空操作） |
+| `__exit__` 竞态 | 不抛 `RuntimeError` |
+
+**变异测试**：把 `run_session` 那层 `dml_scope` 删掉 →
+`test_dml_serializes_concurrent_runs` 与 `test_lock_stays_engaged_after_dml_used` **FAIL**，
+报 **峰值并发 = 6** —— 正是上游说的「同一会话并发 Run 几秒内就死」的形态。恢复后 6 条全过。
+
+`pytest engine/tests` → **exit 0**。
 ### 3.3 明确不跟的
 
 - `RenderEngine.cs` 的 **Track Polish 改版**（含 UI 改动，与「UI 不变」冲突）
