@@ -61,7 +61,7 @@ const { registerDiffsingerIpc } = require('./main/diffsinger');
 const { registerCoverIpc } = require('./main/cover');
 const { createHotkeys, HOTKEY_ACTIONS } = require('./main/hotkeys');
 const { registerSoundfontWorkshopIpc } = require('./main/soundfonts');
-const { createWindow, configureSession, openFileFromArgv, openPath } = require('./main/window');
+const { createWindow, configureSession, openFileFromArgv, openPath, takePendingOpen } = require('./main/window');
 const { pyLit, parsePyJson } = require('./main/py-util');
 
 const APP_ID = 'com.fufumidi.app';
@@ -197,6 +197,12 @@ if (!gotLock) {
 
     // 启动参数里带上 .mid/.midi 时（例如：双击文件 / 命令行调用）自动打开
     setTimeout(() => openFileFromArgv(process.argv, (p) => openPath({ BrowserWindow, fs }, p)), 600);
+// 渲染进程就绪后主动来取「待打开的文件」。
+// 为什么需要：上面这个 600ms 定时器和渲染进程的订阅是**竞态** ——
+// 双击 .mid 时应用冷启动，600ms 往往早于 Vue 挂载完成，那一次 send 就丢了。
+// 有了这个取件口，无论谁先谁后都不会漏。（实测：前端此前**根本没订阅** open-file，
+// 所以双击等于完全没反应；订阅补上后仍需要这个兜底来消除竞态。）
+ipcMain.handle('open-file:take', () => takePendingOpen());
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow({ BrowserWindow, shell, pluginHost, rootDir: __dirname });

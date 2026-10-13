@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
     ipcRenderer.on('open-file', w);
     return () => ipcRenderer.removeListener('open-file', w);
   },
+  // 取「待打开的文件」：消除冷启动时主进程 send 早于渲染进程订阅的竞态
+  takePendingOpenFile: () => ipcRenderer.invoke('open-file:take'),
   // 翻唱工作流（一首歌 → 分离 → 扒谱 → 合成 → 混音 → 成品）
   coverEnv: () => ipcRenderer.invoke('cover:env'),
   coverSingers: () => ipcRenderer.invoke('cover:singers'),

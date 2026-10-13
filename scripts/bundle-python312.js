@@ -99,10 +99,24 @@ function ensureRuntime() {
   fs.mkdirSync(tmp, { recursive: true });
   const unzipDir = path.join(tmp, 'unzip');
   fs.rmSync(unzipDir, { recursive: true, force: true });
-  if (!tryRun('"C:/Program Files/7-Zip/7z.exe" x -y -o"' + unzipDir + '" "' + nupkg + '"')) {
-    if (!tryRun('powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath \'' + nupkg + '\' -DestinationPath \'' + unzipDir + '\' -Force"')) {
-      console.error('[错误] 展开 NuGet 包失败（7z 与 PowerShell 都不可用）'); process.exit(1);
-    }
+  // ★ 解压要三条兜底。原来只试了 C:/Program Files/7-Zip/7z.exe —— 但本机 7z 是
+  //   scoop 装的（在 PATH 上、不在 Program Files），于是直接掉到 PowerShell 分支；
+  //   而 PS 5.1 的 Expand-Archive **只认 .zip 扩展名**，喂 .nupkg 会拒，
+  //   结果报「7z 与 PowerShell 都不可用」——其实两个都在。（实测踩到。）
+  const zipCopy = path.join(tmp, 'python312.zip');
+  let unzipped = tryRun('"C:/Program Files/7-Zip/7z.exe" x -y -o"' + unzipDir + '" "' + nupkg + '"');
+  if (!unzipped) {
+    // 兜底 2：PATH 上的 7z（scoop / winget / choco 装的多半在这）
+    unzipped = tryRun('7z x -y -o"' + unzipDir + '" "' + nupkg + '"');
+  }
+  if (!unzipped) {
+    // 兜底 3：复制成 .zip 再 Expand-Archive（PS 5.1 认扩展名）
+    try { fs.copyFileSync(nupkg, zipCopy); } catch (e) {}
+    unzipped = tryRun('powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath \'' + zipCopy + '\' -DestinationPath \'' + unzipDir + '\' -Force"');
+  }
+  if (!unzipped) {
+    console.error('[错误] 展开 NuGet 包失败（已试：Program Files 的 7z / PATH 上的 7z / Expand-Archive）');
+    process.exit(1);
   }
   const tools = path.join(unzipDir, 'tools');
   if (!fs.existsSync(path.join(tools, 'python.exe'))) { console.error('[错误] NuGet 包里没有 tools/python.exe'); process.exit(1); }

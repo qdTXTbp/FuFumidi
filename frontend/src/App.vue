@@ -399,6 +399,7 @@ onBeforeUnmount(() => { if (_hotkeyOff) { try { _hotkeyOff(); } catch (e) {} _ho
 let offGpuProg = null;
 let gpuBarTimer = null;
 let offUpdateProg = null;
+let offOpenFile = null;  // 双击 .mid 关联打开的订阅取消函数
 let offDlProg = null;   // 模型下载进度订阅取消函数（此前未声明，严格模式下赋值抛 ReferenceError，
                         // 中断 onMounted 后续初始化：更新进度订阅/键盘快捷键/退出前 SQLite 落盘）
 let updLastPct = -1;
@@ -504,6 +505,26 @@ onMounted(() => {
   if (bridge && bridge.onGpuProgress) offGpuProg = bridge.onGpuProgress(onGpuProgressGlobal);
   // 模型下载进度（顶部通知条）
   if (bridge && bridge.onModelProgress) offDlProg = bridge.onModelProgress(applyDl);
+  // ★ 双击 .mid（文件关联）打开：主进程把文件内容经 'open-file' 发过来。
+  //   此前**整个前端没有任何地方订阅它** —— 消息发出去没人收，双击等于完全没反应。
+  //   实测复现：双击后应用开在首页、曲库里找不到该曲目、既不加载也不播放。
+  if (bridge && bridge.onOpenFile) {
+    offOpenFile = bridge.onOpenFile(async (bytes, name) => {
+      try { await app.importFiles([{ name: name, bytes: bytes }]); }
+      catch (e) { try { app.toast(t('打开失败：') + ((e && e.message) || e), 'warn'); } catch (e2) {} }
+    });
+    // 兜底：冷启动时主进程的 600ms 定时器可能早于本订阅，那一次 send 会永久丢失。
+    // 所以再主动取一次「待打开的文件」（取走即清；重复导入由 importFiles 的指纹去重兜住）。
+    // （onMounted 的回调不是 async，所以这里用 IIFE 包一层才允许 await）
+    if (bridge.takePendingOpenFile) {
+      (async () => {
+        try {
+          const pend = await bridge.takePendingOpenFile();
+          if (pend && pend.bytes) await app.importFiles([{ name: pend.name, bytes: new Uint8Array(pend.bytes) }]);
+        } catch (e) {}
+      })();
+    }
+  }
   ensureDlNames();
   // 更新包下载进度提示（主进程预下载阶段）
   if (bridge && bridge.onUpdateProgress) {
@@ -530,6 +551,7 @@ onBeforeUnmount(() => {
   if (offGpuProg) { try { offGpuProg(); } catch (e) {} offGpuProg = null; }
   if (offUpdateProg) { try { offUpdateProg(); } catch (e) {} offUpdateProg = null; }
   if (offDlProg) { try { offDlProg(); } catch (e) {} offDlProg = null; }
+  if (offOpenFile) { try { offOpenFile(); } catch (e) {} offOpenFile = null; }
   clearTimeout(gpuBarTimer);
   clearTimeout(dlHideTimer);
   window.removeEventListener('keydown', onKey);

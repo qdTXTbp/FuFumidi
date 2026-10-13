@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // 主进程窗口服务：创建主窗口、下载会话、文件打开辅助
 // ============================================================
 'use strict';
@@ -85,13 +85,26 @@ function openFileFromArgv(argv, openPath) {
   openPath(target);
 }
 
+// 待打开的文件：主进程在启动 600ms 后就发 'open-file'，而渲染进程可能还没订阅上，
+// 那次消息会**永久丢失**（webContents.send 对没有监听者的消息不做缓存）。
+// 所以这里留一份，让渲染进程就绪后主动来取 —— 取走即清空。
+let _pendingOpen = null;
+
 function openPath({ BrowserWindow, fs: f }, filePath) {
-  const win = BrowserWindow.getAllWindows()[0];
-  if (!win) return;
   f.readFile(filePath, (err, buf) => {
     if (err) return;
-    win.webContents.send('open-file', new Uint8Array(buf), path.basename(filePath));
+    _pendingOpen = { bytes: new Uint8Array(buf), name: path.basename(filePath) };
+    const win = BrowserWindow.getAllWindows()[0];
+    if (!win) return;   // 窗口还没建好：留着，等渲染进程来取
+    win.webContents.send('open-file', _pendingOpen.bytes, _pendingOpen.name);
   });
 }
 
-module.exports = { createWindow, configureSession, openFileFromArgv, openPath };
+/** 渲染进程就绪后主动取一次待打开的文件（拿过就清，避免重复导入） */
+function takePendingOpen() {
+  const p = _pendingOpen;
+  _pendingOpen = null;
+  return p;
+}
+
+module.exports = { createWindow, configureSession, openFileFromArgv, openPath, takePendingOpen };
