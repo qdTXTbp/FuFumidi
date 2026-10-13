@@ -919,5 +919,49 @@ JS 侧的 `path.join('hnsep', 'hnsep_240512')` 与 Python 侧的 `PACKAGE_DIR_RE
 
 （AGENTS.md 说「新增下载点必须补 `npm run test:download` 用例」—— 那个文件测的是
  `fast-download` 模块**本体**，而这次的风险在注册表与引擎的**契约**上；
+---
+
+## 21. 资源中心改两级分类（2026-10-14 续，按用户要求）
+
+用户要求：hnsep 归**调教类模型**；声库与音色也归调教类；调教类里**再分类**。
+
+### 改成了什么
+
+顶层 4 个（原 6 个）：转录模型 / 人声分离 / 修复·VR / **调教**。
+「调教」下面二级：**声库 · DiffSinger** / **声库 · UTAU** / **音色 · GPT-SoVITS** / **调教模型**，
+其中 hnsep 谐波分离（Worldline v11）落在「调教模型」。
+
+顶层从 6 收敛到 4 的理由：声库、音色、hnsep 的共同点是「**让工具唱起来**」，
+跟转录 / 分离不是一类；摊平 6 个页签时，用户得先知道 hnsep 是干嘛的才能找到它。
+
+### 实现里三处值得记的
+
+1. **二级页签的 id 不是 kind。** 声库那两项各走自己的目录组件（DiffSingerCatalog /
+   UtauVoicebankStore），只有 音色 / 调教模型 是卡片网格。用一个 listKind 把两者统一成
+   **单一过滤源**，网格的动画 key 也跟着它走 —— 否则要么复制一份网格标记，
+   要么两个数据源各写各的、迟早对不上。
+2. **新增 kindLabel()。** 详情抽屉原来用一串三元表达式认 kind，新增 tuning 会被显示成
+   「**修复工具**」。分类名写错比不显示更糟，所以收敛成一个函数并注明
+   「加 kind 必须来这里加一行」。
+3. **「调教」页签不显示合计数（显示 …）。** 它的数字要来自三处（DiffSinger 声库目录 /
+   音色 / 模型），其中 UTAU 声库来自独立注册表。硬凑一个合计数只会给出**错的数字**，
+   不如不给。（与 §9 里「不显示会误导的数字」是同一条原则。）
+
+### 落点变化
+
+main/models.js 的 hnsep_240512：kind 由 separate 改为 tuning。
+★ 引擎侧的落点契约测试（test_hnsep.py 那条读 main/models.js 的）不受影响，
+14 项仍全过 —— 那条测的是**装到哪**，不是**归哪一类**。
+
+### 门禁与产物
+
+typecheck 0 · test:ui 173 · test:plugin 6 · test:download 15 ·
+pytest engine/tests/test_hnsep.py 14 项；deploy-installed 冒烟通过（首屏 642 字符 / 0 异常）。
+asar 内实测含：vm-subtabs / vm-subtab / 调教模型 / 声库 · DiffSinger / 声库 · UTAU /
+音色 · GPT-SoVITS / k-tuning / kind: tuning。
+
+★ 核对产物的一个坑：kindLabel、showGrid、SUB_KIND 这些**局部标识符**在 asar 里搜不到，
+  那是压缩器改名所致，**不是没进去**。只有字符串字面量会原样留下 —— 核对时要认这一点。
+
 补在能真正跑到的那一侧更有用。这条取舍记在这里，别当成漏了。）
 
