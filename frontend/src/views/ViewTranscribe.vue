@@ -367,6 +367,15 @@ const PERF_DESC = () => ({
   balanced: t('限制到 4 核、批量减半：折中'),
   fast: t('限制到 2 核 + 最小批量：低配/小显存机器更稳，正常机器上会更慢'),
 }[perf.value] || '');
+
+/* 「速度组」这一栏该不该出现。
+ * ★ 该组目前只有两项（束搜索宽度 / 计算精度），**两项都只适用于 MuScriptor** ——
+ *   束搜索影响生成耗时，计算精度影响显存/内存。其余模型（basic-pitch / 钢琴）没有任何
+ *   「只花时间或显存、不改结果」的参数，就不该看到这个组标题：
+ *   否则会出现「有分类标题、下面一个控件都没有」的空组（用户实测反馈）。
+ * ★ 以后往这一组里加控件，**必须同时改这个判断** —— 它的语义是「本组至少有一个控件会渲染」。
+ *   （separate 模式整块高级参数都不显示，所以不必单独判。） */
+const showSpeedGroup = computed(() => mode.value === 'universal' && umodel.value === 'muscriptor');
 // 模型键 → 内置默认预设名。★ 权威表在 engine/presets.py:MODEL_DEFAULT_PRESET，
 // 桌面端由 presets.list 下发（model_defaults）；下面这份是**网页版兜底**（无桥接时用），
 // 两边名字必须逐字一致，否则网页版「切模型自动套默认」找不到预设。
@@ -1778,8 +1787,10 @@ onBeforeUnmount(() => {
           <div class="tr-switch"><label><span><b>{{ t('自动检测 BPM') }}</b><small>{{ t('作为导出速度') }}</small></span><input type="checkbox" v-model="autoBpm"></label></div>
 
           <!-- WP1-5：速度组。全表里只有这两项是为「省时间 / 省显存」存在的，
-               其余都会改变识别或导出结果，所以都在上面的质量组里。 -->
-          <div class="tr-group">{{ t('速度组（影响耗时与显存/内存占用）') }}</div>
+               其余都会改变识别或导出结果，所以都在上面的质量组里。
+               ★ 组标题必须与它的成员同门控：这两项都是 MuScriptor 专属，
+                 别的模型下会出现"只有标题、没有控件"的空组（用户实测反馈）。 -->
+          <div class="tr-group" v-if="showSpeedGroup">{{ t('速度组（影响耗时与显存/内存占用）') }}</div>
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>{{ t('束搜索宽度') }}<b>{{ msBeam }}</b></label>
             <input type="range" min="1" max="5" step="1" v-model.number="msBeam">
