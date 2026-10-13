@@ -590,6 +590,27 @@ class WorldlineNative:
             ctypes.POINTER(ctypes.c_double),
             ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
             ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
+        # ---- R1.1（Worldline-R1.1 / PhraseSynthV2.SynthContinuousNoise）需要的三个 ----
+        # ★ 2026-10-14 补（WP4-3）：这三条原先没绑，docstring 里也记着「等 PhraseSynthV2
+        #   落地时一起补」。签名逐条取自上游 `OpenUtau.Core/Render/Worldline.cs` 的
+        #   `[DllImport("worldline", CallingConvention = CallingConvention.Cdecl)]` 声明。
+        #   `DecodeMgc` / `DecodeBap` 把 mgc/bap 解成 sp/ap —— 上游 C# 那层包装（Worldline.cs:60/80）
+        #   **catch 住异常返回 null**，我们这边保持同样的「失败不抛」语义。
+        lib.DecodeMgc.restype = None
+        lib.DecodeMgc.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_double), ctypes.c_int,
+                                  ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_double)]
+        lib.DecodeBap.restype = None
+        lib.DecodeBap.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_double),
+                                  ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_double)]
+        # HnAnalysisF0In：R1.1 的分析入口 —— 吃「原样本 + 其谐波分量」，吐出 sp / sp_harmonic / ap
+        lib.HnAnalysisF0In.restype = None
+        lib.HnAnalysisF0In.argtypes = [ctypes.POINTER(_NativeAnalysisConfig),
+                                       ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+                                       ctypes.c_int,
+                                       ctypes.POINTER(ctypes.c_double), ctypes.c_int,
+                                       ctypes.POINTER(ctypes.c_double),
+                                       ctypes.POINTER(ctypes.c_double),
+                                       ctypes.POINTER(ctypes.c_double)]
         lib.WorldSynthesis.restype = ctypes.c_int
         lib.WorldSynthesis.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_int,
                                        ctypes.POINTER(ctypes.c_double), ctypes.c_bool,
