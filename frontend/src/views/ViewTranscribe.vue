@@ -1315,6 +1315,8 @@ onBeforeUnmount(() => {
       <details v-if="mode !== 'separate'" class="tr-adv" data-guide="adv-panel">
         <summary>{{ t('高级参数') }}<span class="adv-cnt">{{ t('阈值 · 踏板 · 模型选项') }}</span><span class="adv-arr">▾</span></summary>
         <div class="tr-params">
+          <!-- WP1-5：原来这里只是两段注释，用户看不到分组。折叠区结构不变，只加可见的分组标题。 -->
+          <div class="tr-group">{{ t('判定阈值') }}</div>
           <div class="tr-slider">
             <label>{{ t('起音阈值') }}<b>{{ onset.toFixed(2) }}</b></label>
             <input type="range" min="0" max="1" step="0.01" v-model.number="onset">
@@ -1337,6 +1339,7 @@ onBeforeUnmount(() => {
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'basic'">
             <label><span><b>{{ t('低音增强') }}</b><small>{{ t('弱化主旋律强化，保留贝斯 / 低音声部（旋律密集时更不易丢低音）') }}</small></span><input type="checkbox" v-model="bassBoost"></label>
           </div>
+          <div class="tr-group" v-if="mode === 'piano' || mode === 'universal'">{{ t('模型与输出') }}</div>
           <!-- ④ 批 A：模型选项（引擎早就有，只是界面没入口） -->
           <div class="tr-slider" v-if="mode === 'universal'">
             <label>{{ t('导出速度') }}<b>{{ exportTempo > 0 ? exportTempo + ' BPM' : t('默认 120 BPM') }}</b></label>
@@ -1362,6 +1365,7 @@ onBeforeUnmount(() => {
           <div class="tr-switch" v-if="mode === 'universal'">
             <label><span><b>{{ t('力度归一化') }}</b><small>{{ t('把力度拉齐到统一强度；关闭后保留模型给出的原始力度') }}</small></span><input type="checkbox" v-model="velNorm"></label>
           </div>
+          <div class="tr-group" v-if="mode === 'universal' && umodel === 'muscriptor'">{{ t('生成参数（影响质量）') }}</div>
           <!-- ④ 批 B：MuScriptor 生成参数（都属「影响质量」，默认保持原行为） -->
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>{{ t('采样温度') }}<b>{{ msTemp.toFixed(1) }}</b></label>
@@ -1636,6 +1640,9 @@ onBeforeUnmount(() => {
 .tr-adv summary .adv-cnt { font-weight: 400; color: var(--stone); font-size: 11px; }
 .tr-adv summary .adv-arr { margin-left: auto; color: var(--stone); }
 .tr-params { padding: 4px 14px 14px; display: flex; flex-direction: column; gap: 10px; }
+/* WP1-5：分组标题。第一条不画上边线（它紧跟在容器 padding 之后）。 */
+.tr-group { margin-top: 2px; padding-top: 10px; border-top: 1px solid var(--hairline); font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--stone); }
+.tr-group:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
 .tr-slider label { display: flex; justify-content: space-between; font-size: 12px; color: var(--slate); margin-bottom: 2px; }
 .tr-slider label b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .tr-slider input[type=range] { width: 100%; accent-color: var(--ink); }
