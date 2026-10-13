@@ -160,4 +160,157 @@ engine/engine_muscriptor.py · engine/engine_transkun.py · engine/music2midi.py
 | 作业 | 状态 |
 |---|---|
 | XPU 包 → CNB 镜像上传 | 进行中（GitHub 那条已停，因为**应用本来就只从 CNB 读包**） |
-| Python 3.12 装配 | 第 3 步失败：`requirements-bundle.txt 安装失败：所有镜像均不可用`，待查 |
+| Python 3.12 装配 | **已修复并在跑**：真因是 `basic-pitch` 钉死 `tensorflow<2.15.1`，而 TF 从未出 3.12 的 2.15.x → 改 `--no-deps` 装 basic-pitch，并补 `scikit-learn typing-extensions mir-eval resampy`。当前进程活跃下载中 |
+
+---
+
+## 四、阶段 1 · 祖先与同类拆解（进行中）
+
+### 4.1 AudioMuse —— FuFumidi 的直系祖先（源码版 v2.6.0）
+
+**结论先行：没有能力缺口。FuFumidi 是 AudioMuse 的严格超集。**
+
+拆解对象：`E:\Midi\安装包\AudioMuse\AudioMuse_源码版_v2.6.0.zip` → `E:\Midi\_attic\am_src`。
+
+| 对比项 | AudioMuse 有 | FuFumidi 有 | 判读 |
+|---|---|---|---|
+| **预设数** | 12 | **14** | ✅ FuFumidi 多出 `人声：最优`、`钢琴：最优`；**AudioMuse 独有 0 个** → 无参数回退 |
+| MusicXML 导出 | 有 | 有（engine 27 处 / frontend 82 处） | ✅ 已重实现 |
+| 钢琴卷帘 | 有 | 有 | ✅ 已重实现 |
+| 频谱图 | 有 | 有 | ✅ 已重实现 |
+
+**AudioMuse 独有文件 = 全部是 PySide6 桌面 GUI**：`gui.py`(104 KB)、`settings_dialog.py`、`guide.py`、
+`anim.py`、`dwm_util.py`、`theme_library.py`。
+
+**判读（重要，别读歪）**：这些不是"丢掉的引擎能力"，而是**架构换代**——AudioMuse 用 PySide6 画桌面窗口，
+FuFumidi 把同一批功能搬到 Electron + Vue 渲染进程。**GUI 框架不同不等于能力缺失**，
+要判断有没有真丢功能，只能逐项对照 *功能*，而不是对照 *文件名*。
+
+### 4.2 阶段 1 拆解目标候选（2026-10-13 从仓库机械枚举，不是凭记忆列的）
+
+来源：`docs/VENDOR.md` + `engine/requirements.txt` + `engine/requirements-bundle.txt`。
+共 15 个第三方，按「拆解能换来什么」排序。**每条都附了它在仓库里的自陈依据**。
+
+| 组 | 目标 | 仓库里的自陈依据 | 拆解能换来什么 |
+|---|---|---|---|
+| **T1 最高** | **MuScriptor** | 装的是 `muscriptor 0.3.0+fufumidi.1`，`docs/plans/2026-10-12-transcribe-options-and-speed.md:34` 记为「**上游级补丁**（改 `OpenNoteTracker`）」commit `82eab7d` | 我们的 wheel vs 上游 0.3.0 release 逐文件比对 → **我们到底改了哪几处**、上游新版有没有已修的同类问题 |
+| **T1 最高** | **OpenUtau native** | `docs/VENDOR.md` 案例 3 原文：「**未记录 tag/commit —— 待补**」；`native_lib.py` 只按 RID 取目录 | 从 4.8 MB 产物内部定位上游版本 → 补上 VENDOR.md 的缺口；升级时才知道偏移量 |
+| **T2** | **js-synthesizer 1.13.0** | VENDOR.md 坑 1：worklet 那份**本地打过补丁**（回传 `doCallFunction` 返回值），且**已从 `frontend/package.json` 移除** | 对比上游同版本 → 补丁是否已被上游修复？能修就能去掉补丁、回归包管理 |
+| **T3** | **verovio wasm** | VENDOR.md：7.3 MB，「**文件里没有 banner、也没有版本串 —— 待补**」 | 从产物内部找构建元数据 → 补版本与来源（现在唯一基线只有 SHA-256） |
+| **T4** | 转录/分离引擎：basic-pitch · piano-transcription-inference · transkun · Aria-AMT · pymss/MSST · demucs | `requirements-bundle.txt` 各段注释 | 拆权重与推理代码，找可借鉴的提速/质量点 |
+| **T5** | 歌声合成链路：DiffSinger · GPT-SoVITS · pypinyin | `docs/COVER.md` 两条音色通道 | 同上 |
+| ~~D~~ | ~~AudioMuse v2.6.0~~ | §4.1 | ✅ **已完成，零缺口** |
+
+**为什么 T1/T2/T3 排在引擎前面**：它们要的是**只有产物视角才给得出的信息**——
+「我们改了什么」「上游是哪一版」「补丁还有没有必要」。
+T4/T5 是「上游有什么值得我们抄」，源码视角也能查一部分，**REA 的边际收益低一些**。
+阶段 0 已经证明过一次这个判断：asar 完整性那条，源码审计**永远看不到**。
+
+**方法论收获**：`docs/plans` 里"祖先对比"这类活儿，**先比数据（预设、参数表、默认值），再比文件名**。
+本次先比文件名时看到 6 个"缺失"文件、像是重大缺口；一比预设数字，结论直接反转成"零缺口"。
+**文件集差集只能用来生成假设，不能用来下结论**——这与 skill 里"读 limitations，别过度声称"是同一条纪律。
+
+### 4.3 阶段 1 决策（2026-10-13 用户确认）
+
+**全部目标获批**，并附加一条约束：**「先别扩，把手上作业收尾」** → 不新开重活，等手上作业跑完。
+
+执行顺序（用户多选全中，按价值排）：
+
+1. **T1 OpenUtau native** —— 纯本地、不抢网络，可与 py312 下载并行
+2. **T1 MuScriptor** —— 需要拉上游 release，等网络空出来
+3. **T2 js-synthesizer** → **T3 verovio** —— 都是 VENDOR.md 的自陈缺口
+4. **T4 转录/分离引擎** → **T5 歌声合成** —— 边际收益低一档，放最后
+
+**手上作业收尾清单（in flight）**：
+
+| 作业 | 状态 |
+|---|---|
+| Python 3.12 装配 | ✅ **完成**（13.7 分钟，exit 0，6 组自检 ok）—— 但复验抓到 3 个真缺陷，见 §5 |
+| CV 包 → CNB 上传 | ✅ 完成（1518.4 MB / 1404 s，verify → 200） |
+| XPU 包实机验证 | **阻塞**：本机无 Intel GPU，只能标注「未经实机验证」 |
+| 尾部安静段异常（115–120 min） | 未查 |
+| 11 个 TODO 桥接方法 | 未决（接通 or 删除） |
+---
+
+## 五、Python 3.12 装配完成 —— 复验抓到三个真缺陷（2026-10-13）
+
+**装配本身成功**：13.7 分钟，`bundle-python312.js` exit 0，`deps.py check` 六组全 ok，
+就绪标记 `.fufumidi-engine-ready` 已写；`python.exe --version` = **3.12.10**；torch 2.14.1 / onnxruntime 1.31.0。
+
+**但「自检六组全 ok」是假绿。** 独立复验（不看它自己的输出）抓到三个缺陷：
+
+### 缺陷 A · 3.12 里的 muscriptor 是**裸上游 0.3.0**，我们的补丁没上
+
+| 运行时 | dist-info | `events.py` |
+|---|---|---|
+| 3.11（现役） | `muscriptor-0.3.0+fufumidi.1` | 12933 B ← **有补丁** |
+| 3.12（新装） | `muscriptor-0.3.0` | 10958 B ← **无补丁** |
+
+后果：**长音频「僵尸音符」缺陷在 3.12 上原样复活**。而 `deps.py` 的 `muscriptor` 组照样报 ok ——
+因为 `DEEP_PROBE` 只 `import` 一次，**import 成功 ≠ 是对的那个构建**。
+
+**根因**：全仓 `scripts/*.js` **没有任何一行**提到 `fufumidi.1` 或 `muscriptor-runtime` ——
+3.11 里那个补丁包是**手工装的**，构建管线从来不知道它的存在，所以 3.12 自然装不到。
+
+### 缺陷 B · `requirements-bundle.txt` 的注释与正文自相矛盾 → 3.12 缺 demucs
+
+- 第 6 行注释：「明确收录人声分离 **demucs**（"人声分离"模式必需，原版默认不装）」
+- 正文包列表：**没有 demucs**（只有 `pymss==2.0.1` 那套 MSST）
+
+而 `engine/engine_separate.py` 是**硬依赖 demucs** 的：`MODEL_NAME = "htdemucs"`、
+`from demucs import separate as demucs_separate`、`_has_demucs()` 失败即抛
+「未检测到 demucs（人声分离引擎）」。`engine/engine.py:18` 也写着 `"separate": ("人声分离", "…（需 demucs）")`。
+
+**实测**：3.11 有 demucs（手工残留），3.12 **没有** → 3.12 的 demucs 人声分离路径不可用。
+
+### 缺陷 C · `deps.py` 的 `separate` 组**检查的是另一个引擎**
+
+```python
+"separate": ["pymss", "pydub", "beartype", "ml_collections", "omegaconf", "einops"],
+```
+
+这六个全是 **MSST**（`engine_msst.py`）的依赖，**demucs 一次都没被检查**。
+于是自检报 `separate ok`，而 demucs 那条路早已断 —— **校验项和它声称校验的引擎不是同一个**。
+
+### ★ 三个缺陷是同一类：**只验「在不在」，不验「是不是对的那个」**
+
+- 缺陷 A：`muscriptor` 在 → ok（但版本错）
+- 缺陷 C：`separate` 的包在 → ok（但查错了引擎）
+- **阶段 0 的 asar 完整性**：文件在 → 部署成功（但 integrity 哈希过期）
+
+**这是同一类缺陷的第二次出现。** 产物视角的价值再次被证实：源码审视 `deps.py` 时，
+`REQUIRED` 表读起来完全合理；只有**把两侧产物摆在一起比**，才看得出「检查项指向的不是要保的东西」。
+
+---
+
+## 六、阶段 1 · T1 MuScriptor ✅ **已得出结论（纯本地，未拉上游）**
+
+原计划要拉上游 release 做比对。**实际上不需要** —— 3.11 有补丁版、3.12 有裸版，
+**两份产物相减就是我们的补丁**：
+
+```
+只在 3.11 有 / 只在 3.12 有:  仅 __pycache__/*.pyc（字节码本就会因解释器版本不同，非源码差异）
+内容不同的文件:                  events.py   12933 B (补丁)  vs  10958 B (上游)   —— 共 1 个
+```
+
+**结论：FuFumidi 对上游 muscriptor 0.3.0 的改动 = 1 个文件、1 个函数、3 个 hunk。**
+
+- 新增模块常量 `DEFAULT_MAX_NOTE_HOLD_SEC: float | None = 15.0`
+- `OpenNoteTracker.__init__` 增加 `max_note_hold` 参数
+- 块边界处理：对**仍在 tie 段里**且 `seek_time - onset > max_note_hold` 的音符，
+  按 `onset + max_note_hold` 强制关闭（而不是等一个永远不来的 note-off）
+- `max_note_hold=None` 时**关闭该行为，与上游 0.3.0 完全一致** —— 留了退路，这点做得对
+
+补丁注释里记着实测缺陷：**100 条块记录里 4320 秒（约全长七成）被吞掉**。
+
+**产出**：`engine/patches/muscriptor-0.3.0-fufumidi.1.patch`（4193 B，3 hunks，
+含上游基线与补丁后 `events.py` 的 SHA-256）—— 让这个**原本手工装、不可复现**的补丁变成可复现的。
+
+### 待办（T1 的收尾）
+
+1. `bundle-python.js` / `bundle-python312.js`：`muscriptor>=0.1`（PyPI 裸版）→ 改为装补丁包
+2. `deps.py`：`muscriptor` 组从「import 成功」升级为**校验补丁身份**（比对 `events.py` 哈希，或查 `DEFAULT_MAX_NOTE_HOLD_SEC` / `max_note_hold` 参数存在），否则缺陷 A 永远静默
+3. `deps.py`：`separate` 组补上 demucs（或明确把 demucs 路径废弃，并从 `engine_separate.py` 与 `engine.py` 的文案里去掉）
+4. `requirements-bundle.txt`：第 6 行注释与正文二选一改齐
+
+
