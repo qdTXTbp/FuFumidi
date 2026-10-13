@@ -188,6 +188,11 @@ export interface PresetListResult {
   ok: boolean;
   presets?: Record<string, PresetItem>;
   builtins?: string[];
+  last_used?: string;
+  /** 模型键 → 该模型的内置默认预设名（权威表在 engine/presets.py:MODEL_DEFAULT_PRESET）。 */
+  model_defaults?: Record<string, string>;
+  /** 模型键 → **用户指定**的预设名（空/缺 = 用内置默认）。这就是「记住用户的选择」。 */
+  model_preset?: Record<string, string>;
   error?: string;
 }
 
@@ -959,6 +964,8 @@ export interface FuBridge {
     reorder(name: string, delta: number): Promise<GeneralResult>;
     reorderTo(name: string, index: number): Promise<GeneralResult>;
     restore(): Promise<GeneralResult>;
+    /** 把某个模型绑定到某个预设；name 传空 = 解绑、回到内置默认。 */
+    setModelPreset(key: string, name: string): Promise<GeneralResult & { model_preset?: Record<string, string> }>;
   };
 
   // plugins

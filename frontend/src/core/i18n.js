@@ -3143,6 +3143,12 @@ export const I18N_MAP = {
   "参数预设管理": "Parameter preset manager",
   "暂无预设": "No presets yet",
   "恢复全部内置": "Restore all built-ins",
+  /* 预设按模型归属（P1）：切模型自动套该模型默认预设 */
+  "本模型默认预设：": "Default preset for this model: ",
+  "本模型使用你指定的预设：": "Using your preset for this model: ",
+  "恢复该模型默认": "Restore model default",
+  "解绑本模型的自定义预设，回到内置默认": "Unbind the custom preset for this model and return to the built-in default",
+  "已恢复该模型默认预设": "Restored this model's default preset",
   "：": ": ",
   " 首 MIDI（保持当前播放）": " MIDI (keeping current playback)",
   "请输入歌单名": "Please enter a playlist name",

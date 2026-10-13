@@ -1,6 +1,6 @@
 <script setup>
 // 转录视图：音频 → MIDI（本地 Python 引擎，桌面端通过 fuBridge 桥接）
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { clamp, esc, fmtTime } from '../core/util.js';
@@ -262,7 +262,12 @@ const msPresetSel = ref('');
 function persistMsPresets() { try { localStorage.setItem(MS_PRESET_KEY, JSON.stringify(msSaved.value)); } catch (e) {} }
 function loadMsPresets() { try { const a = JSON.parse(localStorage.getItem(MS_PRESET_KEY) || '[]'); msSaved.value = Array.isArray(a) ? a : []; } catch (e) { msSaved.value = []; } }
 const msPresetOptions = computed(() => msSaved.value.filter(p => p.modelId === sepModel.value));
-const msDefaults = () => ({ chunk: 926100, overlap: 4, batch: 2, normalize: true, tta: false, format: 'wav', stems: [] });
+// MSST 分离的**每模型默认参数**。判据同预设：最高质量 + 保证稳定性，不考虑速度性能。
+//   · tta: true —— 引擎文档写明「小幅提升质量，推理时间 ×3」= 纯速度代价，按政策取最重的一档；
+//   · format 'wav' —— 无损；
+//   · stems [] —— 空 = 输出该模型全部音轨（含鼓组）。
+// 切 MSST 模型时 applyMsPresetForModel 会套这套默认（用户为这个模型存过预设就用用户的）。
+const msDefaults = () => ({ chunk: 926100, overlap: 4, batch: 2, normalize: true, tta: true, format: 'wav', stems: [] });
 function collectMsParams() { return { chunk: msChunk.value, overlap: msOverlap.value, batch: msBatch.value, normalize: msNormalize.value, tta: msTta.value, format: msFormat.value, stems: msStems.value.slice(), chunkSec: chunkSec.value }; }
 function applyMsParams(params) {
   const d = msDefaults();
@@ -333,6 +338,9 @@ const waveBox = ref(null);
 const presets = reactive({ list: [], builtins: [] });
 const presetSel = ref('');
 const presetMgrOpen = ref(false);
+// 预设按**模型**归属（见下方「参数预设」一节）
+let presetApplying = false;      // 正在套用预设 → watch 不要再插一脚（防回环）
+let lastModelKey = '';           // 上次的模型键，用来判断"模型真的换了"
 
 // 任务模板
 const taskTemplates = reactive([]);
@@ -352,25 +360,50 @@ const PERF_DESC = () => ({
   balanced: t('限制到 4 核、批量减半：折中'),
   fast: t('限制到 2 核 + 最小批量：低配/小显存机器更稳，正常机器上会更慢'),
 }[perf.value] || '');
-const MODE_DEFAULT_PRESET = () => ({ universal: t('通用·标准'), piano: t('钢琴：最优'), separate: t('人声：最优') });
+// 模型键 → 内置默认预设名。★ 权威表在 engine/presets.py:MODEL_DEFAULT_PRESET，
+// 桌面端由 presets.list 下发（model_defaults）；下面这份是**网页版兜底**（无桥接时用），
+// 两边名字必须逐字一致，否则网页版「切模型自动套默认」找不到预设。
+const WEB_MODEL_DEFAULTS = () => ({
+  basic: 'Basic Pitch · 最优',
+  muscriptor_small: 'MuScriptor · 最优',
+  muscriptor_medium: 'MuScriptor · 最优',
+  muscriptor_large: 'MuScriptor · 最优',
+  piano_pt: '钢琴 · 最优',
+  aria: 'Aria-AMT · 最优',
+  transkun: 'Transkun · 最优',
+  separate: '分离 · 最优',
+});
 
-// 网页版内置预设（与引擎 presets.py 的 _builtin_presets 保持一致，仅取界面可应用的键）：
+// 网页版内置预设（与 engine/presets.py 的 _builtin_presets 一一对应；名字必须逐字一致）。
 // 无桥接时 loadPresets 用这份数据填充，避免「应用预设」因列表为空而失效。
-const WEB_BUILTIN_PRESETS = () => [
-  { name: t('人声：最优'), mode: 'separate', params: { onset_threshold: 0.05, frame_threshold: 0.25, minimum_note_length: 100, include_drums: true, denoise: true, normalize: true, auto_bpm: true } },
-  { name: t('钢琴：最优'), mode: 'piano', params: { onset_threshold: 0.05, frame_threshold: 0.06, min_note_ms: 20, merge_gap_ms: 0, include_pedal: true, denoise: true, normalize: true } },
-  { name: t('通用·标准'), mode: 'universal', params: {} },
-  { name: t('通用·更干净'), mode: 'universal', params: { onset_threshold: 0.60, frame_threshold: 0.45, minimum_note_length: 180 } },
-  { name: t('通用·更灵敏'), mode: 'universal', params: { onset_threshold: 0.40, frame_threshold: 0.25, minimum_note_length: 80 } },
-  { name: t('通用·人声主旋律'), mode: 'universal', params: { minimum_note_length: 150 } },
-  { name: t('通用·人声纯净'), mode: 'universal', params: { onset_threshold: 0.45, frame_threshold: 0.35, minimum_note_length: 160, merge_gap_ms: 40, denoise: true } },
-  { name: t('通用·吉他拨弦'), mode: 'universal', params: { frame_threshold: 0.30, minimum_note_length: 100 } },
-  { name: t('通用·低音乐器'), mode: 'universal', params: { frame_threshold: 0.35, minimum_note_length: 200 } },
-  { name: t('钢琴·标准'), mode: 'piano', params: {} },
-  { name: t('钢琴·快速琶音'), mode: 'piano', params: { onset_threshold: 0.25, min_note_ms: 40, merge_gap_ms: 25, include_pedal: false } },
-  { name: t('分离·标准'), mode: 'separate', params: {} },
-  { name: t('分离·带鼓组'), mode: 'separate', params: { include_drums: true } },
-];
+// 判据同引擎侧：最高质量 + 保证稳定性，不考虑速度性能（perf=quality / fp32 / 中性解码值）。
+const WEB_BUILTIN_PRESETS = () => {
+  const basic = {
+    model: 'basic', onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
+    melodia: true, min_freq: 0, max_freq: 0, merge_overlap: true, vel_norm: true,
+    beat_grid: true, tempo: 0, perf: 'quality',
+    denoise: false, normalize: false, auto_bpm: false,
+  };
+  const piano = {
+    onset_threshold: 0.3, frame_threshold: 0.1, min_note_ms: 60, merge_gap_ms: 30,
+    include_pedal: true, perf: 'quality',
+    denoise: false, normalize: false, auto_bpm: false,
+  };
+  return [
+    { name: 'Basic Pitch · 最优', mode: 'universal', params: { ...basic } },
+    { name: 'MuScriptor · 最优', mode: 'universal', params: { ...basic,
+      model: 'muscriptor', model_size: 'medium', muscriptor_instruments: 'none',
+      temperature: 1.0, cfg_coef: 1.0, beam_size: 1, prelude_forcing: true,
+      precision: 'fp32', max_note_hold: 0 } },
+    { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt' } },
+    { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria' } },
+    { name: 'Transkun · 最优', mode: 'piano', params: { ...piano, model: 'transkun' } },
+    { name: '分离 · 最优', mode: 'separate', params: {
+      onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
+      include_drums: true, stem_format: 'wav', perf: 'quality',
+      denoise: false, normalize: false, auto_bpm: false } },
+  ];
+};
 
 const fileInput = ref(null);
 
@@ -584,75 +617,259 @@ async function probeEngine() {
 }
 function selectPerf(p) { perfUserSet = true; perf.value = p; }
 
-/* ---------------- 参数预设 ---------------- */
+/* ---------------- 参数预设（**按模型归属**） ---------------- */
+// 用户要求（2026-10-14）：
+//   ① 内置预设按**模型**给（每个模型一套「最优」），不再按"用途"命名；
+//   ② 切模型 / 切规格 → 自动套该模型的默认预设；
+//   ③ 用户手动应用某个预设 = 指定"当前模型用它" → 写回 presets.json 的 model_preset，
+//      以后切回这个模型就用它（**以用户为准**）；
+//   ④ 「恢复该模型默认」= 解绑，回到内置默认。
+// 记忆落在**数据根**的 presets.json（与预设同一文件），整包更新不会碰它。
+const modelDefaults = ref({});   // 模型键 → 内置默认预设名（权威表在 engine/presets.py）
+const modelPreset = ref({});     // 模型键 → **用户指定**的预设名
+
+/** 当前模型的键。★ 必须与 engine/presets.py:MODEL_DEFAULT_PRESET 的键逐字一致。 */
+function currModelKey() {
+  if (mode.value === 'separate') return 'separate';
+  if (mode.value === 'universal') return umodel.value === 'muscriptor' ? ('muscriptor_' + msSize.value) : 'basic';
+  return pmodel.value;                                  // piano_pt | aria | transkun
+}
+
+/** 该模型该用哪个预设：用户指定 > 后端下发的内置默认 > 网页版兜底。找不到返回空串。 */
+function presetForModel(key) {
+  const want = modelPreset.value[key] || modelDefaults.value[key] || WEB_MODEL_DEFAULTS()[key] || '';
+  return (want && presets.list.some((x) => x.name === want)) ? want : '';
+}
+
+/** 当前模型用的是哪套预设（写进界面，让"现在生效的是哪一套"看得见）。 */
+const presetModelHint = computed(() => {
+  const key = currModelKey();
+  const nm = presetForModel(key);
+  if (!nm) return '';
+  return (modelPreset.value[key] ? t('本模型使用你指定的预设：') : t('本模型默认预设：')) + nm;
+});
+
 async function loadPresets() {
   const local = !bridge || !bridge.presets;
   let list = [], builtins = [];
+  const useWebFallback = () => {
+    list = WEB_BUILTIN_PRESETS();
+    builtins = list.map((p) => p.name);
+    modelDefaults.value = WEB_MODEL_DEFAULTS();
+  };
   if (local) {
     // 网页版无桥接：用前端内置预设，保证「应用预设」可用（保存/删除仅桌面版支持）
-    list = WEB_BUILTIN_PRESETS().map(p => ({ name: p.name, mode: p.mode, params: p.params }));
-    builtins = WEB_BUILTIN_PRESETS().map(p => p.name);
+    useWebFallback();
   } else {
     try {
       const r = await bridge.presets.list();
       if (r && r.ok && r.presets && Object.keys(r.presets).length) {
         list = Object.entries(r.presets).map(([name, val]) => ({ name, ...val }));
         builtins = r.builtins || [];
+        modelDefaults.value = r.model_defaults || {};
+        modelPreset.value = r.model_preset || {};
       } else {
         // 桌面端后端预设意外为空/失败时兜底前端内置，避免预设列表空导致「应用」无反应
         toast(t('加载预设失败：') + ((r && r.error) || t('返回空列表')) + t('，已使用内置预设'), 'warn');
-        list = WEB_BUILTIN_PRESETS().map(p => ({ name: p.name, mode: p.mode, params: p.params }));
-        builtins = WEB_BUILTIN_PRESETS().map(p => p.name);
+        useWebFallback();
       }
-    } catch (e) {
-      list = WEB_BUILTIN_PRESETS().map(p => ({ name: p.name, mode: p.mode, params: p.params }));
-      builtins = WEB_BUILTIN_PRESETS().map(p => p.name);
-    }
+    } catch (e) { useWebFallback(); }
   }
   presets.list.splice(0, presets.list.length, ...list);
   presets.builtins.splice(0, presets.builtins.length, ...builtins);
-  if (presets.list.length) presetSel.value = presets.list[0].name;
+  const want = presetForModel(currModelKey());
+  if (want) presetSel.value = want;
+  else if (presets.list.length) presetSel.value = presets.list[0].name;
+  autoApplyForCurrentModel();     // 首次进来就把当前模型的默认预设套上
 }
-function applyPreset(name) {
-  const p = presets.list.find(x => x.name === name);
+
+/** 预设参数快照：**全量**（与 collectParams 的稀疏 cfg 不同 —— 预设要能完整还原界面）。
+ *  只收当前模型适用的键；应用时按「预设没给就保留当前值」处理。 */
+function collectPresetParams() {
+  const n2 = (v) => parseFloat(Number(v).toFixed(2));
+  const iv = (v) => parseInt(v, 10) || 0;
+  const p = {
+    perf: perf.value,
+    denoise: denoise.value, normalize: normalize.value, auto_bpm: autoBpm.value,
+    merge_overlap: mergeOverlap.value, vel_norm: velNorm.value, tempo: iv(exportTempo.value),
+  };
+  if (mode.value === 'universal') {
+    Object.assign(p, {
+      model: umodel.value,
+      onset_threshold: n2(onset.value), frame_threshold: n2(frame.value),
+      minimum_note_length: iv(minNote.value),
+      melodia: !bassBoost.value,
+      min_freq: iv(minFreq.value), max_freq: iv(maxFreq.value),
+      beat_grid: beatGrid.value,
+    });
+    if (umodel.value === 'muscriptor') Object.assign(p, {
+      model_size: msSize.value,
+      muscriptor_instruments: msInstrValue.value,
+      temperature: Number(msTemp.value), cfg_coef: Number(msCfg.value),
+      beam_size: iv(msBeam.value), prelude_forcing: msPrelude.value,
+      precision: msPrec.value, max_note_hold: iv(maxHold.value),
+    });
+  } else if (mode.value === 'piano') {
+    Object.assign(p, {
+      model: pmodel.value,
+      onset_threshold: n2(onset.value), frame_threshold: n2(frame.value),
+      min_note_ms: iv(minNote.value), merge_gap_ms: iv(mergeGap.value),
+      include_pedal: pedal.value,
+    });
+  } else {
+    Object.assign(p, {
+      onset_threshold: n2(onset.value), frame_threshold: n2(frame.value),
+      minimum_note_length: iv(minNote.value),
+      include_drums: drums.value, stem_format: stemFormat.value || 'wav',
+    });
+  }
+  return p;
+}
+
+/** 应用预设参数（只覆盖预设里给了的键）。
+ *
+ *  ★ opts.keepModel：**不写回 mode / model / model_size**。
+ *    这条路径是「切模型/切规格 → 自动套默认」，此刻模式与子模型是用户刚选的；
+ *    MuScriptor 三个规格**共用同一套预设**，写回去就会把规格打回 medium
+ *    （契约见 engine/presets.py 的 ★ 前端契约）。用户手动点「应用」时才允许连子模型一起切。
+ */
+function applyPresetParams(p, opts) {
+  const pr = p || {};
+  const keep = !!(opts && opts.keepModel);
+  const has = (k) => pr[k] !== undefined && pr[k] !== null;
+  const num = (k) => parseFloat(pr[k]);
+  const numOr = (k, d) => (isNaN(num(k)) ? d : num(k));
+  if (!keep && has('model')) {
+    if (pr.model === 'basic' || pr.model === 'muscriptor') umodel.value = pr.model;
+    else if (['piano_pt', 'aria', 'transkun'].indexOf(pr.model) >= 0) pmodel.value = pr.model;
+  }
+  if (!keep && has('model_size') && ['small', 'medium', 'large'].indexOf(pr.model_size) >= 0) msSize.value = pr.model_size;
+  // 性能档：用户手动选过就尊重用户的选择（自动套预设不改它）
+  if (has('perf') && ['quality', 'balanced', 'fast'].indexOf(pr.perf) >= 0 && !(keep && perfUserSet)) perf.value = pr.perf;
+  if (has('onset_threshold')) onset.value = clamp(num('onset_threshold'), 0, 1);
+  if (has('frame_threshold')) frame.value = clamp(num('frame_threshold'), 0, 1);
+  const mn = has('minimum_note_length') ? num('minimum_note_length') : (has('min_note_ms') ? num('min_note_ms') : null);
+  if (mn !== null && !isNaN(mn)) minNote.value = clamp(Math.round(mn), 10, 300);
+  if (has('merge_gap_ms')) mergeGap.value = clamp(Math.round(num('merge_gap_ms')) || 0, 0, 200);
+  if (has('include_pedal')) pedal.value = pr.include_pedal !== false;
+  // 鼓组：历史预设写 include_drums，界面 cfg 用 with_drums —— 两个都认
+  const dr = has('include_drums') ? pr.include_drums : (has('with_drums') ? pr.with_drums : null);
+  if (dr !== null) drums.value = !!dr;
+  if (has('denoise')) denoise.value = !!pr.denoise;
+  if (has('normalize')) normalize.value = !!pr.normalize;
+  // 预设未显式指定 auto_bpm 时保留当前值（默认开），避免把自动测速关掉
+  if (has('auto_bpm')) autoBpm.value = !!pr.auto_bpm;
+  if (has('stem_format') && ['wav', 'flac', 'mp3'].indexOf(pr.stem_format) >= 0) stemFormat.value = pr.stem_format;
+  if (has('tempo')) exportTempo.value = Math.max(0, Math.round(numOr('tempo', 0)));
+  if (has('merge_overlap')) mergeOverlap.value = pr.merge_overlap !== false;
+  if (has('vel_norm')) velNorm.value = pr.vel_norm !== false;
+  if (has('beat_grid')) beatGrid.value = !!pr.beat_grid;
+  // 主旋律强化：新键 melodia，历史预设写 no_melodia（界面上的「低音增强」= 关掉 melodia）
+  if (has('melodia')) bassBoost.value = pr.melodia === false;
+  else if (has('no_melodia')) bassBoost.value = !!pr.no_melodia;
+  // 音高范围：新键 min_freq/max_freq；历史预设用 minimum_frequency/maximum_frequency（null = 不限制）
+  const freq = (kNew, kOld) => {
+    if (has(kNew)) return Math.max(0, Math.round(numOr(kNew, 0)));
+    if (kOld in pr) return pr[kOld] == null ? 0 : Math.max(0, Math.round(parseFloat(pr[kOld]) || 0));
+    return null;
+  };
+  const lf = freq('min_freq', 'minimum_frequency');
+  if (lf !== null) minFreq.value = lf;
+  const hf = freq('max_freq', 'maximum_frequency');
+  if (hf !== null) maxFreq.value = hf;
+  // MuScriptor 生成参数
+  if (has('muscriptor_instruments') && typeof pr.muscriptor_instruments === 'string') {
+    const v = pr.muscriptor_instruments.trim();
+    if (!v || v === 'none' || v === 'auto') { msMode.value = 'none'; }
+    else {
+      const groups = v.split(',').map((s) => s.trim()).filter((g) => MS_GROUPS.some((x) => x.id === g));
+      if (groups.length) { msGroups.value = groups; msMode.value = 'limit'; }
+    }
+  }
+  if (has('temperature')) msTemp.value = Math.max(0, numOr('temperature', 1.0));
+  if (has('cfg_coef')) msCfg.value = Math.max(0, numOr('cfg_coef', 1.0));
+  if (has('beam_size')) msBeam.value = Math.max(1, Math.round(numOr('beam_size', 1)));
+  if (has('prelude_forcing')) msPrelude.value = pr.prelude_forcing !== false;
+  if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
+  if (has('max_note_hold')) maxHold.value = Math.max(0, Math.round(numOr('max_note_hold', 0)));
+}
+
+function applyPreset(name, opts) {
+  const p = presets.list.find((x) => x.name === name);
   if (!p) return false;
-  mode.value = p.mode || 'universal';
-  const pr = p.params || {};
-  onset.value = pr.onset_threshold != null ? pr.onset_threshold : onset.value;
-  frame.value = pr.frame_threshold != null ? pr.frame_threshold : frame.value;
-  const mnRaw = pr.minimum_note_length != null ? pr.minimum_note_length : (pr.min_note_ms != null ? pr.min_note_ms : minNote.value);
-  minNote.value = clamp(Math.round(parseFloat(mnRaw) || 128), 10, 300);
-  mergeGap.value = clamp(Math.round(parseFloat(pr.merge_gap_ms != null ? pr.merge_gap_ms : mergeGap.value) || 0), 0, 200);
-  pedal.value = pr.include_pedal !== false;
-  drums.value = !!pr.include_drums;
-  denoise.value = !!pr.denoise;
-  normalize.value = !!pr.normalize;
-  // 预设未显式指定 auto_bpm 时保留当前值（默认开），避免通用/钢琴预设把自动测速关掉
-  if (pr.auto_bpm != null) autoBpm.value = !!pr.auto_bpm;
+  presetApplying = true;                       // 阻断 watch 的自动套用（防回环）
+  try {
+    // 手动应用时才跟着切模式；自动套用（keepModel）连模式都不动
+    if (!(opts && opts.keepModel) && p.mode) mode.value = p.mode;
+    applyPresetParams(p.params || {}, opts);
+  } finally { presetApplying = false; }
   presetSel.value = name;
+  lastModelKey = currModelKey();
   return true;
 }
+
+/** 切模型 / 切规格 → 自动套该模型的默认（或用户指定的）预设。
+ *  预设还没加载出来时**不推进 lastModelKey**，等 loadPresets() 末尾再来一次。 */
+function autoApplyForCurrentModel() {
+  if (presetApplying) return;
+  const key = currModelKey();
+  if (key === lastModelKey) return;
+  const want = presetForModel(key);
+  if (!want) return;
+  lastModelKey = key;
+  applyPreset(want, { keepModel: true });
+}
+watch([mode, umodel, msSize, pmodel], autoApplyForCurrentModel);
+
 // 行内「应用」按钮：应用当前选中的预设并给出反馈
-function applySelectedPreset() {
+async function applySelectedPreset() {
   if (!presetSel.value) { toast(t('请先选择预设'), 'warn'); return; }
-  if (applyPreset(presetSel.value)) toast(t('已应用预设：') + presetSel.value, 'ok');
+  if (applyPreset(presetSel.value)) {
+    await bindPresetToCurrentModel(presetSel.value);
+    toast(t('已应用预设：') + presetSel.value, 'ok');
+  }
 }
-function applyDefaultForMode(m) {
-  const def = MODE_DEFAULT_PRESET()[m];
-  if (!def || !presets.list.some(x => x.name === def)) return;
-  if (presetSel.value === def) return;
-  applyPreset(def);
+
+/** 用户手动应用预设 = 指定「当前模型用它」→ 写回 model_preset。这就是「记住用户的选择」。 */
+async function bindPresetToCurrentModel(name) {
+  const key = currModelKey();
+  if (bridge && bridge.presets && bridge.presets.setModelPreset) {
+    try {
+      const r = await bridge.presets.setModelPreset(key, name);
+      if (r && r.ok) { modelPreset.value = r.model_preset || {}; return; }
+    } catch (e) {}
+  }
+  modelPreset.value = { ...modelPreset.value, [key]: name };   // 网页版：只留在内存里
 }
+
+/** 「恢复该模型默认」：解绑本模型的用户指定，回到内置默认。 */
+async function restoreModelDefault() {
+  const key = currModelKey();
+  if (bridge && bridge.presets && bridge.presets.setModelPreset) {
+    try {
+      const r = await bridge.presets.setModelPreset(key, '');
+      if (r && r.ok) modelPreset.value = r.model_preset || {};
+    } catch (e) {}
+  } else {
+    const m = { ...modelPreset.value }; delete m[key]; modelPreset.value = m;
+  }
+  lastModelKey = '';                     // 强制重新套用
+  autoApplyForCurrentModel();
+  toast(t('已恢复该模型默认预设'));
+}
+
 function onModeChange(m) {
-  const prev = mode.value;
+  // 切模式后交给 watch：新模式的模型默认预设会自动套上
+  //（旧版是查一张"模式 → 预设名"的表，现在那张表已经删了 —— 预设按模型归属）
   mode.value = m;
-  if (m !== prev) applyDefaultForMode(m);
 }
 async function savePreset() {
   if (!bridge || !bridge.presets) { toast(t('请使用桌面版保存预设'), 'warn'); return; }
   const name = await app.promptDialog({ title: t('保存预设'), value: '' });
   if (!name || !name.trim()) return;
-  const params = collectParams();
+  // ★ 预设存**全量快照**（collectPresetParams），不是发给引擎的稀疏 cfg ——
+  //   否则"保存当前参数"只会存下被显式改动过的那几项，应用时还原不回来。
+  const params = collectPresetParams();
   try {
     const r = await bridge.presets.save(name.trim(), mode.value, params);
     if (r && r.ok) { toast(t('预设已保存'), 'ok'); loadPresets(); }
@@ -672,8 +889,11 @@ async function openPresetMgr() {
   await loadPresets();
 }
 async function mgrApply(name) {
-  if (applyPreset(name) && bridge && bridge.presets && bridge.presets.lastUsed) {
-    try { await bridge.presets.lastUsed(name); } catch (e) {}
+  if (applyPreset(name)) {
+    await bindPresetToCurrentModel(name);
+    if (bridge && bridge.presets && bridge.presets.lastUsed) {
+      try { await bridge.presets.lastUsed(name); } catch (e) {}
+    }
   }
   presetMgrOpen.value = false;
   toast(t('已应用预设：') + name, 'ok');
@@ -1449,6 +1669,8 @@ onBeforeUnmount(() => {
               <button class="btn sm" @click="savePreset"><Icon name="plus" :size="13" />{{ t('保存') }}</button>
               <button class="btn sm ghost danger" @click="delPreset"><Icon name="trash" :size="13" />{{ t('删除') }}</button>
               <button class="btn sm ghost" @click="openPresetMgr"><Icon name="menu" :size="13" /> {{ t('管理') }}</button>
+              <button class="btn sm ghost" @click="restoreModelDefault" :title="t('解绑本模型的自定义预设，回到内置默认')">{{ t('恢复该模型默认') }}</button>
+              <span class="fb-hint" v-if="presetModelHint" style="margin-left:4px">{{ presetModelHint }}</span>
             </div>
           </div>
         </div>
