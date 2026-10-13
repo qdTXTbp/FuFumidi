@@ -5,6 +5,7 @@ import PianoRoll from '../components/PianoRoll.vue';
 import { useAppStore } from '../stores/app';
 import { fmtTime } from '../core/util.js';
 import { t } from '../core/i18n.js';
+import NumSlider from '../components/NumSlider.vue';
 
 const app = useAppStore();
 const state = app;
@@ -76,14 +77,11 @@ function panStyle(i) {
               <button class="chip-btn" :class="{ 'on-mute': tr.mute }" :title="t('静音')" @click="toggleTrackMute(i)">M</button>
             </div>
             <div class="mt-vol" :title="t('音量 ') + Math.round(tr.vol * 100) + '%'">
-              <input :id="'mt-vol-' + i" :name="'mt-vol-' + i" type="range" min="0" max="1" step="0.01"
-                     :style="{ '--fill': tr.vol * 100 + '%' }"
-                     :value="tr.vol" @input="setTrackVol(i, parseFloat($event.target.value))">
+              <NumSlider :model-value="tr.vol" @update:model-value="v => { setTrackVol(i, parseFloat(v)) }" :min="0" :max="1" :step="0.01" :range-style="{ '--fill': tr.vol * 100 + '%' }" :input-id="'mt-vol-' + i" :input-name="'mt-vol-' + i" :input-width="52" />
             </div>
             <div style="width:70px;display:flex;align-items:center;gap:6px" :title="t('声像 ') + (tr.pan > 0 ? 'R' + Math.round(tr.pan * 100) : tr.pan < 0 ? 'L' + Math.round(-tr.pan * 100) : t('中'))">
               <span class="muted small">L</span>
-              <input :id="'mt-pan-' + i" :name="'mt-pan-' + i" type="range" min="-1" max="1" step="0.01" :style="panStyle(i)"
-                     :value="tr.pan" @input="setTrackPan(i, parseFloat($event.target.value))">
+              <NumSlider :model-value="tr.pan" @update:model-value="v => { setTrackPan(i, parseFloat(v)) }" :min="-1" :max="1" :step="0.01" :range-style="panStyle(i)" :input-id="'mt-pan-' + i" :input-name="'mt-pan-' + i" :input-width="52" />
               <span class="muted small">R</span>
             </div>
           </div>

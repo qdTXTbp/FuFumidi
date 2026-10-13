@@ -1,3 +1,4 @@
+import NumSlider from '../NumSlider.vue';
 <script setup>
 // 参数化 MIDI 工具面板（M2）：左边选工具、右边拖参数，**拖到哪听到/看到哪**。
 //
@@ -128,8 +129,7 @@ watch(() => props.open, (v) => {
           <div v-for="p in cur.params" :key="p.k" class="mtp-row">
             <span class="mtp-lab">{{ t(p.label) }}</span>
             <template v-if="p.type === 'int' || p.type === 'float'">
-              <input class="mtp-range" type="range" :min="p.min" :max="p.max" :step="p.step || 1"
-                     v-model.number="params[p.k]" @input="onInput" />
+              <NumSlider v-model="params[p.k]" :min="p.min" :max="p.max" :step="p.step || 1" range-class="mtp-range" :input-width="60" />
               <input class="num-input" type="number" :min="p.min" :max="p.max" :step="p.step || 1"
                      v-model.number="params[p.k]" @input="onInput" />
               <button v-if="p.dice" class="icon-btn" :title="t('换一个随机种子')" @click="dice(p.k)">⚄</button>

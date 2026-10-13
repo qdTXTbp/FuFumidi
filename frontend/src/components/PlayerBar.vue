@@ -6,6 +6,7 @@ import { getPlayer, getCtx, getSynth } from '../audio.js';
 import { t } from '../core/i18n.js';
 import { GM_INSTRUMENTS, gmByProgram } from '../core/gmInstruments.js';
 import { initMidiOutput, setMidiOutEnabled, midiOutOn, midiOutOff, midiAllOff, getMidiOutDeviceName } from '../core/midiout.js';
+import NumSlider from './NumSlider.vue';
 
 const app = useAppStore();
 const state = app;
@@ -267,7 +268,7 @@ function toggleCrossfade() {
 
       <div class="vol-wrap">
         <span class="vol-ic"><Icon name="volume" :size="16" /></span>
-        <input id="pb-volume" name="pb-volume" type="range" :aria-label="t('音量')" min="0" max="1" step="0.01" :style="volStyle" :value="state.volume" @input="setVolume(parseFloat($event.target.value))">
+        <NumSlider :model-value="state.volume" @update:model-value="v => { setVolume(parseFloat(v)) }" :min="0" :max="1" :step="0.01" :range-style="volStyle" input-id="pb-volume" input-name="pb-volume" :aria-label="t('音量')" :input-width="46" />
       </div>
     </div>
 
@@ -299,13 +300,11 @@ function toggleCrossfade() {
             <button class="chip-btn" :class="{ 'on-mute': tr.mute }" :title="t('静音')" :aria-label="t('静音')" @click="toggleTrackMute(i)">M</button>
           </div>
           <div class="mt-vol" :title="t('音量 ') + Math.round(tr.vol * 100) + '%'">
-            <input type="range" min="0" max="1" step="0.01" :style="{ '--fill': tr.vol * 100 + '%' }"
-                   :value="tr.vol" @input="setTrackVol(i, parseFloat($event.target.value))">
+            <NumSlider :model-value="tr.vol" @update:model-value="v => { setTrackVol(i, parseFloat(v)) }" :min="0" :max="1" :step="0.01" :range-style="{ '--fill': tr.vol * 100 + '%' }" :input-width="46" />
           </div>
           <div style="width:70px;display:flex;align-items:center;gap:6px" :title="panTitle(i)">
             <span class="muted small">L</span>
-            <input type="range" min="-1" max="1" step="0.01" :style="panStyle(i)"
-                   :value="tr.pan" @input="setTrackPan(i, parseFloat($event.target.value))">
+            <NumSlider :model-value="tr.pan" @update:model-value="v => { setTrackPan(i, parseFloat(v)) }" :min="-1" :max="1" :step="0.01" :range-style="panStyle(i)" :input-width="46" />
             <span class="muted small">R</span>
           </div>
         </div>
@@ -367,18 +366,15 @@ function toggleCrossfade() {
         <div class="eq-bands">
           <div v-for="(f, i) in EQ_FREQS" :key="i" class="eq-band" :title="f + ' Hz'">
             <span class="eq-val">{{ (fx.gains[i] > 0 ? '+' : '') + (fx.gains[i] || 0) }}</span>
-            <input class="eq-vslider" type="range" min="-12" max="12" step="0.5"
-                   :value="fx.gains[i]" @input="setEqGain(i, parseFloat($event.target.value))">
+            <NumSlider :model-value="fx.gains[i]" @update:model-value="v => { setEqGain(i, parseFloat(v)) }" :min="-12" :max="12" :step="0.5" range-class="eq-vslider" :input-width="46" />
             <span class="eq-hz">{{ f >= 1000 ? (f / 1000) + 'k' : f }}</span>
           </div>
         </div>
         <div class="eq-xrow">
           <span class="eq-lbl">{{ t('低音增强') }}</span>
-          <input type="range" min="0" max="12" step="0.5" class="eq-hslider" :style="{ '--fill': (fx.bass / 12 * 100) + '%' }"
-                 :value="fx.bass" @input="setBass(parseFloat($event.target.value))">
+          <NumSlider :model-value="fx.bass" @update:model-value="v => { setBass(parseFloat(v)) }" :min="0" :max="12" :step="0.5" range-class="eq-hslider" :range-style="{ '--fill': (fx.bass / 12 * 100) + '%' }" :input-width="46" />
           <span class="eq-lbl">{{ t('空间声') }}</span>
-          <input type="range" min="0" max="1" step="0.05" class="eq-hslider" :style="{ '--fill': (fx.spatial * 100) + '%' }"
-                 :value="fx.spatial" @input="setSpatial(parseFloat($event.target.value))">
+          <NumSlider :model-value="fx.spatial" @update:model-value="v => { setSpatial(parseFloat(v)) }" :min="0" :max="1" :step="0.05" range-class="eq-hslider" :range-style="{ '--fill': (fx.spatial * 100) + '%' }" :input-width="46" />
         </div>
         <div class="eq-note">{{ t('提示：开启「启用音效」后调节实时生效，设置自动保存。') }}</div>
       </div>

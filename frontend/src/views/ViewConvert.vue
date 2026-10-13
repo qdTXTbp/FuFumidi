@@ -895,9 +895,9 @@ async function renderVideo() {
             </div>
             <div v-if="bg.mode === 'image' || bg.mode === 'theme'" class="ve-bg-sliders">
               <span class="muted small">{{ t('模糊') }}</span>
-              <input type="range" min="0" max="40" step="1" :value="bg.blur" @input="vizBg.setBlur($event.target.value)" />
+              <NumSlider :model-value="bg.blur" @update:model-value="v => { vizBg.setBlur(v) }" :min="0" :max="40" :step="1" :input-width="68" />
               <span class="muted small">{{ t('暗化') }}</span>
-              <input type="range" min="0" max="80" step="5" :value="Math.round(bg.dim * 100)" @input="vizBg.setDim((+$event.target.value) / 100)" />
+              <NumSlider :model-value="Math.round(bg.dim * 100)" @update:model-value="v => { vizBg.setDim((+v) / 100) }" :min="0" :max="80" :step="5" :input-width="68" />
             </div>
             <span class="muted small">{{ t('与「可视化」页共用同一套设置') }}</span>
             <span v-if="bg.mode === 'transparent'" class="muted small">{{ t('透明档：MP4 没有透明通道，导出后是黑底（可作叠加层的相加/滤色素材）') }}</span>

@@ -16,6 +16,7 @@ const appVersion = ref('v3.1.8');
 import { getAppVersion, cmpVersion, getUpdateChannel, setUpdateChannel, normalizeUpdateChannel, getDownloadSource, setDownloadSource, normalizeDownloadSource } from '../core/version.js';
 getAppVersion().then(v => { appVersion.value = v; });
 import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';
+import NumSlider from './NumSlider.vue';
 /* 外观三件（字号 / 密度 / 全局缩放）的取值域与落点：与 App.vue 启动时用的是同一份 */
 import {
   applyDisplayPrefs, loadDisplayPrefs, saveFontSize, saveDensity, saveUiScale,
@@ -1083,8 +1084,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <div class="fr-hint">{{ t('全局放大或缩小整个界面（0.9 ~ 1.3）：连画布一起缩放，不会糊也不会重叠') }}</div>
             </div>
             <div class="fr-ctl">
-              <input class="ov-range" type="range" :min="UI_SCALE_MIN" :max="UI_SCALE_MAX" :step="UI_SCALE_STEP"
-                     v-model.number="form.ui_scale" @input="onUiScale" :aria-label="t('界面缩放')" />
+              <NumSlider v-model="form.ui_scale" :min="UI_SCALE_MIN" :max="UI_SCALE_MAX" :step="UI_SCALE_STEP" range-class="ov-range" :aria-label="t('界面缩放')" :input-width="68" />
               <span class="ui-scale-val">{{ Math.round(form.ui_scale * 100) }}%</span>
               <button class="btn sm" :disabled="Math.abs(form.ui_scale - 1) < 0.001" @click="resetUiScale">{{ t('还原 100%') }}</button>
             </div>

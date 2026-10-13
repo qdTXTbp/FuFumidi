@@ -9,6 +9,7 @@ const currentSong = computed(() => app.currentSong);
 import Icon from '../components/Icon.vue';
 import { drawVizWaterfall, rmsFromBytes, smoothEnergy } from '../core/viz.js';
 import { t } from '../core/i18n.js';
+import NumSlider from '../components/NumSlider.vue';
 
 const mode = ref('dash'); // 'dash' | 'waterfall'
 const wfZoom = ref(1);
@@ -396,9 +397,9 @@ onBeforeUnmount(() => {
           <button class="chip-btn" :class="{ active: bg.mode === 'transparent' }" :title="t('真·透明：导出的画面可当叠加层')" @click="setBgMode('transparent')">{{ t('透明') }}</button>
           <template v-if="bg.mode === 'image' || bg.mode === 'theme'">
             <span class="muted small">{{ t('模糊') }}</span>
-            <input type="range" min="0" max="40" step="1" :value="bg.blur" @input="bg.blur = +$event.target.value; saveBg()" style="width:88px" />
+            <NumSlider :model-value="bg.blur" @update:model-value="v => { bg.blur = +v; saveBg() }" :min="0" :max="40" :step="1" range-style="width:88px" :input-width="68" />
             <span class="muted small">{{ t('暗化') }}</span>
-            <input type="range" min="0" max="80" step="5" :value="Math.round(bg.dim * 100)" @input="bg.dim = (+$event.target.value) / 100; saveBg()" style="width:88px" />
+            <NumSlider :model-value="Math.round(bg.dim * 100)" @update:model-value="v => { bg.dim = (+v) / 100; saveBg() }" :min="0" :max="80" :step="5" range-style="width:88px" :input-width="68" />
           </template>
         </div>
         <div class="vc-body" :class="{ 'bd-canvas': bg.mode === 'transparent' }">

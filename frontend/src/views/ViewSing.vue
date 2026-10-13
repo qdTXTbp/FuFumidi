@@ -27,6 +27,7 @@ import { notePhonemes } from '../core/phoneme.js';
 import { normalizeSampleNote } from '../core/utau_tools.js';
 import { computeSpectrogram, drawSpectrogram } from '../core/spectrogram.js';
 import { alignLyrics, splitLyricLines, splitNotesToFit } from '../core/sing_align.js';
+import NumSlider from '../components/NumSlider.vue';
 
 const store = useSingerStore();
 const app = useAppStore();
@@ -3039,16 +3040,13 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
             <span class="muted small">{{ t('下面画的是这个音的颤音包络：起音渐入 → 保持 → 收尾渐出') }}</span>
           </div>
           <label class="vib-row"><span>{{ t('深度') }}</span>
-            <input type="range" min="0" max="100" step="1" :value="vibVal('vibDepth')" :disabled="!sel.vibrato"
-                   @input="store.updateNote(sel.id, { vibDepth: nval($event, 35) })" />
+            <NumSlider :model-value="vibVal('vibDepth')" @update:model-value="v => { store.updateNote(sel.id, { vibDepth: v }) }" :min="0" :max="100" :step="1" :disabled="!sel.vibrato" :input-width="68" />
             <em>{{ vibVal('vibDepth') }}</em></label>
           <label class="vib-row"><span>{{ t('速率') }}</span>
-            <input type="range" min="0" max="12" step="0.1" :value="vibVal('vibFreq')" :disabled="!sel.vibrato"
-                   @input="store.updateNote(sel.id, { vibFreq: nval($event, 5.5) })" />
+            <NumSlider :model-value="vibVal('vibFreq')" @update:model-value="v => { store.updateNote(sel.id, { vibFreq: v }) }" :min="0" :max="12" :step="0.1" :disabled="!sel.vibrato" :input-width="68" />
             <em>{{ Number(vibVal('vibFreq')).toFixed(1) }} Hz</em></label>
           <label class="vib-row"><span>{{ t('淡入') }}</span>
-            <input type="range" min="0" max="0.9" step="0.05" :value="vibVal('vibFade')" :disabled="!sel.vibrato"
-                   @input="store.updateNote(sel.id, { vibFade: nval($event, 0.25) })" />
+            <NumSlider :model-value="vibVal('vibFade')" @update:model-value="v => { store.updateNote(sel.id, { vibFade: v }) }" :min="0" :max="0.9" :step="0.05" :disabled="!sel.vibrato" :input-width="68" />
             <em>{{ Math.round(Number(vibVal('vibFade')) * 100) }}%</em></label>
           <canvas ref="vibCv" class="vib-cv" height="46"></canvas>
         </div>

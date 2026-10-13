@@ -2191,8 +2191,7 @@ onBeforeUnmount(() => {
             <div class="insp-row"><span>{{ t('音名') }}</span><b>{{ sel.name || '—' }}</b></div>
             <div class="insp-row"><span>{{ t('音高') }}</span><b>{{ sel.midi ?? '—' }}</b></div>
             <div class="insp-row"><span>{{ t('力度') }}</span><b>{{ sel.vel ?? '—' }}</b></div>
-            <input class="insp-range" type="range" min="1" max="127" :value="sel.vel ?? 80" data-guide="velocity-slider" :disabled="!sel.vel"
-                   @input="e => editor?.setSelVel(+e.target.value)" />
+            <NumSlider :model-value="sel.vel ?? 80" @update:model-value="v => { editor?.setSelVel(+v) }" :min="1" :max="127" :disabled="!sel.vel" range-class="insp-range" :input-width="56" />
             <div class="insp-row"><span>{{ t('起点') }}</span>
               <input type="number" class="num-input" :value="sel.start ?? 0" step="1" min="0" :disabled="!sel.start"
                      @change="e => editor?.setSelStart(+e.target.value)" /></div>
