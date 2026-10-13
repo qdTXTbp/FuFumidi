@@ -60,6 +60,14 @@
   Var fuKeepRadioDel
 
   Function un.fuUnWelcomeCreate
+    ; ---------------------------------------------------------------
+    ; TODO(下个版本): 本页文字**显示不全且有遮挡**（5.1.0 实测，见 docs/known-issues.md KI-1）。
+    ;   根因：${NSD_CreateLabel} 是 Win32 静态控件，**不会自适应高度** ——
+    ;   下面几行文案在对话框宽度下会折成两行，而我给的高度只有 12u/14u，
+    ;   第二行被裁掉、并与下一个控件（只隔 14~16u）重叠。
+    ;   修法：折行的那几行给 24u 高、相邻起点留 26u；去掉文案里的 Markdown 星号；
+    ;   最长那行拆两行或改只读文本框。改完必须目视核对（makensis 只查语法，查不出排版）。
+    ; ---------------------------------------------------------------
     ; ★ 这里**不能**用 !insertmacro MUI_HEADER_TEXT：electron-builder 把本文件
     ;   放在 MUI2.nsh **之前** include，卸载器那一遍走到这里时该宏还不存在 ——
     ;   实测报 "macro named MUI_HEADER_TEXT not found!"，整个 NSIS 装配直接失败。
