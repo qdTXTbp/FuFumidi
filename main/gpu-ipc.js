@@ -80,8 +80,15 @@ function registerGpuIpc({
     const p = kindPrereq(kind);
     if (p.fits) return null;
     if (p.requiresPython === '3.12') {
-      return 'ROCm 增强包只有 Python 3.12（cp312）轮子，内置运行时是 Python ' + p.currentPython + '，'
-        + '需先安装独立的 Python 3.12 引擎运行时才能启用（当前未检测到）。';
+      // ★ 用户实测反馈：「ROCm 包显示需要 Python 3.12，但本工具只有 3.11」。
+      //   查下来是**我们这边缺一环**：pythonForMinor('3.12') 只负责「查找」3.12 运行时，
+      //   而全仓库没有任何地方能把它装进来 —— 于是这个选项对用户是死的：
+      //   界面提供、点了不让装、还让他去装一个拿不到的运行时。
+      //   在真正提供 3.12 运行时之前，文案必须给出**走得通的那条路**：
+      //   AMD 用户用 DirectML 包（cp311，本就能直接用）。
+      return 'ROCm 增强包只有 Python 3.12（cp312）轮子，而内置引擎运行时是 Python ' + p.currentPython + '；'
+        + '本工具目前**不提供** Python 3.12 运行时，所以这个包暂时装不了（不提供下载，避免白下 1.9GB）。'
+        + 'AMD 显卡请改用 DirectML 增强包 —— 它是 cp311，可以直接装、直接生效。';
     }
     return '该增强包要求 Python ' + p.requiresPython + '，当前运行时是 ' + p.currentPython + '。';
   }
