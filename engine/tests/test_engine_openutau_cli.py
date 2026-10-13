@@ -92,7 +92,14 @@ def build_voicebank(root):
 
 
 def run(args):
-    p = subprocess.run([sys.executable, SCRIPT] + args, capture_output=True, text=True)
+    # ★ 必须显式按 **UTF-8** 解码：引擎在 main() 里做了
+    #   `sys.stdout.reconfigure(encoding='utf-8')`，而 `text=True` 用的是**系统默认编码** ——
+    #   在中文 Windows 上是 GBK。后果不是"中文乱码"那么轻：解码在**读取线程**里抛
+    #   `UnicodeDecodeError`，`p.stdout` 直接变成 `None`，
+    #   整个测试以 `AttributeError: 'NoneType' has no attribute 'splitlines'` 收场，
+    #   看起来像"引擎没输出"，其实引擎一切正常。
+    p = subprocess.run([sys.executable, SCRIPT] + args, capture_output=True,
+                       text=True, encoding='utf-8', errors='replace')
     out = None
     for line in p.stdout.splitlines():
         if line.startswith('###RESULT '):

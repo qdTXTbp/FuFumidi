@@ -1316,7 +1316,7 @@ onBeforeUnmount(() => {
         <summary>{{ t('高级参数') }}<span class="adv-cnt">{{ t('阈值 · 踏板 · 模型选项') }}</span><span class="adv-arr">▾</span></summary>
         <div class="tr-params">
           <!-- WP1-5：原来这里只是两段注释，用户看不到分组。折叠区结构不变，只加可见的分组标题。 -->
-          <div class="tr-group">{{ t('判定阈值') }}</div>
+          <div class="tr-group">{{ t('质量组（影响识别与导出结果）') }}</div>
           <div class="tr-slider">
             <label>{{ t('起音阈值') }}<b>{{ onset.toFixed(2) }}</b></label>
             <input type="range" min="0" max="1" step="0.01" v-model.number="onset">
@@ -1339,7 +1339,7 @@ onBeforeUnmount(() => {
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'basic'">
             <label><span><b>{{ t('低音增强') }}</b><small>{{ t('弱化主旋律强化，保留贝斯 / 低音声部（旋律密集时更不易丢低音）') }}</small></span><input type="checkbox" v-model="bassBoost"></label>
           </div>
-          <div class="tr-group" v-if="mode === 'piano' || mode === 'universal'">{{ t('模型与输出') }}</div>
+          <!-- WP1-5：分组标题按用户要求改为「质量组 / 速度组」，旧的按作用域分组作废 -->
           <!-- ④ 批 A：模型选项（引擎早就有，只是界面没入口） -->
           <div class="tr-slider" v-if="mode === 'universal'">
             <label>{{ t('导出速度') }}<b>{{ exportTempo > 0 ? exportTempo + ' BPM' : t('默认 120 BPM') }}</b></label>
@@ -1365,7 +1365,7 @@ onBeforeUnmount(() => {
           <div class="tr-switch" v-if="mode === 'universal'">
             <label><span><b>{{ t('力度归一化') }}</b><small>{{ t('把力度拉齐到统一强度；关闭后保留模型给出的原始力度') }}</small></span><input type="checkbox" v-model="velNorm"></label>
           </div>
-          <div class="tr-group" v-if="mode === 'universal' && umodel === 'muscriptor'">{{ t('生成参数（影响质量）') }}</div>
+          <!-- WP1-5：同上；MuScriptor 的采样类参数留在质量组，束搜索/精度归速度组 -->
           <!-- ④ 批 B：MuScriptor 生成参数（都属「影响质量」，默认保持原行为） -->
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>{{ t('采样温度') }}<b>{{ msTemp.toFixed(1) }}</b></label>
@@ -1377,26 +1377,8 @@ onBeforeUnmount(() => {
             <input type="range" min="1" max="5" step="0.1" v-model.number="msCfg">
             <small>{{ t('调高＝更贴近提示但更容易重复；默认 1.0 = 关闭引导') }}</small>
           </div>
-          <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label>{{ t('束搜索宽度') }}<b>{{ msBeam }}</b></label>
-            <input type="range" min="1" max="5" step="1" v-model.number="msBeam">
-            <small>{{ t('同时保留多条候选再挑最好；越大越慢，默认 1 = 关闭') }}</small>
-          </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label><span><b>{{ t('跨块延音前置') }}</b><small>{{ t('把上一块未结束的音符强制喂给下一块，分块边界最稳；关掉会降低边界延续质量（默认开）') }}</small></span><input type="checkbox" v-model="msPrelude"></label>
-          </div>
-          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label>
-              <span>
-                <b>{{ t('计算精度') }}</b>
-                <small>{{ t('实测在 10 分钟 / 120 块的长素材上，bf16 与 fp32 耗时相同（CPU 569s vs 569s、显卡 119s vs 119s），输出逐项一致。所以它不是一个提速档 —— 保留仅为降低显存/内存占用。默认 fp32') }}</small>
-              </span>
-              <select v-model="msPrec">
-                <option value="fp32">{{ t('fp32（默认，最稳）') }}</option>
-                <option value="bf16">{{ t('bf16（省显存，实测不更快）') }}</option>
-                <option value="fp16">{{ t('fp16（更激进，未验证）') }}</option>
-              </select>
-            </label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label><span><b>{{ t('节拍网格检测') }}</b><small>{{ t('对齐音符时值；未下载或失败时自动跳过，不影响转录（装了模型默认开）') }}</small></span><input type="checkbox" v-model="beatGrid" @change="beatGridUserSet = true"></label>
@@ -1436,6 +1418,27 @@ onBeforeUnmount(() => {
           <div class="tr-switch"><label><span><b>{{ t('响度平衡') }}</b><small>{{ t('响度标准化（RMS）') }}</small></span><input type="checkbox" v-model="normalize"></label></div>
           <div class="tr-switch"><label><span><b>{{ t('自动检测 BPM') }}</b><small>{{ t('作为导出速度') }}</small></span><input type="checkbox" v-model="autoBpm"></label></div>
 
+          <!-- WP1-5：速度组。全表里只有这两项是为「省时间 / 省显存」存在的，
+               其余都会改变识别或导出结果，所以都在上面的质量组里。 -->
+          <div class="tr-group">{{ t('速度组（影响耗时与显存/内存占用）') }}</div>
+          <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
+            <label>{{ t('束搜索宽度') }}<b>{{ msBeam }}</b></label>
+            <input type="range" min="1" max="5" step="1" v-model.number="msBeam">
+            <small>{{ t('同时保留多条候选再挑最好；越大越慢，默认 1 = 关闭') }}</small>
+          </div>
+          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
+            <label>
+              <span>
+                <b>{{ t('计算精度') }}</b>
+                <small>{{ t('实测在 10 分钟 / 120 块的长素材上，bf16 与 fp32 耗时相同（CPU 569s vs 569s、显卡 119s vs 119s），输出逐项一致。所以它不是一个提速档 —— 保留仅为降低显存/内存占用。默认 fp32') }}</small>
+              </span>
+              <select v-model="msPrec">
+                <option value="fp32">{{ t('fp32（默认，最稳）') }}</option>
+                <option value="bf16">{{ t('bf16（省显存，实测不更快）') }}</option>
+                <option value="fp16">{{ t('fp16（更激进，未验证）') }}</option>
+              </select>
+            </label>
+          </div>
           <div class="tr-preset-row">
             <label class="fb-label" style="margin:0">{{ t('参数预设') }}</label>
             <div class="row" style="gap:6px">

@@ -33,6 +33,13 @@ const DEFAULT_SETTINGS = {
   // UTAU 渲染引擎：'openutau'=照搬 OpenUTAU 的核心（engine/singing，默认），
   // 'legacy'=早期自研的 engine_utau.py。首选失败时主进程会自动回落到另一个引擎。
   utau_engine: 'openutau',
+  // 轨道渲染器（★ 与上面是**两件事**：utau_engine 选"哪个引擎"，这里选"引擎里用哪个渲染器"）。
+  //   'CLASSIC'          = 逐音素：ClassicRenderer + Worldline 变调器（默认，最快）
+  //   'WORLDLINE-R'      = 乐句级 WORLD 合成（v10）
+  //   'WORLDLINE-R1.1'   = v10 + hnsep 谐波/噪声分离（v11）。**需要先下载 hnsep 模型**
+  //                        （资源中心），否则渲染时会给出明确报错。
+  //   实测同机同段：CLASSIC 6.39× 实时 / v10 —— / v11 1.94× 实时（比 v10 慢 3.29×）。
+  utau_renderer: 'CLASSIC',
   diffsinger_enabled: true, // DiffSinger 模块开关：**默认启用**，不再要求用户先手动点一次「启用模块」。
                           // 置 false 仍可显式关闭（保留字段仅为兼容旧 settings.json；主进程已不再据此拦截）。
   // 操作系统级全局热键：{ 动作id: { accel, enabled } }。

@@ -73,6 +73,27 @@ function setTab(v: SingTab) {
   catch (_) { /* 路由不可用时忽略 */ }
 }
 const propsOpen = ref(false);
+
+// ---- 轨道渲染器（只有 UTAU 声库这条链用得上；DiffSinger 走自己的渲染器）----------------
+// ★ 与「引擎」（utau_engine）是**两件事**：引擎选哪个程序，渲染器选程序里的哪条合成路线。
+//   CLASSIC = 逐音素（ClassicRenderer + Worldline 变调器）；Worldline = 乐句级 WORLD 合成。
+//   实测同机同段（4.5s 素材）：CLASSIC 6.39× 实时、v10 —— 、v11 1.94× 实时（比 v10 慢 3.29×）。
+//   v11 需要先下载 hnsep 模型（资源中心），没装时引擎会给出可操作的报错。
+const RENDERER_OPTIONS = [
+  { id: 'CLASSIC', cn: '逐音素（默认，最快）' },
+  { id: 'WORLDLINE-R', cn: 'Worldline v10（乐句级）' },
+  { id: 'WORLDLINE-R1.1', cn: 'Worldline v11（气声更真，慢 3.3×）' },
+];
+const rendererId = ref('CLASSIC');
+async function saveRenderer() {
+  try { await (window as any).fuBridge?.saveSettings?.({ utau_renderer: rendererId.value }); } catch (e) {}
+}
+onMounted(async () => {
+  try {
+    const s = await (window as any).fuBridge?.getSettings?.();
+    if (s && typeof s.utau_renderer === 'string' && s.utau_renderer) rendererId.value = s.utau_renderer;
+  } catch (e) {}
+});
 const cands = ref([]);
 const candFor = ref('');
 
@@ -2419,6 +2440,12 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
                 :title="t('这条轨怎么唱：引擎参数 / 效果链 / 自动化（后两块只作用于本轨）')" @click="propsOpen = !propsOpen">
           <Icon name="sliders" :size="13" /> {{ t('轨道属性') }}
         </button>
+        <!-- 轨道渲染器：放在渲染按钮旁边 —— 它是「点下去会发生什么」的一部分。 -->
+        <select v-if="!isAudio" v-model="rendererId" @change="saveRenderer" class="select-input"
+                style="width:auto;min-width:152px;padding:4px 8px;font-size:12px"
+                :title="t('合成路线：逐音素最快；Worldline 是乐句级 WORLD 合成，v11 气声/噪声更真但慢约 3.3 倍，且需先在资源中心下载 hnsep 模型')">
+          <option v-for="r in RENDERER_OPTIONS" :key="r.id" :value="r.id">{{ t(r.cn) }}</option>
+        </select>
         <!-- 主动作：渲染本轨。前置条件不满足时**按钮本身就变样并说明为什么**（不只是变淡），
              原因同时挂 title 与下方那行提示，不让用户猜（UX 复核第 4 条）。 -->
         <button v-if="!isAudio" class="btn primary" :class="{ blocked: renderBlocked }" data-guide="sing-render"

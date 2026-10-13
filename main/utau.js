@@ -505,6 +505,17 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
         args.push('--tempo-map', '@' + tempoJson);
       }
 
+      // ★ 轨道渲染器：只有 engine_openutau.py 认 `--renderer`。
+      //   legacy（engine_utau.py）**没有**这个参数，回落时必须把它去掉 ——
+      //   否则回落链会被一个未知 flag 直接打断，用户看到"两个引擎都失败"，
+      //   而真正的原因只是多传了一个参数。
+      const rendererId = (() => {
+        try { return String((cfg && cfg.renderer) || readSettings().utau_renderer || 'CLASSIC'); }
+        catch (e) { return 'CLASSIC'; }
+      })();
+      const argsFor = (script) => (script === UTAU_ENGINES.openutau
+        ? args.concat(['--renderer', rendererId]) : args);
+
       const primary = utauEngineScript();
       const fallback = primary === UTAU_ENGINES.legacy
         ? UTAU_ENGINES.openutau : UTAU_ENGINES.legacy;
@@ -515,7 +526,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
       if (primary === UTAU_ENGINES.openutau) {
         const sess = openUtauSession();
         if (sess) {
-          sess.request(args, { timeoutMs: 15 * 60 * 1000 }).then((r) => {
+          sess.request(argsFor(UTAU_ENGINES.openutau), { timeoutMs: 15 * 60 * 1000 }).then((r) => {
             if (r && r.ok && r.out && fs.existsSync(r.out)) {
               try {
                 if (outPath) {
@@ -546,7 +557,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
         }
       }
 
-      const spawnWith = (script, isRetry) => spawnEngine(args, {
+      const spawnWith = (script, isRetry) => spawnEngine(argsFor(script), {
         script,
         onDone: (code, r) => {
           if (r && r.result && r.result.ok && r.result.out && fs.existsSync(r.result.out)) {

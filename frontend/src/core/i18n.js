@@ -1470,10 +1470,14 @@ export const I18N_MAP = {
   '低配省资源': 'Low-spec (fewer resources)',
   // WP1-2：最低音高从「低音增强」独立出来
   '最低音高': 'Lowest pitch',
-  // WP1-5：高级参数区分组（原来只是两段注释，用户看不到分界）
-  '判定阈值': 'Detection thresholds',
-  '模型与输出': 'Model & output',
-  '生成参数（影响质量）': 'Generation (quality-affecting)',
+  // WP1-5：高级参数区分组。用户指定按「质量组 / 速度组」分（此前按作用域分的那版作废）。
+  '质量组（影响识别与导出结果）': 'Quality (affects detection & export)',
+  // WP4-5「最后一跳」：轨道渲染器选择
+  '逐音素（默认，最快）': 'Per-phoneme (default, fastest)',
+  'Worldline v10（乐句级）': 'Worldline v10 (phrase-level)',
+  'Worldline v11（气声更真，慢 3.3×）': 'Worldline v11 (truer breath, 3.3× slower)',
+  '合成路线：逐音素最快；Worldline 是乐句级 WORLD 合成，v11 气声/噪声更真但慢约 3.3 倍，且需先在资源中心下载 hnsep 模型': 'Synthesis path: per-phoneme is fastest; Worldline is phrase-level WORLD synthesis. v11 renders breath/noise more faithfully but is ~3.3× slower and needs the hnsep model from the resource center first.',
+  '速度组（影响耗时与显存/内存占用）': 'Speed (affects time, VRAM / RAM)',
   // 节拍网格：装了 beat_this 模型后默认开
   '对齐音符时值；未下载或失败时自动跳过，不影响转录（装了模型默认开）': 'Aligns note durations; skipped automatically when not downloaded or on failure, never blocks transcription (on by default once the model is installed)',
   '滤掉低于此频率的成分（低频隆隆声/次声）。低音声部被吞时先试 40 Hz；0 = 不限制': 'Filters out content below this frequency (low-frequency rumble / infrasound). If the bass part gets swallowed, try 40 Hz first; 0 = no limit',
