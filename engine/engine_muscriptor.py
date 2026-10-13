@@ -204,9 +204,10 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                 ProgressEvent as _ProgressEvent,
                 NoteStartEvent as _NoteStartEvent,
                 NoteEndEvent as _NoteEndEvent,
+                ChunkBoundary as _ChunkBoundary,
             )
         except Exception:
-            _ProgressEvent = _NoteStartEvent = _NoteEndEvent = None
+            _ProgressEvent = _NoteStartEvent = _NoteEndEvent = _ChunkBoundary = None
 
         # ★ 僵尸音符上限（长音频转录的已知失效模式）
         #
@@ -234,6 +235,17 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             _cap = 15.0          # 默认开：正常文件的时长上限是 12.3s，留有余量
         _cap_stats = {"closed": 0}
 
+        # ★ 逐块计时（#9 长音频尾部异常排查用，**默认关闭**）：
+        #   设 FUFUMIDI_CHUNK_TIMING=1 时，每个块边界打一行
+        #   `###CHUNKTIME {"i":块号,"seek":秒,"ms":距离上一块的毫秒}`。
+        #   为什么挂在 ChunkBoundary 而不是 ProgressEvent：
+        #   `_read_token_dump` 回放时**只吐 ChunkBoundary 与 token、不吐进度事件**，
+        #   挂进度事件的话回放路上量不到 —— 而回放正是复现这类问题的快路子
+        #   （148 分钟音频回放约 20 秒，重跑模型要半小时以上）。
+        _chunk_timing = bool(os.environ.get('FUFUMIDI_CHUNK_TIMING'))
+        _last_chunk_t = [None]
+        _chunk_i = [0]
+
         def _events_capped(events):
             """进度透传 + 超长音符强制收尾（cap <= 0 时行为与旧版一致）。"""
             open_notes = {}
@@ -257,6 +269,20 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     if t is not None:
                         for _end in _expired(t):
                             yield _end          # 先收尾，再吐触发它的事件，保持流有序
+                if _chunk_timing and _ChunkBoundary is not None and isinstance(ev, _ChunkBoundary):
+                    _now = time.perf_counter()
+                    _prev = _last_chunk_t[0]
+                    _last_chunk_t[0] = _now
+                    _chunk_i[0] += 1
+                    if _prev is not None and log_cb:
+                        try:
+                            log_cb('###CHUNKTIME ' + _json.dumps({
+                                'i': _chunk_i[0],
+                                'seek': float(getattr(ev, 'seek_time', 0.0) or 0.0),
+                                'ms': round((_now - _prev) * 1000.0, 3),
+                            }))
+                        except Exception:
+                            pass
                 if _ProgressEvent is not None and isinstance(ev, _ProgressEvent):
                     try:
                         if log_cb and getattr(ev, "total", 0):
