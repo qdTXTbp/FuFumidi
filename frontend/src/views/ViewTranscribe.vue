@@ -5,6 +5,7 @@ import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { clamp, esc, fmtTime } from '../core/util.js';
 import { t } from '../core/i18n.js';
+import NumSlider from '../components/NumSlider.vue';
 
 const app = useAppStore();
 const toast = (m, t) => app.toast(m, t);
@@ -1606,13 +1607,13 @@ onBeforeUnmount(() => {
         <div class="fb-label" style="margin-top:4px">{{ t('推理参数') }} <small class="ms-mut">{{ t('（与 MSST-WebUI 一致 · 支持按模型保存预设）') }}</small></div>
         <div class="ms-grid">
           <label class="ms-field">{{ t('分块大小') }} chunk_size<small>{{ t('增大提高分离效果，也增加耗时与显存') }}</small>
-            <div class="ms-range-row"><input type="range" min="1" max="30" step="1" v-model.number="chunkSec" /><b>{{ chunkSec }}s</b></div>
+            <div class="ms-range-row"><NumSlider v-model="chunkSec" :min="1" :max="30" :step="1" unit="s" /></div>
           </label>
           <label class="ms-field">{{ t('重叠数') }} overlap<small>{{ t('建议 4；增大提高效果、增加耗时') }}</small>
-            <div class="ms-range-row"><input type="range" min="1" max="10" step="1" v-model.number="msOverlap" /><b>{{ msOverlap }}</b></div>
+            <div class="ms-range-row"><NumSlider v-model="msOverlap" :min="1" :max="10" :step="1" /></div>
           </label>
           <label class="ms-field">{{ t('批次大小') }} batch_size<small>{{ t('减小降低显存，对效果影响不大') }}</small>
-            <div class="ms-range-row"><input type="range" min="1" max="8" step="1" v-model.number="msBatch" /><b>{{ msBatch }}</b></div>
+            <div class="ms-range-row"><NumSlider v-model="msBatch" :min="1" :max="8" :step="1" /></div>
           </label>
         </div>
         <div class="tr-switch"><label><span><b>{{ t('音频归一化') }}</b><small>{{ t('对输入/输出进行归一化（部分模型无此功能）') }}</small></span><input type="checkbox" v-model="msNormalize"></label></div>
@@ -1694,19 +1695,19 @@ onBeforeUnmount(() => {
           <div class="tr-group">{{ t('质量组（影响识别与导出结果）') }}</div>
           <div class="tr-slider">
             <label>{{ t('起音阈值') }}<b>{{ onset.toFixed(2) }}</b></label>
-            <input type="range" min="0" max="1" step="0.01" v-model.number="onset">
+            <NumSlider v-model="onset" :min="0" :max="1" :step="0.01" />
           </div>
           <div class="tr-slider">
             <label>{{ t('音符判定阈值') }}<b>{{ frame.toFixed(2) }}</b></label>
-            <input type="range" min="0" max="1" step="0.01" v-model.number="frame">
+            <NumSlider v-model="frame" :min="0" :max="1" :step="0.01" />
           </div>
           <div class="tr-slider">
             <label>{{ t('最短音符') }}<b>{{ minNote }}ms</b></label>
-            <input type="range" min="10" max="300" step="1" v-model.number="minNote">
+            <NumSlider v-model="minNote" :min="10" :max="300" :step="1" />
           </div>
           <div class="tr-slider" v-if="mode === 'piano'">
             <label>{{ t('音符合并间隔') }}<b>{{ mergeGap }}ms</b></label>
-            <input type="range" min="0" max="200" step="1" v-model.number="mergeGap">
+            <NumSlider v-model="mergeGap" :min="0" :max="200" :step="1" />
           </div>
           <div class="tr-switch" v-if="mode === 'piano'">
             <label><span><b>{{ t('包含踏板事件') }}</b><small>{{ t('还原延音踏板') }}</small></span><input type="checkbox" v-model="pedal"></label>
@@ -1721,20 +1722,20 @@ onBeforeUnmount(() => {
           <!-- ④ 批 A：模型选项（引擎早就有，只是界面没入口） -->
           <div class="tr-slider" v-if="mode === 'universal'">
             <label>{{ t('导出速度') }}<b>{{ exportTempo > 0 ? exportTempo + ' BPM' : t('默认 120 BPM') }}</b></label>
-            <input type="range" min="0" max="240" step="1" v-model.number="exportTempo">
+            <NumSlider v-model="exportTempo" :min="0" :max="240" :step="1" />
           </div>
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'basic'">
             <label>{{ t('最高音高') }}<b>{{ maxFreq > 0 ? maxFreq + ' Hz' : t('不限制') }}</b></label>
-            <input type="range" min="0" max="8000" step="50" v-model.number="maxFreq">
+            <NumSlider v-model="maxFreq" :min="0" :max="8000" :step="50" />
           </div>
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'basic'">
             <label>{{ t('最低音高') }}<b>{{ minFreq > 0 ? minFreq + ' Hz' : t('不限制') }}</b></label>
-            <input type="range" min="0" max="2000" step="5" v-model.number="minFreq">
+            <NumSlider v-model="minFreq" :min="0" :max="2000" :step="5" />
             <small>{{ t('滤掉低于此频率的成分（低频隆隆声/次声）。低音声部被吞时先试 40 Hz；0 = 不限制') }}</small>
           </div>
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>{{ t('超长音符上限') }}<b>{{ maxHold > 0 ? maxHold + 's' : t('上限已关') }}</b></label>
-            <input type="range" min="0" max="60" step="1" v-model.number="maxHold">
+            <NumSlider v-model="maxHold" :min="0" :max="60" :step="1" />
             <small>{{ t('超过就强制收尾，治长音频的僵尸音符（实测 100 分钟录播出现过 4320 秒的音）。调大＝少干预，调小＝更狠地剪长音；0 = 关') }}</small>
           </div>
           <div class="tr-switch" v-if="mode === 'universal'">
@@ -1747,12 +1748,12 @@ onBeforeUnmount(() => {
           <!-- ④ 批 B：MuScriptor 生成参数（都属「影响质量」，默认保持原行为） -->
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>{{ t('采样温度') }}<b>{{ msTemp.toFixed(1) }}</b></label>
-            <input type="range" min="0.1" max="2" step="0.1" v-model.number="msTemp">
+            <NumSlider v-model="msTemp" :min="0.1" :max="2" :step="0.1" />
             <small>{{ t('调高＝更随机、更有可能跳出重复；默认 1.0 走贪婪解码，结果可复现') }}</small>
           </div>
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>{{ t('引导系数') }}<b>{{ msCfg.toFixed(1) }}</b></label>
-            <input type="range" min="1" max="5" step="0.1" v-model.number="msCfg">
+            <NumSlider v-model="msCfg" :min="1" :max="5" :step="0.1" />
             <small>{{ t('调高＝更贴近提示但更容易重复；默认 1.0 = 关闭引导') }}</small>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
@@ -1803,7 +1804,7 @@ onBeforeUnmount(() => {
           <div class="tr-group" v-if="showSpeedGroup">{{ t('速度组（影响耗时与显存/内存占用）') }}</div>
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>{{ t('束搜索宽度') }}<b>{{ msBeam }}</b></label>
-            <input type="range" min="1" max="5" step="1" v-model.number="msBeam">
+            <NumSlider v-model="msBeam" :min="1" :max="5" :step="1" />
             <small>{{ t('同时保留多条候选再挑最好；越大越慢，默认 1 = 关闭') }}</small>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">

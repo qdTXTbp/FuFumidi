@@ -13,6 +13,7 @@ import { clamp } from '../core/util.js';
 import { drawVizWaterfall, paintVizBg, drawVizSpectrum, drawVizScope, drawVizChord, rmsAt, smoothEnergy, smoothEnergyDt, activeNotesAt, VIZ_REF_H, VIZ_REF_DPR } from '../core/viz.js';
 import { playVoice, presetFromMode } from '../core/synth.js';
 import { renderSongWithSf2 } from '../core/sf2render.js';
+import NumSlider from '../components/NumSlider.vue';
 
 const tempo = ref(1);
 const rate = ref(44100);
@@ -784,7 +785,7 @@ async function renderVideo() {
         </div>
         <div class="field-row gain-row">
           <label>{{ t('输出音量') }}<b style="color:var(--brand-coral)">{{ gain }}%</b></label>
-          <input type="range" min="0" max="150" v-model.number="gain" class="range" />
+          <NumSlider v-model="gain" :min="0" :max="150" class="range" />
         </div>
       </div>
 
@@ -873,7 +874,7 @@ async function renderVideo() {
           <label>{{ t('水印图片') }}</label>
           <div class="fr-inline">
             <button class="btn sm" @click="vePickWatermark">{{ VE.watermark ? t('更换') : t('选择') }}</button>
-            <input v-if="VE.watermark" type="range" min="0" max="100" v-model.number="VE.watermarkOpacity" style="flex:1 1 80px;min-width:0" />
+            <NumSlider v-model="VE.watermarkOpacity" :min="0" :max="100" style="flex:1 1 80px;min-width:0" />
           </div>
         </div>
         <!-- ★ 背景跟「可视化」页共用一份（stores/vizbg）：这里改，瀑布流那边立刻变；

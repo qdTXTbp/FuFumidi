@@ -8,6 +8,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { t } from '../core/i18n.js';
 import { useAppStore } from '../stores/app';
+import NumSlider from '../components/NumSlider.vue';
 
 const app = useAppStore();
 const bridge = window.fuBridge;
@@ -301,17 +302,17 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
                停在默认值上 = 一个都不发 = 完全用上游默认。 -->
           <div class="cv-row">
             <span class="cv-label">{{ t('top-k') }}</span>
-            <input type="range" min="1" max="100" step="1" v-model.number="gsvTopK" style="flex:1" @change="saveOpts">
+            <NumSlider v-model="gsvTopK" :min="1" :max="100" :step="1" style="flex:1" @change="saveOpts" />
             <b class="cv-val">{{ gsvTopK }}</b>
           </div>
           <div class="cv-row">
             <span class="cv-label">{{ t('top-p') }}</span>
-            <input type="range" min="0" max="1" step="0.05" v-model.number="gsvTopP" style="flex:1" @change="saveOpts">
+            <NumSlider v-model="gsvTopP" :min="0" :max="1" :step="0.05" style="flex:1" @change="saveOpts" />
             <b class="cv-val">{{ Number(gsvTopP).toFixed(2) }}</b>
           </div>
           <div class="cv-row">
             <span class="cv-label">{{ t('温度') }}</span>
-            <input type="range" min="0" max="1" step="0.05" v-model.number="gsvTemperature" style="flex:1" @change="saveOpts">
+            <NumSlider v-model="gsvTemperature" :min="0" :max="1" :step="0.05" style="flex:1" @change="saveOpts" />
             <b class="cv-val">{{ Number(gsvTemperature).toFixed(2) }}</b>
           </div>
           <div class="cv-row">

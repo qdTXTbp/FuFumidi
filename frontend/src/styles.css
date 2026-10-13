@@ -1800,3 +1800,15 @@ input[type="checkbox"]:active, input[type="radio"]:active { transform: scale(0.8
 /* DiffSinger 卡片上的「编辑」小按钮 */
 .ds-edit-btn { align-self: flex-start; margin-top: 2px; padding: 2px 8px; font-size: 10.5px; border-radius: 6px; border: 1px solid var(--hairline); background: var(--surface-soft); color: var(--slate); cursor: pointer; }
 .ds-edit-btn:hover { border-color: var(--border-strong); color: var(--ink); }
+
+/* ============================================================
+   参数滑块（NumSlider）：拖动 + 直接输入数值
+   ------------------------------------------------------------
+   用户要求「所有功能的滑块都允许直接输入数值」。做成组件后行为只有一份：
+   拖动与输入走同一个 v-model，输入在失焦/回车时才钳制并对齐步长。
+   ============================================================ */
+.numslider { display: inline-flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.numslider-range { flex: 1; min-width: 0; accent-color: var(--accent); }
+.numslider-num { flex: none; padding: 2px 6px; font-size: 11.5px; text-align: right; background: var(--surface); color: var(--ink); border: 1px solid var(--hairline); border-radius: 6px; }
+.numslider-num:focus { outline: none; border-color: var(--accent); }
+.numslider-unit { flex: none; font-size: 11px; color: var(--stone); }

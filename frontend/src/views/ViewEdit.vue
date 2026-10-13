@@ -46,6 +46,7 @@ import {
   exportExprMapJson, importExprMapJson, augmentTracks, articulationPlan,
 } from '../core/expression-map.js';
 import { t } from '../core/i18n.js';
+import NumSlider from '../components/NumSlider.vue';
 
 const bridge = window.fuBridge;
 
@@ -2304,7 +2305,7 @@ onBeforeUnmount(() => {
         <span class="art-lane-label">{{ t('谱面底图') }}</span>
         <button class="btn sm" @click="pickUnderlay"><Icon name="import" :size="12" />{{ t('选择图片…') }}</button>
         <label class="ul-f">{{ t('不透明度') }}
-          <input type="range" min="0.05" max="0.9" step="0.05" v-model.number="ulOpacity" />
+          <NumSlider v-model="ulOpacity" :min="0.05" :max="0.9" :step="0.05" />
           <em>{{ Math.round(ulOpacity * 100) }}%</em></label>
         <label class="ul-f">{{ t('宽度(拍)') }}
           <input class="num-input" type="number" min="1" max="512" step="1" v-model.number="ulBeats" style="width:64px" /></label>
@@ -2547,7 +2548,7 @@ onBeforeUnmount(() => {
               <option value="none">{{ t('无') }}</option><option value="funk">Funk</option><option value="jazz">Jazz</option><option value="rock">Rock</option><option value="latin">Latin</option><option value="custom">{{ t('自定义 Groove') }}</option>
             </select>
           </label>
-          <label class="span2">{{ t('强度') }}<input type="range" min="0" max="100" v-model.number="sqStrength" style="width:100%" /> <span class="muted small">{{ sqStrength }}%</span></label>
+          <label class="span2">{{ t('强度') }}<NumSlider v-model="sqStrength" :min="0" :max="100" style="width:100%" /> <span class="muted small">{{ sqStrength }}%</span></label>
         </div>
         <div class="ed-modal-foot">
           <button class="btn sm" @click="extractGroove">{{ t('提取选中为 Groove') }}</button>
