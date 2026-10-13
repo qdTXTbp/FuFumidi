@@ -27,6 +27,9 @@ const beatGrid = ref(false);             // 节拍网格检测（仅 MuScriptor�
 // ④ 批 A：引擎早就有、界面一直没入口的模型选项。默认值一律保持「原来的行为」，
 // 所以不碰这些控件时输出与旧版一致（质量相关的开关默认关，见计划文档 §6）。
 const maxFreq = ref(0);                  // 最高音高 Hz（仅 basic，0 = 不限制）：滤掉高频噪声/镲片串音
+const minFreq = ref(0);                  // 最低音高 Hz（仅 basic，0 = 不限制）：滤掉低频隆隆声/次声
+                                         // ★ 2026-10-14：从「低音增强」里独立出来。用户决定**显式控件优先** ——
+                                         //   勾「低音增强」只设 no_melodia（不再顺带把 min_freq 钉成 40）。
 const maxHold = ref(15);                 // 超长音符上限秒（仅 MuScriptor，0 = 关）：长音频僵尸音符的兜底
 const mergeOverlap = ref(true);          // 合并同音高重叠音符（默认开；关掉 = 引擎收 no_merge）
 const velNorm = ref(true);               // 力度归一化（默认开；关掉 = 引擎收 no_velnorm）
@@ -332,7 +335,15 @@ const tplIdx = ref(-1);
 const rf = reactive({ audio: '', midi: '', mode: 'auto', stem: true, busy: false, jobId: 0, progress: 0, logs: [], info: '' });
 
 const MODE_NAMES = () => ({ universal: t('通用识别'), piano: t('钢琴专用'), separate: t('音频处理') });
-const PERF_NAMES = () => ({ quality: t('最高质量'), balanced: t('均衡'), fast: t('高性能') });
+const PERF_NAMES = () => ({ quality: t('最高质量'), balanced: t('均衡'), fast: t('低配省资源') });
+// ★ 每个档位下面必须写清代价（用户原则：不许只给开关不给代价说明）。
+//   注意 fast 的真实语义是「资源最少」，在正常机器上它**比 quality 慢** ——
+//   引擎侧 PERF_MODES/PERF_BATCH 就是「quality 全核+批量32 / fast 2核+批量8」。
+const PERF_DESC = () => ({
+  quality: t('全部核心 + 最大批量：同一台机器上最快，占内存/显存最多'),
+  balanced: t('限制到 4 核、批量减半：折中'),
+  fast: t('限制到 2 核 + 最小批量：低配/小显存机器更稳，正常机器上会更慢'),
+}[perf.value] || '');
 const MODE_DEFAULT_PRESET = () => ({ universal: t('通用·标准'), piano: t('钢琴：最优'), separate: t('人声：最优') });
 
 // 网页版内置预设（与引擎 presets.py 的 _builtin_presets 保持一致，仅取界面可应用的键）：
@@ -738,9 +749,10 @@ function collectParams() {
     cfg.model = umodel.value;
     // 低音增强（basic 子模型）：melodia trick 会额外强化主旋律、相对压制伴奏声部，
     // 旋律密集时低音容易被吞；关闭后低音声部保留更完整。下限 40Hz 过滤次声噪声。
+    // ★ 2026-10-14：只设 no_melodia。原先这里顺带 `cfg.min_freq = 40`，
+    //   会把用户自己设的「最低音高」覆盖掉；用户决定**显式控件优先**。
     if (bassBoost.value && umodel.value === 'basic') {
       cfg.no_melodia = true;
-      cfg.min_freq = 40;
     }
     if (umodel.value === 'muscriptor') {
       cfg.model_size = msSize.value;
@@ -748,14 +760,17 @@ function collectParams() {
       // 乐器组约束：'auto' / '人声,鼓' 这样的组名列表 / 空。
       // 注意这条链路有三跳（渲染端 → 主进程 worker 请求体 → 引擎），少任何一跳界面选了都不生效。
       cfg.muscriptor_instruments = msInstrValue.value;
-      // MuScriptor 批量推理：GPU 上串行 chunk（batch=1）利用率仅 ~65%，批量可提至
-      // 2-4× 实时。质量档保持串行 + prelude_forcing（边界延续质量最优）；
-      // 均衡/高性能档用批量吞吐（prelude_forcing 关闭，边界质量略降）。
-      // batch 上限按规格收紧（RTX 5070 Ti 12GB 实测：medium batch=4 峰值 4.2GB /
-      // batch=8 峰值 7.9GB 且仅剩 2GB 余量 / batch=16 触发驱动静默回退系统内存，
-      // 速度暴跌 5 倍；4→8 仅再快 10%，故 fast 不超过 balanced 两档的显存预算）。
-      // 批量推理改成显式开关：它必须关闭 prelude_forcing（muscriptor 的限制，
-      // batch_size>1 与 prelude_forcing=True 互斥），代价是跨段延续的音符会被重新判定乐器。
+      // ★ 2026-10-14 更正：这段注释原先描述的是**已被移除**的批量推理行为
+      //   （`bca0a55`「移除批量推理功能」）。现在：
+      //   · `prelude_forcing` 是**独立开关**（见下面的 msPrelude），与性能档无关；
+      //   · 性能档只决定「线程数」与 engine_pt 的**批量前向上限**：
+      //       quality → 全核 + 上限 32（CUDA）/ 16（CPU）
+      //       balanced → 4 核 + 16 / 8
+      //       fast     → 2 核 + 8 / 4
+      //     —— 所以同机上 `quality` 反而最快，`fast` 是给低配/小显存机器防 OOM 的。
+      //   · 旧的显存实测（RTX 5070 Ti 12GB：medium batch=4 峰值 4.2GB / batch=8 峰值 7.9GB
+      //     仅余 2GB / batch=16 触发驱动回退、速度暴跌 5 倍）仍解释了
+      //     `engine_pt._PERF_BATCH` 为什么封在 32 —— 保留作依据，但它已不决定界面行为。
     }
   }
   // ④ 批 A：上面三个 if 之外，还有一批「引擎早就有、界面没入口」的选项。
@@ -763,6 +778,7 @@ function collectParams() {
   if (mode.value === 'universal') {
     if (exportTempo.value > 0) cfg.tempo = exportTempo.value;
     if (umodel.value === 'basic' && maxFreq.value > 0) cfg.max_freq = maxFreq.value;
+    if (umodel.value === 'basic' && minFreq.value > 0) cfg.min_freq = minFreq.value;
     if (umodel.value === 'muscriptor') cfg.max_note_hold = maxHold.value;
     if (!mergeOverlap.value) cfg.no_merge = true;
     if (!velNorm.value) cfg.no_velnorm = true;
@@ -1282,8 +1298,9 @@ onBeforeUnmount(() => {
         <div class="tr-pills">
           <button class="tr-pill" :class="{ active: perf === 'quality' }" @click="selectPerf('quality')">{{ t('最高质量') }}</button>
           <button class="tr-pill" :class="{ active: perf === 'balanced' }" @click="selectPerf('balanced')">{{ t('均衡') }}</button>
-          <button class="tr-pill" :class="{ active: perf === 'fast' }" @click="selectPerf('fast')">{{ t('高性能') }}</button>
+          <button class="tr-pill" :class="{ active: perf === 'fast' }" @click="selectPerf('fast')">{{ t('低配省资源') }}</button>
         </div>
+        <div class="tr-perf-desc">{{ PERF_DESC() }}</div>
         <div v-if="perfHint" class="tr-perf-hint">{{ perfHint }}</div>
       </div>
 
@@ -1320,6 +1337,11 @@ onBeforeUnmount(() => {
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'basic'">
             <label>{{ t('最高音高') }}<b>{{ maxFreq > 0 ? maxFreq + ' Hz' : t('不限制') }}</b></label>
             <input type="range" min="0" max="8000" step="50" v-model.number="maxFreq">
+          </div>
+          <div class="tr-slider" v-if="mode === 'universal' && umodel === 'basic'">
+            <label>{{ t('最低音高') }}<b>{{ minFreq > 0 ? minFreq + ' Hz' : t('不限制') }}</b></label>
+            <input type="range" min="0" max="2000" step="5" v-model.number="minFreq">
+            <small>{{ t('滤掉低于此频率的成分（低频隆隆声/次声）。低音声部被吞时先试 40 Hz；0 = 不限制') }}</small>
           </div>
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>{{ t('超长音符上限') }}<b>{{ maxHold > 0 ? maxHold + 's' : t('上限已关') }}</b></label>
@@ -1600,6 +1622,7 @@ onBeforeUnmount(() => {
 .tr-submodels { margin-top: 10px; padding: 10px 12px; border: 1px dashed var(--hairline); border-radius: 10px; background: var(--surface-soft); }
 .tr-submodels .fb-label { margin-bottom: 8px; }
 .tr-perf-hint { font-size: 11.5px; color: var(--success-text); }
+.tr-perf-desc { margin-top: 6px; font-size: 11.5px; color: var(--stone); line-height: 1.5; }
 .tr-adv { border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); }
 .tr-adv summary { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-size: 12.5px; font-weight: 600; color: var(--ink); cursor: pointer; user-select: none; }
 .tr-adv summary .adv-cnt { font-weight: 400; color: var(--stone); font-size: 11px; }

@@ -1207,13 +1207,13 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
           <div class="field-row">
             <div>
               <div class="fr-label">{{ t('默认性能模式') }}</div>
-              <div class="fr-hint">{{ t('质量越高耗时越长') }}</div>
+              <div class="fr-hint">{{ t('最高质量用全部核心，同机上反而最快；低配省资源限 2 核，低配机更稳') }}</div>
             </div>
             <div class="fr-ctl">
               <select v-model="form.perf_mode" class="ov-input" style="width:200px">
                 <option value="quality">{{ t('最高质量') }}</option>
                 <option value="balanced">{{ t('均衡') }}</option>
-                <option value="fast">{{ t('高性能') }}</option>
+                <option value="fast">{{ t('低配省资源') }}</option>
               </select>
             </div>
           </div>

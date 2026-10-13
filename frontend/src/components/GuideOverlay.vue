@@ -191,7 +191,7 @@ const CHAPTERS = computed(() => [
     steps: [
       { parent: 'transcode', tab: 'transcribe', selector: '[data-guide="audio-drop"]', title: t('导入音频'), desc: t('拖入或点击选择 MP3 / WAV / FLAC / M4A 等；可一次选多个文件排队。'), manual: true },
       { parent: 'transcode', tab: 'transcribe', selector: '[data-guide="mode-universal"]', title: t('三种转录模式'), desc: t('通用识别适合任意歌曲；钢琴专用适合纯钢琴；音频处理先做人声分离再分别处理。'), manual: true },
-      { parent: 'transcode', tab: 'transcribe', selector: '[data-guide="adv-panel"]', title: t('性能档位'), desc: t('最高质量 / 均衡 / 高性能。有独显时会推荐更快的档位，档位越高越慢但越细腻。'), manual: true },
+      { parent: 'transcode', tab: 'transcribe', selector: '[data-guide="adv-panel"]', title: t('性能档位'), desc: t('最高质量 / 均衡 / 低配省资源。最高质量用全部核心，同机上最快；低配省资源限 2 核，给低配机器防卡死。'), manual: true },
       { parent: 'transcode', tab: 'transcribe', selector: '[data-guide="adv-panel"]', title: t('参数预设与任务模板'), desc: t('内置多套预设（钢琴快速琶音、人声主旋律、吉他拨弦等），也可保存自己的参数与任务模板。'), manual: true },
       { parent: 'transcode', tab: 'transcribe', selector: '[data-guide="adv-panel"]', title: t('高级参数'), desc: t('展开后可调阈值、最短音符、合并间隔、踏板、降噪、响度平衡、自动 BPM，以及低音增强。'), manual: true },
       { parent: 'transcode', tab: 'transcribe', selector: '[data-guide="start-transcribe"]', title: t('开始转录'), desc: t('点「开始转录」，全程本机离线运行，可在下方看到进度与日志。'), manual: true },
