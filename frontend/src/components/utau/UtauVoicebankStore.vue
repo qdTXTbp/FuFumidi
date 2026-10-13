@@ -5,7 +5,14 @@
 import { ref, computed, onMounted, onActivated, onBeforeUnmount } from 'vue';
 import Icon from '../Icon.vue';
 import { useSingerStore } from '../../stores/singer';
-import { t } from '../../core/i18n.js';
+import { t } from '../../core/i18n.js';
+import ItemMetaEditor from '../models/ItemMetaEditor.vue';
+// 用户元数据：名字/作者/标签/分类 + 排序/顶置（四页共用一张表，见 core/usermeta.js）
+import {
+  loadUserMeta, orderList, displayName, authorOf, tagsOf, isPinned, togglePin, saveOrder, searchHay,
+} from '../../core/usermeta.js';
+
+loadUserMeta();      // 进页面读一次用户改动（异步，不阻塞渲染）
 
 const emit = defineEmits(['installed']);
 const store = useSingerStore();
@@ -188,12 +195,40 @@ function hit(it) {
   if (langFilter.value !== 'all' && splitLang(it).lang !== langFilter.value) return false;
   const q = query.value.trim().toLowerCase();
   if (!q) return true;
-  return [it.name, it.author, it.lang, it.desc].some(v => String(t(v || '')).toLowerCase().includes(q));
+  // 名字 / 作者 / 标签 / 分类 + 原始字段一起搜（导入项靠标签才找得到）
+  return searchHay('utau', it, [it.lang, it.desc].map(v => String(t(v || ''))).join(' ')).includes(q);
 }
-const shown = computed(() => list.value.filter(hit));
+/** 先把用户排序与顶置套上再过滤 —— 顺序才与看到的卡片一致。 */
+const ordered = computed(() => orderList('utau', list.value));
+const shown = computed(() => ordered.value.filter(hit));
 const shownCount = computed(() => shown.value.length);
 const hasFilter = computed(() => !!query.value.trim() || langFilter.value !== 'all' || stateFilter.value !== 'all');
-function resetFilters() { query.value = ''; langFilter.value = 'all'; stateFilter.value = 'all'; }
+function resetFilters() { query.value = ''; langFilter.value = 'all'; stateFilter.value = 'all'; }
+
+/* ---------------- 顶置 / 拖拽排序 / 编辑条目信息（用户要求：四页一致） ---------------- */
+const dragId = ref('');
+const editItem = ref(null);
+function dragStart(it, ev) {
+  dragId.value = it.id;
+  try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', String(it.id)); } catch (e) {}
+}
+function dragEnd() { dragId.value = ''; }
+async function dropOn(it) {
+  const from = dragId.value;
+  dragId.value = '';
+  if (!from || !it || from === it.id) return;
+  // 过滤/搜索中禁止拖拽：那时列表只是子集，写顺序会与没显示的条目交错，结果无法解释
+  if (hasFilter.value) return;
+  const ids = ordered.value.map((x) => x.id);
+  const i = ids.indexOf(from);
+  const j = ids.indexOf(it.id);
+  if (i < 0 || j < 0) return;
+  ids.splice(j, 0, ids.splice(i, 1)[0]);
+  await saveOrder('utau', ids);
+}
+async function pin(it) { await togglePin('utau', it.id); }
+// 本组件没有 toast（它用行内状态文字），保存成功后 usermeta.js 已自行刷新表，这里只需关闭
+function onEditClose() { editItem.value = null; }
 const langs = computed(() => {
   const m = new Map();
   for (const it of list.value) { const k = splitLang(it).lang; m.set(k, (m.get(k) || 0) + 1); }
@@ -282,14 +317,20 @@ function sizeMb(v) { return v ? (v / 1048576).toFixed(1) + ' MB' : ''; }
               <span class="vb-cat-cnt">{{ f.items.length }}</span>
             </div>
             <div class="vb-grid">
-              <div v-for="it in f.items" :key="it.id" class="vb-card" :class="{ inst: it.installed, down: busyId === it.id }">
+              <div v-for="it in f.items" :key="it.id" class="vb-card"
+                     :class="{ inst: it.installed, down: busyId === it.id, pinned: isPinned('utau', it), dragging: dragId === it.id }"
+                     :draggable="!hasFilter"
+                     @dragstart="dragStart(it, $event)" @dragend="dragEnd" @dragover.prevent @drop.prevent="dropOn(it)">
                 <div class="vb-card-top">
-                  <span class="vb-name" :title="it.name">{{ t(it.name) }}</span>
+                  <span class="vb-name" :title="displayName('utau', it)">{{ t(displayName('utau', it)) }}</span>
+                  <button class="cat-pin" :class="{ on: isPinned('utau', it) }" @click.stop="pin(it)"
+                          :title="isPinned('utau', it) ? t('取消顶置') : t('顶置')">📌</button>
                   <span class="vb-badge" :class="{ inst: it.installed }">{{ it.installed ? t('已安装') : t('未安装') }}</span>
                 </div>
                 <div class="vb-catline">
-                  <span class="vb-tag">{{ it.author }}</span>
+                  <span class="vb-tag">{{ authorOf('utau', it) || it.author }}</span>
                   <span v-if="it.installed && it.size" class="vb-tag">{{ sizeMb(it.size) }}</span>
+                  <span v-for="tg in tagsOf('utau', it)" :key="tg" class="cat-tag meta">{{ tg }}</span>
                 </div>
                 <div class="vb-desc">{{ t(it.desc) }}</div>
                 <div class="vb-license" :title="t(it.license)">{{ t('使用条款：') }}{{ t(it.license) }}</div>
@@ -302,6 +343,7 @@ function sizeMb(v) { return v ? (v / 1048576).toFixed(1) + ' MB' : ''; }
                       <button class="vb-btn re" @click="remove(it)"><Icon name="trash" :size="12" /></button>
                     </template>
                     <button class="vb-btn re" @click="openSite(it)" :title="it.officialUrl">{{ t('来源页') }}</button>
+                    <button class="vb-btn re" @click="editItem = it" :title="t('编辑条目信息')">{{ t('编辑') }}</button>
                   </div>
                 </div>
                 <div v-if="busyId === it.id" class="vb-prog">
@@ -347,6 +389,7 @@ function sizeMb(v) { return v ? (v / 1048576).toFixed(1) + ' MB' : ''; }
       </div>
     </template>
   </div>
+  <ItemMetaEditor v-if="editItem" kind="utau" :item="editItem" :raw-name="editItem.name" @close="onEditClose" />
 </template>
 
 <style scoped>

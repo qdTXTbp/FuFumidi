@@ -1765,3 +1765,38 @@ input[type="checkbox"]:active, input[type="radio"]:active { transform: scale(0.8
 .cat-empty b { font-size: 13px; color: var(--steel); }
 .cat-bar-mini { height: 3px; border-radius: 2px; background: var(--surface-soft); overflow: hidden; }
 .cat-bar-mini i { display: block; height: 100%; background: var(--brand-coral); transition: width .25s ease; }
+
+/* ============================================================
+   目录卡片：顶置 / 拖拽排序 / 用户元数据标签（P4）
+   ------------------------------------------------------------
+   与 .cat-* 同属全局单一样式源（不放进各自 scoped，避免四页再分叉）。
+   过滤/搜索时拖拽被禁用（顺序会不可解释），所以只有 [draggable="true"] 才是抓手光标。
+   ============================================================ */
+.cat-card[draggable="true"] { cursor: grab; }
+.cat-card[draggable="true"]:active { cursor: grabbing; }
+.cat-card.dragging { opacity: .5; }
+.cat-card.pinned { box-shadow: inset 3px 0 0 var(--accent); }
+.cat-pin { margin-left: 4px; padding: 0 2px; background: none; border: 0; cursor: pointer; font-size: 12px; line-height: 1; opacity: .32; filter: grayscale(1); }
+.cat-pin:hover { opacity: .8; }
+.cat-pin.on { opacity: 1; filter: none; }
+.cat-tag.meta { background: var(--surface-soft); color: var(--slate); }
+.cat-draghint { margin-left: auto; font-size: 11px; color: var(--stone); }
+
+/* 三个目录组件共用同一套顶置/拖拽规则（.cat-card / .vb-card / .ds-card） */
+.vb-card[draggable="true"], .ds-card[draggable="true"] { cursor: grab; }
+.vb-card[draggable="true"]:active, .ds-card[draggable="true"]:active { cursor: grabbing; }
+.vb-card.dragging, .ds-card.dragging { opacity: .5; }
+.vb-card.pinned, .ds-card.pinned { box-shadow: inset 3px 0 0 var(--brand-coral); }
+.cat-meta-mask { position: fixed; inset: 0; background: rgba(0,0,0,.42); display: flex; align-items: center; justify-content: center; z-index: 3000; }
+.cat-meta-box { width: min(470px, 92vw); max-height: 88vh; overflow: auto; background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px; padding: 14px 16px; box-shadow: 0 18px 50px rgba(0,0,0,.3); }
+.cat-meta-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.cat-meta-head b { flex: 1; font-size: 13px; color: var(--ink); }
+.cat-meta-raw { font-size: 11px; color: var(--stone); margin-bottom: 10px; word-break: break-all; }
+.cat-meta-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.cat-meta-row > span { width: 56px; flex: none; font-size: 12px; color: var(--slate); }
+.cat-meta-row .text-input { flex: 1; min-width: 0; padding: 5px 8px; font-size: 12px; }
+.cat-meta-foot { display: flex; gap: 6px; margin-top: 10px; }
+.cat-meta-hint { margin-top: 8px; font-size: 11px; color: var(--stone); line-height: 1.5; }
+/* DiffSinger 卡片上的「编辑」小按钮 */
+.ds-edit-btn { align-self: flex-start; margin-top: 2px; padding: 2px 8px; font-size: 10.5px; border-radius: 6px; border: 1px solid var(--hairline); background: var(--surface-soft); color: var(--slate); cursor: pointer; }
+.ds-edit-btn:hover { border-color: var(--border-strong); color: var(--ink); }

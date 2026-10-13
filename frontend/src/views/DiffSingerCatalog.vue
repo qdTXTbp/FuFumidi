@@ -12,7 +12,12 @@ import { useAppStore } from '../stores/app';
 import { useVoicebankStore } from '../stores/voicebank';
 import { useSingerStore } from '../stores/singer';
 import { useDiffsingerStore } from '../stores/diffsinger';
-import { t } from '../core/i18n.js';
+import { t } from '../core/i18n.js';
+import ItemMetaEditor from '../components/models/ItemMetaEditor.vue';
+// 用户元数据：名字/作者/标签/分类 + 顶置/排序（四页共用一张表，见 core/usermeta.js）
+import { loadUserMeta, orderList, displayName, authorOf, tagsOf, isPinned, togglePin, saveOrder } from '../core/usermeta.js';
+
+loadUserMeta();      // 进页面读一次用户改动（异步，不阻塞渲染）
 
 const app = useAppStore();
 const vbStore = useVoicebankStore();
@@ -24,7 +29,40 @@ const bridge = window.fuBridge;
 const loading = ref(false);
 const data = ref(null);
 const errMsg = ref('');
-const query = ref('');
+const query = ref('');
+/** DiffSinger 的条目没有 id 字段，用 path 兜底 name 当稳定键（:key 用的也是 path）。 */
+const dsId = (m) => String((m && (m.path || m.name)) || '');
+/** 套上用户排序（顶置优先 → order → 原顺序）。map 出的对象带 id，供元数据查询用。 */
+const dsOrdered = (models) => orderList('ds', (models || []).map((m) => Object.assign({}, m, { id: dsId(m) })));
+const editItem = ref(null);
+async function pin(m) { await togglePin('ds', dsId(m)); }
+
+/* ---------------- 拖拽排序 ----------------
+   过滤/搜索中禁止拖拽：那时列表只是全集的一个子集，写顺序会与没显示的条目交错，结果无法解释。 */
+const dragId = ref('');
+function dsHasFilter() { return !!query.value.trim() || workFilter.value !== 'all' || catFilter.value !== 'all'; }
+function flatDsIds() {
+  const out = [];
+  for (const w of filteredWorks.value) for (const c of w.categories) for (const m of c.models) out.push(dsId(m));
+  return out;
+}
+function dragStart(m, ev) {
+  dragId.value = dsId(m);
+  try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', dsId(m)); } catch (e) {}
+}
+function dragEnd() { dragId.value = ''; }
+async function dropOn(m) {
+  const from = dragId.value;
+  dragId.value = '';
+  const to = dsId(m);
+  if (!from || !to || from === to || dsHasFilter()) return;
+  const ids = flatDsIds();
+  const i = ids.indexOf(from);
+  const j = ids.indexOf(to);
+  if (i < 0 || j < 0) return;
+  ids.splice(j, 0, ids.splice(i, 1)[0]);
+  await saveOrder('ds', ids);
+}
 const workFilter = ref('all');
 const catFilter = ref('all');
 const stateFilter = ref('all');   // all | available | installed | placeholder
@@ -274,14 +312,18 @@ onActivated(() => { if (!loading.value) refresh(); });
           </div>
           <div class="ds-grid">
             <div
-              v-for="(m, mi) in c.models"
+              v-for="(m, mi) in dsOrdered(c.models)"
               :key="m.path"
               class="ds-card"
-              :class="{ ph: m.placeholder, inst: m.installed, down: isBusy(m.name) }"
+              :class="{ ph: m.placeholder, inst: m.installed, down: isBusy(m.name), pinned: isPinned('ds', m), dragging: dragId === dsId(m) }"
+              :draggable="!dsHasFilter()"
+              @dragstart="dragStart(m, $event)" @dragend="dragEnd" @dragover.prevent @drop.prevent="dropOn(m)"
               :style="{ '--i': mi }"
             >
               <div class="ds-card-top">
-                <span class="ds-name" :title="m.name">{{ m.name }}</span>
+                <span class="ds-name" :title="displayName('ds', m)">{{ displayName('ds', m) }}</span>
+                <button class="cat-pin" :class="{ on: isPinned('ds', m) }" @click.stop="pin(m)"
+                        :title="isPinned('ds', m) ? t('取消顶置') : t('顶置')">📌</button>
                 <span v-if="m.installed" class="ds-badge inst">{{ t('已安装') }}</span>
                 <span v-else-if="m.placeholder" class="ds-badge ph">{{ t('待发布') }}</span>
               </div>
@@ -289,7 +331,12 @@ onActivated(() => { if (!loading.value) refresh(); });
                 <span class="ds-tag">{{ m.work }}</span>
                 <span class="ds-tag">{{ m.category }}</span>
               </div>
-              <div class="ds-desc">{{ m.desc }}</div>
+              <div class="ds-desc">{{ m.desc }}</div>
+              <div class="ds-catline" v-if="authorOf('ds', m) || tagsOf('ds', m).length">
+                <span v-if="authorOf('ds', m)" class="ds-tag">{{ t('作者：') + authorOf('ds', m) }}</span>
+                <span v-for="tg in tagsOf('ds', m)" :key="tg" class="cat-tag meta">{{ tg }}</span>
+              </div>
+              <button class="ds-edit-btn" @click="editItem = m">{{ t('编辑') }}</button>
               <div class="ds-foot">
                 <span class="ds-size">{{ m.placeholder ? t('无权重') : human(m.size) }}</span>
                 <div class="ds-acts">
@@ -331,6 +378,7 @@ onActivated(() => { if (!loading.value) refresh(); });
       </div>
     </div>
   </div>
+  <ItemMetaEditor v-if="editItem" kind="ds" :item="editItem" :raw-name="editItem.name" @close="editItem = null" />
 </template>
 
 <style scoped>

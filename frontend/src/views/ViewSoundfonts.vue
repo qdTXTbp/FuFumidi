@@ -5,7 +5,8 @@ import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
 import { setActiveSoundfontRef } from '../audio.js';
-import { t } from '../core/i18n.js';
+import { t } from '../core/i18n.js';
+import { orderList, isPinned, togglePin, saveOrder } from '../core/usermeta.js';
 
 const app = useAppStore();
 const settings = useSettingsStore();
@@ -80,12 +81,35 @@ async function resetEdit(item) {
 
 /* ---------------- 我的音色搜索：名字 / 作者 / 标签 / 分类 一起搜 ---------------- */
 const sfQuery = ref('');
+/** 套上用户排序与顶置（与资源中心四页**同一张表、同一套规则**）。 */
+const customsOrdered = computed(() => orderList('sf', customs.value));
 const customsShown = computed(() => {
   const q = sfQuery.value.trim().toLowerCase();
-  if (!q) return customs.value;
-  return customs.value.filter((it) => [sfName(it), it.name, sfAuthor(it), sfCategory(it), sfTags(it).join(' '), it.desc || '']
+  if (!q) return customsOrdered.value;
+  return customsOrdered.value.filter((it) => [sfName(it), it.name, sfAuthor(it), sfCategory(it), sfTags(it).join(' '), it.desc || '']
     .join(' ').toLowerCase().indexOf(q) >= 0);
 });
+
+/* ---------------- 顶置 / 拖拽排序（导入的音色库） ---------------- */
+const sfDragId = ref('');
+async function sfPin(it) { await togglePin('sf', it.id); }
+function sfDragStart(it, ev) {
+  sfDragId.value = it.id;
+  try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', String(it.id)); } catch (e) {}
+}
+function sfDragEnd() { sfDragId.value = ''; }
+async function sfDropOn(it) {
+  const from = sfDragId.value;
+  sfDragId.value = '';
+  if (!from || !it || from === it.id) return;
+  if (sfQuery.value.trim()) return;      // 搜索中禁止拖拽：顺序会不可解释
+  const ids = customsOrdered.value.map((x) => x.id);
+  const i = ids.indexOf(from);
+  const j = ids.indexOf(it.id);
+  if (i < 0 || j < 0) return;
+  ids.splice(j, 0, ids.splice(i, 1)[0]);
+  await saveOrder('sf', ids);
+}
 
 function fmtSize(b) {
   if (!b) return '—';
@@ -418,9 +442,14 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
       <div v-if="!customs.length" class="sf-empty">{{ t('还没有自定义音色，点击「导入 .sf2 音色」添加本地音色文件。') }}</div>
       <div v-else-if="!customsShown.length" class="sf-empty">{{ t('没有匹配的音色') }}</div>
       <div v-else class="sf-grid">
-        <div v-for="item in customsShown" :key="item.id" class="sf-tile" :class="{ active: isActive(item) }">
+        <div v-for="item in customsShown" :key="item.id" class="sf-tile"
+             :class="{ active: isActive(item), pinned: isPinned('sf', item), dragging: sfDragId === item.id }"
+             :draggable="!sfQuery.trim()"
+             @dragstart="sfDragStart(item, $event)" @dragend="sfDragEnd" @dragover.prevent @drop.prevent="sfDropOn(item)">
           <div class="sf-tile-top">
             <div class="sf-tile-name">{{ sfName(item) }}</div>
+            <button class="cat-pin" :class="{ on: isPinned('sf', item) }" @click.stop="sfPin(item)"
+                    :title="isPinned('sf', item) ? t('取消顶置') : t('顶置')">📌</button>
             <span class="plg-tag on">{{ sfSourceLabel(item) }}</span>
           </div>
           <div class="sf-tile-desc">{{ item.desc }}</div>

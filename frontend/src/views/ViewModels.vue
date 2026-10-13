@@ -48,6 +48,10 @@ const showUtau = computed(() => curTab.value === 'tuning' && curSub.value === 'u
 const showGrid = computed(() => (curTab.value === 'tuning' ? !!SUB_KIND[curSub.value] : true));
 /** 「音色」「调教模型」两页用共享目录壳（与两个声库页同形），走 ModelCatalog 而不是通用网格 */
 const isTuningGrid = computed(() => curTab.value === 'tuning' && !!SUB_KIND[curSub.value]);
+/** 二级页 → 用户元数据的 kind（白名单见 main/usermeta.js 的 KINDS）。
+    注意不是 SUB_KIND：SUB_KIND 是 model:list 的 kind，这里是「用户改动的归属」。 */
+const META_KIND = { voices: 'voice', models: 'model' };
+const metaKind = computed(() => META_KIND[curSub.value] || 'model');
 
 /* ---------------- 模型列表与进度 ---------------- */
 const list = ref([]);
@@ -221,7 +225,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
     </div>
 
     <!-- 音色 / 调教模型：用与两个声库页**同一套**目录壳（来源条 → 搜索筛选 → 分组 → 卡片网格） -->
-    <ModelCatalog v-else-if="isTuningGrid" :items="tabbedList" :prog="prog" group-key="arch"
+    <ModelCatalog v-else-if="isTuningGrid" :items="tabbedList" :prog="prog" group-key="arch" :kind="metaKind"
                   :icon="listKind === 'tts' ? 'mic' : 'box'"
                   :title="listKind === 'tts' ? 'GPT-SoVITS 音色' : '调教模型'"
                   :note="listKind === 'tts'
