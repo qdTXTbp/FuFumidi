@@ -3206,6 +3206,13 @@ export const I18N_MAP = {
   "多条弯音曲线": "Multiple pitch bends",
   /* 通用声码器覆盖（DiffSinger）：声库未自带 dsvocoder 时生效 */
   "自动（用默认的那一个）": "Automatic (use the default one)",
+  "top-k": "top-k",
+  "top-p": "top-p",
+  "温度": "Temperature",
+  "恢复上游默认": "Restore upstream defaults",
+  "已恢复上游默认采样参数": "Restored the upstream default sampling settings",
+  "当前：完全用 GPT-SoVITS 自己的默认值（未覆盖任何一项）": "Current: using GPT-SoVITS's own defaults (nothing overridden)",
+  "当前覆盖：": "Overridden: ",
   "声库自带 dsvocoder 时这一项会被忽略（自带优先）": "Ignored when the voicebank bundles its own dsvocoder (bundled wins)",
   "同一音符可挂多条弯音（颤音 / 滑音），会落进导出的 MIDI。只对有滑音的人声 / 弦乐有用；钢琴、鼓这类只会多出大量无用事件": "Lets one note carry several pitch-bend curves (vibrato / portamento); these do land in the exported MIDI. Only useful for sliding material such as vocals or strings — for piano or drums it just adds a lot of noise.",
   "搜索名称 / 作者 / 标签 / 架构 / 用途": "Search name / author / tag / arch / use",

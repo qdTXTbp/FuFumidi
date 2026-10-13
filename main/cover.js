@@ -200,6 +200,11 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
       if (py) args.push('--gsv-python', String(py));
       if (o.version) args.push('--gsv-version', String(o.version));
       if (o.align === true) args.push('--gsv-align');   // 默认不做 WORLD 校正（见 docs/COVER.md）
+      // 采样三参数：**只在用户显式覆盖时才发**（不传 = 用 GPT-SoVITS 自己的默认值，
+      // 默认值在上游手里，见 engine/engine_gpt_sovits.py 的 _sampling_kwargs 说明）。
+      if (o.gsvTopK != null) args.push('--gsv-top-k', String(o.gsvTopK));
+      if (o.gsvTopP != null) args.push('--gsv-top-p', String(o.gsvTopP));
+      if (o.gsvTemperature != null) args.push('--gsv-temperature', String(o.gsvTemperature));
     } else {
       args.push('--voicebank', singer.path);
     }

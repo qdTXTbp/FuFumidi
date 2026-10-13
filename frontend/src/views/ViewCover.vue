@@ -25,6 +25,40 @@ const noResume = ref(false);
 const lyrics = ref('auto');
 const gsvRoot = ref('');
 const gsvPython = ref('');
+
+/* GPT-SoVITS 采样三参数（念白与翻唱共用）。
+ * ★ 默认值不是我们定的 —— 是**实地读自本机那份 runtime**：
+ *   `GPT_SoVITS/TTS_infer_pack/TTS.py:1142-1144` → top_k=15 / top_p=1 / temperature=1。
+ *   滑块范围也取上游 WebUI 自己的范围（`inference_webui.py:1414-1420`），不自己编。
+ * ★ 停在默认值上时**一个都不发** —— 于是"没动过"就等于完全用上游默认，
+ *   上游以后改了默认值我们的行为也跟着变；只有用户真拖了才覆盖。
+ *   （引擎侧同理：`_sampling_kwargs` 只取显式给了的。） */
+const GSV_SAMPLING_DEF = { topK: 15, topP: 1, temperature: 1 };
+const gsvTopK = ref(GSV_SAMPLING_DEF.topK);
+const gsvTopP = ref(GSV_SAMPLING_DEF.topP);
+const gsvTemperature = ref(GSV_SAMPLING_DEF.temperature);
+/** 只把**真的改过**的采样参数发给引擎（相等的就不发）。 */
+function gsvSamplingPayload() {
+  const o = {};
+  if (Number(gsvTopK.value) !== GSV_SAMPLING_DEF.topK) o.gsvTopK = Number(gsvTopK.value);
+  if (Number(gsvTopP.value) !== GSV_SAMPLING_DEF.topP) o.gsvTopP = Number(gsvTopP.value);
+  if (Number(gsvTemperature.value) !== GSV_SAMPLING_DEF.temperature) o.gsvTemperature = Number(gsvTemperature.value);
+  return o;
+}
+/** 当前到底是"用上游默认"还是"覆盖了哪几项" —— 写在界面上，别让用户猜。 */
+function gsvSamplingPayloadText() {
+  const o = gsvSamplingPayload();
+  const ks = Object.keys(o);
+  if (!ks.length) return t('当前：完全用 GPT-SoVITS 自己的默认值（未覆盖任何一项）');
+  return t('当前覆盖：') + ks.map((k) => k.replace('gsv', '').toLowerCase() + '=' + o[k]).join(' · ');
+}
+function resetGsvSampling() {
+  gsvTopK.value = GSV_SAMPLING_DEF.topK;
+  gsvTopP.value = GSV_SAMPLING_DEF.topP;
+  gsvTemperature.value = GSV_SAMPLING_DEF.temperature;
+  saveOpts();
+  toast(t('已恢复上游默认采样参数'), 'ok');
+}
 const env = ref(null);
 // 「音频处理」面板分离完可以直接过来：那边把音轨路径写进 localStorage，这里接手
 const preVocals = ref('');
@@ -92,6 +126,9 @@ async function load() {
     if (saved.clarityDb != null) clarityDb.value = saved.clarityDb;
     if (saved.gsvRoot) gsvRoot.value = saved.gsvRoot;
     if (saved.gsvPython) gsvPython.value = saved.gsvPython;
+    if (saved.gsvTopK != null) gsvTopK.value = Number(saved.gsvTopK);
+    if (saved.gsvTopP != null) gsvTopP.value = Number(saved.gsvTopP);
+    if (saved.gsvTemperature != null) gsvTemperature.value = Number(saved.gsvTemperature);
     if (saved.singerKind) singerKind.value = saved.singerKind;
   } catch (e) {}
 }
@@ -101,6 +138,7 @@ function saveOpts() {
     localStorage.setItem('fufumidi_cover_opts', JSON.stringify({
       outdir: outdir.value, device: device.value, clarityDb: clarityDb.value,
       gsvRoot: gsvRoot.value, gsvPython: gsvPython.value, singerKind: singerKind.value,
+      gsvTopK: gsvTopK.value, gsvTopP: gsvTopP.value, gsvTemperature: gsvTemperature.value,
     }));
   } catch (e) {}
 }
@@ -153,6 +191,7 @@ async function run() {
     lyrics: lyrics.value, noResume: noResume.value,
     vocals: preVocals.value || undefined, instrumental: preInst.value || undefined,
     gsvRoot: gsvRoot.value, gsvPython: gsvPython.value,
+    ...gsvSamplingPayload(),      // 只发改过的（相等就不发 = 用上游默认）
   };
   try {
     const r = await bridge.coverRun(payload);
@@ -257,6 +296,30 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
             <span class="cv-label">{{ t('解释器') }}</span>
             <input class="text-input" v-model="gsvPython" style="flex:1;min-width:220px" :placeholder="t('装好 torch 的 python.exe')" @change="saveOpts" />
             <button class="btn sm" @click="pickGsvPython"><Icon name="folder" :size="13" /> {{ t('选择') }}</button>
+          </div>
+          <!-- 采样参数：范围与默认值都取上游自己的（见 script 里的说明）。
+               停在默认值上 = 一个都不发 = 完全用上游默认。 -->
+          <div class="cv-row">
+            <span class="cv-label">{{ t('top-k') }}</span>
+            <input type="range" min="1" max="100" step="1" v-model.number="gsvTopK" style="flex:1" @change="saveOpts">
+            <b class="cv-val">{{ gsvTopK }}</b>
+          </div>
+          <div class="cv-row">
+            <span class="cv-label">{{ t('top-p') }}</span>
+            <input type="range" min="0" max="1" step="0.05" v-model.number="gsvTopP" style="flex:1" @change="saveOpts">
+            <b class="cv-val">{{ Number(gsvTopP).toFixed(2) }}</b>
+          </div>
+          <div class="cv-row">
+            <span class="cv-label">{{ t('温度') }}</span>
+            <input type="range" min="0" max="1" step="0.05" v-model.number="gsvTemperature" style="flex:1" @change="saveOpts">
+            <b class="cv-val">{{ Number(gsvTemperature).toFixed(2) }}</b>
+          </div>
+          <div class="cv-row">
+            <span class="cv-label"></span>
+            <span class="muted small" style="flex:1">
+              {{ gsvSamplingPayloadText() }}
+            </span>
+            <button class="btn sm ghost" @click="resetGsvSampling">{{ t('恢复上游默认') }}</button>
           </div>
           <div class="muted small" v-if="!gsvReady">
             {{ t('没找到 GPT-SoVITS 运行时：指向一份已有安装，或把路径写进 数据目录/gpt-sovits/runtime.json。') }}

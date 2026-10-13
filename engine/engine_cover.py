@@ -408,7 +408,8 @@ def gsv_lines(notes, lyrics, bpm, gap=0.7, min_sec=0.5):
 
 
 def do_gsv(notes, lyrics, voc, outdir, name, voice, bpm, device='auto', gsv_root='',
-           gsv_python='', version='', align=False, log=print):
+           gsv_python='', version='', align=False, log=print,
+           top_k=None, top_p=None, temperature=None):
     """用 GPT-SoVITS 音色唱（路线 A+：**逐句拿原唱当参考**重合成）。
 
     ★ 推理必须在**有 torch + GPT-SoVITS 的解释器**里跑（应用自带的 python 没有），
@@ -434,6 +435,11 @@ def do_gsv(notes, lyrics, voc, outdir, name, voice, bpm, device='auto', gsv_root
         cmd += ['--version', version]
     if align:
         cmd.append('--align')
+    # ★ 采样参数：**只在用户显式覆盖时才发**（默认不传 = 用 GPT-SoVITS 自己的默认值）。
+    #   这里少一跳就会出现「滑块拖了没反应」—— 本仓库同类坑已踩过三次。
+    for _flag, _val in (('--top-k', top_k), ('--top-p', top_p), ('--temperature', temperature)):
+        if _val is not None:
+            cmd += [_flag, str(_val)]
     env = dict(os.environ)
     # ★ GPT-SoVITS 解释器必须跑在**干净**的 Python 环境里：应用侧会把 PYTHONPATH 指向
     #   GPU 增强包的 site-packages（cp311），被 conda 环境继承后 numpy 的 C 扩展就加载失败
@@ -597,6 +603,10 @@ def main():
         s.add_argument('--gsv-align', dest='gsv_align', action='store_true',
                        help='GPT-SoVITS 通道做 WORLD F0 校正（默认关：它是电流声的主要来源）')
         s.set_defaults(gsv_align=False)
+        # 采样三参数：默认不传（不替上游定默认）。范围与上游 WebUI 一致。
+        s.add_argument('--gsv-top-k', dest='gsv_top_k', type=int, default=None)
+        s.add_argument('--gsv-top-p', dest='gsv_top_p', type=float, default=None)
+        s.add_argument('--gsv-temperature', dest='gsv_temperature', type=float, default=None)
     a = ap.parse_args()
     outdir = os.path.abspath(a.outdir)
     os.makedirs(outdir, exist_ok=True)
@@ -675,7 +685,9 @@ def main():
                 dry, gres = do_gsv(notes, lyr, voc, outdir, name, a.gsv_voice, bpm,
                                    device=a.device, gsv_root=a.gsv_root,
                                    gsv_python=a.gsv_python, version=a.gsv_version,
-                                   align=a.gsv_align)
+                                   align=a.gsv_align,
+                                   top_k=a.gsv_top_k, top_p=a.gsv_top_p,
+                                   temperature=a.gsv_temperature)
                 drys = [dry]
                 info.update({'singer': 'GPT-SoVITS/' + os.path.basename(a.gsv_voice),
                              'gsv_lines': gres.get('count'), 'gsv_reused': gres.get('reused'),
