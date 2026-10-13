@@ -23,6 +23,10 @@ const pmodel = ref('piano_pt');          // 钢琴子模型：piano_pt | aria | 
 const perf = ref('quality');             // quality | balanced | fast
 const perfHint = ref('');
 const bassBoost = ref(false);            // 低音增强（仅 basic 子模型）：关闭 melodia trick 以保留低音声部
+// 多条弯音曲线（仅 basic 子模型）：basic-pitch 唯一没转发的用户可见参数。
+// 开了以后同一音符可以挂多条弯音（颤音/滑音），**会真的落进导出的 MIDI**。
+// 默认关 —— 对钢琴/鼓这类素材它只会让 MIDI 多出大量无用事件。
+const pitchBends = ref(false);
 // 节拍网格检测（仅 MuScriptor）。★ 2026-10-14：**装了 beat_this 模型就默认开**
 // （用户要求）。仍然可以在界面上关掉 —— 手动改过之后不再被默认值覆盖。
 // 未下载 / 加载失败时引擎侧会自动跳过，不阻断转录。
@@ -863,6 +867,7 @@ function collectPresetParams() {
       min_freq: iv(minFreq.value), max_freq: iv(maxFreq.value),
       beat_grid: beatGrid.value,
     });
+    if (umodel.value === 'basic') p.multiple_pitch_bends = pitchBends.value;
     if (umodel.value === 'muscriptor') Object.assign(p, {
       model_size: msSize.value,
       muscriptor_instruments: msInstrValue.value,
@@ -925,6 +930,7 @@ function applyPresetParams(p, opts) {
   if (has('merge_overlap')) mergeOverlap.value = pr.merge_overlap !== false;
   if (has('vel_norm')) velNorm.value = pr.vel_norm !== false;
   if (has('beat_grid')) beatGrid.value = !!pr.beat_grid;
+  if (has('multiple_pitch_bends')) pitchBends.value = !!pr.multiple_pitch_bends;
   // 主旋律强化：新键 melodia，历史预设写 no_melodia（界面上的「低音增强」= 关掉 melodia）
   if (has('melodia')) bassBoost.value = pr.melodia === false;
   else if (has('no_melodia')) bassBoost.value = !!pr.no_melodia;
@@ -1140,6 +1146,7 @@ function collectParams() {
   // 默认值都保持原行为：不勾不改时发出去的请求与旧版一致。
   if (mode.value === 'universal') {
     if (exportTempo.value > 0) cfg.tempo = exportTempo.value;
+    if (umodel.value === 'basic' && pitchBends.value) cfg.multiple_pitch_bends = true;
     if (umodel.value === 'basic' && maxFreq.value > 0) cfg.max_freq = maxFreq.value;
     if (umodel.value === 'basic' && minFreq.value > 0) cfg.min_freq = minFreq.value;
     if (umodel.value === 'muscriptor') cfg.max_note_hold = maxHold.value;
@@ -1703,6 +1710,9 @@ onBeforeUnmount(() => {
           </div>
           <div class="tr-switch" v-if="mode === 'piano'">
             <label><span><b>{{ t('包含踏板事件') }}</b><small>{{ t('还原延音踏板') }}</small></span><input type="checkbox" v-model="pedal"></label>
+          </div>
+          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'basic'">
+            <label><span><b>{{ t('多条弯音曲线') }}</b><small>{{ t('同一音符可挂多条弯音（颤音 / 滑音），会落进导出的 MIDI。只对有滑音的人声 / 弦乐有用；钢琴、鼓这类只会多出大量无用事件') }}</small></span><input type="checkbox" v-model="pitchBends"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'basic'">
             <label><span><b>{{ t('低音增强') }}</b><small>{{ t('弱化主旋律强化，保留贝斯 / 低音声部（旋律密集时更不易丢低音）') }}</small></span><input type="checkbox" v-model="bassBoost"></label>

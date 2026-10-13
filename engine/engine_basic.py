@@ -28,6 +28,7 @@ def transcribe_basic(audio_path, output_midi,
                      minimum_frequency=None,
                      maximum_frequency=None,
                      melodia_trick=True,
+                     multiple_pitch_bends=False,
                      midi_tempo=120.0,
                      num_threads=None,
                      log_cb=None,
@@ -41,6 +42,11 @@ def transcribe_basic(audio_path, output_midi,
         minimum_frequency     最低音高 Hz；0 或 None 表示不限（默认 None）
         maximum_frequency     最高音高 Hz；0 或 None 表示不限（默认 None）
         melodia_trick         旋律增强（人声/主旋律更突出，默认 True）
+        multiple_pitch_bends  True = 同一音符可以挂**多条**弯音曲线（颤音 / 滑音）。
+                              basic-pitch 的默认是 False，我们过去没转发它 —— 所以一直按默认走。
+                              开了会**真的落进导出的 MIDI**（midi_post 不动 pitch_bends，
+                              播放端 fluidsynth 认弯音）。对唱腔 / 弦乐等有滑音的材料有用；
+                              对钢琴、鼓这类是纯噪声（会多出大量弯音事件）。
         midi_tempo            导出 MIDI 的节拍速度 BPM（默认 120）
         num_threads           onnxruntime 推理线程数（None=用全部核心）
 
@@ -79,6 +85,7 @@ def transcribe_basic(audio_path, output_midi,
             minimum_frequency=_none_or(minimum_frequency),
             maximum_frequency=_none_or(maximum_frequency),
             melodia_trick=bool(melodia_trick),
+            multiple_pitch_bends=bool(multiple_pitch_bends),
             midi_tempo=float(midi_tempo),
         )
         # 后处理：合并同音高碎片 / 力度归一化（可开关）

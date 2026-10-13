@@ -3203,6 +3203,8 @@ export const I18N_MAP = {
   "可拖拽排序 · 📌 顶置": "Drag to reorder · 📌 to pin",
   "清除筛选后可拖拽排序": "Clear the filters to drag and reorder",
   "排序只影响当前显示的条目": "Reordering only affects the items currently shown",
+  "多条弯音曲线": "Multiple pitch bends",
+  "同一音符可挂多条弯音（颤音 / 滑音），会落进导出的 MIDI。只对有滑音的人声 / 弦乐有用；钢琴、鼓这类只会多出大量无用事件": "Lets one note carry several pitch-bend curves (vibrato / portamento); these do land in the exported MIDI. Only useful for sliding material such as vocals or strings — for piano or drums it just adds a lot of noise.",
   "搜索名称 / 作者 / 标签 / 架构 / 用途": "Search name / author / tag / arch / use",
   "编辑条目信息": "Edit item info",
   "原始名称：": "Original name: ",

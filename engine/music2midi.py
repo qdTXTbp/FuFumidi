@@ -537,6 +537,9 @@ def cmd_worker():
                 minimum_frequency=req.get('min_freq'),
                 maximum_frequency=req.get('max_freq'),
                 no_melodia=bool(req.get('no_melodia')),
+                # 多条弯音（basic-pitch 唯一没转发的用户可见参数）：漏了这一项时
+                # 界面勾了也到不了引擎，basic-pitch 会一直按默认 False 跑。
+                multiple_pitch_bends=bool(req.get('multiple_pitch_bends')),
                 tempo=req.get('tempo'),
                 model=req.get('model'),
                 model_size=req.get('model_size'),
