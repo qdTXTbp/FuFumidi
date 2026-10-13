@@ -140,10 +140,34 @@ if (!checkOnly) {
   console.log('    ' + (spawnSync('"' + python + '" -m pip --version', { shell: true, encoding: 'utf8' }).stdout || '').trim());
 
   console.log('[3/5] 安装 engine/requirements-bundle.txt');
-  if (!pipAnywhere('-r "' + reqFile + '"')) {
-    console.error('[错误] requirements-bundle.txt 安装失败：所有镜像均不可用');
+  // ★ Python 3.12 上必须把 basic-pitch 拆出来单独装（实测踩到）：
+  //   basic-pitch 声明了 `tensorflow<2.15.1,>=2.4.1; python_version >= "3.11"`，
+  //   而 TensorFlow **从未为 3.12 发布过 2.15.x 轮子**（最早 2.16.0rc0）——
+  //   约束不可能满足，pip 于是报「所有镜像均不可用」，看起来像网络问题，其实是依赖冲突。
+  //   这也正是基础运行时必须停在 3.11 的原因。
+  //   而本脚本本来就要把 TensorFlow 卸掉（见下方 TF_STACK），说明它根本不该进来；
+  //   所以：主清单里剔掉 basic-pitch，再用 --no-deps 单独装它，
+  //   它真正需要的运行时依赖由主清单与下面的补充项提供。
+  const reqText = fs.readFileSync(reqFile, 'utf8');
+  const reqFiltered = reqText.split(/\r?\n/)
+    .filter(l => !/^\s*basic-pitch\b/i.test(l))
+    .join('\n');
+  const reqTmp = path.join(require('os').tmpdir(), 'fufumidi-req312.txt');
+  fs.writeFileSync(reqTmp, reqFiltered, 'utf8');
+  if (!pipAnywhere('-r "' + reqTmp + '"')) {
+    console.error('[错误] requirements-bundle.txt 安装失败（已剔除 basic-pitch）：所有镜像均不可用');
     process.exit(1);
   }
+  console.log('    单独安装 basic-pitch（--no-deps，绕开 tensorflow<2.15.1 在 3.12 上无解）');
+  if (!pipAnywhere('--no-deps basic-pitch>=0.4.0')) {
+    console.error('[错误] basic-pitch 安装失败');
+    process.exit(1);
+  }
+  // basic-pitch 真正需要的、主清单没覆盖的运行时依赖（--no-deps 装它就得自己补）
+  // ★ resampy 是 basic-pitch 的依赖，--no-deps 装它就必须自己补上 ——
+  //   漏了它，自检会报 `universal FAIL missing: resampy`，脚本据此拒绝写就绪标记，
+  //   整个 3.12 运行时白装（实测第一轮就漏了这一个）。
+  pipAnywhere('scikit-learn>=1.0 typing-extensions>=4.0 mir-eval>=0.6 resampy>=0.4');
   // 与 3.11 运行时一致：basic-pitch 会拖来整套 TensorFlow，装完立刻卸掉
   for (const p of TF_STACK) tryRun('"' + python + '" -m pip uninstall -y -q ' + p);
   if (spawnSync('"' + python + '" -c "import tensorflow"', { shell: true }).status === 0) {
