@@ -224,13 +224,12 @@ def cmd_convert(args):
 
         note_count = transcribe(src, out, mode=mode, params=params, log_cb=log,
                                 perf_mode=args.perf)
+        # ★ WP2-2（2026-10-14）：这里原先读 `engine_separate.last_stem_exports` 给
+        #   `stems` 赋值，但那段**不可达** —— `mode == "separate"` 在 engine.py 的
+        #   分发里直接 raise（音频分离已改走 `separate` 子命令 → engine_msst），
+        #   所以 `transcribe()` 先抛错，后面的代码永远执行不到。
+        #   随之 `engine/engine_separate.py`（demucs 版分离）成为纯死代码，已删除。
         stems = []
-        if mode == "separate" and params.get("export_stems"):
-            try:
-                import engine_separate
-                stems = list(getattr(engine_separate, "last_stem_exports", []) or [])
-            except Exception:
-                pass
     except Exception as e:
         print(f"[错误] 转录失败: {e}")
         return 1

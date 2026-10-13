@@ -5,8 +5,8 @@
 
 ## 为什么存在
 
-引擎由多个模块组成，其中 `engine_pt.py`、`engine_basic.py`、`engine_separate.py`
-等会依赖 torch / basic-pitch / demucs 等重型库。这些库在离线或未安装的机器上
+引擎由多个模块组成，其中 `engine_pt.py`、`engine_basic.py`、`engine_msst.py`
+等会依赖 torch / basic-pitch / pymss 等重型库。这些库在离线或未安装的机器上
 无法导入，也会拖慢测试。因此本测试套件**刻意只覆盖**：
 
 - `presets.py` —— 预设的加载 / 保存 / 删除 / 结构

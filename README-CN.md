@@ -87,7 +87,7 @@ FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编�
 引擎层被拆分为一组独立 Python 模块，方便单独替换某个 transcriber 而不改动 UI：
 
 - `engine/engine.py` - 引擎入口与分发。
-- `engine/engine_basic.py`、`engine/engine_muscriptor.py`、`engine/engine_aria.py`、`engine/engine_pt.py`、`engine/engine_transkun.py`、`engine/engine_separate.py` - 各模型推理实现。
+- `engine/engine_basic.py`、`engine/engine_muscriptor.py`、`engine/engine_aria.py`、`engine/engine_pt.py`、`engine/engine_transkun.py` - 各模型推理实现；`engine/engine_msst.py` - MSST 音源分离。
 - `engine/engine_gpu.py` - CUDA / DirectML 选择与回退。
 - `engine/smart_midi.py` - 转录后修正与智能清理。
 - `engine/midi_post.py`、`engine/midi_edit.py` - 编辑器与插件共用的 MIDI 工具。

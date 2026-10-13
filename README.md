@@ -86,7 +86,7 @@ Advanced options exposed by the view include onset/frame thresholds, minimum not
 The engine layer is spread across a small family of Python modules so a specific transcriber can be swapped without touching the UI:
 
 - `engine/engine.py` - front door and dispatch.
-- `engine/engine_basic.py`, `engine/engine_muscriptor.py`, `engine/engine_aria.py`, `engine/engine_pt.py`, `engine/engine_transkun.py`, `engine/engine_separate.py` - per-model inference.
+- `engine/engine_basic.py`, `engine/engine_muscriptor.py`, `engine/engine_aria.py`, `engine/engine_pt.py`, `engine/engine_transkun.py` - per-model inference; `engine/engine_msst.py` - MSST source separation.
 - `engine/engine_gpu.py` - CUDA / DirectML selection and fallback.
 - `engine/smart_midi.py` - post-transcription correction and smart cleanup.
 - `engine/midi_post.py`, `engine/midi_edit.py` - shared MIDI utilities used by the editor and by plugins.
