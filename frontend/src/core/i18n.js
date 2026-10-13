@@ -3202,6 +3202,7 @@ export const I18N_MAP = {
   "取消顶置": "Unpin",
   "可拖拽排序 · 📌 顶置": "Drag to reorder · 📌 to pin",
   "清除筛选后可拖拽排序": "Clear the filters to drag and reorder",
+  "排序只影响当前显示的条目": "Reordering only affects the items currently shown",
   "搜索名称 / 作者 / 标签 / 架构 / 用途": "Search name / author / tag / arch / use",
   "编辑条目信息": "Edit item info",
   "原始名称：": "Original name: ",

@@ -5,8 +5,8 @@ import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
 import { setActiveSoundfontRef } from '../audio.js';
-import { t } from '../core/i18n.js';
-import { orderList, isPinned, togglePin, saveOrder } from '../core/usermeta.js';
+import { t } from '../core/i18n.js';
+import { orderList, isPinned, togglePin, saveOrder, mergeSubsetOrder } from '../core/usermeta.js';
 
 const app = useAppStore();
 const settings = useSettingsStore();
@@ -102,13 +102,14 @@ async function sfDropOn(it) {
   const from = sfDragId.value;
   sfDragId.value = '';
   if (!from || !it || from === it.id) return;
-  if (sfQuery.value.trim()) return;      // 搜索中禁止拖拽：顺序会不可解释
-  const ids = customsOrdered.value.map((x) => x.id);
-  const i = ids.indexOf(from);
-  const j = ids.indexOf(it.id);
+  // ★ 搜索时不禁用拖拽：只把**可见项**的新顺序回填到全量顺序里它们占据的位置上
+  const all = customsOrdered.value.map((x) => x.id);
+  const vis = customsShown.value.map((x) => x.id);
+  const i = vis.indexOf(from);
+  const j = vis.indexOf(it.id);
   if (i < 0 || j < 0) return;
-  ids.splice(j, 0, ids.splice(i, 1)[0]);
-  await saveOrder('sf', ids);
+  vis.splice(j, 0, vis.splice(i, 1)[0]);
+  await saveOrder('sf', mergeSubsetOrder(all, vis));
 }
 
 function fmtSize(b) {
@@ -444,7 +445,7 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
       <div v-else class="sf-grid">
         <div v-for="item in customsShown" :key="item.id" class="sf-tile"
              :class="{ active: isActive(item), pinned: isPinned('sf', item), dragging: sfDragId === item.id }"
-             :draggable="!sfQuery.trim()"
+             draggable="true"
              @dragstart="sfDragStart(item, $event)" @dragend="sfDragEnd" @dragover.prevent @drop.prevent="sfDropOn(item)">
           <div class="sf-tile-top">
             <div class="sf-tile-name">{{ sfName(item) }}</div>

@@ -5,13 +5,13 @@
 import { ref, computed, onMounted, onActivated, onBeforeUnmount } from 'vue';
 import Icon from '../Icon.vue';
 import { useSingerStore } from '../../stores/singer';
-import { t } from '../../core/i18n.js';
-import ItemMetaEditor from '../models/ItemMetaEditor.vue';
-// 用户元数据：名字/作者/标签/分类 + 排序/顶置（四页共用一张表，见 core/usermeta.js）
-import {
-  loadUserMeta, orderList, displayName, authorOf, tagsOf, isPinned, togglePin, saveOrder, searchHay,
-} from '../../core/usermeta.js';
-
+import { t } from '../../core/i18n.js';
+import ItemMetaEditor from '../models/ItemMetaEditor.vue';
+// 用户元数据：名字/作者/标签/分类 + 排序/顶置（四页共用一张表，见 core/usermeta.js）
+import {
+  loadUserMeta, orderList, displayName, authorOf, tagsOf, isPinned, togglePin, saveOrder, searchHay, mergeSubsetOrder,
+} from '../../core/usermeta.js';
+
 loadUserMeta();      // 进页面读一次用户改动（异步，不阻塞渲染）
 
 const emit = defineEmits(['installed']);
@@ -195,38 +195,39 @@ function hit(it) {
   if (langFilter.value !== 'all' && splitLang(it).lang !== langFilter.value) return false;
   const q = query.value.trim().toLowerCase();
   if (!q) return true;
-  // 名字 / 作者 / 标签 / 分类 + 原始字段一起搜（导入项靠标签才找得到）
+  // 名字 / 作者 / 标签 / 分类 + 原始字段一起搜（导入项靠标签才找得到）
   return searchHay('utau', it, [it.lang, it.desc].map(v => String(t(v || ''))).join(' ')).includes(q);
 }
-/** 先把用户排序与顶置套上再过滤 —— 顺序才与看到的卡片一致。 */
-const ordered = computed(() => orderList('utau', list.value));
+/** 先把用户排序与顶置套上再过滤 —— 顺序才与看到的卡片一致。 */
+const ordered = computed(() => orderList('utau', list.value));
 const shown = computed(() => ordered.value.filter(hit));
 const shownCount = computed(() => shown.value.length);
 const hasFilter = computed(() => !!query.value.trim() || langFilter.value !== 'all' || stateFilter.value !== 'all');
-function resetFilters() { query.value = ''; langFilter.value = 'all'; stateFilter.value = 'all'; }
-
-/* ---------------- 顶置 / 拖拽排序 / 编辑条目信息（用户要求：四页一致） ---------------- */
-const dragId = ref('');
-const editItem = ref(null);
-function dragStart(it, ev) {
-  dragId.value = it.id;
-  try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', String(it.id)); } catch (e) {}
-}
-function dragEnd() { dragId.value = ''; }
-async function dropOn(it) {
-  const from = dragId.value;
-  dragId.value = '';
-  if (!from || !it || from === it.id) return;
-  // 过滤/搜索中禁止拖拽：那时列表只是子集，写顺序会与没显示的条目交错，结果无法解释
-  if (hasFilter.value) return;
-  const ids = ordered.value.map((x) => x.id);
-  const i = ids.indexOf(from);
-  const j = ids.indexOf(it.id);
-  if (i < 0 || j < 0) return;
-  ids.splice(j, 0, ids.splice(i, 1)[0]);
-  await saveOrder('utau', ids);
-}
-async function pin(it) { await togglePin('utau', it.id); }
+function resetFilters() { query.value = ''; langFilter.value = 'all'; stateFilter.value = 'all'; }
+
+/* ---------------- 顶置 / 拖拽排序 / 编辑条目信息（用户要求：四页一致） ---------------- */
+const dragId = ref('');
+const editItem = ref(null);
+function dragStart(it, ev) {
+  dragId.value = it.id;
+  try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', String(it.id)); } catch (e) {}
+}
+function dragEnd() { dragId.value = ''; }
+async function dropOn(it) {
+  const from = dragId.value;
+  dragId.value = '';
+  if (!from || !it || from === it.id) return;
+  // ★ 分类/搜索不禁用拖拽：只把**可见项**的新顺序回填到全量顺序里它们占据的位置上，
+  //   没显示的条目一个都不动（旧版直接禁用，导致分类视图里排不了序）。
+  const all = ordered.value.map((x) => x.id);
+  const vis = shown.value.map((x) => x.id);
+  const i = vis.indexOf(from);
+  const j = vis.indexOf(it.id);
+  if (i < 0 || j < 0) return;
+  vis.splice(j, 0, vis.splice(i, 1)[0]);
+  await saveOrder('utau', mergeSubsetOrder(all, vis));
+}
+async function pin(it) { await togglePin('utau', it.id); }
 // 本组件没有 toast（它用行内状态文字），保存成功后 usermeta.js 已自行刷新表，这里只需关闭
 function onEditClose() { editItem.value = null; }
 const langs = computed(() => {
@@ -317,9 +318,9 @@ function sizeMb(v) { return v ? (v / 1048576).toFixed(1) + ' MB' : ''; }
               <span class="vb-cat-cnt">{{ f.items.length }}</span>
             </div>
             <div class="vb-grid">
-              <div v-for="it in f.items" :key="it.id" class="vb-card"
-                     :class="{ inst: it.installed, down: busyId === it.id, pinned: isPinned('utau', it), dragging: dragId === it.id }"
-                     :draggable="!hasFilter"
+              <div v-for="it in f.items" :key="it.id" class="vb-card"
+                     :class="{ inst: it.installed, down: busyId === it.id, pinned: isPinned('utau', it), dragging: dragId === it.id }"
+                     draggable="true"
                      @dragstart="dragStart(it, $event)" @dragend="dragEnd" @dragover.prevent @drop.prevent="dropOn(it)">
                 <div class="vb-card-top">
                   <span class="vb-name" :title="displayName('utau', it)">{{ t(displayName('utau', it)) }}</span>
@@ -389,7 +390,7 @@ function sizeMb(v) { return v ? (v / 1048576).toFixed(1) + ' MB' : ''; }
       </div>
     </template>
   </div>
-  <ItemMetaEditor v-if="editItem" kind="utau" :item="editItem" :raw-name="editItem.name" @close="onEditClose" />
+  <ItemMetaEditor v-if="editItem" kind="utau" :item="editItem" :raw-name="editItem.name" @close="onEditClose" />
 </template>
 
 <style scoped>

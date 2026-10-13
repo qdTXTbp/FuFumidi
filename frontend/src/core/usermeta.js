@@ -108,6 +108,29 @@ export async function clearMeta(kind, id) {
   return true;
 }
 
+/** 把「可见子集的新顺序」回填到「全量顺序」里它们占据的那些位置上。
+ *
+ *  ★ 为什么必须有这一步：分类/搜索时列表只是全集的一个子集。如果直接把子集的顺序整体写下去，
+ *    没显示出来的条目还留着旧的 order，两边就会交错。
+ *    第一版的做法是"过滤时干脆禁止拖拽"（draggable=false）—— 结果用户在「原神」这样的
+ *    分类里根本排不了序（实测反馈）。
+ *    正确语义是：**可见条目占据的那些位置不动，只把它们的内部顺序换成刚拖出来的样子**；
+ *    没显示的条目一个都不动。这样筛选状态下拖动既有确定语义，又不会打乱别处。
+ *
+ *  例：全量 [A,B,C,D,E]，可见 [A,C,E]；把 E 拖到最前 → 可见 [E,A,C]
+ *      → 回填后 [E,B,A,D,C]。可见项的显示顺序正是 [E,A,C]，而 B/D 原地不动。
+ *
+ *  ⚠ 跨分组的拖动在**分组视图**里可能看不出变化（例如把 A 组的条目拖到 B 组的条目旁）：
+ *    条目归哪一组由数据决定、不由顺序决定。顺序本身是写对了的。
+ */
+export function mergeSubsetOrder(allIds, subsetOrderedIds) {
+  const inSubset = new Set(subsetOrderedIds);
+  const out = [];
+  let k = 0;
+  for (const id of (allIds || [])) out.push(inSubset.has(id) ? subsetOrderedIds[k++] : id);
+  return out;
+}
+
 /** 保存某个 kind 的展示顺序（传**完整**列表的 id，顺序即展示顺序）。 */
 export async function saveOrder(kind, ids) {
   const b = bridge();
