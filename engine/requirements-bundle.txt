@@ -3,7 +3,9 @@
 # 与 requirements.txt 的区别：
 #   - 不含 PySide6 / gui（那是原 AudioMuse 桌面界面的依赖；Electron 只调用
 #     music2midi.py 的 convert / refine / probe 命令行，永远不走 run_gui()）
-#   - 明确收录人声分离 demucs（“人声分离”模式必需，原版默认不装）
+#   - 分离走 MSST（pymss，见下方）——**不需要 demucs**。原 demucs 链路
+#     （engine_separate.py）已废弃：engine.py 对 mode=="separate" 直接抛错并引导到
+#     「音频处理」面板，music2midi.py 的 separate 子命令由 engine_msst 接管。
 #   - 含 onnxruntime（basic-pitch 通用模型的推理后端，DirectML/CUDA GPU 加速）
 #
 # 由 scripts/bundle-python.js 安装到 app/python/ 内建的独立运行时中，

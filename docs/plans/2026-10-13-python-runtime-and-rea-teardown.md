@@ -252,7 +252,7 @@ T4/T5 是「上游有什么值得我们抄」，源码视角也能查一部分�
 **根因**：全仓 `scripts/*.js` **没有任何一行**提到 `fufumidi.1` 或 `muscriptor-runtime` ——
 3.11 里那个补丁包是**手工装的**，构建管线从来不知道它的存在，所以 3.12 自然装不到。
 
-### 缺陷 B · `requirements-bundle.txt` 的注释与正文自相矛盾 → 3.12 缺 demucs
+### 缺陷 B（已降级为文档问题）· `requirements-bundle.txt` 有一条**过期注释**
 
 - 第 6 行注释：「明确收录人声分离 **demucs**（"人声分离"模式必需，原版默认不装）」
 - 正文包列表：**没有 demucs**（只有 `pymss==2.0.1` 那套 MSST）
@@ -263,7 +263,7 @@ T4/T5 是「上游有什么值得我们抄」，源码视角也能查一部分�
 
 **实测**：3.11 有 demucs（手工残留），3.12 **没有** → 3.12 的 demucs 人声分离路径不可用。
 
-### 缺陷 C · `deps.py` 的 `separate` 组**检查的是另一个引擎**
+### ~~缺陷 C~~ · **误判，已撤回** —— `deps.py` 检查 MSST 是**对的**（更正见本节末）
 
 ```python
 "separate": ["pymss", "pydub", "beartype", "ml_collections", "omegaconf", "einops"],
@@ -294,7 +294,28 @@ scikit-learn 1.9.1 / typing-extensions 4.16.0 / mir-eval 0.8.2 / resampy 0.4.3 /
 **正确修法**：`pipAnywhere` 改成传 **argv 数组 + `shell: false`**，而不是拼字符串走 shell。
 注意 `-r requirements-bundle.txt` 那条路**不受影响**（约束在文件里，不过 shell）。
 
-### ★ 三个缺陷是同一类：**只验「在不在」，不验「是不是对的那个」**
+### ★★ 更正（2026-10-13，查证后）· 缺陷 C **撤回**，缺陷 B 降级
+
+上面 B/C 两段的判读**有一处是错的**，据实更正：
+
+- **C 撤回**：我说 `deps.py:37` 的 `separate` 组「检查的是另一个引擎」。查调用链后否掉了 ——
+  `engine.py:246-252` 对 `mode == "separate"` **直接 `raise RuntimeError`**
+  （「音频处理（MSST 分离）已不再生成 MIDI。请使用新的「音频处理」面板输出分离音轨」），
+  `music2midi.py:330` 的 `separate` 子命令由 **`engine_msst.separate(...)`** 接管，
+  `engine.py:94-95` 的可用性判定也是 `engine_msst.available()`。
+  → **MSST 才是分离引擎，demucs 链路已废弃。`deps.py` 检查 MSST 完全正确，无需改动。**
+  `music2midi.py:228-233` 读 `engine_separate.last_stem_exports` 那段在 `mode == "separate"` 分支里，
+  而该分支在 `transcribe()` 就抛错了 → **不可达**（`engine_separate.py` 是死代码）。
+- **B 降级**：正文没漏包，是**第 6 行注释写错了**。已改成与正文一致。
+  3.12 缺 demucs **不是缺陷**，3.11 里那个 demucs 只是历史残留。
+
+**★ 教训**：我是**先下结论、后查路由**。`deps.py` 的表看起来「查错了引擎」，
+但引擎归属要看**调用点**，不是看文件在不在。§4.1 的教训是「文件集差集只能生成假设」，
+这次是同一句话的另一面：**静态清单读起来合理，判断仍要回到调用链。**
+**「代理指标」不能当结论用 —— 这次是靠回到调用链才没有把一条正确的检查改坏。**
+
+**因此 §5 的收尾清单里，#4 只剩改注释（已做）、#5 取消（不是缺陷）。**
+### ★ 缺陷 A 与阶段 0 的 asar 完整性是同一类：**只验「在不在」，不验「是不是对的那个」**
 
 - 缺陷 A：`muscriptor` 在 → ok（但版本错）
 - 缺陷 C：`separate` 的包在 → ok（但查错了引擎）

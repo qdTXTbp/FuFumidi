@@ -152,6 +152,24 @@ def _find(name):
     return _status(name) == "ok"
 
 
+# ★ 身份校验（2026-10-13 加）：muscriptor 的「僵尸音符」修复是**上游级补丁**，
+#   而 PyPI 上只有裸 0.3.0。只做 import 探测会把裸版判成 ok —— 3.12 运行时
+#   因此静默少了这个修复（跨块 tie 段等不到 note-off，音符越滚越长）。
+#   所以这里查的是**补丁在不在**，不是包在不在。
+#   判据用补丁引入的符号而不是文件哈希：用户自己重装/升级后哈希会变，
+#   但只要补丁语义还在就不该报错；反过来裸版一定没有这个符号。
+MUSCRIPTOR_PATCH_MARKER = "DEFAULT_MAX_NOTE_HOLD_SEC"
+
+
+def _muscriptor_patch_missing():
+    """返回 True 表示 muscriptor 装了，但**没有** FuFumidi 补丁。"""
+    try:
+        import muscriptor.events as ev
+    except Exception:
+        return False        # 缺失/损坏已由 _status 报出，不重复报
+    return not hasattr(ev, MUSCRIPTOR_PATCH_MARKER)
+
+
 def _emit(obj):
     print("###RESULT " + json.dumps(obj, ensure_ascii=False), flush=True)
 
@@ -166,10 +184,15 @@ def check():
                 missing.append(p)
             elif st == "broken":
                 broken.append(p)
+        # 身份校验：包在 ≠ 是对的那个构建（muscriptor 的补丁版 vs 裸上游版）
+        wrong_build = []
+        if group == "muscriptor" and not missing and not broken:
+            if _muscriptor_patch_missing():
+                wrong_build.append("muscriptor(缺 FuFumidi 补丁: " + MUSCRIPTOR_PATCH_MARKER + ")")
         result["groups"][group] = {
-            "ok": not missing and not broken,
+            "ok": not missing and not broken and not wrong_build,
             "missing": missing,
-            "broken": broken,   # 已安装但导入失败（如半损坏的 numpy）
+            "broken": broken + wrong_build,   # 已安装但导入失败 / 或装错了构建
         }
     _emit(result)
     return 0
