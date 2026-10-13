@@ -1472,6 +1472,13 @@ export const I18N_MAP = {
   '最低音高': 'Lowest pitch',
   // WP1-5：高级参数区分组。用户指定按「质量组 / 速度组」分（此前按作用域分的那版作废）。
   '质量组（影响识别与导出结果）': 'Quality (affects detection & export)',
+  // 调教页：本地导入（声库 / 音色）
+  '导入本地音色目录': 'Import a local voice folder',
+  '从网盘 / 社区下载的音色包解压后可直接导入：目录里要有 .ckpt 与 .pth（参考音可选），不需要有直链': 'Unzip a voice pack from a netdisk / community and import it directly: the folder needs .ckpt and .pth (a reference clip is optional). No direct link required.',
+  '已导入音色：': 'Voice imported: ',
+  '导入本地 zip': 'Import local zip',
+  '请在桌面版导入声库。': 'Importing voicebanks requires the desktop app.',
+  '导入从 BOOTH / BowlRoll / 网盘下载的声库 zip；压平后的目录放进去也能被扫到': 'Import a voicebank zip downloaded from BOOTH / BowlRoll / a netdisk. An already-unzipped folder dropped into the voicebank directory is also picked up.',
   // UTAU 声库页（UI 模板对齐 DiffSinger 页）
   '按需从作者或上游项目公开托管的仓库拉取，使用条款随条目展示、由使用者自行遵守；装好后可直接在「调教」里选用。': 'Fetched on demand from repositories hosted publicly by the authors or upstream projects. Terms of use are shown on each entry and are the user\'s responsibility; once installed you can pick it under "Tuning".',
   '搜索声库 / 作者 / 语言': 'Search voicebank / author / language',

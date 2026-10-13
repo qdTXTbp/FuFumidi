@@ -651,6 +651,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
       ref: 'master',
       subdir: '',
       officialUrl: 'https://github.com/ciwomuli/chen_zhe_voice',
+    },
     {
       id: 'milk',
       dirName: 'Milk_JA',
@@ -663,7 +664,6 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
       ref: 'main',
       subdir: '',
       officialUrl: 'https://github.com/oxygen-dioxide/milk-ja',
-    },
     },
   ];
 

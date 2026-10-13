@@ -343,6 +343,40 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     }
     return items;
   });
+  // 本地导入 GPT-SoVITS 音色：社区音色绝大多数**没有稳定直链**（见 main/gpt-sovits.js 的 EXTERNAL），
+  // 本地导入才是它们的主入口。拷进 <模型目录>/gpt-sovits/voices/<目录名>/，与一键下载两条路并存。
+  ipcMain.handle('model:importGsvVoice', async (_e, directPath) => {
+    try {
+      const { dialog } = require('electron');
+      let src = directPath;
+      if (!src || !fs.existsSync(src)) {
+        const r = await dialog.showOpenDialog({
+          properties: ['openDirectory'],
+          title: '选择 GPT-SoVITS 音色目录（需含 gpt.ckpt 与 sovits.pth）',
+        });
+        if (r.canceled || !r.filePaths || !r.filePaths.length) return { ok: false, canceled: true };
+        src = r.filePaths[0];
+      }
+      if (!fs.statSync(src).isDirectory()) return { ok: false, error: '请选择一个目录（音色包先解压）' };
+      const files = fs.readdirSync(src);
+      const hasCkpt = files.some((f) => /\.ckpt$/i.test(f));
+      const hasPth = files.some((f) => /\.pth$/i.test(f));
+      if (!hasCkpt || !hasPth) {
+        return { ok: false, error: '这个目录里没有同时找到 .ckpt 与 .pth —— 音色包至少要有这两样（参考音可选）' };
+      }
+      const name = path.basename(src).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_') || ('voice_' + Date.now());
+      const destDir = path.join(modelsDir(), 'gpt-sovits', 'voices', name);
+      if (fs.existsSync(destDir)) return { ok: false, error: '已存在同名音色：' + name };
+      fs.mkdirSync(destDir, { recursive: true });
+      let n = 0;
+      for (const f of files) {
+        const s = path.join(src, f);
+        try { if (fs.statSync(s).isFile()) { fs.copyFileSync(s, path.join(destDir, f)); n++; } } catch (e) {}
+      }
+      return { ok: true, name, dir: destDir, files: n };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
+
   ipcMain.handle('model:cancel', async (_e, id) => {
     if (id) { _modelCancels.add(id); try { const c = _modelAborts.get(id); if (c) c.abort(); } catch (e) {} }
     return { ok: true };

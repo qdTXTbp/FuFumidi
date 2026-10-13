@@ -816,6 +816,8 @@ export interface FuBridge {
   utauFlags(): Promise<{ ok: boolean; engine_version?: string; supported?: { flag: string; default: number | null; min: number | null; max: number | null; desc: string }[]; unsupported?: { flag: string; desc: string }[]; example?: string; error?: string }>;
   utauListVoicebanks(): Promise<{ ok: boolean; list?: { name: string; dir: string }[]; error?: string }>;
   utauImportVoicebankZip(): Promise<{ ok: boolean; canceled?: boolean; name?: string; dir?: string; error?: string }>;
+  /** 本地导入 GPT-SoVITS 音色目录（社区音色多无直链，这是它们的主入口） */
+  modelImportGsvVoice(directPath?: string): Promise<{ ok: boolean; canceled?: boolean; name?: string; dir?: string; files?: number; error?: string }>;
   /** 声库资源中心：可一键安装的开源/免费声库条目 */
   utauVoicebankRegistry(): Promise<{ ok: boolean; dir?: string; list?: VoicebankEntry[]; error?: string }>;
   utauDownloadVoicebank(id: string): Promise<{ ok: boolean; canceled?: boolean; existed?: boolean; name?: string; dir?: string; files?: number; size?: number; error?: string }>;

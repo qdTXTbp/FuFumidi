@@ -143,9 +143,89 @@ onActivated(load);
 onBeforeUnmount(() => { if (offProgress) { try { offProgress(); } catch (e) {} offProgress = null; } });
 /* ---------------- 搜索 / 筛选 / 分组 ----------------
  * ★ UI 模板与 DiffSingerCatalog.vue **一一对应**（用户要求两个声库页统一）：
+ *   ds-src ↔ vb-src · ds-bar ↔ vb-bar · ds-works ↔ vb-works · ds-groups ↔ vb-groups
+ *   ds-work ↔ vb-work · ds-cat-block ↔ vb-cat-block · ds-grid ↔ vb-grid · ds-card ↔ vb-card
+ *   改视觉时**两边一起改**，否则两个声库页会越差越远。
+ */
+const external = ref([]);      // 渠道索引（多数免费声库不在 GitHub，见 main/utau.js 的 VB_EXTERNAL）
+const query = ref('');
+const langFilter = ref('all');
+const stateFilter = ref('all');
+
+/** 本地导入现成声库 zip。
+ *  ★ 主进程的 utau:importVoicebankZip **一直都在**，只是界面从来没入口 ——
+ *    见 scripts/audit-bridge-contract.cjs 里那条 TODO。免费声库绝大多数在 BOOTH /
+ *    BowlRoll / 网盘，没有直链，所以这条本地通路是必需的，不是补充。 */
+async function importZip() {
+  if (!isDesktop) { err.value = t('请在桌面版导入声库。'); return; }
+  err.value = ''; msg.value = '';
+  try {
+    const r = await bridge.utauImportVoicebankZip();
+    if (!r || r.canceled) return;
+    if (!r.ok) { err.value = t('导入失败：') + ((r && r.error) || 'unknown'); return; }
+    await load();
+    await syncStore(r.dir || '');
+    msg.value = t('已导入声库：') + (r.name || '');
+    emit('installed', r.dir || '');
+  } catch (e) { err.value = String((e && e.message) || e); }
+}
+
+function openUrl(u) {
+  if (!u) return;
+  try { if (bridge && bridge.openExternal) bridge.openExternal(u); else window.open(u, '_blank'); } catch (e) {}
+}
+
+/** 把 it.lang 的「日本語 · 単独音（CV）」拆成 语言 + 形式 —— 分组按这两级 */
+function splitLang(it) {
+  const s = String((it && it.lang) || '');
+  const i = s.indexOf('·');
+  if (i < 0) return { lang: s || '其它', form: '' };
+  return { lang: s.slice(0, i).trim() || '其它', form: s.slice(i + 1).trim() };
+}
+function hit(it) {
+  if (stateFilter.value === 'installed' && !it.installed) return false;
+  if (stateFilter.value === 'missing' && it.installed) return false;
+  if (langFilter.value !== 'all' && splitLang(it).lang !== langFilter.value) return false;
+  const q = query.value.trim().toLowerCase();
+  if (!q) return true;
+  return [it.name, it.author, it.lang, it.desc].some(v => String(t(v || '')).toLowerCase().includes(q));
+}
+const shown = computed(() => list.value.filter(hit));
+const shownCount = computed(() => shown.value.length);
+const hasFilter = computed(() => !!query.value.trim() || langFilter.value !== 'all' || stateFilter.value !== 'all');
+function resetFilters() { query.value = ''; langFilter.value = 'all'; stateFilter.value = 'all'; }
+const langs = computed(() => {
+  const m = new Map();
+  for (const it of list.value) { const k = splitLang(it).lang; m.set(k, (m.get(k) || 0) + 1); }
+  return [...m.entries()].map(([id, n]) => ({ id, n })).sort((a, b) => b.n - a.n || a.id.localeCompare(b.id));
+});
+/** 分组：语言 → 形式 → 条目（对应 DiffSinger 的 作品 → 分类 → 卡片） */
+const groups = computed(() => {
+  const out = [];
+  for (const it of shown.value) {
+    const { lang, form } = splitLang(it);
+    let g = out.find(x => x.lang === lang);
+    if (!g) { g = { lang, forms: [] }; out.push(g); }
+    const key = form || '未标注形式';
+    let f = g.forms.find(x => x.form === key);
+    if (!f) { f = { form: key, items: [] }; g.forms.push(f); }
+    f.items.push(it);
+  }
+  return out;
+});
+function groupCount(g) { return g.forms.reduce((n, f) => n + f.items.length, 0); }
+function phaseText(id) {
+  const p = prog.value[id] || {};
+  if (p.phase === 'extract') return t('解压中…');
+  if (p.phase === 'done') return t('完成');
+  if (p.retry) return t('重试中…') + p.retry;
+  return t('下载中…');
+}
+function sizeMb(v) { return v ? (v / 1048576).toFixed(1) + ' MB' : ''; }
+</script>
+
 <template>
   <div class="vb-cat">
-    <!-- 来源说明条（对应 ds-src） -->
     <div class="vb-src">
       <span class="vb-src-ic"><Icon name="mic" :size="14" /></span>
       <div class="vb-src-txt">
@@ -155,6 +235,7 @@ onBeforeUnmount(() => { if (offProgress) { try { offProgress(); } catch (e) {} o
       <div class="vb-head-act">
         <span v-if="vbRoot" class="vb-root" :title="vbRoot">{{ vbRoot }}</span>
         <button class="btn sm ghost" @click="load" :disabled="loading || !isDesktop" :title="t('重新扫描声库目录')">{{ t('刷新') }}</button>
+        <button class="btn sm ghost" @click="importZip" :disabled="!isDesktop || !!busyId" :title="t('导入从 BOOTH / BowlRoll / 网盘下载的声库 zip')"><Icon name="box" :size="13" /> {{ t('导入本地 zip') }}</button>
         <button class="btn sm ghost" @click="openDir" :disabled="!isDesktop"><Icon name="folder" :size="13" /> {{ t('打开目录') }}</button>
       </div>
     </div>
@@ -162,7 +243,6 @@ onBeforeUnmount(() => { if (offProgress) { try { offProgress(); } catch (e) {} o
     <div v-if="!isDesktop" class="vb-note">{{ t('声库下载安装仅在桌面版可用。') }}</div>
 
     <template v-else>
-      <!-- 搜索 + 筛选（对应 ds-bar） -->
       <div class="vb-bar">
         <div class="vb-search">
           <Icon name="search" :size="13" />
@@ -180,7 +260,6 @@ onBeforeUnmount(() => { if (offProgress) { try { offProgress(); } catch (e) {} o
         </select>
       </div>
 
-      <!-- 语言快捷筛选（对应 ds-works） -->
       <div class="vb-works">
         <button class="vb-wchip" :class="{ active: langFilter === 'all' }" @click="langFilter = 'all'">{{ t('全部') }}</button>
         <button v-for="l in langs" :key="l.id" class="vb-wchip" :class="{ active: langFilter === l.id }" @click="langFilter = l.id">{{ l.id }}<i>{{ l.n }}</i></button>
@@ -228,7 +307,7 @@ onBeforeUnmount(() => { if (offProgress) { try { offProgress(); } catch (e) {} o
                 <div v-if="busyId === it.id" class="vb-prog">
                   <div class="vb-prog-line"><span class="vb-prog-ph">{{ phaseText(it.id) }}</span></div>
                   <div class="vb-bar-mini"><i :style="{ width: ((prog[it.id] && prog[it.id].percent) || 0) + '%' }"></i></div>
-                  <div class="vb-prog-meta"><span>{{ (prog[it.id] && prog[it.id].percent) || 0 }}%</span><span>{{ prog[it.id] && prog[it.id].error ? prog[it.id].error : '' }}</span></div>
+                  <div class="vb-prog-meta"><span>{{ (prog[it.id] && prog[it.id].percent) || 0 }}%</span><span>{{ (prog[it.id] && prog[it.id].error) || '' }}</span></div>
                 </div>
               </div>
             </div>
@@ -241,8 +320,6 @@ onBeforeUnmount(() => { if (offProgress) { try { offProgress(); } catch (e) {} o
           <button v-if="hasFilter" class="btn sm ghost" @click="resetFilters">{{ t('清除筛选') }}</button>
         </div>
 
-        <!-- 渠道索引：多数免费声库不在 GitHub（BOOTH / BowlRoll / 官网 / 网盘），
-             所以**不假装能一键下载** —— 与 DiffSinger / GPT-SoVITS 页的做法一致。 -->
         <section v-if="external.length" class="vb-work">
           <div class="vb-work-head">
             <span class="vb-work-ic"><Icon name="box" :size="15" /></span>
@@ -271,77 +348,9 @@ onBeforeUnmount(() => { if (offProgress) { try { offProgress(); } catch (e) {} o
     </template>
   </div>
 </template>
-        </span>
-      </div>
-      <div class="vbs-head-act">
-        <span v-if="vbRoot" class="vbs-root" :title="vbRoot">{{ t('声库目录：') }}{{ vbRoot }}</span>
-        <button class="btn sm ghost" @click="load" :disabled="loading || !isDesktop" :title="t('重新扫描声库目录')">
-          <Icon name="refresh" :size="13" />{{ t('刷新') }}
-        </button>
-        <button class="btn sm ghost" @click="openDir" :disabled="!isDesktop">
-          <Icon name="folder" :size="13" />{{ t('打开目录') }}
-        </button>
-      </div>
-    </div>
-
-    <div v-if="!isDesktop" class="vbs-note">{{ t('声库下载安装仅在桌面版可用。') }}</div>
-
-    <div v-else class="vbs-grid">
-      <div v-for="it in list" :key="it.id" class="vbs-card" :class="{ on: it.installed }">
-        <div class="vbs-card-top">
-          <Icon name="mic" :size="15" />
-          <b class="vbs-name">{{ t(it.name) }}</b>
-          <span class="vbs-badge" :class="{ ok: it.installed }">{{ it.installed ? t('已安装') : t('未安装') }}</span>
-        </div>
-        <div class="vbs-meta">
-          <span>{{ it.author }}</span>
-          <span class="vbs-dot">·</span>
-          <span>{{ t(it.lang) }}</span>
-          <span v-if="it.installed && it.size" class="vbs-dot">·</span>
-          <span v-if="it.installed && it.size">{{ fmtSize(it.size) }}</span>
-        </div>
-        <div class="vbs-desc">{{ t(it.desc) }}</div>
-        <div class="vbs-license" :title="t(it.license)">{{ t('使用条款：') }}{{ t(it.license) }}</div>
-
-        <!-- ★ 进度条挂在 prog.active 上，而不是 busyId === it.id：
-             列表刷新 / 组件保活切页 / 一次换源，都不该让「正在下载」的进度凭空消失。 -->
-        <div v-if="prog[it.id] && (prog[it.id].active || busyId === it.id)" class="vbs-prog">
-          <div class="vbs-prog-bar"><i :style="{ width: (prog[it.id].percent || 0) + '%' }"></i></div>
-          <span class="vbs-prog-txt">
-            {{ prog[it.id].phase === 'extract' ? t('正在解包安装…')
-               : (prog[it.id].phase === 'retry' ? t('换源重试中… ') + (prog[it.id].percent || 0) + '%'
-                                                 : t('下载中 ') + (prog[it.id].percent || 0) + '%') }}
-          </span>
-        </div>
-
-        <div class="vbs-acts">
-          <button v-if="!it.installed" class="btn sm primary" @click="install(it)" :disabled="!!busyId">
-            <Icon name="download" :size="13" />{{ busyId === it.id ? t('安装中…') : t('下载并安装') }}
-          </button>
-          <button v-else class="btn sm primary" @click="use(it)">
-            <Icon name="zap" :size="13" />{{ t('在 UTAU 工作台使用') }}
-          </button>
-          <button v-if="busyId === it.id" class="btn sm ghost" @click="cancel(it)">{{ t('取消') }}</button>
-          <button v-if="it.installed" class="btn sm ghost danger" @click="remove(it)">
-            <Icon name="trash" :size="13" />{{ t('删除') }}
-          </button>
-          <button class="btn sm ghost vbs-link" @click="openSite(it)" :title="it.officialUrl">{{ t('来源页') }}</button>
-        </div>
-      </div>
-    </div>
-
-    <Transition name="fade">
-    <div v-if="msg" class="vbs-msg ok">{{ msg }}</div>
-    </Transition>
-    <div v-if="err" class="vbs-msg bad">{{ err }}</div>
-    <div v-if="isDesktop && installedCount" class="muted small">
-      {{ t('已安装 ') }}{{ installedCount }}{{ t(' 个声库，可在「UTAU 工作台 → 曲谱与调声 / 合成渲染」切换。') }}
-    </div>
-  </div>
-</template>
 
 <style scoped>
-/* ★ 以下规则**逐条镜像** DiffSingerCatalog.vue 的 .ds-* （同名去前缀），
+/* ★ 以下规则**逐条镜像** DiffSingerCatalog.vue 的 .ds-*（同名去前缀）——
    用户要求两个声库页的 UI 模板统一。改视觉时两边一起改，否则会越差越远。 */
 .vb-cat { display: flex; flex-direction: column; gap: 14px; }
 .vb-src { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid var(--hairline); border-radius: 12px; background: var(--surface-soft); }
@@ -350,7 +359,7 @@ onBeforeUnmount(() => { if (offProgress) { try { offProgress(); } catch (e) {} o
 .vb-src-txt b { font-size: 13px; color: var(--ink); }
 .vb-src-txt small { font-size: 11.5px; color: var(--stone); }
 .vb-head-act { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: 0 0 auto; }
-.vb-root { font-size: 11px; color: var(--stone); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vb-root { font-size: 11px; color: var(--stone); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vb-note { font-size: 12px; color: var(--stone); }
 .vb-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .vb-search { display: flex; align-items: center; gap: 7px; flex: 1 1 240px; min-width: 200px; padding: 0 10px; height: 32px; border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--stone); }

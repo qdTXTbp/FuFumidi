@@ -168,7 +168,7 @@ const ALLOWED_UNUSED = {
   updateDownload: 'TODO 待确认：更新下载动作；可能与 update.* 命名空间重复',
   updateOpen: 'TODO 待确认：打开更新；可能与 update.* 命名空间重复',
   utauFlags: 'TODO 待确认：UTAU 标志位；界面未接入',
-  utauImportVoicebankZip: 'TODO 待确认：从 zip 导入声库；界面上没找到入口',
+  utauImportVoicebankZip: 'UTAU 声库页「导入本地 zip」按钮（见 UtauVoicebankStore.vue）',
   // 同名本地函数撞车，桥接方法本身确实没人用
   notify: 'EditorCanvas/ViewEdit 里是同名**本地函数**，桥接的 notify 无人调用',
   pickImage: 'vizbg.ts 里是同名**本地函数**，桥接的 pickImage 无人调用',

@@ -65,6 +65,18 @@ function countFor(tb) {
 }
 function cnt(n) { return n == null ? '…' : String(n); }
 
+/** 本地导入 GPT-SoVITS 音色：选一个目录 → 主进程校验 .ckpt/.pth 并拷进音色目录。
+ *  社区音色绝大多数没有稳定直链（见 main/gpt-sovits.js 的 EXTERNAL），这是它们的主入口。 */
+async function importGsvVoice() {
+  try {
+    const r = await bridge.modelImportGsvVoice?.();
+    if (!r || r.canceled) return;
+    if (!r.ok) { app.toast((r && r.error) || t('导入失败'), 'error'); return; }
+    app.toast(t('已导入音色：') + (r.name || ''), 'success');
+    await refresh();
+  } catch (e) { app.toast(String((e && e.message) || e), 'error'); }
+}
+
 function kindIcon(m) { return (m.kind === 'separate' || m.kind === 'tts') ? 'mic' : (m.kind === 'transcribe') ? 'music' : 'box'; }
 /** kind → 给用户看的分类名（详情抽屉用）。
  *  ★ 新增 kind **必须**来这里加一行 —— 漏了会把它显示成「修复工具」，
@@ -190,7 +202,9 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 
     <!-- 醒目提示：下载依赖补全 + 下载慢换源，合并成**一条**（两条提示占了两行，
          信息密度低、还各带一个图标，视觉上比内容更抢眼） -->
-    <div v-if="!showDs" class="vm-dep-tip">
+    <!-- 依赖提示只对转录 / 分离那类推理模型有意义；调教页收的是声库、音色与自包含 ONNX，
+         对它们不适用（用户要求去掉），所以 tuning 页不显示。 -->
+    <div v-if="!showDs && curTab !== 'tuning'" class="vm-dep-tip">
       <span class="vm-dep-ic"><Icon name="zap" :size="14" /></span>
       <span>{{ t('下载后请到「资源管理」补全依赖（否则模型可能无法使用）；下载慢可在设置页切换下载源') }}</span>
     </div>
@@ -206,6 +220,13 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
     <!-- 卡片网格 -->
     <Transition v-else-if="showGrid" name="vmfade" mode="out-in">
       <div class="vm-grid" :key="listKind">
+        <!-- 本地导入：调教里的声库 / 音色绝大多数没有稳定直链（BOOTH / BowlRoll / 网盘），
+             所以除了「一键下载」必须给一条本地导入的路。放在网格内、跨整行 ——
+             不要插进 v-if/v-else-if 条件链中间，那样 Vue 会编译失败（踩过）。 -->
+        <div v-if="listKind === 'tts'" class="vm-import">
+          <button class="btn sm" @click="importGsvVoice"><Icon name="folder" :size="13" /> {{ t('导入本地音色目录') }}</button>
+          <span class="muted small">{{ t('从网盘 / 社区下载的音色包解压后可直接导入：目录里要有 .ckpt 与 .pth（参考音可选），不需要有直链') }}</span>
+        </div>
         <div v-for="(m, i) in tabbedList" :key="m.id" class="vm-card" :class="{ inst: m.exists, down: prog[m.id] && prog[m.id].active }" :style="{ animationDelay: (i * 40) + 'ms' }" @click="detail = m">
           <div class="vm-top" :class="'k-' + (m.kind || 'other')"></div>
           <div class="vm-head">
@@ -308,6 +329,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 .vm-tab.active .tb-cnt { background: color-mix(in srgb, var(--brand-coral) 14%, transparent); color: var(--brand-coral); }
 
 /* ===== 卡片网格 ===== */
+.vm-import { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border: 1px dashed var(--hairline); border-radius: 10px; background: var(--surface-soft); }
 .vm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(238px, 1fr)); gap: 14px; }
 .vm-card { position: relative; overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--radius-lg); padding: 14px 16px 12px; background: var(--surface); cursor: pointer; display: flex; flex-direction: column; gap: 6px; min-height: 128px; transition: transform .18s cubic-bezier(.2,.7,.3,1), box-shadow .18s, border-color .18s; }
 .vm-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg); border-color: color-mix(in srgb, var(--brand-coral) 40%, transparent); }

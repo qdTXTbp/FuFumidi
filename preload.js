@@ -199,6 +199,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   // 已导入声库列表 / 导入现成声库 zip
   utauListVoicebanks: () => ipcRenderer.invoke('utau:listVoicebanks'),
   utauImportVoicebankZip: (directPath) => ipcRenderer.invoke('utau:importVoicebankZip', directPath),
+  modelImportGsvVoice: (directPath) => ipcRenderer.invoke('model:importGsvVoice', directPath),
   // 声库资源中心：可一键安装的开源/免费声库清单、下载安装、取消
   utauVoicebankRegistry: () => ipcRenderer.invoke('utau:voicebankRegistry'),
   utauDownloadVoicebank: (id) => ipcRenderer.invoke('utau:downloadVoicebank', id),
