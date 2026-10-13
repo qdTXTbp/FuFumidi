@@ -145,10 +145,23 @@
 | 6 | **缺陷 D**：`pipAnywhere` 走 `shell:true`，`>=x` 被 cmd 当重定向 | ✅ **已修 + 已验证**（改 argv + `shell:false`；重跑后仓库根垃圾文件 **0 个**，修复前 3 个） |
 | 7 | asar integrity 同步（阶段 0 发现） | ✅ 已修（`64219bc`，310 文件 0 不匹配） |
 | 7b | **新增守卫**：`deps.py` 校验 muscriptor **补丁身份**（不只 import） | ✅ 已加并实测：3.11 → `ok:true`；裸版 → `ok:false, broken:[缺 FuFumidi 补丁]` |
-| 8 | ROCm 加速包重建（要 3.12，之前被阻塞） | ⏳ 现已具备条件 |
+| 8 | ROCm 加速包 | ✅ **软件侧阻塞已解除**（见下） |
 | 9 | 尾部安静段异常（115–120 min，median 0.010s、`>2s` 15.9%） | ⏳ 未查 |
 | 10 | 11 个 TODO 桥接方法（接通 or 删除） | ✅ **已定性**：`preload.js` / `main/` 里 **0 个 TODO**；`audit-bridge-contract.cjs` 跑出 **EXIT=0「没有发现契约漂移」**，未接项都在 `ALLOWED_UNUSED` / `ALLOWED_STUBS` 里带理由登记，属**已文档化豁免**，非待办 |
 | 11 | Intel XPU 实机验证 | ⛔ **阻塞**：本机无 Intel GPU，只能标注「未经实机验证」 |
+| 11b | AMD ROCm 实机验证 | ⛔ **阻塞**：本机无 AMD GPU |
+
+### #8 的实际情况（更正我先前的说法）
+
+我先在 `build-gpu-package.js` 里 grep `rocm` 得到 0 命中，一度以为「构建脚本没有 rocm 模式」。
+**错了** —— ROCm 有**独立脚本** `scripts/build-gpu-package-rocm.js`（走 AMD 官方 `repo.radeon.com`
+直链，不打 `rocm-sdk-devel` 那 1.37 GB 编译期头文件）。ROCm 包本身也早在 CNB 上（1838 MB）。
+
+**真正的阻塞是运行时**：`main.js:354` 写着「装了 rocm 且有就绪的 3.12 运行时 → 切过去
+（ROCm 只有 cp312 轮子）」；`main.js:543` 说明 `KIND_PY` 会把版本不匹配的包从 `PYTHONPATH` 过滤掉，
+等价于「已安装但未启用」。**用户看到的「ROCm 显示需要 Python 3.12，但工具只有 3.11」就是这个过滤。**
+
+→ **3.12 运行时现已就绪（含 muscriptor 补丁），软件侧阻塞解除**；剩下的只有实机验证，本机无 AMD GPU。
 
 ---
 
