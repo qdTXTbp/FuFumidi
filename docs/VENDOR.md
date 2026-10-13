@@ -16,7 +16,7 @@
 | `frontend/public/vendor/js-synth/libfluidsynth-2.4.6-with-libsndfile.js` | 2,371,528 | `8f0cc693731da2d02f13e921` | js-synthesizer 附带的 libfluidsynth 2.4.6 构建（带 libsndfile） | 2.4.6 |
 | `frontend/public/vendor/js-synth/fu-seq-clock.js` | 4,251 | `0a2658fb31608df568aa86b3` | **本项目自有**（AudioWorklet 音序时钟） | — |
 | `renderer/vendor/soundfonts/GeneralUser.sf2` | 31,281,186 | `f45b6b4a68b6bf3d792fcbb6` | GeneralUser GS（S. Christian Collins） | v1.471（许可证 v2.0，见同目录 `GeneralUser.LICENSE.txt`） |
-| `engine/singing/openutau/native/**` | 4.8 MB（6 个平台） | 逐文件映射见 `native/README.md` | [stakira/OpenUtau](https://github.com/stakira/OpenUtau)（MIT） | **未记录 tag/commit** —— 待补 |
+| `engine/singing/openutau/native/**` | 4.8 MB（6 个平台） | 逐文件映射见 `native/README.md` | [stakira/OpenUtau](https://github.com/stakira/OpenUtau)（MIT） | commit **`04c4e61005`**（2026-09-27，PR #2468 Rebuild Worldline）—— 2026-10-13 用 blob 比对确定 |
 
 改这一页时用同一条命令重新取指纹：
 
@@ -46,9 +46,14 @@ Get-ChildItem frontend\public\vendor, renderer\vendor -Recurse -File |
 
 ### 3. OpenUtau 只记了「哪来的」，没记「哪一版」
 
-`engine/singing/openutau/native/README.md` 给出了上游仓库、源码路径（`runtimes/<rid>/native/`）与逐文件映射，
-但没有 tag/commit。`native_lib.py` 只按当前 RID 取对应目录，所以升级上游时无法判断偏移量。
-补法：在 `native/README.md` 里补上取文件时的上游 commit。
+**2026-10-13 已闭合。** `engine/singing/openutau/native/README.md` 给出了上游仓库、源码路径
+（`runtimes/<rid>/native/`）与逐文件映射，但没有 tag/commit，`native_lib.py` 只按当前 RID 取目录，
+升级上游时无法判断偏移量。
+
+**确定方法（可复现，别再靠猜）**：`git clone --filter=blob:none --no-checkout` 拉上游，
+对 6 个二进制逐个算 `git hash-object`，再遍历改动过该路径的 commit 取 `git rev-parse <sha>:<path>`，
+**blob 哈希相同即字节相同**。结果：6 个文件全部唯一命中 `04c4e61005`（2026-09-27，PR #2468）。
+这也把**移植基线**钉在了 2026-09-27。
 
 ## 与其它文档的关系
 
