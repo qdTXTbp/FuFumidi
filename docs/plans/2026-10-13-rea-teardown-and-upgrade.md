@@ -389,6 +389,60 @@ pytest engine/tests/test_openutau_core_matches_source.py -q -s
 |---|---|
 | `preutter=150`（> oto 的 60） | offset `100 → 10`、skipOver `→ 0`、consonant `50 → 140`、cutoff `-200 → -290` |
 | `preutter=250`（名义要拉 190） | 夹在 `max(0, oto.offset)=100`：offset `→ 0`、consonant `→ 150`、cutoff `→ -300`、skipOver `→ -90` |
+### 3.8 ✅ Q3 已落地 · 与内置同名的外部 resampler 不再顶掉内置
+
+上游 `2913eeb9`（2026-10-05）原文：
+
+> **Skip external resamplers named like a built-in one**
+> An extensionless file such as `Resamplers/hifisampler` on macOS got the built-in's name
+> and replaced it in the resampler map, so tracks set to the built-in hifisampler
+> ran the external binary instead.
+
+#### 我们有同一个缺陷
+
+`tools_manager.search_resamplers` 先放内置 `WorldlineResampler()`，再对扫描到的文件**无条件** `append(driver)`，
+最后用 `str(resampler)` 建映射表 —— 同名项会**覆盖**内置，而且**不报错**，只是结果不对。
+移植法与上游一致：**先把内置名记成集合**，外部加载后若重名就跳过并告警。
+
+#### ★ 但必须说清楚：**在 Windows 上这个碰撞撞不上**
+
+查两侧命名规则后确认：
+
+- `ExeResampler` 的名字两边都是 `GetRelativePath(base, file)` —— **保留扩展名**
+- `WorldlineResampler.ToString()` 是 `worldline` —— **无扩展名**
+
+所以 Windows 上外部文件叫 `worldline.exe`，名字是 `worldline.exe` ≠ `worldline`，**不碰撞**。
+碰撞只在 **Linux/macOS 的无扩展名文件**上发生（那两个平台 `load_resampler` 接受 `ext == ''`）。
+上游是在 macOS 上被咬到的，**这与提交说明完全一致**。
+
+→ 结论：**这个守卫是「跨平台保险」，不是 Windows 上的现网 bug**。照搬它以保持与上游一致，
+但**不要**把它记成「修了一个用户会遇到的 bug」。
+
+#### 我第一版验证是**空洞的**（记一笔）
+
+我先造了个 `worldline.exe` 跑实测，三条断言全 PASS —— 但映射表里 `worldline.exe` 和 `worldline`
+**两个键都在**，说明守卫**根本没被触发**。那三条 PASS 什么都没证明。
+改成用**替身**直接把名字喂成 `worldline`，才真正打到守卫逻辑上。
+
+#### 用变异测试证明这组回归有牙齿
+
+临时把守卫删掉再跑：
+
+```
+FAILED test_builtin_wins_over_same_named_external
+FAILED test_external_with_same_name_is_not_in_map
+  assert isinstance(m['worldline'], WorldlineResampler)
+  E   assert False   where False = isinstance(<_StubResampler object>, WorldlineResampler)
+```
+
+症状**正是**「`worldline` 那一项变成了替身」= 外部顶掉了内置。恢复守卫后复绿。
+**这才叫验证过**——只跑绿不算，得证明它在该挂的时候会挂。
+
+#### 验收
+
+- 新增 `engine/tests/test_tools_manager_name_conflict.py`（4 条）
+- 变异测试：删守卫 → 2 条 FAIL；恢复 → 4 条 PASS
+- `pytest engine/tests` → **exit 0**
 ### 3.3 明确不跟的
 
 - `RenderEngine.cs` 的 **Track Polish 改版**（含 UI 改动，与「UI 不变」冲突）
