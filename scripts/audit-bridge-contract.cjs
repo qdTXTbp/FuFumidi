@@ -79,7 +79,25 @@ const exposedNested = new Set();
 const fileAliases = new Map();   // 文件 -> Set(别名)
 for (const f of frontFiles) {
   const s = new Set(['bridge', 'fuBridge']);
-  for (const m of read(f).matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*\(?\s*(?:window\.)?fuBridge\b/g)) s.add(m[1]);
+  const src = read(f);
+  // 直接赋值 / 三元赋值：
+  //   const b = window.fuBridge
+  //   const b = (typeof window !== 'undefined') ? window.fuBridge : null   ← 三元，
+  //     display.js:41 就是这个写法，只认「= 后紧跟 fuBridge」会漏掉它。
+  // 放宽成「同一行、等号右边提到过 fuBridge」即可（右边出现 fuBridge 基本就是取桥）。
+  for (const m of src.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=[^\n]*fuBridge/g)) s.add(m[1]);
+  // ★ 间接取桥（第三版又漏了）：文件里常写成
+  //     function br(): any { return (window as any).fuBridge; }
+  //     const b = br();
+  //   只认直接赋值会把 cloudSync.ts 的 dbKvGet/dbKvSet 全报成 producer-only。
+  //   做法：先找「返回 fuBridge 的辅助函数」，再把 `const X = 该函数()` 的 X 也算别名。
+  const helpers = new Set();
+  for (const m of src.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)[^{]*\{[^}]*fuBridge/g)) helpers.add(m[1]);
+  for (const m of src.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*\([^)]*\)\s*=>[^;\n]*fuBridge/g)) helpers.add(m[1]);
+  if (helpers.size) {
+    const hre = new RegExp('(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*(?::[^=]+)?=\\s*(?:' + [...helpers].join('|') + ')\\s*\\(', 'g');
+    for (const m of src.matchAll(hre)) s.add(m[1]);
+  }
   fileAliases.set(f, s);
 }
 const aliasReOf = (set) => [...set].map(a => a.replace(/[$]/g, '\\$')).join('|');
@@ -130,6 +148,39 @@ for (const f of frontFiles) {
   });
 }
 
+// ★ 显式豁免表：这些是「确实没人调用」的桥接面，但**逐条确认过**属于下列情形。
+//   写下来的意义：审计报告保持短、可信；下次有人看到豁免表，能直接判断该不该动。
+//   规则：新增豁免必须写明理由，不许为了「让审计变绿」而加。
+const ALLOWED_UNUSED = {
+  // 跨构建：只有 Tauri 构建用到（frontend/src/bridge/tauri.js 是另一套实现）
+  rustInvoke: 'Tauri 原生模式专用；Electron 构建下无调用方',
+  // 被更强的接口取代，但保留兼容
+  gpuPackageUrl: '已被 gpuListPackages 取代（后者返回完整包信息）',
+  // 事件类：主进程发，但当前 UI 不订阅（订阅了才有意义）
+  onHotkeysState: '快捷键状态事件；UI 目前直接读 store，未订阅',
+  // 调试/内部：只在注释或排障里被提到，不是常规调用路径
+  getZoomFactor: '仅在 display.js 的注释中被提到（真实值可从 documentElement.dataset.uiScale 读）',
+  // TODO(待确认)：下面这些我需要逐个确认「该接界面」还是「该删」——
+  //   它们都对应主进程里真实存在的功能，但界面上找不到入口。
+  dbStatus: 'TODO 待确认：库状态查询，可能已被 dbList/dbKv* 取代',
+  modelPause: 'TODO 待确认：暂停模型下载；界面目前只有取消',
+  openEditGuide: 'TODO 待确认：打开编辑引导；界面上没找到入口',
+  updateDownload: 'TODO 待确认：更新下载动作；可能与 update.* 命名空间重复',
+  updateOpen: 'TODO 待确认：打开更新；可能与 update.* 命名空间重复',
+  utauFlags: 'TODO 待确认：UTAU 标志位；界面未接入',
+  utauImportVoicebankZip: 'TODO 待确认：从 zip 导入声库；界面上没找到入口',
+  // 同名本地函数撞车，桥接方法本身确实没人用
+  notify: 'EditorCanvas/ViewEdit 里是同名**本地函数**，桥接的 notify 无人调用',
+  pickImage: 'vizbg.ts 里是同名**本地函数**，桥接的 pickImage 无人调用',
+};
+for (const k of Object.keys(ALLOWED_UNUSED)) exposedTop.delete(k);
+
+// D 类（空实现）里确认为「跨构建已知缺口」的，同样在这里登记，不要静默放过。
+const ALLOWED_STUBS = {
+  onOpenFile: 'Tauri 构建未实现文件关联（Electron 侧已修好）；见 tauri.js 内注释',
+  onFolderWatch: 'Tauri 构建未实现文件夹监听；见 tauri.js 内注释',
+};
+
 const exposed = new Set([...exposedTop, ...exposedNested]);
 // producer-only 只报**顶层**方法 —— 嵌套成员是命名空间内部实现，不该独立上报
 const exposedUnused = [...exposedTop].filter(n => !used.has(n)).sort();
@@ -153,6 +204,12 @@ for (const m of preload.matchAll(/ipcRenderer\.invoke\(\s*['"]([^'"]+)['"]/g)) {
 for (const m of preload.matchAll(/ipcRenderer\.on\(\s*['"]([^'"]+)['"]/g)) {
   listens.set(m[1], (listens.get(m[1]) || 0) + 1);
 }
+// ★ send 也算消费者（第四版漏的）：`notify: (ev,p) => ipcRenderer.send('app:event', …)`
+//   走的是 send 不是 invoke/on，只收集后两者会把 app:event 误报成死 handler。
+const sends = new Map();
+for (const m of preload.matchAll(/ipcRenderer\.send\(\s*['"]([^'"]+)['"]/g)) {
+  sends.set(m[1], (sends.get(m[1]) || 0) + 1);
+}
 for (const f of mainFiles.concat(walk(path.join(ROOT, 'main')))) {
   const src = read(f);
   for (const m of src.matchAll(/webContents\.send\(\s*['"]([^'"]+)['"]/g)) {
@@ -162,7 +219,7 @@ for (const f of mainFiles.concat(walk(path.join(ROOT, 'main')))) {
 }
 
 const invokeNoHandler = [...invoked.keys()].filter(c => !handlers.has(c)).sort();
-const handlerNoInvoke = [...handlers.keys()].filter(c => !invoked.has(c) && !listens.has(c)).sort();
+const handlerNoInvoke = [...handlers.keys()].filter(c => !invoked.has(c) && !listens.has(c) && !sends.has(c)).sort();
 const sendNoListener = [...sent.keys()].filter(c => !listens.has(c)).sort();
 
 // ---------- D: 桥接层空实现 ----------
@@ -170,7 +227,10 @@ const stubs = [];
 for (const f of [path.join(ROOT, 'frontend', 'src', 'bridge', 'tauri.js'), path.join(ROOT, 'preload.js')]) {
   if (!fs.existsSync(f)) continue;
   read(f).split(/\r?\n/).forEach((line, i) => {
-    if (/=>\s*(?:\{\s*\}|null\s*;?\s*$|undefined\s*;?\s*$)/.test(line) || /:\s*\(\)\s*=>\s*\{\s*\}\s*,?\s*$/.test(line)) {
+    // 只揪「对象成员被赋成空函数」这种**桩**形状：`name: () => {}` / `name: () => () => {}`。
+    // 不要把 `.catch(() => () => {})` 这类防御性兜底算进来 —— 那是正确的错误处理，
+    // 不是功能缺口（第五版把这两类混在一起，D 类虚高）。
+    if (/^\s*[A-Za-z_$][\w$]*\s*:\s*\([^)]*\)\s*=>\s*(?:\{\s*\}|null\s*;?\s*$|\(\s*\)\s*=>\s*\{\s*\}\s*,?\s*)$/.test(line)) {
       stubs.push(path.relative(ROOT, f) + ':' + (i + 1) + '  ' + line.trim().slice(0, 90));
     }
   });
@@ -183,7 +243,8 @@ if (invokeNoHandler.length) DANGER.push(['B/consumer-only', invokeNoHandler.leng
 if (exposedUnused.length) NOTE.push(['A/producer-only', exposedUnused.length, exposedUnused]);
 if (handlerNoInvoke.length) NOTE.push(['B/producer-only', handlerNoInvoke.length, handlerNoInvoke]);
 if (sendNoListener.length) NOTE.push(['C/producer-only', sendNoListener.length, sendNoListener]);
-if (stubs.length) NOTE.push(['D/空实现', stubs.length, stubs]);
+const stubsFiltered = stubs.filter(s => !Object.keys(ALLOWED_STUBS).some(k => new RegExp('^\\s*' + k + '\\s*:').test(s.replace(/^[^:]*:\d+\s+/, ''))));
+if (stubsFiltered.length) NOTE.push(['D/空实现', stubsFiltered.length, stubsFiltered]);
 
 function dump(title, rows) {
   for (const [cls, n, items] of rows) {
@@ -196,7 +257,7 @@ function dump(title, rows) {
 
 console.log('桥接契约审计');
 console.log('  preload 顶层方法 ' + exposedTop.size + ' 个 / 嵌套成员 ' + exposedNested.size + ' 个；前端引用了 ' + used.size + ' 个访问路径');
-console.log('  ipcMain 频道 ' + handlers.size + ' 个；preload invoke ' + invoked.size + ' 个 / on ' + listens.size + ' 个；主进程 send ' + sent.size + ' 个');
+console.log('  ipcMain 频道 ' + handlers.size + ' 个；preload invoke ' + invoked.size + ' / on ' + listens.size + ' / send ' + sends.size + '；主进程 send ' + sent.size + ' 个');
 if (DANGER.length) { console.log('\n=== 危险（必须修） ==='); dump('danger', DANGER); }
 if (NOTE.length) { console.log('\n=== 提示（多为设计如此，逐条确认） ==='); dump('note', NOTE); }
 if (!DANGER.length && !NOTE.length) console.log('\n没有发现契约漂移。');

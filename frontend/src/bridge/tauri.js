@@ -49,7 +49,10 @@ export function installTauriBridge() {
 
   window.fuBridge = {
     // ---- 打开文件（Tauri 阶段：双击关联事件后续接入）----
-    onOpenFile: () => () => {},
+    // ★ Tauri 构建下的功能缺口（审计已登记）：Electron 侧靠主进程 'open-file' 事件
+  //   支持双击 .mid 打开；Tauri 侧没有对应实现，所以这里只能返回一个空取消函数 ——
+  //   即**Tauri 构建下双击 .mid 仍然不生效**。要补齐得在 src-tauri 里接文件关联并 emit 同名事件。
+  onOpenFile: () => () => {},
 
     // ---- 设置 ----
     getSettings: () => call('load_settings'),
@@ -194,7 +197,8 @@ export function installTauriBridge() {
 
     // ---- 文件夹监听（Tauri 阶段暂不实现，返回空订阅）----
     setFolderWatch: () => Promise.resolve({ ok: true }),
-    onFolderWatch: () => () => {},
+    // ★ 同上：Tauri 构建未实现文件夹监听（审计已登记）
+  onFolderWatch: () => () => {},
   };
 
   window.__fufumidi_isTauri = true;
