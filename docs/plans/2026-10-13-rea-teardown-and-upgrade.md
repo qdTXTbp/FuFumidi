@@ -243,6 +243,59 @@ HTTPS 只保护传输过程，不保护「这个发布物本身是不是我们�
 
 - `ast.parse` 通过；`pytest engine/tests` → **exit 0，243 passed / 1 skipped / 0 failed**
 - `get_resampler_flags` **保留未删** —— `classic/ust_note.py:120` 那条路径仍在用
+### 3.5 ✅ Q2 已落地 · 空引用「我们没有」，但补回一个被漏掉的功能
+
+上游 `5c3c83bb`（2026-10-09）「Fix NullReferenceException copying voicebank files for built-in resamplers」：
+
+```csharp
+- var exeResampler = resampler as ExeResampler;   // ← 硬转型：内置 resampler 得到 null
+- if (exeResampler.Manifest != null && ...)       // ← 紧接着就 NRE
++ var files = resampler?.Manifest?.files;         // 修法：空安全取
+```
+
+#### 回答：**我们没有这个空引用** —— 但原因不是我们写对了
+
+`grep manifest|ExeResampler voicebank_files.py` → **零命中**。查下去发现：
+**上游那段 manifest 支路我们整段都没移植**，所以自然不会 NRE。
+
+**代价是少了一个功能**，而且这个缺口是可验证的：
+
+- 我们的 `ResamplerManifest` 只有 `expressions` / `expression_filter`
+  （docstring 自陈「照搬 `ResamplerManifest.cs`（**28 行**）」）—— **没有 `files` 字段**
+- `get_meta_files(source, source_temp)` **没有 `resampler` 参数**，manifest 支路无处可跑
+
+→ 即我们停在**上游 2026-10-07 之前**（`files` 是那次「Add Resampler Meta Files definable
+in resampler manifest」加进来的）。
+
+#### 已做的移植（直接移植**修好的**写法，不复现中间态）
+
+| 文件 | 改动 |
+|---|---|
+| `resampler_manifest.py` | 加 `files: List[str]` |
+| `voicebank_files.py` | `get_meta_files(source, source_temp, resampler=None)` 追加清单元文件；用 `getattr` 逐级取（`manifest` / `files`），**天然空安全** —— 对应上游 `resampler?.Manifest?.files` |
+| `voicebank_files.py` | `copy_source_temp` / `copy_back_meta_files` 透传 `resampler` |
+| `resampler_item.py` | 两个同名方法透传 |
+| `classic_renderer.py` | 4 处调用点传 `item.resampler` |
+| `test_resampler_manifest_files.py` | **新增 6 条回归** |
+
+#### 验收
+
+| 场景 | 结果 |
+|---|---|
+| 不传 resampler | 13 对，末项 `a.hifi.npz`（**与既有断言一致，没改坏**） |
+| 清单 `files=['.myext','_myside']` | **15 对**，新增 `a.myext` / `a_myside` |
+| 清单为空 | 13 对 |
+| 内置 resampler（连 `manifest` 属性都没有） | 13 对，**不抛** ← 上游 NRE 的场景 |
+| `manifest = None` | 13 对，**不抛** |
+
+`pytest engine/tests` → **exit 0，249 passed / 1 skipped**。
+
+#### 顺带澄清一条**不是**漂移的差异
+
+上游的元文件表是 **14 对**（比我们多一个 `noExt + "_hnsep"`）。这**不是漏移植**：
+`worldline_renderer.py:34` 明确写着「**v11**：`PhraseSynthV2(use_hnsep: true)` —— 谐波/噪声分离模型
+`Hnsep` **未搬**」。没搬 Hnsep 就不需要 `_hnsep` 边车文件，**两者是一致的**。
+哪天要跟 Worldline v11，这两个得一起做。
 ### 3.3 明确不跟的
 
 - `RenderEngine.cs` 的 **Track Polish 改版**（含 UI 改动，与「UI 不变」冲突）
