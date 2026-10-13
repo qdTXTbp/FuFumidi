@@ -210,6 +210,39 @@ HTTPS 只保护传输过程，不保护「这个发布物本身是不是我们�
 > **这条最能说明「产物视角」的价值**：源码里 `urls: [url]` 读起来毫无问题，
 > 「直链 30 KB/s、镜像 1.12 MB/s」这个事实**只有实际去量才知道**。
 > 而这次量它的起因，本来是来查「有没有完整性校验」的。
+### 3.4 ✅ P1 已落地 · 移植上游 `f6b0b132`「Cut phrase snapshot allocations」
+
+上游提交 `f6b0b132`（2026-10-03）改了 4 个文件、+34/−30。它做的是**两件事**，而这两件事在 Python 里**价值相反**：
+
+| 上游改动 | C# 里的效果 | Python 里该不该跟 |
+|---|---|---|
+| ① 把 flag 表达式表**每个快照算一次**（原来每个音素都重算） | 4.6 MB → 1.1 MB / 快照，耗时减半 | **跟** —— 语言无关的算法收益 |
+| ② LINQ `Where/Select/FirstOrDefault` 改成 `foreach` | 消除闭包与迭代器分配 | **不跟** —— Python 里列表推导比 `for`+`append` **更快**，照搬只会变慢 |
+
+**只移植 ①。** 落点：
+
+- `pipeline_source.py`：`from_part` 里 `flag_expressions = UPhoneme.get_expression_descriptors(project, track)` **只算一次**，
+  传进 `PhonemeSource.of(...)`；快照字段 `flag_expressions` 由 `[]` 改为接上真表
+- `PhonemeSource.of`：把逐音素的 `phoneme.get_resampler_flags(project, track)` 换成
+  `UPhoneme.build_resampler_flags(flag_expressions, lambda abbr: phoneme.get_expression(...)[0])`
+  （`build_resampler_flags` 这个静态方法**我们的移植里本来就有** —— 缺的只是「把它提到循环外」这一步）
+
+#### 实测数字（N = 800 音素，与上游基准同规模）
+
+| 指标 | 移植前 | 移植后 | 改善 |
+|---|---|---|---|
+| flag 构建耗时 | 5.3 ms | **2.9 ms** | **1.83×** |
+| 分配总量（24 个表达式） | 0.20 MB | **0.88 KB** | **230×** |
+| 分配总量（96 个表达式） | 0.71 MB | **2.09 KB** | **347×** |
+
+**注意别照抄上游的数字**：上游说的「4.6 MB → 1.1 MB」是 **C#** 的口径（LINQ 闭包 + 迭代器 + 数组开销大，
+而且他们的工程表达式更多）。我们这条链原本就用的是列表推导，单次体积更小，
+但**比值同样巨大**，且消掉的是**纯粹的分配抖动**（GC 压力），这正是上游说的「拖动时每秒几十次 GC」的来源。
+
+#### 验收
+
+- `ast.parse` 通过；`pytest engine/tests` → **exit 0，243 passed / 1 skipped / 0 failed**
+- `get_resampler_flags` **保留未删** —— `classic/ust_note.py:120` 那条路径仍在用
 ### 3.3 明确不跟的
 
 - `RenderEngine.cs` 的 **Track Polish 改版**（含 UI 改动，与「UI 不变」冲突）

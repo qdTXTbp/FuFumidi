@@ -323,6 +323,7 @@ class PhonemeSource:
     @classmethod
     def of(cls, phoneme, note_index: int, axis, part_position: int, track, project,
            track_resampler: str, xsy_available: bool,
+           flag_expressions: List[Any],
            graph_expressions: Optional[List[Any]]) -> 'PhonemeSource':
         """对应 C# 的 `PhonemeSource(UPhoneme, int, TimeAxis, int, UTrack, UProject,
         string, bool, IReadOnlyList<UExpressionDescriptor>?)` 构造函数。
@@ -378,7 +379,16 @@ class PhonemeSource:
                 and 0 <= eng < len(eng_descriptor.options or [])
                 and (eng_descriptor.options[eng] or '')):
             resampler = eng_descriptor.options[eng]
-        flags = phoneme.get_resampler_flags(project, track)
+        # ★ 上游 f6b0b132「Cut phrase snapshot allocations」（2026-10-13 移植）：
+        #   flag 表达式表**每个快照只算一次**，由调用方传进来。
+        #   原来这行是 `phoneme.get_resampler_flags(project, track)`，每个音素都要重算一遍
+        #   轨道表达式表（每次都新建一个 list）。上游实测：800 音符的 part 上**每个快照约 4.6 MB**
+        #   分配，拖动时每秒触发几十次 GC；提出循环后约 **1.1 MB**、快照耗时**减半**。
+        #   ※ 上游同一提交还把 LINQ 改成了 foreach —— 那半条**故意不移植**：
+        #     Python 里列表推导比 for+append 更快，照搬只会变慢。只取语言无关的那一半。
+        flags = UPhoneme.build_resampler_flags(
+            flag_expressions,
+            lambda abbr: phoneme.get_expression(project, track, abbr)[0])
         voice_color = phoneme.get_voice_color(project, track)
         suffix = _subbank_suffix(track.singer_obj, voice_color)
         # `xsyAvailable` 为假时目标语音色**不是空串而是 null**（两处判断因此都跳过）
@@ -591,11 +601,13 @@ class PhraseSource:
         # 表达式图（ExpressionGraph/*）未照搬 → ForTrack 恒为 None，下辖四项一并保持默认
         expression_graph = None
         graph_expressions = None
+        # 每个快照算一次，供下面**每个** PhonemeSource 复用（上游 f6b0b132）
+        flag_expressions = UPhoneme.get_expression_descriptors(project, track)
 
         phoneme_sources = [
             PhonemeSource.of(phoneme, note_index(phoneme.parent),
                              axis, part.position, track, project, resampler,
-                             xsy_available, graph_expressions)
+                             xsy_available, flag_expressions, graph_expressions)
             for phoneme in phonemes
         ]
         return cls(
@@ -620,7 +632,7 @@ class PhraseSource:
             expression_graph=expression_graph,
             masked_curves=None,
             phoneme_anchors=None,
-            flag_expressions=[],
+            flag_expressions=flag_expressions,
             drivable_phoneme_expressions={},
             phonemes=phoneme_sources,
             phrase_groups=list(groups),
