@@ -242,6 +242,8 @@ Windows 上 `requests` 会通过 `urllib.request.getproxies()` **读注册表里
 
 **默认口径：路径交给脚本自动测速选（或 ≥ 200 MB 直接走网页传）；50 ~ 200 MB 可加 `--race 3`。**
 
+> **2026-10-13 补充：并行要跨资产、不要跨流；慢就重掷。见 §11.8。**
+
 ```bash
 # >= 200 MB：不要用脚本，直接开网页拖进去（实测 4.87 MB/s）
 #   https://github.com/<owner>/<repo>/releases/tag/v<版本>  ->  Edit  ->  拖入  ->  Update release
@@ -318,3 +320,57 @@ python scripts/upload-release-asset.py <token> qdTXTbp/FuFumidi v5.0.1 release/l
    \`preload.js\`、\`main/*.js\`、\`frontend/src/types/ipc.ts\`，并在 PR 描述里写明兼容性。
 2. 每一句中文 \`t('…')\` 都要有英文与日文条目（\`core/i18n.js\` / \`core/i18n_ja.js\`）。
 3. 界面类改动必须在安装版（\`E:\\Midi\\FuFumidi\`）跑一遍冒烟再提 PR —— 构建通过不等于能用。
+
+---
+
+### 11.8 慢就重掷；并行要**跨资产**，不要跨流（2026-10-13 实测，5.1.0 发布）
+
+**背景**：同一次发布里，同一个 143.9 MB 的文件出现了 **0.31 / 0.39 / 4.60 MB/s** 三种速度（相差 15 倍），
+而 608.9 MB 的完整包最终跑出 **4.27 MB/s**。差别不在文件、不在参数，在**当时那条路**。
+以下四条是这次踩出来的，按重要性排列。
+
+**实测数据（同机、同一发布、2026-10-13 夜）**
+
+| 场景 | 实测 | 说明 |
+|---|---|---|
+| 系统代理端口 `127.0.0.1:10810` | **不在监听** | 此刻只有直连一条路，§11.7 的"自动测速选路"没有第二条路可选 |
+| 直连探针（5 MB → Cloudflare `__up`） | **0.42 MB/s** | 与 §11.7 记的直连地板 0.40 MB/s 一致 |
+| GitHub `--race 3`（**同时**还在传 CNB） | 8.2 MB 用 26 s = **0.31 MB/s**；143.9 MB 传 15 分钟**没传完** | 3 条流抢同一条 0.42 MB/s 的管道 → 每条只剩 0.14；跨发布又抢一次 |
+| GitHub `fast-upload.mjs --jobs 2`（每条资产单流；CNB 已结束） | **752.8 MB / 144 s = 5.23 MB/s**（608.9 MB 单独 142 s = 4.27 MB/s） | 并行**跨资产**才是有效并行 |
+| GitHub `--race 1` 单资产（六分钟后，同一个 143.9 MB） | **0.39 MB/s**（370 s） | 路况是突发性的：慢的时候重掷，不要等 |
+
+**四条规则**
+
+1. **并行要跨资产，不要跨流。** release asset 接口不支持分片（§11.7 已记），所以
+   `--race N` 在**只有一条可用路线**时是纯粹的自我竞争：N 条流各分到 1/N 带宽，
+   总时间反而变成 N 倍。要并行就并行**不同的资产**（`fast-upload.mjs --jobs 2`），
+   每条资产保持单流（`--race 1`）。`--race 3` 只在**确实存在多条快慢不同的路由**时才开。
+
+2. **同一时间只跑一条发布通道。** CNB 单独约 0.95 MB/s；CNB 与 GitHub 同时跑时 GitHub 掉到 0.31 MB/s，
+   两者相加 ≈ 单跑 CNB 的速率 —— 它们共用同一条上行。**先传完 CNB 再传 GitHub（或反之）。**
+
+3. **慢就重掷，不要等。** 吞吐低于 0.5 MB/s 时，掐掉重传的期望收益远大于等它跑完
+   （实测同一文件 0.39 → 4.60 MB/s）。先跑一次 5 MB 探针确认当前路况与代理端口状态，
+   再决定：重掷 / 换 `--no-proxy` / 换 `--proxy <URL>` / 交给网页传。
+
+4. **上传后必须用 API 核对资产清单（名字 + size + state），不能只信脚本输出。** 本次两次踩到：
+   · `fast-upload.mjs` 把 `FuFumidi.Install.5.1.0.exe` 报成"已有相同大小，跳过"，
+     但线上**根本没有这个资产**（它按大小匹配到了同尺寸的兄弟资产 `FuFumidi.Install.exe`）；
+   · `metadata-5.1.0.json` 的一个 race slot 收到 `HTTP 404 update-a-release-asset`，
+     另一个 slot "胜出"、脚本打印了 `uploaded:`，而线上**始终没有这个资产**。
+   两条都会让"发布成功"变成假象 —— 固定名地址（`releases/latest/download/<固定名>`）一旦缺资产，
+   应用内自动更新就断链。
+
+**核对口令（每次发布收尾跑一遍）**
+
+```powershell
+# 资产清单：名字 / 大小 / 状态，逐个对照本地 SHA256SUMS.txt
+$rel = Invoke-RestMethod -Uri "https://api.github.com/repos/qdTXTbp/FuFumidi/releases/tags/v<版本>" -Headers $h
+$rel.assets | Sort-Object name | ForEach-Object { $_.name.PadRight(38) + $_.size + "  " + $_.state }
+# 固定名地址必须能解析（应用内更新就用它）
+curl.exe -sIL "https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe"
+curl.exe -sIL "https://cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/releases/latest/download/FuFumidi.Install.exe"
+```
+
+**默认口径（2026-10-13 起）**：优先 `fast-upload.mjs --jobs 2`（每条资产单流、跨资产并行）；
+单资产 `--race 3` > 网页传 > 等待。任何一次低于 0.5 MB/s 都先重掷再谈别的。
