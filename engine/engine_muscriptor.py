@@ -291,6 +291,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         #   若 K 在某个时间点台阶式上涨，就能解释逐块耗时的 10 倍台阶。
         _open_probe = bool(os.environ.get('FUFUMIDI_OPEN_NOTE_PROBE'))
         _open_peak = [0]
+        _open_seen = [0]
 
         def _events_capped(events):
             """进度透传 + 超长音符强制收尾（cap <= 0 时行为与旧版一致）。"""
@@ -326,15 +327,21 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     continue
                 if _NoteStartEvent is not None and isinstance(ev, _NoteStartEvent):
                     open_notes[ev.index] = ev
-                    if _open_probe and len(open_notes) > _open_peak[0]:
-                        _open_peak[0] = len(open_notes)
-                        try:
-                            log_cb('###OPENNOTES ' + _json.dumps({
-                                'k': len(open_notes),
-                                't': float(getattr(ev, 'start_time', 0.0) or 0.0),
-                            }))
-                        except Exception:
-                            pass
+                    if _open_probe:
+                        _open_seen[0] += 1
+                        if len(open_notes) > _open_peak[0]:
+                            _open_peak[0] = len(open_notes)
+                        # 每 300 个 NoteStart 采样一次：要的是 K 随时间的**曲线**，
+                        # 只看峰值不够 —— 峰值相同、持续时长不同，O(K·E) 的总代价差很远。
+                        if _open_seen[0] % 300 == 0:
+                            try:
+                                log_cb('###OPENNOTES ' + _json.dumps({
+                                    'n': _open_seen[0],
+                                    'k': len(open_notes),
+                                    't': round(float(getattr(ev, 'start_time', 0.0) or 0.0), 1),
+                                }))
+                            except Exception:
+                                pass
                     yield ev
                     continue
                 if _NoteEndEvent is not None and isinstance(ev, _NoteEndEvent):
