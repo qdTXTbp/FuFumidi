@@ -84,6 +84,18 @@ for (const f of frontFiles) {
 }
 const aliasReOf = (set) => [...set].map(a => a.replace(/[$]/g, '\\$')).join('|');
 
+// ★ 标准 API 名排除表：短别名（`b` / `ab` 之类）在别的上下文里指向 AudioBuffer、
+//   IndexedDB、DOM 元素，会把 `ab.getChannelData()`、`b.transaction()` 误报成桥接调用。
+//   实测 `getChannelData` 就是这么冒出来的假报（ab 是 AudioBuffer，不是 bridge）。
+//   这张表要**显式写下来**：不写，下次审计的人不知道这些是被有意放过的。
+//   代价：如果将来真有同名的桥接方法，它会被漏掉 —— 所以桥接方法一律用
+//   带前缀的描述性命名（dbXxx / gpuXxx / diffsingerXxx），不要叫 get/set/find。
+const STD_API = new Set(['getChannelData','arrayBuffer','createObjectStore','objectStoreNames',
+  'transaction','slice','splice','find','findIndex','some','every','filter','map','forEach',
+  'keys','values','entries','click','connect','disconnect','get','set','has','delete','push',
+  'pop','shift','unshift','indexOf','includes','join','split','replace','match','test','exec',
+  'then','catch','finally','toString','valueOf','addEventListener','removeEventListener']);
+
 const bridgeAliasesCache = new Map();
 const used = new Map();   // name -> [文件:行]
 // 同时抓顶层 `bridge.X(` 与嵌套 `bridge.X.Y(` —— 后者用于识别命名空间访问
@@ -111,6 +123,7 @@ for (const f of frontFiles) {
     for (const m of line.matchAll(bridgeAliasesCache.get(f))) {
       // 有第二段就记成「父.子」，否则只记顶层名
       const n = m[2] ? (m[1] + '.' + m[2]) : m[1];
+      if (STD_API.has(n)) continue;   // 见 STD_API：短别名撞上标准 API
       if (!used.has(n)) used.set(n, []);
       used.get(n).push(path.relative(ROOT, f) + ':' + (i + 1));
     }
