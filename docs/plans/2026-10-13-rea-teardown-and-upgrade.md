@@ -600,6 +600,60 @@ i=428  seek 2135.0s  15289.5 ms
 → **尚未定性**的是：这 1000× 的抖动有多少来自 GPU 功耗/热节流、多少来自模型本身、多少来自调度。
 
 **跑完后才能给分布**（1446 块全量 + 按时间的分段统计）。
+### 3.12 ❌ Q4 定性为**不可用**，不改（先前描述有误，此处更正）
+
+我先前的写法是「上游把 WORLDLINE-R1.1 加进**默认渲染器偏好**」—— 读起来像改个默认值。
+**读了上游 diff 才发现不是：**
+
+```csharp
+- getRendererOptions() => { "WORLDLINE-R", "Classic" }
++ getRendererOptions() => { WORLDLINE_R, WORLDLINE_R11, CLASSIC }   // 新增一个渲染器变体
+- if (DefaultRenderer == "Classic" && singerType == Classic) return CLASSIC;
++ if (singerType == Classic && classicRenderers.Contains(DefaultRenderer))
++     return DefaultRenderer;                                        // 尊重用户选的那个
+```
+
+#### 我们的移植：机器全都有，只差两行 —— 但这两行**不能加**
+
+已有的（查证过）：`WORLDLINE_R11 = 'WORLDLINE-R1.1'`、
+`CLASSIC_RENDERERS = (WORLDLINE_R, WORLDLINE_R11, CLASSIC)`（正对上游的 `classicRenderers`）、
+`CreateRenderer` 的 `WORLDLINE_R11 -> version=11` 分支、`register_renderer(WORLDLINE_R11, ...)`。
+
+差的是 `RENDERER_OPTIONS = ('WORLDLINE-R', 'Classic')` 要加一项、
+`get_default_renderer` 要由 `== 'Classic'` 改成 `in CLASSIC_RENDERERS`。
+
+**但 v11 需要 Hnsep 模型，没搬。** `worldline_renderer.py:243` 写得很清楚：
+
+```python
+if self.version == 11:
+    if _default_hnsep() is None:
+        raise NotImplementedError('Worldline-R1.1（v11）需要谐波/噪声分离模型，尚未照搬：…')
+```
+
+所需件（源码里逐条列了）：`Core/Analysis/Hnsep`（ONNX）+ `Analysiss` 的谐波分支 +
+`SynthSegment` 的 `sp_env_harmonic` 传递 + `HnAnalysisF0In` 绑定。
+
+→ **现在把选项加进去，用户一选就报错，比不提供更糟。**
+→ `get_default_renderer` 也不能单独改：那样存量偏好里若存着 `WORLDLINE-R1.1` 就会被「尊重」，直接抛错。
+**两行必须与 Hnsep 一起做。**
+
+> 这同时解释了我早先在 §3.8 记的那条：上游 meta 文件表比我们多一个 `_hnsep` ——
+> 当时判「没搬 Hnsep 就不需要 `_hnsep` 边车，两者一致」。**现在看是一致的，但根因在这**：
+> Hnsep 整条链没搬，所以既不需要边车、也不能提供 v11。
+
+#### 结论
+
+**Q4 不是「改个默认值」，而是「移植 Hnsep（一个 ONNX 模型 + 分析分支）」** —— 那是一个独立项目，
+不是本轮能顺手做掉的。**不改，并把这个前提记在这里**，避免下次又当成两行小改去动它。
+
+#### 另外：本机**没有装任何外部 resampler**
+
+`FuFumidiData\resamplers\` **不存在** —— 所以 P3 里设想的「worldline 进程内 vs 外部 resampler」
+对照实测**在本机做不了**（没有外部 resampler 可跑）。
+能测的只有「外部路径的固定开销」那笔账（已在 §3.9 量到 25 ms/音符）。
+
+声库倒是有：`FuFumidiData\voicebanks\` 下有 `ChenZhe_Voice`(833 文件)、`HowHow_CV`(418)、`Iona_Beta`(109)。
+（我先前用 `-Depth 4` 搜漏了，改用全盘搜才找到。）
 ### 3.3 明确不跟的
 
 - `RenderEngine.cs` 的 **Track Polish 改版**（含 UI 改动，与「UI 不变」冲突）
