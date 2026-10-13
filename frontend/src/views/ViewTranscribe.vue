@@ -23,7 +23,11 @@ const pmodel = ref('piano_pt');          // 钢琴子模型：piano_pt | aria | 
 const perf = ref('quality');             // quality | balanced | fast
 const perfHint = ref('');
 const bassBoost = ref(false);            // 低音增强（仅 basic 子模型）：关闭 melodia trick 以保留低音声部
-const beatGrid = ref(false);             // 节拍网格检测（仅 MuScriptor）：默认关，勾选才加载；未下载/失败自动跳过
+// 节拍网格检测（仅 MuScriptor）。★ 2026-10-14：**装了 beat_this 模型就默认开**
+// （用户要求）。仍然可以在界面上关掉 —— 手动改过之后不再被默认值覆盖。
+// 未下载 / 加载失败时引擎侧会自动跳过，不阻断转录。
+const beatGrid = ref(false);
+let beatGridUserSet = false;             // 用户是否手动改过（改过就不再用默认值覆盖）
 // ④ 批 A：引擎早就有、界面一直没入口的模型选项。默认值一律保持「原来的行为」，
 // 所以不碰这些控件时输出与旧版一致（质量相关的开关默认关，见计划文档 §6）。
 const maxFreq = ref(0);                  // 最高音高 Hz（仅 basic，0 = 不限制）：滤掉高频噪声/镲片串音
@@ -104,6 +108,10 @@ async function refreshModelStatus() {
         sepModel.value = (sepArr.find(m => m.exists) || sepArr[0] || {}).id || '';
       }
       if (sepModel.value) applyMsPresetForModel(sepModel.value);
+      // ★ 节拍网格：模型装了（beat_this = true）就默认勾上；
+      //   用户手动关过则尊重用户的选择。modelInstalled 返回 null 表示「未知」，
+      //   那种情况**不动** —— 别把默认值建立在一个没查清的状态上。
+      if (!beatGridUserSet && modelInstalled('beat_this') === true) beatGrid.value = true;
     }
   } catch (e) {}
 }
@@ -1387,7 +1395,7 @@ onBeforeUnmount(() => {
             </label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label><span><b>{{ t('节拍网格检测') }}</b><small>{{ t('对齐音符时值；未下载或失败时自动跳过，不影响转录') }}</small></span><input type="checkbox" v-model="beatGrid"></label>
+            <label><span><b>{{ t('节拍网格检测') }}</b><small>{{ t('对齐音符时值；未下载或失败时自动跳过，不影响转录（装了模型默认开）') }}</small></span><input type="checkbox" v-model="beatGrid" @change="beatGridUserSet = true"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>

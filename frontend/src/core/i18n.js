@@ -1470,6 +1470,8 @@ export const I18N_MAP = {
   '低配省资源': 'Low-spec (fewer resources)',
   // WP1-2：最低音高从「低音增强」独立出来
   '最低音高': 'Lowest pitch',
+  // 节拍网格：装了 beat_this 模型后默认开
+  '对齐音符时值；未下载或失败时自动跳过，不影响转录（装了模型默认开）': 'Aligns note durations; skipped automatically when not downloaded or on failure, never blocks transcription (on by default once the model is installed)',
   '滤掉低于此频率的成分（低频隆隆声/次声）。低音声部被吞时先试 40 Hz；0 = 不限制': 'Filters out content below this frequency (low-frequency rumble / infrasound). If the bass part gets swallowed, try 40 Hz first; 0 = no limit',
   '全部核心 + 最大批量：同一台机器上最快，占内存/显存最多': 'All cores + max batch: fastest on this machine, uses the most RAM/VRAM',
   '限制到 4 核、批量减半：折中': 'Capped at 4 cores, batch halved: a middle ground',
