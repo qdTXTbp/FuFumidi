@@ -443,6 +443,47 @@ FAILED test_external_with_same_name_is_not_in_map
 - 新增 `engine/tests/test_tools_manager_name_conflict.py`（4 条）
 - 变异测试：删守卫 → 2 条 FAIL；恢复 → 4 条 PASS
 - `pytest engine/tests` → **exit 0**
+### 3.9 ✅ P3 实测完毕 · 外部 resampler 每音符付 **25 ms** 的进程创建
+
+先量再改。基准脚本已固化：`python scripts/bench-spawn-overhead.py`。
+
+#### 量的是什么
+
+`classic_renderer._render_external` 是**每个音素一个 `ResamplerItem`**，再 `_run_parallel(...)`；
+而 `ExeResampler` 走 `subprocess.run(...)` —— 就是 UTAU 生态那个老瓶颈：**逐音符起外部进程**。
+内置的 `WorldlineResampler` 是 ctypes 调原生库、**进程内**，没有这一笔。
+所以这里量的是**外部路径无论如何都要付的那一段**（跑 `cmd /c exit`，不含 resampler 自己的计算）。
+
+#### 数字（本机：32 逻辑核，Windows）
+
+| 项 | 中位 | 最快 |
+|---|---|---|
+| 空 `cmd` 进程创建 | **25.05 ms** | 22.89 ms |
+| `cmd.exe` 直接启动 | 24.54 ms | 23.15 ms |
+| 对照：进程内 2000 次算术 | 0.040 ms | 0.040 ms |
+
+**一次 spawn ≈ 625 次进程内算术。** 换算到一首歌（仅进程创建这一段）：
+
+| 音符数 | 单线程 | 8 线程理想并行 |
+|---|---|---|
+| 300 | 7.5 秒 | 0.9 秒 |
+| 1000 | **25.1 秒** | 3.1 秒 |
+| 3000 | 75.2 秒 | 9.4 秒 |
+
+#### 结论（以及**不能**从它推出的东西）
+
+- **能推**：外部 resampler 路径有一笔 ~25 ms/音符的**不可压缩**固定开销；
+  1000 音符的歌单是这一项就 25 秒。内置 worldline 路径**完全没有这一笔**。
+- **不能推**：**这不等于 worldline 渲染整体更快**。25 ms 只是外部路径的**下限**，
+  而两条路的实际渲染耗时、音质、以及 worldline 的实际覆盖率都还没量。
+  **本轮只量了「外部路径要付多少钱」，没量「换成 worldline 能省多少」。**
+
+#### 与 Q4 的关系
+
+上游 `2026-10-08` 的 `Renderers.cs` 改动是「**Add WORLDLINE-R1.1 to the default renderer preference**」——
+方向与本条一致：**让进程内的 worldline 渲染器进默认偏好**。
+所以 P3 与 Q4 指向同一个动作。但它改的是**默认值**（会影响所有用户的既有工程），
+**必须先量两条路的实际耗时与音质差**再动，本轮不碰。
 ### 3.3 明确不跟的
 
 - `RenderEngine.cs` 的 **Track Polish 改版**（含 UI 改动，与「UI 不变」冲突）
