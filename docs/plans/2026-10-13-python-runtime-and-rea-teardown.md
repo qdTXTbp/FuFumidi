@@ -272,6 +272,28 @@ T4/T5 是「上游有什么值得我们抄」，源码视角也能查一部分�
 这六个全是 **MSST**（`engine_msst.py`）的依赖，**demucs 一次都没被检查**。
 于是自检报 `separate ok`，而 demucs 那条路早已断 —— **校验项和它声称校验的引擎不是同一个**。
 
+### 缺陷 D · `>= x` 在 `shell: true` 下被 cmd 当成重定向 → **版本约束静默丢失**（潜在）
+
+`bundle-python312.js` 第 162/170 行把带约束的 spec 当**内联字符串**传给 `pipAnywhere()`，
+而 `pipAnywhere` → `spawnSync(cmd, { shell: true })`（第 72 行）。**cmd.exe 里 `>` 是重定向符。**
+
+```js
+pipAnywhere('--no-deps basic-pitch>=0.4.0')
+pipAnywhere('scikit-learn>=1.0 typing-extensions>=4.0 mir-eval>=0.6 resampy>=0.4')
+```
+
+**实验复刻**（`spawnSync('echo A>=0.4.0', {shell:true})`）：确实产出名为 `0.4.0` 的垃圾文件。
+仓库根因此留下 `0.4` / `0.4.0` / `0.6` 三个 **0 字节**文件（0 字节是因为 pip 带 `-q`，没有 stdout 可写）。
+已删除。
+
+**定性（不过度声称）**：实测 3.12 里这五个包**都装上了、约束也都满足**——
+scikit-learn 1.9.1 / typing-extensions 4.16.0 / mir-eval 0.8.2 / resampy 0.4.3 / basic-pitch 0.4.0。
+所以这是**潜在缺陷，不是当下故障**：cmd 把 `>=x` 连约束一起吃掉，**pip 只拿到包名、没拿到约束**，
+今天恰好解析到满足约束的版本。**后果是不可复现**（哪天上游出个大版本就会静默越界），不是装不上。
+
+**正确修法**：`pipAnywhere` 改成传 **argv 数组 + `shell: false`**，而不是拼字符串走 shell。
+注意 `-r requirements-bundle.txt` 那条路**不受影响**（约束在文件里，不过 shell）。
+
 ### ★ 三个缺陷是同一类：**只验「在不在」，不验「是不是对的那个」**
 
 - 缺陷 A：`muscriptor` 在 → ok（但版本错）
