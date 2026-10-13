@@ -213,6 +213,16 @@ contextBridge.exposeInMainWorld('fuBridge', {
   diffsingerListVoicebanks: () => ipcRenderer.invoke('diffsinger:listVoicebanks'),
   diffsingerImportVoicebankZip: (directPath) => ipcRenderer.invoke('diffsinger:importVoicebankZip', directPath),
   diffsingerDeleteVoicebank: (dir) => ipcRenderer.invoke('diffsinger:deleteVoicebank', dir),
+  // 文件关联开关（主进程有 settings:fileAssoc，但这里一直漏了暴露 ——
+  // 设置里的开关调用点还带 `if (bridge.fileAssoc)` 保护，于是**点了完全没反应、也不报错**。
+  fileAssoc: (enabled) => ipcRenderer.invoke('settings:fileAssoc', enabled),
+  // UTAU 声库删除（主进程有 utau:deleteVoicebank，同样漏了暴露）；
+  // 这个调用点**没有** guard，所以点「删除声库」会直接抛 TypeError。
+  utauDeleteVoicebank: (dir) => ipcRenderer.invoke('utau:deleteVoicebank', dir),
+  // 顶层 openExternal 别名：有 5 处按顶层调用（SettingsPanel 的 GitHub 反馈/已知问题、
+  // ViewModels、ViewSoundfonts），而它只挂在 update.openExternal 下 ——
+  // 那些调用点都带 `if (bridge.openExternal)` 保护，于是**静默不打开浏览器**。
+  openExternal: (url) => ipcRenderer.invoke('update:openExternal', url),
   diffsingerVoicebankRegistry: () => ipcRenderer.invoke('diffsinger:voicebankRegistry'),
   diffsingerDownloadVoicebank: (id) => ipcRenderer.invoke('diffsinger:downloadVoicebank', id),
   diffsingerCancelVoicebankDownload: (id) => ipcRenderer.invoke('diffsinger:cancelVoicebankDownload', id),
@@ -322,4 +332,12 @@ contextBridge.exposeInMainWorld('fuBridge', {
     // 分轨导出：伴奏源文件主进程直拷（字节不过 IPC）
     copyAsset: (payload) => ipcRenderer.invoke('project:copyAsset', payload),
   },
+  // ★ 顶层别名：上面这个 copyAsset 挂在 project.* 下，但 singer.ts:1490 是按
+  //   `b.copyAsset(...)`（顶层）调的 —— 拿到 undefined，靠 typeof guard 静默降级成
+  //   「当前版本不支持伴奏复制」。契约所有者是 preload，所以在这里补顶层入口。
+  //   （与 openExternal 同一类：嵌套命名空间 vs 顶层访问的错配。）
+  copyAsset: (payload) => ipcRenderer.invoke('project:copyAsset', payload),
+  // 歌词建议：主进程有 diffsinger:suggestLyric，但一直没暴露 ——
+  // ViewSing.vue 调 bridge.diffsingerSuggestLyric() 会直接拿 undefined。
+  diffsingerSuggestLyric: (payload) => ipcRenderer.invoke('diffsinger:suggestLyric', payload),
 });
