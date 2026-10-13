@@ -139,7 +139,7 @@ class ClassicHost:
         from .tools_manager import get_tools_manager
         return get_tools_manager().get_wavtool(name)
 
-    def copy_source_temp(self, source: str, temp: str) -> None:
+    def copy_source_temp(self, source: str, temp: str, resampler=None) -> None:
         """对应 `VoicebankFiles.Inst.CopySourceTemp(source, temp)`。
 
         ★ 只在**外部 resampler** 那条路上被调用（C# 用
@@ -147,12 +147,12 @@ class ClassicHost:
         WAV 的临时输入文件，而自带的 Worldline 直接读原音，不需要这一趟拷贝。
         """
         from .voicebank_files import get_voicebank_files
-        get_voicebank_files().copy_source_temp(source, temp)
+        get_voicebank_files().copy_source_temp(source, temp, resampler)
 
-    def copy_back_meta_files(self, source: str, temp: str) -> None:
+    def copy_back_meta_files(self, source: str, temp: str, resampler=None) -> None:
         """对应 `VoicebankFiles.Inst.CopyBackMetaFiles(source, temp)`（同上，仅外部路径用）。"""
         from .voicebank_files import get_voicebank_files
-        get_voicebank_files().copy_back_meta_files(source, temp)
+        get_voicebank_files().copy_back_meta_files(source, temp, resampler)
 
 
 #: 当前宿主（对应 C# 的全局单例）。测试/主程序在启动时替换它。
