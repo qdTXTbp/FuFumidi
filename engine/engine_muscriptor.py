@@ -246,6 +246,33 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         _last_chunk_t = [None]
         _chunk_i = [0]
 
+        def _timing_tee(stream):
+            """包在**原始 token 流**上，逐块打点。
+
+            ★ 为什么必须包在原始流上（踩过一次）：ChunkBoundary **只存在于原始流里** ——
+              实时模式被 `model.transcribe()` 内部消费掉，回放模式被 `decode_model_tokens()`
+              消费掉，`_events_capped` 收到的已经是解码后的音符事件。
+              第一版把打点放在 `_events_capped` 里，结果 `###CHUNKTIME` 一行都没出。
+            """
+            if not _chunk_timing:
+                return stream
+            for ev in stream:
+                if _ChunkBoundary is not None and isinstance(ev, _ChunkBoundary):
+                    _now = time.perf_counter()
+                    _prev = _last_chunk_t[0]
+                    _last_chunk_t[0] = _now
+                    _chunk_i[0] += 1
+                    if _prev is not None and log_cb:
+                        try:
+                            log_cb('###CHUNKTIME ' + _json.dumps({
+                                'i': _chunk_i[0],
+                                'seek': float(getattr(ev, 'seek_time', 0.0) or 0.0),
+                                'ms': round((_now - _prev) * 1000.0, 3),
+                            }))
+                        except Exception:
+                            pass
+                yield ev
+
         def _events_capped(events):
             """进度透传 + 超长音符强制收尾（cap <= 0 时行为与旧版一致）。"""
             open_notes = {}
@@ -269,20 +296,6 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     if t is not None:
                         for _end in _expired(t):
                             yield _end          # 先收尾，再吐触发它的事件，保持流有序
-                if _chunk_timing and _ChunkBoundary is not None and isinstance(ev, _ChunkBoundary):
-                    _now = time.perf_counter()
-                    _prev = _last_chunk_t[0]
-                    _last_chunk_t[0] = _now
-                    _chunk_i[0] += 1
-                    if _prev is not None and log_cb:
-                        try:
-                            log_cb('###CHUNKTIME ' + _json.dumps({
-                                'i': _chunk_i[0],
-                                'seek': float(getattr(ev, 'seek_time', 0.0) or 0.0),
-                                'ms': round((_now - _prev) * 1000.0, 3),
-                            }))
-                        except Exception:
-                            pass
                 if _ProgressEvent is not None and isinstance(ev, _ProgressEvent):
                     try:
                         if log_cb and getattr(ev, "total", 0):
@@ -409,6 +422,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     # 解码器只吃 token 流，回放不需要音频/模型/GPU
                     from muscriptor.events import decode_model_tokens as _decode
                     _stream, _ = _read_token_dump(_replay_from)
+                    _stream = _timing_tee(_stream)
                     events = _decode(_stream, model._tokenizer._vocab,
                                      model._instrument_for_program,
                                      frame_rate=model._tokenizer.frame_rate)
@@ -433,6 +447,16 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                                 pass
 
                         _atexit.register(_flush_dump)
+                    # 实时路径的逐块计时：同样要包在 `_generate_token_stream`（原始流）上，
+                    # 因为它被 `transcribe()` 内部消费，外面拿不到 ChunkBoundary。
+                    if _chunk_timing and not getattr(model, '_fufumidi_timing_teed', False):
+                        _orig_gts = model._generate_token_stream
+
+                        def _gts_teed(*a, _o=_orig_gts, **kw):
+                            return _timing_tee(_o(*a, **kw))
+
+                        model._generate_token_stream = _gts_teed
+                        model._fufumidi_timing_teed = True
                     events = model.transcribe(wav_tmp, instruments=constrain, **_gen_kw)
                 data = model.events_to_midi_bytes(_events_capped(events), beat_grid=beat_grid)
                 if _cap > 0:
