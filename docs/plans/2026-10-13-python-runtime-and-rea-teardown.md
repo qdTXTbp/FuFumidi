@@ -317,9 +317,9 @@ scikit-learn 1.9.1 / typing-extensions 4.16.0 / mir-eval 0.8.2 / resampy 0.4.3 /
 **因此 §5 的收尾清单里，#4 只剩改注释（已做）、#5 取消（不是缺陷）。**
 ### ★ 缺陷 A 与阶段 0 的 asar 完整性是同一类：**只验「在不在」，不验「是不是对的那个」**
 
-- 缺陷 A：`muscriptor` 在 → ok（但版本错）
-- 缺陷 C：`separate` 的包在 → ok（但查错了引擎）
+- 缺陷 A：`muscriptor` 在 → ok（**但装的是裸版**）
 - **阶段 0 的 asar 完整性**：文件在 → 部署成功（但 integrity 哈希过期）
+- （原先还列了「缺陷 C：`separate` 的包在 → ok」，**已撤回** —— 那条其实是正确的检查，见本节更正）
 
 **这是同一类缺陷的第二次出现。** 产物视角的价值再次被证实：源码审视 `deps.py` 时，
 `REQUIRED` 表读起来完全合理；只有**把两侧产物摆在一起比**，才看得出「检查项指向的不是要保的东西」。
@@ -352,7 +352,7 @@ scikit-learn 1.9.1 / typing-extensions 4.16.0 / mir-eval 0.8.2 / resampy 0.4.3 /
 ### 待办（T1 的收尾）
 
 1. `bundle-python.js` / `bundle-python312.js`：`muscriptor>=0.1`（PyPI 裸版）→ 改为装补丁包
-2. `deps.py`：`muscriptor` 组从「import 成功」升级为**校验补丁身份**（比对 `events.py` 哈希，或查 `DEFAULT_MAX_NOTE_HOLD_SEC` / `max_note_hold` 参数存在），否则缺陷 A 永远静默
+2. ~~`deps.py`：`muscriptor` 组升级为校验补丁身份~~ ✅ **已做**：改查补丁符号 `DEFAULT_MAX_NOTE_HOLD_SEC`（不用文件哈希，因为用户重装后哈希会变、但语义还在就不该报错）。实测 3.11 → `ok:true`；裸版 → `ok:false`
 3. `deps.py`：`separate` 组补上 demucs（或明确把 demucs 路径废弃，并从 `engine_separate.py` 与 `engine.py` 的文案里去掉）
 4. `requirements-bundle.txt`：第 6 行注释与正文二选一改齐
 

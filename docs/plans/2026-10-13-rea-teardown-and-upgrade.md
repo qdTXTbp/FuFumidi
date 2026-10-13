@@ -139,14 +139,15 @@
 |---|---|---|
 | 1 | Python 3.12 装配 | ✅ 完成（3.12.10 / 13.7 min / 6 组自检 ok） |
 | 2 | XPU 包 → CNB 上传 | ✅ 完成（1518.4 MB / 1404 s / verify 200） |
-| 3 | **缺陷 A**：3.12 的 muscriptor 是裸上游版，补丁没上 | ⏳ 待修 |
-| 4 | **缺陷 B**：`requirements-bundle.txt` 注释说收 demucs、正文没有 | ⏳ 待修 |
-| 5 | **缺陷 C**：`deps.py` 的 `separate` 组检查的是 MSST，没检查 demucs | ⏳ 待修 |
-| 6 | **缺陷 D**：`pipAnywhere` 走 `shell:true`，`>=x` 被 cmd 当重定向 | ⏳ 待修 |
+| 3 | **缺陷 A**：3.12 的 muscriptor 是裸上游版，补丁没上 | ✅ **已修**（`0df062e`）脚本 `[3b/5]` 打补丁；重跑验收 exit 0，独立复验 `events.py` 12933 B / `75df831b…`、签名含 `max_note_hold=15.0` |
+| 4 | **缺陷 B**：注释说收 demucs、正文没有 | ✅ **已修**（注释改成与正文一致：分离走 MSST，不需 demucs） |
+| 5 | ~~缺陷 C~~ | ✅ **撤回：不是缺陷**（MSST 才是分离引擎，`deps.py` 本来就是对的）。附带发现 `engine_separate.py` 是**死代码** |
+| 6 | **缺陷 D**：`pipAnywhere` 走 `shell:true`，`>=x` 被 cmd 当重定向 | ✅ **已修 + 已验证**（改 argv + `shell:false`；重跑后仓库根垃圾文件 **0 个**，修复前 3 个） |
 | 7 | asar integrity 同步（阶段 0 发现） | ✅ 已修（`64219bc`，310 文件 0 不匹配） |
+| 7b | **新增守卫**：`deps.py` 校验 muscriptor **补丁身份**（不只 import） | ✅ 已加并实测：3.11 → `ok:true`；裸版 → `ok:false, broken:[缺 FuFumidi 补丁]` |
 | 8 | ROCm 加速包重建（要 3.12，之前被阻塞） | ⏳ 现已具备条件 |
 | 9 | 尾部安静段异常（115–120 min，median 0.010s、`>2s` 15.9%） | ⏳ 未查 |
-| 10 | 11 个 TODO 桥接方法（接通 or 删除） | ⏳ 未决 |
+| 10 | 11 个 TODO 桥接方法（接通 or 删除） | ✅ **已定性**：`preload.js` / `main/` 里 **0 个 TODO**；`audit-bridge-contract.cjs` 跑出 **EXIT=0「没有发现契约漂移」**，未接项都在 `ALLOWED_UNUSED` / `ALLOWED_STUBS` 里带理由登记，属**已文档化豁免**，非待办 |
 | 11 | Intel XPU 实机验证 | ⛔ **阻塞**：本机无 Intel GPU，只能标注「未经实机验证」 |
 
 ---
