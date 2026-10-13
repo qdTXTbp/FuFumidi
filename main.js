@@ -61,6 +61,7 @@ const { registerDiffsingerIpc } = require('./main/diffsinger');
 const { registerCoverIpc } = require('./main/cover');
 const { createHotkeys, HOTKEY_ACTIONS } = require('./main/hotkeys');
 const { registerSoundfontWorkshopIpc } = require('./main/soundfonts');
+const { registerUserMetaIpc } = require('./main/usermeta');
 const { createWindow, configureSession, openFileFromArgv, openPath, takePendingOpen } = require('./main/window');
 const { pyLit, parsePyJson } = require('./main/py-util');
 
@@ -129,6 +130,8 @@ if (!gotLock) {
     registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, cancelEngineJob: (...a) => cancelJob(...a), pluginHost, readSettings, resolveSeparateModel: (id) => (ModelsService ? ModelsService.resolveSeparateModel(id) : null) });
     registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, parsePyJson });
     registerPresetsIpc({ ipcMain, runEngineInline, parsePyJson, pyLit });
+    // 用户元数据（名字/作者/来源/标签/分类/排序/顶置）：资源中心四页 + 音色工坊共用一张表
+    registerUserMetaIpc({ ipcMain });
     registerDialogsIpc({ ipcMain, dialog, path, fs, app, spawnEngine });
     registerDiagnosticsIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine });
     // 依赖 / 环境 / 模型目录规范化：把旧版散落在 C 盘用户目录下的重型目录

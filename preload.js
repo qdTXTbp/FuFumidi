@@ -93,6 +93,16 @@ contextBridge.exposeInMainWorld('fuBridge', {
     openDir: () => ipcRenderer.invoke('sf-workshop:openDir'),
     onProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('sf-workshop:progress', w); return () => ipcRenderer.removeListener('sf-workshop:progress', w); },
   },
+  /* 用户元数据：按 "<kind>:<id>" 存用户改过的名字/作者/来源/标签/分类/排序/顶置。
+     kind ∈ model | utau | ds | sf | voice。落盘在数据根（整包更新不会碰）。
+     为什么是独立表：资源中心四页的数据每次刷新都会重算，用户改的东西写进那些结构里会丢。 */
+  usermeta: {
+    list: () => ipcRenderer.invoke('usermeta:list'),
+    set: (kind, id, patch) => ipcRenderer.invoke('usermeta:set', kind, id, patch),
+    remove: (kind, id) => ipcRenderer.invoke('usermeta:remove', kind, id),
+    reorder: (kind, ids) => ipcRenderer.invoke('usermeta:reorder', kind, ids),
+    pin: (kind, id, pinned) => ipcRenderer.invoke('usermeta:pin', kind, id, pinned),
+  },
   pickMusicXML: () => ipcRenderer.invoke('dialog:pickMusicXML'),
   exportScorePdf: () => ipcRenderer.invoke('score:exportPdf'),
   transcodeVideo: (data, audio, opts) => ipcRenderer.invoke('video:transcode', { data, audio, ...(opts || {}) }),

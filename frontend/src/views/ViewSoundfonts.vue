@@ -23,6 +23,70 @@ let offProg = null;
 const previewBuf = reactive({});      // 预览按钮忙碌态
 const canceling = reactive({});       // 已请求取消的 id：用于忽略后续进度事件
 
+/* ---------------- 用户元数据（名字 / 作者 / 来源 / 标签 / 分类） ----------------
+   落在**数据根**的 usermeta.json（见 main/usermeta.js）。为什么必须单独存：
+   sf-workshop:list 每次刷新都会**重算**，用户改的东西写进那份结果里，刷新即丢。
+   约定：字段为空 = 用原始值（所以"恢复原名"就是把字段清空）。 */
+const meta = reactive({});            // "<kind>:<id>" → { name, author, source, tags, category, ... }
+async function loadMeta() {
+  try {
+    if (bridge && bridge.usermeta && bridge.usermeta.list) {
+      const r = await bridge.usermeta.list();
+      if (r && r.ok && r.items) {
+        for (const k of Object.keys(meta)) delete meta[k];
+        Object.assign(meta, r.items);
+      }
+    }
+  } catch (e) {}
+}
+const sfMeta = (item) => ((item && item.id) ? (meta['sf:' + item.id] || {}) : {});
+/** 展示名：用户改过就用用户的，否则原始名 —— "空 = 用原始值"这条约定在这里落地。 */
+const sfName = (item) => sfMeta(item).name || (item ? item.name : '');
+const sfAuthor = (item) => sfMeta(item).author || '';
+const sfTags = (item) => sfMeta(item).tags || [];
+const sfCategory = (item) => sfMeta(item).category || (item ? (item.category || '') : '');
+
+/** 来源标签：**只按 source 出**，不再看 downloaded —— "来源分不清"的根因就是看了 downloaded。 */
+const SF_SOURCE_LABEL = () => ({ builtin: t('随包内置'), downloaded: t('精选下载'), imported: t('本地导入'), curated: t('未安装') });
+const sfSourceLabel = (item) => SF_SOURCE_LABEL()[(item && item.source) || ''] || '';
+
+/* ---------------- 编辑导入项（名字 / 作者 / 来源 / 标签 / 分类） ---------------- */
+const editId = ref('');
+const editForm = reactive({ name: '', author: '', source: '', tags: '', category: '' });
+function startEdit(item) {
+  if (!item) return;
+  const m = sfMeta(item);
+  editForm.name = m.name || ''; editForm.author = m.author || ''; editForm.source = m.source || '';
+  editForm.tags = (m.tags || []).join('，'); editForm.category = m.category || '';
+  editId.value = item.id;
+}
+function cancelEdit() { editId.value = ''; }
+async function saveEdit(item) {
+  if (!bridge || !bridge.usermeta || !bridge.usermeta.set) { toast(t('请使用桌面版保存'), 'warn'); return; }
+  const patch = {
+    name: editForm.name.trim(), author: editForm.author.trim(), source: editForm.source.trim(),
+    category: editForm.category.trim(),
+    tags: editForm.tags.split(/[，,\s]+/).map((s) => s.trim()).filter(Boolean),
+  };
+  const r = await bridge.usermeta.set('sf', item.id, patch);
+  if (r && r.ok) { editId.value = ''; await loadMeta(); toast(t('已保存'), 'ok'); }
+  else toast(t('保存失败：') + ((r && r.error) || ''), 'warn');
+}
+async function resetEdit(item) {
+  if (!bridge || !bridge.usermeta || !bridge.usermeta.remove) return;
+  const r = await bridge.usermeta.remove('sf', item.id);
+  if (r && r.ok) { editId.value = ''; await loadMeta(); toast(t('已恢复原始名称'), 'ok'); }
+}
+
+/* ---------------- 我的音色搜索：名字 / 作者 / 标签 / 分类 一起搜 ---------------- */
+const sfQuery = ref('');
+const customsShown = computed(() => {
+  const q = sfQuery.value.trim().toLowerCase();
+  if (!q) return customs.value;
+  return customs.value.filter((it) => [sfName(it), it.name, sfAuthor(it), sfCategory(it), sfTags(it).join(' '), it.desc || '']
+    .join(' ').toLowerCase().indexOf(q) >= 0);
+});
+
 function fmtSize(b) {
   if (!b) return '—';
   if (b > 1 << 30) return (b / (1 << 30)).toFixed(1) + ' GB';
@@ -33,6 +97,7 @@ function fmtSize(b) {
 async function refresh() {
   loading.value = true;
   try {
+    await loadMeta();          // 先把用户改过的名字/标签读进来，再渲染列表
     if (bridge && bridge.sfWorkshop && bridge.sfWorkshop.list) {
       const r = await bridge.sfWorkshop.list() || { registry: [], customs: [], dir: '' };
       registry.value = r.registry || [];
@@ -296,8 +361,8 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
       <div v-else class="sf-grid">
         <div v-for="item in registry" :key="item.id" class="sf-tile" :class="{ active: isActive(item) }">
           <div class="sf-tile-top">
-            <div class="sf-tile-name">{{ item.name }}<span v-if="item.version" class="sf-ver"> v{{ item.version }}</span></div>
-            <span v-if="item.downloaded" :class="['plg-tag', 'on']">{{ item.builtin ? t('内置') : t('已下载') }}</span>
+            <div class="sf-tile-name">{{ sfName(item) }}<span v-if="item.version" class="sf-ver"> v{{ item.version }}</span></div>
+            <span v-if="item.source === 'builtin' || item.source === 'downloaded'" :class="['plg-tag', 'on']">{{ sfSourceLabel(item) }}</span>
           </div>
           <div class="sf-tile-desc">{{ item.desc }}</div>
           <div class="sf-tile-meta"><span class="sf-cat">{{ item.category }}</span>{{ fmtSize(item.expected) }} · {{ item.license }}</div>
@@ -334,28 +399,57 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
       </div>
     </div>
 
-    <!-- ============ 我的音色（自定义导入） ============ -->
+    <!-- ============ 我的音色（**只列本地导入**） ============
+         从「内置精选」下载的音色在上面的栏里，**不再重复出现在这里** ——
+         两栏内容重叠是用户实测报告过的缺陷（数据层按注册表路径排除，见 main/soundfonts.js）。 -->
     <div class="card sf-card">
       <div class="sf-head">
         <Icon name="folder" :size="15" />
         <span>{{ t('我的音色') }}</span>
         <em class="sf-sub">{{ customs.length + t(' 个') }}</em>
       </div>
+      <div class="sf-hint" style="color:var(--steel)">
+        {{ t('这里只列你自己导入的音色文件；从「内置精选」下载的在上一栏，两处不会重复。名字、作者、来源、标签、分类都可以改，改完会被记住。') }}
+      </div>
+      <div v-if="customs.length" class="row" style="gap:8px;margin-top:8px;align-items:center">
+        <input v-model="sfQuery" class="text-input" :placeholder="t('搜名字 / 作者 / 标签 / 分类')" style="max-width:250px;padding:5px 8px" />
+        <span class="muted small" v-if="sfQuery">{{ t('匹配 ') + customsShown.length + t(' 个') }}</span>
+      </div>
       <div v-if="!customs.length" class="sf-empty">{{ t('还没有自定义音色，点击「导入 .sf2 音色」添加本地音色文件。') }}</div>
+      <div v-else-if="!customsShown.length" class="sf-empty">{{ t('没有匹配的音色') }}</div>
       <div v-else class="sf-grid">
-        <div v-for="item in customs" :key="item.id" class="sf-tile" :class="{ active: isActive(item) }">
+        <div v-for="item in customsShown" :key="item.id" class="sf-tile" :class="{ active: isActive(item) }">
           <div class="sf-tile-top">
-            <div class="sf-tile-name">{{ item.name }}</div>
-            <span v-if="item.downloaded" :class="['plg-tag', 'on']">{{ t('已导入') }}</span>
+            <div class="sf-tile-name">{{ sfName(item) }}</div>
+            <span class="plg-tag on">{{ sfSourceLabel(item) }}</span>
           </div>
           <div class="sf-tile-desc">{{ item.desc }}</div>
+          <div class="sf-tile-meta" v-if="sfAuthor(item) || sfCategory(item) || sfTags(item).length">
+            <span v-if="sfAuthor(item)">{{ t('作者：') + sfAuthor(item) }}</span>
+            <span v-if="sfCategory(item)" class="sf-cat">{{ sfCategory(item) }}</span>
+            <span v-for="tg in sfTags(item)" :key="tg" class="plg-tag">{{ tg }}</span>
+          </div>
           <div class="sf-tile-meta">{{ fmtSize(item.size) }}</div>
+          <!-- 编辑：名字 / 作者 / 来源 / 分类 / 标签 —— 存进数据根的 usermeta.json，更新不会丢 -->
+          <div v-if="editId === item.id" class="sf-edit">
+            <input v-model="editForm.name" class="text-input" :placeholder="t('名字')" />
+            <input v-model="editForm.author" class="text-input" :placeholder="t('作者')" />
+            <input v-model="editForm.source" class="text-input" :placeholder="t('来源')" />
+            <input v-model="editForm.category" class="text-input" :placeholder="t('分类')" />
+            <input v-model="editForm.tags" class="text-input" :placeholder="t('标签（逗号分隔）')" />
+            <div class="row" style="gap:6px">
+              <button class="btn sm primary" @click="saveEdit(item)">{{ t('保存') }}</button>
+              <button class="btn sm ghost" @click="cancelEdit">{{ t('取消') }}</button>
+              <button class="btn sm ghost danger" @click="resetEdit(item)">{{ t('恢复原名') }}</button>
+            </div>
+          </div>
           <div class="sf-tile-actions">
             <!-- ★ 自定义音色同样可能超过 512MB 读取上限（例如手动导入的 1.18GB Salamander）：
                  直接说明原因，别给一个必然失败的「启用」 -->
             <span v-if="item.overLimit" class="sf-overlimit" :title="t('立体声合成的单文件加载上限为 512MB')">{{ t('暂不支持（超出音色加载上限）') }}</span>
             <button v-else class="btn sm primary" :class="{ on: isActive(item) }" @click="enable(item)" :disabled="busySf">{{ isActive(item) ? t('使用中') : t('启用') }}</button>
             <button v-if="!isActive(item) && !item.overLimit" class="btn sm ghost" :disabled="previewBuf[item.id]" @click="preview(item)">{{ previewBuf[item.id] ? t('试听…') : t('试听') }}</button>
+            <button class="btn sm ghost" @click="editId === item.id ? cancelEdit() : startEdit(item)">{{ editId === item.id ? t('收起') : t('编辑') }}</button>
             <button class="btn sm ghost danger" @click="removeItem(item)">{{ t('删除') }}</button>
           </div>
         </div>
@@ -371,6 +465,9 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
 .sf-active-name { margin-left: auto; font-size: 13px; font-weight: 600; color: var(--accent); word-break: break-all; text-align: right; }
 .sf-active-hint { font-size: 12px; color: var(--stone); line-height: 1.7; }
 .sf-hint { font-size: 11.5px; color: var(--amber); margin-top: 10px; }
+/* 导入项的元数据编辑表单 */
+.sf-edit { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; padding: 8px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface-soft); }
+.sf-edit .text-input { width: 100%; padding: 5px 8px; font-size: 12px; }
 .sf-empty { font-size: 12.5px; color: var(--stone); padding: 14px 2px; }
 .sf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; margin-top: 4px; }
 .sf-tile {

@@ -196,6 +196,27 @@ export interface PresetListResult {
   error?: string;
 }
 
+/** 用户元数据条目的 kind —— 必须与 main/usermeta.js 的 KINDS 白名单一致。 */
+export type UserMetaKind = 'model' | 'utau' | 'ds' | 'sf' | 'voice';
+
+/** 用户改过的一个条目。**空字段不会出现**（空 = 用原始名/原始值）。 */
+export interface UserMetaItem {
+  name?: string;
+  author?: string;
+  source?: string;
+  tags?: string[];
+  category?: string;
+  order?: number;
+  pinned?: boolean;
+}
+
+export interface UserMetaListResult {
+  ok: boolean;
+  items?: Record<string, UserMetaItem>;
+  path?: string;
+  error?: string;
+}
+
 export interface PluginInfo {
   id: string;
   name: string;
@@ -966,6 +987,17 @@ export interface FuBridge {
     restore(): Promise<GeneralResult>;
     /** 把某个模型绑定到某个预设；name 传空 = 解绑、回到内置默认。 */
     setModelPreset(key: string, name: string): Promise<GeneralResult & { model_preset?: Record<string, string> }>;
+  };
+
+  /* 用户元数据（名字/作者/来源/标签/分类/排序/顶置）。
+     ★ 独立表的原因：资源中心四页的数据每次刷新都会重算，用户改的东西写进那些结构里会丢。
+     键是 "<kind>:<id>"；清空某字段（传空串/空数组）= 回到原始值。 */
+  usermeta: {
+    list(): Promise<UserMetaListResult>;
+    set(kind: UserMetaKind, id: string, patch: UserMetaItem): Promise<GeneralResult & { item?: UserMetaItem }>;
+    remove(kind: UserMetaKind, id: string): Promise<GeneralResult>;
+    reorder(kind: UserMetaKind, ids: string[]): Promise<GeneralResult>;
+    pin(kind: UserMetaKind, id: string, pinned: boolean): Promise<GeneralResult>;
   };
 
   // plugins
