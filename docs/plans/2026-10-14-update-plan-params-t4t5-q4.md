@@ -646,5 +646,51 @@ v11 的代价是 **2.6～3.7×**（2.2× 实时，已经不是「随便开」的
 - `ARIA_PINS` 必须是 40 位 commit，且 git+ 与 zip 两条路取**同一个** commit、不含 `refs/heads/`
 - `requirements-bundle.txt` 里必须是 `transkun==2.0.1`（不能是 `>=`）
 - 两个引擎模块可导入、`available()` 返回布尔
+---
 
+## 15. WP3-1 / WP3-3 完成（2026-10-14 续）
 
+### WP3-1 · DiffSinger 参数面：4 项已通，2 项没通
+
+| 参数 | 引擎支持 | 界面可达 | 默认值 |
+|---|---|---|---|
+| 采样步数 `steps` | ✅ `cfg['steps']` / `--steps` | ✅ `singer.ts:1838` 的 `params.steps` | `DEFAULT_STEPS = 20` |
+| 浅扩散深度 `depth` | ✅ `cfg['depth']` → `resolve_depth` / `--depth` | ✅ `params.depth` | `DEFAULT_DEPTH = 1.0`（声库 `use_variable_depth` 时按曲线算） |
+| 语言 `language` | ✅ `cfg['language']` → `lang_id_of` | ✅ `params.language` | `'zh'` |
+| 方差 variance | ✅ `load_variance` + 逐音符表达式曲线 | ✅ 表达式面板 | 中性（`VOIC = 100`） |
+| 声码器覆盖 `vocoder` | ✅ `cfg['vocoder']`（`pipeline.py:152-166` 已修好"覆盖从不生效"） | ❌ **前端只有类型声明 `ipc.ts:496 vocoder?: string`，渲染调用从不发它** | 空 = 用声库自带 `dsvocoder/`，没有则用通用声码器 |
+| 说话人 `speaker` | ⚠️ 数据结构在（`voicebank.speakers` / `DsPhoneme.speaker`），但 `phonemizer.py:281` 把 `speaker_at` **写死成 `lambda n, i: ''`** | ❌ | `''` |
+
+两条结论：
+
+1. **`vocoder` 覆盖是"差最后一跳"**：引擎支持、IPC 类型也声明了，就是 `singer.ts:1838` 的 `params` 没带它。
+   这正是 §4 那条「map 少一个键，界面设了也到不了引擎」的同类缺陷，只是发生在更上一层。
+   要放给用户仍需要一个选择控件的设计 → 记入 §7。
+2. **多说话人声库不支持**：已在写死处加注释固化，避免后来者看到 `speakers` 字段就以为能用。
+   真要做需要三件一起：音符上的 speaker 字段、界面入口、按 speaker 选嵌入。
+
+### WP3-3 · ★ v20 的理由**是错的**（这条最值钱）
+
+原注释写："mel 模型是 `OpenUtau.Core` 的**程序集内嵌资源**，仓库里没有独立文件可取"。**不成立。**
+
+- `OpenUtau.Core/Classic/Data/mel.onnx` 就是仓库里的**独立文件，83.4 KB**。
+  `.resx` / `Resources.Designer.cs` 只是 .NET 编译期嵌资源的机制，**源文件一直在**。
+- 实测可加载，而且签名与我们已有的一切精确对上：
+
+| 模型 | 输入 | 输出 |
+|---|---|---|
+| `Classic/Data/mel.onnx`（上游仓库，83.4 KB） | `f0[1,T]` · `sp_env[1,T,1025]` · `ap[1,T,1025]` | `mel[1,T,128]` |
+| DiffSinger 通用声码器（**已在安装版盘上**） | `mel[1,n,128]` · `f0[1,n]` | `waveform[1,n]` |
+| 声库自带 `kouon_pc_mini_nsf-hifigan_1028_44100hz_512hop_128bin` | 同上 | 同上 |
+
+- `sp_env/ap` 的 **1025 = 2048/2+1**，正是 v20 的 `FFT_SIZE` 算出来的宽度；
+  `mel[.,.,128]` 与声码器的 `mel[1,n,128]` 精确衔接。
+- 第二条理由（声码器走 `PackageManager` 没搬）按字面仍成立，但**不构成阻塞**：
+  `pc-nsf-hifigan` 是 PC-NSF-HiFiGAN，而**每个 DiffSinger 声库的 `dsvocoder/` 里就带一个**（54 MB），
+  资源中心也已经会下 `nsf_hifigan_44.1k_hop512_128bin`。
+
+**固化结论：v20 不是"拿不到模型"，而是"还没写这段编排"。**
+下次重估请从「**要不要写**」开始，不要再从「mel 模型拿不到」开始 —— 那个前提是假的。
+已就地改正 `_synth_r2` 的 docstring 与报错文案（**两处都在教人放弃**）。
+
+注意：这一条只改**理由与证据**，**没有实现 v20**。要不要实现记入 §7。

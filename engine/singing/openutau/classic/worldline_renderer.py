@@ -260,17 +260,35 @@ class WorldlineRenderer(IRenderer):
     def _synth_r2(self, phrase_synth) -> List[float]:
         """v20（Worldline-R2）：WORLD 特征 → patch 到 16 的倍数 → mel ONNX → 声码器 ONNX。
 
-        ★ 未搬，原因不是"懒得写"：
-        - mel 模型是 `OpenUtau.Core` 的**程序集内嵌资源**（`Data.Resources.mel`），
-          仓库里没有独立文件可取；
-        - 声码器是**可下载包** `pc-nsf-hifigan`（`PackageManager` + `vocoder.yaml` 的
-          `model` 字段指向 .onnx），属于包管理子系统，也未搬。
-        所以这里给的是**可执行的替代方案**，而不是半截实现。
+        ★ 未搬 —— **但 WP3-3（2026-10-14）查证后，原来的两条理由都是错的**，别再照着它们重估：
+
+        1. ❌ 旧理由："mel 模型是程序集内嵌资源，仓库里没有独立文件可取"。
+           **实际**：`OpenUtau.Core/Classic/Data/mel.onnx` 就是仓库里的**独立文件**（83.4 KB）。
+           `.resx` / `Resources.Designer.cs` 只是 .NET 把它**编进程序集**的方式，
+           源文件一直都在，直接取即可。已实测可加载：
+             in  `f0 [1,T]` · `sp_env [1,T,1025]` · `ap [1,T,1025]`
+             out `mel [1,T,128]`
+           —— 这三个输入正是 `SynthFeatures()` 已经在算的东西，衔接是现成的。
+
+        2. ⚠ 旧理由："声码器是 `pc-nsf-hifigan` 可下载包，包管理子系统未搬"。
+           按字面仍成立（我们没有 `PackageManager`），但**不构成阻塞**：
+           `pc-nsf-hifigan` 是 PC-NSF-HiFiGAN，而**每个 DiffSinger 声库的 `dsvocoder/` 里就带一个**
+           （如 `kouon_pc_mini_nsf-hifigan_1028_44100hz_512hop_128bin.onnx`，54 MB），
+           资源中心也已经会下通用声码器 `nsf_hifigan_44.1k_hop512_128bin`。两者签名一致：
+             in  `mel [1,n_frames,128]` · `f0 [1,n_frames]`
+             out `waveform [1,n_samples]`
+           与上面的 `mel[1,T,128]` **精确对上**。
+
+        **结论：v20 的两个依赖都在手上，它不是"拿不到模型"而是"还没写这段编排"。**
+        实现时要做的是：取 `mel.onnx`（随包或下载）→ 按上游 `WorldlineRenderer.cs:150-175` 串
+        `f0/sp_env/ap → mel` → 配一个 128bin/512hop PC-NSF-HiFiGAN 声码器出波形；
+        `sp_env/ap` 的 1025 宽与本类的 `FFT_SIZE`=2048 一致，不用改分析侧。
+        仍未实现，所以这里给的仍是**可执行的替代方案**（用 version=10）。
         """
         raise NotImplementedError(
-            'Worldline-R2（v20）需要两个 ONNX 会话，均未照搬：\n'
-            '  - mel 模型：%s（程序集内嵌资源，仓库中无独立文件）\n'
-            '  - 声码器包：%s（走 PackageManager/ vocoder.yaml，包管理子系统未搬）\n'
+            'Worldline-R2（v20）的编排还没写 —— 但两个依赖**都在手上**（见本方法 docstring）：\n'
+            '  - mel 模型：%s（= Classic/Data/mel.onnx，仓库里的独立文件，83.4 KB）\n'
+            '  - 声码器：%s 家族（128bin / 512hop；DiffSinger 声库自带，资源中心也能下）\n'
             '临时替代：用 version=10（WORLDLINE-R，默认渲染器）'
             % (R2_MEL_RESOURCE, R2_VOCODER_PACKAGE))
 

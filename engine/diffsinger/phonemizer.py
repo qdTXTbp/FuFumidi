@@ -278,6 +278,12 @@ def process_part(singer: DsSinger, phrase_notes: Sequence[Sequence],
             word_found.append(False)
         else:
             word_found.append(True)
+        # ★ WP3-1（2026-10-14 查证）：`speaker_at` 这里**写死返回空串**，也就是
+        #   **多说话人声库目前不支持** —— `DsPhoneme.speaker` 恒为 `''`，
+        #   声库 `dsconfig.yaml` 里的 `speakers:` 列表读进来了却没人用。
+        #   上游 `ProcessWord` 是从**音符级 singer 覆写**取说话人的；要接的话
+        #   需要三件一起做：音符上的 speaker 字段、界面入口、以及按 speaker 选嵌入。
+        #   别看到 `voicebank.speakers` / `DsPhoneme.speaker` 就以为已经支持了。
         wps = process_word(word, symbols, g2p, lambda n, i: '')
         pp[-1].phonemes.extend(wps[0].phonemes)           # :385 首辅音并入上一组
         pp.extend(wps[1:])                                # :386
