@@ -152,11 +152,23 @@ def check_diffsinger(vb, lyrics):
                 elif not t.startswith((" ", "\t")):
                     in_block = False
         names = [n for n in names if n]
+        if names:
+            # `speakers:` 里是**嵌入文件基名**（不含 .emb，可带子目录）—— 上游
+            # `DiffSingerSpeakerEmbedManager.loadSpeakerEmbed` 就是读 `<名字>.emb`：
+            # 裸 float32 × dsconfig.hiddenSize，无文件头。缺文件时上游直接抛异常，
+            # 所以这里提前把「缺哪个 .emb」列出来（重装/重新解压即可修）。
+            missing_emb = [n for n in names
+                           if not os.path.isfile(os.path.join(vb, n + '.emb'))]
+            if missing_emb:
+                add("speakers_emb", "error",
+                    "speakers 里声明了 %d 个说话人，但有 %d 个找不到对应的 .emb 嵌入文件（例：%s）"
+                    % (len(names), len(missing_emb), ", ".join(missing_emb[:4])),
+                    "这些 .emb 是声库的一部分，重装/重新解压这个声库")
         if len(names) > 1:
             add("speakers", "warn",
                 "这是**多说话人**声库（%d 个：%s）—— 当前版本还不支持选择说话人，渲染会失败"
                 % (len(names), ", ".join(names[:6])),
-                "先换单说话人声库；多说话人支持正在做（需要音符级 speaker 字段 + 界面入口）")
+                "支持正在做（需照搬上游 DiffSingerSpeakerEmbedManager：读 .emb + 逐音素 spk_embed 张量）")
         elif names:
             add("speakers", "ok", "单说话人声库（speakers: %s）" % names[0])
     except Exception as e:  # noqa: BLE001

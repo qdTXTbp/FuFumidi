@@ -216,9 +216,12 @@ def verify_input_names(session, feeds: Dict[str, object]) -> None:
     if missing or unexpected:
         # ★ 缺 spk = 这是个**多说话人声库**，而渲染链路还没接说话人嵌入。
         #   单独说清楚，别让用户去翻 dsconfig 的 use*Embed 开关（那与 spk 无关）。
-        if 'spk' in missing:
+        # ★ 输入名是 `spk_embed`（浮点嵌入），**不是** `spk` —— 上游
+        #   `DiffSingerBasePhonemizer.cs:463` 用的是 CreateFromTensor("spk_embed", ...)。
+        #   两个都兜住：写 'spk' 只兜了个永远不会出现的名字。
+        if 'spk_embed' in missing or 'spk' in missing:
             raise RenderError(
-                '这个声库是**多说话人**声库（模型需要 spk 输入），当前版本还不支持选择说话人。'
+                '这个声库是**多说话人**声库（模型需要 spk_embed 输入），当前版本还不支持选择说话人。'
                 '可以先换一个单说话人声库；相关支持正在做（需要音符级 speaker 字段 + 界面入口）。')
         raise RenderError(
             '模型输入不匹配 —— 缺少 %s / 多余 %s。'

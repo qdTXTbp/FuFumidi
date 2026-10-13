@@ -42,10 +42,10 @@ class _Sess:
 def test_missing_spk_says_multispeaker():
     """缺 spk → 报错必须点明「多说话人声库、当前不支持」，而不是泛泛的输入不匹配。"""
     with pytest.raises(RenderError) as ei:
-        verify_input_names(_Sess(['tokens', 'durations', 'spk']), {'tokens': 1, 'durations': 2})
+        verify_input_names(_Sess(['tokens', 'durations', 'spk_embed']), {'tokens': 1, 'durations': 2})
     msg = str(ei.value)
     assert '多说话人' in msg, msg
-    assert 'spk' in msg, msg
+    assert 'spk_embed' in msg, msg
 
 
 def test_other_missing_input_keeps_generic_message():
@@ -58,7 +58,7 @@ def test_other_missing_input_keeps_generic_message():
 
 
 def test_matching_feeds_pass():
-    verify_input_names(_Sess(['tokens', 'spk']), {'tokens': 1, 'spk': 2})
+    verify_input_names(_Sess(['tokens', 'spk_embed']), {'tokens': 1, 'spk_embed': 2})
 
 
 def _mkvb(tmp_path, dsconfig):
@@ -83,6 +83,24 @@ def test_vbcheck_ok_on_single_speaker(tmp_path):
     checks, _ = check_diffsinger(vb, [])
     hit = [c for c in checks if c['id'] == 'speakers']
     assert hit and hit[0]['level'] == 'ok'
+
+
+def test_vbcheck_reports_missing_emb(tmp_path):
+    """speakers 声明了但 .emb 不在 → 必须报出来（上游读不到 .emb 会直接抛异常）。"""
+    vb = _mkvb(tmp_path, 'phonemes: []\nspeakers: [小明, 小红]\n')
+    checks, _ = check_diffsinger(vb, [])
+    hit = [c for c in checks if c['id'] == 'speakers_emb']
+    assert hit and hit[0]['level'] == 'error', checks
+    assert '.emb' in hit[0]['text']
+
+
+def test_vbcheck_accepts_present_emb(tmp_path):
+    """`.emb` 齐了就不再报缺失。"""
+    vb = _mkvb(tmp_path, 'phonemes: []\nspeakers: [小明, 小红]\n')
+    for n in ('小明', '小红'):
+        open(os.path.join(vb, n + '.emb'), 'wb').write(b'\x00' * 16)
+    checks, _ = check_diffsinger(vb, [])
+    assert not [c for c in checks if c['id'] == 'speakers_emb'], checks
 
 
 def test_vbcheck_quiet_when_undeclared(tmp_path):
