@@ -214,6 +214,12 @@ def verify_input_names(session, feeds: Dict[str, object]) -> None:
     missing = sorted(want - have)
     unexpected = sorted(have - want)
     if missing or unexpected:
+        # ★ 缺 spk = 这是个**多说话人声库**，而渲染链路还没接说话人嵌入。
+        #   单独说清楚，别让用户去翻 dsconfig 的 use*Embed 开关（那与 spk 无关）。
+        if 'spk' in missing:
+            raise RenderError(
+                '这个声库是**多说话人**声库（模型需要 spk 输入），当前版本还不支持选择说话人。'
+                '可以先换一个单说话人声库；相关支持正在做（需要音符级 speaker 字段 + 界面入口）。')
         raise RenderError(
             '模型输入不匹配 —— 缺少 %s / 多余 %s。'
             '请检查声库 dsconfig.yaml 的 use*Embed 开关是否与 onnx 签名一致。'

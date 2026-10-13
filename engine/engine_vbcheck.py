@@ -129,6 +129,38 @@ def check_diffsinger(vb, lyrics):
             add(name, "error", "缺少 %s" % name, "DiffSinger 声库必须带 dsconfig.yaml + dsdur/ + dsvocoder/")
     if all(os.path.exists(os.path.join(vb, n)) for n in need):
         add("layout", "ok", "目录结构完整（dsconfig.yaml / dsdur / dsvocoder）")
+    # ★ 多说话人声库：speakers 多于一个 = 模型需要 spk 输入，而渲染链路还没接说话人嵌入
+    #   —— 真去渲染会报「模型输入不匹配 —— 缺少 ['spk']」。在**体检**里提前说清，
+    #   别让用户点了「渲染」才撞上一个看不出原因的失败。
+    try:
+        with open(os.path.join(vb, "dsconfig.yaml"), encoding="utf-8", errors="ignore") as f:
+            dlines = f.read().splitlines()
+        names, in_block = [], False
+        for ln in dlines:
+            t = ln.split("#")[0].rstrip()
+            if not t.strip():
+                continue
+            if t.lstrip().startswith("speakers:"):
+                rest = t.split("speakers:", 1)[1].strip()
+                if rest.startswith("["):
+                    names += [x.strip().strip('"').strip("'") for x in rest.strip("[]").split(",")]
+                in_block = True
+                continue
+            if in_block:
+                if t.lstrip().startswith("-"):
+                    names.append(t.lstrip()[1:].strip().strip('"').strip("'"))
+                elif not t.startswith((" ", "\t")):
+                    in_block = False
+        names = [n for n in names if n]
+        if len(names) > 1:
+            add("speakers", "warn",
+                "这是**多说话人**声库（%d 个：%s）—— 当前版本还不支持选择说话人，渲染会失败"
+                % (len(names), ", ".join(names[:6])),
+                "先换单说话人声库；多说话人支持正在做（需要音符级 speaker 字段 + 界面入口）")
+        elif names:
+            add("speakers", "ok", "单说话人声库（speakers: %s）" % names[0])
+    except Exception as e:  # noqa: BLE001
+        add("speakers", "warn", "读 dsconfig.yaml 判断说话人失败：%s" % str(e)[:80])
     dicts = sorted(f for f in os.listdir(vb) if f.startswith("dictionary-") and f.endswith(".txt"))
     stats["dictionaries"] = dicts
     if dicts:
