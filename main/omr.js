@@ -15,8 +15,21 @@ const Paths = require('./paths');
 const createFastDownload = require('./fast-download');
 
 const VERSION = '5.11.0';
-const MSI_URL = 'https://github.com/Audiveris/audiveris/releases/download/' + VERSION +
-  '/Audiveris-5.11.0-windowsConsole-x86_64.msi';
+const MSI_NAME = 'Audiveris-5.11.0-windowsConsole-x86_64.msi';
+// 上游发布物的固定指纹（2026-10-13 实测）
+const MSI_BYTES = 85062430;
+const MSI_SHA256 = '5f1b4e96a12c53c7da426814b76e599363c4181e291855996e0a6878dda95f71';
+const MSI_URL = 'https://github.com/Audiveris/audiveris/releases/download/' + VERSION + '/' + MSI_NAME;
+// ★ 通道列表（2026-10-13 加）：直链在部分网络下被限到 **30 KB/s**（本机实测 0.03 MB/s），
+//   81 MB 要走约 45 分钟 —— 而本文件的看门狗 15 秒无数据就放弃，用户很可能装不上。
+//   走镜像实测 **1.12 MB/s，约 37 倍**。顺序不重要：downloadFast 会先给各通道测速再选最快的，
+//   失败才按序回退。镜像写法与 scripts/bundle-python312.js 的 GIT_MIRRORS、mirror-to-cnb.mjs 一致。
+const MSI_URLS = [
+  MSI_URL,
+  'https://ghfast.top/' + MSI_URL,
+  'https://gh-proxy.com/' + MSI_URL,
+  'https://gh.jasonzeng.dev/' + MSI_URL,
+];
 
 function engineDir() { return require('path').join(Paths.dataRoot(), 'omr', 'audiveris'); }
 function exePath() { return require('path').join(engineDir(), 'Audiveris', 'Audiveris.exe'); }
@@ -54,8 +67,15 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net }) {
     try {
       fs.mkdirSync(path.dirname(tmp), { recursive: true });
       send({ phase: 'download', percent: 0, text: '下载识谱引擎…' });
-      const got = await downloadAny(MSI_URL, tmp, (pct) => send({ phase: 'download', percent: pct, text: '下载识谱引擎…' }));
+      const got = await downloadAny(MSI_URLS, tmp, (pct) => send({ phase: 'download', percent: pct, text: '下载识谱引擎…' }));
       if (!got.ok) return { ok: false, error: got.error };
+      // ★ 完整性校验（2026-10-13 加）：此前这个 81 MB 的安装包**下载后不校验任何指纹**，
+      //   直接 msiexec /a 解包执行；而上游 release 本身也不提供校验文件。
+      //   HTTPS 只保护传输过程，不保护「这个发布物本身是不是我们预期的那个」。
+      //   这与 VENDOR.md 对内置二进制逐个钉 SHA-256 是同一套纪律。
+      send({ phase: 'verify', percent: 87, text: '校验识谱引擎…' });
+      const v = verifyMsi(tmp);
+      if (!v.ok) { try { fs.unlinkSync(tmp); } catch (e) {} return { ok: false, error: v.error }; }
       send({ phase: 'extract', percent: 88, text: '解包识谱引擎…' });
       const dir = engineDir();
       fs.mkdirSync(dir, { recursive: true });
@@ -137,12 +157,27 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net }) {
   // 下载通道：统一入口优先，其后才是「Chromium 栈 → Node 直连 → 系统代理（PowerShell）」三级回退。
   // 统一入口带来测速 / 分段并发 / 断点续传 / 停滞看门狗 / 大小校验；
   // 三级回退保留的原因是企业代理环境里可能只有 PowerShell 走得通。
-  async function downloadAny(url, dest, onProgress) {
+  function verifyMsi(p) {
+    let size = 0;
+    try { size = fs.statSync(p).size; } catch (e) { return { ok: false, error: '安装包不存在' }; }
+    if (size !== MSI_BYTES) {
+      return { ok: false, error: '安装包大小不符：' + size + '/' + MSI_BYTES + '（传输被截断，已丢弃，可重试）' };
+    }
+    const h = require('crypto').createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+    if (h !== MSI_SHA256) {
+      return { ok: false, error: '安装包指纹不符（期望 ' + MSI_SHA256.slice(0, 16) + '…，实得 ' + h.slice(0, 16) + '…），已丢弃' };
+    }
+    return { ok: true };
+  }
+
+  async function downloadAny(urls, dest, onProgress) {
+    const list = Array.isArray(urls) ? urls : [urls];
     try {
       const r = await FastDL.downloadFast({
-        urls: [url],
+        urls: list,
         dest,
         minSize: 1024 * 1024,
+        expectSize: MSI_BYTES,
         headers: { 'user-agent': 'FuFumidi' },
         label: 'OMR 组件',
         onProgress: (p) => { if (!p.done && onProgress) onProgress(Math.min(86, p.percent || 0)); },
@@ -152,10 +187,11 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net }) {
       // 落到下面的老通道；失败原因一并带上，便于诊断
       console.log('[omr] 统一下载器失败，回退老通道：' + String((e && e.message) || e));
     }
+    // 回退通道：前两条跑主通道（不通时最快失败），PowerShell 那条走系统代理，逐镜像试。
     const tries = [];
-    if (net) tries.push(['net', () => downloadNet(url, dest, onProgress)]);
-    tries.push(['node', () => downloadNode(url, dest, onProgress)]);
-    tries.push(['powershell', () => downloadPs(url, dest, onProgress)]);
+    if (net) tries.push(['net', () => downloadNet(list[0], dest, onProgress)]);
+    tries.push(['node', () => downloadNode(list[0], dest, onProgress)]);
+    for (const u of list) tries.push(['powershell', () => downloadPs(u, dest, onProgress)]);
     let last = { ok: false, error: '没有可用的下载通道' };
     for (const pair of tries) {
       try { fs.rmSync(dest, { force: true }); } catch (e) {}
