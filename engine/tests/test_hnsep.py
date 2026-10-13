@@ -79,3 +79,115 @@ def test_zero_mask_gives_silence():
     w = hnsep.periodic_hann(2048)
     y = hnsep.separate(x, 2048, 512, w, zeros_mask)
     assert np.max(np.abs(y)) < 1e-12, '全零掩码必须出静音'
+
+# ---------------------------------------------------------------- autoload（WP4-4）
+
+
+def _reset():
+    """每个用例都从干净状态起 —— 这两处都是**模块级**单例，会互相串。"""
+    from singing.openutau import worldline
+    hnsep._AUTOLOAD = None
+    hnsep.set_instance(None)
+    worldline.set_hnsep(None)
+
+
+def _fake_package(root, model='model.onnx'):
+    """造一个"看起来像"解包后的包目录（只放 yaml + 一个占位 onnx）。"""
+    d = os.path.join(str(root), hnsep.PACKAGE_DIR_REL)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, 'hnsep.yaml'), 'w', encoding='utf-8') as f:
+        f.write('model: %s\nsample_rate: 44100\nn_fft: 2048\nhop_length: 512\n' % model)
+    with open(os.path.join(d, model), 'wb') as f:
+        f.write(b'not-a-real-onnx')
+    return d
+
+
+def test_candidate_dirs_matches_resource_center_layout(tmp_path):
+    """★ 落点契约：引擎去 `<模型目录>/hnsep/hnsep_240512/` 找。
+
+    这个字面量与资源中心那条目（`main/models.js` 的 `hnsep_240512`）必须是**同一件事**；
+    两边写不一致时**不会报错**，只会表现为"下载完了 v11 还说没装"。改任一边都要改这里。
+    """
+    assert hnsep.PACKAGE_DIR_REL == os.path.join('hnsep', hnsep.PACKAGE_ID)
+    assert hnsep.PACKAGE_ID == 'hnsep_240512'
+    ds = hnsep.candidate_dirs(str(tmp_path))
+    assert ds[0] == os.path.join(str(tmp_path), 'hnsep', 'hnsep_240512')
+    assert ds[1] == os.path.join(str(tmp_path), 'hnsep')      # 摊平放的兜底
+    assert hnsep.candidate_dirs.__defaults__ == ('',)
+
+
+def test_autoload_missing_is_harmless(tmp_path):
+    """没装 → 返回 None 且**不抛错**，但要留下可读的原因。"""
+    _reset()
+    assert hnsep.autoload(str(tmp_path)) is None
+    why = hnsep.autoload_error()
+    assert why and 'missing' in why, why
+    assert os.path.join(str(tmp_path), 'hnsep') in why, '原因里要写清找过哪'
+    _reset()
+
+
+def test_autoload_injects_into_worldline(tmp_path, monkeypatch):
+    """★ 这条是重点：autoload 必须真的把实例注进 `worldline`（而不只是返回）。"""
+    from singing.openutau import worldline
+
+    class _Fake:
+        sample_rate = 44100
+
+        def harmonic(self, x):
+            return list(x)
+
+    fake = _Fake()
+    monkeypatch.setattr(hnsep, 'load_package_dir', lambda d: fake)
+    _fake_package(tmp_path)
+    _reset()
+
+    assert hnsep.autoload(str(tmp_path)) is fake
+    assert hnsep.get_instance() is fake
+    assert worldline._default_hnsep() is fake, '没注进去 → v11 仍然会说"没有装"'
+    assert hnsep.autoload_error() is None
+    _reset()
+
+
+def test_autoload_swallows_load_failure(tmp_path, monkeypatch):
+    """包坏了也**不抛**（包只坏在 v11 上，别的路径不该跟着挂）。"""
+    def boom(d):
+        raise RuntimeError('包坏了')
+
+    monkeypatch.setattr(hnsep, 'load_package_dir', boom)
+    _fake_package(tmp_path)
+    _reset()
+
+    assert hnsep.autoload(str(tmp_path)) is None
+    assert '包坏了' in (hnsep.autoload_error() or '')
+    _reset()
+
+
+def test_autoload_caches_the_miss(tmp_path, monkeypatch):
+    """失败也要缓存 —— v11 是**逐乐句**调的，不缓存就是每句扫一次盘。"""
+    seen = []
+    real = hnsep.candidate_dirs
+    monkeypatch.setattr(hnsep, 'candidate_dirs',
+                        lambda md='': (seen.append(md), real(md))[1])
+    _reset()
+
+    hnsep.autoload(str(tmp_path))
+    first = len(seen)
+    assert first > 0
+    hnsep.autoload(str(tmp_path))
+    hnsep.autoload(str(tmp_path))
+    assert len(seen) == first, '第二次以后不该再扫盘'
+    # force=True 必须能突破缓存
+    hnsep.autoload(str(tmp_path), force=True)
+    assert len(seen) > first
+    _reset()
+
+
+def test_autoload_with_garbage_model_does_not_raise(tmp_path):
+    """走**真的** ONNX 加载路径：占位文件必然被 onnxruntime 拒，但必须被吞掉。"""
+    pytest.importorskip('onnxruntime')
+    _fake_package(tmp_path)
+    _reset()
+    assert hnsep.autoload(str(tmp_path)) is None
+    assert hnsep.autoload_error(), '失败必须留下原因'
+    _reset()
+

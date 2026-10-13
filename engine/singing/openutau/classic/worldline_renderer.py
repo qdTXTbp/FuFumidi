@@ -246,13 +246,20 @@ class WorldlineRenderer(IRenderer):
         if self.version == 11:
             from ..worldline import _default_hnsep
             if _default_hnsep() is None:
+                # ★ WP4-4：宿主没注入时，**按资源中心的安装位置自己找一次**（懒加载）。
+                #   放在这里而不是进程启动时 —— v10 用户不该为它付任何启动成本。
                 from ..hnsep import PACKAGE_ID as HNSEP_PACKAGE_ID
+                from ..hnsep import autoload as _autoload_hnsep, autoload_error
+                _autoload_hnsep()
+            if _default_hnsep() is None:
                 raise RuntimeError(
                     'Worldline-R1.1（v11）需要谐波/噪声分离模型 %s，当前没有装。\n'
                     '  · 代码侧已就绪：hnsep 网络 + HnAnalysisF0In + SynthContinuousNoise 都已搬完\n'
-                    '  · 只缺模型包本体（约 52 MB），装好后由宿主调 worldline.set_hnsep() 注入\n'
+                    '  · 缺的是模型包本体（约 52 MB）—— 装到「资源中心」即可，'
+                    '引擎会在渲染 v11 时自动加载\n'
+                    '  · 本次查找结果：%s\n'
                     '临时替代：用 version=10（WORLDLINE-R，默认渲染器）'
-                    % HNSEP_PACKAGE_ID)
+                    % (HNSEP_PACKAGE_ID, autoload_error() or '未找到'))
         return PhraseSynthV2(SAMPLE_RATE, self.hop_size, FFT_SIZE,
                              use_hnsep=(self.version == 11),
                              num_render_threads=self._num_render_threads)

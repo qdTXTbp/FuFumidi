@@ -197,3 +197,67 @@ def get_instance() -> Optional[Hnsep]:
 def set_instance(inst: Optional[Hnsep]) -> None:
     global _INSTANCE
     _INSTANCE = inst
+
+
+# ---------------------------------------------------------------- 自动装配（WP4-4）
+
+#: 资源中心把这个包解到哪（与 `main/models.js` 的同名条目必须一致）
+PACKAGE_DIR_REL = os.path.join('hnsep', PACKAGE_ID)
+
+#: `autoload` 的结果缓存：`'ok'` / `'missing'` / `'error: ...'`
+#: ★ 必须缓存 —— 否则每一句渲染都会去扫一次盘（v11 是**逐乐句**调的）。
+_AUTOLOAD: Optional[str] = None
+
+
+def candidate_dirs(models_dir: str = '') -> List[str]:
+    """按优先级列出可能放着**已解包** hnsep 包的目录。
+
+    `<模型目录>/hnsep/hnsep_240512/` 是资源中心的落点；
+    `<模型目录>/hnsep/` 是给"用户自己把包摊平放"留的兜底。
+    """
+    root = models_dir or os.environ.get('FUFUMIDI_MODELS_DIR') or ''
+    if not root:
+        return []
+    return [os.path.join(root, PACKAGE_DIR_REL),
+            os.path.join(root, 'hnsep')]
+
+
+def autoload(models_dir: str = '', force: bool = False) -> Optional[Hnsep]:
+    """自动找到 hnsep 包并**注入 `worldline`**；返回实例或 `None`。
+
+    ★ 只在真正要跑 v11 时调（见 `WorldlineRenderer._make_phrase_synth`）——
+    v10 用户不该为它付任何启动成本。
+
+    ★ **本函数不抛错**：没装、包坏了、`onnxruntime` 缺失，一律返回 `None`，
+    并把原因记进 `autoload_error()`。v11 之外的路径不该因为这块挂掉，
+    而 v11 那条路会在拿不到实例时给出**可操作**的报错（指到资源中心）。
+    """
+    global _AUTOLOAD
+    if _AUTOLOAD == 'ok' and not force:
+        return _INSTANCE
+    if _AUTOLOAD is not None and _AUTOLOAD != 'ok' and not force:
+        return None                       # 已经试过且失败 —— 不重复扫盘
+    tried = []
+    for d in candidate_dirs(models_dir):
+        cfg = os.path.join(d, 'hnsep.yaml')
+        if not os.path.isfile(cfg):
+            tried.append(d)
+            continue
+        try:
+            inst = load_package_dir(d)
+        except Exception as e:            # noqa: BLE001 —— 任何一种失败都不该炸上层
+            _AUTOLOAD = 'error: %s: %s' % (type(e).__name__, e)
+            return None
+        # 同步两边：本模块的 _INSTANCE 与 worldline 的 _HNSEP_INSTANCE
+        set_instance(inst)
+        from . import worldline
+        worldline.set_hnsep(inst)
+        _AUTOLOAD = 'ok'
+        return inst
+    _AUTOLOAD = 'missing（找过：%s）' % ('; '.join(tried) if tried else '模型目录未设置')
+    return None
+
+
+def autoload_error() -> Optional[str]:
+    """上一次 `autoload` 为什么没成功（成功则返回 `None`）—— 供报错文案使用。"""
+    return None if _AUTOLOAD in (None, 'ok') else _AUTOLOAD
