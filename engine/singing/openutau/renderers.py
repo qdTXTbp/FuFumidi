@@ -10,9 +10,13 @@
 - `GetSupportedRenderers` 的 switch **没有 fallthrough**：只按**精确值**匹配
   `USingerType`。注意 `USingerType.DiffSinger = 0x5` 同时含 `Classic(0x1)|Vogen(0x4)`，
   用"位包含"来判定会错，必须按值相等。
-- `GetDefaultRenderer` 比的是字面量 `"Classic"`（**首字母大写**），而常量 `CLASSIC`
-  是 `"CLASSIC"` —— 因为 `getRendererOptions()` 里给用户看的选项名就是 `"Classic"`。
-  别"顺手统一大小写"，那会让这个分支永远进不去。
+- `GetDefaultRenderer` 在**上游 master** 里不再比字面量：只要偏好里存的渲染器 id
+  属于 `classicRenderers`（`WORLDLINE-R` / `WORLDLINE-R1.1` / `CLASSIC`）就**原样尊重**它 ——
+  也就是"用户选过 R1.1 就一直用 R1.1"（跨重启）。
+  ★ 这一条是**前向移植**：我们的移植基线 `04c4e61005` 里还是老写法
+  `DefaultRenderer == "Classic"`（那时选项名是 `"Classic"`，与常量 `CLASSIC` 不是同一个串）。
+  上游把**选项名统一成了渲染器 id**，于是 `"Classic"` 这个旧名不再匹配、会回落到默认的
+  `WORLDLINE-R`。我们这边 `Preferences.default_renderer` 默认空串且不落盘，没有存量偏好要迁移。
 - `CreateRenderer` 的**分支顺序是语义**：`WORLDLINE-R2` / `WORLDLINE-R1.1` 必须排在
   那个 `StartsWith("WORLDLINE")` 的兜底**之前**，否则它们会被当成 R1。
   （`WORLDLINE_R[0:9]` 就是 `"WORLDLINE"`，C# 原文写的也是 `Substring(0, 9)`。）
@@ -62,8 +66,9 @@ SAMPLE_RATE = 44100
 #: 动态曲线的采样间隔（tick），与 `PITCH_INTERVAL` 同为 5
 DYNAMICS_INTERVAL = 5
 
-#: `getRendererOptions()` 返回的字面量（注意 `"Classic"` 的大小写）
-RENDERER_OPTIONS = ('WORLDLINE-R', 'Classic')
+#: `getRendererOptions()` 返回的字面量 —— 上游 master 已把选项名统一成**渲染器 id**
+#: （于是 `WORLDLINE-R1.1` 与 `CLASSIC` 都能被选到；基线版本是 `('WORLDLINE-R', 'Classic')`）
+RENDERER_OPTIONS = (WORLDLINE_R, WORLDLINE_R11, CLASSIC)
 
 
 # ---------------------------------------------------------------- 具体渲染器注册表
@@ -149,15 +154,16 @@ def get_renderer_options() -> List[str]:
 
 
 def get_default_renderer(singer_type, preferences=None) -> str:
-    """对应 C# `GetDefaultRenderer`。
+    """对应 C# `GetDefaultRenderer`（上游 master 版，见模块 docstring 的移植说明）。
 
-    ⚠ 比的是 `"Classic"`（首字母大写），与常量 `CLASSIC="CLASSIC"` 不是同一个串 ——
-    这是 C# 原文，因为选项名来自 `getRendererOptions()`。别统一大小写。
+    ★ 判据是 `classicRenderers.Contains(pref)`，不是"等于某个字面量"——
+    所以 `WORLDLINE-R` / `WORLDLINE-R1.1` / `CLASSIC` 三个 id 都会被原样尊重；
+    其它值（含旧的选项名 `"Classic"`）一律回落到 `GetSupportedRenderers(...)[0]`。
     """
     prefs = preferences
     default_renderer = getattr(prefs, 'default_renderer', '') if prefs is not None else ''
-    if default_renderer == 'Classic' and singer_type == 0x1:   # USingerType.Classic
-        return CLASSIC
+    if singer_type == 0x1 and default_renderer in CLASSIC_RENDERERS:  # USingerType.Classic
+        return default_renderer
     return get_supported_renderers(singer_type)[0]
 
 

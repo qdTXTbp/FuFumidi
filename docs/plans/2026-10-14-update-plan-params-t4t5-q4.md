@@ -441,3 +441,91 @@ https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/hnsep-v1/hnsep_2405
 镜像落在 **`FuFuCloud-mirror/Models`** —— 与 `main/download-source.js:48` 的模型镜像仓一致
 （`models: 'FuFuCloud-mirror/Models'`），不是随便找个仓塞进去。
 
+---
+
+## 11. ★ WP4-3 + WP4-5 完成：R1.1 代码链路全通（2026-10-14 续）
+
+### WP4-3 · `SynthContinuousNoise` 全链接通
+
+| 落点 | 改动 |
+|---|---|
+| `worldline.py` · `SynthSegment` | 补 hnsep 分支：**在未裁剪的原始样本上、带前后各 `fs/5` 上下文**分离再取回本段；谐波分量与 `samples` 乘**同一个**输入增益；分析改走 `HnAnalysisF0In`；`sp_env_harmonic` 按目标帧插值带出 |
+| `worldline.py` · `_resample_flat` | 把 `resample_features` 的插值核抽出来给 `sp_harmonic` 复用（照抄一份必然漂移）；重构前后**逐元素一致**有测试对账 |
+| `worldline.py` · 异常 | 新增 `HnsepSampleRateError`（对应上游裸的 `NotSupportedException`，**不是** `SynthRequestError` 子类） |
+| `worldline.py` · 绑定 | `HnAnalysisF0In` 等 10 个导出**全绑齐**（无需重编 native） |
+| `tests/test_openutau_core_matches_source.py` | 新增 `test_worldline_r11_continuous_noise()`：**33 项**断言，含"分离拿到的是上下文+本段（40572 样本，不是裁剪后的 28224）"、"增益两边同乘（恒等分离下逐元素相等）"、"重构前后逐元素一致"、"没有 hnsep 时 `sp_env_harmonic` 保持 None"，外加 7 条 C# 源码一致性 |
+
+**真机端到端（真 `worldline.dll` + 真 `hnsep_240512` 模型）**：
+
+```
+分析+分离  0.38 s / 40 帧        模型加载 0.23 s · sample_rate 44100
+sp_env[0:3]      = [2.025, 2.028, 2.035]     ← 原样本包络（含噪声能量）
+sp_harmonic[0:3] = [0.748, 0.749, 0.752]     ← 谐波半边自己的包络
+ap[0:3]          = [0.546, 0.542, 0.536]     ← 低频谱点：那里本来就只有噪声
+v11 22051 样本 · 峰值 0.7567 · RMS 0.3605 · 全有限
+v10 22051 样本 · 峰值 0.6828 · RMS 0.3360
+同一 seed 逐样本相同 = True · 不同 seed max|Δ| = 0.2693（噪声真的由 seed 控制）
+v11 vs v10 max|Δ| = 0.9072（与峰值同量级 → v11 不是 v10 的复制）
+```
+
+**代价（将来要写进界面提示的数字）**：同机同段 v11 **0.43 s** vs v10 **0.12 s**，约 **3.6×**
+（其中分离本身约 0.3 s）。v11 是"更贵换气声/噪声不被脉冲模型抹平"，**不是提速项**。
+
+### WP4-5 · 两处**前向移植**（我们盯的基线比上游旧）
+
+| | 基线 `04c4e61005` | 上游 master | 我们 |
+|---|---|---|---|
+| `getRendererOptions()` | `{ "WORLDLINE-R", "Classic" }` | `{ WORLDLINE_R, WORLDLINE_R11, CLASSIC }` | 跟 master |
+| `GetDefaultRenderer` | `DefaultRenderer == "Classic"` | `classicRenderers.Contains(DefaultRenderer)` | 跟 master |
+
+- 计划里写的"上游那两行"指的是 **master**，不是我们的参考克隆 —— 已核实（取法见 §12）。
+- 语义变化：选项名**统一成渲染器 id**，旧的 `"Classic"` 不再匹配、回落 `WORLDLINE-R`；
+  换来的是"选过 R1.1 就一直用 R1.1"（跨重启）。
+- **没有存量迁移问题**：`Preferences.default_renderer` 默认空串、且当前不落盘。
+- 测试改成"**记录**参考克隆是基线版本 + 用功能断言钉住 master 语义"，不假装克隆里有 master 的代码。
+
+### ★★ 最重要的一条：v11 在应用里**还不可达**（新发现，需要你定夺）
+
+- `engine_openutau.py:697` 把 `track.renderer_settings.renderer` **硬编码成 'CLASSIC'**；
+  应用实际走 `ClassicRenderer + WorldlineResampler`（逐音素 `worldline.resample()`）。
+- `WorldlineRenderer`（v10 / v11 / v20 所在的**乐句级**渲染器）**全仓零调用方**；
+  `get_renderer_options()` / `get_default_renderer()` 同样**没有任何调用方**，前端也不读。
+- ∴ **WP4-5 不产生任何界面变化**；而 **WP4-4 就算把 52 MB 模型下下来，用户也拿不到东西**。
+- 要让 R1.1 真的对用户可用，得新增一个"轨道渲染器"选择入口、并让渲染改走 `WorldlineRenderer`。
+  **那是界面/行为改动，与「工具 UI 不变」直接冲突** —— 所以停在这里等决定，不擅自接线。
+
+### 顺带修掉的一个真实测试缺陷（不是这次改出来的，是被暴露的）
+
+- `test_classic_renderer_external_path` 的 `_Host` 替身 `copy_source_temp(self, source, temp)`
+  **少一个 `resampler` 形参**（实现自上游 `b30d3347` 起是三个）→ 整条外部路径测试直接
+  `TypeError`，**不是断言失败**。这种失败最容易被误读成"环境不行"。已修。
+- 补下 `git checkout 04c4e61005 -- OpenUtau.Plugin.Builtin`（61 个 .cs）后，**10 个音素器测试
+  从 FileNotFoundError 转为真跑并通过** —— 之前那 11 项失败里 10 项是参考克隆不完整，只剩 1 项是真缺陷。
+
+### 门禁（本次）
+
+```
+pytest engine/tests   （OPENUTAU_REF=上游克隆，**不 ignore** 对照文件）  → exit 0
+```
+
+---
+
+## 12. 参考克隆的取法（可复现）
+
+上游对照跑不起来时按这个顺序补，别急着下"环境不行"的结论：
+
+```powershell
+cd E:\Midi\_attic\openutau-upstream
+# OpenUtau.Core（.cs 对照测试读它）
+git -c 'url.https://ghfast.top/https://github.com/.insteadOf=https://github.com/' checkout 04c4e61005 -- OpenUtau.Core
+# OpenUtau.Plugin.Builtin（10 个音素器测试读它）
+git -c 'url.https://ghfast.top/https://github.com/.insteadOf=https://github.com/' checkout 04c4e61005 -- OpenUtau.Plugin.Builtin
+```
+
+- 仓库是 `blob:none` 克隆，checkout 会**按需拉 blob 并中途失败** —— **循环重试即可**
+  （实测第 2 次就 EXIT=0，拿到 61 个 .cs；第一次失败时也已落下 59 个，别以为全丢了）。
+- 想看**比基线更新**的上游代码（例如 WP4-5 那两行），走
+  `https://ghfast.top/https://raw.githubusercontent.com/stakira/OpenUtau/master/<path>`，
+  别在 blob:none 的克隆里 `git show` —— 实测 `git grep HEAD` 走远程拉取会卡到超时，只能 kill。
+
+

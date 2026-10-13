@@ -10,8 +10,10 @@
 | 20 | `WORLDLINE-R2` | 512 | 512/44100 s | WORLD 特征喂给 ONNX 声码器包 |
 
 ★ **version 10 就是 `Renderers.GetDefaultRenderer` 对 Classic 歌手给出的默认渲染器**，
-所以本文件把 v10 做完整；v11 / v20 各缺一块外部依赖，都在**入口处**报错说清楚缺什么
-（不是静默算错、也不是留个 `NotImplementedError` 了事）。
+所以本文件把 v10 做完整。v11 的**代码链路已全部接通**（hnsep 分离 → `HnAnalysisF0In` →
+`SynthContinuousNoise`），它唯一的外部依赖是**模型包** `hnsep_240512` 有没有装；
+没装时在**入口处**报错说清楚缺什么（不是静默算错、也不是留个 `NotImplementedError` 了事）。
+v20 另缺两个 ONNX 会话。
 
 ## 照搬时保留的语义（别"整理"掉）
 1. `SupportsExpression` 与 `ClassicRenderer` 的**不一样**：这里**只**看白名单，
@@ -31,8 +33,9 @@
    共用 R 的表达式图）。
 
 ## v11 / v20 缺什么（都在入口报错）
-- **v11**：`PhraseSynthV2(use_hnsep: true)` —— 谐波/噪声分离模型 `Hnsep` 未搬
-  （`SynthSegment` 的谐波分支 + `HnAnalysisF0In` 绑定 + `sp_env_harmonic` 的传递）。
+- **v11**：代码侧**已全部搬完**（`hnsep.py` + `worldline.`{`hn_analysis_f0_in`,`synth_continuous_noise`}`）。
+  现在缺的只是**运行时依赖**：模型包 `hnsep_240512` 还没安装（约 52 MB，走资源中心下载）。
+  宿主用 `worldline.set_hnsep()` 注入已加载的实例；没注入就在这里给出可操作的报错。
 - **v20**：需要两个 ONNX 会话 —— mel 模型是 `OpenUtau.Core` **程序集内嵌资源**
   （`Data.Resources.mel`，仓库里没有对应文件），声码器是**可下载包**
   `pc-nsf-hifigan`（走 `PackageManager` + `vocoder.yaml`）。两者都不在照搬范围内。
@@ -237,18 +240,19 @@ class WorldlineRenderer(IRenderer):
     def _make_phrase_synth(self) -> PhraseSynthV2:
         """对应 `new Worldline.PhraseSynthV2(44100, hopSize, 2048, useHnsep: version == 11)`。
 
-        v11 需要 hnsep 模型（未搬）→ 在 `PhraseSynthV2.synth_continuous_noise` 里报错；
-        这里额外在**构造时**就给一句更贴近渲染器语境的说明。
+        v11 的代码链路已经搬完，**唯一的前置条件是模型包**：
+        这里在**构造时**就给出可操作的说明（比让 `synth_continuous_noise` 深处再抛要清楚）。
         """
         if self.version == 11:
             from ..worldline import _default_hnsep
             if _default_hnsep() is None:
-                raise NotImplementedError(
-                    'Worldline-R1.1（v11）需要谐波/噪声分离模型，尚未照搬：\n'
-                    '  - Classic/WorldlineRenderer 依赖 Worldline.PhraseSynthV2(useHnsep: true)\n'
-                    '  - 需要 Core/Analysis/Hnsep（ONNX）+ Analysiss 的谐波分支\n'
-                    '  - 另需 SynthSegment 的 sp_env_harmonic 传递与 HnAnalysisF0In 绑定\n'
-                    '临时替代：用 version=10（WORLDLINE-R，默认渲染器）')
+                from ..hnsep import PACKAGE_ID as HNSEP_PACKAGE_ID
+                raise RuntimeError(
+                    'Worldline-R1.1（v11）需要谐波/噪声分离模型 %s，当前没有装。\n'
+                    '  · 代码侧已就绪：hnsep 网络 + HnAnalysisF0In + SynthContinuousNoise 都已搬完\n'
+                    '  · 只缺模型包本体（约 52 MB），装好后由宿主调 worldline.set_hnsep() 注入\n'
+                    '临时替代：用 version=10（WORLDLINE-R，默认渲染器）'
+                    % HNSEP_PACKAGE_ID)
         return PhraseSynthV2(SAMPLE_RATE, self.hop_size, FFT_SIZE,
                              use_hnsep=(self.version == 11),
                              num_render_threads=self._num_render_threads)
