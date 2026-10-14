@@ -24,6 +24,31 @@ from muscriptor.tokenizer.notes import (
 DEFAULT_MAX_NOTE_HOLD_SEC: float | None = 15.0
 
 
+# ★ FuFumidi patch: 音频证据钩子（2026-10-14）。
+#
+# 为什么不能靠时长上限：用户明确要求 —— 音频**真的有**长音时不许截断（那是误伤）。
+# 而僵尸音的本质不是"太长"，是"音频早就没声了，模型却被强制继续"：
+# 上游在块边界把 tracker.open_keys() 无条件塞进 tie 段（transcription_model.py:554），
+# 于是模型每块都被迫声明"这些音还在响"，一颗漏收尾的音就永远关不掉。
+#
+# 修法：在块边界先用**音频**判断每个开着的音是否还有能量 —— 没能量就从 _open 里摘掉，
+# 它自然不会被塞进强制 tie 段，模型也就不再被迫延续它（随后由既有的
+# "不在 tie 集里就在边界收尾"逻辑正常关掉）。有能量的音一律不动。
+#
+# 由引擎层注入（engine_muscriptor.py）。签名：
+#     fn(pitch: int, upto_time: float) -> float | None
+#       返回 None            = 到该时刻为止**仍有声音**（不要动它）
+#       返回一个时刻（秒）    = 该音最后有声音的时刻（在这里收尾）
+# 钩子缺省为 None = 保持上游行为。
+_SUSTAIN_EVIDENCE = None
+
+
+def set_sustain_evidence(fn):
+    """注入音频证据函数（None = 关闭该机制，回到上游行为）。"""
+    global _SUSTAIN_EVIDENCE
+    _SUSTAIN_EVIDENCE = fn
+
+
 _DRUM_INSTRUMENT = "drums"
 
 
@@ -150,6 +175,9 @@ class OpenNoteTracker:
             # every still-open note ends at that chunk's boundary.
             if self._chunk_started and self._in_prologue:
                 actions = self._end_all(self._seek_time)
+            # ★ FuFumidi patch: 音频证据否决 —— 必须在调用方用 open_keys() 构造强制 tie 段
+            #   之前完成，所以就在同一个 feed(Boundary) 调用里做掉。
+            actions = actions + self._veto_unsustained(item.seek_time)
             self._seek_time = item.seek_time
             self._next_seek_time = item.next_seek_time
             self._start_tick = round(item.seek_time * self._frame_rate)
@@ -249,6 +277,36 @@ class OpenNoteTracker:
         ]
         self._open.clear()
         return actions
+
+    def _veto_unsustained(self, boundary_time: float) -> list[_NoteAction]:
+        """把「音频其实已经没在响」的延音收尾（★ FuFumidi patch）。
+
+        只在**边界**咨询证据函数，且**只在证据明确说"最后有声时刻"时**才动手：
+        证据函数返回 None（仍在响）或抛异常时一律不动 —— 宁可不切，也不误伤。
+        """
+        fn = _SUSTAIN_EVIDENCE
+        if fn is None or not self._open:
+            return []
+        out: list[_NoteAction] = []
+        for key in list(self._open):
+            pitch = key[1]
+            try:
+                last = fn(pitch, boundary_time)
+            except Exception:
+                last = None
+            if last is None:
+                continue
+            start = self._open[key]
+            try:
+                end = float(last)
+            except (TypeError, ValueError):
+                continue
+            # 收尾点必须落在 [起音, 边界] 内，否则不动（防御坏证据）
+            if not (start <= end <= boundary_time):
+                continue
+            out.append(_EndNote(*key, end))
+            del self._open[key]
+        return out
 
     def _end_all(self, time: float) -> list[_NoteAction]:
         actions: list[_NoteAction] = [_EndNote(*key, time) for key in self._open]

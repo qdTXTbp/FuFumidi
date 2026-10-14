@@ -94,6 +94,49 @@ def _ensure_config(weights_path, size):
         pass  # 写失败不阻断转录（muscriptor 会走其他回退，代价是可能架构不匹配）
 
 
+def _make_sustain_evidence(wav_path, log_cb=None):
+    """按**音频证据**决定跨块延音要不要收尾（★ 2026-10-14，用户要求）。
+
+    背景：块边界的强制 tie 段来自 `tracker.open_keys()`，于是模型每块都被迫声明
+    「这些音还在响」—— 一颗漏收尾的音就永远关不掉（僵尸音符）。用户明确要求：
+    **要让模型不推理出这种音，而不是按时长硬截断**（音频真有长音时截断会误伤）。
+
+    所以判据完全落在音频上：边界前 0.5 秒**整窗静音**才认为该音已经结束，
+    并收尾在**静音开始处**（往回逐 10 ms 找最后一个有声帧）。只要还有声音就不动。
+
+    阈值刻意保守（−60 dBFS）：宁可漏切一颗僵尸音，也不误伤真实的超长音。
+    """
+    import numpy as np
+    import soundfile as sf
+
+    x, sr = sf.read(wav_path, dtype="float32", always_2d=False)
+    if getattr(x, "ndim", 1) > 1:
+        x = x.mean(axis=1)
+    TH = 0.001                      # ≈ −60 dBFS
+    win = max(1, int(0.5 * sr))     # 边界前看 0.5 秒
+    step = max(1, sr // 100)        # 10 ms 一帧
+
+    def fn(pitch, upto):
+        i = int(float(upto) * sr)
+        if i <= 0:
+            return None
+        lo = max(0, i - win)
+        w = x[lo:i]
+        if w.size < step * 2:
+            return None
+        if float(np.sqrt((w * w).mean())) > TH:
+            return None             # 还有声音 → 不动它
+        j = w.size
+        while j > 0:
+            seg = w[max(0, j - step):j]
+            if float(np.sqrt((seg * seg).mean())) > TH:
+                return (lo + j) / sr   # 静音从这里开始
+            j -= step
+        return lo / sr
+
+    return fn
+
+
 def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                           num_threads=None, **kwargs):
     _require_package()  # 包缺失先给明确报错，再导入
@@ -193,6 +236,15 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     # 采样率 16000 与 muscriptor 内部 _SAMPLE_RATE 一致，免去二次重采样。
     import audio_io
     wav_tmp = audio_io.decode_to_wav(audio_path, 16000)
+    # ★ 音频证据式收尾：让模型不再被迫延续"其实已经没声"的音（见 _make_sustain_evidence）。
+    #   回放 token 流时不注入（没有音频）—— 那是纯解码器复现，保持上游行为。
+    if not params.get("replay_tokens"):
+        try:
+            from muscriptor.events import set_sustain_evidence as _set_evidence
+            _set_evidence(_make_sustain_evidence(wav_tmp))
+            _log(log_cb, "音频证据式收尾：已启用（按音频实际静音处收尾，不截断真实长音）")
+        except Exception as _e:
+            _log(log_cb, "音频证据式收尾不可用，按上游行为：%s" % _e)
     try:
         # 真实进度上报：muscriptor 的 transcribe() 是事件流，其中夹带 ProgressEvent
         # （completed/total 个 5s 分块）。官方 transcribe_to_midi 内部即「事件流 →

@@ -374,3 +374,21 @@ curl.exe -sIL "https://cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/releases/latest/down
 
 **默认口径（2026-10-13 起）**：优先 `fast-upload.mjs --jobs 2`（每条资产单流、跨资产并行）；
 单资产 `--race 3` > 网页传 > 等待。任何一次低于 0.5 MB/s 都先重掷再谈别的。
+
+---
+
+### 11.9 推送一律走 GitHub Git Data API（用户 2026-10-14 决定）
+
+**规矩：以后推送不再用 `git push`，改用 `npm run push:api`（`scripts/api-push.mjs`）。**
+
+原因：本机到 `github.com:443` 经常连不上（`git push` 直接 fatal: Could not connect），
+而 `api.github.com` 一直可用。API 路子是 `blob → tree → commit → PATCH ref`，
+与 git 协议无关，所以网络抖动时照样能推。
+
+**★ 铁律：先读远端 ref，只重放它之后的本地提交。** 已经推过的提交再重放一次，
+会造出**内容相同、SHA 不同**的重复提交（2026-10-14 真的踩了：远端明明已经是 `893bb62`，
+我又重放了 3 个提交，多出 `e5f2f2eb`/`dda40e6e`/`dca130d9`，只能再把 ref 退回去）。
+`api-push.mjs` 已经把这条写进流程（比对远端 ref 与本地 HEAD 后才动手）。
+
+token 从 git 凭据管理器取（`git credential fill`，与 `_attic/asar-deploy/get-token.py` 同源），
+**不写进仓库**。只读预览：`node scripts/api-push.mjs --dry`。

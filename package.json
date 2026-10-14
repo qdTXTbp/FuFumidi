@@ -30,7 +30,8 @@
     "test:download": "node --test scripts/test-fast-download.mjs",
     "test:usermeta": "node --test scripts/test-usermeta.mjs",
     "test:speedtest": "node --test scripts/test-update-speedtest.mjs",
-    "test:cancel": "node --test scripts/test-cancel-worker.mjs"
+    "test:cancel": "node --test scripts/test-cancel-worker.mjs",
+    "push:api": "node scripts/api-push.mjs"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",
