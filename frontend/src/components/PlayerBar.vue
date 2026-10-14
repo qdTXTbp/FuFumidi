@@ -4,11 +4,23 @@ import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
 import { getPlayer, getCtx, getSynth } from '../audio.js';
 import { t } from '../core/i18n.js';
+import { playbackPrefs } from '../core/playback_prefs.js';
+import { useSettingsStore } from '../stores/settings';
 import { GM_INSTRUMENTS, gmByProgram } from '../core/gmInstruments.js';
 import { initMidiOutput, setMidiOutEnabled, midiOutOn, midiOutOff, midiAllOff, getMidiOutDeviceName } from '../core/midiout.js';
 import NumSlider from './NumSlider.vue';
 
 const app = useAppStore();
+const settingsStore = useSettingsStore();
+
+/* 跳过空白片段：用户 2026-10-14 定「默认关，但给一个显眼的开关」——
+   所以它常驻在播放栏（和循环/节拍器同排），一点即用，不必进设置页。 */
+function toggleSkipSilence() {
+  playbackPrefs.skipSilence = !playbackPrefs.skipSilence;
+  app.applyPlaybackPrefs();
+  try { settingsStore.save({ skip_silence: playbackPrefs.skipSilence }); } catch (e) {}
+  app.toast(playbackPrefs.skipSilence ? t('跳空白：开') : t('跳空白：关'));
+}
 const state = app;
 const isAudio = computed(() => state.isAudio);
 const currentSong = computed(() => app.currentSong);
@@ -250,7 +262,10 @@ function toggleCrossfade() {
     <div class="pb-right">
       <button class="tp-btn" data-guide="pb-midiout" :class="{ 'toggle-on': midiOn }" :title="t('MIDI 硬件输出')" :aria-label="t('MIDI 硬件输出')" @click="toggleMidiOut"><Icon name="music" :size="16" /></button>
       <button class="tp-btn" data-guide="pb-loop" :class="{ 'toggle-on': state.loop }" :title="t('循环播放')" :aria-label="t('循环播放')" @click="toggleLoop" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="loop" :size="16" /></button>
-      <button class="tp-btn" data-guide="pb-metro" :class="{ 'toggle-on': state.metro }" :title="t('节拍器')" :aria-label="t('节拍器')" @click="toggleMetro" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="metro" :size="16" /></button>
+      <button class="tp-btn" data-guide="pb-skip-silence" :class="{ 'toggle-on': playbackPrefs.skipSilence }"
+              :title="t('跳过空白片段（没有音符的段落自动跳过）')" :aria-label="t('跳过空白片段')"
+              @click="toggleSkipSilence" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="next" :size="16" /></button>
+<button class="tp-btn" data-guide="pb-metro" :class="{ 'toggle-on': state.metro }" :title="t('节拍器')" :aria-label="t('节拍器')" @click="toggleMetro" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="metro" :size="16" /></button>
       <button class="tp-btn" data-guide="pb-mixer" :class="{ 'toggle-on': mixerOpen }" :title="t('混音台')" :aria-label="t('混音台')" @click="mixerOpen = !mixerOpen" :disabled="isAudio || !state.tracks.length" :style="isAudio ? { opacity: .4 } : null"><Icon name="cclane" :size="16" /></button>
       <button class="tp-btn" data-guide="pb-fx" :class="{ 'toggle-on': fxOpen || fx.enabled }" :title="t('音效调节')" :aria-label="t('音效调节')" @click="toggleFxOpen"><Icon name="cresc" :size="16" /></button>
       <button class="tp-btn" :class="{ 'toggle-on': compact }" :title="t('紧凑/完整播放栏')" :aria-label="t('紧凑/完整播放栏')" @click="compact = !compact"><Icon name="menu" :size="16" /></button>

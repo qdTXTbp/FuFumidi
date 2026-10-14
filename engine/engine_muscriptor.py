@@ -132,9 +132,17 @@ def _make_pitch_evidence(wav_path, log_cb=None):
     GRACE = 0.30           # 到边界前 0.3 s 还在响 → 判定"仍在延音"，不动
     ATTACK = 0.30          # 起音参考窗
 
-    x, sr = sf.read(wav_path, dtype="float32", always_2d=False)
-    if getattr(x, "ndim", 1) > 1:
-        x = x.mean(axis=1)
+    # ★ 既接受文件路径，也接受 (PCM, sr)：分段转录时每段已经在内存里，
+    #   再落盘读一遍纯属浪费（100 分钟音频 400 MB）。
+    if isinstance(wav_path, (tuple, list)) and len(wav_path) == 2:
+        x = np.asarray(wav_path[0], dtype="float32")
+        sr = int(wav_path[1])
+        if getattr(x, "ndim", 1) > 1:
+            x = x.mean(axis=1)
+    else:
+        x, sr = sf.read(wav_path, dtype="float32", always_2d=False)
+        if getattr(x, "ndim", 1) > 1:
+            x = x.mean(axis=1)
     if sr != SR_TARGET and x.size:
         try:
             import librosa as _lb
@@ -344,17 +352,59 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     #     而回放台的意义就是"改了解码器逻辑后用 1 分钟复现"，把证据排除在外就复现不到改动。
     #     （2026-10-14 实测通过回放定位到问题：6505 次收尾**全部**是模型自己的 token，
     #      块边界批量收尾 374/195/1362/1587 个音 —— 所以证据必须进回放路径。）
+    from dataclasses import replace as _replace      # 分段合并时改事件时间/index 用
+    _SUSTAIN_EV = None                               # 分段路径要按段重新注入证据
     if not os.environ.get("FUFUMIDI_NO_EVIDENCE"):
         try:
             import time as _time_ev
             _t_ev = _time_ev.perf_counter()
             from muscriptor.events import set_sustain_evidence as _set_evidence
+            _SUSTAIN_EV = _set_evidence
             _ev = _make_pitch_evidence(wav_tmp, log_cb)
             _set_evidence(_ev)
             _log(log_cb, "音频证据式收尾：已启用（按音高能量时间线收尾，不截断真实长音）"
                  "（构建 %.1fs）" % (_time_ev.perf_counter() - _t_ev))
         except Exception as _e:
             _log(log_cb, "音频证据式收尾不可用，按上游行为：%s" % _e)
+
+    # ★ 静音分段（长音频提速）：见 engine/segmenter.py。**默认 off**（用户 2026-10-14 定），
+    #   可在界面/CLI 选 auto（时长 ≥5 分钟且预计省 ≥3% 才启用）或 on。
+    #   做法：按"完全空白静音"切成若干核心段，逐段推理，事件时间加段偏移后合并成一份 MIDI。
+    #   为什么不在回放路径做：token 流是按整段音频落盘的，切片对不上。
+    _seg_plan = None
+    _seg_pcm = None
+    _seg_sr = 0
+    _seg_cfg = {}
+    _seg_mode = str(params.get("segment_silence") or "off").strip().lower()
+    if _seg_mode in ("off", "false", "0", "no", ""):
+        _seg_mode = "off"
+    for _k, _p in (("threshold", "silence_db"), ("min_silence", "min_silence"),
+                   ("max_segment", "max_segment")):
+        if params.get(_p) is not None:
+            try:
+                _seg_cfg[_k] = float(params[_p])
+            except (TypeError, ValueError):
+                pass
+    if _seg_mode != "off" and not params.get("replay_tokens"):
+        try:
+            import segmenter as _segmod
+            import soundfile as _sf
+            _t_sg = time.perf_counter()
+            _x, _sr = _sf.read(wav_tmp, dtype="float32", always_2d=False)
+            if getattr(_x, "ndim", 1) > 1:
+                _x = _x.mean(axis=1)
+            _plan = _segmod.analyze(_x, _sr, **_seg_cfg)
+            _ok, _why = _segmod.auto_enabled(_plan["duration"], _plan["skipped_sec"], _seg_mode)
+            if _ok and len(_plan["segments"]) > 1:
+                _seg_plan, _seg_pcm, _seg_sr = _plan, _x, _sr
+                _log(log_cb, "静音分段：%s —— %d 段，跳过静音 %.1f s（%.1f%%），分析耗时 %.1fs"
+                     % (_why, len(_plan["segments"]), _plan["skipped_sec"],
+                        100.0 * _plan["skipped_sec"] / max(1e-6, _plan["duration"]),
+                        time.perf_counter() - _t_sg))
+            else:
+                _log(log_cb, "静音分段未启用：%s" % _why)
+        except Exception as _e:
+            _log(log_cb, "静音分段分析失败，按整段转录：%s" % _e)
     try:
         # 真实进度上报：muscriptor 的 transcribe() 是事件流，其中夹带 ProgressEvent
         # （completed/total 个 5s 分块）。官方 transcribe_to_midi 内部即「事件流 →
@@ -523,6 +573,77 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     del open_notes[idx]
                     _cap_stats["closed"] += 1
 
+        def _segmented_events(plan, pcm, sr):
+            """逐段推理并合并事件流（★ 静音分段）。
+
+            三条不变量（错了就会丢音/重音，改动前先看这里）：
+              1. **偏移精确**：每段事件时间 = 段内时间 + 该段在原始时间轴上的起点
+                 （模型时间轴 = 解码时间轴，前面已验证；不是估的）。
+              2. **只在核心区留音符**：起音落在 padding 里的音符丢掉（它属于邻段），
+                 否则接缝处会出现两份同样的音。
+              3. **index 必须重编号**：上游每个转录流的 index 都从 0 开始，直接合并会让
+                 events_to_midi_bytes 的 open_notes 字典撞键（它按 index 配对）。
+            """
+            import soundfile as _sf2
+            import tempfile as _tf
+            segs = plan["segments"]
+            pad = float(params.get("segment_pad") or 1.0)
+            chunk_sec = 5.0
+            per = [max(1, int((e - s) / chunk_sec + 0.999)) for s, e in segs]
+            total_chunks = sum(per)
+            done_chunks = 0
+            base_index = 0
+            tmps = []
+            try:
+                for si, (cs, ce) in enumerate(segs):
+                    a = max(0, int(round((cs - pad) * sr)))
+                    b = min(len(pcm), int(round((ce + pad) * sr)))
+                    if b - a < sr:                      # 短于 1 秒的段没有意义
+                        done_chunks += per[si]
+                        continue
+                    fd, seg_wav = _tf.mkstemp(prefix="fufumidi-seg-", suffix=".wav")
+                    os.close(fd)
+                    tmps.append(seg_wav)
+                    _sf2.write(seg_wav, pcm[a:b], sr)
+                    if _SUSTAIN_EV is not None:      # 每段各自建证据（100 s 音频约 0.3 s）
+                        try:
+                            _SUSTAIN_EV(_make_pitch_evidence((pcm[a:b], sr), log_cb))
+                        except Exception:
+                            pass
+                    off = a / float(sr)
+                    kept = {}
+                    dropped = set()
+                    for ev in model.transcribe(seg_wav, instruments=constrain, **_gen_kw):
+                        if _ProgressEvent is not None and isinstance(ev, _ProgressEvent):
+                            yield _ProgressEvent(completed=done_chunks + int(getattr(ev, "completed", 0)),
+                                                 total=total_chunks)
+                            continue
+                        if _NoteStartEvent is not None and isinstance(ev, _NoteStartEvent):
+                            t = float(ev.start_time) + off
+                            if not (cs - 0.02 <= t < ce - 0.02):   # 落在 padding 里 → 归邻段
+                                dropped.add(ev.index)
+                                continue
+                            new = _replace(ev, start_time=t, index=base_index)
+                            base_index += 1
+                            kept[ev.index] = new
+                            yield new
+                            continue
+                        if _NoteEndEvent is not None and isinstance(ev, _NoteEndEvent):
+                            idx = ev.start_event_index
+                            if idx in dropped or idx not in kept:
+                                continue
+                            t = float(ev.end_time) + off
+                            yield _replace(ev, end_time=t, start_event=kept[idx])
+                            continue
+                        yield ev
+                    done_chunks += per[si]
+            finally:
+                for p_ in tmps:
+                    try:
+                        os.remove(p_)
+                    except OSError:
+                        pass
+
         # 节拍网格只检测一次（OOM 降级重试时复用，避免重复解码/检测）。
         # 权重经资源中心下载到 modelsDir/hub/checkpoints/beat_this-final0.ckpt（TORCH_HOME 指向
         # modelsDir，torch.hub 读到同名缓存即复用，离线可用）；未下载或加载失败时自动跳过，
@@ -655,7 +776,10 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
 
                         model._generate_token_stream = _gts_teed
                         model._fufumidi_timing_teed = True
-                    events = model.transcribe(wav_tmp, instruments=constrain, **_gen_kw)
+                    if _seg_plan is not None:
+                        events = _segmented_events(_seg_plan, _seg_pcm, _seg_sr)
+                    else:
+                        events = model.transcribe(wav_tmp, instruments=constrain, **_gen_kw)
                 data = model.events_to_midi_bytes(_events_capped(events), beat_grid=beat_grid)
                 if _cap > 0:
                     _log(log_cb, "超长音符上限 %.0fs：强制收尾 %d 个音符"

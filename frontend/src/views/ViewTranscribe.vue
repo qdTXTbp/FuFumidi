@@ -48,6 +48,12 @@ const msTemp = ref(1.0);                 // 采样温度（1.0 = 不传）
 const msCfg = ref(1.0);                  // 引导系数（1.0 = 不传）
 const msBeam = ref(1);                   // 束搜索宽度（1 = 不传）
 const msPrelude = ref(true);             // 跨块延音前置（默认开；关掉才传 false）
+/* 静音分段（长音频提速，**默认关** —— 用户 2026-10-14 定）：在完全空白静音处切段、
+   逐段转录、再合并成一份 MIDI。段与段之间本来就是静音，接缝处只是少一点上下文。
+   实测《原神》线上音乐会 2021（104 分钟）：−60 dBFS 下静音 439.5 s / 7.0%，可省约 7%；
+   静音多的素材（多曲目专辑、含掌声的现场、讲座）收益按比例更大。 */
+const msSegment = ref(false);            // 分段开关（默认关）
+const msSegmentMin = ref(2.0);           // 连续静音多久才值得切（秒）
 // ② 计算精度：默认 fp32（不传）—— bf16 改数值精度、属影响质量的开关，默认关。
 // 实测：CPU（Zen 5/AVX512-BF16）10 分钟素材待复测、15 秒素材 +43%；GPU 上 ≈0%；
 // 长素材（10 分钟/120 块）质量逐项相同，误差不累积。
@@ -874,6 +880,8 @@ function collectPresetParams() {
       temperature: Number(msTemp.value), cfg_coef: Number(msCfg.value),
       beam_size: iv(msBeam.value), prelude_forcing: msPrelude.value,
       precision: msPrec.value,
+      segment_silence: msSegment.value ? 'auto' : 'off',
+      min_silence: iv(msSegmentMin.value),
     });
   } else if (mode.value === 'piano') {
     Object.assign(p, {
@@ -957,6 +965,8 @@ function applyPresetParams(p, opts) {
   if (has('cfg_coef')) msCfg.value = Math.max(0, numOr('cfg_coef', 1.0));
   if (has('beam_size')) msBeam.value = Math.max(1, Math.round(numOr('beam_size', 1)));
   if (has('prelude_forcing')) msPrelude.value = pr.prelude_forcing !== false;
+  if (has('segment_silence')) msSegment.value = !!pr.segment_silence && pr.segment_silence !== 'off';
+  if (has('min_silence')) msSegmentMin.value = Number(pr.min_silence) || 2.0;
   if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
 }
 
@@ -1155,6 +1165,9 @@ function collectParams() {
       if (msCfg.value !== 1.0) cfg.cfg_coef = msCfg.value;
       if (msBeam.value > 1) cfg.beam_size = msBeam.value;
       if (!msPrelude.value) cfg.prelude_forcing = false;
+      // 静音分段：显式传 off（与引擎默认一致，写出来是为了预设/日志里看得见）
+      cfg.segment_silence = msSegment.value ? 'auto' : 'off';
+      if (msSegment.value) cfg.min_silence = Number(msSegmentMin.value) || 2.0;
       if (msPrec.value && msPrec.value !== 'fp32') cfg.precision = msPrec.value;
     }
   }
@@ -1750,6 +1763,13 @@ onBeforeUnmount(() => {
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label><span><b>{{ t('跨块延音前置') }}</b><small>{{ t('把上一块未结束的音符强制喂给下一块，分块边界最稳；关掉会降低边界延续质量（默认开）') }}</small></span><input type="checkbox" v-model="msPrelude"></label>
+          </div>
+          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
+            <label><span><b>{{ t('跳过静音分段（长音频加速）') }}</b><small>{{ t('在完全空白静音处切段，逐段转录后拼成一份 MIDI；默认关') }}</small></span><input type="checkbox" v-model="msSegment"></label>
+          </div>
+          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor' && msSegment">
+            <div class="ms-range-row"><NumSlider v-model="msSegmentMin" :min="1" :max="10" :step="0.5" unit="s" :aria-label="t('最短静音段')" /></div>
+            <small>{{ t('最短静音段') }}</small>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label><span><b>{{ t('节拍网格检测') }}</b><small>{{ t('对齐音符时值；未下载或失败时自动跳过，不影响转录（装了模型默认开）') }}</small></span><input type="checkbox" v-model="beatGrid" @change="beatGridUserSet = true"></label>

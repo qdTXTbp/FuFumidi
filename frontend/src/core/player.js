@@ -16,6 +16,8 @@ function metroClick(ctx, time, accent, out) {
   return o;
 }
 
+import { computeGaps, gapAt, nextSkipTarget, leadingSilenceEnd } from './skip_silence.js';
+
 export class Player {
   constructor(synth) {
     this.syn = synth; this.ctx = synth.ctx;
@@ -40,8 +42,37 @@ export class Player {
     this.AHEAD_BASE = 1.0;
     this.aheadSec = this.AHEAD_BASE;
     this._aheadTimer = null;
+    // ★ 跳过空白片段（默认关，见 skip_silence.js 顶部说明）：
+    //   gaps 是"没有音符的空档"列表，在 prepare() 里按当前曲目重算。
+    this.skipSilence = false;
+    this.skipMinGap = 2.5;
+    this.skipLead = 0.2;
+    this.gaps = [];
+    this.onSkip = null;          // (fromSec, toSec) => void，给界面做提示用
   }
   load(song) { this.song = song; this.pausedTick = 0; this.loop = false; this.loopStart = 0; this.loopEnd = 0; this.prepare(); }
+
+  /** 设置"跳过空白片段"。on=false 即关闭（用户默认）；minGap 是最短空档秒数。*/
+  setSkipSilence(on, minGap, lead) {
+    this.skipSilence = !!on;
+    if (Number(minGap) > 0) this.skipMinGap = Number(minGap);
+    if (Number(lead) >= 0) this.skipLead = Number(lead);
+    this._rebuildGaps();
+  }
+
+  _rebuildGaps() {
+    this.gaps = this.skipSilence ? computeGaps(this.events, this.skipMinGap) : [];
+  }
+
+  /** 开头静音（默认跳）：把播放位置挪到第一个音符前一点点。返回是否挪了。*/
+  skipLeadingSilence(minSec = 1.0, lead = 0.5) {
+    const end = leadingSilenceEnd(this.events, minSec);
+    if (end == null) return false;
+    const target = Math.max(0, end - lead);
+    if (this.currentSec() >= target) return false;
+    this.seekSec(target);
+    return true;
+  }
   prepare() {
     const arr = [];
     const st = this.song.chanStateAt;
@@ -114,6 +145,7 @@ export class Player {
     this._ctlByCh = ctlByCh;
     this._bendByCh = bendByCh;
     this.ccursor = 0;
+    this._rebuildGaps();
   }
   // 通道事件里第一个不早于 tick 的下标
   _firstCtlIndex(tick) {
@@ -255,6 +287,20 @@ export class Player {
   progress() { return this.song.totalSec ? this.currentSec() / this.song.totalSec : 0; }
   _sched() {
     if (!this.playing) return;
+    // ★ 跳过空白片段：位置落在"没有音符的空档"里就直接跳到空档末尾（留 lead 余量）。
+    //   放在调度最前面 —— 跳完游标已经重排，本趟不能再按旧游标往后排。
+    if (this.skipSilence && this.gaps.length) {
+      const from = this.currentSec();
+      const to = nextSkipTarget({
+        gaps: this.gaps, sec: from, lead: this.skipLead,
+        totalSec: this.song ? this.song.totalSec : Infinity,
+      });
+      if (to != null) {
+        this.seekSec(to);                 // 播放中会走 _restartAt：allStop + 重排游标
+        if (this.onSkip) { try { this.onSkip(from, to); } catch (_) {} }
+        return;
+      }
+    }
     // SF2 音序器路径：事件写入音频线程音序器后按绝对 tick 自行分发，预排窗口额外扩到
     // 30s——主线程长任务（切页 / 乐谱重绘 / 大文件渲染）阻塞远超 aheadSec 也不会断粮。
     // 其余路径（内置合成器 / ScriptProcessor 回退）维持 aheadSec（预排即创建节点，窗口大内存涨）。

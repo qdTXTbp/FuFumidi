@@ -4,6 +4,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick } 
 import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
+import { playbackPrefs, playbackSettingsPatch } from '../core/playback_prefs.js';
 import { useCloudStore } from '../stores/cloud';
 import CloudSyncChoiceDialog from './CloudSyncChoiceDialog.vue';
 import { t, setLang, getLang } from '../core/i18n.js';
@@ -27,6 +28,16 @@ import {
 
 const bridge = window.fuBridge;
 const settingsStore = useSettingsStore();
+
+/* ---------------- 播放偏好（跳空白 / 方向键步长 / 长按倍数）----------------
+   值放在 core/playback_prefs.js（单一来源，App.vue 的键盘与播放器都读它），
+   这里只负责改 + 写回主进程；改完立刻应用到播放器，不用重启。
+   用户 2026-10-14 定：跳空白默认关（播放栏有显眼开关），开头静音默认跳。 */
+const pb = playbackPrefs;
+function savePlayback() {
+  try { settingsStore.save(playbackSettingsPatch()); } catch (e) {}
+  try { app.applyPlaybackPrefs(); } catch (e) {}
+}
 
 /* ---- 云同步：账号状态共享自 stores/cloud；此处仅保留同步与管理功能 ---- */
 const cloud = useCloudStore();
@@ -1381,6 +1392,52 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
             <button class="btn sm" @click="resetKeys">{{ t('恢复默认快捷键') }}</button>
           </div>
 
+          <!-- ============ 播放：跳空白 + 方向键（用户 2026-10-14）============ -->
+          <div class="hk-sec">
+            <div class="hk-head">
+              <Icon name="play" :size="15" />
+              <b>{{ t('播放：跳空白与方向键') }}</b>
+              <span class="sp" />
+              <span class="muted small">{{ t('改完立刻生效，不用重启') }}</span>
+            </div>
+            <div class="kbd-row">
+              <b>{{ t('跳过空白片段') }}</b>
+              <label class="ov-check"><input type="checkbox" v-model="pb.skipSilence" @change="savePlayback" /> {{ t('播放时自动跳过没有音符的段落') }}</label>
+            </div>
+            <div class="kbd-row">
+              <b>{{ t('最短空档') }}</b>
+              <NumSlider v-model="pb.skipSilenceMin" :min="1" :max="30" :step="0.5" unit="s" :input-width="72" :aria-label="t('最短空档')" @update:model-value="savePlayback" />
+            </div>
+            <div class="kbd-row">
+              <b>{{ t('开头静音') }}</b>
+              <label class="ov-check"><input type="checkbox" v-model="pb.skipLeadingSilence" @change="savePlayback" /> {{ t('开始播放时自动跳过开头静音') }}</label>
+            </div>
+            <div class="kbd-row">
+              <b>{{ t('方向键步长') }}</b>
+              <div style="display:flex;gap:6px;align-items:center">
+                <NumSlider v-model="pb.seekStep" :min="1" :max="600" :step="1" :input-width="72" :aria-label="t('方向键步长')" @update:model-value="savePlayback" />
+                <select v-model="pb.seekStepUnit" class="ov-input" style="width:120px" @change="savePlayback">
+                  <option value="sec">{{ t('秒') }}</option>
+                  <option value="percent">{{ t('百分比') }}</option>
+                  <option value="bar">{{ t('小节') }}</option>
+                </select>
+              </div>
+            </div>
+            <div class="kbd-row">
+              <b>{{ t('长按倍数') }}</b>
+              <div style="display:flex;gap:6px;align-items:center">
+                <NumSlider v-model="pb.holdDelayMs" :min="150" :max="1500" :step="50" unit="ms" :input-width="72" :aria-label="t('长按判定')" @update:model-value="savePlayback" />
+                <select v-model.number="pb.holdRate" class="ov-input" style="width:90px" @change="savePlayback">
+                  <option :value="1.5">1.5×</option>
+                  <option :value="2">2×</option>
+                  <option :value="3">3×</option>
+                  <option :value="4">4×</option>
+                </select>
+              </div>
+            </div>
+            <p class="ov-note">{{ t('短按方向键按步长跳；按住不放则按倍数播放（→ 快进播放，← 快退且不出声）。') }}</p>
+          </div>
+
           <!-- ============ 操作系统级全局热键（用户自己录制） ============ -->
           <div class="hk-sec">
             <div class="hk-head">
@@ -1463,7 +1520,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
                 <div class="sp-tr sp-th">
                   <span>{{ t('线路') }}</span><span>{{ t('类型') }}</span><span>{{ t('延迟') }}</span><span>{{ t('速率') }}</span><span></span>
                 </div>
-                <div v-for="row in speedRows" :key="row.id" class="sp-tr" :class="{ best: row.best, dead: row.ok === false }"
+                <div v-for="row in speedRows" :key="row.id" class="sp-tr" :class="{ best: row.best, dead: row.ok === false }"
                      :title="row.ok === false && row.error ? row.error : row.label">
                   <span class="sp-name">{{ row.label }}<em v-if="row.best">{{ t('最快') }}</em></span>
                   <span class="sp-kind">{{ kindLabel(row.kind) }}</span>

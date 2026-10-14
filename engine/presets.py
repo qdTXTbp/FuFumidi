@@ -166,6 +166,9 @@ def _builtin_presets():
                 "prelude_forcing": True,
                 "precision": "fp32",
                 "max_note_hold": 0,       # ★ 不截断：僵尸音改由**音频证据**收尾（见 engine_muscriptor 的 _make_pitch_evidence）
+                # ★ 静音分段默认关（用户 2026-10-14 定）：在完全空白静音处切段、逐段转录后
+                #   合并成一份 MIDI，用长音频的静音换时间。开启后接缝处上下文变少，所以不默认开。
+                "segment_silence": "off",
             },
         },
         "钢琴 · 最优": {"mode": "piano", "params": {**piano, "model": "piano_pt"}},

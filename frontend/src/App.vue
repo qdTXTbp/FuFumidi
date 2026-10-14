@@ -28,6 +28,8 @@ import { usePlaylistStore } from './stores/playlist';
 import { useSettingsStore } from './stores/settings';
 import { setLang, t, browserLang } from './core/i18n.js';
 import { applyDisplayPrefs as applyDisplayPrefsShared, loadDisplayPrefs } from './core/display.js';
+import { playbackPrefs, applyPlaybackSettings } from './core/playback_prefs.js';
+import { holdRate, isEditableTarget } from './core/transport_keys.js';
 import { getAppVersion, cmpVersion, getUpdateChannel } from './core/version.js';
 import { getBuiltinChangeLogs, fetchRemoteChangeLog } from './core/changelog.js';
 import { applyTheme, loadTheme } from './core/theme.js';
@@ -87,6 +89,9 @@ watch(() => settingsStore.settings, () => {
   const s = settingsStore.settings;
   wpUrl.value = wpFileUrl(s.custom_wallpaper || '');
   wpEnabled.value = !!(s.wallpaper_enabled && s.custom_wallpaper);
+  // 播放偏好（跳过空白 / 步长 / 长按倍数）：设置页一改就同步到播放器
+  applyPlaybackSettings(s);
+  app.applyPlaybackPrefs();
 }, { deep: true });
 watch(() => route.path, (p) => {
   state.view = viewParentOf(viewFromPath(p));
@@ -96,6 +101,8 @@ const stopTickLoop = () => app.stopTickLoop();
 const restoreSongs = () => app.restoreSongs();
 const togglePlay = () => app.togglePlay();
 const seekRatio = (r) => app.seekRatio(r);
+// 方向键短按：按偏好步长跳（秒 / 百分比 / 小节）
+const APP_SEEK_STEP = (dir) => app.seekByStep(dir);
 const setTempo = (v) => app.setTempo(v);
 const toggleLoop = () => app.toggleLoop();
 const toggleMetro = () => app.toggleMetro();
@@ -286,6 +293,64 @@ function cancelImportTargetModal() {
   app.cancelImportTarget();
 }
 
+/* ---------------- 方向键：短按=按步长跳；长按=倍数播放（用户 2026-10-14）----------------
+   为什么这样分派：短按要"精确挪一小段"，长按要"快速掠过"。
+   · → 长按：临时把播放速度切到 N 倍（player.setScale，工程 BPM 不动）；
+   · ← 长按：**快退且不出声** —— MIDI 播放器不能倒放，只能反复 seek，
+     所以先把播放暂停（记住原来是否在播），松手后再从新位置继续。
+   抽成 core/transport_keys.js 的纯函数是为了能单测（holdRate / seekTarget）。 */
+let _holdTimer = null;
+let _rewindTimer = null;
+let _heldDir = 0;
+let _wasPlaying = false;
+
+function _clearHoldTimers() {
+  if (_holdTimer) { clearTimeout(_holdTimer); _holdTimer = null; }
+  if (_rewindTimer) { clearInterval(_rewindTimer); _rewindTimer = null; }
+}
+
+function _endHold() {
+  _clearHoldTimers();
+  const dir = _heldDir;
+  _heldDir = 0;
+  if (!dir) return;
+  if (dir > 0) {
+    app.setTemporaryRate(1);            // 恢复原速（state.tempo 从未被改过）
+  } else if (_wasPlaying) {
+    app.togglePlay();                   // 快退结束：恢复播放（从新位置继续）
+  }
+  _wasPlaying = false;
+}
+
+function onArrowHold(e, dir, isDown) {
+  if (!isDown) { _endHold(); return; }
+  e.preventDefault();
+  if (e.repeat || _heldDir === dir) return;      // 长按的重复事件交给定时器
+  _endHold();                                   // 换了方向：先收尾上一次
+  _heldDir = dir;
+  APP_SEEK_STEP(dir);                           // 短按立刻跳一步（手感：按下去就有反应）
+  if (state.isAudio) return;                    // 音频曲目不做倍数播放（那是音频元素的语速）
+  _holdTimer = setTimeout(() => {
+    _holdTimer = null;
+    if (_heldDir !== dir) return;
+    if (dir > 0) {
+      app.setTemporaryRate(playbackPrefs.holdRate);
+    } else {
+      _wasPlaying = !!state.playing;
+      if (_wasPlaying) app.togglePlay();        // 快退不出声
+      const perTick = Math.max(0.2, Number(playbackPrefs.seekStep) * Number(playbackPrefs.holdRate) * 0.1);
+      _rewindTimer = setInterval(() => {
+        const cur = Number(state.curSec) || 0;
+        app.seekSec(Math.max(0, cur - perTick));
+      }, 100);
+    }
+  }, playbackPrefs.holdDelayMs);
+}
+
+function onKeyUp(e) {
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") _endHold();
+}
+
 function onKey(e) {
   // 全局系统快捷键（优先于输入框拦截：Ctrl+K 命令面板、Esc 关闭浮层）
   if (e.ctrlKey && (e.key === 'k' || e.key === 'K')) {
@@ -312,14 +377,16 @@ function onKey(e) {
     if (v) app.setView(v.id);
     return;
   }
-  // 忽略输入框内的快捷键
-  if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  // 忽略输入框内的快捷键（方向键在输入框里要能移光标，见 isEditableTarget 的说明）
+  if (isEditableTarget(e.target)) return;
   // 系统级全局热键触发时，主进程会顺手发一个同名的合成按键事件；
   // 这里放行，避免同一次按键被处理两遍（播放/暂停、上一首/下一首会跳两次）。
   if (e.__fromGlobalHotkey) return;
   if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
-  else if (e.key === 'ArrowLeft') seekRatio(Math.max(0, state.progress - 0.02));
-  else if (e.key === 'ArrowRight') seekRatio(Math.min(1, state.progress + 0.02));
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    // 步长可配（设置 → 快捷键）；按住不放 → 倍数播放（→ 快进；← 快退且不出声）
+    onArrowHold(e, e.key === 'ArrowRight' ? 1 : -1, true);
+  }
   else if (e.key === 'l' || e.key === 'L') toggleLoop();
   else if (e.key === 'm' || e.key === 'M') toggleMetro();
   else if (e.key === '=' || e.key === '+') setTempo(state.tempo + 0.05);
@@ -536,6 +603,9 @@ onMounted(() => {
     });
   }
   window.addEventListener('keydown', onKey);
+window.addEventListener('keyup', onKeyUp);
+window.addEventListener('blur', _endHold);            // 切窗口时别把倍率/快退留在半路上
+app.setSkipNotice((from, to) => app.toast(t('已跳过 ') + Math.round(to - from) + t(' 秒空白')));
   // 关窗/刷新前保存播放断点
   window.addEventListener('beforeunload', () => { try { state.saveResumePos(); } catch (e) {} });
   // 托盘控制（播放/暂停、下一首）
@@ -555,6 +625,9 @@ onBeforeUnmount(() => {
   clearTimeout(gpuBarTimer);
   clearTimeout(dlHideTimer);
   window.removeEventListener('keydown', onKey);
+window.removeEventListener('keyup', onKeyUp);
+window.removeEventListener('blur', _endHold);
+_endHold();
   window.removeEventListener('beforeunload', onBeforeUnload);
 });
 </script>
