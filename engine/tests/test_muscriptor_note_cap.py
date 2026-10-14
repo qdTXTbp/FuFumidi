@@ -165,6 +165,21 @@ def test_cap_zero_disables(run_transcribe):
     assert not any("强制收尾" in s for s in logs), logs
 
 
+def test_evidence_drop_removes_the_note(run_transcribe):
+    """★ 证据式删除（第四版）：零长度收尾 → 只吞掉收尾，不配对的 start 自然消失。
+
+    依据：下游 `events_to_midi_bytes` 只在收到 end 时才 `notes.append(...)`。
+    这样删音符不必缓冲/重排事件流（"正常短音不重排"是硬不变量）。
+    """
+    stream = [_start(0, 0.0, 60), _end(0, 0.0, 60),      # ← 零长度 = 删掉
+              _start(1, 1.0, 62), _end(1, 1.4, 62)]
+    logs, out, got = run_transcribe(stream, max_note_hold=0)
+    ends = [e for e in got if isinstance(e, NoteEndEvent)]
+    assert [e.start_event_index for e in ends] == [1], ends
+    # 这条不是"证据式删除"，不该冒充它出现在日志里（日志只报证据的判定计数）
+    assert not any("音频证据式收尾：修正" in s for s in logs), logs
+
+
 def test_progress_events_preserved(run_transcribe):
     """进度透传不能被上限逻辑吃掉（前端靠它显示真实进度）。"""
     stream = [ProgressEvent(completed=0, total=7), _start(0, 0.0, 60), _end(0, 0.2, 60),

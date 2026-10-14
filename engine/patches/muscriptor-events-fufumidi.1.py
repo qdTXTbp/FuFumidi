@@ -66,6 +66,7 @@ DEFAULT_MAX_NOTE_HOLD_SEC: float | None = None
 # 其余一律保持原样 —— 宁可不切，也不误伤。
 _EVIDENCE_LONG_GUARD = 2.0     # 只对"会变成这么长"的收尾做证据修正（秒）
 _EVIDENCE_MIN_GAIN = 0.3       # 证据点至少比原收尾点早这么多才值得改（秒）
+_EVIDENCE_DROP = object()      # 证据的"删掉这颗音"哨兵（fn 返回负数时由 _evidence_end 转换）
 
 
 # ★ FuFumidi patch: 音频证据钩子（2026-10-14）。
@@ -80,19 +81,33 @@ _EVIDENCE_MIN_GAIN = 0.3       # 证据点至少比原收尾点早这么多才�
 # "不在 tie 集里就在边界收尾"逻辑正常关掉）。有能量的音一律不动。
 #
 # 由引擎层注入（engine_muscriptor.py 的 _make_pitch_evidence）。签名：
-#     fn(pitch: int, start_time: float, upto_time: float) -> float | None
+#     fn(pitch: int, start_time: float, upto_time: float) -> float
 #       返回 None            = 没有证据 / 到该时刻为止仍有能量（不要动它）
 #       返回一个时刻（秒）    = 该音高最后有能量的时刻（在这里收尾）
+#       返回 drop 哨兵（由 set_sustain_evidence 的第二个参数注入）= ★ 这颗音在音频里
+#                                 **根本不存在**（连它自己开头一秒都没有支撑）→
+#                                 收在其起音处 = 零长度 → 引擎把它整颗删掉。
+#       为什么用对象身份而不是数值（比如 -1）：坏证据必须一律无效 —— 负数同样是个
+#       "合法但坏"的返回值，用数值当哨兵会让坏证据变成"删音符"。
+#       为什么第四版要加这一档：星铁LIVE 26:20 的 D1 被拉成 24.65 秒，而它的
+#       开头 1 秒里该音高只有 0.88 的突出度（≈ 没有这个音）。只砍尾巴会留下
+#       "前 19 秒空白"的假长音 —— 更糟；音频否认的是整颗音。
 #     ★ 第一版是 fn(pitch, upto)：判据是「边界前 0.5 秒整窗静音」，实测在连续有声段落里
 #       一次都不触发（RMS 比阈值高 24~200 倍），等于没接线 —— 所以必须按音高、且要 start。
 # 钩子缺省为 None = 保持上游行为。
 _SUSTAIN_EVIDENCE = None
+_SUSTAIN_DROP = None       # "删掉这颗音"哨兵（对象身份比较）
 
 
-def set_sustain_evidence(fn):
-    """注入音频证据函数（None = 关闭该机制，回到上游行为）。"""
-    global _SUSTAIN_EVIDENCE
+def set_sustain_evidence(fn, drop=None):
+    """注入音频证据函数（None = 关闭该机制，回到上游行为）。
+
+    ``drop`` 是可选的"删掉这颗音"哨兵对象：证据函数返回**同一个对象**时，
+    这一对事件以零长度收尾，引擎据此把整颗音丢掉（见 _evidence_end）。
+    """
+    global _SUSTAIN_EVIDENCE, _SUSTAIN_DROP
     _SUSTAIN_EVIDENCE = fn
+    _SUSTAIN_DROP = drop
 
 
 _DRUM_INSTRUMENT = "drums"
@@ -346,6 +361,8 @@ class OpenNoteTracker:
             return None
         if t is None:
             return None
+        if _SUSTAIN_DROP is not None and t is _SUSTAIN_DROP:
+            return _EVIDENCE_DROP          # ★ 证据要求删掉这颗音（零长度收尾）
         try:
             t = float(t)
         except (TypeError, ValueError):
@@ -360,6 +377,8 @@ class OpenNoteTracker:
         if start is None or (time - start) < _EVIDENCE_LONG_GUARD:
             return time
         ev = self._evidence_end(key, start, time)
+        if ev is _EVIDENCE_DROP:
+            return start                   # ★ 零长度 = 引擎按"删掉这颗音"处理
         if ev is None or (time - ev) < _EVIDENCE_MIN_GAIN:
             return time
         return ev
@@ -382,6 +401,12 @@ class OpenNoteTracker:
             # 已经很长、但证据说它早就停了 → 就收在这里（也顺带把它从 open 里摘掉，
             # 于是下一块的强制 tie 段不会再逼模型"声明它还在响"）。
             if (boundary_time - start) < _EVIDENCE_LONG_GUARD:
+                continue
+            if ev is _EVIDENCE_DROP:
+                # ★ 音频否认整颗音（连开头都没有支撑）→ 零长度收尾 = 删除。
+                #   门槛（≥2 秒）在上面已经过了，不需要 MIN_GAIN。
+                out.append(_EndNote(*key, start))
+                del self._open[key]
                 continue
             if (boundary_time - ev) < _EVIDENCE_MIN_GAIN:
                 continue

@@ -16,6 +16,10 @@
  *   4. 重新打 asar —— **过滤条件与 asarUnpack 清单直接读 electron-builder.yml**；
  *   5. 覆盖安装版的 app.asar 与 app.asar.unpacked（整目录替换）。
  *
+ * ★ 这个脚本**不碰** resources/python：上游级补丁（engine/patches/muscriptor-events-fufumidi.1.py
+ *   → 运行时的 Lib/site-packages/muscriptor/events.py）必须手工 copy，否则"代码改了、
+ *   装到安装版里没生效"（2026-10-14 实测踩过一次）。改引擎证据逻辑时记得两条路一起走。
+ *
  * ★ 2026-10 修掉的两个真实缺陷（尺寸审计实测）：
  *   a) 旧版打包只传 `--unpack-dir=engine --unpack="*.node"`，丢掉了 electron-builder.yml 的
  *      asarUnpack（soundfonts / js-synth / wallpapers）。结果是同一个文件既内联进 asar、

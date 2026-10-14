@@ -161,6 +161,52 @@ def test_token_close_of_long_note_uses_evidence():
         set_sustain_evidence(None)
 
 
+def test_drop_evidence_ends_note_at_its_own_start():
+    """★ 第四版：证据返回"删掉"哨兵 → 以**零长度**收尾（引擎据此丢掉整颗音）。
+
+    为什么需要这一档：星铁LIVE 26:20 的 D1 被拉成 24.65 秒，而它自己开头一秒里
+    该音高根本没有支撑。只砍尾巴会留下"前 19 秒空白"的假长音 —— 更糟。
+    """
+    DROP = object()
+
+    def fn(pitch, start, upto):
+        return DROP if (upto - start) >= 5.0 else None
+
+    set_sustain_evidence(fn, DROP)
+    try:
+        tr = OpenNoteTracker(vocab(), frame_rate=100, max_note_hold=None)
+        tr.feed(ChunkBoundary(0.0, 5.0))
+        open_first_note(tr)                     # 0 s 开音
+        acts = tr.feed(ChunkBoundary(5.0, 10.0))
+        ends = _ends(acts)
+        assert len(ends) == 1, ends
+        assert abs(_t(ends[0])) < 1e-6, "应当收在起音处（零长度）：%r" % (_t(ends[0]),)
+        assert not tr.open_keys(), "删掉之后不该还开着"
+    finally:
+        set_sustain_evidence(None)
+
+
+def test_drop_sentinel_requires_identity_not_value():
+    """★ 哨兵按**对象身份**比较：别的证据返回同样的数值/别的对象 → 一律不动。
+
+    用数值（比如 -1）当哨兵的话，坏证据会变成"删音符" —— 这条钉住那个坑。
+    """
+    DROP = object()
+    set_sustain_evidence(lambda p, s, u: -1.0, DROP)     # 值像哨兵，但不是它
+    try:
+        tr = OpenNoteTracker(vocab(), frame_rate=100, max_note_hold=None)
+        tr.feed(ChunkBoundary(0.0, 5.0))
+        open_first_note(tr)
+        acts = []
+        for k in range(1, 4):
+            acts += tr.feed(ChunkBoundary(k * 5.0, (k + 1) * 5.0))
+            declare_sustain(tr)
+        assert not _ends(acts), "非哨兵的坏值不许删音：%r" % (_ends(acts),)
+        assert tr.open_keys()
+    finally:
+        set_sustain_evidence(None)
+
+
 def test_bad_evidence_never_cuts():
     """证据函数抛异常 / 返回坏值 → 一律不动。"""
     def boom(pitch, start, upto):

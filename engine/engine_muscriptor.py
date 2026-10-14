@@ -94,29 +94,47 @@ def _ensure_config(weights_path, size):
         pass  # 写失败不阻断转录（muscriptor 会走其他回退，代价是可能架构不匹配）
 
 
-def _make_pitch_evidence(wav_path, log_cb=None):
-    """按**音高**判断「这个音此刻还有没有一个真正的音在响」（★ 2026-10-14 第三版）。
+# ★ 证据的"这颗音在音频里根本不存在"哨兵。
+#   为什么不用负数：负数是个**合法但坏**的返回值，坏证据必须一律无效
+#   （test_muscriptor_sustain_evidence.test_bad_evidence_never_cuts 钉着这条）。
+#   所以哨兵是一个**独立对象**，由 set_sustain_evidence(fn, drop) 按身份注入。
+EVIDENCE_DROP = object()
 
-    前两版都被实测否掉了，记在这里免得再走一遍：
+
+def _make_pitch_evidence(wav_path, log_cb=None, stats=None):
+    """按**音高**判断「这个音此刻还有没有一个真正的音在响」（★ 2026-10-14 第四版）。
+
+    三代判据都被实测修正过，全记在这里，免得再走一遍：
       ① 「边界前 0.5 秒整窗静音」（RMS ≤ −60 dBFS）：这段**一秒静音都没有**
          （每 0.5 s 窗 RMS 0.024~0.203，比阈值高 24~200 倍）→ 判据从不触发，
          一个僵尸音都没拦住。
       ② 「该音高的频带能量」：密集配器里**任何时刻都有能量** —— 实测僵尸音
          pitch 29 / 46 的频带能量全程 0.02~0.06（别的乐器与混响漏进来的），
          证据永远说"还在响"，21.9 秒的假长音一个也修不掉。
+      ③ 「最后一个有声帧 + 跟自己起音比」：能修掉"音高停了模型却不收尾"的音，
+         但星铁LIVE 实测（26:20 那段）暴露两个洞：
+         · 只看"最后一帧有声"会被**单个鼓点**骗到 —— D1（pitch 26）每 0.5 s 只有
+           0~3 帧有声（起音突出度只有 0.88），却把一颗 24.65 秒的音一路"接"到底；
+         · 阈值取「起音突出度 × 0.35」，起音若是尖峰（合成音里实测能到 550），
+           后面正常的延音（突出度 ~9）永远不达标 → 反而会**误切真实长音**。
 
-    真正能分辨的是**音调突出度**（prominence = f0 处的峰 ÷ 同八度邻域的中位数）。
-    实测同一段音频（《原神》线上音乐会 2021 的 438~460 s）：
-      · pitch 29（F1，43.7 Hz）：起音 6.0 / 5.1 → 一秒后掉到 ~1.0（根本没有这个音）
-      · pitch 65（349 Hz）：全程 3~48（确实一直有内容 → 不动它）
-    所以判据是"跟**自己起音时**的突出度比"，而不是跟绝对能量比。
+    第四版三条判据，全部是绝对量（不再跟起音比）：
+      · **有声**：该音高的峰高于同八度邻域中位数（突出度 ≥ P_FLOOR）且带内能量 ≥ E_FLOOR；
+      · **持续存在**：0.5 秒窗里至少一半帧"有声"（鼓点、零星泛音接不上）；
+      · **头部必须有支撑**：音符开头 1 秒里，要么有起音峰，要么一半以上帧有声，
+        要么带内能量已达本音符后段的 25%（这一条专门挡"被配器盖住的真实弱音"）。
+        头部就没有支撑 = 音频在这颗音**自称开始的地方**根本没有它 →
+        返回 EVIDENCE_DROP（把它删掉），而不是留一颗"前 20 秒空白"的假长音。
+        **删只对 ≥ DROP_MIN_DUR（5 秒）的音生效**：短音的收尾点本来是模型逐音给的，
+        更可信，而"删一颗 2 秒音"的收益很小、风险却一样大。
+
+    查询 fn(pitch, start, upto) 的返回值：
+      · None       → 没证据 / 到 upto 还在持续 → 不动它
+      · t（≥start）→ 真正的收尾时刻
+      · EVIDENCE_DROP → 这颗音在音频里根本不存在，删掉（对象身份比较，不是数值）
 
     一次 STFT（8192 点 / 50 ms 一跳；8192 是为了低频也有 ~2 Hz 分辨率，F1 才分得出峰）
-    算出 128 个音高的突出度与带内能量时间线。查询 fn(pitch, start, upto)：
-      · 起音突出度 P0 = [start, start+0.3] 内突出度最大值；P0 < P_MIN → 不给证据
-      · 阈值 = max(P_FLOOR, PROM_REL × P0)
-      · 从后往前找最后一个「突出度 ≥ 阈值 且 带内能量 ≥ E_FLOOR」的帧 = 真正停止的位置
-      · 到 upto 前仍在响（间隔 < 0.3 s）→ 返回 None（不动它）
+    算出 128 个音高的突出度与带内能量时间线。
     保守到底：任何一步不满足都返回 None。**宁可漏切一颗僵尸音，也不误伤真实长音。**
     """
     import numpy as np
@@ -126,11 +144,16 @@ def _make_pitch_evidence(wav_path, log_cb=None):
     N_FFT = 8192           # 0.51 s 窗：F1(43.7 Hz) 也要能分出峰
     HOP_MS = 50
     P_FLOOR = 1.6          # 突出度下限（≈ 没有明显峰）
-    PROM_REL = 0.35        # 掉到"起音突出度"的这个比例以下 → 认为这个音停了
-    P_MIN = 2.0            # 起音本身就不突出（≈ 没有这个音）→ 不给证据
     E_FLOOR = 0.002        # 带内能量下限（满幅 ≈ 1.0），挡掉极安静处的伪峰
     GRACE = 0.30           # 到边界前 0.3 s 还在响 → 判定"仍在延音"，不动
+    P_MIN = 2.0            # 起音突出度到这个数 = "有起音峰"
     ATTACK = 0.30          # 起音参考窗
+    DUTY_WIN = 0.50        # "持续存在"的观察窗（秒）
+    DUTY_MIN = 0.50        # 窗内至少一半帧有声，才算这个音高在"持续"
+    HEAD_WIN = 1.00        # 头部支撑的观察窗（给"被盖住的弱起音"整整一秒机会）
+    HEAD_MIN = 0.50        # 头部窗里至少一半帧有声
+    HEAD_BAND_REL = 0.25   # 或：头部带内能量 ≥ 本音符自己后段的这个比例
+    DROP_MIN_DUR = 5.0     # ★ 只有"本来就这么长"的音才允许被删；短音宁可只砍尾巴
 
     # ★ 既接受文件路径，也接受 (PCM, sr)：分段转录时每段已经在内存里，
     #   再落盘读一遍纯属浪费（100 分钟音频 400 MB）。
@@ -210,6 +233,9 @@ def _make_pitch_evidence(wav_path, log_cb=None):
         del seg, mag
 
     hop_s = hop / float(sr)
+    # 收尾修正 / 删除 的计数（调用方可传一个字典进来跨段累加，最后写进日志）
+    if stats is None:
+        stats = {"cut": 0, "drop": 0}
 
     def fn(pitch, start, upto):
         try:
@@ -228,23 +254,43 @@ def _make_pitch_evidence(wav_path, log_cb=None):
         en = band[p, i0:i1].astype("float32")
         if pr.size < 3:
             return None
+        # ① 有声：这个音高此刻突出（不是别的乐器/混响漏进来的能量）
+        ok = (pr >= P_FLOOR) & (en >= E_FLOOR)
+        # ② 头部支撑：开头一秒里到底有没有这颗音存在的痕迹
         a = max(1, int(round(ATTACK / hop_s)))
-        p0 = float(pr[:a].max()) if pr.size else 0.0
-        if p0 < P_MIN:
-            return None                           # 起音处就没有峰 → 无法判断，不给证据
-        thr = max(P_FLOOR, PROM_REL * p0)
-        ok = (pr >= thr) & (en >= E_FLOOR)
-        idx = np.nonzero(ok)[0]
-        if idx.size == 0:
-            return None
-        last = int(idx[-1])
-        t_last = (i0 + last) * hop_s
-        if float(upto) - t_last < GRACE:
-            return None                           # 到边界还在响 → 不动
-        if t_last <= float(start):
-            return None
-        return t_last
+        p0 = float(pr[:a].max())
+        hw = min(pr.size, max(2, int(round(HEAD_WIN / hop_s))))
+        head_duty = float(ok[:hw].mean())
+        ref = float(np.percentile(en, 90))
+        head_level = float(np.median(en[:hw]))
+        head_ok = (p0 >= P_MIN or head_duty >= HEAD_MIN
+                   or (ref > 0.0 and head_level >= HEAD_BAND_REL * ref))
+        # ★ 头部没有支撑 = 这颗音在它自称开始的地方根本不存在 → 删掉。
+        #   但只有**长**音符才删：收益随长度增长，风险不随。实测星铁LIVE 全片，
+        #   不加这道门会删 57 颗，其中 51 颗是 2~4 秒的短音（散在全片各处，很可能是
+        #   真实音符、只是起音被配器盖住）；加门之后只剩 6 颗，全部落在 26:20 那段
+        #   真正坏掉的区间（含被拉成 24.65 秒的 D1）。短音落到下面的"持续存在"
+        #   逻辑，最多只砍尾巴。
+        if not head_ok and (float(upto) - float(start)) >= DROP_MIN_DUR:
+            stats["drop"] += 1
+            return EVIDENCE_DROP
+        # ③ 持续存在：0.5 秒窗里至少一半帧有声 —— 单个鼓点接不上
+        w = max(2, int(round(DUTY_WIN / hop_s)))
+        if ok.size >= w:
+            csum = np.concatenate(([0], np.cumsum(ok.astype("int32"))))
+            duty = (csum[w:] - csum[:-w]).astype("float32") / float(w)
+            idx = np.nonzero(duty >= DUTY_MIN)[0]
+            if idx.size:
+                t_last = (i0 + int(idx[-1]) + w - 1) * hop_s
+                if float(upto) - t_last < GRACE:
+                    return None                # 到边界都还在持续 → 不动它
+                if t_last <= float(start):
+                    return None
+                stats["cut"] += 1
+                return t_last
+        return None
 
+    fn.stats = stats
     return fn
 
 
@@ -354,14 +400,20 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     #      块边界批量收尾 374/195/1362/1587 个音 —— 所以证据必须进回放路径。）
     from dataclasses import replace as _replace      # 分段合并时改事件时间/index 用
     _SUSTAIN_EV = None                               # 分段路径要按段重新注入证据
+    _ev_stats = {"cut": 0, "drop": 0}                # 证据判定的累计计数（各段共用）
     if not os.environ.get("FUFUMIDI_NO_EVIDENCE"):
         try:
             import time as _time_ev
             _t_ev = _time_ev.perf_counter()
             from muscriptor.events import set_sustain_evidence as _set_evidence
-            _SUSTAIN_EV = _set_evidence
-            _ev = _make_pitch_evidence(wav_tmp, log_cb)
-            _set_evidence(_ev)
+
+            def _install_evidence(_fn, _set=_set_evidence):
+                """注入证据函数 + "删掉这颗音"哨兵（哨兵按对象身份比较，见 events 补丁）。"""
+                _set(_fn, EVIDENCE_DROP)
+
+            _SUSTAIN_EV = _install_evidence
+            _ev = _make_pitch_evidence(wav_tmp, log_cb, _ev_stats)
+            _install_evidence(_ev)
             _log(log_cb, "音频证据式收尾：已启用（按音高能量时间线收尾，不截断真实长音）"
                  "（构建 %.1fs）" % (_time_ev.perf_counter() - _t_ev))
         except Exception as _e:
@@ -447,6 +499,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         if _cap is None:
             _cap = 0.0           # ★ 默认不截断：僵尸音符由音频证据式收尾负责（界面开关已移除）
         _cap_stats = {"closed": 0}
+        _zero_len_stats = {"n": 0}      # ★ 被吞掉的"零长度收尾对"（证据式删除走这条）
 
         # ★ 逐块计时（#9 长音频尾部异常排查用，**默认关闭**）：
         #   设 FUFUMIDI_CHUNK_TIMING=1 时，每个块边界打一行
@@ -507,7 +560,15 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         _open_seen = [0]
 
         def _events_capped(events):
-            """进度透传 + 超长音符强制收尾（cap <= 0 时行为与旧版一致）。"""
+            """进度透传 + 超长音符强制收尾 + ★ 证据式删除（cap <= 0 时不做 cap）。
+
+            ★ 删除是怎么做到的（第四版新增）：音频证据判定「这颗音在音频里根本不存在」
+              时，给的是**零长度**事件对（收尾时刻 = 起音时刻）。而下游
+              `events_to_midi_bytes` 只在收到 end 时才 `notes.append(...)` ——
+              所以**只吞掉收尾**即可：不配对的 start 会自然消失。
+              这样既真的删掉了音符，又不必在这里缓冲/重排事件流
+              （"正常短音逐个原样透传、不重排"是 test_muscriptor_note_cap 钉住的硬不变量）。
+            """
             open_notes = {}
             force_closed = set()
 
@@ -562,7 +623,18 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     if idx in force_closed:
                         force_closed.discard(idx)
                         continue        # ★ 丢弃重复收尾，否则下游 pop 会 KeyError
-                    open_notes.pop(idx, None)
+                    st = open_notes.pop(idx, None)
+                    if (st is not None
+                            and abs(float(getattr(ev, "end_time", 0.0))
+                                    - float(st.start_time)) <= 1e-9):
+                        # ★ 零长度收尾对 → 只吞掉 end，不配对的 start 自然消失。
+                        #   两个来源都该丢：① 音频证据判定"这颗音不存在"（主线）；
+                        #   ② 模型在**同一帧**内开又关的退化音（100 fps 下一帧 10 ms，
+                        #   零长度说明它连一帧都没占到；以前会被 validate_notes 撑成
+                        #   0.01 s 的杂音，鼓组那条路本来也是直接丢）。
+                        #   只认**恰好等于起音时刻**的收尾，end<start 的畸形事件保持旧行为。
+                        _zero_len_stats["n"] += 1
+                        continue
                     yield ev
                     continue
                 yield ev
@@ -607,7 +679,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     _sf2.write(seg_wav, pcm[a:b], sr)
                     if _SUSTAIN_EV is not None:      # 每段各自建证据（100 s 音频约 0.3 s）
                         try:
-                            _SUSTAIN_EV(_make_pitch_evidence((pcm[a:b], sr), log_cb))
+                            _SUSTAIN_EV(_make_pitch_evidence((pcm[a:b], sr), log_cb, _ev_stats))
                         except Exception:
                             pass
                     off = a / float(sr)
@@ -784,6 +856,10 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                 if _cap > 0:
                     _log(log_cb, "超长音符上限 %.0fs：强制收尾 %d 个音符"
                                   % (_cap, _cap_stats["closed"]))
+                if _ev_stats["cut"] or _ev_stats["drop"]:
+                    _log(log_cb, "音频证据式收尾：修正 %d 颗长音符的收尾，删除 %d 颗"
+                                  "「音频里根本不存在」的音符"
+                                  % (_ev_stats["cut"], _ev_stats["drop"]))
             except Exception as e:
                 # 显存溢出自动降级：batch ≥2 → 减半重试 → 串行兜底，绝不因此转录失败
                 oom = "out of memory" in str(e).lower() or "OutOfMemoryError" in type(e).__name__
