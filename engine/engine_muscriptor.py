@@ -94,45 +94,148 @@ def _ensure_config(weights_path, size):
         pass  # 写失败不阻断转录（muscriptor 会走其他回退，代价是可能架构不匹配）
 
 
-def _make_sustain_evidence(wav_path, log_cb=None):
-    """按**音频证据**决定跨块延音要不要收尾（★ 2026-10-14，用户要求）。
+def _make_pitch_evidence(wav_path, log_cb=None):
+    """按**音高**判断「这个音此刻还有没有一个真正的音在响」（★ 2026-10-14 第三版）。
 
-    背景：块边界的强制 tie 段来自 `tracker.open_keys()`，于是模型每块都被迫声明
-    「这些音还在响」—— 一颗漏收尾的音就永远关不掉（僵尸音符）。用户明确要求：
-    **要让模型不推理出这种音，而不是按时长硬截断**（音频真有长音时截断会误伤）。
+    前两版都被实测否掉了，记在这里免得再走一遍：
+      ① 「边界前 0.5 秒整窗静音」（RMS ≤ −60 dBFS）：这段**一秒静音都没有**
+         （每 0.5 s 窗 RMS 0.024~0.203，比阈值高 24~200 倍）→ 判据从不触发，
+         一个僵尸音都没拦住。
+      ② 「该音高的频带能量」：密集配器里**任何时刻都有能量** —— 实测僵尸音
+         pitch 29 / 46 的频带能量全程 0.02~0.06（别的乐器与混响漏进来的），
+         证据永远说"还在响"，21.9 秒的假长音一个也修不掉。
 
-    所以判据完全落在音频上：边界前 0.5 秒**整窗静音**才认为该音已经结束，
-    并收尾在**静音开始处**（往回逐 10 ms 找最后一个有声帧）。只要还有声音就不动。
+    真正能分辨的是**音调突出度**（prominence = f0 处的峰 ÷ 同八度邻域的中位数）。
+    实测同一段音频（《原神》线上音乐会 2021 的 438~460 s）：
+      · pitch 29（F1，43.7 Hz）：起音 6.0 / 5.1 → 一秒后掉到 ~1.0（根本没有这个音）
+      · pitch 65（349 Hz）：全程 3~48（确实一直有内容 → 不动它）
+    所以判据是"跟**自己起音时**的突出度比"，而不是跟绝对能量比。
 
-    阈值刻意保守（−60 dBFS）：宁可漏切一颗僵尸音，也不误伤真实的超长音。
+    一次 STFT（8192 点 / 50 ms 一跳；8192 是为了低频也有 ~2 Hz 分辨率，F1 才分得出峰）
+    算出 128 个音高的突出度与带内能量时间线。查询 fn(pitch, start, upto)：
+      · 起音突出度 P0 = [start, start+0.3] 内突出度最大值；P0 < P_MIN → 不给证据
+      · 阈值 = max(P_FLOOR, PROM_REL × P0)
+      · 从后往前找最后一个「突出度 ≥ 阈值 且 带内能量 ≥ E_FLOOR」的帧 = 真正停止的位置
+      · 到 upto 前仍在响（间隔 < 0.3 s）→ 返回 None（不动它）
+    保守到底：任何一步不满足都返回 None。**宁可漏切一颗僵尸音，也不误伤真实长音。**
     """
     import numpy as np
     import soundfile as sf
 
+    SR_TARGET = 16000
+    N_FFT = 8192           # 0.51 s 窗：F1(43.7 Hz) 也要能分出峰
+    HOP_MS = 50
+    P_FLOOR = 1.6          # 突出度下限（≈ 没有明显峰）
+    PROM_REL = 0.35        # 掉到"起音突出度"的这个比例以下 → 认为这个音停了
+    P_MIN = 2.0            # 起音本身就不突出（≈ 没有这个音）→ 不给证据
+    E_FLOOR = 0.002        # 带内能量下限（满幅 ≈ 1.0），挡掉极安静处的伪峰
+    GRACE = 0.30           # 到边界前 0.3 s 还在响 → 判定"仍在延音"，不动
+    ATTACK = 0.30          # 起音参考窗
+
     x, sr = sf.read(wav_path, dtype="float32", always_2d=False)
     if getattr(x, "ndim", 1) > 1:
         x = x.mean(axis=1)
-    TH = 0.001                      # ≈ −60 dBFS
-    win = max(1, int(0.5 * sr))     # 边界前看 0.5 秒
-    step = max(1, sr // 100)        # 10 ms 一帧
+    if sr != SR_TARGET and x.size:
+        try:
+            import librosa as _lb
+            x = _lb.resample(x, orig_sr=int(sr), target_sr=SR_TARGET)
+            sr = SR_TARGET
+        except Exception:
+            pass
+    hop = max(1, int(round(HOP_MS / 1000.0 * sr)))
+    n_frames = max(0, 1 + (len(x) - N_FFT) // hop) if len(x) >= N_FFT else 0
+    if n_frames < 4:
+        return None                              # 太短：不给证据（调用方按上游行为处理）
 
-    def fn(pitch, upto):
-        i = int(float(upto) * sr)
-        if i <= 0:
+    freqs = np.fft.rfftfreq(N_FFT, 1.0 / sr)
+    peak_bins = []
+    wide_bins = []
+    for p in range(128):
+        f0 = 440.0 * (2.0 ** ((p - 69) / 12.0))
+        if f0 >= sr * 0.45:
+            peak_bins.append(None)
+            wide_bins.append(None)
+            continue
+        # 峰带：f0 ±3%（约 1 个半音的 1/6，够宽容也够尖）
+        b0 = int(np.searchsorted(freqs, f0 * 0.97))
+        b1 = int(np.searchsorted(freqs, f0 * 1.03))
+        b0 = max(0, min(b0, freqs.size - 1))
+        b1 = max(b0 + 1, min(b1, freqs.size))
+        peak_bins.append((b0, b1))
+        # 邻域：f0 的 0.75~1.30 倍，去掉峰带本身；高频带很宽，最多取 33 个点算中位数
+        w0 = int(np.searchsorted(freqs, f0 * 0.75))
+        w1 = int(np.searchsorted(freqs, f0 * 1.30))
+        w0 = max(0, min(w0, freqs.size - 1))
+        w1 = max(w0 + 1, min(w1, freqs.size))
+        keep = np.arange(w0, w1)
+        keep = keep[(keep < b0) | (keep >= b1)]
+        if keep.size > 33:
+            keep = keep[np.linspace(0, keep.size - 1, 33).astype(int)]
+        wide_bins.append(keep)
+
+    prom = np.zeros((128, n_frames), dtype="float16")   # 音调突出度
+    band = np.zeros((128, n_frames), dtype="float16")   # 峰带能量（挡伪峰用）
+    win = np.hanning(N_FFT).astype("float32")
+    norm = N_FFT / 4.0                            # 满幅正弦 → 1.0
+    offs = np.arange(N_FFT, dtype=np.int64)[None, :]
+    BLK = 2048
+    for s in range(0, n_frames, BLK):
+        e = min(n_frames, s + BLK)
+        starts = (np.arange(s, e, dtype=np.int64) * hop)[:, None]
+        seg = x[starts + offs] * win
+        mag = np.abs(np.fft.rfft(seg, axis=1)).astype("float32") / norm
+        for p in range(128):
+            pb = peak_bins[p]
+            if pb is None:
+                continue
+            pk = mag[:, pb[0]:pb[1]].max(axis=1)
+            wb = wide_bins[p]
+            if wb is None or wb.size == 0:
+                continue
+            med = np.median(mag[:, wb], axis=1)
+            band[p, s:e] = pk
+            # ★ 注意：prom 是 float16，`prom[p, s:e].astype("float32")` 是**临时副本**，
+            #   往它写 out= 等于什么都没存（第一版就这么写的，prom 全 0 → 证据永远 None）。
+            _pr = pk / np.maximum(med, 1e-6)
+            np.minimum(_pr, 1000.0, out=_pr)
+            prom[p, s:e] = _pr
+        del seg, mag
+
+    hop_s = hop / float(sr)
+
+    def fn(pitch, start, upto):
+        try:
+            p = int(pitch)
+        except (TypeError, ValueError):
             return None
-        lo = max(0, i - win)
-        w = x[lo:i]
-        if w.size < step * 2:
+        if p < 0 or p > 127:
             return None
-        if float(np.sqrt((w * w).mean())) > TH:
-            return None             # 还有声音 → 不动它
-        j = w.size
-        while j > 0:
-            seg = w[max(0, j - step):j]
-            if float(np.sqrt((seg * seg).mean())) > TH:
-                return (lo + j) / sr   # 静音从这里开始
-            j -= step
-        return lo / sr
+        i0 = int(float(start) / hop_s)
+        i1 = int(float(upto) / hop_s)
+        i0 = max(0, i0)
+        i1 = min(n_frames, i1)
+        if i1 - i0 < 3:
+            return None
+        pr = prom[p, i0:i1].astype("float32")
+        en = band[p, i0:i1].astype("float32")
+        if pr.size < 3:
+            return None
+        a = max(1, int(round(ATTACK / hop_s)))
+        p0 = float(pr[:a].max()) if pr.size else 0.0
+        if p0 < P_MIN:
+            return None                           # 起音处就没有峰 → 无法判断，不给证据
+        thr = max(P_FLOOR, PROM_REL * p0)
+        ok = (pr >= thr) & (en >= E_FLOOR)
+        idx = np.nonzero(ok)[0]
+        if idx.size == 0:
+            return None
+        last = int(idx[-1])
+        t_last = (i0 + last) * hop_s
+        if float(upto) - t_last < GRACE:
+            return None                           # 到边界还在响 → 不动
+        if t_last <= float(start):
+            return None
+        return t_last
 
     return fn
 
@@ -236,13 +339,20 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     # 采样率 16000 与 muscriptor 内部 _SAMPLE_RATE 一致，免去二次重采样。
     import audio_io
     wav_tmp = audio_io.decode_to_wav(audio_path, 16000)
-    # ★ 音频证据式收尾：让模型不再被迫延续"其实已经没声"的音（见 _make_sustain_evidence）。
-    #   回放 token 流时不注入（没有音频）—— 那是纯解码器复现，保持上游行为。
-    if not params.get("replay_tokens"):
+    # ★ 音频证据式收尾：让模型不再被迫延续"其实已经没声"的音（见 _make_pitch_evidence）。
+    #   ★ 回放（--replay-tokens）也注入：wav 在这一步已经解码出来了（上面 audio_io.decode_to_wav），
+    #     而回放台的意义就是"改了解码器逻辑后用 1 分钟复现"，把证据排除在外就复现不到改动。
+    #     （2026-10-14 实测通过回放定位到问题：6505 次收尾**全部**是模型自己的 token，
+    #      块边界批量收尾 374/195/1362/1587 个音 —— 所以证据必须进回放路径。）
+    if not os.environ.get("FUFUMIDI_NO_EVIDENCE"):
         try:
+            import time as _time_ev
+            _t_ev = _time_ev.perf_counter()
             from muscriptor.events import set_sustain_evidence as _set_evidence
-            _set_evidence(_make_sustain_evidence(wav_tmp))
-            _log(log_cb, "音频证据式收尾：已启用（按音频实际静音处收尾，不截断真实长音）")
+            _ev = _make_pitch_evidence(wav_tmp, log_cb)
+            _set_evidence(_ev)
+            _log(log_cb, "音频证据式收尾：已启用（按音高能量时间线收尾，不截断真实长音）"
+                 "（构建 %.1fs）" % (_time_ev.perf_counter() - _t_ev))
         except Exception as _e:
             _log(log_cb, "音频证据式收尾不可用，按上游行为：%s" % _e)
     try:

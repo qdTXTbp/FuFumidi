@@ -165,7 +165,7 @@ def _builtin_presets():
                 "temperature": 1.0, "cfg_coef": 1.0, "beam_size": 1,
                 "prelude_forcing": True,
                 "precision": "fp32",
-                "max_note_hold": 0,       # ★ 不截断：僵尸音改由**音频证据**收尾（见 engine_muscriptor 的 _make_sustain_evidence）
+                "max_note_hold": 0,       # ★ 不截断：僵尸音改由**音频证据**收尾（见 engine_muscriptor 的 _make_pitch_evidence）
             },
         },
         "钢琴 · 最优": {"mode": "piano", "params": {**piano, "model": "piano_pt"}},

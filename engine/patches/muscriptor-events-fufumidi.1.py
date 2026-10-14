@@ -5,6 +5,9 @@ one at a time. Every :class:`NoteStartEvent` is guaranteed to be followed by
 exactly one matching :class:`NoteEndEvent` (same `index`) later in the stream.
 """
 
+import json as _json
+import os as _os
+import sys as _sys
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
@@ -12,6 +15,34 @@ from muscriptor.tokenizer.notes import (
     MINIMUM_NOTE_DURATION_SEC,
     Event,
 )
+
+
+# ★ FuFumidi 诊断（2026-10-14）：把"谁关掉了音符"打出来。
+# 为什么需要：长音频里会出现「一堆音在同一瞬间被收尾」，可能是三条规则中的任意一条
+#   （块边界的 malformed 分支 / tie 段丢弃 / 证据式收尾），光看 MIDI 分不出来。
+#   FUFUMIDI_TRACKER_TRACE=1 → 只打批量收尾；=2 → 连块内逐音收尾也打。
+_TRACE = int(_os.environ.get("FUFUMIDI_TRACKER_TRACE") or "0")
+# ★ 为什么落文件而不是打 stderr：引擎把子进程的 stdout/stderr 收进自己的日志协议，
+#   只转发认识的 ### 前缀（实测 ###TRACKER 一行都没出来）。落文件最省事也最可靠。
+_TRACE_FILE = _os.environ.get("FUFUMIDI_TRACKER_TRACE_FILE") or ""
+_TRACE_FH = None
+
+
+def _trace(kind, n, t, **extra):
+    global _TRACE_FH
+    if not (_TRACE and _TRACE_FILE) or not n:
+        return
+    if kind == "token_off" and _TRACE < 2:
+        return
+    try:
+        if _TRACE_FH is None:
+            _TRACE_FH = open(_TRACE_FILE, "a", encoding="utf-8")
+        rec = {"k": kind, "n": int(n), "t": round(float(t), 3)}
+        rec.update(extra)
+        _TRACE_FH.write(_json.dumps(rec, ensure_ascii=False) + "\n")
+        _TRACE_FH.flush()
+    except Exception:
+        pass
 
 # ★ FuFumidi patch (0.3.0+fufumidi.1): 超长音符上限。
 # 背景：块边界只关闭「不在 tie 段里」的音符，而 prelude_forcing 把 tie 段构造成
@@ -25,6 +56,18 @@ from muscriptor.tokenizer.notes import (
 DEFAULT_MAX_NOTE_HOLD_SEC: float | None = None
 
 
+# ★ FuFumidi patch: 音频证据的**使用门槛**（2026-10-14 二次修订）。
+#
+# 为什么要有门槛：证据只能证明"这个音高此刻有没有能量"，它不该被用来改正常的短音
+# （那些收尾点本来就是模型在块内逐音给的，准确）。实测病态输出长这样：
+#   《原神》线上音乐会 2021：7:30 处**当时在响的 160 个音全部收在同一瞬间**，
+#   12 个音长 37 秒；全曲 228 个 >15s 的音里 **227 个都落在这种"共享收尾瞬间"上**。
+# 所以只在"这样收尾会让这个音 ≥ 2 秒"且"证据点比原收尾点早 ≥ 0.3 秒"时才改，
+# 其余一律保持原样 —— 宁可不切，也不误伤。
+_EVIDENCE_LONG_GUARD = 2.0     # 只对"会变成这么长"的收尾做证据修正（秒）
+_EVIDENCE_MIN_GAIN = 0.3       # 证据点至少比原收尾点早这么多才值得改（秒）
+
+
 # ★ FuFumidi patch: 音频证据钩子（2026-10-14）。
 #
 # 为什么不能靠时长上限：用户明确要求 —— 音频**真的有**长音时不许截断（那是误伤）。
@@ -36,10 +79,12 @@ DEFAULT_MAX_NOTE_HOLD_SEC: float | None = None
 # 它自然不会被塞进强制 tie 段，模型也就不再被迫延续它（随后由既有的
 # "不在 tie 集里就在边界收尾"逻辑正常关掉）。有能量的音一律不动。
 #
-# 由引擎层注入（engine_muscriptor.py）。签名：
-#     fn(pitch: int, upto_time: float) -> float | None
-#       返回 None            = 到该时刻为止**仍有声音**（不要动它）
-#       返回一个时刻（秒）    = 该音最后有声音的时刻（在这里收尾）
+# 由引擎层注入（engine_muscriptor.py 的 _make_pitch_evidence）。签名：
+#     fn(pitch: int, start_time: float, upto_time: float) -> float | None
+#       返回 None            = 没有证据 / 到该时刻为止仍有能量（不要动它）
+#       返回一个时刻（秒）    = 该音高最后有能量的时刻（在这里收尾）
+#     ★ 第一版是 fn(pitch, upto)：判据是「边界前 0.5 秒整窗静音」，实测在连续有声段落里
+#       一次都不触发（RMS 比阈值高 24~200 倍），等于没接线 —— 所以必须按音高、且要 start。
 # 钩子缺省为 None = 保持上游行为。
 _SUSTAIN_EVIDENCE = None
 
@@ -176,9 +221,12 @@ class OpenNoteTracker:
             # every still-open note ends at that chunk's boundary.
             if self._chunk_started and self._in_prologue:
                 actions = self._end_all(self._seek_time)
+                _trace("boundary_end_all", len(actions), self._seek_time, seek=item.seek_time)
             # ★ FuFumidi patch: 音频证据否决 —— 必须在调用方用 open_keys() 构造强制 tie 段
             #   之前完成，所以就在同一个 feed(Boundary) 调用里做掉。
-            actions = actions + self._veto_unsustained(item.seek_time)
+            _vetoed = self._veto_unsustained(item.seek_time)
+            _trace("veto", len(_vetoed), item.seek_time)
+            actions = actions + _vetoed
             self._seek_time = item.seek_time
             self._next_seek_time = item.next_seek_time
             self._start_tick = round(item.seek_time * self._frame_rate)
@@ -212,7 +260,8 @@ class OpenNoteTracker:
                         if k in self._tie_set
                         and (self._seek_time - self._open[k]) > self._max_note_hold
                     ]
-                actions = [_EndNote(*key, self._seek_time) for key in ended]
+                _trace("tie_drop", len(ended), self._seek_time, tied=len(self._tie_set))
+                actions = [_EndNote(*key, self._close_at(key, self._seek_time)) for key in ended]
                 for key in expired:
                     actions.append(_EndNote(*key, self._open[key] + self._max_note_hold))
                 for key in ended:
@@ -255,8 +304,13 @@ class OpenNoteTracker:
             key = (self._program, event.value)
             actions = []
             if key in self._open:
+                # ★ 模型在**块边界**一次性吐掉几十个音时（实测 100 个），收尾时刻只能落在
+                #   边界，而它们真正停下的位置在更早的块里 —— 交给音频证据修。
+                _end = self._close_at(key, time)
                 del self._open[key]
-                actions.append(_EndNote(*key, time))
+                _trace("token_off", 1, time, pitch=event.value, retrigger=int(self._velocity > 0),
+                       ev=None if _end == time else round(_end, 3))
+                actions.append(_EndNote(*key, _end))
             if self._velocity > 0:
                 self._open[key] = time
                 actions.append(_StartNote(*key, time))
@@ -271,13 +325,44 @@ class OpenNoteTracker:
         malformed-chunk rule in :meth:`feed`).
         """
         if self._chunk_started and self._in_prologue:
-            return self._end_all(self._seek_time)
+            _acts = self._end_all(self._seek_time)
+            _trace("finish", len(_acts), self._seek_time)
+            return _acts
         actions = [
             _EndNote(*key, onset + MINIMUM_NOTE_DURATION_SEC)
             for key, onset in self._open.items()
         ]
         self._open.clear()
         return actions
+
+    def _evidence_end(self, key, start: float, upto: float):
+        """问音频证据：这个音高最后在哪一刻还有能量（None = 没证据 / 还在响）。"""
+        fn = _SUSTAIN_EVIDENCE
+        if fn is None:
+            return None
+        try:
+            t = fn(key[1], start, upto)
+        except Exception:
+            return None
+        if t is None:
+            return None
+        try:
+            t = float(t)
+        except (TypeError, ValueError):
+            return None
+        if not (start <= t <= upto):
+            return None
+        return t
+
+    def _close_at(self, key, time: float) -> float:
+        """收尾时刻：默认 time；只有"这个音会变得很长"且证据明显更早时才改用证据点。"""
+        start = self._open.get(key)
+        if start is None or (time - start) < _EVIDENCE_LONG_GUARD:
+            return time
+        ev = self._evidence_end(key, start, time)
+        if ev is None or (time - ev) < _EVIDENCE_MIN_GAIN:
+            return time
+        return ev
 
     def _veto_unsustained(self, boundary_time: float) -> list[_NoteAction]:
         """把「音频其实已经没在响」的延音收尾（★ FuFumidi patch）。
@@ -290,27 +375,26 @@ class OpenNoteTracker:
             return []
         out: list[_NoteAction] = []
         for key in list(self._open):
-            pitch = key[1]
-            try:
-                last = fn(pitch, boundary_time)
-            except Exception:
-                last = None
-            if last is None:
-                continue
             start = self._open[key]
-            try:
-                end = float(last)
-            except (TypeError, ValueError):
+            ev = self._evidence_end(key, start, boundary_time)
+            if ev is None:
                 continue
-            # 收尾点必须落在 [起音, 边界] 内，否则不动（防御坏证据）
-            if not (start <= end <= boundary_time):
+            # 已经很长、但证据说它早就停了 → 就收在这里（也顺带把它从 open 里摘掉，
+            # 于是下一块的强制 tie 段不会再逼模型"声明它还在响"）。
+            if (boundary_time - start) < _EVIDENCE_LONG_GUARD:
                 continue
-            out.append(_EndNote(*key, end))
+            if (boundary_time - ev) < _EVIDENCE_MIN_GAIN:
+                continue
+            out.append(_EndNote(*key, ev))
             del self._open[key]
         return out
 
     def _end_all(self, time: float) -> list[_NoteAction]:
-        actions: list[_NoteAction] = [_EndNote(*key, time) for key in self._open]
+        # ★ 批量收尾正是"37 秒僵尸音"的产地（块边界的 malformed 分支会一次关掉一整批），
+        #   所以这里逐个问证据，而不是统一盖成 time。
+        actions: list[_NoteAction] = [
+            _EndNote(*key, self._close_at(key, time)) for key in self._open
+        ]
         self._open.clear()
         return actions
 
