@@ -116,10 +116,24 @@ github       不可达：This operation was aborted
 
 - **编译过**：`makensis` 用独立 harness 编译了改后的 `build/nsis-custom.nsh`
   （`_attic/nsis-check/`，产出 42 KB `check.exe`），nsDialogs / LogicLib / MUI_HEADER_TEXT 全部通过。
-  **没有跑 electron-builder 生成发布包**（用户明确要求先不构建发布物），所以这两张位图与
-  新卸载页在真实安装器里的样子，要等下一次构建才能看到。
+  **没有跑 electron-builder 生成发布包**（用户明确要求先不构建发布物）。
+- **跑过真页面**（2026-10-14 补）：`_attic/nsis-preview/` 里有两个独立 harness —— `preview-install.nsi`
+  （欢迎页 / 目录页 / 完成页，看侧栏与页眉）与 `preview.nsi`（卸载向导，看保留数据那一页）。
+  静默装到 `%TEMP%\fufumidi-uninst-preview` 再跑卸载器，就是真实卸载页；
+  预览包**不碰**注册表与用户目录（`.nsi` 里没有 `!insertmacro preInit`，`$INSTDIR` 被改到 `%TEMP%`）。
 - **看过像素**：侧栏 / 页眉 / 更新器左图三张都导成 PNG 逐张看过（中文未出现豆腐块、暗场不发灰）。
+  侧栏倒影一度铺到文字区、把下面的字"透"出来，已改成"只取底部一条 + 纵向压缩 + 渐隐"。
+- **★ 验内容靠控件枚举，不靠截图**：`PrintWindow` 截 NSIS 自定义页会**漏画**带 `WS_EX_TRANSPARENT`
+  的 label，看上去像"标签不见了"；用 `EnumChildWindows` 读文本 / 矩形 / 可见性才是准的。
+  方法与实测输出见 [docs/known-issues.md](known-issues.md) KI-1。
 - **跑过网络**：上表的实测数字由与主进程同一套算法（256 KB Range + 扣延迟算吞吐）跑出。
+
+### 4.4 安装中断遗留的状态：注册表项没了
+
+`preInit` 先删键、装完再写回 —— 中途取消（或用预览包走一遍卸载向导）会留下
+「程序还在、`设置 → 应用` 里没有条目」。`scripts/repair-install-registry.ps1` 按
+electron-builder 的同一组值重建两处键（幂等、只写注册表）。详见
+[docs/known-issues.md](known-issues.md) KI-2。
 
 ## 5. 明确没抄的
 
