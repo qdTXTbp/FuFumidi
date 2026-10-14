@@ -16,7 +16,18 @@ function createWindow({ BrowserWindow, shell, pluginHost, rootDir }) {
     autoHideMenuBar: true,
     show: true,
     title: 'FuFumidi',
-    icon: path.join(rootDir, 'build', 'icon.png'),
+    // ★ 图标必须解析到**真实磁盘文件**：打包后 rootDir 在 app.asar 内，而 build/ 不进包，
+    //   `rootDir/build/icon.png` 解析不到 → Electron 用空图标覆盖 exe 自带图标 →
+    //   任务栏图标变白（2026-10-14 用户复现「任务栏图标又丢了」）。
+    //   与 setupTray 同一套候选：extraResources 落地的 resources/icon.png 优先。
+    icon: (() => {
+      const cands = [
+        path.join(process.resourcesPath || '', 'icon.png'),
+        path.join(rootDir, 'build', 'icon.png'),
+        path.join(rootDir, 'build', 'icon.ico'),
+      ];
+      return cands.find(p => { try { return p && fs.existsSync(p); } catch (_) { return false; } }) || undefined;
+    })(),
     webPreferences: {
       preload: path.join(rootDir, 'preload.js'),
       contextIsolation: true,
