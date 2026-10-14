@@ -115,8 +115,11 @@ def _builtin_presets():
     · **影响结果、且"值越高越不稳定"的 → 取中性值**：`temperature=1.0`、
       `cfg_coef=1.0`、`beam_size=1`。中性值**就是**稳定性锚点 ——
       "越高越准"没有任何实测支撑，不拿它换不确定性。
-    · **不干预 > 强行干预**：`max_note_hold=0`（不砍长音）、`muscriptor_instruments='none'`
-      （不硬禁乐器组）。少一层猜测就少一层引入错误的机会。
+    · **不干预 > 强行干预**：`muscriptor_instruments='none'`（不硬禁乐器组）。少一层猜测就少一层引入错误的机会。
+    · ★ **例外：`max_note_hold` 不是"干预强度"，它是缺陷护栏。** 上游 tie 结算漏收尾会产生
+      "僵尸音符"（整段一直响），补丁 `engine/patches/muscriptor-events-fufumidi.1.py` 就是靠这个上限
+      兜底的 —— 设成 0 等于**把护栏拆掉**，实测会长出 18 秒的多音同响簇（2026-10-14 复现：
+      96 分钟素材里 167 个 >15s、最长 18.0s，多个音高同时卡住）。默认 15 秒＝补丁的原行为。
     · 每个模型只写**它自己适用**的键，不适用的不写 —— 界面按"预设没给就保留当前值"应用，
       惰性字段只会让状态来源变得不可读。
 
@@ -163,7 +166,7 @@ def _builtin_presets():
                 "temperature": 1.0, "cfg_coef": 1.0, "beam_size": 1,
                 "prelude_forcing": True,
                 "precision": "fp32",
-                "max_note_hold": 0,       # 不砍长音
+                "max_note_hold": 15.0,    # ★ 僵尸音符护栏（不是"干预"取舍）：0 = 拆掉护栏，会长 18s 簇
             },
         },
         "钢琴 · 最优": {"mode": "piano", "params": {**piano, "model": "piano_pt"}},

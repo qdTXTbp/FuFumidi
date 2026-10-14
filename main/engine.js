@@ -332,7 +332,9 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       if (!p) return false;
       clearTimeout(p.timer);
       pending.delete(id);
-      try { p.reject(new Error('canceled')); } catch (e) {}
+      const err = new Error('canceled');
+      err.canceled = true;
+      try { p.reject(err); } catch (e) {}
       return true;
     }
 
@@ -351,10 +353,25 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
    */
   function cancelJob(id) {
     let hit = false;
-    const p = _engineWorkerPending.get(id);
-    if (p) {
-      _engineWorkerPending.delete(id);
-      try { p.reject(new Error('canceled')); } catch (e) {}
+    // ★ 两本账都查：worker 路径按**内部键** 'w<N>' 记 _engineWorkerPending，
+    //   而渲染端只知道自己的 jobId（'batch7' 这种），它被记在 logId 里。
+    //   只查内部键的话，前端点「取消转录」永远落空 —— 正在跑的转录照旧跑完
+    //   （2026-07 修过一次"只查 spawn 路径"，这次是同一条链路上的**第二处漏配**）。
+    let key = _engineWorkerPending.has(id) ? id : null;
+    if (!key) {
+      for (const [k, ent] of _engineWorkerPending) {
+        if (ent && (ent.logId === id || String(ent.logId) === String(id))) { key = k; break; }
+      }
+    }
+    if (key) {
+      const p = _engineWorkerPending.get(key);
+      _engineWorkerPending.delete(key);
+      // ★ 必须带 canceled 标记：task-queue 的 worker 回落分支靠它区分
+      //   "被取消" 与 "worker 崩了" —— 否则取消会触发回落、另起一个进程重跑。
+      const err = new Error('canceled');
+      err.canceled = true;
+      try { p.reject(err); } catch (e) {}
+      // 杀掉 worker 进程才算真停：python 那边一旦开始解码，只 reject Promise 不会让它停手
       try { if (p.child && !p.child.killed && p.child.exitCode === null) p.child.kill(); } catch (e) {}
       hit = true;
     }

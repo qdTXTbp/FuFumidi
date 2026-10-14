@@ -91,7 +91,13 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
           pluginHost.emit('transcribe-done', { ok: true, out: workerRes.out, note_count: workerRes.note_count, mode: cfg.mode, perf: cfg.perf });
           return workerRes;
         }
-      } catch (e) { /* fallback to single spawn */ }
+      } catch (e) {
+        // ★ 取消**不是**"worker 失败"，绝不能回落：回落会另起一个一次性进程
+        //   把整段转录从头重跑一遍（2026-10-14 实测：点「取消」后 python 又起来了，
+        //   用户看到的就是"取消没反应，转录照旧跑完"）。
+        if (e && (e.canceled || /canceled/i.test(String(e && e.message)))) throw e;
+        /* 其它原因（worker 崩溃 / 启动失败）→ 回落到一次性 spawn，功能永远可用 */
+      }
     }
     return runSpawn();
   });

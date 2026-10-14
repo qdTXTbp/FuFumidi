@@ -29,7 +29,8 @@
     "test:plugin": "node --test scripts/test-plugin-sandbox.mjs",
     "test:download": "node --test scripts/test-fast-download.mjs",
     "test:usermeta": "node --test scripts/test-usermeta.mjs",
-    "test:speedtest": "node --test scripts/test-update-speedtest.mjs"
+    "test:speedtest": "node --test scripts/test-update-speedtest.mjs",
+    "test:cancel": "node --test scripts/test-cancel-worker.mjs"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",
