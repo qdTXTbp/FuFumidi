@@ -18,10 +18,11 @@ from muscriptor.tokenizer.notes import (
 # 「当前还开着的音符」—— 于是块边界永远关不掉任何音符，一个音只能靠模型在块内显式
 # 吐 note-off 才结束。模型在长音频里漏一次收尾，这个音就被强制延续下去，
 # 实测 100 分钟录播出现 4320 秒（全曲 72%）的音符。
-# 这里在 tie 结算处补一条保险：任何音持续超过 max_note_hold 就强制关闭。
-# None = 关闭保险（与上游 0.3.0 行为一致）。
+# 2026-10-14 更新：僵尸音符已改由**音频证据式收尾**（见 set_sustain_evidence）兜底，
+# 所以这个时长上限**默认关闭（None = 不截断）** —— 按时长硬切会误伤音频里真实存在的长音；
+# 界面上的调节开关也已移除，参数保留仅供显式指定硬保险时使用。
 # 实测 cap=15s 对正常文件（时长上限 12.3s）零改动，对病态文件把最长音压回 15s。
-DEFAULT_MAX_NOTE_HOLD_SEC: float | None = 15.0
+DEFAULT_MAX_NOTE_HOLD_SEC: float | None = None
 
 
 # ★ FuFumidi patch: 音频证据钩子（2026-10-14）。

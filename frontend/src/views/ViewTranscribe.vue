@@ -39,7 +39,6 @@ const maxFreq = ref(0);                  // 最高音高 Hz（仅 basic，0 = �
 const minFreq = ref(0);                  // 最低音高 Hz（仅 basic，0 = 不限制）：滤掉低频隆隆声/次声
                                          // ★ 2026-10-14：从「低音增强」里独立出来。用户决定**显式控件优先** ——
                                          //   勾「低音增强」只设 no_melodia（不再顺带把 min_freq 钉成 40）。
-const maxHold = ref(15);                 // 超长音符上限秒（仅 MuScriptor，0 = 关）：长音频僵尸音符的兜底
 const mergeOverlap = ref(true);          // 合并同音高重叠音符（默认开；关掉 = 引擎收 no_merge）
 const velNorm = ref(true);               // 力度归一化（默认开；关掉 = 引擎收 no_velnorm）
 const exportTempo = ref(0);              // 导出 BPM（0 = 用引擎默认 120 / 自动 BPM 优先）
@@ -415,7 +414,7 @@ const WEB_BUILTIN_PRESETS = () => {
     { name: 'MuScriptor · 最优', mode: 'universal', params: { ...basic,
       model: 'muscriptor', model_size: 'medium', muscriptor_instruments: 'none',
       temperature: 1.0, cfg_coef: 1.0, beam_size: 1, prelude_forcing: true,
-      precision: 'fp32', max_note_hold: 0 } },
+      precision: 'fp32' } },
     { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt' } },
     { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria' } },
     { name: 'Transkun · 最优', mode: 'piano', params: { ...piano, model: 'transkun' } },
@@ -874,7 +873,7 @@ function collectPresetParams() {
       muscriptor_instruments: msInstrValue.value,
       temperature: Number(msTemp.value), cfg_coef: Number(msCfg.value),
       beam_size: iv(msBeam.value), prelude_forcing: msPrelude.value,
-      precision: msPrec.value, max_note_hold: iv(maxHold.value),
+      precision: msPrec.value,
     });
   } else if (mode.value === 'piano') {
     Object.assign(p, {
@@ -959,7 +958,6 @@ function applyPresetParams(p, opts) {
   if (has('beam_size')) msBeam.value = Math.max(1, Math.round(numOr('beam_size', 1)));
   if (has('prelude_forcing')) msPrelude.value = pr.prelude_forcing !== false;
   if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
-  if (has('max_note_hold')) maxHold.value = Math.max(0, Math.round(numOr('max_note_hold', 0)));
 }
 
 function applyPreset(name, opts) {
@@ -1150,7 +1148,6 @@ function collectParams() {
     if (umodel.value === 'basic' && pitchBends.value) cfg.multiple_pitch_bends = true;
     if (umodel.value === 'basic' && maxFreq.value > 0) cfg.max_freq = maxFreq.value;
     if (umodel.value === 'basic' && minFreq.value > 0) cfg.min_freq = minFreq.value;
-    if (umodel.value === 'muscriptor') cfg.max_note_hold = maxHold.value;
     if (!mergeOverlap.value) cfg.no_merge = true;
     if (!velNorm.value) cfg.no_velnorm = true;
     if (umodel.value === 'muscriptor') {
@@ -1732,11 +1729,6 @@ onBeforeUnmount(() => {
             <label>{{ t('最低音高') }}<b>{{ minFreq > 0 ? minFreq + ' Hz' : t('不限制') }}</b></label>
             <NumSlider v-model="minFreq" :min="0" :max="2000" :step="5" />
             <small>{{ t('滤掉低于此频率的成分（低频隆隆声/次声）。低音声部被吞时先试 40 Hz；0 = 不限制') }}</small>
-          </div>
-          <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label>{{ t('超长音符上限') }}<b>{{ maxHold > 0 ? maxHold + 's' : t('上限已关') }}</b></label>
-            <NumSlider v-model="maxHold" :min="0" :max="60" :step="1" />
-            <small>{{ t('超过就强制收尾，治长音频的僵尸音符（实测 100 分钟录播出现过 4320 秒的音）。调大＝少干预，调小＝更狠地剪长音；0 = 关') }}</small>
           </div>
           <div class="tr-switch" v-if="mode === 'universal'">
             <label><span><b>{{ t('合并重叠音符') }}</b><small>{{ t('合并同音高重叠音符；关闭后更贴近模型原始判定，但同一音高的重复触发会变多') }}</small></span><input type="checkbox" v-model="mergeOverlap"></label>

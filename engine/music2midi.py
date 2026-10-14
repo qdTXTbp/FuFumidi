@@ -470,7 +470,7 @@ def build_parser():
     g.add_argument("--replay-tokens", dest="replay_tokens", default=None, metavar="FILE",
                    help="[诊断] 从落盘的 token 流重跑解码器（不加载模型/不用 GPU，约 1 分钟）")
     g.add_argument("--max-note-hold", dest="max_note_hold", type=float, default=None,
-                   help="[muscriptor] 超长音符上限（秒，默认 15，0=关闭）：超过就强制收尾，"
+                   help="[muscriptor] 超长音符上限（秒，默认 0=不截断）：超过就强制收尾（硬保险，会误伤真实长音；"
                         "治长音频转录的僵尸音符（实测 100 分钟录播里出现 4320 秒的音）")
     g.add_argument("--tempo", type=int, default=None, help="MIDI 速度 BPM（默认 120）")
     g.add_argument("--with-drums", action="store_true",

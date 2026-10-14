@@ -280,11 +280,12 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         # NoteEndEvent —— events_to_midi_bytes 里是 open_notes.pop(ev.start_event_index)，
         # 重复收尾会直接 KeyError，把整次转录炸在最后一步。
         try:
-            _cap = float(params.get("max_note_hold"))
+            _mh = params.get("max_note_hold")
+            _cap = float(_mh) if _mh is not None else None
         except Exception:
             _cap = None
         if _cap is None:
-            _cap = 15.0          # 默认开：正常文件的时长上限是 12.3s，留有余量
+            _cap = 0.0           # ★ 默认不截断：僵尸音符由音频证据式收尾负责（界面开关已移除）
         _cap_stats = {"closed": 0}
 
         # ★ 逐块计时（#9 长音频尾部异常排查用，**默认关闭**）：
