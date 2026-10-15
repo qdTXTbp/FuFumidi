@@ -291,6 +291,84 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
     catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
+  /* ------------------------------------------------------------------
+     M3-2 超分辨率预处理（waifu2x-ncnn-vulkan）—— **用户自行安装**
+     低清扫描件专用：Audiveris 的 ScaleBuilder 要求行距 ≥ 11px，低于它整页判 invalid。
+     实测一张行距 2.4px 的总谱页：不超分 0 个音符（"Sheet ignored"），超分 ×2 后 **253 个音符**。
+     解压 39.5 MB（1 个 exe + 3 组模型），MIT 许可，按需下载、删目录即卸载。
+     ------------------------------------------------------------------ */
+  const SR_VERSION = '20250915';
+  const SR_ZIP = 'waifu2x-ncnn-vulkan-' + SR_VERSION + '-windows.zip';
+  const SR_UPSTREAM = 'https://github.com/nihui/waifu2x-ncnn-vulkan/releases/download/' + SR_VERSION + '/' + SR_ZIP;
+  //: 通道顺序按实测：gh-proxy.com 下这 35.5 MB 只用 8 s（峰值 4 MB/s）；直链在部分网络会卡在几十 KB/s。
+  const SR_URLS = ['https://gh-proxy.com/' + SR_UPSTREAM, 'https://ghfast.top/' + SR_UPSTREAM,
+    'https://ghproxy.net/' + SR_UPSTREAM, SR_UPSTREAM];
+  const SR_MODELS = ['models-cunet', 'models-upconv_7_photo', 'models-upconv_7_anime_style_art_rgb'];
+
+  function srDir() { return path.join(Paths.dataRoot(), 'omr', 'waifu2x'); }
+  function srExePath() { return path.join(srDir(), 'waifu2x-ncnn-vulkan.exe'); }
+
+  function srStatus() {
+    let exeBytes = 0;
+    try { exeBytes = fs.statSync(srExePath()).size; } catch (e) {}
+    const models = SR_MODELS.map((m) => {
+      let bytes = 0;
+      try {
+        const dir = path.join(srDir(), m);
+        for (const f of fs.readdirSync(dir)) { try { bytes += fs.statSync(path.join(dir, f)).size; } catch (e) {} }
+      } catch (e) {}
+      return { name: m, installed: bytes > 1024 * 1024, bytes };
+    });
+    const bytes = exeBytes + models.reduce((s, m) => s + m.bytes, 0);
+    return {
+      ok: true,
+      installed: exeBytes > 1024 * 1024 && models.some((m) => m.installed),
+      version: SR_VERSION, dir: srDir(), exe: srExePath(),
+      models, bytes, missing: models.filter((m) => !m.installed).length,
+      license: 'MIT（waifu2x-ncnn-vulkan · nihui）',
+      upstream: SR_UPSTREAM,
+    };
+  }
+  ipcMain.handle('omr:srStatus', () => srStatus());
+
+  ipcMain.handle('omr:srInstall', async (evt) => {
+    const win = BrowserWindow.fromWebContents(evt.sender);
+    const send = (p) => { try { win && win.webContents.send('omr:progress', p); } catch (e) {} };
+    try {
+      fs.mkdirSync(srDir(), { recursive: true });
+      const tmpZip = path.join(Paths.tempDir(), SR_ZIP);
+      const tmpDst = path.join(Paths.tempDir(), 'waifu2x-unzip');
+      try { fs.rmSync(tmpDst, { recursive: true, force: true }); } catch (e) {}
+      try { fs.mkdirSync(tmpDst, { recursive: true }); } catch (e) {}
+      send({ phase: 'sr-download', percent: 2, text: '下载超分辨率组件（35 MB）' });
+      const got = await downloadAny(SR_URLS, tmpZip, (pct) => {
+        send({ phase: 'sr-download', percent: Math.min(90, 2 + Math.round(88 * pct / 100)), text: '下载超分辨率组件（35 MB）' });
+      }, { minSize: 20 * 1024 * 1024 });
+      if (!got || !got.ok) return { ok: false, error: '下载失败：' + String((got && got.error) || '').slice(0, 200) };
+      send({ phase: 'sr-unzip', percent: 94, text: '解压…' });
+      // zip 里多一层 waifu2x-ncnn-vulkan-<版本>-windows/ —— 把里面的东西挪到 srDir 根下
+      const ps = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
+        'Expand-Archive -Path "' + tmpZip + '" -DestinationPath "' + tmpDst + '" -Force; ' +
+        'Get-ChildItem -Path "' + tmpDst + '" -Directory | Select-Object -First 1 | ForEach-Object { ' +
+        'Move-Item -Path (Join-Path $_.FullName "*") -Destination "' + srDir() + '" -Force }'],
+      { windowsHide: true });
+      await new Promise((res) => { ps.on('close', () => res()); ps.on('error', () => res()); });
+      try { fs.rmSync(tmpZip, { force: true }); } catch (e) {}
+      try { fs.rmSync(tmpDst, { recursive: true, force: true }); } catch (e) {}
+      const st = srStatus();
+      if (!st.installed) return { ok: false, error: '解压后没找到 waifu2x-ncnn-vulkan.exe' };
+      send({ phase: 'done', percent: 100, text: '超分辨率组件就绪' });
+      return st;
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
+  ipcMain.handle('omr:srRemove', () => {
+    try { fs.rmSync(srDir(), { recursive: true, force: true }); return srStatus(); }
+    catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
+
   ipcMain.handle('omr:remove', () => {
     try { fs.rmSync(engineDir(), { recursive: true, force: true }); return status(); }
     catch (e) { return { ok: false, error: String((e && e.message) || e) }; }

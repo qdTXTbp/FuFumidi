@@ -271,7 +271,8 @@ let offOmrProg = null;
 /** 主进程推的是阶段代码，文案在渲染层翻（否则英文/日文界面里会冒出中文进度）。 */
 const OMR_PHASE = { download: '下载识谱引擎…', extract: '解包识谱引擎…', done: '识谱引擎就绪',
   // homr 的三个阶段（沿用同一个 omr:progress 通道）
-  'homr-venv': '创建 AI 识谱独立环境…', 'homr-pip': '安装 AI 识谱依赖…', 'homr-weights': '下载 AI 权重…' };
+  'homr-venv': '创建 AI 识谱独立环境…', 'homr-pip': '安装 AI 识谱依赖…', 'homr-weights': '下载 AI 权重…',
+  'sr-download': '下载超分辨率组件…', 'sr-unzip': '解包超分辨率组件…' };
 async function loadOmr() {
   try { omr.st = (bridge && bridge.omrEngine) ? await bridge.omrEngine.status() : null; }
   catch (e) { omr.st = null; }
@@ -335,6 +336,41 @@ async function removeHomr() {
 const homrSize = computed(() => {
   const b = (homr.st && homr.st.weightBytes) || 0;
   return b ? (b / 1024 / 1024).toFixed(0) + ' MB' : '—';
+});
+
+/* ---- 超分辨率（waifu2x-ncnn-vulkan）：M3-2，低清扫描件专用 ----
+   Audiveris 要求行距 ≥ 11px，低于它整页判 invalid。低清页先用神经放大 ×2 再进去。
+   实测：一张行距 2.4px 的总谱页，不超分 0 个音符，超分后 253 个。
+   单 exe + 3 组模型，解压 39.5 MB，MIT，按需下载、删目录即卸载。 */
+const sr = reactive({ st: null, busy: false, text: '', err: '' });
+async function loadSr() {
+  try {
+    sr.st = (bridge && bridge.omrEngine && bridge.omrEngine.srStatus)
+      ? await bridge.omrEngine.srStatus() : null;
+  } catch (e) { sr.st = null; }
+}
+async function installSr() {
+  if (!bridge || !bridge.omrEngine || !bridge.omrEngine.srInstall || sr.busy) return;
+  sr.busy = true; sr.err = '';
+  try {
+    const r = await bridge.omrEngine.srInstall();
+    if (r && r.ok && r.installed) { sr.st = r; toast(t('超分辨率组件已安装')); }
+    else { sr.err = String((r && r.error) || t('安装失败')); toast(t('安装失败：') + sr.err, 'warn'); }
+  } catch (e) { sr.err = String((e && e.message) || e); toast(t('安装失败：') + sr.err, 'warn'); }
+  finally { sr.busy = false; sr.text = ''; }
+}
+async function removeSr() {
+  if (!bridge || !bridge.omrEngine || !bridge.omrEngine.srRemove || sr.busy) return;
+  if (!window.confirm(t('卸载超分辨率组件？之后低清扫描件（行距 < 11px）会退回普通插值放大，识别率明显下降。'))) return;
+  try {
+    const r = await bridge.omrEngine.srRemove();
+    if (r && r.ok === false) { toast(t('卸载失败：') + String(r.error || ''), 'warn'); return; }
+    sr.st = r || null; toast(t('已卸载超分辨率组件'));
+  } catch (e) { toast(t('卸载失败：') + String((e && e.message) || e), 'warn'); }
+}
+const srSize = computed(() => {
+  const b = (sr.st && sr.st.bytes) || 0;
+  return b ? (b / 1024 / 1024).toFixed(1) + ' MB' : '—';
 });
 
 /* ---- OCR 语言包（Tesseract traineddata）----
@@ -532,6 +568,7 @@ onMounted(() => {
   loadOmr();
   loadLang();
   loadHomr();
+  loadSr();
   if (bridge && bridge.omrEngine && bridge.omrEngine.onProgress) {
     offOmrProg = bridge.omrEngine.onProgress((p) => {
       if (!p) return;
@@ -539,6 +576,7 @@ onMounted(() => {
       const line = label + (p.percent ? ' ' + p.percent + '%' : '');
       // homr 的阶段归 homr 那张卡（同一个通道，靠 phase 前缀分流）
       if (String(p.phase || '').indexOf('homr') === 0) homr.text = line;
+      else if (String(p.phase || '').indexOf('sr-') === 0) sr.text = line;
       else omr.text = line;
     });
   }
@@ -801,6 +839,27 @@ onBeforeUnmount(() => {
             <Icon name="download" :size="12" /> {{ homr.busy ? t('安装中…') : (homr.st.installed ? t('补齐权重') : t('安装 AI 识谱')) }}
           </button>
           <button class="btn sm ghost" v-if="homr.st.installed" :disabled="homr.busy" @click="removeHomr">{{ t('卸载') }}</button>
+        </div>
+      </div>
+
+      <!-- 超分辨率（M3-2）：低清扫描件专用；Audiveris 要求行距 ≥ 11px，低于它整页判 invalid -->
+      <div class="field-row" v-if="sr.st">
+        <div>
+          <div class="fr-label">{{ t('超分辨率（低清扫描）') }}</div>
+          <div class="fr-hint">{{ t('给低清扫描件 / 拍照件做神经放大（waifu2x，走显卡 Vulkan）。Audiveris 官方给低分辨率谱的建议就是这条路。实测一张 0.4 倍的总谱页（谱表都量不出来）：不超分 0 个音符，超分后 253 个；「自动」只在谱表量不出来或行距低于 5px 时才动手 —— 清晰印刷谱与矢量 PDF 渲染的低清页一律不碰（实测给清晰页超分反而把一致性从 1.00 拉到 0.82）。') }}</div>
+          <div class="fr-hint">
+            <b>{{ sr.st.installed ? t('已安装') : t('未安装') }}</b>
+            <span v-if="sr.st.installed"> · v{{ sr.st.version }} · {{ srSize }}</span>
+            <span v-if="sr.busy" class="omr-run"> · {{ sr.text || t('安装中…') }}</span>
+            <span v-if="sr.err" class="omr-bad"> · {{ sr.err }}</span>
+          </div>
+          <div class="fr-hint">{{ t('安装位置：') }}{{ sr.st.dir }}</div>
+        </div>
+        <div class="fr-ctl">
+          <button class="btn sm primary" v-if="!sr.st.installed" :disabled="sr.busy" @click="installSr">
+            <Icon name="download" :size="12" /> {{ sr.busy ? t('安装中…') : t('安装超分辨率') }}
+          </button>
+          <button class="btn sm ghost" v-if="sr.st.installed" :disabled="sr.busy" @click="removeSr">{{ t('卸载') }}</button>
         </div>
       </div>
 

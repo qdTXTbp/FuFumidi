@@ -215,3 +215,93 @@ engine_omr.py `F837FEF32A3A…` / engine_omr_backends.py `D3E2A7A1F093…`）。
 | `npm run audit` | 0 个死选项（新控件已被主进程读取） |
 | engine pytest | 新增 `tests/test_omr_prep.py` **13 项全过**（连 `test_omr_backends.py` 共 43 项，0 失败）；全套仅剩 11 项**既有**失败（diffsinger_cli 1 + openutau phonemizer 10），与上一轮完全一致 |
 | 部署 | `deploy-installed.cjs` 冒烟通过（首屏 370 字符 / fuBridge object / 0 未捕获异常） |
+---
+
+## 9. 第 5 轮（下半）：M3-2 超分辨率预处理 + M2-4「一键重试该页」
+
+跑的都是**安装版**（E:/Midi/FuFumidi/resources/app.asar.unpacked/engine/，部署后 sha256 与源码一致）。
+原始数据：E:/Midi/_attic/omrfix/sr3/*.json（引擎级 A/B）、sr4/final.json、sr5/（清晰页对照）、
+sr3/ui/*.json + 03-pill-before.png / 04-after-retry.png（安装版界面）。
+
+### 9.1 M3-2 做法与门槛（门槛是量出来的，不是拍的）
+
+| 项 | 值 |
+|---|---|
+| 组件 | **waifu2x-ncnn-vulkan**（单 exe 5 MB + 3 组模型；解压 **39.5 MB**；MIT；走 Vulkan） |
+| 装在哪 | **用户自行安装** → 数据根 /omr/waifu2x/（资源中心「识谱引擎 → 超分辨率（低清扫描）」） |
+| 下载 | FastDL：35.5 MB，gh-proxy.com 实测 **8 s**（峰值 4 MB/s）→ ghfast → ghproxy.net → 直链；minSize 20 MB |
+| 引擎 | --sr off/auto/on + --sr-exe；sr_prepare_inputs 在**放大之前**换图；Audiveris 栅格路径与内置经典路径共用；homr 不接（它的网络自带归一化） |
+| auto 门槛 | **谱表量不出来（interline = 0）或行距 < 5px** 才动手；清晰印刷谱与矢量 PDF 渲染的低清页一律不碰 |
+
+### 9.2 质量对照（★ 结论：**音符数会骗人**）
+
+参照 = **同一页全分辨率**的识别结果；指标 = (音高, 起拍) 集合的 F1 与音高分布余弦。
+
+| 用例 | 行距 | 不超分 | 超分（auto） |
+|---|---|---|---|
+| 管弦乐 0.40×（635×898，**谱表量不出来**） | — | **整页失败：0 音符**（2.3 s） | **253 音符 / ×3.0**（78 s；F1 0.11 —— 粗糙，但不再是空的） |
+| 钢琴 0.25×（744×1052） | 4.0px | 400 音符 · **F1 0.081** · 余弦 0.731 | 354 音符 · **F1 0.883** · 余弦 0.993 |
+| 钢琴 0.35×（1041×1472） | 5.75px | 351 音符 · F1 0.931 | 370 音符 · F1 0.999 |
+| **用户自己的总谱页**（1588×2246，清晰矢量 PDF） | 6.0px | 237 音符 · F1 1.00 · 24 s | **237 音符 · 输出 MIDI 逐字节相同**（sha256 17A71E4F…，门控跳过） |
+| 钢琴原页（2977×4208） | 16.25px | 370 音符 | 370 音符（跳过，reason: interline-ok） |
+
+- **原计划的验收写法（「行距 < 6px 上音符数提升 ≥ 30%」）不成立**：0.25× 那一档超分后音符数
+  400 → 354（**−11%**），但与全分辨率结果的一致性 **F1 0.081 → 0.883（10.9 倍）**。
+  少掉的正是插值糊出来的假符头 —— 所以这项验收**改按 F1 / 音高分布**，不按音符数。
+- **给清晰页超分是有害的**：同一张清晰总谱页超分后 F1 从 **1.00 掉到 0.82** 且慢 40 s。
+  门槛因此卡在「LANCZOS 已经救不回来」这条线上。
+
+### 9.3 门控里被抓出来的第三个真 bug
+
+端到端 A/B 第一版里，**最该超分的那一档反而不触发**：0.4× 的总谱页一行谱表都量不出来
+（measure_interline 回 0），而旧门控写的是 0 < sp < 11 —— sp == 0 直接落空，
+结果 sr=auto 与 sr=off 一样失败（0 音符 → 0 音符），srInfo 里连一条记录都没有。
+改成 sp < SR_MIN_INTERLINE 后同一张图 **0 → 253 音符**。
+（另外 0.25×/0.20× 的管弦乐页把行距**量错**成 18.7/15.2px 而绕过门控 —— 这类「量不准」的页
+同样救不回来，留档在下面的未做项里。）
+
+### 9.4 M2-4「一键重试该页」
+
+| 层 | 做法 |
+|---|---|
+| 引擎 | 每次整批跑完把**每页解析结果**落在 workdir/pages/pNNN[-sK].json（失败页没有缓存，正是要重跑的那页）；--retry-page N 只把第 N 页喂给后端，其余页从缓存读回，**再走同一条合并流水线** —— 拍号推断 / 小节网格 / 跨页声部对齐看到的仍是完整页集。 |
+| 应用 | main/score.js 给每次整批跑一个稳定 workdir（缓存 /omr/run-*，只留最近 8 个），结果回传 workdir；--retry-page 透传。 |
+| 界面 | 失败 / 被跳过的页显示成琥珀色**可点胶囊「第 N 页重试」**（普通胶囊只读，这个有 cursor:pointer + 悬停变色）；点了用**当前界面参数**只重跑那一页 —— 所以可以「先打开超分 → 再重试该页」。 |
+| 边界 | 只支持栅格增强引擎；内置经典后端报 retry-needs-raster，不假装成功。单页输入不给按钮（没有「其余页沿用上次」的意义）。 |
+
+判据抽成纯函数 frontend/src/core/score-pages.js（retryablePages / pagesSummary），
+新增 **8 项单测**（三页缺中间页、全齐、首尾都缺、单页、无 pageTotal、分带页重复页号、字符串页号、页数摘要）。
+
+### 9.5 安装版实测（桥层 + 界面层）
+
+**① 组件安装走应用自己的入口**（window.fuBridge.omrEngine.srInstall()）：
+installed:false → true，**41,185,952 B / v20250915**，用时 **47 s**（下载 35.5 MB + 解压），
+落地 E:/Midi/FuFumidi/FuFumidiData/omr/waifu2x。
+
+**② 桥层**（3 页拖入，第 2 页被劣化到 0.2×）：
+
+| 步骤 | 结果 |
+|---|---|
+| 整批跑（sr:off） | ok:true, notes:587, pages:2, pageTotal:3, warnings:[page-failed, page-partial]，回传 workdir |
+| retryPage:2 + sr:on | ok:true, notes:821, pages:**3**, pageTotal:3, retryPage:2, warnings:[]；srInfo **只有一条**（= 这次真的只跑了第 2 页） |
+
+**③ 界面层**（CDP 伪造带真实路径的拖放，走完整界面流程）：
+
+| 时刻 | 逐页胶囊 | 统计 |
+|---|---|---|
+| 拖入后 | 第1页·9 小节·237 音·2.11× / 第3页·23 小节·389 音·2.11× / **[⟳ 第 2 页重试]** / 去重 39 | 32 声部 · **587 音符** · 48.0s · 拍号 6/8（推断）· **2 页 / 3** |
+| 点「第 2 页重试」后 | 第1页 237 音 / **第2页·9 小节·237 音·1×** / 第3页 389 音 / 去重 42，**重试胶囊消失** | 32 声部 · **821 音符** · 57.6s · **3 页** |
+
+截图：E:/Midi/_attic/omrfix/sr3/ui/03-pill-before.png / 04-after-retry.png。
+
+### 9.6 门禁（第 5 轮下半）
+
+| 门禁 | 结果 |
+|---|---|
+| npm run typecheck | 0 |
+| npm run build:ui | 0 |
+| npm run test:ui | **225 / 225**（217 + 8 项新增的「重试该页」判据） |
+| npm run audit | 0 个死选项 |
+| npm run test:download | **17 / 17**（新增 2 项：超分组件的 minSize 挡半截包 / 够大时字节一致） |
+| engine pytest | 新增 tests/test_omr_sr.py **12 项全过**；连 prep/backends 共 **58 项，0 失败** |
+| 部署 | deploy-installed.cjs 冒烟通过 |

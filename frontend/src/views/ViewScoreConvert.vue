@@ -18,6 +18,7 @@ import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { t } from '../core/i18n.js';
 import { parseMidi } from '../core/midi.js';
+import { retryablePages, pagesSummary } from '../core/score-pages.js';
 
 const app = useAppStore();
 const busy = ref(false);
@@ -71,6 +72,11 @@ const thicken = ref(false);           // 二值化后加粗：只对「谱线断
 // ★ M3-3 共用影像预处理层：去倾斜 + Sauvola 局部二值化 + 去噪点。
 //   auto = 逐页判断「像不像扫描件/照片」，像才上（干净印刷谱实测与旧路径逐像素一致）。
 const prep = ref('auto');             // off | auto | scan
+// ★ M3-2 超分辨率：off | auto（只在谱表量不出来 / 行距 < 5px 时才开）| on（强制）
+const sr = ref('auto');               // 需要用户在资源中心装 waifu2x（约 40 MB），没装则自动跳过
+/** ★ M2-4「一键重试该页」：记下这次跑到的东西（页图路径 / workdir / 参数），
+ *  失败页点一下就只重跑那一页，其余页从引擎的按页缓存读回来。 */
+const lastRun = ref<any>(null);
 const quantize = ref('off');          // off | 1/4 | 1/8 | 1/16 | 1/32
 const minNoteMs = ref(0);             // 丢掉过短音符（毫秒）0 = 不过滤
 const dedupe = ref(true);             // 同一个符头被识别两次时去重
@@ -115,7 +121,7 @@ const SCENES = [
   { id: 'full', icon: 'score', name: '管弦乐总谱', desc: '一页几十行谱表，个别页可能识别失败（会列出来）',
     set: { model: 'audiveris', upscale: 'auto', thicken: false, prep: 'off', quantize: 'off', dedupe: true } },
   { id: 'scan', icon: 'expand', name: '扫描件 · 手机拍照', desc: '歪的 / 有阴影 / 有灰点：先摆正再二值化',
-    set: { model: 'audiveris', upscale: 4, thicken: false, prep: 'auto', quantize: '1/16', dedupe: true } },
+    set: { model: 'audiveris', upscale: 4, thicken: false, prep: 'auto', sr: 'auto', quantize: '1/16', dedupe: true } },
 ];
 function applyScene(s: any) {
   const v = s.set || {};
@@ -123,6 +129,7 @@ function applyScene(s: any) {
   if (v.upscale !== undefined) upscale.value = v.upscale;
   if (v.thicken !== undefined) thicken.value = !!v.thicken;
   if (v.prep) prep.value = v.prep;
+  if (v.sr) sr.value = v.sr;
   if (v.quantize) quantize.value = v.quantize;
   if (v.dedupe !== undefined) dedupe.value = !!v.dedupe;
   app.toast(t('已套用：') + t(s.name), 'ok');
@@ -222,15 +229,7 @@ async function convert(inputs: any[], label?: string) {
   files.value = (inputs || []).map((it: any) => it.name || String(it.path || '').split(/[\\/]/).pop() || 'page');
   await loadOverlays([]);
   try {
-    const base = {
-      beats: beats.value, beatType: beatType.value,
-      tempo: autoTempo.value ? 'auto' : tempo.value,
-      ...modelArgs(),
-      upscale: upscale.value, thicken: !!thicken.value, prep: prep.value,
-      quantize: quantize.value, minNoteMs: Number(minNoteMs.value) || 0,
-      dedupe: !!dedupe.value,
-      sounding: !!sounding.value,
-    };
+    const base = baseOpts();
     let r = await run({ ...base, inputs });
     if (!r || r.canceled) return;
     // PDF：渲染进程逐页栅格化（多选时每个 PDF 都要渲），再把页图按原顺序送回去
@@ -266,26 +265,79 @@ async function convert(inputs: any[], label?: string) {
       err.value = r && r.errorCode === 'mixed' ? t('不要混着选：图片 / PDF 是一类，MusicXML 是一类，MIDI 是一类。') : String((r && r.error) || t('转换失败'));
       return;
     }
-    kind.value = r.kind || '';
-    const bytes = b64ToBytes(r.bytes || '');
-    midiBytes.value = bytes;
-    info.value = r.info || null;
-    srcName.value = r.fileName || srcName.value;
-    progress.value = 88; progressText.value = t('生成试看…');
-    try {
-      loadOcrLangs();
-      const mid = parseMidi(bytes);
-      tracks.value = (mid.tracks || []).filter((x: any) => (x.notes || []).length);
-      await nextTick();
-      drawPreview();
-    } catch (e) { /* 预览失败不影响导入 */ }
-    if (r.overlays && r.overlays.length) await loadOverlays(r.overlays);
-    pages.value = (r.pages && r.pages.length) ? r.pages.slice() : [];
-    if (r.names && r.names.length) files.value = r.names.slice();
-    progress.value = 100;
-    const n = (r.info && (r.info.notes || r.info.noteCount)) || 0;
-    app.toast(t('已转换：') + String(n) + t(' 个音符'), 'ok');
-    if (label) srcName.value = label;
+    await applyResult(r, label, base);
+  } catch (e: any) {
+    err.value = String((e && e.message) || e);
+  } finally {
+    busy.value = false;
+    progressText.value = '';
+  }
+}
+
+/** 当前界面上的全部识别参数（首次转换与「重试该页」共用，所以重试前改参数是生效的）。 */
+function baseOpts() {
+  return {
+    beats: beats.value, beatType: beatType.value,
+    tempo: autoTempo.value ? 'auto' : tempo.value,
+    ...modelArgs(),
+    upscale: upscale.value, thicken: !!thicken.value, prep: prep.value, sr: sr.value,
+    quantize: quantize.value, minNoteMs: Number(minNoteMs.value) || 0,
+    dedupe: !!dedupe.value,
+    sounding: !!sounding.value,
+  };
+}
+
+/** 结果落地（首次转换与「重试该页」共用同一条收尾）。 */
+async function applyResult(r: any, label?: string, base?: any) {
+  kind.value = r.kind || '';
+  const bytes = b64ToBytes(r.bytes || '');
+  midiBytes.value = bytes;
+  info.value = r.info || null;
+  srcName.value = r.fileName || srcName.value;
+  progress.value = 88; progressText.value = t('生成试看…');
+  try {
+    loadOcrLangs();
+    const mid = parseMidi(bytes);
+    tracks.value = (mid.tracks || []).filter((x: any) => (x.notes || []).length);
+    await nextTick();
+    drawPreview();
+  } catch (e) { /* 预览失败不影响导入 */ }
+  if (r.overlays && r.overlays.length) await loadOverlays(r.overlays);
+  pages.value = (r.pages && r.pages.length) ? r.pages.slice() : [];
+  if (r.names && r.names.length) files.value = r.names.slice();
+  progress.value = 100;
+  const n = (r.info && (r.info.notes || r.info.noteCount)) || 0;
+  app.toast(t('已转换：') + String(n) + t(' 个音符'), 'ok');
+  if (label) srcName.value = label;
+  // 只有「每页一个文件」的栅格输入才能单页重跑（PDF 已逐页栅格化成独立文件）
+  const pg: string[] = (r.pages || []).slice();
+  const wd = (r.info && r.info.workdir) || r.workdir || '';
+  lastRun.value = (pg.length > 1 && wd && base) ? { pages: pg, workdir: wd, opts: base, name: srcName.value } : null;
+}
+
+/** 没解析出音符的页（含被跳过的页）—— 这些才给「重试该页」。
+ *  判据在 core/score-pages.js 里（纯函数，有单测）；没有上次的页图/workdir 就不给按钮。 */
+const failedPages = computed(() => (lastRun.value
+  ? retryablePages(info.value, pageRows.value.map((x: any) => x.page)) : []));
+
+/** 只重跑第 n 页（引擎按页缓存，其余页读缓存后整份重新合并）。 */
+async function retryPage(n: number) {
+  const lr = lastRun.value;
+  if (!lr) { app.toast(t('这次没有留下可重试的页'), 'warn'); return; }
+  busy.value = true; err.value = '';
+  progress.value = 20; progressText.value = t('只重跑第 ') + n + t(' 页…');
+  // ★ 用**当前界面上的参数**重跑（不是上次那份）：用户往往是先改了参数再点重试
+  //   （例如「这页太糊 → 打开超分 → 重试该页」）。输入页集与 workdir 沿用上次的。
+  const opts = baseOpts();
+  try {
+    const r = await run({ ...opts, inputs: lr.pages.map((p) => ({ path: p })), name: lr.name,
+      retryPage: n, workdir: lr.workdir });
+    if (!r || !r.ok) {
+      err.value = String((r && r.error) || t('重试失败'));
+      app.toast(String((r && r.error) || t('重试失败')), 'warn');
+      return;
+    }
+    await applyResult(r, undefined, opts);
   } catch (e: any) {
     err.value = String((e && e.message) || e);
   } finally {
@@ -555,6 +607,7 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
         <span>{{ t('量化') }}<b>{{ quantize === 'off' ? t('不对齐') : quantize }}</b></span>
         <span v-if="thicken">{{ t('加粗谱线') }}</span>
         <span v-if="prep !== 'off'">{{ t('影像预处理') }}<b>{{ prep === 'scan' ? t('强制') : t('自动') }}</b></span>
+        <span v-if="sr !== 'off'">{{ t('超分辨率') }}<b>{{ sr === 'on' ? t('强制') : t('自动') }}</b></span>
       </div>
     </div>
 
@@ -576,15 +629,20 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
         <span v-if="info.transposedTracks" class="muted">{{ t('移调校正 ') }}{{ info.transposedTracks }}{{ t(' 个声部') }}</span>
         <!-- 拍号是**推**出来的（Audiveris 不导出 <time>），要如实标注，别让用户以为是读出来的 -->
         <span v-if="info.timeSig" class="muted">{{ t('拍号 ') }}<b>{{ info.timeSig }}</b><template v-if="info.meterInferred"> {{ t('推断值') }}</template></span>
-        <span v-if="info.pages > 1" class="muted">{{ info.pages }}{{ t(' 页') }}<template v-if="info.pageTotal > info.pages"> / {{ info.pageTotal }}</template></span>
+        <span v-if="Number(info.pageTotal) > 1" class="muted">{{ pagesSummary(info) }}{{ t(' 页') }}</span>
       </div>
-      <div v-if="pageRows.length || ppStats" class="sc-pages">
+      <div v-if="pageRows.length || ppStats || failedPages.length" class="sc-pages">
         <span v-for="r in pageRows" :key="r.page + '-' + r.system" class="sc-pg" :class="{ warn: r.issues.length }"
               :title="r.issues.join('；')">
           {{ t('第') }}{{ r.page }}{{ t('页') }}<template v-if="r.system">·{{ t('系统') }}{{ r.system }}</template>
           <template v-if="r.bars"> · {{ r.bars }}{{ t(' 小节') }}</template> · {{ r.notes }}{{ t(' 音') }}<template v-if="r.scale"> · {{ r.scale }}×</template>
           <Icon v-if="r.issues.length" name="warn" :size="11" />
         </span>
+        <!-- ★ M2-4：没解析出音符的页 —— 点一下**只重跑这一页**（其余页用上次结果，整份重新合并） -->
+        <button v-for="n in failedPages" :key="'retry' + n" type="button" class="sc-pg retry" :disabled="busy"
+                :title="t('只重跑这一页：其余页沿用上次结果，不需要整批重来')" @click="retryPage(n)">
+          <Icon name="refresh" :size="11" /> {{ t('第 ') }}{{ n }}{{ t(' 页重试') }}
+        </button>
         <span v-if="ppStats && ppStats.dup" class="sc-pg dim">{{ t('去重 ') }}{{ ppStats.dup }}</span>
         <span v-if="ppStats && ppStats.quantized" class="sc-pg dim">{{ t('量化 ') }}{{ ppStats.quantized }}</span>
         <span v-if="ppStats && ppStats.short" class="sc-pg dim">{{ t('滤除过短 ') }}{{ ppStats.short }}</span>
@@ -715,6 +773,14 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
           </select>
         </label>
         <label class="sc-field">
+          <span class="sc-field-nm">{{ t('超分辨率') }}</span>
+          <select v-model="sr" :disabled="busy">
+            <option value="off">{{ t('关') }}</option>
+            <option value="auto">{{ t('自动') }}</option>
+            <option value="on">{{ t('强制') }}</option>
+          </select>
+        </label>
+        <label class="sc-field">
           <span class="sc-field-nm">{{ t('影像预处理') }}</span>
           <select v-model="prep" :disabled="busy">
             <option value="off">{{ t('关') }}</option>
@@ -825,6 +891,12 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
 .sc-opts-line b { margin-left: 5px; color: var(--ink); font-weight: 600; }
 .sc-pages { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--steel); }
 .sc-pg { border: 1px solid var(--hairline); border-radius: 999px; padding: 1px 9px; background: var(--surface); }
+/* 失败页的「重试该页」按钮：可点、悬停变强调色（与只读胶囊区分开） */
+.sc-pg.retry { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; font: inherit;
+  border-color: color-mix(in srgb, #ffb340 60%, var(--line)); color: #b7791f; font-size: 11px; }
+.sc-pg.retry:hover { border-color: var(--accent); color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.sc-pg.retry:disabled { opacity: .55; cursor: default; }
 .sc-pg.dim { border-style: dashed; opacity: .85; }
 /* 体检有问题的页：琥珀色边框 + 悬停看原因（M2-4） */
 .sc-pg.warn { border-color: color-mix(in srgb, #ffb340 55%, var(--line)); color: #b7791f; }

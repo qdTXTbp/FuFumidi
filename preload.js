@@ -134,6 +134,10 @@ contextBridge.exposeInMainWorld('fuBridge', {
     homrStatus: () => ipcRenderer.invoke('omr:homrStatus'),
     homrInstall: () => ipcRenderer.invoke('omr:homrInstall'),
     homrRemove: () => ipcRenderer.invoke('omr:homrRemove'),
+    // 超分辨率（waifu2x-ncnn-vulkan）：M3-2，低清扫描件专用；同样是**用户自行安装**
+    srStatus: () => ipcRenderer.invoke('omr:srStatus'),
+    srInstall: () => ipcRenderer.invoke('omr:srInstall'),
+    srRemove: () => ipcRenderer.invoke('omr:srRemove'),
     // 音频处理模型的配置自愈：配置是**下载模型时**从上游取的（不内置），老安装可用它补一次
     modelEnsureConfig: (id) => ipcRenderer.invoke('model:ensureConfig', id),
     onProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('omr:progress', w); return () => ipcRenderer.removeListener('omr:progress', w); },

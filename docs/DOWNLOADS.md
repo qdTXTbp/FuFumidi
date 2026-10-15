@@ -74,7 +74,16 @@
 ## 3. 适用范围与唯一例外
 
 **必须走 FastDL**：模型权重（含 HuggingFace 整仓）、分卷仓库（MuScriptor / MSST 分离模型 / VR）、
-DiffSinger 声库与声码器、UTAU 声库归档、音色库 SF2/SF3、动态壁纸视频、GPU 增强组件、更新安装包。
+DiffSinger 声库与声码器、UTAU 声库归档、音色库 SF2/SF3、动态壁纸视频、GPU 增强组件、更新安装包、
+**识谱增强组件**（Audiveris MSI、homr 权重、超分辨率 zip）。
+
+识谱这一块的下载点（全部在 `main/omr.js`，都用 FastDL 的 `downloadAny` + 渠道回退）：
+
+| 资源 | 大小 | minSize | 通道顺序（实测） |
+| --- | --- | --- | --- |
+| Audiveris MSI | ~158 MB | 有 | 见 `MSI_URLS` |
+| homr 三个 ONNX 权重 | 各 45~55 MB | 1 MB | gh-proxy.com → gh.jasonzeng → ghfast → 直链 |
+| **超分辨率（waifu2x-ncnn-vulkan）zip** | 35.5 MB | **20 MB** | gh-proxy.com（实测 8 s / 峰值 4 MB/s）→ ghfast → ghproxy.net → 直链 |
 
 **例外一**：**元数据**（manifest.json、HF 的 /api/models/.../tree、Release API 的 JSON、缩略图）
 可以用 net.fetch 直接取，但必须：只读小响应、带超时、带渠道回退。

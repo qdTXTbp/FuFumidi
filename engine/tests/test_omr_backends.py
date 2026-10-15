@@ -500,6 +500,63 @@ def test_prep_image_thicken_optional():
     assert ink_thick > ink_plain, "加粗就是让墨迹变多"
 
 
+# ---------------- M2-4「一键重试该页」：按页缓存 ----------------
+
+def _fake_page(n, notes=3, system=None):
+    return {"page": n, "system": system,
+            "parsed": {"parts": [{"name": "Piano", "staves": 1,
+                                  "notes": [{"start": i * 480, "end": i * 480 + 240, "midi": 60 + i,
+                                             "staff": 1, "m": i, "off": 0} for i in range(notes)]}],
+                       "tpb": 480},
+            "scale": 2.11}
+
+
+def test_page_cache_roundtrip_skips_the_retried_page():
+    tmp = tempfile.mkdtemp(prefix="omr-cache-")
+    B.cache_pages(tmp, [_fake_page(1), _fake_page(2), _fake_page(3, system=0), _fake_page(3, system=1)])
+    got = B.load_cached_pages(tmp, 2)
+    assert sorted((p["page"], p["system"]) for p in got) == [(1, None), (3, 0), (3, 1)], got
+    assert B.load_cached_pages(tmp, 1) and all(p["page"] != 1 for p in B.load_cached_pages(tmp, 1))
+
+
+def test_page_cache_missing_dir_is_empty_not_an_error():
+    assert B.load_cached_pages(tempfile.mkdtemp(prefix="omr-nocache-"), 1) == []
+
+
+def test_page_cache_ignores_entries_without_parsed():
+    """缓存里混进半截文件（上次跑崩了）不能让重试整批失败。"""
+    tmp = tempfile.mkdtemp(prefix="omr-cache2-")
+    B.cache_pages(tmp, [_fake_page(1), {"page": 2, "parsed": None}])
+    d = os.path.join(tmp, B.PAGE_CACHE_DIR)
+    with open(os.path.join(d, "p003.json"), "w", encoding="utf-8") as fh:
+        fh.write("{ not json")
+    got = B.load_cached_pages(tmp, 9)
+    assert [p["page"] for p in got] == [1], got
+
+
+def test_retry_merges_replacement_page_with_cached_ones():
+    """重试 = 换掉一页 + 整份重新合并：合并看到的是完整页集，页数与音符数都要对。"""
+    pages = [_fake_page(1), _fake_page(2), _fake_page(3)]
+    merged = B.merge_pages(pages, None, {"sounding": False})
+    assert merged["noteCount"] == 9, merged["noteCount"]
+    fixed = [_fake_page(1), _fake_page(2, notes=5), _fake_page(3)]   # 第 2 页重跑后多认了 2 个音
+    merged2 = B.merge_pages(fixed, None, {"sounding": False})
+    assert merged2["noteCount"] == 11, merged2["noteCount"]
+
+
+def test_retry_page_rejects_out_of_range_and_missing_cache(capsys):
+    tmp = tempfile.mkdtemp(prefix="omr-retry-")
+    png = os.path.join(tmp, "score.png")
+    omr_fixture.build(png)
+    out = os.path.join(tmp, "out.mid")
+    code = B.main(["to-midi", "--in", png, "--out", out, "--backend", "audiveris",
+                   "--retry-page", "9", "--workdir", os.path.join(tmp, "w")])
+    assert code == 2 and "bad-page" in capsys.readouterr().out
+    code2 = B.main(["to-midi", "--in", png, "--out", out, "--backend", "audiveris",
+                    "--retry-page", "1", "--workdir", os.path.join(tmp, "empty")])
+    assert code2 == 1 and "no-cache" in capsys.readouterr().out
+
+
 def test_classical_backend_still_reachable():
     """auto 模式下没有 Audiveris 时必须能降级到自带经典识谱（离线兜底）。"""
     tmp = tempfile.mkdtemp(prefix="omr-be-")

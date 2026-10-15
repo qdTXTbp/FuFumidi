@@ -115,6 +115,119 @@ MAX_SIDE = 6000
 #: 同尺寸的页共享几何，测过一次行距就够（整本书的排版一致）
 _INTERLINE_CACHE = {}
 
+# ----------------------------------------------------------------------------
+# M3-2 超分辨率（waifu2x-ncnn-vulkan）—— **用户自行安装**（资源中心）
+# ----------------------------------------------------------------------------
+#: 为什么是它：Audiveris 官方「改进输入」文档给的正是「神经放大 + 曲线 + 反锐化」这条路。
+#: waifu2x-ncnn-vulkan 是单文件 exe（5 MB）+ 3 组模型，39.5 MB 解压后即可用，走 Vulkan
+#: （本机 RTX 5070 Ti 实测 1190x1683 页 ×2 只用 3.7 s）。
+#: ★ 不用 Real-ESRGAN：它同一份 ncnn 包里 x4plus 权重就 60+ MB，而这里要的是**低清谱**的
+#:   2 倍放大，waifu2x 的照片模型实测已足够（见 docs 里的 A/B 表）。
+SR_EXE = "waifu2x-ncnn-vulkan.exe"
+#: 照片模型（models-upconv_7_photo）：扫描件/拍照件用这一组；anime 组在灰底线稿上会把细谱线
+#: 当成「风格」处理，实测同一页音符数明显更少。
+SR_MODEL = "models-upconv_7_photo"
+#: ★ auto 的门槛：**行距量不出来（= 谱表检测器整页失败）或 < 5px** 才开超分。
+#:   为什么不是「< 11px 就开」—— 实测（见 docs/test-reports 第 5 轮 §9 的质量对照，
+#:   参照是同一页全分辨率的识别结果，用 (音高,起拍) F1 衡量）：
+#:     · 用户的清晰总谱页 1588×2246（interline 6.0，矢量 PDF 渲染的低清页）：
+#:       不超分 F1 **1.00**、超分 F1 0.82，而且慢 40 s —— 清晰页超分**有害**。
+#:     · 真劣化页（0.35× 重采样，interline 5.75）：F1 0.93 → **1.00**；
+#:       0.25×（interline 4.0）：F1 **0.08 → 0.88** —— 低到 LANCZOS 救不回来时超分才值。
+#:   所以 auto 只在这条界线上动手，其余一律原样；要更激进用 --sr on。
+SR_MIN_INTERLINE = 5.0
+#: 源图超过这个像素数就不超分（×4 的中转图会到 6400 万像素，时间不划算）；这种页本来就够大。
+SR_MAX_SRC_PIXELS = 16_000_000
+
+
+def sr_root():
+    root = os.environ.get("FUFUMIDI_DATA_ROOT") or os.path.join(os.path.expanduser("~"), "FuFumidiData")
+    return os.path.join(root, "omr", "waifu2x")
+
+
+def find_sr(explicit=None):
+    """超分启动器：--sr-exe 参数 > 环境变量 FUFUMIDI_WAFU2X > 数据根下的 waifu2x 目录。"""
+    for cand in (explicit, os.environ.get("FUFUMIDI_WAFU2X")):
+        if cand and os.path.exists(cand):
+            return cand
+    p = os.path.join(sr_root(), SR_EXE)
+    return p if os.path.exists(p) else None
+
+
+def run_sr(src, dst, exe=None, scale=2, model=SR_MODEL, gpu=0, timeout=1800):
+    """神经放大一张图（waifu2x-ncnn-vulkan）。返回 (ok, 说明)。**失败绝不抛** —— 超分是增强，
+    出不来就退回 LANCZOS，整页识别不该因为它挂掉。"""
+    exe = exe or find_sr()
+    if not exe:
+        return False, "没找到超分辨率组件（可在资源中心安装）"
+    root = os.path.dirname(exe)
+    cmd = [exe, "-i", src, "-o", dst, "-s", str(int(scale)), "-n", "0",
+           "-m", os.path.join(root, model), "-g", str(int(gpu)), "-f", "png"]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=root,
+                           encoding="utf-8", errors="replace")
+    except Exception as e:                           # noqa: BLE001
+        return False, str(e)[:160]
+    if not os.path.exists(dst) or os.path.getsize(dst) < 128:
+        tail = ((p.stdout or "") + (p.stderr or "")).strip()[-160:]
+        return False, tail or ("退出码 %s" % p.returncode)
+    return True, ""
+
+
+def sr_prepare_inputs(inputs, workdir, sr="auto", tag="sr", exe=None):
+    """把「低清页」超分成新文件，返回 (新路径列表, 说明列表)。
+
+    sr：off = 不动 | auto = 只在**实测行距 < 11px** 的页上开 | on = 全部页都开。
+    任何一步失败都退回原图（并如实回报，界面上能看见）。
+    """
+    mode = str(sr or "off").lower()
+    if mode in ("off", "no", "false", "0", ""):
+        return list(inputs), []
+    exe = exe or find_sr()
+    infos = []
+    out_paths = []
+    for i, src in enumerate(inputs):
+        info = {"page": i + 1, "used": False, "reason": "", "sec": 0.0}
+        try:
+            sp, nst = measure_interline(src)
+        except Exception:                            # noqa: BLE001
+            sp, nst = 0.0, 0
+        info["interline"] = round(float(sp), 2)
+        # ★ sp == 0 表示**一行谱表都没量出来**：这正是最该超分的一档（实测 0.4× 的总谱页
+        #   不超分 0 个音符，超分后 253 个）。旧写法要求 sp > 0，把这一档整个漏掉了 ——
+        #   端到端 A/B 抓出来的（srInfo 里连一条记录都没有）。
+        want = mode in ("on", "true", "1", "yes", "force") or (sp < SR_MIN_INTERLINE)
+        if not want:
+            info["reason"] = "interline-ok"
+        elif not exe:
+            info["reason"] = "not-installed"
+        else:
+            # ★ 这里的 Image 必须显式 import：本模块只在各函数内部按需 import PIL，
+            #   模块级没有 Image —— 裸写会被下面的 except 吞掉 NameError，
+            #   于是「大图跳过」这道闸门静默失效（实测就是被 tests/test_omr_sr.py 抓到的）。
+            try:
+                from PIL import Image as _PILImage
+                with _PILImage.open(src) as _im:
+                    pxx = _im.width * _im.height
+            except Exception:                        # noqa: BLE001
+                pxx = 0
+            if pxx > SR_MAX_SRC_PIXELS:
+                info["reason"] = "page-too-large"
+            else:
+                dst_png = os.path.join(workdir, "%s-%03d-x2.png" % (tag, i + 1))
+                t0 = time.time()
+                ok, why = run_sr(src, dst_png, exe=exe, scale=2)
+                info["sec"] = round(time.time() - t0, 1)
+                if ok:
+                    out_paths.append(dst_png)
+                    info.update({"used": True, "reason": "ok", "scale": 2})
+                    infos.append(info)
+                    continue
+                info["reason"] = ("failed:" + why)[:160]
+        out_paths.append(src)
+        infos.append(info)
+    return out_paths, infos
+
 
 def measure_interline(src):
     """量「谱线间距」（interline，像素）与谱表数。失败返回 (0, 0)。
@@ -437,7 +550,7 @@ def plan_page_bands(src, workdir, page_no, max_staves=BAND_MAX_STAVES,
 
 
 def run_audiveris(inputs, workdir, timeout=30 * 60, explicit=None, scale=None, thicken=False,
-                   prep="auto"):
+                   prep="auto", sr="off", sr_exe=None):
     """逐页预处理 → Audiveris 批处理 → 按输入名逐页配对导出的 MusicXML。
 
     ★ 配对是必须的：Audiveris 一个输入出一份 .mxl（prep-001.mxl）。旧实现只 list 了
@@ -449,10 +562,16 @@ def run_audiveris(inputs, workdir, timeout=30 * 60, explicit=None, scale=None, t
     if not exe:
         return {"ok": False, "error": "没有找到 Audiveris（可在资源中心安装识谱引擎）", "code": "backend-missing"}
     os.makedirs(workdir, exist_ok=True)
+    # ★ M3-2：低清页先超分成新文件，再走原来的放大/二值化 —— prep_image 会自己量新图的
+    #   行距，所以「超分 ×2 + 剩余倍数交给 LANCZOS」不需要额外改这里的倍数推导。
+    paths, sr_infos = sr_prepare_inputs(inputs, workdir, sr, tag="sr", exe=sr_exe)
+    n_sr = sum(1 for x in sr_infos if x.get("used"))
+    if n_sr:
+        prog(6, "超分辨率预处理（%d 页）" % n_sr)
     prepped = []
     scales = []
     prep_infos = []
-    for i, src in enumerate(inputs):
+    for i, src in enumerate(paths):
         dst = os.path.join(workdir, "prep-%03d.png" % (i + 1))
         prog(8 + int(30 * (i + 1) / max(1, len(inputs))), "预处理第 %d/%d 页" % (i + 1, len(inputs)))
         try:
@@ -525,7 +644,7 @@ def run_audiveris(inputs, workdir, timeout=30 * 60, explicit=None, scale=None, t
             ns = max(1.0, round(float(scales[n - 1] or 2.0) * 0.75, 2))
             dst = os.path.join(workdir, "prep-%03d-r.png" % n)
             try:
-                prep_image(inputs[n - 1], dst, scale=ns, thicken=thicken, prep=prep)
+                prep_image(paths[n - 1], dst, scale=ns, thicken=thicken, prep=prep)
             except Exception:                        # noqa: BLE001
                 continue
             scales[n - 1] = ns
@@ -556,7 +675,7 @@ def run_audiveris(inputs, workdir, timeout=30 * 60, explicit=None, scale=None, t
         for p in band_failed:
             n = p["page"]
             try:
-                bands = plan_page_bands(inputs[n - 1], workdir, n, prep=prep)
+                bands = plan_page_bands(paths[n - 1], workdir, n, prep=prep)
             except Exception as e:                       # noqa: BLE001
                 bands = []
                 p["bandError"] = str(e)[:160]
@@ -598,6 +717,7 @@ def run_audiveris(inputs, workdir, timeout=30 * 60, explicit=None, scale=None, t
         "pageCount": len(prepped),
         "ocrLangs": ocr_langs,
         "prepInfo": prep_infos,
+        "srInfo": sr_infos,
         "exit": code,
     }
     if not res["ok"]:
@@ -1306,6 +1426,54 @@ def mxl_to_midi(mxl, out_mid, timeout=600):
 # 经典后端（子进程调用，保持它自己那套 7 条回归用例的口径）
 # ----------------------------------------------------------------------------
 
+# ---------------------------------------------------------------- 按页缓存（M2-4）
+#: 「一键重试该页」靠它：整批跑完把**每页的解析结果**落在 workdir/pages/ 下，
+#: 重试时只重跑那一页，其余页从缓存读回来再整份重新合并 —— 用户不必为了一页等整批。
+#: 为什么不直接把上次的 MIDI 拼起来：合并层（小节网格推导 / 拍号推断 / 跨页声部对齐）
+#: 必须看到**全部页**才能给出正确结果，所以重试的正确做法是「换掉一页、整份重算」。
+PAGE_CACHE_DIR = "pages"
+
+
+def _page_cache_name(page, system=None):
+    return "p%03d%s.json" % (int(page or 0), "" if system is None else "-s%d" % int(system))
+
+
+def cache_pages(workdir, pages):
+    """把每页解析结果写进 workdir/pages/。失败不致命（只是下次不能单页重试）。"""
+    try:
+        d = os.path.join(workdir, PAGE_CACHE_DIR)
+        os.makedirs(d, exist_ok=True)
+        for pp in pages:
+            name = _page_cache_name(pp.get("page"), pp.get("system"))
+            with open(os.path.join(d, name), "w", encoding="utf-8") as fh:
+                json.dump({"page": pp.get("page"), "system": pp.get("system"),
+                           "parsed": pp.get("parsed"), "scale": pp.get("scale")}, fh, ensure_ascii=False)
+    except Exception:                                # noqa: BLE001
+        pass
+
+
+def load_cached_pages(workdir, skip_page):
+    """读回**除 skip_page 之外**的全部页（重试用）；没有缓存就返回 []。"""
+    d = os.path.join(workdir, PAGE_CACHE_DIR)
+    if not os.path.isdir(d):
+        return []
+    out = []
+    for name in sorted(os.listdir(d)):
+        if not name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(d, name), encoding="utf-8") as fh:
+                pp = json.load(fh)
+        except Exception:                            # noqa: BLE001
+            continue
+        if not pp.get("parsed"):
+            continue
+        if int(pp.get("page") or 0) == int(skip_page):
+            continue
+        out.append(pp)
+    return out
+
+
 def run_classical(args, inputs, out_mid, overlay, extra):
     cmd = [sys.executable, CLASSICAL, "to-midi"]
     for p in inputs:
@@ -1525,11 +1693,16 @@ def main(argv=None):
     ap.add_argument("--workdir", default="")
     ap.add_argument("--audiveris", default="", help="Audiveris 可执行文件路径（应用侧按数据根目录传入）")
     ap.add_argument("--homr", default="", help="homr 可执行文件路径（应用侧按数据根目录下的 venv 传入）")
+    ap.add_argument("--retry-page", default="",
+                    help="只重跑第 N 页（1 起），其余页从 --workdir 的按页缓存读回后再整份合并")
     ap.add_argument("--report", default="")
     ap.add_argument("--upscale", default="auto",
                     help="预处理放大倍数：auto（按实测谱线间距推）| 1 | 2 | 3 | 4")
     ap.add_argument("--thicken", default="off",
                     help="二值化后 3×3 加粗：on | off（默认 off —— 加粗会让密集总谱整页判 invalid）")
+    ap.add_argument("--sr", default="auto",
+                    help="超分辨率预处理（M3-2）：off | auto（只在实测行距 <11px 的页上开）| on")
+    ap.add_argument("--sr-exe", default="", help="waifu2x-ncnn-vulkan 路径（应用侧按数据根目录传入）")
     ap.add_argument("--prep", default="auto",
                     help="共用影像预处理层（M3-3）：off | auto（像扫描件/照片才上）| scan（强制）")
     ap.add_argument("--quantize", default="off", help="量化网格：off | 1/4 | 1/8 | 1/16 | 1/32")
@@ -1571,6 +1744,29 @@ def main(argv=None):
     elif wanted == "audiveris" or (wanted == "auto" and have_av):
         backend = "audiveris"
 
+    # ★ 「一键重试该页」（M2-4）：只把**那一页**喂给后端，其余页从上次的缓存读回来，
+    #   再走同一条合并流水线 —— 合并看到的是完整页集，所以拍号/小节网格/跨页声部都不会变。
+    retry_page = 0
+    try:
+        retry_page = int(str(getattr(args, "retry_page", "") or "0").strip() or 0)
+    except Exception:                                # noqa: BLE001
+        retry_page = 0
+    feed_inputs = args.inputs
+    cached_pages = []
+    total_pages = len(args.inputs)
+    if retry_page:
+        if not (1 <= retry_page <= len(args.inputs)):
+            emit("RESULT", {"ok": False, "code": "bad-page",
+                            "error": "要重试的页号超出范围：%d（共 %d 页）" % (retry_page, len(args.inputs))})
+            return 2
+        cached_pages = load_cached_pages(workdir, retry_page)
+        if not cached_pages:
+            emit("RESULT", {"ok": False, "code": "no-cache",
+                            "error": "找不到上次的识别结果，无法只重试这一页。请整批重跑一次。"})
+            return 1
+        feed_inputs = [args.inputs[retry_page - 1]]
+        prog(8, "只重跑第 %d 页（其余 %d 页用上次的结果）" % (retry_page, len(cached_pages)))
+
     notes = []
     result = None
     if backend in ("audiveris", "homr"):
@@ -1581,11 +1777,14 @@ def main(argv=None):
         else:
             # 两个栅格引擎在后处理上完全同路：都是「每页一份 MusicXML → mxl_to_parsed → merge_pages」
             if backend == "audiveris":
-                raster = run_audiveris(args.inputs, workdir, explicit=(args.audiveris or None),
+                raster = run_audiveris(feed_inputs, workdir, explicit=(args.audiveris or None),
                                        scale=_scale_arg(args.upscale), thicken=_bool_arg(args.thicken, False),
-                                       prep=prep_arg(args.prep))
+                                       prep=prep_arg(args.prep), sr=str(args.sr or "off").lower(),
+                                       sr_exe=(args.sr_exe or None))
             else:
-                raster = run_homr(args.inputs, workdir, explicit=(args.homr or None))
+                # homr 不接这两层：它的网络在**原始扫描件**上训练、自带归一化与缩放，
+                # 再超分/二值化一遍等于双重处理（实测会掉音符）。
+                raster = run_homr(feed_inputs, workdir, explicit=(args.homr or None))
             page_list = raster.get("pages") or []
             parsed_pages = []
             warnings = []
@@ -1618,12 +1817,23 @@ def main(argv=None):
                     continue
                 parsed_pages.append({"page": pg.get("page"), "parsed": info["parsed"],
                                      "scale": pg.get("scale"), "mxl": pg.get("mxl")})
+            if retry_page:
+                # 单页重跑时后端把它当第 1 页 → 页号改回真实页号，再与缓存页拼成完整页集
+                for pp in parsed_pages:
+                    pp["page"] = retry_page
+                cache_pages(workdir, parsed_pages)
+                parsed_pages = sorted(cached_pages + parsed_pages,
+                                      key=lambda x: (int(x.get("page") or 0), int(x.get("system") or 0)))
+                total_pages = max(total_pages, max(int(p.get("page") or 0) for p in parsed_pages))
+            else:
+                cache_pages(workdir, parsed_pages)
             if parsed_pages:
+                # 速度记号只认第 1 页（重试别的页时那次跑出来的 metronome 与全曲无关，必须丢掉）
                 ov = _meta_override(args, parsed_pages[0]["parsed"])
                 # ★ 速度：Audiveris 不导出 <sound tempo>，但它的 OCR 把谱面左上那个速度记号
                 #   留在了 .omr 里（role="Metronome"）。读准了就用（用户没显式填时），
                 #   读不准就如实标出来让界面提示手填 —— 见 read_metronome_from_omr 的注释。
-                metro = raster.get("metronome") or {}
+                metro = {} if retry_page else (raster.get("metronome") or {})
                 bpm_source = "default"
                 if str(getattr(args, "tempo", "auto")).strip().lower() not in ("", "auto", "0", "none"):
                     bpm_source = "user"
@@ -1635,9 +1845,9 @@ def main(argv=None):
                     bpm_source = "metronome-unreadable"
                 mg = merge_pages(parsed_pages, out_mid, ov)
                 pages_ok = len({pp.get("page") for pp in parsed_pages})
-                if pages_ok < len(page_list):
+                if pages_ok < total_pages:
                     warnings.append({"code": "page-partial", "ok": pages_ok,
-                                     "total": len(page_list)})
+                                     "total": total_pages})
                 # 没装 OCR 语言包 → Audiveris 的 TEXTS 步整段跳过：乐器名/速度记号/和弦名全丢，
                 # 声部只能叫「声部 N」。这不是失败，但用户该知道装了能得到什么。
                 if backend == "audiveris" and not (raster.get("ocrLangs") or []):
@@ -1649,7 +1859,7 @@ def main(argv=None):
                     "elapsed": raster.get("elapsed"),
                     "pages": len({pp.get("page") for pp in parsed_pages}),
                     "systems": len(parsed_pages),
-                    "pageTotal": len(page_list),
+                    "pageTotal": total_pages,
                     "notesPerPage": mg["notesPerPage"],
                     "pageChecks": mg.get("pageChecks") or [],
                     "noteCount": mg["noteCount"],
@@ -1678,16 +1888,40 @@ def main(argv=None):
                     "thicken": _bool_arg(args.thicken, False),
                     "prep": prep_arg(args.prep),
                     "prepInfo": raster.get("prepInfo") or [],
+                    "sr": str(args.sr or "off").lower(),
+                    "srInfo": raster.get("srInfo") or [],
+                    # ★ M2-4「一键重试该页」：界面要拿 workdir 回来重试，并知道这次是不是重试
+                    "workdir": workdir,
+                    "retryPage": retry_page or None,
                 }
             else:
                 result = {"ok": False, "backend": backend,
                           "error": ("Audiveris" if backend == "audiveris" else "homr") + " 一页都没能解析出音符",
                           "warnings": warnings, "pages": len(page_list)}
                 result.update({k: raster.get(k) for k in ("elapsed", "log") if raster.get(k)})
+    if retry_page and (result is None or not result.get("ok")):
+        # 单页重试只对栅格增强后端成立（它才有逐页解析结果可缓存）。
+        # 经典后端不返回逐页解析数据，硬跑一遍等于整批重来 —— 如实说清楚，不要假装成功。
+        emit("RESULT", {"ok": False, "code": "retry-needs-raster",
+                        "error": "「重试该页」只支持 Audiveris / homr 引擎；内置识谱请整批重跑。",
+                        "backend": backend})
+        return 1
     if result is None or (not result.get("ok") and wanted == "auto"):
         # 降级：经典后端兜底（离线永远可用），并把「为什么没用增强引擎」如实回报
         prog(55, "经典识谱（离线）")
-        info = run_classical(args, args.inputs, out_mid, args.overlay, extra)
+        cl_inputs = args.inputs
+        cl_sr = []
+        try:
+            cl_inputs, cl_sr = sr_prepare_inputs(args.inputs, workdir, str(args.sr or "off").lower(),
+                                                 tag="sr-cl", exe=(args.sr_exe or None))
+            if any(x.get("used") for x in cl_sr):
+                prog(56, "超分辨率预处理（经典识谱）")
+        except Exception:                            # noqa: BLE001
+            cl_inputs, cl_sr = args.inputs, []
+        info = run_classical(args, cl_inputs, out_mid, args.overlay, extra)
+        if cl_sr:
+            info["sr"] = str(args.sr or "off").lower()
+            info["srInfo"] = cl_sr
         # 后处理参数在经典后端也要真的生效（它自己写 MIDI，量化只能在这一层补）
         if info.get("ok"):
             try:
