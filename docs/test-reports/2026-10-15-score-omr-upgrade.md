@@ -109,3 +109,49 @@ $env:FUFUMIDI_DATA_ROOT='E:\Midi\FuFumidi\FuFumidiData'
 
 复现：`node scripts/api-push.mjs` 之外，配置获取可用资源中心卡片或
 `ipc model:ensureConfig`（preload 暴露为 omrEngine.modelEnsureConfig）。
+## 7. 第 4 轮：速度记号来源 / 模型仓库配置 / 逐页体检 / 变谱页 UI
+
+### 7.1 速度（播放）—— 找到了一个新来源，同时确认了它的边界
+
+Audiveris 不导出 <sound tempo>，<words> 也是 0（实测第 1 页 MXL：sound 只有力度、没有 metronome 元素）。
+但它**认过**那个记号：.omr 书文件里 sheet#1/sheet#1.xml 有
+<metronome role="Metronome"><bounds .../></metronome> 加紧跟其后的兄弟节点 <word value="…">。
+
+| 项 | 实测 |
+|---|---|
+| 谱面真值 | 四分附点 = 60（裁图确认） |
+| Audiveris OCR | 读成 =12（记号方框在原图只有约 17x7 px） |
+| 处理 | 只接受 20~320 的合理值 → 不采用，bpmSource=metronome-unreadable，界面提示手填 |
+| 读得准的谱 | 会直接用（引擎用例覆盖 =120 → 120） |
+
+### 7.2 第 1 项：把模型配置放进模型仓库，下载时同步取
+
+- BS-Roformer_LargeV1.ckpt（vocal/bs_roformer_large，上游 0 个 yaml，权重结构与标签不一致）的那份配置
+  已放进**模型仓库** monologue82/Models/vocal/bs_roformer_large/config_bsrofoL.yaml（3210 B，回读逐字节一致）。
+- 查找顺序新增一环：模型目录 → 数据根共享缓存 → **模型仓库里的同名配置** → 上游 configs/ → 现场生成。
+  安装版实测：modelEnsureConfig("BS-Roformer_LargeV1") → ok:true / from:"model-repo"，且**真加载 + 前向校验通过**。
+- 这一类 KB 级 yaml 统一走 net.fetch（FastDL 在小文件上会截断，见 DOWNLOADS.md 例外二）。
+
+### 7.3 第 5 项：本地已下载模型的配置全部备齐
+
+| 模型 | 配置来源 |
+|---|---|
+| big_beta5e.ckpt | 现场生成（前向校验通过） |
+| denoise_mel_band_roformer_aufr33_aggr_sdr_27.9768 | 现场生成 |
+| denoise_mel_band_roformer_aufr33_sdr_27.9959 | 现场生成 |
+| melband_roformer_instvox_duality_v2 | 现场生成 |
+| BS-Roformer_LargeV1 | 模型仓库取回 |
+
+**ok=5 / fail=0**。生成用的模板也从数据根缓存取（支持上游名模糊匹配 + 同族候选 + 家族双试）。
+
+### 7.4 第 2 项：M2-4 逐页体检（已开工并上线）
+
+实测 3 页：第1页 9 小节 237 音 21 声部 / 第2页(系统0) 9 小节 220 音 / 第2页(系统1) 7 小节 83 音 / 第3页 23 小节 389 音，
+问题项标出 same-pitch-dup（与后处理去重数一致）。界面每页一个胶囊，有问题的琥珀色 + 悬停看原因。
+**未做**：一键重试该页；M3-2 超分、M3-3 影像预处理仍未开工。
+
+### 7.5 第 6 项：变谱页布局与空态
+
+- 空态从四条文字改成**三张可点的谱面类型预设卡**（点了就把模型与参数设好）+ 三步提示；
+- 卡片底色在壁纸下从 78% 提到 92%（玻璃感保留、压亮部不再发花）；
+- 结果面板新增每页「N 小节」与速度来源标注。

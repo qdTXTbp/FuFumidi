@@ -107,11 +107,11 @@ function modelArgs() {
 }
 /** 谱面类型一键预设：单乐器 / 总谱 / 扫描件的参数差别很大，直接给三套。 */
 const SCENES = [
-  { id: 'single', name: '单乐器 · 钢琴谱', desc: '2 行大谱表、页宽通常够，别加粗',
+  { id: 'single', icon: 'music', name: '单乐器 · 钢琴谱', desc: '2 行大谱表、页宽通常够，别加粗',
     set: { model: 'audiveris', upscale: 'auto', thicken: false, quantize: 'off', dedupe: true } },
-  { id: 'full', name: '管弦乐总谱', desc: '一页几十行谱表，个别页可能识别失败（会列出来）',
+  { id: 'full', icon: 'score', name: '管弦乐总谱', desc: '一页几十行谱表，个别页可能识别失败（会列出来）',
     set: { model: 'audiveris', upscale: 'auto', thicken: false, quantize: 'off', dedupe: true } },
-  { id: 'scan', name: '扫描件 · 手机拍照', desc: '谱线可能断裂、发灰，加粗 + 放大',
+  { id: 'scan', icon: 'expand', name: '扫描件 · 手机拍照', desc: '谱线可能断裂、发灰，加粗 + 放大',
     set: { model: 'audiveris', upscale: 4, thicken: true, quantize: '1/16', dedupe: true } },
 ];
 function applyScene(s: any) {
@@ -388,12 +388,29 @@ const warnings = computed<string[]>(() => {
 const noteTotal = computed(() => (info.value && (info.value.notes || info.value.noteCount)) || 0);
 /** 后处理明细（量化/去重/丢短音），让「参数真的生效了」看得见。 */
 const ppStats = computed(() => (info.value && info.value.stats) || null);
-/** 逐页音符数 + 识别时用的放大倍数（哪页出问题一眼看得出）。 */
+/** 体检项 → 人话（M2-4：结构问题要一眼看得见，错几个音是小事、丢小节是大事）。 */
+function issueText(x: any) {
+  if (!x) return '';
+  if (x.code === 'empty-page') return t('这一页没识别到音符');
+  if (x.code === 'bar-count-mismatch') return t('各声部小节数不一致（') + x.min + '~' + x.max + t(' 小节）');
+  if (x.code === 'neg-duration') return t('有非正时值的音符 ') + x.n + t(' 个');
+  if (x.code === 'long-hold') return t('超长音 ') + x.n + t(' 个（可能是连音线没闭合）');
+  if (x.code === 'same-pitch-dup') return t('同刻同音重复 ') + x.n + t(' 处');
+  return String(x.code);
+}
+/** 逐页：小节数 + 音符数 + 放大倍数 + 体检结论（哪页出问题一眼看得出）。 */
 const pageRows = computed(() => {
   const r = info.value || {};
   const per = r.notesPerPage || [];
   const scales = r.scales || [];
-  return per.map((n: number, i: number) => ({ page: i + 1, notes: n, scale: scales[i] || 0 }));
+  const checks = r.pageChecks || [];
+  return per.map((n: number, i: number) => {
+    const c = checks[i] || {};
+    return {
+      page: c.page || i + 1, system: c.system || 0, notes: n, scale: scales[i] || 0,
+      bars: c.bars || 0, issues: ((c.issues || []) as any[]).map((x) => issueText(x)),
+    };
+  });
 });
 const durSec = computed(() => {
   const ms = (info.value && info.value.durationMs) || 0;
@@ -547,14 +564,21 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
         <span v-if="info.accidentals !== undefined">{{ t('变化音') }} <b>{{ info.accidentals }}</b></span>
         <span v-if="info.spacing">{{ t('谱线间距') }} <b>{{ info.spacing }}px</b></span>
         <span v-if="info.tempoChanges > 1" class="muted">{{ t('速度变化 ') }}{{ info.tempoChanges }}{{ t(' 次') }}</span>
+        <span v-if="info.bpm" class="muted">{{ t('速度 ') }}<b>{{ Math.round(info.bpm) }}</b>
+          <template v-if="info.bpmSource === 'metronome'"> {{ t('（谱面记号）') }}</template>
+          <template v-else-if="info.bpmSource === 'metronome-unreadable'"> {{ t('（谱面记号没读准，可在右栏手填）') }}</template>
+        </span>
         <span v-if="info.transposedTracks" class="muted">{{ t('移调校正 ') }}{{ info.transposedTracks }}{{ t(' 个声部') }}</span>
         <!-- 拍号是**推**出来的（Audiveris 不导出 <time>），要如实标注，别让用户以为是读出来的 -->
         <span v-if="info.timeSig" class="muted">{{ t('拍号 ') }}<b>{{ info.timeSig }}</b><template v-if="info.meterInferred"> {{ t('推断值') }}</template></span>
         <span v-if="info.pages > 1" class="muted">{{ info.pages }}{{ t(' 页') }}<template v-if="info.pageTotal > info.pages"> / {{ info.pageTotal }}</template></span>
       </div>
       <div v-if="pageRows.length || ppStats" class="sc-pages">
-        <span v-for="r in pageRows" :key="r.page" class="sc-pg">
-          {{ t('第') }}{{ r.page }}{{ t('页') }} · {{ r.notes }}{{ t(' 音') }}<template v-if="r.scale"> · {{ r.scale }}×</template>
+        <span v-for="r in pageRows" :key="r.page + '-' + r.system" class="sc-pg" :class="{ warn: r.issues.length }"
+              :title="r.issues.join('；')">
+          {{ t('第') }}{{ r.page }}{{ t('页') }}<template v-if="r.system">·{{ t('系统') }}{{ r.system }}</template>
+          <template v-if="r.bars"> · {{ r.bars }}{{ t(' 小节') }}</template> · {{ r.notes }}{{ t(' 音') }}<template v-if="r.scale"> · {{ r.scale }}×</template>
+          <Icon v-if="r.issues.length" name="warn" :size="11" />
         </span>
         <span v-if="ppStats && ppStats.dup" class="sc-pg dim">{{ t('去重 ') }}{{ ppStats.dup }}</span>
         <span v-if="ppStats && ppStats.quantized" class="sc-pg dim">{{ t('量化 ') }}{{ ppStats.quantized }}</span>
@@ -608,12 +632,19 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
           <span>{{ t('右边选识别模型与参数，然后把图片 / PDF / MusicXML / MIDI 拖进来，或点上面的按钮。') }}</span>
         </div>
       </div>
-      <ul class="sc-empty-list">
-        <li>{{ t('单乐器钢琴谱：两行大谱表、页宽通常够 —— 用「自动放大 + 不加粗」一次就能用。') }}</li>
-        <li>{{ t('管弦乐总谱：一页几十行谱表，识别失败的那几页会逐页列在结果里（不再静默少页）。') }}</li>
-        <li>{{ t('扫描件 / 手机拍照：打开「加粗谱线」并放大 —— 谱线一断，整页都会被判为无效。') }}</li>
-        <li>{{ t('MusicXML / MIDI：不经过识谱，直接精确转换；右栏参数对它们不生效。') }}</li>
-      </ul>
+      <!-- 谱面类型直接给三张可点的预设卡：既填满版面，也让「参数该怎么配」变成一次点击 -->
+      <div class="sc-presets">
+        <button v-for="s in SCENES" :key="s.id" type="button" class="sc-preset" :disabled="busy" @click="applyScene(s)">
+          <span class="sc-preset-ic"><Icon :name="s.icon" :size="15" /></span>
+          <span class="sc-preset-nm">{{ t(s.name) }}</span>
+          <span class="sc-preset-desc">{{ t(s.desc) }}</span>
+        </button>
+      </div>
+      <div class="sc-steps">
+        <span><b>1</b>{{ t('拖入谱面') }}</span>
+        <span><b>2</b>{{ t('选模型与参数') }}</span>
+        <span><b>3</b>{{ t('转出 MIDI 或总谱') }}</span>
+      </div>
     </div>
     </div>
 
@@ -766,11 +797,30 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
 .sc-empty-tx b { font-size: 13.5px; color: var(--ink); }
 .sc-empty-tx span { font-size: 12px; color: var(--stone); line-height: 1.55; }
 .sc-empty-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--stone); line-height: 1.65; }
+/* 空态里的三张预设卡（点一下就把模型与参数设好） */
+.sc-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.sc-preset { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 12px 12px 13px;
+  border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); cursor: pointer;
+  transition: border-color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
+.sc-preset:hover { border-color: var(--accent); background: var(--surface); transform: translateY(-1px); }
+.sc-preset:active { transform: scale(0.995); }
+.sc-preset-ic { color: var(--accent); }
+.sc-preset-nm { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.sc-preset-desc { font-size: 11px; color: var(--stone); line-height: 1.5; }
+.sc-steps { display: flex; flex-wrap: wrap; gap: 14px; font-size: 11.5px; color: var(--stone); }
+.sc-steps b { display: inline-flex; width: 15px; height: 15px; align-items: center; justify-content: center; margin-right: 5px;
+  border-radius: 50%; background: var(--accent); color: #fff; font-size: 10px; font-weight: 600; }
+@media (max-width: 900px) { .sc-presets { grid-template-columns: 1fr; } }
+/* 壁纸打开时全局 .card 是 78% 白玻璃：这一页信息密度高，文字压到壁纸亮部会发花 ——
+   单独提到 92%（玻璃感保留，可读性回来）。 */
+.sc-wrap .card { background: color-mix(in srgb, var(--canvas) 92%, transparent); }
 .sc-opts-line { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--stone); }
 .sc-opts-line b { margin-left: 5px; color: var(--ink); font-weight: 600; }
 .sc-pages { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--steel); }
 .sc-pg { border: 1px solid var(--hairline); border-radius: 999px; padding: 1px 9px; background: var(--surface); }
 .sc-pg.dim { border-style: dashed; opacity: .85; }
+/* 体检有问题的页：琥珀色边框 + 悬停看原因（M2-4） */
+.sc-pg.warn { border-color: color-mix(in srgb, #ffb340 55%, var(--line)); color: #b7791f; }
 @media (max-width: 1080px) { .sc-grid { grid-template-columns: minmax(0, 1fr); } .sc-side { position: static; } }
 /* 页头用全局 .page-head / .page-ic / .page-title / .page-sub（与转录、转换一致） */
 .sc-wrap > .page-head { margin-bottom: 16px; }

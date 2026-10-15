@@ -249,6 +249,89 @@ def test_plan_page_bands_respects_max_staves():
     assert all(b["staves"] <= 2 for b in plan)
 
 
+# ---------------- 速度记号（Audiveris 不导出 <sound tempo>，但 OCR 留在 .omr 里）----------------
+
+def _fake_omr(path, words, role="Metronome", box=(2552, 680, 36, 16)):
+    """造一个最小的 Audiveris 书文件：<metronome> + 紧跟的 <word>（实测就是这个结构）。"""
+    import zipfile
+    inner = ''.join('<word value="%s" font="S-24" shape="TEXT" staff="1" id="%d">'
+                    '<bounds x="%d" y="%d" w="%d" h="%d"/></word>'
+                    % (w, 100 + i, box[0], box[1], box[2], box[3]) for i, w in enumerate(words))
+    xml = ('<?xml version="1.0" encoding="UTF-8"?><sheet>'
+           '<metronome font="S-24" role="%s" shape="METRONOME" staff="1" id="14456">'
+           '<bounds x="%d" y="%d" w="%d" h="%d"/></metronome>%s</sheet>'
+           % (role, box[0], box[1], box[2], box[3], inner))
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("book.xml", "<book/>")
+        z.writestr("sheet#1/sheet#1.xml", xml)
+    return path
+
+
+def test_metronome_read_when_ocr_is_clean():
+    """OCR 读准了就采用（谱面「♩ = 120」→ word '=120'）。"""
+    tmp = tempfile.mkdtemp(prefix="omr-metro-")
+    _fake_omr(os.path.join(tmp, "prep-001.omr"), ["=120"])
+    m = B.read_metronome_from_omr(tmp, 1)
+    assert m and m["found"] and m["bpm"] == 120, m
+    assert m["box"] == [2552, 680, 36, 16]
+
+
+def test_metronome_refuses_a_garbled_number():
+    """★ 读不准就不采用：这份总谱真值 60，被 OCR 读成 12 —— 猜错整首曲子的速度都是错的。"""
+    tmp = tempfile.mkdtemp(prefix="omr-metro2-")
+    _fake_omr(os.path.join(tmp, "prep-001.omr"), ["=12"])
+    m = B.read_metronome_from_omr(tmp, 1)
+    assert m and m["found"] and m["bpm"] is None and m.get("unreadable") is True, m
+
+
+def test_metronome_absent_is_not_an_error():
+    tmp = tempfile.mkdtemp(prefix="omr-metro3-")
+    import zipfile
+    with zipfile.ZipFile(os.path.join(tmp, "prep-001.omr"), "w") as z:
+        z.writestr("sheet#1/sheet#1.xml", "<sheet></sheet>")
+    m = B.read_metronome_from_omr(tmp, 1)
+    assert m and m["found"] is False and m["bpm"] is None, m
+    assert B.read_metronome_from_omr(os.path.join(tmp, "nope"), 1) is None
+
+
+# ---------------- M2-4 逐页体检 ----------------
+
+def test_page_checks_flags_structural_problems():
+    """体检要能看出「这一页结构不对」：小节数不一致 / 空页 / 非正时值 / 超长音 / 同刻同音重复。"""
+    good = {"measureLens": [1440] * 9,
+            "notes": [{"start": 0, "end": 480, "midi": 60, "m": 0, "off": 0}]}
+    c = B._page_checks(1, [good], 1440, 480)
+    assert c["bars"] == 9 and c["notes"] == 1 and c["issues"] == []
+
+    # 两个声部看到的小节数不同 → bar-count-mismatch
+    a = {"measureLens": [1440] * 9, "notes": good["notes"]}
+    b = {"measureLens": [1440] * 7, "notes": good["notes"]}
+    c2 = B._page_checks(2, [a, b], 1440, 480)
+    assert c2["bars"] == 9
+    assert any(x["code"] == "bar-count-mismatch" and x["min"] == 7 and x["max"] == 9 for x in c2["issues"])
+
+    # 空页
+    assert any(x["code"] == "empty-page" for x in B._page_checks(3, [{"measureLens": [], "notes": []}], 1440, 480)["issues"])
+
+    # 超长音（> 8 小节）、非正时值、同刻同音重复
+    bad = {"measureLens": [1440] * 4,
+           "notes": [{"start": 0, "end": 1440 * 9, "midi": 60},
+                     {"start": 100, "end": 100, "midi": 62},
+                     {"start": 200, "end": 600, "midi": 64},
+                     {"start": 200, "end": 600, "midi": 64}]}
+    c3 = B._page_checks(4, [bad], 1440, 480)
+    codes = {x["code"] for x in c3["issues"]}
+    assert {"long-hold", "neg-duration", "same-pitch-dup"} <= codes, c3
+
+
+def test_merge_pages_reports_page_checks():
+    page = {"parsed": {"parts": [{"name": "Piano", "staves": 1, "measureLens": [1440, 1440],
+                                  "notes": [{"start": 0, "end": 480, "midi": 60, "staff": 1,
+                                             "m": 0, "off": 0}]}]}}
+    out = B.merge_pages([page], None, {"sounding": False})
+    assert out["pageChecks"] and out["pageChecks"][0]["bars"] == 2, out.get("pageChecks")
+
+
 def test_prep_image_upscales_and_binarizes():
     tmp = tempfile.mkdtemp(prefix="omr-be-")
     src = _tiny_image(os.path.join(tmp, "in.png"))

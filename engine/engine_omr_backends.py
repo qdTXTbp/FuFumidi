@@ -548,7 +548,9 @@ def run_audiveris(inputs, workdir, timeout=30 * 60, explicit=None, scale=None, t
                 p["scale"] = max([x["scale"] for v in sysmap.values() for x in v] or [0])
                 p["bandStaves"] = sum(x["staves"] for v in sysmap.values() for x in v)
                 p["reasons"] = []
+    metro = read_metronome_from_omr(out_dir, 1)
     res = {
+        "metronome": metro,
         "ok": any(p["ok"] for p in pages),
         "pages": pages,
         "mxlList": [p["mxl"] for p in pages if p["ok"]],
@@ -601,6 +603,60 @@ def find_homr(explicit=None):
     if os.path.exists(py):
         return py                      # 兜底：python -m homr.main
     return None
+
+
+def read_metronome_from_omr(out_dir, page_no=1):
+    """从 Audiveris 的 .omr 书文件里读**速度记号**（它不导出 <sound tempo>，但 OCR 结果留在这里）。
+
+    实测（2026-10-15）：sheet#1.xml 里有 `<sentence role="Metronome">` 一句 —— 那就是谱面左上
+    那个「♩. = 60」方框；同页的其它句子角色是 PartName / Lyrics / CreatorComposer / UnknownRole。
+
+    ★ 数字不可信就**不采用**：这份总谱的记号被 OCR 读成 "=12"（真值 60）。所以只接受
+      20~320 的合理值；句子在、数字不可信时返回 "unreadable"，界面据此提示「请手填速度」——
+      猜错的话整首曲子的速度都是错的，比不填更糟。
+    """
+    import re
+    import zipfile
+    if not out_dir or not os.path.isdir(out_dir):
+        return None
+    cands = sorted(glob.glob(os.path.join(out_dir, "prep-%03d*.omr" % page_no)))
+    if not cands:
+        cands = sorted(glob.glob(os.path.join(out_dir, "*.omr")))
+    if not cands:
+        return None
+    try:
+        with zipfile.ZipFile(cands[0]) as z:
+            sheets = [n for n in z.namelist() if re.search(r"sheet.*\.xml$", n)]
+            if not sheets:
+                return None
+            xml = z.read(sheets[0]).decode("utf-8", "replace")
+    except Exception:                                  # noqa: BLE001
+        return None
+    out = {"found": False, "bpm": None, "raw": [], "source": "omr", "box": None}
+    # 实测结构：<metronome role="Metronome" ...><bounds x= y= w= h=/></metronome>，
+    # 紧跟一个兄弟节点 <word value="=12">（同一个包围盒）—— 那就是谱面上的速度记号。
+    for m in re.finditer(r'<metronome\b[^>]*>(.*?)</metronome>', xml, re.S):
+        out["found"] = True
+        bb = re.search(r'<bounds\s+x="(-?\d+)"\s+y="(-?\d+)"\s+w="(\d+)"\s+h="(\d+)"', m.group(1) or "")
+        if bb and not out["box"]:
+            out["box"] = [int(bb.group(1)), int(bb.group(2)), int(bb.group(3)), int(bb.group(4))]
+        tail = xml[m.end():m.end() + 1500]
+        out["raw"] += re.findall(r'<word\s+value="([^"]*)"', tail)[:2]
+    if not out["found"] and 'role="Metronome"' in xml:
+        out["found"] = True
+    for w in out["raw"]:
+        t = str(w).replace(" ", "")
+        # 记号形态：`= 60` / `=60` / `q.=60`，也可能只剩数字
+        mm = re.search(r"=\s*(\d{1,3})", t) or re.fullmatch(r"(\d{1,3})", t)
+        if not mm:
+            continue
+        n = int(mm.group(1))
+        if 20 <= n <= 320:
+            out["bpm"] = n
+            break
+    if not out["bpm"] and out["found"]:
+        out["unreadable"] = True
+    return out
 
 
 def _homr_reasons(out, code):
@@ -865,6 +921,51 @@ def _regrid_page(parts, bar_ticks):
     return moved
 
 
+def _page_checks(page_no, parts, bar_ticks, tpb, system=None):
+    """逐页体检（M2-4）：小节数 / 小节长度是否齐 / 声部数 / 可疑音符。
+
+    目的不是多给几个数字，而是让「第 3 页少 2 小节」这类**结构错误一眼看得见** ——
+    错几个音是小事，丢小节是大事（后面整页都跟着错位）。界面按 code 翻成"下一步怎么做"。
+    """
+    notes = []
+    lens = []
+    for p in parts:
+        notes.extend(p.get("notes") or [])
+        if p.get("measureLens"):
+            lens.append(len(p["measureLens"]))
+    bars = max(lens) if lens else 0
+    issues = []
+    if not notes:
+        issues.append({"code": "empty-page"})
+    if lens and len(set(lens)) > 1:
+        # 同一页里各声部见到的小节数不一样：多半是某一行的小节线没认出来
+        issues.append({"code": "bar-count-mismatch", "min": min(lens), "max": max(lens)})
+    neg = [n for n in notes if int(n.get("end", 0)) <= int(n.get("start", 0))]
+    if neg:
+        issues.append({"code": "neg-duration", "n": len(neg)})
+    if bar_ticks:
+        long_hold = [n for n in notes
+                     if int(n.get("end", 0)) - int(n.get("start", 0)) > bar_ticks * 8]
+        if long_hold:
+            issues.append({"code": "long-hold", "n": len(long_hold)})
+    dup = 0
+    seen = set()
+    for i, p in enumerate(parts):
+        for n in p.get("notes") or []:
+            k = (i, int(n.get("start", 0)), int(n.get("midi", 0)))
+            if k in seen:
+                dup += 1
+            else:
+                seen.add(k)
+    if dup:
+        issues.append({"code": "same-pitch-dup", "n": dup})
+    out = {"page": page_no, "parts": len(parts), "notes": len(notes), "bars": bars,
+           "issues": issues}
+    if system is not None:
+        out["system"] = system
+    return out
+
+
 def _slot_pos(slots, sid):
     """槽位在全局表里的位置（插入会挪下标，所以每次现查）。"""
     for k, s in enumerate(slots):
@@ -966,6 +1067,7 @@ def merge_pages(pages, out_mid, opts=None):
     track_slot = []                 # 轨下标 → 它属于哪个槽位
     per_page_beats = []
     notes_per_page = []
+    checks = []                     # 逐页体检（M2-4）
     conflicts = []
     # ---- 拍号推断 + 统一小节网格（M1-2）----
     # Audiveris 不导出 <time>；更要命的是它不知道拍号时**按每小节认出来的内容**定长，
@@ -1043,6 +1145,7 @@ def merge_pages(pages, out_mid, opts=None):
                 n_page += 1
         per_page_beats.append(round((page_end - offset) / float(tpb), 3))
         notes_per_page.append(n_page)
+        checks.append(_page_checks(pg.get("page"), parts, bar_ticks, tpb, pg.get("system")))
         offset = page_end
 
     # ---- 乐器识别 + 移调（M2-3）----
@@ -1104,6 +1207,7 @@ def merge_pages(pages, out_mid, opts=None):
         "out": out_mid,
         "pageBeats": per_page_beats,
         "notesPerPage": notes_per_page,
+        "pageChecks": checks,
         "tracks": trk,
         "sounding": sounding,
         "transposedTracks": transposed,
@@ -1474,6 +1578,19 @@ def main(argv=None):
                                      "scale": pg.get("scale"), "mxl": pg.get("mxl")})
             if parsed_pages:
                 ov = _meta_override(args, parsed_pages[0]["parsed"])
+                # ★ 速度：Audiveris 不导出 <sound tempo>，但它的 OCR 把谱面左上那个速度记号
+                #   留在了 .omr 里（role="Metronome"）。读准了就用（用户没显式填时），
+                #   读不准就如实标出来让界面提示手填 —— 见 read_metronome_from_omr 的注释。
+                metro = raster.get("metronome") or {}
+                bpm_source = "default"
+                if str(getattr(args, "tempo", "auto")).strip().lower() not in ("", "auto", "0", "none"):
+                    bpm_source = "user"
+                elif metro.get("bpm"):
+                    ov["bpm"] = float(metro["bpm"])
+                    ov["tempos"] = [{"tick": 0, "bpm": float(metro["bpm"])}]
+                    bpm_source = "metronome"
+                elif metro.get("found") and metro.get("unreadable"):
+                    bpm_source = "metronome-unreadable"
                 mg = merge_pages(parsed_pages, out_mid, ov)
                 pages_ok = len({pp.get("page") for pp in parsed_pages})
                 if pages_ok < len(page_list):
@@ -1492,6 +1609,7 @@ def main(argv=None):
                     "systems": len(parsed_pages),
                     "pageTotal": len(page_list),
                     "notesPerPage": mg["notesPerPage"],
+                    "pageChecks": mg.get("pageChecks") or [],
                     "noteCount": mg["noteCount"],
                     "notes": mg["noteCount"],
                     "tracks": mg["tracks"],
@@ -1510,6 +1628,8 @@ def main(argv=None):
                     "scales": [p.get("scale") for p in parsed_pages],
                     "ocrLangs": raster.get("ocrLangs") or [],
                     "bpm": ov["bpm"],
+                    "bpmSource": bpm_source,
+                    "metronomeRaw": (metro.get("raw") or [])[:4],
                     # 拍号以**合并结果**为准（可能来自推断）；ov["times"] 在 auto 且谱面没写时是空的
                     "timeSig": mg.get("timeSig") or "4/4",
                     "quantize": str(args.quantize),

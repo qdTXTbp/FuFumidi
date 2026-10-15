@@ -1274,6 +1274,31 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     let hit = pickYml(modelDirAbs, want);
     if (hit) return { path: hit, from: 'model' };
     hit = pickYml(cfgCacheDir(), want);
+    // ③ 我们自己的模型仓库：<分类>/<模型名>/<配置名>
+    //   ★ 用户 2026-10-15 的决定：「找方法获取配置文件并放到仓库里，下载时同步下载并配置」——
+    //     上游 configs/ 里没有、又推不出结构的模型（如 BS-Roformer_LargeV1），把它那份配置
+    //     放在**模型自己的目录**里随模型一起取（不内置进安装包）。文件名与 index.json 对齐。
+    if (!hit) {
+      const rel = String(m.dest || '').replace(/\\/g, '/') + '/' + (want || (m.outName || 'model').replace(/\.[^.]+$/, '') + '.yaml');
+      const dst = path.join(modelDirAbs, want || path.basename(rel));
+      //  ★ 走 net.fetch 而不是 FastDL：这是 KB 级 yaml，FastDL 在这类小文件上实测会截断
+      //    （见 docs/DOWNLOADS.md 例外二：1555→794、2727→1147）。大文件仍全走 FastDL。
+      if (onText) onText('下载模型自带配置 ' + path.basename(rel));
+      for (const u of modelSrcUrls(rel)) {
+        try {
+          const rr = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi' } });
+          if (!rr.ok) continue;
+          const buf = Buffer.from(await rr.arrayBuffer());
+          const clen = Number(rr.headers.get('content-length') || 0);
+          if (buf.length < 200 || (clen && buf.length !== clen)) continue;
+          fs.writeFileSync(dst, buf);
+          break;
+        } catch (e) {}
+      }
+      hit = pickYml(modelDirAbs, want);
+      if (hit) return { path: hit, from: 'model-repo' };
+      try { fs.rmSync(dst, { force: true }); } catch (_) {}
+    }
     if (!hit) {
       await fetchConfigsToCache(onText);
       hit = pickYml(cfgCacheDir(), want);
