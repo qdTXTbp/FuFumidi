@@ -185,6 +185,10 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
         const up = String(opts.upscale === undefined || opts.upscale === null ? 'auto' : opts.upscale);
         args.push('--upscale', /^[0-9]+(\.[0-9]+)?$/.test(up) ? up : 'auto');
         args.push('--thicken', opts.thicken ? 'on' : 'off');
+        // ★ M3-3 共用影像预处理层：off | auto（看着像扫描件/照片才上）| scan（强制）
+        //   auto 是默认 —— 干净印刷谱实测与旧路径逐像素一致，歪的/带阴影的才走新路径。
+        const prep = String(opts.prep || 'auto').toLowerCase();
+        args.push('--prep', ['off', 'auto', 'scan'].includes(prep) ? prep : 'auto');
         const q = String(opts.quantize || 'off');
         args.push('--quantize', ['off', '1/4', '1/8', '1/16', '1/32'].includes(q) ? q : 'off');
         const mn = Number(opts.minNoteMs) || 0;

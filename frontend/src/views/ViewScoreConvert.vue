@@ -68,6 +68,9 @@ const tempo = ref(120);
 // 预处理与后处理参数（真接到引擎：--upscale / --thicken / --quantize / --min-note-ms / --dedupe）
 const upscale = ref('auto');          // auto | 1 | 2 | 3 | 4（auto = 按实测谱线间距推，上限 19M 像素）
 const thicken = ref(false);           // 二值化后加粗：只对「谱线断裂的扫描件」有利
+// ★ M3-3 共用影像预处理层：去倾斜 + Sauvola 局部二值化 + 去噪点。
+//   auto = 逐页判断「像不像扫描件/照片」，像才上（干净印刷谱实测与旧路径逐像素一致）。
+const prep = ref('auto');             // off | auto | scan
 const quantize = ref('off');          // off | 1/4 | 1/8 | 1/16 | 1/32
 const minNoteMs = ref(0);             // 丢掉过短音符（毫秒）0 = 不过滤
 const dedupe = ref(true);             // 同一个符头被识别两次时去重
@@ -108,17 +111,18 @@ function modelArgs() {
 /** 谱面类型一键预设：单乐器 / 总谱 / 扫描件的参数差别很大，直接给三套。 */
 const SCENES = [
   { id: 'single', icon: 'music', name: '单乐器 · 钢琴谱', desc: '2 行大谱表、页宽通常够，别加粗',
-    set: { model: 'audiveris', upscale: 'auto', thicken: false, quantize: 'off', dedupe: true } },
+    set: { model: 'audiveris', upscale: 'auto', thicken: false, prep: 'off', quantize: 'off', dedupe: true } },
   { id: 'full', icon: 'score', name: '管弦乐总谱', desc: '一页几十行谱表，个别页可能识别失败（会列出来）',
-    set: { model: 'audiveris', upscale: 'auto', thicken: false, quantize: 'off', dedupe: true } },
-  { id: 'scan', icon: 'expand', name: '扫描件 · 手机拍照', desc: '谱线可能断裂、发灰，加粗 + 放大',
-    set: { model: 'audiveris', upscale: 4, thicken: true, quantize: '1/16', dedupe: true } },
+    set: { model: 'audiveris', upscale: 'auto', thicken: false, prep: 'off', quantize: 'off', dedupe: true } },
+  { id: 'scan', icon: 'expand', name: '扫描件 · 手机拍照', desc: '歪的 / 有阴影 / 有灰点：先摆正再二值化',
+    set: { model: 'audiveris', upscale: 4, thicken: false, prep: 'auto', quantize: '1/16', dedupe: true } },
 ];
 function applyScene(s: any) {
   const v = s.set || {};
   if (v.model) model.value = v.model;
   if (v.upscale !== undefined) upscale.value = v.upscale;
   if (v.thicken !== undefined) thicken.value = !!v.thicken;
+  if (v.prep) prep.value = v.prep;
   if (v.quantize) quantize.value = v.quantize;
   if (v.dedupe !== undefined) dedupe.value = !!v.dedupe;
   app.toast(t('已套用：') + t(s.name), 'ok');
@@ -222,7 +226,7 @@ async function convert(inputs: any[], label?: string) {
       beats: beats.value, beatType: beatType.value,
       tempo: autoTempo.value ? 'auto' : tempo.value,
       ...modelArgs(),
-      upscale: upscale.value, thicken: !!thicken.value,
+      upscale: upscale.value, thicken: !!thicken.value, prep: prep.value,
       quantize: quantize.value, minNoteMs: Number(minNoteMs.value) || 0,
       dedupe: !!dedupe.value,
       sounding: !!sounding.value,
@@ -550,6 +554,7 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
         <span>{{ t('放大') }}<b>{{ upscale === 'auto' ? t('自动') : upscale + '×' }}</b></span>
         <span>{{ t('量化') }}<b>{{ quantize === 'off' ? t('不对齐') : quantize }}</b></span>
         <span v-if="thicken">{{ t('加粗谱线') }}</span>
+        <span v-if="prep !== 'off'">{{ t('影像预处理') }}<b>{{ prep === 'scan' ? t('强制') : t('自动') }}</b></span>
       </div>
     </div>
 
@@ -710,6 +715,14 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
           </select>
         </label>
         <label class="sc-field">
+          <span class="sc-field-nm">{{ t('影像预处理') }}</span>
+          <select v-model="prep" :disabled="busy">
+            <option value="off">{{ t('关') }}</option>
+            <option value="auto">{{ t('自动') }}</option>
+            <option value="scan">{{ t('强制') }}</option>
+          </select>
+        </label>
+        <label class="sc-field">
           <span class="sc-field-nm">{{ t('量化网格') }}</span>
           <select v-model="quantize" :disabled="busy">
             <option value="off">{{ t('不对齐') }}</option>
@@ -750,13 +763,8 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
         <div class="sc-side-hint">{{ t('速度/拍号默认「自动」：谱面自己写的优先，填了才覆盖。') }}</div>
       </div>
 
-      <div class="card sc-side-card">
-        <div class="sc-side-head"><Icon name="score" :size="13" /> {{ t('谱面类型') }}</div>
-        <button v-for="s in SCENES" :key="s.id" type="button" class="sc-scene" :disabled="busy" @click="applyScene(s)">
-          <span class="sc-scene-nm">{{ t(s.name) }}</span>
-          <span class="sc-scene-desc">{{ t(s.desc) }}</span>
-        </button>
-      </div>
+      <!-- ★ 谱面类型预设只留空态里那三张卡（用户：「这两处功能重复了，保留这个」）——
+           右栏再放一份完全一样的，既重复又占掉参数区的高度。 -->
     </aside>
     </div>
   </div>
@@ -765,7 +773,7 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
 <style scoped>
 /* 与「转录」「转换」同一条规矩：外边距由全局 .page 给，这里只限宽 */
 .sc-wrap { max-width: 1040px; }
-/* 两栏：左边导入 + 结果，右边模型 / 参数 / 谱面类型。
+/* 两栏：左边导入 + 结果，右边模型 / 参数。
    原来这些控件全塞在一张卡里，页面下半截是一大片空白（用户：「太空旷」）。 */
 .sc-grid { display: grid; grid-template-columns: minmax(0, 1fr) 326px; gap: 14px; align-items: start; }
 .sc-col { min-width: 0; }
@@ -784,25 +792,24 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
 .sc-model-tag { grid-column: 2; grid-row: 1; align-self: start; font-size: 11px; color: var(--steel);
   background: var(--surface); border: 1px solid var(--hairline); border-radius: 999px; padding: 1px 9px; }
 .sc-model-tag.warn { color: #ffb340; border-color: color-mix(in srgb, #ffb340 45%, var(--line)); }
-.sc-scene { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
-  padding: 8px 10px; margin-bottom: 5px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); cursor: pointer;
-  transition: border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
-.sc-scene:hover { border-color: var(--border-strong); }
-.sc-scene:active { transform: scale(0.99); }
-.sc-scene-nm { font-size: 12.5px; font-weight: 600; color: var(--ink); }
-.sc-scene-desc { font-size: 11px; color: var(--stone); line-height: 1.45; }
 .sc-empty { display: flex; flex-direction: column; gap: 12px; }
 .sc-empty-head { display: flex; gap: 10px; align-items: flex-start; color: var(--accent); }
 .sc-empty-tx { display: flex; flex-direction: column; gap: 3px; }
 .sc-empty-tx b { font-size: 13.5px; color: var(--ink); }
 .sc-empty-tx span { font-size: 12px; color: var(--stone); line-height: 1.55; }
 .sc-empty-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--stone); line-height: 1.65; }
-/* 空态里的三张预设卡（点一下就把模型与参数设好） */
+/* 空态里的三张预设卡（点一下就把模型与参数设好）。
+   ★ 必须有**看得见的方框**：之前用 --line 的 1px 发丝线压在这页 92% 白玻璃上等于没有框，
+   用户看不出这里有三个可选项（原话：「要有方框框起来方便用户看到有这三个选项」）。
+   现在用 --border-strong 实边 + 纯白底 + 一层浅投影，三张卡自己立起来。 */
 .sc-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.sc-preset { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 12px 12px 13px;
-  border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); cursor: pointer;
-  transition: border-color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
-.sc-preset:hover { border-color: var(--accent); background: var(--surface); transform: translateY(-1px); }
+.sc-preset { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 12px 13px 14px;
+  border: 1.5px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface); cursor: pointer;
+  box-shadow: 0 1px 2px rgba(10, 10, 10, 0.05), 0 4px 12px rgba(10, 10, 10, 0.06);
+  transition: border-color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out),
+    box-shadow var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
+.sc-preset:hover { border-color: var(--accent); transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(10, 10, 10, 0.06), 0 8px 20px rgba(10, 10, 10, 0.10); }
 .sc-preset:active { transform: scale(0.995); }
 .sc-preset-ic { color: var(--accent); }
 .sc-preset-nm { font-size: 12.5px; font-weight: 600; color: var(--ink); }

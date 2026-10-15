@@ -165,17 +165,25 @@ def auto_scale(src, target_interline=22.0):
     return round(s, 2)
 
 
-def prep_image(src, dst, scale=None, thicken=False):
-    """喂给 Audiveris 之前把图整理一遍：按行距放大 → 二值化 →（可选）加粗。
+def prep_image(src, dst, scale=None, thicken=False, prep="auto"):
+    """喂给 Audiveris 之前把图整理一遍：**摆正 → 放大 → 二值化 → 可选去噪点/加粗**。
 
-    ★ thicken 默认关：3×3 加粗会把密集总谱的符头/符杠/歌词黏成一片，
+    * thicken 默认关：3×3 加粗会把密集总谱的符头/符杠/歌词黏成一片，
       实测第 1 页「加粗 → 导出 0 个 MusicXML；不加粗 → 235 个音符」。
       只有扫描件谱线断裂时才值得开（界面上作为高级参数暴露）。
+    * prep（M3-3 共用影像预处理层）：off = 完全不动；auto = **看着像扫描件/照片才上**
+      （背景不均 / 噪点多 / 有倾斜，判据见 engine_omr.looks_like_scan）；scan = 强制上。
+      这一层做三件事：**去倾斜**（行投影方差最大化，实测 3° 估成 -3.00°）、
+      **Sauvola 局部二值化**（实测阴影下墨占比 0.046，而全局阈值把暗半边整片判成墨 1.000）、
+      **去噪点**（<6px 的连通块）。
     """
     import numpy as np
     from PIL import Image, ImageFilter
     import engine_omr as _omr
     im = Image.open(src).convert("L")
+    skew = 0.0
+    if str(prep).lower() != "off":
+        im, skew = _omr.deskew(im, min_deg=0.25)
     w, h = im.size
     if scale is None or float(scale) <= 0:
         scale = auto_scale(src)
@@ -192,18 +200,32 @@ def prep_image(src, dst, scale=None, thicken=False):
         scale = max(1.0, int((MAX_PIXELS / float(w * h)) ** 0.5 * 100) / 100.0)
     up = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS) if scale > 1.0 else im
     g = np.asarray(up).astype("float32")
-    try:
-        ink, _thr, _frac = _omr.binarize(g)          # 自适应阈值（比写死 0.30 稳）
+    mode = str(prep).lower()
+    want_scan, why = (False, "")
+    if mode == "scan":
+        want_scan, why = True, "forced"
+    elif mode != "off":
+        want_scan, why = _omr.looks_like_scan(g, skew)
+    removed = 0
+    if want_scan:
+        ink, _thr = _omr.sauvola(g)
+        ink, removed = _omr.despeckle(ink, min_px=6)
         out = np.where(ink, 0, 255).astype("uint8")
-    except Exception:                                # noqa: BLE001
-        bg = float(np.percentile(g, 98))
-        inkv = float(np.percentile(g, 1))
-        out = np.where(g < bg - 0.30 * (bg - inkv), 0, 255).astype("uint8")
+    else:
+        try:
+            ink, _thr, _frac = _omr.binarize(g)      # 自适应阈值（比写死 0.30 稳）
+            out = np.where(ink, 0, 255).astype("uint8")
+        except Exception:                            # noqa: BLE001
+            bg = float(np.percentile(g, 98))
+            inkv = float(np.percentile(g, 1))
+            out = np.where(g < bg - 0.30 * (bg - inkv), 0, 255).astype("uint8")
     img = Image.fromarray(out)
     if thicken:
         img = img.filter(ImageFilter.MinFilter(3))
     img.save(dst)
-    return {"size": img.size, "scale": scale}
+    return {"size": img.size, "scale": scale, "skew": round(float(skew), 2),
+            "prep": "off" if mode == "off" else ("scan" if want_scan else "clean"),
+            "prepWhy": why, "despeckled": removed}
 
 
 # ----------------------------------------------------------------------------
@@ -313,8 +335,18 @@ BAND_MAX_STAVES = 12
 BAND_TARGET_SCALE = 3.0
 
 
+def prep_arg(v):
+    """--prep 取值归一：off | auto | scan（也吃 on/true/1 当 scan、no/false/0 当 off）。"""
+    s = str(v if v is not None else "auto").strip().lower()
+    if s in ("off", "no", "false", "0", "none", ""):
+        return "off"
+    if s in ("on", "true", "1", "yes", "scan", "force"):
+        return "scan"
+    return "auto"
+
+
 def plan_page_bands(src, workdir, page_no, max_staves=BAND_MAX_STAVES,
-                    target_scale=BAND_TARGET_SCALE):
+                    target_scale=BAND_TARGET_SCALE, prep="auto"):
     """把一页切成「系统 → 带」两级，写出每带的裁切图。返回 [dict(sys, band, stem, png, scale)]。
 
     **为什么切**：一页 29 行谱表在 ×2.11（1600 万像素）时 Audiveris 抛
@@ -391,7 +423,7 @@ def plan_page_bands(src, workdir, page_no, max_staves=BAND_MAX_STAVES,
             dst = os.path.join(workdir, stem + ".png")
             img.crop((0, y0, W, y1)).save(tmp)
             try:
-                info = prep_image(tmp, dst, scale=s)
+                info = prep_image(tmp, dst, scale=s, prep=prep)
             except Exception:                          # noqa: BLE001
                 cur = nxt
                 continue
@@ -404,7 +436,8 @@ def plan_page_bands(src, workdir, page_no, max_staves=BAND_MAX_STAVES,
     return out
 
 
-def run_audiveris(inputs, workdir, timeout=30 * 60, explicit=None, scale=None, thicken=False):
+def run_audiveris(inputs, workdir, timeout=30 * 60, explicit=None, scale=None, thicken=False,
+                   prep="auto"):
     """逐页预处理 → Audiveris 批处理 → 按输入名逐页配对导出的 MusicXML。
 
     ★ 配对是必须的：Audiveris 一个输入出一份 .mxl（prep-001.mxl）。旧实现只 list 了
@@ -418,15 +451,19 @@ def run_audiveris(inputs, workdir, timeout=30 * 60, explicit=None, scale=None, t
     os.makedirs(workdir, exist_ok=True)
     prepped = []
     scales = []
+    prep_infos = []
     for i, src in enumerate(inputs):
         dst = os.path.join(workdir, "prep-%03d.png" % (i + 1))
         prog(8 + int(30 * (i + 1) / max(1, len(inputs))), "预处理第 %d/%d 页" % (i + 1, len(inputs)))
         try:
-            info = prep_image(src, dst, scale=scale, thicken=thicken)
+            info = prep_image(src, dst, scale=scale, thicken=thicken, prep=prep)
         except Exception as e:                       # noqa: BLE001
             info = {"scale": 0, "error": str(e)}
         prepped.append(dst)
         scales.append(info.get("scale", 0))
+        prep_infos.append({"page": i + 1, "prep": info.get("prep"),
+                           "skew": info.get("skew"), "prepWhy": info.get("prepWhy"),
+                           "despeckled": info.get("despeckled")})
     out_dir = os.path.join(workdir, "out")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -488,7 +525,7 @@ def run_audiveris(inputs, workdir, timeout=30 * 60, explicit=None, scale=None, t
             ns = max(1.0, round(float(scales[n - 1] or 2.0) * 0.75, 2))
             dst = os.path.join(workdir, "prep-%03d-r.png" % n)
             try:
-                prep_image(inputs[n - 1], dst, scale=ns, thicken=thicken)
+                prep_image(inputs[n - 1], dst, scale=ns, thicken=thicken, prep=prep)
             except Exception:                        # noqa: BLE001
                 continue
             scales[n - 1] = ns
@@ -519,7 +556,7 @@ def run_audiveris(inputs, workdir, timeout=30 * 60, explicit=None, scale=None, t
         for p in band_failed:
             n = p["page"]
             try:
-                bands = plan_page_bands(inputs[n - 1], workdir, n)
+                bands = plan_page_bands(inputs[n - 1], workdir, n, prep=prep)
             except Exception as e:                       # noqa: BLE001
                 bands = []
                 p["bandError"] = str(e)[:160]
@@ -560,6 +597,7 @@ def run_audiveris(inputs, workdir, timeout=30 * 60, explicit=None, scale=None, t
         "mxl": next((p["mxl"] for p in pages if p["ok"]), None),
         "pageCount": len(prepped),
         "ocrLangs": ocr_langs,
+        "prepInfo": prep_infos,
         "exit": code,
     }
     if not res["ok"]:
@@ -1492,6 +1530,8 @@ def main(argv=None):
                     help="预处理放大倍数：auto（按实测谱线间距推）| 1 | 2 | 3 | 4")
     ap.add_argument("--thicken", default="off",
                     help="二值化后 3×3 加粗：on | off（默认 off —— 加粗会让密集总谱整页判 invalid）")
+    ap.add_argument("--prep", default="auto",
+                    help="共用影像预处理层（M3-3）：off | auto（像扫描件/照片才上）| scan（强制）")
     ap.add_argument("--quantize", default="off", help="量化网格：off | 1/4 | 1/8 | 1/16 | 1/32")
     ap.add_argument("--min-note-ms", type=float, default=0.0, help="丢掉短于该时长的音符（毫秒，0=不过滤）")
     ap.add_argument("--dedupe", default="on", help="同一个符头被识别两次时去重：on | off")
@@ -1517,7 +1557,8 @@ def main(argv=None):
     except (TypeError, ValueError):
         cl_tempo = 120.0
     extra = ["--beats", str(args.beats), "--beat-type", str(args.beat_type),
-             "--tempo", str(cl_tempo), "--mode", str(args.mode)]
+             "--tempo", str(cl_tempo), "--mode", str(args.mode),
+             "--prep", prep_arg(args.prep)]
 
     wanted = str(args.backend).lower()
     have_av = find_audiveris(explicit=(args.audiveris or None)) if wanted in ("auto", "audiveris") else None
@@ -1541,7 +1582,8 @@ def main(argv=None):
             # 两个栅格引擎在后处理上完全同路：都是「每页一份 MusicXML → mxl_to_parsed → merge_pages」
             if backend == "audiveris":
                 raster = run_audiveris(args.inputs, workdir, explicit=(args.audiveris or None),
-                                       scale=_scale_arg(args.upscale), thicken=_bool_arg(args.thicken, False))
+                                       scale=_scale_arg(args.upscale), thicken=_bool_arg(args.thicken, False),
+                                       prep=prep_arg(args.prep))
             else:
                 raster = run_homr(args.inputs, workdir, explicit=(args.homr or None))
             page_list = raster.get("pages") or []
@@ -1634,6 +1676,8 @@ def main(argv=None):
                     "timeSig": mg.get("timeSig") or "4/4",
                     "quantize": str(args.quantize),
                     "thicken": _bool_arg(args.thicken, False),
+                    "prep": prep_arg(args.prep),
+                    "prepInfo": raster.get("prepInfo") or [],
                 }
             else:
                 result = {"ok": False, "backend": backend,

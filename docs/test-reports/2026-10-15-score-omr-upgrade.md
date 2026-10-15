@@ -12,7 +12,8 @@
 - [x] 音符 **1713**（第 1 轮 1693，原始识别 1813，去重掉 100）
 - [x] 拍号从写死的 **4/4 变成推断出的 6/8**（与原谱一致），1510 个音符重排到统一小节网格
 - [x] 耗时 **187 s**（第 1 轮 228 s）
-- [ ] 未做：结果自检（M2-4）、homr（M3-1）、影像预处理（M3-3）
+- [x] 结果自检（M2-4）、homr（M3-1）、影像预处理（M3-3）—— 均已上线，见 §6–§8
+- [ ] 未做：M2-4 的「一键重试该页」、M3-2 超分辨率预处理
 
 ## 1. 六页逐页结果
 
@@ -155,3 +156,62 @@ Audiveris 不导出 <sound tempo>，<words> 也是 0（实测第 1 页 MXL：sou
 - 空态从四条文字改成**三张可点的谱面类型预设卡**（点了就把模型与参数设好）+ 三步提示；
 - 卡片底色在壁纸下从 78% 提到 92%（玻璃感保留、压亮部不再发花）；
 - 结果面板新增每页「N 小节」与速度来源标注。
+
+---
+
+## 8. 第 5 轮：M3-3 共用影像预处理层（去倾斜 + Sauvola + 去噪点）
+
+跑的是**安装版里的引擎**（`E:\Midi\FuFumidi\resources\app.asar.unpacked\engine\`，部署后 sha256 与源码逐字节一致：
+engine_omr.py `F837FEF32A3A…` / engine_omr_backends.py `D3E2A7A1F093…`）。
+被测算例：把用户的真页（`Desktop\gang\1.png` 2977×4208 钢琴谱、`Desktop\test\1.png` 总谱）
+**人工劣化**成"手机拍照"：旋转 +3°、左亮右暗渐变（×0.45）、σ=6 高斯噪声。
+劣化脚本与全部原始输出留在 `E:\Midi\_attic\omrfix\probe_prep2.py` / `probe_prep_e2e.py` / `prep2\*.json`。
+
+### 8.1 各原语单独实测（合成页，可复现）
+
+| 项 | 输入 | 结果 |
+|---|---|---|
+| 去倾斜 | 真页旋转 +3.0° | 估出 **−3.00°**（符号是"要转回去的角度"，与 PIL 相反），校正后残差 ≤0.4°；正着的页 **0.0° 且不重采样** |
+| Sauvola 抗阴影 | 左亮右暗的合成谱 | 亮半边墨占比 0.0338 / 暗半边 0.0463；**对照组全局阈值把暗半边判成 1.0000**（整片黑） |
+| 去噪点 | 注入 300 个 2×2 灰点 | 去掉 **300 个块**；干净图上 removed=0（不动笔画） |
+| 干净谱不劣化 | 真页 `prep=off` vs `prep=auto` | **逐像素一致**（自动判为 clean）；`scan` 强制档墨占比 0.0734 → 0.0739，去 20 个灰点 |
+| 判据 | 合成页 | 干净页 → false；带阴影页 → true（uneven-background）；给定 3° → true（skew） |
+
+### 8.2 端到端 A/B（同一张劣化页，双引擎）
+
+| 引擎 | `prep=off` | `prep=auto` |
+|---|---|---|
+| 内置经典 | **失败**：0 谱表 → 「没有识别到音符。可能是扫描质量过低…」（0.8 s） | **ok**：**315 音符 / 14 谱表 / 20 小节**（12.2 s），prepInfo：scan / skew −3.0 / 去噪点 8496 块 |
+| Audiveris 5.11 | **失败**：`Sheet prep-001 flagged as invalid` + `StepException: Sheet ignored`（3.5 s） | **ok**：**370 音符**（后处理保留 359）/ 2 轨（17.0 s），prepInfo：scan / skew −3.0 |
+
+**安装版经界面同一条桥（`window.fuBridge.scoreToMidi`）复核**：
+`prep='off'` → `{ok:false, error:"没有识别到音符…"}`；
+`prep='auto'` → `{ok:true, backend:"audiveris", notes:370, tracks:2, prep:"auto", prepInfo:[{prep:"scan",skew:-3,despeckled:8496}], bytes:3692}`。
+
+### 8.3 顺手修掉的两个真 bug（本轮 A/B 撞出来的）
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | **找不到谱表时引擎抛栈**：用户看到「引擎没有返回结果（退出码 1）」，而不是"没识别到音符" | `pick_meter` 在 `scored` 为空时返回 `opts.beats`（此时是字符串 `"auto"`），主流程 `float("auto")` → ValueError | `pick_meter` 无候选时返回 4；主流程再加一道 `isinstance` 兜底 |
+| 2 | `prep=off` 在报告里被写成 `"clean"`，与 `auto` 判定结果无法区分 | `prep_image` 的返回值只分 scan/clean | 三态如实回报 off / clean / scan |
+
+### 8.4 界面（安装版截图核对）
+
+- 「识别参数」新增 **影像预处理（关 / 自动 / 强制）**，概览条显示「影像预处理 自动」；三档都真接到 `--prep`。
+- 空态的**三张谱面类型预设卡加上了看得见的方框**（1.5px `--border-strong` 实边 + 纯白底 + 浅投影）：
+  之前用发丝线压在这页 92% 白玻璃上等于没有框，用户看不出这里有三个可选项（原话：「要有方框框起来方便用户看到有这三个选项」）。
+- 右栏重复的「谱面类型」整块删除（用户：「这两处功能重复了，保留这个」）——预设只留空态那一组，
+  实测 DOM 里 `.sc-scene` 为 0、`.sc-preset` 为 3，右栏只剩「识别模型 / 识别参数」。
+- 「扫描件 · 手机拍照」预设描述与参数改为「歪的 / 有阴影 / 有灰点：先摆正再二值化」+ `prep:auto`、**去掉"加粗"**
+  （加粗会把密集总谱整页判无效，KI-7 ①）。
+
+### 8.5 门禁（本轮）
+
+| 门禁 | 结果 |
+|---|---|
+| `npm run typecheck` | 0 |
+| `npm run build:ui` | 0 |
+| `npm run test:ui` | **217 / 217** |
+| `npm run audit` | 0 个死选项（新控件已被主进程读取） |
+| engine pytest | 新增 `tests/test_omr_prep.py` **13 项全过**（连 `test_omr_backends.py` 共 43 项，0 失败）；全套仅剩 11 项**既有**失败（diffsinger_cli 1 + openutau phonemizer 10），与上一轮完全一致 |
+| 部署 | `deploy-installed.cjs` 冒烟通过（首屏 370 字符 / fuBridge object / 0 未捕获异常） |
