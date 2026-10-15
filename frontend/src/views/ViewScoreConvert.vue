@@ -91,7 +91,13 @@ async function loadOcrLangs() {
     ocrLangs.value = ((r && r.installed) || []).map((x: any) => String(x.code));
   } catch (e) { ocrLangs.value = []; }
 }
-function openOcrResources() { app.setView('resources'); }
+/** 跳到资源中心的**资源管理**页签 —— 识谱引擎 / OCR 语言包 / 超分辨率组件都在那里。
+ *  ★ 不能只 setView('resources')：那样同步出来的 hash 是 #/resources（不带 tab），
+ *    ViewResources 会默认落在「模型管理」，用户在那儿根本看不到识谱引擎（实测反馈）。 */
+function openOcrResources() {
+  app.setView('resources');
+  app.syncHash('resources');
+}
 
 /** 识别模型 = 后端（Audiveris / 内置）+ 内置后端的模式。
  *  图片与 PDF 才有模型可选；MusicXML / MIDI 是直通或精确解析，不经过识谱。 */

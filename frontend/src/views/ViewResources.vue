@@ -615,6 +615,22 @@ onBeforeUnmount(() => {
     <Transition name="group-tab" mode="out-in">
       <div :key="rcTab" class="rc-tab-content">
       <template v-if="rcTab === 'model'">
+      <!-- ★ 用户实测反馈：「变谱用到的模型和 OCR 语言包在资源中心找不到」。
+           它们确实不在这一页 —— 识谱引擎（Audiveris / homr）、OCR 语言包、超分辨率组件
+           都归「资源管理」页签（属于环境组件，不是可下载的模型权重）。这里给一条明确的指路。 -->
+      <div class="card res-sec">
+        <div class="res-sec-head"><Icon name="score" :size="15" /> {{ t('变谱（识谱）要用的组件不在这里') }}</div>
+        <div class="field-row">
+          <div>
+            <div class="fr-label">{{ t('识谱引擎 / OCR 语言包 / 超分辨率') }}</div>
+            <div class="fr-hint">{{ t('这三样在「资源管理」页签里（它们是要装的组件，不是模型权重）：Audiveris 增强引擎（约 158 MB）、homr AI 识谱（约 300 MB）、OCR 语言包（英语约 23 MB）、超分辨率（低清扫描，约 40 MB）。不装也能用内置识谱，只是精度低一档、读不出乐器名与速度记号。') }}</div>
+          </div>
+          <div class="fr-ctl">
+            <button class="btn sm primary" @click="selectRc('resources')">{{ t('去资源管理') }}</button>
+          </div>
+        </div>
+      </div>
+
       <ViewModels />
 
       <div class="card res-sec" data-guide="vm-download-settings">
