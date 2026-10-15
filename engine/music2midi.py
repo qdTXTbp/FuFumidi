@@ -153,6 +153,9 @@ def _resolve_params(args, mode):
         if args.tempo is not None: p["midi_tempo"] = args.tempo
     # 智能预处理 / 后处理开关（各模式通用，Electron 端传入）
     if getattr(args, "denoise", False): p["denoise"] = True
+    # 降噪档位（off/light/strong）——只在 worker 的 Namespace 里加是不够的，必须在这里进 params
+    # （2026-10-15：这张"三跳"表漏一个键，界面设了也到不了引擎；见 scripts/audit-param-contract.cjs）
+    if getattr(args, "denoise_mode", None): p["denoise_mode"] = str(args.denoise_mode)
     if getattr(args, "normalize", False): p["normalize"] = True
     if getattr(args, "auto_bpm", False): p["auto_bpm"] = True
     if getattr(args, "no_merge", False): p["merge_overlap"] = False
@@ -445,6 +448,8 @@ def build_parser():
     g.add_argument("--frame-threshold", type=float, default=None,
                    help="音符判定阈值 0~1，越大越干净")
     g.add_argument("--denoise", action="store_true", help="智能预处理·谱减法降噪")
+    g.add_argument("--denoise-mode", choices=["off", "light", "strong"], default=None,
+                   help="降噪档位：off=关 / light=改进谱减法 / strong=去噪模型（见 engine/audio_chain.py）")
     g.add_argument("--normalize", action="store_true", help="智能预处理·响度平衡")
     g.add_argument("--auto-bpm", action="store_true", help="自动检测 BPM 作为导出速度")
     g.add_argument("--no-merge", action="store_true", help="关闭重叠音符合并")
@@ -550,6 +555,7 @@ def cmd_worker():
                 min_note_ms=req.get('min_note_ms'),
                 merge_gap_ms=req.get('merge_gap_ms'),
                 denoise=bool(req.get('denoise')),
+        denoise_mode=req.get('denoise_mode'),
                 normalize=bool(req.get('normalize')),
                 auto_bpm=bool(req.get('auto_bpm')),
                 no_merge=bool(req.get('no_merge')),

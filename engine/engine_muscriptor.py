@@ -10,6 +10,8 @@ MuScriptor 通用多乐器转录引擎（Kyutai + Mirelo）
 import os
 import time
 
+import pause_gate as _pause_gate_mod
+
 
 def _find_local_model(size):
     """从本地模型目录查找已下载的 MuScriptor 权重（资源中心下载后合并得到）。
@@ -38,18 +40,35 @@ def available():
 
 
 def _require_package():
-    """包缺失时的明确指引：区分「缺 Python 包」与「缺模型权重」。"""
+    """包缺失时的明确指引：区分「缺 Python 包」与「缺模型权重」。
+
+    ★ 2026-10-14：把**底层 ImportError 原文 + 解释器/PYTHONPATH** 一起报出来 ——
+      之前只写「import muscriptor 失败」，真的遇到时无法区分「没装包」「torch 没挂上」
+      「PYTHONPATH 指向了不匹配的 GPU 包」，只能靠猜。
+    """
     try:
         import muscriptor  # noqa: F401
         return True
-    except Exception:
+    except Exception as _e:
+        import traceback as _tb
+        _detail = "%s: %s" % (type(_e).__name__, _e)
+        try:
+            _detail += "\n" + "".join(_tb.format_exc().splitlines(True)[-4:])
+        except Exception:
+            pass
+        try:
+            import sys as _sys, os as _os
+            _detail += "\n解释器：%s\nPYTHONPATH：%s" % (_sys.executable, _os.environ.get("PYTHONPATH", "(未设置)"))
+        except Exception:
+            pass
         raise RuntimeError(
             "未安装 muscriptor Python 运行时包（应用环境的 Python 里 `import muscriptor` 失败）。"
             "模型权重虽已下载，但仍需安装该包：在资源中心点「安装 MuScriptor 运行时」即可。\n"
             "★ 不要直接 `pip install muscriptor` —— PyPI 上的 0.3.0 有长音频缺陷："
             "块边界的 tie 逻辑会让模型漏收尾的音符被无限延续，实测 100 分钟录播会产出"
             "4320 秒（全曲 72%）的超长音符。修复版托管在 "
-            "github.com/monologue82/Models 的 muscriptor-runtime/（0.3.0+fufumidi.1）。")
+            "github.com/monologue82/Models 的 muscriptor-runtime/（0.3.0+fufumidi.1）。\n"
+            "—— 底层错误 ——\n" + _detail)
 
 
 def available_local_sizes():
@@ -92,6 +111,39 @@ def _ensure_config(weights_path, size):
             _json.dump(cfg, f)
     except Exception:
         pass  # 写失败不阻断转录（muscriptor 会走其他回退，代价是可能架构不匹配）
+
+
+def _pause_gate(stream, pause_file, log_cb=None):
+    """MuScriptor 的暂停闸门：每吐出一项（5 秒 token 块）之前先过闸门。
+
+    闸门本体在 pause_gate 模块（三类引擎共用，那里有一张"暂停点在哪"的表）。
+    为什么挂在 `_generate_token_stream` 上：它是**惰性**生成器，每个 5 秒块的推理是在下游
+    "要下一项"时才发生的 —— 所以卡在这里 = 卡在块与块之间，模型状态全在内存里，
+    继续时**从原处接着跑**（不重跑、不丢已算的部分）。
+    """
+    return _pause_gate_mod.gate_stream(stream, _pause_gate_mod.PauseGate(pause_file, log_cb))
+
+
+def _install_pause_wrapper(model):
+    """把闸门包在 model._generate_token_stream 上（只包一次，不叠加）。
+
+    ★ 包装器**不许**捕获 log_cb：worker 常驻、model 是缓存的，包装器只装一次，
+    而 log_cb 每次都不同 —— 捕获它会让第二个文件起的暂停日志打到第一个文件的回调上。
+    所以包装器只调 _pause_gate_mod.wait()，闸门由每次转录开头的 install(log_cb) 重绑。
+    """
+    if getattr(model, '_fufumidi_pause_wrapped', False):
+        return
+    _orig = getattr(model, '_generate_token_stream', None)
+    if _orig is None:
+        # 不走 token 流的模型（测试替身 / 别的引擎）没有这个钩子 —— 直接跳过，
+        # 别让"暂停"这个可选功能把正常转录路径搞崩（实测踩过：8 个用例因此 AttributeError）
+        return
+
+    def _gated(*a, **kw):
+        return _pause_gate_mod.gate_stream(_orig(*a, **kw))
+
+    model._generate_token_stream = _gated
+    model._fufumidi_pause_wrapped = True
 
 
 # ★ 证据的"这颗音在音频里根本不存在"哨兵。
@@ -296,6 +348,7 @@ def _make_pitch_evidence(wav_path, log_cb=None, stats=None):
 
 def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                           num_threads=None, **kwargs):
+    _pause_gate_mod.install(log_cb)   # 本次转录的暂停闸门（见 pause_gate 模块）
     _require_package()  # 包缺失先给明确报错，再导入
     from muscriptor import TranscriptionModel
 
@@ -393,6 +446,15 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     # 采样率 16000 与 muscriptor 内部 _SAMPLE_RATE 一致，免去二次重采样。
     import audio_io
     wav_tmp = audio_io.decode_to_wav(audio_path, 16000)
+    # ★ 转录前音频链（2026-10-15 方案 A/B）：高通 → 降噪 → 电平统一。
+    #   ★★ 必须放在下面「建证据」之前：证据函数读的就是这个 wav，
+    #      两者必须是同一份音频，否则证据判据会按没降噪的音频去裁降噪后的音符。
+    try:
+        import audio_chain as _ac
+        _ac.process_wav_inplace(wav_tmp, 16000, params, log_cb,
+                                strong_runner=_ac.make_strong_runner(log_cb))
+    except Exception as _e:
+        _log(log_cb, "[预处理] 音频链失败，按原始音频继续：%s" % _e)
     # ★ 音频证据式收尾：让模型不再被迫延续"其实已经没声"的音（见 _make_pitch_evidence）。
     #   ★ 回放（--replay-tokens）也注入：wav 在这一步已经解码出来了（上面 audio_io.decode_to_wav），
     #     而回放台的意义就是"改了解码器逻辑后用 1 分钟复现"，把证据排除在外就复现不到改动。
@@ -848,6 +910,9 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
 
                         model._generate_token_stream = _gts_teed
                         model._fufumidi_timing_teed = True
+                    # ★ 暂停闸门（用户 2026-10-14 要求）：同样包在原始 token 流上 ——
+                    #   它是惰性的，所以"卡住"就等于卡在 5 秒块与块之间，继续时从原处接着跑。
+                    _install_pause_wrapper(model)
                     if _seg_plan is not None:
                         events = _segmented_events(_seg_plan, _seg_pcm, _seg_sr)
                     else:

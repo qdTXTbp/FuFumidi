@@ -45,6 +45,37 @@ test('缺少音频 / 未知模型 / 缺配置 都给出可读错误', () => {
   assert.match(SepCommon.buildSeparateRequest({ audio: 'a.wav', sep_model: 'x' }, noCfg).error, /配置文件/);
 });
 
+test('默认模型只挑「真能跑」的：没有 .yaml 的模型不许被选成默认', () => {
+  const resolve = (id) => (id === 'no_cfg'
+    ? { exists: true, modelPath: 'm', configPath: null, arch: 'Mel-Band Roformer' }
+    : { exists: true, modelPath: 'm', configPath: 'c.yaml', arch: 'Mel-Band Roformer' });
+  const reg = { no_cfg: { splitCat: 'vocal' }, melband_roformer_instvox_duality_v2: { splitCat: 'vocal' } };
+  assert.equal(SepCommon.pickDefaultSepModel(reg, resolve), 'melband_roformer_instvox_duality_v2');
+  // 全都跑不动 → 空串（上层给「还没安装分离模型」的提示，而不是选中一个点了就炸的）
+  assert.equal(SepCommon.pickDefaultSepModel({ no_cfg: { splitCat: 'vocal' } }, resolve), '');
+  // VR 家族不需要配置 → 仍然可用
+  assert.equal(SepCommon.pickDefaultSepModel({ vr1: { splitCat: 'vr' } },
+    () => ({ exists: true, modelPath: 'm', configPath: null, arch: 'UVR-VR' })), 'vr1');
+  // 没传解析器时保持旧行为（老调用点）
+  assert.equal(SepCommon.pickDefaultSepModel({ no_cfg: { splitCat: 'vocal' } }), 'no_cfg');
+});
+
+test('UVR-VR（去噪）模型不需要 yaml 配置也能跑 —— pymss 从权重里读结构与音轨名', () => {
+  assert.equal(SepCommon.archNeedsConfig('UVR-VR'), false);
+  assert.equal(SepCommon.archNeedsConfig('vr'), false);
+  assert.equal(SepCommon.archNeedsConfig('Mel-Band Roformer'), true);
+  assert.equal(SepCommon.archNeedsConfig('BS-Roformer'), true);
+  const noCfgVr = { resolveSeparateModel: () => ({ exists: true, modelPath: 'U.pth', configPath: null, arch: 'UVR-VR' }), readSettings: () => ({}), Paths, fs };
+  const r = SepCommon.buildSeparateRequest({ audio: 'E:/song.flac', sep_model: 'uvr_denoise', out_dir: TMP }, noCfgVr);
+  assert.equal(r.ok, true);
+  assert.equal(r.args.includes('--config'), false);            // 不能塞一个 null 进去
+  assert.equal(r.args[r.args.indexOf('--arch') + 1], 'UVR-VR');
+  // 有 config 的架构照旧传（顺序不变，翻唱工作流与面板共用同一份）
+  const withCfg = { resolveSeparateModel: () => ({ exists: true, modelPath: 'm', configPath: 'c.yaml', arch: 'Mel-Band Roformer' }), readSettings: () => ({}), Paths, fs };
+  const r2 = SepCommon.buildSeparateRequest({ audio: 'a.wav', sep_model: 'x', out_dir: TMP }, withCfg);
+  assert.equal(r2.args[r2.args.indexOf('--config') + 1], 'c.yaml');
+});
+
 test('输出目录优先级：调用方 > 设置 > 与输入同目录', () => {
   const resolveSeparateModel = () => ({ exists: true, modelPath: 'm', configPath: 'c', arch: 'A' });
   const r1 = SepCommon.buildSeparateRequest({ audio: 'a.wav', sep_model: 'x', out_dir: TMP },

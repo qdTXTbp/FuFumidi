@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   // 转录引擎
   convert: (cfg) => ipcRenderer.invoke('engine:convert', cfg),
   cancel: (id) => ipcRenderer.invoke('engine:cancel', id),
+  setTranscribePause: (on) => ipcRenderer.invoke('engine:set-pause', !!on),
   onEngineLog: (cb) => {
     const w = (_e, p) => cb(p);
     ipcRenderer.on('engine:log', w);
@@ -123,6 +124,19 @@ contextBridge.exposeInMainWorld('fuBridge', {
     install: () => ipcRenderer.invoke('omr:install'),
     remove: () => ipcRenderer.invoke('omr:remove'),
     openDir: () => ipcRenderer.invoke('omr:openDir'),
+    // OCR 语言包（Tesseract traineddata）：没有它 Audiveris 的 TEXTS 步整段跳过，
+    // 速度记号 / 乐器名 / 和弦名都读不出来。
+    langStatus: () => ipcRenderer.invoke('omr:langStatus'),
+    langInstall: (codes) => ipcRenderer.invoke('omr:langInstall', codes),
+    langRemove: (code) => ipcRenderer.invoke('omr:langRemove', code),
+    // homr（AI 识谱）：用户自行安装的第二个识别引擎，装在数据根下的**独立 venv** 里
+    // （homr 要 numpy>=2.4，应用自带的运行时是 1.26 —— 不隔离就会把引擎拆了）。
+    homrStatus: () => ipcRenderer.invoke('omr:homrStatus'),
+    homrInstall: () => ipcRenderer.invoke('omr:homrInstall'),
+    homrRemove: () => ipcRenderer.invoke('omr:homrRemove'),
+    // 音频处理模型的配置自愈：配置是**下载模型时**从上游取的（不内置），老安装可用它补一次
+    modelEnsureConfig: (id) => ipcRenderer.invoke('model:ensureConfig', id),
+    modelCfgDiag: () => ipcRenderer.invoke('model:cfgDiag'),
     onProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('omr:progress', w); return () => ipcRenderer.removeListener('omr:progress', w); },
   },
   modelList: () => ipcRenderer.invoke('model:list'),

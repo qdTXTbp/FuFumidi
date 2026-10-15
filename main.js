@@ -126,8 +126,10 @@ if (!gotLock) {
     registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app, fs, spawnEngine, dialog });
     registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, readSettings });
     registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, spawnEngine });
-    registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net });
-    registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, cancelEngineJob: (...a) => cancelJob(...a), pluginHost, readSettings, resolveSeparateModel: (id) => (ModelsService ? ModelsService.resolveSeparateModel(id) : null) });
+    registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bundledPython });
+    registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, cancelEngineJob: (...a) => cancelJob(...a), pluginHost, readSettings, resolveSeparateModel: (id) => (ModelsService ? ModelsService.resolveSeparateModel(id) : null),
+    // 分离前自愈：MSST 模型的配置是**下载时**从上游备齐的，老安装/半装状态在这里补一次
+    ensureSepConfig: (id) => (ModelsService && ModelsService.ensureSepConfig ? ModelsService.ensureSepConfig(id) : null) });
     registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, parsePyJson });
     registerPresetsIpc({ ipcMain, runEngineInline, parsePyJson, pyLit });
     // 用户元数据（名字/作者/来源/标签/分类/排序/顶置）：资源中心四页 + 音色工坊共用一张表
@@ -142,7 +144,7 @@ if (!gotLock) {
     try { linkBundledModels(); } catch (_) {}
     try { healModelsDir(); } catch (_) {} // 清除断链（安装器替换 resources/models 后旧 junction 目标消失）
     migrateUserModels();
-    ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings });
+    ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings, resolvePython });
     DbService = createDbService({ app, path, fs });
     DbService.registerDbIpc({ ipcMain });
     // 可选 Rust 核心：先建好服务，供曲库文件体检/重复检测等热点路径优先使用

@@ -170,9 +170,28 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
       for (const p of feed) args.push('--in', p);
       args.push('--out', out, '--overlay', overlayDir);
       if (kind === 'raster') {
-        args.push('--beats', String(Math.max(1, Math.min(16, Number(opts.beats) || 4))));
+        // ★ 拍号 / 速度支持 'auto'：谱面自己写的优先，用户填了才覆盖。
+        //   以前这里无条件取 Number(opts.beats) || 4，引擎侧又只把它用在经典后端，
+        //   于是界面上「自动」这个选项无从表达、Audiveris 路径上更是完全没用。
+        const beatsRaw = String(opts.beats === undefined || opts.beats === null ? 'auto' : opts.beats);
+        args.push('--beats', beatsRaw === 'auto' ? 'auto'
+          : String(Math.max(1, Math.min(16, parseInt(beatsRaw, 10) || 4))));
         args.push('--beat-type', String([2, 4, 8, 16].includes(Number(opts.beatType)) ? Number(opts.beatType) : 4));
-        args.push('--tempo', String(Math.max(20, Math.min(300, Number(opts.tempo) || 120))));
+        const tempoRaw = String(opts.tempo === undefined || opts.tempo === null ? 'auto' : opts.tempo);
+        const tempoNum = Number(tempoRaw);
+        args.push('--tempo', (tempoRaw === 'auto' || !isFinite(tempoNum) || tempoNum <= 0)
+          ? 'auto' : String(Math.max(20, Math.min(300, tempoNum))));
+        // 识谱预处理（放大倍数 / 加粗）与后处理（量化 / 最短音符 / 去重）
+        const up = String(opts.upscale === undefined || opts.upscale === null ? 'auto' : opts.upscale);
+        args.push('--upscale', /^[0-9]+(\.[0-9]+)?$/.test(up) ? up : 'auto');
+        args.push('--thicken', opts.thicken ? 'on' : 'off');
+        const q = String(opts.quantize || 'off');
+        args.push('--quantize', ['off', '1/4', '1/8', '1/16', '1/32'].includes(q) ? q : 'off');
+        const mn = Number(opts.minNoteMs) || 0;
+        args.push('--min-note-ms', String(mn > 0 && mn <= 2000 ? mn : 0));
+        args.push('--dedupe', opts.dedupe === false ? 'off' : 'on');
+        // 移调乐器：默认写实际音高（Horn in F 差纯五度、Clarinet/Trumpet in Bb 差大二度）
+        args.push('--sounding', opts.sounding === false ? 'off' : 'on');
       }
       // 栅格一律走多后端调度层：装着 Audiveris 就用它（质量高一个量级），没装自动降级到自带经典识谱
       const script = kind === 'raster' ? 'engine_omr_backends.py' : 'engine_score2midi.py';
@@ -181,6 +200,9 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
         args.push('--mode', String(opts.mode || 'auto'));
         const avExe = path.join(Paths.dataRoot(), 'omr', 'audiveris', 'Audiveris', 'Audiveris.exe');
         if (fs.existsSync(avExe)) args.push('--audiveris', avExe);
+        // homr（用户自行安装，装在数据根下的独立 venv）：扫描件 / 拍照路径
+        const homrExe = path.join(Paths.dataRoot(), 'omr', 'homr', 'venv', 'Scripts', 'homr.exe');
+        if (fs.existsSync(homrExe)) args.push('--homr', homrExe);
       }
       const res = await new Promise((done) => {
         let settled = false;

@@ -143,14 +143,14 @@ def _builtin_presets():
         "beat_grid": True,            # 节拍网格检测：装了 beat_this 就开
         "tempo": 0,                   # 0 = 引擎默认 120（自动 BPM 优先）
         "perf": "quality",
-        "denoise": False, "normalize": False, "auto_bpm": False,
+        "denoise_mode": "off", "auto_bpm": False,
     }
     piano = {
         "onset_threshold": 0.3, "frame_threshold": 0.1,
         "min_note_ms": 60, "merge_gap_ms": 30,
         "include_pedal": True,        # 踏板：钢琴转录的必需信息，绝不默认丢
         "perf": "quality",
-        "denoise": False, "normalize": False, "auto_bpm": False,
+        "denoise_mode": "off", "auto_bpm": False,
     }
     sep = {k: v for k, v in s.items() if k in
            ("onset_threshold", "frame_threshold", "minimum_note_length", "midi_tempo")}
@@ -181,7 +181,7 @@ def _builtin_presets():
                 "include_drums": True,     # 鼓组轨开
                 "stem_format": "wav",      # 分轨格式 wav（无损）
                 "perf": "quality",
-                "denoise": False, "normalize": False, "auto_bpm": False,
+                "denoise_mode": "off", "auto_bpm": False,
             },
         },
     }
