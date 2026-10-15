@@ -136,7 +136,6 @@ contextBridge.exposeInMainWorld('fuBridge', {
     homrRemove: () => ipcRenderer.invoke('omr:homrRemove'),
     // 音频处理模型的配置自愈：配置是**下载模型时**从上游取的（不内置），老安装可用它补一次
     modelEnsureConfig: (id) => ipcRenderer.invoke('model:ensureConfig', id),
-    modelCfgDiag: () => ipcRenderer.invoke('model:cfgDiag'),
     onProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('omr:progress', w); return () => ipcRenderer.removeListener('omr:progress', w); },
   },
   modelList: () => ipcRenderer.invoke('model:list'),

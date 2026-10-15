@@ -1364,45 +1364,6 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     return { modelPath, configPath, arch: m.arch, exists: true };
   }
 
-  // 临时诊断：Electron 主进程里 net.fetch / 全局 fetch 对 GitHub API 的可用性
-  ipcMain.handle('model:cfgDiag', async () => {
-    const out = {};
-    const url = 'https://api.github.com/repos/ZFTurbo/Music-Source-Separation-Training/contents/configs';
-    try {
-      const r = await net.fetch(url, { headers: { 'user-agent': 'FuFumidi', accept: 'application/vnd.github+json' } });
-      out.netStatus = r.status;
-      const j = await r.json();
-      out.netList = Array.isArray(j) ? j.length : -1;
-    } catch (e) { out.netErr = String((e && e.message) || e).slice(0, 200); }
-    try {
-      const r2 = await fetch(url, { headers: { 'user-agent': 'FuFumidi' } });
-      out.fetchStatus = r2.status;
-      const j2 = await r2.json();
-      out.fetchList = Array.isArray(j2) ? j2.length : -1;
-    } catch (e) { out.fetchErr = String((e && e.message) || e).slice(0, 200); }
-    try {
-      const list = await upstreamCfgList();
-      out.upstream = list.length;
-      const n = await fetchConfigsToCache(null);
-      out.cache = n;
-    } catch (e) { out.cacheErr = String((e && e.message) || e).slice(0, 200); }
-    try {
-      const one = 'https://cdn.jsdelivr.net/gh/ZFTurbo/Music-Source-Separation-Training@main/configs/config_apollo.yaml';
-      for (const he of [{}, { 'accept-encoding': 'identity' }]) {
-        const rr = await net.fetch(one, { headers: he });
-        const buf = Buffer.from(await rr.arrayBuffer());
-        const key = he['accept-encoding'] ? 'identity' : 'default';
-        out['probe_' + key] = { status: rr.status, len: rr.headers.get('content-length'), enc: rr.headers.get('content-encoding'), bytes: buf.length, head: buf.slice(0, 6).toString() };
-      }
-    } catch (e) { out.probeErr = String((e && e.message) || e).slice(0, 120); }
-    out.dir = cfgCacheDir();
-    try { out.dirFiles = listYml(cfgCacheDir()).length; } catch (e2) {}
-    out.fetchLast = _cfgFetchLast;
-    try { out.repairBig = await ensureSepConfig('big_beta5e'); } catch (e3) { out.repairErr = String(e3 && e3.message || e3).slice(0, 160); }
-    try { out.resolved = resolveSeparateModel('big_beta5e'); } catch (e4) { out.resolvedErr = String(e4 && e4.message || e4).slice(0, 160); }
-    try { out.repairByName = await ensureSepConfig('BS-Roformer_LargeV1.ckpt'); } catch (e5) {}
-    return out;
-  });
 
   // 分离前的自愈入口（task-queue 在构造请求前 await 一次）
   ipcMain.handle('model:ensureConfig', async (_e, id) => {

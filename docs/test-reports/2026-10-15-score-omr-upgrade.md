@@ -76,3 +76,36 @@ $env:FUFUMIDI_DATA_ROOT='E:\Midi\FuFumidi\FuFumidiData'
 | 引擎 `pytest engine/tests` | 新增 21 条用例全绿；**既有的 11 条失败**（diffsinger_cli + openutau 音素化）与本次改动无关，数量未变 |
 | `deploy-installed.cjs` | EXIT 0，冒烟：首屏 370 字符 / fuBridge 就绪 / 未捕获异常 0 |
 | 部署一致性 | `engine_omr_backends.py` / `score_instruments.py` / `engine_score2midi.py` 与源码 **sha256 相同** |
+
+## 6. 第 3 轮追加：homr（AI 识谱）与音频模型配置
+
+### 6.1 homr vs Audiveris（安装版，同一台机、同一套参数）
+
+| 用例 | homr | Audiveris |
+|---|---|---|
+| 钢琴 3 页（gang/） | 1095 音符 / 2 轨 / **37 s** | 1128 音符 / 2 轨 / ~2–3 min |
+| 总谱第 6 页（test/6.png） | 75 音符 / **1 轨** / 8 s | 110 音符 / **11 轨** |
+
+- **钢琴谱：打平**（音符 −3%，左右手都分开），**快约 4 倍** —— 扫描件 / 拍照这档它值得存在。
+- **总谱：不适用** —— homr 把 12 行谱表并成一条轨，声部信息全丢。所以它**不进 auto 的默认路径**，
+  只有当 Audiveris 没装时才兜底（对照片仍强于内置经典识谱）。
+- 安装方式：资源中心「用户自行安装」，装在 <数据根>/omr/homr/venv（**独立 venv**：homr 要
+  numpy≥2.4，应用运行时是 1.26）；pip 依赖约 200 MB + 权重 150 MB，**不随安装包分发**。
+- 权重通道实测：ghfast.top 30 KB/s（与 GitHub 直链被限速同源），gh-proxy.com 2.11 MB/s。
+
+### 6.2 音频处理模型的配置：下载时获取（不内置）
+
+按要求改成「下载模型时把配置也下载并配置好」，实测：
+
+| 项 | 结果 |
+|---|---|
+| 应用内置的 28 个 yaml | **已从工具里移除**（只留 index.json 元数据；解包后文件数 344 → 316） |
+| 上游 configs/ 整目录拉取 | **42/42 全部落地，0 失败**（<数据根>/models/_configs/） |
+| 模型目录里的 yaml 优先 | big_beta5e 走「现场生成」→ 拷进模型目录并解析成功 |
+| 分离前自愈 | engine:separate 在构造请求前 await 一次 ensureSepConfig |
+| 已知缺口 | BS-Roformer_LargeV1.ckpt：权重结构与标签不一致（带 mask_estimators），
+|  | 上游也没有它的 yaml（Sucial/MSST-WebUI 全仓 0 个 yaml）→ 界面如实显示「缺配置」；
+|  | 用户/我们可把一个 yaml 放进模型目录，解析会优先用它（不算内置）。 |
+
+复现：`node scripts/api-push.mjs` 之外，配置获取可用资源中心卡片或
+`ipc model:ensureConfig`（preload 暴露为 omrEngine.modelEnsureConfig）。

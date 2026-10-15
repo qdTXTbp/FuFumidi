@@ -76,9 +76,25 @@
 **必须走 FastDL**：模型权重（含 HuggingFace 整仓）、分卷仓库（MuScriptor / MSST 分离模型 / VR）、
 DiffSinger 声库与声码器、UTAU 声库归档、音色库 SF2/SF3、动态壁纸视频、GPU 增强组件、更新安装包。
 
-**唯一例外**：**元数据**（`manifest.json`、HF 的 `/api/models/.../tree`、Release API 的 JSON、缩略图）
-可以用 `net.fetch` 直接取，但必须：只读小响应、带超时、带渠道回退。
-凡是"写进用户磁盘的实体资源"，一律 FastDL。
+**例外一**：**元数据**（manifest.json、HF 的 /api/models/.../tree、Release API 的 JSON、缩略图）
+可以用 net.fetch 直接取，但必须：只读小响应、带超时、带渠道回退。
+
+**例外二（2026-10-15 加）：音频处理模型的配置文件（KB 级的 *.yaml）。**
+用户这轮的决定是「模型要做到下载时把配置文件也下载和配置好，而不是直接内置到工具里」，
+于是这些 yaml 改成模型下载完成时从上游 configs/ 取（main/models.js 的
+fetchConfigsToCache / ensureSepConfig，落在 <数据根>/models/_configs/）。
+它们**必须**用 net.fetch 直取，理由实测：
+
+| 文件 | FastDL 结果 | net.fetch 结果 |
+| --- | --- | --- |
+| config_drumsep.yaml (1555 B) | 「大小不符 1555/794」，轮换 8 轮全失败 | 一次拿到 1555 B |
+| config_apollo.yaml (561 B) | 「大小不符 561/334」 | 一次拿到 561 B |
+| 42 个配置整批 | 只落地 18 个 | 42 个全部落地、0 失败 |
+
+原因：FastDL 的「探测 + 断点续传 + 低速轮换」是为几十 MB~GB 的权重设计的，在 1~5 KB 的文件上
+会把 .part 的续传长度与 content-length 对错（同一个 URL 用 net.fetch 拿到的 content-length
+与字节数完全一致，且无 content-encoding）。
+**大文件（模型权重、分卷、安装包）仍然全部走 FastDL** —— 这里只是 KB 级配置模板这一类。
 
 ---
 

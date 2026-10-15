@@ -10,7 +10,7 @@
 
 | 条目 | 状态 | 实测结果 |
 |---|---|---|
-| **D1 引入 homr** | 已定：**用户自行安装**（资源中心入口） | 待 M3-1 实施 |
+| **D1 引入 homr** | ✅ **已上线**（2026-10-15 第 3 轮） | 引擎后端 + 资源中心「用户自行安装」（**独立 venv**：homr 要 numpy≥2.4，应用运行时是 1.26）+ 3 个 ONNX 权重按镜像下载。安装版实测对比见 M3-1：**钢琴谱与 Audiveris 打平且快约 4 倍；总谱不适用**（会把 12 行谱表并成 1 轨） |
 | **D2 补 OCR 语言** | ✅ **已上线** | 资源中心可装语言包（eng 22.4 MB，实测下载 27 s）；装上后**声部名从「声部 N」变成乐器名**：Flute 1,2 / Oboe 1,2 / Horn (F) 1,2 / Trumpet (Bb) 1,2 / Trombone 1,2,3 / Tuba / Timpani / Glockenspiel / Violin / Viola / ViolonCello / Double Bass；曲目信息也读出来了（Composed by Yang Lee (HOYO-MiX)） |
 | **D3 做分带识别** | ✅ **已上线**（见 M2-1） | 切分判据 + 切带流水线都做了；当前作为**失败页的兜底**接入 |
 | **M1-1 OCR 语言接线** | ✅ 已完成并验证 | 引擎侧给 TESSDATA_PREFIX + -constant …defaultSpecification；**必须用完整版 tessdata**（fast 版实测完全无效） |
@@ -139,7 +139,20 @@
 
 ### M3 · 多引擎与影像（每项 2~4 天，涉及下载体积与许可）
 
-- [ ] **M3-1 第三引擎：homr（AI）**（G6）
+- [x] **M3-1 第三引擎：homr（AI）**（G6）—— 2026-10-15 第 3 轮上线（**用户自行安装**）
+  - 实测对比（安装版，同一台机、同一套参数，--backend homr vs --backend audiveris）：
+
+    | 用例 | homr | Audiveris | 结论 |
+    |---|---|---|---|
+    | 钢琴 3 页（gang/） | **1095 音符 / 2 轨 / 37 s** | 1128 音符 / 2 轨 / ~2–3 min | **打平且快约 4 倍**（左右手都分开） |
+    | 总谱第 6 页（test/6.png） | 75 音符 / **1 轨** / 8 s | 110 音符 / **11 轨** | **不适用**：homr 把 12 行谱表并成一条轨，声部信息全丢 |
+
+  - 因此**不进 auto 的默认路径**（auto 仍是 Audiveris 优先）；只有**没装 Audiveris** 时才用 homr 兜底 ——
+    对「扫描件 / 拍照」这档它比内置经典识谱强，也不会把总谱那一档让出去。
+  - 体积 / 许可（原计划的顾虑，实测落实）：pip 依赖约 200 MB（onnxruntime 占大头）+ 权重 3 个包
+    共 **150 MB**（segnet 54.7 + encoder 50.4 + decoder 45.1），全部装在
+    <数据根>/omr/homr/venv，**不随安装包分发**；卸载 = 删目录。
+  - 权重通道实测：ghfast.top 只有 30 KB/s，gh-proxy.com 2.11 MB/s → 通道顺序按实测排。
   - 定位：**印刷谱/矢量 PDF 用 Audiveris，扫描件与拍照用 homr**（同行 SumisoraOMR 就是这么分的：`Auto 模式按文件类型选引擎`）。
   - 做法：在 `engine_omr_backends.py` 的后端位加一路（现在只有 classical / audiveris）；权重约 **290 MB**，首次使用自动下载，CPU/CUDA 两档；离线包与资源中心入口同 Audiveris。
   - 许可（D1）：代码与权重 AGPL-3.0，权重含 PrIMuS（CC BY-NC）→ **默认不打包进安装包**。
