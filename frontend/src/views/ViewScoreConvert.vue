@@ -34,6 +34,7 @@ const files = ref<string[]>([]);            // 本次转换吃进去的文件（
 // 识谱增强引擎（Audiveris）：没装就在卡片下方给一条「装了会好一个量级」的可操作提示
 const omrEngine = ref<any>(null);
 const homrEngine = ref<any>(null);
+const srEngine = ref<any>(null);              // 超分辨率组件（M3-2，低清扫描用）
 const omrBusy = ref(false);
 const omrText = ref('');
 let offOmr: null | (() => void) = null;
@@ -41,7 +42,26 @@ async function refreshOmr() {
   try { omrEngine.value = await bridge().omrEngine?.status(); } catch (e) { omrEngine.value = null; }
   // homr（AI 识谱）：用户自行安装的第二个引擎，模型卡上要如实标「装没装」
   try { homrEngine.value = await bridge().omrEngine?.homrStatus?.(); } catch (e) { homrEngine.value = null; }
+  // 超分辨率（M3-2）：同上，低清扫描才用得到
+  try { srEngine.value = await bridge().omrEngine?.srStatus?.(); } catch (e) { srEngine.value = null; }
 }
+
+/** ★ 变谱要用到的四样组件 —— 提示就放在**用它的这一页**（用户实测反馈：
+ *  「变谱用到的模型和 OCR 语言包」在资源中心找不到；它们确实不在资源中心默认打开的
+ *  「模型管理」页签里，而在「资源管理」页签）。这里列出状态，缺哪项一句话说清，并给直达按钮。 */
+const omrComponents = computed(() => {
+  const av = !!(omrEngine.value && omrEngine.value.installed);
+  const hm = !!(homrEngine.value && homrEngine.value.ready);
+  const sr = !!(srEngine.value && srEngine.value.installed);
+  const lg = ocrLangs.value.length > 0;
+  return [
+    { id: 'audiveris', name: t('Audiveris 增强引擎'), on: av, size: '158 MB', note: t('印刷谱首选：小节结构与变化音更准') },
+    { id: 'homr', name: t('homr（AI 识谱）'), on: hm, size: '300 MB', note: t('扫描件 / 拍照首选：神经网络整页识谱') },
+    { id: 'sr', name: t('超分辨率（低清扫描）'), on: sr, size: '40 MB', note: t('谱表量不出来或行距 < 5px 时先神经放大') },
+    { id: 'ocr', name: t('OCR 语言包'), on: lg, size: '23 MB', note: t('读乐器名 / 速度记号 / 和弦名') },
+  ];
+});
+const omrMissing = computed(() => omrComponents.value.filter((x: any) => !x.on).length);
 async function installOmr() {
   if (omrBusy.value) return;
   omrBusy.value = true; omrText.value = t('准备下载…');
@@ -736,6 +756,26 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
         <div class="sc-side-hint">{{ t('只有图片 / PDF 走识谱；MusicXML 与 MIDI 是精确解析或直通。') }}</div>
       </div>
 
+      <!-- ★ 组件状态提示（用户：「在变谱页添加提示，而不是资源中心」）：
+           这四样都要单独装，且都不随安装包分发。缺哪项在这一页就说清楚，并给直达按钮。 -->
+      <div class="card sc-side-card">
+        <div class="sc-side-head">
+          <Icon name="download" :size="13" /> {{ t('识谱组件') }}
+          <span class="sc-cmp-tag" :class="{ warn: omrMissing > 0 }">
+            {{ omrMissing ? t('缺 ') + omrMissing + t(' 项') : t('齐备') }}
+          </span>
+        </div>
+        <div v-for="c in omrComponents" :key="c.id" class="sc-cmp">
+          <Icon :name="c.on ? 'check' : 'plus'" :size="11" :class="c.on ? 'sc-cmp-ok' : 'sc-cmp-no'" />
+          <span class="sc-cmp-nm">{{ c.name }}</span>
+          <span class="sc-cmp-st" :class="{ off: !c.on }" :title="c.note">{{ c.on ? t('已安装') : c.size }}</span>
+        </div>
+        <div class="sc-side-hint">{{ t('这四样都要在资源中心单独安装（不随安装包分发，装在数据根的 omr 目录）。没装也能用内置识谱，只是精度低一档、读不出乐器名与速度记号。') }}</div>
+        <button class="btn sm" :class="omrMissing ? 'primary' : ''" @click="openOcrResources">
+          <Icon name="download" :size="12" /> {{ omrMissing ? t('去资源中心安装') : t('打开资源中心') }}
+        </button>
+      </div>
+
       <div class="card sc-side-card">
         <div class="sc-side-head"><Icon name="gear" :size="13" /> {{ t('识别参数') }}</div>
         <label class="sc-field">
@@ -827,11 +867,6 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
             <option :value="false">{{ t('记谱音高') }}</option>
           </select>
         </div>
-        <div class="sc-field">
-          <span class="sc-field-nm">{{ t('OCR 语言包') }}</span>
-          <span class="sc-ocr" :class="{ off: !ocrLangs.length }">{{ ocrLangs.length ? ocrLangs.join(' · ') : t('未安装') }}</span>
-          <button class="btn sm ghost" @click="openOcrResources">{{ t('资源中心') }}</button>
-        </div>
         <div class="sc-side-hint">{{ t('速度/拍号默认「自动」：谱面自己写的优先，填了才覆盖。') }}</div>
       </div>
 
@@ -853,6 +888,17 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
 .sc-side-card { padding: 12px 14px; margin-bottom: 0; gap: 8px; }
 .sc-side-head { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 2px; }
 .sc-side-hint { margin-top: 6px; font-size: 11.5px; color: var(--stone); line-height: 1.55; }
+/* 识谱组件状态行：左边一个对勾/加号，中间组件名，右边「已安装」或体积 */
+.sc-cmp-tag { margin-left: auto; font-size: 10.5px; font-weight: 600; color: var(--steel);
+  background: var(--surface); border: 1px solid var(--hairline); border-radius: 999px; padding: 0 8px; }
+.sc-cmp-tag.warn { color: #b7791f; border-color: color-mix(in srgb, #ffb340 55%, var(--line));
+  background: color-mix(in srgb, #ffb340 12%, transparent); }
+.sc-cmp { display: flex; align-items: center; gap: 7px; font-size: 11.5px; padding: 2px 0; }
+.sc-cmp-ok { color: var(--accent); flex: none; }
+.sc-cmp-no { color: #b7791f; flex: none; }
+.sc-cmp-nm { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-cmp-st { margin-left: auto; flex: none; font-size: 11px; color: var(--accent); }
+.sc-cmp-st.off { color: var(--stone); font-variant-numeric: tabular-nums; }
 .sc-model { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 8px; width: 100%; text-align: left;
   padding: 8px 10px; margin-bottom: 5px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); cursor: pointer;
   transition: border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
