@@ -676,7 +676,7 @@ _endHold();
               : t('正在安装 GPU 加速') + (state.gpuInstall.kind ? t('（') + (state.gpuInstall.kind === 'cuda' ? 'CUDA cu128' : 'DirectML') + t('）') : '') }}
           </div>
           <div v-if="!state.gpuInstall.done" class="gpu-bar-track">
-            <div class="gpu-bar-fill" :style="{ width: Math.min(100, state.gpuInstall.percent || 0) + '%' }"></div>
+            <div class="gpu-bar-fill" :style="{ transform: 'scaleX(' + ((Math.min(100, state.gpuInstall.percent || 0)) / 100) + ')' }"></div>
           </div>
           <div v-else class="gpu-bar-msg">{{ state.gpuInstall.ok ? t('增强包已就绪，点击查看详情') : (state.gpuInstall.error || t('安装失败，点击查看详情')) }}</div>
           <div v-if="!state.gpuInstall.done && state.gpuInstall.text" class="gpu-bar-tip">{{ state.gpuInstall.text }}</div>
@@ -701,7 +701,7 @@ _endHold();
               <!-- 主进程在测速后会发 text（如「选用 国内源 CNB（cnb.cool）（31.2 MB/s）」）。
                    此前这条信息只进内存、界面从不显示，用户无法确认是否真走了国内源。 -->
               <div v-if="d.text" class="dl-src" :title="d.text">{{ d.text }}</div>
-              <div class="dl-pbar"><i :style="{ width: (d.percent || 0) + '%' }"></i></div>
+              <div class="dl-pbar"><i :style="{ transform: 'scaleX(' + (((d.percent || 0)) / 100) + ')' }"></i></div>
               <div class="dl-meta">
                 <span class="pct">{{ (d.percent || 0) }}%</span>
                 <span v-if="d.speed" class="spd">⚡ {{ dlSpeed(d.speed) }}</span>
@@ -831,7 +831,7 @@ _endHold();
 .gpu-bar-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .gpu-bar-title { font-size: 13px; font-weight: 600; color: var(--ink, #171717); }
 .gpu-bar-track { height: 6px; border-radius: 3px; background: var(--border, rgba(0,0,0,.1)); overflow: hidden; }
-.gpu-bar-fill { height: 100%; background: linear-gradient(90deg, #4f94e0, #8fc0f0); transition: width .25s; }
+.gpu-bar-fill { height: 100%; background: linear-gradient(90deg, #4f94e0, #8fc0f0); transition: transform var(--motion-base) var(--ease-out); }
 .gpu-bar.err .gpu-bar-fill { background: #d33; }
 .gpu-bar-msg { font-size: 12px; color: var(--text-muted, #666); line-height: 1.5; word-break: break-all; }
 .gpu-bar-tip { font-size: 11px; color: var(--text-muted, #888); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -842,21 +842,25 @@ _endHold();
 /* ===== 模型下载：顶部通知条 ===== */
 .dl-noti { position: fixed; top: 0; left: 50%; transform: translate(-50%, 0); z-index: 995;
   display: flex; flex-direction: column; align-items: center; pointer-events: none;
-  transition: transform .42s cubic-bezier(.22,.72,.22,1); padding-bottom: 12px; }
+  transition: transform var(--motion-slow) var(--ease-out); padding-bottom: 12px; }
 .dl-noti.peek { transform: translate(-50%, calc(-100% + 26px)); }   /* 上移露出 26px 细条 */
-.dl-stack { pointer-events: auto; display: flex; flex-direction: column; align-items: center; }
+/* 折叠用 grid-template-rows 0fr↔1fr：max-height 会在内容比 340px 矮时"提前到位"、看着一顿一顿；
+   grid 行高则一路跟内容走，展开/收起都是同一条曲线。 */
+.dl-stack { pointer-events: auto; display: grid; grid-template-rows: auto 0fr; justify-items: center;
+  transition: grid-template-rows var(--motion-base) var(--ease-out); }
+.dl-stack.open { grid-template-rows: auto 1fr; }
 .dl-bar { display: inline-flex; align-items: center; gap: 9px; padding: 10px 18px; border: none; border-radius: 999px;
   background: linear-gradient(135deg, var(--accent), var(--brand-coral)); color: #fff; font-size: 12.5px; font-weight: 700;
-  cursor: pointer; box-shadow: var(--shadow-lg); transition: transform .18s ease, box-shadow .2s ease; }
+  cursor: pointer; box-shadow: var(--shadow-lg); transition: transform var(--motion-base) var(--ease-out), box-shadow var(--motion-base) var(--ease-out); }
 .dl-bar:hover { box-shadow: var(--shadow-xl, 0 14px 34px rgba(0,0,0,.28)); }
 .dl-bar:active { transform: scale(.96); }
 .dl-anypct { font-variant-numeric: tabular-nums; }
 .dl-cnt { font-weight: 600; opacity: .96; }
 .dl-caret { font-style: normal; font-size: 9px; opacity: .85; }
-.dl-panel { width: 400px; max-width: 92vw; margin-top: 8px; background: var(--canvas); border: 1px solid var(--hairline);
-  border-radius: 14px; box-shadow: var(--shadow-lg); padding: 4px 14px 8px; overflow: hidden;
-  max-height: 0; opacity: 0; transform: translateY(-6px);
-  transition: max-height .3s cubic-bezier(.2,.7,.3,1), opacity .24s ease, transform .26s ease; }
+.dl-panel { width: 400px; max-width: 92vw; background: var(--canvas); border: 1px solid var(--hairline);
+  border-radius: 14px; box-shadow: var(--shadow-lg); padding: 12px 14px 8px; overflow: hidden; min-height: 0;
+  opacity: 0; transform: translateY(-6px);
+  transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out); }
 .dl-stack.open .dl-panel { max-height: 340px; opacity: 1; transform: translateY(0); overflow-y: auto; }
 .dl-item { padding: 7px 0; border-bottom: 1px solid var(--hairline-soft); }
 .dl-item:last-child { border-bottom: none; }
@@ -867,9 +871,9 @@ _endHold();
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 6px; }
 .dl-pbar { height: 6px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; }
 .dl-pbar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--brand-coral));
-  border-radius: 999px; transition: width .25s ease; }
+  border-radius: 999px; transition: transform var(--motion-base) var(--ease-out); }
 .dl-meta { display: flex; align-items: center; gap: 12px; font-size: 10.5px; color: var(--stone); margin-top: 4px; font-family: var(--mono); }
 .dl-meta .pct { color: var(--ink); font-weight: 700; }
-.dlnoti-enter-active, .dlnoti-leave-active { transition: opacity .24s ease; }
+.dlnoti-enter-active, .dlnoti-leave-active { transition: opacity var(--motion-base) var(--ease-out); }
 .dlnoti-enter-from, .dlnoti-leave-to { opacity: 0; }
 </style>

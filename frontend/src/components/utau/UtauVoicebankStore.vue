@@ -349,7 +349,7 @@ function sizeMb(v) { return v ? (v / 1048576).toFixed(1) + ' MB' : ''; }
                 </div>
                 <div v-if="busyId === it.id" class="vb-prog">
                   <div class="vb-prog-line"><span class="vb-prog-ph">{{ phaseText(it.id) }}</span></div>
-                  <div class="vb-bar-mini"><i :style="{ width: ((prog[it.id] && prog[it.id].percent) || 0) + '%' }"></i></div>
+                  <div class="vb-bar-mini"><i :style="{ transform: 'scaleX(' + ((((prog[it.id] && prog[it.id].percent) || 0)) / 100) + ')' }"></i></div>
                   <div class="vb-prog-meta"><span>{{ (prog[it.id] && prog[it.id].percent) || 0 }}%</span><span>{{ (prog[it.id] && prog[it.id].error) || '' }}</span></div>
                 </div>
               </div>
@@ -413,14 +413,14 @@ function sizeMb(v) { return v ? (v / 1048576).toFixed(1) + ' MB' : ''; }
 .vb-clr:hover { color: var(--ink); background: var(--surface-soft); }
 .vb-sel { height: 32px; padding: 0 8px; border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--ink); font-size: 12.5px; cursor: pointer; max-width: 190px; }
 .vb-works { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.vb-wchip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border: 1px solid var(--hairline); border-radius: 999px; background: transparent; color: var(--steel); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background .18s ease, color .18s ease, border-color .18s ease, transform .18s ease; }
+.vb-wchip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border: 1px solid var(--hairline); border-radius: 999px; background: transparent; color: var(--steel); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background var(--motion-base) var(--ease-out), color var(--motion-base) var(--ease-out), border-color var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out); }
 .vb-wchip:hover { background: var(--surface-soft); color: var(--ink); transform: translateY(-1px); }
 .vb-wchip i { font-style: normal; font-size: 10.5px; color: var(--stone); background: var(--surface-soft); border-radius: 20px; padding: 0 6px; line-height: 15px; }
 .vb-wchip.active { background: color-mix(in srgb, var(--brand-coral) 15%, var(--surface)); border-color: color-mix(in srgb, var(--brand-coral) 32%, transparent); color: var(--ink); }
 .vb-wchip.active i { background: color-mix(in srgb, var(--brand-coral) 14%, transparent); color: var(--brand-coral); }
 .vb-shown { margin-left: auto; font-size: 11.5px; color: var(--stone); }
 .vb-groups { display: flex; flex-direction: column; gap: 20px; }
-.vb-work { animation: vbWorkIn .3s cubic-bezier(.2,.7,.3,1) both; animation-delay: calc(min(var(--wi, 0), 6) * 55ms); }
+.vb-work { animation: vbWorkIn var(--motion-slow) var(--ease-out) both; animation-delay: calc(min(var(--wi, 0), 6) * 55ms); }
 @keyframes vbWorkIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .vb-work-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--hairline); }
 .vb-work-ic { display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 7px; background: color-mix(in srgb, var(--brand-coral) 12%, transparent); color: var(--brand-coral); }
@@ -431,7 +431,7 @@ function sizeMb(v) { return v ? (v / 1048576).toFixed(1) + ' MB' : ''; }
 .vb-cat-head b { font-size: 12.5px; color: var(--ink); }
 .vb-cat-cnt { margin-left: auto; font-size: 11px; color: var(--stone); }
 .vb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 9px; }
-.vb-card { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 10px 11px; border: 1px solid var(--hairline); border-radius: 11px; background: var(--surface); overflow: hidden; transition: border-color .15s, background .15s, transform .15s, box-shadow .15s; }
+.vb-card { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 10px 11px; border: 1px solid var(--hairline); border-radius: 11px; background: var(--surface); overflow: hidden; transition: border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out); }
 .vb-card:hover { border-color: color-mix(in srgb, var(--brand-coral) 30%, var(--hairline)); transform: translateY(-2px); box-shadow: var(--shadow-sm, 0 4px 14px rgba(0,0,0,.08)); }
 .vb-card.inst { background: color-mix(in srgb, var(--brand-coral) 4%, var(--surface)); border-color: color-mix(in srgb, var(--brand-coral) 22%, var(--hairline)); }
 .vb-card.down { border-color: color-mix(in srgb, var(--brand-coral) 45%, var(--hairline)); }
@@ -445,13 +445,13 @@ function sizeMb(v) { return v ? (v / 1048576).toFixed(1) + ' MB' : ''; }
 .vb-license { font-size: 10.5px; color: var(--stone); line-height: 1.45; border-left: 2px solid var(--hairline); padding-left: 7px; }
 .vb-foot { display: flex; align-items: center; gap: 6px; margin-top: auto; }
 .vb-acts { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-wrap: wrap; }
-.vb-btn { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border: 1px solid color-mix(in srgb, var(--brand-coral) 34%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--brand-coral) 12%, transparent); color: var(--brand-coral); font-size: 11.5px; font-weight: 600; cursor: pointer; transition: background .15s; }
+.vb-btn { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border: 1px solid color-mix(in srgb, var(--brand-coral) 34%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--brand-coral) 12%, transparent); color: var(--brand-coral); font-size: 11.5px; font-weight: 600; cursor: pointer; transition: background var(--motion-fast) var(--ease-out); }
 .vb-btn:hover { background: color-mix(in srgb, var(--brand-coral) 20%, transparent); }
 .vb-btn.re { border-color: var(--hairline); background: transparent; color: var(--steel); }
 .vb-btn.re:hover { background: var(--surface-soft); color: var(--ink); }
 .vb-btn.cancel { border-color: color-mix(in srgb, var(--brand-coral) 45%, transparent); background: transparent; color: var(--brand-coral); }
 .vb-bar-mini { height: 3px; border-radius: 2px; background: var(--surface-soft); overflow: hidden; }
-.vb-bar-mini i { display: block; height: 100%; background: linear-gradient(90deg, var(--brand-coral), color-mix(in srgb, var(--brand-coral) 55%, #fff), var(--brand-coral)); background-size: 200% 100%; transition: width .25s ease; }
+.vb-bar-mini i { display: block; height: 100%; background: linear-gradient(90deg, var(--brand-coral), color-mix(in srgb, var(--brand-coral) 55%, #fff), var(--brand-coral)); background-size: 200% 100%; transition: transform var(--motion-base) var(--ease-out); }
 .vb-prog { display: flex; flex-direction: column; gap: 4px; margin-top: 2px; }
 .vb-prog-line { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--stone); }
 .vb-prog-ph { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }

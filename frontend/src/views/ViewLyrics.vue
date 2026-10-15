@@ -479,7 +479,7 @@ onBeforeUnmount(stopLoop);
 .lyr-timeline { width: 100%; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 12px; margin-bottom: 10px; display: block; cursor: pointer; }
 .lyr-list { flex: 1; overflow-y: auto; border: 1px solid var(--hairline); border-radius: 12px; background: var(--canvas); }
 .lyr-empty { color: var(--stone); font-size: 13px; padding: 24px 16px; text-align: center; }
-.lyr-row { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--hairline); transition: background 0.15s; }
+.lyr-row { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--hairline); transition: background var(--motion-fast) var(--ease-out); }
 .lyr-row.cur { background: var(--surface-soft); }
 .lyr-row.cur .ly-text { font-weight: 700; color: var(--brand-coral); }
 .ly-time { width: 92px; padding: 4px 6px; font-size: 11px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 6px; color: var(--ink); font-family: var(--mono); outline: none; }

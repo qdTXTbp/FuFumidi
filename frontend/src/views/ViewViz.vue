@@ -483,7 +483,7 @@ onBeforeUnmount(() => {
   margin: 0; padding: 8px 14px;
   background: linear-gradient(to bottom, rgba(0, 0, 0, .5), rgba(0, 0, 0, 0));
   color: #fff;
-  transition: opacity .3s ease;
+  transition: opacity var(--motion-slow) var(--ease-out);
 }
 /* 沉浸态的控件压在画面之上：统一改成白色系，深浅主题下都能读 */
 /* 沉浸态底色可能是浅色（--canvas）：chip 用**深色半透明** + 白字，浅底深底都读得清 */
@@ -503,7 +503,7 @@ onBeforeUnmount(() => {
   padding: 10px 16px;
   background: linear-gradient(to top, rgba(0, 0, 0, .52), rgba(0, 0, 0, 0));
   color: #fff;
-  transition: opacity .3s ease;
+  transition: opacity var(--motion-slow) var(--ease-out);
 }
 .hud-btn {
   display: inline-flex; align-items: center; gap: 6px;

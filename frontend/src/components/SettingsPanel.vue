@@ -1200,7 +1200,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
             <div v-if="gpu.status" class="gpu-status">{{ gpu.status }}</div>
             <div v-if="gpu.progress != null" class="gpu-prog">
               <div style="height:8px;background:var(--surface-soft);border-radius:999px;overflow:hidden;border:1px solid var(--hairline)">
-                <div style="height:100%;width:0%;background:linear-gradient(90deg,#4f94e0,#8fc0f0);transition:width .2s" :style="{ width: Math.min(100, (gpu.progress || 0)) + '%' }"></div>
+                <div style="height:100%;background:linear-gradient(90deg,#4f94e0,#8fc0f0)" :style="{ transform: 'scaleX(' + ((Math.min(100, (gpu.progress || 0))) / 100) + ')' }"></div>
               </div>
               <div class="gpu-prog-text">{{ gpu.progressText }}</div>
             </div>

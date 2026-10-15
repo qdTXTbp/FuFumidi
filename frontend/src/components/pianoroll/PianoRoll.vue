@@ -15,6 +15,7 @@
 //   updateNote(id, patch) / moveNotes(ids, dBeat, dPitch) / setNotesDuration(ids, durBeat)
 //   removeNotes(ids) / setSelection(ids, primary) / pushUndo() / undo() / redo()
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { fitMenu } from '../../core/menu.js';
 import Icon from '../Icon.vue';
 import { t } from '../../core/i18n.js';
 import { derivePhonemes } from '../../core/phoneme.js';
@@ -98,6 +99,24 @@ const wrap = ref(null);
 const rootEl = ref(null);
 const ctxOpen = ref(false);
 const ctxX = ref(0), ctxY = ref(0), ctxOnNote = ref(false);
+/* ★ 菜单落点：量真实尺寸后夹在卷帘范围内（旧版裸坐标 —— 靠下右键时菜单伸出面板，
+   底部项点不到）。见 core/menu.js；菜单本身超出时由 CSS max-height + overflow 兜底。 */
+const ctxEl = ref(null);
+const ctxPos = ref(null);
+async function placeCtx() {
+  await nextTick();
+  const root = rootEl.value;
+  const el = ctxEl.value;
+  if (!root || !el) return;
+  const r = root.getBoundingClientRect();
+  const p = fitMenu(el, ctxX.value, ctxY.value, { left: 0, top: 0, width: r.width, height: r.height });
+  if (p) ctxPos.value = p;
+}
+function ctxStyle() {
+  const p = ctxPos.value;
+  const at = p || { left: ctxX.value, top: ctxY.value };
+  return { left: at.left + 'px', top: at.top + 'px', visibility: p ? 'visible' : 'hidden' };
+}
 const ctxNoteId = ref(null);
 const cursor = ref('default');
 let ctx = null;
@@ -654,9 +673,11 @@ function onCtx(e) {
   // 菜单是 .pr 的直接 absolute 子元素，坐标必须相对 .pr，而不是滚动容器 wrap
   const r = (rootEl.value && rootEl.value.getBoundingClientRect) ? rootEl.value.getBoundingClientRect() : wrap.value.getBoundingClientRect();
   ctxX.value = e.clientX - r.left; ctxY.value = e.clientY - r.top;
+  ctxPos.value = null;
   ctxOpen.value = true;
+  placeCtx();
 }
-function closeCtx() { ctxOpen.value = false; }
+function closeCtx() { ctxOpen.value = false; ctxPos.value = null; }
 
 /* ---- 手写笔 / 触控（M9 收尾）----
    触摸屏没有右键；画布又是 touch-action:none（否则手指一拖就滚页面），
@@ -1553,7 +1574,7 @@ defineExpose({
 
     <!-- 右键菜单 -->
     <Transition name="ctxmenu">
-      <div v-if="ctxOpen" class="pr-ctx" :style="{ left: ctxX + 'px', top: ctxY + 'px' }" @pointerdown.stop @contextmenu.prevent>
+      <div v-if="ctxOpen" ref="ctxEl" class="pr-ctx" :style="ctxStyle()" @pointerdown.stop @contextmenu.prevent>
         <button class="pr-ctx-i" @click="api.undo(); closeCtx()"><Icon name="undo" :size="13" /> {{ t('撤销') }}</button>
         <button class="pr-ctx-i" @click="api.redo(); closeCtx()"><Icon name="redo" :size="13" /> {{ t('重做') }}</button>
         <div class="pr-ctx-sep"></div>
@@ -1601,12 +1622,12 @@ defineExpose({
 /* 音素条带：贴住音符区底部，横向随同一滚动容器对齐 */
 .pr-ph-canvas { border-top: 1px solid var(--border); touch-action: none; }
 .pr-auto-canvas { touch-action: none; }
-.pr-ctx { position: absolute; z-index: 40; min-width: 132px; padding: 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); box-shadow: 0 8px 24px rgba(0,0,0,.28); }
+.pr-ctx { position: absolute; z-index: 40; min-width: 132px; padding: 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); box-shadow: 0 8px 24px rgba(0,0,0,.28); max-height: calc(100% - 8px); overflow-y: auto; overscroll-behavior: contain; }
 .pr-ctx-i { display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font-size: 12.5px; text-align: left; cursor: pointer; }
 .pr-ctx-i:hover:not(:disabled) { background: var(--surface-muted); }
 .pr-ctx-i:disabled { opacity: .4; cursor: not-allowed; }
 .pr-ctx-k { margin-left: auto; color: var(--text-muted); font-size: 10.5px; font-family: var(--mono); }
 .pr-ctx-sep { height: 1px; margin: 4px 2px; background: var(--border); }
-.ctxmenu-enter-active, .ctxmenu-leave-active { transition: opacity .1s, transform .1s; }
+.ctxmenu-enter-active, .ctxmenu-leave-active { transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
 .ctxmenu-enter-from, .ctxmenu-leave-to { opacity: 0; transform: scale(.96); }
 </style>

@@ -15,9 +15,25 @@ import { esc, clamp, TRACK_COLORS } from '../core/util.js';
 import { encodeMidi } from '../core/midi.js';
 import { parseMusicXMLToSong } from '../core/musicxml.js';
 import { songToAbc, jianpuData, tabData, detectSf, ABC_KEY_NAMES } from '../core/score.js';
-import { songToMusicXMLTrack, songToMusicXML } from '../core/musicxml_out.js';
+import { songToMusicXMLTrack, songToMusicXML, buildFullScore } from '../core/musicxml_out.js';
 
-const mode = ref('staff');       // staff | jianpu | guitar | bass
+const mode = ref('staff');       // staff | score(总谱) | jianpu | guitar | bass
+// 总谱模式与单轨五线谱共用同一个 Verovio 容器与刻版流程，差别只在喂哪份 MusicXML：
+//   staff → songToMusicXMLTrack(当前轨)；score → buildFullScore(全曲所有声部，带谱表括号)
+const isStaffLike = computed(() => mode.value === 'staff' || mode.value === 'score');
+const fullScoreParts = computed(() => tracks.value.filter((x) => !x.tr.isDrum).length);
+/** 工具栏右侧状态：总谱模式报「声部数 / 小节数 / 拍号」，单轨模式报「轨名 / 拍号 / 调号 / 音符数」。 */
+const defStatus = computed(() => {
+  const s = song.value;
+  if (!s) return t('未加载');
+  const sig = (s.sigMap && s.sigMap[0]) ? s.sigMap[0].num + '/' + s.sigMap[0].den : '4/4';
+  if (mode.value === 'score') {
+    return t('总谱') + ' · ' + fullScoreParts.value + t(' 个声部') + ' · ' + (s.bars || 0) + t(' 小节') + ' · ' + sig;
+  }
+  const tr = selTrack.value;
+  const key = ABC_KEY_NAMES[clamp((s.keySig && s.keySig.sf != null) ? s.keySig.sf : detectSf(tr ? tr.notes : []), -7, 7)] || 'C';
+  return (tr ? (tr.name || t('音轨 ') + (trackSel.value + 1)) : '') + ' · ' + sig + ' · ' + key + ' · ' + (tr ? tr.notes.length : 0) + t(' 音符');
+});
 const track = ref(0);
 const fontSz = ref(22);
 const follow = ref(true);
@@ -120,12 +136,14 @@ async function renderStaff() {
   const el = scoreEl.value, s = song.value;
   const tr = selTrack.value;
   const sc = scrollEl.value;
+  const isFull = mode.value === 'score';
   if (!el) return;
   el.innerHTML = '';
   el.style.cssText = '';
   tune = null; noteEvents = []; flow = []; lineTops = []; lineBottoms = []; playingSet.clear();
   if (sc) { sc.scrollTop = 0; sc.scrollLeft = 0; }
-  if (!s || !tr || !tr.notes.length) { el.innerHTML = '<div class="score-empty">' + esc(t('该轨道没有音符')) + '</div>'; setStatus(t('暂无数据')); return; }
+  if (!s || (!isFull && (!tr || !tr.notes.length))) { el.innerHTML = '<div class="score-empty">' + esc(t('该轨道没有音符')) + '</div>'; setStatus(t('暂无数据')); return; }
+  if (isFull && !fullScoreParts.value) { el.innerHTML = '<div class="score-empty">' + esc(t('没有可刻入总谱的声部')) + '</div>'; setStatus(t('暂无数据')); return; }
   setStatus(t('正在生成…'));
   try { await loadVerovio(); } catch (e) { el.innerHTML = '<div class="score-empty">' + esc(String(e.message || e)) + '</div>'; setStatus(t('生成失败')); return; }
   const vrv = window.verovio;
@@ -136,18 +154,31 @@ async function renderStaff() {
     const padL = sc ? (parseFloat(getComputedStyle(sc).paddingLeft) || 0) : 0;
     const padR = sc ? (parseFloat(getComputedStyle(sc).paddingRight) || 0) : 0;
     const pageW = Math.max(300, vpW - padL - padR - 8);
-    const xml = songToMusicXMLTrack(s, selTrackIdx.value);
+    const scalePct = Math.max(30, Math.round(100 * zoom.value));
+    /* ★ Verovio 的 pageWidth 是**排版宽度（单位）**，输出 SVG 的像素宽 = pageWidth × scale/100。
+       所以缩放到 45% 时必须把 pageWidth 放大回去，否则谱面只占容器的一半宽 ——
+       实测那个状态下 Verovio 会因为"纸太窄"把行数翻好几倍（76 行 → 10 页），
+       「预览总谱」直接变成一屏看两小节。 */
+    const layoutW = Math.round(pageW * 100 / scalePct);
+    const built = isFull ? buildFullScore(s) : null;
+    const xml = isFull ? built.xml : songToMusicXMLTrack(s, selTrackIdx.value);
 
     if (scoreVerovio && scoreVerovio.destroy) { try { scoreVerovio.destroy(); } catch (e) {} }
     scoreVerovio = new vrv.toolkit();
     scoreVerovio.setOptions({
-      pageWidth: Math.round(pageW),
+      pageWidth: layoutW,
       pageHeight: 60000,
-      scale: Math.max(100, Math.round(100 * zoom.value)),
+      // ★ 下限从 100 放到 30：总谱一行有二十几行谱表，只能放大不能缩小的话
+      //   一屏连三行谱表都看不全，「预览总谱」就无从谈起（实测就是这样）。
+      scale: scalePct,
       adjustPageHeight: true,
       pageMarginLeft: 30, pageMarginRight: 10, pageMarginTop: 0, pageMarginBottom: 0,
       footer: 'none', header: 'none',
-      spacingLinear: 0.45, spacingNonLinear: 0.8, spacingStaff: 5,
+      spacingLinear: 0.45, spacingNonLinear: 0.8,
+      // 总谱一行有十几到二十几行谱表：行距要留够，否则符头/连音线会黏在一起
+      spacingStaff: isFull ? 8 : 5,
+      // 总谱不做垂直压缩（压缩会把小字号的乐器名与力度记号叠在一起）
+      condense: isFull ? 'none' : 'auto',
     });
     const loadRes = scoreVerovio.loadData(xml);
     if (loadRes === false || loadRes < 0) { el.innerHTML = '<div class="score-empty">' + esc(t('MusicXML 加载失败')) + '</div>'; setStatus(t('生成失败')); return; }
@@ -159,27 +190,45 @@ async function renderStaff() {
     el.classList.toggle('fu-grid', !!opts.grid);
 
     // 建立 timemap：优先用歌曲真实 tick 时间（支持变速 MIDI）
-    const songNotes = tr.notes.slice().sort((a, b) => a.start - b.start || a.midi - b.midi);
+    // 总谱里几十个声部同时在响，SVG 里 .note 的顺序与「某一条轨的音符顺序」不再对应，
+    // 所以总谱走 xml:id（buildFullScore 给每个音符写了 id）查表；单轨仍按顺序映射。
     const systems = Array.from(el.querySelectorAll('.system'));
     const events = [];
     const seen = new Set();
-    let ni = 0;
-    for (const node of el.querySelectorAll('.note')) {
-      const id = node.id || '';
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      const n = songNotes[ni++];
-      let ms = 0, tick = null;
-      if (n) {
-        tick = n.start;
-        ms = midiToSec(s, n.start) * 1000;
-      } else {
-        try { const t2 = scoreVerovio.getTimeForElement(id); if (t2 != null && t2 >= 0) ms = t2; } catch (e) {}
+    if (isFull) {
+      for (const node of el.querySelectorAll('.note')) {
+        const id = node.id || '';
+        if (!id || seen.has(id)) continue;
+        const nfo = built.noteMap.get(id);
+        if (!nfo) continue;                       // 装饰音/休止等没有映射的节点
+        seen.add(id);
+        const tick = nfo.tick;
+        const ms = midiToSec(s, tick) * 1000;
+        const sys = node.closest ? node.closest('.system') : null;
+        const line = Math.max(0, systems.indexOf(sys));
+        node.setAttribute('data-tick', String(tick));
+        events.push({ ms, tick, ev: { el: node, left: null, line, elements: [[node]] } });
       }
-      const sys = node.closest ? node.closest('.system') : null;
-      const line = Math.max(0, systems.indexOf(sys));
-      if (tick != null) node.setAttribute('data-tick', String(tick));
-      events.push({ ms, tick, ev: { el: node, left: null, line, elements: [[node]] } });
+    } else {
+      const songNotes = tr.notes.slice().sort((a, b) => a.start - b.start || a.midi - b.midi);
+      let ni = 0;
+      for (const node of el.querySelectorAll('.note')) {
+        const id = node.id || '';
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        const n = songNotes[ni++];
+        let ms = 0, tick = null;
+        if (n) {
+          tick = n.start;
+          ms = midiToSec(s, n.start) * 1000;
+        } else {
+          try { const t2 = scoreVerovio.getTimeForElement(id); if (t2 != null && t2 >= 0) ms = t2; } catch (e) {}
+        }
+        const sys = node.closest ? node.closest('.system') : null;
+        const line = Math.max(0, systems.indexOf(sys));
+        if (tick != null) node.setAttribute('data-tick', String(tick));
+        events.push({ ms, tick, ev: { el: node, left: null, line, elements: [[node]] } });
+      }
     }
     events.sort((a, b) => a.ms - b.ms);
     noteEvents = events;
@@ -265,7 +314,7 @@ function scheduleRender() {
   if (sc && !sc.isConnected) { pendingWhileDeactivated = true; return; }
   // 五线谱刻版（Verovio loadData/renderToSVG）是重主线程操作。条件未变（同曲/同轨/
   // 同缩放/同网格/同宽）且谱面已在 DOM 时直接复用 KeepAlive 缓存，切页零重刻零卡顿。
-  if (mode.value === 'staff') {
+  if (isStaffLike.value) {
     const key = renderKeyOf();
     const el = scoreEl.value;
     const hasSvg = !!(el && el.isConnected && el.querySelector('svg'));
@@ -287,11 +336,11 @@ function renderKeyOf() {
   const s = song.value;
   const tr = selTrack.value;
   const wBucket = sc ? Math.round(sc.clientWidth / 48) * 48 : 0;
-  return ['staff', state.currentId || '', s ? (s.totalTicks + ':' + s.tracks.length) : '', tr ? tr.notes.length : -1,
+  return [mode.value === 'score' ? 'full' : 'staff', state.currentId || '', s ? (s.totalTicks + ':' + s.tracks.length) : '', tr ? tr.notes.length : -1,
     selTrackIdx.value, zoom.value.toFixed(2), opts.grid ? 1 : 0, opts.beam ? 1 : 0, opts.simple ? 1 : 0, wBucket].join('|');
 }
 function doRender() {
-  if (mode.value === 'staff') {
+  if (isStaffLike.value) {
     // 在途标记覆盖整个异步刻版（含 timemap）：期间的新调度请求只置脏标记，
     // 完成后若条件已变再补一次，避免清空 DOM 造成的 hasSvg 误判引发重复刻版
     engraving = true;
@@ -304,11 +353,24 @@ function doRender() {
   // 非五线谱模式由响应式数据自动渲染
 }
 
-function changeMode() { lastStaffKey = ''; scheduleRender(); }
+function changeMode() {
+  lastStaffKey = '';
+  // 进入总谱：默认缩小到看得见整行（用户随后仍可自由缩放）
+  if (mode.value === 'score') zoom.value = fitZoomForScore();
+  scheduleRender();
+}
 function changeTrack() { lastStaffKey = ''; scheduleRender(); }
 function setZoom(v) {
-  zoom.value = clamp(parseFloat(v) || 1, 0.6, 1.8);
+  zoom.value = clamp(parseFloat(v) || 1, 0.3, 1.8);
   scheduleRender();
+}
+/** 切到总谱时按声部数给一个合适的初始缩放：声部多就自动缩小，先把整行谱表看全。 */
+function fitZoomForScore() {
+  const n = fullScoreParts.value;
+  if (n > 12) return 0.45;
+  if (n > 6) return 0.6;
+  if (n > 3) return 0.8;
+  return 1;
 }
 
 // 曲目/模式/缩放等变化是否需要重刻由 renderKeyOf 指纹判定，这里只负责触发调度
@@ -326,7 +388,7 @@ function tickFollow() {
   if (!sc) return;
   const tick = p.currentTick();
   /* 简谱 / 吉他 / 贝斯（HTML 渲染）：无 Verovio tune，独立实现视角跟随 */
-  if (mode.value !== 'staff') {
+  if (!isStaffLike.value) {
     const tr = selTrack.value;
     if (!tr || !tr.notes.length) return;
     // 二分找最后一个 start <= tick 的音符
@@ -619,7 +681,15 @@ function loop(ts) {
   lastFollow = now;
   tickFollow();
 }
+/** 「变谱」页交接过来的一次性请求：以总谱模式打开（见 ViewScoreConvert.openAsFullScore）。 */
+function takeScoreModeHandoff() {
+  const want = window.__fufumidiScoreMode;
+  if (!want) return;
+  try { delete window.__fufumidiScoreMode; } catch (e) { window.__fufumidiScoreMode = ''; }
+  if (want !== mode.value) { mode.value = want; changeMode(); }
+}
 onActivated(() => {
+  takeScoreModeHandoff();
   // KeepAlive 重新激活：补渲染停用期间搁置的请求。是否需要重刻由 renderKeyOf
   // （含容器宽度）判定——宽度在停用期间变化时 key 失配自动重刻，未变化则复用缓存。
   pendingWhileDeactivated = false;
@@ -634,6 +704,7 @@ onActivated(() => {
 // KeepAlive 保活期间停掉跟随循环，否则离开乐谱页后仍每帧 tickFollow
 onDeactivated(() => { if (followRaf) { cancelAnimationFrame(followRaf); followRaf = 0; } });
 onMounted(() => {
+  takeScoreModeHandoff();
   clearTimeout(activationTimer);
   activationTimer = setTimeout(scheduleRender, 320);
   followRaf = requestAnimationFrame(loop);
@@ -680,14 +751,15 @@ onBeforeUnmount(() => {
       <span class="tb-label">{{ t('乐谱轨道') }}</span>
       <span class="trk-sel">
         <span class="trk-dot" :style="{ background: (selTrack ? (TRACK_COLORS[trackSel % TRACK_COLORS.length]) : 'var(--stone)') }"></span>
-        <select class="select-input" :value="trackSel" @change="trackSel = $event.target.value" :disabled="!tracks.length">
+        <select class="select-input" :value="trackSel" @change="trackSel = $event.target.value" :disabled="!tracks.length || mode === 'score'" :title="mode === 'score' ? t('总谱模式显示全部声部') : ''">
           <option v-for="(tr, i) in tracks" :key="i" :value="i">{{ tr.name || (t('音轨 ') + (i + 1)) }}</option>
         </select>
       </span>
       <span class="sep"></span>
 
-      <select class="select-input" :value="mode" @change="mode = $event.target.value; changeMode()">
+      <select class="select-input" :value="mode" @change="mode = $event.target.value; changeMode()" :title="mode === 'score' ? t('总谱：所有声部同屏，可导出总谱 MusicXML / PNG / PDF') : ''">
         <option value="staff">{{ t('五线谱') }}</option>
+        <option value="score">{{ t('总谱') }}</option>
         <option value="jianpu">{{ t('简谱') }}</option>
         <option value="guitar">{{ t('吉他六线谱') }}</option>
         <option value="bass">{{ t('贝斯四线谱') }}</option>
@@ -719,26 +791,26 @@ onBeforeUnmount(() => {
       <button class="btn sm" @click="importMusicXML" :disabled="midiBusy" :title="t('导入 MusicXML 文件')">
         <Icon name="import" :size="14" />{{ t('MusicXML') }}
       </button>
-      <button class="btn sm" @click="exportMusicXML" :disabled="!song" :title="t('导出 MusicXML 文件')">
+      <button class="btn sm" @click="exportMusicXML" :disabled="!song" :title="t('导出 MusicXML（整份总谱，每个声部一条 part）')">
         <Icon name="save" :size="14" />{{ t('导出 XML') }}
       </button>
-      <button class="btn sm" @click="previewScore" :disabled="mode !== 'staff' || previewBusy" :title="t('分页预览')">
+      <button class="btn sm" @click="previewScore" :disabled="!isStaffLike || previewBusy" :title="t('分页预览')">
         <Icon name="eye" :size="14" />{{ t('预览') }}
       </button>
-      <button class="btn sm" @click="exportStaffPng" :disabled="mode !== 'staff' || exporting">
+      <button class="btn sm" @click="exportStaffPng" :disabled="!isStaffLike || exporting" :title="mode === 'score' ? t('导出总谱 PNG') : ''">
         <Icon name="save" :size="14" />{{ t('PNG') }}
       </button>
-      <button class="btn sm" @click="exportPdf" :disabled="mode !== 'staff'" :title="t('导出 PDF（打印当前页面）')">
+      <button class="btn sm" @click="exportPdf" :disabled="!isStaffLike" :title="t('导出 PDF（打印当前页面）')">
         <Icon name="save" :size="14" />{{ t('PDF') }}
       </button>
-      <button class="btn sm" @click="openScoreSplit" :disabled="mode !== 'staff' || !song" :title="t('分屏查看乐谱并点击定位')">
+      <button class="btn sm" @click="openScoreSplit" :disabled="!isStaffLike || !song" :title="t('分屏查看乐谱并点击定位')">
         <Icon name="viz" :size="14" />{{ t('分屏') }}
       </button>
 
       <span style="flex:1"></span>
       <span class="tb-status">
         <span class="pulse" :class="{ on: state.playing }"></span>
-        <span>{{ status || (song ? (selTrack ? selTrack.name || t('音轨 ') + (trackSel + 1) : '') + ' · ' + ((song.sigMap && song.sigMap[0]) ? song.sigMap[0].num + '/' + song.sigMap[0].den : '4/4') + ' · ' + (ABC_KEY_NAMES[clamp((song.keySig && song.keySig.sf != null) ? song.keySig.sf : detectSf(selTrack ? selTrack.notes : []), -7, 7)] || 'C') + ' · ' + (selTrack ? selTrack.notes.length : 0) + t(' 音符') : t('未加载')) }}</span>
+        <span>{{ status || defStatus }}</span>
       </span>
 
       <span class="sep"></span>
@@ -751,7 +823,7 @@ onBeforeUnmount(() => {
 
     <div class="score-scroll" ref="scrollEl">
       <!-- 五线谱：abcjs 渲染容器 -->
-      <div ref="scoreEl" id="abcScore" v-show="mode === 'staff'" @click="onScoreClick"></div>
+      <div ref="scoreEl" id="abcScore" v-show="isStaffLike" @click="onScoreClick"></div>
       <!-- 简谱 -->
       <div v-if="mode === 'jianpu'">
         <div v-for="b in jianpuBlocks" :key="b.ti" class="score-block">
@@ -840,7 +912,7 @@ onBeforeUnmount(() => {
 .sep { width: 1px; height: 20px; background: var(--hairline); margin: 0 2px; }
 .tb-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--steel); min-width: 0; }
 .tb-status .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--stone); flex: none; }
-.tb-status .pulse.on { background: var(--success-text); box-shadow: 0 0 0 0 rgba(27,166,115,.5); animation: pulse 1.4s infinite; }
+.tb-status .pulse.on { background: var(--success-text); box-shadow: 0 0 0 0 rgba(27,166,115,.5); animation: pulse 1.4s var(--ease-in-out) infinite; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(27,166,115,.5); } 70% { box-shadow: 0 0 0 6px rgba(27,166,115,0); } 100% { box-shadow: 0 0 0 0 rgba(27,166,115,0); } }
 .zoom-fab { display: inline-flex; align-items: center; gap: 2px; }
 .zf-pct { font-size: 11px; color: var(--stone); min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
@@ -854,7 +926,7 @@ onBeforeUnmount(() => {
 .score-pop label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .score-pop input { accent-color: var(--ink); }
 /* 显示选项下拉开合动画 */
-.pop-enter-active, .pop-leave-active { transition: opacity .14s ease, transform .18s cubic-bezier(.2,.9,.3,1.18); transform-origin: top right; }
+.pop-enter-active, .pop-leave-active { transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-base) var(--ease-spring); transform-origin: top right; }
 .pop-enter-from, .pop-leave-to { opacity: 0; transform: scale(.96) translateY(-5px); }
 
 .score-scroll { flex: 1; overflow: auto; padding: 6px 10px 20px; scrollbar-gutter: stable; }

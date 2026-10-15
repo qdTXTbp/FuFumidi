@@ -37,6 +37,7 @@ const importFiles = (items) => app.importFiles(items);
 const setView = (v) => app.setView(v);
 import { encodeMidi } from '../core/midi.js';
 import { noteName, clamp, KEY_NAME, removeNotes } from '../core/util.js';
+import { fitMenu } from '../core/menu.js';
 import { MACRO_DOC, macroToCmd, applyMacroScript, parseMacroScript } from '../core/macro.js';
 import { SCALE_TYPES, parseCustomDegrees, scalePitchClasses } from '../core/scale.js';
 import { detectKeySpec, detectChordTrack, chordPcsByName } from '../core/analysis.js';
@@ -521,33 +522,58 @@ function selectAll() { editor.value?.selectAll(); refreshSel(); }
 /* ---------------- 钢琴卷帘右键菜单 ---------------- */
 const ctxMenu = ref(null);   // { x, y, hit, tick, midi }
 const ctxSub = ref('');      // '' | 'quantize' | 'transpose' | 'velocity'
-const CTX_W = 182, CTX_H = 402, CTX_SUB_W = 158;
+const CTX_SUB_W = 158;
+/* ★ 菜单落点不许超出窗口（用户 2026-10-14 报「右键菜单过长超出工具窗口、底部点不到」）。
+   旧写法把高度猜成 402，而这个菜单真实高度约 780px（26 项）—— 在窗口下半部右键，底部
+   几百像素落到窗口外，永远点不到。现在：渲染后量真实尺寸再夹；高过窗口时菜单自己滚
+   （CSS 的 max-height + overflow-y），子菜单改成 fixed 定位所以不会被滚动区裁掉。 */
+const ctxEl = ref(null);
+const ctxPos = ref(null);     // null = 还没量到 → 先隐藏，避免闪一下再跳
+const ctxH = ref(0);
+const ctxCap = ref(0);        // 菜单可用高度（高过就滚）
+async function placeCtxMenu() {
+  await nextTick();
+  const el = ctxEl.value;
+  if (!el) return;
+  const availH = Math.max(120, window.innerHeight - 16);
+  ctxCap.value = availH;
+  const p = fitMenu(el, ctxMenu.value.x, ctxMenu.value.y);
+  ctxPos.value = p || { left: ctxMenu.value.x, top: ctxMenu.value.y };
+  ctxH.value = el.offsetHeight || 0;
+}
 function openCtxMenu(p) {
   if (!p) return;
   closeCtxMenu();
   ctxMenu.value = p;
+  ctxPos.value = null;
+  ctxSub.value = '';
+  placeCtxMenu();
   // 打开菜单本身不改选中，但要把检查器同步到最新选择（右键命中音符时画布已改选）
   nextTick(refreshSel);
 }
-function closeCtxMenu() { ctxMenu.value = null; ctxSub.value = ''; }
+function closeCtxMenu() { ctxMenu.value = null; ctxSub.value = ''; ctxPos.value = null; }
+/* 子菜单：fixed 定位（跟着被悬停的那一行走；贴近右缘时向左翻） */
+const ctxSubPos = ref({ left: 0, top: 0 });
+function openSub(kind, e) {
+  const r = e && e.currentTarget && e.currentTarget.getBoundingClientRect
+    ? e.currentTarget.getBoundingClientRect() : null;
+  if (!r) { ctxSub.value = kind; return; }
+  const flip = r.right + 6 + CTX_SUB_W > window.innerWidth;
+  ctxSubPos.value = {
+    left: flip ? Math.max(8, r.left - CTX_SUB_W - 6) : r.right + 6,
+    top: Math.max(8, Math.min(r.top - 6, window.innerHeight - 96)),
+  };
+  ctxSub.value = kind;
+}
 /* M3：右键菜单里直达某条参数工具 / 命令面板 */
 function ctxRunTool(id) { closeCtxMenu(); openMidiTools(id); }
 function openPalette() { closeCtxMenu(); palOpen.value = true; }
 function ctxMenuStyle() {
-  const m = ctxMenu.value;
-  if (!m) return {};
-  return {
-    left: Math.max(4, Math.min(m.x, window.innerWidth - CTX_W - 8)) + 'px',
-    top: Math.max(4, Math.min(m.y, window.innerHeight - CTX_H - 8)) + 'px',
-  };
+  const p = ctxPos.value;
+  if (!p) return { left: '0px', top: '0px', visibility: 'hidden' };
+  return { left: p.left + 'px', top: p.top + 'px', maxHeight: ctxCap.value + 'px' };
 }
-/** 子菜单是否向左弹出（贴近视口右缘时） */
-const ctxSubFlip = computed(() => {
-  const m = ctxMenu.value;
-  if (!m) return false;
-  const left = Math.max(4, Math.min(m.x, window.innerWidth - CTX_W - 8));
-  return left + CTX_W + CTX_SUB_W > window.innerWidth;
-});
+const ctxSubStyle = computed(() => ({ left: ctxSubPos.value.left + 'px', top: ctxSubPos.value.top + 'px' }));
 /** 菜单项依赖选区，无选区时给出提示而不是静默失败 */
 function needSel() {
   if (!editor.value || !editor.value.selCount()) {
@@ -2772,7 +2798,7 @@ onBeforeUnmount(() => {
     <!-- 钢琴卷帘右键菜单 -->
     <Transition name="ov">
       <div v-if="ctxMenu" class="ctx-mask" @click.self="closeCtxMenu" @contextmenu.prevent="closeCtxMenu">
-        <div class="ctx-menu" :style="ctxMenuStyle()" @mouseleave="ctxSub = ''">
+        <div ref="ctxEl" class="ctx-menu" :style="ctxMenuStyle()">
           <button class="ctx-item" @click="ctxCut"><span>{{ t('剪切') }}</span></button>
           <button class="ctx-item" @click="ctxCopy"><span>{{ t('复制') }}</span><span class="ctx-k">Ctrl+C</span></button>
           <button class="ctx-item" @click="ctxPaste"><span>{{ t('粘贴到指针处') }}</span><span class="ctx-k">Ctrl+V</span></button>
@@ -2788,33 +2814,18 @@ onBeforeUnmount(() => {
           <button class="ctx-item" @click="openPalette"><span>{{ t('全部命令…') }}</span><span class="ctx-k">Ctrl+Shift+P</span></button>
           <div class="ctx-sep"></div>
 
-          <div class="ctx-sub-wrap" @mouseenter="ctxSub = 'quantize'">
+          <!-- 触发行留在菜单里；子菜单本体搬到了 .ctx-menu 外面（fixed 定位），
+               否则菜单一旦因为太高而出现滚动条，子菜单会被滚动区裁掉（用户 2026-10-14 那个 bug）。 -->
+          <div class="ctx-sub-wrap" @mouseenter="openSub('quantize', $event)">
             <button class="ctx-item" :class="{ on: ctxSub === 'quantize' }"><span>{{ t('量化') }}</span><span class="ctx-arrow">▸</span></button>
-            <div v-if="ctxSub === 'quantize'" class="ctx-menu ctx-sub" :class="{ flip: ctxSubFlip }">
-              <button class="ctx-item" v-for="q in CTX_QUANTIZE" :key="q[1]" @click="ctxQuantize(q[1])"><span>{{ q[0] }}</span></button>
-              <div class="ctx-sep"></div>
-              <button class="ctx-item" @click="ctxQuantize(snapRatio)"><span>{{ t('按当前吸附网格') }}</span><span class="ctx-k">{{ snapRatio ? snapRatio : '—' }}</span></button>
-            </div>
           </div>
 
-          <div class="ctx-sub-wrap" @mouseenter="ctxSub = 'transpose'">
+          <div class="ctx-sub-wrap" @mouseenter="openSub('transpose', $event)">
             <button class="ctx-item" :class="{ on: ctxSub === 'transpose' }"><span>{{ t('移调') }}</span><span class="ctx-arrow">▸</span></button>
-            <div v-if="ctxSub === 'transpose'" class="ctx-menu ctx-sub" :class="{ flip: ctxSubFlip }">
-              <button class="ctx-item" @click="ctxTranspose(1)"><span>{{ t('升 1 个半音') }}</span></button>
-              <button class="ctx-item" @click="ctxTranspose(-1)"><span>{{ t('降 1 个半音') }}</span></button>
-              <button class="ctx-item" @click="ctxTranspose(12)"><span>{{ t('升 1 个八度') }}</span></button>
-              <button class="ctx-item" @click="ctxTranspose(-12)"><span>{{ t('降 1 个八度') }}</span></button>
-            </div>
           </div>
 
-          <div class="ctx-sub-wrap" @mouseenter="ctxSub = 'velocity'">
+          <div class="ctx-sub-wrap" @mouseenter="openSub('velocity', $event)">
             <button class="ctx-item" :class="{ on: ctxSub === 'velocity' }"><span>{{ t('力度') }}</span><span class="ctx-arrow">▸</span></button>
-            <div v-if="ctxSub === 'velocity'" class="ctx-menu ctx-sub" :class="{ flip: ctxSubFlip }">
-              <button class="ctx-item" @click="ctxVel(5)"><span>{{ t('力度 +5') }}</span></button>
-              <button class="ctx-item" @click="ctxVel(-5)"><span>{{ t('力度 −5') }}</span></button>
-              <div class="ctx-sep"></div>
-              <button class="ctx-item" @click="ctxVelReset"><span>{{ t('重置为默认力度') }}</span><span class="ctx-k">80</span></button>
-            </div>
           </div>
           <div class="ctx-sep"></div>
 
@@ -2829,6 +2840,24 @@ onBeforeUnmount(() => {
             <span>{{ t('音阶吸附') }}</span><span v-if="scaleSnap" class="ctx-check">✓</span>
           </button>
           <button class="ctx-item danger" @click="ctxDelete"><span>{{ t('删除') }}</span><span class="ctx-k">Del</span></button>
+        </div>
+        <!-- ★ 子菜单：fixed 定位的兄弟节点（不放在 .ctx-menu 里，避免被它的滚动区裁掉） -->
+        <div v-if="ctxSub === 'quantize'" class="ctx-menu ctx-sub-fixed" :style="ctxSubStyle">
+          <button class="ctx-item" v-for="q in CTX_QUANTIZE" :key="q[1]" @click="ctxQuantize(q[1])"><span>{{ q[0] }}</span></button>
+          <div class="ctx-sep"></div>
+          <button class="ctx-item" @click="ctxQuantize(snapRatio)"><span>{{ t('按当前吸附网格') }}</span><span class="ctx-k">{{ snapRatio ? snapRatio : '—' }}</span></button>
+        </div>
+        <div v-if="ctxSub === 'transpose'" class="ctx-menu ctx-sub-fixed" :style="ctxSubStyle">
+          <button class="ctx-item" @click="ctxTranspose(1)"><span>{{ t('升 1 个半音') }}</span></button>
+          <button class="ctx-item" @click="ctxTranspose(-1)"><span>{{ t('降 1 个半音') }}</span></button>
+          <button class="ctx-item" @click="ctxTranspose(12)"><span>{{ t('升 1 个八度') }}</span></button>
+          <button class="ctx-item" @click="ctxTranspose(-12)"><span>{{ t('降 1 个八度') }}</span></button>
+        </div>
+        <div v-if="ctxSub === 'velocity'" class="ctx-menu ctx-sub-fixed" :style="ctxSubStyle">
+          <button class="ctx-item" @click="ctxVel(5)"><span>{{ t('力度 +5') }}</span></button>
+          <button class="ctx-item" @click="ctxVel(-5)"><span>{{ t('力度 −5') }}</span></button>
+          <div class="ctx-sep"></div>
+          <button class="ctx-item" @click="ctxVelReset"><span>{{ t('重置为默认力度') }}</span><span class="ctx-k">80</span></button>
         </div>
       </div>
     </Transition>
@@ -2853,7 +2882,7 @@ onBeforeUnmount(() => {
 .ed-insp { width: var(--inspector-w); flex: none; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
 /* 检查器与舞台之间的拖拽分隔条 */
 .ed-split { flex: none; width: 7px; margin: 0 -4px; cursor: ew-resize; position: relative; touch-action: none; }
-.ed-split::after { content: ''; position: absolute; inset: 0 3px; border-radius: 3px; background: transparent; transition: background .15s; }
+.ed-split::after { content: ''; position: absolute; inset: 0 3px; border-radius: 3px; background: transparent; transition: background var(--motion-fast) var(--ease-out); }
 .ed-split:hover::after { background: var(--brand); }
 /* 窄窗口：逐级收窄检查器，把宽度让给卷帘（默认窗口下保持 232px 不动） */
 @media (max-width: 1120px) { .edit-view { --inspector-w: 200px; } }
@@ -2880,7 +2909,7 @@ onBeforeUnmount(() => {
 .et-group { display: flex; align-items: center; gap: 4px; }
 /* 统一 26px 基准高度：原先分段控件（padding 2px + 26px 按钮 = 30px）比同排按钮高 2px，
    是「功能栏错位」的直接原因 */
-.et-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 26px; min-height: 26px; padding: 0 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; font-size: 12px; line-height: 1; white-space: nowrap; color: var(--slate); cursor: pointer; transition: background .13s, color .13s, border-color .13s; }
+.et-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 26px; min-height: 26px; padding: 0 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; font-size: 12px; line-height: 1; white-space: nowrap; color: var(--slate); cursor: pointer; transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
 .et-btn:hover { background: var(--surface-soft); color: var(--ink); }
 .et-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .et-btn.danger { color: var(--error); }
@@ -3012,12 +3041,12 @@ onBeforeUnmount(() => {
 }
 .ed-wrap-rel { position: relative; flex: 1; min-height: 0; }
 /* 视图切换闪动：只动透明度与极小位移，不碰画布尺寸（画布是活的，重排会抖） */
-.ed-wrap-rel.ed-flash { animation: edFlash 0.3s cubic-bezier(0.22, 0.7, 0.24, 1); }
+.ed-wrap-rel.ed-flash { animation: edFlash var(--motion-slow) var(--ease-out); }
 @keyframes edFlash { from { opacity: 0.35; transform: translateY(3px); } to { opacity: 1; transform: none; } }
-.ed-insp.ed-insp-in { animation: edInspIn 0.26s cubic-bezier(0.22, 0.7, 0.24, 1); }
+.ed-insp.ed-insp-in { animation: edInspIn var(--motion-base) var(--ease-out); }
 @keyframes edInspIn { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
-.ed-pop-enter-active { transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.22, 0.7, 0.24, 1); }
-.ed-pop-leave-active { transition: opacity 0.16s ease, transform 0.16s ease; }
+.ed-pop-enter-active { transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out); }
+.ed-pop-leave-active { transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
 .ed-pop-enter-from { opacity: 0; transform: translateY(-6px); }
 .ed-pop-leave-to { opacity: 0; transform: translateY(-4px); }
 /* 乐谱工具条：一条横排、可横向滚动，不换行（换行会吃掉音符区高度） */
@@ -3033,7 +3062,7 @@ onBeforeUnmount(() => {
 .ed-menubar-card { display: flex; align-items: center; gap: 8px; padding: 3px 8px; margin-bottom: 6px; flex: none; min-width: 0; position: relative; z-index: 40; }
 .mb-grow { flex: 1; min-width: 0; }
 .ed-presets { display: flex; gap: 2px; padding: 2px; background: var(--surface-soft); border: 1px solid var(--hairline); border-radius: 9px; }
-.ps-chip { font-size: 11.5px; line-height: 1; padding: 5px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--slate); cursor: pointer; transition: background .16s ease, color .16s ease; }
+.ps-chip { font-size: 11.5px; line-height: 1; padding: 5px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--slate); cursor: pointer; transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
 .ps-chip:hover { color: var(--ink); background: var(--canvas); }
 .ps-chip.on { background: var(--accent); color: #fff; }
 /* 上下文任务条：选中后原地出现高频操作。高度固定 32px，不随选择状态抖动 */
@@ -3052,10 +3081,10 @@ onBeforeUnmount(() => {
 .tb-hint { font-size: 11.5px; color: var(--stone); white-space: nowrap; }
 /* 检查器分页 */
 .insp-tabs { display: flex; gap: 2px; padding: 2px; background: var(--surface-soft); border: 1px solid var(--hairline); border-radius: 9px; flex: none; }
-.insp-tab { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 24px; border: 0; border-radius: 7px; background: transparent; color: var(--slate); font-size: 11.5px; cursor: pointer; transition: background .16s ease, color .16s ease, box-shadow .16s ease; }
+.insp-tab { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 24px; border: 0; border-radius: 7px; background: transparent; color: var(--slate); font-size: 11.5px; cursor: pointer; transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out); }
 .insp-tab:hover { color: var(--ink); }
 .insp-tab.on { background: var(--canvas); color: var(--ink); box-shadow: 0 1px 3px rgba(16,24,40,.10); }
-.insp-pane { display: flex; flex-direction: column; gap: 8px; animation: inspPaneIn .22s cubic-bezier(.2,.7,.3,1); }
+.insp-pane { display: flex; flex-direction: column; gap: 8px; animation: inspPaneIn var(--motion-base) var(--ease-out); }
 @keyframes inspPaneIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 /* 跨轨编辑的轨道勾选列表（M5b） */
 .et-list { display: flex; flex-direction: column; gap: 2px; max-height: 168px; overflow-y: auto; border: 1px solid var(--hairline); border-radius: 8px; padding: 4px; }
@@ -3089,13 +3118,13 @@ onBeforeUnmount(() => {
 /* 悬停工具条（M3）：fixed 定位，不参与舞台布局（卷帘高度不会因为它抖动） */
 .hv-bar { position: fixed; z-index: var(--z-overlay); display: flex; align-items: center; gap: 3px; padding: 3px 5px;
   background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-lg);
-  animation: hvIn .16s cubic-bezier(.2,.7,.3,1); }
+  animation: hvIn var(--motion-fast) var(--ease-out); }
 @keyframes hvIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .hv-name { font-size: 11px; font-weight: 700; color: var(--ink); font-family: var(--mono); padding: 0 2px; }
 .hv-vel { font-size: 10.5px; color: var(--stone); font-family: var(--mono); }
 .hv-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 5px;
   border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--slate); font-size: 11px; cursor: pointer;
-  transition: background .13s ease, color .13s ease; }
+  transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
 .hv-btn:hover { background: var(--surface-soft); color: var(--ink); }
 .hv-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .hv-btn.danger { color: var(--error); }
@@ -3103,7 +3132,7 @@ onBeforeUnmount(() => {
 .hv-multi { font-size: 10px; color: var(--stone); padding-left: 4px; }
 
 /* 状态栏右侧的小按钮 */
-.st-btn { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border: 1px solid var(--hairline); border-radius: 6px; background: var(--canvas); color: var(--slate); font-size: 10.5px; cursor: pointer; transition: background .14s ease, color .14s ease; }
+.st-btn { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border: 1px solid var(--hairline); border-radius: 6px; background: var(--canvas); color: var(--slate); font-size: 10.5px; cursor: pointer; transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
 .st-btn:hover { color: var(--ink); background: var(--surface-soft); }
 .st-btn.on { color: var(--ink); border-color: var(--accent); }
 /* 快捷键一览 */
@@ -3133,7 +3162,7 @@ onBeforeUnmount(() => {
 
 /* 钢琴卷帘右键菜单 */
 .ctx-mask { position: fixed; inset: 0; z-index: var(--z-ctx); }
-.ctx-menu { position: fixed; min-width: 182px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+.ctx-menu { position: fixed; min-width: 182px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 4px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; overscroll-behavior: contain; }
 .ctx-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; text-align: left; border: none; background: transparent; color: var(--ink); padding: 7px 10px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
 .ctx-item:hover, .ctx-item.on { background: var(--surface-soft); }
 .ctx-item.danger { color: var(--error); }
@@ -3141,7 +3170,8 @@ onBeforeUnmount(() => {
 .ctx-arrow { color: var(--stone); font-size: 11px; line-height: 1; }
 .ctx-check { color: var(--accent); font-size: 12px; }
 .ctx-sub-wrap { position: relative; }
-.ctx-menu.ctx-sub { position: absolute; left: 100%; top: -4px; min-width: 158px; max-height: 46vh; overflow-y: auto; }
-.ctx-menu.ctx-sub.flip { left: auto; right: 100%; }
+/* ★ 菜单本体允许滚动（max-height 由 ctxMenuStyle 按窗口算）：旧版把高度猜成 402，
+   真实约 780，于是窗口下半部右键时底部几百像素落在窗口外、永远点不到。 */
+.ctx-menu.ctx-sub-fixed { position: fixed; z-index: calc(var(--z-ctx) + 1); min-width: 158px; max-height: 60vh; overflow-y: auto; }
 .ctx-sep { height: 1px; background: var(--hairline); margin: 3px 6px; }
 </style>

@@ -872,13 +872,15 @@ export const useAppStore = defineStore('app', {
       this.progress = 0;
       try { if (this.currentId) this.clearResumePos(this.currentId); } catch (e) {} // 手动停止 = 下次从头播
     },
-    /* ---------------- 播放模式（顺序/随机/单曲循环/列表循环） ---------------- */
+    /* ---------------- 播放模式（顺序/播完就停/随机/单曲循环/列表循环） ----------------
+       ★ 「播完就停」是用户 2026-10-14 要的：只放当前这一首，放完停下、不自动切下一首。
+         与「顺序播放」的区别就在这 —— 顺序播放会一路放到列表末尾才停。 */
     cyclePlayMode() {
-      const seq = ['order', 'shuffle', 'repeatOne', 'loopAll'];
+      const seq = ['order', 'once', 'shuffle', 'repeatOne', 'loopAll'];
       const i = seq.indexOf(this.playMode);
       this.playMode = seq[(i + 1) % seq.length] || 'order';
       try { localStorage.setItem('fufumidi_playmode', this.playMode); } catch (e) {}
-      const label: Record<string, string> = { order: t('顺序播放'), shuffle: t('随机播放'), repeatOne: t('单曲循环'), loopAll: t('列表循环') };
+      const label: Record<string, string> = { order: t('顺序播放'), once: t('播完就停'), shuffle: t('随机播放'), repeatOne: t('单曲循环'), loopAll: t('列表循环') };
       this.toast(t(label[this.playMode] || this.playMode), 'ok');
     },
     // 按模式计算下一首目标 id；dir: 1 下一首 / -1 上一首；返回 null 表示维持当前（单曲循环）或无处可去
@@ -921,7 +923,7 @@ export const useAppStore = defineStore('app', {
     // 无缝播放：播放期间按当前模式预解析下一首，自动切歌时无需再等 parseMidi
     preloadNext() {
       try {
-        if (this.playMode === 'shuffle') return;
+        if (this.playMode === 'shuffle' || this.playMode === 'once') return;   // 这两种模式不会自动切歌
         const nid = this.pickNeighborId(1);
         if (!nid || nid === this.currentId) return;
         const item = this.songs.find((s: any) => s.id === nid);
@@ -961,6 +963,14 @@ export const useAppStore = defineStore('app', {
     async handleTrackEnd() {
       const q = this.queueSongs;
       const mode = this.playMode;
+      // 「播完就停」：不切歌、不复位到列表头 —— 放完这一首就停下（用户 2026-10-14 要的模式）
+      if (mode === 'once') {
+        this.playing = false;
+        this.curSec = 0;
+        this.progress = 0;
+        try { if (this.currentId) this.clearResumePos(this.currentId); } catch (e) {}
+        return;
+      }
       if (mode === 'repeatOne') { if (this.currentId) await this.playSongById(this.currentId); return; }
       const idx = q.findIndex((s: any) => s.id === this.currentId);
       if (mode === 'shuffle') {

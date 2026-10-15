@@ -269,7 +269,9 @@ function revealLibDir() { try { bridge && bridge.openDataRoot && bridge.openData
 const omr = reactive({ st: null, busy: false, text: '', err: '' });
 let offOmrProg = null;
 /** 主进程推的是阶段代码，文案在渲染层翻（否则英文/日文界面里会冒出中文进度）。 */
-const OMR_PHASE = { download: '下载识谱引擎…', extract: '解包识谱引擎…', done: '识谱引擎就绪' };
+const OMR_PHASE = { download: '下载识谱引擎…', extract: '解包识谱引擎…', done: '识谱引擎就绪',
+  // homr 的三个阶段（沿用同一个 omr:progress 通道）
+  'homr-venv': '创建 AI 识谱独立环境…', 'homr-pip': '安装 AI 识谱依赖…', 'homr-weights': '下载 AI 权重…' };
 async function loadOmr() {
   try { omr.st = (bridge && bridge.omrEngine) ? await bridge.omrEngine.status() : null; }
   catch (e) { omr.st = null; }
@@ -299,6 +301,75 @@ const omrSize = computed(() => {
   const b = (omr.st && omr.st.bytes) || 0;
   return b ? (b / 1024 / 1024).toFixed(1) + ' MB' : '—';
 });
+
+/* ---- homr（AI 识谱）：第二个识别引擎，**用户自行安装**（计划 D1）----
+   为什么单独一个入口：homr 代码是 AGPL-3.0，权重还含非商用训练数据（PrIMuS，CC BY-NC），
+   不能塞进安装包；而且它要 numpy>=2.4，必须装进数据根下的独立 venv（应用运行时是 1.26）。
+   定位：扫描件 / 手机拍照比 Audiveris 强（它本来就是为相机照片设计的）。 */
+const homr = reactive({ st: null, busy: false, text: '', err: '' });
+async function loadHomr() {
+  try {
+    homr.st = (bridge && bridge.omrEngine && bridge.omrEngine.homrStatus)
+      ? await bridge.omrEngine.homrStatus() : null;
+  } catch (e) { homr.st = null; }
+}
+async function installHomr() {
+  if (!bridge || !bridge.omrEngine || !bridge.omrEngine.homrInstall || homr.busy) return;
+  homr.busy = true; homr.err = '';
+  try {
+    const r = await bridge.omrEngine.homrInstall();
+    if (r && r.ok && r.installed && r.ready) { homr.st = r; toast(t('AI 识谱已安装')); }
+    else { homr.err = String((r && r.error) || t('安装失败')); toast(t('安装失败：') + homr.err, 'warn'); }
+  } catch (e) { homr.err = String((e && e.message) || e); toast(t('安装失败：') + homr.err, 'warn'); }
+  finally { homr.busy = false; homr.text = ''; }
+}
+async function removeHomr() {
+  if (!bridge || !bridge.omrEngine || !bridge.omrEngine.homrRemove || homr.busy) return;
+  if (!window.confirm(t('卸载 AI 识谱（homr）？之后「扫描件 / 拍照」模型不可用；Audiveris 与内置识谱不受影响。'))) return;
+  try {
+    const r = await bridge.omrEngine.homrRemove();
+    if (r && r.ok === false) { toast(t('卸载失败：') + String(r.error || ''), 'warn'); return; }
+    homr.st = r || null; toast(t('已卸载 AI 识谱'));
+  } catch (e) { toast(t('卸载失败：') + String((e && e.message) || e), 'warn'); }
+}
+const homrSize = computed(() => {
+  const b = (homr.st && homr.st.weightBytes) || 0;
+  return b ? (b / 1024 / 1024).toFixed(0) + ' MB' : '—';
+});
+
+/* ---- OCR 语言包（Tesseract traineddata）----
+   Audiveris 5.5 起不预装任何 OCR 语言，没有语言时它的 TEXTS 步整段跳过：
+   速度记号、乐器名、和弦名一个都读不出来（实测日志：No installed OCR languages）。
+   语言包每个 2~4 MB，装在 <数据根>/omr/tessdata，引擎侧用 TESSDATA_PREFIX 指过去。 */
+const lang = reactive({ st: null, busy: '', err: '' });
+async function loadLang() {
+  try { lang.st = (bridge && bridge.omrEngine && bridge.omrEngine.langStatus) ? await bridge.omrEngine.langStatus() : null; }
+  catch (e) { lang.st = null; }
+}
+function langInstalled(code) {
+  const list = (lang.st && lang.st.installed) || [];
+  return list.some((x) => x.code === code);
+}
+function langBytes(code) {
+  const list = (lang.st && lang.st.installed) || [];
+  const hit = list.find((x) => x.code === code);
+  return hit ? (hit.bytes / 1024 / 1024).toFixed(1) + ' MB' : '';
+}
+async function installLang(code) {
+  if (!bridge || !bridge.omrEngine || !bridge.omrEngine.langInstall || lang.busy) return;
+  lang.busy = code; lang.err = '';
+  try {
+    const r = await bridge.omrEngine.langInstall([code]);
+    if (r && r.ok) { lang.st = r; toast(t('语言包已安装：') + code); }
+    else { lang.err = String((r && r.error) || ''); toast(t('语言包安装失败：') + lang.err, 'warn'); }
+  } catch (e) { lang.err = String((e && e.message) || e); toast(t('语言包安装失败：') + lang.err, 'warn'); }
+  finally { lang.busy = ''; }
+}
+async function removeLang(code) {
+  if (!bridge || !bridge.omrEngine || !bridge.omrEngine.langRemove) return;
+  try { const r = await bridge.omrEngine.langRemove(code); lang.st = r || lang.st; toast(t('已移除语言包：') + code); }
+  catch (e) { toast(t('移除失败：') + String((e && e.message) || e), 'warn'); }
+}
 
 /* ---------------- 诊断与配置 ---------------- */
 async function exportDiag() {
@@ -459,11 +530,16 @@ onMounted(() => {
   loadHfToken();
   loadLibStats();
   loadOmr();
+  loadLang();
+  loadHomr();
   if (bridge && bridge.omrEngine && bridge.omrEngine.onProgress) {
     offOmrProg = bridge.omrEngine.onProgress((p) => {
       if (!p) return;
       const label = OMR_PHASE[p.phase] ? t(OMR_PHASE[p.phase]) : '';
-      omr.text = label + (p.percent ? ' ' + p.percent + '%' : '');
+      const line = label + (p.percent ? ' ' + p.percent + '%' : '');
+      // homr 的阶段归 homr 那张卡（同一个通道，靠 phase 前缀分流）
+      if (String(p.phase || '').indexOf('homr') === 0) homr.text = line;
+      else omr.text = line;
     });
   }
   if (bridge && bridge.onModelProgress) {
@@ -706,6 +782,53 @@ onBeforeUnmount(() => {
           <button class="btn sm ghost" v-if="omr.st && omr.st.installed" :disabled="omr.busy" @click="removeOmr">{{ t('卸载') }}</button>
         </div>
       </div>
+
+      <!-- homr（AI 识谱）：第二个引擎，**用户自行安装**（AGPL + 非商用权重，不随包分发） -->
+      <div class="field-row" v-if="homr.st">
+        <div>
+          <div class="fr-label">homr（AI 识谱）</div>
+          <div class="fr-hint">{{ t('扫描件 / 手机拍照的首选：神经网络整页识谱。代码是 AGPL-3.0、权重含非商用数据，所以不随安装包分发，需要在这里自己装（约 300 MB，装在独立环境里，不影响其它功能）。') }}</div>
+          <div class="fr-hint">
+            <b>{{ homr.st.installed && homr.st.ready ? t('已安装') : (homr.st.installed ? t('缺少权重') : t('未安装')) }}</b>
+            <span v-if="homr.st.installed"> · v{{ homr.st.version }} · {{ t('权重 ') }}{{ homrSize }}</span>
+            <span v-if="homr.busy" class="omr-run"> · {{ homr.text || t('安装中…') }}</span>
+            <span v-if="homr.err" class="omr-bad"> · {{ homr.err }}</span>
+          </div>
+          <div class="fr-hint">{{ t('安装位置：') }}{{ homr.st.dir }}</div>
+        </div>
+        <div class="fr-ctl">
+          <button class="btn sm primary" v-if="!homr.st.ready" :disabled="homr.busy" @click="installHomr">
+            <Icon name="download" :size="12" /> {{ homr.busy ? t('安装中…') : (homr.st.installed ? t('补齐权重') : t('安装 AI 识谱')) }}
+          </button>
+          <button class="btn sm ghost" v-if="homr.st.installed" :disabled="homr.busy" @click="removeHomr">{{ t('卸载') }}</button>
+        </div>
+      </div>
+
+      <!-- OCR 语言包：没有它，速度记号 / 乐器名 / 和弦名一个都读不出来 -->
+      <div class="field-row" v-if="lang.st">
+        <div>
+          <div class="fr-label">{{ t('OCR 语言包') }}</div>
+          <div class="fr-hint">{{ t('Audiveris 5.5 起不预装任何 OCR 语言；没有语言时它的文字识别步骤整段跳过 —— 速度记号、乐器名、和弦名都读不到。装上对应语言（完整版，每个约 23 MB）即可。') }}</div>
+          <div class="omr-langs">
+            <span v-for="c in (lang.st.catalog || [])" :key="c.code" class="omr-lang">
+              <b>{{ c.code }}</b>
+              <span class="omr-lang-nm">{{ t(c.name) }}</span>
+              <template v-if="langInstalled(c.code)">
+                <span class="omr-lang-ok">{{ t('已安装') }} {{ langBytes(c.code) }}</span>
+                <button class="btn sm ghost" @click="removeLang(c.code)">{{ t('移除') }}</button>
+              </template>
+              <template v-else>
+                <button class="btn sm" :disabled="!!lang.busy" @click="installLang(c.code)">
+                  {{ lang.busy === c.code ? t('下载中…') : t('安装') }}
+                </button>
+              </template>
+            </span>
+          </div>
+          <div class="fr-hint" v-if="lang.busy">{{ t('下载语言包 ') }}{{ lang.busy }}{{ t('…') }}</div>
+          <div class="fr-hint" v-if="lang.err"><span class="omr-bad">{{ lang.err }}</span></div>
+          <div class="fr-hint">{{ t('安装位置：') }}{{ lang.st.dir }}</div>
+        </div>
+      </div>
     </div>
 
     <!-- ============ 诊断与配置 ============ -->
@@ -759,7 +882,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .rc-tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
-.rc-tab { border: 1px solid var(--hairline); background: var(--canvas); color: var(--steel); padding: 7px 14px; border-radius: var(--radius-full, 999px); font-size: 13px; cursor: pointer; transition: all .14s; white-space: nowrap; }
+.rc-tab { border: 1px solid var(--hairline); background: var(--canvas); color: var(--steel); padding: 7px 14px; border-radius: var(--radius-full, 999px); font-size: 13px; cursor: pointer; transition: background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out), opacity var(--motion-fast) var(--ease-out); white-space: nowrap; }
 .rc-tab:hover { background: var(--surface-soft); color: var(--ink); }
 .rc-tab.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--ink); font-weight: 600; }
 /* 标签页内容容器：统一去掉末个子卡片的悬挂外边距，避免底部出现多余空白 */
@@ -793,7 +916,7 @@ onBeforeUnmount(() => {
   margin: 0;
 }
 .res-bar { flex: 1; min-width: 90px; height: 5px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; margin: 4px 0 0; }
-.res-bar-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.15s linear; }
+.res-bar-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: transform var(--motion-base) var(--ease-out); }
 .res-bar-err { flex-basis: 100%; font-size: 10.5px; color: var(--error); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 曲库文件与 Rust 核心 */
 .lib-stats { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; max-width: 440px; }
@@ -809,5 +932,12 @@ onBeforeUnmount(() => {
 /* 识谱引擎（Audiveris）：路径很长，必须能换行，否则整卡被撑宽 */
 .omr-run { color: var(--accent); font-variant-numeric: tabular-nums; }
 .omr-bad { color: var(--error); }
+/* OCR 语言包：一行一种语言，代码 + 名称 + 体积 + 安装/移除 */
+.omr-langs { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
+.omr-lang { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--bg); font-size: 11.5px; color: var(--muted); }
+.omr-lang b { color: var(--text); font-weight: 600; }
+.omr-lang-nm { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.omr-lang-ok { color: var(--success-text); }
 .res-sec[data-guide="res-omr"] .fr-hint { word-break: break-all; }
 </style>

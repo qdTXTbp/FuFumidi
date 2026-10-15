@@ -135,7 +135,7 @@ defineExpose({ refresh });
 <style scoped>
 .vbp { display: flex; flex-direction: column; gap: 8px; }
 .vbp-engines { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface-soft); align-self: flex-start; }
-.vbp-eng { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--stone); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background .15s, color .15s; }
+.vbp-eng { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--stone); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
 .vbp-eng:hover { color: var(--ink); }
 .vbp-eng.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
 .vbp-eng.on i { background: color-mix(in srgb, var(--brand-coral) 16%, transparent); color: var(--brand-coral); }

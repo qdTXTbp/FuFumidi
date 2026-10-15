@@ -32,11 +32,14 @@ const pages = ref<string[]>([]);            // 同顺序的**未标注**原谱�
 const files = ref<string[]>([]);            // 本次转换吃进去的文件（多选/拖拽时是多个）
 // 识谱增强引擎（Audiveris）：没装就在卡片下方给一条「装了会好一个量级」的可操作提示
 const omrEngine = ref<any>(null);
+const homrEngine = ref<any>(null);
 const omrBusy = ref(false);
 const omrText = ref('');
 let offOmr: null | (() => void) = null;
 async function refreshOmr() {
   try { omrEngine.value = await bridge().omrEngine?.status(); } catch (e) { omrEngine.value = null; }
+  // homr（AI 识谱）：用户自行安装的第二个引擎，模型卡上要如实标「装没装」
+  try { homrEngine.value = await bridge().omrEngine?.homrStatus?.(); } catch (e) { homrEngine.value = null; }
 }
 async function installOmr() {
   if (omrBusy.value) return;
@@ -55,9 +58,71 @@ const progressText = ref('');
 const kind = ref('');
 
 // 识谱参数（只对图片 / PDF 生效）
-const beats = ref(4);
-const beatType = ref(4);
+// ★ 拍号/速度默认「自动」：谱面自己写的优先，用户填了才覆盖。
+//   以前这两个控件在 Audiveris 路径上根本传不到引擎（只用于经典后端），
+//   也就是「做了但没作用」—— 现在 --beats auto / --tempo auto 是真读的。
+const beats = ref('auto');            // auto | 2 | 3 | 4 | 6
+const beatType = ref(4);              // 4 | 8
+const autoTempo = ref(true);
 const tempo = ref(120);
+// 预处理与后处理参数（真接到引擎：--upscale / --thicken / --quantize / --min-note-ms / --dedupe）
+const upscale = ref('auto');          // auto | 1 | 2 | 3 | 4（auto = 按实测谱线间距推，上限 19M 像素）
+const thicken = ref(false);           // 二值化后加粗：只对「谱线断裂的扫描件」有利
+const quantize = ref('off');          // off | 1/4 | 1/8 | 1/16 | 1/32
+const minNoteMs = ref(0);             // 丢掉过短音符（毫秒）0 = 不过滤
+const dedupe = ref(true);             // 同一个符头被识别两次时去重
+// 移调乐器：谱面上写的是「记谱音高」（Horn in F 差纯五度），MIDI 里一般要实际音高
+const sounding = ref(true);           // true = 实际音高（推荐） / false = 按谱面记谱音高
+// OCR 语言包状态：没装的话 Audiveris 读不出乐器名 / 速度记号 / 和弦名（TEXTS 步直接跳过）
+const ocrLangs = ref<string[]>([]);
+async function loadOcrLangs() {
+  try {
+    const b = bridge();
+    const r = (b && b.omrEngine && b.omrEngine.langStatus) ? await b.omrEngine.langStatus() : null;
+    ocrLangs.value = ((r && r.installed) || []).map((x: any) => String(x.code));
+  } catch (e) { ocrLangs.value = []; }
+}
+function openOcrResources() { app.setView('resources'); }
+
+/** 识别模型 = 后端（Audiveris / 内置）+ 内置后端的模式。
+ *  图片与 PDF 才有模型可选；MusicXML / MIDI 是直通或精确解析，不经过识谱。 */
+const model = ref('auto');
+const MODELS = [
+  { id: 'auto', name: '自动', sub: '有增强引擎就用它，没有就内置识谱', need: false },
+  { id: 'audiveris', name: 'Audiveris 增强', sub: '印刷谱首选：小节结构与变化音更准', need: true },
+  { id: 'homr', name: 'homr（AI 识谱）', sub: '扫描件 / 拍照首选：神经网络整页识谱', needHomr: true },
+  { id: 'classical', name: '内置识谱 · 通用', sub: '离线可用，不装任何东西也能跑', need: false },
+  { id: 'piano', name: '内置识谱 · 钢琴谱', sub: '按大谱表分组，适合单乐器钢琴谱', need: false },
+  { id: 'melody', name: '内置识谱 · 单旋律', sub: '只抽主旋律，适合单声部曲谱', need: false },
+];
+const curModel = computed(() => MODELS.find((m) => m.id === model.value) || MODELS[0]);
+function modelArgs() {
+  const id = model.value;
+  if (id === 'audiveris') return { backend: 'audiveris', mode: 'auto' };
+  if (id === 'homr') return { backend: 'homr', mode: 'auto' };
+  if (id === 'classical') return { backend: 'classical', mode: 'auto' };
+  if (id === 'piano') return { backend: 'classical', mode: 'piano' };
+  if (id === 'melody') return { backend: 'classical', mode: 'melody' };
+  return { backend: 'auto', mode: 'auto' };
+}
+/** 谱面类型一键预设：单乐器 / 总谱 / 扫描件的参数差别很大，直接给三套。 */
+const SCENES = [
+  { id: 'single', name: '单乐器 · 钢琴谱', desc: '2 行大谱表、页宽通常够，别加粗',
+    set: { model: 'audiveris', upscale: 'auto', thicken: false, quantize: 'off', dedupe: true } },
+  { id: 'full', name: '管弦乐总谱', desc: '一页几十行谱表，个别页可能识别失败（会列出来）',
+    set: { model: 'audiveris', upscale: 'auto', thicken: false, quantize: 'off', dedupe: true } },
+  { id: 'scan', name: '扫描件 · 手机拍照', desc: '谱线可能断裂、发灰，加粗 + 放大',
+    set: { model: 'audiveris', upscale: 4, thicken: true, quantize: '1/16', dedupe: true } },
+];
+function applyScene(s: any) {
+  const v = s.set || {};
+  if (v.model) model.value = v.model;
+  if (v.upscale !== undefined) upscale.value = v.upscale;
+  if (v.thicken !== undefined) thicken.value = !!v.thicken;
+  if (v.quantize) quantize.value = v.quantize;
+  if (v.dedupe !== undefined) dedupe.value = !!v.dedupe;
+  app.toast(t('已套用：') + t(s.name), 'ok');
+}
 
 let offProgress: null | (() => void) = null;
 const overlayUrls: string[] = [];
@@ -71,7 +136,10 @@ function b64ToBytes(b64: string): Uint8Array {
 
 function bridge(): any { return (window as any).fuBridge; }
 
-/** PDF → 每页一张 PNG（base64）。宽约 1700px ≈ A4@200dpi，低清谱也够识谱用。 */
+/** PDF → 每页一张 PNG（base64）。
+ *  ★ 目标宽度 3200px：PDF 多是矢量图，直接渲到高分辨率远比「先渲 1700px 再让引擎放大」清楚。
+ *    总谱一行谱线间距在 1700px 下只有 6px（低于 Audiveris 的 11px 下限，整页会被判 invalid），
+ *    3200px 下约 12px 才够它用。上限 6 倍是为了别把内存和 IPC 撑爆（A4 约 3200×4500 ≈ 1400 万像素）。 */
 async function rasterizePdf(path: string): Promise<string[]> {
   const b = bridge();
   const buf = await b.readBinary(path);
@@ -87,7 +155,7 @@ async function rasterizePdf(path: string): Promise<string[]> {
     progressText.value = t('渲染 PDF 第 ') + i + '/' + total + t(' 页');
     const page = await doc.getPage(i);
     const vp0 = page.getViewport({ scale: 1 });
-    const scale = Math.min(4, Math.max(1, 1700 / Math.max(1, vp0.width)));
+    const scale = Math.min(6, Math.max(1, 3200 / Math.max(1, vp0.width)));
     const vp = page.getViewport({ scale });
     const cv = document.createElement('canvas');
     cv.width = Math.max(1, Math.round(vp.width));
@@ -109,7 +177,7 @@ async function rasterizeImage(path: string): Promise<string[]> {
   const blob = new Blob([buf]);
   const bmp = await createImageBitmap(blob);
   const cv = document.createElement('canvas');
-  const scale = Math.min(3, Math.max(1, 1700 / Math.max(1, bmp.width)));
+  const scale = Math.min(3, Math.max(1, 2400 / Math.max(1, bmp.width)));
   cv.width = Math.round(bmp.width * scale);
   cv.height = Math.round(bmp.height * scale);
   const ctx = cv.getContext('2d') as CanvasRenderingContext2D;
@@ -150,7 +218,15 @@ async function convert(inputs: any[], label?: string) {
   files.value = (inputs || []).map((it: any) => it.name || String(it.path || '').split(/[\\/]/).pop() || 'page');
   await loadOverlays([]);
   try {
-    const base = { beats: beats.value, beatType: beatType.value, tempo: tempo.value };
+    const base = {
+      beats: beats.value, beatType: beatType.value,
+      tempo: autoTempo.value ? 'auto' : tempo.value,
+      ...modelArgs(),
+      upscale: upscale.value, thicken: !!thicken.value,
+      quantize: quantize.value, minNoteMs: Number(minNoteMs.value) || 0,
+      dedupe: !!dedupe.value,
+      sounding: !!sounding.value,
+    };
     let r = await run({ ...base, inputs });
     if (!r || r.canceled) return;
     // PDF：渲染进程逐页栅格化（多选时每个 PDF 都要渲），再把页图按原顺序送回去
@@ -193,6 +269,7 @@ async function convert(inputs: any[], label?: string) {
     srcName.value = r.fileName || srcName.value;
     progress.value = 88; progressText.value = t('生成试看…');
     try {
+      loadOcrLangs();
       const mid = parseMidi(bytes);
       tracks.value = (mid.tracks || []).filter((x: any) => (x.notes || []).length);
       await nextTick();
@@ -258,8 +335,15 @@ const isRaster = computed(() => kind.value === 'raster' || kind.value === 'pdf')
 const engineName = computed(() => {
   const b = String((info.value && (info.value.backend || info.value.engine)) || '');
   if (b === 'audiveris') return 'Audiveris';
+  if (b === 'homr') return 'homr (AI)';
   if (b === 'classical') return t('内置识谱');
   return b || '—';
+});
+/** 轨名一律显示引擎给的 label（中文名），拿不到就用 MIDI 里的 ASCII 轨名。 */
+const trackChips = computed(() => {
+  const it = (info.value && info.value.tracks) || [];
+  if (it.length) return it.map((x: any) => ({ name: x.label || x.name, n: Number(x.notes) || 0, range: x.range || null }));
+  return (tracks.value || []).map((x: any) => ({ name: x.name || '', n: (x.notes || []).length, range: null }));
 });
 /** parseMidi 回的 notes 是数组，引擎回的 tracks[].notes 是数字 —— 两种都要能显示。 */
 function noteCountOf(tr: any): number {
@@ -280,11 +364,37 @@ const warnings = computed<string[]>(() => {
     if (w && w.code === 'backend-missing') return t('没装识谱增强引擎（Audiveris），已用内置识谱；可在「资源中心 → 识谱引擎」安装后重试。');
     if (w && w.code === 'classical-fallback') return t('已回退到内置识谱：离线可用，但变化音与节奏精度低于增强引擎。');
     if (w && w.code === 'audiveris-failed') return t('识谱增强引擎失败，已回退内置识谱。');
-    if (w && w.code === 'page-failed') return t('第 ') + w.page + t(' 页识别失败，已跳过。');
+    if (w && w.code === 'page-failed') {
+      // 引擎已把原因归类（fail），这里翻成「下一步怎么做」；拿不准就把原文附上
+      const why = Array.isArray(w.reasons) && w.reasons.length ? '（' + String(w.reasons[0]).slice(0, 90) + '）' : '';
+      const hint = ({
+        lowres: t('分辨率不足：把「放大倍数」调到 4×，或换更高清的图。'),
+        oom: t('内存不足（已自动降档重试）：仍失败就把放大倍数调小一档。'),
+        timeout: t('识别超时：这一页太密，建议拆页或把放大倍数调小。'),
+        'no-staves': t('没找到五线谱：确认这一页是谱面，而不是封面或纯文字页。'),
+        'beam-guess': t('符杠厚度估算不可靠：常见于符杠很少的页，可试「加粗谱线」。'),
+        export: t('识别完成但导出失败：多为分辨率或内存问题，已自动降档重试过。'),
+      } as any)[w.fail] || '';
+      return t('第 ') + w.page + t(' 页识别失败，已跳过') + (hint ? '：' + hint : why) + '。';
+    }
+    if (w && w.code === 'page-partial') return t('只成功了 ') + w.ok + '/' + w.total + t(' 页，其余页没有解析出音符。');
+    if (w && w.code === 'page-unreadable') return t('第 ') + w.page + t(' 页的 MusicXML 解析失败，已跳过。');
+    if (w && w.code === 'no-ocr-lang') return t('没装 OCR 语言包：乐器名、速度记号、和弦名都读不出来（声部只能叫「声部 N」）。可在「资源中心 → 识谱引擎」装英语包，约 23 MB。');
+    if (w && w.code === 'raw-timing') return t('时值未做网格对齐：识谱抖动大时可以打开「量化」。');
+    if (w && w.code === 'postprocess-failed') return t('后处理（量化/去重）失败，已按原始时值输出。');
     return String((w && w.code) || w || '');
   });
 });
 const noteTotal = computed(() => (info.value && (info.value.notes || info.value.noteCount)) || 0);
+/** 后处理明细（量化/去重/丢短音），让「参数真的生效了」看得见。 */
+const ppStats = computed(() => (info.value && info.value.stats) || null);
+/** 逐页音符数 + 识别时用的放大倍数（哪页出问题一眼看得出）。 */
+const pageRows = computed(() => {
+  const r = info.value || {};
+  const per = r.notesPerPage || [];
+  const scales = r.scales || [];
+  return per.map((n: number, i: number) => ({ page: i + 1, notes: n, scale: scales[i] || 0 }));
+});
 const durSec = computed(() => {
   const ms = (info.value && info.value.durationMs) || 0;
   return ms ? (ms / 1000).toFixed(1) + 's' : '—';
@@ -312,6 +422,18 @@ async function importToLibrary() {
   } catch (e: any) { app.toast(t('导入失败：') + String((e && e.message) || e), 'warn'); }
 }
 
+/** 一键「以总谱查看」：把刚转出来的 MIDI 存进曲库并切到乐谱页的总谱模式。
+ *  交接走 window.__fufumidiScoreMode（一次性），乐谱页激活时取走 —— 与页图底图同一套做法。 */
+async function openAsFullScore() {
+  if (!midiBytes.value || !srcName.value) { app.toast(t('请先转换出一份 MIDI'), 'warn'); return; }
+  (window as any).__fufumidiScoreMode = 'score';
+  try {
+    await app.importFiles([{ name: srcName.value.replace(/.[^.]+$/, '') + '.mid', bytes: midiBytes.value }]);
+  } catch (e: any) { app.toast(t('导入失败：') + String((e && e.message) || e), 'warn'); return; }
+  app.setView('score');
+  app.toast(t('已按总谱打开'), 'ok');
+}
+
 async function saveAs() {
   if (!midiBytes.value || !srcName.value) return;
   try {
@@ -328,6 +450,7 @@ async function saveAs() {
 onMounted(() => {
   const b = bridge();
   refreshOmr();
+  loadOcrLangs();
   if (b && b.omrEngine && typeof b.omrEngine.onProgress === 'function') {
     offOmr = b.omrEngine.onProgress((p: any) => { if (p && p.text) omrText.value = String(p.text) + (p.percent ? ' ' + p.percent + '%' : ''); });
   }
@@ -343,29 +466,42 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
 </script>
 
 <template>
-  <div class="sc-wrap">
-    <div class="sc-head">
-      <div class="sc-title"><Icon name="score" :size="16" /> {{ t('变谱') }}</div>
-      <div class="sc-sub">{{ t('任何形态的谱面，直接变成可编辑的 MIDI 工程；支持多选与拖拽。') }}</div>
+  <div class="page sc-wrap">
+    <div class="page-head">
+      <div class="page-ic"><Icon name="score" :size="20" /></div>
+      <div class="grow">
+        <div class="page-title">{{ t('变谱') }}</div>
+        <div class="page-sub">{{ t('谱面 → MIDI · 光学识谱 + MusicXML 精确解析 · 离线完成') }}</div>
+      </div>
+      <span class="tag" :class="{ 'warn-tag': !!(omrEngine && !omrEngine.installed) }">
+        {{ omrEngine && omrEngine.installed ? t('识谱增强引擎已就绪') : t('内置识谱（离线）') }}
+      </span>
+      <button v-if="omrEngine && !omrEngine.installed" class="btn sm" :disabled="omrBusy" @click="installOmr">
+        <Icon name="download" :size="13" /> {{ omrBusy ? t('安装中…') : t('安装识谱引擎') }}
+      </button>
     </div>
 
-    <div class="sc-card sc-in" :class="{ 'sc-drop': dropOn }"
+    <div class="sc-grid">
+    <div class="sc-col">
+    <div class="card sc-card sc-in" :class="{ 'sc-drop-on': dropOn }"
          @dragenter.prevent="dropOn = true" @dragover.prevent="dropOn = true"
          @dragleave="dropOn = false" @drop="onDrop">
+      <div class="sc-dropzone" :class="{ over: dropOn }" @click="pick">
+        <div class="sc-dz-ic"><Icon name="score" :size="26" /></div>
+        <div class="sc-dz-tx">
+          <b>{{ dropOn ? t('释放以上传') : t('拖入谱面 / 点击选择') }}</b>
+          <span>{{ t('PNG · JPG · PDF · MusicXML / MXL · MIDI · 支持多选') }}</span>
+        </div>
+      </div>
       <div class="sc-row">
         <button class="btn primary sc-main" :disabled="busy" @click="pick">
           <Icon name="import" :size="14" />
           <span>{{ busy ? progressText || t('转换中…') : t('选择谱面文件…') }}</span>
         </button>
-        <div class="sc-fmt">
-          <span class="sc-chip">MusicXML / MXL</span>
-          <span class="sc-chip">PDF</span>
-          <span class="sc-chip">PNG · JPG · GIF · WebP · BMP · TIFF</span>
-          <span class="sc-chip">MIDI</span>
-        </div>
+        <span class="tag">{{ t('多选 / 拖拽 / PDF 自动栅格化') }}</span>
       </div>
       <div class="sc-prog" v-if="busy">
-        <div class="sc-prog-bar" :style="{ width: Math.max(4, progress) + '%' }"></div>
+        <div class="sc-prog-bar" :style="{ transform: 'scaleX(' + ((Math.max(4, progress)) / 100) + ')' }"></div>
       </div>
       <TransitionGroup v-if="files.length" name="sc-file" tag="ul" class="sc-files">
         <li v-for="(f, i) in files" :key="f + i">
@@ -392,31 +528,17 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
         <span>{{ t('识谱增强引擎已就绪：Audiveris') }} {{ omrEngine.version }}</span>
       </div>
 
-      <div class="sc-opts">
-        <label class="sc-opt">
-          <span>{{ t('拍号') }}</span>
-          <select v-model.number="beats" :disabled="busy">
-            <option :value="2">2/4</option>
-            <option :value="3">3/4</option>
-            <option :value="4">4/4</option>
-            <option :value="6">6/8</option>
-          </select>
-          <select v-model.number="beatType" :disabled="busy">
-            <option :value="4">/4</option>
-            <option :value="8">/8</option>
-          </select>
-        </label>
-        <label class="sc-opt">
-          <span>{{ t('速度') }}</span>
-          <input type="number" min="20" max="300" step="1" v-model.number="tempo" :disabled="busy" />
-          <span class="sc-unit">BPM</span>
-        </label>
+      <div class="sc-opts-line">
+        <span>{{ t('识别模型') }}<b>{{ t(curModel.name) }}</b></span>
+        <span>{{ t('放大') }}<b>{{ upscale === 'auto' ? t('自动') : upscale + '×' }}</b></span>
+        <span>{{ t('量化') }}<b>{{ quantize === 'off' ? t('不对齐') : quantize }}</b></span>
+        <span v-if="thicken">{{ t('加粗谱线') }}</span>
       </div>
     </div>
 
     <div v-if="err" class="sc-err sc-in"><Icon name="warn" :size="14" /> {{ err }}</div>
 
-    <div v-if="info" class="sc-card sc-in">
+    <div v-if="info" class="card sc-card sc-in">
       <div class="sc-stats">
         <span v-if="info.tracks"><b>{{ info.tracks.length }}</b>{{ t(' 个声部') }}</span>
         <span><b>{{ noteTotal }}</b>{{ t(' 个音符') }}</span>
@@ -425,15 +547,26 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
         <span v-if="info.accidentals !== undefined">{{ t('变化音') }} <b>{{ info.accidentals }}</b></span>
         <span v-if="info.spacing">{{ t('谱线间距') }} <b>{{ info.spacing }}px</b></span>
         <span v-if="info.tempoChanges > 1" class="muted">{{ t('速度变化 ') }}{{ info.tempoChanges }}{{ t(' 次') }}</span>
-        <span v-if="info.pages > 1" class="muted">{{ info.pages }}{{ t(' 页') }}</span>
+        <span v-if="info.transposedTracks" class="muted">{{ t('移调校正 ') }}{{ info.transposedTracks }}{{ t(' 个声部') }}</span>
+        <!-- 拍号是**推**出来的（Audiveris 不导出 <time>），要如实标注，别让用户以为是读出来的 -->
+        <span v-if="info.timeSig" class="muted">{{ t('拍号 ') }}<b>{{ info.timeSig }}</b><template v-if="info.meterInferred"> {{ t('推断值') }}</template></span>
+        <span v-if="info.pages > 1" class="muted">{{ info.pages }}{{ t(' 页') }}<template v-if="info.pageTotal > info.pages"> / {{ info.pageTotal }}</template></span>
+      </div>
+      <div v-if="pageRows.length || ppStats" class="sc-pages">
+        <span v-for="r in pageRows" :key="r.page" class="sc-pg">
+          {{ t('第') }}{{ r.page }}{{ t('页') }} · {{ r.notes }}{{ t(' 音') }}<template v-if="r.scale"> · {{ r.scale }}×</template>
+        </span>
+        <span v-if="ppStats && ppStats.dup" class="sc-pg dim">{{ t('去重 ') }}{{ ppStats.dup }}</span>
+        <span v-if="ppStats && ppStats.quantized" class="sc-pg dim">{{ t('量化 ') }}{{ ppStats.quantized }}</span>
+        <span v-if="ppStats && ppStats.short" class="sc-pg dim">{{ t('滤除过短 ') }}{{ ppStats.short }}</span>
       </div>
       <ul v-if="warnings.length" class="sc-warn">
         <li v-for="(w, i) in warnings" :key="i"><Icon name="warn" :size="12" /> {{ w }}</li>
       </ul>
       <div class="sc-preview"><canvas ref="previewEl"></canvas></div>
       <div class="sc-tracks">
-        <span v-for="(tr, i) in tracks" :key="i" class="sc-tr">
-          {{ tr.name }} · {{ noteCountOf(tr) }}{{ t(' 音') }}
+        <span v-for="(tr, i) in trackChips" :key="i" class="sc-tr">
+          {{ tr.name }} · {{ tr.n }}{{ t(' 音') }}
         </span>
       </div>
 
@@ -459,74 +592,257 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
         <button class="btn" data-guide="sc-proofread" :title="t('把原谱页图半透明垫到工作台的钢琴卷帘下，对着谱面逐音校对')" @click="proofreadInWorkbench">
           <Icon name="wallpaper" :size="14" /> {{ t('在工作台校对') }}
         </button>
+        <button class="btn" data-guide="sc-fullscore" :title="t('把这份 MIDI 按总谱排版打开（每个声部一行谱表）')" @click="openAsFullScore">
+          <Icon name="score" :size="14" /> {{ t('以总谱查看') }}
+        </button>
         <button class="btn" @click="saveAs"><Icon name="save" :size="14" /> {{ t('另存为 MIDI…') }}</button>
       </div>
+    </div>
+
+    <!-- 还没转换时的空态：把「怎么用」和三种谱面的差别写在正中间，不留一大片白 -->
+    <div v-else class="card sc-card sc-empty sc-in">
+      <div class="sc-empty-head">
+        <Icon name="score" :size="20" />
+        <div class="sc-empty-tx">
+          <b>{{ t('还没转换任何谱面') }}</b>
+          <span>{{ t('右边选识别模型与参数，然后把图片 / PDF / MusicXML / MIDI 拖进来，或点上面的按钮。') }}</span>
+        </div>
+      </div>
+      <ul class="sc-empty-list">
+        <li>{{ t('单乐器钢琴谱：两行大谱表、页宽通常够 —— 用「自动放大 + 不加粗」一次就能用。') }}</li>
+        <li>{{ t('管弦乐总谱：一页几十行谱表，识别失败的那几页会逐页列在结果里（不再静默少页）。') }}</li>
+        <li>{{ t('扫描件 / 手机拍照：打开「加粗谱线」并放大 —— 谱线一断，整页都会被判为无效。') }}</li>
+        <li>{{ t('MusicXML / MIDI：不经过识谱，直接精确转换；右栏参数对它们不生效。') }}</li>
+      </ul>
+    </div>
+    </div>
+
+    <aside class="sc-side">
+      <div class="card sc-side-card">
+        <div class="sc-side-head"><Icon name="spark" :size="13" /> {{ t('识别模型') }}</div>
+        <button v-for="m in MODELS" :key="m.id" type="button" class="sc-model"
+                :class="{ on: model === m.id }" :disabled="busy"
+                @click="model = m.id">
+          <span class="sc-model-nm">{{ t(m.name) }}</span>
+          <span class="sc-model-sub">{{ t(m.sub) }}</span>
+          <span v-if="m.need" class="sc-model-tag" :class="{ warn: !!(omrEngine && !omrEngine.installed) }">
+            {{ omrEngine && omrEngine.installed ? t('已安装') : t('未安装') }}
+          </span>
+          <span v-else-if="m.needHomr" class="sc-model-tag" :class="{ warn: !(homrEngine && homrEngine.ready) }">
+            {{ (homrEngine && homrEngine.ready) ? t('已安装') : t('未安装') }}
+          </span>
+          <span v-else-if="m.id === 'auto'" class="sc-model-tag">{{ t('推荐') }}</span>
+        </button>
+        <div class="sc-side-hint">{{ t('只有图片 / PDF 走识谱；MusicXML 与 MIDI 是精确解析或直通。') }}</div>
+      </div>
+
+      <div class="card sc-side-card">
+        <div class="sc-side-head"><Icon name="gear" :size="13" /> {{ t('识别参数') }}</div>
+        <label class="sc-field">
+          <span class="sc-field-nm">{{ t('拍号') }}</span>
+          <select v-model="beats" :disabled="busy">
+            <option value="auto">{{ t('自动') }}</option>
+            <option value="2">2/4</option>
+            <option value="3">3/4</option>
+            <option value="4">4/4</option>
+            <option value="6">6/8</option>
+          </select>
+          <select v-model.number="beatType" :disabled="busy || beats === 'auto'">
+            <option :value="4">/4</option>
+            <option :value="8">/8</option>
+          </select>
+        </label>
+        <label class="sc-field">
+          <span class="sc-field-nm">{{ t('速度') }}</span>
+          <select v-model="autoTempo" :disabled="busy">
+            <option :value="true">{{ t('自动') }}</option>
+            <option :value="false">{{ t('指定') }}</option>
+          </select>
+          <input type="number" min="20" max="300" step="1" v-model.number="tempo" :disabled="busy || autoTempo" />
+          <span class="sc-unit">BPM</span>
+        </label>
+        <label class="sc-field">
+          <span class="sc-field-nm">{{ t('放大倍数') }}</span>
+          <select v-model="upscale" :disabled="busy">
+            <option value="auto">{{ t('自动') }}</option>
+            <option value="1">1×</option>
+            <option value="2">2×</option>
+            <option value="3">3×</option>
+            <option value="4">4×</option>
+          </select>
+        </label>
+        <label class="sc-field">
+          <span class="sc-field-nm">{{ t('加粗谱线') }}</span>
+          <select v-model="thicken" :disabled="busy">
+            <option :value="false">{{ t('关') }}</option>
+            <option :value="true">{{ t('开') }}</option>
+          </select>
+        </label>
+        <label class="sc-field">
+          <span class="sc-field-nm">{{ t('量化网格') }}</span>
+          <select v-model="quantize" :disabled="busy">
+            <option value="off">{{ t('不对齐') }}</option>
+            <option value="1/4">1/4</option>
+            <option value="1/8">1/8</option>
+            <option value="1/16">1/16</option>
+            <option value="1/32">1/32</option>
+          </select>
+        </label>
+        <label class="sc-field">
+          <span class="sc-field-nm">{{ t('最短音符') }}</span>
+          <select v-model.number="minNoteMs" :disabled="busy">
+            <option :value="0">{{ t('不过滤') }}</option>
+            <option :value="30">30 ms</option>
+            <option :value="60">60 ms</option>
+            <option :value="120">120 ms</option>
+          </select>
+        </label>
+        <label class="sc-field">
+          <span class="sc-field-nm">{{ t('去重') }}</span>
+          <select v-model="dedupe" :disabled="busy">
+            <option :value="true">{{ t('开') }}</option>
+            <option :value="false">{{ t('关') }}</option>
+          </select>
+        </label>
+        <div class="sc-field">
+          <span class="sc-field-nm">{{ t('移调乐器') }}</span>
+          <select v-model="sounding" :disabled="busy">
+            <option :value="true">{{ t('实际音高') }}</option>
+            <option :value="false">{{ t('记谱音高') }}</option>
+          </select>
+        </div>
+        <div class="sc-field">
+          <span class="sc-field-nm">{{ t('OCR 语言包') }}</span>
+          <span class="sc-ocr" :class="{ off: !ocrLangs.length }">{{ ocrLangs.length ? ocrLangs.join(' · ') : t('未安装') }}</span>
+          <button class="btn sm ghost" @click="openOcrResources">{{ t('资源中心') }}</button>
+        </div>
+        <div class="sc-side-hint">{{ t('速度/拍号默认「自动」：谱面自己写的优先，填了才覆盖。') }}</div>
+      </div>
+
+      <div class="card sc-side-card">
+        <div class="sc-side-head"><Icon name="score" :size="13" /> {{ t('谱面类型') }}</div>
+        <button v-for="s in SCENES" :key="s.id" type="button" class="sc-scene" :disabled="busy" @click="applyScene(s)">
+          <span class="sc-scene-nm">{{ t(s.name) }}</span>
+          <span class="sc-scene-desc">{{ t(s.desc) }}</span>
+        </button>
+      </div>
+    </aside>
     </div>
   </div>
 </template>
 
 <style scoped>
-.sc-wrap { padding: 18px 20px 26px; max-width: 980px; }
-.sc-head { margin-bottom: 12px; }
-.sc-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; color: var(--text); }
-.sc-sub { margin-top: 4px; font-size: 12.5px; color: var(--muted); }
-.sc-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
-.sc-in { animation: scIn 0.28s cubic-bezier(.2,.7,.3,1) both; }
+/* 与「转录」「转换」同一条规矩：外边距由全局 .page 给，这里只限宽 */
+.sc-wrap { max-width: 1040px; }
+/* 两栏：左边导入 + 结果，右边模型 / 参数 / 谱面类型。
+   原来这些控件全塞在一张卡里，页面下半截是一大片空白（用户：「太空旷」）。 */
+.sc-grid { display: grid; grid-template-columns: minmax(0, 1fr) 326px; gap: 14px; align-items: start; }
+.sc-col { min-width: 0; }
+.sc-side { display: flex; flex-direction: column; gap: 8px; position: sticky; top: 10px; }
+.sc-side-card { padding: 12px 14px; margin-bottom: 0; gap: 8px; }
+.sc-side-head { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 2px; }
+.sc-side-hint { margin-top: 6px; font-size: 11.5px; color: var(--stone); line-height: 1.55; }
+.sc-model { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 8px; width: 100%; text-align: left;
+  padding: 8px 10px; margin-bottom: 5px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); cursor: pointer;
+  transition: border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
+.sc-model:hover { border-color: var(--border-strong); }
+.sc-model:active { transform: scale(0.99); }
+.sc-model.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: 0 6px 16px rgba(10, 10, 10, 0.14); }
+.sc-model-nm { grid-column: 1; font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.sc-model-sub { grid-column: 1; font-size: 11px; color: var(--stone); line-height: 1.45; }
+.sc-model-tag { grid-column: 2; grid-row: 1; align-self: start; font-size: 11px; color: var(--steel);
+  background: var(--surface); border: 1px solid var(--hairline); border-radius: 999px; padding: 1px 9px; }
+.sc-model-tag.warn { color: #ffb340; border-color: color-mix(in srgb, #ffb340 45%, var(--line)); }
+.sc-scene { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
+  padding: 8px 10px; margin-bottom: 5px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); cursor: pointer;
+  transition: border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
+.sc-scene:hover { border-color: var(--border-strong); }
+.sc-scene:active { transform: scale(0.99); }
+.sc-scene-nm { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.sc-scene-desc { font-size: 11px; color: var(--stone); line-height: 1.45; }
+.sc-empty { display: flex; flex-direction: column; gap: 12px; }
+.sc-empty-head { display: flex; gap: 10px; align-items: flex-start; color: var(--accent); }
+.sc-empty-tx { display: flex; flex-direction: column; gap: 3px; }
+.sc-empty-tx b { font-size: 13.5px; color: var(--ink); }
+.sc-empty-tx span { font-size: 12px; color: var(--stone); line-height: 1.55; }
+.sc-empty-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--stone); line-height: 1.65; }
+.sc-opts-line { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--stone); }
+.sc-opts-line b { margin-left: 5px; color: var(--ink); font-weight: 600; }
+.sc-pages { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--steel); }
+.sc-pg { border: 1px solid var(--hairline); border-radius: 999px; padding: 1px 9px; background: var(--surface); }
+.sc-pg.dim { border-style: dashed; opacity: .85; }
+@media (max-width: 1080px) { .sc-grid { grid-template-columns: minmax(0, 1fr); } .sc-side { position: static; } }
+/* 页头用全局 .page-head / .page-ic / .page-title / .page-sub（与转录、转换一致） */
+.sc-wrap > .page-head { margin-bottom: 16px; }
+/* 外观（白底 / hairline / 圆角 / 阴影）由全局 .card 提供，这里只补排布 */
+.sc-card { display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px; }
+.sc-in { animation: scIn var(--motion-slow) var(--ease-out) both; }
 @keyframes scIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .sc-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+/* 与转录的 .tr-drop 同一套几何：1.5px 虚线 + 14 圆角 + 22 内边距 */
+.sc-dropzone { display: flex; align-items: center; gap: 14px; padding: 20px 22px; border: 1.5px dashed var(--border-strong);
+  border-radius: 14px; background: var(--canvas); cursor: pointer;
+  transition: border-color var(--motion-base) var(--ease-out), background var(--motion-base) var(--ease-out); }
+.sc-dropzone:hover, .sc-dropzone.over { border-color: var(--accent); background: var(--surface-soft); }
+.sc-dz-ic { width: 46px; height: 46px; border-radius: 12px; background: var(--surface); display: grid; place-items: center; color: var(--accent); flex: none; }
+.sc-card.sc-drop-on { border-color: var(--accent); }
+.sc-dz-tx { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sc-dz-tx b { font-size: 13.5px; color: var(--ink); }
+.sc-dz-tx span { font-size: 11.5px; color: var(--stone); }
 .sc-main { min-width: 168px; }
 .sc-fmt { display: flex; gap: 6px; flex-wrap: wrap; }
 .sc-chip { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; }
-.sc-prog { margin-top: 12px; height: 4px; border-radius: 3px; background: color-mix(in srgb, var(--line) 70%, transparent); overflow: hidden; }
-.sc-prog-bar { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #5ac8fa, #bf5af2, #5ac8fa); background-size: 200% 100%; animation: scFlow 1.1s linear infinite; transition: width 0.3s ease; }
+.sc-prog { height: 4px; border-radius: 3px; background: color-mix(in srgb, var(--hairline) 70%, transparent); overflow: hidden; }
+.sc-prog-bar { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #5ac8fa, #bf5af2, #5ac8fa); background-size: 200% 100%; animation: scFlow 1.1s linear infinite; transition: transform var(--motion-base) var(--ease-out); }
 @keyframes scFlow { from { background-position: 0 0; } to { background-position: 200% 0; } }
-.sc-hint { margin-top: 10px; font-size: 11.5px; color: var(--muted); line-height: 1.6; }
-/* 拖拽悬停：整卡描边亮起（时长/缓动跟全局一致：0.2~0.34s + cubic-bezier(.2,.7,.3,1)） */
-.sc-card.sc-drop { border-color: color-mix(in srgb, #5ac8fa 60%, var(--line));
-  background: color-mix(in srgb, #5ac8fa 8%, var(--panel));
-  transition: border-color .2s cubic-bezier(.2,.7,.3,1), background .2s cubic-bezier(.2,.7,.3,1); }
+.sc-hint { font-size: 11.5px; color: var(--stone); line-height: 1.6; }
+/* 拖拽悬停：整卡描边亮起（时长/缓动跟全局一致：0.2~0.34s + var(--ease-out)） */
+.sc-card.sc-drop-on { transition: border-color var(--motion-base) var(--ease-out); }
 /* 文件列表：多选/拖拽进来的文件逐个滑入 */
 .sc-files { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .sc-files li { display: inline-flex; align-items: center; gap: 5px; max-width: 260px;
-  padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg);
-  font-size: 11px; color: var(--muted); }
+  padding: 2px 10px; border-radius: 999px; border: 1px solid var(--hairline); background: var(--surface);
+  font-size: 11px; color: var(--steel); }
 .sc-files li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sc-file-enter-active { transition: opacity .24s cubic-bezier(.2,.7,.3,1), transform .24s cubic-bezier(.2,.7,.3,1); }
-.sc-file-leave-active { transition: opacity .16s ease, transform .16s ease; position: absolute; }
+.sc-file-enter-active { transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out); }
+.sc-file-leave-active { transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); position: absolute; }
 .sc-file-enter-from { opacity: 0; transform: translateY(-6px) scale(.96); }
 .sc-file-leave-to { opacity: 0; transform: scale(.96); }
-.sc-file-move { transition: transform .24s cubic-bezier(.2,.7,.3,1); }
-.sc-engine { margin-top: 10px; display: flex; align-items: center; gap: 10px; padding: 9px 12px;
-  border: 1px solid color-mix(in srgb, #5ac8fa 45%, var(--line)); border-radius: 9px;
-  background: linear-gradient(100deg, color-mix(in srgb, #5ac8fa 12%, transparent), transparent 70%);
-  animation: scIn .3s cubic-bezier(.2,.7,.3,1) both; }
-.sc-engine.on { border-color: var(--line); background: none; font-size: 11.5px; color: var(--muted); }
+.sc-file-move { transition: transform var(--motion-base) var(--ease-out); }
+.sc-engine { display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--hairline)); border-radius: 10px;
+  background: linear-gradient(100deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%);
+  animation: scIn var(--motion-slow) var(--ease-out) both; }
+.sc-engine.on { border-color: var(--hairline); background: none; font-size: 11.5px; color: var(--stone); }
 .sc-engine-tx { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.sc-engine-tx b { font-size: 12.5px; color: var(--text); }
-.sc-engine-tx span { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.sc-engine-tx b { font-size: 12.5px; color: var(--ink); }
+.sc-engine-tx span { font-size: 11.5px; color: var(--stone); line-height: 1.5; }
 .sc-engine-prog { font-variant-numeric: tabular-nums; color: #7fd4ff !important; }
 .sc-engine .btn { margin-left: auto; flex: none; }
-.sc-opts { margin-top: 10px; display: flex; gap: 16px; flex-wrap: wrap; }
-.sc-opt { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
-.sc-opt select, .sc-opt input { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font-size: 12px; }
-.sc-opt input { width: 64px; }
+.sc-field { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 11.5px; color: var(--stone); }
+.sc-field-nm { flex: 1; min-width: 0; }
+.sc-field select, .sc-field input { background: var(--canvas); color: var(--ink); border: 1px solid var(--hairline); border-radius: 8px; padding: 4px 8px; font-size: 12px; }
+.sc-field input { width: 62px; }
 .sc-unit { opacity: 0.7; }
+/* OCR 语言包状态：装了显示语言代码，没装标红提示去资源中心 */
+.sc-ocr { font-size: 11.5px; color: var(--success-text); font-variant-numeric: tabular-nums; }
+.sc-ocr.off { color: var(--stone); }
 .sc-err { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 8px; background: color-mix(in srgb, #ff453a 14%, transparent); border: 1px solid color-mix(in srgb, #ff453a 40%, transparent); color: #ff8a80; font-size: 12.5px; margin-bottom: 12px; }
-.sc-stats { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
-.sc-stats b { color: var(--text); font-weight: 600; }
+.sc-stats { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--stone); }
+.sc-stats b { color: var(--ink); font-weight: 600; }
 .sc-warn { margin: 10px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
 .sc-warn li { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; color: #ffb340; line-height: 1.5; }
-.sc-preview { margin-top: 12px; height: 190px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.sc-preview { height: 190px; background: var(--surface); border: 1px solid var(--hairline); border-radius: 10px; overflow: hidden; }
 .sc-preview canvas { width: 100%; height: 100%; display: block; }
-.sc-tracks { margin-top: 8px; display: flex; gap: 10px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted); }
-.sc-tr { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
+.sc-tracks { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11.5px; color: var(--steel); }
+.sc-tr { border: 1px solid var(--hairline); border-radius: 999px; padding: 2px 10px; background: var(--surface); }
 .sc-ov { margin-top: 14px; }
-.sc-ov-head { display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; color: var(--text); }
+.sc-ov-head { display: flex; align-items: center; justify-content: space-between; font-size: 13px; font-weight: 700; color: var(--ink); }
 .sc-ov-tabs { display: flex; gap: 4px; }
-.sc-ov-tabs button { min-width: 24px; height: 22px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--muted); font-size: 11.5px; cursor: pointer; transition: all 0.16s ease; }
+.sc-ov-tabs button { min-width: 24px; height: 22px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--muted); font-size: 11.5px; cursor: pointer; transition: background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out), opacity var(--motion-fast) var(--ease-out); }
 .sc-ov-tabs button.on { color: #fff; background: #5ac8fa; border-color: #5ac8fa; }
-.sc-ov-box { margin-top: 8px; max-height: 460px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
-.sc-ov-img { display: block; width: 100%; animation: scFade 0.22s ease both; }
+.sc-ov-box { margin-top: 8px; max-height: 460px; overflow: auto; border: 1px solid var(--hairline); border-radius: 10px; background: #fff; }
+.sc-ov-img { display: block; width: 100%; animation: scFade var(--motion-base) var(--ease-out) both; }
 @keyframes scFade { from { opacity: 0; } to { opacity: 1; } }
 .sc-ov-tabs button:hover { border-color: color-mix(in srgb, #5ac8fa 55%, var(--line)); color: var(--text); }
 .sc-ov-legend { margin-top: 6px; display: flex; gap: 14px; font-size: 11px; color: var(--muted); }
@@ -534,5 +850,5 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
 .lg-note::before { background: #e62828; }
 .lg-acc::before { background: #009600; }
 .lg-bar::before { background: #ff00ff; }
-.sc-actions { margin-top: 14px; display: flex; gap: 10px; }
+.sc-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 </style>

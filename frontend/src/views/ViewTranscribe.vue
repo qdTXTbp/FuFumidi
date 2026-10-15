@@ -1,6 +1,6 @@
 <script setup>
 // 转录视图：音频 → MIDI（本地 Python 引擎，桌面端通过 fuBridge 桥接）
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue';
+import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { clamp, esc, fmtTime } from '../core/util.js';
@@ -152,10 +152,52 @@ const sepModels = ref([]);                          // 可选模型列表（含�
 const sepPickerOpen = ref(false);                   // 模型选择抽屉
 const currentSep = computed(() => sepModels.value.find(m => m.id === sepModel.value));
 function sepKindIcon(m) { return (m && m.id !== 'demucs_htdemucs') ? 'mic' : 'music'; }
-function sepKindName(m) { return m && m.kind === 'other' ? t('修复·VR') : t('人声分离'); }
+// ★ 别复用 '修复·VR' —— 那个 key 在 i18n 里是「恢复默认」按钮的文案
+//   （EN 译成 "Repair · Restore defaults"），用在这里英文/日文都是错的。凡「模型类别」一律走下面两条。
+// 分类按**用途**判，不按 manifest 分类：vr 分类里既有 UVR-DeNoise（修复）也有 1_HP-UVR（人声分离），
+// 全塞进一个标签下用户找不到东西；名字本身是可靠的判据（模型名都写明 Denoise / De-Echo / DeReverb）。
+function sepPurposeOf(m) {
+  const s = String((m && m.name) || '') + ' ' + String((m && m.id) || '');
+  return /denoise|de-?echo|dereverb|noise/i.test(s) ? 'repair' : 'separate';
+}
+function sepKindName(m) { return sepPurposeOf(m) === 'repair' ? t('修复 · 去噪') : t('人声分离'); }
+/* ---------------- 模型选择抽屉：搜索 + 分类 + 只看已下载 ---------------- */
+// 模型目录里 vocal / multi / single / vr 全列出来有几十条，单列长列表滚半天才找到目标。
+const sepQuery = ref('');
+const sepCat = ref('all');            // all | separate（人声分离） | other（修复 · 去噪）
+// ★ 默认**只显示可用**：仓库里 50 个模型没有任何 .yaml，下完也加载不了；
+//   默认把它们摆出来，用户就会照着我给的「去噪用音频处理」提示下一个跑不动的模型。
+const sepOnlyReady = ref(true);
+function sepCatOf(m) { return sepPurposeOf(m); }
+const sepModelsFiltered = computed(() => {
+  const q = sepQuery.value.trim().toLowerCase();
+  return sepModels.value.filter((m) => {
+    if (sepCat.value !== 'all' && sepCatOf(m) !== sepCat.value) return false;
+    // 「只显示可用」= 已下载 **且** 能真跑起来（缺配置的排除掉）
+    if (sepOnlyReady.value && !(m.exists && m.sepReady !== false)) return false;
+    if (!q) return true;
+    return [m.name, m.arch, m.use, m.note, m.id].some((v) => String(v || '').toLowerCase().includes(q));
+  });
+});
+const sepCatCounts = computed(() => {
+  const c = { all: sepModels.value.length, separate: 0, repair: 0 };
+  for (const m of sepModels.value) c[sepCatOf(m)]++;
+  return c;
+});
+// VR / UVR 去噪模型的音轨名来自权重本身（pymss 的 primary/secondary_stem，通常「Noise / No No Noise」），
+// 不是人声/伴奏那一套 —— 面板上别再摆出「人声 / 伴奏」让用户以为能选。
+const sepIsVr = computed(() => /(^|[^a-z])(vr|uvr)/i.test(String((currentSep.value && currentSep.value.arch) || '')));
+function onDocKeydown(e) { if (e && e.key === 'Escape' && sepPickerOpen.value) sepPickerOpen.value = false; }
 function pickSep(m) {
   if (!m) return;
   if (!m.exists) { toast(t('该模型未下载，请先到') + t('模型管理') + t('下载'), 'warn'); return; }
+  // 已下载但跑不动（缺 .yaml 配置）的模型：在这里拦住并说清原因，
+  // 不要等用户点了「开始分离」才在引擎里炸「该模型缺少配置文件」。
+  if (m.sepReady === false) {
+    const why = String(m.sepWhy || '');
+    toast(t('该模型暂时不可用：') + (why.indexOf('配置') >= 0 ? t('缺少配置文件（本机没有它的 .yaml，下载后也加载不了）') : t('未下载')), 'warn');
+    return;
+  }
   sepModel.value = m.id;
   msStems.value = [];      // 空 = 输出该模型全部音轨
   applyMsPresetForModel(m.id);
@@ -181,6 +223,62 @@ const sepOutputs = ref([]);
 const sepOutDir = ref('');
 const sepLogs = ref([]);
 const sepJobId = ref(0);
+const sepCanceled = ref(false);        // 用户点了「取消分离」——结束时要说"已取消"，不许报"失败"
+const advOpen = ref(false);            // 高级参数是否展开（原来是 <details>，为了能动画改成受控）
+
+/* ---------------- 模式切换：方向 + 整页高度过渡 ----------------
+   为什么还要管"整页高度"：三种模式的内容高度差好几百像素（音频处理比通用识别矮 ~360px，
+   展开高级参数时差得更多）。只做淡入淡出的话，新内容一挂上整页会"咯噔"跳一下 —— 那正是
+   "切换太突兀"的来源。做法是经典的 FLIP：切之前把整页高度钉在旧值，等新内容挂上后量出新高度，
+   再用 height 的 transition 平滑滑过去；期间 overflow: hidden 把溢出裁掉。 */
+const pageEl = ref(null);
+const MODE_ORDER = ['universal', 'piano', 'separate'];
+const swapDir = ref('fwd');            // fwd=往后切（右侧进） / back=往回切（左侧进）
+let _flipToken = 0;
+let _flipH0 = 0;
+let _flipSafety = 0;
+
+function _clearFlip() {
+  const el = pageEl.value;
+  if (!el) return;
+  el.style.transition = '';
+  el.style.height = '';
+  el.style.overflow = '';
+}
+
+watch(mode, (nv, ov) => {
+  swapDir.value = MODE_ORDER.indexOf(nv) >= MODE_ORDER.indexOf(ov) ? 'fwd' : 'back';
+  const el = pageEl.value;
+  if (!el) return;
+  const token = ++_flipToken;
+  _flipH0 = el.offsetHeight;
+  el.style.overflow = 'hidden';
+  el.style.height = _flipH0 + 'px';
+  // 安全网：万一 Transition 没跑（没有动画/被跳过），900ms 后一定要把内联样式清掉
+  window.clearTimeout(_flipSafety);
+  _flipSafety = window.setTimeout(() => { if (token === _flipToken) _clearFlip(); }, 900);
+});
+
+/* ★ 时机要用 Transition 的事件，不能靠"等 150ms"猜：out-in 里如果离场还没结束，
+   pageEl.scrollHeight 量到的仍是旧内容的高度（实测会误判成"高度没变"而直接跳变）。 */
+async function onSwapLeft() {
+  const el = pageEl.value;
+  if (!el) return;
+  const token = _flipToken;
+  await nextTick();                          // 这一刻新内容刚挂上
+  if (token !== _flipToken || !el.isConnected) return;
+  // ★ 量"内容自然高度"不能用 scrollHeight：高度被钉在旧值上时，scrollHeight 取的是
+  //   max(内容, 已钉高度) —— 变矮的情况会量到旧值，于是误判成"高度没变"而直接跳变（实测）。
+  //   先临时 height:auto 量一次再钉回去，中间是同步的、不会闪。
+  el.style.height = 'auto';
+  const h1 = el.offsetHeight;
+  el.style.height = _flipH0 + 'px';
+  if (Math.abs(h1 - _flipH0) < 2) { _clearFlip(); return; }
+  void el.offsetHeight;                      // 强制回流：让下面的 transition 从 _flipH0 起跑
+  el.style.transition = 'height .34s cubic-bezier(.22,.7,.28,1)';
+  el.style.height = h1 + 'px';
+  window.setTimeout(() => { if (token === _flipToken) _clearFlip(); }, 400);
+}
 // MSST 推理参数（无预设体系，逐项独立）
 const msChunk = ref(926100);          // 分块大小（样本数，建议 44100 整数倍）
 const msOverlap = ref(4);             // 重叠数 N → step = chunk // N
@@ -204,7 +302,7 @@ function sepArchStems(arch) {
   if (a.includes('htdemucs') || a.includes('demucs')) return ['drums', 'bass', 'other', 'vocals'];
   return ['vocals', 'other'];
 }
-const msStemOptions = computed(() => sepArchStems(currentSep.value && currentSep.value.arch));
+const msStemOptions = computed(() => sepIsVr.value ? [] : sepArchStems(currentSep.value && currentSep.value.arch));
 function toggleStem(s) { const i = msStems.value.indexOf(s); if (i >= 0) msStems.value.splice(i, 1); else msStems.value.push(s); }
 function allStems() { msStems.value = msStemOptions.value.slice(); }
 function logSep(txt, isErr) { sepLogs.value.push({ txt, isErr: !!isErr }); if (sepLogs.value.length > 200) sepLogs.value.splice(0, sepLogs.value.length - 200); }
@@ -232,7 +330,7 @@ async function runSeparate() {
   if (!sepFile.value) { toast(t('请先选择要分离的音频'), 'warn'); return; }
   if (!currentSep.value || !currentSep.value.exists) { toast(t('请先选择/下载处理模型'), 'warn'); return; }
   if (msChunk.value < 44100) { toast(t('分块大小 chunk_size 至少 44100'), 'warn'); return; }
-  sepBusy.value = true; sepProgress.value = 0; sepLogs.value = []; sepOutputs.value = []; sepOutDir.value = ''; sepStage.value = '';
+  sepBusy.value = true; sepCanceled.value = false; sepProgress.value = 0; sepLogs.value = []; sepOutputs.value = []; sepOutDir.value = ''; sepStage.value = '';
   sepStartAt.value = Date.now(); sepJobId.value++;
   const stems = msStems.value.length ? msStems.value.slice() : null;
   const cfg = { id: 'sep' + sepJobId.value, audio: sepFile.value, sep_model: sepModel.value,
@@ -243,14 +341,29 @@ async function runSeparate() {
     if (res && res.ok) {
       sepOutputs.value = res.outputs || []; sepOutDir.value = res.out_dir || ''; sepProgress.value = 100; sepStage.value = t('分离完成');
       toast(t('分离完成，共 ') + (res.outputs || []).length + t(' 个音轨'), 'ok');
+    } else if (sepCanceled.value) {
+      // 取消**不是**失败：引擎被杀掉后 onDone 会带非 0 code 回来，别把"已取消"报成"失败"
+      sepStage.value = t('已取消'); toast(t('已取消分离'), 'ok');
     } else {
       const msg = (res && res.error) || t('分离失败');
       sepStage.value = t('失败'); logSep(msg, true); toast(msg, 'warn');
     }
-  } catch (e) { const msg = (e && e.message) || String(e); sepStage.value = t('失败'); logSep(msg, true); toast(t('分离失败：') + msg, 'warn'); }
+  } catch (e) {
+    if (sepCanceled.value) { sepStage.value = t('已取消'); toast(t('已取消分离'), 'ok'); return; }
+    const msg = (e && e.message) || String(e); sepStage.value = t('失败'); logSep(msg, true); toast(t('分离失败：') + msg, 'warn');
+  }
   finally { sepBusy.value = false; }
 }
 function openSepOut() { if (sepOutDir.value && bridge.openOutput) bridge.openOutput(sepOutDir.value); else toast(t('请使用桌面版打开输出文件夹'), 'warn'); }
+/* 取消分离：主进程 engine:cancel 杀的正是 convertChildren 里登记的 'sep<N>'（见 main/task-queue.js），
+   面板以前没给按钮 —— 长曲分离要等几十分钟，用户只能干看着。 */
+function cancelSeparate() {
+  if (!sepBusy.value) return;
+  sepCanceled.value = true;
+  try { if (bridge && bridge.cancel) bridge.cancel('sep' + sepJobId.value); } catch (e) {}
+  sepStage.value = t('已请求取消…');
+  logSep(t('已请求取消分离…'), true);
+}
 /* 分离结果 → 翻唱工作流：把音轨路径交给「翻唱」页（那边读 localStorage 接手），
    省掉「再选一次歌、再分离一遍」。人声/伴奏按文件名认，认不出就不带。 */
 function coverFromSep() {
@@ -324,8 +437,10 @@ const pedal = ref(true);
 const drums = ref(false);
 const stemExport = ref(false);
 const stemFormat = ref('wav');
-const denoise = ref(false);
-const normalize = ref(false);
+// ★ 降噪不在转录页暴露：2026-10-15 基准实测两档降噪都会**增加**噪声引起的假音符
+//   （12 dB 素材：1 → 14/39；6 dB 素材：16 → 16/50），所以不摆这个开关。
+//   引擎侧仍支持 denoise_mode（CLI/实验用，见 engine/audio_chain.py），但界面不再发这个键。
+//   「响度平衡」同理：电平统一现在是恒定执行的（见 audio_chain 的 −16 dBFS），不再需要一个开关。
 const autoBpm = ref(true);   // 默认开启：转写出的 MIDI 按源音频自动测速，播放/导出与原曲速度一致
 
 // 转录队列（**当前激活队列**的条目；多队列见下方「多队列」一节）
@@ -408,12 +523,12 @@ const WEB_BUILTIN_PRESETS = () => {
     model: 'basic', onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
     melodia: true, min_freq: 0, max_freq: 0, merge_overlap: true, vel_norm: true,
     beat_grid: true, tempo: 0, perf: 'quality',
-    denoise: false, normalize: false, auto_bpm: false,
+    auto_bpm: false,
   };
   const piano = {
     onset_threshold: 0.3, frame_threshold: 0.1, min_note_ms: 60, merge_gap_ms: 30,
     include_pedal: true, perf: 'quality',
-    denoise: false, normalize: false, auto_bpm: false,
+    auto_bpm: false,
   };
   return [
     { name: 'Basic Pitch · 最优', mode: 'universal', params: { ...basic } },
@@ -427,7 +542,7 @@ const WEB_BUILTIN_PRESETS = () => {
     { name: '分离 · 最优', mode: 'separate', params: {
       onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
       include_drums: true, stem_format: 'wav', perf: 'quality',
-      denoise: false, normalize: false, auto_bpm: false } },
+      auto_bpm: false } },
   ];
 };
 
@@ -656,6 +771,49 @@ const sortedQueue = computed(() => {
   else if (sort.value === 'duration') arr.sort((a, b) => (a.duration || 0) - (b.duration || 0));
   return arr;
 });
+/* ---------------- 队列拖动排序（用户 2026-10-14 要求） ----------------
+   与侧边栏歌单/歌曲一致的交互：整行可拖，落点用 2px accent 线标出（上/下半行决定插前插后）。
+   ★ 只在「默认顺序」下可拖：按名称/类型/时长是**显示层**排序，拖出来的顺序会立刻被排序覆盖，
+     看着像没生效。非默认顺序时右下角给一句提示。 */
+const dragItemId = ref(0);
+function clearTrDragMarks() {
+  document.querySelectorAll('.tr-batch-item').forEach(x => x.classList.remove('tr-drag-before', 'tr-drag-after'));
+}
+function trDragStart(it, e) {
+  if (sort.value !== 'default') { toast(t('拖动排序要在「默认顺序」下进行'), 'warn'); return; }
+  dragItemId.value = it.id;
+  if (e && e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', String(it.id)); } catch (err) {}
+  }
+}
+function trDragOver(e, it) {
+  if (!dragItemId.value || dragItemId.value === it.id) return;
+  const r = e.currentTarget.getBoundingClientRect();
+  const before = (e.clientY - r.top) < r.height / 2;
+  e.currentTarget.classList.toggle('tr-drag-before', before);
+  e.currentTarget.classList.toggle('tr-drag-after', !before);
+}
+function trDragLeave(e) { e.currentTarget.classList.remove('tr-drag-before', 'tr-drag-after'); }
+function trDragEnd() { dragItemId.value = 0; clearTrDragMarks(); }
+function trDrop(e, target) {
+  e.stopPropagation();
+  const id = dragItemId.value;
+  const r = e.currentTarget.getBoundingClientRect();
+  const before = (e.clientY - r.top) < r.height / 2;
+  clearTrDragMarks();
+  if (!id || !target || id === target.id || sort.value !== 'default') { trDragEnd(); return; }
+  const from = queue.findIndex(x => x.id === id);
+  if (from < 0) { trDragEnd(); return; }
+  const [moved] = queue.splice(from, 1);
+  let to = queue.findIndex(x => x.id === target.id);   // 抽走之后重算落点
+  if (to < 0) to = queue.length;
+  if (!before) to += 1;
+  queue.splice(to, 0, moved);
+  saveQueue();
+  trDragEnd();
+}
+
 const queueStat = computed(() => {
   const n = queue.length, d = queue.filter(i => i.status === 'done').length, e = queue.filter(i => i.status === 'error').length;
   if (paused.value) return t('已暂停');
@@ -861,7 +1019,7 @@ function collectPresetParams() {
   const iv = (v) => parseInt(v, 10) || 0;
   const p = {
     perf: perf.value,
-    denoise: denoise.value, normalize: normalize.value, auto_bpm: autoBpm.value,
+    auto_bpm: autoBpm.value,
     merge_overlap: mergeOverlap.value, vel_norm: velNorm.value, tempo: iv(exportTempo.value),
   };
   if (mode.value === 'universal') {
@@ -929,8 +1087,12 @@ function applyPresetParams(p, opts) {
   // 鼓组：历史预设写 include_drums，界面 cfg 用 with_drums —— 两个都认
   const dr = has('include_drums') ? pr.include_drums : (has('with_drums') ? pr.with_drums : null);
   if (dr !== null) drums.value = !!dr;
-  if (has('denoise')) denoise.value = !!pr.denoise;
-  if (has('normalize')) normalize.value = !!pr.normalize;
+  // 旧预设里的 denoise / denoise_mode / normalize 一律忽略：降噪已从转录页移除，
+  // 电平统一恒定开启（见 collectParams 上方的说明）。
+  // ★ 2026-10-15：这里原来还有一行 `if (has('normalize')) normalize.value = ...`，
+  //   `normalize` 这个 ref 早已随降噪开关一起删掉 —— 运行时会抛 ReferenceError，
+  //   把本函数后半段（auto_bpm / tempo / 力度归一 / 节拍网格 / 弯音 / 旋律增强）全部吃掉。
+  //   实测在「套用带 normalize 键的预设」时必然触发，故整行删除。
   // 预设未显式指定 auto_bpm 时保留当前值（默认开），避免把自动测速关掉
   if (has('auto_bpm')) autoBpm.value = !!pr.auto_bpm;
   if (has('stem_format') && ['wav', 'flac', 'mp3'].indexOf(pr.stem_format) >= 0) stemFormat.value = pr.stem_format;
@@ -1113,8 +1275,6 @@ function collectParams() {
     onset_threshold: parseFloat(onset.value.toFixed(2)),
     frame_threshold: parseFloat(frame.value.toFixed(2)),
     min_note_length: parseInt(minNote.value, 10),
-    denoise: denoise.value,
-    normalize: normalize.value,
     auto_bpm: autoBpm.value,
   };
   if (mode.value === 'piano') {
@@ -1211,6 +1371,7 @@ async function runBatch() {
     return;
   }
   running.value = true; paused.value = false; cancelAll.value = false; busy.value = true; done.value = false; progress.value = 3; stage.value = '';
+  try { if (bridge && bridge.setTranscribePause) bridge.setTranscribePause(false); } catch (e) {}   // 清掉上次可能残留的暂停标记
   // 并行数：1-4（持久化）。GPU 模型显存有限，并行收益差；CPU 模型 2-3 收益明显。
   const para = Math.max(1, Math.min(4, parseInt(localStorage.getItem('fufumidi_parallel') || '1', 10) || 1));
   logLine(t('转录队列：共 ') + pendingCount.value + t(' 首') + (para > 1 ? t('，并行 ') + para + t(' 路') : t('，顺序处理')));
@@ -1219,6 +1380,12 @@ async function runBatch() {
   const t0 = Date.now();
   clearInterval(trTimer);
   trTimer = setInterval(() => {
+    // 暂停期间冻结计时（引擎停住了，'已用/剩余'再涨就是骗人）
+    if (paused.value) {
+      const left = queue.filter(i => i.status === 'pending').length;
+      stage.value = t('已暂停') + (left ? ' · ' + t('已暂停：还剩 {n} 首').replace('{n}', String(left)) : '');
+      return;
+    }
     const el = (Date.now() - t0) / 1000;
     const doneN = queue.filter(i => i.status === 'done').length;
     const errN = queue.filter(i => i.status === 'error').length;
@@ -1280,9 +1447,13 @@ async function runBatch() {
   };
   const worker = async () => {
     while (true) {
-      if (paused.value || cancelAll.value) break;
+      if (cancelAll.value) break;
       const it = queue.find(i => i.status === 'pending');
       if (!it) break;
+      // ★ 暂停：先不启动下一首（分块引擎此时正被引擎端卡在块与块之间；
+      //   一次调用跑完的引擎到这儿才停）。继续 = 这个循环自然往下走，**不重算**。
+      while (paused.value && !cancelAll.value) await new Promise(r => setTimeout(r, 200));
+      if (cancelAll.value) break;
       await processOne(it);
     }
   };
@@ -1317,9 +1488,42 @@ async function startTranscribe() {
   if (!ok) return;
   runBatch();
 }
+/* ---------------- 暂停 / 继续（用户 2026-10-14 要求） ----------------
+   语义：**当前这首跑完就停**。中途硬停会白扔这一首已经算的部分（引擎只在收尾时落盘 MIDI，
+   没有单文件断点），所以暂停落在「不再启动下一首」这个边界上；继续 = 从剩下的 pending 接着跑。 */
+function pauseBatch() {
+  if (!running.value || paused.value) return;
+  paused.value = true;
+  try { if (bridge && bridge.setTranscribePause) bridge.setTranscribePause(true); } catch (e) {}
+  // 暂停点在哪取决于引擎（引擎侧见 engine/pause_gate.py 的表）：
+  //  · MuScriptor 卡在 5 秒块之间、basic-pitch 卡在取窗之间 → 当场停住，继续时从原处接着跑；
+  //  · 钢琴 piano_pt 卡在我们自己的分批前向之间 → 手里这一批算完就停（秒级），同样不重算；
+  //  · Aria-AMT / Transkun 是外部工具、一次调用跑完整首 → 这一首跑完再停（下一首不再启动）。
+  const pianoFast = mode.value === 'piano' && pmodel.value === 'piano_pt';
+  const midFile = mode.value !== 'piano' || pianoFast;
+  stage.value = t('已暂停');
+  logLine(pianoFast
+    ? t('已暂停：当前这首算完手里这一批就停住，点「继续」接着跑')
+    : midFile ? t('已暂停：当前这首当场停住，点「继续」接着跑')
+              : t('已暂停：当前这首跑完停住，点「继续」接着跑'));
+  toast(t('已暂停'), 'ok');
+}
+function resumeBatch() {
+  if (!paused.value) return;
+  paused.value = false;
+  try { if (bridge && bridge.setTranscribePause) bridge.setTranscribePause(false); } catch (e) {}
+  logLine(t('继续转录…'));
+  toast(t('继续转录'), 'ok');
+  // 正常情况下 worker 还挂在原来的那一首上（不重启、不重算）；只有「暂停恰好落在两首之间、
+  // worker 已退出」这种边界情况才需要重新起跑。
+  if (!running.value) runBatch();
+}
 function cancelTranscribe() {
-  if (!busy.value) return;
+  if (!busy.value && !paused.value) return;
   cancelAll.value = true;
+  paused.value = false;
+  try { if (bridge && bridge.setTranscribePause) bridge.setTranscribePause(false); } catch (e) {}   // 引擎不能卡在暂停里
+  stage.value = '';
   // 并行模式下取消所有在跑任务
   const jobs = window.__fufumidiRunningJobs || [];
   for (const jid of jobs) { if (bridge && bridge.cancel) bridge.cancel(jid); }
@@ -1390,6 +1594,7 @@ async function openRefineResult() {
 /* ---------------- 引擎日志 ---------------- */
 let offLog = null, offRefine = null, offModelProg = null, offSeparate = null, offSepProg = null;
 onMounted(() => {
+  window.addEventListener('keydown', onDocKeydown);   // 模型选择抽屉：Esc 关闭
   loadQueue();
   loadPresets();
   loadMsPresets();
@@ -1437,6 +1642,7 @@ onMounted(() => {
   }
 });
 onBeforeUnmount(() => {
+  try { window.removeEventListener('keydown', onDocKeydown); } catch (e) {}
   if (trTimer) clearInterval(trTimer);
   if (offLog) offLog();
   if (offRefine) offRefine();
@@ -1447,7 +1653,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page tr-view">
+  <div ref="pageEl" class="page tr-view">
     <div class="page-head">
       <div class="page-ic"><Icon name="transcribe" :size="20" /></div>
       <div class="grow">
@@ -1459,8 +1665,18 @@ onBeforeUnmount(() => {
       <span class="tag" :class="isDesktop ? '' : 'warn-tag'">{{ isDesktop ? t('桌面引擎就绪') : t('请使用桌面版') }}</span>
     </div>
 
-    <!-- 音频选择（转录队列；音频处理模式用独立面板） -->
-    <div v-if="mode !== 'separate'" class="card tr-drop-card">
+    <!-- 音频选择：三种模式**同一个位置、同一套虚线框**（音频处理以前是自己一套图标行） -->
+    <Transition name="trSwap" mode="out-in">
+    <div v-if="mode === 'separate'" class="card tr-drop-card">
+      <div class="tr-drop" @click="pickSepFile">
+        <div class="td-ic"><Icon name="transcribe" :size="26" /></div>
+        <div class="td-txt">
+          <b>{{ sepFile ? String(sepFile).replace(/^.*[\\/]/, '') : t('拖入音频 / 点击选择') }}</b>
+          <span>{{ t('支持 MP3 / WAV / FLAC / M4A 等 · ') }}{{ sepDur ? fmtTime(sepDur) : t('（未选择）') }}</span>
+        </div>
+      </div>
+    </div>
+    <div v-else class="card tr-drop-card">
       <div class="tr-drop" :class="{ over: dropOver }" data-guide="audio-drop"
            @dragover.prevent="dropOver = true" @dragleave="dropOver = false" @drop.prevent="onDrop"
            @click="pickAudio">
@@ -1481,6 +1697,8 @@ onBeforeUnmount(() => {
         <div class="tr-batch-ctls">
           <button class="btn sm" @click="pickAudio"><Icon name="plus" :size="13" />{{ t('文件') }}</button>
           <button class="btn sm" @click="pickFolder"><Icon name="folder" :size="13" /> {{ t('文件夹') }}</button>
+          <button v-if="busy && !paused" class="btn sm" @click="pauseBatch"><Icon name="pause" :size="13" />{{ t('暂停') }}</button>
+          <button v-else-if="paused" class="btn sm" @click="resumeBatch"><Icon name="play" :size="13" />{{ t('继续') }}</button>
           <button class="btn sm ghost" @click="retryAll">{{ t('重试全部') }}</button>
           <button class="btn sm ghost" @click="clearDone">{{ t('清空完成') }}</button>
           <select class="select-input" v-model="sort" style="width:auto;padding:4px 8px;font-size:11px">
@@ -1490,6 +1708,7 @@ onBeforeUnmount(() => {
           <button class="btn sm danger" @click="clearQueue">{{ t('清空') }}</button>
         </div>
       </div>
+      <div class="fb-hint" v-if="queue.length && sort !== 'default'" style="margin:-4px 0 6px">{{ t('拖动排序需切回「默认顺序」') }}</div>
       <!-- 多队列：切队列 = 切模型与参数（每个队列自带一份设置） -->
       <div v-if="queues.length" class="tr-queues">
         <span class="fb-label" style="margin:0">{{ t('队列') }}</span>
@@ -1505,9 +1724,13 @@ onBeforeUnmount(() => {
         <span class="fb-hint" v-if="currentQueue()">{{ t('本队列：') }}{{ queueSummary(currentQueue()) }}</span>
       </div>
       <div v-if="queue.length" class="tr-batch-list">
-        <div class="tr-batch-item" v-for="it in sortedQueue" :key="it.id">
+        <div class="tr-batch-item" v-for="it in sortedQueue" :key="it.id"
+             :draggable="sort === 'default'" :class="{ dragging: dragItemId === it.id }"
+             @dragstart="trDragStart(it, $event)" @dragover.prevent="trDragOver($event, it)"
+             @dragleave="trDragLeave($event)" @drop.stop.prevent="trDrop($event, it)" @dragend="trDragEnd()">
+          <span class="tb-grip" :title="sort === 'default' ? t('拖动排序') : t('拖动排序需切回「默认顺序」')" aria-hidden="true">⋮⋮</span>
           <span class="tb-name" :title="it.path">{{ it.name }}</span>
-          <span class="tb-bar"><i :style="{ width: Math.round(it.progress || 0) + '%' }"></i></span>
+          <span class="tb-bar"><i :style="{ transform: 'scaleX(' + ((Math.round(it.progress || 0)) / 100) + ')' }"></i></span>
           <span class="tb-badge" :class="it.status">{{ statusTxt(it.status) }}{{ it.status === 'done' && it.note_count ? ' · ' + it.note_count : '' }}</span>
           <button v-if="it.status === 'error'" class="btn sm ghost" @click="retryItem(it)">{{ t('重试') }}</button>
           <button v-else-if="it.status === 'pending' || it.status === 'done' || it.status === 'canceled'" class="btn sm ghost danger" @click="removeItem(it)">{{ t('移除') }}</button>
@@ -1515,6 +1738,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="tr-batch-stat muted small">{{ queueStat }}</div>
     </div>
+    </Transition>
 
     <!-- 引擎模式 -->
     <div class="card tr-card">
@@ -1530,6 +1754,11 @@ onBeforeUnmount(() => {
           <b>{{ t('音频处理') }}</b><span>{{ t('选择处理模型 · 分离 / 修复') }}</span>
         </button>
       </div>
+
+      <!-- ★ 切换动画：只包"随模式变化"的内容（引擎模式三张选择卡本身不动）
+           方向感：往后切（通用→钢琴→音频）从右进、往回切从左进，比单纯淡入淡出"有说法" -->
+      <Transition :name="swapDir === 'fwd' ? 'trSwapFwd' : 'trSwapBack'" mode="out-in" @after-leave="onSwapLeft">
+      <div :key="mode" class="tr-mode-body">
 
       <!-- 通用子模型：Basic Pitch（兜底）/ MuScriptor（可选，三档规格） -->
       <div v-if="mode === 'universal'" class="tr-submodels">
@@ -1557,45 +1786,63 @@ onBeforeUnmount(() => {
         <div class="tr-perf-hint" v-if="pmodel !== 'piano_pt'">{{ t('Aria-AMT / Transkun 需先到资源中心安装对应模型') }}</div>
       </div>
 
-      <!-- 音频处理：当前模型 + 选择模型 -->
+      <!-- 音频处理：当前模型 + 选择模型（与「通用模型 / 钢琴模型」同一种 pill 行） -->
       <div v-if="mode === 'separate'" class="tr-submodels">
         <div class="fb-label">{{ t('处理模型') }}</div>
-        <div class="sep-pick" @click="sepPickerOpen = true">
-          <span class="sep-pick-ic"><Icon :name="sepKindIcon(currentSep)" :size="16" /></span>
-          <span class="grow">
-            <b>{{ currentSep ? currentSep.name : t('内置 Demucs') }}</b>
-            <small>{{ currentSep ? (currentSep.arch + ' · ' + fmtSize2(currentSep.size)) : t('HTDemucs · 内置') }}</small>
-          </span>
-          <span class="btn sm ghost">{{ t('选择模型') }}</span>
+        <div class="tr-pills">
+          <button class="tr-pill active" @click="sepPickerOpen = true">
+            {{ currentSep ? currentSep.name : t('内置 Demucs') }}
+            <i class="ms-badge ok">{{ currentSep ? (currentSep.arch + ' · ' + fmtSize2(currentSep.size)) : t('HTDemucs · 内置') }}</i>
+          </button>
+          <button class="tr-pill ghost-like" @click="sepPickerOpen = true"><Icon name="search" :size="13" />{{ t('更换模型') }}</button>
         </div>
+        <div v-if="sepPurposeOf(currentSep) === 'repair'" class="tr-slider-hint">{{ t('这是去噪 / 修复模型：输出「噪声」与「已去噪」两条音轨，不用于人声 / 伴奏分离') }}</div>
+        <div v-else-if="sepIsVr" class="tr-slider-hint">{{ t('VR 模型的音轨名由权重自身决定，面板不预置音轨选项；不勾选即全部输出') }}</div>
       </div>
 
-      <!-- 模型选择抽屉 -->
+      <!-- 模型选择抽屉（搜索 + 分类 + 网格） -->
       <Teleport to="body">
       <Transition name="sepFade">
         <div v-if="sepPickerOpen" class="sep-scrim" @click.self="sepPickerOpen = false">
           <div class="sep-pane">
             <div class="sep-head">
               <b><Icon name="box" :size="15" /> {{ t('选择音频处理模型') }}</b>
+              <span class="sep-head-n">{{ sepModelsFiltered.length }} / {{ sepModels.length }}</span>
               <button class="icon-btn" style="margin-left:auto" @click="sepPickerOpen = false"><Icon name="close" :size="15" /></button>
+            </div>
+            <div class="sep-tools">
+              <label class="sep-search">
+                <Icon name="search" :size="14" />
+                <input class="text-input" v-model="sepQuery" :placeholder="t('搜索模型名称 / 架构 / 用途…')">
+                <button v-if="sepQuery" class="icon-btn" @click="sepQuery = ''"><Icon name="close" :size="12" /></button>
+              </label>
+              <div class="tr-pills">
+                <button class="tr-pill" :class="{ active: sepCat === 'all' }" @click="sepCat = 'all'">{{ t('全部') }}<i class="sep-cnt">{{ sepCatCounts.all }}</i></button>
+                <button class="tr-pill" :class="{ active: sepCat === 'separate' }" @click="sepCat = 'separate'">{{ t('人声分离') }}<i class="sep-cnt">{{ sepCatCounts.separate }}</i></button>
+                <button class="tr-pill" :class="{ active: sepCat === 'repair' }" @click="sepCat = 'repair'">{{ t('修复 · 去噪') }}<i class="sep-cnt">{{ sepCatCounts.repair }}</i></button>
+                <button class="tr-pill ghost-like" :class="{ active: sepOnlyReady }" :title="t('已下载但缺配置文件的模型跑不起来，勾上就看不到它们')" @click="sepOnlyReady = !sepOnlyReady">{{ t('只显示可用') }}</button>
+              </div>
             </div>
             <div class="sep-hint">{{ t('已下载的模型可直接选用；未下载的模型请先到模型管理下载') }}</div>
             <div class="sep-list">
-              <div v-for="m in sepModels" :key="m.id" class="sep-item" :class="{ sel: sepModel === m.id, off: !m.exists }" @click="pickSep(m)">
+              <div v-for="m in sepModelsFiltered" :key="m.id" class="sep-item" :class="{ sel: sepModel === m.id, off: !m.exists }" @click="pickSep(m)">
                 <div class="si-head">
                   <span class="si-ic"><Icon :name="sepKindIcon(m)" :size="14" /></span>
                   <span class="si-arch">{{ m.arch }}</span>
                   <span class="si-kind" :class="m.kind === 'other' ? 'vr' : ''">{{ sepKindName(m) }}</span>
-                  <span class="si-pill" :class="m.exists ? 'on' : 'off'">{{ m.exists ? t('已下载') : t('未下载') }}</span>
+                  <span class="si-pill" :class="(m.exists && m.sepReady !== false) ? 'on' : 'off'"
+                        :title="m.sepWhy && m.sepWhy.indexOf('配置') >= 0 ? t('本机没有这个模型的配置文件（.yaml），下载后也加载不了') : (m.sepWhy ? t(m.sepWhy) : '')">{{
+                    !m.exists ? (String(m.sepWhy || '').indexOf('配置') >= 0 ? t('缺配置') : t('未下载'))
+                              : (m.sepReady === false ? t('不可用') : t('已下载')) }}</span>
                 </div>
                 <div class="si-name">{{ m.name }}<span v-if="m.best" class="si-best" :title="t('该领域效果最佳')">👑 {{ m.best }}</span></div>
                 <div class="si-use">{{ m.use || m.note || '' }}</div>
                 <div class="si-foot">
-                  <span>{{ fmtSize2(m.size) }}</span>
+                  <span>{{ fmtSize2(m.size) }}<i v-if="m.sepAuto" class="si-auto" :title="t('这个模型上游没有带 .yaml：引擎会从权重本身推出结构，生成后跑一次前向校验再使用（只生成一次）')">{{ t('首次自动配置') }}</i></span>
                   <span v-if="m.exists" class="si-check" :class="{ cur: sepModel === m.id }">{{ sepModel === m.id ? t('使用中') : t('使用') }}</span>
                 </div>
               </div>
-              <div v-if="!sepModels.length" class="sep-none">{{ t('没有可选模型（请到模型管理查看）') }}</div>
+              <div v-if="!sepModelsFiltered.length" class="sep-none">{{ sepModels.length ? (sepOnlyReady && !sepQuery.trim() && sepCat === 'all' ? t('本机没有「已下载且可用」的处理模型（缺配置的下载后也跑不起来）；取消勾选「只显示可用」可查看全部') : t('没有匹配的模型（清空搜索或换分类）')) : t('没有可选模型（请到模型管理查看）') }}</div>
             </div>
           </div>
         </div>
@@ -1604,56 +1851,55 @@ onBeforeUnmount(() => {
 
       <!-- 音频处理（MSST 分离）工作区 -->
       <div v-if="mode === 'separate'" class="tr-msst">
-        <div class="fb-label">{{ t('输入音频') }}</div>
-        <div class="sep-pick" @click="pickSepFile">
-          <span class="sep-pick-ic"><Icon name="music" :size="16" /></span>
-          <span class="grow">
-            <b>{{ sepFile ? String(sepFile).replace(/^.*[\\/]/, '') : t('选择要分离的音频') }}</b>
-            <small>{{ t('MP3 / WAV / FLAC / M4A 等 · ') }}{{ sepDur ? fmtTime(sepDur) : t('（未选择）') }}</small>
-          </span>
-          <span class="btn sm ghost">{{ sepFile ? t('更换') : t('选择') }}</span>
-        </div>
+        <div class="tr-submodels">
+          <div class="fb-label">{{ t('推理参数') }} <small class="ms-mut">{{ t('（与 MSST-WebUI 一致 · 支持按模型保存预设）') }}</small></div>
+          <!-- 与「高级参数」里的滑条同一种排法：label + 值 → 滑条 → 说明 -->
+          <div class="tr-slider">
+            <label>{{ t('分块大小') }} chunk_size<b>{{ chunkSec }}s</b></label>
+            <NumSlider v-model="chunkSec" :min="1" :max="30" :step="1" unit="s" />
+            <div class="tr-slider-hint">{{ t('增大提高分离效果，也增加耗时与显存') }}</div>
+          </div>
+          <div class="tr-slider">
+            <label>{{ t('重叠数') }} overlap<b>{{ msOverlap }}</b></label>
+            <NumSlider v-model="msOverlap" :min="1" :max="10" :step="1" />
+            <div class="tr-slider-hint">{{ t('建议 4；增大提高效果、增加耗时') }}</div>
+          </div>
+          <div class="tr-slider">
+            <label>{{ t('批次大小') }} batch_size<b>{{ msBatch }}</b></label>
+            <NumSlider v-model="msBatch" :min="1" :max="8" :step="1" />
+            <div class="tr-slider-hint">{{ t('减小降低显存，对效果影响不大') }}</div>
+          </div>
+          <div class="tr-switch"><label><span><b>{{ t('音频归一化') }}</b><small>{{ t('对输入/输出进行归一化（部分模型无此功能）') }}</small></span><input type="checkbox" v-model="msNormalize"></label></div>
+          <div class="tr-switch"><label><span><b>{{ t('启用 TTA（测试时增强）') }}</b><small>{{ t('小幅提升分离质量，推理时间约 ×3') }}</small></span><input type="checkbox" v-model="msTta"></label></div>
 
-        <div class="fb-label" style="margin-top:4px">{{ t('推理参数') }} <small class="ms-mut">{{ t('（与 MSST-WebUI 一致 · 支持按模型保存预设）') }}</small></div>
-        <div class="ms-grid">
-          <label class="ms-field">{{ t('分块大小') }} chunk_size<small>{{ t('增大提高分离效果，也增加耗时与显存') }}</small>
-            <div class="ms-range-row"><NumSlider v-model="chunkSec" :min="1" :max="30" :step="1" unit="s" /></div>
-          </label>
-          <label class="ms-field">{{ t('重叠数') }} overlap<small>{{ t('建议 4；增大提高效果、增加耗时') }}</small>
-            <div class="ms-range-row"><NumSlider v-model="msOverlap" :min="1" :max="10" :step="1" /></div>
-          </label>
-          <label class="ms-field">{{ t('批次大小') }} batch_size<small>{{ t('减小降低显存，对效果影响不大') }}</small>
-            <div class="ms-range-row"><NumSlider v-model="msBatch" :min="1" :max="8" :step="1" /></div>
-          </label>
-        </div>
-        <div class="tr-switch"><label><span><b>{{ t('音频归一化') }}</b><small>{{ t('对输入/输出进行归一化（部分模型无此功能）') }}</small></span><input type="checkbox" v-model="msNormalize"></label></div>
-        <div class="tr-switch"><label><span><b>{{ t('启用 TTA（测试时增强）') }}</b><small>{{ t('小幅提升分离质量，推理时间约 ×3') }}</small></span><input type="checkbox" v-model="msTta"></label></div>
-
-        <div class="tr-preset-row">
-          <label class="fb-label" style="margin:0">{{ t('参数预设') }} <small class="ms-mut">{{ t('（按当前模型保存 / 还原 / 应用）') }}</small></label>
-          <div class="row" style="gap:6px;flex-wrap:wrap">
-            <select class="select-input" v-model="msPresetSel" style="min-width:130px">
-              <option value="" disabled>{{ t('选择已保存预设') }}</option>
-              <option v-for="p in msPresetOptions" :key="p.name" :value="p.name">{{ t(p.name) }}</option>
-            </select>
-            <button class="btn sm" @click="applyMsPreset">{{ t('应用') }}</button>
-            <button class="btn sm" @click="saveMsPreset"><Icon name="plus" :size="13" />{{ t('保存预设') }}</button>
-            <button class="btn sm ghost" @click="resetMsParams">{{ t('还原默认') }}</button>
-            <button class="btn sm ghost danger" v-if="msPresetSel" @click="delMsPreset">{{ t('删除') }}</button>
+          <div class="tr-preset-row">
+            <label class="fb-label" style="margin:0">{{ t('参数预设') }} <small class="ms-mut">{{ t('（按当前模型保存 / 还原 / 应用）') }}</small></label>
+            <div class="row" style="gap:6px;flex-wrap:wrap">
+              <select class="select-input" v-model="msPresetSel" style="min-width:130px">
+                <option value="" disabled>{{ t('选择已保存预设') }}</option>
+                <option v-for="p in msPresetOptions" :key="p.name" :value="p.name">{{ t(p.name) }}</option>
+              </select>
+              <button class="btn sm" @click="applyMsPreset">{{ t('应用') }}</button>
+              <button class="btn sm" @click="saveMsPreset"><Icon name="plus" :size="13" />{{ t('保存预设') }}</button>
+              <button class="btn sm ghost" @click="resetMsParams">{{ t('还原默认') }}</button>
+              <button class="btn sm ghost danger" v-if="msPresetSel" @click="delMsPreset">{{ t('删除') }}</button>
+            </div>
           </div>
         </div>
 
-        <div class="fb-label" style="margin-top:4px">{{ t('输出音轨') }} <small class="ms-mut">{{ t('（不同模型可输出的音轨不同；不勾选即全部）') }}</small></div>
-        <div class="tr-pills" v-if="msStemOptions.length">
-          <button class="tr-pill" v-for="s in msStemOptions" :key="s" :class="{ active: msStems.includes(s) }" @click="toggleStem(s)">{{ sepStemLabel(s) }}</button>
-          <button class="tr-pill ghost-like" @click="allStems()">{{ t('全选') }}</button>
-        </div>
-
-        <div class="tr-switch" style="margin-top:6px">
-          <label><span><b>{{ t('输出格式') }}</b><small>{{ t('分离音频的保存格式') }}</small></span>
-            <select class="select-input" v-model="msFormat" style="width:104px;padding:2px 6px;font-size:11px">
-              <option value="wav">{{ t('WAV（默认）') }}</option><option value="flac">FLAC</option><option value="mp3">MP3</option>
-            </select></label>
+        <div class="tr-submodels">
+          <div class="fb-label">{{ t('输出') }} <small class="ms-mut">{{ t('（不同模型可输出的音轨不同；不勾选即全部）') }}</small></div>
+          <div class="tr-pills" v-if="msStemOptions.length">
+            <button class="tr-pill" v-for="s in msStemOptions" :key="s" :class="{ active: msStems.includes(s) }" @click="toggleStem(s)">{{ sepStemLabel(s) }}</button>
+            <button class="tr-pill ghost-like" @click="allStems()">{{ t('全选') }}</button>
+          </div>
+          <div v-else class="tr-slider-hint">{{ t('该模型的音轨名由权重自身决定（去噪模型一般输出「噪声 / 已去噪」两条），不勾选即全部输出') }}</div>
+          <div class="tr-switch">
+            <label><span><b>{{ t('输出格式') }}</b><small>{{ t('分离音频的保存格式') }}</small></span>
+              <select class="select-input" v-model="msFormat" style="width:104px;padding:2px 6px;font-size:11px">
+                <option value="wav">{{ t('WAV（默认）') }}</option><option value="flac">FLAC</option><option value="mp3">MP3</option>
+              </select></label>
+          </div>
         </div>
 
         <div v-if="sepFile && currentSep" class="tr-sum" style="margin-top:6px">
@@ -1663,8 +1909,12 @@ onBeforeUnmount(() => {
                 :disabled="!currentSep || !currentSep.exists || sepBusy">
           <Icon name="box" :size="15" />{{ sepBusy ? t('分离中…') : t('开始分离') }}
         </button>
+        <!-- 取消：主进程 engine:cancel 本来就认 'sep<N>' 这个 jobId，只是面板以前没给按钮 -->
+        <div v-if="sepBusy" class="row" style="gap:8px;margin-top:8px">
+          <button class="btn ghost" style="flex:1;justify-content:center" @click="cancelSeparate"><Icon name="stop" :size="14" /> {{ t('取消分离') }}</button>
+        </div>
         <div v-if="sepBusy || sepStage" class="tr-progress" style="margin-top:8px">
-          <div class="pfill" :style="{ width: sepProgress + '%' }"></div><span>{{ sepProgress }}%</span>
+          <div class="pfill" :style="{ transform: 'scaleX(' + ((sepProgress) / 100) + ')' }"></div><span>{{ sepProgress }}%</span>
         </div>
         <div v-if="sepStage" class="tr-stage muted small">{{ sepStage }}</div>
 
@@ -1698,8 +1948,10 @@ onBeforeUnmount(() => {
         <div v-if="perfHint" class="tr-perf-hint">{{ perfHint }}</div>
       </div>
 
-      <details v-if="mode !== 'separate'" class="tr-adv" data-guide="adv-panel">
-        <summary>{{ t('高级参数') }}<span class="adv-cnt">{{ t('阈值 · 踏板 · 模型选项') }}</span><span class="adv-arr">▾</span></summary>
+      <div v-if="mode !== 'separate'" class="tr-adv" :class="{ open: advOpen }" data-guide="adv-panel">
+        <button type="button" class="tr-adv-head" :aria-expanded="advOpen ? 'true' : 'false'" @click="advOpen = !advOpen">{{ t('高级参数') }}<span class="adv-cnt">{{ t('阈值 · 踏板 · 模型选项') }}</span><span class="adv-arr" :class="{ open: advOpen }">▾</span></button>
+        <div class="tr-adv-body">
+        <div class="tr-adv-inner">
         <div class="tr-params">
           <!-- WP1-5：原来这里只是两段注释，用户看不到分组。折叠区结构不变，只加可见的分组标题。 -->
           <div class="tr-group">{{ t('质量组（影响识别与导出结果）') }}</div>
@@ -1714,6 +1966,9 @@ onBeforeUnmount(() => {
           <div class="tr-slider">
             <label>{{ t('最短音符') }}<b>{{ minNote }}ms</b></label>
             <NumSlider v-model="minNote" :min="10" :max="300" :step="1" />
+            <!-- ★ 钢琴模型的碎音护栏（engine_pt._sane_min_note_ms）：10ms 等于关掉过滤器，
+                 实测 30 秒样例 71 → 8037 个音符、3 分钟样例 47967 个 / 517 秒。 -->
+            <div v-if="mode === 'piano'" class="tr-slider-hint">{{ t('钢琴模型：低于 30ms 的碎音会被丢弃（引擎按 30ms 处理）') }}</div>
           </div>
           <div class="tr-slider" v-if="mode === 'piano'">
             <label>{{ t('音符合并间隔') }}<b>{{ mergeGap }}ms</b></label>
@@ -1730,7 +1985,15 @@ onBeforeUnmount(() => {
           </div>
           <!-- WP1-5：分组标题按用户要求改为「质量组 / 速度组」，旧的按作用域分组作废 -->
           <!-- ④ 批 A：模型选项（引擎早就有，只是界面没入口） -->
-          <div class="tr-slider" v-if="mode === 'universal'">
+          <!-- ★「自动检测 BPM」与「导出速度」是**同一件事**（用户 2026-10-14 定）：
+               导出速度就是写进 MIDI 的那个速度标签；勾了自动测速，这个值由源音频测出来，
+               手动档没有意义 → 直接隐藏，避免两个速度互相打架。
+               引擎侧 _apply_auto_bpm 会把整份 MIDI（含每个音符的 tick）一起换到测出来的
+               速度上、绝对秒数不变 —— 所以隐藏不是「少给一个选项」，它们本来就是同一个值。 -->
+          <div class="tr-switch" v-if="mode !== 'separate'">
+            <label><span><b>{{ t('自动检测 BPM') }}</b><small>{{ t('作为导出速度') }}</small></span><input type="checkbox" v-model="autoBpm"></label>
+          </div>
+          <div class="tr-slider" v-if="mode === 'universal' && !autoBpm">
             <label>{{ t('导出速度') }}<b>{{ exportTempo > 0 ? exportTempo + ' BPM' : t('默认 120 BPM') }}</b></label>
             <NumSlider v-model="exportTempo" :min="0" :max="240" :step="1" />
           </div>
@@ -1805,9 +2068,14 @@ onBeforeUnmount(() => {
               </select></span>
             </label>
           </div>
-          <div class="tr-switch"><label><span><b>{{ t('智能降噪') }}</b><small>{{ t('降噪模式：谱减法') }}</small></span><input type="checkbox" v-model="denoise"></label></div>
-          <div class="tr-switch"><label><span><b>{{ t('响度平衡') }}</b><small>{{ t('响度标准化（RMS）') }}</small></span><input type="checkbox" v-model="normalize"></label></div>
-          <div class="tr-switch"><label><span><b>{{ t('自动检测 BPM') }}</b><small>{{ t('作为导出速度') }}</small></span><input type="checkbox" v-model="autoBpm"></label></div>
+          <!-- 降噪**不在转录页**：2026-10-15 用「已知旋律 + 注入噪声」的基准实测过两档降噪，
+               结论是负面的（12 dB 素材假音符 1 → 14（谱减法）/ 39（去噪模型）；6 dB 素材 16 → 16 / 50），
+               所以不在这里摆一个"看起来能救、实测反而更糟"的开关 —— 这是用户明确要防的那类选项。
+               要降噪请走「音频处理」：那里能先听效果再决定要不要拿去转录。 -->
+          <div class="tr-slider-hint" style="margin-top:8px">{{ t('噪声大？转录前先去「音频处理」用去噪模型过一遍（能先试听）；实测在转录页做降噪不会减少噪声引起的假音符，反而可能更多。') }}</div>
+        <div class="tr-slider-hint">{{ t('模型没有配置也能用：首次选用时引擎会从权重本身推出结构，生成后跑一次前向校验（只生成一次，之后走缓存）。') }}</div>
+          <!-- 电平统一：恒定开启，所以不再做成开关（做成开关就等于又造一个"可能没作用"的选项）。 -->
+          <div class="tr-slider-hint" style="margin-top:8px">{{ t('输入电平统一：送入引擎前恒定归一到 −16 dBFS（实测素材电平差 6 dB，音符数会从 69 变 249，所以不再交给开关）') }}</div>
 
           <!-- WP1-5：速度组。全表里只有这两项是为「省时间 / 省显存」存在的，
                其余都会改变识别或导出结果，所以都在上面的质量组里。
@@ -1847,7 +2115,9 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </div>
-      </details>
+      </div>
+      </div>
+      </div>
 
       <!-- 任务模板已移除（2026-10-14）："记住一套设置"改由**队列**承担 ——
            每个队列自带模型与参数，切队列即切设置（用户要求）。 -->
@@ -1867,11 +2137,15 @@ onBeforeUnmount(() => {
       <button class="btn primary big" style="width:100%;justify-content:center;margin-top:14px" data-guide="start-transcribe" @click="startTranscribe" :disabled="busy || !isDesktop || !queue.length">
         <Icon name="transcribe" :size="16" />{{ busy ? t('转录中…') : t('开始转录') }}
       </button>
-      <button v-if="busy" class="btn ghost" style="width:100%;justify-content:center;margin-top:8px" @click="cancelTranscribe"><Icon name="stop" :size="14" /> {{ t('取消转录') }}</button>
+      <div v-if="busy || paused" class="row" style="gap:8px;margin-top:8px">
+        <button v-if="busy && !paused" class="btn ghost" style="flex:1;justify-content:center" @click="pauseBatch"><Icon name="pause" :size="14" /> {{ t('暂停') }}</button>
+        <button v-else class="btn" style="flex:1;justify-content:center" @click="resumeBatch"><Icon name="play" :size="14" /> {{ t('继续') }}</button>
+        <button v-if="busy" class="btn ghost" style="flex:1;justify-content:center" @click="cancelTranscribe"><Icon name="stop" :size="14" /> {{ t('取消转录') }}</button>
+      </div>
 
       <Transition name="fade">
       <div v-if="busy || done" class="tr-progress">
-        <div class="pfill" :style="{ width: progress + '%' }"></div><span>{{ progress }}%</span>
+        <div class="pfill" :style="{ transform: 'scaleX(' + ((progress) / 100) + ')' }"></div><span>{{ progress }}%</span>
       </div>
       </Transition>
       <div v-if="stage" class="tr-stage muted small">{{ stage }}</div>
@@ -1898,6 +2172,8 @@ onBeforeUnmount(() => {
       </div>
       </Transition>
       </div>
+      </div>
+      </Transition>
     </div>
 
     <!-- 智能修正 -->
@@ -1927,7 +2203,7 @@ onBeforeUnmount(() => {
         <Icon name="spark" :size="15" />{{ rf.busy ? t('修正中…') : t('开始智能修正') }}
       </button>
       <div v-if="rf.busy || rf.info" class="tr-progress">
-        <div class="pfill" :style="{ width: (rf.busy ? 60 : 100) + '%' }"></div><span>{{ rf.busy ? '…' : t('完成') }}</span>
+        <div class="pfill" :style="{ transform: 'scaleX(' + (((rf.busy ? 60 : 100)) / 100) + ')' }"></div><span>{{ rf.busy ? '…' : t('完成') }}</span>
       </div>
       <div v-if="rf.info" class="tr-done">
         <button class="btn sm" @click="openRefineResult"><Icon name="play2" :size="13" /> {{ t('打开修正结果') }}</button>
@@ -1974,7 +2250,7 @@ onBeforeUnmount(() => {
 .tr-view { max-width: 900px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
 .warn-tag { color: var(--amber); border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.1); }
 .tr-drop-card { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
-.tr-drop { display: flex; align-items: center; gap: 14px; padding: 22px; border: 1.5px dashed var(--border-strong); border-radius: 14px; background: var(--canvas); cursor: pointer; transition: border-color .15s, background .15s; }
+.tr-drop { display: flex; align-items: center; gap: 14px; padding: 22px; border: 1.5px dashed var(--border-strong); border-radius: 14px; background: var(--canvas); cursor: pointer; transition: border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out), transform var(--motion-base) var(--ease-out), box-shadow var(--motion-base) var(--ease-out); }
 .tr-drop:hover, .tr-drop.over { border-color: var(--brand-blue); background: var(--surface-soft); }
 .td-ic { width: 46px; height: 46px; border-radius: 12px; background: var(--surface); display: flex; align-items: center; justify-content: center; color: var(--brand-blue); flex: none; }
 .td-txt b { display: block; font-size: 13.5px; color: var(--ink); }
@@ -1991,7 +2267,7 @@ onBeforeUnmount(() => {
 .tr-batch-item:last-child { border-bottom: none; }
 .tb-name { flex: 1; min-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
 .tb-bar { width: 120px; height: 6px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; flex: none; }
-.tb-bar i { display: block; height: 100%; background: var(--brand-blue); border-radius: 999px; transition: width .2s; }
+.tb-bar i { display: block; height: 100%; background: var(--brand-blue); border-radius: 999px; transition: transform var(--motion-base) var(--ease-out); }
 .tb-badge { font-size: 10.5px; padding: 2px 8px; border-radius: 999px; background: var(--surface-soft); color: var(--stone); flex: none; }
 .tb-badge.running { background: rgba(20,86,240,.1); color: var(--brand-blue); }
 .tb-badge.done { background: var(--success-bg); color: var(--success-text); }
@@ -1999,8 +2275,21 @@ onBeforeUnmount(() => {
 .tb-badge.canceled { color: var(--muted); }
 .tr-batch-stat { margin-top: 6px; }
 .tr-card { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+/* ===== 模式切换动画：只包"随模式变化"的那块，里面的间距与 .tr-card 保持一致 ===== */
+.tr-mode-body { display: flex; flex-direction: column; gap: 12px; }
+.trSwap-enter-active { transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out); }
+.trSwap-leave-active { transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
+.trSwap-enter-from { opacity: 0; transform: translateY(6px); }
+.trSwap-leave-to { opacity: 0; transform: translateY(-6px); }
+/* 引擎模式切换：方向感（往后切从右进、往回切从左进）+ 稍慢一点，别像瞬移 */
+.trSwapFwd-enter-active, .trSwapBack-enter-active { transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-slow) var(--ease-out); }
+.trSwapFwd-leave-active, .trSwapBack-leave-active { transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
+.trSwapFwd-enter-from { opacity: 0; transform: translateX(16px); }
+.trSwapFwd-leave-to { opacity: 0; transform: translateX(-10px); }
+.trSwapBack-enter-from { opacity: 0; transform: translateX(-16px); }
+.trSwapBack-leave-to { opacity: 0; transform: translateX(10px); }
 .tr-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.tr-mode { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--surface); text-align: left; cursor: pointer; transition: all .15s; }
+.tr-mode { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--surface); text-align: left; cursor: pointer; transition: background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out), opacity var(--motion-fast) var(--ease-out); }
 .tr-mode b { display: block; font-size: 13px; color: var(--ink); margin-bottom: 2px; }
 .tr-mode span { font-size: 11px; color: var(--stone); line-height: 1.4; }
 .tr-mode:hover { border-color: var(--border-strong); }
@@ -2017,11 +2306,22 @@ onBeforeUnmount(() => {
 .tr-submodels { margin-top: 10px; padding: 10px 12px; border: 1px dashed var(--hairline); border-radius: 10px; background: var(--surface-soft); }
 .tr-submodels .fb-label { margin-bottom: 8px; }
 .tr-perf-hint { font-size: 11.5px; color: var(--success-text); }
+.tr-slider-hint { margin-top: 4px; font-size: 11.5px; color: var(--stone); line-height: 1.5; }
 .tr-perf-desc { margin-top: 6px; font-size: 11.5px; color: var(--stone); line-height: 1.5; }
 .tr-adv { border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); }
-.tr-adv summary { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-size: 12.5px; font-weight: 600; color: var(--ink); cursor: pointer; user-select: none; }
-.tr-adv summary .adv-cnt { font-weight: 400; color: var(--stone); font-size: 11px; }
-.tr-adv summary .adv-arr { margin-left: auto; color: var(--stone); }
+.tr-adv-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 14px; font-size: 12.5px; font-weight: 600; color: var(--ink); cursor: pointer; user-select: none; background: none; border: 0; font-family: inherit; text-align: left; }
+.tr-adv-head .adv-cnt { font-weight: 400; color: var(--stone); font-size: 11px; }
+.tr-adv-head .adv-arr { margin-left: auto; color: var(--stone); transition: transform var(--motion-base) var(--ease-out); }
+.tr-adv-head .adv-arr.open { transform: rotate(180deg); }
+/* 折叠动画用 grid-template-rows 0fr→1fr：不用事先知道内容高度，长短内容都能平滑展开 */
+.tr-adv-body { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows var(--motion-base) var(--ease-out), opacity var(--motion-base) var(--ease-out); }
+.tr-adv.open .tr-adv-body { grid-template-rows: 1fr; opacity: 1; }
+/* 里面再包一层：.tr-params 自带 4/14px 上下 padding，折叠态会留下一条 18px 的边。
+   ★ min-height:0 只能在**折叠态**给：展开态给了它，1fr 会被解析成 0（这套 0fr↔1fr 技巧的关键）。 */
+.tr-adv-body > * { overflow: hidden; }
+.tr-adv:not(.open) .tr-adv-body > * { min-height: 0; }
+/* 折叠/展开时把 .tr-params 的上下 padding 也一起收掉，免得留边 */
+.tr-adv:not(.open) .tr-params { padding-top: 0; padding-bottom: 0; }
 .tr-params { padding: 4px 14px 14px; display: flex; flex-direction: column; gap: 10px; }
 /* WP1-5：分组标题。第一条不画上边线（它紧跟在容器 padding 之后）。 */
 .tr-group { margin-top: 2px; padding-top: 10px; border-top: 1px solid var(--hairline); font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--stone); }
@@ -2041,7 +2341,7 @@ onBeforeUnmount(() => {
 .tr-sum { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: var(--surface-soft); border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--slate); }
 .tr-sum b { color: var(--ink); font-weight: 600; }
 .tr-progress { position: relative; display: flex; align-items: center; justify-content: flex-end; height: 20px; background: var(--surface-soft); border-radius: 999px; overflow: hidden; margin-top: 8px; }
-.tr-progress .pfill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--ink); border-radius: 999px; transition: width .2s; }
+.tr-progress .pfill { position: absolute; left: 0; top: 0; bottom: 0; width: 100%; background: var(--ink); border-radius: 999px; transition: transform var(--motion-base) var(--ease-out); }
 .tr-progress span { position: relative; z-index: 1; padding: 0 12px; font-size: 11px; color: var(--steel); }
 .tr-stage { margin-top: 4px; text-align: center; }
 .tr-done { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
@@ -2064,18 +2364,27 @@ onBeforeUnmount(() => {
 .preset-mgr-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--hairline); }
 
 /* ===== 音频处理：模型选择 ===== */
-.sep-pick { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--hairline); border-radius: 12px; background: var(--surface); cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+.sep-pick { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--hairline); border-radius: 12px; background: var(--surface); cursor: pointer; transition: border-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out); }
 .sep-pick:hover { border-color: var(--brand-coral); box-shadow: var(--shadow-sm); }
 .sep-pick-ic { display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center; border-radius: 9px; background: linear-gradient(135deg, var(--brand-coral), color-mix(in srgb, var(--brand-coral) 70%, #8b5cf6)); color: #fff; }
 .sep-pick .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .sep-pick .grow b { font-size: 13px; color: var(--ink); }
 .sep-pick .grow small { font-size: 11px; color: var(--stone); }
 .sep-scrim { position: fixed; inset: 0; z-index: 140; background: rgba(8,10,16,.45); -webkit-backdrop-filter: blur(8px) saturate(1.4); backdrop-filter: blur(8px) saturate(1.4); display: flex; align-items: center; justify-content: center; padding: 24px; }
-.sep-pane { width: 540px; max-width: 94vw; max-height: 84vh; background: var(--glass-bg-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid color-mix(in srgb, #fff 26%, transparent); border-radius: 16px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden; }
+.sep-pane { width: 940px; max-width: 94vw; max-height: 84vh; background: var(--glass-bg-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid color-mix(in srgb, #fff 26%, transparent); border-radius: 16px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden; }
 .sep-head { display: flex; align-items: center; gap: 8px; padding: 13px 16px; border-bottom: 1px solid var(--hairline); font-size: 14px; color: var(--ink); }
-.sep-hint { font-size: 11.5px; color: var(--stone); padding: 8px 16px; background: var(--surface-soft); border-bottom: 1px solid var(--hairline); }
-.sep-list { flex: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 9px; }
-.sep-item { border: 1px solid var(--hairline); border-radius: 12px; padding: 10px 12px; background: var(--surface); cursor: pointer; transition: border-color .15s, box-shadow .15s, opacity .15s; }
+/* 搜索 + 分类：模型一多（vocal/multi/single/vr 全列）单列长列表滚很久，改成「搜索 + 分类 + 网格」 */
+.sep-head-n { font-size: 11px; color: var(--stone); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.sep-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 16px 0; }
+.sep-tools .tr-pills { flex: 1; min-width: 240px; }
+.sep-search { flex: 1; min-width: 240px; display: flex; align-items: center; gap: 7px; padding: 0 8px 0 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--stone); }
+.sep-search:focus-within { border-color: var(--brand-coral); box-shadow: var(--shadow-sm); }
+.sep-search .text-input { flex: 1; min-width: 0; border: 0; background: transparent; padding: 7px 0; font-size: 12.5px; }
+.sep-search .text-input:focus { outline: none; }
+.sep-cnt { font-style: normal; margin-left: 5px; font-size: 10px; opacity: .72; font-variant-numeric: tabular-nums; }
+.sep-hint { font-size: 11.5px; color: var(--stone); padding: 8px 16px; background: var(--surface-soft); border-bottom: 1px solid var(--hairline); margin-top: 10px; }
+.sep-list { flex: 1; overflow-y: auto; padding: 12px 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(258px, 1fr)); gap: 9px; align-content: start; }
+.sep-item { border: 1px solid var(--hairline); border-radius: 12px; padding: 10px 12px; background: var(--surface); cursor: pointer; transition: border-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), opacity var(--motion-fast) var(--ease-out); }
 .sep-item:hover { border-color: var(--brand-coral); box-shadow: var(--shadow-sm); }
 .sep-item.sel { border-color: var(--brand-coral); box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand-coral) 30%, transparent); }
 .sep-item.off { opacity: .45; cursor: not-allowed; }
@@ -2091,16 +2400,21 @@ onBeforeUnmount(() => {
 .si-best { display: inline-flex; align-items: center; gap: 2px; font-size: 9.5px; font-weight: 700; color: #b45309; background: linear-gradient(135deg, #ffd700, #ffed4e); padding: 0 6px; border-radius: 20px; line-height: 15px; }
 .si-use { font-size: 11px; color: var(--slate); line-height: 1.55; margin-top: 2px; -webkit-box-orient: vertical; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; }
 .si-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--stone); font-family: var(--mono); }
+.si-auto { font-style: normal; margin-left: 6px; font-size: 9.5px; font-weight: 700; padding: 1px 6px; border-radius: 20px; background: color-mix(in srgb, var(--brand-blue) 14%, transparent); color: var(--brand-blue); font-family: system-ui; }
 .si-check { font-size: 11px; font-weight: 700; color: var(--stone); font-family: system-ui; }
 .si-check.cur { color: var(--brand-coral); }
-.sep-none { text-align: center; color: var(--stone); padding: 30px 0; font-size: 12px; }
-.sepFade-enter-active, .sepFade-leave-active { transition: opacity .16s ease; }
+.sep-none { grid-column: 1 / -1; text-align: center; color: var(--stone); padding: 30px 0; font-size: 12px; }
+.sepFade-enter-active, .sepFade-leave-active { transition: opacity var(--motion-fast) var(--ease-out); }
 .sepFade-enter-from, .sepFade-leave-to { opacity: 0; }
-.sepFade-enter-active .sep-pane, .sepFade-leave-active .sep-pane { transition: transform .2s cubic-bezier(.2,.7,.3,1), opacity .16s; }
+.sepFade-enter-active .sep-pane, .sepFade-leave-active .sep-pane { transition: transform var(--motion-base) var(--ease-out), opacity var(--motion-fast) var(--ease-out); }
 .sepFade-enter-from .sep-pane, .sepFade-leave-to .sep-pane { transform: scale(.94); opacity: 0; }
 
 /* ===== 音频处理：MSST 工作区 ===== */
 .tr-msst { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }
+.tr-msst .tr-submodels { margin-top: 0; }
+/* 音频处理的分组框与「通用识别 / 钢琴专用」的分组框用同一套间距，避免第三页看起来是另一个页面 */
+.tr-msst .ms-grid { margin-top: 8px; }
+.tr-msst .tr-switch { margin-top: 8px; }
 .ms-mut { color: var(--stone); font-weight: 400; }
 .ms-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 @media (max-width: 640px) { .ms-grid { grid-template-columns: 1fr; } }

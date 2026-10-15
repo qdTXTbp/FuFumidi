@@ -800,7 +800,7 @@ async function renderVideo() {
 
       <Transition name="cv">
         <div v-if="busy || done" class="conv-progress">
-          <div class="pfill" :style="{ width: progress + '%' }"></div>
+          <div class="pfill" :style="{ transform: 'scaleX(' + ((progress) / 100) + ')' }"></div>
           <span>{{ progress }}%</span>
         </div>
       </Transition>
@@ -916,7 +916,7 @@ async function renderVideo() {
       </button>
       <Transition name="cv">
         <div v-if="VE.veBusy" class="conv-progress">
-          <div class="pfill" :style="{ width: VE.veProgress + '%' }"></div>
+          <div class="pfill" :style="{ transform: 'scaleX(' + ((VE.veProgress) / 100) + ')' }"></div>
           <span>{{ Math.round(VE.veProgress) }}%</span>
         </div>
       </Transition>
@@ -957,10 +957,10 @@ async function renderVideo() {
 .conv-est em { font-style: normal; color: var(--stone); }
 .btn.big { width: 100%; padding: 12px 18px; font-size: 14px; }
 .conv-progress { display: flex; align-items: center; gap: 10px; height: 20px; background: var(--surface-soft); border-radius: 999px; overflow: hidden; padding: 0 12px; font-size: 11px; color: var(--steel); font-variant-numeric: tabular-nums; }
-.conv-progress .pfill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.2s; }
+.conv-progress .pfill { height: 100%; background: var(--accent); border-radius: 999px; transition: transform var(--motion-base) var(--ease-out); }
 .conv-done-tip { color: var(--success-text); font-size: 12.5px; font-weight: 600; text-align: center; }
 /* 转换页进度/完成提示显隐过渡 */
-.cv-enter-active, .cv-leave-active { transition: opacity 0.2s ease, transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.18); }
+.cv-enter-active, .cv-leave-active { transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-spring); }
 .cv-enter-from, .cv-leave-to { opacity: 0; transform: translateY(6px); }
 .ve-card { margin-top: 18px; padding: 18px; }
 .ve-head { display: flex; flex-direction: column; gap: 4px; }

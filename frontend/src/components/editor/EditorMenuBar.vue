@@ -49,21 +49,21 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKey); document.r
 .ed-menubar { display: flex; align-items: center; gap: 2px; padding: 2px 2px 4px; }
 .mb-group { position: relative; }
 .mb-btn { font-size: 12.5px; padding: 4px 10px; border-radius: 7px; cursor: pointer; color: var(--ink);
-  border: 1px solid transparent; background: transparent; transition: background .16s ease, border-color .16s ease; }
+  border: 1px solid transparent; background: transparent; transition: background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
 .mb-group.on .mb-btn, .mb-btn:hover { background: var(--surface-soft, rgba(127,127,127,.12)); border-color: var(--hairline); }
 .mb-pop { position: absolute; z-index: 60; top: calc(100% + 4px); left: 0; min-width: 208px; padding: 6px;
   background: var(--surface); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-lg, 0 10px 30px rgba(0,0,0,.18));
   display: flex; flex-direction: column; gap: 1px; }
 .mb-item { display: flex; align-items: baseline; gap: 10px; width: 100%; text-align: left; padding: 5px 9px;
   border: 0; border-radius: 7px; background: transparent; color: var(--ink); font-size: 12.5px; cursor: pointer;
-  transition: background .14s ease; }
+  transition: background var(--motion-fast) var(--ease-out); }
 .mb-item:hover { background: color-mix(in srgb, var(--brand-coral, #ff7a59) 14%, transparent); }
 .mb-item.dis { opacity: .45; cursor: default; }
 .mb-lb { flex: 1; }
 .mb-hint { font-size: 10.5px; color: var(--stone); font-variant-numeric: tabular-nums; }
 .mb-sep { height: 1px; margin: 4px 6px; background: var(--hairline); }
-.mb-pop-enter-active { transition: opacity .16s ease, transform .16s cubic-bezier(.2,.7,.3,1); }
-.mb-pop-leave-active { transition: opacity .12s ease, transform .12s ease; }
+.mb-pop-enter-active { transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
+.mb-pop-leave-active { transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
 .mb-pop-enter-from { opacity: 0; transform: translateY(-4px) scale(.98); }
 .mb-pop-leave-to { opacity: 0; transform: translateY(-2px); }
 </style>

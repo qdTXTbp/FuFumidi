@@ -373,7 +373,7 @@ onActivated(() => { if (!loading.value) refresh(); });
                   <span class="ds-prog-ph">{{ phaseText(m.name) }}</span>
                   <span v-if="prog[m.name].speed" class="ds-prog-spd">⚡ {{ fmtSpeed(prog[m.name].speed) }}</span>
                 </div>
-                <div class="ds-bar-mini"><i :style="{ width: (prog[m.name].percent || 0) + '%' }"></i></div>
+                <div class="ds-bar-mini"><i :style="{ transform: 'scaleX(' + (((prog[m.name].percent || 0)) / 100) + ')' }"></i></div>
                 <div class="ds-prog-meta">
                   <span>{{ prog[m.name].percent || 0 }}%</span>
                   <span v-if="!prog[m.name].phase || prog[m.name].phase === 'download'">{{ human(prog[m.name].received) }} / {{ human(prog[m.name].total) }}</span>
@@ -416,7 +416,7 @@ onActivated(() => { if (!loading.value) refresh(); });
 
 /* 作品快捷切换 */
 .ds-works { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.ds-wchip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border: 1px solid var(--hairline); border-radius: 999px; background: transparent; color: var(--steel); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background .15s, color .15s, border-color .15s; }
+.ds-wchip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border: 1px solid var(--hairline); border-radius: 999px; background: transparent; color: var(--steel); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
 .ds-wchip:hover { background: var(--surface-soft); color: var(--ink); }
 .ds-wchip i { font-style: normal; font-size: 10.5px; color: var(--stone); background: var(--surface-soft); border-radius: 20px; padding: 0 6px; line-height: 15px; }
 .ds-wchip.active { background: color-mix(in srgb, var(--brand-coral) 15%, var(--surface)); border-color: color-mix(in srgb, var(--brand-coral) 32%, transparent); color: var(--ink); }
@@ -438,21 +438,21 @@ onActivated(() => { if (!loading.value) refresh(); });
 
 /* 模型卡片网格 */
 .ds-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 9px; }
-.ds-card { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 10px 11px; border: 1px solid var(--hairline); border-radius: 11px; background: var(--surface); overflow: hidden; transition: border-color .15s, background .15s; }
+.ds-card { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 10px 11px; border: 1px solid var(--hairline); border-radius: 11px; background: var(--surface); overflow: hidden; transition: border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out); }
 .ds-card:hover { border-color: color-mix(in srgb, var(--brand-coral) 30%, var(--hairline)); }
-/* ---------- 动效（与全局同一套：0.2~0.34s + cubic-bezier(.2,.7,.3,1)） ----------
+/* ---------- 动效（与全局同一套：0.2~0.34s + var(--ease-out)） ----------
    目录页原来只有进度条在动：切页签整块硬出现、卡片没有任何反馈。 */
-.ds-work { animation: dsWorkIn .3s cubic-bezier(.2,.7,.3,1) both; animation-delay: calc(min(var(--wi, 0), 6) * 55ms); }
+.ds-work { animation: dsWorkIn var(--motion-slow) var(--ease-out) both; animation-delay: calc(min(var(--wi, 0), 6) * 55ms); }
 @keyframes dsWorkIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 /* 卡片：逐个入场 + 悬停抬升（同屏几十张，延迟封顶 14 张，免得最后一张等半秒） */
-.ds-card { animation: dsCardIn .28s cubic-bezier(.2,.7,.3,1) both;
+.ds-card { animation: dsCardIn var(--motion-slow) var(--ease-out) both;
            animation-delay: calc(min(var(--i, 0), 14) * 22ms);
-           transition: transform .18s cubic-bezier(.2,.7,.3,1), box-shadow .2s ease, border-color .18s ease, background .2s ease; }
+           transition: transform var(--motion-base) var(--ease-out), box-shadow var(--motion-base) var(--ease-out), border-color var(--motion-base) var(--ease-out), background var(--motion-base) var(--ease-out); }
 @keyframes dsCardIn { from { opacity: 0; transform: translateY(6px) scale(.985); } to { opacity: 1; transform: none; } }
 .ds-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-sm, 0 4px 14px rgba(0,0,0,.08)); }
-.ds-wchip { transition: background .18s ease, color .18s ease, border-color .18s ease, transform .18s ease; }
+.ds-wchip { transition: background var(--motion-base) var(--ease-out), color var(--motion-base) var(--ease-out), border-color var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out); }
 .ds-wchip:hover { transform: translateY(-1px); }
-.ds-wchip.active { transition: background .24s cubic-bezier(.2,.7,.3,1), border-color .24s cubic-bezier(.2,.7,.3,1); }
+.ds-wchip.active { transition: background var(--motion-base) var(--ease-out), border-color var(--motion-base) var(--ease-out); }
 .ds-card.inst { background: color-mix(in srgb, var(--brand-coral) 4%, var(--surface)); border-color: color-mix(in srgb, var(--brand-coral) 22%, var(--hairline)); }
 .ds-card.ph { opacity: .62; }
 .ds-card.down { border-color: color-mix(in srgb, var(--brand-coral) 45%, var(--hairline)); }
@@ -467,14 +467,14 @@ onActivated(() => { if (!loading.value) refresh(); });
 .ds-foot { display: flex; align-items: center; gap: 6px; margin-top: auto; }
 .ds-size { font-size: 11px; color: var(--stone); font-variant-numeric: tabular-nums; }
 .ds-acts { margin-left: auto; }
-.ds-btn { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border: 1px solid color-mix(in srgb, var(--brand-coral) 34%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--brand-coral) 12%, transparent); color: var(--brand-coral); font-size: 11.5px; font-weight: 600; cursor: pointer; transition: background .15s; }
+.ds-btn { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border: 1px solid color-mix(in srgb, var(--brand-coral) 34%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--brand-coral) 12%, transparent); color: var(--brand-coral); font-size: 11.5px; font-weight: 600; cursor: pointer; transition: background var(--motion-fast) var(--ease-out); }
 .ds-btn:hover { background: color-mix(in srgb, var(--brand-coral) 20%, transparent); }
 .ds-btn.re { border-color: var(--hairline); background: transparent; color: var(--steel); }
 .ds-btn.re:hover { background: var(--surface-soft); color: var(--ink); }
 .ds-btn.cancel { border-color: color-mix(in srgb, var(--brand-coral) 45%, transparent); background: transparent; color: var(--brand-coral); }
 .ds-btn.dis { border-color: var(--hairline); background: transparent; color: var(--stone); cursor: not-allowed; }
 .ds-bar-mini { height: 3px; border-radius: 2px; background: var(--surface-soft); overflow: hidden; }
-.ds-bar-mini i { display: block; height: 100%; background: var(--brand-coral); transition: width .25s ease; }
+.ds-bar-mini i { display: block; height: 100%; background: var(--brand-coral); transition: transform var(--motion-base) var(--ease-out); }
 
 /* 卡片内进度：阶段文案 + 实时速度 + 字节数（与全局顶部通知条一致） */
 .ds-prog { display: flex; flex-direction: column; gap: 4px; margin-top: 2px; }
