@@ -15,6 +15,7 @@ import { resolveTheme } from '../state/themes.js';
 import { noteColorOf } from '../state/colors.js';
 import { withAlpha, noteStops, shade } from '../state/palette.js';
 import * as P from './primitives.js';
+import { buildNote } from './note.js';
 import { buildKeyboard } from './keyboard.js';
 
 const DEFAULT_BUDGET = { spark: 420, ring: 60, beam: 90 };
@@ -50,7 +51,10 @@ export function createCompiler() {
     const fx = opts.fx || {};
     const pr = [];
     const keysOn = fx.keysOn !== false;
-    const keysA = keysOn ? Math.max(0, Math.min(1, fx.keysAlpha == null ? 1 : Number(fx.keysAlpha))) : 0;
+    // 琴键不再有独立的不透明度滑杆（用户要求去掉）：要么整层显示，要么整层不显示。
+    // 音符的不透明度改由 fx.noteAlpha 管（见下），两者不再互相牵连。
+    const keysA = keysOn ? 1 : 0;
+    const noteAlpha = Math.max(0, Math.min(1, fx.noteAlpha == null ? 1 : Number(fx.noteAlpha)));
     const parts = Object.assign({}, DEFAULT_BUDGET, opts.budget || {});
 
     // ---------- 几何 ----------
@@ -153,12 +157,17 @@ export function createCompiler() {
             pr.push(P.glow('notes', sx + cw / 2, Math.min(bottom, wN), 0, Math.max(7, cw * 0.9),
               color, { alpha: 0.5 * near * (0.5 + 0.5 * velN), blend: 'lighter' }));
           }
-          pr.push(P.capsule('notes', sx, top, cw, bh,
-            { stops: noteStops(color, { velN, gloss }), dir: 'v' },
-            { r: Math.max(2, Math.min(theme.note.radius, cw / 2, bh / 2)), alpha: 1 - 0.5 * depth, z: Math.floor(bottom) }));
+          // 音符本体：玻璃质感（主体 + 边缘亮线 + 纵向高光 + 上下收口），见 scene/note.js
+          // 不透明度受「音符不透明度」滑杆控制，再乘纵深淡出（越远越淡）
+          const parts = buildNote(P, {
+            x: sx, y: top, w: cw, h: bh, color, radius: theme.note.radius,
+            alpha: noteAlpha * (1 - 0.5 * depth), velN, gloss, z: Math.floor(bottom),
+          });
+          for (const q of parts) pr.push(q);
+          // 落点处的那道白热横线（"音符砸到键上"的瞬间），仍归主题的 edge 强度管
           if (gloss && theme.note.edge > 0) {
             pr.push(P.line('notes', sx + 2, Math.min(bottom, wN) - 1, sx + cw - 2, Math.min(bottom, wN) - 1,
-              withAlpha('#ffffff', theme.note.edge * (1 - depth) * (0.5 + 0.5 * velN)), { lw: 1.4, z: Math.floor(bottom) + 1 }));
+              withAlpha('#ffffff', theme.note.edge * (1 - depth) * (0.5 + 0.5 * velN)), { lw: 1.4, z: Math.floor(bottom) + 0.4 }));
           }
         }
         if (forward) {

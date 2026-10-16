@@ -30,26 +30,68 @@ test('图元层顺序固定：background < notes < impact < keyboard < particles
 
 test('每个屏内音符块恰好一个 capsule（旧实现靠"填充类型"猜，现在直接数图元）', () => {
   const r = createCompiler().compile(song, tick, { ...base, fx: {} });
-  const caps = r.prims.filter((p) => p.k === 'capsule' && p.layer === 'notes');
+  // 玻璃质感下每根音符是「主体 + 纵向高光条」两个胶囊，所以这里数的是**主体**：
+  // 主体带四段渐变且不是 lighter 叠加（高光条是 lighter + 纯白）
+  const bodies = (x) => x.prims.filter((p) => p.k === 'capsule' && p.layer === 'notes' && p.blend !== 'lighter');
+  const caps = bodies(r);
   assert.equal(caps.length, 3, '三个音高各一块在屏内');
   // 音符盒必须带四段渐变（内芯），不是纯色 —— 这是"质感"的数据表达
   for (const c of caps) assert.ok(c.fill && Array.isArray(c.fill.stops) && c.fill.stops.length === 4);
 });
 
-test('琴键层可由数据关掉/调透明（★用户点名的那一项，不再靠补乘全局 alpha）', () => {
+test('琴键层只有"显示/隐藏"两态（透明度滑杆已按用户要求移除）', () => {
   const on = createCompiler().compile(song, tick, { ...base, fx: {} });
-  assert.ok(on.prims.some((p) => p.layer === 'keyboard'), '默认应有琴键图元');
+  const ks = on.prims.filter((p) => p.layer === 'keyboard');
+  assert.ok(ks.length > 0, '默认应有琴键图元');
+  assert.ok(ks.every((p) => p.alpha === 1 || p.alpha < 1), '琴键层不再受 keysAlpha 影响');
+  assert.ok(ks.every((p) => p.alpha > 0), '琴键必须是不透明的（除非整层关掉）');
   const off = createCompiler().compile(song, tick, { ...base, fx: { keysOn: false } });
   assert.equal(off.prims.filter((p) => p.layer === 'keyboard').length, 0, 'keysOn:false 必须一块琴键都不产生');
-  const half = createCompiler().compile(song, tick, { ...base, fx: { keysAlpha: 0.4 } });
-  const ks = half.prims.filter((p) => p.layer === 'keyboard');
-  // 键面/前脸/高光的 alpha 必须**都以 keysA 为上限**（按压光与闪光按各自强度再乘一次），
-  // 并且至少有一批等于 keysA —— 这就是"层属性"的含义：整层跟着一个数走。
-  assert.ok(ks.length > 0, 'keysAlpha=0.4 时仍应有琴键图元');
-  assert.ok(ks.every((p) => p.alpha <= 0.4 + 1e-6), '不得有超过 keysA 的琴键图元');
-  assert.ok(ks.some((p) => Math.abs(p.alpha - 0.4) < 1e-6), '键面 alpha 必须等于 keysA');
-  const zero = createCompiler().compile(song, tick, { ...base, fx: { keysAlpha: 0 } });
-  assert.equal(zero.prims.filter((p) => p.layer === 'keyboard').length, 0, 'alpha=0 也不该产生琴键图元');
+});
+
+test('★ 音符不透明度滑杆只作用于下落音符（琴键不再跟着变）', () => {
+  const full = createCompiler().compile(song, tick, { ...base, fx: { noteAlpha: 1 } });
+  const half = createCompiler().compile(song, tick, { ...base, fx: { noteAlpha: 0.4 } });
+  const bodyOf = (r) => r.prims.filter((p) => p.layer === 'notes' && p.k === 'capsule' && p.blend !== 'lighter');
+  const a0 = bodyOf(full), a1 = bodyOf(half);
+  assert.equal(a0.length, a1.length, '图元数量不应随透明度变化');
+  assert.equal(a1.length, 3, '三个音高各一根');
+  // 按 x 配对比较（图元顺序不保证与音符一一对应，按位置配才稳）
+  for (const b of a1) {
+    const ref = a0.find((p) => Math.abs(p.x - b.x) < 0.01 && Math.abs(p.y - b.y) < 0.01);
+    assert.ok(ref, '半透明度下应能找到同一个音符');
+    assert.ok(b.alpha <= ref.alpha * 0.5 + 1e-6, '半透明度下每个音符都应明显更淡：' + b.alpha.toFixed(3) + ' vs ' + ref.alpha.toFixed(3));
+  }
+  // 琴键层完全不受影响
+  const k0 = full.prims.filter((p) => p.layer === 'keyboard').map((p) => p.alpha);
+  const k1 = half.prims.filter((p) => p.layer === 'keyboard').map((p) => p.alpha);
+  assert.deepEqual(k1, k0, '琴键不透明度必须与音符滑杆无关');
+});
+
+test('★ 玻璃质感：音符带边缘亮线 / 纵向高光 / 上下收口，且同一根音符的部件 z 连在一起', () => {
+  const r = createCompiler().compile(song, tick, { ...base, fx: { gloss: true } });
+  const notes = r.prims.filter((p) => p.layer === 'notes');
+  const caps = notes.filter((p) => p.k === 'capsule' && p.blend !== 'lighter');
+  const lines = notes.filter((p) => p.k === 'line');
+  assert.equal(caps.length, 3, '三个音高各一根（主体）');
+  assert.ok(lines.length >= 3 * 3, '每根音符至少三条线（左右边缘 + 上下收口），实际 ' + lines.length);
+  assert.ok(notes.some((p) => p.blend === 'lighter'), '玻璃的亮层走 lighter 叠加');
+  // 边缘亮线必须是白色的（折射亮边），高光条是白色胶囊
+  const white = lines.filter((p) => /255,255,255/.test(p.color));
+  assert.ok(white.length >= 3 * 2, '每根音符应有左右两条白色边缘亮线');
+  // 同一根音符：以 floor(bottom) 为基准，部件 z 落在 [z0, z0+1) 内，不会与相邻音符交错
+  for (const c of caps) {
+    const z0 = c.z;
+    const kin = notes.filter((p) => p.z >= z0 && p.z < z0 + 1);
+    assert.ok(kin.length >= 5, '一根音符应有主体/高光/边缘/收口多个部件共享同一 z 基准，实际 ' + kin.length);
+  }
+});
+
+test('关掉「音符质感」= 退回一块平色（不再有玻璃亮层）', () => {
+  const r = createCompiler().compile(song, tick, { ...base, fx: { gloss: false } });
+  const notes = r.prims.filter((p) => p.layer === 'notes');
+  assert.ok(notes.filter((p) => p.k === 'capsule').length === 3);
+  assert.equal(notes.filter((p) => p.blend === 'lighter').length, 0, '关掉质感后不该再有 lighter 亮层');
 });
 
 test('粒子按预算裁剪（对标 MIDViz 的 per-node Max Items）', () => {

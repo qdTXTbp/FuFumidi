@@ -139,7 +139,8 @@ test('每帧只处理屏内音符块（旧测试数绘制调用，现在直接�
   assert.equal(expected, 3, '三个音高各应只剩屏内那一块');
 
   const r = createCompiler().compile(song, d * TPS, { w: 800, h, zoom: 1, colorScheme: 0, activeNotes: [], energy: 0, theme: 'studio', fx: {} });
-  const notes = r.prims.filter((p) => p.k === 'capsule' && p.layer === 'notes');
+  // 玻璃质感下每根音符是「主体 + 纵向高光条」两个胶囊 → 这里只数主体（非 lighter 叠加）
+  const notes = r.prims.filter((p) => p.k === 'capsule' && p.layer === 'notes' && p.blend !== 'lighter');
   assert.ok(notes.length > 0, '应当产生了音符图元');
   assert.equal(notes.length, expected, '音符图元数应等于屏内块数');
 
@@ -162,7 +163,7 @@ test('放大时落在可视音域之外的高/低音不再产生图元', () => {
 
   const count = (zoom) => createCompiler()
     .compile(song, 0, { w: 800, h, zoom, colorScheme: 0, activeNotes: [], energy: 0, theme: 'studio', fx: {} })
-    .prims.filter((p) => p.k === 'capsule' && p.layer === 'notes').length;
+    .prims.filter((p) => p.k === 'capsule' && p.layer === 'notes' && p.blend !== 'lighter').length;
 
   // zoom = 1：整个 88 键都在画布上，三个音高都该画
   assert.equal(count(1), 3, 'zoom=1 时应画出全部三个音高');

@@ -33,7 +33,69 @@ const immersive = ref(false);
 const vizBg = useVizBgStore();
 const bg = vizBg.bg;                // reactive，模板与绘制都直接读它
 const bgMore = ref(false);          // 设置条是否展开：纯 UI 状态，不进 store
-const fxMore = ref(false);          // 视效条是否展开：同上（开关本身住在 store）
+/* ---------------- 视效面板：独立浮层 + 可在工具内拖动（2026-10-17） ----------------
+   为什么浮层化：原来视效条住在文档流里，一展开画布就被挤矮 —— 调参数时反而看不清效果。
+   现在面板 Teleport 到 body、position:fixed，可以拖到不挡视线的地方，画布保持满幅。
+   拖动手柄**只有标题栏**（面板里的滑块/色块照常点，不会一碰就拖走）；位置记在 localStorage。 */
+const fxPanel = ref(false);
+const fxPanelPos = ref({ x: 0, y: 0 });   // 面板左上角（视口坐标 px）
+const fxPanelEl = ref(null);
+const fxPanelSize = ref({ w: 0, h: 0 });  // 用户拖出来的尺寸（0 = 用 CSS 默认窄宽度）
+let fxRO = null;                          // ResizeObserver：把"拖出来的尺寸"记下来
+let fxDrag = null;                        // { dx, dy }：按下时指针相对面板左上角的偏移
+function attachPanelResize() {
+  if (fxRO || !fxPanelEl.value || typeof ResizeObserver === 'undefined') return;
+  fxRO = new ResizeObserver(() => {
+    const el = fxPanelEl.value;
+    if (!el) return;
+    const w = el.offsetWidth, h = el.offsetHeight;
+    if (Math.abs(w - fxPanelSize.value.w) > 1 || Math.abs(h - fxPanelSize.value.h) > 1) {
+      fxPanelSize.value = { w, h };
+      savePrefs();
+    }
+  });
+  fxRO.observe(fxPanelEl.value);
+}
+function panelSize() {
+  const el = fxPanelEl.value;
+  return { w: el ? el.offsetWidth : 780, h: el ? el.offsetHeight : 260 };
+}
+function clampPanel(x, y) {
+  const { w, h } = panelSize();
+  const maxX = Math.max(8, window.innerWidth - w - 8);
+  const maxY = Math.max(8, window.innerHeight - h - 8);
+  return { x: Math.round(Math.min(Math.max(8, x), maxX)), y: Math.round(Math.min(Math.max(8, y), maxY)) };
+}
+function defaultPanelPos() {
+  const { w } = panelSize();
+  return clampPanel(Math.round((window.innerWidth - w) / 2), Math.round(window.innerHeight * 0.14));
+}
+function toggleFxPanel() {
+  fxPanel.value = !fxPanel.value;
+  if (!fxPanel.value) return;
+  if (!fxPanelPos.value.x && !fxPanelPos.value.y) fxPanelPos.value = defaultPanelPos();
+  nextTick(() => { attachPanelResize(); fxPanelPos.value = clampPanel(fxPanelPos.value.x, fxPanelPos.value.y); });
+}
+function resetPanelPos() { fxPanelPos.value = defaultPanelPos(); savePrefs(); }
+function onPanelDown(e) {
+  if (e.button !== 0) return;
+  if (e.target && e.target.closest && e.target.closest('button')) return;   // 标题栏上的按钮不触发拖动
+  const p = fxPanelPos.value;
+  fxDrag = { dx: e.clientX - p.x, dy: e.clientY - p.y };
+  window.addEventListener('pointermove', onPanelMove);
+  window.addEventListener('pointerup', onPanelUp);
+  e.preventDefault();
+}
+function onPanelMove(e) {
+  if (!fxDrag) return;
+  fxPanelPos.value = clampPanel(e.clientX - fxDrag.dx, e.clientY - fxDrag.dy);
+}
+function onPanelUp() {
+  fxDrag = null;
+  window.removeEventListener('pointermove', onPanelMove);
+  window.removeEventListener('pointerup', onPanelUp);
+  savePrefs();
+}
 const fxItems = vizBg.FX_ITEMS;     // 视效开关清单（顺序即界面顺序）
 /* ---------------- 配色（2026-10-17 推倒重做） ----------------
    旧版有两行互相压制的控件：选了"按音高"之后，"配色档"就整排失效；
@@ -387,10 +449,20 @@ function loadPrefs() {
     if (!s) return;
     if (typeof s.zoom === 'number' && isFinite(s.zoom)) wfZoom.value = Math.min(3, Math.max(0.4, s.zoom));
     if (s.mode === 'dash' || s.mode === 'waterfall') mode.value = s.mode;
+    if (s.fxPanelPos && typeof s.fxPanelPos.x === 'number' && typeof s.fxPanelPos.y === 'number') {
+      fxPanelPos.value = { x: s.fxPanelPos.x, y: s.fxPanelPos.y };
+    }
+    if (s.fxPanelSize && typeof s.fxPanelSize.w === 'number' && s.fxPanelSize.w > 0) {
+      fxPanelSize.value = { w: s.fxPanelSize.w, h: s.fxPanelSize.h || 0 };
+    }
   } catch (e) {}
 }
 function savePrefs() {
-  try { localStorage.setItem(LS_VIZ, JSON.stringify({ zoom: wfZoom.value, mode: mode.value })); } catch (e) {}
+  try {
+    localStorage.setItem(LS_VIZ, JSON.stringify({
+      zoom: wfZoom.value, mode: mode.value, fxPanelPos: fxPanelPos.value, fxPanelSize: fxPanelSize.value,
+    }));
+  } catch (e) {}
 }
 watch([wfZoom, mode], savePrefs);
 
@@ -407,6 +479,7 @@ onMounted(() => {
 onActivated(() => { grabCanvases(); if (!raf) raf = requestAnimationFrame(tick); });
 onDeactivated(() => { if (raf) { cancelAnimationFrame(raf); raf = null; } setImmersive(false); });
 onBeforeUnmount(() => {
+  onPanelUp();   // 摘掉可能还挂着的拖拽监听
   if (raf) cancelAnimationFrame(raf);
   raf = null;
   if (hudTimer) { clearTimeout(hudTimer); hudTimer = null; }
@@ -435,7 +508,7 @@ onBeforeUnmount(() => {
           <!-- 视效：3D 键盘 / 粒子光效 / 落键光柱 / 击键光带 / 音符质感。
                参考 SeeMusic、Synthesia、Lumiric Stage 那类瀑布流的语言：
                「灯、粒子、键的厚度」才是观感差异，而不是把音符块画得更大。 -->
-          <button class="chip-btn" :class="{ active: fxMore }" data-guide="viz-fx" :title="t('瀑布流视效（配色 / 3D 键盘 / 粒子 / 光柱 / 光带 / 质感）')" @click="fxMore = !fxMore">
+          <button class="chip-btn" :class="{ active: fxPanel }" data-guide="viz-fx" :title="t('瀑布流视效（配色 / 3D 键盘 / 粒子 / 光柱 / 光带 / 质感）')" @click="toggleFxPanel">
             <Icon name="spark" :size="12" />{{ t('视效') }}
           </button>
           <span style="flex:1"></span>
@@ -464,10 +537,27 @@ onBeforeUnmount(() => {
             <NumSlider :model-value="Math.round(bg.dim * 100)" @update:model-value="v => { bg.dim = (+v) / 100; saveBg() }" :min="0" :max="80" :step="5" range-style="width:88px" :input-width="68" no-input />
           </template>
         </div>
-        <!-- 视效面板（用户要求：做成几套主题 + 让用户自定义参数；配色也归在这里）
-             三行：① 主题（含用户自定义主题的命名/删除）② 参数滑块 ③ 特效开关 + 配色/分色
+        <!-- 视效面板内容（原来在文档流里，现在整体搬进上面的浮层）：
+             ① 主题（含用户自定义主题的命名/删除）② 参数滑块 ③ 特效开关 ④ 取色/配色/调色
              ★ 所有值都住在 stores/vizbg，导出页读同一份 —— 预览与成片必须是一幅画。 -->
-        <template v-if="fxMore && !immersive">
+          <!-- ★ 视效面板：独立浮层 + 可拖动（2026-10-17）。
+               放在文档流里会把画布挤矮，调参数时看不见效果；浮层化后画布保持满幅，
+               面板可以拖到不挡视线的地方。拖动手柄**只有标题栏**，滑块/色块照常点。 -->
+          <Teleport to="body">
+            <div v-if="fxPanel" ref="fxPanelEl" class="fx-panel"
+                 :style="{
+                   left: fxPanelPos.x + 'px', top: fxPanelPos.y + 'px',
+                   width: fxPanelSize.w ? fxPanelSize.w + 'px' : '', height: fxPanelSize.h ? fxPanelSize.h + 'px' : '',
+                 }">
+              <div class="fx-panel-head" :title="t('拖动标题移动面板')" @pointerdown="onPanelDown">
+                <Icon name="spark" :size="13" />
+                <b>{{ t('视效') }}</b>
+                <span class="muted small">{{ t('拖动标题移动面板') }}</span>
+                <span style="flex:1"></span>
+                <button class="chip-btn" :title="t('复位位置')" @pointerdown.stop @click="resetPanelPos">{{ t('复位') }}</button>
+                <button class="chip-btn" :title="t('关闭')" @pointerdown.stop @click="fxPanel = false">✕</button>
+              </div>
+              <div class="fx-panel-body">
           <div class="viz-bg-bar">
             <span class="muted small">{{ t('视效主题') }}</span>
             <!-- 内置主题 = 视觉主题（舞台/键面/音符材质/后处理整包换）；用户主题带 user 标记 -->
@@ -532,7 +622,9 @@ onBeforeUnmount(() => {
             <span style="flex:1"></span>
             <button class="chip-btn" :title="t('配色参数回到默认（取色方式=轨道色）')" @click="resetColors">{{ t('配色重置') }}</button>
           </div>
-        </template>
+              </div>
+            </div>
+          </Teleport>
         <div class="vc-body" :class="{ 'bd-canvas': bg.mode === 'transparent' }">
           <!-- ★ 画布自己有一层 CSS 底色（.vc-body canvas 的 background）—— 透明档只 clearRect
                是没用的，元素底色照样透不出来。所以透明档必须把画布元素的底色也去掉，
@@ -546,6 +638,7 @@ onBeforeUnmount(() => {
             <input class="hud-seek" type="range" min="0" max="1" step="0.0001" :aria-label="t('播放进度')"
                    :value="hudProgress" @pointerdown="onSeekStart" @pointerup="onSeekEnd"
                    @pointercancel="onSeekEnd" @input="onSeekInput">
+            <button class="hud-btn" :title="t('视效面板')" @click="toggleFxPanel"><Icon name="spark" :size="14" /></button>
             <span class="hud-name">{{ currentSong?.name || '' }}</span>
             <button class="hud-btn hud-exit" :title="t('退出沉浸模式（Esc）')" @click="setImmersive(false)">
               <Icon name="close" :size="14" />{{ t('退出') }}
@@ -656,6 +749,47 @@ onBeforeUnmount(() => {
 .hud-exit { margin-left: auto; }
 /* 静止后整层隐去：只留画面 */
 .hud-hidden { opacity: 0; pointer-events: none; }
+
+/* ---------------- 视效面板（浮层 + 可拖动） ----------------
+   Teleport 到 body，所以这里不能用祖先选择器定位；靠 position:fixed + 高 z-index。
+   玻璃质感：半透明底 + 背景模糊，压在画面上也能看清下面的音符。 */
+.fx-panel {
+  position: fixed;
+  z-index: 4200;
+  /* 默认窄一些：面板是浮层，宽了会挡住画面（用户反馈「面板太宽了」）。
+     需要更宽可以拖右下角 —— resize:both 给了原生缩放手柄，尺寸会记住。 */
+  width: min(560px, 92vw);
+  min-width: 330px;
+  max-width: 96vw;
+  max-height: 86vh;
+  resize: both;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--card) 90%, transparent);
+  backdrop-filter: blur(12px) saturate(1.08);   /* 玻璃感：面板压着画面时仍然能看出下面的音符 */
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .45);
+  color: var(--ink);
+}
+.fx-panel-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  cursor: move;
+  user-select: none;
+  touch-action: none;          /* 拖动时不要触发页面滚动/手势 */
+  position: sticky; top: 0;
+  background: inherit;
+  border-radius: 12px 12px 0 0;
+}
+.fx-panel-head b { font-size: 12.5px; }
+.fx-panel-head .chip-btn { cursor: pointer; }
+.fx-panel-body { display: flex; flex-direction: column; padding-bottom: 6px; }
+/* 面板里的控件比工具条里更紧凑：窄面板下换行次数少一半 */
+.fx-panel-body .viz-bg-bar { padding: 5px 10px 6px; gap: 6px; }
+.fx-panel-body .chip-btn { padding: 3px 8px; font-size: 11.5px; }
+.fx-panel-body :deep(.muted.small) { font-size: 11px; }
+.fx-panel-body .viz-bg-bar { border-radius: 0; }
 @media (max-width: 720px) {
   .hud-name { display: none; }
 }

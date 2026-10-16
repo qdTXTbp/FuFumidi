@@ -204,7 +204,8 @@ export const FX_DEFAULTS = {
   // 配色：取色方式 + 参数（色相/跨度/旋转/饱和/亮度/手色）全在 state/colors.js，这里是单一来源的并入
   ...COLOR_DEFAULTS,
   keysOn: true,      // 显示琴键（关掉 = 只留音符与光效，给叠加层用）
-  keysAlpha: 1,      // 琴键不透明度 0..1（用户点名要的"让琴键透明"）
+  // 琴键不透明度已移除（用户要求去掉：琴键要么显示要么隐藏，透明度留给音符）
+  noteAlpha: 1,      // 下落音符的不透明度 0.15..1（玻璃质感下用它做通透度）
 };
 
 /* 参数元数据 —— **单一来源**：面板据此渲染滑块，不用在 store 与 UI 里各写一遍范围 */
@@ -215,7 +216,7 @@ export const FX_PARAMS = [
   { k: 'flash', label: '击键闪光', min: 0, max: 1.5, step: 0.05 },
   { k: 'partScale', label: '粒子数量', min: 0.3, max: 1.6, step: 0.1 },
   { k: 'glow', label: '光柱强度', min: 0.4, max: 1.6, step: 0.05 },
-  { k: 'keysAlpha', label: '琴键不透明度', min: 0, max: 1, step: 0.05 },
+  { k: 'noteAlpha', label: '音符不透明度', min: 0.15, max: 1, step: 0.05 },
 ];
 // 配色元数据由 state/colors.js 提供（单一来源）：取色方式 / 预设 / 参数范围
 export const FX_COLORBY = COLOR_MODES;

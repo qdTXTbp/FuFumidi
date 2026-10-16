@@ -4734,6 +4734,36 @@ export const I18N_MAP = {
   "把谱面拖到这里": "Drop the score here",
   "或点下面的按钮选择文件（可多选）": "or use the button below (multi-select supported)",
 
+  // —— 可视化「视效」浮层面板 + 配色重做（2026-10-17）——
+  "视效": "Effects",
+  "视效面板": "Effects panel",
+  "拖动标题移动面板": "Drag the title bar to move the panel",
+  "复位位置": "Reset position",
+  "复位": "Reset",
+  "取色": "Color from",
+  "配色预设": "Palette",
+  "配色重置": "Reset colors",
+  "调色": "Tuning",
+  "色相基准": "Base hue",
+  "色相跨度": "Hue spread",
+  "色相旋转": "Hue shift",
+  "饱和度": "Saturation",
+  "亮度": "Lightness",
+  "轨道色": "Track color",
+  "按左右手": "By hand",
+  "七彩": "Rainbow",
+  "暖": "Warm",
+  "冷": "Cool",
+  "单色": "Mono",
+  "左手": "Left",
+  "右手": "Right",
+  "左手颜色": "Left-hand color",
+  "右手颜色": "Right-hand color",
+  "弱": "Soft",
+  "弱力度颜色": "Low-velocity color",
+  "强力度颜色": "High-velocity color",
+  // —— 音符不透明度（琴键不透明度已移除）——
+  "音符不透明度": "Note opacity",
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */
