@@ -180,7 +180,37 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
   function homrSite() { return path.join(homrVenv(), 'Lib', 'site-packages', 'homr'); }
   function homrExePath() { return path.join(homrVenv(), 'Scripts', 'homr.exe'); }
 
-  function homrStatus() {
+  /* ★ 只查"文件在不在"会骗人：运行时从 3.11 升到 3.12 之后，老 venv 里的 numpy/onnxruntime
+     扩展是 cp311，导入直接炸，但 status 依旧报「已安装」。用户实测就是这么被误导的
+     （界面写已安装、一跑就 No module named 'numpy._core._multiarray_umath'）。
+     现在真的跑一次 import，并把 providers 一并带出来（顺带告诉界面 GPU 有没有生效）。 */
+  let homrProbeCache = { at: 0, ok: false, reason: '', providers: '' };
+  function homrProbeVenv(vpy) {
+    if (Date.now() - homrProbeCache.at < 60000 && homrProbeCache.at) return Promise.resolve(homrProbeCache);
+    return new Promise((resolve) => {
+      let buf = '', done = false;
+      const fin = (v) => { if (!done) { done = true; resolve(v); } };
+      let ch = null;
+      try {
+        ch = spawn(vpy, ['-c', 'import numpy,onnxruntime as o;print("OK",o.get_available_providers())'],
+          { windowsHide: true, env: Object.assign({}, process.env, { PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' }) });
+      } catch (e) { fin({ code: -1, out: String((e && e.message) || e) }); return; }
+      ch.stdout.on('data', (d) => { buf += d.toString('utf8'); });
+      ch.stderr.on('data', (d) => { buf += d.toString('utf8'); });
+      ch.on('close', (code) => fin({ code, out: buf }));
+      ch.on('error', (e) => fin({ code: -1, out: String((e && e.message) || e) }));
+      setTimeout(() => { try { ch.kill(); } catch (e) {} fin({ code: -2, out: 'probe timeout' }); }, 60000);
+    }).then((r) => {
+      const m = /OK (.*)/.exec(r.out || '');
+      homrProbeCache = {
+        at: Date.now(), ok: r.code === 0 && !!m,
+        providers: m ? String(m[1]).trim() : '',
+        reason: (r.code === 0 && m) ? '' : String(r.out || '').trim().split('\n').filter(Boolean).slice(-2).join(' ').slice(0, 220),
+      };
+      return homrProbeCache;
+    });
+  }
+  async function homrStatus() {
     const py = path.join(homrVenv(), 'Scripts', 'python.exe');
     const weights = [];
     let bytes = 0;
@@ -194,9 +224,16 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
       weights.push({ file: w.file, installed: has, bytes: size });
       bytes += size;
     }
+    const hasVenv = fs.existsSync(py);
+    const probe = hasVenv ? await homrProbeVenv(py) : { ok: false, reason: '未创建运行环境', providers: '' };
     return {
-      ok: true, installed: fs.existsSync(homrExePath()) || fs.existsSync(py),
-      ready: weights.every((w) => w.installed),
+      ok: true, installed: fs.existsSync(homrExePath()) || hasVenv,
+      // ready 现在要求"权重齐 + venv 真的能 import" —— 半坏的 venv 不再算就绪
+      ready: weights.every((w) => w.installed) && probe.ok,
+      broken: hasVenv && !probe.ok,
+      reason: probe.reason,
+      providers: probe.providers,
+      gpu: /CUDA/i.test(probe.providers || ''),
       version: HOMR_VERSION, dir: homrDir(), exe: homrExePath(),
       weights, weightBytes: bytes, missing: weights.filter((w) => !w.installed).length,
       license: 'AGPL-3.0（权重含 PrIMuS 非商用数据）',
@@ -225,6 +262,19 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
       ch.on('error', (e) => { out += String((e && e.message) || e); fin(-1); });
     });
     try {
+      // ★ 版本护栏：pyvenv.cfg 记着创建 venv 时的 Python 版本。运行时升级（3.11 → 3.12）之后，
+      //   老 venv 里的扩展全是 cp311，pip 重装也救不回来 —— 只能整个删掉重建。
+      const pyMinor = async (exe) => {
+        const r = await run(exe, ['-c', 'import sys;print("%d.%d" % sys.version_info[:2])'], null, 30000);
+        return ((r.out || '').match(/(\d+\.\d+)/) || [])[1] || '';
+      };
+      const wantMinor = await pyMinor(basePy);
+      let haveMinor = '';
+      try { haveMinor = ((fs.readFileSync(path.join(venv, 'pyvenv.cfg'), 'utf8').match(/version\s*=\s*(\d+\.\d+)/) || [])[1]) || ''; } catch (e) {}
+      if (fs.existsSync(vpy) && haveMinor && wantMinor && haveMinor !== wantMinor) {
+        send({ phase: 'homr-venv', percent: 2, text: '内置运行时已升到 Python ' + wantMinor + '，正在重建识谱环境…' });
+        try { fs.rmSync(venv, { recursive: true, force: true }); } catch (e) {}
+      }
       // 1) 独立 venv（不继承 site-packages —— 这是 homr 能装进来的前提）
       if (!fs.existsSync(vpy)) {
         send({ phase: 'homr-venv', percent: 2, text: '创建 homr 独立运行环境…' });
@@ -237,8 +287,10 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
         let lastErr = '';
         for (const idx of PIP_INDEXES) {
           send({ phase: 'homr-pip', percent: 8, text: '安装 homr 依赖（' + idx.replace(/^https?:\/\//, '').split('/')[0] + '）…' });
+          // ★ onnxruntime-gpu：识谱（homr）走 ONNX 推理，装上它才会用 CUDA；
+          //   没有 N 卡时 onnxruntime-gpu 自己回退 CPU，不会更差。
           const r = await run(vpy, ['-m', 'pip', 'install', '--no-input', '--disable-pip-version-check',
-                                    'homr==' + HOMR_VERSION, '-i', idx], (s) => {
+                                    'homr==' + HOMR_VERSION, 'onnxruntime-gpu', '-i', idx], (s) => {
             const m = /Downloading ([^\s]+)/.exec(s);
             if (m) send({ phase: 'homr-pip', percent: 12, text: '下载 ' + m[1].slice(0, 48) });
           }, 30 * 60 * 1000);

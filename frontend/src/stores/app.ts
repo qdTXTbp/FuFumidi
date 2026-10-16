@@ -1067,6 +1067,18 @@ export const useAppStore = defineStore('app', {
         localStorage.setItem('fufumidi_tags', JSON.stringify(m));
       } catch (e) {}
     },
+    /** 重命名曲目（用户：「侧边栏对歌曲的编辑信息功能要可以重命名」）。
+     *  只改**曲库里的名字**并写回库，不动磁盘上的文件 —— 改名不改文件是刻意的：
+     *  文件名一改，用户的播放列表/云同步/历史里引用的路径全会失效。 */
+    async renameSong(id: string, name: string) {
+      const n = String(name || '').trim();
+      const s: any = this.songs.find((x: any) => x.id === id);
+      if (!s || !n || n === s.name) return false;
+      s.name = n;
+      const b: any = (typeof window !== 'undefined') ? (window as any).fuBridge : null;
+      if (b && typeof b.dbSongsPut === 'function') { try { await b.dbSongsPut(s); } catch (e) {} }
+      return true;
+    },
     async editTags(id: string) {
       const s = this.songs.find((x: any) => x.id === id);
       if (!s) return;

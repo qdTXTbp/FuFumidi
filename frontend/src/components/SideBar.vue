@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted, nextTick } from 'vue';
+import { ref, computed, watch, onMounted, nextTick, reactive } from 'vue';
 import Icon from './Icon.vue';
 import CloudUserDialog from './CloudUserDialog.vue';
 import { useAppStore, SIDEBAR_DEFAULT_W, SIDEBAR_MIN_W } from '../stores/app';
@@ -7,6 +7,7 @@ import { usePlaylistStore } from '../stores/playlist';
 import { useCloudStore } from '../stores/cloud';
 import logoUrl from '../assets/logo.png';
 import { t } from '../core/i18n.js';
+import { cleanTags, addTag, removeTagAt, tagSummary } from '../core/tags.js';
 import { getAppVersion } from '../core/version.js';
 import { fmtTime } from '../core/util.js';
 import { fitMenu } from '../core/menu.js';
@@ -95,7 +96,41 @@ const visibleSongs = computed(() => {
   };
   return base.slice().sort((a, b) => key(a).localeCompare(key(b), 'zh'));
 });
-/* ---------------- 标签编辑（艺术家/专辑/流派/封面） ---------------- */
+/* ---------------- 编辑信息弹窗（重命名 + 艺术家/专辑/流派 + 自定义标签） ----------------
+   ★ 2026-10-17 用户：「侧边栏对歌曲的编辑信息功能要可以重命名和自定义标签」。
+   原来是一串 prompt（艺术家 → 专辑 → 流派 → 封面），改三项要点三次确定；
+   而标签是**多个**的，用 prompt 根本表达不了。现在五项一次放进一张卡里。 */
+const infoTarget = ref(null);
+const infoForm = reactive({ name: '', artist: '', album: '', genre: '', tags: [] });
+const tagInput = ref('');
+function openInfo(s) {
+  if (!s) return;
+  infoTarget.value = s;
+  const tg = app.songTags(s.id) || {};
+  infoForm.name = s.name || '';
+  infoForm.artist = tg.artist || '';
+  infoForm.album = tg.album || '';
+  infoForm.genre = tg.genre || '';
+  infoForm.tags = cleanTags(tg.tags);
+  tagInput.value = '';
+}
+function closeInfo() { infoTarget.value = null; tagInput.value = ''; }
+function addInfoTag() { infoForm.tags = addTag(infoForm.tags, tagInput.value); tagInput.value = ''; }
+function removeInfoTag(i) { infoForm.tags = removeTagAt(infoForm.tags, i); }
+async function saveInfo() {
+  const s = infoTarget.value;
+  if (!s) return;
+  const renamed = await app.renameSong(s.id, infoForm.name);
+  app.setSongTags(s.id, {
+    artist: infoForm.artist.trim(), album: infoForm.album.trim(), genre: infoForm.genre.trim(),
+    tags: cleanTags(infoForm.tags),
+  });
+  app.toast(renamed ? t('已重命名并保存信息') : t('信息已保存'), 'ok');
+  closeInfo();
+}
+/** 列表行里展示的标签（最多 2 条，多的折成 +N） */
+function rowTags(id) { const tg = app.songTags(id) || {}; return tagSummary(cleanTags(tg.tags)); }
+// 旧的 prompt 版仍留着（右键菜单里没走弹窗时的兜底，其它页面也可能调用）
 async function editTags(id) { try { await app.editTags(id); } catch (e) {} }
 function tagOf(id) { return app.songTags(id) || {}; }
 function rowCover(id) { const t = app.songTags(id); return t && t.cover ? t.cover : ''; }
@@ -104,6 +139,8 @@ function rowSub(s) {
   const bits = [];
   if (tg.artist) bits.push(tg.artist);
   if (tg.album) bits.push(tg.album);
+  const tgSum = rowTags(s.id);
+  if (tgSum) bits.push(tgSum);
   return bits.join(' · ');
 }
 
@@ -762,7 +799,7 @@ const showAuth = ref(false);
           <button class="icon-btn" style="width:26px;height:26px;font-size:var(--fs-md)" :title="t('添加到歌单')" :aria-label="t('添加到歌单')" @click.stop="openAddToPl(s.id)">
             <Icon name="plus" :size="14" />
           </button>
-          <button class="icon-btn" style="width:26px;height:26px;font-size:var(--fs-md)" :title="t('编辑信息（艺术家/专辑/流派/封面）')" :aria-label="t('编辑信息')" @click.stop="editTags(s.id)">
+          <button class="icon-btn" style="width:26px;height:26px;font-size:var(--fs-md)" :title="t('编辑信息（重命名 / 艺术家 / 专辑 / 流派 / 标签）')" :aria-label="t('编辑信息')" @click.stop="openInfo(s)">
             <Icon name="pencil" :size="13" />
           </button>
           <button class="icon-btn" style="width:26px;height:26px;font-size:var(--fs-md)" :title="isFavView ? t('取消收藏') : (isVirtualView ? t('删除（含本地文件）') : t('从歌单移除'))" :aria-label="t('移除')" @click.stop="isFavView ? toggleFav(s.id) : (isVirtualView ? songDelete(s) : songRemove(s))">
@@ -839,6 +876,53 @@ const showAuth = ref(false);
       </div>
     </Transition>
 
+    <!-- 编辑信息：重命名 + 艺术家/专辑/流派 + 自定义标签 -->
+    <Transition name="ov">
+      <div v-if="infoTarget" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="t('编辑信息')" @click.self="closeInfo" @keydown.esc="closeInfo">
+        <div class="ed-modal" style="width:min(430px,94vw)">
+          <div class="ed-modal-head">
+            <b>{{ t('编辑信息') }}</b>
+            <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" :aria-label="t('关闭')" @click="closeInfo"><Icon name="close" :size="14" /></button>
+          </div>
+          <div class="ed-info-body">
+            <label class="ed-info-row">
+              <span>{{ t('名称') }}</span>
+              <input id="song-info-name" name="song-info-name" class="text-input" v-model="infoForm.name" :aria-label="t('歌曲名')" @keydown.enter="saveInfo" />
+            </label>
+            <label class="ed-info-row">
+              <span>{{ t('艺术家') }}</span>
+              <input id="song-info-artist" name="song-info-artist" class="text-input" v-model="infoForm.artist" :aria-label="t('艺术家')" @keydown.enter="saveInfo" />
+            </label>
+            <label class="ed-info-row">
+              <span>{{ t('专辑') }}</span>
+              <input id="song-info-album" name="song-info-album" class="text-input" v-model="infoForm.album" :aria-label="t('专辑')" @keydown.enter="saveInfo" />
+            </label>
+            <label class="ed-info-row">
+              <span>{{ t('流派') }}</span>
+              <input id="song-info-genre" name="song-info-genre" class="text-input" v-model="infoForm.genre" :aria-label="t('流派')" @keydown.enter="saveInfo" />
+            </label>
+            <div class="ed-info-row ed-info-tags">
+              <span>{{ t('自定义标签') }}</span>
+              <div class="ed-tag-box">
+                <span v-for="(tg, i) in infoForm.tags" :key="tg + i" class="ed-tag-chip">
+                  {{ tg }}
+                  <button class="ed-tag-x" :title="t('移除标签')" :aria-label="t('移除标签')" @click.prevent="removeInfoTag(i)"><Icon name="close" :size="10" /></button>
+                </span>
+                <input id="song-info-tag" name="song-info-tag" class="ed-tag-input" v-model="tagInput"
+                       :placeholder="t('输入标签后回车')" :aria-label="t('自定义标签')"
+                       @keydown.enter.prevent="addInfoTag" @keydown.,.prevent="addInfoTag" />
+              </div>
+            </div>
+            <p class="ed-info-hint">{{ t('重命名只改曲库里的名字，不动磁盘文件；标签最多 24 条。') }}</p>
+          </div>
+          <div class="ed-modal-foot">
+            <button class="btn sm ghost" @click="closeInfo">{{ t('取消') }}</button>
+            <button class="btn sm primary" @click="saveInfo">{{ t('保存') }}</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
     <!-- 确认弹窗 -->
     <Transition name="ov">
       <div v-if="confirmDlg" class="ed-modal-mask ed-modal-top" role="dialog" aria-modal="true" :aria-label="confirmDlg.title" @click.self="closeConfirm" @keydown.esc="closeConfirm">
@@ -883,7 +967,7 @@ const showAuth = ref(false);
             </div>
           </div>
           <button class="pl-ctx-item" @click="toggleFav(songMenu.s.id); closeSongMenu()">{{ isFav(songMenu.s.id) ? t('取消收藏') : t('收藏') }}</button>
-          <button class="pl-ctx-item" @click="editTags(songMenu.s.id); closeSongMenu()">{{ t('编辑信息') }}</button>
+          <button class="pl-ctx-item" @click="openInfo(songMenu.s); closeSongMenu()">{{ t('编辑信息') }}</button>
           <button class="pl-ctx-item" @click="songReveal(songMenu.s); closeSongMenu()">{{ t('打开所在文件夹') }}</button>
           <div class="ctx-sep"></div>
           <button class="pl-ctx-item" @click="songMenuBatch(songMenu.s)">{{ t('批量管理') }}</button>
@@ -1131,4 +1215,18 @@ body.resize-col .sidebar-resizer::after {
 .ctx-sub-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-sub-num { font-style: normal; font-size: var(--fs-xs); color: var(--stone); font-variant-numeric: tabular-nums; }
 .ctx-sep { height: 1px; background: var(--hairline); margin: 3px var(--sp-2); }
+/* 编辑信息弹窗：四行输入 + 标签区（值全部走 token，界面审计的棘轮才不会被顶上去） */
+.ed-info-body { padding: var(--sp-4) var(--sp-1) var(--sp-1); display: flex; flex-direction: column; gap: var(--sp-2); }
+.ed-info-row { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-sm); color: var(--ink); }
+.ed-info-row > span { flex: none; width: 62px; color: var(--stone); }
+.ed-info-row .text-input { flex: 1; min-width: 0; }
+.ed-info-tags { align-items: flex-start; }
+.ed-tag-box { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1);
+  padding: var(--sp-1); border: 1px solid var(--hairline); border-radius: var(--r-sm); background: var(--surface-soft); }
+.ed-tag-chip { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 1px var(--sp-2);
+  border-radius: var(--r-pill); background: var(--accent-soft, var(--surface)); color: var(--accent);
+  border: 1px solid var(--hairline); font-size: var(--fs-xs); }
+.ed-tag-x { display: inline-flex; align-items: center; border: none; background: none; color: inherit; cursor: pointer; padding: 0; }
+.ed-tag-input { flex: 1; min-width: 84px; border: none; background: none; outline: none; color: var(--ink); font-size: var(--fs-sm); }
+.ed-info-hint { margin: 0; color: var(--stone); font-size: var(--fs-xs); line-height: 1.5; }
 </style>

@@ -119,6 +119,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   videoExportEnd: (opts) => ipcRenderer.invoke('video:exportEnd', opts || {}),
   // 「变谱」：乐谱（MusicXML/MXL）→ MIDI（返回 base64 字节 + 统计信息）
   scoreToMidi: (cfg) => ipcRenderer.invoke('score:toMidi', cfg || {}),
+  scoreCancel: () => ipcRenderer.invoke('score:cancel'),
   onScoreProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('score:progress', w); return () => ipcRenderer.removeListener('score:progress', w); },
   // 识谱增强引擎（Audiveris）安装 / 检测
   omrEngine: {

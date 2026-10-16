@@ -54,16 +54,19 @@ const site = path.join(staging, 'site-packages');
 fs.mkdirSync(site, { recursive: true });
 
 if (mode === 'cuda') {
-  if (!process.env.SKIP_PIP) run('"' + pythonDir + '\python.exe" -m pip install --no-input -i https://pypi.tuna.tsinghua.edu.cn/simple -r "' + reqCuda + '"');
-  else console.log('[skip] pip cuda install');
-  const pkgList = ['torch', 'torchgen', 'functorch', 'torchvision', 'torchaudio', 'onnxruntime'];
-  for (const pkg of pkgList) {
-    const srcDir = path.join(pythonDir, 'Lib', 'site-packages', pkg);
-    if (fs.existsSync(srcDir)) {
-      fs.cpSync(srcDir, path.join(site, pkg), { recursive: true });
-      console.log('[copy] ' + pkg);
-    }
-  }
+  /* ★ 改成 --target 隔离安装（2026-10-17）：旧写法是先把 CUDA 版 torch 装进
+     resources/python，再从那里拷贝到 staging —— 两个后果都很糟：
+     ① 内置运行时的 **CPU 版 torch 被 CUDA 版顶掉**（打出来的安装器里就是 CUDA torch，
+        没有 N 卡的机器直接炸）；
+     ② 包的 ABI 跟着**构建时**的运行时漂移：运行时后来升到 3.12，包还是 cp311，
+        用户装上去 import 就 WinError 126（实测：「工具 gpu 加速没有生效」）。
+     现在按当前运行时用 --target 装进 staging，装出来天然与运行时同 ABI。 */
+  const pip = '"' + pythonDir + '\python.exe" -m pip install --no-input --no-cache-dir --target "' + site + '"';
+  if (!process.env.SKIP_PIP) {
+    run(pip + ' --index-url https://mirror.sjtu.edu.cn/pytorch-wheels/cu128 -r "' + reqCuda + '"');
+    // onnxruntime-gpu：转录 / 识谱（homr）的 ONNX 推理靠它才会用 CUDA；无 N 卡时自动回退 CPU
+    run(pip + ' -i https://pypi.tuna.tsinghua.edu.cn/simple onnxruntime-gpu');
+  } else console.log('[skip] pip cuda install');
 } else if (mode === 'xpu') {
   // Intel XPU：整套 CP311 栈装进 staging，包自包含。
   if (!process.env.SKIP_PIP) {

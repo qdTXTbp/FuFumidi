@@ -258,7 +258,10 @@ async function convert(inputs: any[], label?: string) {
   try {
     const base = baseOpts();
     let r = await run({ ...base, inputs });
-    if (!r || r.canceled) return;
+    if (!r || r.canceled) {
+      if (r && r.canceled) { canceling.value = false; app.toast(t('已取消识别'), 'warn'); }
+      return;
+    }
     // PDF：渲染进程逐页栅格化（多选时每个 PDF 都要渲），再把页图按原顺序送回去
     if (!r.ok && r.needRaster && Array.isArray(r.inputs)) {
       srcName.value = r.fileName || '';
@@ -270,6 +273,7 @@ async function convert(inputs: any[], label?: string) {
         if (!it.pages && /\.pdf$/i.test(String(it.path || ''))) {
           donePdf += 1;
           progressText.value = t('渲染 PDF ') + donePdf + '/' + total;
+          if (canceling.value) { canceling.value = false; return; }
           filled.push({ ...it, pages: await rasterizePdf(it.path) });
         } else {
           filled.push(it);
@@ -299,6 +303,15 @@ async function convert(inputs: any[], label?: string) {
     busy.value = false;
     progressText.value = '';
   }
+}
+
+const canceling = ref(false);
+/** 取消当前识别：主进程标记 canceled + 杀掉引擎子进程；界面在结果回来时收尾（busy 由 finally 复位）。 */
+async function cancelRun() {
+  const b = bridge();
+  if (!b || typeof b.scoreCancel !== 'function') return;
+  canceling.value = true;
+  try { await b.scoreCancel(); app.toast(t('正在取消…'), 'warn'); } catch (e) { /* 忽略 */ }
 }
 
 /** 当前界面上的全部识别参数（首次转换与「重试该页」共用，所以重试前改参数是生效的）。 */
@@ -598,6 +611,9 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
           <Icon name="import" :size="14" />
           <span>{{ busy ? progressText || t('转换中…') : t('选择谱面文件…') }}</span>
         </button>
+        <button v-if="busy" class="btn sc-cancel" :disabled="canceling" :title="t('取消这次识别')" @click="cancelRun">
+          <Icon name="close" :size="13" /> {{ canceling ? t('正在取消…') : t('取消') }}
+        </button>
         <span class="tag">{{ t('多选 / 拖拽 / PDF 自动栅格化') }}</span>
       </div>
       <div class="sc-prog" v-if="busy">
@@ -639,6 +655,104 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
     </div>
 
     <div v-if="err" class="sc-err sc-in"><Icon name="warn" :size="14" /> {{ err }}</div>
+
+    <!-- ★ 识别参数（用户：「识别参数模块应该放到第一张图片的两个模块之间」）：
+         原先在右栏，调参时看不到结果；现在夹在「导入」卡与「结果」卡之间，
+         并摊成多列 —— 主栏比右栏宽得多，一列排十行会把结果卡挤出屏幕。 -->
+      <div class="card sc-card sc-params">
+      <div class="sc-param-grid">
+      <label class="sc-field">
+        <span class="sc-field-nm">{{ t('拍号') }}</span>
+        <select v-model="beats" :disabled="busy">
+          <option value="auto">{{ t('自动') }}</option>
+          <option value="2">2/4</option>
+          <option value="3">3/4</option>
+          <option value="4">4/4</option>
+          <option value="6">6/8</option>
+        </select>
+        <select v-model.number="beatType" :disabled="busy || beats === 'auto'">
+          <option :value="4">/4</option>
+          <option :value="8">/8</option>
+        </select>
+      </label>
+      <label class="sc-field">
+        <span class="sc-field-nm">{{ t('速度') }}</span>
+        <select v-model="autoTempo" :disabled="busy">
+          <option :value="true">{{ t('自动') }}</option>
+          <option :value="false">{{ t('指定') }}</option>
+        </select>
+        <input type="number" min="20" max="300" step="1" v-model.number="tempo" :disabled="busy || autoTempo" />
+        <span class="sc-unit">BPM</span>
+      </label>
+      <label class="sc-field">
+        <span class="sc-field-nm">{{ t('放大倍数') }}</span>
+        <select v-model="upscale" :disabled="busy">
+          <option value="auto">{{ t('自动') }}</option>
+          <option value="1">1×</option>
+          <option value="2">2×</option>
+          <option value="3">3×</option>
+          <option value="4">4×</option>
+        </select>
+      </label>
+      <label class="sc-field">
+        <span class="sc-field-nm">{{ t('加粗谱线') }}</span>
+        <select v-model="thicken" :disabled="busy">
+          <option :value="false">{{ t('关') }}</option>
+          <option :value="true">{{ t('开') }}</option>
+        </select>
+      </label>
+      <label class="sc-field">
+        <span class="sc-field-nm">{{ t('超分辨率') }}</span>
+        <select v-model="sr" :disabled="busy">
+          <option value="off">{{ t('关') }}</option>
+          <option value="auto">{{ t('自动') }}</option>
+          <option value="on">{{ t('强制') }}</option>
+        </select>
+      </label>
+      <label class="sc-field">
+        <span class="sc-field-nm">{{ t('影像预处理') }}</span>
+        <select v-model="prep" :disabled="busy">
+          <option value="off">{{ t('关') }}</option>
+          <option value="auto">{{ t('自动') }}</option>
+          <option value="scan">{{ t('强制') }}</option>
+        </select>
+      </label>
+      <label class="sc-field">
+        <span class="sc-field-nm">{{ t('量化网格') }}</span>
+        <select v-model="quantize" :disabled="busy">
+          <option value="off">{{ t('不对齐') }}</option>
+          <option value="1/4">1/4</option>
+          <option value="1/8">1/8</option>
+          <option value="1/16">1/16</option>
+          <option value="1/32">1/32</option>
+        </select>
+      </label>
+      <label class="sc-field">
+        <span class="sc-field-nm">{{ t('最短音符') }}</span>
+        <select v-model.number="minNoteMs" :disabled="busy">
+          <option :value="0">{{ t('不过滤') }}</option>
+          <option :value="30">30 ms</option>
+          <option :value="60">60 ms</option>
+          <option :value="120">120 ms</option>
+        </select>
+      </label>
+      <label class="sc-field">
+        <span class="sc-field-nm">{{ t('去重') }}</span>
+        <select v-model="dedupe" :disabled="busy">
+          <option :value="true">{{ t('开') }}</option>
+          <option :value="false">{{ t('关') }}</option>
+        </select>
+      </label>
+      <div class="sc-field">
+        <span class="sc-field-nm">{{ t('移调乐器') }}</span>
+        <select v-model="sounding" :disabled="busy">
+          <option :value="true">{{ t('实际音高') }}</option>
+          <option :value="false">{{ t('记谱音高') }}</option>
+        </select>
+      </div>
+      <div class="sc-side-hint sc-param-note">{{ t('速度/拍号默认「自动」：谱面自己写的优先，填了才覆盖。') }}</div>
+      </div>
+    </div>
 
     <div v-if="info" class="card sc-card sc-in">
       <div class="sc-stats">
@@ -777,99 +891,6 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
         </button>
       </div>
 
-      <div class="card sc-side-card">
-        <div class="sc-side-head"><Icon name="gear" :size="13" /> {{ t('识别参数') }}</div>
-        <label class="sc-field">
-          <span class="sc-field-nm">{{ t('拍号') }}</span>
-          <select v-model="beats" :disabled="busy">
-            <option value="auto">{{ t('自动') }}</option>
-            <option value="2">2/4</option>
-            <option value="3">3/4</option>
-            <option value="4">4/4</option>
-            <option value="6">6/8</option>
-          </select>
-          <select v-model.number="beatType" :disabled="busy || beats === 'auto'">
-            <option :value="4">/4</option>
-            <option :value="8">/8</option>
-          </select>
-        </label>
-        <label class="sc-field">
-          <span class="sc-field-nm">{{ t('速度') }}</span>
-          <select v-model="autoTempo" :disabled="busy">
-            <option :value="true">{{ t('自动') }}</option>
-            <option :value="false">{{ t('指定') }}</option>
-          </select>
-          <input type="number" min="20" max="300" step="1" v-model.number="tempo" :disabled="busy || autoTempo" />
-          <span class="sc-unit">BPM</span>
-        </label>
-        <label class="sc-field">
-          <span class="sc-field-nm">{{ t('放大倍数') }}</span>
-          <select v-model="upscale" :disabled="busy">
-            <option value="auto">{{ t('自动') }}</option>
-            <option value="1">1×</option>
-            <option value="2">2×</option>
-            <option value="3">3×</option>
-            <option value="4">4×</option>
-          </select>
-        </label>
-        <label class="sc-field">
-          <span class="sc-field-nm">{{ t('加粗谱线') }}</span>
-          <select v-model="thicken" :disabled="busy">
-            <option :value="false">{{ t('关') }}</option>
-            <option :value="true">{{ t('开') }}</option>
-          </select>
-        </label>
-        <label class="sc-field">
-          <span class="sc-field-nm">{{ t('超分辨率') }}</span>
-          <select v-model="sr" :disabled="busy">
-            <option value="off">{{ t('关') }}</option>
-            <option value="auto">{{ t('自动') }}</option>
-            <option value="on">{{ t('强制') }}</option>
-          </select>
-        </label>
-        <label class="sc-field">
-          <span class="sc-field-nm">{{ t('影像预处理') }}</span>
-          <select v-model="prep" :disabled="busy">
-            <option value="off">{{ t('关') }}</option>
-            <option value="auto">{{ t('自动') }}</option>
-            <option value="scan">{{ t('强制') }}</option>
-          </select>
-        </label>
-        <label class="sc-field">
-          <span class="sc-field-nm">{{ t('量化网格') }}</span>
-          <select v-model="quantize" :disabled="busy">
-            <option value="off">{{ t('不对齐') }}</option>
-            <option value="1/4">1/4</option>
-            <option value="1/8">1/8</option>
-            <option value="1/16">1/16</option>
-            <option value="1/32">1/32</option>
-          </select>
-        </label>
-        <label class="sc-field">
-          <span class="sc-field-nm">{{ t('最短音符') }}</span>
-          <select v-model.number="minNoteMs" :disabled="busy">
-            <option :value="0">{{ t('不过滤') }}</option>
-            <option :value="30">30 ms</option>
-            <option :value="60">60 ms</option>
-            <option :value="120">120 ms</option>
-          </select>
-        </label>
-        <label class="sc-field">
-          <span class="sc-field-nm">{{ t('去重') }}</span>
-          <select v-model="dedupe" :disabled="busy">
-            <option :value="true">{{ t('开') }}</option>
-            <option :value="false">{{ t('关') }}</option>
-          </select>
-        </label>
-        <div class="sc-field">
-          <span class="sc-field-nm">{{ t('移调乐器') }}</span>
-          <select v-model="sounding" :disabled="busy">
-            <option :value="true">{{ t('实际音高') }}</option>
-            <option :value="false">{{ t('记谱音高') }}</option>
-          </select>
-        </div>
-        <div class="sc-side-hint">{{ t('速度/拍号默认「自动」：谱面自己写的优先，填了才覆盖。') }}</div>
-      </div>
 
       <!-- ★ 谱面类型预设只留空态里那三张卡（用户：「这两处功能重复了，保留这个」）——
            右栏再放一份完全一样的，既重复又占掉参数区的高度。 -->
@@ -889,6 +910,11 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
 .sc-side-card { padding: 12px 14px; margin-bottom: 0; gap: var(--sp-2); }
 .sc-side-head { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-md); font-weight: 700; color: var(--ink); margin-bottom: 2px; }
 .sc-side-hint { margin-top: 6px; font-size: var(--fs-sm); color: var(--stone); line-height: 1.55; }
+/* 识别参数卡（主栏内）：摊成多列，字段之间只留 2px 行距 */
+.sc-params { padding: 12px 14px; }
+.sc-param-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(196px, 1fr)); gap: 2px var(--sp-4); margin-top: 6px; }
+.sc-param-grid .sc-field { margin-bottom: 0; }
+.sc-param-note { grid-column: 1 / -1; }
 /* 识谱组件状态行：左边一个对勾/加号，中间组件名，右边「已安装」或体积 */
 .sc-cmp-tag { margin-left: auto; font-size: var(--fs-xs); font-weight: 600; color: var(--steel);
   background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--r-pill); padding: 0 8px; }
