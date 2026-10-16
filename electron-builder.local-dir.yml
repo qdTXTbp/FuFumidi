@@ -18,7 +18,7 @@ electronVersion: 33.4.11
 productName: FuFumidi
 npmRebuild: false
 directories:
-  output: release-unpacked4
+  output: release-unpacked7
 asarUnpack:
   - "engine/**"
   - "**/*.node"

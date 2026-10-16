@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import RenderError
-from .g2p import get_symbols, lang_id_of
+from .g2p import get_symbols, lang_id_of, validate_phoneme
 from .speaker_embed import phone_tensor_for
 from .voicebank import DsSinger
 
@@ -271,8 +271,19 @@ def process_part(singer: DsSinger, phrase_notes: Sequence[Sequence],
     for wi, word in enumerate(notes):
         raw, rejected = get_symbols(g2p, tokens_map, str(word[0].lyric),
                                     getattr(word[0], 'phonetic_hint', None), lang_code)
-        symbols = [s for s in raw if s in tokens_map]     # :369
-        rejected = list(rejected) + [s for s in raw if s not in tokens_map]
+        # ★ 逐符号落到声库 token 表：先试裸名，再试 `langCode + '/' + 音素`。
+        #   多语声库的 token 表是带前缀的（`ja/i`、`zh/a`……），裸 `i` 直查必被拒 ——
+        #   这一步与上游 ValidatePhoneme 的「裸名 → 带前缀」顺序一致；差异点是这里
+        #   以声库 token 表为唯一准绳（txt 罗马字词典里没有带前缀的符号，不能要求
+        #   g2p 同时认识 `ja/i`）。
+        symbols = []
+        for s in raw:
+            if s in tokens_map:
+                symbols.append(s)
+            elif lang_code and (lang_code + '/' + s) in tokens_map:
+                symbols.append(lang_code + '/' + s)
+            elif s not in rejected:
+                rejected.append(s)
         if rejected:
             warn.append('位置 %d 的歌词无法识别：%s' % (word[0].position, ' '.join(rejected)))
             # ★ 识别不了的最常见原因：歌词是假名/谚文，但轨道语言选错了（词典跟着语言走）。
