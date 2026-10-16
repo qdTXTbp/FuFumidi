@@ -65,6 +65,29 @@ HTML 里的颜色走 CSS 变量；**画布（Canvas2D/WebGL）里读不到 CSS �
 - 轨道色板、元素数据色、歌手轨色、色觉障碍备选配色（Okabe-Ito）都在那里；
   `core/util.js` 与 `stores/singer.ts` 现在是**再导出**，不再各存一份。
 
+## 3.5 控件契约层：`styles/controls.css`（M3/M4）
+
+字号/圆角/间距统一之后，**同类控件的形状**仍各写各的：实测三个大视图里有 46 / 43 / 23 条"控件类"规则，
+光胶囊控件就有 `5px 14px`、`4px 12px`、`6px 13px` 三种内边距 —— 同一个"选中胶囊"在不同页面长得不一样。
+契约层把 9 类控件的**形状与状态**固定下来，各视图只保留语义偏差（颜色、宽度、布局）：
+
+| 契约 | 用途 | 关键取值 |
+|---|---|---|
+| `.fu-ctl` | 按钮 / 胶囊 / 分段控件 | `padding: var(--sp-1) var(--sp-3)`、`min-height: 28px`、`border-radius: var(--r-pill)`、`font-size: var(--fs-sm)` |
+| `.fu-ctl--sm` | 密集工具条的紧凑档 | `2px var(--sp-2)`、`min-height: 24px`、`--fs-xs` |
+| `.fu-ctl.active` / `.is-on` | 选中态（两个名字都认：仓库里普遍用 `active` 做 `:class` 绑定） | `--accent` 底 + `--on-accent` 字 |
+| `.fu-field` | 输入框 / 下拉 / 包裹式搜索框 | `min-height: 30px`、`--r-md`、`:focus-within` 换 `--accent` 描边 |
+| `.fu-chip` / `.fu-badge` | 小标记与状态徽标 | 胶囊形 + `--fs-xs`；徽标另有 `.is-ok/.is-err/.is-warn` |
+| `.fu-tab` | 标签页 | 底边 2px 当前色 |
+| `.fu-card` / `.fu-panel` | 卡片 / 浮层面板 | `--r-lg` + `--sh-1` / `--sh-3` |
+| `.fu-row` | 列表行 | `var(--sp-2) var(--sp-3)` + 发丝分隔线 |
+| `.fu-empty` | 空状态 | 居中 + `--sp-6` 留白 |
+
+用法：模板上**两者都写**，例如 `class="fu-ctl tr-pill"` —— `.fu-ctl` 给形状，`.tr-pill` 只留语义偏差。
+**不要再就地改 padding 造新档**；需要更紧就用 `.fu-ctl--sm`，需要方角就用 `.fu-ctl--sq`。
+
+已迁移：`ViewTranscribe`（42 处类注入 + 删掉本地重复的形状规则）。待迁移：`ViewEdit` / `ViewSing`。
+
 ## 4. 深色为主，浅色可选
 
 - 默认深色（首次启动、未设置时写入 `fufumidi_mode='dark'`）；用户已选的设置**不动**。
@@ -123,7 +146,7 @@ HTML 里的颜色走 CSS 变量；**画布（Canvas2D/WebGL）里读不到 CSS �
 
 ## 9. 还没做的（按优先级）
 
-1. **M3 组件契约**：15 个重复控件 → 9 个契约类（按钮 / 输入 / 选择 / 卡片 / 面板 / chip / tab / 表格行 / 空状态）。
+1. ~~**M3 组件契约**~~ 已完成并落地为 `styles/controls.css`（9 类，见 §3.5）。
    目前 `styles.css` 已统一了字号圆角间距，但同类控件仍各写各的 padding/height。
 2. **M4 三个大视图**（`ViewSing` 208 KB / `ViewEdit` 190 KB / `ViewTranscribe` 155 KB）：
    把本地样式换成契约类；这一步必须**逐视图**做并各自截图对比，不能脚本化。

@@ -15,8 +15,8 @@
 | M1-b | 三款字体内置 + 子集化（812 KB） | ✅ 提交 `b0310cd` |
 | M1-c | 落地 6 档字号 / 4 档圆角 / 4-8 间距网格 | ✅ |
 | M2 | 消灭硬编码色值 + 颜色单一来源 + 守门脚本 | ✅（0 处违规；8 处刻意字面值带理由标注） |
-| M3 | 15 个重复控件 → 9 个契约类 | ⬜ 未做 |
-| M4 | 三个大视图（ViewSing/ViewEdit/ViewTranscribe）改用契约类 | ⬜ 未做 |
+| M3 | 9 个控件契约类（`styles/controls.css`） | ✅ |
+| M4 | 三个大视图改用契约类 | 🔶 ViewTranscribe 已迁（42 处）；ViewEdit / ViewSing 待做 |
 | M5 | 本文档 + `docs/DESIGN.md` | ✅ |
 
 ## 实测：重构前 → 重构后
@@ -66,7 +66,10 @@
 
 ## 还没做的（下一步）
 
-- **M3**：把重复控件收敛成 9 个契约类 —— 按钮（primary/ghost/danger/sm）、输入、选择、
+- ~~**M3**：把重复控件收敛成 9 个契约类~~ **已完成**：`styles/controls.css` 定义
+  `.fu-ctl` / `--sm` / `active|is-on` / `.fu-field` / `.fu-chip` / `.fu-badge` / `.fu-tab` / `.fu-card`
+  / `.fu-panel` / `.fu-row` / `.fu-empty`；接在 typography.css 之后加载。
+- 旧的（已作废）：把重复控件收敛成 9 个契约类 —— 按钮（primary/ghost/danger/sm）、输入、选择、
   卡片、面板、chip、tab、表格行、空状态；写进 `styles.css` 并逐个替换。
 - **M4**：三个大视图改用契约类（`ViewSing` 208 KB / `ViewEdit` 190 KB / `ViewTranscribe` 155 KB）。
   必须逐视图做 + 每个视图两档截图对比，不能脚本化。

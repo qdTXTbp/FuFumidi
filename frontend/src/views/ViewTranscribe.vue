@@ -1713,7 +1713,7 @@ onBeforeUnmount(() => {
       <!-- 多队列：切队列 = 切模型与参数（每个队列自带一份设置） -->
       <div v-if="queues.length" class="tr-queues">
         <span class="fb-label" style="margin:0">{{ t('队列') }}</span>
-        <button v-for="q in queues" :key="q.id" class="tr-pill" :class="{ active: q.id === activeQid }"
+        <button v-for="q in queues" :key="q.id" class="fu-ctl fu-ctl--sm tr-pill" :class="{ active: q.id === activeQid }"
                 :title="t('切换到这个队列（模型与参数一起切）') + ' · ' + queueSummary(q)"
                 @click="switchQueue(q)">
           {{ q.name }}<i v-if="queueCount(q)" class="tr-q-n">{{ queueCount(q) }}</i>
@@ -1764,14 +1764,14 @@ onBeforeUnmount(() => {
       <!-- 通用子模型：Basic Pitch（兜底）/ MuScriptor（可选，三档规格） -->
       <div v-if="mode === 'universal'" class="tr-submodels">
         <div class="fb-label">{{ t('通用模型') }}</div>
-        <div class="tr-pills">
-          <button class="tr-pill" :class="{ active: umodel === 'basic' }" @click="umodel = 'basic'">{{ t('Basic Pitch · 内置兜底') }}<i v-if="modelInstalled('basic') !== null" class="ms-badge" :class="modelInstalled('basic') ? 'ok' : 'miss'">{{ modelInstalled('basic') ? t('已下载') : t('未下载') }}</i></button>
-          <button class="tr-pill" :class="{ active: umodel === 'muscriptor' }" @click="umodel = 'muscriptor'">MuScriptor<i v-if="currentModelInstalled() !== null" class="ms-badge" :class="currentModelInstalled() ? 'ok' : 'miss'">{{ currentModelInstalled() ? t('已下载') : t('未下载') }}</i></button>
+        <div class="fu-ctl tr-pills">
+          <button class="fu-ctl tr-pill" :class="{ active: umodel === 'basic' }" @click="umodel = 'basic'">{{ t('Basic Pitch · 内置兜底') }}<i v-if="modelInstalled('basic') !== null" class="fu-badge ms-badge" :class="modelInstalled('basic') ? 'ok' : 'miss'">{{ modelInstalled('basic') ? t('已下载') : t('未下载') }}</i></button>
+          <button class="fu-ctl tr-pill" :class="{ active: umodel === 'muscriptor' }" @click="umodel = 'muscriptor'">MuScriptor<i v-if="currentModelInstalled() !== null" class="fu-badge ms-badge" :class="currentModelInstalled() ? 'ok' : 'miss'">{{ currentModelInstalled() ? t('已下载') : t('未下载') }}</i></button>
         </div>
-        <div v-if="umodel === 'muscriptor'" class="tr-pills">
-          <button class="tr-pill" :class="{ active: msSize === 'small' }" @click="msSize = 'small'">Small · 100M<i v-if="modelInstalled('muscriptor_small') !== null" class="ms-badge" :class="modelInstalled('muscriptor_small') ? 'ok' : 'miss'">{{ modelInstalled('muscriptor_small') ? t('已下载') : t('未下载') }}</i></button>
-          <button class="tr-pill" :class="{ active: msSize === 'medium' }" @click="msSize = 'medium'">{{ t('Medium · 300M（推荐）') }}<i v-if="modelInstalled('muscriptor_medium') !== null" class="ms-badge" :class="modelInstalled('muscriptor_medium') ? 'ok' : 'miss'">{{ modelInstalled('muscriptor_medium') ? t('已下载') : t('未下载') }}</i></button>
-          <button class="tr-pill" :class="{ active: msSize === 'large' }" @click="msSize = 'large'">Large · 1.3B<i v-if="modelInstalled('muscriptor_large') !== null" class="ms-badge" :class="modelInstalled('muscriptor_large') ? 'ok' : 'miss'">{{ modelInstalled('muscriptor_large') ? t('已下载') : t('未下载') }}</i></button>
+        <div v-if="umodel === 'muscriptor'" class="fu-ctl tr-pills">
+          <button class="fu-ctl tr-pill" :class="{ active: msSize === 'small' }" @click="msSize = 'small'">Small · 100M<i v-if="modelInstalled('muscriptor_small') !== null" class="fu-badge ms-badge" :class="modelInstalled('muscriptor_small') ? 'ok' : 'miss'">{{ modelInstalled('muscriptor_small') ? t('已下载') : t('未下载') }}</i></button>
+          <button class="fu-ctl tr-pill" :class="{ active: msSize === 'medium' }" @click="msSize = 'medium'">{{ t('Medium · 300M（推荐）') }}<i v-if="modelInstalled('muscriptor_medium') !== null" class="fu-badge ms-badge" :class="modelInstalled('muscriptor_medium') ? 'ok' : 'miss'">{{ modelInstalled('muscriptor_medium') ? t('已下载') : t('未下载') }}</i></button>
+          <button class="fu-ctl tr-pill" :class="{ active: msSize === 'large' }" @click="msSize = 'large'">Large · 1.3B<i v-if="modelInstalled('muscriptor_large') !== null" class="fu-badge ms-badge" :class="modelInstalled('muscriptor_large') ? 'ok' : 'miss'">{{ modelInstalled('muscriptor_large') ? t('已下载') : t('未下载') }}</i></button>
         </div>
         <div class="tr-perf-hint" v-if="umodel === 'muscriptor'">{{ t('未下载时请到资源中心 → 模型文件 按规格下载') }}</div>
       </div>
@@ -1779,10 +1779,10 @@ onBeforeUnmount(() => {
       <!-- 钢琴子模型：piano-transcription / Aria-AMT / Transkun -->
       <div v-if="mode === 'piano'" class="tr-submodels">
         <div class="fb-label">{{ t('钢琴模型') }}</div>
-        <div class="tr-pills">
-          <button class="tr-pill" :class="{ active: pmodel === 'piano_pt' }" @click="pmodel = 'piano_pt'">{{ t('piano-transcription · 内置') }}<i v-if="modelInstalled('piano_pt') !== null" class="ms-badge" :class="modelInstalled('piano_pt') ? 'ok' : 'miss'">{{ modelInstalled('piano_pt') ? t('已下载') : t('未下载') }}</i></button>
-          <button class="tr-pill" :class="{ active: pmodel === 'aria' }" @click="pmodel = 'aria'">Aria-AMT<i v-if="modelInstalled('aria_amt') !== null" class="ms-badge" :class="modelInstalled('aria_amt') ? 'ok' : 'miss'">{{ modelInstalled('aria_amt') ? t('已下载') : t('未下载') }}</i></button>
-          <button class="tr-pill" :class="{ active: pmodel === 'transkun' }" @click="pmodel = 'transkun'">Transkun<i v-if="modelInstalled('transkun') !== null" class="ms-badge" :class="modelInstalled('transkun') ? 'ok' : 'miss'">{{ modelInstalled('transkun') ? t('已下载') : t('未下载') }}</i></button>
+        <div class="fu-ctl tr-pills">
+          <button class="fu-ctl tr-pill" :class="{ active: pmodel === 'piano_pt' }" @click="pmodel = 'piano_pt'">{{ t('piano-transcription · 内置') }}<i v-if="modelInstalled('piano_pt') !== null" class="fu-badge ms-badge" :class="modelInstalled('piano_pt') ? 'ok' : 'miss'">{{ modelInstalled('piano_pt') ? t('已下载') : t('未下载') }}</i></button>
+          <button class="fu-ctl tr-pill" :class="{ active: pmodel === 'aria' }" @click="pmodel = 'aria'">Aria-AMT<i v-if="modelInstalled('aria_amt') !== null" class="fu-badge ms-badge" :class="modelInstalled('aria_amt') ? 'ok' : 'miss'">{{ modelInstalled('aria_amt') ? t('已下载') : t('未下载') }}</i></button>
+          <button class="fu-ctl tr-pill" :class="{ active: pmodel === 'transkun' }" @click="pmodel = 'transkun'">Transkun<i v-if="modelInstalled('transkun') !== null" class="fu-badge ms-badge" :class="modelInstalled('transkun') ? 'ok' : 'miss'">{{ modelInstalled('transkun') ? t('已下载') : t('未下载') }}</i></button>
         </div>
         <div class="tr-perf-hint" v-if="pmodel !== 'piano_pt'">{{ t('Aria-AMT / Transkun 需先到资源中心安装对应模型') }}</div>
       </div>
@@ -1790,12 +1790,12 @@ onBeforeUnmount(() => {
       <!-- 音频处理：当前模型 + 选择模型（与「通用模型 / 钢琴模型」同一种 pill 行） -->
       <div v-if="mode === 'separate'" class="tr-submodels">
         <div class="fb-label">{{ t('处理模型') }}</div>
-        <div class="tr-pills">
-          <button class="tr-pill active" @click="sepPickerOpen = true">
+        <div class="fu-ctl tr-pills">
+          <button class="fu-ctl tr-pill active" @click="sepPickerOpen = true">
             {{ currentSep ? currentSep.name : t('内置 Demucs') }}
-            <i class="ms-badge ok">{{ currentSep ? (currentSep.arch + ' · ' + fmtSize2(currentSep.size)) : t('HTDemucs · 内置') }}</i>
+            <i class="fu-badge ms-badge ok">{{ currentSep ? (currentSep.arch + ' · ' + fmtSize2(currentSep.size)) : t('HTDemucs · 内置') }}</i>
           </button>
-          <button class="tr-pill ghost-like" @click="sepPickerOpen = true"><Icon name="search" :size="13" />{{ t('更换模型') }}</button>
+          <button class="fu-ctl tr-pill ghost-like" @click="sepPickerOpen = true"><Icon name="search" :size="13" />{{ t('更换模型') }}</button>
         </div>
         <div v-if="sepPurposeOf(currentSep) === 'repair'" class="tr-slider-hint">{{ t('这是去噪 / 修复模型：输出「噪声」与「已去噪」两条音轨，不用于人声 / 伴奏分离') }}</div>
         <div v-else-if="sepIsVr" class="tr-slider-hint">{{ t('VR 模型的音轨名由权重自身决定，面板不预置音轨选项；不勾选即全部输出') }}</div>
@@ -1817,11 +1817,11 @@ onBeforeUnmount(() => {
                 <input class="text-input" v-model="sepQuery" :placeholder="t('搜索模型名称 / 架构 / 用途…')">
                 <button v-if="sepQuery" class="icon-btn" @click="sepQuery = ''"><Icon name="close" :size="12" /></button>
               </label>
-              <div class="tr-pills">
-                <button class="tr-pill" :class="{ active: sepCat === 'all' }" @click="sepCat = 'all'">{{ t('全部') }}<i class="sep-cnt">{{ sepCatCounts.all }}</i></button>
-                <button class="tr-pill" :class="{ active: sepCat === 'separate' }" @click="sepCat = 'separate'">{{ t('人声分离') }}<i class="sep-cnt">{{ sepCatCounts.separate }}</i></button>
-                <button class="tr-pill" :class="{ active: sepCat === 'repair' }" @click="sepCat = 'repair'">{{ t('修复 · 去噪') }}<i class="sep-cnt">{{ sepCatCounts.repair }}</i></button>
-                <button class="tr-pill ghost-like" :class="{ active: sepOnlyReady }" :title="t('已下载但缺配置文件的模型跑不起来，勾上就看不到它们')" @click="sepOnlyReady = !sepOnlyReady">{{ t('只显示可用') }}</button>
+              <div class="fu-ctl tr-pills">
+                <button class="fu-ctl tr-pill" :class="{ active: sepCat === 'all' }" @click="sepCat = 'all'">{{ t('全部') }}<i class="sep-cnt">{{ sepCatCounts.all }}</i></button>
+                <button class="fu-ctl tr-pill" :class="{ active: sepCat === 'separate' }" @click="sepCat = 'separate'">{{ t('人声分离') }}<i class="sep-cnt">{{ sepCatCounts.separate }}</i></button>
+                <button class="fu-ctl tr-pill" :class="{ active: sepCat === 'repair' }" @click="sepCat = 'repair'">{{ t('修复 · 去噪') }}<i class="sep-cnt">{{ sepCatCounts.repair }}</i></button>
+                <button class="fu-ctl tr-pill ghost-like" :class="{ active: sepOnlyReady }" :title="t('已下载但缺配置文件的模型跑不起来，勾上就看不到它们')" @click="sepOnlyReady = !sepOnlyReady">{{ t('只显示可用') }}</button>
               </div>
             </div>
             <div class="sep-hint">{{ t('已下载的模型可直接选用；未下载的模型请先到模型管理下载') }}</div>
@@ -1831,7 +1831,7 @@ onBeforeUnmount(() => {
                   <span class="si-ic"><Icon :name="sepKindIcon(m)" :size="14" /></span>
                   <span class="si-arch">{{ m.arch }}</span>
                   <span class="si-kind" :class="m.kind === 'other' ? 'vr' : ''">{{ sepKindName(m) }}</span>
-                  <span class="si-pill" :class="(m.exists && m.sepReady !== false) ? 'on' : 'off'"
+                  <span class="fu-badge si-pill" :class="(m.exists && m.sepReady !== false) ? 'on' : 'off'"
                         :title="m.sepWhy && m.sepWhy.indexOf('配置') >= 0 ? t('本机没有这个模型的配置文件（.yaml），下载后也加载不了') : (m.sepWhy ? t(m.sepWhy) : '')">{{
                     !m.exists ? (String(m.sepWhy || '').indexOf('配置') >= 0 ? t('缺配置') : t('未下载'))
                               : (m.sepReady === false ? t('不可用') : t('已下载')) }}</span>
@@ -1890,9 +1890,9 @@ onBeforeUnmount(() => {
 
         <div class="tr-submodels">
           <div class="fb-label">{{ t('输出') }} <small class="ms-mut">{{ t('（不同模型可输出的音轨不同；不勾选即全部）') }}</small></div>
-          <div class="tr-pills" v-if="msStemOptions.length">
-            <button class="tr-pill" v-for="s in msStemOptions" :key="s" :class="{ active: msStems.includes(s) }" @click="toggleStem(s)">{{ sepStemLabel(s) }}</button>
-            <button class="tr-pill ghost-like" @click="allStems()">{{ t('全选') }}</button>
+          <div class="fu-ctl tr-pills" v-if="msStemOptions.length">
+            <button class="fu-ctl tr-pill" v-for="s in msStemOptions" :key="s" :class="{ active: msStems.includes(s) }" @click="toggleStem(s)">{{ sepStemLabel(s) }}</button>
+            <button class="fu-ctl tr-pill ghost-like" @click="allStems()">{{ t('全选') }}</button>
           </div>
           <div v-else class="tr-slider-hint">{{ t('该模型的音轨名由权重自身决定（去噪模型一般输出「噪声 / 已去噪」两条），不勾选即全部输出') }}</div>
           <div class="tr-switch">
@@ -1940,10 +1940,10 @@ onBeforeUnmount(() => {
 
       <div v-if="mode !== 'separate'">
         <div class="fb-label">{{ t('性能模式') }}</div>
-        <div class="tr-pills">
-          <button class="tr-pill" :class="{ active: perf === 'quality' }" @click="selectPerf('quality')">{{ t('最高质量') }}</button>
-          <button class="tr-pill" :class="{ active: perf === 'balanced' }" @click="selectPerf('balanced')">{{ t('均衡') }}</button>
-          <button class="tr-pill" :class="{ active: perf === 'fast' }" @click="selectPerf('fast')">{{ t('低配省资源') }}</button>
+        <div class="fu-ctl tr-pills">
+          <button class="fu-ctl tr-pill" :class="{ active: perf === 'quality' }" @click="selectPerf('quality')">{{ t('最高质量') }}</button>
+          <button class="fu-ctl tr-pill" :class="{ active: perf === 'balanced' }" @click="selectPerf('balanced')">{{ t('均衡') }}</button>
+          <button class="fu-ctl tr-pill" :class="{ active: perf === 'fast' }" @click="selectPerf('fast')">{{ t('低配省资源') }}</button>
         </div>
         <div class="tr-perf-desc">{{ PERF_DESC() }}</div>
         <div v-if="perfHint" class="tr-perf-hint">{{ perfHint }}</div>
@@ -2052,7 +2052,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="tr-switch" style="display:block" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'limit'">
             <div style="display:flex;flex-wrap:wrap;gap:var(--sp-2);max-height:150px;overflow:auto;padding:2px 0">
-              <button v-for="g in MS_GROUPS" :key="g.id" type="button" class="tr-pill"
+              <button v-for="g in MS_GROUPS" :key="g.id" type="button" class="fu-ctl tr-pill"
                       :class="{ active: msGroups.includes(g.id) }" :title="g.id"
                       @click="toggleMsGroup(g.id)">{{ t(g.cn) }}</button>
             </div>
@@ -2192,10 +2192,10 @@ onBeforeUnmount(() => {
         <span class="muted small rf-path">{{ rf.midi ? rf.midi.replace(/^.*[\\/]/, '') : '—' }}</span>
       </div>
       <div class="fb-label">{{ t('修正模式') }}</div>
-      <div class="tr-pills">
-        <button class="tr-pill" :class="{ active: rf.mode === 'auto' }" @click="rf.mode = 'auto'">{{ t('自动') }}</button>
-        <button class="tr-pill" :class="{ active: rf.mode === 'piano' }" @click="rf.mode = 'piano'">{{ t('钢琴') }}</button>
-        <button class="tr-pill" :class="{ active: rf.mode === 'vocal' }" @click="rf.mode = 'vocal'">{{ t('人声') }}</button>
+      <div class="fu-ctl tr-pills">
+        <button class="fu-ctl tr-pill" :class="{ active: rf.mode === 'auto' }" @click="rf.mode = 'auto'">{{ t('自动') }}</button>
+        <button class="fu-ctl tr-pill" :class="{ active: rf.mode === 'piano' }" @click="rf.mode = 'piano'">{{ t('钢琴') }}</button>
+        <button class="fu-ctl tr-pill" :class="{ active: rf.mode === 'vocal' }" @click="rf.mode = 'vocal'">{{ t('人声') }}</button>
       </div>
       <div class="tr-switch" style="margin-top:8px">
         <label><span><b>{{ t('声部平衡') }}</b><small>{{ t('抬主奏/人声 · 压配乐') }}</small></span><input type="checkbox" v-model="rf.stem"></label>
@@ -2297,10 +2297,9 @@ onBeforeUnmount(() => {
 .tr-mode.active { border-color: var(--ink); background: var(--canvas); box-shadow: 0 0 0 1px var(--ink); }
 .tr-mode.active b { color: var(--brand-coral); }
 .tr-pills { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
-.tr-pill { padding: 5px 14px; border-radius: var(--r-pill); border: 1px solid var(--border); background: var(--surface); font-size: var(--fs-sm); color: var(--slate); cursor: pointer; display: inline-flex; align-items: center; gap: var(--sp-2); }
-.tr-pill:hover { border-color: var(--border-strong); }
-.tr-pill.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.tr-pill .ms-badge { font-style: normal; font-size: var(--fs-xs); line-height: 14px; height: 15px; padding: 0 6px; border-radius: var(--r-pill); }
+/* .tr-pill 的形状（盒/内边距/圆角/悬停/选中）一律由 styles/controls.css 的 .fu-ctl 提供，
+   这里只留语义偏差（ghost-like 的虚线描边）。原先本地那份是 5px 14px，与其它页面的胶囊不一致。 */
+.tr-pill .ms-badge { height: 15px; }   /* 形状交给 .fu-badge，只钉高度 */
 .tr-pill .ms-badge.ok { background: rgba(72, 187, 120, 0.16); color: var(--t-ok); }
 .tr-pill .ms-badge.miss { background: rgba(212, 86, 86, 0.16); color: var(--t-err); }
 .tr-pill.active .ms-badge.ok, .tr-pill.active .ms-badge.miss { background: rgba(255,255,255,0.2); color: var(--on-accent); }
@@ -2337,7 +2336,7 @@ onBeforeUnmount(() => {
 .tr-preset-row { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--hairline); }
 /* 多队列条：切队列 = 切模型与参数 */
 .tr-queues { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin: 0 0 8px; }
-.tr-queues .tr-pill { padding: 4px 12px; font-size: var(--fs-sm); }
+.tr-queues .tr-pill { padding: 2px var(--sp-2); font-size: var(--fs-xs); }   /* 与 .fu-ctl--sm 同值 */
 .tr-queues .tr-q-n { font-style: normal; margin-left: 6px; font-size: var(--fs-xs); opacity: .72; }
 .tr-sum { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; background: var(--surface-soft); border-radius: var(--r-md); padding: 10px 14px; font-size: var(--fs-sm); color: var(--slate); }
 .tr-sum b { color: var(--ink); font-weight: 600; }
@@ -2394,7 +2393,7 @@ onBeforeUnmount(() => {
 .si-arch { font-size: var(--fs-xs); font-weight: 600; color: var(--stone); text-transform: uppercase; letter-spacing: .2px; font-family: var(--mono); }
 .si-kind { margin-left: auto; font-size: var(--fs-xs); font-weight: 700; padding: 1px 7px; border-radius: var(--r-lg); background: color-mix(in srgb, var(--brand-coral) 12%, transparent); color: var(--brand-coral); }
 .si-kind.vr { background: color-mix(in srgb, var(--data-6) 14%, transparent); color: var(--data-6); }
-.si-pill { font-size: var(--fs-xs); font-weight: 700; padding: 1px 7px; border-radius: var(--r-lg); }
+.si-pill { padding: 1px 7px; border-radius: var(--r-lg); font-weight: var(--fw-strong); }   /* 形状交给 .fu-badge */
 .si-pill.on { background: color-mix(in srgb, var(--ok,var(--t-ok)) 16%, transparent); color: var(--ok,var(--t-ok)); }
 .si-pill.off { background: var(--surface-soft); color: var(--stone); }
 .si-name { font-size: var(--fs-md); font-weight: 700; color: var(--ink); margin-top: 5px; display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }

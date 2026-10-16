@@ -10,6 +10,9 @@ import './styles.css';
 // ★ 字体覆盖层必须在 styles.css **之后**：styles.css 自己定义了 --mono 与 body 的 font-family，
 //   同优先级下后加载者赢（详见文件头注释里的实测记录）
 import './styles/typography.css';
+// ★ 控件契约层最后加载：它定义 9 类控件的形状（.fu-ctl/.fu-field/.fu-chip…），
+//   视图里只保留语义偏差。详见 docs/DESIGN.md 第 3.5 节。
+import './styles/controls.css';
 
 /* 主题：深色主导（设计语言决定），浅色可选。
    ★ 必须走应用自己的键：theme.js 用 'fufumidi_theme' 存**主题 ID**、'fufumidi_mode' 存明暗模式。
