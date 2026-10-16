@@ -185,6 +185,14 @@ def cuda_free_gb():
     """(可用?, 说明)：GPU 被别的进程占满时，不要让分离/渲染死在那儿（实测会静默退出）。"""
     try:
         import torch
+        # ★ DirectML（AMD/Intel）没有 cuda 命名空间，旧判据会把整条翻唱渲染降到 CPU。
+        #   DirectML 下查不到空闲显存 → 按"可用"处理，让 GPU 先跑（真爆显存会在渲染里报错）。
+        try:
+            from engine_gpu import torch_device as _td, directml_usable as _dok
+            if _td().startswith("privateuseone"):
+                return (_dok(), 'DirectML（显存无法查询，已按可用处理）')
+        except Exception:
+            pass
         if not torch.cuda.is_available():
             return False, 'CUDA 不可用'
         free, _total = torch.cuda.mem_get_info()

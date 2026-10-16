@@ -360,6 +360,73 @@ def torch_device():
     return detect()["device"]
 
 
+def directml_usable():
+    """DirectML 设备**真跑一次矩阵乘**验证可用（装上了 ≠ 能用；也是"加速到底生不生效"的判据）。"""
+    try:
+        import torch
+        import torch_directml  # noqa: F401
+        dev = str(torch_directml.device(0))
+        a = torch.ones(64, 64).to(dev)
+        c = (a @ a).to("cpu")
+        return bool(torch.isfinite(c).all().item()) and abs(float(c[0, 0]) - 64.0) < 1e-3
+    except Exception:
+        return False
+
+
+#: 每个吃算力的模型/引擎**实际**会用的设备。判据与各自真实的选路代码一致，不是猜的：
+#:   · CUDA / ROCm 可用 → torch 系模型全部走 GPU
+#:   · DirectML(AMD/Intel) → 逐算子支持的走 GPU；只认 CUDA 的库只能 CPU（原因写在 why 里）
+#:   · ONNX 侧看 ExecutionProvider
+#: 由 health.gpu_info() 收进体检报告，用户在设置里就能看到"这个模型 GPU 加速到底生不生效"。
+_CONSUMERS = (
+    ("msst", "分离（MSST / BS-RoFormer 等）", ("cuda", "directml", "mps"), ""),
+    ("muscriptor", "扒谱（MuScriptor）", ("cuda", "directml", "mps"), ""),
+    ("aria", "扒谱（ARIA-AMT）", ("cuda", "directml", "mps"), ""),
+    ("cover", "翻唱渲染（DiffSinger / GSV）", ("cuda", "directml"), ""),
+    ("piano_pt", "钢琴专用转录", ("cuda",), "piano_transcription_inference 只支持 CUDA"),
+    ("transkun", "转录（transkun）", ("cuda", "xpu"), "transkun CLI 不认 DirectML 设备名"),
+)
+
+
+def consumer_devices():
+    """逐模型/引擎的加速状态：{k, name, device, gpu, why}。"""
+    g = detect() or {}
+    dev = g.get("device") or "cpu"
+    backend = g.get("backend") or "cpu"
+    kinds = set()
+    if dev == "cuda":
+        kinds.add("cuda")
+    if dev == "mps":
+        kinds.add("mps")
+    if str(dev).startswith("privateuseone"):
+        kinds.add("directml")
+    try:
+        import torch.xpu as _xpu  # noqa: F401
+        if _xpu.is_available():
+            kinds.add("xpu")
+    except Exception:
+        pass
+    dml_ok = directml_usable() if "directml" in kinds else False
+    onnx = g.get("onnx_provider") or "CPUExecutionProvider"
+    out = []
+    for key, name, allow, why in _CONSUMERS:
+        ok = bool(kinds & set(allow))
+        if ok and "directml" in kinds and "cuda" not in kinds and "mps" not in kinds:
+            ok = dml_ok                      # DirectML 必须真的能算（否则照样是 CPU 在跑）
+        dev_use = dev if ok else "cpu"
+        reason = why
+        if not ok and not why:
+            reason = "当前后端 %s 不被该模型支持" % backend
+        elif ok and "directml" in kinds and "cuda" not in kinds:
+            reason = "DirectML 实测可算（64×64 矩阵乘校验通过）"
+        elif ok:
+            reason = "%s 可用" % backend
+        out.append({"k": key, "name": name, "device": dev_use, "gpu": ok, "why": reason})
+    out.append({"k": "onnx", "name": "ONNX 侧（人声分离等）", "device": onnx,
+                "gpu": onnx != "CPUExecutionProvider", "why": "onnxruntime ExecutionProvider"})
+    return out
+
+
 def onnx_provider():
     """返回 onnxruntime 应优先使用的 ExecutionProvider。"""
     return detect()["onnx_provider"]
