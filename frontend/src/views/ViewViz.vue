@@ -9,7 +9,10 @@ const currentSong = computed(() => app.currentSong);
 import Icon from '../components/Icon.vue';
 // ★ 必须用 drawVizWaterfallPost：它内部才是"场景 + 后处理泛光"的完整一帧。
 //   直接调 drawVizWaterfall 会得到"实时没有泛光、导出有"（或反过来）—— 预览与成片就不一致了。
-import { drawVizWaterfallPost, rmsFromBytes, smoothEnergy, FX_DEFAULTS } from '../core/viz.js';
+// ★ 重做后走新门面 core/viz/index.js（图元层 + 光栅器 + 后处理）。
+//   旧的 core/viz.js 仍提供 timeline/几何与单测用的纯函数。
+import { drawVizWaterfallPost } from '../core/viz/index.js';
+import { rmsFromBytes, smoothEnergy, FX_DEFAULTS } from '../core/viz.js';
 import { t } from '../core/i18n.js';
 import NumSlider from '../components/NumSlider.vue';
 

@@ -5,7 +5,7 @@ import { t } from './i18n.js';
 function cssVar(name, fb) {
   try { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || fb; } catch (e) { return fb; }
 }
-function ensurePm() {
+export function ensurePm() {
   if (ensurePm._pm) return ensurePm._pm;
   const pm = {}; let wk = 0;
   for (let m = 21; m <= 108; m++) { const pb = [1, 3, 6, 8, 10].includes(m % 12); pm[m] = { isBlack: pb, wkCount: wk }; if (!pb) wk++; }
@@ -13,11 +13,11 @@ function ensurePm() {
   return pm;
 }
 // 一个八度内的黑键半音偏移（以 C 为 0）
-const BLACK_PC = [1, 3, 6, 8, 10];
+export const BLACK_PC = [1, 3, 6, 8, 10];
 
 // 52 个白键的 midi（升序）。原来每帧都要用 while 循环把音高换算成白键序号，
 // 这里预计算成数组，音频几何与琴键绘制直接查表。
-const WHITE_MIDI = (() => {
+export const WHITE_MIDI = (() => {
   const out = [];
   for (let m = 21; m <= 108; m++) if (!BLACK_PC.includes(m % 12)) out.push(m);
   return out;
@@ -109,7 +109,7 @@ function blockColor(b, cs, by) {
 }
 
 // 音高 → 所在（黑键取紧邻下方）白键索引，供音域居中与几何计算
-function whiteIndexOf(pitch) {
+export function whiteIndexOf(pitch) {
   const pi = ensurePm()[pitch];
   if (!pi) return 0;
   const i = pi.isBlack ? pi.wkCount - 1 : pi.wkCount;
@@ -118,7 +118,7 @@ function whiteIndexOf(pitch) {
 
 // 音符块横向几何：白键占 0.9 格，黑键占 0.6 格并骑在两个白键之间。
 // cw 不取整（纵深收窄要按比例算），sx 已取整。
-function pitchGeom(pitch, pm, g, wk0) {
+export function pitchGeom(pitch, pm, g, wk0) {
   const pi = pm[pitch];
   if (!pi) return { sx: 0, cw: 0.9 * g };
   if (pi.isBlack) {
@@ -201,7 +201,7 @@ export function visibleRange(arr, d, winSec) {
 }
 
 // 粒子散射用的确定性伪随机：导出画面必须可复现，不能用 Math.random()
-function noise(n) {
+export function noise(n) {
   const x = Math.sin(n * 12.9898) * 43758.5453;
   return x - Math.floor(x);
 }
