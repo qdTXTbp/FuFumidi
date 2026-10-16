@@ -29,11 +29,10 @@ function registerFeedbackIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, sp
    *    · `fusync.de5.net`：协作者的云同步 worker，CN 实测 3.7 秒可达 —— 反馈路由还没
    *      部署上去（现在返回 401），部署后它就是国内更快的那条。
    *
-   *  第二条是 Netlify Functions 的默认路径形态：如果自定义路径 `/feedback` 没生效，
-   *  真正端点会落在 `/.netlify/functions/feedback`。两条都留着，谁通用谁。 */
+   *  （Netlify Functions 的默认路径形态 `/.netlify/functions/feedback` 实测 **404** —— 自定义路径
+   *    已生效，所以那条候选已删，不留无用请求。） */
   const BASES = [
     'https://fufumidi-feedback.netlify.app',
-    'https://fufumidi-feedback.netlify.app/.netlify/functions',
     'https://fusync.de5.net',
   ];
   const BASE_TIMEOUT_MS = 15000;   // 被墙的域名会一直挂着，给它 15 秒就换下一个
