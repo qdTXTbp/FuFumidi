@@ -29,6 +29,11 @@ export const BLACK_T = 0.62;
  *  ——用户实测「3D 键盘黑键明显没有侧面」，而且白键的分割线会在键的边缘透出来。
  *  有厚度之后，前脸 + 两侧面把黑键的轮廓完整盖住，才像一排立起来的键。 */
 const RAISE_BASE = 9;
+/** 按下时近端下沉的像素（2026-10-19 用户："键盘按键没按压效果"）。
+ *  旧实现是 `faceH - 3*s.gv`：① 幅度太小（键面 86px 时只占 3.5%）
+ *  ② **方向反了** —— 近端上移 = 键"变短了"，读起来不像被按下去。
+ *  真实琴键是**近端下沉、远端不动**（绕远端转一点点），所以这里改成近端往下。 */
+export const PRESS_DIP = 11;
 /** 相邻白键之间的防缝重叠（半像素级，避免共享边出现发丝缝） */
 const SEAM = 0.35;
 /** 音符能取到的最大深度（再高就截住，避免收拢过度变成一根线） */
@@ -162,8 +167,13 @@ export function buildKeyboard(P, ctx) {
     const pitch = WHITE_MIDI[i];
     const u0 = (i - wk0) * g - SEAM, u1 = (i - wk0 + 1) * g + SEAM;
     const s = ctx.state(pitch);
-    const kh = ctx.faceH - (solid ? 3 * s.gv : 0);          // 按下时键面略微下沉（平板模式下不下沉）
-    const faceH2 = Math.max(6, kh);
+    /* ★ 按压：远端（t=0，落点线）**绝不许动**，近端往下 dip，前脸同比变矮 ——
+       整块键像绕远端转了一点，这才是"按下去"（旧写法是键面缩短，方向反了且只有 3px）。 */
+    const prs = solid ? Math.max(0, Math.min(1, s.gv)) : 0;
+    const dip = PRESS_DIP * prs;
+    const faceH2 = Math.max(6, ctx.faceH + dip);            // 近端下沉 → 键面变长
+    const wallH = Math.max(3, ctx.frontH - dip * 0.85);     // 前脸补偿：整键下沿只降 0.15*dip
+
     const cam2 = makeKeyboardProjection({ w: ctx.w, wN: ctx.wN, faceH: faceH2, persp: ctx.persp });
     pr.push(face(P, 'keyboard', cam2.quad(u0, u1, 0, 1, 0),
       { stops: [farDark(kp.wkTop), kp.wkBot], dir: 'v' }, { alpha: keysA, z: 100 + i }));
@@ -171,8 +181,13 @@ export function buildKeyboard(P, ctx) {
     if (solid) {
       const qNear = cam2.quad(u0, u1, 1, 1, 0);
       pr.push(face(P, 'keyboard', [
-        qNear[0], qNear[1], qNear[2], qNear[3], qNear[2], qNear[3] + ctx.frontH, qNear[0], qNear[1] + ctx.frontH,
+        qNear[0], qNear[1], qNear[2], qNear[3], qNear[2], qNear[3] + wallH, qNear[0], qNear[1] + wallH,
       ], { stops: [kp.wkFrontTop, kp.wkFrontBot], dir: 'v' }, { alpha: keysA, z: 100 + i }));
+      // 按压的锐利锚点：近端那条边亮一道 —— 满屏音符里只靠 11px 下沉仍不够醒目
+      if (prs > 0.02 && kp.wkEdge) {
+        pr.push(P.line('keyboard', qNear[0], qNear[1], qNear[2], qNear[3], kp.wkEdge,
+          { lw: 2, alpha: 0.75 * prs * keysA, z: 320 + i }));
+      }
     }
     // 远端高光：落在音符落点线上，与音符列严格对齐（t=0 恒等）
     const fe = cam.farEdge(u0, u1);
@@ -204,14 +219,20 @@ export function buildKeyboard(P, ctx) {
       if (!BLACK_PC.includes(pitch % 12)) continue;
       const u0 = (i - wk0 + 1) * g - 0.35 * g, u1 = u0 + 0.7 * g;
       const s = ctx.state(pitch);
-      const t1 = BLACK_T - 0.05 * s.gv;
+      /* ★ 黑键的按压 = **抬起的高度落下去**（它是立在前排的键，不是贴在白键上的黑片）：
+         hTop 从 1 落到 1-0.8*prs，键面 / 前脸 / 两侧面全用同一个 hTop，怎么按都不会断开。
+         平板模式（keys3d 关）没有厚度可落，就停在白键面上（h=0）——
+         这里原先恒为 1，于是平板模式下黑键会浮在白键上方 9px。 */
+      const prs = solid ? Math.max(0, Math.min(1, s.gv)) : 0;
+      const hTop = solid ? 1 - 0.8 * prs : 0;
+      const t1 = BLACK_T;
       // ★ 黑键整层抬到**白键所有元素之上**（白键面 100 / 白键高光 300 / 白键闪光 310）。
       //   黑键是立在前排的键，白键的高光或闪光都不该盖住它 —— 用户实测反馈过这一条。
-      pr.push(face(P, 'keyboard', cam.quad(u0, u1, 0, t1, 1),
+      pr.push(face(P, 'keyboard', cam.quad(u0, u1, 0, t1, hTop),
         { stops: [kp.bkTop, kp.bkBot], dir: 'v' }, { alpha: keysA, z: 1000 + i }));
       if (solid) {
         // 前脸（近端竖直面：从抬高面落到白键面）
-        pr.push(face(P, 'keyboard', cam.wall(u0, u1, t1, 1, 0),
+        pr.push(face(P, 'keyboard', cam.wall(u0, u1, t1, hTop, 0),
           { stops: [kp.bkFrontTop, kp.bkFrontBot], dir: 'v' }, { alpha: keysA, z: 1000 + i }));
         /* ★ 两侧面（2026-10-19 用户："黑键明显没有侧面"）：
            相机横向收敛（kz>0），偏离画布中心的键一定看得见朝中心那一侧的键壁。
@@ -223,8 +244,8 @@ export function buildKeyboard(P, ctx) {
         const near = faceCenter < ctx.w / 2 ? u1 : u0;
         for (const ue of [u0, u1]) {
           const sideQ = [
-            cam.px(ue, 0), cam.py(0, 1),
-            cam.px(ue, t1), cam.py(t1, 1),
+            cam.px(ue, 0), cam.py(0, hTop),
+            cam.px(ue, t1), cam.py(t1, hTop),
             cam.px(ue, t1), cam.py(t1, 0),
             cam.px(ue, 0), cam.py(0, 0),
           ];
@@ -232,8 +253,8 @@ export function buildKeyboard(P, ctx) {
           pr.push(face(P, 'keyboard', sideQ, fill, { alpha: keysA, z: 1040 + i }));
         }
       }
-      if (s.gv > 0.02) pr.push(face(P, 'keyboard', cam.quad(u0, u1, 0, t1, 1), s.color, { alpha: s.gv * keysA, z: 1100 + i }));
-      if (s.fv > 0.02) pr.push(face(P, 'keyboard', cam.quad(u0, u1, 0, t1, 1), '#ffffff', { alpha: Math.min(0.6, s.fv * (fx.flash || 0)) * keysA, z: 1110100 + i }));
+      if (s.gv > 0.02) pr.push(face(P, 'keyboard', cam.quad(u0, u1, 0, t1, hTop), s.color, { alpha: s.gv * keysA, z: 1100 + i }));
+      if (s.fv > 0.02) pr.push(face(P, 'keyboard', cam.quad(u0, u1, 0, t1, hTop), '#ffffff', { alpha: Math.min(0.6, s.fv * (fx.flash || 0)) * keysA, z: 1110100 + i }));
       if (fx.keyNames && (u1 - u0) >= 14) {
         const NN = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
         pr.push(P.text('keyboard', NN[pitch % 12] + (Math.floor(pitch / 12) - 1),

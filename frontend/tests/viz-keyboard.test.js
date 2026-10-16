@@ -2,7 +2,7 @@
 // 上一次的三个实锤缺陷都在这里被钉住：落点错位、键被拆成两半、数组圆角退化成药丸。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeKeyboardProjection, buildKeyboard, BLACK_T } from '../src/core/viz/scene/keyboard.js';
+import { makeKeyboardProjection, buildKeyboard, BLACK_T, PRESS_DIP } from '../src/core/viz/scene/keyboard.js';
 import { WHITE_MIDI, BLACK_PC } from '../src/core/viz.js';
 import * as P from '../src/core/viz/scene/primitives.js';
 
@@ -96,4 +96,44 @@ test('整层带 keysA：琴键透明度是层属性（关闭/变淡不需要逐�
   for (const p of prims) assert.ok(Math.abs(p.alpha - CTX.keysA) < 1e-9, p.k + ' 的 alpha 应等于 keysA');
   const off = buildKeyboard(P, Object.assign({}, CTX, { keysA: 0 }));
   for (const p of off.prims) assert.ok(p.alpha === 0);
+});
+const byZ = (prims, z) => prims.filter((p) => p.z === z);
+
+test('★ 按压：白键远端不动、近端下沉（旧版是键面缩短，方向反了）', () => {
+  const at = (gv) => buildKeyboard(P, Object.assign({}, CTX, {
+    persp: 0,
+    state: (p) => ({ gv: p === WHITE_MIDI[3] ? gv : 0, fv: 0, color: '#f0f' }),
+  })).prims;
+  const off = byZ(at(0), 103);   // [键面, 前脸]
+  const on = byZ(at(1), 103);
+  assert.equal(off.length, 2);
+  assert.equal(on.length, 2);
+  assert.equal(on[0].y, off[0].y, '远端（落点线）绝不许动');
+  assert.ok(Math.abs((on[0].h - off[0].h) - PRESS_DIP) < 1e-9, '近端应下沉 ' + PRESS_DIP + 'px，实测 ' + (on[0].h - off[0].h));
+  assert.ok(on[1].h < off[1].h, '前脸要同比变矮');
+  const bo = off[0].y + off[0].h + off[1].h;
+  const bn = on[0].y + on[0].h + on[1].h;
+  assert.ok(bn > bo && bn - bo < PRESS_DIP * 0.25, '整键下沿只许微降（不然会顶穿下一排）：' + (bn - bo).toFixed(2));
+});
+
+test('★ 按压：黑键的抬起高度落下去，键面与前脸仍共享同一条边', () => {
+  const at = (gv) => buildKeyboard(P, Object.assign({}, CTX, {
+    persp: 0,
+    state: (p) => ({ gv: p === WHITE_MIDI[0] + 1 ? gv : 0, fv: 0, color: '#f0f' }),
+  })).prims;
+  const off = byZ(at(0), 1000);
+  const on = byZ(at(1), 1000);
+  assert.ok(on[0].y > off[0].y, '按下时抬高面必须下降：' + off[0].y + ' -> ' + on[0].y);
+  assert.equal(on[0].h, off[0].h, '键面长度不变（只落高度，不缩键）');
+  assert.ok(Math.abs(on[1].y - (on[0].y + on[0].h)) < 1e-9, '前脸与抬高面共享同一条边（不断开、不浮空）');
+  assert.ok(on[1].h < off[1].h, '落下去后前脸变矮');
+});
+
+test('平板模式（keys3d 关）：黑键停在白键面上，不浮空', () => {
+  const prims = buildKeyboard(P, Object.assign({}, CTX, {
+    persp: 0, fx: { flash: 0.7, beams: true, keyNames: false, keys3d: false },
+  })).prims;
+  const bk = byZ(prims, 1000);
+  assert.equal(bk.length, 1, '平板模式没有前脸与侧面');
+  assert.equal(bk[0].y, CTX.wN, '抬高量 0 → 键面顶边落在落点线上');
 });
