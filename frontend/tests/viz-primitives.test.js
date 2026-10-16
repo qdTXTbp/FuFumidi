@@ -60,7 +60,18 @@ test('★ 音符不透明度滑杆只作用于下落音符（琴键不再跟着�
   for (const b of a1) {
     const ref = a0.find((p) => Math.abs(p.x - b.x) < 0.01 && Math.abs(p.y - b.y) < 0.01);
     assert.ok(ref, '半透明度下应能找到同一个音符');
-    assert.ok(b.alpha <= ref.alpha * 0.5 + 1e-6, '半透明度下每个音符都应明显更淡：' + b.alpha.toFixed(3) + ' vs ' + ref.alpha.toFixed(3));
+    assert.ok(b.alpha < ref.alpha, '通透度拉低后本体应更透：' + b.alpha.toFixed(3) + ' vs ' + ref.alpha.toFixed(3));
+    // ★ 关键：本体有下限，不会"整根消失"—— 要的是玻璃，不是空无一物
+    assert.ok(b.alpha >= 0.12, '最通透时玻璃本体也必须看得见，实际 ' + b.alpha.toFixed(3));
+  }
+  // 结构层（折射边/内壁）不得随本体一起淡掉：这才是"透明度是玻璃的透明度"
+  const alphaOf = (c) => { const m = /rgba?\([^)]*?,\s*([\d.]+)\)\s*$/.exec(String(c)); return m ? +m[1] : 1; };
+  const edges = (r) => r.prims.filter((p) => p.layer === 'notes' && p.k === 'line');
+  const e0 = edges(full), e1 = edges(half);
+  assert.equal(e0.length, e1.length);
+  assert.ok(e0.length > 0);
+  for (let i = 0; i < e0.length; i++) {
+    assert.ok(alphaOf(e1[i].color) >= alphaOf(e0[i].color) * 0.5, '折射边/内壁强度不得跟着本体一起淡掉');
   }
   // 琴键层完全不受影响
   const k0 = full.prims.filter((p) => p.layer === 'keyboard').map((p) => p.alpha);

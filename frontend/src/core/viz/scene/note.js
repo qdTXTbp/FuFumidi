@@ -16,8 +16,9 @@
 // ============================================================
 import { noteStops, withAlpha, mix } from '../state/palette.js';
 
-/** 玻璃管主体不透明度：留一点通透，剩下靠边缘亮线与光晕撑住"玻璃"读法 */
-const GLASS_BODY = 0.86;
+/** 玻璃本体的不透明度区间：滑杆（通透度）在这两端之间调 —— 下限是"清玻璃"，上限是"厚玻璃" */
+const GLASS_BODY_MIN = 0.16;
+const GLASS_BODY_MAX = 0.62;
 /** 折射边的颜色：**带音符色调的白**（纯白会是卡通描边，微带本色的白才像玻璃的亮边） */
 const rimColor = (c, a) => withAlpha(mix(c, '#ffffff', 0.62), a);
 
@@ -74,15 +75,28 @@ export function buildNote(P, o) {
     halo(1.62, 0.05, -0.06);
     halo(1.28, 0.075, -0.05);
   }
-  // ② 主体：四段渐变（顶部受光 → 中段本色 → 底部增厚）
+  // ② 主体：**真的透**（透明度滑杆调的就是这个）—— 背景能透过来，才叫玻璃。
+  //    玻璃的"实心感"由下面 ③ 的菲涅尔边缘 + 高光撑，而不是靠把本体刷厚。
   const stops = noteStops(o.color, { velN, gloss: glow });
+  const bodyA = Math.min(1, GLASS_BODY_MIN + (GLASS_BODY_MAX - GLASS_BODY_MIN) * a);
   if (flat) {
     pr.push(P.capsule('notes', q[0], q[1], w, h, { stops, dir: 'v' },
-      { r: Math.max(1.5, Math.min(o.radius == null ? 5 : o.radius, w / 2, h / 2)), alpha: a * GLASS_BODY, z: z0 }));
+      { r: Math.max(1.5, Math.min(o.radius == null ? 5 : o.radius, w / 2, h / 2)), alpha: bodyA, z: z0 }));
   } else {
-    pr.push(P.quad('notes', q, { stops, dir: 'v' }, { alpha: a * GLASS_BODY, z: z0 }));
+    pr.push(P.quad('notes', q, { stops, dir: 'v' }, { alpha: bodyA, z: z0 }));
   }
   if (!glow) return pr;
+
+  // ②b **菲涅尔边缘环**：这是"玻璃"的核心一笔 —— 光在掠射角处反射最强，所以边缘比中间亮得多。
+  //     用横向渐变 [亮, 透, 透, 亮] 一次画出来（中间那两段是透明的），沿左右两侧各一道。
+  //     之前几版都是在实心块上叠一条亮线，怎么调都不像玻璃，问题就出在"中间没有真的透"。
+  const fres = (0.34 + 0.12 * velN) * structA;
+  const fresStops = [withAlpha('#ffffff', fres), withAlpha('#ffffff', 0), withAlpha('#ffffff', 0), withAlpha('#ffffff', fres)];
+  if (flat) {
+    pr.push(P.rect('notes', q[0], q[1], w, h, { stops: fresStops, dir: 'h' }, { blend: 'lighter', z: z0 + 0.06 }));
+  } else {
+    pr.push(P.quad('notes', q, { stops: fresStops, dir: 'h' }, { blend: 'lighter', z: z0 + 0.06 }));
+  }
 
   // ③ 内部右侧压暗 + 纵向高光：一暗一亮的两个面 → 圆柱的体积感（参考图里管子的"圆"就是这么来的）
   const shadeA = 0.17 * structA;
@@ -95,6 +109,12 @@ export function buildNote(P, o) {
 
   // ④ 折射边：玻璃最要紧的一笔，但要**细而克制**（1.1px / 微带本色），
   //    浓白 2px 会变成卡通描边 —— 这是上一版实测的失败点
+  // 内壁暗线：玻璃管是有壁厚的 —— 紧贴折射边往里 1px 压一道暗，管子立刻"立"起来
+  const wallA = 0.22 * structA;
+  const wL0 = pt(q, 0.07, 0.03), wL1 = pt(q, 0.07, 0.97);
+  const wR0 = pt(q, 0.93, 0.03), wR1 = pt(q, 0.93, 0.97);
+  pr.push(P.line('notes', wL0[0], wL0[1], wL1[0], wL1[1], withAlpha('#000000', wallA), { lw: 1, z: z0 + 0.14 }));
+  pr.push(P.line('notes', wR0[0], wR0[1], wR1[0], wR1[1], withAlpha('#000000', wallA), { lw: 1, z: z0 + 0.14 }));
   const edgeA = (0.42 + 0.16 * velN) * structA;
   const eL0 = pt(q, 0.015, 0.015), eL1 = pt(q, 0.015, 0.985);
   const eR0 = pt(q, 0.985, 0.015), eR1 = pt(q, 0.985, 0.985);
