@@ -44,6 +44,32 @@ CNB 的 OpenAPI（`https://api.cnb.cool`，swagger 199 个端点）**没有创�
    `git push https://cnb:<令牌>@cnb.cool/FuFuCloud-mirror/FuFumidi-Feedback.git main:main` 播种。
 6. **worker**：见 App 仓库 `docs/plans/2026-10-16-feedback-upload.md` §11 的部署命令。
 
+## 部署现实（2026-10-16 实测，务必先读）
+
+线上其实有**两个** Cloudflare worker，别搞混：
+
+| worker | 跑在哪 | 域名 | 状态 |
+|---|---|---|---|
+| `fufumidi-cloud-sync` | **协作者的 CF 账号**（`3b038b29…`，我们没权限） | `fusync.de5.net`（+ `*.workers.dev` 兜底） | 云同步在用；**反馈路由已在代码里，但没部署上去** |
+| `fufumidi-feedback` | **项目自己的 CF 账号**（`a50de010…`） | `fufumidi-feedback.fufumidi.workers.dev` | ✅ 已部署（D1 + KV 都绑好），但**国内访问不到**（见下） |
+
+**国内访问不到 `*.workers.dev`** —— 实测 DNS 被污染：
+`fufumidi-cloud-sync.fumivoice.workers.dev` 解析到 `198.27.124.186`（OVH 的 IP）、
+`fufumidi-feedback.fufumidi.workers.dev` 解析到 `31.13.75.5`（Facebook 的 IP），
+curl 60 秒都连不上；而 `fusync.de5.net` 0.7 秒通、`*.deno.dev` 3 秒通。
+所以**客户端上传必须有一个可达的域名**，三条可行路线：
+
+- **A（最快）**：把反馈路由部署到协作者那个 worker（代码已在 `src/index.js`）——
+  `wrangler d1 migrations apply DB --remote` + `wrangler secret put GITHUB_TOKEN` + `wrangler deploy`，
+  客户端走 `https://fusync.de5.net`（已是 BASES 第一条）。
+- **B（最彻底，推荐长期）**：给项目自己的账号加一个域名（任意注册商 → 加进 Cloudflare 免费版），
+  然后把 `fufumidi-feedback` 绑一个自定义域名（如 `fb.<你的域名>`），客户端 BASES 换过去。
+  这样反馈完全不依赖协作者。
+- **C（备选）**：把同一份逻辑搬到 Deno Deploy（`*.deno.dev` 实测可达）。
+
+在 A/B/C 落地前，反馈页的「上传到反馈仓库」会走完两条候选地址后失败，并**自动把带 md 的 zip 存到本地**
+（界面会提示路径），用户还能用「网页提交 / 存到本地」把反馈送出来 —— 功能不瘫，只是要多点一下。
+
 ## 排查
 
 | 症状 | 先看 |

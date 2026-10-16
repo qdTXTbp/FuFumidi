@@ -16,7 +16,9 @@
 | worker 反馈路由 | ✅ 代码+单测完成 · ⏳ **未部署** | 新增 cloud-sync/worker/src/feedback.js（Turnstile / 体积 / 路径白名单 / 限流 → 附件进 R2 → md 走 GitHub Contents API → 可选建 issue），index.js 接 POST /feedback 与 GET /feedback/att/:id/:name，新增迁移 0003_feedback.sql；**9 项离线单测全过**。本机没有 wrangler、也没有 CF 登录态 → 部署要你跑（见文末） |
 | 客户端脱敏与打包 | ✅ 代码+单测完成 | 新增 main/feedback-format.js（slug / 文件名 / md 模板 / 脱敏 / 设置洗白 / 日志截断）；npm run test:feedback **9 项全过**（含隐私 golden） |
 | 反馈页 UI | ⬜ 待做 | 字段与交互按 §5 |
-| 端到端上传 | ⬜ 待做 | 依赖 worker 部署 |
+| worker 部署 | ✅ 已部署（独立 worker） | 发现云同步 worker 跑在**协作者账号**（`3b038b29…`，无权限）→ 反馈改为独立 worker `fufumidi-feedback` 部署在项目自己账号（`a50de010…`）：新建 workers.dev 子域 `fufumidi`、D1 `fufumidi-feedback`、KV `fufumidi-feedback-att`（R2 未开通，附件走 KV，30 天过期）；迁移 `0001_feedback.sql` 已 apply；`/health` 返回 `build: feedback-1, attachments: kv` |
+| 端到端上传 | ✅ **已实测通**（本地 miniflare 真流程） | `POST /feedback` → HTTP 200；**GitHub 上文件字节与提交内容一致**（332 B）、**Issue #1 带 kind/severity/source 标签建出**、**附件从 KV 回读 24 B 内容一致**（`Content-Disposition` 正确）、**立刻重复提交被 429 拦**（限流生效）；**CNB 镜像头哈希一致**（`fd7ca44be046`）。测试文件与 Issue 已清理 |
+| ⚠️ 可达性 | ⬜ **待你定** | `*.workers.dev` 在**国内被 DNS 污染**（解析到 OVH / Facebook 的 IP，curl 60 s 超时），`fusync.de5.net` 0.7 s 通、`*.deno.dev` 3 s 通。三条路：A 由协作者把反馈路由部署到现成的 worker（代码已在 index.js，客户端 BASES 已把 `fusync.de5.net` 排第一）；B 给自己账号加域名并绑自定义域名（最彻底）；C 搬去 Deno Deploy。未定之前上传会失败并**自动存本地**，页面另给「网页提交/存到本地」 |
 
 ---
 ## 0. 一句话

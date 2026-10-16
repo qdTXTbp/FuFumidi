@@ -21,3 +21,5 @@ CREATE TABLE IF NOT EXISTS feedback_log (
 -- 限流查的是「同一个 install_id 在时间窗内有多少条」，这个复合索引就是为它建的
 CREATE INDEX IF NOT EXISTS idx_feedback_install_time ON feedback_log(install_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback_log(created_at);
+-- 限流也要按来源 IP 兜一层（install_id 是客户端自报的，可以伪造）
+CREATE INDEX IF NOT EXISTS idx_feedback_ip_time ON feedback_log(ip_hash, created_at);

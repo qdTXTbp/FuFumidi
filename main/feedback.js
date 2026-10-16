@@ -18,10 +18,19 @@ const os = require('os');
 function registerFeedbackIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine, net, readSettings }) {
   const F = require('./feedback-format');
 
-  /** 反馈通道地址：与云同步同一个 worker（多域名候选 + 回退） */
+  /** 反馈通道候选地址，按顺序试，某一个不通用下一个。
+   *
+   *  ★ 为什么是两个：workers.dev 在国内被 DNS 污染（实测 fufumidi-feedback.fufumidi.workers.dev
+   *    被解析到一个 Facebook 的 IP，curl 60 秒连不上），而云同步那个 worker 的自定义域名
+   *    fusync.de5.net 实测 0.7 秒就通 —— 所以国内优先走它（反馈路由与云同步共用同一份
+   *    worker 代码，见 cloud-sync/worker/src/index.js）；境外或能直连 workers.dev 的网络
+   *    再回退到我们自己的独立反馈 worker（wrangler.feedback.toml）。
+   *  当前线上只有第一条可达（de5.net 还没部署反馈路由时它会 404，那就快速换下一个）。 */
   const BASES = [
-    'https://fufumidi-cloud-sync.fumivoice.workers.dev',
+    'https://fusync.de5.net',
+    'https://fufumidi-feedback.fufumidi.workers.dev',
   ];
+  const BASE_TIMEOUT_MS = 15000;   // 被污染的域名会一直挂着，给它 15 秒就换下一个
 
   function settingsPath() {
     try {
@@ -176,10 +185,14 @@ function registerFeedbackIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, sp
       }
       let lastErr = '';
       for (const base of BASES) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, BASE_TIMEOUT_MS);
         try {
           const res = await net.fetch(base + '/feedback', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+            signal: ctrl.signal,
           });
+          clearTimeout(timer);
           const j = await res.json().catch(() => null);
           if (res.ok && j && j.ok) {
             if (b.diag.ok) { try { fs.rmSync(b.diag.path, { force: true }); } catch (e) {} }
@@ -187,7 +200,7 @@ function registerFeedbackIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, sp
           }
           lastErr = (j && j.error) || ('HTTP ' + res.status);
           if (res.status === 429 || res.status === 413 || res.status === 400) break;   // 这些重试也没用
-        } catch (e) { lastErr = String((e && e.message) || e); }
+        } catch (e) { clearTimeout(timer); lastErr = String((e && e.message) || e); }
       }
       // 上传失败：**自动兜一份到本地**，用户不至于白填
       const local = path.join(app.getPath('downloads'), 'fufumidi-feedback-' + b.id + '.zip');

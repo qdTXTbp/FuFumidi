@@ -24,6 +24,10 @@ const MAX_ATT_COUNT = 3;
 const RATE_WINDOW_MS = 10 * 60 * 1000;     // 同一个 installId 10 分钟 1 条
 const RATE_DAY_MS = 24 * 3600 * 1000;      // 24 小时 5 条
 const RATE_DAY_MAX = 5;
+// install_id 是客户端自报的、可以伪造，所以再按来源 IP 兜一层（IP 只存哈希）
+const RATE_IP_10MIN_MAX = 3;
+const RATE_IP_DAY_MAX = 20;
+const ATT_TTL_SECONDS = 30 * 24 * 3600;    // 附件在 KV 里留 30 天
 
 /** 只允许写进 issues/YYYY/MM/ 下的 .md，且不许出现 .. —— md 路径由客户端给，必须当不可信输入 */
 function safeMdPath(p) {
@@ -102,6 +106,36 @@ async function ghCreateIssue(env, repo, title, mdUrl, labels) {
   }
 }
 
+/** 附件存储：绑了 R2 就用 R2，没有就退到 KV（KV 免费额度够用，也不用开通 R2）。
+ *  两条路都是"不可猜的随机 key"，语义一样，调用方不用关心。 */
+function attStore(env) {
+  if (env.BUCKET) {
+    return {
+      kind: 'r2',
+      async put(key, bytes, contentType) { await env.BUCKET.put(key, bytes, { httpMetadata: { contentType } }); },
+      async get(key) {
+        const obj = await env.BUCKET.get(key);
+        if (!obj) return null;
+        return { body: obj.body, contentType: (obj.httpMetadata && obj.httpMetadata.contentType) || 'application/octet-stream' };
+      },
+    };
+  }
+  if (env.ATT) {
+    return {
+      kind: 'kv',
+      async put(key, bytes, contentType) {
+        await env.ATT.put(key, bytes, { expirationTtl: ATT_TTL_SECONDS, metadata: { contentType } });
+      },
+      async get(key) {
+        const r = await env.ATT.getWithMetadata(key, { type: 'arrayBuffer' });
+        if (!r || r.value === null || r.value === undefined) return null;
+        return { body: r.value, contentType: (r.metadata && r.metadata.contentType) || 'application/octet-stream' };
+      },
+    };
+  }
+  return null;
+}
+
 export function createFeedback(env) {
   const repo = env.FEEDBACK_REPO || DEFAULT_REPO;
 
@@ -118,6 +152,16 @@ export function createFeedback(env) {
         'SELECT COUNT(*) AS c FROM feedback_log WHERE install_id=? AND created_at>?'
       ).bind(installId, now - RATE_DAY_MS).first();
       if (day && day.c >= RATE_DAY_MAX) return { ok: false, error: '今天提交的反馈有点多（上限 ' + RATE_DAY_MAX + ' 条），明天再来，或直接开 Issue' };
+      if (ipHash) {
+        const ip10 = await env.DB.prepare(
+          'SELECT COUNT(*) AS c FROM feedback_log WHERE ip_hash=? AND created_at>?'
+        ).bind(ipHash, now - RATE_WINDOW_MS).first();
+        if (ip10 && ip10.c >= RATE_IP_10MIN_MAX) return { ok: false, error: '这一网络刚刚提交过几条反馈，请稍后再来' };
+        const ipDay = await env.DB.prepare(
+          'SELECT COUNT(*) AS c FROM feedback_log WHERE ip_hash=? AND created_at>?'
+        ).bind(ipHash, now - RATE_DAY_MS).first();
+        if (ipDay && ipDay.c >= RATE_IP_DAY_MAX) return { ok: false, error: '这一网络今天提交的反馈太多，明天再来' };
+      }
       return { ok: true, ipHash };
     } catch (e) {
       console.log('[feedback] rate limit skipped:', String(e));
@@ -177,15 +221,13 @@ export function createFeedback(env) {
 
     // ④ 附件 → R2（md 里已经带了链接，这里只负责把字节放好）
     const stored = [];
+    const store = attStore(env);
     for (const a of atts) {
       const key = 'feedback/' + id + '/' + a._name;
+      if (!store) return error('附件存储不可用（服务端既没有 R2 也没有 KV 绑定）', 503);
       try {
-        if (env.BUCKET) {
-          await env.BUCKET.put(key, a._bytes, { httpMetadata: { contentType: a._name.endsWith('.zip') ? 'application/zip' : 'application/octet-stream' } });
-          stored.push({ name: a._name, key, bytes: a._bytes.length });
-        } else {
-          return error('附件存储不可用（服务端没有 R2 桶）', 503);
-        }
+        await store.put(key, a._bytes, a._name.endsWith('.zip') ? 'application/zip' : 'application/octet-stream');
+        stored.push({ name: a._name, key, bytes: a._bytes.length, store: store.kind });
       } catch (e) {
         return error('附件保存失败 ' + a._name + '：' + String(e), 502);
       }
@@ -209,11 +251,12 @@ export function createFeedback(env) {
   /** 取附件（不可猜的 id）。诊断包的链接会写进公开的 md，所以再叠一层 id 随机 + 可选过期。 */
   async function attachment(id, name) {
     const key = 'feedback/' + String(id || '').replace(/[^a-f0-9]/gi, '').slice(0, 32) + '/' + safeAttName(name);
-    if (!env.BUCKET) return error('附件存储不可用', 503);
-    const obj = await env.BUCKET.get(key);
+    const store = attStore(env);
+    if (!store) return error('附件存储不可用', 503);
+    const obj = await store.get(key);
     if (!obj) return error('附件不存在或已过期', 404);
     const headers = new Headers();
-    headers.set('Content-Type', (obj.httpMetadata && obj.httpMetadata.contentType) || 'application/octet-stream');
+    headers.set('Content-Type', obj.contentType || 'application/octet-stream');
     headers.set('Content-Disposition', 'attachment; filename="' + safeAttName(name) + '"');
     headers.set('Cache-Control', 'private, max-age=3600');
     return new Response(obj.body, { headers });
