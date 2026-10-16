@@ -801,6 +801,8 @@ export interface FeedbackPreview {
 
 export interface FuBridge {
   onOpenFile(cb: (bytes: Uint8Array, name: string) => void): () => void;
+  /** 沉浸模式：窗口真全屏（收掉原生标题栏）；返回实际状态 */
+  setFullScreen(on: boolean): Promise<{ ok: boolean; fullScreen?: boolean; error?: string }>;
 
   // engine
   convert(cfg: ConvertRequest): Promise<ConvertResult>;

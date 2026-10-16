@@ -397,6 +397,11 @@ function setImmersive(on) {
     app.sidebarOpen = false;
     app.playerbarOpen = false;
     app.ui.immersive = true;
+    // 沉浸标记打在 <html> 上：外壳（分组标签/侧栏/播放栏）与滚动条由 styles.css 统一收掉，
+    // 组件内的 scoped 样式够不到这些兄弟节点。
+    document.documentElement.classList.add('fu-immersive');
+    // 原生标题栏在 web 内容之外，CSS 藏不掉 —— 只有窗口真全屏能收掉它。
+    try { window.fuBridge?.setFullScreen?.(true); } catch (e) {}
     pokeHud();
     app.toast(t('控件 3 秒无操作后自动淡出，移动鼠标或按 I 退出'));
   } else {
@@ -406,6 +411,10 @@ function setImmersive(on) {
       barsSaved = null;
     }
     app.ui.immersive = false;
+    const de = document.documentElement;
+    de.classList.remove('fu-immersive');
+    de.classList.remove('fu-cursor-hidden');
+    try { window.fuBridge?.setFullScreen?.(false); } catch (e) {}
     if (hudTimer) { clearTimeout(hudTimer); hudTimer = null; }
     hudOn.value = true;
   }
@@ -429,6 +438,14 @@ function onKey(e) {
   else if (e.key === 'Escape' && immersive.value) { e.preventDefault(); setImmersive(false); }
 }
 function onPointerMove() { if (immersive.value) pokeHud(); }
+
+/* 控件淡出时连**光标**一起藏（用户要求：按钮 / 进度条 / 光标都能完全隐藏）。
+   光标藏不藏跟着 hudOn 走：动一下鼠标就回来，静止 3 秒后随控件一起消失。 */
+watch([immersive, hudOn], ([im, on]) => {
+  const de = document.documentElement;
+  if (im && !on) de.classList.add('fu-cursor-hidden');
+  else de.classList.remove('fu-cursor-hidden');
+});
 
 /* ---------------- HUD 进度条：拖动时显示本地值，不被播放头拉回 ---------------- */
 const dragging = ref(false);
@@ -701,7 +718,9 @@ onBeforeUnmount(() => {
 /* ★ 沉浸态的底色必须与非沉浸的透明档**完全一致**（用户实测：两边背景不一样）。
    统一用 --canvas：非沉浸那边由 .vc-body.bd-canvas 铺同色，两边看起来才是同一个背景。
    HUD 的可读性靠它自己的深色渐变 + 深色 chip 解决，不靠整块改底色。 */
-.viz-page.immersive { padding: 0; max-width: none; background: var(--canvas); }
+/* ★ fixed + inset:0：实测旧写法在沉浸态下画面**下移 61px（顶栏高度）、右侧留 10px（滚动条槽）**——
+   只写 padding:0/max-width:none 管不到父容器的内边距与滚动条。铺满由这里保证，不靠外层。 */
+.viz-page.immersive { position: fixed; inset: 0; z-index: 30; padding: 0; max-width: none; background: var(--canvas); }
 .viz-page.immersive .viz-hero {
   border: 0; border-radius: 0; background: transparent; box-shadow: none; padding: 0;
 }

@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
   },
   // 取「待打开的文件」：消除冷启动时主进程 send 早于渲染进程订阅的竞态
   takePendingOpenFile: () => ipcRenderer.invoke('open-file:take'),
+  // 沉浸模式用：窗口真全屏（原生标题栏只此一法可收；退出时传 false 还原）
+  setFullScreen: (on) => ipcRenderer.invoke('win:setFullScreen', !!on),
   // 翻唱工作流（一首歌 → 分离 → 扒谱 → 合成 → 混音 → 成品）
   coverEnv: () => ipcRenderer.invoke('cover:env'),
   coverSingers: () => ipcRenderer.invoke('cover:singers'),

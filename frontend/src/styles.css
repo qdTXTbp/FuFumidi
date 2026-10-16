@@ -479,6 +479,21 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 .group-page { height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .group-page > .page { flex: 1; min-height: 0; }
 .group-page > * { min-height: 0; }
+/* ============================================================
+   沉浸模式（全应用）：<html> 上挂 fu-immersive / fu-cursor-hidden
+   ============================================================
+   为什么放在全局样式而不是 ViewViz 的 scoped 样式里：要收掉的是**外壳**（分组标签、侧栏、
+   播放栏）与页面滚动条，它们不在该组件的 DOM 子树里，scoped 选择器够不到。
+   行为：画面铺满整个窗口，控件/进度条 3 秒无操作淡出，**光标一起藏**；动一下鼠标全回来；Esc 退出。 */
+html.fu-immersive, html.fu-immersive body { overflow: hidden; }
+html.fu-immersive .topbar,
+html.fu-immersive .group-tabs,
+html.fu-immersive .sidebar,
+html.fu-immersive .player-bar,
+html.fu-immersive .gpu-bar,
+html.fu-immersive .toast-wrap { display: none !important; }
+html.fu-cursor-hidden, html.fu-cursor-hidden * { cursor: none !important; }
+
 .group-tabs { display: flex; gap: var(--sp-2); padding: var(--sp-3) var(--page-pad-x); border-bottom: 1px solid var(--hairline); background: var(--canvas); position: sticky; top: 0; z-index: 30; flex: none; }
 .gp-tab { flex: none; display: inline-flex; align-items: center; gap: var(--sp-1); padding: var(--sp-2) var(--sp-4); border: 1px solid var(--hairline); border-radius: var(--r-pill); background: transparent; color: var(--steel); font-size: var(--fs-md); cursor: pointer; white-space: nowrap; transition: background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out), opacity var(--motion-fast) var(--ease-out); }
 .gp-tab:hover { background: var(--surface-soft); color: var(--ink); }

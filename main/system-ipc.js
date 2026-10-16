@@ -30,6 +30,18 @@ function registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app
     try { return integrity.repair(ids); } catch (e) { return { ok: false, results: [], error: String(e && e.message || e) }; }
   });
 
+  /* 沉浸模式：把窗口切成真全屏。
+     ★ 为什么必须走主进程：原生标题栏（最小化/最大化/关闭那一行）在 web 内容**之外**，
+       CSS 藏不掉它 —— 只有 setFullScreen 能收掉。退出沉浸时恢复窗口态。 */
+  ipcMain.handle('win:setFullScreen', (evt, on) => {
+    try {
+      const win = BrowserWindow.fromWebContents(evt.sender);
+      if (!win) return { ok: false, error: 'no window' };
+      win.setFullScreen(!!on);
+      return { ok: true, fullScreen: win.isFullScreen() };
+    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  });
+
   ipcMain.handle('guide:openEdit', () => {
     const win = new BrowserWindow({ width: 900, height: 700, title: 'FuFumidi 编辑功能说明', backgroundColor: '#0a0f18', autoHideMenuBar: true });
     win.loadFile(path.join(__dirname, '..', 'renderer', 'edit-guide.html'));
