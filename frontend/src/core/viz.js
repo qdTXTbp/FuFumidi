@@ -430,7 +430,7 @@ export function drawVizChord(ctx, w, h, activeNotes) {
   ctx.fillStyle = cssVar('--canvas', '#ffffff'); ctx.fillRect(0,0,w,h);
   ctx.textAlign='center'; ctx.textBaseline='middle';
   if (chord) {
-    ctx.fillStyle='#ff5530'; ctx.font='700 '+Math.max(18,Math.round(h*.3))+'px "Segoe UI", "Microsoft YaHei", sans-serif';
+    ctx.fillStyle='#ff5530'; ctx.font='700 '+Math.max(18,Math.round(h*.3))+'px "Segoe UI", "Microsoft YaHei", sans-serif';   // ui-tokens-allow: 可视化内部绘制（该子系统自带主题，见 docs/DESIGN.md 第 8 节）
     ctx.fillText(chord.name, w/2, h*.34);
     ctx.fillStyle=cssVar('--stone','rgba(10,10,10,.55)'); ctx.font='10px Consolas, monospace';
     ctx.fillText(chord.pcs.map(p=>KEY_NAME[p]).join(' · '), w/2, h*.62);

@@ -311,7 +311,7 @@ export function newNoteId(): string { return nid(); }
  * 半透明画成「幽灵音符」时也还能认出是哪条轨（参考 FL Studio 的 ghost notes 用法）。
  */
 // 轨色板来自 core/palette.js（单一来源）；本模块内部要用到，所以 import 后再导出
-import { SINGER_TRACK_RAMP as TRACK_PALETTE } from '../core/palette.js';
+import { SINGER_TRACK_RAMP as TRACK_PALETTE, themeColor } from '../core/palette.js';
 export { TRACK_PALETTE };
 
 /**
@@ -344,7 +344,7 @@ export function trackColorOf(track: { color?: string } | null | undefined, index
   if (typeof own === 'string' && /^#[0-9a-f]{3,8}$/i.test(own)) return own;
   const pal = activePalette();
   const n = pal.length;
-  const fallback = '#8b83f0';
+  const fallback = themeColor('--data-6', '#8b83f0');
   if (!n) return fallback;                        // 调色板为空（理论上不会）：给个确定值，别返回 undefined
   return pal[(((index | 0) % n) + n) % n] ?? pal[0] ?? fallback;
 }

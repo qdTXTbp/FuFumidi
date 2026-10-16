@@ -19,7 +19,7 @@ export const BG_KEY = 'fufumidi.viz.bg';
 /* ★ 改默认值 / 改结构时把 BG_VER +1：老数据直接忽略，否则「新默认值」对老用户永远不生效
    （这次就把默认从「主题」改成「透明」，顺便清掉之前调试留下的图片档）。 */
 export const BG_VER = 2;
-export const BG_DEFAULTS = { v: BG_VER, mode: 'transparent', color: '#0b1020', blur: 12, dim: 0.35, path: '', fx: { ...FX_DEFAULTS } };
+export const BG_DEFAULTS = { v: BG_VER, mode: 'transparent', color: '#0b1020', blur: 12, dim: 0.35, path: '', fx: { ...FX_DEFAULTS } };   // ui-tokens-allow: color 是持久化的用户默认值，不是样式
 
 /* 瀑布流视效开关（2026-10 升级）。顺序即界面顺序；每项都能单独关掉回到旧观感。 */
 /* 用户自定义主题（D8：命名交给用户）—— 与内置主题分开存，卸载/升级不丢 */

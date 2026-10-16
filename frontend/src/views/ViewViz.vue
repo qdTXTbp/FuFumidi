@@ -281,7 +281,7 @@ function drawChord(cv, syn) {
   ctx2d.fillStyle = bgc; ctx2d.fillRect(0, 0, w, h);
   ctx2d.textAlign = 'center'; ctx2d.textBaseline = 'middle';
   if (chord) {
-    ctx2d.fillStyle = '#ff5530';
+    ctx2d.fillStyle = themeColor('--data-1', '#ff5530');
     ctx2d.font = '700 ' + Math.max(18, Math.round(h * 0.3)) + 'px "Segoe UI", "Microsoft YaHei", sans-serif';
     ctx2d.fillText(chord.name, w / 2, h * 0.34);
     ctx2d.fillStyle = stone;
@@ -723,7 +723,7 @@ onBeforeUnmount(() => {
   color: var(--on-accent);
 }
 .viz-page.immersive .vc-head .chip-btn:hover { background: rgba(0, 0, 0, .62); }
-.viz-page.immersive .vc-head .chip-btn.active { background: var(--surface); color: #0a0a0a; }
+.viz-page.immersive .vc-head .chip-btn.active { background: var(--btn-bg); color: var(--btn-fg);   /* 反相实心：深色档下原来写死近黑，等于看不清 */ }
 .viz-page.immersive .vc-head .muted,
 .viz-page.immersive .vc-head .vc-zoom { color: rgba(255, 255, 255, .82); }
 

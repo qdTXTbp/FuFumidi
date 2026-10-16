@@ -962,10 +962,10 @@ onBeforeUnmount(() => {
   fill: currentColor !important;
 }
 :deep(#abcScore .fu-play *) { fill: var(--t-warn) !important; stroke: var(--t-warn) !important; }
-:deep(#abcScore .fu-play .abcjs-notehead) { stroke: #6b3200 !important; stroke-width: 2 !important; }
+:deep(#abcScore .fu-play .abcjs-notehead) { stroke: var(--t-stage) !important;   /* 琥珀底上的反相墨色：浅色档 data-3 是深琥珀 */ stroke-width: 2 !important; }
 :deep(#abcScore .fu-play .abcjs-stem) { stroke: var(--t-warn) !important; stroke-width: 2.2 !important; }
 /* 简谱跟随播放高亮（HTML 渲染模式） */
-.jp-note.fu-play { background: var(--data-3) !important; color: #3a2b00 !important; border-radius: var(--r-sm); box-shadow: 0 0 0 2px rgba(255, 216, 102, 0.35); }
+.jp-note.fu-play { background: var(--data-3) !important; color: var(--t-stage) !important; border-radius: var(--r-sm); box-shadow: 0 0 0 2px rgba(255, 216, 102, 0.35); }
 :deep(#abcScore .abcjs-note) { cursor: pointer; }
 :deep(#abcScore svg .abcjs-ending) { display: none; }
 :deep(#abcScore.fu-grid) { background-image: repeating-linear-gradient(to right, var(--hairline) 0 1px, transparent 1px var(--fu-beatw, 56px)); }

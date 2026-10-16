@@ -720,7 +720,7 @@ const arrangeTracks = computed<any[]>(() => (store.tracks || []).map((t: any, i:
   name: t.name,
   kind: t.kind,
   engine: t.engine,
-  color: t.kind === 'audio' ? '#8a93a6' : colorOf(t),
+  color: t.kind === 'audio' ? 'var(--stone)' : colorOf(t),
   notes: t.kind === 'audio' ? [] : (t.notes || []),
   partStarts: t.kind === 'audio' ? [] : (t.partStarts || []),
   hidden: store.rollHidden.includes(t.id),

@@ -678,7 +678,7 @@ function drawVelCurve() {
   const n = vcVals.value.length;
   if (!n) return;
   const x0 = 26, xw = W - x0 - 8;
-  g.strokeStyle = '#1456f0'; g.lineWidth = 1.6; g.beginPath();
+  g.strokeStyle = themeColor('--curve', '#1456f0'); g.lineWidth = 1.6; g.beginPath();
   vcVals.value.forEach((v, i) => {
     const x = x0 + (n > 1 ? i / (n - 1) * xw : 0);
     const y = H - 5 - (v / 127) * (H - 10);
@@ -686,7 +686,7 @@ function drawVelCurve() {
   });
   g.stroke();
   // 音符落点
-  g.fillStyle = '#ff5530';
+  g.fillStyle = themeColor('--playhead', '#ff5530');
   vcVals.value.forEach((v, i) => {
     const x = x0 + (n > 1 ? i / (n - 1) * xw : 0);
     const y = H - 5 - (v / 127) * (H - 10);

@@ -1,4 +1,5 @@
 <script setup>
+import { themeColor } from '../core/palette.js';
 import { ref, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
@@ -334,7 +335,7 @@ function buildTimelineCache(s, w, h, dpr) {
   // 歌词标记
   const lyr = lyrics.value;
   if (lyr.length) {
-    ctx.fillStyle = '#ff5530';
+    ctx.fillStyle = themeColor('--playhead', '#ff5530');
     for (const l of lyr) {
       const x = Math.round(l.tick / total * w);
       if (x >= 0 && x <= w) ctx.fillRect(x, laneTop + laneH + 8, 2, h - laneH - 16);

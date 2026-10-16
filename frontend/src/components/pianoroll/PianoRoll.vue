@@ -221,7 +221,7 @@ function perBarFor(v) { return Math.max(1, Math.round(Number(v)) || 4); }
 
 /* ---------------- 绘制 ---------------- */
 function V(name) {
-  try { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || '#888'; } catch (e) { return '#888'; }
+  try { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || '#888'; } catch (e) { return '#888'; }   // ui-tokens-allow: V() 的颜色兜底
 }
 function roundRect(g, x, y, w, h, r) {
   const rr = Math.min(r, w / 2, h / 2);

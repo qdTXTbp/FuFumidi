@@ -100,7 +100,7 @@ HTML 里的颜色走 CSS 变量；**画布（Canvas2D/WebGL）里读不到 CSS �
 
 | 检查 | 基线（2026-10-19） | 起点 |
 |---|---|---|
-| 颜色字面值 | **21** | 288 |
+| 颜色字面值 | **0**（另有 8 处行尾标注 `ui-tokens-allow` 的刻意字面值） | 288 |
 | font-size 字面值 | **0** | 720 |
 | border-radius 字面值 | **0** | 374 |
 | gap 游离值 | **0** | 610 |
@@ -110,7 +110,9 @@ HTML 里的颜色走 CSS 变量；**画布（Canvas2D/WebGL）里读不到 CSS �
 `cssVar('--x','#hex')` / `themeColor('--x','#hex')` / `pal.getPropertyValue('--x') || '#hex'` /
 `var(--x, #hex)`；④ 注释里的色号。
 
-剩下 21 处集中在画布绘制（`ArrangeView`/`VoicebankPanel`/`ViewConvert`/`ViewViz` 的白/黑墨色与播放头色），
+**刻意写死**的四处（PDF/图片栅格化的纸面白、白+黑双层描边、可视化子系统内部绘制、持久化的用户默认值）
+不走 token，而是在**行尾**标注 `// ui-tokens-allow: 理由` —— 守门脚本认这个标记，"例外"必须写清理由才存在。
+（改前的 21 处已全部定性：14 处改读 token，其中揪出两个真 bug；另 8 处按标记保留。）
 逐个要看绘制意图再定，**不要机械替换**。改善后跑 `node scripts/check-ui-tokens.mjs --update` 下调基线。
 
 ## 8. 与可视化子系统（core/viz）的关系
@@ -125,4 +127,5 @@ HTML 里的颜色走 CSS 变量；**画布（Canvas2D/WebGL）里读不到 CSS �
    目前 `styles.css` 已统一了字号圆角间距，但同类控件仍各写各的 padding/height。
 2. **M4 三个大视图**（`ViewSing` 208 KB / `ViewEdit` 190 KB / `ViewTranscribe` 155 KB）：
    把本地样式换成契约类；这一步必须**逐视图**做并各自截图对比，不能脚本化。
-3. 剩下 21 处画布色值逐个定性（见 `7）。
+3. ~~剩下 21 处画布色值逐个定性~~ 已完成：14 处改读 token（含两个真 bug：编排器浅色档下的白音符、
+   沉浸模式激活 chip 在深色档下近黑压深底），另 8 处带 `ui-tokens-allow` 理由保留。

@@ -23,7 +23,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = path.join(ROOT, 'frontend', 'src');
 
 /* 实测基线 —— 只许变小 */
-const BASELINE = { hex: 21, fs: 0, radius: 0, gap: 0 };
+const BASELINE = { hex: 0, fs: 0, radius: 0, gap: 0 };
 
 /* 合法持有字面值的文件（各自有注释说明理由） */
 const EXEMPT_FILES = [
@@ -118,6 +118,8 @@ for (const abs of walk(SRC)) {
       const at = lineStart + m.index;
       const inCss = isCss[at];
       if (inComment(at)) continue;                                  // 注释里的色号不算
+      // 显式允许：行尾写了 ui-tokens-allow 并说明理由的字面值（PDF 纸面白、双色描边…）
+      if (/ui-tokens-allow/.test(line)) continue;
       const before = line.slice(0, m.index);
       if (/\|\|\s*['"]?$/.test(before)) continue;                  // pal.steel || '#333'（hex 前的引号也要算）
       // 兜底参数必须连右引号一起判，否则 cvar('--surface', '#101826') 会被误报

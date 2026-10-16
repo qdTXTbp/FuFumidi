@@ -473,10 +473,10 @@ function drawRangeHover(ctx: CanvasRenderingContext2D) {
   if (i < 0 || r < 0) return;
   const x = GUTTER + i * CELL_W, y = RULER + r * CELL_H;
   ctx.save();
-  ctx.strokeStyle = '#ffffff';
+  ctx.strokeStyle = '#ffffff';   // ui-tokens-allow: 白+黑双层描边是「任何底色上都看得见」的手法，刻意不跟主题
   ctx.lineWidth = 2;
   ctx.strokeRect(x - 1, y, CELL_W, CELL_H - 1);
-  ctx.strokeStyle = '#000000';
+  ctx.strokeStyle = '#000000';   // ui-tokens-allow: 同上（第二层）
   ctx.lineWidth = 1;
   ctx.strokeRect(x - 1, y, CELL_W, CELL_H - 1);
   ctx.restore();

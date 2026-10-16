@@ -199,7 +199,7 @@ async function rasterizePdf(path: string): Promise<string[]> {
     cv.width = Math.max(1, Math.round(vp.width));
     cv.height = Math.max(1, Math.round(vp.height));
     const ctx = cv.getContext('2d') as CanvasRenderingContext2D;
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = '#ffffff';   // ui-tokens-allow: 取景画布的纸面白（PDF/图片栅格化），导出内容不该随界面主题变
     ctx.fillRect(0, 0, cv.width, cv.height);
     await page.render({ canvasContext: ctx, viewport: vp }).promise;
     pages.push(cv.toDataURL('image/png').split(',')[1]);
@@ -219,7 +219,7 @@ async function rasterizeImage(path: string): Promise<string[]> {
   cv.width = Math.round(bmp.width * scale);
   cv.height = Math.round(bmp.height * scale);
   const ctx = cv.getContext('2d') as CanvasRenderingContext2D;
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = '#ffffff';   // ui-tokens-allow: 取景画布的纸面白（PDF/图片栅格化），导出内容不该随界面主题变
   ctx.fillRect(0, 0, cv.width, cv.height);
   ctx.drawImage(bmp, 0, 0, cv.width, cv.height);
   return [cv.toDataURL('image/png').split(',')[1]];

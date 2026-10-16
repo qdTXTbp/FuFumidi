@@ -218,7 +218,7 @@ function drawPart(t, x0, x1, y, css, drag, viewport = null) {
       lo -= add; hi += add;
     }
     ctx.globalAlpha *= 0.9;
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = themeColor('--t-text', '#ffffff');   // 面板底色跟随主题，白音符在浅色档会消失
     const pad = 4;
     for (const n of notes) {
       const nx = x0 + pad + (n.startBeat - (x0 - HEAD_W) / props.pxPerBeat) * props.pxPerBeat;
@@ -236,7 +236,7 @@ function drawPart(t, x0, x1, y, css, drag, viewport = null) {
     if (vx1 > vx0 + 1) {
       const inset = 1;
       ctx.fillStyle = 'rgba(255,255,255,0.11)';
-      ctx.strokeStyle = '#ffffff';
+      ctx.strokeStyle = themeColor('--t-text', '#ffffff');
       ctx.lineWidth = 2;
       roundRect(x0 + inset + (vx0 - x0), yy + inset, vx1 - vx0, h - inset * 2, 3);
       ctx.fill();
@@ -244,7 +244,7 @@ function drawPart(t, x0, x1, y, css, drag, viewport = null) {
     }
   }
   if (drag) {   // 拖动中的块加高亮描边
-    ctx.strokeStyle = '#ffffff';
+    ctx.strokeStyle = themeColor('--t-text', '#ffffff');
     ctx.lineWidth = 1.6;
     roundRect(x0, yy, w, h, 6);
     ctx.stroke();

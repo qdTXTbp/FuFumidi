@@ -394,7 +394,7 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
     ctx.fillStyle = 'rgba(0,0,0,.55)';
     const tw = Math.min(W - 80, (vf.lyricAt || '').length * 16 + 32);
     ctx.fillRect((W - tw) / 2, H - 36, tw, 28);
-    ctx.fillStyle = '#fff'; ctx.font = '600 15px "Microsoft YaHei", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = themeColor('--on-accent', '#ffffff'); ctx.font = '600 15px "Microsoft YaHei", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(vf.lyricAt, W / 2, H - 22);
   }
   if (VE.showWatermark && VE.watermark) {
@@ -406,7 +406,7 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
   }
   if (VE.showProgress) {
     ctx.fillStyle = 'rgba(255,255,255,.14)'; ctx.fillRect(pad, H - 7, W - pad * 2, 3);
-    ctx.fillStyle = '#ff5530'; ctx.fillRect(pad, H - 7, (W - pad * 2) * vf.pct, 3);
+    ctx.fillStyle = themeColor('--playhead', '#ff5530'); ctx.fillRect(pad, H - 7, (W - pad * 2) * vf.pct, 3);
   }
   if (VE.showTimecode) {
     ctx.fillStyle = cvar('--ink', '#fff'); ctx.font = '12px Consolas, monospace'; ctx.textAlign = 'right';
