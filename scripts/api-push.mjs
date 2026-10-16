@@ -70,13 +70,23 @@ console.log("远端 " + parent.slice(0, 8) + " → 本地 " + head.slice(0, 8) +
 
 for (const sha of ahead) {
   const msg = git("log", "-1", "--format=%B", sha).trim();
+  // ★ 小心重命名：--name-status 对 R/C 输出三段（R100\t旧\t新），
+  //   旧代码 rest.join("\t") 会拼出一个不存在的路径 → cat-file 直接 fatal（2026-10-16 踩过）。
+  //   重命名还必须**显式删掉旧路径**：新提交是 base_tree（远端父提交）加上增量，
+  //   父树里那个旧文件不会自己消失，不删就在远端留一个幽灵文件。
   const changed = git("show", "--name-status", "--format=", sha).split(/\r?\n/).filter(Boolean)
-    .map(l => { const [st, ...rest] = l.split(/\t/); return { st: st[0], path: rest.join("\t") }; });
+    .map(l => {
+      const [st, ...rest] = l.split(/\t/);
+      if (st[0] === "R") return { st: "R", from: rest[0], path: rest[1] };
+      if (st[0] === "C") return { st: "C", from: rest[0], path: rest[1] };
+      return { st: st[0], path: rest.join("\t") };
+    });
   if (DRY) { console.log("  [dry] " + sha.slice(0, 8) + "  " + changed.length + " 文件  " + msg.split("\n")[0].slice(0, 50)); continue; }
   const pc = await api("/git/commits/" + parent);
   const tree = [];
   for (const c of changed) {
     if (c.st === "D") { tree.push({ path: c.path, mode: "100644", type: "blob", sha: null }); continue; }
+    if (c.st === "R") tree.push({ path: c.from, mode: "100644", type: "blob", sha: null });   // 先删旧路径
     const buf = execFileSync("git", ["cat-file", "blob", sha + ":" + c.path], { maxBuffer: 1 << 28 });
     const blob = await post("/git/blobs", { content: buf.toString("base64"), encoding: "base64" });
     tree.push({ path: c.path, mode: "100644", type: "blob", sha: blob.sha });
