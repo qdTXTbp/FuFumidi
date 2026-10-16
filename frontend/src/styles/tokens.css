@@ -1,0 +1,103 @@
+/* ============================================================
+   FuFumidi · 设计 token（M1）
+   ============================================================
+   为什么要有这一层：重构前 styles.css 里堆了 141 个变量、视图里另有
+   288 处硬编码色值（117 种不同颜色）、12 档字号、8 档圆角 —— 那是"手写集合"，
+   不是设计语言。本文件是**唯一允许出现字面色值的地方**，其余一律引用 token。
+
+   深色主导：设计语言以深靛舞台为基底（参考米哈游系的深靛底 + 元素色语义化），
+   浅色作为可选档保留。切换只需在 <html> 上设 data-theme。
+
+   本文件分两段：
+   ① 新的 token API（字号阶/间距/圆角/阴影/动效/字体）—— 新代码只用这些；
+   ② 深色映射层：把**现有**那批变量名映射到深色值。用属性选择器（优先级高于
+      :root）覆盖，所以不必改动 styles.css 的 141 行就能整体变深色，且随时可回退。
+   ============================================================ */
+
+:root {
+  /* ---------- 字体（离线内置，见 frontend/src/assets/fonts/）----------
+     --font-ui    中文与界面正文：内置思源黑体子集，回退系统
+     --font-num   数字/遥测：等宽，时间码、BPM、百分比一律用它（表格才不跳）
+     --font-display 仅标题与品牌：内置衬线拉丁，正文绝不使用（社区对"超粗正文"的批评） */
+  --font-ui: "FuFumidi Sans", "Microsoft YaHei UI", "Source Han Sans SC", "Noto Sans SC", system-ui, sans-serif;
+  --font-num: "FuFumidi Mono", "JetBrains Mono", Consolas, "Cascadia Mono", monospace;
+  --font-display: "FuFumidi Display", "Cinzel", Georgia, serif;
+
+  /* ---------- 字号阶：12 档 → 6 档 ---------- */
+  --fs-xs: 11px;    /* 辅助、徽标、表格脚注 */
+  --fs-sm: 12px;    /* 次要说明、chip */
+  --fs-md: 13px;    /* 界面正文（默认） */
+  --fs-lg: 15px;    /* 小标题、强调数值 */
+  --fs-xl: 20px;    /* 区块标题 */
+  --fs-2xl: 28px;   /* 页面主标题（一屏一主张） */
+  --lh-tight: 1.25;
+  --lh-base: 1.55;
+  --fw-body: 400;
+  --fw-medium: 500;
+  --fw-strong: 600;   /* 正文上限：700 只许标题/大字 */
+
+  /* ---------- 间距：4/8 网格，禁止 6/10/14 这类游离值 ---------- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  /* ---------- 圆角：8 档 → 4 档 ---------- */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-pill: 999px;
+
+  /* ---------- 阴影：贴地 / 浮层 / 模态 ---------- */
+  --sh-1: 0 1px 2px rgba(0, 0, 0, .28);
+  --sh-2: 0 12px 32px rgba(0, 0, 0, .42);
+  --sh-3: 0 24px 64px rgba(0, 0, 0, .55);
+
+  /* ---------- 动效：只服务因果，不做装饰性循环 ---------- */
+  --dur-1: var(--motion-fast, .12s);
+  --dur-2: var(--motion-base, .18s);
+  --dur-3: var(--motion-slow, .28s);
+  --ease: var(--ease-out, cubic-bezier(.22, .61, .36, 1));
+
+  /* ---------- 语义色（深色基准值；浅色档在文件的 light 段覆盖）---------- */
+  --t-stage: #0a0d16;        /* 舞台底 */
+  --t-panel: #111524;        /* 面板 */
+  --t-raised: #171c2e;       /* 抬起（卡片刻） */
+  --t-sunken: #070911;       /* 凹陷（画布/输入槽） */
+  --t-line: rgba(255, 255, 255, .10);
+  --t-line-strong: rgba(255, 255, 255, .18);
+  --t-text: #e8ecf4;         /* 柔白压深靛：纯白压纯黑会眩光 */
+  --t-text-soft: #a7b0c0;
+  --t-text-dim: #6f7889;
+  --t-brand: var(--brand-coral);
+  --t-ok: #3ecf8e;
+  --t-warn: #ffb340;
+  --t-err: #ff6b6b;
+  --t-info: #5ac8fa;
+  /* 七元素数据色：可视化、轨道、图表共用同一套（不做彩虹装饰，只做语义） */
+  --data-1: #ff5530; --data-2: #ffb340; --data-3: #ffe066; --data-4: #3ecf8e;
+  --data-5: #5ac8fa; --data-6: #7c6cff; --data-7: #ea5ec1;
+}
+
+/* ============================================================
+   ★ 为什么这里**不**映射 --canvas / --ink / --surface 那批旧变量
+   ============================================================
+   试过用 html[data-theme="dark"] 去覆盖它们 —— 实测**不生效**：
+   应用自带一套动态主题系统（core/theme.js 的 paletteFor / applyTheme），
+   它在运行时把调色板写成 **documentElement 的内联样式**（--canvas/--surface/--ink…）。
+   内联样式优先级高于任何样式表规则，用 CSS 去顶只能靠 !important 硬扛，
+   那是掩盖问题：真正该做的是**接进它**（模式交给 fufumidi_mode，见 main.ts）。
+
+   所以本文件只负责"新 API"：字号阶 / 间距 / 圆角 / 阴影 / 动效 / 字体 / 语义色 --t-*。
+   旧变量的取值一律由 theme.js 决定 —— 一句话：**深浅色只有一个来源**。
+   ============================================================ */
+
+/* 全局字体与数字：正文走 --font-ui，数字一律等宽（时间码/BPM/百分比不跳字） */
+html { font-family: var(--font-ui); }
+.fu-num, .hud-time, .vc-zoom, .muted.small strong { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

@@ -98,6 +98,12 @@ electronLanguages:
 extraResources:
   - from: "resources/python"
     to: python
+  # ★ 2026-10-18：不再单独打包 python312。
+  #   做法改成「**3.12 直接顶替 resources/python**」（原来的 3.11 已删），包里只留一份运行时：
+  #   · 安装包因此少 1.57 GB（原先两份运行时并存）；
+  #   · 四条 GPU 路径在 3.12 上都有轮子（cu128 / XPU / ROCm / DirectML，逐条实测过），
+  #     DirectML 的 torch==2.4.1 与 torch-directml 都止于 cp312，所以 3.12 是唯一能同时覆盖四者的版本；
+  #   · GPU 增强包需按 cp312 重装（旧的是 cp311 轮子，换版本后必须重下）。
   # VC++ 2015-2022 x64 运行库：干净 Windows 不自带，缺了 torch/onnxruntime 直接
   # 加载失败。这里另存一份（不在更新器 ignoreFolderPath 里，更新会带上），
   # 由 main.js 的 ensureRuntimeDlls 在首次用到引擎时补进 resources/python。
