@@ -1,4 +1,4 @@
-# Host side orchestrator: the L3 release gate for 5.2.0 (fresh install -> post-install -> launch -> uninstall).
+﻿# Host side orchestrator: the L3 release gate for 5.2.0 (fresh install -> post-install -> launch -> uninstall).
 # Each step runs the guest script through guest-run.ps1 and its raw output is saved under _attic for the report.
 # Usage: $env:FUFUMIDI_VM_PASSWORD=...; powershell -File scripts/vm/run-l3-510.ps1
 param(

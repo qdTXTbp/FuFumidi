@@ -4,4 +4,6 @@ torch==2.9.1+cu128
 torchaudio==2.9.1+cu128
 # 部分识别模型（MuScriptor / beat_this 一类）依赖 transformers
 transformers>=4.44,<5
-onnxruntime-gpu==1.20.2
+# ★ 与内置运行时/ homr venv 实测一致的版本（1.31.0 实测 providers = TensorRT/CUDA/CPU）；
+#   曾经写 1.20.2，而 homr 装的是 latest，两处不一致 —— 打包时先装 1.20.2 再被第 68 行升级，纯浪费。
+onnxruntime-gpu==1.31.0

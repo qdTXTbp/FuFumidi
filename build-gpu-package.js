@@ -61,9 +61,20 @@ if (mode === 'cuda') {
      ② 包的 ABI 跟着**构建时**的运行时漂移：运行时后来升到 3.12，包还是 cp311，
         用户装上去 import 就 WinError 126（实测：「工具 gpu 加速没有生效」）。
      现在按当前运行时用 --target 装进 staging，装出来天然与运行时同 ABI。 */
-  const pip = '"' + pythonDir + '\python.exe" -m pip install --no-input --no-cache-dir --target "' + site + '"';
+  // ★ 这里必须是 '\\python.exe'（双反斜杠）。写成单反斜杠时 JS 把 \p 当无效转义吃掉，
+  //   拼出的是 "E:/Midi/FuFumidi/resources/pythonpython.exe" —— cuda 分支因此从来跑不通
+  //   （实测：cmd 报「不是内部或外部命令」）。文件头第 19-22 行记的是同一类坑，这里是第二处。
+  const pip = '"' + pythonDir + '\\python.exe" -m pip install --no-input --no-cache-dir --target "' + site + '"';
   if (!process.env.SKIP_PIP) {
-    run(pip + ' --index-url https://mirror.sjtu.edu.cn/pytorch-wheels/cu128 -r "' + reqCuda + '"');
+    // ★ 本地轮子优先（CUDA_WHEELS）：SJTU 镜像实测 1.2 MB/s，2.7 GB 的 torch 要下 40 分钟，
+    //   而且下到一半断了就得重来。先把 torch/torchaudio 用断点续传的 ranged 下载器拉到本地，
+    //   再让 pip 用 --find-links 直接吃本地文件（torch==2.9.1+cu128 在 PyPI 上不存在，
+    //   所以一定命中本地那份，不会误装 CPU 版）。
+    const cudaWheels = process.env.CUDA_WHEELS || '';
+    const src = cudaWheels
+      ? ' --find-links "' + cudaWheels + '" -i https://pypi.tuna.tsinghua.edu.cn/simple'
+      : ' --index-url https://mirror.sjtu.edu.cn/pytorch-wheels/cu128';
+    run(pip + src + ' -r "' + reqCuda + '"');
     // onnxruntime-gpu：转录 / 识谱（homr）的 ONNX 推理靠它才会用 CUDA；无 N 卡时自动回退 CPU
     run(pip + ' -i https://pypi.tuna.tsinghua.edu.cn/simple onnxruntime-gpu');
   } else console.log('[skip] pip cuda install');
@@ -80,7 +91,15 @@ if (mode === 'cuda') {
       if (!whls.length) { console.error('[错误] XPU_WHEELS 目录里没有 .whl：' + xpuWheelsDir); process.exit(1); }
       console.log('[xpu] 用本地轮子：' + whls.length + ' 个');
       run('"' + pythonDir + '\\python.exe" -m pip install --target "' + site + '" --no-input --no-cache-dir'
-          + ' --index-url https://pypi.tuna.tsinghua.edu.cn/simple ' + whls.join(' '));
+          // ★ --no-deps 是必须的：torch 2.11.0+xpu 声明依赖 triton-xpu==3.7.0，而官方 xpu 索引里
+          //   3.7.0 **只有 Linux（manylinux）轮子**，Windows 上完全解析不到 ——
+          //   实测报「Could not find a version that satisfies the requirement triton-xpu==3.7.0」整包构建失败。
+          //   triton 只服务 torch.compile/inductor，XPU 推理不需要它；于是 no-deps 装轮子，
+          //   再把 torch 真正需要的纯 Python 依赖显式补齐。
+          + ' --no-deps ' + whls.join(' '));
+      run('"' + pythonDir + '\\python.exe" -m pip install --target "' + site + '" --no-input --no-cache-dir'
+          + ' --index-url https://pypi.tuna.tsinghua.edu.cn/simple'
+          + ' filelock sympy networkx jinja2 fsspec typing-extensions setuptools numpy');
     } else {
       console.log('[xpu] 未设 XPU_WHEELS，退回官方索引（很慢）');
       run('"' + pythonDir + '\\python.exe" -m pip install --target "' + site + '" --no-input --no-cache-dir'
@@ -98,7 +117,9 @@ const sevenZip = process.env.SEVENZIP || '7z';
 // ★ 分卷：GitHub Release 单资产上限 2 GB，而 XPU 包解压后 4.6 GB、压完仍超 2 GB。
 //   7z 的 -v 会切出 fufumidi-gpu-xpu.zip.001 / .002 …，正好命中
 //   main/gpu-ipc.js 的分卷识别正则 '^fufumidi-gpu-<kind>(?:-parts)?\.(zip\.\d{3}|part\d+)'。
-const splitSize = mode === 'xpu' ? (process.env.GPU_PACKAGE_SPLIT || '1900m') : '';
+// cuda 也要分卷：解压后 6 GB 上下，压完 1.9 GB 卡在 GitHub 单资产 2 GB 限制的边缘，
+// 实测旧包切成了 .001/.002 —— 不分卷就会上传失败。
+const splitSize = (mode === 'xpu' || mode === 'cuda') ? (process.env.GPU_PACKAGE_SPLIT || '1900m') : '';
 // ★★ 归档根必须是 site-packages，不能是 gpu-package：
 //   安装侧（main/gpu-ipc.js:249 与 :374）找的是 `extractDir/site-packages`，
 //   即**压缩包根目录下**必须有 site-packages。

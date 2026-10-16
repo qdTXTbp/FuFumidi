@@ -1,4 +1,4 @@
-# 构建可选 Rust 性能核心并在本地安装
+﻿# 构建可选 Rust 性能核心并在本地安装
 # 默认优先使用 GNU 工具链（无需 MSVC linker）；设 FUFUMIDI_RUST_GNU=0 可回退 MSVC
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
