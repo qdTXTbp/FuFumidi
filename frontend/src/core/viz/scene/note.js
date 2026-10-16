@@ -1,54 +1,108 @@
 // ============================================================
-// 下落音符（可视化重做 · 场景层 · 玻璃质感）
+// 下落音符（可视化重做 · 场景层 · 玻璃管材质）
 //
-// 用户要求：「把下落的音符长条做成玻璃质感」。
-// 玻璃不是"调半透明"就够了 —— 真实玻璃的读法靠三件事：
-//   ① **明亮的边缘**：光在玻璃里折射，边沿比内部亮（这是它区别于"果冻/塑料块"的关键）
-//   ② **一条纵向高光**：柱面上的镜面反射，位置略偏左（光从左上来的默认假设）
-//   ③ **顶部受光 + 底部增厚**：顶部是光进入的面，底部是厚度累积，压暗一档
-// 所以一根音符 = 主体胶囊 + 左右边缘亮线 + 高光条 + 顶/底收口，亮层全部走 lighter 叠加，
-// 再交给后处理的泛光去发光（"发光"这件事只由后处理做，图元层不自己画糊）。
-//
-// 所有部件的 z 用**同一基准 + 小数偏移**，保证一根音符的部件永远连在一起，
-// 不会被相邻音符的某一部分插进来（sortPrims 是先层后 z）。
+// 两条线一起管这根音符：
+//   ① **透视**：键盘那台相机的横向投影延伸到落点线上方（t<0 = 更远），
+//      于是音符上窄下宽、两条侧边与键列方向一致 —— 用户原话「音符还是直的，但是倾斜地下落」，
+//      说的就是"键列斜了、音符还是竖直矩形"。现在音符吃同一台相机，落地那条边仍是恒等映射，
+//      所以它永远正好落在自己的键列上。
+//   ② **玻璃质感**：参考用户给的示例（PianiCast / 霓虹管那类）—— 玻璃管不是"半透明色块"，而是：
+//      · 外面一圈柔和光晕（管子在发光）
+//      · 亮而清晰的侧边（折射边，最亮的一笔）
+//      · 内部一条纵向高光 + 另一侧压暗（圆柱的体积感）
+//      · 顶面受光最亮、底面收暗（厚度）
+//      亮度层次靠 lighter 叠加，最终由后处理泛光统一发光。
+// 所有部件都从**同一个四边形**用双线性插值取点，所以透视怎么变都不会错位。
 // ============================================================
-import { noteStops, withAlpha } from '../state/palette.js';
+import { noteStops, withAlpha, mix } from '../state/palette.js';
 
-/** 玻璃主体的不透明度：留一点通透，但不至于看不清（剩下的靠边缘亮线撑住"玻璃"读法） */
-const GLASS_BODY = 0.82;
+/** 玻璃管主体不透明度：留一点通透，剩下靠边缘亮线与光晕撑住"玻璃"读法 */
+const GLASS_BODY = 0.86;
+/** 折射边的颜色：**带音符色调的白**（纯白会是卡通描边，微带本色的白才像玻璃的亮边） */
+const rimColor = (c, a) => withAlpha(mix(c, '#ffffff', 0.62), a);
+
+/** 四边形上按 (横比, 纵比) 取点：0..1 在内部，<0 / >1 是向外扩 */
+function pt(q, s, t) {
+  const xt = q[0] + (q[2] - q[0]) * s, yt = q[1] + (q[3] - q[1]) * s;
+  const xb = q[6] + (q[4] - q[6]) * s, yb = q[7] + (q[5] - q[7]) * s;
+  return [xt + (xb - xt) * t, yt + (yb - yt) * t];
+}
+const isAxisAligned = (q) => Math.abs(q[1] - q[3]) < 0.01 && Math.abs(q[5] - q[7]) < 0.01 && Math.abs(q[0] - q[6]) < 0.01 && Math.abs(q[2] - q[4]) < 0.01;
+/**
+ * 把 pt() 返回的点**摊平**成图元要的 [x0,y0,x1,y1,...]。
+ * ★ 踩过的坑：pt() 返回 [x,y]，直接塞进 P.quad 会得到嵌套数组 → 光栅器读到 NaN →
+ *   那几个四边形被静默丢弃（表现是"玻璃只剩主体和描边"，光晕/高光全不见）。
+ */
+const flat4 = (...ps) => ps.reduce((acc, p) => (acc.push(p[0], p[1]), acc), []);
 
 /**
- * 产出**一根**下落音符的全部图元。
+ * 产出一根下落音符的全部图元。
  * @param P 图元构造器（scene/primitives.js 的命名空间）
- * @param o { x, y, w, h, color, alpha, radius, depth, velN, gloss, hitY }
- *   x/y/w/h 屏幕像素 · alpha 该音符的不透明度（= 用户滑杆 × 纵深淡出）· hitY 落点线 y（可空）
+ * @param o { quad, width, height, color, alpha, radius, velN, gloss, z }
+ *   quad = [TLx,TLy, TRx,TRy, BRx,BRy, BLx,BLy]（屏幕像素）；width/height 是**屏幕**上的宽高
  */
 export function buildNote(P, o) {
-  const { x, y, w, h, color } = o;
+  const q = o.quad;
   const a = Math.max(0, Math.min(1, o.alpha == null ? 1 : o.alpha));
-  if (a <= 0.002 || w <= 0 || h <= 0) return [];
+  if (!q || a <= 0.002) return [];
   const z0 = o.z || 0;
   const glow = o.gloss !== false;
-  const r = Math.max(1.5, Math.min(o.radius == null ? 5 : o.radius, w / 2, h / 2));
+  const w = o.width, h = o.height;
+  if (w <= 0.5 || h <= 0.5) return [];
   const pr = [];
-  // ① 主体：四段渐变（顶部受光 → 中段本色 → 底部增厚压暗）
-  pr.push(P.capsule('notes', x, y, w, h, { stops: noteStops(color, { velN: o.velN, gloss: glow }), dir: 'v' },
-    { r, alpha: a * GLASS_BODY, z: z0 }));
-  if (!glow) return pr;
-  // ② 边缘亮线：玻璃最重要的一笔。用 1px 竖线贴着左右边，lighter 叠加 → 边缘比内部亮
-  const edgeA = 0.46 + 0.18 * (o.velN == null ? 0.7 : o.velN);
-  pr.push(P.line('notes', x + 0.75, y + 1.5, x + 0.75, y + h - 1.5, withAlpha('#ffffff', edgeA * a), { lw: 1.1, blend: 'lighter', z: z0 + 0.1 }));
-  pr.push(P.line('notes', x + w - 0.75, y + 1.5, x + w - 0.75, y + h - 1.5, withAlpha('#ffffff', edgeA * 0.78 * a), { lw: 1.1, blend: 'lighter', z: z0 + 0.1 }));
-  // ③ 纵向高光条：偏左的镜面反射；宽度随音符宽度走，窄音符就不画（否则整根发白）
-  const sw = Math.max(1.2, w * 0.16);
-  if (w >= 7) {
-    pr.push(P.capsule('notes', x + w * 0.13, y + Math.min(3, h * 0.12), sw, Math.max(2, h - Math.min(6, h * 0.24)),
-      withAlpha('#ffffff', 0.22 * a), { r: sw / 2, blend: 'lighter', z: z0 + 0.2 }));
+  const flat = isAxisAligned(q);
+  const velN = o.velN == null ? 0.7 : o.velN;
+
+  // ① 外光晕：管子周围的柔光。两个要点（都是实测）：
+  //   · 要**宽而淡**，窄而浓就成了厚描边；
+  //   · 要**两层**才有衰减 —— 单层矩形光晕的边界是硬的，看得出一圈"方框"。
+  if (glow) {
+    const halo = (grow, alpha, dz) => {
+      if (flat) {
+        pr.push(P.capsule('notes', q[0] - w * (grow - 1) / 2, q[1] - grow * 1.2, w * grow, h + grow * 2.4,
+          withAlpha(o.color, alpha * a), { r: Math.min(w, h) / 2, blend: 'lighter', z: z0 + dz }));
+      } else {
+        const gx = (grow - 1) / 2, gy = grow * 0.015;
+        pr.push(P.quad('notes', flat4(pt(q, -gx, -gy), pt(q, 1 + gx, -gy), pt(q, 1 + gx, 1 + gy), pt(q, -gx, 1 + gy)),
+          withAlpha(o.color, alpha * a), { blend: 'lighter', z: z0 + dz }));
+      }
+    };
+    halo(1.62, 0.05, -0.06);
+    halo(1.28, 0.075, -0.05);
   }
-  // ④ 顶部收口（光进入的面，最亮）+ 底部收口（厚度，压暗）
+  // ② 主体：四段渐变（顶部受光 → 中段本色 → 底部增厚）
+  const stops = noteStops(o.color, { velN, gloss: glow });
+  if (flat) {
+    pr.push(P.capsule('notes', q[0], q[1], w, h, { stops, dir: 'v' },
+      { r: Math.max(1.5, Math.min(o.radius == null ? 5 : o.radius, w / 2, h / 2)), alpha: a * GLASS_BODY, z: z0 }));
+  } else {
+    pr.push(P.quad('notes', q, { stops, dir: 'v' }, { alpha: a * GLASS_BODY, z: z0 }));
+  }
+  if (!glow) return pr;
+
+  // ③ 内部右侧压暗 + 纵向高光：一暗一亮的两个面 → 圆柱的体积感（参考图里管子的"圆"就是这么来的）
+  const shadeA = 0.17 * a;
+  if (flat) pr.push(P.rect('notes', q[0] + w * 0.68, q[1], w * 0.32, h, withAlpha('#000000', shadeA), { z: z0 + 0.05 }));
+  else pr.push(P.quad('notes', flat4(pt(q, 0.66, 0), pt(q, 1, 0), pt(q, 1, 1), pt(q, 0.66, 1)), withAlpha('#000000', shadeA), { z: z0 + 0.05 }));
+  const hiA = (0.26 + 0.12 * velN) * a;
+  if (flat) pr.push(P.capsule('notes', q[0] + w * 0.1, q[1] + 2, Math.max(1.4, w * 0.26), Math.max(2, h - 4), withAlpha('#ffffff', hiA),
+    { r: Math.max(0.6, w * 0.13), blend: 'lighter', z: z0 + 0.1 }));
+  else pr.push(P.quad('notes', flat4(pt(q, 0.1, 0.035), pt(q, 0.36, 0.035), pt(q, 0.36, 0.965), pt(q, 0.1, 0.965)), withAlpha('#ffffff', hiA), { blend: 'lighter', z: z0 + 0.1 }));
+
+  // ④ 折射边：玻璃最要紧的一笔，但要**细而克制**（1.1px / 微带本色），
+  //    浓白 2px 会变成卡通描边 —— 这是上一版实测的失败点
+  const edgeA = (0.42 + 0.16 * velN) * a;
+  const eL0 = pt(q, 0.015, 0.015), eL1 = pt(q, 0.015, 0.985);
+  const eR0 = pt(q, 0.985, 0.015), eR1 = pt(q, 0.985, 0.985);
+  pr.push(P.line('notes', eL0[0], eL0[1], eL1[0], eL1[1], rimColor(o.color, edgeA), { lw: 1.1, blend: 'lighter', z: z0 + 0.15 }));
+  pr.push(P.line('notes', eR0[0], eR0[1], eR1[0], eR1[1], rimColor(o.color, edgeA * 0.75), { lw: 1.1, blend: 'lighter', z: z0 + 0.15 }));
+
+  // ⑤ 顶面受光 / 底面收暗（厚度）
   if (h >= 6) {
-    pr.push(P.line('notes', x + r * 0.4, y + 0.8, x + w - r * 0.4, y + 0.8, withAlpha('#ffffff', 0.5 * a), { lw: 1.3, blend: 'lighter', z: z0 + 0.3 }));
-    pr.push(P.line('notes', x + r * 0.4, y + h - 1, x + w - r * 0.4, y + h - 1, withAlpha('#000000', 0.26 * a), { lw: 1.2, z: z0 + 0.3 }));
+    const t0 = pt(q, 0.06, 0), t1 = pt(q, 0.94, 0);
+    const b0 = pt(q, 0.06, 1), b1 = pt(q, 0.94, 1);
+    pr.push(P.line('notes', t0[0], t0[1] + 0.8, t1[0], t1[1] + 0.8, withAlpha('#ffffff', 0.6 * a), { lw: 1.6, blend: 'lighter', z: z0 + 0.2 }));
+    pr.push(P.line('notes', b0[0], b0[1] - 0.8, b1[0], b1[1] - 0.8, withAlpha('#000000', 0.3 * a), { lw: 1.4, z: z0 + 0.2 }));
   }
   return pr;
 }

@@ -4764,6 +4764,8 @@ export const I18N_MAP = {
   "强力度颜色": "High-velocity color",
   // —— 音符不透明度（琴键不透明度已移除）——
   "音符不透明度": "Note opacity",
+  "网格线": "Grid lines",
+  "键位竖线与小节线（想要干净画面、或导出叠加层时关掉）": "Key and bar lines (turn off for a clean frame or overlay export)",
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */

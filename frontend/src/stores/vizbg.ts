@@ -33,6 +33,7 @@ export const FX_ITEMS = [
   { k: 'hitLine', label: '击键光带', hint: '整条击键线随击键亮起' },
   { k: 'gloss', label: '音符质感', hint: '落点光晕 + 白热内芯 + 边缘高光' },
   { k: 'keyNames', label: '键名标注', hint: '在每个白键上标音名（跟弹学习用）' },
+  { k: 'grid', label: '网格线', hint: '键位竖线与小节线（想要干净画面、或导出叠加层时关掉）' },
 ];
 
 export const BG_MODES = [

@@ -26,6 +26,8 @@ export const BLACK_T = 0.62;
 const RAISE_BASE = 3.2;
 /** 相邻白键之间的防缝重叠（半像素级，避免共享边出现发丝缝） */
 const SEAM = 0.35;
+/** 音符能取到的最大深度（再高就截住，避免收拢过度变成一根线） */
+const DEPTH_MAX = 8;
 
 /**
  * 造一台键盘相机。返回的 px/py/quad 就是全部几何来源。
@@ -40,8 +42,10 @@ export function makeKeyboardProjection(o) {
   // 用户读成"粗暴的拉伸"）。真正的深度感主要来自**纵向透视缩短**与远端压暗，所以两者分开：
   // 横向扇形必须很小：它是"整块平面朝画布中心张开"，单键虽窄、位移却是"到中心的距离×kz"，
   // 0.30 实测仍让两侧黑键斜成 45°（用户读成"粗暴的拉伸"）。真实相机的横向收敛在这个尺寸下就该是几度。
-  const kz = persp * 0.04;              // 横向收敛：位移 = (到画布中心的距离)×kz，键深只有 ~50px，
-                                        // 所以 0.04 才对应黑键"自然倾斜"（0.16 实测斜成 45°）
+  const kz = persp * 0.07;              // 横向收敛：位移 = (到画布中心的距离)×kz。键深只有 ~50px，
+                                        // 0.04 时键只斜 5°、240px 高的音符几乎看不出收拢（用户："音符还是直的"）；
+                                        // 0.07 对应键约 11°、音符剪切约 28px —— 看得出来但不夸张。
+                                        // （0.16 那次之所以"粗暴"，主因是纵向映射写反了，不是这个系数）
   const raise = RAISE_BASE + 2.6 * persp;
   // 纵向透视缩短：**近端占的像素多、远端少**（相机在斜上方俯视）。
   // 用 1/z 的精确形式：u(t) = (1 - 1/(1+(r-1)t)) / (1 - 1/r)，u(0)=0、u(1)=1、近端导数更大。
@@ -84,6 +88,23 @@ export function makeKeyboardProjection(o) {
     /** 远端（落点线）某区间的两个端点 */
     farEdge(u0, u1) { return [px0(u0, 0), py0(0), px0(u1, 0), py0(0)]; },
     nearY: py0(1),
+    /**
+     * 音符所在深度：落点线（t=0）以上为负，越高越远。
+     * 用**线性深度**而不是 1/z 反解 —— 1/z 在落点线上方约 2.1 个键长处就会出现 z≤0 的奇点，
+     * 而屏幕上大部分音符都超过那个距离。线性深度在那里仍然良定义，且与键盘 t∈[0,1] 段完全一致。
+     */
+    depthAt(y) { return Math.max(-DEPTH_MAX, Math.min(1, (y - wN) / Math.max(1, faceH))); },
+    /**
+     * 下落音符的四边形（TL,TR,BR,BL）：横向按深度收拢向消失点，纵向就是屏幕上下沿。
+     * persp=0 时 px 恒等 → 退化成精确的竖直矩形（与旧观感一致）。
+     */
+    noteQuad(u0, u1, top, bottom) {
+      const tT = this.depthAt(top), tB = this.depthAt(bottom);
+      return [
+        px0(u0, tT), top, px0(u1, tT), top,
+        px0(u1, tB), bottom, px0(u0, tB), bottom,
+      ];
+    },
   };
 }
 
@@ -105,7 +126,8 @@ function face(P, layer, q, fill, o) {
  */
 export function buildKeyboard(P, ctx) {
   const { g, wk0, wk1, kp, keysA, WHITE_MIDI, BLACK_PC, fx } = ctx;
-  const cam = makeKeyboardProjection({ w: ctx.w, wN: ctx.wN, faceH: ctx.faceH, persp: ctx.persp });
+  // 相机可以由调用方传入（编译器的音符层要用**同一台**），否则就地新建一台
+  const cam = ctx.cam || makeKeyboardProjection({ w: ctx.w, wN: ctx.wN, faceH: ctx.faceH, persp: ctx.persp });
   const kz = cam.kz;
   // 远端压暗：深度感的一半来自明度（远处更暗），只靠几何是"斜着的平面"
   const farDark = (c) => (cam.persp > 0.001 && ctx.shade ? ctx.shade(c, -0.22 * cam.persp) : c);

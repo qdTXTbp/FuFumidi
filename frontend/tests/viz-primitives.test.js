@@ -87,6 +87,28 @@ test('★ 玻璃质感：音符带边缘亮线 / 纵向高光 / 上下收口，�
   }
 });
 
+test('★ 音符吃键盘那台相机：打开透视后音符是「上窄下宽」的四边形，落点边仍与键列对齐', () => {
+  const flat = createCompiler().compile(song, tick, { ...base, fx: { persp: 0 } });
+  const persp = createCompiler().compile(song, tick, { ...base, fx: { persp: 1 } });
+  const bodies = (r) => r.prims.filter((p) => p.layer === 'notes' && p.k === 'quad' && p.blend !== 'lighter');
+  assert.equal(bodies(flat).length, 0, 'persp=0 时音符应退化成圆角胶囊/矩形（快而准）');
+  const qs = bodies(persp);
+  assert.ok(qs.length > 0, 'persp>0 时音符必须是四边形（竖直矩形 = 用户说的"音符还是直的"）');
+  for (const q of qs) {
+    const [x0, y0, x1, , x2, y2, x3] = q.pts;
+    assert.ok(y0 < y2, '上沿应在下沿之上');
+    assert.ok(Math.abs(y0 - q.pts[3]) < 0.01 && Math.abs(y2 - q.pts[5]) < 0.01, '上下沿是水平的');
+    const wTop = x1 - x0, wBot = x2 - x3;
+    assert.ok(wTop <= wBot + 1e-6, '上面（更远）不得比下面宽：' + wTop.toFixed(2) + ' vs ' + wBot.toFixed(2));
+  }
+  // 离画布中心越远的音符，斜得越明显（透视的必然结果）；落点线处仍与键列同宽
+  const slant = (q) => Math.abs(q.pts[6] - q.pts[0]) / Math.max(1, q.pts[5] - q.pts[1]);
+  const sorted = qs.slice().sort((a, b) => Math.abs(a.pts[0] - 400) - Math.abs(b.pts[0] - 400));
+  if (sorted.length >= 2) {
+    assert.ok(slant(sorted[sorted.length - 1]) > slant(sorted[0]), '越靠边缘的音符越斜');
+  }
+});
+
 test('关掉「音符质感」= 退回一块平色（不再有玻璃亮层）', () => {
   const r = createCompiler().compile(song, tick, { ...base, fx: { gloss: false } });
   const notes = r.prims.filter((p) => p.layer === 'notes');

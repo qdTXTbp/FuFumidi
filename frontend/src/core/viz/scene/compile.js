@@ -16,7 +16,7 @@ import { noteColorOf } from '../state/colors.js';
 import { withAlpha, noteStops, shade } from '../state/palette.js';
 import * as P from './primitives.js';
 import { buildNote } from './note.js';
-import { buildKeyboard } from './keyboard.js';
+import { buildKeyboard, makeKeyboardProjection } from './keyboard.js';
 
 const DEFAULT_BUDGET = { spark: 420, ring: 60, beam: 90 };
 
@@ -81,6 +81,10 @@ export function createCompiler() {
     const g = w / span;
     const loMidi = WHITE_MIDI[wk0], hiMidi = WHITE_MIDI[wk1 - 1] + 1;
     const ps = Math.max(0, Math.min(1, fx.persp == null ? 0 : Number(fx.persp)));
+    // ★ 键盘与音符**共用一台相机**：键盘在 t∈[0,1] 段，音符在 t<0（落点线上方 = 更远）。
+    //   两边各写一套投影必然会漂移（上一版音符只是"朝中心缩一下"，所以读起来是"倾斜地下落"）。
+    const keyFaceH = Math.max(10, Math.round(x * 0.72));
+    const cam = makeKeyboardProjection({ w, wN, faceH: keyFaceH, persp: ps });
     const vpX = w / 2, kB = 1 - 0.42 * ps;
     const perspX = (px) => (ps > 0 ? vpX + (px - vpX) * kB : px);
     const energy = Math.max(0, Math.min(1, opts.energy || 0));
@@ -105,13 +109,17 @@ export function createCompiler() {
         if (wN > 0) pr.push(P.rect('background', 0, wN - h * 0.18, w, h * 0.18,
           { stops: [withAlpha(theme.stage.floor, 0), theme.stage.floor], dir: 'v' }, { z: -90 }));
       }
+      // ★ fx.grid（面板「网格线」）：键位竖线 + 小节线 + 小节编号一起开关。
+      //   想要干净的画面、或把画面当叠加层导出时，这一层是最该关掉的"辅助线"。
+      const showGrid = fx.grid !== false;
       const grid = withAlpha('#ffffff', 0.05), gridStrong = withAlpha('#ffffff', 0.10);
-      for (let i = wk0; i <= wk1; i++) {
+      for (let i = wk0; showGrid && i <= wk1; i++) {
         if ((i - 2) % 7 !== 0) continue;
         pr.push(P.line('background', Math.floor((i - wk0) * g), 0, Math.floor((i - wk0) * g), wN, grid, { z: -80 }));
       }
       const M = Math.floor(j / 120), S = Math.floor((j + wN) / 120) + 1;
-      for (let e = M; e <= S; e++) {
+      for (let e = showGrid ? M : 1; e <= S; e++) {
+        if (!showGrid) break;                       // 关掉网格时连小节编号一起收走
         const ty = wN - (120 * e - j);
         if (ty < -20 || ty > wN + 20) continue;
         pr.push(P.line('background', 30, ty, w, ty, gridStrong, { z: -70 }));
@@ -139,13 +147,10 @@ export function createCompiler() {
           const top = wN - (b.end - d) * v;
           const depth = Math.max(0, Math.min(1, (wN - bottom) / Math.max(1, wN)));
           const inset = Math.round(cwB * 0.12 * depth / 2);
-          let cw = Math.max(2, Math.floor(cwB) - inset * 2);
-          let sx = sxB + inset;
-          if (ps > 0) {                                   // 纵深向消失点收拢
-            const dk = 1 - 0.42 * ps * depth;
-            const cxx = vpX + (sx + cw / 2 - vpX) * dk;
-            cw = Math.max(2, cw * dk); sx = cxx - cw / 2;
-          }
+          const cw = Math.max(2, Math.floor(cwB) - inset * 2);
+          const sx = sxB + inset;
+          // 透视：音符的横截面按"所在高度对应的深度"收拢向消失点 —— 上窄下宽、侧边与键列同向。
+          // 落点线处 t=0 是恒等映射，所以音符永远正好落在自己那一列键上（对齐是结构保证）。
           const velN = Math.max(0, Math.min(1, (b.vel == null ? 90 : b.vel) / 127));
           const color = noteColorOf(fx, b);
           const near = Math.max(0, 1 - Math.abs(wN - bottom) / Math.max(1, wN * 0.16));
@@ -159,8 +164,11 @@ export function createCompiler() {
           }
           // 音符本体：玻璃质感（主体 + 边缘亮线 + 纵向高光 + 上下收口），见 scene/note.js
           // 不透明度受「音符不透明度」滑杆控制，再乘纵深淡出（越远越淡）
+          const quad = ps > 0.001
+            ? cam.noteQuad(sx, sx + cw, top, bottom)
+            : [sx, top, sx + cw, top, sx + cw, bottom, sx, bottom];
           const parts = buildNote(P, {
-            x: sx, y: top, w: cw, h: bh, color, radius: theme.note.radius,
+            quad, width: cw, height: bh, color, radius: theme.note.radius,
             alpha: noteAlpha * (1 - 0.5 * depth), velN, gloss, z: Math.floor(bottom),
           });
           for (const q of parts) pr.push(q);
@@ -213,14 +221,14 @@ export function createCompiler() {
     // ============================================================
     const kp = theme.keys;
     if (keysA > 0.001 && wN > 0 && opts.layers !== false) {
-      const faceH = Math.max(10, Math.round(x * 0.72));
+      const faceH = keyFaceH;
       const frontH = Math.max(6, x - faceH);
       const liveSet = new Set((opts.activeNotes || []).map((m) => m.midi));
       const decay = (map, k, step) => { const v0 = map.get(k) || 0; const nv = Math.max(0, v0 - step); if (nv > 0.02) map.set(k, nv); else map.delete(k); return nv; };
       // 键盘整体交给 scene/keyboard.js：一台相机产出全部几何，
       // 高亮/闪光/标签与键面共用同一个 quad → 透视下也严丝合缝（旧版这里用矩形叠，必然错位）
       const kb = buildKeyboard(P, {
-        w, wN, faceH, frontH, g, wk0, wk1, persp: ps, kp, keysA, WHITE_MIDI, BLACK_PC, fx, shade,
+        w, wN, faceH, frontH, g, wk0, wk1, persp: ps, cam, kp, keysA, WHITE_MIDI, BLACK_PC, fx, shade,
         state: (pitch) => {
           const act = sounding.get(pitch);
           const on = act !== undefined || liveSet.has(pitch);

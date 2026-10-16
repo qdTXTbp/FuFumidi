@@ -191,6 +191,7 @@ export function noise(n) {
 export const FX_DEFAULTS = {
   // —— 开关（面板里是勾选项）——
   keys3d: true, particles: true, beams: true, hitLine: true, gloss: true, keyNames: false,
+  grid: true,        // 键位竖线 + 小节线 + 小节编号（想要干净画面就关掉）
   // —— 参数（面板里是滑块）——
   // D2 决定**不做固定档位**，改成用户可调：这些值就是那套"档位"的自由形式。
   persp: 0,          // 键盘透视强度 0..1（0 = 平板键，与 Synthesia/SeeMusic 同路线）。
