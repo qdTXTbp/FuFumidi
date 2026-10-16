@@ -48,12 +48,15 @@ Write-Host "==> 恢复 guest 网卡链路" -ForegroundColor Cyan
 Start-Sleep -Seconds 5
 
 $b = Step "l3-02-post" "l3-02-post-520.ps1"
+# ★ 逐模型实跑（用户要求）：模型"装上了"不等于"跑得动"——
+#   Aria-AMT 需要 CUDA、wheel 可能与运行时 ABI 不匹配，只有真跑一次才知道。
+$m = Step "l3-05-models" "l3-09-models.ps1"
 $c = Step "l3-03-launch" "l3-06-launch-app.ps1"
 $d = Step "l3-04-uninstall" "l3-07-uninstall-keep-data.ps1"
 
 Write-Host ""
 Write-Host "==== 关键断言 ====" -ForegroundColor Cyan
-foreach ($kv in @("offline.verified", "installer.exitCode", "after.version", "mel.exists", "updater.sha256", "registry.entries", "cdp.ready", "data.before.fileCount", "marker.survived", "after.exe.exists")) {
+foreach ($kv in @("offline.verified", "installer.exitCode", "after.version", "mel.exists", "updater.sha256", "registry.entries", "cdp.ready", "data.before.fileCount", "marker.survived", "after.exe.exists", "model.audio", "model.torch", "model.universal_basic.ok", "model.universal_muscriptor.ok", "model.piano_pt.ok", "model.piano_transkun.ok", "model.piano_aria.ok")) {
   $hit = (Select-String -Path (Join-Path $OutDir "*.txt") -Pattern ("^" + [regex]::Escape($kv) + " = ") | Select-Object -Last 1)
   if ($hit) { Write-Host ("  " + $hit.Line) }
 }
