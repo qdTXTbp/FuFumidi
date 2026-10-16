@@ -11,9 +11,11 @@
 //   buildVizBlocks / visibleRange / ensurePm / WHITE_MIDI / pitchGeom / whiteIndexOf / noise
 // ============================================================
 import { buildVizBlocks, visibleRange, ensurePm, WHITE_MIDI, whiteIndexOf, pitchGeom, noise, BLACK_PC } from '../../viz.js';
-import { resolveTheme, noteColor } from '../state/themes.js';
+import { resolveTheme } from '../state/themes.js';
+import { noteColorOf } from '../state/colors.js';
 import { withAlpha, noteStops, shade } from '../state/palette.js';
 import * as P from './primitives.js';
+import { buildKeyboard } from './keyboard.js';
 
 const DEFAULT_BUDGET = { spark: 420, ring: 60, beam: 90 };
 
@@ -125,7 +127,7 @@ export function createCompiler() {
         const rng = visibleRange(arr, d, visSec);
         if (rng.from >= arr.length) continue;
         const head = arr[rng.from];
-        if (head.start <= d) sounding.set(pitch, noteColor(theme, fx.colorBy, head, opts.colorScheme || 0));
+        if (head.start <= d) sounding.set(pitch, noteColorOf(fx, head));
         for (let k = rng.from; k < rng.to; k++) {
           const b = arr[k];
           const { sx: sxB, cw: cwB } = pitchGeom(pitch, ensurePm(), g, wk0);
@@ -141,17 +143,20 @@ export function createCompiler() {
             cw = Math.max(2, cw * dk); sx = cxx - cw / 2;
           }
           const velN = Math.max(0, Math.min(1, (b.vel == null ? 90 : b.vel) / 127));
-          const color = noteColor(theme, fx.colorBy, b, opts.colorScheme || 0);
+          const color = noteColorOf(fx, b);
           const near = Math.max(0, 1 - Math.abs(wN - bottom) / Math.max(1, wN * 0.16));
           const bh = Math.max(bottom - top, 5);
-          if (near > 0.02) {                              // 落点光晕
+          // ★ fx.gloss（面板「音符质感」）必须真的接上：上一版它只是个没人读的开关（实测死控件）。
+          //   接上后它管三件事：落点光晕、白热内芯、边缘高光。
+          const gloss = fx.gloss !== false;
+          if (gloss && near > 0.02) {                     // 落点光晕
             pr.push(P.glow('notes', sx + cw / 2, Math.min(bottom, wN), 0, Math.max(7, cw * 0.9),
               color, { alpha: 0.5 * near * (0.5 + 0.5 * velN), blend: 'lighter' }));
           }
           pr.push(P.capsule('notes', sx, top, cw, bh,
-            { stops: noteStops(color, { velN }), dir: 'v' },
+            { stops: noteStops(color, { velN, gloss }), dir: 'v' },
             { r: Math.max(2, Math.min(theme.note.radius, cw / 2, bh / 2)), alpha: 1 - 0.5 * depth, z: Math.floor(bottom) }));
-          if (theme.note.edge > 0) {
+          if (gloss && theme.note.edge > 0) {
             pr.push(P.line('notes', sx + 2, Math.min(bottom, wN) - 1, sx + cw - 2, Math.min(bottom, wN) - 1,
               withAlpha('#ffffff', theme.note.edge * (1 - depth) * (0.5 + 0.5 * velN)), { lw: 1.4, z: Math.floor(bottom) + 1 }));
           }
@@ -177,7 +182,7 @@ export function createCompiler() {
       for (const b of hits) {
         const { sx: sxB, cw: cwB } = pitchGeom(b.pitch, ensurePm(), g, wk0);
         const velN = Math.max(0, Math.min(1, (b.vel == null ? 90 : b.vel) / 127));
-        const color = noteColor(theme, fx.colorBy, b, opts.colorScheme || 0);
+        const color = noteColorOf(fx, b);
         const cx = sxB + cwB / 2;
         state.hitPulse = 1;
         if (fx.flash > 0) state.keyFlash.set(b.pitch, 1);
@@ -199,50 +204,23 @@ export function createCompiler() {
     // ============================================================
     const kp = theme.keys;
     if (keysA > 0.001 && wN > 0 && opts.layers !== false) {
-      const topH = Math.max(10, Math.round(x * 0.72));
-      const bkH = Math.floor(0.6 * topH), bkFront = Math.round(x * 0.34);
+      const faceH = Math.max(10, Math.round(x * 0.72));
+      const frontH = Math.max(6, x - faceH);
       const liveSet = new Set((opts.activeNotes || []).map((m) => m.midi));
       const decay = (map, k, step) => { const v0 = map.get(k) || 0; const nv = Math.max(0, v0 - step); if (nv > 0.02) map.set(k, nv); else map.delete(k); return nv; };
-      for (let i = wk0; i < wk1; i++) {
-        const pitch = WHITE_MIDI[i];
-        const px = Math.floor((i - wk0) * g), pw = Math.floor(g);
-        const act = sounding.get(pitch);
-        const on = act !== undefined || liveSet.has(pitch);
-        const gv = on ? 1 : decay(state.keyGlow, pitch, 0.09);
-        const fv = fx.flash > 0 ? decay(state.keyFlash, pitch, 0.14) : 0;
-        const kh = Math.max(6, topH - Math.round(4 * gv));
-        const bx0 = perspX(px), bx1 = perspX(px + pw);
-        if (ps > 0) pr.push(P.quad('keyboard', [bx0, wN, bx1, wN, px + pw, wN + kh, px, wN + kh], { stops: [kp.wkTop, kp.wkBot], dir: 'v' }, { alpha: keysA, z: i }));
-        else pr.push(P.rect('keyboard', px, wN, pw, kh, { stops: [kp.wkTop, kp.wkBot], dir: 'v' }, { alpha: keysA, r: [0, 0, 4, 4], z: i }));
-        pr.push(P.rect('keyboard', px, wN + kh, pw, x - kh, { stops: [kp.wkFrontTop, kp.wkFrontBot], dir: 'v' }, { alpha: keysA, z: i }));
-        pr.push(P.line('keyboard', px + 0.5, wN + 0.5, px + pw - 0.5, wN + 0.5, kp.wkEdge, { lw: 1, alpha: keysA, z: 1000 + i }));
-        if (gv > 0.02) {
-          const keyColor = act !== undefined ? act : withAlpha('#ffffff', 0.5);
-          if (fx.beams !== false) pr.push(P.beam('impact', px + pw / 2, wN, pw, 40 + 92 * gv, keyColor, { alpha: 0.26 * gv, blend: 'lighter' }));
-          pr.push(P.rect('keyboard', px, wN, pw, kh, keyColor, { alpha: gv * keysA * 0.85, r: [0, 0, 4, 4], z: 2000 + i }));
-        }
-        if (fv > 0.02) pr.push(P.rect('keyboard', px, wN, pw, kh, '#ffffff', { alpha: Math.min(0.72, fv * fx.flash) * keysA, r: [0, 0, 4, 4], z: 3000 + i }));
-        if (pitch % 12 === 0) pr.push(P.text('keyboard', 'C' + (pitch / 12 - 1), px + 4, h - 5, kp.ink, { size: 10, alpha: keysA, z: 4000 + i }));
-      }
-      for (let i = wk0; i < wk1; i++) {
-        const pitch = WHITE_MIDI[i] + 1;
-        if (!BLACK_PC.includes(pitch % 12)) continue;
-        const bx = Math.floor((i - wk0 + 1) * g - 0.35 * g), bw = Math.floor(0.7 * g);
-        const act = sounding.get(pitch);
-        const on = act !== undefined || liveSet.has(pitch);
-        const gv = on ? 1 : decay(state.keyGlow, pitch, 0.09);
-        const fv = fx.flash > 0 ? decay(state.keyFlash, pitch, 0.14) : 0;
-        const bh = Math.max(6, bkH - Math.round(4 * gv));
-        if (ps > 0) pr.push(P.quad('keyboard', [perspX(bx), wN, perspX(bx + bw), wN, bx + bw, wN + bh, bx, wN + bh], { stops: [kp.bkTop, kp.bkBot], dir: 'v' }, { alpha: keysA, z: 100 + i }));
-        else pr.push(P.rect('keyboard', bx, wN, bw, bh, { stops: [kp.bkTop, kp.bkBot], dir: 'v' }, { alpha: keysA, r: [0, 0, 2, 2], z: 100 + i }));
-        pr.push(P.rect('keyboard', bx, wN + bh, bw, bkFront, { stops: [kp.bkFrontTop, kp.bkFrontBot], dir: 'v' }, { alpha: keysA, z: 100 + i }));
-        if (gv > 0.02) pr.push(P.rect('keyboard', bx, wN, bw, bh, act !== undefined ? act : '#0a0a0a', { alpha: gv * keysA, r: [0, 0, 2, 2], z: 2100 + i }));
-        if (fv > 0.02) pr.push(P.rect('keyboard', bx, wN, bw, bh, '#ffffff', { alpha: Math.min(0.6, fv * fx.flash) * keysA, r: [0, 0, 2, 2], z: 3100 + i }));
-        if (fx.keyNames && bw >= 14) {
-          const NN = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-          pr.push(P.text('keyboard', NN[pitch % 12] + (Math.floor(pitch / 12) - 1), bx + bw / 2, wN + kh0(kp, x) + 9, kp.ink, { size: 9, align: 'center', alpha: keysA }));
-        }
-      }
+      // 键盘整体交给 scene/keyboard.js：一台相机产出全部几何，
+      // 高亮/闪光/标签与键面共用同一个 quad → 透视下也严丝合缝（旧版这里用矩形叠，必然错位）
+      const kb = buildKeyboard(P, {
+        w, wN, faceH, frontH, g, wk0, wk1, persp: ps, kp, keysA, WHITE_MIDI, BLACK_PC, fx, shade,
+        state: (pitch) => {
+          const act = sounding.get(pitch);
+          const on = act !== undefined || liveSet.has(pitch);
+          const gv = on ? 1 : decay(state.keyGlow, pitch, 0.09);
+          const fv = (fx.flash || 0) > 0 ? decay(state.keyFlash, pitch, 0.14) : 0;
+          return { gv, fv, color: act !== undefined ? act : withAlpha('#ffffff', 0.5) };
+        },
+      });
+      for (const q of kb.prims) pr.push(q);
     }
 
     // 波纹（半圆鼓包简化成键线上的小发光）

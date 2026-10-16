@@ -55,5 +55,7 @@ export function noteStops(color, opts = {}) {
   // ★ 提亮要克制：内芯提太多 + 泛光叠加会把音符推成白块（重做后第一版实测霓虹档整条糊白）。
   //   参考实现里"亮"来自轮廓与光晕，不是把填充色刷白。
   const k = opts.velN == null ? 0.7 : opts.velN;
+  // 「音符质感」关掉时给一块平的色块（没有白热内芯，只在底部收一道暗边）
+  if (opts.gloss === false) return [color, color, color, shade(color, -0.22)];
   return [shade(color, 0.10 + 0.10 * k), shade(color, 0.04 + 0.07 * k), color, shade(color, -0.28)];
 }

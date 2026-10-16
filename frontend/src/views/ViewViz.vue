@@ -13,12 +13,13 @@ import Icon from '../components/Icon.vue';
 //   旧的 core/viz.js 仍提供 timeline/几何与单测用的纯函数。
 import { drawVizWaterfallPost } from '../core/viz/index.js';
 import { rmsFromBytes, smoothEnergy, FX_DEFAULTS } from '../core/viz.js';
+// 配色：取色方式 / 预设 / 参数范围都来自 state/colors.js（与渲染层同一份，不在 UI 里另写一遍）
+import { COLOR_MODES, COLOR_PRESETS, COLOR_PARAMS } from '../core/viz/state/colors.js';
 import { t } from '../core/i18n.js';
 import NumSlider from '../components/NumSlider.vue';
 
 const mode = ref('dash'); // 'dash' | 'waterfall'
 const wfZoom = ref(1);
-const colorScheme = ref(0);
 const immersive = ref(false);
 
 /* ---------------- 音符瀑布的背景 ----------------
@@ -34,9 +35,40 @@ const bg = vizBg.bg;                // reactive，模板与绘制都直接读它
 const bgMore = ref(false);          // 设置条是否展开：纯 UI 状态，不进 store
 const fxMore = ref(false);          // 视效条是否展开：同上（开关本身住在 store）
 const fxItems = vizBg.FX_ITEMS;     // 视效开关清单（顺序即界面顺序）
-// 配色档名（与 core/viz.js 的 blockColor 一一对应）：
-// 0 用轨道色；1/2/3 都按音高推导 HSL，只是色相步长/饱和度/明度不同
-const COLOR_SCHEMES = ['轨道色', '按音高·七彩', '按音高·暖', '按音高·冷'];
+/* ---------------- 配色（2026-10-17 推倒重做） ----------------
+   旧版有两行互相压制的控件：选了"按音高"之后，"配色档"就整排失效；
+   而且"按音高/按左右手"返回 hsl() 字符串，在 GPU 路径上解析不出来 → 全部变白。
+   现在拆成两条正交轴：**取色方式**（色相从哪来）× **调色参数**（基准/跨度/旋转/饱和/亮度），
+   预设只是往参数里填一组值，填完还能继续拖 —— 所以每个控件都必然改变画面。 */
+const colorMode = computed(() => (bg.fx && bg.fx.colorMode) || (bg.fx && bg.fx.colorBy) || 'track');
+const colorPreset = computed(() => (bg.fx && bg.fx.preset) || 'rainbow');
+// 色相基准/跨度只在"按音高"下参与取色；其余模式下这两条不显示，免得出现"拖了没反应"的死控件
+const colorParams = computed(() => COLOR_PARAMS.filter((p) => colorMode.value === 'pitch' || (p.k !== 'hueBase' && p.k !== 'hueSpan')));
+function fxColor(k) {
+  const cur = bg.fx ? bg.fx[k] : undefined;
+  return typeof cur === 'string' ? cur : FX_DEFAULTS[k];
+}
+function applyColorPreset(p) {
+  vizBg.setFxAny('preset', p.k);
+  vizBg.setFxAny('hueBase', p.hueBase);
+  vizBg.setFxAny('hueSpan', p.hueSpan);
+  vizBg.setFxAny('satAdj', p.satAdj);
+  vizBg.setFxAny('lightAdj', p.lightAdj);
+  // 预设调的是色相参数，只有"按音高"会用到它们 → 自动切过去，点了就一定看得见变化
+  if (colorMode.value !== 'pitch') vizBg.setFxAny('colorMode', 'pitch');
+}
+function resetColors() {
+  vizBg.setFxAny('colorMode', 'track');
+  vizBg.setFxAny('hueBase', 0);
+  vizBg.setFxAny('hueSpan', 330);
+  vizBg.setFxAny('hueShift', 0);
+  vizBg.setFxAny('satAdj', 0);
+  vizBg.setFxAny('lightAdj', 0);
+  vizBg.setFxAny('handL', '#4f8dff');
+  vizBg.setFxAny('handR', '#ff7a3d');
+  vizBg.setFxAny('velLow', '#2f6fd0');
+  vizBg.setFxAny('velHigh', '#ff5530');
+}
 const fxThemeInput = ref('');        // 自定义主题名（D8：命名交给用户）
 // 参数滑块的当前值（bg.fx 可能还没这批键 —— store 首次读写会补默认）
 function fxNum(k) {
@@ -214,7 +246,6 @@ function drawRoll(ctx2d, c, u, syn, song, player) {
   drawVizWaterfallPost(ctx2d, c, u, song, tick, {
     state: rollState,
     zoom: wfZoom.value,
-    colorScheme: colorScheme.value,
     showLyrics: true,
     lyricAt: '',
     activeNotes: syn && syn.activeNow ? syn.activeNow() : [],
@@ -355,14 +386,13 @@ function loadPrefs() {
     const s = JSON.parse(localStorage.getItem(LS_VIZ) || 'null');
     if (!s) return;
     if (typeof s.zoom === 'number' && isFinite(s.zoom)) wfZoom.value = Math.min(3, Math.max(0.4, s.zoom));
-    if (typeof s.colorScheme === 'number') colorScheme.value = ((Math.round(s.colorScheme) % 4) + 4) % 4;
     if (s.mode === 'dash' || s.mode === 'waterfall') mode.value = s.mode;
   } catch (e) {}
 }
 function savePrefs() {
-  try { localStorage.setItem(LS_VIZ, JSON.stringify({ zoom: wfZoom.value, colorScheme: colorScheme.value, mode: mode.value })); } catch (e) {}
+  try { localStorage.setItem(LS_VIZ, JSON.stringify({ zoom: wfZoom.value, mode: mode.value })); } catch (e) {}
 }
-watch([wfZoom, colorScheme, mode], savePrefs);
+watch([wfZoom, mode], savePrefs);
 
 onMounted(() => {
   loadPrefs();
@@ -467,16 +497,40 @@ onBeforeUnmount(() => {
             <button v-for="f in fxItems" :key="f.k" class="chip-btn"
                     :class="{ active: !!(bg.fx && bg.fx[f.k]) }" :title="t(f.hint)"
                     @click="vizBg.setFx(f.k, !(bg.fx && bg.fx[f.k]))">{{ t(f.label) }}</button>
-            <span class="muted small" style="margin-left:6px">{{ t('配色') }}</span>
-            <!-- 配色档（colorScheme，4 档按音高推导）；分色档（colorBy）见右侧 -->
-            <button v-for="(nm, i) in COLOR_SCHEMES" :key="i" class="chip-btn"
-                    :class="{ active: (bg.fx ? bg.fx.colorBy : 'track') === 'track' && colorScheme === i }"
-                    :title="t('按音高推导的配色档')" @click="vizBg.setFxAny('colorBy', 'track'); colorScheme = i">{{ t(nm) }}</button>
-            <span class="muted small" style="margin-left:6px">{{ t('分色') }}</span>
-            <button v-for="cb in vizBg.FX_COLORBY" :key="cb.k" class="chip-btn"
-                    :class="{ active: (bg.fx ? bg.fx.colorBy : 'track') === cb.k }"
-                    :title="t('按左右手分色：左手冷色 / 右手暖色（音高低于 C4 视为左手）')"
-                    @click="vizBg.setFxAny('colorBy', cb.k)">{{ t(cb.label) }}</button>
+            <span class="muted small" style="margin-left:6px">{{ t('取色') }}</span>
+            <button v-for="m in COLOR_MODES" :key="m.k" class="chip-btn"
+                    :class="{ active: colorMode === m.k }"
+                    :title="t('色相从哪来')" @click="vizBg.setFxAny('colorMode', m.k)">{{ t(m.label) }}</button>
+            <span class="muted small" style="margin-left:6px">{{ t('配色预设') }}</span>
+            <button v-for="cp in COLOR_PRESETS" :key="cp.k" class="chip-btn"
+                    :class="{ active: colorPreset === cp.k }"
+                    :title="t('填一组色相参数，填完还能继续拖滑块')" @click="applyColorPreset(cp)">{{ t(cp.label) }}</button>
+            <template v-if="colorMode === 'hand'">
+              <span class="muted small" style="margin-left:6px">{{ t('左手') }}</span>
+              <input type="color" class="viz-color" :value="fxColor('handL')" :aria-label="t('左手颜色')"
+                     @input="vizBg.setFxAny('handL', $event.target.value)">
+              <span class="muted small">{{ t('右手') }}</span>
+              <input type="color" class="viz-color" :value="fxColor('handR')" :aria-label="t('右手颜色')"
+                     @input="vizBg.setFxAny('handR', $event.target.value)">
+            </template>
+            <template v-else-if="colorMode === 'vel'">
+              <span class="muted small" style="margin-left:6px">{{ t('弱') }}</span>
+              <input type="color" class="viz-color" :value="fxColor('velLow')" :aria-label="t('弱力度颜色')"
+                     @input="vizBg.setFxAny('velLow', $event.target.value)">
+              <span class="muted small">{{ t('强') }}</span>
+              <input type="color" class="viz-color" :value="fxColor('velHigh')" :aria-label="t('强力度颜色')"
+                     @input="vizBg.setFxAny('velHigh', $event.target.value)">
+            </template>
+          </div>
+          <div class="viz-bg-bar">
+            <span class="muted small">{{ t('调色') }}</span>
+            <template v-for="p in colorParams" :key="p.k">
+              <span class="muted small">{{ t(p.label) }}</span>
+              <NumSlider :model-value="fxNum(p.k)" @update:model-value="v2 => vizBg.setFxAny(p.k, +v2)"
+                         :min="p.min" :max="p.max" :step="p.step" range-style="width:74px" :input-width="54" no-input />
+            </template>
+            <span style="flex:1"></span>
+            <button class="chip-btn" :title="t('配色参数回到默认（取色方式=轨道色）')" @click="resetColors">{{ t('配色重置') }}</button>
           </div>
         </template>
         <div class="vc-body" :class="{ 'bd-canvas': bg.mode === 'transparent' }">

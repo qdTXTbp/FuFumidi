@@ -66,8 +66,11 @@ void main() {
   float a = vAlpha;
   if (kind < 2.5) {                       // 0 矩形 / 2 胶囊：圆角盒 SDF（覆盖度≈面积，与 canvas 的解析 AA 对齐）
     vec2 hp = vSize * 0.5;
-    float r = min(vShape.y, min(hp.x, hp.y));
-    vec2 q = abs(vUV * vSize - hp) - (hp - r);
+    vec2 c = vUV * vSize - hp;            // 居中坐标（y 向下为正）
+    // ★ canvas 的 r 可以是 [TL,TR,BR,BL] 四个角；这里按上/下两组取（键面就是"上直角+下圆角"）。
+    //   旧实现把数组直接乘进 shape 得到 NaN，SDF 退化成整块药丸 —— 键盘就是这么被"割裂"的。
+    float r = min(c.y > 0.0 ? vShape.z : vShape.y, min(hp.x, hp.y));
+    vec2 q = abs(c) - (hp - r);
     float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
     a *= clamp(0.5 - d, 0.0, 1.0);
     col = grad(vShape.w > 0.5 ? vUV.x : vUV.y);
@@ -102,6 +105,8 @@ void main() {
   outColor = vec4(col.rgb, col.a * a);
 }`;
 
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+
 export const GL_KINDS = { rect: 0, quad: 1, capsule: 2, glow: 3, ring: 4, beam: 5, line: 6 };
 export const GL_STRIDE = 29;
 
@@ -115,6 +120,17 @@ function parseColor(c) {
   if (m) {
     const q = m[1].split(',').map((v) => parseFloat(v));
     return [(q[0] || 0) / 255, (q[1] || 0) / 255, (q[2] || 0) / 255, q.length > 3 ? (q[3] == null ? 1 : q[3]) : 1];
+  }
+  // hsl()/hsla()：Canvas2D 的 fillStyle 原生支持，WebGL 这边必须自己算 ——
+  // 缺了这一段，"按音高/按左右手"返回的 hsl 颜色在 GPU 路径会静默变成白色（实测踩过）。
+  m = /^hsla?\(([^)]+)\)$/i.exec(s);
+  if (m) {
+    const q = m[1].split(',').map((v) => parseFloat(v));
+    const h = (((q[0] || 0) % 360) + 360) % 360 / 360, sat = clamp(q[1] == null ? 60 : q[1], 0, 100) / 100, l = clamp(q[2] == null ? 55 : q[2], 0, 100) / 100;
+    const hue2 = (p, qq, t) => { if (t < 0) t += 1; if (t > 1) t -= 1; if (t < 1 / 6) return p + (qq - p) * 6 * t; if (t < 1 / 2) return qq; if (t < 2 / 3) return p + (qq - p) * (2 / 3 - t) * 6; return p; };
+    const q2 = l < 0.5 ? l * (1 + sat) : l + sat - l * sat, p2 = 2 * l - q2;
+    const r = sat < 1e-6 ? l : hue2(p2, q2, h + 1 / 3), g = sat < 1e-6 ? l : hue2(p2, q2, h), b = sat < 1e-6 ? l : hue2(p2, q2, h - 1 / 3);
+    return [r, g, b, q.length > 3 ? (q[3] == null ? 1 : q[3]) : 1];
   }
   return [1, 1, 1, 1];
 }
@@ -139,6 +155,20 @@ export function sampleFill(fill) {
 }
 
 const blendOf = (b) => (b === 'lighter' ? 'lighter' : b === 'multiply' ? 'multiply' : 'normal');
+
+/**
+ * 圆角解析：number → [上, 下]；canvas 的 [TL,TR,BR,BL] → [max(TL,TR), max(BR,BL)]。
+ * 返回**设备像素**下的两个半径（SDF 只支持"上下两组"，键面正是这种形状）。
+ */
+export function radiiOf(r, w, h, scale) {
+  const s = scale || 1;
+  const lim = Math.min(Math.abs(w), Math.abs(h)) / 2;
+  const cl = (v) => Math.max(0, Math.min(Number(v) || 0, lim)) * s;
+  if (Array.isArray(r)) return [Math.max(cl(r[0]), cl(r[1])), Math.max(cl(r[2]), cl(r[3]))];
+  if (r == null) return null;
+  const v = cl(r);
+  return [v, v];
+}
 
 /**
  * 打包图元 → 交错实例数据 + 混合模式分段（纯函数，可直接单测）。
@@ -210,8 +240,11 @@ export function packPrims(prims, pw, ph, scale) {
       put(q[0] * s, q[1] * s, q[2] * s, q[3] * s, q[4] * s, q[5] * s, q[6] * s, q[7] * s, stops, [1, 0, 0, F.dir], a);
       continue;
     }
-    const rad = K === 2 ? (p.r == null ? Math.min(p.w, p.h) / 2 : p.r) : (p.r || 0);
-    put(p.x * s, p.y * s, (p.x + p.w) * s, p.y * s, (p.x + p.w) * s, (p.y + p.h) * s, p.x * s, (p.y + p.h) * s, stops, [K, rad * s, 0, F.dir], a);
+    // 圆角：number 或 canvas 的 [TL,TR,BR,BL]；胶囊默认半高（药丸）
+    let rt, rb;
+    if (K === 2 && p.r == null) { const v = Math.min(Math.abs(p.w), Math.abs(p.h)) / 2 * s; rt = v; rb = v; }
+    else { const rr = radiiOf(p.r, p.w, p.h, s) || [0, 0]; rt = rr[0]; rb = rr[1]; }
+    put(p.x * s, p.y * s, (p.x + p.w) * s, p.y * s, (p.x + p.w) * s, (p.y + p.h) * s, p.x * s, (p.y + p.h) * s, stops, [K, rt, rb, F.dir], a);
   }
   if (cur !== null && n > runStart) runs.push({ blend: cur, start: runStart, count: n - runStart });
   return { data, count: n, runs };

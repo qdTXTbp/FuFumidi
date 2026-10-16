@@ -15,6 +15,7 @@
 // → post（着色器后处理），唯一入口是 core/viz/index.js 的门面。
 // ============================================================
 import { TRACK_COLORS } from './util.js';
+import { COLOR_DEFAULTS, COLOR_MODES, COLOR_PRESETS, COLOR_PARAMS } from './viz/state/colors.js';
 import { t } from './i18n.js';
 
 function cssVar(name, fb) {
@@ -192,13 +193,16 @@ export const FX_DEFAULTS = {
   keys3d: true, particles: true, beams: true, hitLine: true, gloss: true, keyNames: false,
   // —— 参数（面板里是滑块）——
   // D2 决定**不做固定档位**，改成用户可调：这些值就是那套"档位"的自由形式。
-  persp: 0.45,       // 键盘透视强度 0..1（0 = 平板键；D6「尝试做」的那一项）
+  persp: 0,          // 键盘透视强度 0..1（0 = 平板键，与 Synthesia/SeeMusic 同路线）。
+                     // 3D 只做"温和倾斜"：横向扇形很小、纵向 1/z 缩短 + 远端压暗 + 黑键前脸。
+                     // 2026-10-17：默认从 0.45 改回 0 —— 上一版的大扇形被用户判为"粗暴的拉伸"。
   bloom: 0.55,       // 后处理泛光强度 0..1.2
   bloomThr: 0.5,     // 泛光阈值 0..1（越大只有最亮的地方发光）
   flash: 0.7,        // 击键闪光 0..1.5（借 MIDIVisualizer 的 --flashes-size）
   partScale: 1,      // 粒子数量倍率 0.3..1.6
   glow: 1,           // 光柱/发光强度倍率 0.4..1.6
-  colorBy: 'track',  // 'track' 轨道色 | 'pitch' 按音高 | 'hand' 按左右手（D5）
+  // 配色：取色方式 + 参数（色相/跨度/旋转/饱和/亮度/手色）全在 state/colors.js，这里是单一来源的并入
+  ...COLOR_DEFAULTS,
   keysOn: true,      // 显示琴键（关掉 = 只留音符与光效，给叠加层用）
   keysAlpha: 1,      // 琴键不透明度 0..1（用户点名要的"让琴键透明"）
 };
@@ -213,11 +217,9 @@ export const FX_PARAMS = [
   { k: 'glow', label: '光柱强度', min: 0.4, max: 1.6, step: 0.05 },
   { k: 'keysAlpha', label: '琴键不透明度', min: 0, max: 1, step: 0.05 },
 ];
-export const FX_COLORBY = [
-  { k: 'track', label: '按轨道色' },
-  { k: 'pitch', label: '按音高' },
-  { k: 'hand', label: '按左右手' },
-];
+// 配色元数据由 state/colors.js 提供（单一来源）：取色方式 / 预设 / 参数范围
+export const FX_COLORBY = COLOR_MODES;
+export { COLOR_MODES, COLOR_PRESETS, COLOR_PARAMS, COLOR_DEFAULTS };
 
 /* 内置主题：名字与数值都在这里，用户保存的自定义主题由 store 合并进来（D8：命名交给用户） */
 
