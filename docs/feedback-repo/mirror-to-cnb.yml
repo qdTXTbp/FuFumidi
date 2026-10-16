@@ -1,0 +1,42 @@
+name: mirror-to-cnb
+
+# 每次往 main 推一个文件（含 App 上传的反馈 md），就同步到 CNB 镜像仓库。
+# 为什么不用"worker 直接写 CNB"：CNB 的 OpenAPI 里**没有创建提交的端点**
+# （只有 blobs / branches / 上传资产，实测 swagger 199 个端点），worker 无法自己写进 git。
+# 所以选「GitHub 为唯一写入点 + 这条 Action 推 CNB」——两边内容始终一致。
+#
+# 需要在仓库 Settings → Secrets and variables → Actions 里加一个 secret：
+#   CNB_TOKEN = CNB 访问令牌（cnb.cool/profile/token）
+# 没配这个 secret 时本工作流直接跳过（不会失败）。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Push to CNB mirror
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          set -e
+          if [ -z "$CNB_TOKEN" ]; then
+            echo "CNB_TOKEN 未配置，跳过镜像（在仓库 Settings → Secrets 里加上即可）"
+            exit 0
+          fi
+          git config user.name  "FuFumidi mirror"
+          git config user.email "mirror@fufumidi.local"
+          # 令牌不进 URL（避免失败时被日志回显），改用 Authorization 头
+          AUTH="$(printf 'cnb:%s' "$CNB_TOKEN" | base64 -w0)"
+          git -c http.extraheader="Authorization: Basic $AUTH" \
+              push --force https://cnb.cool/FuFuCloud-mirror/FuFumidi-Feedback.git HEAD:main
+          echo "已同步到 https://cnb.cool/FuFuCloud-mirror/FuFumidi-Feedback"

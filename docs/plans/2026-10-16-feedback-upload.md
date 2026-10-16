@@ -12,7 +12,7 @@
 |---|---|---|
 | 决策 D1/D2 | ✅ 已定 | 仓库叫 **FuFumidi-Feedback**（公开、只有维护者可写）；CNB 走**镜像** |
 | GitHub 反馈仓库 | ✅ **已建** | github.com/qdTXTbp/FuFumidi-Feedback（公开、Issues 开）；已推 README / 3 套 issue 模板 / config.yml / .gitattributes / issues/README.md，**32 个标签**（kind·area·severity·source） |
-| CNB 反馈仓库 | ⬜ **需要你在 UI 建** | 建仓与镜像**都不在 CNB OpenAPI 里**（swagger 共 199 个端点，无建仓/镜像）；push-to-create 实测报 Repository Not Found。手动步骤见文末 |
+| CNB 反馈仓库 | ✅ **已建并通了镜像** | 你先在建了空仓库；建仓/镜像都不在 CNB OpenAPI 里，所以用 git push 播了种。**CNB OpenAPI 也没有"创建提交"端点**（只有 blobs/branches/资产上传），worker 无法自己写 CNB → 改成「GitHub 为唯一写入点 + GitHub Action 推 CNB」。实测**两边 main 头哈希一致**（a435b3be437d），Action 两次 run 均 success。搭建与排查见 docs/feedback-repo/README.md |
 | worker 反馈路由 | ✅ 代码+单测完成 · ⏳ **未部署** | 新增 cloud-sync/worker/src/feedback.js（Turnstile / 体积 / 路径白名单 / 限流 → 附件进 R2 → md 走 GitHub Contents API → 可选建 issue），index.js 接 POST /feedback 与 GET /feedback/att/:id/:name，新增迁移 0003_feedback.sql；**9 项离线单测全过**。本机没有 wrangler、也没有 CF 登录态 → 部署要你跑（见文末） |
 | 客户端脱敏与打包 | ✅ 代码+单测完成 | 新增 main/feedback-format.js（slug / 文件名 / md 模板 / 脱敏 / 设置洗白 / 日志截断）；npm run test:feedback **9 项全过**（含隐私 golden） |
 | 反馈页 UI | ⬜ 待做 | 字段与交互按 §5 |
