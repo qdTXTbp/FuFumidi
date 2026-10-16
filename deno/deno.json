@@ -1,0 +1,11 @@
+{
+  "name": "@fufumidi/feedback-service",
+  "version": "1.0.0",
+  "exports": "./feedback.ts",
+  "tasks": {
+    "test": "deno test --allow-net --allow-env --allow-read feedback_test.ts"
+  },
+  "fmt": {
+    "lineWidth": 120
+  }
+}

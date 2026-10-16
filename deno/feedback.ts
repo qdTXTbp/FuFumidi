@@ -1,7 +1,12 @@
 // ============================================================
 // 问题反馈后端（Deno Deploy 版）
 //
-// 为什么有这一份：Cloudflare 那条路走不通 ——
+// ⚠️ 2026-10-16 结论：**这份代码已废弃，别再往 Deno Deploy 部署** ——
+//   Cloudflare 收购 Deno 团队后 Deno Deploy 停止服务，新账号注册返回 403 SIGNUP_UNAVAILABLE。
+//   保留它是因为它验证了「附件走 GitHub Release 资产 + PAT 写 Contents API」这套协议可用，
+//   现行后端是 netlify/lib/feedback-core.mjs（同规则、同限流、依赖注入）。
+//
+// 历史备注（当时选它的原因）：Cloudflare 那条路走不通 ——
 //   ① 线上云同步 worker 跑在**协作者账号**里，我们没权限部署；
 //   ② 我们自己账号里部署的 worker 只有 *.workers.dev 域名，而它在**国内被 DNS 污染**
 //      （实测解析到 OVH / Facebook 的 IP，curl 60 秒连不上）；

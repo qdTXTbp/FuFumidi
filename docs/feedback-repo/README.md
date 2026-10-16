@@ -53,21 +53,37 @@ CNB 的 OpenAPI（`https://api.cnb.cool`，swagger 199 个端点）**没有创�
 | `fufumidi-cloud-sync` | **协作者的 CF 账号**（`3b038b29…`，我们没权限） | `fusync.de5.net`（+ `*.workers.dev` 兜底） | 云同步在用；**反馈路由已在代码里，但没部署上去** |
 | `fufumidi-feedback` | **项目自己的 CF 账号**（`a50de010…`） | `fufumidi-feedback.fufumidi.workers.dev` | ✅ 已部署（D1 + KV 都绑好），但**国内访问不到**（见下） |
 
-**国内访问不到 `*.workers.dev`** —— 实测 DNS 被污染：
-`fufumidi-cloud-sync.fumivoice.workers.dev` 解析到 `198.27.124.186`（OVH 的 IP）、
-`fufumidi-feedback.fufumidi.workers.dev` 解析到 `31.13.75.5`（Facebook 的 IP），
-curl 60 秒都连不上；而 `fusync.de5.net` 0.7 秒通、`*.deno.dev` 3 秒通。
-所以**客户端上传必须有一个可达的域名**，三条可行路线：
+**国内访问不到 `*.workers.dev`：是 SNI 阻断，不只是 DNS 污染（2026-10-16 定性）** ——
+DNS 层面确实被污染（`fufumidi-cloud-sync.fumivoice.workers.dev` 解析到 OVH 的 `198.27.124.186`、
+`fufumidi-feedback.fufumidi.workers.dev` 解析到 Facebook 的 `31.13.75.5`），但**绕过解析也没用**：
+用 DoH 拿到真实 CF IP（`172.67.133.241` / `104.21.5.228`）后带正确 SNI 直连，
+**三个 IP 全部在 TLS 握手时被 RST（0.08–0.25 秒）**，不指定 IP 则 12 秒超时。
+所以「DoH + 固定 IP」这条绕过方案**实测无效**，必须换可达域名/平台。
 
-- **A（最快）**：把反馈路由部署到协作者那个 worker（代码已在 `src/index.js`）——
-  `wrangler d1 migrations apply DB --remote` + `wrangler secret put GITHUB_TOKEN` + `wrangler deploy`，
-  客户端走 `https://fusync.de5.net`（已是 BASES 第一条）。
-- **B（最彻底，推荐长期）**：给项目自己的账号加一个域名（任意注册商 → 加进 Cloudflare 免费版），
-  然后把 `fufumidi-feedback` 绑一个自定义域名（如 `fb.<你的域名>`），客户端 BASES 换过去。
-  这样反馈完全不依赖协作者。
-- **C（备选）**：把同一份逻辑搬到 Deno Deploy（`*.deno.dev` 实测可达）。
+各平台用同一手法判别（DoH 解析 + 带 SNI 连接）：
 
-在 A/B/C 落地前，反馈页的「上传到反馈仓库」会走完两条候选地址后失败，并**自动把带 md 的 zip 存到本地**
+| 结果 | 子域 |
+|---|---|
+| ✅ 可达 | `netlify.app`(0.49 s)、`deno.dev`(1.9 s)、`onrender.com`(1.2 s)、`up.railway.app`(0.77 s)、`zeabur.app`(0.82 s)、`github.io`、`gitee.io` |
+| ❌ SNI 阻断 | `vercel.app`(RST 0.09 s)、`workers.dev` |
+
+> **平台首页通 ≠ 函数子域通**（`vercel.com` 200，但 `*.vercel.app` 被 RST）—— 判断可达性必须按子域测。
+
+**Deno Deploy 已停止服务**：Cloudflare 收购 Deno 团队后 Deno Deploy 关停，新账号注册返回
+`403 SIGNUP_UNAVAILABLE`。仓库里的 `deno/` 因此废弃（它验证了「附件走 Release 资产」这套协议可用）。
+
+现在的可行路线：
+
+- **A（当前选定，不依赖任何人）**：Netlify Functions（`*.netlify.app` 实测可达）。
+  站点根目录 `netlify/`，端点是 `POST /feedback`、`GET /health`；
+  代码在 `netlify/lib/feedback-core.mjs`，`npm run test:netlify` 9 项离线单测。
+  **附件上限 4 MB**（Netlify 同步函数请求体 6 MB，base64 膨胀 4/3）。
+- **B（更省基建，要协作者配合）**：让协作者在**自己账号**里单独建一个 feedback worker
+  绑 `fb.de5.net`（**别动线上云同步那个 worker**）。`fusync.de5.net/health` 现在 3.7 秒可达，
+  但 `/feedback` 返回 401 —— 反馈路由不在那台已部署的 worker 里。
+- **C（最彻底）**：项目自己账号加一个域名并绑自定义域名，用已部署的 `fufumidi-feedback` worker。
+
+在 A/B/C 落地前，反馈页的「上传到反馈仓库」会走完候选地址后失败，并**自动把带 md 的 zip 存到本地**
 （界面会提示路径），用户还能用「网页提交 / 存到本地」把反馈送出来 —— 功能不瘫，只是要多点一下。
 
 ## 排查
