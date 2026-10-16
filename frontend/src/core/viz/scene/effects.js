@@ -39,3 +39,38 @@ export function beamQuads(P, o) {
   }
   return pr;
 }
+
+/* ============================================================
+   键缘闪光（2026-10-19 用户："键盘边缘处的波动闪光可以添加更多的样式"）
+   ============================================================
+   原先只有一种：落点线上一个软光晕。这里给 5 种，并且**按下标确定性轮换**
+   （pitch + 力度档）——不用随机数：随机会让同一次按键在相邻帧换样式，看着像抖动。
+     soft  软光晕（原来的）
+     ring  单圈冲击波
+     dual  双圈 + 芯
+     streak 竖向光带（短促）
+     bar   键缘亮条（贴着键面的一条横光）
+   ============================================================ */
+export function keyRipple(P, o) {
+  const { x, y, w, color, life, velN } = o;
+  const idx = ((o.index | 0) % 5 + 5) % 5;
+  const a = Math.max(0.05, Math.min(1, o.alpha == null ? 0.34 : o.alpha)) * (0.5 + 0.5 * velN);
+  const half = Math.max(2.5, w * 0.5);
+  const pr = [];
+  const z = o.z == null ? 0 : o.z;
+  if (idx === 0) {
+    pr.push(P.glow('fx', x, y, 1, Math.max(4, Math.min(half * 0.84, 9)), color, { alpha: a, blend: 'lighter', z }));
+  } else if (idx === 1) {
+    pr.push(P.ring('fx', x, y, 3 + 16 * life, 1.6, color, { alpha: a * 0.9, blend: 'lighter', z }));
+  } else if (idx === 2) {
+    pr.push(P.ring('fx', x, y, 2 + 20 * life, 1.4, color, { alpha: a * 0.75, blend: 'lighter', z }));
+    pr.push(P.ring('fx', x, y, 1 + 10 * life, 1.2, color, { alpha: a * 0.55, blend: 'lighter', z: z + 1 }));
+    pr.push(P.glow('fx', x, y, 1, Math.max(3, half * 0.5), color, { alpha: a * 0.5, blend: 'lighter', z: z + 2 }));
+  } else if (idx === 3) {
+    pr.push(P.beam('fx', x, y - 34 - 26 * life, Math.max(2, w * 0.5), 34 + 26 * life, color, { alpha: a * 0.8, blend: 'lighter', z }));
+  } else {
+    pr.push(P.capsule('fx', x - half, y - 2, half * 2, 4, color, { alpha: a * 0.95, blend: 'lighter', z }));
+    pr.push(P.glow('fx', x, y, 1, Math.max(3, half * 0.6), color, { alpha: a * 0.4, blend: 'lighter', z: z + 1 }));
+  }
+  return pr;
+}

@@ -24,8 +24,11 @@ import { beamQuads } from './effects.js';
 
 /** 黑键占据白键深度的比例（黑键只铺前半段） */
 export const BLACK_T = 0.62;
-/** 抬高的黑键在屏幕上抬起的像素（persp 会再放大一点） */
-const RAISE_BASE = 3.2;
+/** 抬高的黑键在屏幕上抬起的像素（persp 会再放大一点）。
+ *  ★ 2026-10-19：3.2 → 9。原来只有 3.2px 厚，黑键看起来是「贴在白键上的一块黑片」
+ *  ——用户实测「3D 键盘黑键明显没有侧面」，而且白键的分割线会在键的边缘透出来。
+ *  有厚度之后，前脸 + 两侧面把黑键的轮廓完整盖住，才像一排立起来的键。 */
+const RAISE_BASE = 9;
 /** 相邻白键之间的防缝重叠（半像素级，避免共享边出现发丝缝） */
 const SEAM = 0.35;
 /** 音符能取到的最大深度（再高就截住，避免收拢过度变成一根线） */
@@ -48,7 +51,7 @@ export function makeKeyboardProjection(o) {
                                         // 0.04 时键只斜 5°、240px 高的音符几乎看不出收拢（用户："音符还是直的"）；
                                         // 0.07 对应键约 11°、音符剪切约 28px —— 看得出来但不夸张。
                                         // （0.16 那次之所以"粗暴"，主因是纵向映射写反了，不是这个系数）
-  const raise = RAISE_BASE + 2.6 * persp;
+  const raise = RAISE_BASE + 5 * persp;
   // 纵向透视缩短：**近端占的像素多、远端少**（相机在斜上方俯视）。
   // 用 1/z 的精确形式：u(t) = (1 - 1/(1+(r-1)t)) / (1 - 1/r)，u(0)=0、u(1)=1、近端导数更大。
   // ★ 上一版写成 t*(1+k)/(1+k*t) 恰好是反的（远端被拉长、近端被压扁）—— 记一次。
@@ -207,8 +210,27 @@ export function buildKeyboard(P, ctx) {
       pr.push(face(P, 'keyboard', cam.quad(u0, u1, 0, t1, 1),
         { stops: [kp.bkTop, kp.bkBot], dir: 'v' }, { alpha: keysA, z: 1000 + i }));
       if (solid) {
+        // 前脸（近端竖直面：从抬高面落到白键面）
         pr.push(face(P, 'keyboard', cam.wall(u0, u1, t1, 1, 0),
           { stops: [kp.bkFrontTop, kp.bkFrontBot], dir: 'v' }, { alpha: keysA, z: 1000 + i }));
+        /* ★ 两侧面（2026-10-19 用户："黑键明显没有侧面"）：
+           相机横向收敛（kz>0），偏离画布中心的键一定看得见朝中心那一侧的键壁。
+           没有这两面，黑键只是一块贴在白键上的黑片 —— 白键的分割线也会从它的边缘透出来。
+           两侧面的几何都用 cam.py(t, 1)/cam.py(t, 0)：正好落在抬高面下沿与白键面之间，
+           与键面、前脸共享同一条边，不会浮空也不会断开。
+           看得见的那面（朝画布中心）走 bkTop→bkFrontBot 渐变当受光侧壁，背面用最暗色收边。 */
+        const faceCenter = (u0 + u1) / 2;
+        const near = faceCenter < ctx.w / 2 ? u1 : u0;
+        for (const ue of [u0, u1]) {
+          const sideQ = [
+            cam.px(ue, 0), cam.py(0, 1),
+            cam.px(ue, t1), cam.py(t1, 1),
+            cam.px(ue, t1), cam.py(t1, 0),
+            cam.px(ue, 0), cam.py(0, 0),
+          ];
+          const fill = ue === near ? { stops: [kp.bkTop, kp.bkFrontBot], dir: 'v' } : kp.bkFrontBot;
+          pr.push(face(P, 'keyboard', sideQ, fill, { alpha: keysA, z: 1040 + i }));
+        }
       }
       if (s.gv > 0.02) pr.push(face(P, 'keyboard', cam.quad(u0, u1, 0, t1, 1), s.color, { alpha: s.gv * keysA, z: 1100 + i }));
       if (s.fv > 0.02) pr.push(face(P, 'keyboard', cam.quad(u0, u1, 0, t1, 1), '#ffffff', { alpha: Math.min(0.6, s.fv * (fx.flash || 0)) * keysA, z: 1110100 + i }));

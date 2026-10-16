@@ -16,7 +16,7 @@ import { noteColorOf } from '../state/colors.js';
 import { withAlpha, noteStops, shade } from '../state/palette.js';
 import * as P from './primitives.js';
 import { buildNote } from './note.js';
-import { projectX, depthScale, beamQuads } from './effects.js';
+import { projectX, depthScale, beamQuads, keyRipple } from './effects.js';
 import { buildKeyboard, makeKeyboardProjection } from './keyboard.js';
 
 const DEFAULT_BUDGET = { spark: 420, ring: 60, beam: 90 };
@@ -252,13 +252,17 @@ export function createCompiler() {
       for (const q of kb.prims) pr.push(q);
     }
 
-    // 波纹（半圆鼓包简化成键线上的小发光）
+    // 键缘闪光：5 种样式按下标（音高 + 力度档）确定性轮换 —— 见 effects.js 的 keyRipple
     if (fx.hitLine !== false && wN > 0) {
       for (const [pitch, color] of sounding) {
         const pi = ensurePm()[pitch]; if (!pi) continue;
         const { sx: sxB, cw: cwB } = pitchGeom(pitch, ensurePm(), g, wk0);
-        // 落点线上的光晕：t=0 处投影恒等，所以这里天然就是对的位置（写上 projectX 只为表明同一套相机）
-        pr.push(P.glow('fx', projectX(cam, ps, sxB + cwB / 2, wN), wN, 1, Math.max(4, Math.min(cwB * 0.42, 9)), color, { alpha: 0.3, blend: 'lighter' }));
+        const velN = Math.max(0, Math.min(1, (pi.vel == null ? 90 : pi.vel) / 127));
+        // 样式下标：音高 + 力度档（不用随机数 —— 随机会让同一次按键在相邻帧换样式，看着像抖动）
+        const idx = pitch + Math.round(velN * 7);
+        for (const q of keyRipple(P, {
+          x: projectX(cam, ps, sxB + cwB / 2, wN), y: wN, w: cwB, color, life: pi.life, velN, index: idx, alpha: 0.34,
+        })) pr.push(q);
       }
     }
 
