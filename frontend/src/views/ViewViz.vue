@@ -27,6 +27,11 @@ const immersive = ref(false);
 const vizBg = useVizBgStore();
 const bg = vizBg.bg;                // reactive，模板与绘制都直接读它
 const bgMore = ref(false);          // 设置条是否展开：纯 UI 状态，不进 store
+const fxMore = ref(false);          // 视效条是否展开：同上（开关本身住在 store）
+const fxItems = vizBg.FX_ITEMS;     // 视效开关清单（顺序即界面顺序）
+// 配色档名（与 core/viz.js 的 blockColor 一一对应）：
+// 0 用轨道色；1/2/3 都按音高推导 HSL，只是色相步长/饱和度/明度不同
+const COLOR_SCHEMES = ['轨道色', '按音高·七彩', '按音高·暖', '按音高·冷'];
 // 模板里的 @input 是「先改 bg 再存」两步（颜色/模糊/暗化都直接改 reactive 字段），
 // 所以保留一个薄壳；读写都在 store 里，导出页读到的是同一份。
 function saveBg() { vizBg.save(); }
@@ -197,6 +202,8 @@ function drawRoll(ctx2d, c, u, syn, song, player) {
     lyricAt: '',
     activeNotes: syn && syn.activeNow ? syn.activeNow() : [],
     energy: rollState.energy || 0,
+    // 视效开关：与背景同源（stores/vizbg），导出页读同一份 —— 预览与成片才不会两幅画
+    fx: vizBg.fxOpts(),
     // 背景只作用于音符瀑布（频谱/示波器/和弦仍是主题底）
     bg: vizBg.drawOpts(),
   });
@@ -370,11 +377,18 @@ onBeforeUnmount(() => {
           <span class="dot" style="background:var(--brand-coral)"></span><b>{{ t('音符瀑布') }}</b>
           <button class="chip-btn" :class="{ 'active': mode === 'dash' }" data-guide="viz-modes" @click="mode = 'dash'">{{ t('仪表盘') }}</button>
           <button class="chip-btn" :class="{ 'active': mode === 'waterfall' }" data-guide="viz-waterfall" @click="mode = 'waterfall'">{{ t('瀑布流') }}</button>
-          <button class="chip-btn" @click="colorScheme = (colorScheme + 1) % 4" :title="t('切换瀑布流配色')">{{ t('配色') }}</button>
+          <!-- 配色原本是工具栏上一个单独循环的 chip；用户要求「配色归入视效」——
+               它本来就是视效的一部分（轨道色 / 按音高推导的两套 HSL），现在住进视效面板。 -->
           <!-- 背景：主题 / 纯色 / 图片 / 透明（叠加层）。SeeMusic 那类软件把"背景图 + 模糊"
                当成主要观感开关，这里补上；透明档配合导出即可当 OBS 叠加层。 -->
           <button class="chip-btn" :class="{ active: bgMore }" :title="t('音符瀑布背景（主题/纯色/图片/透明）')" @click="bgMore = !bgMore">
             <Icon name="eye" :size="12" />{{ t('背景') }}
+          </button>
+          <!-- 视效：3D 键盘 / 粒子光效 / 落键光柱 / 击键光带 / 音符质感。
+               参考 SeeMusic、Synthesia、Lumiric Stage 那类瀑布流的语言：
+               「灯、粒子、键的厚度」才是观感差异，而不是把音符块画得更大。 -->
+          <button class="chip-btn" :class="{ active: fxMore }" data-guide="viz-fx" :title="t('瀑布流视效（配色 / 3D 键盘 / 粒子 / 光柱 / 光带 / 质感）')" @click="fxMore = !fxMore">
+            <Icon name="spark" :size="12" />{{ t('视效') }}
           </button>
           <span style="flex:1"></span>
           <button class="chip-btn" @click="wfZoom = Math.max(0.4, +(wfZoom - 0.1).toFixed(2))">−</button>
@@ -401,6 +415,20 @@ onBeforeUnmount(() => {
             <span class="muted small">{{ t('暗化') }}</span>
             <NumSlider :model-value="Math.round(bg.dim * 100)" @update:model-value="v => { bg.dim = (+v) / 100; saveBg() }" :min="0" :max="80" :step="5" range-style="width:88px" :input-width="68" no-input />
           </template>
+        </div>
+        <div v-if="fxMore && !immersive" class="viz-bg-bar">
+          <span class="muted small">{{ t('瀑布流视效') }}</span>
+          <span class="muted small" style="margin-left:6px">{{ t('配色') }}</span>
+          <button v-for="(nm, i) in COLOR_SCHEMES" :key="i" class="chip-btn"
+                  :class="{ active: colorScheme === i }" :title="t('切换瀑布流配色')"
+                  @click="colorScheme = i">{{ t(nm) }}</button>
+          <span class="muted small" style="margin-left:6px">{{ t('特效') }}</span>
+          <button v-for="f in fxItems" :key="f.k" class="chip-btn"
+                  :class="{ active: !!(bg.fx && bg.fx[f.k]) }" :title="t(f.hint)"
+                  @click="vizBg.setFx(f.k, !(bg.fx && bg.fx[f.k]))">{{ t(f.label) }}</button>
+          <span style="flex:1"></span>
+          <button class="chip-btn" :title="t('全部打开')" @click="vizBg.resetFx(true)">{{ t('全开') }}</button>
+          <button class="chip-btn" :title="t('全部关掉（回到旧观感）')" @click="vizBg.resetFx(false)">{{ t('全关') }}</button>
         </div>
         <div class="vc-body" :class="{ 'bd-canvas': bg.mode === 'transparent' }">
           <!-- ★ 画布自己有一层 CSS 底色（.vc-body canvas 的 background）—— 透明档只 clearRect

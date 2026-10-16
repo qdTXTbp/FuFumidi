@@ -8,12 +8,25 @@ import { reactive } from 'vue';
 import { defineStore } from 'pinia';
 import { t } from '../core/i18n.js';
 import { useAppStore } from './app';
+// ★ 视效开关的**单一来源**是 core/viz.js 的 FX_DEFAULTS —— store 只负责持久化与转交，
+//   不在两边各写一份默认值（写两份必然漂移：viz.js 加了新档、store 的默认还停在旧形状）。
+import { FX_DEFAULTS } from '../core/viz.js';
 
 export const BG_KEY = 'fufumidi.viz.bg';
 /* ★ 改默认值 / 改结构时把 BG_VER +1：老数据直接忽略，否则「新默认值」对老用户永远不生效
    （这次就把默认从「主题」改成「透明」，顺便清掉之前调试留下的图片档）。 */
 export const BG_VER = 2;
-export const BG_DEFAULTS = { v: BG_VER, mode: 'transparent', color: '#0b1020', blur: 12, dim: 0.35, path: '' };
+export const BG_DEFAULTS = { v: BG_VER, mode: 'transparent', color: '#0b1020', blur: 12, dim: 0.35, path: '', fx: { ...FX_DEFAULTS } };
+
+/* 瀑布流视效开关（2026-10 升级）。顺序即界面顺序；每项都能单独关掉回到旧观感。 */
+export const FX_ITEMS = [
+  { k: 'keys3d', label: '3D 键盘', hint: '键面 + 厚度 + 按压下沉' },
+  { k: 'particles', label: '粒子光效', hint: '击键火花 + 冲击波环' },
+  { k: 'beams', label: '落键光柱', hint: '按键向上洒光' },
+  { k: 'hitLine', label: '击键光带', hint: '整条击键线随击键亮起' },
+  { k: 'gloss', label: '音符质感', hint: '落点光晕 + 白热内芯 + 边缘高光' },
+  { k: 'keyNames', label: '键名标注', hint: '在每个白键上标音名（跟弹学习用）' },
+];
 
 export const BG_MODES = [
   { k: 'theme', label: '主题' },
@@ -26,7 +39,9 @@ function read() {
   try {
     const s = JSON.parse(localStorage.getItem(BG_KEY) || 'null');
     if (s && typeof s === 'object' && s.v === BG_VER) {
-      return { ...BG_DEFAULTS, ...s, v: BG_VER, path: s.path || '' };
+      // fx 要**逐键**合并：整体覆盖会把后来新增的档位丢成 undefined（viz.js 那边再补默认，
+      // 于是界面显示"开"、实际却是默认值，用户改了不生效）
+      return { ...BG_DEFAULTS, ...s, v: BG_VER, path: s.path || '', fx: { ...FX_DEFAULTS, ...(s.fx || {}) } };
     }
   } catch (e) { /* 存储坏了就用默认值 */ }
   return { ...BG_DEFAULTS };
@@ -67,6 +82,17 @@ export const useVizBgStore = defineStore('vizbg', () => {
     return { mode: bg.mode, color: bg.color, blur: bg.blur, dim: bg.dim, image };
   }
   function imageEl() { return image; }
+  /** 交给绘制函数的视效开关（与背景同源，导出页读同一份） */
+  function fxOpts() { return { ...((bg as any).fx || {}) }; }
+  function setFx(k: string, v: boolean) {
+    if (!(bg as any).fx) (bg as any).fx = { ...FX_DEFAULTS };
+    (bg as any).fx[k] = !!v;
+    save();
+  }
+  function resetFx(on: boolean) {
+    (bg as any).fx = Object.fromEntries(Object.keys(FX_DEFAULTS).map((k) => [k, on]));
+    save();
+  }
 
   function setMode(m: string) {
     if (m === 'image' && !bg.path) { void pickImage(); return; }
@@ -119,6 +145,6 @@ export const useVizBgStore = defineStore('vizbg', () => {
     }
   }
 
-  return { bg, BG_MODES, save, drawOpts, imageEl, setMode, setColor, setBlur, setDim,
-           ensureImage, pickImage, init };
+  return { bg, BG_MODES, FX_ITEMS, save, drawOpts, fxOpts, setFx, resetFx, imageEl,
+           setMode, setColor, setBlur, setDim, ensureImage, pickImage, init };
 });

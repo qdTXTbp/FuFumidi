@@ -40,8 +40,19 @@ export const VIZ_REF_W = 960;   // = VIZ_REF_H × 16/9，仅作说明用
 // 导出按 (物理像素 / 实时 devicePixelRatio) 等比放大模糊半径，任何分辨率下相对模糊都一致。
 export const VIZ_REF_DPR = 2.5;
 
-const LIGHT_KEYS = { wkTop: '#f2f3f5', wkBot: '#e2e4e8', wkLine: 'rgba(10,10,10,0.12)', bkTop: '#3a3d42', bkBot: '#1c1e22' };
-const DARK_KEYS = { wkTop: '#2b303a', wkBot: '#20242c', wkLine: 'rgba(255,255,255,0.10)', bkTop: '#0c0e12', bkBot: '#04050a' };
+// 3D 键盘（2026-10）：wk/bk 是**键面**（俯视看到的那一面），wkFront/bkFront 是**前脸**
+// （键的厚度），wkEdge 是键面顶边的那道高光。三部分叠起来才有"一块琴键"的体积感 ——
+// 只有键面时，琴键看起来是一张贴在画面上的纸（旧观感）。
+const LIGHT_KEYS = {
+  wkTop: '#f2f3f5', wkBot: '#e2e4e8', wkLine: 'rgba(10,10,10,0.12)',
+  wkFrontTop: '#d8dbdf', wkFrontBot: '#bfc3c9', wkEdge: 'rgba(255,255,255,0.9)',
+  bkTop: '#3a3d42', bkBot: '#1c1e22', bkFrontTop: '#22252a', bkFrontBot: '#101216',
+};
+const DARK_KEYS = {
+  wkTop: '#2b303a', wkBot: '#20242c', wkLine: 'rgba(255,255,255,0.10)',
+  wkFrontTop: '#1b1f26', wkFrontBot: '#101318', wkEdge: 'rgba(255,255,255,0.16)',
+  bkTop: '#0c0e12', bkBot: '#04050a', bkFrontTop: '#07090c', bkFrontBot: '#020305',
+};
 
 function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 
@@ -188,6 +199,7 @@ function vizState(state) {
   if (typeof s.centerPitch !== 'number') s.centerPitch = 60;
   if (typeof s.lastD !== 'number') s.lastD = -1;
   if (typeof s.seed !== 'number') s.seed = 0;
+  if (typeof s.hitPulse !== 'number') s.hitPulse = 0;   // 击键线光带的衰减脉冲
   return s;
 }
 
@@ -207,7 +219,56 @@ function patchRoundRect() {
   };
 }
 
-const MAX_PARTS = 260; // 粒子总量上限：每帧要逐个更新+绘制，不设上限会拖垮大曲目
+const MAX_PARTS = 420; // 粒子总量上限：每帧要逐个更新+绘制，不设上限会拖垮大曲目
+                       // （旧值 260；升级后单次击键的粒子更多，提到 420，仍是"每帧一遍"）
+
+/* ============================================================
+ * 视效档（2026-10 瀑布流升级）：3D 键盘 / 粒子光效 / 击键光带 / 音符质感
+ * ------------------------------------------------------------
+ * · 全部**默认开启**，可用 opts.fx 覆盖。实时（ViewViz）与导出（ViewConvert）
+ *   读同一份设置（stores/vizbg），预览与成片才一致。
+ * · **关掉任一项都必须回到旧观感**，不能留残余 —— 用户是按开关判断的。
+ * · 确定性：随机量一律走 noise(seed)（与旧版同一套），不用 Math.random，
+ *   否则同一次导出重跑两遍会得到不同画面。
+ * ============================================================ */
+export const FX_DEFAULTS = { keys3d: true, particles: true, beams: true, hitLine: true, gloss: true, keyNames: false };
+export function fxOf(opts) { return Object.assign({}, FX_DEFAULTS, opts && opts.fx); }
+
+/** '#rgb' / '#rrggbb' / 'rgb(...)' → 'rgba(r,g,b,a)'；认不出来就原样返回 */
+function withAlpha(c, a) {
+  const s = String(c == null ? '' : c).trim();
+  let m = /^#([0-9a-f]{3})$/i.exec(s), r, g, b;
+  if (m) { r = parseInt(m[1][0] + m[1][0], 16); g = parseInt(m[1][1] + m[1][1], 16); b = parseInt(m[1][2] + m[1][2], 16); }
+  else if ((m = /^#([0-9a-f]{6})$/i.exec(s))) { r = parseInt(m[1].slice(0, 2), 16); g = parseInt(m[1].slice(2, 4), 16); b = parseInt(m[1].slice(4, 6), 16); }
+  else if ((m = /^rgba?\(([^)]+)\)$/i.exec(s))) { const p = m[1].split(',').map(Number); r = p[0]; g = p[1]; b = p[2]; }
+  if (r == null || !isFinite(r) || !isFinite(g) || !isFinite(b)) return s;
+  return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+}
+
+/* 粒子发光贴图：按颜色缓存一张 64×64 的径向渐变。
+ * 为什么不每帧 createRadialGradient —— 那是这段最贵的一步（每个粒子一次），
+ * 缓存之后每帧只剩一次 drawImage（实测 4K 导出帧预算只有 41ms）。
+ * node 单测环境没有 document → 返回 null，调用方回退成纯 arc 圆点。 */
+const SPRITE_CACHE = new Map();
+function glowSprite(color) {
+  if (SPRITE_CACHE.has(color)) return SPRITE_CACHE.get(color);
+  let cv = null;
+  if (typeof document !== 'undefined' && document.createElement) {
+    const S = 64;
+    cv = document.createElement('canvas');
+    cv.width = S; cv.height = S;
+    const c2 = cv.getContext('2d');
+    const gr = c2.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+    gr.addColorStop(0, withAlpha(color, 1));
+    gr.addColorStop(0.22, withAlpha(color, 0.82));
+    gr.addColorStop(0.55, withAlpha(color, 0.26));
+    gr.addColorStop(1, withAlpha(color, 0));
+    c2.fillStyle = gr;
+    c2.fillRect(0, 0, S, S);
+  }
+  SPRITE_CACHE.set(color, cv);
+  return cv;
+}
 
 // 纵向坐标吸附到「设备像素」，只用于文字这类必须清晰、又不随播放移动的内容。
 //
@@ -310,6 +371,7 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
   patchRoundRect();
   const pm = ensurePm();
   const state = vizState(opts.state);
+  const fx = fxOf(opts);   // 视效开关（默认全开；UI 可逐项关掉，关掉必须回到旧观感）
   if (song && state.songRef !== song) {
     const built = buildVizBlocks(song);
     state.byPitch = built.byPitch;
@@ -370,6 +432,24 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
     ctx.globalAlpha = 1;
   }
 
+  // ---- 击键线光带（升级）：整条击键线随最近击键亮起、约 0.8s 衰减 ----
+  // 先画（在音符与琴键之下），琴键和前脸压在它上面，边界才干净。
+  // 脉冲在这里统一衰减，与开关无关 —— 关掉光带后重新打开不能"欠账"。
+  state.hitPulse = Math.max(0, (state.hitPulse || 0) - 0.06);
+  if (fx.hitLine && wN > 0 && bgModeNow !== 'transparent') {
+    const hp = state.hitPulse;
+    const accent = cssVar('--accent', '#4f94e0');
+    const band = ctx.createLinearGradient(0, wN - 46, 0, wN + 2);
+    band.addColorStop(0, 'rgba(0,0,0,0)');
+    band.addColorStop(1, withAlpha(accent, 0.04 + 0.2 * Math.max(hp, energy * 0.6)));
+    ctx.fillStyle = band;
+    ctx.fillRect(0, wN - 46, w, 48);
+    ctx.strokeStyle = withAlpha(accent, 0.10 + 0.5 * hp + 0.2 * energy);
+    ctx.lineWidth = 1 + hp * 1.6;
+    ctx.beginPath(); ctx.moveTo(0, wN); ctx.lineTo(w, wN); ctx.stroke();
+    ctx.lineWidth = 1;
+  }
+
   const grid = cssVar('--hairline', 'rgba(10,10,10,0.10)');
   const gridStrong = cssVar('--border-strong', 'rgba(10,10,10,0.18)');
   const text = cssVar('--ink', '#0a0a0a');
@@ -425,11 +505,45 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
       ctx.globalAlpha = 1 - 0.5 * depth;
       if (blur > 0) { ctx.shadowBlur = blur; ctx.shadowColor = ctx.fillStyle; }
       // 按精确坐标绘制（不吸附）——理由见 pixelScale 处的说明
+      // 圆角取「半宽 / 半高」上限：短音符就成了胶囊（参考 SeeMusic 那种药丸形），
+      // 长音则是圆角长条。测试只数 roundRect 次数、不看半径，所以这里可以按块变。
+      const bh2 = Math.max(bottom - top, 5);
+      const rr2 = Math.max(2, Math.min(6, cw / 2, bh2 / 2));
       ctx.beginPath();
-      ctx.roundRect(sx, top, cw, Math.max(bottom - top, 5), 4);
+      ctx.roundRect(sx, top, cw, bh2, rr2);
       ctx.fill();
       if (blur > 0) ctx.shadowBlur = 0;
       ctx.globalAlpha = 1;
+      // ---- 音符质感（升级）：落点光晕 + 下落边高光 ----
+      // ★ 这两笔**绝不能用 roundRect**：单测用「击键线之前出现的 roundRect 个数」数屏内块数
+      //   （frontend/tests/viz.test.js），多一个 roundRect 就会打破那条不变量。
+      //   同理块的主填充必须仍是**调色板纯色**，渐变只能叠在它上面。
+      const bc = ctx.fillStyle;
+      if (fx.gloss && near > 0.02) {
+        const hy = Math.min(bottom, wN);
+        const rad = Math.max(7, cw * 0.9);
+        const halo = ctx.createRadialGradient(sx + cw / 2, hy, 0, sx + cw / 2, hy, rad);
+        halo.addColorStop(0, withAlpha(bc, 0.5 * near * (0.5 + 0.5 * velN)));
+        halo.addColorStop(1, withAlpha(bc, 0));
+        ctx.fillStyle = halo;
+        ctx.beginPath(); ctx.arc(sx + cw / 2, hy, rad, 0, 2 * Math.PI); ctx.fill();
+      }
+      if (fx.gloss) {
+        // 白热内芯：参考图里音符不是纯色块，而是「中间亮、边缘是配色」的发光体。
+        // 用一条竖渐变（fillRect，不是 roundRect —— 见上面测试约束）叠在块中央。
+        const coreW = Math.max(2, cw * 0.34);
+        const core = ctx.createLinearGradient(0, top, 0, Math.max(bottom, top + 1));
+        core.addColorStop(0, 'rgba(255,255,255,' + (0.04 + 0.20 * velN).toFixed(3) + ')');
+        core.addColorStop(0.5, 'rgba(255,255,255,' + (0.16 + 0.30 * velN).toFixed(3) + ')');
+        core.addColorStop(1, 'rgba(255,255,255,0.03)');
+        ctx.fillStyle = core;
+        ctx.fillRect(sx + (cw - coreW) / 2, top + 2, coreW, Math.max(bh2 - 4, 2));
+        ctx.strokeStyle = 'rgba(255,255,255,' + ((0.14 + 0.26 * velN) * (1 - depth)).toFixed(3) + ')';
+        ctx.lineWidth = 1.4;
+        const ey = Math.min(bottom, wN) - 1;
+        ctx.beginPath(); ctx.moveTo(sx + 2, ey); ctx.lineTo(sx + cw - 2, ey); ctx.stroke();
+        ctx.lineWidth = 1;
+      }
     }
     if (forward) {
       let k2 = firstStartGT(arr, state.lastD);
@@ -439,22 +553,45 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
 
   // ---- 击键粒子：音符跨过击键线时从键面迸出 ----
   // 方向用确定性伪随机（noise）而非 Math.random，导出画面才能逐帧复现。
+  // kind：0 = 发光火花、1 = 冲击波环、2 = 光柱、3 = 旧版圆点
   if (forward) {
     for (const b of hits) {
       if (state.parts.length >= MAX_PARTS) break;
       const { sx: sxBase, cw: cwBase } = pitchGeom(b.pitch, pm, g, wk0);
       const velN = clamp01((b.vel == null ? 90 : b.vel) / 127);
-      const n = 2 + Math.round(velN * 3);
       const color = blockColor(b, cs);
       const cx = sxBase + cwBase / 2;
+      state.hitPulse = 1;
+      if (!fx.particles) {
+        // 关掉粒子开关 → **逐像素回到旧观感**（旧的 2~5 颗 2px 圆点）
+        const n0 = 2 + Math.round(velN * 3);
+        for (let i = 0; i < n0; i++) {
+          const s1 = noise(state.seed++), s2 = noise(state.seed++);
+          state.parts.push({ kind: 3, x: cx, y: wN, vx: (s1 - 0.5) * 1.8, vy: -(0.5 + s2 * 1.9), life: 1, decay: 0.02, size: 2, color });
+        }
+        continue;
+      }
+      const n = 3 + Math.round(velN * 6);
       for (let i = 0; i < n; i++) {
-        const s1 = noise(state.seed++), s2 = noise(state.seed++);
+        const s1 = noise(state.seed++), s2 = noise(state.seed++), s3 = noise(state.seed++);
         state.parts.push({
-          x: cx, y: wN,
-          vx: (s1 - 0.5) * 1.8,
-          vy: -(0.5 + s2 * 1.9),
-          life: 1, color,
+          kind: 0,
+          x: cx + (s1 - 0.5) * cwBase,
+          y: wN,
+          vx: (s1 - 0.5) * 3.4,
+          vy: -(0.6 + s2 * 3.6) - velN * 1.2,
+          life: 1,
+          decay: 0.016 + s3 * 0.02,
+          size: 5 + s3 * 9 + velN * 8,
+          color,
         });
+      }
+      // 冲击波环：从键面扩散出去 —— 一帧里最快被看到的那笔"击键"
+      state.parts.push({ kind: 1, x: cx, y: wN, r: 2, vr: 2.4 + velN * 2.8, life: 1, decay: 0.042, size: 0, color });
+      // 光柱：短命的竖向光束，落在键上的一瞬间最亮
+      if (fx.beams) {
+        // 光柱：参考图里这一笔会"留"一会儿再淡上去，所以寿命比火花长、越高力越粗越长
+        state.parts.push({ kind: 2, x: cx, y: wN, w: cwBase * (1.5 + velN * 0.5), h: 84 + velN * 150, life: 1, decay: 0.032, size: 0, color });
       }
     }
   }
@@ -475,38 +612,98 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
   // 琴键底色渐变按「纵向」定义，颜色只取决于 y；每个白键/黑键的 y 区间完全一致，
   // 因此整屏琴键可以共用两个渐变对象，而不是每个键各建一个（实测 90 个/帧 → 4 个/帧）。
   // 横向平移不改变纵向渐变的着色（着色由 y 在轴上的投影决定），渲染结果逐像素一致。
-  const grWk = ctx.createLinearGradient(0, wN, 0, wN + x);
+  // ---- 3D 键盘（升级）：键区高度拆成「键面」+「前脸」（键的厚度）----
+  // 只有键面时琴键是一张贴在画面上的纸；补上前脸、顶边高光和按压下沉才有体积感。
+  // ★ 键面的 roundRect 必须**仍然从 y = wN 起** —— 单测用「第一个 y === wN 的 roundRect」
+  //   定位琴键起点（frontend/tests/viz.test.js），改起点就会打破它。
+  const keys3d = !!fx.keys3d;
+  const topH = keys3d ? Math.max(10, Math.round(x * 0.72)) : x;
+  const grWk = ctx.createLinearGradient(0, wN, 0, wN + topH);
   grWk.addColorStop(0, kp.wkTop); grWk.addColorStop(1, kp.wkBot);
-  const bkH = Math.floor(0.6 * x);
+  const grWkFront = keys3d ? ctx.createLinearGradient(0, wN + topH, 0, wN + x) : null;
+  if (grWkFront) { grWkFront.addColorStop(0, kp.wkFrontTop); grWkFront.addColorStop(1, kp.wkFrontBot); }
+  const bkH = Math.floor(0.6 * topH);
+  const bkFrontH = Math.round(x * 0.34);
   const grBk = ctx.createLinearGradient(0, wN, 0, wN + bkH);
   grBk.addColorStop(0, kp.bkTop); grBk.addColorStop(1, kp.bkBot);
+  const grBkFront = keys3d ? ctx.createLinearGradient(0, wN + bkH, 0, wN + bkH + bkFrontH) : null;
+  if (grBkFront) { grBkFront.addColorStop(0, kp.bkFrontTop); grBkFront.addColorStop(1, kp.bkFrontBot); }
   for (let i = wk0; i < wk1; i++) {
     const pitch = WHITE_MIDI[i];
     const px = Math.floor((i - wk0) * g), pw = Math.floor(g);
     const act = sounding.get(pitch);
     const gv = glowOf(pitch, act !== undefined || live.has(pitch));
+    // 击键线上被"顶起来"的那一小块（参考 SeeMusic：线不是直的，音落下处鼓起来）。
+    // 半圆 + 描边，画在琴键之前，键面压在它的下沿上。
+    if (fx.hitLine && act !== undefined) {
+      const rr3 = Math.max(5, Math.min(pw * 0.62, 14));
+      ctx.fillStyle = withAlpha(act, 0.42);
+      ctx.beginPath(); ctx.arc(px + pw / 2, wN, rr3, Math.PI, 2 * Math.PI); ctx.fill();
+      ctx.strokeStyle = withAlpha(act, 0.85); ctx.lineWidth = 1.3;
+      ctx.beginPath(); ctx.arc(px + pw / 2, wN, rr3, Math.PI, 2 * Math.PI); ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+    // 按下 → 键面变短、前脸变长：视觉上"沉下去"，但键面顶边仍在 y = wN（测试约束）
+    const kh = keys3d ? Math.max(6, topH - Math.round(4 * gv)) : x;
+    if (keys3d) { ctx.fillStyle = grWkFront; ctx.fillRect(px, wN + kh, pw, x - kh); }
     ctx.fillStyle = grWk;
-    ctx.beginPath(); ctx.roundRect(px, wN, pw, x, [0, 0, 4, 4]); ctx.fill();
+    ctx.beginPath(); ctx.roundRect(px, wN, pw, kh, [0, 0, 4, 4]); ctx.fill();
+    if (keys3d) {   // 键面顶边高光：3D 感的关键一笔，没有它就是贴纸
+      ctx.strokeStyle = kp.wkEdge; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(px + 0.5, wN + 0.5); ctx.lineTo(px + pw - 0.5, wN + 0.5); ctx.stroke();
+    }
     if (gv > 0.02) {
+      const keyColor = act !== undefined ? act : whiteLiveColor;
+      // 往卷帘区里洒一条向上的光（SeeMusic 那种"灯"的感觉）——
+      // 与粒子/光柱同一档开关，关掉就退回纯琴键高亮
+      if (fx.beams) {
+        const hh = 40 + 92 * gv;
+        const up = ctx.createLinearGradient(0, wN, 0, wN - hh);
+        up.addColorStop(0, withAlpha(keyColor, 0.26 * gv));
+        up.addColorStop(1, withAlpha(keyColor, 0));
+        ctx.fillStyle = up;
+        ctx.fillRect(px, wN - hh, pw, hh);
+      }
       ctx.globalAlpha = gv;
-      ctx.fillStyle = act !== undefined ? act : whiteLiveColor;
+      ctx.fillStyle = keyColor;
       ctx.shadowBlur = 18 * gv; ctx.shadowColor = ctx.fillStyle;
-      ctx.beginPath(); ctx.roundRect(px, wN, pw, x, [0, 0, 4, 4]); ctx.fill();
+      ctx.beginPath(); ctx.roundRect(px, wN, pw, kh, [0, 0, 4, 4]); ctx.fill();
       ctx.shadowBlur = 0; ctx.globalAlpha = 1;
     }
-    ctx.beginPath(); ctx.moveTo(px + pw, wN); ctx.lineTo(px + pw, wN + x - 4);
+    ctx.beginPath(); ctx.moveTo(px + pw, wN); ctx.lineTo(px + pw, wN + kh - 4);
     ctx.strokeStyle = kp.wkLine; ctx.stroke();
+    // 键名标注（默认关）：Synthesia 那类跟弹软件的"学习辅助"，白键够宽才画，否则是噪点
+    if (fx.keyNames && pw >= 14) {
+      const NN = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+      ctx.fillStyle = withAlpha(text, 0.7);
+      ctx.font = '9px system-ui, sans-serif';
+      ctx.fillText(NN[pitch % 12] + (Math.floor(pitch / 12) - 1), px + pw - 3, wN + kh + 9);
+    }
     if (pitch % 12 === 0) { ctx.fillStyle = text; ctx.font = '10px system-ui, sans-serif'; ctx.fillText('C' + (pitch / 12 - 1), px + 4, h - 5); }
   }
   // 黑键骑在两个白键之间：i 号白键右上方各有一个（B/C 与 E/F 之间没有）
   for (let i = wk0; i < wk1; i++) {
     const pitch = WHITE_MIDI[i] + 1;
     if (!BLACK_PC.includes(pitch % 12)) continue;
-    const bx = Math.floor((i - wk0 + 1) * g - 0.35 * g), bw = Math.floor(0.7 * g), bh = bkH;
+    const bx = Math.floor((i - wk0 + 1) * g - 0.35 * g), bw = Math.floor(0.7 * g);
     const act = sounding.get(pitch);
     const gv = glowOf(pitch, act !== undefined || live.has(pitch));
+    const bh = keys3d ? Math.max(6, bkH - Math.round(4 * gv)) : bkH;
+    if (keys3d) { ctx.fillStyle = grBkFront; ctx.fillRect(bx, wN + bh, bw, bkFrontH); }
     ctx.fillStyle = grBk;
     ctx.beginPath(); ctx.roundRect(bx, wN, bw, bh, [0, 0, 2, 2]); ctx.fill();
+    if (keys3d) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.10)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(bx + 0.5, wN + 0.5); ctx.lineTo(bx + bw - 0.5, wN + 0.5); ctx.stroke();
+    }
+    if (fx.beams && gv > 0.02) {
+      const hh = 34 + 78 * gv;
+      const up = ctx.createLinearGradient(0, wN, 0, wN - hh);
+      up.addColorStop(0, withAlpha(act !== undefined ? act : '#8fb8ff', 0.22 * gv));
+      up.addColorStop(1, withAlpha(act !== undefined ? act : '#8fb8ff', 0));
+      ctx.fillStyle = up;
+      ctx.fillRect(bx, wN - hh, bw, hh);
+    }
     if (gv > 0.02) {
       ctx.globalAlpha = gv;
       // 黑键上「仅合成器在响」用深色压暗（浅色主题下 --ink 也是深色，深色主题下则不然，
@@ -517,13 +714,62 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
       ctx.shadowBlur = 0; ctx.globalAlpha = 1;
     }
   }
-  for (let e = state.parts.length - 1; e >= 0; e--) {
-    const p = state.parts[e];
-    p.x += p.vx; p.y += p.vy; p.vy += .2; p.life -= .02;
-    if (p.life <= 0) { state.parts.splice(e, 1); continue; }
-    ctx.globalAlpha = p.life; ctx.fillStyle = p.color;
-    ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, 2 * Math.PI); ctx.fill();
+  // 粒子统一用**加色混合**画：光效叠在深色底上是"发光"，用普通混合只会是"贴纸"。
+  if (state.parts.length) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let e = state.parts.length - 1; e >= 0; e--) {
+      const p = state.parts[e];
+      if (p.kind === 1) {                                  // 冲击波环
+        p.r += p.vr; p.vr *= 0.94; p.life -= p.decay;
+        if (p.life <= 0) { state.parts.splice(e, 1); continue; }
+        ctx.globalAlpha = p.life * 0.5;
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = 1 + 2 * p.life;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 2 * Math.PI); ctx.stroke();
+        continue;
+      }
+      if (p.kind === 2) {                                  // 光柱
+        p.y -= 2.6; p.life -= p.decay;
+        if (p.life <= 0) { state.parts.splice(e, 1); continue; }
+        ctx.globalAlpha = 1;
+        // ★ 三层嵌套：canvas 的渐变只能沿一个轴，单层 linearGradient 的光柱左右是**硬边**，
+        //   看着像红纸条（离线渲染台实测）。三层不同宽度的同色渐变叠起来，
+        //   横向也就有了柔和衰减，接近参考图里"从键上洒出来的一束光"。
+        for (let bi = 0; bi < 3; bi++) {
+          const kk = bi / 2;
+          const wkk = p.w * (0.42 + 0.58 * kk);
+          const beam = ctx.createLinearGradient(0, p.y, 0, p.y - p.h);
+          beam.addColorStop(0, withAlpha(p.color, (0.40 - 0.13 * bi) * p.life));
+          beam.addColorStop(1, withAlpha(p.color, 0));
+          ctx.fillStyle = beam;
+          ctx.fillRect(p.x - wkk / 2, p.y - p.h, wkk, p.h);
+        }
+        continue;
+      }
+      p.x += p.vx; p.y += p.vy;
+      p.vx *= 0.985;
+      p.vy += p.kind === 3 ? 0.2 : 0.16;                   // 旧版圆点保持原重力常数
+      p.life -= p.decay;
+      if (p.life <= 0) { state.parts.splice(e, 1); continue; }
+      if (p.kind === 0) {
+        const sp = glowSprite(p.color);
+        const s = p.size * (0.45 + p.life * 0.55) * 2;
+        ctx.globalAlpha = p.life;
+        if (sp) {
+          ctx.drawImage(sp, p.x - s / 2, p.y - s / 2, s, s);
+        } else {                                           // 无 document：纯 arc 回退
+          ctx.fillStyle = p.color;
+          ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(1.5, s * 0.16), 0, 2 * Math.PI); ctx.fill();
+        }
+      } else {
+        ctx.globalAlpha = p.life; ctx.fillStyle = p.color;
+        ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, 2 * Math.PI); ctx.fill();
+      }
+    }
     ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.restore();
   }
   state.lastD = d;
   if (opts.showLyrics && opts.lyricAt) {

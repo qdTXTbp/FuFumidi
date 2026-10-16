@@ -335,6 +335,9 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
     lyricAt: vf.lyricAt || '',
     activeNotes,
     energy: st.energy,
+    // ★ 视效开关也走同一份设置：以前只有背景同源，开关若只在实时视图生效，
+    //   用户在预览里调的 3D 键盘/粒子，导出的成片又是一副样子（与背景那次是同一类缺陷）
+    fx: vizBg.fxOpts(),
   };
   const drawPanelBg = (x, y, w2, h2, title, sub, dot) => {
     ctx.fillStyle = cvar('--surface', '#101826');
