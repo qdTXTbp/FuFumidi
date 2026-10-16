@@ -140,7 +140,7 @@ export function createCompiler() {
           const near = Math.max(0, 1 - Math.abs(wN - bottom) / Math.max(1, wN * 0.16));
           const bh = Math.max(bottom - top, 5);
           if (near > 0.02) {                              // 落点光晕
-            pr.push(P.glow('notes', sx + cw / 2, Math.min(bottom, wN), Math.max(7, cw * 0.9), 0,
+            pr.push(P.glow('notes', sx + cw / 2, Math.min(bottom, wN), 0, Math.max(7, cw * 0.9),
               color, { alpha: 0.5 * near * (0.5 + 0.5 * velN), blend: 'lighter' }));
           }
           pr.push(P.capsule('notes', sx, top, cw, bh,

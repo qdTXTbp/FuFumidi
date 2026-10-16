@@ -10,6 +10,7 @@
 // ============================================================
 import { createCompiler } from './scene/compile.js';
 import { drawCanvas2D } from './raster/canvas2d.js';
+import { getGLRaster } from './raster/webgl2.js';
 import { bloomPass, ensureScene } from './post/bloom2d.js';
 import { LAYERS } from './scene/primitives.js';
 
@@ -83,7 +84,11 @@ export function createVizRenderer() {
       // 超采样（对标 Pianola 的 "any resolution / supersampling"）：先按 ssaa 倍渲染到离屏，
       // 合成时缩回目标尺寸 —— 抗锯齿与细节都更好，代价是可离线跑（导出不需要实时）。
       const ssaa = Math.max(1, Math.min(3, Number(opts.ssaa) || 1));
-      const needScene = wantBloom || ssaa > 1;
+      // 光栅后端：GPU（WebGL2）优先，跑不了就回退 Canvas2D —— 两条路吃同一份图元。
+      // 调试开关 window.__fufumidiVizForceCanvas2D 用于真机 A/B（不改设置项，避免给用户加开关）。
+      const force2d = typeof window !== 'undefined' && window.__fufumidiVizForceCanvas2D;
+      const gl = (opts.raster === 'canvas2d' || force2d) ? null : getGLRaster();
+      const needScene = !!gl || wantBloom || ssaa > 1;
       const stageIsPrim = !(bg.mode && bg.mode !== 'theme');
       const compileOpts = Object.assign({}, opts, { w, h, theme: opts.theme || 'studio', fx, stage: stageIsPrim });
       const out = compiler.compile(song, tick, compileOpts);
@@ -95,28 +100,38 @@ export function createVizRenderer() {
         ctx.restore();
         return out;
       }
-      // 有泛光：场景先画进离屏，再叠回主画布（后处理的输入必须是"场景"而不是"背景+场景"）
+      // 场景先画进离屏（泛光/超采样的输入必须是"场景"而不是"背景+场景"）
       const tw = Math.max(1, Math.round(w * sc)), th = Math.max(1, Math.round(h * sc));   // 目标设备尺寸
       const pw = Math.max(1, Math.round(w * sc * ssaa)), ph = Math.max(1, Math.round(h * sc * ssaa));
-      const scene = ensureScene(pw, ph);
-      if (!scene) { ctx.save(); paintStage(ctx, w, h, bg); drawLayers(ctx, out.prims, !!opts.stats); ctx.restore(); return out; }
-      const sctx = scene.getContext('2d');
-      sctx.setTransform(1, 0, 0, 1, 0, 0);
-      sctx.clearRect(0, 0, pw, ph);
-      sctx.save(); sctx.scale(sc * ssaa, sc * ssaa);   // 图元是 CSS 单位，这里一次性放大到超采样分辨率
-      drawLayers(sctx, out.prims, false);
-      sctx.restore();
+      let scene = null;
+      let texts = null;
+      if (gl) {
+        gl.resize(pw, ph);
+        texts = out.prims.some((p) => p.k === 'text') ? out.prims.filter((p) => p.k === 'text') : null;
+        gl.draw(out.prims, sc * ssaa);          // text 图元被 WebGL 跳过，留给下面叠字
+        scene = gl.canvas;
+      } else {
+        scene = ensureScene(pw, ph);
+        if (!scene) { ctx.save(); paintStage(ctx, w, h, bg); drawLayers(ctx, out.prims, !!opts.stats); ctx.restore(); return out; }
+        const sctx = scene.getContext('2d');
+        sctx.setTransform(1, 0, 0, 1, 0, 0);
+        sctx.clearRect(0, 0, pw, ph);
+        sctx.save(); sctx.scale(sc * ssaa, sc * ssaa);   // 图元是 CSS 单位，这里一次性放大到超采样分辨率
+        drawLayers(sctx, out.prims, false);
+        sctx.restore();
+      }
       const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
       ctx.save();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalCompositeOperation = 'source-over';
       ctx.globalAlpha = 1;
-      ctx.globalCompositeOperation = 'source-over';
       ctx.save(); ctx.scale(sc, sc); paintStage(ctx, w, h, bg); ctx.restore();
       ctx.drawImage(scene, 0, 0, tw, th);   // 超采样在这里缩回目标尺寸（降采样 = 抗锯齿）
       if (wantBloom) {
         bloomPass(ctx, scene, tw, th, Math.max(0, Number(fx.bloom) || 0), Math.max(0, Math.min(1, Number(fx.bloomThr) == null ? 0.5 : Number(fx.bloomThr))));
       }
+      // 文字层：GPU 后端不画字（字形质量），统一用 Canvas2D 叠在最上，实时与导出同一条路
+      if (texts) { ctx.save(); ctx.scale(sc, sc); drawCanvas2D(ctx, texts); ctx.restore(); }
       ctx.restore();
       lastStats = { total: +(((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0).toFixed(2)), layers: { post: lastStats.total } };
       return out;
@@ -138,3 +153,13 @@ export function drawVizWaterfallPost(ctx, w, h, song, tick, opts = {}) {
 }
 
 export function vizStats() { return lastStats; }
+
+/**
+ * 诊断：当前光栅后端与显卡名。
+ * 真机验收（"我的机器现在到底跑 GPU 还是 CPU"）和问题排查都靠它，挂到 window 上便于 CDP/控制台直查。
+ */
+export function vizRasterInfo() {
+  const g = getGLRaster();
+  return g ? { backend: 'webgl2', renderer: g.renderer } : { backend: 'canvas2d', renderer: 'cpu' };
+}
+if (typeof window !== 'undefined') window.__fufumidiVizRaster = vizRasterInfo;
