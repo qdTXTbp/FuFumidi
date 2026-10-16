@@ -1074,8 +1074,20 @@ export const useAppStore = defineStore('app', {
       const n = String(name || '').trim();
       const s: any = this.songs.find((x: any) => x.id === id);
       if (!s || !n || n === s.name) return false;
-      s.name = n;
       const b: any = (typeof window !== 'undefined') ? (window as any).fuBridge : null;
+      /* ★ 用户要求「重命名同步动磁盘文件名」：**先改文件**，改不动就整个放弃 ——
+         库里改了、磁盘还是旧名，是最糟的中间态（导出、分享、"在文件夹中显示"全对不上）。 */
+      if (b && typeof b.renameMidi === 'function' && s.path) {
+        const oldPath = String(s.path);
+        let r: any = null;
+        try { r = await b.renameMidi(oldPath, n); } catch (e: any) { r = { ok: false, error: String((e && e.message) || e) }; }
+        if (!r || !r.ok) { this.toast(t('重命名失败：') + String((r && r.error) || ''), 'error'); return false; }
+        if (r.path) {
+          s.path = r.path;
+          if (s.meta && s.meta.fp === oldPath) s.meta.fp = r.path;   // 指纹里也存了路径，一起换
+        }
+      }
+      s.name = n;
       if (b && typeof b.dbSongsPut === 'function') { try { await b.dbSongsPut(s); } catch (e) {} }
       return true;
     },

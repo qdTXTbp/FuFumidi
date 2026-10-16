@@ -73,6 +73,40 @@ function onResizerKey(e) {
 // 整理方式（默认/艺术家/专辑/流派/文件夹），持久化到 localStorage
 const libSort = ref((() => { try { return localStorage.getItem('fufumidi_libsort') || 'default'; } catch (e) { return 'default'; } })());
 watch(libSort, (v) => { try { localStorage.setItem('fufumidi_libsort', v); } catch (e) {} });
+
+/* ---------------- 筛选（标签 / 流派 / 艺术家 / 专辑） ----------------
+   ★ 2026-10-17 用户：「全部曲目里可以筛选标签、流派、艺术家」「还可以筛选专辑」。
+   与「整理方式」分开：整理方式决定**顺序**，筛选决定**看哪一些**，两者可叠加、都可清空。
+   选项从**当前歌单里真实出现过的值**里取（含计数）—— 不列永远选不中的空值。 */
+const FILTER_KINDS = [
+  { k: 'tag', label: '标签' }, { k: 'genre', label: '流派' },
+  { k: 'artist', label: '艺术家' }, { k: 'album', label: '专辑' },
+];
+const filterOpen = ref(false);
+const filterKind = ref('tag');
+const filterSel = reactive(new Set());
+const filterCount = computed(() => filterSel.size);
+function setFilterKind(k) { filterKind.value = k; filterSel.clear(); }
+function toggleFilterVal(v) { if (filterSel.has(v)) filterSel.delete(v); else filterSel.add(v); }
+function clearFilter() { filterSel.clear(); filterOpen.value = false; }
+function tagValuesOf(id) {
+  const tg = app.songTags(id) || {};
+  if (filterKind.value === 'tag') return cleanTags(tg.tags);
+  return [String(tg[filterKind.value] == null ? '' : tg[filterKind.value]).trim()].filter(Boolean);
+}
+const filterOptions = computed(() => {
+  const m = new Map();
+  for (const sg of app.queueSongs) {
+    for (const v of tagValuesOf(sg.id)) m.set(v, (m.get(v) || 0) + 1);
+  }
+  return Array.from(m.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh'))
+    .map(([v, n]) => ({ v, n }));
+});
+function songMatchesFilter(sg) {
+  if (!filterSel.size) return true;
+  return tagValuesOf(sg.id).some((v) => filterSel.has(v));
+}
 const isAllView = computed(() => playlist.activePlaylistId === 'all');
 const isFavView = computed(() => playlist.activePlaylistId === 'favorites');
 /** 虚拟智能视图（全部曲目/收藏/最近播放/最常播放）：没有真实的歌单归属，不能「移除」 */
@@ -80,7 +114,7 @@ const isVirtualView = computed(() => ['all', 'favorites', 'recent', 'most'].incl
 const activePlaylist = computed(() => playlist.activePlaylist);
 
 const visibleSongs = computed(() => {
-  const base = app.queueSongs;
+  const base = app.queueSongs.filter(songMatchesFilter);   // 先筛选，再排序
   if (libSort.value === 'default') return base;
   const key = (s) => {
     const tg = app.songTags(s.id) || {};
@@ -693,6 +727,24 @@ const showAuth = ref(false);
           <option value="genre">{{ t('按流派') }}</option>
           <option value="folder">{{ t('按文件夹') }}</option>
         </select>
+          <!-- 筛选：标签 / 流派 / 艺术家 / 专辑（与整理方式叠加） -->
+          <span class="lib-filter">
+            <button class="chip-btn" :class="{ on: filterCount > 0 }" :title="t('按标签 / 流派 / 艺术家 / 专辑筛选')" @click="filterOpen = !filterOpen">
+              {{ t('筛选') }}<b v-if="filterCount" class="lib-filter-n">{{ filterCount }}</b>
+            </button>
+            <button v-if="filterCount" class="chip-btn" :title="t('清除筛选')" @click="clearFilter">✕</button>
+            <div v-if="filterOpen" class="lib-filter-pop" @click.stop>
+              <div class="lib-filter-kinds">
+                <button v-for="k in FILTER_KINDS" :key="k.k" class="chip-btn" :class="{ on: filterKind === k.k }" @click="setFilterKind(k.k)">{{ t(k.label) }}</button>
+              </div>
+              <div class="lib-filter-vals">
+                <button v-for="o in filterOptions" :key="o.v" class="chip-btn" :class="{ on: filterSel.has(o.v) }" @click="toggleFilterVal(o.v)">
+                  {{ o.v }}<span class="lib-filter-c">{{ o.n }}</span>
+                </button>
+                <span v-if="!filterOptions.length" class="muted small">{{ t('这首歌单里还没有这类信息') }}</span>
+              </div>
+            </div>
+          </span>
       </div>
 
       <div class="nav-sep"></div>
@@ -1215,6 +1267,14 @@ body.resize-col .sidebar-resizer::after {
 .ctx-sub-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-sub-num { font-style: normal; font-size: var(--fs-xs); color: var(--stone); font-variant-numeric: tabular-nums; }
 .ctx-sep { height: 1px; background: var(--hairline); margin: 3px var(--sp-2); }
+/* 筛选（与整理方式同排）：一个切换按钮 + 浮层（种类一行、取值一行带计数） */
+.lib-filter { position: relative; display: inline-flex; align-items: center; gap: var(--sp-1); }
+.lib-filter-n { color: var(--accent); margin-left: 3px; }
+.lib-filter-pop { position: absolute; top: calc(100% + var(--sp-1)); left: 0; z-index: 40; width: min(280px, 78vw);
+  padding: var(--sp-2); border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface); box-shadow: var(--shadow); }
+.lib-filter-kinds { display: flex; flex-wrap: wrap; gap: var(--sp-1); padding-bottom: var(--sp-1); border-bottom: 1px solid var(--hairline-soft); }
+.lib-filter-vals { display: flex; flex-wrap: wrap; gap: var(--sp-1); max-height: 190px; overflow: auto; padding-top: var(--sp-1); }
+.lib-filter-c { color: var(--stone); margin-left: 3px; }
 /* 编辑信息弹窗：四行输入 + 标签区（值全部走 token，界面审计的棘轮才不会被顶上去） */
 .ed-info-body { padding: var(--sp-4) var(--sp-1) var(--sp-1); display: flex; flex-direction: column; gap: var(--sp-2); }
 .ed-info-row { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-sm); color: var(--ink); }

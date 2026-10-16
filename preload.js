@@ -177,6 +177,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   hasMidi: (p) => ipcRenderer.invoke('library:hasMidi', p),
   checkMidi: (items) => ipcRenderer.invoke('library:checkMidi', items),
   deleteMidi: (p) => ipcRenderer.invoke('library:deleteMidi', p),
+  renameMidi: (p, name) => ipcRenderer.invoke('library:renameMidi', p, name),
   revealMidi: (p) => ipcRenderer.invoke('library:reveal', p),
   midiStats: () => ipcRenderer.invoke('library:stats'),
   verifyMidi: () => ipcRenderer.invoke('library:verify'),
