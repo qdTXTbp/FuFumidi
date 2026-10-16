@@ -6,6 +6,19 @@
 
 ---
 
+## 执行进度（2026-10-16 第 1 轮）
+
+| 条目 | 状态 | 实测 |
+|---|---|---|
+| 决策 D1/D2 | ✅ 已定 | 仓库叫 **FuFumidi-Feedback**（公开、只有维护者可写）；CNB 走**镜像** |
+| GitHub 反馈仓库 | ✅ **已建** | github.com/qdTXTbp/FuFumidi-Feedback（公开、Issues 开）；已推 README / 3 套 issue 模板 / config.yml / .gitattributes / issues/README.md，**32 个标签**（kind·area·severity·source） |
+| CNB 反馈仓库 | ⬜ **需要你在 UI 建** | 建仓与镜像**都不在 CNB OpenAPI 里**（swagger 共 199 个端点，无建仓/镜像）；push-to-create 实测报 Repository Not Found。手动步骤见文末 |
+| worker 反馈路由 | ✅ 代码+单测完成 · ⏳ **未部署** | 新增 cloud-sync/worker/src/feedback.js（Turnstile / 体积 / 路径白名单 / 限流 → 附件进 R2 → md 走 GitHub Contents API → 可选建 issue），index.js 接 POST /feedback 与 GET /feedback/att/:id/:name，新增迁移 0003_feedback.sql；**9 项离线单测全过**。本机没有 wrangler、也没有 CF 登录态 → 部署要你跑（见文末） |
+| 客户端脱敏与打包 | ✅ 代码+单测完成 | 新增 main/feedback-format.js（slug / 文件名 / md 模板 / 脱敏 / 设置洗白 / 日志截断）；npm run test:feedback **9 项全过**（含隐私 golden） |
+| 反馈页 UI | ⬜ 待做 | 字段与交互按 §5 |
+| 端到端上传 | ⬜ 待做 | 依赖 worker 部署 |
+
+---
 ## 0. 一句话
 
 现在的「去 GitHub 反馈」是**把体检报告复制到剪贴板 + 打开一个预填好的 issue 网页，让用户自己粘贴**
