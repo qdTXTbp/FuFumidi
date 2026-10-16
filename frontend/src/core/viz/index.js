@@ -49,6 +49,21 @@ function paintStage(ctx, w, h, bg = {}) {
   return true;
 }
 
+/**
+ * 键盘是**哑光物体**，不该当泛光的发光源。
+ * ★ 实测（2026-10-19 用户："黑键还是太透明不够实"）：白键的泛光光晕会糊到相邻黑键上，
+ *   黑键从 #23262b 被抬成一片灰蓝 —— 看起来"透明、连白键分隔线都透过来"。
+ *   同一画面关掉泛光做 A/B，黑键立刻变实（截图见 _attic/vizrender/bl-A-keys.png 与 bl-B-keys.png）。
+ *   所以把键盘从泛光源里摘出来：场景（音符/光效/粒子）先带泛光合成，键盘再叠一遍。
+ *   光效层（fx）**仍留在泛光源里** —— 那些波动闪光本来就该发光。
+ */
+export function splitKeyboardBloom(prims, wantBloom) {
+  if (!wantBloom) return { on: false, key: [], rest: prims };
+  const key = prims.filter((p) => p.layer === 'keyboard');
+  if (!key.length) return { on: false, key: [], rest: prims };
+  return { on: true, key, rest: prims.filter((p) => p.layer !== 'keyboard') };
+}
+
 function drawLayers(ctx, prims, wantsStats) {
   if (!wantsStats) { drawCanvas2D(ctx, prims); lastStats = { total: 0, layers: {} }; return; }
   const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -91,6 +106,7 @@ export function createVizRenderer() {
         transparent: bg.mode === 'transparent',
       });
       const out = compiler.compile(song, tick, compileOpts);
+      const splitKB = splitKeyboardBloom(out.prims, wantBloom);
 
       if (!needScene) {
         ctx.save();
@@ -110,7 +126,7 @@ export function createVizRenderer() {
         texts = out.prims.some((p) => p.k === 'text') ? out.prims.filter((p) => p.k === 'text') : null;
         const mat = (opts.theme && resolveTheme ? resolveTheme(opts.theme) : null) || {};
         const material = (mat && mat.material) || {};
-        gl.draw(out.prims, sc * ssaa, {
+        gl.draw(splitKB.on ? splitKB.rest : out.prims, sc * ssaa, {
           post: wantBloom ? {
             enabled: true,
             bloom: Math.max(0, Number(fx.bloom) || 0) * 1.5,
@@ -119,6 +135,8 @@ export function createVizRenderer() {
             exposure: material.grade == null ? 1 : material.grade,
           } : null,
         });   // text 图元被 WebGL 跳过，留给下面叠字
+        // 键盘叠在后处理之后（哑光、不参与泛光，见 splitKeyboardBloom）
+        if (splitKB.on) gl.draw(splitKB.key, sc * ssaa, { keep: true });
         scene = gl.canvas;
         gpuPost = !!(wantBloom && fx && Number(fx.bloom) > 0.001);
       } else {
@@ -128,7 +146,7 @@ export function createVizRenderer() {
         sctx.setTransform(1, 0, 0, 1, 0, 0);
         sctx.clearRect(0, 0, pw, ph);
         sctx.save(); sctx.scale(sc * ssaa, sc * ssaa);   // 图元是 CSS 单位，这里一次性放大到超采样分辨率
-        drawLayers(sctx, out.prims, false);
+        drawLayers(sctx, splitKB.on ? splitKB.rest : out.prims, false);
         sctx.restore();
       }
       const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -141,6 +159,8 @@ export function createVizRenderer() {
       if (wantBloom && !gpuPost) {
         bloomPass(ctx, scene, tw, th, Math.max(0, Number(fx.bloom) || 0), Math.max(0, Math.min(1, Number(fx.bloomThr) == null ? 0.5 : Number(fx.bloomThr))));
       }
+      // 键盘层：泛光之后单独叠一遍（哑光物体，见 splitKeyboardBloom）
+      if (splitKB.on) { ctx.save(); ctx.scale(sc, sc); drawLayers(ctx, splitKB.key, false); ctx.restore(); }
       // 文字层：GPU 后端不画字（字形质量），统一用 Canvas2D 叠在最上，实时与导出同一条路
       if (texts) { ctx.save(); ctx.scale(sc, sc); drawCanvas2D(ctx, texts); ctx.restore(); }
       ctx.restore();

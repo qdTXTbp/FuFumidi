@@ -316,7 +316,10 @@ export function getGLRaster() {
 
     function draw(prims, scale, opts) {
       calls = 0;
-      const wantPost = !!(opts && opts.post && opts.post.enabled);
+      // ★ keep：**叠画**模式 —— 不清屏、不走后处理，直接画在已有内容之上。
+      //   用途：键盘是哑光物体，不参与泛光；后处理合成完再叠一遍（见 core/viz/index.js）。
+      const keep = !!(opts && opts.keep);
+      const wantPost = !keep && !!(opts && opts.post && opts.post.enabled);
       const pk = packPrims(prims, cw, ch, scale);
       // 有后处理时场景先画进离屏 FBO，再由后处理链合成到画布（否则直接画到画布）
       let fbo = null;
@@ -330,8 +333,7 @@ export function getGLRaster() {
       gl.disable(gl.DEPTH_TEST);
       gl.enable(gl.BLEND);
       lastBlend = '';
-      gl.clearColor(0, 0, 0, 0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
+      if (!keep) { gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); }
       if (!pk.count) {
         if (postOpts) { gl.bindFramebuffer(gl.FRAMEBUFFER, null); postCtx.run(postOpts); }
         return { calls: 0, instances: 0, prims: prims.length };
