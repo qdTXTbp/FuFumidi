@@ -67,3 +67,6 @@ frontend/.tmp/
 
 # Local Netlify folder
 .netlify
+
+# scratch/cache 一律放仓库外 (E:\Midi\_attic)；防呆
+_attic/

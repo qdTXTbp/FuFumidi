@@ -7,6 +7,9 @@ import { installTauriBridge } from './bridge/tauri';
 // ★ token 层必须在 styles.css **之前**：深色映射用属性选择器覆盖 :root，靠的就是后加载 + 更高优先级
 import './styles/tokens.css';
 import './styles.css';
+// ★ 字体覆盖层必须在 styles.css **之后**：styles.css 自己定义了 --mono 与 body 的 font-family，
+//   同优先级下后加载者赢（详见文件头注释里的实测记录）
+import './styles/typography.css';
 
 /* 主题：深色主导（设计语言决定），浅色可选。
    ★ 必须走应用自己的键：theme.js 用 'fufumidi_theme' 存**主题 ID**、'fufumidi_mode' 存明暗模式。

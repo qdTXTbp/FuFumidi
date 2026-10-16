@@ -14,6 +14,8 @@
       :root）覆盖，所以不必改动 styles.css 的 141 行就能整体变深色，且随时可回退。
    ============================================================ */
 
+@import './fonts.css';
+
 :root {
   /* ---------- 字体（离线内置，见 frontend/src/assets/fonts/）----------
      --font-ui    中文与界面正文：内置思源黑体子集，回退系统
@@ -22,6 +24,8 @@
   --font-ui: "FuFumidi Sans", "Microsoft YaHei UI", "Source Han Sans SC", "Noto Sans SC", system-ui, sans-serif;
   --font-num: "FuFumidi Mono", "JetBrains Mono", Consolas, "Cascadia Mono", monospace;
   --font-display: "FuFumidi Display", "Cinzel", Georgia, serif;
+  /* 既有代码里数字/时间码走的是 --mono（55 处）—— 把它指向内置等宽，避免两套并存 */
+  --mono: var(--font-num);
 
   /* ---------- 字号阶：12 档 → 6 档 ---------- */
   --fs-xs: 11px;    /* 辅助、徽标、表格脚注 */

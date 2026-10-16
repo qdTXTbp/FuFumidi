@@ -1,0 +1,29 @@
+/* ============================================================
+   FuFumidi · 字体落地覆盖层（M1-b）
+   ============================================================
+   ★ 为什么单独一个文件、且必须在 styles.css **之后**导入：
+     tokens.css 先定义了 --font-ui/--font-num，但 styles.css 在自己的 :root 里又定义了
+     --mono，并且 body 上有 font-family: "DM Sans", Inter, "PingFang SC"…
+     CSS 同优先级下"后加载的赢"，所以只把 token 写在前面**不会生效** ——
+     实测：内置字体状态一直是 unloaded、body 仍是 DM Sans。
+     这里只做"把既有入口指向内置字体"这一件事，等 M2 把这些用法迁进 token 后即可合并。
+
+   三款字体全部内置且子集化（合计 812 KB），应用离线可用、不再依赖机器上装了什么字体。
+   ============================================================ */
+
+body, button, input, select, textarea {
+  font-family: var(--font-ui);
+}
+
+/* 数字/遥测：时间码、BPM、百分比、版本号 —— 等宽 + 等宽数字，切换时不跳字 */
+:root { --mono: var(--font-num); }
+code, kbd, samp, pre {
+  font-family: var(--font-num);
+}
+
+/* 标题与品牌的衬线字：**只在这里**允许使用；正文、表格、按钮一律 --font-ui */
+h1, .fu-display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: .01em;
+}
