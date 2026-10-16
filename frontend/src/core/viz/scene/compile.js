@@ -169,15 +169,25 @@ export function createCompiler() {
           // ★ fx.gloss（面板「音符质感」）必须真的接上：上一版它只是个没人读的开关（实测死控件）。
           //   接上后它管三件事：落点光晕、白热内芯、边缘高光。
           const gloss = fx.gloss !== false;
-          if (gloss && near > 0.02) {                     // 落点光晕
-            pr.push(P.glow('notes', sx + cw / 2, Math.min(bottom, wN), 0, Math.max(7, cw * 0.9),
-              color, { alpha: 0.5 * near * (0.5 + 0.5 * velN), blend: 'lighter' }));
-          }
+          /* ★★ 这两个部件**必须从四边形取点**（2026-10-19 用户："残影"，并给了关键描述：
+             「和音符的间隙一一对应，从上往下走到底时和音符汇合」）。
+             原先它们画在**未剪切**的列中心 sx/cw 上，而本体吃 cam.noteQuad 的透视：
+             透视把音符越往高处推得越斜，于是每颗音符下沿都挂着一道横向偏移的亮线 ——
+             它落在音符与下一颗音符的间隙里（"和间隙一一对应"），越高偏得越多，
+             到落点线处 t=0 是恒等映射、两者重合（"走到底时和音符汇合"）。这就是残影。
+             现在两处都改成取 quad 的**落点边**（底边），与本体严格同源。 */
           // 音符本体：玻璃质感（主体 + 边缘亮线 + 纵向高光 + 上下收口），见 scene/note.js
           // 不透明度受「音符不透明度」滑杆控制，再乘纵深淡出（越远越淡）
           const quad = ps > 0.001
             ? cam.noteQuad(sx, sx + cw, top, bottom)
             : [sx, top, sx + cw, top, sx + cw, bottom, sx, bottom];
+          // ★ 落点边：下面两个"落点部件"都从这里取点（必须在 quad 之后）
+          const bmx = (quad[4] + quad[6]) / 2;
+          const bmy = Math.min((quad[5] + quad[7]) / 2, wN);
+          if (gloss && near > 0.02) {                     // 落点光晕
+            pr.push(P.glow('notes', bmx, bmy, 0, Math.max(7, cw * 0.9),
+              color, { alpha: 0.5 * near * (0.5 + 0.5 * velN), blend: 'lighter' }));
+          }
           const parts = buildNote(P, {
             quad, width: cw, height: bh, color, radius: theme.note.radius,
             alpha: noteAlpha * (1 - 0.5 * depth) * outA, velN, gloss, z: Math.floor(bottom),
@@ -185,7 +195,8 @@ export function createCompiler() {
           for (const q of parts) pr.push(q);
           // 落点处的那道白热横线（"音符砸到键上"的瞬间），仍归主题的 edge 强度管
           if (gloss && theme.note.edge > 0) {
-            pr.push(P.line('notes', sx + 2, Math.min(bottom, wN) - 1, sx + cw - 2, Math.min(bottom, wN) - 1,
+            // 沿 quad 的底边（BL→BR）画，两端各内缩 2px；透视下这条边本身就是斜的，跟着斜才对
+            pr.push(P.line('notes', quad[6] + 2, bmy - 1, quad[4] - 2, bmy - 1,
               withAlpha('#ffffff', theme.note.edge * (1 - depth) * (0.5 + 0.5 * velN)), { lw: 1.4, z: Math.floor(bottom) + 0.4 }));
           }
         }

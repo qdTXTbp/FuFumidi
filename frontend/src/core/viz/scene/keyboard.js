@@ -169,7 +169,9 @@ export function buildKeyboard(P, ctx) {
     const s = ctx.state(pitch);
     /* ★ 按压：远端（t=0，落点线）**绝不许动**，近端往下 dip，前脸同比变矮 ——
        整块键像绕远端转了一点，这才是"按下去"（旧写法是键面缩短，方向反了且只有 3px）。 */
-    const prs = solid ? Math.max(0, Math.min(1, s.gv)) : 0;
+    // ★ 起手要软（2026-10-19 用户："按压效果太生硬"）：直接跟 gv 线性走，按下瞬间就"啪"地沉 11px。
+    //   pow(1.6) 让下压由轻到重（松手时 gv 本身平滑衰减），幅度也不再是瞬间到位。
+    const prs = solid ? Math.pow(Math.max(0, Math.min(1, s.gv)), 1.6) : 0;
     const dip = PRESS_DIP * prs;
     const faceH2 = Math.max(6, ctx.faceH + dip);            // 近端下沉 → 键面变长
     const wallH = Math.max(3, ctx.frontH - dip * 0.85);     // 前脸补偿：整键下沿只降 0.15*dip
@@ -183,11 +185,6 @@ export function buildKeyboard(P, ctx) {
       pr.push(face(P, 'keyboard', [
         qNear[0], qNear[1], qNear[2], qNear[3], qNear[2], qNear[3] + wallH, qNear[0], qNear[1] + wallH,
       ], { stops: [kp.wkFrontTop, kp.wkFrontBot], dir: 'v' }, { alpha: keysA, z: 100 + i }));
-      // 按压的锐利锚点：近端那条边亮一道 —— 满屏音符里只靠 11px 下沉仍不够醒目
-      if (prs > 0.02 && kp.wkEdge) {
-        pr.push(P.line('keyboard', qNear[0], qNear[1], qNear[2], qNear[3], kp.wkEdge,
-          { lw: 2, alpha: 0.75 * prs * keysA, z: 320 + i }));
-      }
     }
     // 远端高光：落在音符落点线上，与音符列严格对齐（t=0 恒等）
     const fe = cam.farEdge(u0, u1);
@@ -223,8 +220,9 @@ export function buildKeyboard(P, ctx) {
          hTop 从 1 落到 1-0.8*prs，键面 / 前脸 / 两侧面全用同一个 hTop，怎么按都不会断开。
          平板模式（keys3d 关）没有厚度可落，就停在白键面上（h=0）——
          这里原先恒为 1，于是平板模式下黑键会浮在白键上方 9px。 */
-      const prs = solid ? Math.max(0, Math.min(1, s.gv)) : 0;
-      const hTop = solid ? 1 - 0.8 * prs : 0;
+      // 与白键同一条软化曲线；黑键落 55% 的抬起量（原来 80% 太"砸"）
+      const prs = solid ? Math.pow(Math.max(0, Math.min(1, s.gv)), 1.6) : 0;
+      const hTop = solid ? 1 - 0.55 * prs : 0;
       const t1 = BLACK_T;
       // ★ 黑键整层抬到**白键所有元素之上**（白键面 100 / 白键高光 300 / 白键闪光 310）。
       //   黑键是立在前排的键，白键的高光或闪光都不该盖住它 —— 用户实测反馈过这一条。

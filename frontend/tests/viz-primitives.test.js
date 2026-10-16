@@ -145,3 +145,30 @@ test('确定性：同一编译器同一 tick 连编两次，图元签名一致',
   const two = sig(b.compile(song, 100 * TPS + 30 * 16, { ...base, fx: {} }).prims);
   assert.equal(one, two, '同一输入必须产生同一份图元（禁止 Math.random）');
 });
+test('★ 音符的落点部件必须长在音符自己的四边形上（透视下不许横向偏移 —— 用户报的"残影"）', () => {
+  // 透视开关在 fx.persp（面板「透视」滑杆），不是顶层 opts
+  const r = createCompiler().compile(song, tick, { ...base, fx: { persp: 1 } });
+  const notes = r.prims.filter((p) => p.layer === 'notes');
+  // 本体：z 为整数（= floor(bottom)）且不是 lighter 叠加；透视下是 quad，平板下是 capsule
+  const bodies = notes.filter((p) => (p.k === 'quad' || p.k === 'capsule') && Number.isInteger(p.z) && !p.blend);
+  assert.ok(bodies.length >= 3, '应有三根音符本体，实测 ' + bodies.length);
+  const bottomOf = (b) => (b.k === 'quad'
+    ? { mx: (b.pts[4] + b.pts[6]) / 2, x0: b.pts[6], x1: b.pts[4] }
+    : { mx: b.x + b.w / 2, x0: b.x, x1: b.x + b.w });
+  let sheared = 0;
+  for (const b of bodies) {
+    if (b.k === 'quad' && Math.abs(b.pts[0] - b.pts[6]) > 0.5) sheared++;   // 上沿与下沿不同 x = 真被透视剪了
+    const bo = bottomOf(b);
+    const hot = notes.find((p) => p.k === 'line' && Math.abs(p.z - (b.z + 0.4)) < 1e-6);
+    if (!hot) continue;                                                    // 主题没开 edge 就不画这条
+    assert.ok(Math.abs((hot.x0 + hot.x1) / 2 - bo.mx) < 1e-6,
+      '落点亮线必须与音符底边同源：亮线中点 ' + ((hot.x0 + hot.x1) / 2).toFixed(2) + ' vs 底边中点 ' + bo.mx.toFixed(2));
+  }
+  assert.ok(sheared > 0, '透视必须真的生效，否则这条测试什么也没证明');
+  const glows = notes.filter((p) => p.k === 'glow');
+  assert.ok(glows.length > 0, '落点线附近的音符应有落点光晕');
+  for (const gl of glows) {
+    assert.ok(bodies.some((b) => Math.abs(gl.x - bottomOf(b).mx) < 1e-6),
+      '光晕圆心必须落在某个音符的底边中点上，实测 x=' + gl.x.toFixed(2));
+  }
+});
