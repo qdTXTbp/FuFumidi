@@ -323,6 +323,75 @@ if (fs.existsSync(OUT_UNPACK)) {
 // 注意：unpacked 与 asar 是配套的，engine 必须两边一致（asar 里 engine 只是占位）
 console.log('[5/7] 已覆盖 app.asar（' + (fs.statSync(ASAR).size / 1048576).toFixed(1) + ' MB）与 app.asar.unpacked');
 
+// ---- 5b) 同步 extraResources：electron-builder 把它们放到 resources/ 下，**asar 里不含**
+//   不补这一层就会出现「asar 里图标换了、窗口/托盘/任务栏还是旧的」——
+//   2026-10-16 换 logo 时实测：build/icon.png 已换，resources/icon.png 仍是旧图（sha 对不上），
+//   而 main/window.js 与 setupTray 都优先读 resources/icon.png。
+//   清单同样**只从 electron-builder.yml 读**，避免两处漂移（和 asarUnpack 一个道理）。
+function ymlPairs(name) {
+  const out = [];
+  let inBlock = false, cur = null;
+  for (const line of YML.split(/\r?\n/)) {
+    if (/^[A-Za-z_]/.test(line)) { inBlock = line.trimStart().startsWith(name + ':'); cur = null; continue; }
+    if (!inBlock) continue;
+    const mf = line.match(/^\s*-\s*from:\s*"?([^"'\s]+)"?/);
+    if (mf) { cur = { from: mf[1] }; out.push(cur); continue; }
+    const mt = line.match(/^\s*to:\s*"?([^"'\s]+)"?/);
+    if (mt && cur) cur.to = mt[1];
+  }
+  return out.filter((x) => x.from && x.to);
+}
+function fingerprint(p) {
+  const st = fs.statSync(p);
+  if (st.isFile()) return { files: 1, bytes: st.size };
+  let files = 0, bytes = 0;
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const q = path.join(d, e.name); if (e.isDirectory()) walk(q); else { files++; bytes += fs.statSync(q).size; } } };
+  walk(p);
+  return { files, bytes };
+}
+// ★ 明确**不接管** resources/python：它是 1.27 GB 的嵌入式解释器，且要按
+//   engine/patches/muscriptor-events-fufumidi.1.py **手工**打上游补丁（见本文件开头第 19 行）。
+//   2026-10-16 实测教训：最初把整张 extraResources 清单一并同步，resources/python 被整目录覆盖。
+//   那次恰好无罪（工作区那份本来就带着补丁，两边 events.py 同为 22897 B），但那是运气：
+//   一旦有人往工作区放一份**未打补丁**的 python，下一次部署就会静默把安装版的补丁抹掉。
+const EXTRA_SKIP = ['resources/python'];
+const extra = ymlPairs('extraResources');
+const synced = [];
+for (const { from, to } of extra) {
+  const src = path.join(ROOT, from);
+  const dst = path.join(RES, to);
+  if (EXTRA_SKIP.some((s) => from === s || from.startsWith(s + '/'))) {
+    synced.push(from + '（**不接管**，上游补丁靠手工 copy）');
+    continue;
+  }
+  if (!fs.existsSync(src)) { synced.push(from + '（源码里没有，跳过）'); continue; }
+  const same = fs.existsSync(dst) &&
+    JSON.stringify(fingerprint(src)) === JSON.stringify(fingerprint(dst));
+  if (same) { synced.push(from + '（已一致）'); continue; }
+  fs.rmSync(dst, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  fs.cpSync(src, dst, { recursive: true });
+  const f = fingerprint(src);
+  synced.push(from + ' -> resources/' + to + '（' + f.files + ' 文件 / ' + (f.bytes / 1048576).toFixed(1) + ' MB）');
+}
+console.log('[5b/7] extraResources 已同步：' + synced.join('；'));
+
+// ---- 5c) 硬门槛：安装版的 muscriptor 必须带着 FuFumidi 上游补丁
+//   补丁只在 engine/patches/ 里存一份、靠手工 copy 进 resources/python（见本文件开头），
+//   所以「有没有打上」必须每次部署都验一次，而不是等用户报告转录丢音。
+{
+  const EV = path.join(RES, 'python', 'Lib', 'site-packages', 'muscriptor', 'events.py');
+  if (fs.existsSync(EV)) {
+    const txt = fs.readFileSync(EV, 'utf8');
+    if (!txt.includes('FUFUMIDI_TRACKER_TRACE')) {
+      console.error('[5c/7] ✗ 安装版的 muscriptor/events.py 没有 FuFumidi 补丁 —— 转录会丢音。');
+      console.error('       修法：copy engine/patches/muscriptor-events-fufumidi.1.py -> ' + EV);
+      process.exit(1);
+    }
+    console.log('[5c/7] muscriptor 上游补丁在位（FUFUMIDI_TRACKER_TRACE）');
+  }
+}
+
 // ---- 6) 自检：内联文件里不该再出现「已经在 unpacked 里」的重复
 function countFiles(dir) {
   let n = 0, bytes = 0;

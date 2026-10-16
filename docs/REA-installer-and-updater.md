@@ -112,6 +112,24 @@ github       不可达：This operation was aborted
 - kachina 侧（schema 允许的范围内）：`windowTitle` 改为「FuFumidi 安装 / 更新」，
   `build/updater-left.webp`（180×400，构建脚本用 `-t` 传进去）重画为同一套语言。
 
+**品牌资产流水线（换 logo 时只改一处）**：
+
+```
+docs/assets/logo-master.png           母图，只此一份（1.2 MB，docs/ 不打进安装包）
+      │  scripts/gen-logo.py          取「头部特写」+ 透明底 → 512/460/ICO
+      ▼
+build/icon.png  build/icon.ico  frontend/src/assets/logo.png  docs/assets/logo.png
+      │  scripts/gen-installer-art.py （圆角方块卡 + 暗场 + 柔光 + 倒影）
+      ▼
+build/installerSidebar.bmp  build/installerHeader.bmp  build/updater-left.webp
+```
+
+两个实测过的坑（都写进 `scripts/gen-logo.py` 的注释里了）：① **母图本身可能就是透明底**
+（看着是白底，其实查看器把透明合成到白上），这时再「去白底」会把图标变成黑底不透明；
+② 图标取景**不能用 alpha 边界框中心** —— 魔杖和帽子蕾丝会把中心带偏，要用肤色像素的中位数。
+另：`resources/icon.png`（窗口 / 托盘用）是 `extraResources` 落的，`asar` 里不含，
+所以 `scripts/deploy-installed.cjs` 现在会一并同步 extraResources 并校验 muscriptor 补丁。
+
 ### 4.3 验证方式（哪些是"看过的"，哪些只是"编译过"）
 
 - **编译过**：`makensis` 用独立 harness 编译了改后的 `build/nsis-custom.nsh`
