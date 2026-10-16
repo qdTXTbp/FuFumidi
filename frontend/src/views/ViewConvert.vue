@@ -1,6 +1,6 @@
 <script setup>
 import { themeColor, VIEW_TRACK_RAMP } from '../core/palette.js';
-import { ref, computed, reactive, watch, nextTick, onMounted } from 'vue';
+import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useVizBgStore, BG_MODES } from '../stores/vizbg';
@@ -230,6 +230,9 @@ const VE = reactive({
 //   任何一边改动，两边的预览与成片立刻一致。
 const vizBg = useVizBgStore();
 const bg = vizBg.bg;
+/** 动态壁纸：与「可视化」页**共用同一份设置** —— 这里挑的壁纸就是导出的背景（同一绘制函数） */
+function pickBgWall() { app.ui.wallpaperTarget = 'viz'; app.ui.wallpaperOpen = true; }
+function clearBgWall() { vizBg.clearWall(); }
 const veResCustom = ref(false);
 const vePreviewEl = ref(null);
 function previewWH() {
@@ -259,12 +262,15 @@ function drawVideoPreview() {
   }
   catch (e) { console.warn('[video] 预览绘制失败：', e); }
 }
-watch(() => [VE.template, bg.mode, bg.color, bg.blur, bg.dim, VE.visual, VE.showProgress, VE.showChord, VE.showTimecode, VE.showLyrics, VE.showWatermark, VE.res, VE.fps, VE.quality, VE.track], () => nextTick(drawVideoPreview), { deep: true });
+watch(() => [VE.template, bg.mode, bg.color, bg.blur, bg.dim, bg.wallPath, VE.visual, VE.showProgress, VE.showChord, VE.showTimecode, VE.showLyrics, VE.showWatermark, VE.res, VE.fps, VE.quality, VE.track], () => nextTick(drawVideoPreview), { deep: true });
 onMounted(() => {
   nextTick(drawVideoPreview);
-  // 图片解码是异步的：读完再重绘一次，否则首帧拿到的是 null（画成主题底）
-  void vizBg.init().then(() => nextTick(drawVideoPreview));
+  // 图片/壁纸解码是异步的：读完再重绘一次，否则首帧拿到的是 null（画成主题底）；
+  // 动态壁纸还要**开播** —— 导出页也得出帧，成片里的背景才会动。
+  void vizBg.init().then(() => { vizBg.setWallActive(bg.mode === 'wallpaper'); nextTick(drawVideoPreview); });
 });
+// 离开导出页就暂停壁纸解码（回来时 onMounted 会再开）
+onBeforeUnmount(() => vizBg.setWallActive(false));
 function vePickWatermark() { vePickImage((d) => { VE.watermark = d; }); }
 function vePickImage(cb) {
   const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
@@ -899,8 +905,14 @@ async function renderVideo() {
                      style="width:38px;height:24px;padding:0;border:1px solid var(--hairline);border-radius:var(--r-sm);background:none;cursor:pointer" />
               <button v-if="bg.mode === 'image'" class="btn sm" @click="vizBg.pickImage()">
                 <Icon name="folder" :size="12" />{{ bg.path ? t('更换') : t('选择') }}</button>
+              <!-- 动态壁纸：走应用壁纸库，落点是瀑布流背景（与「可视化」页同一份设置） -->
+              <button v-if="bg.mode === 'wallpaper'" class="btn sm" @click="pickBgWall">
+                <Icon name="folder" :size="12" />{{ bg.wallPath ? t('更换') : t('选择') }}</button>
+              <button v-if="bg.mode === 'wallpaper' && bg.wallPath" class="btn sm ghost"
+                      :title="t('关掉动态壁纸，退回主题底')" @click="clearBgWall">✕</button>
+              <span v-if="bg.mode === 'wallpaper'" class="muted small" :title="bg.wallPath || ''">{{ bg.wallPath ? (vizBg.wallName || t('动态壁纸')) : t('还没挑壁纸') }}</span>
             </div>
-            <div v-if="bg.mode === 'image' || bg.mode === 'theme'" class="ve-bg-sliders">
+            <div v-if="bg.mode === 'image' || bg.mode === 'theme' || bg.mode === 'wallpaper'" class="ve-bg-sliders">
               <span class="muted small">{{ t('模糊') }}</span>
               <NumSlider :model-value="bg.blur" @update:model-value="v => { vizBg.setBlur(v) }" :min="0" :max="40" :step="1" :input-width="68" />
               <span class="muted small">{{ t('暗化') }}</span>

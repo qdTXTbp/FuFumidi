@@ -257,7 +257,7 @@ function pixelScale(ctx) {
 }
 
 /**
- * 画音符瀑布的背景（`主题 / 纯色 / 图片 / 透明`）—— **可视化页与视频导出共用这一个实现**。
+ * 画音符瀑布的背景（`主题 / 纯色 / 图片 / 动态壁纸 / 透明`）—— **可视化页与视频导出共用这一个实现**。
  *
  * ★ 抽出来是为了让导出与实时预览**逐像素同源**：导出页以前自己 fillRect 一个 bgColor，
  *   跟可视化页选的图片/透明档/模糊暗化完全无关（用户看到的和导出的是两幅画）。
@@ -266,23 +266,60 @@ function pixelScale(ctx) {
  * ★ 千万不要 setTransform(1,0,0,1,0,0)：调用方已经把 dpr 缩放设在 ctx 上，
  *   而传进来的 w/h 是 **CSS 像素**。重置成 identity 只会铺满左上角 1/dpr 的区域。
  */
-function paintVizBgDirect(ctx, w, h, bgOpt = {}) {
+/* 动态壁纸的**受限尺寸帧**（2026-10-19）。
+   视频每帧都在变，所以模糊只能逐帧做 —— 而位图缓存那条路（下面 paintVizBg 里的 BG_CACHE）
+   正是为"背景参数一次会话里恒定"设计的。4K 全分辨率一次 blur 实测 80~150ms，远超单帧预算，
+   于是先把当前帧画进一张**最多 1280 宽**的离屏画布、在那里做模糊（半径同比缩小），再放大铺满：
+   模糊过的画面本来就没有细节可损失，而开销被压到 1/9 以下。不模糊时直接铺，一次 drawImage 最省。 */
+const WALL_FRAME = { cv: null, w: 0, h: 0 };
+function wallFrameCanvas(w, h) {
+  if (!WALL_FRAME.cv) WALL_FRAME.cv = document.createElement('canvas');
+  if (WALL_FRAME.w !== w || WALL_FRAME.h !== h) {
+    WALL_FRAME.cv.width = w; WALL_FRAME.cv.height = h;
+    WALL_FRAME.w = w; WALL_FRAME.h = h;
+  }
+  return WALL_FRAME.cv;
+}
+
+export function paintVizBgDirect(ctx, w, h, bgOpt = {}) {
   const mode = bgOpt.mode || 'theme';
   const blur = Math.max(0, Number(bgOpt.blur) || 0);
   const dim = Math.max(0, Math.min(0.9, Number(bgOpt.dim) || 0));
+  // ★ 动态壁纸档：只认"已经出过帧"的视频（readyState<2 或 videoWidth=0 时交给下面的渐变兜底，
+  //   不留一块黑屏）。视频与图片走**同一条 cover 铺法**，区别只在逐帧做模糊那一支。
+  const vid = (mode === 'wallpaper' && bgOpt.video && bgOpt.video.videoWidth) ? bgOpt.video : null;
+  const img = (!vid && mode === 'image' && bgOpt.image && bgOpt.image.width) ? bgOpt.image : null;
   ctx.save();
   if (mode === 'solid') {
     ctx.fillStyle = bgOpt.color || cssVar('--canvas', '#0b1020');
     ctx.fillRect(0, 0, w, h);
-  } else if (mode === 'image' && bgOpt.image && bgOpt.image.width) {
-    const im = bgOpt.image;
+  } else if (vid && blur > 0 && typeof document !== 'undefined') {
+    const cw = Math.min(1280, Math.max(480, Math.round(w)));
+    const ch = Math.max(1, Math.round(cw * h / Math.max(1, w)));
+    const cv = wallFrameCanvas(cw, ch);
+    const c2 = cv.getContext('2d');
+    const k = cw / Math.max(1, w);                 // 帧相对画布的缩放：模糊半径同比缩
+    const b2 = blur * k, pad2 = b2 * 3;
+    const sc2 = Math.max((cw + pad2 * 2) / vid.videoWidth, (ch + pad2 * 2) / vid.videoHeight);
+    const dw2 = vid.videoWidth * sc2, dh2 = vid.videoHeight * sc2;
+    c2.setTransform(1, 0, 0, 1, 0, 0);
+    c2.clearRect(0, 0, cw, ch);
+    c2.filter = 'blur(' + b2 + 'px)';
+    c2.drawImage(vid, (cw - dw2) / 2, (ch - dh2) / 2, dw2, dh2);
+    c2.filter = 'none';
+    if (dim > 0) { c2.fillStyle = 'rgba(0,0,0,' + dim + ')'; c2.fillRect(0, 0, cw, ch); }
+    ctx.drawImage(cv, 0, 0, w, h);
+  } else if (vid || img) {
+    const src = vid || img;
+    const sw = vid ? vid.videoWidth : img.width;
+    const sh = vid ? vid.videoHeight : img.height;
     // cover：填满、不拉伸变形。模糊会把边缘「吃」掉（blur 会采到画布外的透明像素），
     // 所以按模糊半径外扩一点再画 —— 实测不扩的话四边会透出底色。
     const pad = blur > 0 ? blur * 3 : 0;
-    const scale = Math.max((w + pad * 2) / im.width, (h + pad * 2) / im.height);
-    const dw = im.width * scale, dh = im.height * scale;
+    const scale = Math.max((w + pad * 2) / sw, (h + pad * 2) / sh);
+    const dw = sw * scale, dh = sh * scale;
     ctx.filter = blur > 0 ? 'blur(' + blur + 'px)' : 'none';
-    ctx.drawImage(im, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    ctx.drawImage(src, (w - dw) / 2, (h - dh) / 2, dw, dh);
     ctx.filter = 'none';
     if (dim > 0) { ctx.fillStyle = 'rgba(0,0,0,' + dim + ')'; ctx.fillRect(0, 0, w, h); }
   } else {
@@ -317,6 +354,13 @@ export function paintVizBg(ctx, w, h, bgOpt = {}) {
   if (mode === 'transparent') {
     // 真的清成透明：导出 PNG / 视频后才能当叠加层用（本来就只是一次 clearRect，不必缓存）
     ctx.save(); ctx.clearRect(0, 0, w, h); ctx.restore();
+    return;
+  }
+  if (mode === 'wallpaper') {
+    // ★ 动态壁纸**绝不能走位图缓存**：BG_CACHE 的键里没有时间，缓存住就等于画面永远停在第一帧
+    //   （用户看到的会是"选了动态壁纸却是一张静止图"）。逐帧直画当前帧；
+    //   模糊已在 paintVizBgDirect 内部按受限尺寸做过，所以这里不必再打折。
+    paintVizBgDirect(ctx, w, h, bgOpt);
     return;
   }
   if (typeof document === 'undefined') { paintVizBgDirect(ctx, w, h, bgOpt); return; }

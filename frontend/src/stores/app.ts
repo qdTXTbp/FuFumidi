@@ -231,6 +231,8 @@ export const useAppStore = defineStore('app', {
       settingsTab: 'appearance',
       themesOpen: false,
       wallpaperOpen: false,
+      // 壁纸库这次是给谁挑：'app' = 应用整窗背景，'viz' = 音符瀑布背景（可视化页的「动态壁纸」进来）
+      wallpaperTarget: 'app' as 'app' | 'viz',
       guideOpen: false,
       paletteOpen: false,
       changelogOpen: false,

@@ -4,11 +4,13 @@ import { ref, onMounted } from 'vue';
 import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
+import { useVizBgStore } from '../stores/vizbg';
 import { t } from '../core/i18n.js';
 
 const app = useAppStore();
 const state = app;
 const settingsStore = useSettingsStore();
+const vizBg = useVizBgStore();
 const toast = (m, type) => app.toast(m, type);
 const bridge = window.fuBridge;
 const list = ref([]);
@@ -19,8 +21,14 @@ const progress = ref(0);
 const importing = ref(false);
 const importProgress = ref(0);
 
-function closeWallpaperGallery() { state.ui.wallpaperOpen = false; }
+/** 这个壁纸库是给谁挑的：'app' = 应用整窗背景（原来就有）；'viz' = 音符瀑布的画面背景 */
+function wpTarget() { return state.ui.wallpaperTarget === 'viz' ? 'viz' : 'app'; }
+function appliedToast() { return wpTarget() === 'viz' ? t('已应用到音符瀑布背景') : t('壁纸已应用'); }
+function closeWallpaperGallery() { state.ui.wallpaperOpen = false; state.ui.wallpaperTarget = 'app'; }
+/* ★ 同一个壁纸库、两个落点（2026-10-19）：缩略图 / 下载 / 导入本地视频三件事完全共用，
+   只有"最后写进哪份设置"不同 —— 应用整窗背景写 settings，瀑布流背景写 stores/vizbg。 */
 async function setWallpaperPath(path) {
+  if (wpTarget() === 'viz') { await vizBg.setWall(path); return; }
   // 先乐观更新本地设置，立即触发 App 动态壁纸加载，再持久化
   settingsStore.setLocal({ custom_wallpaper: path, wallpaper_enabled: true });
   try { await settingsStore.save({ custom_wallpaper: path, wallpaper_enabled: true }); } catch (e) {}
@@ -61,16 +69,16 @@ async function pick(item, i) {
         item.local = true;
         item.video = r.path;
         await setWallpaperPath(r.path);
-        toast(t('壁纸已下载并应用'), 'ok');
+        toast(wpTarget() === 'viz' ? t('已应用到音符瀑布背景') : t('壁纸已下载并应用'), 'ok');
       } else {
         // 网络受限/被拦截 → 直接应用在线流
         await setWallpaperPath(item.video);
-        toast((r && r.error) ? t('下载受限，已应用在线壁纸') : t('壁纸已应用'), 'warn');
+        toast((r && r.error) ? t('下载受限，已应用在线壁纸') : appliedToast(), 'warn');
       }
     } else {
       toast(t('正在应用壁纸…'));
       await setWallpaperPath(item.video);
-      toast(t('壁纸已应用'), 'ok');
+      toast(appliedToast(), 'ok');
     }
     closeWallpaperGallery();
   } catch (e) {
@@ -137,6 +145,8 @@ async function removeLocalItem(item, i) {
     if (cfg.custom_wallpaper === item.video || (item.path && cfg.custom_wallpaper === item.path)) {
       await settingsStore.save({ wallpaper_enabled: false, custom_wallpaper: '' });
     }
+    // 瀑布流背景用的若是这一张，一并清掉（否则档位还写着"动态壁纸"、文件已经没了）
+    if (vizBg.bg.wallPath === item.video || (item.path && vizBg.bg.wallPath === item.path)) vizBg.clearWall();
     toast(t('已移除本地壁纸，可重新下载'), 'ok');
   } catch (e) {
     toast(t('删除失败：') + String((e && e.message) || e), 'error');
@@ -151,12 +161,14 @@ onMounted(load);
     <div class="overlay-card wp-gallery">
       <div class="settings-head">
         <Icon name="wallpaper" :size="17" />
-        <span class="settings-title">{{ t('壁纸库') }}</span>
+        <span class="settings-title">{{ t(wpTarget() === 'viz' ? '音符瀑布动态壁纸' : '壁纸库') }}</span>
         <button class="icon-btn" style="margin-left:auto;width:30px;height:30px" :title="t('关闭')" :aria-label="t('关闭')" @click="closeWallpaperGallery">
           <Icon name="close" :size="15" />
         </button>
       </div>
-      <p id="wp-gallery-note" class="ov-note">{{ t('从 GitHub 下载壁纸，点击缩略图即可下载并应用；每次下载一张，需要更多可再次进入。') }}</p>
+      <p id="wp-gallery-note" class="ov-note">{{ wpTarget() === 'viz'
+        ? t('挑一张动态壁纸当音符瀑布的背景：点缩略图即应用，也可以导入本地视频。')
+        : t('从 GitHub 下载壁纸，点击缩略图即可下载并应用；每次下载一张，需要更多可再次进入。') }}</p>
 
       <div v-if="loading" class="wp-loading"><span class="spinner"></span>{{ t('正在加载壁纸列表…') }}</div>
       <div v-else-if="error" class="wp-error">

@@ -14,6 +14,8 @@ import { getGLRaster } from './raster/webgl2.js';
 import { resolveTheme } from './state/themes.js';
 import { bloomPass, ensureScene } from './post/bloom2d.js';
 import { LAYERS } from './scene/primitives.js';
+// ★ 背景实现只有一份（core/viz.js）—— 详见下面 paintStage 的注释
+import { paintVizBgDirect } from '../viz.js';
 
 const RENDERERS = new WeakMap();
 const DEFAULT_KEY = {};
@@ -30,27 +32,20 @@ function pixelScale(ctx) {
   try { const m = ctx.getTransform ? ctx.getTransform() : null; return (m && m.a > 0) ? m.a : 1; } catch (e) { return 1; }
 }
 
-/** 舞台预铺：只处理"主题之外"的三档（透明/纯色/图片）；主题底色来自 background 层的图元 */
+/** 舞台预铺：只处理"主题之外"的档位（透明 / 纯色 / 图片 / 动态壁纸 / keep）；
+ *  主题底色来自 background 层的图元（所以 theme 档返回 false = 没铺底）。
+ *
+ *  ★ 这里**必须**转调 core/viz.js 的 paintVizBgDirect —— 早先这张函数是它的第二份拷贝，
+ *    只认 theme/solid/image/transparent。2026-10-19 新增「动态壁纸」档时漏改了这一份，
+ *    后果不是"画得不好看"而是**整块背景哑火**：本函数在 wallpaper 档下任何分支都不命中，
+ *    却仍返回 true（= "我铺好了"），于是编译器也不再发 background 层图元 ——
+ *    用户看到的是"选了动态壁纸，背景什么都没有"。现在实现只有一份。 */
 function paintStage(ctx, w, h, bg = {}) {
   const mode = bg.mode || 'theme';
-  if (mode === 'theme') return false;
-  ctx.save();
-  if (mode === 'transparent') {
-    ctx.clearRect(0, 0, w, h);
-  } else if (mode === 'solid') {
-    ctx.fillStyle = bg.color || '#0b1020';
-    ctx.fillRect(0, 0, w, h);
-  } else if (mode === 'image' && bg.image && bg.image.width) {
-    const blur = Math.max(0, Number(bg.blur) || 0), dim = Math.max(0, Math.min(0.9, Number(bg.dim) || 0));
-    const pad = blur > 0 ? blur * 3 : 0;
-    const s = Math.max((w + pad * 2) / bg.image.width, (h + pad * 2) / bg.image.height);
-    const dw = bg.image.width * s, dh = bg.image.height * s;
-    ctx.filter = blur > 0 ? 'blur(' + blur + 'px)' : 'none';
-    ctx.drawImage(bg.image, (w - dw) / 2, (h - dh) / 2, dw, dh);
-    ctx.filter = 'none';
-    if (dim > 0) { ctx.fillStyle = 'rgba(0,0,0,' + dim + ')'; ctx.fillRect(0, 0, w, h); }
-  }
-  ctx.restore();
+  if (mode === 'theme') return false;     // 主题底由 background 层图元画
+  if (mode === 'keep') return true;       // 调用方已经自己铺过一整帧（导出模板用）
+  if (mode === 'transparent') { ctx.save(); ctx.clearRect(0, 0, w, h); ctx.restore(); return true; }
+  paintVizBgDirect(ctx, w, h, bg);
   return true;
 }
 

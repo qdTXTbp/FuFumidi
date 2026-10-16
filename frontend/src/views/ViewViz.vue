@@ -149,8 +149,11 @@ function saveThemeAs() {
 function saveBg() { vizBg.save(); }
 function setBgMode(m) { vizBg.setMode(m); }
 function pickBgImage() { void vizBg.pickImage(); }
-// 启动时把上次选过的图读回来（路径有效才用；图没了就退回主题，不留假图片档）
-onMounted(() => { void vizBg.init(); });
+/** 动态壁纸：打开应用的壁纸库，落点选"音符瀑布背景"（state.ui.wallpaperTarget='viz'） */
+function pickBgWall() { app.ui.wallpaperTarget = 'viz'; app.ui.wallpaperOpen = true; }
+function clearBgWall() { vizBg.clearWall(); }
+// 启动时把上次选过的图/壁纸读回来（路径有效才用；没了就退回主题，不留假档位）
+onMounted(() => { void vizBg.init().then(() => vizBg.setWallActive(bg.mode === 'wallpaper')); });
 // 沉浸模式下仪表盘那三张卡片没有意义，直接按瀑布流布局铺满
 const isWaterfall = computed(() => mode.value === 'waterfall' || immersive.value);
 
@@ -509,8 +512,9 @@ onMounted(() => {
 });
 // KeepAlive 保活期间停掉循环：频谱/瀑布每帧都要算 FFT 与大量绘制，
 // 离开本页后继续跑会明显拖慢整个应用
-onActivated(() => { grabCanvases(); if (!raf) raf = requestAnimationFrame(tick); });
-onDeactivated(() => { if (raf) { cancelAnimationFrame(raf); raf = null; } setImmersive(false); });
+// 动态壁纸的播放跟着"页面在不在台前"走：离开本页就暂停解码（别在看不见的地方烧 GPU）
+onActivated(() => { grabCanvases(); if (!raf) raf = requestAnimationFrame(tick); vizBg.setWallActive(bg.mode === 'wallpaper'); });
+onDeactivated(() => { if (raf) { cancelAnimationFrame(raf); raf = null; } setImmersive(false); vizBg.setWallActive(false); });
 onBeforeUnmount(() => {
   onPanelUp();   // 摘掉可能还挂着的拖拽监听
   if (raf) cancelAnimationFrame(raf);
@@ -520,6 +524,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('mousemove', onPointerMove);
   window.removeEventListener('resize', onWindowResize);
   setImmersive(false);
+  vizBg.setWallActive(false);
   spec = [];
 });
 </script>
@@ -536,7 +541,7 @@ onBeforeUnmount(() => {
                它本来就是视效的一部分（轨道色 / 按音高推导的两套 HSL），现在住进视效面板。 -->
           <!-- 背景：主题 / 纯色 / 图片 / 透明（叠加层）。SeeMusic 那类软件把"背景图 + 模糊"
                当成主要观感开关，这里补上；透明档配合导出即可当 OBS 叠加层。 -->
-          <button class="chip-btn" :class="{ active: bgMore }" :title="t('音符瀑布背景（主题/纯色/图片/透明）')" @click="bgMore = !bgMore">
+          <button class="chip-btn" :class="{ active: bgMore }" :title="t('音符瀑布背景（主题/纯色/图片/动态壁纸/透明）')" @click="bgMore = !bgMore">
             <Icon name="eye" :size="12" />{{ t('背景') }}
           </button>
           <!-- 视效：3D 键盘 / 粒子光效 / 落键光柱 / 击键光带 / 音符质感。
@@ -563,8 +568,20 @@ onBeforeUnmount(() => {
           <input v-if="bg.mode === 'solid'" type="color" class="viz-bg-color" :value="bg.color" @input="bg.color = $event.target.value; saveBg()" />
           <button class="chip-btn" :class="{ active: bg.mode === 'image' }" @click="setBgMode('image')">{{ t('图片') }}</button>
           <button class="chip-btn" :title="t('选择背景图片') " @click="pickBgImage"><Icon name="folder" :size="12" />{{ t('选择…') }}</button>
+          <!-- ★ 动态壁纸（2026-10-19 用户："音符瀑布背景允许设定动态壁纸"）：
+               走应用**同一套壁纸库**（缩略图 / 下载 / 导入本地视频），只是落点是"瀑布流画面"
+               而不是整窗背景（WallpaperGallery 按 state.ui.wallpaperTarget 分流）。 -->
+          <button class="chip-btn" :class="{ active: bg.mode === 'wallpaper' }"
+                  :title="t('用视频壁纸当瀑布流背景（同样可模糊 / 暗化）')" @click="setBgMode('wallpaper')">{{ t('动态壁纸') }}</button>
+          <button class="chip-btn" :title="t('打开壁纸库，挑一张动态壁纸当音符瀑布背景')" @click="pickBgWall">
+            <Icon name="folder" :size="12" />{{ bg.wallPath ? t('更换') : t('选择…') }}
+          </button>
+          <button v-if="bg.wallPath" class="chip-btn" :title="t('关掉动态壁纸，退回主题底')" @click="clearBgWall">✕</button>
+          <span v-if="bg.mode === 'wallpaper'" class="muted small" :title="bg.wallPath || ''">
+            {{ bg.wallPath ? (vizBg.wallName || t('动态壁纸')) : t('还没挑壁纸') }}
+          </span>
           <button class="chip-btn" :class="{ active: bg.mode === 'transparent' }" :title="t('真·透明：导出的画面可当叠加层')" @click="setBgMode('transparent')">{{ t('透明') }}</button>
-          <template v-if="bg.mode === 'image' || bg.mode === 'theme'">
+          <template v-if="bg.mode === 'image' || bg.mode === 'theme' || bg.mode === 'wallpaper'">
             <span class="muted small">{{ t('模糊') }}</span>
             <NumSlider :model-value="bg.blur" @update:model-value="v => { bg.blur = +v; saveBg() }" :min="0" :max="40" :step="1" range-style="width:88px" :input-width="68" no-input />
             <span class="muted small">{{ t('暗化') }}</span>
