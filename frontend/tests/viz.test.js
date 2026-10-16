@@ -168,7 +168,12 @@ test('放大时落在可视音域之外的高/低音不再产生图元', () => {
   // zoom = 1：整个 88 键都在画布上，三个音高都该画
   assert.equal(count(1), 3, 'zoom=1 时应画出全部三个音高');
   // zoom = 3：以全曲平均音高为中心只留 ~17 个白键，极低/极高音横向已在画布外
-  assert.equal(count(3), 1, 'zoom=3 时只剩处于可视音域内那一个');
+  // ★ 2026-10-17 改：音域外的音符不再"直接消失"，而是**夹到最近的可见键**上显示并降一档亮度
+  //（用户："鼓的音符就直接隐藏没有显示出来" —— 鼓组在低音区，缩放后整批被丢掉）
+  assert.equal(count(3), 3, '音域外的音符应夹到边缘继续显示，而不是整批消失');
+  const r3 = createCompiler().compile(song, 0, { w: 800, h, zoom: 3, colorScheme: 0, activeNotes: [], energy: 0, theme: 'studio', fx: {} });
+  const as = r3.prims.filter((p) => p.k === 'capsule' && p.layer === 'notes' && p.blend !== 'lighter').map((p) => p.alpha).sort((a, b) => a - b);
+  assert.ok(as[0] < as[as.length - 1], '夹到边缘的那些必须比音域内的暗：' + JSON.stringify(as.map((v) => +v.toFixed(2))));
 });
 
 /* ---------------- 能量度量 ---------------- */

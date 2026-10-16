@@ -141,14 +141,19 @@ export function createCompiler() {
     const forward = state.lastD >= 0 && d >= state.lastD;
     if (song) {
       for (const [pitch, arr] of state.byPitch) {
-        if (pitch < loMidi || pitch > hiMidi) continue;
+        // ★ 可视音域之外的音符不再直接丢掉（用户："鼓的音符就直接隐藏没有显示出来"）：
+        //   鼓组集中在低音区，缩放后音域一变窄就整批消失。现在把它们**夹到最近的可见键**上，
+        //   并降一档亮度表示"它其实在画面外" —— 至少看得见"那儿有东西在响"。
+        const outOfView = pitch < loMidi || pitch > hiMidi;
+        const pitchSrc = outOfView ? Math.max(loMidi, Math.min(hiMidi, pitch)) : pitch;
+        const outA = outOfView ? 0.55 : 1;
         const rng = visibleRange(arr, d, visSec);
         if (rng.from >= arr.length) continue;
         const head = arr[rng.from];
-        if (head.start <= d) sounding.set(pitch, noteColorOf(fx, head));
+        if (head.start <= d) sounding.set(pitchSrc, noteColorOf(fx, head));
         for (let k = rng.from; k < rng.to; k++) {
           const b = arr[k];
-          const { sx: sxB, cw: cwB } = pitchGeom(pitch, ensurePm(), g, wk0);
+          const { sx: sxB, cw: cwB } = pitchGeom(pitchSrc, ensurePm(), g, wk0);
           const bottom = wN - (b.start - d) * v;
           const top = wN - (b.end - d) * v;
           const depth = Math.max(0, Math.min(1, (wN - bottom) / Math.max(1, wN)));
@@ -175,7 +180,7 @@ export function createCompiler() {
             : [sx, top, sx + cw, top, sx + cw, bottom, sx, bottom];
           const parts = buildNote(P, {
             quad, width: cw, height: bh, color, radius: theme.note.radius,
-            alpha: noteAlpha * (1 - 0.5 * depth), velN, gloss, z: Math.floor(bottom),
+            alpha: noteAlpha * (1 - 0.5 * depth) * outA, velN, gloss, z: Math.floor(bottom),
           });
           for (const q of parts) pr.push(q);
           // 落点处的那道白热横线（"音符砸到键上"的瞬间），仍归主题的 edge 强度管

@@ -276,11 +276,32 @@ def separate(audio_path, out_dir, params=None, log_cb=None, progress_cb=None):
     #   `no kernel image is available`。engine_gpu.torch_device() 已经把这种情况判成 cpu，
     #   这里显式跟随。（只认 cuda / mps，其余一律 cpu —— 与 pymss 的合法取值一致；
     #   拿不到 engine_gpu 时保留 "auto" 的旧行为，避免误伤正常 GPU 机器。）
+    # ★ 2026-10-18：DirectML（AMD/Intel 走 torch_directml）之前被这行**无条件降级成 cpu** ——
+    #   体检里明明写着"加速已启用：DirectML GPU（privateuseone:0）"、算力校验也过，
+    #   分离却仍然打"未检测到可用的 GPU 加速"，然后在 CPU 上跑到超时（用户实测 19 分钟超时失败）。
+    #   现在：DirectML 设备先**真跑一次矩阵乘**验证可用，可用就交给 pymss；
+    #   不可用（或拿不到设备）再退回 cpu。cuda/mps 的行为完全不变。
+    def _directml_usable(dev):
+        try:
+            import torch
+            import torch_directml  # noqa: F401  仅确认扩展在
+            a = torch.ones(64, 64).to(dev)
+            b = torch.ones(64, 64).to(dev)
+            c = (a @ b).to("cpu")
+            return bool(torch.isfinite(c).all().item()) and abs(float(c[0, 0]) - 64.0) < 1e-3
+        except Exception:
+            return False
+
     _sep_dev = "auto"
     try:
         from engine_gpu import torch_device as _torch_device
         _d = _torch_device()
-        _sep_dev = _d if _d in ("cuda", "mps") else "cpu"
+        if _d in ("cuda", "mps"):
+            _sep_dev = _d
+        elif _d and _d.startswith("privateuseone"):
+            _sep_dev = _d if _directml_usable(_d) else "cpu"
+        else:
+            _sep_dev = "cpu"
     except Exception:
         _sep_dev = "auto"
 
@@ -290,6 +311,8 @@ def separate(audio_path, out_dir, params=None, log_cb=None, progress_cb=None):
         _log(log_cb, f"加载 MSST 模型（{arch} / {os.path.basename(model_path)}）…")
         if _sep_dev == "cpu":
             _log(log_cb, "分离将使用 CPU（未检测到可用的 GPU 加速，速度较慢）")
+        elif _sep_dev != "auto":
+            _log(log_cb, f"分离将使用 GPU 加速：{_sep_dev}")
         separator = MSSeparator(
             model_type=model_type,
             model_path=model_path,
