@@ -250,6 +250,8 @@ export const FX_DEFAULTS = {
   partScale: 1,      // 粒子数量倍率 0.3..1.6
   glow: 1,           // 光柱/发光强度倍率 0.4..1.6
   colorBy: 'track',  // 'track' 轨道色 | 'pitch' 按音高 | 'hand' 按左右手（D5）
+  keysOn: true,      // 显示琴键（关掉 = 只留音符与光效，给叠加层用）
+  keysAlpha: 1,      // 琴键不透明度 0..1（用户点名要的"让琴键透明"）
 };
 export function fxOf(opts) { return Object.assign({}, FX_DEFAULTS, opts && opts.fx); }
 
@@ -261,6 +263,7 @@ export const FX_PARAMS = [
   { k: 'flash', label: '击键闪光', min: 0, max: 1.5, step: 0.05 },
   { k: 'partScale', label: '粒子数量', min: 0.3, max: 1.6, step: 0.1 },
   { k: 'glow', label: '光柱强度', min: 0.4, max: 1.6, step: 0.05 },
+  { k: 'keysAlpha', label: '琴键不透明度', min: 0, max: 1, step: 0.05 },
 ];
 export const FX_COLORBY = [
   { k: 'track', label: '按轨道色' },
@@ -673,7 +676,14 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
     if (gv > 0.02) keyGlow.set(pitch, gv); else keyGlow.delete(pitch);
     return gv;
   };
+  // 琴键整体不透明度：0 = 隐藏（叠加层模式），1 = 正常。用户点名的"让琴键透明"。
+  // ★ 内部的按键高亮/闪光层会**显式**设置 globalAlpha，所以它们必须乘 keysA，
+  //   否则"透明度拉到 0"之后那些层还在闪。
+  // ★ 必须定义在键盘段**之前**（上一版放后面，直接被 TDZ 打回 —— 单测 2 个红）。
+  const keysA = (fx.keysOn === false) ? 0
+    : Math.max(0, Math.min(1, fx.keysAlpha == null ? 1 : Number(fx.keysAlpha)));
   const whiteLiveColor = cssVar('--ink', '#0a0a0a');
+  if (keysA < 1) ctx.globalAlpha = keysA;   // 键面/前脸/高光都吃这个基底
   // 琴键底色渐变按「纵向」定义，颜色只取决于 y；每个白键/黑键的 y 区间完全一致，
   // 因此整屏琴键可以共用两个渐变对象，而不是每个键各建一个（实测 90 个/帧 → 4 个/帧）。
   // 横向平移不改变纵向渐变的着色（着色由 y 在轴上的投影决定），渲染结果逐像素一致。
@@ -694,6 +704,7 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
   const grBkFront = keys3d ? ctx.createLinearGradient(0, wN + bkH, 0, wN + bkH + bkFrontH) : null;
   if (grBkFront) { grBkFront.addColorStop(0, kp.bkFrontTop); grBkFront.addColorStop(1, kp.bkFrontBot); }
   const glowK = fx.glow == null ? 1 : Math.max(0.2, Number(fx.glow));
+
   // 键面路径：有透视时是**梯形**（后边窄、前边宽），否则维持圆角矩形。
   // ★ ps = 0 走 roundRect 分支 → 与升级前逐像素一致（"全关"必须能回去）。
   const keyTop = (px, pw, kh, r) => {
@@ -750,15 +761,15 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
         ctx.fillStyle = up;
         ctx.fillRect(px, wN - hh, pw, hh);
       }
-      ctx.globalAlpha = gv;
+      ctx.globalAlpha = gv * keysA;
       ctx.fillStyle = keyColor;
       ctx.shadowBlur = 18 * gv * glowK; ctx.shadowColor = ctx.fillStyle;
       keyTop(px, pw, kh, [0, 0, 4, 4]); ctx.fill();
-      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0; ctx.globalAlpha = keysA < 1 ? keysA : 1;
     }
     const fv = fx.flash > 0 ? flashOf(pitch) : 0;
     if (fv > 0.02) {
-      ctx.globalAlpha = Math.min(1, fv * fx.flash);
+      ctx.globalAlpha = Math.min(1, fv * fx.flash) * keysA;
       ctx.fillStyle = 'rgba(255,255,255,0.92)';
       keyTop(px, pw, kh, [0, 0, 4, 4]); ctx.fill();
       ctx.globalAlpha = 1;
@@ -804,11 +815,11 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
       ctx.fillStyle = act !== undefined ? act : '#0a0a0a';
       ctx.shadowBlur = 18 * gv * glowK; ctx.shadowColor = ctx.fillStyle;
       keyTop(bx, bw, bh, [0, 0, 2, 2]); ctx.fill();
-      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0; ctx.globalAlpha = keysA < 1 ? keysA : 1;
     }
     const fvb = fx.flash > 0 ? flashOf(pitch) : 0;
     if (fvb > 0.02) {
-      ctx.globalAlpha = Math.min(1, fvb * fx.flash);
+      ctx.globalAlpha = Math.min(1, fvb * fx.flash) * keysA;
       ctx.fillStyle = 'rgba(255,255,255,0.85)';
       keyTop(bx, bw, bh, [0, 0, 2, 2]); ctx.fill();
       ctx.globalAlpha = 1;
