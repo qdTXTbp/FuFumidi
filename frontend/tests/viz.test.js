@@ -3,7 +3,9 @@
 // viz.js 可以在 node 里直接跑。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildVizBlocks, visibleRange, drawVizWaterfall, rmsAt, rmsFromBytes, smoothEnergy } from '../src/core/viz.js';
+import { buildVizBlocks, visibleRange, rmsAt, rmsFromBytes, smoothEnergy } from '../src/core/viz.js';
+// 可视化重做后，渲染入口只有 core/viz/index.js（门面）；这里测的是它下游的"屏内块 → 图元"数据层
+import { createCompiler } from '../src/core/viz/scene/compile.js';
 
 const TPS = 1000; // baseSec：1000 tick = 1 秒
 
@@ -17,39 +19,9 @@ function makeSong(tracks) {
   };
 }
 
-/* 假 2D 上下文。
-   ★ 这是一份**替身**，它必须覆盖被测代码真正调用到的每一个 ctx 方法 ——
-     viz.js 后来加了 `ctx.save()/restore()/clearRect()/drawImage()`（背景铺陈那条路径），
-     替身没跟上，两个测试就报 "ctx.save is not a function"（构建/其它测试全绿，只有这里红）。
-     维护办法：改 viz.js 的绘制代码后，用
-       grep -o "ctx\.[a-zA-Z]*(" frontend/src/core/viz.js | sort -u
-     对一遍这份清单。 */
-function fakeCtx() {
-  const rects = [];
-  const gradient = { addColorStop() {} };
-  const ctx = {
-    fillStyle: null, strokeStyle: null, lineWidth: 1, font: '', textAlign: '', textBaseline: '',
-    globalAlpha: 1, shadowBlur: 0, shadowColor: null,
-    createLinearGradient: () => gradient,
-    createRadialGradient: () => gradient,
-    // viz.js 的 pixelScale() 读 getTransform().a（拿不到就退化成 1）
-    getTransform: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }),
-    save() {}, restore() {}, clearRect() {}, drawImage() {},
-    fillRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fill() {}, arc() {}, fillText() {},
-    roundRect(x, y, w, h) { rects.push({ x, y, w, h, fill: ctx.fillStyle, alpha: ctx.globalAlpha }); },
-  };
-  return { ctx, rects };
-}
-
-/* 音符块的判别：块的**主填充是调色板纯色字符串**（#rrggbb 或 hsl(...)），琴键用的是渐变对象。
-   ★ 2026-10 加了键盘透视（D6）之后，键面在 persp > 0 时是**梯形路径**（moveTo/lineTo），
-     不再产生 y === wN 的 roundRect —— 旧的判别方式会失效。这个判别与形状无关，
-     仍然守住「每个屏内块**恰好画一次**、且用的是调色板色」这条不变量。
-   ★ 琴键的高亮层/闪光层也用字符串色填充，但它们只在琴键处于激活态时才画；
-     这三个用例传的是 activeNotes: []，所以不会混进来。 */
-function noteRectsOf(rects) {
-  return rects.filter((r) => typeof r.fill === 'string' && /^#|^rgb|^hsl/.test(r.fill));
-}
+/* 旧的两个测试（数 roundRect 绘制次数、用填充类型猜"哪一条是音符"）已随 M6 退役：
+   现在测的是**图元数据**（layer + kind），不再依赖"假 ctx 记住调用过什么"。
+   ★ 教训留在仓库里：替身测试会随被测实现的长相漂移，改一次绘制就要修一次替身。 */
 
 /* ---------------- buildVizBlocks ---------------- */
 
@@ -144,7 +116,7 @@ test('6 万音符的曲目单帧只处理屏内约 1% 的块（旧实现是全�
 
 /* ---------------- 端到端：只画屏内的块 ---------------- */
 
-test('drawVizWaterfall 每帧只绘制屏内音符块', () => {
+test('每帧只处理屏内音符块（旧测试数绘制调用，现在直接数图元）', () => {
   // 三个音高各三块：一块已划过、一块在屏内、一块还在屏外
   const song = makeSong([
     [{ midi: 60, start: 10000, end: 10500 }, { midi: 60, start: 100000, end: 100500 }, { midi: 60, start: 200000, end: 200500 }],
@@ -166,23 +138,19 @@ test('drawVizWaterfall 每帧只绘制屏内音符块', () => {
   }
   assert.equal(expected, 3, '三个音高各应只剩屏内那一块');
 
-  const { ctx, rects } = fakeCtx();
-  drawVizWaterfall(ctx, 800, h, song, d * TPS, {
-    state: {}, zoom: 1, colorScheme: 0, activeNotes: [], energy: 0,
-  });
-
-  const noteRects = noteRectsOf(rects);
-  assert.ok(noteRects.length > 0, '应当画出了音符块');
-  assert.equal(noteRects.length, expected, '音符块的绘制次数应等于屏内块数');
+  const r = createCompiler().compile(song, d * TPS, { w: 800, h, zoom: 1, colorScheme: 0, activeNotes: [], energy: 0, theme: 'studio', fx: {} });
+  const notes = r.prims.filter((p) => p.k === 'capsule' && p.layer === 'notes');
+  assert.ok(notes.length > 0, '应当产生了音符图元');
+  assert.equal(notes.length, expected, '音符图元数应等于屏内块数');
 
   // 三个音高分属三条轨，颜色各不相同 —— 三个颜色都在，说明每档各画了自己那一块
-  const colors = noteRects.map(r => r.fill).sort();
-  assert.deepEqual(colors, ['#1456f0', '#ea5ec1', '#ff5530'].sort(), '应恰好画出三个音高的屏内块');
+  const colors = new Set(notes.map((n) => n.fill.stops[2]));
+  assert.equal(colors.size, 3, '三个音高应各画出自成一色的块');
 });
 
 /* ---------------- 放大后：横向画布外的音高不再被绘制 ---------------- */
 
-test('放大时落在可视音域之外的高/低音不再产生绘制', () => {
+test('放大时落在可视音域之外的高/低音不再产生图元', () => {
   // 三个音高：很低（21）、中间（60）、很高（108），时间上同处一屏
   const song = makeSong([
     [{ midi: 21, start: 0, end: 500 }],
@@ -192,17 +160,14 @@ test('放大时落在可视音域之外的高/低音不再产生绘制', () => {
   const h = 400;
   const wN = h - Math.min(120, Math.round(0.2 * h));
 
-  const draw = (zoom) => {
-    const { ctx, rects } = fakeCtx();
-    drawVizWaterfall(ctx, 800, h, song, 0, { state: {}, zoom, colorScheme: 0, activeNotes: [], energy: 0 });
-    return noteRectsOf(rects);
-  };
+  const count = (zoom) => createCompiler()
+    .compile(song, 0, { w: 800, h, zoom, colorScheme: 0, activeNotes: [], energy: 0, theme: 'studio', fx: {} })
+    .prims.filter((p) => p.k === 'capsule' && p.layer === 'notes').length;
 
   // zoom = 1：整个 88 键都在画布上，三个音高都该画
-  assert.equal(draw(1).length, 3, 'zoom=1 时应画出全部三个音高');
+  assert.equal(count(1), 3, 'zoom=1 时应画出全部三个音高');
   // zoom = 3：以全曲平均音高为中心只留 ~17 个白键，极低/极高音横向已在画布外
-  const zoomed = draw(3);
-  assert.equal(zoomed.length, 1, 'zoom=3 时只剩处于可视音域内那一个');
+  assert.equal(count(3), 1, 'zoom=3 时只剩处于可视音域内那一个');
 });
 
 /* ---------------- 能量度量 ---------------- */
