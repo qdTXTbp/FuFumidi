@@ -723,6 +723,128 @@ async function exportDiag() {
   if (bridge && bridge.diagExport) { try { await bridge.diagExport(); } catch (e) {} }
 }
 
+/* ------------------------------------------------------------------
+   问题反馈上传（方案 docs/plans/2026-10-16-feedback-upload.md）
+   填好 → 上传：问题 md + 体检报告（自动脱敏）+ 可选诊断包 → 反馈仓库。
+   ★ 这个文件是纯 JS 的 <script setup>，不要写 TS 语法。
+   ------------------------------------------------------------------ */
+const fb = reactive({
+  kind: 'bug', area: 'other', severity: 'major',
+  title: '', symptom: '', steps: '', expect: '', freq: '每次', contact: '',
+  includeDiagnostic: false,     // 诊断包含设置与日志，默认不带
+  busy: '', err: '', msg: '',
+  preview: '', previewPath: '', previewAtts: [],
+  resultUrl: '', issueUrl: '', localPath: '', savedLocal: false,
+});
+const FB_KINDS = [
+  { id: 'bug', name: '功能异常' }, { id: 'crash', name: '崩溃/无响应' }, { id: 'perf', name: '卡顿慢' },
+  { id: 'quality', name: '识别或音质不对' }, { id: 'idea', name: '功能建议' }, { id: 'docs', name: '文档与文案' },
+];
+const FB_AREAS = [
+  { id: 'transcribe', name: '转录' }, { id: 'score', name: '变谱' }, { id: 'convert', name: '转换' },
+  { id: 'voice', name: '音色' }, { id: 'sing', name: '调教' }, { id: 'play', name: '播放' },
+  { id: 'library', name: '曲库' }, { id: 'edit', name: '编辑' }, { id: 'update', name: '更新' },
+  { id: 'resources', name: '资源中心' }, { id: 'other', name: '其它' },
+];
+function fbOpen(url) {
+  const b = window.fuBridge;
+  if (b && b.openExternal && url) b.openExternal(url);
+}
+function fbPayload() {
+  return {
+    fields: {
+      kind: fb.kind, area: fb.area, severity: fb.severity, title: String(fb.title || '').trim(),
+      symptom: String(fb.symptom || '').trim(), steps: String(fb.steps || '').trim(),
+      expect: String(fb.expect || '').trim(), freq: fb.freq, contact: String(fb.contact || '').trim(),
+    },
+    includeDiagnostic: !!fb.includeDiagnostic,
+    createIssue: true,
+  };
+}
+function fbValid() {
+  if (!String(fb.title || '').trim()) { fb.err = t('请先写一句标题'); return false; }
+  if (String(fb.symptom || '').trim().length < 20) { fb.err = t('症状描述太短：至少写 20 字，说清楚发生了什么'); return false; }
+  fb.err = ''; return true;
+}
+async function fbPreview() {
+  const b = window.fuBridge;
+  if (!b || !b.feedback || !b.feedback.preview) { fb.err = t('当前环境不支持反馈上传'); return; }
+  if (!fbValid()) return;
+  fb.busy = 'preview'; fb.err = ''; fb.msg = '';
+  try {
+    const r = await b.feedback.preview(fbPayload());
+    if (!r || !r.ok) { fb.err = (r && r.error) || t('生成预览失败'); return; }
+    fb.preview = r.markdown || ''; fb.previewPath = r.path || ''; fb.previewAtts = r.attachments || [];
+    fb.msg = t('预览已生成：这就是将要上传的完整内容');
+  } catch (e) { fb.err = String((e && e.message) || e); }
+  finally { fb.busy = ''; }
+}
+async function fbUpload() {
+  const b = window.fuBridge;
+  if (!b || !b.feedback || !b.feedback.submit) { fb.err = t('当前环境不支持反馈上传'); return; }
+  if (!fbValid()) return;
+  fb.busy = 'upload'; fb.err = ''; fb.msg = ''; fb.resultUrl = ''; fb.issueUrl = ''; fb.savedLocal = false;
+  try {
+    const r = await b.feedback.submit(fbPayload());
+    if (r && r.ok) {
+      fb.resultUrl = r.url || ''; fb.issueUrl = (r.issue && r.issue.url) || '';
+      fb.msg = t('已上传到反馈仓库，谢谢！');
+    } else {
+      fb.err = (r && r.error) || t('上传失败');
+      fb.savedLocal = !!(r && r.savedLocal); fb.localPath = (r && r.localPath) || '';
+      if (r && r.markdown) fb.preview = r.markdown;
+    }
+  } catch (e) { fb.err = String((e && e.message) || e); }
+  finally { fb.busy = ''; }
+}
+async function fbSaveLocal() {
+  const b = window.fuBridge;
+  if (!b || !b.feedback || !b.feedback.saveLocal) return;
+  if (!fbValid()) return;
+  fb.busy = 'save'; fb.err = ''; fb.msg = '';
+  try {
+    const r = await b.feedback.saveLocal(fbPayload());
+    if (r && r.ok) { fb.msg = t('已保存：') + (r.path || ''); fb.localPath = r.path || ''; }
+    else if (r && r.canceled) { /* 用户取消，不提示 */ }
+    else { fb.err = (r && r.error) || t('保存失败'); }
+  } catch (e) { fb.err = String((e && e.message) || e); }
+  finally { fb.busy = ''; }
+}
+async function fbCopyMd() {
+  const b = window.fuBridge;
+  if (!b || !b.feedback || !b.feedback.preview) return;
+  if (!fbValid()) return;
+  fb.busy = 'copy'; fb.err = '';
+  try {
+    const r = await b.feedback.preview(fbPayload());
+    if (!r || !r.ok) { fb.err = (r && r.error) || t('生成失败'); return; }
+    fb.preview = r.markdown || '';
+    try { await navigator.clipboard.writeText(fb.preview); }
+    catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = fb.preview; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (e2) {}
+      document.body.removeChild(ta);
+    }
+    fb.msg = t('已复制反馈内容到剪贴板');
+  } catch (e) { fb.err = String((e && e.message) || e); }
+  finally { fb.busy = ''; }
+}
+async function fbWebFallback() {
+  const b = window.fuBridge;
+  if (!b || !b.feedback || !b.feedback.webFallback) return;
+  if (!fbValid()) return;
+  fb.busy = 'web'; fb.err = '';
+  try {
+    const r = await b.feedback.webFallback(fbPayload());
+    if (!r || !r.ok) { fb.err = (r && r.error) || t('打开失败'); return; }
+    if (r.markdown) fb.preview = r.markdown;
+    if (b.openExternal) b.openExternal(r.url);
+    fb.msg = t('已在浏览器打开：确认内容后点提交即可（附件请手动拖进文件框）');
+  } catch (e) { fb.err = String((e && e.message) || e); }
+  finally { fb.busy = ''; }
+}
+
 async function gpuUninstall() {
   if (!bridge || !bridge.gpuUninstall) { gpu.status = t('当前环境不支持卸载'); return; }
   const kind = gpu.installedKind || 'directml';
@@ -1227,6 +1349,90 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
 
       <!-- 反馈页：体检 + 反馈 + 诊断包，三项放同一页（用户要求「体检和反馈功能一页」「反馈单独成页」） -->
       <div v-else-if="tab === 'feedback'">
+        <!-- ★ 反馈表单（方案 docs/plans/2026-10-16-feedback-upload.md）：填好点上传即进反馈仓库 -->
+        <div class="ov-card">
+          <div style="font-size:15px;font-weight:600">{{ t('反馈问题') }}</div>
+          <div style="font-size:12px;color:var(--text-soft);line-height:1.7;margin:4px 0 10px">
+            {{ t('填好点「上传到反馈仓库」即可。体检报告会自动附上（已去掉用户名与机器名）；诊断包含设置与最近日志，默认不带，需要时自己勾。') }}
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px">
+              {{ t('分类') }}
+              <select v-model="fb.kind" class="ov-input" style="width:130px">
+                <option v-for="k in FB_KINDS" :key="k.id" :value="k.id">{{ t(k.name) }}</option>
+              </select>
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px">
+              {{ t('模块') }}
+              <select v-model="fb.area" class="ov-input" style="width:120px">
+                <option v-for="a in FB_AREAS" :key="a.id" :value="a.id">{{ t(a.name) }}</option>
+              </select>
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px">
+              {{ t('严重度') }}
+              <select v-model="fb.severity" class="ov-input" style="width:120px">
+                <option value="blocker">{{ t('用不了') }}</option>
+                <option value="major">{{ t('很影响') }}</option>
+                <option value="minor">{{ t('小问题') }}</option>
+              </select>
+            </label>
+          </div>
+          <div style="font-size:12px;color:var(--text-soft);margin-bottom:4px">{{ t('标题') }}</div>
+          <input v-model="fb.title" class="ov-input" maxlength="60" style="width:100%;margin-bottom:8px"
+                 :placeholder="t('一句话说清问题，例如：变谱第 2 页总是识别失败')" />
+          <div style="font-size:12px;color:var(--text-soft);margin-bottom:4px">{{ t('症状（必填，至少 20 字）') }}</div>
+          <textarea v-model="fb.symptom" class="ov-input" rows="3" style="width:100%;margin-bottom:8px"
+                    :placeholder="t('发生了什么？界面上的原话、报错文本都可以贴进来')"></textarea>
+          <div style="font-size:12px;color:var(--text-soft);margin-bottom:4px">{{ t('复现步骤（选填）') }}</div>
+          <textarea v-model="fb.steps" class="ov-input" rows="2" style="width:100%;margin-bottom:8px"
+                    :placeholder="t('1. 打开… 2. 点… 3. 结果…')"></textarea>
+          <div style="font-size:12px;color:var(--text-soft);margin-bottom:4px">{{ t('期望 vs 实际（选填）') }}</div>
+          <textarea v-model="fb.expect" class="ov-input" rows="2" style="width:100%;margin-bottom:8px"></textarea>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px">
+              {{ t('频率') }}
+              <select v-model="fb.freq" class="ov-input" style="width:130px">
+                <option value="每次">{{ t('每次') }}</option>
+                <option value="偶尔">{{ t('偶尔') }}</option>
+                <option value="只出现过一次">{{ t('只出现过一次') }}</option>
+              </select>
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;flex:1;min-width:220px">
+              {{ t('联系方式（选填，留空即匿名）') }}
+              <input v-model="fb.contact" class="ov-input" style="flex:1" :placeholder="t('邮箱或 GitHub ID')" />
+            </label>
+          </div>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:10px">
+            <input type="checkbox" v-model="fb.includeDiagnostic" />
+            {{ t('附带诊断包（含最近日志与设置，上传前会再脱敏一次；约几 MB）') }}
+          </label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn sm primary" :disabled="!!fb.busy" @click="fbUpload">
+              {{ fb.busy === 'upload' ? t('上传中…') : t('上传到反馈仓库') }}
+            </button>
+            <button class="btn sm" :disabled="!!fb.busy" @click="fbPreview">{{ fb.busy === 'preview' ? t('生成中…') : t('预览将要上传的内容') }}</button>
+            <button class="btn sm" :disabled="!!fb.busy" @click="fbSaveLocal">{{ t('存到本地') }}</button>
+            <button class="btn sm" :disabled="!!fb.busy" @click="fbCopyMd">{{ t('复制内容') }}</button>
+            <button class="btn sm" :disabled="!!fb.busy" @click="fbWebFallback">{{ t('网页提交') }}</button>
+          </div>
+          <div v-if="fb.err" style="color:#e06c75;font-size:12px;margin-top:8px">{{ fb.err }}</div>
+          <div v-if="fb.msg" style="color:var(--text-soft);font-size:12px;margin-top:8px">{{ fb.msg }}</div>
+          <div v-if="fb.resultUrl" style="font-size:12px;margin-top:6px">
+            <a style="cursor:pointer;text-decoration:underline" @click="fbOpen(fb.resultUrl)">{{ fb.resultUrl }}</a>
+            <span v-if="fb.issueUrl"> · <a style="cursor:pointer;text-decoration:underline" @click="fbOpen(fb.issueUrl)">{{ t('对应议题') }}</a></span>
+          </div>
+          <div v-if="fb.savedLocal && fb.localPath" style="font-size:12px;margin-top:6px;color:var(--text-soft)">
+            {{ t('上传没成功，已自动存到本地：') }}{{ fb.localPath }}
+          </div>
+          <details v-if="fb.preview" style="margin-top:10px">
+            <summary style="cursor:pointer;font-size:12px;color:var(--text-soft)">
+              {{ t('将要上传的内容') }}（{{ fb.previewPath }}<span v-if="fb.previewAtts.length"> · {{ t('附件') }} {{ fb.previewAtts.length }}</span>）
+            </summary>
+            <pre style="max-height:320px;overflow:auto;font-size:11px;line-height:1.5;white-space:pre-wrap;margin-top:6px">{{ fb.preview }}</pre>
+          </details>
+        </div>
+
+        <!-- 体检与诊断（沿用原有能力：体检报告 / 诊断包 / 已知问题） -->
         <div class="ov-card">
           <div style="font-size:15px;font-weight:600;margin-bottom:4px">{{ t('遇到问题？先跑一次体检') }}</div>
           <div style="font-size:12px;color:var(--text-soft);line-height:1.7;margin-bottom:10px">

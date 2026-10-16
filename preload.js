@@ -146,6 +146,13 @@ contextBridge.exposeInMainWorld('fuBridge', {
   depCheck: () => ipcRenderer.invoke('dep:check'),
   diagExport: () => ipcRenderer.invoke('diag:export'),
   diagHealth: () => ipcRenderer.invoke('diag:health'),
+  // 问题反馈上传：预览（看将要上传什么）/ 保存本地 / 上传到反馈仓库 / 网页兜底
+  feedback: {
+    preview: (payload) => ipcRenderer.invoke('feedback:preview', payload),
+    saveLocal: (payload) => ipcRenderer.invoke('feedback:saveLocal', payload),
+    submit: (payload) => ipcRenderer.invoke('feedback:submit', payload),
+    webFallback: (payload) => ipcRenderer.invoke('feedback:webFallback', payload),
+  },
   exportScorePngZip: (opts) => ipcRenderer.invoke('score:exportPngZip', opts),
 
   updateCheck: (channel) => ipcRenderer.invoke('update:check', channel),

@@ -49,6 +49,7 @@ const { registerDialogsIpc } = require('./main/dialogs');
 const { registerModelsIpc } = require('./main/models');
 const { registerSettingsIpc } = require('./main/settings-ipc');
 const { registerDiagnosticsIpc } = require('./main/diagnostics');
+const { registerFeedbackIpc } = require('./main/feedback');
 const { registerSystemIpc } = require('./main/system-ipc');
 const { registerGpuIpc } = require('./main/gpu-ipc');
 const { createRustService } = require('./main/rust');
@@ -136,6 +137,8 @@ if (!gotLock) {
     registerUserMetaIpc({ ipcMain });
     registerDialogsIpc({ ipcMain, dialog, path, fs, app, spawnEngine });
     registerDiagnosticsIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine });
+    // 问题反馈上传（收集 → 脱敏 → 打包 → 上传；写仓库的令牌只在服务端）
+    registerFeedbackIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine, net, readSettings });
     // 依赖 / 环境 / 模型目录规范化：把旧版散落在 C 盘用户目录下的重型目录
     // 一次性迁移到「工具目录」旁的 FuFumidiData（迁移期间显示进度窗）。
     // 必须在模型服务、GPU 服务之前完成，避免服务拿到半成品目录。
