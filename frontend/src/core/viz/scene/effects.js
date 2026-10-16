@@ -23,12 +23,18 @@ export function depthScale(cam, ps, y) {
 export function beamQuads(P, o) {
   const { cam, ps, x, yBottom, w, h, color, alpha } = o;
   const pr = [];
-  const layers = [[1.0, 0.36], [0.66, 0.56], [0.38, 0.78]];
+  // ★ 横向柔化：原先 3 层（宽度 1.0/0.66/0.38、透明度 0.36/0.56/0.78）——
+  //   相邻两层的透明度差到 0.2，在深底上能看出**阶梯**（用户："上游有生硬的转折"）。
+  //   改 4 层并压平相邻差（0.22/0.33/0.47/0.64），阶梯感消失；总数不变，绘制成本一样。
+  const layers = [[1.0, 0.22], [0.78, 0.33], [0.56, 0.47], [0.34, 0.64]];
+  // ★ 层归属：默认 'fx'（在 keyboard 之后）—— 光柱必须压在琴键之上，
+  //   否则键面会在半截处把它切出一条横边。见 primitives.js 的 LAYERS 注释。
+  const layer = o.layer || 'fx';
   for (const [wid, k] of layers) {
     const ww = Math.max(1.5, w * wid);
     const bx0 = projectX(cam, ps, x - ww / 2, yBottom), bx1 = projectX(cam, ps, x + ww / 2, yBottom);
     const tx0 = projectX(cam, ps, x - ww / 2, yBottom - h), tx1 = projectX(cam, ps, x + ww / 2, yBottom - h);
-    pr.push(P.quad('impact', [tx0, yBottom - h, tx1, yBottom - h, bx1, yBottom, bx0, yBottom],
+    pr.push(P.quad(layer, [tx0, yBottom - h, tx1, yBottom - h, bx1, yBottom, bx0, yBottom],
       { stops: [withAlpha(color, 0), withAlpha(color, alpha * k)], dir: 'v' }, { blend: 'lighter', z: o.z }));
   }
   return pr;

@@ -197,13 +197,14 @@ export function createCompiler() {
     }
 
     // ============================================================
-    // 3) impact —— 击键线光带、波纹、闪光、光柱、粒子（按预算裁剪）
+    // 3) 击键光效 —— 击键线光带、波纹、闪光、光柱、粒子（按预算裁剪）
+    //    ★ 光效应画在 **fx 层**（在 keyboard 之后）：它们压在键面上，若留在 impact 层会被键面切出硬边。
     // ============================================================
     state.hitPulse = Math.max(0, state.hitPulse - 0.06);
     if (wN > 0) {
-      pr.push(P.rect('impact', 0, wN - 46, w, 48,
+      pr.push(P.rect('fx', 0, wN - 46, w, 48,
         { stops: ['rgba(0,0,0,0)', withAlpha('#7fb6ff', 0.04 + 0.2 * Math.max(state.hitPulse, energy * 0.6))], dir: 'v' }, { z: -5 }));
-      pr.push(P.line('impact', 0, wN, w, wN, withAlpha('#9cc4ff', 0.1 + 0.5 * state.hitPulse + 0.2 * energy), { lw: 1 + state.hitPulse * 1.6, z: -4 }));
+      pr.push(P.line('fx', 0, wN, w, wN, withAlpha('#9cc4ff', 0.1 + 0.5 * state.hitPulse + 0.2 * energy), { lw: 1 + state.hitPulse * 1.6, z: -4 }));
     }
     const partScale = Math.max(0.2, Math.min(2, fx.partScale == null ? 1 : Number(fx.partScale)));
     if (forward) {
@@ -257,7 +258,7 @@ export function createCompiler() {
         const pi = ensurePm()[pitch]; if (!pi) continue;
         const { sx: sxB, cw: cwB } = pitchGeom(pitch, ensurePm(), g, wk0);
         // 落点线上的光晕：t=0 处投影恒等，所以这里天然就是对的位置（写上 projectX 只为表明同一套相机）
-        pr.push(P.glow('impact', projectX(cam, ps, sxB + cwB / 2, wN), wN, 1, Math.max(4, Math.min(cwB * 0.42, 9)), color, { alpha: 0.3, blend: 'lighter' }));
+        pr.push(P.glow('fx', projectX(cam, ps, sxB + cwB / 2, wN), wN, 1, Math.max(4, Math.min(cwB * 0.42, 9)), color, { alpha: 0.3, blend: 'lighter' }));
       }
     }
 
