@@ -373,6 +373,134 @@ def directml_usable():
         return False
 
 
+def _probe_torch(dev, n=64):
+    """在指定 torch 设备上真跑一次矩阵乘。返回 (ok, 说明)。"""
+    try:
+        import torch
+        a = torch.ones(n, n, device=dev)
+        c = (a @ a).to("cpu")
+        v = float(c[0, 0])
+        if not bool(torch.isfinite(c).all().item()):
+            return False, "结果含非有限值"
+        if abs(v - n) > 1e-2 * n:
+            return False, "结果不符（%g，期望 %g）" % (v, n)
+        return True, "真算通过（%d×%d 矩阵乘）" % (n, n)
+    except Exception as e:                        # noqa: BLE001
+        return False, str(e)[:90]
+
+
+def _onnx_probe_bytes():
+    """造一个最小 ONNX 模型（Add）用于逐 provider 验证。缺 onnx 包时抛异常。"""
+    import onnx
+    from onnx import TensorProto, helper
+    x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 4])
+    y = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 4])
+    node = helper.make_node("Add", ["x", "x"], ["y"])
+    graph = helper.make_graph([node], "probe", [x], [y])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
+    return model.SerializeToString()
+
+
+_EP_LABEL = {
+    "CUDAExecutionProvider": "CUDA", "DmlExecutionProvider": "DirectML",
+    "ROCMExecutionProvider": "ROCm", "MIGraphXExecutionProvider": "MIGraphX",
+    "OpenVINOExecutionProvider": "OpenVINO", "TensorrtExecutionProvider": "TensorRT",
+    "CoreMLExecutionProvider": "CoreML", "XnnpackExecutionProvider": "XNNPACK",
+    "CPUExecutionProvider": "CPU",
+}
+
+
+def verify_backends():
+    """逐个**已装的加速包**真算一遍：装了 ≠ 能用。
+    返回 [{k, name, installed, usable, device, detail}]，供体检报告逐条展示。
+    覆盖：CUDA / ROCm / XPU / MPS / DirectML / 每个 ONNX ExecutionProvider / 运行时依赖。"""
+    res = []
+
+    def add(k, name, installed, usable, device, detail):
+        res.append({"k": k, "name": name, "installed": bool(installed), "usable": bool(usable),
+                    "device": device, "detail": detail})
+
+    try:
+        import torch
+    except Exception as e:                        # noqa: BLE001
+        add("torch", "PyTorch", False, False, "", str(e)[:90])
+        return res
+
+    hip = getattr(torch.version, "hip", None)
+    try:
+        cuda_avail = bool(torch.cuda.is_available())
+    except Exception:                             # noqa: BLE001
+        cuda_avail = False
+    if hip:
+        ok, det = _probe_torch("cuda:0") if cuda_avail else (False, "未检测到可用设备（ROCm 未生效）")
+        add("rocm", "ROCm（AMD，torch 走 cuda 命名空间）", True, ok, "cuda:0", det)
+    else:
+        ok, det = _probe_torch("cuda:0") if cuda_avail else (False, "未检测到 CUDA 设备")
+        add("cuda", "CUDA（NVIDIA）", bool(cuda_avail), ok, "cuda:0", det)
+    # XPU（Intel）
+    try:
+        import torch.xpu as xpu
+        xpu_avail = bool(xpu.is_available())
+        ok, det = _probe_torch("xpu:0") if xpu_avail else (False, "未检测到 XPU 设备")
+        add("xpu", "XPU（Intel Arc / 核显）", xpu_avail, ok, "xpu:0", det)
+    except Exception as e:                        # noqa: BLE001
+        add("xpu", "XPU（Intel Arc / 核显）", False, False, "", "未安装 torch.xpu：%s" % str(e)[:60])
+    # MPS（Apple）
+    try:
+        mps_avail = bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available())
+        ok, det = _probe_torch("mps") if mps_avail else (False, "未检测到 MPS 设备")
+        add("mps", "MPS（Apple 芯片）", mps_avail, ok, "mps", det)
+    except Exception as e:                        # noqa: BLE001
+        add("mps", "MPS（Apple 芯片）", False, False, "", str(e)[:90])
+    # DirectML（AMD / Intel）
+    try:
+        import torch_directml  # noqa: F401
+        dml_installed = True
+        dml_dev = str(torch_directml.device(0))
+    except Exception as e:                        # noqa: BLE001
+        dml_installed, dml_dev = False, ""
+        dml_detail = "未安装 torch-directml：%s" % str(e)[:60]
+    else:
+        ok, det = _probe_torch(dml_dev)
+        dml_detail = det
+        dml_ok_flag = ok
+    if dml_installed:
+        add("directml", "DirectML（AMD / Intel）", True, dml_ok_flag, dml_dev, dml_detail)
+    else:
+        add("directml", "DirectML（AMD / Intel）", False, False, "", dml_detail)
+    # ONNX：逐个 provider 真跑一遍（列在 get_available_providers 里 ≠ 真能用）
+    try:
+        import onnxruntime as ort
+        eps = list(ort.get_available_providers())
+    except Exception as e:                        # noqa: BLE001
+        add("onnx", "ONNX Runtime", False, False, "", "未安装 onnxruntime：%s" % str(e)[:60])
+        eps = []
+    for ep in eps:
+        label = _EP_LABEL.get(ep, ep)
+        try:
+            blob = _onnx_probe_bytes()
+            so = ort.SessionOptions()
+            so.log_severity_level = 3
+            sess = ort.InferenceSession(blob, so, providers=[ep])
+            import numpy as np
+            got = sess.run(None, {"x": np.ones((1, 4), dtype=np.float32)})[0]
+            ok = bool(np.allclose(got, 2.0))
+            add("onnx:" + ep, "ONNX · %s" % label, True, ok, ep,
+                "真算通过" if ok else "输出不符（期望全 2.0）")
+        except Exception as e:                    # noqa: BLE001
+            add("onnx:" + ep, "ONNX · %s" % label, True, False, ep, str(e)[:90])
+    # 运行时依赖（它们挂了，模型的加载链路就不通）
+    for mod, why in (("torchaudio", "音频读取 / 重采样"), ("transformers", "部分识别模型依赖"),
+                     ("librosa", "拍点与特征"), ("soundfile", "音频读写"), ("numpy", "数值")):
+        try:
+            m = __import__(mod)
+            add("dep:" + mod, "%s（%s）" % (mod, why), True, True, "", getattr(m, "__version__", "?"))
+        except Exception as e:                    # noqa: BLE001
+            # 导入失败 = 没装成/装坏了 —— installed 也要如实为 False（否则显示"已装但不可用"，误导）
+            add("dep:" + mod, "%s（%s）" % (mod, why), False, False, "", str(e)[:90])
+    return res
+
+
 #: 每个吃算力的模型/引擎**实际**会用的设备。判据与各自真实的选路代码一致，不是猜的：
 #:   · CUDA / ROCm 可用 → torch 系模型全部走 GPU
 #:   · DirectML(AMD/Intel) → 逐算子支持的走 GPU；只认 CUDA 的库只能 CPU（原因写在 why 里）

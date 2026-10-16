@@ -115,8 +115,9 @@ def gpu_info():
         d["detect_error"] = str(e)
     # ★ 逐模型加速状态：用户在设置里直接看到"这个模型 GPU 加速到底生不生效"
     try:
-        from engine_gpu import consumer_devices
+        from engine_gpu import consumer_devices, verify_backends
         d["consumers"] = consumer_devices()
+        d["backends"] = verify_backends()      # 逐个已装加速包的真算验证
     except Exception as e:
         d["consumers_error"] = str(e)
     # 加速包（隔离 site-packages 通过环境变量挂进来）
