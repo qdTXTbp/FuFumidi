@@ -1604,10 +1604,10 @@ defineExpose({
 .pr-ad select { height: 24px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: var(--ink); font-size: var(--fs-sm); }
 .pr-bar-pitch { padding-top: 0; border-top: 0; }
 .pr-zoom { display: inline-flex; gap: 3px; }
-.pr-mini { width: 24px; height: 24px; border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; color: var(--stone); cursor: pointer; line-height: 1; }
+.pr-mini { width: 28px; height: 28px; border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; color: var(--stone); cursor: pointer; line-height: 1; }
 .pr-mini:hover { background: var(--surface); color: var(--ink); }
 .pr-hint { margin-left: auto; font-size: var(--fs-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pr-hint-btn { margin-left: auto; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--border);
+.pr-hint-btn { margin-left: auto; width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border);   /* 命中区下限 28px（原 20px） */
   background: transparent; color: var(--text-muted); font-size: var(--fs-xs); line-height: 1; cursor: help; flex: none; }
 .pr-hint-btn:hover { color: var(--ink); border-color: var(--brand); }
 .pr-mini-wide { width: auto; padding: 0 6px; font-size: var(--fs-xs); }
@@ -1630,4 +1630,9 @@ defineExpose({
 .pr-ctx-sep { height: 1px; margin: 4px 2px; background: var(--border); }
 .ctxmenu-enter-active, .ctxmenu-leave-active { transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
 .ctxmenu-enter-from, .ctxmenu-leave-to { opacity: 0; transform: scale(.96); }
+
+/* 命中区下限（M4 实测）：这四个是本组件里的工具按钮，实测 25~27px 高（.pr-hint-btn 只有 20px）。
+   注意：父组件 ViewSing 的 scoped 规则**够不到子组件内部元素**（作用域 id 不同），
+   所以这类下限必须写在本组件自己的样式块里。 */
+.pr-tool, .pr-track { min-height: 28px; }
 </style>

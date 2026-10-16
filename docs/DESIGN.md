@@ -86,7 +86,12 @@ HTML 里的颜色走 CSS 变量；**画布（Canvas2D/WebGL）里读不到 CSS �
 用法：模板上**两者都写**，例如 `class="fu-ctl tr-pill"` —— `.fu-ctl` 给形状，`.tr-pill` 只留语义偏差。
 **不要再就地改 padding 造新档**；需要更紧就用 `.fu-ctl--sm`，需要方角就用 `.fu-ctl--sq`。
 
-已迁移：`ViewTranscribe`（42 处类注入 + 删掉本地重复的形状规则）。待迁移：`ViewEdit` / `ViewSing`。
+已迁移：`ViewTranscribe`（42 处类注入 + 删掉本地重复的形状规则）。
+按测量结论**不强制迁移**的：
+- `ViewEdit`：它的控件高度是刻意做的三档密度系统（`.ed-density-compact/standard/roomy` 调 22/23/24/26/30px），
+  套统一的 28px 契约会破坏那个功能；其选中态本来就已是 `--accent` + `--on-accent`。
+- `ViewSing`：本地控件很少，主体（`.chip-btn` 等）本来就在用共享类；
+  这一轮只把它的紧凑控件抬到命中区下限（见 §6）。
 
 ## 4. 深色为主，浅色可选
 
@@ -112,7 +117,17 @@ HTML 里的颜色走 CSS 变量；**画布（Canvas2D/WebGL）里读不到 CSS �
 
 ## 6. 无障碍与手感
 
-- 命中区 ≥28×28px（工具按钮）；图标按钮的实际可点区域由 `padding`+`min-width` 保证。
+- 命中区 ≥28×28px。实测方法：CDP 遍历所有可点元素量 `getBoundingClientRect`，小于 28 的按「类名+尺寸」聚合。
+  **实测主犯**：`.icon-btn` 被调用处的内联 `style="width:26px;height:26px"` 压到 26×26（每页约 200 个）、
+  `.chip-btn` 高 26、`.lib-sort` 高 25、`.ib`/`.pr-mini` 24。修法是在共享类上加 `min-width/min-height`
+  （`min-*` 在层叠里优先于 `width/height`，内联也压得住），而不是去改几百处调用点。
+- 紧凑档（`.fu-ctl--sm`）只缩内边距与字号，**不缩命中区**。
+- **验收数字（2026-10-19，安装版 CDP，五页：首页/音乐/视图/转译/调教）**：
+  修前不达标 7 / 8 / 11 / 12 / 17 个 → 修后 **0 / 0 / 0 / 0 / 0**。
+  量法：取 `offsetWidth/offsetHeight`（布局尺寸，不受 `transform: scale()` 干扰），
+  缩放子树内（钢琴卷帘预览）单独归类 —— 那里的元素视觉尺寸是刻意缩出来的。
+- 子组件内的控件（如 `PianoRoll.vue` 的 `.pr-tool/.pr-track`）**必须写在该组件自己的样式块里**：
+  父组件的 `<style scoped>` 够不到子组件内部元素（作用域 id 不同），实测踩过。
 - 正文对比度 ≥4.5:1、大字 ≥3:1；状态不许只靠颜色区分（配图标或文字）。
 - `prefers-reduced-motion` 下动效降到 0.01ms（`tokens.css` 末尾已处理）。
 - 每个浮层都要有出口（Esc / 点外部 / 关闭按钮），这是上一轮评审的硬要求。

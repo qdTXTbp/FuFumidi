@@ -3315,7 +3315,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .eng.e-diffsinger { background: rgba(64,140,255,.18); }
 .trk-item .lang { font-size: var(--fs-xs); }
 .trk-item .cnt { font-size: var(--fs-xs); color: var(--stone); margin-left: auto; }
-.ib { border: 1px solid var(--border); background: transparent; color: inherit;
+.ib { min-width: 28px; min-height: 28px; border: 1px solid var(--border); background: transparent; color: inherit;
       border-radius: var(--r-sm); padding: 2px 5px; cursor: pointer; }
 .ib:hover { border-color: var(--brand); color: var(--brand-text); }
 .ib.del:hover { border-color: var(--t-err); color: var(--t-err); }
@@ -3594,4 +3594,12 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .ab-group { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 2px 6px; border-radius: var(--r-pill);
             border: 1px solid var(--border); background: var(--surface-muted); }
 .ab-group .btn.sm { padding: 1px 8px; font-size: var(--fs-sm); }
+
+/* 命中区下限（M4 实测）：本视图这批紧凑控件的实测高度只有 19~27px ——
+   pr-ad 48×19 / eng 58×21 / pth 236×24 / lang 61×19 / ck 45×19 / dev 68×25 /
+   tr-track 137×25 / pr-tool 62×27 / select-input 225×27，统一抬到 28px。
+   放在样式块最后，否则会被前面的 height 覆盖（min-height 优先于 height，包括内联）。 */
+.pr-ad, .eng, .pth, .lang, .ck, .dev, .tr-track, .pr-tool, .pr-hint-btn, .curves-toggle, .rs-track, .select-input { min-height: 28px; }
+/* 缩放子树（钢琴卷帘预览）里的元素：视觉尺寸 = 布局尺寸 × scale，
+   这里按布局尺寸给下限（28px 已达标），视觉小于 28 是刻意的缩放效果，不作为命中目标。 */
 </style>

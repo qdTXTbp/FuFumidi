@@ -41,7 +41,9 @@
 }
 .fu-ctl:disabled, .fu-ctl[disabled] { opacity: .5; cursor: not-allowed; }
 /* 紧凑档：密集工具条里用它，而不是就地改 padding（就地改 = 又长出一档） */
-.fu-ctl--sm { padding: 2px var(--sp-2); min-height: 24px; font-size: var(--fs-xs); }
+/* 紧凑档：只缩内边距与字号，**不缩命中区** —— 24px 那版在密集工具条里会点空，
+   而 docs/DESIGN.md §6 定的下限是 28px。 */
+.fu-ctl--sm { padding: 2px var(--sp-2); font-size: var(--fs-xs); }
 /* 方角档：放在表单/卡片里与输入框同形 */
 .fu-ctl--sq { border-radius: var(--r-sm); }
 
