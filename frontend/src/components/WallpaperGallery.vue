@@ -4,11 +4,13 @@ import { ref, onMounted } from 'vue';
 import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
+import { useVizBgStore } from '../stores/vizbg';
 import { t } from '../core/i18n.js';
 
 const app = useAppStore();
 const state = app;
 const settingsStore = useSettingsStore();
+const vizBg = useVizBgStore();
 const toast = (m, type) => app.toast(m, type);
 const bridge = window.fuBridge;
 const list = ref([]);
@@ -19,8 +21,14 @@ const progress = ref(0);
 const importing = ref(false);
 const importProgress = ref(0);
 
-function closeWallpaperGallery() { state.ui.wallpaperOpen = false; }
+/** 这个壁纸库是给谁挑的：'app' = 应用整窗背景（原来就有）；'viz' = 音符瀑布的画面背景 */
+function wpTarget() { return state.ui.wallpaperTarget === 'viz' ? 'viz' : 'app'; }
+function appliedToast() { return wpTarget() === 'viz' ? t('已应用到音符瀑布背景') : t('壁纸已应用'); }
+function closeWallpaperGallery() { state.ui.wallpaperOpen = false; state.ui.wallpaperTarget = 'app'; }
+/* ★ 同一个壁纸库、两个落点（2026-10-17）：缩略图 / 下载 / 导入本地视频三件事完全共用，
+   只有"最后写进哪份设置"不同 —— 应用整窗背景写 settings，瀑布流背景写 stores/vizbg。 */
 async function setWallpaperPath(path) {
+  if (wpTarget() === 'viz') { await vizBg.setWall(path); return; }
   // 先乐观更新本地设置，立即触发 App 动态壁纸加载，再持久化
   settingsStore.setLocal({ custom_wallpaper: path, wallpaper_enabled: true });
   try { await settingsStore.save({ custom_wallpaper: path, wallpaper_enabled: true }); } catch (e) {}
@@ -61,16 +69,16 @@ async function pick(item, i) {
         item.local = true;
         item.video = r.path;
         await setWallpaperPath(r.path);
-        toast(t('壁纸已下载并应用'), 'ok');
+        toast(wpTarget() === 'viz' ? t('已应用到音符瀑布背景') : t('壁纸已下载并应用'), 'ok');
       } else {
         // 网络受限/被拦截 → 直接应用在线流
         await setWallpaperPath(item.video);
-        toast((r && r.error) ? t('下载受限，已应用在线壁纸') : t('壁纸已应用'), 'warn');
+        toast((r && r.error) ? t('下载受限，已应用在线壁纸') : appliedToast(), 'warn');
       }
     } else {
       toast(t('正在应用壁纸…'));
       await setWallpaperPath(item.video);
-      toast(t('壁纸已应用'), 'ok');
+      toast(appliedToast(), 'ok');
     }
     closeWallpaperGallery();
   } catch (e) {
@@ -137,6 +145,8 @@ async function removeLocalItem(item, i) {
     if (cfg.custom_wallpaper === item.video || (item.path && cfg.custom_wallpaper === item.path)) {
       await settingsStore.save({ wallpaper_enabled: false, custom_wallpaper: '' });
     }
+    // 瀑布流背景用的若是这一张，一并清掉（否则档位还写着"动态壁纸"、文件已经没了）
+    if (vizBg.bg.wallPath === item.video || (item.path && vizBg.bg.wallPath === item.path)) vizBg.clearWall();
     toast(t('已移除本地壁纸，可重新下载'), 'ok');
   } catch (e) {
     toast(t('删除失败：') + String((e && e.message) || e), 'error');
@@ -151,12 +161,14 @@ onMounted(load);
     <div class="overlay-card wp-gallery">
       <div class="settings-head">
         <Icon name="wallpaper" :size="17" />
-        <span class="settings-title">{{ t('壁纸库') }}</span>
+        <span class="settings-title">{{ t(wpTarget() === 'viz' ? '音符瀑布动态壁纸' : '壁纸库') }}</span>
         <button class="icon-btn" style="margin-left:auto;width:30px;height:30px" :title="t('关闭')" :aria-label="t('关闭')" @click="closeWallpaperGallery">
           <Icon name="close" :size="15" />
         </button>
       </div>
-      <p id="wp-gallery-note" class="ov-note">{{ t('从 GitHub 下载壁纸，点击缩略图即可下载并应用；每次下载一张，需要更多可再次进入。') }}</p>
+      <p id="wp-gallery-note" class="ov-note">{{ wpTarget() === 'viz'
+        ? t('挑一张动态壁纸当音符瀑布的背景：点缩略图即应用，也可以导入本地视频。')
+        : t('从 GitHub 下载壁纸，点击缩略图即可下载并应用；每次下载一张，需要更多可再次进入。') }}</p>
 
       <div v-if="loading" class="wp-loading"><span class="spinner"></span>{{ t('正在加载壁纸列表…') }}</div>
       <div v-else-if="error" class="wp-error">
@@ -181,7 +193,7 @@ onMounted(load);
       </div>
 
             <div v-if="importing" class="wp-import-progress">
-        <div class="wp-import-bar"><div class="pfill" :style="{ width: (importProgress * 100) + '%' }"></div></div>
+        <div class="wp-import-bar"><div class="pfill" :style="{ transform: 'scaleX(' + (((importProgress * 100)) / 100) + ')' }"></div></div>
         <span>{{ Math.round(importProgress * 100) }}%</span>
       </div>
 <div class="wp-foot">
@@ -194,20 +206,20 @@ onMounted(load);
 
 <style scoped>
 .wp-gallery { width: 640px; max-width: 92vw; }
-.wp-loading, .wp-error { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 46px 0; color: var(--stone); font-size: 13px; flex-direction: column; }
+.wp-loading, .wp-error { display: flex; align-items: center; justify-content: center; gap: var(--sp-3); padding: 46px 0; color: var(--stone); font-size: var(--fs-md); flex-direction: column; }
 .wp-error button { margin-top: 4px; }
-.wp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; max-height: 46vh; overflow-y: auto; padding: 2px; }
+.wp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-3); max-height: 46vh; overflow-y: auto; padding: 2px; }
 @media (max-width: 560px) { .wp-grid { grid-template-columns: repeat(2, 1fr); } }
 .wp-card {
   position: relative;
   aspect-ratio: 16 / 9;
   border: 1px solid var(--hairline);
-  border-radius: 12px;
+  border-radius: var(--r-md);
   overflow: hidden;
   padding: 0;
   cursor: pointer;
   background: var(--surface-soft);
-  transition: transform 0.15s, border-color 0.15s, box-shadow 0.18s;
+  transition: transform var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-base) var(--ease-out);
 }
 .wp-card:hover { transform: translateY(-2px); border-color: var(--border-strong); box-shadow: var(--shadow); }
 .wp-card:active { transform: scale(0.98); }
@@ -218,39 +230,39 @@ onMounted(load);
   position: absolute; left: 8px; bottom: 8px;
   width: 26px; height: 26px; border-radius: 50%;
   border: none; cursor: pointer;
-  background: rgba(0,0,0,.45); color: #fff;
+  background: rgba(0,0,0,.45); color: var(--on-accent);
   display: grid; place-items: center;
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
-  opacity: 0; transition: opacity 0.15s;
+  opacity: 0; transition: opacity var(--motion-fast) var(--ease-out);
 }
 .wp-card:hover .wp-card-del { opacity: 1; }
 .wp-card-del:hover { background: rgba(200, 40, 40, .75); }
 .wp-card-dl {
   position: absolute; right: 8px; bottom: 8px;
   width: 30px; height: 30px; border-radius: 50%;
-  background: rgba(0,0,0,.45); color: #fff;
+  background: rgba(0,0,0,.45); color: var(--on-accent);
   display: grid; place-items: center;
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
-  opacity: 0; transition: opacity 0.15s;
+  opacity: 0; transition: opacity var(--motion-fast) var(--ease-out);
 }
 .wp-card:hover .wp-card-dl { opacity: 1; }
 .wp-card-mask {
   position: absolute; inset: 0;
   background: rgba(10, 10, 10, 0.55);
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
-  color: #fff; font-size: 12px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-2);
+  color: var(--on-accent); font-size: var(--fs-sm);
 }
-.wp-card-mask .spinner { border-color: rgba(255,255,255,0.35); border-top-color: #fff; }
+.wp-card-mask .spinner { border-color: rgba(255,255,255,0.35); border-top-color: var(--on-accent); }
 .spinner {
   width: 18px; height: 18px; border-radius: 50%;
   border: 2px solid rgba(10, 10, 10, 0.14); border-top-color: var(--accent);
   animation: wp-spin 0.7s linear infinite;
 }
 @keyframes wp-spin { to { transform: rotate(360deg); } }
-.wp-import-progress { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 4px 0; }
-.wp-import-progress .wp-import-bar { flex: 1; height: 6px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; }
-.wp-import-progress .pfill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.12s linear; }
-.wp-import-progress span { font-size: 11px; color: var(--stone); min-width: 40px; text-align: right; }
-.wp-foot { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--hairline-soft); }
-.wp-foot .muted { margin-left: auto; font-size: 10.5px; }
+.wp-import-progress { display: flex; align-items: center; gap: var(--sp-2); margin-top: 10px; padding: 4px 0; }
+.wp-import-progress .wp-import-bar { flex: 1; height: 6px; border-radius: var(--r-pill); background: var(--surface-soft); overflow: hidden; }
+.wp-import-progress .pfill { height: 100%; background: var(--accent); border-radius: var(--r-pill); transition: transform var(--motion-base) var(--ease-out); }
+.wp-import-progress span { font-size: var(--fs-xs); color: var(--stone); min-width: 40px; text-align: right; }
+.wp-foot { display: flex; align-items: center; gap: var(--sp-3); margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--hairline-soft); }
+.wp-foot .muted { margin-left: auto; font-size: var(--fs-xs); }
 </style>

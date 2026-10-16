@@ -14,7 +14,7 @@
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from ...ustx.io import from_plain
 from ...ustx.model import UExpressionDescriptor
@@ -27,6 +27,11 @@ class ResamplerManifest:
     expressions: Dict[str, UExpressionDescriptor] = field(default_factory=dict)
     # C#: `public bool expressionFilter = false;`
     expression_filter: bool = False
+    # C#: `public string[] files = Array.Empty<string>();`
+    # ★ 2026-10-13 补（上游 2026-10-07「Add Resampler Meta Files definable in resampler manifest」）：
+    #   清单里可以声明**额外的元文件后缀**，由 `VoicebankFiles.GetMetaFiles` 一并搬运。
+    #   我们原先停在 28 行那版（只有 expressions / expressionFilter），所以这个功能是缺的。
+    files: List[str] = field(default_factory=list)
 
     @staticmethod
     def load(path: str) -> 'ResamplerManifest':

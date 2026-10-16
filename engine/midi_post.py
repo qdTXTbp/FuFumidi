@@ -8,7 +8,7 @@ basic-pitch 等引擎输出的音符常带有：
 - 个别极短杂音 → 按时长过滤
 
 本模块只操作 pretty_midi 对象，可独立导入测试；
-engine_basic / engine_separate 在写盘前调用 apply_post()。
+engine_basic 在写盘前调用 apply_post()。（原 engine_separate 已随 WP2-2 删除）
 """
 
 

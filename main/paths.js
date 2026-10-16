@@ -8,7 +8,7 @@
 // 目录结构：
 //   <root>/
 //     models/            模型权重（含 torch.hub 的 hub/checkpoints）
-//     gpu-enhancements/  GPU 增强包（CUDA / DirectML 的 site-packages）
+//     gpu-enhancements/  GPU 增强包（CUDA / ROCm / XPU 的 site-packages）
 //     soundfonts/        音色库（SF2）
 //     midi/              每个曲目对应的真实 .mid 文件（曲库文件规范化）
 //     cache/             pip / huggingface / matplotlib / numba 等第三方缓存
@@ -131,6 +131,14 @@ function midiDir() { return ensure(at('midi')); }
 /** 第三方缓存根目录 */
 function cacheRoot() { return ensure(at('cache')); }
 function cacheDir(name) { return name ? ensure(path.join(cacheRoot(), name)) : cacheRoot(); }
+
+/**
+ * 转录「暂停/继续」标记文件（2026-10-14 用户要求：正在转录的那一首也要能暂停，继续后接着跑）。
+ * 引擎跑在常驻 Python worker 里，主进程/渲染进程没有别的通道能塞进去 —— 文件是唯一
+ * 既能跨进程、又不用改 stdin 请求协议的开关：文件存在 = 暂停，删掉 = 继续。
+ * 路径通过 env.FUFUMIDI_PAUSE_FILE 传给引擎（engine_muscriptor 的 _pause_gate 轮询它）。
+ */
+function pauseFlagFile() { return path.join(cacheRoot(), 'fufumidi_pause.flag'); }
 /** pip 下载缓存 */
 function pipCacheDir() { return cacheDir('pip'); }
 /** HuggingFace Hub 缓存（HF_HOME） */
@@ -156,6 +164,7 @@ function applyToEnv(env) {
   env.FUFUMIDI_DIFFSINGER_VB_DIR = diffsingerVoicebanksDir();
   env.FUFUMIDI_TEMP_DIR = tempDir();
   env.FUFUMIDI_CACHE_DIR = cacheRoot();
+  env.FUFUMIDI_PAUSE_FILE = pauseFlagFile();
 
   // torch.hub.get_dir() = $TORCH_HOME/hub；beat_this 权重按 models/hub/checkpoints 落盘，
   // 因此 TORCH_HOME 必须等于 models 目录（资源中心与引擎共用同一份）。
@@ -459,6 +468,7 @@ module.exports = {
   midiDir,
   cacheRoot,
   cacheDir,
+  pauseFlagFile,
   pipCacheDir,
   hfCacheDir,
   tempDir,

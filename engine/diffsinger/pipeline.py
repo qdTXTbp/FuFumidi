@@ -33,6 +33,7 @@ from .renderer import DEFAULT_DEPTH, DEFAULT_STEPS, Phrase, build_pitches, rende
 from .session import resolve_providers
 from .variance import load_variance
 from .voicebank import load_singer
+from . import phonemizer
 
 ENGINE_VERSION = '0.3.0'
 _P, _F = [], []
@@ -153,6 +154,13 @@ def render_phrase(cfg: Dict, on_progress=None,
     #   却每次都报一条「暂不支持」—— 实际上通用声码器是**能用**的，没有 dsvocoder 的声库正需要它。
     _voc = cfg.get('vocoder') or None
     singer = load_singer(voicebank, _voc)
+    # ★ 多说话人：本次渲染的默认说话人。空 = 用声库声明的第一个（上游 :79-82 的回退）。
+    _spk = str(cfg.get('speaker') or '')
+    phonemizer.set_default_speaker(_spk)
+    try:
+        singer.acoustic.speaker = _spk          # 逐帧嵌入（variance/acoustic）从这里取
+    except Exception:
+        pass
     if _voc:
         _name = os.path.basename(str(_voc).rstrip('\\/'))
         try:

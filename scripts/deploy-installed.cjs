@@ -16,6 +16,10 @@
  *   4. 重新打 asar —— **过滤条件与 asarUnpack 清单直接读 electron-builder.yml**；
  *   5. 覆盖安装版的 app.asar 与 app.asar.unpacked（整目录替换）。
  *
+ * ★ 这个脚本**不碰** resources/python：上游级补丁（engine/patches/muscriptor-events-fufumidi.1.py
+ *   → 运行时的 Lib/site-packages/muscriptor/events.py）必须手工 copy，否则"代码改了、
+ *   装到安装版里没生效"（2026-10-14 实测踩过一次）。改引擎证据逻辑时记得两条路一起走。
+ *
  * ★ 2026-10 修掉的两个真实缺陷（尺寸审计实测）：
  *   a) 旧版打包只传 `--unpack-dir=engine --unpack="*.node"`，丢掉了 electron-builder.yml 的
  *      asarUnpack（soundfonts / js-synth / wallpapers）。结果是同一个文件既内联进 asar、
@@ -98,6 +102,47 @@ const HARD_SKIP_RE = /^(release|gpu-package)/;
 if (!fs.existsSync(BASE)) { console.error('找不到干净基线：' + BASE + '（先跑一次 electron-builder --dir）'); process.exit(1); }
 if (!fs.existsSync(RES)) { console.error('找不到安装版：' + RES); process.exit(1); }
 
+// ---- 0) 前置：前端产物新鲜度
+// 血泪教训（2026-10-12）：SettingsPanel.vue 是 <script setup>（**纯 JS，没有 lang="ts"**），
+// 往里写 TS 语法（`as any` / `catch (e: any)`）时 `tsc --noEmit` 照样报 0，
+// 但 vite 构建直接失败。而本脚本不看构建结果、照旧部署 ——
+// 于是悄悄发了一版「旧前端 + 新引擎」的包，[7/7] 冒烟还照样通过（前端是旧的，当然不白屏）。
+// 所以这里先比一次时间戳：frontend/src 比 renderer/dist 新就拒绝部署。
+// （故意不自动构建：构建失败时自动构建同样会静默沿用旧产物，那正是要防的事。）
+function newestMtime(dir, re) {
+  let newest = 0;
+  const walk = (d) => {
+    let entries = [];
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { walk(p); continue; }
+      if (re && !re.test(e.name)) continue;
+      try { const m = fs.statSync(p).mtimeMs; if (m > newest) newest = m; } catch (err) {}
+    }
+  };
+  walk(dir);
+  return newest;
+}
+{
+  const SRC = path.join(ROOT, 'frontend', 'src');
+  const DIST = path.join(ROOT, 'renderer', 'dist', 'assets');
+  const srcNewest = newestMtime(SRC, null);
+  const distNewest = newestMtime(DIST, /\.js$/);
+  if (!distNewest) {
+    console.error('[前置] 找不到 renderer/dist/assets —— 先跑 `npm run build:ui`。');
+    process.exit(1);
+  }
+  if (srcNewest > distNewest) {
+    const mins = Math.max(1, Math.round((srcNewest - distNewest) / 60000));
+    console.error('[前置] 前端产物过期：frontend/src 比 renderer/dist 新约 ' + mins + ' 分钟。');
+    console.error('       界面改动还没进渲染层，直接部署会发出「旧前端 + 新引擎」的包。');
+    console.error('       请先 `npm run build:ui`（注意看它的退出码），再重新部署。');
+    process.exit(1);
+  }
+  console.log('[前置] 前端产物新鲜（renderer/dist 不旧于 frontend/src）');
+}
+
 // ---- 1) 关掉安装版（asar 被占用就写不进去）
 try { execSync('taskkill /IM FuFumidi.exe /F', { stdio: 'ignore' }); } catch (e) { /* 没在跑 */ }
 let free = false;
@@ -106,7 +151,7 @@ for (let i = 0; i < 24 && !free; i++) {
   catch (e) { execSync('powershell -NoProfile -Command "Start-Sleep -Milliseconds 500"', { stdio: 'ignore' }); }
 }
 if (!free) { console.error('app.asar 仍被占用（安装版没关掉？）'); process.exit(1); }
-console.log('[1/6] 安装版已关闭');
+console.log('[1/7] 安装版已关闭');
 
 // ---- 2) 解包干净基线
 fs.rmSync(TMP, { recursive: true, force: true });
@@ -117,7 +162,7 @@ execSync('"' + ASAR_BIN + '" extract "' + BASE + '" "' + TMP + '"', { stdio: 'in
 // 否则重新打包后 unpacked 树会缩水 —— 安装版会丢掉内置音色库。
 const BASE_UNPACK = BASE + '.unpacked';
 if (fs.existsSync(BASE_UNPACK)) fs.cpSync(BASE_UNPACK, TMP, { recursive: true, force: false });
-console.log('[2/6] 基线解包完成');
+console.log('[2/7] 基线解包完成');
 // ---- 3) 覆盖：renderer/dist 整目录替换；其余按 electron-builder.yml 的过滤逐个覆盖
 const distSrc = path.join(ROOT, 'renderer', 'dist');
 const distDst = path.join(TMP, 'renderer', 'dist');
@@ -169,7 +214,7 @@ function overlay(relDir) {
   }
 }
 overlay('');
-console.log('[3/6] 覆盖 ' + copied + ' 个文件（其中新增 ' + created + '），内容有变化 ' + changed.length + ' 个：' + changed.slice(0, 12).join(', ') + (changed.length > 12 ? ' …' : ''));
+console.log('[3/7] 覆盖 ' + copied + ' 个文件（其中新增 ' + created + '），内容有变化 ' + changed.length + ' 个：' + changed.slice(0, 12).join(', ') + (changed.length > 12 ? ' …' : ''));
 if (skipped.length) console.log('     跳过（基线里不是文件）：' + skipped.slice(0, 8).join(', '));
 
 // ---- 3b) 清理：基线里有、但现在不该有的文件（源码已删除，或被 files 排除）
@@ -199,7 +244,7 @@ function dirSize(dir) {
   return total;
 }
 pruneTmp(TMP);
-console.log('[3b/6] 清理基线残留 ' + pruned + ' 项 / ' + (prunedBytes / 1048576).toFixed(1) + ' MB（源码已删除或被 electron-builder.yml 排除）');
+console.log('[3b/7] 清理基线残留 ' + pruned + ' 项 / ' + (prunedBytes / 1048576).toFixed(1) + ' MB（源码已删除或被 electron-builder.yml 排除）');
 
 // ---- 4) 重新打包：asarUnpack 清单直接来自 electron-builder.yml
 fs.rmSync(OUT, { force: true });
@@ -235,9 +280,24 @@ const notUnpacked = [];
 })(TMP);
 const unpackExpr = '{' + [...unpackNames].join(',') + '}';
 if (notUnpacked.length) console.log('     注意：以下文件因重名未解包（内联进 asar，功能不受影响）：' + notUnpacked.join(', '));
+// ★★ 必须在打包**之前**把「最终的 engine」放进 TMP。
+//   原因（REA 产物视角查出来的真问题）：asar pack 会为 --unpack 的文件算 integrity 哈希，
+//   而旧流程是「打包 → 覆盖 app.asar → 再用源码 engine 替换 app.asar.unpacked/engine」，
+//   于是**哈希是对 TMP/engine 算的、部署的却是源码 engine**，两者内容不同 → 完整性元数据过期。
+//   REA 实测报出 6 个 integrity 矛盾（engine/deps.py 等），declared 12a4b89b… vs calculated a09d34eb…。
+//   源码视角的审计永远看不到这个 —— 源码里没有 asar 头部这层概念。
+//   现在改成：先把源码 engine 同步进 TMP（含 __pycache__ 过滤），再打包，
+//   第 5 步直接用打包产物，不再二次替换 —— 算哈希的和部署的是同一份字节。
+(function syncEngineIntoTmp() {
+  const dst = path.join(TMP, 'engine');
+  const src = path.join(ROOT, 'engine');
+  fs.rmSync(dst, { recursive: true, force: true });
+  fs.cpSync(src, dst, { recursive: true, filter: (s) => !s.includes('__pycache__') && !s.includes('.pytest_cache') });
+  console.log('[3c/7] 已把源码 engine 同步进打包目录（保证 integrity 哈希与部署内容一致）');
+})();
 execSync('"' + ASAR_BIN + '" pack "' + TMP + '" "' + OUT + '" --unpack-dir=engine --unpack="' + unpackExpr + '"', { stdio: 'inherit' });
 const isUnpacked = (rel) => globMatch('engine/**', rel) || unpackGlobs.some((g) => globMatch(g, rel));
-console.log('[4/6] 新 asar：' + (fs.statSync(OUT).size / 1048576).toFixed(1) + ' MB（asarUnpack：' + UNPACK_PATTERNS.length + ' 条规则）');
+console.log('[4/7] 新 asar：' + (fs.statSync(OUT).size / 1048576).toFixed(1) + ' MB（asarUnpack：' + UNPACK_PATTERNS.length + ' 条规则）');
 
 // 尺寸护栏：内联进 asar 的最大文件逐个列出 —— 上一次 asar 从 200MB 涨到 2GB 就是靠这个发现的
 function biggest(dir, list = []) {
@@ -253,22 +313,131 @@ console.log('     asar 里最大的 5 个内联文件：' + listed.map(([s, p]) 
 
 // ---- 5) 覆盖安装版：asar + unpacked 整目录替换（清掉上一轮的陈旧文件）
 fs.copyFileSync(OUT, ASAR);
+// engine 已经在打包前同步进 TMP（见 [3c/7]），这里**直接用打包产物**，
+// 不再二次替换 —— 否则 asar pack 算出的 integrity 又会和部署内容对不上。
 if (fs.existsSync(OUT_UNPACK)) {
-  const keepEngine = path.join(UNPACK, 'engine');
   fs.rmSync(UNPACK, { recursive: true, force: true });
   fs.mkdirSync(UNPACK, { recursive: true });
   fs.cpSync(OUT_UNPACK, UNPACK, { recursive: true });
-  void keepEngine;
-} else {
-  fs.rmSync(path.join(UNPACK, 'engine'), { recursive: true, force: true });
 }
-// engine 以工作区源码为准（Python 改动只在这里生效），排除 __pycache__
-const dstEngine = path.join(UNPACK, 'engine');
-const srcEngine = path.join(ROOT, 'engine');
-fs.rmSync(dstEngine, { recursive: true, force: true });
-fs.cpSync(srcEngine, dstEngine, { recursive: true, filter: (s) => !s.includes('__pycache__') && !s.includes('.pytest_cache') });
 // 注意：unpacked 与 asar 是配套的，engine 必须两边一致（asar 里 engine 只是占位）
-console.log('[5/6] 已覆盖 app.asar（' + (fs.statSync(ASAR).size / 1048576).toFixed(1) + ' MB）与 app.asar.unpacked');
+console.log('[5/7] 已覆盖 app.asar（' + (fs.statSync(ASAR).size / 1048576).toFixed(1) + ' MB）与 app.asar.unpacked');
+
+// ---- 5b) 同步 extraResources：electron-builder 把它们放到 resources/ 下，**asar 里不含**
+//   不补这一层就会出现「asar 里图标换了、窗口/托盘/任务栏还是旧的」——
+//   2026-10-16 换 logo 时实测：build/icon.png 已换，resources/icon.png 仍是旧图（sha 对不上），
+//   而 main/window.js 与 setupTray 都优先读 resources/icon.png。
+//   清单同样**只从 electron-builder.yml 读**，避免两处漂移（和 asarUnpack 一个道理）。
+function ymlPairs(name) {
+  const out = [];
+  let inBlock = false, cur = null;
+  for (const line of YML.split(/\r?\n/)) {
+    if (/^[A-Za-z_]/.test(line)) { inBlock = line.trimStart().startsWith(name + ':'); cur = null; continue; }
+    if (!inBlock) continue;
+    const mf = line.match(/^\s*-\s*from:\s*"?([^"'\s]+)"?/);
+    if (mf) { cur = { from: mf[1] }; out.push(cur); continue; }
+    const mt = line.match(/^\s*to:\s*"?([^"'\s]+)"?/);
+    if (mt && cur) cur.to = mt[1];
+  }
+  return out.filter((x) => x.from && x.to);
+}
+function fingerprint(p) {
+  const st = fs.statSync(p);
+  if (st.isFile()) return { files: 1, bytes: st.size };
+  let files = 0, bytes = 0;
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const q = path.join(d, e.name); if (e.isDirectory()) walk(q); else { files++; bytes += fs.statSync(q).size; } } };
+  walk(p);
+  return { files, bytes };
+}
+// ★ 明确**不接管** resources/python：它是 1.27 GB 的嵌入式解释器，且要按
+//   engine/patches/muscriptor-events-fufumidi.1.py **手工**打上游补丁（见本文件开头第 19 行）。
+//   2026-10-16 实测教训：最初把整张 extraResources 清单一并同步，resources/python 被整目录覆盖。
+//   那次恰好无罪（工作区那份本来就带着补丁，两边 events.py 同为 22897 B），但那是运气：
+//   一旦有人往工作区放一份**未打补丁**的 python，下一次部署就会静默把安装版的补丁抹掉。
+const EXTRA_SKIP = ['resources/python'];
+const extra = ymlPairs('extraResources');
+const synced = [];
+for (const { from, to } of extra) {
+  const src = path.join(ROOT, from);
+  const dst = path.join(RES, to);
+  if (EXTRA_SKIP.some((s) => from === s || from.startsWith(s + '/'))) {
+    synced.push(from + '（**不接管**，上游补丁靠手工 copy）');
+    continue;
+  }
+  if (!fs.existsSync(src)) { synced.push(from + '（源码里没有，跳过）'); continue; }
+  const same = fs.existsSync(dst) &&
+    JSON.stringify(fingerprint(src)) === JSON.stringify(fingerprint(dst));
+  if (same) { synced.push(from + '（已一致）'); continue; }
+  fs.rmSync(dst, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  fs.cpSync(src, dst, { recursive: true });
+  const f = fingerprint(src);
+  synced.push(from + ' -> resources/' + to + '（' + f.files + ' 文件 / ' + (f.bytes / 1048576).toFixed(1) + ' MB）');
+}
+console.log('[5b/7] extraResources 已同步：' + synced.join('；'));
+
+// ---- 5c) 硬门槛：安装版的 muscriptor 必须带着 FuFumidi 上游补丁
+//   补丁只在 engine/patches/ 里存一份、靠手工 copy 进 resources/python（见本文件开头），
+//   所以「有没有打上」必须每次部署都验一次，而不是等用户报告转录丢音。
+{
+  const EV = path.join(RES, 'python', 'Lib', 'site-packages', 'muscriptor', 'events.py');
+  if (fs.existsSync(EV)) {
+    const txt = fs.readFileSync(EV, 'utf8');
+    if (!txt.includes('FUFUMIDI_TRACKER_TRACE')) {
+      console.error('[5c/7] ✗ 安装版的 muscriptor/events.py 没有 FuFumidi 补丁 —— 转录会丢音。');
+      console.error('       修法：copy engine/patches/muscriptor-events-fufumidi.1.py -> ' + EV);
+      process.exit(1);
+    }
+    console.log('[5c/7] muscriptor 上游补丁在位（FUFUMIDI_TRACKER_TRACE）');
+  }
+}
+
+// ---- 5d) 修 exe 的**内嵌图标**：任务栏 / 快捷方式 / 资源管理器读的是 exe 资源，
+//   不是 asar 里的图，也不是 resources/icon.png —— 2026-10-16 用户实测：
+//   侧栏与窗口图标都换了新 logo，任务栏和桌面快捷方式还是旧的。
+//   工具用 electron-builder 自己的 rcedit（winCodeSign 缓存里），找不到就只警告不失败。
+function findRcedit() {
+  const cands = [
+    path.join(process.env.LOCALAPPDATA || '', 'electron-builder', 'Cache', 'winCodeSign',
+      'winCodeSign-2.6.0', 'rcedit-x64.exe'),
+    path.join(ROOT, 'node_modules', 'electron-winstaller', 'vendor', 'rcedit.exe'),
+  ];
+  for (const c of cands) if (fs.existsSync(c)) return c;
+  const base = path.join(process.env.LOCALAPPDATA || '', 'electron-builder', 'Cache');
+  const walk = (d) => {
+    if (!fs.existsSync(d)) return null;
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const q = path.join(d, e.name);
+      if (e.isDirectory()) { const r = walk(q); if (r) return r; }
+      else if (/^rcedit.*\.exe$/i.test(e.name)) return q;
+    }
+    return null;
+  };
+  return walk(base);
+}
+{
+  const ico = path.join(ROOT, 'build', 'icon.ico');
+  const rcedit = findRcedit();
+  // 安装目录顶层的全部 exe：主程序、kachina 更新器、卸载器 —— 三个都带自己的图标资源
+  const targets = fs.readdirSync(INSTALL, { withFileTypes: true })
+    .filter((e) => e.isFile() && /\.exe$/i.test(e.name))
+    .map((e) => e.name);
+  if (!rcedit || !fs.existsSync(ico)) {
+    console.log('[5d/7] ⚠ 跳过 exe 图标同步（rcedit=' + rcedit + '）—— 任务栏/快捷方式图标会保持旧值');
+  } else {
+    const done = [];
+    for (const f of targets) {
+      const exe = path.join(INSTALL, f);
+      try {
+        execSync('"' + rcedit + '" "' + exe + '" --set-icon "' + ico + '"', { stdio: 'ignore' });
+        done.push(f);
+      } catch (e) {
+        done.push(f + '(失败)');
+      }
+    }
+    console.log('[5d/7] exe 内嵌图标已同步：' + done.join('、'));
+  }
+}
 
 // ---- 6) 自检：内联文件里不该再出现「已经在 unpacked 里」的重复
 function countFiles(dir) {
@@ -278,5 +447,19 @@ function countFiles(dir) {
   return { n, bytes };
 }
 const unp = countFiles(UNPACK);
-console.log('[6/6] app.asar.unpacked：' + unp.n + ' 个文件 / ' + (unp.bytes / 1048576).toFixed(1) + ' MB（engine + soundfonts + js-synth）');
-console.log('完成 —— 双击 ' + path.join(INSTALL, 'FuFumidi.exe') + ' 即可看到改动。');
+console.log('[6/7] app.asar.unpacked：' + unp.n + ' 个文件 / ' + (unp.bytes / 1048576).toFixed(1) + ' MB（engine + soundfonts + js-synth）');
+
+// ---- 7) 部署后冒烟：启动一次，断言不是白屏 / preload 在 / 没有未捕获异常
+// 构建绿 ≠ 能用。上面六步只证明「文件拷贝成功」；渲染进程栽在启动路径上时表现就是白屏，
+// 那样会把一个打不开的版本报成「完成」—— 所以这一步失败要当部署失败处理。
+console.log('[7/7] 部署后冒烟：启动安装版一次，断言首屏有内容 / preload 已加载 / 无未捕获异常…');
+try {
+  execSync('node "' + path.join(__dirname, 'cdp', 'cdp-smoke.cjs') + '"', {
+    stdio: 'inherit',
+    env: Object.assign({}, process.env, { FUFUMIDI_INSTALL: INSTALL }),
+  });
+  console.log('完成 —— 冒烟通过，双击 ' + path.join(INSTALL, 'FuFumidi.exe') + ' 即可看到改动。');
+} catch (e) {
+  console.error('部署已拷贝完成，但冒烟失败：安装版起来了却没通过断言，先按上面的 - 逐条查，别当它可用。');
+  process.exit(1);
+}

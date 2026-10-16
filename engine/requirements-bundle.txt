@@ -3,7 +3,9 @@
 # 与 requirements.txt 的区别：
 #   - 不含 PySide6 / gui（那是原 AudioMuse 桌面界面的依赖；Electron 只调用
 #     music2midi.py 的 convert / refine / probe 命令行，永远不走 run_gui()）
-#   - 明确收录人声分离 demucs（“人声分离”模式必需，原版默认不装）
+#   - 分离走 MSST（pymss，见下方）——**不需要 demucs**。原 demucs 链路
+#     （engine_separate.py）已废弃：engine.py 对 mode=="separate" 直接抛错并引导到
+#     「音频处理」面板，music2midi.py 的 separate 子命令由 engine_msst 接管。
 #   - 含 onnxruntime（basic-pitch 通用模型的推理后端，DirectML/CUDA GPU 加速）
 #
 # 由 scripts/bundle-python.js 安装到 app/python/ 内建的独立运行时中，
@@ -52,7 +54,16 @@ imageio-ffmpeg>=0.4.8
 #
 # 注意：aria 组的 amt / ariautils 不在 PyPI，只能从 GitHub 装，
 # 由 scripts/bundle-python.js 单独处理，不能写进这里。
-transkun>=2.0.1
+# ★ WP2-4 定版（2026-10-14）：transkun 用 == 而不是 >=。
+#   它的 CLI 一共只有 5 个选项（--weight / --conf / --device / --segmentHopSize /
+#   --segmentSize），我们**只暴露 device 与 weight**，另外三个是故意不暴露的：
+#     --conf            模型结构配置。仓库自带默认；改它就是换模型，不是"调参"
+#     --segmentHopSize  内部滑窗步长，默认值写在模型 conf 里
+#     --segmentSize     内部滑窗长度，默认值写在模型 conf 里
+#   后两个是"速度/显存"旋钮：调大在长音频上直接 OOM，而收益只有几十秒，
+#   默认值本来就是作者调好的 —— 归入计划 §5「明确不做」那一类。
+#   钉死版本同时保证这三项的默认值不随上游升级漂移。
+transkun==2.0.1
 orjson>=3.10
 
 # ---- MIDI 处理 ----

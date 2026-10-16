@@ -228,6 +228,8 @@ def cmd_inspect(args):
         # `vocoder` 是**声码器 onnx 的文件名**（旧版为空串表示"用通用组件位"）
         "vocoder": os.path.basename(singer.model("vocoder")),
         "builtinVocoder": builtin_vocoder,
+        # 多说话人：声库声明的说话人（**嵌入文件基名**，不含 .emb）。>1 时界面才显示选择。
+        "speakers": list(getattr(singer.acoustic, "speakers", None) or []),
         "dictionaryFile": dict_name,
         "dictionaryWords": dictionary_words,
         "sampleRate": singer.sample_rate,
@@ -298,6 +300,7 @@ def cmd_render(args):
             "bpm": args.bpm,
             "tempos": _parse_tempo_map(getattr(args, "tempo_map", None)),
             "vocoder": getattr(args, "vocoder", None),
+        "speaker": getattr(args, "speaker", None),
             "start_beat": getattr(args, "start_beat", None),
             "end_beat": getattr(args, "end_beat", None),
             "context_sec": getattr(args, "context_sec", 0.5),
@@ -371,6 +374,8 @@ def cmd_sing_render(args):
             focus_tick=int(args.focus_tick if args.focus_tick is not None else -1),
             device=args.device or 'auto',
             tempos=_parse_tempo_map(getattr(args, 'tempo_map', None)),
+            vocoder=getattr(args, 'vocoder', None),
+            speaker=getattr(args, 'speaker', None),
         ))
         if not r.get('ok'):
             emit_result({'ok': False, 'error': r.get('error')})
@@ -512,6 +517,9 @@ def main(argv=None):
                    help="多点变速 JSON `[{beat,bpm}]`（拍单位），或 @文件路径；给了就覆盖单点 bpm")
     r.add_argument("--vocoder", default=None,
                    help="声码器 onnx 或目录（声库未自带时使用）")
+    # 多说话人声库：轨级默认说话人（空 = 用 dsconfig 声明的第一个）
+    r.add_argument("--speaker", default=None,
+                   help="轨级默认说话人（多说话人声库；空 = 声明的第一个）")
     r.add_argument("--out", default="", help="输出 WAV 路径")
     r.add_argument("--start-beat", type=float, default=None, help="选区起点（拍，含）")
     r.add_argument("--end-beat", type=float, default=None, help="选区终点（拍，含）")
@@ -560,6 +568,12 @@ def main(argv=None):
     sr.add_argument('--depth', type=float, default=1.0, help='采样深度（进缓存名）')
     sr.add_argument('--steps', type=int, default=20, help='采样步数（进缓存名）')
     sr.add_argument('--device', default='auto', help='auto/cpu/cuda/dml')
+    # 通用声码器覆盖：**声库自带 dsvocoder/ 时会被忽略**（引擎侧语义）。
+    # ★ 它会进乐句缓存名 —— 漏了这一跳就会出现「换了声码器还是上一次的声音」。
+    sr.add_argument('--vocoder', default=None,
+                    help='通用声码器 onnx 或目录（声库自带 dsvocoder 时忽略）')
+    sr.add_argument('--speaker', default=None,
+                    help='轨级默认说话人（多说话人声库；空 = 声明的第一个）')
     sr.add_argument('--out', default='', help='输出 wav 路径')
     sr.add_argument('--cache-dir', default=None, help='乐句 wav 缓存目录（给了才命中缓存）')
     sr.add_argument('--playing', action='store_true', help='按播放头优先级排序')

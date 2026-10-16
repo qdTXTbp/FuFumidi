@@ -1,0 +1,75 @@
+# muscriptor 0.3.0 -> 0.3.0+fufumidi.1
+#
+# FuFumidi 对上游 muscriptor 0.3.0 的唯一改动（只改一个文件）。
+# 上游 0.3.0 的 OpenNoteTracker 在块边界只关闭「不在 tie 段里」的音符；
+# 跨块的 tie 段因此永远等不到 note-off，漏一个块尾就被强制续上，越滚越长，
+# 最后变成「僵尸音符」（实测 100 条块记录里 4320 秒、约全长七成被吞掉）。
+# 本补丁在 tie 段上也加一道闸：超过 max_note_hold 就按 onset + max_note_hold 强制关闭。
+# max_note_hold=None 时关闭该行为，与上游 0.3.0 完全一致。
+#
+# 应用方式：对已解包的 muscriptor 包目录打，-p1 后按实际前缀调整。
+#   patch -p1 < engine/patches/muscriptor-0.3.0-fufumidi.1.patch
+#
+# 上游基线 events.py  (10958 B) SHA-256: 55f3c2239ebcfb68ab06158f46b97944501e922ddfe180073068ab3162be9171
+# 补丁后   events.py  (12933 B) SHA-256: 75df831bd2d0aa1e8c3af3e17751f31e89713ccacb56da91c8802079f79a2deb
+#
+--- a/muscriptor/events.py
++++ b/muscriptor/events.py
+@@ -12,6 +12,16 @@
+     MINIMUM_NOTE_DURATION_SEC,
+     Event,
+ )
++
++# ★ FuFumidi patch (0.3.0+fufumidi.1): 超长音符上限。
++# 背景：块边界只关闭「不在 tie 段里」的音符，而 prelude_forcing 把 tie 段构造成
++# 「当前还开着的音符」—— 于是块边界永远关不掉任何音符，一个音只能靠模型在块内显式
++# 吐 note-off 才结束。模型在长音频里漏一次收尾，这个音就被强制延续下去，
++# 实测 100 分钟录播出现 4320 秒（全曲 72%）的音符。
++# 这里在 tie 结算处补一条保险：任何音持续超过 max_note_hold 就强制关闭。
++# None = 关闭保险（与上游 0.3.0 行为一致）。
++# 实测 cap=15s 对正常文件（时长上限 12.3s）零改动，对病态文件把最长音压回 15s。
++DEFAULT_MAX_NOTE_HOLD_SEC: float | None = 15.0
+ 
+ 
+ _DRUM_INSTRUMENT = "drums"
+@@ -112,9 +122,11 @@
+     keeps decoding and forcing consistent by construction.
+     """
+ 
+-    def __init__(self, vocab: list[Event], frame_rate: int = 100):
++    def __init__(self, vocab: list[Event], frame_rate: int = 100,
++                 max_note_hold: float | None = DEFAULT_MAX_NOTE_HOLD_SEC):
+         self._vocab = vocab
+         self._frame_rate = frame_rate
++        self._max_note_hold = max_note_hold
+         # (program, pitch) -> onset time. Insertion-ordered: end-of-stream
+         # closes replay in onset order.
+         self._open: dict[tuple[int, int], float] = {}
+@@ -159,9 +171,26 @@
+                 self._in_prologue = False
+                 self._velocity = None
+                 ended = [k for k in self._open if k not in self._tie_set]
++                # ★ FuFumidi patch: 被 tie 段声明「仍然响着」的音，若已经超过
++                #   max_note_hold，也一并关掉（正好关在 onset + 上限处）。
++                #   没有这一条就会出现「模型漏一次收尾 → 强制延续 → 越滚越长」。
++                #   ★ 要杀的正是「被 tie 段声明为延音」的音 —— 它们才是不收尾的僵尸；
++                #     不在 tie 集里的已由上面的 ended 关掉，别重复关。
++                expired: list[tuple[int, int]] = []
++                if self._max_note_hold is not None:
++                    expired = [
++                        k for k in self._open
++                        if k in self._tie_set
++                        and (self._seek_time - self._open[k]) > self._max_note_hold
++                    ]
++                actions = [_EndNote(*key, self._seek_time) for key in ended]
++                for key in expired:
++                    actions.append(_EndNote(*key, self._open[key] + self._max_note_hold))
+                 for key in ended:
+                     del self._open[key]
+-                return [_EndNote(*key, self._seek_time) for key in ended]
++                for key in expired:
++                    del self._open[key]
++                return actions
+             if etype == "shift":
+                 # No tie token: the chunk is malformed. Close all open notes at
+                 # the boundary and drop the rest of the chunk.

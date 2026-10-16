@@ -283,6 +283,35 @@ test('传输层：两条都不通时抛错，且不是 cancelled', async () => {
   } finally { await srv.close(); }
 });
 
+// ---------------------------------------------------------------
+// 调用点参数化回归：M3-2 超分辨率组件的下载点（main/omr.js 的 omr:srInstall）
+// 它下的是一整包 zip（解压 39.5 MB），所以用 minSize 20 MB 当"半截文件"防线。
+// 这里用同一个 minSize 打一个只有 1 MB 的假源，验证它确实会拒绝 —— 而不是把
+// 半个 zip 解压成一堆残缺模型（用户看到的是"装好了但一跑就崩"）。
+// ---------------------------------------------------------------
+test('超分组件下载点：源给的包小于 minSize 时必须拒绝', async () => {
+  const body = payload(1024 * 1024);
+  const srv = await serve(rangeHandler(body));
+  try {
+    await assert.rejects(
+      () => FastDL.downloadFast({ urls: [srv.url], dest: dest('waifu2x.zip'), minSize: 20 * 1024 * 1024 }),
+      (e) => !e.cancelled && /小|short|size|长度/.test(String(e.message)),
+      '35 MB 的包只下到 1 MB 就该报错，不许当成功',
+    );
+  } finally { await srv.close(); }
+});
+
+test('超分组件下载点：包够大时正常落盘且字节一致', async () => {
+  const body = payload(3 * 1024 * 1024);
+  const srv = await serve(rangeHandler(body));
+  const out = dest('waifu2x-ok.zip');
+  try {
+    const r = await FastDL.downloadFast({ urls: [srv.url], dest: out, minSize: 1024 * 1024 });
+    assert.ok(r && r.ok !== false);
+    assert.deepEqual(fs.readFileSync(out), body);
+  } finally { await srv.close(); }
+});
+
 test('checkDiskSpace：空间不够时提前抛错', () => {
   assert.throws(() => FastDL.checkDiskSpace(dest('x.bin'), 1024 ** 5), /磁盘空间不足/);
   assert.doesNotThrow(() => FastDL.checkDiskSpace(dest('x.bin'), 1024));

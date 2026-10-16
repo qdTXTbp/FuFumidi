@@ -5,6 +5,9 @@
 #   database_id       -> 已创建的 D1 数据库 ID
 #   TURNSTILE_SECRET  -> Turnstile Secret Key（.dev.vars 或 --secret）
 #   RESEND_API_KEY    -> Resend 邮件服务的 API Key（用于发邮箱验证码）
+#   GITHUB_TOKEN      -> 反馈仓库的写入令牌（fine-grained PAT，只授权反馈仓库的
+#                        contents:write + issues:write，设到期日；**只存在服务端**）
+#                        wrangler secret put GITHUB_TOKEN
 # ============================================================
 name = "fufumidi-cloud-sync"
 main = "src/index.js"
@@ -30,6 +33,9 @@ database_id = "9e0774aa-2ac2-46f7-8605-8fa661603054"
 STORAGE_PROVIDER = "r2"
 # 业务展示用，仅用于提示
 APP_NAME = "FuMiVoice Cloud Sync"
+# 问题反馈写到哪个仓库（改这里就能换仓库，不用改代码）
+FEEDBACK_REPO = "qdTXTbp/FuFumidi-Feedback"
+FEEDBACK_BRANCH = "main"
 # Turnstile 站点密钥（公开值，可明文放 vars；配套 Secret 用 wrangler secret put TURNSTILE_SECRET）
 TURNSTILE_SITE_KEY = "0x4AAAAAAEw9YF870FXnrS6y"
 

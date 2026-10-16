@@ -15,7 +15,7 @@
 | `get_flag` | `GetFlag` |
 | `fit_curve` | `PhraseSynthV2.FitCurve` |
 | `compute_timemap` | `SynthSegment` 的 `tSrc`/`tDst`/`stretch` 计算 |
-| `resample_features` | `SynthSegment` 里按 `tDst` 对 f0/sp/ap 的线性插值 |
+| `_resample_flat` / `resample_features` | `SynthSegment` 里按 `tDst` 对 f0/sp/ap 的线性插值（R1.1 的 `sp_harmonic` 复用同一核） |
 | `apply_pitch_bend` | `Resample` 里的音高弯曲线 → f0 |
 | `resample_auto_gain` | `Resample` 的 auto gain（用 `ResamplerVoicedF0`） |
 | `segment_auto_gain` | `SynthSegment.GetAutoGain`（用 `config.f0_floor`，阈值不同） |
@@ -23,12 +23,13 @@
 | `blend_continuous_noise_features` | `PhraseSynthV2.SynthContinuousNoise` 的交叠混合 |
 | `SynthSegment` | 私有嵌套类 `SynthSegment`（含 `.frq` 接入与裁段） |
 | `resample` | `Worldline.Resample(ResamplerItem)` —— **经典线的变调入口** |
-| `WorldlineNative` | ctypes 绑定（已绑 6 个导出，见该类的 docstring） |
+| `PhraseSynthV2` | `PhraseSynthV2`（`AnalyzeRequests` 并行分析 / `Synth` / `SynthContinuousNoise`） |
+| `WorldlineNative` | ctypes 绑定（10 个导出全绑齐，见该类的 docstring） |
 
-**未照搬**：`PhraseSynthV2` 整个类（含 `AnalyzeRequests` 的并行分析、
-`Synth` / `SynthContinuousNoise`）—— 它只被 `WorldlineRenderer` 用，等 P1-d 一起搬；
-届时还要补 `DecodeMgc` / `DecodeBap` / `HnAnalysisF0In` / `WorldSynthesisContinuousNoise`
-四个绑定与 `Core/Analysis/Hnsep`（R1.1）。
+**R1.1 这条链（version 11）已接通**：`Hnsep` 见 `singing/openutau/hnsep.py`，
+`SynthSegment` 带 `hnsep` 时走 `HnAnalysisF0In` 并带出 `sp_env_harmonic` /
+`stretch`，`PhraseSynthV2.synth_continuous_noise(seed)` 出样本。宿主用
+`set_hnsep()` 注入模型（对应 C# 的 `Hnsep.Instance`）。
 
 ## 照搬时保留的语义（别"整理"掉）
 1. **`Resample` 与 `SynthSegment.GetAutoGain` 是两个不同的 auto gain**，别合并：
@@ -116,6 +117,14 @@ class CutOffExceedDurationError(SynthRequestError):
 
 class CutOffBeforeOffsetError(SynthRequestError):
     """对应 `CutOffBeforeOffsetError`。"""
+
+
+class HnsepSampleRateError(Exception):
+    """对应 `SynthSegment` 里 hnsep 采样率不符时抛的 `NotSupportedException`。
+
+    ★ 它**不是** `SynthRequestError` 的子类 —— 上游那条是裸的 `NotSupportedException`，
+    不会带上 `.Item`。（别为了"整齐"把它并进去。）
+    """
 
 
 class SynthCancelled(Exception):
@@ -300,6 +309,32 @@ def compute_timemap(src_start_frame: int, src_end_frame: int, offset_frac_ms: fl
     return t_dst, stretch
 
 
+def _resample_flat(t_dst: Sequence[float], src: Sequence[float],
+                   stride: int) -> List[float]:
+    """按 `tDst` 对一个**扁平**源数组做线性插值（`stride == 1` 就是 f0）。
+
+    这是 `resample_features` 的内核；抽出来是因为 R1.1 还要用**同一套语义**再插值
+    一条 `sp_harmonic`（照抄一份就会漂移）。
+    """
+    n_src = len(src) // stride
+    n = len(t_dst)
+    dst = [0.0] * (n * stride)
+    for i in range(n):
+        pos = max(0.0, min(t_dst[i], n_src - 1.0))
+        index = int(math.floor(pos))
+        frac = pos - index
+        o = i * stride
+        i0 = index * stride
+        if index + 1 < n_src:
+            i1 = i0 + stride
+            for k in range(stride):
+                dst[o + k] = src[i0 + k] * (1.0 - frac) + src[i1 + k] * frac
+        else:
+            for k in range(stride):
+                dst[o + k] = src[i0 + k]
+    return dst
+
+
 def resample_features(t_dst: Sequence[float], f0_src: Sequence[float],
                       sp_src: Sequence[float], ap_src: Sequence[float],
                       sp_size: int):
@@ -308,31 +343,9 @@ def resample_features(t_dst: Sequence[float], f0_src: Sequence[float],
     `sp_src` / `ap_src` 是**扁平**数组（第 i 帧的第 k 个频点 = `i * sp_size + k`）。
     返回 `(f0_dst, sp_dst, ap_dst)`（同样扁平）。
     """
-    n_src = len(f0_src)
-    n = len(t_dst)
-    f0_dst = [0.0] * n
-    sp_dst = [0.0] * (n * sp_size)
-    ap_dst = [0.0] * (n * sp_size)
-    for i in range(n):
-        pos = max(0.0, min(t_dst[i], n_src - 1.0))
-        index = int(math.floor(pos))
-        frac = pos - index
-        if index + 1 < n_src:
-            i1 = (index + 1) * sp_size
-            i0 = index * sp_size
-            o = i * sp_size
-            f0_dst[i] = f0_src[index] * (1.0 - frac) + f0_src[index + 1] * frac
-            for k in range(sp_size):
-                sp_dst[o + k] = sp_src[i0 + k] * (1.0 - frac) + sp_src[i1 + k] * frac
-                ap_dst[o + k] = ap_src[i0 + k] * (1.0 - frac) + ap_src[i1 + k] * frac
-        else:
-            o = i * sp_size
-            i0 = index * sp_size
-            f0_dst[i] = f0_src[index]
-            for k in range(sp_size):
-                sp_dst[o + k] = sp_src[i0 + k]
-                ap_dst[o + k] = ap_src[i0 + k]
-    return f0_dst, sp_dst, ap_dst
+    return (_resample_flat(t_dst, f0_src, 1),
+            _resample_flat(t_dst, sp_src, sp_size),
+            _resample_flat(t_dst, ap_src, sp_size))
 
 
 def apply_pitch_bend(f0: List[float], pitches: Sequence[int], tone: int,
@@ -542,12 +555,12 @@ class WorldlineNative:
 
     `library_path` 可显式指定（便于把随包分发的 `worldline.dll` 指过来）。
 
-    **已绑定**（`Resample` 这条链路要用的）：`F0FrameCount` / `F0` /
-    `InitAnalysisConfig` / `WorldAnalysisF0In` / `WorldSynthesisSampleCount` /
-    `WorldSynthesis`。
-    **未绑定**（调用方还没搬进来）：`DecodeMgc` / `DecodeBap` / `HnAnalysisF0In` /
-    `WorldSynthesisContinuousNoise` —— 它们分别服务 R1.1 的 `Hnsep` 分析与
-    `PhraseSynthV2.SynthContinuousNoise`，等 `PhraseSynthV2` 落地时一起补。
+    **已绑定 10 个导出**（`worldline.dll` 的全部导出，已逐个核对）：
+    - `Resample` 那条链：`F0FrameCount` / `F0` / `InitAnalysisConfig` /
+      `WorldAnalysisF0In` / `WorldSynthesisSampleCount` / `WorldSynthesis`；
+    - R1.1 那条链：`HnAnalysisF0In` / `WorldSynthesisContinuousNoise`，
+      以及 mgc/bap 解码的 `DecodeMgc` / `DecodeBap`（上游那层是 catch 住异常返回
+      null，这里保持"失败不抛"）。
     """
 
     _LIB_NAMES = ('worldline.dll', 'libworldline.so', 'libworldline.dylib', 'worldline')
@@ -590,6 +603,27 @@ class WorldlineNative:
             ctypes.POINTER(ctypes.c_double),
             ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
             ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
+        # ---- R1.1（Worldline-R1.1 / PhraseSynthV2.SynthContinuousNoise）需要的三个 ----
+        # ★ 2026-10-14 补（WP4-3）：这三条原先没绑，docstring 里也记着「等 PhraseSynthV2
+        #   落地时一起补」。签名逐条取自上游 `OpenUtau.Core/Render/Worldline.cs` 的
+        #   `[DllImport("worldline", CallingConvention = CallingConvention.Cdecl)]` 声明。
+        #   `DecodeMgc` / `DecodeBap` 把 mgc/bap 解成 sp/ap —— 上游 C# 那层包装（Worldline.cs:60/80）
+        #   **catch 住异常返回 null**，我们这边保持同样的「失败不抛」语义。
+        lib.DecodeMgc.restype = None
+        lib.DecodeMgc.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_double), ctypes.c_int,
+                                  ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_double)]
+        lib.DecodeBap.restype = None
+        lib.DecodeBap.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_double),
+                                  ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_double)]
+        # HnAnalysisF0In：R1.1 的分析入口 —— 吃「原样本 + 其谐波分量」，吐出 sp / sp_harmonic / ap
+        lib.HnAnalysisF0In.restype = None
+        lib.HnAnalysisF0In.argtypes = [ctypes.POINTER(_NativeAnalysisConfig),
+                                       ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+                                       ctypes.c_int,
+                                       ctypes.POINTER(ctypes.c_double), ctypes.c_int,
+                                       ctypes.POINTER(ctypes.c_double),
+                                       ctypes.POINTER(ctypes.c_double),
+                                       ctypes.POINTER(ctypes.c_double)]
         lib.WorldSynthesis.restype = ctypes.c_int
         lib.WorldSynthesis.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_int,
                                        ctypes.POINTER(ctypes.c_double), ctypes.c_bool,
@@ -662,6 +696,40 @@ class WorldlineNative:
                                     len(samples), _f64_buffer(f0_in), num_frames,
                                     sp_env, ap)
         return list(sp_env), list(ap)
+
+    def hn_analysis_f0_in(self, config: AnalysisConfig, samples: Sequence[float],
+                          harmonic: Sequence[float], f0_in: Sequence[float]):
+        """对应 `Worldline.HnAnalysisF0In` → `(sp_env, sp_harmonic, ap)`，都按**扁平**排布。
+
+        ★ 与 `world_analysis_f0_in` 的两处差别（这是 R1.1 的全部要害）：
+          · **多收一个 `harmonic`** —— 原样本的谐波分量，由 `hnsep.Hnsep.harmonic()` 给出；
+          · **多吐一个 `sp_harmonic`** —— 谐波分量的谱包络，`SynthContinuousNoise` 靠它
+            在合成时单独还原气声/噪声成分（v10 只有一支 sp，那部分会被脉冲模型抹平）。
+
+        上游签名（`Worldline.cs:183`，Cdecl）：
+          void HnAnalysisF0In(AnalysisConfig*, float* samples, float* harmonic, int num_samples,
+                              double* f0_in, int num_frames,
+                              double* sp_env_out, double* sp_harmonic_out, double* ap_out)
+
+        上游还断言 `harmonic.Length == samples.Length`（`:193`），这里同样校验 ——
+        长度不一致时原生侧会越界读，属于必须挡在前面的错误。
+        """
+        self._require()
+        if len(harmonic) != len(samples):
+            raise ValueError('harmonic 与 samples 长度必须一致（上游 HnAnalysisF0In 的断言）')
+        num_frames = len(f0_in)
+        sp_size = config.fft_size // 2 + 1
+        sp_env = (ctypes.c_double * (num_frames * sp_size))()
+        sp_harm = (ctypes.c_double * (num_frames * sp_size))()
+        ap = (ctypes.c_double * (num_frames * sp_size))()
+        cfg = _NativeAnalysisConfig(fs=config.fs, hop_size=config.hop_size,
+                                    fft_size=config.fft_size,
+                                    f0_floor=config.f0_floor, frame_ms=config.frame_ms)
+        self._lib.HnAnalysisF0In(ctypes.byref(cfg), _f32_buffer(samples),
+                                 _f32_buffer(harmonic),
+                                 len(samples), _f64_buffer(f0_in), num_frames,
+                                 sp_env, sp_harm, ap)
+        return list(sp_env), list(sp_harm), list(ap)
 
     def world_synthesis_continuous_noise(
             self, f0: Sequence[float], sp: Sequence[float], harmonic_sp: Sequence[float],
@@ -745,8 +813,15 @@ class SynthSegment:
       （`forResampler: false`）：乐句合成（`PhraseSynthV2`）用。**做输入增益**，
       并且额外算 `skipFrames / p0 / p1 / p3 / p4` 这几个帧边界。
 
-    `hnsep`（Worldline-R1.1 的谐波/噪声分离，`Core/Analysis/Hnsep`）尚未照搬，
-    传入非 None 会抛 `NotImplementedError` —— `Resample` 这条路径恒为 None。
+    `hnsep` 是 Worldline-R1.1 的谐波/噪声分离（对应 `Core/Analysis/Hnsep`，
+    本仓库实现在 `singing/openutau/hnsep.py`）。**`Resample` 这条路径恒为 None**，
+    只有 `PhraseSynthV2` 的乐句合成会传。
+
+    ★ 传了 `hnsep` 时的三处差别（都要与不传时区分开）：
+    - 分离是在**未裁剪的原始样本**上、带前后各 `fs/5` 样本的上下文做的，再取回本段
+      （只在裁剪后的段上分离，边缘会因为缺上下文而不准）；
+    - 谐波分量与 `samples` 乘**同一个**输入增益（否则 ap 这个"功率比"失去意义）；
+    - 分析走 `HnAnalysisF0In`（多吐一条 `sp_env_harmonic`），不是 `WorldAnalysisF0In`。
     """
 
     def __init__(self, config: AnalysisConfig, item, pos_ms: float = 0.0,
@@ -827,10 +902,22 @@ class SynthSegment:
             raise ValueError('Array.Copy 长度为负：%d' % n_copy)
         samples[0:n_copy] = untrimmed[trim_start_sample:trim_start_sample + n_copy]
 
+        # Worldline-R1.1：分离要带**上下文**（前后各 fs/5 个样本）再取回本段 ——
+        # 只在裁剪后的段上跑分离，边缘会因为缺少上下文而分离不准。
+        harmonic: Optional[List[float]] = None
         if hnsep is not None:
-            raise NotImplementedError(
-                'hnsep（Worldline-R1.1 的谐波/噪声分离）尚未照搬；'
-                'Resample 这条路径的 hnsep 恒为 None。')
+            if hnsep.sample_rate != fs:
+                raise HnsepSampleRateError(
+                    'hnsep model sample rate %s Hz, expected %d Hz.'
+                    % (hnsep.sample_rate, fs))
+            margin = fs // 5
+            lo = max(0, trim_start_sample - margin)
+            hi = min(len(untrimmed), trim_end_sample + margin)
+            harmonic_region = hnsep.harmonic(untrimmed[lo:hi])
+            n_keep = trim_end_sample - trim_start_sample
+            harmonic = [0.0] * len(samples)
+            harmonic[0:n_keep] = harmonic_region[trim_start_sample - lo:
+                                                 trim_start_sample - lo + n_keep]
 
         if not for_resampler:
             # 乐句合成那条路：增益在**输入端**做（resampler 那条在输出端做）
@@ -838,9 +925,20 @@ class SynthSegment:
                 samples, f0_src, self.wav_max, config.f0_floor, get_flag(item, 'P', 86))
             for i in range(len(samples)):
                 samples[i] = samples[i] * gain
+            # ★ 谐波分量要乘**同一个**增益：R1.1 的 ap 是"分离出来的功率比"，
+            #   两条谱包络不同量纲的话这个比就没有意义了。
+            if harmonic is not None:
+                for i in range(len(harmonic)):
+                    harmonic[i] = harmonic[i] * gain
 
         sp_size = config.fft_size // 2 + 1
-        sp_env_src, ap_src = native.world_analysis_f0_in(config, samples, f0_src)
+        # ★ R1.1 走 HnAnalysisF0In（多吐一条 sp_harmonic），v10 走 WorldAnalysisF0In。
+        sp_harm_src: Optional[List[float]] = None
+        if harmonic is not None:
+            sp_env_src, sp_harm_src, ap_src = native.hn_analysis_f0_in(
+                config, samples, harmonic, f0_src)
+        else:
+            sp_env_src, ap_src = native.world_analysis_f0_in(config, samples, f0_src)
 
         t_dst, self.stretch = compute_timemap(
             src_start_frame, src_end_frame, self.offset_frac_ms, item.dur_required,
@@ -849,6 +947,9 @@ class SynthSegment:
         self.f0 = f0_dst
         self.sp_env = sp_dst
         self.ap = ap_dst
+        if sp_harm_src is not None:
+            # 与 sp 同一套插值语义（见 `_resample_flat`）
+            self.sp_env_harmonic = _resample_flat(t_dst, sp_harm_src, sp_size)
 
         if not for_resampler:
             self.skip_frames, self.p0, self.p1, self.p3, self.p4 = compute_frame_bounds(
@@ -1069,10 +1170,11 @@ class PhraseSynthV2:
         ★ 第一行的守卫照搬 C#：`if (hnsep == null) throw new InvalidOperationException(
         "SynthContinuousNoise needs the hnsep analysis.");`
 
-        目前**还走不通**，两处依赖未搬（都给的是明确报错，不是静默出错）：
-        - `SynthSegment` 的谐波分离分支（需要 `HnAnalysisF0In` 原生绑定 + 把
-          `sp_env_harmonic` 一路带到 `resample_features`）；
-        - 就算上面通了，还要宿主注入 hnsep 模型（见 `set_hnsep`）。
+        与 `Synth`（v10）的三处不同，缺一不可：
+        - 走 `blend_continuous_noise_features`，多混一条 `sp_harmonic` 与逐帧 `stretch`；
+        - 合成用 `WorldSynthesisContinuousNoise`，帧周期是 `hop_size` 换算的
+          （v10 那条用的是 `config.frame_ms`）；
+        - 多一个 `seed`：噪声成分靠它可复现（同一个 seed 出同一段音频）。
         """
         if self.hnsep is None:
             raise RuntimeError('SynthContinuousNoise needs the hnsep analysis.')

@@ -671,7 +671,8 @@ def _assemble(results, phrases):
 
 
 def render_track(vb_dir, notes, out_path, sample_note='C4', phonemizer='auto',
-                 tpb=480, bpm=120.0, cache_dir=None, tempo_map=None, curves=None):
+                 tpb=480, bpm=120.0, cache_dir=None, tempo_map=None, curves=None,
+                 renderer='CLASSIC'):
     """渲染整条音轨到 `out_path`（WAV）。返回结果 dict。
 
     `tempo_map`：多点变速 `[{beat, bpm}]`（拍单位，应用侧 store.tempoMap 同构）；
@@ -692,10 +693,31 @@ def render_track(vb_dir, notes, out_path, sample_note='C4', phonemizer='auto',
     emit_progress(2, '加载声库…')
     singer = load_singer(vb_dir)
 
+    # ★ 渲染器选择（WP4-5 的"最后一跳"）：默认 CLASSIC 就是原来的行为，**一个字节都不变**。
+    #   给 WORLDLINE-R / WORLDLINE-R1.1 会换成**乐句级** `WorldlineRenderer` ——
+    #   只有那条路会走到 `PhraseSynthV2`（v10 的 `Synth()` / v11 的 `SynthContinuousNoise()`）。
+    #   注册在 `classic/__init__.py` 导入时就做完了（`register_worldline_renderers()`）。
+    from singing.openutau.renderers import create_renderer, get_renderer_options
+    renderer_id = (renderer or 'CLASSIC').strip() or 'CLASSIC'
+    # ★ 必须**先按白名单校验**，不能直接丢给 `create_renderer`：
+    #   它照搬了上游的**前缀兜底** —— "任何以 WORLDLINE 开头的 id 都落到 R1"。
+    #   那是为 ustx 里存的历史字符串设计的；对**用户手敲的 CLI 参数**就成了陷阱：
+    #   把 `WORLDLINE-R1.1` 打成 `WORLDLINE-R11` 会**静默变成 v10**，不报错。
+    known = list(get_renderer_options())
+    if renderer_id not in known:
+        raise ValueError('未知渲染器 %r；可选：%s' % (renderer_id, '、'.join(known)))
+    if renderer_id == 'CLASSIC':
+        renderer_obj = ClassicRenderer()
+    else:
+        renderer_obj = create_renderer(renderer_id)
+        if renderer_obj is None:
+            raise ValueError('渲染器 %r 未注册（可选：%s）'
+                             % (renderer_id, '、'.join(known)))
+
     project = build_project(bpm, tempo_map)
     track = project.tracks[0]
-    track.renderer_settings.renderer = 'CLASSIC'
-    track.renderer_settings.renderer_obj = ClassicRenderer()
+    track.renderer_settings.renderer = renderer_id
+    track.renderer_settings.renderer_obj = renderer_obj
     track.renderer_settings.resampler = 'worldline'
     track.renderer_settings.wavtool = 'convergence'
     track.singer_obj = singer
@@ -722,7 +744,6 @@ def render_track(vb_dir, notes, out_path, sample_note='C4', phonemizer='auto',
     if not phrases:
         raise ValueError('没有可渲染的乐句（音素化后为空）')
 
-    renderer = ClassicRenderer()
     results = []
     for i, phrase in enumerate(phrases):
         done = int((i / len(phrases)) * 84)
@@ -730,7 +751,7 @@ def render_track(vb_dir, notes, out_path, sample_note='C4', phonemizer='auto',
         prog = Progress(len(phrase.phones))
 
         async def _go(p=phrase, pr=prog):
-            return await renderer.render(p, pr, track_no=0)
+            return await renderer_obj.render(p, pr, track_no=0)
 
         res = asyncio.new_event_loop().run_until_complete(_go())
         if res is None or not getattr(res, 'samples', None):
@@ -764,6 +785,7 @@ def render_track(vb_dir, notes, out_path, sample_note='C4', phonemizer='auto',
         'note_count': len(part.notes),
         'phrase_count': len(results),
         'phonemizer': ph_tag,
+        'renderer': renderer_id,
         'sample_rate': SR,
     }
 
@@ -816,7 +838,8 @@ def cmd_render_track(args):
                            phonemizer=args.phonemizer or 'auto',
                            tpb=args.tpb, bpm=args.bpm,
                            tempo_map=_load_json_list(getattr(args, 'tempo_map', None)),
-                           curves=curves)
+                           curves=curves,
+                           renderer=getattr(args, 'renderer', None) or 'CLASSIC')
         return res
     except Exception as e:                                  # noqa: BLE001
         warn(traceback.format_exc())
@@ -1084,6 +1107,10 @@ def main(argv=None):
     t.add_argument('--bpm', type=float, default=120.0)
     t.add_argument('--tempo-map', default=None,
                    help='多点变速 JSON `[{beat,bpm}]`（拍单位），或 @文件路径；给了就覆盖单点 bpm')
+    # ★ WP4-5 的"最后一跳"：默认 CLASSIC 与以前完全一致；换成 Worldline 系列才会走
+    #   乐句级 PhraseSynthV2（WORLDLINE-R = v10，WORLDLINE-R1.1 = v11，WORLDLINE-R2 = v20）。
+    t.add_argument('--renderer', default='CLASSIC',
+                   help='CLASSIC（默认，逐音素）| WORLDLINE-R | WORLDLINE-R1.1 | WORLDLINE-R2')
     t.set_defaults(func=cmd_render_track)
 
     p = sub.add_parser('probe', help='检查声库能否加载')

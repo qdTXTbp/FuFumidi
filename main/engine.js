@@ -5,7 +5,9 @@
 'use strict';
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 const { spawn } = require('child_process');
+const Paths = require('./paths');
 
 function createEngineService({ resolvePython, engineDir, engineEnv }) {
   const activeChildren = new Set();
@@ -14,6 +16,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
   const _workerIdle = new Map();   // slot -> 回收定时器
   let _engineWorkerSeq = 0;
   const _engineWorkerPending = new Map();  // 请求 id -> { resolve, reject, win, logId, child }
+  const _sessions = new Set();             // 常驻引擎会话（cancelJob 需要逐个问）
   const WORKER_IDLE_MS = 120000;   // 并行 worker 空闲 2 分钟后退出，释放模型内存
 
   function reapWorker(slot) {
@@ -80,7 +83,20 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       activeChildren.delete(child);
       finish(() => onDone && onDone(code, { result, out: outBuf, err: errBuf }));
     });
-    const timer = setTimeout(() => finish(() => onError && onError('引擎执行超时，已强制终止')), timeoutMs);
+    // ★ 计时与「暂停/继续」配合（用户 2026-10-14 要求转录可暂停）：被暂停的进程还活着、
+    //   只是零进展 —— 按真实时钟算，一次长暂停会被误判成「引擎执行超时，已强制终止」。
+    //   所以只在**没被暂停**的时间段里扣预算。
+    let _left = timeoutMs;
+    let _last = Date.now();
+    const timer = setInterval(() => {
+      const now = Date.now();
+      const dt = now - _last;
+      _last = now;
+      let paused = false;
+      try { paused = fs.existsSync(Paths.pauseFlagFile()); } catch (e) {}
+      if (!paused) _left -= dt;
+      if (_left <= 0) finish(() => onError && onError('引擎执行超时，已强制终止'));
+    }, 1000);
     return child;
   }
 
@@ -191,9 +207,12 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
     };
     // 注意：这里漏一个键，渲染端设了也到不了引擎 —— 乐器组约束（muscriptor_instruments）
     // 之前就是漏在这张表里，界面选「人声」完全没有效果。
-    const map = { onset_threshold:'onset_threshold', frame_threshold:'frame_threshold', min_note_length:'min_note_length', min_note_ms:'min_note_ms', merge_gap_ms:'merge_gap_ms', tempo:'tempo', stem_format:'stem_format', model:'model', model_size:'model_size', muscriptor_batch:'muscriptor_batch', muscriptor_instruments:'muscriptor_instruments', min_freq:'min_freq', beat_grid:'beat_grid' };
+    const map = { denoise_mode:'denoise_mode', onset_threshold:'onset_threshold', frame_threshold:'frame_threshold', min_note_length:'min_note_length', min_note_ms:'min_note_ms', merge_gap_ms:'merge_gap_ms', tempo:'tempo', stem_format:'stem_format', model:'model', model_size:'model_size', muscriptor_batch:'muscriptor_batch', muscriptor_instruments:'muscriptor_instruments', min_freq:'min_freq', max_freq:'max_freq', beat_grid:'beat_grid',
+      // ★ 2026-10-15 审计抓到：静音分段的五个键在引擎侧全都有（argparse + Namespace + params），
+      //   但**这张表里一个都没有** —— 界面上「跳过静音分段（长音频加速）」因此一直是死的。
+      segment_silence:'segment_silence', silence_db:'silence_db', min_silence:'min_silence', max_segment:'max_segment', segment_pad:'segment_pad', max_note_hold:'max_note_hold', temperature:'temperature', cfg_coef:'cfg_coef', beam_size:'beam_size', prelude_forcing:'prelude_forcing', precision:'precision' };
     for (const [k, rk] of Object.entries(map)) if (cfg[k] != null) req[rk] = cfg[k];
-    for (const k of ['denoise','normalize','auto_bpm','no_merge','no_velnorm','with_drums','export_stems','no_pedal','no_melodia']) if (cfg[k]) req[k] = true;
+    for (const k of ['denoise','normalize','auto_bpm','no_merge','no_velnorm','with_drums','export_stems','no_pedal','no_melodia','multiple_pitch_bends']) if (cfg[k]) req[k] = true;
     const p = new Promise((resolve, reject) => { _engineWorkerPending.set(id, { resolve, reject, win: cfg.__win, logId: cfg.__logId || cfg.id, child }); });
     child.stdin.write(JSON.stringify(req) + '\n');
     return p;
@@ -313,6 +332,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
     }
 
     function kill() {
+      _sessions.delete(handle);
       for (const [, p] of pending) { clearTimeout(p.timer); p.reject(new Error('session killed')); }
       pending.clear();
       const c = child;
@@ -324,12 +344,63 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       }
     }
 
-    return { request, kill };
+    /** 中止该会话里某个在途请求（返回是否命中）。 */
+    function cancel(id) {
+      const p = pending.get(id);
+      if (!p) return false;
+      clearTimeout(p.timer);
+      pending.delete(id);
+      const err = new Error('canceled');
+      err.canceled = true;
+      try { p.reject(err); } catch (e) {}
+      return true;
+    }
+
+    const handle = { request, kill, cancel };
+    _sessions.add(handle);
+    return handle;
+  }
+
+  /**
+   * 取消一个在跑的任务（worker 路径 + 常驻会话路径）。
+   *
+   * ★ 为什么必须在这里做：转录走的是 worker 路径（_engineWorkerPending 记账），
+   *   而 engine:cancel 原来只查 task-queue 的 convertChildren（spawn 路径）——
+   *   两条路径各记各的账，于是「取消转录」对 worker 路径永远返回 { ok: false }，
+   *   前端点了没反应、正在跑的转录照旧跑完。
+   */
+  function cancelJob(id) {
+    let hit = false;
+    // ★ 两本账都查：worker 路径按**内部键** 'w<N>' 记 _engineWorkerPending，
+    //   而渲染端只知道自己的 jobId（'batch7' 这种），它被记在 logId 里。
+    //   只查内部键的话，前端点「取消转录」永远落空 —— 正在跑的转录照旧跑完
+    //   （2026-07 修过一次"只查 spawn 路径"，这次是同一条链路上的**第二处漏配**）。
+    let key = _engineWorkerPending.has(id) ? id : null;
+    if (!key) {
+      for (const [k, ent] of _engineWorkerPending) {
+        if (ent && (ent.logId === id || String(ent.logId) === String(id))) { key = k; break; }
+      }
+    }
+    if (key) {
+      const p = _engineWorkerPending.get(key);
+      _engineWorkerPending.delete(key);
+      // ★ 必须带 canceled 标记：task-queue 的 worker 回落分支靠它区分
+      //   "被取消" 与 "worker 崩了" —— 否则取消会触发回落、另起一个进程重跑。
+      const err = new Error('canceled');
+      err.canceled = true;
+      try { p.reject(err); } catch (e) {}
+      // 杀掉 worker 进程才算真停：python 那边一旦开始解码，只 reject Promise 不会让它停手
+      try { if (p.child && !p.child.killed && p.child.exitCode === null) p.child.kill(); } catch (e) {}
+      hit = true;
+    }
+    for (const s of _sessions) { try { if (s.cancel(id)) hit = true; } catch (e) {} }
+    return hit;
   }
 
   return {
     spawnEngine,
     stopEngineWorker,
+    cancelJob,
     engineWorkerConvert,
     runEngineInline,
     createEngineSession,

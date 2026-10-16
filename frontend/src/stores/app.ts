@@ -7,6 +7,8 @@ import { TRACK_COLORS, fmtTime } from '../core/util';
 import { usePlaylistStore } from './playlist';
 import { bridge } from '../api';
 import { t } from '../core/i18n';
+import { playbackPrefs } from '../core/playback_prefs';
+import { seekTarget } from '../core/transport_keys';
 
 /* 音频曲目（播客 / 有声书）的播放元素与 objectURL。
    ★ 放**模块级**而不是 store state：它们是 DOM 节点与浏览器对象，塞进 reactive 会被 Proxy 包一层，
@@ -229,6 +231,8 @@ export const useAppStore = defineStore('app', {
       settingsTab: 'appearance',
       themesOpen: false,
       wallpaperOpen: false,
+      // 壁纸库这次是给谁挑：'app' = 应用整窗背景，'viz' = 音符瀑布背景（可视化页的「动态壁纸」进来）
+      wallpaperTarget: 'app' as 'app' | 'viz',
       guideOpen: false,
       paletteOpen: false,
       changelogOpen: false,
@@ -792,6 +796,8 @@ export const useAppStore = defineStore('app', {
       player.setScale(this.tempo);
       player.setLoop(this.loop, 0, item.song.totalTicks);
       player.setMetronome(this.metro);
+      // 跳空白开关（用户偏好）随曲目一起应用：空档表按这首歌的音符重算（见 player.prepare）
+      this.applyPlaybackPrefs();
       this.totalSec = item.song.totalSec;
       this.tracks = item.song.tracks.map((tr: any, i: number) => {
         // 混音台生效用的 MIDI 通道：取该轨音符用得最多的通道
@@ -852,6 +858,8 @@ export const useAppStore = defineStore('app', {
         const rv = await ensureEngineHealthy();
         if (rv.rebuilt && this.currentId) { this.playing = false; await this.selectSong(this.currentId); }
         const { player } = ensureAudio();
+        // 开头静音默认跳（用户 2026-10-14 定）：一上来先空几十秒很烦，播之前先挪到第一个音。
+        this.skipLeadingSilenceNow();
         player.play();
         this.playing = true;
         this.trackPlay(); // 播放统计
@@ -866,13 +874,15 @@ export const useAppStore = defineStore('app', {
       this.progress = 0;
       try { if (this.currentId) this.clearResumePos(this.currentId); } catch (e) {} // 手动停止 = 下次从头播
     },
-    /* ---------------- 播放模式（顺序/随机/单曲循环/列表循环） ---------------- */
+    /* ---------------- 播放模式（顺序/播完就停/随机/单曲循环/列表循环） ----------------
+       ★ 「播完就停」是用户 2026-10-14 要的：只放当前这一首，放完停下、不自动切下一首。
+         与「顺序播放」的区别就在这 —— 顺序播放会一路放到列表末尾才停。 */
     cyclePlayMode() {
-      const seq = ['order', 'shuffle', 'repeatOne', 'loopAll'];
+      const seq = ['order', 'once', 'shuffle', 'repeatOne', 'loopAll'];
       const i = seq.indexOf(this.playMode);
       this.playMode = seq[(i + 1) % seq.length] || 'order';
       try { localStorage.setItem('fufumidi_playmode', this.playMode); } catch (e) {}
-      const label: Record<string, string> = { order: t('顺序播放'), shuffle: t('随机播放'), repeatOne: t('单曲循环'), loopAll: t('列表循环') };
+      const label: Record<string, string> = { order: t('顺序播放'), once: t('播完就停'), shuffle: t('随机播放'), repeatOne: t('单曲循环'), loopAll: t('列表循环') };
       this.toast(t(label[this.playMode] || this.playMode), 'ok');
     },
     // 按模式计算下一首目标 id；dir: 1 下一首 / -1 上一首；返回 null 表示维持当前（单曲循环）或无处可去
@@ -915,7 +925,7 @@ export const useAppStore = defineStore('app', {
     // 无缝播放：播放期间按当前模式预解析下一首，自动切歌时无需再等 parseMidi
     preloadNext() {
       try {
-        if (this.playMode === 'shuffle') return;
+        if (this.playMode === 'shuffle' || this.playMode === 'once') return;   // 这两种模式不会自动切歌
         const nid = this.pickNeighborId(1);
         if (!nid || nid === this.currentId) return;
         const item = this.songs.find((s: any) => s.id === nid);
@@ -955,6 +965,14 @@ export const useAppStore = defineStore('app', {
     async handleTrackEnd() {
       const q = this.queueSongs;
       const mode = this.playMode;
+      // 「播完就停」：不切歌、不复位到列表头 —— 放完这一首就停下（用户 2026-10-14 要的模式）
+      if (mode === 'once') {
+        this.playing = false;
+        this.curSec = 0;
+        this.progress = 0;
+        try { if (this.currentId) this.clearResumePos(this.currentId); } catch (e) {}
+        return;
+      }
       if (mode === 'repeatOne') { if (this.currentId) await this.playSongById(this.currentId); return; }
       const idx = q.findIndex((s: any) => s.id === this.currentId);
       if (mode === 'shuffle') {
@@ -1049,6 +1067,30 @@ export const useAppStore = defineStore('app', {
         localStorage.setItem('fufumidi_tags', JSON.stringify(m));
       } catch (e) {}
     },
+    /** 重命名曲目（用户：「侧边栏对歌曲的编辑信息功能要可以重命名」）。
+     *  只改**曲库里的名字**并写回库，不动磁盘上的文件 —— 改名不改文件是刻意的：
+     *  文件名一改，用户的播放列表/云同步/历史里引用的路径全会失效。 */
+    async renameSong(id: string, name: string) {
+      const n = String(name || '').trim();
+      const s: any = this.songs.find((x: any) => x.id === id);
+      if (!s || !n || n === s.name) return false;
+      const b: any = (typeof window !== 'undefined') ? (window as any).fuBridge : null;
+      /* ★ 用户要求「重命名同步动磁盘文件名」：**先改文件**，改不动就整个放弃 ——
+         库里改了、磁盘还是旧名，是最糟的中间态（导出、分享、"在文件夹中显示"全对不上）。 */
+      if (b && typeof b.renameMidi === 'function' && s.path) {
+        const oldPath = String(s.path);
+        let r: any = null;
+        try { r = await b.renameMidi(oldPath, n); } catch (e: any) { r = { ok: false, error: String((e && e.message) || e) }; }
+        if (!r || !r.ok) { this.toast(t('重命名失败：') + String((r && r.error) || ''), 'error'); return false; }
+        if (r.path) {
+          s.path = r.path;
+          if (s.meta && s.meta.fp === oldPath) s.meta.fp = r.path;   // 指纹里也存了路径，一起换
+        }
+      }
+      s.name = n;
+      if (b && typeof b.dbSongsPut === 'function') { try { await b.dbSongsPut(s); } catch (e) {} }
+      return true;
+    },
     async editTags(id: string) {
       const s = this.songs.find((x: any) => x.id === id);
       if (!s) return;
@@ -1089,6 +1131,78 @@ export const useAppStore = defineStore('app', {
       this.tempo = Math.max(0.25, Math.min(4, v));
       const { player } = ensureAudio();
       if (this.currentSong) player.setScale(this.tempo);
+    },
+    /* ---------------- 播放：跳空白 / 方向键步长 / 长按倍数（用户 2026-10-14）----------------
+       偏好值统一来自 core/playback_prefs.js（设置页写、App.vue 键盘读、播放器用）。 */
+    applyPlaybackPrefs() {
+      try {
+        const { player } = ensureAudio();
+        player.setSkipSilence(playbackPrefs.skipSilence, playbackPrefs.skipSilenceMin, playbackPrefs.skipSilenceLead);
+      } catch (e) { /* 还没音频上下文时忽略 */ }
+    },
+    /** 跳到歌曲时间轴上的某个秒（不受变速影响；音频曲目直接设 currentTime）。*/
+    seekSec(sec: number) {
+      if (this.isAudio && audioEl) {
+        const d = audioEl.duration || 0;
+        if (d) audioEl.currentTime = Math.max(0, Math.min(d * 0.999, Number(sec) || 0));
+        this.curSec = audioEl.currentTime;
+        this.progress = d ? this.curSec / d : 0;
+        return;
+      }
+      const s = this.currentSong && this.currentSong.song;
+      if (!s) return;
+      const { player } = ensureAudio();
+      const v = Math.max(0, Math.min(s.totalSec, Number(sec) || 0));
+      player.seekSec(v);
+      this.curSec = player.currentSec();
+      this.progress = s.totalSec ? this.curSec / s.totalSec : 0;
+    },
+    /** 方向键快进/快退：步长与单位来自播放偏好（core/transport_keys.js）。*/
+    seekByStep(dir: number) {
+      if (this.isAudio && audioEl) {
+        const d = audioEl.duration || 0;
+        const step = Number(playbackPrefs.seekStep) || 5;
+        const delta = playbackPrefs.seekStepUnit === "percent" ? d * step / 100 : step;
+        this.seekSec((audioEl.currentTime || 0) + (dir >= 0 ? delta : -delta));
+        return;
+      }
+      const s = this.currentSong && this.currentSong.song;
+      if (!s) return;
+      const { player } = ensureAudio();
+      // 一小节秒数按曲子自己的速度映射算（第 0 拍起 4 拍），变速播放不影响它
+      let secPerBar = 2;
+      try {
+        const tpb = s.tpb || 480;
+        secPerBar = (s.baseSec(4 * tpb) - s.baseSec(0)) || 2;
+      } catch (e) { /* 拿不到就 2 秒兜底 */ }
+      const target = seekTarget({
+        sec: player.currentSec(), dir,
+        step: playbackPrefs.seekStep, unit: playbackPrefs.seekStepUnit,
+        totalSec: s.totalSec, secPerBar,
+      });
+      this.seekSec(target);
+    },
+    /** 临时播放倍率（长按 → 用）：只改播放器，不动 state.tempo / 工程 BPM。*/
+    setTemporaryRate(mult: number) {
+      const m = Number(mult) > 0 ? Number(mult) : 1;
+      if (!this.currentSong) return;
+      const { player } = ensureAudio();
+      player.setScale(this.tempo * m);
+    },
+    /** 播放前跳开头静音（默认开，用户 2026-10-14 定）。*/
+    skipLeadingSilenceNow() {
+      if (this.isAudio) return false;
+      try {
+        const { player } = ensureAudio();
+        return player.skipLeadingSilence(1.0, 0.5);
+      } catch (e) { return false; }
+    },
+    /** 跳过空白时给界面一个提示（播放器的回调）。*/
+    setSkipNotice(fn: ((from: number, to: number) => void) | null) {
+      try {
+        const { player } = ensureAudio();
+        player.onSkip = fn;
+      } catch (e) { /* 忽略 */ }
     },
     toggleLoop() {
       this.loop = !this.loop;

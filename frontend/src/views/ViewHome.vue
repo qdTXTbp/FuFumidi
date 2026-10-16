@@ -7,6 +7,10 @@ import { encodeMidi } from '../core/midi.js';
 import { t } from '../core/i18n.js';
 import { getAppVersion } from '../core/version.js';
 import { fmtTime } from '../core/util.js';
+// 立绘（全身，透明底）：用户要求「立绘放到工具里」—— 首页是工具内最大的静态位。
+// 小尺寸位（侧栏 38px、文档 nav 36px）用的是头像特写 build 出来的 assets/logo.png，
+// 立绘缩到那个尺寸只剩一条竖线，认不出人。
+import mascotUrl from '../assets/mascot.png';
 
 const app = useAppStore();
 const state = app;
@@ -35,6 +39,12 @@ const QUICK = [
 
 function go(v) { setView(v); }
 function openGuide() { state.ui.guideOpen = true; }
+/** 首页 → 调试工具 · 全局体检（settingsTab 用 'gpu'，体检区块就在那个标签页里） */
+function openHealth() {
+  // 用户反馈：点首页这张卡应当直接落到「反馈」页（体检 + 反馈 + 诊断包都在那一页）
+  state.ui.settingsTab = 'feedback';
+  state.ui.settingsOpen = true;
+}
 function openUpdate() {
   state.ui.settingsTab = 'update';
   state.ui.settingsOpen = true;
@@ -119,6 +129,8 @@ async function openProject() {
         <div class="page-title">{{ t('首页工作区') }}</div>
         <div class="page-sub">{{ t('快速开始 · 最近曲目 · 播放状态') }}</div>
       </div>
+      <!-- 立绘：靠右、不参与点击（pointer-events: none），窄窗口自动隐藏 -->
+      <img class="home-mascot" :src="mascotUrl" alt="" aria-hidden="true" />
     </div>
 
     <div class="grid grid-3">
@@ -141,6 +153,12 @@ async function openProject() {
       <button class="home-card" @click="openProject">
         <span class="hc-ic"><Icon name="folder" :size="18" /></span>
         <div><b>{{ t('打开工程') }}</b><small>{{ t('载入 .fufu') }}</small></div>
+      </button>
+      <!-- 问题反馈入口：用户要求「在首页工作区提供入口，方便用户反馈问题」。
+           直接跳到设置里的「调试工具 · 全局体检」，不用用户自己去翻。 -->
+      <button class="home-card" @click="openHealth">
+        <span class="hc-ic"><Icon name="info" :size="18" /></span>
+        <div><b>{{ t('遇到问题？') }}</b><small>{{ t('一键体检 · 反馈到 GitHub') }}</small></div>
       </button>
       <button class="home-card" @click="saveProject" :disabled="!currentSong">
         <span class="hc-ic"><Icon name="save" :size="18" /></span>

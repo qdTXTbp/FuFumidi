@@ -8,11 +8,12 @@ const AdmZip = require('adm-zip');
 const Paths = require('./paths');
 const { safeExtractAllTo } = require('./zip-safe');
 const MSST_CATALOG = require('./models-msst-catalog');
+const SepCommon = require('./separate-common');
 const DS = require('./download-source');
 const createFastDownload = require('./fast-download');
 const GSV = require('./gpt-sovits');
 
-function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings }) {
+function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings, resolvePython }) {
   const _folderWatchers = new Map();
 
   // 本模块不再自带下载器：所有「取文件字节」的活统一交给 main/fast-download.js
@@ -139,6 +140,32 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       downloadable: true,
       runtime: 'aria',
     },
+    // Worldline v11（R1.1）的谐波/噪声分离模型。
+    // ★ 它是 `.oudep` —— **内容就是 zip**（实测前 4 字节 50 4B 03 04：hnsep.yaml + model.onnx
+    //   + oudep.yaml + LICENSE）。所以走 `unpack`：下到 <dest>.oudep → 校验 sha256 →
+    //   解包进 dest → 删掉压缩包。落点**必须**与引擎侧一致
+    //   （engine/singing/openutau/hnsep.py 的 PACKAGE_DIR_REL = hnsep/hnsep_240512），
+    //   否则会出现「下载完了 v11 还说没装」—— 这种不一致**不报错**，最难查。
+    //   kind 用 'tuning'：★ 2026-10-14 按用户要求，资源中心改成两级分类 ——
+    //   顶层「调教」下面再分 声库 / 音色 / 调教模型。hnsep 只在调教渲染时用得到，
+    //   放「人声分离」会让用户去错地方找（那也是它一开始的归属，已按用户意见修正）。
+    hnsep_240512: {
+      id: 'hnsep_240512',
+      name: 'hnsep 谐波分离（Worldline v11）',
+      note: '约 52 MB · MIT（tsurumeso/vocal-remover）',
+      kind: 'tuning',
+      arch: 'Hnsep ONNX（STFT 复数掩码）',
+      use: '把原音拆成「谐波 + 噪声」两路，气声与辅音更真。只有「轨道渲染器」选 Worldline v11 时才用得到；没装时 v11 会给出明确报错。',
+      dest: path.join('hnsep', 'hnsep_240512'),
+      unpack: true,
+      unpackMarker: 'hnsep.yaml',
+      url: 'https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/hnsep-v1/hnsep_240512.oudep',
+      sha256: '8f8c1046d0cacd40363e6f71d48bc1663e06a01d4625af0569055648d771ff92',
+      size: 54934878,
+      minSize: 5e7,
+      downloadable: true,
+      runtime: 'worldline-r11',
+    },
   };
   // ===================== MSST 分离模型清单（动态） =====================
   // 数据源：monologue82/Models 仓库 manifest.json（vocal/multi/single/vr 全部分类）+ 本地目录（models-msst-catalog.js，
@@ -161,6 +188,11 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
   }
   function inferMsstArch(name) {
     const n = String(name || '').toLowerCase();
+    // ★ .pth/.pt 一律是 UVR(VR) 格式，**必须先判扩展名**：否则 "5_HP-Karaoke-UVR.pth"
+    //   会被下面的 karaoke 分支吃掉、判成 Mel-Band Roformer，于是要求一份根本不存在、
+    //   仓库里也没有的 .yaml（实测：这类模型白白被标成"缺配置"）。
+    if (n.endsWith('.pth') || n.endsWith('.pt')) return 'UVR-VR';
+    if (n.includes('mbr') || n.includes('reverb')) return n.includes('bs_') ? 'BS-Roformer' : 'Mel-Band Roformer';
     if (n.includes('mdx23c')) return 'MDX23C';
     if (n.includes('htdemucs') || n.includes('demucs')) return 'HTDemucs';
     if (n.includes('scnet')) return 'SCNet';
@@ -249,6 +281,24 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     //   条目本身出问题只该跳过它自己 —— 所以整个收集过程包在 try 里，有多少返回多少。
     const guard = (fn) => { try { return fn(); } catch (e) { try { console.warn('[models] 列条目失败:', e && e.message); } catch (_) {} } };
     try { await ensureMsstModels(); } catch (e) {}
+    // ★ 「已下载但跑不动」的**唯一判据处**：与 main/separate-common.js 同一份逻辑，
+    //   界面里不许再另写一套。MSST 模型走下面第二个循环，两处都必须带上这个字段 ——
+    //   漏一处就会出现「列表里显示已下载、一点就报缺少配置文件」（实测踩过）。
+    const sepUsable = (m) => {
+      if (!m || m.type !== 'ghsplit') return null;
+      try {
+        const r = resolveSeparateModel(m.id);
+        if (!r) return null;
+        // 缺配置与"有没有下载"无关 —— 仓库里就没有它的 .yaml，下完也用不了，必须先说清楚
+        if (SepCommon.archNeedsConfig(r.arch) && !r.configPath) {
+          // roformer 两族的配置引擎能自己从权重推出来（生成后跑一次前向校验）→ 仍算可用
+          if (SepCommon.archSelfConfigurable(r.arch)) return { ready: true, why: '', auto: true };
+          return { ready: false, why: r.exists ? '缺少配置文件' : '缺少配置文件（下载后也用不了）' };
+        }
+        if (!r.exists) return { ready: false, why: '未下载' };
+        return { ready: true, why: '' };
+      } catch (e) { return null; }
+    };
     const push = (name, p, note, extra) => {
       try {
         const st = fs.statSync(p);
@@ -285,9 +335,14 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       } else {
         exists = dirSize >= m.minSize; size = dirSize;
       }
+      // 音频处理（分离）「能不能真跑起来」：面板必须看得见「已下载但缺配置」这类模型 ——
+      // 否则用户选中它、点了开始才在引擎里炸出「该模型缺少配置文件」（实测 UVR 家族就撞过）。
+      // 判据与 main/separate-common.js 完全同一份，不在界面里另写一套。
+      const sepInfo = sepUsable(m);
       items.push({
         id: m.id, name: m.name, path: dest, size, exists, active: _activeDownloads.has(m.id),
         downloadable: true, note: m.note, kind: m.kind, arch: m.arch, use: m.use, type: m.type, repo: m.repo, gated: !!m.gated, runtime: m.runtime,
+        sepReady: sepInfo ? sepInfo.ready : undefined, sepWhy: sepInfo ? sepInfo.why : undefined,
         group: (m.type === 'gsv' || m.type === 'link') ? 'gsv' : undefined,
         url: m.url || undefined, external: !!m.external,
       });
@@ -309,14 +364,51 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       let size = 0, exists = false;
       if (fs.existsSync(finalFile)) { size = fs.statSync(finalFile).size; exists = size >= m.minSize; }
       else { size = m.size || 0; }  // 未下载时展示清单总大小
+      const sepInfo = sepUsable(m);
       items.push({
         id: m.id, name: m.name, path: dest, size, exists, active: _activeDownloads.has(m.id),
         downloadable: true, note: m.note, kind: m.kind, arch: m.arch, use: m.use,
         type: m.type, repo: m.repo, runtime: m.runtime, parts: m.parts, group: 'msst', best: m.best || null,
+        sepReady: sepInfo ? sepInfo.ready : undefined, sepWhy: sepInfo ? sepInfo.why : undefined,
+        sepAuto: sepInfo ? !!sepInfo.auto : undefined,
       });
     }
     return items;
   });
+  // 本地导入 GPT-SoVITS 音色：社区音色绝大多数**没有稳定直链**（见 main/gpt-sovits.js 的 EXTERNAL），
+  // 本地导入才是它们的主入口。拷进 <模型目录>/gpt-sovits/voices/<目录名>/，与一键下载两条路并存。
+  ipcMain.handle('model:importGsvVoice', async (_e, directPath) => {
+    try {
+      const { dialog } = require('electron');
+      let src = directPath;
+      if (!src || !fs.existsSync(src)) {
+        const r = await dialog.showOpenDialog({
+          properties: ['openDirectory'],
+          title: '选择 GPT-SoVITS 音色目录（需含 gpt.ckpt 与 sovits.pth）',
+        });
+        if (r.canceled || !r.filePaths || !r.filePaths.length) return { ok: false, canceled: true };
+        src = r.filePaths[0];
+      }
+      if (!fs.statSync(src).isDirectory()) return { ok: false, error: '请选择一个目录（音色包先解压）' };
+      const files = fs.readdirSync(src);
+      const hasCkpt = files.some((f) => /\.ckpt$/i.test(f));
+      const hasPth = files.some((f) => /\.pth$/i.test(f));
+      if (!hasCkpt || !hasPth) {
+        return { ok: false, error: '这个目录里没有同时找到 .ckpt 与 .pth —— 音色包至少要有这两样（参考音可选）' };
+      }
+      const name = path.basename(src).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_') || ('voice_' + Date.now());
+      const destDir = path.join(modelsDir(), 'gpt-sovits', 'voices', name);
+      if (fs.existsSync(destDir)) return { ok: false, error: '已存在同名音色：' + name };
+      fs.mkdirSync(destDir, { recursive: true });
+      let n = 0;
+      for (const f of files) {
+        const s = path.join(src, f);
+        try { if (fs.statSync(s).isFile()) { fs.copyFileSync(s, path.join(destDir, f)); n++; } } catch (e) {}
+      }
+      return { ok: true, name, dir: destDir, files: n };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
+
   ipcMain.handle('model:cancel', async (_e, id) => {
     if (id) { _modelCancels.add(id); try { const c = _modelAborts.get(id); if (c) c.abort(); } catch (e) {} }
     return { ok: true };
@@ -378,7 +470,9 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
   }
   function extractLocalArchive(file, outDir) {
     const ext = path.extname(file).toLowerCase();
-    if (ext === '.zip') {
+    // ★ `.oudep` 是 OpenUTAU 的依赖包扩展名，**内容就是 zip**（实测前 4 字节 50 4B 03 04），
+    //   所以按 zip 走同一套安全解包；单独列出来是因为用户在资源中心拿到的就是这个名字。
+    if (ext === '.zip' || ext === '.oudep') {
       const zip = new AdmZip(file);
       const _zsafe = safeExtractAllTo(zip, outDir);
 
@@ -603,6 +697,21 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     const walk = (p) => { const st = fs.statSync(p); if (st.isFile()) size += st.size; else for (const f of fs.readdirSync(p)) walk(path.join(p, f)); };
     walk(destDir);
     if (size < spec.minSize) throw new Error('下载文件不完整：' + size + ' bytes');
+    // ★ 音频处理（MSST）模型：**下载完就把配置备齐**（用户 2026-10-15 的决定 ——
+    //   配置文件不内置到工具里，改成下载时从上游取 / 现场生成）。失败不阻断下载：
+    //   分离前还有一次自愈（engine:separate 会 await ensureSepConfig），界面也会提示缺配置。
+    try {
+      const mm = _msstRegistry[spec.id];
+      if (mm) {
+        const got = await ensureSepConfig(spec.id, (t) => {
+          if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, text: t, received: size, total: size, percent: 99, done: false, speed: 0 });
+        });
+        if (got && win && !win.isDestroyed()) {
+          win.webContents.send('model:progress', { id: spec.id, text: '配置就绪（' + got.from + '）', received: size, total: size, percent: 100, done: true, speed: 0 });
+          return { ok: true, path: destDir, size, config: got.path, configFrom: got.from };
+        }
+      }
+    } catch (e) {}
     if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received: size, total: size, percent: 100, done: true, speed: 0 });
     return { ok: true, path: destDir, size };
   }
@@ -863,6 +972,73 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         _modelCancels.delete(id); _modelPause.delete(id); _activeDownloads.delete(id);
       }
     }
+    // ---- 解包型（.oudep：下下来是压缩包，要解开才算装好）----
+    //    与单文件分支的区别：dest 是**目录**，压缩包是临时的，装好的判据是 unpackMarker。
+    if (spec.unpack) {
+      const destDir = path.join(modelsDir(), spec.dest);
+      const marker = path.join(destDir, spec.unpackMarker || '');
+      if (spec.unpackMarker && fs.existsSync(marker)) {
+        _activeDownloads.delete(id);
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, percent: 100, done: true });
+        return { ok: true, path: destDir, existed: true };
+      }
+      _modelCancels.delete(id); _modelPause.delete(id);
+      const uctrl = new AbortController(); _modelAborts.set(id, uctrl);
+      const archive = destDir + '.oudep';   // 解包后删掉，不留双份
+      try {
+        fs.mkdirSync(destDir, { recursive: true });
+        const urls = mirrorUrls(spec);
+        if (!urls.length) throw new Error('该模型没有可用的下载地址');
+        FastDL.checkDiskSpace(archive, spec.size || spec.minSize || 0);
+        const r = await FastDL.downloadFast({
+          urls,
+          dest: archive,
+          minSize: spec.minSize,
+          headers: { 'user-agent': 'FuFumidi' },
+          isUserAbort: guardOf(id),
+          ctrl: uctrl,
+          expectSize: spec.size || 0,
+          label: spec.name || id,
+          onProgress: (p) => {
+            if (!win || win.isDestroyed()) return;
+            win.webContents.send('model:progress', {
+              id, received: p.received || 0, total: p.total || spec.size || 0,
+              percent: p.percent || 0, done: !!p.done, speed: p.speed || 0,
+              segmented: p.segmented || 1, text: p.text || '',
+            });
+          },
+        });
+        if (spec.sha256) {
+          const hash = await sha256File(archive);
+          if (hash !== spec.sha256) {
+            try { fs.rmSync(archive, { force: true }); } catch (_) {}
+            try { FastDL.cleanSegments(archive); } catch (_) {}
+            throw new Error('SHA256 校验失败：' + hash + '（文件已丢弃，请重试或换源）');
+          }
+        }
+        extractLocalArchive(archive, destDir);
+        try { fs.rmSync(archive, { force: true }); } catch (_) {}
+        try { FastDL.cleanSegments(archive); } catch (_) {}
+        if (spec.unpackMarker && !fs.existsSync(marker)) {
+          throw new Error('解包后没找到 ' + spec.unpackMarker + '（包结构不对，请重试或换源）');
+        }
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: r.size, total: r.size, percent: 100, done: true, speed: 0 });
+        return { ok: true, path: destDir, size: r.size, unpacked: true };
+      } catch (e) {
+        const rawMsg = String((e && e.message) || e);
+        const paused = _modelPause.has(id);
+        const canceled = _modelCancels.has(id);
+        const msg = (e && e.cancelled) || /aborted/i.test(rawMsg)
+          ? (paused ? '已暂停（断点已保留，继续时会接着下）' : '下载中断（断点已保留，可稍后重试续传）')
+          : rawMsg;
+        console.log('[model] 解包型下载失败：' + rawMsg);
+        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, error: msg, canceled, paused });
+        return { ok: false, error: msg, canceled, paused };
+      } finally {
+        _modelCancels.delete(id); _modelAborts.delete(id); _modelPause.delete(id); _activeDownloads.delete(id);
+      }
+    }
+
     const dest = path.join(modelsDir(), spec.dest);
     if (fs.existsSync(dest) && fs.statSync(dest).size >= spec.minSize) {
       _activeDownloads.delete(id);
@@ -932,6 +1108,255 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     _folderWatchers.clear();
   }
 
+  /* ------------------------------------------------------------------
+   * 音频处理（MSST）模型的**配置**：下载时从上游取并配置好，不内置到工具里
+   *
+   * 用户 2026-10-15 的决定：「音频处理相关的模型要做到下载时把配置文件也下载和配置好，
+   * 而不是直接内置到工具里」。
+   *
+   * 改前的实情（实测）：
+   *   * engine/msst_configs/*.yaml 随应用分发（28 个），而**模型自己的目录里一个 yaml 都没有**
+   *     （vocal/big_beta5e、vocal/bs_roformer_large、single/denoise_mel_band_roformer_* 实测）；
+   *   * 28 个内置配置里只有 **12 个**能在上游一字不差地找到，其余是改过名字的。
+   * 改后：模型下载完成时（以及分离前的自愈）按顺序把配置准备好 ——
+   *   ① 模型目录自带的 yaml（HF 仓库随模型带配置的走这条）
+   *   ② 共享缓存 <数据根>/models/_configs/（上游 configs/ 整目录拉，约 45 个文件 < 100 KB）
+   *   ③ 上游现取（raw 直连 + gh 镜像，按名字精确 / 模糊匹配）
+   *   ④ 仍没有 → engine/msst_autoconfig.py 现场生成（模板也从上面这个缓存取，离线可用）
+   * 应用目录里的 msst_configs/ 只留 index.json（模型 → 配置名 / 架构的**元数据**），
+   * 里面那份 yaml 只在旧安装上被读一次作兜底。
+   * ------------------------------------------------------------------ */
+  const MSST_CFG_REPOS = [
+    { repo: 'ZFTurbo/Music-Source-Separation-Training', dir: 'configs' },
+    { repo: 'Sucial/MSST-WebUI', dir: 'configs' },
+  ];
+  //: 取原始文件的通道。★ 实测（2026-10-15）：这些 yaml 只有 0.5~5 KB，**分段下载会踩坑** ——
+  //: gh-proxy 对小文件的 Range 请求返回被截断的内容（561 字节只拿到 334，报「大小不符」），
+  //: 所以下面每一条都配 singleStream:true 单流拉；通道顺序按实测可用性排（jsdelivr 是 CDN，最稳）。
+  function cfgUrls(repo, dir, name) {
+    const p = dir + '/' + encodeURIComponent(name);
+    const raw = 'https://raw.githubusercontent.com/' + repo + '/main/' + p;
+    return [
+      'https://cdn.jsdelivr.net/gh/' + repo + '@main/' + p,
+      'https://ghproxy.net/' + raw,
+      'https://gh-proxy.com/' + raw,
+      'https://ghfast.top/' + raw,
+      raw,
+    ];
+  }
+  /** 模型条目：既接受注册表 id（big_beta5e），也接受文件名（big_beta5e.ckpt）——两个调用点都用得上。 */
+  function msstEntry(id) {
+    if (_msstRegistry[id]) return _msstRegistry[id];
+    const s = String(id || '');
+    return Object.keys(_msstRegistry).map((k) => _msstRegistry[k])
+      .find((x) => x && (x.outName === s || x.id === s)) || null;
+  }
+  function cfgCacheDir() { return path.join(modelsDir(), '_configs'); }
+  /** msst_autoconfig 生成的配置落点（<数据根>/cache/msst_autocfg/） */
+  function autocfgDir() {
+    try { return path.join(Paths.cacheRoot ? Paths.cacheRoot() : path.join(Paths.dataRoot(), 'cache'), 'msst_autocfg'); }
+    catch (e) { return path.join(modelsDir(), '_configs'); }
+  }
+  const normCfg = (n) => String(n || '').toLowerCase().replace(/\.ya?ml$/, '')
+    .replace(/^config[_-]?/, '').replace(/[^a-z0-9]+/g, '');
+  function listYml(dir) {
+    try { return fs.readdirSync(dir).filter((f) => /\.ya?ml$/i.test(f)); } catch (e) { return []; }
+  }
+  /** 在一个目录里挑配置文件：先按期望名精确，再宽松包含，最后"只有一个就用它"。 */
+  function pickYml(dir, want) {
+    const files = listYml(dir);
+    if (!files.length) return null;
+    const w = normCfg(want);
+    if (w) {
+      const exact = files.find((f) => normCfg(f) === w);
+      if (exact) return path.join(dir, exact);
+      const loose = files.find((f) => { const n = normCfg(f); return n && (n.includes(w) || w.includes(n)); });
+      if (loose) return path.join(dir, loose);
+    }
+    return files.length === 1 ? path.join(dir, files[0]) : null;
+  }
+  let _upstreamCfg = null;
+  /** 上游 configs/ 目录清单（每个仓库列一次，进程内缓存） */
+  async function upstreamCfgList() {
+    if (_upstreamCfg) return _upstreamCfg;
+    const out = [];
+    for (const { repo, dir } of MSST_CFG_REPOS) {
+      for (const host of ['https://api.github.com', 'https://gh-proxy.com/https://api.github.com']) {
+        try {
+          const r = await net.fetch(host + '/repos/' + repo + '/contents/' + dir,
+            { headers: { 'user-agent': 'FuFumidi', accept: 'application/vnd.github+json' } });
+          if (!r.ok) continue;
+          const list = await r.json();
+          for (const f of (Array.isArray(list) ? list : [])) {
+            if (f.type === 'file' && /\.ya?ml$/i.test(f.name)) {
+              out.push({ repo, dir, name: f.name, norm: normCfg(f.name) });
+            }
+          }
+          break;
+        } catch (e) {}
+      }
+    }
+    _upstreamCfg = out;
+    return out;
+  }
+  let _cfgFetchLast = { files: 0, failed: [] };
+  /** 上游 configs/ 整目录拉到共享缓存（只补缺的；一次不到 100 KB） */
+  async function fetchConfigsToCache(onText) {
+    const list = await upstreamCfgList();
+    _cfgFetchLast = { files: 0, failed: [] };
+    if (!list.length) { _cfgFetchLast.failed.push('上游清单为空（api.github.com 没通）'); return 0; }
+    const cache = cfgCacheDir();
+    try { fs.mkdirSync(cache, { recursive: true }); } catch (e) { _cfgFetchLast.failed.push('建目录失败:' + String(e && e.message || e).slice(0, 80)); return 0; }
+    const have = new Set(listYml(cache));
+    const items = [];
+    for (const f of list) {
+      if (have.has(f.name)) continue;
+      const dst = path.join(cache, f.name);
+      // ★ noProbe + 先清 .part：这些小文件用"探测 + 断点续传"那套会自伤 ——
+      //   上一次留下 2727 B 的 .part，续传时按 content-length 再核一次就变成"2727/1147 大小不符"
+      //   （实测 42 个只落地 18 个，其余全卡在这一步）。单流、不探测、每次从头拉。
+      try { fs.rmSync(dst + '.part', { force: true }); } catch (e) {}
+      items.push({
+        urls: cfgUrls(f.repo, f.dir, f.name),
+        singleStream: true, noProbe: true,
+        dest: dst, expectSize: 0, minSize: 32, label: f.name,
+      });
+    }
+    if (items.length) {
+      if (onText) onText('下载配置模板 ' + items.length + ' 个…');
+      // ★ 为什么这一类**不**走 FastDL（本仓库唯一的下载入口，规范见 docs/DOWNLOADS.md）：
+      //   这些配置只有 1~5 KB，FastDL 的「探测 + 断点续传 + 低速轮换」在这条路径上实测会把文件
+      //   **截断**：同一 URL「1555 字节只拿到 794」「561 只拿到 334」，报「大小不符」，
+      //   轮换 8 轮全失败（42 个只落地 18 个）；而同一个 URL 用 net.fetch 一次就拿到完整的
+      //   561/1555 字节，content-length 与字节数一致（net 侧无 content-encoding）。
+      //   大文件（模型权重、分卷）仍然全部走 FastDL —— 这里只是「KB 级配置模板」这一类的例外，
+      //   已在 docs/DOWNLOADS.md 备案。
+      let got = 0;
+      const queue = items.slice();
+      const one = async (it) => {
+        let lastErr = '';
+        for (const u of it.urls) {
+          try {
+            const r = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi' } });
+            if (!r.ok) { lastErr = 'HTTP ' + r.status; continue; }
+            const buf = Buffer.from(await r.arrayBuffer());
+            const clen = Number(r.headers.get('content-length') || 0);
+            if (buf.length < 32) { lastErr = '文件过小 ' + buf.length; continue; }
+            if (clen && buf.length !== clen) { lastErr = '长度不符 ' + buf.length + '/' + clen; continue; }
+            fs.mkdirSync(path.dirname(it.dest), { recursive: true });
+            fs.writeFileSync(it.dest, buf);
+            got++;
+            return true;
+          } catch (e) { lastErr = String((e && e.message) || e).slice(0, 70); }
+        }
+        _cfgFetchLast.failed.push(it.label + ' → ' + (lastErr || '全部通道失败'));
+        return false;
+      };
+      await Promise.all(Array.from({ length: Math.min(4, queue.length) }, async () => {
+        for (;;) {
+          const it = queue.shift();
+          if (!it) return;
+          if (onText) onText('下载配置 ' + it.label);
+          await one(it);
+        }
+      }));
+    }
+    _cfgFetchLast.files = listYml(cache).length;
+    return _cfgFetchLast.files;
+  }
+  /** 让某个 MSST 模型有一份可用的配置；返回 { path, from } 或 null。 */
+  async function ensureSepConfig(id, onText) {
+    const m = msstEntry(id);
+    if (!m || !m.outName || !m.dest) return null;
+    const entry = msstConfigIndex()[m.outName] || {};
+    const want = entry.config || '';
+    const modelDirAbs = path.join(modelsDir(), m.dest);
+    let hit = pickYml(modelDirAbs, want);
+    if (hit) return { path: hit, from: 'model' };
+    hit = pickYml(cfgCacheDir(), want);
+    // ③ 我们自己的模型仓库：<分类>/<模型名>/<配置名>
+    //   ★ 用户 2026-10-15 的决定：「找方法获取配置文件并放到仓库里，下载时同步下载并配置」——
+    //     上游 configs/ 里没有、又推不出结构的模型（如 BS-Roformer_LargeV1），把它那份配置
+    //     放在**模型自己的目录**里随模型一起取（不内置进安装包）。文件名与 index.json 对齐。
+    if (!hit) {
+      const rel = String(m.dest || '').replace(/\\/g, '/') + '/' + (want || (m.outName || 'model').replace(/\.[^.]+$/, '') + '.yaml');
+      const dst = path.join(modelDirAbs, want || path.basename(rel));
+      //  ★ 走 net.fetch 而不是 FastDL：这是 KB 级 yaml，FastDL 在这类小文件上实测会截断
+      //    （见 docs/DOWNLOADS.md 例外二：1555→794、2727→1147）。大文件仍全走 FastDL。
+      if (onText) onText('下载模型自带配置 ' + path.basename(rel));
+      for (const u of modelSrcUrls(rel)) {
+        try {
+          const rr = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi' } });
+          if (!rr.ok) continue;
+          const buf = Buffer.from(await rr.arrayBuffer());
+          const clen = Number(rr.headers.get('content-length') || 0);
+          if (buf.length < 200 || (clen && buf.length !== clen)) continue;
+          fs.writeFileSync(dst, buf);
+          break;
+        } catch (e) {}
+      }
+      hit = pickYml(modelDirAbs, want);
+      if (hit) return { path: hit, from: 'model-repo' };
+      try { fs.rmSync(dst, { force: true }); } catch (_) {}
+    }
+    if (!hit) {
+      await fetchConfigsToCache(onText);
+      hit = pickYml(cfgCacheDir(), want);
+    }
+    if (!hit) {
+      // 按上游清单再模糊找一次（本地名与上游名不一致的 16 个走这条）
+      const list = await upstreamCfgList();
+      const w = normCfg(want);
+      const cand = list.find((x) => x.name.toLowerCase() === String(want).toLowerCase())
+        || (w ? list.find((x) => x.norm === w) : null)
+        || (w ? list.find((x) => x.norm && (x.norm.includes(w) || w.includes(x.norm))) : null);
+      if (cand) {
+        const dst = path.join(cfgCacheDir(), cand.name);
+        try { fs.mkdirSync(cfgCacheDir(), { recursive: true }); } catch (e) {}
+        try {
+          if (onText) onText('下载配置 ' + cand.name);
+          await FastDL.downloadFast({
+            urls: cfgUrls(cand.repo, cand.dir, cand.name), singleStream: true,
+            dest: dst, expectSize: 0, minSize: 32,
+            headers: { 'user-agent': 'FuFumidi' }, label: cand.name,
+          });
+          hit = pickYml(cfgCacheDir(), want) || dst;
+        } catch (e) { try { fs.rmSync(dst, { force: true }); } catch (_) {} }
+      }
+    }
+    if (hit) return { path: hit, from: 'upstream' };
+    // 生成（离线也能走）：模板同样从数据根缓存取
+    try {
+      const py = typeof resolvePython === 'function' ? resolvePython() : '';
+      const script = path.join(engineDir(), 'msst_autoconfig.py');
+      const model = path.join(modelDirAbs, m.outName);
+      if (py && fs.existsSync(script) && fs.existsSync(model)) {
+        if (onText) onText('生成配置 ' + (want || m.outName));
+        const out = await new Promise((res) => {
+          let buf = '';
+          const ch = spawn(py, [script, model, m.arch || ''], { windowsHide: true, cwd: engineDir(),
+            env: Object.assign({}, process.env, { PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' }) });
+          ch.stdout.on('data', (d) => { buf += String(d); });
+          ch.stderr.on('data', (d) => { buf += String(d); });
+          ch.on('close', () => res(buf));
+          ch.on('error', () => res(''));
+        });
+        // msst_autoconfig 把生成的 yaml 写在缓存目录（<数据根>/cache/msst_autocfg/），
+        // 这里拷一份**到模型目录**：解析顺序因此只有"模型目录 → 共享缓存"两条，别再散第三处。
+        const mm = /RESULT\s+(\S+)/.exec(out || '');
+        if (mm && mm[1] && mm[1] !== 'None' && fs.existsSync(mm[1])) {
+          const dst = path.join(modelDirAbs, want || path.basename(mm[1]));
+          try { fs.copyFileSync(mm[1], dst); } catch (e) {}
+          if (fs.existsSync(dst)) return { path: dst, from: 'generated' };
+          return { path: mm[1], from: 'generated' };
+        }
+        hit = pickYml(modelDirAbs, want) || pickYml(autocfgDir(), want);
+        if (hit) return { path: hit, from: 'generated' };
+      }
+    } catch (e) {}
+    return null;
+  }
+
   // 音频处理（MSST 分离）：按模型 id 解析 { modelPath, configPath, arch }
   let _msstConfigIndex = null;
   function msstConfigIndex() {
@@ -943,20 +1368,35 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     return _msstConfigIndex;
   }
   function resolveSeparateModel(id) {
-    const m = _msstRegistry[id];
+    const m = msstEntry(id);
     if (!m || !m.outName || !m.dest) return null;
     const modelPath = path.join(modelsDir(), m.dest, m.outName);
-    if (!fs.existsSync(modelPath)) return { modelPath, arch: m.arch, exists: false, error: '模型未下载，请先到模型管理下载' };
+    // ★ configPath 要**先算再判 exists**：否则"还没下载"的模型永远看不出它其实没有配置，
+    //   界面就会鼓励用户去下一个下完也跑不起来的模型（实测：single/ 分类里有 50 个这种）。
     const entry = msstConfigIndex()[m.outName];
     let configPath = null;
-    if (entry && entry.config) {
+    // 顺序：① 模型目录自带的 yaml（下载时拉下来的就在这儿）→ ② 数据根共享缓存
+    //       → ③ 旧应用内置的那份（只在老安装上存在，新装包里已经不带 yaml 了）
+    const dirAbs = path.join(modelsDir(), m.dest);
+    configPath = pickYml(dirAbs, entry && entry.config);
+    if (!configPath) configPath = pickYml(cfgCacheDir(), entry && entry.config);
+    if (!configPath) configPath = pickYml(autocfgDir(), entry && entry.config);   // 现场生成的那份
+    if (!configPath && entry && entry.config) {
       const c = path.join(engineDir(), 'msst_configs', entry.config);
-      if (fs.existsSync(c)) configPath = c;
+      if (fs.existsSync(c)) configPath = c;                                       // 旧安装兜底
     }
+    if (!fs.existsSync(modelPath)) return { modelPath, configPath, arch: m.arch, exists: false, error: '模型未下载，请先到模型管理下载' };
     return { modelPath, configPath, arch: m.arch, exists: true };
   }
 
-  return { closeAll, resolveSeparateModel };
+
+  // 分离前的自愈入口（task-queue 在构造请求前 await 一次）
+  ipcMain.handle('model:ensureConfig', async (_e, id) => {
+    try { const r = await ensureSepConfig(id); return r ? { ok: true, ...r } : { ok: false, error: '没有找到可用的配置' }; }
+    catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
+
+  return { closeAll, resolveSeparateModel, ensureSepConfig };
 }
 
 module.exports = { registerModelsIpc };

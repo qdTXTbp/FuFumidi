@@ -1,4 +1,5 @@
 <script setup>
+import { themeColor } from '../core/palette.js';
 // 声库制作（M3b）：上传音频切分 / 录音 → 片段列表 → oto.ini 可视化标注 → 导出声库
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
@@ -49,11 +50,11 @@ const encHint = computed(() => t((OTO_ENCODINGS.find(e => e.id === otoEnc.value)
 const selSeg = computed(() => segments.value.find(s => s.id === selId.value) || null);
 
 const MARKERS = [
-  { k: 'offset', label: 'offset', c: '#3C2ECA' },
-  { k: 'overlap', label: 'overlap', c: '#27D2BF' },
-  { k: 'preutterance', label: 'preutterance', c: '#E8463A' },
-  { k: 'consonant', label: 'consonant', c: '#EFAA17' },
-  { k: 'blank', label: 'blank', c: '#22A5F7' },
+  { k: 'offset', label: 'offset', c: themeColor('--data-6', '#3c2eca') },
+  { k: 'overlap', label: 'overlap', c: themeColor('--t-ok', '#27d2bf') },
+  { k: 'preutterance', label: 'preutterance', c: themeColor('--t-err', '#e8463a') },
+  { k: 'consonant', label: 'consonant', c: themeColor('--t-warn', '#efaa17') },
+  { k: 'blank', label: 'blank', c: themeColor('--t-info', '#22a5f7') },
 ];
 
 let _idc = 0;
@@ -218,8 +219,8 @@ function markAbs(m) {
 function getBrandColor() {
   try {
     const v = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim();
-    return v || '#4B3FE3';
-  } catch (e) { return '#4B3FE3'; }
+    return v || themeColor('--data-6', '#4b3fe3');
+  } catch (e) { return themeColor('--data-6', '#4b3fe3'); }
 }
 
 /* 频谱底图缓存：拖标记时每帧重算 STFT 是浪费（片段没换就没必要重算） */
@@ -626,48 +627,48 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.vb { padding: 0; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
-.vb-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; overflow-x: auto; flex: none; }
+.vb { padding: 0; display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; }
+.vb-toolbar { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: nowrap; overflow-x: auto; flex: none; }
 .vb-toolbar .btn { min-height: var(--ctl-h); }
-.vb-src-name { margin-left: auto; font-size: 12px; color: var(--stone); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vb-params { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--stone); background: var(--surface-muted); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
-.vb-head-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.vb-params label { display: inline-flex; align-items: center; gap: 6px; }
-.vb-num { width: 76px; padding: 3px 6px; font-size: 12px; }
-.vb-body { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 14px; flex: 1; min-height: 0; }
+.vb-src-name { margin-left: auto; font-size: var(--fs-sm); color: var(--stone); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vb-params { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; font-size: var(--fs-sm); color: var(--stone); background: var(--surface-muted); border: 1px solid var(--border); border-radius: var(--r-md); padding: 8px 10px; }
+.vb-head-actions { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.vb-params label { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.vb-num { width: 76px; padding: 3px 6px; font-size: var(--fs-sm); }
+.vb-body { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: var(--sp-4); flex: 1; min-height: 0; }
 /* 窄窗口回退单列：左栏（切分列表）折到上方，避免右侧波形被压到溢出 */
 @media (max-width: 860px) {
   .vb-body { grid-template-columns: minmax(0, 1fr); }
   .vb-left { max-height: 42vh; }
 }
-.vb-left { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 12px; background: var(--canvas); min-height: 0; }
-.vb-left-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.vb-left { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--canvas); min-height: 0; }
+.vb-left-head { display: flex; align-items: center; gap: var(--sp-2); padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: var(--fs-md); }
 .vb-left-head b { margin-right: auto; }
 .vb-empty { padding: 12px; line-height: 1.6; }
-.vb-segs { overflow-y: auto; flex: 1; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
-.vb-seg { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; }
+.vb-segs { overflow-y: auto; flex: 1; padding: 6px; display: flex; flex-direction: column; gap: var(--sp-1); }
+.vb-seg { display: flex; align-items: center; gap: var(--sp-2); padding: 5px 8px; border: 1px solid transparent; border-radius: var(--r-md); cursor: pointer; }
 .vb-seg:hover { background: var(--surface-muted); }
 .vb-seg.on { border-color: var(--brand); background: var(--brand-soft); }
-.vb-name { width: 56px; padding: 3px 6px; font-size: 12px; }
-.vb-time { font-size: 11px; color: var(--stone); flex: 1; min-width: 0; }
+.vb-name { width: 56px; padding: 3px 6px; font-size: var(--fs-sm); }
+.vb-time { font-size: var(--fs-xs); color: var(--stone); flex: 1; min-width: 0; }
 .vb-tools { display: inline-flex; gap: 2px; }
-.vb-right { display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--canvas); padding: 12px; min-height: 0; }
-.vb-wave-head { display: flex; align-items: baseline; gap: 10px; font-size: 13px; }
+.vb-right { display: flex; flex-direction: column; gap: var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--canvas); padding: 12px; min-height: 0; }
+.vb-wave-head { display: flex; align-items: baseline; gap: var(--sp-3); font-size: var(--fs-md); }
 /* 波形高度跟随窗口：短窗口下不再把右栏（波形 + oto 网格）撑出可视区 */
-.vb-wave { width: 100%; height: clamp(150px, 26vh, 260px); border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); cursor: crosshair; touch-action: none; }
-.vb-oto-grid { display: flex; flex-wrap: wrap; gap: 10px; }
-.vb-oto-item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 5px 9px; border: 1px solid var(--border); border-radius: 8px; }
+.vb-wave { width: 100%; height: clamp(150px, 26vh, 260px); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-muted); cursor: crosshair; touch-action: none; }
+.vb-oto-grid { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
+.vb-oto-item { display: inline-flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); padding: 5px 9px; border: 1px solid var(--border); border-radius: var(--r-md); }
 .vb-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 .vb-oto-k { min-width: 78px; color: var(--ink); }
-.vb-welcome { padding: 26px 8px; line-height: 1.9; font-size: 13px; }
+.vb-welcome { padding: 26px 8px; line-height: 1.9; font-size: var(--fs-md); }
 
 /* ---- M8e：编码切换 / 一览表 / 频域底图 ---- */
-.vb-enc { margin-left: auto; gap: 4px; }
-.vb-sel { width: 118px; padding: 3px 6px; font-size: 12px; }
-.vb-pane-tabs { display: inline-flex; gap: 4px; }
-.vb-spec-toggle { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--stone); }
-.vb-table-wrap { overflow: auto; flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: 8px; }
-.vb-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.vb-enc { margin-left: auto; gap: var(--sp-1); }
+.vb-sel { width: 118px; padding: 3px 6px; font-size: var(--fs-sm); }
+.vb-pane-tabs { display: inline-flex; gap: var(--sp-1); }
+.vb-spec-toggle { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-sm); color: var(--stone); }
+.vb-table-wrap { overflow: auto; flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: var(--r-md); }
+.vb-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
 .vb-table th { position: sticky; top: 0; z-index: 1; background: var(--surface-muted); border-bottom: 1px solid var(--border); padding: 5px 6px; text-align: left; font-weight: 600; white-space: nowrap; }
 .vb-table td { border-bottom: 1px solid var(--border); padding: 3px 6px; }
 .vb-table tr.on td { background: var(--brand-soft); }
@@ -681,11 +682,11 @@ onBeforeUnmount(() => {
    单行摆（名字 输入 按钮）会把每列撑到 ~190px，5 列参数必然横向裁掉（实测 1042px 塞进 662px）。 */
 .vb-th-param { white-space: nowrap; }
 /* 列宽由表头决定：参数名用 11px，'preutterance' 这种长名字才不会把列撑到 104px */
-.vb-th-name { display: flex; align-items: center; gap: 4px; font-size: 11px; }
+.vb-th-name { display: flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-xs); }
 .vb-col-apply { display: flex; align-items: center; gap: 2px; margin-top: 2px; }
 /* ⚠ 要写成 .vb-table .vb-num-sm：上面那条 .vb-table .vb-num（0,2,0）比 .vb-num-sm（0,1,0）更具体，
    否则表头那个"统一为"输入框仍是 58px，列宽被顶到 104px，5 列参数横向溢出（实测两次） */
-.vb-table .vb-num-sm { width: 40px; padding: 1px 3px; font-size: 11px; }
+.vb-table .vb-num-sm { width: 40px; padding: 1px 3px; font-size: var(--fs-xs); }
 .vb-th-idx, .vb-td-idx { width: 18px; color: var(--stone); }
 .vb-td-dur { white-space: nowrap; color: var(--stone); }
 .vb-td-act { width: 72px; }

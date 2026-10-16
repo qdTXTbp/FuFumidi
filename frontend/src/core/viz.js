@@ -1,11 +1,27 @@
-// 共享可视化渲染：从 ViewViz.vue 抽离，供 ViewConvert 视频导出复用
+// ============================================================
+// 可视化共享工具（重做后的角色）
+//
+// ★ 这里**不再有任何渲染入口**：旧的 drawVizWaterfall / drawVizWaterfallPost
+//   （一个 520 行的单体函数 + 它的 canvas 泛光）已随重做的 M6 删除。
+// 留下的是被新旧两边共用的纯工具：
+//   · 几何/时间轴：ensurePm / WHITE_MIDI / BLACK_PC / whiteIndexOf / pitchGeom /
+//                  buildVizBlocks / visibleRange / noise
+//   · 音乐能量：rmsAt / rmsFromBytes / smoothEnergy / smoothEnergyDt / normalizeRms / activeNotesAt
+//   · 背景：paintVizBg（主题/纯色/图片/透明，实时与视频导出同一个）
+//   · 仪表盘：drawVizSpectrum / drawVizScope / drawVizChord
+//   · 参数默认值：FX_DEFAULTS / FX_PARAMS / FX_COLORBY（stores/vizbg 的单一来源）
+//
+// 新渲染架构在 core/viz/ 下：state（数据）→ scene（图元）→ raster（Canvas2D / WebGL2）
+// → post（着色器后处理），唯一入口是 core/viz/index.js 的门面。
+// ============================================================
 import { TRACK_COLORS } from './util.js';
+import { COLOR_DEFAULTS, COLOR_MODES, COLOR_PRESETS, COLOR_PARAMS } from './viz/state/colors.js';
 import { t } from './i18n.js';
 
 function cssVar(name, fb) {
   try { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || fb; } catch (e) { return fb; }
 }
-function ensurePm() {
+export function ensurePm() {
   if (ensurePm._pm) return ensurePm._pm;
   const pm = {}; let wk = 0;
   for (let m = 21; m <= 108; m++) { const pb = [1, 3, 6, 8, 10].includes(m % 12); pm[m] = { isBlack: pb, wkCount: wk }; if (!pb) wk++; }
@@ -13,61 +29,58 @@ function ensurePm() {
   return pm;
 }
 // 一个八度内的黑键半音偏移（以 C 为 0）
-const BLACK_PC = [1, 3, 6, 8, 10];
+export const BLACK_PC = [1, 3, 6, 8, 10];
 
 // 52 个白键的 midi（升序）。原来每帧都要用 while 循环把音高换算成白键序号，
 // 这里预计算成数组，音频几何与琴键绘制直接查表。
-const WHITE_MIDI = (() => {
+export const WHITE_MIDI = (() => {
   const out = [];
   for (let m = 21; m <= 108; m++) if (!BLACK_PC.includes(m % 12)) out.push(m);
   return out;
 })();
 const WHITE_TOTAL = WHITE_MIDI.length; // 52
 
-const LIGHT_KEYS = { wkTop: '#f2f3f5', wkBot: '#e2e4e8', wkLine: 'rgba(10,10,10,0.12)', bkTop: '#3a3d42', bkBot: '#1c1e22' };
-const DARK_KEYS = { wkTop: '#2b303a', wkBot: '#20242c', wkLine: 'rgba(255,255,255,0.10)', bkTop: '#0c0e12', bkBot: '#04050a' };
+/* ---- 参考逻辑尺寸（导出与实时同尺度的唯一基准）----
+ * 瀑布流的几何里有一批**绝对像素**常量（琴键条高度上限 120、一小节恒 120px、圆角 4、
+ * 发光半径 20、字号 10…）。它们只在「画布逻辑尺寸 ≈ 实时画布」时才正确。
+ * 实测实时画布（瀑布流、1920×1080 窗口）是 934×534 CSS；导出若直接拿物理像素当逻辑单位
+ * （4K 就是 3840×2160），这些常量相对画布就小了 4 倍 —— 琴键条变成一条 5% 高的细缝、
+ * 一屏塞进 36 秒音乐、音符成了一条条细丝，与实时画面「差了十万八千里」（用户原话）。
+ * 所以导出固定按 VIZ_REF_H 的逻辑高度绘制，再用 ctx.scale 映射到物理缓冲。
+ * 仪表盘模板的实时卡片是 934×300，瀑布流是 934×534 —— 取 540 与瀑布流对齐。 */
+export const VIZ_REF_H = 540;
+export const VIZ_REF_W = 960;   // = VIZ_REF_H × 16/9，仅作说明用
+// 背景模糊半径的折算基准（导出时按 ds / VIZ_REF_DPR 等比放大模糊）
+export const VIZ_REF_DPR = 2.5;
+
+// 3D 键盘（2026-10）：wk/bk 是**键面**（俯视看到的那一面），wkFront/bkFront 是**前脸**
+// （键的厚度），wkEdge 是键面顶边的那道高光。三部分叠起来才有"一块琴键"的体积感 ——
+// 只有键面时，琴键看起来是一张贴在画面上的纸（旧观感）。
+/* ★ 键面亮度是"效果一般"的**元凶**（2026-10-17 量测）：
+ *   参考实现（SeeMusic/粒子流/Synthesia/DoraPiano）的**键盘区平均亮度 0.00–0.33**，
+ *   而我们是 **0.59–0.65** —— 一大条白键盘抢走了全部注意力，音符再亮也是陪衬。
+ *   所以两套主题的键面**都压暗**：白键不再是"白"，而是中灰；黑键接近背景。
+ *   只有**按键**才亮（余辉 + 光柱 + 闪光），亮度层级才对：背景 < 键盘 < 音符 < 击键瞬间。
+ *   亮度的读数用 scripts/viz-lookcheck.py（此条不是验收门槛，是自查）。 */
 
 function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 
-// 判断 CSS 颜色是否偏暗（相对亮度 < 0.5）。琴键配色据此在浅/深两套间切换。
-// 认不出来的写法按浅色处理 —— 与历史观感一致，不会把浅色主题误判成深色。
-function isDarkColor(s) {
-  const str = String(s || '').trim();
-  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(str);
-  if (hex) {
-    let hx = hex[1];
-    if (hx.length === 3) hx = hx[0] + hx[0] + hx[1] + hx[1] + hx[2] + hx[2];
-    const r = parseInt(hx.slice(0, 2), 16), g = parseInt(hx.slice(2, 4), 16), b = parseInt(hx.slice(4, 6), 16);
-    return (0.2126 * r + 0.7152 * g + 0.0722 * b) < 128;
-  }
-  const rgb = /^rgba?\(([^)]+)\)$/i.exec(str);
-  if (rgb) {
-    const p = rgb[1].split(',').map(x => parseFloat(x));
-    if (p.length >= 3 && p.every(x => isFinite(x))) return (0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]) < 128;
-  }
-  return false;
-}
-
-// 琴键配色跟随主题：深色基底（studio / hc / 深色模式）下不再是一块亮白板。
-// 结果按解析出的 --canvas 缓存，主题切换后自动失效重算。
-function keyPalette(state) {
-  const canvas = cssVar('--canvas', '#ffffff');
-  if (state._keyFor !== canvas) {
-    state._keyFor = canvas;
-    state._key = isDarkColor(canvas) ? DARK_KEYS : LIGHT_KEYS;
-  }
-  return state._key;
-}
-
 // 音符块配色：colorScheme=0 用轨道色，1/2/3 用按音高推导的 HSL（与原实现同公式）
-function blockColor(b, cs) {
+function blockColor(b, cs, by) {
+  // 按左右手（D5）：左手冷色、右手暖色 —— SeeMusic / Synthesia 那一套的学习向配色。
+  // 没有分手信息时用**音高**作启发（< C4 视为左手）。已知局限：跨越中音区的分解和弦会被拆成两色，
+  // 所以面板里它是**可选项**，默认仍是轨道色。
+  if (by === 'hand') return (b.pitch < 60) ? 'hsl(205,78%,62%)' : 'hsl(24,88%,60%)';
+  if (by === 'pitch') {
+    return 'hsl(' + ((b.pitch * 13) % 360) + ',72%,60%)';
+  }
   if (!cs) return b.color;
   return 'hsl(' + (((b.pitch * (cs === 1 ? 7 : cs === 2 ? 13 : 17)) + (cs === 2 ? 30 : 0)) % 360) + ',' +
     (cs === 3 ? 75 : cs === 2 ? 80 : 70) + '%,' + (cs === 3 ? 65 : 60) + '%)';
 }
 
 // 音高 → 所在（黑键取紧邻下方）白键索引，供音域居中与几何计算
-function whiteIndexOf(pitch) {
+export function whiteIndexOf(pitch) {
   const pi = ensurePm()[pitch];
   if (!pi) return 0;
   const i = pi.isBlack ? pi.wkCount - 1 : pi.wkCount;
@@ -76,7 +89,7 @@ function whiteIndexOf(pitch) {
 
 // 音符块横向几何：白键占 0.9 格，黑键占 0.6 格并骑在两个白键之间。
 // cw 不取整（纵深收窄要按比例算），sx 已取整。
-function pitchGeom(pitch, pm, g, wk0) {
+export function pitchGeom(pitch, pm, g, wk0) {
   const pi = pm[pitch];
   if (!pi) return { sx: 0, cw: 0.9 * g };
   if (pi.isBlack) {
@@ -159,39 +172,74 @@ export function visibleRange(arr, d, winSec) {
 }
 
 // 粒子散射用的确定性伪随机：导出画面必须可复现，不能用 Math.random()
-function noise(n) {
+export function noise(n) {
   const x = Math.sin(n * 12.9898) * 43758.5453;
   return x - Math.floor(x);
 }
 
-// 帧间状态归一化：实时视图与视频导出各持一份，导出侧的对象字面量不一定带全部字段
-function vizState(state) {
-  const s = state || (drawVizWaterfall._state = drawVizWaterfall._state || {});
-  if (!s.parts) s.parts = [];
-  if (!s.byPitch) s.byPitch = new Map();
-  if (typeof s.centerPitch !== 'number') s.centerPitch = 60;
-  if (typeof s.lastD !== 'number') s.lastD = -1;
-  if (typeof s.seed !== 'number') s.seed = 0;
-  return s;
+                       // （旧值 260；升级后单次击键的粒子更多，提到 420，仍是"每帧一遍"）
+
+/* ============================================================
+ * 视效档（2026-10 瀑布流升级）：3D 键盘 / 粒子光效 / 击键光带 / 音符质感
+ * ------------------------------------------------------------
+ * · 全部**默认开启**，可用 opts.fx 覆盖。实时（ViewViz）与导出（ViewConvert）
+ *   读同一份设置（stores/vizbg），预览与成片才一致。
+ * · **关掉任一项都必须回到旧观感**，不能留残余 —— 用户是按开关判断的。
+ * · 确定性：随机量一律走 noise(seed)（与旧版同一套），不用 Math.random，
+ *   否则同一次导出重跑两遍会得到不同画面。
+ * ============================================================ */
+export const FX_DEFAULTS = {
+  // —— 开关（面板里是勾选项）——
+  keys3d: true, particles: true, beams: true, hitLine: true, gloss: true, keyNames: false,
+  grid: true,        // 键位竖线 + 小节线 + 小节编号（想要干净画面就关掉）
+  // —— 参数（面板里是滑块）——
+  // D2 决定**不做固定档位**，改成用户可调：这些值就是那套"档位"的自由形式。
+  persp: 0,          // 键盘透视强度 0..1（0 = 平板键，与 Synthesia/SeeMusic 同路线）。
+                     // 3D 只做"温和倾斜"：横向扇形很小、纵向 1/z 缩短 + 远端压暗 + 黑键前脸。
+                     // 2026-10-17：默认从 0.45 改回 0 —— 上一版的大扇形被用户判为"粗暴的拉伸"。
+  bloom: 0.55,       // 后处理泛光强度 0..1.2
+  bloomThr: 0.5,     // 泛光阈值 0..1（越大只有最亮的地方发光）
+  flash: 0.7,        // 击键闪光 0..1.5（借 MIDIVisualizer 的 --flashes-size）
+  partScale: 1,      // 粒子数量倍率 0.3..1.6
+  glow: 1,           // 光柱/发光强度倍率 0.4..1.6
+  // 配色：取色方式 + 参数（色相/跨度/旋转/饱和/亮度/手色）全在 state/colors.js，这里是单一来源的并入
+  ...COLOR_DEFAULTS,
+  keysOn: true,      // 显示琴键（关掉 = 只留音符与光效，给叠加层用）
+  // 琴键不透明度已移除（用户要求去掉：琴键要么显示要么隐藏，透明度留给音符）
+  noteAlpha: 1,      // 下落音符的不透明度 0.15..1（玻璃质感下用它做通透度）
+};
+
+/* 参数元数据 —— **单一来源**：面板据此渲染滑块，不用在 store 与 UI 里各写一遍范围 */
+export const FX_PARAMS = [
+  { k: 'persp', label: '键盘透视', min: 0, max: 1, step: 0.05 },
+  { k: 'bloom', label: '泛光', min: 0, max: 1.2, step: 0.05 },
+  { k: 'bloomThr', label: '泛光阈值', min: 0, max: 1, step: 0.05 },
+  { k: 'flash', label: '击键闪光', min: 0, max: 1.5, step: 0.05 },
+  { k: 'partScale', label: '粒子数量', min: 0.3, max: 1.6, step: 0.1 },
+  { k: 'glow', label: '光柱强度', min: 0.4, max: 1.6, step: 0.05 },
+  { k: 'noteAlpha', label: '音符不透明度', min: 0.15, max: 1, step: 0.05 },
+];
+// 配色元数据由 state/colors.js 提供（单一来源）：取色方式 / 预设 / 参数范围
+export const FX_COLORBY = COLOR_MODES;
+export { COLOR_MODES, COLOR_PRESETS, COLOR_PARAMS, COLOR_DEFAULTS };
+
+/* 内置主题：名字与数值都在这里，用户保存的自定义主题由 store 合并进来（D8：命名交给用户） */
+
+/** '#rgb' / '#rrggbb' / 'rgb(...)' → 'rgba(r,g,b,a)'；认不出来就原样返回 */
+function withAlpha(c, a) {
+  const s = String(c == null ? '' : c).trim();
+  let m = /^#([0-9a-f]{3})$/i.exec(s), r, g, b;
+  if (m) { r = parseInt(m[1][0] + m[1][0], 16); g = parseInt(m[1][1] + m[1][1], 16); b = parseInt(m[1][2] + m[1][2], 16); }
+  else if ((m = /^#([0-9a-f]{6})$/i.exec(s))) { r = parseInt(m[1].slice(0, 2), 16); g = parseInt(m[1].slice(2, 4), 16); b = parseInt(m[1].slice(4, 6), 16); }
+  else if ((m = /^rgba?\(([^)]+)\)$/i.exec(s))) { const p = m[1].split(',').map(Number); r = p[0]; g = p[1]; b = p[2]; }
+  if (r == null || !isFinite(r) || !isFinite(g) || !isFinite(b)) return s;
+  return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
 }
 
-// 老 Chromium 没有 roundRect：补一个等价实现（只在首次调用时打一次补丁）
-function patchRoundRect() {
-  if (typeof CanvasRenderingContext2D === 'undefined' || CanvasRenderingContext2D.prototype.roundRect) return;
-  CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
-    if (typeof r === 'number') r = [r, r, r, r];
-    const q = [0, 0, 0, 0];
-    (r || []).slice(0, 4).forEach((v, i) => { q[i] = Math.max(0, Math.min(v || 0, Math.min(w, h))); });
-    this.moveTo(x + q[0], y);
-    this.lineTo(x + w - q[1], y); this.arcTo(x + w, y, x + w, y + q[1], q[1]);
-    this.lineTo(x + w, y + h - q[2]); this.arcTo(x + w, y + h, x + w - q[2], y + h, q[2]);
-    this.lineTo(x + q[3], y + h); this.arcTo(x, y + h, x, y + h - q[3], q[3]);
-    this.lineTo(x, y + q[0]); this.arcTo(x, y, x + q[0], y, q[0]);
-    this.closePath(); return this;
-  };
-}
-
-const MAX_PARTS = 260; // 粒子总量上限：每帧要逐个更新+绘制，不设上限会拖垮大曲目
+/* 粒子发光贴图：按颜色缓存一张 64×64 的径向渐变。
+ * 为什么不每帧 createRadialGradient —— 那是这段最贵的一步（每个粒子一次），
+ * 缓存之后每帧只剩一次 drawImage（实测 4K 导出帧预算只有 41ms）。
+ * node 单测环境没有 document → 返回 null，调用方回退成纯 arc 圆点。 */
 
 // 纵向坐标吸附到「设备像素」，只用于文字这类必须清晰、又不随播放移动的内容。
 //
@@ -209,7 +257,7 @@ function pixelScale(ctx) {
 }
 
 /**
- * 画音符瀑布的背景（`主题 / 纯色 / 图片 / 透明`）—— **可视化页与视频导出共用这一个实现**。
+ * 画音符瀑布的背景（`主题 / 纯色 / 图片 / 动态壁纸 / 透明`）—— **可视化页与视频导出共用这一个实现**。
  *
  * ★ 抽出来是为了让导出与实时预览**逐像素同源**：导出页以前自己 fillRect 一个 bgColor，
  *   跟可视化页选的图片/透明档/模糊暗化完全无关（用户看到的和导出的是两幅画）。
@@ -218,27 +266,60 @@ function pixelScale(ctx) {
  * ★ 千万不要 setTransform(1,0,0,1,0,0)：调用方已经把 dpr 缩放设在 ctx 上，
  *   而传进来的 w/h 是 **CSS 像素**。重置成 identity 只会铺满左上角 1/dpr 的区域。
  */
-export function paintVizBg(ctx, w, h, bgOpt = {}) {
+/* 动态壁纸的**受限尺寸帧**（2026-10-17）。
+   视频每帧都在变，所以模糊只能逐帧做 —— 而位图缓存那条路（下面 paintVizBg 里的 BG_CACHE）
+   正是为"背景参数一次会话里恒定"设计的。4K 全分辨率一次 blur 实测 80~150ms，远超单帧预算，
+   于是先把当前帧画进一张**最多 1280 宽**的离屏画布、在那里做模糊（半径同比缩小），再放大铺满：
+   模糊过的画面本来就没有细节可损失，而开销被压到 1/9 以下。不模糊时直接铺，一次 drawImage 最省。 */
+const WALL_FRAME = { cv: null, w: 0, h: 0 };
+function wallFrameCanvas(w, h) {
+  if (!WALL_FRAME.cv) WALL_FRAME.cv = document.createElement('canvas');
+  if (WALL_FRAME.w !== w || WALL_FRAME.h !== h) {
+    WALL_FRAME.cv.width = w; WALL_FRAME.cv.height = h;
+    WALL_FRAME.w = w; WALL_FRAME.h = h;
+  }
+  return WALL_FRAME.cv;
+}
+
+export function paintVizBgDirect(ctx, w, h, bgOpt = {}) {
   const mode = bgOpt.mode || 'theme';
-  if (mode === 'keep') return;
   const blur = Math.max(0, Number(bgOpt.blur) || 0);
   const dim = Math.max(0, Math.min(0.9, Number(bgOpt.dim) || 0));
+  // ★ 动态壁纸档：只认"已经出过帧"的视频（readyState<2 或 videoWidth=0 时交给下面的渐变兜底，
+  //   不留一块黑屏）。视频与图片走**同一条 cover 铺法**，区别只在逐帧做模糊那一支。
+  const vid = (mode === 'wallpaper' && bgOpt.video && bgOpt.video.videoWidth) ? bgOpt.video : null;
+  const img = (!vid && mode === 'image' && bgOpt.image && bgOpt.image.width) ? bgOpt.image : null;
   ctx.save();
-  if (mode === 'transparent') {
-    // 真的清成透明：导出 PNG / 视频后才能当叠加层用
-    ctx.clearRect(0, 0, w, h);
-  } else if (mode === 'solid') {
+  if (mode === 'solid') {
     ctx.fillStyle = bgOpt.color || cssVar('--canvas', '#0b1020');
     ctx.fillRect(0, 0, w, h);
-  } else if (mode === 'image' && bgOpt.image && bgOpt.image.width) {
-    const im = bgOpt.image;
+  } else if (vid && blur > 0 && typeof document !== 'undefined') {
+    const cw = Math.min(1280, Math.max(480, Math.round(w)));
+    const ch = Math.max(1, Math.round(cw * h / Math.max(1, w)));
+    const cv = wallFrameCanvas(cw, ch);
+    const c2 = cv.getContext('2d');
+    const k = cw / Math.max(1, w);                 // 帧相对画布的缩放：模糊半径同比缩
+    const b2 = blur * k, pad2 = b2 * 3;
+    const sc2 = Math.max((cw + pad2 * 2) / vid.videoWidth, (ch + pad2 * 2) / vid.videoHeight);
+    const dw2 = vid.videoWidth * sc2, dh2 = vid.videoHeight * sc2;
+    c2.setTransform(1, 0, 0, 1, 0, 0);
+    c2.clearRect(0, 0, cw, ch);
+    c2.filter = 'blur(' + b2 + 'px)';
+    c2.drawImage(vid, (cw - dw2) / 2, (ch - dh2) / 2, dw2, dh2);
+    c2.filter = 'none';
+    if (dim > 0) { c2.fillStyle = 'rgba(0,0,0,' + dim + ')'; c2.fillRect(0, 0, cw, ch); }
+    ctx.drawImage(cv, 0, 0, w, h);
+  } else if (vid || img) {
+    const src = vid || img;
+    const sw = vid ? vid.videoWidth : img.width;
+    const sh = vid ? vid.videoHeight : img.height;
     // cover：填满、不拉伸变形。模糊会把边缘「吃」掉（blur 会采到画布外的透明像素），
     // 所以按模糊半径外扩一点再画 —— 实测不扩的话四边会透出底色。
     const pad = blur > 0 ? blur * 3 : 0;
-    const scale = Math.max((w + pad * 2) / im.width, (h + pad * 2) / im.height);
-    const dw = im.width * scale, dh = im.height * scale;
+    const scale = Math.max((w + pad * 2) / sw, (h + pad * 2) / sh);
+    const dw = sw * scale, dh = sh * scale;
     ctx.filter = blur > 0 ? 'blur(' + blur + 'px)' : 'none';
-    ctx.drawImage(im, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    ctx.drawImage(src, (w - dw) / 2, (h - dh) / 2, dw, dh);
     ctx.filter = 'none';
     if (dim > 0) { ctx.fillStyle = 'rgba(0,0,0,' + dim + ')'; ctx.fillRect(0, 0, w, h); }
   } else {
@@ -251,234 +332,55 @@ export function paintVizBg(ctx, w, h, bgOpt = {}) {
   ctx.restore();
 }
 
-// 抽离自 ViewViz.drawRoll：绘制竖向音符瀑布到 ctx（w x h）
-export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
-  patchRoundRect();
-  const pm = ensurePm();
-  const state = vizState(opts.state);
-  if (song && state.songRef !== song) {
-    const built = buildVizBlocks(song);
-    state.byPitch = built.byPitch;
-    state.centerPitch = built.centerPitch;
-    state.songRef = song;
-    state.parts.length = 0;
-    state.lastD = -1;
-  }
-  const x = Math.min(120, Math.round(0.2 * h));
-  const wN = Math.floor(h - x); // 卷帘区高度；击键线在 y = wN
-  // 纵向吸附到设备像素：所有会随播放移动的纵向坐标都过它，保证整场滚动步进一致、边缘不忽清忽虚
-  const sc = pixelScale(ctx);
-  const snapY = (yv) => Math.round(yv * sc) / sc;
-  // ---- 背景：主题渐变 / 纯色 / 真透明（OBS 叠加层）/ 自定义图片（可模糊 + 暗化）----
-  // opts.bg = { mode:'theme'|'solid'|'transparent'|'image'|'keep', color, image, blur, dim }
-  // ★ 实现在 paintVizBg（导出侧调同一个函数，两边逐像素同源）
-  paintVizBg(ctx, w, h, opts.bg || {});
-
-  let d = 0, curTempo = (song && song.initialBpm) || 120, curSig = { num: 4 };
-  if (song) {
-    d = song.baseSec ? song.baseSec(tick) : 0;
-    const tm = song.tempoMap || [], sm = song.sigMap || [];
-    let ti = tm.length - 1; while (ti > 0 && tm[ti].sec > d) ti--;
-    if (tm.length) curTempo = 60e6 / tm[ti].us;
-    let si = sm.length - 1; while (si > 0 && sm[si].tick > tick) si--;
-    if (sm.length) curSig = sm[si];
-  }
-  const barSec = curSig.num * 60 / curTempo;
-  const v = 120 / barSec, j = d * v;      // px/秒：一小节恒为 120px
-  const visSec = wN > 0 ? wN / v : 0;     // 一屏覆盖的时间跨度（秒）
-
-  // ---- 可视音域：zoom 缩放的是音域宽度，不是琴键宽度 ----
-  // zoom = 1 时 span = 52 且 wk0 = 0，几何退化成「88 键铺满画布」，与旧版逐像素一致。
-  const zoom = opts.zoom || 1;
-  const span = Math.max(12, Math.min(WHITE_TOTAL, Math.round(WHITE_TOTAL / zoom)));
-  const centerWk = whiteIndexOf(state.centerPitch);
-  const wk0 = Math.max(0, Math.min(WHITE_TOTAL - span, Math.round(centerWk - span / 2)));
-  const wk1 = wk0 + span;                 // 白键索引区间 [wk0, wk1)
-  const g = w / span;                     // 白键宽度
-  // 该音域之外音高的块横向已在画布外，连遍历都省掉（zoom=1 时覆盖 21..108 全部音高，
-  // 与旧版行为一致）
-  const loMidi = WHITE_MIDI[wk0];
-  const hiMidi = WHITE_MIDI[wk1 - 1] + 1;
-
-  // ---- 音乐能量驱动的背景光晕（能量由调用方传入，实时与导出同算法）----
-  const energy = clamp01(opts.energy || 0);
-  // ★ 光晕是「加在背景上」的：透明档（OBS 叠加层）不能有它，否则导出层自带一块亮斑。
-  //   档位从 opts.bg 现取 —— 抽走 paintVizBg 之后这里的 bgMode 已不在作用域里
-  //   （踩过：引用残留变量 → 导出抛 'bgMode is not defined'，预览又被 try/catch 吞掉）。
-  const bgModeNow = (opts.bg || {}).mode || 'theme';
-  if (energy > 0.01 && wN > 0 && bgModeNow !== 'transparent') {
-    const glow = ctx.createLinearGradient(0, wN, 0, 0);
-    glow.addColorStop(0, cssVar('--accent', '#4f94e0'));
-    glow.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.globalAlpha = 0.05 + 0.16 * energy;
-    ctx.fillStyle = glow;
-    ctx.fillRect(0, 0, w, wN);
-    ctx.globalAlpha = 1;
-  }
-
-  const grid = cssVar('--hairline', 'rgba(10,10,10,0.10)');
-  const gridStrong = cssVar('--border-strong', 'rgba(10,10,10,0.18)');
-  const text = cssVar('--ink', '#0a0a0a');
-  ctx.strokeStyle = grid; ctx.lineWidth = 1;
-  for (let i = wk0; i <= wk1; i++) {
-    if ((i - 2) % 7 !== 0) continue;      // 只描 C 键左沿
-    const tx = Math.floor((i - wk0) * g);
-    ctx.beginPath(); ctx.moveTo(tx, 0); ctx.lineTo(tx, wN); ctx.stroke();
-  }
-  const M = Math.floor(j / 120), S = Math.floor((j + wN) / 120) + 1;
-  ctx.font = '10px system-ui, sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-  // 滚动小节线：音符竖直下落，小节线应为水平线随音符一同向下滚动（1 像素 = 1 tick）
-  for (let e = M; e <= S; e++) {
-    const ty = wN - (120 * e - j);
-    if (ty < -20 || ty > wN + 20) continue;
-    ctx.strokeStyle = gridStrong; ctx.beginPath(); ctx.moveTo(30, ty); ctx.lineTo(w, ty); ctx.stroke();
-    // 线随音符一起按精确坐标移动（见 pixelScale 处的说明）；编号是静态文字，吸附住避免发虚
-    if (e > 0) { ctx.fillStyle = gridStrong; ctx.fillText(String(e), 24, snapY(ty)); }
-  }
-  const liveNotes = opts.activeNotes || [];
-  const live = new Set(liveNotes.map(m => m.midi));
-  const cs = opts.colorScheme || 0;
-
-  // ---- 可见音符块 ----
-  // 每个音高只做一次二分：跳过整段已划过的历史（i0 之前的块都已结束），
-  // 再向上遍历到屏外为止。窗口外的块不进绘制循环 —— 这是大 MIDI 不掉帧的关键。
-  const sounding = new Map();   // 正压在击键线上的音高 → 配色（供琴键高亮）
-  const hits = [];              // 本帧刚跨过击键线的块（用于生成粒子）
-  const forward = state.lastD >= 0 && d >= state.lastD;
-  for (const [pitch, arr] of state.byPitch) {
-    if (pitch < loMidi || pitch > hiMidi) continue;  // 横向在画布外
-    const { from, to } = visibleRange(arr, d, visSec);
-    if (from >= arr.length) continue;               // 该音高已全部走完
-    const head = arr[from];
-    if (head.start <= d) sounding.set(pitch, blockColor(head, cs));
-    for (let k = from; k < to; k++) {
-      const b = arr[k];
-      const { sx: sxBase, cw: cwBase } = pitchGeom(pitch, pm, g, wk0);
-      const bottom = wN - (b.start - d) * v;        // 起点：最先落到击键线的边
-      const top = wN - (b.end - d) * v;
-      // 纵深：0 = 正压在击键线上，1 = 屏顶。越远越淡、越窄、越不发亮
-      const depth = clamp01((wN - bottom) / wN);
-      const inset = Math.round(cwBase * 0.12 * depth / 2);
-      const cw = Math.max(2, Math.floor(cwBase) - inset * 2);
-      const sx = sxBase + inset;
-      const velN = clamp01((b.vel == null ? 90 : b.vel) / 127);
-      // 发光强度：只看「起音边到击键线的距离」，越近越亮，越过击键线后沿同一条曲线衰减。
-      // 全程连续 —— 此前是「正在发声(9+13*vel) / 即将击键(0→9)」两段拼接，音头处会有一次
-      // 最高 13px 的光晕阶跃，密集音符下观感就是一片片地在闪。
-      const near = Math.max(0, 1 - Math.abs(wN - bottom) / (wN * 0.16));
-      const blur = 20 * near * (0.55 + 0.45 * velN);
-      ctx.fillStyle = blockColor(b, cs);
-      ctx.globalAlpha = 1 - 0.5 * depth;
-      if (blur > 0) { ctx.shadowBlur = blur; ctx.shadowColor = ctx.fillStyle; }
-      // 按精确坐标绘制（不吸附）——理由见 pixelScale 处的说明
-      ctx.beginPath();
-      ctx.roundRect(sx, top, cw, Math.max(bottom - top, 5), 4);
-      ctx.fill();
-      if (blur > 0) ctx.shadowBlur = 0;
-      ctx.globalAlpha = 1;
-    }
-    if (forward) {
-      let k2 = firstStartGT(arr, state.lastD);
-      while (k2 < arr.length && arr[k2].start <= d) { hits.push(arr[k2]); k2++; }
-    }
-  }
-
-  // ---- 击键粒子：音符跨过击键线时从键面迸出 ----
-  // 方向用确定性伪随机（noise）而非 Math.random，导出画面才能逐帧复现。
-  if (forward) {
-    for (const b of hits) {
-      if (state.parts.length >= MAX_PARTS) break;
-      const { sx: sxBase, cw: cwBase } = pitchGeom(b.pitch, pm, g, wk0);
-      const velN = clamp01((b.vel == null ? 90 : b.vel) / 127);
-      const n = 2 + Math.round(velN * 3);
-      const color = blockColor(b, cs);
-      const cx = sxBase + cwBase / 2;
-      for (let i = 0; i < n; i++) {
-        const s1 = noise(state.seed++), s2 = noise(state.seed++);
-        state.parts.push({
-          x: cx, y: wN,
-          vx: (s1 - 0.5) * 1.8,
-          vy: -(0.5 + s2 * 1.9),
-          life: 1, color,
-        });
-      }
-    }
-  }
-
-  // ---- 琴键 ----
-  const kp = keyPalette(state);
-  // 琴键余辉：按下即亮，松开后在约 0.18s 内淡出。此前是硬开硬关并直接挂 20px 发光，
-  // 密集音符下琴键会一片片地闪。高亮层改为叠在底色上按余辉强度渐入渐出。
-  const keyGlow = state.keyGlow || (state.keyGlow = new Map());
-  const KEY_DECAY = 0.09;
-  const glowOf = (pitch, on) => {
-    const prev = keyGlow.get(pitch) || 0;
-    const gv = on ? 1 : Math.max(0, prev - KEY_DECAY);
-    if (gv > 0.02) keyGlow.set(pitch, gv); else keyGlow.delete(pitch);
-    return gv;
-  };
-  const whiteLiveColor = cssVar('--ink', '#0a0a0a');
-  // 琴键底色渐变按「纵向」定义，颜色只取决于 y；每个白键/黑键的 y 区间完全一致，
-  // 因此整屏琴键可以共用两个渐变对象，而不是每个键各建一个（实测 90 个/帧 → 4 个/帧）。
-  // 横向平移不改变纵向渐变的着色（着色由 y 在轴上的投影决定），渲染结果逐像素一致。
-  const grWk = ctx.createLinearGradient(0, wN, 0, wN + x);
-  grWk.addColorStop(0, kp.wkTop); grWk.addColorStop(1, kp.wkBot);
-  const bkH = Math.floor(0.6 * x);
-  const grBk = ctx.createLinearGradient(0, wN, 0, wN + bkH);
-  grBk.addColorStop(0, kp.bkTop); grBk.addColorStop(1, kp.bkBot);
-  for (let i = wk0; i < wk1; i++) {
-    const pitch = WHITE_MIDI[i];
-    const px = Math.floor((i - wk0) * g), pw = Math.floor(g);
-    const act = sounding.get(pitch);
-    const gv = glowOf(pitch, act !== undefined || live.has(pitch));
-    ctx.fillStyle = grWk;
-    ctx.beginPath(); ctx.roundRect(px, wN, pw, x, [0, 0, 4, 4]); ctx.fill();
-    if (gv > 0.02) {
-      ctx.globalAlpha = gv;
-      ctx.fillStyle = act !== undefined ? act : whiteLiveColor;
-      ctx.shadowBlur = 18 * gv; ctx.shadowColor = ctx.fillStyle;
-      ctx.beginPath(); ctx.roundRect(px, wN, pw, x, [0, 0, 4, 4]); ctx.fill();
-      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
-    }
-    ctx.beginPath(); ctx.moveTo(px + pw, wN); ctx.lineTo(px + pw, wN + x - 4);
-    ctx.strokeStyle = kp.wkLine; ctx.stroke();
-    if (pitch % 12 === 0) { ctx.fillStyle = text; ctx.font = '10px system-ui, sans-serif'; ctx.fillText('C' + (pitch / 12 - 1), px + 4, h - 5); }
-  }
-  // 黑键骑在两个白键之间：i 号白键右上方各有一个（B/C 与 E/F 之间没有）
-  for (let i = wk0; i < wk1; i++) {
-    const pitch = WHITE_MIDI[i] + 1;
-    if (!BLACK_PC.includes(pitch % 12)) continue;
-    const bx = Math.floor((i - wk0 + 1) * g - 0.35 * g), bw = Math.floor(0.7 * g), bh = bkH;
-    const act = sounding.get(pitch);
-    const gv = glowOf(pitch, act !== undefined || live.has(pitch));
-    ctx.fillStyle = grBk;
-    ctx.beginPath(); ctx.roundRect(bx, wN, bw, bh, [0, 0, 2, 2]); ctx.fill();
-    if (gv > 0.02) {
-      ctx.globalAlpha = gv;
-      // 黑键上「仅合成器在响」用深色压暗（浅色主题下 --ink 也是深色，深色主题下则不然，
-      // 这里保持与改动前一致的语义）
-      ctx.fillStyle = act !== undefined ? act : '#0a0a0a';
-      ctx.shadowBlur = 18 * gv; ctx.shadowColor = ctx.fillStyle;
-      ctx.beginPath(); ctx.roundRect(bx, wN, bw, bh, [0, 0, 2, 2]); ctx.fill();
-      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
-    }
-  }
-  for (let e = state.parts.length - 1; e >= 0; e--) {
-    const p = state.parts[e];
-    p.x += p.vx; p.y += p.vy; p.vy += .2; p.life -= .02;
-    if (p.life <= 0) { state.parts.splice(e, 1); continue; }
-    ctx.globalAlpha = p.life; ctx.fillStyle = p.color;
-    ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, 2 * Math.PI); ctx.fill();
-    ctx.globalAlpha = 1;
-  }
-  state.lastD = d;
-  if (opts.showLyrics && opts.lyricAt) {
-    ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(0, 4, w, 24);
-    ctx.fillStyle = '#fff'; ctx.font = '600 14px "Microsoft YaHei", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(opts.lyricAt, w / 2, 16);
-  }
-  return { active: liveNotes.filter(n => n.start <= tick && n.end >= tick) };
+/* ---- 背景位图缓存（性能，逐像素等价）----
+ * 为什么必须有：模糊一张底图是整帧里最贵的一步。4K（3840×2160）下一次 blur + cover 缩放实测
+ * 要 80~150ms，而导出是**实时录制**（单帧预算 = 1/fps，24fps 只有 41ms）—— 每帧都超预算，
+ * 于是持续满负载、丢帧，用户的机器甚至崩溃重启过一次。
+ * 背景参数在一次会话里恒定（模式 / 颜色 / 模糊 / 暗化 / 图片 / 画布设备尺寸），所以缓存一张
+ * **设备分辨率**的离屏位图，之后每帧只做一次 drawImage。
+ * 为什么逐像素等价：缓存是在 ctx.scale(sc, sc) 下画的，模糊与 cover 裁切语义与直画完全一致
+ * —— canvas 的 filter blur 作用在**设备空间**、不受 CTM 影响（实测模糊斜坡宽度不随 scale 变）。
+ * 实时视图同样受益（dpr=2.5 时每帧少一次 2335×1335 的模糊）。 */
+const BG_CACHE = { key: '', cv: null };
+function bgCacheKey(mode, o, pw, ph) {
+  const im = o.image;
+  return [mode, o.color || '', Number(o.blur) || 0, Number(o.dim) || 0,
+    im ? (im.currentSrc || im.src || 'img') + ':' + im.width + 'x' + im.height : '', pw, ph].join('|');
 }
+
+export function paintVizBg(ctx, w, h, bgOpt = {}) {
+  const mode = bgOpt.mode || 'theme';
+  if (mode === 'keep') return;
+  if (mode === 'transparent') {
+    // 真的清成透明：导出 PNG / 视频后才能当叠加层用（本来就只是一次 clearRect，不必缓存）
+    ctx.save(); ctx.clearRect(0, 0, w, h); ctx.restore();
+    return;
+  }
+  if (mode === 'wallpaper') {
+    // ★ 动态壁纸**绝不能走位图缓存**：BG_CACHE 的键里没有时间，缓存住就等于画面永远停在第一帧
+    //   （用户看到的会是"选了动态壁纸却是一张静止图"）。逐帧直画当前帧；
+    //   模糊已在 paintVizBgDirect 内部按受限尺寸做过，所以这里不必再打折。
+    paintVizBgDirect(ctx, w, h, bgOpt);
+    return;
+  }
+  if (typeof document === 'undefined') { paintVizBgDirect(ctx, w, h, bgOpt); return; }
+  const sc = pixelScale(ctx) || 1;
+  const pw = Math.max(1, Math.round(w * sc)), ph = Math.max(1, Math.round(h * sc));
+  const key = bgCacheKey(mode, bgOpt, pw, ph);
+  if (BG_CACHE.key !== key || !BG_CACHE.cv) {
+    const cv = document.createElement('canvas');
+    cv.width = pw; cv.height = ph;
+    const c2 = cv.getContext('2d');
+    c2.save(); c2.scale(sc, sc);
+    paintVizBgDirect(c2, w, h, bgOpt);
+    c2.restore();
+    BG_CACHE.key = key; BG_CACHE.cv = cv;
+  }
+  ctx.save();
+  ctx.drawImage(BG_CACHE.cv, 0, 0, w, h);
+  ctx.restore();
+}
+
 
 /* ---------------- 音乐能量：实时视图与视频导出共用同一套算法 ---------------- */
 
@@ -572,7 +474,7 @@ export function drawVizChord(ctx, w, h, activeNotes) {
   ctx.fillStyle = cssVar('--canvas', '#ffffff'); ctx.fillRect(0,0,w,h);
   ctx.textAlign='center'; ctx.textBaseline='middle';
   if (chord) {
-    ctx.fillStyle='#ff5530'; ctx.font='700 '+Math.max(18,Math.round(h*.3))+'px "Segoe UI", "Microsoft YaHei", sans-serif';
+    ctx.fillStyle='#ff5530'; ctx.font='700 '+Math.max(18,Math.round(h*.3))+'px "Segoe UI", "Microsoft YaHei", sans-serif';   // ui-tokens-allow: 可视化内部绘制（该子系统自带主题，见 docs/DESIGN.md 第 8 节）
     ctx.fillText(chord.name, w/2, h*.34);
     ctx.fillStyle=cssVar('--stone','rgba(10,10,10,.55)'); ctx.font='10px Consolas, monospace';
     ctx.fillText(chord.pcs.map(p=>KEY_NAME[p]).join(' · '), w/2, h*.62);
@@ -582,4 +484,38 @@ export function drawVizChord(ctx, w, h, activeNotes) {
     ctx.fillStyle=cssVar('--slate','rgba(10,10,10,.75)'); ctx.font='12px "Microsoft YaHei", sans-serif';
     ctx.fillText(pcs.length ? pcs.map(p=>KEY_NAME[p]).join(' · ') : t('播放时显示实时和弦'), w/2, h*.45);
   }
+}
+/** 按**秒**平滑的能量包络（③ 导出/实时统一）。
+ *  旧的 smoothEnergy(prev, target, attack, release) 是**逐帧**系数：实时 60~144Hz 与导出固定 fps
+ *  的时间常数不同，于是同一个音在两边「脉动」的快慢/幅度不一样。
+ *  这里用 1-exp(-dt/τ) 的形式，dt 由调用方给（实时取 rAF 间隔，导出取 1/fps）。 */
+export function smoothEnergyDt(prev, target, dt, attack = 0.18, release = 0.22) {
+  // ★ 必须和 smoothEnergy 一样兜住非数值：导出每次开录都把 _state 清空，
+  //   第一帧 prev 是 undefined —— 少了这一行，undefined + NaN 会让包络**整段变成 NaN**，
+  //   于是 `energy > 0.01` 永远为假，导出的画面从头到尾没有那层随音乐脉动的背景光晕
+  //   （实时侧有兜底、导出侧没有 ⇒ 两边差一层光）。
+  const p = (typeof prev === 'number' && isFinite(prev)) ? prev : 0;
+  const tg = (typeof target === 'number' && isFinite(target)) ? target : 0;
+  const k = (tg > p ? attack : release);
+  const a = 1 - Math.exp(-Math.max(0, dt) / Math.max(1e-3, k));
+  return p + (tg - p) * a;
+}
+
+/** 某一时刻**真正在发声**的音符（④ 导出与实时统一）：
+ *  导出原来直接遍历谱面 `n.start <= tick && n.end >= tick`，于是**静音轨/独奏外的轨**也会被点亮，
+ *  亮块数量与实时（syn.activeNow() 只报真正在响的）对不上。
+ *  mute = 被静音的轨 index 数组；solo >= 0 时只算该轨（与混音台语义一致）。 */
+export function activeNotesAt(song, tick, opts = {}) {
+  const mute = opts.mute || [];
+  const solo = (typeof opts.solo === 'number') ? opts.solo : -1;
+  const minVel = opts.minVel || 1;
+  const out = [];
+  for (const tr of (song && song.tracks) || []) {
+    if (solo >= 0 ? tr.index !== solo : mute.indexOf(tr.index) >= 0) continue;
+    if (tr.muted && solo < 0) continue;
+    for (const n of tr.notes || []) {
+      if (n.start <= tick && n.end >= tick && (n.vel == null ? 127 : n.vel) >= minVel) out.push(n);
+    }
+  }
+  return out;
 }

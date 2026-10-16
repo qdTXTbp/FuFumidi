@@ -5,6 +5,7 @@ import PianoRoll from '../components/PianoRoll.vue';
 import { useAppStore } from '../stores/app';
 import { fmtTime } from '../core/util.js';
 import { t } from '../core/i18n.js';
+import NumSlider from '../components/NumSlider.vue';
 
 const app = useAppStore();
 const state = app;
@@ -42,7 +43,7 @@ function panStyle(i) {
         <div class="page-title">{{ currentSong?.name || t('演奏工作区') }}</div>
         <div class="page-sub">{{ currentSong ? t('钢琴卷帘预览 · 轨道混音 · 实时播放') : t('导入 MIDI 文件即可开始演奏与混音') }}</div>
       </div>
-      <div v-if="stats" class="row" style="gap:8px;flex-wrap:wrap">
+      <div v-if="stats" class="row" style="gap:var(--sp-2);flex-wrap:wrap">
         <span class="tag accent">♩ {{ stats.bpm }} BPM</span>
         <span class="tag">{{ stats.sig }}</span>
         <span class="tag">{{ stats.bars }}{{ t(' 小节') }}</span>
@@ -76,14 +77,11 @@ function panStyle(i) {
               <button class="chip-btn" :class="{ 'on-mute': tr.mute }" :title="t('静音')" @click="toggleTrackMute(i)">M</button>
             </div>
             <div class="mt-vol" :title="t('音量 ') + Math.round(tr.vol * 100) + '%'">
-              <input :id="'mt-vol-' + i" :name="'mt-vol-' + i" type="range" min="0" max="1" step="0.01"
-                     :style="{ '--fill': tr.vol * 100 + '%' }"
-                     :value="tr.vol" @input="setTrackVol(i, parseFloat($event.target.value))">
+              <NumSlider :model-value="tr.vol" @update:model-value="v => { setTrackVol(i, parseFloat(v)) }" :min="0" :max="1" :step="0.01" :range-style="{ '--fill': tr.vol * 100 + '%' }" :input-id="'mt-vol-' + i" :input-name="'mt-vol-' + i" :input-width="52" no-input />
             </div>
-            <div style="width:70px;display:flex;align-items:center;gap:6px" :title="t('声像 ') + (tr.pan > 0 ? 'R' + Math.round(tr.pan * 100) : tr.pan < 0 ? 'L' + Math.round(-tr.pan * 100) : t('中'))">
+            <div style="width:70px;display:flex;align-items:center;gap:var(--sp-2)" :title="t('声像 ') + (tr.pan > 0 ? 'R' + Math.round(tr.pan * 100) : tr.pan < 0 ? 'L' + Math.round(-tr.pan * 100) : t('中'))">
               <span class="muted small">L</span>
-              <input :id="'mt-pan-' + i" :name="'mt-pan-' + i" type="range" min="-1" max="1" step="0.01" :style="panStyle(i)"
-                     :value="tr.pan" @input="setTrackPan(i, parseFloat($event.target.value))">
+              <NumSlider :model-value="tr.pan" @update:model-value="v => { setTrackPan(i, parseFloat(v)) }" :min="-1" :max="1" :step="0.01" :range-style="panStyle(i)" :input-id="'mt-pan-' + i" :input-name="'mt-pan-' + i" :input-width="52" no-input />
               <span class="muted small">R</span>
             </div>
           </div>
@@ -93,7 +91,7 @@ function panStyle(i) {
         <!-- 曲目信息 -->
         <div class="card">
           <div class="card-title"><span class="dot" style="background:var(--accent2)"></span>{{ t('曲目概览') }}</div>
-          <div style="display:flex;flex-direction:column;gap:10px">
+          <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
             <div class="spread" v-for="(row, i) in [
               { k: t('曲名'), v: currentSong?.name },
               { k: t('速度'), v: stats?.bpm + ' BPM' },
@@ -107,7 +105,7 @@ function panStyle(i) {
               <span class="small" style="font-weight:600">{{ row.v }}</span>
             </div>
           </div>
-          <div class="row" style="margin-top:14px;gap:8px;flex-wrap:wrap">
+          <div class="row" style="margin-top:14px;gap:var(--sp-2);flex-wrap:wrap">
             <span class="tag" v-for="(tr, i) in state.tracks.slice(0, 8)" :key="i" :style="{ color: tr.color, borderColor: tr.color + '55' }">
               {{ tr.name }}
             </span>

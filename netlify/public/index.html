@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FuFumidi 反馈通道</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+         background: #0b0e14; color: #d7dde8;
+         font: 16px/1.7 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
+  main { max-width: 40rem; padding: 2.5rem; }
+  h1 { font-size: 1.35rem; margin: 0 0 .6rem; color: #eaf2ff; letter-spacing: .02em; }
+  p { margin: .5rem 0; }
+  code { background: #151a24; padding: .15em .45em; border-radius: 4px; color: #9ecbff; }
+  .dim { color: #7d879c; font-size: .9rem; }
+  ul { padding-left: 1.2rem; }
+  a { color: #6cb6ff; }
+</style>
+<main>
+  <h1>FuFumidi 反馈通道</h1>
+  <p>这是 FuFumidi 桌面端「问题反馈」使用的上传端点，不是给人直接访问的页面。</p>
+  <ul>
+    <li><code>POST /feedback</code> —— 提交反馈（md 落 GitHub，附件进 Release 资产，可选建 Issue）</li>
+    <li><code>GET /health</code> —— 通道健康检查</li>
+  </ul>
+  <p class="dim">反馈仓库：<a href="https://github.com/qdTXTbp/FuFumidi-Feedback">qdTXTbp/FuFumidi-Feedback</a>（国内镜像在 CNB）。</p>
+</main>
+</html>

@@ -5,7 +5,7 @@
 
 export type EngineMode = 'universal' | 'piano' | 'separate';
 export type PerfMode = 'quality' | 'balanced' | 'fast';
-export type GpuKind = 'cuda' | 'directml' | 'rocm';
+export type GpuKind = 'cuda' | 'rocm' | 'xpu';   // DirectML 增强包已下线（2026-10-17）
 
 export interface ConvertRequest {
   /** MuScriptor 乐器组约束：'auto' 或不约束为空；否则是组名列表（如 'voice,drums'，硬约束） */
@@ -28,6 +28,29 @@ export interface ConvertRequest {
   denoise?: boolean;
   normalize?: boolean;
   auto_bpm?: boolean;
+}
+
+/** 体检里的一条结论（level 决定图标与配色） */
+export interface DiagVerdict { level: 'ok' | 'warn' | 'error' | 'info'; group: string; msg: string }
+/** 全局体检报告 */
+export interface DiagHealthReport {
+  time: string;
+  app_version?: string;
+  verdicts: DiagVerdict[];
+  system: Record<string, unknown>;
+  gpu: Record<string, unknown>;
+  compute_check: Record<string, unknown>;
+  runtime: Record<string, unknown>;
+  models: Record<string, unknown>;
+  recent_errors: { file: string; line: string }[];
+  /** 已脱敏、可直接粘贴进 issue 的纯文本报告 */
+  report_text: string;
+}
+export interface DiagHealthResult {
+  ok: boolean;
+  report?: DiagHealthReport | null;
+  error?: string | null;
+  raw?: string;
 }
 
 export interface ConvertResult {
@@ -165,6 +188,32 @@ export interface PresetListResult {
   ok: boolean;
   presets?: Record<string, PresetItem>;
   builtins?: string[];
+  last_used?: string;
+  /** 模型键 → 该模型的内置默认预设名（权威表在 engine/presets.py:MODEL_DEFAULT_PRESET）。 */
+  model_defaults?: Record<string, string>;
+  /** 模型键 → **用户指定**的预设名（空/缺 = 用内置默认）。这就是「记住用户的选择」。 */
+  model_preset?: Record<string, string>;
+  error?: string;
+}
+
+/** 用户元数据条目的 kind —— 必须与 main/usermeta.js 的 KINDS 白名单一致。 */
+export type UserMetaKind = 'model' | 'utau' | 'ds' | 'sf' | 'voice';
+
+/** 用户改过的一个条目。**空字段不会出现**（空 = 用原始名/原始值）。 */
+export interface UserMetaItem {
+  name?: string;
+  author?: string;
+  source?: string;
+  tags?: string[];
+  category?: string;
+  order?: number;
+  pinned?: boolean;
+}
+
+export interface UserMetaListResult {
+  ok: boolean;
+  items?: Record<string, UserMetaItem>;
+  path?: string;
   error?: string;
 }
 
@@ -209,6 +258,8 @@ export interface Settings {
   watch_enabled?: boolean;
   file_assoc?: boolean;
   lang?: 'zh' | 'zh-Hant' | 'en' | '';
+  /** UTAU 引擎里的合成路线：'CLASSIC'（默认）| 'WORLDLINE-R' | 'WORLDLINE-R1.1' | 'WORLDLINE-R2' */
+  utau_renderer?: string;
   [key: string]: any;
 }
 
@@ -473,6 +524,8 @@ export interface DiffsingerVoicebankInfo {
   vocoder?: string;
   /** 声库自带 dsvocoder/（否则用通用组件位） */
   builtinVocoder?: boolean;
+  /** 多说话人声库声明的说话人名（嵌入文件基名）；>1 时界面才显示选择 */
+  speakers?: string[];
   /** 实际加载的那份词典的词条数（dsdict-<lang>.yaml 的 entries 条数） */
   dictionaryWords?: number;
   /** 实际加载的词典文件名，如 `dsdict-zh.yaml` */
@@ -722,12 +775,40 @@ export interface CoverProgress {
   result?: any;
 }
 
+/** 一次问题反馈的输入（字段与反馈页一一对应；空的字段不进 md） */
+export interface FeedbackPayload {
+  fields: {
+    kind: string; area: string; severity: string; title: string;
+    symptom: string; steps?: string; expect?: string; freq?: string; contact?: string;
+  };
+  /** 是否附带诊断包（zip）。默认 false —— 里面有设置与日志，体积与隐私都更重 */
+  includeDiagnostic?: boolean;
+  /** Turnstile token（拿不到时留空，服务端按配置决定是否放行） */
+  turnstile?: string;
+  /** 是否顺手开一条 Issue（默认开） */
+  createIssue?: boolean;
+}
+
+export interface FeedbackPreview {
+  ok: boolean;
+  id?: string;
+  markdown?: string;
+  path?: string;
+  attachments?: { name: string; bytes: number }[];
+  healthOk?: boolean;
+  error?: string;
+}
+
 export interface FuBridge {
   onOpenFile(cb: (bytes: Uint8Array, name: string) => void): () => void;
+  /** 沉浸模式：窗口真全屏（收掉原生标题栏）；返回实际状态 */
+  setFullScreen(on: boolean): Promise<{ ok: boolean; fullScreen?: boolean; error?: string }>;
 
   // engine
   convert(cfg: ConvertRequest): Promise<ConvertResult>;
   cancel(id: string | number): Promise<GeneralResult>;
+  /** 转录「暂停 / 继续」：正在转录的那一首当场停住，继续后从原处接着跑（只对分块引擎有效） */
+  setTranscribePause(on: boolean): Promise<GeneralResult>;
   onEngineLog(cb: (p: any) => void): () => void;
   probe(): Promise<EngineProbeResult>;
   refine(cfg: RefineRequest): Promise<RefineResult>;
@@ -757,10 +838,30 @@ export interface FuBridge {
   soundfonts: { list(): Promise<SoundFontItem[]> };
   pickMusicXML(): Promise<string | null>;
   exportScorePdf(): Promise<GeneralResult>;
-  transcodeVideo(data: any, audio: any): Promise<GeneralResult>;
+  /* 视频导出。opts.name = 曲名，主进程拿它当保存对话框的默认文件名（main/video.js 的 safeVideoBase
+     会再洗一遍 Windows 非法字符）。旧调用方只传前两个参数仍然有效。 */
+  transcodeVideo(data: any, audio: any, opts?: { name?: string; audioOffset?: number }): Promise<GeneralResult>;
+  /* 流式导出（main/video.js 的 video:exportBegin/Write/Abort/End）。
+     begin → 多次 write（data 为编码后的字节片段）→ end（封装 MP4，弹保存对话框）。
+     container: 'h264'（WebCodecs 硬件编码，Annex B）| 'webm'（MediaRecorder 回退路径）。
+     targetPath 仅供自动化冒烟跳过对话框，界面不传。 */
+  videoExportBegin(opts: { container?: 'h264' | 'webm' }): Promise<{ ok: boolean; id?: string; container?: string; path?: string; error?: string }>;
+  videoExportWrite(id: string, data: Uint8Array): Promise<{ ok: boolean; bytes?: number; error?: string }>;
+  videoExportAbort(id: string): Promise<{ ok: boolean }>;
+  videoExportEnd(opts: { id: string; fps?: number; duration?: number; audio?: any; audioOffset?: number; name?: string; targetPath?: string }): Promise<GeneralResult & { bytes?: number; copy?: boolean }>;
   modelList(): Promise<any[]>;
   depCheck(): Promise<GeneralResult>;
   diagExport(): Promise<GeneralResult>;
+  /** 全局体检：主动检查各子系统并下结论（含显卡算力实跑校验，约几秒） */
+  diagHealth(): Promise<DiagHealthResult>;
+  /* 问题反馈上传（main/feedback.js + preload 的 feedback 组）。
+     preview 只生成不落盘 —— 用户先看清「究竟会上传什么」再决定。 */
+  feedback: {
+    preview(payload: FeedbackPayload): Promise<FeedbackPreview>;
+    saveLocal(payload: FeedbackPayload): Promise<GeneralResult & { bytes?: number; entries?: string[]; stripped?: string[] }>;
+    submit(payload: FeedbackPayload): Promise<GeneralResult & { url?: string; issue?: { number?: number; url?: string } | null; savedLocal?: boolean; localPath?: string; markdown?: string }>;
+    webFallback(payload: FeedbackPayload): Promise<GeneralResult & { url?: string; markdown?: string; path?: string }>;
+  };
   exportScorePngZip(opts: any): Promise<GeneralResult>;
   listMidiFiles(dir: string): Promise<string[]>;
   readBinary(p: string): Promise<Uint8Array | null>;
@@ -779,6 +880,8 @@ export interface FuBridge {
   utauFlags(): Promise<{ ok: boolean; engine_version?: string; supported?: { flag: string; default: number | null; min: number | null; max: number | null; desc: string }[]; unsupported?: { flag: string; desc: string }[]; example?: string; error?: string }>;
   utauListVoicebanks(): Promise<{ ok: boolean; list?: { name: string; dir: string }[]; error?: string }>;
   utauImportVoicebankZip(): Promise<{ ok: boolean; canceled?: boolean; name?: string; dir?: string; error?: string }>;
+  /** 本地导入 GPT-SoVITS 音色目录（社区音色多无直链，这是它们的主入口） */
+  modelImportGsvVoice(directPath?: string): Promise<{ ok: boolean; canceled?: boolean; name?: string; dir?: string; files?: number; error?: string }>;
   /** 声库资源中心：可一键安装的开源/免费声库条目 */
   utauVoicebankRegistry(): Promise<{ ok: boolean; dir?: string; list?: VoicebankEntry[]; error?: string }>;
   utauDownloadVoicebank(id: string): Promise<{ ok: boolean; canceled?: boolean; existed?: boolean; name?: string; dir?: string; files?: number; size?: number; error?: string }>;
@@ -816,6 +919,10 @@ export interface FuBridge {
   diffsingerMsDownload(cfg: { name: string; path: string }): Promise<GeneralResult & { canceled?: boolean; name?: string; dir?: string; size?: number; source?: string }>;
   diffsingerMsCancelDownload(name: string): Promise<GeneralResult>;
   diffsingerInspectVoicebank(cfg: { voicebank: string }): Promise<DiffsingerVoicebankInfo>;
+  /** 通用声码器候选（数据根 vocoder/ 与通用组件位 Dependency/）。**不含**声库自带的 dsvocoder。 */
+  diffsingerVocoders(): Promise<{ ok: boolean; items: { id: string; name: string; path: string }[]; dir?: string; error?: string }>;
+  /** 已装声库声明的说话人并集（多说话人声库用；条目是嵌入文件基名） */
+  diffsingerSpeakers(): Promise<{ ok: boolean; items: { dir: string; name: string; speakers: string[] }[]; speakers: string[] }>;
   /** 歌词输入建议。`language` 为**轨道级**语言设置，不从歌词自动判断。 */
   diffsingerSuggestLyric(cfg: { text: string; language?: string; voicebank?: string; limit?: number }): Promise<DiffsingerSuggestResult>;
   diffsingerRender(cfg: {
@@ -920,6 +1027,19 @@ export interface FuBridge {
     reorder(name: string, delta: number): Promise<GeneralResult>;
     reorderTo(name: string, index: number): Promise<GeneralResult>;
     restore(): Promise<GeneralResult>;
+    /** 把某个模型绑定到某个预设；name 传空 = 解绑、回到内置默认。 */
+    setModelPreset(key: string, name: string): Promise<GeneralResult & { model_preset?: Record<string, string> }>;
+  };
+
+  /* 用户元数据（名字/作者/来源/标签/分类/排序/顶置）。
+     ★ 独立表的原因：资源中心四页的数据每次刷新都会重算，用户改的东西写进那些结构里会丢。
+     键是 "<kind>:<id>"；清空某字段（传空串/空数组）= 回到原始值。 */
+  usermeta: {
+    list(): Promise<UserMetaListResult>;
+    set(kind: UserMetaKind, id: string, patch: UserMetaItem): Promise<GeneralResult & { item?: UserMetaItem }>;
+    remove(kind: UserMetaKind, id: string): Promise<GeneralResult>;
+    reorder(kind: UserMetaKind, ids: string[]): Promise<GeneralResult>;
+    pin(kind: UserMetaKind, id: string, pinned: boolean): Promise<GeneralResult>;
   };
 
   // plugins

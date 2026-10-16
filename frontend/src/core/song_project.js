@@ -580,7 +580,8 @@ export function resolveAssetPaths(tracks, resolved) {
  * - 多段 tempo：前端是单 bpm 模型，只取第一段；多 tempo 信息留在原文件。
  *
  * @param {object} p  引擎 export-project 的 `project` 字段
- * @returns {{ok:boolean, error?:string, json?:object, resolved?:object}}
+ * @returns {{ok:boolean, error?:string, json?:object, resolved?:Record<string,string>}}
+ *   resolved 是「临时 asset id → 本机绝对路径」的映射，resolveAssetPaths 直接按它回填。
  */
 export function convertExternalProject(p) {
   if (!p || typeof p !== 'object') return fail('导入数据无效');

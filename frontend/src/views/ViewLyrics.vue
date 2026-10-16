@@ -1,4 +1,5 @@
 <script setup>
+import { themeColor } from '../core/palette.js';
 import { ref, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
@@ -334,7 +335,7 @@ function buildTimelineCache(s, w, h, dpr) {
   // 歌词标记
   const lyr = lyrics.value;
   if (lyr.length) {
-    ctx.fillStyle = '#ff5530';
+    ctx.fillStyle = themeColor('--playhead', '#ff5530');
     for (const l of lyr) {
       const x = Math.round(l.tick / total * w);
       if (x >= 0 && x <= w) ctx.fillRect(x, laneTop + laneH + 8, 2, h - laneH - 16);
@@ -468,22 +469,22 @@ onBeforeUnmount(stopLoop);
 
 <style scoped>
 .lyrics-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; padding: var(--page-pad-y) var(--page-pad-x) 24px; max-width: 1100px; margin: 0 auto; }
-.lyr-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; overflow-x: auto; margin-bottom: 10px; flex: none; }
+.lyr-toolbar { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: nowrap; overflow-x: auto; margin-bottom: 10px; flex: none; }
 .sep { width: 1px; height: 20px; background: var(--hairline); margin: 0 2px; }
-.lyr-ctl { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--steel); }
+.lyr-ctl { display: inline-flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); color: var(--steel); }
 .lyr-ctl input[type=checkbox] { accent-color: var(--ink); }
-.lyr-status { font-size: 11px; color: var(--stone); }
-.lyr-add { display: flex; gap: 8px; margin-bottom: 10px; }
-.text-input { flex: 1; padding: 8px 12px; font-size: 12.5px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; color: var(--ink); outline: none; }
+.lyr-status { font-size: var(--fs-xs); color: var(--stone); }
+.lyr-add { display: flex; gap: var(--sp-2); margin-bottom: 10px; }
+.text-input { flex: 1; padding: 8px 12px; font-size: var(--fs-md); background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--r-md); color: var(--ink); outline: none; }
 .text-input:focus { border-color: var(--ink); }
-.lyr-timeline { width: 100%; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 12px; margin-bottom: 10px; display: block; cursor: pointer; }
-.lyr-list { flex: 1; overflow-y: auto; border: 1px solid var(--hairline); border-radius: 12px; background: var(--canvas); }
-.lyr-empty { color: var(--stone); font-size: 13px; padding: 24px 16px; text-align: center; }
-.lyr-row { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--hairline); transition: background 0.15s; }
+.lyr-timeline { width: 100%; background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--r-md); margin-bottom: 10px; display: block; cursor: pointer; }
+.lyr-list { flex: 1; overflow-y: auto; border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--canvas); }
+.lyr-empty { color: var(--stone); font-size: var(--fs-md); padding: 24px 16px; text-align: center; }
+.lyr-row { display: flex; gap: var(--sp-2); align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--hairline); transition: background var(--motion-fast) var(--ease-out); }
 .lyr-row.cur { background: var(--surface-soft); }
 .lyr-row.cur .ly-text { font-weight: 700; color: var(--brand-coral); }
-.ly-time { width: 92px; padding: 4px 6px; font-size: 11px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 6px; color: var(--ink); font-family: var(--mono); outline: none; }
-.ly-text { flex: 1; min-width: 80px; padding: 4px 8px; font-size: 12.5px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 6px; color: var(--ink); outline: none; }
+.ly-time { width: 92px; padding: 4px 6px; font-size: var(--fs-xs); background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--r-sm); color: var(--ink); font-family: var(--mono); outline: none; }
+.ly-text { flex: 1; min-width: 80px; padding: 4px 8px; font-size: var(--fs-md); background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--r-sm); color: var(--ink); outline: none; }
 .ly-time:focus, .ly-text:focus { border-color: var(--ink); }
 
 /* 批量替换弹窗 */
@@ -495,9 +496,9 @@ onBeforeUnmount(stopLoop);
 .rep-card {
   width: 380px; max-width: calc(100vw - 40px);
   background: var(--canvas); border: 1px solid var(--hairline);
-  border-radius: 16px; box-shadow: var(--shadow-lg);
-  padding: 16px; display: flex; flex-direction: column; gap: 10px;
+  border-radius: var(--r-lg); box-shadow: var(--shadow-lg);
+  padding: 16px; display: flex; flex-direction: column; gap: var(--sp-3);
 }
-.rep-head { display: flex; align-items: center; justify-content: space-between; font-size: 14px; font-weight: 700; color: var(--ink); }
-.rep-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.rep-head { display: flex; align-items: center; justify-content: space-between; font-size: var(--fs-lg); font-weight: 700; color: var(--ink); }
+.rep-actions { display: flex; gap: var(--sp-2); justify-content: flex-end; }
 </style>

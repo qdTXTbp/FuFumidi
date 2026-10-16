@@ -1,0 +1,41 @@
+# ============================================================
+# 反馈专用 worker（独立部署，跑在项目自己的 Cloudflare 账号下）
+#
+#   npx wrangler deploy --config wrangler.feedback.toml
+#   npx wrangler d1 migrations apply fufumidi-feedback --config wrangler.feedback.toml --remote
+#   npx wrangler secret put GITHUB_TOKEN --config wrangler.feedback.toml
+#
+# ★ 别和 wrangler.toml 混：那份是云同步 worker（fusync.de5.net），跑在**协作者的账号**里，
+#   我们没权限、也不该动它。反馈是独立 worker + 独立 D1 + 独立 KV。
+#
+# 为什么附件用 KV 不用 R2：项目这个账号没开通 R2（403 "Please enable R2"），
+# 而 KV 免费额度（1 GB / 1000 写/天）对反馈附件足够，且不用开通任何付费项。
+# ============================================================
+name = "fufumidi-feedback"
+main = "src/feedback-worker.js"
+compatibility_date = "2024-09-01"
+compatibility_flags = ["nodejs_compat"]
+account_id = "a50de010000a6232832ae557e4abb755"
+workers_dev = true
+
+# 附件存储（不可猜的随机 key；30 天后自动过期）
+[[kv_namespaces]]
+binding = "ATT"
+id = "0278f6ae3c6e40be8e4e85d0b071aa13"
+
+# 限流记录（同一 install_id 10 分钟 1 条；同一 IP 10 分钟 3 条 / 24 小时 20 条）
+[[d1_databases]]
+binding = "DB"
+database_name = "fufumidi-feedback"
+database_id = "ef157357-97c9-4b28-bb54-4b62daa79d24"
+migrations_dir = "migrations-feedback"
+
+[vars]
+# 反馈写到哪个仓库（唯一写入点；CNB 由该仓库的 Action 镜像）
+FEEDBACK_REPO = "qdTXTbp/FuFumidi-Feedback"
+FEEDBACK_BRANCH = "main"
+
+# 需要在部署后设置的 secret：
+#   GITHUB_TOKEN —— fine-grained PAT，只授权 qdTXTbp/FuFumidi-Feedback 的
+#                   contents:write + issues:write，设到期日
+#   （可选）TURNSTILE_SECRET —— 配了才强制人机验证；不配则只靠上面的限流

@@ -14,90 +14,237 @@ from engine import DEFAULTS, MODES
 
 
 def _base_dir():
+    """引擎所在目录。**只用来找旧位置的预设**，不再作为写入落点。"""
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
 
-PRESETS_FILE = os.path.join(_base_dir(), "presets.json")
+def _data_root():
+    """用户数据根目录 —— 与 gsv_env.data_root() **同一条规则**（见该函数）。
+
+    优先级：FUFUMIDI_DATA_DIR → FUFUMIDI_MODELS_DIR 的上一级 → 引擎目录的上一级。
+    主进程跑引擎时一定会设 FUFUMIDI_MODELS_DIR，所以实战里走的是第二条。
+
+    ★★ 为什么必须搬到这里：原来的落点是引擎目录（见 _base_dir），而引擎装在
+    `<安装目录>/resources/app.asar.unpacked/engine/`。**整包更新会替换 resources/**，
+    于是用户的预设与「上次用的那个」会被静默清空 —— 实测确认过。
+    预设属于用户数据，必须落在数据根（FuFumidiData）里，跟模型/声库同一处。
+    """
+    env = os.environ.get("FUFUMIDI_DATA_DIR")
+    if env and os.path.isdir(env):
+        return os.path.abspath(env)
+    models = os.environ.get("FUFUMIDI_MODELS_DIR") or ""
+    if models:
+        return os.path.abspath(os.path.dirname(models.rstrip("\\/")))
+    return os.path.abspath(os.path.join(_base_dir(), os.pardir))
+
+
+#: 用户预设的**新**落点（数据根下，更新不会碰）
+PRESETS_FILE = os.path.join(_data_root(), "presets.json")
+
+#: **旧**落点（引擎目录内）。只做一次性迁移的来源，**永不删除** —— 留着当回滚路径。
+LEGACY_PRESETS_FILE = os.path.join(_base_dir(), "presets.json")
+
+#: 迁移只在「新文件不存在」时做一次
+_migrated = False
+
+
+def _migrate_legacy_once():
+    """新落点还没有文件、而旧落点有内容 → 抄一份过去。
+
+    只读旧文件、不删不改；拷完即可继续用。这样即便迁移逻辑将来出问题，
+    旧文件仍在原处，用户随时能手工找回。
+    """
+    global _migrated
+    if _migrated:
+        return
+    _migrated = True
+    try:
+        if os.path.exists(PRESETS_FILE) or not os.path.exists(LEGACY_PRESETS_FILE):
+            return
+        with open(LEGACY_PRESETS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict) or not data:
+            return
+        # 旧文件是「空壳」（只有键、没内容）就不迁，免得把空状态固化过去
+        if not (data.get("presets") or data.get("last_used") or data.get("hidden_builtins")
+                or data.get("order")):
+            return
+        os.makedirs(os.path.dirname(PRESETS_FILE) or ".", exist_ok=True)
+        with open(PRESETS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+#: 模型标识 → 内置默认预设名。
+#: ★ 契约：前端 `ViewTranscribe.currentModelKey()` 必须产出同一套键。
+#: 切模型时前端查这张表套用默认预设；用户在界面上指定过就写进 model_preset（见 set_model_preset）。
+MODEL_DEFAULT_PRESET = {
+    "basic":             "Basic Pitch · 最优",
+    "muscriptor_small":  "MuScriptor · 最优",
+    "muscriptor_medium": "MuScriptor · 最优",
+    "muscriptor_large":  "MuScriptor · 最优",
+    "piano_pt":          "钢琴 · 最优",
+    "aria":              "Aria-AMT · 最优",
+    "transkun":          "Transkun · 最优",
+    "separate":          "分离 · 最优",
+}
+
+#: 旧版按「用途」命名的 13 个内置预设，v3 起**全部删除**。
+#: 迁移时只用来确认"这个名字已经不是内置了"；**绝不删 data["presets"] 里的同名条目**
+#: —— 那可能是用户自己存下来的预设，属用户数据。列表本身也被测试用来钉住"确实删干净了"。
+REMOVED_BUILTINS = (
+    "人声：最优", "钢琴：最优",
+    "通用·标准", "通用·更干净", "通用·更灵敏", "通用·人声主旋律", "通用·人声纯净",
+    "通用·吉他拨弦", "通用·低音乐器",
+    "钢琴·标准", "钢琴·快速琶音",
+    "分离·标准", "分离·带鼓组",
+)
 
 
 def _builtin_presets():
-    """内置预设（始终存在，用户可在界面里覆盖/隐藏同名预设）。"""
+    """内置预设：**每个模型一套**（旧版那 13 套按用途命名的已全部删除）。
+
+    判据（用户明确）：**最高质量 + 保证稳定性，不考虑速度与性能**。落到参数上：
+
+    · **只影响速度/资源的 → 一律取最重的一档**：`perf=quality`（全核 + 批量上限最高）、
+      `precision=fp32`（bf16 改数值精度，属影响质量的开关）、TTA 开（引擎文档：
+      「小幅提升质量，推理时间 ×3」—— 纯速度代价）。
+    · **影响结果、且"值越高越不稳定"的 → 取中性值**：`temperature=1.0`、
+      `cfg_coef=1.0`、`beam_size=1`。中性值**就是**稳定性锚点 ——
+      "越高越准"没有任何实测支撑，不拿它换不确定性。
+    · **不干预 > 强行干预**：`muscriptor_instruments='none'`（不硬禁乐器组）。少一层猜测就少一层引入错误的机会。
+    · ★ **`max_note_hold` 保持 0（不截断）**：僵尸音符已改为**音频证据式收尾** ——
+      引擎在块边界按音频判断该音是否还有能量，没能量才收尾（收在静音开始处）。
+      按时长硬截断会误伤音频里真实存在的长音（用户明确否掉）。上限仍保留为可选兜底。
+    · 每个模型只写**它自己适用**的键，不适用的不写 —— 界面按"预设没给就保留当前值"应用，
+      惰性字段只会让状态来源变得不可读。
+
+    两处**不必写**的：Aria 的 `variant`（engine_aria 缺省就是 `medium-double`，
+    资源中心只镜像这一个变体）；Transkun 的 `device`（缺省 auto）。
+
+    ★ 由此推出一条**前端契约**：MuScriptor 三个规格共用上面这一套预设，所以
+      「切模型/切规格 → 自动套该模型默认」时**不许把 model / model_size 写回去**，
+      否则每次切规格都会被打回 `medium`。前端用 `applyPresetParams(p, {keepModel:true})`
+      走这条路径；用户**手动点「应用预设」**时才允许连子模型一起切。
+    """
     u = DEFAULTS["universal"]
     p = DEFAULTS["piano"]
     s = DEFAULTS["separate"]
+    basic = {
+        "model": "basic",
+        "onset_threshold": 0.5, "frame_threshold": 0.3,
+        "minimum_note_length": 128.0,
+        "melodia": True,              # 主旋律强化开（关掉 = 界面的「低音增强」）
+        "min_freq": 0, "max_freq": 0,  # 0 = 不限制音高范围
+        "merge_overlap": True, "vel_norm": True,   # 合并同音高重叠 / 力度归一化
+        "beat_grid": True,            # 节拍网格检测：装了 beat_this 就开
+        "tempo": 0,                   # 0 = 引擎默认 120（自动 BPM 优先）
+        "perf": "quality",
+        "denoise_mode": "off", "auto_bpm": False,
+    }
+    piano = {
+        "onset_threshold": 0.3, "frame_threshold": 0.1,
+        "min_note_ms": 60, "merge_gap_ms": 30,
+        "include_pedal": True,        # 踏板：钢琴转录的必需信息，绝不默认丢
+        "perf": "quality",
+        "denoise_mode": "off", "auto_bpm": False,
+    }
+    sep = {k: v for k, v in s.items() if k in
+           ("onset_threshold", "frame_threshold", "minimum_note_length", "midi_tempo")}
     return {
-        # 推荐默认（新装即默认「人声：最优」；切到钢琴模式自动换「钢琴：最优」）
-        "人声：最优": {
+        "Basic Pitch · 最优": {"mode": "universal", "params": dict(basic)},
+        "MuScriptor · 最优": {
+            "mode": "universal",
+            "params": {
+                **basic,
+                "model": "muscriptor", "model_size": "medium",
+                "muscriptor_instruments": "none",   # 不干预乐器组判定
+                "temperature": 1.0, "cfg_coef": 1.0, "beam_size": 1,
+                "prelude_forcing": True,
+                "precision": "fp32",
+                "max_note_hold": 0,       # ★ 不截断：僵尸音改由**音频证据**收尾（见 engine_muscriptor 的 _make_pitch_evidence）
+                # ★ 静音分段默认关（用户 2026-10-14 定）：在完全空白静音处切段、逐段转录后
+                #   合并成一份 MIDI，用长音频的静音换时间。开启后接缝处上下文变少，所以不默认开。
+                "segment_silence": "off",
+            },
+        },
+        "钢琴 · 最优": {"mode": "piano", "params": {**piano, "model": "piano_pt"}},
+        "Aria-AMT · 最优": {"mode": "piano", "params": {**piano, "model": "aria"}},
+        "Transkun · 最优": {"mode": "piano", "params": {**piano, "model": "transkun"}},
+        "分离 · 最优": {
             "mode": "separate",
-            "params": {**s, "onset_threshold": 0.05, "frame_threshold": 0.25,
-                       "minimum_note_length": 100, "include_drums": True,
-                       "denoise": True, "normalize": True, "auto_bpm": True},
+            "params": {
+                **sep,
+                "include_drums": True,     # 鼓组轨开
+                "stem_format": "wav",      # 分轨格式 wav（无损）
+                "perf": "quality",
+                "denoise_mode": "off", "auto_bpm": False,
+            },
         },
-        "钢琴：最优": {
-            "mode": "piano",
-            "params": {**p, "onset_threshold": 0.05, "frame_threshold": 0.06,
-                       "min_note_ms": 20, "merge_gap_ms": 0, "include_pedal": True,
-                       "denoise": True, "normalize": True},
-        },
-        "通用·标准": {"mode": "universal", "params": dict(u)},
-        "通用·更干净": {
-            "mode": "universal",
-            "params": {**u, "onset_threshold": 0.60, "frame_threshold": 0.45,
-                       "minimum_note_length": 180, "minimum_frequency": 60},
-        },
-        "通用·更灵敏": {
-            "mode": "universal",
-            "params": {**u, "onset_threshold": 0.40, "frame_threshold": 0.25,
-                       "minimum_note_length": 80},
-        },
-        "通用·人声主旋律": {
-            "mode": "universal",
-            "params": {**u, "melodia_trick": True, "minimum_frequency": 130,
-                       "maximum_frequency": 1050, "minimum_note_length": 150},
-        },
-        "通用·人声纯净": {
-            "mode": "universal",
-            "params": {**u, "onset_threshold": 0.45, "frame_threshold": 0.35,
-                       "minimum_note_length": 160, "minimum_frequency": 80,
-                       "maximum_frequency": 1000, "melodia_trick": True,
-                       "merge_overlap": True, "merge_gap_ms": 40},
-        },
-        "通用·吉他拨弦": {
-            "mode": "universal",
-            "params": {**u, "frame_threshold": 0.30, "minimum_note_length": 100,
-                       "minimum_frequency": 80, "maximum_frequency": 4000,
-                       "melodia_trick": False},
-        },
-        "通用·低音乐器": {
-            "mode": "universal",
-            "params": {**u, "frame_threshold": 0.35, "minimum_note_length": 200,
-                       "minimum_frequency": 30, "maximum_frequency": 500,
-                       "melodia_trick": False},
-        },
-        "钢琴·标准": {"mode": "piano", "params": dict(p)},
-        "钢琴·快速琶音": {
-            "mode": "piano",
-            "params": {**p, "onset_threshold": 0.25, "min_note_ms": 40,
-                       "merge_gap_ms": 25, "include_pedal": False},
-        },
-        "分离·标准": {"mode": "separate", "params": dict(s)},
-        "分离·带鼓组": {"mode": "separate", "params": {**s, "include_drums": True}},
     }
 
 
+#: 数据格式版本。改动结构时**只加迁移分支、不改老分支** —— 这样老用户的文件永远读得进来。
+SCHEMA_VERSION = 3
+
+
+def _migrate_schema(data):
+    """结构迁移。返回 (data, changed)。**只加分支，永不修改已有分支。**
+
+    v3：内置预设从「按用途命名的 13 套」改成「每个模型一套」，旧内置名不复存在。
+        · `hidden_builtins` 里残留的旧名要清掉 —— 留着的话，用户以后存一个同名预设会被
+          静默隐藏（隐藏语义只对内置有意义，所以按"当前内置名"过滤）；
+        · `order` 里残留的旧名是死键，一并清掉；
+        · `presets`（用户预设）**一个都不动**。
+    """
+    v = data.get("schema_version") or 0
+    changed = v != SCHEMA_VERSION
+    if v < 3:
+        builtin_names = set(_builtin_presets().keys())
+        live = builtin_names | set((data.get("presets") or {}).keys())
+        hb = [n for n in (data.get("hidden_builtins") or []) if n in builtin_names]
+        if hb != list(data.get("hidden_builtins") or []):
+            data["hidden_builtins"] = hb
+        od = [n for n in (data.get("order") or []) if n in live]
+        if od != list(data.get("order") or []):
+            data["order"] = od or None
+    return data, changed
+
+
+def _unbind_model_presets(data, name):
+    """预设被删掉时，把"指向它的模型绑定"一并解掉。
+
+    否则切到那个模型会去套用一个已经不存在的预设，界面表现为"什么都没发生"。
+    """
+    m = dict(data.get("model_preset") or {})
+    for k in [k for k, v in m.items() if v == name]:
+        m.pop(k, None)
+    data["model_preset"] = m
+
 def _read_file():
+    _migrate_legacy_once()
     try:
         with open(PRESETS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        data = data if isinstance(data, dict) else {}
     except Exception:
         return {}
+    data, changed = _migrate_schema(data)
+    if changed:
+        # 迁移结果立刻落盘：_write_file 会顺手把 schema_version 盖成最新，
+        # 于是这个分支只会走一次（幂等）。
+        _write_file(data)
+    return data
 
 
 def _write_file(data):
     try:
+        data = dict(data or {})
+        data["schema_version"] = SCHEMA_VERSION
+        os.makedirs(os.path.dirname(PRESETS_FILE) or ".", exist_ok=True)
         with open(PRESETS_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return True
@@ -128,9 +275,11 @@ def load_presets():
                 ordered[name] = presets.pop(name)
         ordered.update(presets)
         presets = ordered
+    # v3：last_used 可能指向已删除的老内置预设。那种情况返回空串，由前端按
+    # 「当前模型的默认预设」决定 —— 不再像旧版那样硬塞一个「人声：最优」。
     last = data.get("last_used", "")
-    if not last:
-        last = "人声：最优"
+    if last not in presets:
+        last = ""
     return presets, last
 
 
@@ -159,11 +308,13 @@ def delete_preset(name):
         data.get("presets", {}).pop(name, None)   # 清除同名用户覆盖，避免隐藏后复活
         order = [n for n in (data.get("order") or []) if n != name]
         data["order"] = order or None
+        _unbind_model_presets(data, name)
         return _write_file(data)
     if name in data.get("presets", {}):
         del data["presets"][name]
         order = [n for n in (data.get("order") or []) if n != name]
         data["order"] = order or None
+        _unbind_model_presets(data, name)
         return _write_file(data)
     return False
 
@@ -214,6 +365,34 @@ def save_last_used(name):
     data = _read_file()
     data["last_used"] = name
     _write_file(data)
+
+
+def load_model_preset_map():
+    """模型键 → **用户指定**的预设名。键见 MODEL_DEFAULT_PRESET。
+
+    没列出的模型 = 用内置默认。这张表就是「记住用户的选择」的落点：
+    它与 preset 数据同在数据根，整包更新不会碰。
+    """
+    data = _read_file()
+    m = data.get("model_preset") or {}
+    return {k: v for k, v in m.items()
+            if isinstance(k, str) and isinstance(v, str) and v}
+
+
+def set_model_preset(key, name):
+    """把某个模型绑定到某个预设；name 传空 = 解绑、回到内置默认。"""
+    key = (key or "").strip()
+    if not key:
+        return False
+    data = _read_file()
+    m = dict(data.get("model_preset") or {})
+    name = (name or "").strip()
+    if name:
+        m[key] = name
+    else:
+        m.pop(key, None)
+    data["model_preset"] = m
+    return _write_file(data)
 
 
 def preset_names():

@@ -16,9 +16,9 @@ FuFumidi is a fully offline desktop workstation for MIDI. It targets musicians, 
 
 The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally; transcription and editing never upload anything. Only when you opt in to cloud sync does your playlist and MIDI library get uploaded to your own cloud account.
 
-Current release line: **5.0.0-beta.2** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v5.0.0-beta.2), beta channel).
+Current release line: **5.1.0** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v5.1.0), stable channel; test builds are published under the [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) tag).
 
-What's new in 5.0.0-beta.1: **UTAU and DiffSinger are now genuinely fused** — the "Make Audio" workbench gets a unified voicebank picker, so choosing a voicebank and hitting render dispatches to concatenative synthesis or AI inference automatically. The DiffSinger workbench gains **OpenUTAU-style score editing** (a general piano roll, a phoneme strip, and a ±200-cent pitch lane with move / draw / line / sine / smooth tools), and **pitch curves drawn on the score now actually affect the rendered audio**. The score view adds an optional phoneme display, and voicebank downloads share the same global notification bar as regular models. Also fixed: whole-song renders failing with spawn ENAMETOOLONG, the update-channel toggle not persisting, the resource centre always reporting zero downloadable voicebanks, and missing pack exclusion rules that could bloat app.asar past 2 GB. The 4.5.0 feature set is folded into this major version; there will be no separate 4.5.0 release.
+What's new in 5.1.0: **the singing workbench gains two more render paths and multi-speaker voicebanks.** Worldline v11 (R1.1) is now turnkey - the harmonic/noise separation model is downloadable from the resource centre and auto-installs - and a third path, **Worldline v20 (R2)**, feeds WORLD features through a bundled 83 KB `mel.onnx` into an NSF-HiFiGAN vocoder, with frame padding, trimming and edge fades matched line by line against upstream. DiffSinger voicebanks with several speakers now expose speaker selection (per-note override, track-level default). Elsewhere: transcription parameters are exposed in the UI (including a precision switch that honestly reports **no speed gain on either backend**), task templates were replaced by per-queue settings, a token replay bench reproduces a 148-minute run in 19.5 seconds with byte-identical MIDI, the resource centre gained pinning / drag-sorting / tags / search, presets are now per-model, every parameter slider accepts typed values, and the update page lists each download line with measured latency and speed. 22 defects were fixed; the full list is in the [release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v5.1.0).
 
 ### What it does
 
@@ -86,7 +86,8 @@ Advanced options exposed by the view include onset/frame thresholds, minimum not
 The engine layer is spread across a small family of Python modules so a specific transcriber can be swapped without touching the UI:
 
 - `engine/engine.py` - front door and dispatch.
-- `engine/engine_basic.py`, `engine/engine_muscriptor.py`, `engine/engine_aria.py`, `engine/engine_pt.py`, `engine/engine_transkun.py`, `engine/engine_separate.py` - per-model inference.
+- `engine/engine_basic.py`, `engine/engine_muscriptor.py`, `engine/engine_aria.py`, `engine/engine_pt.py`, `engine/engine_transkun.py` - per-model inference; `engine/engine_msst.py` - MSST source separation.
+- `engine/pause_gate.py` - the file-flag pause/resume gate shared by every streaming transcriber (MuScriptor token stream, basic-pitch window generator, the batched piano forward loop).
 - `engine/engine_gpu.py` - CUDA / DirectML selection and fallback.
 - `engine/smart_midi.py` - post-transcription correction and smart cleanup.
 - `engine/midi_post.py`, `engine/midi_edit.py` - shared MIDI utilities used by the editor and by plugins.

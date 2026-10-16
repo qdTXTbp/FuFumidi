@@ -72,11 +72,66 @@ function tryRun(cmd) {
   const r = spawnSync(cmd, { shell: true, stdio: 'pipe', encoding: 'utf8' });
   return r.status === 0;
 }
+// ★ 必须传 argv 数组、shell:false（2026-10-13 修）：
+//   原来拼字符串走 `shell: true`，而 cmd.exe 里 `>` 是重定向符 ——
+//   `basic-pitch>=0.4.0` 会被拆成「装 basic-pitch」+「stdout 重定向到文件 0.4.0」，
+//   **版本约束静默丢失**，仓库根还会掉下 0.4 / 0.4.0 / 0.6 三个 0 字节垃圾文件。
+//   不传 shell 就没有这一层解析。接受字符串（单参数）或数组（多参数）。
 function pipAnywhere(args) {
+  const specs = Array.isArray(args) ? args : [args];
   for (const m of PIP_MIRRORS) {
-    if (tryRun('"' + python + '" -m pip install --no-input -q --disable-pip-version-check -i ' + m + ' ' + args)) return true;
+    const argv = ['-m', 'pip', 'install', '--no-input', '-q', '--disable-pip-version-check'];
+    if (m) argv.push('-i', m);
+    argv.push.apply(argv, specs);
+    if (spawnSync(python, argv, { stdio: 'pipe', encoding: 'utf8' }).status === 0) return true;
   }
   return false;
+}
+
+/* ---------------- muscriptor 上游级补丁 ---------------- */
+// ★ 为什么必须在这里打（2026-10-13 实测定位）：
+//   PyPI 上的 muscriptor 只有裸 0.3.0，而我们的「僵尸音符」修复是**上游级补丁**
+//   （改 OpenNoteTracker：跨块 tie 段永远等不到 note-off，越滚越长）。
+//   3.11 那套运行时里的 0.3.0+fufumidi.1 是**手工装的**，构建管线从不知道它的存在 ——
+//   于是 3.12 装配出来是裸版，长音频缺陷静默复活，而 deps.py 自检照样报 ok
+//   （它只 import，不校验身份）。现在改为：pip 装完从仓库内的补丁文件覆盖，
+//   并**用哈希双向校验**；上游一变就停下来报错，不盲目覆盖。
+const MUSCRIPTOR_UPSTREAM_SHA = '55f3c2239ebcfb68ab06158f46b97944501e922ddfe180073068ab3162be9171';
+const MUSCRIPTOR_PATCHED_SHA = '75df831bd2d0aa1e8c3af3e17751f31e89713ccacb56da91c8802079f79a2deb';
+const MUSCRIPTOR_PATCH_FILE = path.join(__dirname, '..', 'engine', 'patches', 'muscriptor-events-fufumidi.1.py');
+
+function sha256(p) {
+  return require('crypto').createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+}
+
+function applyMuscriptorPatch() {
+  const target = path.join(pythonDir, 'Lib', 'site-packages', 'muscriptor', 'events.py');
+  if (!fs.existsSync(target)) {
+    console.error('[错误] 找不到 ' + target + '（muscriptor 没装上？）');
+    process.exit(1);
+  }
+  if (!fs.existsSync(MUSCRIPTOR_PATCH_FILE)) {
+    console.error('[错误] 找不到补丁文件 ' + MUSCRIPTOR_PATCH_FILE);
+    process.exit(1);
+  }
+  const cur = sha256(target);
+  if (cur === MUSCRIPTOR_PATCHED_SHA) { console.log('    已是补丁版，跳过'); return; }
+  if (cur !== MUSCRIPTOR_UPSTREAM_SHA) {
+    console.error('[错误] muscriptor/events.py 的哈希既不是上游基线、也不是补丁版：');
+    console.error('       实际 ' + cur);
+    console.error('       上游 ' + MUSCRIPTOR_UPSTREAM_SHA);
+    console.error('       补丁 ' + MUSCRIPTOR_PATCHED_SHA);
+    console.error('       → 上游可能已发新版。请人工确认补丁是否仍适用，不要盲目覆盖。');
+    process.exit(1);
+  }
+  fs.copyFileSync(MUSCRIPTOR_PATCH_FILE, target);
+  const after = sha256(target);
+  if (after !== MUSCRIPTOR_PATCHED_SHA) {
+    console.error('[错误] 打完补丁哈希不符：' + after);
+    process.exit(1);
+  }
+  console.log('    [ok] events.py 已打补丁（' + MUSCRIPTOR_UPSTREAM_SHA.slice(0, 12) +
+              ' → ' + MUSCRIPTOR_PATCHED_SHA.slice(0, 12) + '）');
 }
 
 /* ---------------- 1) 准备 3.12 运行时本体 ---------------- */
@@ -99,10 +154,24 @@ function ensureRuntime() {
   fs.mkdirSync(tmp, { recursive: true });
   const unzipDir = path.join(tmp, 'unzip');
   fs.rmSync(unzipDir, { recursive: true, force: true });
-  if (!tryRun('"C:/Program Files/7-Zip/7z.exe" x -y -o"' + unzipDir + '" "' + nupkg + '"')) {
-    if (!tryRun('powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath \'' + nupkg + '\' -DestinationPath \'' + unzipDir + '\' -Force"')) {
-      console.error('[错误] 展开 NuGet 包失败（7z 与 PowerShell 都不可用）'); process.exit(1);
-    }
+  // ★ 解压要三条兜底。原来只试了 C:/Program Files/7-Zip/7z.exe —— 但本机 7z 是
+  //   scoop 装的（在 PATH 上、不在 Program Files），于是直接掉到 PowerShell 分支；
+  //   而 PS 5.1 的 Expand-Archive **只认 .zip 扩展名**，喂 .nupkg 会拒，
+  //   结果报「7z 与 PowerShell 都不可用」——其实两个都在。（实测踩到。）
+  const zipCopy = path.join(tmp, 'python312.zip');
+  let unzipped = tryRun('"C:/Program Files/7-Zip/7z.exe" x -y -o"' + unzipDir + '" "' + nupkg + '"');
+  if (!unzipped) {
+    // 兜底 2：PATH 上的 7z（scoop / winget / choco 装的多半在这）
+    unzipped = tryRun('7z x -y -o"' + unzipDir + '" "' + nupkg + '"');
+  }
+  if (!unzipped) {
+    // 兜底 3：复制成 .zip 再 Expand-Archive（PS 5.1 认扩展名）
+    try { fs.copyFileSync(nupkg, zipCopy); } catch (e) {}
+    unzipped = tryRun('powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath \'' + zipCopy + '\' -DestinationPath \'' + unzipDir + '\' -Force"');
+  }
+  if (!unzipped) {
+    console.error('[错误] 展开 NuGet 包失败（已试：Program Files 的 7z / PATH 上的 7z / Expand-Archive）');
+    process.exit(1);
   }
   const tools = path.join(unzipDir, 'tools');
   if (!fs.existsSync(path.join(tools, 'python.exe'))) { console.error('[错误] NuGet 包里没有 tools/python.exe'); process.exit(1); }
@@ -126,10 +195,34 @@ if (!checkOnly) {
   console.log('    ' + (spawnSync('"' + python + '" -m pip --version', { shell: true, encoding: 'utf8' }).stdout || '').trim());
 
   console.log('[3/5] 安装 engine/requirements-bundle.txt');
-  if (!pipAnywhere('-r "' + reqFile + '"')) {
-    console.error('[错误] requirements-bundle.txt 安装失败：所有镜像均不可用');
+  // ★ Python 3.12 上必须把 basic-pitch 拆出来单独装（实测踩到）：
+  //   basic-pitch 声明了 `tensorflow<2.15.1,>=2.4.1; python_version >= "3.11"`，
+  //   而 TensorFlow **从未为 3.12 发布过 2.15.x 轮子**（最早 2.16.0rc0）——
+  //   约束不可能满足，pip 于是报「所有镜像均不可用」，看起来像网络问题，其实是依赖冲突。
+  //   这也正是基础运行时必须停在 3.11 的原因。
+  //   而本脚本本来就要把 TensorFlow 卸掉（见下方 TF_STACK），说明它根本不该进来；
+  //   所以：主清单里剔掉 basic-pitch，再用 --no-deps 单独装它，
+  //   它真正需要的运行时依赖由主清单与下面的补充项提供。
+  const reqText = fs.readFileSync(reqFile, 'utf8');
+  const reqFiltered = reqText.split(/\r?\n/)
+    .filter(l => !/^\s*basic-pitch\b/i.test(l))
+    .join('\n');
+  const reqTmp = path.join(require('os').tmpdir(), 'fufumidi-req312.txt');
+  fs.writeFileSync(reqTmp, reqFiltered, 'utf8');
+  if (!pipAnywhere(['-r', reqTmp])) {
+    console.error('[错误] requirements-bundle.txt 安装失败（已剔除 basic-pitch）：所有镜像均不可用');
     process.exit(1);
   }
+  console.log('    单独安装 basic-pitch（--no-deps，绕开 tensorflow<2.15.1 在 3.12 上无解）');
+  if (!pipAnywhere(['--no-deps', 'basic-pitch>=0.4.0'])) {
+    console.error('[错误] basic-pitch 安装失败');
+    process.exit(1);
+  }
+  // basic-pitch 真正需要的、主清单没覆盖的运行时依赖（--no-deps 装它就得自己补）
+  // ★ resampy 是 basic-pitch 的依赖，--no-deps 装它就必须自己补上 ——
+  //   漏了它，自检会报 `universal FAIL missing: resampy`，脚本据此拒绝写就绪标记，
+  //   整个 3.12 运行时白装（实测第一轮就漏了这一个）。
+  pipAnywhere(['scikit-learn>=1.0', 'typing-extensions>=4.0', 'mir-eval>=0.6', 'resampy>=0.4']);
   // 与 3.11 运行时一致：basic-pitch 会拖来整套 TensorFlow，装完立刻卸掉
   for (const p of TF_STACK) tryRun('"' + python + '" -m pip uninstall -y -q ' + p);
   if (spawnSync('"' + python + '" -c "import tensorflow"', { shell: true }).status === 0) {
@@ -137,6 +230,9 @@ if (!checkOnly) {
     process.exit(1);
   }
   console.log('    已确认运行时不带 TensorFlow（走 ONNX 后端）');
+
+  console.log('[3b/5] 打 muscriptor 上游补丁（僵尸音符修复）');
+  applyMuscriptorPatch();
 
   console.log('[4/5] 部署 VC++ 2015-2022 x64 运行库');
   const lack = [];

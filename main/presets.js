@@ -10,10 +10,18 @@ function registerPresetsIpc({ ipcMain, runEngineInline, parsePyJson, pyLit }) {
       'import json, presets\n' +
       'p, last = presets.load_presets()\n' +
       "print(json.dumps({'ok': True, 'presets': p, 'last_used': last, " +
-      "'builtins': list(presets._builtin_presets().keys())}, ensure_ascii=False))"
+      "'builtins': list(presets._builtin_presets().keys()), " +
+      // 每个模型的「内置默认预设名」+ 用户指定过的绑定；切模型自动套预设靠这两张表
+      "'model_defaults': presets.MODEL_DEFAULT_PRESET, " +
+      "'model_preset': presets.load_model_preset_map()}, ensure_ascii=False))"
     );
     const d = parsePyJson(r.out);
-    if (d && d.ok) return { ok: true, presets: d.presets || {}, last_used: d.last_used || '', builtins: d.builtins || [] };
+    if (d && d.ok) {
+      return {
+        ok: true, presets: d.presets || {}, last_used: d.last_used || '', builtins: d.builtins || [],
+        model_defaults: d.model_defaults || {}, model_preset: d.model_preset || {},
+      };
+    }
     return { ok: false, error: (r.error || r.out || 'presets:list failed').slice(-400) };
   });
   ipcMain.handle('presets:save', async (_e, name, mode, params) => {
@@ -65,6 +73,19 @@ function registerPresetsIpc({ ipcMain, runEngineInline, parsePyJson, pyLit }) {
     const d = parsePyJson(r.out);
     if (d && d.ok) return { ok: true, order: d.order || [] };
     return { ok: false, error: (r.error || r.out || 'presets:reorderTo failed').slice(-400) };
+  });
+  // 把某个模型绑定到某个预设（name 传空 = 解绑、回到内置默认）。
+  // 这就是「用户自建预设并指定某模型用它，以用户为准」+「记住用户选择」的落点。
+  ipcMain.handle('presets:setModelPreset', async (_e, key, name) => {
+    const code =
+      'import json, presets\n' +
+      'ok = presets.set_model_preset(' + JSON.stringify(String(key == null ? '' : key)) + ', ' +
+      JSON.stringify(String(name == null ? '' : name)) + ')\n' +
+      "print(json.dumps({'ok': True, 'saved': bool(ok), 'model_preset': presets.load_model_preset_map()}, ensure_ascii=False))";
+    const r = await runEngineInline(code);
+    const d = parsePyJson(r.out);
+    if (d && d.ok) return { ok: true, saved: !!d.saved, model_preset: d.model_preset || {} };
+    return { ok: false, error: (r.error || r.out || 'presets:setModelPreset failed').slice(-400) };
   });
   ipcMain.handle('presets:restore', async () => {
     const code =

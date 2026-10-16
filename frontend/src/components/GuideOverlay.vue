@@ -110,8 +110,7 @@ const CHAPTERS = computed(() => [
   {
     id: 'playback', ic: 'player', name: t('播放与音质'), desc: t('播放栏、节拍器、倍速、混音台、音效'),
     steps: [
-      { parent: 'home', selector: '[data-guide="pb-mode"]', title: t('播放模式'), desc: t('顺序 / 随机 / 单曲循环 / 列表循环，点一次换一种。'), manual: true },
-      { parent: 'home', selector: '[data-guide="pb-loop"]', title: t('循环区间'), desc: t('开启后只在选区（或整曲）内循环。编辑页还能设置精确的循环起止。'), manual: true },
+      { parent: 'home', selector: '[data-guide="pb-mode"]', title: t('播放模式'), desc: t('顺序 / 播完就停 / 随机 / 单曲循环 / 列表循环，点一次换一种。'), manual: true },
       { parent: 'home', selector: '[data-guide="pb-metro"]', title: t('节拍器'), desc: t('跟着节拍练习或对拍；关闭后已排队的点击声会立刻取消。'), manual: true },
       { parent: 'home', selector: '#pb-tempo', title: t('播放速度'), desc: t('0.25× ~ 4× 变速播放，适合听清快速段落。加速即加速，与界面方向一致。'), manual: true },
       { parent: 'home', selector: '#pb-volume', title: t('音量'), desc: t('总音量；分轨音量与声像在混音台里调。'), manual: true },
@@ -191,11 +190,11 @@ const CHAPTERS = computed(() => [
     steps: [
       { parent: 'transcode', tab: 'transcribe', selector: '[data-guide="audio-drop"]', title: t('导入音频'), desc: t('拖入或点击选择 MP3 / WAV / FLAC / M4A 等；可一次选多个文件排队。'), manual: true },
       { parent: 'transcode', tab: 'transcribe', selector: '[data-guide="mode-universal"]', title: t('三种转录模式'), desc: t('通用识别适合任意歌曲；钢琴专用适合纯钢琴；音频处理先做人声分离再分别处理。'), manual: true },
-      { parent: 'transcode', tab: 'transcribe', selector: '[data-guide="adv-panel"]', title: t('性能档位'), desc: t('最高质量 / 均衡 / 高性能。有独显时会推荐更快的档位，档位越高越慢但越细腻。'), manual: true },
-      { parent: 'transcode', tab: 'transcribe', selector: '[data-guide="adv-panel"]', title: t('参数预设与任务模板'), desc: t('内置多套预设（钢琴快速琶音、人声主旋律、吉他拨弦等），也可保存自己的参数与任务模板。'), manual: true },
+      { parent: 'transcode', tab: 'transcribe', selector: '[data-guide="adv-panel"]', title: t('性能档位'), desc: t('最高质量 / 均衡 / 低配省资源。最高质量用全部核心，同机上最快；低配省资源限 2 核，给低配机器防卡死。'), manual: true },
+      { parent: 'transcode', tab: 'transcribe', selector: '[data-guide="adv-panel"]', title: t('参数预设（按模型）'), desc: t('每个模型自带一套「最优」预设，切换模型会自动套用；你手动应用的预设会为这个模型记住，也可一键恢复该模型默认。'), manual: true },
       { parent: 'transcode', tab: 'transcribe', selector: '[data-guide="adv-panel"]', title: t('高级参数'), desc: t('展开后可调阈值、最短音符、合并间隔、踏板、降噪、响度平衡、自动 BPM，以及低音增强。'), manual: true },
       { parent: 'transcode', tab: 'transcribe', selector: '[data-guide="start-transcribe"]', title: t('开始转录'), desc: t('点「开始转录」，全程本机离线运行，可在下方看到进度与日志。'), manual: true },
-      { parent: 'transcode', tab: 'transcribe', selector: '.tr-adv', title: t('队列与中断控制'), desc: t('多文件队列可暂停 / 取消 / 重试 / 清空；转录出的 MIDI 会直接进入曲库。'), manual: true },
+      { parent: 'transcode', tab: 'transcribe', selector: '.tr-adv', title: t('多队列与中断控制'), desc: t('可建多个转录队列，每个队列各自带一套模型与参数（切队列即切设置）；队列可暂停 / 取消 / 重试 / 清空，转录出的 MIDI 会直接进入曲库。'), manual: true },
       { parent: 'transcode', tab: 'transcribe', selector: '[data-guide="adv-panel"]', title: t('智能修正'), desc: t('对识别结果做起音对齐、尾音修正、音高修正、清理微音符、力度与声部平衡，可载入修正结果。'), manual: true },
     ],
   },
@@ -582,7 +581,7 @@ if (typeof window !== 'undefined') {
   place-items: center;
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
-  border-radius: 14px;
+  border-radius: var(--r-lg);
   margin-bottom: 12px;
   overflow: hidden;
 }
@@ -590,20 +589,20 @@ if (typeof window !== 'undefined') {
 .g-step {
   position: absolute;
   top: 8px; left: 12px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 700;
   color: var(--stone);
   letter-spacing: .4px;
   z-index: 2;
 }
-.g-note { position: absolute; color: color-mix(in srgb, var(--accent) 30%, transparent); font-size: 24px; user-select: none; animation: gfloat 3.2s ease-in-out infinite; }
+.g-note { position: absolute; color: color-mix(in srgb, var(--accent) 30%, transparent); font-size: var(--fs-2xl); user-select: none; animation: gfloat 3.2s var(--ease-in-out) infinite; }
 .g-note:nth-child(1){ top:16%; left:12%; animation-delay:0s; }
-.g-note:nth-child(2){ top:70%; left:20%; font-size:18px; animation-delay:1s; }
-.g-note:nth-child(3){ top:30%; right:10%; font-size:30px; animation-delay:1.9s; }
-.g-note:nth-child(4){ top:64%; right:22%; font-size:15px; animation-delay:.5s; }
+.g-note:nth-child(2){ top:70%; left:20%; font-size:var(--fs-xl); animation-delay:1s; }
+.g-note:nth-child(3){ top:30%; right:10%; font-size:var(--fs-2xl); animation-delay:1.9s; }
+.g-note:nth-child(4){ top:64%; right:22%; font-size:var(--fs-lg); animation-delay:.5s; }
 @keyframes gfloat { 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-6px); } }
-.guide-dots { display: flex; gap: 6px; margin-top: 14px; flex: none; }
-.guide-dots i { width:8px; height:8px; border-radius:50%; background: var(--hairline); transition:.2s; }
+.guide-dots { display: flex; gap: var(--sp-2); margin-top: 14px; flex: none; }
+.guide-dots i { width:8px; height:8px; border-radius:50%; background: var(--hairline); transition:var(--motion-base) var(--ease-out); }
 .guide-dots i.on { background: var(--accent); transform: scale(1.25); }
 .guide-overlay { background: rgba(6,10,16,.58); backdrop-filter: blur(2px); pointer-events: none; }
 /* 交互式实操：挖洞遮罩由 .ig-highlight 的 999px box-shadow 负责，
@@ -616,10 +615,10 @@ if (typeof window !== 'undefined') {
   position: fixed;
   z-index: 1200;
   pointer-events: none;
-  border-radius: 12px;
+  border-radius: var(--r-md);
   box-shadow: 0 0 0 999px rgba(6,10,16,.58);
   border: 2px dashed var(--accent);
-  animation: igpulse 1.4s ease-in-out infinite;
+  animation: igpulse 1.4s var(--ease-in-out) infinite;
 }
 @keyframes igpulse { 0%,100%{ box-shadow: 0 0 0 999px rgba(6,10,16,.58); } 50%{ box-shadow: 0 0 0 999px rgba(6,10,16,.46); } }
 .ig-card {
@@ -629,33 +628,33 @@ if (typeof window !== 'undefined') {
   max-width: 92vw;
   background: var(--canvas);
   border: 1px solid var(--hairline);
-  border-radius: 14px;
+  border-radius: var(--r-lg);
   padding: 14px 16px;
   box-shadow: var(--shadow-lg);
 }
-.ig-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--ink); }
-.ig-count { font-size: 11px; color: var(--stone); white-space: nowrap; }
-.ig-desc { margin: 8px 0 10px; font-size: 12.5px; line-height: 1.65; color: var(--steel); }
-.ig-missing { margin: 0 0 10px; font-size: 12px; line-height: 1.6; color: var(--ink); background: color-mix(in srgb, var(--accent) 10%, transparent); border-left: 3px solid var(--accent); border-radius: 6px; padding: 7px 9px; }
-.ig-foot { display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.ig-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); color: var(--ink); }
+.ig-count { font-size: var(--fs-xs); color: var(--stone); white-space: nowrap; }
+.ig-desc { margin: 8px 0 10px; font-size: var(--fs-md); line-height: 1.65; color: var(--steel); }
+.ig-missing { margin: 0 0 10px; font-size: var(--fs-sm); line-height: 1.6; color: var(--ink); background: color-mix(in srgb, var(--accent) 10%, transparent); border-left: 3px solid var(--accent); border-radius: var(--r-sm); padding: 7px 9px; }
+.ig-foot { display: flex; justify-content: flex-end; gap: var(--sp-2); flex-wrap: wrap; }
 
 /* 章节目录 */
 .guide-catalog { width: 480px; max-width: 94vw; }
-.cat-progress { margin-left: auto; margin-right: 8px; font-size: 11px; color: var(--stone); white-space: nowrap; }
-.cat-intro { margin: 2px 0 12px; font-size: 12.5px; line-height: 1.6; color: var(--steel); }
-.cat-list { display: flex; flex-direction: column; gap: 6px; max-height: 46vh; overflow-y: auto; padding-right: 2px; margin-bottom: 14px; }
+.cat-progress { margin-left: auto; margin-right: 8px; font-size: var(--fs-xs); color: var(--stone); white-space: nowrap; }
+.cat-intro { margin: 2px 0 12px; font-size: var(--fs-md); line-height: 1.6; color: var(--steel); }
+.cat-list { display: flex; flex-direction: column; gap: var(--sp-2); max-height: 46vh; overflow-y: auto; padding-right: 2px; margin-bottom: 14px; }
 .cat-item {
-  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
-  padding: 9px 11px; border: 1px solid var(--hairline); border-radius: 10px;
-  background: var(--surface); cursor: pointer; transition: .15s;
+  display: flex; align-items: center; gap: var(--sp-3); width: 100%; text-align: left;
+  padding: 9px 11px; border: 1px solid var(--hairline); border-radius: var(--r-md);
+  background: var(--surface); cursor: pointer; transition: var(--motion-fast) var(--ease-out);
 }
 .cat-item:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
 .cat-item.done { opacity: .78; }
-.ci-ic { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 8px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.ci-ic { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--r-md); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
 .ci-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.ci-main b { font-size: 13px; color: var(--ink); }
-.ci-main small { font-size: 11.5px; color: var(--steel); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ci-meta { flex: none; font-size: 11px; color: var(--stone); }
+.ci-main b { font-size: var(--fs-md); color: var(--ink); }
+.ci-main small { font-size: var(--fs-sm); color: var(--steel); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ci-meta { flex: none; font-size: var(--fs-xs); color: var(--stone); }
 .ci-meta em { font-style: normal; }
 .ci-done { color: var(--accent); font-weight: 600; }
 </style>

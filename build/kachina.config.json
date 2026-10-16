@@ -70,7 +70,7 @@
   "programFilesPath": "FuFumidi",
   "title": "FuFumidi",
   "description": "离线 MIDI 播放 / 编辑 / 可视化 / 分析 / 乐谱 / 转录（音频转 MIDI）一体工具",
-  "windowTitle": "FuFumidi 更新程序",
+  "windowTitle": "FuFumidi 安装 / 更新",
   "ignoreFolderPath": [
     "${INSTALL_PATH}/resources/python",
     "${INSTALL_PATH}/resources/models",

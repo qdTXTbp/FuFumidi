@@ -47,6 +47,9 @@ class DsDurConfig:
     phonemes: str
     languages: Optional[str] = None
     speakers: Optional[List[str]] = None
+    #: 说话人嵌入维度（上游 `DiffSingerConfig.cs:32` 默认 256）—— `.emb` 按它读，
+    #: 读错长度就把整个嵌入读歪了，所以必须来自 dsconfig 而不是硬编码。
+    hidden_size: int = 256
     use_lang_id: bool = False
     hop_size: int = 512
     sample_rate: int = 44100
@@ -98,6 +101,9 @@ class DsAcousticConfig:
     # --- 其它
     languages: Optional[str] = None
     speakers: Optional[List[str]] = None
+    #: 说话人嵌入维度（上游 `DiffSingerConfig.cs:32` 默认 256）—— `.emb` 按它读，
+    #: 读错长度就把整个嵌入读歪了，所以必须来自 dsconfig 而不是硬编码。
+    hidden_size: int = 256
     raw: Dict[str, Any] = field(default_factory=dict)
 
     @property

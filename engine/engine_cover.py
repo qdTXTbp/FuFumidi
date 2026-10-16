@@ -185,6 +185,14 @@ def cuda_free_gb():
     """(可用?, 说明)：GPU 被别的进程占满时，不要让分离/渲染死在那儿（实测会静默退出）。"""
     try:
         import torch
+        # ★ DirectML（AMD/Intel）没有 cuda 命名空间，旧判据会把整条翻唱渲染降到 CPU。
+        #   DirectML 下查不到空闲显存 → 按"可用"处理，让 GPU 先跑（真爆显存会在渲染里报错）。
+        try:
+            from engine_gpu import torch_device as _td, directml_usable as _dok
+            if _td().startswith("privateuseone"):
+                return (_dok(), 'DirectML（显存无法查询，已按可用处理）')
+        except Exception:
+            pass
         if not torch.cuda.is_available():
             return False, 'CUDA 不可用'
         free, _total = torch.cuda.mem_get_info()
@@ -305,12 +313,12 @@ def do_notes(vocal_wav, outdir, lyrics, lang='zh', bpm=0.0, inst_wav='', log=pri
 
 
 def do_render(notes_path, outdir, voicebank, bpm, steps=32, device='cuda', chunk=140,
-              log=print, resume=True):
+              log=print, resume=True, vocoder=''):
     """音符 → 干声（长曲分段：引擎在音符极多时一次渲染容易长时间没有输出）。
 
     ★ 分段结果**可复用**：每段旁边写一份 `chunkN.meta.json`（声库指纹 + BPM + 步数 +
-      该段音符的 hash）。签名一致就跳过 —— 于是「上次渲染到一半断了」再跑一次不是从头再来，
-      改了歌词 / 换了声库才重算。
+      **声码器** + 该段音符的 hash）。签名一致就跳过 —— 于是「上次渲染到一半断了」再跑一次
+      不是从头再来，改了歌词 / 换了声库 / 换了声码器才重算。
     """
     notes = json.load(open(notes_path, encoding='utf-8'))
     if not notes:
@@ -318,8 +326,11 @@ def do_render(notes_path, outdir, voicebank, bpm, steps=32, device='cuda', chunk
     rdir = os.path.join(outdir, 'render')
     os.makedirs(rdir, exist_ok=True)
     groups = [notes[i:i + chunk] for i in range(0, len(notes), chunk)]
+    # ★ 声码器覆盖必须进这份签名：不进的话换了声码器会直接复用上次渲好的 chunkN.wav，
+    #   用户看到的就是「换了没反应」（同样的坑在乐句缓存那里也修了一次）。
     base = {'voicebank': _vb_sig(voicebank), 'bpm': round(float(bpm), 4),
-            'steps': int(steps), 'chunk': int(chunk), 'total': len(notes)}
+            'steps': int(steps), 'chunk': int(chunk), 'total': len(notes),
+            'vocoder': str(vocoder or '')}
     outs = []
     reused = 0
     log('渲染：%d 个音符分 %d 段（每段 <= %d）—— 引擎在音符极多时一次性渲染会卡住，分段可绕开'
@@ -341,6 +352,9 @@ def do_render(notes_path, outdir, voicebank, bpm, steps=32, device='cuda', chunk
                '--voicebank', voicebank, '--notes', '@' + part, '--bpm', str(bpm),
                '--language', 'zh', '--steps', str(steps), '--depth', '1.0',
                '--device', device, '--out', wav]
+        # 声码器覆盖：**声库自带 dsvocoder/ 时引擎会忽略它**（见 diffsinger/voicebank.py）
+        if vocoder:
+            cmd += ['--vocoder', str(vocoder)]
         t0 = time.time()
         p = subprocess.run(cmd, cwd=_HERE, capture_output=True, text=True,
                            encoding='utf-8', errors='ignore')
@@ -402,7 +416,8 @@ def gsv_lines(notes, lyrics, bpm, gap=0.7, min_sec=0.5):
 
 
 def do_gsv(notes, lyrics, voc, outdir, name, voice, bpm, device='auto', gsv_root='',
-           gsv_python='', version='', align=False, log=print):
+           gsv_python='', version='', align=False, log=print,
+           top_k=None, top_p=None, temperature=None):
     """用 GPT-SoVITS 音色唱（路线 A+：**逐句拿原唱当参考**重合成）。
 
     ★ 推理必须在**有 torch + GPT-SoVITS 的解释器**里跑（应用自带的 python 没有），
@@ -428,6 +443,11 @@ def do_gsv(notes, lyrics, voc, outdir, name, voice, bpm, device='auto', gsv_root
         cmd += ['--version', version]
     if align:
         cmd.append('--align')
+    # ★ 采样参数：**只在用户显式覆盖时才发**（默认不传 = 用 GPT-SoVITS 自己的默认值）。
+    #   这里少一跳就会出现「滑块拖了没反应」—— 本仓库同类坑已踩过三次。
+    for _flag, _val in (('--top-k', top_k), ('--top-p', top_p), ('--temperature', temperature)):
+        if _val is not None:
+            cmd += [_flag, str(_val)]
     env = dict(os.environ)
     # ★ GPT-SoVITS 解释器必须跑在**干净**的 Python 环境里：应用侧会把 PYTHONPATH 指向
     #   GPU 增强包的 site-packages（cp311），被 conda 环境继承后 numpy 的 C 扩展就加载失败
@@ -569,6 +589,8 @@ def main():
         s.add_argument('--bpm', type=float, default=0.0)
         s.add_argument('--steps', type=int, default=32)
         s.add_argument('--device', default='cuda')
+        s.add_argument('--vocoder', default='',
+                        help='通用声码器 onnx 或目录（声库自带 dsvocoder 时忽略；会进分段/乐句缓存键）')
         s.add_argument('--chunk', type=int, default=140)
         s.add_argument('--sep-model', default='')
         s.add_argument('--sep-config', default='')
@@ -589,6 +611,10 @@ def main():
         s.add_argument('--gsv-align', dest='gsv_align', action='store_true',
                        help='GPT-SoVITS 通道做 WORLD F0 校正（默认关：它是电流声的主要来源）')
         s.set_defaults(gsv_align=False)
+        # 采样三参数：默认不传（不替上游定默认）。范围与上游 WebUI 一致。
+        s.add_argument('--gsv-top-k', dest='gsv_top_k', type=int, default=None)
+        s.add_argument('--gsv-top-p', dest='gsv_top_p', type=float, default=None)
+        s.add_argument('--gsv-temperature', dest='gsv_temperature', type=float, default=None)
     a = ap.parse_args()
     outdir = os.path.abspath(a.outdir)
     os.makedirs(outdir, exist_ok=True)
@@ -667,7 +693,9 @@ def main():
                 dry, gres = do_gsv(notes, lyr, voc, outdir, name, a.gsv_voice, bpm,
                                    device=a.device, gsv_root=a.gsv_root,
                                    gsv_python=a.gsv_python, version=a.gsv_version,
-                                   align=a.gsv_align)
+                                   align=a.gsv_align,
+                                   top_k=a.gsv_top_k, top_p=a.gsv_top_p,
+                                   temperature=a.gsv_temperature)
                 drys = [dry]
                 info.update({'singer': 'GPT-SoVITS/' + os.path.basename(a.gsv_voice),
                              'gsv_lines': gres.get('count'), 'gsv_reused': gres.get('reused'),
@@ -682,7 +710,7 @@ def main():
                     pass
             else:
                 drys = do_render(notes_path, outdir, a.voicebank, bpm, a.steps, a.device, a.chunk,
-                                 resume=a.resume)
+                                 resume=a.resume, vocoder=a.vocoder)
                 info['singer'] = 'DiffSinger/' + os.path.basename(a.voicebank)
             save_state(outdir, {'stage': 'render', 'notes': len(notes), 'bpm': round(bpm, 4),
                                 'dry': drys, 'info': info})

@@ -171,7 +171,7 @@ class ClassicRenderer(IRenderer):
                     # 自带 Worldline 直接读原音 → 不需要解码到临时文件
                     is_worldline = isinstance(item.resampler, WorldlineResampler)
                     if not is_worldline:
-                        classic_host.copy_source_temp(item.input_file, item.input_temp)
+                        classic_host.copy_source_temp(item.input_file, item.input_temp, item.resampler)
                     if not item.phone.direct:
                         with get_cache_lock(item.output_file):
                             item.resampler.do_resampler_returns_file(item, logger)
@@ -181,7 +181,7 @@ class ClassicRenderer(IRenderer):
                                 % (item.resampler, item.phone.phoneme,
                                    _bar_beat(item.phrase.position + item.phone.position)))
                     if not is_worldline:
-                        classic_host.copy_back_meta_files(item.input_file, item.input_temp)
+                        classic_host.copy_back_meta_files(item.input_file, item.input_temp, item.resampler)
                 # ★ 在 if 之外：取消/缓存命中也照样上报一步
                 _complete(progress, 1, 'Track %d: %s "%s"'
                           % (track_no + 1, item.resampler, item.phone.phoneme))
@@ -220,11 +220,11 @@ class ClassicRenderer(IRenderer):
                     logger.exception('Failed to render: failed to open %s', wav_path)
             if result.samples is None:
                 for item in items:
-                    classic_host.copy_source_temp(item.input_file, item.input_temp)
+                    classic_host.copy_source_temp(item.input_file, item.input_temp, item.resampler)
                 wavtool = classic_host.get_wavtool(phrase.wavtool)
                 result.samples = wavtool.concatenate(items, wav_path, cancellation)
                 for item in items:
-                    classic_host.copy_back_meta_files(item.input_file, item.input_temp)
+                    classic_host.copy_back_meta_files(item.input_file, item.input_temp, item.resampler)
             _complete(progress, len(phrase.phones), info)
             if result.samples is not None:
                 apply_dynamics(phrase, result)

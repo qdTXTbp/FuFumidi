@@ -49,6 +49,10 @@ from .unix_wavtool import UnixWavtool
 from .voicebank_loader import cs_get_extension
 from .worldline_resampler import WorldlineResampler
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def _host():
     """取当前宿主（`PathManager.Inst` 的替身）。函数内导入避免包初始化成环。"""
@@ -128,13 +132,24 @@ class ToolsManager:
             self._resamplers.clear()
             self._resamplers_map.clear()
             self._resamplers.append(WorldlineResampler())
+            # ★ 上游 2913eeb9「Skip external resamplers named like a built-in one」
+            #   （2026-10-13 移植）：**内置名要先记下来**。外部文件若与内置同名，
+            #   下面 `str(resampler) -> resampler` 建映射表时会**顶掉内置的那个** ——
+            #   于是「设为内置」的轨道实际跑的是外部二进制，而且**不报错**，只是结果不对。
+            #   上游是在 macOS 上被 `Resamplers/hifisampler`（无扩展名）咬到的；
+            #   Windows 上 `hifisampler.exe` / `worldline.exe` 去掉扩展名同样会撞。
+            builtin_names = {str(r) for r in self._resamplers}
             base_path = getattr(_host(), 'resamplers_path', '') or ''
             try:
                 os.makedirs(base_path, exist_ok=True)
                 for file in _enumerate_files(base_path):
                     driver = self.load_resampler(file, base_path)
-                    if driver is not None:
-                        self._resamplers.append(driver)
+                    if driver is None:
+                        continue
+                    if str(driver) in builtin_names:
+                        logger.warning('跳过与内置同名的 resampler：%s', file)
+                        continue
+                    self._resamplers.append(driver)
             except Exception:                              # noqa: BLE001
                 # ★ 照搬：连内置的 WorldlineResampler 一起清掉（见 docstring 第 2 条）
                 self._resamplers.clear()

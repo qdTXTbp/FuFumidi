@@ -37,8 +37,9 @@ def transcribe_transkun(audio_path, output_midi, params=None, log_cb=None,
         try:
             from engine_gpu import torch_device as _td
             _d = _td()
-            # transkun CLI 只认 cuda/cpu（DirectML 设备名不适用）
-            device = "cuda" if _d == "cuda" else "cpu"
+            # transkun CLI 认 cuda / xpu / cpu（DirectML 的 privateuseone 设备名它不认）。
+            # xpu 是 Intel 专供包（torch+xpu）；transkun 内部走 torch，所以能吃。
+            device = _d if _d in ("cuda", "xpu") else "cpu"
         except Exception:
             device = "cpu"
     weight = str(params.get("weight") or "").strip()

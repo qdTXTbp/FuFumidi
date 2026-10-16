@@ -1,0 +1,13 @@
+{
+  "name": "fufumidi-feedback-service",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "FuFumidi 问题反馈的上传端点（Netlify Functions）：md 写 GitHub、附件进 Release 资产、可选建 Issue",
+  "scripts": {
+    "test": "node lib/feedback-core.test.mjs"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^11.1.0"
+  }
+}

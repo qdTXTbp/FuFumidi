@@ -15,6 +15,7 @@
 //   updateNote(id, patch) / moveNotes(ids, dBeat, dPitch) / setNotesDuration(ids, durBeat)
 //   removeNotes(ids) / setSelection(ids, primary) / pushUndo() / undo() / redo()
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { fitMenu } from '../../core/menu.js';
 import Icon from '../Icon.vue';
 import { t } from '../../core/i18n.js';
 import { derivePhonemes } from '../../core/phoneme.js';
@@ -98,6 +99,24 @@ const wrap = ref(null);
 const rootEl = ref(null);
 const ctxOpen = ref(false);
 const ctxX = ref(0), ctxY = ref(0), ctxOnNote = ref(false);
+/* ★ 菜单落点：量真实尺寸后夹在卷帘范围内（旧版裸坐标 —— 靠下右键时菜单伸出面板，
+   底部项点不到）。见 core/menu.js；菜单本身超出时由 CSS max-height + overflow 兜底。 */
+const ctxEl = ref(null);
+const ctxPos = ref(null);
+async function placeCtx() {
+  await nextTick();
+  const root = rootEl.value;
+  const el = ctxEl.value;
+  if (!root || !el) return;
+  const r = root.getBoundingClientRect();
+  const p = fitMenu(el, ctxX.value, ctxY.value, { left: 0, top: 0, width: r.width, height: r.height });
+  if (p) ctxPos.value = p;
+}
+function ctxStyle() {
+  const p = ctxPos.value;
+  const at = p || { left: ctxX.value, top: ctxY.value };
+  return { left: at.left + 'px', top: at.top + 'px', visibility: p ? 'visible' : 'hidden' };
+}
 const ctxNoteId = ref(null);
 const cursor = ref('default');
 let ctx = null;
@@ -202,7 +221,7 @@ function perBarFor(v) { return Math.max(1, Math.round(Number(v)) || 4); }
 
 /* ---------------- 绘制 ---------------- */
 function V(name) {
-  try { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || '#888'; } catch (e) { return '#888'; }
+  try { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || '#888'; } catch (e) { return '#888'; }   // ui-tokens-allow: V() 的颜色兜底
 }
 function roundRect(g, x, y, w, h, r) {
   const rr = Math.min(r, w / 2, h / 2);
@@ -654,9 +673,11 @@ function onCtx(e) {
   // 菜单是 .pr 的直接 absolute 子元素，坐标必须相对 .pr，而不是滚动容器 wrap
   const r = (rootEl.value && rootEl.value.getBoundingClientRect) ? rootEl.value.getBoundingClientRect() : wrap.value.getBoundingClientRect();
   ctxX.value = e.clientX - r.left; ctxY.value = e.clientY - r.top;
+  ctxPos.value = null;
   ctxOpen.value = true;
+  placeCtx();
 }
-function closeCtx() { ctxOpen.value = false; }
+function closeCtx() { ctxOpen.value = false; ctxPos.value = null; }
 
 /* ---- 手写笔 / 触控（M9 收尾）----
    触摸屏没有右键；画布又是 touch-action:none（否则手指一拖就滚页面），
@@ -1553,7 +1574,7 @@ defineExpose({
 
     <!-- 右键菜单 -->
     <Transition name="ctxmenu">
-      <div v-if="ctxOpen" class="pr-ctx" :style="{ left: ctxX + 'px', top: ctxY + 'px' }" @pointerdown.stop @contextmenu.prevent>
+      <div v-if="ctxOpen" ref="ctxEl" class="pr-ctx" :style="ctxStyle()" @pointerdown.stop @contextmenu.prevent>
         <button class="pr-ctx-i" @click="api.undo(); closeCtx()"><Icon name="undo" :size="13" /> {{ t('撤销') }}</button>
         <button class="pr-ctx-i" @click="api.redo(); closeCtx()"><Icon name="redo" :size="13" /> {{ t('重做') }}</button>
         <div class="pr-ctx-sep"></div>
@@ -1573,23 +1594,23 @@ defineExpose({
 </template>
 
 <style scoped>
-.pr { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface); }
-.pr-bar { display: flex; align-items: center; gap: 10px; padding: 6px 10px; flex-wrap: wrap; border-bottom: 1px solid var(--border); background: var(--surface-muted); }
-.pr-tools { display: inline-flex; gap: 4px; }
-.pr-tool { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 7px; background: transparent; color: var(--stone); font-size: 12px; cursor: pointer; }
+.pr { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; background: var(--surface); }
+.pr-bar { display: flex; align-items: center; gap: var(--sp-3); padding: 6px 10px; flex-wrap: wrap; border-bottom: 1px solid var(--border); background: var(--surface-muted); }
+.pr-tools { display: inline-flex; gap: var(--sp-1); }
+.pr-tool { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; color: var(--stone); font-size: var(--fs-sm); cursor: pointer; }
 .pr-tool:hover { background: var(--surface); color: var(--ink); }
 .pr-tool.on { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-text); }
-.pr-ad { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--stone); }
-.pr-ad select { height: 24px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 11.5px; }
+.pr-ad { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-sm); color: var(--stone); }
+.pr-ad select { height: 24px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: var(--ink); font-size: var(--fs-sm); }
 .pr-bar-pitch { padding-top: 0; border-top: 0; }
 .pr-zoom { display: inline-flex; gap: 3px; }
-.pr-mini { width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--stone); cursor: pointer; line-height: 1; }
+.pr-mini { width: 28px; height: 28px; border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; color: var(--stone); cursor: pointer; line-height: 1; }
 .pr-mini:hover { background: var(--surface); color: var(--ink); }
-.pr-hint { margin-left: auto; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pr-hint-btn { margin-left: auto; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--border);
-  background: transparent; color: var(--text-muted); font-size: 11px; line-height: 1; cursor: help; flex: none; }
+.pr-hint { margin-left: auto; font-size: var(--fs-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pr-hint-btn { margin-left: auto; width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border);   /* 命中区下限 28px（原 20px） */
+  background: transparent; color: var(--text-muted); font-size: var(--fs-xs); line-height: 1; cursor: help; flex: none; }
 .pr-hint-btn:hover { color: var(--ink); border-color: var(--brand); }
-.pr-mini-wide { width: auto; padding: 0 6px; font-size: 11px; }
+.pr-mini-wide { width: auto; padding: 0 6px; font-size: var(--fs-xs); }
 .pr-scroll { position: relative; overflow: auto; background: var(--surface); }
 /* fill：卷帘自己撑满父容器，滚动区吃掉工具栏之外的全部高度（行高由 JS 自适应） */
 .pr.pr-fill { height: 100%; min-height: 0; }
@@ -1601,12 +1622,17 @@ defineExpose({
 /* 音素条带：贴住音符区底部，横向随同一滚动容器对齐 */
 .pr-ph-canvas { border-top: 1px solid var(--border); touch-action: none; }
 .pr-auto-canvas { touch-action: none; }
-.pr-ctx { position: absolute; z-index: 40; min-width: 132px; padding: 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); box-shadow: 0 8px 24px rgba(0,0,0,.28); }
-.pr-ctx-i { display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font-size: 12.5px; text-align: left; cursor: pointer; }
+.pr-ctx { position: absolute; z-index: 40; min-width: 132px; padding: 4px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); box-shadow: 0 8px 24px rgba(0,0,0,.28); max-height: calc(100% - 8px); overflow-y: auto; overscroll-behavior: contain; }
+.pr-ctx-i { display: flex; align-items: center; gap: var(--sp-2); width: 100%; padding: 6px 9px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--ink); font-size: var(--fs-md); text-align: left; cursor: pointer; }
 .pr-ctx-i:hover:not(:disabled) { background: var(--surface-muted); }
 .pr-ctx-i:disabled { opacity: .4; cursor: not-allowed; }
-.pr-ctx-k { margin-left: auto; color: var(--text-muted); font-size: 10.5px; font-family: var(--mono); }
+.pr-ctx-k { margin-left: auto; color: var(--text-muted); font-size: var(--fs-xs); font-family: var(--mono); }
 .pr-ctx-sep { height: 1px; margin: 4px 2px; background: var(--border); }
-.ctxmenu-enter-active, .ctxmenu-leave-active { transition: opacity .1s, transform .1s; }
+.ctxmenu-enter-active, .ctxmenu-leave-active { transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
 .ctxmenu-enter-from, .ctxmenu-leave-to { opacity: 0; transform: scale(.96); }
+
+/* 命中区下限（M4 实测）：这四个是本组件里的工具按钮，实测 25~27px 高（.pr-hint-btn 只有 20px）。
+   注意：父组件 ViewSing 的 scoped 规则**够不到子组件内部元素**（作用域 id 不同），
+   所以这类下限必须写在本组件自己的样式块里。 */
+.pr-tool, .pr-track { min-height: 28px; }
 </style>

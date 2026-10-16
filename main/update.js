@@ -5,6 +5,7 @@
 const Paths = require('./paths');
 const DS = require('./download-source');
 const createFastDownload = require('./fast-download');
+const ST = require('./update-speedtest');
 
 // ── 更新通道 ────────────────────────────────────────────────────────────────
 // stable：用 GitHub 的 releases/latest 锚点。该端点会自动跳过 prerelease，
@@ -20,10 +21,10 @@ const UA = 'FuFumidi/3.1.16';
 // 镜像前缀（空串 = 官方直连）。id 与 build/kachina.config.json 的 source 一一对应，
 // 测试通道的 id 加 -beta 后缀（ghfast-beta …）。
 const UPDATE_MIRRORS = [
-  { id: 'ghfast', prefix: 'https://ghfast.top/' },
-  { id: 'ghproxy', prefix: 'https://gh-proxy.com/' },
-  { id: 'ghproxy-net', prefix: 'https://ghproxy.net/' },
-  { id: 'github', prefix: '' },
+  { id: 'ghfast', prefix: 'https://ghfast.top/', label: 'ghfast.top', kind: 'mirror' },
+  { id: 'ghproxy', prefix: 'https://gh-proxy.com/', label: 'gh-proxy.com', kind: 'mirror' },
+  { id: 'ghproxy-net', prefix: 'https://ghproxy.net/', label: 'ghproxy.net', kind: 'mirror' },
+  { id: 'github', prefix: '', label: 'GitHub 官方', kind: 'github' },
 ];
 // 更新包下载地址 / 版本查询接口，按通道取值
 const CHANNEL_ASSET_PATH = {
@@ -50,15 +51,21 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
   function pref() {
     try { return DS.normSource(readSettings && readSettings() && readSettings().download_source); } catch (e) { return 'auto'; }
   }
+  // 用户测速后手动选定的线路（持久化在设置里）。它只是**提到最前**、不是"锁定"：
+  // 不可达时后面的回退链照旧生效（这是安全属性，别改成硬绑定）。
+  function preferred() {
+    try { return String((readSettings && readSettings() && readSettings().update_preferred_source) || ''); } catch (e) { return ''; }
+  }
   // 某个通道下、按偏好排序的更新源（CNB 国内 / GitHub 镜像 · 官方）
   function orderedUpdateSources(channel) {
     const ch = normChannel(channel);
-    const cnb = { id: sourceIdOf('cnb', ch), uri: ch === 'beta' ? DS.cnbTagUrl('beta', 'FuFumidi.Install.exe') : DS.cnbLatestUrl('FuFumidi.Install.exe') };
-    const gh = UPDATE_MIRRORS.map(m => ({ id: sourceIdOf(m.id, ch), uri: m.prefix + GH_WEB + CHANNEL_ASSET_PATH[ch] }));
+    const cnb = { id: sourceIdOf('cnb', ch), uri: ch === 'beta' ? DS.cnbTagUrl('beta', 'FuFumidi.Install.exe') : DS.cnbLatestUrl('FuFumidi.Install.exe'), label: 'CNB 国内源', kind: 'cnb' };
+    const gh = UPDATE_MIRRORS.map(m => ({ id: sourceIdOf(m.id, ch), uri: m.prefix + GH_WEB + CHANNEL_ASSET_PATH[ch], label: m.label, kind: m.kind }));
     const github = gh[gh.length - 1];            // 官方直连（UPDATE_MIRRORS 末位 prefix 为空）
     const mirrors = gh.slice(0, gh.length - 1);  // 国内加速镜像
     // 国内优先：[CNB, 镜像…, GitHub 官方]；全球优先：[GitHub 官方, 镜像…, CNB 兜底]
-    return DS.preferCnb(pref()) ? [cnb, ...gh] : [github, ...mirrors, cnb];
+    const order = DS.preferCnb(pref()) ? [cnb, ...gh] : [github, ...mirrors, cnb];
+    return ST.orderCandidates(order, preferred());
   }
   // 从 CNB 的 latest.yml 读最新版本（公开地址，无需认证），合成 GitHub release 同构对象
   async function fetchCnbRelease(channel) {
@@ -204,6 +211,83 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
       return { ok: false, error: String((e && e.message) || e) };
     }
   }
+
+  // ── 线路测速（BetterGI / FufuLauncher 式：列表 + 延迟 + 速率）─────────────
+  // 每条线路只取 SPEEDTEST_BYTES 就断开，并在取够后主动 cancel ——
+  // 测速不该把 150 MB 的安装包下完（这是与被测工具一致的做法）。
+  async function probeSource(s) {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), ST.SPEEDTEST_TIMEOUT_MS);
+    const t0 = Date.now();
+    try {
+      const r = await net.fetch(s.uri, {
+        headers: { 'user-agent': UA, range: 'bytes=0-' + (ST.SPEEDTEST_BYTES - 1) },
+        signal: ctrl.signal,
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      // 首字节时间 = 延迟。它和"速率"是两件事：延迟高、带宽大的线路，
+      // 下小文件反而慢 —— 所以两个数都要显示。
+      const latencyMs = Date.now() - t0;
+      let bytes = 0;
+      let head = null;
+      if (r.body && typeof r.body.getReader === 'function') {
+        const reader = r.body.getReader();
+        try {
+          while (bytes < ST.SPEEDTEST_BYTES) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            if (chunk.value && chunk.value.length) {
+              if (!head) head = chunk.value;
+              bytes += chunk.value.length;
+            }
+          }
+        } finally { try { await reader.cancel(); } catch (e) {} }
+      }
+      // ★ 拿到的必须真是安装包：安装包是 PE，头两个字节必然是 "MZ"。
+      //   镜像返回 200 但塞了 HTML 拦截页/改写内容时，只看 HTTP 状态会把它判成"最快"，
+      //   用户选了才开始下载失败。（FufuLauncher 用 ProbeMd5 校验镜像，同一思路。）
+      if (head && head.length >= 2 && !(head[0] === 0x4d && head[1] === 0x5a)) {
+        throw new Error('返回的不是安装包（可能被镜像拦截或改写）');
+      }
+      const elapsedMs = Date.now() - t0;
+      return Object.assign({}, s, {
+        ok: true, latencyMs, bytes, elapsedMs,
+        speedMBps: ST.computeSpeedMBps(bytes, latencyMs, elapsedMs),
+      });
+    } catch (e) {
+      return Object.assign({}, s, {
+        ok: false, error: (e && e.message) || String(e),
+        latencyMs: null, speedMBps: 0, bytes: 0,
+      });
+    } finally { clearTimeout(to); }
+  }
+
+  ipcMain.handle('update:sources', async (_e, channel) => orderedUpdateSources(channel)
+    .map(s => ({ id: s.id, label: s.label, kind: s.kind, channel: normChannel(channel) })));
+
+  ipcMain.handle('update:speedtest', async (evt, channel) => {
+    const list = orderedUpdateSources(channel);
+    const out = [];
+    let next = 0;
+    // 并发 3：再多会互相抢带宽，测出来的速率就不准了；再少则整张表等太久。
+    const worker = async () => {
+      while (next < list.length) {
+        const s = list[next++];
+        const row = await probeSource(s);
+        out.push(row);
+        try { if (!evt.sender.isDestroyed()) evt.sender.send('update:speedtest:progress', row); } catch (e) {}
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, list.length) }, worker));
+    return ST.summarize(out);
+  });
+
+  // 把用户选定的线路提到最前（并清掉"最近成功的源"，否则旧选择会压过新选择）
+  ipcMain.handle('update:setPreferredSource', async (_e, id) => {
+    const v = String(id || '');
+    lastGoodSource = v || null;
+    return v;
+  });
 
   ipcMain.handle('update:list', async () => {
     try {

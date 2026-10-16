@@ -22,6 +22,10 @@ contextBridge.exposeInMainWorld('fuBridge', {
     ipcRenderer.on('open-file', w);
     return () => ipcRenderer.removeListener('open-file', w);
   },
+  // 取「待打开的文件」：消除冷启动时主进程 send 早于渲染进程订阅的竞态
+  takePendingOpenFile: () => ipcRenderer.invoke('open-file:take'),
+  // 沉浸模式用：窗口真全屏（原生标题栏只此一法可收；退出时传 false 还原）
+  setFullScreen: (on) => ipcRenderer.invoke('win:setFullScreen', !!on),
   // 翻唱工作流（一首歌 → 分离 → 扒谱 → 合成 → 混音 → 成品）
   coverEnv: () => ipcRenderer.invoke('cover:env'),
   coverSingers: () => ipcRenderer.invoke('cover:singers'),
@@ -40,6 +44,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   // 转录引擎
   convert: (cfg) => ipcRenderer.invoke('engine:convert', cfg),
   cancel: (id) => ipcRenderer.invoke('engine:cancel', id),
+  setTranscribePause: (on) => ipcRenderer.invoke('engine:set-pause', !!on),
   onEngineLog: (cb) => {
     const w = (_e, p) => cb(p);
     ipcRenderer.on('engine:log', w);
@@ -91,11 +96,30 @@ contextBridge.exposeInMainWorld('fuBridge', {
     openDir: () => ipcRenderer.invoke('sf-workshop:openDir'),
     onProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('sf-workshop:progress', w); return () => ipcRenderer.removeListener('sf-workshop:progress', w); },
   },
+  /* 用户元数据：按 "<kind>:<id>" 存用户改过的名字/作者/来源/标签/分类/排序/顶置。
+     kind ∈ model | utau | ds | sf | voice。落盘在数据根（整包更新不会碰）。
+     为什么是独立表：资源中心四页的数据每次刷新都会重算，用户改的东西写进那些结构里会丢。 */
+  usermeta: {
+    list: () => ipcRenderer.invoke('usermeta:list'),
+    set: (kind, id, patch) => ipcRenderer.invoke('usermeta:set', kind, id, patch),
+    remove: (kind, id) => ipcRenderer.invoke('usermeta:remove', kind, id),
+    reorder: (kind, ids) => ipcRenderer.invoke('usermeta:reorder', kind, ids),
+    pin: (kind, id, pinned) => ipcRenderer.invoke('usermeta:pin', kind, id, pinned),
+  },
   pickMusicXML: () => ipcRenderer.invoke('dialog:pickMusicXML'),
   exportScorePdf: () => ipcRenderer.invoke('score:exportPdf'),
   transcodeVideo: (data, audio, opts) => ipcRenderer.invoke('video:transcode', { data, audio, ...(opts || {}) }),
+  /* 流式导出：渲染进程用 WebCodecs 逐帧编码，边产边写临时文件，最后一次性封装成 MP4。
+     为什么要流式：① 长片不再把整段视频堆在内存里（10 分钟 4K ≈ 1.2 GB）；② 编码产物是
+     Annex B 裸 H.264，主进程用 -c:v copy 直接封装，不再跑一遍 libx264 重编码。
+     begin → 多次 write → end（或 abort）。 */
+  videoExportBegin: (opts) => ipcRenderer.invoke('video:exportBegin', opts || {}),
+  videoExportWrite: (id, data) => ipcRenderer.invoke('video:exportWrite', { id, data }),
+  videoExportAbort: (id) => ipcRenderer.invoke('video:exportAbort', { id }),
+  videoExportEnd: (opts) => ipcRenderer.invoke('video:exportEnd', opts || {}),
   // 「变谱」：乐谱（MusicXML/MXL）→ MIDI（返回 base64 字节 + 统计信息）
   scoreToMidi: (cfg) => ipcRenderer.invoke('score:toMidi', cfg || {}),
+  scoreCancel: () => ipcRenderer.invoke('score:cancel'),
   onScoreProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('score:progress', w); return () => ipcRenderer.removeListener('score:progress', w); },
   // 识谱增强引擎（Audiveris）安装 / 检测
   omrEngine: {
@@ -103,11 +127,35 @@ contextBridge.exposeInMainWorld('fuBridge', {
     install: () => ipcRenderer.invoke('omr:install'),
     remove: () => ipcRenderer.invoke('omr:remove'),
     openDir: () => ipcRenderer.invoke('omr:openDir'),
+    // OCR 语言包（Tesseract traineddata）：没有它 Audiveris 的 TEXTS 步整段跳过，
+    // 速度记号 / 乐器名 / 和弦名都读不出来。
+    langStatus: () => ipcRenderer.invoke('omr:langStatus'),
+    langInstall: (codes) => ipcRenderer.invoke('omr:langInstall', codes),
+    langRemove: (code) => ipcRenderer.invoke('omr:langRemove', code),
+    // homr（AI 识谱）：用户自行安装的第二个识别引擎，装在数据根下的**独立 venv** 里
+    // （homr 要 numpy>=2.4，应用自带的运行时是 1.26 —— 不隔离就会把引擎拆了）。
+    homrStatus: () => ipcRenderer.invoke('omr:homrStatus'),
+    homrInstall: () => ipcRenderer.invoke('omr:homrInstall'),
+    homrRemove: () => ipcRenderer.invoke('omr:homrRemove'),
+    // 超分辨率（waifu2x-ncnn-vulkan）：M3-2，低清扫描件专用；同样是**用户自行安装**
+    srStatus: () => ipcRenderer.invoke('omr:srStatus'),
+    srInstall: () => ipcRenderer.invoke('omr:srInstall'),
+    srRemove: () => ipcRenderer.invoke('omr:srRemove'),
+    // 音频处理模型的配置自愈：配置是**下载模型时**从上游取的（不内置），老安装可用它补一次
+    modelEnsureConfig: (id) => ipcRenderer.invoke('model:ensureConfig', id),
     onProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('omr:progress', w); return () => ipcRenderer.removeListener('omr:progress', w); },
   },
   modelList: () => ipcRenderer.invoke('model:list'),
   depCheck: () => ipcRenderer.invoke('dep:check'),
   diagExport: () => ipcRenderer.invoke('diag:export'),
+  diagHealth: () => ipcRenderer.invoke('diag:health'),
+  // 问题反馈上传：预览（看将要上传什么）/ 保存本地 / 上传到反馈仓库 / 网页兜底
+  feedback: {
+    preview: (payload) => ipcRenderer.invoke('feedback:preview', payload),
+    saveLocal: (payload) => ipcRenderer.invoke('feedback:saveLocal', payload),
+    submit: (payload) => ipcRenderer.invoke('feedback:submit', payload),
+    webFallback: (payload) => ipcRenderer.invoke('feedback:webFallback', payload),
+  },
   exportScorePngZip: (opts) => ipcRenderer.invoke('score:exportPngZip', opts),
 
   updateCheck: (channel) => ipcRenderer.invoke('update:check', channel),
@@ -129,6 +177,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   hasMidi: (p) => ipcRenderer.invoke('library:hasMidi', p),
   checkMidi: (items) => ipcRenderer.invoke('library:checkMidi', items),
   deleteMidi: (p) => ipcRenderer.invoke('library:deleteMidi', p),
+  renameMidi: (p, name) => ipcRenderer.invoke('library:renameMidi', p, name),
   revealMidi: (p) => ipcRenderer.invoke('library:reveal', p),
   midiStats: () => ipcRenderer.invoke('library:stats'),
   verifyMidi: () => ipcRenderer.invoke('library:verify'),
@@ -146,6 +195,11 @@ contextBridge.exposeInMainWorld('fuBridge', {
   updateDownload: (url) => ipcRenderer.invoke('update:download', url),
   updateOpen: (p) => ipcRenderer.invoke('update:open', p),
   onUpdateProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('update:progress', w); return () => ipcRenderer.removeListener('update:progress', w); },
+  // 线路测速（列表 / 逐个结果流式回传 / 记下首选线路）
+  updateSources: (channel) => ipcRenderer.invoke('update:sources', channel),
+  updateSpeedtest: (channel) => ipcRenderer.invoke('update:speedtest', channel),
+  updateSetPreferredSource: (id) => ipcRenderer.invoke('update:setPreferredSource', id),
+  onUpdateSpeedtest: (cb) => { const w = (_e, row) => cb(row); ipcRenderer.on('update:speedtest:progress', w); return () => ipcRenderer.removeListener('update:speedtest:progress', w); },
 
   depInstall: (group) => ipcRenderer.invoke('dep:install', group),
 
@@ -188,6 +242,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   // 已导入声库列表 / 导入现成声库 zip
   utauListVoicebanks: () => ipcRenderer.invoke('utau:listVoicebanks'),
   utauImportVoicebankZip: (directPath) => ipcRenderer.invoke('utau:importVoicebankZip', directPath),
+  modelImportGsvVoice: (directPath) => ipcRenderer.invoke('model:importGsvVoice', directPath),
   // 声库资源中心：可一键安装的开源/免费声库清单、下载安装、取消
   utauVoicebankRegistry: () => ipcRenderer.invoke('utau:voicebankRegistry'),
   utauDownloadVoicebank: (id) => ipcRenderer.invoke('utau:downloadVoicebank', id),
@@ -202,6 +257,16 @@ contextBridge.exposeInMainWorld('fuBridge', {
   diffsingerListVoicebanks: () => ipcRenderer.invoke('diffsinger:listVoicebanks'),
   diffsingerImportVoicebankZip: (directPath) => ipcRenderer.invoke('diffsinger:importVoicebankZip', directPath),
   diffsingerDeleteVoicebank: (dir) => ipcRenderer.invoke('diffsinger:deleteVoicebank', dir),
+  // 文件关联开关（主进程有 settings:fileAssoc，但这里一直漏了暴露 ——
+  // 设置里的开关调用点还带 `if (bridge.fileAssoc)` 保护，于是**点了完全没反应、也不报错**。
+  fileAssoc: (enabled) => ipcRenderer.invoke('settings:fileAssoc', enabled),
+  // UTAU 声库删除（主进程有 utau:deleteVoicebank，同样漏了暴露）；
+  // 这个调用点**没有** guard，所以点「删除声库」会直接抛 TypeError。
+  utauDeleteVoicebank: (dir) => ipcRenderer.invoke('utau:deleteVoicebank', dir),
+  // 顶层 openExternal 别名：有 5 处按顶层调用（SettingsPanel 的 GitHub 反馈/已知问题、
+  // ViewModels、ViewSoundfonts），而它只挂在 update.openExternal 下 ——
+  // 那些调用点都带 `if (bridge.openExternal)` 保护，于是**静默不打开浏览器**。
+  openExternal: (url) => ipcRenderer.invoke('update:openExternal', url),
   diffsingerVoicebankRegistry: () => ipcRenderer.invoke('diffsinger:voicebankRegistry'),
   diffsingerDownloadVoicebank: (id) => ipcRenderer.invoke('diffsinger:downloadVoicebank', id),
   diffsingerCancelVoicebankDownload: (id) => ipcRenderer.invoke('diffsinger:cancelVoicebankDownload', id),
@@ -209,6 +274,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
   diffsingerMsDownload: (cfg) => ipcRenderer.invoke('diffsinger:msDownload', cfg),
   diffsingerMsCancelDownload: (name) => ipcRenderer.invoke('diffsinger:msCancelDownload', name),
   diffsingerInspectVoicebank: (cfg) => ipcRenderer.invoke('diffsinger:inspectVoicebank', cfg),
+  diffsingerVocoders: () => ipcRenderer.invoke('diffsinger:vocoders'),
+  diffsingerSpeakers: () => ipcRenderer.invoke('diffsinger:speakers'),
   diffsingerRender: (cfg) => ipcRenderer.invoke('diffsinger:render', cfg),
   // 统一声库清单（UTAU + DiffSinger 融合）：音频制作侧可切换两类声库
   voicebankUnified: () => ipcRenderer.invoke('voicebank:unified'),
@@ -226,6 +293,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
     lastUsed: (name) => ipcRenderer.invoke('presets:lastUsed', name),
     reorder: (name, delta) => ipcRenderer.invoke('presets:reorder', name, delta),
     reorderTo: (name, index) => ipcRenderer.invoke('presets:reorderTo', name, index),
+    setModelPreset: (key, name) => ipcRenderer.invoke('presets:setModelPreset', key, name),
     restore: () => ipcRenderer.invoke('presets:restore'),
   },
   // 插件系统
@@ -243,6 +311,10 @@ contextBridge.exposeInMainWorld('fuBridge', {
     list: () => ipcRenderer.invoke('update:list'),
     openExternal: (url) => ipcRenderer.invoke('update:openExternal', url),
     launchUpdater: (channel) => ipcRenderer.invoke('update:launchUpdater', channel),
+    sources: (channel) => ipcRenderer.invoke('update:sources', channel),
+    speedtest: (channel) => ipcRenderer.invoke('update:speedtest', channel),
+    setPreferredSource: (id) => ipcRenderer.invoke('update:setPreferredSource', id),
+    onSpeedtest: (cb) => { const w = (_e, row) => cb(row); ipcRenderer.on('update:speedtest:progress', w); return () => ipcRenderer.removeListener('update:speedtest:progress', w); },
   },
   plugins: {
     list: () => ipcRenderer.invoke('plugins:list'),
@@ -311,4 +383,12 @@ contextBridge.exposeInMainWorld('fuBridge', {
     // 分轨导出：伴奏源文件主进程直拷（字节不过 IPC）
     copyAsset: (payload) => ipcRenderer.invoke('project:copyAsset', payload),
   },
+  // ★ 顶层别名：上面这个 copyAsset 挂在 project.* 下，但 singer.ts:1490 是按
+  //   `b.copyAsset(...)`（顶层）调的 —— 拿到 undefined，靠 typeof guard 静默降级成
+  //   「当前版本不支持伴奏复制」。契约所有者是 preload，所以在这里补顶层入口。
+  //   （与 openExternal 同一类：嵌套命名空间 vs 顶层访问的错配。）
+  copyAsset: (payload) => ipcRenderer.invoke('project:copyAsset', payload),
+  // 歌词建议：主进程有 diffsinger:suggestLyric，但一直没暴露 ——
+  // ViewSing.vue 调 bridge.diffsingerSuggestLyric() 会直接拿 undefined。
+  diffsingerSuggestLyric: (payload) => ipcRenderer.invoke('diffsinger:suggestLyric', payload),
 });

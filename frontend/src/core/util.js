@@ -36,7 +36,8 @@ export function removeNotes(tracks, doomed) {
   return n;
 }
 
-export const TRACK_COLORS = ['#ff5530', '#ea5ec1', '#1456f0', '#a855f7', '#3daeff', '#1ba673', '#3b82f6', '#f59e0b', '#d45656', '#17437d'];
+// 十色轨色板：与 core/palette.js 的 VIEW_TRACK_RAMP 逐字节相同，改为再导出（单一来源）
+export { VIEW_TRACK_RAMP as TRACK_COLORS } from './palette.js';
 
 /** 文件名清洗：路径非法字符 → 下划线（分轨导出/工程命名用）；清完为空或只剩 `_` 时兜底 */
 export function stemSafeName(s) {

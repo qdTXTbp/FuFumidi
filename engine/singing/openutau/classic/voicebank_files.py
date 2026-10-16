@@ -34,7 +34,7 @@
 import os
 import shutil
 import time
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from ..renderers import get_cache_lock
 from ..wave import Wave
@@ -82,10 +82,18 @@ class VoicebankFiles:
     # ------------------------------------------------------------------ 元文件
 
     @staticmethod
-    def get_meta_files(source: str, source_temp: str) -> List[Tuple[str, str]]:
+    def get_meta_files(source: str, source_temp: str,
+                       resampler: Optional[Any] = None) -> List[Tuple[str, str]]:
         """对应 `GetMetaFiles`（13 对；上游原文里 `.lessaudio` 那对被注释掉了）。
 
         ★ `temp_no_ext` 用的是 **source 的 ext 长度**（见模块 docstring 第 2 条）。
+
+        ★ 2026-10-13 补：`resampler` 为可选参数，用来取清单里声明的额外元文件后缀。
+        上游原版这里写的是 `resampler as ExeResampler`，**对内置 resampler 会得到 null**，
+        紧接着 `exeResampler.Manifest` 就是 NullReferenceException —— 上游 2026-10-09 的
+        `5c3c83bb` 改成 `resampler?.Manifest?.files` 才修好。
+        **我们直接移植修好的写法**（Python 用 getattr 逐级取，天然空安全），
+        不去复现那个中间态。
         """
         ext = cs_get_extension(source)
         no_ext = source[:len(source) - len(ext)]
@@ -93,7 +101,7 @@ class VoicebankFiles:
         temp_ext = cs_get_extension(source_temp)
         temp_no_ext = source_temp[:len(source_temp) - len(ext)]
         temp_frq_ext = temp_ext.replace('.', '_') + '.frq'
-        return [
+        pairs = [
             (no_ext + frq_ext, temp_no_ext + temp_frq_ext),
             (source + '.llsm', source_temp + '.llsm'),
             (source + '.uspec', source_temp + '.uspec'),
@@ -108,20 +116,30 @@ class VoicebankFiles:
             (no_ext + '.sc', temp_no_ext + '.sc'),
             (no_ext + '.hifi.npz', temp_no_ext + '.hifi.npz'),
         ]
+        # 清单声明的额外元文件（上游 5c3c83bb 修好后的写法：任意 resampler 都可能带清单，
+        # 内置的那些也会走到这里，所以**不能**假定它是 ExeResampler）
+        manifest = getattr(resampler, 'manifest', None) if resampler is not None else None
+        extra = getattr(manifest, 'files', None) if manifest is not None else None
+        if extra:
+            for suffix in extra:
+                pairs.append((no_ext + str(suffix), temp_no_ext + str(suffix)))
+        return pairs
 
     # ------------------------------------------------------------------ 搬运
 
-    def copy_source_temp(self, source: str, temp: str) -> None:
+    def copy_source_temp(self, source: str, temp: str,
+                         resampler: Optional[Any] = None) -> None:
         """对应 `CopySourceTemp`：素材解码到缓存 + 元文件一并搬过去。"""
         with get_cache_lock(temp):
             self.decode_or_stamp(source, temp)
-            for src, dst in self.get_meta_files(source, temp):
+            for src, dst in self.get_meta_files(source, temp, resampler):
                 self.copy_or_stamp(src, dst, False)
 
-    def copy_back_meta_files(self, source: str, temp: str) -> None:
+    def copy_back_meta_files(self, source: str, temp: str,
+                             resampler: Optional[Any] = None) -> None:
         """对应 `CopyBackMetaFiles`：**反向**搬（缓存 → 素材旁）。"""
         with get_cache_lock(temp):
-            for src, dst in self.get_meta_files(source, temp):
+            for src, dst in self.get_meta_files(source, temp, resampler):
                 self.copy_or_stamp(dst, src, False)
 
     @staticmethod

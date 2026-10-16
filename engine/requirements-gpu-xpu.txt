@@ -1,0 +1,17 @@
+# Intel XPU 加速包（torch+xpu / oneAPI）—— Intel Arc 独显与部分核显
+#
+# ★ 与 cuda 包互斥：xpu 版 torch 是**独立构建**，不带 CUDA，两者不能同时挂。
+# ★ 版本选择：torchaudio 的 xpu 轮子只到 2.11.0，所以 torch 取同版配成对。
+#   两者都有 cp311 win_amd64 轮子（2026-10-13 实测确认）。
+# ★ ONNX 侧配 onnxruntime-directml：Intel 没有 onnxruntime-xpu，
+#   而 engine_gpu.py 认的是 DmlExecutionProvider / CUDAExecutionProvider。
+#
+# 构建时必须走镜像：download.pytorch.org 实测只有 313 KB/s，
+# SJTU 的 pytorch-wheels 镜像实测 14.5 MB/s（差 46 倍），否则光下载就要 1-2 小时。
+torch==2.11.0+xpu
+torchaudio==2.11.0+xpu
+# 部分识别模型（MuScriptor / beat_this 一类）依赖 transformers
+transformers>=4.44,<5
+# onnxruntime-directml 是 **XPU 包的 ONNX 执行后端**，与已下线的
+# 「DirectML 增强包」（torch-directml 那一套）不是一回事，包删了它仍要留。
+onnxruntime-directml>=1.16

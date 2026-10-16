@@ -166,7 +166,8 @@ def parse_musicxml(text):
         open_ties = {}                   # (voice, midi) -> 正在延长的音符 dict
         cur_vel = 0                      # 最近的力度记号（<sound dynamics> / <dynamics>）
         measure_start = 0
-        for m in _children(part, 'measure'):
+        measure_lens = []                # 每个小节被算成多长（Audiveris 不知道拍号时按内容定长）
+        for mi, m in enumerate(_children(part, 'measure')):
             measure_start = cursor
             cur = 0                      # 小节内游标（backup/forward 作用在它上面）
             voice_max = {}               # 每个声部在本小节里走到哪（用于结尾对齐，可不用）
@@ -247,7 +248,16 @@ def parse_musicxml(text):
                     last_note = {'start': start, 'midi': midi}
                     continue
                 note = {'start': measure_start + start, 'end': measure_start + start + ticks,
-                        'midi': midi, 'vel': vel}
+                        'midi': midi, 'vel': vel,
+                        # ★ m / off = 第几小节 + 小节内偏移。Audiveris 在拍号不明的谱上会
+                        #   **按这一小节认出来的内容**给小节定长（日志会写 "No target duration
+                        #   for measures ... please check time signatures"），于是同一页里
+                        #   不同声部的小节长度能差一倍 —— 合到一条时间轴上就各走各的拍。
+                        #   有了 m/off 就能把每个声部重新摆到统一的小节网格上（见 merge_pages）。
+                        'm': mi, 'off': start,
+                        # ★ <staff> 是「这一行属于大谱表的第几行」：钢琴谱右/左手共用一个 <part>，
+                        #   不记它就只能合成一条轨（用户要的是左右手分开可编辑）。
+                        'staff': _int(_text(el, 'staff'), 1) or 1}
                 notes.append(note)
                 if tie_start:
                     open_ties[key] = note
@@ -257,6 +267,7 @@ def parse_musicxml(text):
             # 未闭合的连音线（谱面没写 stop）：就地收尾
             open_ties.clear()
             cursor = measure_start + cur
+            measure_lens.append(cursor - measure_start)
         notes.sort(key=lambda n: (n['start'], n['midi']))
         staves = 1
         first_m = _children(part, 'measure')
@@ -264,8 +275,10 @@ def parse_musicxml(text):
             att0 = _child(first_m[0], 'attributes')
             if att0 is not None:
                 staves = max(1, _int(_text(att0, 'staves'), 1) or 1)
-        out_parts.append({'name': name, 'notes': notes, 'staves': staves})
+        out_parts.append({'name': name, 'notes': notes, 'staves': staves,
+                          'measureLens': measure_lens})
 
+    times_from_score = bool(times)          # 谱面自己写没写拍号（Audiveris 不导出 <time>）
     if not tempos:
         tempos = [{'tick': 0, 'bpm': 120}]
     if not times:
@@ -276,7 +289,8 @@ def parse_musicxml(text):
     for t in tempos:
         temps[t['tick']] = t['bpm']
     tempos = [{'tick': k, 'bpm': temps[k]} for k in sorted(temps)]
-    return {'parts': out_parts, 'tempos': tempos, 'times': _dedupe(times), 'keys': _dedupe(keys), 'tpb': tpb}
+    return {'parts': out_parts, 'tempos': tempos, 'times': _dedupe(times), 'keys': _dedupe(keys),
+            'tpb': tpb, 'timesFromScore': times_from_score}
 
 
 def _dedupe(seq):

@@ -273,75 +273,75 @@ onBeforeUnmount(() => { if (offLog) { try { offLog(); } catch (e) {} offLog = nu
 
 <style scoped>
 /* 插件网入口：一条横幅，别抢「插件中心」列表的注意力 */
-.pc-net { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin: 10px 0 4px;
-  border: 1px solid var(--line); border-radius: 10px;
-  background: linear-gradient(100deg, color-mix(in srgb, #5ac8fa 12%, transparent), transparent 62%);
-  animation: pcNetIn 0.34s cubic-bezier(0.22, 0.7, 0.24, 1) both; }
+.pc-net { display: flex; align-items: center; gap: var(--sp-3); padding: 12px 14px; margin: 10px 0 4px;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: linear-gradient(100deg, color-mix(in srgb, var(--t-info) 12%, transparent), transparent 62%);
+  animation: pcNetIn var(--motion-slow) var(--ease-out) both; }
 @keyframes pcNetIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
-.pc-net-ic { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
-  background: color-mix(in srgb, #5ac8fa 20%, transparent); color: #7fd4ff; flex: none; }
+.pc-net-ic { width: 34px; height: 34px; border-radius: var(--r-md); display: grid; place-items: center;
+  background: color-mix(in srgb, var(--t-info) 20%, transparent); color: var(--t-info); flex: none; }
 .pc-net-tx { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.pc-net-tx b { font-size: 13px; color: var(--text); }
-.pc-net-tx small { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.pc-net-tx b { font-size: var(--fs-md); color: var(--text); }
+.pc-net-tx small { font-size: var(--fs-sm); color: var(--muted); line-height: 1.5; }
 .pc-net-host { font-family: ui-monospace, Consolas, monospace; opacity: 0.75; }
-.pc-net-act { margin-left: auto; display: flex; gap: 8px; flex: none; }
+.pc-net-act { margin-left: auto; display: flex; gap: var(--sp-2); flex: none; }
 .pc { height: 100%; overflow: auto; background: var(--canvas); padding: 12px 16px 18px; }
-.pc-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
-.pc-head b { font-size: 14px; }
+.pc-head { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.pc-head b { font-size: var(--fs-lg); }
 .pc-head .sp { flex: 1; }
-.pc-ch { height: 26px; border: 1px solid var(--hairline); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: 12px; }
-.pc-err { display: flex; align-items: center; gap: 6px; margin: 10px 0 0; color: var(--brand-coral); }
-.pc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; margin-top: 12px; }
-.pc-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--border);
-           border-radius: 12px; background: var(--surface); }
-.pc-ic { width: 40px; height: 40px; flex: none; border-radius: 10px; display: grid; place-items: center;
+.pc-ch { height: 26px; border: 1px solid var(--hairline); border-radius: var(--r-sm); background: var(--surface); color: var(--ink); font-size: var(--fs-sm); }
+.pc-err { display: flex; align-items: center; gap: var(--sp-2); margin: 10px 0 0; color: var(--brand-coral); }
+.pc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--sp-3); margin-top: 12px; }
+.pc-card { display: flex; align-items: center; gap: var(--sp-3); padding: 12px 14px; border: 1px solid var(--border);
+           border-radius: var(--r-md); background: var(--surface); }
+.pc-ic { width: 40px; height: 40px; flex: none; border-radius: var(--r-md); display: grid; place-items: center;
          background: var(--surface-soft); overflow: hidden; }
 .pc-ic img { width: 100%; height: 100%; object-fit: cover; }
 .pc-body { flex: 1; min-width: 0; }
-.pc-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.pc-name b { font-size: 13.5px; }
-.pc-ver { font-size: 11px; color: var(--stone); font-family: var(--mono); }
-.pc-badge { font-size: 10.5px; padding: 1px 7px; border-radius: 20px; border: 1px solid var(--border); }
-.pc-badge.on { border-color: var(--success-text, #22c55e); color: var(--success-text, #22c55e); }
-.pc-sum { font-size: 12px; color: var(--slate); margin-top: 2px; }
+.pc-name { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.pc-name b { font-size: var(--fs-md); }
+.pc-ver { font-size: var(--fs-xs); color: var(--stone); font-family: var(--mono); }
+.pc-badge { font-size: var(--fs-xs); padding: 1px 7px; border-radius: var(--r-lg); border: 1px solid var(--border); }
+.pc-badge.on { border-color: var(--success-text, var(--t-ok)); color: var(--success-text, var(--t-ok)); }
+.pc-sum { font-size: var(--fs-sm); color: var(--slate); margin-top: 2px; }
 .pc-meta { margin-top: 3px; }
 /* ---- 页签与「已安装」面板（原设置页的插件页样式搬过来） ---- */
-.pc-tabs { display: flex; gap: 6px; margin-top: 12px; }
-.pc-tab { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 13px; cursor: pointer;
+.pc-tabs { display: flex; gap: var(--sp-2); margin-top: 12px; }
+.pc-tab { display: inline-flex; align-items: center; gap: var(--sp-2); height: 30px; padding: 0 13px; cursor: pointer;
           border: 1px solid var(--border); background: var(--surface); color: var(--slate);
-          border-radius: 9px; font-size: 12.5px; }
+          border-radius: var(--r-md); font-size: var(--fs-md); }
 .pc-tab:hover { color: var(--ink); }
 .pc-tab.on { background: var(--surface-soft); color: var(--ink); border-color: var(--hairline); font-weight: 600; }
 .pc-note { margin: 12px 0 0; line-height: 1.8; }
-.pc-note b { font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
-.pc-empty { margin-top: 14px; padding: 26px; text-align: center; color: var(--stone); font-size: 12.5px;
-            border: 1px dashed var(--border); border-radius: 12px; }
-.pc-inst { display: flex; align-items: center; gap: 12px; margin-top: 10px; padding: 11px 14px;
-           border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.pc-note b { font-family: var(--mono); font-size: var(--fs-sm); color: var(--ink); }
+.pc-empty { margin-top: 14px; padding: 26px; text-align: center; color: var(--stone); font-size: var(--fs-md);
+            border: 1px dashed var(--border); border-radius: var(--r-md); }
+.pc-inst { display: flex; align-items: center; gap: var(--sp-3); margin-top: 10px; padding: 11px 14px;
+           border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
 .pc-inst-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.pc-inst-info b { font-size: 13px; }
-.pc-inst-info small { color: var(--slate); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-inst-info b { font-size: var(--fs-md); }
+.pc-inst-info small { color: var(--slate); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pc-switch { position: relative; width: 36px; height: 20px; flex: none; cursor: pointer; }
 .pc-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
-.pc-switch span { position: absolute; inset: 0; border-radius: 20px; background: var(--hairline); transition: background .15s; }
+.pc-switch span { position: absolute; inset: 0; border-radius: var(--r-lg); background: var(--hairline); transition: background var(--motion-fast) var(--ease-out); }
 .pc-switch span::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
-                         background: var(--canvas); transition: transform .15s; }
+                         background: var(--canvas); transition: transform var(--motion-fast) var(--ease-out); }
 .pc-switch input:checked + span { background: var(--brand-coral); }
 .pc-switch input:checked + span::after { transform: translateX(16px); }
-.pc-log-head { margin: 16px 0 6px; font-size: 12.5px; font-weight: 600; }
-.pc-log { max-height: 180px; overflow: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
-          background: var(--surface-soft); color: var(--slate); font-family: var(--mono); font-size: 11.5px;
+.pc-log-head { margin: 16px 0 6px; font-size: var(--fs-md); font-weight: 600; }
+.pc-log { max-height: 180px; overflow: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-md);
+          background: var(--surface-soft); color: var(--slate); font-family: var(--mono); font-size: var(--fs-sm);
           line-height: 1.7; white-space: pre-wrap; word-break: break-all; }
-.pc-docs { font-size: 12px; color: var(--brand-coral); cursor: pointer; }
+.pc-docs { font-size: var(--fs-sm); color: var(--brand-coral); cursor: pointer; }
 .pc-docs:hover { text-decoration: underline; }
 .pc-mask { position: fixed; inset: 0; background: rgba(8, 10, 16, .45); z-index: 120; display: grid; place-items: center; padding: 24px; }
 .pc-dlg { width: 460px; max-width: 94vw; background: var(--canvas); border: 1px solid var(--border);
-          border-radius: 14px; box-shadow: 0 24px 60px rgba(0,0,0,.3); overflow: hidden; }
-.pc-dlg-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
-.pc-dlg-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
-.pc-kv { display: flex; gap: 10px; font-size: 12.5px; }
+          border-radius: var(--r-lg); box-shadow: 0 24px 60px rgba(0,0,0,.3); overflow: hidden; }
+.pc-dlg-head { display: flex; align-items: center; gap: var(--sp-2); padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.pc-dlg-body { padding: 12px 14px; display: flex; flex-direction: column; gap: var(--sp-2); }
+.pc-kv { display: flex; gap: var(--sp-3); font-size: var(--fs-md); }
 .pc-kv span { width: 56px; flex: none; color: var(--stone); }
 .pc-desc { margin: 6px 0 0; line-height: 1.7; }
 .pc-warn { margin: 6px 0 0; color: var(--brand-coral); }
-.pc-dlg-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); }
+.pc-dlg-foot { display: flex; justify-content: flex-end; gap: var(--sp-2); padding: 10px 14px; border-top: 1px solid var(--border); }
 </style>

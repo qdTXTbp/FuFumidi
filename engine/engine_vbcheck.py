@@ -129,6 +129,50 @@ def check_diffsinger(vb, lyrics):
             add(name, "error", "缺少 %s" % name, "DiffSinger 声库必须带 dsconfig.yaml + dsdur/ + dsvocoder/")
     if all(os.path.exists(os.path.join(vb, n)) for n in need):
         add("layout", "ok", "目录结构完整（dsconfig.yaml / dsdur / dsvocoder）")
+    # ★ 多说话人声库：speakers 多于一个 = 模型需要 spk 输入，而渲染链路还没接说话人嵌入
+    #   —— 真去渲染会报「模型输入不匹配 —— 缺少 ['spk']」。在**体检**里提前说清，
+    #   别让用户点了「渲染」才撞上一个看不出原因的失败。
+    try:
+        with open(os.path.join(vb, "dsconfig.yaml"), encoding="utf-8", errors="ignore") as f:
+            dlines = f.read().splitlines()
+        names, in_block = [], False
+        for ln in dlines:
+            t = ln.split("#")[0].rstrip()
+            if not t.strip():
+                continue
+            if t.lstrip().startswith("speakers:"):
+                rest = t.split("speakers:", 1)[1].strip()
+                if rest.startswith("["):
+                    names += [x.strip().strip('"').strip("'") for x in rest.strip("[]").split(",")]
+                in_block = True
+                continue
+            if in_block:
+                if t.lstrip().startswith("-"):
+                    names.append(t.lstrip()[1:].strip().strip('"').strip("'"))
+                elif not t.startswith((" ", "\t")):
+                    in_block = False
+        names = [n for n in names if n]
+        if names:
+            # `speakers:` 里是**嵌入文件基名**（不含 .emb，可带子目录）—— 上游
+            # `DiffSingerSpeakerEmbedManager.loadSpeakerEmbed` 就是读 `<名字>.emb`：
+            # 裸 float32 × dsconfig.hiddenSize，无文件头。缺文件时上游直接抛异常，
+            # 所以这里提前把「缺哪个 .emb」列出来（重装/重新解压即可修）。
+            missing_emb = [n for n in names
+                           if not os.path.isfile(os.path.join(vb, n + '.emb'))]
+            if missing_emb:
+                add("speakers_emb", "error",
+                    "speakers 里声明了 %d 个说话人，但有 %d 个找不到对应的 .emb 嵌入文件（例：%s）"
+                    % (len(names), len(missing_emb), ", ".join(missing_emb[:4])),
+                    "这些 .emb 是声库的一部分，重装/重新解压这个声库")
+        if len(names) > 1:
+            add("speakers", "warn",
+                "这是**多说话人**声库（%d 个：%s）—— 当前版本还不支持选择说话人，渲染会失败"
+                % (len(names), ", ".join(names[:6])),
+                "支持正在做（需照搬上游 DiffSingerSpeakerEmbedManager：读 .emb + 逐音素 spk_embed 张量）")
+        elif names:
+            add("speakers", "ok", "单说话人声库（speakers: %s）" % names[0])
+    except Exception as e:  # noqa: BLE001
+        add("speakers", "warn", "读 dsconfig.yaml 判断说话人失败：%s" % str(e)[:80])
     dicts = sorted(f for f in os.listdir(vb) if f.startswith("dictionary-") and f.endswith(".txt"))
     stats["dictionaries"] = dicts
     if dicts:

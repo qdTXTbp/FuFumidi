@@ -66,6 +66,9 @@ class UPhoneme:
         self.auto_preutter: float = 0
         self.auto_overlap: float = 0
         self.max_oto_preutter: float = 0
+        # ★ 上游 b30d3347：preutter 能拉到**文件开头**时对应的上限。
+        #   `ResamplerItem` 用它决定 offset 能往前拉多少。
+        self.max_file_preutter: float = 0
         self.adjacent: bool = False
         self.overlapped: bool = False
         self.tail_intrude: float = 0
@@ -167,6 +170,9 @@ class UPhoneme:
         consonant_stretch = 2 ** (1.0 - self.get_expression(project, track, Ustx.VEL)[0] / 100.0)
         self.auto_overlap = self.oto.overlap * consonant_stretch
         self.auto_preutter = self.max_oto_preutter = self.oto.preutter * consonant_stretch
+        # 拉到文件开头所需的 preutter：(oto.preutter + max(0, oto.offset)) * 缩放
+        self.max_file_preutter = ((self.oto.preutter + max(0.0, self.oto.offset))
+                                  * consonant_stretch)
         self.adjacent = False
         self.tail_intrude = 0
         self.tail_overlap = 0

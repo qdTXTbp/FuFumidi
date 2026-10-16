@@ -10,8 +10,10 @@
 | 20 | `WORLDLINE-R2` | 512 | 512/44100 s | WORLD 特征喂给 ONNX 声码器包 |
 
 ★ **version 10 就是 `Renderers.GetDefaultRenderer` 对 Classic 歌手给出的默认渲染器**，
-所以本文件把 v10 做完整；v11 / v20 各缺一块外部依赖，都在**入口处**报错说清楚缺什么
-（不是静默算错、也不是留个 `NotImplementedError` 了事）。
+所以本文件把 v10 做完整。v11 的**代码链路已全部接通**（hnsep 分离 → `HnAnalysisF0In` →
+`SynthContinuousNoise`），它唯一的外部依赖是**模型包** `hnsep_240512` 有没有装；
+没装时在**入口处**报错说清楚缺什么（不是静默算错、也不是留个 `NotImplementedError` 了事）。
+v20 的编码链已接通（mel 模型随包，见 `resolve_mel_model`），只差 128bin/512hop 声码器这个外部资源。
 
 ## 照搬时保留的语义（别"整理"掉）
 1. `SupportsExpression` 与 `ClassicRenderer` 的**不一样**：这里**只**看白名单，
@@ -31,11 +33,15 @@
    共用 R 的表达式图）。
 
 ## v11 / v20 缺什么（都在入口报错）
-- **v11**：`PhraseSynthV2(use_hnsep: true)` —— 谐波/噪声分离模型 `Hnsep` 未搬
-  （`SynthSegment` 的谐波分支 + `HnAnalysisF0In` 绑定 + `sp_env_harmonic` 的传递）。
-- **v20**：需要两个 ONNX 会话 —— mel 模型是 `OpenUtau.Core` **程序集内嵌资源**
-  （`Data.Resources.mel`，仓库里没有对应文件），声码器是**可下载包**
-  `pc-nsf-hifigan`（走 `PackageManager` + `vocoder.yaml`）。两者都不在照搬范围内。
+- **v11**：代码侧**已全部搬完**（`hnsep.py` + `worldline.`{`hn_analysis_f0_in`,`synth_continuous_noise`}`）。
+  现在缺的只是**运行时依赖**：模型包 `hnsep_240512` 还没安装（约 52 MB，走资源中心下载）。
+  宿主用 `worldline.set_hnsep()` 注入已加载的实例；没注入就在这里给出可操作的报错。
+- **v20**：需要两个 ONNX 会话 —— mel 模型是仓库里的**独立文件**
+  `OpenUtau.Core/Classic/Data/mel.onnx`（83.4 KB；`.resx` 只是 .NET 把它编进程序集的方式，
+  源文件一直都在），声码器是 128bin / 512hop 的 PC-NSF-HiFiGAN
+  （**每个 DiffSinger 声库的 `dsvocoder/` 里就带一个**，资源中心也会下通用声码器）。
+  ★ **两个依赖都在盘上（WP3-3 实测）**：v20 缺的不是模型，而是"这段编排"。
+  别再照着"拿不到 mel 模型"重估 —— 详见 `_synth_r2` 的 docstring。
 """
 
 import asyncio
@@ -65,8 +71,136 @@ SAMPLE_RATE = 44100
 FFT_SIZE = 2048
 
 #: v20 的 ONNX 两件套（都未搬，报错时要把名字说清楚）
+#: 随包的 mel 模型（上游 `Classic/Data/mel.onnx`）。来源与 sha256 见 docs/VENDOR.md。
+#: 上游把它放在 `OpenUtau.Core/Classic/Data/`，这里镜像成 `classic/data/`。
+R2_MEL_BUNDLED = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'mel.onnx')
 R2_MEL_RESOURCE = 'Data.Resources.mel'
 R2_VOCODER_PACKAGE = 'pc-nsf-hifigan'
+
+
+def resolve_mel_model() -> str:
+    """mel 模型在哪：环境变量 → 数据根 → **随包**。都没有则给可行动的报错。
+
+    随包那份是默认路径（83.4 KB），所以正常情况下永远走得到。
+    """
+    cands = [os.environ.get('FUFUMIDI_MEL_ONNX')]
+    root = os.environ.get('FUFUMIDI_DATA_ROOT')
+    if root:
+        cands.append(os.path.join(root, 'diffsinger', 'mel', 'mel.onnx'))
+    cands.append(R2_MEL_BUNDLED)
+    for p in cands:
+        if p and os.path.isfile(p):
+            return p
+    raise RuntimeError(
+        'v20（Worldline-R2）需要 mel 模型，但一个候选路径都没有：%s\n'
+        '  随包那份应该在这里：%s\n'
+        '  （它只有 83.4 KB，若缺失说明安装包不完整；也可用 FUFUMIDI_MEL_ONNX 指定）'
+        % (cands, R2_MEL_BUNDLED))
+
+
+def resolve_r2_vocoder() -> str:
+    """128bin / 512hop 的 PC-NSF-HiFiGAN：环境变量 → **数据根的通用声码器**。
+
+    只认这两个来源：声库自带的 `dsvocoder/` 是 DiffSinger 管线的东西，签名相近但训练集不同，
+    静默用错比报错更难查。缺了就报错，让用户去资源中心装通用声码器（那边已经会下）。
+    """
+    env = os.environ.get('FUFUMIDI_R2_VOCODER')
+    if env and os.path.isfile(env):
+        return env
+    root = os.environ.get('FUFUMIDI_DATA_ROOT')
+    dirs = []
+    if root:
+        dirs.append(os.path.join(root, 'diffsinger', 'vocoder'))
+    for d in dirs:
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            continue
+        # 优先 512hop / 128bin（与 mel 的 128 bins 精确衔接），否则退回任意 onnx
+        pick = [n for n in names if n.lower().endswith('.onnx') and 'hop512' in n and '128bin' in n] \
+            or [n for n in names if n.lower().endswith('.onnx')]
+        if pick:
+            return os.path.join(d, pick[0])
+    raise RuntimeError(
+        'v20（Worldline-R2）需要 128bin/512hop 的 PC-NSF-HiFiGAN 声码器，没找到。\n'
+        '  资源中心装「通用声码器」即可（约 55 MB）；也可用 FUFUMIDI_R2_VOCODER 指定。')
+
+
+def r2_pad(total_frames, f0, sp, ap, sp_size):
+    """按上游补帧：**左补 4 帧**，再补到 16 的倍数。
+
+    `WorldlineRenderer.cs:140-147`。★ 三件容易漏的事：
+      1. 不是「补到 16 的倍数」那么简单 —— 先 `+8` 再 `+4` 再取整，等价于
+         `ceil((T + 12) / 16) * 16`，**左边固定 4 帧**、其余全在右边；
+      2. `f0` 与 `sp_env` 补 **0**，`ap` 补 **1** —— ap 是「非周期成分」，补 0 等于
+         宣称这些帧完全周期，边缘会出错；
+      3. 补出来的帧**不参与最终输出**（见 `r2_synthesize` 的裁剪），只是为了满足
+         mel 模型对帧数的整除要求、并给边缘一点余量。
+
+    返回 `(padded_len, left, f0, sp, ap)`。
+    """
+    import numpy as np
+
+    T = int(total_frames)
+    padded = int(math.ceil((T + 12) / 16.0)) * 16
+    left = 4
+    right = padded - T - left
+    f0a = np.asarray(f0, dtype=np.float32).reshape(-1)
+    spa = np.asarray(sp, dtype=np.float32).reshape(-1, sp_size)
+    apa = np.asarray(ap, dtype=np.float32).reshape(-1, sp_size)
+    f0p = np.concatenate([np.zeros(left, np.float32), f0a, np.zeros(right, np.float32)])
+    spp = np.concatenate([np.zeros((left, sp_size), np.float32), spa,
+                          np.zeros((right, sp_size), np.float32)], axis=0)
+    app = np.concatenate([np.ones((left, sp_size), np.float32), apa,
+                          np.ones((right, sp_size), np.float32)], axis=0)
+    return padded, left, f0p, spp, app
+
+
+def r2_synthesize(total_frames, f0, sp, ap, sp_size, providers=None):
+    """v20 的**核心编排**（独立成函数，便于不起 native 库就单测）：
+
+    WORLD 特征 → 左补 4 帧并补到 16 的倍数 → `mel.onnx` → 128bin/512hop 声码器 →
+    裁掉补出来的帧 → 首尾各 512 样本淡入淡出。上游 `WorldlineRenderer.cs:138-193`，逐行对齐。
+
+    三个输入与 mel 输出的签名**精确衔接**：`f0 [1,T]` · `sp_env [1,T,1025]` · `ap [1,T,1025]`
+    → `mel [1,T,128]` → 声码器 `mel [1,n,128]` · `f0 [1,n]` → `waveform [1,n_samples]`。
+
+    ★ 两个上游决定照搬：mel 会话用 **CPU**（`OnnxRunnerChoice.CPU`，模型只有 85 KB，
+    挪去 GPU 不划算），声码器用默认（GPU 可用就用）。
+    """
+    import numpy as np
+    from diffsinger.session import resolve_providers, run_session
+
+    T = int(total_frames)
+    if T <= 0:
+        # 空乐句不该因为缺模型而失败（也不该白跑一次路径解析）
+        return []
+    mel_path = resolve_mel_model()
+    voc_path = resolve_r2_vocoder()
+    prov = providers or resolve_providers('auto')
+    padded, left, f0p, spp, app = r2_pad(T, f0, sp, ap, sp_size)
+    # run_session 会做双向输入名比对（缺/多都抛）—— 正好替我们盯住签名漂移
+    mel = run_session(mel_path, {
+        'f0': f0p.reshape(1, padded),
+        'sp_env': spp.reshape(1, padded, sp_size),
+        'ap': app.reshape(1, padded, sp_size),
+    }, resolve_providers('cpu'), 'worldline r2 mel')[0]
+    mel = np.asarray(mel, dtype=np.float32)
+    wave = run_session(voc_path, {'mel': mel, 'f0': f0p.reshape(1, padded)},
+                       prov, 'worldline r2 vocoder')[0]
+    wave = np.asarray(wave, dtype=np.float32).reshape(-1)
+    # ★ 丢掉左补的 4 帧，只取 T 帧（上游 :183）—— 留着补出来的帧会让乐句整体前移。
+    start = left * HOP_SIZES[20]
+    want = T * HOP_SIZES[20]
+    wave = wave[start:start + want]
+    if wave.size == 0:
+        return []
+    # ★ 首尾各 512 样本线性淡入淡出（上游 :184-193）—— 这是乐句拼接处不爆音的原因。
+    n = min(wave.size, HOP_SIZES[20])
+    if n > 0:
+        wave[:n] = wave[:n] * (np.arange(n, dtype=np.float32) / n)
+        wave[wave.size - n:] = wave[wave.size - n:] * (np.arange(n, 0, -1, dtype=np.float32) / n)
+    return [float(x) for x in wave]
 
 
 def hop_size_for_version(version: int) -> int:
@@ -237,38 +371,62 @@ class WorldlineRenderer(IRenderer):
     def _make_phrase_synth(self) -> PhraseSynthV2:
         """对应 `new Worldline.PhraseSynthV2(44100, hopSize, 2048, useHnsep: version == 11)`。
 
-        v11 需要 hnsep 模型（未搬）→ 在 `PhraseSynthV2.synth_continuous_noise` 里报错；
-        这里额外在**构造时**就给一句更贴近渲染器语境的说明。
+        v11 的代码链路已经搬完，**唯一的前置条件是模型包**：
+        这里在**构造时**就给出可操作的说明（比让 `synth_continuous_noise` 深处再抛要清楚）。
         """
         if self.version == 11:
             from ..worldline import _default_hnsep
             if _default_hnsep() is None:
-                raise NotImplementedError(
-                    'Worldline-R1.1（v11）需要谐波/噪声分离模型，尚未照搬：\n'
-                    '  - Classic/WorldlineRenderer 依赖 Worldline.PhraseSynthV2(useHnsep: true)\n'
-                    '  - 需要 Core/Analysis/Hnsep（ONNX）+ Analysiss 的谐波分支\n'
-                    '  - 另需 SynthSegment 的 sp_env_harmonic 传递与 HnAnalysisF0In 绑定\n'
-                    '临时替代：用 version=10（WORLDLINE-R，默认渲染器）')
+                # ★ WP4-4：宿主没注入时，**按资源中心的安装位置自己找一次**（懒加载）。
+                #   放在这里而不是进程启动时 —— v10 用户不该为它付任何启动成本。
+                from ..hnsep import PACKAGE_ID as HNSEP_PACKAGE_ID
+                from ..hnsep import autoload as _autoload_hnsep, autoload_error
+                _autoload_hnsep()
+            if _default_hnsep() is None:
+                raise RuntimeError(
+                    'Worldline-R1.1（v11）需要谐波/噪声分离模型 %s，当前没有装。\n'
+                    '  · 代码侧已就绪：hnsep 网络 + HnAnalysisF0In + SynthContinuousNoise 都已搬完\n'
+                    '  · 缺的是模型包本体（约 52 MB）—— 装到「资源中心」即可，'
+                    '引擎会在渲染 v11 时自动加载\n'
+                    '  · 本次查找结果：%s\n'
+                    '临时替代：用 version=10（WORLDLINE-R，默认渲染器）'
+                    % (HNSEP_PACKAGE_ID, autoload_error() or '未找到'))
         return PhraseSynthV2(SAMPLE_RATE, self.hop_size, FFT_SIZE,
                              use_hnsep=(self.version == 11),
                              num_render_threads=self._num_render_threads)
 
     def _synth_r2(self, phrase_synth) -> List[float]:
-        """v20（Worldline-R2）：WORLD 特征 → patch 到 16 的倍数 → mel ONNX → 声码器 ONNX。
+        """v20（Worldline-R2）：WORLD 特征 → 左补 4 帧并补到 16 的倍数 → mel ONNX → 声码器 ONNX。
 
-        ★ 未搬，原因不是"懒得写"：
-        - mel 模型是 `OpenUtau.Core` 的**程序集内嵌资源**（`Data.Resources.mel`），
-          仓库里没有独立文件可取；
-        - 声码器是**可下载包** `pc-nsf-hifigan`（`PackageManager` + `vocoder.yaml` 的
-          `model` 字段指向 .onnx），属于包管理子系统，也未搬。
-        所以这里给的是**可执行的替代方案**，而不是半截实现。
+        ★ 未搬 —— **但 WP3-3（2026-10-14）查证后，原来的两条理由都是错的**，别再照着它们重估：
+
+        1. ❌ 旧理由："mel 模型是程序集内嵌资源，仓库里没有独立文件可取"。
+           **实际**：`OpenUtau.Core/Classic/Data/mel.onnx` 就是仓库里的**独立文件**（83.4 KB）。
+           `.resx` / `Resources.Designer.cs` 只是 .NET 把它**编进程序集**的方式，
+           源文件一直都在，直接取即可。已实测可加载：
+             in  `f0 [1,T]` · `sp_env [1,T,1025]` · `ap [1,T,1025]`
+             out `mel [1,T,128]`
+           —— 这三个输入正是 `SynthFeatures()` 已经在算的东西，衔接是现成的。
+
+        2. ⚠ 旧理由："声码器是 `pc-nsf-hifigan` 可下载包，包管理子系统未搬"。
+           按字面仍成立（我们没有 `PackageManager`），但**不构成阻塞**：
+           `pc-nsf-hifigan` 是 PC-NSF-HiFiGAN，而**每个 DiffSinger 声库的 `dsvocoder/` 里就带一个**
+           （如 `kouon_pc_mini_nsf-hifigan_1028_44100hz_512hop_128bin.onnx`，54 MB），
+           资源中心也已经会下通用声码器 `nsf_hifigan_44.1k_hop512_128bin`。两者签名一致：
+             in  `mel [1,n_frames,128]` · `f0 [1,n_frames]`
+             out `waveform [1,n_samples]`
+           与上面的 `mel[1,T,128]` **精确对上**。
+
+        **结论：v20 的两个依赖都在手上，它不是"拿不到模型"而是"还没写这段编排"。**
+        实现时要做的是：取 `mel.onnx`（随包或下载）→ 按上游 `WorldlineRenderer.cs:150-175` 串
+        `f0/sp_env/ap → mel` → 配一个 128bin/512hop PC-NSF-HiFiGAN 声码器出波形；
+        `sp_env/ap` 的 1025 宽与本类的 `FFT_SIZE`=2048 一致，不用改分析侧。
+        **已实现（2026-10-14）**：mel 模型随包（`classic/data/mel.onnx`，83.4 KB，
+        sha256 见 `docs/VENDOR.md`），声码器走数据根的通用声码器。
         """
-        raise NotImplementedError(
-            'Worldline-R2（v20）需要两个 ONNX 会话，均未照搬：\n'
-            '  - mel 模型：%s（程序集内嵌资源，仓库中无独立文件）\n'
-            '  - 声码器包：%s（走 PackageManager/ vocoder.yaml，包管理子系统未搬）\n'
-            '临时替代：用 version=10（WORLDLINE-R，默认渲染器）'
-            % (R2_MEL_RESOURCE, R2_VOCODER_PACKAGE))
+        total, f0, sp, ap = phrase_synth.synth_features()
+        sp_size = FFT_SIZE // 2 + 1
+        return r2_synthesize(total, f0, sp, ap, sp_size)
 
     # ------------------------------------------------------------------ 曲线 / direct
 
@@ -306,8 +464,9 @@ class WorldlineRenderer(IRenderer):
             samples = Wave.get_samples(phone.oto.file)
             if samples is None:
                 continue
-            offset = int(phone.oto.offset / 1000 * SAMPLE_RATE)
-            cutoff = int(phone.oto.cutoff / 1000 * SAMPLE_RATE)
+            # ★ 上游 b30d3347：同 sharp_wavtool，用 ResamplerItem 算出来的值
+            offset = int(item.offset / 1000 * SAMPLE_RATE)
+            cutoff = int(item.cutoff / 1000 * SAMPLE_RATE)
             length = (len(samples) - offset - cutoff) if cutoff >= 0 else -cutoff
             # C# 的 `Skip(offset).Take(length)`：Take 负数得到空数组（不抛错）
             samples = samples[offset:offset + length] if length > 0 else []

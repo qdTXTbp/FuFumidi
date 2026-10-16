@@ -6,6 +6,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import DiffSingerCatalog from './DiffSingerCatalog.vue';
+import ModelCatalog from '../components/models/ModelCatalog.vue';
 import UtauVoicebankStore from '../components/utau/UtauVoicebankStore.vue';
 import { useAppStore } from '../stores/app';
 import { useVoicebankStore } from '../stores/voicebank';
@@ -17,19 +18,40 @@ const toast = (m, type) => app.toast(m, type);
 const bridge = window.fuBridge;
 
 /* ---------------- 分类 --------------- */
+/* ---------------- 分类 ----------------
+ * ★ 2026-10-14 按用户要求改成**两级**：顶层 4 类，「调教」下面再分声库 / 音色 / 调教模型。
+ *   理由：声库（DiffSinger/UTAU）、音色（GPT-SoVITS）、hnsep 这些东西的共同点是
+ *   「让工具唱起来」，跟「转录 / 分离」不是一类。原来摊平成 6 个顶层页签时，
+ *   用户得先知道 hnsep 是干什么的才能找到它。
+ */
 const TABS = computed(() => [
   { id: 'transcribe', label: t('转录模型'), ic: 'transcribe' },
   { id: 'separate', label: t('人声分离'), ic: 'mic' },
   { id: 'other', label: t('修复·VR'), ic: 'box' },
-  { id: 'diffsinger', label: t('DiffSinger 声库'), ic: 'spark' },
-  // UTAU 声库（开源 / 免费，一键下载安装）：声库属于「资源」，统一收在模型管理里，
-  // 不再散落在资源管理页 —— 用户找声库只需要记住一个地方。
-  { id: 'utau', label: t('UTAU 声库'), ic: 'mic' },
-  // GPT-SoVITS 社区微调音色（资源中心下载，落点 <模型目录>/gpt-sovits/voices/）：
-  // 与 DiffSinger 声库并列 —— 它也是「一个音色」，只是唱法走逐句参考重合成（见「翻唱」页）。
-  { id: 'tts', label: t('GPT-SoVITS 音色'), ic: 'mic' },
+  { id: 'tuning', label: t('调教'), ic: 'spark' },
 ]);
+/** 调教下面的二级分类。id **不是** kind —— 声库那两类各走自己的目录组件。 */
+const TUNING_SUBS = computed(() => [
+  { id: 'ds', label: t('声库 · DiffSinger'), ic: 'spark' },
+  { id: 'utau', label: t('声库 · UTAU'), ic: 'mic' },
+  { id: 'voices', label: t('音色 · GPT-SoVITS'), ic: 'mic' },
+  { id: 'models', label: t('调教模型'), ic: 'box' },
+]);
+/** 二级分类里哪两个是卡片网格（另外两个是独立目录组件，没有 kind） */
+const SUB_KIND = { voices: 'tts', models: 'tuning' };
 const curTab = ref('transcribe');
+const curSub = ref('ds');
+/** 网格实际按哪个 kind 过滤：调教下看二级，其余看顶层 */
+const listKind = computed(() => (curTab.value === 'tuning' ? (SUB_KIND[curSub.value] || '') : curTab.value));
+const showDs = computed(() => curTab.value === 'tuning' && curSub.value === 'ds');
+const showUtau = computed(() => curTab.value === 'tuning' && curSub.value === 'utau');
+const showGrid = computed(() => (curTab.value === 'tuning' ? !!SUB_KIND[curSub.value] : true));
+/** 「音色」「调教模型」两页用共享目录壳（与两个声库页同形），走 ModelCatalog 而不是通用网格 */
+const isTuningGrid = computed(() => curTab.value === 'tuning' && !!SUB_KIND[curSub.value]);
+/** 二级页 → 用户元数据的 kind（白名单见 main/usermeta.js 的 KINDS）。
+    注意不是 SUB_KIND：SUB_KIND 是 model:list 的 kind，这里是「用户改动的归属」。 */
+const META_KIND = { voices: 'voice', models: 'model' };
+const metaKind = computed(() => META_KIND[curSub.value] || 'model');
 
 /* ---------------- 模型列表与进度 ---------------- */
 const list = ref([]);
@@ -37,18 +59,42 @@ const prog = reactive({});            // id -> {active, percent, speed, received
 const loading = ref(false);
 const detail = ref(null);             // 当前选中模型（详情抽屉）
 
-const tabbedList = computed(() => list.value.filter(m => m.kind === curTab.value));
+const tabbedList = computed(() => list.value.filter(m => m.kind === listKind.value));
 // DiffSinger 声库不在 modelList 里，数量从共享 store 取（由 DiffSingerCatalog 拉目录后写入）；
 // 未加载完成前显示「…」而非 0，避免误报「可下载声库数量为 0」。
 function countFor(tb) {
-  if (tb === 'diffsinger') return vbStore.dsLoaded ? vbStore.dsAvailable : null;
-  // UTAU 声库来自独立注册表（UtauVoicebankStore 自己拉），这里不给数字，避免误报 0
+  // 调教 = 声库 + 音色 + 模型，其中 UTAU 声库的数字来自它自己的注册表 ——
+  // 硬凑一个合计数只会给出一个错的数字，不如显示「…」。
+  if (tb === 'tuning') return null;
+  if (tb === 'ds') return vbStore.dsLoaded ? vbStore.dsAvailable : null;
   if (tb === 'utau') return null;
   return list.value.filter(m => m.kind === tb).length;
 }
 function cnt(n) { return n == null ? '…' : String(n); }
 
+/** 本地导入 GPT-SoVITS 音色：选一个目录 → 主进程校验 .ckpt/.pth 并拷进音色目录。
+ *  社区音色绝大多数没有稳定直链（见 main/gpt-sovits.js 的 EXTERNAL），这是它们的主入口。 */
+async function importGsvVoice() {
+  try {
+    const r = await bridge.modelImportGsvVoice?.();
+    if (!r || r.canceled) return;
+    if (!r.ok) { app.toast((r && r.error) || t('导入失败'), 'error'); return; }
+    app.toast(t('已导入音色：') + (r.name || ''), 'success');
+    await refresh();
+  } catch (e) { app.toast(String((e && e.message) || e), 'error'); }
+}
+
 function kindIcon(m) { return (m.kind === 'separate' || m.kind === 'tts') ? 'mic' : (m.kind === 'transcribe') ? 'music' : 'box'; }
+/** kind → 给用户看的分类名（详情抽屉用）。
+ *  ★ 新增 kind **必须**来这里加一行 —— 漏了会把它显示成「修复工具」，
+ *    分类名写错比不显示更糟。 */
+function kindLabel(k) {
+  if (k === 'separate') return t('人声分离');
+  if (k === 'transcribe') return t('转录模型');
+  if (k === 'tts') return t('音色');
+  if (k === 'tuning') return t('调教模型');
+  return t('修复工具');
+}
 /** 外部门户（论坛 / 网盘 / Spaces）：不能一键下载，只把用户送去该去的地方 */
 function openExternal(m) {
   if (!m || !m.url) return;
@@ -143,7 +189,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
         <div class="page-title">{{ t('模型管理') }}</div>
         <div class="page-sub">{{ TABS.map(tb => tb.label + ' ' + cnt(countFor(tb.id))).join(' · ') }}</div>
       </div>
-      <button v-if="curTab !== 'diffsinger'" class="btn sm ghost" @click="refresh">{{ t('刷新') }}</button>
+      <button v-if="!showDs" class="btn sm ghost" @click="refresh">{{ t('刷新') }}</button>
     </div>
 
     <!-- 分类页签 -->
@@ -153,24 +199,56 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
       </button>
     </div>
 
+    <!-- 调教的二级分类：声库 / 音色 / 调教模型 -->
+    <div v-if="curTab === 'tuning'" class="vm-subtabs">
+      <button v-for="sb in TUNING_SUBS" :key="sb.id" class="vm-subtab" :data-guide="'vm-sub-' + sb.id"
+              :class="{ active: curSub === sb.id }" @click="curSub = sb.id">
+        <span class="tb-ic"><Icon :name="sb.ic" :size="13" /></span>{{ sb.label }}
+      </button>
+    </div>
+
     <!-- 醒目提示：下载依赖补全 + 下载慢换源，合并成**一条**（两条提示占了两行，
          信息密度低、还各带一个图标，视觉上比内容更抢眼） -->
-    <div v-if="curTab !== 'diffsinger'" class="vm-dep-tip">
+    <!-- 依赖提示只对转录 / 分离那类推理模型有意义；调教页收的是声库、音色与自包含 ONNX，
+         对它们不适用（用户要求去掉），所以 tuning 页不显示。 -->
+    <div v-if="!showDs && curTab !== 'tuning'" class="vm-dep-tip">
       <span class="vm-dep-ic"><Icon name="zap" :size="14" /></span>
       <span>{{ t('下载后请到「资源管理」补全依赖（否则模型可能无法使用）；下载慢可在设置页切换下载源') }}</span>
     </div>
 
     <!-- DiffSinger 声库目录（独立板块，非模型卡片的 kind 分组） -->
-    <DiffSingerCatalog v-if="curTab === 'diffsinger'" />
+    <DiffSingerCatalog v-if="showDs" />
 
     <!-- UTAU 声库（开源 / 免费）：一键下载安装，装完可在「调教」里直接选来唱 -->
-    <div v-else-if="curTab === 'utau'" class="vm-utau">
+    <div v-else-if="showUtau" class="vm-utau">
       <UtauVoicebankStore />
     </div>
 
-    <!-- 卡片网格 -->
-    <Transition v-else name="vmfade" mode="out-in">
-      <div class="vm-grid" :key="curTab">
+    <!-- 音色 / 调教模型：用与两个声库页**同一套**目录壳（来源条 → 搜索筛选 → 分组 → 卡片网格） -->
+    <ModelCatalog v-else-if="isTuningGrid" :items="tabbedList" :prog="prog" group-key="arch" :kind="metaKind"
+                  :icon="listKind === 'tts' ? 'mic' : 'box'"
+                  :title="listKind === 'tts' ? 'GPT-SoVITS 音色' : '调教模型'"
+                  :note="listKind === 'tts'
+                    ? '社区音色绝大多数没有稳定直链，网盘 / 社区下载的包可直接用「导入本地音色目录」安装；这里的条目是从公开仓库一键拉取的那部分。'
+                    : '调教（歌声合成）用到的模型。Worldline v11 的谐波分离模型就在这里下载。'"
+                  :empty-text="listKind === 'tts' ? '没有符合条件的音色' : '没有符合条件的调教模型'"
+                  @download="startDownload" @remove="deleteModel"
+                  @cancel="(it) => cancelDownload(it.id)" @openExternal="openExternal">
+      <template #actions>
+        <button v-if="listKind === 'tts'" class="btn sm" @click="importGsvVoice"><Icon name="folder" :size="13" /> {{ t('导入本地音色目录') }}</button>
+      </template>
+    </ModelCatalog>
+
+    <!-- 卡片网格（转录 / 分离 / 修复·VR 沿用） -->
+    <Transition v-else-if="showGrid" name="vmfade" mode="out-in">
+      <div class="vm-grid" :key="listKind">
+        <!-- 本地导入：调教里的声库 / 音色绝大多数没有稳定直链（BOOTH / BowlRoll / 网盘），
+             所以除了「一键下载」必须给一条本地导入的路。放在网格内、跨整行 ——
+             不要插进 v-if/v-else-if 条件链中间，那样 Vue 会编译失败（踩过）。 -->
+        <div v-if="listKind === 'tts'" class="vm-import">
+          <button class="btn sm" @click="importGsvVoice"><Icon name="folder" :size="13" /> {{ t('导入本地音色目录') }}</button>
+          <span class="muted small">{{ t('从网盘 / 社区下载的音色包解压后可直接导入：目录里要有 .ckpt 与 .pth（参考音可选），不需要有直链') }}</span>
+        </div>
         <div v-for="(m, i) in tabbedList" :key="m.id" class="vm-card" :class="{ inst: m.exists, down: prog[m.id] && prog[m.id].active }" :style="{ animationDelay: (i * 40) + 'ms' }" @click="detail = m">
           <div class="vm-top" :class="'k-' + (m.kind || 'other')"></div>
           <div class="vm-head">
@@ -189,7 +267,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
               <span class="vm-size">{{ human(prog[m.id] && prog[m.id].received || m.size) }}</span>
             </template>
           </div>
-          <div v-if="prog[m.id] && prog[m.id].active" class="mini-bar"><i :style="{ width: (prog[m.id].percent || 0) + '%' }"></i></div>
+          <div v-if="prog[m.id] && prog[m.id].active" class="mini-bar"><i :style="{ transform: 'scaleX(' + (((prog[m.id].percent || 0)) / 100) + ')' }"></i></div>
         </div>
         <div v-if="!tabbedList.length" class="vm-empty">
           <div class="vm-empty-ic"><Icon name="box" :size="30" /></div>
@@ -206,7 +284,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
             <span class="dm-ic"><Icon :name="kindIcon(detail)" :size="16" /></span>
             <div class="dm-title">
               <b>{{ detail.name }}</b>
-              <small>{{ detail.arch }} · {{ detail.kind === 'separate' ? t('人声分离') : (detail.kind === 'transcribe' ? t('转录模型') : t('修复工具')) }}</small>
+              <small>{{ detail.arch }} · {{ kindLabel(detail.kind) }}</small>
             </div>
             <button class="icon-btn" style="margin-left:auto" @click="closeDetail"><Icon name="close" :size="15" /></button>
           </div>
@@ -217,7 +295,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
             </div>
             <div class="vm-meta">
               <div class="meta-row"><span class="meta-k">{{ t('架构') }}</span><span>{{ detail.arch || '—' }}</span></div>
-              <div class="meta-row"><span class="meta-k">{{ t('分类') }}</span><span>{{ detail.kind === 'separate' ? t('人声分离') : (detail.kind === 'transcribe' ? t('转录模型') : t('修复工具')) }}</span></div>
+              <div class="meta-row"><span class="meta-k">{{ t('分类') }}</span><span>{{ kindLabel(detail.kind) }}</span></div>
               <div class="meta-row"><span class="meta-k">{{ t('大小') }}</span><span>{{ human(detail.size) }}</span></div>
               <div v-if="detail.repo" class="meta-row"><span class="meta-k">{{ t('来源') }}</span><span class="mono">{{ detail.repo }}</span></div>
               <div v-if="detail.parts" class="meta-row"><span class="meta-k">{{ t('分卷') }}</span><span>{{ detail.parts }} × 25MB</span></div>
@@ -225,7 +303,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
             <p class="vm-note">{{ detail.note }}</p>
 
             <div v-if="prog[detail.id] && prog[detail.id].active" class="vm-prog-box">
-              <div class="vm-prog-bar"><i :style="{ width: (prog[detail.id].percent || 0) + '%' }"></i></div>
+              <div class="vm-prog-bar"><i :style="{ transform: 'scaleX(' + (((prog[detail.id].percent || 0)) / 100) + ')' }"></i></div>
               <div class="vm-prog-txt">
                 <span class="pc">{{ (prog[detail.id].percent || 0) }}%</span>
                 <span v-if="prog[detail.id].speed">⚡ {{ speedTxt(prog[detail.id].speed) }}</span>
@@ -258,95 +336,104 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 
 /* ===== 页签 ===== */
 /*** 页签：与全局 .btn/.tab 一致的轻量 pill 风格，去掉厚重渐变与强投影 ***/
-.vm-tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.vm-tabs { display: flex; gap: var(--sp-2); margin-bottom: 16px; flex-wrap: wrap; }
 
 /* ===== 依赖补全醒目提示 ===== */
-.vm-dep-tip { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; padding: 9px 14px; border-radius: var(--radius-lg); border: 1px solid color-mix(in srgb, var(--brand-coral) 38%, transparent); background: color-mix(in srgb, var(--brand-coral) 11%, var(--surface)); color: var(--ink); font-size: 12.5px; font-weight: 700; line-height: 1.5; }
+.vm-dep-tip { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: 14px; padding: 9px 14px; border-radius: var(--r-lg); border: 1px solid color-mix(in srgb, var(--brand-coral) 38%, transparent); background: color-mix(in srgb, var(--brand-coral) 11%, var(--surface)); color: var(--ink); font-size: var(--fs-md); font-weight: 700; line-height: 1.5; }
 .vm-dep-ic { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; border-radius: 50%; background: color-mix(in srgb, var(--brand-coral) 18%, transparent); color: var(--brand-coral); flex: none; }
 
-.vm-tab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border: 1px solid var(--hairline); border-radius: 999px; background: transparent; color: var(--steel); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background .15s, color .15s, border-color .15s; }
+.vm-tab { display: inline-flex; align-items: center; gap: var(--sp-2); padding: 6px 14px; border: 1px solid var(--hairline); border-radius: var(--r-pill); background: transparent; color: var(--steel); font-size: var(--fs-md); font-weight: 600; cursor: pointer; transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
 .vm-tab:hover { background: var(--surface-soft); color: var(--ink); }
-.vm-tab .tb-ic { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 50%; background: var(--surface-soft); color: var(--steel); transition: all .15s ease; }
+.vm-tab .tb-ic { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 50%; background: var(--surface-soft); color: var(--steel); transition: background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out), opacity var(--motion-fast) var(--ease-out); }
 .vm-tab.active { background: color-mix(in srgb, var(--brand-coral) 15%, var(--surface)); border-color: color-mix(in srgb, var(--brand-coral) 32%, transparent); color: var(--ink); }
 .vm-tab.active .tb-ic { background: color-mix(in srgb, var(--brand-coral) 18%, transparent); color: var(--brand-coral); }
-.vm-tab .tb-cnt { font-size: 10.5px; font-style: normal; background: var(--surface-soft); color: var(--stone); border-radius: 20px; padding: 0 7px; line-height: 16px; }
+.vm-tab .tb-cnt { font-size: var(--fs-xs); font-style: normal; background: var(--surface-soft); color: var(--stone); border-radius: var(--r-lg); padding: 0 7px; line-height: 16px; }
 .vm-tab.active .tb-cnt { background: color-mix(in srgb, var(--brand-coral) 14%, transparent); color: var(--brand-coral); }
 
 /* ===== 卡片网格 ===== */
-.vm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(238px, 1fr)); gap: 14px; }
-.vm-card { position: relative; overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--radius-lg); padding: 14px 16px 12px; background: var(--surface); cursor: pointer; display: flex; flex-direction: column; gap: 6px; min-height: 128px; transition: transform .18s cubic-bezier(.2,.7,.3,1), box-shadow .18s, border-color .18s; }
+.vm-import { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; padding: 10px 12px; border: 1px dashed var(--hairline); border-radius: var(--r-md); background: var(--surface-soft); }
+.vm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(238px, 1fr)); gap: var(--sp-4); }
+.vm-card { position: relative; overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--r-lg); padding: 14px 16px 12px; background: var(--surface); cursor: pointer; display: flex; flex-direction: column; gap: var(--sp-2); min-height: 128px; transition: transform var(--motion-base) var(--ease-out), box-shadow var(--motion-base) var(--ease-out), border-color var(--motion-base) var(--ease-out); }
 .vm-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg); border-color: color-mix(in srgb, var(--brand-coral) 40%, transparent); }
-.vm-card.inst { border-color: color-mix(in srgb, var(--ok, #22c55e) 45%, transparent); }
+.vm-card.inst { border-color: color-mix(in srgb, var(--ok, var(--t-ok)) 45%, transparent); }
 .vm-card.down { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }
 .vm-top { position: absolute; left: 0; right: 0; top: 0; height: 4px; }
-.vm-top.k-transcribe { background: linear-gradient(90deg, #f093fb, #f5576c); }
-.vm-top.k-separate { background: linear-gradient(90deg, #4facfe, #00f2fe); }
-.vm-top.k-other { background: linear-gradient(90deg, #43e97b, #38f9d7); }
-.vm-top.k-tts { background: linear-gradient(90deg, #a18cd1, #fbc2eb); }
+.vm-top.k-transcribe { background: linear-gradient(90deg, var(--data-7), var(--data-1)); }
+.vm-top.k-separate { background: linear-gradient(90deg, var(--t-info), var(--t-info)); }
+.vm-top.k-other { background: linear-gradient(90deg, var(--data-4), var(--data-5)); }
+.vm-top.k-tts { background: linear-gradient(90deg, var(--data-6), var(--data-7)); }
+.vm-top.k-tuning { background: linear-gradient(90deg, var(--data-2), var(--data-1)); }
+/* 调教的二级页签：比顶层轻一档（胶囊、小一号），避免和顶层抢层级 */
+.vm-subtabs { display: flex; gap: var(--sp-2); margin: -6px 0 14px; flex-wrap: wrap; }
+.vm-subtab { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 4px 11px; border: 1px solid var(--hairline); border-radius: var(--r-pill); background: var(--surface); color: var(--slate); font-size: var(--fs-sm); cursor: pointer; }
+.vm-subtab .tb-ic { display: inline-flex; width: 17px; height: 17px; align-items: center; justify-content: center; }
+.vm-subtab:hover { background: var(--surface-soft); color: var(--ink); }
+.vm-subtab.active { background: color-mix(in srgb, var(--brand-coral) 12%, var(--surface)); border-color: color-mix(in srgb, var(--brand-coral) 42%, var(--hairline)); color: var(--ink); }
+
 .vm-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
-.vm-ic { display: inline-flex; width: 26px; height: 26px; align-items: center; justify-content: center; border-radius: 8px; background: var(--surface-soft); color: var(--brand-coral); font-size: 15px; }
-.vm-arch { font-size: 10.5px; font-weight: 600; color: var(--stone); text-transform: uppercase; letter-spacing: .2px; font-family: var(--mono); transition: color .15s; }
+.vm-ic { display: inline-flex; width: 26px; height: 26px; align-items: center; justify-content: center; border-radius: var(--r-md); background: var(--surface-soft); color: var(--brand-coral); font-size: var(--fs-lg); }
+.vm-arch { font-size: var(--fs-xs); font-weight: 600; color: var(--stone); text-transform: uppercase; letter-spacing: .2px; font-family: var(--mono); transition: color var(--motion-fast) var(--ease-out); }
 .vm-card:hover .vm-arch { color: var(--brand-coral); }
-.vm-name { font-size: 13.5px; font-weight: 700; color: var(--ink); }
-.vm-name-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.vm-best { display: inline-flex; align-items: center; gap: 2px; font-size: 10px; font-weight: 700; color: #b45309; background: linear-gradient(135deg, #ffd700, #ffed4e); padding: 1px 6px; border-radius: 20px; line-height: 15px; }
-.vm-use { font-size: 11.5px; color: var(--slate); line-height: 1.6; flex: 1; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.vm-name { font-size: var(--fs-md); font-weight: 700; color: var(--ink); }
+.vm-name-line { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.vm-best { display: inline-flex; align-items: center; gap: 2px; font-size: var(--fs-xs); font-weight: 700; color: var(--t-warn); background: linear-gradient(135deg, var(--data-2), var(--data-3)); padding: 1px 6px; border-radius: var(--r-lg); line-height: 15px; }
+.vm-use { font-size: var(--fs-sm); color: var(--slate); line-height: 1.6; flex: 1; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .vm-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; }
-.pill { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 20px; letter-spacing: .2px; }
-.pill.on { background: color-mix(in srgb, var(--ok,#22c55e) 14%, transparent); color: var(--ok,#16a34a); }
+.pill { font-size: var(--fs-xs); font-weight: 700; padding: 2px 8px; border-radius: var(--r-lg); letter-spacing: .2px; }
+.pill.on { background: color-mix(in srgb, var(--ok,var(--t-ok)) 14%, transparent); color: var(--ok,var(--t-ok)); }
 .pill.run { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
 .pill.off { background: var(--surface-soft); color: var(--stone); }
-.vm-size { font-size: 11px; color: var(--stone); font-family: var(--mono); }
-.mini-bar { height: 4px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; margin-top: 4px; }
-.mini-bar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--brand-coral)); transition: width .2s linear; }
-.vm-empty { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 56px 0; color: var(--stone); }
+.vm-size { font-size: var(--fs-xs); color: var(--stone); font-family: var(--mono); }
+.mini-bar { height: 4px; border-radius: var(--r-pill); background: var(--surface-soft); overflow: hidden; margin-top: 4px; }
+.mini-bar i { display: block; height: 100%; border-radius: var(--r-pill); background: linear-gradient(90deg, var(--accent), var(--brand-coral)); transition: transform var(--motion-base) var(--ease-out); }
+.vm-empty { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: var(--sp-3); padding: 56px 0; color: var(--stone); }
 .vm-empty-ic { opacity: .35; }
 
 /* ===== 抽屉 ===== */
 .vm-scrim { position: fixed; inset: 0; background: rgba(8,10,16,.45); -webkit-backdrop-filter: blur(8px) saturate(1.4); backdrop-filter: blur(8px) saturate(1.4); z-index: 130; display: flex; align-items: center; justify-content: center; padding: 24px; }
 .scrim-bg { background: linear-gradient(160deg, rgba(16,18,28,.6), rgba(8,10,16,.5)); }
-.vm-drawer { width: 440px; max-width: 94vw; max-height: 88vh; background: var(--glass-bg-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid color-mix(in srgb, #fff 26%, transparent); border-radius: 16px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden; }
-.vm-drawer-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--hairline); }
-.dm-ic { display: inline-flex; width: 34px; height: 34px; flex:none; align-items: center; justify-content: center; border-radius: 10px; background: linear-gradient(135deg, var(--brand-coral), color-mix(in srgb, var(--brand-coral) 70%, #8b5cf6)); color: #fff; }
+.vm-drawer { width: 440px; max-width: 94vw; max-height: 88vh; background: var(--glass-bg-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid color-mix(in srgb, var(--on-accent) 26%, transparent); border-radius: var(--r-lg); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden; }
+.vm-drawer-head { display: flex; align-items: center; gap: var(--sp-3); padding: 14px 16px; border-bottom: 1px solid var(--hairline); }
+.dm-ic { display: inline-flex; width: 34px; height: 34px; flex:none; align-items: center; justify-content: center; border-radius: var(--r-md); background: linear-gradient(135deg, var(--brand-coral), color-mix(in srgb, var(--brand-coral) 70%, var(--data-6))); color: var(--on-accent); }
 .dm-title { display: flex; flex-direction: column; min-width: 0; }
-.dm-title b { font-size: 14px; color: var(--ink); }
-.dm-title small { font-size: 10.5px; color: var(--stone); }
+.dm-title b { font-size: var(--fs-lg); color: var(--ink); }
+.dm-title small { font-size: var(--fs-xs); color: var(--stone); }
 .vm-drawer-body { padding: 14px 16px 8px; overflow-y: auto; }
-.vm-hero { background: linear-gradient(135deg, color-mix(in srgb, var(--brand-coral) 8%, transparent), color-mix(in srgb, #8b5cf6 8%, transparent)); border: 1px solid color-mix(in srgb, var(--brand-coral) 22%, transparent); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
-.hero-use { font-size: 12.5px; color: var(--ink); line-height: 1.65; }
-.vm-meta { border: 1px solid var(--hairline); border-radius: 12px; padding: 4px 14px; }
-.meta-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--hairline); font-size: 12px; color: var(--ink); }
+.vm-hero { background: linear-gradient(135deg, color-mix(in srgb, var(--brand-coral) 8%, transparent), color-mix(in srgb, var(--data-6) 8%, transparent)); border: 1px solid color-mix(in srgb, var(--brand-coral) 22%, transparent); border-radius: var(--r-md); padding: 12px 14px; margin-bottom: 12px; }
+.hero-use { font-size: var(--fs-md); color: var(--ink); line-height: 1.65; }
+.vm-meta { border: 1px solid var(--hairline); border-radius: var(--r-md); padding: 4px 14px; }
+.meta-row { display: flex; align-items: center; gap: var(--sp-3); padding: 8px 0; border-bottom: 1px dashed var(--hairline); font-size: var(--fs-sm); color: var(--ink); }
 .meta-row:last-child { border-bottom: 0; }
-.meta-k { color: var(--stone); width: 52px; flex: none; font-size: 11.5px; }
+.meta-k { color: var(--stone); width: 52px; flex: none; font-size: var(--fs-sm); }
 .meta-row .mono { font-family: var(--mono); color: var(--slate); overflow: hidden; text-overflow: ellipsis; }
-.vm-note { font-size: 11.5px; color: var(--stone); margin: 10px 2px; line-height: 1.65; }
-.vm-drawer-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--hairline); background: var(--surface); }
-.df-group { display: flex; gap: 8px; }
+.vm-note { font-size: var(--fs-sm); color: var(--stone); margin: 10px 2px; line-height: 1.65; }
+.vm-drawer-foot { display: flex; justify-content: flex-end; gap: var(--sp-2); padding: 12px 16px; border-top: 1px solid var(--hairline); background: var(--surface); }
+.df-group { display: flex; gap: var(--sp-2); }
 
 /* ===== 进度 ===== */
 .vm-prog-box { margin-top: 8px; }
-.vm-prog-bar { height: 8px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; }
-.vm-prog-bar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--brand-coral)); transition: width .2s linear; }
-.vm-prog-txt { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--stone); margin-top: 6px; }
-.vm-prog-txt .pc { font-weight: 800; font-size: 13px; color: var(--ink); font-family: var(--mono); }
-.vm-prog-name { font-size: 12px; font-weight: 600; color: var(--ink); margin-bottom: 5px; }
-.vm-err { color: var(--error); font-size: 11.5px; margin-top: 8px; }
+.vm-prog-bar { height: 8px; border-radius: var(--r-pill); background: var(--surface-soft); overflow: hidden; }
+.vm-prog-bar i { display: block; height: 100%; border-radius: var(--r-pill); background: linear-gradient(90deg, var(--accent), var(--brand-coral)); transition: transform var(--motion-base) var(--ease-out); }
+.vm-prog-txt { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-xs); color: var(--stone); margin-top: 6px; }
+.vm-prog-txt .pc { font-weight: 800; font-size: var(--fs-md); color: var(--ink); font-family: var(--mono); }
+.vm-prog-name { font-size: var(--fs-sm); font-weight: 600; color: var(--ink); margin-bottom: 5px; }
+.vm-err { color: var(--error); font-size: var(--fs-sm); margin-top: 8px; }
 
 /* ===== 弹窗 ===== */
-.vm-pop { width: 480px; max-width: 92vw; max-height: 70vh; background: var(--glass-bg-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid color-mix(in srgb, #fff 26%, transparent); border-radius: 16px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden; }
+.vm-pop { width: 480px; max-width: 92vw; max-height: 70vh; background: var(--glass-bg-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid color-mix(in srgb, var(--on-accent) 26%, transparent); border-radius: var(--r-lg); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden; }
 .vm-pop-body { padding: 10px 16px 14px; overflow-y: auto; }
 .dd-item { padding: 10px 0; border-bottom: 1px dashed var(--hairline); }
 .dd-item:last-child { border-bottom: 0; }
 
 /* ===== 动画（整套应用风格：每次交互皆有流畅过渡） ===== */
 @keyframes vmUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
-.vm-card { animation: vmUp .42s cubic-bezier(.2, .7, .3, 1) both; }
+.vm-card { animation: vmUp var(--motion-slow) var(--ease-out) both; }
 .vmcard-empty { animation: none; }
-.vmfade-enter-active, .vmfade-leave-active { transition: opacity .16s ease, transform .16s ease; }
+.vmfade-enter-active, .vmfade-leave-active { transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
 .vmfade-enter-from, .vmfade-leave-to { opacity: 0; transform: translateY(6px); }
 /* 抽屉：右侧滑入滑出 */
-.dr-enter-active, .dr-leave-active { transition: opacity .26s ease; }
+.dr-enter-active, .dr-leave-active { transition: opacity var(--motion-base) var(--ease-out); }
 .dr-enter-from, .dr-leave-to { opacity: 0; }
-.dr-enter-active .vm-drawer, .dr-leave-active .vm-drawer { transition: transform .34s cubic-bezier(.2,.7,.3,1); }
+.dr-enter-active .vm-drawer, .dr-leave-active .vm-drawer { transition: transform var(--motion-slow) var(--ease-out); }
 .dr-enter-from .vm-drawer, .dr-leave-to .vm-drawer { transform: translateX(100%); }
 </style>

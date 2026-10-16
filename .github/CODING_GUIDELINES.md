@@ -170,6 +170,7 @@ git push origin v<主>.<次>.<补丁>
    - 资产名称、大小与本地一致。
    - 资产状态为 `uploaded`。
    - Release 简介在 GitHub 页面显示正常（无乱码）。
+4. **≥ 200 MB 的资产用网页上传；50 ~ 200 MB 用脚本并行（见 11.7）** —— 脚本速度取决于系统代理状态，实测波动可达 65 倍。
 
 ### 11.5 禁止事项
 - **禁止**在未提交代码前上传安装包。
@@ -198,6 +199,78 @@ git push origin v<主>.<次>.<补丁>
 3. 不要直接依赖 PowerShell 控制台编码写中文；若必须用 `Invoke-RestMethod`，请先将 JSON 写入 UTF-8 文件或使用 UTF-8 字节数组。
 4. 上传后立即在 GitHub 页面检查简介中文是否正常；发现乱码立刻用 UTF-8 JSON 重新 PATCH。
 5. 建议在 Release 简介中只用标准 Markdown + 纯中文/英文，避免特殊字符被编码破坏。
+
+### 11.7 上传加速：先确认代理，再谈并行（大资产优先用网页传）
+
+**背景**：GitHub 直连上传又慢又不稳，608 MB 的完整安装包一度要 90 分钟以上，且中途整份传完还失败过一次。
+
+**真正的根因：上传被静默地导到了本地代理上，而代理的快慢波动极大。**
+
+Windows 上 `requests` 会通过 `urllib.request.getproxies()` **读注册表里的 WinINET 代理设置** ——
+即使一个 `HTTP_PROXY` 环境变量都没有，脚本也会自动走系统代理。本机实测
+（2026-10-11，系统代理 `127.0.0.1:10810`；同一个 24 MB 对照文件、同一条线路）：
+
+| 路径 | 实测速度 | 说明 |
+|---|---|---|
+| 直连（`--no-proxy`） | **0.40 MB/s** | 稳定但慢，是国际链路的硬地板 |
+| 走系统代理（脚本默认） | **2.59 MB/s** | 快路径，但随时间剧烈波动 |
+| 同一代理的历史波动 | **0.075 ~ 4.87 MB/s** | 相差 65 倍 |
+| **浏览器手动上传** | **4.87 MB/s**（608 MB / 125 秒） | 同一时段最快，见结论 1 |
+
+**之前把「每条流恒定 0.4 MB/s」当成链路物理上限是错的** —— 那只是代理状态差时的表现。
+代理正常时单流就能到 2.59 MB/s，浏览器走同一代理能到 4.87 MB/s。
+所以并行与重掷都只是次要手段：**代理不健康时，怎么调都是 0.4 MB/s。**
+
+结论：
+
+1. **≥ 200 MB 的资产直接用 GitHub 网页上传。** 实测 608 MB / 125 秒（4.87 MB/s），
+   比脚本快一个数量级，而且浏览器自带重试与连接复用，不用调参、也不会在服务端留下半成品资产。
+2. **脚本现在默认自动测速选路。** 启动时直连与系统代理各真传一个 2 MB 探针到
+   `uploads.github.com` 测速，**哪条快走哪条**，并打印两条的实测值 + 最终选择。
+   探针测完即删，另有按前缀兜底清理。显式覆盖：`--no-proxy` / `--proxy <URL>`。
+   之所以不写死：同一条代理实测 0.075 ~ 4.87 MB/s（差 65 倍），直连则是稳定但慢的 0.40 MB/s ——
+   写死任何一条都会有一半时间选中较差的那条。
+3. `--race N` 与 `--min-speed` 保留（并行拉总吞吐、慢流重掷），但都只在代理健康时有意义。
+4. 分片 / 断点续传不存在（见下），所以慢就只能换路径 —— 或者换人用浏览器传。
+
+**两条走不通的路（不要再试）**：
+
+1. **ghfast.top / gh-proxy.com / ghproxy.net 不能加速上传。** 它们是 releases 的**下载**代理，
+   不代理上传。上传只能直连 `uploads.github.com`。
+2. **分片 / 断点续传不存在。** GitHub 的 release asset 接口不支持 multipart 或 Range，
+   所以「多线程分片传同一个文件」这条路做不了。
+
+**默认口径：路径交给脚本自动测速选（或 ≥ 200 MB 直接走网页传）；50 ~ 200 MB 可加 `--race 3`。**
+
+> **2026-10-13 补充：并行要跨资产、不要跨流；慢就重掷。见 §11.8。**
+
+```bash
+# >= 200 MB：不要用脚本，直接开网页拖进去（实测 4.87 MB/s）
+#   https://github.com/<owner>/<repo>/releases/tag/v<版本>  ->  Edit  ->  拖入  ->  Update release
+
+# 50 ~ 200 MB：脚本并行 3 条流，不开 watchdog
+python scripts/upload-release-asset.py <token> qdTXTbp/FuFumidi v5.0.1 "release/FuFumidi Setup 5.0.1.exe" FuFumidi-Setup-5.0.1.exe --race 3
+
+# 速度不对时：先看脚本打印的 proxy: 行，再决定直连还是指定代理
+python scripts/upload-release-asset.py <token> qdTXTbp/FuFumidi v5.0.1 <file> <name> --no-proxy
+
+# 小资产（< 50 MB）：单流即可
+python scripts/upload-release-asset.py <token> qdTXTbp/FuFumidi v5.0.1 release/latest.yml latest.yml
+```
+
+- `--race N`：同时开 N 条相同 POST，第一条返回 201 即胜出，其余流立即中断
+  （读文件时抛异常 → 连接断开，服务端不落资产）。**N 建议 3**，上限 8；代价是 N 倍上行流量。
+- `--min-speed X`（默认 0 = 关闭）：每条流已发 ≥ 8 MB 后开始计速，窗口内低于 X MB/s 就掐掉，
+  并立刻补一条新流（换路由重掷）。**只有当链路确实存在快慢路由差异时才开** ——
+  全线都慢时它只会白烧流量并耗尽 `--rolls`（实测 6 次重掷全部 0.14~0.44 MB/s，无收益）。
+- **≥ 200 MB 的包优先只挂 CNB**：CNB 实测 1.04 MB/s（608 MB 用 587 秒），比 GitHub 快得多，
+  而 `kachina.config.json` 里 CNB 本来就是更新器的首选源。GitHub 只放增量包即可，
+  完整包留给需要的人（见 11.4）。
+- `--rolls N`（默认 6）：每条流最多重掷几次。单流整份传完却失败（实测发生过）也被覆盖 ——
+  任一条流失败或被掐只影响它自己，其余继续。
+- 胜出后脚本按资产名清掉重复项，**保证同名资产只剩一条** ——
+  `releases/latest/download/<固定名>` 依赖这个唯一性，同名重复会直接破坏自动更新。
+- 验收口径不变：上传后核对资产名称、大小与本地一致，状态为 `uploaded`（见 11.4 第 3 条）。
 
 ---
 
@@ -247,3 +320,75 @@ git push origin v<主>.<次>.<补丁>
    \`preload.js\`、\`main/*.js\`、\`frontend/src/types/ipc.ts\`，并在 PR 描述里写明兼容性。
 2. 每一句中文 \`t('…')\` 都要有英文与日文条目（\`core/i18n.js\` / \`core/i18n_ja.js\`）。
 3. 界面类改动必须在安装版（\`E:\\Midi\\FuFumidi\`）跑一遍冒烟再提 PR —— 构建通过不等于能用。
+
+---
+
+### 11.8 慢就重掷；并行要**跨资产**，不要跨流（2026-10-13 实测，5.1.0 发布）
+
+**背景**：同一次发布里，同一个 143.9 MB 的文件出现了 **0.31 / 0.39 / 4.60 MB/s** 三种速度（相差 15 倍），
+而 608.9 MB 的完整包最终跑出 **4.27 MB/s**。差别不在文件、不在参数，在**当时那条路**。
+以下四条是这次踩出来的，按重要性排列。
+
+**实测数据（同机、同一发布、2026-10-13 夜）**
+
+| 场景 | 实测 | 说明 |
+|---|---|---|
+| 系统代理端口 `127.0.0.1:10810` | **不在监听** | 此刻只有直连一条路，§11.7 的"自动测速选路"没有第二条路可选 |
+| 直连探针（5 MB → Cloudflare `__up`） | **0.42 MB/s** | 与 §11.7 记的直连地板 0.40 MB/s 一致 |
+| GitHub `--race 3`（**同时**还在传 CNB） | 8.2 MB 用 26 s = **0.31 MB/s**；143.9 MB 传 15 分钟**没传完** | 3 条流抢同一条 0.42 MB/s 的管道 → 每条只剩 0.14；跨发布又抢一次 |
+| GitHub `fast-upload.mjs --jobs 2`（每条资产单流；CNB 已结束） | **752.8 MB / 144 s = 5.23 MB/s**（608.9 MB 单独 142 s = 4.27 MB/s） | 并行**跨资产**才是有效并行 |
+| GitHub `--race 1` 单资产（六分钟后，同一个 143.9 MB） | **0.39 MB/s**（370 s） | 路况是突发性的：慢的时候重掷，不要等 |
+
+**四条规则**
+
+1. **并行要跨资产，不要跨流。** release asset 接口不支持分片（§11.7 已记），所以
+   `--race N` 在**只有一条可用路线**时是纯粹的自我竞争：N 条流各分到 1/N 带宽，
+   总时间反而变成 N 倍。要并行就并行**不同的资产**（`fast-upload.mjs --jobs 2`），
+   每条资产保持单流（`--race 1`）。`--race 3` 只在**确实存在多条快慢不同的路由**时才开。
+
+2. **同一时间只跑一条发布通道。** CNB 单独约 0.95 MB/s；CNB 与 GitHub 同时跑时 GitHub 掉到 0.31 MB/s，
+   两者相加 ≈ 单跑 CNB 的速率 —— 它们共用同一条上行。**先传完 CNB 再传 GitHub（或反之）。**
+
+3. **慢就重掷，不要等。** 吞吐低于 0.5 MB/s 时，掐掉重传的期望收益远大于等它跑完
+   （实测同一文件 0.39 → 4.60 MB/s）。先跑一次 5 MB 探针确认当前路况与代理端口状态，
+   再决定：重掷 / 换 `--no-proxy` / 换 `--proxy <URL>` / 交给网页传。
+
+4. **上传后必须用 API 核对资产清单（名字 + size + state），不能只信脚本输出。** 本次两次踩到：
+   · `fast-upload.mjs` 把 `FuFumidi.Install.5.1.0.exe` 报成"已有相同大小，跳过"，
+     但线上**根本没有这个资产**（它按大小匹配到了同尺寸的兄弟资产 `FuFumidi.Install.exe`）；
+   · `metadata-5.1.0.json` 的一个 race slot 收到 `HTTP 404 update-a-release-asset`，
+     另一个 slot "胜出"、脚本打印了 `uploaded:`，而线上**始终没有这个资产**。
+   两条都会让"发布成功"变成假象 —— 固定名地址（`releases/latest/download/<固定名>`）一旦缺资产，
+   应用内自动更新就断链。
+
+**核对口令（每次发布收尾跑一遍）**
+
+```powershell
+# 资产清单：名字 / 大小 / 状态，逐个对照本地 SHA256SUMS.txt
+$rel = Invoke-RestMethod -Uri "https://api.github.com/repos/qdTXTbp/FuFumidi/releases/tags/v<版本>" -Headers $h
+$rel.assets | Sort-Object name | ForEach-Object { $_.name.PadRight(38) + $_.size + "  " + $_.state }
+# 固定名地址必须能解析（应用内更新就用它）
+curl.exe -sIL "https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe"
+curl.exe -sIL "https://cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/releases/latest/download/FuFumidi.Install.exe"
+```
+
+**默认口径（2026-10-13 起）**：优先 `fast-upload.mjs --jobs 2`（每条资产单流、跨资产并行）；
+单资产 `--race 3` > 网页传 > 等待。任何一次低于 0.5 MB/s 都先重掷再谈别的。
+
+---
+
+### 11.9 推送一律走 GitHub Git Data API（用户 2026-10-14 决定）
+
+**规矩：以后推送不再用 `git push`，改用 `npm run push:api`（`scripts/api-push.mjs`）。**
+
+原因：本机到 `github.com:443` 经常连不上（`git push` 直接 fatal: Could not connect），
+而 `api.github.com` 一直可用。API 路子是 `blob → tree → commit → PATCH ref`，
+与 git 协议无关，所以网络抖动时照样能推。
+
+**★ 铁律：先读远端 ref，只重放它之后的本地提交。** 已经推过的提交再重放一次，
+会造出**内容相同、SHA 不同**的重复提交（2026-10-14 真的踩了：远端明明已经是 `893bb62`，
+我又重放了 3 个提交，多出 `e5f2f2eb`/`dda40e6e`/`dca130d9`，只能再把 ref 退回去）。
+`api-push.mjs` 已经把这条写进流程（比对远端 ref 与本地 HEAD 后才动手）。
+
+token 从 git 凭据管理器取（`git credential fill`，与 `_attic/asar-deploy/get-token.py` 同源），
+**不写进仓库**。只读预览：`node scripts/api-push.mjs --dry`。

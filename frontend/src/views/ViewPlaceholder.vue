@@ -14,7 +14,7 @@ const ICONS = { home: 'home', play: 'play2', lyrics: 'music', edit: 'edit', viz:
       <div class="mig-ic"><Icon :name="ICONS[v.id] || 'spark'" :size="30" /></div>
       <h2>{{ t(v.label) }}{{ t('视图') }}</h2>
       <p>{{ t('该功能正在逐步迁移到新的现代化界面中。核心能力（MIDI 解析、Web Audio 合成、播放调度）已完成模块化，此视图将在后续迭代接入。') }}</p>
-      <div class="row" style="justify-content:center;gap:10px;flex-wrap:wrap">
+      <div class="row" style="justify-content:center;gap:var(--sp-3);flex-wrap:wrap">
         <button class="btn ghost sm" disabled><Icon name="spark" :size="14" /> {{ t('迁移计划中') }}</button>
         <span class="tag">{{ t('渐进式重构 · 保留离线能力') }}</span>
       </div>

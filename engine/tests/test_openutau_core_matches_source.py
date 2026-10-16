@@ -849,11 +849,17 @@ def test_renderers_registry():
               'C#=%r 我们=%r' % (_cs_array(cs_name), ours))
     check('Renderers: noRenderers 是空数组', re.search(r'string\[\] noRenderers = new string\[0\]', cs) is not None)
 
-    # ---- getRendererOptions 的字面量（注意 "Classic" 的大小写）
+    # ---- getRendererOptions：**前向移植自上游 master**，参考克隆停在更早的提交
+    #   基线 04c4e61005：new List<string> { "WORLDLINE-R", "Classic" }
+    #   master         ：new List<string> { WORLDLINE_R, WORLDLINE_R11, CLASSIC }
+    #   R1.1 就是随这次改动一起放出来的，所以这里是**有意的向前对齐**，不是漂移。
     m = re.search(r'getRendererOptions\(\)\s*\{(.*?)\}', cs, re.S)
     opts = re.findall(r'"([^"]+)"', m.group(1)) if m else None
-    check('Renderers: getRendererOptions 字面量一致（含 "Classic" 的大小写）',
-          opts == R.get_renderer_options(), 'C#=%r 我们=%r' % (opts, R.get_renderer_options()))
+    check('Renderers: 参考克隆仍是基线版本（选项表只有两项）—— 把这个差异记下来',
+          opts == ['WORLDLINE-R', 'Classic'], 'C#=%r' % (opts,))
+    check('Renderers: getRendererOptions 跟 master（R1.1 与 CLASSIC 都在里面）',
+          R.get_renderer_options() == [WORLDLINE_R, WORLDLINE_R11, CLASSIC],
+          'got %r' % (R.get_renderer_options(),))
 
     # ---- ApplyDynamics 里写死的常数
     check('Renderers: ApplyDynamics 的 interval=5', re.search(r'ApplyDynamics.*?const int interval = 5;', cs, re.S) is not None)
@@ -861,8 +867,11 @@ def test_renderers_registry():
     check('Renderers: ApplyDynamics 末段 b 取自身（不外推）',
           'phrase.dynamics[i + 1]' in cs and '(i + 1) == phrase.dynamics.Length' in cs)
 
-    # ---- GetDefaultRenderer 比较的字面量
-    check('Renderers: GetDefaultRenderer 比的是 "Classic"（非 CLASSIC）',
+    # ---- GetDefaultRenderer：同样前向移植自 master
+    #   基线：if (Preferences.Default.DefaultRenderer == "Classic" && singerType == Classic)
+    #   master：if (singerType == Classic && classicRenderers.Contains(Preferences.Default.DefaultRenderer))
+    #   功能语义由下面的 _Pref* 三条断言钉住（这里只记录参考克隆是基线版本）。
+    check('Renderers: 参考克隆里 GetDefaultRenderer 还是老写法（== "Classic"）—— 记录差异',
           'DefaultRenderer == "Classic"' in cs)
 
     # ---- 分支顺序：WORLDLINE-R2 / -R1.1 必须在前缀兜底之前
@@ -880,18 +889,33 @@ def test_renderers_registry():
     check('Renderers.GetSupportedRenderers(未知) 返回共享空元组',
           R.get_supported_renderers(0x99) is R.NO_RENDERERS)
 
-    # ---- 功能：DefaultRenderer=="Classic" 且 Classic → 常量 CLASSIC
-    class _Pref:
-        default_renderer = 'Classic'
+    # ---- 功能：偏好里存的渲染器 id 只要在 classicRenderers 里就**原样尊重**
+    class _PrefR11:
+        default_renderer = WORLDLINE_R11
 
-    class _PrefLower:
-        default_renderer = 'CLASSIC'
+    class _PrefClassic:
+        default_renderer = CLASSIC
 
-    check('Renderers.GetDefaultRenderer: "Classic"+Classic → CLASSIC',
-          R.get_default_renderer(0x1, _Pref()) == CLASSIC)
-    check('Renderers.GetDefaultRenderer: "CLASSIC"（全大写）不进特判分支',
-          R.get_default_renderer(0x1, _PrefLower()) == WORLDLINE_R,
-          'got %r' % R.get_default_renderer(0x1, _PrefLower()))
+    class _PrefOldName:
+        default_renderer = 'Classic'      # 基线时代的选项名，master 起不再匹配
+
+    class _PrefEmpty:
+        default_renderer = ''
+
+    check('Renderers.GetDefaultRenderer: 存 WORLDLINE-R1.1 时被尊重（R1.1 能跨重启保持）',
+          R.get_default_renderer(0x1, _PrefR11()) == WORLDLINE_R11,
+          'got %r' % R.get_default_renderer(0x1, _PrefR11()))
+    check('Renderers.GetDefaultRenderer: 存 CLASSIC 时被尊重',
+          R.get_default_renderer(0x1, _PrefClassic()) == CLASSIC,
+          'got %r' % R.get_default_renderer(0x1, _PrefClassic()))
+    check('Renderers.GetDefaultRenderer: 旧选项名 "Classic" 不再匹配 → 回落默认 WORLDLINE-R',
+          R.get_default_renderer(0x1, _PrefOldName()) == WORLDLINE_R,
+          'got %r' % R.get_default_renderer(0x1, _PrefOldName()))
+    check('Renderers.GetDefaultRenderer: 空偏好 → 回落默认 WORLDLINE-R',
+          R.get_default_renderer(0x1, _PrefEmpty()) == WORLDLINE_R)
+    check('Renderers.GetDefaultRenderer: 非 Classic 歌手类型不吃这个偏好',
+          R.get_default_renderer(0x5, _PrefR11()) == DIFFSINGER,
+          'got %r' % R.get_default_renderer(0x5, _PrefR11()))
 
     # ---- 功能：CreateRenderer 的版本分派与前缀兜底
     R.reset_registry()
@@ -1054,9 +1078,55 @@ def test_resampler_item():
         # durRequired = (500-0) + 30 + 10 = 540 → ceil(540/50+0.5)*50 = ceil(11.3)*50 = 600
         check('ResamplerItem: durRequired = ceil((540/50)+0.5)*50 = 600',
               abs(item.dur_required - 600.0) < 1e-9, 'got %r' % item.dur_required)
-        check('ResamplerItem: 直接透传 oto 的 offset/consonant/cutoff',
+        # 注意：**仅当 leading ≤ oto.preutter 时**才是直接透传 —— 此时 pulled=0。
+        # 见下面「preutter 超过 oto」那一组。
+        check('ResamplerItem: 直接透传 oto 的 offset/consonant/cutoff（leading ≤ preutter 时）',
               (item.offset, item.consonant, item.cutoff) == (100.0, 50.0, -200.0),
               'got %r' % ((item.offset, item.consonant, item.cutoff),))
+
+        # ---- 上游 b30d3347：preutter 超过 oto 时把 offset 往前拉到文件开头
+        # ★ 关键：`RenderPhone.leading_ms` 取的是 **preutter**（见上面那条断言），不是 `leading`。
+        #   同一套 oto（offset=100, preutter=60, consonant=50, cutoff=-200），velocity=1 → stretch=1：
+        #     preutter=150 → leadingMs=150 → pulled = round(150/1 - 60, 3) = 90（≤100，不夹）
+        #       offset    = 100 - 90 = 10
+        #       pitchLead = (60 + 90) * 1 = 150 → skipOver = 150 - 150 = 0
+        #       consonant = 50 + 90  = 140      （在文件中的绝对位置不变）
+        #       cutoff    = -200 - 90 = -290    （负 cutoff 从结尾算，要跟着移）
+        ph2 = _mk_phoneme(
+            oto=uoto, envelope=env_pts,
+            flags=[('V', 50, 'vel')],
+            velocity=1.0, volume=100.0, modulation=0.0,
+            preutter=150.0, overlap=10.0, tail_intrude=25.0, tail_overlap=5.0,
+            leading=150)
+        _rp2 = RenderPhrase(src, [ph2], 0, 1)
+        item2 = RI.ResamplerItem(_rp2, _rp2.phones[0])
+        check('★ ResamplerItem: preutter 超过 oto 时 offset 往前拉 90ms（100 → 10）',
+              abs(item2.offset - 10.0) < 1e-9, 'got %r' % item2.offset)
+        check('★ ResamplerItem: 前拉后 skipOver 归零（pitchLeading 补齐到 leadingMs）',
+              abs(item2.skip_over - 0.0) < 1e-9, 'got %r' % item2.skip_over)
+        check('★ ResamplerItem: consonant 跟着前拉，保持在文件中的绝对位置',
+              abs(item2.consonant - 140.0) < 1e-9, 'got %r' % item2.consonant)
+        check('★ ResamplerItem: 负 cutoff 跟着前拉（-200 → -290）',
+              abs(item2.cutoff - (-290.0)) < 1e-9, 'got %r' % item2.cutoff)
+
+        # 夹紧上界：preutter 再大也拉不过文件开头 —— pulled 夹在 max(0, oto.offset)=100
+        #   preutter=250 → pulled 名义 190 → 夹到 100
+        #     offset = 100 - 100 = 0，consonant = 50 + 100 = 150，cutoff = -200 - 100 = -300
+        #     skipOver = (60 + 100) * 1 - 250 = -90（为负：pitchLeading 还不够补上 leadingMs）
+        ph3 = _mk_phoneme(
+            oto=uoto, envelope=env_pts,
+            flags=[('V', 50, 'vel')],
+            velocity=1.0, volume=100.0, modulation=0.0,
+            preutter=250.0, overlap=10.0, tail_intrude=25.0, tail_overlap=5.0,
+            leading=250)
+        _rp3 = RenderPhrase(src, [ph3], 0, 1)
+        item3 = RI.ResamplerItem(_rp3, _rp3.phones[0])
+        check('★ ResamplerItem: pulled 夹在 max(0, oto.offset) —— offset 落到 0 就不再往前',
+              abs(item3.offset - 0.0) < 1e-9 and abs(item3.consonant - 150.0) < 1e-9
+              and abs(item3.cutoff - (-300.0)) < 1e-9,
+              'got offset=%r consonant=%r cutoff=%r' % (item3.offset, item3.consonant, item3.cutoff))
+        check('★ ResamplerItem: 夹住后 skipOver 转负（pitchLeading 补不满 leadingMs）',
+              abs(item3.skip_over - (-90.0)) < 1e-9, 'got %r' % item3.skip_over)
         check('ResamplerItem: durCorrection 照抄 RenderPhone 的值',
               item.dur_correction == rp.phones[0].dur_correction_ms)
         check('ResamplerItem: tempo 取 phone.adjustedTempo', item.tempo == 120.0,
@@ -3631,6 +3701,9 @@ class _FakeNative:
         self.f0_methods = []
         self.analysis_samples = None
         self.synthesis_call = None
+        #: Worldline-R1.1（v11）那条链的记录位
+        self.hn_analysis_call = None
+        self.cn_call = None
 
     def init_analysis_config(self, fs, hop_size, fft_size):
         from singing.openutau.worldline import init_analysis_config
@@ -3645,6 +3718,31 @@ class _FakeNative:
         sp_size = config.fft_size // 2 + 1
         n = len(f0_in)
         return [1e-6] * (n * sp_size), [1.0] * (n * sp_size)
+
+    def hn_analysis_f0_in(self, config, samples, harmonic, f0_in):
+        """对应 R1.1 的分析入口：多收 `harmonic`，多吐 `sp_harmonic`。
+
+        两支包络故意给**不同量级**（1e-6 vs 2e-6），测试才能分辨哪支流到了哪里。
+        """
+        self.hn_analysis_call = dict(samples=list(samples), harmonic=list(harmonic),
+                                     frames=len(f0_in))
+        sp_size = config.fft_size // 2 + 1
+        n = len(f0_in)
+        return ([1e-6] * (n * sp_size), [2e-6] * (n * sp_size), [1.0] * (n * sp_size))
+
+    def world_synthesis_continuous_noise(self, f0, sp, harmonic_sp, ap, stretch,
+                                         fft_size, hop_size, fs, seed, gender,
+                                         tension, breathiness, voicing):
+        from singing.openutau.worldline import world_synthesis_sample_count
+        self.cn_call = dict(f0=list(f0), frames=len(f0),
+                            sp_size=len(sp) // max(1, len(f0)),
+                            sp=list(sp), harmonic_sp=list(harmonic_sp), ap=list(ap),
+                            stretch=list(stretch), fft_size=fft_size, hop_size=hop_size,
+                            fs=fs, seed=seed, gender=list(gender), tension=list(tension),
+                            breathiness=list(breathiness), voicing=list(voicing))
+        # ★ 帧周期用 hopSize 换算（不是 config.frame_ms）—— 与 C# 一致
+        count = world_synthesis_sample_count(len(f0), hop_size * 1000.0 / fs, fs)
+        return [0.125] * count
 
     def world_synthesis(self, f0, sp, is_mgc, mgc_size, bap, is_bap, fft_size,
                         frame_period, fs, gender, tension, breathiness, voicing):
@@ -3809,6 +3907,249 @@ def test_worldline_resample_orchestration():
               'throw new CutOffExceedDurationError();' in flat)
         check('Worldline.cs: srcEndFrame <= srcStartFrame 是错误',
               'throw new CutOffBeforeOffsetError();' in flat)
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+class _FakeHnsep:
+    """假 hnsep（对应 `Core/Analysis/Hnsep`）：**恒等**分离，并记录收到的样本数。
+
+    恒等是故意的 —— 于是"谐波分量与样本乘了同一个增益"这件事可以用**逐元素相等**来断言。
+    """
+
+    def __init__(self, sample_rate=44100, scale=1.0):
+        self.sample_rate = sample_rate
+        self.scale = scale
+        self.input_len = None
+
+    def harmonic(self, samples):
+        self.input_len = len(samples)
+        return [v * self.scale for v in samples]
+
+
+def test_worldline_r11_continuous_noise():
+    """Worldline-R1.1：hnsep 分离 → HnAnalysisF0In → SynthContinuousNoise。
+
+    对齐 `Worldline.cs` 的 `SynthSegment`（hnsep 分支，:429-464）与
+    `PhraseSynthV2.SynthContinuousNoise`（:691-764）。
+    """
+    import random
+    import tempfile
+
+    from singing.openutau import Wave
+    from singing.openutau.worldline import (
+        HnsepSampleRateError, PhraseSynthV2, SynthSegment,
+        blend_continuous_noise_features, get_flag, resample_features,
+        segment_auto_gain, world_synthesis_sample_count,
+    )
+
+    cs = _read('Render/Worldline.cs')
+    if cs is None:
+        print('  SKIP 找不到 Render/Worldline.cs')
+        return
+
+    tmp = tempfile.mkdtemp(prefix='fufumidi-r11-')
+    try:
+        n = 44100
+        sine = [0.5 * math.sin(2 * math.pi * 440 * i / 44100) for i in range(n)]
+        wav = os.path.join(tmp, 'p.wav')
+        _write_wav(wav, sine)
+
+        phrase = _StubPhrase(_time_axis())
+        # offset/cutoff 选在**文件中间**，这样 hnsep 的前后上下文都不会被文件边界吃掉。
+        # volume=50 → 输入增益 ≈ 0.5（≠1），"谐波有没有跟着乘增益"才测得出来。
+        item = _StubItem(phrase, _StubPhone(), input_file=wav, offset=300.0, cutoff=100.0,
+                         consonant=100.0, velocity=100, dur_required=400.0, volume=50,
+                         tempo=120.0, tone=69, flags=[], pitches=[0] * 200)
+
+        native = _FakeNative()
+        config = native.init_analysis_config(44100, 441, 2048)
+        sp_size = config.fft_size // 2 + 1          # 1025
+
+        # ---- ① hnsep 分支：带上下文分离、多吐 sp_env_harmonic、增益两边同乘
+        h = _FakeHnsep(sample_rate=44100)
+        seg = SynthSegment(config, item, pos_ms=100.0, skip_ms=0.0, length_ms=400.0,
+                           fade_in_ms=50.0, fade_out_ms=50.0,
+                           for_resampler=False, hnsep=h, native=native)
+
+        # 帧边界（frame_ms=10）：srcStart=30 → trimStart=28、trimEnd=92
+        #   trimStartSample = 28*441 = 12348、trimEndSample = 92*441 = 40572
+        #   margin = 44100//5 = 8820 → lo = 12348-8820 = 3528、hi = 44100（被文件尾截）
+        check('R1.1: hnsep 拿到的样本 = 上下文 + 本段（不是只给裁剪后的段）',
+              h.input_len == 40572, 'got %r' % (h.input_len,))
+        call = native.hn_analysis_call
+        check('R1.1: 分析走 HnAnalysisF0In（不是 WorldAnalysisF0In）',
+              call is not None and native.analysis_samples is None,
+              'hn=%r / world=%r' % (call is not None, native.analysis_samples is not None))
+        check('R1.1: harmonic 与 samples 等长（上游有这条断言）',
+              len(call['harmonic']) == len(call['samples']) == 28224,
+              'got %d / %d' % (len(call['harmonic']), len(call['samples'])))
+
+        decoded = Wave.get_samples(wav)
+        peak = max(abs(v) for v in decoded)
+        expect_gain = item.volume * 0.01 * segment_auto_gain(
+            decoded, [440.0] * 101, peak, config.f0_floor, get_flag(item, 'P', 86))
+        check('R1.1: 输入增益与 v10 那条路同公式（且这条断言有意义：增益≠1）',
+              abs(expect_gain - 1.0) > 0.1, 'gain=%r' % (expect_gain,))
+        check('R1.1: 谐波分量乘的是**同一个**增益（恒等分离下两者逐元素相等）',
+              call['harmonic'] == call['samples'])
+        check('R1.1: 分析输入的电平 = peak × 输入增益',
+              abs(max(abs(v) for v in call['samples']) - peak * expect_gain) < 1e-6,
+              'got %r / want %r'
+              % (max(abs(v) for v in call['samples']), peak * expect_gain))
+
+        check('R1.1: sp_env_harmonic 有值且按目标帧数给齐',
+              seg.sp_env_harmonic is not None and len(seg.sp_env_harmonic) == 40 * sp_size,
+              'got %r' % (None if seg.sp_env_harmonic is None else len(seg.sp_env_harmonic),))
+        check('R1.1: sp 与 sp_harmonic 是两条独立的包络',
+              seg.sp_env_harmonic is not None
+              and seg.sp_env_harmonic != seg.sp_env
+              and abs(seg.sp_env_harmonic[0] - 2e-6) < 1e-12
+              and abs(seg.sp_env[0] - 1e-6) < 1e-12,
+              'sp=%r harm=%r' % (seg.sp_env[:1],
+                                 (seg.sp_env_harmonic or [])[:1]))
+        check('R1.1: sp_env / ap / sp_env_harmonic 全都有限',
+              all(math.isfinite(v) for arr in (seg.sp_env, seg.ap, seg.sp_env_harmonic)
+                  for v in arr))
+        check('R1.1: stretch 逐帧给出且为正（辅音/元音两段的 1/speed）',
+              len(seg.stretch) == 40 and all(v > 0 and math.isfinite(v) for v in seg.stretch),
+              'got %r' % (seg.stretch[:3],))
+
+        # ---- ② hnsep 采样率不符 → HnsepSampleRateError（上游是 NotSupportedException）
+        try:
+            SynthSegment(config, item, pos_ms=100.0, skip_ms=0.0, length_ms=400.0,
+                         fade_in_ms=50.0, fade_out_ms=50.0, for_resampler=False,
+                         hnsep=_FakeHnsep(sample_rate=48000), native=_FakeNative())
+            check('R1.1: hnsep 采样率 != 44100 时抛 HnsepSampleRateError', False)
+        except HnsepSampleRateError:
+            check('R1.1: hnsep 采样率 != 44100 时抛 HnsepSampleRateError', True)
+
+        # ---- ③ 不给 hnsep → 老路，sp_env_harmonic 保持 None
+        native_plain = _FakeNative()
+        seg_plain = SynthSegment(config, item, pos_ms=100.0, skip_ms=0.0, length_ms=400.0,
+                                 fade_in_ms=50.0, fade_out_ms=50.0,
+                                 for_resampler=False, native=native_plain)
+        check('R1.1: 没有 hnsep 时 sp_env_harmonic 保持 None',
+              seg_plain.sp_env_harmonic is None)
+        check('R1.1: 没有 hnsep 时走 WorldAnalysisF0In',
+              native_plain.analysis_samples is not None
+              and native_plain.hn_analysis_call is None)
+
+        # ---- ④ PhraseSynthV2.synth_continuous_noise 端到端
+        synth = PhraseSynthV2(44100, 441, 2048, use_hnsep=True, hnsep=_FakeHnsep(),
+                              native=native, num_render_threads=1)
+        synth.add_request(item, 100.0, 0.0, 400.0, 50.0, 50.0)
+        synth.set_curves(None, None, None, None, None)
+        out = synth.synth_continuous_noise(987654321)
+        cn = native.cn_call
+        check('SynthContinuousNoise: 确实调了 WorldSynthesisContinuousNoise', cn is not None)
+        check('SynthContinuousNoise: 输出长度 = WorldSynthesisSampleCount(hopSize 换算)',
+              len(out) == world_synthesis_sample_count(
+                  cn['frames'], cn['hop_size'] * 1000.0 / cn['fs'], cn['fs'])
+              and len(out) > 0, 'got %d' % len(out))
+        check('SynthContinuousNoise: 全部有限', all(math.isfinite(v) for v in out))
+        check('SynthContinuousNoise: 帧数 = max(p4)+1 = 51',
+              cn['frames'] == 51, 'got %r' % (cn['frames'],))
+        check('SynthContinuousNoise: sp / sp_harmonic / ap 都按 frames×spSize 给齐',
+              cn['sp_size'] == sp_size and len(cn['sp']) == cn['frames'] * sp_size
+              and len(cn['harmonic_sp']) == cn['frames'] * sp_size
+              and len(cn['ap']) == cn['frames'] * sp_size
+              and len(cn['stretch']) == cn['frames'],
+              'got sp=%d harm=%d ap=%d stretch=%d'
+              % (len(cn['sp']), len(cn['harmonic_sp']), len(cn['ap']), len(cn['stretch'])))
+        check('SynthContinuousNoise: sp 与 sp_harmonic 都流到了原生层且互不相同',
+              cn['sp'] != cn['harmonic_sp'])
+        check('SynthContinuousNoise: seed 原样传给原生层', cn['seed'] == 987654321)
+        check('SynthContinuousNoise: fft_size / hop_size 用 config 的那两个',
+              cn['fft_size'] == 2048 and cn['hop_size'] == 441 and cn['fs'] == 44100)
+
+        # ---- ⑤ 没有 hnsep → 明确抛错（对应上游那道守卫），不是静默算错
+        try:
+            PhraseSynthV2(44100, 441, 2048, use_hnsep=False, native=_FakeNative(),
+                          num_render_threads=1).synth_continuous_noise(0)
+            check('SynthContinuousNoise: 没有 hnsep 时抛错（上游守卫）', False)
+        except RuntimeError:
+            check('SynthContinuousNoise: 没有 hnsep 时抛错（上游守卫）', True)
+
+        # ---- ⑥ blend_continuous_noise_features 的 6 元组与末帧复制
+        class _Seg:
+            pass
+        s = _Seg()
+        s.p0, s.p1, s.p3, s.p4, s.skip_frames = 0, 1, 2, 3, 0
+        s.f0 = [100.0, 200.0, 300.0]
+        s.sp_env = [1e-6] * (3 * 4)
+        s.sp_env_harmonic = [3e-6] * (3 * 4)
+        s.ap = [0.25] * (3 * 4)
+        s.stretch = [1.5] * 3
+        tf, f0o, spo, spho, apo, sto = blend_continuous_noise_features([s], 4)
+        check('blend R1.1: 返回 6 元组，帧数 = max(p4)+1', tf == 4, 'got %r' % (tf,))
+        check('blend R1.1: sp 与 sp_harmonic 各自成一路（4=第 1 帧第 0 个频点）',
+              abs(spo[4] - 1e-6) < 1e-11 and abs(spho[4] - 3e-6) < 1e-11
+              and spho[4] > 2 * spo[4], 'sp=%r harm=%r' % (spo[4], spho[4]))
+        check('blend R1.1: 末帧复制前一帧（f0 / stretch / 三条谱全部）',
+              f0o[3] == f0o[2] and sto[3] == sto[2]
+              and spo[12] == spo[8] and spho[12] == spho[8] and apo[12] == apo[8])
+
+        # ---- ⑦ resample_features 的重构等价性（抽 _resample_flat 前后必须逐元素一致）
+        rng = random.Random(20261014)
+        stride = 7
+        f0_src = [rng.uniform(50.0, 400.0) for _ in range(9)]
+        sp_src = [rng.uniform(0.0, 1.0) for _ in range(9 * stride)]
+        ap_src = [rng.uniform(0.0, 1.0) for _ in range(9 * stride)]
+        # t_dst 覆盖：负数、整数、末帧、越界（都要与旧实现一致）
+        t_dst = [-1.0, 0.0, 0.5, 1.0, 3.25, 7.999, 8.0, 8.5, 20.0]
+
+        def _old_resample_features(t_dst, f0_src, sp_src, ap_src, sp_size):
+            """逐行照抄重构前的实现，作为对账基准。"""
+            n_src = len(f0_src)
+            m = len(t_dst)
+            o_f0 = [0.0] * m
+            o_sp = [0.0] * (m * sp_size)
+            o_ap = [0.0] * (m * sp_size)
+            for i in range(m):
+                pos = max(0.0, min(t_dst[i], n_src - 1.0))
+                index = int(math.floor(pos))
+                frac = pos - index
+                if index + 1 < n_src:
+                    i1 = (index + 1) * sp_size
+                    i0 = index * sp_size
+                    o = i * sp_size
+                    o_f0[i] = f0_src[index] * (1.0 - frac) + f0_src[index + 1] * frac
+                    for k in range(sp_size):
+                        o_sp[o + k] = sp_src[i0 + k] * (1.0 - frac) + sp_src[i1 + k] * frac
+                        o_ap[o + k] = ap_src[i0 + k] * (1.0 - frac) + ap_src[i1 + k] * frac
+                else:
+                    o = i * sp_size
+                    i0 = index * sp_size
+                    o_f0[i] = f0_src[index]
+                    for k in range(sp_size):
+                        o_sp[o + k] = sp_src[i0 + k]
+                        o_ap[o + k] = ap_src[i0 + k]
+            return o_f0, o_sp, o_ap
+
+        got = resample_features(t_dst, f0_src, sp_src, ap_src, stride)
+        want = _old_resample_features(t_dst, f0_src, sp_src, ap_src, stride)
+        check('resample_features: 抽出 _resample_flat 后与重构前逐元素完全一致',
+              got == want)
+
+        # ---- ⑧ 源码一致性（R1.1 的每一处要害都能在 C# 里指到）
+        flat = cs.replace('\n', ' ')
+        check('Worldline.cs: hnsep 分离带 fs/5 的上下文', 'int margin = fs / 5;' in flat)
+        check('Worldline.cs: hnsep 采样率不符抛 NotSupportedException',
+              'throw new NotSupportedException($' in flat
+              and 'hnsep model sample rate' in flat)
+        check('Worldline.cs: R1.1 用 HnAnalysisF0In（带 spEnvHarmonicOut）',
+              'HnAnalysisF0In(ref cfg, samples, harmonic, f0Src, out spEnvSrc, '
+              'out var spEnvHarmonicOut, out apSrc);' in flat)
+        check('Worldline.cs: spHarmonic 初值 1e-12',
+              'Array.Fill(spHarmonic, 1e-12);' in flat)
+        check('Worldline.cs: stretch 初值 1.0', 'Array.Fill(stretch, 1.0);' in flat)
+        check('Worldline.cs: SynthContinuousNoise 的 hnsep 守卫',
+              'SynthContinuousNoise needs the hnsep analysis.' in flat)
+        check('Worldline.cs: 谐波索引 segIdx*spSize（与 sp 同帧）',
+              'spHarmonic[j * spSize + k] += segSpHarmonic[segIdx * spSize + k] * weight;'
+              in flat)
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
@@ -4096,10 +4437,13 @@ def _test_classic_host(cache_path, resampler, wavtool=None):
         def get_wavtool(self, name):
             return wavtool
 
-        def copy_source_temp(self, source, temp):
+        # ★ 签名必须跟实现走：上游 b30d3347 之后这两处都多带一个 resampler
+        #   （见 classic/voicebank_files.py:130 与 classic_renderer.py:223）。
+        #   替身少一个形参 → 外部路径整条测试直接 TypeError，而不是断言失败。
+        def copy_source_temp(self, source, temp, resampler=None):
             self.source_temp_calls += 1
 
-        def copy_back_meta_files(self, source, temp):
+        def copy_back_meta_files(self, source, temp, resampler=None):
             pass
 
     return _Host()
@@ -5056,18 +5400,33 @@ def test_worldline_renderer():
           wr.sample_curve(_Ph(), None, 0.5, 2, lambda x: x * 999) == [0.5, 0.5])
 
     # ---- v11 / v20 的依赖报错（不依赖真机）
+    # ★ v11 的**代码链路已全部搬完**（hnsep 网络 + HnAnalysisF0In + SynthContinuousNoise），
+    #   现在缺的只是**模型包**，所以抛的是 RuntimeError（一句能照做的说明），
+    #   不再是表示"未照搬"的 NotImplementedError。
+    from singing.openutau import worldline as _WL
+    _WL.set_hnsep(None)                     # 让这条断言与其它测试的注入互不影响
     try:
         WorldlineRenderer(11)._make_phrase_synth()
-        check('WorldlineRenderer: v11 无 hnsep 时给出明确的依赖报错', False, '没抛错')
-    except NotImplementedError as e:
-        check('WorldlineRenderer: v11 无 hnsep 时给出明确的依赖报错',
-              'Hnsep' in str(e) or '谐波' in str(e), 'got %r' % str(e)[:60])
-    try:
-        WorldlineRenderer(20)._synth_r2(None)
-        check('WorldlineRenderer: v20 给出 ONNX 依赖报错（并说清缺哪两件）', False, '没抛错')
-    except NotImplementedError as e:
-        check('WorldlineRenderer: v20 给出 ONNX 依赖报错（并说清缺哪两件）',
-              'Data.Resources.mel' in str(e) and 'pc-nsf-hifigan' in str(e))
+        check('WorldlineRenderer: v11 未装 hnsep 模型时给出可操作的依赖报错', False, '没抛错')
+    except RuntimeError as e:
+        check('WorldlineRenderer: v11 未装 hnsep 模型时给出可操作的依赖报错',
+              'hnsep_240512' in str(e) and 'set_hnsep' in str(e), 'got %r' % str(e)[:90])
+    # ★ v20 **已实现**（2026-10-14）：mel 模型随包（classic/data/mel.onnx），
+    #   只剩声码器是外部资源。这里只做源码一致性 —— 真机数值在 test_worldline_r2.py。
+    _wr_src = open(os.path.join(ENGINE, 'singing', 'openutau', 'classic',
+                                'worldline_renderer.py'), encoding='utf-8').read()
+    _r2_src = _wr_src.split('def _synth_r2')[1].split('\n    def ')[0]
+    check('WorldlineRenderer: v20 不再是 NotImplementedError 桩（已接 ONNX 编排）',
+          'NotImplementedError' not in _r2_src and 'r2_synthesize(' in _r2_src,
+          'got %r' % _r2_src[:120])
+    # 上游 :140-147：paddedLength = (T + 8) 再 +4 取整到 16；左补 4；ap 补 **1**
+    check('WorldlineRenderer: v20 补帧与上游一致（ceil((T+12)/16)*16，左 4，ap 补 1）',
+          'T + 12' in _wr_src and 'left = 4' in _wr_src
+          and 'np.ones((left, sp_size), np.float32)' in _wr_src)
+    check('WorldlineRenderer: v20 出波形后按上游裁掉左补帧 + 首尾 512 淡入淡出',
+          'wave[start:start + want]' in _wr_src and 'HOP_SIZES[20]' in _wr_src)
+    check('WorldlineRenderer: v20 的 mel 会话固定 CPU（上游 OnnxRunnerChoice.CPU）',
+          "resolve_providers('cpu')" in _wr_src)
     check('WorldlineRenderer: register_worldline_renderers 可重复登记',
           (__import__('singing.openutau.classic', fromlist=['x'])
            .register_worldline_renderers()) is None)
@@ -5122,6 +5481,77 @@ def test_worldline_renderer():
               len(result2.samples) == len(result.samples))
         check('WorldlineRenderer e2e: 进度上报到 100（每个音素一次 + 收尾）',
               seen and seen[-1][0] == 100, 'got %r' % seen)
+    finally:
+        if old_host is not None:
+            try:
+                _install_host(old_host)
+            except Exception:
+                pass
+
+
+def test_worldline_r2_end_to_end():
+    """v20 真机端到端：真 native WORLD 特征 → mel ONNX → 声码器 → 波形。
+
+    ★ 判据是**主频**（过零率）。补帧/裁剪只要错一格（左补 4、补到 16 的倍数、再裁回 T 帧），
+    波形的时间轴就整体平移，估出来的主频立刻偏 —— 所以这一条同时盯住补帧与裁剪，
+    不只是「跑出来了」。声码器（55 MB）不在仓库里，找不到就 SKIP。
+    """
+    import tempfile
+
+    from singing.openutau import Progress, RenderPhrase
+    from singing.openutau import worldline as W
+    from singing.openutau.classic import WorldlineRenderer
+    from singing.openutau.classic.worldline_renderer import resolve_r2_vocoder
+
+    dll = os.path.join(REF_ROOT, 'runtimes', 'win-x64', 'native', 'worldline.dll')
+    if not os.path.isfile(dll):
+        print('  SKIP 找不到预编译 worldline.dll')
+        return
+    native = W.get_native(dll)
+    if not native.available:
+        print('  SKIP worldline.dll 加载失败：%s' % native.error)
+        return
+    try:
+        resolve_r2_vocoder()
+    except RuntimeError:
+        # 与 test_worldline_r2.py 同款约定：本机装好的那份
+        cand = (r'E:\Midi\FuFumidi\FuFumidiData\diffsinger\vocoder'
+                r'\nsf_hifigan_44.1k_hop512_128bin_2024.02.onnx')
+        if not os.path.isfile(cand):
+            print('  SKIP 本机没有 128bin/512hop 声码器')
+            return
+        os.environ['FUFUMIDI_R2_VOCODER'] = cand
+
+    tmp = tempfile.mkdtemp(prefix='fufumidi-r2-')
+    old_host = None
+    try:
+        project, track, part, _classic = _render_fixture(tmp)
+        wr20 = WorldlineRenderer(20)
+        track.renderer_settings.renderer_obj = wr20
+        phrases = RenderPhrase.from_part(project, track, part)
+        check('WorldlineRenderer v20 e2e: 能构建出乐句', len(phrases) == 1,
+              'got %d' % len(phrases))
+        phrase = phrases[0]
+        old_host = _install_host(_test_classic_host(tmp, _CountingResampler()))
+        result = _run(wr20.render(phrase, Progress(len(phrase.phones),
+                                                  notify=lambda pct, info: None),
+                                  track_no=0))
+        samples = samples_of(result)
+        check('WorldlineRenderer v20 e2e: 产出非空样本', len(samples) > 0,
+              'got %d' % len(samples))
+        check('WorldlineRenderer v20 e2e: 样本有限且不静音',
+              all(math.isfinite(v) for v in samples)
+              and max(abs(v) for v in samples) > 1e-3,
+              'got peak %r' % (max(abs(v) for v in samples) if samples else None))
+        check('WorldlineRenderer v20 e2e: 样本数是 512 的整数倍（按帧裁剪，没留补出来的帧）',
+              len(samples) % 512 == 0, 'got %d' % len(samples))
+        check('WorldlineRenderer v20 e2e: 主频 ≈ 440Hz（补帧/裁剪对得上，过零率 ±10%%）',
+              _dominant_zero_cross(samples) is not None
+              and abs(_dominant_zero_cross(samples) - 440.0) < 44.0,
+              'got %r' % _dominant_zero_cross(samples))
+        check('WorldlineRenderer v20 e2e: 缓存文件带版本号 wdl-v20-',
+              any('wdl-v20-' in f for f in phrase.cache_files),
+              'got %r' % phrase.cache_files)
     finally:
         if old_host is not None:
             try:

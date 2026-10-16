@@ -22,14 +22,51 @@ function outputNames(inputPath, path) {
 /** 默认分离模型：优先「人声/伴奏 duality」，其次是任何已安装的 vocal 类模型 */
 function pickDefaultSepModel(msstRegistry, resolveSeparateModel) {
   const ids = Object.keys(msstRegistry || {});
+  // ★ 只挑**真能跑**的：仓库里有一批模型没有任何 .yaml（下完也加载不了），
+  //   默认模型要是挑中它们，翻唱工作流第一步就报「该模型缺少配置文件」。
+  const usable = (id) => {
+    if (!resolveSeparateModel) return true;      // 没给解析器时保持旧行为（老调用点/测试）
+    try {
+      const r = resolveSeparateModel(id);
+      if (!r) return false;
+      return !(archNeedsConfig(r.arch) && !r.configPath);
+    } catch (e) { return true; }
+  };
   const preferred = [
     'melband_roformer_instvox_duality_v2',
     'melband_roformer_inst_v2',
     'mel_band_roformer_vocals_becruily',
   ];
-  for (const id of preferred) if (ids.includes(id)) return id;
-  const anyVocal = ids.find((id) => (msstRegistry[id] || {}).splitCat === 'vocal');
-  return anyVocal || '';
+  for (const id of preferred) if (ids.includes(id) && usable(id)) return id;
+  const anyVocal = ids.find((id) => (msstRegistry[id] || {}).splitCat === 'vocal' && usable(id));
+  if (anyVocal) return anyVocal;
+  return ids.find(usable) || '';                 // 退而求其次：任何能跑的，总比报错强
+}
+
+/**
+ * 该架构是否**必须**提供 .yaml 配置。
+ *
+ * pymss 里只有 vr 家族把结构参数与音轨名存在权重文件内部（separator.py 的
+ * `model_type == 'vr'` 分支走 get_vr_model_metadata，音轨名 = primary/secondary_stem），
+ * 因此 UVR-VR（UVR-DeNoise 这类）**可以没有 config**。
+ * 曾经这里无条件要求 configPath，于是「UVR-DeNoise」在面板上选得中、一点就炸
+ * ——「该模型缺少配置文件，暂不支持此模型」，而引擎其实支持它。
+ */
+function archNeedsConfig(arch) {
+  const key = String(arch || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return key !== 'vr' && key !== 'uvr' && key !== 'uvrvr';
+}
+
+/**
+ * 引擎能否**自己推出**配置的架构家族（见 engine/msst_autoconfig.py）。
+ * 缺 .yaml 不等于不能用：这两族的结构量（dim/depth/heads/dim_head/num_bands/num_stems）
+ * 都能从权重的键集合与形状读出来，引擎会生成配置、跑一次前向校验后才用。
+ */
+function archSelfConfigurable(arch) {
+  const key = String(arch || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  // 与 engine/msst_autoconfig.py 的 _ARCH_TO_FAMILY 保持同一份清单
+  return ['melbandroformer', 'bsroformer', 'htdemucs', 'htdemucsvocals', 'htdemucsftbass',
+    'htdemucsftdrums', 'htdemucsftother', 'drumsep', 'mdx23c', 'apollo'].includes(key);
 }
 
 /** 输出目录优先级：调用方指定 > 设置里的「默认输出目录」> 与输入同目录 > 临时目录 */
@@ -62,11 +99,15 @@ function buildSeparateRequest(cfg, { resolveSeparateModel, readSettings, Paths, 
   const resolved = resolveSeparateModel(modelId);
   if (!resolved) return { ok: false, error: '未知的分离模型：' + modelId };
   if (resolved.exists === false) return { ok: false, error: resolved.error || ('分离模型未下载：' + modelId + '（请到资源中心下载）') };
-  if (!resolved.configPath) return { ok: false, error: '该模型缺少配置文件，暂不支持此模型' };
+  const needsCfg = archNeedsConfig(resolved.arch);
+  if (needsCfg && !archSelfConfigurable(resolved.arch) && !resolved.configPath) {
+    return { ok: false, error: '该模型缺少配置文件，暂不支持此模型' };
+  }
 
   const dir = pickOutputDir(cfg, { readSettings, Paths, fs });
-  const args = ['separate', cfg.audio, '--output', dir,
-    '--model', resolved.modelPath, '--config', resolved.configPath, '--arch', resolved.arch];
+  const args = ['separate', cfg.audio, '--output', dir, '--model', resolved.modelPath];
+  if (resolved.configPath) args.push('--config', resolved.configPath);   // VR 家族没有 yaml，引擎也不读它
+  args.push('--arch', resolved.arch);
   if (cfg.chunk_size) args.push('--chunk-size', String(cfg.chunk_size));
   if (cfg.num_overlap) args.push('--num-overlap', String(cfg.num_overlap));
   if (cfg.batch_size) args.push('--batch-size', String(cfg.batch_size));
@@ -78,4 +119,4 @@ function buildSeparateRequest(cfg, { resolveSeparateModel, readSettings, Paths, 
   return { ok: true, dir, args, names: outputNames(cfg.audio, Paths.path || require('path')), model: modelId };
 }
 
-module.exports = { outputNames, pickDefaultSepModel, pickOutputDir, buildSeparateRequest };
+module.exports = { outputNames, pickDefaultSepModel, pickOutputDir, buildSeparateRequest, archNeedsConfig, archSelfConfigurable };

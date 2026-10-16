@@ -69,6 +69,16 @@ GIT_SOURCES = {
     "amt": "EleutherAI/aria-amt",
     "ariautils": "EleutherAI/aria-utils",
 }
+
+# ★ WP2-3 定版（2026-10-14）：这两个仓库**必须钉 commit**，不能用"默认分支当时的 HEAD"。
+#   原来的 `git+<镜像><repo>.git` 不带 ref —— 隔一周装就是两份不同的代码；
+#   而两个 dist 的版本号都是没用的 `0.0.1`，出问题没法复现、也没法对比。
+#   下面的 SHA 取自**安装版**里 dist-info/direct_url.json 的实际安装 commit，
+#   也就是当前这套跑通过的组合。升级时改这里，并重跑一次 aria 转录冒烟。
+ARIA_PINS = {
+    "amt": "a1ab73fc901d1759ec3bc173c146b3c6a3040261",
+    "ariautils": "4ed0749d2d70918610f03a5316bf283479ff9d09",
+}
 # 镜像顺序：国内 GitHub 加速优先（gh.jasonzeng.dev 与应用内其它下载源一致）；最后为官方直连兜底
 GIT_MIRROR_PREFIXES = [
     "https://gh.jasonzeng.dev/https://github.com/",
@@ -80,8 +90,28 @@ GIT_MIRROR_PREFIXES = [
 # 必须 --no-deps 装本体，再单独装缺失依赖（torch/torchaudio 已在环境内）
 GIT_NO_DEPS = {"amt"}
 
-# zip 兜底时仓库默认分支名不统一（main / master），两个都试
-ARCHIVE_REFS = ["main", "master"]
+# ⚠ 这里原来还有 `ARCHIVE_REFS = ["main", "master"]`（zip 兜底按分支取）。
+#   定版后 zip 兜底改成按 **commit** 取（GitHub 支持 `/archive/<sha>.zip`），
+#   所以分支名不再需要 —— 而且它本来就是个隐患：分支名会让 zip 那条路和 git+ 那条路
+#   装到**不同**的版本。
+
+# ★ MuScriptor 必须装「修复版」——不能从 PyPI 按包名装。
+#   上游 0.3.0 的 OpenNoteTracker 在长音频上会产出「僵尸音符」：块边界只关闭不在
+#   tie 段里的音，而 prelude_forcing 把 tie 段构造成「当前还开着的音」，于是块边界
+#   永远关不掉任何音符，模型漏一次收尾就被无限延续 —— 实测 100 分钟交响录播出现
+#   4320 秒（全曲 72%）的音符。修复版 wheel 托管在 monologue82/Models
+#   （见该仓库 muscriptor-runtime/README.md），PyPI 上仍是未修复的 0.3.0。
+#   注意 %2B = 文件名里的 + （PEP 440 本地版本号），别写成裸 +。
+MUSCRIPTOR_WHEEL_PATH = ("monologue82/Models/main/muscriptor-runtime/"
+                         "muscriptor-0.3.0%2Bfufumidi.1-py3-none-any.whl")
+MUSCRIPTOR_SHA256 = "11828351ae24f22024f7a16f5f093a4192f3826165f459a4fcc134ac7224bae6"
+# raw 文件的 GitHub 加速前缀（与 main/models.js 的 RAW 镜像同源）
+RAW_MIRROR_PREFIXES = [
+    "https://gh.jasonzeng.dev/https://raw.githubusercontent.com/",
+    "https://ghfast.top/https://raw.githubusercontent.com/",
+    "https://gh-proxy.com/https://raw.githubusercontent.com/",
+    "https://raw.githubusercontent.com/",
+]
 
 
 def _aria_specs(pkg):
@@ -93,12 +123,13 @@ def _aria_specs(pkg):
     只需要 HTTPS，不需要 git。
     """
     repo = GIT_SOURCES[pkg]
+    rev = ARIA_PINS[pkg]
     specs = []
     if shutil.which("git"):
-        specs += ["git+" + p + repo + ".git" for p in GIT_MIRROR_PREFIXES]
+        specs += ["git+" + p + repo + ".git@" + rev for p in GIT_MIRROR_PREFIXES]
     for p in GIT_MIRROR_PREFIXES:
-        for ref in ARCHIVE_REFS:
-            specs.append(p + repo + "/archive/refs/heads/" + ref + ".zip")
+        # ★ 两条路钉**同一个 commit**（否则 git 可用与否会装出不同版本）
+        specs.append(p + repo + "/archive/" + rev + ".zip")
     return specs
 
 
@@ -134,6 +165,24 @@ def _find(name):
     return _status(name) == "ok"
 
 
+# ★ 身份校验（2026-10-13 加）：muscriptor 的「僵尸音符」修复是**上游级补丁**，
+#   而 PyPI 上只有裸 0.3.0。只做 import 探测会把裸版判成 ok —— 3.12 运行时
+#   因此静默少了这个修复（跨块 tie 段等不到 note-off，音符越滚越长）。
+#   所以这里查的是**补丁在不在**，不是包在不在。
+#   判据用补丁引入的符号而不是文件哈希：用户自己重装/升级后哈希会变，
+#   但只要补丁语义还在就不该报错；反过来裸版一定没有这个符号。
+MUSCRIPTOR_PATCH_MARKER = "DEFAULT_MAX_NOTE_HOLD_SEC"
+
+
+def _muscriptor_patch_missing():
+    """返回 True 表示 muscriptor 装了，但**没有** FuFumidi 补丁。"""
+    try:
+        import muscriptor.events as ev
+    except Exception:
+        return False        # 缺失/损坏已由 _status 报出，不重复报
+    return not hasattr(ev, MUSCRIPTOR_PATCH_MARKER)
+
+
 def _emit(obj):
     print("###RESULT " + json.dumps(obj, ensure_ascii=False), flush=True)
 
@@ -148,10 +197,15 @@ def check():
                 missing.append(p)
             elif st == "broken":
                 broken.append(p)
+        # 身份校验：包在 ≠ 是对的那个构建（muscriptor 的补丁版 vs 裸上游版）
+        wrong_build = []
+        if group == "muscriptor" and not missing and not broken:
+            if _muscriptor_patch_missing():
+                wrong_build.append("muscriptor(缺 FuFumidi 补丁: " + MUSCRIPTOR_PATCH_MARKER + ")")
         result["groups"][group] = {
-            "ok": not missing and not broken,
+            "ok": not missing and not broken and not wrong_build,
             "missing": missing,
-            "broken": broken,   # 已安装但导入失败（如半损坏的 numpy）
+            "broken": broken + wrong_build,   # 已安装但导入失败 / 或装错了构建
         }
     _emit(result)
     return 0
@@ -226,6 +280,24 @@ def install(group=None):
                     _emit({"ok": False, "error": last_err or "安装失败（GitHub 各镜像与官方源均不可达）", "group": g})
                     return 1
             _emit({"ok": True, "installed": missing, "group": g})
+            continue
+        # muscriptor：装我们托管的修复版 wheel（PyPI 上是未修复的 0.3.0）
+        if g == "muscriptor" and missing:
+            ok = False
+            for pre in RAW_MIRROR_PREFIXES:
+                cmd = list(PIP_BASE)
+                if MIRRORS and MIRRORS[0]:
+                    cmd += ["-i", MIRRORS[0]]
+                cmd.append(pre + MUSCRIPTOR_WHEEL_PATH)
+                ok, last_err = _pip_run(cmd)
+                if ok:
+                    break
+            if ok:
+                _emit({"ok": True, "installed": ["muscriptor 0.3.0+fufumidi.1（修复版）"], "group": g})
+            else:
+                _emit({"ok": False, "group": g,
+                       "error": last_err or "下载修复版 muscriptor 失败（GitHub 各镜像均不可达）"})
+                return 1
             continue
         # 常规 pip 安装 + 镜像回退
         installed = False

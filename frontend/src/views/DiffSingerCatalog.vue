@@ -13,6 +13,11 @@ import { useVoicebankStore } from '../stores/voicebank';
 import { useSingerStore } from '../stores/singer';
 import { useDiffsingerStore } from '../stores/diffsinger';
 import { t } from '../core/i18n.js';
+import ItemMetaEditor from '../components/models/ItemMetaEditor.vue';
+// 用户元数据：名字/作者/标签/分类 + 顶置/排序（四页共用一张表，见 core/usermeta.js）
+import { loadUserMeta, orderList, displayName, authorOf, tagsOf, isPinned, togglePin, saveOrder, mergeSubsetOrder } from '../core/usermeta.js';
+
+loadUserMeta();      // 进页面读一次用户改动（异步，不阻塞渲染）
 
 const app = useAppStore();
 const vbStore = useVoicebankStore();
@@ -25,6 +30,53 @@ const loading = ref(false);
 const data = ref(null);
 const errMsg = ref('');
 const query = ref('');
+/** DiffSinger 的条目没有 id 字段，用 path 兜底 name 当稳定键（:key 用的也是 path）。 */
+const dsId = (m) => String((m && (m.path || m.name)) || '');
+/** 套上用户排序（顶置优先 → order → 原顺序）。map 出的对象带 id，供元数据查询用。 */
+const dsOrdered = (models) => orderList('ds', (models || []).map((m) => Object.assign({}, m, { id: dsId(m) })));
+const editItem = ref(null);
+async function pin(m) { await togglePin('ds', dsId(m)); }
+
+/* ---------------- 拖拽排序 ----------------
+   ★ 分类/搜索**不再禁止拖拽**：旧版禁止，结果在「原神」这类分类里根本排不了序（实测反馈）。
+     现在改成：先算出**可见项**的新顺序，再回填到**全量顺序**里它们占据的位置上
+     （mergeSubsetOrder）—— 没显示的条目一个都不动。 */
+const dragId = ref('');
+/** ★ 两个 id 列表都必须走 dsOrdered（= 用户排序后的**显示**顺序）。
+ *  DiffSinger 的用户排序是在**模板**里套的（v-for dsOrdered(c.models)），不在 filteredWorks 里 ——
+ *  如果这里取原始顺序，一旦已有自定义 order，indexOf 算出的下标就和用户看到的对不上，
+ *  拖动会落到错误的位置。
+ *  另外：DS 的排序是**按 category 分桶**的（每桶内部排），所以两个列表都按桶拼：
+ *  写下去的 order 是全局 1..n，但只有同桶内的相对大小有意义 —— 这与模板行为一致。 */
+/** 当前**可见**（经分类/搜索过滤后）的显示顺序。 */
+function flatDsIds() {
+  const out = [];
+  for (const w of filteredWorks.value) for (const c of w.categories) for (const m of dsOrdered(c.models)) out.push(dsId(m));
+  return out;
+}
+/** **全量**（未过滤）的显示顺序 —— 回填的目标。 */
+function allDsIds() {
+  const out = [];
+  for (const w of works.value) for (const c of w.categories) for (const m of dsOrdered(c.models)) out.push(dsId(m));
+  return out;
+}
+function dragStart(m, ev) {
+  dragId.value = dsId(m);
+  try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', dsId(m)); } catch (e) {}
+}
+function dragEnd() { dragId.value = ''; }
+async function dropOn(m) {
+  const from = dragId.value;
+  dragId.value = '';
+  const to = dsId(m);
+  if (!from || !to || from === to) return;
+  const vis = flatDsIds();
+  const i = vis.indexOf(from);
+  const j = vis.indexOf(to);
+  if (i < 0 || j < 0) return;
+  vis.splice(j, 0, vis.splice(i, 1)[0]);                      // 可见项的新顺序
+  await saveOrder('ds', mergeSubsetOrder(allDsIds(), vis));   // 回填到全量位置上
+}
 const workFilter = ref('all');
 const catFilter = ref('all');
 const stateFilter = ref('all');   // all | available | installed | placeholder
@@ -274,14 +326,18 @@ onActivated(() => { if (!loading.value) refresh(); });
           </div>
           <div class="ds-grid">
             <div
-              v-for="(m, mi) in c.models"
+              v-for="(m, mi) in dsOrdered(c.models)"
               :key="m.path"
               class="ds-card"
-              :class="{ ph: m.placeholder, inst: m.installed, down: isBusy(m.name) }"
+              :class="{ ph: m.placeholder, inst: m.installed, down: isBusy(m.name), pinned: isPinned('ds', m), dragging: dragId === dsId(m) }"
+              draggable="true"
+              @dragstart="dragStart(m, $event)" @dragend="dragEnd" @dragover.prevent @drop.prevent="dropOn(m)"
               :style="{ '--i': mi }"
             >
               <div class="ds-card-top">
-                <span class="ds-name" :title="m.name">{{ m.name }}</span>
+                <span class="ds-name" :title="displayName('ds', m)">{{ displayName('ds', m) }}</span>
+                <button class="cat-pin" :class="{ on: isPinned('ds', m) }" @click.stop="pin(m)"
+                        :title="isPinned('ds', m) ? t('取消顶置') : t('顶置')">📌</button>
                 <span v-if="m.installed" class="ds-badge inst">{{ t('已安装') }}</span>
                 <span v-else-if="m.placeholder" class="ds-badge ph">{{ t('待发布') }}</span>
               </div>
@@ -290,6 +346,11 @@ onActivated(() => { if (!loading.value) refresh(); });
                 <span class="ds-tag">{{ m.category }}</span>
               </div>
               <div class="ds-desc">{{ m.desc }}</div>
+              <div class="ds-catline" v-if="authorOf('ds', m) || tagsOf('ds', m).length">
+                <span v-if="authorOf('ds', m)" class="ds-tag">{{ t('作者：') + authorOf('ds', m) }}</span>
+                <span v-for="tg in tagsOf('ds', m)" :key="tg" class="cat-tag meta">{{ tg }}</span>
+              </div>
+              <button class="ds-edit-btn" @click="editItem = m">{{ t('编辑') }}</button>
               <div class="ds-foot">
                 <span class="ds-size">{{ m.placeholder ? t('无权重') : human(m.size) }}</span>
                 <div class="ds-acts">
@@ -312,7 +373,7 @@ onActivated(() => { if (!loading.value) refresh(); });
                   <span class="ds-prog-ph">{{ phaseText(m.name) }}</span>
                   <span v-if="prog[m.name].speed" class="ds-prog-spd">⚡ {{ fmtSpeed(prog[m.name].speed) }}</span>
                 </div>
-                <div class="ds-bar-mini"><i :style="{ width: (prog[m.name].percent || 0) + '%' }"></i></div>
+                <div class="ds-bar-mini"><i :style="{ transform: 'scaleX(' + (((prog[m.name].percent || 0)) / 100) + ')' }"></i></div>
                 <div class="ds-prog-meta">
                   <span>{{ prog[m.name].percent || 0 }}%</span>
                   <span v-if="!prog[m.name].phase || prog[m.name].phase === 'download'">{{ human(prog[m.name].received) }} / {{ human(prog[m.name].total) }}</span>
@@ -331,104 +392,105 @@ onActivated(() => { if (!loading.value) refresh(); });
       </div>
     </div>
   </div>
+  <ItemMetaEditor v-if="editItem" kind="ds" :item="editItem" :raw-name="editItem.name" @close="editItem = null" />
 </template>
 
 <style scoped>
-.ds-cat { display: flex; flex-direction: column; gap: 14px; }
+.ds-cat { display: flex; flex-direction: column; gap: var(--sp-4); }
 
 /* 来源说明条 */
-.ds-src { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid var(--hairline); border-radius: 12px; background: var(--surface-soft); }
+.ds-src { display: flex; align-items: center; gap: var(--sp-3); padding: 10px 14px; border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface-soft); }
 .ds-src-ic { display: inline-flex; width: 26px; height: 26px; align-items: center; justify-content: center; border-radius: 50%; background: color-mix(in srgb, var(--brand-coral) 14%, transparent); color: var(--brand-coral); flex: 0 0 auto; }
 .ds-src-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.ds-src-txt b { font-size: 13px; color: var(--ink); }
-.ds-src-txt small { font-size: 11.5px; color: var(--stone); }
+.ds-src-txt b { font-size: var(--fs-md); color: var(--ink); }
+.ds-src-txt small { font-size: var(--fs-sm); color: var(--stone); }
 
 /* 搜索与筛选条 */
-.ds-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.ds-search { display: flex; align-items: center; gap: 7px; flex: 1 1 240px; min-width: 200px; padding: 0 10px; height: 32px; border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--stone); }
-.ds-search input { flex: 1; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 12.5px; min-width: 0; }
+.ds-bar { display: flex; gap: var(--sp-2); flex-wrap: wrap; align-items: center; }
+.ds-search { display: flex; align-items: center; gap: var(--sp-2); flex: 1 1 240px; min-width: 200px; padding: 0 10px; height: 32px; border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface); color: var(--stone); }
+.ds-search input { flex: 1; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: var(--fs-md); min-width: 0; }
 .ds-search input::placeholder { color: var(--stone); }
 .ds-clr { display: inline-flex; border: 0; background: transparent; color: var(--stone); cursor: pointer; padding: 2px; border-radius: 50%; }
 .ds-clr:hover { color: var(--ink); background: var(--surface-soft); }
-.ds-sel { height: 32px; padding: 0 8px; border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--ink); font-size: 12.5px; cursor: pointer; max-width: 190px; }
+.ds-sel { height: 32px; padding: 0 8px; border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface); color: var(--ink); font-size: var(--fs-md); cursor: pointer; max-width: 190px; }
 
 /* 作品快捷切换 */
-.ds-works { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.ds-wchip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border: 1px solid var(--hairline); border-radius: 999px; background: transparent; color: var(--steel); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background .15s, color .15s, border-color .15s; }
+.ds-works { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.ds-wchip { display: inline-flex; align-items: center; gap: var(--sp-2); padding: 4px 12px; border: 1px solid var(--hairline); border-radius: var(--r-pill); background: transparent; color: var(--steel); font-size: var(--fs-md); font-weight: 600; cursor: pointer; transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
 .ds-wchip:hover { background: var(--surface-soft); color: var(--ink); }
-.ds-wchip i { font-style: normal; font-size: 10.5px; color: var(--stone); background: var(--surface-soft); border-radius: 20px; padding: 0 6px; line-height: 15px; }
+.ds-wchip i { font-style: normal; font-size: var(--fs-xs); color: var(--stone); background: var(--surface-soft); border-radius: var(--r-lg); padding: 0 6px; line-height: 15px; }
 .ds-wchip.active { background: color-mix(in srgb, var(--brand-coral) 15%, var(--surface)); border-color: color-mix(in srgb, var(--brand-coral) 32%, transparent); color: var(--ink); }
 .ds-wchip.active i { background: color-mix(in srgb, var(--brand-coral) 14%, transparent); color: var(--brand-coral); }
-.ds-shown { margin-left: auto; font-size: 11.5px; color: var(--stone); }
+.ds-shown { margin-left: auto; font-size: var(--fs-sm); color: var(--stone); }
 
 /* 分组 */
-.ds-groups { display: flex; flex-direction: column; gap: 20px; }
-.ds-work-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--hairline); }
-.ds-work-ic { display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 7px; background: color-mix(in srgb, var(--brand-coral) 12%, transparent); color: var(--brand-coral); }
-.ds-work-head b { font-size: 14px; color: var(--ink); }
-.ds-work-cnt { font-size: 11.5px; color: var(--stone); }
+.ds-groups { display: flex; flex-direction: column; gap: var(--sp-5); }
+.ds-work-head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--hairline); }
+.ds-work-ic { display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: var(--r-sm); background: color-mix(in srgb, var(--brand-coral) 12%, transparent); color: var(--brand-coral); }
+.ds-work-head b { font-size: var(--fs-lg); color: var(--ink); }
+.ds-work-cnt { font-size: var(--fs-sm); color: var(--stone); }
 
 .ds-cat-block { margin-bottom: 14px; }
-.ds-cat-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; color: var(--steel); }
-.ds-cat-head b { font-size: 12.5px; color: var(--ink); }
-.ds-cat-desc { font-size: 11px; color: var(--stone); }
-.ds-cat-cnt { margin-left: auto; font-size: 11px; color: var(--stone); }
+.ds-cat-head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: 8px; color: var(--steel); }
+.ds-cat-head b { font-size: var(--fs-md); color: var(--ink); }
+.ds-cat-desc { font-size: var(--fs-xs); color: var(--stone); }
+.ds-cat-cnt { margin-left: auto; font-size: var(--fs-xs); color: var(--stone); }
 
 /* 模型卡片网格 */
-.ds-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 9px; }
-.ds-card { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 10px 11px; border: 1px solid var(--hairline); border-radius: 11px; background: var(--surface); overflow: hidden; transition: border-color .15s, background .15s; }
+.ds-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--sp-2); }
+.ds-card { position: relative; display: flex; flex-direction: column; gap: var(--sp-2); padding: 10px 11px; border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface); overflow: hidden; transition: border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out); }
 .ds-card:hover { border-color: color-mix(in srgb, var(--brand-coral) 30%, var(--hairline)); }
-/* ---------- 动效（与全局同一套：0.2~0.34s + cubic-bezier(.2,.7,.3,1)） ----------
+/* ---------- 动效（与全局同一套：0.2~0.34s + var(--ease-out)） ----------
    目录页原来只有进度条在动：切页签整块硬出现、卡片没有任何反馈。 */
-.ds-work { animation: dsWorkIn .3s cubic-bezier(.2,.7,.3,1) both; animation-delay: calc(min(var(--wi, 0), 6) * 55ms); }
+.ds-work { animation: dsWorkIn var(--motion-slow) var(--ease-out) both; animation-delay: calc(min(var(--wi, 0), 6) * 55ms); }
 @keyframes dsWorkIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 /* 卡片：逐个入场 + 悬停抬升（同屏几十张，延迟封顶 14 张，免得最后一张等半秒） */
-.ds-card { animation: dsCardIn .28s cubic-bezier(.2,.7,.3,1) both;
+.ds-card { animation: dsCardIn var(--motion-slow) var(--ease-out) both;
            animation-delay: calc(min(var(--i, 0), 14) * 22ms);
-           transition: transform .18s cubic-bezier(.2,.7,.3,1), box-shadow .2s ease, border-color .18s ease, background .2s ease; }
+           transition: transform var(--motion-base) var(--ease-out), box-shadow var(--motion-base) var(--ease-out), border-color var(--motion-base) var(--ease-out), background var(--motion-base) var(--ease-out); }
 @keyframes dsCardIn { from { opacity: 0; transform: translateY(6px) scale(.985); } to { opacity: 1; transform: none; } }
 .ds-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-sm, 0 4px 14px rgba(0,0,0,.08)); }
-.ds-wchip { transition: background .18s ease, color .18s ease, border-color .18s ease, transform .18s ease; }
+.ds-wchip { transition: background var(--motion-base) var(--ease-out), color var(--motion-base) var(--ease-out), border-color var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out); }
 .ds-wchip:hover { transform: translateY(-1px); }
-.ds-wchip.active { transition: background .24s cubic-bezier(.2,.7,.3,1), border-color .24s cubic-bezier(.2,.7,.3,1); }
+.ds-wchip.active { transition: background var(--motion-base) var(--ease-out), border-color var(--motion-base) var(--ease-out); }
 .ds-card.inst { background: color-mix(in srgb, var(--brand-coral) 4%, var(--surface)); border-color: color-mix(in srgb, var(--brand-coral) 22%, var(--hairline)); }
 .ds-card.ph { opacity: .62; }
 .ds-card.down { border-color: color-mix(in srgb, var(--brand-coral) 45%, var(--hairline)); }
-.ds-card-top { display: flex; align-items: center; gap: 6px; }
-.ds-name { font-size: 13px; font-weight: 650; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ds-badge { font-size: 10px; padding: 1px 6px; border-radius: 20px; line-height: 15px; flex: 0 0 auto; margin-left: auto; }
+.ds-card-top { display: flex; align-items: center; gap: var(--sp-2); }
+.ds-name { font-size: var(--fs-md); font-weight: 650; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds-badge { font-size: var(--fs-xs); padding: 1px 6px; border-radius: var(--r-lg); line-height: 15px; flex: 0 0 auto; margin-left: auto; }
 .ds-badge.inst { background: color-mix(in srgb, var(--brand-coral) 15%, transparent); color: var(--brand-coral); }
 .ds-badge.ph { background: var(--surface-soft); color: var(--stone); }
-.ds-catline { display: flex; gap: 5px; flex-wrap: wrap; }
-.ds-tag { font-size: 10px; padding: 1px 6px; border-radius: 5px; background: var(--surface-soft); color: var(--stone); }
-.ds-desc { font-size: 11.5px; color: var(--steel); line-height: 1.45; min-height: 32px; }
-.ds-foot { display: flex; align-items: center; gap: 6px; margin-top: auto; }
-.ds-size { font-size: 11px; color: var(--stone); font-variant-numeric: tabular-nums; }
+.ds-catline { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
+.ds-tag { font-size: var(--fs-xs); padding: 1px 6px; border-radius: var(--r-sm); background: var(--surface-soft); color: var(--stone); }
+.ds-desc { font-size: var(--fs-sm); color: var(--steel); line-height: 1.45; min-height: 32px; }
+.ds-foot { display: flex; align-items: center; gap: var(--sp-2); margin-top: auto; }
+.ds-size { font-size: var(--fs-xs); color: var(--stone); font-variant-numeric: tabular-nums; }
 .ds-acts { margin-left: auto; }
-.ds-btn { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border: 1px solid color-mix(in srgb, var(--brand-coral) 34%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--brand-coral) 12%, transparent); color: var(--brand-coral); font-size: 11.5px; font-weight: 600; cursor: pointer; transition: background .15s; }
+.ds-btn { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 3px 10px; border: 1px solid color-mix(in srgb, var(--brand-coral) 34%, transparent); border-radius: var(--r-sm); background: color-mix(in srgb, var(--brand-coral) 12%, transparent); color: var(--brand-coral); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; transition: background var(--motion-fast) var(--ease-out); }
 .ds-btn:hover { background: color-mix(in srgb, var(--brand-coral) 20%, transparent); }
 .ds-btn.re { border-color: var(--hairline); background: transparent; color: var(--steel); }
 .ds-btn.re:hover { background: var(--surface-soft); color: var(--ink); }
 .ds-btn.cancel { border-color: color-mix(in srgb, var(--brand-coral) 45%, transparent); background: transparent; color: var(--brand-coral); }
 .ds-btn.dis { border-color: var(--hairline); background: transparent; color: var(--stone); cursor: not-allowed; }
-.ds-bar-mini { height: 3px; border-radius: 2px; background: var(--surface-soft); overflow: hidden; }
-.ds-bar-mini i { display: block; height: 100%; background: var(--brand-coral); transition: width .25s ease; }
+.ds-bar-mini { height: 3px; border-radius: var(--r-sm); background: var(--surface-soft); overflow: hidden; }
+.ds-bar-mini i { display: block; height: 100%; background: var(--brand-coral); transition: transform var(--motion-base) var(--ease-out); }
 
 /* 卡片内进度：阶段文案 + 实时速度 + 字节数（与全局顶部通知条一致） */
-.ds-prog { display: flex; flex-direction: column; gap: 4px; margin-top: 2px; }
-.ds-prog-line { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--stone); }
+.ds-prog { display: flex; flex-direction: column; gap: var(--sp-1); margin-top: 2px; }
+.ds-prog-line { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-xs); color: var(--stone); }
 .ds-prog-ph { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
 .ds-prog-spd { flex: 0 0 auto; color: var(--brand-coral); font-variant-numeric: tabular-nums; }
-.ds-prog-meta { display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--stone); font-variant-numeric: tabular-nums; }
+.ds-prog-meta { display: flex; align-items: center; justify-content: space-between; font-size: var(--fs-xs); color: var(--stone); font-variant-numeric: tabular-nums; }
 /* 解压/安装阶段无字节进度，给进度条加流光表示“仍在工作” */
-.ds-card.down .ds-bar-mini i { background: linear-gradient(90deg, var(--brand-coral), color-mix(in srgb, var(--brand-coral) 55%, #fff), var(--brand-coral)); background-size: 200% 100%; animation: ds-flow 1.2s linear infinite; }
+.ds-card.down .ds-bar-mini i { background: linear-gradient(90deg, var(--brand-coral), color-mix(in srgb, var(--brand-coral) 55%, var(--surface)), var(--brand-coral)); background-size: 200% 100%; animation: ds-flow 1.2s linear infinite; }
 @keyframes ds-flow { to { background-position: -200% 0; } }
-.ds-card-err { font-size: 10.5px; color: #c0392b; line-height: 1.35; }
+.ds-card-err { font-size: var(--fs-xs); color: var(--t-err); line-height: 1.35; }
 
 /* 空态与提示 */
-.ds-err { display: flex; align-items: center; gap: 7px; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--brand-coral) 30%, var(--hairline)); border-radius: 10px; background: color-mix(in srgb, var(--brand-coral) 6%, var(--surface)); color: var(--ink); font-size: 12.5px; }
-.ds-loading { padding: 32px; text-align: center; color: var(--stone); font-size: 13px; }
-.ds-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 44px 16px; color: var(--stone); }
+.ds-err { display: flex; align-items: center; gap: var(--sp-2); padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--brand-coral) 30%, var(--hairline)); border-radius: var(--r-md); background: color-mix(in srgb, var(--brand-coral) 6%, var(--surface)); color: var(--ink); font-size: var(--fs-md); }
+.ds-loading { padding: 32px; text-align: center; color: var(--stone); font-size: var(--fs-md); }
+.ds-empty { display: flex; flex-direction: column; align-items: center; gap: var(--sp-3); padding: 44px 16px; color: var(--stone); }
 .ds-empty-ic { color: var(--stone); opacity: .55; }
-.ds-empty b { font-size: 13px; color: var(--steel); }
+.ds-empty b { font-size: var(--fs-md); color: var(--steel); }
 </style>

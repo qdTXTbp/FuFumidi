@@ -4,7 +4,8 @@
 ==========================================
 - 最高质量 默认：全部 CPU 核心，识别最完整
 - 均衡      ：限制到 ≤4 核，降低内存占用与系统争用
-- 高性能    ：限制到 2 核，适合低配 / 老机器（更省内存，不会拖垮整机）
+- 低配省资源：限制到 2 核，适合低配 / 老机器（更省内存，不会拖垮整机）
+             ★ 名字如实：它在正常机器上**比「最高质量」慢**，不是提速档
 
 实现方式：
 - 设置 OpenMP / MKL / NumPy / Numba 线程数环境变量（在引擎导入前生效）
@@ -13,7 +14,7 @@
 （引擎均为懒加载，转码时才生效，不影响 GUI 启动速度。）
 
 自动性能评估（detect_recommended）：根据 CPU 核数 / 内存 / GPU 自动推荐
-档位并给出上限——高配置解锁全部档位，低配置锁定高性能档防止崩溃。
+档位并给出上限——高配置解锁全部档位，低配置锁定「低配省资源」档防止崩溃。
 """
 
 import os
@@ -22,7 +23,11 @@ from pathlib import Path
 
 # 每档限制的线程数；0 表示不限（用全部核心）
 PERF_MODES = {"quality": 0, "balanced": 4, "fast": 2}
-PERF_LABELS = {"quality": "最高质量", "balanced": "均衡", "fast": "高性能"}
+# ★ 标签必须如实描述代价（2026-10-14 改）：fast 的真实语义是「资源最少」，
+#   它在正常机器上**比 quality 慢** —— PERF_MODES 是 quality=0(全核)/fast=2，
+#   再叠加 engine_pt._PERF_BATCH 的 quality=32/fast=8。
+#   旧标签「高性能」会让用户为了「快」去点最慢的那一档。
+PERF_LABELS = {"quality": "最高质量", "balanced": "均衡", "fast": "低配省资源"}
 
 _THREAD_ENV = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS",
                "NUMBA_NUM_THREADS", "OPENBLAS_NUM_THREADS")
@@ -152,7 +157,7 @@ def detect_recommended():
         res["reasons"].append("中配置：推荐「均衡」档，可按需手动选择最高质量")
     else:
         res["recommended"] = "fast"
-        res["reasons"].append("低配置：建议使用「高性能」档以保持流畅（可手动调整）")
+        res["reasons"].append("低配置：建议使用「低配省资源」档以保持流畅（可手动调整）")
     return res
 
 

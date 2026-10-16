@@ -4,10 +4,23 @@ import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
 import { getPlayer, getCtx, getSynth } from '../audio.js';
 import { t } from '../core/i18n.js';
+import { playbackPrefs } from '../core/playback_prefs.js';
+import { useSettingsStore } from '../stores/settings';
 import { GM_INSTRUMENTS, gmByProgram } from '../core/gmInstruments.js';
 import { initMidiOutput, setMidiOutEnabled, midiOutOn, midiOutOff, midiAllOff, getMidiOutDeviceName } from '../core/midiout.js';
+import NumSlider from './NumSlider.vue';
 
 const app = useAppStore();
+const settingsStore = useSettingsStore();
+
+/* 跳过空白片段：用户 2026-10-14 定「默认关，但给一个显眼的开关」——
+   所以它常驻在播放栏（和循环/节拍器同排），一点即用，不必进设置页。 */
+function toggleSkipSilence() {
+  playbackPrefs.skipSilence = !playbackPrefs.skipSilence;
+  app.applyPlaybackPrefs();
+  try { settingsStore.save({ skip_silence: playbackPrefs.skipSilence }); } catch (e) {}
+  app.toast(playbackPrefs.skipSilence ? t('跳空白：开') : t('跳空白：关'));
+}
 const state = app;
 const isAudio = computed(() => state.isAudio);
 const currentSong = computed(() => app.currentSong);
@@ -17,7 +30,6 @@ const togglePlay = () => app.togglePlay();
 const stopPlay = () => app.stopPlay();
 const seekRatio = (r) => app.seekRatio(r);
 const setTempo = (v) => app.setTempo(v);
-const toggleLoop = () => app.toggleLoop();
 const toggleMetro = () => app.toggleMetro();
 const setVolume = (v) => app.setVolume(v);
 const selectSong = (id) => app.selectSong(id);
@@ -45,6 +57,36 @@ function onProgressInput(e) {
   dragRatio.value = r;
   seekRatio(r);
 }
+
+/* ---------------- 进度条悬停预览（用户 2026-10-14 要求，仿参考截图） ----------------
+   鼠标掠过进度条时：在指针上方给出「落点时间 (-剩余) / 总长」，并在条上落一根竖线。
+   拖动过程中同样显示（拖动本身就是 pointermove）。纯展示层，不碰播放/跳转逻辑。
+   时长格式：≥1 小时用 h:mm:ss（截图里的 2:00:31 / -1:41:48），否则 m:ss。 */
+const hoverRatio = ref(-1);      // < 0 = 没在悬停
+const hoverTipPct = ref(50);     // 气泡位置（已按气泡半宽夹过，贴边不溢出）
+const TIP_HALF = 78;             // 气泡半宽上限（px）
+function fmtClock(sec) {
+  const s = Math.max(0, Math.floor(isFinite(sec) ? sec : 0));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+  const mm = h > 0 ? String(m).padStart(2, '0') : String(m);
+  return (h > 0 ? h + ':' : '') + mm + ':' + String(ss).padStart(2, '0');
+}
+const hoverTip = computed(() => {
+  const d = state.totalSec || 0;
+  if (hoverRatio.value < 0 || d <= 0) return '';
+  const at = Math.max(0, Math.min(1, hoverRatio.value)) * d;
+  return fmtClock(at) + ' (-' + fmtClock(Math.max(0, d - at)) + ') / ' + fmtClock(d);
+});
+function onProgressHover(e) {
+  const el = e.currentTarget;
+  const rect = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+  if (!rect || !rect.width) return;
+  const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+  hoverRatio.value = x / rect.width;
+  const half = Math.min(TIP_HALF, rect.width / 2);
+  hoverTipPct.value = (Math.min(Math.max(x, half), rect.width - half) / rect.width) * 100;
+}
+function onProgressLeave() { hoverRatio.value = -1; }
 
 function stepTempo(d) { setTempo(Math.round((state.tempo + d) * 100) / 100); }
 
@@ -131,8 +173,8 @@ function next() {
   app.skip(1);
 }
 const playMode = computed(() => state.playMode || 'order');
-const modeIcon = computed(() => ({ order: 'modeOrder', shuffle: 'shuffle', repeatOne: 'repeat1', loopAll: 'refresh' }[playMode.value] || 'modeOrder'));
-const modeTitle = computed(() => ({ order: t('顺序播放'), shuffle: t('随机播放'), repeatOne: t('单曲循环'), loopAll: t('列表循环') }[playMode.value] || t('播放模式')));
+const modeIcon = computed(() => ({ order: 'modeOrder', once: 'modeOnce', shuffle: 'shuffle', repeatOne: 'repeat1', loopAll: 'refresh' }[playMode.value] || 'modeOrder'));
+const modeTitle = computed(() => ({ order: t('顺序播放'), once: t('播完就停'), shuffle: t('随机播放'), repeatOne: t('单曲循环'), loopAll: t('列表循环') }[playMode.value] || t('播放模式')));
 function cycleMode() { app.cyclePlayMode(); }
 
 /* ---------------- 书签 & 睡眠定时 ---------------- */
@@ -243,18 +285,26 @@ function toggleCrossfade() {
       <div class="pb-time"><span>{{ curStr }}</span><span>{{ totalStr }}</span></div>
       <input id="pb-progress" name="pb-progress" type="range" :aria-label="t('播放进度')" min="0" max="1" step="0.0001" :style="pbStyle" :value="displayProgress"
              @pointerdown="onProgressDragStart" @pointerup="onProgressDragEnd" @pointercancel="onProgressDragEnd"
+             @pointerenter="onProgressHover" @pointermove="onProgressHover" @pointerleave="onProgressLeave"
              @input="onProgressInput">
+      <!-- ★ 悬停预览（用户 2026-10-14 要求，仿参考截图）：竖线落在指针处，气泡在正上方 -->
+      <template v-if="hoverRatio >= 0 && hoverTip">
+        <span class="pb-hoverline" :style="{ left: (hoverRatio * 100) + '%' }" aria-hidden="true"></span>
+        <span class="pb-hovertip" :style="{ left: hoverTipPct + '%' }">{{ hoverTip }}</span>
+      </template>
     </div>
 
     <div class="pb-right">
       <button class="tp-btn" data-guide="pb-midiout" :class="{ 'toggle-on': midiOn }" :title="t('MIDI 硬件输出')" :aria-label="t('MIDI 硬件输出')" @click="toggleMidiOut"><Icon name="music" :size="16" /></button>
-      <button class="tp-btn" data-guide="pb-loop" :class="{ 'toggle-on': state.loop }" :title="t('循环播放')" :aria-label="t('循环播放')" @click="toggleLoop" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="loop" :size="16" /></button>
-      <button class="tp-btn" data-guide="pb-metro" :class="{ 'toggle-on': state.metro }" :title="t('节拍器')" :aria-label="t('节拍器')" @click="toggleMetro" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="metro" :size="16" /></button>
+      <button class="tp-btn" data-guide="pb-skip-silence" :class="{ 'toggle-on': playbackPrefs.skipSilence }"
+              :title="t('跳过空白片段（没有音符的段落自动跳过）')" :aria-label="t('跳过空白片段')"
+              @click="toggleSkipSilence" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="skipGap" :size="16" /></button>
+<button class="tp-btn" data-guide="pb-metro" :class="{ 'toggle-on': state.metro }" :title="t('节拍器')" :aria-label="t('节拍器')" @click="toggleMetro" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="metro" :size="16" /></button>
       <button class="tp-btn" data-guide="pb-mixer" :class="{ 'toggle-on': mixerOpen }" :title="t('混音台')" :aria-label="t('混音台')" @click="mixerOpen = !mixerOpen" :disabled="isAudio || !state.tracks.length" :style="isAudio ? { opacity: .4 } : null"><Icon name="cclane" :size="16" /></button>
       <button class="tp-btn" data-guide="pb-fx" :class="{ 'toggle-on': fxOpen || fx.enabled }" :title="t('音效调节')" :aria-label="t('音效调节')" @click="toggleFxOpen"><Icon name="cresc" :size="16" /></button>
       <button class="tp-btn" :class="{ 'toggle-on': compact }" :title="t('紧凑/完整播放栏')" :aria-label="t('紧凑/完整播放栏')" @click="compact = !compact"><Icon name="menu" :size="16" /></button>
 
-      <div class="row" style="gap:4px">
+      <div class="row" style="gap:var(--sp-1)">
         <button class="chip-btn" @click="stepTempo(-0.05)" :title="t('减速')" :aria-label="t('减速')">−</button>
         <input id="pb-tempo" name="pb-tempo" class="num-input" :aria-label="t('速度倍率')" type="number" min="0.25" max="4" step="0.05" v-model.number="state.tempo" style="width:52px;text-align:center" :title="t('速度倍率')">
         <button class="chip-btn" @click="stepTempo(0.05)" :title="t('加速')" :aria-label="t('加速')">＋</button>
@@ -267,7 +317,7 @@ function toggleCrossfade() {
 
       <div class="vol-wrap">
         <span class="vol-ic"><Icon name="volume" :size="16" /></span>
-        <input id="pb-volume" name="pb-volume" type="range" :aria-label="t('音量')" min="0" max="1" step="0.01" :style="volStyle" :value="state.volume" @input="setVolume(parseFloat($event.target.value))">
+        <NumSlider :model-value="state.volume" @update:model-value="v => { setVolume(parseFloat(v)) }" :min="0" :max="1" :step="0.01" :range-style="volStyle" input-id="pb-volume" input-name="pb-volume" :aria-label="t('音量')" :input-width="46" no-input />
       </div>
     </div>
 
@@ -282,8 +332,8 @@ function toggleCrossfade() {
           <b>{{ t('混音台') }}</b>
           <button class="icon-btn" @click="mixerOpen = false" :title="t('关闭')"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
         </div>
-        <div class="muted small" style="padding:0 2px 8px">{{ t('音量/静音/独奏/声像作用于 MIDI 通道：同一通道上的多条轨会一起变化') }}</div>
-        <div v-if="!state.tracks.length" class="muted small" style="padding:12px 4px">{{ t('当前曲目没有可混音的轨道') }}</div>
+        <div class="muted small" style="padding:0 2px var(--sp-2)">{{ t('音量/静音/独奏/声像作用于 MIDI 通道：同一通道上的多条轨会一起变化') }}</div>
+        <div v-if="!state.tracks.length" class="muted small" style="padding:var(--sp-3) var(--sp-1)">{{ t('当前曲目没有可混音的轨道') }}</div>
         <div v-for="(tr, i) in state.tracks" :key="i" class="mix-track">
           <span class="mt-color" :style="{ background: tr.color }"></span>
           <div class="mt-name">
@@ -299,13 +349,11 @@ function toggleCrossfade() {
             <button class="chip-btn" :class="{ 'on-mute': tr.mute }" :title="t('静音')" :aria-label="t('静音')" @click="toggleTrackMute(i)">M</button>
           </div>
           <div class="mt-vol" :title="t('音量 ') + Math.round(tr.vol * 100) + '%'">
-            <input type="range" min="0" max="1" step="0.01" :style="{ '--fill': tr.vol * 100 + '%' }"
-                   :value="tr.vol" @input="setTrackVol(i, parseFloat($event.target.value))">
+            <NumSlider :model-value="tr.vol" @update:model-value="v => { setTrackVol(i, parseFloat(v)) }" :min="0" :max="1" :step="0.01" :range-style="{ '--fill': tr.vol * 100 + '%' }" :input-width="46" no-input />
           </div>
-          <div style="width:70px;display:flex;align-items:center;gap:6px" :title="panTitle(i)">
+          <div style="width:70px;display:flex;align-items:center;gap:var(--sp-2)" :title="panTitle(i)">
             <span class="muted small">L</span>
-            <input type="range" min="-1" max="1" step="0.01" :style="panStyle(i)"
-                   :value="tr.pan" @input="setTrackPan(i, parseFloat($event.target.value))">
+            <NumSlider :model-value="tr.pan" @update:model-value="v => { setTrackPan(i, parseFloat(v)) }" :min="-1" :max="1" :step="0.01" :range-style="panStyle(i)" :input-width="46" no-input />
             <span class="muted small">R</span>
           </div>
         </div>
@@ -332,7 +380,7 @@ function toggleCrossfade() {
                   <small>{{ it.englishName }} · {{ it.family }}</small>
                 </span>
               </button>
-              <div v-if="!instFiltered.length" class="muted small" style="padding:12px 4px">{{ t('没有匹配的音色') }}</div>
+              <div v-if="!instFiltered.length" class="muted small" style="padding:var(--sp-3) var(--sp-1)">{{ t('没有匹配的音色') }}</div>
             </div>
             <div class="mx-inst-foot">
               <button class="btn sm ghost" @click="instReset(instrumentFor)">{{ t('恢复文件音色') }}</button>
@@ -367,18 +415,15 @@ function toggleCrossfade() {
         <div class="eq-bands">
           <div v-for="(f, i) in EQ_FREQS" :key="i" class="eq-band" :title="f + ' Hz'">
             <span class="eq-val">{{ (fx.gains[i] > 0 ? '+' : '') + (fx.gains[i] || 0) }}</span>
-            <input class="eq-vslider" type="range" min="-12" max="12" step="0.5"
-                   :value="fx.gains[i]" @input="setEqGain(i, parseFloat($event.target.value))">
+            <NumSlider :model-value="fx.gains[i]" @update:model-value="v => { setEqGain(i, parseFloat(v)) }" :min="-12" :max="12" :step="0.5" range-class="eq-vslider" :input-width="46" no-input />
             <span class="eq-hz">{{ f >= 1000 ? (f / 1000) + 'k' : f }}</span>
           </div>
         </div>
         <div class="eq-xrow">
           <span class="eq-lbl">{{ t('低音增强') }}</span>
-          <input type="range" min="0" max="12" step="0.5" class="eq-hslider" :style="{ '--fill': (fx.bass / 12 * 100) + '%' }"
-                 :value="fx.bass" @input="setBass(parseFloat($event.target.value))">
+          <NumSlider :model-value="fx.bass" @update:model-value="v => { setBass(parseFloat(v)) }" :min="0" :max="12" :step="0.5" range-class="eq-hslider" :range-style="{ '--fill': (fx.bass / 12 * 100) + '%' }" :input-width="46" no-input />
           <span class="eq-lbl">{{ t('空间声') }}</span>
-          <input type="range" min="0" max="1" step="0.05" class="eq-hslider" :style="{ '--fill': (fx.spatial * 100) + '%' }"
-                 :value="fx.spatial" @input="setSpatial(parseFloat($event.target.value))">
+          <NumSlider :model-value="fx.spatial" @update:model-value="v => { setSpatial(parseFloat(v)) }" :min="0" :max="1" :step="0.05" range-class="eq-hslider" :range-style="{ '--fill': (fx.spatial * 100) + '%' }" :input-width="46" no-input />
         </div>
         <div class="eq-note">{{ t('提示：开启「启用音效」后调节实时生效，设置自动保存。') }}</div>
       </div>
@@ -397,8 +442,8 @@ function toggleCrossfade() {
   min-width: 190px;
   background: var(--surface);
   border: 1px solid var(--hairline);
-  border-radius: 10px;
-  padding: 6px;
+  border-radius: var(--r-md);
+  padding: var(--sp-2);
   box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
@@ -413,62 +458,62 @@ function toggleCrossfade() {
   transform: translateX(-50%);
   z-index: var(--z-modal, 1000);
 }
-.pb-pop-row { display: flex; gap: 4px; align-items: center; }
-.pb-pop-jump { flex: 1; display: flex; align-items: center; gap: 6px; padding: 7px 10px; border: 0; background: transparent; color: var(--ink); border-radius: 7px; cursor: pointer; font-size: 12.5px; text-align: left; }
+.pb-pop-row { display: flex; gap: var(--sp-1); align-items: center; }
+.pb-pop-jump { flex: 1; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 0; background: transparent; color: var(--ink); border-radius: var(--r-sm); cursor: pointer; font-size: var(--fs-md); text-align: left; }
 .pb-pop-jump:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.pb-pop-del { border: 0; background: transparent; color: var(--stone); cursor: pointer; padding: 6px; border-radius: 6px; }
-.pb-pop-del:hover { color: #e26d5a; }
-.pb-pop-empty { padding: 8px 10px; font-size: 12px; color: var(--stone); }
-.eq-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 2px 10px; }
-.eq-switch { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink); cursor: pointer; }
+.pb-pop-del { border: 0; background: transparent; color: var(--stone); cursor: pointer; padding: var(--sp-2); border-radius: var(--r-sm); }
+.pb-pop-del:hover { color: var(--t-err); }
+.pb-pop-empty { padding: var(--sp-2) var(--sp-3); font-size: var(--fs-sm); color: var(--stone); }
+.eq-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-1) 2px var(--sp-3); }
+.eq-switch { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-md); color: var(--ink); cursor: pointer; }
 .eq-switch input { accent-color: var(--accent); }
-.eq-preset { background: var(--surface); color: var(--ink); border: 1px solid var(--hairline); border-radius: 8px; padding: 5px 10px; font-size: 12.5px; }
-.eq-bands { display: flex; gap: 10px; justify-content: space-between; padding: 8px 2px 4px; }
-.eq-band { display: flex; flex-direction: column; align-items: center; gap: 5px; flex: 1; min-width: 0; }
+.eq-preset { background: var(--surface); color: var(--ink); border: 1px solid var(--hairline); border-radius: var(--r-md); padding: var(--sp-1) var(--sp-3); font-size: var(--fs-md); }
+.eq-bands { display: flex; gap: var(--sp-3); justify-content: space-between; padding: var(--sp-2) 2px var(--sp-1); }
+.eq-band { display: flex; flex-direction: column; align-items: center; gap: var(--sp-1); flex: 1; min-width: 0; }
 .eq-vslider { writing-mode: vertical-lr; direction: rtl; width: 22px; height: 120px; accent-color: var(--accent); }
-.eq-hz { font-size: 10px; color: var(--stone); }
-.eq-val { font-size: 10px; color: var(--steel); min-height: 13px; }
-.eq-xrow { display: flex; align-items: center; gap: 10px; padding: 12px 2px 2px; }
+.eq-hz { font-size: var(--fs-xs); color: var(--stone); }
+.eq-val { font-size: var(--fs-xs); color: var(--steel); min-height: 13px; }
+.eq-xrow { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) 2px 2px; }
 .eq-xrow input[type="range"] { flex: 1; accent-color: var(--accent); }
-.eq-lbl { font-size: 12px; color: var(--steel); flex: none; }
-.eq-note { padding: 10px 2px 0; font-size: 11.5px; color: var(--stone); }
-.bpm-wrap { display: flex; align-items: center; gap: 6px; flex: none; }
-.bpm-lbl { font-size: 10.5px; color: rgba(255, 255, 255, 0.55); font-weight: 600; }
+.eq-lbl { font-size: var(--fs-sm); color: var(--steel); flex: none; }
+.eq-note { padding: var(--sp-3) 2px 0; font-size: var(--fs-sm); color: var(--stone); }
+.bpm-wrap { display: flex; align-items: center; gap: var(--sp-2); flex: none; }
+.bpm-lbl { font-size: var(--fs-xs); color: rgba(255, 255, 255, 0.55); font-weight: 600; }
 .mx-overlay {
   position: fixed; inset: 0; z-index: 90;
   background: rgba(10, 10, 10, 0.28);
   -webkit-backdrop-filter: blur(8px) saturate(1.4); backdrop-filter: blur(8px) saturate(1.4);
   display: flex; align-items: flex-end; justify-content: flex-end;
-  padding: 0 14px calc(var(--playerbar-h) + 14px) 0;
+  padding: 0 var(--sp-4) calc(var(--playerbar-h) + 14px) 0;
 }
 .mx-card {
   width: 480px; max-width: calc(100vw - 28px); max-height: 58vh; overflow-y: auto;
   background: var(--glass-bg-strong);
   -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
   color: var(--ink);
-  border: 1px solid color-mix(in srgb, #fff 26%, transparent);
-  border-radius: 16px;
-  box-shadow: var(--shadow-lg); padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--on-accent) 26%, transparent);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg); padding: var(--sp-4);
 }
 /* 音色选择浮层 */
 .mx-instr-mask {
   position: absolute; inset: 0; z-index: 5;
-  background: rgba(10, 10, 10, 0.35); border-radius: 16px;
+  background: rgba(10, 10, 10, 0.35); border-radius: var(--r-lg);
   display: flex; align-items: stretch; justify-content: center;
 }
 .mx-card { position: relative; }
 .mx-instr {
-  width: 100%; max-width: 440px; margin: 10px;
+  width: 100%; max-width: 440px; margin: var(--sp-3);
   display: flex; flex-direction: column;
   background: var(--glass-bg-strong);
   -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
-  border: 1px solid color-mix(in srgb, #fff 26%, transparent);
-  border-radius: 12px; padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--on-accent) 26%, transparent);
+  border-radius: var(--r-md); padding: var(--sp-3);
 }
 .mx-inst-search {
-  display: flex; align-items: center; gap: 6px;
-  padding: 4px 8px; margin-bottom: 8px;
-  border: 1px solid var(--border); border-radius: 9px;
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2); margin-bottom: var(--sp-2);
+  border: 1px solid var(--border); border-radius: var(--r-md);
   color: var(--steel);
 }
 .mx-inst-list {
@@ -477,34 +522,49 @@ function toggleCrossfade() {
   padding-right: 2px;
 }
 .mx-inst-item {
-  display: flex; align-items: center; gap: 8px; text-align: left;
-  padding: 6px 8px; border-radius: 8px; background: none; border: none;
+  display: flex; align-items: center; gap: var(--sp-2); text-align: left;
+  padding: var(--sp-2) var(--sp-2); border-radius: var(--r-md); background: none; border: none;
   color: var(--ink); cursor: pointer;
 }
 .mx-inst-item:hover { background: var(--surface-soft); }
 .mx-inst-item.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
 .mx-inst-names { display: flex; flex-direction: column; min-width: 0; }
-.mx-inst-names b { font-size: 13px; font-weight: 600; }
-.mx-inst-names small { font-size: 11.5px; color: var(--stone); }
-.mx-inst-foot { display: flex; justify-content: space-between; gap: 8px; padding-top: 10px; }
+.mx-inst-names b { font-size: var(--fs-md); font-weight: 600; }
+.mx-inst-names small { font-size: var(--fs-sm); color: var(--stone); }
+.mx-inst-foot { display: flex; justify-content: space-between; gap: var(--sp-2); padding-top: var(--sp-3); }
 .mt-inst {
-  display: inline-flex; align-items: center; gap: 5px;
+  display: inline-flex; align-items: center; gap: var(--sp-1);
   background: none; border: none; cursor: pointer; padding: 0;
   color: var(--accent);
 }
-.mt-inst small { font-size: 11.5px; color: var(--accent); }
+.mt-inst small { font-size: var(--fs-sm); color: var(--accent); }
 .mt-inst em { font-style: normal; opacity: 0.7; color: var(--stone); }
 .mt-inst:hover small { text-decoration: underline; }
 .mx-head {
   display: flex; align-items: center; justify-content: space-between;
-  font-size: 14px; font-weight: 700; color: var(--ink);
-  padding: 2px 4px 10px;
+  font-size: var(--fs-lg); font-weight: 700; color: var(--ink);
+  padding: 2px var(--sp-1) var(--sp-3);
 }
 /* 混音台在黑色播放条内部，覆盖其白色滑杆样式 */
 .mx-card input[type="range"] {
   background: linear-gradient(90deg, var(--ink) 0%, var(--ink) var(--fill, 0%), var(--hairline) var(--fill, 0%));
 }
-.mx-card input[type="range"]::-webkit-slider-thumb { background: #fff; border-color: var(--ink); }
+.mx-card input[type="range"]::-webkit-slider-thumb { background: var(--surface); border-color: var(--ink); }
+
+/* 进度条悬停预览（仿参考截图）：白底深字气泡 + 落点竖线；纯展示，不挡指针 */
+.pb-progress { position: relative; }
+.pb-hoverline {
+  position: absolute; bottom: -3px; width: 2px; height: 10px;
+  background: rgba(255, 255, 255, 0.9); border-radius: var(--r-sm);
+  transform: translateX(-1px); pointer-events: none;
+}
+.pb-hovertip {
+  position: absolute; bottom: calc(100% - 2px); transform: translateX(-50%);
+  background: var(--surface); color: var(--ink); border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: var(--r-sm); padding: 3px var(--sp-2); font-size: var(--fs-sm); line-height: 1.2;
+  font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); z-index: 6;
+}
 
 /* 紧凑播放栏 */
 .playerbar.compact .pb-title { display: none; }

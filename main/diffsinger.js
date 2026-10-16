@@ -993,6 +993,83 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     }
   }));
 
+  // 通用声码器候选（供「通用声码器」下拉）。
+  // ★ 只列**通用**的：数据根 vocoder/ 下的目录与 .onnx、以及通用组件位 Dependency/。
+  //   **声库自带的 dsvocoder/ 不列** —— 引擎语义是"自带优先、覆盖只在没自带时生效"，
+  //   把它列出来只会让人以为能强行换掉某个声库自带的声码器。
+  // 多说话人声库的说话人**并集**（供界面「默认说话人」下拉）。
+  // ★ 直接读各声库 dsconfig.yaml 的 speakers:，不起 Python —— 只是一次目录扫描。
+  //   条目是**嵌入文件基名**（不含 .emb）；引擎按名字匹配当前声库，匹配不上回落第一个。
+  ipcMain.handle('diffsinger:speakers', async () => {
+    const items = [];
+    const all = new Set();
+    try {
+      const root = Paths.diffsingerVoicebanksDir();
+      if (fs.existsSync(root)) {
+        for (const n of fs.readdirSync(root)) {
+          const dir = path.join(root, n);
+          let st = null;
+          try { st = fs.statSync(dir); } catch (e) { continue; }
+          if (!st.isDirectory()) continue;
+          let txt = '';
+          try { txt = fs.readFileSync(path.join(dir, 'dsconfig.yaml'), 'utf8'); } catch (e) { continue; }
+          const names = [];
+          let inBlock = false;
+          for (const raw of txt.split(/\r?\n/)) {
+            const t = raw.split('#')[0].replace(/\s+$/, '');
+            if (!t.trim()) continue;
+            const m = t.match(/^\s*speakers\s*:\s*(.*)$/);
+            if (m) {
+              const rest = m[1].trim();
+              if (rest.startsWith('[')) {
+                for (const s of rest.replace(/^\[|\]$/g, '').split(',')) {
+                  const q = s.trim().replace(/^["']|["']$/g, '');
+                  if (q) names.push(q);
+                }
+              }
+              inBlock = true;
+              continue;
+            }
+            if (inBlock) {
+              if (/^\s*-/.test(t)) {
+                const q = t.trim().replace(/^-\s*/, '').replace(/^["']|["']$/g, '');
+                if (q) names.push(q);
+              } else if (!/^\s/.test(t)) { inBlock = false; }
+            }
+          }
+          if (names.length) items.push({ dir, name: n, speakers: names });
+          for (const s of names) all.add(s);
+        }
+      }
+    } catch (e) {}
+    return { ok: true, items, speakers: [...all] };
+  });
+
+  ipcMain.handle('diffsinger:vocoders', async () => {
+    const items = [];
+    const push = (p, name) => { if (!items.some((x) => x.path === p)) items.push({ id: p, name, path: p }); };
+    try {
+      const vd = vocoderDir();
+      if (fs.existsSync(vd)) {
+        for (const n of fs.readdirSync(vd)) {
+          const p = path.join(vd, n);
+          let st = null;
+          try { st = fs.statSync(p); } catch (e) { continue; }
+          if (st.isDirectory() && fs.existsSync(path.join(p, 'vocoder.yaml'))) push(p, n);
+          else if (st.isFile() && /\.onnx$/i.test(n)) push(p, n.replace(/\.onnx$/i, ''));
+        }
+      }
+      const dep = path.join(dsRoot(), 'Dependency');
+      if (fs.existsSync(dep)) {
+        for (const n of fs.readdirSync(dep)) {
+          const p = path.join(dep, n);
+          try { if (fs.statSync(p).isDirectory() && fs.existsSync(path.join(p, 'vocoder.yaml'))) push(p, n); } catch (e) {}
+        }
+      }
+    } catch (e) {}
+    return { ok: true, items, dir: vocoderDir() };
+  });
+
   ipcMain.handle('diffsinger:inspectVoicebank', (evt, cfg) => new Promise((resolve) => {
     const { voicebank } = cfg || {};
     const pre = precheck(voicebank);
@@ -1079,14 +1156,23 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       }
       // 推理后端：auto 交给引擎按可用性自动选择（GPU 优先）
       if (device && device !== 'auto') args.push('--device', String(device));
-      // 声码器优先级：声库自带 > 通用组件位
+      // 声码器优先级：声库自带 > 通用组件位。
+      // ★ 前端给了 params.vocoder 就用它（用户在「通用声码器」里选的）；没给才回落到
+      // 多说话人声库：轨级默认说话人（空 = 引擎侧用声明的第一个）
+      if (params.speaker) args.push('--speaker', String(params.speaker));
+      //   数据根里那一个默认的 —— 这一段以前是**写死**的，界面上换不了。
+      //   注意引擎侧语义：声库自带 dsvocoder/ 时这个覆盖会被忽略（见 diffsinger/voicebank.py）。
       const vd = vocoderDir();
-      try {
-        if (fs.existsSync(vd)) {
-          const onnx = fs.readdirSync(vd).find(n => /\.onnx$/i.test(n));
-          if (onnx) args.push('--vocoder', path.join(vd, onnx));
-        }
-      } catch (e) {}
+      if (params.vocoder) {
+        args.push('--vocoder', String(params.vocoder));
+      } else {
+        try {
+          if (fs.existsSync(vd)) {
+            const onnx = fs.readdirSync(vd).find(n => /\.onnx$/i.test(n));
+            if (onnx) args.push('--vocoder', path.join(vd, onnx));
+          }
+        } catch (e) {}
+      }
       // ---- 常驻会话优先（省 Python 启动 + torch import + 声库加载固定开销）----
       // 会话失败（进程崩溃/超时）→ 丢掉会话、回退一次性 spawn：功能永远可用。
       // 引擎业务错误（缺声库/无音符等 ok=false）不回退 —— 回退也是同样错误。

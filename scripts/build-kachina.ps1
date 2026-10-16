@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # kachina updater / offline package build script (BetterGI style)
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts/build-kachina.ps1 -Version 3.2.0

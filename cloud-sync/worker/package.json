@@ -7,7 +7,8 @@
     "dev": "wrangler dev --local",
     "deploy": "wrangler deploy",
     "db:migrate": "wrangler d1 migrations apply DB",
-    "db:create": "wrangler d1 create fufumidi-cloud-sync"
+    "db:create": "wrangler d1 create fufumidi-cloud-sync",
+    "test:worker": "node --test test/*.test.mjs"
   },
   "devDependencies": {
     "wrangler": "^3.80.0"

@@ -67,6 +67,14 @@ export const useDiffsingerStore = defineStore('diffsinger', {
     depsSkipped: false,
     vocoderInstalled: false,
     vocoderDir: '',
+    /** 通用声码器候选（数据根 vocoder/ 与通用组件位 Dependency/）；**不含**声库自带的 dsvocoder */
+    vocoders: [] as { id: string; name: string; path: string }[],
+    /** 已装声库声明的说话人并集（多说话人声库的「默认说话人」下拉用） */
+    speakerOptions: [] as string[],
+    /** 用户选的默认说话人；空 = 引擎用声库声明的第一个 */
+    speakerPick: (typeof localStorage !== 'undefined' && localStorage.getItem('fufumidi_ds_speaker')) || '',
+    /** 用户选中的通用声码器路径；空串 = 自动（用数据根里那一个默认的） */
+    vocoderPick: (typeof localStorage !== 'undefined' && localStorage.getItem('fufumidi_ds_vocoder')) || '',
     checking: false,
 
     /* 组件安装 */
@@ -132,7 +140,45 @@ export const useDiffsingerStore = defineStore('diffsinger', {
       } catch (e) {}
       this.checking = false;
     },
-    async setEnabled(on: boolean): Promise<string> {
+    /** 拉取通用声码器候选（进「声库」面板时调一次）。 */
+  async loadVocoders() {
+    try {
+      const b = (window as any).fuBridge;
+      if (!b || !b.diffsingerVocoders) return;
+      const r = await b.diffsingerVocoders();
+      if (r && r.ok) this.vocoders = r.items || [];
+    } catch (e) { /* 拉不到就只显示「自动」，不影响渲染 */ }
+  },
+
+  /** 选通用声码器（空串 = 自动）。落 localStorage：这是界面偏好，不随曲目走。 */
+  setVocoder(p: string) {
+    this.vocoderPick = p || '';
+    try {
+      if (this.vocoderPick) localStorage.setItem('fufumidi_ds_vocoder', this.vocoderPick);
+      else localStorage.removeItem('fufumidi_ds_vocoder');
+    } catch (e) {}
+  },
+
+  /** 拉取已装声库的说话人并集（进「声库」面板时调一次）。 */
+  async loadSpeakers() {
+    try {
+      const b = (window as any).fuBridge;
+      if (!b || !b.diffsingerSpeakers) return;
+      const r = await b.diffsingerSpeakers();
+      if (r && r.ok) this.speakerOptions = r.speakers || [];
+    } catch (e) { /* 拉不到就不显示下拉，不影响渲染 */ }
+  },
+
+  /** 选默认说话人（空 = 自动）。落 localStorage：界面偏好，不随曲目走。 */
+  setSpeaker(name: string) {
+    this.speakerPick = name || '';
+    try {
+      if (this.speakerPick) localStorage.setItem('fufumidi_ds_speaker', this.speakerPick);
+      else localStorage.removeItem('fufumidi_ds_speaker');
+    } catch (e) {}
+  },
+
+  async setEnabled(on: boolean): Promise<string> {
       if (!this.hasBridge) return '桌面版不可用';
       const r = await (bridge as any).diffsingerSetEnabled(!!on);
       if (r && r.ok) {

@@ -20,6 +20,7 @@ bandit / apollo / vr 等架构。
 """
 
 import os
+import tempfile
 import time
 
 
@@ -225,8 +226,23 @@ def separate(audio_path, out_dir, params=None, log_cb=None, progress_cb=None):
         )
     if not model_path or not os.path.isfile(model_path):
         raise RuntimeError("未找到模型文件，请先在模型管理中下载所选模型。")
+    # ★ 仓库里没带 .yaml 的模型不再直接判死：按权重自动生成配置并**跑一次 1 秒前向**校验，
+    #   过了就用（缓存在 cache/msst_autocfg，只生成一次）；没过才照旧报错。
+    #   为什么必须跑前向：pymss 用 load_state_dict(..., assign=True) 会跳过形状校验，
+    #   "装上了"不等于"能用"（见 engine/msst_autoconfig.py 顶部说明）。
     if model_type != "vr" and (not config_path or not os.path.isfile(config_path)):
-        raise RuntimeError("未找到该模型的配置文件（.\\.yaml），暂不支持此模型。")
+        try:
+            import msst_autoconfig as _autocfg
+            _log(log_cb, "该模型没有现成配置，正在按权重自动生成并校验（首次会慢一点）…")
+            _t_auto = time.time()
+            _auto = _autocfg.ensure_config(model_path, arch, log_cb)
+            if _auto:
+                config_path = _auto
+                _log(log_cb, "自动配置通过前向校验（%.1fs）" % (time.time() - _t_auto))
+        except Exception as _e:
+            _log(log_cb, "自动配置失败：%s" % _e)
+    if model_type != "vr" and (not config_path or not os.path.isfile(config_path)):
+        raise RuntimeError("未找到该模型的配置文件（yaml 缺失），自动生成也没通过校验，暂不支持此模型。")
 
     output_format = str(params.get("output_format") or "wav").lower().lstrip(".")
     if output_format not in ("wav", "flac", "mp3"):
@@ -260,11 +276,32 @@ def separate(audio_path, out_dir, params=None, log_cb=None, progress_cb=None):
     #   `no kernel image is available`。engine_gpu.torch_device() 已经把这种情况判成 cpu，
     #   这里显式跟随。（只认 cuda / mps，其余一律 cpu —— 与 pymss 的合法取值一致；
     #   拿不到 engine_gpu 时保留 "auto" 的旧行为，避免误伤正常 GPU 机器。）
+    # ★ 2026-10-18：DirectML（AMD/Intel 走 torch_directml）之前被这行**无条件降级成 cpu** ——
+    #   体检里明明写着"加速已启用：DirectML GPU（privateuseone:0）"、算力校验也过，
+    #   分离却仍然打"未检测到可用的 GPU 加速"，然后在 CPU 上跑到超时（用户实测 19 分钟超时失败）。
+    #   现在：DirectML 设备先**真跑一次矩阵乘**验证可用，可用就交给 pymss；
+    #   不可用（或拿不到设备）再退回 cpu。cuda/mps 的行为完全不变。
+    def _directml_usable(dev):
+        try:
+            import torch
+            import torch_directml  # noqa: F401  仅确认扩展在
+            a = torch.ones(64, 64).to(dev)
+            b = torch.ones(64, 64).to(dev)
+            c = (a @ b).to("cpu")
+            return bool(torch.isfinite(c).all().item()) and abs(float(c[0, 0]) - 64.0) < 1e-3
+        except Exception:
+            return False
+
     _sep_dev = "auto"
     try:
         from engine_gpu import torch_device as _torch_device
         _d = _torch_device()
-        _sep_dev = _d if _d in ("cuda", "mps") else "cpu"
+        if _d in ("cuda", "mps"):
+            _sep_dev = _d
+        elif _d and _d.startswith("privateuseone"):
+            _sep_dev = _d if _directml_usable(_d) else "cpu"
+        else:
+            _sep_dev = "cpu"
     except Exception:
         _sep_dev = "auto"
 
@@ -274,6 +311,8 @@ def separate(audio_path, out_dir, params=None, log_cb=None, progress_cb=None):
         _log(log_cb, f"加载 MSST 模型（{arch} / {os.path.basename(model_path)}）…")
         if _sep_dev == "cpu":
             _log(log_cb, "分离将使用 CPU（未检测到可用的 GPU 加速，速度较慢）")
+        elif _sep_dev != "auto":
+            _log(log_cb, f"分离将使用 GPU 加速：{_sep_dev}")
         separator = MSSeparator(
             model_type=model_type,
             model_path=model_path,
@@ -357,6 +396,106 @@ def separate(audio_path, out_dir, params=None, log_cb=None, progress_cb=None):
         except Exception:
             pass
 
+
+#: 去噪模型候选（按优先级）。元组：(相对 models 目录的子路径, 文件名, 架构名)
+#: 这些都在资源中心的「修复与工具 / VR」分类里，用户下完就能直接被「强降噪」用上。
+_DENOISE_CANDIDATES = (
+    ('vr/uvr_denoise', 'UVR-DeNoise.pth', 'UVR-VR'),
+    ('vr/uvr_denoise_lite', 'UVR-DeNoise-Lite.pth', 'UVR-VR'),
+    ('single/denoise_mel_band_roformer_aufr33_sdr_27_9959',
+     'denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt', 'Mel-Band Roformer'),
+    ('single/denoise_mel_band_roformer_aufr33_aggr_sdr_27_9768',
+     'denoise_mel_band_roformer_aufr33_aggr_sdr_27.9768.ckpt', 'Mel-Band Roformer'),
+)
+
+
+def find_denoise_model():
+    """找一个**已安装**的去噪模型，返回 (model_path, config_path, arch)；没有就返回 None。
+
+    为什么要显式找：转录链路的「强降噪」档必须「要么真跑模型、要么明说不可用」——
+    不允许出现「开关打开了但什么都没发生」（这正是「智能降噪」原来的毛病）。
+    """
+    root = os.environ.get('FUFUMIDI_MODELS_DIR') or ''
+    if not root:
+        return None
+    for sub, fname, arch in _DENOISE_CANDIDATES:
+        d = os.path.join(root, *sub.split('/'))
+        mp = os.path.join(d, fname)
+        try:
+            if not os.path.isfile(mp) or os.path.getsize(mp) < 1024 * 1024:
+                continue
+        except Exception:
+            continue
+        cfg = None
+        if arch != 'UVR-VR':       # roformer 必须有同名 yaml
+            try:
+                for f in sorted(os.listdir(d)):
+                    if f.lower().endswith(('.yaml', '.yml')):
+                        cfg = os.path.join(d, f)
+                        break
+            except Exception:
+                cfg = None
+            if not cfg:
+                continue
+        return mp, cfg, arch
+    return None
+
+
+def denoise_file(audio_path, log_cb=None, progress_cb=None):
+    """用去噪模型处理整段音频，返回处理后文件路径；没有可用模型返回 None（由调用方说明）。"""
+    found = find_denoise_model()
+    if not found:
+        return None
+    mp, cfg, arch = found
+    out_dir = tempfile.mkdtemp(prefix='fufumidi-denoise-')
+    try:
+        outs = separate(audio_path, out_dir, params={
+            'model_path': mp, 'config_path': cfg, 'arch': arch,
+            'output_format': 'wav', 'chunk_size': 926100, 'num_overlap': 4, 'batch_size': 2,
+        }, log_cb=log_cb, progress_cb=progress_cb)
+    except Exception as e:
+        _log(log_cb, '· 去噪模型执行失败：%s' % e)
+        return None
+    if not outs:
+        return None
+    out = _pick_denoised(outs)
+    if not out or not os.path.isfile(out):
+        return None
+    _log(log_cb, '· 去噪完成（%s → %s）' % (os.path.basename(mp), os.path.basename(out)))
+    return out
+
+
+def _pick_denoised(outs):
+    """从去噪模型的输出里挑「干净的那条」。
+
+    ★ 踩过的坑：VR 去噪模型（UVR-DeNoise 系列）一次输出**两条**：「Noise」和「No Noise」。
+      取 outs[0] 正好拿到「噪声」那条 —— 实测把音频换成近乎静音的残差，
+      转录结果直接变 0 个音符（电平还被归一顶到上限 +18dB）。
+    规则：名字排除 noise 的那条优先，其次按 RMS 最大（干净信号占绝大部分能量）。
+    """
+    import numpy as np
+    import soundfile as sf
+    if len(outs) == 1:
+        return outs[0]
+    def score(p):
+        name = os.path.basename(p).lower()
+        if 'no noise' in name or 'nonoise' in name or 'no_noise' in name:
+            return (0, 0.0)
+        if 'denois' in name or 'clean' in name or 'dry' in name:
+            return (1, 0.0)
+        if 'noise' in name:
+            return (3, 0.0)                     # 这是噪声本身，最后选
+        return (2, 0.0)
+    ranked = []
+    for p in outs:
+        try:
+            d, _sr = sf.read(p, dtype='float32', always_2d=True)
+            r = float(np.sqrt((d ** 2).mean()))
+        except Exception:
+            r = 0.0
+        ranked.append((score(p)[0], -r, p))
+    ranked.sort()
+    return ranked[0][2]
 
 def np_mean_channels(mix):
     import numpy as np

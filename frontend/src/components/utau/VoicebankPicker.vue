@@ -133,20 +133,20 @@ defineExpose({ refresh });
 </template>
 
 <style scoped>
-.vbp { display: flex; flex-direction: column; gap: 8px; }
-.vbp-engines { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface-soft); align-self: flex-start; }
-.vbp-eng { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--stone); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background .15s, color .15s; }
+.vbp { display: flex; flex-direction: column; gap: var(--sp-2); }
+.vbp-engines { display: inline-flex; gap: var(--sp-1); padding: 3px; border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface-soft); align-self: flex-start; }
+.vbp-eng { display: inline-flex; align-items: center; gap: var(--sp-2); padding: 5px 12px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--stone); font-size: var(--fs-md); font-weight: 600; cursor: pointer; transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
 .vbp-eng:hover { color: var(--ink); }
 .vbp-eng.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
 .vbp-eng.on i { background: color-mix(in srgb, var(--brand-coral) 16%, transparent); color: var(--brand-coral); }
-.vbp-eng i { font-style: normal; font-size: 10.5px; padding: 0 6px; line-height: 15px; border-radius: 20px; background: var(--surface-soft); color: var(--stone); }
-.vbp-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.vbp-sel { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 180px; }
-.vbp-lb { font-size: 11.5px; color: var(--stone); white-space: nowrap; }
-.vbp-sel select { flex: 1; height: 30px; padding: 0 8px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface); color: var(--ink); font-size: 12.5px; cursor: pointer; min-width: 0; }
-.vbp-hint { font-size: 11px; color: var(--stone); }
-.vbp-refresh { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 1px solid var(--hairline); border-radius: 8px; background: transparent; color: var(--stone); cursor: pointer; flex: 0 0 auto; }
+.vbp-eng i { font-style: normal; font-size: var(--fs-xs); padding: 0 6px; line-height: 15px; border-radius: var(--r-lg); background: var(--surface-soft); color: var(--stone); }
+.vbp-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.vbp-sel { display: flex; align-items: center; gap: var(--sp-2); flex: 1; min-width: 180px; }
+.vbp-lb { font-size: var(--fs-sm); color: var(--stone); white-space: nowrap; }
+.vbp-sel select { flex: 1; height: 30px; padding: 0 8px; border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface); color: var(--ink); font-size: var(--fs-md); cursor: pointer; min-width: 0; }
+.vbp-hint { font-size: var(--fs-xs); color: var(--stone); }
+.vbp-refresh { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 1px solid var(--hairline); border-radius: var(--r-md); background: transparent; color: var(--stone); cursor: pointer; flex: 0 0 auto; }
 .vbp-refresh:hover { background: var(--surface-soft); color: var(--ink); }
-.vbp-err { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--brand-coral); }
-.compact .vbp-row { gap: 6px; }
+.vbp-err { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); color: var(--brand-coral); }
+.compact .vbp-row { gap: var(--sp-2); }
 </style>

@@ -27,6 +27,7 @@ from typing import List, Optional, Tuple
 from ..renderer import IRenderer, RenderResult
 from ..renderers import DIFFSINGER, apply_dynamics, register_renderer
 from ..singer import USingerType
+from .cache_name import phrase_cache_name
 
 #: 上游 `DiffSingerUtils.cs:11-13` 的三条额外曲线常量（不在项目默认表达式里）
 VELC = 'velc'
@@ -66,17 +67,21 @@ class DiffsingerIRenderer(IRenderer):
 
     def __init__(self, merge_nearby_phrases: bool = False,
                  depth: float = 1.0, steps: int = 20,
-                 cache_dir: Optional[str] = None):
+                 cache_dir: Optional[str] = None,
+                 vocoder: Optional[str] = None):
         """
         * `merge_nearby_phrases` ← `Preferences.Default.DiffSingerMergeNearbyPhrases`
           （`DiffSingerRenderer.cs:98`）。关着时**按音素间隙切句**。
-        * `depth`/`steps` 进缓存文件名，不进 hash（`:123`）。
+        * `depth`/`steps` **进缓存文件名，不进 hash**（`:123`）。
+        * `vocoder`（通用声码器覆盖）**也必须进缓存文件名** —— 否则换了声码器还会命中
+          上一次的 wav（见 cache_name.py 的说明）。没给覆盖时文件名与旧版逐字相同。
         * `cache_dir` ← `PathManager.Inst.CachePath` 的等价物。
         """
         self.merge_nearby_phrases = bool(merge_nearby_phrases)
         self.depth = float(depth)
         self.steps = int(steps)
         self.cache_dir = cache_dir
+        self.vocoder = vocoder or None
 
     # ---------------------------------------------------------------- 基本属性
 
@@ -226,7 +231,7 @@ class DiffsingerIRenderer(IRenderer):
             return None
         return os.path.join(
             self.cache_dir,
-            'ds-%016x-depth%.2f-steps%d.wav' % (phrase.hash, depth, steps))
+            phrase_cache_name(phrase.hash, depth, steps, self.vocoder))
 
     # ---------------------------------------------------------------- dynamics
 

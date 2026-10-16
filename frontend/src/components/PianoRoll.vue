@@ -1,4 +1,5 @@
 <script setup>
+import { TRACK_FALLBACK } from '../core/palette.js';
 import { ref, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue';
 import { useAppStore } from '../stores/app';
 import { KEY_NAME, noteName } from '../core/util.js';
@@ -32,7 +33,6 @@ function cssVar(name, fb) {
 
 /* 主题颜色令牌缓存：按主题一次性解析，主题切换由 applyTheme 写 documentElement
    内联样式触发 MutationObserver 失效。原先每帧 ~16 次 getComputedStyle。 */
-const TRACK_FALLBACK = ['#3b82f6', '#14b8a6', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899'];
 let _pal = null;
 function palette() {
   if (_pal) return _pal;

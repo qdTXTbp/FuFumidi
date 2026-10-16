@@ -102,8 +102,24 @@ def load_tts(voice_dir: str, device: str = 'auto', version: str = '', is_half=No
     return tts, cfg
 
 
+def _sampling_kwargs(a):
+    """采样参数 kwargs —— **只取显式给了的**；None = 不覆盖，让上游用自己的默认值。
+
+    ★ 为什么不给默认值：默认值在 GPT-SoVITS 那边（**实地读过**这个应用实际用的那份 runtime：
+      `GPT_SoVITS/TTS_infer_pack/TTS.py:1142-1144` → top_k=15 / top_p=1 / temperature=1），
+      **不在我们手里**。我们一律不传 → "没替上游定默认"是结构上成立的，不靠文档承诺；
+      上游哪天改了默认值，我们的行为跟着变，不会出现两份不一致的默认值。
+    """
+    kw = {}
+    for k in ('top_k', 'top_p', 'temperature'):
+        v = getattr(a, k, None)
+        if v is not None:
+            kw[k] = v
+    return kw
+
 def synth(tts, text: str, ref_path: str, prompt_text: str, lang: str = 'zh',
-          speed: float = 1.0, seed: int = 42, aux_refs=None, split: str = 'cut5'):
+          speed: float = 1.0, seed: int = 42, aux_refs=None, split: str = 'cut5',
+          top_k=None, top_p=None, temperature=None):
     """跑一次推理 → (float32 波形, 采样率)。"""
     import numpy as np
     inputs = {
@@ -124,6 +140,13 @@ def synth(tts, text: str, ref_path: str, prompt_text: str, lang: str = 'zh',
     }
     if aux_refs:
         inputs['aux_ref_audio_paths'] = list(aux_refs)
+    # 采样参数：**给了才发**（见 _sampling_kwargs 的说明）
+    if top_k is not None:
+        inputs['top_k'] = int(top_k)
+    if top_p is not None:
+        inputs['top_p'] = float(top_p)
+    if temperature is not None:
+        inputs['temperature'] = float(temperature)
     out, sr = None, 32000
     for sr_i, chunk in tts.run(inputs):
         sr = int(sr_i)
@@ -168,7 +191,7 @@ def cmd_say(a):
     if not ref:
         raise RuntimeError('音色目录里没有参考音（ref.wav），请用 --ref 指定一段 3~10 秒的人声')
     prompt = a.prompt or a.text
-    y, sr = synth(tts, a.text, ref, prompt, a.lang, a.speed, a.seed)
+    y, sr = synth(tts, a.text, ref, prompt, a.lang, a.speed, a.seed, **_sampling_kwargs(a))
     if a.out:
         A.save_mono(a.out, y, sr)
     emit_result({'ok': True, 'out': a.out, 'seconds': round(len(y) / float(sr), 2),
@@ -283,7 +306,7 @@ def cmd_sing(a):
             t0 = time.time()
             try:
                 y_out, sr_out = synth(tts, text_syn, ref_path, prompt_syn, a.lang, a.speed,
-                                      int(a.seed) + idx)
+                                      int(a.seed) + idx, **_sampling_kwargs(a))
             except Exception as e1:                      # noqa: BLE001
                 # ★ 单句失败**不许拖垮整首**：先退化成「啦」再试一次，还不行就跳过这一句。
                 log('句 %d 合成失败（%s）→ 换「不切句」重试' % (idx, str(e1)[:100]))
@@ -292,13 +315,15 @@ def cmd_sing(a):
                     # cut5 会按标点切句，切出来的碎片可能一个可 token 的字符都没有
                     # （空 token 列表正是 torch.cat 报错的原因）→ 先试「整句不切」
                     y_out, sr_out = synth(tts, text_syn, ref_path, prompt_syn, a.lang,
-                                          a.speed, int(a.seed) + idx, split='cut0')
+                                          a.speed, int(a.seed) + idx, split='cut0',
+                                          **_sampling_kwargs(a))
                 except Exception as e15:                 # noqa: BLE001
                     log('句 %d 不切句也失败（%s）→ 退化成「啦」' % (idx, str(e15)[:80]))
                 if y_out is None:
                     try:
                         y_out, sr_out = synth(tts, '啦' * max(1, nsyl or 4), ref_path,
-                                              prompt_syn, a.lang, a.speed, int(a.seed) + idx)
+                                              prompt_syn, a.lang, a.speed, int(a.seed) + idx,
+                                              **_sampling_kwargs(a))
                     except Exception as e2:              # noqa: BLE001
                         # ★ 这一句彻底救不回来：**只跳过它**，保留静音，整首继续。
                         #   （以前一句失败会让整首 45/71 句全部白跑。）
@@ -407,6 +432,14 @@ def main(argv=None):
     s.add_argument('--version', default='', help='v1/v2/v3/v4…（默认按音色探测）')
     s.add_argument('--gsv-root', default='')
     s.add_argument('--out', default='')
+    # ★ 采样三参数：**默认 None = 一个都不发**，用上游自己的默认值。
+    #   范围取上游 WebUI 自己的滑块范围（GPT_SoVITS/inference_webui.py:1414-1420），不自己编。
+    s.add_argument('--top-k', dest='top_k', type=int, default=None,
+                   help='top-k 采样（上游默认 15；给了才覆盖）')
+    s.add_argument('--top-p', dest='top_p', type=float, default=None,
+                   help='top-p 采样（上游默认 1；给了才覆盖）')
+    s.add_argument('--temperature', type=float, default=None,
+                   help='采样温度（上游默认 1；给了才覆盖）')
     s.set_defaults(func=cmd_say)
 
     g = sub.add_parser('sing', help='逐句参考重合成 → 整长干声轨')
@@ -428,6 +461,10 @@ def main(argv=None):
                    help='做 WORLD F0 校正（默认关，见 docs/COVER.md）')
     g.add_argument('--no-metrics', dest='metrics', action='store_false', help='不算客观量（省时间）')
     g.add_argument('--no-reuse', dest='reuse', action='store_false', help='不复用已合成的句子')
+    # 同 say：默认不覆盖，不替上游定默认
+    g.add_argument('--top-k', dest='top_k', type=int, default=None)
+    g.add_argument('--top-p', dest='top_p', type=float, default=None)
+    g.add_argument('--temperature', type=float, default=None)
     g.set_defaults(func=cmd_sing, align=False, metrics=True, reuse=True)
 
     a = ap.parse_args(argv)

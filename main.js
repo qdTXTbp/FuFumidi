@@ -49,6 +49,7 @@ const { registerDialogsIpc } = require('./main/dialogs');
 const { registerModelsIpc } = require('./main/models');
 const { registerSettingsIpc } = require('./main/settings-ipc');
 const { registerDiagnosticsIpc } = require('./main/diagnostics');
+const { registerFeedbackIpc } = require('./main/feedback');
 const { registerSystemIpc } = require('./main/system-ipc');
 const { registerGpuIpc } = require('./main/gpu-ipc');
 const { createRustService } = require('./main/rust');
@@ -61,7 +62,8 @@ const { registerDiffsingerIpc } = require('./main/diffsinger');
 const { registerCoverIpc } = require('./main/cover');
 const { createHotkeys, HOTKEY_ACTIONS } = require('./main/hotkeys');
 const { registerSoundfontWorkshopIpc } = require('./main/soundfonts');
-const { createWindow, configureSession, openFileFromArgv, openPath } = require('./main/window');
+const { registerUserMetaIpc } = require('./main/usermeta');
+const { createWindow, configureSession, openFileFromArgv, openPath, takePendingOpen } = require('./main/window');
 const { pyLit, parsePyJson } = require('./main/py-util');
 
 const APP_ID = 'com.fufumidi.app';
@@ -125,12 +127,18 @@ if (!gotLock) {
     registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app, fs, spawnEngine, dialog });
     registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, readSettings });
     registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, spawnEngine });
-    registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net });
-    registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, pluginHost, readSettings, resolveSeparateModel: (id) => (ModelsService ? ModelsService.resolveSeparateModel(id) : null) });
+    registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bundledPython });
+    registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, cancelEngineJob: (...a) => cancelJob(...a), pluginHost, readSettings, resolveSeparateModel: (id) => (ModelsService ? ModelsService.resolveSeparateModel(id) : null),
+    // 分离前自愈：MSST 模型的配置是**下载时**从上游备齐的，老安装/半装状态在这里补一次
+    ensureSepConfig: (id) => (ModelsService && ModelsService.ensureSepConfig ? ModelsService.ensureSepConfig(id) : null) });
     registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, parsePyJson });
     registerPresetsIpc({ ipcMain, runEngineInline, parsePyJson, pyLit });
+    // 用户元数据（名字/作者/来源/标签/分类/排序/顶置）：资源中心四页 + 音色工坊共用一张表
+    registerUserMetaIpc({ ipcMain });
     registerDialogsIpc({ ipcMain, dialog, path, fs, app, spawnEngine });
     registerDiagnosticsIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine });
+    // 问题反馈上传（收集 → 脱敏 → 打包 → 上传；写仓库的令牌只在服务端）
+    registerFeedbackIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine, net, readSettings });
     // 依赖 / 环境 / 模型目录规范化：把旧版散落在 C 盘用户目录下的重型目录
     // 一次性迁移到「工具目录」旁的 FuFumidiData（迁移期间显示进度窗）。
     // 必须在模型服务、GPU 服务之前完成，避免服务拿到半成品目录。
@@ -139,7 +147,7 @@ if (!gotLock) {
     try { linkBundledModels(); } catch (_) {}
     try { healModelsDir(); } catch (_) {} // 清除断链（安装器替换 resources/models 后旧 junction 目标消失）
     migrateUserModels();
-    ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings });
+    ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings, resolvePython });
     DbService = createDbService({ app, path, fs });
     DbService.registerDbIpc({ ipcMain });
     // 可选 Rust 核心：先建好服务，供曲库文件体检/重复检测等热点路径优先使用
@@ -197,6 +205,12 @@ if (!gotLock) {
 
     // 启动参数里带上 .mid/.midi 时（例如：双击文件 / 命令行调用）自动打开
     setTimeout(() => openFileFromArgv(process.argv, (p) => openPath({ BrowserWindow, fs }, p)), 600);
+// 渲染进程就绪后主动来取「待打开的文件」。
+// 为什么需要：上面这个 600ms 定时器和渲染进程的订阅是**竞态** ——
+// 双击 .mid 时应用冷启动，600ms 往往早于 Vue 挂载完成，那一次 send 就丢了。
+// 有了这个取件口，无论谁先谁后都不会漏。（实测：前端此前**根本没订阅** open-file，
+// 所以双击等于完全没反应；订阅补上后仍需要这个兜底来消除竞态。）
+ipcMain.handle('open-file:take', () => takePendingOpen());
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow({ BrowserWindow, shell, pluginHost, rootDir: __dirname });
@@ -534,7 +548,7 @@ function engineEnv(extra) {
     if (st && st.hf_token) env.HF_TOKEN = String(st.hf_token).trim();
   } catch (_) {}
   // 只挂「与当前解释器 ABI 匹配」的增强包：三种包都按 CPython 次版本编译
-  // （cuda/directml → cp311，rocm → cp312）。把不匹配的塞进 PYTHONPATH 会拖进
+  // （cuda → cp311，rocm → cp312）。把不匹配的塞进 PYTHONPATH 会拖进
   // 一堆加载不了的 .pyd，比不挂更糟。装了但版本不匹配的，视为「已安装未启用」，
   // 由设置页给出提示（rocm 需 Python 3.12 运行时）。
   const minor = currentPythonMinor();
@@ -554,7 +568,7 @@ function engineEnv(extra) {
 
 // ---------- 引擎服务（main/engine.js） ----------
 const EngineService = createEngineService({ resolvePython, engineDir, engineEnv });
-const { spawnEngine, stopEngineWorker, runEngineInline, engineWorkerConvert, killAll } = EngineService;
+const { spawnEngine, stopEngineWorker, runEngineInline, engineWorkerConvert, cancelJob, killAll } = EngineService;
 
 // ---------- 插件服务（main/plugins.js） ----------
 const PluginService = createPluginService({ app, path, fs, shell, ipcMain, BrowserWindow, readSettings, writeSettings, spawnEngine });
@@ -571,7 +585,7 @@ async function resetBaseToCpu() {
   try {
     const py = resolvePython();
     const sp = path.join(process.resourcesPath, 'python', 'Lib', 'site-packages');
-    // Remove GPU-only metadata / DirectML leftovers (torch/onnxruntime dirs are replaced by CPU wheels below)
+    // Remove GPU-only metadata / legacy DirectML leftovers (torch/onnxruntime dirs are replaced by CPU wheels below)
     if (fs.existsSync(sp)) {
       for (const name of fs.readdirSync(sp)) {
         if (/^(torch_directml|onnxruntime_gpu|onnxruntime_directml)/.test(name)) {

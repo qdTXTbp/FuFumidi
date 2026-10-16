@@ -47,6 +47,14 @@ scripts/cdp/*-report.txt
 .workbuddy/
 .trae/
 
+# Cloudflare Worker 的本地密钥文件（**里面是 GitHub 令牌，绝不能入库**）
+# wrangler dev 会读它；部署用的 secret 走 wrangler secret put，也不落盘
+.dev.vars
+**/.dev.vars
+# wrangler 本地状态（miniflare 模拟的 D1/KV 目录，几百 KB，不入库）
+.wrangler/
+**/.wrangler/
+
 # 调试用的一次性产物（渲染样例 wav 等，几 MB 的二进制，不入库）
 _artifacts/
 
@@ -56,3 +64,9 @@ release-unpacked3/
 release-unpacked4/
 release-unpacked5/
 frontend/.tmp/
+
+# Local Netlify folder
+.netlify
+
+# scratch/cache һ�ɷŲֿ��� (E:\Midi\_attic)������
+_attic/

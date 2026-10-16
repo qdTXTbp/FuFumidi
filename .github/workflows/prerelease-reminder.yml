@@ -1,0 +1,110 @@
+# ============================================================
+# 预发行版清理提醒
+#
+# 用户要求：「删除预发行版本，以后有正式版后都提醒删除预发行版（在仓库里设置提醒）」
+#
+# 做法：每次**正式版**发布后，自动开一个固定标题的 issue，列出当前还挂着的预发行版
+# 和可直接复制的删除命令。已有同名 issue 就改写它，不会每次发版都刷一个新 issue。
+#
+# ★ 三个「资产通道」不算预发行版，必须排除，否则会一直提醒删它们、真删了会断下载：
+#     beta            —— 测试通道锚点（update 链路指它）
+#     gpu-v2          —— GPU 加速包仓库（几个 GB 的包）
+#     soundfonts-v1   —— SoundFont 镜像资产
+# ============================================================
+name: 预发行版清理提醒
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:        # 也允许手动跑一次，用来清理已有的积压
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检查预发行版并开/更新提醒 issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const ASSET_CHANNELS = ['beta', 'gpu-v2', 'soundfonts-v1'];
+            const TITLE = '【自动提醒】清理过期的预发行版';
+            const MARK = '<!-- prerelease-reminder -->';   // 用来认领自己开的 issue
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // 事件本身是「新发了一个预发行版」时不提醒 —— 那个刚发出来，本来就该在。
+            const rel = context.payload.release;
+            if (rel && rel.prerelease) {
+              core.info('本次发布的是预发行版 (' + rel.tag_name + ')，不触发清理提醒。');
+              return;
+            }
+
+            const all = await github.paginate(github.rest.repos.listReleases,
+              { owner: owner, repo: repo, per_page: 100 });
+
+            const stale = all
+              .filter(function (r) { return r.prerelease && ASSET_CHANNELS.indexOf(r.tag_name) < 0; })
+              .map(function (r) {
+                return { tag: r.tag_name, name: r.name || r.tag_name,
+                         date: (r.published_at || '').slice(0, 10) };
+              });
+
+            // 找自己开过的 issue（按正文里的标记认，标题被改过也不怕）
+            const issues = await github.paginate(github.rest.issues.listForRepo,
+              { owner: owner, repo: repo, state: 'all', per_page: 100 });
+            const mine = issues.find(function (i) {
+              return !i.pull_request && (i.body || '').indexOf(MARK) >= 0;
+            });
+
+            if (stale.length === 0) {
+              if (mine && mine.state === 'open') {
+                await github.rest.issues.createComment({ owner: owner, repo: repo, issue_number: mine.number,
+                  body: '预发行版已清理干净，关闭本条提醒。' });
+                await github.rest.issues.update({ owner: owner, repo: repo, issue_number: mine.number, state: 'closed' });
+              }
+              core.info('没有需要清理的预发行版。');
+              return;
+            }
+
+            const B = String.fromCharCode(96);   // 反引号
+            const BLOCK = B + B + B;
+            const lines = [
+              MARK,
+              '',
+              '刚发布了正式版 **' + (rel ? rel.tag_name : '(手动触发)') + '**，按约定检查一下过期的预发行版。',
+              '',
+              '下面这些是当前还挂着的**程序**预发行版（已排除 ' + B + 'beta' + B + ' / ' + B + 'gpu-v2' + B +
+                ' / ' + B + 'soundfonts-v1' + B + ' 三个资产通道）：',
+              '',
+              '| tag | 名称 | 发布时间 |',
+              '|---|---|---|'
+            ];
+            stale.forEach(function (r) {
+              lines.push('| ' + B + r.tag + B + ' | ' + r.name + ' | ' + r.date + ' |');
+            });
+            lines.push('');
+            lines.push('确认后逐条删除。' + B + '--cleanup-tag' + B + ' 会连 tag 一起删，不需要保留 tag 就不要带它：');
+            lines.push('');
+            lines.push(BLOCK + 'bash');
+            stale.forEach(function (r) { lines.push('gh release delete ' + r.tag + ' --yes'); });
+            lines.push(BLOCK);
+            lines.push('');
+            lines.push('删完可以重跑本工作流（Actions → 预发行版清理提醒 → Run workflow）确认没有遗漏，');
+            lines.push('清理干净后本条 issue 会自动关闭。');
+            lines.push('');
+            lines.push('> 本 issue 由 ' + B + '.github/workflows/prerelease-reminder.yml' + B + ' 自动维护，不要手动关闭。');
+            const body = lines.join('\n');
+
+            if (mine) {
+              await github.rest.issues.update({ owner: owner, repo: repo, issue_number: mine.number,
+                title: TITLE, body: body, state: 'open' });
+              core.info('已更新提醒 issue #' + mine.number + '（' + stale.length + ' 个待清理）');
+            } else {
+              const created = await github.rest.issues.create({ owner: owner, repo: repo, title: TITLE, body: body });
+              core.info('已创建提醒 issue #' + created.data.number + '（' + stale.length + ' 个待清理）');
+            }

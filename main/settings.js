@@ -30,14 +30,36 @@ const DEFAULT_SETTINGS = {
   data_root: '',  // 数据根目录（模型 / 依赖 / 缓存 / 临时文件的落点）；留空 = 自动（工具目录旁的 FuFumidiData）
   update_channel: 'stable',  // 更新通道：'stable'=正式版（默认），'beta'=测试版（提前收到 X.Y.Z-beta.N / -rc.N）
   download_source: 'auto',   // 下载源：'auto'=自动（优先国内 CNB，失败回退 GitHub），'cnb'=国内优先，'github'=全球优先
+  // 线路测速后选定的具体源 id（如 'ghfast' / 'cnb-beta' / 'github'）；空串 = 没选过，按 download_source 的偏好走。
+  // 只影响**顺序**（提到最前），不可达时仍会沿回退链换源 —— 不是硬绑定。
+  update_preferred_source: '',
   // UTAU 渲染引擎：'openutau'=照搬 OpenUTAU 的核心（engine/singing，默认），
   // 'legacy'=早期自研的 engine_utau.py。首选失败时主进程会自动回落到另一个引擎。
   utau_engine: 'openutau',
+  // 轨道渲染器（★ 与上面是**两件事**：utau_engine 选"哪个引擎"，这里选"引擎里用哪个渲染器"）。
+  //   'CLASSIC'          = 逐音素：ClassicRenderer + Worldline 变调器（默认，最快）
+  //   'WORLDLINE-R'      = 乐句级 WORLD 合成（v10）
+  //   'WORLDLINE-R1.1'   = v10 + hnsep 谐波/噪声分离（v11）。**需要先下载 hnsep 模型**
+  //                        （资源中心），否则渲染时会给出明确报错。
+  //   'WORLDLINE-R2'     = v20：WORLD 特征 → mel ONNX（随包 83.4 KB）→ ONNX 声码器出波形。
+  //                        **需要 128bin/512hop 的通用声码器**（资源中心「NSF-HiFiGAN 通用声码器」），
+  //                        没装时渲染会给出明确报错。
+  //   实测同机同段：CLASSIC 6.39× 实时 / v10 —— / v11 1.94× 实时（比 v10 慢 3.29×）。
+  utau_renderer: 'CLASSIC',
   diffsinger_enabled: true, // DiffSinger 模块开关：**默认启用**，不再要求用户先手动点一次「启用模块」。
                           // 置 false 仍可显式关闭（保留字段仅为兼容旧 settings.json；主进程已不再据此拦截）。
   // 操作系统级全局热键：{ 动作id: { accel, enabled } }。
   // ★ 默认空 = **一个都不注册** —— 系统级热键会和其他软件抢键，必须由用户在设置里显式录制并启用。
   global_hotkeys: {},
+  // ---- 播放（用户 2026-10-14 定）----
+  // 跳过空白片段：**默认关**（给一个显眼的开关）；开头静音**默认跳**。
+  skip_silence: false,
+  skip_silence_min: 2.5,        // 多长的空档才跳（秒）
+  skip_leading_silence: true,   // 开头静音默认跳
+  seek_step: 5,                 // 方向键步长（数值）
+  seek_step_unit: 'sec',        // 'sec' | 'percent' | 'bar'
+  hold_delay_ms: 400,           // 按住多久算"长按"
+  hold_rate: 2,                 // 长按时的播放倍数（→ 快进播放；← 快退不出声）
 };
 
 function settingsPath() {

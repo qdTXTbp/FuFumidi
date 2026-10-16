@@ -414,13 +414,18 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
     for (const it of REGISTRY) {
       const p = localFilePath(it);
       const size = await statFile(p);
+      const complete = isCompleteSf(it, size);
+      const isBuiltin = !!it.bundledPath && complete;
       out.push({
         id: it.id, name: it.name, version: it.version, desc: it.desc,
         size, expected: it.size, license: it.license,
-        downloaded: isCompleteSf(it, size),
-        builtin: !!it.bundledPath && isCompleteSf(it, size),
+        downloaded: complete,
+        builtin: isBuiltin,
+        // ★ 来源的**单一事实**：随包内置 / 从精选下载 / 还没装（curated）。
+        //   界面一律按这个字段出标签，不再拿 downloaded 猜 —— 那正是"来源分不清"的根因。
+        source: isBuiltin ? 'builtin' : (complete ? 'downloaded' : 'curated'),
         // ★ 磁盘上有文件但不合格（旧版本 / 截断 / 过大）：界面据此提示“需重新下载”并放开「删除」。
-        stale: size > 0 && !isCompleteSf(it, size),
+        stale: size > 0 && !complete,
         manual: !!it.manual, officialUrl: it.officialUrl || '',
         path: p,
         sources: (githubRawCandidates(it).length ? ['github'] : []) ,
@@ -434,12 +439,21 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
     const customs = [];
     try {
       fs.mkdirSync(sfDir(), { recursive: true });
+      // ★ 精选音色**下载下来也落在这个目录里**，所以必须按路径把它们排除掉 ——
+      //   不排除的话「我的音色」会把「内置精选」整个再列一遍（用户实测报告过的缺陷：
+      //   "我的音色和内置精选音色库部分重叠，下载下来的音色也进入了我的音色库"）。
+      //   手动从官网下载、再经「导入 .sf2」放进来的精选音色**同样**被排除：
+      //   那正是注册表条目该有的归宿（注册表按体积判定"已装好"，与文档流程一致）。
+      const curatedPaths = new Set(REGISTRY.map((it) => path.resolve(localFilePath(it))));
       for (const f of fs.readdirSync(sfDir())) {
         if (!/\.(sf2|sf3)$/i.test(f)) continue;
         const p = path.join(sfDir(), f);
+        if (curatedPaths.has(path.resolve(p))) continue;
         const size = await statFile(p);
-        customs.push({ id: 'custom:' + f, name: f.replace(/\.[^.]+$/, ''), desc: '用户导入的音色库', size, downloaded: size > 0, builtin: false, category: '我的音色', custom: true, path: p, overLimit: size > SF2_LOAD_LIMIT });
+        customs.push({ id: 'custom:' + f, name: f.replace(/\.[^.]+$/, ''), desc: '用户导入的音色库', size, downloaded: size > 0, builtin: false, source: 'imported', category: '我的音色', custom: true, path: p, overLimit: size > SF2_LOAD_LIMIT });
       }
+      // 稳定顺序：按名字排，免得每次刷新顺序乱跳（用户自定义排序由 usermeta 的 order 决定）
+      customs.sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh'));
     } catch (e) {}
     return { registry: out, customs, dir: sfDir() };
   });

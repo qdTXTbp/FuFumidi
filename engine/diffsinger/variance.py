@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence
 
 from . import RenderError
+from .speaker_embed import frame_tensor_for
 from .utils import (
     BREC, ENE, TENC, VOIC, clamp_variance, resample_padded_curve, variance_delta,
 )
@@ -203,9 +204,11 @@ def predict(singer, cfg: DsVarianceConfig, phrase, segments, durations: Sequence
     if cfg.predict_energy:
         feeds['energy'] = ones.copy()
 
+    # ★ 多说话人：variance 要**逐帧**的 spk_embed（上游 :103 「used by variance, pitch and acoustic」）
     v_outs = run_session(cfg.model('variance'), feeds, providers,
                          'dsvariance', identifier=(hashes or {}).get('variance'),
-                         cache_dir=cache_dir)
+                         cache_dir=cache_dir,
+                         spk_factory=lambda: frame_tensor_for(cfg, total_frames))
     outs = dict(zip(_output_names(cfg.model('variance'), providers), v_outs))
     result = VarianceResult(head_frames=HEAD_FRAMES, tail_frames=TAIL_FRAMES,
                             frame_ms=frame_ms)

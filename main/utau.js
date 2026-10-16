@@ -505,6 +505,17 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
         args.push('--tempo-map', '@' + tempoJson);
       }
 
+      // ★ 轨道渲染器：只有 engine_openutau.py 认 `--renderer`。
+      //   legacy（engine_utau.py）**没有**这个参数，回落时必须把它去掉 ——
+      //   否则回落链会被一个未知 flag 直接打断，用户看到"两个引擎都失败"，
+      //   而真正的原因只是多传了一个参数。
+      const rendererId = (() => {
+        try { return String((cfg && cfg.renderer) || readSettings().utau_renderer || 'CLASSIC'); }
+        catch (e) { return 'CLASSIC'; }
+      })();
+      const argsFor = (script) => (script === UTAU_ENGINES.openutau
+        ? args.concat(['--renderer', rendererId]) : args);
+
       const primary = utauEngineScript();
       const fallback = primary === UTAU_ENGINES.legacy
         ? UTAU_ENGINES.openutau : UTAU_ENGINES.legacy;
@@ -515,7 +526,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
       if (primary === UTAU_ENGINES.openutau) {
         const sess = openUtauSession();
         if (sess) {
-          sess.request(args, { timeoutMs: 15 * 60 * 1000 }).then((r) => {
+          sess.request(argsFor(UTAU_ENGINES.openutau), { timeoutMs: 15 * 60 * 1000 }).then((r) => {
             if (r && r.ok && r.out && fs.existsSync(r.out)) {
               try {
                 if (outPath) {
@@ -546,7 +557,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
         }
       }
 
-      const spawnWith = (script, isRetry) => spawnEngine(args, {
+      const spawnWith = (script, isRetry) => spawnEngine(argsFor(script), {
         script,
         onDone: (code, r) => {
           if (r && r.result && r.result.ok && r.result.out && fs.existsSync(r.result.out)) {
@@ -641,6 +652,55 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
       subdir: '',
       officialUrl: 'https://github.com/ciwomuli/chen_zhe_voice',
     },
+    {
+      id: 'milk',
+      dirName: 'Milk_JA',
+      name: 'Milk（日文 VCV · 6 音阶）',
+      author: 'Xepheris（本仓为 oxygen-dioxide 的未改动镜像）',
+      lang: '日本語 · VCV（連続音 · 6 音階）',
+      desc: '日文连续音（VCV）6 音阶：A3 / D4 / F3 / G4 / PowerC5 / Falsetto，另带换气音。仓根有 character.txt 与 oto.ini，多音阶按 prefix.map 自动分派，适合正经调声而不是试听。',
+      license: '免费使用 · 允许无需许可再分发（Milk Voicebank Terms of Use）；须标注声库名与作者。本仓为未改动镜像。',
+      repo: 'oxygen-dioxide/milk-ja',
+      ref: 'main',
+      subdir: '',
+      officialUrl: 'https://github.com/oxygen-dioxide/milk-ja',
+    },
+  ];
+
+  /**
+   * 免费 UTAU 声库的**渠道索引**。
+   * ★ 绝大多数免费声库**不在 GitHub 上**（BOOTH / BowlRoll / 作者官网 / 网盘），
+   *   所以这里**不假装能一键下载** —— 与 GPT-SoVITS 的 EXTERNAL 同一套做法：
+   *   列出来、给一个「打开来源」，让用户知道该去哪儿找，而不是空着说「暂无」。
+   * 收录标准：官方配布页，或长期维护的索引站。不收录聚合盘与转载页。
+   */
+  const VB_EXTERNAL = [
+    { id: 'ext_teto', name: '重音テト（Kasane Teto）官方', kind: '声库',
+      note: '最知名的免费日文声库之一；官网配布，使用条款以官方说明为准',
+      url: 'https://kasaneteto.jp/utau/' },
+    { id: 'ext_momo', name: '桃音モモ（Momone Momo）官方', kind: '声库',
+      note: '经典免费日文声库，官网配布', url: 'https://momonemomo.com/' },
+    { id: 'ext_booth', name: 'BOOTH（创作者直售 / 免费配布）', kind: '平台',
+      note: '大量新声库在 BOOTH 免费发布，如 Juki、螺音ラグ 等',
+      url: 'https://booth.pm/' },
+    { id: 'ext_bowlroll', name: 'BowlRoll（日本主流配布站）', kind: '平台',
+      note: '很多声库（茜音イーライ、ピータン 等）只在这里配布',
+      url: 'https://bowlroll.net/' },
+    { id: 'ext_chwiki', name: 'UTAU 中华组维基', kind: '索引',
+      note: '国内最大的中文 UTAU 音源信息库，含简介与配布地址',
+      url: 'https://utauchn.huijiwiki.com' },
+    { id: 'ext_utaou', name: 'UTAU ユーザー互助会@ウィキ', kind: '索引',
+      note: '记录了非常多的早期日文音源配布位置',
+      url: 'https://w.atwiki.jp/utaou/pages/19.html' },
+    { id: 'ext_nicodic', name: 'ニコニコ大百科 · UTAU 音声ライブラリ一覧', kind: '索引',
+      note: '字典式的日文声库总览，信息量很大',
+      url: 'https://dic.nicovideo.jp/a/utau%E9%9F%B3%E5%A3%B0%E3%83%A9%E3%82%A4%E3%83%96%E3%83%A9%E3%83%AA%E4%B8%80%E8%A6%A7' },
+    { id: 'ext_utauwiki', name: 'UTAU Wiki（英文 · UTAUloids）', kind: '索引',
+      note: '英文社区汇总，找国外音源从这里入手',
+      url: 'https://utau.fandom.com/wiki/UTAUloids' },
+    { id: 'ext_bilibili', name: 'B 站「UTAU 音源配布」', kind: '索引',
+      note: '国内创作者多在 B 站发布配布视频，下载链接在简介 / 评论区',
+      url: 'https://search.bilibili.com/all?keyword=UTAU%20%E9%9F%B3%E6%BA%90%E9%85%8D%E5%B8%83' },
   ];
 
   const _vbAborts = new Map();
@@ -682,6 +742,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
     try {
       return {
         ok: true, dir: vbRoot(),
+        external: VB_EXTERNAL,
         list: VB_REGISTRY.map((it) => {
           const installed = vbInstalled(it);
           return {
