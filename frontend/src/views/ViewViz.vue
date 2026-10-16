@@ -221,6 +221,7 @@ function drawRoll(ctx2d, c, u, syn, song, player) {
     energy: rollState.energy || 0,
     // 视效开关：与背景同源（stores/vizbg），导出页读同一份 —— 预览与成片才不会两幅画
     fx: vizBg.fxOpts(),
+    theme: vizBg.vizTheme(),   // ★ 视觉主题（舞台/键面/材质）也走同一份设置
     // 背景只作用于音符瀑布（频谱/示波器/和弦仍是主题底）
     bg: vizBg.drawOpts(),
   });
@@ -439,8 +440,9 @@ onBeforeUnmount(() => {
         <template v-if="fxMore && !immersive">
           <div class="viz-bg-bar">
             <span class="muted small">{{ t('视效主题') }}</span>
-            <button v-for="nm in vizBg.themeList()" :key="nm" class="chip-btn"
-                    :class="{ active: vizBg.themeName === nm }" @click="vizBg.applyTheme(nm)">{{ t(nm) }}</button>
+            <!-- 内置主题 = 视觉主题（舞台/键面/音符材质/后处理整包换）；用户主题带 user 标记 -->
+            <button v-for="th in vizBg.themeList()" :key="th.k" class="chip-btn"
+                    :class="{ active: vizBg.themeName === th.k }" @click="vizBg.applyTheme(th.k)">{{ t(th.label) }}</button>
             <input class="viz-theme-input" v-model="fxThemeInput" :placeholder="t('新主题名')"
                    @keydown.enter="saveThemeAs" />
             <button class="chip-btn" :title="t('把当前参数存成自定义主题（名字你定）')" @click="saveThemeAs">

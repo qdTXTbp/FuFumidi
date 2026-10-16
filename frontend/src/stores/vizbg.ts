@@ -10,7 +10,10 @@ import { t } from '../core/i18n.js';
 import { useAppStore } from './app';
 // ★ 视效开关的**单一来源**是 core/viz.js 的 FX_DEFAULTS —— store 只负责持久化与转交，
 //   不在两边各写一份默认值（写两份必然漂移：viz.js 加了新档、store 的默认还停在旧形状）。
-import { FX_DEFAULTS, FX_PARAMS, FX_THEMES, FX_COLORBY } from '../core/viz.js';
+import { FX_DEFAULTS, FX_PARAMS, FX_COLORBY } from '../core/viz.js';
+// ★ 重做后的"主题"是**视觉主题**（舞台/键面/音符材质/后处理），住在 core/viz/state/themes.js，
+//   旧 viz.js 那套"主题=参数 diff"已退役 —— 那正是"换主题看不出区别"的原因。
+import { THEMES } from '../core/viz/state/themes.js';
 
 export const BG_KEY = 'fufumidi.viz.bg';
 /* ★ 改默认值 / 改结构时把 BG_VER +1：老数据直接忽略，否则「新默认值」对老用户永远不生效
@@ -88,9 +91,23 @@ export const useVizBgStore = defineStore('vizbg', () => {
   function imageEl() { return image; }
 
   /* ---------------- 视效主题（D1/D8）----------------
-   * 内置主题在 core/viz.js 的 FX_THEMES（单一来源）；用户主题在这里，名字由用户起。 */
+   * 内置**视觉主题**在 core/viz/state/themes.js（单一来源）；用户主题在这里，名字由用户起。
+ * 用户主题存的是 { viz: 视觉主题 id, fx: 参数 diff } —— 两样都要能存能还原。 */
   const userThemes = reactive<FxUserThemes>(readUserThemes());
-  const themeName = ref<string>((bg as any).theme || '默认');
+  const VIZ_THEMES = Object.keys(THEMES).map((k) => ({ k, label: (THEMES as any)[k].name }));
+  const themeName = ref<string>((bg as any).theme || 'studio');
+  function vizTheme(): string { return (bg as any).theme || 'studio'; }
+  /** 导出超采样倍率（1/1.5/2）—— 只在导出侧用；实时不需要 */
+  const ssaa = ref<number>((bg as any).ssaa || 1);
+  function setSsaa(v: number) {
+    const n = Math.max(1, Math.min(2, Number(v) || 1));
+    (bg as any).ssaa = n; ssaa.value = n; save();
+  }
+  function setVizTheme(id: string) {
+    (bg as any).theme = id;
+    themeName.value = id;
+    save();
+  }
   function readUserThemes(): FxUserThemes {
     try {
       const o = JSON.parse(localStorage.getItem(FX_USER_KEY) || '{}');
@@ -100,16 +117,20 @@ export const useVizBgStore = defineStore('vizbg', () => {
   function saveUserThemes() {
     try { localStorage.setItem(FX_USER_KEY, JSON.stringify(userThemes)); } catch (e) { /* 忽略 */ }
   }
-  /** 主题清单：内置 + 用户（用户同名时后者覆盖前面） */
+  /** 主题清单：内置视觉主题 + 用户主题（带 user 标记，UI 据此分组/显示删除） */
   function themeList() {
-    return Object.keys(FX_THEMES).concat(Object.keys(userThemes).filter((k) => !(k in FX_THEMES)));
+    return VIZ_THEMES.map((t) => ({ k: t.k, label: t.label, user: false }))
+      .concat(Object.keys(userThemes).map((k) => ({ k, label: k, user: true })));
   }
-  /** 应用主题：把该主题的键**合并**进 fx（不清空没提到的项，用户调过的其余参数保留） */
+  /** 应用主题：内置主题只切视觉主题；用户主题同时还原视觉主题与参数 diff */
   function applyTheme(name: string) {
-    const t = userThemes[name] || (FX_THEMES as any)[name] || {};
-    const cur = (bg as any).fx || {};
-    (bg as any).fx = { ...FX_DEFAULTS, ...cur, ...t };
-    (bg as any).theme = name;
+    const u = userThemes[name];
+    if (u) {
+      if (u.viz) (bg as any).theme = u.viz;
+      (bg as any).fx = { ...FX_DEFAULTS, ...((bg as any).fx || {}), ...((u.fx as any) || {}) };
+    } else if ((THEMES as any)[name]) {
+      (bg as any).theme = name;
+    }
     themeName.value = name;
     save();
   }
@@ -123,7 +144,7 @@ export const useVizBgStore = defineStore('vizbg', () => {
     for (const k of Object.keys(FX_DEFAULTS)) {
       if (cur[k] !== (FX_DEFAULTS as any)[k]) diff[k] = cur[k];
     }
-    userThemes[n] = diff;
+    userThemes[n] = { viz: (bg as any).theme || 'studio', fx: diff };
     saveUserThemes();
     (bg as any).theme = n;
     themeName.value = n;
@@ -134,7 +155,7 @@ export const useVizBgStore = defineStore('vizbg', () => {
     if (!(name in userThemes)) return false;
     delete userThemes[name];
     saveUserThemes();
-    if (themeName.value === name) applyTheme('默认');
+    if (themeName.value === name) applyTheme('studio');
     return true;
   }
   /** 改一个视效参数/开关（用户手改后主题名退成"自定义"，避免"主题"与实际值不符） */
@@ -204,8 +225,9 @@ export const useVizBgStore = defineStore('vizbg', () => {
     }
   }
 
-  return { bg, BG_MODES, FX_ITEMS, FX_PARAMS, FX_COLORBY, FX_THEMES,
-           userThemes, themeName, themeList, applyTheme, saveTheme, deleteTheme,
+  return { bg, BG_MODES, FX_ITEMS, FX_PARAMS, FX_COLORBY, VIZ_THEMES,
+           userThemes, themeName, vizTheme, setVizTheme, themeList, applyTheme, saveTheme, deleteTheme,
+           ssaa, setSsaa,
            save, drawOpts, fxOpts, setFx, setFxAny, resetFx, imageEl,
            setMode, setColor, setBlur, setDim, ensureImage, pickImage, init };
 });

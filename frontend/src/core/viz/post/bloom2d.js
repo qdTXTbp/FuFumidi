@@ -22,6 +22,8 @@ export function ensureScene(pw, ph) { return sized('scene', pw, ph); }
  * @param scene 场景离屏画布（设备分辨率）
  */
 export function bloomPass(ctx, scene, pw, ph, amount, thr) {
+  // pw/ph 是**目标**设备尺寸（可能是 1/ssaa 的缩小目标）；small 从目标尺寸推导，
+  // scene 可能是超采样的大图 —— drawImage 会替我们缩放，所以两者可以不一致。
   const small = sized('small', Math.max(1, Math.round(pw * 0.25)), Math.max(1, Math.round(ph * 0.25)));
   if (!small) return;
   const c2 = small.getContext('2d');

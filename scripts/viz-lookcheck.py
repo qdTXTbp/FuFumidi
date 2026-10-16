@@ -48,5 +48,11 @@ REF = r"E:\Midi\_attic\vizref"
 OURS = r"E:\Midi\_attic\vizrender"
 refs = sorted(glob.glob(os.path.join(REF, "seemusic_*.jpg")))[:2] + sorted(glob.glob(os.path.join(REF, "particles_*.jpg")))[:2] + sorted(glob.glob(os.path.join(REF, "synthesia_*.jpg")))[:1] + sorted(glob.glob(os.path.join(REF, "dorapiano_*.jpg")))[:1]
 table(refs, "参考实现（截图，取靶子）")
-ours = [os.path.join(OURS, n) for n in ("v2-default.png","v2-aurora.png","v2-nobloom.png","fx-on.png")]
-table([p for p in ours if os.path.exists(p)], "我们现在的渲染")
+# 用法：python scripts/viz-lookcheck.py [图片...]  —— 不给参数就看固定对照。
+# ★ 这张表是**自查工具**，不是验收门槛：验收由用户肉眼判定。
+argv = [a for a in sys.argv[1:] if os.path.exists(a)]
+if argv:
+    table(argv, "指定图片")
+else:
+    ours = [os.path.join(OURS, n) for n in ("t-studio.png", "t-neon.png", "t-aurora.png", "t-retro.png", "t-minimal.png", "v2-default.png")]
+    table([q for q in ours if os.path.exists(q)], "我们的渲染（v3 新引擎 / 末行是 v2 旧引擎对照）")

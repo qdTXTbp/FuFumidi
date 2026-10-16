@@ -80,11 +80,15 @@ export function createVizRenderer() {
       const bg = opts.bg || {};
       const sc = pixelScale(ctx) || 1;
       const wantBloom = (typeof document !== 'undefined' && document.createElement && (Number(fx.bloom) || 0) > 0.001);
+      // 超采样（对标 Pianola 的 "any resolution / supersampling"）：先按 ssaa 倍渲染到离屏，
+      // 合成时缩回目标尺寸 —— 抗锯齿与细节都更好，代价是可离线跑（导出不需要实时）。
+      const ssaa = Math.max(1, Math.min(3, Number(opts.ssaa) || 1));
+      const needScene = wantBloom || ssaa > 1;
       const stageIsPrim = !(bg.mode && bg.mode !== 'theme');
       const compileOpts = Object.assign({}, opts, { w, h, theme: opts.theme || 'studio', fx, stage: stageIsPrim });
       const out = compiler.compile(song, tick, compileOpts);
 
-      if (!wantBloom) {
+      if (!needScene) {
         ctx.save();
         paintStage(ctx, w, h, bg);
         drawLayers(ctx, out.prims, !!opts.stats);
@@ -92,13 +96,14 @@ export function createVizRenderer() {
         return out;
       }
       // 有泛光：场景先画进离屏，再叠回主画布（后处理的输入必须是"场景"而不是"背景+场景"）
-      const pw = Math.max(1, Math.round(w * sc)), ph = Math.max(1, Math.round(h * sc));
+      const tw = Math.max(1, Math.round(w * sc)), th = Math.max(1, Math.round(h * sc));   // 目标设备尺寸
+      const pw = Math.max(1, Math.round(w * sc * ssaa)), ph = Math.max(1, Math.round(h * sc * ssaa));
       const scene = ensureScene(pw, ph);
       if (!scene) { ctx.save(); paintStage(ctx, w, h, bg); drawLayers(ctx, out.prims, !!opts.stats); ctx.restore(); return out; }
       const sctx = scene.getContext('2d');
       sctx.setTransform(1, 0, 0, 1, 0, 0);
       sctx.clearRect(0, 0, pw, ph);
-      sctx.save(); sctx.scale(sc, sc);
+      sctx.save(); sctx.scale(sc * ssaa, sc * ssaa);   // 图元是 CSS 单位，这里一次性放大到超采样分辨率
       drawLayers(sctx, out.prims, false);
       sctx.restore();
       const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -108,8 +113,10 @@ export function createVizRenderer() {
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
       ctx.save(); ctx.scale(sc, sc); paintStage(ctx, w, h, bg); ctx.restore();
-      ctx.drawImage(scene, 0, 0);
-      bloomPass(ctx, scene, pw, ph, Math.max(0, Number(fx.bloom) || 0), Math.max(0, Math.min(1, Number(fx.bloomThr) == null ? 0.5 : Number(fx.bloomThr))));
+      ctx.drawImage(scene, 0, 0, tw, th);   // 超采样在这里缩回目标尺寸（降采样 = 抗锯齿）
+      if (wantBloom) {
+        bloomPass(ctx, scene, tw, th, Math.max(0, Number(fx.bloom) || 0), Math.max(0, Math.min(1, Number(fx.bloomThr) == null ? 0.5 : Number(fx.bloomThr))));
+      }
       ctx.restore();
       lastStats = { total: +(((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0).toFixed(2)), layers: { post: lastStats.total } };
       return out;
