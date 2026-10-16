@@ -43,7 +43,11 @@ const flat4 = (...ps) => ps.reduce((acc, p) => (acc.push(p[0], p[1]), acc), []);
  */
 export function buildNote(P, o) {
   const q = o.quad;
+  // ★ 这里的 alpha 是**玻璃本体的通透度**（滑杆），不是"整根音符的透明度"：
+  //   结构层（折射边/高光/顶底收口/光晕）只随它**轻微**减弱，永远不会跟着一起消失 ——
+  //   否则滑杆一拉低，画面上就什么都不剩（用户："拉高后整个琴键都不见了，要像玻璃一样"）。
   const a = Math.max(0, Math.min(1, o.alpha == null ? 1 : o.alpha));
+  const structA = 0.42 + 0.58 * a;          // 结构层强度：实心时 1.0，最通透时仍有 0.42
   if (!q || a <= 0.002) return [];
   const z0 = o.z || 0;
   const glow = o.gloss !== false;
@@ -60,11 +64,11 @@ export function buildNote(P, o) {
     const halo = (grow, alpha, dz) => {
       if (flat) {
         pr.push(P.capsule('notes', q[0] - w * (grow - 1) / 2, q[1] - grow * 1.2, w * grow, h + grow * 2.4,
-          withAlpha(o.color, alpha * a), { r: Math.min(w, h) / 2, blend: 'lighter', z: z0 + dz }));
+          withAlpha(o.color, alpha * structA), { r: Math.min(w, h) / 2, blend: 'lighter', z: z0 + dz }));
       } else {
         const gx = (grow - 1) / 2, gy = grow * 0.015;
         pr.push(P.quad('notes', flat4(pt(q, -gx, -gy), pt(q, 1 + gx, -gy), pt(q, 1 + gx, 1 + gy), pt(q, -gx, 1 + gy)),
-          withAlpha(o.color, alpha * a), { blend: 'lighter', z: z0 + dz }));
+          withAlpha(o.color, alpha * structA), { blend: 'lighter', z: z0 + dz }));
       }
     };
     halo(1.62, 0.05, -0.06);
@@ -81,17 +85,17 @@ export function buildNote(P, o) {
   if (!glow) return pr;
 
   // ③ 内部右侧压暗 + 纵向高光：一暗一亮的两个面 → 圆柱的体积感（参考图里管子的"圆"就是这么来的）
-  const shadeA = 0.17 * a;
+  const shadeA = 0.17 * structA;
   if (flat) pr.push(P.rect('notes', q[0] + w * 0.68, q[1], w * 0.32, h, withAlpha('#000000', shadeA), { z: z0 + 0.05 }));
   else pr.push(P.quad('notes', flat4(pt(q, 0.66, 0), pt(q, 1, 0), pt(q, 1, 1), pt(q, 0.66, 1)), withAlpha('#000000', shadeA), { z: z0 + 0.05 }));
-  const hiA = (0.26 + 0.12 * velN) * a;
+  const hiA = (0.26 + 0.12 * velN) * structA;
   if (flat) pr.push(P.capsule('notes', q[0] + w * 0.1, q[1] + 2, Math.max(1.4, w * 0.26), Math.max(2, h - 4), withAlpha('#ffffff', hiA),
     { r: Math.max(0.6, w * 0.13), blend: 'lighter', z: z0 + 0.1 }));
   else pr.push(P.quad('notes', flat4(pt(q, 0.1, 0.035), pt(q, 0.36, 0.035), pt(q, 0.36, 0.965), pt(q, 0.1, 0.965)), withAlpha('#ffffff', hiA), { blend: 'lighter', z: z0 + 0.1 }));
 
   // ④ 折射边：玻璃最要紧的一笔，但要**细而克制**（1.1px / 微带本色），
   //    浓白 2px 会变成卡通描边 —— 这是上一版实测的失败点
-  const edgeA = (0.42 + 0.16 * velN) * a;
+  const edgeA = (0.42 + 0.16 * velN) * structA;
   const eL0 = pt(q, 0.015, 0.015), eL1 = pt(q, 0.015, 0.985);
   const eR0 = pt(q, 0.985, 0.015), eR1 = pt(q, 0.985, 0.985);
   pr.push(P.line('notes', eL0[0], eL0[1], eL1[0], eL1[1], rimColor(o.color, edgeA), { lw: 1.1, blend: 'lighter', z: z0 + 0.15 }));
@@ -101,8 +105,8 @@ export function buildNote(P, o) {
   if (h >= 6) {
     const t0 = pt(q, 0.06, 0), t1 = pt(q, 0.94, 0);
     const b0 = pt(q, 0.06, 1), b1 = pt(q, 0.94, 1);
-    pr.push(P.line('notes', t0[0], t0[1] + 0.8, t1[0], t1[1] + 0.8, withAlpha('#ffffff', 0.6 * a), { lw: 1.6, blend: 'lighter', z: z0 + 0.2 }));
-    pr.push(P.line('notes', b0[0], b0[1] - 0.8, b1[0], b1[1] - 0.8, withAlpha('#000000', 0.3 * a), { lw: 1.4, z: z0 + 0.2 }));
+    pr.push(P.line('notes', t0[0], t0[1] + 0.8, t1[0], t1[1] + 0.8, withAlpha('#ffffff', 0.6 * structA), { lw: 1.6, blend: 'lighter', z: z0 + 0.2 }));
+    pr.push(P.line('notes', b0[0], b0[1] - 0.8, b1[0], b1[1] - 0.8, withAlpha('#000000', 0.3 * structA), { lw: 1.4, z: z0 + 0.2 }));
   }
   return pr;
 }

@@ -20,6 +20,8 @@
 // persp=0 时整台相机退化成恒等映射 → 平面键盘（与旧观感完全一致，可随时退回）。
 // ============================================================
 
+import { beamQuads } from './effects.js';
+
 /** 黑键占据白键深度的比例（黑键只铺前半段） */
 export const BLACK_T = 0.62;
 /** 抬高的黑键在屏幕上抬起的像素（persp 会再放大一点） */
@@ -165,7 +167,8 @@ export function buildKeyboard(P, ctx) {
       pr.push(P.line('keyboard', xa, ya + 1, xb, yb, kp.wkLine, { lw: 1, alpha: keysA, z: 900 + i }));
     }
     if (s.gv > 0.02) {
-      pr.push(P.beam('impact', (fe[0] + fe[2]) / 2, ctx.wN, (fe[2] - fe[0]) * (1 + 0.6 * kz), 40 + 92 * s.gv, s.color, { alpha: 0.26 * s.gv, blend: 'lighter' }));
+      // 光柱从落点线往上洒 → 往上即进入更远的深度，必须跟着键列收拢（用户："击键光柱也要受透视影响"）
+      for (const q of beamQuads(P, { cam: cam2, ps: ctx.persp, x: (fe[0] + fe[2]) / 2, yBottom: ctx.wN, w: (fe[2] - fe[0]) * 1.35, h: 40 + 92 * s.gv, color: s.color, alpha: 0.26 * s.gv, z: 0 })) pr.push(q);
       pr.push(face(P, 'keyboard', cam2.quad(u0, u1, 0, 1, 0), s.color, { alpha: s.gv * keysA * 0.85, z: 2000 + i }));
     }
     if (s.fv > 0.02) pr.push(face(P, 'keyboard', cam2.quad(u0, u1, 0, 1, 0), '#ffffff', { alpha: Math.min(0.72, s.fv * (fx.flash || 0)) * keysA, z: 3000 + i }));

@@ -16,6 +16,7 @@ import { noteColorOf } from '../state/colors.js';
 import { withAlpha, noteStops, shade } from '../state/palette.js';
 import * as P from './primitives.js';
 import { buildNote } from './note.js';
+import { projectX, depthScale, beamQuads } from './effects.js';
 import { buildKeyboard, makeKeyboardProjection } from './keyboard.js';
 
 const DEFAULT_BUDGET = { spark: 420, ring: 60, beam: 90 };
@@ -28,7 +29,7 @@ export function createCompiler() {
   };
 
   /** 粒子更新（物理），返回存活的粒子；预算按 kind 裁剪 */
-  function stepParts(prims, budget, at) {
+  function stepParts(prims, budget, cam, ps) {
     const alive = [];
     let spark = 0, ring = 0, beam = 0;
     for (const p of state.parts) {
@@ -36,13 +37,18 @@ export function createCompiler() {
       else if (p.kind === 2) { p.y -= 2.6; p.life -= p.decay; }
       else { p.x += p.vx; p.y += p.vy; p.vx *= 0.985; p.vy += 0.16; p.life -= p.decay; }
       if (p.life <= 0) continue;
-      if (p.kind === 1) { if (++ring > budget.ring) continue; prims.push(P.ring('particles', p.x, p.y, p.r, 1 + 2 * p.life, p.color, { alpha: p.life * 0.5, blend: 'lighter' })); }
-      else if (p.kind === 2) { if (++beam > budget.beam) continue; prims.push(P.beam('impact', p.x, p.y, p.w, p.h, p.color, { alpha: 0.4 * p.life, blend: 'lighter' })); }
-      else { if (++spark > budget.spark) continue; prims.push(P.glow('particles', p.x, p.y, 0, p.size * (0.45 + p.life * 0.55), p.color, { alpha: p.life, blend: 'lighter' })); }
+      // ★ 粒子会往上飘 → 位置与尺寸都要按所在高度取深度投影，否则"键斜了、粒子还是直的"（用户点名）
+      const pxs = projectX(cam, ps, p.x, p.y);
+      const kd = depthScale(cam, ps, p.y);
+      if (p.kind === 1) { if (++ring > budget.ring) continue; prims.push(P.ring('particles', pxs, p.y, p.r * kd, (1 + 2 * p.life) * kd, p.color, { alpha: p.life * 0.5, blend: 'lighter' })); }
+      else if (p.kind === 2) {
+        if (++beam > budget.beam) continue;
+        for (const q of beamQuads(P, { cam, ps, x: p.x, yBottom: p.y, w: p.w * kd, h: p.h, color: p.color, alpha: 0.4 * p.life, z: 0 })) prims.push(q);
+      } else { if (++spark > budget.spark) continue; prims.push(P.glow('particles', pxs, p.y, 0, p.size * (0.45 + p.life * 0.55) * kd, p.color, { alpha: p.life, blend: 'lighter' })); }
       alive.push(p);
     }
     state.parts = alive;
-    return at;
+    return prims;
   }
 
   function compile(song, tick, opts = {}) {
@@ -214,7 +220,7 @@ export function createCompiler() {
         }
       }
     }
-    stepParts(pr, parts, null);
+    stepParts(pr, parts, cam, ps);
 
     // ============================================================
     // 4) keyboard —— 琴键层（★不透明度/隐藏/只显按键都在这里，是层属性而不是补丁）
@@ -245,7 +251,8 @@ export function createCompiler() {
       for (const [pitch, color] of sounding) {
         const pi = ensurePm()[pitch]; if (!pi) continue;
         const { sx: sxB, cw: cwB } = pitchGeom(pitch, ensurePm(), g, wk0);
-        pr.push(P.glow('impact', sxB + cwB / 2, wN, 1, Math.max(4, Math.min(cwB * 0.42, 9)), color, { alpha: 0.3, blend: 'lighter' }));
+        // 落点线上的光晕：t=0 处投影恒等，所以这里天然就是对的位置（写上 projectX 只为表明同一套相机）
+        pr.push(P.glow('impact', projectX(cam, ps, sxB + cwB / 2, wN), wN, 1, Math.max(4, Math.min(cwB * 0.42, 9)), color, { alpha: 0.3, blend: 'lighter' }));
       }
     }
 
