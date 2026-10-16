@@ -73,12 +73,15 @@ void main() {
   vec4 c = texture(uScene, vUV);
   vec3 b = texture(uB1, vUV).rgb * uW.x + texture(uB2, vUV).rgb * uW.y + texture(uB3, vUV).rgb * uW.z;
   float ba = texture(uB1, vUV).a * uW.x + texture(uB2, vUV).a * uW.y + texture(uB3, vUV).a * uW.z;
+  float cov = clamp(c.a + ba * uBloom, 0.0, 1.0);
   vec3 x = c.rgb + b * uBloom;                 // 泛光加进"加色光层"，再走色调映射
-  x = x * uExposure * uGain + uLift;           // 调色：蓝通道 lift/gain 抬得最多，暗部保持靛蓝
+  // 调色：蓝通道 lift/gain 抬得最多，暗部保持靛蓝。
+  // ★ lift 乘 cov：否则整幅透明区也会被抬出非零 RGB（alpha=0 却有色），透明导出会出现脏底。
+  x = x * uExposure * uGain + uLift * cov;
   float l = dot(x, vec3(0.2126, 0.7152, 0.0722));
   x = mix(vec3(l), x, uSat);
   x = tonemap(max(x, 0.0));
-  outColor = vec4(x, clamp(c.a + ba * uBloom, 0.0, 1.0));
+  outColor = vec4(x, cov);
 }`;
 
 const BASE_POST = {

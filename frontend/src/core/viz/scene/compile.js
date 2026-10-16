@@ -91,9 +91,14 @@ export function createCompiler() {
     //    参考实现的背景一律是"深且平"的，元素往上面叠；旧实现直接吃壁纸，才会发灰。
     // ============================================================
     if (opts.layers !== false) {
-      pr.push(P.rect('background', 0, 0, w, h, { stops: [theme.stage.top, theme.stage.bottom], dir: 'v' }, { z: -100 }));
-      if (wN > 0) pr.push(P.rect('background', 0, wN - h * 0.18, w, h * 0.18,
-        { stops: [withAlpha(theme.stage.floor, 0), theme.stage.floor], dir: 'v' }, { z: -90 }));
+      // opts.stage===false（纯色/图片/透明背景）时**不发舞台底色与地面反光** ——
+      // 否则透明导出会得到一整幅不透明的深蓝底（实测过：alpha 全 255），叠加模式直接废掉。
+      // 网格线/小节线保留：它们是叠加层里有意保留的"谱面"装饰。
+      if (opts.stage !== false) {
+        pr.push(P.rect('background', 0, 0, w, h, { stops: [theme.stage.top, theme.stage.bottom], dir: 'v' }, { z: -100 }));
+        if (wN > 0) pr.push(P.rect('background', 0, wN - h * 0.18, w, h * 0.18,
+          { stops: [withAlpha(theme.stage.floor, 0), theme.stage.floor], dir: 'v' }, { z: -90 }));
+      }
       const grid = withAlpha('#ffffff', 0.05), gridStrong = withAlpha('#ffffff', 0.10);
       for (let i = wk0; i <= wk1; i++) {
         if ((i - 2) % 7 !== 0) continue;
@@ -253,7 +258,8 @@ export function createCompiler() {
       pr.push(P.rect('overlay', 0, 4, w, 24, 'rgba(0,0,0,0.55)', { z: 1 }));
       pr.push(P.text('overlay', String(opts.lyricAt), w / 2, 16, '#fff', { size: 14, align: 'center', bold: true, z: 2 }));
     }
-    pr.push(P.overlay('vignette', { strength: theme.material.vignette, z: 9 }));
+    // 透明模式（叠加到别的视频上）不发暗角：一块半透明黑会把底下的画面整体压暗
+    if (!opts.transparent) pr.push(P.overlay('vignette', { strength: theme.material.vignette, z: 9 }));
 
     P.sortPrims(pr);
     state.lastD = d;

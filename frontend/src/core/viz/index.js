@@ -91,7 +91,10 @@ export function createVizRenderer() {
       const gl = (opts.raster === 'canvas2d' || force2d) ? null : getGLRaster();
       const needScene = !!gl || wantBloom || ssaa > 1;
       const stageIsPrim = !(bg.mode && bg.mode !== 'theme');
-      const compileOpts = Object.assign({}, opts, { w, h, theme: opts.theme || 'studio', fx, stage: stageIsPrim });
+      const compileOpts = Object.assign({}, opts, {
+        w, h, theme: opts.theme || 'studio', fx, stage: stageIsPrim,
+        transparent: bg.mode === 'transparent',
+      });
       const out = compiler.compile(song, tick, compileOpts);
 
       if (!needScene) {
