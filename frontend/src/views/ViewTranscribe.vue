@@ -22,6 +22,19 @@ const mode = ref('universal');           // universal | piano | separate
 const umodel = ref('basic');             // 通用子模型：basic | muscriptor
 const msSize = ref('medium');            // MuScriptor 规格：small | medium | large
 const pmodel = ref('piano_pt');          // 钢琴子模型：piano_pt | aria | transkun
+/* ★ Aria-AMT 需要 CUDA（2026-10-17 用户：「Aria-AMT 在转录页标注需要 CUDA」）。
+   实测：没有 CUDA 时它直接抛 AssertionError: CUDA device not found，而界面只说「未下载」，
+   用户会以为是模型没装。这里把"要不要 CUDA"和"当前有没有 CUDA"都摆到台面上。 */
+const cudaReady = ref(false);
+void (async () => {
+  try {
+    const b = window.fuBridge;
+    if (b && typeof b.gpuStatus === 'function') {
+      const st = await b.gpuStatus();
+      cudaReady.value = !!(st && (st.cudaActive || st.cuda));
+    }
+  } catch (e) { /* 取不到就当没有，提示会显示出来，不会误报可用 */ }
+})();
 const perf = ref('quality');             // quality | balanced | fast
 const perfHint = ref('');
 const bassBoost = ref(false);            // 低音增强（仅 basic 子模型）：关闭 melodia trick 以保留低音声部
@@ -1781,10 +1794,11 @@ onBeforeUnmount(() => {
         <div class="fb-label">{{ t('钢琴模型') }}</div>
         <div class="fu-ctl tr-pills">
           <button class="fu-ctl tr-pill" :class="{ active: pmodel === 'piano_pt' }" @click="pmodel = 'piano_pt'">{{ t('piano-transcription · 内置') }}<i v-if="modelInstalled('piano_pt') !== null" class="fu-badge ms-badge" :class="modelInstalled('piano_pt') ? 'ok' : 'miss'">{{ modelInstalled('piano_pt') ? t('已下载') : t('未下载') }}</i></button>
-          <button class="fu-ctl tr-pill" :class="{ active: pmodel === 'aria' }" @click="pmodel = 'aria'">Aria-AMT<i v-if="modelInstalled('aria_amt') !== null" class="fu-badge ms-badge" :class="modelInstalled('aria_amt') ? 'ok' : 'miss'">{{ modelInstalled('aria_amt') ? t('已下载') : t('未下载') }}</i></button>
+          <button class="fu-ctl tr-pill" :class="{ active: pmodel === 'aria' }" @click="pmodel = 'aria'">Aria-AMT<b class="tr-cuda" :title="t('Aria-AMT 需要 CUDA（NVIDIA 显卡 + CUDA 加速包）；没有 CUDA 时它无法转录')">{{ t('需 CUDA') }}</b><i v-if="modelInstalled('aria_amt') !== null" class="fu-badge ms-badge" :class="modelInstalled('aria_amt') ? 'ok' : 'miss'">{{ modelInstalled('aria_amt') ? t('已下载') : t('未下载') }}</i></button>
           <button class="fu-ctl tr-pill" :class="{ active: pmodel === 'transkun' }" @click="pmodel = 'transkun'">Transkun<i v-if="modelInstalled('transkun') !== null" class="fu-badge ms-badge" :class="modelInstalled('transkun') ? 'ok' : 'miss'">{{ modelInstalled('transkun') ? t('已下载') : t('未下载') }}</i></button>
         </div>
         <div class="tr-perf-hint" v-if="pmodel !== 'piano_pt'">{{ t('Aria-AMT / Transkun 需先到资源中心安装对应模型') }}</div>
+        <div class="tr-perf-hint tr-warn" v-if="pmodel === 'aria' && !cudaReady">{{ t('当前没有可用的 CUDA（需 NVIDIA 显卡 + 已安装的 CUDA 加速包）。Aria-AMT 会报「CUDA device not found」——改用 piano-transcription 或 Transkun 可以正常转录。') }}</div>
       </div>
 
       <!-- 音频处理：当前模型 + 选择模型（与「通用模型 / 钢琴模型」同一种 pill 行） -->
@@ -2428,4 +2442,9 @@ onBeforeUnmount(() => {
 .tr-pill.ghost-like:hover { border-color: var(--brand-coral); color: var(--brand-coral); }
 .ms-out-list { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: 4px; }
 .ms-out-item { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-sm); color: var(--success-text); background: var(--success-bg); padding: 3px 9px; border-radius: var(--r-pill); font-family: var(--mono); }
+/* Aria-AMT 的「需 CUDA」徽标与不可用提示 */
+.tr-cuda { margin-left: var(--sp-2); padding: 0 var(--sp-1); border-radius: var(--r-sm);
+  font-size: var(--fs-xs); font-weight: 600; color: var(--t-warn);
+  border: 1px solid color-mix(in srgb, var(--t-warn) 45%, var(--line)); background: color-mix(in srgb, var(--t-warn) 12%, transparent); }
+.tr-perf-hint.tr-warn { color: var(--t-warn); }
 </style>
