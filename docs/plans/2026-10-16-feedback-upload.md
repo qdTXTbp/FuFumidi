@@ -18,6 +18,9 @@
 | 反馈页 UI | ⬜ 待做 | 字段与交互按 §5 |
 | worker 部署 | ✅ 已部署（独立 worker） | 发现云同步 worker 跑在**协作者账号**（`3b038b29…`，无权限）→ 反馈改为独立 worker `fufumidi-feedback` 部署在项目自己账号（`a50de010…`）：新建 workers.dev 子域 `fufumidi`、D1 `fufumidi-feedback`、KV `fufumidi-feedback-att`（R2 未开通，附件走 KV，30 天过期）；迁移 `0001_feedback.sql` 已 apply；`/health` 返回 `build: feedback-1, attachments: kv` |
 | 端到端上传 | ✅ **已实测通**（本地 miniflare 真流程） | `POST /feedback` → HTTP 200；**GitHub 上文件字节与提交内容一致**（332 B）、**Issue #1 带 kind/severity/source 标签建出**、**附件从 KV 回读 24 B 内容一致**（`Content-Disposition` 正确）、**立刻重复提交被 429 拦**（限流生效）；**CNB 镜像头哈希一致**（`fd7ca44be046`）。测试文件与 Issue 已清理 |
+| Deno 备用后端 | ✅ 代码+单测完成 · ⏳ **未部署** | 因为 `*.workers.dev` 国内不可达，**走方案 C：Deno Deploy**。新增 `deno/feedback.ts`（与 CF 版同规则同限流）+ `deno/main.ts`（`BUILD=deno-feedback-1`）：附件改走 **GitHub Release 资产**（固定 tag `attachments`），限流用 **Deno KV**；`deno/feedback_test.ts` **8 项离线单测全过**（本机 deno.land/jsr 被墙，测试不引外部依赖） |
+| Deno 端到端 | ✅ **已实测通**（本地 `deno run` 真流程） | `POST /feedback` 200 → **GitHub 上 md 文件字节一致**（160 B）、**附件经 Release 资产回读 96 B 逐字节一致**、**Issue #2 带 kind/severity/source 三个标签建出**、**立刻重复提交被 429 拦**。测试文件 / Issue / 资产随后全部清理（release 里剩 0 个测试资产） |
+| ⏳ 待办：Deno 部署 | ⬜ **要你登录一次** | 需要 `deno deploy` 的登录态（或 `DENO_DEPLOY_TOKEN`），以及一个**只授权 FuFumidi-Feedback** 的 fine-grained PAT 作为 `GITHUB_TOKEN` secret。部署后把客户端 `main/feedback.js` 的 BASES 指到 `https://fufumidi-feedback.<org>.deno.dev` |
 | ⚠️ 可达性 | ⬜ **待你定** | `*.workers.dev` 在**国内被 DNS 污染**（解析到 OVH / Facebook 的 IP，curl 60 s 超时），`fusync.de5.net` 0.7 s 通、`*.deno.dev` 3 s 通。三条路：A 由协作者把反馈路由部署到现成的 worker（代码已在 index.js，客户端 BASES 已把 `fusync.de5.net` 排第一）；B 给自己账号加域名并绑自定义域名（最彻底）；C 搬去 Deno Deploy。未定之前上传会失败并**自动存本地**，页面另给「网页提交/存到本地」 |
 
 ---
