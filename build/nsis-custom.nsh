@@ -71,21 +71,25 @@
       Abort
     ${EndIf}
 
-    ${NSD_CreateLabel} 0 0 100% 14u "卸载 FuFumidi —— 先决定已下载的数据怎么办"
+    ; ★ 布局（2026-10-14 修 KI-1）：nsDialogs 的静态控件**不会自适应高度**，
+    ;   而 100% 宽度下中文每行约 17~19 字 —— 长句必然折行。所以每段按**行数**给高度：
+    ;   单行 12u、两行 26u，段间留 4~8u，总高约 116u（对话框可用高度之内）。
+    ;   教训：makensis 只查语法，排版必须目视（见 docs/known-issues.md KI-1）。
+    ${NSD_CreateLabel} 0 0 100% 12u "卸载 FuFumidi —— 先决定已下载的数据怎么办"
     Pop $1
-    ${NSD_CreateLabel} 0 16u 100% 12u "卸载会移除程序文件；下面这些是**你自己的**数据，删掉不可恢复："
+    ${NSD_CreateLabel} 0 16u 100% 26u "卸载会移除程序文件；下面这些是你自己的数据，删掉不可恢复："
     Pop $R0
-    ${NSD_CreateLabel} 0 30u 100% 12u "模型 / 声库 / 音色库 / 曲库 / 设置，位置：$INSTDIR\FuFumidiData"
+    ${NSD_CreateLabel} 0 46u 100% 26u "数据位置（模型 / 声库 / 音色库 / 曲库 / 设置）：$\r$\n$INSTDIR\FuFumidiData"
     Pop $2
 
-    ${NSD_CreateRadioButton} 0 50u 100% 12u "保留我的数据（推荐）—— 重装到同一目录后可继续使用"
+    ${NSD_CreateRadioButton} 0 78u 100% 12u "保留我的数据（推荐）—— 重装到同一目录后可继续使用"
     Pop $fuKeepRadioKeep
-    ${NSD_CreateRadioButton} 0 66u 100% 12u "一并删除 —— 彻底清空，不可恢复"
+    ${NSD_CreateRadioButton} 0 94u 100% 12u "一并删除 —— 彻底清空，不可恢复"
     Pop $fuKeepRadioDel
     ${NSD_Check} $fuKeepRadioKeep
 
     ${IfNot} ${FileExists} "$INSTDIR\FuFumidiData\*.*"
-      ${NSD_CreateLabel} 0 86u 100% 12u "（当前安装目录下没有找到 FuFumidiData，本页选择不会影响任何数据）"
+      ${NSD_CreateLabel} 0 110u 100% 12u "（当前安装目录下没有 FuFumidiData，本页选择不会影响任何数据）"
       Pop $3
     ${EndIf}
 

@@ -51,6 +51,15 @@ const DEFAULT_SETTINGS = {
   // 操作系统级全局热键：{ 动作id: { accel, enabled } }。
   // ★ 默认空 = **一个都不注册** —— 系统级热键会和其他软件抢键，必须由用户在设置里显式录制并启用。
   global_hotkeys: {},
+  // ---- 播放（用户 2026-10-14 定）----
+  // 跳过空白片段：**默认关**（给一个显眼的开关）；开头静音**默认跳**。
+  skip_silence: false,
+  skip_silence_min: 2.5,        // 多长的空档才跳（秒）
+  skip_leading_silence: true,   // 开头静音默认跳
+  seek_step: 5,                 // 方向键步长（数值）
+  seek_step_unit: 'sec',        // 'sec' | 'percent' | 'bar'
+  hold_delay_ms: 400,           // 按住多久算"长按"
+  hold_rate: 2,                 // 长按时的播放倍数（→ 快进播放；← 快退不出声）
 };
 
 function settingsPath() {

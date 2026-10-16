@@ -133,11 +133,11 @@ function about() {
   font-size: 12.5px;
   cursor: pointer;
   text-align: left;
-  transition: background .12s;
+  transition: background var(--motion-fast) var(--ease-out);
 }
 .menu-pop-item:hover { background: var(--surface-soft); }
 .menu-pop-div { height: 1px; background: var(--hairline); margin: 6px 4px; }
 /* 弹出菜单开合动画（右上锚点轻缩放 + 淡入淡出） */
-.mnu-enter-active, .mnu-leave-active { transition: opacity .14s ease, transform .18s cubic-bezier(.2,.9,.3,1.18); transform-origin: top right; }
+.mnu-enter-active, .mnu-leave-active { transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-base) var(--ease-spring); transform-origin: top right; }
 .mnu-enter-from, .mnu-leave-to { opacity: 0; transform: scale(.96) translateY(-6px); }
 </style>

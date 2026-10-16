@@ -775,12 +775,38 @@ export interface CoverProgress {
   result?: any;
 }
 
+/** 一次问题反馈的输入（字段与反馈页一一对应；空的字段不进 md） */
+export interface FeedbackPayload {
+  fields: {
+    kind: string; area: string; severity: string; title: string;
+    symptom: string; steps?: string; expect?: string; freq?: string; contact?: string;
+  };
+  /** 是否附带诊断包（zip）。默认 false —— 里面有设置与日志，体积与隐私都更重 */
+  includeDiagnostic?: boolean;
+  /** Turnstile token（拿不到时留空，服务端按配置决定是否放行） */
+  turnstile?: string;
+  /** 是否顺手开一条 Issue（默认开） */
+  createIssue?: boolean;
+}
+
+export interface FeedbackPreview {
+  ok: boolean;
+  id?: string;
+  markdown?: string;
+  path?: string;
+  attachments?: { name: string; bytes: number }[];
+  healthOk?: boolean;
+  error?: string;
+}
+
 export interface FuBridge {
   onOpenFile(cb: (bytes: Uint8Array, name: string) => void): () => void;
 
   // engine
   convert(cfg: ConvertRequest): Promise<ConvertResult>;
   cancel(id: string | number): Promise<GeneralResult>;
+  /** 转录「暂停 / 继续」：正在转录的那一首当场停住，继续后从原处接着跑（只对分块引擎有效） */
+  setTranscribePause(on: boolean): Promise<GeneralResult>;
   onEngineLog(cb: (p: any) => void): () => void;
   probe(): Promise<EngineProbeResult>;
   refine(cfg: RefineRequest): Promise<RefineResult>;
@@ -826,6 +852,14 @@ export interface FuBridge {
   diagExport(): Promise<GeneralResult>;
   /** 全局体检：主动检查各子系统并下结论（含显卡算力实跑校验，约几秒） */
   diagHealth(): Promise<DiagHealthResult>;
+  /* 问题反馈上传（main/feedback.js + preload 的 feedback 组）。
+     preview 只生成不落盘 —— 用户先看清「究竟会上传什么」再决定。 */
+  feedback: {
+    preview(payload: FeedbackPayload): Promise<FeedbackPreview>;
+    saveLocal(payload: FeedbackPayload): Promise<GeneralResult & { bytes?: number; entries?: string[]; stripped?: string[] }>;
+    submit(payload: FeedbackPayload): Promise<GeneralResult & { url?: string; issue?: { number?: number; url?: string } | null; savedLocal?: boolean; localPath?: string; markdown?: string }>;
+    webFallback(payload: FeedbackPayload): Promise<GeneralResult & { url?: string; markdown?: string; path?: string }>;
+  };
   exportScorePngZip(opts: any): Promise<GeneralResult>;
   listMidiFiles(dir: string): Promise<string[]>;
   readBinary(p: string): Promise<Uint8Array | null>;

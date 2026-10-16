@@ -17,6 +17,7 @@ import { shiftRange, shiftCurveRange, shiftBoundsRange } from '../core/arrange.j
 import CurveCanvas from '../components/sing/CurveCanvas.vue';
 import ViewVoicebank from './ViewVoicebank.vue';
 import { t } from '../core/i18n.js';
+import { fitMenu } from '../core/menu.js';
 import { ENGINES, LANGUAGES, useSingerStore } from '../stores/singer';
 import { useAppStore } from '../stores/app';
 import { getTransport } from '../core/sing_transport.js';
@@ -282,11 +283,22 @@ function renameTrack(x: any) {
   store.patchTrack(x.id, { name: String(next).trim() });
 }
 const trackMenu = ref<{ x: number; y: number; track: any } | null>(null);
+/* ★ 落点按真实尺寸夹住（旧版裸坐标：窗口下半部右键时菜单会伸出窗口，底部项点不到） */
+const trackMenuEl = ref(null);
+const trackMenuPos = ref<{ left: number; top: number } | null>(null);
 function openTrackMenu(e: MouseEvent, x: any) {
   trackMenu.value = { x: e.clientX, y: e.clientY, track: x };
+  trackMenuPos.value = null;
+  nextTick(() => { const p = fitMenu(trackMenuEl.value, e.clientX, e.clientY); if (p) trackMenuPos.value = p; });
   store.selectTrack(x.id);
 }
-function closeTrackMenu() { trackMenu.value = null; }
+function closeTrackMenu() { trackMenu.value = null; trackMenuPos.value = null; }
+function trackMenuStyle() {
+  const p = trackMenuPos.value;
+  const m = trackMenu.value;
+  const at = p || { left: (m && m.x) || 0, top: (m && m.y) || 0 };
+  return { left: at.left + 'px', top: at.top + 'px', visibility: p ? 'visible' : 'hidden' };
+}
 function menuDuplicate(x: any) {
   // 复制轨：新 id + 深拷贝音符（引用共享会让两条轨编辑互相影响）
   const src = JSON.parse(JSON.stringify({ engine: x.engine, name: x.name, singer: x.singer, singerName: x.singerName,
@@ -2194,7 +2206,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
     <!-- 轨列表右键菜单（复制 / 清空 / 删除） -->
     <div v-if="trackMenu" class="tk-menu-mask" @click="closeTrackMenu" @contextmenu.prevent="closeTrackMenu"></div>
-    <div v-if="trackMenu" class="tk-menu" :style="{ left: trackMenu.x + 'px', top: trackMenu.y + 'px' }" @click.stop>
+    <div v-if="trackMenu" ref="trackMenuEl" class="tk-menu" :style="trackMenuStyle()" @click.stop>
       <b>{{ trackMenu.track.name || t('未命名轨') }}</b>
       <button @click="renameTrack(trackMenu.track); closeTrackMenu()"><Icon name="edit" :size="13" /> {{ t('重命名') }}</button>
       <button @click="menuDuplicate(trackMenu.track)"><Icon name="copy" :size="13" /> {{ t('复制这条轨') }}</button>
@@ -2484,7 +2496,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
       <!-- 渲染进行中：进度条 + 分条文案 + 取消入口（不然长曲只能干等） -->
       <div v-if="store.busy" class="edt-prog-wrap">
-        <div class="edt-prog"><i :style="{ width: store.progress + '%' }" /></div>
+        <div class="edt-prog"><i :style="{ transform: 'scaleX(' + ((store.progress) / 100) + ')' }" /></div>
         <span class="muted small">{{ store.msg || t('正在渲染…') }}</span>
         <button class="btn sm" :title="t('正在渲染的这一条不会被打断，它跑完即停')" @click="store.cancelRender">
           <Icon name="stop" :size="12" /> {{ t('停止后续渲染') }}
@@ -3263,7 +3275,8 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .tk-menu-mask { position: fixed; inset: 0; z-index: 60; }
 .tk-menu { position: fixed; z-index: 61; min-width: 168px; padding: 6px;
            border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
-           box-shadow: 0 10px 28px rgba(0,0,0,.22); display: flex; flex-direction: column; gap: 2px; }
+           box-shadow: 0 10px 28px rgba(0,0,0,.22); display: flex; flex-direction: column; gap: 2px;
+            max-height: calc(100vh - 16px); overflow-y: auto; overscroll-behavior: contain; }
 .tk-menu b { font-size: 11.5px; color: var(--stone); padding: 4px 8px 6px; }
 .tk-menu button { display: flex; align-items: center; gap: 8px; text-align: left; padding: 6px 9px; border: 0; border-radius: 6px;
                   background: transparent; color: var(--ink); font-size: 12.5px; cursor: pointer; }
@@ -3276,7 +3289,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .sing-maker { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px 18px; background: var(--canvas); }
 .sing-maker > * { min-height: 100%; }
 /* 声库制作页切进来时一次性淡入（v-show 不会触发 Transition，用动画类代替） */
-.sing-maker.sing-in { animation: singMakerIn .28s cubic-bezier(.2, .7, .3, 1) both; }
+.sing-maker.sing-in { animation: singMakerIn var(--motion-slow) var(--ease-out) both; }
 @keyframes singMakerIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 /* ---- 左：轨道列表 ---- */
@@ -3331,7 +3344,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .edt-bar .tag.e-utau { background: rgba(80,190,120,.18); }
 .edt-bar .tag.e-diffsinger { background: rgba(64,140,255,.18); }
 .edt-prog { height: 3px; background: var(--surface-muted); }
-.edt-prog i { display: block; height: 100%; background: var(--brand); transition: width .2s; }
+.edt-prog i { display: block; height: 100%; background: var(--brand); transition: transform var(--motion-base) var(--ease-out); }
 .edt-msg { margin: 6px 12px; color: var(--brand-text); }
 /* 音符区：默认吃满编辑区剩余高度（flex:1），手动拖过则固定像素（见 rollBoxStyle） */
 /*
@@ -3348,7 +3361,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .roll-resizer { flex: none; height: 10px; margin: 0 12px; display: flex; align-items: center;
   cursor: ns-resize; touch-action: none; }
 .roll-resizer:hover .rr-grip { background: var(--brand); }
-.rr-grip { display: block; width: 100%; height: 3px; border-radius: 3px; background: var(--border); transition: background .15s; }
+.rr-grip { display: block; width: 100%; height: 3px; border-radius: 3px; background: var(--border); transition: background var(--motion-fast) var(--ease-out); }
 /* 多轨叠置条（卷帘上方）：色块=切轨 / 圆点=换色 / 眼睛=临时隐藏 / M,S=静音独奏 */
 .roll-strip { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 12px 0;
   padding: 3px 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); }

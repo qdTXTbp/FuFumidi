@@ -5,7 +5,7 @@
 const SepCommon = require('./separate-common');
 const Paths = require('./paths');
 
-function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, cancelEngineJob, pluginHost, readSettings, resolveSeparateModel }) {
+function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, cancelEngineJob, pluginHost, readSettings, resolveSeparateModel, ensureSepConfig }) {
   const convertChildren = new Map();  // jobId -> 子进程句柄（转录/修正取消用）
 
   // 转录
@@ -49,6 +49,10 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
         min_note_ms: '--min-note-ms',
         merge_gap_ms: '--merge-gap-ms',
         tempo: '--tempo',
+        denoise_mode: '--denoise-mode',
+        // 同上：回退到命令行这条路径也要带，否则静音分段在两条路径上表现不一致
+        segment_silence: '--segment-silence', silence_db: '--silence-db',
+        min_silence: '--min-silence', max_segment: '--max-segment', segment_pad: '--segment-pad',
       };
       for (const [k, flag] of Object.entries(map)) {
         if (cfg[k] !== undefined && cfg[k] !== null) args.push(flag, String(cfg[k]));
@@ -91,9 +95,29 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
           pluginHost.emit('transcribe-done', { ok: true, out: workerRes.out, note_count: workerRes.note_count, mode: cfg.mode, perf: cfg.perf });
           return workerRes;
         }
-      } catch (e) { /* fallback to single spawn */ }
+      } catch (e) {
+        // ★ 取消**不是**"worker 失败"，绝不能回落：回落会另起一个一次性进程
+        //   把整段转录从头重跑一遍（2026-10-14 实测：点「取消」后 python 又起来了，
+        //   用户看到的就是"取消没反应，转录照旧跑完"）。
+        if (e && (e.canceled || /canceled/i.test(String(e && e.message)))) throw e;
+        /* 其它原因（worker 崩溃 / 启动失败）→ 回落到一次性 spawn，功能永远可用 */
+      }
     }
     return runSpawn();
+  });
+
+  // 转录「暂停 / 继续」（用户 2026-10-14 要求：正在转录的那一首也要能暂停，继续后接着跑）。
+  // 只写/删一个标记文件，引擎在 5 秒块与块之间轮询它（见 engine_muscriptor._pause_gate）：
+  // **不 kill、不重启** —— 模型状态留在进程里，继续时从原处接着跑。
+  ipcMain.handle('engine:set-pause', (_e, on) => {
+    const f = Paths.pauseFlagFile();
+    try {
+      if (on) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, String(Date.now())); }
+      else { try { fs.unlinkSync(f); } catch (e2) {} }
+      return { ok: true, paused: !!on, file: f };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
   });
 
   // 智能修正（转录 MIDI + 原音频 → 精修 MIDI）
@@ -130,8 +154,17 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
   }));
 
   // 音频处理（MSST 分离）：audio + 分离模型 → 输出所选音轨
-  ipcMain.handle('engine:separate', (evt, cfg) => new Promise((resolve, reject) => {
+  ipcMain.handle('engine:separate', async (evt, cfg) => {
     const win = BrowserWindow.fromWebContents(evt.sender);
+    // ★ 配置自愈：MSST 的配置是**下载模型时**从上游取的（不内置到工具里）。老安装、
+    //   或下载完但配置没备齐的，这里补一次再构造请求 —— 否则会以「缺配置」直接失败。
+    try {
+      const id = cfg && (cfg.model || cfg.modelId || cfg.sepModel);
+      const cur = resolveSeparateModel ? resolveSeparateModel(id) : null;
+      if (cur && cur.exists && !cur.configPath && ensureSepConfig) await ensureSepConfig(id);
+    } catch (e) {}
+    return new Promise((resolve, reject) => {
+    const win2 = win;
     // ★ 参数构造集中在 main/separate-common.js —— 音频处理面板与翻唱工作流共用同一份，
     //   避免「面板出一个文件名、工作流找另一个文件名」这种只在运行时才炸的错。
     const req = SepCommon.buildSeparateRequest(cfg, { resolveSeparateModel, readSettings, Paths, fs });
@@ -154,7 +187,8 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
       });
       convertChildren.set(cfg.id, child);
     } catch (e) { reject(new Error(String(e))); }
-  }));
+    });
+  });
 
   // 取消转录 / 修正（终止对应 jobId 的引擎子进程）
   ipcMain.handle('engine:cancel', (_e, id) => {

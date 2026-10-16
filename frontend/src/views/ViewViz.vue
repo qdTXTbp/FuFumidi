@@ -7,13 +7,19 @@ import { getSynth, ensureAudio, getPlayer } from '../audio.js';
 const app = useAppStore();
 const currentSong = computed(() => app.currentSong);
 import Icon from '../components/Icon.vue';
-import { drawVizWaterfall, rmsFromBytes, smoothEnergy } from '../core/viz.js';
+// ★ 必须用 drawVizWaterfallPost：它内部才是"场景 + 后处理泛光"的完整一帧。
+//   直接调 drawVizWaterfall 会得到"实时没有泛光、导出有"（或反过来）—— 预览与成片就不一致了。
+// ★ 重做后走新门面 core/viz/index.js（图元层 + 光栅器 + 后处理）。
+//   旧的 core/viz.js 仍提供 timeline/几何与单测用的纯函数。
+import { drawVizWaterfallPost } from '../core/viz/index.js';
+import { rmsFromBytes, smoothEnergy, FX_DEFAULTS } from '../core/viz.js';
+// 配色：取色方式 / 预设 / 参数范围都来自 state/colors.js（与渲染层同一份，不在 UI 里另写一遍）
+import { COLOR_MODES, COLOR_PRESETS, COLOR_PARAMS } from '../core/viz/state/colors.js';
 import { t } from '../core/i18n.js';
 import NumSlider from '../components/NumSlider.vue';
 
 const mode = ref('dash'); // 'dash' | 'waterfall'
 const wfZoom = ref(1);
-const colorScheme = ref(0);
 const immersive = ref(false);
 
 /* ---------------- 音符瀑布的背景 ----------------
@@ -27,6 +33,116 @@ const immersive = ref(false);
 const vizBg = useVizBgStore();
 const bg = vizBg.bg;                // reactive，模板与绘制都直接读它
 const bgMore = ref(false);          // 设置条是否展开：纯 UI 状态，不进 store
+/* ---------------- 视效面板：独立浮层 + 可在工具内拖动（2026-10-17） ----------------
+   为什么浮层化：原来视效条住在文档流里，一展开画布就被挤矮 —— 调参数时反而看不清效果。
+   现在面板 Teleport 到 body、position:fixed，可以拖到不挡视线的地方，画布保持满幅。
+   拖动手柄**只有标题栏**（面板里的滑块/色块照常点，不会一碰就拖走）；位置记在 localStorage。 */
+const fxPanel = ref(false);
+const fxPanelPos = ref({ x: 0, y: 0 });   // 面板左上角（视口坐标 px）
+const fxPanelEl = ref(null);
+const fxPanelSize = ref({ w: 0, h: 0 });  // 用户拖出来的尺寸（0 = 用 CSS 默认窄宽度）
+let fxRO = null;                          // ResizeObserver：把"拖出来的尺寸"记下来
+let fxDrag = null;                        // { dx, dy }：按下时指针相对面板左上角的偏移
+function attachPanelResize() {
+  if (fxRO || !fxPanelEl.value || typeof ResizeObserver === 'undefined') return;
+  fxRO = new ResizeObserver(() => {
+    const el = fxPanelEl.value;
+    if (!el) return;
+    const w = el.offsetWidth, h = el.offsetHeight;
+    if (Math.abs(w - fxPanelSize.value.w) > 1 || Math.abs(h - fxPanelSize.value.h) > 1) {
+      fxPanelSize.value = { w, h };
+      savePrefs();
+    }
+  });
+  fxRO.observe(fxPanelEl.value);
+}
+function panelSize() {
+  const el = fxPanelEl.value;
+  return { w: el ? el.offsetWidth : 780, h: el ? el.offsetHeight : 260 };
+}
+function clampPanel(x, y) {
+  const { w, h } = panelSize();
+  const maxX = Math.max(8, window.innerWidth - w - 8);
+  const maxY = Math.max(8, window.innerHeight - h - 8);
+  return { x: Math.round(Math.min(Math.max(8, x), maxX)), y: Math.round(Math.min(Math.max(8, y), maxY)) };
+}
+function defaultPanelPos() {
+  const { w } = panelSize();
+  return clampPanel(Math.round((window.innerWidth - w) / 2), Math.round(window.innerHeight * 0.14));
+}
+function toggleFxPanel() {
+  fxPanel.value = !fxPanel.value;
+  if (!fxPanel.value) return;
+  if (!fxPanelPos.value.x && !fxPanelPos.value.y) fxPanelPos.value = defaultPanelPos();
+  nextTick(() => { attachPanelResize(); fxPanelPos.value = clampPanel(fxPanelPos.value.x, fxPanelPos.value.y); });
+}
+function resetPanelPos() { fxPanelPos.value = defaultPanelPos(); savePrefs(); }
+function onPanelDown(e) {
+  if (e.button !== 0) return;
+  if (e.target && e.target.closest && e.target.closest('button')) return;   // 标题栏上的按钮不触发拖动
+  const p = fxPanelPos.value;
+  fxDrag = { dx: e.clientX - p.x, dy: e.clientY - p.y };
+  window.addEventListener('pointermove', onPanelMove);
+  window.addEventListener('pointerup', onPanelUp);
+  e.preventDefault();
+}
+function onPanelMove(e) {
+  if (!fxDrag) return;
+  fxPanelPos.value = clampPanel(e.clientX - fxDrag.dx, e.clientY - fxDrag.dy);
+}
+function onPanelUp() {
+  fxDrag = null;
+  window.removeEventListener('pointermove', onPanelMove);
+  window.removeEventListener('pointerup', onPanelUp);
+  savePrefs();
+}
+const fxItems = vizBg.FX_ITEMS;     // 视效开关清单（顺序即界面顺序）
+/* ---------------- 配色（2026-10-17 推倒重做） ----------------
+   旧版有两行互相压制的控件：选了"按音高"之后，"配色档"就整排失效；
+   而且"按音高/按左右手"返回 hsl() 字符串，在 GPU 路径上解析不出来 → 全部变白。
+   现在拆成两条正交轴：**取色方式**（色相从哪来）× **调色参数**（基准/跨度/旋转/饱和/亮度），
+   预设只是往参数里填一组值，填完还能继续拖 —— 所以每个控件都必然改变画面。 */
+const colorMode = computed(() => (bg.fx && bg.fx.colorMode) || (bg.fx && bg.fx.colorBy) || 'track');
+const colorPreset = computed(() => (bg.fx && bg.fx.preset) || 'rainbow');
+// 色相基准/跨度只在"按音高"下参与取色；其余模式下这两条不显示，免得出现"拖了没反应"的死控件
+const colorParams = computed(() => COLOR_PARAMS.filter((p) => colorMode.value === 'pitch' || (p.k !== 'hueBase' && p.k !== 'hueSpan')));
+function fxColor(k) {
+  const cur = bg.fx ? bg.fx[k] : undefined;
+  return typeof cur === 'string' ? cur : FX_DEFAULTS[k];
+}
+function applyColorPreset(p) {
+  vizBg.setFxAny('preset', p.k);
+  vizBg.setFxAny('hueBase', p.hueBase);
+  vizBg.setFxAny('hueSpan', p.hueSpan);
+  vizBg.setFxAny('satAdj', p.satAdj);
+  vizBg.setFxAny('lightAdj', p.lightAdj);
+  // 预设调的是色相参数，只有"按音高"会用到它们 → 自动切过去，点了就一定看得见变化
+  if (colorMode.value !== 'pitch') vizBg.setFxAny('colorMode', 'pitch');
+}
+function resetColors() {
+  vizBg.setFxAny('colorMode', 'track');
+  vizBg.setFxAny('hueBase', 0);
+  vizBg.setFxAny('hueSpan', 330);
+  vizBg.setFxAny('hueShift', 0);
+  vizBg.setFxAny('satAdj', 0);
+  vizBg.setFxAny('lightAdj', 0);
+  vizBg.setFxAny('handL', '#4f8dff');
+  vizBg.setFxAny('handR', '#ff7a3d');
+  vizBg.setFxAny('velLow', '#2f6fd0');
+  vizBg.setFxAny('velHigh', '#ff5530');
+}
+const fxThemeInput = ref('');        // 自定义主题名（D8：命名交给用户）
+// 参数滑块的当前值（bg.fx 可能还没这批键 —— store 首次读写会补默认）
+function fxNum(k) {
+  const cur = bg.fx ? bg.fx[k] : undefined;
+  return typeof cur === 'number' ? cur : FX_DEFAULTS[k];
+}
+function saveThemeAs() {
+  const name = String(fxThemeInput.value || '').trim();
+  if (!vizBg.saveTheme(name)) { app.toast(t('先给主题起个名字'), 'warn'); return; }
+  app.toast(t('已存为主题：') + name);
+  fxThemeInput.value = '';
+}
 // 模板里的 @input 是「先改 bg 再存」两步（颜色/模糊/暗化都直接改 reactive 字段），
 // 所以保留一个薄壳；读写都在 store 里，导出页读到的是同一份。
 function saveBg() { vizBg.save(); }
@@ -189,14 +305,16 @@ function drawChord(cv, syn) {
 
 function drawRoll(ctx2d, c, u, syn, song, player) {
   const tick = player && song ? player.currentTick() : 0;
-  drawVizWaterfall(ctx2d, c, u, song, tick, {
+  drawVizWaterfallPost(ctx2d, c, u, song, tick, {
     state: rollState,
     zoom: wfZoom.value,
-    colorScheme: colorScheme.value,
     showLyrics: true,
     lyricAt: '',
     activeNotes: syn && syn.activeNow ? syn.activeNow() : [],
     energy: rollState.energy || 0,
+    // 视效开关：与背景同源（stores/vizbg），导出页读同一份 —— 预览与成片才不会两幅画
+    fx: vizBg.fxOpts(),
+    theme: vizBg.vizTheme(),   // ★ 视觉主题（舞台/键面/材质）也走同一份设置
     // 背景只作用于音符瀑布（频谱/示波器/和弦仍是主题底）
     bg: vizBg.drawOpts(),
   });
@@ -330,14 +448,23 @@ function loadPrefs() {
     const s = JSON.parse(localStorage.getItem(LS_VIZ) || 'null');
     if (!s) return;
     if (typeof s.zoom === 'number' && isFinite(s.zoom)) wfZoom.value = Math.min(3, Math.max(0.4, s.zoom));
-    if (typeof s.colorScheme === 'number') colorScheme.value = ((Math.round(s.colorScheme) % 4) + 4) % 4;
     if (s.mode === 'dash' || s.mode === 'waterfall') mode.value = s.mode;
+    if (s.fxPanelPos && typeof s.fxPanelPos.x === 'number' && typeof s.fxPanelPos.y === 'number') {
+      fxPanelPos.value = { x: s.fxPanelPos.x, y: s.fxPanelPos.y };
+    }
+    if (s.fxPanelSize && typeof s.fxPanelSize.w === 'number' && s.fxPanelSize.w > 0) {
+      fxPanelSize.value = { w: s.fxPanelSize.w, h: s.fxPanelSize.h || 0 };
+    }
   } catch (e) {}
 }
 function savePrefs() {
-  try { localStorage.setItem(LS_VIZ, JSON.stringify({ zoom: wfZoom.value, colorScheme: colorScheme.value, mode: mode.value })); } catch (e) {}
+  try {
+    localStorage.setItem(LS_VIZ, JSON.stringify({
+      zoom: wfZoom.value, mode: mode.value, fxPanelPos: fxPanelPos.value, fxPanelSize: fxPanelSize.value,
+    }));
+  } catch (e) {}
 }
-watch([wfZoom, colorScheme, mode], savePrefs);
+watch([wfZoom, mode], savePrefs);
 
 onMounted(() => {
   loadPrefs();
@@ -352,6 +479,7 @@ onMounted(() => {
 onActivated(() => { grabCanvases(); if (!raf) raf = requestAnimationFrame(tick); });
 onDeactivated(() => { if (raf) { cancelAnimationFrame(raf); raf = null; } setImmersive(false); });
 onBeforeUnmount(() => {
+  onPanelUp();   // 摘掉可能还挂着的拖拽监听
   if (raf) cancelAnimationFrame(raf);
   raf = null;
   if (hudTimer) { clearTimeout(hudTimer); hudTimer = null; }
@@ -370,11 +498,18 @@ onBeforeUnmount(() => {
           <span class="dot" style="background:var(--brand-coral)"></span><b>{{ t('音符瀑布') }}</b>
           <button class="chip-btn" :class="{ 'active': mode === 'dash' }" data-guide="viz-modes" @click="mode = 'dash'">{{ t('仪表盘') }}</button>
           <button class="chip-btn" :class="{ 'active': mode === 'waterfall' }" data-guide="viz-waterfall" @click="mode = 'waterfall'">{{ t('瀑布流') }}</button>
-          <button class="chip-btn" @click="colorScheme = (colorScheme + 1) % 4" :title="t('切换瀑布流配色')">{{ t('配色') }}</button>
+          <!-- 配色原本是工具栏上一个单独循环的 chip；用户要求「配色归入视效」——
+               它本来就是视效的一部分（轨道色 / 按音高推导的两套 HSL），现在住进视效面板。 -->
           <!-- 背景：主题 / 纯色 / 图片 / 透明（叠加层）。SeeMusic 那类软件把"背景图 + 模糊"
                当成主要观感开关，这里补上；透明档配合导出即可当 OBS 叠加层。 -->
           <button class="chip-btn" :class="{ active: bgMore }" :title="t('音符瀑布背景（主题/纯色/图片/透明）')" @click="bgMore = !bgMore">
             <Icon name="eye" :size="12" />{{ t('背景') }}
+          </button>
+          <!-- 视效：3D 键盘 / 粒子光效 / 落键光柱 / 击键光带 / 音符质感。
+               参考 SeeMusic、Synthesia、Lumiric Stage 那类瀑布流的语言：
+               「灯、粒子、键的厚度」才是观感差异，而不是把音符块画得更大。 -->
+          <button class="chip-btn" :class="{ active: fxPanel }" data-guide="viz-fx" :title="t('瀑布流视效（配色 / 3D 键盘 / 粒子 / 光柱 / 光带 / 质感）')" @click="toggleFxPanel">
+            <Icon name="spark" :size="12" />{{ t('视效') }}
           </button>
           <span style="flex:1"></span>
           <button class="chip-btn" @click="wfZoom = Math.max(0.4, +(wfZoom - 0.1).toFixed(2))">−</button>
@@ -402,6 +537,94 @@ onBeforeUnmount(() => {
             <NumSlider :model-value="Math.round(bg.dim * 100)" @update:model-value="v => { bg.dim = (+v) / 100; saveBg() }" :min="0" :max="80" :step="5" range-style="width:88px" :input-width="68" no-input />
           </template>
         </div>
+        <!-- 视效面板内容（原来在文档流里，现在整体搬进上面的浮层）：
+             ① 主题（含用户自定义主题的命名/删除）② 参数滑块 ③ 特效开关 ④ 取色/配色/调色
+             ★ 所有值都住在 stores/vizbg，导出页读同一份 —— 预览与成片必须是一幅画。 -->
+          <!-- ★ 视效面板：独立浮层 + 可拖动（2026-10-17）。
+               放在文档流里会把画布挤矮，调参数时看不见效果；浮层化后画布保持满幅，
+               面板可以拖到不挡视线的地方。拖动手柄**只有标题栏**，滑块/色块照常点。 -->
+          <Teleport to="body">
+            <div v-if="fxPanel" ref="fxPanelEl" class="fx-panel"
+                 :style="{
+                   left: fxPanelPos.x + 'px', top: fxPanelPos.y + 'px',
+                   width: fxPanelSize.w ? fxPanelSize.w + 'px' : '', height: fxPanelSize.h ? fxPanelSize.h + 'px' : '',
+                 }">
+              <div class="fx-panel-head" :title="t('拖动标题移动面板')" @pointerdown="onPanelDown">
+                <Icon name="spark" :size="13" />
+                <b>{{ t('视效') }}</b>
+                <span class="muted small">{{ t('拖动标题移动面板') }}</span>
+                <span style="flex:1"></span>
+                <button class="chip-btn" :title="t('复位位置')" @pointerdown.stop @click="resetPanelPos">{{ t('复位') }}</button>
+                <button class="chip-btn" :title="t('关闭')" @pointerdown.stop @click="fxPanel = false">✕</button>
+              </div>
+              <div class="fx-panel-body">
+          <div class="viz-bg-bar">
+            <span class="muted small">{{ t('视效主题') }}</span>
+            <!-- 内置主题 = 视觉主题（舞台/键面/音符材质/后处理整包换）；用户主题带 user 标记 -->
+            <button v-for="th in vizBg.themeList()" :key="th.k" class="chip-btn"
+                    :class="{ active: vizBg.themeName === th.k }" @click="vizBg.applyTheme(th.k)">{{ t(th.label) }}</button>
+            <input class="viz-theme-input" v-model="fxThemeInput" :placeholder="t('新主题名')"
+                   @keydown.enter="saveThemeAs" />
+            <button class="chip-btn" :title="t('把当前参数存成自定义主题（名字你定）')" @click="saveThemeAs">
+              <Icon name="save" :size="12" />{{ t('存为主题') }}
+            </button>
+            <button v-if="vizBg.userThemes[vizBg.themeName]" class="chip-btn"
+                    :title="t('删除这个自定义主题')" @click="vizBg.deleteTheme(vizBg.themeName)">✕</button>
+            <span style="flex:1"></span>
+            <button class="chip-btn" :title="t('全部打开')" @click="vizBg.resetFx(true)">{{ t('全开') }}</button>
+            <button class="chip-btn" :title="t('全部关掉（回到旧观感）')" @click="vizBg.resetFx(false)">{{ t('全关') }}</button>
+          </div>
+          <div class="viz-bg-bar">
+            <span class="muted small">{{ t('视效参数') }}</span>
+            <template v-for="p in vizBg.FX_PARAMS" :key="p.k">
+              <span class="muted small">{{ t(p.label) }}</span>
+              <NumSlider :model-value="fxNum(p.k)" @update:model-value="v2 => vizBg.setFxAny(p.k, +v2)"
+                         :min="p.min" :max="p.max" :step="p.step" range-style="width:74px" :input-width="54" no-input />
+            </template>
+          </div>
+          <div class="viz-bg-bar">
+            <span class="muted small">{{ t('特效') }}</span>
+            <button v-for="f in fxItems" :key="f.k" class="chip-btn"
+                    :class="{ active: !!(bg.fx && bg.fx[f.k]) }" :title="t(f.hint)"
+                    @click="vizBg.setFx(f.k, !(bg.fx && bg.fx[f.k]))">{{ t(f.label) }}</button>
+            <span class="muted small" style="margin-left:6px">{{ t('取色') }}</span>
+            <button v-for="m in COLOR_MODES" :key="m.k" class="chip-btn"
+                    :class="{ active: colorMode === m.k }"
+                    :title="t('色相从哪来')" @click="vizBg.setFxAny('colorMode', m.k)">{{ t(m.label) }}</button>
+            <span class="muted small" style="margin-left:6px">{{ t('配色预设') }}</span>
+            <button v-for="cp in COLOR_PRESETS" :key="cp.k" class="chip-btn"
+                    :class="{ active: colorPreset === cp.k }"
+                    :title="t('填一组色相参数，填完还能继续拖滑块')" @click="applyColorPreset(cp)">{{ t(cp.label) }}</button>
+            <template v-if="colorMode === 'hand'">
+              <span class="muted small" style="margin-left:6px">{{ t('左手') }}</span>
+              <input type="color" class="viz-color" :value="fxColor('handL')" :aria-label="t('左手颜色')"
+                     @input="vizBg.setFxAny('handL', $event.target.value)">
+              <span class="muted small">{{ t('右手') }}</span>
+              <input type="color" class="viz-color" :value="fxColor('handR')" :aria-label="t('右手颜色')"
+                     @input="vizBg.setFxAny('handR', $event.target.value)">
+            </template>
+            <template v-else-if="colorMode === 'vel'">
+              <span class="muted small" style="margin-left:6px">{{ t('弱') }}</span>
+              <input type="color" class="viz-color" :value="fxColor('velLow')" :aria-label="t('弱力度颜色')"
+                     @input="vizBg.setFxAny('velLow', $event.target.value)">
+              <span class="muted small">{{ t('强') }}</span>
+              <input type="color" class="viz-color" :value="fxColor('velHigh')" :aria-label="t('强力度颜色')"
+                     @input="vizBg.setFxAny('velHigh', $event.target.value)">
+            </template>
+          </div>
+          <div class="viz-bg-bar">
+            <span class="muted small">{{ t('调色') }}</span>
+            <template v-for="p in colorParams" :key="p.k">
+              <span class="muted small">{{ t(p.label) }}</span>
+              <NumSlider :model-value="fxNum(p.k)" @update:model-value="v2 => vizBg.setFxAny(p.k, +v2)"
+                         :min="p.min" :max="p.max" :step="p.step" range-style="width:74px" :input-width="54" no-input />
+            </template>
+            <span style="flex:1"></span>
+            <button class="chip-btn" :title="t('配色参数回到默认（取色方式=轨道色）')" @click="resetColors">{{ t('配色重置') }}</button>
+          </div>
+              </div>
+            </div>
+          </Teleport>
         <div class="vc-body" :class="{ 'bd-canvas': bg.mode === 'transparent' }">
           <!-- ★ 画布自己有一层 CSS 底色（.vc-body canvas 的 background）—— 透明档只 clearRect
                是没用的，元素底色照样透不出来。所以透明档必须把画布元素的底色也去掉，
@@ -415,6 +638,7 @@ onBeforeUnmount(() => {
             <input class="hud-seek" type="range" min="0" max="1" step="0.0001" :aria-label="t('播放进度')"
                    :value="hudProgress" @pointerdown="onSeekStart" @pointerup="onSeekEnd"
                    @pointercancel="onSeekEnd" @input="onSeekInput">
+            <button class="hud-btn" :title="t('视效面板')" @click="toggleFxPanel"><Icon name="spark" :size="14" /></button>
             <span class="hud-name">{{ currentSong?.name || '' }}</span>
             <button class="hud-btn hud-exit" :title="t('退出沉浸模式（Esc）')" @click="setImmersive(false)">
               <Icon name="close" :size="14" />{{ t('退出') }}
@@ -461,6 +685,11 @@ onBeforeUnmount(() => {
 .viz-bg-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 12px 8px; font-size: 12px;
               border-bottom: 1px solid var(--hairline); margin-bottom: 2px; }
 .viz-bg-bar input[type=range] { accent-color: var(--accent); }
+.viz-theme-input {
+  width: 108px; height: 24px; padding: 0 8px; font-size: 12px;
+  border: 1px solid var(--hairline); border-radius: 7px;
+  background: var(--surface); color: var(--ink);
+}
 .viz-bg-color { width: 28px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: transparent; }
 .viz-page.waterfall .viz-grid { display: none; }
 .viz-page.waterfall .viz-hero { flex: 1; }
@@ -483,7 +712,7 @@ onBeforeUnmount(() => {
   margin: 0; padding: 8px 14px;
   background: linear-gradient(to bottom, rgba(0, 0, 0, .5), rgba(0, 0, 0, 0));
   color: #fff;
-  transition: opacity .3s ease;
+  transition: opacity var(--motion-slow) var(--ease-out);
 }
 /* 沉浸态的控件压在画面之上：统一改成白色系，深浅主题下都能读 */
 /* 沉浸态底色可能是浅色（--canvas）：chip 用**深色半透明** + 白字，浅底深底都读得清 */
@@ -503,7 +732,7 @@ onBeforeUnmount(() => {
   padding: 10px 16px;
   background: linear-gradient(to top, rgba(0, 0, 0, .52), rgba(0, 0, 0, 0));
   color: #fff;
-  transition: opacity .3s ease;
+  transition: opacity var(--motion-slow) var(--ease-out);
 }
 .hud-btn {
   display: inline-flex; align-items: center; gap: 6px;
@@ -520,6 +749,47 @@ onBeforeUnmount(() => {
 .hud-exit { margin-left: auto; }
 /* 静止后整层隐去：只留画面 */
 .hud-hidden { opacity: 0; pointer-events: none; }
+
+/* ---------------- 视效面板（浮层 + 可拖动） ----------------
+   Teleport 到 body，所以这里不能用祖先选择器定位；靠 position:fixed + 高 z-index。
+   玻璃质感：半透明底 + 背景模糊，压在画面上也能看清下面的音符。 */
+.fx-panel {
+  position: fixed;
+  z-index: 4200;
+  /* 默认窄一些：面板是浮层，宽了会挡住画面（用户反馈「面板太宽了」）。
+     需要更宽可以拖右下角 —— resize:both 给了原生缩放手柄，尺寸会记住。 */
+  width: min(560px, 92vw);
+  min-width: 330px;
+  max-width: 96vw;
+  max-height: 86vh;
+  resize: both;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--card) 90%, transparent);
+  backdrop-filter: blur(12px) saturate(1.08);   /* 玻璃感：面板压着画面时仍然能看出下面的音符 */
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .45);
+  color: var(--ink);
+}
+.fx-panel-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  cursor: move;
+  user-select: none;
+  touch-action: none;          /* 拖动时不要触发页面滚动/手势 */
+  position: sticky; top: 0;
+  background: inherit;
+  border-radius: 12px 12px 0 0;
+}
+.fx-panel-head b { font-size: 12.5px; }
+.fx-panel-head .chip-btn { cursor: pointer; }
+.fx-panel-body { display: flex; flex-direction: column; padding-bottom: 6px; }
+/* 面板里的控件比工具条里更紧凑：窄面板下换行次数少一半 */
+.fx-panel-body .viz-bg-bar { padding: 5px 10px 6px; gap: 6px; }
+.fx-panel-body .chip-btn { padding: 3px 8px; font-size: 11.5px; }
+.fx-panel-body :deep(.muted.small) { font-size: 11px; }
+.fx-panel-body .viz-bg-bar { border-radius: 0; }
 @media (max-width: 720px) {
   .hud-name { display: none; }
 }

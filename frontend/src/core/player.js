@@ -16,6 +16,8 @@ function metroClick(ctx, time, accent, out) {
   return o;
 }
 
+import { computeGaps, gapAt, nextSkipTarget, leadingSilenceEnd } from './skip_silence.js';
+
 export class Player {
   constructor(synth) {
     this.syn = synth; this.ctx = synth.ctx;
@@ -40,8 +42,48 @@ export class Player {
     this.AHEAD_BASE = 1.0;
     this.aheadSec = this.AHEAD_BASE;
     this._aheadTimer = null;
+    // ★ 跳过空白片段（默认关，见 skip_silence.js 顶部说明）：
+    //   gaps 是"没有音符的空档"列表，在 prepare() 里按当前曲目重算。
+    this.skipSilence = false;
+    this.skipMinGap = 2.5;
+    this.skipLead = 0.2;
+    this.gaps = [];
+    this.onSkip = null;          // (fromSec, toSec) => void，给界面做提示用
   }
   load(song) { this.song = song; this.pausedTick = 0; this.loop = false; this.loopStart = 0; this.loopEnd = 0; this.prepare(); }
+
+  /** 设置"跳过空白片段"。on=false 即关闭（用户默认）；minGap 是最短空档秒数。*/
+  setSkipSilence(on, minGap, lead) {
+    this.skipSilence = !!on;
+    if (Number(minGap) > 0) this.skipMinGap = Number(minGap);
+    if (Number(lead) >= 0) this.skipLead = Number(lead);
+    this._rebuildGaps();
+  }
+
+  _rebuildGaps() {
+    if (!this.skipSilence || !this.song) { this.gaps = []; return; }
+    // ★ 量纲（第一版就在这里错了）：events 里的 start/end 是 **tick**，而空档判定与 seek 都用
+    //   **歌曲秒**。直接拿 tick 当秒算，开头静音算出来的目标是"几万秒"，seek 被钳到曲尾，
+    //   play() 又因为"已到曲尾"把位置重置成 0 —— 表现就是「开头跳空白点了没反应」。
+    this.gaps = computeGaps(this._eventsSec(), this.skipMinGap);
+  }
+
+  /** 事件表换算成"歌曲秒"（events 里是 tick；空档表与 seek 都要用秒）。*/
+  _eventsSec() {
+    const bs = this.song && this.song.baseSec;
+    if (!bs) return [];
+    return this.events.map((e) => ({ start: bs(e.start), end: bs(e.end) }));
+  }
+
+  /** 开头静音（默认跳）：把播放位置挪到第一个音符前一点点。返回是否挪了。*/
+  skipLeadingSilence(minSec = 1.0, lead = 0.5) {
+    const end = leadingSilenceEnd(this._eventsSec(), minSec);
+    if (end == null) return false;
+    const target = Math.max(0, end - lead);
+    if (this.currentSec() >= target) return false;
+    this.seekSec(target);
+    return true;
+  }
   prepare() {
     const arr = [];
     const st = this.song.chanStateAt;
@@ -114,6 +156,7 @@ export class Player {
     this._ctlByCh = ctlByCh;
     this._bendByCh = bendByCh;
     this.ccursor = 0;
+    this._rebuildGaps();
   }
   // 通道事件里第一个不早于 tick 的下标
   _firstCtlIndex(tick) {
@@ -228,10 +271,15 @@ export class Player {
   // 之前这里直接把 speed 赋给 this.scale，于是界面按「加速」按钮实际把曲子放慢了，
   // BPM 输入框填 240 得到一半速度 —— 方向整个是反的。收敛在这一处换算，
   // 调用方（app.ts / ViewEdit / EditorCanvas）无需各自记得取倒数。
+  // ★ 顺序不能反（2026-10-14 实测踩到）：**先按旧倍率取当前位置，再改 this.scale**。
+  //   currentTick() 是用 this.scale 把"墙上经过的时间"折回歌曲时间的 —— 先改倍率再取位置，
+  //   等于把已经按旧倍率走过的时长按新倍率重算：从 2× 切回 1× 时位置直接回撤一半，
+  //   用户长按 → 快进、松手后会觉得"被倒回去一段"。改倍速（含临时倍率）都会命中。
   setScale(speed) {
     const sp = Number(speed) > 0 ? Number(speed) : 1;
+    const t = this.playing ? this.currentTick() : this.pausedTick;
     this.scale = 1 / sp;
-    if (this.playing) { const t = this.currentTick(); this.pausedTick = t; this._restartAt(t); }
+    if (this.playing) { this.pausedTick = t; this._restartAt(t); }
   }
   setLoop(on, a, b) {
     this.loopStart = a != null ? a : 0;
@@ -255,6 +303,20 @@ export class Player {
   progress() { return this.song.totalSec ? this.currentSec() / this.song.totalSec : 0; }
   _sched() {
     if (!this.playing) return;
+    // ★ 跳过空白片段：位置落在"没有音符的空档"里就直接跳到空档末尾（留 lead 余量）。
+    //   放在调度最前面 —— 跳完游标已经重排，本趟不能再按旧游标往后排。
+    if (this.skipSilence && this.gaps.length) {
+      const from = this.currentSec();
+      const to = nextSkipTarget({
+        gaps: this.gaps, sec: from, lead: this.skipLead,
+        totalSec: this.song ? this.song.totalSec : Infinity,
+      });
+      if (to != null) {
+        this.seekSec(to);                 // 播放中会走 _restartAt：allStop + 重排游标
+        if (this.onSkip) { try { this.onSkip(from, to); } catch (_) {} }
+        return;
+      }
+    }
     // SF2 音序器路径：事件写入音频线程音序器后按绝对 tick 自行分发，预排窗口额外扩到
     // 30s——主线程长任务（切页 / 乐谱重绘 / 大文件渲染）阻塞远超 aheadSec 也不会断粮。
     // 其余路径（内置合成器 / ScriptProcessor 回退）维持 aheadSec（预排即创建节点，窗口大内存涨）。

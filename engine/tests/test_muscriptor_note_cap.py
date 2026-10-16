@@ -8,7 +8,8 @@
   模型从某个内容节点起开始漏收尾，之后每个音高都被拉成几分钟的长音：
   星铁 LIVE 最长 4320.8 秒（全曲 72%）、原神交响 2023 最长 2691.7 秒，>30 秒的音符占 9~12%。
 
-修复：在事件流上兜底，任何音持续超过 max_note_hold（默认 15 秒）就补一个收尾事件。
+修复：在事件流上兜底，任何音持续超过 max_note_hold 就补一个收尾事件。
+★ 2026-10-14 起该上限**默认关闭**（僵尸音符改由音频证据式收尾），这里只在显式传 cap 时生效。
 离线模拟：cap=15s 对两个坏文件把最长音压到 15s，对 4 个正常文件（最长 12.3s）零改动。
 
 这里锁死四件事：
@@ -162,6 +163,21 @@ def test_cap_zero_disables(run_transcribe):
     logs, out, got = run_transcribe(stream, max_note_hold=0)
     assert got == stream
     assert not any("强制收尾" in s for s in logs), logs
+
+
+def test_evidence_drop_removes_the_note(run_transcribe):
+    """★ 证据式删除（第四版）：零长度收尾 → 只吞掉收尾，不配对的 start 自然消失。
+
+    依据：下游 `events_to_midi_bytes` 只在收到 end 时才 `notes.append(...)`。
+    这样删音符不必缓冲/重排事件流（"正常短音不重排"是硬不变量）。
+    """
+    stream = [_start(0, 0.0, 60), _end(0, 0.0, 60),      # ← 零长度 = 删掉
+              _start(1, 1.0, 62), _end(1, 1.4, 62)]
+    logs, out, got = run_transcribe(stream, max_note_hold=0)
+    ends = [e for e in got if isinstance(e, NoteEndEvent)]
+    assert [e.start_event_index for e in ends] == [1], ends
+    # 这条不是"证据式删除"，不该冒充它出现在日志里（日志只报证据的判定计数）
+    assert not any("音频证据式收尾：修正" in s for s in logs), logs
 
 
 def test_progress_events_preserved(run_transcribe):

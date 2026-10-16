@@ -88,6 +88,7 @@ FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编�
 
 - `engine/engine.py` - 引擎入口与分发。
 - `engine/engine_basic.py`、`engine/engine_muscriptor.py`、`engine/engine_aria.py`、`engine/engine_pt.py`、`engine/engine_transkun.py` - 各模型推理实现；`engine/engine_msst.py` - MSST 音源分离。
+- `engine/pause_gate.py` - 三类引擎共用的「暂停 / 继续」闸门（MuScriptor 的 token 流、basic-pitch 的取窗生成器、钢琴的分批前向循环）。
 - `engine/engine_gpu.py` - CUDA / DirectML 选择与回退。
 - `engine/smart_midi.py` - 转录后修正与智能清理。
 - `engine/midi_post.py`、`engine/midi_edit.py` - 编辑器与插件共用的 MIDI 工具。

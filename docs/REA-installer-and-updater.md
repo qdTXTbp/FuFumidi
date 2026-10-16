@@ -112,14 +112,74 @@ github       不可达：This operation was aborted
 - kachina 侧（schema 允许的范围内）：`windowTitle` 改为「FuFumidi 安装 / 更新」，
   `build/updater-left.webp`（180×400，构建脚本用 `-t` 传进去）重画为同一套语言。
 
+**品牌资产流水线（换 logo 只在品牌目录改一处）**：
+
+上游是单独的一套生成流水线（在归档区，不在本仓库）：
+
+```
+E:\Midi\_attic\styles\logo3.py    立绘：本机 ComfyUI + Anima 2B（seed 903），出 定稿\立绘-定稿-*.png
+E:\Midi\_attic\styles\mkicon.py   全套图标：≥128 用全身、≤64 换半身（尺寸自适应），出 徽记/立绘-{白底,深靛,透明}-*
+      │  取用其中 5 个文件
+      ▼
+docs/assets/brand/                  进仓库的品牌资产（docs/ 不打进安装包）
+      │  scripts/gen-logo.py        选择 + 拷贝 + 断言（不重新缩放，避免重采样损失）
+      ▼
+build/icon.png  build/icon.ico  frontend/src/assets/logo.png  docs/assets/logo.png
+      │  scripts/gen-installer-art.py （徽记做大卡片 / 白底立绘做小页眉，暗场 + 柔光 + 倒影）
+      ▼
+build/installerSidebar.bmp  build/installerHeader.bmp  build/updater-left.webp
+```
+
+**选型依据（2026-10 用户拍板，改之前先读）**：
+
+| 位置 | 用什么 | 为什么 |
+|---|---|---|
+| exe / 安装器 / 窗口 / 托盘图标 | **头像特写 + 透明底** | 用户明确要求「图标要抠白底」：白底圆角卡在深色任务栏上就是一块白板 |
+| 侧边栏徽标（38px）、文档页 nav（36px） | **头像特写 + 透明底** | 方形小位放立绘只剩一条竖线，认不出人 |
+| **首页工作区** | **立绘整幅**（高 168px，右侧、`pointer-events:none`、窄窗口隐藏） | 用户要求「立绘放到工具里」；工具内最大的静态位就是首页页头 |
+| 安装器三张图（侧栏 / 页眉 / 更新器） | 头像特写做圆角卡 | `gen-installer-art.py` 的既有做法：暗场 + 柔光 + 倒影 |
+
+> 走过一次弯路并回退：中途试过用上游出的「白底圆角卡」当主图标 + 徽记当安装器卡，
+> 用户否掉了白底（"图标要抠白底"）。**头像特写 + 透明底**是定稿。
+
+**图标有三个互不相干的落点**，换 logo 时一个都不能漏（2026-10-16 用户实测：换完窗口图标变了、
+任务栏和桌面快捷方式还是旧的）：
+
+| 落点 | 谁在读 | 怎么同步 |
+|---|---|---|
+| `resources/icon.png` | 窗口 / 托盘（Electron 运行时） | `extraResources`，`asar` 里不含 → 部署脚本同步 |
+| exe **内嵌**图标资源 | 任务栏、桌面/开始菜单快捷方式、资源管理器 | `scripts/deploy-installed.cjs` 用 electron-builder 自带的 **rcedit** 重写三个 exe（主程序 / kachina 更新器 / 卸载器） |
+| `asar` 里的 `frontend/src/assets/logo.png` | 应用内侧边栏 | 常规构建；改完要跑 `build:ui` |
+
+> 改完 exe 图标还要**刷新 Windows 图标缓存**才看得到（否则一直显示旧图）：
+> 删 `%LOCALAPPDATA%\Microsoft\Windows\Explorer\iconcache*.db` + 重启 explorer，
+> 再 `ie4uinit.exe -show`。这一步脚本不做（会打断用户），需要时手工执行。
+
+另：`scripts/deploy-installed.cjs` 还会**校验 muscriptor 上游补丁在位**
+（`resources/python` 明确不接管，靠手工 copy）。
+
 ### 4.3 验证方式（哪些是"看过的"，哪些只是"编译过"）
 
 - **编译过**：`makensis` 用独立 harness 编译了改后的 `build/nsis-custom.nsh`
   （`_attic/nsis-check/`，产出 42 KB `check.exe`），nsDialogs / LogicLib / MUI_HEADER_TEXT 全部通过。
-  **没有跑 electron-builder 生成发布包**（用户明确要求先不构建发布物），所以这两张位图与
-  新卸载页在真实安装器里的样子，要等下一次构建才能看到。
+  **没有跑 electron-builder 生成发布包**（用户明确要求先不构建发布物）。
+- **跑过真页面**（2026-10-14 补）：`_attic/nsis-preview/` 里有两个独立 harness —— `preview-install.nsi`
+  （欢迎页 / 目录页 / 完成页，看侧栏与页眉）与 `preview.nsi`（卸载向导，看保留数据那一页）。
+  静默装到 `%TEMP%\fufumidi-uninst-preview` 再跑卸载器，就是真实卸载页；
+  预览包**不碰**注册表与用户目录（`.nsi` 里没有 `!insertmacro preInit`，`$INSTDIR` 被改到 `%TEMP%`）。
 - **看过像素**：侧栏 / 页眉 / 更新器左图三张都导成 PNG 逐张看过（中文未出现豆腐块、暗场不发灰）。
+  侧栏倒影一度铺到文字区、把下面的字"透"出来，已改成"只取底部一条 + 纵向压缩 + 渐隐"。
+- **★ 验内容靠控件枚举，不靠截图**：`PrintWindow` 截 NSIS 自定义页会**漏画**带 `WS_EX_TRANSPARENT`
+  的 label，看上去像"标签不见了"；用 `EnumChildWindows` 读文本 / 矩形 / 可见性才是准的。
+  方法与实测输出见 [docs/known-issues.md](known-issues.md) KI-1。
 - **跑过网络**：上表的实测数字由与主进程同一套算法（256 KB Range + 扣延迟算吞吐）跑出。
+
+### 4.4 安装中断遗留的状态：注册表项没了
+
+`preInit` 先删键、装完再写回 —— 中途取消（或用预览包走一遍卸载向导）会留下
+「程序还在、`设置 → 应用` 里没有条目」。`scripts/repair-install-registry.ps1` 按
+electron-builder 的同一组值重建两处键（幂等、只写注册表）。详见
+[docs/known-issues.md](known-issues.md) KI-2。
 
 ## 5. 明确没抄的
 

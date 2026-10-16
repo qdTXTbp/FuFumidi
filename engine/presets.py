@@ -115,8 +115,10 @@ def _builtin_presets():
     · **影响结果、且"值越高越不稳定"的 → 取中性值**：`temperature=1.0`、
       `cfg_coef=1.0`、`beam_size=1`。中性值**就是**稳定性锚点 ——
       "越高越准"没有任何实测支撑，不拿它换不确定性。
-    · **不干预 > 强行干预**：`max_note_hold=0`（不砍长音）、`muscriptor_instruments='none'`
-      （不硬禁乐器组）。少一层猜测就少一层引入错误的机会。
+    · **不干预 > 强行干预**：`muscriptor_instruments='none'`（不硬禁乐器组）。少一层猜测就少一层引入错误的机会。
+    · ★ **`max_note_hold` 保持 0（不截断）**：僵尸音符已改为**音频证据式收尾** ——
+      引擎在块边界按音频判断该音是否还有能量，没能量才收尾（收在静音开始处）。
+      按时长硬截断会误伤音频里真实存在的长音（用户明确否掉）。上限仍保留为可选兜底。
     · 每个模型只写**它自己适用**的键，不适用的不写 —— 界面按"预设没给就保留当前值"应用，
       惰性字段只会让状态来源变得不可读。
 
@@ -141,14 +143,14 @@ def _builtin_presets():
         "beat_grid": True,            # 节拍网格检测：装了 beat_this 就开
         "tempo": 0,                   # 0 = 引擎默认 120（自动 BPM 优先）
         "perf": "quality",
-        "denoise": False, "normalize": False, "auto_bpm": False,
+        "denoise_mode": "off", "auto_bpm": False,
     }
     piano = {
         "onset_threshold": 0.3, "frame_threshold": 0.1,
         "min_note_ms": 60, "merge_gap_ms": 30,
         "include_pedal": True,        # 踏板：钢琴转录的必需信息，绝不默认丢
         "perf": "quality",
-        "denoise": False, "normalize": False, "auto_bpm": False,
+        "denoise_mode": "off", "auto_bpm": False,
     }
     sep = {k: v for k, v in s.items() if k in
            ("onset_threshold", "frame_threshold", "minimum_note_length", "midi_tempo")}
@@ -163,7 +165,10 @@ def _builtin_presets():
                 "temperature": 1.0, "cfg_coef": 1.0, "beam_size": 1,
                 "prelude_forcing": True,
                 "precision": "fp32",
-                "max_note_hold": 0,       # 不砍长音
+                "max_note_hold": 0,       # ★ 不截断：僵尸音改由**音频证据**收尾（见 engine_muscriptor 的 _make_pitch_evidence）
+                # ★ 静音分段默认关（用户 2026-10-14 定）：在完全空白静音处切段、逐段转录后
+                #   合并成一份 MIDI，用长音频的静音换时间。开启后接缝处上下文变少，所以不默认开。
+                "segment_silence": "off",
             },
         },
         "钢琴 · 最优": {"mode": "piano", "params": {**piano, "model": "piano_pt"}},
@@ -176,7 +181,7 @@ def _builtin_presets():
                 "include_drums": True,     # 鼓组轨开
                 "stem_format": "wav",      # 分轨格式 wav（无损）
                 "perf": "quality",
-                "denoise": False, "normalize": False, "auto_bpm": False,
+                "denoise_mode": "off", "auto_bpm": False,
             },
         },
     }

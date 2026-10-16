@@ -181,7 +181,7 @@ onMounted(load);
       </div>
 
             <div v-if="importing" class="wp-import-progress">
-        <div class="wp-import-bar"><div class="pfill" :style="{ width: (importProgress * 100) + '%' }"></div></div>
+        <div class="wp-import-bar"><div class="pfill" :style="{ transform: 'scaleX(' + (((importProgress * 100)) / 100) + ')' }"></div></div>
         <span>{{ Math.round(importProgress * 100) }}%</span>
       </div>
 <div class="wp-foot">
@@ -207,7 +207,7 @@ onMounted(load);
   padding: 0;
   cursor: pointer;
   background: var(--surface-soft);
-  transition: transform 0.15s, border-color 0.15s, box-shadow 0.18s;
+  transition: transform var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-base) var(--ease-out);
 }
 .wp-card:hover { transform: translateY(-2px); border-color: var(--border-strong); box-shadow: var(--shadow); }
 .wp-card:active { transform: scale(0.98); }
@@ -221,7 +221,7 @@ onMounted(load);
   background: rgba(0,0,0,.45); color: #fff;
   display: grid; place-items: center;
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
-  opacity: 0; transition: opacity 0.15s;
+  opacity: 0; transition: opacity var(--motion-fast) var(--ease-out);
 }
 .wp-card:hover .wp-card-del { opacity: 1; }
 .wp-card-del:hover { background: rgba(200, 40, 40, .75); }
@@ -231,7 +231,7 @@ onMounted(load);
   background: rgba(0,0,0,.45); color: #fff;
   display: grid; place-items: center;
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
-  opacity: 0; transition: opacity 0.15s;
+  opacity: 0; transition: opacity var(--motion-fast) var(--ease-out);
 }
 .wp-card:hover .wp-card-dl { opacity: 1; }
 .wp-card-mask {
@@ -249,7 +249,7 @@ onMounted(load);
 @keyframes wp-spin { to { transform: rotate(360deg); } }
 .wp-import-progress { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 4px 0; }
 .wp-import-progress .wp-import-bar { flex: 1; height: 6px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; }
-.wp-import-progress .pfill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.12s linear; }
+.wp-import-progress .pfill { height: 100%; background: var(--accent); border-radius: 999px; transition: transform var(--motion-base) var(--ease-out); }
 .wp-import-progress span { font-size: 11px; color: var(--stone); min-width: 40px; text-align: right; }
 .wp-foot { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--hairline-soft); }
 .wp-foot .muted { margin-left: auto; font-size: 10.5px; }

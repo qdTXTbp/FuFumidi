@@ -110,8 +110,7 @@ const CHAPTERS = computed(() => [
   {
     id: 'playback', ic: 'player', name: t('播放与音质'), desc: t('播放栏、节拍器、倍速、混音台、音效'),
     steps: [
-      { parent: 'home', selector: '[data-guide="pb-mode"]', title: t('播放模式'), desc: t('顺序 / 随机 / 单曲循环 / 列表循环，点一次换一种。'), manual: true },
-      { parent: 'home', selector: '[data-guide="pb-loop"]', title: t('循环区间'), desc: t('开启后只在选区（或整曲）内循环。编辑页还能设置精确的循环起止。'), manual: true },
+      { parent: 'home', selector: '[data-guide="pb-mode"]', title: t('播放模式'), desc: t('顺序 / 播完就停 / 随机 / 单曲循环 / 列表循环，点一次换一种。'), manual: true },
       { parent: 'home', selector: '[data-guide="pb-metro"]', title: t('节拍器'), desc: t('跟着节拍练习或对拍；关闭后已排队的点击声会立刻取消。'), manual: true },
       { parent: 'home', selector: '#pb-tempo', title: t('播放速度'), desc: t('0.25× ~ 4× 变速播放，适合听清快速段落。加速即加速，与界面方向一致。'), manual: true },
       { parent: 'home', selector: '#pb-volume', title: t('音量'), desc: t('总音量；分轨音量与声像在混音台里调。'), manual: true },
@@ -596,14 +595,14 @@ if (typeof window !== 'undefined') {
   letter-spacing: .4px;
   z-index: 2;
 }
-.g-note { position: absolute; color: color-mix(in srgb, var(--accent) 30%, transparent); font-size: 24px; user-select: none; animation: gfloat 3.2s ease-in-out infinite; }
+.g-note { position: absolute; color: color-mix(in srgb, var(--accent) 30%, transparent); font-size: 24px; user-select: none; animation: gfloat 3.2s var(--ease-in-out) infinite; }
 .g-note:nth-child(1){ top:16%; left:12%; animation-delay:0s; }
 .g-note:nth-child(2){ top:70%; left:20%; font-size:18px; animation-delay:1s; }
 .g-note:nth-child(3){ top:30%; right:10%; font-size:30px; animation-delay:1.9s; }
 .g-note:nth-child(4){ top:64%; right:22%; font-size:15px; animation-delay:.5s; }
 @keyframes gfloat { 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-6px); } }
 .guide-dots { display: flex; gap: 6px; margin-top: 14px; flex: none; }
-.guide-dots i { width:8px; height:8px; border-radius:50%; background: var(--hairline); transition:.2s; }
+.guide-dots i { width:8px; height:8px; border-radius:50%; background: var(--hairline); transition:var(--motion-base) var(--ease-out); }
 .guide-dots i.on { background: var(--accent); transform: scale(1.25); }
 .guide-overlay { background: rgba(6,10,16,.58); backdrop-filter: blur(2px); pointer-events: none; }
 /* 交互式实操：挖洞遮罩由 .ig-highlight 的 999px box-shadow 负责，
@@ -619,7 +618,7 @@ if (typeof window !== 'undefined') {
   border-radius: 12px;
   box-shadow: 0 0 0 999px rgba(6,10,16,.58);
   border: 2px dashed var(--accent);
-  animation: igpulse 1.4s ease-in-out infinite;
+  animation: igpulse 1.4s var(--ease-in-out) infinite;
 }
 @keyframes igpulse { 0%,100%{ box-shadow: 0 0 0 999px rgba(6,10,16,.58); } 50%{ box-shadow: 0 0 0 999px rgba(6,10,16,.46); } }
 .ig-card {
@@ -647,7 +646,7 @@ if (typeof window !== 'undefined') {
 .cat-item {
   display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
   padding: 9px 11px; border: 1px solid var(--hairline); border-radius: 10px;
-  background: var(--surface); cursor: pointer; transition: .15s;
+  background: var(--surface); cursor: pointer; transition: var(--motion-fast) var(--ease-out);
 }
 .cat-item:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
 .cat-item.done { opacity: .78; }

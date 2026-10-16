@@ -10,7 +10,8 @@ const currentSong = computed(() => app.currentSong);
 const toast = (m, t) => app.toast(m, t);
 import { clamp } from '../core/util.js';
 // ★ paintVizBg：与「可视化」页**同一个**背景绘制函数（主题/纯色/图片/透明）
-import { drawVizWaterfall, paintVizBg, drawVizSpectrum, drawVizScope, drawVizChord, rmsAt, smoothEnergy, smoothEnergyDt, activeNotesAt, VIZ_REF_H, VIZ_REF_DPR } from '../core/viz.js';
+import { drawVizWaterfallPost } from '../core/viz/index.js';
+import { paintVizBg, drawVizSpectrum, drawVizScope, drawVizChord, rmsAt, smoothEnergy, smoothEnergyDt, activeNotesAt, VIZ_REF_H, VIZ_REF_DPR } from '../core/viz.js';
 import { playVoice, presetFromMode } from '../core/synth.js';
 import { renderSongWithSf2 } from '../core/sf2render.js';
 import NumSlider from '../components/NumSlider.vue';
@@ -335,6 +336,11 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
     lyricAt: vf.lyricAt || '',
     activeNotes,
     energy: st.energy,
+    // ★ 视效开关也走同一份设置：以前只有背景同源，开关若只在实时视图生效，
+    //   用户在预览里调的 3D 键盘/粒子，导出的成片又是一副样子（与背景那次是同一类缺陷）
+    fx: vizBg.fxOpts(),
+    theme: vizBg.vizTheme(),
+    ssaa: vizBg.ssaa,   // 导出超采样（对标 Pianola 的 supersampling）：离线渲染不抢实时预算
   };
   const drawPanelBg = (x, y, w2, h2, title, sub, dot) => {
     ctx.fillStyle = cvar('--surface', '#101826');
@@ -349,7 +355,7 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
     ctx.beginPath(); ctx.moveTo(x + 1, y + 27); ctx.lineTo(x + w2 - 1, y + 27); ctx.stroke();
   };
   if (mode === 'waterfall') {
-    drawVizWaterfall(ctx, W, H, s, tick, opts);
+    drawVizWaterfallPost(ctx, W, H, s, tick, opts);
   } else {
     // 仪表盘：顶部瀑布 + 底部三卡片
     // ★ ⑥ 与实时统一：实时那边瀑布是画在**卡片**里的（圆角 + 发丝描边 + --canvas 底），
@@ -363,7 +369,7 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
     ctx.beginPath(); roundRect(ctx, cx0, cy0, cw0, ch0, cardR); ctx.stroke();
     ctx.beginPath(); roundRect(ctx, cx0, cy0, cw0, ch0, cardR); ctx.clip();
     ctx.translate(cx0, cy0);
-    drawVizWaterfall(ctx, cw0, ch0, s, tick, opts);
+    drawVizWaterfallPost(ctx, cw0, ch0, s, tick, opts);
     ctx.restore();
     const gy = rollH + pad;
     const ch = panelH - 34;
@@ -800,7 +806,7 @@ async function renderVideo() {
 
       <Transition name="cv">
         <div v-if="busy || done" class="conv-progress">
-          <div class="pfill" :style="{ width: progress + '%' }"></div>
+          <div class="pfill" :style="{ transform: 'scaleX(' + ((progress) / 100) + ')' }"></div>
           <span>{{ progress }}%</span>
         </div>
       </Transition>
@@ -900,6 +906,12 @@ async function renderVideo() {
               <NumSlider :model-value="Math.round(bg.dim * 100)" @update:model-value="v => { vizBg.setDim((+v) / 100) }" :min="0" :max="80" :step="5" :input-width="68" />
             </div>
             <span class="muted small">{{ t('与「可视化」页共用同一套设置') }}</span>
+            <!-- 导出超采样：离线渲染不抢实时预算，2× 能把发光边缘与细线拉干净（对标 Pianola） -->
+            <span class="muted small" style="margin-left:8px">{{ t('超采样') }}</span>
+            <button v-for="k in [1, 1.5, 2]" :key="k" class="chip-btn"
+                    :class="{ active: Math.abs(vizBg.ssaa - k) < 1e-6 }"
+                    :title="t('导出时按该倍率渲染再缩小，边缘更干净（更慢）')"
+                    @click="vizBg.setSsaa(k)">{{ k }}×</button>
             <span v-if="bg.mode === 'transparent'" class="muted small">{{ t('透明档：MP4 没有透明通道，导出后是黑底（可作叠加层的相加/滤色素材）') }}</span>
           </div>
         </div>
@@ -916,7 +928,7 @@ async function renderVideo() {
       </button>
       <Transition name="cv">
         <div v-if="VE.veBusy" class="conv-progress">
-          <div class="pfill" :style="{ width: VE.veProgress + '%' }"></div>
+          <div class="pfill" :style="{ transform: 'scaleX(' + ((VE.veProgress) / 100) + ')' }"></div>
           <span>{{ Math.round(VE.veProgress) }}%</span>
         </div>
       </Transition>
@@ -957,10 +969,10 @@ async function renderVideo() {
 .conv-est em { font-style: normal; color: var(--stone); }
 .btn.big { width: 100%; padding: 12px 18px; font-size: 14px; }
 .conv-progress { display: flex; align-items: center; gap: 10px; height: 20px; background: var(--surface-soft); border-radius: 999px; overflow: hidden; padding: 0 12px; font-size: 11px; color: var(--steel); font-variant-numeric: tabular-nums; }
-.conv-progress .pfill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.2s; }
+.conv-progress .pfill { height: 100%; background: var(--accent); border-radius: 999px; transition: transform var(--motion-base) var(--ease-out); }
 .conv-done-tip { color: var(--success-text); font-size: 12.5px; font-weight: 600; text-align: center; }
 /* 转换页进度/完成提示显隐过渡 */
-.cv-enter-active, .cv-leave-active { transition: opacity 0.2s ease, transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.18); }
+.cv-enter-active, .cv-leave-active { transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-spring); }
 .cv-enter-from, .cv-leave-to { opacity: 0; transform: translateY(6px); }
 .ve-card { margin-top: 18px; padding: 18px; }
 .ve-head { display: flex; flex-direction: column; gap: 4px; }

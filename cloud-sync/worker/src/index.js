@@ -5,13 +5,14 @@
 // 客户端上传其拥有/改动的全部记录，服务器合并后把"服务器较新"
 // 及"客户端尚未拥有"的记录回传，实现双向同步。
 // ============================================================
-import { json, error, ok, nowMs } from './util.js';
+import { json, error, ok, nowMs, sha256Hex } from './util.js';
 import { createAuth, cloudCounts } from './auth.js';
 import { buildStorage } from './storage.js';
 import { turnstileHtml } from './turnstilePage.js';
+import { createFeedback } from './feedback.js';
 
 // 构建标记：用于确认线上实际跑的是哪一版代码（/health 会返回它）
-const BUILD = 'chunked-sync';
+const BUILD = 'chunked-sync+feedback';
 
 // 单批曲目上限：分开发送/拉取字节，避免一次请求或响应过大
 // （Workers 对请求体、内存与单次调用子请求数都有上限，整包同步 500+ 首会中途被杀）
@@ -39,6 +40,18 @@ export default {
         return new Response(html, {
           headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
         });
+      }
+
+      // ---------- 问题反馈（**匿名**：Turnstile + installId 限流；写仓库的权限只在服务端）----------
+      // 刻意放在 requireAuth 之前：反馈不需要注册账号，门槛越低越好。
+      if (path === '/feedback' && request.method === 'POST') {
+        const ip = request.headers.get('CF-Connecting-IP') || '';
+        const ipHash = ip ? await sha256Hex(ip + '|fufumidi-feedback') : '';
+        return withCors(await createFeedback(env).submit(await request.json(), { ipHash }));
+      }
+      if (path.startsWith('/feedback/att/') && request.method === 'GET') {
+        const rest = path.slice('/feedback/att/'.length).split('/');
+        return createFeedback(env).attachment(rest[0], rest.slice(1).join('/'));
       }
 
       if (path === '/auth/register' && request.method === 'POST') {

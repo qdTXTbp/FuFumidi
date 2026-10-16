@@ -727,7 +727,7 @@ function onRangeClick() {
           </p>
           <!-- 安装进度（主进程 diffsinger:runtimeProgress → store.runtimePct/runtimeText） -->
           <div v-if="ds.runtimeInstalling" class="ds-prog">
-            <div class="ds-prog-track"><i :style="{ width: Math.max(2, ds.runtimePct) + '%' }"></i></div>
+            <div class="ds-prog-track"><i :style="{ transform: 'scaleX(' + ((Math.max(2, ds.runtimePct)) / 100) + ')' }"></i></div>
             <span class="muted small ds-prog-text">
               {{ ds.runtimeText || t('正在安装…') }} {{ Math.round(ds.runtimePct) }}%
             </span>
@@ -807,30 +807,30 @@ function onRangeClick() {
 .vbp-list .tag { font-size: 10px; padding: 1px 5px; border-radius: 4px;
                  border: 1px solid var(--border); flex: none; }
 
-/* ---------------- 动效：跟全局一套（0.2~0.34s + cubic-bezier(.2,.7,.3,1)） ----------------
+/* ---------------- 动效：跟全局一套（0.2~0.34s + var(--ease-out)） ----------------
    ★ 这一页原来一个过渡都没有：切到「声库」页签是整页硬切，列表、体检结果都是「啪」地出现。 */
 /* 两块卡片：入页时错位滑入 */
-.vbp-card-in { animation: vbpCardIn .3s cubic-bezier(.2, .7, .3, 1) both;
+.vbp-card-in { animation: vbpCardIn var(--motion-slow) var(--ease-out) both;
                animation-delay: calc(var(--i, 0) * 60ms); }
 @keyframes vbpCardIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 /* 声库行：逐行入场 + 悬停高亮（行多时延迟封顶，不然最后一行要等一秒） */
-.vbp-row { animation: vbpRowIn .28s cubic-bezier(.2, .7, .3, 1) both;
+.vbp-row { animation: vbpRowIn var(--motion-slow) var(--ease-out) both;
            animation-delay: calc(min(var(--i, 0), 12) * 26ms);
-           border-radius: 6px; transition: background .18s ease, transform .18s ease; }
+           border-radius: 6px; transition: background var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out); }
 .vbp-row:hover { background: color-mix(in srgb, var(--brand-soft) 60%, transparent); transform: translateX(2px); }
 @keyframes vbpRowIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 /* 体检面板：高度 + 透明度一起过渡（max-height 给足余量，内容多了也不会被裁） */
 .vbp-drop-enter-active, .vbp-drop-leave-active {
-  transition: opacity .24s cubic-bezier(.2,.7,.3,1), transform .24s cubic-bezier(.2,.7,.3,1), max-height .3s cubic-bezier(.2,.7,.3,1);
+  transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out), max-height var(--motion-slow) var(--ease-out);
   overflow: hidden; max-height: 1200px; }
 .vbp-drop-enter-from, .vbp-drop-leave-to { opacity: 0; transform: translateY(-6px); max-height: 0; }
 /* 体检结果逐条入场 */
-.vbp-check { animation: vbpCheckIn .24s cubic-bezier(.2, .7, .3, 1) both;
+.vbp-check { animation: vbpCheckIn var(--motion-base) var(--ease-out) both;
              animation-delay: calc(min(var(--i, 0), 16) * 22ms); }
 @keyframes vbpCheckIn { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }
 /* 分段筛选 / 卡片状态：状态变化平滑过渡，不要瞬间跳色 */
-.seg button { transition: border-color .18s ease, background .18s ease, color .18s ease; }
-.vbp-st { transition: border-color .28s cubic-bezier(.2,.7,.3,1), background .28s ease; }
+.seg button { transition: border-color var(--motion-base) var(--ease-out), background var(--motion-base) var(--ease-out), color var(--motion-base) var(--ease-out); }
+.vbp-st { transition: border-color var(--motion-slow) var(--ease-out), background var(--motion-slow) var(--ease-out); }
 .tag.e-utau { background: rgba(80, 190, 120, .18); }
 .tag.e-diffsinger { background: rgba(64, 140, 255, .18); }
 .vbp-list .inuse { font-size: 10.5px; color: var(--brand-text); flex: none; }
@@ -867,5 +867,5 @@ function onRangeClick() {
 /* DS 组件安装进度条（runtimePct/runtimeText） */
 .ds-prog { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .ds-prog-track { flex: 1; min-width: 60px; height: 6px; border-radius: 3px; background: var(--surface-muted); overflow: hidden; }
-.ds-prog-track i { display: block; height: 100%; background: var(--brand); transition: width .25s; }
+.ds-prog-track i { display: block; height: 100%; background: var(--brand); transition: transform var(--motion-base) var(--ease-out); }
 .ds-prog-text { white-space: nowrap; }

@@ -62,8 +62,8 @@ const cloudEmpty = computed(() => {
                 <span>{{ cloud.elapsed }}s</span>
               </div>
               <div v-if="cloud.progress && cloud.progress.total" style="height:6px;background:var(--surface-soft);border-radius:999px;overflow:hidden;border:1px solid var(--hairline)">
-                <div style="height:100%;background:linear-gradient(90deg,#4f94e0,#8fc0f0);transition:width .2s"
-                     :style="{ width: Math.min(100, Math.round(((cloud.progress.done || 0) / (cloud.progress.total || 1)) * 100)) + '%' }"></div>
+                <div style="height:100%;background:linear-gradient(90deg,#4f94e0,#8fc0f0);transform-origin:left center;transition:transform var(--motion-base) var(--ease-out)"
+                     :style="{ transform: 'scaleX(' + ((Math.min(100, Math.round(((cloud.progress.done || 0) / (cloud.progress.total || 1)) * 100))) / 100) + ')' }"></div>
               </div>
             </div>
             <div v-if="cloud.err" style="font-size:12px;color:#e05858">{{ cloud.err }}</div>

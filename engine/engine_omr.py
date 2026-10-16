@@ -103,6 +103,173 @@ def binarize(gray):
 # 2. 谱表（5 线）与小节线
 # ----------------------------------------------------------------------------
 
+# ----------------------------------------------------------------------------
+# 共用影像预处理层（M3-3）：去倾斜 / Sauvola 局部二值化 / 去噪点
+#
+# 为什么放在 engine_omr.py：classical 与 audiveris 两条路都要用同一份实现
+#   （audiveris 侧在 engine_omr_backends.prep_image 里调，classical 侧预处理后再喂）。
+# 定位：**印刷谱本来就能跑，这一层是给扫描件/手机拍照的** —— 倾斜、阴影、噪点。
+#   实测（见 docs/test-reports）：倾斜 3° + 阴影的照片，不加这一层整页判无效。
+# ----------------------------------------------------------------------------
+
+def looks_like_scan(gray, skew=0.0, max_w=800):
+    """粗判「这像扫描件/照片，而不是干净的印刷谱」——决定要不要上整层预处理。
+
+    三条判据（命中一条就算，实测都各自能触发）：
+      ① 背景不均：把图切成 8×8 块，各块"背景亮度"（90 分位）的极差 / 255 > 0.22（阴影、台灯）
+      ② 噪点多：小连通块（<6px）占到墨像素的 2% 以上（灰点、JPEG 噪点）
+      ③ 倾斜：|角度| >= 0.25°（直接由 estimate_skew 给出）
+    返回 (bool, 原因字符串)——原因会进报告，用户能看出它为什么走了这条路。
+    """
+    a = np.asarray(gray).astype('float32')
+    if a.ndim == 3:
+        a = a.mean(axis=2)
+    if abs(float(skew)) >= 0.25:
+        return True, 'skew'
+    im = Image.fromarray(a.astype('uint8'))
+    if im.width > max_w:
+        im = im.resize((max_w, max(1, int(im.height * max_w / float(im.width)))), Image.BILINEAR)
+    b = np.asarray(im).astype('float32')
+    h, w = b.shape
+    tiles = []
+    for ty in range(8):
+        for tx in range(8):
+            blk = b[ty * h // 8:(ty + 1) * h // 8, tx * w // 8:(tx + 1) * w // 8]
+            if blk.size:
+                tiles.append(float(np.percentile(blk, 90)))
+    if tiles and (max(tiles) - min(tiles)) / 255.0 > 0.22:
+        return True, 'uneven-background'
+    med = float(np.median(b))
+    ink = b < med - 20
+    if ink.any():
+        _lab, n = ndi.label(ink)
+        if n:
+            sizes = np.bincount(_lab.ravel())
+            small = int(sizes[1:][sizes[1:] < 6].sum()) if sizes.size > 1 else 0
+            if small / float(ink.sum()) > 0.02:
+                return True, 'noisy'
+    return False, ''
+
+
+def _integral_stats(a):
+    """积分图算局部均值与局部标准差要用的两个前缀和（O(1) 查窗口）。"""
+    ii = np.cumsum(np.cumsum(a, axis=0), axis=1)
+    ii2 = np.cumsum(np.cumsum(a * a, axis=0), axis=1)
+    return ii, ii2
+
+
+def _window_means(ii, ii2, r, n):
+    """滑窗均值 / 平方均值（用前缀和，边缘按有效面积归一）。"""
+    h, w = ii.shape
+    ys = np.arange(h)
+    xs = np.arange(w)
+    y0 = np.clip(ys - r, 0, h - 1)
+    y1 = np.clip(ys + r, 0, h - 1)
+    x0 = np.clip(xs - r, 0, w - 1)
+    x1 = np.clip(xs + r, 0, w - 1)
+    def box(ii_):
+        Y0 = ii_[y0][:, x0]
+        Y1 = ii_[y1][:, x1]
+        Y2 = ii_[y0][:, x1]
+        Y3 = ii_[y1][:, x0]
+        area = ((y1 - y0 + 1)[:, None] * (x1 - x0 + 1)[None, :]).astype('float32')
+        return (Y1 - Y2 - Y3 + Y0) / np.maximum(area, 1.0)
+    return box(ii), box(ii2)
+
+
+def sauvola(gray, window=None, k=0.15, r=128.0):
+    """Sauvola 局部自适应二值化 → 墨迹布尔图（True = 有墨）。
+
+    比全局阈值强在哪：它按 **(局部均值)·(1 + k·(局部标准差/r - 1))** 定阈值，阈值随局部亮度走 ——
+    实测「左亮右暗」的照片上，全局阈值把暗半**整片判成墨**（墨占比 1.0000），Sauvola 是 0.045。
+
+    ★ k 取 0.15（比文献里文档扫描常用的 0.2~0.5 小）：乐谱的笔画细、扫描/拍照后常发灰，
+      k 大一点就会把「比背景暗 20% 的浅笔画」直接漏掉（实测亮部墨占比掉到 0）。宁可多认一点，
+      后面还有 despeckle 收尾。window 默认图宽的 1/24（约 4~6 个谱线间距）。
+    """
+    a = np.asarray(gray).astype('float32')
+    if a.ndim == 3:
+        a = a.mean(axis=2)
+    h, w = a.shape
+    if window is None:
+        window = max(9, int(round(min(h, w) / 24.0)) | 1)
+    r_ = max(2, int(window) // 2)
+    ii, ii2 = _integral_stats(a)
+    mean, mean2 = _window_means(ii, ii2, r_, a.size)
+    var = np.maximum(mean2 - mean * mean, 0.0)
+    std = np.sqrt(var)
+    thr = mean * (1.0 + k * (std / float(r) - 1.0))
+    return a < thr, float(np.median(thr))
+
+
+def estimate_skew(gray, max_deg=6.0, coarse=1.0, fine=0.2, max_w=1200):
+    """估倾斜角（度）。做法：把墨迹按**行**投影，找让行投影方差最大的旋转角。
+
+    乐谱里全是长横线（谱线/符杠）—— 摆正时行投影最尖（方差最大），歪了就摊平。
+    先在缩略图上 ±max_deg 粗扫，再在最好的一档附近细扫。返回 (角度, 得分)。
+    """
+    a = np.asarray(gray).astype('float32')
+    if a.ndim == 3:
+        a = a.mean(axis=2)
+    im = Image.fromarray(a.astype('uint8')) if a.dtype != np.uint8 else Image.fromarray(a)
+    if im.width > max_w:
+        im = im.resize((max_w, max(1, int(im.height * max_w / float(im.width)))), Image.BILINEAR)
+    arr = np.asarray(im).astype('float32')
+    ink = (arr < float(np.percentile(arr, 40))).astype('float32')
+
+    def score(deg):
+        rot = Image.fromarray((ink * 255).astype('uint8')).rotate(
+            deg, resample=Image.BILINEAR, fillcolor=0)
+        prof = np.asarray(rot).astype('float32').sum(axis=1)
+        prof = prof - prof.mean()
+        return float((prof * prof).mean())
+
+    best_deg, best_sc = 0.0, score(0.0)
+    d = -max_deg
+    while d <= max_deg + 1e-9:
+        s = score(d)
+        if s > best_sc:
+            best_deg, best_sc = float(d), s
+        d += coarse
+    d = best_deg - coarse
+    while d <= best_deg + coarse + 1e-9:
+        s = score(d)
+        if s > best_sc:
+            best_deg, best_sc = float(d), s
+        d += fine
+    return round(best_deg, 2), best_sc
+
+
+def deskew(gray, max_deg=6.0, min_deg=0.25):
+    """倾斜超过 min_deg 才转（旋转要重采样，能不动就不动）。返回 (gray, 用掉的角度)。"""
+    ang, _sc = estimate_skew(gray, max_deg=max_deg)
+    if abs(ang) < min_deg:
+        return gray, 0.0
+    im = gray if isinstance(gray, Image.Image) else Image.fromarray(np.asarray(gray).astype('uint8'))
+    return im.rotate(ang, resample=Image.BICUBIC, fillcolor=255), ang
+
+
+def despeckle(ink, min_px=6, max_px=None):
+    """去掉小连通块（扫描噪点）。返回 (ink, 去掉的块数)。
+
+    min_px 默认 6：谱面上的附点、十六分音符的符尾都在 10px 以上，6px 以下基本都是灰点。
+    """
+    lab, n = ndi.label(ink)
+    if n == 0:
+        return ink, 0
+    sizes = np.bincount(lab.ravel())
+    small = np.zeros(sizes.shape[0], dtype=bool)
+    small[1:] = sizes[1:] < int(min_px)
+    if max_px:
+        small[1:] |= sizes[1:] > int(max_px)
+    removed = int(small[lab].sum() and small.sum())
+    if not small.any():
+        return ink, 0
+    out = ink.copy()
+    out[small[lab]] = False
+    return out, removed
+
+
 def _row_runs(ink):
     """每行最长连续墨迹长度（列方向已经向量化）。"""
     h, w = ink.shape
@@ -684,6 +851,45 @@ def step_to_midi(step, acc, key_sig):
 # 6. 主流程
 # ----------------------------------------------------------------------------
 
+def prep_gray(gray, prep="auto"):
+    """★ M3-3 共用影像预处理层（灰度入口，经典后端与栅格后端共用同一组原语）。
+
+    做的事与顺序：
+      ① **去倾斜**（deskew，行投影方差最大化）—— 有倾斜才动，全程 <0.25° 直接跳过；
+      ② **看是不是扫描件/照片**（looks_like_scan：背景不均 / 噪点多 / 有倾斜）；
+      ③ 是的话走 **Sauvola 局部二值化 + 去噪点**，否则原样返回交给 binarize。
+
+    为什么扫描件必须换 Sauvola：全局阈值把「带阴影的照片」的暗半边**整片判成墨**
+    （实测墨占比 1.0000），而 Sauvola 在同一张图上给出 0.0463/0.0338（暗/亮半边），
+    干净印刷谱上两者墨占比一致（0.0563 vs 0.0563）—— 所以这一层对正常谱面是无损的。
+
+    prep：off = 什么都不做 | auto = 看着像扫描件才上 | scan = 强制上。
+    返回 (gray, info)；gray 可能是 0/255 的「二值化后灰度」，binarize 对它是幂等的。
+    """
+    info = {"prep": "off", "skew": 0.0, "despeckled": 0, "prepWhy": ""}
+    mode = str(prep or "auto").lower()
+    if mode == "off":
+        return gray, info
+    g = gray.astype(np.float32)
+    if g.ndim == 3:
+        g = g.mean(axis=2)
+    g, skew = deskew(g, min_deg=0.25)
+    # deskew 转过之后返回的是 PIL 图（旋转要重采样）—— 这里统一回 ndarray，
+    # 否则下游 binarize 的 gray.astype 会直接 AttributeError（实测踩到）。
+    if not isinstance(g, np.ndarray):
+        g = np.asarray(g).astype(np.float32)
+    info["skew"] = round(float(skew), 2)
+    mode_scan, why = (True, "forced") if mode == "scan" else looks_like_scan(g, skew)
+    if not mode_scan:
+        info["prep"] = "clean"
+        return g, info
+    ink, _thr = sauvola(g)
+    ink, removed = despeckle(ink, min_px=6)
+    out = np.where(ink, 0.0, 255.0).astype(np.float32)
+    info.update({"prep": "scan", "prepWhy": why, "despeckled": int(removed)})
+    return out, info
+
+
 def analyze_page(gray, opts, page_index):
     ink, thr, frac = binarize(gray)
     h, w = ink.shape
@@ -899,7 +1105,11 @@ def pick_meter(pages, opts, candidates=(2, 4, 3)):
         #  两边取绝对差才分得开 —— 截断成 min(1,fill) 会让 1.1 和 1.9 打平，实测就选错了拍号）。
         scored.append((abs(fill - 1.0), err, b, fill))
     if not scored:
-        return opts.beats, []
+        # ★ 一行谱表都没认出来的时候（歪的/糊的扫描件）必须回一个**数字**：
+        #   旧实现返回 opts.beats（"auto"），主流程 float("auto") 直接抛栈，
+        #   用户看到的是「引擎没有返回结果，退出码 1」而不是「没识别到音符」——
+        #   实测一张旋转 3° 的照片走 prep=off 就是这么崩的。
+        return 4, []
     # 罚分接近时优先小拍号（2/4 的谱按 4/4 解读会整体慢一倍）
     scored.sort(key=lambda t: (round(t[0], 2), t[2]))
     best = scored[0]
@@ -1156,19 +1366,24 @@ def main(argv=None):
     ap.add_argument("--beat-type", type=int, default=4)
     ap.add_argument("--mode", default="auto")           # auto | piano | melody
     ap.add_argument("--tempo", type=float, default=120.0)
+    ap.add_argument("--prep", default="auto",
+                    help="共用影像预处理层：off | auto（像扫描件才上）| scan（强制）")
     args = ap.parse_args(argv)
 
     if not args.inputs:
         emit("RESULT", {"ok": False, "error": "没有输入文件"})
         return 2
     pages = []
+    prep_info = []
     total = len(args.inputs)
     for k, p in enumerate(args.inputs):
         if not os.path.exists(p):
             emit("RESULT", {"ok": False, "error": "找不到文件：" + p})
             return 2
         for name, gray in load_frames(p):
+            gray, pinfo = prep_gray(gray, getattr(args, "prep", "auto"))
             pages.append((name, gray))
+            prep_info.append(dict(pinfo, name=name))
         prog(10 + 40 * (k + 1) / total, "读取 %s" % os.path.basename(p))
 
     results = []
@@ -1187,6 +1402,8 @@ def main(argv=None):
             beats_n = max(1, min(16, int(args.beats)))
         except Exception:
             beats_n = 4
+    if not isinstance(beats_n, (int, float)) or beats_n <= 0:
+        beats_n = 4                                  # 兜底：任何情况下都要给主流程一个数字
     args.beats = beats_n
     beats = float(args.beats) * 4.0 / float(args.beat_type)
 
@@ -1292,6 +1509,9 @@ def main(argv=None):
         "engine": "omr-classic",
         "mode": str(args.mode),
         "meters": meter_info,
+        # ★ M3-3：这一层做了什么要如实回报（倾斜几度、有没有按扫描件走、去了多少噪点）
+        "prep": str(getattr(args, "prep", "auto")),
+        "prepInfo": prep_info[:8],
     }
     emit("RESULT", stats)
     if args.report:

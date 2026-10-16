@@ -7,6 +7,10 @@ import { encodeMidi } from '../core/midi.js';
 import { t } from '../core/i18n.js';
 import { getAppVersion } from '../core/version.js';
 import { fmtTime } from '../core/util.js';
+// 立绘（全身，透明底）：用户要求「立绘放到工具里」—— 首页是工具内最大的静态位。
+// 小尺寸位（侧栏 38px、文档 nav 36px）用的是头像特写 build 出来的 assets/logo.png，
+// 立绘缩到那个尺寸只剩一条竖线，认不出人。
+import mascotUrl from '../assets/mascot.png';
 
 const app = useAppStore();
 const state = app;
@@ -125,6 +129,8 @@ async function openProject() {
         <div class="page-title">{{ t('首页工作区') }}</div>
         <div class="page-sub">{{ t('快速开始 · 最近曲目 · 播放状态') }}</div>
       </div>
+      <!-- 立绘：靠右、不参与点击（pointer-events: none），窄窗口自动隐藏 -->
+      <img class="home-mascot" :src="mascotUrl" alt="" aria-hidden="true" />
     </div>
 
     <div class="grid grid-3">

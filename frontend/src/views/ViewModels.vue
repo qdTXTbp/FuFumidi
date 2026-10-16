@@ -267,7 +267,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
               <span class="vm-size">{{ human(prog[m.id] && prog[m.id].received || m.size) }}</span>
             </template>
           </div>
-          <div v-if="prog[m.id] && prog[m.id].active" class="mini-bar"><i :style="{ width: (prog[m.id].percent || 0) + '%' }"></i></div>
+          <div v-if="prog[m.id] && prog[m.id].active" class="mini-bar"><i :style="{ transform: 'scaleX(' + (((prog[m.id].percent || 0)) / 100) + ')' }"></i></div>
         </div>
         <div v-if="!tabbedList.length" class="vm-empty">
           <div class="vm-empty-ic"><Icon name="box" :size="30" /></div>
@@ -303,7 +303,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
             <p class="vm-note">{{ detail.note }}</p>
 
             <div v-if="prog[detail.id] && prog[detail.id].active" class="vm-prog-box">
-              <div class="vm-prog-bar"><i :style="{ width: (prog[detail.id].percent || 0) + '%' }"></i></div>
+              <div class="vm-prog-bar"><i :style="{ transform: 'scaleX(' + (((prog[detail.id].percent || 0)) / 100) + ')' }"></i></div>
               <div class="vm-prog-txt">
                 <span class="pc">{{ (prog[detail.id].percent || 0) }}%</span>
                 <span v-if="prog[detail.id].speed">⚡ {{ speedTxt(prog[detail.id].speed) }}</span>
@@ -342,9 +342,9 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 .vm-dep-tip { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; padding: 9px 14px; border-radius: var(--radius-lg); border: 1px solid color-mix(in srgb, var(--brand-coral) 38%, transparent); background: color-mix(in srgb, var(--brand-coral) 11%, var(--surface)); color: var(--ink); font-size: 12.5px; font-weight: 700; line-height: 1.5; }
 .vm-dep-ic { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; border-radius: 50%; background: color-mix(in srgb, var(--brand-coral) 18%, transparent); color: var(--brand-coral); flex: none; }
 
-.vm-tab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border: 1px solid var(--hairline); border-radius: 999px; background: transparent; color: var(--steel); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background .15s, color .15s, border-color .15s; }
+.vm-tab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border: 1px solid var(--hairline); border-radius: 999px; background: transparent; color: var(--steel); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
 .vm-tab:hover { background: var(--surface-soft); color: var(--ink); }
-.vm-tab .tb-ic { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 50%; background: var(--surface-soft); color: var(--steel); transition: all .15s ease; }
+.vm-tab .tb-ic { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 50%; background: var(--surface-soft); color: var(--steel); transition: background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out), opacity var(--motion-fast) var(--ease-out); }
 .vm-tab.active { background: color-mix(in srgb, var(--brand-coral) 15%, var(--surface)); border-color: color-mix(in srgb, var(--brand-coral) 32%, transparent); color: var(--ink); }
 .vm-tab.active .tb-ic { background: color-mix(in srgb, var(--brand-coral) 18%, transparent); color: var(--brand-coral); }
 .vm-tab .tb-cnt { font-size: 10.5px; font-style: normal; background: var(--surface-soft); color: var(--stone); border-radius: 20px; padding: 0 7px; line-height: 16px; }
@@ -353,7 +353,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 /* ===== 卡片网格 ===== */
 .vm-import { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border: 1px dashed var(--hairline); border-radius: 10px; background: var(--surface-soft); }
 .vm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(238px, 1fr)); gap: 14px; }
-.vm-card { position: relative; overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--radius-lg); padding: 14px 16px 12px; background: var(--surface); cursor: pointer; display: flex; flex-direction: column; gap: 6px; min-height: 128px; transition: transform .18s cubic-bezier(.2,.7,.3,1), box-shadow .18s, border-color .18s; }
+.vm-card { position: relative; overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--radius-lg); padding: 14px 16px 12px; background: var(--surface); cursor: pointer; display: flex; flex-direction: column; gap: 6px; min-height: 128px; transition: transform var(--motion-base) var(--ease-out), box-shadow var(--motion-base) var(--ease-out), border-color var(--motion-base) var(--ease-out); }
 .vm-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg); border-color: color-mix(in srgb, var(--brand-coral) 40%, transparent); }
 .vm-card.inst { border-color: color-mix(in srgb, var(--ok, #22c55e) 45%, transparent); }
 .vm-card.down { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }
@@ -372,7 +372,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 
 .vm-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
 .vm-ic { display: inline-flex; width: 26px; height: 26px; align-items: center; justify-content: center; border-radius: 8px; background: var(--surface-soft); color: var(--brand-coral); font-size: 15px; }
-.vm-arch { font-size: 10.5px; font-weight: 600; color: var(--stone); text-transform: uppercase; letter-spacing: .2px; font-family: var(--mono); transition: color .15s; }
+.vm-arch { font-size: 10.5px; font-weight: 600; color: var(--stone); text-transform: uppercase; letter-spacing: .2px; font-family: var(--mono); transition: color var(--motion-fast) var(--ease-out); }
 .vm-card:hover .vm-arch { color: var(--brand-coral); }
 .vm-name { font-size: 13.5px; font-weight: 700; color: var(--ink); }
 .vm-name-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -385,7 +385,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 .pill.off { background: var(--surface-soft); color: var(--stone); }
 .vm-size { font-size: 11px; color: var(--stone); font-family: var(--mono); }
 .mini-bar { height: 4px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; margin-top: 4px; }
-.mini-bar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--brand-coral)); transition: width .2s linear; }
+.mini-bar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--brand-coral)); transition: transform var(--motion-base) var(--ease-out); }
 .vm-empty { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 56px 0; color: var(--stone); }
 .vm-empty-ic { opacity: .35; }
 
@@ -413,7 +413,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 /* ===== 进度 ===== */
 .vm-prog-box { margin-top: 8px; }
 .vm-prog-bar { height: 8px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; }
-.vm-prog-bar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--brand-coral)); transition: width .2s linear; }
+.vm-prog-bar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--brand-coral)); transition: transform var(--motion-base) var(--ease-out); }
 .vm-prog-txt { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--stone); margin-top: 6px; }
 .vm-prog-txt .pc { font-weight: 800; font-size: 13px; color: var(--ink); font-family: var(--mono); }
 .vm-prog-name { font-size: 12px; font-weight: 600; color: var(--ink); margin-bottom: 5px; }
@@ -427,13 +427,13 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 
 /* ===== 动画（整套应用风格：每次交互皆有流畅过渡） ===== */
 @keyframes vmUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
-.vm-card { animation: vmUp .42s cubic-bezier(.2, .7, .3, 1) both; }
+.vm-card { animation: vmUp var(--motion-slow) var(--ease-out) both; }
 .vmcard-empty { animation: none; }
-.vmfade-enter-active, .vmfade-leave-active { transition: opacity .16s ease, transform .16s ease; }
+.vmfade-enter-active, .vmfade-leave-active { transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
 .vmfade-enter-from, .vmfade-leave-to { opacity: 0; transform: translateY(6px); }
 /* 抽屉：右侧滑入滑出 */
-.dr-enter-active, .dr-leave-active { transition: opacity .26s ease; }
+.dr-enter-active, .dr-leave-active { transition: opacity var(--motion-base) var(--ease-out); }
 .dr-enter-from, .dr-leave-to { opacity: 0; }
-.dr-enter-active .vm-drawer, .dr-leave-active .vm-drawer { transition: transform .34s cubic-bezier(.2,.7,.3,1); }
+.dr-enter-active .vm-drawer, .dr-leave-active .vm-drawer { transition: transform var(--motion-slow) var(--ease-out); }
 .dr-enter-from .vm-drawer, .dr-leave-to .vm-drawer { transform: translateX(100%); }
 </style>

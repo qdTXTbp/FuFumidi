@@ -4,6 +4,20 @@
 'use strict';
 const Paths = require('./paths');
 
+/** 变谱的按页缓存目录会随每次整批跑增长（每页一份解析 JSON）—— 只留最近 8 个，其余删掉。
+ *  正在被引用的目录不会被删（重试发生在同一次会话里，8 个足够覆盖）。 */
+function pruneOmrRuns() {
+  try {
+    const root = Paths.cacheDir('omr');
+    const dirs = fs.readdirSync(root, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && /^run-/.test(d.name))
+      .map((d) => ({ p: path.join(root, d.name), t: fs.statSync(path.join(root, d.name)).mtimeMs }))
+      .sort((a, b) => b.t - a.t);
+    for (const d of dirs.slice(8)) { try { fs.rmSync(d.p, { recursive: true, force: true }); } catch (e) {} }
+  } catch (e) { /* 清理失败不影响转换 */ }
+}
+
+
 function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, spawnEngine }) {
   ipcMain.handle('score:exportPngZip', async (evt, opts) => {
     try {
@@ -165,14 +179,43 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
       // MusicXML 解析器一次只吃一个文件：多选时只转第一个并如实回报
       const multiOnlyFirst = kind === 'score' && items.length > 1;
 
+      pruneOmrRuns();
       const args = ['to-midi'];
       const feed = kind === 'score' ? inputs.slice(0, 1) : inputs;
       for (const p of feed) args.push('--in', p);
       args.push('--out', out, '--overlay', overlayDir);
       if (kind === 'raster') {
-        args.push('--beats', String(Math.max(1, Math.min(16, Number(opts.beats) || 4))));
+        // ★ 拍号 / 速度支持 'auto'：谱面自己写的优先，用户填了才覆盖。
+        //   以前这里无条件取 Number(opts.beats) || 4，引擎侧又只把它用在经典后端，
+        //   于是界面上「自动」这个选项无从表达、Audiveris 路径上更是完全没用。
+        const beatsRaw = String(opts.beats === undefined || opts.beats === null ? 'auto' : opts.beats);
+        args.push('--beats', beatsRaw === 'auto' ? 'auto'
+          : String(Math.max(1, Math.min(16, parseInt(beatsRaw, 10) || 4))));
         args.push('--beat-type', String([2, 4, 8, 16].includes(Number(opts.beatType)) ? Number(opts.beatType) : 4));
-        args.push('--tempo', String(Math.max(20, Math.min(300, Number(opts.tempo) || 120))));
+        const tempoRaw = String(opts.tempo === undefined || opts.tempo === null ? 'auto' : opts.tempo);
+        const tempoNum = Number(tempoRaw);
+        args.push('--tempo', (tempoRaw === 'auto' || !isFinite(tempoNum) || tempoNum <= 0)
+          ? 'auto' : String(Math.max(20, Math.min(300, tempoNum))));
+        // 识谱预处理（放大倍数 / 加粗）与后处理（量化 / 最短音符 / 去重）
+        const up = String(opts.upscale === undefined || opts.upscale === null ? 'auto' : opts.upscale);
+        args.push('--upscale', /^[0-9]+(\.[0-9]+)?$/.test(up) ? up : 'auto');
+        args.push('--thicken', opts.thicken ? 'on' : 'off');
+        // ★ M3-3 共用影像预处理层：off | auto（看着像扫描件/照片才上）| scan（强制）
+        //   auto 是默认 —— 干净印刷谱实测与旧路径逐像素一致，歪的/带阴影的才走新路径。
+        const prep = String(opts.prep || 'auto').toLowerCase();
+        args.push('--prep', ['off', 'auto', 'scan'].includes(prep) ? prep : 'auto');
+        // ★ M3-2 超分辨率：off | auto（只在谱表量不出来 / 行距 < 5px 时开）| on（强制）
+        const sr = String(opts.sr || 'auto').toLowerCase();
+        args.push('--sr', ['off', 'auto', 'on'].includes(sr) ? sr : 'auto');
+        const srExe = path.join(Paths.dataRoot(), 'omr', 'waifu2x', 'waifu2x-ncnn-vulkan.exe');
+        if (fs.existsSync(srExe)) args.push('--sr-exe', srExe);
+        const q = String(opts.quantize || 'off');
+        args.push('--quantize', ['off', '1/4', '1/8', '1/16', '1/32'].includes(q) ? q : 'off');
+        const mn = Number(opts.minNoteMs) || 0;
+        args.push('--min-note-ms', String(mn > 0 && mn <= 2000 ? mn : 0));
+        args.push('--dedupe', opts.dedupe === false ? 'off' : 'on');
+        // 移调乐器：默认写实际音高（Horn in F 差纯五度、Clarinet/Trumpet in Bb 差大二度）
+        args.push('--sounding', opts.sounding === false ? 'off' : 'on');
       }
       // 栅格一律走多后端调度层：装着 Audiveris 就用它（质量高一个量级），没装自动降级到自带经典识谱
       const script = kind === 'raster' ? 'engine_omr_backends.py' : 'engine_score2midi.py';
@@ -181,6 +224,23 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
         args.push('--mode', String(opts.mode || 'auto'));
         const avExe = path.join(Paths.dataRoot(), 'omr', 'audiveris', 'Audiveris', 'Audiveris.exe');
         if (fs.existsSync(avExe)) args.push('--audiveris', avExe);
+        // homr（用户自行安装，装在数据根下的独立 venv）：扫描件 / 拍照路径
+        const homrExe = path.join(Paths.dataRoot(), 'omr', 'homr', 'venv', 'Scripts', 'homr.exe');
+        if (fs.existsSync(homrExe)) args.push('--homr', homrExe);
+        /* ★ M2-4「一键重试该页」：给每次整批跑一个**稳定的 workdir**，引擎把每页解析结果
+           缓存在 <workdir>/pages/ 下；重试时把同一个 workdir 传回去，引擎只重跑那一页，
+           其余页从缓存读回，再整份重新合并（合并必须看到完整页集，否则拍号与跨页声部会变）。 */
+        const retryPage = Math.max(0, parseInt(opts.retryPage, 10) || 0);
+        let workdir = '';
+        try {
+          if (retryPage && typeof opts.workdir === 'string' && opts.workdir && fs.existsSync(opts.workdir)) {
+            workdir = opts.workdir;
+          } else {
+            workdir = path.join(Paths.cacheDir('omr'), 'run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6));
+          }
+        } catch (e) { workdir = ''; }
+        if (workdir) args.push('--workdir', workdir);
+        if (retryPage) args.push('--retry-page', String(retryPage));
       }
       const res = await new Promise((done) => {
         let settled = false;
@@ -196,7 +256,9 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
           onError: (e) => finish({ ok: false, error: String(e) }),
         });
       });
-      if (!res || !res.ok) return resolve({ ok: false, error: (res && res.error) || '转换失败', inputs: items, fileName: name, names, kind });
+      if (!res || !res.ok) return resolve({ ok: false, error: (res && res.error) || '转换失败',
+        errorCode: (res && res.code) || '', workdir: (res && res.workdir) || '',
+        inputs: items, fileName: name, names, kind });
       let bytes = null;
       try { bytes = fs.readFileSync(out).toString('base64'); } catch (e) { return resolve({ ok: false, error: '读回 MIDI 失败：' + String(e) }); }
       let overlays = [];
@@ -213,7 +275,8 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
       if (kind === 'raster') {
         pages = inputs.filter((p) => { try { return fs.existsSync(p); } catch (e) { return false; } });
       }
-      resolve({ ok: true, kind, info: res, bytes, overlays, pages, sourcePath: (feed[0] || ''), fileName: name, names });
+      resolve({ ok: true, kind, info: res, bytes, overlays, pages, workdir: (res && res.workdir) || '',
+        sourcePath: (feed[0] || ''), fileName: name, names });
     })().catch((e) => resolve({ ok: false, error: String((e && e.message) || e) }));
   }));
 }

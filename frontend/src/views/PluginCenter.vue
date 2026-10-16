@@ -276,7 +276,7 @@ onBeforeUnmount(() => { if (offLog) { try { offLog(); } catch (e) {} offLog = nu
 .pc-net { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin: 10px 0 4px;
   border: 1px solid var(--line); border-radius: 10px;
   background: linear-gradient(100deg, color-mix(in srgb, #5ac8fa 12%, transparent), transparent 62%);
-  animation: pcNetIn 0.34s cubic-bezier(0.22, 0.7, 0.24, 1) both; }
+  animation: pcNetIn var(--motion-slow) var(--ease-out) both; }
 @keyframes pcNetIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 .pc-net-ic { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
   background: color-mix(in srgb, #5ac8fa 20%, transparent); color: #7fd4ff; flex: none; }
@@ -323,9 +323,9 @@ onBeforeUnmount(() => { if (offLog) { try { offLog(); } catch (e) {} offLog = nu
 .pc-inst-info small { color: var(--slate); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pc-switch { position: relative; width: 36px; height: 20px; flex: none; cursor: pointer; }
 .pc-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
-.pc-switch span { position: absolute; inset: 0; border-radius: 20px; background: var(--hairline); transition: background .15s; }
+.pc-switch span { position: absolute; inset: 0; border-radius: 20px; background: var(--hairline); transition: background var(--motion-fast) var(--ease-out); }
 .pc-switch span::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
-                         background: var(--canvas); transition: transform .15s; }
+                         background: var(--canvas); transition: transform var(--motion-fast) var(--ease-out); }
 .pc-switch input:checked + span { background: var(--brand-coral); }
 .pc-switch input:checked + span::after { transform: translateX(16px); }
 .pc-log-head { margin: 16px 0 6px; font-size: 12.5px; font-weight: 600; }

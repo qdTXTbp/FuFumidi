@@ -4,11 +4,23 @@ import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
 import { getPlayer, getCtx, getSynth } from '../audio.js';
 import { t } from '../core/i18n.js';
+import { playbackPrefs } from '../core/playback_prefs.js';
+import { useSettingsStore } from '../stores/settings';
 import { GM_INSTRUMENTS, gmByProgram } from '../core/gmInstruments.js';
 import { initMidiOutput, setMidiOutEnabled, midiOutOn, midiOutOff, midiAllOff, getMidiOutDeviceName } from '../core/midiout.js';
 import NumSlider from './NumSlider.vue';
 
 const app = useAppStore();
+const settingsStore = useSettingsStore();
+
+/* 跳过空白片段：用户 2026-10-14 定「默认关，但给一个显眼的开关」——
+   所以它常驻在播放栏（和循环/节拍器同排），一点即用，不必进设置页。 */
+function toggleSkipSilence() {
+  playbackPrefs.skipSilence = !playbackPrefs.skipSilence;
+  app.applyPlaybackPrefs();
+  try { settingsStore.save({ skip_silence: playbackPrefs.skipSilence }); } catch (e) {}
+  app.toast(playbackPrefs.skipSilence ? t('跳空白：开') : t('跳空白：关'));
+}
 const state = app;
 const isAudio = computed(() => state.isAudio);
 const currentSong = computed(() => app.currentSong);
@@ -18,7 +30,6 @@ const togglePlay = () => app.togglePlay();
 const stopPlay = () => app.stopPlay();
 const seekRatio = (r) => app.seekRatio(r);
 const setTempo = (v) => app.setTempo(v);
-const toggleLoop = () => app.toggleLoop();
 const toggleMetro = () => app.toggleMetro();
 const setVolume = (v) => app.setVolume(v);
 const selectSong = (id) => app.selectSong(id);
@@ -46,6 +57,36 @@ function onProgressInput(e) {
   dragRatio.value = r;
   seekRatio(r);
 }
+
+/* ---------------- 进度条悬停预览（用户 2026-10-14 要求，仿参考截图） ----------------
+   鼠标掠过进度条时：在指针上方给出「落点时间 (-剩余) / 总长」，并在条上落一根竖线。
+   拖动过程中同样显示（拖动本身就是 pointermove）。纯展示层，不碰播放/跳转逻辑。
+   时长格式：≥1 小时用 h:mm:ss（截图里的 2:00:31 / -1:41:48），否则 m:ss。 */
+const hoverRatio = ref(-1);      // < 0 = 没在悬停
+const hoverTipPct = ref(50);     // 气泡位置（已按气泡半宽夹过，贴边不溢出）
+const TIP_HALF = 78;             // 气泡半宽上限（px）
+function fmtClock(sec) {
+  const s = Math.max(0, Math.floor(isFinite(sec) ? sec : 0));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+  const mm = h > 0 ? String(m).padStart(2, '0') : String(m);
+  return (h > 0 ? h + ':' : '') + mm + ':' + String(ss).padStart(2, '0');
+}
+const hoverTip = computed(() => {
+  const d = state.totalSec || 0;
+  if (hoverRatio.value < 0 || d <= 0) return '';
+  const at = Math.max(0, Math.min(1, hoverRatio.value)) * d;
+  return fmtClock(at) + ' (-' + fmtClock(Math.max(0, d - at)) + ') / ' + fmtClock(d);
+});
+function onProgressHover(e) {
+  const el = e.currentTarget;
+  const rect = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+  if (!rect || !rect.width) return;
+  const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+  hoverRatio.value = x / rect.width;
+  const half = Math.min(TIP_HALF, rect.width / 2);
+  hoverTipPct.value = (Math.min(Math.max(x, half), rect.width - half) / rect.width) * 100;
+}
+function onProgressLeave() { hoverRatio.value = -1; }
 
 function stepTempo(d) { setTempo(Math.round((state.tempo + d) * 100) / 100); }
 
@@ -132,8 +173,8 @@ function next() {
   app.skip(1);
 }
 const playMode = computed(() => state.playMode || 'order');
-const modeIcon = computed(() => ({ order: 'modeOrder', shuffle: 'shuffle', repeatOne: 'repeat1', loopAll: 'refresh' }[playMode.value] || 'modeOrder'));
-const modeTitle = computed(() => ({ order: t('顺序播放'), shuffle: t('随机播放'), repeatOne: t('单曲循环'), loopAll: t('列表循环') }[playMode.value] || t('播放模式')));
+const modeIcon = computed(() => ({ order: 'modeOrder', once: 'modeOnce', shuffle: 'shuffle', repeatOne: 'repeat1', loopAll: 'refresh' }[playMode.value] || 'modeOrder'));
+const modeTitle = computed(() => ({ order: t('顺序播放'), once: t('播完就停'), shuffle: t('随机播放'), repeatOne: t('单曲循环'), loopAll: t('列表循环') }[playMode.value] || t('播放模式')));
 function cycleMode() { app.cyclePlayMode(); }
 
 /* ---------------- 书签 & 睡眠定时 ---------------- */
@@ -244,13 +285,21 @@ function toggleCrossfade() {
       <div class="pb-time"><span>{{ curStr }}</span><span>{{ totalStr }}</span></div>
       <input id="pb-progress" name="pb-progress" type="range" :aria-label="t('播放进度')" min="0" max="1" step="0.0001" :style="pbStyle" :value="displayProgress"
              @pointerdown="onProgressDragStart" @pointerup="onProgressDragEnd" @pointercancel="onProgressDragEnd"
+             @pointerenter="onProgressHover" @pointermove="onProgressHover" @pointerleave="onProgressLeave"
              @input="onProgressInput">
+      <!-- ★ 悬停预览（用户 2026-10-14 要求，仿参考截图）：竖线落在指针处，气泡在正上方 -->
+      <template v-if="hoverRatio >= 0 && hoverTip">
+        <span class="pb-hoverline" :style="{ left: (hoverRatio * 100) + '%' }" aria-hidden="true"></span>
+        <span class="pb-hovertip" :style="{ left: hoverTipPct + '%' }">{{ hoverTip }}</span>
+      </template>
     </div>
 
     <div class="pb-right">
       <button class="tp-btn" data-guide="pb-midiout" :class="{ 'toggle-on': midiOn }" :title="t('MIDI 硬件输出')" :aria-label="t('MIDI 硬件输出')" @click="toggleMidiOut"><Icon name="music" :size="16" /></button>
-      <button class="tp-btn" data-guide="pb-loop" :class="{ 'toggle-on': state.loop }" :title="t('循环播放')" :aria-label="t('循环播放')" @click="toggleLoop" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="loop" :size="16" /></button>
-      <button class="tp-btn" data-guide="pb-metro" :class="{ 'toggle-on': state.metro }" :title="t('节拍器')" :aria-label="t('节拍器')" @click="toggleMetro" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="metro" :size="16" /></button>
+      <button class="tp-btn" data-guide="pb-skip-silence" :class="{ 'toggle-on': playbackPrefs.skipSilence }"
+              :title="t('跳过空白片段（没有音符的段落自动跳过）')" :aria-label="t('跳过空白片段')"
+              @click="toggleSkipSilence" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="skipGap" :size="16" /></button>
+<button class="tp-btn" data-guide="pb-metro" :class="{ 'toggle-on': state.metro }" :title="t('节拍器')" :aria-label="t('节拍器')" @click="toggleMetro" :disabled="isAudio" :style="isAudio ? { opacity: .4 } : null"><Icon name="metro" :size="16" /></button>
       <button class="tp-btn" data-guide="pb-mixer" :class="{ 'toggle-on': mixerOpen }" :title="t('混音台')" :aria-label="t('混音台')" @click="mixerOpen = !mixerOpen" :disabled="isAudio || !state.tracks.length" :style="isAudio ? { opacity: .4 } : null"><Icon name="cclane" :size="16" /></button>
       <button class="tp-btn" data-guide="pb-fx" :class="{ 'toggle-on': fxOpen || fx.enabled }" :title="t('音效调节')" :aria-label="t('音效调节')" @click="toggleFxOpen"><Icon name="cresc" :size="16" /></button>
       <button class="tp-btn" :class="{ 'toggle-on': compact }" :title="t('紧凑/完整播放栏')" :aria-label="t('紧凑/完整播放栏')" @click="compact = !compact"><Icon name="menu" :size="16" /></button>
@@ -501,6 +550,21 @@ function toggleCrossfade() {
   background: linear-gradient(90deg, var(--ink) 0%, var(--ink) var(--fill, 0%), var(--hairline) var(--fill, 0%));
 }
 .mx-card input[type="range"]::-webkit-slider-thumb { background: #fff; border-color: var(--ink); }
+
+/* 进度条悬停预览（仿参考截图）：白底深字气泡 + 落点竖线；纯展示，不挡指针 */
+.pb-progress { position: relative; }
+.pb-hoverline {
+  position: absolute; bottom: -3px; width: 2px; height: 10px;
+  background: rgba(255, 255, 255, 0.9); border-radius: 1px;
+  transform: translateX(-1px); pointer-events: none;
+}
+.pb-hovertip {
+  position: absolute; bottom: calc(100% - 2px); transform: translateX(-50%);
+  background: #fff; color: #111; border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 6px; padding: 3px 8px; font-size: 12px; line-height: 1.2;
+  font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); z-index: 6;
+}
 
 /* 紧凑播放栏 */
 .playerbar.compact .pb-title { display: none; }

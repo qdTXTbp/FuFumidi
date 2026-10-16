@@ -396,7 +396,7 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
           <!-- ★ 磁盘上有文件但不合格（旧版本/截断/过大）：说清要重新下载，别让「启用」点下去才失败 -->
           <div v-if="item.stale" class="sf-tile-note">{{ t('检测到旧版文件（') + fmtSize(item.size) + t('），需重新下载') }}</div>
           <div class="sf-tile-bar" v-if="prog[item.id] && prog[item.id].active">
-            <div class="sf-tile-fill" :style="{ width: (prog[item.id].percent || 0) + '%' }"></div>
+            <div class="sf-tile-fill" :style="{ transform: 'scaleX(' + (((prog[item.id].percent || 0)) / 100) + ')' }"></div>
           </div>
           <div class="sf-tile-err" v-else-if="prog[item.id] && prog[item.id].error">{{ prog[item.id].error }}</div>
           <div class="sf-tile-note" v-else-if="prog[item.id] && prog[item.id].notice">{{ prog[item.id].notice }}</div>
@@ -503,7 +503,7 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
 .sf-tile {
   border: 1px solid var(--hairline); border-radius: 12px; padding: 12px 14px;
   background: color-mix(in srgb, var(--surface-soft) 45%, transparent);
-  display: flex; flex-direction: column; gap: 7px; transition: border-color 0.15s, box-shadow 0.15s;
+  display: flex; flex-direction: column; gap: 7px; transition: border-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out);
 }
 .sf-tile.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .sf-tile-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
@@ -519,13 +519,13 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
 .sf-tile-actions .btn.danger { flex: 0 1 auto; }
 .sf-pct { font-size: 11.5px; color: var(--accent); font-variant-numeric: tabular-nums; }
 .sf-tile-bar { height: 5px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; }
-.sf-tile-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.15s linear; }
+.sf-tile-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: transform var(--motion-base) var(--ease-out); }
 .sf-tile-err { font-size: 10.5px; color: var(--error); word-break: break-all; }
 .sf-busy-mask { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--canvas) 55%, transparent); backdrop-filter: blur(2px); }
 /* 加载遮罩淡入淡出 */
-.fade-enter-active, .fade-leave-active { transition: opacity .18s ease; }
+.fade-enter-active, .fade-leave-active { transition: opacity var(--motion-base) var(--ease-out); }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
-.sf-busy-box { display: flex; align-items: center; gap: 10px; background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 600; padding: 14px 20px; border-radius: 12px; border: 1px solid var(--hairline); box-shadow: 0 8px 30px rgba(0,0,0,0.14); animation: sf-busy-pulse 1.2s ease-in-out infinite; }
+.sf-busy-box { display: flex; align-items: center; gap: 10px; background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 600; padding: 14px 20px; border-radius: 12px; border: 1px solid var(--hairline); box-shadow: 0 8px 30px rgba(0,0,0,0.14); animation: sf-busy-pulse 1.2s var(--ease-in-out) infinite; }
 @keyframes sf-busy-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
 .sf-overlimit { font-size: 11.5px; color: var(--stone); align-self: center; }
 .sf-tile-note { font-size: 11.5px; color: var(--stone); }

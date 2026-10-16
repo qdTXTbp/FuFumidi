@@ -153,6 +153,9 @@ def _resolve_params(args, mode):
         if args.tempo is not None: p["midi_tempo"] = args.tempo
     # 智能预处理 / 后处理开关（各模式通用，Electron 端传入）
     if getattr(args, "denoise", False): p["denoise"] = True
+    # 降噪档位（off/light/strong）——只在 worker 的 Namespace 里加是不够的，必须在这里进 params
+    # （2026-10-15：这张"三跳"表漏一个键，界面设了也到不了引擎；见 scripts/audit-param-contract.cjs）
+    if getattr(args, "denoise_mode", None): p["denoise_mode"] = str(args.denoise_mode)
     if getattr(args, "normalize", False): p["normalize"] = True
     if getattr(args, "auto_bpm", False): p["auto_bpm"] = True
     if getattr(args, "no_merge", False): p["merge_overlap"] = False
@@ -175,6 +178,17 @@ def _resolve_params(args, mode):
     # 这里显式取出，命令行与 worker 两条路径才都能覆盖它。
     _mh = getattr(args, "max_note_hold", None)
     if _mh is not None: p["max_note_hold"] = float(_mh)
+    # ⑤ 静音分段（仅 muscriptor 用到，默认 off）：这里显式取出，命令行与 worker 两条路径
+    #    才都能覆盖它（同上面几条的坑：只在 worker 的 Namespace 里加是不够的）。
+    _ss = getattr(args, "segment_silence", None)
+    if _ss: p["segment_silence"] = str(_ss).lower()
+    for _k in ("silence_db", "min_silence", "max_segment", "segment_pad"):
+        _v = getattr(args, _k, None)
+        if _v is not None:
+            try:
+                p[_k] = float(_v)
+            except (TypeError, ValueError):
+                pass
     # ① 回放台（仅 muscriptor 用到，开发/诊断用，界面不暴露）：
     #   --dump-tokens   真实转录时把 token 流顺手落盘（JSONL，几 MB）
     #   --replay-tokens 从落盘流重跑解码器（不加载模型、不用 GPU）
@@ -434,6 +448,8 @@ def build_parser():
     g.add_argument("--frame-threshold", type=float, default=None,
                    help="音符判定阈值 0~1，越大越干净")
     g.add_argument("--denoise", action="store_true", help="智能预处理·谱减法降噪")
+    g.add_argument("--denoise-mode", choices=["off", "light", "strong"], default=None,
+                   help="降噪档位：off=关 / light=改进谱减法 / strong=去噪模型（见 engine/audio_chain.py）")
     g.add_argument("--normalize", action="store_true", help="智能预处理·响度平衡")
     g.add_argument("--auto-bpm", action="store_true", help="自动检测 BPM 作为导出速度")
     g.add_argument("--no-merge", action="store_true", help="关闭重叠音符合并")
@@ -449,6 +465,19 @@ def build_parser():
     g.add_argument("--no-melodia", action="store_true", help="关闭旋律增强")
     g.add_argument("--beat-grid", action="store_true",
                    help="[muscriptor] 加载 Beat This! 权重做节拍网格检测（未下载/失败时自动跳过）")
+    # 静音分段（长音频提速）：默认 off。auto = 时长 ≥5 分钟且预计省 ≥3% 才启用。
+    # 见 engine/segmenter.py —— 只在"完全空白静音"（默认 −60 dBFS）上切，切在静音中点。
+    g.add_argument("--segment-silence", dest="segment_silence", default="off",
+                   choices=["off", "auto", "on"],
+                   help="[muscriptor] 静音分段转录（长音频提速）：off=关(默认) / auto=划算才开 / on=强制")
+    g.add_argument("--silence-db", dest="silence_db", type=float, default=None,
+                   help="[muscriptor] 判定\"完全空白静音\"的帧 RMS 阈值（默认 0.001 ≈ −60 dBFS）")
+    g.add_argument("--min-silence", dest="min_silence", type=float, default=None,
+                   help="[muscriptor] 连续静音多久才值得切（秒，默认 2.0）")
+    g.add_argument("--max-segment", dest="max_segment", type=float, default=None,
+                   help="[muscriptor] 单段最长秒数（默认 600，超了在最安静处再切）")
+    g.add_argument("--segment-pad", dest="segment_pad", type=float, default=None,
+                   help="[muscriptor] 每段前后多带的上下文秒数（默认 1.0）")
     g.add_argument("--muscriptor-instruments", dest="muscriptor_instruments", default=None,
                    help="[muscriptor] 乐器组硬约束：逗号分隔的组名（voice / acoustic_piano /"
                         " clean_electric_guitar / synth_lead / flutes / organ / drums …，"
@@ -470,7 +499,7 @@ def build_parser():
     g.add_argument("--replay-tokens", dest="replay_tokens", default=None, metavar="FILE",
                    help="[诊断] 从落盘的 token 流重跑解码器（不加载模型/不用 GPU，约 1 分钟）")
     g.add_argument("--max-note-hold", dest="max_note_hold", type=float, default=None,
-                   help="[muscriptor] 超长音符上限（秒，默认 15，0=关闭）：超过就强制收尾，"
+                   help="[muscriptor] 超长音符上限（秒，默认 0=不截断）：超过就强制收尾（硬保险，会误伤真实长音；"
                         "治长音频转录的僵尸音符（实测 100 分钟录播里出现 4320 秒的音）")
     g.add_argument("--tempo", type=int, default=None, help="MIDI 速度 BPM（默认 120）")
     g.add_argument("--with-drums", action="store_true",
@@ -526,6 +555,7 @@ def cmd_worker():
                 min_note_ms=req.get('min_note_ms'),
                 merge_gap_ms=req.get('merge_gap_ms'),
                 denoise=bool(req.get('denoise')),
+        denoise_mode=req.get('denoise_mode'),
                 normalize=bool(req.get('normalize')),
                 auto_bpm=bool(req.get('auto_bpm')),
                 no_merge=bool(req.get('no_merge')),
@@ -553,6 +583,12 @@ def cmd_worker():
                 # 超长音符上限：漏了这一项时主进程设了也到不了引擎（同上面两条的坑），
                 # 引擎会一直用默认 15s。
                 max_note_hold=req.get('max_note_hold'),
+                # ⑤ 静音分段（漏一项界面勾了也到不了引擎）
+                segment_silence=req.get('segment_silence'),
+                silence_db=req.get('silence_db'),
+                min_silence=req.get('min_silence'),
+                max_segment=req.get('max_segment'),
+                segment_pad=req.get('segment_pad'),
                 # ④ 批 B：MuScriptor 生成参数（漏一项界面调了也不生效 —— 同上面几条的坑）
                 temperature=req.get('temperature'),
                 cfg_coef=req.get('cfg_coef'),

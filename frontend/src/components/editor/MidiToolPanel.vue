@@ -187,7 +187,7 @@ watch(() => props.open, (v) => {
   border: 1px solid var(--hairline); border-radius: 10px; padding: 8px; background: var(--surface-soft); }
 .mtp-grp-h { font-size: 10.5px; font-weight: 700; color: var(--stone); letter-spacing: .02em; margin: 2px 0 3px; }
 .mtp-item { display: block; width: 100%; text-align: left; padding: 5px 8px; border: 1px solid transparent; border-radius: 7px;
-  background: transparent; color: var(--ink); font-size: 12px; cursor: pointer; transition: background .14s ease, border-color .14s ease; }
+  background: transparent; color: var(--ink); font-size: 12px; cursor: pointer; transition: background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
 .mtp-item:hover { background: var(--canvas); }
 .mtp-item.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .mtp-form { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }

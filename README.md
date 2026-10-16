@@ -87,6 +87,7 @@ The engine layer is spread across a small family of Python modules so a specific
 
 - `engine/engine.py` - front door and dispatch.
 - `engine/engine_basic.py`, `engine/engine_muscriptor.py`, `engine/engine_aria.py`, `engine/engine_pt.py`, `engine/engine_transkun.py` - per-model inference; `engine/engine_msst.py` - MSST source separation.
+- `engine/pause_gate.py` - the file-flag pause/resume gate shared by every streaming transcriber (MuScriptor token stream, basic-pitch window generator, the batched piano forward loop).
 - `engine/engine_gpu.py` - CUDA / DirectML selection and fallback.
 - `engine/smart_midi.py` - post-transcription correction and smart cleanup.
 - `engine/midi_post.py`, `engine/midi_edit.py` - shared MIDI utilities used by the editor and by plugins.

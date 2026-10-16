@@ -57,3 +57,47 @@
   并且**把生成物取回来读一遍**，不要只看模板源码。
 - **`/D=` 路径参数必须裸写且放最后**（NSIS）：含中文的安装路径要先把整串参数拼好再传，
   不能交给参数数组逐个引用。
+
+## E. 引擎运行时（Python）
+
+### E1 两份 Python 合并成一份 —— 候选 3.12，**等用户有空再动**（2026-10-14 取证，未开工）
+
+**现状**
+
+| 运行时 | 位置 | 体积 | 版本 |
+|---|---|---|---|
+| 主运行时 | `resources/python`（安装版也只有这一份） | 仓库 1,239 MB / 安装版 1,686 MB | 3.11.12 |
+| ROCm 备运行时 | `resources/python312`（仓库有、安装版没有） | 1,573 MB | 3.12.10 |
+
+`main.js` 只在启用 AMD ROCm 时切到 3.12（要求 `.fufumidi-engine-ready` 标记）—— ROCm 轮子是 cp312，
+那份 3.12 就是为它准备的。
+
+**3.12 那份是完整的**：`node scripts/bundle-python312.js --check` →
+universal / piano / separate / muscriptor / aria / transkun 六组能力全 ok（实测）。
+
+**为什么不是 3.13（先测再下结论）**
+
+| 组件 | cp312 | cp313 |
+|---|---|---|
+| torch CUDA cu128（download.pytorch.org/whl/cu128） | ✓ | ✓ |
+| Intel XPU torch / torchaudio `+xpu`（whl/xpu） | ✓ | ✓ |
+| ROCm Windows（`repo.radeon.com/rocm/windows/rocm-rel-7.2`） | ✓（官方仓只有 cp312） | 未见 |
+| `torch-directml` + 它钉死的 `torch==2.4.1` | ✓ | **✗** |
+
+`torch-directml` 最后一版 `0.2.5.dev240914` 只有 cp310/cp311/cp312 轮子，且 `requires` 钉死
+`torch==2.4.1`；torch 2.4.1 的 win_amd64 轮子止于 cp312（实测 PyPI 清单）。
+DirectML 是 A 卡 / I 卡没有 CUDA 时的兜底 GPU 路径 —— 换 3.13 等于砍掉它。
+
+**结论：要合并就选 3.12（四条 GPU 路径全通），不选 3.13。**
+
+**改动清单（等指令再开工）**
+
+1. `scripts/bundle-python312.js`：装配目标从 `resources/python312` 改成 `resources/python`，去掉"备运行时"语义；
+2. `main.js`：删掉 `bundledPython312()` 与就绪标记分支，只留一份运行时；
+3. `electron-builder.yml` / `electron-builder.local-dir.yml`：只打 `resources/python`；
+4. GPU 包的 `requirements-gpu-*.txt` 按 cp312 重钉（cu128 cp312 ✓、torch 2.4.1 cp312 ✓、xpu cp312 ✓，ROCm 不变）；
+5. i18n 里"ROCm 需 Python 3.12 引擎运行时"那几条文案随之作废；
+6. **先 A/B 再替换**：同一段音频分别用 3.11 / 3.12 转一遍比对（两份的依赖版本差一档：
+   torch 2.13.0 → 2.14.1、numpy 1.26.4 → 2.5.4、librosa 0.11.0 → 1.0.0）；
+   确认产出可比之后，再替换安装版里 1.7 GB 的 `resources/python` 并跑冒烟。
+

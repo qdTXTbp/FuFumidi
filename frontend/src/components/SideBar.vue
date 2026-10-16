@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, nextTick } from 'vue';
 import Icon from './Icon.vue';
 import CloudUserDialog from './CloudUserDialog.vue';
 import { useAppStore, SIDEBAR_DEFAULT_W, SIDEBAR_MIN_W } from '../stores/app';
@@ -9,6 +9,7 @@ import logoUrl from '../assets/logo.png';
 import { t } from '../core/i18n.js';
 import { getAppVersion } from '../core/version.js';
 import { fmtTime } from '../core/util.js';
+import { fitMenu } from '../core/menu.js';
 
 const app = useAppStore();
 const state = app;
@@ -216,45 +217,51 @@ function bmDragEnd() { bmDragId.value = null; bmDragOverId.value = null; }
 
 /* ---------------- 歌单右键菜单 ---------------- */
 const plMenu = ref(null); // { x, y, pl }
+/* ★ 落点按**真实尺寸**夹（旧版猜 130/246 高：菜单一变长，底部就落到窗口外点不到，
+   用户 2026-10-14 报的就是这个）。见 core/menu.js。 */
+const plMenuEl = ref(null);
+const plMenuPos = ref(null);
+const songMenuEl = ref(null);
+const songMenuPos = ref(null);
+async function placeMenu(el, pos, m) {
+  await nextTick();
+  const p = fitMenu(el.value, m.x, m.y);
+  if (p) pos.value = p;
+}
 function openPlMenu(e, pl) {
   plMenu.value = { x: e.clientX, y: e.clientY, pl };
+  plMenuPos.value = null;
+  placeMenu(plMenuEl, plMenuPos, plMenu.value);
 }
-function closePlMenu() { plMenu.value = null; }
+function closePlMenu() { plMenu.value = null; plMenuPos.value = null; }
 function plMenuStyle() {
-  const m = plMenu.value;
-  if (!m) return {};
-  const w = Math.min(180, window.innerWidth - 8);
-  const h = Math.min(130, window.innerHeight - 8);
-  return { left: Math.max(4, Math.min(m.x, window.innerWidth - w)) + 'px', top: Math.max(4, Math.min(m.y, window.innerHeight - h)) + 'px' };
+  const p = plMenuPos.value;
+  return p ? { left: p.left + 'px', top: p.top + 'px' } : { left: '0px', top: '0px', visibility: 'hidden' };
 }
 
 /* ---------------- 曲目列表右键菜单（二级界面） ---------------- */
 const SONG_MENU_W = 186;
-const SONG_MENU_H = 246;
 const SONG_SUB_W = 168;
 const songMenu = ref(null);   // { x, y, s }
 const songSub = ref(false);   // 「添加到歌单」子菜单是否展开
 function openSongMenu(e, s) {
   songMenu.value = { x: e.clientX, y: e.clientY, s };
   songSub.value = false;
+  songMenuPos.value = null;
+  placeMenu(songMenuEl, songMenuPos, songMenu.value);
   // 批量模式下右键任意一行，先把它纳入勾选集合，菜单随后可直接操作
   if (playlist.batchOn && !batchIsSel(s.id)) batchToggle(s.id);
 }
-function closeSongMenu() { songMenu.value = null; songSub.value = false; }
+function closeSongMenu() { songMenu.value = null; songSub.value = false; songMenuPos.value = null; }
 function songMenuStyle() {
-  const m = songMenu.value;
-  if (!m) return {};
-  return {
-    left: Math.max(4, Math.min(m.x, window.innerWidth - SONG_MENU_W - 8)) + 'px',
-    top: Math.max(4, Math.min(m.y, window.innerHeight - SONG_MENU_H - 8)) + 'px',
-  };
+  const p = songMenuPos.value;
+  return p ? { left: p.left + 'px', top: p.top + 'px' } : { left: '0px', top: '0px', visibility: 'hidden' };
 }
-/** 子菜单是否向左弹出（贴近视口右缘时） */
+/** 子菜单是否向左弹出（贴近视口右缘时）：按**实际落点**算，不再按猜测宽度 */
 const songSubFlip = computed(() => {
-  const m = songMenu.value;
-  if (!m) return false;
-  const left = Math.max(4, Math.min(m.x, window.innerWidth - SONG_MENU_W - 8));
-  return left + SONG_MENU_W + SONG_SUB_W > window.innerWidth;
+  const p = songMenuPos.value;
+  if (!p) return false;
+  return p.left + SONG_MENU_W + SONG_SUB_W > window.innerWidth;
 });
 /** 右键菜单内直接加入指定歌单（不经过「添加到歌单」弹窗） */
 function songMenuAddTo(plId) {
@@ -849,7 +856,7 @@ const showAuth = ref(false);
     <!-- 歌单右键菜单 -->
     <Transition name="ov">
       <div v-if="plMenu" class="pl-ctx-mask" @click.self="closePlMenu" @contextmenu.prevent="closePlMenu">
-        <div class="pl-ctx-menu" :style="plMenuStyle()">
+        <div ref="plMenuEl" class="pl-ctx-menu" :style="plMenuStyle()">
           <button class="pl-ctx-item" @click="openBatchManager(plMenu.pl); closePlMenu()">{{ t('批量管理歌单') }}</button>
           <button class="pl-ctx-item" @click="openRename(plMenu.pl); closePlMenu()">{{ t('重命名') }}</button>
           <button class="pl-ctx-item danger" @click="deletePl(plMenu.pl); closePlMenu()">{{ t('删除歌单') }}</button>
@@ -860,7 +867,7 @@ const showAuth = ref(false);
     <!-- 曲目右键菜单（二级界面：曲目列表） -->
     <Transition name="ov">
       <div v-if="songMenu" class="pl-ctx-mask" @click.self="closeSongMenu" @contextmenu.prevent="closeSongMenu">
-        <div class="pl-ctx-menu song-ctx" :style="songMenuStyle()">
+        <div ref="songMenuEl" class="pl-ctx-menu song-ctx" :style="songMenuStyle()">
           <button class="pl-ctx-item" @click="playSong(songMenu.s.id); closeSongMenu()">{{ t('播放') }}</button>
           <div class="ctx-sub-wrap" @mouseenter="songSub = true" @mouseleave="songSub = false">
             <button class="pl-ctx-item ctx-has-sub" @click="openAddToPl(songMenu.s.id); closeSongMenu()">
@@ -964,9 +971,9 @@ const showAuth = ref(false);
 .si-fav { color: var(--stone); font-size: 13px; }
 .si-fav.on { color: var(--amber); }
 /* 歌曲列表容器：拖拽高亮动画（上游 v3.0.0 恢复） */
-.song-list { min-height: 18px; border-radius: 10px; transition: box-shadow .12s, background .12s; }
+.song-list { min-height: 18px; border-radius: 10px; transition: box-shadow var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out); }
 .song-list.drag-active { box-shadow: inset 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
-.si-drag { display: inline-flex; align-items: center; color: var(--stone); cursor: grab; opacity: .35; margin-right: 2px; transition: opacity .12s; user-select: none; }
+.si-drag { display: inline-flex; align-items: center; color: var(--stone); cursor: grab; opacity: .35; margin-right: 2px; transition: opacity var(--motion-fast) var(--ease-out); user-select: none; }
 .song-item:hover .si-drag, .song-item.dragging .si-drag { opacity: 1; }
 .song-item.dragging { opacity: .45; }
 .song-item.dragTarget { background: var(--surface-soft); box-shadow: inset 0 0 0 1px var(--accent); }
@@ -976,9 +983,9 @@ const showAuth = ref(false);
 .pl-hint { padding: 0 12px 2px; font-size: 10.5px; color: var(--stone); }
 .pl-new { display: flex; align-items: center; gap: 6px; padding: 4px 12px; }
 /* 歌单列表容器：拖拽高亮动画（上游 v3.0.0 恢复） */
-.pl-list { display: flex; flex-direction: column; gap: 2px; padding: 2px; margin-bottom: 6px; border: 1px solid transparent; border-radius: 10px; transition: box-shadow .12s, background .12s; }
+.pl-list { display: flex; flex-direction: column; gap: 2px; padding: 2px; margin-bottom: 6px; border: 1px solid transparent; border-radius: 10px; transition: box-shadow var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out); }
 .pl-list:has(.pl-item.dragging) { box-shadow: inset 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 5%, transparent); }
-.pl-item { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: var(--radius-sm); font-size: 13px; color: var(--charcoal); cursor: pointer; border: 1px solid transparent; transition: background 0.12s, color 0.12s, border-color 0.12s, box-shadow 0.12s; }
+.pl-item { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: var(--radius-sm); font-size: 13px; color: var(--charcoal); cursor: pointer; border: 1px solid transparent; transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out); }
 /* 智能入口 2×2 网格：全部曲目/收藏/最近播放/最常播放 两两并置，精简面板高度 */
 .pl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 0 8px; margin-bottom: 4px; }
 .pl-grid .pl-item { padding: 6px 9px; gap: 6px; font-size: 12px; min-width: 0; }
@@ -993,9 +1000,9 @@ const showAuth = ref(false);
 .pl-item.on .pl-key { border-color: var(--brand-blue); color: var(--brand-blue-deep); }
 .pl-item em { font-style: normal; font-size: 11px; color: var(--stone); font-variant-numeric: tabular-nums; }
 .pl-item.on em { color: var(--brand-blue-deep); }
-.pl-item .pl-tools { display: flex; gap: 2px; opacity: 0; transition: opacity 0.14s; }
+.pl-item .pl-tools { display: flex; gap: 2px; opacity: 0; transition: opacity var(--motion-fast) var(--ease-out); }
 .pl-item:hover .pl-tools { opacity: 1; }
-.pl-drag { display: inline-flex; align-items: center; color: var(--stone); opacity: .35; transition: opacity .12s; user-select: none; }
+.pl-drag { display: inline-flex; align-items: center; color: var(--stone); opacity: .35; transition: opacity var(--motion-fast) var(--ease-out); user-select: none; }
 .pl-item:hover .pl-drag, .pl-item.dragging .pl-drag { opacity: 1; }
 .pl-item.dragging { opacity: .45; }
 .pl-item.dragTarget { background: var(--surface-soft); }
@@ -1018,7 +1025,7 @@ const showAuth = ref(false);
   box-shadow: none;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.14s;
+  transition: opacity var(--motion-fast) var(--ease-out);
 }
 .song-item:hover .si-tools,
 .song-item:focus-within .si-tools { opacity: 1; pointer-events: auto; }
@@ -1043,7 +1050,7 @@ const showAuth = ref(false);
 
 /* 添加到歌单弹窗列表 */
 .pl-add-list { display: flex; flex-direction: column; gap: 2px; max-height: 34vh; overflow-y: auto; }
-.pl-add-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: none; background: transparent; border-radius: var(--radius-sm); font-size: 13px; color: var(--charcoal); cursor: pointer; text-align: left; transition: background 0.12s; }
+.pl-add-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: none; background: transparent; border-radius: var(--radius-sm); font-size: 13px; color: var(--charcoal); cursor: pointer; text-align: left; transition: background var(--motion-fast) var(--ease-out); }
 .pl-add-item:hover { background: var(--surface-soft); color: var(--ink); }
 .pl-add-item .pl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-add-item em { font-style: normal; font-size: 11px; color: var(--stone); font-variant-numeric: tabular-nums; }
@@ -1067,7 +1074,7 @@ const showAuth = ref(false);
   height: 100%;
   border-radius: 2px;
   background: transparent;
-  transition: background 0.15s;
+  transition: background var(--motion-fast) var(--ease-out);
 }
 .sidebar:hover .sidebar-resizer::after,
 .sidebar-resizer:hover::after,
@@ -1079,7 +1086,7 @@ body.resize-col .sidebar-resizer::after {
 
 /* 歌单右键菜单 */
 .pl-ctx-mask { position: fixed; inset: 0; z-index: var(--z-ctx); }
-.pl-ctx-menu { position: fixed; min-width: 160px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+.pl-ctx-menu { position: fixed; min-width: 160px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 4px; display: flex; flex-direction: column; gap: 2px; max-height: calc(100vh - 16px); overflow-y: auto; overscroll-behavior: contain; }
 .pl-ctx-item { text-align: left; border: none; background: transparent; color: var(--ink); padding: 7px 10px; border-radius: 6px; font-size: 13px; cursor: pointer; }
 .pl-ctx-item:hover { background: var(--surface-soft); }
 .pl-ctx-item.danger { color: var(--error); }

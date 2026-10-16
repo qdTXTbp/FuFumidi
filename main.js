@@ -49,6 +49,7 @@ const { registerDialogsIpc } = require('./main/dialogs');
 const { registerModelsIpc } = require('./main/models');
 const { registerSettingsIpc } = require('./main/settings-ipc');
 const { registerDiagnosticsIpc } = require('./main/diagnostics');
+const { registerFeedbackIpc } = require('./main/feedback');
 const { registerSystemIpc } = require('./main/system-ipc');
 const { registerGpuIpc } = require('./main/gpu-ipc');
 const { createRustService } = require('./main/rust');
@@ -126,14 +127,18 @@ if (!gotLock) {
     registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app, fs, spawnEngine, dialog });
     registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, readSettings });
     registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, spawnEngine });
-    registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net });
-    registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, cancelEngineJob: (...a) => cancelJob(...a), pluginHost, readSettings, resolveSeparateModel: (id) => (ModelsService ? ModelsService.resolveSeparateModel(id) : null) });
+    registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bundledPython });
+    registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, cancelEngineJob: (...a) => cancelJob(...a), pluginHost, readSettings, resolveSeparateModel: (id) => (ModelsService ? ModelsService.resolveSeparateModel(id) : null),
+    // 分离前自愈：MSST 模型的配置是**下载时**从上游备齐的，老安装/半装状态在这里补一次
+    ensureSepConfig: (id) => (ModelsService && ModelsService.ensureSepConfig ? ModelsService.ensureSepConfig(id) : null) });
     registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, parsePyJson });
     registerPresetsIpc({ ipcMain, runEngineInline, parsePyJson, pyLit });
     // 用户元数据（名字/作者/来源/标签/分类/排序/顶置）：资源中心四页 + 音色工坊共用一张表
     registerUserMetaIpc({ ipcMain });
     registerDialogsIpc({ ipcMain, dialog, path, fs, app, spawnEngine });
     registerDiagnosticsIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine });
+    // 问题反馈上传（收集 → 脱敏 → 打包 → 上传；写仓库的令牌只在服务端）
+    registerFeedbackIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine, net, readSettings });
     // 依赖 / 环境 / 模型目录规范化：把旧版散落在 C 盘用户目录下的重型目录
     // 一次性迁移到「工具目录」旁的 FuFumidiData（迁移期间显示进度窗）。
     // 必须在模型服务、GPU 服务之前完成，避免服务拿到半成品目录。
@@ -142,7 +147,7 @@ if (!gotLock) {
     try { linkBundledModels(); } catch (_) {}
     try { healModelsDir(); } catch (_) {} // 清除断链（安装器替换 resources/models 后旧 junction 目标消失）
     migrateUserModels();
-    ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings });
+    ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings, resolvePython });
     DbService = createDbService({ app, path, fs });
     DbService.registerDbIpc({ ipcMain });
     // 可选 Rust 核心：先建好服务，供曲库文件体检/重复检测等热点路径优先使用

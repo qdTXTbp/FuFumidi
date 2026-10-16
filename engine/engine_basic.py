@@ -11,6 +11,33 @@
 
 import os
 
+import pause_gate
+
+
+def _install_audio_input_gate(inference_module=None):
+    """把暂停闸门挂到 basic-pitch 的**取窗生成器**上（只挂一次，不叠加）。
+
+    basic-pitch 的 `predict()` 是「一次调用跑完整首」，但它的取窗生成器
+    `basic_pitch.inference.get_audio_input()` 是模块级生成器：每 yield 一个窗（约 1.6 秒
+    音频）之前过一下闸门，就等于把断点放在"窗与窗之间"——窗的推理是下游"要下一个窗"时
+    才发生的，所以停下时已算的窗都还在 `_predict` 的 output 列表里，继续时**从原处接着算**。
+
+    包装器**不许**捕获 log_cb：worker 常驻、只挂一次，log_cb 却每次都不同（见 pause_gate 模块）。
+    """
+    if inference_module is None:
+        from basic_pitch import inference as inference_module
+    if getattr(inference_module, '_fufumidi_pause_wrapped', False):
+        return
+    _orig = inference_module.get_audio_input
+
+    def _gated(*a, **kw):
+        for item in _orig(*a, **kw):
+            pause_gate.wait()
+            yield item
+
+    inference_module.get_audio_input = _gated
+    inference_module._fufumidi_pause_wrapped = True
+
 
 def available():
     """basic-pitch 是否安装。"""
@@ -58,17 +85,26 @@ def transcribe_basic(audio_path, output_midi,
 
     from audio_io import decode_to_wav, remove_temp
 
-    # 可选智能预处理：降噪 / 响度平衡 / 自动 BPM
-    denoise_on = bool(kwargs.get("denoise", False))
-    normalize_on = bool(kwargs.get("normalize", False))
+    # ★ 转录中途暂停 / 继续（用户 2026-10-14 要求，见 pause_gate 模块）：
+    #   basic-pitch 是一次调用跑完整首，但它的取窗生成器可以包 —— 停点落在「窗与窗之间」。
+    pause_gate.install(log_cb)
+    _install_audio_input_gate()
+
+    # 可选：自动 BPM（降噪/电平统一已经合并进下面的「转录前音频链」，不再各管一段）
     auto_bpm = bool(kwargs.get("auto_bpm", False))
 
     _log(log_cb, f"解码音频 → 22050Hz …")
     wav = decode_to_wav(audio_path, 22050)
     try:
-        if denoise_on or normalize_on:
-            from preprocess import process_wav_file
-            wav = process_wav_file(wav, 22050, denoise_on, normalize_on, log_cb)
+        # ★ 转录前音频链（2026-10-15 方案 A/B）：高通 → 降噪 → 电平统一。
+        #   （旧路径用的是 preprocess.process_wav_file：前 0.3 秒估噪的谱减法 + 可选响度归一，
+        #     实测会把现场音乐从 69 个音符变成 0 个；电平也不再随素材漂。）
+        try:
+            import audio_chain as _ac
+            _ac.process_wav_inplace(wav, 22050, kwargs, log_cb,
+                                    strong_runner=_ac.make_strong_runner(log_cb))
+        except Exception as _e:
+            _log(log_cb, "[预处理] 音频链失败，按原始音频继续：%s" % _e)
         if auto_bpm:
             from preprocess import bpm_of_file
             detected = bpm_of_file(wav, 22050)

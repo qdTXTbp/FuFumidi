@@ -364,7 +364,7 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
           <button class="btn danger" v-if="running" @click="cancel">{{ t('取消') }}</button>
           <span class="muted small">{{ stage }}</span>
         </div>
-        <div class="cv-bar"><i :style="{ width: Math.max(0, Math.min(100, percent)) + '%' }"></i></div>
+        <div class="cv-bar"><i :style="{ transform: 'scaleX(' + ((Math.max(0, Math.min(100, percent))) / 100) + ')' }"></i></div>
         <div v-if="error" class="cv-err">{{ error }}</div>
         <pre v-if="logs.length" class="cv-log">{{ logs.slice(-40).join('\n') }}</pre>
       </div>
@@ -396,7 +396,7 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
 .cv-adv { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--hairline); }
 .cv-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--steel); margin-top: 10px; }
 .cv-bar { height: 8px; border-radius: 6px; background: var(--surface-soft); overflow: hidden; margin-top: 10px; }
-.cv-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--brand-blue, #4facfe), #00f2fe); transition: width .25s ease; }
+.cv-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--brand-blue, #4facfe), #00f2fe); transition: transform var(--motion-base) var(--ease-out); }
 .cv-err { margin-top: 10px; font-size: 12px; color: var(--error); white-space: pre-wrap; }
 .cv-log { margin-top: 10px; max-height: 220px; overflow: auto; font-size: 11.5px; line-height: 1.6; background: var(--surface-soft); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; }
 </style>

@@ -10,6 +10,8 @@ MuScriptor 通用多乐器转录引擎（Kyutai + Mirelo）
 import os
 import time
 
+import pause_gate as _pause_gate_mod
+
 
 def _find_local_model(size):
     """从本地模型目录查找已下载的 MuScriptor 权重（资源中心下载后合并得到）。
@@ -38,18 +40,35 @@ def available():
 
 
 def _require_package():
-    """包缺失时的明确指引：区分「缺 Python 包」与「缺模型权重」。"""
+    """包缺失时的明确指引：区分「缺 Python 包」与「缺模型权重」。
+
+    ★ 2026-10-14：把**底层 ImportError 原文 + 解释器/PYTHONPATH** 一起报出来 ——
+      之前只写「import muscriptor 失败」，真的遇到时无法区分「没装包」「torch 没挂上」
+      「PYTHONPATH 指向了不匹配的 GPU 包」，只能靠猜。
+    """
     try:
         import muscriptor  # noqa: F401
         return True
-    except Exception:
+    except Exception as _e:
+        import traceback as _tb
+        _detail = "%s: %s" % (type(_e).__name__, _e)
+        try:
+            _detail += "\n" + "".join(_tb.format_exc().splitlines(True)[-4:])
+        except Exception:
+            pass
+        try:
+            import sys as _sys, os as _os
+            _detail += "\n解释器：%s\nPYTHONPATH：%s" % (_sys.executable, _os.environ.get("PYTHONPATH", "(未设置)"))
+        except Exception:
+            pass
         raise RuntimeError(
             "未安装 muscriptor Python 运行时包（应用环境的 Python 里 `import muscriptor` 失败）。"
             "模型权重虽已下载，但仍需安装该包：在资源中心点「安装 MuScriptor 运行时」即可。\n"
             "★ 不要直接 `pip install muscriptor` —— PyPI 上的 0.3.0 有长音频缺陷："
             "块边界的 tie 逻辑会让模型漏收尾的音符被无限延续，实测 100 分钟录播会产出"
             "4320 秒（全曲 72%）的超长音符。修复版托管在 "
-            "github.com/monologue82/Models 的 muscriptor-runtime/（0.3.0+fufumidi.1）。")
+            "github.com/monologue82/Models 的 muscriptor-runtime/（0.3.0+fufumidi.1）。\n"
+            "—— 底层错误 ——\n" + _detail)
 
 
 def available_local_sizes():
@@ -94,8 +113,242 @@ def _ensure_config(weights_path, size):
         pass  # 写失败不阻断转录（muscriptor 会走其他回退，代价是可能架构不匹配）
 
 
+def _pause_gate(stream, pause_file, log_cb=None):
+    """MuScriptor 的暂停闸门：每吐出一项（5 秒 token 块）之前先过闸门。
+
+    闸门本体在 pause_gate 模块（三类引擎共用，那里有一张"暂停点在哪"的表）。
+    为什么挂在 `_generate_token_stream` 上：它是**惰性**生成器，每个 5 秒块的推理是在下游
+    "要下一项"时才发生的 —— 所以卡在这里 = 卡在块与块之间，模型状态全在内存里，
+    继续时**从原处接着跑**（不重跑、不丢已算的部分）。
+    """
+    return _pause_gate_mod.gate_stream(stream, _pause_gate_mod.PauseGate(pause_file, log_cb))
+
+
+def _install_pause_wrapper(model):
+    """把闸门包在 model._generate_token_stream 上（只包一次，不叠加）。
+
+    ★ 包装器**不许**捕获 log_cb：worker 常驻、model 是缓存的，包装器只装一次，
+    而 log_cb 每次都不同 —— 捕获它会让第二个文件起的暂停日志打到第一个文件的回调上。
+    所以包装器只调 _pause_gate_mod.wait()，闸门由每次转录开头的 install(log_cb) 重绑。
+    """
+    if getattr(model, '_fufumidi_pause_wrapped', False):
+        return
+    _orig = getattr(model, '_generate_token_stream', None)
+    if _orig is None:
+        # 不走 token 流的模型（测试替身 / 别的引擎）没有这个钩子 —— 直接跳过，
+        # 别让"暂停"这个可选功能把正常转录路径搞崩（实测踩过：8 个用例因此 AttributeError）
+        return
+
+    def _gated(*a, **kw):
+        return _pause_gate_mod.gate_stream(_orig(*a, **kw))
+
+    model._generate_token_stream = _gated
+    model._fufumidi_pause_wrapped = True
+
+
+# ★ 证据的"这颗音在音频里根本不存在"哨兵。
+#   为什么不用负数：负数是个**合法但坏**的返回值，坏证据必须一律无效
+#   （test_muscriptor_sustain_evidence.test_bad_evidence_never_cuts 钉着这条）。
+#   所以哨兵是一个**独立对象**，由 set_sustain_evidence(fn, drop) 按身份注入。
+EVIDENCE_DROP = object()
+
+
+def _make_pitch_evidence(wav_path, log_cb=None, stats=None):
+    """按**音高**判断「这个音此刻还有没有一个真正的音在响」（★ 2026-10-14 第四版）。
+
+    三代判据都被实测修正过，全记在这里，免得再走一遍：
+      ① 「边界前 0.5 秒整窗静音」（RMS ≤ −60 dBFS）：这段**一秒静音都没有**
+         （每 0.5 s 窗 RMS 0.024~0.203，比阈值高 24~200 倍）→ 判据从不触发，
+         一个僵尸音都没拦住。
+      ② 「该音高的频带能量」：密集配器里**任何时刻都有能量** —— 实测僵尸音
+         pitch 29 / 46 的频带能量全程 0.02~0.06（别的乐器与混响漏进来的），
+         证据永远说"还在响"，21.9 秒的假长音一个也修不掉。
+      ③ 「最后一个有声帧 + 跟自己起音比」：能修掉"音高停了模型却不收尾"的音，
+         但星铁LIVE 实测（26:20 那段）暴露两个洞：
+         · 只看"最后一帧有声"会被**单个鼓点**骗到 —— D1（pitch 26）每 0.5 s 只有
+           0~3 帧有声（起音突出度只有 0.88），却把一颗 24.65 秒的音一路"接"到底；
+         · 阈值取「起音突出度 × 0.35」，起音若是尖峰（合成音里实测能到 550），
+           后面正常的延音（突出度 ~9）永远不达标 → 反而会**误切真实长音**。
+
+    第四版三条判据，全部是绝对量（不再跟起音比）：
+      · **有声**：该音高的峰高于同八度邻域中位数（突出度 ≥ P_FLOOR）且带内能量 ≥ E_FLOOR；
+      · **持续存在**：0.5 秒窗里至少一半帧"有声"（鼓点、零星泛音接不上）；
+      · **头部必须有支撑**：音符开头 1 秒里，要么有起音峰，要么一半以上帧有声，
+        要么带内能量已达本音符后段的 25%（这一条专门挡"被配器盖住的真实弱音"）。
+        头部就没有支撑 = 音频在这颗音**自称开始的地方**根本没有它 →
+        返回 EVIDENCE_DROP（把它删掉），而不是留一颗"前 20 秒空白"的假长音。
+        **删只对 ≥ DROP_MIN_DUR（5 秒）的音生效**：短音的收尾点本来是模型逐音给的，
+        更可信，而"删一颗 2 秒音"的收益很小、风险却一样大。
+
+    查询 fn(pitch, start, upto) 的返回值：
+      · None       → 没证据 / 到 upto 还在持续 → 不动它
+      · t（≥start）→ 真正的收尾时刻
+      · EVIDENCE_DROP → 这颗音在音频里根本不存在，删掉（对象身份比较，不是数值）
+
+    一次 STFT（8192 点 / 50 ms 一跳；8192 是为了低频也有 ~2 Hz 分辨率，F1 才分得出峰）
+    算出 128 个音高的突出度与带内能量时间线。
+    保守到底：任何一步不满足都返回 None。**宁可漏切一颗僵尸音，也不误伤真实长音。**
+    """
+    import numpy as np
+    import soundfile as sf
+
+    SR_TARGET = 16000
+    N_FFT = 8192           # 0.51 s 窗：F1(43.7 Hz) 也要能分出峰
+    HOP_MS = 50
+    P_FLOOR = 1.6          # 突出度下限（≈ 没有明显峰）
+    E_FLOOR = 0.002        # 带内能量下限（满幅 ≈ 1.0），挡掉极安静处的伪峰
+    GRACE = 0.30           # 到边界前 0.3 s 还在响 → 判定"仍在延音"，不动
+    P_MIN = 2.0            # 起音突出度到这个数 = "有起音峰"
+    ATTACK = 0.30          # 起音参考窗
+    DUTY_WIN = 0.50        # "持续存在"的观察窗（秒）
+    DUTY_MIN = 0.50        # 窗内至少一半帧有声，才算这个音高在"持续"
+    HEAD_WIN = 1.00        # 头部支撑的观察窗（给"被盖住的弱起音"整整一秒机会）
+    HEAD_MIN = 0.50        # 头部窗里至少一半帧有声
+    HEAD_BAND_REL = 0.25   # 或：头部带内能量 ≥ 本音符自己后段的这个比例
+    DROP_MIN_DUR = 5.0     # ★ 只有"本来就这么长"的音才允许被删；短音宁可只砍尾巴
+
+    # ★ 既接受文件路径，也接受 (PCM, sr)：分段转录时每段已经在内存里，
+    #   再落盘读一遍纯属浪费（100 分钟音频 400 MB）。
+    if isinstance(wav_path, (tuple, list)) and len(wav_path) == 2:
+        x = np.asarray(wav_path[0], dtype="float32")
+        sr = int(wav_path[1])
+        if getattr(x, "ndim", 1) > 1:
+            x = x.mean(axis=1)
+    else:
+        x, sr = sf.read(wav_path, dtype="float32", always_2d=False)
+        if getattr(x, "ndim", 1) > 1:
+            x = x.mean(axis=1)
+    if sr != SR_TARGET and x.size:
+        try:
+            import librosa as _lb
+            x = _lb.resample(x, orig_sr=int(sr), target_sr=SR_TARGET)
+            sr = SR_TARGET
+        except Exception:
+            pass
+    hop = max(1, int(round(HOP_MS / 1000.0 * sr)))
+    n_frames = max(0, 1 + (len(x) - N_FFT) // hop) if len(x) >= N_FFT else 0
+    if n_frames < 4:
+        return None                              # 太短：不给证据（调用方按上游行为处理）
+
+    freqs = np.fft.rfftfreq(N_FFT, 1.0 / sr)
+    peak_bins = []
+    wide_bins = []
+    for p in range(128):
+        f0 = 440.0 * (2.0 ** ((p - 69) / 12.0))
+        if f0 >= sr * 0.45:
+            peak_bins.append(None)
+            wide_bins.append(None)
+            continue
+        # 峰带：f0 ±3%（约 1 个半音的 1/6，够宽容也够尖）
+        b0 = int(np.searchsorted(freqs, f0 * 0.97))
+        b1 = int(np.searchsorted(freqs, f0 * 1.03))
+        b0 = max(0, min(b0, freqs.size - 1))
+        b1 = max(b0 + 1, min(b1, freqs.size))
+        peak_bins.append((b0, b1))
+        # 邻域：f0 的 0.75~1.30 倍，去掉峰带本身；高频带很宽，最多取 33 个点算中位数
+        w0 = int(np.searchsorted(freqs, f0 * 0.75))
+        w1 = int(np.searchsorted(freqs, f0 * 1.30))
+        w0 = max(0, min(w0, freqs.size - 1))
+        w1 = max(w0 + 1, min(w1, freqs.size))
+        keep = np.arange(w0, w1)
+        keep = keep[(keep < b0) | (keep >= b1)]
+        if keep.size > 33:
+            keep = keep[np.linspace(0, keep.size - 1, 33).astype(int)]
+        wide_bins.append(keep)
+
+    prom = np.zeros((128, n_frames), dtype="float16")   # 音调突出度
+    band = np.zeros((128, n_frames), dtype="float16")   # 峰带能量（挡伪峰用）
+    win = np.hanning(N_FFT).astype("float32")
+    norm = N_FFT / 4.0                            # 满幅正弦 → 1.0
+    offs = np.arange(N_FFT, dtype=np.int64)[None, :]
+    BLK = 2048
+    for s in range(0, n_frames, BLK):
+        e = min(n_frames, s + BLK)
+        starts = (np.arange(s, e, dtype=np.int64) * hop)[:, None]
+        seg = x[starts + offs] * win
+        mag = np.abs(np.fft.rfft(seg, axis=1)).astype("float32") / norm
+        for p in range(128):
+            pb = peak_bins[p]
+            if pb is None:
+                continue
+            pk = mag[:, pb[0]:pb[1]].max(axis=1)
+            wb = wide_bins[p]
+            if wb is None or wb.size == 0:
+                continue
+            med = np.median(mag[:, wb], axis=1)
+            band[p, s:e] = pk
+            # ★ 注意：prom 是 float16，`prom[p, s:e].astype("float32")` 是**临时副本**，
+            #   往它写 out= 等于什么都没存（第一版就这么写的，prom 全 0 → 证据永远 None）。
+            _pr = pk / np.maximum(med, 1e-6)
+            np.minimum(_pr, 1000.0, out=_pr)
+            prom[p, s:e] = _pr
+        del seg, mag
+
+    hop_s = hop / float(sr)
+    # 收尾修正 / 删除 的计数（调用方可传一个字典进来跨段累加，最后写进日志）
+    if stats is None:
+        stats = {"cut": 0, "drop": 0}
+
+    def fn(pitch, start, upto):
+        try:
+            p = int(pitch)
+        except (TypeError, ValueError):
+            return None
+        if p < 0 or p > 127:
+            return None
+        i0 = int(float(start) / hop_s)
+        i1 = int(float(upto) / hop_s)
+        i0 = max(0, i0)
+        i1 = min(n_frames, i1)
+        if i1 - i0 < 3:
+            return None
+        pr = prom[p, i0:i1].astype("float32")
+        en = band[p, i0:i1].astype("float32")
+        if pr.size < 3:
+            return None
+        # ① 有声：这个音高此刻突出（不是别的乐器/混响漏进来的能量）
+        ok = (pr >= P_FLOOR) & (en >= E_FLOOR)
+        # ② 头部支撑：开头一秒里到底有没有这颗音存在的痕迹
+        a = max(1, int(round(ATTACK / hop_s)))
+        p0 = float(pr[:a].max())
+        hw = min(pr.size, max(2, int(round(HEAD_WIN / hop_s))))
+        head_duty = float(ok[:hw].mean())
+        ref = float(np.percentile(en, 90))
+        head_level = float(np.median(en[:hw]))
+        head_ok = (p0 >= P_MIN or head_duty >= HEAD_MIN
+                   or (ref > 0.0 and head_level >= HEAD_BAND_REL * ref))
+        # ★ 头部没有支撑 = 这颗音在它自称开始的地方根本不存在 → 删掉。
+        #   但只有**长**音符才删：收益随长度增长，风险不随。实测星铁LIVE 全片，
+        #   不加这道门会删 57 颗，其中 51 颗是 2~4 秒的短音（散在全片各处，很可能是
+        #   真实音符、只是起音被配器盖住）；加门之后只剩 6 颗，全部落在 26:20 那段
+        #   真正坏掉的区间（含被拉成 24.65 秒的 D1）。短音落到下面的"持续存在"
+        #   逻辑，最多只砍尾巴。
+        if not head_ok and (float(upto) - float(start)) >= DROP_MIN_DUR:
+            stats["drop"] += 1
+            return EVIDENCE_DROP
+        # ③ 持续存在：0.5 秒窗里至少一半帧有声 —— 单个鼓点接不上
+        w = max(2, int(round(DUTY_WIN / hop_s)))
+        if ok.size >= w:
+            csum = np.concatenate(([0], np.cumsum(ok.astype("int32"))))
+            duty = (csum[w:] - csum[:-w]).astype("float32") / float(w)
+            idx = np.nonzero(duty >= DUTY_MIN)[0]
+            if idx.size:
+                t_last = (i0 + int(idx[-1]) + w - 1) * hop_s
+                if float(upto) - t_last < GRACE:
+                    return None                # 到边界都还在持续 → 不动它
+                if t_last <= float(start):
+                    return None
+                stats["cut"] += 1
+                return t_last
+        return None
+
+    fn.stats = stats
+    return fn
+
+
 def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                           num_threads=None, **kwargs):
+    _pause_gate_mod.install(log_cb)   # 本次转录的暂停闸门（见 pause_gate 模块）
     _require_package()  # 包缺失先给明确报错，再导入
     from muscriptor import TranscriptionModel
 
@@ -193,6 +446,79 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     # 采样率 16000 与 muscriptor 内部 _SAMPLE_RATE 一致，免去二次重采样。
     import audio_io
     wav_tmp = audio_io.decode_to_wav(audio_path, 16000)
+    # ★ 转录前音频链（2026-10-15 方案 A/B）：高通 → 降噪 → 电平统一。
+    #   ★★ 必须放在下面「建证据」之前：证据函数读的就是这个 wav，
+    #      两者必须是同一份音频，否则证据判据会按没降噪的音频去裁降噪后的音符。
+    try:
+        import audio_chain as _ac
+        _ac.process_wav_inplace(wav_tmp, 16000, params, log_cb,
+                                strong_runner=_ac.make_strong_runner(log_cb))
+    except Exception as _e:
+        _log(log_cb, "[预处理] 音频链失败，按原始音频继续：%s" % _e)
+    # ★ 音频证据式收尾：让模型不再被迫延续"其实已经没声"的音（见 _make_pitch_evidence）。
+    #   ★ 回放（--replay-tokens）也注入：wav 在这一步已经解码出来了（上面 audio_io.decode_to_wav），
+    #     而回放台的意义就是"改了解码器逻辑后用 1 分钟复现"，把证据排除在外就复现不到改动。
+    #     （2026-10-14 实测通过回放定位到问题：6505 次收尾**全部**是模型自己的 token，
+    #      块边界批量收尾 374/195/1362/1587 个音 —— 所以证据必须进回放路径。）
+    from dataclasses import replace as _replace      # 分段合并时改事件时间/index 用
+    _SUSTAIN_EV = None                               # 分段路径要按段重新注入证据
+    _ev_stats = {"cut": 0, "drop": 0}                # 证据判定的累计计数（各段共用）
+    if not os.environ.get("FUFUMIDI_NO_EVIDENCE"):
+        try:
+            import time as _time_ev
+            _t_ev = _time_ev.perf_counter()
+            from muscriptor.events import set_sustain_evidence as _set_evidence
+
+            def _install_evidence(_fn, _set=_set_evidence):
+                """注入证据函数 + "删掉这颗音"哨兵（哨兵按对象身份比较，见 events 补丁）。"""
+                _set(_fn, EVIDENCE_DROP)
+
+            _SUSTAIN_EV = _install_evidence
+            _ev = _make_pitch_evidence(wav_tmp, log_cb, _ev_stats)
+            _install_evidence(_ev)
+            _log(log_cb, "音频证据式收尾：已启用（按音高能量时间线收尾，不截断真实长音）"
+                 "（构建 %.1fs）" % (_time_ev.perf_counter() - _t_ev))
+        except Exception as _e:
+            _log(log_cb, "音频证据式收尾不可用，按上游行为：%s" % _e)
+
+    # ★ 静音分段（长音频提速）：见 engine/segmenter.py。**默认 off**（用户 2026-10-14 定），
+    #   可在界面/CLI 选 auto（时长 ≥5 分钟且预计省 ≥3% 才启用）或 on。
+    #   做法：按"完全空白静音"切成若干核心段，逐段推理，事件时间加段偏移后合并成一份 MIDI。
+    #   为什么不在回放路径做：token 流是按整段音频落盘的，切片对不上。
+    _seg_plan = None
+    _seg_pcm = None
+    _seg_sr = 0
+    _seg_cfg = {}
+    _seg_mode = str(params.get("segment_silence") or "off").strip().lower()
+    if _seg_mode in ("off", "false", "0", "no", ""):
+        _seg_mode = "off"
+    for _k, _p in (("threshold", "silence_db"), ("min_silence", "min_silence"),
+                   ("max_segment", "max_segment")):
+        if params.get(_p) is not None:
+            try:
+                _seg_cfg[_k] = float(params[_p])
+            except (TypeError, ValueError):
+                pass
+    if _seg_mode != "off" and not params.get("replay_tokens"):
+        try:
+            import segmenter as _segmod
+            import soundfile as _sf
+            _t_sg = time.perf_counter()
+            _x, _sr = _sf.read(wav_tmp, dtype="float32", always_2d=False)
+            if getattr(_x, "ndim", 1) > 1:
+                _x = _x.mean(axis=1)
+            _plan = _segmod.analyze(_x, _sr, **_seg_cfg)
+            _ok, _why = _segmod.auto_enabled(_plan["duration"], _plan["skipped_sec"], _seg_mode)
+            if _ok and len(_plan["segments"]) > 1:
+                _seg_plan, _seg_pcm, _seg_sr = _plan, _x, _sr
+                _log(log_cb, "静音分段：%s —— %d 段，跳过静音 %.1f s（%.1f%%），分析耗时 %.1fs"
+                     % (_why, len(_plan["segments"]), _plan["skipped_sec"],
+                        100.0 * _plan["skipped_sec"] / max(1e-6, _plan["duration"]),
+                        time.perf_counter() - _t_sg))
+            else:
+                _log(log_cb, "静音分段未启用：%s" % _why)
+        except Exception as _e:
+            _log(log_cb, "静音分段分析失败，按整段转录：%s" % _e)
     try:
         # 真实进度上报：muscriptor 的 transcribe() 是事件流，其中夹带 ProgressEvent
         # （completed/total 个 5s 分块）。官方 transcribe_to_midi 内部即「事件流 →
@@ -228,12 +554,14 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         # NoteEndEvent —— events_to_midi_bytes 里是 open_notes.pop(ev.start_event_index)，
         # 重复收尾会直接 KeyError，把整次转录炸在最后一步。
         try:
-            _cap = float(params.get("max_note_hold"))
+            _mh = params.get("max_note_hold")
+            _cap = float(_mh) if _mh is not None else None
         except Exception:
             _cap = None
         if _cap is None:
-            _cap = 15.0          # 默认开：正常文件的时长上限是 12.3s，留有余量
+            _cap = 0.0           # ★ 默认不截断：僵尸音符由音频证据式收尾负责（界面开关已移除）
         _cap_stats = {"closed": 0}
+        _zero_len_stats = {"n": 0}      # ★ 被吞掉的"零长度收尾对"（证据式删除走这条）
 
         # ★ 逐块计时（#9 长音频尾部异常排查用，**默认关闭**）：
         #   设 FUFUMIDI_CHUNK_TIMING=1 时，每个块边界打一行
@@ -294,7 +622,15 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         _open_seen = [0]
 
         def _events_capped(events):
-            """进度透传 + 超长音符强制收尾（cap <= 0 时行为与旧版一致）。"""
+            """进度透传 + 超长音符强制收尾 + ★ 证据式删除（cap <= 0 时不做 cap）。
+
+            ★ 删除是怎么做到的（第四版新增）：音频证据判定「这颗音在音频里根本不存在」
+              时，给的是**零长度**事件对（收尾时刻 = 起音时刻）。而下游
+              `events_to_midi_bytes` 只在收到 end 时才 `notes.append(...)` ——
+              所以**只吞掉收尾**即可：不配对的 start 会自然消失。
+              这样既真的删掉了音符，又不必在这里缓冲/重排事件流
+              （"正常短音逐个原样透传、不重排"是 test_muscriptor_note_cap 钉住的硬不变量）。
+            """
             open_notes = {}
             force_closed = set()
 
@@ -349,7 +685,18 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     if idx in force_closed:
                         force_closed.discard(idx)
                         continue        # ★ 丢弃重复收尾，否则下游 pop 会 KeyError
-                    open_notes.pop(idx, None)
+                    st = open_notes.pop(idx, None)
+                    if (st is not None
+                            and abs(float(getattr(ev, "end_time", 0.0))
+                                    - float(st.start_time)) <= 1e-9):
+                        # ★ 零长度收尾对 → 只吞掉 end，不配对的 start 自然消失。
+                        #   两个来源都该丢：① 音频证据判定"这颗音不存在"（主线）；
+                        #   ② 模型在**同一帧**内开又关的退化音（100 fps 下一帧 10 ms，
+                        #   零长度说明它连一帧都没占到；以前会被 validate_notes 撑成
+                        #   0.01 s 的杂音，鼓组那条路本来也是直接丢）。
+                        #   只认**恰好等于起音时刻**的收尾，end<start 的畸形事件保持旧行为。
+                        _zero_len_stats["n"] += 1
+                        continue
                     yield ev
                     continue
                 yield ev
@@ -359,6 +706,77 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     yield _NoteEndEvent(end_time=st.start_time + _cap, start_event=st)
                     del open_notes[idx]
                     _cap_stats["closed"] += 1
+
+        def _segmented_events(plan, pcm, sr):
+            """逐段推理并合并事件流（★ 静音分段）。
+
+            三条不变量（错了就会丢音/重音，改动前先看这里）：
+              1. **偏移精确**：每段事件时间 = 段内时间 + 该段在原始时间轴上的起点
+                 （模型时间轴 = 解码时间轴，前面已验证；不是估的）。
+              2. **只在核心区留音符**：起音落在 padding 里的音符丢掉（它属于邻段），
+                 否则接缝处会出现两份同样的音。
+              3. **index 必须重编号**：上游每个转录流的 index 都从 0 开始，直接合并会让
+                 events_to_midi_bytes 的 open_notes 字典撞键（它按 index 配对）。
+            """
+            import soundfile as _sf2
+            import tempfile as _tf
+            segs = plan["segments"]
+            pad = float(params.get("segment_pad") or 1.0)
+            chunk_sec = 5.0
+            per = [max(1, int((e - s) / chunk_sec + 0.999)) for s, e in segs]
+            total_chunks = sum(per)
+            done_chunks = 0
+            base_index = 0
+            tmps = []
+            try:
+                for si, (cs, ce) in enumerate(segs):
+                    a = max(0, int(round((cs - pad) * sr)))
+                    b = min(len(pcm), int(round((ce + pad) * sr)))
+                    if b - a < sr:                      # 短于 1 秒的段没有意义
+                        done_chunks += per[si]
+                        continue
+                    fd, seg_wav = _tf.mkstemp(prefix="fufumidi-seg-", suffix=".wav")
+                    os.close(fd)
+                    tmps.append(seg_wav)
+                    _sf2.write(seg_wav, pcm[a:b], sr)
+                    if _SUSTAIN_EV is not None:      # 每段各自建证据（100 s 音频约 0.3 s）
+                        try:
+                            _SUSTAIN_EV(_make_pitch_evidence((pcm[a:b], sr), log_cb, _ev_stats))
+                        except Exception:
+                            pass
+                    off = a / float(sr)
+                    kept = {}
+                    dropped = set()
+                    for ev in model.transcribe(seg_wav, instruments=constrain, **_gen_kw):
+                        if _ProgressEvent is not None and isinstance(ev, _ProgressEvent):
+                            yield _ProgressEvent(completed=done_chunks + int(getattr(ev, "completed", 0)),
+                                                 total=total_chunks)
+                            continue
+                        if _NoteStartEvent is not None and isinstance(ev, _NoteStartEvent):
+                            t = float(ev.start_time) + off
+                            if not (cs - 0.02 <= t < ce - 0.02):   # 落在 padding 里 → 归邻段
+                                dropped.add(ev.index)
+                                continue
+                            new = _replace(ev, start_time=t, index=base_index)
+                            base_index += 1
+                            kept[ev.index] = new
+                            yield new
+                            continue
+                        if _NoteEndEvent is not None and isinstance(ev, _NoteEndEvent):
+                            idx = ev.start_event_index
+                            if idx in dropped or idx not in kept:
+                                continue
+                            t = float(ev.end_time) + off
+                            yield _replace(ev, end_time=t, start_event=kept[idx])
+                            continue
+                        yield ev
+                    done_chunks += per[si]
+            finally:
+                for p_ in tmps:
+                    try:
+                        os.remove(p_)
+                    except OSError:
+                        pass
 
         # 节拍网格只检测一次（OOM 降级重试时复用，避免重复解码/检测）。
         # 权重经资源中心下载到 modelsDir/hub/checkpoints/beat_this-final0.ckpt（TORCH_HOME 指向
@@ -492,11 +910,21 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
 
                         model._generate_token_stream = _gts_teed
                         model._fufumidi_timing_teed = True
-                    events = model.transcribe(wav_tmp, instruments=constrain, **_gen_kw)
+                    # ★ 暂停闸门（用户 2026-10-14 要求）：同样包在原始 token 流上 ——
+                    #   它是惰性的，所以"卡住"就等于卡在 5 秒块与块之间，继续时从原处接着跑。
+                    _install_pause_wrapper(model)
+                    if _seg_plan is not None:
+                        events = _segmented_events(_seg_plan, _seg_pcm, _seg_sr)
+                    else:
+                        events = model.transcribe(wav_tmp, instruments=constrain, **_gen_kw)
                 data = model.events_to_midi_bytes(_events_capped(events), beat_grid=beat_grid)
                 if _cap > 0:
                     _log(log_cb, "超长音符上限 %.0fs：强制收尾 %d 个音符"
                                   % (_cap, _cap_stats["closed"]))
+                if _ev_stats["cut"] or _ev_stats["drop"]:
+                    _log(log_cb, "音频证据式收尾：修正 %d 颗长音符的收尾，删除 %d 颗"
+                                  "「音频里根本不存在」的音符"
+                                  % (_ev_stats["cut"], _ev_stats["drop"]))
             except Exception as e:
                 # 显存溢出自动降级：batch ≥2 → 减半重试 → 串行兜底，绝不因此转录失败
                 oom = "out of memory" in str(e).lower() or "OutOfMemoryError" in type(e).__name__

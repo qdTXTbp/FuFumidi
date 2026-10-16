@@ -43,6 +43,11 @@ files:
   # 服务端 Cloudflare Worker 源码（cloud-sync/worker/）：它是独立部署的组件，不是应用代码。
   # 排除它是为了让安装版与发布版一致 —— scripts/deploy-installed.cjs 的过滤清单直接读本文件。
   - "!cloud-sync/**"
+  # 服务端反馈后端（netlify/）与已废弃的 Deno 版（deno/）：同样是独立部署的组件。
+  # ★ 必须排掉：netlify deploy 会在本地跑构建的 npm install，于是 netlify/node_modules 会
+  #   出现在工作区里 —— 2026-10-16 实测它 **17.4 MB** 被原样打进安装版 asar（asar 涨到 31.9 MB）。
+  - "!netlify/**"
+  - "!deno/**"
   - "!test/**"
   # 开发用文件（用户不需要；LICENSE 除外 —— MIT 要求随二进制分发版权声明）
   - "!AGENTS.md"

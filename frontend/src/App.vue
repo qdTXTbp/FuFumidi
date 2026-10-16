@@ -28,6 +28,8 @@ import { usePlaylistStore } from './stores/playlist';
 import { useSettingsStore } from './stores/settings';
 import { setLang, t, browserLang } from './core/i18n.js';
 import { applyDisplayPrefs as applyDisplayPrefsShared, loadDisplayPrefs } from './core/display.js';
+import { playbackPrefs, applyPlaybackSettings } from './core/playback_prefs.js';
+import { holdRate, isEditableTarget } from './core/transport_keys.js';
 import { getAppVersion, cmpVersion, getUpdateChannel } from './core/version.js';
 import { getBuiltinChangeLogs, fetchRemoteChangeLog } from './core/changelog.js';
 import { applyTheme, loadTheme } from './core/theme.js';
@@ -87,6 +89,9 @@ watch(() => settingsStore.settings, () => {
   const s = settingsStore.settings;
   wpUrl.value = wpFileUrl(s.custom_wallpaper || '');
   wpEnabled.value = !!(s.wallpaper_enabled && s.custom_wallpaper);
+  // 播放偏好（跳过空白 / 步长 / 长按倍数）：设置页一改就同步到播放器
+  applyPlaybackSettings(s);
+  app.applyPlaybackPrefs();
 }, { deep: true });
 watch(() => route.path, (p) => {
   state.view = viewParentOf(viewFromPath(p));
@@ -96,6 +101,8 @@ const stopTickLoop = () => app.stopTickLoop();
 const restoreSongs = () => app.restoreSongs();
 const togglePlay = () => app.togglePlay();
 const seekRatio = (r) => app.seekRatio(r);
+// 方向键短按：按偏好步长跳（秒 / 百分比 / 小节）
+const APP_SEEK_STEP = (dir) => app.seekByStep(dir);
 const setTempo = (v) => app.setTempo(v);
 const toggleLoop = () => app.toggleLoop();
 const toggleMetro = () => app.toggleMetro();
@@ -286,6 +293,64 @@ function cancelImportTargetModal() {
   app.cancelImportTarget();
 }
 
+/* ---------------- 方向键：短按=按步长跳；长按=倍数播放（用户 2026-10-14）----------------
+   为什么这样分派：短按要"精确挪一小段"，长按要"快速掠过"。
+   · → 长按：临时把播放速度切到 N 倍（player.setScale，工程 BPM 不动）；
+   · ← 长按：**快退且不出声** —— MIDI 播放器不能倒放，只能反复 seek，
+     所以先把播放暂停（记住原来是否在播），松手后再从新位置继续。
+   抽成 core/transport_keys.js 的纯函数是为了能单测（holdRate / seekTarget）。 */
+let _holdTimer = null;
+let _rewindTimer = null;
+let _heldDir = 0;
+let _wasPlaying = false;
+
+function _clearHoldTimers() {
+  if (_holdTimer) { clearTimeout(_holdTimer); _holdTimer = null; }
+  if (_rewindTimer) { clearInterval(_rewindTimer); _rewindTimer = null; }
+}
+
+function _endHold() {
+  _clearHoldTimers();
+  const dir = _heldDir;
+  _heldDir = 0;
+  if (!dir) return;
+  if (dir > 0) {
+    app.setTemporaryRate(1);            // 恢复原速（state.tempo 从未被改过）
+  } else if (_wasPlaying) {
+    app.togglePlay();                   // 快退结束：恢复播放（从新位置继续）
+  }
+  _wasPlaying = false;
+}
+
+function onArrowHold(e, dir, isDown) {
+  if (!isDown) { _endHold(); return; }
+  e.preventDefault();
+  if (e.repeat || _heldDir === dir) return;      // 长按的重复事件交给定时器
+  _endHold();                                   // 换了方向：先收尾上一次
+  _heldDir = dir;
+  APP_SEEK_STEP(dir);                           // 短按立刻跳一步（手感：按下去就有反应）
+  if (state.isAudio) return;                    // 音频曲目不做倍数播放（那是音频元素的语速）
+  _holdTimer = setTimeout(() => {
+    _holdTimer = null;
+    if (_heldDir !== dir) return;
+    if (dir > 0) {
+      app.setTemporaryRate(playbackPrefs.holdRate);
+    } else {
+      _wasPlaying = !!state.playing;
+      if (_wasPlaying) app.togglePlay();        // 快退不出声
+      const perTick = Math.max(0.2, Number(playbackPrefs.seekStep) * Number(playbackPrefs.holdRate) * 0.1);
+      _rewindTimer = setInterval(() => {
+        const cur = Number(state.curSec) || 0;
+        app.seekSec(Math.max(0, cur - perTick));
+      }, 100);
+    }
+  }, playbackPrefs.holdDelayMs);
+}
+
+function onKeyUp(e) {
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") _endHold();
+}
+
 function onKey(e) {
   // 全局系统快捷键（优先于输入框拦截：Ctrl+K 命令面板、Esc 关闭浮层）
   if (e.ctrlKey && (e.key === 'k' || e.key === 'K')) {
@@ -312,14 +377,16 @@ function onKey(e) {
     if (v) app.setView(v.id);
     return;
   }
-  // 忽略输入框内的快捷键
-  if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  // 忽略输入框内的快捷键（方向键在输入框里要能移光标，见 isEditableTarget 的说明）
+  if (isEditableTarget(e.target)) return;
   // 系统级全局热键触发时，主进程会顺手发一个同名的合成按键事件；
   // 这里放行，避免同一次按键被处理两遍（播放/暂停、上一首/下一首会跳两次）。
   if (e.__fromGlobalHotkey) return;
   if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
-  else if (e.key === 'ArrowLeft') seekRatio(Math.max(0, state.progress - 0.02));
-  else if (e.key === 'ArrowRight') seekRatio(Math.min(1, state.progress + 0.02));
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    // 步长可配（设置 → 快捷键）；按住不放 → 倍数播放（→ 快进；← 快退且不出声）
+    onArrowHold(e, e.key === 'ArrowRight' ? 1 : -1, true);
+  }
   else if (e.key === 'l' || e.key === 'L') toggleLoop();
   else if (e.key === 'm' || e.key === 'M') toggleMetro();
   else if (e.key === '=' || e.key === '+') setTempo(state.tempo + 0.05);
@@ -536,6 +603,9 @@ onMounted(() => {
     });
   }
   window.addEventListener('keydown', onKey);
+window.addEventListener('keyup', onKeyUp);
+window.addEventListener('blur', _endHold);            // 切窗口时别把倍率/快退留在半路上
+app.setSkipNotice((from, to) => app.toast(t('已跳过 ') + Math.round(to - from) + t(' 秒空白')));
   // 关窗/刷新前保存播放断点
   window.addEventListener('beforeunload', () => { try { state.saveResumePos(); } catch (e) {} });
   // 托盘控制（播放/暂停、下一首）
@@ -555,6 +625,9 @@ onBeforeUnmount(() => {
   clearTimeout(gpuBarTimer);
   clearTimeout(dlHideTimer);
   window.removeEventListener('keydown', onKey);
+window.removeEventListener('keyup', onKeyUp);
+window.removeEventListener('blur', _endHold);
+_endHold();
   window.removeEventListener('beforeunload', onBeforeUnload);
 });
 </script>
@@ -603,7 +676,7 @@ onBeforeUnmount(() => {
               : t('正在安装 GPU 加速') + (state.gpuInstall.kind ? t('（') + (state.gpuInstall.kind === 'cuda' ? 'CUDA cu128' : 'DirectML') + t('）') : '') }}
           </div>
           <div v-if="!state.gpuInstall.done" class="gpu-bar-track">
-            <div class="gpu-bar-fill" :style="{ width: Math.min(100, state.gpuInstall.percent || 0) + '%' }"></div>
+            <div class="gpu-bar-fill" :style="{ transform: 'scaleX(' + ((Math.min(100, state.gpuInstall.percent || 0)) / 100) + ')' }"></div>
           </div>
           <div v-else class="gpu-bar-msg">{{ state.gpuInstall.ok ? t('增强包已就绪，点击查看详情') : (state.gpuInstall.error || t('安装失败，点击查看详情')) }}</div>
           <div v-if="!state.gpuInstall.done && state.gpuInstall.text" class="gpu-bar-tip">{{ state.gpuInstall.text }}</div>
@@ -628,7 +701,7 @@ onBeforeUnmount(() => {
               <!-- 主进程在测速后会发 text（如「选用 国内源 CNB（cnb.cool）（31.2 MB/s）」）。
                    此前这条信息只进内存、界面从不显示，用户无法确认是否真走了国内源。 -->
               <div v-if="d.text" class="dl-src" :title="d.text">{{ d.text }}</div>
-              <div class="dl-pbar"><i :style="{ width: (d.percent || 0) + '%' }"></i></div>
+              <div class="dl-pbar"><i :style="{ transform: 'scaleX(' + (((d.percent || 0)) / 100) + ')' }"></i></div>
               <div class="dl-meta">
                 <span class="pct">{{ (d.percent || 0) }}%</span>
                 <span v-if="d.speed" class="spd">⚡ {{ dlSpeed(d.speed) }}</span>
@@ -758,7 +831,7 @@ onBeforeUnmount(() => {
 .gpu-bar-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .gpu-bar-title { font-size: 13px; font-weight: 600; color: var(--ink, #171717); }
 .gpu-bar-track { height: 6px; border-radius: 3px; background: var(--border, rgba(0,0,0,.1)); overflow: hidden; }
-.gpu-bar-fill { height: 100%; background: linear-gradient(90deg, #4f94e0, #8fc0f0); transition: width .25s; }
+.gpu-bar-fill { height: 100%; background: linear-gradient(90deg, #4f94e0, #8fc0f0); transition: transform var(--motion-base) var(--ease-out); }
 .gpu-bar.err .gpu-bar-fill { background: #d33; }
 .gpu-bar-msg { font-size: 12px; color: var(--text-muted, #666); line-height: 1.5; word-break: break-all; }
 .gpu-bar-tip { font-size: 11px; color: var(--text-muted, #888); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -769,21 +842,25 @@ onBeforeUnmount(() => {
 /* ===== 模型下载：顶部通知条 ===== */
 .dl-noti { position: fixed; top: 0; left: 50%; transform: translate(-50%, 0); z-index: 995;
   display: flex; flex-direction: column; align-items: center; pointer-events: none;
-  transition: transform .42s cubic-bezier(.22,.72,.22,1); padding-bottom: 12px; }
+  transition: transform var(--motion-slow) var(--ease-out); padding-bottom: 12px; }
 .dl-noti.peek { transform: translate(-50%, calc(-100% + 26px)); }   /* 上移露出 26px 细条 */
-.dl-stack { pointer-events: auto; display: flex; flex-direction: column; align-items: center; }
+/* 折叠用 grid-template-rows 0fr↔1fr：max-height 会在内容比 340px 矮时"提前到位"、看着一顿一顿；
+   grid 行高则一路跟内容走，展开/收起都是同一条曲线。 */
+.dl-stack { pointer-events: auto; display: grid; grid-template-rows: auto 0fr; justify-items: center;
+  transition: grid-template-rows var(--motion-base) var(--ease-out); }
+.dl-stack.open { grid-template-rows: auto 1fr; }
 .dl-bar { display: inline-flex; align-items: center; gap: 9px; padding: 10px 18px; border: none; border-radius: 999px;
   background: linear-gradient(135deg, var(--accent), var(--brand-coral)); color: #fff; font-size: 12.5px; font-weight: 700;
-  cursor: pointer; box-shadow: var(--shadow-lg); transition: transform .18s ease, box-shadow .2s ease; }
+  cursor: pointer; box-shadow: var(--shadow-lg); transition: transform var(--motion-base) var(--ease-out), box-shadow var(--motion-base) var(--ease-out); }
 .dl-bar:hover { box-shadow: var(--shadow-xl, 0 14px 34px rgba(0,0,0,.28)); }
 .dl-bar:active { transform: scale(.96); }
 .dl-anypct { font-variant-numeric: tabular-nums; }
 .dl-cnt { font-weight: 600; opacity: .96; }
 .dl-caret { font-style: normal; font-size: 9px; opacity: .85; }
-.dl-panel { width: 400px; max-width: 92vw; margin-top: 8px; background: var(--canvas); border: 1px solid var(--hairline);
-  border-radius: 14px; box-shadow: var(--shadow-lg); padding: 4px 14px 8px; overflow: hidden;
-  max-height: 0; opacity: 0; transform: translateY(-6px);
-  transition: max-height .3s cubic-bezier(.2,.7,.3,1), opacity .24s ease, transform .26s ease; }
+.dl-panel { width: 400px; max-width: 92vw; background: var(--canvas); border: 1px solid var(--hairline);
+  border-radius: 14px; box-shadow: var(--shadow-lg); padding: 12px 14px 8px; overflow: hidden; min-height: 0;
+  opacity: 0; transform: translateY(-6px);
+  transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out); }
 .dl-stack.open .dl-panel { max-height: 340px; opacity: 1; transform: translateY(0); overflow-y: auto; }
 .dl-item { padding: 7px 0; border-bottom: 1px solid var(--hairline-soft); }
 .dl-item:last-child { border-bottom: none; }
@@ -794,9 +871,9 @@ onBeforeUnmount(() => {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 6px; }
 .dl-pbar { height: 6px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; }
 .dl-pbar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--brand-coral));
-  border-radius: 999px; transition: width .25s ease; }
+  border-radius: 999px; transition: transform var(--motion-base) var(--ease-out); }
 .dl-meta { display: flex; align-items: center; gap: 12px; font-size: 10.5px; color: var(--stone); margin-top: 4px; font-family: var(--mono); }
 .dl-meta .pct { color: var(--ink); font-weight: 700; }
-.dlnoti-enter-active, .dlnoti-leave-active { transition: opacity .24s ease; }
+.dlnoti-enter-active, .dlnoti-leave-active { transition: opacity var(--motion-base) var(--ease-out); }
 .dlnoti-enter-from, .dlnoti-leave-to { opacity: 0; }
 </style>

@@ -52,6 +52,9 @@ DEFAULTS = {
         "merge_gap_ms": 30.0,
         "normalize_vel": True,
         # 智能音频预处理（可选）：
+        #   denoise_mode 是三档（off/light/strong，见 engine/audio_chain.py）；
+        #   denoise/normalize 只保留给旧前端兼容 —— 电平统一现在是恒定执行的，不看这两个键。
+        "denoise_mode": "off",
         "denoise": False,
         "normalize": False,
         "auto_bpm": False,
@@ -63,6 +66,7 @@ DEFAULTS = {
         "merge_gap_ms": 40,
         "include_pedal": True,
         # 智能音频预处理（可选）：
+        "denoise_mode": "off",
         "denoise": False,
         "normalize": False,
     },
@@ -152,11 +156,20 @@ def _release_gpu_memory():
 
 
 def _apply_auto_bpm(midi_path, audio_path, log_cb=None):
-    """统一 auto-BPM 后处理：从源音频测速并重写 MIDI 的 tempo 事件。
+    """统一 auto-BPM 后处理：从源音频测速，并把整份 MIDI 换到那个速度上。
 
     用于未内置测速的子引擎（basic-pitch / MuScriptor / 钢琴系）——它们把 MIDI
-    写成固定 120 BPM，导致播放/导出与原曲录音速度不符。basic（engine_basic）
-    与分轨链路已内置测速，无需此步。
+    写成固定 120 BPM。basic（engine_basic）与分轨链路已内置测速，无需此步。
+
+    ★ 2026-10-14 修掉的真缺陷（用户实测：「转写出来结尾拖长音」）：
+      旧实现只把 `set_tempo` 的**数值**改成测出来的 BPM，音符的 tick 一个没动 ——
+      于是「标签 152 BPM、位置还是 120 BPM」，文件播放快 152/120 = 1.27 倍，
+      总长只剩音频的 79%。实测：180 秒素材转出来只到 141.98 秒（0.789 = 120/152）；
+      整曲 7231 秒转出来 6029 秒（0.833 = 120/144）。界面上把这条压缩后的时间轴
+      摊回音频长度时，每个音都会被拉长 27%，结尾尤其明显。
+      正确做法：**每个音符的绝对秒数不许变** —— tick 按「旧速度 / 新速度」缩放
+      （`tick ×= us_old / us_new`），标签与位置一起改。这样自动测速才真正实现
+      「节拍网格对上原曲、播放时长与原曲一致」的原意。
     """
     import os
     if not midi_path or not os.path.isfile(midi_path):
@@ -176,19 +189,44 @@ def _apply_auto_bpm(midi_path, audio_path, log_cb=None):
         return
     import mido
     mid = mido.MidiFile(midi_path)
-    us = int(round(60_000_000 / float(bpm)))
+    us_new = int(round(60_000_000 / float(bpm)))
+    # 旧速度 = 文件里第一个 set_tempo（转录输出至多一个）；没有就按默认 120 BPM
+    us_old = 500000
+    for tr in mid.tracks:
+        found = False
+        for msg in tr:
+            if msg.type == 'set_tempo':
+                us_old = int(msg.tempo)
+                found = True
+                break
+        if found:
+            break
+    scale = float(us_old) / float(us_new)
+    if abs(scale - 1.0) > 1e-9:
+        # ★ 按**绝对 tick** 缩放再还原成 delta：逐条 delta 乘的话，
+        #   长素材（100 分钟 ≈ 700 万个 tick）会累积舍入漂移。
+        for tr in mid.tracks:
+            abs_old = 0
+            abs_new = 0
+            for msg in tr:
+                abs_old += int(msg.time)
+                tgt = int(round(abs_old * scale))
+                msg.time = max(0, tgt - abs_new)
+                abs_new = tgt
     done = False
     for tr in mid.tracks:            # 转录输出至多一个 tempo，统一改写
         for msg in tr:
             if msg.type == 'set_tempo':
-                msg.tempo = us
+                msg.tempo = us_new
                 done = True
     if not done:
         first = mid.tracks[0]
-        first.insert(0, mido.MetaMessage('set_tempo', tempo=us, time=0))
+        first.insert(0, mido.MetaMessage('set_tempo', tempo=us_new, time=0))
     mid.save(midi_path)
     if log_cb:
-        log_cb(f"[auto-bpm] 已按源音频自动测速：{bpm} BPM")
+        log_cb(f"[auto-bpm] 已按源音频自动测速：{bpm} BPM"
+               + (f"（时间轴按 {us_old}→{us_new} µs/拍 同步缩放，播放时长与原曲一致）"
+                  if abs(scale - 1.0) > 1e-9 else ""))
 
 
 def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
