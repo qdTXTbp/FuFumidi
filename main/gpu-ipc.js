@@ -72,11 +72,21 @@ function registerGpuIpc({
     const cur = currentPythonMinor();
     const ok = fitsPython(kind, cur);
     const hasRuntime = need ? !!pythonForMinor(need) : false;
-    return { kind, label: KIND_LABEL[kind] || kind, requiresPython: need, currentPython: cur, fits: ok, hasRuntime };
+    // ★ 2026-10-19 用户要求：Python 运行时换成 3.12 之后，按 3.11 构建的包**不再拦截下载安装**。
+    //   版本不匹配只作为提示（warn）交给界面 —— 装上一个 ABI 不匹配的包，最坏结果只是引擎
+    //   加载失败并自动回退 CPU，不该让用户连下都下不了。
+    const warn = (!ok && need)
+      ? (need + ' 版 · 与当前运行时不匹配，可安装；若引擎加载失败会自动回退 CPU')
+      : '';
+    return { kind, label: KIND_LABEL[kind] || kind, requiresPython: need, currentPython: cur, fits: ok, hasRuntime, warn };
   }
 
-  /** 不满足前置条件时的可操作提示（返回 null 表示可用） */
+  /** 前置条件检查：**不再拦截**（返回 null = 放行）。版本不匹配的判断留在 kindPrereq().warn 里，
+      由界面提示用户，而不是把按钮变灰。 */
   function prereqError(kind) {
+    return null;
+  }
+  function prereqErrorLegacy(kind) {
     const p = kindPrereq(kind);
     if (p.fits) return null;
     if (p.requiresPython === '3.12') {
@@ -198,7 +208,7 @@ function registerGpuIpc({
       for (const kind of GPU_KINDS) {
         const single = assets.find((a) => a.name && a.name.toLowerCase() === ('fufumidi-gpu-' + kind + '.zip'));
         if (single) {
-          out.push({ tag: rel.tag_name, name: single.name, url: single.browser_download_url, size: single.size, kind, requiresPython: requiredPython(kind) });
+          out.push({ tag: rel.tag_name, name: single.name, url: single.browser_download_url, size: single.size, kind, requiresPython: requiredPython(kind), warn: kindPrereq(kind).warn });
         }
         const parts = splitPartsFor(assets, kind);
         if (parts.length) {
