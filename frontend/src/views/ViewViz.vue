@@ -3,6 +3,7 @@ import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount, onActivated
 import { useAppStore } from '../stores/app';
 import { useVizBgStore } from '../stores/vizbg';
 import { getSynth, ensureAudio, getPlayer } from '../audio.js';
+import { FX_DEFAULT_COLORS } from '../core/palette.js';
 
 const app = useAppStore();
 const currentSong = computed(() => app.currentSong);
@@ -126,10 +127,10 @@ function resetColors() {
   vizBg.setFxAny('hueShift', 0);
   vizBg.setFxAny('satAdj', 0);
   vizBg.setFxAny('lightAdj', 0);
-  vizBg.setFxAny('handL', '#4f8dff');
-  vizBg.setFxAny('handR', '#ff7a3d');
-  vizBg.setFxAny('velLow', '#2f6fd0');
-  vizBg.setFxAny('velHigh', '#ff5530');
+  vizBg.setFxAny('handL', FX_DEFAULT_COLORS.handL);
+  vizBg.setFxAny('handR', FX_DEFAULT_COLORS.handR);
+  vizBg.setFxAny('velLow', FX_DEFAULT_COLORS.velLow);
+  vizBg.setFxAny('velHigh', FX_DEFAULT_COLORS.velHigh);
 }
 const fxThemeInput = ref('');        // 自定义主题名（D8：命名交给用户）
 // 参数滑块的当前值（bg.fx 可能还没这批键 —— store 首次读写会补默认）
@@ -667,30 +668,30 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .viz-page { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.viz-col { display: flex; flex-direction: column; gap: 14px; height: 100%; min-height: 0; }
+.viz-col { display: flex; flex-direction: column; gap: var(--sp-4); height: 100%; min-height: 0; }
 .viz-hero { display: flex; flex-direction: column; min-height: 0; position: relative; }
 .viz-hero .vc-body { height: 46vh; min-height: 260px; position: relative; }
 /* 卡片列用 minmax(0,1fr)：canvas 的内在宽度（300px）会把纯 1fr 撑破并横向裁切 */
-.viz-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.viz-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-4); }
 .viz-card { min-width: 0; }
 .viz-card .vc-body { height: clamp(140px, 20vh, 220px); }
 @media (max-width: 1024px) { .viz-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 720px) { .viz-grid { grid-template-columns: minmax(0, 1fr); } }
-.vc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; font-weight: 600; color: var(--ink); flex-wrap: wrap; }
+.vc-head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: 10px; font-size: var(--fs-md); font-weight: 600; color: var(--ink); flex-wrap: wrap; }
 .vc-head b { letter-spacing: -0.2px; }
-.vc-head .vc-zoom { font-size: 11px; min-width: 44px; text-align: center; font-weight: 500; }
-.vc-body canvas { width: 100%; height: 100%; display: block; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--canvas); }
-.chip-btn.active { background: var(--accent); color: #fff; }
+.vc-head .vc-zoom { font-size: var(--fs-xs); min-width: 44px; text-align: center; font-weight: 500; }
+.vc-body canvas { width: 100%; height: 100%; display: block; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--canvas); }
+.chip-btn.active { background: var(--accent); color: var(--on-accent); }
 /* 背景设置条：低调的一行，不抢画面 */
-.viz-bg-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 12px 8px; font-size: 12px;
+.viz-bg-bar { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; padding: 6px 12px 8px; font-size: var(--fs-sm);
               border-bottom: 1px solid var(--hairline); margin-bottom: 2px; }
 .viz-bg-bar input[type=range] { accent-color: var(--accent); }
 .viz-theme-input {
-  width: 108px; height: 24px; padding: 0 8px; font-size: 12px;
-  border: 1px solid var(--hairline); border-radius: 7px;
+  width: 108px; height: 24px; padding: 0 8px; font-size: var(--fs-sm);
+  border: 1px solid var(--hairline); border-radius: var(--r-sm);
   background: var(--surface); color: var(--ink);
 }
-.viz-bg-color { width: 28px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: transparent; }
+.viz-bg-color { width: 28px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; }
 .viz-page.waterfall .viz-grid { display: none; }
 .viz-page.waterfall .viz-hero { flex: 1; }
 /* 全屏瀑布流：不写死 vh 魔法数，直接吃掉剩余高度（窗口变化时自适应） */
@@ -711,7 +712,7 @@ onBeforeUnmount(() => {
   position: absolute; top: 0; left: 0; right: 0; z-index: 3;
   margin: 0; padding: 8px 14px;
   background: linear-gradient(to bottom, rgba(0, 0, 0, .5), rgba(0, 0, 0, 0));
-  color: #fff;
+  color: var(--on-accent);
   transition: opacity var(--motion-slow) var(--ease-out);
 }
 /* 沉浸态的控件压在画面之上：统一改成白色系，深浅主题下都能读 */
@@ -719,33 +720,33 @@ onBeforeUnmount(() => {
 .viz-page.immersive .vc-head .chip-btn {
   background: rgba(0, 0, 0, .45);
   border-color: rgba(255, 255, 255, .22);
-  color: #fff;
+  color: var(--on-accent);
 }
 .viz-page.immersive .vc-head .chip-btn:hover { background: rgba(0, 0, 0, .62); }
-.viz-page.immersive .vc-head .chip-btn.active { background: #fff; color: #0a0a0a; }
+.viz-page.immersive .vc-head .chip-btn.active { background: var(--surface); color: #0a0a0a; }
 .viz-page.immersive .vc-head .muted,
 .viz-page.immersive .vc-head .vc-zoom { color: rgba(255, 255, 255, .82); }
 
 .viz-hud {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 3;
-  display: flex; align-items: center; gap: 12px;
+  display: flex; align-items: center; gap: var(--sp-3);
   padding: 10px 16px;
   background: linear-gradient(to top, rgba(0, 0, 0, .52), rgba(0, 0, 0, 0));
-  color: #fff;
+  color: var(--on-accent);
   transition: opacity var(--motion-slow) var(--ease-out);
 }
 .hud-btn {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex; align-items: center; gap: var(--sp-2);
   flex: none;
   padding: 7px 12px; border: 1px solid rgba(255, 255, 255, .24);
-  border-radius: var(--radius-full, 999px);
-  background: rgba(255, 255, 255, .16); color: #fff;
-  font-size: 12.5px; font-weight: 600; cursor: pointer;
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, .16); color: var(--on-accent);
+  font-size: var(--fs-md); font-weight: 600; cursor: pointer;
 }
 .hud-btn:hover { background: rgba(255, 255, 255, .28); }
-.hud-time { flex: none; font-size: 12px; font-variant-numeric: tabular-nums; opacity: .92; }
-.hud-name { flex: none; max-width: 32%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; opacity: .92; }
-.hud-seek { flex: 1; min-width: 0; accent-color: #fff; }
+.hud-time { flex: none; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; opacity: .92; }
+.hud-name { flex: none; max-width: 32%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-md); font-weight: 600; opacity: .92; }
+.hud-seek { flex: 1; min-width: 0; accent-color: var(--on-accent); }
 .hud-exit { margin-left: auto; }
 /* 静止后整层隐去：只留画面 */
 .hud-hidden { opacity: 0; pointer-events: none; }
@@ -765,14 +766,14 @@ onBeforeUnmount(() => {
   resize: both;
   overflow: auto;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--r-md);
   background: color-mix(in srgb, var(--card) 90%, transparent);
   backdrop-filter: blur(12px) saturate(1.08);   /* 玻璃感：面板压着画面时仍然能看出下面的音符 */
   box-shadow: 0 18px 50px rgba(0, 0, 0, .45);
   color: var(--ink);
 }
 .fx-panel-head {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: var(--sp-2);
   padding: 8px 10px;
   border-bottom: 1px solid var(--line);
   cursor: move;
@@ -780,15 +781,15 @@ onBeforeUnmount(() => {
   touch-action: none;          /* 拖动时不要触发页面滚动/手势 */
   position: sticky; top: 0;
   background: inherit;
-  border-radius: 12px 12px 0 0;
+  border-radius: var(--r-md) var(--r-md) 0 0;
 }
-.fx-panel-head b { font-size: 12.5px; }
+.fx-panel-head b { font-size: var(--fs-md); }
 .fx-panel-head .chip-btn { cursor: pointer; }
 .fx-panel-body { display: flex; flex-direction: column; padding-bottom: 6px; }
 /* 面板里的控件比工具条里更紧凑：窄面板下换行次数少一半 */
-.fx-panel-body .viz-bg-bar { padding: 5px 10px 6px; gap: 6px; }
-.fx-panel-body .chip-btn { padding: 3px 8px; font-size: 11.5px; }
-.fx-panel-body :deep(.muted.small) { font-size: 11px; }
+.fx-panel-body .viz-bg-bar { padding: 5px 10px 6px; gap: var(--sp-2); }
+.fx-panel-body .chip-btn { padding: 3px 8px; font-size: var(--fs-sm); }
+.fx-panel-body :deep(.muted.small) { font-size: var(--fs-xs); }
 .fx-panel-body .viz-bg-bar { border-radius: 0; }
 @media (max-width: 720px) {
   .hud-name { display: none; }

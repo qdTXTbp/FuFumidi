@@ -388,15 +388,15 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
 </template>
 
 <style scoped>
-.cv-wrap { display: flex; flex-direction: column; gap: 14px; }
-.cv-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
-.cv-label { font-size: 12px; color: var(--stone); flex: none; }
+.cv-wrap { display: flex; flex-direction: column; gap: var(--sp-4); }
+.cv-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-top: 8px; }
+.cv-label { font-size: var(--fs-sm); color: var(--stone); flex: none; }
 .cv-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60ch; }
-.cv-seg { display: flex; gap: 8px; margin-top: 6px; }
+.cv-seg { display: flex; gap: var(--sp-2); margin-top: 6px; }
 .cv-adv { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--hairline); }
-.cv-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--steel); margin-top: 10px; }
-.cv-bar { height: 8px; border-radius: 6px; background: var(--surface-soft); overflow: hidden; margin-top: 10px; }
-.cv-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--brand-blue, #4facfe), #00f2fe); transition: transform var(--motion-base) var(--ease-out); }
-.cv-err { margin-top: 10px; font-size: 12px; color: var(--error); white-space: pre-wrap; }
-.cv-log { margin-top: 10px; max-height: 220px; overflow: auto; font-size: 11.5px; line-height: 1.6; background: var(--surface-soft); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; }
+.cv-check { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); color: var(--steel); margin-top: 10px; }
+.cv-bar { height: 8px; border-radius: var(--r-sm); background: var(--surface-soft); overflow: hidden; margin-top: 10px; }
+.cv-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--brand-blue, var(--t-info)), var(--t-info)); transition: transform var(--motion-base) var(--ease-out); }
+.cv-err { margin-top: 10px; font-size: var(--fs-sm); color: var(--error); white-space: pre-wrap; }
+.cv-log { margin-top: 10px; max-height: 220px; overflow: auto; font-size: var(--fs-sm); line-height: 1.6; background: var(--surface-soft); border-radius: var(--r-md); padding: 8px 10px; white-space: pre-wrap; }
 </style>

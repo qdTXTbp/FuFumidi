@@ -13,6 +13,7 @@
 </template>
 
 <script setup>
+import { themeColor } from '../../core/palette.js';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { partClusters, PART_GAP_BEATS } from '../../core/arrange.js';
 
@@ -170,13 +171,13 @@ function draw() {
   // ---- 播放头（贯穿）
   const px2 = xOfBeat(props.playheadBeat);
   if (px2 >= HEAD_W - 2 && px2 <= w) {
-    ctx.strokeStyle = '#ff7a6b';
+    ctx.strokeStyle = themeColor('--t-err', '#ff7a6b');
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(px2 + 0.5, PAD_TOP);
     ctx.lineTo(px2 + 0.5, h);
     ctx.stroke();
-    ctx.fillStyle = '#ff7a6b';
+    ctx.fillStyle = themeColor('--t-err', '#ff7a6b');
     ctx.beginPath();
     ctx.moveTo(px2 - 5, PAD_TOP);
     ctx.lineTo(px2 + 5, PAD_TOP);
@@ -379,9 +380,9 @@ defineExpose({ draw, resize });
 .arr {
   overflow-x: auto;
   overflow-y: hidden;
-  border: 1px solid var(--bd, #2a2f3a);
-  border-radius: 8px;
-  background: var(--arr-bg, #1c1f26);
+  border: 1px solid var(--bd, var(--t-line));
+  border-radius: var(--r-md);
+  background: var(--arr-bg, var(--canvas));
 }
 .arr canvas { display: block; }
 </style>

@@ -310,8 +310,9 @@ export function newNoteId(): string { return nid(); }
  * 八个色相拉开距离、明度都在中间调：浅色主题与深色主题下都能与底色分开，
  * 半透明画成「幽灵音符」时也还能认出是哪条轨（参考 FL Studio 的 ghost notes 用法）。
  */
-export const TRACK_PALETTE = ['#3d8bfd', '#ff7a45', '#36b37e', '#b37feb',
-  '#f2b705', '#22b8cf', '#f06595', '#7f8c8d'];
+// 轨色板来自 core/palette.js（单一来源）；本模块内部要用到，所以 import 后再导出
+import { SINGER_TRACK_RAMP as TRACK_PALETTE } from '../core/palette.js';
+export { TRACK_PALETTE };
 
 /**
  * 色盲友好配色板（M9c）：**Okabe–Ito** 八色。
@@ -320,8 +321,8 @@ export const TRACK_PALETTE = ['#3d8bfd', '#ff7a45', '#36b37e', '#b37feb',
  *   对红绿色盲（最常见）也保持可分辨，而且明度拉开、投影仪/打印都不塌。
  *   原来那套里 #36b37e（绿）与 #ff7a45（橙红）、#f06595（粉）与 #b37feb（紫）在红绿色盲下会糊在一起。
  */
-export const TRACK_PALETTE_CB = ['#0072B2', '#D55E00', '#009E73', '#CC79A7',
-  '#E69F00', '#56B4E9', '#F0E442', '#000000'];
+import { SINGER_TRACK_PALETTE_CB as TRACK_PALETTE_CB } from '../core/palette.js';
+export { TRACK_PALETTE_CB };
 
 const CB_KEY = 'fufumidi_cb_palette';
 /* ★ 必须是 **ref** 而不是普通变量：trackColorOf() 被模板与 computed 调用，

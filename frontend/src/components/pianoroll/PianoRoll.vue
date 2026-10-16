@@ -1594,23 +1594,23 @@ defineExpose({
 </template>
 
 <style scoped>
-.pr { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface); }
-.pr-bar { display: flex; align-items: center; gap: 10px; padding: 6px 10px; flex-wrap: wrap; border-bottom: 1px solid var(--border); background: var(--surface-muted); }
-.pr-tools { display: inline-flex; gap: 4px; }
-.pr-tool { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 7px; background: transparent; color: var(--stone); font-size: 12px; cursor: pointer; }
+.pr { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; background: var(--surface); }
+.pr-bar { display: flex; align-items: center; gap: var(--sp-3); padding: 6px 10px; flex-wrap: wrap; border-bottom: 1px solid var(--border); background: var(--surface-muted); }
+.pr-tools { display: inline-flex; gap: var(--sp-1); }
+.pr-tool { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; color: var(--stone); font-size: var(--fs-sm); cursor: pointer; }
 .pr-tool:hover { background: var(--surface); color: var(--ink); }
 .pr-tool.on { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-text); }
-.pr-ad { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--stone); }
-.pr-ad select { height: 24px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 11.5px; }
+.pr-ad { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-sm); color: var(--stone); }
+.pr-ad select { height: 24px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: var(--ink); font-size: var(--fs-sm); }
 .pr-bar-pitch { padding-top: 0; border-top: 0; }
 .pr-zoom { display: inline-flex; gap: 3px; }
-.pr-mini { width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--stone); cursor: pointer; line-height: 1; }
+.pr-mini { width: 24px; height: 24px; border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; color: var(--stone); cursor: pointer; line-height: 1; }
 .pr-mini:hover { background: var(--surface); color: var(--ink); }
-.pr-hint { margin-left: auto; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pr-hint { margin-left: auto; font-size: var(--fs-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pr-hint-btn { margin-left: auto; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--border);
-  background: transparent; color: var(--text-muted); font-size: 11px; line-height: 1; cursor: help; flex: none; }
+  background: transparent; color: var(--text-muted); font-size: var(--fs-xs); line-height: 1; cursor: help; flex: none; }
 .pr-hint-btn:hover { color: var(--ink); border-color: var(--brand); }
-.pr-mini-wide { width: auto; padding: 0 6px; font-size: 11px; }
+.pr-mini-wide { width: auto; padding: 0 6px; font-size: var(--fs-xs); }
 .pr-scroll { position: relative; overflow: auto; background: var(--surface); }
 /* fill：卷帘自己撑满父容器，滚动区吃掉工具栏之外的全部高度（行高由 JS 自适应） */
 .pr.pr-fill { height: 100%; min-height: 0; }
@@ -1622,11 +1622,11 @@ defineExpose({
 /* 音素条带：贴住音符区底部，横向随同一滚动容器对齐 */
 .pr-ph-canvas { border-top: 1px solid var(--border); touch-action: none; }
 .pr-auto-canvas { touch-action: none; }
-.pr-ctx { position: absolute; z-index: 40; min-width: 132px; padding: 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); box-shadow: 0 8px 24px rgba(0,0,0,.28); max-height: calc(100% - 8px); overflow-y: auto; overscroll-behavior: contain; }
-.pr-ctx-i { display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font-size: 12.5px; text-align: left; cursor: pointer; }
+.pr-ctx { position: absolute; z-index: 40; min-width: 132px; padding: 4px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); box-shadow: 0 8px 24px rgba(0,0,0,.28); max-height: calc(100% - 8px); overflow-y: auto; overscroll-behavior: contain; }
+.pr-ctx-i { display: flex; align-items: center; gap: var(--sp-2); width: 100%; padding: 6px 9px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--ink); font-size: var(--fs-md); text-align: left; cursor: pointer; }
 .pr-ctx-i:hover:not(:disabled) { background: var(--surface-muted); }
 .pr-ctx-i:disabled { opacity: .4; cursor: not-allowed; }
-.pr-ctx-k { margin-left: auto; color: var(--text-muted); font-size: 10.5px; font-family: var(--mono); }
+.pr-ctx-k { margin-left: auto; color: var(--text-muted); font-size: var(--fs-xs); font-family: var(--mono); }
 .pr-ctx-sep { height: 1px; margin: 4px 2px; background: var(--border); }
 .ctxmenu-enter-active, .ctxmenu-leave-active { transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
 .ctxmenu-enter-from, .ctxmenu-leave-to { opacity: 0; transform: scale(.96); }

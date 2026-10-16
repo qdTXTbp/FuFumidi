@@ -9,6 +9,7 @@
     如果这里也用 glass/半透明，密集文字会压在壁纸上看不清 —— 这正是改版前的实测问题。
 -->
 <script setup lang="ts">
+import { themeColor } from '../../core/palette.js';
 import { computed, nextTick, onActivated, onMounted, ref } from 'vue';
 import Icon from '../Icon.vue';
 import { t } from '../../core/i18n.js';
@@ -417,8 +418,8 @@ function drawRange() {
   bctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   bctx.clearRect(0, 0, w, h);
 
-  const brand = (getComputedStyle(document.documentElement).getPropertyValue('--brand') || '#4B3FE3').trim() || '#4B3FE3';
-  const accent = (getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#E8463A').trim() || '#E8463A';
+  const brand = (getComputedStyle(document.documentElement).getPropertyValue('--brand') || themeColor('--data-6', '#4b3fe3')).trim() || themeColor('--data-6', '#4b3fe3');
+  const accent = (getComputedStyle(document.documentElement).getPropertyValue('--accent') || themeColor('--t-err', '#e8463a')).trim() || themeColor('--t-err', '#e8463a');
   const stone = (getComputedStyle(document.documentElement).getPropertyValue('--stone') || '#8a8f98').trim() || '#8a8f98';
   const ink = (getComputedStyle(document.documentElement).getPropertyValue('--ink') || '#222').trim() || '#222';
 
@@ -437,7 +438,7 @@ function drawRange() {
   rows.forEach((item: any, r: number) => {
     const y = RULER + r * CELL_H;
     const label = String(item.alias || item.file || '?');
-    bctx.fillStyle = item.error ? '#c0392b' : (item.note == null ? stone : ink);
+    bctx.fillStyle = item.error ? themeColor('--t-err', '#c0392b') : (item.note == null ? stone : ink);
     bctx.font = '10px ui-monospace, monospace';
     bctx.fillText(label.length > 20 ? label.slice(0, 19) + '…' : label, 4, y + 3);
     if (item.note == null) {
@@ -771,40 +772,40 @@ function onRangeClick() {
 <style scoped>
 /* ★ 实心底：壁纸开启时 .app-main 透明，这里必须自己铺不透明底，否则文字压在壁纸上 */
 .vbp-page { height: 100%; overflow: auto; background: var(--canvas); padding: 12px 16px 18px; }
-.vbp-head { display: flex; align-items: center; gap: 10px; padding-bottom: 10px;
+.vbp-head { display: flex; align-items: center; gap: var(--sp-3); padding-bottom: 10px;
             border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-.vbp-head b { font-size: 14px; }
+.vbp-head b { font-size: var(--fs-lg); }
 .vbp-msg { margin: 8px 0 0; color: var(--brand-text); }
-.vbp-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+.vbp-card { border: 1px solid var(--border); border-radius: var(--r-md); padding: 10px 12px;
             margin-top: 12px; background: var(--surface); }
-.vbp-title { display: flex; align-items: center; gap: 7px; font-size: 12.5px; margin-bottom: 8px; }
+.vbp-title { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-md); margin-bottom: 8px; }
 .vbp-title .sp { flex: 1; }
-.vbp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
-.vbp-st { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--canvas); }
+.vbp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--sp-3); }
+.vbp-st { border: 1px solid var(--border); border-radius: var(--r-md); padding: 8px 10px; background: var(--canvas); }
 .vbp-st.ok { border-color: rgba(80, 190, 120, .5); }
-.vbp-st b { font-size: 12px; }
+.vbp-st b { font-size: var(--fs-sm); }
 .vbp-list { list-style: none; margin: 0; padding: 0; }
-.vbp-list li { display: flex; align-items: center; gap: 8px; padding: 5px 0;
+.vbp-list li { display: flex; align-items: center; gap: var(--sp-2); padding: 5px 0;
                border-bottom: 1px solid var(--border); }
 .vbp-list li:last-child { border-bottom: none; }
-.vbp-probe { margin-top: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--canvas); }
-.vbp-probe-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.vbp-probe { margin-top: 10px; border: 1px solid var(--border); border-radius: var(--r-md); padding: 8px 10px; background: var(--canvas); }
+.vbp-probe-head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: 6px; }
 .vbp-probe-head .sp { flex: 1; }
-.vbp-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.vbp-checks li { display: flex; align-items: baseline; gap: 6px; font-size: 12px; }
+.vbp-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.vbp-checks li { display: flex; align-items: baseline; gap: var(--sp-2); font-size: var(--fs-sm); }
 .vbp-checks li i { font-style: normal; width: 12px; text-align: center; }
-.vbp-checks li.ok i { color: var(--success-text, #4caf50); }
-.vbp-checks li.warn i { color: var(--warn-text, #d9a300); }
-.vbp-checks li.error i { color: var(--danger-text, #e05252); }
+.vbp-checks li.ok i { color: var(--success-text, var(--t-ok)); }
+.vbp-checks li.warn i { color: var(--warn-text, var(--t-warn)); }
+.vbp-checks li.error i { color: var(--danger-text, var(--t-err)); }
 .vbp-checks li .txt { flex: 0 1 auto; }
 .vbp-checks li .fix { flex: 1 1 180px; }
-.vbp-list .nm { font-size: 12.5px; flex: none; }
+.vbp-list .nm { font-size: var(--fs-md); flex: none; }
 .vbp-list .dir { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.seg { display: inline-flex; gap: 4px; }
-.seg button { font-size: 11px; padding: 2px 9px; border-radius: 9px; cursor: pointer;
+.seg { display: inline-flex; gap: var(--sp-1); }
+.seg button { font-size: var(--fs-xs); padding: 2px 9px; border-radius: var(--r-md); cursor: pointer;
               border: 1px solid var(--border); background: var(--canvas); color: inherit; }
 .seg button.on { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-text); }
-.vbp-list .tag { font-size: 10px; padding: 1px 5px; border-radius: 4px;
+.vbp-list .tag { font-size: var(--fs-xs); padding: 1px 5px; border-radius: var(--r-sm);
                  border: 1px solid var(--border); flex: none; }
 
 /* ---------------- 动效：跟全局一套（0.2~0.34s + var(--ease-out)） ----------------
@@ -816,7 +817,7 @@ function onRangeClick() {
 /* 声库行：逐行入场 + 悬停高亮（行多时延迟封顶，不然最后一行要等一秒） */
 .vbp-row { animation: vbpRowIn var(--motion-slow) var(--ease-out) both;
            animation-delay: calc(min(var(--i, 0), 12) * 26ms);
-           border-radius: 6px; transition: background var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out); }
+           border-radius: var(--r-sm); transition: background var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out); }
 .vbp-row:hover { background: color-mix(in srgb, var(--brand-soft) 60%, transparent); transform: translateX(2px); }
 @keyframes vbpRowIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 /* 体检面板：高度 + 透明度一起过渡（max-height 给足余量，内容多了也不会被裁） */
@@ -833,39 +834,39 @@ function onRangeClick() {
 .vbp-st { transition: border-color var(--motion-slow) var(--ease-out), background var(--motion-slow) var(--ease-out); }
 .tag.e-utau { background: rgba(80, 190, 120, .18); }
 .tag.e-diffsinger { background: rgba(64, 140, 255, .18); }
-.vbp-list .inuse { font-size: 10.5px; color: var(--brand-text); flex: none; }
+.vbp-list .inuse { font-size: var(--fs-xs); color: var(--brand-text); flex: none; }
 
 /* ---- M8f 别名表 ---- */
-.vbp-oto-tools { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
+.vbp-oto-tools { display: flex; align-items: center; gap: var(--sp-2); margin: 6px 0; flex-wrap: wrap; }
 .vbp-oto-search { width: 200px; }
-.vbp-oto-wrap { max-height: 46vh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
-.vbp-oto { width: 100%; border-collapse: collapse; font-size: 12px; }
+.vbp-oto-wrap { max-height: 46vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.vbp-oto { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
 .vbp-oto th { position: sticky; top: 0; z-index: 1; background: var(--surface-muted);
               border-bottom: 1px solid var(--border); padding: 4px 6px; text-align: left;
               white-space: nowrap; font-weight: 600; }
 .vbp-oto td { border-bottom: 1px solid var(--border); padding: 2px 6px; }
 .vbp-oto tr:hover td { background: color-mix(in srgb, var(--brand-soft) 45%, transparent); }
-.vbp-oto .oto-num { width: 62px; padding: 2px 4px; font-size: 12px; }
-.vbp-oto .oto-alias { width: 92px; padding: 2px 4px; font-size: 12px; }
+.vbp-oto .oto-num { width: 62px; padding: 2px 4px; font-size: var(--fs-sm); }
+.vbp-oto .oto-alias { width: 92px; padding: 2px 4px; font-size: var(--fs-sm); }
 .vbp-oto .oto-file { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vbp-oto .vb-tools { display: inline-flex; gap: 2px; }
-.vbp-pitch { display: inline-flex; align-items: center; gap: 5px; }
-.vbp-pitch .oto-num { width: 54px; padding: 2px 4px; font-size: 12px; }
+.vbp-pitch { display: inline-flex; align-items: center; gap: var(--sp-1); }
+.vbp-pitch .oto-num { width: 54px; padding: 2px 4px; font-size: var(--fs-sm); }
 .vbp-audition { margin: 4px 0; }
-.vbp-probe .dirty { font-size: 11.5px; color: var(--warn-text, #d9a300); }
+.vbp-probe .dirty { font-size: var(--fs-sm); color: var(--warn-text, var(--t-warn)); }
 
 /* ---- M8 音域热力图 ---- */
-.vbp-range-wrap { max-height: 52vh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.vbp-range-wrap { max-height: 52vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
 .vbp-range { display: block; cursor: crosshair; }
 .vbp-range-hint { margin: 4px 0 2px; line-height: 1.6; }
 .vbp-range-readout { margin: 2px 0 6px; min-height: 18px; }
 .vbp-range-readout b { color: var(--brand-text); }
-.vbp-range-readout .bad { color: var(--danger-text, #e05252); }
-.vbp-probe .tag { font-size: 10px; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border); }
+.vbp-range-readout .bad { color: var(--danger-text, var(--t-err)); }
+.vbp-probe .tag { font-size: var(--fs-xs); padding: 1px 5px; border-radius: var(--r-sm); border: 1px solid var(--border); }
 </style>
 
 /* DS 组件安装进度条（runtimePct/runtimeText） */
-.ds-prog { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-.ds-prog-track { flex: 1; min-width: 60px; height: 6px; border-radius: 3px; background: var(--surface-muted); overflow: hidden; }
+.ds-prog { display: flex; align-items: center; gap: var(--sp-2); margin-top: 6px; }
+.ds-prog-track { flex: 1; min-width: 60px; height: 6px; border-radius: var(--r-sm); background: var(--surface-muted); overflow: hidden; }
 .ds-prog-track i { display: block; height: 100%; background: var(--brand); transition: transform var(--motion-base) var(--ease-out); }
 .ds-prog-text { white-space: nowrap; }

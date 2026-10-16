@@ -304,7 +304,7 @@ function toggleCrossfade() {
       <button class="tp-btn" data-guide="pb-fx" :class="{ 'toggle-on': fxOpen || fx.enabled }" :title="t('音效调节')" :aria-label="t('音效调节')" @click="toggleFxOpen"><Icon name="cresc" :size="16" /></button>
       <button class="tp-btn" :class="{ 'toggle-on': compact }" :title="t('紧凑/完整播放栏')" :aria-label="t('紧凑/完整播放栏')" @click="compact = !compact"><Icon name="menu" :size="16" /></button>
 
-      <div class="row" style="gap:4px">
+      <div class="row" style="gap:var(--sp-1)">
         <button class="chip-btn" @click="stepTempo(-0.05)" :title="t('减速')" :aria-label="t('减速')">−</button>
         <input id="pb-tempo" name="pb-tempo" class="num-input" :aria-label="t('速度倍率')" type="number" min="0.25" max="4" step="0.05" v-model.number="state.tempo" style="width:52px;text-align:center" :title="t('速度倍率')">
         <button class="chip-btn" @click="stepTempo(0.05)" :title="t('加速')" :aria-label="t('加速')">＋</button>
@@ -332,8 +332,8 @@ function toggleCrossfade() {
           <b>{{ t('混音台') }}</b>
           <button class="icon-btn" @click="mixerOpen = false" :title="t('关闭')"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
         </div>
-        <div class="muted small" style="padding:0 2px 8px">{{ t('音量/静音/独奏/声像作用于 MIDI 通道：同一通道上的多条轨会一起变化') }}</div>
-        <div v-if="!state.tracks.length" class="muted small" style="padding:12px 4px">{{ t('当前曲目没有可混音的轨道') }}</div>
+        <div class="muted small" style="padding:0 2px var(--sp-2)">{{ t('音量/静音/独奏/声像作用于 MIDI 通道：同一通道上的多条轨会一起变化') }}</div>
+        <div v-if="!state.tracks.length" class="muted small" style="padding:var(--sp-3) var(--sp-1)">{{ t('当前曲目没有可混音的轨道') }}</div>
         <div v-for="(tr, i) in state.tracks" :key="i" class="mix-track">
           <span class="mt-color" :style="{ background: tr.color }"></span>
           <div class="mt-name">
@@ -351,7 +351,7 @@ function toggleCrossfade() {
           <div class="mt-vol" :title="t('音量 ') + Math.round(tr.vol * 100) + '%'">
             <NumSlider :model-value="tr.vol" @update:model-value="v => { setTrackVol(i, parseFloat(v)) }" :min="0" :max="1" :step="0.01" :range-style="{ '--fill': tr.vol * 100 + '%' }" :input-width="46" no-input />
           </div>
-          <div style="width:70px;display:flex;align-items:center;gap:6px" :title="panTitle(i)">
+          <div style="width:70px;display:flex;align-items:center;gap:var(--sp-2)" :title="panTitle(i)">
             <span class="muted small">L</span>
             <NumSlider :model-value="tr.pan" @update:model-value="v => { setTrackPan(i, parseFloat(v)) }" :min="-1" :max="1" :step="0.01" :range-style="panStyle(i)" :input-width="46" no-input />
             <span class="muted small">R</span>
@@ -380,7 +380,7 @@ function toggleCrossfade() {
                   <small>{{ it.englishName }} · {{ it.family }}</small>
                 </span>
               </button>
-              <div v-if="!instFiltered.length" class="muted small" style="padding:12px 4px">{{ t('没有匹配的音色') }}</div>
+              <div v-if="!instFiltered.length" class="muted small" style="padding:var(--sp-3) var(--sp-1)">{{ t('没有匹配的音色') }}</div>
             </div>
             <div class="mx-inst-foot">
               <button class="btn sm ghost" @click="instReset(instrumentFor)">{{ t('恢复文件音色') }}</button>
@@ -442,8 +442,8 @@ function toggleCrossfade() {
   min-width: 190px;
   background: var(--surface);
   border: 1px solid var(--hairline);
-  border-radius: 10px;
-  padding: 6px;
+  border-radius: var(--r-md);
+  padding: var(--sp-2);
   box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
@@ -458,62 +458,62 @@ function toggleCrossfade() {
   transform: translateX(-50%);
   z-index: var(--z-modal, 1000);
 }
-.pb-pop-row { display: flex; gap: 4px; align-items: center; }
-.pb-pop-jump { flex: 1; display: flex; align-items: center; gap: 6px; padding: 7px 10px; border: 0; background: transparent; color: var(--ink); border-radius: 7px; cursor: pointer; font-size: 12.5px; text-align: left; }
+.pb-pop-row { display: flex; gap: var(--sp-1); align-items: center; }
+.pb-pop-jump { flex: 1; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 0; background: transparent; color: var(--ink); border-radius: var(--r-sm); cursor: pointer; font-size: var(--fs-md); text-align: left; }
 .pb-pop-jump:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.pb-pop-del { border: 0; background: transparent; color: var(--stone); cursor: pointer; padding: 6px; border-radius: 6px; }
-.pb-pop-del:hover { color: #e26d5a; }
-.pb-pop-empty { padding: 8px 10px; font-size: 12px; color: var(--stone); }
-.eq-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 2px 10px; }
-.eq-switch { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink); cursor: pointer; }
+.pb-pop-del { border: 0; background: transparent; color: var(--stone); cursor: pointer; padding: var(--sp-2); border-radius: var(--r-sm); }
+.pb-pop-del:hover { color: var(--t-err); }
+.pb-pop-empty { padding: var(--sp-2) var(--sp-3); font-size: var(--fs-sm); color: var(--stone); }
+.eq-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-1) 2px var(--sp-3); }
+.eq-switch { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-md); color: var(--ink); cursor: pointer; }
 .eq-switch input { accent-color: var(--accent); }
-.eq-preset { background: var(--surface); color: var(--ink); border: 1px solid var(--hairline); border-radius: 8px; padding: 5px 10px; font-size: 12.5px; }
-.eq-bands { display: flex; gap: 10px; justify-content: space-between; padding: 8px 2px 4px; }
-.eq-band { display: flex; flex-direction: column; align-items: center; gap: 5px; flex: 1; min-width: 0; }
+.eq-preset { background: var(--surface); color: var(--ink); border: 1px solid var(--hairline); border-radius: var(--r-md); padding: var(--sp-1) var(--sp-3); font-size: var(--fs-md); }
+.eq-bands { display: flex; gap: var(--sp-3); justify-content: space-between; padding: var(--sp-2) 2px var(--sp-1); }
+.eq-band { display: flex; flex-direction: column; align-items: center; gap: var(--sp-1); flex: 1; min-width: 0; }
 .eq-vslider { writing-mode: vertical-lr; direction: rtl; width: 22px; height: 120px; accent-color: var(--accent); }
-.eq-hz { font-size: 10px; color: var(--stone); }
-.eq-val { font-size: 10px; color: var(--steel); min-height: 13px; }
-.eq-xrow { display: flex; align-items: center; gap: 10px; padding: 12px 2px 2px; }
+.eq-hz { font-size: var(--fs-xs); color: var(--stone); }
+.eq-val { font-size: var(--fs-xs); color: var(--steel); min-height: 13px; }
+.eq-xrow { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) 2px 2px; }
 .eq-xrow input[type="range"] { flex: 1; accent-color: var(--accent); }
-.eq-lbl { font-size: 12px; color: var(--steel); flex: none; }
-.eq-note { padding: 10px 2px 0; font-size: 11.5px; color: var(--stone); }
-.bpm-wrap { display: flex; align-items: center; gap: 6px; flex: none; }
-.bpm-lbl { font-size: 10.5px; color: rgba(255, 255, 255, 0.55); font-weight: 600; }
+.eq-lbl { font-size: var(--fs-sm); color: var(--steel); flex: none; }
+.eq-note { padding: var(--sp-3) 2px 0; font-size: var(--fs-sm); color: var(--stone); }
+.bpm-wrap { display: flex; align-items: center; gap: var(--sp-2); flex: none; }
+.bpm-lbl { font-size: var(--fs-xs); color: rgba(255, 255, 255, 0.55); font-weight: 600; }
 .mx-overlay {
   position: fixed; inset: 0; z-index: 90;
   background: rgba(10, 10, 10, 0.28);
   -webkit-backdrop-filter: blur(8px) saturate(1.4); backdrop-filter: blur(8px) saturate(1.4);
   display: flex; align-items: flex-end; justify-content: flex-end;
-  padding: 0 14px calc(var(--playerbar-h) + 14px) 0;
+  padding: 0 var(--sp-4) calc(var(--playerbar-h) + 14px) 0;
 }
 .mx-card {
   width: 480px; max-width: calc(100vw - 28px); max-height: 58vh; overflow-y: auto;
   background: var(--glass-bg-strong);
   -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
   color: var(--ink);
-  border: 1px solid color-mix(in srgb, #fff 26%, transparent);
-  border-radius: 16px;
-  box-shadow: var(--shadow-lg); padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--on-accent) 26%, transparent);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg); padding: var(--sp-4);
 }
 /* 音色选择浮层 */
 .mx-instr-mask {
   position: absolute; inset: 0; z-index: 5;
-  background: rgba(10, 10, 10, 0.35); border-radius: 16px;
+  background: rgba(10, 10, 10, 0.35); border-radius: var(--r-lg);
   display: flex; align-items: stretch; justify-content: center;
 }
 .mx-card { position: relative; }
 .mx-instr {
-  width: 100%; max-width: 440px; margin: 10px;
+  width: 100%; max-width: 440px; margin: var(--sp-3);
   display: flex; flex-direction: column;
   background: var(--glass-bg-strong);
   -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
-  border: 1px solid color-mix(in srgb, #fff 26%, transparent);
-  border-radius: 12px; padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--on-accent) 26%, transparent);
+  border-radius: var(--r-md); padding: var(--sp-3);
 }
 .mx-inst-search {
-  display: flex; align-items: center; gap: 6px;
-  padding: 4px 8px; margin-bottom: 8px;
-  border: 1px solid var(--border); border-radius: 9px;
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2); margin-bottom: var(--sp-2);
+  border: 1px solid var(--border); border-radius: var(--r-md);
   color: var(--steel);
 }
 .mx-inst-list {
@@ -522,46 +522,46 @@ function toggleCrossfade() {
   padding-right: 2px;
 }
 .mx-inst-item {
-  display: flex; align-items: center; gap: 8px; text-align: left;
-  padding: 6px 8px; border-radius: 8px; background: none; border: none;
+  display: flex; align-items: center; gap: var(--sp-2); text-align: left;
+  padding: var(--sp-2) var(--sp-2); border-radius: var(--r-md); background: none; border: none;
   color: var(--ink); cursor: pointer;
 }
 .mx-inst-item:hover { background: var(--surface-soft); }
 .mx-inst-item.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
 .mx-inst-names { display: flex; flex-direction: column; min-width: 0; }
-.mx-inst-names b { font-size: 13px; font-weight: 600; }
-.mx-inst-names small { font-size: 11.5px; color: var(--stone); }
-.mx-inst-foot { display: flex; justify-content: space-between; gap: 8px; padding-top: 10px; }
+.mx-inst-names b { font-size: var(--fs-md); font-weight: 600; }
+.mx-inst-names small { font-size: var(--fs-sm); color: var(--stone); }
+.mx-inst-foot { display: flex; justify-content: space-between; gap: var(--sp-2); padding-top: var(--sp-3); }
 .mt-inst {
-  display: inline-flex; align-items: center; gap: 5px;
+  display: inline-flex; align-items: center; gap: var(--sp-1);
   background: none; border: none; cursor: pointer; padding: 0;
   color: var(--accent);
 }
-.mt-inst small { font-size: 11.5px; color: var(--accent); }
+.mt-inst small { font-size: var(--fs-sm); color: var(--accent); }
 .mt-inst em { font-style: normal; opacity: 0.7; color: var(--stone); }
 .mt-inst:hover small { text-decoration: underline; }
 .mx-head {
   display: flex; align-items: center; justify-content: space-between;
-  font-size: 14px; font-weight: 700; color: var(--ink);
-  padding: 2px 4px 10px;
+  font-size: var(--fs-lg); font-weight: 700; color: var(--ink);
+  padding: 2px var(--sp-1) var(--sp-3);
 }
 /* 混音台在黑色播放条内部，覆盖其白色滑杆样式 */
 .mx-card input[type="range"] {
   background: linear-gradient(90deg, var(--ink) 0%, var(--ink) var(--fill, 0%), var(--hairline) var(--fill, 0%));
 }
-.mx-card input[type="range"]::-webkit-slider-thumb { background: #fff; border-color: var(--ink); }
+.mx-card input[type="range"]::-webkit-slider-thumb { background: var(--surface); border-color: var(--ink); }
 
 /* 进度条悬停预览（仿参考截图）：白底深字气泡 + 落点竖线；纯展示，不挡指针 */
 .pb-progress { position: relative; }
 .pb-hoverline {
   position: absolute; bottom: -3px; width: 2px; height: 10px;
-  background: rgba(255, 255, 255, 0.9); border-radius: 1px;
+  background: rgba(255, 255, 255, 0.9); border-radius: var(--r-sm);
   transform: translateX(-1px); pointer-events: none;
 }
 .pb-hovertip {
   position: absolute; bottom: calc(100% - 2px); transform: translateX(-50%);
-  background: #fff; color: #111; border: 1px solid rgba(0, 0, 0, 0.12);
-  border-radius: 6px; padding: 3px 8px; font-size: 12px; line-height: 1.2;
+  background: var(--surface); color: var(--ink); border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: var(--r-sm); padding: 3px var(--sp-2); font-size: var(--fs-sm); line-height: 1.2;
   font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); z-index: 6;
 }

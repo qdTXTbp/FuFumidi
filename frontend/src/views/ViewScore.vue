@@ -858,8 +858,8 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="score-legend">
-      <span class="lg-item"><span class="dot" style="background:#ffd866"></span>{{ t('正在播放音符') }}</span>
-      <span class="lg-item"><span class="dot" style="background:#1456f0"></span>{{ t('升降号自动按调号判定') }}</span>
+      <span class="lg-item"><span class="dot" style="background:var(--data-3)"></span>{{ t('正在播放音符') }}</span>
+      <span class="lg-item"><span class="dot" style="background:var(--accent)"></span>{{ t('升降号自动按调号判定') }}</span>
     </div>
 
     <!-- 乐谱分页预览弹窗 -->
@@ -902,28 +902,28 @@ onBeforeUnmount(() => {
 .score-view { display: flex; flex-direction: column; height: 100%; background: var(--canvas); }
 .score-toolbar {
   position: relative;           /* .score-pop 的定位基准（否则会跑到窗口右上角） */
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: var(--sp-2);
   padding: 8px 14px; border-bottom: 1px solid var(--hairline);
   flex-wrap: nowrap; overflow-x: auto; flex: none;
 }
-.tb-label { font-size: 12px; color: var(--stone); font-weight: 600; }
-.trk-sel { display: inline-flex; align-items: center; gap: 6px; }
+.tb-label { font-size: var(--fs-sm); color: var(--stone); font-weight: 600; }
+.trk-sel { display: inline-flex; align-items: center; gap: var(--sp-2); }
 .trk-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
 .sep { width: 1px; height: 20px; background: var(--hairline); margin: 0 2px; }
-.tb-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--steel); min-width: 0; }
+.tb-status { display: inline-flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); color: var(--steel); min-width: 0; }
 .tb-status .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--stone); flex: none; }
 .tb-status .pulse.on { background: var(--success-text); box-shadow: 0 0 0 0 rgba(27,166,115,.5); animation: pulse 1.4s var(--ease-in-out) infinite; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(27,166,115,.5); } 70% { box-shadow: 0 0 0 6px rgba(27,166,115,0); } 100% { box-shadow: 0 0 0 0 rgba(27,166,115,0); } }
 .zoom-fab { display: inline-flex; align-items: center; gap: 2px; }
-.zf-pct { font-size: 11px; color: var(--stone); min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
+.zf-pct { font-size: var(--fs-xs); color: var(--stone); min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
 .score-pop {
   position: absolute; top: calc(100% + 6px); right: 10px; z-index: 60;
   background: var(--canvas); border: 1px solid var(--hairline);
-  border-radius: 12px; box-shadow: var(--shadow);
-  padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
-  font-size: 12.5px; color: var(--ink); min-width: 140px;
+  border-radius: var(--r-md); box-shadow: var(--shadow);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: var(--sp-2);
+  font-size: var(--fs-md); color: var(--ink); min-width: 140px;
 }
-.score-pop label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.score-pop label { display: flex; align-items: center; gap: var(--sp-2); cursor: pointer; }
 .score-pop input { accent-color: var(--ink); }
 /* 显示选项下拉开合动画 */
 .pop-enter-active, .pop-leave-active { transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-base) var(--ease-spring); transform-origin: top right; }
@@ -931,26 +931,26 @@ onBeforeUnmount(() => {
 
 .score-scroll { flex: 1; overflow: auto; padding: 6px 10px 20px; scrollbar-gutter: stable; }
 .score-block { margin-bottom: 14px; border-bottom: 1px dashed var(--hairline); padding-bottom: 8px; }
-.score-block-name { font-size: 12px; color: var(--stone); margin-bottom: 4px; }
+.score-block-name { font-size: var(--fs-sm); color: var(--stone); margin-bottom: 4px; }
 
-.score-empty { color: var(--stone); font-size: 13px; padding: 18px 12px; line-height: 1.8; text-align: center; }
+.score-empty { color: var(--stone); font-size: var(--fs-md); padding: 18px 12px; line-height: 1.8; text-align: center; }
 .jianpu { display: block; padding: 14px 8px; line-height: 2; color: var(--ink); }
 .jp-cell { display: inline-block; margin: 2px 8px; white-space: nowrap; }
-.jp-note { font-weight: 700; color: #d45656; }
+.jp-note { font-weight: 700; color: var(--t-err); }
 .jp-long::after { content: ' —'; color: var(--stone); }
 .jp-half::after { content: ' -'; color: var(--stone); }
 .jp-8 { text-decoration: underline; }
 .jp-16 { text-decoration: underline double; }
-.jp-dash { color: var(--stone); font-size: 15px; margin-left: 4px; }
-.tab-sys { display: flex; flex-direction: column; gap: 16px; padding: 12px 8px; }
-.tab-line { font-family: var(--mono); font-size: 13px; line-height: 1.55; white-space: pre; overflow-x: auto; color: var(--steel); padding: 1px 0; }
+.jp-dash { color: var(--stone); font-size: var(--fs-lg); margin-left: 4px; }
+.tab-sys { display: flex; flex-direction: column; gap: var(--sp-4); padding: 12px 8px; }
+.tab-line { font-family: var(--mono); font-size: var(--fs-md); line-height: 1.55; white-space: pre; overflow-x: auto; color: var(--steel); padding: 1px 0; }
 
 .score-legend {
-  display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
+  display: flex; gap: var(--sp-4); flex-wrap: wrap; align-items: center;
   padding: 8px 14px; border-top: 1px solid var(--hairline);
-  font-size: 11px; color: var(--stone); flex: none;
+  font-size: var(--fs-xs); color: var(--stone); flex: none;
 }
-.lg-item { display: inline-flex; align-items: center; gap: 6px; }
+.lg-item { display: inline-flex; align-items: center; gap: var(--sp-2); }
 .lg-item .dot { width: 7px; height: 7px; border-radius: 50%; }
 
 /* Verovio 五线谱：强制使用主题文字色，避免深色主题下黑音符融入背景 */
@@ -961,11 +961,11 @@ onBeforeUnmount(() => {
   stroke: currentColor !important;
   fill: currentColor !important;
 }
-:deep(#abcScore .fu-play *) { fill: #ffb224 !important; stroke: #ffb224 !important; }
+:deep(#abcScore .fu-play *) { fill: var(--t-warn) !important; stroke: var(--t-warn) !important; }
 :deep(#abcScore .fu-play .abcjs-notehead) { stroke: #6b3200 !important; stroke-width: 2 !important; }
-:deep(#abcScore .fu-play .abcjs-stem) { stroke: #ffbe3c !important; stroke-width: 2.2 !important; }
+:deep(#abcScore .fu-play .abcjs-stem) { stroke: var(--t-warn) !important; stroke-width: 2.2 !important; }
 /* 简谱跟随播放高亮（HTML 渲染模式） */
-.jp-note.fu-play { background: #ffd866 !important; color: #3a2b00 !important; border-radius: 4px; box-shadow: 0 0 0 2px rgba(255, 216, 102, 0.35); }
+.jp-note.fu-play { background: var(--data-3) !important; color: #3a2b00 !important; border-radius: var(--r-sm); box-shadow: 0 0 0 2px rgba(255, 216, 102, 0.35); }
 :deep(#abcScore .abcjs-note) { cursor: pointer; }
 :deep(#abcScore svg .abcjs-ending) { display: none; }
 :deep(#abcScore.fu-grid) { background-image: repeating-linear-gradient(to right, var(--hairline) 0 1px, transparent 1px var(--fu-beatw, 56px)); }
@@ -980,18 +980,18 @@ onBeforeUnmount(() => {
 .pv-card {
   width: 780px; max-width: 96vw; max-height: 88vh;
   background: var(--canvas); border: 1px solid var(--hairline);
-  border-radius: 16px; box-shadow: var(--shadow-lg);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-lg);
   display: flex; flex-direction: column; overflow: hidden;
 }
 .pv-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px; border-bottom: 1px solid var(--hairline);
-  font-size: 14px; font-weight: 700; color: var(--ink);
+  font-size: var(--fs-lg); font-weight: 700; color: var(--ink);
   flex: none;
 }
-.pv-body { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
-.pv-page { border: 1px solid var(--hairline); border-radius: 12px; overflow: hidden; }
-.pv-page-name { font-size: 11px; color: var(--stone); padding: 5px 10px; border-bottom: 1px solid var(--hairline); }
+.pv-body { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: var(--sp-4); }
+.pv-page { border: 1px solid var(--hairline); border-radius: var(--r-md); overflow: hidden; }
+.pv-page-name { font-size: var(--fs-xs); color: var(--stone); padding: 5px 10px; border-bottom: 1px solid var(--hairline); }
 .pv-page img { width: 100%; display: block; background: var(--canvas); }
 .split-body { flex: 1; overflow: auto; padding: 14px 16px; }
 .split-body svg { max-width: 100%; display: block; margin: 0 auto; background: var(--canvas); }

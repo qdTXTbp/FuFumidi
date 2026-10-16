@@ -17,7 +17,9 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SRC = path.join(ROOT, '_attic', 'fonts-src');          // 下载缓存（不进仓库）
+// ★ 缓存必须放在**仓库外**：ROOT 是 FuFumidi-Source，上一级才是 E:\Midi\_attic。
+//   踩过：最初写成 path.join(ROOT,'_attic') → 17.9 MB 字体源进了 git（已 amend 掉，仓库 .gitignore 也加了防呆）。
+const SRC = path.resolve(ROOT, '..', '_attic', 'fonts-src');
 const OUT = path.join(ROOT, 'frontend', 'src', 'assets', 'fonts');
 const PY = process.env.FUFUMIDI_PY || 'E:\\Midi\\FuFumidi\\resources\\python\\python.exe';
 const FORCE = process.argv.includes('--force');

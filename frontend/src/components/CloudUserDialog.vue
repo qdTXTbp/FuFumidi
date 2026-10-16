@@ -96,47 +96,47 @@ async function doLogout() { await cloud.logout(); emit('close'); }
           </div>
 
           <!-- 冲突：本机与云端存档都非空，须用户选择保留哪一侧 -->
-          <div v-if="conflict" class="cloud-user-body" style="display:flex;flex-direction:column;gap:10px;padding:6px 2px">
-            <div style="font-size:13px;font-weight:600">{{ t('检测到歌单存档冲突') }}</div>
-            <div class="muted" style="font-size:12px">{{ t('本机存档') }}{{ t('：') }}{{ conflict.localSongs || 0 }} {{ t('曲') }} / {{ conflict.localN }} {{ t('个歌单') }}</div>
-            <div class="muted" style="font-size:12px">{{ t('云端存档') }}{{ t('：') }}{{ conflict.cloudSongs || 0 }} {{ t('曲') }} / {{ conflict.cloudN }} {{ t('个歌单') }}</div>
-            <div class="muted" style="font-size:12px">{{ t('请选择保留哪一份；选择后另一份将被覆盖。') }}</div>
-            <div v-if="conflictMsg" style="font-size:12px;color:#e05858">{{ conflictMsg }}</div>
-            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
+          <div v-if="conflict" class="cloud-user-body" style="display:flex;flex-direction:column;gap:var(--sp-3);padding:6px 2px">
+            <div style="font-size:var(--fs-md);font-weight:600">{{ t('检测到歌单存档冲突') }}</div>
+            <div class="muted" style="font-size:var(--fs-sm)">{{ t('本机存档') }}{{ t('：') }}{{ conflict.localSongs || 0 }} {{ t('曲') }} / {{ conflict.localN }} {{ t('个歌单') }}</div>
+            <div class="muted" style="font-size:var(--fs-sm)">{{ t('云端存档') }}{{ t('：') }}{{ conflict.cloudSongs || 0 }} {{ t('曲') }} / {{ conflict.cloudN }} {{ t('个歌单') }}</div>
+            <div class="muted" style="font-size:var(--fs-sm)">{{ t('请选择保留哪一份；选择后另一份将被覆盖。') }}</div>
+            <div v-if="conflictMsg" style="font-size:var(--fs-sm);color:var(--t-err)">{{ conflictMsg }}</div>
+            <div style="display:flex;gap:var(--sp-2);justify-content:flex-end;margin-top:6px">
               <button class="btn sm ghost" @click="resolveConflict('cloud')" :disabled="localBusy">{{ localBusy ? t('处理中…') : t('保留云端') }}</button>
               <button class="btn sm primary" @click="resolveConflict('local')" :disabled="localBusy">{{ localBusy ? t('处理中…') : t('保留本机') }}</button>
             </div>
           </div>
 
           <!-- 已登录：账号信息 + 同步管理 -->
-          <div v-else-if="cloud.account" class="cloud-user-body" style="display:flex;flex-direction:column;gap:12px;padding:4px 2px">
-            <div class="cloud-user-row" style="display:flex;align-items:center;gap:10px">
+          <div v-else-if="cloud.account" class="cloud-user-body" style="display:flex;flex-direction:column;gap:var(--sp-3);padding:4px 2px">
+            <div class="cloud-user-row" style="display:flex;align-items:center;gap:var(--sp-3)">
               <span class="cloud-avatar">
                 <svg viewBox="0 0 40 40" width="30" height="30" aria-hidden="true">
-                  <circle cx="20" cy="14" r="9" fill="#9aa0a6"/>
-                  <path d="M7 36a13 13 0 0 1 26 0z" fill="#9aa0a6"/>
+                  <circle cx="20" cy="14" r="9" fill="var(--stone, #9aa0a6)"/>
+                  <path d="M7 36a13 13 0 0 1 26 0z" fill="var(--stone, #9aa0a6)"/>
                 </svg>
               </span>
               <div style="min-width:0">
-                <div style="font-size:13px;font-weight:600">{{ cloud.account.email }}</div>
-                <div class="muted" style="font-size:12px">{{ t('已登录') }}</div>
+                <div style="font-size:var(--fs-md);font-weight:600">{{ cloud.account.email }}</div>
+                <div class="muted" style="font-size:var(--fs-sm)">{{ t('已登录') }}</div>
               </div>
             </div>
-            <div v-if="cloud.err" style="font-size:12px;color:#e05858">{{ cloud.err }}</div>
-            <div v-if="cloud.last && cloud.last.ok" style="font-size:12px;color:var(--muted)">
+            <div v-if="cloud.err" style="font-size:var(--fs-sm);color:var(--t-err)">{{ cloud.err }}</div>
+            <div v-if="cloud.last && cloud.last.ok" style="font-size:var(--fs-sm);color:var(--muted)">
               {{ t('上次同步：上传') }} {{ cloud.last.uploadedSongs }} {{ t('曲 /') }} {{ cloud.last.uploadedPlaylists }} {{ t('单，下载') }} {{ cloud.last.downloadedSongs }} {{ t('曲') }}
             </div>
-            <div v-if="cloud.last && cloud.last.ok && cloud.last.missingBytes" style="font-size:12px;color:#e0a558">
+            <div v-if="cloud.last && cloud.last.ok && cloud.last.missingBytes" style="font-size:var(--fs-sm);color:var(--t-warn)">
               {{ t('有') }} {{ cloud.last.missingBytes }} {{ t('首曲目在本机找不到 MIDI 内容，已跳过备份') }}
             </div>
-            <div style="display:flex;gap:8px;justify-content:flex-end">
+            <div style="display:flex;gap:var(--sp-2);justify-content:flex-end">
               <button class="btn sm ghost" @click="doLogout" :disabled="cloud.busy">{{ t('退出登录') }}</button>
               <button class="btn sm primary" @click="doSync" :disabled="cloud.busy">{{ cloud.busy ? t('同步中…') : t('立即同步') }}</button>
             </div>
           </div>
 
           <!-- 未登录：登录 / 注册表单 -->
-          <div v-else class="cloud-user-body" style="display:flex;flex-direction:column;gap:10px;padding:4px 2px">
+          <div v-else class="cloud-user-body" style="display:flex;flex-direction:column;gap:var(--sp-3);padding:4px 2px">
             <input v-model="email" class="text-input" type="text" :placeholder="t('邮箱')" style="width:100%" />
             <input v-model="password" class="text-input" type="password" :placeholder="mode==='register' ? t('密码（至少 8 位）') : t('密码')" style="width:100%"
                    @keydown.enter="submit" />
@@ -145,8 +145,8 @@ async function doLogout() { await cloud.logout(); emit('close'); }
               <iframe :src="TS_URL" class="cloud-ts-frame" :title="t('人机验证')"></iframe>
               <div v-if="tsErr" class="cloud-ts-err">{{ tsErr }}</div>
             </div>
-            <div v-if="formErr" style="font-size:12px;color:#e05858">{{ formErr }}</div>
-            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
+            <div v-if="formErr" style="font-size:var(--fs-sm);color:var(--t-err)">{{ formErr }}</div>
+            <div style="display:flex;gap:var(--sp-2);justify-content:flex-end;margin-top:4px">
               <button class="btn sm ghost" @click="switchMode" :disabled="localBusy">{{ mode==='login' ? t('注册新账号') : t('返回登录') }}</button>
               <button class="btn sm primary" @click="submit" :disabled="localBusy">{{ localBusy ? t('处理中…') : (mode==='login' ? t('登录') : t('注册')) }}</button>
             </div>
@@ -173,10 +173,10 @@ async function doLogout() { await cloud.logout(); emit('close'); }
 }
 .cloud-user-mask .ed-modal {
   width: min(360px, 92vw);
-  background: var(--card, #ffffff);
+  background: var(--card, var(--surface));
   color: var(--text, inherit);
   border: 1px solid var(--hairline, rgba(128, 128, 128, 0.25));
-  border-radius: 14px;
+  border-radius: var(--r-lg);
   padding: 16px 18px;
   box-shadow: 0 14px 44px rgba(0, 0, 0, 0.35);
   max-height: 86vh;
@@ -185,14 +185,14 @@ async function doLogout() { await cloud.logout(); emit('close'); }
 .cloud-user-mask .ed-modal-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
   margin-bottom: 12px;
 }
-.cloud-user-mask .ed-modal-head b { font-size: 14px; }
+.cloud-user-mask .ed-modal-head b { font-size: var(--fs-lg); }
 .cloud-user-mask .btn { white-space: nowrap; }
 .cloud-avatar {
   width: 34px; height: 34px; border-radius: 50%;
-  background: var(--card, #2a2e37);
+  background: var(--card, var(--surface-soft));
   display: inline-flex; align-items: center; justify-content: center;
   flex: none;
 }
@@ -200,5 +200,5 @@ async function doLogout() { await cloud.logout(); emit('close'); }
 .cloud-user-mask:focus { outline: none; }
 .cloud-ts { display: flex; flex-direction: column; align-items: center; }
 .cloud-ts-frame { width: 100%; height: 80px; border: 0; background: transparent; }
-.cloud-ts-err { font-size: 11px; color: #e05858; text-align: center; margin-top: 4px; line-height: 1.5; }
+.cloud-ts-err { font-size: var(--fs-xs); color: var(--t-err); text-align: center; margin-top: 4px; line-height: 1.5; }
 </style>

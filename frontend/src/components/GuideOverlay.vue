@@ -581,7 +581,7 @@ if (typeof window !== 'undefined') {
   place-items: center;
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
-  border-radius: 14px;
+  border-radius: var(--r-lg);
   margin-bottom: 12px;
   overflow: hidden;
 }
@@ -589,19 +589,19 @@ if (typeof window !== 'undefined') {
 .g-step {
   position: absolute;
   top: 8px; left: 12px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 700;
   color: var(--stone);
   letter-spacing: .4px;
   z-index: 2;
 }
-.g-note { position: absolute; color: color-mix(in srgb, var(--accent) 30%, transparent); font-size: 24px; user-select: none; animation: gfloat 3.2s var(--ease-in-out) infinite; }
+.g-note { position: absolute; color: color-mix(in srgb, var(--accent) 30%, transparent); font-size: var(--fs-2xl); user-select: none; animation: gfloat 3.2s var(--ease-in-out) infinite; }
 .g-note:nth-child(1){ top:16%; left:12%; animation-delay:0s; }
-.g-note:nth-child(2){ top:70%; left:20%; font-size:18px; animation-delay:1s; }
-.g-note:nth-child(3){ top:30%; right:10%; font-size:30px; animation-delay:1.9s; }
-.g-note:nth-child(4){ top:64%; right:22%; font-size:15px; animation-delay:.5s; }
+.g-note:nth-child(2){ top:70%; left:20%; font-size:var(--fs-xl); animation-delay:1s; }
+.g-note:nth-child(3){ top:30%; right:10%; font-size:var(--fs-2xl); animation-delay:1.9s; }
+.g-note:nth-child(4){ top:64%; right:22%; font-size:var(--fs-lg); animation-delay:.5s; }
 @keyframes gfloat { 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-6px); } }
-.guide-dots { display: flex; gap: 6px; margin-top: 14px; flex: none; }
+.guide-dots { display: flex; gap: var(--sp-2); margin-top: 14px; flex: none; }
 .guide-dots i { width:8px; height:8px; border-radius:50%; background: var(--hairline); transition:var(--motion-base) var(--ease-out); }
 .guide-dots i.on { background: var(--accent); transform: scale(1.25); }
 .guide-overlay { background: rgba(6,10,16,.58); backdrop-filter: blur(2px); pointer-events: none; }
@@ -615,7 +615,7 @@ if (typeof window !== 'undefined') {
   position: fixed;
   z-index: 1200;
   pointer-events: none;
-  border-radius: 12px;
+  border-radius: var(--r-md);
   box-shadow: 0 0 0 999px rgba(6,10,16,.58);
   border: 2px dashed var(--accent);
   animation: igpulse 1.4s var(--ease-in-out) infinite;
@@ -628,33 +628,33 @@ if (typeof window !== 'undefined') {
   max-width: 92vw;
   background: var(--canvas);
   border: 1px solid var(--hairline);
-  border-radius: 14px;
+  border-radius: var(--r-lg);
   padding: 14px 16px;
   box-shadow: var(--shadow-lg);
 }
-.ig-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--ink); }
-.ig-count { font-size: 11px; color: var(--stone); white-space: nowrap; }
-.ig-desc { margin: 8px 0 10px; font-size: 12.5px; line-height: 1.65; color: var(--steel); }
-.ig-missing { margin: 0 0 10px; font-size: 12px; line-height: 1.6; color: var(--ink); background: color-mix(in srgb, var(--accent) 10%, transparent); border-left: 3px solid var(--accent); border-radius: 6px; padding: 7px 9px; }
-.ig-foot { display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.ig-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); color: var(--ink); }
+.ig-count { font-size: var(--fs-xs); color: var(--stone); white-space: nowrap; }
+.ig-desc { margin: 8px 0 10px; font-size: var(--fs-md); line-height: 1.65; color: var(--steel); }
+.ig-missing { margin: 0 0 10px; font-size: var(--fs-sm); line-height: 1.6; color: var(--ink); background: color-mix(in srgb, var(--accent) 10%, transparent); border-left: 3px solid var(--accent); border-radius: var(--r-sm); padding: 7px 9px; }
+.ig-foot { display: flex; justify-content: flex-end; gap: var(--sp-2); flex-wrap: wrap; }
 
 /* 章节目录 */
 .guide-catalog { width: 480px; max-width: 94vw; }
-.cat-progress { margin-left: auto; margin-right: 8px; font-size: 11px; color: var(--stone); white-space: nowrap; }
-.cat-intro { margin: 2px 0 12px; font-size: 12.5px; line-height: 1.6; color: var(--steel); }
-.cat-list { display: flex; flex-direction: column; gap: 6px; max-height: 46vh; overflow-y: auto; padding-right: 2px; margin-bottom: 14px; }
+.cat-progress { margin-left: auto; margin-right: 8px; font-size: var(--fs-xs); color: var(--stone); white-space: nowrap; }
+.cat-intro { margin: 2px 0 12px; font-size: var(--fs-md); line-height: 1.6; color: var(--steel); }
+.cat-list { display: flex; flex-direction: column; gap: var(--sp-2); max-height: 46vh; overflow-y: auto; padding-right: 2px; margin-bottom: 14px; }
 .cat-item {
-  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
-  padding: 9px 11px; border: 1px solid var(--hairline); border-radius: 10px;
+  display: flex; align-items: center; gap: var(--sp-3); width: 100%; text-align: left;
+  padding: 9px 11px; border: 1px solid var(--hairline); border-radius: var(--r-md);
   background: var(--surface); cursor: pointer; transition: var(--motion-fast) var(--ease-out);
 }
 .cat-item:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
 .cat-item.done { opacity: .78; }
-.ci-ic { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 8px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.ci-ic { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--r-md); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
 .ci-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.ci-main b { font-size: 13px; color: var(--ink); }
-.ci-main small { font-size: 11.5px; color: var(--steel); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ci-meta { flex: none; font-size: 11px; color: var(--stone); }
+.ci-main b { font-size: var(--fs-md); color: var(--ink); }
+.ci-main small { font-size: var(--fs-sm); color: var(--steel); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ci-meta { flex: none; font-size: var(--fs-xs); color: var(--stone); }
 .ci-meta em { font-style: normal; }
 .ci-done { color: var(--accent); font-weight: 600; }
 </style>

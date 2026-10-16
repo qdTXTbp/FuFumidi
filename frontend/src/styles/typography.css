@@ -15,6 +15,13 @@ body, button, input, select, textarea {
   font-family: var(--font-ui);
 }
 
+/* ★ font-size: inherit 不是可有可无的：按钮/输入框不写尺寸时会落到浏览器默认的
+   **13.3333px**（实测首页 24 个 .home-card 按钮 + 输入框都是这一档），
+   于是"6 档字号"实际会变成 7 档，且不受 --fs-* 控制。 */
+button, input, select, textarea {
+  font-size: inherit;
+}
+
 /* 数字/遥测：时间码、BPM、百分比、版本号 —— 等宽 + 等宽数字，切换时不跳字 */
 :root { --mono: var(--font-num); }
 code, kbd, samp, pre {

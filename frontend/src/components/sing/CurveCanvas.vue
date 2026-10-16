@@ -266,6 +266,6 @@ defineExpose({ smooth, quantize, revert, pointCount: () => local.value.length })
 
 <style scoped>
 .cc-wrap { width: 100%; }
-.cc-canvas { width: 100%; display: block; border: 1px solid var(--hairline); border-radius: 10px; cursor: crosshair; touch-action: none; background: var(--surface-soft); }
+.cc-canvas { width: 100%; display: block; border: 1px solid var(--hairline); border-radius: var(--r-md); cursor: crosshair; touch-action: none; background: var(--surface-soft); }
 .cc-canvas.locked { cursor: not-allowed; opacity: .92; }
 </style>

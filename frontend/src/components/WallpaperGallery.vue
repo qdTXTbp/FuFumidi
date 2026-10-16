@@ -194,15 +194,15 @@ onMounted(load);
 
 <style scoped>
 .wp-gallery { width: 640px; max-width: 92vw; }
-.wp-loading, .wp-error { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 46px 0; color: var(--stone); font-size: 13px; flex-direction: column; }
+.wp-loading, .wp-error { display: flex; align-items: center; justify-content: center; gap: var(--sp-3); padding: 46px 0; color: var(--stone); font-size: var(--fs-md); flex-direction: column; }
 .wp-error button { margin-top: 4px; }
-.wp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; max-height: 46vh; overflow-y: auto; padding: 2px; }
+.wp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-3); max-height: 46vh; overflow-y: auto; padding: 2px; }
 @media (max-width: 560px) { .wp-grid { grid-template-columns: repeat(2, 1fr); } }
 .wp-card {
   position: relative;
   aspect-ratio: 16 / 9;
   border: 1px solid var(--hairline);
-  border-radius: 12px;
+  border-radius: var(--r-md);
   overflow: hidden;
   padding: 0;
   cursor: pointer;
@@ -218,7 +218,7 @@ onMounted(load);
   position: absolute; left: 8px; bottom: 8px;
   width: 26px; height: 26px; border-radius: 50%;
   border: none; cursor: pointer;
-  background: rgba(0,0,0,.45); color: #fff;
+  background: rgba(0,0,0,.45); color: var(--on-accent);
   display: grid; place-items: center;
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
   opacity: 0; transition: opacity var(--motion-fast) var(--ease-out);
@@ -228,7 +228,7 @@ onMounted(load);
 .wp-card-dl {
   position: absolute; right: 8px; bottom: 8px;
   width: 30px; height: 30px; border-radius: 50%;
-  background: rgba(0,0,0,.45); color: #fff;
+  background: rgba(0,0,0,.45); color: var(--on-accent);
   display: grid; place-items: center;
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
   opacity: 0; transition: opacity var(--motion-fast) var(--ease-out);
@@ -237,20 +237,20 @@ onMounted(load);
 .wp-card-mask {
   position: absolute; inset: 0;
   background: rgba(10, 10, 10, 0.55);
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
-  color: #fff; font-size: 12px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-2);
+  color: var(--on-accent); font-size: var(--fs-sm);
 }
-.wp-card-mask .spinner { border-color: rgba(255,255,255,0.35); border-top-color: #fff; }
+.wp-card-mask .spinner { border-color: rgba(255,255,255,0.35); border-top-color: var(--on-accent); }
 .spinner {
   width: 18px; height: 18px; border-radius: 50%;
   border: 2px solid rgba(10, 10, 10, 0.14); border-top-color: var(--accent);
   animation: wp-spin 0.7s linear infinite;
 }
 @keyframes wp-spin { to { transform: rotate(360deg); } }
-.wp-import-progress { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 4px 0; }
-.wp-import-progress .wp-import-bar { flex: 1; height: 6px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; }
-.wp-import-progress .pfill { height: 100%; background: var(--accent); border-radius: 999px; transition: transform var(--motion-base) var(--ease-out); }
-.wp-import-progress span { font-size: 11px; color: var(--stone); min-width: 40px; text-align: right; }
-.wp-foot { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--hairline-soft); }
-.wp-foot .muted { margin-left: auto; font-size: 10.5px; }
+.wp-import-progress { display: flex; align-items: center; gap: var(--sp-2); margin-top: 10px; padding: 4px 0; }
+.wp-import-progress .wp-import-bar { flex: 1; height: 6px; border-radius: var(--r-pill); background: var(--surface-soft); overflow: hidden; }
+.wp-import-progress .pfill { height: 100%; background: var(--accent); border-radius: var(--r-pill); transition: transform var(--motion-base) var(--ease-out); }
+.wp-import-progress span { font-size: var(--fs-xs); color: var(--stone); min-width: 40px; text-align: right; }
+.wp-foot { display: flex; align-items: center; gap: var(--sp-3); margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--hairline-soft); }
+.wp-foot .muted { margin-left: auto; font-size: var(--fs-xs); }
 </style>

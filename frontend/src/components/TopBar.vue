@@ -108,35 +108,35 @@ function about() {
   overflow-y: auto;
   background: var(--canvas);
   border: 1px solid var(--hairline);
-  border-radius: 14px;
+  border-radius: var(--r-lg);
   box-shadow: var(--shadow-lg);
-  padding: 8px;
+  padding: var(--sp-2);
 }
 .menu-pop-title {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 700;
   color: var(--stone);
   letter-spacing: .4px;
   text-transform: uppercase;
-  padding: 8px 10px 4px;
+  padding: var(--sp-2) var(--sp-3) var(--sp-1);
 }
 .menu-pop-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
   width: 100%;
-  padding: 8px 10px;
+  padding: var(--sp-2) var(--sp-3);
   border: none;
-  border-radius: 9px;
+  border-radius: var(--r-md);
   background: transparent;
   color: var(--ink);
-  font-size: 12.5px;
+  font-size: var(--fs-md);
   cursor: pointer;
   text-align: left;
   transition: background var(--motion-fast) var(--ease-out);
 }
 .menu-pop-item:hover { background: var(--surface-soft); }
-.menu-pop-div { height: 1px; background: var(--hairline); margin: 6px 4px; }
+.menu-pop-div { height: 1px; background: var(--hairline); margin: var(--sp-2) var(--sp-1); }
 /* 弹出菜单开合动画（右上锚点轻缩放 + 淡入淡出） */
 .mnu-enter-active, .mnu-leave-active { transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-base) var(--ease-spring); transform-origin: top right; }
 .mnu-enter-from, .mnu-leave-to { opacity: 0; transform: scale(.96) translateY(-6px); }
