@@ -134,6 +134,11 @@ win:
       arch:
         - x64
   icon: build/icon.ico
+# 压缩档：electron-builder 默认是 normal（7z 低档）。改成 maximum 用 LZMA 最高档 ——
+# 代价是打包时间变长（本地实测多几分钟），收益是安装包明显更小；
+# 这个项目要下载分发，体积比构建时间重要。
+compression: maximum
+
 nsis:
   oneClick: false
   # 安装器外观（位图由 scripts/gen-installer-art.py 代码生成后提交，见构建说明）
