@@ -7,7 +7,9 @@ import { getSynth, ensureAudio, getPlayer } from '../audio.js';
 const app = useAppStore();
 const currentSong = computed(() => app.currentSong);
 import Icon from '../components/Icon.vue';
-import { drawVizWaterfall, rmsFromBytes, smoothEnergy } from '../core/viz.js';
+// ★ 必须用 drawVizWaterfallPost：它内部才是"场景 + 后处理泛光"的完整一帧。
+//   直接调 drawVizWaterfall 会得到"实时没有泛光、导出有"（或反过来）—— 预览与成片就不一致了。
+import { drawVizWaterfallPost, rmsFromBytes, smoothEnergy, FX_DEFAULTS } from '../core/viz.js';
 import { t } from '../core/i18n.js';
 import NumSlider from '../components/NumSlider.vue';
 
@@ -32,6 +34,18 @@ const fxItems = vizBg.FX_ITEMS;     // 视效开关清单（顺序即界面顺�
 // 配色档名（与 core/viz.js 的 blockColor 一一对应）：
 // 0 用轨道色；1/2/3 都按音高推导 HSL，只是色相步长/饱和度/明度不同
 const COLOR_SCHEMES = ['轨道色', '按音高·七彩', '按音高·暖', '按音高·冷'];
+const fxThemeInput = ref('');        // 自定义主题名（D8：命名交给用户）
+// 参数滑块的当前值（bg.fx 可能还没这批键 —— store 首次读写会补默认）
+function fxNum(k) {
+  const cur = bg.fx ? bg.fx[k] : undefined;
+  return typeof cur === 'number' ? cur : FX_DEFAULTS[k];
+}
+function saveThemeAs() {
+  const name = String(fxThemeInput.value || '').trim();
+  if (!vizBg.saveTheme(name)) { app.toast(t('先给主题起个名字'), 'warn'); return; }
+  app.toast(t('已存为主题：') + name);
+  fxThemeInput.value = '';
+}
 // 模板里的 @input 是「先改 bg 再存」两步（颜色/模糊/暗化都直接改 reactive 字段），
 // 所以保留一个薄壳；读写都在 store 里，导出页读到的是同一份。
 function saveBg() { vizBg.save(); }
@@ -194,7 +208,7 @@ function drawChord(cv, syn) {
 
 function drawRoll(ctx2d, c, u, syn, song, player) {
   const tick = player && song ? player.currentTick() : 0;
-  drawVizWaterfall(ctx2d, c, u, song, tick, {
+  drawVizWaterfallPost(ctx2d, c, u, song, tick, {
     state: rollState,
     zoom: wfZoom.value,
     colorScheme: colorScheme.value,
@@ -416,20 +430,50 @@ onBeforeUnmount(() => {
             <NumSlider :model-value="Math.round(bg.dim * 100)" @update:model-value="v => { bg.dim = (+v) / 100; saveBg() }" :min="0" :max="80" :step="5" range-style="width:88px" :input-width="68" no-input />
           </template>
         </div>
-        <div v-if="fxMore && !immersive" class="viz-bg-bar">
-          <span class="muted small">{{ t('瀑布流视效') }}</span>
-          <span class="muted small" style="margin-left:6px">{{ t('配色') }}</span>
-          <button v-for="(nm, i) in COLOR_SCHEMES" :key="i" class="chip-btn"
-                  :class="{ active: colorScheme === i }" :title="t('切换瀑布流配色')"
-                  @click="colorScheme = i">{{ t(nm) }}</button>
-          <span class="muted small" style="margin-left:6px">{{ t('特效') }}</span>
-          <button v-for="f in fxItems" :key="f.k" class="chip-btn"
-                  :class="{ active: !!(bg.fx && bg.fx[f.k]) }" :title="t(f.hint)"
-                  @click="vizBg.setFx(f.k, !(bg.fx && bg.fx[f.k]))">{{ t(f.label) }}</button>
-          <span style="flex:1"></span>
-          <button class="chip-btn" :title="t('全部打开')" @click="vizBg.resetFx(true)">{{ t('全开') }}</button>
-          <button class="chip-btn" :title="t('全部关掉（回到旧观感）')" @click="vizBg.resetFx(false)">{{ t('全关') }}</button>
-        </div>
+        <!-- 视效面板（用户要求：做成几套主题 + 让用户自定义参数；配色也归在这里）
+             三行：① 主题（含用户自定义主题的命名/删除）② 参数滑块 ③ 特效开关 + 配色/分色
+             ★ 所有值都住在 stores/vizbg，导出页读同一份 —— 预览与成片必须是一幅画。 -->
+        <template v-if="fxMore && !immersive">
+          <div class="viz-bg-bar">
+            <span class="muted small">{{ t('视效主题') }}</span>
+            <button v-for="nm in vizBg.themeList()" :key="nm" class="chip-btn"
+                    :class="{ active: vizBg.themeName === nm }" @click="vizBg.applyTheme(nm)">{{ t(nm) }}</button>
+            <input class="viz-theme-input" v-model="fxThemeInput" :placeholder="t('新主题名')"
+                   @keydown.enter="saveThemeAs" />
+            <button class="chip-btn" :title="t('把当前参数存成自定义主题（名字你定）')" @click="saveThemeAs">
+              <Icon name="save" :size="12" />{{ t('存为主题') }}
+            </button>
+            <button v-if="vizBg.userThemes[vizBg.themeName]" class="chip-btn"
+                    :title="t('删除这个自定义主题')" @click="vizBg.deleteTheme(vizBg.themeName)">✕</button>
+            <span style="flex:1"></span>
+            <button class="chip-btn" :title="t('全部打开')" @click="vizBg.resetFx(true)">{{ t('全开') }}</button>
+            <button class="chip-btn" :title="t('全部关掉（回到旧观感）')" @click="vizBg.resetFx(false)">{{ t('全关') }}</button>
+          </div>
+          <div class="viz-bg-bar">
+            <span class="muted small">{{ t('视效参数') }}</span>
+            <template v-for="p in vizBg.FX_PARAMS" :key="p.k">
+              <span class="muted small">{{ t(p.label) }}</span>
+              <NumSlider :model-value="fxNum(p.k)" @update:model-value="v2 => vizBg.setFxAny(p.k, +v2)"
+                         :min="p.min" :max="p.max" :step="p.step" range-style="width:74px" :input-width="54" no-input />
+            </template>
+          </div>
+          <div class="viz-bg-bar">
+            <span class="muted small">{{ t('特效') }}</span>
+            <button v-for="f in fxItems" :key="f.k" class="chip-btn"
+                    :class="{ active: !!(bg.fx && bg.fx[f.k]) }" :title="t(f.hint)"
+                    @click="vizBg.setFx(f.k, !(bg.fx && bg.fx[f.k]))">{{ t(f.label) }}</button>
+            <span class="muted small" style="margin-left:6px">{{ t('配色') }}</span>
+            <!-- 配色档（colorScheme，4 档按音高推导）；分色档（colorBy）见右侧 -->
+            <button v-for="(nm, i) in COLOR_SCHEMES" :key="i" class="chip-btn"
+                    :class="{ active: (bg.fx ? bg.fx.colorBy : 'track') === 'track' && colorScheme === i }"
+                    :title="t('按音高推导的配色档')" @click="vizBg.setFxAny('colorBy', 'track'); colorScheme = i">{{ t(nm) }}</button>
+            <span class="muted small" style="margin-left:6px">{{ t('分色') }}</span>
+            <button v-for="cb in vizBg.FX_COLORBY" :key="cb.k" class="chip-btn"
+                    :class="{ active: (bg.fx ? bg.fx.colorBy : 'track') === cb.k }"
+                    :title="t('按左右手分色：左手冷色 / 右手暖色（音高低于 C4 视为左手）')"
+                    @click="vizBg.setFxAny('colorBy', cb.k)">{{ t(cb.label) }}</button>
+          </div>
+        </template>
         <div class="vc-body" :class="{ 'bd-canvas': bg.mode === 'transparent' }">
           <!-- ★ 画布自己有一层 CSS 底色（.vc-body canvas 的 background）—— 透明档只 clearRect
                是没用的，元素底色照样透不出来。所以透明档必须把画布元素的底色也去掉，
@@ -489,6 +533,11 @@ onBeforeUnmount(() => {
 .viz-bg-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 12px 8px; font-size: 12px;
               border-bottom: 1px solid var(--hairline); margin-bottom: 2px; }
 .viz-bg-bar input[type=range] { accent-color: var(--accent); }
+.viz-theme-input {
+  width: 108px; height: 24px; padding: 0 8px; font-size: 12px;
+  border: 1px solid var(--hairline); border-radius: 7px;
+  background: var(--surface); color: var(--ink);
+}
 .viz-bg-color { width: 28px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: transparent; }
 .viz-page.waterfall .viz-grid { display: none; }
 .viz-page.waterfall .viz-hero { flex: 1; }

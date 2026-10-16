@@ -41,6 +41,16 @@ function fakeCtx() {
   return { ctx, rects };
 }
 
+/* 音符块的判别：块的**主填充是调色板纯色字符串**（#rrggbb 或 hsl(...)），琴键用的是渐变对象。
+   ★ 2026-10 加了键盘透视（D6）之后，键面在 persp > 0 时是**梯形路径**（moveTo/lineTo），
+     不再产生 y === wN 的 roundRect —— 旧的判别方式会失效。这个判别与形状无关，
+     仍然守住「每个屏内块**恰好画一次**、且用的是调色板色」这条不变量。
+   ★ 琴键的高亮层/闪光层也用字符串色填充，但它们只在琴键处于激活态时才画；
+     这三个用例传的是 activeNotes: []，所以不会混进来。 */
+function noteRectsOf(rects) {
+  return rects.filter((r) => typeof r.fill === 'string' && /^#|^rgb|^hsl/.test(r.fill));
+}
+
 /* ---------------- buildVizBlocks ---------------- */
 
 test('buildVizBlocks 把同音高首尾相接的音符合并，力度取组内最大', () => {
@@ -161,11 +171,8 @@ test('drawVizWaterfall 每帧只绘制屏内音符块', () => {
     state: {}, zoom: 1, colorScheme: 0, activeNotes: [], energy: 0,
   });
 
-  // 琴键从 y === wN 起画，音符块的底边不会正好落在 wN 上（至少留 5px），
-  // 据此把音符块与琴键的 roundRect 分开
-  const firstKey = rects.findIndex(r => r.y === wN);
-  assert.ok(firstKey > 0, '应当先画音符块、再画琴键');
-  const noteRects = rects.slice(0, firstKey);
+  const noteRects = noteRectsOf(rects);
+  assert.ok(noteRects.length > 0, '应当画出了音符块');
   assert.equal(noteRects.length, expected, '音符块的绘制次数应等于屏内块数');
 
   // 三个音高分属三条轨，颜色各不相同 —— 三个颜色都在，说明每档各画了自己那一块
@@ -188,8 +195,7 @@ test('放大时落在可视音域之外的高/低音不再产生绘制', () => {
   const draw = (zoom) => {
     const { ctx, rects } = fakeCtx();
     drawVizWaterfall(ctx, 800, h, song, 0, { state: {}, zoom, colorScheme: 0, activeNotes: [], energy: 0 });
-    const firstKey = rects.findIndex(r => r.y === wN);
-    return rects.slice(0, firstKey);
+    return noteRectsOf(rects);
   };
 
   // zoom = 1：整个 88 键都在画布上，三个音高都该画

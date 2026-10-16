@@ -10,7 +10,7 @@ const currentSong = computed(() => app.currentSong);
 const toast = (m, t) => app.toast(m, t);
 import { clamp } from '../core/util.js';
 // ★ paintVizBg：与「可视化」页**同一个**背景绘制函数（主题/纯色/图片/透明）
-import { drawVizWaterfall, paintVizBg, drawVizSpectrum, drawVizScope, drawVizChord, rmsAt, smoothEnergy, smoothEnergyDt, activeNotesAt, VIZ_REF_H, VIZ_REF_DPR } from '../core/viz.js';
+import { drawVizWaterfallPost, paintVizBg, drawVizSpectrum, drawVizScope, drawVizChord, rmsAt, smoothEnergy, smoothEnergyDt, activeNotesAt, VIZ_REF_H, VIZ_REF_DPR } from '../core/viz.js';
 import { playVoice, presetFromMode } from '../core/synth.js';
 import { renderSongWithSf2 } from '../core/sf2render.js';
 import NumSlider from '../components/NumSlider.vue';
@@ -352,7 +352,7 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
     ctx.beginPath(); ctx.moveTo(x + 1, y + 27); ctx.lineTo(x + w2 - 1, y + 27); ctx.stroke();
   };
   if (mode === 'waterfall') {
-    drawVizWaterfall(ctx, W, H, s, tick, opts);
+    drawVizWaterfallPost(ctx, W, H, s, tick, opts);
   } else {
     // 仪表盘：顶部瀑布 + 底部三卡片
     // ★ ⑥ 与实时统一：实时那边瀑布是画在**卡片**里的（圆角 + 发丝描边 + --canvas 底），
@@ -366,7 +366,7 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
     ctx.beginPath(); roundRect(ctx, cx0, cy0, cw0, ch0, cardR); ctx.stroke();
     ctx.beginPath(); roundRect(ctx, cx0, cy0, cw0, ch0, cardR); ctx.clip();
     ctx.translate(cx0, cy0);
-    drawVizWaterfall(ctx, cw0, ch0, s, tick, opts);
+    drawVizWaterfallPost(ctx, cw0, ch0, s, tick, opts);
     ctx.restore();
     const gy = rollH + pad;
     const ch = panelH - 34;
