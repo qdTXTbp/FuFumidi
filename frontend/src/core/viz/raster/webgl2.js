@@ -18,6 +18,8 @@
 // packPrims 是**纯函数**：Node 里可以直接断言打包结果，这是 M2 可测性的抓手。
 // ============================================================
 
+import { createGLPost } from '../post/glpost.js';
+
 const VS = `#version 300 es
 in vec2 aP0; in vec2 aP1; in vec2 aP2; in vec2 aP3;
 in vec4 aS0; in vec4 aS1; in vec4 aS2; in vec4 aS3;
@@ -251,6 +253,7 @@ export function getGLRaster() {
       S0: L('aS0'), S1: L('aS1'), S2: L('aS2'), S3: L('aS3'), shape: L('aShape'), alpha: L('aAlpha'),
     };
     const uRes = gl.getUniformLocation(prog, 'uRes');
+    const postCtx = createGLPost(gl);   // M3：着色器后处理（泛光/调色/色调映射）
     const inst = gl.createBuffer();
     let cap = 0;
     let cw = 0, ch = 0, calls = 0, lastBlend = '';
@@ -278,16 +281,28 @@ export function getGLRaster() {
       if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
     }
 
-    function draw(prims, scale) {
+    function draw(prims, scale, opts) {
       calls = 0;
+      const wantPost = !!(opts && opts.post && opts.post.enabled);
       const pk = packPrims(prims, cw, ch, scale);
+      // 有后处理时场景先画进离屏 FBO，再由后处理链合成到画布（否则直接画到画布）
+      let fbo = null;
+      let postOpts = null;
+      if (wantPost) {
+        const r = postCtx.ensure(cw, ch);
+        if (r.caps.ok) { fbo = r.scene.fb; postOpts = opts.post; }
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
       gl.viewport(0, 0, cw, ch);
       gl.disable(gl.DEPTH_TEST);
       gl.enable(gl.BLEND);
       lastBlend = '';
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
-      if (!pk.count) return { calls: 0, instances: 0, prims: prims.length };
+      if (!pk.count) {
+        if (postOpts) { gl.bindFramebuffer(gl.FRAMEBUFFER, null); postCtx.run(postOpts); }
+        return { calls: 0, instances: 0, prims: prims.length };
+      }
       gl.useProgram(prog);
       gl.uniform2f(uRes, cw, ch);
       // 实例缓冲（除数为 1）
@@ -305,6 +320,12 @@ export function getGLRaster() {
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, run.count);
         instances += run.count;
         calls++;
+      }
+      if (postOpts) {
+        // 后处理用同一套顶点属性槽位 0，先把实例属性关掉（属性开关是全局状态，不分 program）
+        for (const name of attrs) { const l = A[name]; if (l >= 0) gl.disableVertexAttribArray(l); }
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        postCtx.run(postOpts);
       }
       return { calls, instances, prims: prims.length };
     }

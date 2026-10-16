@@ -11,6 +11,7 @@
 import { createCompiler } from './scene/compile.js';
 import { drawCanvas2D } from './raster/canvas2d.js';
 import { getGLRaster } from './raster/webgl2.js';
+import { resolveTheme } from './state/themes.js';
 import { bloomPass, ensureScene } from './post/bloom2d.js';
 import { LAYERS } from './scene/primitives.js';
 
@@ -105,11 +106,23 @@ export function createVizRenderer() {
       const pw = Math.max(1, Math.round(w * sc * ssaa)), ph = Math.max(1, Math.round(h * sc * ssaa));
       let scene = null;
       let texts = null;
+      let gpuPost = false;   // 泛光已在 GPU 链里做完，就不必再走 canvas 版 bloomPass
       if (gl) {
         gl.resize(pw, ph);
         texts = out.prims.some((p) => p.k === 'text') ? out.prims.filter((p) => p.k === 'text') : null;
-        gl.draw(out.prims, sc * ssaa);          // text 图元被 WebGL 跳过，留给下面叠字
+        const mat = (opts.theme && resolveTheme ? resolveTheme(opts.theme) : null) || {};
+        const material = (mat && mat.material) || {};
+        gl.draw(out.prims, sc * ssaa, {
+          post: wantBloom ? {
+            enabled: true,
+            bloom: Math.max(0, Number(fx.bloom) || 0) * 1.5,
+            thr: Math.max(0, Math.min(1, Number(fx.bloomThr) == null ? (material.bloomThr == null ? 0.55 : material.bloomThr) : Number(fx.bloomThr))),
+            knee: 0.26,
+            exposure: material.grade == null ? 1 : material.grade,
+          } : null,
+        });   // text 图元被 WebGL 跳过，留给下面叠字
         scene = gl.canvas;
+        gpuPost = !!(wantBloom && fx && Number(fx.bloom) > 0.001);
       } else {
         scene = ensureScene(pw, ph);
         if (!scene) { ctx.save(); paintStage(ctx, w, h, bg); drawLayers(ctx, out.prims, !!opts.stats); ctx.restore(); return out; }
@@ -127,7 +140,7 @@ export function createVizRenderer() {
       ctx.globalAlpha = 1;
       ctx.save(); ctx.scale(sc, sc); paintStage(ctx, w, h, bg); ctx.restore();
       ctx.drawImage(scene, 0, 0, tw, th);   // 超采样在这里缩回目标尺寸（降采样 = 抗锯齿）
-      if (wantBloom) {
+      if (wantBloom && !gpuPost) {
         bloomPass(ctx, scene, tw, th, Math.max(0, Number(fx.bloom) || 0), Math.max(0, Math.min(1, Number(fx.bloomThr) == null ? 0.5 : Number(fx.bloomThr))));
       }
       // 文字层：GPU 后端不画字（字形质量），统一用 Canvas2D 叠在最上，实时与导出同一条路
