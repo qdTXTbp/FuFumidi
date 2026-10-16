@@ -43,15 +43,23 @@ export const VIZ_REF_DPR = 2.5;
 // 3D 键盘（2026-10）：wk/bk 是**键面**（俯视看到的那一面），wkFront/bkFront 是**前脸**
 // （键的厚度），wkEdge 是键面顶边的那道高光。三部分叠起来才有"一块琴键"的体积感 ——
 // 只有键面时，琴键看起来是一张贴在画面上的纸（旧观感）。
+/* ★ 键面亮度是"效果一般"的**元凶**（2026-10-17 量测）：
+ *   参考实现（SeeMusic/粒子流/Synthesia/DoraPiano）的**键盘区平均亮度 0.00–0.33**，
+ *   而我们是 **0.59–0.65** —— 一大条白键盘抢走了全部注意力，音符再亮也是陪衬。
+ *   所以两套主题的键面**都压暗**：白键不再是"白"，而是中灰；黑键接近背景。
+ *   只有**按键**才亮（余辉 + 光柱 + 闪光），亮度层级才对：背景 < 键盘 < 音符 < 击键瞬间。
+ *   亮度的读数用 scripts/viz-lookcheck.py（此条不是验收门槛，是自查）。 */
 const LIGHT_KEYS = {
-  wkTop: '#f2f3f5', wkBot: '#e2e4e8', wkLine: 'rgba(10,10,10,0.12)',
-  wkFrontTop: '#d8dbdf', wkFrontBot: '#bfc3c9', wkEdge: 'rgba(255,255,255,0.9)',
-  bkTop: '#3a3d42', bkBot: '#1c1e22', bkFrontTop: '#22252a', bkFrontBot: '#101216',
+  wkTop: '#9aa0a8', wkBot: '#7d838b', wkLine: 'rgba(0,0,0,0.30)',
+  wkFrontTop: '#6b717a', wkFrontBot: '#565c65', wkEdge: 'rgba(255,255,255,0.34)',
+  bkTop: '#23262b', bkBot: '#14171b', bkFrontTop: '#12151a', bkFrontBot: '#0a0c0f',
+  ink: 'rgba(255,255,255,0.52)',
 };
 const DARK_KEYS = {
-  wkTop: '#2b303a', wkBot: '#20242c', wkLine: 'rgba(255,255,255,0.10)',
-  wkFrontTop: '#1b1f26', wkFrontBot: '#101318', wkEdge: 'rgba(255,255,255,0.16)',
-  bkTop: '#0c0e12', bkBot: '#04050a', bkFrontTop: '#07090c', bkFrontBot: '#020305',
+  wkTop: '#3a4150', wkBot: '#2c323d', wkLine: 'rgba(0,0,0,0.35)',
+  wkFrontTop: '#242a34', wkFrontBot: '#1a1f27', wkEdge: 'rgba(255,255,255,0.22)',
+  bkTop: '#14171c', bkBot: '#0a0c10', bkFrontTop: '#080a0d', bkFrontBot: '#030406',
+  ink: 'rgba(255,255,255,0.42)',
 };
 
 function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
@@ -783,7 +791,7 @@ export function drawVizWaterfall(ctx, w, h, song, tick, opts = {}) {
       ctx.font = '9px system-ui, sans-serif';
       ctx.fillText(NN[pitch % 12] + (Math.floor(pitch / 12) - 1), px + pw - 3, wN + kh + 9);
     }
-    if (pitch % 12 === 0) { ctx.fillStyle = text; ctx.font = '10px system-ui, sans-serif'; ctx.fillText('C' + (pitch / 12 - 1), px + 4, h - 5); }
+    if (pitch % 12 === 0) { ctx.fillStyle = kp.ink || text; ctx.font = '10px system-ui, sans-serif'; ctx.fillText('C' + (pitch / 12 - 1), px + 4, h - 5); }
   }
   // 黑键骑在两个白键之间：i 号白键右上方各有一个（B/C 与 E/F 之间没有）
   for (let i = wk0; i < wk1; i++) {
