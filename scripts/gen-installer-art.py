@@ -18,7 +18,8 @@ from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageFilter
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 BUILD = os.path.join(ROOT, "build")
-ICON = os.path.join(BUILD, "icon.png")
+ICON = os.path.join(BUILD, "icon.png")                       # 白底立绘（小尺寸可读）
+EMBLEM = os.path.join(ROOT, "docs", "assets", "brand", "徽记-512.png")   # 完整徽记（大卡片用）
 
 BG_TOP = (12, 16, 28)
 BG_BOT = (24, 34, 58)
@@ -77,9 +78,13 @@ def rounded(im, radius):
     return out
 
 
-def logo_tile(size, radius_ratio=0.22, ring=True):
-    """把工具 logo 做成圆角方块卡（带细边），返回 RGBA 图。"""
-    src = Image.open(ICON).convert("RGBA").resize((size, size), Image.LANCZOS)
+def logo_tile(size, radius_ratio=0.22, ring=True, src_path=None):
+    """把品牌图做成圆角方块卡（带细边），返回 RGBA 图。
+
+    ★ 徽记是**整幅不透明**的（自带深靛方底 + 金框），所以对它要 ring=False 且半径极小 ——
+      多套一圈圆角会把金框四角切掉，再叠一圈蓝细边就成了「金框外面套蓝框」。
+      立绘系列是圆角透明的，才需要这里补圆角。"""
+    src = Image.open(src_path or ICON).convert("RGBA").resize((size, size), Image.LANCZOS)
     tile = rounded(src, max(2, int(size * radius_ratio)))
     if ring:
         d = ImageDraw.Draw(tile)
@@ -88,8 +93,10 @@ def logo_tile(size, radius_ratio=0.22, ring=True):
     return tile
 
 
-def paste_logo(img, cx, cy, size, glow=True, reflect=True):
+def paste_logo(img, cx, cy, size, glow=True, reflect=True, src_path=None,
+               radius_ratio=0.22, ring=True):
     """把 logo 卡贴到 (cx, cy)：先柔光、后倒影、再卡片本身。"""
+    tile = logo_tile(size, radius_ratio, ring, src_path)
     if glow:
         g = Image.new("RGBA", img.size, (0, 0, 0, 0))
         ImageDraw.Draw(g).ellipse([cx - int(size * 0.85), cy - int(size * 0.85),
@@ -99,7 +106,7 @@ def paste_logo(img, cx, cy, size, glow=True, reflect=True):
     if reflect:
         # 倒影只取底部一小条，再纵向压缩 + 渐隐。
         # 整块镜像会一直铺到文字区，把下面的字"透"出来（实测缺陷）。
-        r = logo_tile(size).transpose(Image.FLIP_TOP_BOTTOM)
+        r = tile.transpose(Image.FLIP_TOP_BOTTOM)
         rh = max(8, int(size * 0.20))
         r = r.crop((0, 0, size, rh)).resize((size, max(4, int(rh * 0.60))), Image.LANCZOS)
         a = r.getchannel("A").point(lambda v: int(v * 0.18))
@@ -109,7 +116,7 @@ def paste_logo(img, cx, cy, size, glow=True, reflect=True):
             fd.line([(0, y), (r.size[0], y)], fill=int(255 * (1.0 - y / max(1, r.size[1] - 1))))
         r.putalpha(ImageChops.multiply(a, fade))
         img.alpha_composite(r, (int(cx - size / 2), int(cy + size / 2 + max(4, size // 12))))
-    img.alpha_composite(logo_tile(size), (int(cx - size / 2), int(cy - size / 2)))
+    img.alpha_composite(tile, (int(cx - size / 2), int(cy - size / 2)))
 
 
 def sidebar():
@@ -118,7 +125,7 @@ def sidebar():
     d = ImageDraw.Draw(img, "RGBA")
     grid(d, 0, h - 140, w, h, 14, (26, 38, 64))
     starfield(d, w, h, 120, 11, 0, h - 110)
-    paste_logo(img, w // 2, 92, 108)
+    paste_logo(img, w // 2, 92, 112, src_path=EMBLEM, radius_ratio=0.05, ring=False)
     d = ImageDraw.Draw(img, "RGBA")
     d.text((w // 2, 176), "FuFumidi", font=font(21, True), fill=INK, anchor="mm")
     d.text((w // 2, 196), "离线 MIDI 工作站", font=font(12), fill=SOFT, anchor="mm")
@@ -149,7 +156,7 @@ def updater_left():
     d = ImageDraw.Draw(img, "RGBA")
     starfield(d, w, h, 150, 23, 0, h - 150)
     grid(d, 0, h - 128, w, h, 16, (24, 36, 60))
-    paste_logo(img, w // 2, 104, 116)
+    paste_logo(img, w // 2, 104, 124, src_path=EMBLEM, radius_ratio=0.05, ring=False)
     d = ImageDraw.Draw(img, "RGBA")
     d.text((w // 2, 196), "FuFumidi", font=font(26, True), fill=INK, anchor="mm")
     d.text((w // 2, 222), "离线 MIDI 工作站", font=font(13), fill=SOFT, anchor="mm")

@@ -112,23 +112,41 @@ github       不可达：This operation was aborted
 - kachina 侧（schema 允许的范围内）：`windowTitle` 改为「FuFumidi 安装 / 更新」，
   `build/updater-left.webp`（180×400，构建脚本用 `-t` 传进去）重画为同一套语言。
 
-**品牌资产流水线（换 logo 时只改一处）**：
+**品牌资产流水线（换 logo 只在品牌目录改一处）**：
+
+上游是单独的一套生成流水线（在归档区，不在本仓库）：
 
 ```
-docs/assets/logo-master.png           母图，只此一份（1.2 MB，docs/ 不打进安装包）
-      │  scripts/gen-logo.py          取「头部特写」+ 透明底 → 512/460/ICO
+E:\Midi\_attic\styles\logo3.py    立绘：本机 ComfyUI + Anima 2B（seed 903），出 定稿\立绘-定稿-*.png
+E:\Midi\_attic\styles\mkicon.py   全套图标：≥128 用全身、≤64 换半身（尺寸自适应），出 徽记/立绘-{白底,深靛,透明}-*
+      │  取用其中 5 个文件
+      ▼
+docs/assets/brand/                  进仓库的品牌资产（docs/ 不打进安装包）
+      │  scripts/gen-logo.py        选择 + 拷贝 + 断言（不重新缩放，避免重采样损失）
       ▼
 build/icon.png  build/icon.ico  frontend/src/assets/logo.png  docs/assets/logo.png
-      │  scripts/gen-installer-art.py （圆角方块卡 + 暗场 + 柔光 + 倒影）
+      │  scripts/gen-installer-art.py （徽记做大卡片 / 白底立绘做小页眉，暗场 + 柔光 + 倒影）
       ▼
 build/installerSidebar.bmp  build/installerHeader.bmp  build/updater-left.webp
 ```
 
-两个实测过的坑（都写进 `scripts/gen-logo.py` 的注释里了）：① **母图本身可能就是透明底**
-（看着是白底，其实查看器把透明合成到白上），这时再「去白底」会把图标变成黑底不透明；
-② 图标取景**不能用 alpha 边界框中心** —— 魔杖和帽子蕾丝会把中心带偏，要用肤色像素的中位数。
-另：`resources/icon.png`（窗口 / 托盘用）是 `extraResources` 落的，`asar` 里不含，
-所以 `scripts/deploy-installed.cjs` 现在会一并同步 extraResources 并校验 muscriptor 补丁。
+**选型依据**（写进 `scripts/gen-logo.py` 的表，改之前先读）：
+
+| 位置 | 用什么 | 为什么 |
+|---|---|---|
+| exe / 安装器图标 | 立绘-**白底** | 官方结论：白底版当主图标；徽记那种「深靛底 + 细金线」在 64px 以下糊成一团 |
+| 窗口 / 托盘 | 立绘-**白底**-512 | 与 .ico 同一张脸 |
+| 侧边栏（浅色面板） | 立绘-**深靛**-512 | 白底图标会糊进浅色侧栏里；深靛卡在浅/深主题下都立得住 |
+| 文档页 nav | 立绘-**深靛**-512 | 同为浅色底 |
+| 安装器侧栏 / 更新器左图 | **徽记**-512 | 徽记是「启动画面 / 关于页」的完整方形图（金框 + 刻度环 + 钢琴卷帘 + 五星），底色本就深靛 |
+| 安装器页眉（150×57） | 立绘-**白底**（38px） | 尺寸太小，徽记在这里不可读 |
+
+**一个必须记住的差别**：徽记是**整幅不透明**的，立绘系列是**圆角透明**的 ——
+所以安装器脚本给徽记 `ring=False` 且半径极小（多套一圈圆角会切掉金框、再叠一圈蓝边就成了「金框外套蓝框」）。
+
+另：`resources/icon.png`（窗口 / 托盘用）是 `extraResources` 落的、`asar` 里不含，
+所以 `scripts/deploy-installed.cjs` 会一并同步 extraResources，并**校验 muscriptor 上游补丁在位**
+（`resources/python` 明确不接管，靠手工 copy）。
 
 ### 4.3 验证方式（哪些是"看过的"，哪些只是"编译过"）
 
