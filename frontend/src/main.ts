@@ -2,7 +2,7 @@ import { createApp } from 'vue';
 import App from './App.vue';
 import { vFocusTrap } from './directives/focusTrap.js';
 import { pinia } from './stores/pinia';
-import { router } from './router';
+import { router, prefetchHeavyViews } from './router';
 import { installTauriBridge } from './bridge/tauri';
 // ★ token 层必须在 styles.css **之前**：深色映射用属性选择器覆盖 :root，靠的就是后加载 + 更高优先级
 import './styles/tokens.css';
@@ -32,3 +32,7 @@ app.use(pinia);
 app.use(router);
 app.directive('focus-trap', vFocusTrap);
 app.mount('#app');
+
+/* 首屏已经可交互了，剩下的带宽/解析余量拿去预热重视图（见 router.ts 的注释）。
+   实测收益：安装版「调教」页首次进入从 2586ms 降到百毫秒级 —— 用户点过去时分包已经在了。 */
+prefetchHeavyViews();

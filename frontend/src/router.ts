@@ -42,6 +42,31 @@ export const router = createRouter({
   scrollBehavior: () => ({ top: 0 }),
 });
 
+/* ---------------- 空闲预取重视图（2026-10-19 性能）----------------
+   路由是懒加载的，**首次点击**才下载并解析分包。安装版实测：
+     「调教」首次进入 2586ms、同一会话再进 4ms —— 成本全在这一次（CDP 采样显示主线程 93% 空闲，
+     说明不是算得慢，而是在等分包加载与首次构建）。
+   首屏可交互之后、浏览器空闲时把它们预热掉，用户点过去就是即时的。
+   只预取"重且常用"的 5 个：全部预取会把首屏的解析/磁盘抢走，反而拖慢启动。 */
+const PREFETCH_VIEWS = [
+  () => import('./views/ViewSing.vue'),        // 208 KB
+  () => import('./views/ViewEdit.vue'),        // 190 KB
+  () => import('./views/ViewViz.vue'),         // WebGL 初始化也在这条路径上
+  () => import('./views/ViewTranscribe.vue'),  // 155 KB
+  () => import('./views/ViewMusic.vue'),
+];
+export function prefetchHeavyViews(): void {
+  const run = () => {
+    for (const load of PREFETCH_VIEWS) {
+      // 失败无所谓：真点击时路由自己还会再加载一次
+      try { void load(); } catch (e) { /* 忽略 */ }
+    }
+  };
+  const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
+  if (typeof ric === 'function') ric(run, { timeout: 3000 });
+  else setTimeout(run, 1500);
+}
+
 export function viewFromPath(path: string): string {
   const seg = path.replace(/^\/+/, '').split('/')[0] || 'home';
   return seg;
