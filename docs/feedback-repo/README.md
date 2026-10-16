@@ -72,18 +72,46 @@ DNS 层面确实被污染（`fufumidi-cloud-sync.fumivoice.workers.dev` 解析�
 **Deno Deploy 已停止服务**：Cloudflare 收购 Deno 团队后 Deno Deploy 关停，新账号注册返回
 `403 SIGNUP_UNAVAILABLE`。仓库里的 `deno/` 因此废弃（它验证了「附件走 Release 资产」这套协议可用）。
 
-现在的可行路线：
+## 当前后端：Netlify Functions（2026-10-16 起）
 
-- **A（当前选定，不依赖任何人）**：Netlify Functions（`*.netlify.app` 实测可达）。
-  站点根目录 `netlify/`，端点是 `POST /feedback`、`GET /health`；
-  代码在 `netlify/lib/feedback-core.mjs`，`npm run test:netlify` 9 项离线单测。
-  **附件上限 4 MB**（Netlify 同步函数请求体 6 MB，base64 膨胀 4/3）。
-- **B（更省基建，要协作者配合）**：让协作者在**自己账号**里单独建一个 feedback worker
-  绑 `fb.de5.net`（**别动线上云同步那个 worker**）。`fusync.de5.net/health` 现在 3.7 秒可达，
-  但 `/feedback` 返回 401 —— 反馈路由不在那台已部署的 worker 里。
-- **C（最彻底）**：项目自己账号加一个域名并绑自定义域名，用已部署的 `fufumidi-feedback` worker。
+| 项 | 值 |
+|---|---|
+| 站点 | `https://fufumidi-feedback.netlify.app`（site id `0b1f74a9-11ec-46ac-9b08-7e142d8e0a3b`，team `qdtxtbp`） |
+| 端点 | `POST /feedback`、`GET /health`（另有 Functions 默认形态 `/.netlify/functions/feedback`） |
+| 代码 | `netlify/lib/feedback-core.mjs`（核心，依赖注入）+ `netlify/functions/*.mjs`（端点） |
+| 单测 | `npm run test:netlify` → 9 项离线单测 |
+| 环境变量 | `GITHUB_TOKEN`（fine-grained PAT，只授权反馈仓库 contents+issues）、`FEEDBACK_REPO`、`FEEDBACK_BRANCH` |
+| 限流 | Netlify Blobs（`fufumidi-feedback-rl`），窗口与 CF / Deno 版一致 |
+| **附件上限** | **4 MB**（Netlify 同步函数请求体 6 MB，协议是 base64 JSON → 膨胀 4/3；超限返 413 并提示「存到本地」） |
 
-在 A/B/C 落地前，反馈页的「上传到反馈仓库」会走完候选地址后失败，并**自动把带 md 的 zip 存到本地**
+### ★ 部署时会踩的坑（都实测过）
+
+1. **Netlify 2026-07 起「新项目默认私有」**（官方 changelog："New Netlify projects are now private
+   by default"）：新建的项目所有路径都返回 **401 + Login Redirect**（`app.netlify.com/edge-access?...`），
+   连 `/health` 都进不去。**必须在项目页点一次 `Make public`**（首次成功部署后出现）。
+   这个开关**没有公开 API**：`PATCH /api/v1/sites/{id}` 收 `sso_login`/`visibility` 无效（Invalid
+   request 或静默忽略），`/api/v1/projects/*` 全 404，团队级 `PATCH /api/v1/accounts/{slug}` 400，
+   Netlify CLI 也没有对应命令 —— 只能点。
+2. **部署命令**（站点根就是仓库里的 `netlify/` 目录，UI 里 Base directory 填 `netlify`）：
+   ```powershell
+   $env:NETLIFY_AUTH_TOKEN = '<nfp_...>'      # Personal access token
+   cd E:\Midi\FuFumidi-Source\netlify
+   npx netlify-cli@27.12.1 sites:create --name fufumidi-feedback --account-slug qdtxtbp
+   npx netlify-cli@27.12.1 env:set GITHUB_TOKEN '<github_pat_...>'
+   npx netlify-cli@27.12.1 deploy --prod
+   ```
+   站点只 `npm install` `netlify/package.json` 里的 `@netlify/blobs`，**不会碰 Electron 那一大坨依赖**。
+3. `netlify-cli` 走 npmmirror 更快：`$env:npm_config_registry='https://registry.npmmirror.com'`。
+
+### 备用路线（都还没落地）
+
+- **协作者的 `fb.de5.net`**：`fusync.de5.net/health` CN 实测 3.7 秒可达，但 `/feedback` 返回 **401**
+  —— 反馈路由不在那台已部署的 worker 里。要在协作者**自己账号**里单独建一个 feedback worker
+  绑 `fb.de5.net`（**别动线上云同步那个 worker**）。
+- **自有域名 + Cloudflare**：把已部署的 `fufumidi-feedback` worker 绑一个自定义域名
+  （像 `fusync.de5.net` 那样），国内可达 —— 最彻底，但需要一个域名。
+
+任何一条落地失败时，反馈页的「上传到反馈仓库」会走完候选地址后失败，并**自动把带 md 的 zip 存到本地**
 （界面会提示路径），用户还能用「网页提交 / 存到本地」把反馈送出来 —— 功能不瘫，只是要多点一下。
 
 ## 排查

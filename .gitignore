@@ -64,3 +64,6 @@ release-unpacked3/
 release-unpacked4/
 release-unpacked5/
 frontend/.tmp/
+
+# Local Netlify folder
+.netlify

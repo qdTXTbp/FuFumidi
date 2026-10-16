@@ -20,17 +20,23 @@ function registerFeedbackIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, sp
 
   /** 反馈通道候选地址，按顺序试，某一个不通用下一个。
    *
-   *  ★ 为什么是两个：workers.dev 在国内被 DNS 污染（实测 fufumidi-feedback.fufumidi.workers.dev
-   *    被解析到一个 Facebook 的 IP，curl 60 秒连不上），而云同步那个 worker 的自定义域名
-   *    fusync.de5.net 实测 0.7 秒就通 —— 所以国内优先走它（反馈路由与云同步共用同一份
-   *    worker 代码，见 cloud-sync/worker/src/index.js）；境外或能直连 workers.dev 的网络
-   *    再回退到我们自己的独立反馈 worker（wrangler.feedback.toml）。
-   *  当前线上只有第一条可达（de5.net 还没部署反馈路由时它会 404，那就快速换下一个）。 */
+   *  ★ 平台选型是**实测**出来的（详见 docs/feedback-repo/README.md）：
+   *    · `*.workers.dev`：**SNI 阻断**，不只是 DNS 污染 —— 用 DoH 拿到真实 CF IP 后带正确
+   *      SNI 直连，三个 IP 全部在 TLS 握手时被 RST。所以它已经从候选里删掉：留着只会
+   *      白等 15 秒超时，没有任何成功率。
+   *    · Deno Deploy：Cloudflare 收购 Deno 团队后**已停服**，新账号注册 403。
+   *    · **Netlify**：`*.netlify.app` 实测未被阻断（404 / 0.49 秒），是当前主通道。
+   *    · `fusync.de5.net`：协作者的云同步 worker，CN 实测 3.7 秒可达 —— 反馈路由还没
+   *      部署上去（现在返回 401），部署后它就是国内更快的那条。
+   *
+   *  第二条是 Netlify Functions 的默认路径形态：如果自定义路径 `/feedback` 没生效，
+   *  真正端点会落在 `/.netlify/functions/feedback`。两条都留着，谁通用谁。 */
   const BASES = [
+    'https://fufumidi-feedback.netlify.app',
+    'https://fufumidi-feedback.netlify.app/.netlify/functions',
     'https://fusync.de5.net',
-    'https://fufumidi-feedback.fufumidi.workers.dev',
   ];
-  const BASE_TIMEOUT_MS = 15000;   // 被污染的域名会一直挂着，给它 15 秒就换下一个
+  const BASE_TIMEOUT_MS = 15000;   // 被墙的域名会一直挂着，给它 15 秒就换下一个
 
   function settingsPath() {
     try {
