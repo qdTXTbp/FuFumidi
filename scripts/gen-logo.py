@@ -1,105 +1,230 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""把品牌资产（docs/assets/brand/）同步到 5 个消费点。
+"""从品牌母图生成两套东西：**图标 = 头像特写**，**立绘 = 放进工具里**。
 
     python scripts/gen-logo.py
 
-为什么是「同步」而不是「现场生成」：品牌资产由 E:\Midi\_attic\styles\ 那套流水线
-（logo3.py 出立绘 → mkicon.py 出全套尺寸）**已经生成好了**，并且对每个尺寸做过
-尺寸自适应（≥128 用全身、≤64 换半身）。这里再自己缩放一遍只会引入重采样损失，
-所以只做「选择 + 拷贝 + 断言」。要换立绘请改母图后重跑那套流水线，再重跑本脚本。
+母图只此一份：docs/assets/brand/立绘-定稿-带描边.png（1092x1550，自带透明底）。
+它是用户拍板的那张（带贴纸描边的定稿），上游流水线在
+E:\Midi\_attic\styles\（logo3.py 出立绘 → mkicon.py 出全套图标尺寸）。
 
-消费点与选型（依据 = 新图标\读我.md 的用途表 + 各位置的实际底色）：
+★ 两条用户明确的要求，别再弄反（2026-08 定）：
 
-| 位置 | 用什么 | 为什么 |
-|---|---|---|
-| build/icon.ico（exe / 安装器 / 卸载器） | 立绘-白底（.ico 多尺寸） | 官方结论：**白底版当主图标**；深靛底 + 细金线的徽记在小尺寸下糊成一团 |
-| build/icon.png（窗口 / 托盘 / extraResources） | 立绘-白底-512 | 同上，与 .ico 保持同一张脸 |
-| frontend/src/assets/logo.png（侧边栏 38px） | **立绘-深靛-512** | 侧边栏是**浅色**面板：白底图标会糊进白里；深靛圆角卡在浅色/深色主题下都立得住 |
-| docs/assets/logo.png（文档页 nav 36px） | 立绘-深靛-512 | 文档页同为浅色底 |
-| 安装器侧栏 / 更新器左图 | **徽记-512** | 徽记是「启动画面 / 关于页」用的完整方形图（金框 + 刻度环 + 钢琴卷帘 + 五星），底色本来就是深靛，压在深色安装器上正好 |
-| 安装器页眉 150x57 | 立绘-白底（38px） | 页眉太小，徽记在这个尺寸不可读（读我实测：48 以下 ✗） |
+1. **图标要抠白底。** 图标（exe / 安装器 / 窗口 / 托盘）用**头像特写 + 透明底**，
+   不要做成"白底圆角卡"——白底卡在深色任务栏上是一块白板，也会盖掉任务栏主题。
+   母图本身已经是透明底（51% 透明），所以这里不需要"抠"；万一换成白底图，
+   flood_remove_white() 会从四边泛洪把白底去掉（**不能**简单"白变透明"，
+   角色的白头发、白短裤会被一起打洞）。
+2. **立绘放到工具里。** 全身立绘（透明底）进应用内：侧边栏品牌位 + 首页工作区吉祥物
+   + 文档页 nav。所以立绘是**竖构图整幅**输出，不裁成方形。
 
-★ 一个必须记住的差别：**徽记是整幅不透明的**（自带深靛方底），
-  而立绘系列是**圆角透明**的。所以安装器脚本里徽记**不能再套一次圆角**（会切掉金框），
-  立绘则要套。
+产出：
+    build/icon.png                     512x512 头像特写（透明）
+    build/icon.ico                     16/32/48/64/128/256
+    frontend/src/assets/logo.png       460x460 头像特写（透明，侧边栏徽标）
+    frontend/src/assets/mascot.png     高 1000 立绘（透明，首页吉祥物）
+    docs/assets/logo.png               460x460 头像特写（透明，文档页 nav）
+
+尺寸分工（别搞反）：**方形小位（38px 侧栏 / 36px 文档 nav）用头像特写**——立绘缩到这个
+尺寸只剩一个竖条，认不出人；**首页那种大位才用整幅立绘**。
+    dist/logo-preview.png              预览接触印相（仅本地看，不进安装包）
+
+★ 头像取景不能用 alpha 边界框中心：这张图右边有帽子的蕾丝飘带、左边伸出魔杖，
+  两者横向极值差得远，拿 bbox 中心取景会把脸推偏。改用**肤色像素在全身上半段 x 的中位数**。
 """
-import hashlib
 import os
-import shutil
 import sys
 
-from PIL import Image
+from PIL import Image, ImageFilter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BRAND = os.path.join(ROOT, 'docs', 'assets', 'brand')
+MASTER = os.path.join(BRAND, '立绘-定稿-带描边.png')
 BUILD = os.path.join(ROOT, 'build')
+LOGO_FE = os.path.join(ROOT, 'frontend', 'src', 'assets', 'logo.png')
+MASCOT_FE = os.path.join(ROOT, 'frontend', 'src', 'assets', 'mascot.png')
+LOGO_DOCS = os.path.join(ROOT, 'docs', 'assets', 'logo.png')
 
-SYNC = [
-    ('FuFumidi.ico', os.path.join(BUILD, 'icon.ico'), 'exe / 安装器 / 卸载器图标（白底主图标，含 256..16）'),
-    ('立绘-白底-512.png', os.path.join(BUILD, 'icon.png'), '窗口 / 托盘图标'),
-    ('立绘-深靛-512.png', os.path.join(ROOT, 'frontend', 'src', 'assets', 'logo.png'), '侧边栏（浅色面板）'),
-    ('立绘-深靛-512.png', os.path.join(ROOT, 'docs', 'assets', 'logo.png'), '文档页 nav'),
-]
-
-EXPECT_ICO_SIZES = {(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)}
+BG_MIN = 228          # 泛洪时"够亮"的门限
+BG_SAT = 14           # 泛洪时"几乎无彩度"的门限
+HEAD_SIDE = 0.62      # 头像方框边长 = 全身高度的比例
 
 
-def sha(p):
-    return hashlib.sha256(open(p, 'rb').read()).hexdigest()[:12]
+def flood_remove_white(im):
+    """从四边泛洪去白底（只在母图确实不透明时才会被调用）。"""
+    im = im.convert('RGB')
+    w, h = im.size
+    px = im.load()
+    is_bg = bytearray(w * h)
+    for y in range(h):
+        row = y * w
+        for x in range(w):
+            r, g, b = px[x, y]
+            if min(r, g, b) >= BG_MIN and (max(r, g, b) - min(r, g, b)) <= BG_SAT:
+                is_bg[row + x] = 1
+    from collections import deque
+    seen = bytearray(w * h)
+    q = deque()
+    for x in range(w):
+        for y in (0, h - 1):
+            i = y * w + x
+            if is_bg[i] and not seen[i]:
+                seen[i] = 1
+                q.append(i)
+    for y in range(h):
+        for x in (0, w - 1):
+            i = y * w + x
+            if is_bg[i] and not seen[i]:
+                seen[i] = 1
+                q.append(i)
+    while q:
+        i = q.popleft()
+        x, y = i % w, i // w
+        for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+            if 0 <= nx < w and 0 <= ny < h:
+                j = ny * w + nx
+                if is_bg[j] and not seen[j]:
+                    seen[j] = 1
+                    q.append(j)
+    alpha = Image.frombytes('L', (w, h), bytes(0 if seen[i] else 255 for i in range(w * h)))
+    alpha = alpha.filter(ImageFilter.GaussianBlur(0.6))
+    alpha = alpha.point(lambda v: 0 if v < 24 else (255 if v > 232 else v))
+    out = im.convert('RGBA')
+    out.putalpha(alpha)
+    return out
+
+
+def prepare(im):
+    hist = im.convert('RGBA').getchannel('A').histogram()
+    if hist[0] / float(sum(hist)) >= 0.05:
+        print('母图自带透明底（透明像素 %.1f%%），直接用' % (100.0 * hist[0] / sum(hist)))
+        return im.convert('RGBA')
+    print('母图不透明，按白底泛洪去背')
+    return flood_remove_white(im)
+
+
+def alpha_bbox(im):
+    return im.getchannel('A').point(lambda v: 255 if v > 32 else 0).getbbox()
+
+
+def face_center_x(im, y0, hgt):
+    import numpy as np
+    a = np.asarray(im)
+    rgb, alpha = a[:, :, :3].astype(int), a[:, :, 3]
+    skin = (alpha > 128) & (rgb[:, :, 0] > 205) & (rgb[:, :, 0] - rgb[:, :, 2] > 20) & (rgb[:, :, 1] > 140)
+    ys, xs = np.nonzero(skin)
+    if xs.size:
+        upper = ys <= y0 + hgt * 0.55
+        return int(np.median(xs[upper])) if upper.any() else int(np.median(xs))
+    band = (alpha[y0:y0 + int(hgt * 0.55)] > 32).sum(axis=0)
+    xs2 = np.repeat(np.arange(a.shape[1]), band)
+    return int(np.median(xs2)) if xs2.size else im.size[0] // 2
+
+
+def head_box(im):
+    """头像特写：边长 0.62×全身高、从头顶起，横向以脸为中心。"""
+    x0, y0, x1, y1 = alpha_bbox(im)
+    hgt = y1 - y0
+    side = min(int(hgt * HEAD_SIDE), im.size[0], im.size[1])
+    cx = face_center_x(im, y0, hgt)
+    top = max(0, min(y0, im.size[1] - side))
+    left = max(0, min(cx - side // 2, im.size[0] - side))
+    return (left, top, left + side, top + side)
+
+
+def fit_square(im, box, size, pad_ratio=0.035):
+    crop = im.crop(box)
+    inner = int(size * (1 - pad_ratio * 2))
+    cw, ch = crop.size
+    scale = inner / float(max(cw, ch))
+    nw, nh = max(1, int(round(cw * scale))), max(1, int(round(ch * scale)))
+    crop = crop.resize((nw, nh), Image.LANCZOS)
+    canvas = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    canvas.paste(crop, ((size - nw) // 2, (size - nh) // 2), crop)
+    return canvas
+
+
+def fit_height(im, box, height, pad_ratio=0.03):
+    """竖构图整幅输出：按高度缩放，**不裁成方形**（立绘要放进界面里，方形会把人物切掉）。"""
+    crop = im.crop(box)
+    inner = int(height * (1 - pad_ratio * 2))
+    cw, ch = crop.size
+    scale = inner / float(ch)
+    nw, nh = max(1, int(round(cw * scale))), max(1, int(round(ch * scale)))
+    crop = crop.resize((nw, nh), Image.LANCZOS)
+    canvas = Image.new('RGBA', (nw, height), (0, 0, 0, 0))
+    canvas.paste(crop, (0, (height - nh) // 2), crop)
+    return canvas
+
+
+def contact_sheet(icon, mascot, out_path):
+    from PIL import ImageDraw
+    W, H = 860, 420
+    sheet = Image.new('RGB', (W, H), (24, 26, 32))
+    d = ImageDraw.Draw(sheet)
+    d.text((20, 10), '图标（头像特写 · 透明底）', fill=(200, 210, 225))
+    x = 20
+    for i, bg in enumerate([(18, 20, 26), (244, 246, 250), (222, 228, 236)]):
+        tile = Image.new('RGB', (150, 150), bg)
+        im = icon.resize((130, 130), Image.LANCZOS)
+        tile.paste(im, (10, 10), im)
+        sheet.paste(tile, (x, 34))
+        x += 160
+    y = 200
+    d.text((20, y - 18), '实尺小图', fill=(200, 210, 225))
+    x = 20
+    for s in (48, 32, 16):
+        tiny = icon.resize((s, s), Image.LANCZOS)
+        sheet.paste(tiny, (x, y), tiny)
+        big = tiny.resize((s * 2, s * 2), Image.NEAREST)
+        sheet.paste(big, (x + 60, y), big)
+        x += s + 120
+    d.text((560, 10), '立绘（放进工具里的那张）', fill=(200, 210, 225))
+    m = mascot.resize((int(mascot.width * 260.0 / mascot.height), 260), Image.LANCZOS)
+    tile2 = Image.new('RGB', (300, 330), (247, 248, 250))
+    tile2.paste(m, ((300 - m.width) // 2, 20), m)
+    sheet.paste(tile2, (540, 44))
+    sheet.save(out_path)
+    return out_path
 
 
 def main():
-    if not os.path.isdir(BRAND):
-        print('品牌目录不存在：' + BRAND)
+    if not os.path.exists(MASTER):
+        print('母图不存在：' + MASTER)
         return 1
-    missing = [s for s, _, _ in SYNC if not os.path.exists(os.path.join(BRAND, s))]
-    if missing:
-        print('品牌资产缺失：' + ', '.join(missing))
-        return 1
+    cut = prepare(Image.open(MASTER))
+    hb, fb = head_box(cut), alpha_bbox(cut)
+    print('alpha 边界框 = %s  头像框 = %s' % (fb, hb))
 
-    for src_name, dst, why in SYNC:
-        src = os.path.join(BRAND, src_name)
-        shutil.copy2(src, dst)
-        print('%-42s <- %-18s %8d B  sha=%s  %s' % (
-            os.path.relpath(dst, ROOT), src_name, os.path.getsize(dst), sha(dst), why))
+    # ---- 图标：头像特写 + 透明底
+    icon = fit_square(cut, hb, 512)
+    icon.save(os.path.join(BUILD, 'icon.png'))
+    icon.save(os.path.join(BUILD, 'icon.ico'),
+              sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
 
-    # ---- 断言：尺寸 / 透明度 / ICO 内含尺寸不对就别往下走（图标坏了要发布前就发现）
-    icon = Image.open(os.path.join(BUILD, 'icon.png'))
-    assert icon.size == (512, 512), 'icon.png 必须是 512x512，实际 ' + str(icon.size)
-    assert icon.mode == 'RGBA' and icon.getchannel('A').getpixel((0, 0)) == 0, \
-        'icon.png 必须有透明圆角（角落不透明说明选错了变体）'
+    # ---- 侧栏 / 文档 nav：方形小位，用头像特写（立绘缩到 38px 认不出）
+    logo = fit_square(cut, hb, 460)
+    logo.save(LOGO_FE)
+    logo.save(LOGO_DOCS)
 
-    ico = Image.open(os.path.join(BUILD, 'icon.ico'))
-    have = set(ico.info.get('sizes', set()))
-    if not EXPECT_ICO_SIZES.issubset(have):
-        print('✗ icon.ico 缺少尺寸：' + str(sorted(EXPECT_ICO_SIZES - have)))
-        return 1
+    # ---- 首页吉祥物：整幅立绘（工具里能看清全身）
+    mascot = fit_height(cut, fb, 1000)
+    mascot.save(MASCOT_FE)
 
-    # ---- 预览：深底 / 浅底 各变体（写 dist/，不进安装包）
+    # ---- 断言
+    for p in (os.path.join(BUILD, 'icon.png'), LOGO_FE, MASCOT_FE):
+        im = Image.open(p)
+        assert im.mode == 'RGBA', p + ' 必须是 RGBA'
+        assert im.getchannel('A').getpixel((0, 0)) == 0, p + ' 角落不透明 → 白底没抠掉'
+    assert Image.open(os.path.join(BUILD, 'icon.png')).size == (512, 512)
+    assert Image.open(MASCOT_FE).height == 1000
+
     prev = os.path.join(ROOT, 'dist')
     os.makedirs(prev, exist_ok=True)
-    from PIL import ImageDraw
-    white = os.path.join(BRAND, '立绘-白底-512.png')
-    indigo = os.path.join(BRAND, '立绘-深靛-512.png')
-    sheet = Image.new('RGB', (760, 250), (24, 26, 32))
-    d = ImageDraw.Draw(sheet)
-    tiles = [
-        ('白底 @ 深底', white, (18, 20, 26)),
-        ('白底 @ 浅底', white, (244, 246, 250)),
-        ('深靛 @ 浅底（侧栏用）', indigo, (247, 248, 250)),
-        ('深靛 @ 深底', indigo, (24, 26, 32)),
-    ]
-    for i, (label, path, bg) in enumerate(tiles):
-        tile = Image.new('RGB', (170, 170), bg)
-        im = Image.open(path).convert('RGBA')
-        small = im.resize((130, 130), Image.LANCZOS)
-        tile.paste(small, (20, 20), small)
-        sheet.paste(tile, (20 + i * 185, 50))
-        d.text((20 + i * 185, 28), label, fill=(200, 210, 225))
-    sheet.save(os.path.join(prev, 'logo-preview.png'))
+    contact_sheet(icon, mascot, os.path.join(prev, 'logo-preview.png'))
+    for p in (os.path.join(BUILD, 'icon.png'), os.path.join(BUILD, 'icon.ico'), LOGO_FE, MASCOT_FE, LOGO_DOCS):
+        print('%-44s %8d B' % (os.path.relpath(p, ROOT), os.path.getsize(p)))
     print('预览：' + os.path.join(prev, 'logo-preview.png'))
-    print('（安装器三张图由 scripts/gen-installer-art.py 从品牌资产派生）')
     return 0
 
 

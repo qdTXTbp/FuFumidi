@@ -18,8 +18,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageFilter
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 BUILD = os.path.join(ROOT, "build")
-ICON = os.path.join(BUILD, "icon.png")                       # 白底立绘（小尺寸可读）
-EMBLEM = os.path.join(ROOT, "docs", "assets", "brand", "徽记-512.png")   # 完整徽记（大卡片用）
+ICON = os.path.join(BUILD, "icon.png")   # 头像特写（透明底）—— 安装器三张图都用它做卡片
 
 BG_TOP = (12, 16, 28)
 BG_BOT = (24, 34, 58)
@@ -125,7 +124,7 @@ def sidebar():
     d = ImageDraw.Draw(img, "RGBA")
     grid(d, 0, h - 140, w, h, 14, (26, 38, 64))
     starfield(d, w, h, 120, 11, 0, h - 110)
-    paste_logo(img, w // 2, 92, 112, src_path=EMBLEM, radius_ratio=0.05, ring=False)
+    paste_logo(img, w // 2, 92, 108)
     d = ImageDraw.Draw(img, "RGBA")
     d.text((w // 2, 176), "FuFumidi", font=font(21, True), fill=INK, anchor="mm")
     d.text((w // 2, 196), "离线 MIDI 工作站", font=font(12), fill=SOFT, anchor="mm")
@@ -156,7 +155,7 @@ def updater_left():
     d = ImageDraw.Draw(img, "RGBA")
     starfield(d, w, h, 150, 23, 0, h - 150)
     grid(d, 0, h - 128, w, h, 16, (24, 36, 60))
-    paste_logo(img, w // 2, 104, 124, src_path=EMBLEM, radius_ratio=0.05, ring=False)
+    paste_logo(img, w // 2, 104, 116)
     d = ImageDraw.Draw(img, "RGBA")
     d.text((w // 2, 196), "FuFumidi", font=font(26, True), fill=INK, anchor="mm")
     d.text((w // 2, 222), "离线 MIDI 工作站", font=font(13), fill=SOFT, anchor="mm")

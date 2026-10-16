@@ -481,6 +481,13 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 
 /* 页头：窄窗口自动换行（右侧统计标签下沉一行），长标题省略而不撑破 */
 .page-head { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; flex-wrap: wrap; row-gap: 10px; }
+/* 首页的立绘吉祥物：靠右贴齐、不参与布局点击；窄窗口隐藏（会和标题挤在一起） */
+.home-mascot {
+  margin-left: auto; flex: none; height: 168px; width: auto;
+  pointer-events: none; user-select: none;
+  filter: drop-shadow(0 14px 26px rgba(22, 44, 84, 0.20));
+}
+@media (max-width: 1080px) { .home-mascot { display: none; } }
 .page-ic {
   width: 44px; height: 44px;
   border-radius: 12px;
