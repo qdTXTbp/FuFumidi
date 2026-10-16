@@ -532,7 +532,7 @@ const gpuRecommended = computed(() => {
   if (d.vendor === 'intel') return t('不可用（CPU）');
   return t('不可用');
 });
-/* ★ 2026-10-19 用户要求：不再按 Python 版本拦截下载安装。
+/* ★ 2026-10-17 用户要求：不再按 Python 版本拦截下载安装。
    以前这里按 requiresPython 与当前运行时是否匹配返回"不可安装"的理由，把按钮变灰；
    引擎运行时换成 3.12 之后，按 3.11 构建的包就全被灰掉了。
    现在版本不匹配只作为提示（main 的 kindPrereq().warn → p.warn，见下面的琥珀小字），
@@ -1328,7 +1328,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <div v-for="p in gpu.packages" :key="p.kind + '|' + p.name" style="display:flex;align-items:center;gap:var(--sp-2);margin:6px 0">
                 <span style="flex:1;font-size:var(--fs-md)">{{ gpuKindLabel(p.kind) + (p.split ? t('（分卷）') : '') + (p.requiresPython === '3.12' ? t('（需 Python 3.12 运行时）') : '') + (p.kind === 'xpu' ? t('（未经实机验证）') : '') }}</span>
                 <span style="font-size:var(--fs-sm);color:var(--text-soft)">{{ p.sizeText }}</span>
-                <!-- ★ Python 版本不匹配不再拦截下载（2026-10-19 用户要求），改成这里的琥珀提示 -->
+                <!-- ★ Python 版本不匹配不再拦截下载（2026-10-17 用户要求），改成这里的琥珀提示 -->
                 <span v-if="p.warn" style="font-size:var(--fs-xs);color:var(--t-warn);max-width:230px">{{ p.warn }}</span>
                 <button class="btn sm" @click="gpuDownloadRemote(p)" :disabled="gpu.busy || app.gpuInstall.active" :title="p.warn || t('下载并安装')">{{ t('下载并安装') }}</button>
               </div>

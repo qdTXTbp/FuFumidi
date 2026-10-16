@@ -31,7 +31,7 @@
 | 颜色来源 | 组件各写各的 | `theme.js`（两档）+ `palette.js`（画布兜底） | — |
 | 重复轨色板 | 4 份（util / singer / EditorCanvas / ViewConvert+ViewEdit） | **1 份**（`palette.js`） | 再导出 |
 
-### 安装版验收（CDP 实测，2026-10-19）
+### 安装版验收（CDP 实测，2026-10-17）
 
 - 正文字体：`"FuFumidi Sans", "Microsoft YaHei UI"…`（内置字体生效）。
 - **字号档数 6**：13px×972、15px×391、11px×246、20px×52、12px×43（第 6 档仅 28px 页面主标题，首页没有）。

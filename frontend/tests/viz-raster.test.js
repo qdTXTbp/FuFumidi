@@ -86,7 +86,7 @@ test('线展成垂直方向加宽的四边形，线宽进 shape（片元据此�
   near(d[24], GL_KINDS.line);
   near(d[25], 2, '线宽（设备像素）');
 });
-test('键盘不进泛光源（哑光物体；2026-10-19「黑键太透明」的实测结论）', () => {
+test('键盘不进泛光源（哑光物体；2026-10-17「黑键太透明」的实测结论）', () => {
   const prims = [
     { k: 'rect', layer: 'background', x: 0, y: 0, w: 1, h: 1 },
     { k: 'rect', layer: 'notes', x: 0, y: 0, w: 1, h: 1 },

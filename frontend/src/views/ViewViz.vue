@@ -568,7 +568,7 @@ onBeforeUnmount(() => {
           <input v-if="bg.mode === 'solid'" type="color" class="viz-bg-color" :value="bg.color" @input="bg.color = $event.target.value; saveBg()" />
           <button class="chip-btn" :class="{ active: bg.mode === 'image' }" @click="setBgMode('image')">{{ t('图片') }}</button>
           <button class="chip-btn" :title="t('选择背景图片') " @click="pickBgImage"><Icon name="folder" :size="12" />{{ t('选择…') }}</button>
-          <!-- ★ 动态壁纸（2026-10-19 用户："音符瀑布背景允许设定动态壁纸"）：
+          <!-- ★ 动态壁纸（2026-10-17 用户："音符瀑布背景允许设定动态壁纸"）：
                走应用**同一套壁纸库**（缩略图 / 下载 / 导入本地视频），只是落点是"瀑布流画面"
                而不是整窗背景（WallpaperGallery 按 state.ui.wallpaperTarget 分流）。 -->
           <button class="chip-btn" :class="{ active: bg.mode === 'wallpaper' }"

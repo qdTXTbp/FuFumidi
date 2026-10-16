@@ -4,7 +4,7 @@
 //   跟可视化页的背景设置**毫无关系** —— 用户在瀑布流里挑的图片、透明档、模糊/暗化，
 //   导出的成片一概不认，看到的和导出的是两幅画。现在两边读写同一个 store、同一个
 //   localStorage 键、同一个绘制函数（core/viz.js 的 paintVizBg），任何一处改动两边立刻同步。
-// ★ 2026-10-19（用户："音符瀑布背景允许设定动态壁纸"）：新增 `wallpaper` 档 —— 拿应用**壁纸库**
+// ★ 2026-10-17（用户："音符瀑布背景允许设定动态壁纸"）：新增 `wallpaper` 档 —— 拿应用**壁纸库**
 //   里的动态壁纸（视频）当瀑布流背景。与应用整窗背景（App.vue 的 custom_wallpaper）**互相独立**：
 //   两处各挑各的，谁也不覆盖谁。
 import { reactive, ref } from 'vue';
@@ -22,7 +22,7 @@ export const BG_KEY = 'fufumidi.viz.bg';
 /* ★ 改默认值 / 改结构时把 BG_VER +1：老数据直接忽略，否则「新默认值」对老用户永远不生效
    （这次就把默认从「主题」改成「透明」，顺便清掉之前调试留下的图片档）。 */
 export const BG_VER = 2;
-/* ★ 2026-10-19 加了 wallPath（动态壁纸）：它是**纯新增字段**，老记录没有它就落到默认 ''，
+/* ★ 2026-10-17 加了 wallPath（动态壁纸）：它是**纯新增字段**，老记录没有它就落到默认 ''，
    因此**不动 BG_VER** —— 一动 BG_VER，老用户存的图片/纯色/模糊/暗化会被整条丢掉重来。 */
 export const BG_DEFAULTS = { v: BG_VER, mode: 'transparent', color: '#0b1020', blur: 12, dim: 0.35, path: '', wallPath: '', fx: { ...FX_DEFAULTS } };   // ui-tokens-allow: color 是持久化的用户默认值，不是样式
 

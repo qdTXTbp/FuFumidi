@@ -1,4 +1,4 @@
-﻿# Host side orchestrator: the L3 release gate for 5.2.0 (fresh install -> post-install -> launch -> uninstall).
+# Host side orchestrator: the L3 release gate for 5.2.0 (fresh install -> post-install -> launch -> uninstall).
 # Each step runs the guest script through guest-run.ps1 and its raw output is saved under _attic for the report.
 # Usage: $env:FUFUMIDI_VM_PASSWORD=...; powershell -File scripts/vm/run-l3-510.ps1
 param(
@@ -21,6 +21,22 @@ function Step([string]$name, [string]$script) {
 }
 
 Write-Host "==== FuFumidi 5.2.0 L3 发布闸门 ====" -ForegroundColor Cyan
+
+# ★ 等 guest 真的能跑命令再开始（2026-10-17 实测教训）：
+#   reset-test-vm.ps1 把快照回滚并以 GUI 启动后**立刻**跑 L3，guestcontrol 还没就绪，
+#   四个步骤全部报「未取到输出文件」——那不是应用失败，是通道没起来。
+#   判据：guestproperty 报告 GuestAdditions 版本，且真的能跑通一条 cmd。
+$guestReady = $false
+for ($i = 0; $i -lt 60; $i++) {
+  $props = & $vbox guestproperty enumerate $VmName 2>$null | Out-String
+  if ($props -match 'GuestAdd/Version') {
+    $probe = & $vbox guestcontrol $VmName run --exe 'C:\Windows\System32\cmd.exe' --username=tester --password=$env:FUFUMIDI_VM_PASSWORD --wait-stdout --timeout 20000 -- cmd /c echo ready 2>&1 | Out-String
+    if ($probe -match 'ready') { $guestReady = $true; break }
+  }
+  Start-Sleep -Seconds 5
+}
+if (-not $guestReady) { Write-Host "[失败] guest 通道 5 分钟内未就绪，中止（这不是应用的问题）" -ForegroundColor Red; exit 2 }
+Write-Host "==> guest 通道就绪" -ForegroundColor Green
 
 # A 断网静默安装：先摘掉 guest 的网卡链路，装完再挂回来
 Write-Host "==> 关闭 guest 网卡链路（断网安装断言）" -ForegroundColor Cyan

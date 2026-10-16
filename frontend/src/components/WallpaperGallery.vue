@@ -25,7 +25,7 @@ const importProgress = ref(0);
 function wpTarget() { return state.ui.wallpaperTarget === 'viz' ? 'viz' : 'app'; }
 function appliedToast() { return wpTarget() === 'viz' ? t('已应用到音符瀑布背景') : t('壁纸已应用'); }
 function closeWallpaperGallery() { state.ui.wallpaperOpen = false; state.ui.wallpaperTarget = 'app'; }
-/* ★ 同一个壁纸库、两个落点（2026-10-19）：缩略图 / 下载 / 导入本地视频三件事完全共用，
+/* ★ 同一个壁纸库、两个落点（2026-10-17）：缩略图 / 下载 / 导入本地视频三件事完全共用，
    只有"最后写进哪份设置"不同 —— 应用整窗背景写 settings，瀑布流背景写 stores/vizbg。 */
 async function setWallpaperPath(path) {
   if (wpTarget() === 'viz') { await vizBg.setWall(path); return; }
