@@ -402,6 +402,12 @@ function setImmersive(on) {
     document.documentElement.classList.add('fu-immersive');
     // 原生标题栏在 web 内容之外，CSS 藏不掉 —— 只有窗口真全屏能收掉它。
     try { window.fuBridge?.setFullScreen?.(true); } catch (e) {}
+    // 全屏切换会改窗口尺寸，而画布尺寸是"读一次 clientWidth/Height"算出来的：
+    // 立刻 + 120ms + 600ms 各重算一次，把过渡期间的空档也覆盖掉（实测只算一次会留底边）。
+    const remeasure = () => { try { grabCanvases(); window.dispatchEvent(new Event('resize')); } catch (e) {} };
+    nextTick(remeasure);
+    setTimeout(remeasure, 120);
+    setTimeout(remeasure, 600);
     pokeHud();
     app.toast(t('控件 3 秒无操作后自动淡出，移动鼠标或按 I 退出'));
   } else {
@@ -484,12 +490,21 @@ function savePrefs() {
 }
 watch([wfZoom, mode], savePrefs);
 
+/* 窗口尺寸变化（含进出全屏 / 拖窗 / 缩放）→ 必须重算画布。
+   原先没有任何 resize 监听：画布尺寸只在挂载与切模式时读一次，
+   全屏后就会沿用旧高度，底部留出一条。 */
+function onWindowResize() {
+  try { grabCanvases(); } catch (e) {}
+  if (immersive.value) pokeHud();
+}
+
 onMounted(() => {
   loadPrefs();
   try { ensureAudio(); } catch (e) { /* 不支持 Web Audio 时仅渲染瀑布 */ }
   grabCanvases();
   window.addEventListener('keydown', onKey);
   window.addEventListener('mousemove', onPointerMove);
+  window.addEventListener('resize', onWindowResize);
   raf = requestAnimationFrame(tick);
 });
 // KeepAlive 保活期间停掉循环：频谱/瀑布每帧都要算 FFT 与大量绘制，
@@ -503,6 +518,7 @@ onBeforeUnmount(() => {
   if (hudTimer) { clearTimeout(hudTimer); hudTimer = null; }
   window.removeEventListener('keydown', onKey);
   window.removeEventListener('mousemove', onPointerMove);
+  window.removeEventListener('resize', onWindowResize);
   setImmersive(false);
   spec = [];
 });
@@ -727,6 +743,15 @@ onBeforeUnmount(() => {
 .vc-body canvas.cv-transparent { background: transparent; }
 .vc-body.bd-canvas { background: var(--canvas); }
 .viz-page.immersive .vc-body canvas { border: 0; border-radius: 0; }
+/* ★ 高度链必须显式到底：.vc-body 靠 flex:1 撑，而 .viz-col/.viz-hero 若没有 100%，
+   全屏切换（窗口从 1268×785 变 1536×960）时会把画布留出一条底边（用户实测反馈「底部有一点没挡住」）。
+   这里把整条链钉死，并让画布 block 化、去掉任何边框/圆角带来的 1~2px 误差。 */
+.viz-page.immersive,
+.viz-page.immersive .viz-col,
+.viz-page.immersive .viz-hero { height: 100%; }
+.viz-page.immersive .viz-hero { display: flex; flex-direction: column; }
+.viz-page.immersive .vc-body { flex: 1 1 auto; min-height: 0; height: auto; }
+.viz-page.immersive .vc-body canvas { display: block; width: 100%; height: 100%; }
 .viz-page.immersive .vc-head {
   position: absolute; top: 0; left: 0; right: 0; z-index: 3;
   margin: 0; padding: 8px 14px;
