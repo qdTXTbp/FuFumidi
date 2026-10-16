@@ -33,7 +33,7 @@ const RAISE_BASE = 9;
  *  旧实现是 `faceH - 3*s.gv`：① 幅度太小（键面 86px 时只占 3.5%）
  *  ② **方向反了** —— 近端上移 = 键"变短了"，读起来不像被按下去。
  *  真实琴键是**近端下沉、远端不动**（绕远端转一点点），所以这里改成近端往下。 */
-export const PRESS_DIP = 11;
+export const PRESS_DIP = 16;
 /** 相邻白键之间的防缝重叠（半像素级，避免共享边出现发丝缝） */
 const SEAM = 0.35;
 /** 音符能取到的最大深度（再高就截住，避免收拢过度变成一根线） */
@@ -171,7 +171,11 @@ export function buildKeyboard(P, ctx) {
        整块键像绕远端转了一点，这才是"按下去"（旧写法是键面缩短，方向反了且只有 3px）。 */
     // ★ 起手要软（2026-10-17 用户："按压效果太生硬"）：直接跟 gv 线性走，按下瞬间就"啪"地沉 11px。
     //   pow(1.6) 让下压由轻到重（松手时 gv 本身平滑衰减），幅度也不再是瞬间到位。
-    const prs = solid ? Math.pow(Math.max(0, Math.min(1, s.gv)), 1.6) : 0;
+    /* ★ 按下量取编译器的**弹簧值 s.prs**（攻 35ms / 松 110ms、略过冲，见 scene/compile.js）：
+       位移跟着弹簧走才是"按下去"的动画，而不是"啪"地一步到位。
+       取不到 prs（纯几何单测里只传 gv）就退回 gv，位移仍与 PRESS_DIP 严格对应。 */
+    const pressIn = s.prs == null ? s.gv : s.prs;
+    const prs = solid ? Math.max(0, Math.min(1.25, pressIn)) : 0;
     const dip = PRESS_DIP * prs;
     const faceH2 = Math.max(6, ctx.faceH + dip);            // 近端下沉 → 键面变长
     const wallH = Math.max(3, ctx.frontH - dip * 0.85);     // 前脸补偿：整键下沿只降 0.15*dip
@@ -185,6 +189,12 @@ export function buildKeyboard(P, ctx) {
       pr.push(face(P, 'keyboard', [
         qNear[0], qNear[1], qNear[2], qNear[3], qNear[2], qNear[3] + wallH, qNear[0], qNear[1] + wallH,
       ], { stops: [kp.wkFrontTop, kp.wkFrontBot], dir: 'v' }, { alpha: keysA, z: 100 + i }));
+      // 按下的那一瞬，前脸（键的立面）亮一档 —— 与下沉同一个弹簧值，所以是渐亮而不是"闪"
+      if (prs > 0.02) {
+        pr.push(face(P, 'keyboard', [
+          qNear[0], qNear[1], qNear[2], qNear[3], qNear[2], qNear[3] + wallH, qNear[0], qNear[1] + wallH,
+        ], '#ffffff', { alpha: 0.13 * prs * keysA, blend: 'lighter', z: 101 + i }));
+      }
     }
     // 远端高光：落在音符落点线上，与音符列严格对齐（t=0 恒等）
     const fe = cam.farEdge(u0, u1);
@@ -221,8 +231,10 @@ export function buildKeyboard(P, ctx) {
          平板模式（keys3d 关）没有厚度可落，就停在白键面上（h=0）——
          这里原先恒为 1，于是平板模式下黑键会浮在白键上方 9px。 */
       // 与白键同一条软化曲线；黑键落 55% 的抬起量（原来 80% 太"砸"）
-      const prs = solid ? Math.pow(Math.max(0, Math.min(1, s.gv)), 1.6) : 0;
-      const hTop = solid ? 1 - 0.55 * prs : 0;
+      // 与白键同一个弹簧值；黑键落 72% 的抬起量（抬起 9~14px → 看得见地"沉下去"）
+      const pressIn = s.prs == null ? s.gv : s.prs;
+      const prs = solid ? Math.max(0, Math.min(1.25, pressIn)) : 0;
+      const hTop = solid ? Math.max(0, 1 - 0.72 * prs) : 0;
       const t1 = BLACK_T;
       // ★ 黑键整层抬到**白键所有元素之上**（白键面 100 / 白键高光 300 / 白键闪光 310）。
       //   黑键是立在前排的键，白键的高光或闪光都不该盖住它 —— 用户实测反馈过这一条。

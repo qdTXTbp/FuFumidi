@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeKeyboardProjection, buildKeyboard, BLACK_T, PRESS_DIP } from '../src/core/viz/scene/keyboard.js';
+import { createCompiler } from '../src/core/viz/scene/compile.js';
 import { WHITE_MIDI, BLACK_PC } from '../src/core/viz.js';
 import * as P from '../src/core/viz/scene/primitives.js';
 
@@ -136,4 +137,39 @@ test('平板模式（keys3d 关）：黑键停在白键面上，不浮空', () =
   const bk = byZ(prims, 1000);
   assert.equal(bk.length, 1, '平板模式没有前脸与侧面');
   assert.equal(bk[0].y, CTX.wN, '抬高量 0 → 键面顶边落在落点线上');
+});
+
+test('★ 按压是弹簧动画：逐帧下沉、轻过冲后回稳（不是一步到位）', () => {
+  const comp = createCompiler();
+  const kbSong = {
+    initialBpm: 120,
+    tempoMap: [{ sec: 0, us: 500000 }],
+    sigMap: [{ tick: 0, num: 4, den: 4 }],
+    tracks: [{ index: 0, notes: [{ midi: 60, start: 0, end: 200000, vel: 100 }], color: '#4f9dff' }],
+    baseSec: (tk) => tk / 1000,
+  };
+  // 每帧前进 1/60 秒，取"下沉最深的那条底边"当观测量
+  // 观测量取**键面**的底边：同一个 z 上有"键面"和"前脸"两条矩形，键面 y 更小。
+  // （整键下沿只降 0.15*dip —— 前脸同比变矮是为了不顶穿下一排，所以不能拿它当观测量）
+  const bottomOf = (tick) => {
+    const r = comp.compile(kbSong, tick, { w: 800, h: 400, zoom: 1, colorScheme: 0, activeNotes: [], energy: 0, theme: 'studio', fx: { persp: 0 } });
+    const byZ = new Map();
+    for (const p of r.prims) {
+      if (p.layer !== 'keyboard' || p.k !== 'rect' || p.blend) continue;
+      const cur = byZ.get(p.z);
+      if (!cur || p.y < cur.y) byZ.set(p.z, p);
+    }
+    return Math.max(...[...byZ.values()].map((p) => p.y + p.h));
+  };
+  const seq = [];
+  for (let f = 0; f <= 18; f++) seq.push(bottomOf((f * 1000) / 60));
+  const rest = seq[0];
+  const dips = seq.map((b) => +(b - rest).toFixed(2));
+  const peak = Math.max(...dips);
+  assert.ok(dips[1] < peak * 0.5, '第一帧就该只走一半不到（否则是"一步到位"）：' + dips.slice(0, 4).join(','));
+  assert.ok(peak > PRESS_DIP * 0.9, '峰值要够明显（≈' + PRESS_DIP + 'px 起）：' + peak);
+  assert.ok(peak > PRESS_DIP * 1.02, '弹簧应有一点过冲：峰 ' + peak + ' vs 稳态 ' + PRESS_DIP);
+  const settle = dips[dips.length - 1];
+  assert.ok(Math.abs(settle - PRESS_DIP) < 1.2, '末尾应回稳到 PRESS_DIP 附近：' + settle);
+  assert.ok(settle < peak, '过冲后要回落');
 });

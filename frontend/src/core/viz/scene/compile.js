@@ -26,6 +26,7 @@ export function createCompiler() {
     songRef: null, byPitch: new Map(), centerPitch: 60,
     lastD: -1, seed: 0, hitPulse: 0,
     parts: [], keyGlow: new Map(), keyFlash: new Map(),
+    press: new Map(),        // 每键"按下量"包络（见下面 state()）——琴键下沉/落高度跟它走
   };
 
   /** 粒子更新（物理），返回存活的粒子；预算按 kind 裁剪 */
@@ -257,7 +258,31 @@ export function createCompiler() {
           const on = act !== undefined || liveSet.has(pitch);
           const gv = on ? 1 : decay(state.keyGlow, pitch, 0.09);
           const fv = (fx.flash || 0) > 0 ? decay(state.keyFlash, pitch, 0.14) : 0;
-          return { gv, fv, color: act !== undefined ? act : withAlpha('#ffffff', 0.5) };
+          /* ★ 按下量包络（2026-10-17 用户："按压效果不够丝滑和明显"）。
+             gv 是**开关量**：命中瞬间就是 1、之后线性衰减 —— 琴键下沉直接跟它，必然"一步到位"，
+             所以看起来是"啪"地跳下去而不是按下去。
+             这里给每个键单独一条**时间常数**包络：攻 35ms、松 110ms，按 dt 指数趋近。
+             起手有 2~3 帧的过渡、回弹更慢，两帧之间不会跳；键盘层优先读它（读不到退回 gv，
+             所以纯几何单测里传 {gv:1} 仍然成立）。 */
+          const target = on ? 1 : 0;
+          const prevD = state.lastD < 0 ? d : state.lastD;
+          const frameDt = d - prevD;
+          let pp = state.press.get(pitch);
+          if (!pp) { pp = { p: 0, v: 0 }; state.press.set(pitch, pp); }
+          // ★ 只在"时间真的前进了"时积分：同一 tick 连编两次（确定性单测）必须给出同样的图元
+          if (frameDt > 0.0008) {
+            const sdt = Math.min(0.05, frameDt);
+            const steps = sdt > 0.02 ? 2 : 1;          // 掉帧时拆子步，弹簧不会炸
+            const h = sdt / steps;
+            for (let si = 0; si < steps; si++) {
+              const acc = 900 * (target - pp.p) - 26 * pp.v;   // 刚度 900 / 阻尼 26 → ζ≈0.43
+              pp.v += acc * h;
+              pp.p += pp.v * h;
+            }
+          }
+          if (!target && pp.p < 0.003 && Math.abs(pp.v) < 0.01) state.press.delete(pitch);
+          const prs = Math.max(0, Math.min(1.25, pp.p));   // 允许一点过冲 → 按下时"dig"一下再回稳
+          return { gv, fv, prs, color: act !== undefined ? act : withAlpha('#ffffff', 0.5) };
         },
       });
       for (const q of kb.prims) pr.push(q);
