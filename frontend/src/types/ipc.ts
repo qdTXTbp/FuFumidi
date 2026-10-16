@@ -5,7 +5,7 @@
 
 export type EngineMode = 'universal' | 'piano' | 'separate';
 export type PerfMode = 'quality' | 'balanced' | 'fast';
-export type GpuKind = 'cuda' | 'directml' | 'rocm';
+export type GpuKind = 'cuda' | 'rocm' | 'xpu';   // DirectML 增强包已下线（2026-10-19）
 
 export interface ConvertRequest {
   /** MuScriptor 乐器组约束：'auto' 或不约束为空；否则是组名列表（如 'voice,drums'，硬约束） */

@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 
 // 本文件在 engine/tests/ 下，仓库根要往上两级
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const files = ['requirements-gpu-cuda.txt', 'requirements-gpu-directml.txt', 'requirements-gpu-xpu.txt'];
+// DirectML 增强包已下线（2026-10-19），需求文件一并删除
+const files = ['requirements-gpu-cuda.txt', 'requirements-gpu-xpu.txt'];
 const ver = (txt, name) => {
   const m = new RegExp('^' + name + '==([^\\s#]+)', 'm').exec(txt);
   return m ? m[1] : null;

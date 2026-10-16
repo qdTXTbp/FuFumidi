@@ -117,7 +117,7 @@ function registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app
         done.push('soundfonts');
       }
       if (list.includes('deps')) {
-        // 资源中心安装的依赖：GPU 增强包（CUDA / DirectML 实际装到这里的 site-packages）
+        // 资源中心安装的依赖：GPU 增强包（CUDA / ROCm / XPU 实际装到这里的 site-packages）
         // 及其残留的 pip 下载缓存。这些都是可在资源中心重新安装的，按「清除数据」语义一并清掉。
         rm(Paths.gpuEnhanceRoot());
         rm(path.join(ud, 'fufumidi', 'gpu-enhancements'));

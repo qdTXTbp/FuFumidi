@@ -334,9 +334,11 @@ def _probe():
     elif gpu["vendor"] == "nvidia" and not gpu["cuda"]:
         gpu["note"] = "检测到 NVIDIA 显卡，但未安装 CUDA 版 torch；改用 CUDA 运行时可显著加速"
     elif gpu["vendor"] == "amd" and not (gpu.get("directml") or gpu.get("torch_directml")):
-        gpu["note"] = "检测到 AMD 显卡，建议安装 DirectML 运行时以加速（较新 Radeon 可选 ROCm，需 Python 3.12 运行时）"
+        # ★ DirectML 增强包已下线（2026-10-19）：不能再引导用户去装它。
+        #   已装的 legacy 环境照旧可用（检测与串行锁保留），只是不再是"建议路径"。
+        gpu["note"] = "检测到 AMD 显卡。DirectML 增强包已下线；较新的 Radeon 可选 ROCm（需 Python 3.12 运行时）"
     elif gpu["vendor"] == "intel" and not (gpu.get("directml") or gpu.get("torch_directml")):
-        gpu["note"] = "检测到 INTEL 显卡，建议安装 DirectML 运行时以加速"
+        gpu["note"] = "检测到 INTEL 显卡。DirectML 增强包已下线；Intel 走 XPU 增强包"
     return gpu
 
 
@@ -507,10 +509,10 @@ def verify_backends():
 #:   · ONNX 侧看 ExecutionProvider
 #: 由 health.gpu_info() 收进体检报告，用户在设置里就能看到"这个模型 GPU 加速到底生不生效"。
 _CONSUMERS = (
-    ("msst", "分离（MSST / BS-RoFormer 等）", ("cuda", "directml", "mps"), ""),
-    ("muscriptor", "扒谱（MuScriptor）", ("cuda", "directml", "mps"), ""),
-    ("aria", "扒谱（ARIA-AMT）", ("cuda", "directml", "mps"), ""),
-    ("cover", "翻唱渲染（DiffSinger / GSV）", ("cuda", "directml"), ""),
+    ("msst", "分离（MSST / BS-RoFormer 等）", ("cuda", "mps"), ""),
+    ("muscriptor", "扒谱（MuScriptor）", ("cuda", "mps"), ""),
+    ("aria", "扒谱（ARIA-AMT）", ("cuda", "mps"), ""),
+    ("cover", "翻唱渲染（DiffSinger / GSV）", ("cuda",), ""),
     ("piano_pt", "钢琴专用转录", ("cuda",), "piano_transcription_inference 只支持 CUDA"),
     ("transkun", "转录（transkun）", ("cuda", "xpu"), "transkun CLI 不认 DirectML 设备名"),
 )

@@ -21,7 +21,7 @@ files:
   - "!release/**"
   - "!release-*/**"
   - "!*-unpacked/**"
-  # GPU 增强包的构建中间产物：gpu-package/（cuda/directml staging）、
+  # GPU 增强包的构建中间产物：gpu-package/（cuda/xpu staging）、
   # gpu-package-rocm/（4.5GB / 1.8 万文件）、gpu-package-out/（分卷输出 6.8GB）。
   # 它们不在 release* 命名下，只靠上面三条排不掉 —— 实测误打进 asar 会让它
   # 从 ~70MB 膨胀到 **15GB**（36086 条目，其中 3.6 万来自这几个目录）。
@@ -102,7 +102,7 @@ extraResources:
   #   做法改成「**3.12 直接顶替 resources/python**」（原来的 3.11 已删），包里只留一份运行时：
   #   · 安装包因此少 1.57 GB（原先两份运行时并存）；
   #   · 四条 GPU 路径在 3.12 上都有轮子（cu128 / XPU / ROCm / DirectML，逐条实测过），
-  #     DirectML 的 torch==2.4.1 与 torch-directml 都止于 cp312，所以 3.12 是唯一能同时覆盖四者的版本；
+  #     （DirectML 增强包已于 2026-10-19 下线，不再提供）；
   #   · GPU 增强包需按 cp312 重装（旧的是 cp311 轮子，换版本后必须重下）。
   # VC++ 2015-2022 x64 运行库：干净 Windows 不自带，缺了 torch/onnxruntime 直接
   # 加载失败。这里另存一份（不在更新器 ignoreFolderPath 里，更新会带上），

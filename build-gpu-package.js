@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Build GPU enhancement packages: node build-gpu-package.js cuda|directml|xpu
+// Build GPU enhancement packages: node build-gpu-package.js cuda|xpu    （DirectML 包已下线）
 //
-// xpu（Intel）走 directml 那套 --target 隔离安装，**不能**像 cuda 那样装进内置运行时：
+// xpu（Intel）走 --target 隔离安装那一套，**不能**像 cuda 那样装进内置运行时：
 // xpu 版 torch 是独立构建（不带 CUDA），装进基础运行时会把 CPU 版 torch 顶掉，
 // 而基础运行时是所有非 GPU 路径的兜底 —— 顶掉了就全乱套。
 // ★ 走 SJTU 镜像：download.pytorch.org 实测 313 KB/s，SJTU 14.5 MB/s。
@@ -9,9 +9,9 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-const mode = (process.argv[2] || 'directml').toLowerCase();
-if (!['cuda', 'directml', 'xpu'].includes(mode)) {
-  console.error('用法: node build-gpu-package.js cuda|directml|xpu');
+const mode = (process.argv[2] || 'cuda').toLowerCase();
+if (!['cuda', 'xpu'].includes(mode)) {
+  console.error('用法: node build-gpu-package.js cuda|xpu');
   process.exit(1);
 }
 const root = __dirname;
@@ -19,11 +19,10 @@ const staging = path.join(root, 'gpu-package');
 // ★ 必须写成正斜杠（或双反斜杠）：原来的写法 `'E:\Midi\FuFumidi\resources\python'`
 // 在 JS 字符串里 \M \F \p 是无效转义会被吃掉、**\r 是回车**，
 // 路径实际变成 `E:MidiFuFumidi<CR>esourcespython`，pip 根本起不来 ——
-// 这个脚本在带这些字母组合的路径下**从来没跑通过**（cuda / directml 分支同样中招）。
+// 这个脚本在带这些字母组合的路径下**从来没跑通过**（cuda 分支同样中招）。
 const pythonDir = process.env.FUFUMIDI_PYTHON_DIR || 'E:/Midi/FuFumidi/resources/python';
 
 const reqCuda = path.join(root, 'engine', 'requirements-gpu-cuda.txt');
-const reqDirectML = path.join(root, 'engine', 'requirements-gpu-directml.txt');
 const reqXpu = path.join(root, 'engine', 'requirements-gpu-xpu.txt');
 /** Intel XPU 轮子来源：优先本地目录（用 curl 从镜像拉，实测 31 MB/s），
  *  否则退回 PyTorch 官方 xpu 索引（能用但只有 313 KB/s，一个 torch 轮子要下 40 分钟）。
@@ -66,9 +65,9 @@ if (mode === 'cuda') {
     }
   }
 } else if (mode === 'xpu') {
-  // Intel XPU：与 DirectML 同款 —— 整套 CP311 栈装进 staging，包自包含。
+  // Intel XPU：整套 CP311 栈装进 staging，包自包含。
   if (!process.env.SKIP_PIP) {
-    // onnxruntime-directml 等从 tuna 装；torch/torchaudio 从本地轮子装（见文件头说明）
+    // onnxruntime-directml（XPU 包的 ONNX 后端，与已下线的 DirectML 增强包无关）等从 tuna 装；torch/torchaudio 从本地轮子装（见文件头说明）
     run('"' + pythonDir + '\\python.exe" -m pip install --target "' + site + '" --no-input --no-cache-dir'
         + ' --index-url https://pypi.tuna.tsinghua.edu.cn/simple'
         + ' "onnxruntime-directml>=1.16"');
@@ -87,13 +86,6 @@ if (mode === 'cuda') {
   } else {
     console.log('[skip] pip xpu install (staging must already contain packages)');
   }
-} else {
-  // DirectML: install a complete CP311 stack into the staging site-packages so the package is self-contained.
-  if (!process.env.SKIP_PIP) {
-    run('"' + pythonDir + '\python.exe" -m pip install --target "' + site + '" --no-input --no-cache-dir -r "' + reqDirectML + '"');
-  } else {
-    console.log('[skip] pip directml install (staging must already contain packages)');
-  }
 }
 
 const outDir = process.env.GPU_PACKAGE_OUT || 'E:/Midi/安装包/FuFumidi/增强包';
@@ -109,7 +101,7 @@ const splitSize = mode === 'xpu' ? (process.env.GPU_PACKAGE_SPLIT || '1900m') : 
 //   即**压缩包根目录下**必须有 site-packages。
 //   原写法 `7z a out.zip "<staging>\*"` 会把 staging 的目录名一起打进去
 //   （条目变成 gpu-package\site-packages\…），解压后根下没有 site-packages，
-//   安装时报「压缩包内缺少 site-packages 目录」——cuda / directml 同样中招。
+//   安装时报「压缩包内缺少 site-packages 目录」——cuda 同样中招。
 //   正确做法：**切到 staging 里执行**，只归档 site-packages\*。
 //   （Windows 上用 cmd 的 cd /d 切目录；7z 按 cwd 决定归档内的相对路径。）
 run('cmd /c "cd /d \"' + staging + '\" && \"' + sevenZip + '\" a -tzip -mx5'

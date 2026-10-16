@@ -494,8 +494,8 @@ async function clearUserData() {
 }
 
 /* ---------------- GPU 加速 ---------------- */
-// 三种增强包：cuda（NVIDIA）/ directml（AMD·Intel）/ rocm（AMD 较新 Radeon，需 Python 3.12）
-const GPU_KIND_LABEL = { cuda: 'CUDA', directml: 'DirectML', rocm: 'ROCm', xpu: 'Intel XPU' };
+// 增强包：cuda（NVIDIA）/ rocm（AMD 较新 Radeon，需 Python 3.12）/ xpu（Intel）。DirectML 包已下线。
+const GPU_KIND_LABEL = { cuda: 'CUDA', rocm: 'ROCm', xpu: 'Intel XPU' };
 function gpuKindLabel(k) { return GPU_KIND_LABEL[k] || String(k || '').toUpperCase(); }
 const gpu = reactive({
   detect: null,        // {vendor,name,blackwell,needCu128,available,backend}
@@ -526,10 +526,10 @@ const gpuRecommended = computed(() => {
   if (d.vendor === 'nvidia') return 'CUDA' + (d.needCu128 ? t('（cu128 · RTX 50 系）') : '');
   if (d.vendor === 'amd') {
     if (d.backend === 'rocm' || gpu.rocmActive) return 'ROCm';
-    // AMD 默认走 DirectML（覆盖面最广）；较新 Radeon 才能用 ROCm，且需要 3.12 运行时
-    return 'DirectML' + (gpu.canPython312 ? t('（较新 Radeon 可选 ROCm）') : '');
+    // DirectML 包已下线：AMD 现在没有开箱即用的 GPU 路径，只有较新 Radeon + 3.12 运行时能上 ROCm
+    return t('不可用（CPU）') + (gpu.canPython312 ? t('（较新 Radeon 可选 ROCm）') : '');
   }
-  if (d.vendor === 'intel') return 'DirectML';
+  if (d.vendor === 'intel') return t('不可用（CPU）');
   return t('不可用');
 });
 /** 预打包增强包的前置条件（返回非空字符串 = 不可安装，作为按钮 title 展示） */
@@ -551,7 +551,7 @@ async function gpuRefreshInstalled() {
   try {
     const r = await bridge.gpuStatus();
     if (r && r.ok) {
-      const kinds = Array.isArray(r.kinds) ? r.kinds : ['cuda', 'directml', 'rocm'].filter((k) => !!r[k]);
+      const kinds = Array.isArray(r.kinds) ? r.kinds : ['cuda', 'rocm', 'xpu'].filter((k) => !!r[k]);
       gpu.kinds = kinds;
       gpu.rocmActive = !!r.rocmActive;
       gpu.needsPython312 = !!r.needsPython312;
@@ -847,7 +847,7 @@ async function fbWebFallback() {
 
 async function gpuUninstall() {
   if (!bridge || !bridge.gpuUninstall) { gpu.status = t('当前环境不支持卸载'); return; }
-  const kind = gpu.installedKind || 'directml';
+  const kind = gpu.installedKind || 'cuda';
   gpu.busy = true;
   gpu.status = t('正在卸载…');
   gpuSetProgress(10, t('正在卸载…'));
@@ -1303,7 +1303,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
 
         <!-- ============ GPU 加速 ============ -->
         <div v-else-if="tab === 'gpu'">
-          <p class="ov-note">{{ t('一键自动检测显卡并安装对应的 GPU 加速（NVIDIA → CUDA，AMD/Intel → DirectML）。安装后转录与分离任务将明显提速。') }}</p>
+          <p class="ov-note">{{ t('一键自动检测显卡并安装对应的 GPU 加速（目前支持 NVIDIA → CUDA）。安装后转录与分离任务将明显提速。') }}</p>
           <div class="gpu-panel">
             <div class="gpu-detect">
               <div class="gpu-row"><span class="gpu-k">{{ t('显卡') }}</span><span class="gpu-v">{{ gpuCard }}</span></div>

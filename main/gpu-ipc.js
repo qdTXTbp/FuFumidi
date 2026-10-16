@@ -1,7 +1,7 @@
 // ============================================================
 // 主进程 GPU 增强包 IPC：状态、安装、卸载、下载与自动检测
 //
-// 支持三种 kind：cuda / directml / rocm（见 main/gpu.js 的 KIND_PY）。
+// 支持三种 kind：cuda / rocm / xpu（见 main/gpu.js 的 KIND_PY）。
 // ★ ROCm 的轮子只有 cp312，必须在 Python 3.12 运行时下才生效；
 //   3.11 下安装/启用都会被拒（并给出可操作的说明），避免下 1.9GB 却装而无用。
 // ============================================================
@@ -85,10 +85,10 @@ function registerGpuIpc({
       //   而全仓库没有任何地方能把它装进来 —— 于是这个选项对用户是死的：
       //   界面提供、点了不让装、还让他去装一个拿不到的运行时。
       //   在真正提供 3.12 运行时之前，文案必须给出**走得通的那条路**：
-      //   AMD 用户用 DirectML 包（cp311，本就能直接用）。
+      //   ★ DirectML 增强包已下线，AMD 目前没有可自动安装的 GPU 路径，文案必须说清而不是指向一个不存在的包。
       return 'ROCm 增强包只有 Python 3.12（cp312）轮子，而内置引擎运行时是 Python ' + p.currentPython + '；'
         + '本工具目前**不提供** Python 3.12 运行时，所以这个包暂时装不了（不提供下载，避免白下 1.9GB）。'
-        + 'AMD 显卡请改用 DirectML 增强包 —— 它是 cp311，可以直接装、直接生效。';
+        + 'AMD 显卡当前只能走 CPU（原 DirectML 增强包已下线）。';
     }
     return '该增强包要求 Python ' + p.requiresPython + '，当前运行时是 ' + p.currentPython + '。';
   }
@@ -231,7 +231,7 @@ function registerGpuIpc({
       const first = localPaths[0];
       const detected = inferGpuKind(first);
       const k = String(detected || kind || '').toLowerCase();
-      if (!isGpuKind(k)) return { ok: false, error: '无法识别增强包类型，请先选择 CUDA / DirectML / ROCm 包或分卷' };
+      if (!isGpuKind(k)) return { ok: false, error: '无法识别增强包类型，请先选择 CUDA / ROCm / XPU 包或分卷' };
       const block = prereqError(k);
       if (block) return { ok: false, kind: k, error: block, requiresPython: requiredPython(k) };
       const zipTmp = path.join(Paths.tempDir(), 'fufumidi-gpu-import.zip');
@@ -397,11 +397,6 @@ function registerGpuIpc({
     { torch: 'https://mirror.sjtu.edu.cn/pytorch-wheels/cu128', pypi: 'https://pypi.tuna.tsinghua.edu.cn/simple', label: '上海交大' },
     { torch: 'https://download.pytorch.org/whl/cu128', pypi: 'https://pypi.org/simple', label: '官方' },
   ];
-  const DIRECTML_PIP_SOURCES = [
-    { torch: null, pypi: 'https://mirrors.aliyun.com/pypi/simple', label: '阿里云' },
-    { torch: null, pypi: 'https://pypi.tuna.tsinghua.edu.cn/simple', label: '清华' },
-    { torch: null, pypi: null, label: '官方' },
-  ];
 
   // Intel XPU 的安装后自检 —— 单独一条，因为**它没有 CUDA 那样的 sm 算力模型可比**。
   //
@@ -530,22 +525,26 @@ function registerGpuIpc({
       if (!d.vendor) {
         return { ok: false, error: '未检测到可用的独立显卡（NVIDIA / AMD / Intel），无法安装 GPU 加速；可在下方「本地导入 ZIP」手动安装增强包', gpu: gpuDetect };
       }
-      // 一键安装只覆盖「开箱即用」的两条路：NVIDIA → CUDA，AMD/Intel → DirectML。
-      // ROCm 需要较新的 Radeon + Adrenalin 26.1.1+ 驱动，且必须配 Python 3.12 运行时，
-      // 属于显式选择项（见下方「预打包增强包」列表），不在这里自动装。
-      const kind = d.vendor === 'nvidia' ? 'cuda' : 'directml';
-      const req = kind === 'cuda' ? 'requirements-gpu-cuda.txt' : 'requirements-gpu-directml.txt';
+      // 一键安装只覆盖「开箱即用」这一条路：NVIDIA → CUDA。
+      // ★ DirectML 增强包已下线；AMD/Intel 没有可自动安装的包（ROCm 还要较新的 Radeon +
+      //   Adrenalin 26.1.1+ 驱动与 Python 3.12 运行时，属显式选择项）。
+      //   以前这里会把 AMD/Intel 引导去装 DirectML —— 包没了就必须**明说**，不能去装一个不存在的包。
+      if (d.vendor !== 'nvidia') {
+        return { ok: false, kind: null, error: '当前显卡（' + (d.name || d.vendor) + '）没有可一键安装的 GPU 增强包：DirectML 增强包已下线，ROCm 需要较新的 Radeon 显卡与 Python 3.12 运行时。可继续使用 CPU 转录 / 分离。', gpu: gpuDetect };
+      }
+      const kind = 'cuda';
+      const req = 'requirements-gpu-cuda.txt';
       const reqPath = path.join(engineDir(), req);
       if (!fs.existsSync(reqPath)) return { ok: false, error: 'GPU requirement file missing: ' + reqPath, kind, gpu: gpuDetect };
       const targetSite = gpuEnhanceSite(kind);
       await stopEngineWorker();
       fs.mkdirSync(targetSite, { recursive: true });
-      const sourceSets = kind === 'cuda' ? CUDA_PIP_SOURCES : DIRECTML_PIP_SOURCES;
+      const sourceSets = CUDA_PIP_SOURCES;
       // 逐个源尝试：国内镜像优先，全部失败则报最后一源的错误
       let result = null;
       for (const src of sourceSets) {
         if (_gpuCanceled) break;
-        send({ percent: 1, text: '检测到 ' + (d.name || d.vendor) + '，开始安装 ' + (kind === 'cuda' ? 'CUDA（cu128）' : 'DirectML') + ' 加速（源：' + src.label + '）…', installing: true });
+        send({ percent: 1, text: '检测到 ' + (d.name || d.vendor) + '，开始安装 CUDA（cu128）') + ' 加速（源：' + src.label + '）…', installing: true });
         // --retries/--timeout：网络抖动自动重试；--cache-dir：已下载 wheel 复用，失败后续传
         const pipCache = Paths.pipCacheDir();
         const args = ['-m', 'pip', 'install', '--target', targetSite, '-r', reqPath, '--no-input', '--disable-pip-version-check',

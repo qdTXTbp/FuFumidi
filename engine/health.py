@@ -296,7 +296,8 @@ def verdicts(rep):
     if vendor is None and not g.get("available"):
         v.append(("info", "系统", "没有检测到独立显卡，按 CPU 运行（不影响功能，只是慢）"))
     elif not g.get("available") and vendor:
-        want = {"nvidia": "CUDA", "amd": "DirectML 或 ROCm", "intel": "Intel XPU 或 DirectML"}.get(vendor, "DirectML")
+        # DirectML 增强包已下线：AMD 只剩 ROCm（且要较新 Radeon + Python 3.12）
+        want = {"nvidia": "CUDA", "amd": "ROCm", "intel": "Intel XPU"}.get(vendor, "CUDA")
         v.append(("warn", "显卡", "检测到 %s（%s），但显卡加速没启用 —— 可在「设置 → GPU」安装 %s 加速包"
                   % (name or vendor, vendor, want)))
     elif g.get("available"):
