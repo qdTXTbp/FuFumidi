@@ -144,8 +144,20 @@ build/installerSidebar.bmp  build/installerHeader.bmp  build/updater-left.webp
 **一个必须记住的差别**：徽记是**整幅不透明**的，立绘系列是**圆角透明**的 ——
 所以安装器脚本给徽记 `ring=False` 且半径极小（多套一圈圆角会切掉金框、再叠一圈蓝边就成了「金框外套蓝框」）。
 
-另：`resources/icon.png`（窗口 / 托盘用）是 `extraResources` 落的、`asar` 里不含，
-所以 `scripts/deploy-installed.cjs` 会一并同步 extraResources，并**校验 muscriptor 上游补丁在位**
+**图标有三个互不相干的落点**，换 logo 时一个都不能漏（2026-10-16 用户实测：换完窗口图标变了、
+任务栏和桌面快捷方式还是旧的）：
+
+| 落点 | 谁在读 | 怎么同步 |
+|---|---|---|
+| `resources/icon.png` | 窗口 / 托盘（Electron 运行时） | `extraResources`，`asar` 里不含 → 部署脚本同步 |
+| exe **内嵌**图标资源 | 任务栏、桌面/开始菜单快捷方式、资源管理器 | `scripts/deploy-installed.cjs` 用 electron-builder 自带的 **rcedit** 重写三个 exe（主程序 / kachina 更新器 / 卸载器） |
+| `asar` 里的 `frontend/src/assets/logo.png` | 应用内侧边栏 | 常规构建；改完要跑 `build:ui` |
+
+> 改完 exe 图标还要**刷新 Windows 图标缓存**才看得到（否则一直显示旧图）：
+> 删 `%LOCALAPPDATA%\Microsoft\Windows\Explorer\iconcache*.db` + 重启 explorer，
+> 再 `ie4uinit.exe -show`。这一步脚本不做（会打断用户），需要时手工执行。
+
+另：`scripts/deploy-installed.cjs` 还会**校验 muscriptor 上游补丁在位**
 （`resources/python` 明确不接管，靠手工 copy）。
 
 ### 4.3 验证方式（哪些是"看过的"，哪些只是"编译过"）

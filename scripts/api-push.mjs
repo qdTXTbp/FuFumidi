@@ -70,17 +70,23 @@ console.log("远端 " + parent.slice(0, 8) + " → 本地 " + head.slice(0, 8) +
 
 for (const sha of ahead) {
   const msg = git("log", "-1", "--format=%B", sha).trim();
-  // ★ 小心重命名：--name-status 对 R/C 输出三段（R100\t旧\t新），
-  //   旧代码 rest.join("\t") 会拼出一个不存在的路径 → cat-file 直接 fatal（2026-10-16 踩过）。
-  //   重命名还必须**显式删掉旧路径**：新提交是 base_tree（远端父提交）加上增量，
-  //   父树里那个旧文件不会自己消失，不删就在远端留一个幽灵文件。
-  const changed = git("show", "--name-status", "--format=", sha).split(/\r?\n/).filter(Boolean)
-    .map(l => {
-      const [st, ...rest] = l.split(/\t/);
-      if (st[0] === "R") return { st: "R", from: rest[0], path: rest[1] };
-      if (st[0] === "C") return { st: "C", from: rest[0], path: rest[1] };
-      return { st: st[0], path: rest.join("\t") };
-    });
+  // ★ 两个坑都在这里（2026-10-16 各踩过一次，都真的打断了推送）：
+  //   ① 重命名：--name-status 对 R/C 输出三段（R100\t旧\t新），旧代码 rest.join("\t")
+  //      会拼出一个不存在的路径 → cat-file fatal。重命名还必须**显式删掉旧路径**：
+  //      新提交是 base_tree（远端父提交）加上增量，父树里那个旧文件不会自己消失，
+  //      不删就在远端留一个幽灵文件。
+  //   ② 非 ASCII 路径：不带 -z 时 git 会给带中文的路径**加双引号并八进制转义**
+  //      （"docs/assets/brand/\345\276\275\350\256\260-512.png"），照样 cat-file 不到。
+  //      所以用 -z 拿 NUL 分隔的**原始字节路径**（不再有引号/转义，含制表符的路径也安全）。
+  const parts = execFileSync("git", ["show", "--name-status", "-z", "--format=", sha], { cwd: DIR, encoding: "utf8" })
+    .split("\0");
+  const changed = [];
+  for (let i = 0; i < parts.length;) {
+    const st = parts[i++];
+    if (!st) continue;
+    if (st[0] === "R" || st[0] === "C") { const from = parts[i++], path = parts[i++]; changed.push({ st: st[0], from, path }); }
+    else changed.push({ st: st[0], path: parts[i++] });
+  }
   if (DRY) { console.log("  [dry] " + sha.slice(0, 8) + "  " + changed.length + " 文件  " + msg.split("\n")[0].slice(0, 50)); continue; }
   const pc = await api("/git/commits/" + parent);
   const tree = [];

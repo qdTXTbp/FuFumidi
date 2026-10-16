@@ -392,6 +392,53 @@ console.log('[5b/7] extraResources 已同步：' + synced.join('；'));
   }
 }
 
+// ---- 5d) 修 exe 的**内嵌图标**：任务栏 / 快捷方式 / 资源管理器读的是 exe 资源，
+//   不是 asar 里的图，也不是 resources/icon.png —— 2026-10-16 用户实测：
+//   侧栏与窗口图标都换了新 logo，任务栏和桌面快捷方式还是旧的。
+//   工具用 electron-builder 自己的 rcedit（winCodeSign 缓存里），找不到就只警告不失败。
+function findRcedit() {
+  const cands = [
+    path.join(process.env.LOCALAPPDATA || '', 'electron-builder', 'Cache', 'winCodeSign',
+      'winCodeSign-2.6.0', 'rcedit-x64.exe'),
+    path.join(ROOT, 'node_modules', 'electron-winstaller', 'vendor', 'rcedit.exe'),
+  ];
+  for (const c of cands) if (fs.existsSync(c)) return c;
+  const base = path.join(process.env.LOCALAPPDATA || '', 'electron-builder', 'Cache');
+  const walk = (d) => {
+    if (!fs.existsSync(d)) return null;
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const q = path.join(d, e.name);
+      if (e.isDirectory()) { const r = walk(q); if (r) return r; }
+      else if (/^rcedit.*\.exe$/i.test(e.name)) return q;
+    }
+    return null;
+  };
+  return walk(base);
+}
+{
+  const ico = path.join(ROOT, 'build', 'icon.ico');
+  const rcedit = findRcedit();
+  // 安装目录顶层的全部 exe：主程序、kachina 更新器、卸载器 —— 三个都带自己的图标资源
+  const targets = fs.readdirSync(INSTALL, { withFileTypes: true })
+    .filter((e) => e.isFile() && /\.exe$/i.test(e.name))
+    .map((e) => e.name);
+  if (!rcedit || !fs.existsSync(ico)) {
+    console.log('[5d/7] ⚠ 跳过 exe 图标同步（rcedit=' + rcedit + '）—— 任务栏/快捷方式图标会保持旧值');
+  } else {
+    const done = [];
+    for (const f of targets) {
+      const exe = path.join(INSTALL, f);
+      try {
+        execSync('"' + rcedit + '" "' + exe + '" --set-icon "' + ico + '"', { stdio: 'ignore' });
+        done.push(f);
+      } catch (e) {
+        done.push(f + '(失败)');
+      }
+    }
+    console.log('[5d/7] exe 内嵌图标已同步：' + done.join('、'));
+  }
+}
+
 // ---- 6) 自检：内联文件里不该再出现「已经在 unpacked 里」的重复
 function countFiles(dir) {
   let n = 0, bytes = 0;
