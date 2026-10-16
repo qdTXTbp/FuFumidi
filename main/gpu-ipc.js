@@ -544,7 +544,7 @@ function registerGpuIpc({
       let result = null;
       for (const src of sourceSets) {
         if (_gpuCanceled) break;
-        send({ percent: 1, text: '检测到 ' + (d.name || d.vendor) + '，开始安装 CUDA（cu128）') + ' 加速（源：' + src.label + '）…', installing: true });
+        send({ percent: 1, text: '检测到 ' + (d.name || d.vendor) + '，开始安装 CUDA（cu128） 加速（源：' + src.label + '）…', installing: true });
         // --retries/--timeout：网络抖动自动重试；--cache-dir：已下载 wheel 复用，失败后续传
         const pipCache = Paths.pipCacheDir();
         const args = ['-m', 'pip', 'install', '--target', targetSite, '-r', reqPath, '--no-input', '--disable-pip-version-check',
