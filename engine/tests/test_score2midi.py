@@ -150,8 +150,10 @@ def main():
           (2400, 76) in ons and (2400, 79) in ons and (3360, 76) in offs and (3360, 79) in offs, (ons, offs))
     ons2, offs2 = on_off(tracks[2])
     check('休止符不发音：长笛第一个音在 960', ons2[0] == (960, 74), ons2[:3])
-    check('力度记号 88 → velocity 112',
-          all(m.velocity == 112 for m in mid.tracks[1] if m.type == 'note_on'),
+    # <direction> 里有 <dynamics><mf/> 和 <sound dynamics="88">：优先认字母 mf=80
+    # （以前优先用百分比 88×1.27=112，强奏全被顶到 127，页面上的 f/ff 听不出区别）
+    check('力度记号 <mf> → velocity 80（字母优先，不再被 sound dynamics 百分比顶满）',
+          all(m.velocity == 80 for m in mid.tracks[1] if m.type == 'note_on'),
           [m.velocity for m in mid.tracks[1] if m.type == 'note_on'])
 
     print('--- ③ .mxl（zip 包）---')
@@ -214,6 +216,43 @@ def test_direction_tempo_converts_beat_unit_to_quarter_bpm():
                        '<beat-unit>half</beat-unit><per-minute>30</per-minute></metronome>'
                        '</direction-type></direction>')
     assert S2M._direction_tempo(el) == 90
+
+
+_ARTIC_XML = ('<?xml version="1.0"?><score-partwise version="3.1"><part-list>'
+              '<score-part id="P1"><part-name>Flute</part-name></score-part></part-list>'
+              '<part id="P1"><measure number="1"><attributes><divisions>8</divisions>'
+              '<time><beats>6</beats><beat-type>8</beat-type></time></attributes>'
+              # 断奏八分（应只响一半：4→2 divisions）＋ 后面的正常八分必须**不提前**
+              '<note><pitch><step>C</step><octave>5</octave></pitch><duration>4</duration><voice>1</voice>'
+              '<notations><articulations><staccato/></articulations></notations></note>'
+              '<note><pitch><step>D</step><octave>5</octave></pitch><duration>4</duration><voice>1</voice></note>'
+              # 重音（时值不变、力度 +16）
+              '<note><pitch><step>E</step><octave>5</octave></pitch><duration>4</duration><voice>1</voice>'
+              '<notations><articulations><accent/></articulations></notations></note>'
+              # Audiveris 常把力度记号的文字塞进 lyric：这里用 mp 当力度记号
+              '<note><pitch><step>F</step><octave>5</octave></pitch><duration>4</duration><voice>1</voice>'
+              '<lyric number="1"><text>mp</text></lyric></note>'
+              '</measure></part></score-partwise>')
+
+
+def test_articulations_and_lyric_dynamics_reach_the_midi():
+    """★ 谱面上的发音记号/力度记号要真的进 MIDI（用户：「谱子里的记号没有都识别并转换成 midi」）。
+
+    Audiveris 会把 <notations><articulations>（断奏/重音）导出，也会把一部分力度记号 OCR 成
+    <lyric><text>。旧解析器两类都直接丢掉：断奏被拉满、重音被抹平、力度全是默认值。
+    """
+    import engine_score2midi as S2M
+    parsed = S2M.parse_musicxml(_ARTIC_XML)
+    notes = parsed['parts'][0]['notes']
+    starts = [n['start'] for n in notes]
+    # 断奏：发声只有一半（4 divisions = 240 tick → 120），但**后面的音不许提前**
+    assert starts == [0, 240, 480, 720], starts
+    assert notes[0]['end'] - notes[0]['start'] == 120, notes[0]
+    # 重音：时值不变、力度比默认 80 + 16
+    assert notes[2]['end'] - notes[2]['start'] == 240, notes[2]
+    assert notes[2]['vel'] == 96, notes[2]
+    # lyric 里的 mp → 力度 64（并持续到下一个力度记号）
+    assert notes[3]['vel'] == 64, notes[3]
 
 
 def test_parse_musicxml_collects_full_measure_rest_lengths():
