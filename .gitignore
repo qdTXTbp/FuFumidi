@@ -79,3 +79,7 @@ _attic/
 scripts/e2e/artifacts/
 # Dev data root created when running electron .
 FuFumidiData/
+
+# P1-3 质量基准：生成的合成样本与最近一次真实评估
+engine/tests/quality/
+docs/quality-last-run.json
