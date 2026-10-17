@@ -17,6 +17,8 @@ const routes: RouteRecordRaw[] = [
   // 编排时间线（P1-1）：并入「视图」组做页签，旧/外部链接 /arrange 重定向过去
   { path: '/arrange', redirect: { path: '/views', query: { tab: 'arrange' } } },
   { path: '/transcode', name: 'transcode', component: () => import('./views/ViewTranscode.vue') },
+  // P1-7 关于与许可（从设置-关于进入，也可直接开 #/about）
+  { path: '/about', name: 'about', component: () => import('./views/ViewAbout.vue') },
   { path: '/resources', name: 'resources', component: () => import('./views/ViewResources.vue') },
   { path: '/models', redirect: { path: '/resources', query: { tab: 'model' } } },
   { path: '/soundfonts', redirect: { path: '/resources', query: { tab: 'soundfonts' } } },

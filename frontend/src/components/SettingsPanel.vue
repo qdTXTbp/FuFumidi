@@ -1148,6 +1148,11 @@ function apply() {
   state.ui.settingsOpen = false;
 }
 function cancel() { state.ui.settingsOpen = false; }
+/** P1-7：打开「关于与许可」页（关掉设置浮层再跳） */
+function openLicenses() {
+  state.ui.settingsOpen = false;
+  try { location.hash = '#/about'; } catch (e) {}
+}
 
 /* ---------------- 生命周期 ---------------- */
 // immediate：设置面板是「打开时才挂载」的，而调用方（如转录页的「GPU 加速」按钮）会先写
@@ -1678,7 +1683,9 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
           <div class="field-row">
             <div>
               <div class="fr-label">{{ t('当前版本') }}</div>
-              <div class="fr-hint">{{ appVersion }}<template v-if="buildTime"> · {{ t('构建于') }} {{ buildTime }}</template></div>
+              <div class="fr-hint">{{ appVersion }}<template v-if="buildTime"> · {{ t('构建于') }} {{ buildTime }}</template>
+        <button class="btn sm" style="margin-left:var(--sp-2)" @click="openLicenses">{{ t('许可与溯源') }}</button>
+      </div>
             </div>
             <div class="fr-ctl">
               <button class="btn sm primary" @click="updLaunch">{{ t('检查更新') }}</button>

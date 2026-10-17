@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseMidi, encodeMidi } from '../src/core/midi.js';
+import { parseMidi, encodeMidi, buildSong } from '../src/core/midi.js';
 
 const normNotes = (ns) => ns.map((n) => [n.start, n.end, n.midi, n.vel, n.ch]).sort((a, b) => a[0] - b[0] || a[2] - b[2] || a[1] - b[1]);
 const normCCs = (cs) => cs.map((c) => [c.tick, c.cc, c.cv, c.ch]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -149,4 +149,23 @@ test("P0-6（原 P0-1 拒绝项）：SMPTE 时间码文件现在能解析", () =
   assert.deepEqual(mid.smpte, { fps: 25, ticksPerFrame: 40 });
   assert.equal(mid.ticksPerBeat, 40);
   assert.equal(mid.divisionRaw, 0xe728);
+});
+
+
+test('P1-7 MIDI 版权元事件（0x02）：encode→parse→buildSong 往返', () => {
+  const src = [{ name: "t", ch: 0, program: 0, notes: [], ccs: [], events: [] }];
+  const bytes = encodeMidi(src, { division: 480, copyright: "FuFumidi · 测试曲目 © 2026" });
+  const mid = parseMidi(bytes);
+  const ev = mid.tracks[0].events.find((e) => e.type === 'copyright');
+  assert.ok(ev, '解析出 copyright 事件');
+  assert.equal(ev.text, "FuFumidi · 测试曲目 © 2026");
+  const song = buildSong(mid);
+  assert.equal(song.copyright, "FuFumidi · 测试曲目 © 2026");
+});
+
+test('P1-7 MIDI 版权：不传则不写，解析回来为 null/空', () => {
+  const src = [{ name: "t", ch: 0, program: 0, notes: [], ccs: [], events: [] }];
+  const mid = parseMidi(encodeMidi(src, { division: 480 }));
+  assert.equal(mid.tracks[0].events.filter((e) => e.type === 'copyright').length, 0);
+  assert.equal(buildSong(mid).copyright, '');
 });

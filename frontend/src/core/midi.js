@@ -48,6 +48,7 @@ export function parseMidi(bytes) {
         if (mt === 0x51) { const us = (u8() << 16) | (u8() << 8) | u8(); events.push({ tick, type: 'tempo', us }); }
         else if (mt === 0x58) { const num = u8(), den = Math.pow(2, u8()); u8(); u8(); events.push({ tick, type: 'sig', num, den }); }
         else if (mt === 0x59) { let sf = u8(); if (sf >= 128) sf -= 256; const mi = u8(); events.push({ tick, type: 'key', sf, mi }); }  // sf 是带符号字节（-7..7）
+        else if (mt === 0x02) { events.push({ tick, type: 'copyright', text: ascii(ml) }); }
         else if (mt === 0x03) { const s = ascii(ml); if (!name) name = s; events.push({ tick, type: 'name', text: s }); }
         /* ★ v6.0.0 P0-1：meta 文本要按类型分开保留 —— 0x01 文本 / 0x05 歌词 / 0x06 marker / 0x07 cue。
            旧实现把 0x06 和 0x01 都记成 'text'，导出时 marker 与普通文本会互相覆盖。 */
@@ -156,6 +157,10 @@ export function encodeMidi(tracks, opts = {}) {
     const tick = Math.max(0, Math.round(keySig.tick || 0));
     metaEvs.push({ tick, bytes: metaKey(keySig.sf, keySig.mi), order: 2 });
   }
+  if (opts.copyright) {
+    const b = asciiBytes(String(opts.copyright));
+    metaEvs.push({ tick: 0, bytes: [0xff, 0x02, ...vlqBytes(b.length), ...b], order: -1 });
+  }
   metaEvs.sort((a, b) => a.tick - b.tick || a.order - b.order);
 
   const chunks = [[0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6,
@@ -226,6 +231,9 @@ export function encodeMidi(tracks, opts = {}) {
 export function buildSong(mid, meta = {}) {
   const tpb = mid.ticksPerBeat;
   const tempoEvents = [], sigEvents = [];
+  /* P1-7：版权元事件（0x02）单独提出来，导出时可回填 */
+  let copyright = '';
+  for (const tr of mid.tracks) for (const e of (tr.events || [])) { if (e.type === 'copyright' && !copyright) copyright = e.text; }
   let keySig = null;
   for (const tr of mid.tracks) for (const e of tr.events) {
     if (e.type === 'tempo') tempoEvents.push({ tick: e.tick, us: e.us });
@@ -323,7 +331,7 @@ export function buildSong(mid, meta = {}) {
   let totalTicks = 0;
   for (const tr of tracks) for (const n of tr.notes) totalTicks = Math.max(totalTicks, n.end);
   totalTicks += tpb;
-  const song = Object.assign({ format: mid.format, tpb, smpte, tracks, tempoMap: map, sigMap, keySig, totalTicks, chanStateAt }, meta);
+  const song = Object.assign({ format: mid.format, tpb, smpte, tracks, tempoMap: map, sigMap, keySig, copyright, totalTicks, chanStateAt }, meta);
   song.totalSec = baseSec(song.totalTicks);
   song.baseSec = baseSec;
   song.secToTick = secToTick;

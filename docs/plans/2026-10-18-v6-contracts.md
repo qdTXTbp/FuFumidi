@@ -167,6 +167,13 @@
   - 视频轨：新增「视频偏移（秒）」输入 + 播放同步（200ms 纠偏，偏差 >150ms 才 seek），偏移持久化 localStorage；
   - E2E `frame-snap-ui`：切检查器视图页 → 勾选帧吸附 → 帧率下拉出现且含 23.976/29.97 → 时间码格式正确。
 
+- **P1-7 许可与溯源 ✅**：
+  - `scripts/gen-licenses.mjs` 从**真实数据源**生成清单：应用自身（package.json）、内置音色库（main/soundfonts.js REGISTRY，20 项）、内置第三方二进制（docs/VENDOR.md 清单，10 项）+ 许可证提示；产物为 `frontend/src/core/licenses.js`（关于页 import）与 `docs/licenses.md`；
+  - 门禁 `check:licenses`（已进 `npm run audit`）：生成物与数据源漂移即失败，且 **docs/VENDOR.md 列出的每个组件都必须出现在清单里**（防漏项）；生成内容做 `#` 清洗（避免被 UI token 审计误判为颜色）；
+  - 新 `views/ViewAbout.vue` + 路由 `/about`；设置·关于新增「许可与溯源」按钮；
+  - 导出溯源：MIDI 编码支持 **版权元事件（0x02）**（parse/encode/buildSong 全链路），编辑页导出自动写 `FuFumidi · 曲名`；2 个 round-trip 测例；
+  - E2E `about-ui`：关于页出现应用/音色库/第三方组件清单（≥15 行）且含 MIT/GeneralUser/verovio 等关键条目。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；
