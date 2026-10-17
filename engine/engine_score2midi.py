@@ -229,8 +229,14 @@ def parse_musicxml(text):
                         bar_rest_lens.append(int(ticks))
                 if is_grace:
                     ticks = max(15, ticks)
+                # ★ 发音记号只改变**发声**长度，不改变谱面时值：游标仍按 ticks 前进，
+                #   否则一个断奏音之后的所有音都会提前（旧解析器干脆忽略这些记号）。
+                art_f, art_vel = _articulations(el)
                 start = cur if not is_chord else (last_note['start'] if last_note else cur)
                 is_cue = _child(el, 'cue') is not None
+                snd_ticks = ticks
+                if art_f != 1.0 and not is_rest and not is_cue:
+                    snd_ticks = max(1, int(round(ticks * art_f)))
                 if is_rest or is_cue:
                     if not is_chord and not is_grace:
                         cur += ticks
@@ -244,24 +250,29 @@ def parse_musicxml(text):
                 octv = _int(_text(pitch, 'octave'), 4)
                 alter = _int(_text(pitch, 'alter'), 0)
                 midi = max(0, min(127, 12 * (octv + 1) + STEP_SEMITONES.get(step, 0) + alter))
+                # Audiveris 的 TEXTS 步常把力度记号 OCR 进 <lyric><text>（实测这份总谱：
+                # 16 个 lyric "f" 里有一半没有对应的 <direction>）→ 也当成力度记号用。
+                lyr = _lyric_text(el)
+                if lyr in DYNAMICS:
+                    cur_vel = DYNAMICS[lyr]
                 vel = _int(el.get('velocity') or _text(el, 'velocity'), 0)
                 if not vel:
                     vel = cur_vel or 80
-                vel = max(1, min(127, vel))
+                vel = max(1, min(127, vel + art_vel))
                 tie_start = _has_tie(el, 'start')
                 tie_stop = _has_tie(el, 'stop')
                 key = (voice, midi)
                 if tie_stop and key in open_ties and not is_chord:
                     # 连音线的后半段：并进前一个音，不加新音
                     prev = open_ties[key]
-                    prev['end'] = max(prev['end'], measure_start + start + ticks)
+                    prev['end'] = max(prev['end'], measure_start + start + snd_ticks)
                     if not tie_start:
                         del open_ties[key]
                     if not is_grace:
                         cur += ticks
                     last_note = {'start': start, 'midi': midi}
                     continue
-                note = {'start': measure_start + start, 'end': measure_start + start + ticks,
+                note = {'start': measure_start + start, 'end': measure_start + start + snd_ticks,
                         'midi': midi, 'vel': vel,
                         # ★ m / off = 第几小节 + 小节内偏移。Audiveris 在拍号不明的谱上会
                         #   **按这一小节认出来的内容**给小节定长（日志会写 "No target duration
@@ -385,7 +396,17 @@ DYNAMICS = {'ppp': 20, 'pp': 33, 'p': 49, 'mp': 64, 'mf': 80, 'f': 96, 'ff': 112
 
 
 def _velocity_from_direction(el):
-    """<direction> 里的力度（"'sound dynamics="80"'" 或 <dynamics><mf/>）→ 0..127。"""
+    """<direction> 里的力度 → 0..127。
+
+    ★ 优先认 <dynamics><f/> 这种**字母**：它按 MIDI 的力度分级（f=96），给 ff/fff 留出余量。
+      以前优先用 <sound dynamics> 的百分比 ×1.27，f（Audiveris 写 100）被顶成 127 ——
+      页面上所有强奏一个响度，听感是"平的"（用户实测反馈：「谱子里的记号没有都识别并转换」）。
+      没有字母记号时才退回百分比（0~100 → 0~127）。
+    """
+    for s in el.iter():
+        nm = _localname(s.tag)
+        if nm in DYNAMICS:
+            return DYNAMICS[nm]
     for s in el.iter():
         if _localname(s.tag) == 'sound' and s.get('dynamics'):
             try:
@@ -393,11 +414,43 @@ def _velocity_from_direction(el):
                 return max(1, min(127, v))
             except Exception:  # noqa: BLE001
                 pass
-    for s in el.iter():
-        nm = _localname(s.tag)
-        if nm in DYNAMICS:
-            return DYNAMICS[nm]
     return 0
+
+
+#: 发音记号 → (时值系数, 力度增减)。Audiveris 会导出 <notations><articulations>，但旧解析器
+#: 完全忽略它们：断奏被拉满、重音被抹平、延音记号没有 —— 用户："谱子里的记号没有都识别".
+_ARTIC = {
+    'staccato': (0.50, 0),          # 断奏：只响一半（游标仍按谱面时值前进，后面的音不许提前）
+    'staccatissimo': (0.30, 0),
+    'marcato': (0.72, 24),          # 强音记号：更短更响
+    'accent': (1.00, 16),           # 重音：时值不变，力度抬一档
+    'tenuto': (1.00, 6),            # 保持音：略重一点
+    'detached-legato': (0.70, 0),
+    'breath-mark': (0.92, 0),
+}
+
+
+def _articulations(note_el):
+    """音符上的发音/延长记号 → (时值系数, 力度增减)。"""
+    dur_f = 1.0
+    vel_d = 0
+    for s in note_el.iter():
+        nm = _localname(s.tag)
+        hit = _ARTIC.get(nm)
+        if hit:
+            dur_f = min(dur_f, hit[0])
+            vel_d = max(vel_d, hit[1])
+        elif nm == 'fermata':       # 延长记号：让这个音多响一会儿（不挪后面的音，否则整拍会错位）
+            dur_f = max(dur_f, 1.5)
+    return dur_f, vel_d
+
+
+def _lyric_text(note_el):
+    """音符上挂的歌词/文字（Audiveris 的 TEXTS 步常把力度记号 OCR 成 <lyric><text>）。"""
+    for s in note_el.iter():
+        if _localname(s.tag) == 'text':
+            return (s.text or '').strip()
+    return ''
 
 
 def _has_tie(el, kind):
