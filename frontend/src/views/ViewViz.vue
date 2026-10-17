@@ -284,7 +284,7 @@ function drawChord(cv, syn) {
   ctx2d.fillStyle = bgc; ctx2d.fillRect(0, 0, w, h);
   ctx2d.textAlign = 'center'; ctx2d.textBaseline = 'middle';
   if (chord) {
-    ctx2d.fillStyle = themeColor('--data-1', '#ff5530');
+    ctx2d.fillStyle = cssVar('--data-1', '#ff5530');
     ctx2d.font = '700 ' + Math.max(18, Math.round(h * 0.3)) + 'px "Segoe UI", "Microsoft YaHei", sans-serif';
     ctx2d.fillText(chord.name, w / 2, h * 0.34);
     ctx2d.fillStyle = stone;

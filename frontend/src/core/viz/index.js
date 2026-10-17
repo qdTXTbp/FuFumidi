@@ -105,7 +105,10 @@ export function createVizRenderer() {
         w, h, theme: opts.theme || 'studio', fx, stage: stageIsPrim,
         transparent: bg.mode === 'transparent',
       });
+      const tPhase = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      const tc0 = tPhase();
       const out = compiler.compile(song, tick, compileOpts);
+      const tc1 = tPhase();
       const splitKB = splitKeyboardBloom(out.prims, wantBloom);
 
       if (!needScene) {
@@ -164,7 +167,16 @@ export function createVizRenderer() {
       // 文字层：GPU 后端不画字（字形质量），统一用 Canvas2D 叠在最上，实时与导出同一条路
       if (texts) { ctx.save(); ctx.scale(sc, sc); drawCanvas2D(ctx, texts); ctx.restore(); }
       ctx.restore();
-      lastStats = { total: +(((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0).toFixed(2)), layers: { post: lastStats.total } };
+      const tr1 = tPhase();
+      lastStats = {
+        total: +((tr1 - t0).toFixed(2)),
+        prims: out.prims.length,
+        layers: {
+          compile: +((tc1 - tc0).toFixed(2)),
+          raster: +((tr1 - tc1).toFixed(2)),
+          post: lastStats.total,
+        },
+      };
       return out;
     },
     stats() { return lastStats; },
@@ -194,3 +206,7 @@ export function vizRasterInfo() {
   return g ? { backend: 'webgl2', renderer: g.renderer } : { backend: 'canvas2d', renderer: 'cpu' };
 }
 if (typeof window !== 'undefined') window.__fufumidiVizRaster = vizRasterInfo;
+// 诊断：每帧耗时与图元数（与 __fufumidiVizRaster 同类，只读用途）。
+// ★ 排查「音符一多就卡」时用它区分「编译重」还是「光栅/后处理重」：
+//   stats.layers 里是各阶段毫秒，prims 是每帧图元数（含被预算裁剪前的原始量）。
+if (typeof window !== 'undefined') window.__fufumidiVizStats = vizStats;
