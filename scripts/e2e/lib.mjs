@@ -246,16 +246,25 @@ export async function launchApp(opts = {}) {
   if (!fs.existsSync(ELECTRON)) throw new Error("找不到 Electron：" + ELECTRON);
   const logFile = path.join(ARTIFACTS, `app-${Date.now()}-${port}.log`);
   const out = fs.createWriteStream(logFile, { flags: "a" });
+  // ★ 数据根隔离（main/paths.js 的 FUFUMIDI_E2E_DATA_ROOT）：每次启动一个干净目录，
+  //   绝不读/写用户真实曲库、模型与自动保存草稿。目录在 artifacts 下（已 gitignore）。
+  const dataRoot = path.join(ARTIFACTS, "data-" + port);
+  try { fs.rmSync(dataRoot, { recursive: true, force: true }); } catch (_) {}
+  fs.mkdirSync(dataRoot, { recursive: true });
   const args = [ROOT, `--remote-debugging-port=${port}`];
   if (Array.isArray(opts.args)) args.push(...opts.args);
   const child = spawn(ELECTRON, args, {
     cwd: ROOT,
-    env: Object.assign({}, process.env, { FUFUMIDI_E2E: "1" }, opts.env || {}),
+    env: Object.assign({}, process.env, {
+      FUFUMIDI_E2E: "1",
+      FUFUMIDI_E2E_DATA_ROOT: dataRoot,
+    }, opts.env || {}),
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.pipe(out);
   child.stderr.pipe(out);
   const app = new Harness(port, child, logFile);
+  app.dataRoot = dataRoot;
   try {
     await app.connect(opts.connectTimeoutMs || 60000);
   } catch (e) {

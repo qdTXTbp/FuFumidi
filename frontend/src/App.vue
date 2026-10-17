@@ -460,6 +460,20 @@ function onBeforeUnload() {
 }
 
 onMounted(() => setupGlobalHotkeys());
+
+/* E2E 测试钩子（scripts/e2e）：只在 FUFUMIDI_E2E=1 的实例里注册，正常安装版不存在。
+   用途：让交互回放能在**隔离数据根**里造一首最小 MIDI，从而进入编辑页/跑手势脚本，
+   不依赖用户曲库。接口刻意做小：hasSong / importMidi / songCount。 */
+onMounted(() => {
+  try {
+    if (!window.fuBridge || !window.fuBridge.e2e) return;
+    window.__fufumidiE2E = {
+      hasSong: () => !!(app.currentSong && app.currentSong.song),
+      songCount: () => (Array.isArray(app.songs) ? app.songs.length : 0),
+      importMidi: (name, bytes) => app.importFiles([{ name: String(name || 'e2e.mid'), bytes: new Uint8Array(bytes) }]),
+    };
+  } catch (e) { /* 测试钩子失败不影响应用 */ }
+});
 onBeforeUnmount(() => { if (_hotkeyOff) { try { _hotkeyOff(); } catch (e) {} _hotkeyOff = null; } });
 
 /* ---------------- GPU 安装常驻通知条 ---------------- */

@@ -37,6 +37,8 @@ const toast = (m, t) => app.toast(m, t);
 const importFiles = (items) => app.importFiles(items);
 const setView = (v) => app.setView(v);
 import { encodeMidi } from '../core/midi.js';
+import { appSession } from '../core/session.js';
+import { timelineOfSong, formatBarBeat } from '../core/timeline.js';
 import { noteName, clamp, KEY_NAME, removeNotes } from '../core/util.js';
 import { fitMenu } from '../core/menu.js';
 import { MACRO_DOC, macroToCmd, applyMacroScript, parseMacroScript } from '../core/macro.js';
@@ -105,7 +107,7 @@ const song = computed(() => (currentSong.value && currentSong.value.song) || nul
 
 const smpteText = computed(() => {
   const sec = Math.max(0, state.curSec || 0);
-  const fps = 25;
+  const fps = (song.value && song.value.smpte && song.value.smpte.fps) || 25;
   const hh = Math.floor(sec / 3600);
   const mm = Math.floor((sec % 3600) / 60);
   const ss = Math.floor(sec % 60);
@@ -113,13 +115,16 @@ const smpteText = computed(() => {
   return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0') + ':' + String(ss).padStart(2, '0') + ':' + String(ff).padStart(2, '0');
 });
 // 状态栏：小节:拍 位置 + 速度 + 当前轨道，给出与 DAW 一致的时间参照
+/* P0-6：位置读数走 TimelineModel（变拍号时按分段算，不再假定 sigMap[0] 贯穿全曲） */
 const posText = computed(() => {
   const s = song.value; if (!s) return '1:1';
-  const tpb = s.tpb || 480;
-  const sig = (s.sigMap && s.sigMap[0]) ? s.sigMap[0].num : 4;
   const tick = Math.max(0, Math.round(s.secToTick(state.curSec / (state.tempo || 1))));
-  const per = tpb * sig;
-  return (Math.floor(tick / per) + 1) + ':' + (Math.floor((tick % per) / tpb) + 1);
+  try { return formatBarBeat(timelineOfSong(s), tick); } catch (e) {
+    const tpb = s.tpb || 480;
+    const sig = (s.sigMap && s.sigMap[0]) ? s.sigMap[0].num : 4;
+    const per = tpb * sig;
+    return (Math.floor(tick / per) + 1) + ':' + (Math.floor((tick % per) / tpb) + 1);
+  }
 });
 // 速度取自曲目本身（state.tempo 是播放倍速，不是 BPM）
 const bpmText = computed(() => {
@@ -1793,6 +1798,138 @@ async function exportMidi() {
   } catch (e) { toast(t('导出失败：') + (e.message || e), 'warn'); }
 }
 
+/* ---------------- P0-2：自动保存 + 崩溃恢复（C3 DocumentSession） ----------------
+   脏判定不靠给每个编辑入口埋点（会漏掉 tempo / CC / 轨名 / 演奏法这些改法），
+   而是每 4s **序列化一次当前编辑结果为 MIDI 字节并取哈希**：字节变了就是脏。
+   代价：6 万音符一次 encodeMidi 约几毫秒（远小于一帧预算），换来"任何修改都漏不掉"。
+   落盘 30s 一次；失焦 / 切歌 / 离开视图 / 关窗时立即冲刷。
+   草稿只写数据根的 temp/autosave/，**绝不覆盖用户工程文件**；恢复时作为新曲目导入。 */
+const AUTOSAVE_SEC = 30;
+const AUTOSAVE_TICK_MS = 4000;
+const docId = computed(() => (song.value ? 'edit:' + (app.currentId || song.value.name || 'untitled') : ''));
+const recoverInfo = ref(null);
+const recoverClock = computed(() => {
+  const ts = recoverInfo.value && recoverInfo.value.ts;
+  if (!ts) return '';
+  try { return new Date(ts).toLocaleString(); } catch (e) { return ''; }
+});
+let autoTimer = 0;
+let lastHash = '';
+let lastDocId = '';
+let flushingAutosave = false;
+
+function encodeForAutosave() {
+  const s = song.value;
+  if (!s) return null;
+  try {
+    return encodeMidi(tracksForExport(), { division: s.tpb, tempoMap: s.tempoMap, sigMap: s.sigMap, keySig: s.keySig });
+  } catch (e) { return null; }
+}
+function fnv1a(bytes) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < bytes.length; i++) { h ^= bytes[i]; h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(16) + ':' + bytes.length;
+}
+async function flushAutosave(reason) {
+  if (flushingAutosave) return false;
+  const s = song.value, d = docId.value;
+  if (!s || !d || !bridge || !bridge.project || !bridge.project.autosaveWrite) return false;
+  const bytes = encodeForAutosave();
+  if (!bytes) return false;
+  const hash = fnv1a(bytes);
+  if (hash === lastHash && !appSession.isDirty(d)) return false;
+  flushingAutosave = true;
+  try {
+    const r = await bridge.project.autosaveWrite({
+      docId: d,
+      model: { midi: Array.from(bytes), tpb: s.tpb, name: s.name, savedAt: Date.now() },
+      meta: { kind: 'edit', title: s.name || '', tracks: (s.tracks || []).length, totalSec: Math.round((s.totalSec || 0) * 10) / 10, reason: reason || 'timer' },
+    });
+    if (r && r.ok) {
+      lastHash = hash;
+      appSession.markSaved(d, r.ts);
+      return true;
+    }
+    if (r && r.error && reason === 'manual') toast(t('草稿保存失败：') + r.error, 'warn');
+    return false;
+  } catch (e) {
+    if (reason === 'manual') toast(t('草稿保存失败：') + ((e && e.message) || e), 'warn');
+    return false;
+  } finally { flushingAutosave = false; }
+}
+async function bindSessionDoc() {
+  const d = docId.value;
+  if (!d) return;
+  if (lastDocId && lastDocId !== d) {
+    await flushAutosave('switch');
+    appSession.close(lastDocId);
+  }
+  lastDocId = d;
+  if (!appSession.get(d)) {
+    appSession.open({ docId: d, kind: 'edit', title: (song.value && song.value.name) || '' });
+  }
+  const bytes = encodeForAutosave();
+  lastHash = bytes ? fnv1a(bytes) : '';
+}
+async function checkAutosave() {
+  const s = song.value, d = docId.value;
+  if (!s || !d) return;
+  const bytes = encodeForAutosave();
+  if (!bytes) return;
+  const hash = fnv1a(bytes);
+  if (hash === lastHash) return;
+  if (!appSession.isDirty(d)) appSession.markDirty(d, 'edit');
+  if (appSession.shouldAutosave(d, Date.now(), AUTOSAVE_SEC)) await flushAutosave('timer');
+}
+async function loadRecoveryHint() {
+  if (!bridge || !bridge.project || !bridge.project.autosaveList) return;
+  try {
+    const list = await bridge.project.autosaveList();
+    const cur = docId.value;
+    const hit = (list || []).find((x) => x && x.meta && x.meta.kind === 'edit' && x.docId !== cur);
+    if (hit) recoverInfo.value = { docId: hit.docId, title: (hit.meta && hit.meta.title) || '', ts: hit.ts, bytes: hit.bytes };
+  } catch (e) { /* 恢复提示失败不影响编辑 */ }
+}
+async function restoreRecovered() {
+  const info = recoverInfo.value;
+  if (!info || !bridge || !bridge.project || !bridge.project.autosaveRead) return;
+  try {
+    const r = await bridge.project.autosaveRead(info.docId);
+    if (!r || !r.ok || !r.data || !r.data.midi) throw new Error((r && r.error) || '草稿为空');
+    const base = (r.meta && r.meta.title) || info.title || t('未命名');
+    app.importFiles([{ name: base + t('（恢复）'), bytes: new Uint8Array(r.data.midi) }]);
+    await bridge.project.autosaveClear(info.docId);
+    recoverInfo.value = null;
+    toast(t('已恢复草稿（作为新曲目导入）'), 'ok');
+  } catch (e) { toast(t('恢复失败：') + ((e && e.message) || e), 'warn'); }
+}
+async function discardRecovered() {
+  const info = recoverInfo.value;
+  if (!info) return;
+  try { if (bridge && bridge.project && bridge.project.autosaveClear) await bridge.project.autosaveClear(info.docId); } catch (e) {}
+  recoverInfo.value = null;
+}
+function onEditBeforeUnload(e) {
+  const d = docId.value;
+  if (d && appSession.isDirty(d)) {
+    void flushAutosave('unload');
+    e.preventDefault();
+    e.returnValue = '';
+  }
+}
+watch(docId, () => { void bindSessionDoc(); }, { immediate: true });
+onMounted(async () => {
+  await loadRecoveryHint();
+  autoTimer = setInterval(() => { void checkAutosave(); }, AUTOSAVE_TICK_MS);
+  window.addEventListener('beforeunload', onEditBeforeUnload);
+});
+onDeactivated(() => { void flushAutosave('deactivate'); });
+onBeforeUnmount(() => {
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = 0; }
+  window.removeEventListener('beforeunload', onEditBeforeUnload);
+  void flushAutosave('unmount');
+});
+
 /* ---------------- 迷你图 ---------------- */
 // 迷你图是「静态缩略图」：把小节块预渲染到离屏画布并缓存，之后每次只贴一次图。
 // 原实现被无条件放进 rAF 循环，每帧遍历全曲所有音符（大 MIDI 9 万+ 次 fillRect/帧），
@@ -1963,6 +2100,17 @@ onBeforeUnmount(() => {
         <div class="page-sub">{{ t('钢琴卷帘 · 画笔点击添加 · 拖拽移动 · 边缘拉伸') }}</div>
       </div>
       <button class="btn sm primary" @click="exportMidi"><Icon name="save" :size="13" />{{ t('导出 MIDI') }}</button>
+    </div>
+
+    <!-- P0-2 崩溃恢复提示条：草稿只写 temp/autosave，恢复时作为新曲目导入，不覆盖原文件 -->
+    <div v-if="recoverInfo" class="card ed-recover-bar" data-guide="edit-recover">
+      <Icon name="info" :size="14" />
+      <span class="grow">
+        {{ t('检测到未保存的编辑草稿') }}<template v-if="recoverInfo.title">：{{ recoverInfo.title }}</template>
+        <span class="ed-recover-time">{{ recoverClock }}</span>
+      </span>
+      <button class="btn sm" @click="discardRecovered">{{ t('丢弃') }}</button>
+      <button class="btn sm primary" @click="restoreRecovered">{{ t('恢复草稿') }}</button>
     </div>
 
     <div v-if="!currentSong" class="empty card">
@@ -2868,6 +3016,9 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* P0-2 草稿恢复条：用既有 token，别写死颜色/间距（ui-tokens 审计会拦） */
+.ed-recover-bar { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); margin-bottom: 8px; border: 1px solid var(--hairline); background: var(--surface); border-radius: var(--r-md); }
+.ed-recover-time { color: var(--muted); margin-left: var(--sp-2); }
 /* min-width:0 是必须的：本页是一个 flex 项，自动最小尺寸 = 内容的 min-content，
    而钢琴卷帘 canvas 的固有宽度会把 min-content 顶到 1200+，整页于是溢出到视口外被
    .app-main 的 overflow-x:hidden 裁掉（工具条右侧的「更多」、状态栏右侧、右上角小地图

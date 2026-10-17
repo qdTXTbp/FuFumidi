@@ -191,6 +191,12 @@ export function tickOfBarBeat(tl, bar, beat = 0) {
   return seg.tick + barsInSeg * seg.barTicks + clamp(toInt(beat), 0, seg.num - 1) * beatTicks;
 }
 
+/** 给状态栏/位置显示用：tick → "小节:拍"（1 基，与 DAW 一致） */
+export function formatBarBeat(tl, tick) {
+  const b = barBeatOf(tl, tick);
+  return (b.bar + 1) + ':' + (b.beat + 1);
+}
+
 /** 从 fromTick 到 toTick 逐小节产出（网格/标尺用） */
 export function iterBars(tl, fromTick = 0, toTick = Infinity) {
   const out = [];

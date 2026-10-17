@@ -140,10 +140,13 @@ test("P0-1 tempoMap 同 tick 去重（后者覆盖）", () => {
   assert.equal(tempo.find((e) => e.tick === 0).us, 400000);
 });
 
-test("P0-1 SMPTE 时间码文件：当前版本明确拒绝（P0-6 再做支持）", () => {
+test("P0-6（原 P0-1 拒绝项）：SMPTE 时间码文件现在能解析", () => {
   const bytes = new Uint8Array([
     0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 0, 0, 1, 0xe7, 0x28,
     0x4d, 0x54, 0x72, 0x6b, 0, 0, 0, 4, 0, 0xff, 0x2f, 0x00,
   ]);
-  assert.throws(() => parseMidi(bytes), /SMPTE/);
+  const mid = parseMidi(bytes);
+  assert.deepEqual(mid.smpte, { fps: 25, ticksPerFrame: 40 });
+  assert.equal(mid.ticksPerBeat, 40);
+  assert.equal(mid.divisionRaw, 0xe728);
 });

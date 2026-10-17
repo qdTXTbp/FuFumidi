@@ -800,6 +800,8 @@ export interface FeedbackPreview {
 }
 
 export interface FuBridge {
+  /** E2E 测试实例标记（scripts/e2e 启动时 FUFUMIDI_E2E=1）：true 时渲染进程会注册最小测试钩子 */
+  e2e?: boolean;
   onOpenFile(cb: (bytes: Uint8Array, name: string) => void): () => void;
   /** 沉浸模式：窗口真全屏（收掉原生标题栏）；返回实际状态 */
   setFullScreen(on: boolean): Promise<{ ok: boolean; fullScreen?: boolean; error?: string }>;

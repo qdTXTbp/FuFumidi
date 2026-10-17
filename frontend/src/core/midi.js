@@ -17,8 +17,15 @@ export function parseMidi(bytes) {
   const format = u16();
   const ntrks = u16();
   const div = u16();
-  const ticksPerBeat = div & 0x7fff;
-  if (div & 0x8000) throw t('暂不支持 SMPTE 时间码的 MIDI（请转换后重试）');
+  let ticksPerBeat = div & 0x7fff;
+  /* v6.0.0 P0-6：SMPTE division（高字节是负 fps 的二补码，低字节是每帧 tick 数）。
+     例：0xE728 = fps 25、40 ticks/frame；时间换算走 smpte，不再用 tempoMap 积分。 */
+  let smpte = null;
+  if (div & 0x8000) {
+    const fps = 256 - ((div >> 8) & 0xff);
+    const ticksPerFrame = div & 0xff;
+    if (fps > 0 && ticksPerFrame > 0) { smpte = { fps, ticksPerFrame }; ticksPerBeat = ticksPerFrame; }
+  }
 
   const tracks = [];
   if (ntrks > 256) throw t('MIDI 轨道数异常（') + ntrks + t('），拒绝解析');
@@ -68,7 +75,7 @@ export function parseMidi(bytes) {
     for (const [n, a] of active) notes.push({ start: a.start, end: tick, midi: n, vel: a.vel, ch: a.ch });
     tracks.push({ name, program, ch, notes, events, ccs });
   }
-  return { format, ntrks, ticksPerBeat, tracks };
+  return { format, ntrks, ticksPerBeat, divisionRaw: div, smpte, tracks };
 }
 
 /* ---------------- 编码 ---------------- */
@@ -114,7 +121,11 @@ function collectMeta(tracks, type) {
 
 export function encodeMidi(tracks, opts = {}) {
   tracks = Array.isArray(tracks) ? tracks : [];
-  const div = clamp(Math.round(opts.division || opts.ticksPerBeat || 480), 24, 0x7fff);
+  let div = clamp(Math.round(opts.division || opts.ticksPerBeat || 480), 24, 0x7fff);
+  const smpte = opts.smpte && Number(opts.smpte.fps) > 0
+    ? { fps: clamp(Math.round(Number(opts.smpte.fps)), 1, 255), ticksPerFrame: clamp(Math.round(Number(opts.smpte.ticksPerFrame) || 40), 1, 255) }
+    : null;
+  if (smpte) div = (((256 - smpte.fps) & 0xff) << 8) | (smpte.ticksPerFrame & 0xff);
   /* ★ P0-1：format 必须按轨数决定 —— 旧实现写死 format 0 却带 ntrks>1（格式 0 是多轨合并语义，
      多轨 format 0 在多数 DAW 里会被拆错轨）。 >1 轨写 1；opts.format 可显式覆盖（导出测试用）。 */
   const format = opts.format != null ? (Math.round(Number(opts.format)) === 1 ? 1 : 0) : (tracks.length > 1 ? 1 : 0);
@@ -235,12 +246,15 @@ export function buildSong(mid, meta = {}) {
     const l = sigMap[sigMap.length - 1];
     if (e.tick === l.tick) { l.num = e.num; l.den = e.den; } else sigMap.push({ tick: e.tick, num: e.num, den: e.den });
   }
+  const smpte = mid.smpte && mid.smpte.fps ? mid.smpte : null;
   function baseSec(tick) {
+    if (smpte) return tick / (smpte.fps * smpte.ticksPerFrame);
     let seg = map[0];
     for (let i = map.length - 1; i >= 0; i--) if (map[i].tick <= tick) { seg = map[i]; break; }
     return seg.sec + (tick - seg.tick) * seg.us / 1e6 / tpb;
   }
   function secToTick(sec) {
+    if (smpte) return Math.max(0, Number(sec) || 0) * smpte.fps * smpte.ticksPerFrame;
     if (sec <= 0) return 0;
     let prev = map[0];
     for (let i = 1; i < map.length; i++) {
@@ -309,7 +323,7 @@ export function buildSong(mid, meta = {}) {
   let totalTicks = 0;
   for (const tr of tracks) for (const n of tr.notes) totalTicks = Math.max(totalTicks, n.end);
   totalTicks += tpb;
-  const song = Object.assign({ format: mid.format, tpb, tracks, tempoMap: map, sigMap, keySig, totalTicks, chanStateAt }, meta);
+  const song = Object.assign({ format: mid.format, tpb, smpte, tracks, tempoMap: map, sigMap, keySig, totalTicks, chanStateAt }, meta);
   song.totalSec = baseSec(song.totalTicks);
   song.baseSec = baseSec;
   song.secToTick = secToTick;

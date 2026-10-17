@@ -98,7 +98,13 @@
   - 主进程 `main/autosave.js`：原子写（.tmp→rename）、32MB 上限、任意 docId 安全文件名、list（按时间倒序、坏草稿跳过）/read/clear；
   - IPC：`autosave:write/list/read/clear` 三处同改（preload `project.autosave*` → main/project.js 注册 → types/ipc.ts）；
   - 单测：`frontend/tests/session.test.js`（10 例）+ `scripts/test-autosave.mjs`（6 例），并进 `npm test` 链。
-- **P0-2 第一批（存储层）完成**：编辑器侧还差「30s 定时器 + 崩溃恢复提示条 + dirty 拦截」——下一卡接进 ViewEdit。
+- **P0-2 完成（第一版）**：
+  - ViewEdit 已接线：4s 定时「序列化 MIDI → FNV 哈希」判定脏（任何修改都漏不掉，不靠逐入口埋点）、30s 落盘、失焦/切歌/离开视图/关窗立即冲刷、beforeunload 脏则拦截；
+  - 崩溃恢复提示条（恢复=作为新曲目导入，绝不覆盖原文件；丢弃=清除草稿）；
+  - E2E 数据隔离：`FUFUMIDI_E2E_DATA_ROOT`（main/paths.js）+ 每实例干净目录；`window.__fufumidiE2E` 最小测试钩子（仅 FUFUMIDI_E2E=1 注册）；
+  - 新增 E2E 用例 `autosave-ipc`（write→list→read→clear 全链）。
+- **P0-6 数据层完成**：`parseMidi` 支持 SMPTE division（0xE728 → fps25/40tpf）、`buildSong` 按帧算时间（tempoMap 不参与）、`encodeMidi` 写回 SMPTE 头；多拍号 encode→parse→buildSong 全保留（此前只取首条）；状态栏位置读数改走 `formatBarBeat`（变拍号按分段算）。
+  - 剩余（P0-6b）：EditorCanvas/总谱的**网格绘制**仍是按第一拍号均匀布局，变拍号视觉分段待下一卡。
 
 ## 3. E2E（验收底座，已落地）
 
