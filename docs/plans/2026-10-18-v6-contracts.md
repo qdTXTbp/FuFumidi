@@ -251,6 +251,13 @@
   - mini-map / 选区循环原本已有：补 `data-guide`（edit-minimap / edit-loop-set / edit-loop-clear）并纳入 E2E；
   - E2E `edit-follow-ui`：默认开启 → 关闭/重开持久化 → mini-map 点击导航 → Ctrl+A 设选区循环（按钮高亮）→ 清除循环 → 播放中画布正常。
 
+- **P1-14 B4 任务中心 / 通知 / 设置可搜索 / 帮助 ✅（设置搜索为本轮新增）**：
+  - 任务中心与通知体系（C2）此前已落地：`main/taskcenter.js` + `stores/tasks.ts` + `TaskCenter.vue`（E2E tasks-ui）；
+  - 帮助：`GuideOverlay` / Guide 章节此前已存在；
+  - **设置可搜索（新）**：`core/settings_index.js`——20 个设置项索引（label/hint/口头别名：字大/显卡/升级/热键/夜间模式…），`searchSettings` 打分排序（精确 > 前缀 > 包含 > 别名 > hint），`validateSettingsIndex` 校验 id 唯一与页签合法；6 测例；
+  - SettingsPanel 头部新增搜索框 + 结果下拉；点结果切页签并 `scrollIntoView` 到 `data-setting` 锚点（短暂高亮）；已给 7 个高频设置行加锚点；
+  - E2E `settings-search-ui`：输入「显卡」→ 首条命中 GPU 加速 → 点击切到 GPU 页签；「更新通道」→ 更新页签；无结果显示「没有找到匹配的设置」。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；

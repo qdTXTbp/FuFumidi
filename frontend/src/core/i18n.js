@@ -1595,6 +1595,8 @@ export const I18N_MAP = {
   '后退': 'Back',
   '弯音 PB（±2 半音）': 'Pitch bend PB (±2 semitones)',
   '跟随': 'Follow',
+  '搜索设置项…（如：字号 / 显卡 / 更新）': 'Search settings… (e.g. font size / GPU / updates)',
+  '没有找到匹配的设置': 'No matching settings',
   '播放时自动滚动视图，让播放头保持可见': 'Auto-scroll the view during playback to keep the playhead visible',
   '前进': 'Forward',
   '专家模式': 'Expert mode',

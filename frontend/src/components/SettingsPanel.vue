@@ -8,6 +8,8 @@ import { playbackPrefs, playbackSettingsPatch } from '../core/playback_prefs.js'
 import { useCloudStore } from '../stores/cloud';
 import CloudSyncChoiceDialog from './CloudSyncChoiceDialog.vue';
 import { t, setLang, getLang } from '../core/i18n.js';
+// P1-14 B4：设置可搜索（索引是纯逻辑，见 core/settings_index.js）
+import { searchSettings } from '../core/settings_index.js';
 
 const app = useAppStore();
 const state = app;
@@ -59,6 +61,26 @@ const TABS = computed(() => [
   { id: 'feedback', label: t('反馈'), icon: 'info' },
 ]);
 const tab = ref('appearance');
+
+/* P1-14 B4：设置搜索 —— 输入关键词 → 命中项；点结果切页签并滚到 data-setting 锚点 */
+const searchQuery = ref('');
+const searchHits = computed(() => (searchQuery.value.trim() ? searchSettings(searchQuery.value, 8) : []));
+let setFlashTimer = 0;
+async function gotoSetting(e) {
+  if (!e) return;
+  searchQuery.value = '';
+  tab.value = e.tab;
+  state.ui.settingsTab = e.tab;
+  await nextTick();
+  try {
+    const el = document.querySelector('[data-setting="' + e.id + '"]');
+    if (!el) return;
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el.classList.add('set-flash');
+    clearTimeout(setFlashTimer);
+    setFlashTimer = setTimeout(() => el.classList.remove('set-flash'), 1500);
+  } catch (err) {}
+}
 
 // 标签页切换：对设置卡片高度做柔和非线性补间（从旧高度过渡到新内容自然高度）
 const cardRef = ref(null);
@@ -1178,6 +1200,19 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
       <div class="settings-head">
         <Icon name="gear" :size="17" />
         <span class="settings-title">{{ t('应用设置') }}</span>
+        <!-- P1-14 B4：设置搜索 -->
+        <div class="settings-search">
+          <Icon name="search" :size="13" />
+          <input v-model="searchQuery" class="settings-search-input" data-guide="settings-search-input"
+                 :placeholder="t('搜索设置项…（如：字号 / 显卡 / 更新）')" />
+          <div v-if="searchQuery.trim()" class="settings-search-results" data-guide="settings-search-results">
+            <button v-for="h in searchHits" :key="h.id" class="settings-search-item" :data-hit="h.id" @click="gotoSetting(h)">
+              <b>{{ t(h.label) }}</b>
+              <span>{{ t(h.hint) }}</span>
+            </button>
+            <div v-if="!searchHits.length" class="settings-search-empty">{{ t('没有找到匹配的设置') }}</div>
+          </div>
+        </div>
       </div>
 
       <div class="settings-tabs" ref="tabsRef">
@@ -1208,7 +1243,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
       <div class="settings-body">
         <!-- ============ 外观 ============ -->
         <div v-if="tab === 'appearance'">
-          <div class="field-row">
+          <div class="field-row" data-setting="theme">
             <div>
               <div class="fr-label">{{ t('界面模式') }}</div>
               <div class="fr-hint">{{ t('浅色明亮 · 深色护眼 · 跟随系统按系统偏好自动切换') }}</div>
@@ -1280,7 +1315,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               </div>
             </div>
           </div>
-          <div class="field-row">
+          <div class="field-row" data-setting="ui_scale">
             <div>
               <div class="fr-label">{{ t('界面缩放') }}</div>
               <div class="fr-hint">{{ t('全局放大或缩小整个界面（0.9 ~ 1.3）：连画布一起缩放，不会糊也不会重叠') }}</div>
@@ -1479,7 +1514,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
       </div>
 
         <div v-else-if="tab === 'feature'">
-          <div class="field-row">
+          <div class="field-row" data-setting="engine_mode">
             <div>
               <div class="fr-label">{{ t('默认引擎模式') }}</div>
               <div class="fr-hint">{{ t('转录新音频时默认使用的识别引擎') }}</div>
@@ -1492,7 +1527,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               </select>
             </div>
           </div>
-          <div class="field-row">
+          <div class="field-row" data-setting="perf_mode">
             <div>
               <div class="fr-label">{{ t('默认性能模式') }}</div>
               <div class="fr-hint">{{ t('最高质量用全部核心，同机上反而最快；低配省资源限 2 核，低配机更稳') }}</div>
@@ -1505,7 +1540,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               </select>
             </div>
           </div>
-          <div class="field-row" data-guide="expert-mode-row">
+          <div class="field-row" data-setting="expert_mode" data-guide="expert-mode-row">
             <div>
               <div class="fr-label">{{ t('专家模式') }}</div>
               <div class="fr-hint">{{ t('打开后显示 OMR / 翻唱 / GPU 等高级入口；关闭时界面保持精简（可随时打开）') }}</div>
@@ -1547,7 +1582,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               </select>
             </div>
           </div>
-          <div class="field-row">
+          <div class="field-row" data-setting="watch_dir">
             <div>
               <div class="fr-label">{{ t('监视文件夹') }}</div>
               <div class="fr-hint">{{ t('放入音频自动加入转录队列') }}</div>
@@ -1722,7 +1757,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
             </div>
           </div>
 
-          <div class="field-row">
+          <div class="field-row" data-setting="download_source">
             <div>
               <div class="fr-label">{{ t('下载源') }}</div>
               <div class="fr-hint">{{ t('国内源经 CNB 镜像，速度更快；全球源直连 GitHub，适合境外网络。自动会在国内源不可用时回退。') }}</div>
@@ -1919,4 +1954,19 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
             border: 1px solid var(--hairline); background: transparent; color: var(--ink); }
   .sp-use:disabled { opacity: .4; cursor: default; }
   .sp-empty { padding: 10px; font-size: var(--fs-sm); color: var(--text-soft); }
+
+  /* P1-14 B4：设置搜索 */
+  .settings-search { position: relative; margin-left: auto; display: flex; align-items: center; gap: var(--sp-1);
+                     padding: 2px var(--sp-2); border: 1px solid var(--hairline); border-radius: var(--r-sm); background: var(--canvas); }
+  .settings-search-input { border: none; background: transparent; color: var(--ink); outline: none; width: 220px; font-size: var(--fs-sm); }
+  .settings-search-results { position: absolute; top: calc(100% + var(--sp-2)); right: 0; width: 380px; max-height: 320px; overflow-y: auto;
+                             background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md);
+                             box-shadow: var(--shadow-lg); z-index: 60; padding: var(--sp-1); }
+  .settings-search-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%;
+                          padding: var(--sp-1) var(--sp-2); border: none; background: transparent; color: var(--ink);
+                          cursor: pointer; border-radius: var(--r-sm); text-align: left; }
+  .settings-search-item:hover { background: var(--surface-soft); }
+  .settings-search-item span { color: var(--muted); font-size: var(--fs-sm); }
+  .settings-search-empty { padding: var(--sp-2); color: var(--muted); font-size: var(--fs-sm); }
+  :deep(.field-row.set-flash) { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: var(--r-sm); }
 </style>
