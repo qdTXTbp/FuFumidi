@@ -84,10 +84,12 @@ function writeExport(o = {}) {
 }
 
 /** 注册 IPC（由 main.js 调用；electron 依赖只在这里出现） */
-function registerExportIpc({ ipcMain, dialog, app, path: nodePath } = {}) {
+function registerExportIpc({ ipcMain, dialog, app, path: nodePath, center } = {}) {
   if (!ipcMain) return;
   ipcMain.handle('export:audio', async (_e, payload) => {
     const p = payload || {};
+    // C2：导出属于“长任务必须登记”的范畴（这里写盘很快，但链路/取消/跳转语义先接上）
+    const task = center ? center.register({ kind: 'export', title: '导出音频：' + String(p.name || '未命名') }) : null;
     try {
       const bytes = p.bytes ? Buffer.from(p.bytes) : Buffer.alloc(0);
       if (!bytes.length) return { ok: false, error: '没有可导出的音频数据' };
@@ -124,8 +126,13 @@ function registerExportIpc({ ipcMain, dialog, app, path: nodePath } = {}) {
           try { fs.renameSync(res.path, want); res.path = want; } catch (e) {}
         }
       }
+      if (task) {
+        if (res && res.ok) { task.progress(1, '已写出 ' + (res.path || '')); task.done({ path: res.path, manifestPath: res.manifestPath }); }
+        else task.fail((res && res.error) || '导出失败');
+      }
       return res;
     } catch (e) {
+      if (task) task.fail(e);
       return { ok: false, error: String((e && e.message) || e) };
     }
   });

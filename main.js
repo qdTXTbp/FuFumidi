@@ -57,6 +57,7 @@ const { createDbService } = require('./main/db');
 const { registerLibraryIpc } = require('./main/library');
 const { registerProjectIpc } = require('./main/project');
 const { registerExportIpc } = require('./main/export');
+const { getTaskCenter, registerTaskIpc } = require('./main/taskcenter');
 const { registerWallpaperIpc } = require('./main/wallpaper');
 const { registerUtauIpc } = require('./main/utau');
 const { registerDiffsingerIpc } = require('./main/diffsinger');
@@ -165,7 +166,16 @@ if (!gotLock) {
     registerSettingsIpc({ ipcMain, readSettings, writeSettings, db: DbService });
     // 歌声工程文件（.fufumidi 自包含包）：保存/打开都在这里，音频字节不过 IPC
     registerProjectIpc({ ipcMain, dialog, path, fs, spawnEngine });
-  registerExportIpc({ ipcMain, dialog, app, path });
+  // C2 TaskCenter：全局长任务中心（进度/取消/离开页面不丢）。先建中心，再把句柄分给各业务模块。
+  const taskCenter = getTaskCenter({
+    emit: (ev) => {
+      for (const w of BrowserWindow.getAllWindows()) {
+        try { w.webContents.send('task:update', ev); } catch (e) {}
+      }
+    },
+  });
+  registerTaskIpc({ ipcMain, center: taskCenter, e2e: process.env.FUFUMIDI_E2E === '1' });
+  registerExportIpc({ ipcMain, dialog, app, path, center: taskCenter });
     registerWallpaperIpc({ ipcMain, app, fs, net, runEngineInline, parsePyJson });
     registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawnEngine, createEngineSession: EngineService.createEngineSession });
     // DiffSinger 模块化集成：默认关闭；启用后才按需下载推理依赖与通用声码器（模块内自检）

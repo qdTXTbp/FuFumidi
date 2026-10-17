@@ -11,6 +11,7 @@ import WallpaperGallery from './components/WallpaperGallery.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import GuideOverlay from './components/GuideOverlay.vue';
 import ChangeLogOverlay from './components/ChangeLogOverlay.vue';
+import TaskCenter from './components/TaskCenter.vue';
 import { ref, computed, reactive } from 'vue';
 
 /* 全局 UI 缩放（M9b）：界面全是 px 布局，用 CSS zoom 整体缩放最省事、也最一致
@@ -762,6 +763,9 @@ _endHold();
     <Transition name="ov">
       <ChangeLogOverlay v-if="state.ui.changelogOpen" />
     </Transition>
+    <!-- C2：全局长任务中心（任何页面都能看进度/取消）；必须是 Transition 的兄弟节点，
+         放进 Transition 里会被当成第二个子节点（切换时被一起移除）。 -->
+    <TaskCenter />
   </div>
 
   <!-- 全局 Web 弹窗：统一替代 window.confirm / alert / prompt -->

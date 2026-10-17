@@ -18,7 +18,7 @@
 | # | 契约 | 落点文件 | 状态 | 消费方 |
 |---|---|---|---|---|
 | C1 | CommandRegistry 命令注册表 | `frontend/src/core/commands.js`（新） | ✅ **已实现**（registry + ViewEdit 菜单同步 + 快捷键兜底 + 冲突检测；11 测例 + E2E） | 菜单/工具栏/右键/快捷键/命令面板/宏 |
-| C2 | TaskCenter 长任务中心 | `main/taskcenter.js`（新）+ `preload.js` | W0 待实现（接口冻结） | 转录/下载/渲染/导出/更新/OMR |
+| C2 | TaskCenter 长任务中心 | `main/taskcenter.js`（新）+ `preload.js` | ✅ **已实现**（主进程任务中心 + task:update 10Hz + 全局任务面板 + 7 测例 + E2E；导出已登记任务） | 转录/下载/渲染/导出/更新/OMR |
 | C3 | DocumentSession 文档会话 | `frontend/src/core/session.js`（新） | ✅ **核心已实现**（`session.js` + `main/autosave.js` + IPC + 16 测例；编辑器 UI 接线属 P0-2 后续卡） | 编辑/调教/谱面/歌词；自动保存/恢复 |
 | C4 | TimelineModel 时间轴模型 | `frontend/src/core/midi.js`（扩展）+ `core/timeline.js`（新） | ✅ **已实现**（`timeline.js` 264 行 + 10 测例；SMPTE 模式已预留，P0-6 接入口） | 编辑器/编排时间线/调教/可视化 |
 | C5 | ExportJob 导出管线 | `main/export.js`（新）+ `frontend/src/core/export_audio.js`（新） | W0 待实现（接口冻结） | WAV/FLAC/MP3/OGG/分轨/MIDI/MusicXML/MP4 |
@@ -142,6 +142,12 @@
   - ViewEdit 接线：菜单动作 + 参数工具 + 工作区预设全部同步注册；命令面板数据源改为注册表（打开前重同步，避免 setup 期间求值 menuGroups 踩后段 ref 的 TDZ —— 已记注释）；未显式处理的组合键交给 `byKeys` 兜底；启动/打开时 `conflicts()` 告警；
   - 测试：`frontend/tests/commands.test.js` 11 例；E2E `command-palette`（Ctrl+Shift+P 打开、全量列表、搜索「量化」收窄、Esc 关闭）；
   - 取消 `watch(menuGroups)` 的原因与替代方案已写入代码注释（README 级教训：TDZ 只在运行时炸，构建/类型检查都发现不了）。
+
+- **C2 TaskCenter ✅**：
+  - 主进程 `main/taskcenter.js`（纯逻辑 `createTaskCenter` + Electron 适配 `registerTaskIpc`）：register→handle（progress/log/done/fail/cancel）、列表排序（running 前）、**10Hz 合并广播**、保留策略（5 分钟 / 最多 200 条 / 日志 200 行）、`tasks:list` / `tasks:cancel`；只回**可结构化克隆快照**（内部 onCancel 函数不回 IPC —— 踩过 "could not be cloned"）；
+  - preload `tasks.list/cancel/onUpdate` + `types/ipc.ts` TaskItem；前端 `stores/tasks.ts` + `components/TaskCenter.vue`（全局右下角按钮 + 进度条 + 取消），已挂到 App 根（**必须放在 Transition 兄弟节点**，放里面会被当第二子节点移除 —— 踩过）；
+  - 业务接入：`export:audio` 登记任务（写盘完成 done / 失败 fail）；E2E 模式额外注册 `tasks:demo` 造可控假任务；
+  - 测试：`scripts/test-taskcenter.mjs` 7 例（状态机/节流/取消/保留/上限/日志）；E2E `tasks-ui`（demo 任务 → 面板显示 running+进度 → 取消 → 面板显示已取消）。
 
 ## 3. E2E（验收底座，已落地）
 

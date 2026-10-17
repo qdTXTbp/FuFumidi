@@ -393,6 +393,17 @@ contextBridge.exposeInMainWorld('fuBridge', {
     autosaveRead: (docId) => ipcRenderer.invoke('autosave:read', docId),
     autosaveClear: (docId) => ipcRenderer.invoke('autosave:clear', docId),
   },
+  // C2 任务中心：长任务登记在主进程（离开页面不丢）；事件 10Hz 合并广播
+  tasks: {
+    list: () => ipcRenderer.invoke('tasks:list'),
+    cancel: (id) => ipcRenderer.invoke('tasks:cancel', id),
+    demo: (opts) => ipcRenderer.invoke('tasks:demo', opts),
+    onUpdate: (cb) => {
+      const fn = (_e, ev) => { try { cb(ev); } catch (e) {} };
+      ipcRenderer.on('task:update', fn);
+      return () => { try { ipcRenderer.removeListener('task:update', fn); } catch (e) {} };
+    },
+  },
   // P0-4 音频导出：渲染进程编码好 WAV 字节，主进程负责原子落盘 + 写 manifest
   exportAudio: (payload) => ipcRenderer.invoke('export:audio', payload),
   // ★ 顶层别名：上面这个 copyAsset 挂在 project.* 下，但 singer.ts:1490 是按

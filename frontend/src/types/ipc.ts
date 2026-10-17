@@ -830,9 +830,31 @@ export interface AudioExportResult {
   error?: string;
 }
 
+export interface TaskItem {
+  id: string;
+  kind: string;
+  title: string;
+  status: 'running' | 'done' | 'error' | 'canceled';
+  progress: number;
+  startedAt: number;
+  endedAt: number | null;
+  result?: any;
+  error?: string;
+  logs?: string[];
+  cancelable?: boolean;
+}
+
 export interface FuBridge {
   /** E2E 测试实例标记（scripts/e2e 启动时 FUFUMIDI_E2E=1）：true 时渲染进程会注册最小测试钩子 */
   e2e?: boolean;
+  /** C2 任务中心：长任务列表/取消/事件订阅（离开页面不丢） */
+  tasks?: {
+    list(): Promise<TaskItem[]>;
+    cancel(id: string): Promise<{ ok: boolean; error?: string }>;
+    /** 仅 E2E 实例可用：造一个演示任务验证进度/取消链路 */
+    demo?(opts?: { intervalMs?: number }): Promise<{ id: string }>;
+    onUpdate(cb: (ev: { type: string; tasks: TaskItem[] }) => void): () => void;
+  };
   /** P0-4 音频导出：字节落盘 + manifest（主进程 main/export.js） */
   exportAudio(payload: AudioExportRequest): Promise<AudioExportResult>;
   onOpenFile(cb: (bytes: Uint8Array, name: string) => void): () => void;
