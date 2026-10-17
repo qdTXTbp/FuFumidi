@@ -30,6 +30,18 @@ function registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app
     try { return integrity.repair(ids); } catch (e) { return { ok: false, results: [], error: String(e && e.message || e) }; }
   });
 
+  /* 沉浸模式：把窗口切成真全屏。
+     ★ 为什么必须走主进程：原生标题栏（最小化/最大化/关闭那一行）在 web 内容**之外**，
+       CSS 藏不掉它 —— 只有 setFullScreen 能收掉。退出沉浸时恢复窗口态。 */
+  ipcMain.handle('win:setFullScreen', (evt, on) => {
+    try {
+      const win = BrowserWindow.fromWebContents(evt.sender);
+      if (!win) return { ok: false, error: 'no window' };
+      win.setFullScreen(!!on);
+      return { ok: true, fullScreen: win.isFullScreen() };
+    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  });
+
   ipcMain.handle('guide:openEdit', () => {
     const win = new BrowserWindow({ width: 900, height: 700, title: 'FuFumidi 编辑功能说明', backgroundColor: '#0a0f18', autoHideMenuBar: true });
     win.loadFile(path.join(__dirname, '..', 'renderer', 'edit-guide.html'));
@@ -105,7 +117,7 @@ function registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app
         done.push('soundfonts');
       }
       if (list.includes('deps')) {
-        // 资源中心安装的依赖：GPU 增强包（CUDA / DirectML 实际装到这里的 site-packages）
+        // 资源中心安装的依赖：GPU 增强包（CUDA / ROCm / XPU 实际装到这里的 site-packages）
         // 及其残留的 pip 下载缓存。这些都是可在资源中心重新安装的，按「清除数据」语义一并清掉。
         rm(Paths.gpuEnhanceRoot());
         rm(path.join(ud, 'fufumidi', 'gpu-enhancements'));

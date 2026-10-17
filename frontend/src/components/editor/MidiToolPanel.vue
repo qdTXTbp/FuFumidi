@@ -176,37 +176,37 @@ watch(() => props.open, (v) => {
 /* 弹窗外壳自带一份样式：.ed-modal* 是 ViewEdit 的**作用域**样式（scoped），
    在别的组件里不生效 —— 之前面板没遮罩、不居中、内容被页面穿透就是这个原因。 */
 .mtp-mask { position: fixed; inset: 0; background: rgba(10, 10, 10, 0.35); display: flex; align-items: center; justify-content: center; z-index: var(--z-modal); }
-.mtp-card { width: min(860px, 95vw); max-height: 88vh; background: var(--canvas); border-radius: 14px;
-  box-shadow: 0 24px 64px rgba(16, 24, 40, 0.2); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-.mtp-head { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink); }
-.mtp-head b { font-size: 15px; }
-.mtp-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
-.mtp-count { font-size: 11.5px; color: var(--accent); font-weight: 600; }
-.mtp-body { display: flex; gap: 12px; min-height: 300px; }
-.mtp-list { flex: none; width: 168px; display: flex; flex-direction: column; gap: 8px; max-height: 52vh; overflow-y: auto;
-  border: 1px solid var(--hairline); border-radius: 10px; padding: 8px; background: var(--surface-soft); }
-.mtp-grp-h { font-size: 10.5px; font-weight: 700; color: var(--stone); letter-spacing: .02em; margin: 2px 0 3px; }
-.mtp-item { display: block; width: 100%; text-align: left; padding: 5px 8px; border: 1px solid transparent; border-radius: 7px;
-  background: transparent; color: var(--ink); font-size: 12px; cursor: pointer; transition: background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
+.mtp-card { width: min(860px, 95vw); max-height: 88vh; background: var(--canvas); border-radius: var(--r-lg);
+  box-shadow: 0 24px 64px rgba(16, 24, 40, 0.2); padding: 16px; display: flex; flex-direction: column; gap: var(--sp-3); }
+.mtp-head { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-lg); color: var(--ink); }
+.mtp-head b { font-size: var(--fs-lg); }
+.mtp-foot { display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-2); }
+.mtp-count { font-size: var(--fs-sm); color: var(--accent); font-weight: 600; }
+.mtp-body { display: flex; gap: var(--sp-3); min-height: 300px; }
+.mtp-list { flex: none; width: 168px; display: flex; flex-direction: column; gap: var(--sp-2); max-height: 52vh; overflow-y: auto;
+  border: 1px solid var(--hairline); border-radius: var(--r-md); padding: 8px; background: var(--surface-soft); }
+.mtp-grp-h { font-size: var(--fs-xs); font-weight: 700; color: var(--stone); letter-spacing: .02em; margin: 2px 0 3px; }
+.mtp-item { display: block; width: 100%; text-align: left; padding: 5px 8px; border: 1px solid transparent; border-radius: var(--r-sm);
+  background: transparent; color: var(--ink); font-size: var(--fs-sm); cursor: pointer; transition: background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
 .mtp-item:hover { background: var(--canvas); }
-.mtp-item.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-.mtp-form { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
-.mtp-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.mtp-title b { font-size: 14px; }
-.mtp-row { display: flex; align-items: center; gap: 8px; }
-.mtp-lab { flex: none; width: 74px; font-size: 11.5px; color: var(--stone); }
+.mtp-item.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.mtp-form { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-3); }
+.mtp-title { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; }
+.mtp-title b { font-size: var(--fs-lg); }
+.mtp-row { display: flex; align-items: center; gap: var(--sp-2); }
+.mtp-lab { flex: none; width: 74px; font-size: var(--fs-sm); color: var(--stone); }
 .mtp-range { flex: 1; min-width: 0; accent-color: var(--accent); }
 .mtp-row .num-input { width: 64px; }
-.mtp-val { flex: none; width: 62px; text-align: right; font-family: var(--mono); font-size: 11px; color: var(--slate); }
-.mtp-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--slate); }
-.mtp-warn { font-size: 11.5px; color: var(--warn, #b26a00); background: var(--surface-soft); border: 1px dashed var(--hairline); border-radius: 8px; padding: 6px 8px; }
-.mtp-presets { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 8px; border-top: 1px dashed var(--hairline); }
-.mtp-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--hairline); border-radius: 999px;
-  background: var(--canvas); color: var(--ink); font-size: 11.5px; cursor: pointer; }
+.mtp-val { flex: none; width: 62px; text-align: right; font-family: var(--mono); font-size: var(--fs-xs); color: var(--slate); }
+.mtp-check { display: inline-flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); color: var(--slate); }
+.mtp-warn { font-size: var(--fs-sm); color: var(--warn, var(--t-warn)); background: var(--surface-soft); border: 1px dashed var(--hairline); border-radius: var(--r-md); padding: 6px 8px; }
+.mtp-presets { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-top: auto; padding-top: 8px; border-top: 1px dashed var(--hairline); }
+.mtp-chip { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 3px 8px; border: 1px solid var(--hairline); border-radius: var(--r-pill);
+  background: var(--canvas); color: var(--ink); font-size: var(--fs-sm); cursor: pointer; }
 .mtp-chip:hover { border-color: var(--accent); }
-.mtp-x { font-style: normal; color: var(--stone); font-size: 10px; }
-.mtp-x:hover { color: var(--error, #d33); }
+.mtp-x { font-style: normal; color: var(--stone); font-size: var(--fs-xs); }
+.mtp-x:hover { color: var(--error, var(--t-err)); }
 .mtp-name { width: 120px; }
-.mtp-changed { margin-right: auto; font-size: 11.5px; color: var(--accent); font-weight: 600; }
+.mtp-changed { margin-right: auto; font-size: var(--fs-sm); color: var(--accent); font-weight: 600; }
 .mtp-changed.zero { color: var(--stone); font-weight: 400; }
 </style>

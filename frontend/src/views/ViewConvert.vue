@@ -1,5 +1,6 @@
 <script setup>
-import { ref, computed, reactive, watch, nextTick, onMounted } from 'vue';
+import { themeColor, VIEW_TRACK_RAMP } from '../core/palette.js';
+import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useVizBgStore, BG_MODES } from '../stores/vizbg';
@@ -229,6 +230,9 @@ const VE = reactive({
 //   任何一边改动，两边的预览与成片立刻一致。
 const vizBg = useVizBgStore();
 const bg = vizBg.bg;
+/** 动态壁纸：与「可视化」页**共用同一份设置** —— 这里挑的壁纸就是导出的背景（同一绘制函数） */
+function pickBgWall() { app.ui.wallpaperTarget = 'viz'; app.ui.wallpaperOpen = true; }
+function clearBgWall() { vizBg.clearWall(); }
 const veResCustom = ref(false);
 const vePreviewEl = ref(null);
 function previewWH() {
@@ -258,12 +262,15 @@ function drawVideoPreview() {
   }
   catch (e) { console.warn('[video] 预览绘制失败：', e); }
 }
-watch(() => [VE.template, bg.mode, bg.color, bg.blur, bg.dim, VE.visual, VE.showProgress, VE.showChord, VE.showTimecode, VE.showLyrics, VE.showWatermark, VE.res, VE.fps, VE.quality, VE.track], () => nextTick(drawVideoPreview), { deep: true });
+watch(() => [VE.template, bg.mode, bg.color, bg.blur, bg.dim, bg.wallPath, VE.visual, VE.showProgress, VE.showChord, VE.showTimecode, VE.showLyrics, VE.showWatermark, VE.res, VE.fps, VE.quality, VE.track], () => nextTick(drawVideoPreview), { deep: true });
 onMounted(() => {
   nextTick(drawVideoPreview);
-  // 图片解码是异步的：读完再重绘一次，否则首帧拿到的是 null（画成主题底）
-  void vizBg.init().then(() => nextTick(drawVideoPreview));
+  // 图片/壁纸解码是异步的：读完再重绘一次，否则首帧拿到的是 null（画成主题底）；
+  // 动态壁纸还要**开播** —— 导出页也得出帧，成片里的背景才会动。
+  void vizBg.init().then(() => { vizBg.setWallActive(bg.mode === 'wallpaper'); nextTick(drawVideoPreview); });
 });
+// 离开导出页就暂停壁纸解码（回来时 onMounted 会再开）
+onBeforeUnmount(() => vizBg.setWallActive(false));
 function vePickWatermark() { vePickImage((d) => { VE.watermark = d; }); }
 function vePickImage(cb) {
   const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
@@ -292,7 +299,7 @@ function detectLiveChord(notes) {
   if (has(3) && has(7)) return { name: NAME[root] + 'm', minor: true };
   return { name: NAME[root] + t('（近似）'), minor: false };
 }
-const TRACK_COLORS = ['#ff5530', '#ea5ec1', '#1456f0', '#a855f7', '#3daeff', '#1ba673', '#3b82f6', '#f59e0b', '#d45656', '#17437d'];
+const TRACK_COLORS = VIEW_TRACK_RAMP;
 function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
   const cvar = (n, fb) => { try { return getComputedStyle(document.documentElement).getPropertyValue(n).trim() || fb; } catch (e) { return fb; } };
   const mode = VE.visual || 'mix';
@@ -376,8 +383,8 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
     const cardW = Math.max(60, Math.floor((W - pad * 4) / 3));
     const cards = [
       { title: t('频谱瀑布'), sub: t('竖直下落'), dot: cvar('--accent', '#4f9dff'), draw: (cx, cy, cw, chh) => drawVizSpectrum(ctx, cw, chh, audioBuf, nowSec) },
-      { title: t('波形示波器'), sub: t('时域'), dot: '#5ac8fa', draw: (cx, cy, cw, chh) => drawVizScope(ctx, cw, chh, audioBuf, nowSec) },
-      { title: t('实时和弦'), sub: t('播放同步'), dot: '#b48ef0', draw: (cx, cy, cw, chh) => drawVizChord(ctx, cw, chh, activeNotes) },
+      { title: t('波形示波器'), sub: t('时域'), dot: themeColor('--t-info', '#5ac8fa'), draw: (cx, cy, cw, chh) => drawVizScope(ctx, cw, chh, audioBuf, nowSec) },
+      { title: t('实时和弦'), sub: t('播放同步'), dot: themeColor('--data-6', '#b48ef0'), draw: (cx, cy, cw, chh) => drawVizChord(ctx, cw, chh, activeNotes) },
     ];
     cards.forEach((card, i) => {
       const x = pad + i * (cardW + pad), y = gy;
@@ -393,7 +400,7 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
     ctx.fillStyle = 'rgba(0,0,0,.55)';
     const tw = Math.min(W - 80, (vf.lyricAt || '').length * 16 + 32);
     ctx.fillRect((W - tw) / 2, H - 36, tw, 28);
-    ctx.fillStyle = '#fff'; ctx.font = '600 15px "Microsoft YaHei", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = themeColor('--on-accent', '#ffffff'); ctx.font = '600 15px "Microsoft YaHei", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(vf.lyricAt, W / 2, H - 22);
   }
   if (VE.showWatermark && VE.watermark) {
@@ -405,7 +412,7 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
   }
   if (VE.showProgress) {
     ctx.fillStyle = 'rgba(255,255,255,.14)'; ctx.fillRect(pad, H - 7, W - pad * 2, 3);
-    ctx.fillStyle = '#ff5530'; ctx.fillRect(pad, H - 7, (W - pad * 2) * vf.pct, 3);
+    ctx.fillStyle = themeColor('--playhead', '#ff5530'); ctx.fillRect(pad, H - 7, (W - pad * 2) * vf.pct, 3);
   }
   if (VE.showTimecode) {
     ctx.fillStyle = cvar('--ink', '#fff'); ctx.font = '12px Consolas, monospace'; ctx.textAlign = 'right';
@@ -895,11 +902,17 @@ async function renderVideo() {
                       @click="vizBg.setMode(m.k)">{{ t(m.label) }}</button>
               <input v-if="bg.mode === 'solid'" type="color" :value="bg.color"
                      @input="vizBg.setColor($event.target.value)"
-                     style="width:38px;height:24px;padding:0;border:1px solid var(--hairline);border-radius:6px;background:none;cursor:pointer" />
+                     style="width:38px;height:24px;padding:0;border:1px solid var(--hairline);border-radius:var(--r-sm);background:none;cursor:pointer" />
               <button v-if="bg.mode === 'image'" class="btn sm" @click="vizBg.pickImage()">
                 <Icon name="folder" :size="12" />{{ bg.path ? t('更换') : t('选择') }}</button>
+              <!-- 动态壁纸：走应用壁纸库，落点是瀑布流背景（与「可视化」页同一份设置） -->
+              <button v-if="bg.mode === 'wallpaper'" class="btn sm" @click="pickBgWall">
+                <Icon name="folder" :size="12" />{{ bg.wallPath ? t('更换') : t('选择') }}</button>
+              <button v-if="bg.mode === 'wallpaper' && bg.wallPath" class="btn sm ghost"
+                      :title="t('关掉动态壁纸，退回主题底')" @click="clearBgWall">✕</button>
+              <span v-if="bg.mode === 'wallpaper'" class="muted small" :title="bg.wallPath || ''">{{ bg.wallPath ? (vizBg.wallName || t('动态壁纸')) : t('还没挑壁纸') }}</span>
             </div>
-            <div v-if="bg.mode === 'image' || bg.mode === 'theme'" class="ve-bg-sliders">
+            <div v-if="bg.mode === 'image' || bg.mode === 'theme' || bg.mode === 'wallpaper'" class="ve-bg-sliders">
               <span class="muted small">{{ t('模糊') }}</span>
               <NumSlider :model-value="bg.blur" @update:model-value="v => { vizBg.setBlur(v) }" :min="0" :max="40" :step="1" :input-width="68" />
               <span class="muted small">{{ t('暗化') }}</span>
@@ -941,54 +954,54 @@ async function renderVideo() {
 
 <style scoped>
 .convert-view { max-width: 820px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
-.conv-info-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 12px; padding: 8px 14px; margin-bottom: 12px; font-size: 12.5px; color: var(--steel); }
+.conv-info-bar { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--r-md); padding: 8px 14px; margin-bottom: 12px; font-size: var(--fs-md); color: var(--steel); }
 .conv-song { color: var(--stone); }
-.conv-form { display: flex; flex-direction: column; gap: 16px; }
-.form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px 20px; }
+.conv-form { display: flex; flex-direction: column; gap: var(--sp-4); }
+.form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--sp-4) var(--sp-5); }
 @media (max-width: 720px) { .form-grid { grid-template-columns: 1fr; } }
-.field-row { display: flex; flex-direction: column; gap: 6px; }
-.field-row label { font-size: 12px; color: var(--steel); font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.field-row { display: flex; flex-direction: column; gap: var(--sp-2); }
+.field-row label { font-size: var(--fs-sm); color: var(--steel); font-weight: 600; display: flex; align-items: center; gap: var(--sp-2); }
 /* ★ 全局 styles.css 的 .field-row 是「设置面板」那一套（label 左 / 控件右 / space-between + 分隔线），
    会一路继承进这张卡片。一旦某一行被内容更高的邻居撑高（比如「背景」），space-between 就把标签和
    控件分别顶到行的上下两端 —— 实测 163px 高的行里两者相距 110px，看着像控件飞出去了。
    下面几条把卡片范围内的 .field-row 重置成「标签在上、控件紧跟其下」。 */
-.ve-card .form-grid { align-items: start; row-gap: 16px; }
-.ve-card .field-row { justify-content: flex-start; align-items: stretch; gap: 6px; padding: 0; border-bottom: 0; }
+.ve-card .form-grid { align-items: start; row-gap: var(--sp-4); }
+.ve-card .field-row { justify-content: flex-start; align-items: stretch; gap: var(--sp-2); padding: 0; border-bottom: 0; }
 .ve-card .field-row:hover { background: none; }
 /* 内容多的格子（背景：模式 chip + 换图 + 两条滑杆 + 说明）整行铺满，内部横向排 */
 .ve-card .field-row.is-wide { grid-column: 1 / -1; }
-.ve-bg-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.ve-bg-inline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-4); }
 .ve-bg-inline .ve-bg-sliders { flex: 1 1 280px; min-width: 220px; margin-top: 0; }
 /* 一行内并排的控件（时长 + 秒数、水印按钮 + 不透明度） */
-.fr-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fr-inline { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .fr-inline .select-input { flex: 1 1 auto; min-width: 0; }
 .gain-row { flex-direction: row; align-items: center; justify-content: space-between; }
 .range { flex: 1; accent-color: var(--ink); }
-.conv-est { display: flex; align-items: center; gap: 10px; background: var(--surface-soft); border-radius: 10px; padding: 8px 14px; font-size: 12px; color: var(--steel); }
-.conv-est b { color: var(--ink); font-size: 15px; margin-right: 8px; font-variant-numeric: tabular-nums; }
+.conv-est { display: flex; align-items: center; gap: var(--sp-3); background: var(--surface-soft); border-radius: var(--r-md); padding: 8px 14px; font-size: var(--fs-sm); color: var(--steel); }
+.conv-est b { color: var(--ink); font-size: var(--fs-lg); margin-right: 8px; font-variant-numeric: tabular-nums; }
 .conv-est em { font-style: normal; color: var(--stone); }
-.btn.big { width: 100%; padding: 12px 18px; font-size: 14px; }
-.conv-progress { display: flex; align-items: center; gap: 10px; height: 20px; background: var(--surface-soft); border-radius: 999px; overflow: hidden; padding: 0 12px; font-size: 11px; color: var(--steel); font-variant-numeric: tabular-nums; }
-.conv-progress .pfill { height: 100%; background: var(--accent); border-radius: 999px; transition: transform var(--motion-base) var(--ease-out); }
-.conv-done-tip { color: var(--success-text); font-size: 12.5px; font-weight: 600; text-align: center; }
+.btn.big { width: 100%; padding: 12px 18px; font-size: var(--fs-lg); }
+.conv-progress { display: flex; align-items: center; gap: var(--sp-3); height: 20px; background: var(--surface-soft); border-radius: var(--r-pill); overflow: hidden; padding: 0 12px; font-size: var(--fs-xs); color: var(--steel); font-variant-numeric: tabular-nums; }
+.conv-progress .pfill { height: 100%; background: var(--accent); border-radius: var(--r-pill); transition: transform var(--motion-base) var(--ease-out); }
+.conv-done-tip { color: var(--success-text); font-size: var(--fs-md); font-weight: 600; text-align: center; }
 /* 转换页进度/完成提示显隐过渡 */
 .cv-enter-active, .cv-leave-active { transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-spring); }
 .cv-enter-from, .cv-leave-to { opacity: 0; transform: translateY(6px); }
 .ve-card { margin-top: 18px; padding: 18px; }
-.ve-head { display: flex; flex-direction: column; gap: 4px; }
-.ve-head b { font-size: 15px; color: var(--ink); }
-.ve-preview-wrap { position: relative; width: 100%; background: var(--surface-soft); border: 1px solid var(--hairline); border-radius: 12px; overflow: hidden; }
+.ve-head { display: flex; flex-direction: column; gap: var(--sp-1); }
+.ve-head b { font-size: var(--fs-lg); color: var(--ink); }
+.ve-preview-wrap { position: relative; width: 100%; background: var(--surface-soft); border: 1px solid var(--hairline); border-radius: var(--r-md); overflow: hidden; }
 .ve-preview-wrap.ve-tpl-landscape { aspect-ratio: 16 / 9; }
 .ve-preview-wrap.ve-tpl-portrait { aspect-ratio: 9 / 16; max-width: 320px; }
 .ve-preview-wrap.ve-tpl-subtitle { aspect-ratio: 16 / 10; }
 .ve-preview-canvas { width: 100%; height: 100%; display: block; }
-.ve-preview-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--stone); font-size: 12px; pointer-events: none; }
+.ve-preview-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--stone); font-size: var(--fs-sm); pointer-events: none; }
 /* 背景控件：跟「可视化」页的 .viz-bg-bar 同一套语言（chip-btn + 细滑杆） */
-.ve-bg-modes { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.ve-bg-sliders { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.ve-bg-modes { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.ve-bg-sliders { display: flex; align-items: center; gap: var(--sp-2); margin-top: 6px; }
 .ve-bg-sliders input[type=range] { flex: 1; min-width: 60px; accent-color: var(--accent); }
-.ve-opts { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--slate); }
-.ve-opts label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.ve-opts { display: flex; flex-wrap: wrap; gap: var(--sp-4); font-size: var(--fs-md); color: var(--slate); }
+.ve-opts label { display: inline-flex; align-items: center; gap: var(--sp-1); cursor: pointer; }
 .ve-opts input[type=checkbox] { accent-color: var(--ink); }
-.num-input { width: 100%; padding: 6px 8px; font-size: 12px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 8px; color: var(--ink); outline: none; box-sizing: border-box; }
+.num-input { width: 100%; padding: 6px 8px; font-size: var(--fs-sm); background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--r-md); color: var(--ink); outline: none; box-sizing: border-box; }
 </style>

@@ -1,4 +1,4 @@
-# L3 step 1: silent install of 5.1.0 in a clean guest (host disables the NIC first).
+﻿# L3 step 1: silent install of 5.1.0 in a clean guest (host disables the NIC first).
 # Pure ASCII only -- the guest reads .ps1 as ANSI when there is no BOM.
 $ErrorActionPreference = 'Continue'
 function Say($k, $v) { Write-Output ($k + ' = ' + $v) }

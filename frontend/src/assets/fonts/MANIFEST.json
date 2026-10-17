@@ -1,0 +1,39 @@
+{
+ "generatedAt": "2026-10-16T14:46:50.446Z",
+ "chars": 2912,
+ "fonts": [
+  {
+   "id": "sans-sc",
+   "family": "FuFumidi Sans",
+   "file": "fufumidi-sans-sc.woff2",
+   "note": "界面正文与中文（可变字重 400–600）",
+   "license": "OFL-1.1",
+   "source": "(cached)",
+   "sourceSha256": null,
+   "outBytes": 777264,
+   "outSha256": "7a252df7292f2c3c86ddcd17ab9f5939b63cb62556af8cff27b88662cfd0c27f"
+  },
+  {
+   "id": "mono",
+   "family": "FuFumidi Mono",
+   "file": "fufumidi-mono.woff2",
+   "note": "数字/遥测（时间码、BPM、百分比）",
+   "license": "OFL-1.1",
+   "source": "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf",
+   "sourceSha256": "48715a42ec242c21e9f02692891e147d022299a52e48d5e413e1a942193ffeda",
+   "outBytes": 35144,
+   "outSha256": "78906507faeae8905bb419aeb0b67becbc98c40ccf3bc1dc3f6dbc54d5c3e2f6"
+  },
+  {
+   "id": "display",
+   "family": "FuFumidi Display",
+   "file": "fufumidi-display.woff2",
+   "note": "仅标题/品牌衬线（正文禁止使用）",
+   "license": "OFL-1.1",
+   "source": "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/cinzel/Cinzel%5Bwght%5D.ttf",
+   "sourceSha256": "f4d83d34d1f6c741193e4acf4b3dff9531e5a67b6aa65228d00a7db72a4e0f34",
+   "outBytes": 19236,
+   "outSha256": "a592bf7a83a62ee938a7f81d18b5a7f33edc91a39dde0535e5f072c956cfb2b5"
+  }
+ ]
+}

@@ -1,4 +1,5 @@
 <script setup>
+import { themeColor, TRACK_FALLBACK } from '../core/palette.js';
 // 可编辑钢琴卷帘：选择 / 画笔 / 橡皮 · 拖拽移动 · 缩放平移 · 撤销重做
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue';
 import { useAppStore } from '../stores/app';
@@ -128,7 +129,7 @@ function cssVar(name, fb) {
    结果按主题缓存：主题切换由 applyTheme 写 documentElement 的内联样式触发，
    用 MutationObserver 失效即可 —— 否则每帧 ~30 次 getComputedStyle 会让整个应用发烫
    （实测后台保活时 getComputedStyle 调用量达 5000+/秒）。 */
-const TRACK_FALLBACK = ['#3b82f6', '#14b8a6', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899'];
+
 let _pal = null;
 function buildPalette() {
   const tracks = [];
@@ -444,7 +445,7 @@ function drawScore(g, W, HK) {
   };
   const ink = pal.steel || '#333';
   const line = pal.hair || 'rgba(0,0,0,.25)';
-  const accent = pal.accent || '#3d8bfd';
+  const accent = pal.accent || themeColor('--t-info', '#3d8bfd');
   const selSet = selection;
   for (let sys = 0; sys < lay.systems; sys++) {
     const y0 = 8 + sys * lay.systemH - scoreScrollY.value;

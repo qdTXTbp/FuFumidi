@@ -1,0 +1,149 @@
+/* ============================================================
+   FuFumidi · 控件契约层（M3/M4）
+   ============================================================
+   为什么需要这一层：字号/圆角/间距在 M1-c 之后已经统一，但**同类控件的形状**仍各写各的 ——
+   实测三个大视图里有 46/43/23 条"控件类"规则，光胶囊控件就有 5px 14px、4px 12px、6px 13px 三种内边距，
+   于是同一个"选中胶囊"在不同页面长得不一样。
+
+   这里把 9 类控件的**形状与状态**固定下来（都是量出来的最常见取值，迁移的视觉差最小）；
+   各视图只保留自己的语义偏差（颜色、宽度、布局位置）。契约只管形状，颜色一律走 token。
+
+   加载顺序：tokens.css → styles.css → typography.css → controls.css（后者可覆盖前者）
+   引入新控件时先看这里有没有现成契约，不要再写一份。
+   ============================================================ */
+
+/* ---------- 1. 控件盒（按钮 / 胶囊 / 分段控件）---------- */
+.fu-ctl {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
+  min-height: 28px;                 /* 命中区下限（参考社区对"小按钮难点"的批评） */
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--slate);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-body);
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.fu-ctl:hover { border-color: var(--border-strong); }
+/* 选中态：本仓库普遍用 active（Vue 的 :class 绑定），is-on 是给新代码的名字，两个都认 */
+.fu-ctl.active, .fu-ctl.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.fu-ctl:disabled, .fu-ctl[disabled] { opacity: .5; cursor: not-allowed; }
+/* 紧凑档：密集工具条里用它，而不是就地改 padding（就地改 = 又长出一档） */
+/* 紧凑档：只缩内边距与字号，**不缩命中区** —— 24px 那版在密集工具条里会点空，
+   而 docs/DESIGN.md §6 定的下限是 28px。 */
+.fu-ctl--sm { padding: 2px var(--sp-2); font-size: var(--fs-xs); }
+/* 方角档：放在表单/卡片里与输入框同形 */
+.fu-ctl--sq { border-radius: var(--r-sm); }
+
+/* ---------- 2. 输入框 / 下拉（含包裹式搜索框）---------- */
+.fu-field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--slate);
+  font-size: var(--fs-md);
+}
+.fu-field input, .fu-field select, .fu-field textarea {
+  flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink);
+  font-size: var(--fs-md); padding: 6px 0;
+}
+.fu-field:focus-within { border-color: var(--accent); box-shadow: var(--shadow-sm); }
+
+/* ---------- 3. chip（可带数值/关闭的小标记）---------- */
+.fu-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-pill);
+  background: var(--surface-soft);
+  color: var(--steel);
+  font-size: var(--fs-xs);
+  line-height: 16px;
+  white-space: nowrap;
+}
+.fu-chip i { font-style: normal; color: var(--stone); }
+
+/* ---------- 4. 标签页 ---------- */
+.fu-tab {
+  padding: var(--sp-1) var(--sp-3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--steel);
+  font-size: var(--fs-md);
+  cursor: pointer;
+}
+.fu-tab.active, .fu-tab.is-on { color: var(--ink); border-bottom-color: var(--accent); font-weight: var(--fw-medium); }
+
+/* ---------- 5. 卡片 ---------- */
+.fu-card {
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------- 6. 浮层面板 ---------- */
+.fu-panel {
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  background: var(--glass-bg-strong, var(--surface));
+  box-shadow: var(--shadow-lg);
+}
+
+/* ---------- 7. 列表行 ---------- */
+.fu-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.fu-row:hover { background: var(--surface-soft); }
+
+/* ---------- 8. 徽标（状态/计数）---------- */
+.fu-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-pill);
+  background: var(--surface-soft);
+  color: var(--stone);
+  font-style: normal;
+  font-size: var(--fs-xs);
+  line-height: 15px;
+  white-space: nowrap;
+}
+.fu-badge.is-ok { background: color-mix(in srgb, var(--t-ok) 16%, transparent); color: var(--t-ok); }
+.fu-badge.is-err { background: color-mix(in srgb, var(--t-err) 16%, transparent); color: var(--t-err); }
+.fu-badge.is-warn { background: color-mix(in srgb, var(--t-warn) 16%, transparent); color: var(--t-warn); }
+
+/* ---------- 9. 空状态 ---------- */
+.fu-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-6) var(--sp-4);
+  color: var(--stone);
+  font-size: var(--fs-md);
+  text-align: center;
+}

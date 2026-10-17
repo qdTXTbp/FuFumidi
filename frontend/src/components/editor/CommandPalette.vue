@@ -84,20 +84,20 @@ function onKey(e) {
 <style scoped>
 /* 自带外壳样式：.ed-modal* 是别的组件的作用域样式，借不到（M2 踩过） */
 .cp-mask { position: fixed; inset: 0; background: rgba(10, 10, 10, 0.28); display: flex; align-items: flex-start; justify-content: center; z-index: var(--z-modal); padding-top: 12vh; }
-.cp-card { width: min(620px, 92vw); background: var(--canvas); border-radius: 14px; box-shadow: 0 24px 64px rgba(16, 24, 40, .24);
+.cp-card { width: min(620px, 92vw); background: var(--canvas); border-radius: var(--r-lg); box-shadow: 0 24px 64px rgba(16, 24, 40, .24);
   display: flex; flex-direction: column; overflow: hidden; }
-.cp-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--hairline); }
-.cp-ic { color: var(--stone); font-size: 13px; }
-.cp-input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--ink); font-size: 14px; }
-.cp-count { font-size: 11px; color: var(--stone); font-family: var(--mono); }
+.cp-head { display: flex; align-items: center; gap: var(--sp-2); padding: 10px 14px; border-bottom: 1px solid var(--hairline); }
+.cp-ic { color: var(--stone); font-size: var(--fs-md); }
+.cp-input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--ink); font-size: var(--fs-lg); }
+.cp-count { font-size: var(--fs-xs); color: var(--stone); font-family: var(--mono); }
 .cp-list { max-height: 52vh; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 1px; }
-.cp-item { display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left; padding: 7px 10px; border: 0; border-radius: 8px;
-  background: transparent; color: var(--ink); font-size: 12.5px; cursor: pointer; }
+.cp-item { display: flex; align-items: baseline; gap: var(--sp-2); width: 100%; text-align: left; padding: 7px 10px; border: 0; border-radius: var(--r-md);
+  background: transparent; color: var(--ink); font-size: var(--fs-md); cursor: pointer; }
 .cp-item.on { background: var(--surface-soft); }
 .cp-item.dis { opacity: .45; cursor: default; }
-.cp-group { flex: none; width: 68px; font-size: 10.5px; color: var(--stone); }
+.cp-group { flex: none; width: 68px; font-size: var(--fs-xs); color: var(--stone); }
 .cp-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cp-hint { flex: none; font-size: 10.5px; color: var(--stone); font-family: var(--mono); }
-.cp-empty { padding: 18px; text-align: center; color: var(--stone); font-size: 12px; }
-.cp-foot { padding: 6px 14px 10px; font-size: 10.5px; color: var(--stone); }
+.cp-hint { flex: none; font-size: var(--fs-xs); color: var(--stone); font-family: var(--mono); }
+.cp-empty { padding: 18px; text-align: center; color: var(--stone); font-size: var(--fs-sm); }
+.cp-foot { padding: 6px 14px 10px; font-size: var(--fs-xs); color: var(--stone); }
 </style>

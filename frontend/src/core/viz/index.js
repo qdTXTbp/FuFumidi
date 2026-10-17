@@ -14,6 +14,8 @@ import { getGLRaster } from './raster/webgl2.js';
 import { resolveTheme } from './state/themes.js';
 import { bloomPass, ensureScene } from './post/bloom2d.js';
 import { LAYERS } from './scene/primitives.js';
+// ★ 背景实现只有一份（core/viz.js）—— 详见下面 paintStage 的注释
+import { paintVizBgDirect } from '../viz.js';
 
 const RENDERERS = new WeakMap();
 const DEFAULT_KEY = {};
@@ -30,28 +32,36 @@ function pixelScale(ctx) {
   try { const m = ctx.getTransform ? ctx.getTransform() : null; return (m && m.a > 0) ? m.a : 1; } catch (e) { return 1; }
 }
 
-/** 舞台预铺：只处理"主题之外"的三档（透明/纯色/图片）；主题底色来自 background 层的图元 */
+/** 舞台预铺：只处理"主题之外"的档位（透明 / 纯色 / 图片 / 动态壁纸 / keep）；
+ *  主题底色来自 background 层的图元（所以 theme 档返回 false = 没铺底）。
+ *
+ *  ★ 这里**必须**转调 core/viz.js 的 paintVizBgDirect —— 早先这张函数是它的第二份拷贝，
+ *    只认 theme/solid/image/transparent。2026-10-17 新增「动态壁纸」档时漏改了这一份，
+ *    后果不是"画得不好看"而是**整块背景哑火**：本函数在 wallpaper 档下任何分支都不命中，
+ *    却仍返回 true（= "我铺好了"），于是编译器也不再发 background 层图元 ——
+ *    用户看到的是"选了动态壁纸，背景什么都没有"。现在实现只有一份。 */
 function paintStage(ctx, w, h, bg = {}) {
   const mode = bg.mode || 'theme';
-  if (mode === 'theme') return false;
-  ctx.save();
-  if (mode === 'transparent') {
-    ctx.clearRect(0, 0, w, h);
-  } else if (mode === 'solid') {
-    ctx.fillStyle = bg.color || '#0b1020';
-    ctx.fillRect(0, 0, w, h);
-  } else if (mode === 'image' && bg.image && bg.image.width) {
-    const blur = Math.max(0, Number(bg.blur) || 0), dim = Math.max(0, Math.min(0.9, Number(bg.dim) || 0));
-    const pad = blur > 0 ? blur * 3 : 0;
-    const s = Math.max((w + pad * 2) / bg.image.width, (h + pad * 2) / bg.image.height);
-    const dw = bg.image.width * s, dh = bg.image.height * s;
-    ctx.filter = blur > 0 ? 'blur(' + blur + 'px)' : 'none';
-    ctx.drawImage(bg.image, (w - dw) / 2, (h - dh) / 2, dw, dh);
-    ctx.filter = 'none';
-    if (dim > 0) { ctx.fillStyle = 'rgba(0,0,0,' + dim + ')'; ctx.fillRect(0, 0, w, h); }
-  }
-  ctx.restore();
+  if (mode === 'theme') return false;     // 主题底由 background 层图元画
+  if (mode === 'keep') return true;       // 调用方已经自己铺过一整帧（导出模板用）
+  if (mode === 'transparent') { ctx.save(); ctx.clearRect(0, 0, w, h); ctx.restore(); return true; }
+  paintVizBgDirect(ctx, w, h, bg);
   return true;
+}
+
+/**
+ * 键盘是**哑光物体**，不该当泛光的发光源。
+ * ★ 实测（2026-10-17 用户："黑键还是太透明不够实"）：白键的泛光光晕会糊到相邻黑键上，
+ *   黑键从 #23262b 被抬成一片灰蓝 —— 看起来"透明、连白键分隔线都透过来"。
+ *   同一画面关掉泛光做 A/B，黑键立刻变实（截图见 _attic/vizrender/bl-A-keys.png 与 bl-B-keys.png）。
+ *   所以把键盘从泛光源里摘出来：场景（音符/光效/粒子）先带泛光合成，键盘再叠一遍。
+ *   光效层（fx）**仍留在泛光源里** —— 那些波动闪光本来就该发光。
+ */
+export function splitKeyboardBloom(prims, wantBloom) {
+  if (!wantBloom) return { on: false, key: [], rest: prims };
+  const key = prims.filter((p) => p.layer === 'keyboard');
+  if (!key.length) return { on: false, key: [], rest: prims };
+  return { on: true, key, rest: prims.filter((p) => p.layer !== 'keyboard') };
 }
 
 function drawLayers(ctx, prims, wantsStats) {
@@ -96,6 +106,7 @@ export function createVizRenderer() {
         transparent: bg.mode === 'transparent',
       });
       const out = compiler.compile(song, tick, compileOpts);
+      const splitKB = splitKeyboardBloom(out.prims, wantBloom);
 
       if (!needScene) {
         ctx.save();
@@ -115,7 +126,7 @@ export function createVizRenderer() {
         texts = out.prims.some((p) => p.k === 'text') ? out.prims.filter((p) => p.k === 'text') : null;
         const mat = (opts.theme && resolveTheme ? resolveTheme(opts.theme) : null) || {};
         const material = (mat && mat.material) || {};
-        gl.draw(out.prims, sc * ssaa, {
+        gl.draw(splitKB.on ? splitKB.rest : out.prims, sc * ssaa, {
           post: wantBloom ? {
             enabled: true,
             bloom: Math.max(0, Number(fx.bloom) || 0) * 1.5,
@@ -124,6 +135,8 @@ export function createVizRenderer() {
             exposure: material.grade == null ? 1 : material.grade,
           } : null,
         });   // text 图元被 WebGL 跳过，留给下面叠字
+        // 键盘叠在后处理之后（哑光、不参与泛光，见 splitKeyboardBloom）
+        if (splitKB.on) gl.draw(splitKB.key, sc * ssaa, { keep: true });
         scene = gl.canvas;
         gpuPost = !!(wantBloom && fx && Number(fx.bloom) > 0.001);
       } else {
@@ -133,7 +146,7 @@ export function createVizRenderer() {
         sctx.setTransform(1, 0, 0, 1, 0, 0);
         sctx.clearRect(0, 0, pw, ph);
         sctx.save(); sctx.scale(sc * ssaa, sc * ssaa);   // 图元是 CSS 单位，这里一次性放大到超采样分辨率
-        drawLayers(sctx, out.prims, false);
+        drawLayers(sctx, splitKB.on ? splitKB.rest : out.prims, false);
         sctx.restore();
       }
       const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -146,6 +159,8 @@ export function createVizRenderer() {
       if (wantBloom && !gpuPost) {
         bloomPass(ctx, scene, tw, th, Math.max(0, Number(fx.bloom) || 0), Math.max(0, Math.min(1, Number(fx.bloomThr) == null ? 0.5 : Number(fx.bloomThr))));
       }
+      // 键盘层：泛光之后单独叠一遍（哑光物体，见 splitKeyboardBloom）
+      if (splitKB.on) { ctx.save(); ctx.scale(sc, sc); drawLayers(ctx, splitKB.key, false); ctx.restore(); }
       // 文字层：GPU 后端不画字（字形质量），统一用 Canvas2D 叠在最上，实时与导出同一条路
       if (texts) { ctx.save(); ctx.scale(sc, sc); drawCanvas2D(ctx, texts); ctx.restore(); }
       ctx.restore();

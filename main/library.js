@@ -116,6 +116,31 @@ function registerLibraryIpc({ ipcMain, path, fs, shell, rustInvoke }) {
   });
 
   /** 在资源管理器中定位曲目文件；文件不存在时退化为打开曲库目录 */
+  /* ★ 改名同时改磁盘文件名（2026-10-17 用户：「重命名同步动磁盘文件名」）。
+     只改曲库显示名不够 —— 用户在资源管理器里看到的还是旧名，导出/分享也还是旧名。
+     规则：同目录改、保留原扩展名；Windows 非法字符剔掉；重名自动加 (2)/(3)…（不覆盖任何文件）。 */
+  ipcMain.handle('library:renameMidi', async (_e, p, newName) => {
+    const src = path.resolve(String(p || ''));
+    if (!src || !fs.existsSync(src)) return { ok: false, error: '文件不存在' };
+    const dir = path.dirname(src);
+    const ext = path.extname(src) || '.mid';
+    let base = String(newName || '')
+      .replace(/[\\/:*?"<>|]/g, ' ')     // Windows 非法字符
+      .replace(/[\r\n\t]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/[. ]+$/, '');              // 结尾的点/空格 Windows 不接受
+    if (!base) return { ok: false, error: '名字不能为空' };
+    if (base.length > 120) base = base.slice(0, 120);
+    let dst = path.join(dir, base + ext);
+    for (let n = 2; fs.existsSync(dst) && path.resolve(dst) !== src; n++) {
+      dst = path.join(dir, base + ' (' + n + ')' + ext);
+    }
+    if (path.resolve(dst) === src) return { ok: true, path: src, renamed: false };
+    try { fs.renameSync(src, dst); } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+    return { ok: true, path: dst, renamed: true, from: src };
+  });
+
   ipcMain.handle('library:reveal', async (_e, p) => {
     try {
       const target = p && inRoot(p) ? String(p) : '';

@@ -930,6 +930,12 @@ def merge_midis(paths, out_mid, tempo=120.0):
             tr.append(msg.copy(time=tick - last))
             last = tick
     merged.save(out_mid)
+    # ★ 按轨名回填 GM 音色（见 engine_omr.apply_gm_programs）——Audiveris 的导出不带音色
+    try:
+        from engine_omr import apply_gm_programs
+        apply_gm_programs(out_mid)
+    except Exception as _e:
+        print("  [音色] 回填跳过：" + str(_e)[:120])
     return {"ok": True, "pages": per_page}
 
 
@@ -1347,6 +1353,11 @@ def merge_pages(pages, out_mid, opts=None):
     }
     if out_mid:
         S2M.write_midi(parsed_out, out_mid)
+    try:
+        from engine_omr import apply_gm_programs
+        apply_gm_programs(out_mid)
+    except Exception as _e:
+        print("  [音色] 回填跳过：" + str(_e)[:120])
     trk = []
     for i, p in enumerate(parts):
         ns = p["notes"]

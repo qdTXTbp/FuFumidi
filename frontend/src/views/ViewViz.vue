@@ -3,6 +3,7 @@ import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount, onActivated
 import { useAppStore } from '../stores/app';
 import { useVizBgStore } from '../stores/vizbg';
 import { getSynth, ensureAudio, getPlayer } from '../audio.js';
+import { FX_DEFAULT_COLORS } from '../core/palette.js';
 
 const app = useAppStore();
 const currentSong = computed(() => app.currentSong);
@@ -126,10 +127,10 @@ function resetColors() {
   vizBg.setFxAny('hueShift', 0);
   vizBg.setFxAny('satAdj', 0);
   vizBg.setFxAny('lightAdj', 0);
-  vizBg.setFxAny('handL', '#4f8dff');
-  vizBg.setFxAny('handR', '#ff7a3d');
-  vizBg.setFxAny('velLow', '#2f6fd0');
-  vizBg.setFxAny('velHigh', '#ff5530');
+  vizBg.setFxAny('handL', FX_DEFAULT_COLORS.handL);
+  vizBg.setFxAny('handR', FX_DEFAULT_COLORS.handR);
+  vizBg.setFxAny('velLow', FX_DEFAULT_COLORS.velLow);
+  vizBg.setFxAny('velHigh', FX_DEFAULT_COLORS.velHigh);
 }
 const fxThemeInput = ref('');        // 自定义主题名（D8：命名交给用户）
 // 参数滑块的当前值（bg.fx 可能还没这批键 —— store 首次读写会补默认）
@@ -148,8 +149,11 @@ function saveThemeAs() {
 function saveBg() { vizBg.save(); }
 function setBgMode(m) { vizBg.setMode(m); }
 function pickBgImage() { void vizBg.pickImage(); }
-// 启动时把上次选过的图读回来（路径有效才用；图没了就退回主题，不留假图片档）
-onMounted(() => { void vizBg.init(); });
+/** 动态壁纸：打开应用的壁纸库，落点选"音符瀑布背景"（state.ui.wallpaperTarget='viz'） */
+function pickBgWall() { app.ui.wallpaperTarget = 'viz'; app.ui.wallpaperOpen = true; }
+function clearBgWall() { vizBg.clearWall(); }
+// 启动时把上次选过的图/壁纸读回来（路径有效才用；没了就退回主题，不留假档位）
+onMounted(() => { void vizBg.init().then(() => vizBg.setWallActive(bg.mode === 'wallpaper')); });
 // 沉浸模式下仪表盘那三张卡片没有意义，直接按瀑布流布局铺满
 const isWaterfall = computed(() => mode.value === 'waterfall' || immersive.value);
 
@@ -280,7 +284,7 @@ function drawChord(cv, syn) {
   ctx2d.fillStyle = bgc; ctx2d.fillRect(0, 0, w, h);
   ctx2d.textAlign = 'center'; ctx2d.textBaseline = 'middle';
   if (chord) {
-    ctx2d.fillStyle = '#ff5530';
+    ctx2d.fillStyle = themeColor('--data-1', '#ff5530');
     ctx2d.font = '700 ' + Math.max(18, Math.round(h * 0.3)) + 'px "Segoe UI", "Microsoft YaHei", sans-serif';
     ctx2d.fillText(chord.name, w / 2, h * 0.34);
     ctx2d.fillStyle = stone;
@@ -334,6 +338,25 @@ function readEnergy(syn) {
 const MIN_FRAME_MS = 15;
 let lastPaint = 0;
 let lastAudioTry = 0;   // 音频引擎未就绪时的重试节流
+// ★ 播放中 ctx 挂起看门狗：context 被环境半途压回 suspended 时 currentTick 冻结，
+//   音符瀑布看起来「完全卡住」（2026-10-17 用户实测 5.2.0；启动体检覆盖不到半途）。
+//   连续 ~1.2s 非 running 就自愈一次（store.healEngineDuringPlay：救不回来就重建并续播）。
+let ctxBadSince = 0;
+let ctxHealAt = 0;
+function watchCtxDuringPlay(syn, now) {
+  if (!syn || !syn.ctx) return;
+  if (app.playing && syn.ctx.state !== 'running') {
+    if (!ctxBadSince) ctxBadSince = now;
+    if (now - ctxBadSince > 1200 && now - ctxHealAt > 5000) {
+      ctxHealAt = now;
+      ctxBadSince = 0;
+      try { app.toast(t('音频引擎异常，正在自动恢复…')); } catch (e) {}
+      try { Promise.resolve(app.healEngineDuringPlay()).catch(() => {}); } catch (e) {}
+    }
+  } else {
+    ctxBadSince = 0;
+  }
+}
 function tick(ts) {
   raf = requestAnimationFrame(tick);
   const now = ts || performance.now();
@@ -342,6 +365,7 @@ function tick(ts) {
   const syn = getSynth();
   const song = currentSong.value && currentSong.value.song;
   const player = getPlayer();
+  watchCtxDuringPlay(syn, now);
   // ★ 这里**不能**再 `if (!syn || !song) return;`：频谱 / 示波器 / 实时和弦三块只需要
   //   AnalyserNode（syn），跟有没有 MIDI 谱面（song）无关。以前这一行把三块一起挡掉了 ——
   //   纯音频曲目、或刚启动还没解析谱面时，三块面板永远空白，连 drawChord 里那句
@@ -396,6 +420,17 @@ function setImmersive(on) {
     app.sidebarOpen = false;
     app.playerbarOpen = false;
     app.ui.immersive = true;
+    // 沉浸标记打在 <html> 上：外壳（分组标签/侧栏/播放栏）与滚动条由 styles.css 统一收掉，
+    // 组件内的 scoped 样式够不到这些兄弟节点。
+    document.documentElement.classList.add('fu-immersive');
+    // 原生标题栏在 web 内容之外，CSS 藏不掉 —— 只有窗口真全屏能收掉它。
+    try { window.fuBridge?.setFullScreen?.(true); } catch (e) {}
+    // 全屏切换会改窗口尺寸，而画布尺寸是"读一次 clientWidth/Height"算出来的：
+    // 立刻 + 120ms + 600ms 各重算一次，把过渡期间的空档也覆盖掉（实测只算一次会留底边）。
+    const remeasure = () => { try { grabCanvases(); window.dispatchEvent(new Event('resize')); } catch (e) {} };
+    nextTick(remeasure);
+    setTimeout(remeasure, 120);
+    setTimeout(remeasure, 600);
     pokeHud();
     app.toast(t('控件 3 秒无操作后自动淡出，移动鼠标或按 I 退出'));
   } else {
@@ -405,6 +440,10 @@ function setImmersive(on) {
       barsSaved = null;
     }
     app.ui.immersive = false;
+    const de = document.documentElement;
+    de.classList.remove('fu-immersive');
+    de.classList.remove('fu-cursor-hidden');
+    try { window.fuBridge?.setFullScreen?.(false); } catch (e) {}
     if (hudTimer) { clearTimeout(hudTimer); hudTimer = null; }
     hudOn.value = true;
   }
@@ -428,6 +467,14 @@ function onKey(e) {
   else if (e.key === 'Escape' && immersive.value) { e.preventDefault(); setImmersive(false); }
 }
 function onPointerMove() { if (immersive.value) pokeHud(); }
+
+/* 控件淡出时连**光标**一起藏（用户要求：按钮 / 进度条 / 光标都能完全隐藏）。
+   光标藏不藏跟着 hudOn 走：动一下鼠标就回来，静止 3 秒后随控件一起消失。 */
+watch([immersive, hudOn], ([im, on]) => {
+  const de = document.documentElement;
+  if (im && !on) de.classList.add('fu-cursor-hidden');
+  else de.classList.remove('fu-cursor-hidden');
+});
 
 /* ---------------- HUD 进度条：拖动时显示本地值，不被播放头拉回 ---------------- */
 const dragging = ref(false);
@@ -466,18 +513,28 @@ function savePrefs() {
 }
 watch([wfZoom, mode], savePrefs);
 
+/* 窗口尺寸变化（含进出全屏 / 拖窗 / 缩放）→ 必须重算画布。
+   原先没有任何 resize 监听：画布尺寸只在挂载与切模式时读一次，
+   全屏后就会沿用旧高度，底部留出一条。 */
+function onWindowResize() {
+  try { grabCanvases(); } catch (e) {}
+  if (immersive.value) pokeHud();
+}
+
 onMounted(() => {
   loadPrefs();
   try { ensureAudio(); } catch (e) { /* 不支持 Web Audio 时仅渲染瀑布 */ }
   grabCanvases();
   window.addEventListener('keydown', onKey);
   window.addEventListener('mousemove', onPointerMove);
+  window.addEventListener('resize', onWindowResize);
   raf = requestAnimationFrame(tick);
 });
 // KeepAlive 保活期间停掉循环：频谱/瀑布每帧都要算 FFT 与大量绘制，
 // 离开本页后继续跑会明显拖慢整个应用
-onActivated(() => { grabCanvases(); if (!raf) raf = requestAnimationFrame(tick); });
-onDeactivated(() => { if (raf) { cancelAnimationFrame(raf); raf = null; } setImmersive(false); });
+// 动态壁纸的播放跟着"页面在不在台前"走：离开本页就暂停解码（别在看不见的地方烧 GPU）
+onActivated(() => { grabCanvases(); if (!raf) raf = requestAnimationFrame(tick); vizBg.setWallActive(bg.mode === 'wallpaper'); });
+onDeactivated(() => { if (raf) { cancelAnimationFrame(raf); raf = null; } setImmersive(false); vizBg.setWallActive(false); });
 onBeforeUnmount(() => {
   onPanelUp();   // 摘掉可能还挂着的拖拽监听
   if (raf) cancelAnimationFrame(raf);
@@ -485,7 +542,9 @@ onBeforeUnmount(() => {
   if (hudTimer) { clearTimeout(hudTimer); hudTimer = null; }
   window.removeEventListener('keydown', onKey);
   window.removeEventListener('mousemove', onPointerMove);
+  window.removeEventListener('resize', onWindowResize);
   setImmersive(false);
+  vizBg.setWallActive(false);
   spec = [];
 });
 </script>
@@ -502,7 +561,7 @@ onBeforeUnmount(() => {
                它本来就是视效的一部分（轨道色 / 按音高推导的两套 HSL），现在住进视效面板。 -->
           <!-- 背景：主题 / 纯色 / 图片 / 透明（叠加层）。SeeMusic 那类软件把"背景图 + 模糊"
                当成主要观感开关，这里补上；透明档配合导出即可当 OBS 叠加层。 -->
-          <button class="chip-btn" :class="{ active: bgMore }" :title="t('音符瀑布背景（主题/纯色/图片/透明）')" @click="bgMore = !bgMore">
+          <button class="chip-btn" :class="{ active: bgMore }" :title="t('音符瀑布背景（主题/纯色/图片/动态壁纸/透明）')" @click="bgMore = !bgMore">
             <Icon name="eye" :size="12" />{{ t('背景') }}
           </button>
           <!-- 视效：3D 键盘 / 粒子光效 / 落键光柱 / 击键光带 / 音符质感。
@@ -529,8 +588,20 @@ onBeforeUnmount(() => {
           <input v-if="bg.mode === 'solid'" type="color" class="viz-bg-color" :value="bg.color" @input="bg.color = $event.target.value; saveBg()" />
           <button class="chip-btn" :class="{ active: bg.mode === 'image' }" @click="setBgMode('image')">{{ t('图片') }}</button>
           <button class="chip-btn" :title="t('选择背景图片') " @click="pickBgImage"><Icon name="folder" :size="12" />{{ t('选择…') }}</button>
+          <!-- ★ 动态壁纸（2026-10-17 用户："音符瀑布背景允许设定动态壁纸"）：
+               走应用**同一套壁纸库**（缩略图 / 下载 / 导入本地视频），只是落点是"瀑布流画面"
+               而不是整窗背景（WallpaperGallery 按 state.ui.wallpaperTarget 分流）。 -->
+          <button class="chip-btn" :class="{ active: bg.mode === 'wallpaper' }"
+                  :title="t('用视频壁纸当瀑布流背景（同样可模糊 / 暗化）')" @click="setBgMode('wallpaper')">{{ t('动态壁纸') }}</button>
+          <button class="chip-btn" :title="t('打开壁纸库，挑一张动态壁纸当音符瀑布背景')" @click="pickBgWall">
+            <Icon name="folder" :size="12" />{{ bg.wallPath ? t('更换') : t('选择…') }}
+          </button>
+          <button v-if="bg.wallPath" class="chip-btn" :title="t('关掉动态壁纸，退回主题底')" @click="clearBgWall">✕</button>
+          <span v-if="bg.mode === 'wallpaper'" class="muted small" :title="bg.wallPath || ''">
+            {{ bg.wallPath ? (vizBg.wallName || t('动态壁纸')) : t('还没挑壁纸') }}
+          </span>
           <button class="chip-btn" :class="{ active: bg.mode === 'transparent' }" :title="t('真·透明：导出的画面可当叠加层')" @click="setBgMode('transparent')">{{ t('透明') }}</button>
-          <template v-if="bg.mode === 'image' || bg.mode === 'theme'">
+          <template v-if="bg.mode === 'image' || bg.mode === 'theme' || bg.mode === 'wallpaper'">
             <span class="muted small">{{ t('模糊') }}</span>
             <NumSlider :model-value="bg.blur" @update:model-value="v => { bg.blur = +v; saveBg() }" :min="0" :max="40" :step="1" range-style="width:88px" :input-width="68" no-input />
             <span class="muted small">{{ t('暗化') }}</span>
@@ -667,30 +738,30 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .viz-page { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.viz-col { display: flex; flex-direction: column; gap: 14px; height: 100%; min-height: 0; }
+.viz-col { display: flex; flex-direction: column; gap: var(--sp-4); height: 100%; min-height: 0; }
 .viz-hero { display: flex; flex-direction: column; min-height: 0; position: relative; }
 .viz-hero .vc-body { height: 46vh; min-height: 260px; position: relative; }
 /* 卡片列用 minmax(0,1fr)：canvas 的内在宽度（300px）会把纯 1fr 撑破并横向裁切 */
-.viz-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.viz-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-4); }
 .viz-card { min-width: 0; }
 .viz-card .vc-body { height: clamp(140px, 20vh, 220px); }
 @media (max-width: 1024px) { .viz-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 720px) { .viz-grid { grid-template-columns: minmax(0, 1fr); } }
-.vc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; font-weight: 600; color: var(--ink); flex-wrap: wrap; }
+.vc-head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: 10px; font-size: var(--fs-md); font-weight: 600; color: var(--ink); flex-wrap: wrap; }
 .vc-head b { letter-spacing: -0.2px; }
-.vc-head .vc-zoom { font-size: 11px; min-width: 44px; text-align: center; font-weight: 500; }
-.vc-body canvas { width: 100%; height: 100%; display: block; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--canvas); }
-.chip-btn.active { background: var(--accent); color: #fff; }
+.vc-head .vc-zoom { font-size: var(--fs-xs); min-width: 44px; text-align: center; font-weight: 500; }
+.vc-body canvas { width: 100%; height: 100%; display: block; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--canvas); }
+.chip-btn.active { background: var(--accent); color: var(--on-accent); }
 /* 背景设置条：低调的一行，不抢画面 */
-.viz-bg-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 12px 8px; font-size: 12px;
+.viz-bg-bar { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; padding: 6px 12px 8px; font-size: var(--fs-sm);
               border-bottom: 1px solid var(--hairline); margin-bottom: 2px; }
 .viz-bg-bar input[type=range] { accent-color: var(--accent); }
 .viz-theme-input {
-  width: 108px; height: 24px; padding: 0 8px; font-size: 12px;
-  border: 1px solid var(--hairline); border-radius: 7px;
+  width: 108px; height: 24px; padding: 0 8px; font-size: var(--fs-sm);
+  border: 1px solid var(--hairline); border-radius: var(--r-sm);
   background: var(--surface); color: var(--ink);
 }
-.viz-bg-color { width: 28px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: transparent; }
+.viz-bg-color { width: 28px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; }
 .viz-page.waterfall .viz-grid { display: none; }
 .viz-page.waterfall .viz-hero { flex: 1; }
 /* 全屏瀑布流：不写死 vh 魔法数，直接吃掉剩余高度（窗口变化时自适应） */
@@ -700,18 +771,29 @@ onBeforeUnmount(() => {
 /* ★ 沉浸态的底色必须与非沉浸的透明档**完全一致**（用户实测：两边背景不一样）。
    统一用 --canvas：非沉浸那边由 .vc-body.bd-canvas 铺同色，两边看起来才是同一个背景。
    HUD 的可读性靠它自己的深色渐变 + 深色 chip 解决，不靠整块改底色。 */
-.viz-page.immersive { padding: 0; max-width: none; background: var(--canvas); }
+/* ★ fixed + inset:0：实测旧写法在沉浸态下画面**下移 61px（顶栏高度）、右侧留 10px（滚动条槽）**——
+   只写 padding:0/max-width:none 管不到父容器的内边距与滚动条。铺满由这里保证，不靠外层。 */
+.viz-page.immersive { position: fixed; inset: 0; z-index: 30; padding: 0; max-width: none; background: var(--canvas); }
 .viz-page.immersive .viz-hero {
   border: 0; border-radius: 0; background: transparent; box-shadow: none; padding: 0;
 }
 .vc-body canvas.cv-transparent { background: transparent; }
 .vc-body.bd-canvas { background: var(--canvas); }
 .viz-page.immersive .vc-body canvas { border: 0; border-radius: 0; }
+/* ★ 高度链必须显式到底：.vc-body 靠 flex:1 撑，而 .viz-col/.viz-hero 若没有 100%，
+   全屏切换（窗口从 1268×785 变 1536×960）时会把画布留出一条底边（用户实测反馈「底部有一点没挡住」）。
+   这里把整条链钉死，并让画布 block 化、去掉任何边框/圆角带来的 1~2px 误差。 */
+.viz-page.immersive,
+.viz-page.immersive .viz-col,
+.viz-page.immersive .viz-hero { height: 100%; }
+.viz-page.immersive .viz-hero { display: flex; flex-direction: column; }
+.viz-page.immersive .vc-body { flex: 1 1 auto; min-height: 0; height: auto; }
+.viz-page.immersive .vc-body canvas { display: block; width: 100%; height: 100%; }
 .viz-page.immersive .vc-head {
   position: absolute; top: 0; left: 0; right: 0; z-index: 3;
   margin: 0; padding: 8px 14px;
   background: linear-gradient(to bottom, rgba(0, 0, 0, .5), rgba(0, 0, 0, 0));
-  color: #fff;
+  color: var(--on-accent);
   transition: opacity var(--motion-slow) var(--ease-out);
 }
 /* 沉浸态的控件压在画面之上：统一改成白色系，深浅主题下都能读 */
@@ -719,33 +801,33 @@ onBeforeUnmount(() => {
 .viz-page.immersive .vc-head .chip-btn {
   background: rgba(0, 0, 0, .45);
   border-color: rgba(255, 255, 255, .22);
-  color: #fff;
+  color: var(--on-accent);
 }
 .viz-page.immersive .vc-head .chip-btn:hover { background: rgba(0, 0, 0, .62); }
-.viz-page.immersive .vc-head .chip-btn.active { background: #fff; color: #0a0a0a; }
+.viz-page.immersive .vc-head .chip-btn.active { background: var(--btn-bg); color: var(--btn-fg);   /* 反相实心：深色档下原来写死近黑，等于看不清 */ }
 .viz-page.immersive .vc-head .muted,
 .viz-page.immersive .vc-head .vc-zoom { color: rgba(255, 255, 255, .82); }
 
 .viz-hud {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 3;
-  display: flex; align-items: center; gap: 12px;
+  display: flex; align-items: center; gap: var(--sp-3);
   padding: 10px 16px;
   background: linear-gradient(to top, rgba(0, 0, 0, .52), rgba(0, 0, 0, 0));
-  color: #fff;
+  color: var(--on-accent);
   transition: opacity var(--motion-slow) var(--ease-out);
 }
 .hud-btn {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex; align-items: center; gap: var(--sp-2);
   flex: none;
   padding: 7px 12px; border: 1px solid rgba(255, 255, 255, .24);
-  border-radius: var(--radius-full, 999px);
-  background: rgba(255, 255, 255, .16); color: #fff;
-  font-size: 12.5px; font-weight: 600; cursor: pointer;
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, .16); color: var(--on-accent);
+  font-size: var(--fs-md); font-weight: 600; cursor: pointer;
 }
 .hud-btn:hover { background: rgba(255, 255, 255, .28); }
-.hud-time { flex: none; font-size: 12px; font-variant-numeric: tabular-nums; opacity: .92; }
-.hud-name { flex: none; max-width: 32%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; opacity: .92; }
-.hud-seek { flex: 1; min-width: 0; accent-color: #fff; }
+.hud-time { flex: none; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; opacity: .92; }
+.hud-name { flex: none; max-width: 32%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-md); font-weight: 600; opacity: .92; }
+.hud-seek { flex: 1; min-width: 0; accent-color: var(--on-accent); }
 .hud-exit { margin-left: auto; }
 /* 静止后整层隐去：只留画面 */
 .hud-hidden { opacity: 0; pointer-events: none; }
@@ -765,14 +847,14 @@ onBeforeUnmount(() => {
   resize: both;
   overflow: auto;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--r-md);
   background: color-mix(in srgb, var(--card) 90%, transparent);
   backdrop-filter: blur(12px) saturate(1.08);   /* 玻璃感：面板压着画面时仍然能看出下面的音符 */
   box-shadow: 0 18px 50px rgba(0, 0, 0, .45);
   color: var(--ink);
 }
 .fx-panel-head {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: var(--sp-2);
   padding: 8px 10px;
   border-bottom: 1px solid var(--line);
   cursor: move;
@@ -780,15 +862,15 @@ onBeforeUnmount(() => {
   touch-action: none;          /* 拖动时不要触发页面滚动/手势 */
   position: sticky; top: 0;
   background: inherit;
-  border-radius: 12px 12px 0 0;
+  border-radius: var(--r-md) var(--r-md) 0 0;
 }
-.fx-panel-head b { font-size: 12.5px; }
+.fx-panel-head b { font-size: var(--fs-md); }
 .fx-panel-head .chip-btn { cursor: pointer; }
 .fx-panel-body { display: flex; flex-direction: column; padding-bottom: 6px; }
 /* 面板里的控件比工具条里更紧凑：窄面板下换行次数少一半 */
-.fx-panel-body .viz-bg-bar { padding: 5px 10px 6px; gap: 6px; }
-.fx-panel-body .chip-btn { padding: 3px 8px; font-size: 11.5px; }
-.fx-panel-body :deep(.muted.small) { font-size: 11px; }
+.fx-panel-body .viz-bg-bar { padding: 5px 10px 6px; gap: var(--sp-2); }
+.fx-panel-body .chip-btn { padding: 3px 8px; font-size: var(--fs-sm); }
+.fx-panel-body :deep(.muted.small) { font-size: var(--fs-xs); }
 .fx-panel-body .viz-bg-bar { border-radius: 0; }
 @media (max-width: 720px) {
   .hud-name { display: none; }

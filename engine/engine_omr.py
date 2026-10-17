@@ -1290,6 +1290,29 @@ def extract_melody(notes):
     return out
 
 
+
+def apply_gm_programs(path):
+    """按轨名回填 GM 音色（实现见 engine/midi_programs.py）。
+
+    ★ 用户实测（2026-10-17）：「识别出来的 midi 轨道很多，但没有按照谱子的音色来设定
+      不同轨道的音色，全是钢琴的音色」。查证：38 条轨**一条 program_change 都没有**，
+      而且音符全在 channel 0。Audiveris 的 MIDI 导出本身不带音色，内置后端只分左右手，
+      两条路径都缺这一笔 —— 所以这里统一在**写完 MIDI 之后**按 track_name 回填，与后端无关。
+    """
+    try:
+        from midi_programs import apply_programs
+        rows = apply_programs(path)
+        named = [r for r in rows if r.get("program") is not None]
+        if named:
+            show = ", ".join("%s->%d" % (str(r["name"])[:16], r["program"]) for r in named[:6])
+            print("  [音色] 已按轨名回填 GM 音色：%d 轨（%s%s）" % (
+                len(named), show, " ..." if len(named) > 6 else ""))
+        return rows
+    except Exception as e:
+        print("  [音色] 回填失败（不影响出谱）：" + str(e)[:160])
+        return []
+
+
 def write_midi(notes, out_path, opts):
     """写类型 1 MIDI：0 号轨速度，之后按谱表（高音/低音）分轨。"""
     import mido
@@ -1462,6 +1485,7 @@ def main(argv=None):
         return 1
     if args.out:
         write_midi(all_notes, args.out, args)
+        apply_gm_programs(args.out)
 
     overlays = []
     if args.overlay:

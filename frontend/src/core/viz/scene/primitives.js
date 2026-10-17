@@ -9,7 +9,11 @@
 // ============================================================
 
 /** 层顺序 —— 渲染顺序由它决定，每一层都可有独立的开关与透明度 */
-export const LAYERS = ['background', 'notes', 'impact', 'keyboard', 'particles', 'overlay'];
+/* ★ 'fx' 是 2026-10-17 为"光效遮挡关系"加的层：它排在 keyboard **之后**。
+   原先击键光柱/粒子光带都在 'impact' 层 —— 那是**琴键之前**，于是光柱的下半截被键面盖住，
+   在键顶露出一条横向硬边（用户："光效的遮挡关系有问题、上游有生硬的转折"）。
+   光是从键面往上洒的：它属于"压在键盘之上"的一层，所以单独给一层放在 keyboard 之后。 */
+export const LAYERS = ['background', 'notes', 'impact', 'keyboard', 'fx', 'particles', 'overlay'];
 export const LAYER_INDEX = LAYERS.reduce((m, l, i) => (m[l] = i, m), {});
 
 const P = (k, layer, o) => Object.assign({ k, layer }, o);

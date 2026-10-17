@@ -16,7 +16,7 @@ import { noteColorOf } from '../state/colors.js';
 import { withAlpha, noteStops, shade } from '../state/palette.js';
 import * as P from './primitives.js';
 import { buildNote } from './note.js';
-import { projectX, depthScale, beamQuads } from './effects.js';
+import { projectX, depthScale, beamQuads, keyRipple } from './effects.js';
 import { buildKeyboard, makeKeyboardProjection } from './keyboard.js';
 
 const DEFAULT_BUDGET = { spark: 420, ring: 60, beam: 90 };
@@ -26,6 +26,7 @@ export function createCompiler() {
     songRef: null, byPitch: new Map(), centerPitch: 60,
     lastD: -1, seed: 0, hitPulse: 0,
     parts: [], keyGlow: new Map(), keyFlash: new Map(),
+    press: new Map(),        // 每键"按下量"包络（见下面 state()）——琴键下沉/落高度跟它走
   };
 
   /** 粒子更新（物理），返回存活的粒子；预算按 kind 裁剪 */
@@ -169,15 +170,25 @@ export function createCompiler() {
           // ★ fx.gloss（面板「音符质感」）必须真的接上：上一版它只是个没人读的开关（实测死控件）。
           //   接上后它管三件事：落点光晕、白热内芯、边缘高光。
           const gloss = fx.gloss !== false;
-          if (gloss && near > 0.02) {                     // 落点光晕
-            pr.push(P.glow('notes', sx + cw / 2, Math.min(bottom, wN), 0, Math.max(7, cw * 0.9),
-              color, { alpha: 0.5 * near * (0.5 + 0.5 * velN), blend: 'lighter' }));
-          }
+          /* ★★ 这两个部件**必须从四边形取点**（2026-10-17 用户："残影"，并给了关键描述：
+             「和音符的间隙一一对应，从上往下走到底时和音符汇合」）。
+             原先它们画在**未剪切**的列中心 sx/cw 上，而本体吃 cam.noteQuad 的透视：
+             透视把音符越往高处推得越斜，于是每颗音符下沿都挂着一道横向偏移的亮线 ——
+             它落在音符与下一颗音符的间隙里（"和间隙一一对应"），越高偏得越多，
+             到落点线处 t=0 是恒等映射、两者重合（"走到底时和音符汇合"）。这就是残影。
+             现在两处都改成取 quad 的**落点边**（底边），与本体严格同源。 */
           // 音符本体：玻璃质感（主体 + 边缘亮线 + 纵向高光 + 上下收口），见 scene/note.js
           // 不透明度受「音符不透明度」滑杆控制，再乘纵深淡出（越远越淡）
           const quad = ps > 0.001
             ? cam.noteQuad(sx, sx + cw, top, bottom)
             : [sx, top, sx + cw, top, sx + cw, bottom, sx, bottom];
+          // ★ 落点边：下面两个"落点部件"都从这里取点（必须在 quad 之后）
+          const bmx = (quad[4] + quad[6]) / 2;
+          const bmy = Math.min((quad[5] + quad[7]) / 2, wN);
+          if (gloss && near > 0.02) {                     // 落点光晕
+            pr.push(P.glow('notes', bmx, bmy, 0, Math.max(7, cw * 0.9),
+              color, { alpha: 0.5 * near * (0.5 + 0.5 * velN), blend: 'lighter' }));
+          }
           const parts = buildNote(P, {
             quad, width: cw, height: bh, color, radius: theme.note.radius,
             alpha: noteAlpha * (1 - 0.5 * depth) * outA, velN, gloss, z: Math.floor(bottom),
@@ -185,7 +196,8 @@ export function createCompiler() {
           for (const q of parts) pr.push(q);
           // 落点处的那道白热横线（"音符砸到键上"的瞬间），仍归主题的 edge 强度管
           if (gloss && theme.note.edge > 0) {
-            pr.push(P.line('notes', sx + 2, Math.min(bottom, wN) - 1, sx + cw - 2, Math.min(bottom, wN) - 1,
+            // 沿 quad 的底边（BL→BR）画，两端各内缩 2px；透视下这条边本身就是斜的，跟着斜才对
+            pr.push(P.line('notes', quad[6] + 2, bmy - 1, quad[4] - 2, bmy - 1,
               withAlpha('#ffffff', theme.note.edge * (1 - depth) * (0.5 + 0.5 * velN)), { lw: 1.4, z: Math.floor(bottom) + 0.4 }));
           }
         }
@@ -197,13 +209,14 @@ export function createCompiler() {
     }
 
     // ============================================================
-    // 3) impact —— 击键线光带、波纹、闪光、光柱、粒子（按预算裁剪）
+    // 3) 击键光效 —— 击键线光带、波纹、闪光、光柱、粒子（按预算裁剪）
+    //    ★ 光效应画在 **fx 层**（在 keyboard 之后）：它们压在键面上，若留在 impact 层会被键面切出硬边。
     // ============================================================
     state.hitPulse = Math.max(0, state.hitPulse - 0.06);
     if (wN > 0) {
-      pr.push(P.rect('impact', 0, wN - 46, w, 48,
+      pr.push(P.rect('fx', 0, wN - 46, w, 48,
         { stops: ['rgba(0,0,0,0)', withAlpha('#7fb6ff', 0.04 + 0.2 * Math.max(state.hitPulse, energy * 0.6))], dir: 'v' }, { z: -5 }));
-      pr.push(P.line('impact', 0, wN, w, wN, withAlpha('#9cc4ff', 0.1 + 0.5 * state.hitPulse + 0.2 * energy), { lw: 1 + state.hitPulse * 1.6, z: -4 }));
+      pr.push(P.line('fx', 0, wN, w, wN, withAlpha('#9cc4ff', 0.1 + 0.5 * state.hitPulse + 0.2 * energy), { lw: 1 + state.hitPulse * 1.6, z: -4 }));
     }
     const partScale = Math.max(0.2, Math.min(2, fx.partScale == null ? 1 : Number(fx.partScale)));
     if (forward) {
@@ -245,19 +258,47 @@ export function createCompiler() {
           const on = act !== undefined || liveSet.has(pitch);
           const gv = on ? 1 : decay(state.keyGlow, pitch, 0.09);
           const fv = (fx.flash || 0) > 0 ? decay(state.keyFlash, pitch, 0.14) : 0;
-          return { gv, fv, color: act !== undefined ? act : withAlpha('#ffffff', 0.5) };
+          /* ★ 按下量包络（2026-10-17 用户："按压效果不够丝滑和明显"）。
+             gv 是**开关量**：命中瞬间就是 1、之后线性衰减 —— 琴键下沉直接跟它，必然"一步到位"，
+             所以看起来是"啪"地跳下去而不是按下去。
+             这里给每个键单独一条**时间常数**包络：攻 35ms、松 110ms，按 dt 指数趋近。
+             起手有 2~3 帧的过渡、回弹更慢，两帧之间不会跳；键盘层优先读它（读不到退回 gv，
+             所以纯几何单测里传 {gv:1} 仍然成立）。 */
+          const target = on ? 1 : 0;
+          const prevD = state.lastD < 0 ? d : state.lastD;
+          const frameDt = d - prevD;
+          let pp = state.press.get(pitch);
+          if (!pp) { pp = { p: 0, v: 0 }; state.press.set(pitch, pp); }
+          // ★ 只在"时间真的前进了"时积分：同一 tick 连编两次（确定性单测）必须给出同样的图元
+          if (frameDt > 0.0008) {
+            const sdt = Math.min(0.05, frameDt);
+            const steps = sdt > 0.02 ? 2 : 1;          // 掉帧时拆子步，弹簧不会炸
+            const h = sdt / steps;
+            for (let si = 0; si < steps; si++) {
+              const acc = 900 * (target - pp.p) - 26 * pp.v;   // 刚度 900 / 阻尼 26 → ζ≈0.43
+              pp.v += acc * h;
+              pp.p += pp.v * h;
+            }
+          }
+          if (!target && pp.p < 0.003 && Math.abs(pp.v) < 0.01) state.press.delete(pitch);
+          const prs = Math.max(0, Math.min(1.25, pp.p));   // 允许一点过冲 → 按下时"dig"一下再回稳
+          return { gv, fv, prs, color: act !== undefined ? act : withAlpha('#ffffff', 0.5) };
         },
       });
       for (const q of kb.prims) pr.push(q);
     }
 
-    // 波纹（半圆鼓包简化成键线上的小发光）
+    // 键缘闪光：5 种样式按下标（音高 + 力度档）确定性轮换 —— 见 effects.js 的 keyRipple
     if (fx.hitLine !== false && wN > 0) {
       for (const [pitch, color] of sounding) {
         const pi = ensurePm()[pitch]; if (!pi) continue;
         const { sx: sxB, cw: cwB } = pitchGeom(pitch, ensurePm(), g, wk0);
-        // 落点线上的光晕：t=0 处投影恒等，所以这里天然就是对的位置（写上 projectX 只为表明同一套相机）
-        pr.push(P.glow('impact', projectX(cam, ps, sxB + cwB / 2, wN), wN, 1, Math.max(4, Math.min(cwB * 0.42, 9)), color, { alpha: 0.3, blend: 'lighter' }));
+        const velN = Math.max(0, Math.min(1, (pi.vel == null ? 90 : pi.vel) / 127));
+        // 样式下标：音高 + 力度档（不用随机数 —— 随机会让同一次按键在相邻帧换样式，看着像抖动）
+        const idx = pitch + Math.round(velN * 7);
+        for (const q of keyRipple(P, {
+          x: projectX(cam, ps, sxB + cwB / 2, wN), y: wN, w: cwB, color, life: pi.life, velN, index: idx, alpha: 0.34,
+        })) pr.push(q);
       }
     }
 

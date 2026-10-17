@@ -625,7 +625,7 @@ onBeforeUnmount(() => {
             <div class="fr-hint">{{ t('下载需授权的模型（MuScriptor 等）时必填') }}</div>
           </div>
           <div class="fr-ctl col">
-            <div style="display:flex;gap:6px;width:100%">
+            <div style="display:flex;gap:var(--sp-2);width:100%">
               <input :type="hfTokenVisible ? 'text' : 'password'" v-model="hfToken" class="ov-input mono" style="flex:1;min-width:200px" :placeholder="t('hf_xxxx（huggingface.co/settings/tokens 创建）')" @change="saveHfToken" />
               <button class="btn sm" @click="hfTokenVisible = !hfTokenVisible">{{ hfTokenVisible ? t('隐藏') : t('显示') }}</button>
               <button class="btn sm" @click="saveHfToken">{{ t('保存') }}</button>
@@ -672,7 +672,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="fr-ctl col">
           <input v-model="enginePath" class="ov-input mono" style="width:100%;max-width:340px" :placeholder="t('留空 = 自动检测')" @change="savePath" />
-          <div style="display:flex;gap:6px">
+          <div style="display:flex;gap:var(--sp-2)">
             <button class="btn sm" @click="autoPy">{{ t('自动检测') }}</button>
             <button class="btn sm" @click="testEngine" :disabled="pyState.busy">{{ pyState.busy ? t('正在检查…') : t('测试引擎') }}</button>
           </div>
@@ -764,7 +764,7 @@ onBeforeUnmount(() => {
             <span v-else class="lib-badge off">{{ t('纯 JS 模式') }}</span>
           </div>
           <div class="lib-path" :title="lib.dir">{{ lib.dir || t('（尚未创建）') }}</div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <div style="display:flex;gap:var(--sp-2);flex-wrap:wrap">
             <button class="btn sm" @click="revealLibDir">{{ t('打开曲库目录') }}</button>
             <button class="btn sm primary" :disabled="lib.verifyBusy" @click="verifyLibrary">{{ lib.verifyBusy ? t('体检中…') : t('曲库文件体检') }}</button>
             <button class="btn sm" :disabled="lib.dupeBusy" @click="findDupes">{{ lib.dupeBusy ? t('检测中…') : t('检测重复文件') }}</button>
@@ -940,22 +940,22 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.rc-tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
-.rc-tab { border: 1px solid var(--hairline); background: var(--canvas); color: var(--steel); padding: 7px 14px; border-radius: var(--radius-full, 999px); font-size: 13px; cursor: pointer; transition: background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out), opacity var(--motion-fast) var(--ease-out); white-space: nowrap; }
+.rc-tabs { display: flex; gap: var(--sp-2); margin-bottom: 14px; flex-wrap: wrap; }
+.rc-tab { border: 1px solid var(--hairline); background: var(--canvas); color: var(--steel); padding: 7px 14px; border-radius: var(--r-pill); font-size: var(--fs-md); cursor: pointer; transition: background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out), opacity var(--motion-fast) var(--ease-out); white-space: nowrap; }
 .rc-tab:hover { background: var(--surface-soft); color: var(--ink); }
 .rc-tab.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--ink); font-weight: 600; }
 /* 标签页内容容器：统一去掉末个子卡片的悬挂外边距，避免底部出现多余空白 */
 .rc-tab-content > :last-child { margin-bottom: 0; }
 .res-sec { margin-bottom: 14px; }
 .res-sec-head {
-  display: flex; align-items: center; gap: 7px;
-  font-size: 13.5px; font-weight: 700; color: var(--ink);
+  display: flex; align-items: center; gap: var(--sp-2);
+  font-size: var(--fs-md); font-weight: 700; color: var(--ink);
   margin-bottom: 12px; letter-spacing: -0.2px;
 }
 .res-result { width: 520px; max-width: 92vw; }
 .res-result-loading {
-  display: flex; align-items: center; gap: 10px;
-  color: var(--stone); font-size: 13px;
+  display: flex; align-items: center; gap: var(--sp-3);
+  color: var(--stone); font-size: var(--fs-md);
   padding: 24px 0; justify-content: center;
 }
 .res-spinner {
@@ -968,33 +968,33 @@ onBeforeUnmount(() => {
    否则会与全局规则同特异度打架，导致弹窗下方留大片空白 */
 .res-result-text {
   white-space: pre-wrap; word-break: break-word;
-  font-family: var(--mono); font-size: 12px; line-height: 1.7;
+  font-family: var(--mono); font-size: var(--fs-sm); line-height: 1.7;
   color: var(--slate); background: var(--surface-soft);
-  border: 1px solid var(--hairline); border-radius: 10px;
+  border: 1px solid var(--hairline); border-radius: var(--r-md);
   padding: 12px 14px; overflow: auto;
   margin: 0;
 }
-.res-bar { flex: 1; min-width: 90px; height: 5px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; margin: 4px 0 0; }
-.res-bar-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: transform var(--motion-base) var(--ease-out); }
-.res-bar-err { flex-basis: 100%; font-size: 10.5px; color: var(--error); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.res-bar { flex: 1; min-width: 90px; height: 5px; border-radius: var(--r-pill); background: var(--surface-soft); overflow: hidden; margin: 4px 0 0; }
+.res-bar-fill { height: 100%; background: var(--accent); border-radius: var(--r-pill); transition: transform var(--motion-base) var(--ease-out); }
+.res-bar-err { flex-basis: 100%; font-size: var(--fs-xs); color: var(--error); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 曲库文件与 Rust 核心 */
-.lib-stats { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; max-width: 440px; }
-.lib-badge { padding: 1px 8px; border-radius: 999px; background: var(--surface-soft); color: var(--slate); font-size: 10.5px; font-family: var(--mono); white-space: nowrap; }
+.lib-stats { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; justify-content: flex-end; max-width: 440px; }
+.lib-badge { padding: 1px 8px; border-radius: var(--r-pill); background: var(--surface-soft); color: var(--slate); font-size: var(--fs-xs); font-family: var(--mono); white-space: nowrap; }
 .lib-badge.on { background: var(--success-bg); color: var(--success-text); }
 .lib-badge.off { background: var(--surface-soft); color: var(--stone); }
-.lib-path { font-family: var(--mono); font-size: 10.5px; color: var(--stone); max-width: 440px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lib-result { font-size: 12px; color: var(--slate); line-height: 1.8; padding: 8px 10px; margin-top: 8px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface-soft); }
+.lib-path { font-family: var(--mono); font-size: var(--fs-xs); color: var(--stone); max-width: 440px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-result { font-size: var(--fs-sm); color: var(--slate); line-height: 1.8; padding: 8px 10px; margin-top: 8px; border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface-soft); }
 .lib-result b { color: var(--ink); font-family: var(--mono); }
 .lib-result b.bad { color: var(--error); }
-.lib-bad { font-family: var(--mono); font-size: 10.5px; color: var(--stone); word-break: break-all; margin-top: 2px; }
-.lib-err { margin-top: 8px; font-size: 11.5px; color: var(--error); word-break: break-all; }
+.lib-bad { font-family: var(--mono); font-size: var(--fs-xs); color: var(--stone); word-break: break-all; margin-top: 2px; }
+.lib-err { margin-top: 8px; font-size: var(--fs-sm); color: var(--error); word-break: break-all; }
 /* 识谱引擎（Audiveris）：路径很长，必须能换行，否则整卡被撑宽 */
 .omr-run { color: var(--accent); font-variant-numeric: tabular-nums; }
 .omr-bad { color: var(--error); }
 /* OCR 语言包：一行一种语言，代码 + 名称 + 体积 + 安装/移除 */
-.omr-langs { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
-.omr-lang { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px;
-  border: 1px solid var(--line); border-radius: 999px; background: var(--bg); font-size: 11.5px; color: var(--muted); }
+.omr-langs { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin: 6px 0 2px; }
+.omr-lang { display: inline-flex; align-items: center; gap: var(--sp-2); padding: 3px 8px;
+  border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--bg); font-size: var(--fs-sm); color: var(--muted); }
 .omr-lang b { color: var(--text); font-weight: 600; }
 .omr-lang-nm { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .omr-lang-ok { color: var(--success-text); }

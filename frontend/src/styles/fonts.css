@@ -1,0 +1,38 @@
+/* ============================================================
+   FuFumidi · 内置字体（M1-b）
+   ============================================================
+   三款都是 OFL-1.1（可随应用分发），源与 SHA-256 见 assets/fonts/MANIFEST.json。
+   ★ 全部经过**字符子集化**：思源黑体全量 16.95 MB → 759 KB（只留 UI 实际用到的
+     2,912 个字符，其中汉字 2,705），等宽 34 KB、衬线 19 KB，合计 812 KB。
+     生成脚本：node scripts/fetch-fonts.mjs（幂等，可重跑）。
+
+   为什么必须内置：应用是离线的，系统字体在不同 Windows 版本/语言下差异很大
+   （微软雅黑 vs 思源黑体 vs 苹方），排版会飘；数字走等宽才不会在时间码上跳字。
+   ============================================================ */
+
+/* 界面正文与中文：可变字重，一个文件覆盖 400–600 */
+@font-face {
+  font-family: "FuFumidi Sans";
+  src: url("../assets/fonts/fufumidi-sans-sc.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* 数字/遥测：时间码、BPM、百分比 —— 等宽 + tabular 数字 */
+@font-face {
+  font-family: "FuFumidi Mono";
+  src: url("../assets/fonts/fufumidi-mono.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* 仅标题/品牌：拉丁衬线（正文**禁止**使用 —— 社区对"超粗/装饰体滥用"的批评） */
+@font-face {
+  font-family: "FuFumidi Display";
+  src: url("../assets/fonts/fufumidi-display.woff2") format("woff2-variations");
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+}

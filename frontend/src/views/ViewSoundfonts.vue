@@ -436,7 +436,7 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
       <div class="sf-hint" style="color:var(--steel)">
         {{ t('这里只列你自己导入的音色文件；从「内置精选」下载的在上一栏，两处不会重复。名字、作者、来源、标签、分类都可以改，改完会被记住。') }}
       </div>
-      <div v-if="customs.length" class="row" style="gap:8px;margin-top:8px;align-items:center">
+      <div v-if="customs.length" class="row" style="gap:var(--sp-2);margin-top:8px;align-items:center">
         <input v-model="sfQuery" class="text-input" :placeholder="t('搜名字 / 作者 / 标签 / 分类')" style="max-width:250px;padding:5px 8px" />
         <span class="muted small" v-if="sfQuery">{{ t('匹配 ') + customsShown.length + t(' 个') }}</span>
       </div>
@@ -467,7 +467,7 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
             <input v-model="editForm.source" class="text-input" :placeholder="t('来源')" />
             <input v-model="editForm.category" class="text-input" :placeholder="t('分类')" />
             <input v-model="editForm.tags" class="text-input" :placeholder="t('标签（逗号分隔）')" />
-            <div class="row" style="gap:6px">
+            <div class="row" style="gap:var(--sp-2)">
               <button class="btn sm primary" @click="saveEdit(item)">{{ t('保存') }}</button>
               <button class="btn sm ghost" @click="cancelEdit">{{ t('取消') }}</button>
               <button class="btn sm ghost danger" @click="resetEdit(item)">{{ t('恢复原名') }}</button>
@@ -490,44 +490,44 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
 
 <style scoped>
 .sf-card { padding: 18px 20px; margin-bottom: 14px; }
-.sf-head { display: flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 700; color: var(--ink); margin-bottom: 12px; letter-spacing: -0.2px; }
-.sf-head em.sf-sub { font-style: normal; font-size: 11.5px; font-weight: 500; color: var(--stone); margin-left: 2px; }
-.sf-active-name { margin-left: auto; font-size: 13px; font-weight: 600; color: var(--accent); word-break: break-all; text-align: right; }
-.sf-active-hint { font-size: 12px; color: var(--stone); line-height: 1.7; }
-.sf-hint { font-size: 11.5px; color: var(--amber); margin-top: 10px; }
+.sf-head { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-md); font-weight: 700; color: var(--ink); margin-bottom: 12px; letter-spacing: -0.2px; }
+.sf-head em.sf-sub { font-style: normal; font-size: var(--fs-sm); font-weight: 500; color: var(--stone); margin-left: 2px; }
+.sf-active-name { margin-left: auto; font-size: var(--fs-md); font-weight: 600; color: var(--accent); word-break: break-all; text-align: right; }
+.sf-active-hint { font-size: var(--fs-sm); color: var(--stone); line-height: 1.7; }
+.sf-hint { font-size: var(--fs-sm); color: var(--amber); margin-top: 10px; }
 /* 导入项的元数据编辑表单 */
-.sf-edit { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; padding: 8px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface-soft); }
-.sf-edit .text-input { width: 100%; padding: 5px 8px; font-size: 12px; }
-.sf-empty { font-size: 12.5px; color: var(--stone); padding: 14px 2px; }
-.sf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; margin-top: 4px; }
+.sf-edit { display: flex; flex-direction: column; gap: var(--sp-2); margin: 8px 0; padding: 8px; border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface-soft); }
+.sf-edit .text-input { width: 100%; padding: 5px 8px; font-size: var(--fs-sm); }
+.sf-empty { font-size: var(--fs-md); color: var(--stone); padding: 14px 2px; }
+.sf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: var(--sp-3); margin-top: 4px; }
 .sf-tile {
-  border: 1px solid var(--hairline); border-radius: 12px; padding: 12px 14px;
+  border: 1px solid var(--hairline); border-radius: var(--r-md); padding: 12px 14px;
   background: color-mix(in srgb, var(--surface-soft) 45%, transparent);
-  display: flex; flex-direction: column; gap: 7px; transition: border-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out);
+  display: flex; flex-direction: column; gap: var(--sp-2); transition: border-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out);
 }
 .sf-tile.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-.sf-tile-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.sf-tile-name { font-size: 13.5px; font-weight: 700; color: var(--ink); line-height: 1.3; }
-.sf-ver { font-size: 11px; font-weight: 500; color: var(--stone); margin-left: 4px; }
-.sf-tile-desc { font-size: 12px; color: var(--slate); line-height: 1.6; min-height: 36px; }
-.sf-tile-meta { font-size: 11px; color: var(--stone); }
-.sf-cat { display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 999px; font-size: 10px; color: var(--slate); background: var(--surface-soft); }
-.sf-tile-slow { font-size: 10.5px; color: var(--amber); line-height: 1.5; }
-.sf-tile-actions { display: flex; align-items: center; gap: 6px; margin-top: auto; flex-wrap: wrap; padding-top: 2px; }
+.sf-tile-top { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+.sf-tile-name { font-size: var(--fs-md); font-weight: 700; color: var(--ink); line-height: 1.3; }
+.sf-ver { font-size: var(--fs-xs); font-weight: 500; color: var(--stone); margin-left: 4px; }
+.sf-tile-desc { font-size: var(--fs-sm); color: var(--slate); line-height: 1.6; min-height: 36px; }
+.sf-tile-meta { font-size: var(--fs-xs); color: var(--stone); }
+.sf-cat { display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--slate); background: var(--surface-soft); }
+.sf-tile-slow { font-size: var(--fs-xs); color: var(--amber); line-height: 1.5; }
+.sf-tile-actions { display: flex; align-items: center; gap: var(--sp-2); margin-top: auto; flex-wrap: wrap; padding-top: 2px; }
 .sf-tile-actions .btn { flex: 1; justify-content: center; }
 .sf-tile-actions .btn.ghost { flex: 0 1 auto; }
 .sf-tile-actions .btn.danger { flex: 0 1 auto; }
-.sf-pct { font-size: 11.5px; color: var(--accent); font-variant-numeric: tabular-nums; }
-.sf-tile-bar { height: 5px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; }
-.sf-tile-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: transform var(--motion-base) var(--ease-out); }
-.sf-tile-err { font-size: 10.5px; color: var(--error); word-break: break-all; }
+.sf-pct { font-size: var(--fs-sm); color: var(--accent); font-variant-numeric: tabular-nums; }
+.sf-tile-bar { height: 5px; border-radius: var(--r-pill); background: var(--surface-soft); overflow: hidden; }
+.sf-tile-fill { height: 100%; background: var(--accent); border-radius: var(--r-pill); transition: transform var(--motion-base) var(--ease-out); }
+.sf-tile-err { font-size: var(--fs-xs); color: var(--error); word-break: break-all; }
 .sf-busy-mask { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--canvas) 55%, transparent); backdrop-filter: blur(2px); }
 /* 加载遮罩淡入淡出 */
 .fade-enter-active, .fade-leave-active { transition: opacity var(--motion-base) var(--ease-out); }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
-.sf-busy-box { display: flex; align-items: center; gap: 10px; background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 600; padding: 14px 20px; border-radius: 12px; border: 1px solid var(--hairline); box-shadow: 0 8px 30px rgba(0,0,0,0.14); animation: sf-busy-pulse 1.2s var(--ease-in-out) infinite; }
+.sf-busy-box { display: flex; align-items: center; gap: var(--sp-3); background: var(--surface); color: var(--ink); font-size: var(--fs-md); font-weight: 600; padding: 14px 20px; border-radius: var(--r-md); border: 1px solid var(--hairline); box-shadow: 0 8px 30px rgba(0,0,0,0.14); animation: sf-busy-pulse 1.2s var(--ease-in-out) infinite; }
 @keyframes sf-busy-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
-.sf-overlimit { font-size: 11.5px; color: var(--stone); align-self: center; }
-.sf-tile-note { font-size: 11.5px; color: var(--stone); }
-.sf-tile-note { font-size: 11.5px; color: var(--stone); }
+.sf-overlimit { font-size: var(--fs-sm); color: var(--stone); align-self: center; }
+.sf-tile-note { font-size: var(--fs-sm); color: var(--stone); }
+.sf-tile-note { font-size: var(--fs-sm); color: var(--stone); }
 </style>

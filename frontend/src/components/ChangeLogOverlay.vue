@@ -43,18 +43,18 @@ function close() { state.ui.changelogOpen = false; }
 
 <style scoped>
 .cl-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.4); display: flex; align-items: center; justify-content: center; z-index: 990; }
-.cl-card { width: min(480px, 92vw); max-height: min(72vh, 640px); background: var(--canvas); border-radius: 14px;
+.cl-card { width: min(480px, 92vw); max-height: min(72vh, 640px); background: var(--canvas); border-radius: var(--r-lg);
   box-shadow: 0 24px 64px rgba(16,24,40,0.24); display: flex; flex-direction: column; overflow: hidden; }
-.cl-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 10px; }
-.cl-title { display: flex; align-items: center; gap: 8px; font-size: 15px; color: var(--ink); }
+.cl-head { display: flex; align-items: center; gap: var(--sp-3); padding: 14px 16px 10px; }
+.cl-title { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-lg); color: var(--ink); }
 .cl-title svg { color: var(--brand); }
-.cl-range { font-size: 12px; color: var(--text-muted, #888); font-weight: 500; }
+.cl-range { font-size: var(--fs-sm); color: var(--text-muted, var(--stone)); font-weight: 500; }
 .cl-head .icon-btn { margin-left: auto; }
 .cl-body { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 18px 8px; }
 .cl-group { margin-bottom: 14px; }
-.cl-ver { font-size: 13px; font-weight: 700; color: var(--brand-text, var(--brand)); margin-bottom: 6px; }
-.cl-items { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; }
-.cl-items li { font-size: 12.5px; line-height: 1.65; color: var(--ink, #333); }
-.cl-empty { padding: 24px 0; text-align: center; color: var(--text-muted, #888); font-size: 13px; }
+.cl-ver { font-size: var(--fs-md); font-weight: 700; color: var(--brand-text, var(--brand)); margin-bottom: 6px; }
+.cl-items { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: var(--sp-1); }
+.cl-items li { font-size: var(--fs-md); line-height: 1.65; color: var(--ink, var(--ink)); }
+.cl-empty { padding: 24px 0; text-align: center; color: var(--text-muted, var(--stone)); font-size: var(--fs-md); }
 .cl-foot { padding: 10px 16px 14px; display: flex; justify-content: flex-end; }
 </style>

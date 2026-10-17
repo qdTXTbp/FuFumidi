@@ -10,4 +10,8 @@
 # SJTU 的 pytorch-wheels 镜像实测 14.5 MB/s（差 46 倍），否则光下载就要 1-2 小时。
 torch==2.11.0+xpu
 torchaudio==2.11.0+xpu
+# 部分识别模型（MuScriptor / beat_this 一类）依赖 transformers
+transformers>=4.44,<5
+# onnxruntime-directml 是 **XPU 包的 ONNX 执行后端**，与已下线的
+# 「DirectML 增强包」（torch-directml 那一套）不是一回事，包删了它仍要留。
 onnxruntime-directml>=1.16

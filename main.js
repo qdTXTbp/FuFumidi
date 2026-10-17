@@ -548,7 +548,7 @@ function engineEnv(extra) {
     if (st && st.hf_token) env.HF_TOKEN = String(st.hf_token).trim();
   } catch (_) {}
   // 只挂「与当前解释器 ABI 匹配」的增强包：三种包都按 CPython 次版本编译
-  // （cuda/directml → cp311，rocm → cp312）。把不匹配的塞进 PYTHONPATH 会拖进
+  // （cuda → cp311，rocm → cp312）。把不匹配的塞进 PYTHONPATH 会拖进
   // 一堆加载不了的 .pyd，比不挂更糟。装了但版本不匹配的，视为「已安装未启用」，
   // 由设置页给出提示（rocm 需 Python 3.12 运行时）。
   const minor = currentPythonMinor();
@@ -585,7 +585,7 @@ async function resetBaseToCpu() {
   try {
     const py = resolvePython();
     const sp = path.join(process.resourcesPath, 'python', 'Lib', 'site-packages');
-    // Remove GPU-only metadata / DirectML leftovers (torch/onnxruntime dirs are replaced by CPU wheels below)
+    // Remove GPU-only metadata / legacy DirectML leftovers (torch/onnxruntime dirs are replaced by CPU wheels below)
     if (fs.existsSync(sp)) {
       for (const name of fs.readdirSync(sp)) {
         if (/^(torch_directml|onnxruntime_gpu|onnxruntime_directml)/.test(name)) {

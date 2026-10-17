@@ -494,8 +494,8 @@ async function clearUserData() {
 }
 
 /* ---------------- GPU 加速 ---------------- */
-// 三种增强包：cuda（NVIDIA）/ directml（AMD·Intel）/ rocm（AMD 较新 Radeon，需 Python 3.12）
-const GPU_KIND_LABEL = { cuda: 'CUDA', directml: 'DirectML', rocm: 'ROCm', xpu: 'Intel XPU' };
+// 增强包：cuda（NVIDIA）/ rocm（AMD 较新 Radeon，需 Python 3.12）/ xpu（Intel）。DirectML 包已下线。
+const GPU_KIND_LABEL = { cuda: 'CUDA', rocm: 'ROCm', xpu: 'Intel XPU' };
 function gpuKindLabel(k) { return GPU_KIND_LABEL[k] || String(k || '').toUpperCase(); }
 const gpu = reactive({
   detect: null,        // {vendor,name,blackwell,needCu128,available,backend}
@@ -526,21 +526,17 @@ const gpuRecommended = computed(() => {
   if (d.vendor === 'nvidia') return 'CUDA' + (d.needCu128 ? t('（cu128 · RTX 50 系）') : '');
   if (d.vendor === 'amd') {
     if (d.backend === 'rocm' || gpu.rocmActive) return 'ROCm';
-    // AMD 默认走 DirectML（覆盖面最广）；较新 Radeon 才能用 ROCm，且需要 3.12 运行时
-    return 'DirectML' + (gpu.canPython312 ? t('（较新 Radeon 可选 ROCm）') : '');
+    // DirectML 包已下线：AMD 现在没有开箱即用的 GPU 路径，只有较新 Radeon + 3.12 运行时能上 ROCm
+    return t('不可用（CPU）') + (gpu.canPython312 ? t('（较新 Radeon 可选 ROCm）') : '');
   }
-  if (d.vendor === 'intel') return 'DirectML';
+  if (d.vendor === 'intel') return t('不可用（CPU）');
   return t('不可用');
 });
-/** 预打包增强包的前置条件（返回非空字符串 = 不可安装，作为按钮 title 展示） */
-function gpuPkgBlockedReason(p) {
-  if (!p || !p.requiresPython) return '';
-  if (p.requiresPython === gpu.currentPython) return '';
-  // ROCm 需要 3.12：只要存在就绪的 3.12 运行时就能装（装完会切过去）
-  if (p.requiresPython === '3.12' && gpu.canPython312) return '';
-  if (p.requiresPython === '3.12') return t('ROCm 需要 Python 3.12 引擎运行时，当前尚未就绪，暂时无法安装');
-  return t('该增强包所需的 Python 运行时尚未就绪，暂时无法安装');
-}
+/* ★ 2026-10-17 用户要求：不再按 Python 版本拦截下载安装。
+   以前这里按 requiresPython 与当前运行时是否匹配返回"不可安装"的理由，把按钮变灰；
+   引擎运行时换成 3.12 之后，按 3.11 构建的包就全被灰掉了。
+   现在版本不匹配只作为提示（main 的 kindPrereq().warn → p.warn，见下面的琥珀小字），
+   按钮始终可点 —— 装上 ABI 不匹配的包最坏只是引擎加载失败并自动回退 CPU。 */
 
 function gpuSetProgress(p, txt) {
   gpu.progress = p;
@@ -551,7 +547,7 @@ async function gpuRefreshInstalled() {
   try {
     const r = await bridge.gpuStatus();
     if (r && r.ok) {
-      const kinds = Array.isArray(r.kinds) ? r.kinds : ['cuda', 'directml', 'rocm'].filter((k) => !!r[k]);
+      const kinds = Array.isArray(r.kinds) ? r.kinds : ['cuda', 'rocm', 'xpu'].filter((k) => !!r[k]);
       gpu.kinds = kinds;
       gpu.rocmActive = !!r.rocmActive;
       gpu.needsPython312 = !!r.needsPython312;
@@ -847,7 +843,7 @@ async function fbWebFallback() {
 
 async function gpuUninstall() {
   if (!bridge || !bridge.gpuUninstall) { gpu.status = t('当前环境不支持卸载'); return; }
-  const kind = gpu.installedKind || 'directml';
+  const kind = gpu.installedKind || 'cuda';
   gpu.busy = true;
   gpu.status = t('正在卸载…');
   gpuSetProgress(10, t('正在卸载…'));
@@ -1303,7 +1299,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
 
         <!-- ============ GPU 加速 ============ -->
         <div v-else-if="tab === 'gpu'">
-          <p class="ov-note">{{ t('一键自动检测显卡并安装对应的 GPU 加速（NVIDIA → CUDA，AMD/Intel → DirectML）。安装后转录与分离任务将明显提速。') }}</p>
+          <p class="ov-note">{{ t('一键自动检测显卡并安装对应的 GPU 加速（目前支持 NVIDIA → CUDA）。安装后转录与分离任务将明显提速。') }}</p>
           <div class="gpu-panel">
             <div class="gpu-detect">
               <div class="gpu-row"><span class="gpu-k">{{ t('显卡') }}</span><span class="gpu-v">{{ gpuCard }}</span></div>
@@ -1321,22 +1317,24 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
             <button v-if="app.gpuInstall.active && bridge && bridge.gpuCancelInstall" class="btn sm danger" style="margin-top:8px;width:100%" @click="cancelGpuInstall">{{ t('取消安装') }}</button>
             <div v-if="gpu.status" class="gpu-status">{{ gpu.status }}</div>
             <div v-if="gpu.progress != null" class="gpu-prog">
-              <div style="height:8px;background:var(--surface-soft);border-radius:999px;overflow:hidden;border:1px solid var(--hairline)">
-                <div style="height:100%;background:linear-gradient(90deg,#4f94e0,#8fc0f0)" :style="{ transform: 'scaleX(' + ((Math.min(100, (gpu.progress || 0))) / 100) + ')' }"></div>
+              <div style="height:8px;background:var(--surface-soft);border-radius:var(--r-pill);overflow:hidden;border:1px solid var(--hairline)">
+                <div style="height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2))" :style="{ transform: 'scaleX(' + ((Math.min(100, (gpu.progress || 0))) / 100) + ')' }"></div>
               </div>
               <div class="gpu-prog-text">{{ gpu.progressText }}</div>
             </div>
             <!-- 预打包增强包：自动安装（pip）失败/无网络时的备用路径，可一键下载并安装 -->
             <div v-if="gpu.packages.length" style="margin-top:12px;border-top:1px solid var(--hairline);padding-top:12px">
-              <div style="font-size:12px;color:var(--text-soft);margin-bottom:6px">{{ t('预打包增强包（自动安装失败时备用）') }}</div>
-              <div v-for="p in gpu.packages" :key="p.kind + '|' + p.name" style="display:flex;align-items:center;gap:8px;margin:6px 0">
-                <span style="flex:1;font-size:13px">{{ gpuKindLabel(p.kind) + (p.split ? t('（分卷）') : '') + (p.requiresPython === '3.12' ? t('（需 Python 3.12 运行时）') : '') + (p.kind === 'xpu' ? t('（未经实机验证）') : '') }}</span>
-                <span style="font-size:12px;color:var(--text-soft)">{{ p.sizeText }}</span>
-                <button class="btn sm" @click="gpuDownloadRemote(p)" :disabled="gpu.busy || app.gpuInstall.active || !!gpuPkgBlockedReason(p)" :title="gpuPkgBlockedReason(p)">{{ t('下载并安装') }}</button>
+              <div style="font-size:var(--fs-sm);color:var(--text-soft);margin-bottom:6px">{{ t('预打包增强包（自动安装失败时备用）') }}</div>
+              <div v-for="p in gpu.packages" :key="p.kind + '|' + p.name" style="display:flex;align-items:center;gap:var(--sp-2);margin:6px 0">
+                <span style="flex:1;font-size:var(--fs-md)">{{ gpuKindLabel(p.kind) + (p.split ? t('（分卷）') : '') + (p.requiresPython === '3.12' ? t('（需 Python 3.12 运行时）') : '') + (p.kind === 'xpu' ? t('（未经实机验证）') : '') }}</span>
+                <span style="font-size:var(--fs-sm);color:var(--text-soft)">{{ p.sizeText }}</span>
+                <!-- ★ Python 版本不匹配不再拦截下载（2026-10-17 用户要求），改成这里的琥珀提示 -->
+                <span v-if="p.warn" style="font-size:var(--fs-xs);color:var(--t-warn);max-width:230px">{{ p.warn }}</span>
+                <button class="btn sm" @click="gpuDownloadRemote(p)" :disabled="gpu.busy || app.gpuInstall.active" :title="p.warn || t('下载并安装')">{{ t('下载并安装') }}</button>
               </div>
-              <div style="font-size:12px;color:var(--text-soft);margin-top:4px">{{ t('国内优先走 CNB 镜像，境外走 GitHub。') }}</div>
-              <div style="font-size:12px;color:var(--text-soft);margin-top:2px">{{ t('ROCm 仅适用于较新 Radeon（RX 7000/9000 等），且需 Adrenalin 26.1.1+ 驱动。') }}</div>
-              <div style="font-size:12px;color:var(--text-soft);margin-top:2px">{{ t('Intel XPU 面向 Intel Arc 独显 / 部分核显（torch+xpu）。本包尚未在 Intel 显卡实机上验证过：安装后会自动在显卡上跑一次矩阵乘并与 CPU 结果对拍，通不过就判为不可用并自动改用 CPU，不会让转录中途出错。') }}</div>
+              <div style="font-size:var(--fs-sm);color:var(--text-soft);margin-top:4px">{{ t('国内优先走 CNB 镜像，境外走 GitHub。') }}</div>
+              <div style="font-size:var(--fs-sm);color:var(--text-soft);margin-top:2px">{{ t('ROCm 仅适用于较新 Radeon（RX 7000/9000 等），且需 Adrenalin 26.1.1+ 驱动。') }}</div>
+              <div style="font-size:var(--fs-sm);color:var(--text-soft);margin-top:2px">{{ t('Intel XPU 面向 Intel Arc 独显 / 部分核显（torch+xpu）。本包尚未在 Intel 显卡实机上验证过：安装后会自动在显卡上跑一次矩阵乘并与 CPU 结果对拍，通不过就判为不可用并自动改用 CPU，不会让转录中途出错。') }}</div>
             </div>
             <div class="gpu-extra">
               <button class="btn sm" @click="gpuImportLocal" :disabled="gpu.busy || app.gpuInstall.active">{{ t('本地导入 ZIP') }}</button>
@@ -1351,24 +1349,24 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
       <div v-else-if="tab === 'feedback'">
         <!-- ★ 反馈表单（方案 docs/plans/2026-10-16-feedback-upload.md）：填好点上传即进反馈仓库 -->
         <div class="ov-card">
-          <div style="font-size:15px;font-weight:600">{{ t('反馈问题') }}</div>
-          <div style="font-size:12px;color:var(--text-soft);line-height:1.7;margin:4px 0 10px">
+          <div style="font-size:var(--fs-lg);font-weight:600">{{ t('反馈问题') }}</div>
+          <div style="font-size:var(--fs-sm);color:var(--text-soft);line-height:1.7;margin:4px 0 10px">
             {{ t('填好点「上传到反馈仓库」即可。体检报告会自动附上（已去掉用户名与机器名）；诊断包含设置与最近日志，默认不带，需要时自己勾。') }}
           </div>
-          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-            <label style="display:flex;align-items:center;gap:6px;font-size:12px">
+          <div style="display:flex;gap:var(--sp-3);flex-wrap:wrap;margin-bottom:8px">
+            <label style="display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-sm)">
               {{ t('分类') }}
               <select v-model="fb.kind" class="ov-input" style="width:130px">
                 <option v-for="k in FB_KINDS" :key="k.id" :value="k.id">{{ t(k.name) }}</option>
               </select>
             </label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:12px">
+            <label style="display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-sm)">
               {{ t('模块') }}
               <select v-model="fb.area" class="ov-input" style="width:120px">
                 <option v-for="a in FB_AREAS" :key="a.id" :value="a.id">{{ t(a.name) }}</option>
               </select>
             </label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:12px">
+            <label style="display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-sm)">
               {{ t('严重度') }}
               <select v-model="fb.severity" class="ov-input" style="width:120px">
                 <option value="blocker">{{ t('用不了') }}</option>
@@ -1377,19 +1375,19 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               </select>
             </label>
           </div>
-          <div style="font-size:12px;color:var(--text-soft);margin-bottom:4px">{{ t('标题') }}</div>
+          <div style="font-size:var(--fs-sm);color:var(--text-soft);margin-bottom:4px">{{ t('标题') }}</div>
           <input v-model="fb.title" class="ov-input" maxlength="60" style="width:100%;margin-bottom:8px"
                  :placeholder="t('一句话说清问题，例如：变谱第 2 页总是识别失败')" />
-          <div style="font-size:12px;color:var(--text-soft);margin-bottom:4px">{{ t('症状（必填，至少 20 字）') }}</div>
+          <div style="font-size:var(--fs-sm);color:var(--text-soft);margin-bottom:4px">{{ t('症状（必填，至少 20 字）') }}</div>
           <textarea v-model="fb.symptom" class="ov-input" rows="3" style="width:100%;margin-bottom:8px"
                     :placeholder="t('发生了什么？界面上的原话、报错文本都可以贴进来')"></textarea>
-          <div style="font-size:12px;color:var(--text-soft);margin-bottom:4px">{{ t('复现步骤（选填）') }}</div>
+          <div style="font-size:var(--fs-sm);color:var(--text-soft);margin-bottom:4px">{{ t('复现步骤（选填）') }}</div>
           <textarea v-model="fb.steps" class="ov-input" rows="2" style="width:100%;margin-bottom:8px"
                     :placeholder="t('1. 打开… 2. 点… 3. 结果…')"></textarea>
-          <div style="font-size:12px;color:var(--text-soft);margin-bottom:4px">{{ t('期望 vs 实际（选填）') }}</div>
+          <div style="font-size:var(--fs-sm);color:var(--text-soft);margin-bottom:4px">{{ t('期望 vs 实际（选填）') }}</div>
           <textarea v-model="fb.expect" class="ov-input" rows="2" style="width:100%;margin-bottom:8px"></textarea>
-          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-            <label style="display:flex;align-items:center;gap:6px;font-size:12px">
+          <div style="display:flex;gap:var(--sp-3);flex-wrap:wrap;margin-bottom:8px">
+            <label style="display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-sm)">
               {{ t('频率') }}
               <select v-model="fb.freq" class="ov-input" style="width:130px">
                 <option value="每次">{{ t('每次') }}</option>
@@ -1397,16 +1395,16 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
                 <option value="只出现过一次">{{ t('只出现过一次') }}</option>
               </select>
             </label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:12px;flex:1;min-width:220px">
+            <label style="display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-sm);flex:1;min-width:220px">
               {{ t('联系方式（选填，留空即匿名）') }}
               <input v-model="fb.contact" class="ov-input" style="flex:1" :placeholder="t('邮箱或 GitHub ID')" />
             </label>
           </div>
-          <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:10px">
+          <label style="display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-sm);margin-bottom:10px">
             <input type="checkbox" v-model="fb.includeDiagnostic" />
             {{ t('附带诊断包（含最近日志与设置，上传前会再脱敏一次；约几 MB）') }}
           </label>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <div style="display:flex;gap:var(--sp-2);flex-wrap:wrap">
             <button class="btn sm primary" :disabled="!!fb.busy" @click="fbUpload">
               {{ fb.busy === 'upload' ? t('上传中…') : t('上传到反馈仓库') }}
             </button>
@@ -1415,33 +1413,33 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
             <button class="btn sm" :disabled="!!fb.busy" @click="fbCopyMd">{{ t('复制内容') }}</button>
             <button class="btn sm" :disabled="!!fb.busy" @click="fbWebFallback">{{ t('网页提交') }}</button>
           </div>
-          <div v-if="fb.err" style="color:#e06c75;font-size:12px;margin-top:8px">{{ fb.err }}</div>
-          <div v-if="fb.msg" style="color:var(--text-soft);font-size:12px;margin-top:8px">{{ fb.msg }}</div>
-          <div v-if="fb.resultUrl" style="font-size:12px;margin-top:6px">
+          <div v-if="fb.err" style="color:var(--t-err);font-size:var(--fs-sm);margin-top:8px">{{ fb.err }}</div>
+          <div v-if="fb.msg" style="color:var(--text-soft);font-size:var(--fs-sm);margin-top:8px">{{ fb.msg }}</div>
+          <div v-if="fb.resultUrl" style="font-size:var(--fs-sm);margin-top:6px">
             <a style="cursor:pointer;text-decoration:underline" @click="fbOpen(fb.resultUrl)">{{ fb.resultUrl }}</a>
             <span v-if="fb.issueUrl"> · <a style="cursor:pointer;text-decoration:underline" @click="fbOpen(fb.issueUrl)">{{ t('对应议题') }}</a></span>
           </div>
-          <div v-if="fb.savedLocal && fb.localPath" style="font-size:12px;margin-top:6px;color:var(--text-soft)">
+          <div v-if="fb.savedLocal && fb.localPath" style="font-size:var(--fs-sm);margin-top:6px;color:var(--text-soft)">
             {{ t('上传没成功，已自动存到本地：') }}{{ fb.localPath }}
           </div>
           <details v-if="fb.preview" style="margin-top:10px">
-            <summary style="cursor:pointer;font-size:12px;color:var(--text-soft)">
+            <summary style="cursor:pointer;font-size:var(--fs-sm);color:var(--text-soft)">
               {{ t('将要上传的内容') }}（{{ fb.previewPath }}<span v-if="fb.previewAtts.length"> · {{ t('附件') }} {{ fb.previewAtts.length }}</span>）
             </summary>
-            <pre style="max-height:320px;overflow:auto;font-size:11px;line-height:1.5;white-space:pre-wrap;margin-top:6px">{{ fb.preview }}</pre>
+            <pre style="max-height:320px;overflow:auto;font-size:var(--fs-xs);line-height:1.5;white-space:pre-wrap;margin-top:6px">{{ fb.preview }}</pre>
           </details>
         </div>
 
         <!-- 体检与诊断（沿用原有能力：体检报告 / 诊断包 / 已知问题） -->
         <div class="ov-card">
-          <div style="font-size:15px;font-weight:600;margin-bottom:4px">{{ t('遇到问题？先跑一次体检') }}</div>
-          <div style="font-size:12px;color:var(--text-soft);line-height:1.7;margin-bottom:10px">
+          <div style="font-size:var(--fs-lg);font-weight:600;margin-bottom:4px">{{ t('遇到问题？先跑一次体检') }}</div>
+          <div style="font-size:var(--fs-sm);color:var(--text-soft);line-height:1.7;margin-bottom:10px">
             {{ t('体检会把系统、显卡与加速包、运行时依赖、模型资源和最近错误逐条查一遍并给出结论；报告已自动去掉用户名与机器名，可以直接粘贴到反馈里。') }}
           </div>
             <!-- 调试工具 · 全局体检：一键拿到可粘贴的排障报告 -->
             <div style="margin-top:16px;border-top:1px solid var(--hairline);padding-top:12px">
-              <div style="font-size:12px;color:var(--text-soft);margin-bottom:6px">{{ t('调试工具 · 全局体检') }}</div>
-              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <div style="font-size:var(--fs-sm);color:var(--text-soft);margin-bottom:6px">{{ t('调试工具 · 全局体检') }}</div>
+              <div style="display:flex;align-items:center;gap:var(--sp-2);flex-wrap:wrap">
                 <button class="btn sm" @click="runHealth" :disabled="health.busy">{{ health.busy ? t('体检中…') : t('开始体检') }}</button>
                 <button class="btn sm" v-if="health.report" @click="copyHealth">{{ t('复制报告') }}</button>
                 <button class="btn sm" v-if="health.report" @click="reportIssue">{{ t('反馈问题') }}</button>
@@ -1449,23 +1447,23 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
                 <button class="btn sm" @click="exportDiag">{{ t('导出诊断包') }}</button>
                 <button class="btn sm" v-if="health.report" @click="health.showRaw = !health.showRaw">{{ health.showRaw ? t('看结论') : t('看完整报告') }}</button>
               </div>
-              <div style="font-size:12px;color:var(--text-soft);margin-top:4px">{{ t('体检会检查系统、显卡与加速包、运行时依赖、模型资源和最近错误，并逐条给出结论。报告已自动去掉用户名与机器名，可直接粘贴到反馈里。') }}</div>
-              <div v-if="health.error" style="color:#e06c75;font-size:12px;margin-top:6px">{{ health.error }}</div>
-              <div v-if="health.report && !health.showRaw" style="margin-top:8px;max-height:280px;overflow:auto;border:1px solid var(--hairline);border-radius:6px;padding:8px">
-                <div v-for="(v, i) in health.report.verdicts" :key="i" style="display:flex;gap:8px;margin:5px 0;font-size:13px;align-items:baseline">
-                  <span :style="{ color: v.level === 'ok' ? '#5cb85c' : v.level === 'warn' ? '#e0a030' : v.level === 'error' ? '#e06c75' : 'var(--text-soft)', fontWeight: 600 }">{{ v.level === 'ok' ? '✓' : v.level === 'warn' ? '!' : v.level === 'error' ? '✕' : 'i' }}</span>
+              <div style="font-size:var(--fs-sm);color:var(--text-soft);margin-top:4px">{{ t('体检会检查系统、显卡与加速包、运行时依赖、模型资源和最近错误，并逐条给出结论。报告已自动去掉用户名与机器名，可直接粘贴到反馈里。') }}</div>
+              <div v-if="health.error" style="color:var(--t-err);font-size:var(--fs-sm);margin-top:6px">{{ health.error }}</div>
+              <div v-if="health.report && !health.showRaw" style="margin-top:8px;max-height:280px;overflow:auto;border:1px solid var(--hairline);border-radius:var(--r-sm);padding:8px">
+                <div v-for="(v, i) in health.report.verdicts" :key="i" style="display:flex;gap:var(--sp-2);margin:5px 0;font-size:var(--fs-md);align-items:baseline">
+                  <span :style="{ color: v.level === 'ok' ? 'var(--t-ok)' : v.level === 'warn' ? 'var(--t-warn)' : v.level === 'error' ? 'var(--t-err)' : 'var(--text-soft)', fontWeight: 600 }">{{ v.level === 'ok' ? '✓' : v.level === 'warn' ? '!' : v.level === 'error' ? '✕' : 'i' }}</span>
                   <span style="color:var(--text-soft);min-width:64px">{{ v.group }}</span>
                   <span style="flex:1">{{ v.msg }}</span>
                 </div>
               </div>
-              <pre v-if="health.report && health.showRaw" style="margin-top:8px;max-height:340px;overflow:auto;font-size:11px;line-height:1.5;white-space:pre-wrap;border:1px solid var(--hairline);border-radius:6px;padding:8px">{{ health.report.report_text }}</pre>
+              <pre v-if="health.report && health.showRaw" style="margin-top:8px;max-height:340px;overflow:auto;font-size:var(--fs-xs);line-height:1.5;white-space:pre-wrap;border:1px solid var(--hairline);border-radius:var(--r-sm);padding:8px">{{ health.report.report_text }}</pre>
             </div>
           <div style="margin-top:14px;border-top:1px solid var(--hairline);padding-top:12px">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <div style="display:flex;align-items:center;gap:var(--sp-2);flex-wrap:wrap">
               <button class="btn sm" @click="reportIssue">{{ t('去 GitHub 反馈') }}</button>
               <button class="btn sm" @click="openKnownIssues">{{ t('先看看已知问题') }}</button>
             </div>
-            <div style="font-size:12px;color:var(--text-soft);margin-top:6px">{{ t('点「去 GitHub 反馈」会先把体检报告复制到剪贴板，再打开一个预填好标题与正文的 issue 页面 —— 粘贴即可提交。') }}</div>
+            <div style="font-size:var(--fs-sm);color:var(--text-soft);margin-top:6px">{{ t('点「去 GitHub 反馈」会先把体检报告复制到剪贴板，再打开一个预填好标题与正文的 issue 页面 —— 粘贴即可提交。') }}</div>
           </div>
         </div>
       </div>
@@ -1594,7 +1592,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <span class="kbd-key" v-for="key in k.keys" :key="key">{{ key }}</span>
             </div>
           </div>
-          <div style="display:flex;gap:6px;margin-top:12px">
+          <div style="display:flex;gap:var(--sp-2);margin-top:12px">
             <button class="btn sm" @click="resetKeys">{{ t('恢复默认快捷键') }}</button>
           </div>
 
@@ -1620,7 +1618,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
             </div>
             <div class="kbd-row">
               <b>{{ t('方向键步长') }}</b>
-              <div style="display:flex;gap:6px;align-items:center">
+              <div style="display:flex;gap:var(--sp-2);align-items:center">
                 <NumSlider v-model="pb.seekStep" :min="1" :max="600" :step="1" :input-width="72" :aria-label="t('方向键步长')" @update:model-value="savePlayback" />
                 <select v-model="pb.seekStepUnit" class="ov-input" style="width:120px" @change="savePlayback">
                   <option value="sec">{{ t('秒') }}</option>
@@ -1631,7 +1629,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
             </div>
             <div class="kbd-row">
               <b>{{ t('长按倍数') }}</b>
-              <div style="display:flex;gap:6px;align-items:center">
+              <div style="display:flex;gap:var(--sp-2);align-items:center">
                 <NumSlider v-model="pb.holdDelayMs" :min="150" :max="1500" :step="50" unit="ms" :input-width="72" :aria-label="t('长按判定')" @update:model-value="savePlayback" />
                 <select v-model.number="pb.holdRate" class="ov-input" style="width:90px" @change="savePlayback">
                   <option :value="1.5">1.5×</option>
@@ -1683,8 +1681,8 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <button class="btn sm primary" @click="updLaunch">{{ t('检查更新') }}</button>
             </div>
           </div>
-          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
-            <span style="font-size:12px;color:var(--stone)">{{ upd.status }}</span>
+          <div style="display:flex;gap:var(--sp-2);margin-top:10px;flex-wrap:wrap;align-items:center">
+            <span style="font-size:var(--fs-sm);color:var(--stone)">{{ upd.status }}</span>
             <!-- 走到「失败」或「已启动更新器」都显示重试：更新器窗口内的实际失败应用无法感知，
                  只要更新未让应用重启成功（成功会重启到新版本，此态自然消失），即可点重试重新发起 -->
             <button v-if="upd.failed || upd.launched" class="btn sm primary" @click="updLaunch"><Icon name="redo" :size="13" /> {{ t('重试') }}</button>
@@ -1781,7 +1779,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
                   <span v-if="e.pending" class="dr-entry-w">{{ e.conflict ? t('目标已有内容') : t('待迁移') }}</span>
                 </button>
               </div>
-              <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <div style="display:flex;gap:var(--sp-2);flex-wrap:wrap">
                 <button class="btn sm" @click="openDataRoot('')">{{ t('打开数据目录') }}</button>
                 <button class="btn sm ghost" :disabled="dataRoot.busy" @click="cleanTemp">{{ dataRoot.busy ? t('清理中…') : t('清理中间产物') }}</button>
               </div>
@@ -1835,11 +1833,11 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
                 <div class="fr-hint">{{ cloud.dir || '—' }}</div>
               </div>
             </div>
-            <div v-if="cloud.err" style="font-size:12px;color:#e05858;margin-top:6px">{{ cloud.err }}</div>
-            <div v-if="cloud.last && cloud.last.ok" style="font-size:12px;color:var(--stone);margin-top:6px">
+            <div v-if="cloud.err" style="font-size:var(--fs-sm);color:var(--t-err);margin-top:6px">{{ cloud.err }}</div>
+            <div v-if="cloud.last && cloud.last.ok" style="font-size:var(--fs-sm);color:var(--stone);margin-top:6px">
               {{ t('上传 ') }}{{ cloud.last.uploadedSongs }}{{ t(' 曲 / ') }}{{ cloud.last.uploadedPlaylists }}{{ t(' 单，下载 ') }}{{ cloud.last.downloadedSongs }}{{ t(' 曲，歌单共 ') }}{{ cloud.last.appliedPlaylists }}{{ t(' 个') }}
             </div>
-            <div v-if="cloud.last && cloud.last.ok && cloud.last.missingBytes" style="font-size:12px;color:#e0a558;margin-top:4px">
+            <div v-if="cloud.last && cloud.last.ok && cloud.last.missingBytes" style="font-size:var(--fs-sm);color:var(--t-warn);margin-top:4px">
               {{ t('注意：有 ') }}{{ cloud.last.missingBytes }}{{ t(' 首曲目在本机找不到 MIDI 内容（曲库记录与本地缓存都没有字节），已跳过备份。请重新导入这些文件后再同步。') }}
             </div>
           </template>
@@ -1851,7 +1849,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
                 <div class="fr-hint">{{ t('请点击左下角用户头像登录 / 注册后进行云同步。') }}</div>
               </div>
             </div>
-            <div v-if="cloud.err" style="font-size:12px;color:#e05858;margin-top:6px">{{ cloud.err }}</div>
+            <div v-if="cloud.err" style="font-size:var(--fs-sm);color:var(--t-err);margin-top:6px">{{ cloud.err }}</div>
           </template>
         </div>
       </div>
@@ -1870,34 +1868,34 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
 <style scoped>
 /* ---- 操作系统级全局热键（用户自己录制） ---- */
 .hk-sec { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
-.hk-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.hk-head b { font-size: 13px; }
+.hk-head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: 6px; }
+.hk-head b { font-size: var(--fs-md); }
 .hk-head .sp { flex: 1; }
-.hk-row { display: flex; align-items: center; gap: 10px; padding: 7px 0;
+.hk-row { display: flex; align-items: center; gap: var(--sp-3); padding: 7px 0;
           border-bottom: 1px dashed var(--border); }
 .hk-row:last-child { border-bottom: none; }
-.hk-lb { flex: none; width: 108px; font-size: 12.5px; }
-.hk-val { flex: 1; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
-.hk-val .kbd-key.ok { border-color: var(--success-text, #22c55e); color: var(--ink); }
+.hk-lb { flex: none; width: 108px; font-size: var(--fs-md); }
+.hk-val { flex: 1; display: flex; align-items: center; gap: var(--sp-1); flex-wrap: wrap; min-width: 0; }
+.hk-val .kbd-key.ok { border-color: var(--success-text, var(--t-ok)); color: var(--ink); }
 .hk-val .kbd-key.bad { border-color: var(--brand-coral); color: var(--brand-coral); }
 .hk-val .kbd-key.rec { border-style: dashed; border-color: var(--accent); color: var(--brand-text); }
-  .hk-bad { font-size: 11px; color: var(--brand-coral); }
+  .hk-bad { font-size: var(--fs-xs); color: var(--brand-coral); }
   /* 线路测速表：等宽数字对齐，好横向比较（不是卡片流） */
-  .sp-table { margin-top: 8px; border: 1px solid var(--hairline); border-radius: 8px; overflow: hidden; }
+  .sp-table { margin-top: 8px; border: 1px solid var(--hairline); border-radius: var(--r-md); overflow: hidden; }
   .sp-tr { display: grid; grid-template-columns: minmax(120px, 1.4fr) 84px 82px 96px 62px; align-items: center;
-           gap: 8px; padding: 6px 10px; font-size: 12.5px; border-top: 1px solid var(--hairline); }
+           gap: var(--sp-2); padding: 6px 10px; font-size: var(--fs-md); border-top: 1px solid var(--hairline); }
   .sp-tr:first-child { border-top: 0; }
-  .sp-th { color: var(--text-soft); font-size: 11.5px; background: color-mix(in srgb, var(--ink) 4%, transparent); }
+  .sp-th { color: var(--text-soft); font-size: var(--fs-sm); background: color-mix(in srgb, var(--ink) 4%, transparent); }
   .sp-num { font-variant-numeric: tabular-nums; }
-  .sp-name { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .sp-name em { font-style: normal; font-size: 10.5px; padding: 1px 5px; border-radius: 999px;
+  .sp-name { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sp-name em { font-style: normal; font-size: var(--fs-xs); padding: 1px 5px; border-radius: var(--r-pill);
                 color: var(--brand-text); border: 1px solid var(--accent); }
   .sp-kind { color: var(--text-soft); }
   .sp-tr.best { background: color-mix(in srgb, var(--accent) 10%, transparent); }
   .sp-tr.dead { opacity: .55; }
   .sp-act { text-align: right; }
-  .sp-use { font-size: 11.5px; padding: 2px 8px; border-radius: 6px; cursor: pointer;
+  .sp-use { font-size: var(--fs-sm); padding: 2px 8px; border-radius: var(--r-sm); cursor: pointer;
             border: 1px solid var(--hairline); background: transparent; color: var(--ink); }
   .sp-use:disabled { opacity: .4; cursor: default; }
-  .sp-empty { padding: 10px; font-size: 12px; color: var(--text-soft); }
+  .sp-empty { padding: 10px; font-size: var(--fs-sm); color: var(--text-soft); }
 </style>

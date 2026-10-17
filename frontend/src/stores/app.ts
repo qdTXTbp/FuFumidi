@@ -231,6 +231,8 @@ export const useAppStore = defineStore('app', {
       settingsTab: 'appearance',
       themesOpen: false,
       wallpaperOpen: false,
+      // 壁纸库这次是给谁挑：'app' = 应用整窗背景，'viz' = 音符瀑布背景（可视化页的「动态壁纸」进来）
+      wallpaperTarget: 'app' as 'app' | 'viz',
       guideOpen: false,
       paletteOpen: false,
       changelogOpen: false,
@@ -863,10 +865,26 @@ export const useAppStore = defineStore('app', {
         this.trackPlay(); // 播放统计
       }
     },
+    // ★ 播放中音频引擎自愈（ViewViz 的 ctx 看门狗触发）：AudioContext 会被
+    //   （虚拟音频驱动之类的）环境在半途压回 suspended —— currentTick 冻结，
+    //   用户侧就是「音符下落完全卡住 + 进度条不动」（2026-10-17 实测 5.2.0）。
+    //   启动时的体检覆盖不到半途挂起，由可视化渲染循环盯着并调到这里。
+    //   重建后旧 player 作废：把当前曲目装回去并续播（从曲首开始，胜过永久静默）。
+    async healEngineDuringPlay() {
+      if (!this.playing) return { rebuilt: false };
+      const rv = await ensureEngineHealthy();
+      if (rv.rebuilt && this.currentId) {
+        this.playing = false;
+        await this.selectSong(this.currentId);
+        const { player } = ensureAudio();
+        player.play();
+        this.playing = true;
+      }
+      return rv;
+    },
     stopPlay() {
       if (this.isAudio && audioEl) { audioEl.pause(); audioEl.currentTime = 0; this.playing = false; this.curSec = 0; this.progress = 0; this.clearResumePos(this.currentId); return; }
-      const { player } = ensureAudio();
-      player.stop();
+      const { player } = ensureAudio();      player.stop();
       this.playing = false;
       this.curSec = 0;
       this.progress = 0;
@@ -1064,6 +1082,30 @@ export const useAppStore = defineStore('app', {
         m[id] = Object.assign(m[id] || {}, patch);
         localStorage.setItem('fufumidi_tags', JSON.stringify(m));
       } catch (e) {}
+    },
+    /** 重命名曲目（用户：「侧边栏对歌曲的编辑信息功能要可以重命名」）。
+     *  只改**曲库里的名字**并写回库，不动磁盘上的文件 —— 改名不改文件是刻意的：
+     *  文件名一改，用户的播放列表/云同步/历史里引用的路径全会失效。 */
+    async renameSong(id: string, name: string) {
+      const n = String(name || '').trim();
+      const s: any = this.songs.find((x: any) => x.id === id);
+      if (!s || !n || n === s.name) return false;
+      const b: any = (typeof window !== 'undefined') ? (window as any).fuBridge : null;
+      /* ★ 用户要求「重命名同步动磁盘文件名」：**先改文件**，改不动就整个放弃 ——
+         库里改了、磁盘还是旧名，是最糟的中间态（导出、分享、"在文件夹中显示"全对不上）。 */
+      if (b && typeof b.renameMidi === 'function' && s.path) {
+        const oldPath = String(s.path);
+        let r: any = null;
+        try { r = await b.renameMidi(oldPath, n); } catch (e: any) { r = { ok: false, error: String((e && e.message) || e) }; }
+        if (!r || !r.ok) { this.toast(t('重命名失败：') + String((r && r.error) || ''), 'error'); return false; }
+        if (r.path) {
+          s.path = r.path;
+          if (s.meta && s.meta.fp === oldPath) s.meta.fp = r.path;   // 指纹里也存了路径，一起换
+        }
+      }
+      s.name = n;
+      if (b && typeof b.dbSongsPut === 'function') { try { await b.dbSongsPut(s); } catch (e) {} }
+      return true;
     },
     async editTags(id: string) {
       const s = this.songs.find((x: any) => x.id === id);

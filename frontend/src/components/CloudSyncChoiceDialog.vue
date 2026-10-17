@@ -46,31 +46,31 @@ const cloudEmpty = computed(() => {
             <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" :aria-label="t('关闭')" @click="close"><Icon name="close" :size="14" /></button>
           </div>
 
-          <div style="display:flex;flex-direction:column;gap:10px;padding:4px 2px">
+          <div style="display:flex;flex-direction:column;gap:var(--sp-3);padding:4px 2px">
             <template v-if="cloud.counts">
-              <div class="muted" style="font-size:12px">{{ t('本机存档') }}{{ t('：') }}{{ cloud.counts.localSongs }} {{ t('曲') }} / {{ cloud.counts.localPlaylists }} {{ t('个歌单') }}</div>
-              <div class="muted" style="font-size:12px">{{ t('云端存档') }}{{ t('：') }}{{ cloud.counts.cloudSongs }} {{ t('曲') }} / {{ cloud.counts.cloudPlaylists }} {{ t('个歌单') }}</div>
-              <div class="muted" style="font-size:12px">{{ t('请选择以哪一份为准；选择后另一份将被覆盖。') }}</div>
+              <div class="muted" style="font-size:var(--fs-sm)">{{ t('本机存档') }}{{ t('：') }}{{ cloud.counts.localSongs }} {{ t('曲') }} / {{ cloud.counts.localPlaylists }} {{ t('个歌单') }}</div>
+              <div class="muted" style="font-size:var(--fs-sm)">{{ t('云端存档') }}{{ t('：') }}{{ cloud.counts.cloudSongs }} {{ t('曲') }} / {{ cloud.counts.cloudPlaylists }} {{ t('个歌单') }}</div>
+              <div class="muted" style="font-size:var(--fs-sm)">{{ t('请选择以哪一份为准；选择后另一份将被覆盖。') }}</div>
             </template>
-            <div v-else style="font-size:12px;color:var(--stone)">
+            <div v-else style="font-size:var(--fs-sm);color:var(--stone)">
               {{ cloud.busy ? t('正在读取存档…') : t('未能读取存档信息') }}
             </div>
             <!-- 进度：分批传输可能持续几分钟，给出阶段 + 已用时，避免看起来像卡死 -->
-            <div v-if="cloud.busy && cloud.progress" style="display:flex;flex-direction:column;gap:6px">
-              <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--stone)">
+            <div v-if="cloud.busy && cloud.progress" style="display:flex;flex-direction:column;gap:var(--sp-2)">
+              <div style="display:flex;justify-content:space-between;font-size:var(--fs-sm);color:var(--stone)">
                 <span>{{ (cloud.progress && cloud.progress.text) || t('正在同步…') }}</span>
                 <span>{{ cloud.elapsed }}s</span>
               </div>
-              <div v-if="cloud.progress && cloud.progress.total" style="height:6px;background:var(--surface-soft);border-radius:999px;overflow:hidden;border:1px solid var(--hairline)">
-                <div style="height:100%;background:linear-gradient(90deg,#4f94e0,#8fc0f0);transform-origin:left center;transition:transform var(--motion-base) var(--ease-out)"
+              <div v-if="cloud.progress && cloud.progress.total" style="height:6px;background:var(--surface-soft);border-radius:var(--r-pill);overflow:hidden;border:1px solid var(--hairline)">
+                <div style="height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));transform-origin:left center;transition:transform var(--motion-base) var(--ease-out)"
                      :style="{ transform: 'scaleX(' + ((Math.min(100, Math.round(((cloud.progress.done || 0) / (cloud.progress.total || 1)) * 100))) / 100) + ')' }"></div>
               </div>
             </div>
-            <div v-if="cloud.err" style="font-size:12px;color:#e05858">{{ cloud.err }}</div>
-            <div v-if="cloudEmpty" style="font-size:12px;color:#e0a558">
+            <div v-if="cloud.err" style="font-size:var(--fs-sm);color:var(--t-err)">{{ cloud.err }}</div>
+            <div v-if="cloudEmpty" style="font-size:var(--fs-sm);color:var(--t-warn)">
               {{ t('云端存档为空，使用云端会清空本机存档，已禁用该选项。请选择「使用本机存档」上传。') }}
             </div>
-            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
+            <div style="display:flex;gap:var(--sp-2);justify-content:flex-end;margin-top:6px">
               <button class="btn sm ghost" @click="close" :disabled="cloud.busy">{{ t('取消') }}</button>
               <button class="btn sm ghost" @click="choose('pull')" :disabled="cloud.busy || cloudEmpty">{{ t('使用云端存档') }}</button>
               <button class="btn sm primary" @click="choose('push')" :disabled="cloud.busy">{{ cloud.busy ? t('同步中…') : t('使用本机存档') }}</button>
@@ -95,10 +95,10 @@ const cloudEmpty = computed(() => {
 }
 .cloud-choice-mask .ed-modal {
   width: min(360px, 92vw);
-  background: var(--card, #ffffff);
+  background: var(--card, var(--surface));
   color: var(--text, inherit);
   border: 1px solid var(--hairline, rgba(128, 128, 128, 0.25));
-  border-radius: 14px;
+  border-radius: var(--r-lg);
   padding: 16px 18px;
   box-shadow: 0 14px 44px rgba(0, 0, 0, 0.35);
   max-height: 86vh;
@@ -107,10 +107,10 @@ const cloudEmpty = computed(() => {
 .cloud-choice-mask .ed-modal-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
   margin-bottom: 12px;
 }
-.cloud-choice-mask .ed-modal-head b { font-size: 14px; }
+.cloud-choice-mask .ed-modal-head b { font-size: var(--fs-lg); }
 .cloud-choice-mask .btn { white-space: nowrap; }
 .cloud-choice-mask:focus { outline: none; }
 </style>

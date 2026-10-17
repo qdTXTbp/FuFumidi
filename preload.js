@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
   },
   // 取「待打开的文件」：消除冷启动时主进程 send 早于渲染进程订阅的竞态
   takePendingOpenFile: () => ipcRenderer.invoke('open-file:take'),
+  // 沉浸模式用：窗口真全屏（原生标题栏只此一法可收；退出时传 false 还原）
+  setFullScreen: (on) => ipcRenderer.invoke('win:setFullScreen', !!on),
   // 翻唱工作流（一首歌 → 分离 → 扒谱 → 合成 → 混音 → 成品）
   coverEnv: () => ipcRenderer.invoke('cover:env'),
   coverSingers: () => ipcRenderer.invoke('cover:singers'),
@@ -117,6 +119,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   videoExportEnd: (opts) => ipcRenderer.invoke('video:exportEnd', opts || {}),
   // 「变谱」：乐谱（MusicXML/MXL）→ MIDI（返回 base64 字节 + 统计信息）
   scoreToMidi: (cfg) => ipcRenderer.invoke('score:toMidi', cfg || {}),
+  scoreCancel: () => ipcRenderer.invoke('score:cancel'),
   onScoreProgress: (cb) => { const w = (_e, p) => cb(p); ipcRenderer.on('score:progress', w); return () => ipcRenderer.removeListener('score:progress', w); },
   // 识谱增强引擎（Audiveris）安装 / 检测
   omrEngine: {
@@ -174,6 +177,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   hasMidi: (p) => ipcRenderer.invoke('library:hasMidi', p),
   checkMidi: (items) => ipcRenderer.invoke('library:checkMidi', items),
   deleteMidi: (p) => ipcRenderer.invoke('library:deleteMidi', p),
+  renameMidi: (p, name) => ipcRenderer.invoke('library:renameMidi', p, name),
   revealMidi: (p) => ipcRenderer.invoke('library:reveal', p),
   midiStats: () => ipcRenderer.invoke('library:stats'),
   verifyMidi: () => ipcRenderer.invoke('library:verify'),

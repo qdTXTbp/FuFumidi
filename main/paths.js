@@ -8,7 +8,7 @@
 // 目录结构：
 //   <root>/
 //     models/            模型权重（含 torch.hub 的 hub/checkpoints）
-//     gpu-enhancements/  GPU 增强包（CUDA / DirectML 的 site-packages）
+//     gpu-enhancements/  GPU 增强包（CUDA / ROCm / XPU 的 site-packages）
 //     soundfonts/        音色库（SF2）
 //     midi/              每个曲目对应的真实 .mid 文件（曲库文件规范化）
 //     cache/             pip / huggingface / matplotlib / numba 等第三方缓存

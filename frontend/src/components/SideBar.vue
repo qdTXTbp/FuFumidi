@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted, nextTick } from 'vue';
+import { ref, computed, watch, onMounted, nextTick, reactive } from 'vue';
 import Icon from './Icon.vue';
 import CloudUserDialog from './CloudUserDialog.vue';
 import { useAppStore, SIDEBAR_DEFAULT_W, SIDEBAR_MIN_W } from '../stores/app';
@@ -7,6 +7,7 @@ import { usePlaylistStore } from '../stores/playlist';
 import { useCloudStore } from '../stores/cloud';
 import logoUrl from '../assets/logo.png';
 import { t } from '../core/i18n.js';
+import { cleanTags, addTag, removeTagAt, tagSummary } from '../core/tags.js';
 import { getAppVersion } from '../core/version.js';
 import { fmtTime } from '../core/util.js';
 import { fitMenu } from '../core/menu.js';
@@ -72,6 +73,40 @@ function onResizerKey(e) {
 // 整理方式（默认/艺术家/专辑/流派/文件夹），持久化到 localStorage
 const libSort = ref((() => { try { return localStorage.getItem('fufumidi_libsort') || 'default'; } catch (e) { return 'default'; } })());
 watch(libSort, (v) => { try { localStorage.setItem('fufumidi_libsort', v); } catch (e) {} });
+
+/* ---------------- 筛选（标签 / 流派 / 艺术家 / 专辑） ----------------
+   ★ 2026-10-17 用户：「全部曲目里可以筛选标签、流派、艺术家」「还可以筛选专辑」。
+   与「整理方式」分开：整理方式决定**顺序**，筛选决定**看哪一些**，两者可叠加、都可清空。
+   选项从**当前歌单里真实出现过的值**里取（含计数）—— 不列永远选不中的空值。 */
+const FILTER_KINDS = [
+  { k: 'tag', label: '标签' }, { k: 'genre', label: '流派' },
+  { k: 'artist', label: '艺术家' }, { k: 'album', label: '专辑' },
+];
+const filterOpen = ref(false);
+const filterKind = ref('tag');
+const filterSel = reactive(new Set());
+const filterCount = computed(() => filterSel.size);
+function setFilterKind(k) { filterKind.value = k; filterSel.clear(); }
+function toggleFilterVal(v) { if (filterSel.has(v)) filterSel.delete(v); else filterSel.add(v); }
+function clearFilter() { filterSel.clear(); filterOpen.value = false; }
+function tagValuesOf(id) {
+  const tg = app.songTags(id) || {};
+  if (filterKind.value === 'tag') return cleanTags(tg.tags);
+  return [String(tg[filterKind.value] == null ? '' : tg[filterKind.value]).trim()].filter(Boolean);
+}
+const filterOptions = computed(() => {
+  const m = new Map();
+  for (const sg of app.queueSongs) {
+    for (const v of tagValuesOf(sg.id)) m.set(v, (m.get(v) || 0) + 1);
+  }
+  return Array.from(m.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh'))
+    .map(([v, n]) => ({ v, n }));
+});
+function songMatchesFilter(sg) {
+  if (!filterSel.size) return true;
+  return tagValuesOf(sg.id).some((v) => filterSel.has(v));
+}
 const isAllView = computed(() => playlist.activePlaylistId === 'all');
 const isFavView = computed(() => playlist.activePlaylistId === 'favorites');
 /** 虚拟智能视图（全部曲目/收藏/最近播放/最常播放）：没有真实的歌单归属，不能「移除」 */
@@ -79,7 +114,7 @@ const isVirtualView = computed(() => ['all', 'favorites', 'recent', 'most'].incl
 const activePlaylist = computed(() => playlist.activePlaylist);
 
 const visibleSongs = computed(() => {
-  const base = app.queueSongs;
+  const base = app.queueSongs.filter(songMatchesFilter);   // 先筛选，再排序
   if (libSort.value === 'default') return base;
   const key = (s) => {
     const tg = app.songTags(s.id) || {};
@@ -95,7 +130,41 @@ const visibleSongs = computed(() => {
   };
   return base.slice().sort((a, b) => key(a).localeCompare(key(b), 'zh'));
 });
-/* ---------------- 标签编辑（艺术家/专辑/流派/封面） ---------------- */
+/* ---------------- 编辑信息弹窗（重命名 + 艺术家/专辑/流派 + 自定义标签） ----------------
+   ★ 2026-10-17 用户：「侧边栏对歌曲的编辑信息功能要可以重命名和自定义标签」。
+   原来是一串 prompt（艺术家 → 专辑 → 流派 → 封面），改三项要点三次确定；
+   而标签是**多个**的，用 prompt 根本表达不了。现在五项一次放进一张卡里。 */
+const infoTarget = ref(null);
+const infoForm = reactive({ name: '', artist: '', album: '', genre: '', tags: [] });
+const tagInput = ref('');
+function openInfo(s) {
+  if (!s) return;
+  infoTarget.value = s;
+  const tg = app.songTags(s.id) || {};
+  infoForm.name = s.name || '';
+  infoForm.artist = tg.artist || '';
+  infoForm.album = tg.album || '';
+  infoForm.genre = tg.genre || '';
+  infoForm.tags = cleanTags(tg.tags);
+  tagInput.value = '';
+}
+function closeInfo() { infoTarget.value = null; tagInput.value = ''; }
+function addInfoTag() { infoForm.tags = addTag(infoForm.tags, tagInput.value); tagInput.value = ''; }
+function removeInfoTag(i) { infoForm.tags = removeTagAt(infoForm.tags, i); }
+async function saveInfo() {
+  const s = infoTarget.value;
+  if (!s) return;
+  const renamed = await app.renameSong(s.id, infoForm.name);
+  app.setSongTags(s.id, {
+    artist: infoForm.artist.trim(), album: infoForm.album.trim(), genre: infoForm.genre.trim(),
+    tags: cleanTags(infoForm.tags),
+  });
+  app.toast(renamed ? t('已重命名并保存信息') : t('信息已保存'), 'ok');
+  closeInfo();
+}
+/** 列表行里展示的标签（最多 2 条，多的折成 +N） */
+function rowTags(id) { const tg = app.songTags(id) || {}; return tagSummary(cleanTags(tg.tags)); }
+// 旧的 prompt 版仍留着（右键菜单里没走弹窗时的兜底，其它页面也可能调用）
 async function editTags(id) { try { await app.editTags(id); } catch (e) {} }
 function tagOf(id) { return app.songTags(id) || {}; }
 function rowCover(id) { const t = app.songTags(id); return t && t.cover ? t.cover : ''; }
@@ -104,6 +173,8 @@ function rowSub(s) {
   const bits = [];
   if (tg.artist) bits.push(tg.artist);
   if (tg.album) bits.push(tg.album);
+  const tgSum = rowTags(s.id);
+  if (tgSum) bits.push(tgSum);
   return bits.join(' · ');
 }
 
@@ -634,7 +705,7 @@ const showAuth = ref(false);
     </div>
 
     <div class="sidebar-body">
-      <div style="display:flex;gap:6px">
+      <div style="display:flex;gap:var(--sp-2)">
         <button class="btn sm" data-guide="sidebar-import" style="flex:1;min-width:0;justify-content:center" @click="onPick">
           <Icon name="import" :size="14" /> {{ t('导入到曲库') }}
         </button>
@@ -656,13 +727,31 @@ const showAuth = ref(false);
           <option value="genre">{{ t('按流派') }}</option>
           <option value="folder">{{ t('按文件夹') }}</option>
         </select>
+          <!-- 筛选：标签 / 流派 / 艺术家 / 专辑（与整理方式叠加） -->
+          <span class="lib-filter">
+            <button class="chip-btn" :class="{ on: filterCount > 0 }" :title="t('按标签 / 流派 / 艺术家 / 专辑筛选')" @click="filterOpen = !filterOpen">
+              {{ t('筛选') }}<b v-if="filterCount" class="lib-filter-n">{{ filterCount }}</b>
+            </button>
+            <button v-if="filterCount" class="chip-btn" :title="t('清除筛选')" @click="clearFilter">✕</button>
+            <div v-if="filterOpen" class="lib-filter-pop" @click.stop>
+              <div class="lib-filter-kinds">
+                <button v-for="k in FILTER_KINDS" :key="k.k" class="chip-btn" :class="{ on: filterKind === k.k }" @click="setFilterKind(k.k)">{{ t(k.label) }}</button>
+              </div>
+              <div class="lib-filter-vals">
+                <button v-for="o in filterOptions" :key="o.v" class="chip-btn" :class="{ on: filterSel.has(o.v) }" @click="toggleFilterVal(o.v)">
+                  {{ o.v }}<span class="lib-filter-c">{{ o.n }}</span>
+                </button>
+                <span v-if="!filterOptions.length" class="muted small">{{ t('这首歌单里还没有这类信息') }}</span>
+              </div>
+            </div>
+          </span>
       </div>
 
       <div class="nav-sep"></div>
 
       <!-- 歌单列表 -->
       <div class="pl-head" data-guide="sidebar-playlists">
-        <span class="nav-group-title" style="padding:6px 12px 4px">{{ t('MIDI 歌单') }}</span>
+        <span class="nav-group-title" style="padding:var(--sp-2) var(--sp-3) var(--sp-1)">{{ t('MIDI 歌单') }}</span>
         <div style="display:flex;gap:2px">
           <button class="icon-btn" style="width:24px;height:24px" :title="plCollapsed ? t('展开歌单') : t('折叠歌单')" :aria-label="plCollapsed ? t('展开歌单') : t('折叠歌单')" @click="plCollapsed = !plCollapsed">
             {{ plCollapsed ? '▸' : '▾' }}
@@ -674,8 +763,8 @@ const showAuth = ref(false);
       </div>
       <div class="pl-hint muted small">{{ t('右键歌单可管理 · 按数字 1~9 快速切换歌单') }}</div>
       <div v-if="plCreating" class="pl-new">
-        <input v-model="newPlName" class="text-input" style="flex:1;padding:4px 8px;font-size:12px" :placeholder="t('歌单名')" @keydown.enter="onNewPlKey" @keydown.esc="onNewPlKey" autofocus />
-        <button class="btn sm" style="padding:3px 10px" @click="createPl()">{{ t('确定') }}</button>
+        <input v-model="newPlName" class="text-input" style="flex:1;padding:var(--sp-1) var(--sp-2);font-size:var(--fs-sm)" :placeholder="t('歌单名')" @keydown.enter="onNewPlKey" @keydown.esc="onNewPlKey" autofocus />
+        <button class="btn sm" style="padding:3px var(--sp-3)" @click="createPl()">{{ t('确定') }}</button>
       </div>
 
       <template v-if="!plCollapsed">
@@ -714,7 +803,7 @@ const showAuth = ref(false);
       <div class="nav-sep"></div>
 
       <!-- 歌曲列表（按当前歌单过滤） -->
-      <div v-if="!visibleSongs.length" class="muted small" style="padding:8px 12px;line-height:1.6">
+      <div v-if="!visibleSongs.length" class="muted small" style="padding:var(--sp-2) var(--sp-3);line-height:1.6">
         {{ emptyHint }}
       </div>
 
@@ -756,16 +845,16 @@ const showAuth = ref(false);
           <small>{{ rowSub(s) ? rowSub(s) + ' · ' : '' }}{{ s.song ? s.song.tracks.length : (s.meta.tracks || '—') }} {{ t(' 轨 · ') }} {{ (s.meta.size / 1024).toFixed(0) }} KB<span v-if="fmtDur(s)"> · {{ fmtDur(s) }}</span></small>
         </div>
         <div class="si-tools" v-if="!playlist.batchOn">
-          <button class="icon-btn heart" :class="{ on: isFav(s.id) }" style="width:26px;height:26px;font-size:13px" :title="t('收藏')" :aria-label="t('收藏')" @click.stop="toggleFav(s.id)">
+          <button class="icon-btn heart" :class="{ on: isFav(s.id) }" style="width:26px;height:26px;font-size:var(--fs-md)" :title="t('收藏')" :aria-label="t('收藏')" @click.stop="toggleFav(s.id)">
             <Icon :name="isFav(s.id) ? 'heart' : 'heart-o'" :size="14" />
           </button>
-          <button class="icon-btn" style="width:26px;height:26px;font-size:13px" :title="t('添加到歌单')" :aria-label="t('添加到歌单')" @click.stop="openAddToPl(s.id)">
+          <button class="icon-btn" style="width:26px;height:26px;font-size:var(--fs-md)" :title="t('添加到歌单')" :aria-label="t('添加到歌单')" @click.stop="openAddToPl(s.id)">
             <Icon name="plus" :size="14" />
           </button>
-          <button class="icon-btn" style="width:26px;height:26px;font-size:13px" :title="t('编辑信息（艺术家/专辑/流派/封面）')" :aria-label="t('编辑信息')" @click.stop="editTags(s.id)">
+          <button class="icon-btn" style="width:26px;height:26px;font-size:var(--fs-md)" :title="t('编辑信息（重命名 / 艺术家 / 专辑 / 流派 / 标签）')" :aria-label="t('编辑信息')" @click.stop="openInfo(s)">
             <Icon name="pencil" :size="13" />
           </button>
-          <button class="icon-btn" style="width:26px;height:26px;font-size:13px" :title="isFavView ? t('取消收藏') : (isVirtualView ? t('删除（含本地文件）') : t('从歌单移除'))" :aria-label="t('移除')" @click.stop="isFavView ? toggleFav(s.id) : (isVirtualView ? songDelete(s) : songRemove(s))">
+          <button class="icon-btn" style="width:26px;height:26px;font-size:var(--fs-md)" :title="isFavView ? t('取消收藏') : (isVirtualView ? t('删除（含本地文件）') : t('从歌单移除'))" :aria-label="t('移除')" @click.stop="isFavView ? toggleFav(s.id) : (isVirtualView ? songDelete(s) : songRemove(s))">
             <Icon name="trash" :size="14" />
           </button>
         </div>
@@ -773,15 +862,15 @@ const showAuth = ref(false);
       </div>
     </div>
 
-    <div style="padding:10px 14px;border-top:1px solid var(--border)" class="small muted row">
+    <div style="padding:var(--sp-3) var(--sp-4);border-top:1px solid var(--border)" class="small muted row">
       <!-- 版本号不折行：窄侧栏下「v5.0.0-beta.2」曾被折成两行（UX 复核第 6 条） -->
       <span class="tag ver-tag">{{ appVersion }}</span>
-      <button class="cloud-user" style="margin-left:auto;display:flex;align-items:center;gap:8px;background:none;border:none;color:inherit;cursor:pointer;padding:3px 6px;border-radius:9px"
+      <button class="cloud-user" style="margin-left:auto;display:flex;align-items:center;gap:var(--sp-2);background:none;border:none;color:inherit;cursor:pointer;padding:3px var(--sp-2);border-radius:var(--r-md)"
               :title="t('账号与云同步')" :aria-label="t('账号与云同步')" @click="showAuth = true">
         <span class="cloud-avatar">
           <svg viewBox="0 0 40 40" width="26" height="26" aria-hidden="true">
-            <circle cx="20" cy="14" r="9" fill="#9aa0a6"/>
-            <path d="M7 36a13 13 0 0 1 26 0z" fill="#9aa0a6"/>
+            <circle cx="20" cy="14" r="9" fill="var(--stone, #9aa0a6)"/>
+            <path d="M7 36a13 13 0 0 1 26 0z" fill="var(--stone, #9aa0a6)"/>
           </svg>
         </span>
         <span class="cloud-uname" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:110px"
@@ -810,7 +899,7 @@ const showAuth = ref(false);
             <button class="pl-add-item" v-for="pl in playlist.playlists" :key="pl.id" @click="addToPlChoose(pl.id)">
               <Icon name="folder" :size="13" /><span class="pl-name">{{ pl.name }}</span><em>{{ pl.songIds.length }}</em>
             </button>
-            <div v-if="!playlist.playlists.length" class="muted small" style="padding:8px 2px">{{ t('暂无歌单，可在下方新建') }}</div>
+            <div v-if="!playlist.playlists.length" class="muted small" style="padding:var(--sp-2) 2px">{{ t('暂无歌单，可在下方新建') }}</div>
           </div>
           <div class="pl-add-new">
             <input id="pl-add-new-name" name="pl-add-new-name" v-model="addToPlNew" class="text-input" style="flex:1;min-width:0" :placeholder="t('新建歌单名')" :aria-label="t('新建歌单名')" @keydown.enter="addToPlCreate" @keydown.esc="closeAddToPl" />
@@ -828,7 +917,7 @@ const showAuth = ref(false);
       <div v-if="renameTarget" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="t('重命名歌单')" @click.self="closeRename" @keydown.esc="closeRename">
         <div class="ed-modal" style="width:min(320px,92vw)">
           <div class="ed-modal-head"><b>{{ t('重命名歌单') }}</b><button class="icon-btn" style="margin-left:auto" :title="t('关闭')" :aria-label="t('关闭')" @click="closeRename"><Icon name="close" :size="14" /></button></div>
-          <div style="padding:14px 4px 4px">
+          <div style="padding:var(--sp-4) var(--sp-1) var(--sp-1)">
             <input id="pl-rename-name" name="pl-rename-name" v-model="renameVal" class="text-input" style="width:100%" :aria-label="t('歌单名')" @keydown.enter="confirmRename" @keydown.esc="closeRename" />
           </div>
           <div class="ed-modal-foot">
@@ -839,12 +928,59 @@ const showAuth = ref(false);
       </div>
     </Transition>
 
+    <!-- 编辑信息：重命名 + 艺术家/专辑/流派 + 自定义标签 -->
+    <Transition name="ov">
+      <div v-if="infoTarget" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="t('编辑信息')" @click.self="closeInfo" @keydown.esc="closeInfo">
+        <div class="ed-modal" style="width:min(430px,94vw)">
+          <div class="ed-modal-head">
+            <b>{{ t('编辑信息') }}</b>
+            <button class="icon-btn" style="margin-left:auto" :title="t('关闭')" :aria-label="t('关闭')" @click="closeInfo"><Icon name="close" :size="14" /></button>
+          </div>
+          <div class="ed-info-body">
+            <label class="ed-info-row">
+              <span>{{ t('名称') }}</span>
+              <input id="song-info-name" name="song-info-name" class="text-input" v-model="infoForm.name" :aria-label="t('歌曲名')" @keydown.enter="saveInfo" />
+            </label>
+            <label class="ed-info-row">
+              <span>{{ t('艺术家') }}</span>
+              <input id="song-info-artist" name="song-info-artist" class="text-input" v-model="infoForm.artist" :aria-label="t('艺术家')" @keydown.enter="saveInfo" />
+            </label>
+            <label class="ed-info-row">
+              <span>{{ t('专辑') }}</span>
+              <input id="song-info-album" name="song-info-album" class="text-input" v-model="infoForm.album" :aria-label="t('专辑')" @keydown.enter="saveInfo" />
+            </label>
+            <label class="ed-info-row">
+              <span>{{ t('流派') }}</span>
+              <input id="song-info-genre" name="song-info-genre" class="text-input" v-model="infoForm.genre" :aria-label="t('流派')" @keydown.enter="saveInfo" />
+            </label>
+            <div class="ed-info-row ed-info-tags">
+              <span>{{ t('自定义标签') }}</span>
+              <div class="ed-tag-box">
+                <span v-for="(tg, i) in infoForm.tags" :key="tg + i" class="ed-tag-chip">
+                  {{ tg }}
+                  <button class="ed-tag-x" :title="t('移除标签')" :aria-label="t('移除标签')" @click.prevent="removeInfoTag(i)"><Icon name="close" :size="10" /></button>
+                </span>
+                <input id="song-info-tag" name="song-info-tag" class="ed-tag-input" v-model="tagInput"
+                       :placeholder="t('输入标签后回车')" :aria-label="t('自定义标签')"
+                       @keydown.enter.prevent="addInfoTag" @keydown.,.prevent="addInfoTag" />
+              </div>
+            </div>
+            <p class="ed-info-hint">{{ t('重命名只改曲库里的名字，不动磁盘文件；标签最多 24 条。') }}</p>
+          </div>
+          <div class="ed-modal-foot">
+            <button class="btn sm ghost" @click="closeInfo">{{ t('取消') }}</button>
+            <button class="btn sm primary" @click="saveInfo">{{ t('保存') }}</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
     <!-- 确认弹窗 -->
     <Transition name="ov">
       <div v-if="confirmDlg" class="ed-modal-mask ed-modal-top" role="dialog" aria-modal="true" :aria-label="confirmDlg.title" @click.self="closeConfirm" @keydown.esc="closeConfirm">
         <div class="ed-modal" style="width:min(340px,92vw)">
           <div class="ed-modal-head"><b>{{ confirmDlg.title }}</b><button class="icon-btn" style="margin-left:auto" :title="t('关闭')" :aria-label="t('关闭')" @click="closeConfirm"><Icon name="close" :size="14" /></button></div>
-          <div style="padding:14px 4px 4px;line-height:1.6;color:var(--ink)" class="small">{{ confirmDlg.msg }}</div>
+          <div style="padding:var(--sp-4) var(--sp-1) var(--sp-1);line-height:1.6;color:var(--ink)" class="small">{{ confirmDlg.msg }}</div>
           <div class="ed-modal-foot">
             <button class="btn sm ghost" @click="closeConfirm">{{ t('取消') }}</button>
             <button class="btn sm danger" @click="runConfirm">{{ confirmDlg.okText }}</button>
@@ -877,13 +1013,13 @@ const showAuth = ref(false);
               <button class="pl-ctx-item" v-for="pl in playlist.playlists" :key="pl.id" @click="songMenuAddTo(pl.id)">
                 <span class="ctx-sub-name">{{ pl.name }}</span><em class="ctx-sub-num">{{ pl.songIds.length }}</em>
               </button>
-              <div v-if="!playlist.playlists.length" class="muted small" style="padding:6px 10px">{{ t('暂无歌单') }}</div>
+              <div v-if="!playlist.playlists.length" class="muted small" style="padding:var(--sp-2) var(--sp-3)">{{ t('暂无歌单') }}</div>
               <div class="ctx-sep"></div>
               <button class="pl-ctx-item" @click="openAddToPl(songMenu.s.id); closeSongMenu()">{{ t('新建歌单…') }}</button>
             </div>
           </div>
           <button class="pl-ctx-item" @click="toggleFav(songMenu.s.id); closeSongMenu()">{{ isFav(songMenu.s.id) ? t('取消收藏') : t('收藏') }}</button>
-          <button class="pl-ctx-item" @click="editTags(songMenu.s.id); closeSongMenu()">{{ t('编辑信息') }}</button>
+          <button class="pl-ctx-item" @click="openInfo(songMenu.s); closeSongMenu()">{{ t('编辑信息') }}</button>
           <button class="pl-ctx-item" @click="songReveal(songMenu.s); closeSongMenu()">{{ t('打开所在文件夹') }}</button>
           <div class="ctx-sep"></div>
           <button class="pl-ctx-item" @click="songMenuBatch(songMenu.s)">{{ t('批量管理') }}</button>
@@ -922,7 +1058,7 @@ const showAuth = ref(false);
             <button class="btn sm ghost" @click="closeBatchManager">{{ t('完成') }}</button>
           </div>
           <div class="bm-list">
-            <div v-if="!bmSongs.length" class="muted small" style="padding:12px 4px">{{ t('当前歌单没有曲目') }}</div>
+            <div v-if="!bmSongs.length" class="muted small" style="padding:var(--sp-3) var(--sp-1)">{{ t('当前歌单没有曲目') }}</div>
             <div v-for="s in bmSongs" :key="s.id" class="bm-item" :class="{ 'bm-drag-target': bmDragOverId === s.id, 'bm-fav-on': playlist.isFavorite(s.id) }"
                  draggable="true"
                  @dragstart="bmDragStart(s, $event)"
@@ -952,7 +1088,7 @@ const showAuth = ref(false);
 <style scoped>
 .cloud-avatar {
   width: 28px; height: 28px; border-radius: 50%;
-  background: var(--card, #2a2e37);
+  background: var(--card, var(--surface-soft));
   display: inline-flex; align-items: center; justify-content: center;
   flex: none;
 }
@@ -961,17 +1097,17 @@ const showAuth = ref(false);
 .btn.sidebar-primary {
   border: 1px solid var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 600;
 }
 .btn.sidebar-primary:hover {
-  background: color-mix(in srgb, var(--accent) 86%, #000);
+  background: color-mix(in srgb, var(--accent) 86%, var(--canvas));
   border-color: var(--accent);
 }
-.si-fav { color: var(--stone); font-size: 13px; }
+.si-fav { color: var(--stone); font-size: var(--fs-md); }
 .si-fav.on { color: var(--amber); }
 /* 歌曲列表容器：拖拽高亮动画（上游 v3.0.0 恢复） */
-.song-list { min-height: 18px; border-radius: 10px; transition: box-shadow var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out); }
+.song-list { min-height: 18px; border-radius: var(--r-md); transition: box-shadow var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out); }
 .song-list.drag-active { box-shadow: inset 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .si-drag { display: inline-flex; align-items: center; color: var(--stone); cursor: grab; opacity: .35; margin-right: 2px; transition: opacity var(--motion-fast) var(--ease-out); user-select: none; }
 .song-item:hover .si-drag, .song-item.dragging .si-drag { opacity: 1; }
@@ -979,26 +1115,26 @@ const showAuth = ref(false);
 .song-item.dragTarget { background: var(--surface-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 
 /* master 版歌单项：图标 + 计数 + hover 工具按钮 */
-.pl-head { display: flex; align-items: center; justify-content: space-between; padding-right: 6px; }
-.pl-hint { padding: 0 12px 2px; font-size: 10.5px; color: var(--stone); }
-.pl-new { display: flex; align-items: center; gap: 6px; padding: 4px 12px; }
+.pl-head { display: flex; align-items: center; justify-content: space-between; padding-right: var(--sp-2); }
+.pl-hint { padding: 0 var(--sp-3) 2px; font-size: var(--fs-xs); color: var(--stone); }
+.pl-new { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-3); }
 /* 歌单列表容器：拖拽高亮动画（上游 v3.0.0 恢复） */
-.pl-list { display: flex; flex-direction: column; gap: 2px; padding: 2px; margin-bottom: 6px; border: 1px solid transparent; border-radius: 10px; transition: box-shadow var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out); }
+.pl-list { display: flex; flex-direction: column; gap: 2px; padding: 2px; margin-bottom: var(--sp-2); border: 1px solid transparent; border-radius: var(--r-md); transition: box-shadow var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out); }
 .pl-list:has(.pl-item.dragging) { box-shadow: inset 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 5%, transparent); }
-.pl-item { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: var(--radius-sm); font-size: 13px; color: var(--charcoal); cursor: pointer; border: 1px solid transparent; transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out); }
+.pl-item { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-sm); font-size: var(--fs-md); color: var(--charcoal); cursor: pointer; border: 1px solid transparent; transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out); }
 /* 智能入口 2×2 网格：全部曲目/收藏/最近播放/最常播放 两两并置，精简面板高度 */
-.pl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 0 8px; margin-bottom: 4px; }
-.pl-grid .pl-item { padding: 6px 9px; gap: 6px; font-size: 12px; min-width: 0; }
+.pl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-1); padding: 0 var(--sp-2); margin-bottom: var(--sp-1); }
+.pl-grid .pl-item { padding: var(--sp-2) var(--sp-2); gap: var(--sp-2); font-size: var(--fs-sm); min-width: 0; }
 .pl-grid .pl-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-grid .pl-item em { flex: none; }
 .pl-item:hover { background: var(--surface-soft); color: var(--ink); }
 .pl-item.on { background: color-mix(in srgb, var(--brand-blue-200) 58%, transparent); color: var(--brand-blue-deep); font-weight: 600; }
 .pl-item .pl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 歌单的快捷键编号：小而未选中时低调，选中时高亮 */
-.pl-item .pl-key { flex: none; width: 15px; text-align: center; font-size: 10px; line-height: 15px;
-                   border-radius: 4px; border: 1px solid var(--hairline); color: var(--stone); }
+.pl-item .pl-key { flex: none; width: 15px; text-align: center; font-size: var(--fs-xs); line-height: 15px;
+                   border-radius: var(--r-sm); border: 1px solid var(--hairline); color: var(--stone); }
 .pl-item.on .pl-key { border-color: var(--brand-blue); color: var(--brand-blue-deep); }
-.pl-item em { font-style: normal; font-size: 11px; color: var(--stone); font-variant-numeric: tabular-nums; }
+.pl-item em { font-style: normal; font-size: var(--fs-xs); color: var(--stone); font-variant-numeric: tabular-nums; }
 .pl-item.on em { color: var(--brand-blue-deep); }
 .pl-item .pl-tools { display: flex; gap: 2px; opacity: 0; transition: opacity var(--motion-fast) var(--ease-out); }
 .pl-item:hover .pl-tools { opacity: 1; }
@@ -1020,7 +1156,7 @@ const showAuth = ref(false);
   gap: 2px;
   flex: none;
   padding: 2px 3px;
-  border-radius: 8px;
+  border-radius: var(--r-md);
   background: linear-gradient(90deg, transparent, var(--surface-soft) 26%);
   box-shadow: none;
   opacity: 0;
@@ -1034,27 +1170,27 @@ const showAuth = ref(false);
 .icon-btn.heart.on { color: var(--brand-coral); }
 
 /* 搜索框 */
-.pl-search { display: flex; align-items: center; gap: 6px; padding: 2px 4px; color: var(--stone); }
-.pl-search .text-input { flex: 1; min-width: 0; padding: 4px 8px; font-size: 12px; }
+.pl-search { display: flex; align-items: center; gap: var(--sp-2); padding: 2px var(--sp-1); color: var(--stone); }
+.pl-search .text-input { flex: 1; min-width: 0; padding: var(--sp-1) var(--sp-2); font-size: var(--fs-sm); }
 .pl-search input::placeholder { color: var(--stone); opacity: .8; }
 
 /* 弹窗（与 ViewEdit 一致的应用内弹窗样式） */
 .ed-modal-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.35); display: flex; align-items: center; justify-content: center; z-index: var(--z-modal); }
 /* 确认弹窗需要盖在批量管理子页面（同 z-index 且更靠后渲染）之上 */
 .ed-modal-top { z-index: var(--z-modal-top); }
-.ed-modal { width: min(560px, 92vw); background: var(--canvas); border-radius: 14px; box-shadow: 0 24px 64px rgba(16,24,40,0.2); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-.ed-modal-head { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink); }
-.ed-modal-head b { font-size: 15px; }
-.ed-modal-foot { display: flex; justify-content: flex-end; gap: 8px; }
+.ed-modal { width: min(560px, 92vw); background: var(--canvas); border-radius: var(--r-lg); box-shadow: 0 24px 64px rgba(16,24,40,0.2); padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3); }
+.ed-modal-head { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-lg); color: var(--ink); }
+.ed-modal-head b { font-size: var(--fs-lg); }
+.ed-modal-foot { display: flex; justify-content: flex-end; gap: var(--sp-2); }
 .ed-modal-foot .btn.danger { border-color: rgba(212, 86, 86, 0.4); color: var(--error); }
 
 /* 添加到歌单弹窗列表 */
 .pl-add-list { display: flex; flex-direction: column; gap: 2px; max-height: 34vh; overflow-y: auto; }
-.pl-add-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: none; background: transparent; border-radius: var(--radius-sm); font-size: 13px; color: var(--charcoal); cursor: pointer; text-align: left; transition: background var(--motion-fast) var(--ease-out); }
+.pl-add-item { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border: none; background: transparent; border-radius: var(--r-sm); font-size: var(--fs-md); color: var(--charcoal); cursor: pointer; text-align: left; transition: background var(--motion-fast) var(--ease-out); }
 .pl-add-item:hover { background: var(--surface-soft); color: var(--ink); }
 .pl-add-item .pl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pl-add-item em { font-style: normal; font-size: 11px; color: var(--stone); font-variant-numeric: tabular-nums; }
-.pl-add-new { display: flex; align-items: center; gap: 6px; border-top: 1px dashed var(--hairline); padding-top: 10px; }
+.pl-add-item em { font-style: normal; font-size: var(--fs-xs); color: var(--stone); font-variant-numeric: tabular-nums; }
+.pl-add-new { display: flex; align-items: center; gap: var(--sp-2); border-top: 1px dashed var(--hairline); padding-top: var(--sp-3); }
 
 /* 侧边栏宽度拖动把手 */
 .sidebar-resizer {
@@ -1072,7 +1208,7 @@ const showAuth = ref(false);
   top: 0; right: 1px;
   width: 2px;
   height: 100%;
-  border-radius: 2px;
+  border-radius: var(--r-sm);
   background: transparent;
   transition: background var(--motion-fast) var(--ease-out);
 }
@@ -1086,24 +1222,24 @@ body.resize-col .sidebar-resizer::after {
 
 /* 歌单右键菜单 */
 .pl-ctx-mask { position: fixed; inset: 0; z-index: var(--z-ctx); }
-.pl-ctx-menu { position: fixed; min-width: 160px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 4px; display: flex; flex-direction: column; gap: 2px; max-height: calc(100vh - 16px); overflow-y: auto; overscroll-behavior: contain; }
-.pl-ctx-item { text-align: left; border: none; background: transparent; color: var(--ink); padding: 7px 10px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+.pl-ctx-menu { position: fixed; min-width: 160px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--r-md); box-shadow: var(--shadow-lg); padding: var(--sp-1); display: flex; flex-direction: column; gap: 2px; max-height: calc(100vh - 16px); overflow-y: auto; overscroll-behavior: contain; }
+.pl-ctx-item { text-align: left; border: none; background: transparent; color: var(--ink); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-sm); font-size: var(--fs-md); cursor: pointer; }
 .pl-ctx-item:hover { background: var(--surface-soft); }
 .pl-ctx-item.danger { color: var(--error); }
 
 /* 批量管理子页面 */
-.bm-bar { display: flex; align-items: center; gap: 6px; padding: 10px 4px; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+.bm-bar { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-1); flex-wrap: wrap; border-bottom: 1px solid var(--border); }
 .bm-spacer { flex: 1; min-width: 0; }
 .bm-move { flex: 0 1 150px; min-width: 104px; }
-.bm-heart { color: var(--brand-magenta); font-size: 12px; }
+.bm-heart { color: var(--brand-magenta); font-size: var(--fs-sm); }
 .bm-heart.on { color: var(--brand-coral); }
-.bm-list { max-height: 52vh; overflow-y: auto; padding: 6px 4px; display: flex; flex-direction: column; gap: 2px; }
-.bm-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
+.bm-list { max-height: 52vh; overflow-y: auto; padding: var(--sp-2) var(--sp-1); display: flex; flex-direction: column; gap: 2px; }
+.bm-item { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-2); border-radius: var(--r-md); cursor: pointer; }
 .bm-item:hover { background: var(--surface-soft); }
 .bm-item input { width: 14px; height: 14px; accent-color: var(--brand-blue); flex: none; }
-.bm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--ink); }
+.bm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-md); color: var(--ink); }
 .bm-fav-btn { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--stone); font-size: 12px; cursor: pointer; }
+  border: 1px solid transparent; border-radius: var(--r-sm); background: transparent; color: var(--stone); font-size: var(--fs-sm); cursor: pointer; }
 .bm-fav-btn:hover { background: var(--surface); color: var(--brand-coral); }
 .bm-fav-btn.on { color: var(--brand-coral); }
 .bm-item.bm-fav-on .bm-name { color: var(--ink-strong); }
@@ -1112,7 +1248,7 @@ body.resize-col .sidebar-resizer::after {
 .bm-item[draggable="true"]:active { cursor: grabbing; }
 .bm-drag { display: inline-flex; align-items: center; color: var(--stone); cursor: grab; flex: none; }
 /* 曲目列表上方的批量工具栏：比弹窗里的工具栏更紧凑，且不做分隔线 */
-.song-batch-bar { padding: 6px 12px; border-bottom: none; }
+.song-batch-bar { padding: var(--sp-2) var(--sp-3); border-bottom: none; }
 /* 批量模式下每行的勾选框 */
 .si-check { width: 14px; height: 14px; flex: none; accent-color: var(--brand-blue); }
 .song-item.batch-sel { background: var(--surface); box-shadow: inset 0 0 0 1px var(--accent); }
@@ -1120,15 +1256,37 @@ body.resize-col .sidebar-resizer::after {
 /* 曲目右键菜单：与歌单菜单同款，额外支持「添加到歌单」子菜单 */
 .song-ctx { min-width: 186px; }
 .ctx-sub-wrap { position: relative; }
-.ctx-has-sub { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
-.ctx-arrow { color: var(--stone); font-size: 11px; line-height: 1; }
+.ctx-has-sub { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); width: 100%; }
+.ctx-arrow { color: var(--stone); font-size: var(--fs-xs); line-height: 1; }
 .pl-ctx-menu.ctx-sub {
   position: absolute; left: 100%; top: -4px; min-width: 168px;
   max-height: 46vh; overflow-y: auto;
 }
 .pl-ctx-menu.ctx-sub.flip { left: auto; right: 100%; }
-.pl-ctx-menu.ctx-sub .pl-ctx-item { display: flex; align-items: center; gap: 8px; }
+.pl-ctx-menu.ctx-sub .pl-ctx-item { display: flex; align-items: center; gap: var(--sp-2); }
 .ctx-sub-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ctx-sub-num { font-style: normal; font-size: 11px; color: var(--stone); font-variant-numeric: tabular-nums; }
-.ctx-sep { height: 1px; background: var(--hairline); margin: 3px 6px; }
+.ctx-sub-num { font-style: normal; font-size: var(--fs-xs); color: var(--stone); font-variant-numeric: tabular-nums; }
+.ctx-sep { height: 1px; background: var(--hairline); margin: 3px var(--sp-2); }
+/* 筛选（与整理方式同排）：一个切换按钮 + 浮层（种类一行、取值一行带计数） */
+.lib-filter { position: relative; display: inline-flex; align-items: center; gap: var(--sp-1); }
+.lib-filter-n { color: var(--accent); margin-left: 3px; }
+.lib-filter-pop { position: absolute; top: calc(100% + var(--sp-1)); left: 0; z-index: 40; width: min(280px, 78vw);
+  padding: var(--sp-2); border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface); box-shadow: var(--shadow); }
+.lib-filter-kinds { display: flex; flex-wrap: wrap; gap: var(--sp-1); padding-bottom: var(--sp-1); border-bottom: 1px solid var(--hairline-soft); }
+.lib-filter-vals { display: flex; flex-wrap: wrap; gap: var(--sp-1); max-height: 190px; overflow: auto; padding-top: var(--sp-1); }
+.lib-filter-c { color: var(--stone); margin-left: 3px; }
+/* 编辑信息弹窗：四行输入 + 标签区（值全部走 token，界面审计的棘轮才不会被顶上去） */
+.ed-info-body { padding: var(--sp-4) var(--sp-1) var(--sp-1); display: flex; flex-direction: column; gap: var(--sp-2); }
+.ed-info-row { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-sm); color: var(--ink); }
+.ed-info-row > span { flex: none; width: 62px; color: var(--stone); }
+.ed-info-row .text-input { flex: 1; min-width: 0; }
+.ed-info-tags { align-items: flex-start; }
+.ed-tag-box { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1);
+  padding: var(--sp-1); border: 1px solid var(--hairline); border-radius: var(--r-sm); background: var(--surface-soft); }
+.ed-tag-chip { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 1px var(--sp-2);
+  border-radius: var(--r-pill); background: var(--accent-soft, var(--surface)); color: var(--accent);
+  border: 1px solid var(--hairline); font-size: var(--fs-xs); }
+.ed-tag-x { display: inline-flex; align-items: center; border: none; background: none; color: inherit; cursor: pointer; padding: 0; }
+.ed-tag-input { flex: 1; min-width: 84px; border: none; background: none; outline: none; color: var(--ink); font-size: var(--fs-sm); }
+.ed-info-hint { margin: 0; color: var(--stone); font-size: var(--fs-xs); line-height: 1.5; }
 </style>

@@ -4,7 +4,7 @@
 //
 // 三种增强包（kind）：
 //   cuda     —— NVIDIA（torch cu128 + onnxruntime-gpu）
-//   directml —— AMD / Intel（torch-directml + onnxruntime-directml）；不装专用包也能用的保底路径
+//   ★ DirectML 增强包已下线（2026-10-19 用户决定，不再提供下载与安装）。
 //   rocm     —— AMD 较新 Radeon（ROCm 7.2；**只提供 cp312 轮子，必须配 Python 3.12 运行时**）
 //   xpu      —— Intel 独显 / 核显（torch+xpu，Intel oneAPI）
 //               ★ 与 cuda **互斥**（xpu 版 torch 不带 CUDA，两个包不能同时挂）；
@@ -21,10 +21,15 @@ const path = require('path');
 const fs = require('fs');
 const Paths = require('./paths');
 
-const GPU_KINDS = ['cuda', 'directml', 'rocm', 'xpu'];
+const GPU_KINDS = ['cuda', 'rocm', 'xpu'];
 /** 每种增强包所要求的 CPython 次版本（决定用哪个解释器跑引擎） */
-const KIND_PY = { cuda: '3.11', directml: '3.11', rocm: '3.12', xpu: '3.11' };
-const KIND_LABEL = { cuda: 'CUDA', directml: 'DirectML', rocm: 'ROCm', xpu: 'Intel XPU' };
+/* 目标 CPython 次版本：只在**包还没装**时用来判断"该按哪个版本构建/下载"（见 fitsPython）。
+   ★ 2026-10-17：运行时升到 3.12 之后，这里曾写死 cuda: '3.11' —— 于是装好的 CUDA 包被判定
+   与运行时不符、GPU 一直不生效，而界面又只说"已安装"（用户实测："工具 gpu 加速没有生效"）。
+   现在**已安装的包以它自己的 ABI 为准**（packAbi 读 torch 的 _C.cp3XX 文件名），
+   这里的常量只作为"未安装时的目标版本"。 */
+const KIND_PY = { cuda: '3.12', rocm: '3.12', xpu: '3.12' };
+const KIND_LABEL = { cuda: 'CUDA', rocm: 'ROCm', xpu: 'Intel XPU' };
 
 /** 是否是已知的增强包类型 */
 function isGpuKind(kind) {
@@ -36,13 +41,28 @@ function requiredPython(kind) {
   return KIND_PY[String(kind || '').toLowerCase()] || null;
 }
 
-/** 该增强包能否在给定的 Python 次版本下加载 */
+/** 已安装增强包里 torch 扩展的 ABI（'3.11' / '3.12'）——文件名就是权威来源，不看清单声明 */
+function packAbi(kind) {
+  try {
+    const t = path.join(gpuEnhanceSite(kind), 'torch');
+    if (!fs.existsSync(t)) return '';
+    const f = fs.readdirSync(t).find((n) => /^_C\.cp3\d+-/.test(n));
+    const m = f && /cp3(\d+)/.exec(f);
+    return m ? ('3.' + m[1]) : '';
+  } catch (e) { return ''; }
+}
+
+/** 该增强包能否在给定的 Python 次版本下加载。
+ *  ★ 已安装的包**以包自己的 ABI 为准**：清单里写的目标版本会过期（运行时升级过，包没重建），
+ *    而 _C.cpXX 文件名是编译事实。只有没装包时才退回 KIND_PY 的目标版本。 */
 function fitsPython(kind, minor) {
-  const need = requiredPython(kind);
-  if (!need) return false;
   // 先校验格式：探测失败时可能传进来 'undefined.undefined' 之类的脏值，
   // 不能让它悄悄参与比较（宁可判不匹配，也不要拿脏值去放行）。
   if (!/^\d+\.\d+$/.test(String(minor || ''))) return false;
+  const abi = packAbi(kind);
+  if (abi) return String(minor) === abi;
+  const need = requiredPython(kind);
+  if (!need) return false;
   return String(minor) === need;
 }
 
@@ -73,7 +93,6 @@ function installedGpuKinds() {
 function inferGpuKind(nameOrUrl) {
   const t = String(nameOrUrl || '').toLowerCase();
   if (t.indexOf('cuda') >= 0) return 'cuda';
-  if (t.indexOf('directml') >= 0 || t.indexOf('dml') >= 0) return 'directml';
   // rocm / hip：ROCm on Windows 的 torch 里 torch.version.hip 有值、version.cuda 为空
   if (t.indexOf('rocm') >= 0 || t.indexOf('rocmsdk') >= 0 || t.indexOf('-hip') >= 0) return 'rocm';
   // Intel XPU（torch+xpu）放在最后判：文件名里可能同时出现 xpu 与 dml，
@@ -140,6 +159,7 @@ module.exports = {
   isGpuKind,
   requiredPython,
   fitsPython,
+  packAbi,
   gpuEnhanceRoot,
   gpuEnhanceDir,
   gpuEnhanceSite,

@@ -87,6 +87,17 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
   const SCORE_EXT = ['musicxml', 'xml', 'mxl'];
   const MIDI_EXT = ['mid', 'midi'];
   const extOf = (p) => { const m = /\.([a-z0-9]+)$/i.exec(String(p || '')); return m ? m[1].toLowerCase() : ''; };
+  /* ★ 「取消」句柄（用户：「变谱页缺失取消键」）：一次只跑一个 OMR 任务，用一个句柄表达"当前这一跑"。
+     两件事都要做 —— 先标记 canceled，再 kill 子进程：只标记要等当前页跑完才停，
+     只 kill 的话 onDone 会带回"引擎退出码 1"，界面会把它当失败弹错误。 */
+  let activeRun = null;
+  ipcMain.handle('score:cancel', () => {
+    if (!activeRun) return { ok: false, error: '没有正在进行的识别' };
+    activeRun.canceled = true;
+    try { if (activeRun.child && activeRun.child.exitCode === null) activeRun.child.kill(); } catch (e) { /* 忽略 */ }
+    return { ok: true };
+  });
+
   ipcMain.handle('score:toMidi', (evt, cfg) => new Promise((resolve) => {
     const win = BrowserWindow.fromWebContents(evt.sender);
     (async () => {
@@ -242,20 +253,28 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
         if (workdir) args.push('--workdir', workdir);
         if (retryPage) args.push('--retry-page', String(retryPage));
       }
+      const run = { canceled: false, child: null };
+      activeRun = run;
       const res = await new Promise((done) => {
         let settled = false;
         const finish = (v) => { if (!settled) { settled = true; done(v); } };
-        spawnEngine(args, {
+        run.child = spawnEngine(args, {
           script,
           timeoutMs: 10 * 60 * 1000,
-          onProgress: (p) => { try { win && win.webContents.send('score:progress', p); } catch (e) {} },
+          onProgress: (p) => {
+            if (run.canceled) { finish({ ok: false, canceled: true }); return; }
+            try { win && win.webContents.send('score:progress', p); } catch (e) {}
+          },
           onDone: (code, rr) => {
+            if (run.canceled) { finish({ ok: false, canceled: true }); return; }
             const r = rr && rr.result;
             finish(r || { ok: false, error: '引擎没有返回结果（退出码 ' + code + '）' });
           },
-          onError: (e) => finish({ ok: false, error: String(e) }),
+          onError: (e) => finish(run.canceled ? { ok: false, canceled: true } : { ok: false, error: String(e) }),
         });
       });
+      if (activeRun === run) activeRun = null;
+      if (run.canceled) return resolve({ ok: false, canceled: true });
       if (!res || !res.ok) return resolve({ ok: false, error: (res && res.error) || '转换失败',
         errorCode: (res && res.code) || '', workdir: (res && res.workdir) || '',
         inputs: items, fileName: name, names, kind });

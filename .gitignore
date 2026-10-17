@@ -67,3 +67,10 @@ frontend/.tmp/
 
 # Local Netlify folder
 .netlify
+
+# scratch/cache һ�ɷŲֿ��� (E:\Midi\_attic)������
+_attic/
+
+# 前端源码目录例外：components/models 是 Vue 组件，不是模型权重（曾被全局 models/ 规则误伤，
+# 导致 ModelCatalog/ItemMetaEditor 从未入库、发布分支编译失败）
+!frontend/src/components/models/

@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { packPrims, sampleFill, GL_STRIDE, GL_KINDS } from '../src/core/viz/raster/webgl2.js';
+import { splitKeyboardBloom } from '../src/core/viz/index.js';
 
 const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-6, (msg ? msg + ': ' : '') + a + ' != ' + b);
 
@@ -84,4 +85,20 @@ test('线展成垂直方向加宽的四边形，线宽进 shape（片元据此�
   near(d[2], 8.5); near(d[3], 100);
   near(d[24], GL_KINDS.line);
   near(d[25], 2, '线宽（设备像素）');
+});
+test('键盘不进泛光源（哑光物体；2026-10-17「黑键太透明」的实测结论）', () => {
+  const prims = [
+    { k: 'rect', layer: 'background', x: 0, y: 0, w: 1, h: 1 },
+    { k: 'rect', layer: 'notes', x: 0, y: 0, w: 1, h: 1 },
+    { k: 'rect', layer: 'keyboard', x: 0, y: 0, w: 1, h: 1 },
+    { k: 'rect', layer: 'fx', x: 0, y: 0, w: 1, h: 1 },
+    { k: 'rect', layer: 'keyboard', x: 0, y: 0, w: 1, h: 1 },
+  ];
+  assert.equal(splitKeyboardBloom(prims, false).on, false, '没开泛光就不必拆（省一次绘制）');
+  const s = splitKeyboardBloom(prims, true);
+  assert.equal(s.on, true);
+  assert.equal(s.key.length, 2);
+  assert.ok(!s.rest.some((p) => p.layer === 'keyboard'), '泛光源里一个键盘图元都不许有');
+  assert.ok(s.rest.some((p) => p.layer === 'fx'), '波动闪光仍要参与泛光');
+  assert.equal(s.key.length + s.rest.length, prims.length, '拆分不许丢图元');
 });

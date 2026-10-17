@@ -315,31 +315,31 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.stat-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.stat-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--sp-3); margin-bottom: 14px; }
 @media (max-width: 1100px) { .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 620px) { .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.stat-card { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 12px 14px; background: var(--surface); }
-.stat-card .sc-label { font-size: 11px; color: var(--stone); margin-bottom: 4px; }
-.stat-card .sc-value { font-size: 17px; font-weight: 700; color: var(--ink); letter-spacing: -0.3px; }
+.stat-card { border: 1px solid var(--border); border-radius: var(--r-lg); padding: 12px 14px; background: var(--surface); }
+.stat-card .sc-label { font-size: var(--fs-xs); color: var(--stone); margin-bottom: 4px; }
+.stat-card .sc-value { font-size: var(--fs-lg); font-weight: 700; color: var(--ink); letter-spacing: -0.3px; }
 .stat-card .sc-value.alt { color: var(--brand-coral); }
-.stat-card .sc-sub { font-size: 10.5px; color: var(--stone); margin-top: 3px; }
-.az-summary { font-size: 12.5px; color: var(--slate); line-height: 1.7; margin-bottom: 14px; }
-.az-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.stat-card .sc-sub { font-size: var(--fs-xs); color: var(--stone); margin-top: 3px; }
+.az-summary { font-size: var(--fs-md); color: var(--slate); line-height: 1.7; margin-bottom: 14px; }
+.az-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); margin-bottom: 14px; }
 @media (max-width: 900px) { .az-row { grid-template-columns: 1fr; } }
 .az-card.az-wide { grid-column: 1 / -1; }
-.az-card h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--ink); }
-.az-card h4 .az-zoom { margin-left: auto; display: flex; align-items: center; gap: 6px; font-weight: 500; }
-.az-card h4 .az-zoom-txt { font-size: 11px; min-width: 40px; text-align: center; }
+.az-card h4 { display: flex; align-items: center; gap: var(--sp-2); margin: 0 0 10px; font-size: var(--fs-md); font-weight: 600; color: var(--ink); }
+.az-card h4 .az-zoom { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); font-weight: 500; }
+.az-card h4 .az-zoom-txt { font-size: var(--fs-xs); min-width: 40px; text-align: center; }
 /* 图表高度跟随窗口：大屏不浪费、小屏不必整页滚动 */
 .chart-wrap { height: clamp(120px, 17vh, 190px); }
 .chart-wrap.cw-tall { height: clamp(140px, 21vh, 210px); }
 .chart-wrap.cw-short { height: clamp(110px, 15vh, 170px); }
 .chart-wrap canvas { width: 100%; height: 100%; display: block; }
 @media (max-width: 900px) { .chart-wrap, .chart-wrap.cw-tall, .chart-wrap.cw-short { height: clamp(110px, 16vh, 150px); } }
-.az-txt { font-size: 12.5px; color: var(--slate); line-height: 1.8; min-height: 40px; }
-.chord-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.chord-chips .chip { display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-full); background: var(--surface); font-size: 12px; color: var(--ink); cursor: pointer; }
+.az-txt { font-size: var(--fs-md); color: var(--slate); line-height: 1.8; min-height: 40px; }
+.chord-chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.chord-chips .chip { display: inline-flex; align-items: baseline; gap: var(--sp-2); padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--r-pill); background: var(--surface); font-size: var(--fs-sm); color: var(--ink); cursor: pointer; }
 .chord-chips .chip:hover { border-color: var(--brand-coral); color: var(--brand-coral); }
 .chord-chips .chip b { color: var(--brand-coral); font-weight: 600; }
-.chord-chips .chip span { color: var(--stone); font-size: 10.5px; }
+.chord-chips .chip span { color: var(--stone); font-size: var(--fs-xs); }
 </style>

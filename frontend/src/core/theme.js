@@ -128,7 +128,13 @@ export function resolveMode(mode) {
   return mode === 'dark' ? 'dark' : 'light';
 }
 
+/* 主题纪元：applyTheme 每执行一次 +1。core/palette.js 的 themeColor 用它做缓存失效 ——
+   画布代码里逐音符读 getComputedStyle 太贵，缓存住又怕切主题后读到旧值，靠这个计数解决。 */
+let _themeEpoch = 0;
+export function themeEpoch() { return _themeEpoch; }
+
 export function applyTheme(name, accent, mode) {
+  _themeEpoch++;
   if (typeof document === 'undefined') return;
   const R = document.documentElement.style;
   const eff = resolveMode(mode);                 // 'auto' 在这里落地
@@ -216,6 +222,36 @@ export function applyTheme(name, accent, mode) {
   R.setProperty('--vel-low', tracks[0]);
   R.setProperty('--vel-mid', tracks[2]);
   R.setProperty('--vel-high', tracks[3]);
+
+  /* ---------- 设计 token 层（M2）----------
+     ★ 为什么由这里发布，而不是写在 styles/tokens.css 里：
+     本函数是深/浅色的**唯一来源**（它写的是 documentElement 的内联样式，
+     优先级高于任何样式表）。tokens.css 里的同名字面值只是"JS 起来之前"的首屏兜底。
+     组件从此只写 var(--t-err) 这类语义名，深浅两档自动正确 ——
+     这就是那 288 处硬编码色值的归宿。 */
+  const tokens = {
+    // 底色/描边/文字：直接复用调色板，避免长出第二套取值
+    't-stage': pal.bg0, 't-panel': pal.panel, 't-raised': pal.card, 't-sunken': pal.bg2,
+    't-line': pal.border, 't-line-strong': pal.border2,
+    't-text': pal.text, 't-text-soft': pal.text2, 't-text-dim': pal.text3,
+    // 压在饱和强调色上的文字：两档都用白（强调色本身够深，白字对比度最高）
+    'on-accent': '#ffffff',
+    // 语义色：浅色档必须压深 —— 白底上 #ff6b6b 只有 2.6:1，正文可读性不达标
+    't-ok': dark ? '#3ecf8e' : '#0f7a4a',
+    't-warn': dark ? '#ffb340' : '#8a5a00',
+    't-err': dark ? '#ff6b6b' : '#c0392b',
+    't-info': dark ? '#5ac8fa' : '#0b6f9c',
+    // 抬升：深底重阴影（贴地），浅底轻阴影（不压脏白卡片）
+    'sh-1': dark ? '0 1px 2px rgba(0,0,0,.28)' : '0 1px 2px rgba(16,24,40,.05)',
+    'sh-2': dark ? '0 12px 32px rgba(0,0,0,.42)' : '0 12px 32px rgba(16,24,40,.10)',
+    'sh-3': dark ? '0 24px 64px rgba(0,0,0,.55)' : '0 24px 48px rgba(16,24,40,.14)',
+  };
+  // 七元素数据色：与 --track-* 同一套语义（图表 / 分类 / 可视化共用）；浅底加深保对比
+  const dataColors = dark
+    ? ['#ff5530', '#ffb340', '#ffe066', '#3ecf8e', '#5ac8fa', '#7c6cff', '#ea5ec1']
+    : ['#c53a12', '#a15c00', '#8a6100', '#0f7a4a', '#0b6f9c', '#5138d6', '#b02a86'];
+  dataColors.forEach((c, i) => { tokens['data-' + (i + 1)] = c; });
+  for (const k in tokens) R.setProperty('--' + k, tokens[k]);
 }
 
 // 应用 + 持久化（localStorage 优先 + Electron settings 兜底）

@@ -57,9 +57,9 @@ def test_verdicts_flag_arch_unsupported():
 
 def test_verdicts_flag_failed_compute_check():
     """issue #20 的形态：is_available 为真、但真算就炸。"""
-    rep = {"gpu": {"vendor": "amd", "available": True, "backend": "directml",
+    rep = {"gpu": {"vendor": "amd", "available": True, "backend": "rocm",
                    "name": "RX 7900"},
-           "compute_check": {"tested": True, "device": "privateuseone:0", "ok": False,
+           "compute_check": {"tested": True, "device": "cuda:0", "ok": False,
                              "error": "no kernel image is available"},
            "system": {}, "runtime": {"deps": {}}, "models": {}, "recent_errors": []}
     v = health.verdicts(rep)

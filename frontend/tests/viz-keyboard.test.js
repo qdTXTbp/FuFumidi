@@ -2,7 +2,8 @@
 // 上一次的三个实锤缺陷都在这里被钉住：落点错位、键被拆成两半、数组圆角退化成药丸。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeKeyboardProjection, buildKeyboard, BLACK_T } from '../src/core/viz/scene/keyboard.js';
+import { makeKeyboardProjection, buildKeyboard, BLACK_T, PRESS_DIP } from '../src/core/viz/scene/keyboard.js';
+import { createCompiler } from '../src/core/viz/scene/compile.js';
 import { WHITE_MIDI, BLACK_PC } from '../src/core/viz.js';
 import * as P from '../src/core/viz/scene/primitives.js';
 
@@ -96,4 +97,79 @@ test('整层带 keysA：琴键透明度是层属性（关闭/变淡不需要逐�
   for (const p of prims) assert.ok(Math.abs(p.alpha - CTX.keysA) < 1e-9, p.k + ' 的 alpha 应等于 keysA');
   const off = buildKeyboard(P, Object.assign({}, CTX, { keysA: 0 }));
   for (const p of off.prims) assert.ok(p.alpha === 0);
+});
+const byZ = (prims, z) => prims.filter((p) => p.z === z);
+
+test('★ 按压：白键远端不动、近端下沉（旧版是键面缩短，方向反了）', () => {
+  const at = (gv) => buildKeyboard(P, Object.assign({}, CTX, {
+    persp: 0,
+    state: (p) => ({ gv: p === WHITE_MIDI[3] ? gv : 0, fv: 0, color: '#f0f' }),
+  })).prims;
+  const off = byZ(at(0), 103);   // [键面, 前脸]
+  const on = byZ(at(1), 103);
+  assert.equal(off.length, 2);
+  assert.equal(on.length, 2);
+  assert.equal(on[0].y, off[0].y, '远端（落点线）绝不许动');
+  assert.ok(Math.abs((on[0].h - off[0].h) - PRESS_DIP) < 1e-9, '近端应下沉 ' + PRESS_DIP + 'px，实测 ' + (on[0].h - off[0].h));
+  assert.ok(on[1].h < off[1].h, '前脸要同比变矮');
+  const bo = off[0].y + off[0].h + off[1].h;
+  const bn = on[0].y + on[0].h + on[1].h;
+  assert.ok(bn > bo && bn - bo < PRESS_DIP * 0.25, '整键下沿只许微降（不然会顶穿下一排）：' + (bn - bo).toFixed(2));
+});
+
+test('★ 按压：黑键的抬起高度落下去，键面与前脸仍共享同一条边', () => {
+  const at = (gv) => buildKeyboard(P, Object.assign({}, CTX, {
+    persp: 0,
+    state: (p) => ({ gv: p === WHITE_MIDI[0] + 1 ? gv : 0, fv: 0, color: '#f0f' }),
+  })).prims;
+  const off = byZ(at(0), 1000);
+  const on = byZ(at(1), 1000);
+  assert.ok(on[0].y > off[0].y, '按下时抬高面必须下降：' + off[0].y + ' -> ' + on[0].y);
+  assert.equal(on[0].h, off[0].h, '键面长度不变（只落高度，不缩键）');
+  assert.ok(Math.abs(on[1].y - (on[0].y + on[0].h)) < 1e-9, '前脸与抬高面共享同一条边（不断开、不浮空）');
+  assert.ok(on[1].h < off[1].h, '落下去后前脸变矮');
+});
+
+test('平板模式（keys3d 关）：黑键停在白键面上，不浮空', () => {
+  const prims = buildKeyboard(P, Object.assign({}, CTX, {
+    persp: 0, fx: { flash: 0.7, beams: true, keyNames: false, keys3d: false },
+  })).prims;
+  const bk = byZ(prims, 1000);
+  assert.equal(bk.length, 1, '平板模式没有前脸与侧面');
+  assert.equal(bk[0].y, CTX.wN, '抬高量 0 → 键面顶边落在落点线上');
+});
+
+test('★ 按压是弹簧动画：逐帧下沉、轻过冲后回稳（不是一步到位）', () => {
+  const comp = createCompiler();
+  const kbSong = {
+    initialBpm: 120,
+    tempoMap: [{ sec: 0, us: 500000 }],
+    sigMap: [{ tick: 0, num: 4, den: 4 }],
+    tracks: [{ index: 0, notes: [{ midi: 60, start: 0, end: 200000, vel: 100 }], color: '#4f9dff' }],
+    baseSec: (tk) => tk / 1000,
+  };
+  // 每帧前进 1/60 秒，取"下沉最深的那条底边"当观测量
+  // 观测量取**键面**的底边：同一个 z 上有"键面"和"前脸"两条矩形，键面 y 更小。
+  // （整键下沿只降 0.15*dip —— 前脸同比变矮是为了不顶穿下一排，所以不能拿它当观测量）
+  const bottomOf = (tick) => {
+    const r = comp.compile(kbSong, tick, { w: 800, h: 400, zoom: 1, colorScheme: 0, activeNotes: [], energy: 0, theme: 'studio', fx: { persp: 0 } });
+    const byZ = new Map();
+    for (const p of r.prims) {
+      if (p.layer !== 'keyboard' || p.k !== 'rect' || p.blend) continue;
+      const cur = byZ.get(p.z);
+      if (!cur || p.y < cur.y) byZ.set(p.z, p);
+    }
+    return Math.max(...[...byZ.values()].map((p) => p.y + p.h));
+  };
+  const seq = [];
+  for (let f = 0; f <= 18; f++) seq.push(bottomOf((f * 1000) / 60));
+  const rest = seq[0];
+  const dips = seq.map((b) => +(b - rest).toFixed(2));
+  const peak = Math.max(...dips);
+  assert.ok(dips[1] < peak * 0.5, '第一帧就该只走一半不到（否则是"一步到位"）：' + dips.slice(0, 4).join(','));
+  assert.ok(peak > PRESS_DIP * 0.9, '峰值要够明显（≈' + PRESS_DIP + 'px 起）：' + peak);
+  assert.ok(peak > PRESS_DIP * 1.02, '弹簧应有一点过冲：峰 ' + peak + ' vs 稳态 ' + PRESS_DIP);
+  const settle = dips[dips.length - 1];
+  assert.ok(Math.abs(settle - PRESS_DIP) < 1.2, '末尾应回稳到 PRESS_DIP 附近：' + settle);
+  assert.ok(settle < peak, '过冲后要回落');
 });
