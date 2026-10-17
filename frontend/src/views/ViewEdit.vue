@@ -42,6 +42,8 @@ import { applyTake } from '../core/recorder.js';
 import { appSession } from '../core/session.js';
 import { commands as commandRegistry } from '../core/commands.js';
 import { timelineOfSong, formatBarBeat } from '../core/timeline.js';
+// P1-6 影视配乐：帧吸附 / 时间码 / 视频偏移
+import { FPS_PRESETS, timecodeOfTick, videoTimeForPlayhead } from '../core/frame_snap.js';
 import { noteName, clamp, KEY_NAME, removeNotes } from '../core/util.js';
 import { fitMenu } from '../core/menu.js';
 import { MACRO_DOC, macroToCmd, applyMacroScript, parseMacroScript } from '../core/macro.js';
@@ -66,6 +68,17 @@ function cssVar(name, fb) {
 
 const tool = ref('pencil');
 const snapRatio = ref(0.0625);
+// P1-6：帧吸附（时间域吸附，适合影视配乐）与视频偏移；持久化到 localStorage
+const frameSnapOn = ref((() => { try { return localStorage.getItem('fufumidi_frame_snap') === '1'; } catch (e) { return false; } })());
+const videoFps = ref((() => { try { const v = Number(localStorage.getItem('fufumidi_video_fps') || ''); return FPS_PRESETS.some((p) => p.fps === v) ? v : 25; } catch (e) { return 25; } })());
+const videoOffsetSec = ref((() => { try { const v = Number(localStorage.getItem('fufumidi_video_offset') || ''); return Number.isFinite(v) ? v : 0; } catch (e) { return 0; } })());
+watch([frameSnapOn, videoFps, videoOffsetSec], () => {
+  try {
+    localStorage.setItem('fufumidi_frame_snap', frameSnapOn.value ? '1' : '0');
+    localStorage.setItem('fufumidi_video_fps', String(videoFps.value));
+    localStorage.setItem('fufumidi_video_offset', String(videoOffsetSec.value || 0));
+  } catch (e) {}
+});
 const trackIndex = ref(0);
 const timbre = ref(0);
 const zoomPct = ref(100);
@@ -109,14 +122,22 @@ const SNAPS = [
 
 const song = computed(() => (currentSong.value && currentSong.value.song) || null);
 
+/* P1-6：状态栏时间码统一走 frame_snap.timecodeOfTick（SMPTE 文件用文件 fps，否则用所选 fps） */
 const smpteText = computed(() => {
-  const sec = Math.max(0, state.curSec || 0);
-  const fps = (song.value && song.value.smpte && song.value.smpte.fps) || 25;
-  const hh = Math.floor(sec / 3600);
-  const mm = Math.floor((sec % 3600) / 60);
-  const ss = Math.floor(sec % 60);
-  const ff = Math.floor((sec % 1) * fps);
-  return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0') + ':' + String(ss).padStart(2, '0') + ':' + String(ff).padStart(2, '0');
+  const s = song.value;
+  const fps = (s && s.smpte && s.smpte.fps) || videoFps.value || 25;
+  if (!s) return '00:00:00:00';
+  try {
+    const tick = Math.max(0, Math.round(s.secToTick((state.curSec || 0) / (state.tempo || 1))));
+    return timecodeOfTick(timelineOfSong(s), tick, fps);
+  } catch (e) {
+    const sec = Math.max(0, state.curSec || 0);
+    const totalFrames = Math.round(sec * fps);
+    const ff = totalFrames % Math.round(fps);
+    const tsec = Math.floor(totalFrames / Math.round(fps));
+    const pad = (n) => String(n).padStart(2, '0');
+    return pad(Math.floor(tsec / 3600)) + ':' + pad(Math.floor(tsec / 60) % 60) + ':' + pad(tsec % 60) + ':' + pad(ff);
+  }
 });
 // 状态栏：小节:拍 位置 + 速度 + 当前轨道，给出与 DAW 一致的时间参照
 /* P0-6：位置读数走 TimelineModel（变拍号时按分段算，不再假定 sigMap[0] 贯穿全曲） */
@@ -1836,6 +1857,21 @@ async function loadVideo() {
   toast(t('视频已嵌入编辑区，播放 MIDI 时自动同步'), 'ok');
 }
 function removeVideo() { videoUrl.value = ''; toast(t('已移除视频轨道'), 'ok'); }
+/* P1-6：视频轨与播放同步（带偏移）。200ms 纠偏；偏差 >150ms 才 seek，避免抖。 */
+const videoEl = ref(null);
+let videoSyncTimer = 0;
+function syncVideoToPlayhead() {
+  const v = videoEl.value;
+  if (!v || !videoUrl.value) return;
+  const playing = !!state.playing;
+  if (playing) {
+    if (v.paused) { try { void v.play(); } catch (e) {} }
+    const target = videoTimeForPlayhead(state.curSec || 0, videoOffsetSec.value);
+    if (target >= 0 && Math.abs(v.currentTime - target) > 0.15) {
+      try { v.currentTime = Math.min(target, (v.duration || target) - 0.02); } catch (e) {}
+    }
+  } else if (!v.paused) { try { v.pause(); } catch (e) {} }
+}
 
 function newMidi() {
   const mid = { ticksPerBeat: 480, format: 1, tracks: [{ name: t('音轨 1'), ch: 0, program: 0, events: [], notes: [], ccs: [] }] };
@@ -1989,11 +2025,13 @@ watch(docId, () => { void bindSessionDoc(); }, { immediate: true });
 onMounted(async () => {
   await loadRecoveryHint();
   autoTimer = setInterval(() => { void checkAutosave(); }, AUTOSAVE_TICK_MS);
+  videoSyncTimer = setInterval(syncVideoToPlayhead, 200);
   window.addEventListener('beforeunload', onEditBeforeUnload);
 });
 onDeactivated(() => { void flushAutosave('deactivate'); });
 onBeforeUnmount(() => {
   if (autoTimer) { clearInterval(autoTimer); autoTimer = 0; }
+  if (videoSyncTimer) { clearInterval(videoSyncTimer); videoSyncTimer = 0; }
   window.removeEventListener('beforeunload', onEditBeforeUnload);
   void flushAutosave('unmount');
 });
@@ -2411,6 +2449,9 @@ onBeforeUnmount(() => {
           <button class="et-btn" :class="{ active: audioSyncOn }" :title="t('播放 MIDI 时同步试听原音频')" @click="toggleAudioSync"><Icon name="play" :size="14" />{{ t('试听') }}</button>
           <button class="et-btn" :title="t('嵌入视频轨道（影视配乐对齐）')" @click="loadVideo"><Icon name="play2" :size="14" />{{ t('视频') }}</button>
           <button v-if="videoUrl" class="et-btn" :title="t('移除视频轨道')" @click="removeVideo"><Icon name="trash" :size="14" />{{ t('移除视频') }}</button>
+          <span v-if="videoUrl" class="et-label" :title="t('视频偏移（秒）：正数=视频比音乐晚开始')">{{ t('视频偏移') }}</span>
+          <input v-if="videoUrl" type="number" v-model.number="videoOffsetSec" step="0.04" class="num-input rec-num" style="width:76px"
+                 data-guide="edit-video-offset" :title="t('视频偏移（秒）：正数=视频比音乐晚开始')" />
         </div>
         <div class="adv-row">
           <span class="et-label">{{ t('速度轨') }}</span>
@@ -2529,8 +2570,15 @@ onBeforeUnmount(() => {
           <div class="insp-sec">
             <div class="insp-h"><Icon name="quantize" :size="12" />{{ t('网格与显示') }}</div>
             <div class="insp-row"><span>{{ t('吸附') }}</span>
-              <select class="select-input" v-model="snapRatio">
+              <select class="select-input" v-model="snapRatio" :disabled="frameSnapOn">
                 <option v-for="s in SNAPS" :key="s[0]" :value="s[0]">{{ s[1] }}</option>
+              </select></div>
+            <!-- P1-6 影视：帧吸附优先于拍吸附（23.976/24/25/29.97/30） -->
+            <div class="insp-row" data-guide="edit-framesnap"><span>{{ t('帧吸附') }}</span>
+              <input type="checkbox" v-model="frameSnapOn" /></div>
+            <div class="insp-row" v-if="frameSnapOn"><span>{{ t('帧率') }}</span>
+              <select class="select-input" v-model.number="videoFps">
+                <option v-for="p in FPS_PRESETS" :key="p.fps" :value="p.fps">{{ p.label }}</option>
               </select></div>
             <div class="insp-row"><span>{{ t('着色') }}</span>
               <select class="select-input" v-model="colorMode" :title="t('音符着色方案')">
@@ -2655,7 +2703,7 @@ onBeforeUnmount(() => {
 
       <!-- 钢琴卷帘（用 v-show 保活：切到鼓组再切回不会丢撤销历史与视图位置） -->
       <div v-show="viewMode !== 'drum'" class="ed-wrap-rel" :class="{ 'ed-flash': viewFlash }">
-        <EditorCanvas ref="editor" :tool="tool" :snap-ratio="snapRatio" :track-index="trackIndex"
+        <EditorCanvas ref="editor" :tool="tool" :snap-ratio="snapRatio" :frame-snap="frameSnapOn ? { fps: videoFps } : null" :track-index="trackIndex"
                       :view="viewMode === 'score' ? 'score' : 'piano'"
                       :cc-enabled="ccEnabled && viewMode === 'piano'" :cc-number="ccNumber"
                       :scale-spec="scaleSpec" :scale-mode="scaleMode" :chord-track="chordSpec" :ks-map="ksMap" :audio="audioData"
@@ -2664,7 +2712,7 @@ onBeforeUnmount(() => {
                       @select="refreshSel" @modify="onModified" @zoom="onZoom" @ctxmenu="openCtxMenu" @hover="onHover" @step="onStep"
                       :step-on="stepOn" :step-ticks="stepTicks" :edit-tracks="editTracks"
                       :underlay="underlayProp" />
-        <video v-if="videoUrl" :src="videoUrl" controls playsinline class="ed-video-overlay"></video>
+        <video ref="videoEl" v-if="videoUrl" :src="videoUrl" controls playsinline class="ed-video-overlay"></video>
         <!-- 悬停工具条（M3）：压到音符上就地出现，鼠标移到条上不消失 -->
         <div v-if="hoverInfo && !midiToolOpen" class="hv-bar" :style="hoverBarStyle"
              @pointerenter="cancelHoverHide" @pointerleave="scheduleHoverHide">

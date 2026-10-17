@@ -161,6 +161,12 @@
   - 写回：`chordMarkersOf` / `mergeChordMarkers` 把逐小节和弦转成 **MIDI marker 元事件**（P0-1 编码器直接导出；重复写只替换 `chordGen` 标记，不动用户手写 marker）；6 测例；
   - UI：分析页新增「转调与调性」「段落结构」卡片（大曲目自动跳过滑窗并提示）；编辑页工具菜单新增「分析和弦轨 → 写入 MIDI 标记」；E2E `analysis-ui` 验证 C→F 曲目切出 ≥2 段。
 
+- **P1-6 影视配乐 ✅（帧吸附 / 时间码 / 视频偏移）**：
+  - 新 `core/frame_snap.js`：5 档帧率（23.976/24/25/29.97/30）、`snapTickToFrame`（**时间域吸附**：tick→秒→按 fps 取整→秒→tick，变速曲目与 SMPTE 时间轴都正确）、时间码 `HH:MM:SS:FF`（29.97 走 NDF 30 帧计数）、`frameTickStep / framesBetween / videoTimeForPlayhead`；7 测例；
+  - 编辑器：检查器「网格与显示」新增「帧吸附」开关 + 帧率选择（开帧吸附时拍吸附置灰）；EditorCanvas 的 `snapTick` 优先走帧吸附（失败自动回退拍吸附）；状态栏时间码统一走 `timecodeOfTick`（SMPTE 文件用文件 fps）；
+  - 视频轨：新增「视频偏移（秒）」输入 + 播放同步（200ms 纠偏，偏差 >150ms 才 seek），偏移持久化 localStorage；
+  - E2E `frame-snap-ui`：切检查器视图页 → 勾选帧吸附 → 帧率下拉出现且含 23.976/29.97 → 时间码格式正确。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；

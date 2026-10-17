@@ -13,6 +13,8 @@ import { t } from '../core/i18n.js';
 import { snapToPcs, scalePitchClasses } from '../core/scale.js';
 // 乐谱视图要用「按音符分布猜调号」（与乐谱页同一套）
 import { detectSf } from '../core/score.js';
+// P1-6：帧吸附（时间域；23.976/29.97 与变速曲目都正确）
+import { snapTickToFrame } from '../core/frame_snap.js';
 // P0-6b：变拍号的网格/谱面分段布局（C4 TimelineModel）
 import { timelineOfSong, iterBars } from '../core/timeline.js';
 /* 手写笔 / 触控（M9 收尾）：掌侧误触、第二根手指、长按=右键、笔压当力度 */
@@ -21,6 +23,7 @@ import { claimPointer, isPrimaryPointer, releasePointer, penPressure, makeLongPr
 const props = defineProps({
   tool: { type: String, default: 'select' },      // select | pencil | erase
   snapRatio: { type: Number, default: 0.0625 },   // 拍的比例（0=关）
+  frameSnap: { type: Object, default: null },     // P1-6：{ fps } 非空时按帧（时间域）吸附，优先于拍比例
   trackIndex: { type: Number, default: 0 },
   ccEnabled: { type: Boolean, default: false },   // 是否显示 CC 泳道
   ccNumber: { type: Number, default: 11 },        // CC 控制器编号
@@ -173,7 +176,12 @@ function tickToX(t) { return (t - viewTick.value) * pxPerTick.value; }
 function yToMidi(y) { return viewTop.value - Math.floor(y / rowH.value); }
 function midiToY(m) { return (viewTop.value - m) * rowH.value; }
 function snapTick(t) {
-  const s = song(); if (!s || !props.snapRatio) return Math.max(0, Math.round(t));
+  const s = song(); if (!s) return Math.max(0, Math.round(t));
+  // P1-6 帧吸附：按秒取整（23.976/29.97 等非整数帧率与变速曲目都正确），优先于拍比例
+  if (props.frameSnap && props.frameSnap.fps) {
+    try { return Math.max(0, Math.round(snapTickToFrame(timelineOfSong(s), t, props.frameSnap.fps))); } catch (e) { /* 回退拍吸附 */ }
+  }
+  if (!props.snapRatio) return Math.max(0, Math.round(t));
   const st = s.tpb * props.snapRatio;
   return Math.max(0, Math.round(t / st) * st);
 }
