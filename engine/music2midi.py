@@ -490,7 +490,8 @@ def build_parser():
     g.add_argument("--beam-size", dest="beam_size", type=int, default=None,
                    help="[muscriptor] 束搜索宽度（默认 1=关闭；越大越慢）")
     g.add_argument("--no-prelude-forcing", dest="prelude_forcing", action="store_false", default=None,
-                   help="[muscriptor] 关闭跨块延音前置（会降低分块边界的延续质量）")
+                   help="[muscriptor] 关闭跨块延音缝合（分块边界上的延音不再缝回长音；"
+                        "默认开＝解码关掉模型强制 tie，再按同音高同音色缝合，从根上杜绝僵尸长音）")
     g.add_argument("--precision", dest="precision", default=None,
                    choices=["fp32", "bf16", "fp16"],
                    help="[muscriptor] 计算精度（默认 fp32）。bf16 更快但数值精度不同")

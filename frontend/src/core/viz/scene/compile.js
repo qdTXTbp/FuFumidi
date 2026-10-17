@@ -46,7 +46,21 @@ export function createCompiler() {
       else if (p.kind === 2) {
         if (++beam > budget.beam) continue;
         for (const q of beamQuads(P, { cam, ps, x: p.x, yBottom: p.y, w: p.w * kd, h: p.h, color: p.color, alpha: 0.4 * p.life, z: 0 })) prims.push(q);
-      } else { if (++spark > budget.spark) continue; prims.push(P.glow('particles', pxs, p.y, 0, p.size * (0.45 + p.life * 0.55) * kd, p.color, { alpha: p.life, blend: 'lighter' })); }
+      } else {
+        if (++spark > budget.spark) continue;
+        /* ★ 用户决策三②：粒子运动模糊拖尾。沿速度反方向留 2 段更淡的残影，
+           60–100ms 内随 life 一起消散 —— 单个光点是"闪光"，带拖尾才是"喷射"。 */
+        for (let ti = 2; ti >= 1; ti--) {
+          const bx = p.x - p.vx * ti * 2.6;
+          const by = p.y - p.vy * ti * 2.6;
+          const bpx = projectX(cam, ps, bx, by);
+          const bkd = depthScale(cam, ps, by);
+          prims.push(P.glow('particles', bpx, by, 0,
+            p.size * (0.30 + p.life * 0.35) * bkd * (1 - 0.22 * ti),
+            p.color, { alpha: p.life * (ti === 1 ? 0.34 : 0.16), blend: 'lighter' }));
+        }
+        prims.push(P.glow('particles', pxs, p.y, 0, p.size * (0.45 + p.life * 0.55) * kd, p.color, { alpha: p.life, blend: 'lighter' }));
+      }
       alive.push(p);
     }
     state.parts = alive;
@@ -66,7 +80,9 @@ export function createCompiler() {
     const parts = Object.assign({}, DEFAULT_BUDGET, opts.budget || {});
 
     // ---------- 几何 ----------
-    const x = Math.min(120, Math.round(0.2 * h));
+    // ★ 用户决策三①：落点线（判定线）放在屏幕底部往上 **14%**（规范 10–15%），
+    //   给玩家留出视觉反应空间；键盘区就是这 14%。
+    const x = Math.min(110, Math.round(0.14 * h));
     const wN = h - x;                        // 键线 y
     let d = 0, tempo = (song && song.initialBpm) || 120, sig = { num: 4 };
     if (song) {
@@ -77,8 +93,22 @@ export function createCompiler() {
       let si = sm.length - 1; while (si > 0 && sm[si].tick > tick) si--;
       if (sm.length) sig = sm[si];
     }
-    const barSec = sig.num * 60 / tempo;
-    const v = 120 / barSec, j = d * v;
+    /* ★ 用户决策三①：音频延迟补偿。蓝牙/缓冲让声音比画面慢 20–100ms 是常态，
+       这里的 ms 直接平移视觉时间轴：正 = 画面**提前**（音符更早到落点线），负 = 延后。
+       只动可视化，不动音频时钟/播放进度。 */
+    d += Math.max(-0.2, Math.min(0.2, Number(fx.latencyMs || 0) / 1000));
+    /* ★ 时间 → 空间换算（2026-10-18e，按用户给的 PPB 规范实现）：
+       速度(px/s) = PPB × (BPM/60)，PPB = 每个**四分音符**在坡道上的像素长度。
+         · 这样不管 BPM 快慢，音符之间的"空间频率"恒定（大脑不用重新适应慢歌/快歌）；
+         · 音符长度(px) = 时值(秒) × 速度 = PPB × 时值/四分时值 —— 时值即长度，天然成立；
+         · 玩家滑块只改 PPB（fx.scrollSpeed），不碰 BPM 本身：拖慢 = 整体变小变慢。
+       默认 PPB=30 与原实现（一小节 120px / 4 拍）在 4/4 下完全等价，旧观感不变。 */
+    const scrollSpeed = Math.max(0.25, Math.min(4, Number(fx.scrollSpeed == null ? 1 : fx.scrollSpeed) || 1));
+    const ppb = 30 * scrollSpeed;                       // px / 四分音符
+    const barBeats = Math.max(0.25, (sig.num * 4) / (sig.beatType || 4));   // 一小节 = 几个四分音符
+    const barPx = ppb * barBeats;                       // 一小节占多少坡道像素
+    const v = ppb * tempo / 60;                         // px/s
+    const j = d * v;
     const zoom = opts.zoom || 1;
     const WHITE_TOTAL = WHITE_MIDI.length;
     const span = Math.max(12, Math.min(WHITE_TOTAL, Math.round(WHITE_TOTAL / zoom)));
@@ -100,6 +130,22 @@ export function createCompiler() {
     const sTop = wN > 0 ? cam.sOf(0) : 0;
     const visSec = wN > 0 && v > 0 ? sTop / v : 0;
     const energy = Math.max(0, Math.min(1, opts.energy || 0));
+    /* ★ 用户决策三③：复合拍重音。数据源不是"每 3 个音符"而是**小节内的拍位置**：
+       · 6/8、9/8、12/8：每小节按 3 个八分一组，强拍落在每组第 1 个（第 1、第 4 个八分）；
+       · 4/4、3/4、2/4：每 2 拍一个强拍（第 1、第 3 拍）。
+       重音只放大**瞬时特效**（光柱/粒子/脉冲），不改音符长度与颜色底色。 */
+    const tpb = Math.max(1, (song && song.tpb) || 480);
+    const beatTicks = Math.max(1, tpb * 4 / (sig.den || sig.beatType || 4));
+    const accentOf = (startTick) => {
+      if (startTick == null) return 0;
+      const rel = startTick - (sig.tick || 0);
+      const bi = Math.floor(rel / beatTicks);
+      const num = Math.max(1, sig.num || 4);
+      const b = ((bi % num) + num) % num;
+      const compound = (sig.den || 4) === 8 && num % 3 === 0;
+      const per = compound ? 3 : Math.max(1, Math.round(num / 2));
+      return b % per === 0 ? 1 : 0;
+    };
 
     // ---------- 场景光带（2026-10-17）：光影随「键盘透视」变化的来源 ----------
     // 坡道上方一条"棚灯"光带；它经坡道反射进相机的深度由**相机高度**决定 ——
@@ -138,10 +184,10 @@ export function createCompiler() {
         const uu = (i - wk0) * g;
         pr.push(P.line('background', uu, wN, cam.pxN(uu, 0), 0, grid, { z: -80 }));
       }
-      const M = Math.floor(j / 120), Sx = Math.floor((j + Math.max(0, sTop)) / 120) + 1;
+      const M = Math.floor(j / barPx), Sx = Math.floor((j + Math.max(0, sTop)) / barPx) + 1;
       for (let e = showGrid ? M : 1; e <= Sx; e++) {
         if (!showGrid) break;                       // 关掉网格时连小节编号一起收走
-        const ty = cam.yOf(120 * e - j);
+        const ty = cam.yOf(barPx * e - j);
         if (ty < -20 || ty > wN + 20) continue;
         pr.push(P.line('background', 30, ty, w, ty, gridStrong, { z: -70 }));
         if (e > 0) pr.push(P.text('background', String(e), 24, ty, withAlpha('#ffffff', 0.42), { align: 'right', size: 10, z: -60 }));
@@ -256,16 +302,17 @@ export function createCompiler() {
         const velN = Math.max(0, Math.min(1, (b.vel == null ? 90 : b.vel) / 127));
         const color = noteColorOf(fx, b);
         const cx = sxB + cwB / 2;
-        state.hitPulse = 1;
-        if (fx.flash > 0) state.keyFlash.set(b.pitch, 1);
+        const acc = accentOf(b.start);          // 1 = 本小节强拍（6/8 的第 1、4 个八分）
+        state.hitPulse = Math.max(state.hitPulse, 1 + 0.4 * acc);
+        if (fx.flash > 0) state.keyFlash.set(b.pitch, acc ? 1.25 : 1);
         if (fx.particles !== false) {
-          const n = Math.max(1, Math.round((3 + velN * 6) * partScale));
+          const n = Math.max(1, Math.round((3 + velN * 6) * partScale * (1 + 0.65 * acc)));
           for (let i = 0; i < n; i++) {
             const s1 = noise(state.seed++), s2 = noise(state.seed++), s3 = noise(state.seed++);
             state.parts.push({ kind: 0, x: cx + (s1 - 0.5) * cwB, y: wN, vx: (s1 - 0.5) * 3.4, vy: -(0.6 + s2 * 3.6) - velN * 1.2, life: 1, decay: 0.016 + s3 * 0.02, size: 5 + s3 * 9 + velN * 8, color });
           }
-          state.parts.push({ kind: 1, x: cx, y: wN, r: 2, vr: 2.4 + velN * 2.8, life: 1, decay: 0.042, color });
-          if (fx.beams !== false) state.parts.push({ kind: 2, x: cx, y: wN, w: cwB * (1.5 + velN * 0.5), h: 84 + velN * 150, life: 1, decay: 0.032, color });
+          state.parts.push({ kind: 1, x: cx, y: wN, r: 2 + acc * 1.5, vr: (2.4 + velN * 2.8) * (1 + 0.5 * acc), life: 1, decay: 0.042, color });
+          if (fx.beams !== false) state.parts.push({ kind: 2, x: cx, y: wN, w: cwB * (1.5 + velN * 0.5), h: (84 + velN * 150) * (1 + 0.5 * acc), life: 1, decay: 0.032, color });
         }
       }
     }
@@ -342,7 +389,7 @@ export function createCompiler() {
 
     P.sortPrims(pr);
     state.lastD = d;
-    return { prims: pr, sounding, hits, d, wN, x, geom: { g, wk0, wk1 }, theme };
+    return { prims: pr, sounding, hits, d, wN, x, geom: { g, wk0, wk1 }, theme, hitPulse: state.hitPulse };
   }
 
   return { compile, state };

@@ -16,6 +16,10 @@
 // ============================================================
 
 export const COLOR_MODES = [
+  /* ★ 2026-10-18f（用户决策二）：默认改成「左右手 + 音区冷暖」渐变 ——
+     左手区 C1–B3 深蓝 → 紫，右手区 C4–B6 粉紫 → 明黄/橙。
+     多人总谱要按声部区分时，切到「轨道色」（= 多轨总谱模式，保留 8 色高对比）。 */
+  { k: 'handPitch', label: '左右手音区' },
   { k: 'track', label: '轨道色' },
   { k: 'pitch', label: '按音高' },
   { k: 'hand', label: '按左右手' },
@@ -31,7 +35,7 @@ export const COLOR_PRESETS = [
 ];
 
 export const COLOR_DEFAULTS = {
-  colorMode: 'track',
+  colorMode: 'handPitch',
   preset: 'rainbow',
   hueBase: 0,      // 色相基准 0..360
   hueSpan: 330,    // 色相跨度：最低音到最高音之间的色相跨度 0..360
@@ -129,6 +133,18 @@ export function noteColorOf(cfg, note) {
   const pitch = note && note.pitch != null ? note.pitch : 60;
   const base = { h: 210, s: 70, l: 58 };
   switch (c.colorMode) {
+    case 'handPitch': {
+      /* 左手 C1(24)–B3(59)：h 228°(深蓝) → 290°(紫)；右手 C4(60)–B6(95)：h 315°(粉紫) → 405°(=45° 明黄)，
+         同时低音压暗、高音提亮 —— 「低音像深海、高音像火花」这条直觉要能看见。 */
+      if (pitch < 60) {
+        const u = clamp((pitch - 24) / 35, 0, 1);
+        base.h = 228 + u * 62; base.s = 70 + u * 8; base.l = 50 + u * 10;
+      } else {
+        const u = clamp((pitch - 60) / 35, 0, 1);
+        base.h = 315 + u * 90; base.s = 78 + u * 6; base.l = 56 + u * 12;
+      }
+      break;
+    }
     case 'hand': {
       const src = toHsl(pitch < 60 ? c.handL : c.handR);
       base.h = src.h; base.s = src.s; base.l = src.l;

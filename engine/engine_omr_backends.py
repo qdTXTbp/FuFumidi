@@ -1340,7 +1340,7 @@ def _regrid_page(parts, bar_ticks):
         for note in part.get("notes") or []:
             if "m" in note:
                 n = max(n, int(note["m"]) + 1)
-    if n <= 0:
+    if n <= 0 or bar_ticks <= 0:
         return 0, 0
     # 每一格的内容跨度：所有声部里最长的那个（含跨小节连音延伸出来的尾巴）
     span = [0] * n
@@ -1356,10 +1356,16 @@ def _regrid_page(parts, bar_ticks):
                 end = int(note.get("off") or 0) + max(1, int(note["end"]) - int(note["start"]))
                 if end > span[mi]:
                     span[mi] = end
-    scale = [1.0] * n
+    # ★ 2026-10-17 第四次改（用户要求：「应当使用谱内的节奏型」）：
+    #   **音长保持谱面时值，一律不缩放** —— 之前按比例缩放整页/整格会把断奏、连奏、
+    #   以及各声部之间的时值关系一起改掉（用户听起来是"顿挫感"）。
+    #   只处理"过满的小节"（漏认小节线，实测有 2280 tick 的小节）：把音符在**小节内的位置**
+    #   按比例收回这一格，时值原样保留（放不下就延续到下一格 —— 管弦乐的持续音本来如此，
+    #   比把每个音都削短连贯）。
+    off_scale = [1.0] * n
     for i in range(n):
         if span[i] > bar_ticks:
-            scale[i] = float(bar_ticks) / float(span[i])
+            off_scale[i] = float(bar_ticks) / float(span[i])
     moved = 0
     grid_end = n * bar_ticks
     for part in parts:
@@ -1371,10 +1377,10 @@ def _regrid_page(parts, bar_ticks):
                 mi = 0
             elif mi >= n:
                 mi = n - 1
-            sc = scale[mi]
+            sc = off_scale[mi]
             off = int(round(int(note.get("off") or 0) * sc))
             dur0 = max(1, int(note["end"]) - int(note["start"]))
-            dur = max(1, int(round(dur0 * sc)))
+            dur = dur0                       # ★ 时值 = 谱面时值，不缩放（用户要求）
             ns = mi * bar_ticks + off
             if ns != int(note["start"]) or dur != dur0:
                 moved += 1
