@@ -203,6 +203,11 @@
   - 接入编排页：拖片段/拖边缩放/中键平移/标尺拖拽框区间都走状态机；**标尺拖动预览带**（松手才落 region，10px 以内当点击 seek）；E2E `arrange-ui` 增加「标尺拖出 1 个区间」断言；
   - 剩余（B1 后续）：EditorCanvas / ViewSing 的既有 dragState 迁移到同一状态机；B2 悬浮工具条/就地编辑、B3 曲线引擎、B4 导航/mini-map。
 
+- **P1-10 性能基线 ✅**：
+  - 新 `scripts/perf-baseline.mjs`（CDP 驱动真实应用，非估算）：启动到可交互、4 个视图冷/热切换、60k 音符编辑页首次进入、**播放时 rAF 帧间隔 p50/p95（180 帧）**、JS 堆增长；
+  - 实测基线（本机 32 核）：启动 ~0.8s、视图冷切换 p95 ~0.4s（含懒加载）、热切换 p95 ~0.2s、60k 编辑页 ~0.55s、帧间隔 p95 3.4ms（240Hz 屏）、堆 10MB→45MB；
+  - 预算 = 「基线 +25% 抖动」并带绝对值下限（启动 4s / 冷切 1.2s / 编辑 3s / 帧 20ms / 堆 25%）；`npm run perf:gate` 超预算非零退出，`npm run perf:baseline` 重记；生成 `docs/perf-baseline.json` + `docs/perf-report.md`（含口径说明：帧率随显示器刷新率变化，故取相对基线）。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；
