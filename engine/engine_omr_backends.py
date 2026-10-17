@@ -1245,13 +1245,37 @@ _METERS = {
 
 
 def infer_meter(pages, tpb, min_share=0.2):
-    """从所有声部的小节长度推拍号 —— **Audiveris 不导出 <time>**，解析器只能落回 4/4。
+    """从谱面证据推拍号 —— **Audiveris 不导出 <time>**，解析器只能落回 4/4。
 
-    做法：把所有 part 的所有小节长度取众数（谱面自己写死了拍号，绝大多数小节会同长），
-    占比 ≥ min_share 才采用；否则返回 None（混合拍号 / 识别太碎，宁可只用 4/4 并如实回报）。
-    返回 dict(beats, beatType, ticks, share, raw)；ticks 是推定的一小节 tick 数。
+    ① **整小节休止的时长**（2026-10-17 新增，最硬的证据）：Audiveris 不知道拍号时，
+       每个小节的长度 = 它写出来的**内容**长度（末尾休止符常常不写），所以 measureLens
+       的众数会偏向"半小节"（实测那份 6 页总谱：1440 占 40%、720 占 27% —— 一半小节线
+       被当成 3/8 的边界）。但「整小节休止」必须占满一小节，它的 duration 就是 Audiveris
+       认定的拍长：全曲 803 个整小节休止里 1440 占 400 个（49.8%）→ 6/8。
+    ② 没有整小节休止证据时，退回"小节长度众数 + 真因数"的旧判据（见下）。
+
+    返回 dict(beats, beatType, ticks, share, raw, source)；ticks 是推定的一小节 tick 数。
     """
     from collections import Counter
+    # ---------- ① 整小节休止 → 直接读拍长 ----------
+    rests = Counter()
+    for pg in pages:
+        for v in (pg.get("parsed") or {}).get("barRestLens") or []:
+            try:
+                v = int(v)
+            except (TypeError, ValueError):
+                continue
+            if 0 < v <= 24 * tpb:
+                rests[v] += 1
+    if rests:
+        rraw, rn = rests.most_common(1)[0]
+        rtotal = sum(rests.values())
+        rhalf = int(round(rraw * 2.0 / tpb))
+        if rn >= 6 and rtotal >= 8 and rn / float(rtotal) >= 0.35 and rhalf in _METERS:
+            rb, rbt = _METERS[rhalf]
+            return {"beats": rb, "beatType": rbt, "ticks": int(round(rb * tpb * 4.0 / rbt)),
+                    "share": round(rn / float(rtotal), 3), "raw": int(rraw), "source": "measure-rest"}
+    # ---------- ② 退回：小节长度众数 ----------
     cnt = Counter()
     total = 0
     for pg in pages:
@@ -1292,47 +1316,72 @@ def infer_meter(pages, tpb, min_share=0.2):
         return None
     beats, bt = _METERS[half]
     return {"beats": beats, "beatType": bt, "ticks": int(round(beats * tpb * 4.0 / bt)),
-            "share": round(share, 3), "raw": raw}
+            "share": round(share, 3), "raw": raw, "source": "measure-lens"}
 
 
 def _regrid_page(parts, bar_ticks):
-    """把一页里每个声部摆到**统一网格**上：小节 k 的起点 = 前 k 个小节各自取整后的累计长度。
+    """把一页里所有声部摆到**同一张小节网格**上：第 k 小节 = 第 k 格（k·bar_ticks）。
 
-    ★ 2026-10-18 改（旧写法是 k × bar_ticks）：旧写法的前提是「每个小节都正好 bar_ticks 长」。
-      实测那份 6 页总谱里小节线经常被漏认（两个 3/8 小节并成一个 1440 的小节），小节长度分布
-      是 720/1440/960 混着的 —— 用固定 bar_ticks 重建会把时间轴整体拉伸，音符全落到错的小节里
-      （用户："和原音频差距巨大"）。现在按**每个小节自己的长度取整到基拍（bar_ticks）的整数倍**
-      再累加：一个 1440 的小节 = 2 个基拍、720 = 1 个 —— 局部节奏不再被拉平，声部之间仍然同步
-      （同一页各声部的小节序列本来就该对得上）。
-    返回 (移动的音符数, 整页的网格长度 tick)。
+    ★ 2026-10-17 改（第三次 —— 前两次都被实测打脸）：
+      Audiveris 的「小节长度」= 这一小节**写出来的内容**长度（拍号不明时它按内容定长，
+      末尾的休止符经常不写）。所以它既可能是半小节（720）、也可能被跨小节连音/漏认的
+      小节线撑到 2280：
+        · 写法 A「每个小节按自己的长度累加」→ 从第一处不同开始各声部的小节线就分家
+          （实测 p1 第 3 小节起就对不上），合起来是"各走各的拍"。
+        · 写法 B「固定 k×bar_ticks」→ 过满的小节会被顶进下一小节，越往后越挤。
+      现在的做法：**小节号就是格号** —— 页内所有声部共用 k·bar_ticks 这一张网格（声部之间
+      天然对齐）。某一格若被内容撑得比 bar_ticks 长（两小节被并成一节），就按**这一格里
+      所有声部最长的内容**统一压回一格：同格内所有声部乘同一个比例，所以还是同步的。
+    返回 (被动过的音符数, 整页网格长度 tick)。
     """
-    moved = 0
-    grid_end = 0
+    n = 0
     for part in parts:
-        lens = [int(x) for x in (part.get("measureLens") or [])]
-        grid = [0]
-        for L in lens:
-            if bar_ticks:
-                units = max(1, int(round(float(L) / bar_ticks))) if L > 0 else 1
-            else:
-                units = 1
-            grid.append(grid[-1] + units * bar_ticks)
-        for n in part.get("notes") or []:
-            if "m" not in n:
+        n = max(n, len(part.get("measureLens") or []))
+        for note in part.get("notes") or []:
+            if "m" in note:
+                n = max(n, int(note["m"]) + 1)
+    if n <= 0:
+        return 0, 0
+    # 每一格的内容跨度：所有声部里最长的那个（含跨小节连音延伸出来的尾巴）
+    span = [0] * n
+    for part in parts:
+        for i, L in enumerate(part.get("measureLens") or []):
+            if i < n and int(L) > span[i]:
+                span[i] = int(L)
+        for note in part.get("notes") or []:
+            if "m" not in note:
                 continue
-            mi = int(n["m"])
-            if 0 <= mi < len(grid):
-                base = grid[mi]
-            else:
-                base = grid[-1] + (mi - len(grid) + 1) * bar_ticks
-            ns = base + int(n.get("off") or 0)
-            dur = max(1, int(n["end"]) - int(n["start"]))
-            if ns != int(n["start"]):
+            mi = int(note["m"])
+            if 0 <= mi < n:
+                end = int(note.get("off") or 0) + max(1, int(note["end"]) - int(note["start"]))
+                if end > span[mi]:
+                    span[mi] = end
+    scale = [1.0] * n
+    for i in range(n):
+        if span[i] > bar_ticks:
+            scale[i] = float(bar_ticks) / float(span[i])
+    moved = 0
+    grid_end = n * bar_ticks
+    for part in parts:
+        for note in part.get("notes") or []:
+            if "m" not in note:
+                continue
+            mi = int(note["m"])
+            if mi < 0:
+                mi = 0
+            elif mi >= n:
+                mi = n - 1
+            sc = scale[mi]
+            off = int(round(int(note.get("off") or 0) * sc))
+            dur0 = max(1, int(note["end"]) - int(note["start"]))
+            dur = max(1, int(round(dur0 * sc)))
+            ns = mi * bar_ticks + off
+            if ns != int(note["start"]) or dur != dur0:
                 moved += 1
-            n["start"] = ns
-            n["end"] = ns + dur
-            grid_end = max(grid_end, ns + dur)
-        grid_end = max(grid_end, grid[-1])
+            note["start"] = ns
+            note["end"] = ns + dur
+            if ns + dur > grid_end:
+                grid_end = ns + dur
     return moved, grid_end
 
 
@@ -2066,14 +2115,16 @@ def main(argv=None):
                     # 分带页：一个「系统」= 一个时间块；同一系统里多带是同时刻的，parts 相加
                     for s in pg.get("systems") or []:
                         parts = []
+                        rests = []
                         for m in s["mxl"]:
                             info = mxl_to_parsed(m)
                             if info.get("ok"):
                                 parts.extend(info["parsed"]["parts"])
+                                rests.extend(info["parsed"].get("barRestLens") or [])
                         if not parts:
                             continue
                         parsed_pages.append({"page": pg.get("page"), "system": s["system"],
-                                             "parsed": {"parts": parts, "tpb": 480},
+                                             "parsed": {"parts": parts, "tpb": 480, "barRestLens": rests},
                                              "scale": pg.get("scale"), "mxl": s["mxl"][0]})
                     continue
                 info = mxl_to_parsed(pg["mxl"])
