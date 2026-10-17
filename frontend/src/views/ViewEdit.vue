@@ -1776,7 +1776,9 @@ async function exportMidi() {
   try {
     /* ★ 技法动作（§3.7）：导出前把每条轨的 PC / CC / 力度系数展开进去。
        不改 song.value 本身（纯函数），所以反复导出/试听不会叠加事件。 */
-    const bytes = encodeMidi(tracksForExport(), { division: s.tpb, tempoMap: s.tempoMap, sigMap: s.sigMap });
+    // ★ P0-1：导出补上调号（keySig）。事件级保真（bend/歌词/marker/触后）在 core/midi.js 的
+    //   encodeMidi 里统一写出，track 上的 events/ccs/pcs 原样带进即可。
+    const bytes = encodeMidi(tracksForExport(), { division: s.tpb, tempoMap: s.tempoMap, sigMap: s.sigMap, keySig: s.keySig });
     if (bridge && bridge.saveBinary) {
       const r = await bridge.saveBinary({ name: s.name + '.mid', data: Array.from(bytes) });
       if (r && r.ok) toast(t('已导出 MIDI'), 'ok');
@@ -1912,7 +1914,7 @@ onMounted(async () => {
         exportBytes: () => {
           const s = song.value;
           if (!s) return null;
-          return encodeMidi(tracksForExport(), { division: s.tpb, tempoMap: s.tempoMap, sigMap: s.sigMap });
+          return encodeMidi(tracksForExport(), { division: s.tpb, tempoMap: s.tempoMap, sigMap: s.sigMap, keySig: s.keySig });
         },
         // 播放侧证据：player.events（每个音符的 prog/vel）与 player.ctlEvents（通道事件）
         playerState: () => {

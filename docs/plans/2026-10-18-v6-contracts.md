@@ -20,7 +20,7 @@
 | C1 | CommandRegistry 命令注册表 | `frontend/src/core/commands.js`（新） | W0 待实现（接口冻结） | 菜单/工具栏/右键/快捷键/命令面板/宏 |
 | C2 | TaskCenter 长任务中心 | `main/taskcenter.js`（新）+ `preload.js` | W0 待实现（接口冻结） | 转录/下载/渲染/导出/更新/OMR |
 | C3 | DocumentSession 文档会话 | `frontend/src/core/session.js`（新） | W0 待实现（接口冻结） | 编辑/调教/谱面/歌词；自动保存/恢复 |
-| C4 | TimelineModel 时间轴模型 | `frontend/src/core/midi.js`（扩展）+ `core/timeline.js`（新） | W0 待实现（接口冻结） | 编辑器/编排时间线/调教/可视化 |
+| C4 | TimelineModel 时间轴模型 | `frontend/src/core/midi.js`（扩展）+ `core/timeline.js`（新） | ✅ **已实现**（`timeline.js` 264 行 + 10 测例；SMPTE 模式已预留，P0-6 接入口） | 编辑器/编排时间线/调教/可视化 |
 | C5 | ExportJob 导出管线 | `main/export.js`（新）+ `frontend/src/core/export_audio.js`（新） | W0 待实现（接口冻结） | WAV/FLAC/MP3/OGG/分轨/MIDI/MusicXML/MP4 |
 | C6 | GestureState 手势状态机 | `frontend/src/core/gesture.js`（新） | W0 待实现（接口冻结） | 编辑页/调教页/编排页 |
 
@@ -81,6 +81,18 @@
 // 所有拖拽：begin(e) -> update(e) 产生 preview -> commit() 才写入模型（一次手势 = 一次撤销）
 // 吸附优先级：frame > beat > grid；编辑页与调教页共用同一实现
 ```
+
+## 2.1 实现记录
+
+- **C4 TimelineModel 已实现**：`frontend/src/core/timeline.js`
+  - API：`normalizeTimeline / secOfTick / tickOfSec / barBeatOf / tickOfBarBeat / barTicksOf / iterBars / rulerMarks / snapStep / snapTick / timelineOfSong / cloneTimeline / playheadSec`
+  - 单测：`frontend/tests/timeline-model.test.js`（10 例：恒定/变速积分、4/4→6/8→3/4、往返、吸附、SMPTE、song 桥接、深拷贝）
+  - SMPTE 模式已支持（`{fps,ticksPerFrame}`），等 P0-6 把 `parseMidi` 的 SMPTE division 接进来即可。
+- **P0-1 MIDI 导出保真（核心已实现）**：`core/midi.js`
+  - 写出：format 按轨数正确写 1（多轨）/0（单轨）、pitch bend、复音/通道触后、歌词/文本/marker/cue 分类型、调号（带符号 sf）、中途 program、tempo/拍号去重且只写 0 号轨；
+  - 解析：aftertouch 不再丢弃、marker/cue 与 text 分开、keySig 按带符号字节读；
+  - 单测：`frontend/tests/midi-roundtrip.test.js`（9 例，encode→parse 逐事件断言）。
+- 剩余：P0-1 的「弯音车道 UI / 编辑后导出接线」在 P0-1 后续卡（编辑器侧）完成；本文件状态列随批次回填。
 
 ## 3. E2E（验收底座，已落地）
 
