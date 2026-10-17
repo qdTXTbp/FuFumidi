@@ -302,6 +302,19 @@
   - 新 `docs/CROSS-PLATFORM.md`：dev 包构建步骤、Python/ffmpeg/模型前置、冒烟清单、已知缺口（签名公证 / 原生音频 I/O / Flatpak）；
   - `npm run test:platform` 已进 `npm test` 链。
 
+## 发布记录（6.0.0）
+
+- 版本四源一致 6.0.0；发布说明 `scripts/release-notes-v6.0.0.md`；更新日志内置 6.0.0。
+- 构建：`scripts/build-release.ps1 -Version 6.0.0` 成功（Setup 675.9MB / Install 145.7MB / 更新器嵌入配置断言通过）。
+- 签名：`scripts/sign-update.mjs` 对 `FuFumidi.Install.6.0.0.exe` 生成 `update-manifest.json`（Ed25519）；
+  `archive-release.mjs` 归档到 `E:\Midi\安装包\FuFumidi\6.0.0`（含 SHA256SUMS）。
+- **CNB 发布**：`v6.0.0` Release 9 个资产（Setup/blockmap/Install/更新器/latest.yml/metadata/说明/签名清单），
+  `make_latest` 已置为最新；`releases/latest/download/{latest.yml,update-manifest.json,FuFumidi.Install.exe}` 校验一致，
+  **下载安装包后用内嵌公钥验签通过**（sha256 7e4686…）。
+- **安装版部署 + 真机冒烟**：`deploy-installed.cjs` 覆盖 app.asar 后启动冒烟通过（首屏 358 字符、fuBridge 就绪、0 未捕获异常、0 console.error）。
+- 未完成：GitHub Release 资产上传（本机无 GitHub 凭据，credential fill 交互不可用）；mac/linux 真机构建与签名公证；
+  Authenticode 证书；原生音频 I/O（WASAPI/ASIO）与真实插件宿主 —— 均属环境/资源依赖项。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；
