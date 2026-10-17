@@ -332,7 +332,9 @@
 - **P0-1…P0-8**：均有实现与测试（midi-roundtrip / session / midiin / recorder / export_audio / default-soundfont / timeline-model / check-version）。
   - **P0-4c 分轨 ZIP 打包 ✅（本轮）**：`export:stems-zip` IPC（主进程 adm-zip 一次写出、文件名安全化、总大小 ≤2GB、E2E 模式可绕过保存对话框）；转换页「打包为一个 ZIP（推荐）」开关（默认开，分轨勾选后出现）；`renderStems` 重构为「编码 → 一次打包 / 逐文件保存」，网页端自动退回逐文件下载；E2E `stems-zip-ui`（开关可见 + IPC 写出两轨 ZIP 并解包校验），全量 E2E 25/25。
   - P0-8 的 i18n **历史欠账仍很大**（基线 EN 1203 / JA 1157，按棘轮「只许变小」逐步还；本轮新增文案均已 EN+JA）。
-- **P1-1…P1-14**：全部主体完成；尾巴：P1-5 的丢字 UI 标记/手动修正、P1-13 的分标签页独立撤销栈、P0-4c stems zip 打包细节。
+- **P1-1…P1-14**：全部主体完成；尾巴：P1-5 手动修正/强制校验。
+  - **P1-13 分标签页独立撤销栈 ✅（编排页，本轮）**：`history_stack.js` 新增 `createTabbedHistoryRegistry`（每曲目一个快照栈、LRU 上限 16）；编排页按 `app.currentId` 取栈、切标签保存/恢复横向滚动位置；E2E `arrange-tabs-undo` 验证 A/B 两标签撤销互不影响且切回仍可撤销（全量 E2E 26/26）。
+  - **P0-4c 分轨 ZIP 打包 ✅**（上轮）。
 - **P2-1/P2-2/P2-3/P2-4**：协议层/契约/构建入口完成；真实第三方插件宿主、WASAPI/ASIO/CoreAudio 原生 I/O、mac/linux 真机构建与签名公证属环境/资源依赖项。
 - **P2-5 DAW 互通（DAWproject）✅（导出子集；未经 DAW 实机导入验证）**：
   - `core/dawproject.js`（8 测例）：模型规范化（bpm 20–666、拍号分母 2 的幂、空轨/非法音符剔除、颜色 #RRGGBB）、`songToDawprojectModel`（**tick/tpb 直接换算 beats，变速曲目正确**）、`buildProjectXml`（官方 XSD/示例同构：Application/Transport Tempo+TimeSignature/Structure Track+Channel(Volume/Pan/Mute)+Master/Arrangement Lanes→Clips→Clip→Notes→Note/Scenes，全部转义）、`buildMetadataXml`、`parseProjectXml` 回读、标记导出；

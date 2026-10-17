@@ -47,6 +47,44 @@ export function createHistoryStack(opts = {}) {
   return { push, undo, redo, canUndo, canRedo, depth, clear };
 }
 
+/**
+ * P1-13：按标签页隔离的历史栈注册表。
+ * 每个 key（曲目 id）一个独立 undo/redo；未创建的 key 惰性创建。
+ * 超过 maxTabs 时按 LRU 丢弃最久未用的栈（避免多标签长期占用内存）。
+ */
+export function createTabbedHistoryRegistry(opts = {}) {
+  const limit = Math.max(1, Number(opts.limit) || 60);
+  const maxTabs = Math.max(1, Number(opts.maxTabs) || 16);
+  const map = new Map();   // key -> { stack, used }
+  let clock = 0;
+
+  function forTab(key) {
+    const k = String(key == null ? 'default' : key);
+    let hit = map.get(k);
+    if (!hit) {
+      hit = { stack: createHistoryStack({ limit, clone: opts.clone }), used: 0 };
+      map.set(k, hit);
+    }
+    hit.used = ++clock;
+    // LRU：超限时丢最久未用的（保持至少当前这一个）
+    if (map.size > maxTabs) {
+      let oldestKey = '';
+      let oldest = Infinity;
+      for (const [kk, v] of map) {
+        if (kk === k) continue;
+        if (v.used < oldest) { oldest = v.used; oldestKey = kk; }
+      }
+      if (oldestKey) map.delete(oldestKey);
+    }
+    return hit.stack;
+  }
+  function drop(key) { return map.delete(String(key == null ? 'default' : key)); }
+  function keys() { return Array.from(map.keys()); }
+  function size() { return map.size; }
+  function clearAll() { map.clear(); }
+  return { forTab, drop, keys, size, clearAll };
+}
+
 function defaultClone(v) {
   if (typeof structuredClone === 'function') {
     try { return structuredClone(v); } catch (e) { /* 含函数时退回 JSON */ }

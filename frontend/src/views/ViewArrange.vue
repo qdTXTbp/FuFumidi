@@ -11,7 +11,7 @@ import { timelineOfSong, iterBars, secOfTick, tickOfSec } from '../core/timeline
 // P1-13 B1：手势状态机（拖动/拖边/框选/平移/点击的判定与阈值统一走 core/gesture.js）
 import { createGestureState, beginGesture, updateGesture, endGesture, INTENTS, isMutatingIntent } from '../core/gesture.js';
 // P1-13 B2：撤销/重做走统一历史栈 + C1 命令注册表（菜单/命令面板/快捷键同一份）
-import { createHistoryStack } from '../core/history_stack.js';
+import { createTabbedHistoryRegistry } from '../core/history_stack.js';
 import { commands, comboOfEvent } from '../core/commands.js';
 import {
   createArrangeState, addClip, removeClip, moveClip, resizeClip, splitClip,
@@ -32,7 +32,12 @@ const RULER_H = 26;
 let raf = 0;
 let gs = createGestureState();       // 当前指针手势（P1-13）
 let dragCtx = null;                  // 拖动上下文：clip 原值 + 命中边缘
-const hist = createHistoryStack({ limit: 60 });   // 编排撤销/重做（快照栈）
+// P1-13：**分标签页独立撤销栈** —— 每个曲目一个快照栈，切走再切回仍能撤销/重做
+const tabHist = createTabbedHistoryRegistry({ limit: 60, maxTabs: 16 });
+function tabKey() { return String(app.currentId || 'default'); }
+let lastTabKey = tabKey();
+let hist = tabHist.forTab(tabKey());
+const scrollByTab = new Map();   // 每个标签的横向滚动位置（tick）
 const histDepth = ref({ undo: 0, redo: 0 });
 const cmdOffs = [];
 
@@ -90,11 +95,16 @@ const markerCount = computed(() => state.value.markers.length);
 const regionCount = computed(() => state.value.regions.length);
 
 function resetState() {
-  hist.clear();
+  // 切标签：先把**上一个**标签的滚动位置存起来，再换到该曲目的历史栈（**不清空**，切回可撤销）
+  scrollByTab.set(lastTabKey, scrollX.value);
+  const key = tabKey();
+  lastTabKey = key;
+  hist = tabHist.forTab(key);
   syncHist();
   const s = song.value;
   // P1-1c：优先恢复 song.arrange（会话内持久化），没有则按曲目生成默认编排
   state.value = readArrangeFromSong(s) || defaultArrangeState(s);
+  scrollX.value = Number(scrollByTab.get(key) || 0);
   selected.value = '';
   draw();
 }
@@ -408,6 +418,17 @@ function fitAll() {
 let tickTimer = 0;
 onMounted(async () => {
   resetState();
+  // E2E 钩子：分标签撤销栈隔离的断言入口（仅测试实例）
+  if (window.fuBridge && window.fuBridge.e2e) {
+    window.__fufumidiArrange = {
+      depth: () => ({ ...histDepth.value }),
+      key: () => tabKey(),
+      markers: () => state.value.markers.length,
+      clips: () => state.value.clips.length,
+      undo: () => undoArrange(),
+      redo: () => redoArrange(),
+    };
+  }
   await nextTick();
   fitAll();
   tickTimer = setInterval(() => { if (app.playing) draw(); }, 100);
@@ -423,6 +444,7 @@ onMounted(async () => {
   window.addEventListener('keydown', onArrangeKey);
 });
 onBeforeUnmount(() => {
+  if (window.__fufumidiArrange) { try { delete window.__fufumidiArrange; } catch (e) {} }
   if (tickTimer) clearInterval(tickTimer);
   while (cmdOffs.length) { try { cmdOffs.pop()(); } catch (e) {} }
   window.removeEventListener('keydown', onArrangeKey);
