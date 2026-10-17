@@ -549,6 +549,213 @@ def plan_page_bands(src, workdir, page_no, max_staves=BAND_MAX_STAVES,
     return out
 
 
+
+# ----------------------------------------------------------------------------
+# 速度记号（谱面 OCR）—— 2026-10-18
+# ----------------------------------------------------------------------------
+# Audiveris 不导出 <sound tempo>/<metronome>（实测 5.5.2：钢琴谱与 25 行总谱都没导出），
+# 它自己的 TEXTS 步也常常读不到「附点四分 = 60」这种紧贴音符图元的小记号。于是变谱只能落回
+# 默认 120 BPM —— 实测整首曲子因此快 33%（用户：「转谱出来的速度不对」「和原音频差距巨大」）。
+# 这一层自己找：第 1 页第一行谱表**上方**那条带（速度记号就印在那儿）→ 用 **Audiveris 自带**
+# 的 Tesseract OCR 那一小块 → 解析「= 60」和附点（附点四分 = 60 即四分音符 90）。
+# 为什么要从 Audiveris 里抽 tesseract：它已经装着变谱增强引擎，而 Tesseract 5.5 的 CLI 就在
+# 它的 app/tesseract-*-windows-x86_64.jar 与 app/leptonica-*-windows-x86_64.jar 里（bytedeco 打包：
+# tesseract.exe + libtesseract55.dll + libleptonica-6.dll + mingw 运行库）。这样安装包不必多带
+# 一份 OCR 运行库（约 12 MB），也不新增强制依赖；抽一次缓存在数据根下。
+
+_TESS_CACHE = {"exe": None, "checked": False}
+
+
+def _tesseract_cli():
+    """从安装好的 Audiveris 里抽出 tesseract CLI（含依赖 dll）到数据根缓存目录。
+
+    返回 exe 路径；不可用返回 ""（调用方据此跳过速度识别，不报错）。
+    """
+    if _TESS_CACHE["checked"]:
+        return _TESS_CACHE["exe"] or ""
+    _TESS_CACHE["checked"] = True
+    exe = find_audiveris()
+    if not exe:
+        return ""
+    app = os.path.join(os.path.dirname(exe), "app")
+    if not os.path.isdir(app):
+        app = os.path.join(os.path.dirname(os.path.dirname(exe)), "app")
+    if not os.path.isdir(app):
+        return ""
+    jars = []
+    try:
+        for f in os.listdir(app):
+            fl = f.lower()
+            if fl.endswith(".jar") and "windows" in fl and (fl.startswith("tesseract-") or fl.startswith("leptonica-")):
+                jars.append(os.path.join(app, f))
+    except OSError:
+        return ""
+    if not jars:
+        return ""
+    root = os.environ.get("FUFUMIDI_DATA_ROOT") or os.environ.get("FUFUMIDI_DATA") or ""
+    if not root:
+        return ""
+    dst = os.path.join(root, "omr", "tesseract-cli")
+    marker = os.path.join(dst, "tesseract.exe")
+    if os.path.isfile(marker):
+        _TESS_CACHE["exe"] = marker
+        return marker
+    try:
+        import zipfile
+        os.makedirs(dst, exist_ok=True)
+        for jp in jars:
+            with zipfile.ZipFile(jp) as z:
+                for n in z.namelist():
+                    low = n.lower()
+                    if not (low.endswith(".dll") or low.endswith(".exe")):
+                        continue
+                    base = os.path.basename(n)
+                    # JNI 层不要（CLI 只需要 C 运行库）：jni*.dll 是给 Java 用的胶水
+                    if base.lower().startswith("jni"):
+                        continue
+                    with z.open(n) as sf, open(os.path.join(dst, base), "wb") as fh:
+                        fh.write(sf.read())
+    except Exception:                                  # noqa: BLE001
+        return ""
+    if not os.path.isfile(marker):
+        return ""
+    _TESS_CACHE["exe"] = marker
+    return marker
+
+
+def _run_tesseract(png, psm=6):
+    """对一张小图跑 Tesseract（只用 eng：速度记号就是数字 + 等号）。返回识别文本。"""
+    exe = _tesseract_cli()
+    if not exe or not png or not os.path.isfile(png):
+        return ""
+    env = dict(os.environ)
+    td = tessdata_dir()
+    if td and os.path.isdir(td):
+        env["TESSDATA_PREFIX"] = td
+    out = ""
+    try:
+        proc = subprocess.run([exe, png, "stdout", "--psm", str(psm), "-l", "eng"],
+                              capture_output=True, text=True, timeout=90,
+                              cwd=os.path.dirname(exe), env=env,
+                              encoding="utf-8", errors="replace")
+        out = (proc.stdout or "").strip()
+    except Exception:                                  # noqa: BLE001
+        out = ""
+    return out
+
+
+def _tempo_from_ocr_text(text):
+    """OCR 文本 → {perMinute, dotted, raw}；认不出返回 None。
+
+    形态实测：谱面「附点四分 = 60」被读成 J.=60 / | J.= 60 / q.=60 / = 60 这几种。
+    """
+    import re
+    if not text:
+        return None
+    flat = " ".join(str(text).split())
+    m = re.search(r"=\s*(\d{1,3})", flat)
+    dotted = bool(re.search(r"[.\u00b7\u2022]\s*=", flat))
+    if not m:
+        # 没有等号：整块带子里只有一个 2~3 位数，也认（速度记号那条带子本来就只有它）
+        nums = re.findall(r"(?<![0-9])(\d{2,3})(?![0-9])", flat)
+        if len(nums) != 1:
+            return None
+        n = int(nums[0])
+        if not (30 <= n <= 300):
+            return None
+        return {"perMinute": n, "dotted": dotted, "raw": flat}
+    n = int(m.group(1))
+    if not (30 <= n <= 300):
+        return None
+    return {"perMinute": n, "dotted": dotted, "raw": flat}
+
+
+def read_tempo_mark_from_raster(page_png, workdir=None):
+    """从第 1 页栅格图里读速度记号（左上角「附点四分 = 60」那一块）。
+
+    ① 找第一行谱表的 y：整行几乎全是黑的长横线（标题/文字的长横远短于谱线）；
+    ② 取它上方一条带（x 8%~46%、y 谱线上方约 7.5% 页高）；
+    ③ Tesseract OCR（psm 6/7/11 各跑一次，取第一个能解析出数字的）。
+    返回 {found, bpm, perMinute, dotted, raw, source}；没把握 → found=False（界面提示手填）。
+    """
+    out = {"found": False, "bpm": None, "perMinute": None, "dotted": False,
+           "raw": [], "source": "raster"}
+    if not page_png or not os.path.isfile(page_png):
+        return out
+    try:
+        import numpy as np
+        from PIL import Image
+        im = Image.open(page_png).convert("L")
+        arr = np.asarray(im, dtype=np.uint8)
+    except Exception:                                  # noqa: BLE001
+        return out
+    h, w = arr.shape[:2]
+    dark = (arr < 128)
+    # ① 第一行谱表：找「最长连续黑段 >= 45% 页宽」的最小 y
+    top_staff = None
+    for y in range(0, h):
+        row = dark[y]
+        if row.sum() < w * 0.25:
+            continue
+        idx = np.flatnonzero(row)
+        if idx.size == 0:
+            continue
+        best = cur = 1
+        prev = idx[0]
+        for v in idx[1:]:
+            if v == prev + 1:
+                cur += 1
+            else:
+                cur = 1
+            if cur > best:
+                best = cur
+            prev = v
+        if best >= w * 0.45:
+            top_staff = y
+            break
+    if top_staff is None or top_staff < h * 0.03:
+        return out
+    # 带子取**第一行谱表上方 6% 页高**、横向 10%~34%：速度记号就印在这里（标题与作曲家在更上面）。
+    # 太宽的带子会把标题文字也带进来，Tesseract 反而读不出那个小记号（实测 psm 6/7 全空）。
+    y0 = max(0, int(top_staff - h * 0.060))
+    y1 = max(0, int(top_staff - int(h * 0.004)))
+    x0 = int(w * 0.10)
+    x1 = int(w * 0.34)
+    if y1 - y0 < 10 or x1 - x0 < 60:
+        return out
+    crop = arr[y0:y1, x0:x1]
+    tmpdir = os.path.join(workdir or os.path.dirname(page_png), "tempo")
+    try:
+        os.makedirs(tmpdir, exist_ok=True)
+        # 二值化 + 四周留白：速度记号很小，直接喂原图 Tesseract 常常整块读空
+        import numpy as _np
+        binimg = (_np.where(crop < 160, 0, 255)).astype(_np.uint8)
+        pad = 24
+        padded = _np.full((binimg.shape[0] + pad * 2, binimg.shape[1] + pad * 2), 255, dtype=_np.uint8)
+        padded[pad:pad + binimg.shape[0], pad:pad + binimg.shape[1]] = binimg
+        big = Image.fromarray(padded).resize(
+            (padded.shape[1] * 4, padded.shape[0] * 4), Image.LANCZOS)
+        png = os.path.join(tmpdir, "tempo-band.png")
+        big.save(png)
+    except Exception:                                  # noqa: BLE001
+        return out
+    for psm in (6, 7, 12):
+        txt = _run_tesseract(png, psm)
+        if not txt:
+            continue
+        out["raw"].append("[psm%d] %s" % (psm, " ".join(txt.split())[:60]))
+        got = _tempo_from_ocr_text(txt)
+        if not got:
+            continue
+        out["found"] = True
+        out["perMinute"] = got["perMinute"]
+        out["dotted"] = got["dotted"]
+        # 附点四分 = 60 → 四分音符 90；无附点按四分音符记（MIDI 的 set_tempo 永远是四分音符）
+        out["bpm"] = int(round(got["perMinute"] * (1.5 if got["dotted"] else 1.0)))
+        out["raw"].append("perMinute=%d dotted=%s bpm=%d" % (got["perMinute"], got["dotted"], out["bpm"]))
+        break
+    return out
+
 def run_audiveris(inputs, workdir, timeout=30 * 60, explicit=None, scale=None, thicken=False,
                    prep="auto", sr="off", sr_exe=None):
     """逐页预处理 → Audiveris 批处理 → 按输入名逐页配对导出的 MusicXML。
@@ -705,8 +912,17 @@ def run_audiveris(inputs, workdir, timeout=30 * 60, explicit=None, scale=None, t
                 p["bandStaves"] = sum(x["staves"] for v in sysmap.values() for x in v)
                 p["reasons"] = []
     metro = read_metronome_from_omr(out_dir, 1)
+    # .omr 里没有速度记号 → 再从**第 1 页栅格图**上 OCR 一次（速度记号本来就印在谱面上）。
+    # 只在没拿到 metronome 时才做：OCR 比读 .omr 慢（抽 tesseract + 3 次识别 ≈ 1~2 秒）。
+    tempo_mark = {}
+    if not (metro or {}).get("bpm"):
+        try:
+            tempo_mark = read_tempo_mark_from_raster(prepped[0] if prepped else "", workdir)
+        except Exception as _e:                      # noqa: BLE001
+            tempo_mark = {"found": False, "error": str(_e)[:120]}
     res = {
         "metronome": metro,
+        "tempoMark": tempo_mark,
         "ok": any(p["ok"] for p in pages),
         "pages": pages,
         "mxlList": [p["mxl"] for p in pages if p["ok"]],
@@ -1056,6 +1272,21 @@ def infer_meter(pages, tpb, min_share=0.2):
     # 但 1440 是第二名的 3.2 倍 —— 谱面自己写死的拍号就是这个规律。
     if share < min_share or (second and n < 1.5 * second):
         return None
+    # ★ 2026-10-18：**漏认小节线会把两小节并成一小节**（实测那份 6 页总谱：真正的 3/8 小节是 720，
+    #   但 1440 才是众数 —— 一半的小节线没认出来）。如果众数长度的**真因数**（缩小 2/3/4 倍）
+    #   也占到了实打实的比例，那它才是真正的拍长；否则 3/8 的谱会被当成 6/8，
+    #   后面按统一网格重排时整条时间轴被拉长一倍（用户："和原音频差距巨大"）。
+    best_len = raw
+    for div in (4, 3, 2):
+        if raw % div:
+            continue
+        cand = raw // div
+        cshare = cnt.get(cand, 0) / float(total)
+        if cshare >= 0.12 and int(round(cand * 2.0 / tpb)) in _METERS:
+            best_len = cand
+            share = max(share, cshare)
+            break
+    raw = best_len
     half = int(round(raw * 2.0 / tpb))                # 半拍为单位，避免浮点
     if half not in _METERS:
         return None
@@ -1065,24 +1296,44 @@ def infer_meter(pages, tpb, min_share=0.2):
 
 
 def _regrid_page(parts, bar_ticks):
-    """把一页里每个声部的小节拉到**统一网格**：小节 k 的起点 = k × bar_ticks。
+    """把一页里每个声部摆到**统一网格**上：小节 k 的起点 = 前 k 个小节各自取整后的累计长度。
 
-    不这么做的话，各声部的小节长度是各认各的（见 parse_musicxml 里 m/off 的注释），
-    合到一条时间轴上会越走越散 —— 用户听到的是「声部之间对不齐」，而不是错了几个音。
-    音符在小节内的偏移（off）来自时值本身，是可靠的，所以按它重建。
+    ★ 2026-10-18 改（旧写法是 k × bar_ticks）：旧写法的前提是「每个小节都正好 bar_ticks 长」。
+      实测那份 6 页总谱里小节线经常被漏认（两个 3/8 小节并成一个 1440 的小节），小节长度分布
+      是 720/1440/960 混着的 —— 用固定 bar_ticks 重建会把时间轴整体拉伸，音符全落到错的小节里
+      （用户："和原音频差距巨大"）。现在按**每个小节自己的长度取整到基拍（bar_ticks）的整数倍**
+      再累加：一个 1440 的小节 = 2 个基拍、720 = 1 个 —— 局部节奏不再被拉平，声部之间仍然同步
+      （同一页各声部的小节序列本来就该对得上）。
+    返回 (移动的音符数, 整页的网格长度 tick)。
     """
     moved = 0
+    grid_end = 0
     for part in parts:
+        lens = [int(x) for x in (part.get("measureLens") or [])]
+        grid = [0]
+        for L in lens:
+            if bar_ticks:
+                units = max(1, int(round(float(L) / bar_ticks))) if L > 0 else 1
+            else:
+                units = 1
+            grid.append(grid[-1] + units * bar_ticks)
         for n in part.get("notes") or []:
             if "m" not in n:
                 continue
-            ns = int(n["m"]) * bar_ticks + int(n.get("off") or 0)
+            mi = int(n["m"])
+            if 0 <= mi < len(grid):
+                base = grid[mi]
+            else:
+                base = grid[-1] + (mi - len(grid) + 1) * bar_ticks
+            ns = base + int(n.get("off") or 0)
             dur = max(1, int(n["end"]) - int(n["start"]))
             if ns != int(n["start"]):
                 moved += 1
             n["start"] = ns
             n["end"] = ns + dur
-    return moved
+            grid_end = max(grid_end, ns + dur)
+        grid_end = max(grid_end, grid[-1])
+    return moved, grid_end
 
 
 def _page_checks(page_no, parts, bar_ticks, tpb, system=None):
@@ -1253,8 +1504,10 @@ def merge_pages(pages, out_mid, opts=None):
     for pg in pages:
         parsed = pg.get("parsed") or {}
         parts = parsed.get("parts") or []
+        page_grid_end = 0
         if bar_ticks:
-            regridded += _regrid_page(parts, bar_ticks)
+            _mv, page_grid_end = _regrid_page(parts, bar_ticks)
+            regridded += _mv
         infos = []
         for part in parts:
             raw = part.get("name") or ""
@@ -1270,6 +1523,8 @@ def merge_pages(pages, out_mid, opts=None):
             for n in part.get("notes") or []:
                 if "m" in n:
                     n_bars = max(n_bars, int(n["m"]) + 1)
+        # 页长仍按「小节数 × 基拍」——这是**页与页之间**的衔接量，用网格累计（可能因某声部多认了
+        # 几小节而偏大）会把整份谱越拼越长。页内小节长度不等的问题由上面的重排解决。
         page_end = offset + (n_bars * bar_ticks if (bar_ticks and n_bars) else 0)
         n_page = 0
         for idx, part in enumerate(parts):
@@ -1845,6 +2100,7 @@ def main(argv=None):
                 #   留在了 .omr 里（role="Metronome"）。读准了就用（用户没显式填时），
                 #   读不准就如实标出来让界面提示手填 —— 见 read_metronome_from_omr 的注释。
                 metro = {} if retry_page else (raster.get("metronome") or {})
+                tmark = {} if retry_page else (raster.get("tempoMark") or {})
                 bpm_source = "default"
                 if str(getattr(args, "tempo", "auto")).strip().lower() not in ("", "auto", "0", "none"):
                     bpm_source = "user"
@@ -1852,6 +2108,11 @@ def main(argv=None):
                     ov["bpm"] = float(metro["bpm"])
                     ov["tempos"] = [{"tick": 0, "bpm": float(metro["bpm"])}]
                     bpm_source = "metronome"
+                elif tmark.get("bpm"):
+                    # 谱面左上那个速度记号 OCR 出来的（附点四分 = 60 → 四分音符 90）
+                    ov["bpm"] = float(tmark["bpm"])
+                    ov["tempos"] = [{"tick": 0, "bpm": float(tmark["bpm"])}]
+                    bpm_source = "tempo-mark"
                 elif metro.get("found") and metro.get("unreadable"):
                     bpm_source = "metronome-unreadable"
                 mg = merge_pages(parsed_pages, out_mid, ov)
@@ -1893,6 +2154,8 @@ def main(argv=None):
                     "bpm": ov["bpm"],
                     "bpmSource": bpm_source,
                     "metronomeRaw": (metro.get("raw") or [])[:4],
+                    "tempoMarkRaw": (tmark.get("raw") or [])[:4],
+                    "tempoMarkDotted": bool(tmark.get("dotted")),
                     # 拍号以**合并结果**为准（可能来自推断）；ov["times"] 在 auto 且谱面没写时是空的
                     "timeSig": mg.get("timeSig") or "4/4",
                     "quantize": str(args.quantize),

@@ -227,6 +227,10 @@ export function buildSong(mid, meta = {}) {
   song.baseSec = baseSec;
   song.secToTick = secToTick;
   song.initialBpm = Math.round(60e6 / map[0].us);
-  song.bars = Math.ceil(song.totalTicks / (tpb * 4));
+  // ★ 2026-10-18：小节数必须按**拍号**算（旧写法 ceil(totalTicks / tpb·4) 假定 4/4）。
+  //   3/8 的曲子会被算成 1/3 的小节数 → 转谱页/总谱直接截断（实测 87 小节被当成 33 小节）。
+  const _s0 = sigMap[0] || { num: 4, den: 4 };
+  const _barLen = Math.max(1, Math.round(_s0.num * tpb * 4 / _s0.den));
+  song.bars = Math.max(1, Math.ceil(song.totalTicks / _barLen));
   return song;
 }

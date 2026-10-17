@@ -310,14 +310,60 @@ def _dur_ticks(el, divisions, tpb):
     return int(round(d * tpb / max(1, divisions)))
 
 
+#: <beat-unit> 的名字 → 等于几个四分音符
+_BEAT_UNIT_QUARTERS = {
+    'maxima': 32, 'long': 16, 'breve': 8, 'whole': 4, 'half': 2,
+    'quarter': 1, 'eighth': 0.5, '16th': 0.25, '32nd': 0.125,
+    '64th': 0.0625, '128th': 0.03125, '256th': 0.015625,
+}
+
+
+def _metronome_bpm(el):
+    """<metronome> → **四分音符** BPM（按 <beat-unit> 与附点换算）。
+
+    ★ 2026-10-18 修：旧实现直接拿 <per-minute> 当 BPM，把拍号单位当成了四分音符。
+      于是 "♩. = 60"（附点四分 = 60，即四分音符 90）被读成 60 —— 整首曲子的速度只有真值的三分之二；
+      "♩ = 60" 没问题，但 "♪ = 120"（八分 = 120 → 四分 60）、"half = 60"（二分 = 60 → 四分 120）
+      全都会错。MIDI 的 set_tempo 永远是**四分音符** BPM，所以这里必须换算。
+    """
+    met = None
+    for s in el.iter():
+        if _localname(s.tag) == 'metronome':
+            met = s
+            break
+    if met is None:
+        return 0
+    per = 0
+    unit = 'quarter'
+    dots = 0
+    for c in met:
+        nm = _localname(c.tag)
+        if nm == 'per-minute':
+            per = _int(c.text, 0)
+        elif nm == 'beat-unit':
+            unit = (c.text or '').strip().lower()
+        elif nm == 'beat-unit-dot':
+            dots += 1
+    if per <= 0:
+        return 0
+    # 音符 = 单位 × (2 - 2^-dots)：一个附点 = ×1.5，两个附点 = ×1.75
+    unit_q = _BEAT_UNIT_QUARTERS.get(unit)
+    if not unit_q:
+        return 0
+    mult = unit_q * (2.0 - 2.0 ** (-dots))
+    # per 表示「每个 beat 数量 / 分钟」→ 四分音符速度 = per × 每个 beat 含几个四分音符
+    bpm = per * mult
+    return max(1, min(400, int(round(bpm))))
+
+
 def _direction_tempo(el):
-    """从 <direction> 里取速度：<sound tempo> 优先，其次 <metronome><per-minute>。"""
+    """从 <direction> 里取速度（**换算成四分音符 BPM**）：<sound tempo> 优先，其次 <metronome>。"""
     for s in el.iter():
         if _localname(s.tag) == 'sound' and s.get('tempo'):
             return _int(s.get('tempo'), 0)
-    for s in el.iter():
-        if _localname(s.tag) == 'per-minute':
-            return _int(s.text, 0)
+    bpm = _metronome_bpm(el)
+    if bpm:
+        return bpm
     return 0
 
 

@@ -567,3 +567,63 @@ def test_classical_backend_still_reachable():
                    "--beats", "4", "--tempo", "120"])
     assert code == 0
     assert os.path.exists(out) and os.path.getsize(out) > 200
+
+
+# ---------------- 速度记号 / 拍号 / 小节网格（2026-10-18）----------------
+# 用户实测：「变谱出来的 MIDI 速度不对、和原音频差距巨大」。两个根因在这里钉住：
+#   ① Audiveris 不导出 <sound tempo>，谱面上那个「附点四分 = 60」只能自己 OCR → 90 才对；
+#   ② 小节线被漏认时（两个 3/8 并成 1440）拍号会被推成 6/8，按固定网格重排会把时间轴拉长一倍。
+
+
+@pytest.mark.parametrize("text,per_minute,dotted", [
+    ("L J.=60", 60, True),
+    ("- |J.= 60| 1", 60, True),
+    ("q . = 66", 66, True),
+    ("J=120", 120, False),
+    ("= 90", 90, False),
+    ("60", 60, False),          # 丢掉了等号：带子里只有一个两位数，也认
+])
+def test_tempo_from_ocr_text(text, per_minute, dotted):
+    got = B._tempo_from_ocr_text(text)
+    assert got is not None, text
+    assert got["perMinute"] == per_minute
+    assert got["dotted"] is dotted
+
+
+@pytest.mark.parametrize("text", ["", "no digits", "= 900", "1 2 3"])
+def test_tempo_from_ocr_text_rejects_garbage(text):
+    assert B._tempo_from_ocr_text(text) is None
+
+
+def _page_with_lens(lens):
+    return {"parsed": {"parts": [{"name": "Flute", "measureLens": list(lens), "notes": []}]}}
+
+
+def test_infer_meter_prefers_the_real_bar_length_when_barlines_are_merged():
+    # 真谱是 3/8（720），但一半的小节线没认出来 → 众数是 1440。
+    # 720 占 27% 是实打实的，必须选 720，否则当成 6/8 会把整条时间轴拉长一倍。
+    pages = [_page_with_lens([1440] * 8 + [720] * 3)]
+    m = B.infer_meter(pages, 480)
+    assert m is not None
+    assert (m["beats"], m["beatType"]) == (3, 8), m
+
+
+def test_infer_meter_keeps_compound_meter_when_no_smaller_length_exists():
+    # 真 6/8 的谱：只有 1440，没有 720 → 必须还是 6/8
+    m = B.infer_meter([_page_with_lens([1440] * 12)], 480)
+    assert m is not None and (m["beats"], m["beatType"]) == (6, 8), m
+
+
+def test_regrid_keeps_variable_measure_lengths():
+    # 小节 0 被并成两小节（1440 = 2×720），小节 1 是正常的 720
+    part = {"name": "Flute", "measureLens": [1440, 720],
+            "notes": [
+                {"start": 0, "end": 240, "midi": 60, "m": 0, "off": 0},
+                {"start": 240, "end": 480, "midi": 62, "m": 0, "off": 240},
+                {"start": 1440, "end": 1680, "midi": 64, "m": 1, "off": 0},
+            ]}
+    moved, grid_end = B._regrid_page([part], 720)
+    assert part["notes"][1]["start"] == 240, "小节内偏移不能丢"
+    assert part["notes"][2]["start"] == 1440, "第二小节必须落在累计网格 1440（不是 m×720=720）"
+    assert moved >= 0
+    assert grid_end == 2160
