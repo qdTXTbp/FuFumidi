@@ -345,6 +345,8 @@ async function decodeSepDur(p) {
 // 长音频（预计 > 30 分钟）要提前说清楚：主进程已放宽超时（无进展 20 分钟才判卡死），
 // 不然用户会以为程序挂了（2026-10-17 实测：演唱会 FLAC 被判「引擎执行超时」）。
 const sepLong = computed(() => { const s = sepEstSec(); return !!s && s > 30 * 60; });
+// 单轨降噪模型（denoise_*，training.target_instrument 非空）不是分离模型：输出≈原音，先说明白
+const sepIsDenoise = computed(() => /^denoise[_-]/i.test(String(sepModel.value || '')));
 function sepEstSec() {
   if (!sepDur.value) return null;
   const isGpu = !!gpuInfo.value;
@@ -1934,6 +1936,7 @@ onBeforeUnmount(() => {
         <div v-if="sepFile && currentSep" class="tr-sum" style="margin-top:6px">
           {{ t('即将分离：') }}<b>{{ currentSep.name }}</b><span v-if="sepEstSec()"> · {{ t('预计耗时约 ') }}<b>{{ fmtTime(sepEstSec()) }}</b></span>
           <span v-if="sepLong" class="tr-warn"> · {{ t('长音频：分离会一直跑下去（无进展 20 分钟才判失败），慢的话建议先裁剪片段') }}</span>
+          <span v-if="sepIsDenoise" class="tr-warn"> · {{ t('这是单轨降噪模型：输出≈原音（只压稳态噪声），不分离人声/伴奏；要分离请选 Mel-Band Roformer（如 duality）') }}</span>
         </div>
         <button class="btn primary big" style="width:100%;justify-content:center;margin-top:8px" @click="runSeparate"
                 :disabled="!currentSep || !currentSep.exists || sepBusy">
