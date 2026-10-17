@@ -227,6 +227,12 @@
   - 7 测例（正常/篡改/同大小换内容/改版本/错 key/坏清单/坏路径）+ 真实私钥签名→内嵌公钥验签端到端通过；`npm run test:update-sign` 已进 test 链；`docs/UPDATE-SIGNING.md` 写清流程与密钥轮换；
   - 剩余：Windows Authenticode 代码签名（证书采购）、macOS 公证（P2-4）。
 
+- **P1-7 导出元数据 ✅（WAV：BWF bext + LIST INFO）**：
+  - `encodeWav` 新增 `metadata`：BWF **bext**（description/originator/originatorReference/日期/时间/时间参考，版本 1）+ **LIST INFO**（INAM/IART/ISFT/ICMT/ICRD）；chunk 偶数对齐，非 ASCII 写成 Latin-1 安全字符（'?'）避免非法字节；
+  - `decodeWavHeader` 改为**按 chunk 扫描**（data 前可能有 bext/LIST，固定偏移会读错）；返回 `extraChunks`；
+  - 转换页导出的每个 WAV 自动写「FuFumidi / 曲名 / 生成日期时间」溯源信息；6 测例（无元数据/bext 回读/INFO 回读/奇数对齐/float32/中文安全）；
+  - MP4 元数据（ID3/BWF 之外的容器标签）暂未做：视频导出走 MediaRecorder，容器由 Electron 写，后续需要换封装链路。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；

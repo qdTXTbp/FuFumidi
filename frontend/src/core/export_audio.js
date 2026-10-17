@@ -35,11 +35,85 @@ export function tpdfNoise() { return (Math.random() - Math.random()); }
 
 /* ---------------- WAV 编码 ---------------- */
 
+/* 小工具：Latin-1 写字符串（BWF/INFO 字段规定 ASCII；中文会被截断为 '?'，避免写出非法字节） */
+function latin1Bytes(s, max) {
+  const str = String(s == null ? '' : s);
+  const n = Math.min(max, str.length);
+  const out = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const c = str.charCodeAt(i);
+    out[i] = c >= 0 && c <= 0xff ? c : 0x3f;
+  }
+  return out;
+}
+function fillString(buf, off, len, s) {
+  const bytes = latin1Bytes(s, len);
+  for (let i = 0; i < len; i++) buf[off + i] = bytes[i] || 0;
+}
+/** 构造一个 RIFF 子 chunk（含 8 字节头与偶数对齐填充） */
+function riffChunk(id, payload) {
+  const pad = payload.length % 2;
+  const out = new Uint8Array(8 + payload.length + pad);
+  const v = new DataView(out.buffer);
+  for (let i = 0; i < 4; i++) v.setUint8(i, id.charCodeAt(i));
+  v.setUint32(4, payload.length, true);
+  out.set(payload, 8);
+  return out;
+}
+/** BWF bext chunk（602 字节负载；未提供的字段填 0） */
+function bextChunk(meta) {
+  const payload = new Uint8Array(602);
+  fillString(payload, 0, 256, meta.description);        // Description
+  fillString(payload, 256, 32, meta.originator);        // Originator
+  fillString(payload, 288, 32, meta.originatorReference); // OriginatorReference
+  fillString(payload, 320, 10, meta.originationDate);   // OriginationDate (yyyy-mm-dd)
+  fillString(payload, 330, 8, meta.originationTime);    // OriginationTime (hh:mm:ss)
+  const v = new DataView(payload.buffer);
+  const tr = Math.max(0, Math.round(Number(meta.timeReference) || 0));
+  v.setUint32(338, tr >>> 0, true);                     // TimeReferenceLow
+  v.setUint32(342, Math.floor(tr / 4294967296) >>> 0, true); // TimeReferenceHigh
+  v.setUint16(346, 1, true);                            // BWF version 1
+  // 412-421：响度字段（0x7FFF = 未知）；这里一律未知，行尾 180 字节保留
+  for (const off of [412, 414, 416, 418, 420]) v.setInt16(off, 0x7fff, true);
+  return riffChunk('bext', payload);
+}
+/** LIST INFO chunk（INAM/IART/ISFT/ICMT/ICRD） */
+function infoChunk(meta) {
+  const fields = [
+    ['INAM', meta.title], ['IART', meta.artist], ['ISFT', meta.software],
+    ['ICMT', meta.comment], ['ICRD', meta.date],
+  ].filter((x) => x[1]);
+  if (!fields.length) return null;
+  const sub = [];
+  let bodyLen = 4;   // 'INFO'
+  for (const [id, val] of fields) {
+    const text = latin1Bytes(val, 512);
+    const size = text.length + 1;             // 含结尾 NUL
+    const pad = size % 2;
+    bodyLen += 8 + size + pad;
+    sub.push({ id, text, size, pad });
+  }
+  const out = new Uint8Array(bodyLen);
+  const v = new DataView(out.buffer);
+  for (let i = 0; i < 4; i++) v.setUint8(i, 'INFO'.charCodeAt(i));
+  let off = 4;
+  for (const s of sub) {
+    for (let i = 0; i < 4; i++) v.setUint8(off + i, s.id.charCodeAt(i));
+    v.setUint32(off + 4, s.size, true);
+    out.set(s.text, off + 8);
+    // 结尾 NUL 与 pad 已是 0
+    off += 8 + s.size + s.pad;
+  }
+  return riffChunk('LIST', out);
+}
+
 /**
  * 把多声道 Float32 样本编码成 WAV。
  * @param {Float32Array[]|AudioBuffer} channels
  * @param {number} sampleRate
- * @param {{bitDepth?:16|24|32, dither?:boolean}} opts
+ * @param {{bitDepth?:16|24|32, dither?:boolean, metadata?:object}} opts
+ *   metadata（可选，P1-7 溯源）：{ description, originator, originatorReference,
+ *   originationDate, originationTime, timeReference, title, artist, software, comment, date }
  * @returns {Uint8Array}
  */
 export function encodeWav(channels, sampleRate, opts = {}) {
@@ -55,60 +129,93 @@ export function encodeWav(channels, sampleRate, opts = {}) {
   const bytesPerSample = bitDepth / 8;
   const blockAlign = ch * bytesPerSample;
   const dataSize = frames * blockAlign;
-  const buf = new ArrayBuffer(44 + dataSize);
+
+  const fmtPayload = new Uint8Array(16);
+  const fv = new DataView(fmtPayload.buffer);
+  fv.setUint16(0, float ? 3 : 1, true);           // 3 = IEEE float
+  fv.setUint16(2, ch, true);
+  fv.setUint32(4, sr, true);
+  fv.setUint32(8, sr * blockAlign, true);
+  fv.setUint16(12, blockAlign, true);
+  fv.setUint16(14, bitDepth, true);
+  const parts = [riffChunk('fmt ', fmtPayload)];
+  const meta = opts.metadata && typeof opts.metadata === 'object' ? opts.metadata : null;
+  if (meta) {
+    const needBext = !!(meta.description || meta.originator || meta.originatorReference ||
+      meta.originationDate || meta.originationTime || meta.timeReference);
+    if (needBext) parts.push(bextChunk(meta));
+    const info = infoChunk(meta);
+    if (info) parts.push(info);
+  }
+  const extraLen = parts.reduce((a, p) => a + p.length, 0);
+  const riffSize = 4 + extraLen + 8 + dataSize;
+  const buf = new ArrayBuffer(8 + riffSize);
+  const out = new Uint8Array(buf);
   const v = new DataView(buf);
   const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
-  ws(0, 'RIFF'); v.setUint32(4, 36 + dataSize, true); ws(8, 'WAVE');
-  ws(12, 'fmt '); v.setUint32(16, 16, true);
-  v.setUint16(20, float ? 3 : 1, true);           // 3 = IEEE float
-  v.setUint16(22, ch, true);
-  v.setUint32(24, sr, true);
-  v.setUint32(28, sr * blockAlign, true);
-  v.setUint16(32, blockAlign, true);
-  v.setUint16(34, bitDepth, true);
-  ws(36, 'data'); v.setUint32(40, dataSize, true);
-
-  let o = 44;
+  ws(0, 'RIFF'); v.setUint32(4, riffSize, true); ws(8, 'WAVE');
+  let off = 12;
+  for (const p of parts) { out.set(p, off); off += p.length; }
+  ws(off, 'data'); v.setUint32(off + 4, dataSize, true);
+  off += 8;
+  let o2 = off;
   for (let i = 0; i < frames; i++) {
     for (let c = 0; c < ch; c++) {
       let x = chs[c][i];
       if (!Number.isFinite(x)) x = 0;
       x = clampf(x, -1, 1);
-      if (float) { v.setFloat32(o, x, true); o += 4; continue; }
+      if (float) { v.setFloat32(o2, x, true); o2 += 4; continue; }
       if (bitDepth === 16) {
         let s = x * 32767;
         if (dither) s += tpdfNoise();          // TPDF 峰值 ±1 LSB，等效有效值约 0.41 LSB
         const q = Math.max(-32768, Math.min(32767, Math.round(s)));
-        v.setInt16(o, q, true); o += 2;
+        v.setInt16(o2, q, true); o2 += 2;
       } else {
         // 24-bit：放大到 2^23-1，写 3 字节小端；负数用二补码
         let s = Math.round(x * 8388607);
         if (s < 0) s += 16777216;
         s = Math.max(0, Math.min(16777215, s));
-        v.setUint8(o, s & 0xff); v.setUint8(o + 1, (s >> 8) & 0xff); v.setUint8(o + 2, (s >> 16) & 0xff);
-        o += 3;
+        v.setUint8(o2, s & 0xff); v.setUint8(o2 + 1, (s >> 8) & 0xff); v.setUint8(o2 + 2, (s >> 16) & 0xff);
+        o2 += 3;
       }
     }
   }
   return new Uint8Array(buf);
 }
 
-/** 解析 WAV 头（校验用；只看标准 44 字节 PCM/float 头） */
+/**
+ * 解析 WAV 头（校验用）：按 chunk 扫描而不是固定偏移 —— P1-7 之后 data 前面可能有 bext/LIST，
+ * 固定偏移会把 chunk 头当样本长度读错。
+ */
 export function decodeWavHeader(bytes) {
   const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   if (u8.length < 44) return null;
   const str = (o, l) => String.fromCharCode.apply(null, Array.from(u8.subarray(o, o + l)));
   if (str(0, 4) !== 'RIFF' || str(8, 4) !== 'WAVE') return null;
   const v = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
-  const fmt = v.getUint16(20, true);
-  const channels = v.getUint16(22, true);
-  const sampleRate = v.getUint32(24, true);
-  const bits = v.getUint16(34, true);
-  const dataSize = v.getUint32(40, true);
+  let off = 12;
+  let fmt = 0, channels = 0, sampleRate = 0, bits = 0, dataSize = 0, extra = [];
+  while (off + 8 <= u8.length) {
+    const id = str(off, 4);
+    const size = v.getUint32(off + 4, true);
+    const body = off + 8;
+    if (id === 'fmt ' && body + 16 <= u8.length) {
+      fmt = v.getUint16(body, true);
+      channels = v.getUint16(body + 2, true);
+      sampleRate = v.getUint32(body + 4, true);
+      bits = v.getUint16(body + 14, true);
+    } else if (id === 'data') {
+      dataSize = size;
+    } else {
+      extra.push(id);
+    }
+    off = body + size + (size % 2);
+  }
   const bytesPerSample = bits / 8;
   return {
     format: fmt, float: fmt === 3, channels, sampleRate, bits, dataSize,
     frames: Math.floor(dataSize / (channels * bytesPerSample)), durationSec: 0,
+    extraChunks: extra,
   };
 }
 

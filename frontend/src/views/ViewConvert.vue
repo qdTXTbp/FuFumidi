@@ -266,7 +266,22 @@ async function exportRendered(buf, baseName, gainMul) {
     out = lim.channels;
     report = { outputLufs: measureLufs(out, sr), outputPeakDb: measurePeakDb(out), targetLufs: null, reductionDb: lim.reductionDb };
   }
-  const bytes = encodeWav(out, sr, { bitDepth: fi.bitDepth, dither: exp.dither && fi.bitDepth === 16 });
+  // P1-7：WAV 写入 BWF bext + LIST INFO 元数据（溯源：软件 / 曲名 / 生成日期时间）
+  const now = new Date();
+  const p2 = (n) => String(n).padStart(2, '0');
+  const wavMeta = {
+    originator: 'FuFumidi',
+    originatorReference: 'FuFumidi',
+    description: (song.value && song.value.name) || baseName,
+    software: 'FuFumidi',
+    title: (song.value && song.value.name) || baseName,
+    artist: 'FuFumidi',
+    date: now.getFullYear() + '-' + p2(now.getMonth() + 1) + '-' + p2(now.getDate()),
+    originationDate: now.getFullYear() + '-' + p2(now.getMonth() + 1) + '-' + p2(now.getDate()),
+    originationTime: p2(now.getHours()) + ':' + p2(now.getMinutes()) + ':' + p2(now.getSeconds()),
+    timeReference: 0,
+  };
+  const bytes = encodeWav(out, sr, { bitDepth: fi.bitDepth, dither: exp.dither && fi.bitDepth === 16, metadata: wavMeta });
   const peakDb = report ? report.outputPeakDb : measurePeakDb(out);
   const lufs = report ? report.outputLufs : measureLufs(out, sr);
   const meta = buildExportMeta({
