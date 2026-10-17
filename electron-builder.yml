@@ -1,5 +1,8 @@
 appId: com.fufumidi.app
 electronVersion: 33.4.11
+# ★ 用本地 node_modules 里已装的 Electron（2026-10-18：本机直连 github.com 不可达，
+#   electron-builder 默认会去 GitHub 下载 electron-v33.4.11-win32-x64.zip 而超时失败）。
+electronDist: node_modules/electron/dist
 productName: FuFumidi
 npmRebuild: false
 directories:
