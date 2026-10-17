@@ -61,7 +61,7 @@ const exportTempo = ref(0);              // 导出 BPM（0 = 用引擎默认 120
 const msTemp = ref(1.0);                 // 采样温度（1.0 = 不传）
 const msCfg = ref(1.0);                  // 引导系数（1.0 = 不传）
 const msBeam = ref(1);                   // 束搜索宽度（1 = 不传）
-const msPrelude = ref(true);             // 跨块延音前置（默认开；关掉才传 false）
+const msPrelude = ref(true);             // 跨块延音缝合（默认开；关掉才传 false＝不缝合）
 /* 静音分段（长音频提速，**默认关** —— 用户 2026-10-14 定）：在完全空白静音处切段、
    逐段转录、再合并成一份 MIDI。段与段之间本来就是静音，接缝处只是少一点上下文。
    实测《原神》线上音乐会 2021（104 分钟）：−60 dBFS 下静音 439.5 s / 7.0%，可省约 7%；
@@ -1331,6 +1331,9 @@ function collectParams() {
       // ★ 2026-10-14 更正：这段注释原先描述的是**已被移除**的批量推理行为
       //   （`bca0a55`「移除批量推理功能」）。现在：
       //   · `prelude_forcing` 是**独立开关**（见下面的 msPrelude），与性能档无关；
+      //     2026-10-18b 起这个开关的**实现换了**：不再让模型 teacher-force 跨块 tie
+      //     （那是僵尸长音的产地），改成解码后按「同轨同音高 + 边界两侧相接」缝合（见
+      //     engine_muscriptor._stitch_chunk_boundaries）。界面开关含义不变：开＝要延音连续。
       //   · 性能档只决定「线程数」与 engine_pt 的**批量前向上限**：
       //       quality → 全核 + 上限 32（CUDA）/ 16（CPU）
       //       balanced → 4 核 + 16 / 8
@@ -1354,6 +1357,7 @@ function collectParams() {
       if (msTemp.value !== 1.0) cfg.temperature = msTemp.value;
       if (msCfg.value !== 1.0) cfg.cfg_coef = msCfg.value;
       if (msBeam.value > 1) cfg.beam_size = msBeam.value;
+      // 开（默认）不传参数 = 引擎默认「缝合延音」；关掉才显式 false = 不缝合
       if (!msPrelude.value) cfg.prelude_forcing = false;
       // 静音分段：显式传 off（与引擎默认一致，写出来是为了预设/日志里看得见）
       cfg.segment_silence = msSegment.value ? 'auto' : 'off';
@@ -2062,7 +2066,7 @@ onBeforeUnmount(() => {
             <small>{{ t('调高＝更贴近提示但更容易重复；默认 1.0 = 关闭引导') }}</small>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label><span><b>{{ t('跨块延音前置') }}</b><small>{{ t('把上一块未结束的音符强制喂给下一块，分块边界最稳；关掉会降低边界延续质量（默认开）') }}</small></span><input type="checkbox" v-model="msPrelude"></label>
+            <label><span><b>{{ t('跨块延音缝合') }}</b><small>{{ t('解码后把 5 秒分块边界两侧同音高、同音色的延音缝回一个长音：延音不断，而模型不再被强制拖着走 —— 从根上消除僵尸长音。关掉＝不缝合，边界处延音可能断（默认开）') }}</small></span><input type="checkbox" v-model="msPrelude"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label><span><b>{{ t('跳过静音分段（长音频加速）') }}</b><small>{{ t('在完全空白静音处切段，逐段转录后拼成一份 MIDI；默认关') }}</small></span><input type="checkbox" v-model="msSegment"></label>

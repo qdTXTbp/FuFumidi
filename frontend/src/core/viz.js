@@ -202,6 +202,8 @@ export const FX_DEFAULTS = {
   flash: 0.7,        // 击键闪光 0..1.5（借 MIDIVisualizer 的 --flashes-size）
   partScale: 1,      // 粒子数量倍率 0.3..1.6
   glow: 1,           // 光柱/发光强度倍率 0.4..1.6
+  scrollSpeed: 1,    // 下落速度倍率（只改 PPB = 每个四分音符的像素长度，不改 BPM）0.4..2.5
+  latencyMs: 0,      // 视觉偏移（ms）：正 = 画面提前，用来对齐蓝牙/音频缓冲导致的"声画差" -200..200
   // 配色：取色方式 + 参数（色相/跨度/旋转/饱和/亮度/手色）全在 state/colors.js，这里是单一来源的并入
   ...COLOR_DEFAULTS,
   keysOn: true,      // 显示琴键（关掉 = 只留音符与光效，给叠加层用）
@@ -219,6 +221,8 @@ export const FX_PARAMS = [
   { k: 'flash', label: '击键闪光', min: 0, max: 1.5, step: 0.05 },
   { k: 'partScale', label: '粒子数量', min: 0.3, max: 1.6, step: 0.1 },
   { k: 'glow', label: '光柱强度', min: 0.4, max: 1.6, step: 0.05 },
+  { k: 'scrollSpeed', label: '下落速度', min: 0.4, max: 2.5, step: 0.1 },
+  { k: 'latencyMs', label: '视觉偏移(ms)', min: -200, max: 200, step: 5 },
   { k: 'noteAlpha', label: '音符不透明度', min: 0.15, max: 1, step: 0.05 },
 ];
 // 配色元数据由 state/colors.js 提供（单一来源）：取色方式 / 预设 / 参数范围

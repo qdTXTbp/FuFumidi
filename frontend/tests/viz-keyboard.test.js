@@ -156,6 +156,10 @@ test('★ 按压是弹簧动画：逐帧下沉、轻过冲后回稳（不是一�
     const byZ = new Map();
     for (const p of r.prims) {
       if (p.layer !== 'keyboard' || p.k !== 'rect' || p.blend) continue;
+    // 只认**键面**（上沿落在落点线 wN 上的矩形）：2026-10-18d 之后还多了凹槽/前脸渐变/
+    // 环境光等装饰层，它们的底边固定是键下沿，不能当"按压下沉"的观测量（会把下沉整个盖住）。
+    const wN = 400 - Math.min(110, Math.round(0.14 * 400));   // 与 compile 的落点线公式保持一致
+    if (Math.abs(p.y - wN) > 0.5) continue;
       const cur = byZ.get(p.z);
       if (!cur || p.y < cur.y) byZ.set(p.z, p);
     }
@@ -214,3 +218,17 @@ test('★ 音符越往上越窄、且左右对称地朝消失点收拢（不是�
   // 下沿（落点线）必须与键列 1:1
   near(q0[0], uL, 1e-9); near(q0[2], uR, 1e-9);
 });
+
+test('★ state() 每个 pitch 每帧只调用一次（它推进按压弹簧与高亮衰减，重复调用会加速动画）', () => {
+  const seen = new Set();
+  const dup = [];
+  buildKeyboard(P, Object.assign({}, CTX, {
+    state: (p) => {
+      if (seen.has(p)) dup.push(p);
+      seen.add(p);
+      return { gv: 0, fv: 0, prs: 0, color: '#fff' };
+    },
+  }));
+  assert.deepEqual(dup, [], '同一 pitch 被重复取 state：' + dup.slice(0, 5).join(','));
+});
+

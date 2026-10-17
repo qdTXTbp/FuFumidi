@@ -40,6 +40,7 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
     'Salamander_Grand_Piano_SF2_V3_20200602_6L.sf2', // 449.7MB（6 力度层精简版）
     'FluidR3_GM.sf2',                                // 141.5MB
     'Arachno_SoundFont_Version_1.0.sf2',             // 148.2MB
+    'allvoice.sf2',                                  // 480.5MB · Allvoice（2026-10-18 镜像到 CNB）
   ]);
   /** 自有镜像文件补一条 CNB 直链，并按下载源偏好把候选地址排序（国内优先 CNB 打头） */
   function orderSfUrls(urls) {
@@ -101,6 +102,75 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
         'https://sourceforge.net/projects/androidframe/files/soundfonts/FluidR3_GM.sf2/download', // 官方回退
       ],
       bundledPath: null,
+    },
+    {
+      // MuseScore General：MuseScore 官方默认 GM 音色（FluidR3Mono 派生 + S. Christian Collins
+      // 补录，MIT，见官方 MuseScore_General_License.md）。管弦乐编制最齐（木管/铜管/弦乐/
+      // 打击乐/竖琴/钟琴/管钟都有），SF3 压缩后仅 ~38MB —— 「变谱」出来的总谱用它试听，
+      // 比内置 GeneralUser 的管弦乐音色更接近原曲（用户实测：「部分音色对不上 / 音色缺失」）。
+      // 唯一官方分发点：https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/
+      id: 'mscore_general',
+      name: 'MuseScore General',
+      version: '0.2 (2020-05-13)',
+      fileName: 'MuseScore_General.sf3',
+      desc: 'MuseScore 官方默认通用音色（MIT）：木管 / 铜管 / 弦乐 / 打击乐 / 竖琴 / 钟琴 / 管钟齐全，管弦乐总谱还原度高，SF3 压缩仅约 38MB。',
+      size: 39900972,
+      license: 'MIT · 可自由使用/分发（FluidR3 © Frank Wen · 适配 © S. Christian Collins）',
+      minSize: 30000000,
+      maxSize: 60000000,
+      fromRepo: null,
+      repoFile: null,
+      bundledPath: null,
+      category: '通用音色库',
+      urls: [
+        'https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General.sf3',
+      ],
+    },
+    {
+      // Allvoice（2026-10-18 用户指定）：以 Timbres of Heaven (XGM) 4.00 为基底，
+      // 把 ToH 全部预设 + 多个开源音色库的补充预设合并成一个「音色最全」的大包。
+      // 实测：517 个预设 / 4164 采样 / 保留 4306 条 pmod+imod 调制器；
+      //   bank0 GM 128 个全来自 ToH，bank128 鼓组也是 ToH，其余 bank 是 XG/GS 扩展；
+      //   480.5MB < 应用 512MB 单文件读取上限（libfluidsynth 实测加载 591ms，129/129 音色有声）。
+      // ⚠ 许可：ToH 原库条款禁止未经书面授权再分发 —— 本条目只给「已获 ToH 授权」的用户下载，
+      //   若作者/法务要求下架，应立刻删除 soundfonts-v1 Release 里的 allvoice.sf2 资产。
+      id: 'allvoice',
+      name: 'Allvoice (ToH 基底 · 最全)',
+      version: '2.0',
+      desc: '以 Timbres of Heaven (XGM) 4.00 为基底、再合并多个开源音色库而成的大综合音色库：517 个预设 / 4164 个采样（480MB），完整保留 ToH 的调制器与 GM/XG 扩展音色，管弦乐与合奏细节最完整。',
+      size: 503881454,
+      license: 'ToH 派生 · 仅供已获 Timbres of Heaven 授权的用户使用（原库条款禁止再分发）',
+      minSize: 500000000,
+      maxSize: 520000000,
+      fileName: 'allvoice.sf2',
+      fromRepo: null,
+      repoFile: null,
+      bundledPath: null,
+      category: '通用音色库',
+      urls: [
+        // 本机实测（2026-10-18）：直连 github.com 不可达、gh.jasonzeng.dev DNS 失败，
+        // ghfast.top 可用（HEAD 200 / Content-Length=503881454）→ 它排第一。
+        'https://ghfast.top/https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/allvoice.sf2',
+        'https://gh.jasonzeng.dev/https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/allvoice.sf2',
+        'https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/allvoice.sf2',
+      ],
+    },
+    {
+      // Sonatina Symphonic Orchestra：纯管弦乐 SF2 合集（弦乐/木管/铜管/打击/竖琴），
+      // 官方只分发 ZIP（417MB），工具内不解压 → 标记 manual：界面给「前往官网」+ 手动导入。
+      // 管弦乐总谱用它，音色匹配度比通用 GM 高一档（Sonatina 是 CC0 系列采样库）。
+      id: 'sonatina',
+      name: 'Sonatina Symphonic Orchestra',
+      version: 'SF2 (2.0)',
+      desc: '纯管弦乐音色合集（弦乐 / 木管 / 铜管 / 打击乐 / 竖琴，约 417MB）。官方只提供 ZIP 压缩包：请前往官网下载、解压后把 .sf2 用「导入音色」加进来。',
+      size: 417656133,
+      license: '免费使用（Sonatina 采样库，详见包内许可）',
+      minSize: 300000000,
+      fromRepo: null,
+      repoFile: null,
+      bundledPath: null,
+      manual: true,
+      officialUrl: 'https://ftp.osuosl.org/pub/musescore/soundfont/',
     },
     {
       // Arachno：上游仓库该文件为 Git LFS（raw 直链只返回 134 字节指针），必须走
@@ -447,6 +517,9 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
       const curatedPaths = new Set(REGISTRY.map((it) => path.resolve(localFilePath(it))));
       for (const f of fs.readdirSync(sfDir())) {
         if (!/\.(sf2|sf3)$/i.test(f)) continue;
+        // sf3→sf2 的转换缓存（见 main/dialogs.js readSoundFont 的同名 .conv.sf2），
+        // 不是用户导入的音色：不排除就会在「我的音色」里多出一条重复项
+        if (/\.conv\.sf2$/i.test(f)) continue;
         const p = path.join(sfDir(), f);
         if (curatedPaths.has(path.resolve(p))) continue;
         const size = await statFile(p);

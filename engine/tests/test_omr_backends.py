@@ -635,18 +635,38 @@ def test_infer_meter_reads_full_measure_rests_first():
 
 def test_regrid_puts_measures_on_one_grid_and_squeezes_overflow():
     """★ 一小节 = 一格；内容超出一小节（漏认小节线）时整格按比例压回，格内相对位置保留。"""
-    part = {"name": "Flute", "measureLens": [1440, 720],
+    part = {"name": "Flute", "measureLens": [1440, 720, 720],
             "notes": [
                 {"start": 0, "end": 240, "midi": 60, "m": 0, "off": 0},
                 {"start": 240, "end": 480, "midi": 62, "m": 0, "off": 240},
                 {"start": 1440, "end": 1680, "midi": 64, "m": 1, "off": 0},
+                {"start": 2160, "end": 2400, "midi": 65, "m": 2, "off": 0},
             ]}
     moved, grid_end = B._regrid_page([part], 720)
-    assert part["notes"][0]["start"] == 0
     assert part["notes"][1]["start"] == 120, "小节内偏移按同一比例压回（240 × 720/1440）"
-    assert part["notes"][2]["start"] == 720, "第 2 小节必须落在第 2 格（不是累计 1440）"
+    assert part["notes"][1]["end"] - part["notes"][1]["start"] == 240, "时值保持谱面时值，不随位置缩放"
+    assert [n["start"] for n in part["notes"][2:]] == [720, 1440], "第 k 小节必须落在第 k 格"
     assert moved >= 1
-    assert grid_end == 1440
+    assert grid_end == 2160
+
+
+def test_regrid_keeps_the_written_rhythm_when_a_page_is_short():
+    """★ 用户要求「应当使用谱内的节奏型」：页级内容短于小节长时**不许**整页拉伸。
+
+    Audiveris 经常漏写小节末尾的休止符，于是整页内容只有半小节长；硬拉伸会把断奏/连奏
+    的时值关系一起改掉（用户听起来是"顿挫感"）。这里只把第 k 小节对齐到第 k 格，
+    音符的小节内位置与**时值都保持谱面原样**。
+    """
+    part = {"name": "Flute", "measureLens": [720, 720],
+            "notes": [
+                {"start": 0, "end": 240, "midi": 60, "m": 0, "off": 0},
+                {"start": 360, "end": 480, "midi": 62, "m": 0, "off": 360},
+                {"start": 720, "end": 960, "midi": 64, "m": 1, "off": 0},
+            ]}
+    B._regrid_page([part], 1440)
+    assert [n["start"] for n in part["notes"]] == [0, 360, 1440], part["notes"]
+    assert part["notes"][1]["end"] - part["notes"][1]["start"] == 120, "时值必须保持谱面时值"
+    assert part["notes"][2]["end"] - part["notes"][2]["start"] == 240, "第 2 小节的时值也不能变"
 
 
 def test_regrid_keeps_all_parts_on_the_same_grid():

@@ -34,7 +34,7 @@ export const BLACK_T = 0.62;
  *  ★ 2026-10-17：3.2 → 9。原来只有 3.2px 厚，黑键看起来是「贴在白键上的一块黑片」
  *  ——用户实测「3D 键盘黑键明显没有侧面」，而且白键的分割线会在键的边缘透出来。
  *  有厚度之后，前脸 + 两侧面把黑键的轮廓完整盖住，才像一排立起来的键。 */
-const RAISE_BASE = 10;
+const RAISE_RATIO = 0.075;   // 黑键高出白键的比例（真实钢琴：白键可见长 ~150mm、黑键高出 ~12mm ≈ 8%）
 /** 按下时近端下沉的像素（2026-10-17 用户："键盘按键没按压效果"）。
  *  真实琴键是**近端下沉、远端不动**（绕远端转一点点），所以这里改成近端往下。 */
 export const PRESS_DIP = 16;
@@ -51,6 +51,10 @@ export const PERSP_FAN = 0.07;
 const LEAN_MAX = 0.60;
 /** 相机到落点线的深度（相对 wN 的倍数，透视拉满时）。越小 = 广角，坡道收敛越强 */
 const Z0_FACTOR = 1.6;
+/* ★ 2026-10-18i（用户明确要求）：**键盘不再画任何阴影**。
+   之前几版的黑键接触阴影/白键凹槽暗面/键床 AO 全部删除 —— 用户判定为"渲染错误的贴图/光照"。
+   只保留：键面本体的明暗渐变（几何受光）、前脸亮棱、极淡的分隔缝。
+   统一光源约定仍作用于**键的侧面明暗**（左亮右暗），但不产生任何投影。 */
 
 /**
  * 造一台**针孔相机**。整幅画面（键床 + 落点线上方的坡道）都由它投影。
@@ -84,7 +88,10 @@ export function makeKeyboardProjection(o) {
   const flat = persp <= 1e-6;
   const fan = PERSP_FAN * persp;              // 键床近端的横向放大比例
   const r = 1 + fan;
-  const raise = RAISE_BASE + 8 * persp;
+  // ★ 2026-10-17（用户：「黑键有点太高了,要符合现实的高度」）：以前固定 10px、透视再加到 18px，
+  //   比真实钢琴夸张一倍多。改成按**键面长度**取比例（~7.5%，透视再加一点），
+  //   黑键只比白键高薄薄一层 —— 和真实三角钢琴的比例一致。
+  const raise = Math.max(3.5, Math.min(11, faceH * RAISE_RATIO)) * (1 + 0.18 * persp);
   // 相机高度：键床在屏幕上正好占 faceH → H·(r-1) = faceH
   const H = flat ? 0 : faceH / fan;
   // 相机到落点线那一层的深度：决定镜头"长焦还是广角"（坡道收敛强度）。
@@ -203,6 +210,39 @@ export function buildKeyboard(P, ctx) {
   };
   const pr = [];
   const bottomY = ctx.wN + ctx.faceH + ctx.frontH;
+  // ★ ctx.state(pitch) 有副作用（推进按压弹簧、衰减高亮），**每个 pitch 每帧只能调用一次**，
+  //   这里做一层按 pitch 的缓存（白键/黑键各取一次）。
+  const stateCache = new Map();
+  const stateOf = (pitch) => {
+    if (!stateCache.has(pitch)) stateCache.set(pitch, ctx.state(pitch));
+    return stateCache.get(pitch);
+  };
+  /* ★ 2026-10-18j（用户："制作真实光影，而不是像之前一样生硬的"）：
+     只用线性渐变画不出"半影"，硬边/单段渐变就是"生硬"的来源。
+     这里用 **5 层同心 quad** 叠出近似高斯的衰减：内层小而实、外层大而淡，
+     每一层自己再用 4 段 stop（a → 0.55a → 0.18a → 0）做二次软化。
+     总不透明度保持在 0.18–0.22 的"淡"区间 —— 真实接触阴影本来就该很淡。 */
+  const softShadow = (camS, uu0, uu1, tt, spanT, dx0, dx1, coreA, dy) => {
+    const LAYERS = 5;
+    const vy = dy || 0;
+    for (let k = 0; k < LAYERS; k++) {
+      const fr = k / (LAYERS - 1);                       // 0 = 核心, 1 = 最外
+      const spread = g * 0.095 * fr;
+      const sp = spanT * (0.55 + 0.85 * fr);
+      const a = coreA * (1 - 0.80 * fr) / (1 + 1.5 * fr);
+      const q = camS.quad(uu0 - spread, uu1 + spread,
+        Math.max(0, tt - 0.014 * fr), Math.min(0.97, tt + sp), 0);
+      const s0 = dx0 * (0.55 + 0.45 * fr), s1 = dx1 * (0.55 + 0.45 * fr);
+      q[0] += s0; q[2] += s0; q[4] += s1; q[6] += s1;
+      // ★ 整团影子随键体一起下移（用户："按下去影子要跟着下去，不是压缩"）
+      if (vy) { q[1] += vy; q[3] += vy; q[5] += vy; q[7] += vy; }
+      pr.push(face(P, 'keyboard', q, {
+        stops: [withAlpha('#000000', a), withAlpha('#000000', a * 0.55),
+          withAlpha('#000000', a * 0.18), withAlpha('#000000', 0)],
+        dir: 'v',
+      }, { alpha: keysA, z: 986 + k }));
+    }
+  };
   // ★ fx.keys3d（面板「3D 键盘」）：管"厚度/侧面/受光"与"按压下沉"。
   //   关掉 = 只要键面的一排平板键，而且**透视也一起关掉**（用户 2026-10-18：
   //   「让键盘透视只在 3D 键盘开启时生效」—— 平板键配倾斜透视本来就是自相矛盾的）。
@@ -222,7 +262,7 @@ export function buildKeyboard(P, ctx) {
   for (let i = wk0; i < wk1; i++) {
     const pitch = WHITE_MIDI[i];
     const u0 = (i - wk0) * g - SEAM, u1 = (i - wk0 + 1) * g + SEAM;
-    const s = ctx.state(pitch);
+    const s = stateOf(pitch);
     /* ★ 按压：远端（t=0，落点线）**绝不许动**，近端往下 dip，前脸同比变矮 ——
        整块键像绕远端转了一点，这才是"按下去"（旧写法是键面缩短，方向反了且只有 3px）。 */
     // ★ 按下量取编译器的**弹簧值 s.prs**（攻 35ms / 松 110ms、略过冲，见 scene/compile.js）：
@@ -245,26 +285,48 @@ export function buildKeyboard(P, ctx) {
       //   ① 前脸顶棱受光：白键那条"前沿"亮起来，键才有厚度（平板模式下没有前脸，也就不画）
       pr.push(P.line('keyboard', wall[0], wall[1] + 0.6, wall[2], wall[3] + 0.6,
         withAlpha('#ffffff', 0.34), { lw: 1.4, alpha: keysA, z: 120 + i }));
-      //   ② 前脸竖向缝：相邻白键的前脸之间有一道暗缝，一排键才不会糊成一条横带
-      pr.push(P.line('keyboard', wall[0] + 0.4, wall[1] + 1, wall[0] + 0.4, wall[5] - 0.5,
-        withAlpha('#000000', 0.26), { lw: 1, alpha: keysA, z: 121 + i }));
-      //   ③ 前脸下缘压暗：给出"键体到底"的收口
-      pr.push(P.line('keyboard', wall[6] + 1, wall[7] - 0.5, wall[4] - 1, wall[5] - 0.5,
-        withAlpha('#000000', 0.30), { lw: 1, alpha: keysA, z: 122 + i }));
+      /* ★ 2026-10-18d：前脸不再用两条硬黑线 —— 用户指出「白键左侧亮、右边邻键左边缘却突然
+         一条黑带，阴影像凭空出现」。改成按统一左上光推导的**两条窄渐变**：
+           左侧受光（左壁被照亮）、右侧入暗（右壁背光 + 凹槽遮挡）。 */
+      const w3 = Math.max(2, (wall[2] - wall[0]) * 0.22);
+      pr.push(face(P, 'keyboard', [wall[0], wall[1], wall[0] + w3, wall[1], wall[0] + w3, wall[5], wall[0], wall[5]], {
+        stops: [withAlpha('#ffffff', 0.14), withAlpha('#ffffff', 0.05), withAlpha('#ffffff', 0)],
+        dir: 'h',
+      }, { alpha: keysA, z: 121 + i, blend: 'lighter' }));
+      // 前脸顶棱的软 AO：键面与立面相接处一条 12% 高的极淡渐暗（真实接触暗部，不是硬线）
+      const waoH = Math.max(1, (wall[5] - wall[1]) * 0.16);
+      pr.push(face(P, 'keyboard', [wall[0], wall[1], wall[2], wall[1], wall[2], wall[1] + waoH, wall[0], wall[1] + waoH], {
+        stops: [withAlpha('#000000', 0.10), withAlpha('#000000', 0.03), withAlpha('#000000', 0)],
+        dir: 'v',
+      }, { alpha: keysA, z: 121 + i }));
       // 按下的那一瞬，前脸（键的立面）亮一档 —— 与下沉同一个弹簧值，所以是渐亮而不是"闪"
       if (prs > 0.02) {
-        pr.push(face(P, 'keyboard', wall, '#ffffff', { alpha: 0.13 * prs * keysA, blend: 'lighter', z: 101 + i }));
+        pr.push(face(P, 'keyboard', wall, '#ffffff', { alpha: 0.10 * prs * keysA, blend: 'lighter', z: 101 + i }));
       }
     }
     // 远端高光：落在音符落点线上，与音符列严格对齐（t=0 恒等）
     const fe = cam.farEdge(u0, u1);
     pr.push(P.line('keyboard', fe[0] + 0.5, fe[1] + 0.5, fe[2] - 0.5, fe[3] + 0.5, kp.wkEdge, { lw: 1, alpha: keysA, z: 200 + i }));
-    // 白键分隔线：沿投影方向从远端拉到近端（主题里的 wkLine 之前一直是死数据）
-    // 有了它，键盘才"是一排键"而不是一块灰板 —— 尤其在透视下。
+    /* ★ 2026-10-18d：键面之间的凹槽。统一左上光 → 每根键**右缘**是暗面（右邻键挡光），
+       左缘是受光亮边；全部用渐变，不用硬线（硬线正是用户说的"凭空出现的黑带"）。
+       旧的 wkLine 保留成一条非常淡的中性缝，只负责"看得出是一排键"。 */
+    /* ★ 2026-10-18j：键面凹槽的**软 AO**（真实光影，不是硬灰带）。
+       左上光 → 左缘受光（几乎看不见的一层亮），右缘被右邻键遮挡（4 段渐变的淡暗）。
+       宽度 10% 键宽、最大 0.11 alpha，衰减用 4 段 —— 观感是"边缘渐渐暗下去"，不是一条带。 */
+    const gw = Math.max(1.8, g * 0.10);
+    pr.push(face(P, 'keyboard', cam.quad(u0, u0 + gw * 0.5, 0.01, 1, 0), {
+      stops: [withAlpha('#ffffff', 0.06), withAlpha('#ffffff', 0.03), withAlpha('#ffffff', 0)],
+      dir: 'h',
+    }, { alpha: keysA, z: 205 + i, blend: 'lighter' }));
+    pr.push(face(P, 'keyboard', cam.quad(u1 - gw, u1, 0.01, 1, 0), {
+      stops: [withAlpha('#000000', 0), withAlpha('#000000', 0.03),
+        withAlpha('#000000', 0.07), withAlpha('#000000', 0.11)],
+      dir: 'h',
+    }, { alpha: keysA, z: 206 + i }));
     if (kp.wkLine) {
       const xa = cam.px(u0, 0), ya = cam.py(0, 0);
       const xb = cam.px(u0, 1), yb = cam.py(1, 0);
-      pr.push(P.line('keyboard', xa, ya + 1, xb, yb, kp.wkLine, { lw: 1, alpha: keysA, z: 210 + i }));
+      pr.push(P.line('keyboard', xa, ya + 1, xb, yb, withAlpha(kp.wkLine, 0.45), { lw: 1, alpha: keysA, z: 210 + i }));
     }
     if (s.gv > 0.02) {
       // 光柱从落点线往上洒 → 往上即进入更远的深度，必须跟着键列收拢
@@ -272,6 +334,15 @@ export function buildKeyboard(P, ctx) {
       // ★ 白键点亮也必须留在**黑键之下**：黑键立在前排，白键的高光不可能盖住它
       pr.push(face(P, 'keyboard', cam2.quad(u0, u1, 0, 1, 0), s.color, { alpha: s.gv * keysA * 0.85, z: 300 + i }));
     }
+    /* ★ 按压阴影（2026-10-18c 用户第二次反馈「阴影问题没有解决」）：
+       之前只让**黑键的投影**跟着承影面平移，按下的键本身没有任何阴影变化 ——
+       视觉上蓝键像"贴"在键床上，没有陷下去。这里给按下的白键补两层内凹阴影：
+         ① 两侧缝：键沉下去后与邻键之间出现暗缝（越深越暗）；
+         ② 近端接触阴影：前脸顶棱处一圈暗（键面与立面交接的 AO）。
+       都用 prs 做强度，和下沉弹簧同一根曲线，所以是"跟着按"而不是"啪一下"。 */
+    /* ★ 2026-10-18h（用户第四次反馈）：**删掉按下键上的灰色渐变**。
+       用户原话：「只有被按下的琴键才有影子，形状和位置像渲染错误的贴图和光照」——
+       那些内凹渐变被读成瑕疵，不是阴影。按下的反馈改回：下沉几何 + 高亮色 + 前脸微亮。 */
     if (s.fv > 0.02) pr.push(face(P, 'keyboard', cam2.quad(u0, u1, 0, 1, 0), '#ffffff', { alpha: Math.min(0.72, s.fv * (fx.flash || 0)) * keysA, z: 31000 + i }));
     if (pitch % 12 === 0) {
       pr.push(P.text('keyboard', 'C' + (pitch / 12 - 1), cam.px((u0 + u1) / 2, 1) - 12, bottomY - 5, kp.ink, { size: 10, alpha: keysA, z: 4000 + i }));
@@ -284,7 +355,7 @@ export function buildKeyboard(P, ctx) {
       const pitch = WHITE_MIDI[i] + 1;
       if (!BLACK_PC.includes(pitch % 12)) continue;
       const u0 = (i - wk0 + 1) * g - 0.35 * g, u1 = u0 + 0.7 * g;
-      const s = ctx.state(pitch);
+      const s = stateOf(pitch);
       /* ★ 黑键的按压 = **抬起的高度落下去**（它是立在前排的键，不是贴在白键上的黑片）：
          hTop 从 1 落到 1-0.72*prs，键面 / 前脸 / 两侧面全用同一个 hTop，怎么按都不会断开。
          平板模式（keys3d 关）没有厚度可落，就停在白键面上（h=0）。 */
@@ -292,14 +363,28 @@ export function buildKeyboard(P, ctx) {
       const prs = solid ? Math.max(0, Math.min(1.25, pressIn)) : 0;
       const hTop = solid ? Math.max(0, 1 - 0.72 * prs) : 0;
       const t1 = BLACK_T;
-      // ★ 接触阴影（2026-10-18 三维化）：黑键是**立在**键面上的，白键面必须有它投下的暗影，
-      //   否则黑键读成一张贴纸。画在黑键之前（z 低于 1000），所以键本身把最暗的一段盖住。
+      /* ★ 2026-10-18j：软接触阴影（真实光影版）。黑键抬起的"底面"离白键面有高度，
+         光从左上 → 影子落向右下，靠近键底最实、往外迅速散开成半影。
+         抬起越高影子越长越淡；按下去（hTop↓）影子收紧、变实。 */
       if (solid) {
-        const shadowQ = cam.quad(u0 - g * 0.06, u1 + g * 0.06, t1, Math.min(1, t1 + 0.26), 0);
-        pr.push(face(P, 'keyboard', shadowQ, {
-          stops: [withAlpha('#000000', 0.36), withAlpha('#000000', 0)],
-          dir: 'v',
-        }, { alpha: keysA, z: 990 + i }));
+        const wL = WHITE_MIDI[i];
+        const wR = i + 1 < wk1 ? WHITE_MIDI[i + 1] : null;
+        const wLp = stateOf(wL), wRp = wR == null ? null : stateOf(wR);
+        const prsW = Math.max(0, Math.min(1.25,
+          Math.max(wLp && wLp.prs != null ? wLp.prs : 0, wRp && wRp.prs != null ? wRp.prs : 0)));
+        const kk = Math.min(1, Math.max(0, hTop));
+        const raise = cam.raise || 6;
+        const lean = (0.55 + 0.45 * (1 - kk)) * raise;
+        const dx0 = 0.18 * lean;
+        const dx1 = dx0 + 0.16 * lean;
+        /* ★ 2026-10-18l（用户澄清："应该是压缩而不是跟着下去"）：
+           阴影**锚在接触处**（不整体平移）。黑键自己按下去 → 键底离白键面更近，
+           影子**变短、变窄、变实**（压缩）；下面的白键按下去 → 承影面远离黑键，
+           影子**变长一点点、更淡**（半影变大）。
+           两种变化都只动长度/浓度，不动锚点 —— 这就是真实接触阴影的读法。 */
+        const frac = 0.16 * (0.62 + 0.38 * kk) * (1 + 0.22 * prsW);
+        const alpha = (0.10 + 0.07 * (1 - kk)) * (1 - 0.14 * prsW);
+        softShadow(cam, u0, u1, t1, frac, dx0, dx1, alpha, 0);
       }
       // ★ 黑键整层抬到**白键所有元素之上**（白键面 100 / 白键高光 300 / 白键闪光 310）。
       //   黑键是立在前排的键，白键的高光或闪光都不该盖住它 —— 用户实测反馈过这一条。
@@ -314,8 +399,9 @@ export function buildKeyboard(P, ctx) {
            没有这两面，黑键只是一块贴在白键上的黑片 —— 白键的分割线也会从它的边缘透出来。
            两侧面的几何都用 cam.py(t, 1)/cam.py(t, 0)：正好落在抬高面下沿与白键面之间，
            与键面、前脸共享同一条边，不会浮空也不会断开。 */
-        const faceCenter = (u0 + u1) / 2;
-        const inner = faceCenter < ctx.w / 2 ? u1 : u0;
+        /* ★ 2026-10-18d：侧壁明暗按**统一光源**（左上入射）分：左侧壁受光、右侧壁入暗。
+           旧写法按「朝画布中心」选亮面 —— 那是按相机位置推的，和黑键投影/白键凹槽的光向
+           对不上，画面里就会出现互相打架的明暗（用户实测反馈）。 */
         for (const ue of [u0, u1]) {
           const sideQ = [
             cam.px(ue, 0), cam.py(0, hTop),
@@ -323,22 +409,21 @@ export function buildKeyboard(P, ctx) {
             cam.px(ue, t1), cam.py(t1, 0),
             cam.px(ue, 0), cam.py(0, 0),
           ];
-          const fill = ue === inner ? { stops: [kp.bkTop, kp.bkFrontBot], dir: 'v' } : kp.bkFrontBot;
+          const fill = ue === u0 ? { stops: [kp.bkTop, kp.bkFrontBot], dir: 'v' } : kp.bkFrontBot;
           pr.push(face(P, 'keyboard', sideQ, fill, { alpha: keysA, z: 1040 + i }));
         }
-        // 顶面受光：黑键顶面靠观众那一半提亮（高光），远端压暗 —— 立体键的"面"才分得开
+        // 顶面受光：左上光 → 顶面左侧亮、右侧衰减（与影子落向右下一致）
         pr.push(face(P, 'keyboard', cam.quad(u0, u1, 0, t1, hTop), {
-          stops: [withAlpha('#ffffff', 0.02), withAlpha('#ffffff', 0.11)],
-          dir: 'v',
+          stops: [withAlpha('#ffffff', 0.15), withAlpha('#ffffff', 0.10), withAlpha('#ffffff', 0.02)],
+          dir: 'h',
         }, { blend: 'lighter', alpha: keysA, z: 1020 + i }));
         // 远端亮棱：抬高面与落点线相接的那条边（键的"后沿"），一条亮线把键从背景里拔起来
         const feB = [cam.px(u0, 0), cam.py(0, hTop), cam.px(u1, 0), cam.py(0, hTop)];
         pr.push(P.line('keyboard', feB[0] + 1, feB[1] + 0.6, feB[2] - 1, feB[3] + 0.6,
           withAlpha('#ffffff', 0.22), { lw: 1.1, alpha: keysA, z: 1021 + i }));
-        // 内侧壁亮边：朝画布中心那面键壁的受光亮边（有它侧面才不是一块死黑）
-        const uInner = inner, t0 = 0;
-        pr.push(P.line('keyboard', cam.px(uInner, t0), cam.py(t0, hTop), cam.px(uInner, t1), cam.py(t1, hTop),
-          withAlpha('#ffffff', 0.10), { lw: 1, alpha: keysA, z: 1041 + i }));
+        // 受光侧壁亮边：左壁与白键面交接处的受光亮边（有它侧面才不是一块死黑）
+        pr.push(P.line('keyboard', cam.px(u0, 0), cam.py(0, hTop), cam.px(u0, t1), cam.py(t1, hTop),
+          withAlpha('#ffffff', 0.12), { lw: 1, alpha: keysA, z: 1041 + i }));
       }
       if (s.gv > 0.02) pr.push(face(P, 'keyboard', cam.quad(u0, u1, 0, t1, hTop), s.color, { alpha: s.gv * keysA, z: 1100 + i }));
       if (s.fv > 0.02) pr.push(face(P, 'keyboard', cam.quad(u0, u1, 0, t1, hTop), '#ffffff', { alpha: Math.min(0.6, s.fv * (fx.flash || 0)) * keysA, z: 1110100 + i }));
