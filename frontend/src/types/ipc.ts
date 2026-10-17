@@ -1099,5 +1099,10 @@ export interface FuBridge {
     exportUstx(payload: UstxExportRequest): Promise<UstxExportResult>;
     /** 分轨导出：伴奏源文件主进程直拷（字节不过 IPC） */
     copyAsset(payload: { src: string; dest: string }): Promise<{ ok: boolean; savedTo?: string; error?: string }>;
+    /** P0-2 自动保存草稿：写数据根 temp/autosave/，返回落盘路径与时间戳 */
+    autosaveWrite(payload: { docId: string; model: any; meta?: any }): Promise<{ ok: boolean; path?: string; ts?: number; bytes?: number; error?: string }>;
+    autosaveList(): Promise<Array<{ docId: string; id: string; ts: number; meta: any; bytes: number; path: string }>>;
+    autosaveRead(docId: string): Promise<{ ok: boolean; docId?: string; ts?: number; meta?: any; data?: any; path?: string; error?: string }>;
+    autosaveClear(docId: string): Promise<{ ok: boolean; removed?: boolean }>;
   };
 }

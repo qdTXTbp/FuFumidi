@@ -384,6 +384,11 @@ contextBridge.exposeInMainWorld('fuBridge', {
     exportUstx: (payload) => ipcRenderer.invoke('project:exportUstx', payload),
     // 分轨导出：伴奏源文件主进程直拷（字节不过 IPC）
     copyAsset: (payload) => ipcRenderer.invoke('project:copyAsset', payload),
+    // P0-2 自动保存草稿：只写数据根 temp/autosave/，绝不覆盖用户工程文件
+    autosaveWrite: (payload) => ipcRenderer.invoke('autosave:write', payload),
+    autosaveList: () => ipcRenderer.invoke('autosave:list'),
+    autosaveRead: (docId) => ipcRenderer.invoke('autosave:read', docId),
+    autosaveClear: (docId) => ipcRenderer.invoke('autosave:clear', docId),
   },
   // ★ 顶层别名：上面这个 copyAsset 挂在 project.* 下，但 singer.ts:1490 是按
   //   `b.copyAsset(...)`（顶层）调的 —— 拿到 undefined，靠 typeof guard 静默降级成

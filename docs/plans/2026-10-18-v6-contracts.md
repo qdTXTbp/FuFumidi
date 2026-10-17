@@ -19,7 +19,7 @@
 |---|---|---|---|---|
 | C1 | CommandRegistry 命令注册表 | `frontend/src/core/commands.js`（新） | W0 待实现（接口冻结） | 菜单/工具栏/右键/快捷键/命令面板/宏 |
 | C2 | TaskCenter 长任务中心 | `main/taskcenter.js`（新）+ `preload.js` | W0 待实现（接口冻结） | 转录/下载/渲染/导出/更新/OMR |
-| C3 | DocumentSession 文档会话 | `frontend/src/core/session.js`（新） | W0 待实现（接口冻结） | 编辑/调教/谱面/歌词；自动保存/恢复 |
+| C3 | DocumentSession 文档会话 | `frontend/src/core/session.js`（新） | ✅ **核心已实现**（`session.js` + `main/autosave.js` + IPC + 16 测例；编辑器 UI 接线属 P0-2 后续卡） | 编辑/调教/谱面/歌词；自动保存/恢复 |
 | C4 | TimelineModel 时间轴模型 | `frontend/src/core/midi.js`（扩展）+ `core/timeline.js`（新） | ✅ **已实现**（`timeline.js` 264 行 + 10 测例；SMPTE 模式已预留，P0-6 接入口） | 编辑器/编排时间线/调教/可视化 |
 | C5 | ExportJob 导出管线 | `main/export.js`（新）+ `frontend/src/core/export_audio.js`（新） | W0 待实现（接口冻结） | WAV/FLAC/MP3/OGG/分轨/MIDI/MusicXML/MP4 |
 | C6 | GestureState 手势状态机 | `frontend/src/core/gesture.js`（新） | W0 待实现（接口冻结） | 编辑页/调教页/编排页 |
@@ -93,6 +93,12 @@
   - 解析：aftertouch 不再丢弃、marker/cue 与 text 分开、keySig 按带符号字节读；
   - 单测：`frontend/tests/midi-roundtrip.test.js`（9 例，encode→parse 逐事件断言）。
 - 剩余：P0-1 的「弯音车道 UI / 编辑后导出接线」在 P0-1 后续卡（编辑器侧）完成；本文件状态列随批次回填。
+- **C3 DocumentSession 核心已实现**：
+  - 前端 `core/session.js`：open/close/activate、序号式脏标记（dirtySeq/savedSeq）、撤销/重做（上限可配、异常保护）、视图状态、`shouldAutosave`（默认 30s 可调）、snapshot/restore、订阅事件；
+  - 主进程 `main/autosave.js`：原子写（.tmp→rename）、32MB 上限、任意 docId 安全文件名、list（按时间倒序、坏草稿跳过）/read/clear；
+  - IPC：`autosave:write/list/read/clear` 三处同改（preload `project.autosave*` → main/project.js 注册 → types/ipc.ts）；
+  - 单测：`frontend/tests/session.test.js`（10 例）+ `scripts/test-autosave.mjs`（6 例），并进 `npm test` 链。
+- **P0-2 第一批（存储层）完成**：编辑器侧还差「30s 定时器 + 崩溃恢复提示条 + dirty 拦截」——下一卡接进 ViewEdit。
 
 ## 3. E2E（验收底座，已落地）
 
