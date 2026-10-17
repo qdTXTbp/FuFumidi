@@ -1868,6 +1868,8 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="si-name">{{ m.name }}<span v-if="m.best" class="si-best" :title="t('该领域效果最佳')">👑 {{ m.best }}</span></div>
                 <div class="si-use">{{ m.use || m.note || '' }}</div>
+                <div v-if="m.useLabel" class="si-usage">{{ t('用途：') }}{{ t(m.useLabel) }}</div>
+                <div v-if="m.useNotFor" class="si-notfor">{{ t('注意：') }}{{ t(m.useNotFor) }}</div>
                 <div class="si-foot">
                   <span>{{ fmtSize2(m.size) }}<i v-if="m.sepAuto" class="si-auto" :title="t('这个模型上游没有带 .yaml：引擎会从权重本身推出结构，生成后跑一次前向校验再使用（只生成一次）')">{{ t('首次自动配置') }}</i></span>
                   <span v-if="m.exists" class="si-check" :class="{ cur: sepModel === m.id }">{{ sepModel === m.id ? t('使用中') : t('使用') }}</span>
@@ -1937,6 +1939,8 @@ onBeforeUnmount(() => {
           {{ t('即将分离：') }}<b>{{ currentSep.name }}</b><span v-if="sepEstSec()"> · {{ t('预计耗时约 ') }}<b>{{ fmtTime(sepEstSec()) }}</b></span>
           <span v-if="sepLong" class="tr-warn"> · {{ t('长音频：分离会一直跑下去（无进展 20 分钟才判失败），慢的话建议先裁剪片段') }}</span>
           <span v-if="sepIsDenoise" class="tr-warn"> · {{ t('这是单轨降噪模型：输出≈原音（只压稳态噪声），不分离人声/伴奏；要分离请选 Mel-Band Roformer（如 duality）') }}</span>
+          <span v-if="currentSep && currentSep.useLabel" class="sep-uselabel"> · {{ t('用途：') }}{{ t(currentSep.useLabel) }}</span>
+          <span v-if="currentSep && currentSep.useNotFor" class="tr-warn"> · {{ t('注意：') }}{{ t(currentSep.useNotFor) }}</span>
         </div>
         <button class="btn primary big" style="width:100%;justify-content:center;margin-top:8px" @click="runSeparate"
                 :disabled="!currentSep || !currentSep.exists || sepBusy">
@@ -2431,6 +2435,9 @@ onBeforeUnmount(() => {
 .si-name { font-size: var(--fs-md); font-weight: 700; color: var(--ink); margin-top: 5px; display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .si-best { display: inline-flex; align-items: center; gap: 2px; font-size: var(--fs-xs); font-weight: 700; color: var(--t-warn); background: linear-gradient(135deg, var(--data-2), var(--data-3)); padding: 0 6px; border-radius: var(--r-lg); line-height: 15px; }
 .si-use { font-size: var(--fs-xs); color: var(--slate); line-height: 1.55; margin-top: 2px; -webkit-box-orient: vertical; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; }
+.si-usage { font-size: var(--fs-xs); color: var(--accent); line-height: 1.5; margin-top: 3px; }
+.si-notfor { font-size: var(--fs-xs); color: var(--t-warn); line-height: 1.5; margin-top: 1px; }
+.sep-uselabel { color: var(--slate); font-size: var(--fs-xs); }
 .si-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; font-size: var(--fs-xs); color: var(--stone); font-family: var(--mono); }
 .si-auto { font-style: normal; margin-left: 6px; font-size: var(--fs-xs); font-weight: 700; padding: 1px 6px; border-radius: var(--r-lg); background: color-mix(in srgb, var(--brand-blue) 14%, transparent); color: var(--brand-blue); font-family: system-ui; }
 .si-check { font-size: var(--fs-xs); font-weight: 700; color: var(--stone); font-family: system-ui; }

@@ -15,6 +15,23 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  "用途：": "Purpose: ",
+  "注意：": "Note: ",
+  "降噪（仅稳态噪声：底噪 / 嘶声 / 电流声）": "Noise reduction (steady noise only: hiss / hum / broadband floor)",
+  "不能去除现场观众声、混响或回声；也不会分离人声/伴奏": "It does NOT remove crowd noise, reverb or echo, and does not split vocals/instrumental",
+  "去混响 / 去回声（场馆、房间混响）": "Dereverb / de-echo (venue and room reverb)",
+  "不分离人声与伴奏；也不是降噪（底噪请用 denoise 模型）": "Does not split vocals/instrumental and is not noise reduction (use a denoise model for hiss)",
+  "人群声分离（提取 / 去除现场观众声）": "Crowd separation (extract / remove live audience noise)",
+  "不是通用降噪，也不分离人声与伴奏": "Not general denoising, and does not split vocals/instrumental",
+  "卡拉OK（去人声、出伴奏）": "Karaoke (remove vocals, keep instrumental)",
+  "鼓组分离（单独提取鼓）": "Drum separation (extract drums)",
+  "多音轨分离（人声 / 鼓 / 贝斯 / 其他等）": "Multi-stem separation (vocals / drums / bass / other)",
+  "人声分离（UVR 系列：出人声 / 伴奏）": "Vocal separation (UVR: vocals / instrumental)",
+  "UVR 系列：人声 / 伴奏分离": "UVR series: vocals / instrumental separation",
+  "提取伴奏（乐器轨）": "Instrumental extraction",
+  "人声 / 伴奏分离（出人声与伴奏两轨）": "Vocals / instrumental separation (two stems)",
+  "单轨处理模型（只出一轨：干净声 / 目标声）": "Single-stem processor (one output: clean / target)",
+  "音频分离": "Audio separation",
   "这是单轨降噪模型：输出≈原音（只压稳态噪声），不分离人声/伴奏；要分离请选 Mel-Band Roformer（如 duality）": "Single-stem denoise model: the output is ≈ identical to the original (it only removes steady noise). It does NOT split vocals/instrumental — use a Mel-Band Roformer (e.g. duality) for that",
   "长音频：分离会一直跑下去（无进展 20 分钟才判失败），慢的话建议先裁剪片段": "Long audio: separation keeps running (only fails after 20 min without progress). Consider trimming a clip first",
   'GPU 逐帧编码中…': 'Encoding on the GPU…',
