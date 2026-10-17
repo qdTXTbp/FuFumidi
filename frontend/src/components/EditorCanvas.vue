@@ -13,6 +13,8 @@ import { t } from '../core/i18n.js';
 import { snapToPcs, scalePitchClasses } from '../core/scale.js';
 // 乐谱视图要用「按音符分布猜调号」（与乐谱页同一套）
 import { detectSf } from '../core/score.js';
+// P0-6b：变拍号的网格/谱面分段布局（C4 TimelineModel）
+import { timelineOfSong, iterBars } from '../core/timeline.js';
 /* 手写笔 / 触控（M9 收尾）：掌侧误触、第二根手指、长按=右键、笔压当力度 */
 import { claimPointer, isPrimaryPointer, releasePointer, penPressure, makeLongPress } from '../core/pointer.js';
 
@@ -244,11 +246,14 @@ function afterEdit() {
   for (const tr of s.tracks) for (const n of tr.notes) totalTicks = Math.max(totalTicks, n.end);
   s.totalTicks = totalTicks + s.tpb;
   s.totalSec = s.baseSec(s.totalTicks);
-  // 小节数按拍号算（与 core/midi.js 的 buildSong 保持一致；4/4 之外不许再假定四分音符一小节）
+  // 小节数按 TimelineModel 分段算：变拍号时每段小节长度不同，不能拿第一条拍号一刀切
   {
-    const _s0 = (s.sigMap && s.sigMap[0]) || { num: 4, den: 4 };
-    const _barLen = Math.max(1, Math.round(_s0.num * s.tpb * 4 / _s0.den));
-    s.bars = Math.max(1, Math.ceil(s.totalTicks / _barLen));
+    try { s.bars = Math.max(1, iterBars(timelineOfSong(s), 0, s.totalTicks).length); }
+    catch (e) {
+      const _s0 = (s.sigMap && s.sigMap[0]) || { num: 4, den: 4 };
+      const _barLen = Math.max(1, Math.round(_s0.num * s.tpb * 4 / _s0.den));
+      s.bars = Math.max(1, Math.ceil(s.totalTicks / _barLen));
+    }
   }
   // 刷新播放器 + UI
   const { player } = ensureAudio();
@@ -496,7 +501,8 @@ function drawScore(g, W, HK) {
     // 空小节：画一个全休止方块
     g.fillStyle = line;
     for (let b = 0; b < barsThis; b++) {
-      const t0 = (firstBar + b) * lay.barTicks, t1 = t0 + lay.barTicks;
+      const barInfo = scoreBarAt(lay, firstBar + b);
+      const t0 = barInfo.tick, t1 = t0 + barInfo.ticks;
       let has = false;
       for (const n of tr.notes) { if (n.end > t0 && n.start < t1) { has = true; break; } }
       if (has) continue;
@@ -505,7 +511,7 @@ function drawScore(g, W, HK) {
     }
     // 音符
     for (const n of tr.notes) {
-      const bar = Math.floor(n.start / lay.barTicks);
+      const bar = scoreBarIdx(lay, n.start);
       if (bar < firstBar || bar >= firstBar + barsThis) continue;
       const xRaw = scoreXOf(lay, n.start);
       const x = Math.round(xRaw) + 0.5;
@@ -522,7 +528,7 @@ function drawScore(g, W, HK) {
   //   一进乐谱视图就抛 ReferenceError（实测）。播放头位置跟迷你条用同一个来源。
   const pt = (() => { const sg = song(); return sg ? sg.secToTick(state.curSec / state.tempo) : null; })();
   if (pt != null && pt >= 0) {
-    const bar = Math.floor(pt / lay.barTicks);
+    const bar = scoreBarIdx(lay, pt);
     const sys = Math.floor(bar / barsPerSystem);
     const y0 = 8 + sys * lay.systemH - scoreScrollY.value;
     if (y0 > -20 && y0 < HK + 20) {
@@ -665,26 +671,35 @@ function draw() {
       }
     }
   }
-  // 垂直网格：按「拍」绘制（与吸附粒度解耦，避免缩放后线条糊成一片），
-  // 小节线更强；过密时只画第一根强线（与原仓库一致）。
+  /* 垂直网格（P0-6b）：按 TimelineModel 逐小节 / 逐拍绘制 —— 变拍号时 6/8 的小节线
+     落在正确 tick 上，不再用「第 b 个四分音符 % sigMap[0].num」一刀切。 */
   const s2 = song();
   const tpb = s2 ? s2.tpb : 480;
-  const sigNum = (s2 && s2.sigMap[0]) ? s2.sigMap[0].num : 4;
   const viewT0 = xToTick(0), viewT1 = viewT0 + W / pxPerTick.value;
-  const firstBeat = Math.floor(viewT0 / tpb), lastBeat = Math.ceil(viewT1 / tpb);
   ctx2d.lineWidth = 1;
   let lastStrongX = -9999;
-  for (let b = firstBeat; b <= lastBeat; b++) {
-    const t = b * tpb;
-    const x = tickToX(t);
-    if (x < -5 || x > W + 5) continue;
-    const isBar = b % sigNum === 0;
-    if (isBar) {
-      if (x - lastStrongX < 9) continue;   // 小节线过密时跳过，避免糊成一片
+  const drawVLine = (x, strong) => {
+    if (x < -5 || x > W + 5) return;
+    if (strong) {
+      if (x - lastStrongX < 9) return;   // 小节线过密时跳过，避免糊成一片
       lastStrongX = x;
     }
-    ctx2d.strokeStyle = isBar ? border2 : hair;
+    ctx2d.strokeStyle = strong ? border2 : hair;
     ctx2d.beginPath(); ctx2d.moveTo(x, 0); ctx2d.lineTo(x, HK); ctx2d.stroke();
+  };
+  if (s2) {
+    let bars = [];
+    try { bars = iterBars(timelineOfSong(s2), Math.max(0, Math.floor(viewT0 / tpb) * tpb), viewT1 + tpb); } catch (e) { bars = []; }
+    if (bars.length) {
+      for (const bar of bars) {
+        const beatTicks = bar.ticks / Math.max(1, bar.num);
+        for (let k = 1; k < bar.num; k++) drawVLine(tickToX(bar.tick + k * beatTicks), false);
+        drawVLine(tickToX(bar.tick), true);
+      }
+    } else {
+      const firstBeat = Math.floor(viewT0 / tpb), lastBeat = Math.ceil(viewT1 / tpb);
+      for (let b = firstBeat; b <= lastBeat; b++) drawVLine(tickToX(b * tpb), b % 4 === 0);
+    }
   }
   // 水平音高轨道线（每个音高一行，C 音位稍强）
   for (let m = lo; m <= hi; m++) {
@@ -1023,13 +1038,36 @@ function scoreLayout(W, HK) {
   const beatPx = Math.max(9, pxPerBeat.value * 0.85);
   const barW = Math.max(96, beatsPerBar * beatPx);
   const barsPerSystem = Math.max(1, Math.floor((W - leftPad - rightPad) / barW));
-  const lastTick = Math.max(barTicks, maxTickOf(tr));
-  const bars = Math.max(1, Math.ceil(lastTick / barTicks));
+  const tl = timelineOfSong(s);
+  const lastTick = Math.max(barTicks, maxTickOf(tr), tl.totalTicks || 0);
+  // P0-6b：小节表按 TimelineModel 分段生成（变拍号时每小节 tick 长度不同）
+  let barList = [];
+  try { barList = iterBars(tl, 0, lastTick); } catch (e) { barList = []; }
+  if (!barList.length) barList = [{ bar: 0, tick: 0, ticks: barTicks, num: sig.num, den: sig.den }];
+  const bars = Math.max(1, barList.length);
   const systems = Math.max(1, Math.ceil(bars / barsPerSystem));
   return { s, tr, tpb, sig, beatsPerBar, barTicks, sf, sharps, clef, gap, lineY0, staffH, systemH,
-           leftPad, rightPad, barW, barsPerSystem, bars, systems, W, HK };
+           leftPad, rightPad, barW, barsPerSystem, bars, systems, W, HK, tl, barList };
 }
 function maxTickOf(tr) { let m = 0; for (const n of tr.notes || []) m = Math.max(m, n.end); return m; }
+
+/** 变拍号：tick 落在第几小节（barList 按 tick 升序，二分） */
+function scoreBarIdx(lay, tick) {
+  const list = (lay && lay.barList) || [];
+  if (!list.length) return 0;
+  let lo = 0, hi = list.length - 1, ans = 0;
+  while (lo <= hi) {
+    const m = (lo + hi) >> 1;
+    if (list[m].tick <= tick) { ans = m; lo = m + 1; } else hi = m - 1;
+  }
+  return ans;
+}
+/** 第 bar 小节的几何信息（越界夹到首/尾） */
+function scoreBarAt(lay, bar) {
+  const list = (lay && lay.barList) || [];
+  if (!list.length) return { tick: 0, ticks: (lay && lay.barTicks) || 480 };
+  return list[Math.max(0, Math.min(list.length - 1, Math.round(bar) || 0))];
+}
 
 /** 音符在谱面上的 y（全音阶序号 → 像素）。五线谱 E4=0 线序的换算在这里集中 */
 function scoreYOf(lay, n) {
@@ -1042,13 +1080,14 @@ function scoreYOf(lay, n) {
 
 /** 音符 x：按 tick 线性映射（与卷帘同一个 pxPerBeat 语义，缩放一致） */
 function scoreXOf(lay, tick) {
-  const bar = Math.floor(tick / lay.barTicks);
-  const inBar = tick - bar * lay.barTicks;
-  const barIdx = bar % lay.barsPerSystem;
-  return lay.leftPad + barIdx * lay.barW + (inBar / lay.barTicks) * (lay.barW - 12);
+  const barIdxAll = scoreBarIdx(lay, tick);
+  const info = scoreBarAt(lay, barIdxAll);
+  const inBar = Math.max(0, tick - info.tick);
+  const barIdx = barIdxAll % lay.barsPerSystem;
+  return lay.leftPad + barIdx * lay.barW + (inBar / Math.max(1, info.ticks)) * (lay.barW - 12);
 }
 function scoreSystemY(lay, tick) {
-  const bar = Math.floor(tick / lay.barTicks);
+  const bar = scoreBarIdx(lay, tick);
   return 8 + Math.floor(bar / lay.barsPerSystem) * lay.systemH - scoreScrollY.value;
 }
 function scoreTickAt(lay, x, y) {
@@ -1057,7 +1096,8 @@ function scoreTickAt(lay, x, y) {
   const barIdx = Math.max(0, Math.min(lay.barsPerSystem - 1, Math.floor(localX / lay.barW)));
   const frac = Math.max(0, Math.min(1, (localX - barIdx * lay.barW) / (lay.barW - 12)));
   const bar = row * lay.barsPerSystem + barIdx;
-  return Math.round((bar * lay.barTicks + frac * lay.barTicks) / 5) * 5;
+  const info = scoreBarAt(lay, bar);
+  return Math.round((info.tick + frac * info.ticks) / 5) * 5;
 }
 /** 由 y 反推该处的音高（保留原音符的变音记号） */
 function scorePitchAt(lay, y, acc) {
@@ -1120,7 +1160,8 @@ function scoreMove(x, y) {
   if (!d || !lay) return;
   const step = Math.max(2, lay.gap / 2);
   const diaSteps = Math.round((d.startY - y) / step);
-  const tickPerPx = lay.barTicks / Math.max(1, lay.barW - 12);
+  const info0 = scoreBarAt(lay, scoreBarIdx(lay, d.orig[0].n.start));
+  const tickPerPx = info0.ticks / Math.max(1, lay.barW - 12);
   const dTickRaw = (x - d.startX) * tickPerPx;
   const dTick = snapTick(Math.abs(dTickRaw)) * (dTickRaw < 0 ? -1 : 1);
   for (const o of d.orig) {
@@ -1471,7 +1512,7 @@ function focusSelection() {
   if (props.view === 'score') {
     const lay = scoreLayout(wrap.value ? wrap.value.clientWidth : 600, H.value);
     if (lay) {
-      const bar = Math.floor(first.start / lay.barTicks);
+      const bar = scoreBarIdx(lay, first.start);
       const sys = Math.floor(bar / lay.barsPerSystem);
       const y = sys * lay.systemH;
       if (y < scoreScrollY.value || y + lay.systemH > scoreScrollY.value + H.value) {

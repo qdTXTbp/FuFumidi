@@ -469,6 +469,7 @@ onMounted(() => {
     if (!window.fuBridge || !window.fuBridge.e2e) return;
     window.__fufumidiE2E = {
       hasSong: () => !!(app.currentSong && app.currentSong.song),
+      song: () => (app.currentSong && app.currentSong.song) || null,
       songCount: () => (Array.isArray(app.songs) ? app.songs.length : 0),
       importMidi: (name, bytes) => app.importFiles([{ name: String(name || 'e2e.mid'), bytes: new Uint8Array(bytes) }]),
     };

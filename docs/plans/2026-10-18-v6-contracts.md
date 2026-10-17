@@ -101,10 +101,11 @@
 - **P0-2 完成（第一版）**：
   - ViewEdit 已接线：4s 定时「序列化 MIDI → FNV 哈希」判定脏（任何修改都漏不掉，不靠逐入口埋点）、30s 落盘、失焦/切歌/离开视图/关窗立即冲刷、beforeunload 脏则拦截；
   - 崩溃恢复提示条（恢复=作为新曲目导入，绝不覆盖原文件；丢弃=清除草稿）；
-  - E2E 数据隔离：`FUFUMIDI_E2E_DATA_ROOT`（main/paths.js）+ 每实例干净目录；`window.__fufumidiE2E` 最小测试钩子（仅 FUFUMIDI_E2E=1 注册）；
+  - **E2E 数据隔离（两处都要）**：① `FUFUMIDI_E2E_DATA_ROOT`（main/paths.js）隔离 FuFumidiData；② `--user-data-dir`（scripts/e2e/lib.mjs）隔离 IndexedDB/localStorage —— **只隔离①仍会读到用户真实曲库**（实测 280 首）。`window.__fufumidiE2E` 最小测试钩子（仅 FUFUMIDI_E2E=1 注册，含 hasSong/song/importMidi）；
   - 新增 E2E 用例 `autosave-ipc`（write→list→read→clear 全链）。
 - **P0-6 数据层完成**：`parseMidi` 支持 SMPTE division（0xE728 → fps25/40tpf）、`buildSong` 按帧算时间（tempoMap 不参与）、`encodeMidi` 写回 SMPTE 头；多拍号 encode→parse→buildSong 全保留（此前只取首条）；状态栏位置读数改走 `formatBarBeat`（变拍号按分段算）。
-  - 剩余（P0-6b）：EditorCanvas/总谱的**网格绘制**仍是按第一拍号均匀布局，变拍号视觉分段待下一卡。
+  - **P0-6b ✅**：EditorCanvas 卷帘垂直网格改为按 `iterBars` 逐小节/逐拍绘制（6/8 小节线落点正确）；五线谱视图的 `scoreLayout` 生成 `barList` 分段小节表，`scoreXOf/scoreSystemY/scoreTickAt/拖动/播放头/HUD` 全部按分段算；`afterEdit` 的曲目小节数也改分段统计。
+  - E2E 新增 `edit-varmeter`（4/4→6/8→3/4 三段，验证 sigMap 与谱面渲染）。
 
 ## 3. E2E（验收底座，已落地）
 

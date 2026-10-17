@@ -251,7 +251,12 @@ export async function launchApp(opts = {}) {
   const dataRoot = path.join(ARTIFACTS, "data-" + port);
   try { fs.rmSync(dataRoot, { recursive: true, force: true }); } catch (_) {}
   fs.mkdirSync(dataRoot, { recursive: true });
-  const args = [ROOT, `--remote-debugging-port=${port}`];
+  // ★ Chromium userData 也必须隔离：IndexedDB / localStorage 里的曲库快照、最近播放都
+  //   存在 userData 下 —— 只隔离 FuFumidiData 的话，dev 实例仍会读到用户真实曲库（实测 280 首）。
+  const userDataDir = path.join(ARTIFACTS, "ud-" + port);
+  try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch (_) {}
+  fs.mkdirSync(userDataDir, { recursive: true });
+  const args = [ROOT, `--remote-debugging-port=${port}`, `--user-data-dir=${userDataDir}`];
   if (Array.isArray(opts.args)) args.push(...opts.args);
   const child = spawn(ELECTRON, args, {
     cwd: ROOT,
