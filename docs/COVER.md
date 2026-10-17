@@ -76,6 +76,23 @@ python engine_cover.py all 歌曲.flac --outdir 输出目录 --gsv-voice gsv_nen
 * **客观量**：`f0_corr`（旋律像不像原唱）、`mfcc_dist_ref` / `mfcc_dist_voice`（像原唱 / 像目标音色）。
   `f0_corr ≥ 0.6` 认为路线 A 成立；`< 0.3` 说明参考音没能带出旋律，该换路线 B（专门的 SVC）。
 
+### 字级对齐与丢字检测（`engine/align_sofa.py`，P1-5）
+
+整句合成之后，判断"每个字唱到了没有、有没有丢字/糊字"需要字级时间片：
+
+* **默认实现**：能量包络（10ms 帧）+ 字数比例先验 → 在"静音谷的右沿"取字边界（取谷中间会平均偏早半个静音，
+  实测 80~100ms；取右沿后中位误差 <30ms）。不需要任何模型，随包可用。
+* **丢字检测**：`retention = min(时长保留率, 起音覆盖率)`。
+  - 时长保留率：短于 55ms 的字视为没唱出来；一个字时长超过中位数 2.2× 视为吞字（相邻字被并进来）；
+  - 起音覆盖率：能量上升沿计数（70ms 去抖）与实际字数之比 —— 连音/气声会低估，所以它是**提示**不是判决。
+  - `retention < 0.95` 会在合成结果 `warnings` 里列出「N 句字保留率 < 95%」。
+* **结果落点**：`<outdir>/lines.meta.json` 每句的 `char_align` 字段（`chars[] / retention / medianMs /
+  onsetCount / onsetRatio / absorbed`），同时随 `###RESULT` 的 `lines[]` 返回。
+* **可选强对齐**：MFA / FunASR 只需实现同结构的 `align_*()` 再替换调用点；模型体积与许可不适合随包分发，
+  所以默认不装。开关：引擎侧 `--char-align`（cover 流程默认开，`--gsv-no-char-align` 可关）。
+* **验收**：`engine/tests/test_align_sofa.py` 用合成 burst 做真值 —— 5 字中位边界误差 <30ms、
+  少一个 burst（6 字只唱 5 个）时 onsetRatio/retention 都 <95%。
+
 ## GPT-SoVITS 的四个坑（都已在代码里解决，别再踩）
 
 1. **`TTS_Config` 的入参必须包在 `"custom"` 里**。它的实现是

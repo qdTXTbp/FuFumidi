@@ -270,6 +270,13 @@
   - **本轮补 SMT（Sheet Music Transformer）可选后端**：`find_smt/run_smt` 命令适配器（`FUFUMIDI_SMT_CMD` 或 `--smt`，契约 `--in <页图> --out <页 MIDI>`），逐页校验输出再用 `merge_midis` 拼接；未配置时明确报 `backend-missing`（不静默退化）；模型/权重不随包分发（体积与许可原因）；
   - 测试：`engine/tests/test_omr*.py` **62 项全部通过**（OMR 7 + 后端 55，含本轮 4 个 SMT 适配器用例）；新增 `npm run test:omr`（`scripts/test-engine-omr.mjs`：自动找带 pytest 的 Python，找不到则跳过；本机用 `_attic/envs/engine-test`）。
 
+- **P1-5 咬字与歌词对齐 ✅（核心；UI 标记/手动修正待做）**：
+  - 新 `engine/align_sofa.py`：能量包络（10ms）+ 字数比例先验 → 静音谷右沿取字边界；`clean_units`（中文按字、拉丁按词、标点剔除）、`align_signal/align_file/align_lines`、`boundary_error_ms`；
+  - 丢字检测：`retention = min(时长保留率, 起音覆盖率)`（短于 55ms 视为没唱、超中位 2.2× 视为吞字；起音上升沿 70ms 去抖），<95% 写进合成 warnings；
+  - 接入链路：`engine_gpt_sovits.py sing --char-align` → 每句 `lines.meta.json.char_align` 与 `RESULT.lines[]`；`engine_cover.py do_gsv` 默认开启（`--gsv-no-char-align` 可关），不影响合成；
+  - 测试 `engine/tests/test_align_sofa.py` 6 例（合成 burst 真值：5 字中位边界误差 <30ms、缺一字时 onsetRatio/retention <95%、纯静音/空音频安全、标点与拉丁词切分）；
+  - 剩余：ViewCover 的丢字 UI 标记与手动修正、合成前强制校验（当前是 warnings + meta 数据）。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；

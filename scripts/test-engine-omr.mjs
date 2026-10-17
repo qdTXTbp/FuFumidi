@@ -28,7 +28,7 @@ if (!exe) {
   console.log('跳过引擎 OMR 测试：没有找到带 pytest 的 Python（设置 FUFUMIDI_TEST_PYTHON 或用开发环境）');
   process.exit(0);
 }
-const r = spawnSync(exe, ['-m', 'pytest', 'engine/tests/test_omr.py', 'engine/tests/test_omr_backends.py', '-q'], {
+const r = spawnSync(exe, ['-m', 'pytest', 'engine/tests/test_omr.py', 'engine/tests/test_omr_backends.py', 'engine/tests/test_align_sofa.py', '-q'], {
   cwd: ROOT, encoding: 'utf8', timeout: 10 * 60 * 1000, env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
 });
 process.stdout.write(r.stdout || '');
@@ -37,4 +37,4 @@ if (r.status !== 0) {
   console.error('引擎 OMR 测试失败（退出码 ' + r.status + '）');
   process.exit(r.status || 1);
 }
-console.log('引擎 OMR 测试通过（' + exe + '）');
+console.log('引擎 OMR/对齐测试通过（' + exe + '）');

@@ -349,6 +349,16 @@ def cmd_sing(a):
             meta[str(idx)] = rec
             with open(meta_path, 'w', encoding='utf-8') as f:
                 json.dump(meta, f, ensure_ascii=False, indent=1)
+        # P1-5：字级对齐（默认关；资源中心的「合成前校验」用这个字段判断丢字）
+        if getattr(a, 'char_align', False):
+            try:
+                import align_sofa as AL
+                rec['char_align'] = AL.align_signal(y_out, sr_out, text)
+            except Exception as e:                          # noqa: BLE001
+                rec['char_align_error'] = str(e)[:160]
+            meta[str(idx)] = rec
+            with open(meta_path, 'w', encoding='utf-8') as f:
+                json.dump(meta, f, ensure_ascii=False, indent=1)
         # 放进整长干声轨（重采样到 44100 与混音链一致）
         y44 = A.resample(y_out, sr_out, 44100)
         pos = int(start * 44100)
@@ -362,6 +372,10 @@ def cmd_sing(a):
             'stretch': rec.get('stretch'), 'level_db': rec.get('level_db'),
             'f0': rec.get('f0'), 'f0_shape_before': rec.get('f0_shape_before'),
         }
+        if getattr(a, 'char_align', False):
+            ca = rec.get('char_align')
+            if ca:
+                m['char_align'] = ca
         if a.metrics:
             try:
                 mm = A.metrics(y_out, sr_out, tgt, vsr, vref_y, vref_sr)
@@ -384,6 +398,11 @@ def cmd_sing(a):
         if bad * 2 > len(gates):
             warns.append('%d/%d 句的 F0 相关 < 0.3：参考音没能带出旋律，建议走路线 B（专门 SVC）'
                          % (bad, len(gates)))
+    if getattr(a, 'char_align', False):
+        lousy = [m for m in report if (m.get('char_align') or {}).get('retention', 1.0) < 0.95]
+        if lousy:
+            warns.append('%d 句字保留率 < 95%%（可能有丢字/糊字，见 lines.meta.json 的 char_align）'
+                         % len(lousy))
     emit_prog(100, '完成')
     emit_result({'ok': True, 'dry': dry, 'lines': report, 'count': len(report),
                  'reused': reused, 'warnings': warns, 'elapsed_s': round(time.time() - t_all, 1),
@@ -459,13 +478,15 @@ def main(argv=None):
     #   还没有证据（每句都会记下校正前/后的 f0_shape，可对比）。要校正就显式加这个开关。
     g.add_argument('--align', dest='align', action='store_true',
                    help='做 WORLD F0 校正（默认关，见 docs/COVER.md）')
+    g.add_argument('--char-align', dest='char_align', action='store_true',
+                   help='逐句做字级对齐（能量谷底 + 字数先验；写进 lines.meta.json 的 char_align 字段）')
     g.add_argument('--no-metrics', dest='metrics', action='store_false', help='不算客观量（省时间）')
     g.add_argument('--no-reuse', dest='reuse', action='store_false', help='不复用已合成的句子')
     # 同 say：默认不覆盖，不替上游定默认
     g.add_argument('--top-k', dest='top_k', type=int, default=None)
     g.add_argument('--top-p', dest='top_p', type=float, default=None)
     g.add_argument('--temperature', type=float, default=None)
-    g.set_defaults(func=cmd_sing, align=False, metrics=True, reuse=True)
+    g.set_defaults(func=cmd_sing, align=False, char_align=False, metrics=True, reuse=True)
 
     a = ap.parse_args(argv)
     try:
