@@ -43,6 +43,7 @@
     "test:update-sign": "node --test scripts/test-update-sign.mjs",
     "test:omr": "node scripts/test-engine-omr.mjs",
     "sign:update": "node scripts/sign-update.mjs",
+    "audio:rtl": "node scripts/audio-rtl.mjs",
     "perf:baseline": "node scripts/perf-baseline.mjs --update-baseline",
     "perf:gate": "node scripts/perf-baseline.mjs",
     "check:version": "node scripts/check-version-consistency.mjs",

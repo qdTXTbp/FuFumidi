@@ -289,6 +289,12 @@
   - **导出链接线**：`export.audio.plugins` 设置 → `normalizeExportOptions` 规范化 → ViewConvert 渲染后、**响度归一化之前**应用（压缩器不会破坏已校准 LUFS）；插件链异常只告警并跳过，不阻断导出；
   - 说明：真实 VST3/CLAP 需要外部宿主（`pedalboard` 或独立进程），本机未安装插件与宿主，本轮交付**可测的节点契约 + 内置等效节点**；接真实插件时只需把主进程宿主输出映射成同一 JSON 节点（Phase B 实时宿主不做）。
 
+- **P2-2 原生音频 I/O ✅（契约 + 延迟实测；Rust 侧 WASAPI/ASIO 未实现）**：
+  - 新 `core/audio_rt.js`（8 测例）：后端表（WebAudio / WASAPI 独占 / ASIO / CoreAudio / ALSA）、按平台与原生可用性过滤；`chooseAudioBackend`（auto/webaudio/native）——**原生不可用时必须回退 WebAudio 且把原因写进报告**（不静默）；延迟口径 `latencyReport`（base+output+输入缓冲，目标 ≤10ms，low/medium/high 分级）；`formatLatencyReport`、`bufferOptions`；
+  - 新 `scripts/audio-rtl.mjs`（`npm run audio:rtl`）：在真实 Electron 渲染进程建 AudioContext（interactive / playback 两档）实测 baseLatency/outputLatency/采样率，生成 `docs/audio-rtl-report.md`；
+  - 本机实测（48kHz）：interactive baseLatency 10ms → 估算 RTL 10ms（刚好达标）；playback 20ms（未达标）。outputLatency 上报 0（测试实例无实际输出设备），报告已注明；
+  - 说明：真正把 RTL 压到 ≤10ms 且稳定需要 WASAPI 独占/ASIO（cpal + ASIO SDK）——属于 P2-2 的原生实现，当前未随包；本轮交付的是**可测的契约、回退策略与测量脚本**，原生实现可后续无痛接入（只需实现同一 `availableBackends/chooseAudioBackend` 输入）。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；
