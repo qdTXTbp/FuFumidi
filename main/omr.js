@@ -12,6 +12,7 @@
 'use strict';
 const { spawn, execFile } = require('child_process');
 const Paths = require('./paths');
+const Platform = require('./platform');
 const createFastDownload = require('./fast-download');
 
 const VERSION = '5.11.0';
@@ -211,7 +212,7 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
     });
   }
   async function homrStatus() {
-    const py = path.join(homrVenv(), 'Scripts', 'python.exe');
+    const py = path.join(homrVenv(), Platform.venvPythonRelative(process.platform));
     const weights = [];
     let bytes = 0;
     for (const w of HOMR_WEIGHTS) {
@@ -247,7 +248,7 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
     const basePy = typeof bundledPython === 'function' ? bundledPython() : '';
     if (!basePy) return { ok: false, error: '没有找到内置 Python 运行时，无法创建独立环境' };
     const venv = homrVenv();
-    const vpy = path.join(venv, 'Scripts', 'python.exe');
+    const vpy = path.join(venv, Platform.venvPythonRelative(process.platform));
     try { fs.mkdirSync(homrDir(), { recursive: true }); } catch (e) {}
     const run = (exe, args, onOut, timeoutMs) => new Promise((resolve) => {
       let out = '', done = false;

@@ -16,6 +16,7 @@
 'use strict';
 
 const Paths = require('./paths');
+const Platform = require('./platform');
 
 function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spawnEngine,
                             engineEnv, readSettings }) {
@@ -80,7 +81,7 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
     const cands = [cfg.root, path.join(Paths.dataRoot(), 'gpt-sovits', 'runtime')].filter(Boolean);
     for (const root of cands) {
       if (hasFile(path.join(root, 'GPT_SoVITS', 'TTS_infer_pack', 'TTS.py'))) {
-        const py = [cfg.python, path.join(root, 'python', 'python.exe')].find(hasFile) || '';
+        const py = [cfg.python, path.join(root, Platform.pythonRuntimeRelative(process.platform))].find(hasFile) || '';
         return { found: true, root, python: py, source: root === cfg.root ? 'runtime.json' : '数据目录' };
       }
     }

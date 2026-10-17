@@ -295,6 +295,13 @@
   - 本机实测（48kHz）：interactive baseLatency 10ms → 估算 RTL 10ms（刚好达标）；playback 20ms（未达标）。outputLatency 上报 0（测试实例无实际输出设备），报告已注明；
   - 说明：真正把 RTL 压到 ≤10ms 且稳定需要 WASAPI 独占/ASIO（cpal + ASIO SDK）——属于 P2-2 的原生实现，当前未随包；本轮交付的是**可测的契约、回退策略与测量脚本**，原生实现可后续无痛接入（只需实现同一 `availableBackends/chooseAudioBackend` 输入）。
 
+- **P2-4 跨平台 ✅（dev 包构建入口 + 路径/冒烟清单；签名公证与真机验证待环境）**：
+  - 新 `main/platform.js`（7 测例）：目标平台的 Python 运行时/venv 解释器相对路径、安装包后缀、数据根默认位置、冒烟清单、平台说明、解释器候选优先级；**路径按目标平台风格生成**（Windows 上也能正确规划 mac/linux 路径）；
+  - 跨平台路径收口：`main/omr.js` 的 venv 解释器、`main/cover.js` 的 GPT-SoVITS 运行时候选改用 `platform.js`（不再硬编码 `Scripts/python.exe`）；
+  - 新 `scripts/build-platform.mjs`（`npm run build:platform`）：目标平台校验、前置条件检查（内置 Python、当前平台匹配）、冒烟清单打印、`--dry-run` 可在任何平台查看构建命令；非本机平台拒绝真正构建（原生依赖）；
+  - 新 `docs/CROSS-PLATFORM.md`：dev 包构建步骤、Python/ffmpeg/模型前置、冒烟清单、已知缺口（签名公证 / 原生音频 I/O / Flatpak）；
+  - `npm run test:platform` 已进 `npm test` 链。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；
