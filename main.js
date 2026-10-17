@@ -112,11 +112,14 @@ try {
 const isDev = !app.isPackaged;
 
 // ---------- 单实例锁：保证双击 .mid 打开进同一个窗口 ----------
-const gotLock = app.requestSingleInstanceLock();
+// ★ v6.0.0 E2E（scripts/e2e）：测试要并行起多个实例、且不抢用户正在用的窗口 →
+//   由 FUFUMIDI_E2E=1 跳过单实例锁；正常启动行为完全不变。
+const E2E_MODE = !!process.env.FUFUMIDI_E2E;
+const gotLock = E2E_MODE ? true : app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on('second-instance', (_e, argv) => {
+  if (!E2E_MODE) app.on('second-instance', (_e, argv) => {
     const win = BrowserWindow.getAllWindows()[0];
     if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
     openFileFromArgv(argv, (p) => openPath({ BrowserWindow, fs }, p));
