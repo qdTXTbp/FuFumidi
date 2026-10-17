@@ -3,8 +3,15 @@
 # engine modules are loadable, and reports which model assets are missing.
 $ErrorActionPreference = 'Continue'
 function Say($k, $v) { Write-Output ($k + ' = ' + $v) }
-$cands = @((Join-Path $env:LOCALAPPDATA 'Programs\FuFumidi'), (Join-Path $env:ProgramFiles 'FuFumidi'))
+$cands = @((Join-Path $env:LOCALAPPDATA 'Programs\FuFumidi'), (Join-Path $env:ProgramFiles 'FuFumidi'), (Join-Path $env:ProgramFiles 'FuFumidi\FuFumidi'))
 $inst = $cands | Where-Object { Test-Path (Join-Path $_ 'FuFumidi.exe') } | Select-Object -First 1
+if (-not $inst) {
+  $keys = @('HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*')
+  foreach ($k in $keys) {
+    $hit = Get-ItemProperty $k -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'FuFumidi*' -and $_.InstallLocation } | Select-Object -First 1
+    if ($hit) { $inst = $hit.InstallLocation; break }
+  }
+}
 Say 'func.app' ($inst)
 if (-not $inst) { Say 'done' '0'; exit 2 }
 $py = Join-Path $inst 'resources\python\python.exe'
