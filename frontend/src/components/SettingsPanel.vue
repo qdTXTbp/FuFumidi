@@ -13,7 +13,9 @@ const app = useAppStore();
 const state = app;
 const toast = (m, t) => app.toast(m, t);
 // 当前版本号（从主进程读取，与 SideBar 左下角一致）
-const appVersion = ref('v3.1.8');
+const appVersion = ref('');
+// P0-7：构建时间由 vite define 注入（关于页显示版本 + 构建时间，便于用户报问题时定位）
+const buildTime = (typeof __BUILD_TIME__ !== 'undefined') ? String(__BUILD_TIME__).slice(0, 19).replace('T', ' ') : '';
 import { getAppVersion, cmpVersion, getUpdateChannel, setUpdateChannel, normalizeUpdateChannel, getDownloadSource, setDownloadSource, normalizeDownloadSource } from '../core/version.js';
 // 线路测速的呈现层纯函数（格式化 / 按 id 合并流式结果 / 标最快）
 import { pendingRow, markBest, mergeRow, formatLatency, formatSpeed } from '../core/speedtest.js';
@@ -1676,7 +1678,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
           <div class="field-row">
             <div>
               <div class="fr-label">{{ t('当前版本') }}</div>
-              <div class="fr-hint">{{ appVersion }}</div>
+              <div class="fr-hint">{{ appVersion }}<template v-if="buildTime"> · {{ t('构建于') }} {{ buildTime }}</template></div>
             </div>
             <div class="fr-ctl">
               <button class="btn sm primary" @click="updLaunch">{{ t('检查更新') }}</button>

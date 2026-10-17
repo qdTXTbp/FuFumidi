@@ -126,6 +126,16 @@
   - 测试：`frontend/tests/export_options.test.js`（5 例）+ E2E `convert-ui`（面板挂载与控件齐全）；
   - 剩余（P0-4c）：分轨 zip 打包、FLAC/MP3/OGG（按 Scope Guard 可延后到 P1）。
 
+- **P0-7 文档与版本一致性 ✅**：
+  - 版本唯一来源 = 根 `package.json`；构建时由 `vite.config.js` 注入 `__APP_VERSION__` 与 `__BUILD_TIME__`，`core/version.js` 删除写死的 `v5.0.1` 回退、关于页显示「版本 · 构建时间」；
+  - `core/changelog.js` 补 5.2.4 条目（此前最新只到 5.2.3，升级后不会弹更新说明）；
+  - 新门禁 `scripts/check-version-consistency.mjs`：根/前端 package.json、changelog 条目、version.js 禁止硬编码、vite 注入四处断言，已进 `npm run audit` 与 `npm test` 链。
+- **P0-8 i18n 覆盖率门禁 ✅（棘轮版）**：
+  - 新 `scripts/check-i18n-coverage.mjs`：扫全源码 `t('中文…')` 字面量，检查 EN(`i18n.js`) / JA(`i18n_ja.js`) 词条；拼接片段自动豁免、白名单文件 `scripts/i18n-whitelist.json`；
+  - **历史欠账基线** `scripts/i18n-baseline.json`（EN 1208 / JA 1161 条老 UI 未译字符串）：只允许减少、不许增加，`--update-baseline` 缩表；已进 `npm run audit`；
+  - 本批起新代码的键必须同步 EN/JA（本批新增的中文键均已补齐）。
+  - 剩余：老欠账分批翻译（每批清一批并把基线缩小）；P0-8 其余已知 bug（音量/音效跨歌串扰、MIDI 输出设备固定首个等）逐条修 + 回归测试。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；

@@ -1527,6 +1527,7 @@ export const I18N_MAP = {
   '分轨导出完成：': 'Stems exported: ',
   ' 轨': ' tracks',
   '没有可导出的音符': 'No notes to export',
+  '构建于': 'built at',
   '监视到新文件：': 'New file watched: ',
   '已监视：': 'Watching: ',
   '取消监视': 'Watching stopped',
