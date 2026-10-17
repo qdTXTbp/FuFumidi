@@ -325,12 +325,26 @@ async function pickSepFile() {
   else toast(t('请使用桌面版 FuFumidi 选择音频'), 'warn');
 }
 async function decodeSepDur(p) {
-  try { const buf = await bridge.readBinary(p); if (!buf) return;
+  // ★ 先问主进程（ffmpeg 读头信息，毫秒级、不占内存）。以前无条件 readBinary + decodeAudioData：
+  //   1.4 GB 的演唱会 flac 会把整文件读进渲染进程再解码，界面直接假死（长音频分离必踩）。
+  try {
+    if (bridge && bridge.audioDuration) {
+      const r = await bridge.audioDuration(p);
+      if (r && r.ok && r.seconds > 0) { sepDur.value = r.seconds; return; }
+    }
+  } catch (e) {}
+  // 兜底：只有拿不到时长的小文件才走解码（>48MB 直接放弃，别把内存撑爆）
+  try {
+    const buf = await bridge.readBinary(p); if (!buf) return;
+    if (buf.length > 48 * 1024 * 1024) return;
     const AC = window.AudioContext || window.webkitAudioContext; const actx = new AC();
     await new Promise(res => { try { actx.decodeAudioData(buf.slice(0), ab => { sepDur.value = ab.duration || 0; res(); }, () => res()); } catch (e) { res(); } });
     if (actx.close) actx.close();
   } catch (e) {}
 }
+// 长音频（预计 > 30 分钟）要提前说清楚：主进程已放宽超时（无进展 20 分钟才判卡死），
+// 不然用户会以为程序挂了（2026-10-17 实测：演唱会 FLAC 被判「引擎执行超时」）。
+const sepLong = computed(() => { const s = sepEstSec(); return !!s && s > 30 * 60; });
 function sepEstSec() {
   if (!sepDur.value) return null;
   const isGpu = !!gpuInfo.value;
@@ -1919,6 +1933,7 @@ onBeforeUnmount(() => {
 
         <div v-if="sepFile && currentSep" class="tr-sum" style="margin-top:6px">
           {{ t('即将分离：') }}<b>{{ currentSep.name }}</b><span v-if="sepEstSec()"> · {{ t('预计耗时约 ') }}<b>{{ fmtTime(sepEstSec()) }}</b></span>
+          <span v-if="sepLong" class="tr-warn"> · {{ t('长音频：分离会一直跑下去（无进展 20 分钟才判失败），慢的话建议先裁剪片段') }}</span>
         </div>
         <button class="btn primary big" style="width:100%;justify-content:center;margin-top:8px" @click="runSeparate"
                 :disabled="!currentSep || !currentSep.exists || sepBusy">

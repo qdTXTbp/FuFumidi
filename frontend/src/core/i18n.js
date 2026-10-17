@@ -15,6 +15,7 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  "长音频：分离会一直跑下去（无进展 20 分钟才判失败），慢的话建议先裁剪片段": "Long audio: separation keeps running (only fails after 20 min without progress). Consider trimming a clip first",
   'GPU 逐帧编码中…': 'Encoding on the GPU…',
   '封装为 MP4…': 'Packaging the MP4…',
   '后台渲染中（可继续使用应用）…': 'Rendering in the background (you can keep using the app)…',
