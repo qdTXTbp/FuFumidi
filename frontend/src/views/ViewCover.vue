@@ -70,6 +70,12 @@ const percent = ref(0);
 const stage = ref('');
 const logs = ref([]);
 const result = ref(null);
+// P1-5：逐句字级对齐里保留率 <95% 的句子（丢字/糊字 UI 标记；数据来自 engine_cover 的 info.gsv_char_report）
+const charBadLines = computed(() => {
+  const info = (result.value && result.value.info) || {};
+  const rows = info.gsv_char_report;
+  return Array.isArray(rows) ? rows : [];
+});
 const error = ref('');
 let off = null;
 
@@ -382,6 +388,15 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
             {{ t('配平') }} {{ result.info.level_match_db }} dB
           </span>
         </div>
+        <div v-if="charBadLines.length" class="cv-char-warn" data-guide="cover-char-align">
+          <div class="cv-row"><span class="cv-label">{{ t('咬字校验') }}</span>
+            <b>{{ charBadLines.length }}</b>&nbsp;{{ t('句字保留率 <95%（可能丢字/糊字）') }}</div>
+          <div v-for="ln in charBadLines.slice(0, 20)" :key="ln.index" class="cv-row cv-char-line">
+            <span class="cv-ellipsis">#{{ (ln.index != null ? ln.index : 0) + 1 }} {{ ln.text }}</span>
+            <span class="cv-char-pct">{{ Math.round((Number(ln.retention) || 0) * 100) }}%</span>
+          </div>
+          <div class="cv-hint">{{ t('建议换参考音或缩短句子后重新合成这些句；字级明细见 gsv/gsv_lines.json 的 char_align') }}</div>
+        </div>
       </div>
     </template>
   </div>
@@ -399,4 +414,8 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
 .cv-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--brand-blue, var(--t-info)), var(--t-info)); transition: transform var(--motion-base) var(--ease-out); }
 .cv-err { margin-top: 10px; font-size: var(--fs-sm); color: var(--error); white-space: pre-wrap; }
 .cv-log { margin-top: 10px; max-height: 220px; overflow: auto; font-size: var(--fs-sm); line-height: 1.6; background: var(--surface-soft); border-radius: var(--r-md); padding: 8px 10px; white-space: pre-wrap; }
+.cv-char-warn { margin-top: 10px; padding: 8px 10px; border-radius: var(--r-md); background: var(--surface-soft); border-left: 2px solid var(--warn, var(--t-info)); }
+.cv-char-line { margin-top: 4px; font-size: var(--fs-sm); }
+.cv-char-pct { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--warn, var(--t-info)); }
+.cv-hint { margin-top: 6px; font-size: var(--fs-xs); color: var(--stone); }
 </style>

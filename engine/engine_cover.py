@@ -702,14 +702,29 @@ def main():
                                    top_k=a.gsv_top_k, top_p=a.gsv_top_p,
                                    temperature=a.gsv_temperature)
                 drys = [dry]
+                # P1-5：字级对齐汇总（丢字 UI 标记用；单句明细在 gsv_lines.json 的 char_align）
+                glines = gres.get('lines') or []
+                bad_lines = []
+                for _ln in glines:
+                    _ca = (_ln or {}).get('char_align') or {}
+                    _ret = _ca.get('retention')
+                    if isinstance(_ret, (int, float)) and _ret < 0.95:
+                        bad_lines.append({'index': _ln.get('index'),
+                                          'text': (_ln.get('text') or '')[:80],
+                                          'retention': round(float(_ret), 3),
+                                          'onsetRatio': _ca.get('onsetRatio')})
                 info.update({'singer': 'GPT-SoVITS/' + os.path.basename(a.gsv_voice),
                              'gsv_lines': gres.get('count'), 'gsv_reused': gres.get('reused'),
-                             'gsv_device': gres.get('device'), 'gsv_version': gres.get('version')})
+                             'gsv_device': gres.get('device'), 'gsv_version': gres.get('version'),
+                             'gsv_char_total': len(glines), 'gsv_char_bad': len(bad_lines),
+                             'gsv_char_report': bad_lines[:50]})
                 gpath = os.path.join(outdir, 'gsv', 'gsv_lines.json')
                 try:
                     with open(gpath, 'w', encoding='utf-8') as f:
-                        json.dump({'lines': gres.get('lines') or [],
-                                   'warnings': gres.get('warnings') or []},
+                        json.dump({'lines': glines,
+                                   'warnings': gres.get('warnings') or [],
+                                   'charAlign': {'bad': bad_lines,
+                                                 'total': len(glines), 'threshold': 0.95}},
                                   f, ensure_ascii=False, indent=1)
                 except OSError:
                     pass
