@@ -5,6 +5,8 @@ import { navHistory, readSession, writeSession, parseDeepLink } from './core/nav
 import Icon from './components/Icon.vue';
 import SideBar from './components/SideBar.vue';
 import TopBar from './components/TopBar.vue';
+import SongTabs from './components/SongTabs.vue';
+import { useTabsStore } from './stores/tabs';
 import PlayerBar from './components/PlayerBar.vue';
 import SettingsPanel from './components/SettingsPanel.vue';
 import ThemeLibrary from './components/ThemeLibrary.vue';
@@ -40,12 +42,19 @@ import { viewFromPath } from './router';
 const app = useAppStore();
 const state = app;
 const playlistStore = usePlaylistStore();
+const tabsStore = useTabsStore();
 const settingsStore = useSettingsStore();
 const wallpaperPromptOpen = ref(false);
 const route = useRoute();
 const router = useRouter();
 // P1-14 B3：启动时先同步抓一次会话（避免首帧路由 watcher 写入把上次会话覆盖掉）
 const bootSession = readSession();
+// E2E 调试钩子：曲目标签（正常安装版不存在）
+try {
+  if (window.fuBridge && window.fuBridge.e2e) {
+    window.__fufumidiTabs = () => ({ tabs: tabsStore.tabs.map((x) => ({ id: x.id, name: x.name })), activeId: tabsStore.activeId });
+  }
+} catch (e) {}
 // E2E 调试钩子：只在测试实例里暴露历史栈（正常安装版不存在）
 try { if (window.fuBridge && window.fuBridge.e2e) window.__fufumidiNav = navHistory; } catch (e) {}
 
@@ -103,6 +112,13 @@ watch(() => settingsStore.settings, () => {
 watch(() => route.path, (p) => {
   state.view = viewParentOf(viewFromPath(p));
 }, { immediate: true });
+/* P1-14 多标签页：当前曲目变化 → 打开/聚焦同名标签（标签栏只做切换入口，不复制数据） */
+watch(() => state.currentId, (id) => {
+  if (!id) return;
+  const item = (state.songs || []).find((s) => s.id === id);
+  if (item) tabsStore.open(id, item.name || id);
+}, { immediate: true });
+
 /* P1-14 B3：导航历史 + 会话持久化（只记视图 hash；曲目恢复仍走曲库原有逻辑） */
 let sessionTimer = 0;
 function saveSessionNow() {
@@ -616,7 +632,12 @@ onMounted(() => {
   // settings 尽早加载（同步 active_soundfont 引用）：restoreSongs→selectSong→ensureAudio
   // 会读该引用选择音色库，曾因晚于音频初始化导致重启后回退内置音色（另有 localStorage 兜底）
   loadWallpaper();
-  restoreSongs();
+  Promise.resolve(restoreSongs()).finally(() => {
+    try {
+      tabsStore.hydrate((state.songs || []).map((s) => s.id));
+      if (state.currentId) tabsStore.open(state.currentId, (state.songs.find((s) => s.id === state.currentId) || {}).name || state.currentId);
+    } catch (e) {}
+  });
   setTimeout(restoreSessionView, 350);   // 等首屏路由/曲库恢复稳定后再套用会话
   playlistStore.hydrateFromDb();
   initGlobal();
@@ -689,6 +710,7 @@ _endHold();
     <SideBar />
     <TopBar />
     <main class="app-main">
+      <SongTabs />
       <router-view v-slot="{ Component }">
         <Transition name="view" mode="out-in">
           <KeepAlive>

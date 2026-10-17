@@ -258,6 +258,13 @@
   - SettingsPanel 头部新增搜索框 + 结果下拉；点结果切页签并 `scrollIntoView` 到 `data-setting` 锚点（短暂高亮）；已给 7 个高频设置行加锚点；
   - E2E `settings-search-ui`：输入「显卡」→ 首条命中 GPU 加速 → 点击切到 GPU 页签；「更新通道」→ 更新页签；无结果显示「没有找到匹配的设置」。
 
+- **P1-14 多标签页 ✅（v1：曲目标签切换）**：
+  - 新 `stores/tabs.ts`（5 测例）：标签列表 + activeId，open（已存在只激活）/activate/close（关当前自动选邻居）/closeOthers/hydrate（启动时清掉曲库里已不存在的标签）/上限 12/持久化 localStorage；
+  - 新 `components/SongTabs.vue`：≥2 个曲目时显示标签栏（单曲目不占垂直空间），点击切换曲目、× 关闭（不删曲目）、双击关闭其它；`data-guide=song-tabs / song-tab-close`；
+  - App：当前曲目变化自动开标签；恢复曲库后 hydrate；E2E-only 调试钩子 `window.__fufumidiTabs`；
+  - E2E `song-tabs-ui`：导入两首 → 两个标签 → 点第一个切换（activeId 正确）→ 关闭另一个 → 剩 1 个且曲库仍有 2 首。
+  - 边界（v1）：标签只是**切换入口**，不复制 song 数据；每个标签的独立撤销栈/滚动位置仍由重新进入编辑器时的实例状态决定（后续可做多编辑器实例缓存）。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；
