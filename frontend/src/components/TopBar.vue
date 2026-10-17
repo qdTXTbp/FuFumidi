@@ -1,7 +1,9 @@
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import Icon from './Icon.vue';
 import { useAppStore, VIEWS } from '../stores/app';
+import { navHistory } from '../core/nav_history.js';
 import { useSettingsStore } from '../stores/settings';
 import { visibleViews } from '../core/expert.js';
 import { t } from '../core/i18n.js';
@@ -12,6 +14,29 @@ const state = app;
 const settingsStore = useSettingsStore();
 // P1-12 专家模式：带 expert 标记的导航项（翻唱等）只在专家模式显示
 const navViews = computed(() => visibleViews(VIEWS, settingsStore.settings));
+/* P1-14 B3：后退 / 前进（hash 路由自定义历史栈；与浏览器语义一致，但只在应用内导航） */
+const route = useRoute();
+const router = useRouter();
+const canBack = ref(false);
+const canForward = ref(false);
+function syncNavState() {
+  const s = navHistory.snapshot();
+  canBack.value = s.canBack;
+  canForward.value = s.canForward;
+}
+function applyNavTarget(target) {
+  if (!target) return;
+  navHistory.state.applying = true;
+  Promise.resolve(router.push(target)).finally(() => {
+    navHistory.state.applying = false;
+    syncNavState();
+  });
+}
+function goBack() { applyNavTarget(navHistory.back()); }
+function goForward() { applyNavTarget(navHistory.forward()); }
+onMounted(syncNavState);
+watch(() => route.fullPath, syncNavState);
+navHistory.onChange(syncNavState);
 const setView = (v) => app.setView(v);
 const ICONS = { home: 'home', music: 'music', views: 'viz', transcode: 'convert', resources: 'box', models: 'box', soundfonts: 'music', singer: 'utau', utau: 'utau', diffsinger: 'utau', cover: 'mic', plugins: 'extension', play: 'play2', lyrics: 'music', edit: 'edit', viz: 'viz', analyze: 'chart', score: 'score', transcribe: 'transcribe', convert: 'convert' };
 const menuOpen = ref(false);
@@ -47,6 +72,12 @@ function about() {
   <header class="topbar" role="navigation" :aria-label="t('主导航')">
     <button class="icon-btn" :title="t('折叠 / 展开侧边栏')" :aria-label="t('折叠 / 展开侧边栏')" @click="toggleSidebar">
       <Icon name="panel" :size="17" />
+    </button>
+    <button class="icon-btn nav-hist" data-guide="nav-back" :disabled="!canBack" :title="t('后退')" :aria-label="t('后退')" @click="goBack">
+      <Icon name="back" :size="16" />
+    </button>
+    <button class="icon-btn nav-hist" data-guide="nav-forward" :disabled="!canForward" :title="t('前进')" :aria-label="t('前进')" @click="goForward">
+      <Icon name="forward" :size="16" />
     </button>
     <div class="tab" v-for="v in navViews" :key="v.id" :class="{ active: state.view === v.id }" :aria-current="state.view === v.id ? 'page' : null" :data-view="v.id"
          :title="v.hint ? t(v.hint) : null" @click="setView(v.id)">

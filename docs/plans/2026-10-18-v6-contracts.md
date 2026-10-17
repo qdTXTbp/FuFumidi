@@ -213,6 +213,13 @@
   - 编排页接入：拖片段/拖边缩放/标尺拖区间/切分/删除/静音/加标记/加区间全部记一次历史（**一次手势=一条撤销项**：第一次真正移动才 push，快照是移动前）；工具栏「撤销/重做」按钮 + `Mod+Z`/`Mod+Shift+Z` 走 **C1 命令注册表**（`arrange.undo/redo`，命令面板/快捷键/按钮同一份）；
   - E2E `arrange-ui` 增加：标尺拖出区间 → 撤销回原状 → 重做恢复；同时修掉 `about-ui` 的启动期 hash 竞态（与 storage-ui 同一处理）。
 
+- **P1-14 B3 导航历史 / 深链接 / 会话恢复 ✅（标签页与多文档未做）**：
+  - 新 `core/nav_history.js`（7 测例）：应用级后退/前进栈（连续重复不入栈、新导航丢前进栈、上限 50、onChange 订阅）；`parseDeepLink/buildDeepLink` 解析、生成视图深链接（页签白名单校验）；`normalizeSession/readSession/writeSession` 会话快照（7 天 TTL、坏数据/未来时间安全返回 null）；
+  - TopBar 新增**后退 / 前进**按钮（`data-guide=nav-back/nav-forward`，与浏览器语义一致但只走应用内路由；`navHistory.state.applying` 防止路由 watcher 重复入栈）；
+  - App：路由变化写入历史 + 防抖写会话（hash + 曲目 id）；启动时**同步抓取**上次会话，仅在「本次从首页启动且上次不是首页」时 `router.replace` 恢复，避免深链接/文件关联被旧会话抢走；
+  - E2E `nav-history-ui`：视图→资源中心→后退→前进；回首页写入自定义会话→重载→自动恢复到「视图/编排」；E2E-only 调试钩子 `window.__fufumidiNav`。
+  - 剩余：多标签页 / 每个标签独立滚动与选区 / 会话里的曲目 id 恢复。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；

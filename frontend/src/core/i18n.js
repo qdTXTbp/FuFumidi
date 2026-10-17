@@ -1592,6 +1592,8 @@ export const I18N_MAP = {
   '许可证': 'License',
   '上游': 'Upstream',
   '许可与溯源': 'Licenses & provenance',
+  '后退': 'Back',
+  '前进': 'Forward',
   '专家模式': 'Expert mode',
   '打开后显示 OMR / 翻唱 / GPU 等高级入口；关闭时界面保持精简（可随时打开）': 'Show advanced entries such as OMR / Cover / GPU; keep the UI minimal when off (can be re-enabled anytime)',
   '显示高级入口': 'Show advanced entries',

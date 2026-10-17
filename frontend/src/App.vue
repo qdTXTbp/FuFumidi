@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, onBeforeUnmount, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
+import { navHistory, readSession, writeSession, parseDeepLink } from './core/nav_history.js';
 import Icon from './components/Icon.vue';
 import SideBar from './components/SideBar.vue';
 import TopBar from './components/TopBar.vue';
@@ -42,6 +43,11 @@ const playlistStore = usePlaylistStore();
 const settingsStore = useSettingsStore();
 const wallpaperPromptOpen = ref(false);
 const route = useRoute();
+const router = useRouter();
+// P1-14 B3：启动时先同步抓一次会话（避免首帧路由 watcher 写入把上次会话覆盖掉）
+const bootSession = readSession();
+// E2E 调试钩子：只在测试实例里暴露历史栈（正常安装版不存在）
+try { if (window.fuBridge && window.fuBridge.e2e) window.__fufumidiNav = navHistory; } catch (e) {}
 
 const wpUrl = ref('');
 const wpEnabled = ref(false);
@@ -97,6 +103,34 @@ watch(() => settingsStore.settings, () => {
 watch(() => route.path, (p) => {
   state.view = viewParentOf(viewFromPath(p));
 }, { immediate: true });
+/* P1-14 B3：导航历史 + 会话持久化（只记视图 hash；曲目恢复仍走曲库原有逻辑） */
+let sessionTimer = 0;
+function saveSessionNow() {
+  try {
+    writeSession({ hash: route.fullPath || '/home', songId: (state.currentSong && state.currentSong.id) || '' });
+  } catch (e) {}
+}
+watch(() => route.fullPath, (p) => {
+  if (p && !navHistory.state.applying) navHistory.push(p);
+  clearTimeout(sessionTimer);
+  sessionTimer = setTimeout(saveSessionNow, 400);
+}, { immediate: true });
+// 启动后恢复上次视图：仅当本次是从首页启动（没有深链接/文件关联抢入口）且上次不是首页
+function restoreSessionView() {
+  try {
+    const cur = route.fullPath || '/';
+    if (cur && cur !== '/home' && cur !== '/' && cur !== '') return;
+    const s = bootSession;
+    if (!s || s.hash === cur || s.hash === '/home') return;
+    if (!parseDeepLink(s.hash).valid) return;
+    navHistory.state.applying = true;
+    Promise.resolve(router.replace(s.hash)).finally(() => {
+      navHistory.state.applying = false;
+      navHistory.push(String(route.fullPath || s.hash));
+      saveSessionNow();
+    });
+  } catch (e) {}
+}
 const startTickLoop = () => app.startTickLoop();
 const stopTickLoop = () => app.stopTickLoop();
 const restoreSongs = () => app.restoreSongs();
@@ -583,6 +617,7 @@ onMounted(() => {
   // 会读该引用选择音色库，曾因晚于音频初始化导致重启后回退内置音色（另有 localStorage 兜底）
   loadWallpaper();
   restoreSongs();
+  setTimeout(restoreSessionView, 350);   // 等首屏路由/曲库恢复稳定后再套用会话
   playlistStore.hydrateFromDb();
   initGlobal();
   if (bridge && bridge.onGpuProgress) offGpuProg = bridge.onGpuProgress(onGpuProgressGlobal);
