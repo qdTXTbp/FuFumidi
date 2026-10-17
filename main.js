@@ -56,6 +56,7 @@ const { createRustService } = require('./main/rust');
 const { createDbService } = require('./main/db');
 const { registerLibraryIpc } = require('./main/library');
 const { registerProjectIpc } = require('./main/project');
+const { registerExportIpc } = require('./main/export');
 const { registerWallpaperIpc } = require('./main/wallpaper');
 const { registerUtauIpc } = require('./main/utau');
 const { registerDiffsingerIpc } = require('./main/diffsinger');
@@ -164,6 +165,7 @@ if (!gotLock) {
     registerSettingsIpc({ ipcMain, readSettings, writeSettings, db: DbService });
     // 歌声工程文件（.fufumidi 自包含包）：保存/打开都在这里，音频字节不过 IPC
     registerProjectIpc({ ipcMain, dialog, path, fs, spawnEngine });
+  registerExportIpc({ ipcMain, dialog, app, path });
     registerWallpaperIpc({ ipcMain, app, fs, net, runEngineInline, parsePyJson });
     registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawnEngine, createEngineSession: EngineService.createEngineSession });
     // DiffSinger 模块化集成：默认关闭；启用后才按需下载推理依赖与通用声码器（模块内自检）

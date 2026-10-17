@@ -801,9 +801,38 @@ export interface FeedbackPreview {
   error?: string;
 }
 
+export interface AudioExportRequest {
+  /** 文件名（不含扩展名），主进程会做 Windows 安全化 */
+  name: string;
+  /** 编码好的 WAV 字节 */
+  bytes: Uint8Array | number[];
+  ext?: string;
+  format?: 'wav' | 'wav24' | 'float32' | string;
+  bitDepth?: 16 | 24 | 32;
+  sampleRate?: number;
+  channels?: number;
+  durationSec?: number;
+  lufs?: number;
+  peakDb?: number;
+  targetLufs?: number | null;
+  sourceName?: string;
+  /** 仅测试/自动化用：直接写到该路径，不弹保存框 */
+  targetPath?: string;
+}
+export interface AudioExportResult {
+  ok: boolean;
+  path?: string;
+  manifestPath?: string;
+  manifest?: any;
+  canceled?: boolean;
+  error?: string;
+}
+
 export interface FuBridge {
   /** E2E 测试实例标记（scripts/e2e 启动时 FUFUMIDI_E2E=1）：true 时渲染进程会注册最小测试钩子 */
   e2e?: boolean;
+  /** P0-4 音频导出：字节落盘 + manifest（主进程 main/export.js） */
+  exportAudio(payload: AudioExportRequest): Promise<AudioExportResult>;
   onOpenFile(cb: (bytes: Uint8Array, name: string) => void): () => void;
   /** 沉浸模式：窗口真全屏（收掉原生标题栏）；返回实际状态 */
   setFullScreen(on: boolean): Promise<{ ok: boolean; fullScreen?: boolean; error?: string }>;

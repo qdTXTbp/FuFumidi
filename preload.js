@@ -393,6 +393,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
     autosaveRead: (docId) => ipcRenderer.invoke('autosave:read', docId),
     autosaveClear: (docId) => ipcRenderer.invoke('autosave:clear', docId),
   },
+  // P0-4 音频导出：渲染进程编码好 WAV 字节，主进程负责原子落盘 + 写 manifest
+  exportAudio: (payload) => ipcRenderer.invoke('export:audio', payload),
   // ★ 顶层别名：上面这个 copyAsset 挂在 project.* 下，但 singer.ts:1490 是按
   //   `b.copyAsset(...)`（顶层）调的 —— 拿到 undefined，靠 typeof guard 静默降级成
   //   「当前版本不支持伴奏复制」。契约所有者是 preload，所以在这里补顶层入口。

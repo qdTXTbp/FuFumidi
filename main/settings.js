@@ -31,6 +31,10 @@ const DEFAULT_SETTINGS = {
      （renderer/vendor/soundfonts/GeneralUser.sf2，29.8MB），不阻塞首屏；用户在音色工坊显式选过
      音色或关掉此开关则不再自动加载。 */
   default_gm: true,
+  /* P0-4 音频导出默认值（导出面板接线后消费；先给默认，避免老设置文件缺键） */
+  'export.audio.format': 'wav24',   // wav16 / wav24 / float32（/ flac 等后续）
+  'export.audio.dither': true,      // 仅 16bit 生效
+  'export.audio.loudness': 'off',   // off / -14 / -16 / -23 LUFS
   data_root: '',  // 数据根目录（模型 / 依赖 / 缓存 / 临时文件的落点）；留空 = 自动（工具目录旁的 FuFumidiData）
   update_channel: 'stable',  // 更新通道：'stable'=正式版（默认），'beta'=测试版（提前收到 X.Y.Z-beta.N / -rc.N）
   download_source: 'auto',   // 下载源：'auto'=自动（优先国内 CNB，失败回退 GitHub），'cnb'=国内优先，'github'=全球优先
