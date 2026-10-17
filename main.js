@@ -58,6 +58,7 @@ const { registerLibraryIpc } = require('./main/library');
 const { registerProjectIpc } = require('./main/project');
 const { registerExportIpc } = require('./main/export');
 const { getTaskCenter, registerTaskIpc } = require('./main/taskcenter');
+const { registerStorageIpc } = require('./main/storage');
 const { registerWallpaperIpc } = require('./main/wallpaper');
 const { registerUtauIpc } = require('./main/utau');
 const { registerDiffsingerIpc } = require('./main/diffsinger');
@@ -175,6 +176,22 @@ if (!gotLock) {
     },
   });
   registerTaskIpc({ ipcMain, center: taskCenter, e2e: process.env.FUFUMIDI_E2E === '1' });
+  // P1-9 存储治理：分类占用 + 安全清理（曲库永远 protected；资产需显式 includeAssets）
+  registerStorageIpc({
+    ipcMain,
+    areas: () => [
+      { id: 'models', dir: Paths.modelsDir() },
+      { id: 'soundfonts', dir: Paths.soundfontsDir() },
+      { id: 'voicebanks', dir: Paths.voicebanksDir() },
+      { id: 'diffsinger', dir: Paths.diffsingerRoot() },
+      { id: 'diffsingerVoicebanks', dir: Paths.diffsingerVoicebanksDir() },
+      { id: 'gpuEnhancements', dir: Paths.gpuEnhanceRoot() },
+      { id: 'cache', dir: Paths.cacheRoot() },
+      { id: 'temp', dir: Paths.tempDir() },
+      { id: 'logs', dir: Paths.logDir() },
+      { id: 'midi', dir: Paths.midiDir() },
+    ],
+  });
   registerExportIpc({ ipcMain, dialog, app, path, center: taskCenter });
     registerWallpaperIpc({ ipcMain, app, fs, net, runEngineInline, parsePyJson });
     registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawnEngine, createEngineSession: EngineService.createEngineSession });

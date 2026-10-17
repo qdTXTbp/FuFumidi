@@ -393,6 +393,11 @@ contextBridge.exposeInMainWorld('fuBridge', {
     autosaveRead: (docId) => ipcRenderer.invoke('autosave:read', docId),
     autosaveClear: (docId) => ipcRenderer.invoke('autosave:clear', docId),
   },
+  // P1-9 存储治理：分类占用报告 + 安全清理（曲库永不清，资产需显式 includeAssets）
+  storage: {
+    report: () => ipcRenderer.invoke('storage:report'),
+    cleanup: (payload) => ipcRenderer.invoke('storage:cleanup', payload),
+  },
   // C2 任务中心：长任务登记在主进程（离开页面不丢）；事件 10Hz 合并广播
   tasks: {
     list: () => ipcRenderer.invoke('tasks:list'),

@@ -830,6 +830,23 @@ export interface AudioExportResult {
   error?: string;
 }
 
+export interface StorageArea {
+  id: string;
+  label: string;
+  path: string;
+  kind: 'safe' | 'asset' | 'protected' | string;
+  safe: boolean;
+  protected: boolean;
+  exists: boolean;
+  bytes: number;
+  files: number;
+}
+export interface StorageReport {
+  areas: StorageArea[];
+  totalBytes: number;
+  updatedAt: number;
+}
+
 export interface TaskItem {
   id: string;
   kind: string;
@@ -847,6 +864,11 @@ export interface TaskItem {
 export interface FuBridge {
   /** E2E 测试实例标记（scripts/e2e 启动时 FUFUMIDI_E2E=1）：true 时渲染进程会注册最小测试钩子 */
   e2e?: boolean;
+  /** P1-9 存储治理：分类占用与安全清理 */
+  storage?: {
+    report(): Promise<StorageReport>;
+    cleanup(payload: { includeAssets?: boolean }): Promise<{ ok: boolean; freedBytes: number; removed: Array<{ id: string; bytes: number; files: number }>; errors: string[] }>;
+  };
   /** C2 任务中心：长任务列表/取消/事件订阅（离开页面不丢） */
   tasks?: {
     list(): Promise<TaskItem[]>;

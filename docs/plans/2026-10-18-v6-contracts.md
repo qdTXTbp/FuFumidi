@@ -174,6 +174,13 @@
   - 导出溯源：MIDI 编码支持 **版权元事件（0x02）**（parse/encode/buildSong 全链路），编辑页导出自动写 `FuFumidi · 曲名`；2 个 round-trip 测例；
   - E2E `about-ui`：关于页出现应用/音色库/第三方组件清单（≥15 行）且含 MIT/GeneralUser/verovio 等关键条目。
 
+- **P1-9 存储治理 ✅**：
+  - 新 `main/storage.js`（纯逻辑 + IPC）：10 类占用（模型/音色/声库/DiffSinger/GPU 增强/缓存/临时/日志/曲库）×字节+文件数；
+    清理规则硬编码在数据层 —— **曲库 protected 永不清**，资产（模型/音色/声库）需显式 `includeAssets`，日志只保留最近 5 份，其余目录只清空内容；
+  - IPC `storage:report` / `storage:cleanup`（preload + types 同步）；`scripts/test-paths-storage.mjs` 5 测例（含"includeAssets 也不动曲库"）；
+  - 资源中心新增「存储治理」页签：分类表 + 总计 + 刷新 + 清理（二次确认），危险选项「包含已下载资产」显式勾选；
+  - E2E `storage-ui`：面板挂载、≥8 分类、曲库标记不可清理、刷新。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；
