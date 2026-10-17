@@ -393,6 +393,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
     autosaveRead: (docId) => ipcRenderer.invoke('autosave:read', docId),
     autosaveClear: (docId) => ipcRenderer.invoke('autosave:clear', docId),
   },
+  // P0-4c 分轨导出：一次写成一个 ZIP
+  exportStemsZip: (payload) => ipcRenderer.invoke('export:stems-zip', payload),
   // P2-5 DAW 互通：DAWproject 导出（ZIP：project.xml + metadata.xml）
   exportDawproject: (payload) => ipcRenderer.invoke('dawproject:export', payload),
   // P2-6 AI 生成（可选、默认关）：产物带 AI 标注；没有本地命令时明确报 not-configured

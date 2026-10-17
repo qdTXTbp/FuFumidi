@@ -861,6 +861,21 @@ export interface TaskItem {
   cancelable?: boolean;
 }
 
+/** P0-4c 分轨打包导出 */
+export interface StemZipFile {
+  name: string;
+  bytes: Uint8Array;
+  ext?: string;
+}
+export interface StemZipResult {
+  ok: boolean;
+  canceled?: boolean;
+  error?: string;
+  path?: string;
+  count?: number;
+  bytes?: number;
+}
+
 /** P2-5 DAW 互通：DAWproject 包内文件（project.xml / metadata.xml） */
 export interface DawprojectExportFile {
   name: string;
@@ -909,6 +924,8 @@ export interface AiGenerateResult {
 export interface FuBridge {
   /** E2E 测试实例标记（scripts/e2e 启动时 FUFUMIDI_E2E=1）：true 时渲染进程会注册最小测试钩子 */
   e2e?: boolean;
+  /** P0-4c：分轨导出→单个 ZIP */
+  exportStemsZip?(payload: { files: StemZipFile[]; suggestedName?: string; targetPath?: string }): Promise<StemZipResult>;
   /** P2-5 DAW 互通：导出 DAWproject */
   exportDawproject?(payload: { files: DawprojectExportFile[]; suggestedName?: string; filePath?: string }): Promise<DawprojectExportResult>;
   /** P2-6 AI 生成（可选、默认关）：生成文件一律带 AI 标注 */

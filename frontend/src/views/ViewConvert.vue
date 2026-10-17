@@ -38,7 +38,7 @@ const done = ref(false);
 
 /* P0-4b 导出质量选项：格式/位深、dither、响度目标、总线限幅、分轨 */
 const bridge = window.fuBridge;
-const exp = reactive(normalizeExportOptions({}));
+const exp = reactive(Object.assign(normalizeExportOptions({}), { stemsZip: true }));
 const arrangeExport = ref(false);   // P1-1c：按「视图 → 编排」的片段排布离线渲染
 const hasArrange = computed(() => {
   const s = song.value;
@@ -250,7 +250,7 @@ function mixRendered(rendered, sr, totalLen) {
  * 链路：增益 →（响度归一 + 限幅）→ WAV 编码（位深/dither）→ bridge.exportAudio（主进程原子写 + manifest）。
  * 网页端没有 bridge.exportAudio 时退回 blob 下载。
  */
-async function exportRendered(buf, baseName, gainMul) {
+async function encodeRendered(buf, baseName, gainMul) {
   const sr = buf.sampleRate;
   const chs = [];
   for (let c = 0; c < buf.numberOfChannels; c++) {
@@ -305,6 +305,12 @@ async function exportRendered(buf, baseName, gainMul) {
     lufs, peakDb, targetLufs: exp.loudness === 'off' ? null : Number(exp.loudness),
     sourceName: (song.value && song.value.name) || '',
   });
+  return { bytes, meta, fi };
+}
+
+/** 把 encodeRendered 的结果落盘（桌面走主进程原子写；网页退回 blob 下载）。 */
+async function saveEncoded(enc) {
+  const { bytes, meta, fi } = enc;
   if (bridge && bridge.exportAudio) {
     const r = await bridge.exportAudio(Object.assign({ bytes }, meta));
     if (r && r.ok) { toast(t('已保存到：') + r.path, 'ok'); return true; }
@@ -318,6 +324,11 @@ async function exportRendered(buf, baseName, gainMul) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   return true;
+}
+
+/** 编码并落盘（普通音频导出路径） */
+async function exportRendered(buf, baseName, gainMul) {
+  return saveEncoded(await encodeRendered(buf, baseName, gainMul));
 }
 
 /**
@@ -355,19 +366,34 @@ async function renderArrangeToBuffer(s, g) {
   return ab;
 }
 
-/** P0-4b 分轨导出：每轨单独离线渲染（其余轨静音）→ 各自一个文件；进度按轨推进 */
+/** P0-4b/P0-4c 分轨导出：每轨单独离线渲染（其余轨静音）→ 各自一个文件或打包成一个 ZIP */
 async function renderStems(s, gainMul) {
   const targets = (s.tracks || []).map((tr, i) => ({ tr, i })).filter((x) => x.tr && x.tr.notes && x.tr.notes.length);
   if (!targets.length) { toast(t('没有可导出的音符'), 'warn'); return 0; }
-  let ok = 0;
+  const encoded = [];
   for (let k = 0; k < targets.length; k++) {
     const { tr, i } = targets[k];
-    progress.value = Math.max(2, Math.round((k / targets.length) * 95));
+    progress.value = Math.max(2, Math.round((k / targets.length) * 90));
     // 单轨子歌曲：index 归 0（渲染内层按 s.tracks 下标分配增益节点）
     const sub = Object.assign({}, s, { tracks: [Object.assign({}, tr, { index: 0 })] });
     const buf = await renderAudioBuffer(sub, { rate: rate.value, scale: tempo.value, mode: preset.value });
     const name = s.name + '_' + (tr.name || (t('轨道') + (i + 1))) + '_stem';
-    if (await exportRendered(buf, name, gainMul)) ok++;
+    encoded.push(await encodeRendered(buf, name, gainMul));
+  }
+  progress.value = 95;
+  let ok = 0;
+  // P0-4c：桌面版默认打成一个 ZIP（一次保存，文件名可控）；网页端或主进程不支持时逐文件保存
+  if (exp.stemsZip && bridge && typeof bridge.exportStemsZip === 'function') {
+    try {
+      const r = await bridge.exportStemsZip({
+        files: encoded.map((e) => ({ name: e.meta.name + '.' + e.fi.ext, bytes: e.bytes })),
+        suggestedName: s.name + '_stems.zip',
+      });
+      if (r && r.ok) { ok = encoded.length; toast(t('分轨已打包：') + r.path, 'ok'); }
+      else if (!(r && r.canceled)) toast(t('打包分轨失败：') + ((r && r.error) || ''), 'warn');
+    } catch (e) { toast(t('打包分轨失败：') + String((e && e.message) || e), 'warn'); }
+  } else {
+    for (const e of encoded) { if (await saveEncoded(e)) ok++; }
   }
   progress.value = 100;
   done.value = true;
@@ -995,7 +1021,11 @@ async function renderVideo() {
         </div>
         <div class="field-row">
           <label>{{ t('分轨导出（每轨一个文件）') }}</label>
-          <input type="checkbox" v-model="exp.stems" />
+          <input type="checkbox" v-model="exp.stems" data-guide="export-stems" />
+        </div>
+        <div class="field-row" v-if="exp.stems">
+          <label :title="t('桌面版默认把分轨打成一个 ZIP，只需选一次保存位置')">{{ t('打包为一个 ZIP（推荐）') }}</label>
+          <input type="checkbox" v-model="exp.stemsZip" data-guide="export-stems-zip" />
         </div>
         <div class="field-row">
           <label :title="t('按「视图 → 编排」里放置的片段顺序渲染（需要先编排）')">{{ t('按编排片段导出') }}</label>

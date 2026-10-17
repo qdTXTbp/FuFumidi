@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const AdmZip = require('adm-zip');
 
 const MAX_BYTES = 2 * 1024 * 1024 * 1024;   // 2GB 上限（3 小时 24bit 立体声也够）
 
@@ -131,6 +132,49 @@ function registerExportIpc({ ipcMain, dialog, app, path: nodePath, center } = {}
         else task.fail((res && res.error) || '导出失败');
       }
       return res;
+    } catch (e) {
+      if (task) task.fail(e);
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
+  // P0-4c：分轨导出打包为单个 ZIP（避免 N 次保存对话框，并保持文件名与曲名一致）
+  ipcMain.handle('export:stems-zip', async (_e, payload) => {
+    const p = payload || {};
+    const task = center ? center.register({ kind: 'export', title: '打包分轨：' + String(p.suggestedName || 'stems.zip') }) : null;
+    try {
+      const filesIn = Array.isArray(p.files) ? p.files : [];
+      if (!filesIn.length) return { ok: false, error: '没有可打包的分轨文件' };
+      if (filesIn.length > 100) return { ok: false, error: '分轨数量过多（>100）' };
+      const items = [];
+      let total = 0;
+      for (const f of filesIn) {
+        const buf = f && f.bytes ? Buffer.from(f.bytes) : Buffer.alloc(0);
+        if (!buf.length) continue;
+        total += buf.length;
+        if (total > MAX_BYTES) return { ok: false, error: '分轨总大小超过 2GB' };
+        items.push({ name: sanitizeName(f.name, f.ext || 'wav'), bytes: buf });
+      }
+      if (!items.length) return { ok: false, error: '没有可打包的音频数据' };
+      const suggested = sanitizeName(p.suggestedName || 'stems', 'zip');
+      let target = process.env.FUFUMIDI_E2E === '1' && p.targetPath ? String(p.targetPath) : '';
+      if (!target) {
+        const downloads = app ? app.getPath('downloads') : process.cwd();
+        const def = nodePath ? nodePath.join(downloads, suggested) : suggested;
+        const r = await dialog.showSaveDialog({
+          title: '分轨打包导出',
+          defaultPath: def,
+          filters: [{ name: 'ZIP 压缩包', extensions: ['zip'] }],
+        });
+        if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+        target = r.filePath;
+      }
+      const zip = new AdmZip();
+      for (const it of items) zip.addFile(it.name, it.bytes);
+      zip.writeZip(target);
+      const size = fs.statSync(target).size;
+      if (task) { task.progress(1, '已写出 ' + target); task.done({ path: target, count: items.length }); }
+      return { ok: true, path: target, count: items.length, bytes: size };
     } catch (e) {
       if (task) task.fail(e);
       return { ok: false, error: String((e && e.message) || e) };
