@@ -112,6 +112,11 @@
   - 设置新增 `default_gm`（默认 true）+ 音色工坊开关「启动时自动加载内置 GM 音色（推荐）」；用户显式选过音色或点「使用默认合成器」后不再抢；
   - 竞态：settings 异步加载的自愈逻辑加了「默认 GM 生效中」白名单，避免把刚装好的 GM 又切回内置合成器；
   - E2E 新增 `soundfont-lazy`：真实走 IPC 列表 → 读 29.8MB SF2 → synth 装载 → `appliedSoundfont` 指向 GeneralUser（**真链路验证，不是只测决策函数**）。
+- **P0-3 录音引擎核心 ✅（UI 面板待接）**：
+  - 新 `core/recorder.js`（288 行）：预备拍（0–4 小节，跨边界按住的音从 take 0 起算）、循环 take（overdub/replace、跨圈按住音圈尾收尾不叠音）、量化（off/1/4/1/8/1/16/1/32/自定义 tick）、输入延迟补偿、`applyTake`（replace 窗口替换 / overdub 同音高截断）、`calibrateLatency`（中位偏移 + p10–p90 稳定性，≤5ms 判 ok）；
+  - `core/midiin.js` 升级：所有回调带 `performance.now()` 时间戳、新增 `onControl`（CC/延音踏板）与 `onRaw`、新增可测纯函数 `parseControlMessage`；
+  - 测试：`frontend/tests/recorder.test.js`（15 例）+ `frontend/tests/midiin.test.js`（4 例），含 **假 MIDI 事件流 256 拍不丢事件** 的 DoD 用例；
+  - 剩余（P0-3b）：ViewEdit 录音面板（录音/停止/take 试听采用丢弃）、延迟校准向导、settings.midiInputOffsetMs 持久化。
 
 ## 3. E2E（验收底座，已落地）
 
