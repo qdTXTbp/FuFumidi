@@ -106,6 +106,12 @@
 - **P0-6 数据层完成**：`parseMidi` 支持 SMPTE division（0xE728 → fps25/40tpf）、`buildSong` 按帧算时间（tempoMap 不参与）、`encodeMidi` 写回 SMPTE 头；多拍号 encode→parse→buildSong 全保留（此前只取首条）；状态栏位置读数改走 `formatBarBeat`（变拍号按分段算）。
   - **P0-6b ✅**：EditorCanvas 卷帘垂直网格改为按 `iterBars` 逐小节/逐拍绘制（6/8 小节线落点正确）；五线谱视图的 `scoreLayout` 生成 `barList` 分段小节表，`scoreXOf/scoreSystemY/scoreTickAt/拖动/播放头/HUD` 全部按分段算；`afterEdit` 的曲目小节数也改分段统计。
   - E2E 新增 `edit-varmeter`（4/4→6/8→3/4 三段，验证 sigMap 与谱面渲染）。
+- **P0-5 默认 GM 音色懒加载 ✅**：
+  - 随包分发的 `renderer/vendor/soundfonts/GeneralUser.sf2`（29.8MB）此前在桌面端从未被默认用起来；现在首次播放时后台装载，不阻塞首屏；
+  - 纯决策逻辑抽到 `core/default_soundfont.js`（`pickDefaultSoundfont / shouldLazyLoadDefaultGm / defaultGmFlagOf`，6 测例）；
+  - 设置新增 `default_gm`（默认 true）+ 音色工坊开关「启动时自动加载内置 GM 音色（推荐）」；用户显式选过音色或点「使用默认合成器」后不再抢；
+  - 竞态：settings 异步加载的自愈逻辑加了「默认 GM 生效中」白名单，避免把刚装好的 GM 又切回内置合成器；
+  - E2E 新增 `soundfont-lazy`：真实走 IPC 列表 → 读 29.8MB SF2 → synth 装载 → `appliedSoundfont` 指向 GeneralUser（**真链路验证，不是只测决策函数**）。
 
 ## 3. E2E（验收底座，已落地）
 

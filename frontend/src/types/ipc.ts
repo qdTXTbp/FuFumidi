@@ -260,6 +260,8 @@ export interface Settings {
   lang?: 'zh' | 'zh-Hant' | 'en' | '';
   /** UTAU 引擎里的合成路线：'CLASSIC'（默认）| 'WORLDLINE-R' | 'WORLDLINE-R1.1' | 'WORLDLINE-R2' */
   utau_renderer?: string;
+  /** P0-5：首次播放时后台加载随包内置的 GeneralUser GS（默认 true；关掉则始终用内置合成器） */
+  default_gm?: boolean;
   [key: string]: any;
 }
 

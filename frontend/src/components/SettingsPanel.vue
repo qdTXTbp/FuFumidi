@@ -479,6 +479,7 @@ async function clearUserData() {
           localStorage.removeItem('fufumidi_playmode');
           localStorage.removeItem('fufumidi_fx');
           localStorage.removeItem('fufumidi_soundfont');
+          localStorage.removeItem('fufumidi_default_gm');
         } catch (e) {}
         app.toast(t('用户数据已清除，应用即将重启…'), 'ok');
         setTimeout(() => { try { window.location.reload(); } catch (e) {} }, 800);

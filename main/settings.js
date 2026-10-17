@@ -27,6 +27,10 @@ const DEFAULT_SETTINGS = {
   lang: '',   // 界面语言：''=未设定（首次启动按浏览器语言确定），可选 'zh' | 'zh-Hant' | 'en' | 'ja'
   hf_token: '',   // HuggingFace 访问令牌（用于下载 gated 模型，如 MuScriptor 需授权）
   active_soundfont: 'internal',   // 播放时使用的音色库：'internal'=内置合成器，其余为 SF2 文件绝对路径（音色工坊选择，持久化）
+  /* P0-5：默认 GM 音色懒加载。true = 桌面端首次播放时后台加载随包分发的 GeneralUser GS
+     （renderer/vendor/soundfonts/GeneralUser.sf2，29.8MB），不阻塞首屏；用户在音色工坊显式选过
+     音色或关掉此开关则不再自动加载。 */
+  default_gm: true,
   data_root: '',  // 数据根目录（模型 / 依赖 / 缓存 / 临时文件的落点）；留空 = 自动（工具目录旁的 FuFumidiData）
   update_channel: 'stable',  // 更新通道：'stable'=正式版（默认），'beta'=测试版（提前收到 X.Y.Z-beta.N / -rc.N）
   download_source: 'auto',   // 下载源：'auto'=自动（优先国内 CNB，失败回退 GitHub），'cnb'=国内优先，'github'=全球优先
