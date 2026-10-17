@@ -4,6 +4,11 @@
 import { cmpVersion } from './version.js';
 
 const CHANGELOG = {
+  // 6.0.2：分轨导出打包 ZIP · 编排页分标签独立撤销栈。
+  '6.0.2': [
+    '分轨导出：勾选分轨后新增「打包为一个 ZIP（推荐）」（默认开）——桌面版只弹一次保存对话框，所有分轨写进一个 ZIP；网页端自动回退逐文件保存。',
+    '编排页（视图 → 编排）：撤销/重做按**曲目标签**隔离，切到别的曲目是独立历史、切回来撤销记录仍在；横向滚动位置也随标签恢复。',
+  ],
   // 6.0.1：DAWproject 导出 / 可选 AI 生成（默认关）/ 翻唱咬字校验 UI。
   '6.0.1': [
     '转换页新增「导出 DAWproject」：把曲目导出为 DAWproject 1.0（ZIP：project.xml + metadata.xml），含 MIDI 音符轨、速度、拍号、标记；支持该格式的 DAW（Studio One / Bitwig / Cubase）可导入。当前只覆盖音符轨子集，且尚未在 DAW 实机验证。',
