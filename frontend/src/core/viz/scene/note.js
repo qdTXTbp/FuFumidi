@@ -44,12 +44,6 @@ const isAxisAligned = (q) => Math.abs(q[1] - q[3]) < 0.01 && Math.abs(q[5] - q[7
 const flat4 = (...ps) => ps.reduce((acc, p) => (acc.push(p[0], p[1]), acc), []);
 /** 四边形参数空间里的一块矩形区域 → 顶点数组 */
 const band = (q, s0, s1, t0, t1) => flat4(pt(q, s0, t0), pt(q, s1, t0), pt(q, s1, t1), pt(q, s0, t1));
-/** 单色填充（四段同色）→ **{stops, dir} 对象**。
- * ★ 2026-10-17 修的真 bug：这里以前直接返回数组 [c,c,c,c]，而光栅器只认 fill.stops ——
- *   Canvas2D 那边得到一个没有色标的渐变（等于不画），WebGL2 那边 sampleFill 把"没有 stops"
- *   当白色不透明（[1,1,1,1]）→ 本该是"内侧压暗"的那条夜色四边形被画成**整条纯白**。
- *   用户看到的「白色的反光太强烈了，喧宾夺主」有一半是它。 */
-const solidFill = (c) => ({ stops: [c, c, c, c], dir: 'v' });
 
 /**
  * 产出一根下落音符的全部图元。
