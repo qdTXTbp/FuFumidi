@@ -2493,27 +2493,27 @@ onBeforeUnmount(() => {
            以前这些散在「更多」面板的两屏高度里，选中后还要去展开面板才能改力度。 -->
       <div class="card ed-taskbar">
         <template v-if="sel.count">
-          <span class="tb-badge">{{ t('已选 ') }}{{ sel.count }}</span>
+          <span class="tb-badge" data-guide="sel-badge">{{ t('已选 ') }}{{ sel.count }}</span>
           <span class="et-label">{{ t('移调') }}</span>
-          <button class="et-btn" :title="t('降半音')" @click="trDown">-1</button>
-          <button class="et-btn" :title="t('升半音')" @click="trUp">+1</button>
-          <button class="et-btn" :title="t('降八度')" @click="octDown">-12</button>
-          <button class="et-btn" :title="t('升八度')" @click="octUp">+12</button>
+          <button class="et-btn" data-guide="sel-transpose-down" :title="t('降半音')" @click="trDown">-1</button>
+          <button class="et-btn" data-guide="sel-transpose-up" :title="t('升半音')" @click="trUp">+1</button>
+          <button class="et-btn" data-guide="sel-oct-down" :title="t('降八度')" @click="octDown">-12</button>
+          <button class="et-btn" data-guide="sel-oct-up" :title="t('升八度')" @click="octUp">+12</button>
           <span class="et-sep"></span>
           <span class="et-label">{{ t('力度') }}</span>
-          <button class="et-btn" :title="t('选区力度渐弱')" @click="velDown">-3</button>
-          <button class="et-btn" :title="t('选区力度渐强')" @click="velUp">+3</button>
+          <button class="et-btn" data-guide="sel-vel-down" :title="t('选区力度渐弱')" @click="velDown">-3</button>
+          <button class="et-btn" data-guide="sel-vel-up" :title="t('选区力度渐强')" @click="velUp">+3</button>
           <button class="et-btn" :title="t('选区力度 -20')" @click="ctxVel(-20)">-20</button>
           <span class="et-sep"></span>
-          <button class="et-btn" :title="t('量化到吸附网格')" @click="quantize"><Icon name="quantize" :size="13" />{{ t('量化') }}</button>
+          <button class="et-btn" data-guide="sel-quantize" :title="t('量化到吸附网格')" @click="quantize"><Icon name="quantize" :size="13" />{{ t('量化') }}</button>
           <button class="et-btn" :title="t('参数化工具：拖动即预览，回车应用')" @click="openMidiTools"><Icon name="sliders" :size="13" />{{ t('参数工具') }}</button>
           <button class="et-btn" :title="t('列表编辑器：精确修改数值')" @click="openList"><Icon name="list" :size="13" />{{ t('列表') }}</button>
           <button class="et-btn" :title="t('复制')" @click="copy"><Icon name="copy" :size="13" />{{ t('复制') }}</button>
           <button class="et-btn" :title="t('克隆选区到其后')" @click="dup"><Icon name="plus" :size="13" />{{ t('克隆') }}</button>
           <button class="et-btn" :class="{ active: selMutedNow === true }" :title="t('静音选中的音符')" @click="editor?.setSelMuted(true)"><Icon name="minus" :size="13" />{{ t('静音') }}</button>
-          <button class="et-btn danger" :title="t('删除 Del')" @click="del"><Icon name="trash" :size="13" />{{ t('删除') }}</button>
+          <button class="et-btn danger" data-guide="sel-delete" :title="t('删除 Del')" @click="del"><Icon name="trash" :size="13" />{{ t('删除') }}</button>
           <span class="st-grow"></span>
-          <button class="et-btn" :title="t('取消选择')" @click="editor?.selectNone(); refreshSel()">{{ t('取消选择') }}</button>
+          <button class="et-btn" data-guide="sel-cancel" :title="t('取消选择')" @click="editor?.selectNone(); refreshSel()">{{ t('取消选择') }}</button>
         </template>
         <template v-else>
           <span class="tb-hint">{{ t('未选中音符 · 拖拽框选或点击音符，这里会出现就地操作（移调 / 力度 / 量化 / 列表 / 复制 / 删除）') }}</span>

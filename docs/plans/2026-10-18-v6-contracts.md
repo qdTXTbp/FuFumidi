@@ -239,6 +239,11 @@
   - 编辑器新增**弯音（PB）泳道**：CC 目标里加「弯音 PB（±2 半音）」，与 CC 共用同一条泳道但写入 14bit `bend` 事件（按 tick 有序插入、±2 tick 合并）；E2E `edit-pb-lane` 验证画一笔后轨道事件里出现正弯音；
   - 统一：`track_automation.sampleAt` 改为委托 `curve_engine.valueAt`，调教侧与编辑侧取值语义同源。
 
+- **P1-13 B2 悬浮工具条 / 就地编辑 / 批量操作 ✅（补齐验收）**：
+  - 能力原本已存在：M3 悬停工具条（音符名/力度/演奏法就地显示）、列表编辑器与参数工具（就地精确改值）、选区上下文任务条（移调/八度/力度/量化/复制/克隆/静音/删除/列表）；
+  - 本轮为任务条所有高频按钮补 `data-guide`（sel-badge / sel-transpose-up/down / sel-oct-up/down / sel-vel-up/down / sel-quantize / sel-delete / sel-cancel），并新增 E2E `edit-selection-toolbar`：
+    **Ctrl+A 全选 → 已选 3 → 批量升半音（每个音符 +1，逐条读回数据）→ 批量力度渐强 → 批量删除 → Ctrl+Z 恢复 3 个音符**（一次操作 = 一条撤销项）。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；
