@@ -313,6 +313,10 @@
   `make_latest` 已置为最新；`releases/latest/download/{latest.yml,update-manifest.json,FuFumidi.Install.exe}` 校验一致，
   **下载安装包后用内嵌公钥验签通过**（sha256 7e4686…）。
 - **安装版部署 + 真机冒烟**：`deploy-installed.cjs` 覆盖 app.asar 后启动冒烟通过（首屏 358 字符、fuBridge 就绪、0 未捕获异常、0 console.error）。
+- **6.0.1（功能补齐版，源码与安装包一致）**：版本四源一致；新增 DAWproject 导出 / 可选 AI 生成 / 翻唱咬字校验 UI；
+  `build-release.ps1 -Version 6.0.1` 成功、更新器嵌入断言通过；Ed25519 清单签名；归档 `E:\Midi\安装包\FuFumidi\6.0.1`；
+  CNB `v6.0.1` Release 9 资产上传、**is_latest=true**（`releases/latest` → v6.0.1）；
+  latest.yml/manifest/安装包大小一致，**从 CNB 下载安装包验签通过**（sha256 485250…）；安装版部署 6.0.1 + 冒烟通过。
 - 未完成：GitHub Release 资产上传（本机无 GitHub 凭据，credential fill 交互不可用）；mac/linux 真机构建与签名公证；
   Authenticode 证书；原生音频 I/O（WASAPI/ASIO）与真实插件宿主 —— 均属环境/资源依赖项。
 
