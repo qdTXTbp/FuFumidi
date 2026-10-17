@@ -32,7 +32,7 @@ export const FX_USER_KEY = 'fufumidi.viz.fxthemes';
 export type FxUserThemes = Record<string, Record<string, unknown>>;
 
 export const FX_ITEMS = [
-  { k: 'keys3d', label: '3D 键盘', hint: '键面 + 厚度 + 按压下沉' },
+  { k: 'keys3d', label: '3D 键盘', hint: '立体键盘：透视 + 键面厚度 + 侧面 + 按压下沉（关掉 = 平板键，透视也一起关）' },
   { k: 'particles', label: '粒子光效', hint: '击键火花 + 冲击波环' },
   { k: 'beams', label: '落键光柱', hint: '按键向上洒光' },
   { k: 'hitLine', label: '击键光带', hint: '整条击键线随击键亮起' },

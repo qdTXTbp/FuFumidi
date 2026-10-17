@@ -10,13 +10,15 @@
 // ============================================================
 import { withAlpha } from '../state/palette.js';
 
-/** 屏幕 x → 按该点深度投影后的 x（persp=0 时恒等） */
+/** 屏幕 x → 该高度（音符坡道平面）上的投影 x（persp=0 时恒等） */
 export function projectX(cam, ps, x, y) {
-  return ps > 0.001 ? cam.px(x, cam.depthAt(y)) : x;
+  return ps > 0.001 ? cam.pxN(x, y) : x;
 }
-/** 该高度处的横向缩放（尺寸类效果跟着缩，才与位置一致） */
+/** 该高度处的透视缩放（尺寸类效果跟着缩，才与位置一致）。
+ *  ★ 用坡道平面自己的 S（同一台相机的 1/z 投影），不是另写一个线性 kz ——
+ *    两套公式会让光柱/粒子与音符、键列对不上。 */
 export function depthScale(cam, ps, y) {
-  return ps > 0.001 ? 1 + cam.kz * cam.depthAt(y) : 1;
+  return ps > 0.001 ? cam.sN(y) : 1;
 }
 
 /** 一根会随透视倾倒的光柱：外层宽而淡 → 内层窄而亮，纵向由渐变收口 */

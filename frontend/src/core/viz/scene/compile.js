@@ -78,7 +78,6 @@ export function createCompiler() {
     }
     const barSec = sig.num * 60 / tempo;
     const v = 120 / barSec, j = d * v;
-    const visSec = wN > 0 ? wN / v : 0;
     const zoom = opts.zoom || 1;
     const WHITE_TOTAL = WHITE_MIDI.length;
     const span = Math.max(12, Math.min(WHITE_TOTAL, Math.round(WHITE_TOTAL / zoom)));
@@ -87,13 +86,18 @@ export function createCompiler() {
     const wk1 = wk0 + span;
     const g = w / span;
     const loMidi = WHITE_MIDI[wk0], hiMidi = WHITE_MIDI[wk1 - 1] + 1;
-    const ps = Math.max(0, Math.min(1, fx.persp == null ? 0 : Number(fx.persp)));
+    // ★ 透视只在「3D 键盘」开启时生效（用户 2026-10-18：「让键盘透视只在 3D 键盘开启时生效」）。
+    //   平板键配倾斜透视是自相矛盾的：没有厚度、没有侧面、音符也没有体积，却把整幅画面斜过来。
+    const keys3dOn = fx.keys3d !== false;
+    const ps = keys3dOn ? Math.max(0, Math.min(1, fx.persp == null ? 0 : Number(fx.persp))) : 0;
     // ★ 键盘与音符**共用一台相机**：键盘在 t∈[0,1] 段，音符在 t<0（落点线上方 = 更远）。
     //   两边各写一套投影必然会漂移（上一版音符只是"朝中心缩一下"，所以读起来是"倾斜地下落"）。
     const keyFaceH = Math.max(10, Math.round(x * 0.72));
     const cam = makeKeyboardProjection({ w, wN, faceH: keyFaceH, persp: ps });
-    const vpX = w / 2, kB = 1 - 0.42 * ps;
-    const perspX = (px) => (ps > 0 ? vpX + (px - vpX) * kB : px);
+    // ★ 一屏能看到多少秒，由**相机**决定（坡道距离 s 从落点线到屏幕顶端）。
+    //   透视下纵向会被压缩：屏幕顶端对应的时间更远，仍然按 wN/v 算会**漏掉上游的音符**。
+    const sTop = wN > 0 ? cam.sOf(0) : 0;
+    const visSec = wN > 0 && v > 0 ? sTop / v : 0;
     const energy = Math.max(0, Math.min(1, opts.energy || 0));
 
     // ---------- 歌曲块（沿用旧引擎的构建与裁剪） ----------
@@ -120,14 +124,16 @@ export function createCompiler() {
       //   想要干净的画面、或把画面当叠加层导出时，这一层是最该关掉的"辅助线"。
       const showGrid = fx.grid !== false;
       const grid = withAlpha('#ffffff', 0.05), gridStrong = withAlpha('#ffffff', 0.10);
+      // 键位竖线也是**透视线**：落点线处恒等、往上跟着音符坡道一起收拢（与音符侧边同源）
       for (let i = wk0; showGrid && i <= wk1; i++) {
         if ((i - 2) % 7 !== 0) continue;
-        pr.push(P.line('background', Math.floor((i - wk0) * g), 0, Math.floor((i - wk0) * g), wN, grid, { z: -80 }));
+        const uu = (i - wk0) * g;
+        pr.push(P.line('background', uu, wN, cam.pxN(uu, 0), 0, grid, { z: -80 }));
       }
-      const M = Math.floor(j / 120), S = Math.floor((j + wN) / 120) + 1;
-      for (let e = showGrid ? M : 1; e <= S; e++) {
+      const M = Math.floor(j / 120), Sx = Math.floor((j + Math.max(0, sTop)) / 120) + 1;
+      for (let e = showGrid ? M : 1; e <= Sx; e++) {
         if (!showGrid) break;                       // 关掉网格时连小节编号一起收走
-        const ty = wN - (120 * e - j);
+        const ty = cam.yOf(120 * e - j);
         if (ty < -20 || ty > wN + 20) continue;
         pr.push(P.line('background', 30, ty, w, ty, gridStrong, { z: -70 }));
         if (e > 0) pr.push(P.text('background', String(e), 24, ty, withAlpha('#ffffff', 0.42), { align: 'right', size: 10, z: -60 }));
@@ -155,10 +161,14 @@ export function createCompiler() {
         for (let k = rng.from; k < rng.to; k++) {
           const b = arr[k];
           const { sx: sxB, cw: cwB } = pitchGeom(pitchSrc, ensurePm(), g, wk0);
-          const bottom = wN - (b.start - d) * v;
-          const top = wN - (b.end - d) * v;
+          // ★ 屏幕位置由**相机**投影坡道距离得到（不是直接线性 wN - 秒数·v）：
+          //   透视下越高的音符纵向越压缩，这样它们才与键列、小节线落在同一套透视里。
+          const bottom = cam.yOf((b.start - d) * v);
+          const top = Math.max(-h, cam.yOf((b.end - d) * v));
           const depth = Math.max(0, Math.min(1, (wN - bottom) / Math.max(1, wN)));
-          const inset = Math.round(cwB * 0.12 * depth / 2);
+          // 平板模式保留老的「越远越窄」内缩（没有相机，靠它制造远近感）；
+          // 开了透视就**不许**再内缩：宽度必须严格等于键列宽度 × S(t)，否则侧边会离开键列线。
+          const inset = ps > 0.001 ? 0 : Math.round(cwB * 0.12 * depth / 2);
           const cw = Math.max(2, Math.floor(cwB) - inset * 2);
           const sx = sxB + inset;
           // 透视：音符的横截面按"所在高度对应的深度"收拢向消失点 —— 上窄下宽、侧边与键列同向。
@@ -192,6 +202,8 @@ export function createCompiler() {
           const parts = buildNote(P, {
             quad, width: cw, height: bh, color, radius: theme.note.radius,
             alpha: noteAlpha * (1 - 0.5 * depth) * outA, velN, gloss, z: Math.floor(bottom),
+            // ★ 三维玻璃块路径（只有「3D 键盘」打开 + 有透视时才走）：方块底切面/内侧键壁/顶面受光
+            mode3d: ps > 0.001, vpX: w / 2,
           });
           for (const q of parts) pr.push(q);
           // 落点处的那道白热横线（"音符砸到键上"的瞬间），仍归主题的 edge 强度管

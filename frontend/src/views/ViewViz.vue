@@ -134,6 +134,11 @@ function resetColors() {
 }
 const fxThemeInput = ref('');        // 自定义主题名（D8：命名交给用户）
 // 参数滑块的当前值（bg.fx 可能还没这批键 —— store 首次读写会补默认）
+/* ★ 「键盘透视」只在「3D 键盘」开启时生效（编译层同样会强制归零）。
+   平板键上拖透视什么都不会变 —— 与其留一个拖了没反应的控件，不如禁用并说明原因。 */
+function fxParamLocked(p) {
+  return !!(p && p.needs) && !(bg.fx && bg.fx[p.needs]);
+}
 function fxNum(k) {
   const cur = bg.fx ? bg.fx[k] : undefined;
   return typeof cur === 'number' ? cur : FX_DEFAULTS[k];
@@ -648,9 +653,10 @@ onBeforeUnmount(() => {
           <div class="viz-bg-bar">
             <span class="muted small">{{ t('视效参数') }}</span>
             <template v-for="p in vizBg.FX_PARAMS" :key="p.k">
-              <span class="muted small">{{ t(p.label) }}</span>
+              <span class="muted small" :title="fxParamLocked(p) ? t('这项只在「3D 键盘」开启时生效') : ''">{{ t(p.label) }}</span>
               <NumSlider :model-value="fxNum(p.k)" @update:model-value="v2 => vizBg.setFxAny(p.k, +v2)"
-                         :min="p.min" :max="p.max" :step="p.step" range-style="width:74px" :input-width="54" no-input />
+                         :min="p.min" :max="p.max" :step="p.step" range-style="width:74px" :input-width="54" no-input
+                         :disabled="fxParamLocked(p)" />
             </template>
           </div>
           <div class="viz-bg-bar">

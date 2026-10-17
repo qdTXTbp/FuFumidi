@@ -211,7 +211,9 @@ export const FX_DEFAULTS = {
 
 /* 参数元数据 —— **单一来源**：面板据此渲染滑块，不用在 store 与 UI 里各写一遍范围 */
 export const FX_PARAMS = [
-  { k: 'persp', label: '键盘透视', min: 0, max: 1, step: 0.05 },
+  // ★ needs：这项只在「3D 键盘」开启时有意义（编译层也会把它强制归零，见 scene/compile.js）。
+  //   面板据此禁用滑杆 —— 平板键上拖"透视"什么都不会变，留着就是个骗人的控件。
+  { k: 'persp', label: '键盘透视', min: 0, max: 1, step: 0.05, needs: 'keys3d' },
   { k: 'bloom', label: '泛光', min: 0, max: 1.2, step: 0.05 },
   { k: 'bloomThr', label: '泛光阈值', min: 0, max: 1, step: 0.05 },
   { k: 'flash', label: '击键闪光', min: 0, max: 1.5, step: 0.05 },
