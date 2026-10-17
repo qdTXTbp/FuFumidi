@@ -149,6 +149,12 @@
   - 业务接入：`export:audio` 登记任务（写盘完成 done / 失败 fail）；E2E 模式额外注册 `tasks:demo` 造可控假任务；
   - 测试：`scripts/test-taskcenter.mjs` 7 例（状态机/节流/取消/保留/上限/日志）；E2E `tasks-ui`（demo 任务 → 面板显示 running+进度 → 取消 → 面板显示已取消）。
 
+- **P1-1a/b 编排时间线 ✅（UI 第一版）**：
+  - 模型（P1-1a）：`core/arrange.js` 扩展 clip 纯函数（add/move/resize/split/duplicate、track flags、markers/regions、`renderPlan` 秒映射、`focusRangeOfClip`），13 测例；
+  - UI（P1-1b）：`views/ViewArrange.vue`（挂在「视图」组新页签「编排」，`/arrange` 重定向）——画布标尺/小节网格/C4 `iterBars`、clip 圆角块、拖拽移动+跨轨、拖边缩放、按播放头切分、删除、静音轨道、加标记/区间、缩放/全览/滚轮、播放头、双击片段写 focus 意图并跳编辑页（ViewEdit 读取后定位轨道+起点）；
+  - E2E `arrange-ui`：挂载、片段统计、加两次标记、加区间、全览、截图。
+  - 剩余（P1-1c）：编排状态持久化到工程（`song_project.js` 的 clips）、按 clip 离线渲染接 `export:audio`、撤销走 C1 命令注册表。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；

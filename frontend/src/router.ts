@@ -14,6 +14,8 @@ const routes: RouteRecordRaw[] = [
   { path: '/convert', name: 'convert', component: () => import('./views/ViewConvert.vue') },
   { path: '/music', name: 'music', component: () => import('./views/ViewMusic.vue') },
   { path: '/views', name: 'views', component: () => import('./views/ViewViews.vue') },
+  // 编排时间线（P1-1）：并入「视图」组做页签，旧/外部链接 /arrange 重定向过去
+  { path: '/arrange', redirect: { path: '/views', query: { tab: 'arrange' } } },
   { path: '/transcode', name: 'transcode', component: () => import('./views/ViewTranscode.vue') },
   { path: '/resources', name: 'resources', component: () => import('./views/ViewResources.vue') },
   { path: '/models', redirect: { path: '/resources', query: { tab: 'model' } } },

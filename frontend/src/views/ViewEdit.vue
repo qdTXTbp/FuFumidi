@@ -2108,6 +2108,17 @@ watch(trackIndex, () => {
 onMounted(async () => {
   window.addEventListener('keydown', onKey);
   syncCommandRegistry();   // C1：setup 结束后再求值 menuGroups（避开后段 ref 的 TDZ）
+  // P1-1b：编排时间线双击片段 → 定位到该轨道 + 原曲起点（focusRangeOfClip 写过来的意图）
+  try {
+    const focus = window.__fufumidiArrangeFocus;
+    if (focus && song.value) {
+      window.__fufumidiArrangeFocus = null;
+      if (focus.trackIndex >= 0 && focus.trackIndex < song.value.tracks.length) trackIndex.value = focus.trackIndex;
+      app.seekSec(song.value.baseSec(focus.fromTick || 0) / (app.tempo || 1));
+      await nextTick();
+      editor.value?.draw?.();
+    }
+  } catch (e) {}
   /* 调试桥（M3 起）：本项目的验收方式是「装好的应用 + CDP 驱动」，而生产包里拿不到
      组件实例（__vueParentComponent 只在 dev 有）。所以留一个显式开关：
      localStorage.fufumidi_debug = '1'（或 hash 里带 debug=1）时把画布 API 挂到 window。

@@ -5,6 +5,7 @@ import Icon from '../components/Icon.vue';
 import ViewViz from './ViewViz.vue';
 import ViewAnalyze from './ViewAnalyze.vue';
 import ViewScore from './ViewScore.vue';
+import ViewArrange from './ViewArrange.vue';
 import { t } from '../core/i18n.js';
 const route = useRoute();
 const router = useRouter();
@@ -12,8 +13,9 @@ const tabs = [
   { id: 'viz', label: t('可视化'), ic: 'viz' },
   { id: 'analyze', label: t('分析'), ic: 'chart' },
   { id: 'score', label: t('乐谱'), ic: 'score' },
+  { id: 'arrange', label: t('编排'), ic: 'edit' },
 ];
-const comps = { viz: ViewViz, analyze: ViewAnalyze, score: ViewScore };
+const comps = { viz: ViewViz, analyze: ViewAnalyze, score: ViewScore, arrange: ViewArrange };
 const validTab = (id) => tabs.some(x => x.id === id);
 const tab = ref(validTab(String(route.query.tab || '')) ? String(route.query.tab) : tabs[0].id);
 const cur = computed(() => comps[tab.value]);
