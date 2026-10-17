@@ -2,8 +2,14 @@
 
 export default async function (app) {
   await app.waitFor('!!(window.__fufumidiE2E)', { timeout: 20000, message: 'E2E 测试钩子已注册' });
-  await app.navigate('#/resources?tab=storage');
-  await app.waitFor('location.hash.indexOf("storage") >= 0', { timeout: 15000 });
+  // 路由初始化可能与首次导航竞争（首屏 overlay/恢复流程也会写 hash）：导航后确认，被覆盖就再导航一次
+  let hashOk = false;
+  for (let i = 0; i < 12 && !hashOk; i++) {
+    await app.navigate('#/resources?tab=storage');
+    await new Promise((r) => setTimeout(r, 250));
+    hashOk = !!(await app.eval('location.hash.indexOf("storage") >= 0'));
+  }
+  app.assert(hashOk, '导航到资源中心存储页签');
   await app.waitFor('!!document.querySelector("[data-guide=storage-panel]")', { timeout: 30000, message: '存储面板出现' });
   await app.waitFor('document.body.innerText.indexOf("存储治理") >= 0', { timeout: 15000 });
   const info = JSON.parse(await app.eval('JSON.stringify({ rows: document.querySelectorAll(".st-row").length, areas: document.querySelectorAll("[data-area]").length, text: document.querySelector("[data-guide=storage-panel]").innerText })'));

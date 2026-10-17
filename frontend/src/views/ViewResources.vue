@@ -30,6 +30,8 @@ watch(() => route.query.tab, (v) => {
 const app = useAppStore();
 const toast = (m, type) => app.toast(m, type);
 const settingsStore = useSettingsStore();
+// P1-12 专家模式：普通模式隐藏 OMR / GPU 等高级入口（设置 → 功能 → 专家模式）
+const expertMode = computed(() => !!(settingsStore.settings && settingsStore.settings.advanced_mode));
 const bridge = window.fuBridge;
 
 /* ---------------- 检查结果弹窗 ---------------- */
@@ -722,7 +724,7 @@ onBeforeUnmount(() => {
 
 
     <!-- ============ GPU 加速 ============ -->
-    <div class="card res-sec">
+    <div v-if="expertMode" class="card res-sec" data-guide="res-gpu">
       <div class="res-sec-head"><Icon name="zap" :size="15" /> {{ t('GPU 加速') }}</div>
       <div class="field-row">
         <div>
@@ -804,7 +806,7 @@ onBeforeUnmount(() => {
          声库属于资源，和模型放在同一处，用户只需要记住一个入口。 -->
 
     <!-- ============ 识谱引擎（变谱页的光学识谱增强包，Plan §6.2） ============ -->
-    <div class="card res-sec" data-guide="res-omr">
+    <div v-if="expertMode" class="card res-sec" data-guide="res-omr">
       <div class="res-sec-head"><Icon name="score" :size="15" /> {{ t('识谱引擎') }}</div>
       <div class="field-row">
         <div>

@@ -191,6 +191,12 @@
     - `renderOffline` 按播放同一套参数混音（仅非静音轨、总长含 0.3s 尾音）
   - 需要导出的 `applyFades` 已加 `export`（测试用，生产行为不变）。
 
+- **P1-12 控件契约 + 任务模板 + 专家模式 ✅**：
+  - 新 `core/ui_contract.js`：17 条控件语义（播放/撤销/重做/保存/量化/切分/删除/复制/缩放/全选…）声明**规范键位 + 覆盖视图 + 是否必需**；`validateControlContract` 检出「快捷键冲突 / 跨视图键位漂移 / 未声明语义 / 必需项缺失」；吸附档位 `SNAP_OPTIONS` 与模板共用一份；8 测例；
+  - 新 `core/workspace_templates.js`：钢琴改编 / 乐队编曲 / 短视频 BGM 三个**任务模板**（只改吸附/着色/CC，不动曲目），`normalizeTemplatePrefs` 把吸附夹到合法档位，`applyTemplate` 只覆盖模板键；编辑器检查器「网格与显示」新增模板 chips；6 测例；
+  - **专家模式**沿用已有设置键 `advanced_mode`（默认关）：普通模式隐藏「翻唱」导航与资源中心「OMR 识谱引擎 / GPU 加速」区块；设置 → 功能 新增开关；TopBar 与命令面板统一走 `core/expert.js` 过滤；4 测例 + E2E `expert-mode-ui`（普通隐藏 → 打开显式设置后重载可见 → 复原 → 模板把吸附切到 1/8）；
+  - 布局预设（`stores/workspace.ts` 的编曲/调教/校对/混音）是既有能力，与任务模板正交保留。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；

@@ -44,6 +44,8 @@ import { commands as commandRegistry } from '../core/commands.js';
 import { timelineOfSong, formatBarBeat } from '../core/timeline.js';
 // P1-6 影视配乐：帧吸附 / 时间码 / 视频偏移
 import { FPS_PRESETS, timecodeOfTick, videoTimeForPlayhead } from '../core/frame_snap.js';
+// P1-12 任务模板：钢琴改编 / 乐队编曲 / 短视频 BGM（只改编辑偏好，不动曲目）
+import { listTemplates, applyTemplate } from '../core/workspace_templates.js';
 import { noteName, clamp, KEY_NAME, removeNotes } from '../core/util.js';
 import { fitMenu } from '../core/menu.js';
 import { MACRO_DOC, macroToCmd, applyMacroScript, parseMacroScript } from '../core/macro.js';
@@ -69,6 +71,18 @@ function cssVar(name, fb) {
 const tool = ref('pencil');
 const snapRatio = ref(0.0625);
 // P1-6：帧吸附（时间域吸附，适合影视配乐）与视频偏移；持久化到 localStorage
+const taskTemplates = listTemplates();
+/** P1-12：应用任务模板（吸附/着色/CC 泳道），未提到的偏好保持原值 */
+function applyTaskTemplate(id) {
+  const cur = { snapRatio: snapRatio.value, viewMode: viewMode.value, colorMode: colorMode.value, ccEnabled: ccEnabled.value };
+  const r = applyTemplate(cur, id);
+  if (r.prefs.snapRatio != null) snapRatio.value = r.prefs.snapRatio;
+  if (r.prefs.viewMode) viewMode.value = r.prefs.viewMode;
+  if (r.prefs.colorMode) colorMode.value = r.prefs.colorMode;
+  if (r.prefs.ccEnabled != null) ccEnabled.value = r.prefs.ccEnabled;
+  const tpl = taskTemplates.find((x) => x.id === id);
+  if (tpl) toast(t('已应用模板：') + t(tpl.label), 'ok');
+}
 const frameSnapOn = ref((() => { try { return localStorage.getItem('fufumidi_frame_snap') === '1'; } catch (e) { return false; } })());
 const videoFps = ref((() => { try { const v = Number(localStorage.getItem('fufumidi_video_fps') || ''); return FPS_PRESETS.some((p) => p.fps === v) ? v : 25; } catch (e) { return 25; } })());
 const videoOffsetSec = ref((() => { try { const v = Number(localStorage.getItem('fufumidi_video_offset') || ''); return Number.isFinite(v) ? v : 0; } catch (e) { return 0; } })());
@@ -2581,6 +2595,13 @@ onBeforeUnmount(() => {
               <select class="select-input" v-model.number="videoFps">
                 <option v-for="p in FPS_PRESETS" :key="p.fps" :value="p.fps">{{ p.label }}</option>
               </select></div>
+            <!-- P1-12 任务模板：一键把吸附/着色/CC 切到某类工作流 -->
+            <div class="insp-row"><span>{{ t('任务模板') }}</span>
+              <div class="tpl-chips">
+                <button v-for="tp in taskTemplates" :key="tp.id" class="tpl-chip" :title="t(tp.desc)"
+                        :data-guide="'tpl-' + tp.id" @click="applyTaskTemplate(tp.id)">{{ t(tp.label) }}</button>
+              </div>
+            </div>
             <div class="insp-row"><span>{{ t('着色') }}</span>
               <select class="select-input" v-model="colorMode" :title="t('音符着色方案')">
                 <option v-for="c in COLOR_MODES()" :key="c[0]" :value="c[0]">{{ c[1] }}</option>
@@ -3209,6 +3230,10 @@ onBeforeUnmount(() => {
 .insp-row .select-input, .insp-row .num-input { width: 100px; }
 .insp-range { width: 100%; }
 .insp-btns { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
+/* P1-12 任务模板 chips */
+.tpl-chips { display: flex; gap: var(--sp-1); flex-wrap: wrap; justify-content: flex-end; }
+.tpl-chip { border: 1px solid var(--hairline); background: var(--canvas); color: var(--steel); border-radius: var(--r-sm); padding: var(--sp-1) var(--sp-2); cursor: pointer; font-size: var(--fs-sm); }
+.tpl-chip:hover { background: var(--surface-soft); color: var(--ink); }
 .insp-btns .btn { flex: 1; min-width: 0; padding: 3px 6px; font-size: var(--fs-xs); justify-content: center; }
 .ed-stage { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .ed-status { display: flex; align-items: center; gap: var(--sp-4); height: var(--statusbar-h); padding: 0 6px; margin-top: 6px; border-top: 1px solid var(--hairline); font-size: var(--fs-xs); color: var(--stone); min-width: 0; overflow: hidden; flex: none; overflow: hidden; }

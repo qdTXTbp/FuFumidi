@@ -31,7 +31,7 @@ export const VIEWS = [
     hint: '调教 = 让声库把音符唱出来：选歌手、填词、画音高/参数曲线、渲染成音频（声部轨 = 一条人声轨；UTAU / DiffSinger 是两种合成引擎）' },
   // 翻唱：把「分离 → 扒谱 → 合成 → 混音」串成一条工作流。音色可以是 DiffSinger 声库，
   // 也可以是资源中心下载的 GPT-SoVITS 音色（逐句拿原唱那一句当参考重合成）。
-  { id: 'cover', label: '翻唱', ic: 'mic',
+  { id: 'cover', label: '翻唱', ic: 'mic', expert: true,
     hint: '一首歌 → 分离人声 → 扒谱（音符 + 歌词）→ 用你选的音色唱出来 → 混音成成品' },
   // 插件中心：官方插件平台的应用内入口（下载后由主进程解压安装并立即启用）
   { id: 'plugins', label: '插件中心', ic: 'extension', hint: '扩展功能：下载后由主进程安装并立即启用' },

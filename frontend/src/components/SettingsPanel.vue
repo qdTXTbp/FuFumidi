@@ -114,6 +114,7 @@ const form = reactive({
   font_size: 'standard', density: 'comfortable', ui_scale: 1, lang: 'zh',
   engine_path: '', engine_mode: 'universal', perf_mode: 'quality', batch_concurrency: 'auto',
   output_dir: '', name_rule: '', watch_dir: '', watch_enabled: false, file_assoc: true,
+  advanced_mode: false,   // P1-12 专家模式（默认关 = 普通模式，隐藏 OMR/翻唱/GPU 入口）
 });
 
 /* ---------------- 更新 ---------------- */
@@ -202,6 +203,7 @@ async function load() {
   form.watch_dir = s.watch_dir || '';
   form.watch_enabled = !!s.watch_enabled;
   form.file_assoc = s.file_assoc !== false;
+  form.advanced_mode = !!s.advanced_mode;
   // 更新通道：这里必须用**纯归一化**，不能调 setUpdateChannel ——
   // 后者会把值写回 localStorage 与设置，而 s 可能来自 store 的内存缓存（未必最新），
   // 会把用户刚选的通道反向覆盖成旧值，表现为「选了测试版，重开设置又变回正式版」。
@@ -1131,7 +1133,7 @@ function apply() {
     batch_concurrency_manual: form.batch_concurrency !== 'auto',
     output_dir: form.output_dir, name_rule: form.name_rule,
     watch_dir: form.watch_dir, watch_enabled: form.watch_enabled,
-    file_assoc: form.file_assoc,
+    file_assoc: form.file_assoc, advanced_mode: form.advanced_mode,
   };
   let saved = false;
   settingsStore.save(payload).then(() => { if (!saved) toast(t('设置已保存')); }).catch(() => toast(t('设置保存失败'), 'error'));
@@ -1501,6 +1503,15 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
                 <option value="balanced">{{ t('均衡') }}</option>
                 <option value="fast">{{ t('低配省资源') }}</option>
               </select>
+            </div>
+          </div>
+          <div class="field-row" data-guide="expert-mode-row">
+            <div>
+              <div class="fr-label">{{ t('专家模式') }}</div>
+              <div class="fr-hint">{{ t('打开后显示 OMR / 翻唱 / GPU 等高级入口；关闭时界面保持精简（可随时打开）') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <label class="ov-check"><input type="checkbox" v-model="form.advanced_mode" data-guide="expert-mode-toggle" /> {{ t('显示高级入口') }}</label>
             </div>
           </div>
           <div class="field-row">

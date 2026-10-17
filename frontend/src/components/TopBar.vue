@@ -1,12 +1,17 @@
 <script setup>
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import Icon from './Icon.vue';
 import { useAppStore, VIEWS } from '../stores/app';
+import { useSettingsStore } from '../stores/settings';
+import { visibleViews } from '../core/expert.js';
 import { t } from '../core/i18n.js';
 import { getAppVersion } from '../core/version.js';
 
 const app = useAppStore();
 const state = app;
+const settingsStore = useSettingsStore();
+// P1-12 专家模式：带 expert 标记的导航项（翻唱等）只在专家模式显示
+const navViews = computed(() => visibleViews(VIEWS, settingsStore.settings));
 const setView = (v) => app.setView(v);
 const ICONS = { home: 'home', music: 'music', views: 'viz', transcode: 'convert', resources: 'box', models: 'box', soundfonts: 'music', singer: 'utau', utau: 'utau', diffsinger: 'utau', cover: 'mic', plugins: 'extension', play: 'play2', lyrics: 'music', edit: 'edit', viz: 'viz', analyze: 'chart', score: 'score', transcribe: 'transcribe', convert: 'convert' };
 const menuOpen = ref(false);
@@ -43,7 +48,7 @@ function about() {
     <button class="icon-btn" :title="t('折叠 / 展开侧边栏')" :aria-label="t('折叠 / 展开侧边栏')" @click="toggleSidebar">
       <Icon name="panel" :size="17" />
     </button>
-    <div class="tab" v-for="v in VIEWS" :key="v.id" :class="{ active: state.view === v.id }" :aria-current="state.view === v.id ? 'page' : null" :data-view="v.id"
+    <div class="tab" v-for="v in navViews" :key="v.id" :class="{ active: state.view === v.id }" :aria-current="state.view === v.id ? 'page' : null" :data-view="v.id"
          :title="v.hint ? t(v.hint) : null" @click="setView(v.id)">
       <Icon :name="ICONS[v.id]" :size="14" />
       {{ t(v.label) }}
