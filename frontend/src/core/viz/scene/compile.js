@@ -18,6 +18,7 @@ import * as P from './primitives.js';
 import { buildNote } from './note.js';
 import { projectX, depthScale, beamQuads, keyRipple } from './effects.js';
 import { buildKeyboard, makeKeyboardProjection } from './keyboard.js';
+import { rampLight, lightAt } from './light.js';
 
 const DEFAULT_BUDGET = { spark: 420, ring: 60, beam: 90 };
 
@@ -100,6 +101,13 @@ export function createCompiler() {
     const visSec = wN > 0 && v > 0 ? sTop / v : 0;
     const energy = Math.max(0, Math.min(1, opts.energy || 0));
 
+    // ---------- 场景光带（2026-10-17）：光影随「键盘透视」变化的来源 ----------
+    // 坡道上方一条"棚灯"光带；它经坡道反射进相机的深度由**相机高度**决定 ——
+    // 相机越高压（透视越大），反射点越往观众这边移，拖滑杆时光带就沿坡道扫过去。
+    // 音符层吃的 look / bar / depthT 全部从这里出，见 scene/note.js 的三维玻璃块。
+    const look = ps;
+    const light = rampLight(sTop, ps);
+
     // ---------- 歌曲块（沿用旧引擎的构建与裁剪） ----------
     if (song && state.songRef !== song) {
       const built = buildVizBlocks(song);
@@ -177,6 +185,13 @@ export function createCompiler() {
           const color = noteColorOf(fx, b);
           const near = Math.max(0, 1 - Math.abs(wN - bottom) / Math.max(1, wN * 0.16));
           const bh = Math.max(bottom - top, 5);
+          // ★ 视角相关量（由**相机**算出，不是写死的贴图位置）：
+          //   sMid   = 这条音符在坡道上的距离（落点线以上多少像素）
+          //   depthT = 坡道深度 0..1（0 落点线 / 1 屏幕最远）
+          //   lightBar = 它被那条光带照到的强度 0..1（光带位置 barS 随透视移动）
+          const sMid = ps > 0.001 ? cam.sOf(Math.max(-h, Math.min(wN, (top + bottom) / 2))) : 0;
+          const depthT = sTop > 0 ? Math.max(0, Math.min(1, sMid / sTop)) : 0;
+          const lightBar = ps > 0.001 ? lightAt(light, sMid) : 0;
           // ★ fx.gloss（面板「音符质感」）必须真的接上：上一版它只是个没人读的开关（实测死控件）。
           //   接上后它管三件事：落点光晕、白热内芯、边缘高光。
           const gloss = fx.gloss !== false;
@@ -204,6 +219,8 @@ export function createCompiler() {
             alpha: noteAlpha * (1 - 0.5 * depth) * outA, velN, gloss, z: Math.floor(bottom),
             // ★ 三维玻璃块路径（只有「3D 键盘」打开 + 有透视时才走）：方块底切面/内侧键壁/顶面受光
             mode3d: ps > 0.001, vpX: w / 2,
+            // ★ 视角相关（2026-10-17）：俯视角 / 光带强度 / 坡道深度 —— 光影随透视变化
+            look, bar: lightBar, depthT,
             // ★ 三维结构随「键盘透视」淡入（0→0.25 走完）：滑杆刚离开 0 时不会"啪"地变高光
             k3d: Math.min(1, ps / 0.25),
           });
