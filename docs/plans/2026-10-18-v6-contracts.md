@@ -197,6 +197,12 @@
   - **专家模式**沿用已有设置键 `advanced_mode`（默认关）：普通模式隐藏「翻唱」导航与资源中心「OMR 识谱引擎 / GPU 加速」区块；设置 → 功能 新增开关；TopBar 与命令面板统一走 `core/expert.js` 过滤；4 测例 + E2E `expert-mode-ui`（普通隐藏 → 打开显式设置后重载可见 → 复原 → 模板把吸附切到 1/8）；
   - 布局预设（`stores/workspace.ts` 的编曲/调教/校对/混音）是既有能力，与任务模板正交保留。
 
+- **P1-13 B1 手势状态机 ✅（核心 + 编排页接入）**：
+  - 新 `core/gesture.js`（10 测例）：`resolveIntent` 判定 8 种语义（tap / drag / resize-start / resize-end / marquee / pan / create / erase），边缘命中 6px、**3px 拖动阈值**（手抖不再变成"挪 1 tick"，点击与拖动撤销粒度分开）；
+  - `beginGesture/updateGesture/endGesture/cancelGesture`：`endGesture` 返回 `{tap, moved, intent, dx, snapDx}`，吸附通过注入 `snapX/snapY`（引擎不假设坐标含义）；`isMutatingIntent` 区分是否需要推撤销；未 active 时 update/end/cancel 全部安全；
+  - 接入编排页：拖片段/拖边缩放/中键平移/标尺拖拽框区间都走状态机；**标尺拖动预览带**（松手才落 region，10px 以内当点击 seek）；E2E `arrange-ui` 增加「标尺拖出 1 个区间」断言；
+  - 剩余（B1 后续）：EditorCanvas / ViewSing 的既有 dragState 迁移到同一状态机；B2 悬浮工具条/就地编辑、B3 曲线引擎、B4 导航/mini-map。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；

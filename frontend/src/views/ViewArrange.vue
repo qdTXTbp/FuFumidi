@@ -8,6 +8,8 @@ import { useAppStore } from '../stores/app';
 import { t } from '../core/i18n.js';
 import { themeColor } from '../core/palette.js';
 import { timelineOfSong, iterBars, secOfTick, tickOfSec } from '../core/timeline.js';
+// P1-13 B1：手势状态机（拖动/拖边/框选/平移/点击的判定与阈值统一走 core/gesture.js）
+import { createGestureState, beginGesture, updateGesture, endGesture, INTENTS } from '../core/gesture.js';
 import {
   createArrangeState, addClip, removeClip, moveClip, resizeClip, splitClip,
   setTrackFlags, addMarker, addRegion, clipLen, findClip, focusRangeOfClip,
@@ -25,7 +27,8 @@ const scrollX = ref(0);      // tick
 const rowH = 56;
 const RULER_H = 26;
 let raf = 0;
-let drag = null;
+let gs = createGestureState();       // 当前指针手势（P1-13）
+let dragCtx = null;                  // 拖动上下文：clip 原值 + 命中边缘
 
 const timeline = computed(() => {
   const s = song.value;
@@ -168,6 +171,14 @@ function draw() {
     g.fillStyle = 'rgba(224,108,117,.10)';
     g.fillRect(Math.max(0, x0), RULER_H, Math.min(W, x1) - Math.max(0, x0), H - RULER_H);
   }
+  // 标尺拖拽中的区间预览（P1-13：拖宽即框区间，松手才落地）
+  if (gs && gs.active && gs.ruler && gs.moved && gs.start && gs.point) {
+    const a = Math.min(gs.start.x, gs.point.x), b = Math.max(gs.start.x, gs.point.x);
+    g.fillStyle = 'rgba(224,108,117,.16)';
+    g.fillRect(Math.max(0, a), RULER_H, Math.min(W, b) - Math.max(0, a), H - RULER_H);
+    g.strokeStyle = accent; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(a, RULER_H); g.lineTo(a, H); g.moveTo(b, RULER_H); g.lineTo(b, H); g.stroke(); g.lineWidth = 1;
+  }
   for (const m of state.value.markers) {
     const x = xOfTick(m.tick);
     if (x < -10 || x > W + 10) continue;
@@ -212,38 +223,79 @@ function hitClip(x, y) {
 function onDown(e) {
   const rect = e.currentTarget.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
-  if (y < RULER_H) {
-    // 点标尺 = seek
-    try { const s = song.value; if (s && timeline.value) app.seekSec(secOfTick(timeline.value, Math.max(0, Math.round(tickOfX(x))))); } catch (err) {}
-    return;
+  const inRuler = y < RULER_H;
+  const hit = inRuler ? null : hitClip(x, y);
+  dragCtx = null;
+  if (hit) {
+    selected.value = hit.clip.id;
+    const { trackIndex } = tickAt(x, y);
+    dragCtx = { clipId: hit.clip.id, edge: hit.edge, origStart: hit.clip.startTick, origEnd: hit.clip.endTick, trackIndex };
+  } else if (!inRuler) {
+    selected.value = '';
   }
-  const hit = hitClip(x, y);
-  if (!hit) { selected.value = ''; draw(); return; }
-  selected.value = hit.clip.id;
-  const { trackIndex } = tickAt(x, y);
-  drag = { clipId: hit.clip.id, edge: hit.edge, startX: x, startY: y, origStart: hit.clip.startTick, origEnd: hit.clip.endTick, trackIndex };
+  // 命中交给手势状态机判 intent（边缘 6px 内 = resize，空白 = marquee，中键 = pan）
+  const hitInfo = hit && {
+    bounds: { left: Math.max(96, xOfTick(hit.clip.startTick)), right: xOfTick(hit.clip.endTick) },
+    edge: hit.edge,
+  };
+  beginGesture(gs, { point: { x, y }, hit: hitInfo, button: e.button, tool: 'select' });
+  gs.ruler = inRuler;
+  gs.rulerStartTick = inRuler ? Math.max(0, Math.round(tickOfX(x))) : 0;
+  gs.panLastX = x;
   try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
   draw();
 }
 function onMove(e) {
-  if (!drag) return;
+  if (!gs.active) return;
   const rect = e.currentTarget.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
-  const dTick = Math.round((x - drag.startX) / zoom.value);
-  if (drag.edge === 'start') {
-    state.value = resizeClip(state.value, drag.clipId, 'start', Math.max(0, drag.origStart + dTick));
-  } else if (drag.edge === 'end') {
-    state.value = resizeClip(state.value, drag.clipId, 'end', Math.max(1, drag.origEnd + dTick));
+  updateGesture(gs, { x, y });
+  if (!gs.moved) return;                       // 3px 阈值内还是"点击"
+  if (gs.intent === INTENTS.PAN) {
+    const d = x - (gs.panLastX == null ? gs.start.x : gs.panLastX);
+    gs.panLastX = x;
+    scrollX.value = Math.max(0, scrollX.value - d / zoom.value);
+    draw();
+    return;
+  }
+  if (gs.ruler) { draw(); return; }            // 标尺拖拽：onUp 落成区间（draw 里画预览带）
+  if (!dragCtx) { draw(); return; }
+  const dTick = Math.round(gs.dx / zoom.value);
+  if (dragCtx.edge === 'start') {
+    state.value = resizeClip(state.value, dragCtx.clipId, 'start', Math.max(0, dragCtx.origStart + dTick));
+  } else if (dragCtx.edge === 'end') {
+    state.value = resizeClip(state.value, dragCtx.clipId, 'end', Math.max(1, dragCtx.origEnd + dTick));
   } else {
     const row = Math.floor((y - RULER_H) / rowH);
     const tr = state.value.tracks[Math.max(0, Math.min(state.value.tracks.length - 1, row))];
-    const patch = { startTick: Math.max(0, drag.origStart + dTick) };
+    const patch = { startTick: Math.max(0, dragCtx.origStart + dTick) };
     if (tr) patch.trackId = tr.id;
-    state.value = moveClip(state.value, drag.clipId, patch);
+    state.value = moveClip(state.value, dragCtx.clipId, patch);
   }
   draw();
 }
-function onUp(e) { drag = null; try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (err) {} }
+function onUp(e) {
+  const wasActive = gs.active;
+  const inRuler = gs.ruler;
+  const rulerStart = gs.rulerStartTick || 0;
+  const end = endGesture(gs);
+  try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (err) {}
+  dragCtx = null;
+  if (wasActive && inRuler) {
+    if (end.moved && end.end) {
+      // 标尺拖拽 = 框一个区间（比"加区间"按钮更直观；太短当点击）
+      const tick2 = Math.max(0, Math.round(tickOfX(end.end.x)));
+      const a = Math.min(rulerStart, tick2), b = Math.max(rulerStart, tick2);
+      if (b - a >= Math.max(10, Math.round(zoom.value > 0 ? 20 / zoom.value : 10))) {
+        state.value = addRegion(state.value, { name: 'R' + (regionCount.value + 1), startTick: a, endTick: b });
+      }
+    } else {
+      // 点标尺 = seek
+      try { const s = song.value; if (s && timeline.value) app.seekSec(secOfTick(timeline.value, rulerStart)); } catch (err) {}
+    }
+  }
+  draw();
+}
 function onWheel(e) {
   e.preventDefault();
   if (e.ctrlKey) { setZoom(e.deltaY < 0 ? 1.15 : 0.87); return; }

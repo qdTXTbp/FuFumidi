@@ -30,6 +30,14 @@ export default async function (app) {
   const stat2 = await app.eval('(document.querySelector(".arr-stat") || {}).innerText || ""');
   app.assert(stat2.indexOf('区间') >= 0, '区间计数出现：' + stat2);
   await clickBtn('全览');
+  // P1-13：标尺拖拽 = 框一个区间（手势状态机：超过阈值才算拖动）
+  const beforeStat = await app.eval('(document.querySelector(".arr-stat") || {}).innerText || ""');
+  const beforeRegions = Number((beforeStat.match(/(\d+) 区间/) || [])[1] || 0);
+  await app.eval("(() => { const cv = document.querySelector('[data-guide=arrange-canvas] canvas'); const r = cv.getBoundingClientRect(); const opts = { bubbles: true, pointerId: 1, pointerType: 'mouse', isPrimary: true }; cv.dispatchEvent(new PointerEvent('pointerdown', { ...opts, clientX: r.left + 180, clientY: r.top + 10 })); cv.dispatchEvent(new PointerEvent('pointermove', { ...opts, clientX: r.left + 420, clientY: r.top + 10 })); cv.dispatchEvent(new PointerEvent('pointerup', { ...opts, clientX: r.left + 420, clientY: r.top + 10 })); return true; })()");
+  await new Promise((r2) => setTimeout(r2, 250));
+  const afterStat = await app.eval('(document.querySelector(".arr-stat") || {}).innerText || ""');
+  const afterRegions = Number((afterStat.match(/(\d+) 区间/) || [])[1] || 0);
+  app.assert(afterRegions === beforeRegions + 1, '标尺拖拽新增区间：' + beforeRegions + ' → ' + afterRegions);
   await app.screenshot('arrange-view');
   app.assert(true, '编排视图交互通过：' + stat2);
 }
