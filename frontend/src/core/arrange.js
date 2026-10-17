@@ -297,3 +297,71 @@ export function renderPlan(state, timeline, opts = {}) {
 export function focusRangeOfClip(clip) {
   return { fromTick: clip.offsetTick, toTick: clip.offsetTick + clipLen(clip), trackId: clip.trackId };
 }
+
+/* ============================================================
+ * P1-1c 编排持久化 + 按 clip 渲染计划
+ * ============================================================ */
+function _plainArrState(state) {
+  return {
+    tracks: (state.tracks || []).map((t) => ({ id: t.id, name: t.name, color: t.color, mute: !!t.mute, solo: !!t.solo, height: t.height })),
+    clips: (state.clips || []).map((c) => ({ id: c.id, trackId: c.trackId, startTick: c.startTick, endTick: c.endTick, offsetTick: c.offsetTick, name: c.name, color: c.color })),
+    markers: (state.markers || []).map((m) => ({ id: m.id, title: m.title, tick: m.tick, color: m.color })),
+    regions: (state.regions || []).map((r) => ({ id: r.id, name: r.name, startTick: r.startTick, endTick: r.endTick, color: r.color })),
+  };
+}
+
+/** 把编排状态挂到 song 上（工程保存/会话恢复用；纯数据，可 JSON 序列化） */
+export function writeArrangeToSong(song, state) {
+  if (!song) return null;
+  const plain = _plainArrState(state || createArrangeState({}));
+  song.arrange = plain;
+  return plain;
+}
+
+/** 从 song 读编排状态；没有/不合法返回 null（调用方自己建默认） */
+export function readArrangeFromSong(song) {
+  if (!song || !song.arrange) return null;
+  try {
+    const st = createArrangeState(song.arrange);
+    return validateArrangeState(st).ok ? st : null;
+  } catch (e) { return null; }
+}
+
+/** 按当前曲目生成默认编排：有音符的轨道各一个整曲 clip（最多 16 轨，避免超宽） */
+export function defaultArrangeState(song, opts = {}) {
+  if (!song) return createArrangeState({});
+  const maxTracks = Math.max(1, Number(opts.maxTracks) || 16);
+  const tracks = [];
+  const clips = [];
+  const end = Math.max(1920, song.totalTicks || 0);
+  (song.tracks || []).forEach((tr, i) => {
+    if (!tr.notes || !tr.notes.length) return;
+    if (tracks.length >= maxTracks) return;
+    const id = 't' + i;
+    tracks.push({ id, name: tr.name || ('轨道 ' + (i + 1)), mute: !!tr.mute, solo: !!tr.solo });
+    clips.push({ id: 'clip-' + (i + 1), trackId: id, startTick: 0, endTick: end, offsetTick: 0, name: tr.name || ('轨道 ' + (i + 1)) });
+  });
+  return createArrangeState({ tracks, clips });
+}
+
+/**
+ * 按 clip 渲染计划（P1-1c）：
+ *   每个 clip 需要「从原曲 offsetSec 起渲染 durationSec，再放到 arrange 时间线的 placeSec」。
+ * 返回 { jobs, totalSec }；jobs 已按 placeSec 排序。scale=播放倍速（导出时若 1.5×，两边时间同除）。
+ */
+export function clipsRenderJobs(state, timeline, opts = {}) {
+  const scale = Math.max(0.05, Number(opts.scale) || 1);
+  const sec = (tick) => secOfTick(timeline, Math.max(0, Math.round(tick || 0)));
+  const jobs = (state.clips || []).map((c) => {
+    const srcStart = sec(c.offsetTick) / scale;
+    const srcEnd = sec(c.offsetTick + clipLen(c)) / scale;
+    const place = sec(c.startTick) / scale;
+    return {
+      clipId: c.id, trackId: c.trackId, name: c.name,
+      placeSec: place, sourceStartSec: srcStart, sourceEndSec: srcEnd,
+      durationSec: Math.max(0, srcEnd - srcStart),
+    };
+  }).filter((j) => j.durationSec > 0).sort((a, b) => a.placeSec - b.placeSec);
+  const totalSec = jobs.reduce((m, j) => Math.max(m, j.placeSec + j.durationSec), 0);
+  return { jobs, totalSec };
+}

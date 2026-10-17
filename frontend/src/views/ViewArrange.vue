@@ -11,6 +11,7 @@ import { timelineOfSong, iterBars, secOfTick, tickOfSec } from '../core/timeline
 import {
   createArrangeState, addClip, removeClip, moveClip, resizeClip, splitClip,
   setTrackFlags, addMarker, addRegion, clipLen, findClip, focusRangeOfClip,
+  readArrangeFromSong, writeArrangeToSong, defaultArrangeState,
 } from '../core/arrange.js';
 
 const app = useAppStore();
@@ -46,27 +47,23 @@ const clipCount = computed(() => state.value.clips.length);
 const markerCount = computed(() => state.value.markers.length);
 const regionCount = computed(() => state.value.regions.length);
 
-function buildDefaultState() {
-  const s = song.value;
-  if (!s) return createArrangeState({});
-  const tracks = (s.tracks || []).map((tr, i) => ({
-    id: 't' + i, name: tr.name || (t('轨道') + ' ' + (i + 1)),
-    mute: !!tr.mute, solo: !!tr.solo,
-  }));
-  const clips = [];
-  const end = Math.max(1920, s.totalTicks || 0);
-  (s.tracks || []).forEach((tr, i) => {
-    if (!tr.notes || !tr.notes.length) return;
-    clips.push({ id: 'clip-' + (i + 1), trackId: 't' + i, startTick: 0, endTick: end, offsetTick: 0, name: tr.name || (t('轨道') + ' ' + (i + 1)) });
-  });
-  return createArrangeState({ tracks, clips });
-}
 function resetState() {
-  state.value = buildDefaultState();
+  const s = song.value;
+  // P1-1c：优先恢复 song.arrange（会话内持久化），没有则按曲目生成默认编排
+  state.value = readArrangeFromSong(s) || defaultArrangeState(s);
   selected.value = '';
   draw();
 }
 watch(song, () => { resetState(); });
+// 编排状态回写 song.arrange（防抖 250ms；同曲目切换页签/重新进入不丢）
+let persistTimer = 0;
+watch(state, () => {
+  draw();
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    try { writeArrangeToSong(song.value, state.value); } catch (e) {}
+  }, 250);
+}, { deep: true });
 
 function ensureCv() {
   const el = cv.value, w = wrap.value;
@@ -312,7 +309,7 @@ onMounted(async () => {
   tickTimer = setInterval(() => { if (app.playing) draw(); }, 100);
 });
 onBeforeUnmount(() => { if (tickTimer) clearInterval(tickTimer); });
-watch(state, () => { draw(); }, { deep: true });
+
 </script>
 
 <template>

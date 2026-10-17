@@ -153,7 +153,8 @@
   - 模型（P1-1a）：`core/arrange.js` 扩展 clip 纯函数（add/move/resize/split/duplicate、track flags、markers/regions、`renderPlan` 秒映射、`focusRangeOfClip`），13 测例；
   - UI（P1-1b）：`views/ViewArrange.vue`（挂在「视图」组新页签「编排」，`/arrange` 重定向）——画布标尺/小节网格/C4 `iterBars`、clip 圆角块、拖拽移动+跨轨、拖边缩放、按播放头切分、删除、静音轨道、加标记/区间、缩放/全览/滚轮、播放头、双击片段写 focus 意图并跳编辑页（ViewEdit 读取后定位轨道+起点）；
   - E2E `arrange-ui`：挂载、片段统计、加两次标记、加区间、全览、截图。
-  - 剩余（P1-1c）：编排状态持久化到工程（`song_project.js` 的 clips）、按 clip 离线渲染接 `export:audio`、撤销走 C1 命令注册表。
+  - **P1-1c ✅**：编排状态回写 `song.arrange`（防抖 250ms；`readArrangeFromSong` 校验失败回退默认）；`clipsRenderJobs` 把 clip 转成「从原曲区间渲染 + 放到时间线 placeSec」的任务（含播放倍速折算）；转换页新增「按编排片段导出」——逐 clip 离线渲染后按 placeSec 叠加到 master，再走既有编码/落盘/manifest 链路。
+  - 剩余：编排编辑走 C1 命令注册表（撤销）；`.fufumidi` 工程包写入 clips（当前只挂 song 内存 + 自动保存的 MIDI 字节不含编排）。
 
 - **P1-2 分析升级 ✅（核心 + UI 第一版）**：
   - 核心：`analysis.js` 新增 K-S 转调滑窗、转调段合并、和弦+能量段落聚类、和弦名解析、罗马数字（按输入拼写判升降号）；9 测例；

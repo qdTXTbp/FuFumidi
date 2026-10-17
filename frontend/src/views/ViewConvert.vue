@@ -18,6 +18,9 @@ import { renderSongWithSf2 } from '../core/sf2render.js';
 // P0-4b：导出的编码/DSP/选项映射（纯模块，有单测）
 import { encodeWav, measureLufs, measurePeakDb, applyLimiter, normalizeLoudness } from '../core/export_audio.js';
 import { EXPORT_FORMATS, LOUDNESS_TARGETS, formatInfo, normalizeExportOptions, exportOptionsToSettings, buildExportMeta, estimateFileBytes } from '../core/export_options.js';
+// P1-1c：按编排片段导出
+import { clipsRenderJobs, readArrangeFromSong } from '../core/arrange.js';
+import { timelineOfSong } from '../core/timeline.js';
 import NumSlider from '../components/NumSlider.vue';
 
 const tempo = ref(1);
@@ -32,6 +35,11 @@ const done = ref(false);
 /* P0-4b 导出质量选项：格式/位深、dither、响度目标、总线限幅、分轨 */
 const bridge = window.fuBridge;
 const exp = reactive(normalizeExportOptions({}));
+const arrangeExport = ref(false);   // P1-1c：按「视图 → 编排」的片段排布离线渲染
+const hasArrange = computed(() => {
+  const s = song.value;
+  try { const st = s && readArrangeFromSong(s); return !!(st && st.clips && st.clips.length); } catch (e) { return false; }
+});
 onMounted(async () => {
   try {
     const s = (bridge && bridge.getSettings) ? await bridge.getSettings() : {};
@@ -195,7 +203,14 @@ async function renderAudio() {
   busy.value = true; done.value = false; progress.value = 0;
   const g = clamp(gain.value / 100, 0, 2);
   try {
-    if (exp.stems) {
+    if (arrangeExport.value && hasArrange.value) {
+      const ab = await renderArrangeToBuffer(s, g);
+      if (!ab) { toast(t('编排时间线里还没有片段'), 'warn'); return; }
+      progress.value = 92;
+      await exportRendered(ab, s.name + '_arrange', 1);
+      progress.value = 100; done.value = true;
+      toast(t('已按编排片段导出'));
+    } else if (exp.stems) {
       await renderStems(s, g);
     } else {
       const buf = await renderAudioBuffer(s, { rate: rate.value, scale: tempo.value, mode: preset.value, onProgress: (p) => { progress.value = Math.round(p * 90); } });
@@ -273,6 +288,41 @@ async function exportRendered(buf, baseName, gainMul) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   return true;
+}
+
+/**
+ * P1-1c 按编排片段导出：按 clipsRenderJobs 的顺序，逐个从原曲区间离线渲染，再按 placeSec
+ * 贴到 master 时间线上（overlap 相加），最后走与普通导出同一条编码/落盘链路。
+ */
+async function renderArrangeToBuffer(s, g) {
+  const st = readArrangeFromSong(s);
+  if (!st || !st.clips.length) return null;
+  const tl = timelineOfSong(s);
+  const { jobs, totalSec } = clipsRenderJobs(st, tl, { scale: tempo.value });
+  if (!jobs.length) return null;
+  const sr = rate.value;
+  const totalLen = Math.max(1, Math.ceil((totalSec + 1.5) * sr));
+  const master = [new Float32Array(totalLen), new Float32Array(totalLen)];
+  for (let i = 0; i < jobs.length; i++) {
+    const j = jobs[i];
+    progress.value = Math.max(2, Math.round((i / jobs.length) * 80));
+    const buf = await renderAudioBuffer(s, {
+      rate: sr, scale: tempo.value, mode: preset.value,
+      startSec: j.sourceStartSec, endSec: j.sourceEndSec,
+    });
+    const off = Math.max(0, Math.round(j.placeSec * sr));
+    const n = Math.min(buf.length, totalLen - off);
+    for (let ch = 0; ch < 2; ch++) {
+      const src = buf.getChannelData(Math.min(ch, buf.numberOfChannels - 1));
+      const dst = master[ch];
+      for (let k = 0; k < n; k++) dst[off + k] += src[k] * g;
+    }
+  }
+  const oc = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(2, totalLen, sr);
+  const ab = oc.createBuffer(2, totalLen, sr);
+  ab.copyToChannel(master[0], 0);
+  ab.copyToChannel(master[1], 1);
+  return ab;
 }
 
 /** P0-4b 分轨导出：每轨单独离线渲染（其余轨静音）→ 各自一个文件；进度按轨推进 */
@@ -898,6 +948,10 @@ async function renderVideo() {
         <div class="field-row">
           <label>{{ t('分轨导出（每轨一个文件）') }}</label>
           <input type="checkbox" v-model="exp.stems" />
+        </div>
+        <div class="field-row">
+          <label :title="t('按「视图 → 编排」里放置的片段顺序渲染（需要先编排）')">{{ t('按编排片段导出') }}</label>
+          <input type="checkbox" v-model="arrangeExport" :disabled="!hasArrange" />
         </div>
         <div class="field-row gain-row">
           <label>{{ t('输出音量') }}<b style="color:var(--brand-coral)">{{ gain }}%</b></label>

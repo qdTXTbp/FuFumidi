@@ -5,6 +5,7 @@ import {
   createArrangeState, validateArrangeState, clipLen, clipsOfTrack, findClip,
   addClip, removeClip, moveClip, resizeClip, splitClip, duplicateClip, setTrackFlags,
   addMarker, removeMarker, addRegion, removeRegion, renderPlan, focusRangeOfClip,
+  defaultArrangeState, writeArrangeToSong, readArrangeFromSong, clipsRenderJobs,
 } from '../src/core/arrange.js';
 import { normalizeTimeline } from '../src/core/timeline.js';
 
@@ -162,4 +163,49 @@ test('P1-1 所有变更函数都不改入参（函数式）', () => {
   addMarker(s, { title: 'x', tick: 1 });
   addRegion(s, { name: 'x', startTick: 1, endTick: 2 });
   assert.equal(JSON.stringify(s), snapshot, '原 state 字符串未变');
+});
+
+
+test('P1-1c defaultArrangeState：按曲目音符生成默认 clip（每轨一个整曲区间）', () => {
+  const song = { tpb: 480, totalTicks: 9600, tracks: [
+    { name: '钢琴', notes: [{ start: 0, end: 9600, midi: 60 }], mute: true },
+    { name: '空轨', notes: [] },
+    { name: '弦乐', notes: [{ start: 0, end: 4800, midi: 72 }] },
+  ] };
+  const st = defaultArrangeState(song);
+  assert.deepEqual(st.tracks.map((t) => t.name), ['钢琴', '弦乐']);
+  assert.deepEqual(st.clips.map((c) => [c.trackId, c.startTick, c.endTick]), [['t0', 0, 9600], ['t2', 0, 9600]]);
+  assert.equal(st.tracks[0].mute, true);
+  assert.deepEqual(defaultArrangeState(null).clips, []);
+});
+
+test('P1-1c writeArrangeToSong / readArrangeFromSong：round-trip 且坏数据返回 null', () => {
+  const song = { tpb: 480, totalTicks: 3840, tracks: [{ name: 'a', notes: [{ start: 0, end: 3840, midi: 60 }] }] };
+  const st = defaultArrangeState(song);
+  const plain = writeArrangeToSong(song, st);
+  assert.ok(song.arrange && plain === song.arrange);
+  const back = readArrangeFromSong(song);
+  assert.deepEqual(back.clips.map((c) => [c.trackId, c.startTick, c.endTick]), [[st.clips[0].trackId, 0, 3840]]);
+  song.arrange = { tracks: [], clips: [{ id: 'x', trackId: 'nope', startTick: 0, endTick: 10 }] };
+  assert.equal(readArrangeFromSong(song), null, '指向未知轨道的坏数据不恢复');
+  assert.equal(readArrangeFromSong({}), null);
+});
+
+test('P1-1c clipsRenderJobs：每个 clip 的「放置时间 / 原曲区间 / 时长」+ 总长', () => {
+  const tl = normalizeTimeline({ tpb: 480, tempoMap: [{ tick: 0, us: 500000 }] });
+  const st = createArrangeState({
+    tracks: [{ id: 't1' }],
+    clips: [
+      { id: 'c1', trackId: 't1', startTick: 0, endTick: 960, offsetTick: 0 },
+      { id: 'c2', trackId: 't1', startTick: 1920, endTick: 2400, offsetTick: 960 },
+    ],
+  });
+  const r = clipsRenderJobs(st, tl);
+  assert.equal(r.jobs.length, 2);
+  assert.deepEqual(r.jobs.map((j) => j.clipId), ['c1', 'c2'], '按放置时间排序');
+  assert.deepEqual(r.jobs.map((j) => [j.placeSec, j.sourceStartSec, j.sourceEndSec, j.durationSec]), [[0, 0, 1, 1], [2, 1, 1.5, 0.5]]);
+  assert.ok(Math.abs(r.totalSec - 2.5) < 1e-9);
+  const fast = clipsRenderJobs(st, tl, { scale: 2 });
+  assert.ok(Math.abs(fast.jobs[0].durationSec - 0.5) < 1e-9, '2× 播放时片段时长减半');
+  assert.ok(Math.abs(fast.totalSec - 1.25) < 1e-9);
 });
