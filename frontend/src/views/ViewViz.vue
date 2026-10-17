@@ -338,6 +338,25 @@ function readEnergy(syn) {
 const MIN_FRAME_MS = 15;
 let lastPaint = 0;
 let lastAudioTry = 0;   // 音频引擎未就绪时的重试节流
+// ★ 播放中 ctx 挂起看门狗：context 被环境半途压回 suspended 时 currentTick 冻结，
+//   音符瀑布看起来「完全卡住」（2026-10-17 用户实测 5.2.0；启动体检覆盖不到半途）。
+//   连续 ~1.2s 非 running 就自愈一次（store.healEngineDuringPlay：救不回来就重建并续播）。
+let ctxBadSince = 0;
+let ctxHealAt = 0;
+function watchCtxDuringPlay(syn, now) {
+  if (!syn || !syn.ctx) return;
+  if (app.playing && syn.ctx.state !== 'running') {
+    if (!ctxBadSince) ctxBadSince = now;
+    if (now - ctxBadSince > 1200 && now - ctxHealAt > 5000) {
+      ctxHealAt = now;
+      ctxBadSince = 0;
+      try { app.toast(t('音频引擎异常，正在自动恢复…')); } catch (e) {}
+      try { Promise.resolve(app.healEngineDuringPlay()).catch(() => {}); } catch (e) {}
+    }
+  } else {
+    ctxBadSince = 0;
+  }
+}
 function tick(ts) {
   raf = requestAnimationFrame(tick);
   const now = ts || performance.now();
@@ -346,6 +365,7 @@ function tick(ts) {
   const syn = getSynth();
   const song = currentSong.value && currentSong.value.song;
   const player = getPlayer();
+  watchCtxDuringPlay(syn, now);
   // ★ 这里**不能**再 `if (!syn || !song) return;`：频谱 / 示波器 / 实时和弦三块只需要
   //   AnalyserNode（syn），跟有没有 MIDI 谱面（song）无关。以前这一行把三块一起挡掉了 ——
   //   纯音频曲目、或刚启动还没解析谱面时，三块面板永远空白，连 drawChord 里那句

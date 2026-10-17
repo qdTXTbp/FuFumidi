@@ -865,10 +865,26 @@ export const useAppStore = defineStore('app', {
         this.trackPlay(); // 播放统计
       }
     },
+    // ★ 播放中音频引擎自愈（ViewViz 的 ctx 看门狗触发）：AudioContext 会被
+    //   （虚拟音频驱动之类的）环境在半途压回 suspended —— currentTick 冻结，
+    //   用户侧就是「音符下落完全卡住 + 进度条不动」（2026-10-17 实测 5.2.0）。
+    //   启动时的体检覆盖不到半途挂起，由可视化渲染循环盯着并调到这里。
+    //   重建后旧 player 作废：把当前曲目装回去并续播（从曲首开始，胜过永久静默）。
+    async healEngineDuringPlay() {
+      if (!this.playing) return { rebuilt: false };
+      const rv = await ensureEngineHealthy();
+      if (rv.rebuilt && this.currentId) {
+        this.playing = false;
+        await this.selectSong(this.currentId);
+        const { player } = ensureAudio();
+        player.play();
+        this.playing = true;
+      }
+      return rv;
+    },
     stopPlay() {
       if (this.isAudio && audioEl) { audioEl.pause(); audioEl.currentTime = 0; this.playing = false; this.curSec = 0; this.progress = 0; this.clearResumePos(this.currentId); return; }
-      const { player } = ensureAudio();
-      player.stop();
+      const { player } = ensureAudio();      player.stop();
       this.playing = false;
       this.curSec = 0;
       this.progress = 0;

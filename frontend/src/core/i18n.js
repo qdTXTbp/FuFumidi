@@ -4816,6 +4816,9 @@ export const I18N_MAP = {
   '恢复默认': 'Reset to default',
   '保存中…': 'Saving…',
 
+  /* ---- 播放中音频引擎自愈（ViewViz 看门狗）---- */
+  '音频引擎异常，正在自动恢复…': 'Audio engine error — recovering automatically…',
+
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */
