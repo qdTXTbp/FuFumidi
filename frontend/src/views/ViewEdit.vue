@@ -46,7 +46,7 @@ import { noteName, clamp, KEY_NAME, removeNotes } from '../core/util.js';
 import { fitMenu } from '../core/menu.js';
 import { MACRO_DOC, macroToCmd, applyMacroScript, parseMacroScript } from '../core/macro.js';
 import { SCALE_TYPES, parseCustomDegrees, scalePitchClasses } from '../core/scale.js';
-import { detectKeySpec, detectChordTrack, chordPcsByName } from '../core/analysis.js';
+import { detectKeySpec, detectChordTrack, chordPcsByName, chordMarkersOf, mergeChordMarkers } from '../core/analysis.js';
 import { listArticulations, applyArticulation, upsertUserArticulation, removeUserArticulation } from '../core/articulations.js';
 import {
   loadExprMap, saveExprMap, setExprAction, sanitizeExprMap, applyExprPreset, EXPR_PRESETS,
@@ -479,6 +479,7 @@ const menuGroups = computed(() => {
       { label: t('撤销历史'), disabled: !hasSong, run: openHistory },
       { sep: true },
       { label: t('分析逐小节和弦'), disabled: !hasSong, run: analyzeChordTrack },
+      { label: t('分析和弦轨 → 写入 MIDI 标记'), disabled: !hasSong, run: writeChordTrackToMidi },
       { label: t('智能伴奏'), disabled: !hasSong, run: addAccompaniment },
       { label: t('CC 事件列表'), disabled: !hasSong, run: openCCList },
       { label: t('添加延音踏板（CC64）'), disabled: !hasSong, run: addPedal },
@@ -1076,6 +1077,21 @@ function analyzeChordTrack() {
   rebuildChordBars(list);
   chordOpen.value = true;
   toast(t('已生成和弦轨：') + list.length + t(' 个小节'), 'ok');
+}
+/** P1-2b：把逐小节和弦写成 MIDI marker 元事件（P0-1 编码器会导出；重复执行只替换自己写过的） */
+function writeChordTrackToMidi() {
+  const s = song.value; if (!s) return;
+  const list = detectChordTrack(s);
+  if (!list.length) { toast(t('没有识别到和弦（曲目可能没有音符）'), 'warn'); return; }
+  const tr = (s.tracks || []).find(t => t.notes && t.notes.length) || (s.tracks || [])[0];
+  if (!tr) return;
+  const markers = chordMarkersOf(list);
+  const ti = s.tracks.indexOf(tr);
+  editor.value?.pushStateForTrack(ti);
+  tr.events = mergeChordMarkers(tr.events || [], markers);
+  try { editor.value?.notifyExternalEdit?.(); } catch (e) {}
+  onModified();
+  toast(t('已写入和弦标记：') + markers.length + t(' 个'), 'ok');
 }
 function editChordBar(b) {
   app.promptDialog({

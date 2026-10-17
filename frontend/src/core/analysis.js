@@ -482,3 +482,48 @@ export function romanNumeralOf(chordName, key) {
   if (isMinor || /^dim/.test(c.suffix)) numeral = numeral.toLowerCase();
   return accidental + numeral + c.suffix.replace(/^m(?!aj7)/, '');
 }
+
+/* ============================================================
+ * P1-2b 和弦轨写回 MIDI：把逐小节和弦转成 marker 元事件
+ * ============================================================
+ * 为什么用 marker（0x06）而不是自造事件：P0-1 编码器已能写出 marker，DAW/Cubase/REAPER
+ * 都会把它显示在时间线标尺上，兼容性最好；重写时用 chordGen 标记「上一轮生成的」，
+ * 只替换自己写过的，不动用户手写的 marker。
+ */
+function _keyName(root) { return KEY_NAME[((root % 12) + 12) % 12] || String(root); }
+
+/** 调性 spec → 显示名（'C 大调' / 'A 小调'） */
+export function keySpecLabel(spec) {
+  if (!spec || spec.root == null) return '';
+  return _keyName(spec.root) + ' ' + t(spec.mode === 'major' ? '大调' : '小调');
+}
+
+/**
+ * detectChordTrack() 的逐小节和弦 → marker 事件（默认合并相邻同名和弦）。
+ * @param {Array<{tick:number,name:string}>} chords
+ * @param {{collapse?:boolean}} opts
+ * @returns {Array<{tick:number,type:'marker',text:string,chordGen:true}>}
+ */
+export function chordMarkersOf(chords, opts = {}) {
+  const collapse = opts.collapse !== false;
+  const out = [];
+  const list = (chords || []).slice().sort((a, b) => a.tick - b.tick);
+  for (const c of list) {
+    if (!c || !c.name) continue;
+    const tick = Math.max(0, Math.round(c.tick || 0));
+    const last = out[out.length - 1];
+    if (collapse && last && last.text === c.name) continue;
+    out.push({ tick, type: 'marker', text: String(c.name), chordGen: true });
+  }
+  return out;
+}
+
+/**
+ * 把和弦 marker 合并进一条轨的事件表（纯函数）：先删掉上一轮 chordGen 生成的 marker，
+ * 再追加新的；其他事件原样保留，按 tick 稳定排序。返回新数组。
+ */
+export function mergeChordMarkers(existingEvents, markers) {
+  const keep = (existingEvents || []).filter((e) => !(e && e.chordGen));
+  const add = (markers || []).map((m) => Object.assign({}, m, { chordGen: true, type: 'marker' }));
+  return keep.concat(add).sort((a, b) => (a.tick - b.tick));
+}

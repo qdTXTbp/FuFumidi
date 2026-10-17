@@ -155,6 +155,11 @@
   - E2E `arrange-ui`：挂载、片段统计、加两次标记、加区间、全览、截图。
   - 剩余（P1-1c）：编排状态持久化到工程（`song_project.js` 的 clips）、按 clip 离线渲染接 `export:audio`、撤销走 C1 命令注册表。
 
+- **P1-2 分析升级 ✅（核心 + UI 第一版）**：
+  - 核心：`analysis.js` 新增 K-S 转调滑窗、转调段合并、和弦+能量段落聚类、和弦名解析、罗马数字（按输入拼写判升降号）；9 测例；
+  - 写回：`chordMarkersOf` / `mergeChordMarkers` 把逐小节和弦转成 **MIDI marker 元事件**（P0-1 编码器直接导出；重复写只替换 `chordGen` 标记，不动用户手写 marker）；6 测例；
+  - UI：分析页新增「转调与调性」「段落结构」卡片（大曲目自动跳过滑窗并提示）；编辑页工具菜单新增「分析和弦轨 → 写入 MIDI 标记」；E2E `analysis-ui` 验证 C→F 曲目切出 ≥2 段。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；
