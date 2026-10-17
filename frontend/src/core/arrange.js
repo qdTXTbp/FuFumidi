@@ -17,6 +17,8 @@
  */
 
 /** 聚类判 gap 的默认阈值（拍）：1 小节 @4/4 */
+import { secOfTick } from './timeline.js';
+
 export const PART_GAP_BEATS = 4;
 
 /**
@@ -109,4 +111,189 @@ export function shiftBoundsRange(bounds, from, to, delta) {
     if (s >= from && s < to) return Math.round((s + delta) * 1000) / 1000;
     return s;
   });
+}
+
+/* ============================================================
+ * P1-1 编排时间线 clip 模型（v6 新增；与上面的 OpenUTAU part 纯逻辑共存）
+ * ============================================================
+ * 数据契约：clip 引用 track + 原曲区间 + 偏移，全部用 tick；渲染/换算走 C4 TimelineModel。
+ * 所有变更函数都是**纯函数**（返回新 state），UI 侧由 C1 命令注册表统一包 undo。
+ * state = { tracks:[...], clips:[...], markers:[...], regions:[...] }
+ */
+let _arrSeq = 0;
+function _uid(prefix) { _arrSeq += 1; return prefix + '-' + _arrSeq; }
+function _num(v, d) { const n = Math.round(Number(v)); return Number.isFinite(n) ? n : d; }
+function _clone(o) { return JSON.parse(JSON.stringify(o)); }
+function _normTrack(t, i) {
+  return {
+    id: String(t.id || ('track-' + (i + 1))),
+    name: String(t.name || ('')), color: t.color || '',
+    mute: !!t.mute, solo: !!t.solo,
+    height: Math.max(28, _num(t.height, 56)),
+  };
+}
+function _normClip(c) {
+  const startTick = Math.max(0, _num(c.startTick, 0));
+  const endTick = Math.max(startTick + 1, _num(c.endTick, startTick + 1));
+  return {
+    id: String(c.id || _uid('clip')), trackId: String(c.trackId || ''),
+    startTick, endTick, offsetTick: Math.max(0, _num(c.offsetTick, 0)),
+    name: String(c.name || ''), color: c.color || '',
+  };
+}
+function _normMarker(m, i) { return { id: String(m.id || ('marker-' + (i + 1))), title: String(m.title || ''), tick: Math.max(0, _num(m.tick, 0)), color: m.color || '' }; }
+function _normRegion(r, i) {
+  const startTick = Math.max(0, _num(r.startTick, 0));
+  const endTick = Math.max(startTick + 1, _num(r.endTick, startTick + 1));
+  return { id: String(r.id || ('region-' + (i + 1))), name: String(r.name || ''), startTick, endTick, color: r.color || '' };
+}
+
+/** 规范化输入（幂等）：补 id/默认值、clip 排序 */
+export function createArrangeState(input = {}) {
+  return {
+    tracks: (input.tracks || []).map(_normTrack),
+    clips: (input.clips || []).map(_normClip).sort((a, b) => a.startTick - b.startTick || a.trackId.localeCompare(b.trackId)),
+    markers: (input.markers || []).map(_normMarker).sort((a, b) => a.tick - b.tick),
+    regions: (input.regions || []).map(_normRegion).sort((a, b) => a.startTick - b.startTick),
+  };
+}
+
+/** 校验：返回 { ok, errors[] }（不抛异常，UI 可展示） */
+export function validateArrangeState(state) {
+  const errors = [];
+  if (!state || !Array.isArray(state.tracks) || !Array.isArray(state.clips)) return { ok: false, errors: ['state 结构不合法'] };
+  const ids = new Set();
+  for (const c of state.clips) {
+    if (ids.has(c.id)) errors.push('clip id 重复：' + c.id);
+    ids.add(c.id);
+    if (c.endTick <= c.startTick) errors.push('clip 长度必须 > 0：' + c.id);
+    if (!state.tracks.some((t) => t.id === c.trackId)) errors.push('clip 指向不存在的轨道：' + c.id + ' → ' + c.trackId);
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+export function clipLen(c) { return Math.max(0, (c.endTick || 0) - (c.startTick || 0)); }
+export function clipsOfTrack(state, trackId) { return state.clips.filter((c) => c.trackId === trackId); }
+export function findClip(state, clipId) { return state.clips.find((c) => c.id === clipId) || null; }
+
+function _withClips(state, clips) {
+  return Object.assign({}, state, { clips: clips.slice().sort((a, b) => a.startTick - b.startTick || a.trackId.localeCompare(b.trackId)) });
+}
+
+export function addClip(state, clip) {
+  const next = _clone(state);
+  const trackId = next.tracks.some((t) => t.id === clip.trackId) ? clip.trackId : (next.tracks[0] && next.tracks[0].id);
+  if (!trackId) return next;
+  next.clips.push(_normClip(Object.assign({}, clip, { trackId })));
+  return _withClips(next, next.clips);
+}
+
+export function removeClip(state, clipId) {
+  const next = _clone(state);
+  next.clips = next.clips.filter((c) => c.id !== clipId);
+  return next;
+}
+
+export function moveClip(state, clipId, patch = {}) {
+  const next = _clone(state);
+  const c = next.clips.find((x) => x.id === clipId);
+  if (!c) return next;
+  const len = clipLen(c);
+  if (patch.trackId != null && next.tracks.some((t) => t.id === patch.trackId)) c.trackId = String(patch.trackId);
+  const startTick = Math.max(0, _num(patch.startTick, c.startTick));
+  c.startTick = startTick;
+  c.endTick = startTick + len;
+  return _withClips(next, next.clips);
+}
+
+/** 拖边改长度：edge='start'|'end'；start 边同步调 offset，保持素材内容不漂移 */
+export function resizeClip(state, clipId, edge, tick) {
+  const next = _clone(state);
+  const c = next.clips.find((x) => x.id === clipId);
+  if (!c) return next;
+  const t = Math.max(0, _num(tick, edge === 'start' ? c.startTick : c.endTick));
+  if (edge === 'start') {
+    const newStart = Math.min(t, c.endTick - 1);
+    c.offsetTick = Math.max(0, c.offsetTick + (newStart - c.startTick));
+    c.startTick = newStart;
+  } else {
+    c.endTick = Math.max(c.startTick + 1, t);
+  }
+  return _withClips(next, next.clips);
+}
+
+export function splitClip(state, clipId, atTick) {
+  const next = _clone(state);
+  const idx = next.clips.findIndex((x) => x.id === clipId);
+  if (idx < 0) return next;
+  const c = next.clips[idx];
+  const at = _num(atTick, 0);
+  if (at <= c.startTick || at >= c.endTick) return next;
+  const right = Object.assign({}, c, { id: _uid('clip'), startTick: at, offsetTick: c.offsetTick + (at - c.startTick) });
+  c.endTick = at;
+  next.clips.push(right);
+  return _withClips(next, next.clips);
+}
+
+export function duplicateClip(state, clipId, patch = {}) {
+  const src = findClip(state, clipId);
+  if (!src) return _clone(state);
+  const start = patch.startTick != null ? patch.startTick : src.endTick;
+  return addClip(state, Object.assign({}, src, {
+    id: _uid('clip'),
+    trackId: patch.trackId != null ? patch.trackId : src.trackId,
+    startTick: start, endTick: start + clipLen(src),
+  }));
+}
+
+export function setTrackFlags(state, trackId, flags = {}) {
+  const next = _clone(state);
+  const t = next.tracks.find((x) => x.id === trackId);
+  if (!t) return next;
+  if (flags.mute != null) t.mute = !!flags.mute;
+  if (flags.solo != null) t.solo = !!flags.solo;
+  if (flags.name != null) t.name = String(flags.name);
+  if (flags.height != null) t.height = Math.max(28, _num(flags.height, t.height));
+  return next;
+}
+
+export function addMarker(state, marker) {
+  const next = _clone(state);
+  next.markers.push(_normMarker(marker, next.markers.length));
+  next.markers.sort((a, b) => a.tick - b.tick);
+  return next;
+}
+export function removeMarker(state, id) {
+  const next = _clone(state);
+  next.markers = next.markers.filter((m) => m.id !== id);
+  return next;
+}
+export function addRegion(state, region) {
+  const next = _clone(state);
+  next.regions.push(_normRegion(region, next.regions.length));
+  next.regions.sort((a, b) => a.startTick - b.startTick);
+  return next;
+}
+export function removeRegion(state, id) {
+  const next = _clone(state);
+  next.regions = next.regions.filter((r) => r.id !== id);
+  return next;
+}
+
+/** 导出/渲染计划：clip → 秒（C4 TimelineModel），供“按 clip 渲染”的离线导出用 */
+export function renderPlan(state, timeline, opts = {}) {
+  const only = opts.trackId ? state.clips.filter((c) => c.trackId === opts.trackId) : state.clips;
+  const sec = (tick) => secOfTick(timeline, tick);
+  return only.map((c) => ({
+    clipId: c.id, trackId: c.trackId,
+    startTick: c.startTick, endTick: c.endTick, offsetTick: c.offsetTick,
+    startSec: sec(c.startTick), endSec: sec(c.endTick),
+    offsetSec: sec(c.offsetTick) - sec(0),
+    durationSec: sec(c.endTick) - sec(c.startTick),
+  })).sort((a, b) => a.startSec - b.startSec);
+}
+
+/** 双击聚焦：clip → 卷帘里应定位到的原曲 tick 区间 */
+export function focusRangeOfClip(clip) {
+  return { fromTick: clip.offsetTick, toTick: clip.offsetTick + clipLen(clip), trackId: clip.trackId };
 }
