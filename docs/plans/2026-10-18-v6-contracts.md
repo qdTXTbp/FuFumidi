@@ -233,6 +233,12 @@
   - 转换页导出的每个 WAV 自动写「FuFumidi / 曲名 / 生成日期时间」溯源信息；6 测例（无元数据/bext 回读/INFO 回读/奇数对齐/float32/中文安全）；
   - MP4 元数据（ID3/BWF 之外的容器标签）暂未做：视频导出走 MediaRecorder，容器由 Electron 写，后续需要换封装链路。
 
+- **P1-13 B3 曲线引擎统一 ✅（核心 + PB 泳道）**：
+  - 新 `core/curve_engine.js`（11 测例）：点运算（排序/同拍去重、钳制、插入/删除/移动、线性取值+两端保持、RDP 简化、步长量化、平滑、缩放、合并）；**不可变**返回新数组，调用方决定撤销粒度；
+  - MIDI 弯音换算：`bendToUnit/unitToBend`（**中心精确 64 ↔ 8192**：负半轴 8192 步、正半轴 8191 步，避免回中残留 +1.5 cent）、`bendToCents/centsToBend`（默认 ±2 半音，可配范围）、`bendNorm`；
+  - 编辑器新增**弯音（PB）泳道**：CC 目标里加「弯音 PB（±2 半音）」，与 CC 共用同一条泳道但写入 14bit `bend` 事件（按 tick 有序插入、±2 tick 合并）；E2E `edit-pb-lane` 验证画一笔后轨道事件里出现正弯音；
+  - 统一：`track_automation.sampleAt` 改为委托 `curve_engine.valueAt`，调教侧与编辑侧取值语义同源。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；

@@ -125,6 +125,8 @@ const CC_OPTIONS = [
   [7, t('CC7 音量')], [8, t('CC8 平衡')], [10, t('CC10 声像')], [11, t('CC11 表情')],
   [64, t('CC64 延音踏板')], [65, t('CC65 弱音器')], [66, t('CC66 持续音')], [67, t('CC67 弱音踏板')],
   [68, t('CC68 连奏')], [71, t('CC71 共鸣')], [74, t('CC74 亮度')], [91, t('CC91 混响')], [93, t('CC93 合唱')],
+  // P1-13 B3：128 是弯音（PB）哨兵值 —— 与 CC 共用同一条泳道，但写的是 bend 事件
+  [128, t('弯音 PB（±2 半音）')],
 ];
 
 const sel = reactive({ count: 0, midi: null, name: '', vel: null, start: null, len: null });
@@ -2439,7 +2441,7 @@ onBeforeUnmount(() => {
           <select class="select-input" v-model="ccNumber" style="width:auto;max-width:130px">
             <option v-for="c in CC_OPTIONS" :key="c[0]" :value="c[0]">{{ c[1] }}</option>
           </select>
-          <button class="et-btn" :class="{ active: ccEnabled }" :title="t('切换 CC 自动化泳道')" @click="ccEnabled = !ccEnabled"><Icon name="cclane" :size="14" />{{ ccEnabled ? t('关闭泳道') : t('显示泳道') }}</button>
+          <button class="et-btn" data-guide="edit-cc-toggle" :class="{ active: ccEnabled }" :title="t('切换 CC 自动化泳道')" @click="ccEnabled = !ccEnabled"><Icon name="cclane" :size="14" />{{ ccEnabled ? t('关闭泳道') : t('显示泳道') }}</button>
           <select v-model="ccMode" class="select-input" style="width:auto" :title="t('CC 绘制方式')">
             <option value="free">{{ t('手绘') }}</option><option value="line">{{ t('直线') }}</option><option value="curve">{{ t('曲线') }}</option>
           </select>

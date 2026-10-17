@@ -15,6 +15,8 @@ import { snapToPcs, scalePitchClasses } from '../core/scale.js';
 import { detectSf } from '../core/score.js';
 // P1-6：帧吸附（时间域；23.976/29.97 与变速曲目都正确）
 import { snapTickToFrame } from '../core/frame_snap.js';
+// P1-13 B3：弯音（PB）泳道与通用曲线换算共用 curve_engine
+import { bendToUnit, unitToBend } from '../core/curve_engine.js';
 // P0-6b：变拍号的网格/谱面分段布局（C4 TimelineModel）
 import { timelineOfSong, iterBars } from '../core/timeline.js';
 /* 手写笔 / 触控（M9 收尾）：掌侧误触、第二根手指、长按=右键、笔压当力度 */
@@ -859,24 +861,43 @@ const dragState = ref(null);
 /* ---------------- CC 泳道 ---------------- */
 const ccDrawing = ref(false);
 const ccLast = ref(null);   // {tick, val}
+/* 弯音（PB）在编辑器里复用 CC 泳道：ccNumber=128 作为哨兵值 */
+const PB_LANE = 128;
 function drawCC(g, W, H2, ccNum) {
   const s = song();
   const pal = themeColors();
+  const isPB = ccNum === PB_LANE;
   g.clearRect(0, 0, W, H2);
   g.fillStyle = pal.laneBg; g.fillRect(0, 0, W, H2);
-  const name = CC_NAMES[ccNum] || ('CC' + ccNum);
+  const name = isPB ? 'Pitch Bend' : (CC_NAMES[ccNum] || ('CC' + ccNum));
   const hair = pal.hair;
   const stone = pal.stone;
   const slate = pal.steel;
   g.fillStyle = slate; g.font = '9.5px monospace'; g.textAlign = 'left'; g.textBaseline = 'middle';
-  g.fillText(name + ' ' + ccNum, 6, 10);
-  for (const v of [0, 64, 127]) {
-    const y = H2 - 4 - (v / 127) * (H2 - 12);
-    g.strokeStyle = hair; g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
-    g.fillStyle = stone; g.fillText(String(v), 6, y);
+  g.fillText(isPB ? '弯音 PB' : (name + ' ' + ccNum), 6, 10);
+  if (isPB) {
+    // 弯音：中间 = 0（精确 8192），上下 = ±2 半音；中心线画重一点
+    const marks = [[0, '-2'], [64, '0'], [127, '+2']];
+    for (const [v, label] of marks) {
+      const y = H2 - 4 - (v / 127) * (H2 - 12);
+      g.strokeStyle = v === 64 ? pal.cc : hair;
+      g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
+      g.fillStyle = stone; g.fillText(label, 6, y);
+    }
+  } else {
+    for (const v of [0, 64, 127]) {
+      const y = H2 - 4 - (v / 127) * (H2 - 12);
+      g.strokeStyle = hair; g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
+      g.fillStyle = stone; g.fillText(String(v), 6, y);
+    }
   }
   const tr = curTrack();
-  const ccs = (tr && (tr.ccs || []).filter(c => c.cc === ccNum).sort((a, b) => a.tick - b.tick)) || [];
+  const ccs = isPB
+    ? ((tr && Array.isArray(tr.events) ? tr.events : [])
+      .filter((e) => e && e.type === 'bend')
+      .map((e) => ({ tick: e.tick, cv: bendToUnit(e.val) }))
+      .sort((a, b) => a.tick - b.tick))
+    : ((tr && (tr.ccs || []).filter(c => c.cc === ccNum).sort((a, b) => a.tick - b.tick)) || []);
   if (!s || !ccs.length) return;
   g.strokeStyle = pal.cc; g.lineWidth = 1.4; g.beginPath();
   for (let i = 0; i < ccs.length; i++) {
@@ -939,11 +960,24 @@ function ccPaint(e) {
   const tick = Math.max(0, Math.round(xToTick(x)));
   const val = ccYToVal(e.clientY - rect.top);
   const tr = curTrack(); if (!tr) return;
-  const arr = tr.ccs = tr.ccs || [];
+  const isPB = ccNum === PB_LANE;
+  const arr = isPB ? (tr.events = tr.events || []) : (tr.ccs = tr.ccs || []);
   const put = (t, v) => {
-    const idx = arr.findIndex(c => c.cc === ccNum && Math.abs(c.tick - t) < 2);
-    if (idx >= 0) arr[idx] = { tick: t, cc: ccNum, cv: v };
-    else arr.push({ tick: t, cc: ccNum, cv: v });
+    if (isPB) {
+      // 弯音事件：0..127 泳道 → 14bit；同 tick ±2 内替换，保持按 tick 排序
+      const idx = arr.findIndex((e) => e && e.type === 'bend' && Math.abs(e.tick - t) < 2);
+      const ev = { tick: t, type: 'bend', val: unitToBend(v), ch: tr.ch || 0 };
+      if (idx >= 0) arr[idx] = ev;
+      else {
+        // 插到正确位置（其它 meta 事件顺序不变）
+        let at = arr.findIndex((e) => e && e.tick > t);
+        if (at < 0) arr.push(ev); else arr.splice(at, 0, ev);
+      }
+    } else {
+      const idx = arr.findIndex(c => c.cc === ccNum && Math.abs(c.tick - t) < 2);
+      if (idx >= 0) arr[idx] = { tick: t, cc: ccNum, cv: v };
+      else arr.push({ tick: t, cc: ccNum, cv: v });
+    }
   };
   if (props.ccMode === 'line' && ccLast.value) {
     // 直线：从上一采样点到当前点线性插值
@@ -966,7 +1000,7 @@ function ccPaint(e) {
     if (ccLast.value != null && Math.abs(tick - ccLast.value.tick) < 2) return;
     put(tick, val);
   }
-  arr.sort((a, b) => a.tick - b.tick);
+  if (!isPB) arr.sort((a, b) => a.tick - b.tick);
   ccLast.value = { tick, val };
   ccDrawLane();
 }
