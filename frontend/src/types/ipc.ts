@@ -262,6 +262,8 @@ export interface Settings {
   utau_renderer?: string;
   /** P0-5：首次播放时后台加载随包内置的 GeneralUser GS（默认 true；关掉则始终用内置合成器） */
   default_gm?: boolean;
+  /** P0-3b：MIDI 键盘录音的输入延迟补偿（ms） */
+  midiInputOffsetMs?: number;
   [key: string]: any;
 }
 

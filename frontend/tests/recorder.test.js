@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createRecorder, quantizeGridTicks, quantizeTick, trimSamePitchOverlaps, applyTake, calibrateLatency,
+  createRecorder, quantizeGridTicks, quantizeTick, trimSamePitchOverlaps, applyTake, calibrateLatency, recordStartPlan,
 } from '../src/core/recorder.js';
 
 // tpb=480 / 120BPM → 1 tick = 1.0417ms；480 tick = 1 拍 = 500ms
@@ -191,4 +191,24 @@ test('P0-3 非法事件保护：没 start 不录、noteOff 无对应 on 返回 f
   const take = r.stop(MS(200));
   assert.equal(take.notes[0].midi, 127);
   assert.equal(take.notes[0].vel, 127);
+});
+
+
+test('P0-3b recordStartPlan：预备拍让播放从「起点 − 预备拍」开始，结束时正好在起点', () => {
+  const noPre = recordStartPlan({ startTick: 4800, barTicks: 1920, preRollBars: 0, bpm: 120, tpb: 480 });
+  assert.equal(noPre.seekTick, 4800);
+  assert.equal(noPre.preRollMs, 0);
+  const one = recordStartPlan({ startTick: 4800, barTicks: 1920, preRollBars: 1, bpm: 120, tpb: 480 });
+  assert.equal(one.seekTick, 2880);
+  assert.equal(one.preRollTicks, 1920);
+  assert.ok(Math.abs(one.preRollMs - 2000) < 1e-6, '4/4 120BPM 一小节 = 2000ms，实际 ' + one.preRollMs);
+  const two = recordStartPlan({ startTick: 4800, barTicks: 1920, preRollBars: 2, bpm: 60, tpb: 480 });
+  assert.equal(two.seekTick, 960);
+  assert.ok(Math.abs(two.preRollMs - 8000) < 1e-6, '60BPM 两小节 = 8000ms');
+});
+
+test('P0-3b recordStartPlan：起点靠前时 seek 夹到 0，预备拍最多 4 小节', () => {
+  const p = recordStartPlan({ startTick: 500, barTicks: 1920, preRollBars: 2, bpm: 120, tpb: 480 });
+  assert.equal(p.seekTick, 0, '不能 seek 到负数');
+  assert.equal(recordStartPlan({ startTick: 0, barTicks: 1920, preRollBars: 9 }).preRollBars, 4);
 });

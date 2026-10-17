@@ -4,6 +4,7 @@ import { themeColor, VIEW_TRACK_RAMP } from '../core/palette.js';
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
 import EditorCanvas from '../components/EditorCanvas.vue';
+import RecordPanel from '../components/editor/RecordPanel.vue';
 import { useAppStore } from '../stores/app';
 import { useWorkspace, SCALES } from '../stores/workspace';
 import EditorMenuBar from '../components/editor/EditorMenuBar.vue';
@@ -37,6 +38,7 @@ const toast = (m, t) => app.toast(m, t);
 const importFiles = (items) => app.importFiles(items);
 const setView = (v) => app.setView(v);
 import { encodeMidi } from '../core/midi.js';
+import { applyTake } from '../core/recorder.js';
 import { appSession } from '../core/session.js';
 import { timelineOfSong, formatBarBeat } from '../core/timeline.js';
 import { noteName, clamp, KEY_NAME, removeNotes } from '../core/util.js';
@@ -70,6 +72,7 @@ const editor = ref(null);
 const miniEl = ref(null);
 const miniWrap = ref(null);
 const advOpen = ref(false);
+const recOpen = ref(false);   // P0-3b：录音面板
 // 三视图切换：钢琴卷帘 / 鼓组网格（乐谱为独立页面，见 setEditorView）
 const viewMode = ref('piano');
 
@@ -2013,6 +2016,20 @@ function scheduleDraw() {
 // 真正改动曲目：迷你图缓存失效 + 重绘（选区变化不重建缩略图）
 function onModified() { miniRev++; refreshSel(); scheduleDraw(); }
 
+/* P0-3b：采用一条录音 take —— 按模式合并进当前轨，并作为一次可撤销编辑 */
+function onRecordTake(payload) {
+  const s = song.value;
+  const take = payload && payload.take;
+  const idx = payload && Number.isFinite(payload.trackIndex) ? payload.trackIndex : trackIndex.value;
+  if (!s || !s.tracks[idx]) return;
+  if (!take || !take.notes || !take.notes.length) { toast(t('没有录到音符'), 'warn'); return; }
+  const tr = s.tracks[idx];
+  const next = applyTake(tr.notes || [], take, {});
+  editor.value?.replaceNotes(next);   // replaceNotes 内部已 pushState + afterEdit
+  onModified();
+  toast(t('已采用录音：') + take.notes.length + t(' 个音符'), 'ok');
+}
+
 watch(currentSong, () => {
   const tracks = song.value?.tracks || [];
   const nonEmpty = tracks.findIndex(t => t.notes && t.notes.length);
@@ -2134,6 +2151,9 @@ onBeforeUnmount(() => {
         <button class="st-btn" :title="t('快捷键一览（?）')" @click="shortcutsOpen = true"><Icon name="info" :size="12" />{{ t('快捷键') }}</button>
       </div>
 
+      <!-- P0-3b 录音面板：挂在工具栏下方，不遮挡卷帘（打开时才占高度） -->
+      <RecordPanel v-if="recOpen" :song="song" :track-index="trackIndex" @apply="onRecordTake" @close="recOpen = false" />
+
       <div class="ed-toolbar-wrap">
       <div class="card ed-toolbar">
         <div class="et-group">
@@ -2141,6 +2161,13 @@ onBeforeUnmount(() => {
           <button class="et-btn" :class="{ active: tool === 'pencil' }" :title="t('画笔 B')" @click="tool = 'pencil'"><Icon name="pencil" :size="14" />{{ t('画笔') }}</button>
           <button class="et-btn" :class="{ active: tool === 'erase' }" :title="t('橡皮 E')" @click="tool = 'erase'"><Icon name="erase" :size="14" />{{ t('橡皮') }}</button>
           <button class="et-btn" :class="{ active: tool === 'mute' }" :title="t('静音：点击音符切换发声/静音（不删除、不改力度）')" @click="tool = 'mute'"><Icon name="minus" :size="14" />{{ t('静音') }}</button>
+        </div>
+        <span class="et-sep"></span>
+        <div class="et-group">
+          <button class="et-btn" :class="{ active: recOpen }" data-guide="edit-record-btn"
+                  :title="t('MIDI 键盘录音：设备输入 / 预备拍 / 量化 / 循环 take / 延迟校准')" @click="recOpen = !recOpen">
+            <Icon name="record" :size="14" />{{ t('录音') }}
+          </button>
         </div>
         <span class="et-sep"></span>
         <!-- 步进输入（M4）：Cubase/Logic 的 Step Input —— 落音由指针决定并自动前进 -->

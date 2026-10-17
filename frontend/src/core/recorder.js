@@ -41,6 +41,27 @@ function nowMs() {
 }
 
 /**
+ * 录音起点规划（P0-3b）：给定播放头/循环起点与预备拍，算出
+ *   seekTick  —— 播放要从哪开始（起点 - 预备拍），这样预备拍结束时正好在 startTick
+ *   preRollMs —— 预备拍实际时长（毫秒）
+ */
+export function recordStartPlan(o = {}) {
+  const startTick = Math.max(0, Math.round(Number(o.startTick) || 0));
+  const barTicks = Math.max(1, Math.round(Number(o.barTicks) || 1920));
+  const preRollBars = Math.max(0, Math.min(4, Math.round(Number(o.preRollBars) || 0)));
+  const tpb = Math.max(1, Math.round(Number(o.tpb) || 480));
+  const bpm = Math.max(1, Number(o.bpm) || 120);
+  const preRollTicks = preRollBars * barTicks;
+  return {
+    startTick,
+    preRollBars,
+    preRollTicks,
+    seekTick: Math.max(0, startTick - preRollTicks),
+    preRollMs: preRollTicks * (60000 / (bpm * tpb)),
+  };
+}
+
+/**
  * 创建录音器。
  * @param {{tpb?:number, bpm?:number, sigNum?:number, sigDen?:number, barTicks?:number,
  *          preRollBars?:number, quantize?:string|number, mode?:'replace'|'overdub',

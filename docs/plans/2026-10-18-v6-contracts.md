@@ -116,7 +116,8 @@
   - 新 `core/recorder.js`（288 行）：预备拍（0–4 小节，跨边界按住的音从 take 0 起算）、循环 take（overdub/replace、跨圈按住音圈尾收尾不叠音）、量化（off/1/4/1/8/1/16/1/32/自定义 tick）、输入延迟补偿、`applyTake`（replace 窗口替换 / overdub 同音高截断）、`calibrateLatency`（中位偏移 + p10–p90 稳定性，≤5ms 判 ok）；
   - `core/midiin.js` 升级：所有回调带 `performance.now()` 时间戳、新增 `onControl`（CC/延音踏板）与 `onRaw`、新增可测纯函数 `parseControlMessage`；
   - 测试：`frontend/tests/recorder.test.js`（15 例）+ `frontend/tests/midiin.test.js`（4 例），含 **假 MIDI 事件流 256 拍不丢事件** 的 DoD 用例；
-  - 剩余（P0-3b）：ViewEdit 录音面板（录音/停止/take 试听采用丢弃）、延迟校准向导、settings.midiInputOffsetMs 持久化。
+  - **P0-3b ✅**：ViewEdit 录音面板（`components/editor/RecordPanel.vue`）—— 设备选择/刷新、预备拍 0–2 小节、量化 off…1/32、叠加/替换、输入延迟 ±200ms、延迟校准向导（4 击 click → 中位偏移 + 离散度，≤5ms 判通过，写入 settings.midiInputOffsetMs）、take「采用/丢弃」；采用走 `applyTake` + EditorCanvas.replaceNotes（可撤销）；
+  - `recorder.js` 新增 `recordStartPlan`（预备拍时 seek 到「起点 − 预备拍」，预备拍结束正好落在起点）；新 E2E `record-ui`（面板打开/控件齐全/关闭）；
 - **P0-4 导出核心 ✅（UI/分轨接线待接）**：
   - 新 `core/export_audio.js`（289 行）：WAV PCM16（TPDF dither）/ PCM24 / float32 编码、WAV 头解析、峰值/RMS、ITU-R BS.1770 K 加权响度（400ms 块 + 75% 重叠 + 门限）、前瞻限幅、响度归一（目标 −14/−16/−23，报告误差与衰减量）；
   - 新 `main/export.js`：`export:audio` IPC 原子落盘 + 同名 .manifest.json（sha256/size/格式/位深/采样率/声道/时长/LUFS/峰值/目标）；文件名 Windows 安全化；三处同改（preload.exportAudio → main.js 注册 → types/ipc.ts）；
