@@ -1777,7 +1777,8 @@ export const I18N_MAP = {
   '最短静音段': 'Minimum silence',
   '静音判定阈值': 'Silence threshold',
   '最高音高': 'Highest pitch',
-  '不限制': 'no limit',  '超过就强制收尾，治长音频的僵尸音符（实测 100 分钟录播出现过 4320 秒的音）。调大＝少干预，调小＝更狠地剪长音；0 = 关': 'Force-close any note longer than this - the fix for zombie notes on long audio (a 100-minute recording once produced a 4320 s note). Higher = less intervention, lower = cuts long notes harder; 0 = off',
+  '不限制': 'no limit',
+  '超过就强制收尾，治长音频的僵尸音符（实测 100 分钟录播出现过 4320 秒的音）。调大＝少干预，调小＝更狠地剪长音；0 = 关': 'Force-close any note longer than this - the fix for zombie notes on long audio (a 100-minute recording once produced a 4320 s note). Higher = less intervention, lower = cuts long notes harder; 0 = off',
   '合并重叠音符': 'Merge overlapping notes',
   '合并同音高重叠音符；关闭后更贴近模型原始判定，但同一音高的重复触发会变多': 'Merge same-pitch overlapping notes. Off stays closer to the model raw judgement, but repeated triggers of one pitch increase.',
   '力度归一化': 'Normalize velocity',
@@ -4794,6 +4795,27 @@ export const I18N_MAP = {
   "音符不透明度": "Note opacity",
   "网格线": "Grid lines",
   "键位竖线与小节线（想要干净画面、或导出叠加层时关掉）": "Key and bar lines (turn off for a clean frame or overlay export)",
+  /* ---- ModelCatalog 目录壳（重建件）---- */
+  '搜索名称 / 架构 / 用途…': 'Search name / architecture / purpose…',
+  '仅已安装': 'Installed only',
+  '仅未安装': 'Not installed only',
+  '其他': 'Other',
+  '没有符合条件的条目': 'No matching entries',
+
+  /* ---- ItemMetaEditor 条目元数据编辑（重建件）---- */
+  '编辑条目信息': 'Edit entry info',
+  '显示名称': 'Display name',
+  '作者': 'Author',
+  '来源': 'Source',
+  '标签': 'Tags',
+  '分类': 'Category',
+  '（用原始名称）': '(use original name)',
+  '（空 = 不显示）': '(empty = hidden)',
+  '（空 = 用原始分类）': '(empty = original category)',
+  '用逗号分隔，如：中文,女声,高音': 'Separate with commas, e.g. Chinese,Female,High',
+  '恢复默认': 'Reset to default',
+  '保存中…': 'Saving…',
+
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */
