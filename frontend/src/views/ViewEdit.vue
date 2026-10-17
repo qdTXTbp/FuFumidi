@@ -116,6 +116,12 @@ const listDraft = ref([]);
 
 // CC 泳道
 const ccEnabled = ref(false);
+/* P1-13 B4：跟随播放（默认开）——播放时视口自动滚动，让播放头留在可视区 */
+const followPlay = ref((() => { try { return localStorage.getItem('fufumidi_edit_follow') !== '0'; } catch (e) { return true; } })());
+function toggleFollowPlay() {
+  followPlay.value = !followPlay.value;
+  try { localStorage.setItem('fufumidi_edit_follow', followPlay.value ? '1' : '0'); } catch (e) {}
+}
 const ccNumber = ref(11);
 /* CC 泳道可选目标（M5b：从 5 个扩到常用的一套）。
    管弦乐/表情写法最常用的几个：CC1 调制、CC2 呼吸、CC11 表情、CC7 音量、CC10 声像，
@@ -2374,6 +2380,10 @@ onBeforeUnmount(() => {
           <button class="et-btn" :class="{ active: fullscreenOn }" :title="t('全屏编辑，最大化钢琴卷帘')" @click="toggleFullscreen">
             <Icon name="expand" :size="14" />{{ t('全屏') }}
           </button>
+          <button class="et-btn" data-guide="edit-follow" :class="{ active: followPlay }"
+                  :title="t('播放时自动滚动视图，让播放头保持可见')" @click="toggleFollowPlay">
+            <Icon name="target" :size="14" />{{ t('跟随') }}
+          </button>
           <span class="et-sep"></span>
           <span class="et-label">{{ t('剪贴板') }}</span>
           <button class="et-btn" :title="t('复制 Ctrl+C')" @click="copy"><Icon name="copy" :size="14" />{{ t('复制') }}</button>
@@ -2455,8 +2465,8 @@ onBeforeUnmount(() => {
           <span class="et-label">{{ t('踏板与循环') }}</span>
           <button class="et-btn" :title="t('在选区/整轨起止处添加延音踏板（CC64）')" @click="addPedal"><Icon name="cclane" :size="14" />+ {{ t('踏板') }}</button>
           <button class="et-btn" :title="t('删除选区/整轨内的踏板事件')" @click="delPedal"><Icon name="cclane" :size="14" />- {{ t('踏板') }}</button>
-          <button class="et-btn" :class="{ active: state.loop }" :title="t('将选区设为循环')" @click="setLoopFromSel"><Icon name="loop" :size="14" />{{ t('选区循环') }}</button>
-          <button class="et-btn" :title="t('清除循环')" @click="clearLoopSel"><Icon name="minus" :size="14" />{{ t('清循环') }}</button>
+          <button class="et-btn" data-guide="edit-loop-set" :class="{ active: state.loop }" :title="t('将选区设为循环')" @click="setLoopFromSel"><Icon name="loop" :size="14" />{{ t('选区循环') }}</button>
+          <button class="et-btn" data-guide="edit-loop-clear" :title="t('清除循环')" @click="clearLoopSel"><Icon name="minus" :size="14" />{{ t('清循环') }}</button>
         </div>
         <div class="adv-row">
           <span class="et-label">{{ t('歌词与音频') }}</span>
@@ -2635,7 +2645,7 @@ onBeforeUnmount(() => {
         </Transition>
       <!-- 迷你图 + 缩放 -->
       <div class="ed-nav" ref="miniWrap">
-        <canvas ref="miniEl" class="ed-mini" style="height:34px" @click="miniClick"></canvas>
+        <canvas ref="miniEl" class="ed-mini" data-guide="edit-minimap" style="height:34px" @click="miniClick"></canvas>
         <div class="ed-zoom">
           <button class="icon-btn" :title="t('缩小')" @click="editor?.zoomBy(0.85)"><Icon name="minus" :size="13" /></button>
           <span class="ez-pct">{{ zoomPct }}%</span>
@@ -2729,6 +2739,7 @@ onBeforeUnmount(() => {
       <div v-show="viewMode !== 'drum'" class="ed-wrap-rel" :class="{ 'ed-flash': viewFlash }">
         <EditorCanvas ref="editor" :tool="tool" :snap-ratio="snapRatio" :frame-snap="frameSnapOn ? { fps: videoFps } : null" :track-index="trackIndex"
                       :view="viewMode === 'score' ? 'score' : 'piano'"
+                      :follow-play="followPlay"
                       :cc-enabled="ccEnabled && viewMode === 'piano'" :cc-number="ccNumber"
                       :scale-spec="scaleSpec" :scale-mode="scaleMode" :chord-track="chordSpec" :ks-map="ksMap" :audio="audioData"
                       :cc2-enabled="cc2Enabled" :cc2-number="cc2Number" :cc-mode="ccMode"

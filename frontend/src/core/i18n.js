@@ -1594,6 +1594,8 @@ export const I18N_MAP = {
   '许可与溯源': 'Licenses & provenance',
   '后退': 'Back',
   '弯音 PB（±2 半音）': 'Pitch bend PB (±2 semitones)',
+  '跟随': 'Follow',
+  '播放时自动滚动视图，让播放头保持可见': 'Auto-scroll the view during playback to keep the playhead visible',
   '前进': 'Forward',
   '专家模式': 'Expert mode',
   '打开后显示 OMR / 翻唱 / GPU 等高级入口；关闭时界面保持精简（可随时打开）': 'Show advanced entries such as OMR / Cover / GPU; keep the UI minimal when off (can be re-enabled anytime)',

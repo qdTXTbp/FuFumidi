@@ -17,6 +17,8 @@ import { detectSf } from '../core/score.js';
 import { snapTickToFrame } from '../core/frame_snap.js';
 // P1-13 B3：弯音（PB）泳道与通用曲线换算共用 curve_engine
 import { bendToUnit, unitToBend } from '../core/curve_engine.js';
+// P1-13 B4：跟随播放的视口滚动（策略在 core/editor_nav.js，纯逻辑可测）
+import { followViewTick } from '../core/editor_nav.js';
 // P0-6b：变拍号的网格/谱面分段布局（C4 TimelineModel）
 import { timelineOfSong, iterBars } from '../core/timeline.js';
 /* 手写笔 / 触控（M9 收尾）：掌侧误触、第二根手指、长按=右键、笔压当力度 */
@@ -26,6 +28,7 @@ const props = defineProps({
   tool: { type: String, default: 'select' },      // select | pencil | erase
   snapRatio: { type: Number, default: 0.0625 },   // 拍的比例（0=关）
   frameSnap: { type: Object, default: null },     // P1-6：{ fps } 非空时按帧（时间域）吸附，优先于拍比例
+  followPlay: { type: Boolean, default: false },  // P1-13 B4：播放时自动滚动，让播放头留在可视区
   trackIndex: { type: Number, default: 0 },
   ccEnabled: { type: Boolean, default: false },   // 是否显示 CC 泳道
   ccNumber: { type: Number, default: 11 },        // CC 控制器编号
@@ -839,8 +842,12 @@ function draw() {
     ctx2d.strokeRect(sx + 0.5, 0.5, sw - 1, HK - 1);
     ctx2d.fillStyle = pal.curve; ctx2d.fillRect(sx, 0, sw, 3);
   }
-  // 播放头
+  // 播放头（P1-13 B4：跟随播放时先按策略滚动视口，再画）
   const curTick = s.secToTick(state.curSec / state.tempo);
+  if (props.followPlay && state.playing) {
+    const nt = followViewTick({ viewTick: viewTick.value, pxPerTick: pxPerTick.value, width: W, curTick });
+    if (nt != null) viewTick.value = nt;
+  }
   const px = tickToX(curTick);
   const pg = ctx2d.createLinearGradient(0, 0, 0, HK);
   pg.addColorStop(0, pal.playhead); pg.addColorStop(1, pal.playheadSoft);
@@ -1880,6 +1887,7 @@ function resetView() { computeRange(); viewTick.value = 0; zoom.value = 1; fit()
 
 defineExpose({
   setZoom, setViewTick, zoomBy, fit, focusSelection, resetView,
+  viewInfo: () => ({ viewTick: viewTick.value, pxPerTick: pxPerTick.value }),   // E2E：跟随播放断言用
   deleteSelected, quantizeSelected, transposeSelected, velRampSelected,
   copySelected, pasteAt, duplicateSelected, selectSamePitch,
   selectAll, selectNone, selCount, selInfo,

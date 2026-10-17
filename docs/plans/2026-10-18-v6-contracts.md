@@ -244,6 +244,13 @@
   - 本轮为任务条所有高频按钮补 `data-guide`（sel-badge / sel-transpose-up/down / sel-oct-up/down / sel-vel-up/down / sel-quantize / sel-delete / sel-cancel），并新增 E2E `edit-selection-toolbar`：
     **Ctrl+A 全选 → 已选 3 → 批量升半音（每个音符 +1，逐条读回数据）→ 批量力度渐强 → 批量删除 → Ctrl+Z 恢复 3 个音符**（一次操作 = 一条撤销项）。
 
+- **P1-13 B4 导航 / 跟随 / mini-map / 循环 ✅**：
+  - 新 `core/editor_nav.js`（5 测例）：跟随播放的视口滚动策略——播放头在 12%~88% 可视区内不滚，越界才滚到 30% 锚点；纯函数、无 DOM、无数据安全返回 null；
+  - EditorCanvas 新增 `followPlay`：播放中每帧按策略调整 `viewTick`（只在越界时改，手动滚动不会被每帧抢回）；新增 `viewInfo()` E2E 钩子；
+  - 编辑器工具栏新增「跟随」开关（默认开、localStorage 持久化；`data-guide=edit-follow`）；
+  - mini-map / 选区循环原本已有：补 `data-guide`（edit-minimap / edit-loop-set / edit-loop-clear）并纳入 E2E；
+  - E2E `edit-follow-ui`：默认开启 → 关闭/重开持久化 → mini-map 点击导航 → Ctrl+A 设选区循环（按钮高亮）→ 清除循环 → 播放中画布正常。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；
