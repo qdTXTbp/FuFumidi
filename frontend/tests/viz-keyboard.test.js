@@ -173,3 +173,44 @@ test('★ 按压是弹簧动画：逐帧下沉、轻过冲后回稳（不是一�
   assert.ok(Math.abs(settle - PRESS_DIP) < 1.2, '末尾应回稳到 PRESS_DIP 附近：' + settle);
   assert.ok(settle < peak, '过冲后要回落');
 });
+
+/* ---------------- 相机一致性（2026-10-18：音符"完全符合透视"的结构保证） ---------------- */
+
+test('★ 坡道平面与键床平面是**同一台相机**：落点线处两个平面必须重合', () => {
+  for (const persp of [0, 0.25, 0.5, 1]) {
+    const cam = makeKeyboardProjection(Object.assign({}, CAM, { persp }));
+    // 坡道距离 0 == 落点线 == 键床远端
+    near(cam.yOf(0), CAM.wN, 1e-9);
+    near(cam.sOf(CAM.wN), 0, 1e-9);
+    // 横向缩放一致：落点线上 S=1（音符正好落在它那一列键上，对齐是结构保证）
+    near(cam.sN(CAM.wN), 1, 1e-9);
+    for (const u of [10, 400, 1200]) near(cam.pxN(u, CAM.wN), u, 1e-9);
+  }
+});
+
+test('★ 坡道映射单调、可逆：yOf/sOf 互为反函数，音符的上下沿不会翻面', () => {
+  const cam = makeKeyboardProjection(Object.assign({}, CAM, { persp: 1 }));
+  for (const s of [0, 30, 120, 400, 700]) {
+    near(cam.sOf(cam.yOf(s)), s, 1e-6);
+  }
+  let lastY = Infinity;
+  for (let s = 0; s <= 800; s += 40) {
+    const y = cam.yOf(s);
+    assert.ok(y < lastY, '坡道距离越大屏幕 y 必须越小：s=' + s + ' y=' + y.toFixed(1));
+    lastY = y;
+  }
+});
+
+test('★ 音符越往上越窄、且左右对称地朝消失点收拢（不是只把某一边推走）', () => {
+  const cam = makeKeyboardProjection(Object.assign({}, CAM, { persp: 1 }));
+  const uL = 760, uR = 840;   // 跨过画布中心（w=1600 → 消失点在 x=800）
+  const q0 = cam.noteQuad(uL, uR, cam.yOf(0), cam.yOf(0));
+  const q1 = cam.noteQuad(uL, uR, cam.yOf(300), cam.yOf(320));
+  const w0 = q0[2] - q0[0], w1 = q1[2] - q1[0];
+  assert.ok(w1 < w0, '高处必须更窄：' + w1.toFixed(2) + ' vs ' + w0.toFixed(2));
+  // 收拢是朝画布中心（消失点在 x 方向正中）：左端点右移、右端点左移
+  assert.ok(q1[0] > q0[0], '左端点应向中心移');
+  assert.ok(q1[2] < q0[2], '右端点应向中心移');
+  // 下沿（落点线）必须与键列 1:1
+  near(q0[0], uL, 1e-9); near(q0[2], uR, 1e-9);
+});

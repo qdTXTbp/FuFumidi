@@ -15,6 +15,8 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  "立体键盘：透视 + 键面厚度 + 侧面 + 按压下沉（关掉 = 平板键，透视也一起关）": "3D keyboard: perspective + key thickness + side faces + press dip (off = flat keys, perspective off too)",
+  "这项只在「3D 键盘」开启时生效": "Only active when \"3D keyboard\" is on",
   "用途：": "Purpose: ",
   "注意：": "Note: ",
   "降噪（仅稳态噪声：底噪 / 嘶声 / 电流声）": "Noise reduction (steady noise only: hiss / hum / broadband floor)",

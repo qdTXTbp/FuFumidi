@@ -13,7 +13,7 @@ const song = {
   tracks: [{ index: 0, notes: [
     { midi: 60, start: 100000, end: 100500, vel: 90 },
     { midi: 64, start: 102000, end: 103000, vel: 70 },
-    { midi: 67, start: 104000, end: 105000, vel: 80 },
+    { midi: 67, start: 103000, end: 104000, vel: 80 },
   ], color: '#4f9dff' }],
   baseSec: (tk) => tk / TPS,
 };
@@ -171,4 +171,17 @@ test('★ 音符的落点部件必须长在音符自己的四边形上（透视�
     assert.ok(bodies.some((b) => Math.abs(gl.x - bottomOf(b).mx) < 1e-6),
       '光晕圆心必须落在某个音符的底边中点上，实测 x=' + gl.x.toFixed(2));
   }
+});
+
+test('★ 「3D 键盘」关掉时透视必须一起失效（用户 2026-10-18：让键盘透视只在 3D 键盘开启时生效）', () => {
+  const sig = (r) => r.prims.map((p) => [p.k, p.layer, Math.round(p.x || 0), Math.round(p.y || 0),
+    Math.round(p.w || 0), Math.round(p.h || 0), (p.pts || []).map((v) => Math.round(v)).join(',')].join(',')).join('|');
+  const off = (persp) => createCompiler().compile(song, tick, { ...base, fx: { keys3d: false, persp } });
+  assert.equal(sig(off(1)), sig(off(0)), '平板键盘模式下 persp=1 与 persp=0 必须逐图元一致（透视被强制归零）');
+  // 打开 3D 键盘后透视必须真的生效：键面变成四边形（有横向收拢）
+  const on = createCompiler().compile(song, tick, { ...base, fx: { keys3d: true, persp: 1 } });
+  const kbQuads = on.prims.filter((p) => p.layer === 'keyboard' && p.k === 'quad');
+  assert.ok(kbQuads.length > 0, '3D 键盘 + 透视时键面应为四边形');
+  const sheared = kbQuads.filter((p) => Math.abs(p.pts[0] - p.pts[6]) > 0.5);
+  assert.ok(sheared.length > 0, '键面必须有横向收拢（否则透视没生效）');
 });

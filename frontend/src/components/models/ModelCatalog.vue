@@ -166,7 +166,7 @@ const groups = computed(() => {
 .pill.on { background: color-mix(in srgb, var(--ok,var(--t-ok)) 14%, transparent); color: var(--ok,var(--t-ok)); }
 .pill.run { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
 .pill.off { background: var(--surface-soft); color: var(--stone); }
-.mini-bar { height: 3px; border-radius: 2px; background: var(--surface-soft); overflow: hidden; }
+.mini-bar { height: 3px; border-radius: var(--r-sm); background: var(--surface-soft); overflow: hidden; }
 .mini-bar i { display: block; height: 100%; background: var(--accent); transform-origin: left center; transition: transform var(--motion-fast) linear; }
 
 .vm-empty { display: flex; flex-direction: column; align-items: center; gap: var(--sp-3); padding: 48px 20px; color: var(--stone); }
