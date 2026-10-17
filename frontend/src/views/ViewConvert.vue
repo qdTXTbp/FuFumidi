@@ -20,6 +20,8 @@ import { encodeWav, measureLufs, measurePeakDb, applyLimiter, normalizeLoudness 
 import { EXPORT_FORMATS, LOUDNESS_TARGETS, formatInfo, normalizeExportOptions, exportOptionsToSettings, buildExportMeta, estimateFileBytes } from '../core/export_options.js';
 // P1-1c：按编排片段导出
 import { clipsRenderJobs, readArrangeFromSong } from '../core/arrange.js';
+// P2-1：离线插件节点（在渲染后、响度处理前应用）
+import { applyPluginChain } from '../core/plugin_node.js';
 import { timelineOfSong } from '../core/timeline.js';
 import NumSlider from '../components/NumSlider.vue';
 
@@ -47,6 +49,7 @@ onMounted(async () => {
       format: s && s['export.audio.format'],
       dither: s && s['export.audio.dither'],
       loudness: s && s['export.audio.loudness'],
+    plugins: s && s['export.audio.plugins'],
     }));
   } catch (e) { /* 读不到设置就用默认 wav24 */ }
 });
@@ -257,6 +260,15 @@ async function exportRendered(buf, baseName, gainMul) {
   const fi = formatInfo(exp.format);
   let out = chs;
   let report = null;
+  // P2-1：插件链在响度归一化**之前**跑（否则压缩器会破坏已校准的 LUFS）
+  let pluginReport = null;
+  if (Array.isArray(exp.plugins) && exp.plugins.length) {
+    try {
+      const pr = applyPluginChain(out, sr, exp.plugins);
+      out = pr.channels;
+      pluginReport = pr.report;
+    } catch (e) { console.warn('[export] 插件链失败，跳过：', (e && e.message) || e); }
+  }
   if (exp.loudness !== 'off') {
     const n = normalizeLoudness(chs, sr, { targetLufs: Number(exp.loudness), ceilingDb: -1, limiter: exp.limiter !== false });
     out = n.channels;
@@ -281,6 +293,7 @@ async function exportRendered(buf, baseName, gainMul) {
     originationTime: p2(now.getHours()) + ':' + p2(now.getMinutes()) + ':' + p2(now.getSeconds()),
     timeReference: 0,
   };
+  void pluginReport;
   const bytes = encodeWav(out, sr, { bitDepth: fi.bitDepth, dither: exp.dither && fi.bitDepth === 16, metadata: wavMeta });
   const peakDb = report ? report.outputPeakDb : measurePeakDb(out);
   const lufs = report ? report.outputLufs : measureLufs(out, sr);

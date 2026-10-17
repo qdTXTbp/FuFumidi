@@ -5,6 +5,20 @@ import {
   normalizeExportOptions, exportOptionsToSettings, buildExportMeta, estimateFileBytes,
 } from '../src/core/export_options.js';
 
+test('P2-1 导出选项：插件节点规范化（非法节点过滤、参数夹紧）', () => {
+  const o = normalizeExportOptions({ plugins: [
+    { type: 'eq', params: { freq: 99999, q: 100 } },
+    { type: 'nope' },
+    { type: 'gain', params: { gainDb: 100 } },
+  ] });
+  assert.equal(o.plugins.length, 2);
+  assert.equal(o.plugins[0].params.freq, 20000);
+  assert.equal(o.plugins[0].params.q, 12);
+  assert.equal(o.plugins[1].params.gainDb, 24);
+  assert.deepEqual(normalizeExportOptions({}).plugins, []);
+  assert.deepEqual(exportOptionsToSettings({ plugins: [{ type: 'gain' }] })['export.audio.plugins'][0].type, 'gain');
+});
+
 test('P0-4b 格式表：16/24/float32 与位深/扩展名', () => {
   assert.deepEqual(EXPORT_FORMATS.map((f) => [f.id, f.bitDepth, f.ext]), [
     ['wav16', 16, 'wav'], ['wav24', 24, 'wav'], ['float32', 32, 'wav'],
@@ -27,11 +41,12 @@ test('P0-4b normalizeExportOptions：默认值 / 未知值回落 / 数值夹取'
   assert.equal(normalizeExportOptions({ format: 'wav16', dither: false }).dither, false);
 });
 
-test('P0-4b exportOptionsToSettings：写成 settings.js 的三个键', () => {
+test('P0-4b exportOptionsToSettings：写成 settings.js 的键（P2-1 起含插件链）', () => {
   assert.deepEqual(exportOptionsToSettings({ format: 'float32', dither: false, loudness: '-14' }), {
     'export.audio.format': 'float32',
     'export.audio.dither': false,
     'export.audio.loudness': '-14',
+    'export.audio.plugins': [],
   });
 });
 

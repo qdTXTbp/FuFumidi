@@ -283,6 +283,12 @@
   - MIDI Clock：24 PPQN 状态机（start/continue/stop/setBpm），**相位累计不丢脉冲**（100 次 10ms 小步进恰好 48 脉冲/秒@120BPM）；Song Position Pointer 14-bit；`clockSchedule` 静态时间表、`clockJitter` 接收抖动统计；
   - 剩余：把 clock 主/从接到 Web MIDI 输出（播放/停止/跳转时发 start/continue/stop/SPP）、MPE 输出设备选择、UMP 实际发送（当前协议层可测，未接设备）。
 
+- **P2-1 VST3/CLAP Phase A ✅（离线插件节点 + 导出链接线；真实第三方插件宿主待接）**：
+  - 新 `core/plugin_node.js`（10 测例）：离线 DSP 节点 —— gain、单段 EQ（RBJ peaking/low/high shelf/lowpass/highpass）、压缩器（peak 包络 + 软膝 + makeup）、饱和器（tanh + dry/wet）；参数按元数据夹紧、未知类型过滤、链顺序影响结果、立体声独立、输出钳制（NaN→0 / 超范围 ±1）；
+  - `normalizePluginChain` / `describePluginChain`（UI 摘要）、`applyPluginChain` 返回每节点耗时与前后峰值报告；
+  - **导出链接线**：`export.audio.plugins` 设置 → `normalizeExportOptions` 规范化 → ViewConvert 渲染后、**响度归一化之前**应用（压缩器不会破坏已校准 LUFS）；插件链异常只告警并跳过，不阻断导出；
+  - 说明：真实 VST3/CLAP 需要外部宿主（`pedalboard` 或独立进程），本机未安装插件与宿主，本轮交付**可测的节点契约 + 内置等效节点**；接真实插件时只需把主进程宿主输出映射成同一 JSON 节点（Phase B 实时宿主不做）。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；

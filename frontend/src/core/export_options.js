@@ -3,6 +3,8 @@
 // ============================================================
 // 设置里存的是字符串 id（export.audio.format / dither / loudness），导出面板把它规范成
 // 一份确定的对象，再映射成 main/export.js 需要的 IPC 字段。纯函数，便于单测。
+// P2-1：export.audio.plugins 是离线插件节点数组（gain/eq/compressor/saturator），
+// 在渲染后、响度处理前应用（见 core/plugin_node.js）。
 
 export const EXPORT_FORMATS = [
   { id: 'wav16', label: 'WAV 16-bit', bitDepth: 16, ext: 'wav' },
@@ -16,6 +18,8 @@ export const LOUDNESS_TARGETS = [
   { id: '-16', label: '−16 LUFS（播客）', targetLufs: -16 },
   { id: '-23', label: '−23 LUFS（广播 EBU R128）', targetLufs: -23 },
 ];
+
+import { normalizePluginChain } from './plugin_node.js';
 
 export function formatInfo(id) {
   return EXPORT_FORMATS.find((f) => f.id === id) || EXPORT_FORMATS[1];
@@ -37,6 +41,7 @@ export function normalizeExportOptions(raw = {}) {
     limiter: raw.limiter == null ? true : !!raw.limiter,
     stems: !!raw.stems,
     gainPct: Math.max(0, Math.min(150, Number(raw.gainPct == null ? 100 : raw.gainPct) || 0)),
+    plugins: normalizePluginChain(raw.plugins),
   };
 }
 
@@ -47,6 +52,7 @@ export function exportOptionsToSettings(opts = {}) {
     'export.audio.format': o.format,
     'export.audio.dither': o.dither,
     'export.audio.loudness': o.loudness,
+    'export.audio.plugins': o.plugins,
   };
 }
 
