@@ -17,6 +17,10 @@ Write-Host "[3/3] electron-builder --win nsis (更新器已在 gen 之后同步)
 $up = Join-Path $root "release\update\FuFumidi.update.exe"
 $bytes = [System.IO.File]::ReadAllBytes($up)
 $s = [System.Text.Encoding]::GetEncoding(28591).GetString($bytes)
-if ($s.IndexOf("FuFumidi") -lt 0) { throw ("[断言失败] " + $up + " 没有嵌入应用配置，用户更新会报「安装包损坏」") }
+# ★ 只查 "FuFumidi" 不够（文件名/图标里就有这串），必须查**嵌入配置里的特征字段**：
+#   2026-10-18 事故就是更新器没嵌配置（embedded_config={}），用户更新报「安装包损坏」。
+if ($s.IndexOf("FuFumidiData") -lt 0 -or $s.IndexOf("FuFumidi.exe") -lt 0) {
+  throw ("[断言失败] " + $up + " 没有嵌入应用配置（缺 FuFumidiData / FuFumidi.exe 标记），用户更新会报「安装包损坏」")
+}
 Write-Host "[ok] 更新器已嵌入配置：" $up -ForegroundColor Green
 Write-Host "[ok] 安装包：" (Get-ChildItem (Join-Path $root "release") -Filter "*.exe" | Where-Object { $_.Name -like "*Setup*" } | ForEach-Object { $_.FullName }) -ForegroundColor Green

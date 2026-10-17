@@ -415,6 +415,32 @@ function findRcedit() {
   };
   return walk(base);
 }
+/* ★ 2026-10-18（真机事故：「安装包损坏，请重新下载」再次出现）：
+   安装版里的 FuFumidi.update.exe 必须是**嵌入了应用配置**的那一版，否则 kachina 更新器
+   不知道自己属于哪个应用 —— 日志里 embedded_config={}、install_path=C:\Program Files\KachinaInstaller，
+   更新必然失败。dev 部署只替换 app.asar 时，安装目录里的更新器会保留上一次安装留下的旧文件，
+   所以这里强制用构建产物里的「已配置更新器」覆盖安装目录那份（8.6MB 那版）。
+   判定标记用 FuFumidiData（只存在于嵌入配置里），比 "FuFumidi" 字面量可靠。 */
+{
+  const builtUpdater = path.join(ROOT, 'release', 'update', 'FuFumidi.update.exe');
+  const instUpdater = path.join(INSTALL, 'FuFumidi.update.exe');
+  try {
+    if (fs.existsSync(builtUpdater) && fs.statSync(builtUpdater).size > 1048576) {
+      const buf = fs.readFileSync(builtUpdater);
+      if (buf.includes(Buffer.from('FuFumidiData'))) {
+        const cur = fs.existsSync(instUpdater) ? fs.readFileSync(instUpdater) : null;
+        if (!cur || !cur.includes(Buffer.from('FuFumidiData'))) {
+          fs.copyFileSync(builtUpdater, instUpdater);
+          console.log('[5c/7] 已同步「含应用配置」的更新器 → ' + instUpdater);
+        }
+      } else {
+        console.log('[5c/7] ⚠ 构建产物里的更新器不含应用配置，跳过同步（请先跑 build-kachina）');
+      }
+    }
+  } catch (e) {
+    console.log('[5c/7] ⚠ 更新器同步失败：' + (e && e.message));
+  }
+}
 {
   const ico = path.join(ROOT, 'build', 'icon.ico');
   const rcedit = findRcedit();
