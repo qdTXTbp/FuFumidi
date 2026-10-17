@@ -277,6 +277,12 @@
   - 测试 `engine/tests/test_align_sofa.py` 6 例（合成 burst 真值：5 字中位边界误差 <30ms、缺一字时 onsetRatio/retention <95%、纯静音/空音频安全、标点与拉丁词切分）；
   - 剩余：ViewCover 的丢字 UI 标记与手动修正、合成前强制校验（当前是 warnings + meta 数据）。
 
+- **P2-3 MIDI 2.0 / MPE / Clock ✅（协议核心；设备 I/O 接线待做）**：
+  - 新 `core/midi2.js`（13 测例）：UMP 编解码（MT2 = MIDI 1.0 通道消息 32-bit；MT4 = MIDI 2.0 通道消息 64-bit：Note On 16-bit 力度、逐音弯音 32-bit 有符号）、7/16-bit 力度换算；
+  - MPE：lower/upper zone、master 通道保留、一音一 member 通道（池化分配/释放回收）、逐音弯音（semitone → 14-bit，默认 ±48）/CC74 音色/通道压力；通道耗尽安全返回 null；
+  - MIDI Clock：24 PPQN 状态机（start/continue/stop/setBpm），**相位累计不丢脉冲**（100 次 10ms 小步进恰好 48 脉冲/秒@120BPM）；Song Position Pointer 14-bit；`clockSchedule` 静态时间表、`clockJitter` 接收抖动统计；
+  - 剩余：把 clock 主/从接到 Web MIDI 输出（播放/停止/跳转时发 start/continue/stop/SPP）、MPE 输出设备选择、UMP 实际发送（当前协议层可测，未接设备）。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；
