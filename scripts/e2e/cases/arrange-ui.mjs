@@ -38,6 +38,18 @@ export default async function (app) {
   const afterStat = await app.eval('(document.querySelector(".arr-stat") || {}).innerText || ""');
   const afterRegions = Number((afterStat.match(/(\d+) 区间/) || [])[1] || 0);
   app.assert(afterRegions === beforeRegions + 1, '标尺拖拽新增区间：' + beforeRegions + ' → ' + afterRegions);
+  // P1-13 B2：撤销/重做（一次手势 = 一条撤销项）
+  app.assert(await app.eval('!document.querySelector("[data-guide=arrange-undo]").disabled'), '撤销按钮已可用');
+  await app.eval("document.querySelector('[data-guide=arrange-undo]').click()");
+  await new Promise((r3) => setTimeout(r3, 200));
+  const undoStat = await app.eval('(document.querySelector(".arr-stat") || {}).innerText || ""');
+  const undoRegions = Number((undoStat.match(/(\d+) 区间/) || [])[1] || 0);
+  app.assert(undoRegions === beforeRegions, '撤销回到拖拽前：' + afterRegions + ' → ' + undoRegions);
+  await app.eval("document.querySelector('[data-guide=arrange-redo]').click()");
+  await new Promise((r4) => setTimeout(r4, 200));
+  const redoStat = await app.eval('(document.querySelector(".arr-stat") || {}).innerText || ""');
+  const redoRegions = Number((redoStat.match(/(\d+) 区间/) || [])[1] || 0);
+  app.assert(redoRegions === afterRegions, '重做恢复拖拽：' + undoRegions + ' → ' + redoRegions);
   await app.screenshot('arrange-view');
   app.assert(true, '编排视图交互通过：' + stat2);
 }

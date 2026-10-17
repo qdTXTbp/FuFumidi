@@ -9,7 +9,10 @@ import { t } from '../core/i18n.js';
 import { themeColor } from '../core/palette.js';
 import { timelineOfSong, iterBars, secOfTick, tickOfSec } from '../core/timeline.js';
 // P1-13 B1：手势状态机（拖动/拖边/框选/平移/点击的判定与阈值统一走 core/gesture.js）
-import { createGestureState, beginGesture, updateGesture, endGesture, INTENTS } from '../core/gesture.js';
+import { createGestureState, beginGesture, updateGesture, endGesture, INTENTS, isMutatingIntent } from '../core/gesture.js';
+// P1-13 B2：撤销/重做走统一历史栈 + C1 命令注册表（菜单/命令面板/快捷键同一份）
+import { createHistoryStack } from '../core/history_stack.js';
+import { commands, comboOfEvent } from '../core/commands.js';
 import {
   createArrangeState, addClip, removeClip, moveClip, resizeClip, splitClip,
   setTrackFlags, addMarker, addRegion, clipLen, findClip, focusRangeOfClip,
@@ -29,6 +32,42 @@ const RULER_H = 26;
 let raf = 0;
 let gs = createGestureState();       // 当前指针手势（P1-13）
 let dragCtx = null;                  // 拖动上下文：clip 原值 + 命中边缘
+const hist = createHistoryStack({ limit: 60 });   // 编排撤销/重做（快照栈）
+const histDepth = ref({ undo: 0, redo: 0 });
+const cmdOffs = [];
+
+function snapshotArrange() { return JSON.parse(JSON.stringify(state.value)); }
+function syncHist() { histDepth.value = hist.depth(); }
+/** 在修改**之前**调用：记下当前状态，供撤销恢复 */
+function pushHistory() { hist.push(snapshotArrange()); syncHist(); }
+function applyArrange(snap) {
+  if (!snap) return false;
+  state.value = createArrangeState(snap);
+  selected.value = '';
+  draw();
+  return true;
+}
+function undoArrange() {
+  if (!hist.canUndo()) return false;
+  applyArrange(hist.undo(snapshotArrange()));
+  syncHist();
+  return true;
+}
+function redoArrange() {
+  if (!hist.canRedo()) return false;
+  applyArrange(hist.redo(snapshotArrange()));
+  syncHist();
+  return true;
+}
+/** 键盘：交给 C1 命令表解析（Mod+Z / Mod+Shift+Z），保证与全局快捷键同一套 */
+function onArrangeKey(e) {
+  const hits = commands.byKeys(e);
+  const cmd = hits.find((c) => c.area === 'arrange');
+  if (!cmd) return;
+  e.preventDefault();
+  e.stopPropagation();
+  commands.run(cmd);
+}
 
 const timeline = computed(() => {
   const s = song.value;
@@ -51,6 +90,8 @@ const markerCount = computed(() => state.value.markers.length);
 const regionCount = computed(() => state.value.regions.length);
 
 function resetState() {
+  hist.clear();
+  syncHist();
   const s = song.value;
   // P1-1c：优先恢复 song.arrange（会话内持久化），没有则按曲目生成默认编排
   state.value = readArrangeFromSong(s) || defaultArrangeState(s);
@@ -251,6 +292,11 @@ function onMove(e) {
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
   updateGesture(gs, { x, y });
   if (!gs.moved) return;                       // 3px 阈值内还是"点击"
+  // 第一次真正移动才记历史：快照是"移动前"的状态，整个手势只记一次（撤销粒度=一次手势）
+  if (!gs.historyPushed && !gs.ruler && isMutatingIntent(gs.intent)) {
+    pushHistory();
+    gs.historyPushed = true;
+  }
   if (gs.intent === INTENTS.PAN) {
     const d = x - (gs.panLastX == null ? gs.start.x : gs.panLastX);
     gs.panLastX = x;
@@ -287,6 +333,7 @@ function onUp(e) {
       const tick2 = Math.max(0, Math.round(tickOfX(end.end.x)));
       const a = Math.min(rulerStart, tick2), b = Math.max(rulerStart, tick2);
       if (b - a >= Math.max(10, Math.round(zoom.value > 0 ? 20 / zoom.value : 10))) {
+        pushHistory();
         state.value = addRegion(state.value, { name: 'R' + (regionCount.value + 1), startTick: a, endTick: b });
       }
     } else {
@@ -316,11 +363,13 @@ function onDblClick(e) {
 /* ---- 工具条动作 ---- */
 function splitAtPlayhead() {
   if (!selected.value) return;
+  pushHistory();
   state.value = splitClip(state.value, selected.value, playTick.value);
   draw();
 }
 function deleteSelected() {
   if (!selected.value) return;
+  pushHistory();
   state.value = removeClip(state.value, selected.value);
   selected.value = '';
   draw();
@@ -328,6 +377,7 @@ function deleteSelected() {
 function toggleMute() {
   const tr = state.value.tracks.find((x) => x.id === (findClip(state.value, selected.value) || {}).trackId);
   if (!tr) return;
+  pushHistory();
   state.value = setTrackFlags(state.value, tr.id, { mute: !tr.mute });
   draw();
 }
@@ -335,6 +385,7 @@ function addMarkerHere() {
   const tl = timeline.value;
   let bar = 1;
   try { bar = tl ? Math.floor(tickOfSec(tl, secOfTick(tl, playTick.value) + 0.001) / 1) : 1; } catch (e) {}
+  pushHistory();
   state.value = addMarker(state.value, { title: 'M' + (markerCount.value + 1), tick: playTick.value });
   void bar;
   draw();
@@ -343,6 +394,7 @@ function addRegionHere() {
   const tl = timeline.value;
   let span = 1920;
   try { if (tl) { const b = iterBars(tl, playTick.value, playTick.value + 1920 * 8); if (b.length > 1) span = b[1].ticks * 4; } } catch (e) {}
+  pushHistory();
   state.value = addRegion(state.value, { name: 'R' + (regionCount.value + 1), startTick: playTick.value, endTick: playTick.value + span });
   draw();
 }
@@ -359,8 +411,22 @@ onMounted(async () => {
   await nextTick();
   fitAll();
   tickTimer = setInterval(() => { if (app.playing) draw(); }, 100);
+  // C1：编排页自己的撤销/重做命令（命令面板/快捷键/Menu 都查同一张表）
+  cmdOffs.push(commands.register({
+    id: 'arrange.undo', title: '撤销', area: 'arrange', keys: 'Mod+Z', undoable: true,
+    when: () => hist.canUndo(), run: () => { undoArrange(); },
+  }));
+  cmdOffs.push(commands.register({
+    id: 'arrange.redo', title: '重做', area: 'arrange', keys: 'Mod+Shift+Z', undoable: true,
+    when: () => hist.canRedo(), run: () => { redoArrange(); },
+  }));
+  window.addEventListener('keydown', onArrangeKey);
 });
-onBeforeUnmount(() => { if (tickTimer) clearInterval(tickTimer); });
+onBeforeUnmount(() => {
+  if (tickTimer) clearInterval(tickTimer);
+  while (cmdOffs.length) { try { cmdOffs.pop()(); } catch (e) {} }
+  window.removeEventListener('keydown', onArrangeKey);
+});
 
 </script>
 
@@ -377,6 +443,8 @@ onBeforeUnmount(() => { if (tickTimer) clearInterval(tickTimer); });
       <button class="btn sm" :disabled="!selected" @click="splitAtPlayhead">{{ t('在播放头切分') }}</button>
       <button class="btn sm" :disabled="!selected" @click="toggleMute">{{ t('静音轨道') }}</button>
       <button class="btn sm" :disabled="!selected" @click="deleteSelected">{{ t('删除片段') }}</button>
+      <button class="btn sm" data-guide="arrange-undo" :disabled="!histDepth.undo" @click="undoArrange">{{ t('撤销') }}</button>
+      <button class="btn sm" data-guide="arrange-redo" :disabled="!histDepth.redo" @click="redoArrange">{{ t('重做') }}</button>
       <button class="btn sm" @click="addMarkerHere">{{ t('加标记') }}</button>
       <button class="btn sm" @click="addRegionHere">{{ t('加区间') }}</button>
     </div>
