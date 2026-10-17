@@ -122,7 +122,9 @@
   - 新 `main/export.js`：`export:audio` IPC 原子落盘 + 同名 .manifest.json（sha256/size/格式/位深/采样率/声道/时长/LUFS/峰值/目标）；文件名 Windows 安全化；三处同改（preload.exportAudio → main.js 注册 → types/ipc.ts）；
   - 测试：`frontend/tests/export_audio.test.js`（10 例：头/大小/量化/dither 噪声形状/响度实测/限幅/归一）+ `scripts/test-export.mjs`（4 例：命名/落盘/manifest/错误路径），并进 `npm test` 链；
   - E2E 新增 `export-ipc`：渲染进程生成 WAV → bridge → 主进程落盘 → Node 侧校验文件头与 manifest 后清理；
-  - 剩余（P0-4b）：导出面板（格式/位深/dither/响度目标 UI）、分轨渲染与 zip 打包、FLAC/MP3/OGG（按 Scope Guard 可延后）。
+  - **P0-4b ✅**：转换页导出面板接入 —— 导出格式（WAV 16/24/float32）、响度目标（off/−14/−16/−23 LUFS）、16bit TPDF dither、总线限幅（−1 dBFS）、**分轨导出**（每轨单独离线渲染一个文件）；选项持久化到 settings（`export.audio.*`）；渲染链路 = 增益 →（响度归一 + 限幅）→ WAV 编码 → `export:audio` 落盘 + manifest；文件预估按位深/分轨数算；
+  - 测试：`frontend/tests/export_options.test.js`（5 例）+ E2E `convert-ui`（面板挂载与控件齐全）；
+  - 剩余（P0-4c）：分轨 zip 打包、FLAC/MP3/OGG（按 Scope Guard 可延后到 P1）。
 
 ## 3. E2E（验收底座，已落地）
 

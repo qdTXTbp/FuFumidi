@@ -15,6 +15,9 @@ import { drawVizWaterfallPost } from '../core/viz/index.js';
 import { paintVizBg, drawVizSpectrum, drawVizScope, drawVizChord, rmsAt, smoothEnergy, smoothEnergyDt, activeNotesAt, VIZ_REF_H, VIZ_REF_DPR } from '../core/viz.js';
 import { playVoice, presetFromMode } from '../core/synth.js';
 import { renderSongWithSf2 } from '../core/sf2render.js';
+// P0-4b：导出的编码/DSP/选项映射（纯模块，有单测）
+import { encodeWav, measureLufs, measurePeakDb, applyLimiter, normalizeLoudness } from '../core/export_audio.js';
+import { EXPORT_FORMATS, LOUDNESS_TARGETS, formatInfo, normalizeExportOptions, exportOptionsToSettings, buildExportMeta, estimateFileBytes } from '../core/export_options.js';
 import NumSlider from '../components/NumSlider.vue';
 
 const tempo = ref(1);
@@ -25,6 +28,23 @@ const range = ref('full');
 const busy = ref(false);
 const progress = ref(0);
 const done = ref(false);
+
+/* P0-4b 导出质量选项：格式/位深、dither、响度目标、总线限幅、分轨 */
+const bridge = window.fuBridge;
+const exp = reactive(normalizeExportOptions({}));
+onMounted(async () => {
+  try {
+    const s = (bridge && bridge.getSettings) ? await bridge.getSettings() : {};
+    Object.assign(exp, normalizeExportOptions({
+      format: s && s['export.audio.format'],
+      dither: s && s['export.audio.dither'],
+      loudness: s && s['export.audio.loudness'],
+    }));
+  } catch (e) { /* 读不到设置就用默认 wav24 */ }
+});
+watch(() => [exp.format, exp.dither, exp.loudness], () => {
+  try { if (bridge && bridge.saveSettings) bridge.saveSettings(exportOptionsToSettings(exp)).catch(() => {}); } catch (e) {}
+});
 
 const song = computed(() => (currentSong.value && currentSong.value.song) || null);
 const totalNotes = computed(() => song.value ? song.value.tracks.reduce((a, tr) => a + tr.notes.length, 0) : 0);
@@ -43,7 +63,9 @@ const estSize = computed(() => {
   const s = song.value;
   if (!s) return '—';
   const sec = s.totalSec / (tempo.value || 1);
-  const bytes = sec * (rate.value || 44100) * 2;
+  // 按实际位深与是否分轨估算（16bit 立体声 44.1k 约 10.1MB/分钟）
+  const perFile = estimateFileBytes(sec, rate.value || 44100, exp.format);
+  const bytes = perFile * (exp.stems ? Math.max(1, (s.tracks || []).length) : 1);
   const kb = bytes / 1024;
   return kb >= 1048576 ? (kb / 1048576).toFixed(1) + ' MB' : Math.round(kb) + ' KB';
 });
@@ -171,12 +193,17 @@ async function renderAudio() {
   if (!s) { toast(t('请先载入 MIDI 文件'), 'warn'); return; }
   if (busy.value) return;
   busy.value = true; done.value = false; progress.value = 0;
+  const g = clamp(gain.value / 100, 0, 2);
   try {
-    const buf = await renderAudioBuffer(s, { rate: rate.value, scale: tempo.value, mode: preset.value, onProgress: (p) => { progress.value = Math.round(p * 50); } });
-    const g = clamp(gain.value / 100, 0, 2);
-    await downloadWav(buf, s.name, g);
-    progress.value = 100; done.value = true;
-    toast(t('音频已导出'));
+    if (exp.stems) {
+      await renderStems(s, g);
+    } else {
+      const buf = await renderAudioBuffer(s, { rate: rate.value, scale: tempo.value, mode: preset.value, onProgress: (p) => { progress.value = Math.round(p * 90); } });
+      progress.value = 92;
+      await exportRendered(buf, s.name + '_render', g);
+      progress.value = 100; done.value = true;
+      toast(t('音频已导出'));
+    }
   } catch (e) {
     toast(t('渲染失败：') + String(e.message || e), 'warn');
   } finally { busy.value = false; }
@@ -198,22 +225,74 @@ function mixRendered(rendered, sr, totalLen) {
   return out;
 }
 
-async function downloadWav(buf, name, g) {
-  const bytes = await audioBufferToWavBytesAsync(buf, (p) => { progress.value = Math.max(progress.value, Math.round(p * 100)); }, g);
-  const bridge = window.fuBridge;
-  if (bridge && bridge.saveBinary) {
-    // 直接传 Uint8Array（结构化克隆），避免 Array.from 生成数千万元素数组导致内存暴涨
-    const r = await bridge.saveBinary({ name: name + '_render.wav', data: bytes });
-    if (r && r.ok) toast(t('已保存到：') + r.path, 'ok');
-    else if (!(r && r.canceled)) toast(t('保存失败：') + ((r && r.error) || ''), 'warn');
-    return;
+/**
+ * P0-4b：把离线渲染好的 AudioBuffer 编码并落盘。
+ * 链路：增益 →（响度归一 + 限幅）→ WAV 编码（位深/dither）→ bridge.exportAudio（主进程原子写 + manifest）。
+ * 网页端没有 bridge.exportAudio 时退回 blob 下载。
+ */
+async function exportRendered(buf, baseName, gainMul) {
+  const sr = buf.sampleRate;
+  const chs = [];
+  for (let c = 0; c < buf.numberOfChannels; c++) {
+    const src = buf.getChannelData(c);
+    const a = new Float32Array(src.length);
+    for (let i = 0; i < src.length; i++) a[i] = src[i] * gainMul;
+    chs.push(a);
+  }
+  const fi = formatInfo(exp.format);
+  let out = chs;
+  let report = null;
+  if (exp.loudness !== 'off') {
+    const n = normalizeLoudness(chs, sr, { targetLufs: Number(exp.loudness), ceilingDb: -1, limiter: exp.limiter !== false });
+    out = n.channels;
+    report = n.report;
+  } else if (exp.limiter !== false) {
+    const lim = applyLimiter(chs, sr, { ceilingDb: -1 });
+    out = lim.channels;
+    report = { outputLufs: measureLufs(out, sr), outputPeakDb: measurePeakDb(out), targetLufs: null, reductionDb: lim.reductionDb };
+  }
+  const bytes = encodeWav(out, sr, { bitDepth: fi.bitDepth, dither: exp.dither && fi.bitDepth === 16 });
+  const peakDb = report ? report.outputPeakDb : measurePeakDb(out);
+  const lufs = report ? report.outputLufs : measureLufs(out, sr);
+  const meta = buildExportMeta({
+    name: baseName, format: exp.format, sampleRate: sr, channels: out.length,
+    durationSec: (out[0] ? out[0].length : 0) / sr,
+    lufs, peakDb, targetLufs: exp.loudness === 'off' ? null : Number(exp.loudness),
+    sourceName: (song.value && song.value.name) || '',
+  });
+  if (bridge && bridge.exportAudio) {
+    const r = await bridge.exportAudio(Object.assign({ bytes }, meta));
+    if (r && r.ok) { toast(t('已保存到：') + r.path, 'ok'); return true; }
+    if (!(r && r.canceled)) { toast(t('保存失败：') + ((r && r.error) || ''), 'warn'); return false; }
+    return false;
   }
   const blob = new Blob([bytes], { type: 'audio/wav' });
   const a = document.createElement('a');
-  a.download = name + '_render.wav';
+  a.download = meta.name + '.' + fi.ext;
   a.href = URL.createObjectURL(blob);
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  return true;
+}
+
+/** P0-4b 分轨导出：每轨单独离线渲染（其余轨静音）→ 各自一个文件；进度按轨推进 */
+async function renderStems(s, gainMul) {
+  const targets = (s.tracks || []).map((tr, i) => ({ tr, i })).filter((x) => x.tr && x.tr.notes && x.tr.notes.length);
+  if (!targets.length) { toast(t('没有可导出的音符'), 'warn'); return 0; }
+  let ok = 0;
+  for (let k = 0; k < targets.length; k++) {
+    const { tr, i } = targets[k];
+    progress.value = Math.max(2, Math.round((k / targets.length) * 95));
+    // 单轨子歌曲：index 归 0（渲染内层按 s.tracks 下标分配增益节点）
+    const sub = Object.assign({}, s, { tracks: [Object.assign({}, tr, { index: 0 })] });
+    const buf = await renderAudioBuffer(sub, { rate: rate.value, scale: tempo.value, mode: preset.value });
+    const name = s.name + '_' + (tr.name || (t('轨道') + (i + 1))) + '_stem';
+    if (await exportRendered(buf, name, gainMul)) ok++;
+  }
+  progress.value = 100;
+  done.value = true;
+  toast(t('分轨导出完成：') + ok + t(' 轨'), 'ok');
+  return ok;
 }
 
 /* ==================== 视频 / 可视化导出 ==================== */
@@ -796,6 +875,30 @@ async function renderVideo() {
             <option value="full">{{ t('整首歌曲') }}</option>
           </select>
         </div>
+        <div class="field-row">
+          <label>{{ t('导出格式') }}</label>
+          <select class="select-input" v-model="exp.format">
+            <option v-for="f in EXPORT_FORMATS" :key="f.id" :value="f.id">{{ f.label }}</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <label>{{ t('响度目标') }}</label>
+          <select class="select-input" v-model="exp.loudness">
+            <option v-for="l in LOUDNESS_TARGETS" :key="l.id" :value="l.id">{{ l.label }}</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <label>{{ t('16bit TPDF dither') }}</label>
+          <input type="checkbox" v-model="exp.dither" :disabled="formatInfo(exp.format).bitDepth !== 16" />
+        </div>
+        <div class="field-row">
+          <label>{{ t('总线限幅（-1 dBFS）') }}</label>
+          <input type="checkbox" v-model="exp.limiter" />
+        </div>
+        <div class="field-row">
+          <label>{{ t('分轨导出（每轨一个文件）') }}</label>
+          <input type="checkbox" v-model="exp.stems" />
+        </div>
         <div class="field-row gain-row">
           <label>{{ t('输出音量') }}<b style="color:var(--brand-coral)">{{ gain }}%</b></label>
           <NumSlider v-model="gain" :min="0" :max="150" class="range" />
@@ -808,7 +911,7 @@ async function renderVideo() {
       </div>
 
       <button class="btn primary big" @click="renderAudio" :disabled="busy || !song">
-        <Icon name="convert" :size="16" />{{ busy ? t('渲染中…') : t('渲染并导出 WAV') }}
+        <Icon name="convert" :size="16" />{{ busy ? t('渲染中…') : t('渲染并导出音频') }}
       </button>
 
       <Transition name="cv">
@@ -818,7 +921,7 @@ async function renderVideo() {
         </div>
       </Transition>
       <Transition name="cv">
-        <div v-if="done" class="conv-done-tip">✓ {{ t('渲染完成，WAV 已下载') }}</div>
+        <div v-if="done" class="conv-done-tip">✓ {{ t('渲染完成，音频已导出') }}</div>
       </Transition>
     </div>
 
