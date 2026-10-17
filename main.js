@@ -63,6 +63,7 @@ const { registerWallpaperIpc } = require('./main/wallpaper');
 const { registerUtauIpc } = require('./main/utau');
 const { registerDiffsingerIpc } = require('./main/diffsinger');
 const { registerCoverIpc } = require('./main/cover');
+const { registerAiIpc } = require('./main/ai-generate');
 const { createHotkeys, HOTKEY_ACTIONS } = require('./main/hotkeys');
 const { registerSoundfontWorkshopIpc } = require('./main/soundfonts');
 const { registerUserMetaIpc } = require('./main/usermeta');
@@ -200,6 +201,8 @@ if (!gotLock) {
     // 翻唱工作流（一首歌 → 分离 → 扒谱 → 合成 → 混音 → 成品）：
     // 引擎是 engine_cover.py；GPT-SoVITS 音色通道的解释器/运行时由环境变量传给引擎。
     registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spawnEngine, engineEnv, readSettings });
+  // P2-6 AI 生成（可选、默认关）：只调用用户自备的本地命令；产物强制 AI 标注
+  registerAiIpc({ ipcMain, app, readSettings });
     registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, net });
     registerPluginsIpc();
     registerGpuIpc({

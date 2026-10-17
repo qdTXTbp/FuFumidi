@@ -19,6 +19,10 @@ const DEFAULT_SETTINGS = {
   output_dir: '',
   guide_done: false,
   advanced_mode: false,
+  /* P2-6 AI 生成（可选、默认关）：本地生成命令由用户自备；
+     默认命令留空 = not-configured，不会联网也不会内置模型。 */
+  'ai.enabled': false,
+  'ai.provider_cmd': '',
   custom_wallpaper: '',
   wallpaper_prompt_done: false,
   wallpaper_enabled: false,

@@ -137,6 +137,8 @@ const form = reactive({
   engine_path: '', engine_mode: 'universal', perf_mode: 'quality', batch_concurrency: 'auto',
   output_dir: '', name_rule: '', watch_dir: '', watch_enabled: false, file_assoc: true,
   advanced_mode: false,   // P1-12 专家模式（默认关 = 普通模式，隐藏 OMR/翻唱/GPU 入口）
+  ai_enabled: false,      // P2-6 AI 生成（可选、默认关；仅专家模式可见）
+  ai_provider_cmd: '',    // 用户自备的本地生成命令（不内置模型/不联网）
 });
 
 /* ---------------- 更新 ---------------- */
@@ -226,6 +228,8 @@ async function load() {
   form.watch_enabled = !!s.watch_enabled;
   form.file_assoc = s.file_assoc !== false;
   form.advanced_mode = !!s.advanced_mode;
+  form.ai_enabled = s['ai.enabled'] === true;
+  form.ai_provider_cmd = s['ai.provider_cmd'] || '';
   // 更新通道：这里必须用**纯归一化**，不能调 setUpdateChannel ——
   // 后者会把值写回 localStorage 与设置，而 s 可能来自 store 的内存缓存（未必最新），
   // 会把用户刚选的通道反向覆盖成旧值，表现为「选了测试版，重开设置又变回正式版」。
@@ -1156,6 +1160,7 @@ function apply() {
     output_dir: form.output_dir, name_rule: form.name_rule,
     watch_dir: form.watch_dir, watch_enabled: form.watch_enabled,
     file_assoc: form.file_assoc, advanced_mode: form.advanced_mode,
+    'ai.enabled': form.ai_enabled, 'ai.provider_cmd': form.ai_provider_cmd,
   };
   let saved = false;
   settingsStore.save(payload).then(() => { if (!saved) toast(t('设置已保存')); }).catch(() => toast(t('设置保存失败'), 'error'));
@@ -1549,6 +1554,16 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <label class="ov-check"><input type="checkbox" v-model="form.advanced_mode" data-guide="expert-mode-toggle" /> {{ t('显示高级入口') }}</label>
             </div>
           </div>
+          <div v-if="form.advanced_mode" class="field-row" data-setting="ai_mode" data-guide="ai-generate-row">
+            <div>
+              <div class="fr-label">{{ t('AI 生成（可选）') }}</div>
+              <div class="fr-hint">{{ t('默认关闭。打开后使用你自备的本地生成命令；所有产物会标记为 AI 生成') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <label class="ov-check"><input type="checkbox" v-model="form.ai_enabled" data-guide="ai-generate-toggle" /> {{ t('允许 AI 生成') }}</label>
+              <input v-model="form.ai_provider_cmd" class="ov-input mono" style="width:240px" :placeholder="t('本地命令（可选）')" data-guide="ai-generate-cmd" />
+            </div>
+          </div>
           <div class="field-row">
             <div>
               <div class="fr-label">{{ t('默认输出目录') }}</div>
@@ -1912,7 +1927,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
 
       <div class="settings-foot">
         <button class="btn" @click="cancel">{{ t('取消') }}</button>
-        <button class="btn primary" @click="apply">{{ t('保存') }}</button>
+        <button class="btn primary" data-guide="settings-save" @click="apply">{{ t('保存') }}</button>
       </div>
     </div>
 

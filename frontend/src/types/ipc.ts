@@ -861,9 +861,45 @@ export interface TaskItem {
   cancelable?: boolean;
 }
 
+/** P2-6 AI 生成（可选、默认关）：本地命令契约由 main/ai-generate.js 执行 */
+export interface AiStatus {
+  enabled: boolean;
+  ready: boolean;
+  code: 'disabled' | 'not-configured' | 'ready';
+  reason: string;
+  kinds: string[];
+}
+export interface AiRequest {
+  kind: 'midi' | 'audio' | 'lyrics';
+  prompt: string;
+  title?: string;
+  seed?: number;
+}
+export interface AiFile {
+  name: string;
+  path: string;
+  kind: string;
+  bytes: number;
+}
+export interface AiGenerateResult {
+  ok: boolean;
+  code?: string;
+  error?: string;
+  jobId?: string;
+  outdir?: string;
+  files?: AiFile[];
+  meta?: { aiGenerated: true; provider: string; model: string; kind: string; createdAt: string; promptHash: string };
+  log?: string;
+}
+
 export interface FuBridge {
   /** E2E 测试实例标记（scripts/e2e 启动时 FUFUMIDI_E2E=1）：true 时渲染进程会注册最小测试钩子 */
   e2e?: boolean;
+  /** P2-6 AI 生成（可选、默认关）：生成文件一律带 AI 标注 */
+  ai?: {
+    status(): Promise<AiStatus>;
+    generate(req: AiRequest): Promise<AiGenerateResult>;
+  };
   /** P1-9 存储治理：分类占用与安全清理 */
   storage?: {
     report(): Promise<StorageReport>;

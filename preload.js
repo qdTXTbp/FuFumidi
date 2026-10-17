@@ -393,6 +393,11 @@ contextBridge.exposeInMainWorld('fuBridge', {
     autosaveRead: (docId) => ipcRenderer.invoke('autosave:read', docId),
     autosaveClear: (docId) => ipcRenderer.invoke('autosave:clear', docId),
   },
+  // P2-6 AI 生成（可选、默认关）：产物带 AI 标注；没有本地命令时明确报 not-configured
+  ai: {
+    status: () => ipcRenderer.invoke('ai:status'),
+    generate: (req) => ipcRenderer.invoke('ai:generate', req),
+  },
   // P1-9 存储治理：分类占用报告 + 安全清理（曲库永不清，资产需显式 includeAssets）
   storage: {
     report: () => ipcRenderer.invoke('storage:report'),

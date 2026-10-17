@@ -315,6 +315,21 @@
 - 未完成：GitHub Release 资产上传（本机无 GitHub 凭据，credential fill 交互不可用）；mac/linux 真机构建与签名公证；
   Authenticode 证书；原生音频 I/O（WASAPI/ASIO）与真实插件宿主 —— 均属环境/资源依赖项。
 
+- **P2-6 AI 生成接入 ✅（可选、默认关；本地命令适配器）**：
+  - 新 `core/ai_generate.js`（7 测例）：状态机（disabled / not-configured / ready，**只有布尔 true 算开启**）、请求校验（kind/prompt 长度/seed 夹紧）、job 契约（`fufumidi-ai-job/v1` + promptHash）、结果规范化（**强制 aiGenerated=true + provider/model/时间/哈希**，去重、拒绝路径穿越/控制字符/空文件）、AI 标注文案；
+  - 新 `main/ai-generate.js`：IPC `ai:status` / `ai:generate` —— 只调用用户自备本地命令（`ai.provider_cmd` 或 `FUFUMIDI_AI_CMD`，契约 `--job <job.json> --outdir <dir>`，结果 `result.json`），10 分钟超时、输出文件必须真实存在且在 outdir 内、退出码/缺结果文件/无有效文件都明确报错（**不伪造成功**）；不内置模型、不联网；
+  - 三处同改：preload `ai.status/generate` + `types/ipc.ts` 类型 + 设置默认值 `ai.enabled=false` / `ai.provider_cmd=''`；设置索引新增「AI 生成（可选）」；SettingsPanel 专家模式下的开关与命令输入（`data-guide=ai-generate-*`）；EN/JA 文案同步；
+  - E2E `ai-generate-ui`：默认关闭时 IPC 拒绝、专家模式出现开关、开启未配置 → not-configured、配置假命令 → **bad-result**、复原设置；全量 E2E 23/23；
+  - 说明：真实生成能力取决于用户本地模型/命令，随包不提供模型；AI 产物已带标注字段，供导出/曲库展示。
+
+### 6.0.0 完成度审计（对照 28 包）
+
+- **P0-1…P0-8**：均有实现与测试（midi-roundtrip / session / midiin / recorder / export_audio / default-soundfont / timeline-model / check-version），P0-8 的 i18n 欠账仅剩 EN 5 / JA 4 条（棘轮已缩基线）。
+- **P1-1…P1-14**：全部主体完成；尾巴：P1-5 的丢字 UI 标记/手动修正、P1-13 的分标签页独立撤销栈、P0-4c stems zip 打包细节。
+- **P2-1/P2-2/P2-3/P2-4**：协议层/契约/构建入口完成；真实第三方插件宿主、WASAPI/ASIO/CoreAudio 原生 I/O、mac/linux 真机构建与签名公证属环境/资源依赖项。
+- **P2-5 DAW 互通（DAWproject）**：**尚未实现**（下一轮做导出/导入核心 + 自测；无 Studio One/Bitwig 实机，验收只能标记"未经 DAW 实测"）。
+- **P2-6 AI 生成**：✅ 本轮完成（可选、默认关、本地命令、强制 AI 标注）。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；
