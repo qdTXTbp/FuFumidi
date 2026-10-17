@@ -15,6 +15,7 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  "这是单轨降噪模型：输出≈原音（只压稳态噪声），不分离人声/伴奏；要分离请选 Mel-Band Roformer（如 duality）": "Single-stem denoise model: the output is ≈ identical to the original (it only removes steady noise). It does NOT split vocals/instrumental — use a Mel-Band Roformer (e.g. duality) for that",
   "长音频：分离会一直跑下去（无进展 20 分钟才判失败），慢的话建议先裁剪片段": "Long audio: separation keeps running (only fails after 20 min without progress). Consider trimming a clip first",
   'GPU 逐帧编码中…': 'Encoding on the GPU…',
   '封装为 MP4…': 'Packaging the MP4…',

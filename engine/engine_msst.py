@@ -379,6 +379,31 @@ def separate(audio_path, out_dir, params=None, log_cb=None, progress_cb=None):
             outputs.append(save_dir)
             _log(log_cb, f"· 已输出音轨「{stem}」→ {os.path.basename(save_dir)}")
 
+        # ★ 单轨降噪模型（training.target_instrument 非空，如 au*r*33 denoise_*）的「clean」
+        #   在设计上就是**尽量保留音乐、只压稳态噪声**：对音乐为主的素材，输出与原始音频
+        #   几乎完全相同是正常的，不是分离失败。但用户看到「clean 和原音一样」会以为坏了，
+        #   所以这里做一次相似度检查并把话说清楚（2026-10-17 用户实测反馈）。
+        try:
+            target = separator.config.training.target_instrument
+        except Exception:
+            target = None
+        if target and target in results:
+            try:
+                import numpy as _np
+                a = _np.asarray(results[target], dtype=_np.float64)
+                b = _np.asarray(mix.T if _np.ndim(mix) == 2 and _np.shape(mix)[0] == 2 else mix, dtype=_np.float64)
+                n = min(_np.shape(a)[0], _np.shape(b)[0])
+                a2 = a.reshape(n, -1)[:n] if _np.ndim(a) > 1 else a[:n].reshape(-1, 1)
+                b2 = b.reshape(n, -1)[:n] if _np.ndim(b) > 1 else b[:n].reshape(-1, 1)
+                num = float(_np.sum(a2 * b2)); den = float(_np.sqrt(_np.sum(a2 * a2) * _np.sum(b2 * b2)) + 1e-20)
+                corr = num / den
+                if corr > 0.999:
+                    _log(log_cb, "· 提示：这是**单轨降噪模型**，输出与原始音频几乎相同（它只压稳态噪声、"
+                                 "不分离人声/伴奏 —— 对音乐为主的素材这是正常结果）。要分离人声/伴奏请换用 "
+                                 "Mel-Band Roformer（如 duality）等分离模型；要做强降噪可用「强降噪」功能。")
+            except Exception:
+                pass
+
         _log(log_cb, f"分离完成，共 {len(outputs)} 个音轨，耗时 {time.time() - start:.1f}s")
         return outputs
     finally:
