@@ -40,7 +40,11 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
   function spawnEngine(pyArgs, opts = {}) {
     // env：允许调用方覆盖环境变量（翻唱工作流要把 FUFUMIDI_GSV_ROOT / FUFUMIDI_GSV_PYTHON
     // 传给引擎，让 engine_cover 能找到 GPT-SoVITS 运行时与它的解释器）。
-    const { script = 'music2midi.py', onLog, onProgress, onDone, onError, timeoutMs = 30 * 60 * 1000, env: envOverride } = opts;
+    // ★ idleTimeoutMs：**无进展**多久就判定卡死（0 = 不启用）。
+    //   长音频分离/翻唱动辄几十分钟，用总时长当超时会把正常的长任务当卡死杀掉
+    //   （2026-10-17 实测：一场演唱会 FLAC 分离跑过 30 分钟被「引擎执行超时」干掉）。
+    //   有 progress/log 输出就刷新计时，只有真的长时间一句话都没有才终止。
+    const { script = 'music2midi.py', onLog, onProgress, onDone, onError, timeoutMs = 30 * 60 * 1000, idleTimeoutMs = 0, env: envOverride } = opts;
     const py = resolvePython();
     const eng = engineDir();
     const scriptPath = path.isAbsolute(script) ? script : path.join(eng, script);
@@ -54,6 +58,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
     let outBuf = '', errBuf = '';
     let result = null;
     let settled = false;
+    let _lastActivity = Date.now();   // 最近一次有输出的时刻（idle 看门狗用）
     const finish = (fn) => {
       if (settled) return;
       settled = true;
@@ -62,6 +67,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       try { fn(); } catch {}
     };
     const pumpOut = (d) => {
+      _lastActivity = Date.now();
       outBuf += d.toString('utf8');
       const lines = outBuf.split(/\r?\n/);
       outBuf = lines.pop();
@@ -75,7 +81,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
         try { onLog && onLog(t); } catch {}
       }
     };
-    const pumpErr = (d) => { errBuf += d.toString('utf8'); };
+    const pumpErr = (d) => { _lastActivity = Date.now(); errBuf += d.toString('utf8'); };
     child.stdout.on('data', pumpOut);
     child.stderr.on('data', pumpErr);
     child.on('error', (e) => finish(() => onError && onError(String(e))));
@@ -95,6 +101,13 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       let paused = false;
       try { paused = fs.existsSync(Paths.pauseFlagFile()); } catch (e) {}
       if (!paused) _left -= dt;
+      // 暂停期间不算「无进展」：暂停本来就是零输出
+      if (paused) _lastActivity = now;
+      else if (idleTimeoutMs > 0 && now - _lastActivity >= idleTimeoutMs) {
+        const mins = Math.round(idleTimeoutMs / 60000);
+        finish(() => onError && onError('引擎已 ' + mins + ' 分钟没有任何进展，判定卡死并终止（长音频建议先裁剪片段再处理）'));
+        return;
+      }
       if (_left <= 0) finish(() => onError && onError('引擎执行超时，已强制终止'));
     }, 1000);
     return child;
