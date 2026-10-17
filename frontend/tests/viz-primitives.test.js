@@ -4,6 +4,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCompiler } from '../src/core/viz/scene/compile.js';
 import { LAYERS, LAYER_INDEX, countBy } from '../src/core/viz/scene/primitives.js';
+import * as P from '../src/core/viz/scene/primitives.js';
+import { buildNote } from '../src/core/viz/scene/note.js';
+import { rampLight, lightAt } from '../src/core/viz/scene/light.js';
 
 const TPS = 1000;
 const song = {
@@ -186,19 +189,84 @@ test('★ 「3D 键盘」关掉时透视必须一起失效（用户 2026-10-18�
   assert.ok(sheared.length > 0, '键面必须有横向收拢（否则透视没生效）');
 });
 
+/* ---------------- 三维玻璃块：光影必须随「键盘透视」变化（2026-10-17 用户实测反馈） ---------------- */
+
+// 直接拿 buildNote 试材质：一根 80×200 的块，只改视角参数
+const NQ = [100, 120, 180, 120, 180, 320, 100, 320];      // TL TR BR BL
+const noteAt = (o) => buildNote(P, Object.assign({
+  quad: NQ, width: 80, height: 200, color: '#ff5530', alpha: 0.85, velN: 0.8,
+  gloss: true, z: 10, mode3d: true, vpX: 400, k3d: 1, look: 0.5, bar: 0, depthT: 0,
+}, o || {}));
+const alphaOf = (c) => {
+  const s = String(c == null ? '' : c);
+  if (!/^rgba?\(/.test(s)) return 1;                       // #rrggbb / rgb() 都是不透明
+  const q = s.replace(/^rgba?\(|\)$/g, '').split(',').map(Number);
+  return q.length > 3 ? q[3] : 1;
+};
+const quadAlpha = (p) => (p.alpha == null ? 1 : p.alpha) * ((p.fill && p.fill.stops) || []).reduce((m, c) => Math.max(m, alphaOf(c)), 0);
+const ysOf = (p) => p.pts.filter((_, i) => i % 2 === 1);
+/** 顶面：下沿正好是音符上沿 y=120、且往上伸出去的那块四边形 */
+const topCapOf = (prims) => prims.find((p) => p.k === 'quad' && p.pts && Math.abs(Math.max(...ysOf(p)) - 120) < 0.01 && Math.min(...ysOf(p)) < 119.9);
+/** 底面：上沿正好是音符下沿 y=320、且往下伸出去的那块四边形 */
+const botCapOf = (prims) => prims.find((p) => p.k === 'quad' && p.pts && Math.abs(Math.min(...ysOf(p)) - 320) < 0.01 && Math.max(...ysOf(p)) > 320.1);
+const capPx = (q) => (q ? Math.abs(120 - Math.min(...ysOf(q))) : 0);
+const botPx = (q) => (q ? Math.abs(Math.max(...ysOf(q)) - 320) : 0);
+
 test('★ 三维结构随「键盘透视」平滑淡入（滑杆刚离开 0 时不许突然变高光）', () => {
-  // 透视 = 0 时走平板玻璃管（高光是胶囊/矩形），三维倒角/反光一律是**四边形**；
-  // 刚动一点点应该几乎看不出来，随 ps 增大到 0.25 才逐步满强度 ——
   // 用户 2026-10-18：「从平面状态动一下就会变为高光，没有过渡」。
-  const quadGloss = (persp) => {
-    const r = createCompiler().compile(song, tick, { ...base, fx: { persp, keys3d: true, gloss: true } });
-    return r.prims.filter((p) => p.layer === 'notes' && p.k === 'quad' && p.blend === 'lighter').length;
+  // 观测的是**三维部件的强度总和**（quad 的 alpha×最亮色标 + 线的颜色 alpha），
+  // 不含玻璃本体与光晕（它们两条路径都有，且已经做了连续过渡）。
+  const strength = (k3d) => noteAt({ k3d }).filter((p) => p.z > 10).reduce((s, p) => s + (p.k === 'quad' ? quadAlpha(p) : p.k === 'line' ? alphaOf(p.color) : 0), 0);
+  const a0 = strength(0.05), a1 = strength(0.5), a2 = strength(1);   // k3d = clamp(ps/0.25)
+  assert.ok(a2 > 1, '满强度时应有一批三维部件，实测 ' + a2.toFixed(2));
+  assert.ok(a0 < 0.15 * a2, '刚离开 0 时必须很淡（不是"啪"地变高光）：' + a0.toFixed(3) + ' vs ' + a2.toFixed(3));
+  assert.ok(a1 > a0 * 3, 'k3d 0.05→0.5 应显著变强：' + a0.toFixed(3) + ' → ' + a1.toFixed(3));
+  assert.ok(a1 < a2 * 0.9, '半程还不能到满强度：' + a1.toFixed(3) + ' vs ' + a2.toFixed(3));
+});
+
+test('★ 光影随「键盘透视」变化：顶面变高、底面变矮、镜面高光在横截面上滑动', () => {
+  // 用户 2026-10-17：「音符的光影并没有随着透视角度变化」。这三条是**看得见**的证据：
+  const low = noteAt({ look: 0.2 }), high = noteAt({ look: 1 });
+  const capLow = capPx(topCapOf(low)), capHigh = capPx(topCapOf(high));
+  assert.ok(capLow > 0.6 && capHigh > capLow * 1.25, '越俯视顶面越高（厚度看得越多）：' + capLow.toFixed(2) + ' → ' + capHigh.toFixed(2));
+  const botLow = botPx(botCapOf(low)), botHigh = botPx(botCapOf(high));
+  assert.ok(botLow > 0.5 && botHigh < botLow * 0.85, '越俯视底面越矮（朝键盘那面看得越少）：' + botLow.toFixed(2) + ' → ' + botHigh.toFixed(2));
+  // 镜面高光条：唯一一条"很窄的 lighter 四边形"，它的横向中心必须随 look 移动
+  const streakX = (prims) => {
+    const q = prims.find((p) => p.k === 'quad' && p.blend === 'lighter' && p.pts && (Math.max(...p.pts.filter((_, i) => i % 2 === 0)) - Math.min(...p.pts.filter((_, i) => i % 2 === 0))) < 20);
+    if (!q) return null;
+    const xs = q.pts.filter((_, i) => i % 2 === 0);
+    return (Math.min(...xs) + Math.max(...xs)) / 2;
   };
-  assert.equal(quadGloss(0), 0, '透视=0 是平板玻璃管：不该出现三维高光四边形');
-  const a05 = quadGloss(0.05);
-  const a25 = quadGloss(0.25);
-  const a100 = quadGloss(1);
-  assert.ok(a05 > 0, '刚离开 0 应该有三维部件（只是很淡）');
-  assert.ok(a05 <= a100, 'ps 越大三维部件不应减少');
-  assert.ok(a25 >= a100, 'ps>=0.25 后应与满强度同量：' + a25 + ' vs ' + a100);
+  const xLow = streakX(low), xHigh = streakX(high);
+  assert.ok(xLow != null && xHigh != null, '应有镜面高光条');
+  assert.ok(xHigh - xLow > 10, '高光条必须随俯视角横移（不是贴死的）：' + xLow.toFixed(1) + ' → ' + xHigh.toFixed(1));
+});
+
+test('★ 场景光带随「键盘透视」沿坡道扫动：同一条音符在不同透视下吃到的光不同', () => {
+  const sTop = 320;
+  const l0 = rampLight(sTop, 0.1), l1 = rampLight(sTop, 1);
+  assert.ok(l1.s < l0.s - 80, '光带中心必须随透视往近端移：' + l0.s.toFixed(1) + ' → ' + l1.s.toFixed(1));
+  assert.ok(lightAt(l0, l0.s) > 0.99, '光带中心处强度应为 1');
+  assert.ok(lightAt(l0, l0.s + l0.w * 2) < 0.1, '离开光带应迅速变暗');
+  const sMid = 120;                                   // 坡道中段的一条音符
+  assert.ok(Math.abs(lightAt(l0, sMid) - lightAt(l1, sMid)) > 0.25,
+    '透视变了，同一条音符的受光必须变：' + lightAt(l0, sMid).toFixed(2) + ' vs ' + lightAt(l1, sMid).toFixed(2));
+  // 光带照到的音符整体更亮（bar 不做成死参数，必须真的进材质）
+  const bright = (bar) => noteAt({ bar }).filter((p) => p.k === 'quad' && p.blend === 'lighter').reduce((s, p) => s + quadAlpha(p), 0);
+  assert.ok(bright(1) > bright(0) * 1.25, '被光带照到时亮层应明显更强：' + bright(0).toFixed(3) + ' → ' + bright(1).toFixed(3));
+});
+
+test('★ 每个图元的 fill 必须是字符串或 {stops:[...]} —— 否则 WebGL2 会把它画成纯白', () => {
+  // 2026-10-17 实锤：音符的"内侧压暗"把 fill 写成了一个数组，Canvas2D 当透明、
+  // WebGL2 的 sampleFill 兜底成 [1,1,1,1] → 整条音符被刷成白条（用户："白色的反光太强烈"）。
+  const r = createCompiler().compile(song, tick, { ...base, fx: { persp: 1, keys3d: true, gloss: true } });
+  const bad = [];
+  for (const p of r.prims) {
+    const fl = p.fill;
+    if (fl == null || typeof fl === 'string') continue;
+    if (!Array.isArray(fl.stops) || fl.stops.length === 0) { bad.push(p.k + '/' + p.layer); continue; }
+    for (const c of fl.stops) if (typeof c !== 'string' || !/^(#|rgb|hsl)/.test(c)) bad.push(p.k + '/' + p.layer + ': ' + String(c));
+  }
+  assert.deepEqual(bad.slice(0, 8), [], '缺 stops / 色标不是颜色的 fill：' + bad.slice(0, 8).join(', '));
 });

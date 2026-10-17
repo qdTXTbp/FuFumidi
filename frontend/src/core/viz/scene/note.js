@@ -1,21 +1,25 @@
 // ============================================================
-// 下落音符（可视化重做 · 场景层 · 玻璃管材质 / 2026-10-18 三维玻璃块）
+// 下落音符（可视化重做 · 场景层 · 玻璃管材质 / 2026-10-17 三维玻璃块重构）
 //
 // 两条线一起管这根音符：
 //   ① **透视**：吃键盘那台相机（scene/keyboard.js）。四边形的每个角都由相机投影产生，
 //      两条侧边正好落在键列线的延长线上 —— 用户 2026-10-18：「让下落的音符完全符合透视」。
-//      （上一版横向用 1+kz·t、纵向用 1/z，两套公式不是同一台相机，侧边与键列线对不上。）
-//   ② **玻璃质感**：参考用户给的示例（PianiCast / 霓虹管那类）—— 玻璃管不是"半透明色块"，而是：
+//   ② **玻璃质感**：玻璃管不是"半透明色块"，而是：
 //      · 外面一圈柔和光晕（管子在发光）
 //      · 亮而清晰的侧边（折射边，最亮的一笔）
-//      · 内部一条纵向高光 + 另一侧压暗（圆柱的体积感）
-//      · 顶面受光最亮、底面收暗（厚度）
-//      2026-10-18「让 3D 的音符更有玻璃质感」在此之上再加四个**立体**的部件：
-//      · 底部斜切面（吸光/暗玻璃）：方块朝向键盘的那一面
-//      · 内侧键壁（朝消失点那一侧）：厚度可见，玻璃块才不是一张纸
-//      · 顶面高光带 + 顶部亮棱：方块的上表面被灯照到
-//      · 横向镜面反光带：真实玻璃的掠射反光，一条横过正面的软亮带
-// 所有部件都从**同一个四边形**用双线性插值取点，所以透视怎么变都不会错位。
+//      · 横向的受光/背光渐变（体积感）
+//      · 顶面 / 底面（3D 键盘 + 透视时才有：块子的"厚度"）
+//
+// ★ 2026-10-17 三维玻璃块重构（用户三连：「音符的光影并没有随着透视角度变化」
+//   「白色的反光还是太强烈了，喧宾夺主」「音符立体感还不够」）：
+//   · **光影跟着相机走**：俯视角 look / 场景光带 bar / 坡道深度 depthT 全部由 compile 从
+//     相机算好传进来（见 compile.js 的「光带」段）。顶面高度、底面高度、镜面高光沿音符的
+//     位置都随 look 变化 —— 拉「键盘透视」时明暗是真的在表面上滑动，不是形状被拉伸。
+//   · **白高光减半**：亮面 = mix(本色,白,0.34)，棱线 = mix(本色,白,0.55)，不再有一大条纯白；
+//     玻璃的"亮"来自窄棱 + 小面积高光点（纯白会盖掉音符自己的颜色，喧宾夺主）。
+//   · **立体感靠"面"**：顶面（受光梯形，左亮右暗）· 底面（朝键盘，暗）· 左受光面 ·
+//     右背光面（横向渐变读出圆角块的体积）· 顶棱/下棱亮线。
+// 所有部件都从**同一个四边形**用 pt()/band() 取点，所以透视怎么变都不会错位。
 // ============================================================
 import { noteStops, withAlpha, mix, shade } from '../state/palette.js';
 
@@ -40,9 +44,12 @@ const isAxisAligned = (q) => Math.abs(q[1] - q[3]) < 0.01 && Math.abs(q[5] - q[7
 const flat4 = (...ps) => ps.reduce((acc, p) => (acc.push(p[0], p[1]), acc), []);
 /** 四边形参数空间里的一块矩形区域 → 顶点数组 */
 const band = (q, s0, s1, t0, t1) => flat4(pt(q, s0, t0), pt(q, s1, t0), pt(q, s1, t1), pt(q, s0, t1));
-
-/** 单色渐变（Canvas/WebGL 都支持）：四段同色，避免"一段渐变"在 WebGL 采样里走形 */
-const solidStops = (c) => [c, c, c, c];
+/** 单色填充（四段同色）→ **{stops, dir} 对象**。
+ * ★ 2026-10-17 修的真 bug：这里以前直接返回数组 [c,c,c,c]，而光栅器只认 fill.stops ——
+ *   Canvas2D 那边得到一个没有色标的渐变（等于不画），WebGL2 那边 sampleFill 把"没有 stops"
+ *   当白色不透明（[1,1,1,1]）→ 本该是"内侧压暗"的那条夜色四边形被画成**整条纯白**。
+ *   用户看到的「白色的反光太强烈了，喧宾夺主」有一半是它。 */
+const solidFill = (c) => ({ stops: [c, c, c, c], dir: 'v' });
 
 /**
  * 产出一根下落音符的全部图元。
@@ -62,118 +69,189 @@ export function buildNote(P, o) {
 }
 
 /* ============================================================
- * 三维玻璃块（3D 键盘开启时）
+ * 三维玻璃块（3D 键盘 + 透视时）
+ *
+ * 这一版把"光"从**贴图**变成了**视角相关**的量。compile.js 每帧算好三个数传进来：
+ *   look   = 相机俯视角（= 键盘透视 0..1）：越大 = 越从斜上方看
+ *   bar    = 场景里一条光带的强度：光带落在坡道上的位置由相机高度决定，
+ *            透视滑块一动，光带就沿坡道扫过（被扫到的音符整体更亮、棱更亮）
+ *   depthT = 音符在坡道上的深度（0 = 落点线 / 1 = 屏幕最远）
+ *
+ * 由 look 推出的三个**看得见**的变化（拉滑杆时一眼能看出来）：
+ *   · 顶面（端面）越高：越俯视，块子的上表面看得越多  → capH 随 look 变大（0.32 → 1.30 倍）
+ *   · 底面越矮：越俯视，朝向键盘的那一面越看不见      → botH 随 look 变小（0.92 → 0.34 倍）
+ *   · 镜面高光条在横截面上滑动：hiX 随 look 从 0.22 移到 0.46
+ *
+ * ★ 立体感 = **面**（不是描边）：四个面各有自己的亮度，而且**面上有硬边界**：
+ *     顶面（受光，最亮）> 左受光面 > 正面（玻璃，透）> 右背光面 > 底面（最暗）
+ *   透明度按菲涅尔分层：正面中心是透的（玻璃），侧面/端面是"厚料"，几乎不透明 ——
+ *   物理上也是如此（掠射角看到更多材料），而且只有这样才能读出"块"的轮廓。
+ * ★ 所有亮色都**带本色**（mix(本色,白,0.3~0.6)），不再出现一大条纯白：
+ *   上一版 17 层纯白 lighter 叠起来把音符刷成白条（用户：「白色的反光还是太强烈了，喧宾夺主」）。
  * ============================================================ */
 function buildNote3D(P, o, q, w, h, a) {
   // 这里的 a 是**玻璃本体的通透度**（滑杆）：结构层只随它轻微减弱，永远不会一起消失
   const structA = 0.42 + 0.58 * a;
-  // ★ 三维结构（倒角/高光/反光）随「键盘透视」平滑淡入（用户 2026-10-18：
-  //   「从平面状态动一下就会变为高光，没有过渡」）。ps 0→0.25 之间淡入，之后满强度；
-  //   平面态（ps=0）本来就走平板玻璃管，所以这里 0 的时候这些部件全为 0，视觉上才连续。
+  // ★ 三维结构随「键盘透视」平滑淡入（用户 2026-10-18：「从平面状态动一下就会变为高光，没有过渡」）。
+  //   ps 0→0.25 之间淡入，之后满强度；flat 态本来就走平板玻璃管，所以这里 0 的时候这些部件全为 0。
   const k3 = Math.max(0, Math.min(1, o.k3d == null ? 1 : Number(o.k3d)));
   if (k3 <= 0.001) return buildNoteFlat(P, o, q, w, h, a);
+  // ★ 三维结构整体随 k3d 淡入：滑杆刚离开 0 时只是"微微有厚度"，不是"啪"地变高光
+  const fade = k3;
+  const clamp01 = (v, d) => { const n = Number(v == null || !isFinite(v) ? d : v); return n < 0 ? 0 : n > 1 ? 1 : n; };
   const z0 = o.z || 0;
   const glow = o.gloss !== false;
   const velN = o.velN == null ? 0.7 : o.velN;
   const color = o.color;
-  const vpX = o.vpX == null ? q[0] : o.vpX;
-  const cxq = (q[0] + q[2] + q[4] + q[6]) / 4;
-  // 朝消失点的那一侧是"内侧"（厚度看得见的那一面）：键列越往远处越向中心收，所以内侧 = 朝中心那一侧
-  const innerS = cxq <= vpX;              // 音符在消失点左边 → 内侧是右边
   const pr = [];
 
-  /* ① 外光晕：玻璃周围的一圈柔光（两层才有衰减，单层矩形的边界是硬的） */
+  /* ---------- ① 视角（全部由相机算出，见 compile.js） ---------- */
+  const look = clamp01(o.look, 0.5);        // 俯视角：0 平视 / 1 从斜上方
+  const bar = clamp01(o.bar, 0);            // 光带强度：0 没被照到 / 1 正被扫到
+  const depthT = clamp01(o.depthT, 0);      // 坡道深度：0 落点线 / 1 屏幕最远
+  // 这条音符吃到的光：被光带扫到更亮、越远越暗
+  const lit = (0.86 + 0.34 * bar) * (1 - 0.20 * depthT);
+  const ga = structA * lit * fade;
+
+  /* ---------- ② 材质色（亮面/棱线全部带本色） ---------- */
+  const cRim = mix(color, '#ffffff', 0.62);     // 棱线（折射亮边）
+  const cLit = mix(color, '#ffffff', 0.34);     // 左侧受光面
+  const cTop = mix(color, '#ffffff', 0.40);     // 顶面（最亮的面）
+  const cGlint = mix(color, '#ffffff', 0.70);   // 镜面高光
+  const cDark = shade(color, -0.52);            // 右侧背光面
+  const cDeep = shade(color, -0.76);            // 最暗（底棱/背光边）
+
+  /* ---------- ③ 面的几何：端面（上下）+ 侧面（左右），全部视角相关 ---------- */
+  const xTL = q[0], xTR = q[2], xBL = q[6], xBR = q[4], yTop = q[1], yBot = q[5];
+  const bw = Math.max(3, xBR - xBL);                                    // 屏幕上音符的底宽
+  const thMax = Math.max(3, Math.min(12, 0.20 * bw));                   // 端面基准厚度（像素）
+  const capH = Math.min(h * 0.30, thMax * (0.32 + 0.98 * look) * (0.92 + 0.18 * bar));
+  const botH = Math.min(h * 0.26, thMax * (0.92 - 0.58 * look) * (0.92 + 0.18 * bar));
+  const capIn = Math.min(2.4, bw * 0.11);                               // 顶面远端内收
+  // 侧面：相机横向扇形（fan ∝ 透视）决定看得到多少侧壁；离画面中心越远，内侧壁越宽
+  const cxq = (q[0] + q[2] + q[4] + q[6]) / 4;
+  const off = Math.min(1, Math.abs(cxq - (o.vpX == null ? q[0] : o.vpX)) / Math.max(30, w * 4));
+  const sideF = Math.min(0.30, Math.max(0.13, 0.13 + 0.12 * look + 0.06 * off));
+  const sideW = sideF * bw;                                            // 侧壁宽（像素）
+  const sideA = Math.min(1, 0.90 * structA * fade);                     // 侧壁是"厚料"，近乎不透明
+
+  /* ---------- ④ 外光晕：只留一圈很淡的柔光（太强会把硬边糊掉） ---------- */
   if (glow) {
     const halo = (grow, alpha, dz) => {
       const gx = (grow - 1) / 2, gy = grow * 0.012;
       pr.push(P.quad('notes', band(q, -gx, 1 + gx, -gy, 1 + gy),
         withAlpha(color, alpha * structA), { blend: 'lighter', z: z0 - 0.06 + dz }));
     };
-    halo(1.62, 0.04, 0);
-    halo(1.28, 0.06, 0.01);
+    // 强度从"平板玻璃管"那一档线性过渡到三维这一档：ps 刚离开 0 时不会闪一下
+    halo(1.62, 0.050 - 0.028 * fade, -0.06);
+    halo(1.28, 0.075 - 0.041 * fade, -0.05);
   }
 
-  /* ② 主体：真的透（透明度滑杆调的就是这个）—— 背景能透过来，才叫玻璃。
-     与平板玻璃管共用同一套四段渐变材质，保证"3D 打开"不会把音符变成另一种东西。 */
+  /* ---------- ⑤ 正面（玻璃本体，真的透） ---------- */
   const stops = noteStops(color, { velN, gloss: glow });
-  const bodyA = Math.min(1, GLASS_BODY_MIN + (GLASS_BODY_MAX - GLASS_BODY_MIN) * a);
+  // 三维路径下正面的玻璃比平板稍实一点：侧面/端面已经是厚料（近乎不透明），
+  // 正面太透会让整块读成"雾"而不是"玻璃块"（远端透一点，近端实一点）。
+  // 同样随 fade 过渡，保证 ps 从 0 抬起来时观感连续。
+  const bodyBase = Math.min(1, GLASS_BODY_MIN + (GLASS_BODY_MAX - GLASS_BODY_MIN) * a);
+  const bodyA = Math.min(0.94, bodyBase + 0.14 * fade);
   pr.push(P.quad('notes', q, { stops, dir: 'v' }, { alpha: bodyA, z: z0 }));
-
-  let bxF = 0, byF = 0;
-  if (glow) {
-    /* ③ **倒角（chamfer）**：3D 建模读得出来的关键一笔。四条梯形压在轮廓内侧：
-         上/左受光（亮、带本色）· 右/下背光（暗）—— 音符再窄也看得出是一块有厚度的玻璃。
-        （先画主体、再把倒角压上去：倒角只覆盖轮廓边缘，所以中间那块仍然透亮，不会发闷。） */
-    // ★ 倒角宽度要**跟着音符的尺寸收**：窄音符（十几像素宽）上用 3.4px 倒角，倒角就占了半条音符，
-    //   读出来是"一条白框"而不是玻璃。所以既限像素（2.2 / 2.6px）又限比例（<=16% / <=14%）。
-    bxF = Math.max(0.055, Math.min(0.16, 2.2 / Math.max(3, w)));
-    byF = Math.max(0.03, Math.min(0.14, 2.6 / Math.max(6, h)));
-    const sideDark = shade(color, -0.55);
-    // 上倒角：受光斜切面（带本色的亮，不用纯白）
-    pr.push(P.quad('notes', band(q, 0, 1, 0, byF),
-      { stops: [withAlpha(mix(color, '#ffffff', 0.28), 0.34 * k3 * structA), withAlpha(mix(color, '#ffffff', 0.10), 0.14 * k3 * structA)], dir: 'v' },
-      { blend: 'lighter', z: z0 + 0.02 }));
-    // 左倒角：次亮（光从左上来）
-    pr.push(P.quad('notes', band(q, 0, bxF, byF, 1),
-      { stops: [withAlpha(mix(color, '#ffffff', 0.16), 0.18 * k3 * structA), withAlpha(color, 0.05 * k3 * structA)], dir: 'v' },
-      { blend: 'lighter', z: z0 + 0.02 }));
-    // 右倒角：背光（压暗）
-    pr.push(P.quad('notes', band(q, 1 - bxF, 1, byF, 1), solidStops(withAlpha(sideDark, 0.30 * k3 * structA)), { z: z0 + 0.02 }));
-    // 下倒角：朝向键盘那一面（最暗，吸光）
-    pr.push(P.quad('notes', band(q, 0, 1, 1 - byF, 1),
-      { stops: [withAlpha(sideDark, 0.24 * k3 * structA), withAlpha(shade(color, -0.72), 0.46 * k3 * structA)], dir: 'v' },
-      { z: z0 + 0.02 }));
-    // 上棱：上倒角与正面的交界线（玻璃的硬亮边）
-    const tc0 = pt(q, 0.02, byF), tc1 = pt(q, 0.98, byF);
-    pr.push(P.line('notes', tc0[0], tc0[1], tc1[0], tc1[1], withAlpha('#ffffff', 0.22 * k3 * structA), { lw: 1, blend: 'lighter', z: z0 + 0.03 }));
-  }
 
   if (!glow) return pr;
 
-  /* ④ 横向镜面反光带（掠射反光）：一条横过正面上部的软亮带 —— 玻璃最有说服力的一笔 */
-  const spA = (0.06 + 0.03 * velN) * structA * (0.35 + 0.65 * k3);
-  pr.push(P.quad('notes', band(q, 0.05, 0.95, 0.07, 0.26), {
-    stops: [withAlpha('#ffffff', 0), withAlpha('#ffffff', spA), withAlpha('#ffffff', spA * 0.6), withAlpha('#ffffff', 0)],
+  /* ---------- ⑥ 光带扫过的整体提亮（透视滑块一动，这条光带沿坡道扫） ---------- */
+  if (bar > 0.03) {
+    pr.push(P.quad('notes', q, {
+      stops: [withAlpha(mix(color, '#ffffff', 0.30), 0.07 * bar * structA * fade), withAlpha(mix(color, '#ffffff', 0.30), 0.03 * bar * structA * fade)],
+      dir: 'v',
+    }, { blend: 'lighter', z: z0 + 0.01 }));
+  }
+
+  /* ---------- ⑦ 正面明暗：左受光 → 中间透 → 右背光（横向渐变，给正面一点体积） ---------- */
+  pr.push(P.quad('notes', band(q, 0.42, 1, 0, 1), {
+    stops: [withAlpha(cDark, 0), withAlpha(cDark, 0.16 * ga), withAlpha(cDeep, 0.34 * ga)],
     dir: 'h',
-  }, { blend: 'lighter', z: z0 + 0.05 }));
+  }, { z: z0 + 0.02 }));
 
-  /* ⑤ 菲涅尔边缘环：光在掠射角反射最强 —— 只亮**边缘**，中间必须真的是透的 */
-  const fres = (0.13 + 0.06 * velN) * structA;
-  pr.push(P.quad('notes', q, {
-    stops: [withAlpha('#ffffff', fres), withAlpha('#ffffff', 0), withAlpha('#ffffff', 0), withAlpha('#ffffff', fres)],
+  /* ---------- ⑦b 正面的纵向明暗：上端被顶面反下来的光照亮、下端近键面收紧 ----------
+     两个很淡的四边形（一亮一暗），让正面自己也有上下方向的光，而不是一块平色。 */
+  pr.push(P.quad('notes', band(q, sideF, 1 - sideF, 0.02, 0.42), {
+    stops: [withAlpha(cLit, 0.10 * ga), withAlpha(cLit, 0)],
+    dir: 'v',
+  }, { blend: 'lighter', z: z0 + 0.035 }));
+  pr.push(P.quad('notes', band(q, sideF, 1 - sideF, 0.55, 0.99), {
+    stops: [withAlpha(cDeep, 0), withAlpha(cDeep, 0.18 * ga)],
+    dir: 'v',
+  }, { z: z0 + 0.036 }));
+
+  /* ---------- ⑧ 左侧面（受光）：一道有厚度的亮面 + 硬边界 ---------- */
+  pr.push(P.quad('notes', band(q, 0, sideW / bw, 0, 1), {
+    stops: [cLit, shade(cLit, -0.30)],
     dir: 'h',
-  }, { blend: 'lighter', z: z0 + 0.06 }));
+  }, { alpha: sideA, z: z0 + 0.05 }));
+  // 正面与侧面的交界棱：块的"转折线"，最亮的一笔（细、带本色、不过曝）
+  pr.push(P.line('notes', ...pt(q, sideW / bw, 0.01), ...pt(q, sideW / bw, 0.99),
+    withAlpha(cRim, Math.min(1, (0.42 + 0.16 * bar) * ga)), { lw: 1.1, blend: 'lighter', z: z0 + 0.07 }));
 
-  /* ⑥ 内侧压暗 + 纵向高光：一暗一亮两个面 → 玻璃块也有这种明暗秩序 */
-  const shadeA = 0.18 * structA;
-  pr.push(P.quad('notes', band(q, innerS ? 0.64 : 0, innerS ? 1 : 0.36, 0, 1),
-    solidStops(withAlpha('#000000', shadeA)), { z: z0 + 0.07 }));
-  const hiA = (0.12 + 0.06 * velN) * structA;
-  pr.push(P.quad('notes', band(q, 0.14, 0.34, 0.03, 0.97), solidStops(withAlpha('#ffffff', hiA)), { blend: 'lighter', z: z0 + 0.08 }));
+  /* ---------- ⑨ 右侧面（背光）：暗面 + 深色收边 ---------- */
+  pr.push(P.quad('notes', band(q, 1 - sideW / bw, 1, 0, 1), {
+    stops: [cDark, cDeep],
+    dir: 'h',
+  }, { alpha: sideA, z: z0 + 0.05 }));
+  pr.push(P.line('notes', ...pt(q, 1 - sideW / bw, 0.01), ...pt(q, 1 - sideW / bw, 0.99),
+    withAlpha(cDeep, Math.min(1, 0.42 * structA * fade)), { lw: 1, z: z0 + 0.06 }));
 
-  /* ⑦ 内芯：玻璃里透出来的光（带本色的白，不是纯白 —— 纯白会把音符推成灯管） */
-  const coreA = (0.05 + 0.04 * velN) * structA;
-  pr.push(P.quad('notes', band(q, 0.32, 0.68, 0.06, 0.94),
-    { stops: [withAlpha(mix(color, '#ffffff', 0.4), 0), withAlpha(mix(color, '#ffffff', 0.4), coreA), withAlpha(mix(color, '#ffffff', 0.4), 0)],
-      dir: 'v' }, { blend: 'lighter', z: z0 + 0.09 }));
+  /* ---------- ⑩ 镜面高光条：竖直的一条窄光，**横向位置随俯视角滑动**（0.22 → 0.46） ----------
+     玻璃管的高光沿管子走；相机高度一变，反射点就在横截面上滑过去 —— 这是"光影随透视变化"最直观的一笔。 */
+  const hiX = Math.min(1 - sideW / bw - 0.02, 0.22 + 0.24 * look);
+  const hiW = Math.min(0.10, Math.max(0.045, 1.8 / Math.max(4, w)));
+  const hiA = (0.26 + 0.12 * bar) * ga;
+  pr.push(P.quad('notes', band(q, hiX - hiW, hiX + hiW, 0.03, 0.97), {
+    stops: [withAlpha(cGlint, 0), withAlpha(cGlint, hiA), withAlpha(cGlint, 0)],
+    dir: 'h',
+  }, { blend: 'lighter', z: z0 + 0.08 }));
 
-  /* ⑧ 折射边 + 内壁暗线：玻璃最要紧的一笔，细而克制（1px / 微带本色）。
-     浓白 2px 会变成卡通描边 —— 上一版实测的失败点。 */
-  const wallA = 0.24 * structA;
-  const wL0 = pt(q, 0.08, 0.03), wL1 = pt(q, 0.08, 0.97);
-  const wR0 = pt(q, 0.92, 0.03), wR1 = pt(q, 0.92, 0.97);
-  pr.push(P.line('notes', wL0[0], wL0[1], wL1[0], wL1[1], withAlpha('#000000', wallA), { lw: 1, z: z0 + 0.10 }));
-  pr.push(P.line('notes', wR0[0], wR0[1], wR1[0], wR1[1], withAlpha('#000000', wallA), { lw: 1, z: z0 + 0.10 }));
-  const edgeA = (0.30 + 0.10 * velN) * structA;
-  const eL0 = pt(q, 0.01, 0.01), eL1 = pt(q, 0.01, 0.99);
-  const eR0 = pt(q, 0.99, 0.01), eR1 = pt(q, 0.99, 0.99);
-  pr.push(P.line('notes', eL0[0], eL0[1], eL1[0], eL1[1], rimColor(color, edgeA), { lw: 1, z: z0 + 0.11 }));
-  pr.push(P.line('notes', eR0[0], eR0[1], eR1[0], eR1[1], rimColor(color, edgeA * 0.65), { lw: 1, z: z0 + 0.11 }));
+  /* ---------- ⑪ 内芯：玻璃里透出来的光（低强度、带本色、沿纵向衰减） ---------- */
+  const coreC = mix(color, '#ffffff', 0.30);
+  const coreA = (0.05 + 0.03 * velN) * ga;
+  pr.push(P.quad('notes', band(q, sideW / bw, 1 - sideW / bw, 0.06, 0.94), {
+    stops: [withAlpha(coreC, 0), withAlpha(coreC, coreA), withAlpha(coreC, 0)],
+    dir: 'v',
+  }, { blend: 'lighter', z: z0 + 0.09 }));
 
-  /* ⑨ 下棱（撞击面上沿）：光从键面反上来的一条亮线 */
-  const b0 = pt(q, 0.04, 1 - byF), b1 = pt(q, 0.96, 1 - byF);
-  pr.push(P.line('notes', b0[0], b0[1], b1[0], b1[1],
-    withAlpha(mix(color, '#ffffff', 0.30), 0.26 * k3 * structA), { lw: 1.1, z: z0 + 0.12 }));
+  /* ---------- ⑫ 顶面（端面，受光梯形）+ 顶棱 / 交界棱 ----------
+     顶面在音符**上沿之外**：轮廓真的变了，才读得出"厚度"。 */
+  if (capH > 0.6) {
+    const capQ = [xTL + capIn, yTop - capH, xTR - capIn, yTop - capH, xTR, yTop, xTL, yTop];
+    pr.push(P.quad('notes', capQ, {
+      stops: [cTop, shade(cTop, -0.10), mix(color, '#000000', 0.18), cDark],
+      dir: 'h',
+    }, { alpha: Math.min(1, (0.94 + 0.06 * bar) * structA * fade), z: z0 + 0.10 }));
+    // 顶棱：块子的最高棱，接光最亮的一条线
+    pr.push(P.line('notes', xTL + capIn + 0.5, yTop - capH + 0.6, xTR - capIn - 0.5, yTop - capH + 0.6,
+      withAlpha(cRim, Math.min(1, (0.52 + 0.18 * bar) * ga)), { lw: 1.2, blend: 'lighter', z: z0 + 0.11 }));
+    // 顶面与正面的交界：一道暗棱（倒角的阴影），把"顶面"和"正面"分成两个面
+    pr.push(P.line('notes', xTL + 0.5, yTop + 0.4, xTR - 0.5, yTop + 0.4,
+      withAlpha(cDeep, Math.min(1, 0.50 * structA * fade)), { lw: 1, z: z0 + 0.105 }));
+  }
+
+  /* ---------- ⑬ 底面（朝键盘那一面，最暗） ---------- */
+  if (botH > 0.5) {
+    const out = Math.min(2.4, bw * 0.11);
+    const botQ = [xBL, yBot, xBR, yBot, xBR + out, yBot + botH, xBL - out, yBot + botH];
+    pr.push(P.quad('notes', botQ, {
+      stops: [cDark, cDeep],
+      dir: 'v',
+    }, { alpha: Math.min(1, (0.86 + 0.10 * bar) * structA * fade), z: z0 + 0.10 }));
+    // 底棱：撞到键面的那条边，光从键面反上来（细亮线）
+    pr.push(P.line('notes', xBL - out + 0.5, yBot + botH - 0.6, xBR + out - 0.5, yBot + botH - 0.6,
+      withAlpha(cRim, Math.min(1, 0.40 * ga)), { lw: 1.1, blend: 'lighter', z: z0 + 0.12 }));
+  }
+
+  /* ---------- ⑭ 正面左右轮廓：细，只负责把块从背景里"切"出来 ---------- */
+  pr.push(P.line('notes', ...pt(q, 0.008, 0.02), ...pt(q, 0.008, 0.98),
+    withAlpha(cRim, Math.min(1, (0.34 + 0.14 * bar) * ga)), { lw: 1, blend: 'lighter', z: z0 + 0.13 }));
+  pr.push(P.line('notes', ...pt(q, 0.992, 0.02), ...pt(q, 0.992, 0.98),
+    withAlpha(cDeep, Math.min(1, 0.55 * structA * fade)), { lw: 1, z: z0 + 0.13 }));
   return pr;
 }
 

@@ -139,7 +139,10 @@ function parseColor(c) {
 export function sampleFill(fill) {
   if (typeof fill === 'string' || !fill) { const c = parseColor(fill); return { stops: [c, c, c, c], dir: 0 }; }
   const raw = (fill.stops || []).map(parseColor);
-  const st = raw.length ? raw : [[1, 1, 1, 1]];
+  // ★ 缺 stops 的 fill 对象一律当**全透明**：以前兜底成 [1,1,1,1]，于是任何把 fill 写成
+  //   "数组/别的形状"的图元都会在 GPU 路径上变成一块不透明白色（2026-10-17 实锤：音符内侧
+  //   压暗层被画成整条纯白，Canvas2D 路径却是透明的 —— 两条路径观感不一致，极难查）。
+  const st = raw.length ? raw : [[0, 0, 0, 0]];
   const dir = fill.dir === 'h' ? 1 : 0;
   if (st.length === 1) return { stops: [st[0], st[0], st[0], st[0]], dir };
   const out = [];
