@@ -146,6 +146,16 @@ powershell -ExecutionPolicy Bypass -File scripts/build-kachina.ps1 -Version X.Y.
 #                                                 extraFiles 从这里取，脚本会同步覆盖，别手工删）
 #     release/update/FuFumidi.Install.X.Y.Z.exe   离线包（上传用）
 
+# 2b. ★ 必须重跑一次 NSIS 打包
+#     kachina 的 gen 才会把应用配置（appName / programFilesPath / INICONFIG）嵌进更新器，
+#     而 electron-builder 的 extraFiles 是从 release/update/ 取更新器 —— 不在 gen 之后重打，
+#     安装包里带的就是 build-updater.js 用 pack 产出的「无配置更新器」：
+#     它运行时把 install_path 认成 C:\Program Files\KachinaInstaller、embedded_config 为空，
+#     用户点更新直接报「安装包损坏，请重新下载」（2026-10-17：5.2.0 → 5.2.2 实测踩过）。
+#     判据：更新器 exe 里能搜到 "FuFumidi"（配置已嵌入）；运行日志里
+#     INSTALLER_CONFIG.install_path 应等于安装目录，而不是 Program Files\KachinaInstaller。
+npx electron-builder --win nsis --x64
+
 # 3. 上传离线包到 GitHub Releases（固定名 FuFumidi.Install.exe，覆盖旧版）
 python scripts/upload-release-asset.py <GH_TOKEN> qdTXTbp/FuFumidi vX.Y.Z `
     release/update/FuFumidi.Install.X.Y.Z.exe FuFumidi.Install.exe

@@ -99,7 +99,16 @@ if (mode === 'cuda') {
           + ' --no-deps ' + whls.join(' '));
       run('"' + pythonDir + '\\python.exe" -m pip install --target "' + site + '" --no-input --no-cache-dir'
           + ' --index-url https://pypi.tuna.tsinghua.edu.cn/simple'
-          + ' filelock sympy networkx jinja2 fsspec typing-extensions setuptools numpy');
+          + ' filelock sympy networkx jinja2 fsspec "typing-extensions" "setuptools<82" sympy numpy'
+          // ★ Intel oneAPI/SYCL 运行时**必须**一起装：torch 的 xpu 轮子声明了一长串
+          //   intel-cmplr-*/intel-sycl-rt/onemkl-*/dpcpp-cpp-rt/intel-opencl-rt/mkl/intel-openmp/tbb…
+          //   少了它们 import torch 直接 OSError [WinError 126] c10_xpu.dll（实测踩过）。
+          //   唯一要排除的是 triton-xpu==3.7.0 —— Windows 上没有它的轮子。
+          + ' "intel-cmplr-lib-rt==2025.3.2" "intel-cmplr-lib-ur==2025.3.2" "intel-cmplr-lic-rt==2025.3.2"'
+          + ' "intel-sycl-rt==2025.3.2" "onemkl-license==2025.3.1" "onemkl-sycl-blas==2025.3.1"'
+          + ' "onemkl-sycl-dft==2025.3.1" "onemkl-sycl-lapack==2025.3.1" "onemkl-sycl-rng==2025.3.1"'
+          + ' "onemkl-sycl-sparse==2025.3.1" "dpcpp-cpp-rt==2025.3.2" "intel-opencl-rt==2025.3.2"'
+          + ' "mkl==2025.3.1" "intel-openmp==2025.3.2" "tbb==2022.3.1" "tcmlib==1.4.1" "umf==1.0.3" "intel-pti==0.16.0"');
     } else {
       console.log('[xpu] 未设 XPU_WHEELS，退回官方索引（很慢）');
       run('"' + pythonDir + '\\python.exe" -m pip install --target "' + site + '" --no-input --no-cache-dir'

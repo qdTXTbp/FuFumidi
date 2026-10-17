@@ -67,6 +67,13 @@ if ($OldDirs) {
   @diffArgs `
   -u (Join-Path $staging 'FuFumidi.update.exe') -p 'FuFumidi.update.exe'
 if ($LASTEXITCODE -ne 0) { throw "gen failed" }
+# ★ gen 会把应用配置（appName / programFilesPath / INICONFIG 等）**嵌进** $staging\FuFumidi.update.exe。
+#   不把它同步回 release/update/ 与 win-unpacked/，装出来/打进安装包里的就是 build-updater.js 用 `pack` 产出的
+#   「无配置更新器」——它运行时把 install_path 认成 C:\Program Files\KachinaInstaller，
+#   用户点更新会直接报「安装包损坏，请重新下载」（2026-10-17：5.2.0 → 5.2.2 实测踩过）。
+#   注意：这一步之后必须**重新跑一次 electron-builder --win nsis**，否则 NSIS 安装包里内嵌的仍是旧更新器。
+Copy-Item (Join-Path $staging 'FuFumidi.update.exe') (Join-Path $outDir 'FuFumidi.update.exe') -Force
+Copy-Item (Join-Path $staging 'FuFumidi.update.exe') (Join-Path $winUnpacked 'FuFumidi.update.exe') -Force
 
 Write-Host "[4/4] pack: generating offline package FuFumidi.Install.$Version.exe ..."
 $offArgs = @('pack', '-c', $config, '-m', (Join-Path $outDir "metadata-$Version.json"), '-d', $metaOut, '-o', (Join-Path $outDir "FuFumidi.Install.$Version.exe"), '--icon', (Join-Path $root 'build\icon.ico'))

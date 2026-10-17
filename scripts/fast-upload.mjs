@@ -87,7 +87,8 @@ async function ensureRelease() {
     r = await api(`/repos/${repo}/releases`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tag_name: tag, name: title || tag, prerelease: true, draft: false,
+      // ★ 正式版本号必须是正式 Release：electron-updater 默认跳过 prerelease，标成预发布 = 用户端收不到更新。
+      body: JSON.stringify({ tag_name: tag, name: title || tag, prerelease: /-(beta|alpha|rc)/i.test(tag), draft: false,
         body: notes && existsSync(notes) ? readFileSync(notes, 'utf8') : '' }),
     });
     if (!r.ok) throw new Error('建 release 失败 ' + r.status + ' ' + JSON.stringify(r.body).slice(0, 200));
@@ -97,7 +98,8 @@ async function ensureRelease() {
   if (r.ok) return r.body;
   r = await api(`/${repo}/-/releases`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tag_name: tag, name: title || tag, draft: false, prerelease: true, commitish: 'master' }),
+    body: JSON.stringify({ tag_name: tag, name: title || tag, draft: false, prerelease: /-(beta|alpha|rc)/i.test(tag), target_commitish: 'master',
+      body: notes && existsSync(notes) ? readFileSync(notes, 'utf8') : '' }),
   });
   if (!r.ok) throw new Error('建 CNB release 失败 ' + r.status + ' ' + JSON.stringify(r.body).slice(0, 200));
   return r.body;
