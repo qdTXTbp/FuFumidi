@@ -181,6 +181,16 @@
   - 资源中心新增「存储治理」页签：分类表 + 总计 + 刷新 + 清理（二次确认），危险选项「包含已下载资产」显式勾选；
   - E2E `storage-ui`：面板挂载、≥8 分类、曲库标记不可清理、刷新。
 
+- **P1-11 音频轨最小闭环 ✅（补齐验收）**：
+  - 音频轨模型/序列化（`song_project.js` `kind:'audio'`：asset/fileName/durationMs/skip/trim/fadeIn/fadeOut/gainDb/muted）与 UI（ViewSing 音频轨头：增益/静音/跳过/淡入淡出）原本已存在；
+  - 本轮补上**缺失的自动化测试** `frontend/tests/audio-track.test.js`（8 例，假 AudioContext，无需声卡）：
+    - 伴奏/人声两条源拿到**同一个 `when`**（采样级同步，误差 0ms；要求 <5ms）
+    - 中途起播 offset = max(skip, 位置)；`durationMs` 按 (时长−skip) 取最大
+    - 增益 dB→线性且单轨上限 1、muted=0；变速 `playbackRate` 与源时长、位置按倍率缩放
+    - `applyFades` 首尾归零/中段不变、淡入+淡出超总长时按比例收缩
+    - `renderOffline` 按播放同一套参数混音（仅非静音轨、总长含 0.3s 尾音）
+  - 需要导出的 `applyFades` 已加 `export`（测试用，生产行为不变）。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；
