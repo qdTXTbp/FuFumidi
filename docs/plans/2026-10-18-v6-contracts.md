@@ -220,6 +220,13 @@
   - E2E `nav-history-ui`：视图→资源中心→后退→前进；回首页写入自定义会话→重载→自动恢复到「视图/编排」；E2E-only 调试钩子 `window.__fufumidiNav`。
   - 剩余：多标签页 / 每个标签独立滚动与选区 / 会话里的曲目 id 恢复。
 
+- **P1-8 更新包签名与验签 ✅（Phase 1：Ed25519 清单签名；Authenticode/EV 证书待购）**：
+  - 新 `main/update_sign.js`：Ed25519（Node 内置 crypto）签名/验签，签名对象是规范串 `fufumidi-update/v1\n版本\n资产名\nsha256`；内嵌公钥、私钥只在构建机（`E:\Midi\_attic\update-signing\`，不入库）；
+  - 新 `scripts/sign-update.mjs` 生成 `update-manifest.json`（默认签 update 目录的 `FuFumidi.Install.exe`，与 kachina 更新器实际下载资产名一致）；`archive-release.mjs` 自动归档清单并进 SHA256SUMS；
+  - 更新器 `main/update.js`：安装包下载完成后从 CNB/GitHub（latest/beta + 镜像）取清单 → 校验大小/sha256 → 验签；**失败即删除安装包并拒绝更新**；旧版本 Release 无清单时跳过并告警（兼容），6.0.0 起发版必须带清单；
+  - 7 测例（正常/篡改/同大小换内容/改版本/错 key/坏清单/坏路径）+ 真实私钥签名→内嵌公钥验签端到端通过；`npm run test:update-sign` 已进 test 链；`docs/UPDATE-SIGNING.md` 写清流程与密钥轮换；
+  - 剩余：Windows Authenticode 代码签名（证书采购）、macOS 公证（P2-4）。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；

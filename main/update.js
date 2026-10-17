@@ -6,6 +6,7 @@ const Paths = require('./paths');
 const DS = require('./download-source');
 const createFastDownload = require('./fast-download');
 const ST = require('./update-speedtest');
+const { fetchManifest, verifyManifest } = require('./update_sign');
 
 // ── 更新通道 ────────────────────────────────────────────────────────────────
 // stable：用 GitHub 的 releases/latest 锚点。该端点会自动跳过 prerelease，
@@ -178,6 +179,21 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
 
   // 主进程下载完整离线安装包（多镜像回退 + 进度 + 大小校验）。
   // 关键：下载只写临时目录，失败/中断不影响当前安装——绝不边下边改已安装文件
+  /** 更新包签名清单候选地址（CNB latest/beta + GitHub latest/beta + 镜像） */
+  function updateManifestUrls(channel) {
+    const ch = normChannel(channel);
+    const gh = ch === 'beta'
+      ? 'https://github.com/' + GH_REPO + '/releases/download/beta/update-manifest.json'
+      : 'https://github.com/' + GH_REPO + '/releases/latest/download/update-manifest.json';
+    const cnb = ch === 'beta'
+      ? DS.cnbTagUrl('beta', 'update-manifest.json')
+      : DS.cnbLatestUrl('update-manifest.json');
+    return [cnb, ...DS.githubMirrorCandidates(gh)];
+  }
+  function currentChannel() {
+    try { return normChannel(readSettings && readSettings() && readSettings().update_channel); } catch (e) { return 'stable'; }
+  }
+
   async function downloadInstallPackage(url, win) {
     // 按下载源偏好排序：国内优先 → CNB 打头；全球优先 → GitHub（含镜像）打头。
     // githubMirrorCandidates 对非 GitHub 地址原样返回，避免把 CNB 地址套上 gh 镜像前缀。
@@ -206,7 +222,27 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
         onProgress: (p) => { if (!p.done) sendUpdateProgress(win, p.received || 0, p.total || 0, false); },
       });
       sendUpdateProgress(win, r.size, r.size, true);
-      return { ok: true, path: dest, size: r.size, segments: r.segments };
+      // P1-8：下载完成后先验签再允许启动更新器。
+      // 兼容策略：Release 没有 update-manifest.json（旧版本）时跳过并告警；
+      // 一旦清单存在，验签失败就删除安装包并拒绝更新（不提供"忽略"开关）。
+      let verified = false;
+      try {
+        const manifest = await fetchManifest(updateManifestUrls(currentChannel()), net);
+        if (manifest) {
+          const v = await verifyManifest({ filePath: dest, manifest: manifest });
+          if (!v.ok) {
+            try { fs.unlinkSync(dest); } catch (e) {}
+            return { ok: false, error: '安装包签名校验失败：' + v.error, verified: false };
+          }
+          verified = true;
+          console.log('[update] 安装包签名验证通过：v' + v.version + ' · ' + v.sha256);
+        } else {
+          console.warn('[update] Release 未提供 update-manifest.json，本次跳过签名校验（旧版本兼容）');
+        }
+      } catch (e) {
+        console.warn('[update] 签名校验异常，跳过：' + String((e && e.message) || e));
+      }
+      return { ok: true, path: dest, size: r.size, segments: r.segments, verified: verified };
     } catch (e) {
       return { ok: false, error: String((e && e.message) || e) };
     }
