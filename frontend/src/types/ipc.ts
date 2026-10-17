@@ -861,6 +861,20 @@ export interface TaskItem {
   cancelable?: boolean;
 }
 
+/** P2-5 DAW 互通：DAWproject 包内文件（project.xml / metadata.xml） */
+export interface DawprojectExportFile {
+  name: string;
+  data: string;
+}
+export interface DawprojectExportResult {
+  ok: boolean;
+  canceled?: boolean;
+  error?: string;
+  filePath?: string;
+  bytes?: number;
+  files?: string[];
+}
+
 /** P2-6 AI 生成（可选、默认关）：本地命令契约由 main/ai-generate.js 执行 */
 export interface AiStatus {
   enabled: boolean;
@@ -895,6 +909,8 @@ export interface AiGenerateResult {
 export interface FuBridge {
   /** E2E 测试实例标记（scripts/e2e 启动时 FUFUMIDI_E2E=1）：true 时渲染进程会注册最小测试钩子 */
   e2e?: boolean;
+  /** P2-5 DAW 互通：导出 DAWproject */
+  exportDawproject?(payload: { files: DawprojectExportFile[]; suggestedName?: string; filePath?: string }): Promise<DawprojectExportResult>;
   /** P2-6 AI 生成（可选、默认关）：生成文件一律带 AI 标注 */
   ai?: {
     status(): Promise<AiStatus>;

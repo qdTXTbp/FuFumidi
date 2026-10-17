@@ -22,6 +22,8 @@ import { EXPORT_FORMATS, LOUDNESS_TARGETS, formatInfo, normalizeExportOptions, e
 import { clipsRenderJobs, readArrangeFromSong } from '../core/arrange.js';
 // P2-1：离线插件节点（在渲染后、响度处理前应用）
 import { applyPluginChain } from '../core/plugin_node.js';
+// P2-5：DAW 互通（DAWproject：模型 → project.xml/metadata.xml → 主进程写 ZIP）
+import { songToDawprojectModel, makeDawprojectFiles } from '../core/dawproject.js';
 import { timelineOfSong } from '../core/timeline.js';
 import NumSlider from '../components/NumSlider.vue';
 
@@ -371,6 +373,24 @@ async function renderStems(s, gainMul) {
   done.value = true;
   toast(t('分轨导出完成：') + ok + t(' 轨'), 'ok');
   return ok;
+}
+
+/** P2-5：导出 DAWproject（Studio One / Bitwig 等支持该交换格式） */
+async function exportDawproject() {
+  const s = song.value;
+  if (!s) { toast(t('请先载入 MIDI 文件'), 'warn'); return; }
+  try {
+    const model = songToDawprojectModel(s, { title: s.name });
+    if (!model.tracks.length) { toast(t('没有可导出的音符'), 'warn'); return; }
+    const { files } = makeDawprojectFiles(model);
+    if (!bridge || typeof bridge.exportDawproject !== 'function') {
+      toast(t('桌面版才支持导出 DAWproject'), 'warn');
+      return;
+    }
+    const r = await bridge.exportDawproject({ files, suggestedName: (s.name || 'project') + '.dawproject' });
+    if (r && r.ok) toast(t('已导出 DAWproject：') + (r.filePath || ''), 'ok');
+    else if (r && !r.canceled) toast(t('导出 DAWproject 失败：') + ((r && r.error) || ''), 'warn');
+  } catch (e) { toast(t('导出 DAWproject 失败：') + String((e && e.message) || e), 'warn'); }
 }
 
 /* ==================== 视频 / 可视化导出 ==================== */
@@ -994,6 +1014,9 @@ async function renderVideo() {
 
       <button class="btn primary big" @click="renderAudio" :disabled="busy || !song">
         <Icon name="convert" :size="16" />{{ busy ? t('渲染中…') : t('渲染并导出音频') }}
+      </button>
+      <button class="btn big" style="margin-left:var(--sp-2)" data-guide="export-dawproject" @click="exportDawproject" :disabled="!song">
+        <Icon name="convert" :size="16" />{{ t('导出 DAWproject') }}
       </button>
 
       <Transition name="cv">
