@@ -41,6 +41,7 @@
     "test:quality": "node scripts/eval-quality.mjs",
     "test:storage": "node --test scripts/test-paths-storage.mjs",
     "test:update-sign": "node --test scripts/test-update-sign.mjs",
+    "test:omr": "node scripts/test-engine-omr.mjs",
     "sign:update": "node scripts/sign-update.mjs",
     "perf:baseline": "node scripts/perf-baseline.mjs --update-baseline",
     "perf:gate": "node scripts/perf-baseline.mjs",

@@ -4,6 +4,7 @@
 三个后端，一个出口：
   * classical  —— 本项目自带的经典识谱（engine_omr.py，只依赖 numpy/scipy/Pillow，永远可用）
   * audiveris  —— 外部成熟 OMR（Audiveris 5.11，Java），**喂图前必须预处理**（见下）
+  * smt          —— Sheet Music Transformer（可选：需自备模型/推理脚本，见 run_smt）
   * (预留)oemer —— ONNX 端到端
 
 ★ 为什么 Audiveris 一定要预处理：
@@ -24,6 +25,7 @@ import argparse
 import glob
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1097,6 +1099,63 @@ def run_homr(inputs, workdir, timeout=30 * 60, explicit=None):
             "pageCount": len(inputs), "ocrLangs": []}
 
 
+# ---------------------------------------------------------------------------
+# Sheet Music Transformer（SMT，可选后端）
+# ---------------------------------------------------------------------------
+# 为什么不随包分发：SMT 的权重与训练代码是独立项目（约 1GB 级，许可与体积都不适合内置），
+# 因此只做**命令适配器**：用户/高级用户用 FUFUMIDI_SMT_CMD 指向自己的推理命令
+# （或传 --smt），约定每页调用一次：
+#
+#     <cmd> --in <页面图片> --out <本页 MIDI>
+#
+# 本模块逐页调用、校验输出，再用 merge_midis 按页拼接。没有配置时后端报 backend-missing，
+# 不会静默退化（否则用户以为在用 SMT，实际是经典引擎）。
+
+def find_smt(explicit=None):
+    """返回 SMT 推理命令（字符串）；未配置返回 None。"""
+    cand = (explicit or os.environ.get("FUFUMIDI_SMT_CMD") or "").strip()
+    if not cand:
+        return None
+    return cand
+
+
+def run_smt(inputs, workdir, timeout=1800, explicit=None):
+    """逐页调用外部 SMT 命令（契约：--in <img> --out <mid>），返回与其它后端同构的结果。"""
+    cmdline = find_smt(explicit)
+    if not cmdline:
+        return {"ok": False, "code": "backend-missing",
+                "error": "没有配置 SMT 后端（设置环境变量 FUFUMIDI_SMT_CMD 或传 --smt）"}
+    try:
+        base = shlex.split(cmdline)
+    except Exception as e:                            # noqa: BLE001
+        return {"ok": False, "code": "backend-bad-command", "error": "SMT 命令无法解析：%s" % e}
+    os.makedirs(workdir, exist_ok=True)
+    pages, mids, log, t0 = [], [], "", time.time()
+    for i, src in enumerate(inputs):
+        prog(40 + int(30 * (i + 1) / max(1, len(inputs))), "SMT 识谱 %d/%d" % (i + 1, len(inputs)))
+        stem = "smt-%03d" % (i + 1)
+        out_mid = os.path.join(workdir, stem + ".mid")
+        try:
+            proc = subprocess.run(base + ["--in", src, "--out", out_mid],
+                                  capture_output=True, text=True, timeout=timeout,
+                                  cwd=workdir, encoding="utf-8", errors="replace")
+            code = proc.returncode
+            out = (proc.stdout or "") + (proc.stderr or "")
+        except subprocess.TimeoutExpired:
+            code, out = -1, "Timeout"
+        except Exception as e:                        # noqa: BLE001
+            code, out = -1, str(e)
+        log += "\n---- %s ----\n%s" % (stem, out[-1500:])
+        ok = code == 0 and os.path.exists(out_mid) and os.path.getsize(out_mid) > 14
+        pages.append({"page": i + 1, "ok": ok, "midi": out_mid if ok else None,
+                      "reasons": [] if ok else ["SMT 未产出有效 MIDI（退出码 %s）" % code]})
+        if ok:
+            mids.append(out_mid)
+    return {"ok": any(p["ok"] for p in pages), "pages": pages, "midiList": mids,
+            "elapsed": round(time.time() - t0, 1), "log": log[-4000:],
+            "pageCount": len(inputs), "ocrLangs": []}
+
+
 def merge_midis(paths, out_mid, tempo=120.0):
     """把逐页 MIDI 按时间顺序拼成一份：页与页之间以「上一页实际长度」推进，不留空洞也不重叠。
 
@@ -2003,7 +2062,8 @@ def main(argv=None):
     ap.add_argument("cmd", nargs="?", default="to-midi")
     ap.add_argument("--in", dest="inputs", action="append", default=[])
     ap.add_argument("--out", default="")
-    ap.add_argument("--backend", default="auto")           # auto | classical | audiveris | homr
+    ap.add_argument("--backend", default="auto")           # auto | classical | audiveris | homr | smt
+    ap.add_argument("--smt", default=None, help="SMT 推理命令（等价于环境变量 FUFUMIDI_SMT_CMD）")
     ap.add_argument("--beats", default="auto")
     ap.add_argument("--beat-type", type=int, default=4)
     # ★ 不能用 type=float：auto 是合法取值，argparse 的 float() 会在解析阶段直接退出（退出码 2），
@@ -2060,6 +2120,8 @@ def main(argv=None):
     # auto：Audiveris 优先（印刷谱 / 矢量 PDF 更强），它没装才用 homr（扫描件 / 拍照更强）。
     # 两个都装着的用户可以在界面上显式选 homr —— 实测它更适合照片与低清扫描件。
     backend = "classical"
+    if wanted == "smt":
+        backend = "smt"
     if wanted == "homr" or (wanted == "auto" and not have_av and have_homr):
         backend = "homr"
     elif wanted == "audiveris" or (wanted == "auto" and have_av):
@@ -2090,6 +2152,23 @@ def main(argv=None):
 
     notes = []
     result = None
+    if backend == "smt":
+        smt = run_smt(args.inputs, workdir, explicit=(getattr(args, "smt", None) or None))
+        if not smt.get("ok"):
+            emit("RESULT", {"ok": False, "backend": "smt",
+                            "error": smt.get("error") or "SMT 一页都没能解析出音符",
+                            "code": smt.get("code") or "backend-failed",
+                            "pages": smt.get("pages") or []})
+            return 1
+        try:
+            merge_midis(smt.get("midiList") or [], args.out, tempo=cl_tempo)
+        except Exception as e:                        # noqa: BLE001
+            emit("RESULT", {"ok": False, "backend": "smt", "error": "合并 SMT 结果失败：%s" % e})
+            return 1
+        emit("RESULT", {"ok": True, "backend": "smt", "engine": "smt", "out": args.out,
+                        "pages": smt.get("pages") or [], "pageCount": len(args.inputs),
+                        "warnings": [], "elapsed": smt.get("elapsed"), "log": smt.get("log")})
+        return 0
     if backend in ("audiveris", "homr"):
         if backend == "audiveris" and not have_av:
             result = {"ok": False, "error": "没有找到 Audiveris（可在资源中心安装识谱引擎）", "code": "backend-missing"}

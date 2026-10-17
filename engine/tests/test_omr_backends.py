@@ -678,3 +678,77 @@ def test_regrid_keeps_all_parts_on_the_same_grid():
     B._regrid_page([a, b], 1440)
     assert [n["start"] for n in a["notes"]] == [0, 1440, 2880]
     assert [n["start"] for n in b["notes"]] == [0, 1440, 2880]
+
+
+# ---------------------------------------------------------------------------
+# SMT 可选后端（P1-4）：命令适配器契约 --in/--out，逐页产出 MIDI，再合并
+# ---------------------------------------------------------------------------
+
+def _write_tiny_midi(path, pitches=(60, 64)):
+    import mido
+    mid = mido.MidiFile(type=1, ticks_per_beat=480)
+    tr = mido.MidiTrack()
+    mid.tracks.append(tr)
+    tr.append(mido.MetaMessage("track_name", name="p1", time=0))
+    last = 0
+    for i, p in enumerate(pitches):
+        tr.append(mido.Message("note_on", note=p, velocity=90, time=0 if i == 0 else 480))
+        tr.append(mido.Message("note_off", note=p, velocity=0, time=480))
+    mid.save(path)
+
+
+def _fake_smt_cmd(tmp_path, midi_path, exit_code=0):
+    """生成一个假 SMT：解析 --in/--out，把预置 MIDI 复制到 out。"""
+    script = tmp_path / "fake_smt.py"
+    script.write_text(
+        "import sys, shutil\n"
+        "a = sys.argv\n"
+        "src = a[a.index('--in') + 1]\n"
+        "dst = a[a.index('--out') + 1]\n"
+        "if %d != 0:\n"
+        "    sys.exit(%d)\n"
+        "shutil.copyfile(%r, dst)\n" % (exit_code, exit_code, str(midi_path)),
+        encoding="utf-8")
+    return '"%s" "%s"' % (sys.executable, script)
+
+
+def test_find_smt_requires_configuration(monkeypatch):
+    monkeypatch.delenv("FUFUMIDI_SMT_CMD", raising=False)
+    assert B.find_smt() is None
+    assert B.find_smt("  ") is None
+    monkeypatch.setenv("FUFUMIDI_SMT_CMD", "  smt-runner --model x  ")
+    assert B.find_smt() == "smt-runner --model x"
+    assert B.find_smt("explicit-cmd") == "explicit-cmd"
+
+
+def test_run_smt_without_config_reports_backend_missing(tmp_path):
+    r = B.run_smt([str(tmp_path / "a.png")], str(tmp_path / "wd"), explicit=None)
+    assert r["ok"] is False
+    assert r["code"] == "backend-missing"
+
+
+def test_run_smt_calls_command_per_page_and_merges(tmp_path):
+    midi = tmp_path / "page.mid"
+    _write_tiny_midi(midi)
+    cmd = _fake_smt_cmd(tmp_path, midi)
+    img1 = tmp_path / "p1.png"; img1.write_bytes(b"\x89PNG")
+    img2 = tmp_path / "p2.png"; img2.write_bytes(b"\x89PNG")
+    wd = tmp_path / "wd"
+    r = B.run_smt([str(img1), str(img2)], str(wd), explicit=cmd)
+    assert r["ok"] is True, r
+    assert len(r["midiList"]) == 2
+    assert [p["page"] for p in r["pages"]] == [1, 2]
+    out = tmp_path / "out.mid"
+    B.merge_midis(r["midiList"], str(out))
+    assert out.exists() and out.stat().st_size > 14
+
+
+def test_run_smt_failure_is_reported_per_page(tmp_path):
+    midi = tmp_path / "page.mid"
+    _write_tiny_midi(midi)
+    cmd = _fake_smt_cmd(tmp_path, midi, exit_code=3)
+    img = tmp_path / "p1.png"; img.write_bytes(b"\x89PNG")
+    r = B.run_smt([str(img)], str(tmp_path / "wd"), explicit=cmd)
+    assert r["ok"] is False
+    assert r["pages"][0]["ok"] is False
+    assert any("退出码" in x for x in r["pages"][0]["reasons"])

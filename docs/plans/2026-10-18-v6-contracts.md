@@ -265,6 +265,11 @@
   - E2E `song-tabs-ui`：导入两首 → 两个标签 → 点第一个切换（activeId 正确）→ 关闭另一个 → 剩 1 个且曲库仍有 2 首。
   - 边界（v1）：标签只是**切换入口**，不复制 song 数据；每个标签的独立撤销栈/滚动位置仍由重新进入编辑器时的实例状态决定（后续可做多编辑器实例缓存）。
 
+- **P1-4 OMR 收口 ✅**：
+  - 现状盘点：`engine/engine_omr_backends.py` 已是多后端调度层（classical 自带识谱 / Audiveris / homr AI 识谱），含按系统切带 `plan_page_bands`、拍号推定、失败分类 `classify_failure`、逐页体检 `page_checks`、按页重试缓存、跨页 `merge_pages`/`merge_midis`；UI 侧 `ViewScoreConvert` 已有失败页列表与「一键重试该页」；
+  - **本轮补 SMT（Sheet Music Transformer）可选后端**：`find_smt/run_smt` 命令适配器（`FUFUMIDI_SMT_CMD` 或 `--smt`，契约 `--in <页图> --out <页 MIDI>`），逐页校验输出再用 `merge_midis` 拼接；未配置时明确报 `backend-missing`（不静默退化）；模型/权重不随包分发（体积与许可原因）；
+  - 测试：`engine/tests/test_omr*.py` **62 项全部通过**（OMR 7 + 后端 55，含本轮 4 个 SMT 适配器用例）；新增 `npm run test:omr`（`scripts/test-engine-omr.mjs`：自动找带 pytest 的 Python，找不到则跳过；本机用 `_attic/envs/engine-test`）。
+
 ## 3. E2E（验收底座，已落地）
 
 - 位置：`scripts/e2e/`（`lib.mjs` CDP 驱动、`run.mjs` 运行器、`cases/*.mjs` 用例）；
