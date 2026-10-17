@@ -67,6 +67,11 @@ export function buildNote(P, o) {
 function buildNote3D(P, o, q, w, h, a) {
   // 这里的 a 是**玻璃本体的通透度**（滑杆）：结构层只随它轻微减弱，永远不会一起消失
   const structA = 0.42 + 0.58 * a;
+  // ★ 三维结构（倒角/高光/反光）随「键盘透视」平滑淡入（用户 2026-10-18：
+  //   「从平面状态动一下就会变为高光，没有过渡」）。ps 0→0.25 之间淡入，之后满强度；
+  //   平面态（ps=0）本来就走平板玻璃管，所以这里 0 的时候这些部件全为 0，视觉上才连续。
+  const k3 = Math.max(0, Math.min(1, o.k3d == null ? 1 : Number(o.k3d)));
+  if (k3 <= 0.001) return buildNoteFlat(P, o, q, w, h, a);
   const z0 = o.z || 0;
   const glow = o.gloss !== false;
   const velN = o.velN == null ? 0.7 : o.velN;
@@ -84,8 +89,8 @@ function buildNote3D(P, o, q, w, h, a) {
       pr.push(P.quad('notes', band(q, -gx, 1 + gx, -gy, 1 + gy),
         withAlpha(color, alpha * structA), { blend: 'lighter', z: z0 - 0.06 + dz }));
     };
-    halo(1.62, 0.05, 0);
-    halo(1.28, 0.075, 0.01);
+    halo(1.62, 0.04, 0);
+    halo(1.28, 0.06, 0.01);
   }
 
   /* ② 主体：真的透（透明度滑杆调的就是这个）—— 背景能透过来，才叫玻璃。
@@ -106,34 +111,34 @@ function buildNote3D(P, o, q, w, h, a) {
     const sideDark = shade(color, -0.55);
     // 上倒角：受光斜切面（带本色的亮，不用纯白）
     pr.push(P.quad('notes', band(q, 0, 1, 0, byF),
-      { stops: [withAlpha(mix(color, '#ffffff', 0.34), 0.52 * structA), withAlpha(mix(color, '#ffffff', 0.12), 0.20 * structA)], dir: 'v' },
+      { stops: [withAlpha(mix(color, '#ffffff', 0.28), 0.34 * k3 * structA), withAlpha(mix(color, '#ffffff', 0.10), 0.14 * k3 * structA)], dir: 'v' },
       { blend: 'lighter', z: z0 + 0.02 }));
     // 左倒角：次亮（光从左上来）
     pr.push(P.quad('notes', band(q, 0, bxF, byF, 1),
-      { stops: [withAlpha(mix(color, '#ffffff', 0.20), 0.26 * structA), withAlpha(color, 0.08 * structA)], dir: 'v' },
+      { stops: [withAlpha(mix(color, '#ffffff', 0.16), 0.18 * k3 * structA), withAlpha(color, 0.05 * k3 * structA)], dir: 'v' },
       { blend: 'lighter', z: z0 + 0.02 }));
     // 右倒角：背光（压暗）
-    pr.push(P.quad('notes', band(q, 1 - bxF, 1, byF, 1), solidStops(withAlpha(sideDark, 0.34 * structA)), { z: z0 + 0.02 }));
+    pr.push(P.quad('notes', band(q, 1 - bxF, 1, byF, 1), solidStops(withAlpha(sideDark, 0.30 * k3 * structA)), { z: z0 + 0.02 }));
     // 下倒角：朝向键盘那一面（最暗，吸光）
     pr.push(P.quad('notes', band(q, 0, 1, 1 - byF, 1),
-      { stops: [withAlpha(sideDark, 0.28 * structA), withAlpha(shade(color, -0.72), 0.54 * structA)], dir: 'v' },
+      { stops: [withAlpha(sideDark, 0.24 * k3 * structA), withAlpha(shade(color, -0.72), 0.46 * k3 * structA)], dir: 'v' },
       { z: z0 + 0.02 }));
     // 上棱：上倒角与正面的交界线（玻璃的硬亮边）
     const tc0 = pt(q, 0.02, byF), tc1 = pt(q, 0.98, byF);
-    pr.push(P.line('notes', tc0[0], tc0[1], tc1[0], tc1[1], withAlpha('#ffffff', 0.32 * structA), { lw: 1, blend: 'lighter', z: z0 + 0.03 }));
+    pr.push(P.line('notes', tc0[0], tc0[1], tc1[0], tc1[1], withAlpha('#ffffff', 0.22 * k3 * structA), { lw: 1, blend: 'lighter', z: z0 + 0.03 }));
   }
 
   if (!glow) return pr;
 
   /* ④ 横向镜面反光带（掠射反光）：一条横过正面上部的软亮带 —— 玻璃最有说服力的一笔 */
-  const spA = (0.11 + 0.06 * velN) * structA;
+  const spA = (0.06 + 0.03 * velN) * structA * (0.35 + 0.65 * k3);
   pr.push(P.quad('notes', band(q, 0.05, 0.95, 0.07, 0.26), {
     stops: [withAlpha('#ffffff', 0), withAlpha('#ffffff', spA), withAlpha('#ffffff', spA * 0.6), withAlpha('#ffffff', 0)],
     dir: 'h',
   }, { blend: 'lighter', z: z0 + 0.05 }));
 
   /* ⑤ 菲涅尔边缘环：光在掠射角反射最强 —— 只亮**边缘**，中间必须真的是透的 */
-  const fres = (0.22 + 0.10 * velN) * structA;
+  const fres = (0.13 + 0.06 * velN) * structA;
   pr.push(P.quad('notes', q, {
     stops: [withAlpha('#ffffff', fres), withAlpha('#ffffff', 0), withAlpha('#ffffff', 0), withAlpha('#ffffff', fres)],
     dir: 'h',
@@ -143,11 +148,11 @@ function buildNote3D(P, o, q, w, h, a) {
   const shadeA = 0.18 * structA;
   pr.push(P.quad('notes', band(q, innerS ? 0.64 : 0, innerS ? 1 : 0.36, 0, 1),
     solidStops(withAlpha('#000000', shadeA)), { z: z0 + 0.07 }));
-  const hiA = (0.20 + 0.10 * velN) * structA;
+  const hiA = (0.12 + 0.06 * velN) * structA;
   pr.push(P.quad('notes', band(q, 0.14, 0.34, 0.03, 0.97), solidStops(withAlpha('#ffffff', hiA)), { blend: 'lighter', z: z0 + 0.08 }));
 
   /* ⑦ 内芯：玻璃里透出来的光（带本色的白，不是纯白 —— 纯白会把音符推成灯管） */
-  const coreA = (0.09 + 0.07 * velN) * structA;
+  const coreA = (0.05 + 0.04 * velN) * structA;
   pr.push(P.quad('notes', band(q, 0.32, 0.68, 0.06, 0.94),
     { stops: [withAlpha(mix(color, '#ffffff', 0.4), 0), withAlpha(mix(color, '#ffffff', 0.4), coreA), withAlpha(mix(color, '#ffffff', 0.4), 0)],
       dir: 'v' }, { blend: 'lighter', z: z0 + 0.09 }));
@@ -159,7 +164,7 @@ function buildNote3D(P, o, q, w, h, a) {
   const wR0 = pt(q, 0.92, 0.03), wR1 = pt(q, 0.92, 0.97);
   pr.push(P.line('notes', wL0[0], wL0[1], wL1[0], wL1[1], withAlpha('#000000', wallA), { lw: 1, z: z0 + 0.10 }));
   pr.push(P.line('notes', wR0[0], wR0[1], wR1[0], wR1[1], withAlpha('#000000', wallA), { lw: 1, z: z0 + 0.10 }));
-  const edgeA = (0.44 + 0.14 * velN) * structA;
+  const edgeA = (0.30 + 0.10 * velN) * structA;
   const eL0 = pt(q, 0.01, 0.01), eL1 = pt(q, 0.01, 0.99);
   const eR0 = pt(q, 0.99, 0.01), eR1 = pt(q, 0.99, 0.99);
   pr.push(P.line('notes', eL0[0], eL0[1], eL1[0], eL1[1], rimColor(color, edgeA), { lw: 1, z: z0 + 0.11 }));
@@ -168,7 +173,7 @@ function buildNote3D(P, o, q, w, h, a) {
   /* ⑨ 下棱（撞击面上沿）：光从键面反上来的一条亮线 */
   const b0 = pt(q, 0.04, 1 - byF), b1 = pt(q, 0.96, 1 - byF);
   pr.push(P.line('notes', b0[0], b0[1], b1[0], b1[1],
-    withAlpha(mix(color, '#ffffff', 0.32), 0.34 * structA), { lw: 1.1, z: z0 + 0.12 }));
+    withAlpha(mix(color, '#ffffff', 0.30), 0.26 * k3 * structA), { lw: 1.1, z: z0 + 0.12 }));
   return pr;
 }
 

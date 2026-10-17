@@ -204,6 +204,8 @@ export function createCompiler() {
             alpha: noteAlpha * (1 - 0.5 * depth) * outA, velN, gloss, z: Math.floor(bottom),
             // ★ 三维玻璃块路径（只有「3D 键盘」打开 + 有透视时才走）：方块底切面/内侧键壁/顶面受光
             mode3d: ps > 0.001, vpX: w / 2,
+            // ★ 三维结构随「键盘透视」淡入（0→0.25 走完）：滑杆刚离开 0 时不会"啪"地变高光
+            k3d: Math.min(1, ps / 0.25),
           });
           for (const q of parts) pr.push(q);
           // 落点处的那道白热横线（"音符砸到键上"的瞬间），仍归主题的 edge 强度管

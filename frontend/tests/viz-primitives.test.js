@@ -185,3 +185,20 @@ test('★ 「3D 键盘」关掉时透视必须一起失效（用户 2026-10-18�
   const sheared = kbQuads.filter((p) => Math.abs(p.pts[0] - p.pts[6]) > 0.5);
   assert.ok(sheared.length > 0, '键面必须有横向收拢（否则透视没生效）');
 });
+
+test('★ 三维结构随「键盘透视」平滑淡入（滑杆刚离开 0 时不许突然变高光）', () => {
+  // 透视 = 0 时走平板玻璃管（高光是胶囊/矩形），三维倒角/反光一律是**四边形**；
+  // 刚动一点点应该几乎看不出来，随 ps 增大到 0.25 才逐步满强度 ——
+  // 用户 2026-10-18：「从平面状态动一下就会变为高光，没有过渡」。
+  const quadGloss = (persp) => {
+    const r = createCompiler().compile(song, tick, { ...base, fx: { persp, keys3d: true, gloss: true } });
+    return r.prims.filter((p) => p.layer === 'notes' && p.k === 'quad' && p.blend === 'lighter').length;
+  };
+  assert.equal(quadGloss(0), 0, '透视=0 是平板玻璃管：不该出现三维高光四边形');
+  const a05 = quadGloss(0.05);
+  const a25 = quadGloss(0.25);
+  const a100 = quadGloss(1);
+  assert.ok(a05 > 0, '刚离开 0 应该有三维部件（只是很淡）');
+  assert.ok(a05 <= a100, 'ps 越大三维部件不应减少');
+  assert.ok(a25 >= a100, 'ps>=0.25 后应与满强度同量：' + a25 + ' vs ' + a100);
+});

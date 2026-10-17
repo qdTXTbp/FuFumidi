@@ -190,3 +190,27 @@ def test_score2midi():
 
 if __name__ == '__main__':
     sys.exit(main())
+
+def test_direction_tempo_converts_beat_unit_to_quarter_bpm():
+    """★ <metronome> 的 <per-minute> 是**以 beat-unit 为单位**的，不是四分音符。
+
+    旧实现直接把它当 BPM：谱面「附点四分 = 60」（真值四分音符 90）被读成 60，整首曲子慢 1/3 ——
+    用户实测「变谱出来的 MIDI 和原音频差距巨大」的一半原因就在这里。
+    """
+    import xml.etree.ElementTree as ET
+    import engine_score2midi as S2M
+
+    def bpm(inner):
+        el = ET.fromstring('<direction><direction-type>' + inner + '</direction-type></direction>')
+        return S2M._direction_tempo(el)
+
+    assert bpm('<metronome><beat-unit>quarter</beat-unit><per-minute>120</per-minute></metronome>') == 120
+    assert bpm('<metronome><beat-unit>quarter</beat-unit><beat-unit-dot/>'
+               '<per-minute>60</per-minute></metronome>') == 90
+    assert bpm('<metronome><beat-unit>half</beat-unit><per-minute>60</per-minute></metronome>') == 120
+    assert bpm('<metronome><beat-unit>eighth</beat-unit><per-minute>120</per-minute></metronome>') == 60
+    # <sound tempo> 永远是四分音符 BPM，优先且不换算
+    el = ET.fromstring('<direction><sound tempo="90"/><direction-type><metronome>'
+                       '<beat-unit>half</beat-unit><per-minute>30</per-minute></metronome>'
+                       '</direction-type></direction>')
+    assert S2M._direction_tempo(el) == 90

@@ -8,7 +8,8 @@
 //   5. 多声部要有谱表括号 <part-group>，且每个音符带 xml:id（界面靠它做播放高亮）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildFullScore, splitVoices } from '../src/core/musicxml_out.js';
+import { buildFullScore, splitVoices, metronomeXml } from '../src/core/musicxml_out.js';
+import { buildSong } from '../src/core/midi.js';
 
 function song6_8(tracks) {
   return {
@@ -93,4 +94,42 @@ test('splitVoices：同刻起音归同一组，重叠才另起声部', () => {
   assert.equal(vs.length, 2, '和弦组 + 重叠音 = 两声部');
   assert.equal(vs[0].notes.length, 2, '和弦两个音在同一组');
   assert.equal(vs[1].notes.length, 1);
+});
+
+/* ---------------- 速度记号 + 小节数（2026-10-18：转谱速度/截断两个真实缺陷） ---------------- */
+
+test('★ 速度记号：x/8 拍按**附点四分**记，且 per-minute 与 beat-unit 成对换算', () => {
+  // 3/8、6/8 是复合拍：谱面惯例记成「附点四分 = 60」（= 四分音符 90）
+  for (const sig of [{ num: 3, den: 8 }, { num: 6, den: 8 }, { num: 9, den: 8 }, { num: 12, den: 8 }]) {
+    const xml = metronomeXml(sig, 90);
+    assert.ok(xml.includes('<beat-unit>quarter</beat-unit><beat-unit-dot/>'), '复合拍应带附点：' + xml);
+    assert.ok(xml.includes('<per-minute>60</per-minute>'), '附点四分 = 60 才是四分音符 90：' + xml);
+  }
+  // 简单拍仍按四分音符
+  assert.ok(metronomeXml({ num: 4, den: 4 }, 90).includes('<per-minute>90</per-minute>'));
+  assert.ok(!metronomeXml({ num: 4, den: 4 }, 90).includes('<beat-unit-dot/>'));
+  assert.ok(metronomeXml({ num: 2, den: 4 }, 120).includes('<per-minute>120</per-minute>'));
+  // 3/4 不是复合拍（附点四分记号在那儿是错的）
+  assert.ok(metronomeXml({ num: 3, den: 4 }, 120).includes('<per-minute>120</per-minute>'));
+});
+
+test('★ 总谱：速度记号写进 XML（附点写法），sound tempo 仍是四分音符 BPM', () => {
+  const s = song6_8([tr('Flute', [{ start: 0, end: 480, midi: 72, velocity: 80 }])]);
+  s.tempoMap = [{ tick: 0, us: 666667 }];            // 90 BPM
+  const xml = buildFullScore(s).xml;
+  assert.ok(xml.includes('<beat-unit-dot/><per-minute>60</per-minute>'), '6/8 应写成附点四分 = 60');
+  assert.ok(xml.includes('<sound tempo="90"/>'), 'MIDI 速度仍是四分音符 90');
+});
+
+test('★ 小节数按拍号算（旧写法假定 4/4，3/8 曲子会被算成 1/3 小节数 → 转谱截断）', () => {
+  const mid = {
+    format: 1, ticksPerBeat: 480,
+    tracks: [{ name: 'T', ch: 0, program: 0, events: [{ tick: 0, type: 'sig', num: 3, den: 8 }],
+               notes: [{ start: 0, end: 720 * 87, midi: 60, vel: 80 }] }],
+  };
+  const song = buildSong(mid);
+  // 87 小节 × 720 tick（3/8）= 62640 tick，加一拍余量后 ceil 到 88
+  assert.equal(song.sigMap[0].num, 3);
+  assert.equal(song.bars, Math.ceil(song.totalTicks / 720), '3/8 的一小节是 720 tick');
+  assert.ok(song.bars >= 87, '87 小节以上，实际 ' + song.bars);
 });
