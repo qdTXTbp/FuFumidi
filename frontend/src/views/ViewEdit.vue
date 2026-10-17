@@ -40,6 +40,7 @@ const setView = (v) => app.setView(v);
 import { encodeMidi } from '../core/midi.js';
 import { applyTake } from '../core/recorder.js';
 import { appSession } from '../core/session.js';
+import { commands as commandRegistry } from '../core/commands.js';
 import { timelineOfSong, formatBarBeat } from '../core/timeline.js';
 import { noteName, clamp, KEY_NAME, removeNotes } from '../core/util.js';
 import { fitMenu } from '../core/menu.js';
@@ -338,21 +339,22 @@ function hoverMore() {
   refreshSel();
   openMidiTools('');
 }
-/* ---- 命令面板（M3，Ctrl+Shift+P）：动作表就是菜单条那一份 ---- */
+/* ---- 命令面板（M3，Ctrl+Shift+P）：数据源 = C1 命令注册表（菜单条同一份动作） ----
+   v6 起菜单动作全部同步注册到 core/commands.js，命令面板 / 快捷键 / 未来宏共用一份表；
+   注册表在 menuGroups 重算时重建（禁用状态随选区实时更新），冲突检测在 sync 时告警。 */
 const palOpen = ref(false);
+const cmdRev = ref(0);
+
 const commands = computed(() => {
-  const out = [];
-  for (const g of menuGroups.value) {
-    for (const it of g.items) {
-      if (it.sep) continue;
-      out.push({ group: g.label, label: it.label, hint: it.hint || '', disabled: !!it.disabled, run: it.run });
-    }
-  }
-  for (const tool of MIDI_TOOLS) {
-    out.push({ group: t('参数工具'), label: t(tool.name), hint: t(tool.group), disabled: !sel.count, run: () => openMidiTools(tool.id) });
-  }
-  for (const p of ws.presets) out.push({ group: t('工作区'), label: t('工作区：') + t(p.label), hint: '', run: () => applyPreset(p.id) });
-  return out;
+  cmdRev.value;   // 依赖注册表版本号，注册表变化时面板重算
+  return commandRegistry.all().map((c) => ({
+    group: c.area,
+    label: c.title,
+    hint: c.hint || (c.keys ? c.keys.toUpperCase().replace(/CTRL/g, 'Ctrl') : ''),
+    disabled: c.disabled,
+    keys: c.keys,
+    run: () => { void commandRegistry.run(c.id); },
+  }));
 });
 const toolCtx = computed(() => {
   const s = song.value;
@@ -494,6 +496,53 @@ const menuGroups = computed(() => {
     ] },
   ];
 });
+
+let cmdOffs = [];
+function syncCommandRegistry() {
+  for (const off of cmdOffs) off();
+  cmdOffs = [];
+  let gi = 0;
+  for (const g of menuGroups.value) {
+    let ii = 0;
+    for (const it of g.items) {
+      ii += 1;
+      if (it.sep) continue;
+      cmdOffs.push(commandRegistry.register({
+        id: 'edit.menu.' + gi + '.' + ii,
+        title: it.label, area: g.label,
+        keys: (it.hint && /\+/.test(it.hint)) ? it.hint : '',
+        hint: (it.hint && !/\+/.test(it.hint)) ? it.hint : '',
+        when: () => !it.disabled,
+        run: it.run,
+      }));
+    }
+    gi += 1;
+  }
+  for (const tool of MIDI_TOOLS) {
+    cmdOffs.push(commandRegistry.register({
+      id: 'edit.tool.' + String(tool.id).replace(/[^a-z0-9-]/gi, '-').toLowerCase(),
+      title: t(tool.name), area: t('参数工具'), hint: t(tool.group),
+      when: () => sel.count > 0,
+      run: () => openMidiTools(tool.id),
+    }));
+  }
+  for (const p of ws.presets) {
+    cmdOffs.push(commandRegistry.register({
+      id: 'edit.preset.' + String(p.id).replace(/[^a-z0-9-]/gi, '-').toLowerCase(),
+      title: t('工作区：') + t(p.label), area: t('工作区'),
+      run: () => applyPreset(p.id),
+    }));
+  }
+  const conf = commandRegistry.conflicts();
+  if (conf.length) console.warn('[commands] 快捷键冲突（同一按键、同时可用）：', conf);
+  cmdRev.value += 1;
+}
+/* 同步时机（踩过 TDZ，别再改回去）：
+   menuGroups 引用了 fullscreenOn/helpOpen 等在 setup 后段才声明的 ref，在 setup 期间任何求值
+   都会 "Cannot access before initialization"。所以：
+     · onMounted 里同步一次（setup 已结束）；
+     · 每次打开命令面板前再同步一次（禁用状态随当前选区刷新）。
+   watch(menuGroups) 会在这个 setup 阶段读 computed，实测直接踩 TDZ —— 不要用。 */
 
 function refreshSel() {
   const info = editor.value ? editor.value.selInfo() : null;
@@ -1994,11 +2043,16 @@ function onKey(e) {
   if (stepOn.value && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) { e.preventDefault(); editor.value?.stepBy(e.key === 'ArrowRight' ? 1 : -1); return; }
   if (stepOn.value && e.key === 'Escape') { stepOn.value = false; return; }
   if (e.key === '?' || e.key === 'F1') { e.preventDefault(); shortcutsOpen.value = !shortcutsOpen.value; return; }
-  if (mod && e.shiftKey && (e.key === 'p' || e.key === 'P')) { e.preventDefault(); palOpen.value = true; return; }
+  if (mod && e.shiftKey && (e.key === 'p' || e.key === 'P')) { e.preventDefault(); syncCommandRegistry(); palOpen.value = true; return; }
   const k = e.key.toLowerCase();
   if (k === 'v') tool.value = 'select';
   else if (k === 'b') tool.value = 'pencil';
   else if (k === 'e') tool.value = 'erase';
+  // C1：上面没显式处理的组合键，交给命令注册表兜底（菜单里带快捷键的动作统一走这里）
+  try {
+    const regs = commandRegistry.byKeys(e);
+    if (regs.length === 1) { e.preventDefault(); void commandRegistry.run(regs[0].id); }
+  } catch (err) { /* 注册表异常不影响键盘 */ }
 }
 
 let raf = 0;
@@ -2053,6 +2107,7 @@ watch(trackIndex, () => {
 
 onMounted(async () => {
   window.addEventListener('keydown', onKey);
+  syncCommandRegistry();   // C1：setup 结束后再求值 menuGroups（避开后段 ref 的 TDZ）
   /* 调试桥（M3 起）：本项目的验收方式是「装好的应用 + CDP 驱动」，而生产包里拿不到
      组件实例（__vueParentComponent 只在 dev 有）。所以留一个显式开关：
      localStorage.fufumidi_debug = '1'（或 hash 里带 debug=1）时把画布 API 挂到 window。
@@ -2104,6 +2159,8 @@ onBeforeUnmount(() => {
   raf = 0;
   if (miniRo) { miniRo.disconnect(); miniRo = null; }
   window.removeEventListener('keydown', onKey);
+  for (const off of cmdOffs) { try { off(); } catch (e) {} }
+  cmdOffs = [];
 });
 </script>
 

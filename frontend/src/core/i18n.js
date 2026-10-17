@@ -1551,6 +1551,7 @@ export const I18N_MAP = {
   '需重试': 'retry needed',
   '没有录到音符': 'No notes recorded',
   '已采用录音：': 'Recording applied: ',
+  '命令执行失败：': 'Command failed: ',
   'MIDI 键盘录音：设备输入 / 预备拍 / 量化 / 循环 take / 延迟校准': 'MIDI keyboard recording: device input / pre-roll / quantize / loop takes / latency calibration',
   '监视到新文件：': 'New file watched: ',
   '已监视：': 'Watching: ',

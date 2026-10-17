@@ -276,6 +276,15 @@ export async function launchApp(opts = {}) {
     await app.close();
     throw e;
   }
+  // 「更新内容」浮层（ChangeLogOverlay）会在全新 userData 首次启动时挡住页面。
+  // 注入一个自动关闭器：只点 .cl-mask 里的主按钮，不影响用例自己的弹窗。
+  try {
+    await app.eval("( () => { if (window.__e2eDismissCl) return true; window.__e2eDismissCl = setInterval(() => { try {"
+      + " const cl = document.querySelector('.cl-mask'); if (cl) { const b = cl.querySelector('button.btn.primary') || cl.querySelector('button'); if (b) b.click(); return; }"
+      + " const wp = document.querySelector('.overlay'); if (wp && wp.innerText.indexOf('发现动态壁纸') >= 0) { const b = [...wp.querySelectorAll('button')].find(x => x.innerText.indexOf('暂不') >= 0) || wp.querySelector('button'); if (b) b.click(); return; }"
+      + " const gb = document.querySelector('.guide-btn.ghost'); if (gb) { gb.click(); return; }"
+      + " } catch (e) {} }, 300); return true; })()");
+  } catch (e) {}
   return app;
 }
 

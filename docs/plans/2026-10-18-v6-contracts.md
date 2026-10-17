@@ -17,7 +17,7 @@
 
 | # | 契约 | 落点文件 | 状态 | 消费方 |
 |---|---|---|---|---|
-| C1 | CommandRegistry 命令注册表 | `frontend/src/core/commands.js`（新） | W0 待实现（接口冻结） | 菜单/工具栏/右键/快捷键/命令面板/宏 |
+| C1 | CommandRegistry 命令注册表 | `frontend/src/core/commands.js`（新） | ✅ **已实现**（registry + ViewEdit 菜单同步 + 快捷键兜底 + 冲突检测；11 测例 + E2E） | 菜单/工具栏/右键/快捷键/命令面板/宏 |
 | C2 | TaskCenter 长任务中心 | `main/taskcenter.js`（新）+ `preload.js` | W0 待实现（接口冻结） | 转录/下载/渲染/导出/更新/OMR |
 | C3 | DocumentSession 文档会话 | `frontend/src/core/session.js`（新） | ✅ **核心已实现**（`session.js` + `main/autosave.js` + IPC + 16 测例；编辑器 UI 接线属 P0-2 后续卡） | 编辑/调教/谱面/歌词；自动保存/恢复 |
 | C4 | TimelineModel 时间轴模型 | `frontend/src/core/midi.js`（扩展）+ `core/timeline.js`（新） | ✅ **已实现**（`timeline.js` 264 行 + 10 测例；SMPTE 模式已预留，P0-6 接入口） | 编辑器/编排时间线/调教/可视化 |
@@ -136,6 +136,12 @@
   - **历史欠账基线** `scripts/i18n-baseline.json`（EN 1208 / JA 1161 条老 UI 未译字符串）：只允许减少、不许增加，`--update-baseline` 缩表；已进 `npm run audit`；
   - 本批起新代码的键必须同步 EN/JA（本批新增的中文键均已补齐）。
   - 剩余：老欠账分批翻译（每批清一批并把基线缩小）；P0-8 其余已知 bug（音量/音效跨歌串扰、MIDI 输出设备固定首个等）逐条修 + 回归测试。
+
+- **C1 CommandRegistry ✅**（P1-13 第一块）：
+  - 新 `core/commands.js`（195 行）：`register/registerAll/unregister/all/palette/byKeys/conflicts/run/runSequence/on`，id 规则 `area.action[.variant]`、组合键规范化（Mod/CmdOrCtrl→ctrl、事件→组合键、修饰键定序）、面板打分、when 可用性过滤、统一 try/catch 与 ran/error 事件；
+  - ViewEdit 接线：菜单动作 + 参数工具 + 工作区预设全部同步注册；命令面板数据源改为注册表（打开前重同步，避免 setup 期间求值 menuGroups 踩后段 ref 的 TDZ —— 已记注释）；未显式处理的组合键交给 `byKeys` 兜底；启动/打开时 `conflicts()` 告警；
+  - 测试：`frontend/tests/commands.test.js` 11 例；E2E `command-palette`（Ctrl+Shift+P 打开、全量列表、搜索「量化」收窄、Esc 关闭）；
+  - 取消 `watch(menuGroups)` 的原因与替代方案已写入代码注释（README 级教训：TDZ 只在运行时炸，构建/类型检查都发现不了）。
 
 ## 3. E2E（验收底座，已落地）
 
