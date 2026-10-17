@@ -214,3 +214,30 @@ def test_direction_tempo_converts_beat_unit_to_quarter_bpm():
                        '<beat-unit>half</beat-unit><per-minute>30</per-minute></metronome>'
                        '</direction-type></direction>')
     assert S2M._direction_tempo(el) == 90
+
+
+def test_parse_musicxml_collects_full_measure_rest_lengths():
+    """★ 整小节休止（<rest measure="yes">）的 duration = Audiveris 认定的**一小节长度**。
+
+    ★ 2026-10-17：这是推拍号最硬的证据（见 engine_omr_backends.infer_meter）。Audiveris 不写
+      <time>，而普通小节的 measureLens 只是"写出来的内容"长度（末尾休止符常常省略），所以
+      按内容长度投票会把 6/8 的谱误判成 3/8、整条时间轴拉长一倍（用户："和原音频差距巨大"）。
+      只有整小节休止必须占满一小节 —— 实测这份总谱 803 个整小节休止里 1440（6/8）占 49.8%。
+    """
+    import engine_score2midi as S2M
+    head = ('<?xml version="1.0"?><score-partwise version="3.1"><part-list>'
+            '<score-part id="P1"><part-name>Flute</part-name></score-part></part-list>'
+            '<part id="P1">')
+    attrs = '<attributes><divisions>8</divisions></attributes>'
+    rest_measure = attrs + '<note><rest measure="yes"/><duration>24</duration><voice>1</voice></note>'
+    normal_rest = attrs + '<note><rest/><duration>12</duration><voice>1</voice></note>'
+    note = attrs + ('<note><pitch><step>C</step><octave>5</octave></pitch>'
+                    '<duration>12</duration><voice>1</voice></note>')
+    tail = '</part></score-partwise>'
+    xml = head + '<measure number="1">' + rest_measure + '</measure>' \
+        + '<measure number="2">' + rest_measure + '</measure>' \
+        + '<measure number="3">' + normal_rest + '</measure>' \
+        + '<measure number="4">' + note + '</measure>' + tail
+    parsed = S2M.parse_musicxml(xml)
+    # 24 divisions / 8 = 3 个四分音符 = 1440 tick；普通休止（没有 measure="yes"）不算
+    assert parsed.get('barRestLens') == [1440, 1440], parsed.get('barRestLens')

@@ -155,6 +155,11 @@ def parse_musicxml(text):
 
     out_parts = []
     tempos, times, keys = [], [], []
+    #: 整小节休止的时长（tick）。★ Audiveris 不知道拍号时，每小节的长度 = 它写出来的
+    #: **内容**长度（末尾休止符通常不写），所以 measureLens 的众数会偏向"半小节"。
+    #: 只有「整小节休止」必须占满一小节 —— 它的 duration 就是 Audiveris 认定的拍长，
+    #: 这是唯一不受"省略休止符"影响的直接证据（见 engine_omr_backends.infer_meter）。
+    bar_rest_lens = []
 
     for pi, part in enumerate(parts):
         name = ((_text(part, 'part-name') or '').strip()
@@ -211,8 +216,17 @@ def parse_musicxml(text):
                 voice = _text(el, 'voice', '1') or '1'
                 ticks = _dur_ticks(el, divisions, tpb)
                 is_chord = _child(el, 'chord') is not None
-                is_rest = _child(el, 'rest') is not None
+                rest_el = _child(el, 'rest')
+                is_rest = rest_el is not None
                 is_grace = _child(el, 'grace') is not None
+                # 整小节休止（<rest measure="yes">）：它的时长就是一小节
+                if rest_el is not None and ticks > 0:
+                    try:
+                        mr = str(rest_el.get('measure') or '').strip().lower()
+                    except Exception:                     # noqa: BLE001
+                        mr = ''
+                    if mr in ('yes', '1', 'true'):
+                        bar_rest_lens.append(int(ticks))
                 if is_grace:
                     ticks = max(15, ticks)
                 start = cur if not is_chord else (last_note['start'] if last_note else cur)
@@ -290,7 +304,7 @@ def parse_musicxml(text):
         temps[t['tick']] = t['bpm']
     tempos = [{'tick': k, 'bpm': temps[k]} for k in sorted(temps)]
     return {'parts': out_parts, 'tempos': tempos, 'times': _dedupe(times), 'keys': _dedupe(keys),
-            'tpb': tpb, 'timesFromScore': times_from_score}
+            'tpb': tpb, 'timesFromScore': times_from_score, 'barRestLens': bar_rest_lens}
 
 
 def _dedupe(seq):

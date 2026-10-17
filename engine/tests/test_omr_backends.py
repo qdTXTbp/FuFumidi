@@ -614,8 +614,27 @@ def test_infer_meter_keeps_compound_meter_when_no_smaller_length_exists():
     assert m is not None and (m["beats"], m["beatType"]) == (6, 8), m
 
 
-def test_regrid_keeps_variable_measure_lengths():
-    # 小节 0 被并成两小节（1440 = 2×720），小节 1 是正常的 720
+def test_infer_meter_reads_full_measure_rests_first():
+    """★ 整小节休止的时长 = Audiveris 认定的一小节长度，是推拍号最硬的证据。
+
+    实测那份总谱：普通小节的 measureLens 众数是 720（内容只写了半小节，末尾休止符省略），
+    按它投票会误判成 3/8；但 803 个整小节休止里 1440 占 400 个（49.8%）→ 真值是 6/8。
+    """
+    pages = [{"parsed": {"parts": [{"name": "Flute", "measureLens": [720] * 9, "notes": []}],
+                         "barRestLens": [1440] * 7 + [720]}}]
+    m = B.infer_meter(pages, 480)
+    assert m is not None
+    assert (m["beats"], m["beatType"]) == (6, 8), m
+    assert m["ticks"] == 1440 and m["source"] == "measure-rest", m
+    # 证据不足（样本太少）时不许凭空改判，退回小节长度判据
+    weak = [{"parsed": {"parts": [{"name": "Flute", "measureLens": [720] * 9, "notes": []}],
+                        "barRestLens": [1440] * 3}}]
+    m2 = B.infer_meter(weak, 480)
+    assert (m2["beats"], m2["beatType"]) == (3, 8) and m2["source"] == "measure-lens", m2
+
+
+def test_regrid_puts_measures_on_one_grid_and_squeezes_overflow():
+    """★ 一小节 = 一格；内容超出一小节（漏认小节线）时整格按比例压回，格内相对位置保留。"""
     part = {"name": "Flute", "measureLens": [1440, 720],
             "notes": [
                 {"start": 0, "end": 240, "midi": 60, "m": 0, "off": 0},
@@ -623,7 +642,19 @@ def test_regrid_keeps_variable_measure_lengths():
                 {"start": 1440, "end": 1680, "midi": 64, "m": 1, "off": 0},
             ]}
     moved, grid_end = B._regrid_page([part], 720)
-    assert part["notes"][1]["start"] == 240, "小节内偏移不能丢"
-    assert part["notes"][2]["start"] == 1440, "第二小节必须落在累计网格 1440（不是 m×720=720）"
-    assert moved >= 0
-    assert grid_end == 2160
+    assert part["notes"][0]["start"] == 0
+    assert part["notes"][1]["start"] == 120, "小节内偏移按同一比例压回（240 × 720/1440）"
+    assert part["notes"][2]["start"] == 720, "第 2 小节必须落在第 2 格（不是累计 1440）"
+    assert moved >= 1
+    assert grid_end == 1440
+
+
+def test_regrid_keeps_all_parts_on_the_same_grid():
+    """★ 各声部识别出的小节长度不一样时，也必须落在**同一张**网格上（否则各走各的拍）。"""
+    a = {"name": "Flute", "measureLens": [720, 720, 720],
+         "notes": [{"start": i * 720, "end": i * 720 + 240, "midi": 60, "m": i, "off": 0} for i in range(3)]}
+    b = {"name": "Oboe", "measureLens": [1440, 1440, 1440],
+         "notes": [{"start": i * 1440, "end": i * 1440 + 480, "midi": 64, "m": i, "off": 0} for i in range(3)]}
+    B._regrid_page([a, b], 1440)
+    assert [n["start"] for n in a["notes"]] == [0, 1440, 2880]
+    assert [n["start"] for n in b["notes"]] == [0, 1440, 2880]
