@@ -965,7 +965,7 @@ const showAuth = ref(false);
                        @keydown.enter.prevent="addInfoTag" @keydown.,.prevent="addInfoTag" />
               </div>
             </div>
-            <p class="ed-info-hint">{{ t('重命名只改曲库里的名字，不动磁盘文件；标签最多 24 条。') }}</p>
+            <p class="ed-info-hint">{{ t('重命名会同步改磁盘上的文件名；标签最多 24 条。') }}</p>
           </div>
           <div class="ed-modal-foot">
             <button class="btn sm ghost" @click="closeInfo">{{ t('取消') }}</button>
