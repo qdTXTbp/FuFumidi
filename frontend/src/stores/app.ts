@@ -29,10 +29,9 @@ export const VIEWS = [
   // 所以合成**一个**入口；页内在「编辑器 / 声库」两个页签之间切换（?tab=banks）。
   { id: 'singer', label: '调教', ic: 'utau',
     hint: '调教 = 让声库把音符唱出来：选歌手、填词、画音高/参数曲线、渲染成音频（声部轨 = 一条人声轨；UTAU / DiffSinger 是两种合成引擎）' },
-  // 翻唱：把「分离 → 扒谱 → 合成 → 混音」串成一条工作流。音色可以是 DiffSinger 声库，
-  // 也可以是资源中心下载的 GPT-SoVITS 音色（逐句拿原唱那一句当参考重合成）。
-  { id: 'cover', label: '翻唱', ic: 'mic', expert: true,
-    hint: '一首歌 → 分离人声 → 扒谱（音符 + 歌词）→ 用你选的音色唱出来 → 混音成成品' },
+  // 翻唱：把「分离 → 变声 → 混音」串成一条工作流。音色 = 导入的 SVC 模型。
+  { id: 'cover', label: '翻唱', ic: 'mic',
+    hint: '一首歌 → 分离人声 → 用导入的模型换音色 → 混音成成品' },
   // 插件中心：官方插件平台的应用内入口（下载后由主进程解压安装并立即启用）
   { id: 'plugins', label: '插件中心', ic: 'extension', hint: '扩展功能：下载后由主进程安装并立即启用' },
 ];
@@ -1083,45 +1082,28 @@ export const useAppStore = defineStore('app', {
         localStorage.setItem('fufumidi_tags', JSON.stringify(m));
       } catch (e) {}
     },
-    /** 重命名曲目（用户：「侧边栏对歌曲的编辑信息功能要可以重命名」+「重命名同步动磁盘文件名」）。
-     *  ★ 2026-10-17 修：原来读的是 `s.path`，而曲库的路径一律存在 **`s.meta.path`**
-     *    （DB 记录里是扁平字段 path，restoreSongs() 把它搬进 meta）—— 判空失败后整段被跳过，
-     *    于是只改了库里的名字、磁盘文件名纹丝不动（用户实测就是这么报的）。
-     *    现在：先改文件，改不动就整个放弃（库里改了、磁盘还是旧名是最糟的中间态），
-     *    再把新路径用**扁平记录**写回库（嵌套 meta 直接写入会让 songsAll() 读回 path 为空）。 */
+    /** 重命名曲目（用户：「侧边栏对歌曲的编辑信息功能要可以重命名」）。
+     *  只改**曲库里的名字**并写回库，不动磁盘上的文件 —— 改名不改文件是刻意的：
+     *  文件名一改，用户的播放列表/云同步/历史里引用的路径全会失效。 */
     async renameSong(id: string, name: string) {
       const n = String(name || '').trim();
       const s: any = this.songs.find((x: any) => x.id === id);
       if (!s || !n || n === s.name) return false;
       const b: any = (typeof window !== 'undefined') ? (window as any).fuBridge : null;
-      const oldPath = String((s.meta && s.meta.path) || '');
-      if (b && typeof b.renameMidi === 'function' && oldPath) {
+      /* ★ 用户要求「重命名同步动磁盘文件名」：**先改文件**，改不动就整个放弃 ——
+         库里改了、磁盘还是旧名，是最糟的中间态（导出、分享、"在文件夹中显示"全对不上）。 */
+      if (b && typeof b.renameMidi === 'function' && s.path) {
+        const oldPath = String(s.path);
         let r: any = null;
         try { r = await b.renameMidi(oldPath, n); } catch (e: any) { r = { ok: false, error: String((e && e.message) || e) }; }
         if (!r || !r.ok) { this.toast(t('重命名失败：') + String((r && r.error) || ''), 'error'); return false; }
-        const np = String((r && r.path) || oldPath);
-        if (!s.meta) s.meta = {};
-        s.meta.path = np;
-        if (s.meta.fp === oldPath) s.meta.fp = np;   // 指纹里也存了路径，一起换
+        if (r.path) {
+          s.path = r.path;
+          if (s.meta && s.meta.fp === oldPath) s.meta.fp = r.path;   // 指纹里也存了路径，一起换
+        }
       }
       s.name = n;
-      if (b && typeof b.dbSongsPut === 'function') {
-        try {
-          let bytes = toBytes(s.__bytes);
-          if (!bytes) { try { const rec = await idbGet(STORE_SONGS, s.id); bytes = toBytes(rec && rec.bytes); } catch (e) {} }
-          if (!bytes && s.meta && s.meta.path) { try { bytes = toBytes(await b.readBinary(s.meta.path)); } catch (e) {} }
-          const rec: any = {
-            id: s.id, name: s.name,
-            size: (s.meta && s.meta.size) || (bytes ? bytes.byteLength : 0),
-            time: (s.meta && s.meta.time) || 0,
-            dur: (s.meta && s.meta.dur) || 0,
-            fp: (s.meta && s.meta.fp) || '',
-            path: (s.meta && s.meta.path) || '',
-          };
-          if (bytes) rec.bytes = Array.from(bytes as any);
-          await b.dbSongsPut(rec);
-        } catch (e) {}
-      }
+      if (b && typeof b.dbSongsPut === 'function') { try { await b.dbSongsPut(s); } catch (e) {} }
       return true;
     },
     async editTags(id: string) {

@@ -1,68 +1,40 @@
 <script setup>
-// 翻唱工作流（一键）：一首歌 → 分离 → 扒谱 → 合成 → 混音 → 成品。
-// 引擎侧只有一份实现（engine/engine_cover.py），界面只是选参数 + 看进度：
-//   · 音色通道 ①DiffSinger 声库（扒谱出的音符 → 合成）
-//   · 音色通道 ②GPT-SoVITS 音色（逐句拿原唱那一句当参考重合成，音色可复用下载的声库）
-// 两条通道的产出同构（一条整长干声轨），后面的混音完全共用。
+// 翻唱工作流（一键）：一首歌 → 分离 → 变声 → 混音 → 成品。
+// 引擎侧只有一份实现（engine/engine_cover.py），界面只是选参数 + 看进度。
+//
+// ★ 扒谱与歌词环节已删除：SVC 是「把原唱的人声换成另一个音色」，旋律/节奏/咬字
+//   本来就来自原唱，不需要歌词也不需要音符表。
+// ★ 音色 = 导入的 SVC 模型（模型管理 → 翻唱模型）。应用不内置、不代下载。
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
+import { useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import { t } from '../core/i18n.js';
 import { useAppStore } from '../stores/app';
-import NumSlider from '../components/NumSlider.vue';
 
 const app = useAppStore();
+const router = useRouter();
 const bridge = window.fuBridge;
 const isDesktop = !!bridge;
 
 const audio = ref('');
 const outdir = ref('');
 const name = ref('');
-const singers = ref({ diffsinger: [], gsv: [] });
-const singerKind = ref('diffsinger');
+const singers = ref([]);
 const singerId = ref('');
 const device = ref('auto');
 const clarityDb = ref(2.0);
 const noResume = ref(false);
-// P1-5：严格模式（字保留率 <95% 时停止混音，保留干声供调整后重试）
-const charStrict = ref(false);
-const lyrics = ref('auto');
-const gsvRoot = ref('');
-const gsvPython = ref('');
-
-/* GPT-SoVITS 采样三参数（念白与翻唱共用）。
- * ★ 默认值不是我们定的 —— 是**实地读自本机那份 runtime**：
- *   `GPT_SoVITS/TTS_infer_pack/TTS.py:1142-1144` → top_k=15 / top_p=1 / temperature=1。
- *   滑块范围也取上游 WebUI 自己的范围（`inference_webui.py:1414-1420`），不自己编。
- * ★ 停在默认值上时**一个都不发** —— 于是"没动过"就等于完全用上游默认，
- *   上游以后改了默认值我们的行为也跟着变；只有用户真拖了才覆盖。
- *   （引擎侧同理：`_sampling_kwargs` 只取显式给了的。） */
-const GSV_SAMPLING_DEF = { topK: 15, topP: 1, temperature: 1 };
-const gsvTopK = ref(GSV_SAMPLING_DEF.topK);
-const gsvTopP = ref(GSV_SAMPLING_DEF.topP);
-const gsvTemperature = ref(GSV_SAMPLING_DEF.temperature);
-/** 只把**真的改过**的采样参数发给引擎（相等的就不发）。 */
-function gsvSamplingPayload() {
-  const o = {};
-  if (Number(gsvTopK.value) !== GSV_SAMPLING_DEF.topK) o.gsvTopK = Number(gsvTopK.value);
-  if (Number(gsvTopP.value) !== GSV_SAMPLING_DEF.topP) o.gsvTopP = Number(gsvTopP.value);
-  if (Number(gsvTemperature.value) !== GSV_SAMPLING_DEF.temperature) o.gsvTemperature = Number(gsvTemperature.value);
-  return o;
-}
-/** 当前到底是"用上游默认"还是"覆盖了哪几项" —— 写在界面上，别让用户猜。 */
-function gsvSamplingPayloadText() {
-  const o = gsvSamplingPayload();
-  const ks = Object.keys(o);
-  if (!ks.length) return t('当前：完全用 GPT-SoVITS 自己的默认值（未覆盖任何一项）');
-  return t('当前覆盖：') + ks.map((k) => k.replace('gsv', '').toLowerCase() + '=' + o[k]).join(' · ');
-}
-function resetGsvSampling() {
-  gsvTopK.value = GSV_SAMPLING_DEF.topK;
-  gsvTopP.value = GSV_SAMPLING_DEF.topP;
-  gsvTemperature.value = GSV_SAMPLING_DEF.temperature;
-  saveOpts();
-  toast(t('已恢复上游默认采样参数'), 'ok');
-}
-const env = ref(null);
+/* ---- SVC 参数：常用项 + 高级（默认折叠），全部交给引擎，界面不做任何 DSP ---- */
+const transpose = ref(0);
+const f0Method = ref('rmvpe');
+const indexRate = ref(0.3);
+const advOpen = ref(false);
+const rmsMixRate = ref(0.25);
+const protect = ref(0.33);
+const chunkSec = ref(60);
+const autoPredictF0 = ref(false);
+/* ★ 不给「中值滤波半径（filter_radius）」旋钮：那是老版 RVC 的参数，当前上游
+   pipeline 里已经不存在（0bed2df 的决定）——  upstream 没有的参数就不给旋钮。 */
 // 「音频处理」面板分离完可以直接过来：那边把音轨路径写进 localStorage，这里接手
 const preVocals = ref('');
 const preInst = ref('');
@@ -72,29 +44,20 @@ const percent = ref(0);
 const stage = ref('');
 const logs = ref([]);
 const result = ref(null);
-// P1-5：逐句字级对齐里保留率 <95% 的句子（丢字/糊字 UI 标记；数据来自 engine_cover 的 info.gsv_char_report）
-const charBadLines = computed(() => {
-  const info = (result.value && result.value.info) || {};
-  const rows = info.gsv_char_report;
-  return Array.isArray(rows) ? rows : [];
-});
 const error = ref('');
 let off = null;
 
-const currentList = computed(() => (singerKind.value === 'gsv' ? singers.value.gsv : singers.value.diffsinger));
-const currentSinger = computed(() => currentList.value.find((s) => s.id === singerId.value) || null);
-/* ★ 选中项与当前分栏必须始终自洽。
-   以前只在 load() 里选一次，而 localStorage 记住的「上次分栏」是**在列表拉回来之后**才恢复的：
-   于是「上次用的 GPT-SoVITS」重启后，分栏高亮在 GPT-SoVITS，singerId 却还是 DiffSinger 的名字 →
-   下拉框空白、也点不动（用户报的「无法选择资源中心下载的音色」就是这个）。
-   这里改成 watch：分栏或列表一变，选中的 id 不在当前列表里就自动落到第一项。 */
-watch([singerKind, currentList], () => {
-  const list = currentList.value;
+const currentSinger = computed(() => singers.value.find((s) => s.id === singerId.value) || null);
+const canRun = computed(() => !!audio.value && !!currentSinger.value && !!currentSinger.value.ready && !!outdir.value && !running.value);
+
+/* ★ 选中项与列表必须始终自洽（这个坑上游踩过一次，别重犯）：
+   localStorage 里记住的「上次模型」是在列表拉回来**之后**才恢复的 —— 那个模型要是已经被删了，
+   singerId 就指向一个不存在的条目 → 下拉框空白、「开始翻唱」也点不动。
+   这里用 watch 兜底：列表或选中项一变，不在列表里就落到第一项。 */
+watch(singers, (list) => {
   if (!list.length) { singerId.value = ''; return; }
   if (!list.some((s) => s.id === singerId.value)) singerId.value = list[0].id;
 }, { immediate: true });
-const gsvReady = computed(() => !!(env.value && env.value.gsv && env.value.gsv.found));
-const canRun = computed(() => !!audio.value && !!currentSinger.value && !!outdir.value && !running.value);
 
 function toast(m, type) { try { app.toast(m, type || 'info'); } catch (e) {} }
 
@@ -103,18 +66,8 @@ async function load() {
   try {
     const r = await bridge.coverSingers();
     if (r && r.ok) {
-      singers.value = { diffsinger: r.diffsinger || [], gsv: r.gsv || [] };
-      if (!singers.value.diffsinger.length && singers.value.gsv.length) singerKind.value = 'gsv';
-      const list = currentList.value;
-      if (list.length && !list.some((s) => s.id === singerId.value)) singerId.value = list[0].id;
-    }
-  } catch (e) {}
-  try {
-    const e2 = await bridge.coverEnv();
-    if (e2 && e2.ok) {
-      env.value = e2;
-      if (!gsvRoot.value && e2.gsv && e2.gsv.root) gsvRoot.value = e2.gsv.root;
-      if (!gsvPython.value && e2.gsv && e2.gsv.python) gsvPython.value = e2.gsv.python;
+      singers.value = r.svc || [];
+      if (singers.value.length && !singers.value.some((s) => s.id === singerId.value)) singerId.value = singers.value[0].id;
     }
   } catch (e) {}
   try {
@@ -133,13 +86,10 @@ async function load() {
     if (saved.outdir) outdir.value = saved.outdir;
     if (saved.device) device.value = saved.device;
     if (saved.clarityDb != null) clarityDb.value = saved.clarityDb;
-    if (saved.gsvRoot) gsvRoot.value = saved.gsvRoot;
-    if (saved.gsvPython) gsvPython.value = saved.gsvPython;
-    if (saved.gsvTopK != null) gsvTopK.value = Number(saved.gsvTopK);
-    if (saved.gsvTopP != null) gsvTopP.value = Number(saved.gsvTopP);
-    if (saved.gsvTemperature != null) gsvTemperature.value = Number(saved.gsvTemperature);
-    if (saved.singerKind) singerKind.value = saved.singerKind;
-    if (saved.charStrict != null) charStrict.value = !!saved.charStrict;
+    if (saved.singerId) singerId.value = saved.singerId;
+    if (saved.transpose != null) transpose.value = saved.transpose;
+    if (saved.f0Method) f0Method.value = saved.f0Method;
+    if (saved.indexRate != null) indexRate.value = saved.indexRate;
   } catch (e) {}
 }
 
@@ -147,9 +97,8 @@ function saveOpts() {
   try {
     localStorage.setItem('fufumidi_cover_opts', JSON.stringify({
       outdir: outdir.value, device: device.value, clarityDb: clarityDb.value,
-      gsvRoot: gsvRoot.value, gsvPython: gsvPython.value, singerKind: singerKind.value,
-      gsvTopK: gsvTopK.value, gsvTopP: gsvTopP.value, gsvTemperature: gsvTemperature.value,
-      charStrict: !!charStrict.value,
+      singerId: singerId.value, transpose: transpose.value,
+      f0Method: f0Method.value, indexRate: indexRate.value,
     }));
   } catch (e) {}
 }
@@ -172,24 +121,6 @@ async function pickDir() {
   if (r && r.ok) outdir.value = r.path;
 }
 
-/** 选一次 GPT-SoVITS 目录就够：主进程写进 runtime.json，以后自动带出来 */
-async function pickGsvRoot() {
-  if (!bridge.coverPickGsvRoot) return;
-  const r = await bridge.coverPickGsvRoot();
-  if (r && r.ok) { gsvRoot.value = r.root || ''; if (r.python) gsvPython.value = r.python; toast(t('已记住 GPT-SoVITS 运行时'), 'ok'); }
-  else if (r && r.error) toast(r.error, 'warn');
-}
-async function pickGsvPython() {
-  if (!bridge.coverPickGsvPython) return;
-  const r = await bridge.coverPickGsvPython();
-  if (r && r.ok) { gsvPython.value = r.python || ''; toast(t('已记住解释器'), 'ok'); }
-}
-
-function switchKind(k) {
-  singerKind.value = k;      // 选中项由上面的 watch 兜底（不在当前列表里就落到第一项）
-  saveOpts();
-}
-
 async function run() {
   if (!canRun.value) return;
   running.value = true; percent.value = 0; stage.value = ''; logs.value = []; result.value = null; error.value = '';
@@ -197,12 +128,17 @@ async function run() {
   const singer = currentSinger.value;
   const payload = {
     audio: audio.value, outdir: outdir.value, name: name.value || undefined,
-    singer: { kind: singer.kind, path: singer.dir, id: singer.id },
+    singer: { kind: 'svc', id: singer.id, path: singer.dir },
     device: device.value, clarityDb: Number(clarityDb.value) || 0,
-    lyrics: lyrics.value, noResume: noResume.value, charStrict: !!charStrict.value,
+    noResume: noResume.value,
     vocals: preVocals.value || undefined, instrumental: preInst.value || undefined,
-    gsvRoot: gsvRoot.value, gsvPython: gsvPython.value,
-    ...gsvSamplingPayload(),      // 只发改过的（相等就不发 = 用上游默认）
+    transpose: Number(transpose.value) || 0,
+    f0Method: f0Method.value,
+    indexRate: Number(indexRate.value),
+    rmsMixRate: Number(rmsMixRate.value),
+    protect: Number(protect.value),
+    chunkSec: Number(chunkSec.value) || 60,
+    autoPredictF0: !!autoPredictF0.value,
   };
   try {
     const r = await bridge.coverRun(payload);
@@ -217,8 +153,11 @@ async function cancel() {
 }
 
 function openPath(p) { try { bridge.coverOpen(p); } catch (e) {} }
-/** P1-5 手动修正：去调教页改歌词（未改动的句子在重跑时复用缓存，只重跑改过的句） */
-function goSinger() { try { location.hash = '#/singer'; } catch (e) {} }
+
+/** 没有模型时给一条能走的路：直接去模型管理的翻唱模型页 */
+function gotoModels() {
+  try { router.push({ path: '/resources', query: { tab: 'model', m: 'svc' } }); } catch (e) {}
+}
 
 onMounted(() => {
   load();
@@ -254,7 +193,7 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
       <div class="page-ic"><Icon name="mic" :size="20" /></div>
       <div>
         <div class="page-title">{{ t('翻唱') }}</div>
-        <div class="page-sub">{{ t('一首歌 → 分离 → 扒谱 → 合成 → 混音 → 成品。人声分离复用「音频处理」那套模型，音色可以是你下载的 DiffSinger 声库或 GPT-SoVITS 音色。') }}</div>
+        <div class="page-sub">{{ t('一首歌 → 分离 → 变声 → 混音 → 成品。音色来自你导入的 SVC 模型（应用不内置、不代下载）。') }}</div>
       </div>
     </div>
 
@@ -272,70 +211,37 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
           <span class="muted small cv-ellipsis">{{ preVocals || '—' }} / {{ preInst || '—' }}</span>
           <button class="btn sm ghost" @click="preVocals = ''; preInst = ''">{{ t('清除') }}</button>
         </div>
-        <div class="cv-row" data-guide="cover-lyrics">
-          <span class="cv-label">{{ t('歌词') }}</span>
-          <select class="text-input" v-model="lyrics" style="max-width:220px">
-            <option value="auto">{{ t('自动（同名 .lrc / 音频内嵌 / 没有就哼唱）') }}</option>
-          </select>
-          <span class="muted small">{{ t('有 LRC 时每句都能对上；没有歌词就整首用「啦」哼唱') }}</span>
-        </div>
       </div>
 
       <div class="card">
         <div class="card-title"><span class="dot"></span>{{ t('② 选音色') }}</div>
-        <div class="cv-seg" data-guide="cover-kind">
-          <button class="btn sm" :class="{ primary: singerKind === 'diffsinger' }" @click="switchKind('diffsinger')">
-            {{ t('DiffSinger 声库') }}（{{ singers.diffsinger.length }}）
-          </button>
-          <button class="btn sm" :class="{ primary: singerKind === 'gsv' }" @click="switchKind('gsv')">
-            GPT-SoVITS {{ t('音色') }}（{{ singers.gsv.length }}）
-          </button>
+        <div class="cv-row">
+          <select class="text-input" data-guide="cover-singer" v-model="singerId" style="max-width:420px" @change="saveOpts">
+            <option v-for="s in singers" :key="s.id" :value="s.id">{{ s.name }}<template v-if="s.arch"> —— {{ s.arch }}</template><template v-if="s.note"> · {{ s.note }}</template></option>
+          </select>
+          <span v-if="!singers.length" class="muted small">{{ t('还没有导入翻唱模型，去「模型管理 → 翻唱模型」导入一个') }}</span>
+          <button v-if="!singers.length" class="btn sm" @click="gotoModels">{{ t('翻唱模型') }}</button>
         </div>
         <div class="cv-row">
-          <select class="text-input" v-model="singerId" style="max-width:420px">
-            <option v-for="s in currentList" :key="s.kind + s.id" :value="s.id">{{ s.name }} —— {{ s.note }}</option>
+          <span class="cv-label">{{ t('变调（半音）') }}</span>
+          <input class="text-input cv-num" type="number" v-model.number="transpose" step="1" @change="saveOpts" />
+          <span class="cv-label">{{ t('f0 算法') }}</span>
+          <select class="text-input" v-model="f0Method" style="max-width:120px" @change="saveOpts">
+            <option value="rmvpe">rmvpe</option>
+            <option value="pm">pm</option>
+            <option value="harvest">harvest</option>
+            <option value="crepe">crepe</option>
           </select>
-          <span v-if="!currentList.length" class="muted small">
-            {{ singerKind === 'gsv' ? t('还没有 GPT-SoVITS 音色，去「资源中心」下载') : t('还没有 DiffSinger 声库，去「调教 → 声库」安装') }}
-          </span>
+          <span class="cv-label">{{ t('index 检索') }}</span>
+          <input class="text-input cv-num" type="number" v-model.number="indexRate" step="0.05" min="0" max="1" @change="saveOpts" />
         </div>
-        <div v-if="singerKind === 'gsv'" class="cv-adv">
-          <div class="cv-row">
-            <span class="cv-label">{{ t('运行时') }}</span>
-            <input class="text-input" v-model="gsvRoot" style="flex:1;min-width:220px" :placeholder="t('GPT-SoVITS 目录（含 GPT_SoVITS/）')" @change="saveOpts" />
-            <button class="btn sm" @click="pickGsvRoot"><Icon name="folder" :size="13" /> {{ t('选择') }}</button>
-          </div>
-          <div class="cv-row">
-            <span class="cv-label">{{ t('解释器') }}</span>
-            <input class="text-input" v-model="gsvPython" style="flex:1;min-width:220px" :placeholder="t('装好 torch 的 python.exe')" @change="saveOpts" />
-            <button class="btn sm" @click="pickGsvPython"><Icon name="folder" :size="13" /> {{ t('选择') }}</button>
-          </div>
-          <!-- 采样参数：范围与默认值都取上游自己的（见 script 里的说明）。
-               停在默认值上 = 一个都不发 = 完全用上游默认。 -->
-          <div class="cv-row">
-            <span class="cv-label">{{ t('top-k') }}</span>
-            <NumSlider v-model="gsvTopK" :min="1" :max="100" :step="1" style="flex:1" @change="saveOpts" />
-            <b class="cv-val">{{ gsvTopK }}</b>
-          </div>
-          <div class="cv-row">
-            <span class="cv-label">{{ t('top-p') }}</span>
-            <NumSlider v-model="gsvTopP" :min="0" :max="1" :step="0.05" style="flex:1" @change="saveOpts" />
-            <b class="cv-val">{{ Number(gsvTopP).toFixed(2) }}</b>
-          </div>
-          <div class="cv-row">
-            <span class="cv-label">{{ t('温度') }}</span>
-            <NumSlider v-model="gsvTemperature" :min="0" :max="1" :step="0.05" style="flex:1" @change="saveOpts" />
-            <b class="cv-val">{{ Number(gsvTemperature).toFixed(2) }}</b>
-          </div>
-          <div class="cv-row">
-            <span class="cv-label"></span>
-            <span class="muted small" style="flex:1">
-              {{ gsvSamplingPayloadText() }}
-            </span>
-            <button class="btn sm ghost" @click="resetGsvSampling">{{ t('恢复上游默认') }}</button>
-          </div>
-          <div class="muted small" v-if="!gsvReady">
-            {{ t('没找到 GPT-SoVITS 运行时：指向一份已有安装，或把路径写进 数据目录/gpt-sovits/runtime.json。') }}
+        <div class="cv-adv">
+          <button class="btn sm ghost" @click="advOpen = !advOpen">{{ t('高级') }} {{ advOpen ? '▲' : '▼' }}</button>
+          <div v-if="advOpen" class="cv-adv-grid">
+            <label class="cv-field"><span>{{ t('包络混入') }}</span><input class="text-input cv-num" type="number" v-model.number="rmsMixRate" step="0.05" min="0" max="1" /></label>
+            <label class="cv-field"><span>{{ t('清辅音保护') }}</span><input class="text-input cv-num" type="number" v-model.number="protect" step="0.01" min="0" max="0.5" /></label>
+            <label class="cv-field"><span>{{ t('分块秒数') }}</span><input class="text-input cv-num" type="number" v-model.number="chunkSec" step="10" min="10" /></label>
+            <label class="cv-check"><input type="checkbox" v-model="autoPredictF0" /> {{ t('自动预测 f0') }}</label>
           </div>
         </div>
       </div>
@@ -364,10 +270,7 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
             <option :value="3">+3 dB</option>
           </select>
         </div>
-        <label class="cv-check"><input type="checkbox" v-model="noResume" /> {{ t('不复用上次的中间结果（分离 / 扒谱 / 合成全部重算）') }}</label>
-      <label class="cv-check" v-if="singerKind === 'gsv'" :title="t('字级校验不通过时停止混音（干声会保留）')">
-        <input type="checkbox" v-model="charStrict" data-guide="cover-char-strict" /> {{ t('咬字校验严格模式（保留率 <95% 时不混音）') }}
-      </label>
+        <label class="cv-check"><input type="checkbox" v-model="noResume" /> {{ t('不复用上次的中间结果（分离 / 变声全部重算）') }}</label>
       </div>
 
       <div class="card">
@@ -392,21 +295,11 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
         <div class="cv-row" v-if="result.readme"><span class="cv-label">{{ t('说明') }}</span><span class="cv-ellipsis">{{ result.readme }}</span></div>
         <div class="cv-row" v-if="result.info">
           <span class="muted small">
-            {{ t('音符') }} {{ result.info.notes }} · BPM {{ result.info.bpm }} ·
             {{ t('音色') }} {{ result.info.singer || '—' }} ·
+            {{ t('变调（半音）') }} {{ result.info.transpose }} ·
+            {{ t('f0 算法') }} {{ result.info.f0_method }} ·
             {{ t('配平') }} {{ result.info.level_match_db }} dB
           </span>
-        </div>
-        <div v-if="charBadLines.length" class="cv-char-warn" data-guide="cover-char-align">
-          <div class="cv-row"><span class="cv-label">{{ t('咬字校验') }}</span>
-            <b>{{ charBadLines.length }}</b>&nbsp;{{ t('句字保留率 <95%（可能丢字/糊字）') }}</div>
-          <div v-for="ln in charBadLines.slice(0, 20)" :key="ln.index" class="cv-row cv-char-line">
-            <span class="cv-ellipsis">#{{ (ln.index != null ? ln.index : 0) + 1 }} {{ ln.text }}</span>
-            <span class="cv-char-pct">{{ Math.round((Number(ln.retention) || 0) * 100) }}%</span>
-          </div>
-          <div class="cv-hint">{{ t('建议换参考音或缩短句子后重新合成这些句；字级明细见 gsv/gsv_lines.json 的 char_align') }}</div>
-          <div class="cv-hint">{{ t('手动修正：去调教页改这些句的歌词后再合成 —— 未改动的句子会复用上次结果，只重跑改过的句。') }}</div>
-          <button class="btn sm" style="margin-top:6px" data-guide="cover-char-goto-singer" @click="goSinger">{{ t('去改歌词') }}</button>
         </div>
       </div>
     </template>
@@ -418,15 +311,13 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
 .cv-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-top: 8px; }
 .cv-label { font-size: var(--fs-sm); color: var(--stone); flex: none; }
 .cv-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60ch; }
-.cv-seg { display: flex; gap: var(--sp-2); margin-top: 6px; }
+.cv-num { max-width: 92px; }
 .cv-adv { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--hairline); }
+.cv-adv-grid { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin-top: var(--sp-2); }
+.cv-field { display: flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-sm); color: var(--steel); }
 .cv-check { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); color: var(--steel); margin-top: 10px; }
 .cv-bar { height: 8px; border-radius: var(--r-sm); background: var(--surface-soft); overflow: hidden; margin-top: 10px; }
 .cv-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--brand-blue, var(--t-info)), var(--t-info)); transition: transform var(--motion-base) var(--ease-out); }
 .cv-err { margin-top: 10px; font-size: var(--fs-sm); color: var(--error); white-space: pre-wrap; }
 .cv-log { margin-top: 10px; max-height: 220px; overflow: auto; font-size: var(--fs-sm); line-height: 1.6; background: var(--surface-soft); border-radius: var(--r-md); padding: 8px 10px; white-space: pre-wrap; }
-.cv-char-warn { margin-top: 10px; padding: 8px 10px; border-radius: var(--r-md); background: var(--surface-soft); border-left: 2px solid var(--warn, var(--t-info)); }
-.cv-char-line { margin-top: 4px; font-size: var(--fs-sm); }
-.cv-char-pct { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--warn, var(--t-info)); }
-.cv-hint { margin-top: 6px; font-size: var(--fs-xs); color: var(--stone); }
 </style>
