@@ -34,7 +34,7 @@ const protect = ref(0.33);
 const chunkSec = ref(60);
 const autoPredictF0 = ref(false);
 /* ★ 不给「中值滤波半径（filter_radius）」旋钮：那是老版 RVC 的参数，当前上游
-   pipeline 里已经不存在（0bed2df 的决定）——  upstream 没有的参数就不给旋钮。 */a4053b0 (feat(cover): 翻唱改走 SVC 变声 + 导入模型，删除 GPT-SoVITS 全套)
+   pipeline 里已经不存在（0bed2df 的决定）——  upstream 没有的参数就不给旋钮。 */
 // 「音频处理」面板分离完可以直接过来：那边把音轨路径写进 localStorage，这里接手
 const preVocals = ref('');
 const preInst = ref('');
@@ -89,7 +89,7 @@ async function load() {
     if (saved.singerId) singerId.value = saved.singerId;
     if (saved.transpose != null) transpose.value = saved.transpose;
     if (saved.f0Method) f0Method.value = saved.f0Method;
-    if (saved.indexRate != null) indexRate.value = saved.indexRate;a4053b0 (feat(cover): 翻唱改走 SVC 变声 + 导入模型，删除 GPT-SoVITS 全套)
+    if (saved.indexRate != null) indexRate.value = saved.indexRate;
   } catch (e) {}
 }
 
@@ -98,7 +98,7 @@ function saveOpts() {
     localStorage.setItem('fufumidi_cover_opts', JSON.stringify({
       outdir: outdir.value, device: device.value, clarityDb: clarityDb.value,
       singerId: singerId.value, transpose: transpose.value,
-      f0Method: f0Method.value, indexRate: indexRate.value,a4053b0 (feat(cover): 翻唱改走 SVC 变声 + 导入模型，删除 GPT-SoVITS 全套)
+      f0Method: f0Method.value, indexRate: indexRate.value,
     }));
   } catch (e) {}
 }
@@ -138,7 +138,7 @@ async function run() {
     rmsMixRate: Number(rmsMixRate.value),
     protect: Number(protect.value),
     chunkSec: Number(chunkSec.value) || 60,
-    autoPredictF0: !!autoPredictF0.value,a4053b0 (feat(cover): 翻唱改走 SVC 变声 + 导入模型，删除 GPT-SoVITS 全套)
+    autoPredictF0: !!autoPredictF0.value,
   };
   try {
     const r = await bridge.coverRun(payload);
@@ -211,18 +211,16 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
           <span class="muted small cv-ellipsis">{{ preVocals || '—' }} / {{ preInst || '—' }}</span>
           <button class="btn sm ghost" @click="preVocals = ''; preInst = ''">{{ t('清除') }}</button>
         </div>
-a4053b0 (feat(cover): 翻唱改走 SVC 变声 + 导入模型，删除 GPT-SoVITS 全套)
       </div>
 
       <div class="card">
         <div class="card-title"><span class="dot"></span>{{ t('② 选音色') }}</div>
         <div class="cv-row">
-          <select class="text-input" v-model="singerId" style="max-width:420px" @change="saveOpts">
+          <select class="text-input" data-guide="cover-singer" v-model="singerId" style="max-width:420px" @change="saveOpts">
             <option v-for="s in singers" :key="s.id" :value="s.id">{{ s.name }}<template v-if="s.arch"> —— {{ s.arch }}</template><template v-if="s.note"> · {{ s.note }}</template></option>
           </select>
           <span v-if="!singers.length" class="muted small">{{ t('还没有导入翻唱模型，去「模型管理 → 翻唱模型」导入一个') }}</span>
           <button v-if="!singers.length" class="btn sm" @click="gotoModels">{{ t('翻唱模型') }}</button>
-        </div>a4053b0 (feat(cover): 翻唱改走 SVC 变声 + 导入模型，删除 GPT-SoVITS 全套)
         </div>
         <div class="cv-row">
           <span class="cv-label">{{ t('变调（半音）') }}</span>
@@ -244,8 +242,6 @@ a4053b0 (feat(cover): 翻唱改走 SVC 变声 + 导入模型，删除 GPT-SoVITS
             <label class="cv-field"><span>{{ t('清辅音保护') }}</span><input class="text-input cv-num" type="number" v-model.number="protect" step="0.01" min="0" max="0.5" /></label>
             <label class="cv-field"><span>{{ t('分块秒数') }}</span><input class="text-input cv-num" type="number" v-model.number="chunkSec" step="10" min="10" /></label>
             <label class="cv-check"><input type="checkbox" v-model="autoPredictF0" /> {{ t('自动预测 f0') }}</label>
-          </div>
-        </div>a4053b0 (feat(cover): 翻唱改走 SVC 变声 + 导入模型，删除 GPT-SoVITS 全套)
           </div>
         </div>
       </div>
@@ -323,5 +319,5 @@ a4053b0 (feat(cover): 翻唱改走 SVC 变声 + 导入模型，删除 GPT-SoVITS
 .cv-bar { height: 8px; border-radius: var(--r-sm); background: var(--surface-soft); overflow: hidden; margin-top: 10px; }
 .cv-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--brand-blue, var(--t-info)), var(--t-info)); transition: transform var(--motion-base) var(--ease-out); }
 .cv-err { margin-top: 10px; font-size: var(--fs-sm); color: var(--error); white-space: pre-wrap; }
-.cv-log { margin-top: 10px; max-height: 220px; overflow: auto; font-size: var(--fs-sm); line-height: 1.6; background: var(--surface-soft); border-radius: var(--r-md); padding: 8px 10px; white-space: pre-wrap; }a4053b0 (feat(cover): 翻唱改走 SVC 变声 + 导入模型，删除 GPT-SoVITS 全套)
+.cv-log { margin-top: 10px; max-height: 220px; overflow: auto; font-size: var(--fs-sm); line-height: 1.6; background: var(--surface-soft); border-radius: var(--r-md); padding: 8px 10px; white-space: pre-wrap; }
 </style>

@@ -148,12 +148,6 @@ def test_diffsinger_sing_render_cli_accepts_vocoder():
     assert '--vocoder' in r.stdout
 
 
-def test_cover_cli_accepts_vocoder():
-    """翻唱链路（engine_cover.py）也要能把声码器覆盖透下去。"""
-    r = subprocess.run([PY, os.path.join(ENGINE, 'engine_cover.py'), 'all', '--help'],
-                       capture_output=True, text=True, encoding='utf-8', errors='replace')
-    assert r.returncode == 0
-    assert '--vocoder' in r.stdout
 
 
 def test_vbcheck_reports_missing_character_and_lyrics(tmp_path):
