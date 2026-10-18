@@ -741,7 +741,7 @@ GPT-SoVITS **不是 pip 包**，我们也不分发它。`gsv_env.find_runtime()`
 - 时长拉伸（`MAX_STRETCH = 1.6`）+ WORLD F0 校正（**保留 sp/ap 不动，只换 F0**）；
 - 客观量 `f0_corr`（对数音高域相关）、`dur_ratio`、`mfcc_dist_ref` 与 `mfcc_dist_voice`，
   并明写后两者**互相打架**（一个要像原唱、一个要像目标音色）；
-- **判定门**：`f0_corr >= 0.6` → 路线 A 成立；`< 0.3` → 该换路线 B（专用 SVC）。
+- **判定门**：`f0_corr >= 0.6` → 路线 A 成立；`< 0.3` → 该换路线 B（专用 RVC）。
   注释写明这是**决策依据，不是打分**；
 - **有意的降级链**：没有 pyworld 就只做时长对齐，并写 `f0_corrected=False`，**不假装校正过**。
 

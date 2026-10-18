@@ -2,9 +2,9 @@
 // 翻唱工作流（一键）：一首歌 → 分离 → 变声 → 混音 → 成品。
 // 引擎侧只有一份实现（engine/engine_cover.py），界面只是选参数 + 看进度。
 //
-// ★ 扒谱与歌词环节已删除：SVC 是「把原唱的人声换成另一个音色」，旋律/节奏/咬字
+// ★ 扒谱与歌词环节已删除：RVC 是「把原唱的人声换成另一个音色」，旋律/节奏/咬字
 //   本来就来自原唱，不需要歌词也不需要音符表。
-// ★ 音色 = 导入的 SVC 模型（模型管理 → 翻唱模型）。应用不内置、不代下载。
+// ★ 音色 = 导入的 RVC 模型（模型管理 → 翻唱模型）。应用不内置、不代下载。
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
@@ -24,7 +24,7 @@ const singerId = ref('');
 const device = ref('auto');
 const clarityDb = ref(2.0);
 const noResume = ref(false);
-/* ---- SVC 参数：常用项 + 高级（默认折叠），全部交给引擎，界面不做任何 DSP ---- */
+/* ---- RVC 参数：常用项 + 高级（默认折叠），全部交给引擎，界面不做任何 DSP ---- */
 const transpose = ref(0);
 const f0Method = ref('rmvpe');
 const indexRate = ref(0.3);
@@ -66,7 +66,7 @@ async function load() {
   try {
     const r = await bridge.coverSingers();
     if (r && r.ok) {
-      singers.value = r.svc || [];
+      singers.value = r.rvc || [];
       if (singers.value.length && !singers.value.some((s) => s.id === singerId.value)) singerId.value = singers.value[0].id;
     }
   } catch (e) {}
@@ -128,7 +128,7 @@ async function run() {
   const singer = currentSinger.value;
   const payload = {
     audio: audio.value, outdir: outdir.value, name: name.value || undefined,
-    singer: { kind: 'svc', id: singer.id, path: singer.dir },
+    singer: { kind: 'rvc', id: singer.id, path: singer.dir },
     device: device.value, clarityDb: Number(clarityDb.value) || 0,
     noResume: noResume.value,
     vocals: preVocals.value || undefined, instrumental: preInst.value || undefined,
@@ -156,7 +156,7 @@ function openPath(p) { try { bridge.coverOpen(p); } catch (e) {} }
 
 /** 没有模型时给一条能走的路：直接去模型管理的翻唱模型页 */
 function gotoModels() {
-  try { router.push({ path: '/resources', query: { tab: 'model', m: 'svc' } }); } catch (e) {}
+  try { router.push({ path: '/resources', query: { tab: 'model', m: 'rvc' } }); } catch (e) {}
 }
 
 onMounted(() => {
@@ -193,7 +193,7 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
       <div class="page-ic"><Icon name="mic" :size="20" /></div>
       <div>
         <div class="page-title">{{ t('翻唱') }}</div>
-        <div class="page-sub">{{ t('一首歌 → 分离 → 变声 → 混音 → 成品。音色来自你导入的 SVC 模型（应用不内置、不代下载）。') }}</div>
+        <div class="page-sub">{{ t('一首歌 → 分离 → 变声 → 混音 → 成品。音色来自你导入的 RVC 模型（应用不内置、不代下载）。') }}</div>
       </div>
     </div>
 
@@ -220,7 +220,7 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
             <option v-for="s in singers" :key="s.id" :value="s.id">{{ s.name }}<template v-if="s.arch"> —— {{ s.arch }}</template><template v-if="s.note"> · {{ s.note }}</template></option>
           </select>
           <span v-if="!singers.length" class="muted small">{{ t('还没有导入翻唱模型，去「模型管理 → 翻唱模型」导入一个') }}</span>
-          <button v-if="!singers.length" class="btn sm" @click="gotoModels">{{ t('翻唱模型') }}</button>
+          <button v-if="!singers.length" class="btn sm" @click="gotoModels">{{ t('RVC 模型') }}</button>
         </div>
         <div class="cv-row">
           <span class="cv-label">{{ t('变调（半音）') }}</span>

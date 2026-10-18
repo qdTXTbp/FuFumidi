@@ -1,24 +1,24 @@
-# 翻唱：SVC 变声 + 导入模型（取代 GPT-SoVITS / DiffSinger 接 RVC）
+# 翻唱：RVC 变声 + 导入模型（取代 GPT-SoVITS / DiffSinger 接 RVC）
 
 > 一句话：**一首歌进去，分离出人声，用你导入的模型把人声换成目标音色，混回伴奏，成品出来。**
 >
 > 与旧链路最大的三处不同：
 >
 > 1. **不再有 GPT-SoVITS**（纯 TTS 硬凑旋律那套）和 **DiffSinger 接 RVC**（先合成再变声）；
->    翻唱只有一条音色路线：**SVC 变声转换**。
-> 2. **扒谱与歌词环节整段删除**：SVC 是「把原唱的人声换成另一个音色」，旋律、节奏、咬字
+>    翻唱只有一条音色路线：**RVC 变声转换**。
+> 2. **扒谱与歌词环节整段删除**：RVC 是「把原唱的人声换成另一个音色」，旋律、节奏、咬字
 >    本来就来自原唱，不需要知道歌词也不需要音符表（`cover_notes.py` 仍在，调教/扒谱自己用）。
 > 3. **应用不内置模型、不代下载**（授权见下），音色由用户**导入**。
 >
-> 引擎：`engine/engine_svc.py`（变声）+ `engine/engine_cover.py`（编排）。
-> 界面：导航「翻唱」（`ViewCover.vue`）+ 模型管理「翻唱模型」分类（`components/cover/SvcModelPanel.vue`）。
+> 引擎：`engine/engine_rvc.py`（变声）+ `engine/engine_cover.py`（编排）。
+> 界面：导航「翻唱」（`ViewCover.vue`）+ 模型管理「翻唱模型」分类（`components/cover/RvcModelPanel.vue`）。
 
 ## 链路
 
 ```
 源音频 ─┬─ 分离（music2midi.py separate，与「音频处理」面板同一个入口）→ vocals / instrumental
         │
-        ├─ 变声（engine_svc.py convert：导入的 SVC 模型整轨转换）→ svc/dry.wav
+        ├─ 变声（engine_rvc.py convert：导入的 RVC 模型整轨转换）→ rvc/dry.wav
         │
         └─ 混音（engine/cover_mix.py：能量配平 + 吐字 EQ + 压缩 + 混响）→ <名称>.wav
 ```
@@ -26,7 +26,7 @@
 命令行等价物：
 
 ```bash
-python engine_cover.py all 歌曲.flac --outdir 输出目录 --svc-model <模型 id> \
+python engine_cover.py all 歌曲.flac --outdir 输出目录 --rvc-model <模型 id> \
     --transpose 0 --f0-method rmvpe --index-rate 0.3 --device auto
 ```
 
@@ -46,15 +46,15 @@ python engine_cover.py all 歌曲.flac --outdir 输出目录 --svc-model <模型
 所以应用**不做一键下载**：目录只做索引（把用户送到 ModelScope），下载由用户自己完成，
 再「导入」进应用。界面顶部常驻授权提示条；成品目录里的 `说明.md` 也写明许可与署名。
 
-### 目录快照（`main/svc-catalog.json`）
+### 目录快照（`main/rvc-catalog.json`）
 
-`scripts/build-svc-catalog.js` 拉 ModelScope 文件树，产出精简索引（1214 条 / 433 KB）：
+`scripts/build-rvc-catalog.js` 拉 ModelScope 文件树，产出精简索引（1214 条 / 433 KB）：
 
 ```
 { id, name（角色）, work（作品）, lang（语言）, sr, gen, engine, pth, pthSize, index, indexSize }
 ```
 
-- 内置快照 → 打开即有、可离线浏览；「刷新目录」才联网重写缓存（`<数据根>/svc-catalog.json`）。
+- 内置快照 → 打开即有、可离线浏览；「刷新目录」才联网重写缓存（`<数据根>/rvc-catalog.json`）。
 - 界面按**语言**（中文 222 / 英语 211 / 日语 202 / 韩语 140 / 未标语言 184）+ 作品筛选 + 搜索。
 
 ### 导入三种形态
@@ -62,11 +62,11 @@ python engine_cover.py all 歌曲.flac --outdir 输出目录 --svc-model <模型
 | 形态 | 行为 | 说明 |
 |---|---|---|
 | 选文件夹 | **登记引用，不复制** | 权重 + index 近 180MB/角色，复制纯属浪费磁盘 |
-| 逐个选文件 | 复制到 `<模型目录>/svc/<id>/` | 元数据手填（扩展名先自动归类） |
+| 逐个选文件 | 复制到 `<模型目录>/rvc/<id>/` | 元数据手填（扩展名先自动归类） |
 | 导入 zip | 解压到应用目录再识别 | 散文件没有可引用的家 |
 
 ★ **引用式导入删除时只注销条目，不动用户的原文件** —— 那可能是他的下载目录
-（`main/svc.js` 的 `remove()` 只在 `dir` 位于 `svcRoot` 之下时才物理删除）。
+（`main/rvc.js` 的 `remove()` 只在 `dir` 位于 `rvcRoot` 之下时才物理删除）。
 
 每个模型一份 `model.json`：
 
@@ -78,7 +78,7 @@ python engine_cover.py all 歌曲.flac --outdir 输出目录 --svc-model <模型
   "source": "folder", "lang": "日语", "work": "原神", "importedAt": "…" }
 ```
 
-★ **探测值只是候选**：权重里真正写着什么只有加载才知道。`engine_svc.py probe`
+★ **探测值只是候选**：权重里真正写着什么只有加载才知道。`engine_rvc.py probe`
 用 torch 读出真实的 `version` / `f0` / `tgt_sr`，**与清单不一致就回写清单**（界面「校正」按钮）。
 
 ## 参数（界面：常用 + 高级折叠）
@@ -96,25 +96,25 @@ python engine_cover.py all 歌曲.flac --outdir 输出目录 --svc-model <模型
 
 ★ **上游没有的参数就不给旋钮**：老版 RVC 的 `filterRadius`（中值滤波半径）在当前上游
 `infer/vc/pipeline.py` 里已经不存在，所以界面/CLI/清单里都**没有**这一项 ——
-留一个点了没反应的参数比不留更糟（`tests/test_svc_rvc_vendor.py` 会盯着上游，
+留一个点了没反应的参数比不留更糟（`tests/test_rvc_rvc_vendor.py` 会盯着上游，
 哪天它回来了我们再补）。
 
-## 运行环境：新增 `kind=svc` 包
+## 运行环境：新增 `kind=rvc` 包
 
 RVC 推理要 torch + transformers（HuBERT）+ faiss + librosa + scipy + soundfile（+ 选 pm 时的 parselmouth）。
-这些**不塞进本体**，做成第四种包类型（`main/gpu.js`：`GPU_KINDS` 加 `svc`，`KIND_PY.svc='3.11'`，
-`KIND_LABEL.svc='SVC 推理'`），用户在「加速包」页按需安装：
+这些**不塞进本体**，做成第四种包类型（`main/gpu.js`：`GPU_KINDS` 加 `rvc`，`KIND_PY.rvc='3.11'`，
+`KIND_LABEL.rvc='RVC 推理'`），用户在「加速包」页按需安装：
 
 - 包内 `site-packages/` 装上面那些 Python 依赖；另带 `assets/`（**公共编码器**）：
   `assets/hubert_base/`（transformers 版 HuBERT/ContentVec）与 `assets/rmvpe.pt`；
   角色权重是用户导入的，**公共编码器随包走**；
-- 装到别处时用 `FUFUMIDI_SVC_HUBERT` / `FUFUMIDI_SVC_RMVPE` 指过去
+- 装到别处时用 `FUFUMIDI_RVC_HUBERT` / `FUFUMIDI_RVC_RMVPE` 指过去
   （上游把路径写死在 `<vendor>/assets/…`，我们**只改指向、不改上游代码**）；
 - 模型目录里若自带 `assets/hubert_base/` 或 `rmvpe.pt`，优先用自带的（有的模型绑特定编码器）。
 
-包没装时，翻唱会**明确报「SVC 推理环境未就绪」并指向加速包页**，不假装能跑。
+包没装时，翻唱会**明确报「RVC 推理环境未就绪」并指向加速包页**，不假装能跑。
 
-## 引擎：`engine_svc.py` + `engine/svc/rvc.py` + vendor
+## 引擎：`engine_rvc.py` + `engine/rvc/rvc.py` + vendor
 
 ```
 probe   --model <dir>            读权重实际 version / f0 / 采样率
@@ -123,8 +123,8 @@ convert <in.wav> --model <dir> --out <wav> …   整轨变声
 
 进度/结果协议与全引擎一致：`###PROG {json}` / `###RESULT {json}`（失败 = `ok:false` + 退出码 0）。
 
-**推理照搬上游**：`engine/svc/vendor/rvc/` 是 RVC 官方仓库 `main @ 81eed5e`（2026-08-04，MIT）
-的**原样副本**（10 个 .py，约 2.9k 行），`engine/svc/rvc.py` 只做薄适配：
+**推理照搬上游**：`engine/rvc/vendor/rvc/` 是 RVC 官方仓库 `main @ 81eed5e`（2026-08-04，MIT）
+的**原样副本**（10 个 .py，约 2.9k 行），`engine/rvc/rvc.py` 只做薄适配：
 
 1. 参数翻译成上游 `Pipeline.pipeline(...)` 的入参；
 2. 长音频按**低能量点**切段（思路照搬上游 `opt_ts` 的选点方式），避免整首一次性进出显存；
@@ -132,7 +132,7 @@ convert <in.wav> --model <dir> --out <wav> …   整轨变声
 
 模型加载逐行照搬上游 `get_vc`：`tgt_sr=config[-1]`、`config[-3]=emb_g.weight.shape[0]`、
 `(version, if_f0)` → 四类合成器、`del net_g.enc_q`、`load_state_dict(strict=False)`。
-`tests/test_svc_rvc_vendor.py` 与上游源码**逐字节**比对 vendor 文件，并比对合成器映射表、
+`tests/test_rvc_rvc_vendor.py` 与上游源码**逐字节**比对 vendor 文件，并比对合成器映射表、
 `x_pad/x_query/x_center/x_max` 取值；上游源码不在时 SKIP（不假装通过）。
 
 DDSP 本轮只留接口（清单能存 `engine:"ddsp"`、界面能显示，选了会提示「尚未支持」）。
@@ -142,7 +142,7 @@ DDSP 本轮只留接口（清单能存 `engine:"ddsp"`、界面能显示，选�
 | 步骤 | 产物 | 复用条件 |
 |---|---|---|
 | 分离 | `sep/src_Vocals.wav`、`src_Instrumental.wav` | 文件在（`--vocals/--instrumental` 可外部指定） |
-| 变声 | `svc/dry.wav` + `svc/dry.meta.json` | 模型指纹 + 人声轨 + 全部参数都没变 |
+| 变声 | `rvc/dry.wav` + `rvc/dry.meta.json` | 模型指纹 + 人声轨 + 全部参数都没变 |
 
 `--no-resume` 强制重算；`state.json` 记录进度。
 
@@ -159,12 +159,12 @@ DDSP 本轮只留接口（清单能存 `engine:"ddsp"`、界面能显示，选�
 | 文件 | 作用 |
 |---|---|
 | `engine/engine_cover.py` | 编排 + 进度/结果协议 + 断点续跑 |
-| `engine/engine_svc.py` | SVC 推理（probe / convert，含依赖自检） |
-| `engine/svc/rvc.py` | 薄适配层：参数翻译 + 低能量点切段 + soundfile IO |
-| `engine/svc/vendor/rvc/` | 上游 RVC 推理代码（MIT，**一行未改**，见同目录 README） |
-| `main/svc.js` | 模型注册表：导入 / 列出 / 删除 / probe / 目录 |
-| `main/svc-catalog.json` | 目录快照（`scripts/build-svc-catalog.js` 生成） |
+| `engine/engine_rvc.py` | RVC 推理（probe / convert，含依赖自检） |
+| `engine/rvc/rvc.py` | 薄适配层：参数翻译 + 低能量点切段 + soundfile IO |
+| `engine/rvc/vendor/rvc/` | 上游 RVC 推理代码（MIT，**一行未改**，见同目录 README） |
+| `main/rvc.js` | 模型注册表：导入 / 列出 / 删除 / probe / 目录 |
+| `main/rvc-catalog.json` | 目录快照（`scripts/build-rvc-catalog.js` 生成） |
 | `main/cover.js` | 翻唱 IPC（选歌、跑、取消） |
 | `frontend/src/views/ViewCover.vue` | 翻唱页 |
-| `frontend/src/components/cover/SvcModelPanel.vue` | 翻唱模型：导入 + 已导入 + 在线目录 |
+| `frontend/src/components/cover/RvcModelPanel.vue` | 翻唱模型：导入 + 已导入 + 在线目录 |
 | `frontend/src/views/ViewModels.vue` | 模型管理（新增「翻唱模型」分类） |

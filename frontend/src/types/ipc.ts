@@ -714,9 +714,9 @@ export interface UstxExportResult {
   warnings?: string[];
 }
 
-/** 翻唱工作流：可选音色 = 导入的 SVC 模型 */
+/** 翻唱工作流：可选音色 = 导入的 RVC 模型 */
 export interface CoverSinger {
-  kind: 'svc';
+  kind: 'rvc';
   id: string;
   name: string;
   /** 模型目录（直接传给引擎） */
@@ -737,8 +737,8 @@ export interface CoverEnv {
   ok: boolean;
   dataRoot: string;
   modelsRoot: string;
-  /** 翻唱模型落点 <模型目录>/svc */
-  svcRoot: string;
+  /** 翻唱模型落点 <模型目录>/rvc */
+  rvcRoot: string;
   singers: number;
 }
 
@@ -748,7 +748,7 @@ export interface CoverRunOptions {
   audio: string;
   outdir: string;
   name?: string;
-  singer: { kind: 'svc'; id: string; path?: string };
+  singer: { kind: 'rvc'; id: string; path?: string };
   /** auto / cuda / cpu */
   device?: string;
   /** 吐字清晰度补偿（dB），0 = 关 */
@@ -759,7 +759,7 @@ export interface CoverRunOptions {
   instrumental?: string;
   /** 不复用上次的中间结果 */
   noResume?: boolean;
-  /* ---- SVC 参数（常用 + 高级，全部交给引擎，界面不自己实现 DSP）---- */
+  /* ---- RVC 参数（常用 + 高级，全部交给引擎，界面不自己实现 DSP）---- */
   /** 变调（半音） */
   transpose?: number;
   /** rmvpe / pm / harvest / crepe */
@@ -777,8 +777,8 @@ export interface CoverRunOptions {
   autoPredictF0?: boolean;
 }
 
-/* ---------------- 翻唱模型（SVC）注册表 ---------------- */
-export interface SvcModel {
+/* ---------------- 翻唱模型（RVC）注册表 ---------------- */
+export interface RvcModel {
   id: string;
   name: string;
   engine: 'rvc' | 'ddsp' | string;
@@ -800,7 +800,7 @@ export interface SvcModel {
 }
 
 /** ModelScope 目录里的一条模型（只做索引，不含权重） */
-export interface SvcCatalogModel {
+export interface RvcCatalogModel {
   id: string;
   name: string;
   work: string;
@@ -816,7 +816,7 @@ export interface SvcCatalogModel {
   supported?: boolean;
 }
 
-export interface SvcCatalog {
+export interface RvcCatalog {
   generated: string;
   note?: string;
   refreshed?: boolean;
@@ -824,7 +824,7 @@ export interface SvcCatalog {
            commercial: boolean; credits: string[]; supported: boolean; count: number }[];
   langs: string[];
   works: string[];
-  models: SvcCatalogModel[];
+  models: RvcCatalogModel[];
 }
 
 /** 翻唱进度（cover:progress 推送；`-1` 表示只带日志/文本） */
@@ -959,7 +959,7 @@ export interface FuBridge {
 
   // 翻唱工作流（一首歌 → 分离 → 变声 → 混音 → 成品）：引擎是 engine/engine_cover.py
   coverEnv(): Promise<CoverEnv>;
-  coverSingers(): Promise<{ ok: boolean; svc?: CoverSinger[]; error?: string }>;
+  coverSingers(): Promise<{ ok: boolean; rvc?: CoverSinger[]; error?: string }>;
   coverPickAudio(): Promise<{ ok?: boolean; canceled?: boolean; path?: string }>;
   coverPickDir(): Promise<{ ok?: boolean; canceled?: boolean; path?: string }>;
   /** 选 GPT-SoVITS 运行时目录（会记进 <数据根>/gpt-sovits/runtime.json） */
@@ -969,19 +969,19 @@ export interface FuBridge {
   coverRun(opts: CoverRunOptions): Promise<{ ok: boolean; id?: string; error?: string }>;
   coverCancel(): Promise<GeneralResult & { canceled?: boolean }>;
   coverOpen(p: string): Promise<GeneralResult>;
-  // 翻唱模型（SVC）注册表：导入 / 列出 / 删除 / ModelScope 目录
-  svcList(): Promise<{ ok: boolean; models?: SvcModel[]; root?: string; error?: string }>;
-  svcCatalog(): Promise<{ ok: boolean; catalog?: SvcCatalog; error?: string }>;
-  svcRefreshCatalog(): Promise<{ ok: boolean; count?: number; generated?: string; error?: string }>;
-  svcPickFolder(): Promise<{ ok?: boolean; canceled?: boolean; dir?: string; detected?: any }>;
-  svcPickFiles(): Promise<{ ok?: boolean; canceled?: boolean; files?: string[] }>;
-  svcPickZip(): Promise<{ ok?: boolean; canceled?: boolean; path?: string }>;
-  svcImportFolder(dir: string, opts?: any): Promise<{ ok: boolean; model?: SvcModel; detected?: any; error?: string }>;
-  svcImportFiles(files: Record<string, string>, opts?: any): Promise<{ ok: boolean; model?: SvcModel; error?: string }>;
-  svcImportZip(p: string, opts?: any): Promise<{ ok: boolean; model?: SvcModel; error?: string }>;
-  svcRemove(id: string): Promise<{ ok: boolean; removedPhysical?: boolean; error?: string }>;
-  svcProbe(id: string): Promise<{ ok: boolean; model?: SvcModel; patched?: Record<string, any>; raw?: any; error?: string }>;
-  svcOpenCatalogPage(url: string): Promise<GeneralResult>;
+  // 翻唱模型（RVC）注册表：导入 / 列出 / 删除 / ModelScope 目录
+  rvcList(): Promise<{ ok: boolean; models?: RvcModel[]; root?: string; error?: string }>;
+  rvcCatalog(): Promise<{ ok: boolean; catalog?: RvcCatalog; error?: string }>;
+  rvcRefreshCatalog(): Promise<{ ok: boolean; count?: number; generated?: string; error?: string }>;
+  rvcPickFolder(): Promise<{ ok?: boolean; canceled?: boolean; dir?: string; detected?: any }>;
+  rvcPickFiles(): Promise<{ ok?: boolean; canceled?: boolean; files?: string[] }>;
+  rvcPickZip(): Promise<{ ok?: boolean; canceled?: boolean; path?: string }>;
+  rvcImportFolder(dir: string, opts?: any): Promise<{ ok: boolean; model?: RvcModel; detected?: any; error?: string }>;
+  rvcImportFiles(files: Record<string, string>, opts?: any): Promise<{ ok: boolean; model?: RvcModel; error?: string }>;
+  rvcImportZip(p: string, opts?: any): Promise<{ ok: boolean; model?: RvcModel; error?: string }>;
+  rvcRemove(id: string): Promise<{ ok: boolean; removedPhysical?: boolean; error?: string }>;
+  rvcProbe(id: string): Promise<{ ok: boolean; model?: RvcModel; patched?: Record<string, any>; raw?: any; error?: string }>;
+  rvcOpenCatalogPage(url: string): Promise<GeneralResult>;
   onCoverProgress(cb: (p: CoverProgress) => void): () => void;
 
   // DiffSinger 模块化集成（未启用模块时 status 返回 enabled=false，组件零下载）

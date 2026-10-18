@@ -38,19 +38,19 @@ contextBridge.exposeInMainWorld('fuBridge', {
     ipcRenderer.on('cover:progress', w);
     return () => ipcRenderer.removeListener('cover:progress', w);
   },
-  // 翻唱模型（SVC）注册表：导入 / 列出 / 删除 / ModelScope 目录
-  svcList: () => ipcRenderer.invoke('svc:list'),
-  svcCatalog: () => ipcRenderer.invoke('svc:catalog'),
-  svcRefreshCatalog: () => ipcRenderer.invoke('svc:refreshCatalog'),
-  svcPickFolder: () => ipcRenderer.invoke('svc:pickFolder'),
-  svcPickFiles: () => ipcRenderer.invoke('svc:pickFiles'),
-  svcPickZip: () => ipcRenderer.invoke('svc:pickZip'),
-  svcImportFolder: (dir, opts) => ipcRenderer.invoke('svc:importFolder', dir, opts),
-  svcImportFiles: (files, opts) => ipcRenderer.invoke('svc:importFiles', files, opts),
-  svcImportZip: (p, opts) => ipcRenderer.invoke('svc:importZip', p, opts),
-  svcRemove: (id) => ipcRenderer.invoke('svc:remove', id),
-  svcProbe: (id) => ipcRenderer.invoke('svc:probe', id),
-  svcOpenCatalogPage: (url) => ipcRenderer.invoke('svc:openCatalogPage', url),
+  // 翻唱模型（RVC）注册表：导入 / 列出 / 删除 / ModelScope 目录
+  rvcList: () => ipcRenderer.invoke('rvc:list'),
+  rvcCatalog: () => ipcRenderer.invoke('rvc:catalog'),
+  rvcRefreshCatalog: () => ipcRenderer.invoke('rvc:refreshCatalog'),
+  rvcPickFolder: () => ipcRenderer.invoke('rvc:pickFolder'),
+  rvcPickFiles: () => ipcRenderer.invoke('rvc:pickFiles'),
+  rvcPickZip: () => ipcRenderer.invoke('rvc:pickZip'),
+  rvcImportFolder: (dir, opts) => ipcRenderer.invoke('rvc:importFolder', dir, opts),
+  rvcImportFiles: (files, opts) => ipcRenderer.invoke('rvc:importFiles', files, opts),
+  rvcImportZip: (p, opts) => ipcRenderer.invoke('rvc:importZip', p, opts),
+  rvcRemove: (id) => ipcRenderer.invoke('rvc:remove', id),
+  rvcProbe: (id) => ipcRenderer.invoke('rvc:probe', id),
+  rvcOpenCatalogPage: (url) => ipcRenderer.invoke('rvc:openCatalogPage', url),
   // 转录引擎
   convert: (cfg) => ipcRenderer.invoke('engine:convert', cfg),
   cancel: (id) => ipcRenderer.invoke('engine:cancel', id),

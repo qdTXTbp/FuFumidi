@@ -11,7 +11,7 @@ const MSST_CATALOG = require('./models-msst-catalog');
 const SepCommon = require('./separate-common');
 const DS = require('./download-source');
 const createFastDownload = require('./fast-download');
-const SVC = require('./svc');
+const RVC = require('./rvc');
 
 function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings, resolvePython }) {
   const _folderWatchers = new Map();
@@ -375,12 +375,12 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         sepReady: sepInfo ? sepInfo.ready : undefined, sepWhy: sepInfo ? sepInfo.why : undefined,        url: m.url || undefined, external: !!m.external,
       });
     }
-    // 翻唱模型（用户导入的 SVC 模型，见 main/svc.js）：不下载、不更新，只列出与删除
-    for (const m of SVC.list()) {
+    // 翻唱模型（用户导入的 RVC 模型，见 main/rvc.js）：不下载、不更新，只列出与删除
+    for (const m of RVC.list()) {
       items.push({
-        id: 'svc:' + m.id, name: m.name, path: m.dir, size: m.size || 0, exists: true,
-        downloadable: false, kind: 'svc', arch: SVC.archLabel(m), use: SVC.useLabel(m),
-        note: SVC.noteLabel(m), type: 'svc', imported: true,
+        id: 'rvc:' + m.id, name: m.name, path: m.dir, size: m.size || 0, exists: true,
+        downloadable: false, kind: 'rvc', arch: RVC.archLabel(m), use: RVC.useLabel(m),
+        note: RVC.noteLabel(m), type: 'rvc', imported: true,
         engine: m.engine, version: m.version || '', sr: m.sr || 0,
       });
     }
@@ -445,8 +445,8 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
   });
   ipcMain.handle('model:delete', async (_e, id) => {
     try {
-      // 翻唱模型（用户导入的 SVC 模型）：只删它自己那个目录，不动别的
-      if (String(id || '').startsWith('svc:')) return SVC.remove(String(id).slice(4));
+      // 翻唱模型（用户导入的 RVC 模型）：只删它自己那个目录，不动别的
+      if (String(id || '').startsWith('rvc:')) return RVC.remove(String(id).slice(4));
       let p = null;
       if (MODEL_REGISTRY[id]) p = path.join(modelsDir(), MODEL_REGISTRY[id].dest);
       else if (_msstRegistry[id]) p = path.join(modelsDir(), _msstRegistry[id].dest);

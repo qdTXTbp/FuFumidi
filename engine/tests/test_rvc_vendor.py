@@ -18,10 +18,10 @@ ENGINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ENGINE not in sys.path:
     sys.path.insert(0, ENGINE)
 
-VENDOR = os.path.join(ENGINE, 'svc', 'vendor', 'rvc')
+VENDOR = os.path.join(ENGINE, 'rvc', 'vendor', 'rvc')
 UPSTREAM = os.path.join(os.path.dirname(os.path.dirname(ENGINE)), '_ref', 'RVC')
 
-import svc.rvc as RVC                                     # noqa: E402
+import rvc.adapter as RVC                               # noqa: E402
 
 needs_upstream = pytest.mark.skipif(
     not os.path.isfile(os.path.join(UPSTREAM, 'infer', 'vc', 'modules.py')),
@@ -109,7 +109,7 @@ def test_upstream_has_no_filter_radius_so_we_dont_either():
         if os.path.isfile(p):
             src += open(p, encoding='utf-8', errors='ignore').read()
     assert 'filter_radius' not in src, '上游又有 filter_radius 了 → 适配层该跟着补上'
-    assert 'filter_radius' not in open(os.path.join(ENGINE, 'engine_svc.py'), encoding='utf-8').read()
+    assert 'filter_radius' not in open(os.path.join(ENGINE, 'engine_rvc.py'), encoding='utf-8').read()
 
 
 # ---------------------------------------------------------------- 我们的切段逻辑
@@ -149,7 +149,7 @@ class _Args(object):
 
 def test_convert_without_weights_is_honest(monkeypatch, tmp_path):
     """vendor 就位但目录里没有权重 → 说「没有权重」，不许静默产出一个空 wav。"""
-    import engine_svc as ES
+    import engine_rvc as ES
     monkeypatch.setattr(ES, 'deps', lambda: {'torch': True, 'soundfile': True, 'faiss': True, 'vendor_rvc': True})
     import soundfile as sf
     import numpy as np

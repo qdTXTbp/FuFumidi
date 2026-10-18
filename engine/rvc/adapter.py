@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """RVC 推理适配层（**薄胶水**）—— DSP 与模型全部走 vendor 的上游代码。
 
-    vendor = engine/svc/vendor/rvc/（RVC-Project 上游，MIT，**一行未改**）
+    vendor = engine/rvc/vendor/rvc/（RVC-Project 上游，MIT，**一行未改**）
 
 这个文件只做三件上游没做的事：
   1. 把界面/引擎的参数翻译成上游 `pipeline.pipeline(...)` 的入参；
@@ -58,13 +58,13 @@ def pick_device(prefer='auto'):
 
 
 def hubert_dir():
-    """HuBERT/ContentVec 权重目录（随 kind=svc 包装，公共组件而不是角色权重）。"""
-    return os.environ.get('FUFUMIDI_SVC_HUBERT') or os.path.join(_VENDOR, 'assets', 'hubert_base')
+    """HuBERT/ContentVec 权重目录（随 kind=rvc 包装，公共组件而不是角色权重）。"""
+    return os.environ.get('FUFUMIDI_RVC_HUBERT') or os.path.join(_VENDOR, 'assets', 'hubert_base')
 
 
 def rmvpe_dir():
     """rmvpe 权重所在目录（上游 `Pipeline.get_f0` 读的是环境变量 rmvpe_root）。"""
-    return os.environ.get('FUFUMIDI_SVC_RMVPE') or os.environ.get('rmvpe_root') or os.path.join(_VENDOR, 'assets')
+    return os.environ.get('FUFUMIDI_RVC_RMVPE') or os.environ.get('rmvpe_root') or os.path.join(_VENDOR, 'assets')
 
 
 def load_hubert(device, is_half=False, log=print):
@@ -80,7 +80,7 @@ def load_hubert(device, is_half=False, log=print):
         H.HUBERT_MODEL_PATH = Path(d).resolve()      # 仅指向，不改写上游逻辑
     if not os.path.isfile(os.path.join(str(H.HUBERT_MODEL_PATH), 'config.json')):
         raise RuntimeError(
-            '缺少 HuBERT/ContentVec 权重：%s（请安装 SVC 推理包，或用 FUFUMIDI_SVC_HUBERT 指向它）'
+            '缺少 HuBERT/ContentVec 权重：%s（请安装 RVC 推理包，或用 FUFUMIDI_RVC_HUBERT 指向它）'
             % H.HUBERT_MODEL_PATH)
     log('加载 HuBERT：%s' % H.HUBERT_MODEL_PATH)
     return H.load_hubert_model(device, is_half)

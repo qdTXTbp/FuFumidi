@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """翻唱工作流（一键）：一首歌 → 分离 → 变声 → 混音 → 成品。
 
-    python engine_cover.py all <歌曲> --outdir <输出目录> --svc-model <模型 id> [选项]
+    python engine_cover.py all <歌曲> --outdir <输出目录> --rvc-model <模型 id> [选项]
 
 分工：
-  engine_svc.py   变声（导入的 SVC 模型把原唱人声换成目标音色）
+  engine_rvc.py   变声（导入的 RVC 模型把原唱人声换成目标音色）
   cover_mix.py    干声 + 伴奏 → 成品（原曲能量比配平 + 吐字 EQ + 后期链）
   本文件          串起来 + 进度协议（###PROG）+ 结果协议（###RESULT）
 
-★ 扒谱与歌词环节已整段删除：SVC 是「把原唱的人声换成另一个音色」，旋律、节奏、咬字
+★ 扒谱与歌词环节已整段删除：RVC 是「把原唱的人声换成另一个音色」，旋律、节奏、咬字
   本来就来自原唱，不需要知道歌词也不需要音符表（cover_notes.py 仍在，调教/扒谱自己用）。
 ★ 旧的 GPT-SoVITS 逐句参考重合成与「DiffSinger 声库接 RVC」两条通道已删除。
 
@@ -123,7 +123,7 @@ def cuda_free_gb():
         import torch
         # ★ DirectML（AMD/Intel）没有 cuda 命名空间，旧判据会把整条翻唱渲染降到 CPU。
         #   DirectML 下查不到空闲显存 → 按"可用"处理，让 GPU 先跑（真爆显存会在渲染里报错）。
-        #   （补丁随 5.2.2 的 b749152 一并搬过来，别在合 SVC 分支时丢掉。）
+        #   （补丁随 5.2.2 的 b749152 一并搬过来，别在合 RVC 分支时丢掉。）
         try:
             from engine_gpu import torch_device as _td, directml_usable as _dok
             if _td().startswith("privateuseone"):
@@ -214,15 +214,15 @@ def do_separate(audio, outdir, model='', config='', arch='', use_tta=False, batc
     return voc, inst, device
 
 
-def resolve_svc_model(model_id):
+def resolve_rvc_model(model_id):
     """模型 id → (模型目录, 清单)。
 
-    两种落点（见 main/svc.js）：
-      · <模型目录>/svc/<id>/model.json  —— zip / 逐个文件导入（文件在应用目录里）
-      · <模型目录>/svc/index.json       —— 文件夹导入（**引用式**，dir 指向用户自己的目录）
+    两种落点（见 main/rvc.js）：
+      · <模型目录>/rvc/<id>/model.json  —— zip / 逐个文件导入（文件在应用目录里）
+      · <模型目录>/rvc/index.json       —— 文件夹导入（**引用式**，dir 指向用户自己的目录）
     """
     root = os.environ.get('FUFUMIDI_MODELS_DIR') or ''
-    base = os.path.join(root, 'svc')
+    base = os.path.join(root, 'rvc')
     d = os.path.join(base, str(model_id))
     mf = os.path.join(d, 'model.json')
     if os.path.isfile(mf):
@@ -238,15 +238,15 @@ def resolve_svc_model(model_id):
     raise RuntimeError('找不到翻唱模型「%s」（已导入的模型在 %s）' % (model_id, base))
 
 
-def do_svc(voc, outdir, model_id, device='auto', log=print, resume=True, params=None):
-    """原唱人声 → 目标音色干声（engine_svc.py convert）。
+def do_rvc(voc, outdir, model_id, device='auto', log=print, resume=True, params=None):
+    """原唱人声 → 目标音色干声（engine_rvc.py convert）。
 
     ★ 变声是整首最慢的一步（长歌几十分钟），所以同样写 `*.meta.json` 签名：
       模型指纹 + 人声轨 + 全部参数都没变就直接用上次的干声。
     """
     p = params or {}
-    model_dir, manifest = resolve_svc_model(model_id)
-    sdir = os.path.join(outdir, 'svc')
+    model_dir, manifest = resolve_rvc_model(model_id)
+    sdir = os.path.join(outdir, 'rvc')
     os.makedirs(sdir, exist_ok=True)
     dry = os.path.join(sdir, 'dry.wav')
     meta = os.path.join(sdir, 'dry.meta.json')
@@ -255,7 +255,7 @@ def do_svc(voc, outdir, model_id, device='auto', log=print, resume=True, params=
         log('变声：复用已有干声（模型与人声轨、参数都没变）')
         emit_prog(60, '变声', {'reused': True})
         return dry, {'reused': True, 'model': manifest.get('name') or model_id}
-    cmd = [sys.executable, os.path.join(_HERE, 'engine_svc.py'), 'convert', voc,
+    cmd = [sys.executable, os.path.join(_HERE, 'engine_rvc.py'), 'convert', voc,
            '--model', model_dir, '--out', dry,
            '--transpose', str(int(p.get('transpose') or 0)),
            '--f0-method', str(p.get('f0_method') or 'rmvpe'),
@@ -319,7 +319,7 @@ def write_readme(outdir, name, info):
             '- %s.wav —— 成品（变声人声 + 分离伴奏）' % name,
             '- %s_干声.wav —— 变声后的人声（未混伴奏）' % name,
             '- sep/ —— 分离出的人声轨与伴奏轨',
-            '- svc/ —— 变声的中间产物', '',
+            '- rvc/ —— 变声的中间产物', '',
             '> 由 FuFumidi 翻唱工作流自动生成。',
             '> 模型为社区开源权重（CC-BY-NC-4.0）：禁止商用，须署名训练者。']
     open(p, 'w', encoding='utf-8').write(chr(10).join(txt))
@@ -333,7 +333,7 @@ def main():
         s = sub.add_parser(nm)
         s.add_argument('audio', nargs='?' if nm != 'all' else None)
         s.add_argument('--outdir', required=True)
-        s.add_argument('--svc-model', default='', help='导入的翻唱模型 id（见 <模型目录>/svc）')
+        s.add_argument('--rvc-model', default='', help='导入的翻唱模型 id（见 <模型目录>/rvc）')
         s.add_argument('--name', default='')
         s.add_argument('--device', default='cuda')
         s.add_argument('--sep-model', default='')
@@ -346,7 +346,7 @@ def main():
         s.add_argument('--no-resume', dest='resume', action='store_false',
                        help='不复用上次的中间结果（分离 / 变声全部重算）')
         s.set_defaults(resume=True)
-        # ---- SVC 参数（界面「常用 + 高级」直接映射过来，界面不自己实现 DSP）
+        # ---- RVC 参数（界面「常用 + 高级」直接映射过来，界面不自己实现 DSP）
         s.add_argument('--transpose', type=int, default=0)
         s.add_argument('--f0-method', default='rmvpe')
         s.add_argument('--index-rate', type=float, default=0.3)
@@ -396,23 +396,23 @@ def main():
                   'rms_mix_rate': a.rms_mix_rate,
                   'protect': a.protect, 'chunk_sec': a.chunk_sec, 'auto_predict_f0': a.auto_predict_f0}
         if a.cmd in ('convert', 'all'):
-            if not a.svc_model:
-                emit_result({'ok': False, 'error': '缺少翻唱模型（--svc-model）：先在模型管理里导入一个'})
+            if not a.rvc_model:
+                emit_result({'ok': False, 'error': '缺少翻唱模型（--rvc-model）：先在模型管理里导入一个'})
                 return 1
             emit_prog(20, '变声')
-            dry, sres = do_svc(voc, outdir, a.svc_model, device=a.device, log=log_,
+            dry, sres = do_rvc(voc, outdir, a.rvc_model, device=a.device, log=log_,
                                resume=a.resume, params=params)
-            _model_dir, manifest = resolve_svc_model(a.svc_model)
-            info.update({'singer': manifest.get('name') or a.svc_model,
+            _model_dir, manifest = resolve_rvc_model(a.rvc_model)
+            info.update({'singer': manifest.get('name') or a.rvc_model,
                          'engine': manifest.get('engine') or 'rvc',
                          'transpose': a.transpose, 'f0_method': a.f0_method,
-                         'index_rate': a.index_rate, 'svc_reused': bool(sres.get('reused'))})
+                         'index_rate': a.index_rate, 'rvc_reused': bool(sres.get('reused'))})
             save_state(outdir, {'stage': 'convert', 'dry': dry, 'info': info})
             if a.cmd == 'convert':
                 emit_result({'ok': True, 'stage': 'convert', 'dry': dry, 'info': info})
                 return 0
         else:
-            dry = os.path.join(outdir, 'svc', 'dry.wav')
+            dry = os.path.join(outdir, 'rvc', 'dry.wav')
             if not os.path.isfile(dry):
                 emit_result({'ok': False, 'error': '没有变声结果：先跑 convert（或 all）'})
                 return 1

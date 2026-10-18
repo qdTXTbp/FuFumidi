@@ -21,7 +21,7 @@ def _base_dir():
 
 
 def _data_root():
-    """用户数据根目录 —— 与 gsv_env.data_root() **同一条规则**（见该函数）。
+    """用户数据根目录 —— 与 engine_rvc 的模型目录解析**同一条规则**（gsv_env 已随翻唱改走 RVC 删除）。
 
     优先级：FUFUMIDI_DATA_DIR → FUFUMIDI_MODELS_DIR 的上一级 → 引擎目录的上一级。
     主进程跑引擎时一定会设 FUFUMIDI_MODELS_DIR，所以实战里走的是第二条。

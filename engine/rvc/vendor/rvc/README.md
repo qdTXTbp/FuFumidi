@@ -28,11 +28,11 @@
 | 上游文件 | 不搬的原因 |
 |---|---|
 | `infer/audio.py` | 依赖 `ffmpeg` + `av`(PyAV)；我们用 `soundfile` 做 IO（引擎里已有） |
-| `infer/vc/modules.py` | 和 WebUI（gradio / i18n / 说话人下拉）耦合；它的**加载逻辑**由 `svc/rvc.py` 逐行照搬 |
+| `infer/vc/modules.py` | 和 WebUI（gradio / i18n / 说话人下拉）耦合；它的**加载逻辑**由 `rvc/rvc.py` 逐行照搬 |
 | `infer/fcpe.py`、`rtrvc.py`、`cli.py` | 额外依赖（torchfcpe）/ 实时链路 / CLI，翻唱用不到 |
-| `configs/config.py` | 与 WebUI 参数耦合；其中**推理真正用到的字段**在 `svc/rvc.py::Config` 里按同样取值复刻 |
+| `configs/config.py` | 与 WebUI 参数耦合；其中**推理真正用到的字段**在 `rvc/rvc.py::Config` 里按同样取值复刻 |
 
-## 依赖（装在 `kind=svc` 加速包里，不进本体）
+## 依赖（装在 `kind=rvc` 加速包里，不进本体）
 
 `torch`、`transformers`（HuBERT）、`faiss`（index 检索）、`librosa`、`scipy`、
 `soundfile`、`numpy`；选 `pm` 做 f0 时还要 `parselmouth`。
@@ -41,9 +41,9 @@
 
 - `assets/hubert_base/` —— HuBERT/ContentVec（公共编码器，随加速包装）；
   上游把它写死在 `<vendor>/assets/hubert_base`，装到别处时用环境变量
-  `FUFUMIDI_SVC_HUBERT` 指向（**只改指向，不改上游代码**）。
+  `FUFUMIDI_RVC_HUBERT` 指向（**只改指向，不改上游代码**）。
 - `rmvpe.pt` —— 上游 `Pipeline.get_f0` 读环境变量 `rmvpe_root`；
-  我们在调用前把它指到 `FUFUMIDI_SVC_RMVPE`（或包内 `assets/`）。
+  我们在调用前把它指到 `FUFUMIDI_RVC_RMVPE`（或包内 `assets/`）。
 - 角色权重（`.pth` + `.index`）由**用户导入**，不在这里。
 
 > 改这里任何一行前先想清楚：漂移一次，用户手里的模型就可能从「能唱」变成「电音」。

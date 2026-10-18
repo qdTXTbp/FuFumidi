@@ -4509,11 +4509,11 @@ export const I18N_MAP = {
 
   '外部来源': 'External source',
   '打开来源': 'Open source page',
-  /* 模型管理：翻唱模型（SVC）分类页签 */
-  '翻唱模型': 'Cover models',
+  /* 模型管理：翻唱模型（RVC）分类页签 */
+  'RVC 模型': 'Cover models',
   '选择': 'Choose',
 
-  /* 翻唱模型（SvcModelPanel.vue）：导入 + 在线目录 */
+  /* 翻唱模型（RvcModelPanel.vue）：导入 + 在线目录 */
   '导入模型': 'Import model',
   '选文件夹（登记引用，不复制）': 'Pick folder (reference only, no copy)',
   '逐个选文件（手填元数据）': 'Pick files (fill in metadata)',
@@ -4541,7 +4541,7 @@ export const I18N_MAP = {
   /* 翻唱工作流（ViewCover.vue 与导航） */
   '翻唱': 'Cover',
   '一首歌 → 分离人声 → 用导入的模型换音色 → 混音成成品': 'One song → separate the vocal → convert it with an imported model → mix the final track',
-  '一首歌 → 分离 → 变声 → 混音 → 成品。音色来自你导入的 SVC 模型（应用不内置、不代下载）。': 'One song → separate → voice conversion → mix → final track. The voice comes from an SVC model you import (the app bundles none and downloads none for you).',
+  '一首歌 → 分离 → 变声 → 混音 → 成品。音色来自你导入的 RVC 模型（应用不内置、不代下载）。': 'One song → separate → voice conversion → mix → final track. The voice comes from an RVC model you import (the app bundles none and downloads none for you).',
   '① 选歌': '1. Pick a song',
   '② 选音色': '2. Pick a voice',
   '③ 输出与选项': '3. Output and options',
@@ -4591,9 +4591,9 @@ export const I18N_MAP = {
   "翻唱走「分离 → 扒谱 → 合成 → 混音」四步：选入一首完整歌曲，应用自动把人声与伴奏分开，把人声转成旋律，再用你选的音色唱出来。": "Covering runs four steps: separation → transcription → singing → mixing. Pick a full song and the app splits vocals from the accompaniment, turns the vocal into a melody, then sings it with your chosen voice.",
   "如果之前在「音频处理」里分离过这首歌，人声与伴奏会自动带过来，直接跳过分离这一步（省时间）。": "If you already separated this song in “Audio processing”, the vocals and accompaniment are picked up automatically — skip the separation step and save time.",
   "分离 → 变声 → 混音，一条龙做翻唱": "Separate → voice-convert → mix: one-stop cover",
-  "翻唱走「分离 → 变声 → 混音」三步：选入一首完整歌曲，应用自动把人声与伴奏分开，用你导入的 SVC 模型把原唱换成另一个音色，再和伴奏混成成品。旋律、节奏、咬字都来自原唱，不需要歌词。": "Cover runs three steps — separate → voice-convert → mix: pick a full song, the app splits vocals from the accompaniment, swaps the original voice with your imported SVC model, then mixes with the accompaniment. Melody, rhythm and diction all come from the original — no lyrics needed.",
+  "翻唱走「分离 → 变声 → 混音」三步：选入一首完整歌曲，应用自动把人声与伴奏分开，用你导入的 RVC 模型把原唱换成另一个音色，再和伴奏混成成品。旋律、节奏、咬字都来自原唱，不需要歌词。": "Cover runs three steps — separate → voice-convert → mix: pick a full song, the app splits vocals from the accompaniment, swaps the original voice with your imported RVC model, then mixes with the accompaniment. Melody, rhythm and diction all come from the original — no lyrics needed.",
   "选翻唱模型": "Pick a cover model",
-  "音色来自你导入的 SVC（RVC）模型：应用不内置也不代下载，去「模型管理 → 翻唱模型」导入社区权重即可（导入时可逐项探测版本 / f0 / 采样率，探测值只是候选，以权重真实读数为准）。": "The voice comes from your imported SVC (RVC) model: not bundled, not auto-downloaded — import community weights via Model Manager → Cover Models (import probes version / f0 / sample rate per item; probe values are only candidates, the weights' real readings win).",
+  "音色来自你导入的 RVC（RVC）模型：应用不内置也不代下载，去「模型管理 → 翻唱模型」导入社区权重即可（导入时可逐项探测版本 / f0 / 采样率，探测值只是候选，以权重真实读数为准）。": "The voice comes from your imported RVC (RVC) model: not bundled, not auto-downloaded — import community weights via Model Manager → Cover Models (import probes version / f0 / sample rate per item; probe values are only candidates, the weights' real readings win).",
   "选好输出目录后点「开始翻唱」：长曲自动按低能量点切块推理再混音，支持断点续跑（中断后可继续，或勾选「不复用上次结果」全部重算）。": "Pick an output folder and hit Start Cover: long songs are split at low-energy points for block-wise inference, then mixed; resume is supported (continue after an interruption, or tick “do not reuse previous results” to recompute everything).",
   "选音色类型": "Choose voice type",
   "DiffSinger 音色来自声库工坊，即选即用；GPT-SoVITS 音色需要本机运行时（v2pro）与参考音频。两种都能在本地完成合成。": "DiffSinger voices come from the voice-bank workshop and work instantly; GPT-SoVITS voices need a local runtime (v2pro) and reference audio. Both render fully offline.",

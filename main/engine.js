@@ -39,7 +39,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
 
   function spawnEngine(pyArgs, opts = {}) {
     // env：允许调用方覆盖环境变量（翻唱工作流要把 FUFUMIDI_MODELS_DIR 指过去，
-    // 让 engine_cover / engine_svc 能找到导入的翻唱模型）。0d4e9fb6dc3213154803419b963b07e335b3d70b
+    // 让 engine_cover / engine_rvc 能找到导入的翻唱模型）。
     // ★ idleTimeoutMs：**无进展**多久就判定卡死（0 = 不启用）。
     //   长音频分离/翻唱动辄几十分钟，用总时长当超时会把正常的长任务当卡死杀掉
     //   （2026-10-17 实测：一场演唱会 FLAC 分离跑过 30 分钟被「引擎执行超时」干掉）。
