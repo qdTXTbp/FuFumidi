@@ -4,7 +4,7 @@ export const LICENSES = {
   "generatedBy": "scripts/gen-licenses.mjs",
   "app": {
     "name": "fufumidi",
-    "version": "6.0.2",
+    "version": "6.0.3",
     "license": "MIT"
   },
   "soundfonts": [
