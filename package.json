@@ -43,6 +43,7 @@
     "test:update-sign": "node --test scripts/test-update-sign.mjs",
     "test:omr": "node scripts/test-engine-omr.mjs",
     "test:platform": "node --test scripts/test-platform.mjs",
+    "i18n:apply": "node scripts/i18n-apply-batch.mjs",
     "build:platform": "node scripts/build-platform.mjs",
     "sign:update": "node scripts/sign-update.mjs",
     "audio:rtl": "node scripts/audio-rtl.mjs",
