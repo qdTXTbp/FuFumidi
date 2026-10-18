@@ -33,6 +33,9 @@ const rmsMixRate = ref(0.25);
 const protect = ref(0.33);
 const chunkSec = ref(60);
 const autoPredictF0 = ref(false);
+/* ---- 人声分离：**可选**。'' = 不分离（整曲变声）；选了就用用户指定的那个模型 ---- */
+const sepOptions = ref([]);
+const selectedSepId = ref('');
 /* ★ 不给「中值滤波半径（filter_radius）」旋钮：那是老版 RVC 的参数，当前上游
    pipeline 里已经不存在（0bed2df 的决定）——  upstream 没有的参数就不给旋钮。 */
 // 「音频处理」面板分离完可以直接过来：那边把音轨路径写进 localStorage，这里接手
@@ -71,6 +74,13 @@ async function load() {
     }
   } catch (e) {}
   try {
+    // 分离模型是**可选项**：这里只列出「已下载」的，没下载的不出现（不强迫任何人装模型）
+    const ml = await bridge.modelList();
+    sepOptions.value = (ml || []).filter((m) => m.kind === 'separate' && m.exists)
+      .map((m) => ({ id: m.id, name: m.name, ready: m.sepReady !== false }));
+    if (selectedSepId.value && !sepOptions.value.some((m) => m.id === selectedSepId.value)) selectedSepId.value = '';
+  } catch (e) {}
+  try {
     const pre = JSON.parse(localStorage.getItem('fufumidi_cover_prefill') || '{}');
     if (pre && (pre.vocals || pre.instrumental)) {
       preVocals.value = pre.vocals || '';
@@ -87,6 +97,7 @@ async function load() {
     if (saved.device) device.value = saved.device;
     if (saved.clarityDb != null) clarityDb.value = saved.clarityDb;
     if (saved.singerId) singerId.value = saved.singerId;
+    if (saved.selectedSepId != null) selectedSepId.value = String(saved.selectedSepId);
     if (saved.transpose != null) transpose.value = saved.transpose;
     if (saved.f0Method) f0Method.value = saved.f0Method;
     if (saved.indexRate != null) indexRate.value = saved.indexRate;
@@ -99,6 +110,7 @@ function saveOpts() {
       outdir: outdir.value, device: device.value, clarityDb: clarityDb.value,
       singerId: singerId.value, transpose: transpose.value,
       f0Method: f0Method.value, indexRate: indexRate.value,
+      selectedSepId: selectedSepId.value,
     }));
   } catch (e) {}
 }
@@ -132,6 +144,8 @@ async function run() {
     device: device.value, clarityDb: Number(clarityDb.value) || 0,
     noResume: noResume.value,
     vocals: preVocals.value || undefined, instrumental: preInst.value || undefined,
+    sepMode: selectedSepId.value ? undefined : 'off',
+    sepModel: selectedSepId.value ? { id: selectedSepId.value } : undefined,
     transpose: Number(transpose.value) || 0,
     f0Method: f0Method.value,
     indexRate: Number(indexRate.value),
@@ -263,6 +277,15 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
           <span class="cv-label">{{ t('复用分离结果') }}</span>
           <span class="muted small cv-ellipsis">{{ preVocals || '—' }} / {{ preInst || '—' }}</span>
           <button class="btn sm ghost" @click="preVocals = ''; preInst = ''">{{ t('清除') }}</button>
+        </div>
+        <!-- 人声分离：可选。不选 = 整曲直接变声；选了 = 先分离再只变声人声（需要已下载分离模型） -->
+        <div class="cv-row">
+          <span class="cv-label">{{ t('人声分离') }}</span>
+          <select class="text-input" v-model="selectedSepId" style="max-width:420px" @change="saveOpts">
+            <option value="">{{ t('不分离 —— 变声整曲') }}</option>
+            <option v-for="m in sepOptions" :key="m.id" :value="m.id">{{ m.name }}<template v-if="m.ready === false">（{{ t('加速未就绪，将用 CPU') }}）</template></option>
+          </select>
+          <span class="muted small">{{ t('分离模型需要先在「模型管理」里下载；不选就整曲直接变声') }}</span>
         </div>
       </div>
 

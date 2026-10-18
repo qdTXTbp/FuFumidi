@@ -341,6 +341,8 @@ def main():
         s.add_argument('--sep-arch', default='')
         s.add_argument('--tta', action='store_true')
         s.add_argument('--clarity-db', type=float, default=2.0)
+        s.add_argument('--no-separate', action='store_true',
+                       help='不分离：整曲直接变声（没有伴奏可混，成品=变声后的整轨）')
         s.add_argument('--vocals', default='', help='已分离好的人声轨（给了就跳过分离）')
         s.add_argument('--instrumental', default='', help='已分离好的伴奏轨（给了就跳过分离）')
         s.add_argument('--no-resume', dest='resume', action='store_false',
@@ -369,8 +371,13 @@ def main():
         prev_state = load_state(outdir) if a.resume else {}
         if prev_state.get('stage'):
             log_('输出目录里已有上次的状态：stage=%s（--no-resume 可全部重算）' % prev_state['stage'])
+        # ⓪ 不分离：整曲直接变声（用户自主选择，不强制人声分离模型）
+        if getattr(a, 'no_separate', False) and a.cmd == 'all':
+            voc, inst = a.audio, ''
+            info['separate'] = '未分离（变声整曲）'
+            log_('未分离：整曲直接变声（可用 --sep-model 指定分离模型改变这一行为）')
         # ① 直接复用调用方给的分离结果（音频处理面板刚导出的音轨 / 之前跑过的结果）
-        if a.vocals and a.instrumental and os.path.isfile(a.vocals) and os.path.isfile(a.instrumental):
+        elif a.vocals and a.instrumental and os.path.isfile(a.vocals) and os.path.isfile(a.instrumental):
             voc, inst = a.vocals, a.instrumental
             info['separate'] = '复用已有分离结果（跳过分离）'
             log_('复用已有分离结果，跳过分离')
@@ -422,6 +429,18 @@ def main():
         import soundfile as sf
         import cover_mix as CM
         seconds = float(sf.info(dry).duration or 0)
+        if not (inst and os.path.isfile(inst)):
+            # 未分离：没有伴奏可配 —— 成品就是变声后的整轨，不走混音链
+            import shutil
+            shutil.copyfile(dry, out_wav)
+            info['separate'] = '未分离（变声整曲，无伴奏混音）'
+            info.update({'seconds': round(seconds, 1), 'clarity_boost_db': 0})
+            readme = write_readme(outdir, name, info)
+            save_state(outdir, {'stage': 'done', 'info': info, 'out': out_wav, 'dry': dry, 'readme': readme})
+            emit_prog(100, '完成')
+            emit_result({'ok': True, 'stage': 'all', 'out': out_wav, 'dry': dry, 'readme': readme,
+                         'elapsed_s': round(time.time() - t_all, 1), 'info': info})
+            return 0
         # ★ 整轨变声：整条干声都是「演唱区」（没有音符表，不能按句开窗）——
         #   混音里的句间静音闸因此等效关闭，配平按整轨能量算。
         stats = CM.mix_song([dry], inst, voc, out_wav, [(0.0, seconds)],

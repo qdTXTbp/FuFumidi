@@ -16,7 +16,7 @@
 const Paths = require('./paths');
 const RVC = require('./rvc');
 
-function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spawnEngine,
+function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spawnEngine, modelsService,
                             engineEnv, readSettings }) {
   //: 当前运行中的翻唱任务（同一时刻只允许一个：它会占满 CPU/GPU）
   let current = null;
@@ -99,6 +99,22 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
     const args = ['all', o.audio, '--outdir', o.outdir, '--rvc-model', String(singer.id)];
     if (o.name) args.push('--name', String(o.name));
     // ---- RVC 参数（常用 + 高级，全部走引擎，界面不自己实现任何 DSP）。
+    // ---- 人声分离：**可选**，由用户自主决定 ----
+    //   · o.sepMode === 'off'            → 不分离，整曲直接变声（--no-separate）
+    //   · o.sepModel.id（已下载的模型）  → 解析成 ckpt/config/arch 三元组显式下发
+    //   · 两者都没有                     → 引擎走默认模型兜底（找不到会明确报错）
+    if (o.sepMode === 'off') {
+      args.push('--no-separate');
+    } else if (o.sepModel && o.sepModel.id) {
+      const res = modelsService && modelsService.resolveSeparateModel
+        ? modelsService.resolveSeparateModel(String(o.sepModel.id)) : null;
+      if (!res) return { ok: false, error: '未知的分离模型：' + o.sepModel.id };
+      if (res.exists === false) return { ok: false, error: res.error || ('分离模型未下载：' + o.sepModel.id) };
+      args.push('--sep-model', res.modelPath);
+      if (res.configPath) args.push('--sep-config', res.configPath);
+      if (res.arch) args.push('--sep-arch', res.arch);
+    }
+
     // 注意：filter-radius 是**老版 RVC** 的参数，当前上游已不存在，别加回来
     // （上游没有的参数就不给旋钮 —— 加了个点了没反应的比不加更糟）。
     const num = (v, d) => (v == null || v === '' ? d : Number(v));

@@ -206,7 +206,7 @@ if (!gotLock) {
     registerRvcIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, net, spawnEngine, engineEnv });
     // 翻唱工作流（一首歌 → 分离 → 变声 → 混音 → 成品）：引擎是 engine_cover.py，
     // 变声这一步走 engine_rvc.py（导入的 RVC 模型）。
-    registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spawnEngine, engineEnv, readSettings });
+    registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spawnEngine, engineEnv, readSettings, modelsService: ModelsService });
   // P2-6 AI 生成（可选、默认关）：只调用用户自备的本地命令；产物强制 AI 标注
   registerAiIpc({ ipcMain, app, readSettings });
   // P2-5 DAW 互通：DAWproject 导出（渲染进程出 XML，主进程写 ZIP）
