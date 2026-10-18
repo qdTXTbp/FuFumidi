@@ -1606,6 +1606,8 @@ export const I18N_MAP = {
   'AI 生成（可选）': 'AI generation (optional)',
   '导出 DAWproject': 'Export DAWproject',
   '咬字校验': 'Pronunciation check',
+  '手动修正：去调教页改这些句的歌词后再合成 —— 未改动的句子会复用上次结果，只重跑改过的句。': 'Manual fix: edit the lyrics of these lines on the tuning page and synthesize again — unchanged lines reuse previous results, only edited lines are re-run.',
+  '去改歌词': 'Edit lyrics',
   '咬字校验严格模式（保留率 <95% 时不混音）': 'Strict pronunciation check (skip mixing when retention <95%)',
   '字级校验不通过时停止混音（干声会保留）': 'Stop before mixing if character-level check fails (dry stems are kept)',
   '打包为一个 ZIP（推荐）': 'Pack into one ZIP (recommended)',

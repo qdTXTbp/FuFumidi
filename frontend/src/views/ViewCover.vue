@@ -217,6 +217,8 @@ async function cancel() {
 }
 
 function openPath(p) { try { bridge.coverOpen(p); } catch (e) {} }
+/** P1-5 手动修正：去调教页改歌词（未改动的句子在重跑时复用缓存，只重跑改过的句） */
+function goSinger() { try { location.hash = '#/singer'; } catch (e) {} }
 
 onMounted(() => {
   load();
@@ -403,6 +405,8 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
             <span class="cv-char-pct">{{ Math.round((Number(ln.retention) || 0) * 100) }}%</span>
           </div>
           <div class="cv-hint">{{ t('建议换参考音或缩短句子后重新合成这些句；字级明细见 gsv/gsv_lines.json 的 char_align') }}</div>
+          <div class="cv-hint">{{ t('手动修正：去调教页改这些句的歌词后再合成 —— 未改动的句子会复用上次结果，只重跑改过的句。') }}</div>
+          <button class="btn sm" style="margin-top:6px" data-guide="cover-char-goto-singer" @click="goSinger">{{ t('去改歌词') }}</button>
         </div>
       </div>
     </template>
