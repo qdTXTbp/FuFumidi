@@ -163,8 +163,6 @@ module.exports = {
   GPU_KINDS,
   KIND_PY,
   KIND_LABEL,
-  ACCEL_KINDS,
-  isAccelKind,
   isGpuKind,
   requiredPython,
   fitsPython,
