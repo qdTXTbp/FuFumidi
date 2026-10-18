@@ -24,7 +24,7 @@ const pathMod = require('path');
 
 const SCHEMA_VERSION = 1;
 /** 允许的 kind：白名单 + 拒绝。前端传错 kind 时不写盘，免得变成静默丢数据。 */
-const KINDS = ['model', 'utau', 'ds', 'sf', 'voice'];
+const KINDS = ['model', 'utau', 'ds', 'sf', 'voice', 'svc'];
 const STR_FIELDS = ['name', 'author', 'source', 'category'];
 const MAX_TAGS = 24;
 
