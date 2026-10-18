@@ -322,6 +322,9 @@
   Ed25519 清单签名（sha256 89d373…）；归档 `E:\Midi\安装包\FuFumidi\6.0.2`；CNB `v6.0.2` 9 资产、
   **is_latest=true**；latest.yml/manifest 一致，**下载安装包验签通过**；安装版部署 6.0.2 + 冒烟通过。
   （注：构建脚本在 vite 把告警写 stderr 时外部 PowerShell 退出码可能为 1，但产物/断言均已正确完成 —— 以产物校验为准。）
+- **6.0.3（收尾版）**：P0-4c 分轨 ZIP / P1-13 分标签撤销 / P0-8 i18n 欠账清零 / P1-5 咬字手动入口；
+  版本四源一致、构建成功（更新器断言通过）；Ed25519 清单签名（sha256 730696…）；归档 `E:\Midi\安装包\FuFumidi\6.0.3`；
+  CNB `v6.0.3` 9 资产、**is_latest=true**；latest.yml/manifest 一致，**下载安装包验签通过**；安装版部署 6.0.3 + 冒烟通过。
 - 未完成：GitHub Release 资产上传（本机无 GitHub 凭据，credential fill 交互不可用）；mac/linux 真机构建与签名公证；
   Authenticode 证书；原生音频 I/O（WASAPI/ASIO）与真实插件宿主 —— 均属环境/资源依赖项。
 
