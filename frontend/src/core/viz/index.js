@@ -155,6 +155,7 @@ export function createVizRenderer() {
       const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
       ctx.save();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
+      // （2026-10-18i：用户要求去掉全屏微脉冲 Scaling —— 合成阶段不再做整体缩放）
       ctx.globalCompositeOperation = 'source-over';
       ctx.globalAlpha = 1;
       ctx.save(); ctx.scale(sc, sc); paintStage(ctx, w, h, bg); ctx.restore();

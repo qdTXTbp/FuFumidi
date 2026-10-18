@@ -66,6 +66,19 @@ export function bpmOfSong(song) {
   return 120;
 }
 
+/** 速度记号的 MusicXML 片段：x/8（3/8、6/8、9/8、12/8）按**附点四分**记（谱面惯例），
+ *  其它拍号按四分音符。★ per-minute 必须与 beat-unit 成对换算：附点四分 = 60 ⇔ 四分音符 90
+ *  —— MIDI 的 set_tempo 永远是四分音符，所以这里换算的是**记号写法**，不是速度本身。
+ *  这样重新渲出来的谱面记号与原始谱面一致（用户 2026-10-18：转谱的速度记号不对）。 */
+export function metronomeXml(sig, bpmQuarter) {
+  const num = (sig && sig.num) || 4, den = (sig && sig.den) || 4;
+  const compound = den === 8 && (num === 3 || num === 6 || num === 9 || num === 12);
+  const bpm = Math.max(1, Math.round(bpmQuarter || 120));
+  const per = compound ? Math.max(1, Math.round(bpm / 1.5)) : bpm;
+  return '<metronome><beat-unit>quarter</beat-unit>' + (compound ? '<beat-unit-dot/>' : '')
+    + '<per-minute>' + per + '</per-minute></metronome>';
+}
+
 // 单轨 MusicXML（供 Verovio 渲染当前乐谱轨道）
 export function songToMusicXMLTrack(song, ti) {
   const tr = song.tracks[ti];
@@ -131,7 +144,7 @@ export function songToMusicXMLTrack(song, ti) {
       const kf = inferKeyFifths(tr.notes);
       xml += '<attributes><divisions>' + tpb + '</divisions><key><fifths>' + kf.fifths + '</fifths><mode>' + kf.mode + '</mode></key><time><beats>' + sig.num + '</beats><beat-type>' + sig.den + '</beat-type></time><clef><sign>' + clefSign + '</sign><line>' + clefLine + '</line></clef></attributes>\n';
       const _bpm0 = bpmOfSong(song);
-      xml += '<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>' + _bpm0 + '</per-minute></metronome></direction-type><sound tempo="' + _bpm0 + '"/></direction>\n';
+      xml += '<direction placement="above"><direction-type>' + metronomeXml(sig, _bpm0) + '</direction-type><sound tempo="' + _bpm0 + '"/></direction>\n';
     } else if (newClef !== curClef) {
       curClef = newClef;
       const clefLine = curClef === 'F' ? 4 : 2;
@@ -267,8 +280,8 @@ export function buildFullScore(song, opts) {
           + '<time><beats>' + sig.num + '</beats><beat-type>' + sig.den + '</beat-type></time>'
           + '<clef><sign>' + curClef + '</sign><line>' + cl + '</line></clef></attributes>\n';
         if (pi === 0) {
-          xml += '<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>' + bpm
-            + '</per-minute></metronome></direction-type><sound tempo="' + bpm + '"/></direction>\n';
+          xml += '<direction placement="above"><direction-type>' + metronomeXml(sig, bpm)
+            + '</direction-type><sound tempo="' + bpm + '"/></direction>\n';
         }
       } else if (newClef !== curClef) {
         curClef = newClef;

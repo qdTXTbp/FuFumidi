@@ -70,6 +70,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
   },
   // 音频处理（MSST 分离）
   separateAudio: (cfg) => ipcRenderer.invoke('engine:separate', cfg),
+  // 音频时长（主进程用内置 ffmpeg 读头信息，避免把大文件读进渲染进程）
+  audioDuration: (p) => ipcRenderer.invoke('audio:duration', p),
   onSeparateLog: (cb) => {
     const w = (_e, p) => cb(p);
     ipcRenderer.on('engine:separate:log', w);

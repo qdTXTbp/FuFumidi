@@ -213,6 +213,47 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     return 'MSST';
   }
   function msstKind(cat) { return (cat === 'vocal' || cat === 'multi') ? 'separate' : 'other'; }
+  /** 模型用途标注：把"这个模型到底能干什么/不能干什么"写清楚。
+   *  2026-10-17 用户反馈：选 UVR-DeNoise / denoise_* 去现场录音，结果 clean 和原音一样 ——
+   *  因为降噪模型只针对**稳态噪声**（底噪/嘶声/电流声），并不去观众声/混响，也不是人声分离。 */
+  function sepUsageOf(file, cat) {
+    const n = String(file || '').toLowerCase();
+    if (n.includes('denoise')) {
+      return { label: '降噪（仅稳态噪声：底噪 / 嘶声 / 电流声）',
+        notFor: '不能去除现场观众声、混响或回声；也不会分离人声/伴奏' };
+    }
+    if (n.includes('dereverb') || n.includes('de_big_reverb') || n.includes('reverb')) {
+      return { label: '去混响 / 去回声（场馆、房间混响）',
+        notFor: '不分离人声与伴奏；也不是降噪（底噪请用 denoise 模型）' };
+    }
+    if (n.includes('crowd')) {
+      return { label: '人群声分离（提取 / 去除现场观众声）',
+        notFor: '不是通用降噪，也不分离人声与伴奏' };
+    }
+    if (n.includes('karaoke')) {
+      return { label: '卡拉OK（去人声、出伴奏）', notFor: '' };
+    }
+    if (n.includes('drumsep') || n.includes('drum')) {
+      return { label: '鼓组分离（单独提取鼓）', notFor: '' };
+    }
+    if (cat === 'multi') {
+      return { label: '多音轨分离（人声 / 鼓 / 贝斯 / 其他等）', notFor: '' };
+    }
+    if (cat === 'vr') {
+      if (n.includes('vocal') || n.includes('hp-uvr')) return { label: '人声分离（UVR 系列：出人声 / 伴奏）', notFor: '' };
+      return { label: 'UVR 系列：人声 / 伴奏分离', notFor: '' };
+    }
+    if (n.includes('inst_v') || n.includes('instrumental') || n.includes('_inst.')) {
+      return { label: '提取伴奏（乐器轨）', notFor: '' };
+    }
+    if (cat === 'vocal') {
+      return { label: '人声 / 伴奏分离（出人声与伴奏两轨）', notFor: '' };
+    }
+    if (cat === 'single') {
+      return { label: '单轨处理模型（只出一轨：干净声 / 目标声）', notFor: '' };
+    }
+    return { label: '音频分离', notFor: '' };
+  }
   async function ensureMsstModels() {
     let manifest = null;
     const manifestFile = path.join(modelsDir(), 'msst-manifest.json');
@@ -243,6 +284,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
             id: key,
             name: file ? String(file).replace(/\.[^.]+$/, '') : key,
             note: desc, use: desc, arch: inferMsstArch(file || key), best: hit ? (hit[3] || null) : null,
+            ...sepUsageOf(file || key, catOf),
             kind: msstKind(catOf), type: 'ghsplit', splitCat: catOf, sizeKey: key,
             outName: file, repo: 'monologue82/Models', dest: path.join(catOf, key),
             minSize: Math.max(1, Math.floor((meta.size || 0) * 0.9)),
@@ -356,6 +398,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         id: m.id, name: m.name, path: dest, size, exists, active: _activeDownloads.has(m.id),
         downloadable: true, note: m.note, kind: m.kind, arch: m.arch, use: m.use,
         type: m.type, repo: m.repo, runtime: m.runtime, parts: m.parts, group: 'msst', best: m.best || null,
+        useLabel: m.label || '', useNotFor: m.notFor || '',
         sepReady: sepInfo ? sepInfo.ready : undefined, sepWhy: sepInfo ? sepInfo.why : undefined,
         sepAuto: sepInfo ? !!sepInfo.auto : undefined,
       });

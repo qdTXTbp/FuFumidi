@@ -155,6 +155,11 @@ def parse_musicxml(text):
 
     out_parts = []
     tempos, times, keys = [], [], []
+    #: 整小节休止的时长（tick）。★ Audiveris 不知道拍号时，每小节的长度 = 它写出来的
+    #: **内容**长度（末尾休止符通常不写），所以 measureLens 的众数会偏向"半小节"。
+    #: 只有「整小节休止」必须占满一小节 —— 它的 duration 就是 Audiveris 认定的拍长，
+    #: 这是唯一不受"省略休止符"影响的直接证据（见 engine_omr_backends.infer_meter）。
+    bar_rest_lens = []
 
     for pi, part in enumerate(parts):
         name = ((_text(part, 'part-name') or '').strip()
@@ -211,12 +216,27 @@ def parse_musicxml(text):
                 voice = _text(el, 'voice', '1') or '1'
                 ticks = _dur_ticks(el, divisions, tpb)
                 is_chord = _child(el, 'chord') is not None
-                is_rest = _child(el, 'rest') is not None
+                rest_el = _child(el, 'rest')
+                is_rest = rest_el is not None
                 is_grace = _child(el, 'grace') is not None
+                # 整小节休止（<rest measure="yes">）：它的时长就是一小节
+                if rest_el is not None and ticks > 0:
+                    try:
+                        mr = str(rest_el.get('measure') or '').strip().lower()
+                    except Exception:                     # noqa: BLE001
+                        mr = ''
+                    if mr in ('yes', '1', 'true'):
+                        bar_rest_lens.append(int(ticks))
                 if is_grace:
                     ticks = max(15, ticks)
+                # ★ 发音记号只改变**发声**长度，不改变谱面时值：游标仍按 ticks 前进，
+                #   否则一个断奏音之后的所有音都会提前（旧解析器干脆忽略这些记号）。
+                art_f, art_vel = _articulations(el)
                 start = cur if not is_chord else (last_note['start'] if last_note else cur)
                 is_cue = _child(el, 'cue') is not None
+                snd_ticks = ticks
+                if art_f != 1.0 and not is_rest and not is_cue:
+                    snd_ticks = max(1, int(round(ticks * art_f)))
                 if is_rest or is_cue:
                     if not is_chord and not is_grace:
                         cur += ticks
@@ -230,24 +250,29 @@ def parse_musicxml(text):
                 octv = _int(_text(pitch, 'octave'), 4)
                 alter = _int(_text(pitch, 'alter'), 0)
                 midi = max(0, min(127, 12 * (octv + 1) + STEP_SEMITONES.get(step, 0) + alter))
+                # Audiveris 的 TEXTS 步常把力度记号 OCR 进 <lyric><text>（实测这份总谱：
+                # 16 个 lyric "f" 里有一半没有对应的 <direction>）→ 也当成力度记号用。
+                lyr = _lyric_text(el)
+                if lyr in DYNAMICS:
+                    cur_vel = DYNAMICS[lyr]
                 vel = _int(el.get('velocity') or _text(el, 'velocity'), 0)
                 if not vel:
                     vel = cur_vel or 80
-                vel = max(1, min(127, vel))
+                vel = max(1, min(127, vel + art_vel))
                 tie_start = _has_tie(el, 'start')
                 tie_stop = _has_tie(el, 'stop')
                 key = (voice, midi)
                 if tie_stop and key in open_ties and not is_chord:
                     # 连音线的后半段：并进前一个音，不加新音
                     prev = open_ties[key]
-                    prev['end'] = max(prev['end'], measure_start + start + ticks)
+                    prev['end'] = max(prev['end'], measure_start + start + snd_ticks)
                     if not tie_start:
                         del open_ties[key]
                     if not is_grace:
                         cur += ticks
                     last_note = {'start': start, 'midi': midi}
                     continue
-                note = {'start': measure_start + start, 'end': measure_start + start + ticks,
+                note = {'start': measure_start + start, 'end': measure_start + start + snd_ticks,
                         'midi': midi, 'vel': vel,
                         # ★ m / off = 第几小节 + 小节内偏移。Audiveris 在拍号不明的谱上会
                         #   **按这一小节认出来的内容**给小节定长（日志会写 "No target duration
@@ -290,7 +315,7 @@ def parse_musicxml(text):
         temps[t['tick']] = t['bpm']
     tempos = [{'tick': k, 'bpm': temps[k]} for k in sorted(temps)]
     return {'parts': out_parts, 'tempos': tempos, 'times': _dedupe(times), 'keys': _dedupe(keys),
-            'tpb': tpb, 'timesFromScore': times_from_score}
+            'tpb': tpb, 'timesFromScore': times_from_score, 'barRestLens': bar_rest_lens}
 
 
 def _dedupe(seq):
@@ -310,14 +335,60 @@ def _dur_ticks(el, divisions, tpb):
     return int(round(d * tpb / max(1, divisions)))
 
 
+#: <beat-unit> 的名字 → 等于几个四分音符
+_BEAT_UNIT_QUARTERS = {
+    'maxima': 32, 'long': 16, 'breve': 8, 'whole': 4, 'half': 2,
+    'quarter': 1, 'eighth': 0.5, '16th': 0.25, '32nd': 0.125,
+    '64th': 0.0625, '128th': 0.03125, '256th': 0.015625,
+}
+
+
+def _metronome_bpm(el):
+    """<metronome> → **四分音符** BPM（按 <beat-unit> 与附点换算）。
+
+    ★ 2026-10-18 修：旧实现直接拿 <per-minute> 当 BPM，把拍号单位当成了四分音符。
+      于是 "♩. = 60"（附点四分 = 60，即四分音符 90）被读成 60 —— 整首曲子的速度只有真值的三分之二；
+      "♩ = 60" 没问题，但 "♪ = 120"（八分 = 120 → 四分 60）、"half = 60"（二分 = 60 → 四分 120）
+      全都会错。MIDI 的 set_tempo 永远是**四分音符** BPM，所以这里必须换算。
+    """
+    met = None
+    for s in el.iter():
+        if _localname(s.tag) == 'metronome':
+            met = s
+            break
+    if met is None:
+        return 0
+    per = 0
+    unit = 'quarter'
+    dots = 0
+    for c in met:
+        nm = _localname(c.tag)
+        if nm == 'per-minute':
+            per = _int(c.text, 0)
+        elif nm == 'beat-unit':
+            unit = (c.text or '').strip().lower()
+        elif nm == 'beat-unit-dot':
+            dots += 1
+    if per <= 0:
+        return 0
+    # 音符 = 单位 × (2 - 2^-dots)：一个附点 = ×1.5，两个附点 = ×1.75
+    unit_q = _BEAT_UNIT_QUARTERS.get(unit)
+    if not unit_q:
+        return 0
+    mult = unit_q * (2.0 - 2.0 ** (-dots))
+    # per 表示「每个 beat 数量 / 分钟」→ 四分音符速度 = per × 每个 beat 含几个四分音符
+    bpm = per * mult
+    return max(1, min(400, int(round(bpm))))
+
+
 def _direction_tempo(el):
-    """从 <direction> 里取速度：<sound tempo> 优先，其次 <metronome><per-minute>。"""
+    """从 <direction> 里取速度（**换算成四分音符 BPM**）：<sound tempo> 优先，其次 <metronome>。"""
     for s in el.iter():
         if _localname(s.tag) == 'sound' and s.get('tempo'):
             return _int(s.get('tempo'), 0)
-    for s in el.iter():
-        if _localname(s.tag) == 'per-minute':
-            return _int(s.text, 0)
+    bpm = _metronome_bpm(el)
+    if bpm:
+        return bpm
     return 0
 
 
@@ -325,7 +396,17 @@ DYNAMICS = {'ppp': 20, 'pp': 33, 'p': 49, 'mp': 64, 'mf': 80, 'f': 96, 'ff': 112
 
 
 def _velocity_from_direction(el):
-    """<direction> 里的力度（"'sound dynamics="80"'" 或 <dynamics><mf/>）→ 0..127。"""
+    """<direction> 里的力度 → 0..127。
+
+    ★ 优先认 <dynamics><f/> 这种**字母**：它按 MIDI 的力度分级（f=96），给 ff/fff 留出余量。
+      以前优先用 <sound dynamics> 的百分比 ×1.27，f（Audiveris 写 100）被顶成 127 ——
+      页面上所有强奏一个响度，听感是"平的"（用户实测反馈：「谱子里的记号没有都识别并转换」）。
+      没有字母记号时才退回百分比（0~100 → 0~127）。
+    """
+    for s in el.iter():
+        nm = _localname(s.tag)
+        if nm in DYNAMICS:
+            return DYNAMICS[nm]
     for s in el.iter():
         if _localname(s.tag) == 'sound' and s.get('dynamics'):
             try:
@@ -333,11 +414,43 @@ def _velocity_from_direction(el):
                 return max(1, min(127, v))
             except Exception:  # noqa: BLE001
                 pass
-    for s in el.iter():
-        nm = _localname(s.tag)
-        if nm in DYNAMICS:
-            return DYNAMICS[nm]
     return 0
+
+
+#: 发音记号 → (时值系数, 力度增减)。Audiveris 会导出 <notations><articulations>，但旧解析器
+#: 完全忽略它们：断奏被拉满、重音被抹平、延音记号没有 —— 用户："谱子里的记号没有都识别".
+_ARTIC = {
+    'staccato': (0.50, 0),          # 断奏：只响一半（游标仍按谱面时值前进，后面的音不许提前）
+    'staccatissimo': (0.30, 0),
+    'marcato': (0.72, 24),          # 强音记号：更短更响
+    'accent': (1.00, 16),           # 重音：时值不变，力度抬一档
+    'tenuto': (1.00, 6),            # 保持音：略重一点
+    'detached-legato': (0.70, 0),
+    'breath-mark': (0.92, 0),
+}
+
+
+def _articulations(note_el):
+    """音符上的发音/延长记号 → (时值系数, 力度增减)。"""
+    dur_f = 1.0
+    vel_d = 0
+    for s in note_el.iter():
+        nm = _localname(s.tag)
+        hit = _ARTIC.get(nm)
+        if hit:
+            dur_f = min(dur_f, hit[0])
+            vel_d = max(vel_d, hit[1])
+        elif nm == 'fermata':       # 延长记号：让这个音多响一会儿（不挪后面的音，否则整拍会错位）
+            dur_f = max(dur_f, 1.5)
+    return dur_f, vel_d
+
+
+def _lyric_text(note_el):
+    """音符上挂的歌词/文字（Audiveris 的 TEXTS 步常把力度记号 OCR 成 <lyric><text>）。"""
+    for s in note_el.iter():
+        if _localname(s.tag) == 'text':
+            return (s.text or '').strip()
+    return ''
 
 
 def _has_tie(el, kind):

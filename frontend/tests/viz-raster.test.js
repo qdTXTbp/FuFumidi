@@ -60,6 +60,16 @@ test('4 段渐变被精确采样（canvas 的分段线形在片元里逐段还�
   near(two.stops[3][0], 1);
 });
 
+test('★ 缺 stops 的 fill 对象当**全透明**（不许兜底成纯白 —— 2026-10-17 白条 bug 的根）', () => {
+  // 以前这里兜底成 [1,1,1,1]，于是任何 fill 形状写错的图元在 GPU 路径上都会变成
+  // 一块不透明白色；Canvas2D 路径却是"没有色标的渐变 = 不画"。两条路径不一致，极难查
+  // （实测表现：音符的内侧压暗层被画成整条纯白，用户："白色的反光太强烈了"）。
+  for (const broken of [{}, { dir: 'h' }, [], [1, 0, 0, 1]]) {
+    const f = sampleFill(broken);
+    for (const c of f.stops) assert.deepEqual(c, [0, 0, 0, 0], '缺 stops 必须当透明：' + JSON.stringify(broken));
+  }
+});
+
 test('rgba() 里的 alpha 进入采样色（网格线就是靠它变淡的）', () => {
   const f = sampleFill('rgba(255,255,255,0.05)');
   assert.ok(Math.abs(f.stops[0][3] - 0.05) < 1e-6, 'parseColor 必须解析 rgba 的 alpha');

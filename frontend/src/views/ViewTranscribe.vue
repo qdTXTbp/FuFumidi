@@ -61,7 +61,7 @@ const exportTempo = ref(0);              // 导出 BPM（0 = 用引擎默认 120
 const msTemp = ref(1.0);                 // 采样温度（1.0 = 不传）
 const msCfg = ref(1.0);                  // 引导系数（1.0 = 不传）
 const msBeam = ref(1);                   // 束搜索宽度（1 = 不传）
-const msPrelude = ref(true);             // 跨块延音前置（默认开；关掉才传 false）
+const msPrelude = ref(true);             // 跨块延音缝合（默认开；关掉才传 false＝不缝合）
 /* 静音分段（长音频提速，**默认关** —— 用户 2026-10-14 定）：在完全空白静音处切段、
    逐段转录、再合并成一份 MIDI。段与段之间本来就是静音，接缝处只是少一点上下文。
    实测《原神》线上音乐会 2021（104 分钟）：−60 dBFS 下静音 439.5 s / 7.0%，可省约 7%；
@@ -325,12 +325,28 @@ async function pickSepFile() {
   else toast(t('请使用桌面版 FuFumidi 选择音频'), 'warn');
 }
 async function decodeSepDur(p) {
-  try { const buf = await bridge.readBinary(p); if (!buf) return;
+  // ★ 先问主进程（ffmpeg 读头信息，毫秒级、不占内存）。以前无条件 readBinary + decodeAudioData：
+  //   1.4 GB 的演唱会 flac 会把整文件读进渲染进程再解码，界面直接假死（长音频分离必踩）。
+  try {
+    if (bridge && bridge.audioDuration) {
+      const r = await bridge.audioDuration(p);
+      if (r && r.ok && r.seconds > 0) { sepDur.value = r.seconds; return; }
+    }
+  } catch (e) {}
+  // 兜底：只有拿不到时长的小文件才走解码（>48MB 直接放弃，别把内存撑爆）
+  try {
+    const buf = await bridge.readBinary(p); if (!buf) return;
+    if (buf.length > 48 * 1024 * 1024) return;
     const AC = window.AudioContext || window.webkitAudioContext; const actx = new AC();
     await new Promise(res => { try { actx.decodeAudioData(buf.slice(0), ab => { sepDur.value = ab.duration || 0; res(); }, () => res()); } catch (e) { res(); } });
     if (actx.close) actx.close();
   } catch (e) {}
 }
+// 长音频（预计 > 30 分钟）要提前说清楚：主进程已放宽超时（无进展 20 分钟才判卡死），
+// 不然用户会以为程序挂了（2026-10-17 实测：演唱会 FLAC 被判「引擎执行超时」）。
+const sepLong = computed(() => { const s = sepEstSec(); return !!s && s > 30 * 60; });
+// 单轨降噪模型（denoise_*，training.target_instrument 非空）不是分离模型：输出≈原音，先说明白
+const sepIsDenoise = computed(() => /^denoise[_-]/i.test(String(sepModel.value || '')));
 function sepEstSec() {
   if (!sepDur.value) return null;
   const isGpu = !!gpuInfo.value;
@@ -1315,6 +1331,9 @@ function collectParams() {
       // ★ 2026-10-14 更正：这段注释原先描述的是**已被移除**的批量推理行为
       //   （`bca0a55`「移除批量推理功能」）。现在：
       //   · `prelude_forcing` 是**独立开关**（见下面的 msPrelude），与性能档无关；
+      //     2026-10-18b 起这个开关的**实现换了**：不再让模型 teacher-force 跨块 tie
+      //     （那是僵尸长音的产地），改成解码后按「同轨同音高 + 边界两侧相接」缝合（见
+      //     engine_muscriptor._stitch_chunk_boundaries）。界面开关含义不变：开＝要延音连续。
       //   · 性能档只决定「线程数」与 engine_pt 的**批量前向上限**：
       //       quality → 全核 + 上限 32（CUDA）/ 16（CPU）
       //       balanced → 4 核 + 16 / 8
@@ -1338,6 +1357,7 @@ function collectParams() {
       if (msTemp.value !== 1.0) cfg.temperature = msTemp.value;
       if (msCfg.value !== 1.0) cfg.cfg_coef = msCfg.value;
       if (msBeam.value > 1) cfg.beam_size = msBeam.value;
+      // 开（默认）不传参数 = 引擎默认「缝合延音」；关掉才显式 false = 不缝合
       if (!msPrelude.value) cfg.prelude_forcing = false;
       // 静音分段：显式传 off（与引擎默认一致，写出来是为了预设/日志里看得见）
       cfg.segment_silence = msSegment.value ? 'auto' : 'off';
@@ -1852,6 +1872,8 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="si-name">{{ m.name }}<span v-if="m.best" class="si-best" :title="t('该领域效果最佳')">👑 {{ m.best }}</span></div>
                 <div class="si-use">{{ m.use || m.note || '' }}</div>
+                <div v-if="m.useLabel" class="si-usage">{{ t('用途：') }}{{ t(m.useLabel) }}</div>
+                <div v-if="m.useNotFor" class="si-notfor">{{ t('注意：') }}{{ t(m.useNotFor) }}</div>
                 <div class="si-foot">
                   <span>{{ fmtSize2(m.size) }}<i v-if="m.sepAuto" class="si-auto" :title="t('这个模型上游没有带 .yaml：引擎会从权重本身推出结构，生成后跑一次前向校验再使用（只生成一次）')">{{ t('首次自动配置') }}</i></span>
                   <span v-if="m.exists" class="si-check" :class="{ cur: sepModel === m.id }">{{ sepModel === m.id ? t('使用中') : t('使用') }}</span>
@@ -1919,6 +1941,10 @@ onBeforeUnmount(() => {
 
         <div v-if="sepFile && currentSep" class="tr-sum" style="margin-top:6px">
           {{ t('即将分离：') }}<b>{{ currentSep.name }}</b><span v-if="sepEstSec()"> · {{ t('预计耗时约 ') }}<b>{{ fmtTime(sepEstSec()) }}</b></span>
+          <span v-if="sepLong" class="tr-warn"> · {{ t('长音频：分离会一直跑下去（无进展 20 分钟才判失败），慢的话建议先裁剪片段') }}</span>
+          <span v-if="sepIsDenoise" class="tr-warn"> · {{ t('这是单轨降噪模型：输出≈原音（只压稳态噪声），不分离人声/伴奏；要分离请选 Mel-Band Roformer（如 duality）') }}</span>
+          <span v-if="currentSep && currentSep.useLabel" class="sep-uselabel"> · {{ t('用途：') }}{{ t(currentSep.useLabel) }}</span>
+          <span v-if="currentSep && currentSep.useNotFor" class="tr-warn"> · {{ t('注意：') }}{{ t(currentSep.useNotFor) }}</span>
         </div>
         <button class="btn primary big" style="width:100%;justify-content:center;margin-top:8px" @click="runSeparate"
                 :disabled="!currentSep || !currentSep.exists || sepBusy">
@@ -2040,7 +2066,7 @@ onBeforeUnmount(() => {
             <small>{{ t('调高＝更贴近提示但更容易重复；默认 1.0 = 关闭引导') }}</small>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label><span><b>{{ t('跨块延音前置') }}</b><small>{{ t('把上一块未结束的音符强制喂给下一块，分块边界最稳；关掉会降低边界延续质量（默认开）') }}</small></span><input type="checkbox" v-model="msPrelude"></label>
+            <label><span><b>{{ t('跨块延音缝合') }}</b><small>{{ t('解码后把 5 秒分块边界两侧同音高、同音色的延音缝回一个长音：延音不断，而模型不再被强制拖着走 —— 从根上消除僵尸长音。关掉＝不缝合，边界处延音可能断（默认开）') }}</small></span><input type="checkbox" v-model="msPrelude"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label><span><b>{{ t('跳过静音分段（长音频加速）') }}</b><small>{{ t('在完全空白静音处切段，逐段转录后拼成一份 MIDI；默认关') }}</small></span><input type="checkbox" v-model="msSegment"></label>
@@ -2413,6 +2439,9 @@ onBeforeUnmount(() => {
 .si-name { font-size: var(--fs-md); font-weight: 700; color: var(--ink); margin-top: 5px; display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .si-best { display: inline-flex; align-items: center; gap: 2px; font-size: var(--fs-xs); font-weight: 700; color: var(--t-warn); background: linear-gradient(135deg, var(--data-2), var(--data-3)); padding: 0 6px; border-radius: var(--r-lg); line-height: 15px; }
 .si-use { font-size: var(--fs-xs); color: var(--slate); line-height: 1.55; margin-top: 2px; -webkit-box-orient: vertical; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; }
+.si-usage { font-size: var(--fs-xs); color: var(--accent); line-height: 1.5; margin-top: 3px; }
+.si-notfor { font-size: var(--fs-xs); color: var(--t-warn); line-height: 1.5; margin-top: 1px; }
+.sep-uselabel { color: var(--slate); font-size: var(--fs-xs); }
 .si-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; font-size: var(--fs-xs); color: var(--stone); font-family: var(--mono); }
 .si-auto { font-style: normal; margin-left: 6px; font-size: var(--fs-xs); font-weight: 700; padding: 1px 6px; border-radius: var(--r-lg); background: color-mix(in srgb, var(--brand-blue) 14%, transparent); color: var(--brand-blue); font-family: system-ui; }
 .si-check { font-size: var(--fs-xs); font-weight: 700; color: var(--stone); font-family: system-ui; }

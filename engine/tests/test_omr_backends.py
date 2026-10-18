@@ -567,3 +567,114 @@ def test_classical_backend_still_reachable():
                    "--beats", "4", "--tempo", "120"])
     assert code == 0
     assert os.path.exists(out) and os.path.getsize(out) > 200
+
+
+# ---------------- 速度记号 / 拍号 / 小节网格（2026-10-18）----------------
+# 用户实测：「变谱出来的 MIDI 速度不对、和原音频差距巨大」。两个根因在这里钉住：
+#   ① Audiveris 不导出 <sound tempo>，谱面上那个「附点四分 = 60」只能自己 OCR → 90 才对；
+#   ② 小节线被漏认时（两个 3/8 并成 1440）拍号会被推成 6/8，按固定网格重排会把时间轴拉长一倍。
+
+
+@pytest.mark.parametrize("text,per_minute,dotted", [
+    ("L J.=60", 60, True),
+    ("- |J.= 60| 1", 60, True),
+    ("q . = 66", 66, True),
+    ("J=120", 120, False),
+    ("= 90", 90, False),
+    ("60", 60, False),          # 丢掉了等号：带子里只有一个两位数，也认
+])
+def test_tempo_from_ocr_text(text, per_minute, dotted):
+    got = B._tempo_from_ocr_text(text)
+    assert got is not None, text
+    assert got["perMinute"] == per_minute
+    assert got["dotted"] is dotted
+
+
+@pytest.mark.parametrize("text", ["", "no digits", "= 900", "1 2 3"])
+def test_tempo_from_ocr_text_rejects_garbage(text):
+    assert B._tempo_from_ocr_text(text) is None
+
+
+def _page_with_lens(lens):
+    return {"parsed": {"parts": [{"name": "Flute", "measureLens": list(lens), "notes": []}]}}
+
+
+def test_infer_meter_prefers_the_real_bar_length_when_barlines_are_merged():
+    # 真谱是 3/8（720），但一半的小节线没认出来 → 众数是 1440。
+    # 720 占 27% 是实打实的，必须选 720，否则当成 6/8 会把整条时间轴拉长一倍。
+    pages = [_page_with_lens([1440] * 8 + [720] * 3)]
+    m = B.infer_meter(pages, 480)
+    assert m is not None
+    assert (m["beats"], m["beatType"]) == (3, 8), m
+
+
+def test_infer_meter_keeps_compound_meter_when_no_smaller_length_exists():
+    # 真 6/8 的谱：只有 1440，没有 720 → 必须还是 6/8
+    m = B.infer_meter([_page_with_lens([1440] * 12)], 480)
+    assert m is not None and (m["beats"], m["beatType"]) == (6, 8), m
+
+
+def test_infer_meter_reads_full_measure_rests_first():
+    """★ 整小节休止的时长 = Audiveris 认定的一小节长度，是推拍号最硬的证据。
+
+    实测那份总谱：普通小节的 measureLens 众数是 720（内容只写了半小节，末尾休止符省略），
+    按它投票会误判成 3/8；但 803 个整小节休止里 1440 占 400 个（49.8%）→ 真值是 6/8。
+    """
+    pages = [{"parsed": {"parts": [{"name": "Flute", "measureLens": [720] * 9, "notes": []}],
+                         "barRestLens": [1440] * 7 + [720]}}]
+    m = B.infer_meter(pages, 480)
+    assert m is not None
+    assert (m["beats"], m["beatType"]) == (6, 8), m
+    assert m["ticks"] == 1440 and m["source"] == "measure-rest", m
+    # 证据不足（样本太少）时不许凭空改判，退回小节长度判据
+    weak = [{"parsed": {"parts": [{"name": "Flute", "measureLens": [720] * 9, "notes": []}],
+                        "barRestLens": [1440] * 3}}]
+    m2 = B.infer_meter(weak, 480)
+    assert (m2["beats"], m2["beatType"]) == (3, 8) and m2["source"] == "measure-lens", m2
+
+
+def test_regrid_puts_measures_on_one_grid_and_squeezes_overflow():
+    """★ 一小节 = 一格；内容超出一小节（漏认小节线）时整格按比例压回，格内相对位置保留。"""
+    part = {"name": "Flute", "measureLens": [1440, 720, 720],
+            "notes": [
+                {"start": 0, "end": 240, "midi": 60, "m": 0, "off": 0},
+                {"start": 240, "end": 480, "midi": 62, "m": 0, "off": 240},
+                {"start": 1440, "end": 1680, "midi": 64, "m": 1, "off": 0},
+                {"start": 2160, "end": 2400, "midi": 65, "m": 2, "off": 0},
+            ]}
+    moved, grid_end = B._regrid_page([part], 720)
+    assert part["notes"][1]["start"] == 120, "小节内偏移按同一比例压回（240 × 720/1440）"
+    assert part["notes"][1]["end"] - part["notes"][1]["start"] == 240, "时值保持谱面时值，不随位置缩放"
+    assert [n["start"] for n in part["notes"][2:]] == [720, 1440], "第 k 小节必须落在第 k 格"
+    assert moved >= 1
+    assert grid_end == 2160
+
+
+def test_regrid_keeps_the_written_rhythm_when_a_page_is_short():
+    """★ 用户要求「应当使用谱内的节奏型」：页级内容短于小节长时**不许**整页拉伸。
+
+    Audiveris 经常漏写小节末尾的休止符，于是整页内容只有半小节长；硬拉伸会把断奏/连奏
+    的时值关系一起改掉（用户听起来是"顿挫感"）。这里只把第 k 小节对齐到第 k 格，
+    音符的小节内位置与**时值都保持谱面原样**。
+    """
+    part = {"name": "Flute", "measureLens": [720, 720],
+            "notes": [
+                {"start": 0, "end": 240, "midi": 60, "m": 0, "off": 0},
+                {"start": 360, "end": 480, "midi": 62, "m": 0, "off": 360},
+                {"start": 720, "end": 960, "midi": 64, "m": 1, "off": 0},
+            ]}
+    B._regrid_page([part], 1440)
+    assert [n["start"] for n in part["notes"]] == [0, 360, 1440], part["notes"]
+    assert part["notes"][1]["end"] - part["notes"][1]["start"] == 120, "时值必须保持谱面时值"
+    assert part["notes"][2]["end"] - part["notes"][2]["start"] == 240, "第 2 小节的时值也不能变"
+
+
+def test_regrid_keeps_all_parts_on_the_same_grid():
+    """★ 各声部识别出的小节长度不一样时，也必须落在**同一张**网格上（否则各走各的拍）。"""
+    a = {"name": "Flute", "measureLens": [720, 720, 720],
+         "notes": [{"start": i * 720, "end": i * 720 + 240, "midi": 60, "m": i, "off": 0} for i in range(3)]}
+    b = {"name": "Oboe", "measureLens": [1440, 1440, 1440],
+         "notes": [{"start": i * 1440, "end": i * 1440 + 480, "midi": 64, "m": i, "off": 0} for i in range(3)]}
+    B._regrid_page([a, b], 1440)
+    assert [n["start"] for n in a["notes"]] == [0, 1440, 2880]
+    assert [n["start"] for n in b["notes"]] == [0, 1440, 2880]

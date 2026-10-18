@@ -244,7 +244,12 @@ function afterEdit() {
   for (const tr of s.tracks) for (const n of tr.notes) totalTicks = Math.max(totalTicks, n.end);
   s.totalTicks = totalTicks + s.tpb;
   s.totalSec = s.baseSec(s.totalTicks);
-  s.bars = Math.ceil(s.totalTicks / (s.tpb * 4));
+  // 小节数按拍号算（与 core/midi.js 的 buildSong 保持一致；4/4 之外不许再假定四分音符一小节）
+  {
+    const _s0 = (s.sigMap && s.sigMap[0]) || { num: 4, den: 4 };
+    const _barLen = Math.max(1, Math.round(_s0.num * s.tpb * 4 / _s0.den));
+    s.bars = Math.max(1, Math.ceil(s.totalTicks / _barLen));
+  }
   // 刷新播放器 + UI
   const { player } = ensureAudio();
   player.load(s);

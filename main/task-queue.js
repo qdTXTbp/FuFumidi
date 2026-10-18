@@ -153,6 +153,27 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
     } catch (e) { reject(new Error(String(e))); }
   }));
 
+  // 音频时长探测（走 engine/audio_probe.py，用内置 ffmpeg 读头信息）。
+  // ★ 不要在渲染进程里 readBinary + decodeAudioData 取时长：1.4 GB 的演唱会 flac
+  //   会把整文件读进渲染进程内存再解码，界面直接卡死（长音频分离场景必踩）。
+  ipcMain.handle('audio:duration', async (_e, p) => {
+    const file = String(p || '');
+    try { if (!file || !fs.existsSync(file)) return { ok: false, error: '文件不存在' }; } catch (e) { return { ok: false, error: String(e) }; }
+    return new Promise((resolve) => {
+      try {
+        spawnEngine([file], {
+          script: 'audio_probe.py',
+          timeoutMs: 120000,
+          onDone: (_code, r) => {
+            if (r && r.result && r.result.ok) return resolve(r.result);
+            resolve({ ok: false, error: (r && ((r.result && r.result.error) || r.err || r.out) || '探测失败').slice(-200) });
+          },
+          onError: (msg) => resolve({ ok: false, error: String(msg) }),
+        });
+      } catch (e) { resolve({ ok: false, error: String(e) }); }
+    });
+  });
+
   // 音频处理（MSST 分离）：audio + 分离模型 → 输出所选音轨
   ipcMain.handle('engine:separate', async (evt, cfg) => {
     const win = BrowserWindow.fromWebContents(evt.sender);
@@ -175,7 +196,13 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
     const sendLog = (line) => { if (win && !win.isDestroyed()) win.webContents.send('engine:separate:log', { id: cfg.id, line }); };
     const sendProg = (p) => { if (win && !win.isDestroyed()) win.webContents.send('engine:separate:progress', Object.assign({ id: cfg.id }, p || {})); };
     try {
+      // ★ 分离对长音频可能要几十分钟到几小时：总超时放宽到 6 小时（与翻唱一致），
+      //   改由「20 分钟没有任何输出」来判定卡死 —— 否则一场演唱会 FLAC 会在 30 分钟被误杀
+      //   （2026-10-17 用户实测：denoise mel-band roformer 分离报「引擎执行超时，已强制终止」）。
+      sendLog('[分离] 已放宽超时：无进展 20 分钟才终止（硬上限 6 小时）');
       const child = spawnEngine(args, {
+        timeoutMs: 6 * 60 * 60 * 1000,
+        idleTimeoutMs: 20 * 60 * 1000,
         onLog: sendLog,
         onProgress: sendProg,
         onDone: (code, r) => {

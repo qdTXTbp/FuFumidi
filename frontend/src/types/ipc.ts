@@ -891,6 +891,8 @@ export interface FuBridge {
   repairIntegrity(ids: string[]): Promise<GeneralResult>;
 
   // dialogs / files
+  /** 音频时长（秒）。主进程用内置 ffmpeg 读头信息，不把整个文件读进渲染进程（长音频会卡死界面） */
+  audioDuration(p: string): Promise<{ ok: boolean; seconds?: number; error?: string }>;
   pickAudio(): Promise<string | null>;
   pickAudioFiles(): Promise<string[] | null>;
   listAudioFiles(dir: string): Promise<string[]>;

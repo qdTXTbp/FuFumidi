@@ -346,6 +346,191 @@ def _make_pitch_evidence(wav_path, log_cb=None, stats=None):
     return fn
 
 
+#: 分块时长（秒）—— 与 muscriptor 的 _SEGMENT_DURATION 一致，「跨块延音缝合」以这些时刻为边界。
+CHUNK_SEC = 5.0
+
+
+def _stitch_chunk_boundaries(midi_bytes, chunk_sec=CHUNK_SEC, tol=0.14):
+    """把 5 秒分块边界两侧的延音**缝回一个长音**（★ 2026-10-18b）。
+
+    为什么要有它（这次是真的换掉 prelude_forcing 的实现方式）：
+      · 上游的 tie 段机制 = 块边界把「上一块还没结束的音」**强制**声明为延续。
+        模型只要漏一次收尾，这颗音就被迫一直延续 —— 一个音慢慢滚成整片音墙。
+        实测这首 154s 的歌：7115 个音符、时长中位数 20ms、最长 82.9s；同一次
+        音频关掉强制 tie 后是 788 个音符、中位数 0.54s、最长 12s。
+      · 但直接关掉 tie，模型每 5s 会自己重新猜哪些音在延续：延音可能在边界被
+        切断、甚至换乐器（muscriptor 文档原话：re-enter with the wrong instruments）。
+
+    所以改成「解码关掉强制 tie（不可能再产生僵尸音）+ 解码后按证据缝合」：
+      同一条轨（同乐器）、同一音高，一个音恰在边界前结束、另一个恰在边界后开始，
+      说明它们本来就是同一颗持续音 → 缝成一个长音。跨乐器不缝（那会改音色）。
+    这样延音连续性和「无僵尸长音」不再互斥。
+
+    返回 (new_bytes, stats)，stats = {"merged": 接合处数, "longest": 缝合后最长音秒数}。
+    """
+    import io as _io
+    try:
+        import mido
+    except Exception:
+        return midi_bytes, {"merged": 0, "longest": 0.0}
+
+    try:
+        mid = mido.MidiFile(file=_io.BytesIO(bytes(midi_bytes)))
+    except Exception:
+        return midi_bytes, {"merged": 0, "longest": 0.0}
+    tpb = int(mid.ticks_per_beat or 480) or 480
+
+    # ---- 速度表：tick → 秒 ----
+    marks = []
+    for tr in mid.tracks:
+        t = 0
+        for msg in tr:
+            t += msg.time
+            if msg.type == "set_tempo":
+                marks.append((t, int(msg.tempo)))
+    marks.sort()
+    if not marks:
+        marks = [(0, 500000)]
+
+    def tick2sec(tick):
+        sec = 0.0
+        last = 0
+        tempo = marks[0][1]
+        for at, tm in marks:
+            if at >= tick:
+                break
+            sec += (at - last) / float(tpb) * (tempo / 1e6)
+            last = at
+            tempo = tm
+        sec += (tick - last) / float(tpb) * (tempo / 1e6)
+        return sec
+
+    merged_total = 0
+    longest = 0.0
+    out_tracks = []
+    for tr in mid.tracks:
+        # 绝对 tick + 稳定的原始顺序（同一时刻的事件排序不能乱，programchange 必须先于音符）
+        events = []
+        t = 0
+        for seq, msg in enumerate(tr):
+            t += int(msg.time)
+            events.append((t, seq, msg))
+
+        # ---- 配对音符 ----
+        open_notes = {}
+        notes = []
+        for idx, (tick, seq, msg) in enumerate(events):
+            if msg.type == "note_on" and msg.velocity > 0:
+                open_notes.setdefault((msg.channel, msg.note), []).append(idx)
+            elif msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
+                stack = open_notes.get((msg.channel, msg.note))
+                if stack:
+                    on_idx = stack.pop(0)
+                    notes.append({"on": on_idx, "off": idx, "start": events[on_idx][0],
+                                  "end": tick, "pitch": int(msg.note), "ch": int(msg.channel)})
+        if not notes:
+            out_tracks.append(tr)
+            continue
+
+        # ---- 同轨同音高 → 按起点索引；边界两侧配对 ----
+        by_key = {}
+        for n in notes:
+            by_key.setdefault((n["ch"], n["pitch"]), []).append(n)
+        for lst in by_key.values():
+            lst.sort(key=lambda n: n["start"])
+        dropped = set()
+        merges = 0
+        for A in notes:
+            if id(A) in dropped:
+                continue
+            while True:
+                end_tick = A["end"]
+                end_sec = tick2sec(end_tick)
+                start_sec = tick2sec(A["start"])
+                if end_sec - start_sec > 600.0:      # 防御：异常文件别在这里死循环
+                    break
+                b = round(end_sec / chunk_sec) * chunk_sec
+                if b <= 0 or abs(end_sec - b) > tol:  # 不在任何一个块边界上 → 不用缝
+                    break
+                best, best_d = None, 1e9
+                for B in by_key.get((A["ch"], A["pitch"]), []):
+                    if B is A or id(B) in dropped:
+                        continue
+                    if B["start"] <= A["start"]:
+                        continue
+                    bs = tick2sec(B["start"])
+                    be = tick2sec(B["end"])
+                    if be <= bs:
+                        continue
+                    if bs < end_sec - tol or abs(bs - b) > tol:
+                        continue
+                    d = abs(bs - b)
+                    if d < best_d:
+                        best, best_d = B, d
+                if best is None:
+                    break
+                dropped.add(id(best))
+                A["end"] = best["end"]
+                merges += 1
+        merged_total += merges
+        if not merges:
+            out_tracks.append(tr)
+            continue
+
+        # ---- 重建这条轨：延音尾巴延长到接上来的那颗音的收尾；被并掉的音整对删除 ----
+        skip = set()
+        stretch = {}
+        for n in notes:
+            if id(n) in dropped:
+                skip.add(n["on"])
+                skip.add(n["off"])
+        # 只有「接合链的最后一颗」需要改收尾：按 start 顺序重建时，靠 end 的并合反复覆盖即可 ——
+        # 这里直接遍历 notes：被并掉的音的 off 跳过；保留音的 off tick 用其当前 end。
+        for n in notes:
+            if id(n) in dropped:
+                continue
+            if n["off"] not in skip and events[n["off"]][0] != n["end"]:
+                stretch[n["off"]] = n["end"]
+
+        rebuilt = []
+        for idx, (tick, seq, msg) in enumerate(events):
+            if idx in skip:
+                continue
+            nt = stretch.get(idx, tick)
+            rebuilt.append((nt, seq, msg))
+        rebuilt.sort(key=lambda e: (e[0], e[1]))
+        new_tr = mido.MidiTrack()
+        prev = 0
+        for tick, seq, msg in rebuilt:
+            delta = max(0, tick - prev)
+            prev = tick
+            try:
+                new_tr.append(msg.copy(time=delta))
+            except Exception:
+                new_tr.append(msg)
+        out_tracks.append(new_tr)
+
+    if not merged_total:
+        return midi_bytes, {"merged": 0, "longest": 0.0}
+
+    out = mido.MidiFile(type=mid.type, ticks_per_beat=tpb)
+    for tr in out_tracks:
+        out.tracks.append(tr)
+    buf = _io.BytesIO()
+    out.save(file=buf)
+    for tr in out.tracks:
+        t = 0
+        last_on = {}
+        for msg in tr:
+            t += msg.time
+            if msg.type == "note_on" and msg.velocity > 0:
+                last_on[msg.note] = t
+            elif msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
+                if msg.note in last_on:
+                    longest = max(longest, tick2sec(t) - tick2sec(last_on.pop(msg.note)))
+    return buf.getvalue(), {"merged": merged_total, "longest": round(longest, 2)}
+
+
 def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                           num_threads=None, **kwargs):
     _pause_gate_mod.install(log_cb)   # 本次转录的暂停闸门（见 pause_gate 模块）
@@ -802,6 +987,8 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             _log(log_cb, "已关闭节拍网格检测")
 
         # muscriptor 0.3+ 的 transcribe_to_midi 返回 MIDI 字节（非写文件）。
+        # ★ 2026-10-18b：prelude_forcing **不再传给模型**（见 _gen_kw 处的说明），改成解码后缝合；
+        #   下面这段批量推理说明保留作历史依据。
         # 批量推理开关：prelude_forcing=False + batch_size>1 可提速 2-4×（长音频 chunk 串行是
         # 大瓶颈）。**代价不是"边界质量略降"那么轻** —— prelude_forcing 的作用正是把"上一块
         # 未结束的音"按原乐器 teacher-force 进下一块的 tie 段；关掉后模型会自己猜，于是每 5s
@@ -860,8 +1047,23 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     _gen_kw[_k] = _cast(_v)
                 except (TypeError, ValueError):
                     pass
-        if params.get("prelude_forcing") is not None:
-            _gen_kw["prelude_forcing"] = bool(params["prelude_forcing"])
+        # ★ 2026-10-18b：「跨块延音前置」不再交给模型做 teacher-forcing —— 那个机制就是
+        #   僵尸长音的产地（模型漏收尾 → 被迫延续一整片音墙）。改成本地实现：
+        #   解码时 prelude_forcing=False（块边界必然收尾，物理上不可能再有僵尸音），
+        #   解码完成后用 _stitch_chunk_boundaries() 按「同轨同音高 + 边界两侧恰好在
+        #   一起」的证据把真实延音缝回一个长音（连续性不丢，也不靠模型猜乐器）。
+        #   想复现旧行为的调试路径：FUFUMIDI_LEGACY_PRELUDE=1（保留给回放对照）。
+        _legacy_prelude = bool(os.environ.get("FUFUMIDI_LEGACY_PRELUDE"))
+        _want_continuity = (
+            bool(params["prelude_forcing"]) if params.get("prelude_forcing") is not None else True
+        )
+        _stitch = False
+        if _legacy_prelude:
+            if params.get("prelude_forcing") is not None:
+                _gen_kw["prelude_forcing"] = bool(params["prelude_forcing"])
+        else:
+            _gen_kw["prelude_forcing"] = False
+            _stitch = _want_continuity
         # beam_size > 1 时不要再开采样：束搜索要求确定性地逐 token 打分，
         # 两者同时给上游会互相打架。
         if _gen_kw.get("beam_size", 1) <= 1 and (
@@ -918,6 +1120,15 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     else:
                         events = model.transcribe(wav_tmp, instruments=constrain, **_gen_kw)
                 data = model.events_to_midi_bytes(_events_capped(events), beat_grid=beat_grid)
+                if _stitch and data:
+                    try:
+                        _stitched, _st_stats = _stitch_chunk_boundaries(data)
+                        if _st_stats.get("merged"):
+                            data = _stitched
+                        _log(log_cb, "跨块延音缝合：接合 %d 处（边界两侧同轨同音高），缝合后最长音 %.1fs"
+                             % (int(_st_stats.get("merged") or 0), float(_st_stats.get("longest") or 0.0)))
+                    except Exception as _e:                 # noqa: BLE001
+                        _log(log_cb, "跨块延音缝合跳过（按原样输出）：%s" % _e)
                 if _cap > 0:
                     _log(log_cb, "超长音符上限 %.0fs：强制收尾 %d 个音符"
                                   % (_cap, _cap_stats["closed"]))
