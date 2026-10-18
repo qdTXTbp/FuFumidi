@@ -74,6 +74,6 @@
 ## 最终状态
 
 - 28 包：21 ✅ 完成 + 5 ◐ 转为「用户指定不实现」（P1-8 证书尾巴、P2-1 CLAP、P2-2 原生 I/O、P2-4 mac/linux、P2-5 参考 DAW）+ 2 包（P2-3/P2-6）已完成。
-- 发布：6.0.3 已同步 CNB（latest）+ GitHub（latest，9 assets）；安装版部署冒烟通过。
+- 发布：**6.0.4 为最终版**，已同步 CNB（latest）+ GitHub（latest，各 9 assets）；Ed25519 签名验证通过；安装版部署冒烟通过。
 - 门禁：typecheck / test:ui 546 / E2E 26 / audit 全绿；test:dawproject、test:plugin-host、test:omr 可跑。
 - 已知非功能缺口（用户已接受）：GitHub 源码分支推送受 github.com:443 直连限制（Release 资产不受影响）。
