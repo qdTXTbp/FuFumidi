@@ -171,7 +171,7 @@ if (!gotLock) {
     registerRvcIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, net, spawnEngine, engineEnv });
     // 翻唱工作流（一首歌 → 分离 → 变声 → 混音 → 成品）：引擎是 engine_cover.py，
     // 变声这一步走 engine_rvc.py（导入的 RVC 模型）。
-    registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spawnEngine, engineEnv, readSettings });
+    registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spawnEngine, engineEnv, readSettings, modelsService: ModelsService });
     registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, net });
     registerPluginsIpc();
     registerGpuIpc({
