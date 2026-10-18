@@ -23,6 +23,8 @@ const singerId = ref('');
 const device = ref('auto');
 const clarityDb = ref(2.0);
 const noResume = ref(false);
+// P1-5：严格模式（字保留率 <95% 时停止混音，保留干声供调整后重试）
+const charStrict = ref(false);
 const lyrics = ref('auto');
 const gsvRoot = ref('');
 const gsvPython = ref('');
@@ -137,6 +139,7 @@ async function load() {
     if (saved.gsvTopP != null) gsvTopP.value = Number(saved.gsvTopP);
     if (saved.gsvTemperature != null) gsvTemperature.value = Number(saved.gsvTemperature);
     if (saved.singerKind) singerKind.value = saved.singerKind;
+    if (saved.charStrict != null) charStrict.value = !!saved.charStrict;
   } catch (e) {}
 }
 
@@ -146,6 +149,7 @@ function saveOpts() {
       outdir: outdir.value, device: device.value, clarityDb: clarityDb.value,
       gsvRoot: gsvRoot.value, gsvPython: gsvPython.value, singerKind: singerKind.value,
       gsvTopK: gsvTopK.value, gsvTopP: gsvTopP.value, gsvTemperature: gsvTemperature.value,
+      charStrict: !!charStrict.value,
     }));
   } catch (e) {}
 }
@@ -195,7 +199,7 @@ async function run() {
     audio: audio.value, outdir: outdir.value, name: name.value || undefined,
     singer: { kind: singer.kind, path: singer.dir, id: singer.id },
     device: device.value, clarityDb: Number(clarityDb.value) || 0,
-    lyrics: lyrics.value, noResume: noResume.value,
+    lyrics: lyrics.value, noResume: noResume.value, charStrict: !!charStrict.value,
     vocals: preVocals.value || undefined, instrumental: preInst.value || undefined,
     gsvRoot: gsvRoot.value, gsvPython: gsvPython.value,
     ...gsvSamplingPayload(),      // 只发改过的（相等就不发 = 用上游默认）
@@ -359,6 +363,9 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
           </select>
         </div>
         <label class="cv-check"><input type="checkbox" v-model="noResume" /> {{ t('不复用上次的中间结果（分离 / 扒谱 / 合成全部重算）') }}</label>
+      <label class="cv-check" v-if="singerKind === 'gsv'" :title="t('字级校验不通过时停止混音（干声会保留）')">
+        <input type="checkbox" v-model="charStrict" data-guide="cover-char-strict" /> {{ t('咬字校验严格模式（保留率 <95% 时不混音）') }}
+      </label>
       </div>
 
       <div class="card">

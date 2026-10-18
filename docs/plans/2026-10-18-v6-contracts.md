@@ -276,7 +276,8 @@
   - 接入链路：`engine_gpt_sovits.py sing --char-align` → 每句 `lines.meta.json.char_align` 与 `RESULT.lines[]`；`engine_cover.py do_gsv` 默认开启（`--gsv-no-char-align` 可关），不影响合成；
   - 测试 `engine/tests/test_align_sofa.py` 6 例（合成 burst 真值：5 字中位边界误差 <30ms、缺一字时 onsetRatio/retention <95%、纯静音/空音频安全、标点与拉丁词切分）；
   - **UI 标记 ✅**：`engine_cover` 汇总逐句 `char_align.retention<0.95` → `info.gsv_char_report` 并写 `gsv/gsv_lines.json.charAlign`；ViewCover 结果卡显示「咬字校验」：坏句数、逐句文本/保留率、处理建议（`data-guide=cover-char-align`）。
-  - 剩余：手动修正（逐句换参考音/改文本重合成）与合成前**强制**校验（当前是 warnings + 报告）。
+  - **严格模式 ✅（本轮）**：`engine_cover --gsv-char-strict`：字保留率 <95% 的句子存在时**在混音前中止**（返回 code=char-retention，保留干声与 info 供调整后重试）；`main/cover.js` 透传 `charStrict`；ViewCover 高级区新增「咬字校验严格模式」开关（`data-guide=cover-char-strict`，仅 GPT-SoVITS 通道显示，选项持久化）。
+  - 剩余：逐句自动重合成的"手动修正"UI（当前工作流：看「咬字校验」列表 → 换参考音/缩短句子 → 重跑，严格模式下干声保留便于对比）。
 
 - **P2-3 MIDI 2.0 / MPE / Clock ✅（协议核心；设备 I/O 接线待做）**：
   - 新 `core/midi2.js`（13 测例）：UMP 编解码（MT2 = MIDI 1.0 通道消息 32-bit；MT4 = MIDI 2.0 通道消息 64-bit：Note On 16-bit 力度、逐音弯音 32-bit 有符号）、7/16-bit 力度换算；

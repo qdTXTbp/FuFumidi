@@ -611,6 +611,8 @@ def main():
         s.add_argument('--gsv-root', default='', help='GPT-SoVITS 运行时目录')
         s.add_argument('--gsv-python', default='', help='跑 GPT-SoVITS 的解释器')
         s.add_argument('--gsv-version', default='', help='v1/v2/v3/v4…（默认按音色探测）')
+        s.add_argument('--gsv-char-strict', dest='gsv_char_strict', action='store_true',
+                       help='咬字校验（字保留率 <95%%）不通过时中止混音（保留干声供调整后重试）')
         s.add_argument('--gsv-align', dest='gsv_align', action='store_true',
                        help='GPT-SoVITS 通道做 WORLD F0 校正（默认关：它是电流声的主要来源）')
         s.add_argument('--gsv-no-char-align', dest='gsv_char_align', action='store_false',
@@ -728,6 +730,14 @@ def main():
                                   f, ensure_ascii=False, indent=1)
                 except OSError:
                     pass
+                # P1-5 合成前（严格模式）校验：字保留率 <95% 就不进混音，避免"糊着发出去"
+                if a.gsv_char_strict and bad_lines:
+                    emit_result({'ok': False, 'stage': 'render', 'code': 'char-retention',
+                                 'error': '咬字校验未通过：%d 句字保留率 <95%%。已保留干声（%s），'
+                                          '请调整参考音或缩短句子后重试，或关闭严格校验。'
+                                          % (len(bad_lines), drys[0] if drys else ''),
+                                 'info': info, 'dry': drys})
+                    return 2
             else:
                 drys = do_render(notes_path, outdir, a.voicebank, bpm, a.steps, a.device, a.chunk,
                                  resume=a.resume, vocoder=a.vocoder)

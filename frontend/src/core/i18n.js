@@ -1606,6 +1606,8 @@ export const I18N_MAP = {
   'AI 生成（可选）': 'AI generation (optional)',
   '导出 DAWproject': 'Export DAWproject',
   '咬字校验': 'Pronunciation check',
+  '咬字校验严格模式（保留率 <95% 时不混音）': 'Strict pronunciation check (skip mixing when retention <95%)',
+  '字级校验不通过时停止混音（干声会保留）': 'Stop before mixing if character-level check fails (dry stems are kept)',
   '打包为一个 ZIP（推荐）': 'Pack into one ZIP (recommended)',
   '桌面版默认把分轨打成一个 ZIP，只需选一次保存位置': 'Desktop packs all stems into one ZIP so you only pick a save location once',
   '分轨已打包：': 'Stems packed: ',
