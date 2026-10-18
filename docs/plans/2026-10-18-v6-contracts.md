@@ -336,7 +336,7 @@
 
 - **P0-1…P0-8**：均有实现与测试（midi-roundtrip / session / midiin / recorder / export_audio / default-soundfont / timeline-model / check-version）。
   - **P0-4c 分轨 ZIP 打包 ✅（本轮）**：`export:stems-zip` IPC（主进程 adm-zip 一次写出、文件名安全化、总大小 ≤2GB、E2E 模式可绕过保存对话框）；转换页「打包为一个 ZIP（推荐）」开关（默认开，分轨勾选后出现）；`renderStems` 重构为「编码 → 一次打包 / 逐文件保存」，网页端自动退回逐文件下载；E2E `stems-zip-ui`（开关可见 + IPC 写出两轨 ZIP 并解包校验），全量 E2E 25/25。
-  - P0-8 的 i18n **历史欠账正在逐批还**：新增 `scripts/i18n-apply-batch.mjs`（`npm run i18n:apply`：把 `{en,ja}` 批量插入两词典，跳过已有键）+ 每批后 `--update-baseline` 缩棘轮。第一批已补 **EN 60 / JA 57**，第二批 **EN 100 / JA 96**、第三批 **EN 100 / JA 99**（编辑工作台/声库/变谱/转录音频/队列/环境提示），基线 1203/1157 → **943/905**；第四批 **EN 100 / JA 91**（钢琴卷帘/声库/变谱/资源/设置/工作区），→ **843/814**；剩余按文件热度继续分批。
+  - P0-8 的 i18n **历史欠账正在逐批还**：新增 `scripts/i18n-apply-batch.mjs`（`npm run i18n:apply`：把 `{en,ja}` 批量插入两词典，跳过已有键）+ 每批后 `--update-baseline` 缩棘轮。第一批已补 **EN 60 / JA 57**，第二批 **EN 100 / JA 96**、第三批 **EN 100 / JA 99**（编辑工作台/声库/变谱/转录音频/队列/环境提示），基线 1203/1157 → **943/905**；第四批 **EN 100 / JA 91**、第五批 **EN 100 / JA 97**（编辑器技法/跨轨/力度/布局/文件与网络提示），→ **743/717**；剩余按文件热度继续分批。
 - **P1-1…P1-14**：全部主体完成；尾巴：P1-5 手动修正/强制校验。
   - **P1-13 分标签页独立撤销栈 ✅（编排页，本轮）**：`history_stack.js` 新增 `createTabbedHistoryRegistry`（每曲目一个快照栈、LRU 上限 16）；编排页按 `app.currentId` 取栈、切标签保存/恢复横向滚动位置；E2E `arrange-tabs-undo` 验证 A/B 两标签撤销互不影响且切回仍可撤销（全量 E2E 26/26）。
   - **P0-4c 分轨 ZIP 打包 ✅**（上轮）。
