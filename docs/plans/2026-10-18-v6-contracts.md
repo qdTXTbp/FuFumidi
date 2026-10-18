@@ -351,7 +351,8 @@
   - `core/dawproject.js`（8 测例）：模型规范化（bpm 20–666、拍号分母 2 的幂、空轨/非法音符剔除、颜色 #RRGGBB）、`songToDawprojectModel`（**tick/tpb 直接换算 beats，变速曲目正确**）、`buildProjectXml`（官方 XSD/示例同构：Application/Transport Tempo+TimeSignature/Structure Track+Channel(Volume/Pan/Mute)+Master/Arrangement Lanes→Clips→Clip→Notes→Note/Scenes，全部转义）、`buildMetadataXml`、`parseProjectXml` 回读、标记导出；
   - `main/dawproject.js` + IPC `dawproject:export`：渲染进程出 XML，主进程用 adm-zip 写 .dawproject（校验只有 project.xml/metadata.xml、总大小上限、原生保存对话框；E2E 模式允许指定路径）；
   - 转换页新增「导出 DAWproject」按钮（有曲目才可用）；E2E `dawproject-ui`：按钮可见 + IPC 落盘 + 解包校验 project.xml/metadata.xml，全量 E2E 24/24；
-  - **限制**：只覆盖 MIDI 音符轨 + 速度/拍号/标记子集；未在 Studio One / Bitwig 实机导入验证（无该软件），验收锚点中「导入报告」需真机补；音频事件/Warp/插件状态/自动化不导出。
+  - **官方 XSD 校验 ✅（本轮）**：下载 bitwig/dawproject 的 Project.xsd / MetaData.xsd 到 docs/dawproject/，新增 engine/validate_dawproject.py + npm run test:dawproject（导出样例 → lxml 校验 → 两文件均 VALID；无 lxml 环境自动跳过）。
+  - **限制**：只覆盖 MIDI 音符轨 + 速度/拍号/标记子集；XSD 合规不等于各 DAW 实际导入行为，**Studio One / Bitwig 实机导入仍未验证**；音频事件/Warp/插件状态/自动化不导出。
 - **P2-6 AI 生成**：✅ 本轮完成（可选、默认关、本地命令、强制 AI 标注）。
 
 ## 3. E2E（验收底座，已落地）

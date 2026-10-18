@@ -33,7 +33,7 @@
 | P2-2 | 原生音频 I/O（WASAPI/ASIO） | ◐ | audio_rt.js 契约 + audio:rtl 实测报告；**Rust 原生实现未做**（需 Rust/ASIO + 真机） |
 | P2-3 | MIDI 2.0 / MPE / 时钟 | ✅ | midi2.js 13 测试（UMP/MPE/Clock） |
 | P2-4 | 跨平台发布 | ◐ | platform.js + build:platform + CROSS-PLATFORM.md；**mac/linux 真机构建、签名公证未做** |
-| P2-5 | DAW 互通（DAWproject） | ◐ | dawproject.js 8 测试 + 主进程 ZIP + E2E；**Studio One/Bitwig 实机导入未验证** |
+| P2-5 | DAW 互通（DAWproject） | ◐ | dawproject.js 8 测试 + 主进程 ZIP + E2E；**官方 XSD 校验通过**（docs/dawproject/Project.xsd + npm run test:dawproject）；Studio One/Bitwig 实机导入未验证 |
 | P2-6 | AI 生成接入（可选、默认关） | ✅ | ai_generate.js 7 测试 + main/ai-generate.js + 设置开关 + E2E ai-generate-ui |
 
 ## 当前门禁（每次提交验证）
