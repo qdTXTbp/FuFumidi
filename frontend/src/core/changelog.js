@@ -4,6 +4,12 @@
 import { cmpVersion } from './version.js';
 
 const CHANGELOG = {
+  // 6.0.4：VST3 离线宿主（可选、自备）+ DAWproject 官方 XSD 校验；范围收口。
+  '6.0.4': [
+    'VST3 离线渲染（实验、可选）：转换页可选择 .vst3 插件与 WAV 输入离线渲染；宿主（pedalboard）与插件不随包分发，需自行配置（见 docs/plugins.md）。',
+    'DAWproject：导出子集通过官方 XSD 校验（npm run test:dawproject）；实机 DAW 验证按范围决定不做。',
+    '范围收口：Authenticode 证书 / macOS-Linux 构建 / 原生音频 I/O / 参考 DAW / CLAP 宿主均不实现，更新包安全由 Ed25519 清单验签承担。',
+  ],
   // 6.0.3：分轨 ZIP · 编排分标签撤销 · i18n 欠账清零 · 咬字手动修正入口。
   '6.0.3': [
     '分轨导出：勾选分轨后默认「打包为一个 ZIP」，桌面版只弹一次保存对话框。',
