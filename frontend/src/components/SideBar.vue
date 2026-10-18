@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted, nextTick, reactive } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, reactive } from 'vue';
 import Icon from './Icon.vue';
 import CloudUserDialog from './CloudUserDialog.vue';
 import { useAppStore, SIDEBAR_DEFAULT_W, SIDEBAR_MIN_W } from '../stores/app';
@@ -83,12 +83,43 @@ const FILTER_KINDS = [
   { k: 'artist', label: '艺术家' }, { k: 'album', label: '专辑' },
 ];
 const filterOpen = ref(false);
+const filterBtn = ref(null);
+const filterPopStyle = ref({});
 const filterKind = ref('tag');
 const filterSel = reactive(new Set());
 const filterCount = computed(() => filterSel.size);
 function setFilterKind(k) { filterKind.value = k; filterSel.clear(); }
 function toggleFilterVal(v) { if (filterSel.has(v)) filterSel.delete(v); else filterSel.add(v); }
 function clearFilter() { filterSel.clear(); filterOpen.value = false; }
+/** 筛选浮层：fixed 定位（侧栏/滚动容器会裁切 absolute 浮层），按视口夹紧、空间不足时翻到按钮上方 */
+function positionFilterPop() {
+  const el = filterBtn.value;
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const width = Math.min(320, Math.max(200, window.innerWidth - 16));
+  let left = r.left;
+  if (left + width > window.innerWidth - 8) left = window.innerWidth - width - 8;
+  if (left < 8) left = 8;
+  const maxH = Math.max(180, Math.min(360, window.innerHeight - 24));
+  const below = window.innerHeight - r.bottom - 8;
+  const style = { left: left + 'px', width: width + 'px', maxHeight: Math.min(maxH, Math.max(180, below)) + 'px' };
+  if (below >= 240) style.top = (r.bottom + 4) + 'px';
+  else { style.bottom = Math.max(8, window.innerHeight - r.top + 4) + 'px'; style.maxHeight = Math.min(maxH, Math.max(180, r.top - 12)) + 'px'; }
+  filterPopStyle.value = style;
+}
+function toggleFilter() {
+  filterOpen.value = !filterOpen.value;
+  if (filterOpen.value) nextTick(positionFilterPop);
+}
+function closeFilter() { filterOpen.value = false; }
+function onDocDown(e) {
+  if (!filterOpen.value) return;
+  const tgt = e.target;
+  if (filterBtn.value && filterBtn.value.contains(tgt)) return;
+  if (tgt && tgt.closest && tgt.closest('.lib-filter-pop')) return;
+  closeFilter();
+}
+function onDocKey(e) { if (e.key === 'Escape') closeFilter(); }
 function tagValuesOf(id) {
   const tg = app.songTags(id) || {};
   if (filterKind.value === 'tag') return cleanTags(tg.tags);
@@ -688,7 +719,20 @@ function onDrop(e) {
   });
 }
 
-onMounted(() => { playlist.hydrateFavorites(); cloud.init(); });
+onMounted(() => {
+  playlist.hydrateFavorites();
+  cloud.init();
+  document.addEventListener('pointerdown', onDocDown, true);
+  document.addEventListener('keydown', onDocKey, true);
+  window.addEventListener('resize', positionFilterPop);
+  window.addEventListener('scroll', positionFilterPop, true);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onDocDown, true);
+  document.removeEventListener('keydown', onDocKey, true);
+  window.removeEventListener('resize', positionFilterPop);
+  window.removeEventListener('scroll', positionFilterPop, true);
+});
 
 // 云同步用户弹窗开关（点击左下角头像触发）
 const showAuth = ref(false);
@@ -720,6 +764,8 @@ const showAuth = ref(false);
         <Icon name="search" :size="13" />
         <input id="sidebar-search" name="sidebar-search" v-model="playlist.search" class="text-input" :placeholder="t('搜索曲目')" :aria-label="t('搜索曲目')" />
         <button v-if="playlist.search" class="icon-btn" style="width:18px;height:18px;flex:none" :title="t('清空')" :aria-label="t('清空')" @click="playlist.search = ''"><Icon name="close" :size="11" /></button>
+      </div>
+      <div class="pl-controls">
         <select class="lib-sort" :title="t('整理方式')" :value="libSort" @change="libSort = $event.target.value">
           <option value="default">{{ t('默认') }}</option>
           <option value="artist">{{ t('按艺术家') }}</option>
@@ -727,25 +773,27 @@ const showAuth = ref(false);
           <option value="genre">{{ t('按流派') }}</option>
           <option value="folder">{{ t('按文件夹') }}</option>
         </select>
-          <!-- 筛选：标签 / 流派 / 艺术家 / 专辑（与整理方式叠加） -->
-          <span class="lib-filter">
-            <button class="chip-btn" :class="{ on: filterCount > 0 }" :title="t('按标签 / 流派 / 艺术家 / 专辑筛选')" @click="filterOpen = !filterOpen">
-              {{ t('筛选') }}<b v-if="filterCount" class="lib-filter-n">{{ filterCount }}</b>
-            </button>
-            <button v-if="filterCount" class="chip-btn" :title="t('清除筛选')" @click="clearFilter">✕</button>
-            <div v-if="filterOpen" class="lib-filter-pop" @click.stop>
-              <div class="lib-filter-kinds">
-                <button v-for="k in FILTER_KINDS" :key="k.k" class="chip-btn" :class="{ on: filterKind === k.k }" @click="setFilterKind(k.k)">{{ t(k.label) }}</button>
-              </div>
-              <div class="lib-filter-vals">
-                <button v-for="o in filterOptions" :key="o.v" class="chip-btn" :class="{ on: filterSel.has(o.v) }" @click="toggleFilterVal(o.v)">
-                  {{ o.v }}<span class="lib-filter-c">{{ o.n }}</span>
-                </button>
-                <span v-if="!filterOptions.length" class="muted small">{{ t('这首歌单里还没有这类信息') }}</span>
-              </div>
-            </div>
-          </span>
+        <!-- 筛选：标签 / 流派 / 艺术家 / 专辑（与整理方式叠加） -->
+        <span class="lib-filter">
+          <button ref="filterBtn" class="chip-btn" :class="{ on: filterCount > 0 }" :title="t('按标签 / 流派 / 艺术家 / 专辑筛选')" @click="toggleFilter">
+            {{ t('筛选') }}<b v-if="filterCount" class="lib-filter-n">{{ filterCount }}</b>
+          </button>
+          <button v-if="filterCount" class="chip-btn" :title="t('清除筛选')" @click="clearFilter">✕</button>
+        </span>
       </div>
+      <Teleport to="body">
+        <div v-if="filterOpen" class="lib-filter-pop" :style="filterPopStyle" @click.stop>
+          <div class="lib-filter-kinds">
+            <button v-for="k in FILTER_KINDS" :key="k.k" class="chip-btn" :class="{ on: filterKind === k.k }" @click="setFilterKind(k.k)">{{ t(k.label) }}</button>
+          </div>
+          <div class="lib-filter-vals">
+            <button v-for="o in filterOptions" :key="o.v" class="chip-btn" :class="{ on: filterSel.has(o.v) }" @click="toggleFilterVal(o.v)">
+              {{ o.v }}<span class="lib-filter-c">{{ o.n }}</span>
+            </button>
+            <span v-if="!filterOptions.length" class="muted small">{{ t('这首歌单里还没有这类信息') }}</span>
+          </div>
+        </div>
+      </Teleport>
 
       <div class="nav-sep"></div>
 
@@ -1173,6 +1221,10 @@ const showAuth = ref(false);
 .pl-search { display: flex; align-items: center; gap: var(--sp-2); padding: 2px var(--sp-1); color: var(--stone); }
 .pl-search .text-input { flex: 1; min-width: 0; padding: var(--sp-1) var(--sp-2); font-size: var(--fs-sm); }
 .pl-search input::placeholder { color: var(--stone); opacity: .8; }
+/* 第二行：整理方式 + 筛选（搜索框独占一行，窄侧栏不再把按钮挤出去） */
+.pl-controls { display: flex; align-items: center; gap: var(--sp-2); padding: 2px var(--sp-1); }
+.pl-controls .lib-sort { flex: 1; min-width: 0; }
+.pl-controls .chip-btn { flex: none; }
 
 /* 弹窗（与 ViewEdit 一致的应用内弹窗样式） */
 .ed-modal-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.35); display: flex; align-items: center; justify-content: center; z-index: var(--z-modal); }
@@ -1270,7 +1322,8 @@ body.resize-col .sidebar-resizer::after {
 /* 筛选（与整理方式同排）：一个切换按钮 + 浮层（种类一行、取值一行带计数） */
 .lib-filter { position: relative; display: inline-flex; align-items: center; gap: var(--sp-1); }
 .lib-filter-n { color: var(--accent); margin-left: 3px; }
-.lib-filter-pop { position: absolute; top: calc(100% + var(--sp-1)); left: 0; z-index: 40; width: min(280px, 78vw);
+/* 浮层 fixed 定位（由 positionFilterPop 计算并夹紧视口）：侧栏/滚动容器不会裁切 */
+.lib-filter-pop { position: fixed; z-index: 80; overflow: hidden; display: flex; flex-direction: column;
   padding: var(--sp-2); border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface); box-shadow: var(--shadow); }
 .lib-filter-kinds { display: flex; flex-wrap: wrap; gap: var(--sp-1); padding-bottom: var(--sp-1); border-bottom: 1px solid var(--hairline-soft); }
 .lib-filter-vals { display: flex; flex-wrap: wrap; gap: var(--sp-1); max-height: 190px; overflow: auto; padding-top: var(--sp-1); }
