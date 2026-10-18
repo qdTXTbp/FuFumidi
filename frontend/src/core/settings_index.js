@@ -22,6 +22,7 @@ export const SETTINGS_INDEX = [
   { id: 'output_dir', tab: 'feature', label: '默认输出目录', hint: '转录结果的保存位置', aliases: ['保存目录', '导出目录', 'output', '路径'] },
   { id: 'expert_mode', tab: 'feature', label: '专家模式', hint: '显示 OMR / 翻唱 / GPU 等高级入口', aliases: ['高级', 'advanced', 'OMR', '翻唱', 'GPU'] },
   { id: 'ai_mode', tab: 'feature', label: 'AI 生成（可选）', hint: '本地生成命令；产物带 AI 标注（默认关）', aliases: ['ai', '生成', '人工智能', 'ace-step', '本地模型'] },
+  { id: 'vst3_mode', tab: 'feature', label: 'VST3 离线渲染（可选）', hint: '自备 pedalboard 宿主与 .vst3 插件；不随包分发', aliases: ['vst', 'vst3', '插件', 'pedalboard', '插件宿主'] },
   { id: 'file_assoc', tab: 'feature', label: '文件关联', hint: '双击 .mid 时用本应用打开', aliases: ['关联', '默认打开', 'midi'] },
   { id: 'watch_dir', tab: 'feature', label: '监视文件夹', hint: '新文件自动导入曲库', aliases: ['自动导入', '监视', 'watch'] },
   { id: 'hotkeys', tab: 'keys', label: '快捷键', hint: '全局快捷键绑定与录制', aliases: ['热键', 'shortcut', 'keybind', '按键'] },

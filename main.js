@@ -65,6 +65,7 @@ const { registerDiffsingerIpc } = require('./main/diffsinger');
 const { registerCoverIpc } = require('./main/cover');
 const { registerAiIpc } = require('./main/ai-generate');
 const { registerDawprojectIpc } = require('./main/dawproject');
+const { registerPluginIpc } = require('./main/plugin-host');
 const { createHotkeys, HOTKEY_ACTIONS } = require('./main/hotkeys');
 const { registerSoundfontWorkshopIpc } = require('./main/soundfonts');
 const { registerUserMetaIpc } = require('./main/usermeta');
@@ -206,6 +207,8 @@ if (!gotLock) {
   registerAiIpc({ ipcMain, app, readSettings });
   // P2-5 DAW 互通：DAWproject 导出（渲染进程出 XML，主进程写 ZIP）
   registerDawprojectIpc({ ipcMain, dialog, BrowserWindow, app });
+  // P2-1 VST3 离线渲染：宿主解释器由 plugin.host_python 指定（不在安装包内）
+  registerPluginIpc({ ipcMain, app, dialog, BrowserWindow, readSettings, writeSettings, rootDir: __dirname });
     registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, net });
     registerPluginsIpc();
     registerGpuIpc({

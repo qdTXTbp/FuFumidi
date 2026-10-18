@@ -23,6 +23,9 @@ const DEFAULT_SETTINGS = {
      默认命令留空 = not-configured，不会联网也不会内置模型。 */
   'ai.enabled': false,
   'ai.provider_cmd': '',
+  /* P2-1 VST3 离线渲染宿主：解释器与插件目录都不随包分发，需用户自备（见 docs/plugins.md） */
+  'plugin.host_python': '',
+  'plugin.dirs': [],
   custom_wallpaper: '',
   wallpaper_prompt_done: false,
   wallpaper_enabled: false,

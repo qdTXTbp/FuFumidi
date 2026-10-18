@@ -393,6 +393,16 @@ contextBridge.exposeInMainWorld('fuBridge', {
     autosaveRead: (docId) => ipcRenderer.invoke('autosave:read', docId),
     autosaveClear: (docId) => ipcRenderer.invoke('autosave:clear', docId),
   },
+  // P2-1 VST3 离线渲染（宿主与插件均为可选、自备）
+  plugin: {
+    status: () => ipcRenderer.invoke('plugin:status'),
+    list: () => ipcRenderer.invoke('plugin:list'),
+    pickDir: () => ipcRenderer.invoke('plugin:pickDir'),
+    pickFile: () => ipcRenderer.invoke('plugin:pickFile'),
+    pickAudio: () => ipcRenderer.invoke('plugin:pickAudio'),
+    savePath: (suggested) => ipcRenderer.invoke('plugin:savePath', suggested),
+    renderFile: (payload) => ipcRenderer.invoke('plugin:renderFile', payload),
+  },
   // P0-4c 分轨导出：一次写成一个 ZIP
   exportStemsZip: (payload) => ipcRenderer.invoke('export:stems-zip', payload),
   // P2-5 DAW 互通：DAWproject 导出（ZIP：project.xml + metadata.xml）

@@ -29,7 +29,7 @@
 | P1-12 | 控件契约/模板/专家模式 | ✅ | ui_contract.js / workspace_templates.js / expert.js；约 18 测试；E2E expert-mode |
 | P1-13 | 编辑器交互语言统一 | ✅ | gesture/curve_engine/history_stack（含分标签 registry）；E2E arrange-tabs-undo、edit-pb-lane、edit-selection-toolbar、edit-follow-ui |
 | P1-14 | App Shell/导航/命令/会话/多标签/设置搜索 | ✅ | commands.js/nav_history/session/tabs/settings_index；E2E command-palette、nav-history、song-tabs、settings-search |
-| P2-1 | VST3/CLAP（离线节点） | ◐ | plugin_node.js 10 测试 + 导出链接线；**真实插件宿主未接**（需外部宿主/插件二进制） |
+| P2-1 | VST3/CLAP（离线节点） | ◐ | 内置节点 10 测试 + 导出链接线；**真实 VST3 离线宿主已落地**（engine/plugin_render.py + main/plugin-host.js + 转换页入口；pedalboard 宿主 + 自行获取的 Dexed/OB-Xf/Surge XT/Surge XT Effects 实测加载与渲染，见 docs/plugins.md）；CLAP 与参考 DAW 频谱对比待补 |
 | P2-2 | 原生音频 I/O（WASAPI/ASIO） | ◐ | audio_rt.js 契约 + audio:rtl 实测报告；**Rust 原生实现未做**（需 Rust/ASIO + 真机） |
 | P2-3 | MIDI 2.0 / MPE / 时钟 | ✅ | midi2.js 13 测试（UMP/MPE/Clock） |
 | P2-4 | 跨平台发布 | ◐ | platform.js + build:platform + CROSS-PLATFORM.md；**mac/linux 真机构建、签名公证未做** |
@@ -49,8 +49,9 @@
 1. **Authenticode 代码签名证书**（P1-8 尾巴）：需采购证书；当前靠 Ed25519 更新清单验签兜底。
 2. **原生音频 I/O**（P2-2）：需 Rust + cpal/ASIO SDK 实现 + 真机 RTL 测量（≤10ms 目标）。
 3. **macOS/Linux 真机构建与签名公证**（P2-4）：需 Apple Developer 账号 / Linux runner。
-4. **GitHub Release 资产上传**：本机无 GitHub 凭据（credential manager 需交互）。
+4. **GitHub 源码分支推送**：github.com:443 直连超时（Release 资产经 api.github.com/uploads 已成功上传）；需可用的 git 代理/SSH。
 5. **DAWproject 实机导入验证**（P2-5）：需 Studio One / Bitwig；当前仅按官方 XSD/示例自测。
+6. **CLAP 宿主 / 参考 DAW 频谱对比**（P2-1 尾巴）：pedalboard 仅宿主 VST3；参考 DAW 可脚本化渲染环境未获取。
 
 ## 结论
 

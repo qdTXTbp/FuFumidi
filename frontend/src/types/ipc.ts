@@ -861,6 +861,24 @@ export interface TaskItem {
   cancelable?: boolean;
 }
 
+/** P2-1 VST3 离线渲染（宿主自备） */
+export interface PluginInfo { name: string; path: string; format: string }
+export interface PluginStatus { ok: boolean; hostPython: string; plugins: PluginInfo[]; dirs: string[]; error: string }
+export interface PluginRenderResult {
+  ok: boolean;
+  mode?: string;
+  plugin?: string;
+  params?: string[];
+  sampleRate?: number;
+  seconds?: number;
+  peak?: number;
+  rms?: number;
+  out?: string;
+  elapsed?: number;
+  error?: string;
+  log?: string;
+}
+
 /** P0-4c 分轨打包导出 */
 export interface StemZipFile {
   name: string;
@@ -924,6 +942,16 @@ export interface AiGenerateResult {
 export interface FuBridge {
   /** E2E 测试实例标记（scripts/e2e 启动时 FUFUMIDI_E2E=1）：true 时渲染进程会注册最小测试钩子 */
   e2e?: boolean;
+  /** P2-1：VST3 离线渲染（宿主与插件自备） */
+  plugin?: {
+    status(): Promise<PluginStatus>;
+    list(): Promise<{ ok: boolean; plugins?: PluginInfo[]; error?: string }>;
+    pickDir(): Promise<{ ok: boolean; canceled?: boolean; dir?: string }>;
+    pickFile(): Promise<{ ok: boolean; canceled?: boolean; file?: string }>;
+    pickAudio(): Promise<{ ok: boolean; canceled?: boolean; file?: string }>;
+    savePath(suggested?: string): Promise<{ ok: boolean; canceled?: boolean; file?: string }>;
+    renderFile(payload: { plugin: string; input: string; output: string; params?: Record<string, number>; sampleRate?: number }): Promise<PluginRenderResult>;
+  };
   /** P0-4c：分轨导出→单个 ZIP */
   exportStemsZip?(payload: { files: StemZipFile[]; suggestedName?: string; targetPath?: string }): Promise<StemZipResult>;
   /** P2-5 DAW 互通：导出 DAWproject */

@@ -419,6 +419,22 @@ async function exportDawproject() {
   } catch (e) { toast(t('导出 DAWproject 失败：') + String((e && e.message) || e), 'warn'); }
 }
 
+/** P2-1：VST3 离线渲染（实验）—— 依次选择插件/输入/输出，由主进程调 pedalboard 宿主渲染 */
+async function quickVst3Render() {
+  if (!bridge || !bridge.plugin) { toast(t('桌面版才支持 VST3 离线渲染'), 'warn'); return; }
+  try {
+    const pk = await bridge.plugin.pickFile();
+    if (!pk || !pk.ok) return;
+    const inFile = await bridge.plugin.pickAudio();
+    if (!inFile || !inFile.ok) return;
+    const out = await bridge.plugin.savePath('vst3-render.wav');
+    if (!out || !out.ok) return;
+    const r = await bridge.plugin.renderFile({ plugin: pk.file, input: inFile.file, output: out.file });
+    if (r && r.ok) toast(t('VST3 渲染完成：') + (r.out || '') + ' · ' + r.seconds + 's / ' + r.elapsed + 's', 'ok');
+    else toast(t('VST3 渲染失败：') + ((r && r.error) || ''), 'warn');
+  } catch (e) { toast(t('VST3 渲染失败：') + String((e && e.message) || e), 'warn'); }
+}
+
 /* ==================== 视频 / 可视化导出 ==================== */
 const VE = reactive({
   format: 'mp4', template: 'landscape', res: '1280x720', fps: 24, quality: 'medium',
@@ -1047,6 +1063,9 @@ async function renderVideo() {
       </button>
       <button class="btn big" style="margin-left:var(--sp-2)" data-guide="export-dawproject" @click="exportDawproject" :disabled="!song">
         <Icon name="convert" :size="16" />{{ t('导出 DAWproject') }}
+      </button>
+      <button class="btn big" style="margin-left:var(--sp-2)" data-guide="vst3-render" @click="quickVst3Render" :title="t('可选能力：需自备 pedalboard 宿主与 .vst3 插件')">
+        <Icon name="convert" :size="16" />{{ t('VST3 离线渲染（实验）') }}
       </button>
 
       <Transition name="cv">

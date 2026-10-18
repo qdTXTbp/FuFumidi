@@ -325,7 +325,8 @@
 - **6.0.3（收尾版）**：P0-4c 分轨 ZIP / P1-13 分标签撤销 / P0-8 i18n 欠账清零 / P1-5 咬字手动入口；
   版本四源一致、构建成功（更新器断言通过）；Ed25519 清单签名（sha256 730696…）；归档 `E:\Midi\安装包\FuFumidi\6.0.3`；
   CNB `v6.0.3` 9 资产、**is_latest=true**；latest.yml/manifest 一致，**下载安装包验签通过**；安装版部署 6.0.3 + 冒烟通过。
-- 未完成：GitHub Release 资产上传（本机无 GitHub 凭据，credential fill 交互不可用）；mac/linux 真机构建与签名公证；
+- **GitHub Release 同步 ✅**：v6.0.3 的 9 个资产已通过 api.github.com 上传（GitHub Release 为 latest），凭据来自用户提供的 token 文件；**源码分支推送**仍受 github.com:443 直连超时限制。
+- 未完成：mac/linux 真机构建与签名公证；
   Authenticode 证书；原生音频 I/O（WASAPI/ASIO）与真实插件宿主 —— 均属环境/资源依赖项。
 
 - **P2-6 AI 生成接入 ✅（可选、默认关；本地命令适配器）**：
