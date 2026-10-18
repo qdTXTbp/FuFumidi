@@ -5,6 +5,7 @@
 const Paths = require('./paths');
 const DS = require('./download-source');
 const createFastDownload = require('./fast-download');
+const { updaterLooksConfigured } = require('./update_util');
 const ST = require('./update-speedtest');
 const { fetchManifest, verifyManifest } = require('./update_sign');
 
@@ -386,6 +387,36 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
+  /** 配置好的更新器资产地址（随 Release 上传的 FuFumidi.update.exe） */
+  function updaterUrls(channel) {
+    const ch = normChannel(channel);
+    const cnb = ch === 'beta' ? DS.cnbTagUrl('beta', 'FuFumidi.update.exe') : DS.cnbLatestUrl('FuFumidi.update.exe');
+    const gh = 'https://github.com/' + GH_REPO + '/releases/' + (ch === 'beta' ? 'download/beta' : 'latest/download') + '/FuFumidi.update.exe';
+    return [cnb, ...DS.githubMirrorCandidates(gh)];
+  }
+  /** 已安装更新器未嵌入配置时：下载 Release 里带配置的更新器到 temp，返回其路径 */
+  async function downloadConfiguredUpdater(channel) {
+    let dest = path.join(Paths.tempDir(), 'fufumidi-update', 'FuFumidi.update.exe');
+    try { fs.mkdirSync(path.dirname(dest), { recursive: true }); }
+    catch (_) {
+      dest = path.join(app.getPath('temp'), 'fufumidi-update', 'FuFumidi.update.exe');
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+    }
+    const mirrors = [...new Set(updaterUrls(channel))].filter(Boolean);
+    const r = await FastDL.downloadFast({
+      urls: mirrors,
+      dest,
+      minSize: 4 * 1024 * 1024,
+      headers: { 'user-agent': 'FuFumidi' },
+      label: 'FuFumidi.update.exe',
+    });
+    if (r && r.size && updaterLooksConfigured(fs.readFileSync(dest))) {
+      try { fs.chmodSync(dest, 0o755); } catch (_) {}
+      return { ok: true, path: dest, size: r.size };
+    }
+    return { ok: false, error: '下载到的更新器仍未嵌入应用配置（大小 ' + (r && r.size) + '）' };
+  }
+
   // 增量更新流程（kachina 更新器方案，见 UPDATING.md）：
   //  1) 更新器内嵌源配置（ghfast 等镜像，指向 releases/latest/download/FuFumidi.Install.exe）
   //     —— 由更新器自行差分下载（Range 请求）并显示进度，主进程不做整包预下载
@@ -397,10 +428,27 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
     try {
       const { spawn } = require('child_process');
       const updaterDir = app.isPackaged ? path.dirname(process.execPath) : path.join(app.getAppPath(), 'release', 'win-unpacked');
-      const updaterPath = path.join(updaterDir, 'FuFumidi.update.exe');
+      let updaterPath = path.join(updaterDir, 'FuFumidi.update.exe');
       const mainExe = path.join(updaterDir, 'FuFumidi.exe');
       if (!fs.existsSync(updaterPath)) {
         return { ok: false, error: '更新器不存在：' + updaterPath + '（请使用新版便携版 / 重新下载完整安装包）' };
+      }
+      // ★ 旧安装包/手动部署可能留下「未嵌入应用配置」的更新器：它会把安装路径认成
+      //   C:Program FilesKachinaInstaller，点更新直接报「安装包损坏，请重新下载」。
+      //   这里检测并自动改用 Release 里带配置的更新器；下载失败则明确报原因（不再让用户猜）。
+      let stagedUpdater = '';
+      try {
+        if (!updaterLooksConfigured(fs.readFileSync(updaterPath))) {
+          try { fs.appendFileSync(path.join(Paths.tempDir(), 'fufumidi-restart.log'), new Date().toTimeString().slice(0, 8) + ' [main] installed updater lacks embedded config; fetching configured one\n'); } catch (_) {}
+          const got = await downloadConfiguredUpdater(channel);
+          if (!got.ok) {
+            return { ok: false, error: '已安装的更新器未嵌入应用配置，自动获取新版更新器失败：' + (got.error || '未知错误') + '。请下载完整安装包覆盖安装。' };
+          }
+          stagedUpdater = got.path;
+          updaterPath = got.path;
+        }
+      } catch (e) {
+        return { ok: false, error: '检查/修复更新器失败：' + String((e && e.message) || e) };
       }
       // 1) 守护脚本：等更新器退出（完成替换）→ 短暂等待落盘 → 启动新版主程序
       //    独立进程跑，脱离主进程，即便主程序被更新器结束也能继续完成重启

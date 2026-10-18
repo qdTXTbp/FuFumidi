@@ -376,6 +376,35 @@ for (const { from, to } of extra) {
 }
 console.log('[5b/7] extraResources 已同步：' + synced.join('；'));
 
+// ---- 5c) 更新器必须与 release/update 的「已嵌入应用配置」版本一致 ----
+//   2026-10-18 实测缺陷：手动部署只换 app.asar，安装目录里的 FuFumidi.update.exe 还是旧版
+//   （embedded_config 为空），点「更新」会被更新器认成 C:\Program Files\KachinaInstaller 并报
+//   「安装包损坏，请重新下载」。这里每次部署都同步一次，旧文件备份为 .bak。
+const updSrc = path.join(ROOT, 'release', 'update', 'FuFumidi.update.exe');
+const updDst = path.join(INSTALL, 'FuFumidi.update.exe');
+if (fs.existsSync(updSrc)) {
+  try {
+    if (fs.existsSync(updDst)) {
+      const oldBuf = fs.readFileSync(updDst);
+      const newBuf = fs.readFileSync(updSrc);
+      if (!oldBuf.equals(newBuf)) {
+        fs.copyFileSync(updDst, updDst + '.bak');
+        fs.copyFileSync(updSrc, updDst);
+        console.log('  更新器已同步（旧文件备份为 FuFumidi.update.exe.bak）');
+      } else {
+        console.log('  更新器已是最新（带配置版）');
+      }
+    } else {
+      fs.copyFileSync(updSrc, updDst);
+      console.log('  更新器已写入（带配置版）');
+    }
+  } catch (e) {
+    console.log('  ⚠ 更新器同步失败：' + String((e && e.message) || e));
+  }
+} else {
+  console.log('  ⚠ 未找到 release/update/FuFumidi.update.exe，跳过更新器同步');
+}
+
 // ---- 5c) 硬门槛：安装版的 muscriptor 必须带着 FuFumidi 上游补丁
 //   补丁只在 engine/patches/ 里存一份、靠手工 copy 进 resources/python（见本文件开头），
 //   所以「有没有打上」必须每次部署都验一次，而不是等用户报告转录丢音。
