@@ -58,3 +58,22 @@
 - 28 包中 **21 项 ✅ 完成**、**7 项 ◐ 核心完成但有外部依赖**（P1-8 / P2-1 / P2-2 / P2-4 / P2-5 及上述资源）；无 ✗ 未开工项。
 - 可交付产品：**6.0.3（CNB latest，2026-10-18 发布）**，含 P0-4c 分轨 ZIP、P1-13 分标签撤销、P0-8 i18n 欠账清零、P1-5 手动入口；
   发布链路（构建 → 签名 → CNB latest → 安装包下载验签 → 安装版部署冒烟）全部验证通过。
+
+## 用户明确不实现的项（2026-10-18 14:00 左右）
+
+以下 5 项经用户确认**不再实现**，不计入剩余工作：
+
+1. **Authenticode 受信证书**（含自签名方案）：不实现；更新包安全由 Ed25519 清单验签承担。
+2. **macOS / Linux 构建**（含 WSL/交叉构建）：不实现；仅保留 `platform.js` + `build:platform` dev 入口与文档。
+3. **ASIO SDK 与原生音频 I/O（WASAPI/cpal）**：不实现；WebAudio 后端契约与 RTL 实测报告为最终交付。
+4. **参考 DAW 实机验证**（Bitwig/REAPER/Studio One）：不实现；DAWproject 以**官方 XSD 校验通过**作为验收。
+5. **CLAP 宿主**：不实现；VST3 离线宿主（pedalboard）为最终交付。
+
+> 以上排除项使 28 包全部进入「已交付」或「用户指定不实现」两类，**无剩余待办**。
+
+## 最终状态
+
+- 28 包：21 ✅ 完成 + 5 ◐ 转为「用户指定不实现」（P1-8 证书尾巴、P2-1 CLAP、P2-2 原生 I/O、P2-4 mac/linux、P2-5 参考 DAW）+ 2 包（P2-3/P2-6）已完成。
+- 发布：6.0.3 已同步 CNB（latest）+ GitHub（latest，9 assets）；安装版部署冒烟通过。
+- 门禁：typecheck / test:ui 546 / E2E 26 / audit 全绿；test:dawproject、test:plugin-host、test:omr 可跑。
+- 已知非功能缺口（用户已接受）：GitHub 源码分支推送受 github.com:443 直连限制（Release 资产不受影响）。

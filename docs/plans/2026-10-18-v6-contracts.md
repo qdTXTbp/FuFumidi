@@ -326,7 +326,8 @@
   版本四源一致、构建成功（更新器断言通过）；Ed25519 清单签名（sha256 730696…）；归档 `E:\Midi\安装包\FuFumidi\6.0.3`；
   CNB `v6.0.3` 9 资产、**is_latest=true**；latest.yml/manifest 一致，**下载安装包验签通过**；安装版部署 6.0.3 + 冒烟通过。
 - **GitHub Release 同步 ✅**：v6.0.3 的 9 个资产已通过 api.github.com 上传（GitHub Release 为 latest），凭据来自用户提供的 token 文件；**源码分支推送**仍受 github.com:443 直连超时限制。
-- 未完成：mac/linux 真机构建与签名公证；
+- **用户 2026-10-18 明确不实现的 5 项**：Authenticode 受信证书、mac/linux 构建、原生音频 I/O（WASAPI/ASIO）、参考 DAW 实机验证、CLAP 宿主 —— 不计入剩余工作；DAWproject 以官方 XSD 校验为验收。
+- 已知非功能限制：GitHub 源码分支推送受 github.com:443 直连限制（Release 资产已成功上传）。
   Authenticode 证书；原生音频 I/O（WASAPI/ASIO）与真实插件宿主 —— 均属环境/资源依赖项。
 
 - **P2-6 AI 生成接入 ✅（可选、默认关；本地命令适配器）**：
