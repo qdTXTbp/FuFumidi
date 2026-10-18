@@ -159,6 +159,59 @@ function gotoModels() {
   try { router.push({ path: '/resources', query: { tab: 'model', m: 'rvc' } }); } catch (e) {}
 }
 
+/* ---- 直接导入 RVC 模型：不用跳去模型管理页 ----
+   语义与 RvcModelPanel 完全一致（登记引用 / 逐个文件 / zip），导入后刷新本页的音色下拉。 */
+const importBusy = ref(false);
+
+async function importRvcFolder() {
+  if (importBusy.value) return;
+  if (!bridge || !bridge.rvcPickFolder) return toast(t('请使用桌面版 FuFumidi'), 'warn');
+  const picked = await bridge.rvcPickFolder();
+  if (!picked || picked.canceled) return;
+  importBusy.value = true;
+  try {
+    const r = await bridge.rvcImportFolder(picked.dir, {}).catch((e) => ({ ok: false, error: String(e && e.message || e) }));
+    if (r && r.ok) { toast(t('已导入') + '：' + (r.model && r.model.name), 'ok'); await load(); }
+    else toast((r && r.error) || t('失败'), 'warn');
+  } finally { importBusy.value = false; }
+}
+
+async function importRvcFiles() {
+  if (importBusy.value) return;
+  if (!bridge || !bridge.rvcPickFiles) return toast(t('请使用桌面版 FuFumidi'), 'warn');
+  const picked = await bridge.rvcPickFiles();
+  if (!picked || picked.canceled || !picked.files) return;
+  // 按扩展名归类（与面板同一套规则：认得出的先认，认不出的去卡片上「校正」）
+  const files = {};
+  for (const pth of picked.files) {
+    const low = String(pth).toLowerCase();
+    if (low.endsWith('.pth') || low.endsWith('.pt')) files.model = files.model || pth;
+    else if (low.endsWith('.index')) files.index = pth;
+    else if (low.endsWith('.yaml') || low.endsWith('.yml')) files.config = pth;
+  }
+  if (!files.model) return toast(t('没认出权重文件（.pth / .pt）'), 'warn');
+  importBusy.value = true;
+  try {
+    const r = await bridge.rvcImportFiles(files, { name: String(files.model).replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '') })
+      .catch((e) => ({ ok: false, error: String(e && e.message || e) }));
+    if (r && r.ok) { toast(t('已导入') + '：' + (r.model && r.model.name), 'ok'); await load(); }
+    else toast((r && r.error) || t('失败'), 'warn');
+  } finally { importBusy.value = false; }
+}
+
+async function importRvcZip() {
+  if (importBusy.value) return;
+  if (!bridge || !bridge.rvcPickZip) return toast(t('请使用桌面版 FuFumidi'), 'warn');
+  const picked = await bridge.rvcPickZip();
+  if (!picked || picked.canceled) return;
+  importBusy.value = true;
+  try {
+    const r = await bridge.rvcImportZip(picked.path, {}).catch((e) => ({ ok: false, error: String(e && e.message || e) }));
+    if (r && r.ok) { toast(t('已导入') + '：' + (r.model && r.model.name), 'ok'); await load(); }
+    else toast((r && r.error) || t('失败'), 'warn');
+  } finally { importBusy.value = false; }
+}
+
 onMounted(() => {
   load();
   if (bridge && bridge.onCoverProgress) {
@@ -219,8 +272,15 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
           <select class="text-input" data-guide="cover-singer" v-model="singerId" style="max-width:420px" @change="saveOpts">
             <option v-for="s in singers" :key="s.id" :value="s.id">{{ s.name }}<template v-if="s.arch"> —— {{ s.arch }}</template><template v-if="s.note"> · {{ s.note }}</template></option>
           </select>
-          <span v-if="!singers.length" class="muted small">{{ t('还没有导入翻唱模型，去「模型管理 → 翻唱模型」导入一个') }}</span>
-          <button v-if="!singers.length" class="btn sm" @click="gotoModels">{{ t('RVC 模型') }}</button>
+          <span v-if="!singers.length" class="muted small">{{ t('还没有导入 RVC 模型：可直接在这里导入，也可以去「模型管理 → RVC 模型」里管理') }}</span>
+        </div>
+        <!-- 导入行：常驻，不跟空列表联动 —— 想加第二个模型时不必先删一个 -->
+        <div class="cv-row">
+          <span class="cv-label">{{ t('导入模型') }}</span>
+          <button class="btn sm" :disabled="importBusy" @click="importRvcFolder"><Icon name="folder" :size="13" /> {{ t('选文件夹（登记引用，不复制）') }}</button>
+          <button class="btn sm" :disabled="importBusy" @click="importRvcFiles"><Icon name="import" :size="13" /> {{ t('逐个选文件（手填元数据）') }}</button>
+          <button class="btn sm" :disabled="importBusy" @click="importRvcZip"><Icon name="box" :size="13" /> {{ t('导入 zip') }}</button>
+          <button class="btn sm ghost" @click="gotoModels">{{ t('去模型管理') }}</button>
         </div>
         <div class="cv-row">
           <span class="cv-label">{{ t('变调（半音）') }}</span>
