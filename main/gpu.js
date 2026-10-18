@@ -12,7 +12,7 @@
 //                 但界面应标注「未经实机验证」，别让用户以为一定可用。
 //
 // 另有一类**不是加速、而是能力包**：
-//   svc      —— 翻唱变声推理（torch + faiss + contentvec/hubert 编码器 + rmvpe 权重 + pyworld）。
+//   rvc      —— 翻唱变声推理（torch + faiss + contentvec/hubert 编码器 + rmvpe 权重 + pyworld）。
 //               不塞进本体（体积大），用户按需在「加速包」页安装；角色权重仍是用户导入的。
 //
 // ★ Python 版本约束：增强包是按某个 CPython 次版本编译的（site-packages 里的
@@ -25,17 +25,17 @@ const path = require('path');
 const fs = require('fs');
 const Paths = require('./paths');
 
-const GPU_KINDS = ['cuda', 'rocm', 'xpu', 'svc'];
+const GPU_KINDS = ['cuda', 'rocm', 'xpu', 'rvc'];
 /** 每种增强包所要求的 CPython 次版本（决定用哪个解释器跑引擎） */
 /* 目标 CPython 次版本：只在**包还没装**时用来判断"该按哪个版本构建/下载"（见 fitsPython）。
    ★ 2026-10-17：运行时升到 3.12 之后，这里曾写死 cuda: '3.11' —— 于是装好的 CUDA 包被判定
    与运行时不符、GPU 一直不生效，而界面又只说"已安装"（用户实测："工具 gpu 加速没有生效"）。
    现在**已安装的包以它自己的 ABI 为准**（packAbi 读 torch 的 _C.cp3XX 文件名），
    这里的常量只作为"未安装时的目标版本"。
-   ★ svc（RVC 翻唱推理）是**能力包**不是加速包：不切换解释器、不显示加速开关，
+   ★ rvc（RVC 翻唱推理）是**能力包**不是加速包：不切换解释器、不显示加速开关，
      目标版本跟运行时一致（3.12）。DirectML 已在 5.2.0 下线，不再登记。 */
-const KIND_PY = { cuda: '3.12', rocm: '3.12', xpu: '3.12', svc: '3.12' };
-const KIND_LABEL = { cuda: 'CUDA', rocm: 'ROCm', xpu: 'Intel XPU', svc: 'SVC 推理' };
+const KIND_PY = { cuda: '3.12', rocm: '3.12', xpu: '3.12', rvc: '3.12' };
+const KIND_LABEL = { cuda: 'CUDA', rocm: 'ROCm', xpu: 'Intel XPU', rvc: 'RVC 推理' };
 /** 是否是已知的增强包类型 */
 function isGpuKind(kind) {
   return GPU_KINDS.indexOf(String(kind || '').toLowerCase()) >= 0;
@@ -97,7 +97,8 @@ function installedGpuKinds() {
 }
 function inferGpuKind(nameOrUrl) {
   const t = String(nameOrUrl || '').toLowerCase();
-  if (t.indexOf('svc') >= 0 || t.indexOf('rvc') >= 0) return 'svc';
+  // 加速包文件名 / URL 里出现 rvc 或 svc（历史包名两种拼写都有）都认成 rvc  kind
+  if (t.indexOf('rvc') >= 0 || t.indexOf('svc') >= 0) return 'rvc';
   if (t.indexOf('cuda') >= 0) return 'cuda';
   // rocm / hip：ROCm on Windows 的 torch 里 torch.version.hip 有值、version.cuda 为空
   if (t.indexOf('rocm') >= 0 || t.indexOf('rocmsdk') >= 0 || t.indexOf('-hip') >= 0) return 'rocm';

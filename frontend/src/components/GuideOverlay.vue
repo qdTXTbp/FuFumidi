@@ -259,9 +259,9 @@ const CHAPTERS = computed(() => [
   {
     id: 'cover', ic: 'mic', name: t('翻唱工作流'), desc: t('分离 → 变声 → 混音，一条龙做翻唱'),
     steps: [
-      { parent: 'cover', selector: '[data-guide="cover-pick-audio"]', title: t('选一首歌'), desc: t('翻唱走「分离 → 变声 → 混音」三步：选入一首完整歌曲，应用自动把人声与伴奏分开，用你导入的 SVC 模型把原唱换成另一个音色，再和伴奏混成成品。旋律、节奏、咬字都来自原唱，不需要歌词。'), manual: true },
+      { parent: 'cover', selector: '[data-guide="cover-pick-audio"]', title: t('选一首歌'), desc: t('翻唱走「分离 → 变声 → 混音」三步：选入一首完整歌曲，应用自动把人声与伴奏分开，用你导入的 RVC 模型把原唱换成另一个音色，再和伴奏混成成品。旋律、节奏、咬字都来自原唱，不需要歌词。'), manual: true },
       { parent: 'cover', selector: '[data-guide="cover-pick-audio"]', title: t('复用分离结果'), desc: t('如果之前在「音频处理」里分离过这首歌，人声与伴奏会自动带过来，直接跳过分离这一步（省时间）。'), manual: true },
-      { parent: 'cover', selector: '[data-guide="cover-singer"]', title: t('选翻唱模型'), desc: t('音色来自你导入的 SVC（RVC）模型：应用不内置也不代下载，去「模型管理 → 翻唱模型」导入社区权重即可（导入时可逐项探测版本 / f0 / 采样率，探测值只是候选，以权重真实读数为准）。'), manual: true },
+      { parent: 'cover', selector: '[data-guide="cover-singer"]', title: t('选翻唱模型'), desc: t('音色来自你导入的 RVC（RVC）模型：应用不内置也不代下载，去「模型管理 → 翻唱模型」导入社区权重即可（导入时可逐项探测版本 / f0 / 采样率，探测值只是候选，以权重真实读数为准）。'), manual: true },
       { parent: 'cover', selector: '[data-guide="cover-run"]', title: t('开始翻唱'), desc: t('选好输出目录后点「开始翻唱」：长曲自动按低能量点切块推理再混音，支持断点续跑（中断后可继续，或勾选「不复用上次结果」全部重算）。'), manual: true },
     ],
   },

@@ -1,5 +1,5 @@
 <script setup>
-// 翻唱模型（SVC）：导入 + 已导入管理 + 在线目录（按语言分组）
+// 翻唱模型（RVC）：导入 + 已导入管理 + 在线目录（按语言分组）
 //
 // ★ 应用不内置、不代下载：两个社区仓库都是 CC-BY-NC-4.0（禁商用、必须署名训练者），
 //   分发不在我们这边。目录只做索引，把用户送到 ModelScope，下载完再用「导入」放进应用。
@@ -51,25 +51,25 @@ function srTxt(sr) { return sr ? (sr / 1000) + 'k' : '?'; }
 
 /* ---- 列表 ---- */
 async function refresh() {
-  if (!bridge || !bridge.svcList) return;
+  if (!bridge || !bridge.rvcList) return;
   loading.value = true;
   try {
-    const r = await bridge.svcList();
+    const r = await bridge.rvcList();
     if (r && r.ok) { models.value = r.models || []; root.value = r.root || ''; }
   } catch (e) {}
   loading.value = false;
 }
 async function loadCatalog() {
-  if (!bridge || !bridge.svcCatalog) return;
+  if (!bridge || !bridge.rvcCatalog) return;
   try {
-    const r = await bridge.svcCatalog();
+    const r = await bridge.rvcCatalog();
     if (r && r.ok) catalog.value = r.catalog || null;
   } catch (e) {}
 }
 async function refreshCatalog() {
-  if (!bridge || !bridge.svcRefreshCatalog) return;
+  if (!bridge || !bridge.rvcRefreshCatalog) return;
   busy.value = true;
-  const r = await bridge.svcRefreshCatalog().catch(() => null);
+  const r = await bridge.rvcRefreshCatalog().catch(() => null);
   busy.value = false;
   if (r && r.ok) { await loadCatalog(); toast(t('刷新目录') + '：' + r.count + ' 个模型', 'ok'); }
   else toast((r && r.error) || t('失败'), 'warn');
@@ -77,17 +77,17 @@ async function refreshCatalog() {
 
 /* ---- 导入 ---- */
 async function importFolder() {
-  if (!bridge || !bridge.svcPickFolder) return toast(t('请使用桌面版 FuFumidi'), 'warn');
-  const picked = await bridge.svcPickFolder();
+  if (!bridge || !bridge.rvcPickFolder) return toast(t('请使用桌面版 FuFumidi'), 'warn');
+  const picked = await bridge.rvcPickFolder();
   if (!picked || picked.canceled) return;
-  const r = await bridge.svcImportFolder(picked.dir, {}).catch((e) => ({ ok: false, error: String(e && e.message || e) }));
+  const r = await bridge.rvcImportFolder(picked.dir, {}).catch((e) => ({ ok: false, error: String(e && e.message || e) }));
   if (r && r.ok) { toast(t('已导入') + '：' + r.model.name, 'ok'); await refresh(); await probe(r.model.id); }
   else toast((r && r.error) || t('失败'), 'warn');
 }
 
 async function importFiles() {
-  if (!bridge || !bridge.svcPickFiles) return toast(t('请使用桌面版 FuFumidi'), 'warn');
-  const picked = await bridge.svcPickFiles();
+  if (!bridge || !bridge.rvcPickFiles) return toast(t('请使用桌面版 FuFumidi'), 'warn');
+  const picked = await bridge.rvcPickFiles();
   if (!picked || picked.canceled || !picked.files) return;
   // 按扩展名归类（手填元数据的兜底：认得出的先认，认不出的用户自己在卡片上校正）
   const files = {};
@@ -98,18 +98,18 @@ async function importFiles() {
     else if (low.endsWith('.yaml') || low.endsWith('.yml')) files.config = p;
   }
   if (!files.model) return toast(t('没认出权重文件（.pth / .pt）'), 'warn');
-  const r = await bridge.svcImportFiles(files, { name: String(files.model).replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '') })
+  const r = await bridge.rvcImportFiles(files, { name: String(files.model).replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '') })
     .catch((e) => ({ ok: false, error: String(e && e.message || e) }));
   if (r && r.ok) { toast(t('已导入') + '：' + r.model.name, 'ok'); await refresh(); await probe(r.model.id); }
   else toast((r && r.error) || t('失败'), 'warn');
 }
 
 async function importZip() {
-  if (!bridge || !bridge.svcPickZip) return toast(t('请使用桌面版 FuFumidi'), 'warn');
-  const picked = await bridge.svcPickZip();
+  if (!bridge || !bridge.rvcPickZip) return toast(t('请使用桌面版 FuFumidi'), 'warn');
+  const picked = await bridge.rvcPickZip();
   if (!picked || picked.canceled) return;
   busy.value = true;
-  const r = await bridge.svcImportZip(picked.path, {}).catch((e) => ({ ok: false, error: String(e && e.message || e) }));
+  const r = await bridge.rvcImportZip(picked.path, {}).catch((e) => ({ ok: false, error: String(e && e.message || e) }));
   busy.value = false;
   if (r && r.ok) { toast(t('已导入') + '：' + r.model.name, 'ok'); await refresh(); await probe(r.model.id); }
   else toast((r && r.error) || t('失败'), 'warn');
@@ -117,18 +117,18 @@ async function importZip() {
 
 /** 校正：让引擎读权重，把真实的 version / f0 / 采样率回写清单 */
 async function probe(id) {
-  if (!bridge || !bridge.svcProbe) return;
-  const r = await bridge.svcProbe(id).catch(() => null);
+  if (!bridge || !bridge.rvcProbe) return;
+  const r = await bridge.rvcProbe(id).catch(() => null);
   if (r && r.ok) {
     if (r.patched && Object.keys(r.patched).length) toast(t('校正完成') + '：' + JSON.stringify(r.patched), 'ok');
     await refresh();
   }
-  // 失败不弹错：环境没装 SVC 推理包时 probe 必然失败，这不该打扰用户
+  // 失败不弹错：环境没装 RVC 推理包时 probe 必然失败，这不该打扰用户
 }
 
 async function remove(m) {
   if (!window.confirm(t('删除') + '「' + m.name + '」？' + (m.external ? '（' + t('引用式导入：删除只注销条目，不会删你的原文件') + '）' : ''))) return;
-  const r = await bridge.svcRemove(m.id).catch(() => null);
+  const r = await bridge.rvcRemove(m.id).catch(() => null);
   if (r && r.ok) { toast(t('已删除'), 'ok'); await refresh(); }
   else toast((r && r.error) || t('删除失败'), 'warn');
 }
@@ -136,7 +136,7 @@ async function remove(m) {
 function openCatalogPage() {
   const site = (catalog.value && catalog.value.repos && catalog.value.repos[0] && catalog.value.repos[0].site)
     || 'https://www.modelscope.cn/models/aihobbyist/RVC_Model_Collection';
-  try { if (bridge.svcOpenCatalogPage) bridge.svcOpenCatalogPage(site); else window.open(site, '_blank'); } catch (e) {}
+  try { if (bridge.rvcOpenCatalogPage) bridge.rvcOpenCatalogPage(site); else window.open(site, '_blank'); } catch (e) {}
 }
 
 onMounted(async () => { await refresh(); await loadCatalog(); });

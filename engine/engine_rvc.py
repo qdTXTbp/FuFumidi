@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
-"""翻唱音色引擎（SVC）：把一段人声换成目标音色。
+"""翻唱音色引擎（RVC）：把一段人声换成目标音色。
 
-    python engine_svc.py probe   --model <模型目录>
-    python engine_svc.py convert <输入.wav> --model <模型目录> --out <输出.wav> [参数]
+    python engine_rvc.py probe   --model <模型目录>
+    python engine_rvc.py convert <输入.wav> --model <模型目录> --out <输出.wav> [参数]
 
 分工：
   probe    读权重，把**真实**的 version / f0 / 采样率说出来（回写 model.json）
   convert  整轨变声：分块 → 编码 → f0 → 检索 → 合成 → 拼接
 
 ★ 本文件是**骨架**：协议、参数、分块、断点与依赖自检都已就位；
-  真正的 RVC 推理照搬上游（engine/svc/vendor/rvc/，MIT），没就位时**如实报错**，
+  真正的 RVC 推理照搬上游（engine/rvc/vendor/rvc/，MIT），没就位时**如实报错**，
   绝不为了「看起来能跑」而假装成功 —— 返回 ok:false + 退出码 0（与全引擎一致）。
 
 ★ 探测值只是候选：权重里真正写着什么只有加载才知道，所以 probe 永远以权重为准。
@@ -23,7 +23,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-VENDOR_RVC = os.path.join(_HERE, 'svc', 'vendor', 'rvc')
+VENDOR_RVC = os.path.join(_HERE, 'rvc', 'vendor', 'rvc')
 
 
 def emit_prog(percent, stage='', extra=None):
@@ -70,9 +70,9 @@ def missing_hint(d):
     if not d.get('soundfile'):
         miss.append('soundfile')
     if miss:
-        return 'SVC 推理环境未就绪：缺 %s。请在「加速包」里安装 SVC 推理包（kind=svc）。' % '、'.join(miss)
+        return 'RVC 推理环境未就绪：缺 %s。请在「加速包」里安装 RVC 推理包（kind=rvc）。' % '、'.join(miss)
     if not d.get('vendor_rvc'):
-        return 'RVC 推理代码未就位（engine/svc/vendor/rvc）：本轮先做骨架，尚未接入实际推理。'
+        return 'RVC 推理代码未就位（engine/rvc/vendor/rvc）：本轮先做骨架，尚未接入实际推理。'
     return ''
 
 
@@ -145,7 +145,7 @@ def cmd_probe(a):
 def cmd_convert(a):
     """整轨变声：读音频 → 加载模型/HuBERT → 分段合成 → 写出。
 
-    推理全部走 `svc/rvc.py` → vendor 的上游代码；这里只负责协议、进度与**如实报错**。
+    推理全部走 `rvc/rvc.py` → vendor 的上游代码；这里只负责协议、进度与**如实报错**。
     """
     d = deps()
     hint = missing_hint(d)
@@ -164,7 +164,7 @@ def cmd_convert(a):
     emit_prog(5, '分块', {'parts': n, 'chunk_sec': chunk})
     if not d.get('vendor_rvc'):
         # 推理代码没就位 —— 说清楚，别装成功（不能拿 faiss 那类降级提示顶替）
-        emit_result({'ok': False, 'error': 'RVC 推理代码未就位（engine/svc/vendor/rvc）：请先同步上游 vendor 代码。',
+        emit_result({'ok': False, 'error': 'RVC 推理代码未就位（engine/rvc/vendor/rvc）：请先同步上游 vendor 代码。',
                      'deps': d, 'warnings': dep_warnings(d),
                      'planned': {'parts': n, 'chunk_sec': chunk, 'seconds': round(total, 1)}})
         return 0
@@ -174,7 +174,7 @@ def cmd_convert(a):
         emit_result({'ok': False, 'error': '模型目录里没有权重（.pth / .pt）：%s' % model_dir})
         return 0
     try:
-        import svc.rvc as RVC
+        import rvc.rvc as RVC
     except Exception as e:                               # noqa: BLE001
         emit_result({'ok': False, 'error': '加载 RVC 推理适配层失败：%s' % str(e)[:200], 'deps': d})
         return 0

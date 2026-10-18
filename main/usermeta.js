@@ -24,7 +24,7 @@ const pathMod = require('path');
 
 const SCHEMA_VERSION = 1;
 /** 允许的 kind：白名单 + 拒绝。前端传错 kind 时不写盘，免得变成静默丢数据。 */
-const KINDS = ['model', 'utau', 'ds', 'sf', 'voice', 'svc'];
+const KINDS = ['model', 'utau', 'ds', 'sf', 'voice', 'rvc'];
 const STR_FIELDS = ['name', 'author', 'source', 'category'];
 const MAX_TAGS = 24;
 
@@ -151,16 +151,16 @@ function createUserMeta(opts) {
 
 /** 主进程注册：所有 handler 返回 { ok, ... }，前端不必靠猜错误。 */
 function registerUserMetaIpc({ ipcMain }) {
-  const svc = createUserMeta({
+  const rvc = createUserMeta({
     root: () => require('./paths').dataRoot(),
     onCorrupt: (bak, e) => console.error('[usermeta] 元数据文件解析失败，已另存为 ' + bak + '：' + (e && e.message)),
   });
-  ipcMain.handle('usermeta:list', async () => ({ ok: true, items: svc.list(), path: svc.filePath() }));
-  ipcMain.handle('usermeta:set', async (_e, kind, id, patch) => svc.setItem(kind, id, patch));
-  ipcMain.handle('usermeta:remove', async (_e, kind, id) => svc.removeItem(kind, id));
-  ipcMain.handle('usermeta:reorder', async (_e, kind, ids) => svc.reorder(kind, ids));
-  ipcMain.handle('usermeta:pin', async (_e, kind, id, pinned) => svc.setItem(kind, id, { pinned: !!pinned }));
-  return svc;
+  ipcMain.handle('usermeta:list', async () => ({ ok: true, items: rvc.list(), path: rvc.filePath() }));
+  ipcMain.handle('usermeta:set', async (_e, kind, id, patch) => rvc.setItem(kind, id, patch));
+  ipcMain.handle('usermeta:remove', async (_e, kind, id) => rvc.removeItem(kind, id));
+  ipcMain.handle('usermeta:reorder', async (_e, kind, ids) => rvc.reorder(kind, ids));
+  ipcMain.handle('usermeta:pin', async (_e, kind, id, pinned) => rvc.setItem(kind, id, { pinned: !!pinned }));
+  return rvc;
 }
 
 module.exports = { createUserMeta, registerUserMetaIpc, SCHEMA_VERSION, KINDS };

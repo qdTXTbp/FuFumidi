@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""翻唱变声引擎（engine_svc.py）骨架 —— 先把「诚实」钉死。
+"""翻唱变声引擎（engine_rvc.py）骨架 —— 先把「诚实」钉死。
 
 钉这些不是为了凑数，是因为这类**环境未就绪**的路径最容易被人顺手写成「假装成功」：
 
-  · 缺 torch / soundfile → 必须明确说「未就绪 + 去装 kind=svc 包」，不许静默返回空结果；
+  · 缺 torch / soundfile → 必须明确说「未就绪 + 去装 kind=rvc 包」，不许静默返回空结果；
   · 没接 RVC 推理代码 → 必须说「未就位」，不许产出一个全静音的 wav 冒充成品；
   · probe 必须以**权重里真实写着的值**为准（version / f0 / 采样率），因为清单里的
     探测值只是候选 —— 采样率错了整首走调。
@@ -20,7 +20,7 @@ ENGINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ENGINE not in sys.path:
     sys.path.insert(0, ENGINE)
 
-import engine_svc as ES                                   # noqa: E402
+import engine_rvc as ES                                   # noqa: E402
 
 
 class _Rec:
@@ -74,7 +74,7 @@ class _Args:
 # ---------------------------------------------------------------- 依赖自检的话术
 def test_missing_hint_covers_fatal_only():
     """致命提示里只放「跑不了」的原因；faiss 那种能跑但会降级的，不许混进来当错误。"""
-    assert 'kind=svc' in ES.missing_hint({'torch': False, 'soundfile': False, 'faiss': False, 'vendor_rvc': False})
+    assert 'kind=rvc' in ES.missing_hint({'torch': False, 'soundfile': False, 'faiss': False, 'vendor_rvc': False})
     assert '未就绪' in ES.missing_hint({'torch': False, 'soundfile': True, 'faiss': True, 'vendor_rvc': True})
     # 依赖齐了但推理代码没就位
     assert '未就位' in ES.missing_hint({'torch': True, 'soundfile': True, 'faiss': True, 'vendor_rvc': False})

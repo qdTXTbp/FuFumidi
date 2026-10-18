@@ -9,7 +9,7 @@ import Icon from '../components/Icon.vue';
 import DiffSingerCatalog from './DiffSingerCatalog.vue';
 import ModelCatalog from '../components/models/ModelCatalog.vue';
 import UtauVoicebankStore from '../components/utau/UtauVoicebankStore.vue';
-import SvcModelPanel from '../components/cover/SvcModelPanel.vue';
+import RvcModelPanel from '../components/cover/RvcModelPanel.vue';
 import { useAppStore } from '../stores/app';
 import { useVoicebankStore } from '../stores/voicebank';
 import { t } from '../core/i18n.js';
@@ -36,31 +36,31 @@ const TABS = computed(() => [
 const TUNING_SUBS = computed(() => [
   { id: 'ds', label: t('声库 · DiffSinger'), ic: 'spark' },
   { id: 'utau', label: t('声库 · UTAU'), ic: 'mic' },
-  // 翻唱模型（SVC）：用户导入的角色权重 —— 应用不内置也不代下载（CC-BY-NC-4.0）。
-  // 落点 <模型目录>/svc/，翻唱页的音色下拉就读这里；GPT-SoVITS 音色已随路线调整删除。
-  { id: 'svc', label: t('翻唱模型'), ic: 'mic' },
+  // 翻唱模型（RVC）：用户导入的角色权重 —— 应用不内置也不代下载（CC-BY-NC-4.0）。
+  // 落点 <模型目录>/rvc/，翻唱页的音色下拉就读这里；GPT-SoVITS 音色已随路线调整删除。
+  { id: 'rvc', label: t('RVC 模型'), ic: 'mic' },
   { id: 'models', label: t('调教模型'), ic: 'box' },
 ]);
 /** 二级分类里哪一个是卡片网格（其余是独立目录组件 / 独立面板，没有 kind） */
 const SUB_KIND = { models: 'tuning' };
-// 深链：?m=<页签或二级 id> 直接落到某个分类（翻唱页「去导入模型」带 ?m=svc 过来）
+// 深链：?m=<页签或二级 id> 直接落到某个分类（翻唱页「去导入模型」带 ?m=rvc 过来）
 const route = useRoute();
 const curTab = ref('transcribe');
 const curSub = ref('ds');
 const deepLink = String(route.query.m || '');
-if (deepLink === 'svc') { curTab.value = 'tuning'; curSub.value = 'svc'; }
+if (deepLink === 'rvc') { curTab.value = 'tuning'; curSub.value = 'rvc'; }
 else if (['ds', 'utau', 'models'].includes(deepLink)) { curTab.value = 'tuning'; curSub.value = deepLink; }
 /** 网格实际按哪个 kind 过滤：调教下看二级，其余看顶层 */
 const listKind = computed(() => (curTab.value === 'tuning' ? (SUB_KIND[curSub.value] || '') : curTab.value));
 const showDs = computed(() => curTab.value === 'tuning' && curSub.value === 'ds');
 const showUtau = computed(() => curTab.value === 'tuning' && curSub.value === 'utau');
-const showSvc = computed(() => curTab.value === 'tuning' && curSub.value === 'svc');
+const showRvc = computed(() => curTab.value === 'tuning' && curSub.value === 'rvc');
 const showGrid = computed(() => (curTab.value === 'tuning' ? !!SUB_KIND[curSub.value] : true));
 /** 「调教模型」页用共享目录壳（与两个声库页同形），走 ModelCatalog 而不是通用网格 */
 const isTuningGrid = computed(() => curTab.value === 'tuning' && !!SUB_KIND[curSub.value]);
 /** 二级页 → 用户元数据的 kind（白名单见 main/usermeta.js 的 KINDS）。
     注意不是 SUB_KIND：SUB_KIND 是 model:list 的 kind，这里是「用户改动的归属」。 */
-const META_KIND = { svc: 'svc', models: 'model' };
+const META_KIND = { rvc: 'rvc', models: 'model' };
 const metaKind = computed(() => META_KIND[curSub.value] || 'model');
 
 /* ---------------- 模型列表与进度 ---------------- */
@@ -82,7 +82,7 @@ function countFor(tb) {
 }
 function cnt(n) { return n == null ? '…' : String(n); }
 
-function kindIcon(m) { return (m.kind === 'separate' || m.kind === 'tts' || m.kind === 'svc') ? 'mic' : (m.kind === 'transcribe') ? 'music' : 'box'; }
+function kindIcon(m) { return (m.kind === 'separate' || m.kind === 'tts' || m.kind === 'rvc') ? 'mic' : (m.kind === 'transcribe') ? 'music' : 'box'; }
 /** kind → 给用户看的分类名（详情抽屉用）。
  *  ★ 新增 kind **必须**来这里加一行 —— 漏了会把它显示成「修复工具」，
  *    分类名写错比不显示更糟。 */
@@ -90,7 +90,7 @@ function kindLabel(k) {
   if (k === 'separate') return t('人声分离');
   if (k === 'transcribe') return t('转录模型');
   if (k === 'tts') return t('音色');
-  if (k === 'svc') return t('翻唱模型');
+  if (k === 'rvc') return t('RVC 模型');
   if (k === 'tuning') return t('调教模型');
   return t('修复工具');
 }
@@ -223,9 +223,9 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
       <UtauVoicebankStore />
     </div>
 
-    <!-- 翻唱模型（SVC）：导入 / 已导入 / 在线目录，自带面板 -->
-    <div v-else-if="showSvc" class="vm-svc">
-      <SvcModelPanel />
+    <!-- 翻唱模型（RVC）：导入 / 已导入 / 在线目录，自带面板 -->
+    <div v-else-if="showRvc" class="vm-rvc">
+      <RvcModelPanel />
     </div>
 
     <!-- 调教模型：与两个声库页**同一套**目录壳（来源条 → 搜索筛选 → 分组 → 卡片网格） -->
@@ -325,7 +325,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 /* UTAU 声库页签：声库卡片网格自带样式，这里只给一层容器间距 */
 .vm-utau { margin-top: 4px; }
 /* 翻唱模型页签：面板自带间距 */
-.vm-svc { margin-top: 4px; }
+.vm-rvc { margin-top: 4px; }
 
 /* ===== 页签 ===== */
 /*** 页签：与全局 .btn/.tab 一致的轻量 pill 风格，去掉厚重渐变与强投影 ***/

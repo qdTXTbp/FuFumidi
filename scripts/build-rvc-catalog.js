@@ -1,6 +1,6 @@
-// 生成翻唱模型目录快照（SVC 模型目录）：ModelScope 两个社区仓库 → main/svc-catalog.json
+// 生成翻唱模型目录快照（RVC 模型目录）：ModelScope 两个社区仓库 → main/rvc-catalog.json
 //
-//   node scripts/build-svc-catalog.js
+//   node scripts/build-rvc-catalog.js
 //
 // ★ 目录只是「有哪些模型、在哪、多大」的索引，**不含权重**。应用不内置一键下载
 //   （两个仓库都是 CC-BY-NC-4.0：禁商用、必须署名训练者 —— 分发不在我们这边），
@@ -127,7 +127,7 @@ async function main() {
     try {
       files = await fileTree(repo);
     } catch (e) {
-      console.warn('[svc-catalog] 拉取失败，跳过：' + repo.name + ' → ' + e.message);
+      console.warn('[rvc-catalog] 拉取失败，跳过：' + repo.name + ' → ' + e.message);
       continue;
     }
     const list = repo.key === 'rvc' ? buildRvc(files) : buildDdsp(files);
@@ -137,7 +137,7 @@ async function main() {
       license: repo.license, commercial: repo.commercial, credits: repo.credits,
       supported: repo.supported !== false, count: list.length,
     });
-    console.log('[svc-catalog] ' + repo.name + '：' + list.length + ' 个模型');
+    console.log('[rvc-catalog] ' + repo.name + '：' + list.length + ' 个模型');
   }
   const langs = [];
   for (const l of LANGS) if (models.some((m) => m.lang === l)) langs.push(l);
@@ -148,10 +148,10 @@ async function main() {
     note: '目录只做索引，不含权重。CC-BY-NC-4.0：禁止商用，必须署名训练者。',
     repos, langs, works, models,
   };
-  const dest = path.join(__dirname, '..', 'main', 'svc-catalog.json');
+  const dest = path.join(__dirname, '..', 'main', 'rvc-catalog.json');
   fs.writeFileSync(dest, JSON.stringify(catalog), 'utf8');
   const kb = (fs.statSync(dest).size / 1024).toFixed(0);
-  console.log('[svc-catalog] → ' + dest + '（' + models.length + ' 个模型，' + kb + ' KB）');
+  console.log('[rvc-catalog] → ' + dest + '（' + models.length + ' 个模型，' + kb + ' KB）');
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

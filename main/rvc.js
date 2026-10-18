@@ -1,18 +1,18 @@
 // ============================================================
-// 翻唱模型（SVC）注册表：导入 / 列出 / 删除 / 目录
+// 翻唱模型（RVC）注册表：导入 / 列出 / 删除 / 目录
 // ------------------------------------------------------------
 // 音色 = **用户导入的模型**，应用不内置、不代下载：
 //
 //   · 两个社区仓库（ModelScope aihobbyist/RVC_Model_Collection、ACG-DDSP-Model）
 //     都是 **CC-BY-NC-4.0（禁商用、必须署名训练者）**，分发不在我们这边。
-//     目录只做索引（main/svc-catalog.json，脚本 scripts/build-svc-catalog.js 生成），
+//     目录只做索引（main/rvc-catalog.json，脚本 scripts/build-rvc-catalog.js 生成），
 //     界面把用户送到 ModelScope 页面，下载由用户自己完成，再用「导入」放进应用。
 //
 //   · 导入三种形态：选文件夹（登记引用，不复制）/ 逐个选文件（复制到应用目录）/ 导入 zip（解压到应用目录）。
 //     ★ 引用式导入**删除时只注销条目，不删用户的原文件** —— 那可能是他的下载目录。
 //
 // 每个模型一份 model.json（清单）。目录里的值只是候选，真正的 version/f0/采样率
-// 由引擎加载权重后 probe 出来并回写（见 engine/engine_svc.py probe）。
+// 由引擎加载权重后 probe 出来并回写（见 engine/engine_rvc.py probe）。
 // ============================================================
 'use strict';
 const path = require('path');
@@ -20,11 +20,11 @@ const fs = require('fs');
 const Paths = require('./paths');
 
 /* ---------------- 目录与清单 ---------------- */
-function svcRoot() {
-  return path.join(Paths.modelsDir(), 'svc');
+function rvcRoot() {
+  return path.join(Paths.modelsDir(), 'rvc');
 }
 function catalogCacheFile() {
-  return path.join(Paths.dataRoot(), 'svc-catalog.json');
+  return path.join(Paths.dataRoot(), 'rvc-catalog.json');
 }
 function modelsDir() {
   return Paths.modelsDir();
@@ -97,7 +97,7 @@ function fileState(m) {
 
 /* ---------------- 列出 ---------------- */
 function list() {
-  const root = svcRoot();
+  const root = rvcRoot();
   const out = [];
   for (const name of readdir(root)) {
     const dir = path.join(root, name);
@@ -114,7 +114,7 @@ function list() {
       external: !String(dir).startsWith(root),   // 引用式：指向应用目录之外
     });
   }
-  // 引用式导入的模型不落在 svcRoot 下，单独登记在 index.json 里
+  // 引用式导入的模型不落在 rvcRoot 下，单独登记在 index.json 里
   const idx = readJson(path.join(root, 'index.json')) || {};
   for (const [id, m] of Object.entries(idx.models || {})) {
     if (out.some((x) => x.id === id)) continue;
@@ -134,7 +134,7 @@ function slug(s) {
   return String(s || '').trim().replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, '_').slice(0, 60) || 'model';
 }
 function uniqueId(base) {
-  const root = svcRoot();
+  const root = rvcRoot();
   let id = base, i = 2;
   while (hasDir(path.join(root, id)) || find(id)) { id = base + '-' + (i++); }
   return id;
@@ -142,7 +142,7 @@ function uniqueId(base) {
 
 /** 登记一份清单：落在应用目录里的写 model.json，引用式的写 index.json */
 function saveModel(m) {
-  const root = svcRoot();
+  const root = rvcRoot();
   fs.mkdirSync(root, { recursive: true });
   if (String(m.dir || '').startsWith(root)) {
     writeJson(path.join(m.dir, 'model.json'), m);
@@ -187,12 +187,12 @@ function importFolder(dir, opts) {
   return { ok: true, model: m, detected: d };
 }
 
-/** 逐个选文件 + 手填元数据：文件复制到 <模型目录>/svc/<id>/ */
+/** 逐个选文件 + 手填元数据：文件复制到 <模型目录>/rvc/<id>/ */
 function importFiles(files, opts) {
   const o = opts || {};
   const picked = Object.entries(files || {}).filter(([, v]) => !!v);
   if (!picked.length) return { ok: false, error: '没有选中任何文件' };
-  const root = svcRoot();
+  const root = rvcRoot();
   const name = o.name || slug(path.basename(picked[0][1]).replace(/\.[^.]+$/, ''));
   const id = uniqueId(slug(o.id || name));
   const dest = path.join(root, id);
@@ -231,7 +231,7 @@ function importZip(zipPath, opts) {
   if (!hasFile(zipPath)) return { ok: false, error: '压缩包不存在：' + zipPath };
   let AdmZip;
   try { AdmZip = require('adm-zip'); } catch (e) { return { ok: false, error: '缺少 adm-zip' }; }
-  const root = svcRoot();
+  const root = rvcRoot();
   const base = slug(path.basename(zipPath).replace(/\.(zip|7z|rar)$/i, ''));
   const id = uniqueId(slug(o.id || base));
   const dest = path.join(root, id);
@@ -258,7 +258,7 @@ function importZip(zipPath, opts) {
 function remove(id) {
   const m = find(id);
   if (!m) return { ok: false, error: 'not found' };
-  const root = svcRoot();
+  const root = rvcRoot();
   try {
     if (String(m.dir || '').startsWith(root)) fs.rmSync(m.dir, { recursive: true, force: true });
     const idx = readJson(path.join(root, 'index.json'));
@@ -274,7 +274,7 @@ function remove(id) {
 
 /* ---------------- 目录（ModelScope 索引快照） ---------------- */
 function builtinCatalog() {
-  try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'svc-catalog.json'), 'utf8')); }
+  try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'rvc-catalog.json'), 'utf8')); }
   catch (e) { return { generated: '', repos: [], langs: [], works: [], models: [] }; }
 }
 /** 内置快照 + 在线刷新过的缓存（缓存新就用缓存） */
@@ -299,7 +299,7 @@ async function refreshCatalog(net) {
   });
   const j = JSON.parse(body);
   const files = ((j && j.Data && j.Data.Files) || []).filter((f) => f.Type === 'blob');
-  // 与 scripts/build-svc-catalog.js 同一套规则（避免两处逻辑走偏）
+  // 与 scripts/build-rvc-catalog.js 同一套规则（避免两处逻辑走偏）
   const byDir = new Map();
   for (const f of files) {
     if (!/\.pth$/i.test(f.Name)) continue;
@@ -351,23 +351,23 @@ function noteLabel(m) {
 }
 
 /* ---------------- IPC ---------------- */
-function registerSvcIpc({ ipcMain, BrowserWindow, path: _path, fs: _fs, dialog, shell, spawnEngine, engineEnv, net }) {
-  ipcMain.handle('svc:list', async () => {
-    try { return { ok: true, models: list(), root: svcRoot() }; }
+function registerRvcIpc({ ipcMain, BrowserWindow, path: _path, fs: _fs, dialog, shell, spawnEngine, engineEnv, net }) {
+  ipcMain.handle('rvc:list', async () => {
+    try { return { ok: true, models: list(), root: rvcRoot() }; }
     catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
-  ipcMain.handle('svc:catalog', async () => {
+  ipcMain.handle('rvc:catalog', async () => {
     try { return { ok: true, catalog: catalog() }; }
     catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
-  ipcMain.handle('svc:refreshCatalog', async () => {
+  ipcMain.handle('rvc:refreshCatalog', async () => {
     try { return await refreshCatalog(net); }
     catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
-  ipcMain.handle('svc:pickFolder', async (evt) => {
+  ipcMain.handle('rvc:pickFolder', async (evt) => {
     const win = BrowserWindow.fromWebContents(evt.sender);
     const r = await dialog.showOpenDialog(win, { title: '选择模型目录（含 .pth 权重）', properties: ['openDirectory'] });
     if (r.canceled || !r.filePaths.length) return { canceled: true };
@@ -376,7 +376,7 @@ function registerSvcIpc({ ipcMain, BrowserWindow, path: _path, fs: _fs, dialog, 
     return { ok: true, dir, detected: d };
   });
 
-  ipcMain.handle('svc:pickFiles', async (evt) => {
+  ipcMain.handle('rvc:pickFiles', async (evt) => {
     const win = BrowserWindow.fromWebContents(evt.sender);
     const r = await dialog.showOpenDialog(win, {
       title: '选择模型文件（.pth 权重 / .index / config.yaml）',
@@ -387,7 +387,7 @@ function registerSvcIpc({ ipcMain, BrowserWindow, path: _path, fs: _fs, dialog, 
     return { ok: true, files: r.filePaths };
   });
 
-  ipcMain.handle('svc:pickZip', async (evt) => {
+  ipcMain.handle('rvc:pickZip', async (evt) => {
     const win = BrowserWindow.fromWebContents(evt.sender);
     const r = await dialog.showOpenDialog(win, {
       title: '选择模型压缩包', properties: ['openFile'],
@@ -397,25 +397,25 @@ function registerSvcIpc({ ipcMain, BrowserWindow, path: _path, fs: _fs, dialog, 
     return { ok: true, path: r.filePaths[0] };
   });
 
-  ipcMain.handle('svc:importFolder', async (_e, dir, opts) => {
+  ipcMain.handle('rvc:importFolder', async (_e, dir, opts) => {
     try { return importFolder(dir, opts || {}); } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
-  ipcMain.handle('svc:importFiles', async (_e, files, opts) => {
+  ipcMain.handle('rvc:importFiles', async (_e, files, opts) => {
     try { return importFiles(files || {}, opts || {}); } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
-  ipcMain.handle('svc:importZip', async (_e, p, opts) => {
+  ipcMain.handle('rvc:importZip', async (_e, p, opts) => {
     try { return importZip(p, opts || {}); } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
-  ipcMain.handle('svc:remove', async (_e, id) => remove(id));
+  ipcMain.handle('rvc:remove', async (_e, id) => remove(id));
 
   /** probe：让引擎读权重，把真实的 version / f0 / 采样率回写清单 */
-  ipcMain.handle('svc:probe', async (_e, id) => {
+  ipcMain.handle('rvc:probe', async (_e, id) => {
     const m = find(id);
     if (!m) return { ok: false, error: '模型不存在：' + id };
     return new Promise((resolve) => {
       let out = '';
       spawnEngine(['probe', '--model', String(m.dir)], {
-        script: 'engine_svc.py',
+        script: 'engine_rvc.py',
         timeoutMs: 5 * 60 * 1000,
         env: engineEnv({}),
         onLog: (line) => { out += line + '\n'; },
@@ -438,7 +438,7 @@ function registerSvcIpc({ ipcMain, BrowserWindow, path: _path, fs: _fs, dialog, 
     });
   });
 
-  ipcMain.handle('svc:openCatalogPage', async (_e, url) => {
+  ipcMain.handle('rvc:openCatalogPage', async (_e, url) => {
     try { if (url) await shell.openExternal(String(url)); return { ok: true }; }
     catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
@@ -447,10 +447,10 @@ function registerSvcIpc({ ipcMain, BrowserWindow, path: _path, fs: _fs, dialog, 
 }
 
 module.exports = {
-  svcRoot, catalogCacheFile, modelsDir,
+  rvcRoot, catalogCacheFile, modelsDir,
   list, find, detect, fileState,
   importFolder, importFiles, importZip, remove,
   catalog, refreshCatalog, builtinCatalog,
   archLabel, useLabel, noteLabel,
-  registerSvcIpc,
+  registerRvcIpc,
 };

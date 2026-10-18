@@ -4,17 +4,17 @@
 // 引擎侧只有一份实现：engine/engine_cover.py（CLI 与界面走同一条路，
 // 分离又复用「音频处理」面板同一个入口 music2midi.py separate）。
 //
-// 音色只有一条通道：**导入的 SVC 模型**（engine/engine_svc.py convert）。
+// 音色只有一条通道：**导入的 RVC 模型**（engine/engine_rvc.py convert）。
 // 旧的两条（GPT-SoVITS 逐句参考重合成、DiffSinger 声库接 RVC）已删除 ——
-// SVC 直接把原唱人声换成目标音色，旋律/节奏/咬字本来就来自原唱，
+// RVC 直接把原唱人声换成目标音色，旋律/节奏/咬字本来就来自原唱，
 // 不需要歌词也不需要音符表（扒谱环节整段去掉）。
 //
-// 模型不内置、不代下载（CC-BY-NC-4.0），由用户导入：见 main/svc.js。
+// 模型不内置、不代下载（CC-BY-NC-4.0），由用户导入：见 main/rvc.js。
 // ============================================================
 'use strict';
 
 const Paths = require('./paths');
-const SVC = require('./svc');
+const RVC = require('./rvc');
 
 function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spawnEngine,
                             engineEnv, readSettings }) {
@@ -28,11 +28,11 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
 
   function hasFile(p) { try { return !!p && fs.statSync(p).isFile(); } catch (e) { return false; } }
 
-  /* ---------------- 音色 = 导入的 SVC 模型 ---------------- */
-  function svcSingers() {
-    return SVC.list().filter((m) => m.engine === 'rvc').map((m) => ({
-      kind: 'svc', id: m.id, name: m.name, dir: m.dir,
-      ready: m.ready, note: SVC.noteLabel(m), arch: SVC.archLabel(m),
+  /* ---------------- 音色 = 导入的 RVC 模型 ---------------- */
+  function rvcSingers() {
+    return RVC.list().filter((m) => m.engine === 'rvc').map((m) => ({
+      kind: 'rvc', id: m.id, name: m.name, dir: m.dir,
+      ready: m.ready, note: RVC.noteLabel(m), arch: RVC.archLabel(m),
       sr: m.sr || 0, lang: m.lang || '', work: m.work || '',
     }));
   }
@@ -41,11 +41,11 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
 
   ipcMain.handle('cover:env', async () => {
     return { ok: true, dataRoot: Paths.dataRoot(), modelsRoot: Paths.modelsDir(),
-      svcRoot: SVC.svcRoot(), singers: svcSingers().length };
+      rvcRoot: RVC.rvcRoot(), singers: rvcSingers().length };
   });
 
   ipcMain.handle('cover:singers', async () => {
-    try { return { ok: true, svc: svcSingers() }; }
+    try { return { ok: true, rvc: rvcSingers() }; }
     catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   });
 
@@ -96,9 +96,9 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
     const id = 'cover' + (++seq);
     // ★ 子命令必须在前：engine_cover.py 是 `{analyze,convert,mix,all}` 子命令式 CLI，
     //   少了这个 all，argparse 会把音频路径当成子命令名直接报错
-    const args = ['all', o.audio, '--outdir', o.outdir, '--svc-model', String(singer.id)];
+    const args = ['all', o.audio, '--outdir', o.outdir, '--rvc-model', String(singer.id)];
     if (o.name) args.push('--name', String(o.name));
-    // ---- SVC 参数（常用 + 高级，全部走引擎，界面不自己实现任何 DSP）。
+    // ---- RVC 参数（常用 + 高级，全部走引擎，界面不自己实现任何 DSP）。
     // 注意：filter-radius 是**老版 RVC** 的参数，当前上游已不存在，别加回来
     // （上游没有的参数就不给旋钮 —— 加了个点了没反应的比不加更糟）。
     const num = (v, d) => (v == null || v === '' ? d : Number(v));
@@ -154,7 +154,7 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
     return { ok: true, id };
   });
 
-  return { svcSingers };
+  return { rvcSingers };
 }
 
 module.exports = { registerCoverIpc };
