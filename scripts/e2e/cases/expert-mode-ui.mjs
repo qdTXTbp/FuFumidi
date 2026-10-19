@@ -8,9 +8,10 @@ const MINI = Array.from(encodeMidi([{
 
 export default async function (app) {
   await app.waitFor('!!(window.__fufumidiE2E)', { timeout: 20000, message: 'E2E 测试钩子已注册' });
-  // 1) 普通模式：翻唱导航与资源中心 OMR/GPU 区块隐藏
+  // 1) 普通模式：资源中心 OMR/GPU 区块隐藏
+  //    翻唱导航自 6.1.0 起常驻（RVC 翻唱是主线功能，不再收进专家模式）。
   const coverTab = await app.eval('!!document.querySelector("[data-view=cover]")');
-  app.assert(coverTab === false, '普通模式下翻唱导航隐藏');
+  app.assert(coverTab === true, '普通模式下翻唱导航常驻（RVC 主线）');
   await app.navigate('#/resources?tab=resources');
   await app.waitFor('(() => { const b = document.querySelector(".rc-tab.on"); return !!b && b.innerText.indexOf("资源管理") >= 0; })()', { timeout: 25000, message: '资源管理页签激活' });
   await new Promise((r) => setTimeout(r, 400));
