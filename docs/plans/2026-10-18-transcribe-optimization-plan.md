@@ -178,3 +178,4 @@
 - §4 P2：`engine_gpu` 通过 nvidia-smi 检测驱动版本/VRAM/Sysmem Fallback 支持（≥536.40；≥546.01 可控制）；界面显示驱动与回退状态。
 - 统一内存实验：`engine/cuda_um_experiment.py` + IPC `gpu:unifiedMemoryExperiment` + 界面按钮；实测 cudaMallocManaged 64MB 成功（分配 ~259ms/主机写入 ~540ms），但 PyTorch 默认分配器不能直接用，未接入转录。
 - §3 音色稳定：`engine/timbre_stabilize.py` 把短命孤立乐器轨并入邻近主导轨，MuScriptor 预设默认开；`engine/tests/test_timbre_stabilize.py` 锁定行为。
+- §3 音色稳定预设：新增「MuScriptor · 音色稳定」（probe 锁定 + 5s + 缝合 + 短命轨后处理）；A/B 报告见 `docs/plans/2026-10-18-muscriptor-preset-ab.md`，已按结果固化 MuScriptor 默认。

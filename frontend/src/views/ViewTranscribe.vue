@@ -130,7 +130,11 @@ const MS_GROUPS = [
 /** 传给引擎的取值：'voice,drums'（手动硬约束）或 'none'（不限定）。
  *  'none' 必须显式送出去，不能靠"不发这个字段"表示不限定 —— 引擎的缺省语义是"不限制"，
  *  但历史上把"没给"当成过 auto，显式送值才不会再出歧义。 */
-const msInstrValue = computed(() => (msMode.value === 'limit' ? msGroups.value.join(',') : 'none'));
+const msInstrValue = computed(() => {
+  if (msMode.value === 'limit') return msGroups.value.join(',');
+  if (msMode.value === 'probe') return 'probe';
+  return 'none';
+});
 const busy = ref(false);
 const done = ref(false);
 const progress = ref(0);
@@ -583,9 +587,10 @@ const showSpeedGroup = computed(() => mode.value === 'universal' && umodel.value
 // 两边名字必须逐字一致，否则网页版「切模型自动套默认」找不到预设。
 const WEB_MODEL_DEFAULTS = () => ({
   basic: 'Basic Pitch · 最优',
-  muscriptor_small: 'MuScriptor · 最优',
-  muscriptor_medium: 'MuScriptor · 最优',
-  muscriptor_large: 'MuScriptor · 最优',
+  // A/B 后固化：音色稳定（探测锁定 + 5s + 缝合 + 短命轨后处理）
+  muscriptor_small: 'MuScriptor · 音色稳定',
+  muscriptor_medium: 'MuScriptor · 音色稳定',
+  muscriptor_large: 'MuScriptor · 音色稳定',
   piano_pt: '钢琴 · 最优',
   aria: 'Aria-AMT · 最优',
   transkun: 'Transkun · 最优',
@@ -611,6 +616,10 @@ const WEB_BUILTIN_PRESETS = () => {
     { name: 'Basic Pitch · 最优', mode: 'universal', params: { ...basic } },
     { name: 'MuScriptor · 最优', mode: 'universal', params: { ...basic,
       model: 'muscriptor', model_size: 'medium', muscriptor_instruments: 'none',
+      temperature: 1.0, cfg_coef: 1.0, beam_size: 1, prelude_forcing: true,
+      timbre_stabilize: true, precision: 'fp32', segment_sec: 5 } },
+    { name: 'MuScriptor · 音色稳定', mode: 'universal', params: { ...basic,
+      model: 'muscriptor', model_size: 'medium', muscriptor_instruments: 'probe',
       temperature: 1.0, cfg_coef: 1.0, beam_size: 1, prelude_forcing: true,
       timbre_stabilize: true, precision: 'fp32', segment_sec: 5 } },
     { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt', segment_sec: 10 } },
@@ -1284,7 +1293,8 @@ function applyPresetParams(p, opts) {
   // MuScriptor 生成参数
   if (has('muscriptor_instruments') && typeof pr.muscriptor_instruments === 'string') {
     const v = pr.muscriptor_instruments.trim();
-    if (!v || v === 'none' || v === 'auto') { msMode.value = 'none'; }
+    if (!v || v === 'none') { msMode.value = 'none'; }
+    else if (v === 'probe' || v === 'auto') { msMode.value = 'probe'; }
     else {
       const groups = v.split(',').map((s) => s.trim()).filter((g) => MS_GROUPS.some((x) => x.id === g));
       if (groups.length) { msGroups.value = groups; msMode.value = 'limit'; }
@@ -2347,8 +2357,12 @@ onBeforeUnmount(() => {
               <select v-model="msMode">
                 <option value="none">{{ t('不限定（模型自由判定）') }}</option>
                 <option value="limit">{{ t('限定乐器组（硬约束）') }}</option>
+                <option value="probe">{{ t('自动探测并锁定（音色稳定）') }}</option>
               </select>
             </label>
+          </div>
+          <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe'" class="tr-slider-hint" data-guide="probe-lock">
+            {{ t('转录前先跑 instrument_probe 探测主乐器组，再作为硬约束；只留主要乐器、减少长尾误判（会增加一次预分析耗时）') }}
           </div>
           <div class="tr-switch" style="display:block" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'limit'">
             <div style="display:flex;flex-wrap:wrap;gap:var(--sp-2);max-height:150px;overflow:auto;padding:2px 0">

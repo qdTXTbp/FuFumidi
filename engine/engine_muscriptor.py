@@ -1033,6 +1033,19 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         import instrument_probe
         _mode, _groups = instrument_probe.parse_mode(params.get("muscriptor_instruments"))
         constrain = _groups if _mode == "limit" else None
+        if _mode == "probe":
+            # 「音色稳定」预设：先探测主乐器组，再作为硬约束（减少长尾乐器与跨块改判）
+            try:
+                _pr = instrument_probe.probe(model, wav_tmp, log=log_cb)
+                _groups = _pr.get("groups") or []
+                if _groups:
+                    constrain = _groups
+                    _log(log_cb, "预分析锁定乐器组（音色稳定）：" + " / ".join(_groups)
+                         + "（%s）" % _pr.get("reason", "ok"))
+                else:
+                    _log(log_cb, "预分析未得到可用乐器组（%s），本次不限制" % _pr.get("reason", "unknown"))
+            except Exception as _e:  # noqa: BLE001
+                _log(log_cb, "预分析失败，本次不限制：%s" % _e)
         if not constrain:
             _log(log_cb, "未限定乐器组：模型自由判定（同一段旋律可能被写成多种音色）")
         if constrain:

@@ -5831,6 +5831,8 @@ export const I18N_MAP = {
   '（当前转录结束后可切换）': ' (switchable after the current transcription ends)',
   ' 首（已完成曲目已加入：': ' tracks (finished tracks added to: ',
   '已删除的歌单': 'Deleted playlist',
+  '自动探测并锁定（音色稳定）': 'Auto-detect and lock (stable timbre)',
+  '转录前先跑 instrument_probe 探测主乐器组，再作为硬约束；只留主要乐器、减少长尾误判（会增加一次预分析耗时）': 'Run instrument_probe before transcription, then hard-constrain to the main instrument groups: keeps the primary instruments and reduces long-tail misclassification (adds a probe pass).',
   '驱动 ': 'Driver ',
   '共享显存回退：支持（驱动 ≥536.40；≥546.01 可按应用关闭）': 'Shared-memory fallback: supported (driver ≥536.40; ≥546.01 can disable it per app)',
   '共享显存回退：不支持（显存不足会直接报 OOM）': 'Shared-memory fallback: not supported (VRAM exhaustion fails with OOM)',

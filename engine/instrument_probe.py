@@ -105,8 +105,13 @@ def parse_mode(raw):
         groups = [s.strip() for s in str(raw or "").split(",") if s.strip()]
     if not groups:
         return ("none", [])
-    if len(groups) == 1 and groups[0].lower() in ("auto", "smart", "none", "off", "free", "-"):
+    if len(groups) == 1 and groups[0].lower() in ("none", "off", "free", "-"):
         return ("none", [])
+    # 'probe'（兼容旧 'auto'/'smart'）：转录前先探测主乐器组，再作为硬约束。
+    # 注：它不会单独解决「分块边界换音色」，需配合 segment_sec=5 + 跨块延音缝合 +
+    # timbre_stabilize（见「MuScriptor · 音色稳定」预设）。
+    if len(groups) == 1 and groups[0].lower() in ("probe", "auto", "smart"):
+        return ("probe", [])
     return ("limit", groups)
 
 
