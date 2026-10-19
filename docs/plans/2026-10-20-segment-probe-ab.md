@@ -4,7 +4,7 @@
 
 ## 做法
 
-- 固定 30/60s 分段；每段用**独立 small MuScriptor 探测器**（不是主模型）取 20s 代表窗口识别乐器组；
+- 固定 30/60s 分段；每段用**专用 AudioSet 音频标签模型**（zipformer-small，CPU；置信度不足时回退 MuScriptor-small）取 20s 代表窗口识别乐器组；
 - 跨段并集：全局出现 ≥2 段的组保留，本段允许组 = 全局组 ∪ 本段 ∪ 相邻段（最多 12 组）；
 - 逐段调用主模型并硬约束，事件时间平移后复用跨块延音缝合/音色稳定后处理；
 - UI：MuScriptor → 自动探测并锁定 → 「分段探测乐器组（实验）」开关 + 探测段长 20–120s。
@@ -28,3 +28,5 @@
 ```powershell
 python engine/bench_presets.py --material synth --seconds 60 --model-size medium --repeat 1 --md ab.md
 ```
+
+> 注：上表数据采集于「专用标签模型」接入前，探测器当时是 MuScriptor-small；当前实现已改为标签模型优先 + 低置信度回退，故这组数字仅作历史基线参考。
