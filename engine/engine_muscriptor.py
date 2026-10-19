@@ -613,6 +613,13 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     #   界面调了值就在这里改模块常量（同一进程只跑一次转录；模型 token 布局不随块长变）。
     import segment_options as _seg_opt
     _chunk_sec = _seg_opt.muscriptor_segment_sec(params.get("segment_sec"))
+    if str(params.get("memory_mode") or "") == "low":
+        # MuScriptor 本身是 batch=1 串行；低显存模式下把静音分段临时关掉，
+        # 避免「分段 + 每段各自建证据」在低显存机器上叠内存（速度收益本来也不大）
+        if str(params.get("segment_silence") or "off") != "off":
+            _log(log_cb, "低显存模式：本次关闭静音分段（降低峰值内存）")
+        params = dict(params)
+        params["segment_silence"] = "off"
     if params.get("segment_sec"):
         try:
             import muscriptor.transcription_model as _tm

@@ -44,6 +44,25 @@ const perfHint = ref('');
    0 = 跟随模型默认（各模型默认不同：basic-pitch 内置窗约 2s、MuScriptor 5s、
    piano-transcription 10s、Aria-AMT 30s、Transkun 由模型配置决定）。 */
 const segmentSec = ref(0);
+/* 转录前降噪：默认 off（保持旧输出完全一致）。选项来自引擎 audio_chain：
+   off / light（谱减）/ strong（UVR-DeNoise 模型，需资源中心下载）。
+   2026-10-15 实测降噪在部分素材会增加噪声引起的假音符，所以默认关、并写明代价。 */
+const denoiseMode = ref('off');
+/* 显存策略（硬件相关，存 localStorage，不进参数预设）：
+   auto=默认；low=低显存自动降批（推荐，避免驱动共享内存溢出慢 5–10×）；
+   allow=允许驱动借用系统内存（能跑完但可能明显变慢）。 */
+const memoryMode = ref(localStorage.getItem('fufumidi_memory_mode') || 'auto');
+function setMemoryMode(v) {
+  memoryMode.value = ['auto', 'low', 'allow'].includes(v) ? v : 'auto';
+  try { localStorage.setItem('fufumidi_memory_mode', memoryMode.value); } catch (e) {}
+}
+/** 各模型推荐片段长度（= 训练块长；见各引擎源码/配置） */
+const SEG_RECOMMEND = computed(() => {
+  if (mode.value === 'universal') return umodel.value === 'basic' ? 0 : 5;
+  if (pmodel.value === 'aria') return 30;
+  if (pmodel.value === 'transkun') return 16;
+  return 10;
+});
 const bassBoost = ref(false);            // 低音增强（仅 basic 子模型）：关闭 melodia trick 以保留低音声部
 // 多条弯音曲线（仅 basic 子模型）：basic-pitch 唯一没转发的用户可见参数。
 // 开了以后同一音符可以挂多条弯音（颤音/滑音），**会真的落进导出的 MIDI**。
@@ -474,10 +493,9 @@ const pedal = ref(true);
 const drums = ref(false);
 const stemExport = ref(false);
 const stemFormat = ref('wav');
-// ★ 降噪不在转录页暴露：2026-10-15 基准实测两档降噪都会**增加**噪声引起的假音符
-//   （12 dB 素材：1 → 14/39；6 dB 素材：16 → 16/50），所以不摆这个开关。
-//   引擎侧仍支持 denoise_mode（CLI/实验用，见 engine/audio_chain.py），但界面不再发这个键。
-//   「响度平衡」同理：电平统一现在是恒定执行的（见 audio_chain 的 −16 dBFS），不再需要一个开关。
+// 降噪：2026-10-15 实测两档降噪都会增加噪声引起的假音符（12 dB 素材 1 → 14/39），
+// 所以默认关闭；2026-10-18 用户要求补回选项，高级参数里提供 off/light/strong 并写明代价。
+// 电平统一恒定执行（audio_chain 的 −16 dBFS），不设开关。
 const autoBpm = ref(true);   // 默认开启：转写出的 MIDI 按源音频自动测速，播放/导出与原曲速度一致
 
 // 转录队列（**当前激活队列**的条目；多队列见下方「多队列」一节）
@@ -488,6 +506,24 @@ const running = ref(false);
 const paused = ref(false);
 const cancelAll = ref(false);
 const currentJobId = ref(null);
+/* 运行中的队列 id：运行中允许切换**视图**，但正在跑的队列始终是这个 id；
+   顺序转录（chainMode）默认关，用户显式打开后才会一个队列接一个队列跑。 */
+const runningQueueId = ref(0);
+const chainMode = ref(false);
+try { chainMode.value = localStorage.getItem('fufumidi_chain_queues') === '1'; } catch (e) {}
+function setChainMode(v) {
+  chainMode.value = !!v;
+  try { localStorage.setItem('fufumidi_chain_queues', chainMode.value ? '1' : '0'); } catch (e) {}
+}
+let userPinnedQueue = false;     // 运行中用户手动切过视图 → 顺序转录不再自动跟随 */
+function pendingItemsOf(q) { return (q && Array.isArray(q.items) ? q.items : []).filter((i) => i.status === 'pending'); }
+/** 顺序转录的队列顺序：从当前激活队列开始、按列表顺序绕一圈 */
+function queueOrderFrom(activeId) {
+  const list = queues.slice();
+  const i = list.findIndex((q) => q.id === activeId);
+  if (i > 0) return list.slice(i).concat(list.slice(0, i));
+  return list;
+}
 
 // 音频信息 + 波形
 const audioInfo = ref('');
@@ -560,22 +596,22 @@ const WEB_BUILTIN_PRESETS = () => {
     model: 'basic', onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
     melodia: true, min_freq: 0, max_freq: 0, merge_overlap: true, vel_norm: true,
     beat_grid: true, tempo: 0, perf: 'quality',
-    auto_bpm: false,
+    auto_bpm: false, denoise_mode: 'off', segment_sec: 0,
   };
   const piano = {
     onset_threshold: 0.3, frame_threshold: 0.1, min_note_ms: 60, merge_gap_ms: 30,
     include_pedal: true, perf: 'quality',
-    auto_bpm: false,
+    auto_bpm: false, denoise_mode: 'off', segment_sec: 10,
   };
   return [
     { name: 'Basic Pitch · 最优', mode: 'universal', params: { ...basic } },
     { name: 'MuScriptor · 最优', mode: 'universal', params: { ...basic,
       model: 'muscriptor', model_size: 'medium', muscriptor_instruments: 'none',
       temperature: 1.0, cfg_coef: 1.0, beam_size: 1, prelude_forcing: true,
-      precision: 'fp32' } },
-    { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt' } },
-    { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria' } },
-    { name: 'Transkun · 最优', mode: 'piano', params: { ...piano, model: 'transkun' } },
+      precision: 'fp32', segment_sec: 5 } },
+    { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt', segment_sec: 10 } },
+    { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria', segment_sec: 30 } },
+    { name: 'Transkun · 最优', mode: 'piano', params: { ...piano, model: 'transkun', segment_sec: 16 } },
     { name: '分离 · 最优', mode: 'separate', params: {
       onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
       include_drums: true, stem_format: 'wav', perf: 'quality',
@@ -601,10 +637,17 @@ const pendingCount = computed(() => queue.filter(i => i.status === 'pending' || 
 
 /* ---------------- 队列 ---------------- */
 function addPaths(paths) {
+  const q = currentQueue();
   for (const p of (paths || [])) {
     if (!p) continue;
     if (queue.some(i => i.path === p)) continue;
-    queue.push({ id: nextId++, path: p, name: String(p).replace(/^.*[\\/]/, ''), status: 'pending', progress: 0, realPct: 0, duration: 0, out: '', note_count: 0, error: '' });
+    const it = { id: nextId++, path: p, name: String(p).replace(/^.*[\\/]/, ''), status: 'pending', progress: 0, realPct: 0, duration: 0, out: '', note_count: 0, error: '' };
+    queue.push(it);
+    // 运行中往当前视图队列加条目：同时写进队列对象，正在跑的 worker 才能捡到
+    if (q && q.id === runningQueueId.value) {
+      q.items = Array.isArray(q.items) ? q.items : [];
+      if (!q.items.some((x) => x.id === it.id)) q.items.push(it);
+    }
   }
   saveQueue();
 }
@@ -705,7 +748,18 @@ function saveQueue() { snapshotIntoQueue(currentQueue()); persistQueues(); }
 
 function switchQueue(q) {
   if (!q || q.id === activeQid.value) return;
-  if (running.value) { toast(t('队列运行中，请先停止再切换'), 'warn'); return; }
+  if (running.value) {
+    // 运行中允许切换视图：不打断正在跑的队列，也不拿当前界面覆盖运行队列的设置。
+    const cur = currentQueue();
+    if (cur && cur.id !== runningQueueId.value) snapshotIntoQueue(cur);
+    userPinnedQueue = true;
+    activeQid.value = q.id;
+    loadQueueSettings(q);
+    persistQueues();
+    const still = (q.id === runningQueueId.value) ? t('（这就是正在转录的队列）') : t('（后台仍在转录另一个队列，完成后可切回）');
+    toast(t('已切换到队列：') + q.name + still, 'ok');
+    return;
+  }
   snapshotIntoQueue(currentQueue());
   activeQid.value = q.id;
   loadQueueSettings(q);
@@ -1008,10 +1062,16 @@ async function probeEngine() {
     }
     if (p && p.gpu) {
       const g = p.gpu;
-      if (g.rocm) gpuInfo.value = 'GPU · AMD (ROCm) ✓';
-      else if (g.cuda) gpuInfo.value = 'GPU · ' + (g.vendor === 'nvidia' ? 'NVIDIA' : 'CUDA') + ' ✓';
-      else if (g.mps) gpuInfo.value = 'GPU · Apple (MPS) ✓';
-      else if (g.torch_directml || g.directml) gpuInfo.value = 'GPU · ' + (g.vendor === 'amd' ? 'AMD' : g.vendor === 'intel' ? 'Intel' : 'DirectML') + ' (DirectML) ✓';
+      let _base = '';
+      if (g.rocm) _base = 'GPU · AMD (ROCm) ✓';
+      else if (g.cuda) _base = 'GPU · ' + (g.vendor === 'nvidia' ? 'NVIDIA' : 'CUDA') + ' ✓';
+      else if (g.mps) _base = 'GPU · Apple (MPS) ✓';
+      else if (g.torch_directml || g.directml) _base = 'GPU · ' + (g.vendor === 'amd' ? 'AMD' : g.vendor === 'intel' ? 'Intel' : 'DirectML') + ' (DirectML) ✓';
+      if (g.vram_total_mb) {
+        const _gb = (x) => (Math.round(x / 102.4) / 10).toFixed(1);
+        _base += ' · 显存 ' + _gb(g.vram_free_mb || 0) + '/' + _gb(g.vram_total_mb) + ' GB 空闲';
+      }
+      gpuInfo.value = _base;
     }
   } catch (e) {}
 }
@@ -1098,6 +1158,7 @@ function collectPresetParams() {
     auto_bpm: autoBpm.value,
     merge_overlap: mergeOverlap.value, vel_norm: velNorm.value, tempo: iv(exportTempo.value),
     segment_sec: Math.max(0, iv(segmentSec.value)),
+    denoise_mode: denoiseMode.value || 'off',
   };
   if (mode.value === 'universal') {
     Object.assign(p, {
@@ -1209,6 +1270,10 @@ function applyPresetParams(p, opts) {
   if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
   // 识别片段长度（0 = 模型默认）；老预设没有这个键时保留当前值
   if (has('segment_sec')) segmentSec.value = clamp(Math.round(numOr('segment_sec', 0)), 0, 120);
+  // 降噪档位：只认引擎支持的三个值；老预设没有这个键时保持当前值（默认 off）
+  if (has('denoise_mode') && ['off', 'light', 'strong'].indexOf(String(pr.denoise_mode)) >= 0) {
+    denoiseMode.value = String(pr.denoise_mode);
+  }
 }
 
 function applyPreset(name, opts) {
@@ -1416,6 +1481,9 @@ function collectParams() {
   }
   // 识别片段长度：0 = 各模型默认，不传；>0 时所有转录模型共用同一个键（引擎按模型映射）
   if (mode.value !== 'separate' && Number(segmentSec.value) > 0) cfg.segment_sec = Number(segmentSec.value);
+  // 转录前降噪（默认 off = 旧行为；只有显式选择才发送）
+  if (mode.value !== 'separate' && denoiseMode.value && denoiseMode.value !== 'off') cfg.denoise_mode = denoiseMode.value;
+  if (mode.value !== 'separate' && memoryMode.value) cfg.memory_mode = memoryMode.value;
   if (mode.value === 'separate') {
     cfg.with_drums = drums.value;
     cfg.export_stems = stemExport.value;
@@ -1450,59 +1518,64 @@ async function decodeDuration(it) {
 async function runBatch() {
   if (running.value) return;
   if (!isDesktop) { toast(t('请使用桌面版 FuFumidi 进行转录'), 'warn'); return; }
-  if (!queue.some(i => i.status === 'pending')) {
-    const d = queue.filter(i => i.status === 'done').length;
-    toast(d ? t('队列已完成，可清空后继续添加音频') : t('请先选择音频文件'), d ? 'ok' : 'warn');
+  const activeQ = currentQueue();
+  const chain = !!chainMode.value;
+  let work = [];
+  if (chain) {
+    work = queueOrderFrom(activeQ && activeQ.id).filter((q) => pendingItemsOf(q).length);
+  } else if (activeQ && pendingItemsOf(activeQ).length) {
+    work = [activeQ];
+  }
+  if (!work.length) {
+    const doneN = (activeQ && Array.isArray(activeQ.items) ? activeQ.items : []).filter((i) => i.status === 'done').length;
+    toast(doneN ? t('队列已完成，可清空后继续添加音频') : t('请先选择音频文件'), doneN ? 'ok' : 'warn');
     return;
   }
   running.value = true; paused.value = false; cancelAll.value = false; busy.value = true; done.value = false; progress.value = 3; stage.value = '';
-  try { if (bridge && bridge.setTranscribePause) bridge.setTranscribePause(false); } catch (e) {}   // 清掉上次可能残留的暂停标记
-  // 并行数：1-4（持久化）。GPU 模型显存有限，并行收益差；CPU 模型 2-3 收益明显。
+  userPinnedQueue = false;
+  try { if (bridge && bridge.setTranscribePause) bridge.setTranscribePause(false); } catch (e) {}
   const para = Math.max(1, Math.min(4, parseInt(localStorage.getItem('fufumidi_parallel') || '1', 10) || 1));
-  logLine(t('转录队列：共 ') + pendingCount.value + t(' 首') + (para > 1 ? t('，并行 ') + para + t(' 路') : t('，顺序处理')));
-  const inst = currentModelInstalled();
-  logLine(t('使用模型：') + currentModelLabel() + (inst === true ? t('（已就绪）') : inst === false ? t('（未下载，请到资源中心安装）') : ''));
-  // 产物目标歌单：开跑时快照（运行中切换队列被禁止；运行中改歌单下拉会禁用，
-  // 但即使被改，这一批也按开跑时的目标走，避免同一批落在两个歌单）
-  const batchQueueRef = currentQueue();
-  const batchTarget = effectiveTarget(batchQueueRef);
-  const batchTargetLabel = targetName(batchTarget);
+  const totals = {
+    total: work.reduce((s, q) => s + pendingItemsOf(q).length, 0),
+    done: 0, err: 0, queueIndex: 0, queueCount: work.length,
+  };
+  logLine(chain
+    ? t('顺序转录：共 ') + work.length + t(' 个队列 / ') + totals.total + t(' 首')
+    : t('转录队列：共 ') + totals.total + t(' 首') + (para > 1 ? t('，并行 ') + para + t(' 路') : t('，顺序处理')));
+  let runQ = null;
+  let runItems = [];
   const t0 = Date.now();
   clearInterval(trTimer);
   trTimer = setInterval(() => {
-    // 暂停期间冻结计时（引擎停住了，'已用/剩余'再涨就是骗人）
     if (paused.value) {
-      const left = queue.filter(i => i.status === 'pending').length;
-      stage.value = t('已暂停') + (left ? ' · ' + t('已暂停：还剩 {n} 首').replace('{n}', String(left)) : '');
+      const left = runItems.filter((i) => i.status === 'pending').length;
+      stage.value = t('已暂停') + (left ? ' · ' + t('已暂停：还剩 {n} 首').replace('{n}', String(left)) : '') + (chain ? ' · ' + t('队列 ') + totals.queueIndex + '/' + totals.queueCount : '');
       return;
     }
-    const el = (Date.now() - t0) / 1000;
-    const doneN = queue.filter(i => i.status === 'done').length;
-    const errN = queue.filter(i => i.status === 'error').length;
-    const total = Math.max(1, queue.length);
-    const cur = queue.find(i => i.status === 'running');
-    // 当前项进度：未完成时按已用时间/预估时长估算（平滑推进而非停在 3% 突跳到 100%）
+    const doneN = runItems.filter((i) => i.status === 'done').length;
+    const errN = runItems.filter((i) => i.status === 'error').length;
+    const cur = runItems.find((i) => i.status === 'running');
     let curP = 0;
     if (cur) {
-      if (cur.realPct > 0) curP = Math.min(99, cur.realPct);   // 引擎真实分块进度优先（替代时间估算）
+      if (cur.realPct > 0) curP = Math.min(99, cur.realPct);
       else if (cur.progress >= 100) curP = 100;
       else if (cur.progress > 0) curP = cur.progress;
       else if (cur.startedAt && cur.estMs) curP = Math.min(95, Math.round((Date.now() - cur.startedAt) / cur.estMs * 100));
-      if (curP > 0 && curP < 100) cur.progress = curP; // 同步到队列行内进度条
-      // 统一进度信息（对齐音频处理面板）：百分比 + 已用时间 + 剩余时间
+      if (curP > 0 && curP < 100) cur.progress = curP;
       const elS = (Date.now() - (cur.startedAt || Date.now())) / 1000;
       const estS = ((cur.estMs || estSec() * 1000 || 60000)) / 1000;
       const remains = Math.max(0, Math.round(estS - elS));
-      // 百分比已由上方进度条呈现，此处只显示时间信息（原先重复显示「转录中 3%」且估算值长期不变）
-      stage.value = t('已用 ') + fmtTime(elS) + (remains > 0 ? ' · ' + t('剩余约 ') + fmtTime(remains) : '');
+      stage.value = (chain ? t('队列 ') + totals.queueIndex + '/' + totals.queueCount + ' · ' : '')
+        + t('已用 ') + fmtTime(elS) + (remains > 0 ? ' · ' + t('剩余约 ') + fmtTime(remains) : '');
     }
-    progress.value = Math.max(3, Math.min(95, Math.round(((doneN + errN) + curP / 100) / total * 100)));
-    if (!cur) stage.value = t('完成 ') + doneN + ' / ' + total + (errN ? t(' · 失败 ') + errN : '') + ' · ' + fmtTime(el);
+    const _allDone = Math.max(1, totals.total);
+    progress.value = Math.max(3, Math.min(95, Math.round(((totals.done + totals.err) + curP / 100) / _allDone * 100)));
+    if (!cur) stage.value = t('完成 ') + (totals.done + totals.err) + ' / ' + totals.total + (totals.err ? t(' · 失败 ') + totals.err : '') + ' · ' + fmtTime((Date.now() - t0) / 1000);
   }, 500);
 
   const runningJobIds = new Set();
   try { window.__fufumidiRunningJobs = runningJobIds; } catch (e) {}
-  const processOne = async (it) => {
+  const processOne = async (it, cfgBase, target) => {
     it.status = 'running'; it.progress = 0; it.realPct = 0; it.error = '';
     it.startedAt = Date.now();
     await decodeDuration(it);
@@ -1511,53 +1584,84 @@ async function runBatch() {
     runningJobIds.add(jid); currentJobId.value = jid;
     logLine('→ ' + it.name);
     try {
-      const cfg = collectParams();
-      cfg.audio = it.path; cfg.id = jid; cfg.out = null; cfg.mode = mode.value; cfg.perf = perf.value;
-      cfg.__slots = para; // 主进程按此开多 worker 槽位（GPU 自动降 1）
+      const cfg = Object.assign({}, cfgBase);
+      cfg.audio = it.path; cfg.id = jid; cfg.out = null;
+      cfg.mode = (runQ && runQ.mode) || mode.value;
+      cfg.perf = (runQ && runQ.perf) || perf.value;
+      cfg.__slots = para;
       const res = await bridge.convert(cfg);
       if (cancelAll.value) it.status = 'canceled';
       else if (res && res.ok && res.out) {
         it.status = 'done'; it.progress = 100; it.out = res.out; it.note_count = res.note_count || 0;
+        totals.done += 1;
         try {
           const bytes = await bridge.readBinary(res.out);
-          if (bytes) { await importFiles([{ name: String(res.out).replace(/^.*[\\/]/, ''), bytes }], batchTarget); }
+          if (bytes) { await importFiles([{ name: String(res.out).replace(/^.*[\\/]/, ''), bytes }], target); }
         } catch (e) {}
       } else {
         it.status = 'error'; it.error = (res && res.error) || (res ? 'code ' + res.code : '');
+        totals.err += 1;
         logLine(it.name + t('：') + it.error, true);
       }
     } catch (e) {
       if (cancelAll.value) it.status = 'canceled';
-      else { it.status = 'error'; it.error = (e && e.message) || String(e); logLine(it.name + t('：') + it.error, true); }
+      else { it.status = 'error'; it.error = (e && e.message) || String(e); totals.err += 1; logLine(it.name + t('：') + it.error, true); }
     }
     runningJobIds.delete(jid);
     const rest = [...runningJobIds];
     currentJobId.value = rest.length ? rest[rest.length - 1] : null;
-    saveQueue();
+    persistQueues();
   };
-  const worker = async () => {
-    while (true) {
-      if (cancelAll.value) break;
-      const it = queue.find(i => i.status === 'pending');
-      if (!it) break;
-      // ★ 暂停：先不启动下一首（分块引擎此时正被引擎端卡在块与块之间；
-      //   一次调用跑完的引擎到这儿才停）。继续 = 这个循环自然往下走，**不重算**。
-      while (paused.value && !cancelAll.value) await new Promise(r => setTimeout(r, 200));
-      if (cancelAll.value) break;
-      await processOne(it);
+  const runQueue = async (q, qi) => {
+    runQ = q; runningQueueId.value = q.id; totals.queueIndex = qi + 1;
+    if (!userPinnedQueue) { activeQid.value = q.id; loadQueueSettings(q); }
+    // 取这个队列自己的参数快照：如果用户把视图切到了别的队列，临时加载本队列设置取完再切回
+    let cfgBase;
+    if (activeQid.value === q.id) {
+      cfgBase = collectParams();
+    } else {
+      const prevId = activeQid.value; const prevQ = currentQueue();
+      loadQueueSettings(q);
+      cfgBase = collectParams();
+      if (prevQ) { activeQid.value = prevId; loadQueueSettings(prevQ); }
     }
+    if (activeQid.value === q.id) q.items = queue.slice();
+    q.items = Array.isArray(q.items) ? q.items : [];
+    runItems = q.items;
+    const target = effectiveTarget(q);
+    const targetLabel = targetName(target);
+    logLine(t('开始队列：') + q.name + (chain ? '（' + totals.queueIndex + '/' + totals.queueCount + '）' : '') + t(' · 产物：') + targetLabel);
+    const worker = async () => {
+      while (true) {
+        if (cancelAll.value) break;
+        const it = (q.items || []).find((x) => x.status === 'pending');
+        if (!it) break;
+        while (paused.value && !cancelAll.value) await new Promise((r) => setTimeout(r, 200));
+        if (cancelAll.value) break;
+        await processOne(it, cfgBase, target);
+      }
+    };
+    await Promise.all(Array.from({ length: para }, () => worker()));
+    if (activeQid.value === q.id) queue.splice(0, queue.length, ...(q.items || []));
+    persistQueues();
+    // 暂停时不要启动下一个队列（继续按钮会解除暂停）
+    while (paused.value && !cancelAll.value) await new Promise((r) => setTimeout(r, 200));
   };
-  await Promise.all(Array.from({ length: para }, () => worker()));
-  running.value = false; busy.value = false;
+  for (let qi = 0; qi < work.length; qi++) {
+    if (cancelAll.value) break;
+    await runQueue(work[qi], qi);
+  }
+  running.value = false; busy.value = false; runningQueueId.value = 0;
   clearInterval(trTimer);
-  const dN = queue.filter(i => i.status === 'done').length;
-  const eN = queue.filter(i => i.status === 'error').length;
-  progress.value = dN && !eN ? 100 : (dN ? Math.round(dN / Math.max(1, queue.length) * 100) : progress.value);
+  if (runQ && activeQid.value === runQ.id) queue.splice(0, queue.length, ...(runQ.items || []));
+  persistQueues();
+  const dN = totals.done; const eN = totals.err;
+  progress.value = dN && !eN ? 100 : (dN ? Math.round(dN / Math.max(1, totals.total) * 100) : progress.value);
   if (dN && !eN) {
-    const last = queue.filter(i => i.status === 'done').pop();
+    const last = runItems.filter((i) => i.status === 'done').pop();
     if (last) { lastOut.value = last.out; doneInfo.value = t('成功 ') + dN + t(' 首') + (last.note_count != null ? ' · ' + last.note_count + t(' 个音符') : ''); logLine(doneInfo.value); }
     done.value = true;
-    toast(t('批量转录完成：成功 ') + dN + t(' 首（已完成曲目已加入：') + batchTargetLabel + '）', 'ok');
+    toast(chain ? t('顺序转录完成：成功 ') + dN + t(' 首（各队列产物已按各自歌单加入）') : t('批量转录完成：成功 ') + dN + t(' 首'), 'ok');
   } else if (dN) {
     logLine(t('[失败] ') + eN + t(' 首失败，可在队列中点击「重试」。'), true);
     toast(t('批量转录完成：成功 ') + dN + t(' 首，失败 ') + eN + t(' 首'), 'warn');
@@ -1566,14 +1670,19 @@ async function runBatch() {
     toast(t('转录失败'), 'warn');
   }
   if (cancelAll.value && !paused.value) logLine(t('已取消转录队列…'), true);
-  // 长音频·质量档提示：串行档在长音频上明显慢于 GPU 批量档，完成后给出可操作建议
-  if (dN && !eN && perf.value === 'quality' && mode.value === 'universal' && umodel.value === 'muscriptor') {
-  }
 }
 async function startTranscribe() {
   if (busy.value) return;
+  const chain = !!chainMode.value;
+  const activeQ = currentQueue();
+  const activePending = activeQ ? pendingItemsOf(activeQ).length : 0;
+  const pending = chain ? queues.reduce((s, q) => s + pendingItemsOf(q).length, 0) : activePending;
+  if (!pending) { toast(t('请先选择音频文件'), 'warn'); return; }
   const est = estSec();
-  const msg = t('确认开始转录？\n文件：') + queue.find(i => i.status === 'pending')?.name + t('\n模式：') + (MODE_NAMES()[mode.value] || mode.value) + t('\n质量：') + (PERF_NAMES()[perf.value] || perf.value) + (est ? t('\n预计耗时：约 ') + fmtTime(est) : '');
+  const first = activeQ && pendingItemsOf(activeQ)[0] ? pendingItemsOf(activeQ)[0].name : '';
+  const msg = chain
+    ? t('确认开始转录？') + '\n' + t('顺序转录全部队列：') + queues.filter((q) => pendingItemsOf(q).length).length + t(' 个队列，共 ') + pending + t(' 首')
+    : t('确认开始转录？\n文件：') + first + t('\n模式：') + (MODE_NAMES()[mode.value] || mode.value) + t('\n质量：') + (PERF_NAMES()[perf.value] || perf.value) + (est ? t('\n预计耗时：约 ') + fmtTime(est) : '');
   const ok = await app.confirmDialog({ title: t('开始转录'), msg, okText: t('开始') });
   if (!ok) return;
   runBatch();
@@ -1589,8 +1698,11 @@ function pauseBatch() {
   //  · MuScriptor 卡在 5 秒块之间、basic-pitch 卡在取窗之间 → 当场停住，继续时从原处接着跑；
   //  · 钢琴 piano_pt 卡在我们自己的分批前向之间 → 手里这一批算完就停（秒级），同样不重算；
   //  · Aria-AMT / Transkun 是外部工具、一次调用跑完整首 → 这一首跑完再停（下一首不再启动）。
-  const pianoFast = mode.value === 'piano' && pmodel.value === 'piano_pt';
-  const midFile = mode.value !== 'piano' || pianoFast;
+  const _rq = queues.find((q) => q.id === runningQueueId.value) || currentQueue();
+  const _rmode = (_rq && _rq.mode) || mode.value;
+  const _rpmodel = (_rq && _rq.pmodel) || pmodel.value;
+  const pianoFast = _rmode === 'piano' && _rpmodel === 'piano_pt';
+  const midFile = _rmode !== 'piano' || pianoFast;
   stage.value = t('已暂停');
   logLine(pianoFast
     ? t('已暂停：当前这首算完手里这一批就停住，点「继续」接着跑')
@@ -1730,8 +1842,24 @@ onMounted(() => {
       sepStage.value = t('分块处理 ') + pct + '% · ' + t('已用 ') + fmtTime(el) + (eta > 0 ? ' · ' + t('剩余约 ') + fmtTime(eta) : '');
     });
   }
+  // E2E/调试钩子：只暴露队列操作，不改变正常交互；用于无文件对话框验证
+  // 「运行中切换队列」「顺序转录」两条真实流程（见 scripts/e2e/cases/transcribe-queue-chain.mjs）。
+  try {
+    window.__fufumidiTranscribe = {
+      addPaths,
+      runBatch,
+      switchQueue,
+      setChainMode,
+      state: () => ({
+        running: running.value, paused: paused.value, runningQueueId: runningQueueId.value,
+        activeQid: activeQid.value, chainMode: chainMode.value,
+        queues: queues.map((q) => ({ id: q.id, name: q.name, playlistTarget: q.playlistTarget || '', items: (q.items || []).map((i) => ({ id: i.id, name: i.name, status: i.status, note_count: i.note_count || 0 })) })),
+      }),
+    };
+  } catch (e) {}
 });
 onBeforeUnmount(() => {
+  try { delete window.__fufumidiTranscribe; } catch (e) {}
   try { window.removeEventListener('keydown', onDocKeydown); } catch (e) {}
   if (trTimer) clearInterval(trTimer);
   if (offLog) offLog();
@@ -1805,12 +1933,16 @@ onBeforeUnmount(() => {
         <button v-for="q in queues" :key="q.id" class="fu-ctl fu-ctl--sm tr-pill" :class="{ active: q.id === activeQid }"
                 :title="t('切换到这个队列（模型与参数一起切）') + ' · ' + queueSummary(q)"
                 @click="switchQueue(q)">
-          {{ q.name }}<i v-if="queueCount(q)" class="tr-q-n">{{ queueCount(q) }}</i>
+          {{ q.name }}<i v-if="q.id === runningQueueId" class="tr-q-run" :title="t('正在转录')">▶</i><i v-if="queueCount(q)" class="tr-q-n">{{ queueCount(q) }}</i>
         </button>
         <button class="btn sm ghost" @click="addQueue"><Icon name="plus" :size="13" />{{ t('新建队列') }}</button>
         <button class="btn sm ghost" :disabled="!currentQueue()" @click="renameQueue(currentQueue())">{{ t('重命名') }}</button>
         <button class="btn sm ghost" :disabled="!currentQueue()" @click="duplicateQueue(currentQueue())">{{ t('复制') }}</button>
         <button class="btn sm ghost danger" :disabled="queues.length <= 1 || !currentQueue()" @click="removeQueue(currentQueue())">{{ t('删除队列') }}</button>
+        <label class="tr-chain" data-guide="chain-queues" :title="t('打开后按队列顺序：一个队列跑完自动接着跑下一个（默认关）')">
+          <input type="checkbox" :checked="chainMode" :disabled="running" @change="setChainMode($event.target.checked)">
+          <span>{{ t('依次转录全部队列') }}</span>
+        </label>
         <label class="tr-queue-target" data-guide="queue-playlist" :title="t('这个队列的转录产物完成后加入哪个歌单')">
           <span>{{ t('产物歌单') }}</span>
           <select class="select-input" :value="queueTarget(currentQueue())" :disabled="running || busy" @change="setQueueTarget">
@@ -2076,9 +2208,29 @@ onBeforeUnmount(() => {
             <div v-if="mode === 'piano'" class="tr-slider-hint">{{ t('钢琴模型：低于 30ms 的碎音会被丢弃（引擎按 30ms 处理）') }}</div>
           </div>
           <div class="tr-slider" v-if="mode !== 'separate'" data-guide="segment-sec">
-            <label>{{ t('识别片段长度') }}<b>{{ segmentSec > 0 ? segmentSec + 's' : t('模型默认') }}</b></label>
+            <label>{{ t('识别片段长度') }}<b>{{ segmentSec > 0 ? segmentSec + 's' : t('模型默认') }} · {{ t('推荐') }}{{ SEG_RECOMMEND > 0 ? ' ' + SEG_RECOMMEND + 's' : ' ' + t('不分段') }}</b></label>
             <NumSlider v-model="segmentSec" :min="0" :max="60" :step="1" unit="s" />
             <small>{{ t('一次喂给模型识别的音频长度（秒）；0 = 各模型默认。调长：上下文更完整但更慢/更占显存；调短：更省资源但接缝处可能丢音。') }}</small>
+          </div>
+          <div class="tr-switch" v-if="mode !== 'separate'" data-guide="memory-mode">
+            <label>
+              <span><b>{{ t('显存策略') }}</b><small>{{ t('低显存模式会按空闲显存自动降低批大小/分块，避免 Windows 驱动静默借用系统内存（溢出后可能慢 5–10 倍）。「允许借用」能跑完但更慢；无法让内存达到显存速度。') }}</small></span>
+              <select class="select-input" :value="memoryMode" @change="setMemoryMode($event.target.value)" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
+                <option value="auto">{{ t('自动（默认）') }}</option>
+                <option value="low">{{ t('低显存模式（推荐）') }}</option>
+                <option value="allow">{{ t('允许借用系统内存') }}</option>
+              </select>
+            </label>
+          </div>
+          <div class="tr-switch" v-if="mode !== 'separate'" data-guide="denoise-mode">
+            <label>
+              <span><b>{{ t('转录前降噪') }}</b><small>{{ t('默认关闭（实测降噪可能增加假音符）。轻降噪=谱减；强降噪=UVR-DeNoise 模型（需先下载），更慢但能压稳态噪声') }}</small></span>
+              <select class="select-input" v-model="denoiseMode" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
+                <option value="off">{{ t('关闭（默认）') }}</option>
+                <option value="light">{{ t('轻降噪（谱减）') }}</option>
+                <option value="strong">{{ t('强降噪（UVR 模型）') }}</option>
+              </select>
+            </label>
           </div>
           <div class="tr-slider" v-if="mode === 'piano'">
             <label>{{ t('音符合并间隔') }}<b>{{ mergeGap }}ms</b></label>
@@ -2447,6 +2599,9 @@ onBeforeUnmount(() => {
 .tr-queues { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin: 0 0 8px; }
 .tr-queues .tr-pill { padding: 2px var(--sp-2); font-size: var(--fs-xs); }   /* 与 .fu-ctl--sm 同值 */
 .tr-queues .tr-q-n { font-style: normal; margin-left: 6px; font-size: var(--fs-xs); opacity: .72; }
+.tr-chain { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-xs); color: var(--stone); cursor: pointer; }
+.tr-chain input { accent-color: var(--accent); }
+.tr-q-run { font-style: normal; margin-left: 4px; color: var(--accent); font-size: var(--fs-xs); }
 .tr-queue-target { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-xs); color: var(--stone); }
 .tr-queue-target select { max-width: 160px; padding: 2px 6px; font-size: var(--fs-xs); }
 .tr-sum { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; background: var(--surface-soft); border-radius: var(--r-md); padding: 10px 14px; font-size: var(--fs-sm); color: var(--slate); }

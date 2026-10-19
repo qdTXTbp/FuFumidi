@@ -31,6 +31,15 @@ export default async function (app) {
   const segText = await app.eval('(() => document.querySelector("[data-guide=segment-sec]").innerText)()');
   app.assert(/5\s*s/.test(segText) || segText.indexOf('5s') >= 0, '片段长度滑条显示 5s：' + segText.slice(0, 120));
 
+  // 降噪选项（默认「关闭」）与显存策略（默认「自动」）
+  const denoise = await app.eval('(() => { const w=document.querySelector("[data-guide=denoise-mode]"); const s=w&&w.querySelector("select"); return { has: !!w, value: s?s.value:"", opts: s?[...s.options].map(o=>o.value):[] }; })()');
+  app.assert(denoise.has && denoise.value === 'off', '降噪默认关闭：' + JSON.stringify(denoise));
+  app.assert(denoise.opts.includes('off') && denoise.opts.includes('light') && denoise.opts.includes('strong'), '降噪三个档位齐全');
+  const mem = await app.eval('(() => { const w=document.querySelector("[data-guide=memory-mode]"); const s=w&&w.querySelector("select"); return { has: !!w, value: s?s.value:"", opts: s?[...s.options].map(o=>o.value):[] }; })()');
+  app.assert(mem.has && mem.opts.includes('auto') && mem.opts.includes('low') && mem.opts.includes('allow'), '显存策略选项齐全：' + JSON.stringify(mem));
+  const chain = await app.eval('(() => { const c=document.querySelector("[data-guide=chain-queues] input"); return c ? c.checked : null; })()');
+  app.assert(chain === false, '顺序转录默认关');
+
   const addBtn = await app.eval('(() => [...document.querySelectorAll(".tr-queues button")].some(b => (b.innerText || "").indexOf("新建队列") >= 0))()');
   app.assert(addBtn, '有「新建队列」按钮（运行中也允许新建，见代码注释）');
   await app.screenshot('transcribe-queue-ui');

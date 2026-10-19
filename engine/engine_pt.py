@@ -25,11 +25,19 @@ _QUIET = True
 _PERF_BATCH = {"fast": 8, "balanced": 16, "quality": 32}
 
 
-def _batch_cap(perf_mode, device):
-    """按性能档 + 设备类型决定批量前向上限，防止低配 / 小显存机器 OOM。"""
+def _batch_cap(perf_mode, device, memory_mode=None):
+    """按性能档 + 设备类型决定批量前向上限，防止低配 / 小显存机器 OOM。
+
+    memory_mode（用户设置）：
+      low   = 低显存模式：再减半，尽量不触发驱动「共享内存」静默溢出（溢出会慢 5–10×）
+      allow = 允许驱动借用系统内存（不额外降批，可能变慢）
+      auto / None = 保持原性能档行为
+    """
     cap = _PERF_BATCH.get(perf_mode or "quality", 32)
     if device != "cuda":
         cap = max(1, cap // 2)   # CPU 更保守
+    if memory_mode == "low":
+        cap = max(1, cap // 2)
     return cap
 
 
@@ -173,7 +181,7 @@ def _find_bundled_model():
 
 
 def _engine_init(onset_threshold=0.3, frame_threshold=0.1, num_threads=None, perf_mode="quality",
-                 segment_sec=0):
+                 segment_sec=0, memory_mode=None):
     """初始化转录器(惰性, 只初始化一次)。
 
     设备自动选择：CUDA → CPU（见 engine_gpu）。piano_transcription_inference
@@ -217,7 +225,7 @@ def _engine_init(onset_threshold=0.3, frame_threshold=0.1, num_threads=None, per
                                         budget_s=_PAUSE_BUDGET_S)
             return _batched_forward
 
-        _cap = _batch_cap(perf_mode, _device)
+        _cap = _batch_cap(perf_mode, _device, memory_mode)
         _inf.forward = _make_patch(_cap)
 
         try:
@@ -231,7 +239,7 @@ def _engine_init(onset_threshold=0.3, frame_threshold=0.1, num_threads=None, per
             # 设备初始化失败（DirectML/MPS 兼容性等）→ 回退 CPU
             if _device != "cpu":
                 _device = "cpu"
-                _cap = _batch_cap(perf_mode, _device)
+                _cap = _batch_cap(perf_mode, _device, memory_mode)
                 _inf.forward = _make_patch(_cap)
             _kw = {}
             if _want_samples:
@@ -295,7 +303,8 @@ def transcribe_pt(audio_path, output_midi, onset_threshold=0.3, frame_threshold=
                           frame_threshold=frame_threshold,
                           num_threads=num_threads,
                           perf_mode=kwargs.get("perf_mode", "quality"),
-                          segment_sec=kwargs.get("segment_sec"))
+                          segment_sec=kwargs.get("segment_sec"),
+                          memory_mode=kwargs.get("memory_mode"))
     _dev = _DEVICE
     _log(log_cb, f"加载钢琴模型（{'GPU · ' + (_gpu.get('name') or _dev) if _dev == 'cuda' else 'CPU 多核'}）…")
 

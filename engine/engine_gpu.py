@@ -278,6 +278,16 @@ def _probe():
                 pass
     except Exception:
         pass
+    # ---- 显存信息（转录页显示 + 低显存模式判断）----
+    try:
+        if gpu.get("cuda"):
+            import torch as _torch
+            _free, _total = _torch.cuda.mem_get_info(0)
+            gpu["vram_total_mb"] = int(_total // (1024 * 1024))
+            gpu["vram_free_mb"] = int(_free // (1024 * 1024))
+            gpu["vram_used_mb"] = int((_total - _free) // (1024 * 1024))
+    except Exception:
+        pass
     if gpu.get("xpu"):
         gpu["recommended_backend"] = "xpu"
     # ---- torch-directml：AMD / Intel 显卡用 DirectML 跑 torch 模型 ----

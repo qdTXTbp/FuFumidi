@@ -144,6 +144,8 @@ def _builtin_presets():
         "tempo": 0,                   # 0 = 引擎默认 120（自动 BPM 优先）
         "perf": "quality",
         "denoise_mode": "off", "auto_bpm": False,
+        # 识别片段长度：Basic Pitch 模型输入固定 2s 窗，外层再切只会增加接缝 → 0 = 不切
+        "segment_sec": 0,
     }
     piano = {
         "onset_threshold": 0.3, "frame_threshold": 0.1,
@@ -151,6 +153,8 @@ def _builtin_presets():
         "include_pedal": True,        # 踏板：钢琴转录的必需信息，绝不默认丢
         "perf": "quality",
         "denoise_mode": "off", "auto_bpm": False,
+        # piano-transcription 训练块长 10s（config.py segment_seconds=10）
+        "segment_sec": 10,
     }
     sep = {k: v for k, v in s.items() if k in
            ("onset_threshold", "frame_threshold", "minimum_note_length", "midi_tempo")}
@@ -169,11 +173,13 @@ def _builtin_presets():
                 # ★ 静音分段默认关（用户 2026-10-14 定）：在完全空白静音处切段、逐段转录后
                 #   合并成一份 MIDI，用长音频的静音换时间。开启后接缝处上下文变少，所以不默认开。
                 "segment_silence": "off",
+                # MuScriptor 训练/推理块长 5s；固定训练值最不容易在块边界换音色
+                "segment_sec": 5,
             },
         },
-        "钢琴 · 最优": {"mode": "piano", "params": {**piano, "model": "piano_pt"}},
-        "Aria-AMT · 最优": {"mode": "piano", "params": {**piano, "model": "aria"}},
-        "Transkun · 最优": {"mode": "piano", "params": {**piano, "model": "transkun"}},
+        "钢琴 · 最优": {"mode": "piano", "params": {**piano, "model": "piano_pt", "segment_sec": 10}},
+        "Aria-AMT · 最优": {"mode": "piano", "params": {**piano, "model": "aria", "segment_sec": 30}},
+        "Transkun · 最优": {"mode": "piano", "params": {**piano, "model": "transkun", "segment_sec": 16}},
         "分离 · 最优": {
             "mode": "separate",
             "params": {

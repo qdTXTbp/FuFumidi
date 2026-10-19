@@ -166,6 +166,10 @@ def _resolve_params(args, mode):
                 p["segment_sec"] = float(_sg)
         except (TypeError, ValueError):
             pass
+    # 显存策略（auto / low / allow）：由主进程传，引擎按模型降批或保持
+    _mm = getattr(args, "memory_mode", None)
+    if _mm in ("auto", "low", "allow"):
+        p["memory_mode"] = str(_mm)
     if getattr(args, "no_merge", False): p["merge_overlap"] = False
     if getattr(args, "no_velnorm", False): p["normalize_vel"] = False
     # 子模型选择：universal → basic / muscriptor；piano → piano_pt / aria / transkun
@@ -466,6 +470,8 @@ def build_parser():
     g = parser.add_argument_group("通用/分离（basic-pitch）参数")
     g.add_argument("--segment-sec", dest="segment_sec", type=float, default=None,
                    help="识别片段长度（秒，所有转录模型）：0/不传 = 各模型默认")
+    g.add_argument("--memory-mode", dest="memory_mode", choices=["auto", "low", "allow"], default=None,
+                   help="显存策略：low=低显存自动降批（推荐）/ allow=允许驱动借用系统内存 / auto=默认")
     g.add_argument("--min-note-length", type=float, default=None,
                    help="最短音符时长(ms)（默认 128）")
     g.add_argument("--min-freq", "--minimum-frequency", dest="minimum_frequency",
@@ -597,6 +603,7 @@ def cmd_worker():
                 # ⑤ 静音分段（漏一项界面勾了也到不了引擎）
                 # 识别片段长度：漏这一项时界面滑条调了也到不了引擎
                 segment_sec=req.get('segment_sec'),
+                memory_mode=req.get('memory_mode'),
                 segment_silence=req.get('segment_silence'),
                 silence_db=req.get('silence_db'),
                 min_silence=req.get('min_silence'),
