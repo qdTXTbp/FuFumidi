@@ -2370,10 +2370,10 @@ onBeforeUnmount(() => {
             </label>
           </div>
           <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe'" class="tr-slider-hint" data-guide="probe-lock">
-            {{ t('转录前先跑 instrument_probe 探测主乐器组，再作为硬约束；只留主要乐器、减少长尾误判（会增加一次预分析耗时）') }}
+            {{ t('转录前先用专用音频标签模型（AudioSet 小模型）识别主乐器组，再作为硬约束；只留主要乐器、减少长尾误判（不占主模型推理）') }}
           </div>
           <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe'" class="tr-switch" data-guide="probe-segments">
-            <label><span><b>{{ t('分段探测乐器组（实验）') }}</b><small>{{ t('按 30/60 秒分段，每段单独用独立小模型探测器识别乐器组再硬约束；全局与相邻段并集，减少大编制漏乐器（更慢）') }}</small></span><input type="checkbox" v-model="msProbeSegments"></label>
+            <label><span><b>{{ t('分段探测乐器组（实验）') }}</b><small>{{ t('按 30/60 秒分段，每段用专用音频标签模型识别乐器组再硬约束；全局与相邻段并集，减少大编制漏乐器（置信度不足时不锁定）') }}</small></span><input type="checkbox" v-model="msProbeSegments"></label>
           </div>
           <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe' && msProbeSegments" class="tr-slider">
             <label>{{ t('探测段长') }}<b>{{ msProbeSegSec }}s</b></label>

@@ -45,3 +45,7 @@
 
 - 新增 MuScriptor「分段探测乐器组（实验，默认关）」：30/60s 分段 + 独立 small 探测器 + 全局/邻段并集约束；A/B 报告见 `docs/plans/2026-10-20-segment-probe-ab.md`。
 - 修复 MIDI 文件图标：打包版启动时按设置自愈 `.mid/.midi` 关联，图标指向 FuFumidi.exe 自带 logo；开发版不再写 Electron 图标。
+## 自动探测改用专用音频标签模型（方案 B）
+
+- 内置 `resources/models/audio-tagger`（AudioSet zipformer-small int8 ONNX，26MB），自动探测/分段探测不再占用主模型；CPU 推理约 0.3s/10s。
+- 置信度不足时宁可不锁定（日志会说明），避免硬约束把真实乐器关掉；MuScriptor 探测器保留为模型不可用时的回退。

@@ -1077,15 +1077,25 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             _probe_model = model
             _probe_label = "主模型"
             _probe_tmp = False
-            # 探测器选择（auto）：large 主模型用 small 探测器（否则拿 large 做 3×20s 预分析
-            # 实测要数分钟到 10 分钟）；medium/small 主模型直接用主模型探测（实测 medium 探测
-            # 25s/3min 歌，small 探测器反而 39s 且组更少，因此不要一律 small）。
-            # 环境变量 FUFUMIDI_PROBE_MODEL=small|main 可强制覆盖（排查/A-B 用）。
+            # ★ 方案 B：优先用**专用音频标签模型**（AudioSet zipformer-small，26MB ONNX，
+            #   CPU 0.3s/10s），不再拿 MuScriptor-small 做 3×20s 预分析。
+            #   它只输出乐器组，不参与 MIDI 生成；置信度不足时宁可不锁定，也不硬塞。
+            _tagger = None
+            try:
+                import audio_tagger as _audio_tagger
+                if _audio_tagger.available():
+                    _tagger = _audio_tagger.default_tagger()
+                    _probe_label = "音频标签模型（AudioSet）"
+                    _log(log_cb, "自动探测使用专用音频标签模型（AudioSet zipformer-small，CPU；不占主模型）")
+            except Exception as _e:  # noqa: BLE001
+                _tagger = None
+                _log(log_cb, "音频标签模型不可用，退回 MuScriptor 探测器：%s" % str(_e)[:120])
+            # 探测器选择（auto）：没有标签模型时，large 主模型用 small 探测器；
+            # medium/small 直接用主模型。环境变量 FUFUMIDI_PROBE_MODEL 可强制覆盖。
             _probe_pref = os.environ.get("FUFUMIDI_PROBE_MODEL", "auto").strip().lower()
-            _use_small_probe = (_probe_pref == "small"
+            _use_small_probe = (_tagger is None and (_probe_pref == "small"
                                or (_probe_pref != "main" and size == "large")
-                               # 分段探测按用户要求固定用独立 small 探测器（主模型只负责转录）
-                               or (_probe_pref != "main" and bool(params.get("probe_segments"))))
+                               or (_probe_pref != "main" and bool(params.get("probe_segments")))))
             if _use_small_probe and size != "small":
                 try:
                     _small_path = _find_local_model("small")
@@ -1126,14 +1136,20 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                         for _si, (_a, _b) in enumerate(_segs):
                             _sp = os.path.join(_tmpdir, "seg%02d.wav" % _si)
                             _sfp.write(_sp, _x[int(_a * _sr):int(_b * _sr)], _sr)
-                            _pr = instrument_probe.probe(
-                                _probe_model, _sp, log=log_cb, count=1,
-                                win=min(20.0, max(5.0, _b - _a)))
-                            _pg = _pr.get("groups") or []
+                            if _tagger is not None:
+                                _pg, _psc, _prs = _tagger.probe_groups(_sp, min_score=0.05,
+                                                                       max_windows=5)
+                            else:
+                                _pr = instrument_probe.probe(
+                                    _probe_model, _sp, log=log_cb, count=1,
+                                    win=min(20.0, max(5.0, _b - _a)))
+                                _pg = _pr.get("groups") or []
+                                _prs = _pr.get("reason", "")
                             _per_groups.append(_pg)
-                            _log(log_cb, "分段探测 %d/%d（%.0f–%.0fs）：%s"
+                            _log(log_cb, "分段探测 %d/%d（%.0f–%.0fs）：%s%s"
                                  % (_si + 1, len(_segs), _a, _b,
-                                    " / ".join(_pg) if _pg else "（未检出）"))
+                                    " / ".join(_pg) if _pg else "（置信度不足/未检出）",
+                                    "" if _pg else ("（%s）" % _prs if _prs else "")))
                     finally:
                         try:
                             _shp.rmtree(_tmpdir, ignore_errors=True)
@@ -1152,16 +1168,21 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                         _log(log_cb, "分段探测未得到任何乐器组（探测器=%s，%.1fs），本次不限制"
                              % (_probe_label, time.perf_counter() - _t_probe))
                 else:
-                    _pr = instrument_probe.probe(_probe_model, wav_tmp, log=log_cb)
+                    if _tagger is not None:
+                        _groups, _gsc, _prs = _tagger.probe_groups(wav_tmp, min_score=0.05,
+                                                                   max_windows=3)
+                    else:
+                        _pr = instrument_probe.probe(_probe_model, wav_tmp, log=log_cb)
+                        _groups = _pr.get("groups") or []
+                        _prs = _pr.get("reason", "ok")
                     _probe_secs = time.perf_counter() - _t_probe
-                    _groups = _pr.get("groups") or []
                     if _groups:
                         constrain = _groups
                         _log(log_cb, "预分析锁定乐器组（音色稳定，探测器=%s，%.1fs）：" % (_probe_label, _probe_secs)
-                             + " / ".join(_groups) + "（%s）" % _pr.get("reason", "ok"))
+                             + " / ".join(_groups) + "（%s）" % _prs)
                     else:
-                        _log(log_cb, "预分析未得到可用乐器组（探测器=%s，%.1fs，%s），本次不限制"
-                             % (_probe_label, _probe_secs, _pr.get("reason", "unknown")))
+                        _log(log_cb, "预分析未得到足够可信的乐器组（探测器=%s，%.1fs，%s），本次不限制"
+                             % (_probe_label, _probe_secs, _prs or "低置信度"))
             except Exception as _e:  # noqa: BLE001
                 _log(log_cb, "预分析失败，本次不限制：%s" % _e)
             finally:

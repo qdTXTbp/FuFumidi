@@ -195,6 +195,22 @@ export const LICENSES = {
       "license": "GeneralUser GS License v2.0（见包内 GeneralUser.LICENSE.txt）"
     },
     {
+      "file": "resources/models/audio-tagger/model.int8.onnx",
+      "size": "27,038,066",
+      "sha256_24": "`69304b8a1b96bbe6b7d16c24`",
+      "upstream": "[k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 的 audio-tagging 模型（zipformer-small，AudioSet 527 类，int8 ONNX）",
+      "version": "2024-04-15 发布包；CPU 推理，用于自动乐器组探测（方案 B）",
+      "license": "见上游仓库 LICENSE"
+    },
+    {
+      "file": "resources/models/audio-tagger/class_labels_indices.csv",
+      "size": "14,675",
+      "sha256_24": "—",
+      "upstream": "同上（AudioSet 标签表）",
+      "version": "同上",
+      "license": "见上游仓库 LICENSE"
+    },
+    {
       "file": "engine/singing/openutau/classic/data/mel.onnx",
       "size": "85,404",
       "sha256_24": "`1493ffc868c6fb8b66104e2c`",

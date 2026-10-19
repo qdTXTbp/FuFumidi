@@ -45,6 +45,8 @@
 | frontend/public/vendor/js-synth/libfluidsynth-2.4.6-with-libsndfile.js | js-synthesizer 附带的 libfluidsynth 2.4.6 构建（带 libsndfile） | 2.4.6 | MIT（js-synthesizer）；libfluidsynth: LGPL-2.1+ |
 | frontend/public/vendor/js-synth/fu-seq-clock.js | 本项目自有（AudioWorklet 音序时钟） | — | 本项目自有代码（MIT） |
 | renderer/vendor/soundfonts/GeneralUser.sf2 | GeneralUser GS（S. Christian Collins） | v1.471（许可证 v2.0，见同目录 `GeneralUser.LICENSE.txt`） | GeneralUser GS License v2.0（见包内 GeneralUser.LICENSE.txt） |
+| resources/models/audio-tagger/model.int8.onnx | [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 的 audio-tagging 模型（zipformer-small，AudioSet 527 类，int8 ONNX） | 2024-04-15 发布包；CPU 推理，用于自动乐器组探测（方案 B） | 见上游仓库 LICENSE |
+| resources/models/audio-tagger/class_labels_indices.csv | 同上（AudioSet 标签表） | 同上 | 见上游仓库 LICENSE |
 | engine/singing/openutau/classic/data/mel.onnx | [stakira/OpenUtau](https://github.com/stakira/OpenUtau)（源路径 `OpenUtau.Core/Classic/Data/mel.onnx`） | 上游 commit `4d26fa51a62effe586e5be036eb46fbe8d550a1b`（2025-11-28「update worldline-r2 model」） | MIT（上游 stakira/OpenUtau） |
 | engine/singing/openutau/native/** | [stakira/OpenUtau](https://github.com/stakira/OpenUtau)（MIT） | commit `04c4e61005`（2026-09-27，PR No.2468 Rebuild Worldline）—— 2026-10-13 用 blob 比对确定 | MIT（上游 stakira/OpenUtau） |
 

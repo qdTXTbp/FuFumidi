@@ -16,6 +16,8 @@
 | `frontend/public/vendor/js-synth/libfluidsynth-2.4.6-with-libsndfile.js` | 2,371,528 | `8f0cc693731da2d02f13e921` | js-synthesizer 附带的 libfluidsynth 2.4.6 构建（带 libsndfile） | 2.4.6 |
 | `frontend/public/vendor/js-synth/fu-seq-clock.js` | 4,251 | `0a2658fb31608df568aa86b3` | **本项目自有**（AudioWorklet 音序时钟） | — |
 | `renderer/vendor/soundfonts/GeneralUser.sf2` | 31,281,186 | `f45b6b4a68b6bf3d792fcbb6` | GeneralUser GS（S. Christian Collins） | v1.471（许可证 v2.0，见同目录 `GeneralUser.LICENSE.txt`） |
+| `resources/models/audio-tagger/model.int8.onnx` | 27,038,066 | `69304b8a1b96bbe6b7d16c24` | [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 的 audio-tagging 模型（zipformer-small，AudioSet 527 类，int8 ONNX） | 2024-04-15 发布包；CPU 推理，用于自动乐器组探测（方案 B） |
+| `resources/models/audio-tagger/class_labels_indices.csv` | 14,675 | — | 同上（AudioSet 标签表） | 同上 |
 | `engine/singing/openutau/classic/data/mel.onnx` | 85,404 | `1493ffc868c6fb8b66104e2c` | [stakira/OpenUtau](https://github.com/stakira/OpenUtau)（源路径 `OpenUtau.Core/Classic/Data/mel.onnx`） | 上游 commit `4d26fa51a62effe586e5be036eb46fbe8d550a1b`（2025-11-28「update worldline-r2 model」） |
 | `engine/singing/openutau/native/**` | 4.8 MB（6 个平台） | 逐文件映射见 `native/README.md` | [stakira/OpenUtau](https://github.com/stakira/OpenUtau)（MIT） | commit **`04c4e61005`**（2026-09-27，PR #2468 Rebuild Worldline）—— 2026-10-13 用 blob 比对确定 |
 

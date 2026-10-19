@@ -5831,6 +5831,8 @@ export const I18N_MAP = {
   '（当前转录结束后可切换）': ' (switchable after the current transcription ends)',
   ' 首（已完成曲目已加入：': ' tracks (finished tracks added to: ',
   '已删除的歌单': 'Deleted playlist',
+  '转录前先用专用音频标签模型（AudioSet 小模型）识别主乐器组，再作为硬约束；只留主要乐器、减少长尾误判（不占主模型推理）': 'Before transcription, a dedicated audio-tagging model (small AudioSet model) detects the main instrument groups and hard-constrains them: keeps the main instruments and reduces long-tail misclassification (does not use the main model for probing).',
+  '按 30/60 秒分段，每段用专用音频标签模型识别乐器组再硬约束；全局与相邻段并集，减少大编制漏乐器（置信度不足时不锁定）': 'Split into 30/60 s segments and use a dedicated audio-tagging model per segment before hard-constraining; union with global and neighboring segments reduces missed instruments in large arrangements (skips locking when confidence is low).',
   '分段探测乐器组（实验）': 'Segment-wise instrument probing (experimental)',
   '按 30/60 秒分段，每段单独用独立小模型探测器识别乐器组再硬约束；全局与相邻段并集，减少大编制漏乐器（更慢）': 'Split into 30/60 s segments, detect instrument groups per segment with a separate small detector, then hard-constrain that segment; union with global and neighboring segments reduces missed instruments in large arrangements (slower).',
   '探测段长': 'Probe segment length',
