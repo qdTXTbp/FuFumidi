@@ -17,6 +17,7 @@ import os
 import pause_gate
 
 _ENGINE = None
+_ENGINE_SEGMENT = None   # 当前推理器使用的 segment_samples（换片段长度要重建）
 _DEVICE = "cpu"   # 引擎实际运行的设备（规范化后：cuda / cpu）
 _QUIET = True
 
@@ -171,7 +172,8 @@ def _find_bundled_model():
     return None
 
 
-def _engine_init(onset_threshold=0.3, frame_threshold=0.1, num_threads=None, perf_mode="quality"):
+def _engine_init(onset_threshold=0.3, frame_threshold=0.1, num_threads=None, perf_mode="quality",
+                 segment_sec=0):
     """初始化转录器(惰性, 只初始化一次)。
 
     设备自动选择：CUDA → CPU（见 engine_gpu）。piano_transcription_inference
@@ -179,7 +181,16 @@ def _engine_init(onset_threshold=0.3, frame_threshold=0.1, num_threads=None, per
     静默跑 CPU 却误标 GPU，因此这里把设备规范化成 'cuda' / 'cpu' 两种；
     初始化失败时回退 CPU，保证转录不中断。
     """
-    global _ENGINE, _DEVICE
+    global _ENGINE, _DEVICE, _ENGINE_SEGMENT
+    # 识别片段长度（秒）→ PianoTranscription(segment_samples=秒*16000)。
+    # 模型缓存的键必须包含片段长度：换长度要重建推理器，否则界面调了不生效。
+    try:
+        import segment_options as _so
+        _want_samples = _so.piano_segment_samples(segment_sec)
+    except Exception:
+        _want_samples = None
+    if _ENGINE is not None and _want_samples and _want_samples != _ENGINE_SEGMENT:
+        _release_pt_engine()
     if _ENGINE is None:
         import torch
         torch.set_num_threads(num_threads or os.cpu_count())
@@ -210,19 +221,26 @@ def _engine_init(onset_threshold=0.3, frame_threshold=0.1, num_threads=None, per
         _inf.forward = _make_patch(_cap)
 
         try:
+            _kw = {}
+            if _want_samples:
+                _kw["segment_samples"] = int(_want_samples)
             with _redirect_stdout():
                 _ENGINE = PianoTranscription(device=_device,
-                                             checkpoint_path=_find_bundled_model())
+                                             checkpoint_path=_find_bundled_model(), **_kw)
         except Exception:
             # 设备初始化失败（DirectML/MPS 兼容性等）→ 回退 CPU
             if _device != "cpu":
                 _device = "cpu"
                 _cap = _batch_cap(perf_mode, _device)
                 _inf.forward = _make_patch(_cap)
+            _kw = {}
+            if _want_samples:
+                _kw["segment_samples"] = int(_want_samples)
             with _redirect_stdout():
                 _ENGINE = PianoTranscription(device="cpu",
-                                             checkpoint_path=_find_bundled_model())
+                                             checkpoint_path=_find_bundled_model(), **_kw)
         _DEVICE = _device
+        _ENGINE_SEGMENT = _want_samples
 
     # 应用阈值参数
     _ENGINE.onset_threshold = onset_threshold
@@ -276,7 +294,8 @@ def transcribe_pt(audio_path, output_midi, onset_threshold=0.3, frame_threshold=
     engine = _engine_init(onset_threshold=onset_threshold,
                           frame_threshold=frame_threshold,
                           num_threads=num_threads,
-                          perf_mode=kwargs.get("perf_mode", "quality"))
+                          perf_mode=kwargs.get("perf_mode", "quality"),
+                          segment_sec=kwargs.get("segment_sec"))
     _dev = _DEVICE
     _log(log_cb, f"加载钢琴模型（{'GPU · ' + (_gpu.get('name') or _dev) if _dev == 'cuda' else 'CPU 多核'}）…")
 
@@ -306,9 +325,10 @@ def transcribe_pt(audio_path, output_midi, onset_threshold=0.3, frame_threshold=
 
 def _release_pt_engine():
     """释放钢琴转录引擎（全局缓存 _ENGINE）与显存。"""
-    global _ENGINE
+    global _ENGINE, _ENGINE_SEGMENT
     try:
         _ENGINE = None
+        _ENGINE_SEGMENT = None
         import gc
         gc.collect()
         try:

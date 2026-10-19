@@ -4,14 +4,17 @@ import { themeColor } from '../core/palette.js';
 import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
+import { usePlaylistStore } from '../stores/playlist';
 import { clamp, esc, fmtTime } from '../core/util.js';
 import { t } from '../core/i18n.js';
 import NumSlider from '../components/NumSlider.vue';
 
 const app = useAppStore();
+const playlist = usePlaylistStore();
 const toast = (m, t) => app.toast(m, t);
 // 转录结果属于后台产物：正在播放时只入库，不抢切当前曲目（避免打断播放）
-const importFiles = (items) => app.importFiles(items, undefined, { keepPlaying: true });
+// target：队列指定的歌单 id | 'all'（只进全部曲目）| undefined（跟随当前歌单）
+const importFiles = (items, target) => app.importFiles(items, target, { keepPlaying: true });
 const setView = (v) => app.setView(v);
 
 const bridge = window.fuBridge;
@@ -37,6 +40,10 @@ void (async () => {
 })();
 const perf = ref('quality');             // quality | balanced | fast
 const perfHint = ref('');
+/* 识别片段长度（秒）：每种模型一次喂给模型识别的音频长度。
+   0 = 跟随模型默认（各模型默认不同：basic-pitch 内置窗约 2s、MuScriptor 5s、
+   piano-transcription 10s、Aria-AMT 30s、Transkun 由模型配置决定）。 */
+const segmentSec = ref(0);
 const bassBoost = ref(false);            // 低音增强（仅 basic 子模型）：关闭 melodia trick 以保留低音声部
 // 多条弯音曲线（仅 basic 子模型）：basic-pitch 唯一没转发的用户可见参数。
 // 开了以后同一音符可以挂多条弯音（颤音/滑音），**会真的落进导出的 MIDI**。
@@ -611,6 +618,29 @@ const MODEL_SHORT = () => ({
   transkun: 'Transkun', separate: t('音频处理'),
 });
 function currentQueue() { return queues.find((q) => q.id === activeQid.value) || queues[0] || null; }
+/* 每个队列的「转录产物加入哪个歌单」：
+   ''      = 跟随当前歌单（旧队列/旧版本行为，保持兼容）
+   'all'   = 只进「全部曲目」，不归入任何歌单
+   其它    = 歌单 id */
+function queueTarget(q) { return (q && q.playlistTarget) || ''; }
+function targetName(target) {
+  if (target === 'all') return t('全部曲目');
+  if (!target) return t('跟随当前歌单');
+  const pl = playlist.playlists.find((x) => x.id === target);
+  return pl ? pl.name : t('已删除的歌单');
+}
+function setQueueTarget(ev) {
+  const q = currentQueue();
+  if (!q) return;
+  q.playlistTarget = String(ev && ev.target ? ev.target.value : '');
+  persistQueues();
+}
+/** 真正传给 importFiles 的 target；歌单被删/无效时回退旧行为（跟随当前歌单） */
+function effectiveTarget(q) {
+  const v = queueTarget(q);
+  if (v === 'all' || v === '') return v;
+  return playlist.playlists.some((x) => x.id === v) ? v : '';
+}
 /** 队列摘要 —— 用户要的就是"一眼看出这个队列用什么模型、什么参数跑"。 */
 function queueSummary(q) {
   if (!q) return '';
@@ -654,6 +684,7 @@ function persistQueues() {
     const dump = queues.map((q) => ({
       id: q.id, name: q.name, mode: q.mode, umodel: q.umodel, msSize: q.msSize, pmodel: q.pmodel,
       perf: q.perf, preset: q.preset, modelKey: q.modelKey, params: q.params,
+      playlistTarget: q.playlistTarget || '',
       // 上限 500 条/队列：localStorage 只有几 MB，别让一个超大队列把配额撑爆
       items: ((q.id === activeQid.value ? queue : (q.items || []))).slice(0, 500).map((it) => ({
         id: it.id, path: it.path, name: it.name, duration: it.duration || 0,
@@ -682,12 +713,27 @@ function switchQueue(q) {
   toast(t('已切换到队列：') + q.name + t('（模型与参数已同步切换）'), 'ok');
 }
 async function addQueue() {
-  if (running.value) { toast(t('队列运行中，请先停止再新建'), 'warn'); return; }
+  const whileRunning = running.value;
   const name = await app.promptDialog({ title: t('新建队列'), value: t('队列 ') + (queues.length + 1) });
   if (!name || !name.trim()) return;
-  snapshotIntoQueue(currentQueue());
-  const q = { id: queues.reduce((m, x) => Math.max(m, (x.id || 0) + 1), 1), name: name.trim(), items: [] };
+  const old = currentQueue();
+  snapshotIntoQueue(old);            // 只复制快照，不动正在跑的条目
+  const q = {
+    id: queues.reduce((m, x) => Math.max(m, (x.id || 0) + 1), 1),
+    name: name.trim(), items: [],
+    mode: mode.value, umodel: umodel.value, msSize: msSize.value, pmodel: pmodel.value,
+    perf: perf.value, preset: presetSel.value, modelKey: currModelKey(),
+    params: collectPresetParams(),
+    playlistTarget: (old && old.playlistTarget) || '',
+  };
   queues.push(q);
+  if (whileRunning) {
+    // 运行中只“加入队列列表”，不能切过去（切走会清空正在跑的 queue → 这一批条目丢失）。
+    // 当前这一批结束后再切；设置已按当时界面复制，切过去后还能改。
+    persistQueues();
+    toast(t('已新建队列：') + q.name + t('（当前转录结束后可切换）'), 'ok');
+    return;
+  }
   activeQid.value = q.id;
   queue.splice(0, queue.length);     // 新队列从空开始（旧队列的条目已经在它自己身上了）
   snapshotIntoQueue(q);              // 但沿用当前界面的模型/参数 —— 想改直接在界面上改
@@ -1051,6 +1097,7 @@ function collectPresetParams() {
     perf: perf.value,
     auto_bpm: autoBpm.value,
     merge_overlap: mergeOverlap.value, vel_norm: velNorm.value, tempo: iv(exportTempo.value),
+    segment_sec: Math.max(0, iv(segmentSec.value)),
   };
   if (mode.value === 'universal') {
     Object.assign(p, {
@@ -1160,6 +1207,8 @@ function applyPresetParams(p, opts) {
   if (has('segment_silence')) msSegment.value = !!pr.segment_silence && pr.segment_silence !== 'off';
   if (has('min_silence')) msSegmentMin.value = Number(pr.min_silence) || 2.0;
   if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
+  // 识别片段长度（0 = 模型默认）；老预设没有这个键时保留当前值
+  if (has('segment_sec')) segmentSec.value = clamp(Math.round(numOr('segment_sec', 0)), 0, 120);
 }
 
 function applyPreset(name, opts) {
@@ -1365,6 +1414,8 @@ function collectParams() {
       if (msPrec.value && msPrec.value !== 'fp32') cfg.precision = msPrec.value;
     }
   }
+  // 识别片段长度：0 = 各模型默认，不传；>0 时所有转录模型共用同一个键（引擎按模型映射）
+  if (mode.value !== 'separate' && Number(segmentSec.value) > 0) cfg.segment_sec = Number(segmentSec.value);
   if (mode.value === 'separate') {
     cfg.with_drums = drums.value;
     cfg.export_stems = stemExport.value;
@@ -1411,6 +1462,11 @@ async function runBatch() {
   logLine(t('转录队列：共 ') + pendingCount.value + t(' 首') + (para > 1 ? t('，并行 ') + para + t(' 路') : t('，顺序处理')));
   const inst = currentModelInstalled();
   logLine(t('使用模型：') + currentModelLabel() + (inst === true ? t('（已就绪）') : inst === false ? t('（未下载，请到资源中心安装）') : ''));
+  // 产物目标歌单：开跑时快照（运行中切换队列被禁止；运行中改歌单下拉会禁用，
+  // 但即使被改，这一批也按开跑时的目标走，避免同一批落在两个歌单）
+  const batchQueueRef = currentQueue();
+  const batchTarget = effectiveTarget(batchQueueRef);
+  const batchTargetLabel = targetName(batchTarget);
   const t0 = Date.now();
   clearInterval(trTimer);
   trTimer = setInterval(() => {
@@ -1464,7 +1520,7 @@ async function runBatch() {
         it.status = 'done'; it.progress = 100; it.out = res.out; it.note_count = res.note_count || 0;
         try {
           const bytes = await bridge.readBinary(res.out);
-          if (bytes) { await importFiles([{ name: String(res.out).replace(/^.*[\\/]/, ''), bytes }]); }
+          if (bytes) { await importFiles([{ name: String(res.out).replace(/^.*[\\/]/, ''), bytes }], batchTarget); }
         } catch (e) {}
       } else {
         it.status = 'error'; it.error = (res && res.error) || (res ? 'code ' + res.code : '');
@@ -1501,7 +1557,7 @@ async function runBatch() {
     const last = queue.filter(i => i.status === 'done').pop();
     if (last) { lastOut.value = last.out; doneInfo.value = t('成功 ') + dN + t(' 首') + (last.note_count != null ? ' · ' + last.note_count + t(' 个音符') : ''); logLine(doneInfo.value); }
     done.value = true;
-    toast(t('批量转录完成：成功 ') + dN + t(' 首（已完成曲目已加入歌单）'), 'ok');
+    toast(t('批量转录完成：成功 ') + dN + t(' 首（已完成曲目已加入：') + batchTargetLabel + '）', 'ok');
   } else if (dN) {
     logLine(t('[失败] ') + eN + t(' 首失败，可在队列中点击「重试」。'), true);
     toast(t('批量转录完成：成功 ') + dN + t(' 首，失败 ') + eN + t(' 首'), 'warn');
@@ -1755,7 +1811,15 @@ onBeforeUnmount(() => {
         <button class="btn sm ghost" :disabled="!currentQueue()" @click="renameQueue(currentQueue())">{{ t('重命名') }}</button>
         <button class="btn sm ghost" :disabled="!currentQueue()" @click="duplicateQueue(currentQueue())">{{ t('复制') }}</button>
         <button class="btn sm ghost danger" :disabled="queues.length <= 1 || !currentQueue()" @click="removeQueue(currentQueue())">{{ t('删除队列') }}</button>
-        <span class="fb-hint" v-if="currentQueue()">{{ t('本队列：') }}{{ queueSummary(currentQueue()) }}</span>
+        <label class="tr-queue-target" data-guide="queue-playlist" :title="t('这个队列的转录产物完成后加入哪个歌单')">
+          <span>{{ t('产物歌单') }}</span>
+          <select class="select-input" :value="queueTarget(currentQueue())" :disabled="running || busy" @change="setQueueTarget">
+            <option value="">{{ t('跟随当前歌单') }}</option>
+            <option value="all">{{ t('仅加入全部曲目') }}</option>
+            <option v-for="pl in playlist.playlists" :key="pl.id" :value="pl.id">{{ pl.name }}</option>
+          </select>
+        </label>
+        <span class="fb-hint" v-if="currentQueue()">{{ t('本队列：') }}{{ queueSummary(currentQueue()) }} · {{ targetName(queueTarget(currentQueue())) }}</span>
       </div>
       <div v-if="queue.length" class="tr-batch-list">
         <div class="tr-batch-item" v-for="it in sortedQueue" :key="it.id"
@@ -2010,6 +2074,11 @@ onBeforeUnmount(() => {
             <!-- ★ 钢琴模型的碎音护栏（engine_pt._sane_min_note_ms）：10ms 等于关掉过滤器，
                  实测 30 秒样例 71 → 8037 个音符、3 分钟样例 47967 个 / 517 秒。 -->
             <div v-if="mode === 'piano'" class="tr-slider-hint">{{ t('钢琴模型：低于 30ms 的碎音会被丢弃（引擎按 30ms 处理）') }}</div>
+          </div>
+          <div class="tr-slider" v-if="mode !== 'separate'" data-guide="segment-sec">
+            <label>{{ t('识别片段长度') }}<b>{{ segmentSec > 0 ? segmentSec + 's' : t('模型默认') }}</b></label>
+            <NumSlider v-model="segmentSec" :min="0" :max="60" :step="1" unit="s" />
+            <small>{{ t('一次喂给模型识别的音频长度（秒）；0 = 各模型默认。调长：上下文更完整但更慢/更占显存；调短：更省资源但接缝处可能丢音。') }}</small>
           </div>
           <div class="tr-slider" v-if="mode === 'piano'">
             <label>{{ t('音符合并间隔') }}<b>{{ mergeGap }}ms</b></label>
@@ -2378,6 +2447,8 @@ onBeforeUnmount(() => {
 .tr-queues { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin: 0 0 8px; }
 .tr-queues .tr-pill { padding: 2px var(--sp-2); font-size: var(--fs-xs); }   /* 与 .fu-ctl--sm 同值 */
 .tr-queues .tr-q-n { font-style: normal; margin-left: 6px; font-size: var(--fs-xs); opacity: .72; }
+.tr-queue-target { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-xs); color: var(--stone); }
+.tr-queue-target select { max-width: 160px; padding: 2px 6px; font-size: var(--fs-xs); }
 .tr-sum { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; background: var(--surface-soft); border-radius: var(--r-md); padding: 10px 14px; font-size: var(--fs-sm); color: var(--slate); }
 .tr-sum b { color: var(--ink); font-weight: 600; }
 .tr-progress { position: relative; display: flex; align-items: center; justify-content: flex-end; height: 20px; background: var(--surface-soft); border-radius: var(--r-pill); overflow: hidden; margin-top: 8px; }

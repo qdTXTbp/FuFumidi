@@ -609,6 +609,17 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     except Exception:
         model = TranscriptionModel.load_model(load_arg)
 
+    # ★ 识别片段长度：MuScriptor 的块长写死在 muscriptor.transcription_model._SEGMENT_DURATION（5s）。
+    #   界面调了值就在这里改模块常量（同一进程只跑一次转录；模型 token 布局不随块长变）。
+    import segment_options as _seg_opt
+    _chunk_sec = _seg_opt.muscriptor_segment_sec(params.get("segment_sec"))
+    if params.get("segment_sec"):
+        try:
+            import muscriptor.transcription_model as _tm
+            _tm._SEGMENT_DURATION = float(_chunk_sec)
+            _log(log_cb, "识别片段长度：%.1fs（MuScriptor 默认 5s）" % float(_chunk_sec))
+        except Exception as _e:  # noqa: BLE001
+            _log(log_cb, "识别片段长度设置失败，按默认 5s：%s" % _e)
     if model._device and model._device.type == "cuda":
         _log(log_cb, "使用 GPU（CUDA）推理")
     elif model._device and model._device.type == "mps":
@@ -907,7 +918,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             import tempfile as _tf
             segs = plan["segments"]
             pad = float(params.get("segment_pad") or 1.0)
-            chunk_sec = 5.0
+            chunk_sec = _chunk_sec
             per = [max(1, int((e - s) / chunk_sec + 0.999)) for s, e in segs]
             total_chunks = sum(per)
             done_chunks = 0
@@ -1122,7 +1133,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                 data = model.events_to_midi_bytes(_events_capped(events), beat_grid=beat_grid)
                 if _stitch and data:
                     try:
-                        _stitched, _st_stats = _stitch_chunk_boundaries(data)
+                        _stitched, _st_stats = _stitch_chunk_boundaries(data, chunk_sec=_chunk_sec)
                         if _st_stats.get("merged"):
                             data = _stitched
                         _log(log_cb, "跨块延音缝合：接合 %d 处（边界两侧同轨同音高），缝合后最长音 %.1fs"

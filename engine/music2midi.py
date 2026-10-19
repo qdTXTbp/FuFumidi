@@ -158,6 +158,14 @@ def _resolve_params(args, mode):
     if getattr(args, "denoise_mode", None): p["denoise_mode"] = str(args.denoise_mode)
     if getattr(args, "normalize", False): p["normalize"] = True
     if getattr(args, "auto_bpm", False): p["auto_bpm"] = True
+    # 识别片段长度（所有转录模型共用）：0/空 = 各模型默认
+    _sg = getattr(args, "segment_sec", None)
+    if _sg is not None:
+        try:
+            if float(_sg) > 0:
+                p["segment_sec"] = float(_sg)
+        except (TypeError, ValueError):
+            pass
     if getattr(args, "no_merge", False): p["merge_overlap"] = False
     if getattr(args, "no_velnorm", False): p["normalize_vel"] = False
     # 子模型选择：universal → basic / muscriptor；piano → piano_pt / aria / transkun
@@ -456,6 +464,8 @@ def build_parser():
     g.add_argument("--no-velnorm", action="store_true", help="关闭力度归一化")
 
     g = parser.add_argument_group("通用/分离（basic-pitch）参数")
+    g.add_argument("--segment-sec", dest="segment_sec", type=float, default=None,
+                   help="识别片段长度（秒，所有转录模型）：0/不传 = 各模型默认")
     g.add_argument("--min-note-length", type=float, default=None,
                    help="最短音符时长(ms)（默认 128）")
     g.add_argument("--min-freq", "--minimum-frequency", dest="minimum_frequency",
@@ -585,6 +595,8 @@ def cmd_worker():
                 # 引擎会一直用默认 15s。
                 max_note_hold=req.get('max_note_hold'),
                 # ⑤ 静音分段（漏一项界面勾了也到不了引擎）
+                # 识别片段长度：漏这一项时界面滑条调了也到不了引擎
+                segment_sec=req.get('segment_sec'),
                 segment_silence=req.get('segment_silence'),
                 silence_db=req.get('silence_db'),
                 min_silence=req.get('min_silence'),

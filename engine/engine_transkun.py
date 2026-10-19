@@ -62,6 +62,12 @@ def transcribe_transkun(audio_path, output_midi, params=None, log_cb=None,
         cmd += [wav, output_midi, "--device", device]
         if weight:
             cmd += ["--weight", weight]
+        # 识别片段长度：transkun CLI 原生支持 --segmentSize / --segmentHopSize（秒）
+        try:
+            import segment_options as _so
+            cmd += _so.transkun_segment_args(params.get("segment_sec"))
+        except Exception:
+            pass
         _run(cmd, log_cb)
     finally:
         remove_temp(wav)
