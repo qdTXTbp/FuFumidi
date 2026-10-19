@@ -12,6 +12,11 @@ import time
 
 import pause_gate as _pause_gate_mod
 
+# 队列批量转录的模型复用：worker 进程常驻时，同一模型/设备/精度只加载一次。
+# 只对 CUDA 启用（CPU 上多 worker 各留一份 1.17GB 模型容易爆内存）；
+# 低显存模式强制不缓存（优先保证不 OOM）。
+_MODEL_CACHE = {}
+
 
 def _find_local_model(size):
     """从本地模型目录查找已下载的 MuScriptor 权重（资源中心下载后合并得到）。
@@ -601,13 +606,36 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     _dtype = str(params.get("dtype") or "").strip() or None
     if _dtype:
         _log(log_cb, "计算精度：%s（bf16 更快，但数值精度与 fp32 不同）" % _dtype)
+    # 队列里连续多首时复用模型：30 秒素材实测模型加载占每首固定开销的 2–3 秒，
+    # 批量队列里这部分会被重复支付。缓存 key = (权重路径, device, dtype)。
+    _cache_ok = False
     try:
-        model = TranscriptionModel.load_model(load_arg, device=dev, dtype=_dtype)
-    except TypeError:
-        # 老版本 muscriptor 的 load_model 不认 dtype：退回旧签名，别让整次转录失败
-        model = TranscriptionModel.load_model(load_arg, device=dev)
+        import torch as _torch
+        _cache_ok = bool(_torch.cuda.is_available()) and str(params.get("memory_mode") or "") != "low"
     except Exception:
-        model = TranscriptionModel.load_model(load_arg)
+        _cache_ok = False
+    _ckey = (str(load_arg), str(dev), str(_dtype or ""))
+    model = None
+    if _cache_ok and _MODEL_CACHE.get("key") == _ckey and _MODEL_CACHE.get("model") is not None:
+        model = _MODEL_CACHE["model"]
+        _log(log_cb, "复用已加载模型（同一队列后续曲目跳过模型加载）")
+    if model is None:
+        _t_load = time.perf_counter()
+        try:
+            model = TranscriptionModel.load_model(load_arg, device=dev, dtype=_dtype)
+        except TypeError:
+            # 老版本 muscriptor 的 load_model 不认 dtype：退回旧签名，别让整次转录失败
+            model = TranscriptionModel.load_model(load_arg, device=dev)
+        except Exception:
+            model = TranscriptionModel.load_model(load_arg)
+        if _cache_ok:
+            _MODEL_CACHE.clear()
+            _MODEL_CACHE["key"] = _ckey
+            _MODEL_CACHE["model"] = model
+        try:
+            _log(log_cb, "模型加载耗时 %.2fs%s" % (time.perf_counter() - _t_load, "（已缓存供后续曲目复用）" if _cache_ok else ""))
+        except Exception:
+            pass
 
     # ★ 识别片段长度：MuScriptor 的块长写死在 muscriptor.transcription_model._SEGMENT_DURATION（5s）。
     #   界面调了值就在这里改模块常量（同一进程只跑一次转录；模型 token 布局不随块长变）。
