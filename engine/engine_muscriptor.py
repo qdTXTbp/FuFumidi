@@ -938,7 +938,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     del open_notes[idx]
                     _cap_stats["closed"] += 1
 
-        def _segmented_events(plan, pcm, sr):
+        def _segmented_events(plan, pcm, sr, constrain_override="__unset__"):
             """逐段推理并合并事件流（★ 静音分段）。
 
             三条不变量（错了就会丢音/重音，改动前先看这里）：
@@ -978,7 +978,8 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     off = a / float(sr)
                     kept = {}
                     dropped = set()
-                    for ev in model.transcribe(seg_wav, instruments=constrain, **_gen_kw):
+                    _seg_instruments = constrain if constrain_override == "__unset__" else constrain_override
+                    for ev in model.transcribe(seg_wav, instruments=_seg_instruments, **_gen_kw):
                         if _ProgressEvent is not None and isinstance(ev, _ProgressEvent):
                             yield _ProgressEvent(completed=done_chunks + int(getattr(ev, "completed", 0)),
                                                  total=total_chunks)
@@ -1062,18 +1063,63 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         _mode, _groups = instrument_probe.parse_mode(params.get("muscriptor_instruments"))
         constrain = _groups if _mode == "limit" else None
         if _mode == "probe":
-            # 「音色稳定」预设：先探测主乐器组，再作为硬约束（减少长尾乐器与跨块改判）
+            # 「音色稳定」预设：先探测主乐器组，再作为硬约束（减少长尾乐器与跨块改判）。
+            # ★ 探测器**优先用小模型**，不再复用主模型：大模型（large，1.4B）本身很慢，
+            #   拿它做 3×20s 预分析实测要数分钟（RTX 5070 Ti 笔记本上甚至逼近 10 分钟），
+            #   主转录还没开始用户就以为卡死；小模型探测约几秒，且探测结果只用于选组。
+            _probe_model = model
+            _probe_label = "主模型"
+            _probe_tmp = False
+            # 探测器选择（auto）：large 主模型用 small 探测器（否则拿 large 做 3×20s 预分析
+            # 实测要数分钟到 10 分钟）；medium/small 主模型直接用主模型探测（实测 medium 探测
+            # 25s/3min 歌，small 探测器反而 39s 且组更少，因此不要一律 small）。
+            # 环境变量 FUFUMIDI_PROBE_MODEL=small|main 可强制覆盖（排查/A-B 用）。
+            _probe_pref = os.environ.get("FUFUMIDI_PROBE_MODEL", "auto").strip().lower()
+            _use_small_probe = _probe_pref == "small" or (_probe_pref != "main" and size == "large")
+            if _use_small_probe and size != "small":
+                try:
+                    _small_path = _find_local_model("small")
+                    if _small_path:
+                        _t_probe_load = time.perf_counter()
+                        try:
+                            _probe_model = TranscriptionModel.load_model(_small_path, device=dev, dtype=_dtype)
+                        except TypeError:
+                            _probe_model = TranscriptionModel.load_model(_small_path, device=dev)
+                        except Exception:
+                            _probe_model = TranscriptionModel.load_model(_small_path)
+                        _probe_tmp = True
+                        _probe_label = "small（独立探测器）"
+                        _log(log_cb, "自动探测使用独立小模型（small，不消耗主模型推理；加载 %.2fs）"
+                             % (time.perf_counter() - _t_probe_load))
+                except Exception as _e:  # noqa: BLE001
+                    _probe_model = model
+                    _probe_label = "主模型（small 加载失败：%s）" % str(_e)[:80]
+                    _log(log_cb, "小模型探测器不可用，退回主模型探测：%s" % _e)
             try:
-                _pr = instrument_probe.probe(model, wav_tmp, log=log_cb)
+                _t_probe = time.perf_counter()
+                _pr = instrument_probe.probe(_probe_model, wav_tmp, log=log_cb)
+                _probe_secs = time.perf_counter() - _t_probe
                 _groups = _pr.get("groups") or []
                 if _groups:
                     constrain = _groups
-                    _log(log_cb, "预分析锁定乐器组（音色稳定）：" + " / ".join(_groups)
-                         + "（%s）" % _pr.get("reason", "ok"))
+                    _log(log_cb, "预分析锁定乐器组（音色稳定，探测器=%s，%.1fs）：" % (_probe_label, _probe_secs)
+                         + " / ".join(_groups) + "（%s）" % _pr.get("reason", "ok"))
                 else:
-                    _log(log_cb, "预分析未得到可用乐器组（%s），本次不限制" % _pr.get("reason", "unknown"))
+                    _log(log_cb, "预分析未得到可用乐器组（探测器=%s，%.1fs，%s），本次不限制"
+                         % (_probe_label, _probe_secs, _pr.get("reason", "unknown")))
             except Exception as _e:  # noqa: BLE001
                 _log(log_cb, "预分析失败，本次不限制：%s" % _e)
+            finally:
+                if _probe_tmp:
+                    try:
+                        del _probe_model
+                        import gc as _gc_probe
+                        _gc_probe.collect()
+                        import torch as _torch_probe
+                        if _torch_probe.cuda.is_available():
+                            _torch_probe.cuda.empty_cache()
+                    except Exception:
+                        pass
         if not constrain:
             _log(log_cb, "未限定乐器组：模型自由判定（同一段旋律可能被写成多种音色）")
         if constrain:
@@ -1179,6 +1225,40 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     else:
                         events = model.transcribe(wav_tmp, instruments=constrain, **_gen_kw)
                 data = model.events_to_midi_bytes(_events_capped(events), beat_grid=beat_grid)
+                # ★ 0 音符保护：空 MIDI 不是成功结果。
+                #   以前这里会把只有 tempo 的 33B 文件直接写盘/入库（用户看到"转录成功但 MIDI 是空的"）。
+                #   先在内存里数音符：为 0 且用了乐器组约束时，**取消约束重试一次**（有时是探测组
+                #   与这首歌不匹配）；仍为 0 就明确报错，不再静默产出空文件。
+                _n_before = _midi_note_count_bytes(data)
+                if _n_before == 0 and constrain is not None:
+                    _log(log_cb, "识别结果为 0 音符，先取消乐器组约束重试一次（原限制：%s）"
+                         % (" / ".join(constrain) if constrain else "无"))
+                    try:
+                        if _seg_plan is not None:
+                            _retry_events = _segmented_events(_seg_plan, _seg_pcm, _seg_sr, constrain_override=None)
+                        else:
+                            _retry_events = model.transcribe(wav_tmp, instruments=None, **_gen_kw)
+                        _retry_data = model.events_to_midi_bytes(_events_capped(_retry_events), beat_grid=beat_grid)
+                        _n_retry = _midi_note_count_bytes(_retry_data)
+                        if _n_retry > 0:
+                            data = _retry_data
+                            _n_before = _n_retry
+                            _log(log_cb, "取消乐器组约束后重试成功：%d 音符" % _n_retry)
+                        else:
+                            _log(log_cb, "取消乐器组约束后重试仍为 0 音符")
+                    except Exception as _re:  # noqa: BLE001
+                        _log(log_cb, "取消约束重试失败：%s" % _re)
+                if _n_before == 0:
+                    try:
+                        import soundfile as _sf_chk
+                        _dur_chk = float(_sf_chk.info(wav_tmp).duration)
+                    except Exception:
+                        _dur_chk = 0.0
+                    raise RuntimeError(
+                        "识别结果为 0 音符（音频 %.1fs，模型 %s，乐器组限制=%s）。"
+                        "常见原因：音频近乎静音/只有噪声、乐器组限制与素材不匹配、或模型未输出事件。"
+                        "已取消乐器组约束重试仍为空，未写入空 MIDI。"
+                        % (_dur_chk, size, " / ".join(constrain) if constrain else "无"))
                 if _stitch and data:
                     try:
                         _stitched, _st_stats = _stitch_chunk_boundaries(data, chunk_sec=_chunk_sec)
@@ -1384,6 +1464,28 @@ def _read_token_dump(path):
                 yield int(o["t"])
 
     return gen(), grid
+
+
+def _midi_note_count_bytes(data):
+    """从内存里的 MIDI 字节数音符（note_on velocity>0）；解析失败返回 -1。
+
+    只用于「0 音符保护」：检查引擎是否在**写盘前**就已经没有音符事件，避免把
+    一个只有 tempo 的空 MIDI 当成成功结果返回给界面。
+    """
+    if not data:
+        return 0
+    try:
+        import io as _io
+        import mido as _mido
+        mf = _mido.MidiFile(file=_io.BytesIO(data))
+        n = 0
+        for track in mf.tracks:
+            for msg in track:
+                if msg.type == "note_on" and getattr(msg, "velocity", 0):
+                    n += 1
+        return n
+    except Exception:
+        return -1
 
 
 def _duration_stats(midi_path):
