@@ -48,4 +48,4 @@
 ## 自动探测改用专用音频标签模型（方案 B）
 
 - 内置 `resources/models/audio-tagger`（AudioSet zipformer-small int8 ONNX，26MB），自动探测/分段探测不再占用主模型；CPU 推理约 0.3s/10s。
-- 置信度不足时宁可不锁定（日志会说明），避免硬约束把真实乐器关掉；MuScriptor 探测器保留为模型不可用时的回退。
+- 置信度不足时宁可不锁定（日志会说明），避免硬约束把真实乐器关掉；MuScriptor 探测器保留为模型不可用时的回退。- 置信度不足时自动回退 MuScriptor-small 探测（日志会标注），保证音色稳定不会变成空操作；标签模型自身只占 CPU、不占主模型。

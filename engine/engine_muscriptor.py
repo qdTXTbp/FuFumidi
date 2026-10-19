@@ -1090,6 +1090,22 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             except Exception as _e:  # noqa: BLE001
                 _tagger = None
                 _log(log_cb, "音频标签模型不可用，退回 MuScriptor 探测器：%s" % str(_e)[:120])
+
+            def _load_fallback_probe():
+                """标签模型置信度不足时的兜底探测器：独立 small（失败再用主模型）。"""
+                try:
+                    _p = _find_local_model("small")
+                    if size != "small" and _p:
+                        try:
+                            return TranscriptionModel.load_model(_p, device=dev, dtype=_dtype), True
+                        except TypeError:
+                            return TranscriptionModel.load_model(_p, device=dev), True
+                        except Exception:
+                            return TranscriptionModel.load_model(_p), True
+                except Exception:
+                    pass
+                return model, False
+
             # 探测器选择（auto）：没有标签模型时，large 主模型用 small 探测器；
             # medium/small 直接用主模型。环境变量 FUFUMIDI_PROBE_MODEL 可强制覆盖。
             _probe_pref = os.environ.get("FUFUMIDI_PROBE_MODEL", "auto").strip().lower()
@@ -1164,6 +1180,27 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                         _log(log_cb, "分段探测完成（探测器=%s，%.1fs）：%d 段；稳定组=%s"
                              % (_probe_label, time.perf_counter() - _t_probe,
                                 len(_segs), " / ".join(_keep) if _keep else "无"))
+                    elif _tagger is not None:
+                        # 分段标签置信度都不足：退回整曲 small 探测，至少别让音色稳定变成空操作
+                        _log(log_cb, "分段标签模型置信度不足，尝试 MuScriptor-small 整曲兜底探测…")
+                        _fb_model, _fb_tmp = _load_fallback_probe()
+                        try:
+                            _fpr = instrument_probe.probe(_fb_model, wav_tmp, log=log_cb)
+                            _fgroups = _fpr.get("groups") or []
+                            if _fgroups:
+                                constrain = _fgroups
+                                _log(log_cb, "整曲兜底锁定乐器组（MuScriptor-small）：" + " / ".join(_fgroups))
+                        finally:
+                            if _fb_tmp:
+                                try:
+                                    del _fb_model
+                                    import gc as _gc_fb
+                                    _gc_fb.collect()
+                                    import torch as _torch_fb
+                                    if _torch_fb.cuda.is_available():
+                                        _torch_fb.cuda.empty_cache()
+                                except Exception:
+                                    pass
                     else:
                         _log(log_cb, "分段探测未得到任何乐器组（探测器=%s，%.1fs），本次不限制"
                              % (_probe_label, time.perf_counter() - _t_probe))
@@ -1176,6 +1213,27 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                         _groups = _pr.get("groups") or []
                         _prs = _pr.get("reason", "ok")
                     _probe_secs = time.perf_counter() - _t_probe
+                    if not _groups and _tagger is not None:
+                        _log(log_cb, "音频标签模型置信度不足（%s），尝试 MuScriptor-small 兜底探测…" % (_prs or "低置信度"))
+                        _fb_model, _fb_tmp = _load_fallback_probe()
+                        try:
+                            _fpr = instrument_probe.probe(_fb_model, wav_tmp, log=log_cb)
+                            _groups = _fpr.get("groups") or []
+                            _prs = _fpr.get("reason", "ok")
+                            if _groups:
+                                _probe_label = "MuScriptor-small 兜底"
+                        finally:
+                            if _fb_tmp:
+                                try:
+                                    del _fb_model
+                                    import gc as _gc_fb
+                                    _gc_fb.collect()
+                                    import torch as _torch_fb
+                                    if _torch_fb.cuda.is_available():
+                                        _torch_fb.cuda.empty_cache()
+                                except Exception:
+                                    pass
+                        _probe_secs = time.perf_counter() - _t_probe
                     if _groups:
                         constrain = _groups
                         _log(log_cb, "预分析锁定乐器组（音色稳定，探测器=%s，%.1fs）：" % (_probe_label, _probe_secs)
