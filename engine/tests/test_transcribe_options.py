@@ -13,6 +13,7 @@ def test_builtin_segment_sec_values():
     b = P._builtin_presets()
     assert b["Basic Pitch · 最优"]["params"]["segment_sec"] == 0
     assert b["MuScriptor · 最优"]["params"]["segment_sec"] == 5
+    assert b["MuScriptor · 最优"]["params"].get("timbre_stabilize") is True
     assert b["钢琴 · 最优"]["params"]["segment_sec"] == 10
     assert b["Aria-AMT · 最优"]["params"]["segment_sec"] == 30
     assert b["Transkun · 最优"]["params"]["segment_sec"] == 16

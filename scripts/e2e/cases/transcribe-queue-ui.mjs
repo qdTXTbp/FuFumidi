@@ -40,6 +40,41 @@ export default async function (app) {
   const chain = await app.eval('(() => { const c=document.querySelector("[data-guide=chain-queues] input"); return c ? c.checked : null; })()');
   app.assert(chain === false, '顺序转录默认关');
 
+  // 内置预设里的各模型推荐片段长度（engine/presets.py → desktop presets.list）
+  const presRaw = await app.eval('window.fuBridge.presets.list().then(r => JSON.stringify(r)).catch(e => "ERR:" + e.message)');
+  let pres = null;
+  try { pres = JSON.parse(presRaw); } catch (e) {}
+  if (pres && pres.presets) {
+    const seg = (n) => (pres.presets[n] && pres.presets[n].params || {}).segment_sec;
+    app.assert(seg('Basic Pitch · 最优') === 0, 'Basic Pitch 预设片段=0：' + seg('Basic Pitch · 最优'));
+    app.assert(seg('MuScriptor · 最优') === 5, 'MuScriptor 预设片段=5s：' + seg('MuScriptor · 最优'));
+    app.assert(seg('钢琴 · 最优') === 10, '钢琴预设片段=10s：' + seg('钢琴 · 最优'));
+    app.assert(seg('Aria-AMT · 最优') === 30, 'Aria 预设片段=30s：' + seg('Aria-AMT · 最优'));
+    app.assert(seg('Transkun · 最优') === 16, 'Transkun 预设片段=16s：' + seg('Transkun · 最优'));
+  } else {
+    app.assert(false, 'presets.list 返回异常：' + String(presRaw).slice(0, 120));
+  }
+  // 切到 MuScriptor 应自动套内置预设 → 滑条显示推荐 5s
+  await app.eval("(() => { const b=[...document.querySelectorAll('.tr-pills button')].find(x=>(x.innerText||'').indexOf('MuScriptor')>=0); if (b) b.click(); return !!b; })()");
+  await new Promise((r) => setTimeout(r, 500));
+  const segMu = await app.eval('(() => document.querySelector("[data-guide=segment-sec]").innerText)()');
+  app.assert(/5\s*s/.test(segMu) || segMu.indexOf('5s') >= 0, '切 MuScriptor 后片段长度自动为 5s：' + segMu.slice(0, 140));
+  const timbre = await app.eval('(() => { const e=document.querySelector("[data-guide=timbre-stabilize] input"); return e?{has:true,checked:e.checked}:{has:false}; })()');
+  app.assert(timbre.has && timbre.checked === true, '音色稳定后处理默认开：' + JSON.stringify(timbre));
+
+  // P2：驱动/共享显存检测 + 音色稳定开关 + 统一内存实验按钮
+  await app.waitFor('!!document.querySelector("[data-guide=gpu-detail]")', { timeout: 30000, message: 'GPU 驱动检测信息出现' });
+  const gpuDetail = await app.eval('(() => { const e=document.querySelector("[data-guide=gpu-detail]"); return e?e.innerText:""; })()');
+  app.assert(gpuDetail.indexOf('驱动') >= 0 || gpuDetail.indexOf('Driver') >= 0, '驱动检测显示：' + gpuDetail.slice(0, 120));
+  app.assert(gpuDetail.indexOf('共享显存回退') >= 0 || gpuDetail.indexOf('Shared-memory') >= 0, '共享显存回退状态显示：' + gpuDetail.slice(0, 160));
+  const umBtn = await app.eval('(() => { const e=document.querySelector("[data-guide=unified-memory] button"); return e?e.innerText:""; })()');
+  app.assert(!!umBtn && (umBtn.indexOf('统一内存') >= 0 || umBtn.indexOf('unified') >= 0), '统一内存实验按钮存在：' + umBtn);
+  // 真的跑一次实验（E2E 数据根没有 GPU 增强包时预期 backend-missing；只要求 IPC 有明确结果）
+  await app.eval('document.querySelector("[data-guide=unified-memory] button").click(); true');
+  await app.waitFor('(() => { const e=document.querySelector("[data-guide=unified-memory] small"); return !!e && (e.innerText||"").length > 0; })()', { timeout: 60000, message: '统一内存实验结果返回' });
+  const umRes = await app.eval('(() => { const e=document.querySelector("[data-guide=unified-memory] small"); return e?e.innerText:""; })()');
+  app.assert(umRes.indexOf('统一内存') >= 0 || umRes.indexOf('Unified memory') >= 0, '统一内存实验有结果：' + umRes.slice(0, 160));
+
   const addBtn = await app.eval('(() => [...document.querySelectorAll(".tr-queues button")].some(b => (b.innerText || "").indexOf("新建队列") >= 0))()');
   app.assert(addBtn, '有「新建队列」按钮（运行中也允许新建，见代码注释）');
   await app.screenshot('transcribe-queue-ui');

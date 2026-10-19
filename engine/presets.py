@@ -175,6 +175,8 @@ def _builtin_presets():
                 "segment_silence": "off",
                 # MuScriptor 训练/推理块长 5s；固定训练值最不容易在块边界换音色
                 "segment_sec": 5,
+                # 音色稳定后处理：短命孤立乐器轨并入邻近主导轨（减少跨块换音色）
+                "timbre_stabilize": True,
             },
         },
         "钢琴 · 最优": {"mode": "piano", "params": {**piano, "model": "piano_pt", "segment_sec": 10}},

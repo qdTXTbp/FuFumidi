@@ -88,6 +88,7 @@ const msTemp = ref(1.0);                 // 采样温度（1.0 = 不传）
 const msCfg = ref(1.0);                  // 引导系数（1.0 = 不传）
 const msBeam = ref(1);                   // 束搜索宽度（1 = 不传）
 const msPrelude = ref(true);             // 跨块延音缝合（默认开；关掉才传 false＝不缝合）
+const msTimbre = ref(true);              // 音色稳定后处理（MuScriptor 默认开）：短命孤立乐器轨并入邻近主导轨
 /* 静音分段（长音频提速，**默认关** —— 用户 2026-10-14 定）：在完全空白静音处切段、
    逐段转录、再合并成一份 MIDI。段与段之间本来就是静音，接缝处只是少一点上下文。
    实测《原神》线上音乐会 2021（104 分钟）：−60 dBFS 下静音 439.5 s / 7.0%，可省约 7%；
@@ -140,6 +141,9 @@ const logExpanded = ref(false);
 const lastOut = ref('');
 const doneInfo = ref('');
 const gpuInfo = ref('');
+const gpuDetail = ref('');          // 驱动版本 / 共享显存回退支持（P2 驱动检测）
+const umBusy = ref(false);
+const umResult = ref('');          // CUDA 统一内存实验输出（P2 实验，不改变转录）
 
 /* ---------------- 模型下载状态（用于标记哪些模型已安装） ---------------- */
 // key → model:list 返回条目的 id；basic / piano_pt 为内置兜底，始终就绪
@@ -608,7 +612,7 @@ const WEB_BUILTIN_PRESETS = () => {
     { name: 'MuScriptor · 最优', mode: 'universal', params: { ...basic,
       model: 'muscriptor', model_size: 'medium', muscriptor_instruments: 'none',
       temperature: 1.0, cfg_coef: 1.0, beam_size: 1, prelude_forcing: true,
-      precision: 'fp32', segment_sec: 5 } },
+      timbre_stabilize: true, precision: 'fp32', segment_sec: 5 } },
     { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt', segment_sec: 10 } },
     { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria', segment_sec: 30 } },
     { name: 'Transkun · 最优', mode: 'piano', params: { ...piano, model: 'transkun', segment_sec: 16 } },
@@ -1072,10 +1076,34 @@ async function probeEngine() {
         _base += ' · 显存 ' + _gb(g.vram_free_mb || 0) + '/' + _gb(g.vram_total_mb) + ' GB 空闲';
       }
       gpuInfo.value = _base;
+      const _parts = [];
+      if (g.driver_version) _parts.push(t('驱动 ') + g.driver_version);
+      if (g.sysmem_fallback_supported === true) _parts.push(t('共享显存回退：支持（驱动 ≥536.40；≥546.01 可按应用关闭）'));
+      else if (g.sysmem_fallback_supported === false) _parts.push(t('共享显存回退：不支持（显存不足会直接报 OOM）'));
+      gpuDetail.value = _parts.join(' · ');
     }
   } catch (e) {}
 }
 function selectPerf(p) { perfUserSet = true; perf.value = p; }
+async function runUnifiedMemoryExperiment() {
+  if (!bridge || typeof bridge.gpuUnifiedMemoryExperiment !== 'function') { toast(t('当前版本不支持统一内存实验'), 'warn'); return; }
+  if (umBusy.value) return;
+  umBusy.value = true;
+  umResult.value = '';
+  try {
+    const r = await bridge.gpuUnifiedMemoryExperiment();
+    if (r && r.ok) {
+      umResult.value = t('统一内存：可用 · 分配 ') + (r.alloc_ms || 0) + 'ms · ' + t('主机写入 ') + (r.host_touch_ms || 0) + 'ms · ' + t('同步 ') + (r.sync_ms || 0) + 'ms（仅实验，不改变转录分配器）';
+      toast(t('统一内存实验通过（仅实验，不改变转录）'), 'ok');
+    } else {
+      umResult.value = t('统一内存：不可用：') + ((r && (r.error || r.code)) || '');
+      toast(t('统一内存不可用：') + ((r && (r.error || r.code)) || ''), 'warn');
+    }
+  } catch (e) {
+    umResult.value = t('统一内存：不可用：') + String((e && e.message) || e);
+    toast(t('统一内存实验失败'), 'warn');
+  } finally { umBusy.value = false; }
+}
 
 /* ---------------- 参数预设（**按模型归属**） ---------------- */
 // 用户要求（2026-10-14）：
@@ -1175,6 +1203,7 @@ function collectPresetParams() {
       muscriptor_instruments: msInstrValue.value,
       temperature: Number(msTemp.value), cfg_coef: Number(msCfg.value),
       beam_size: iv(msBeam.value), prelude_forcing: msPrelude.value,
+      timbre_stabilize: msTimbre.value,
       precision: msPrec.value,
       segment_silence: msSegment.value ? 'auto' : 'off',
       min_silence: iv(msSegmentMin.value),
@@ -1265,6 +1294,7 @@ function applyPresetParams(p, opts) {
   if (has('cfg_coef')) msCfg.value = Math.max(0, numOr('cfg_coef', 1.0));
   if (has('beam_size')) msBeam.value = Math.max(1, Math.round(numOr('beam_size', 1)));
   if (has('prelude_forcing')) msPrelude.value = pr.prelude_forcing !== false;
+  if (has('timbre_stabilize')) msTimbre.value = pr.timbre_stabilize !== false;
   if (has('segment_silence')) msSegment.value = !!pr.segment_silence && pr.segment_silence !== 'off';
   if (has('min_silence')) msSegmentMin.value = Number(pr.min_silence) || 2.0;
   if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
@@ -1442,6 +1472,7 @@ function collectParams() {
       // 乐器组约束：'auto' / '人声,鼓' 这样的组名列表 / 空。
       // 注意这条链路有三跳（渲染端 → 主进程 worker 请求体 → 引擎），少任何一跳界面选了都不生效。
       cfg.muscriptor_instruments = msInstrValue.value;
+      cfg.timbre_stabilize = !!msTimbre.value;
       // ★ 2026-10-14 更正：这段注释原先描述的是**已被移除**的批量推理行为
       //   （`bca0a55`「移除批量推理功能」）。现在：
       //   · `prelude_forcing` 是**独立开关**（见下面的 msPrelude），与性能档无关；
@@ -2222,6 +2253,7 @@ onBeforeUnmount(() => {
               </select>
             </label>
           </div>
+          <div v-if="mode !== 'separate' && gpuDetail" class="tr-slider-hint" data-guide="gpu-detail">{{ gpuDetail }}</div>
           <div class="tr-switch" v-if="mode !== 'separate'" data-guide="denoise-mode">
             <label>
               <span><b>{{ t('转录前降噪') }}</b><small>{{ t('默认关闭（实测降噪可能增加假音符）。轻降噪=谱减；强降噪=UVR-DeNoise 模型（需先下载），更慢但能压稳态噪声') }}</small></span>
@@ -2231,6 +2263,10 @@ onBeforeUnmount(() => {
                 <option value="strong">{{ t('强降噪（UVR 模型）') }}</option>
               </select>
             </label>
+          </div>
+          <div v-if="mode !== 'separate'" class="tr-slider" data-guide="unified-memory">
+            <button class="btn sm ghost" :disabled="umBusy" @click="runUnifiedMemoryExperiment">{{ umBusy ? t('实验中…') : t('运行统一内存实验（CUDA Managed Memory）') }}</button>
+            <small v-if="umResult">{{ umResult }}</small>
           </div>
           <div class="tr-slider" v-if="mode === 'piano'">
             <label>{{ t('音符合并间隔') }}<b>{{ mergeGap }}ms</b></label>
@@ -2288,6 +2324,9 @@ onBeforeUnmount(() => {
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label><span><b>{{ t('跨块延音缝合') }}</b><small>{{ t('解码后把 5 秒分块边界两侧同音高、同音色的延音缝回一个长音：延音不断，而模型不再被强制拖着走 —— 从根上消除僵尸长音。关掉＝不缝合，边界处延音可能断（默认开）') }}</small></span><input type="checkbox" v-model="msPrelude"></label>
+          </div>
+          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'" data-guide="timbre-stabilize">
+            <label><span><b>{{ t('音色稳定后处理') }}</b><small>{{ t('把短命、孤立的乐器轨并入邻近主导轨，减少分块边界处「同一旋律换音色」；默认开，关掉则保留模型原始判定的所有乐器轨') }}</small></span><input type="checkbox" v-model="msTimbre"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label><span><b>{{ t('跳过静音分段（长音频加速）') }}</b><small>{{ t('在完全空白静音处切段，逐段转录后拼成一份 MIDI；默认关') }}</small></span><input type="checkbox" v-model="msSegment"></label>

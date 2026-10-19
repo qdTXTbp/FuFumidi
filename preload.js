@@ -313,6 +313,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   gpuListPackages: () => ipcRenderer.invoke('gpu:listPackages'),
   gpuImportLocal: (p, kind) => ipcRenderer.invoke('gpu:importLocal', p, kind),
   gpuStatus: () => ipcRenderer.invoke('gpu:status'),
+  gpuUnifiedMemoryExperiment: () => ipcRenderer.invoke('gpu:unifiedMemoryExperiment'),
   gpuUninstall: (kind) => ipcRenderer.invoke('gpu:uninstall', kind),
   gpuCancelInstall: () => ipcRenderer.invoke('gpu:cancelInstall'),
   pickZip: () => ipcRenderer.invoke('dialog:pickZip'),

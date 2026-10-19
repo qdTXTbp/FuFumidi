@@ -21,6 +21,24 @@ function registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app
     } catch (e) { resolve({ ok: false, error: String(e) }); }
   }));
 
+  // CUDA 统一内存（cudaMallocManaged）可行性实验：独立脚本，不改变转录主流程
+  ipcMain.handle('gpu:unifiedMemoryExperiment', () => new Promise((resolve) => {
+    let acc = '';
+    try {
+      spawnEngine(['--mb', '256', '--json'], {
+        script: 'cuda_um_experiment.py',
+        timeoutMs: 90000,
+        onLog: (l) => { acc += '\n' + l; },
+        onDone: () => {
+          const m = acc.match(/\{[\s\S]*\}/);
+          try { resolve(m ? JSON.parse(m[0]) : { ok: false, error: '实验脚本没有返回 JSON', raw: acc.slice(-400) }); }
+          catch (e) { resolve({ ok: false, error: '解析实验输出失败：' + String(e && e.message || e), raw: acc.slice(-400) }); }
+        },
+        onError: (e) => resolve({ ok: false, error: String(e) }),
+      });
+    } catch (e) { resolve({ ok: false, error: String((e && e.message) || e) }); }
+  }));
+
   // 完整性检验：校验 settings / presets / 插件清单，返回问题列表
   ipcMain.handle('integrity:check', () => {
     try { return integrity.check(); } catch (e) { return { ok: false, issues: [], error: String(e && e.message || e) }; }

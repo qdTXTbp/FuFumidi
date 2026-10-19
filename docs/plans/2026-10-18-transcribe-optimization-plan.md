@@ -173,3 +173,8 @@
 - §3 片段长度：内置预设写入训练块长并显示「推荐」；`engine/tests/test_transcribe_options.py` 锁定。
 - §4 显存：GPU 面板显存字段 + memory_mode auto/low/allow（钢琴批上限减半已实测）；驱动 Sysmem 策略只做说明，未做 NVAPI 自动切换。
 - §5 其它提速/提质：Basic Pitch 批量取窗、量化、音色稳定后处理等仍为后续实验项。
+### P2 实现记录（2026-10-18 追加）
+
+- §4 P2：`engine_gpu` 通过 nvidia-smi 检测驱动版本/VRAM/Sysmem Fallback 支持（≥536.40；≥546.01 可控制）；界面显示驱动与回退状态。
+- 统一内存实验：`engine/cuda_um_experiment.py` + IPC `gpu:unifiedMemoryExperiment` + 界面按钮；实测 cudaMallocManaged 64MB 成功（分配 ~259ms/主机写入 ~540ms），但 PyTorch 默认分配器不能直接用，未接入转录。
+- §3 音色稳定：`engine/timbre_stabilize.py` 把短命孤立乐器轨并入邻近主导轨，MuScriptor 预设默认开；`engine/tests/test_timbre_stabilize.py` 锁定行为。

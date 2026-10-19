@@ -53,11 +53,16 @@ export default async function (app) {
   // 当前激活是新队列 B → 加 B 的音频
   await app.eval('window.__fufumidiTranscribe.addPaths(' + JSON.stringify([wavB]) + '); true');
 
-  // 切回第一个队列，加 A 的音频
+  // 队列 B 的产物歌单设为「默认歌单」（验证每个队列各自的目标）
+  await app.eval("(() => { const s=document.querySelector('[data-guide=queue-playlist] select'); s.value='default'; s.dispatchEvent(new Event('change',{bubbles:true})); return s.value; })()");
+  await new Promise((r) => setTimeout(r, 200));
+  // 切回第一个队列，加 A 的音频；A 设为「仅全部曲目」
   const qA = st.queues.find((q) => q.id !== qB.id);
   app.assert(!!qA, '默认队列存在');
   await app.eval("(() => { const b=[...document.querySelectorAll('.tr-queues .tr-pill')].find(x=>x.innerText.indexOf('E2E 队列 B')<0); b.click(); return true; })()");
   await new Promise((r) => setTimeout(r, 300));
+  await app.eval("(() => { const s=document.querySelector('[data-guide=queue-playlist] select'); s.value='all'; s.dispatchEvent(new Event('change',{bubbles:true})); return s.value; })()");
+  await new Promise((r) => setTimeout(r, 200));
   await app.eval('window.__fufumidiTranscribe.addPaths(' + JSON.stringify([wavA]) + '); true');
 
   // 打开顺序转录（默认关 → 用户显式开启）
@@ -85,6 +90,10 @@ export default async function (app) {
   const doneA = (final.queues.find((q) => q.id === runQid)?.items || []).filter((i) => i.status === 'done').length;
   const doneB = (final.queues.find((q) => q.id !== runQid)?.items || []).filter((i) => i.status === 'done').length;
   app.assert(doneA >= 1 && doneB >= 1, '两个队列都完成了转录：A=' + doneA + ' B=' + doneB);
+  // 产物歌单：A=仅全部曲目，B=默认歌单 → 全部曲目 2 首、默认歌单 1 首
+  const counts = await app.eval("(() => { const lis=[...document.querySelectorAll('.pl-item')]; const all=lis.find(x=>x.innerText.indexOf('全部曲目')>=0); const def=lis.find(x=>x.innerText.indexOf('默认歌单')>=0); return { all: all ? (all.querySelector('em')||{}).textContent : '', def: def ? (def.querySelector('em')||{}).textContent : '' }; })()");
+  app.assert(String(counts.all) === '2', '全部曲目应有 2 首：' + JSON.stringify(counts));
+  app.assert(String(counts.def) === '1', '默认歌单应有 1 首（B 的产物）：' + JSON.stringify(counts));
   await app.screenshot('transcribe-queue-chain');
   app.assert(true, '运行中切换队列 + 顺序转录通过');
 }

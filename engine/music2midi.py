@@ -170,6 +170,7 @@ def _resolve_params(args, mode):
     _mm = getattr(args, "memory_mode", None)
     if _mm in ("auto", "low", "allow"):
         p["memory_mode"] = str(_mm)
+    if getattr(args, "timbre_stabilize", False): p["timbre_stabilize"] = True
     if getattr(args, "no_merge", False): p["merge_overlap"] = False
     if getattr(args, "no_velnorm", False): p["normalize_vel"] = False
     # 子模型选择：universal → basic / muscriptor；piano → piano_pt / aria / transkun
@@ -472,6 +473,8 @@ def build_parser():
                    help="识别片段长度（秒，所有转录模型）：0/不传 = 各模型默认")
     g.add_argument("--memory-mode", dest="memory_mode", choices=["auto", "low", "allow"], default=None,
                    help="显存策略：low=低显存自动降批（推荐）/ allow=允许驱动借用系统内存 / auto=默认")
+    g.add_argument("--timbre-stabilize", action="store_true",
+                   help="MuScriptor 音色稳定后处理：把短命孤立乐器轨并入邻近主导轨（默认关；界面预设默认开）")
     g.add_argument("--min-note-length", type=float, default=None,
                    help="最短音符时长(ms)（默认 128）")
     g.add_argument("--min-freq", "--minimum-frequency", dest="minimum_frequency",
@@ -604,6 +607,7 @@ def cmd_worker():
                 # 识别片段长度：漏这一项时界面滑条调了也到不了引擎
                 segment_sec=req.get('segment_sec'),
                 memory_mode=req.get('memory_mode'),
+                timbre_stabilize=bool(req.get('timbre_stabilize')),
                 segment_silence=req.get('segment_silence'),
                 silence_db=req.get('silence_db'),
                 min_silence=req.get('min_silence'),

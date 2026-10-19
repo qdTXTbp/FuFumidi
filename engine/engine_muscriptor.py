@@ -1147,6 +1147,18 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                              % (int(_st_stats.get("merged") or 0), float(_st_stats.get("longest") or 0.0)))
                     except Exception as _e:                 # noqa: BLE001
                         _log(log_cb, "跨块延音缝合跳过（按原样输出）：%s" % _e)
+                # 音色稳定后处理（默认关；MuScriptor 预设默认开）：短命孤立乐器轨并入邻近主导轨
+                if params.get("timbre_stabilize") and data:
+                    try:
+                        import timbre_stabilize as _ts
+                        data2, _ts_stats = _ts.stabilize_midi_bytes(data)
+                        if _ts_stats.get("moved"):
+                            data = data2
+                        _log(log_cb, "音色稳定：并入 %d 个短命轨音符，删除 %d 条孤立轨（轨 %d → %d）"
+                             % (int(_ts_stats.get("moved") or 0), int(_ts_stats.get("removed_tracks") or 0),
+                                int(_ts_stats.get("before_tracks") or 0), int(_ts_stats.get("after_tracks") or 0)))
+                    except Exception as _e:                 # noqa: BLE001
+                        _log(log_cb, "音色稳定后处理跳过（按原样输出）：%s" % _e)
                 if _cap > 0:
                     _log(log_cb, "超长音符上限 %.0fs：强制收尾 %d 个音符"
                                   % (_cap, _cap_stats["closed"]))

@@ -102,6 +102,17 @@ export interface GpuInfo {
   /** ROCm HIP 版本，如 '7.2.26024-f6f897bd3d' */
   hip_version?: string | null;
   note?: string;
+  /** NVIDIA 驱动版本（nvidia-smi；GPU 增强包未装也可读） */
+  driver_version?: string;
+  /** 显存 MB（nvidia-smi / torch） */
+  vram_total_mb?: number;
+  vram_free_mb?: number;
+  vram_used_mb?: number;
+  /** 驱动是否支持共享显存回退（Windows + 驱动 ≥536.40） */
+  sysmem_fallback_supported?: boolean;
+  /** 是否可在控制面板按应用关闭（驱动 ≥546.01） */
+  sysmem_fallback_controllable?: boolean;
+  sysmem_fallback_note?: string;
 }
 
 export interface EngineProbeResult {
@@ -113,6 +124,21 @@ export interface EngineProbeResult {
   libs?: Record<string, boolean>;
   gpu?: GpuInfo;
   perf?: { recommended?: PerfMode };
+  error?: string;
+  raw?: string;
+}
+
+/** CUDA 统一内存实验（cudaMallocManaged）结果 */
+export interface UnifiedMemoryResult {
+  ok: boolean;
+  code?: string;
+  method?: string;
+  cudart?: string;
+  size_mb?: number;
+  alloc_ms?: number;
+  host_touch_ms?: number;
+  sync_ms?: number;
+  note?: string;
   error?: string;
   raw?: string;
 }
@@ -1211,6 +1237,8 @@ export interface FuBridge {
   gpuListPackages(): Promise<GeneralResult & { packages?: GpuPackage[] }>;
   gpuImportLocal(p: string | string[], kind: GpuKind): Promise<GeneralResult>;
   gpuStatus(): Promise<GpuStatusResult>;
+  /** P2 实验：验证 cudaMallocManaged 可用性与耗时；不改变转录用分配器 */
+  gpuUnifiedMemoryExperiment(): Promise<UnifiedMemoryResult>;
   gpuUninstall(kind: GpuKind): Promise<GeneralResult>;
   gpuCancelInstall(): Promise<GeneralResult>;
   gpuDownloadPackage(opts: GpuDownloadOptions): Promise<GeneralResult>;

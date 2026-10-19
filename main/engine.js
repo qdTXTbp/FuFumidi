@@ -225,7 +225,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       //   但**这张表里一个都没有** —— 界面上「跳过静音分段（长音频加速）」因此一直是死的。
       segment_sec:'segment_sec', memory_mode:'memory_mode', segment_silence:'segment_silence', silence_db:'silence_db', min_silence:'min_silence', max_segment:'max_segment', segment_pad:'segment_pad', max_note_hold:'max_note_hold', temperature:'temperature', cfg_coef:'cfg_coef', beam_size:'beam_size', prelude_forcing:'prelude_forcing', precision:'precision' };
     for (const [k, rk] of Object.entries(map)) if (cfg[k] != null) req[rk] = cfg[k];
-    for (const k of ['denoise','normalize','auto_bpm','no_merge','no_velnorm','with_drums','export_stems','no_pedal','no_melodia','multiple_pitch_bends']) if (cfg[k]) req[k] = true;
+    for (const k of ['denoise','normalize','auto_bpm','no_merge','no_velnorm','with_drums','export_stems','no_pedal','no_melodia','multiple_pitch_bends','timbre_stabilize']) if (cfg[k]) req[k] = true;
     const p = new Promise((resolve, reject) => { _engineWorkerPending.set(id, { resolve, reject, win: cfg.__win, logId: cfg.__logId || cfg.id, child }); });
     child.stdin.write(JSON.stringify(req) + '\n');
     return p;
