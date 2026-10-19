@@ -41,3 +41,7 @@
 - 自动探测模型按主模型规格选择：large → 独立 small 探测器（探测从数分钟降到几秒级）；medium/small → 主模型探测。
 - 新增 0 音符保护：识别结果为空时先取消乐器组约束重试一次，仍为空则报错并附音频/模型/限制信息，不再静默生成 33B 空 MIDI。
 - 排查记录：`docs/plans/2026-10-20-empty-midi-probe.md`。
+## 分段探测与图标修复（2026-10-20）
+
+- 新增 MuScriptor「分段探测乐器组（实验，默认关）」：30/60s 分段 + 独立 small 探测器 + 全局/邻段并集约束；A/B 报告见 `docs/plans/2026-10-20-segment-probe-ab.md`。
+- 修复 MIDI 文件图标：打包版启动时按设置自愈 `.mid/.midi` 关联，图标指向 FuFumidi.exe 自带 logo；开发版不再写 Electron 图标。

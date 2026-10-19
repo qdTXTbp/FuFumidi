@@ -717,6 +717,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     #   做法：按"完全空白静音"切成若干核心段，逐段推理，事件时间加段偏移后合并成一份 MIDI。
     #   为什么不在回放路径做：token 流是按整段音频落盘的，切片对不上。
     _seg_plan = None
+    _per_seg_constraints = None
     _seg_pcm = None
     _seg_sr = 0
     _seg_cfg = {}
@@ -938,7 +939,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     del open_notes[idx]
                     _cap_stats["closed"] += 1
 
-        def _segmented_events(plan, pcm, sr, constrain_override="__unset__"):
+        def _segmented_events(plan, pcm, sr, constrain_override="__unset__", per_seg_constraints=None):
             """逐段推理并合并事件流（★ 静音分段）。
 
             三条不变量（错了就会丢音/重音，改动前先看这里）：
@@ -978,7 +979,13 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     off = a / float(sr)
                     kept = {}
                     dropped = set()
-                    _seg_instruments = constrain if constrain_override == "__unset__" else constrain_override
+                    if constrain_override != "__unset__":
+                        _seg_instruments = constrain_override
+                    elif per_seg_constraints is not None and si < len(per_seg_constraints):
+                        _pg = per_seg_constraints[si] or []
+                        _seg_instruments = _pg if _pg else None
+                    else:
+                        _seg_instruments = constrain
                     for ev in model.transcribe(seg_wav, instruments=_seg_instruments, **_gen_kw):
                         if _ProgressEvent is not None and isinstance(ev, _ProgressEvent):
                             yield _ProgressEvent(completed=done_chunks + int(getattr(ev, "completed", 0)),
@@ -1075,7 +1082,10 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             # 25s/3min 歌，small 探测器反而 39s 且组更少，因此不要一律 small）。
             # 环境变量 FUFUMIDI_PROBE_MODEL=small|main 可强制覆盖（排查/A-B 用）。
             _probe_pref = os.environ.get("FUFUMIDI_PROBE_MODEL", "auto").strip().lower()
-            _use_small_probe = _probe_pref == "small" or (_probe_pref != "main" and size == "large")
+            _use_small_probe = (_probe_pref == "small"
+                               or (_probe_pref != "main" and size == "large")
+                               # 分段探测按用户要求固定用独立 small 探测器（主模型只负责转录）
+                               or (_probe_pref != "main" and bool(params.get("probe_segments"))))
             if _use_small_probe and size != "small":
                 try:
                     _small_path = _find_local_model("small")
@@ -1097,16 +1107,61 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     _log(log_cb, "小模型探测器不可用，退回主模型探测：%s" % _e)
             try:
                 _t_probe = time.perf_counter()
-                _pr = instrument_probe.probe(_probe_model, wav_tmp, log=log_cb)
-                _probe_secs = time.perf_counter() - _t_probe
-                _groups = _pr.get("groups") or []
-                if _groups:
-                    constrain = _groups
-                    _log(log_cb, "预分析锁定乐器组（音色稳定，探测器=%s，%.1fs）：" % (_probe_label, _probe_secs)
-                         + " / ".join(_groups) + "（%s）" % _pr.get("reason", "ok"))
+                if params.get("probe_segments"):
+                    # ★ 分段探测（实验，方案 B）：固定 30/60s 一段，每段用探测器短推理
+                    #    （默认独立 small）得到该段主乐器组，再按段硬约束；全局保留出现 ≥2 段的组，
+                    #    并与相邻段并集，避免某段漏检把后面才进场的乐器整组关掉。
+                    import segment_probe as _segprobe
+                    import soundfile as _sfp
+                    import tempfile as _tfp
+                    import shutil as _shp
+                    _x, _sr = _sfp.read(wav_tmp, dtype="float32", always_2d=False)
+                    if getattr(_x, "ndim", 1) > 1:
+                        _x = _x.mean(axis=1)
+                    _dur = len(_x) / float(_sr) if _sr else 0.0
+                    _segs = _segprobe.fixed_segments(_dur, params.get("probe_segment_sec") or 60)
+                    _tmpdir = _tfp.mkdtemp(prefix="fuprobe-seg-")
+                    _per_groups = []
+                    try:
+                        for _si, (_a, _b) in enumerate(_segs):
+                            _sp = os.path.join(_tmpdir, "seg%02d.wav" % _si)
+                            _sfp.write(_sp, _x[int(_a * _sr):int(_b * _sr)], _sr)
+                            _pr = instrument_probe.probe(
+                                _probe_model, _sp, log=log_cb, count=1,
+                                win=min(20.0, max(5.0, _b - _a)))
+                            _pg = _pr.get("groups") or []
+                            _per_groups.append(_pg)
+                            _log(log_cb, "分段探测 %d/%d（%.0f–%.0fs）：%s"
+                                 % (_si + 1, len(_segs), _a, _b,
+                                    " / ".join(_pg) if _pg else "（未检出）"))
+                    finally:
+                        try:
+                            _shp.rmtree(_tmpdir, ignore_errors=True)
+                        except Exception:
+                            pass
+                    _allowed, _keep = _segprobe.build_constraints(_per_groups, max_groups=12)
+                    if any(_allowed):
+                        _per_seg_constraints = _allowed
+                        _seg_plan = {"duration": _dur, "segments": _segs, "skipped_sec": 0.0}
+                        _seg_pcm, _seg_sr = _x, _sr
+                        constrain = None
+                        _log(log_cb, "分段探测完成（探测器=%s，%.1fs）：%d 段；稳定组=%s"
+                             % (_probe_label, time.perf_counter() - _t_probe,
+                                len(_segs), " / ".join(_keep) if _keep else "无"))
+                    else:
+                        _log(log_cb, "分段探测未得到任何乐器组（探测器=%s，%.1fs），本次不限制"
+                             % (_probe_label, time.perf_counter() - _t_probe))
                 else:
-                    _log(log_cb, "预分析未得到可用乐器组（探测器=%s，%.1fs，%s），本次不限制"
-                         % (_probe_label, _probe_secs, _pr.get("reason", "unknown")))
+                    _pr = instrument_probe.probe(_probe_model, wav_tmp, log=log_cb)
+                    _probe_secs = time.perf_counter() - _t_probe
+                    _groups = _pr.get("groups") or []
+                    if _groups:
+                        constrain = _groups
+                        _log(log_cb, "预分析锁定乐器组（音色稳定，探测器=%s，%.1fs）：" % (_probe_label, _probe_secs)
+                             + " / ".join(_groups) + "（%s）" % _pr.get("reason", "ok"))
+                    else:
+                        _log(log_cb, "预分析未得到可用乐器组（探测器=%s，%.1fs，%s），本次不限制"
+                             % (_probe_label, _probe_secs, _pr.get("reason", "unknown")))
             except Exception as _e:  # noqa: BLE001
                 _log(log_cb, "预分析失败，本次不限制：%s" % _e)
             finally:
@@ -1221,7 +1276,8 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     #   它是惰性的，所以"卡住"就等于卡在 5 秒块与块之间，继续时从原处接着跑。
                     _install_pause_wrapper(model)
                     if _seg_plan is not None:
-                        events = _segmented_events(_seg_plan, _seg_pcm, _seg_sr)
+                        events = _segmented_events(_seg_plan, _seg_pcm, _seg_sr,
+                                                   per_seg_constraints=_per_seg_constraints)
                     else:
                         events = model.transcribe(wav_tmp, instruments=constrain, **_gen_kw)
                 data = model.events_to_midi_bytes(_events_capped(events), beat_grid=beat_grid)
@@ -1235,7 +1291,8 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                          % (" / ".join(constrain) if constrain else "无"))
                     try:
                         if _seg_plan is not None:
-                            _retry_events = _segmented_events(_seg_plan, _seg_pcm, _seg_sr, constrain_override=None)
+                            _retry_events = _segmented_events(_seg_plan, _seg_pcm, _seg_sr, constrain_override=None,
+                                                              per_seg_constraints=None)
                         else:
                             _retry_events = model.transcribe(wav_tmp, instruments=None, **_gen_kw)
                         _retry_data = model.events_to_midi_bytes(_events_capped(_retry_events), beat_grid=beat_grid)

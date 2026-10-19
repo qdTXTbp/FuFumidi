@@ -61,6 +61,9 @@ export default async function (app) {
   app.assert(/5\s*s/.test(segMu) || segMu.indexOf('5s') >= 0, '切 MuScriptor 后片段长度自动为 5s：' + segMu.slice(0, 140));
   const timbre = await app.eval('(() => { const e=document.querySelector("[data-guide=timbre-stabilize] input"); return e?{has:true,checked:e.checked}:{has:false}; })()');
   app.assert(timbre.has && timbre.checked === true, '音色稳定后处理默认开：' + JSON.stringify(timbre));
+  // 分段探测（实验，默认关）在自动探测模式下可见
+  const segToggle = await app.eval('(() => { const e=document.querySelector("[data-guide=probe-segments] input"); return e?{has:true,checked:e.checked}:{has:false}; })()');
+  app.assert(segToggle.has && segToggle.checked === false, '分段探测开关存在且默认关：' + JSON.stringify(segToggle));
 
   // P2：驱动/共享显存检测 + 音色稳定开关 + 统一内存实验按钮
   await app.waitFor('!!document.querySelector("[data-guide=gpu-detail]")', { timeout: 30000, message: 'GPU 驱动检测信息出现' });

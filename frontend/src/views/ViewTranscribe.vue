@@ -106,6 +106,8 @@ const msPrec = ref('fp32');
 //   none  —— 不干预，模型自由判定（默认）
 const msMode = ref('none');
 const msGroups = ref(['voice', 'drums']);          // 限定模式下允许的乐器组
+const msProbeSegments = ref(false);                // 分段探测乐器组（实验）：固定 30/60s 一段
+const msProbeSegSec = ref(60);                     // 分段探测段长（秒）
 function toggleMsGroup(id) {
   const i = msGroups.value.indexOf(id);
   if (i >= 0) { if (msGroups.value.length > 1) msGroups.value.splice(i, 1); return; }  // 至少留一组
@@ -1213,6 +1215,8 @@ function collectPresetParams() {
       temperature: Number(msTemp.value), cfg_coef: Number(msCfg.value),
       beam_size: iv(msBeam.value), prelude_forcing: msPrelude.value,
       timbre_stabilize: msTimbre.value,
+      probe_segments: msProbeSegments.value,
+      probe_segment_sec: iv(msProbeSegSec.value),
       precision: msPrec.value,
       segment_silence: msSegment.value ? 'auto' : 'off',
       min_silence: iv(msSegmentMin.value),
@@ -1305,6 +1309,8 @@ function applyPresetParams(p, opts) {
   if (has('beam_size')) msBeam.value = Math.max(1, Math.round(numOr('beam_size', 1)));
   if (has('prelude_forcing')) msPrelude.value = pr.prelude_forcing !== false;
   if (has('timbre_stabilize')) msTimbre.value = pr.timbre_stabilize !== false;
+  if (has('probe_segments')) msProbeSegments.value = pr.probe_segments === true;
+  if (has('probe_segment_sec')) msProbeSegSec.value = clamp(Math.round(numOr('probe_segment_sec', 60)), 20, 120);
   if (has('segment_silence')) msSegment.value = !!pr.segment_silence && pr.segment_silence !== 'off';
   if (has('min_silence')) msSegmentMin.value = Number(pr.min_silence) || 2.0;
   if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
@@ -1483,6 +1489,8 @@ function collectParams() {
       // 注意这条链路有三跳（渲染端 → 主进程 worker 请求体 → 引擎），少任何一跳界面选了都不生效。
       cfg.muscriptor_instruments = msInstrValue.value;
       cfg.timbre_stabilize = !!msTimbre.value;
+      cfg.probe_segments = !!(msMode.value === 'probe' && msProbeSegments.value);
+      if (cfg.probe_segments) cfg.probe_segment_sec = Number(msProbeSegSec.value) || 60;
       // ★ 2026-10-14 更正：这段注释原先描述的是**已被移除**的批量推理行为
       //   （`bca0a55`「移除批量推理功能」）。现在：
       //   · `prelude_forcing` 是**独立开关**（见下面的 msPrelude），与性能档无关；
@@ -2363,6 +2371,13 @@ onBeforeUnmount(() => {
           </div>
           <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe'" class="tr-slider-hint" data-guide="probe-lock">
             {{ t('转录前先跑 instrument_probe 探测主乐器组，再作为硬约束；只留主要乐器、减少长尾误判（会增加一次预分析耗时）') }}
+          </div>
+          <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe'" class="tr-switch" data-guide="probe-segments">
+            <label><span><b>{{ t('分段探测乐器组（实验）') }}</b><small>{{ t('按 30/60 秒分段，每段单独用独立小模型探测器识别乐器组再硬约束；全局与相邻段并集，减少大编制漏乐器（更慢）') }}</small></span><input type="checkbox" v-model="msProbeSegments"></label>
+          </div>
+          <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe' && msProbeSegments" class="tr-slider">
+            <label>{{ t('探测段长') }}<b>{{ msProbeSegSec }}s</b></label>
+            <NumSlider v-model="msProbeSegSec" :min="20" :max="120" :step="10" unit="s" :aria-label="t('探测段长')" />
           </div>
           <div class="tr-switch" style="display:block" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'limit'">
             <div style="display:flex;flex-wrap:wrap;gap:var(--sp-2);max-height:150px;overflow:auto;padding:2px 0">

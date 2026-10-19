@@ -190,6 +190,8 @@ def main(argv=None):
         ("optimal", {"muscriptor_instruments": "none", "timbre_stabilize": False}),
         ("probe_only", {"muscriptor_instruments": "probe", "timbre_stabilize": False}),
         ("stable", {"muscriptor_instruments": "probe", "timbre_stabilize": True}),
+        ("segprobe", {"muscriptor_instruments": "probe", "timbre_stabilize": True,
+                      "probe_segments": True, "probe_segment_sec": 30}),
     ]
     rows = []
     for name, params in configs:

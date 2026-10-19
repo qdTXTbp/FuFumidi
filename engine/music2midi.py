@@ -171,6 +171,8 @@ def _resolve_params(args, mode):
     if _mm in ("auto", "low", "allow"):
         p["memory_mode"] = str(_mm)
     if getattr(args, "timbre_stabilize", False): p["timbre_stabilize"] = True
+    if getattr(args, "probe_segments", False): p["probe_segments"] = True
+    if getattr(args, "probe_segment_sec", None): p["probe_segment_sec"] = args.probe_segment_sec
     if getattr(args, "no_merge", False): p["merge_overlap"] = False
     if getattr(args, "no_velnorm", False): p["normalize_vel"] = False
     # 子模型选择：universal → basic / muscriptor；piano → piano_pt / aria / transkun
@@ -475,6 +477,10 @@ def build_parser():
                    help="显存策略：low=低显存自动降批（推荐）/ allow=允许驱动借用系统内存 / auto=默认")
     g.add_argument("--timbre-stabilize", action="store_true",
                    help="MuScriptor 音色稳定后处理：把短命孤立乐器轨并入邻近主导轨（默认关；界面预设默认开）")
+    g.add_argument("--probe-segments", action="store_true",
+                   help="分段探测乐器组（实验）：每 30/60s 用独立小模型探测并按段硬约束")
+    g.add_argument("--probe-segment-sec", type=float, default=None,
+                   help="分段探测的段长（秒，20–120；默认 60）")
     g.add_argument("--min-note-length", type=float, default=None,
                    help="最短音符时长(ms)（默认 128）")
     g.add_argument("--min-freq", "--minimum-frequency", dest="minimum_frequency",
@@ -608,6 +614,8 @@ def cmd_worker():
                 segment_sec=req.get('segment_sec'),
                 memory_mode=req.get('memory_mode'),
                 timbre_stabilize=bool(req.get('timbre_stabilize')),
+                probe_segments=bool(req.get('probe_segments')),
+                probe_segment_sec=req.get('probe_segment_sec'),
                 segment_silence=req.get('segment_silence'),
                 silence_db=req.get('silence_db'),
                 min_silence=req.get('min_silence'),
