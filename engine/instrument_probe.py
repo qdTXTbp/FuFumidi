@@ -107,11 +107,13 @@ def parse_mode(raw):
         return ("none", [])
     if len(groups) == 1 and groups[0].lower() in ("none", "off", "free", "-"):
         return ("none", [])
-    # 'probe'（兼容旧 'auto'/'smart'）：转录前先探测主乐器组，再作为硬约束。
-    # 注：它不会单独解决「分块边界换音色」，需配合 segment_sec=5 + 跨块延音缝合 +
-    # timbre_stabilize（见「MuScriptor · 音色稳定」预设）。
+    # 'probe'：整曲探测后硬约束；
+    # 'probe_segments'：按 30/60s 分段探测、逐段硬约束（实验）。
+    # 旧值 'auto'/'smart' 兼容为整曲 probe。
     if len(groups) == 1 and groups[0].lower() in ("probe", "auto", "smart"):
         return ("probe", [])
+    if len(groups) == 1 and groups[0].lower() in ("probe_segments", "segments"):
+        return ("probe_segments", [])
     return ("limit", groups)
 
 

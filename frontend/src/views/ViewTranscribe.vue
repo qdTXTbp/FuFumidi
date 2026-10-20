@@ -106,8 +106,7 @@ const msPrec = ref('fp32');
 //   none  —— 不干预，模型自由判定（默认）
 const msMode = ref('none');
 const msGroups = ref(['voice', 'drums']);          // 限定模式下允许的乐器组
-const msProbeSegments = ref(false);                // 分段探测乐器组（实验）：固定 30/60s 一段
-const msProbeSegSec = ref(60);                     // 分段探测段长（秒）
+const msProbeSegSec = ref(60);                     // 分段探测段长（秒；仅 probe_segments 模式用）
 function toggleMsGroup(id) {
   const i = msGroups.value.indexOf(id);
   if (i >= 0) { if (msGroups.value.length > 1) msGroups.value.splice(i, 1); return; }  // 至少留一组
@@ -135,6 +134,7 @@ const MS_GROUPS = [
 const msInstrValue = computed(() => {
   if (msMode.value === 'limit') return msGroups.value.join(',');
   if (msMode.value === 'probe') return 'probe';
+  if (msMode.value === 'probe_segments') return 'probe_segments';
   return 'none';
 });
 const busy = ref(false);
@@ -1215,7 +1215,6 @@ function collectPresetParams() {
       temperature: Number(msTemp.value), cfg_coef: Number(msCfg.value),
       beam_size: iv(msBeam.value), prelude_forcing: msPrelude.value,
       timbre_stabilize: msTimbre.value,
-      probe_segments: msProbeSegments.value,
       probe_segment_sec: iv(msProbeSegSec.value),
       precision: msPrec.value,
       segment_silence: msSegment.value ? 'auto' : 'off',
@@ -1299,6 +1298,7 @@ function applyPresetParams(p, opts) {
     const v = pr.muscriptor_instruments.trim();
     if (!v || v === 'none') { msMode.value = 'none'; }
     else if (v === 'probe' || v === 'auto') { msMode.value = 'probe'; }
+    else if (v === 'probe_segments' || v === 'segments') { msMode.value = 'probe_segments'; }
     else {
       const groups = v.split(',').map((s) => s.trim()).filter((g) => MS_GROUPS.some((x) => x.id === g));
       if (groups.length) { msGroups.value = groups; msMode.value = 'limit'; }
@@ -1309,7 +1309,6 @@ function applyPresetParams(p, opts) {
   if (has('beam_size')) msBeam.value = Math.max(1, Math.round(numOr('beam_size', 1)));
   if (has('prelude_forcing')) msPrelude.value = pr.prelude_forcing !== false;
   if (has('timbre_stabilize')) msTimbre.value = pr.timbre_stabilize !== false;
-  if (has('probe_segments')) msProbeSegments.value = pr.probe_segments === true;
   if (has('probe_segment_sec')) msProbeSegSec.value = clamp(Math.round(numOr('probe_segment_sec', 60)), 20, 120);
   if (has('segment_silence')) msSegment.value = !!pr.segment_silence && pr.segment_silence !== 'off';
   if (has('min_silence')) msSegmentMin.value = Number(pr.min_silence) || 2.0;
@@ -1489,8 +1488,7 @@ function collectParams() {
       // 注意这条链路有三跳（渲染端 → 主进程 worker 请求体 → 引擎），少任何一跳界面选了都不生效。
       cfg.muscriptor_instruments = msInstrValue.value;
       cfg.timbre_stabilize = !!msTimbre.value;
-      cfg.probe_segments = !!(msMode.value === 'probe' && msProbeSegments.value);
-      if (cfg.probe_segments) cfg.probe_segment_sec = Number(msProbeSegSec.value) || 60;
+      if (msMode.value === 'probe_segments') cfg.probe_segment_sec = Number(msProbeSegSec.value) || 60;
       // ★ 2026-10-14 更正：这段注释原先描述的是**已被移除**的批量推理行为
       //   （`bca0a55`「移除批量推理功能」）。现在：
       //   · `prelude_forcing` 是**独立开关**（见下面的 msPrelude），与性能档无关；
@@ -2366,16 +2364,14 @@ onBeforeUnmount(() => {
                 <option value="none">{{ t('不限定（模型自由判定）') }}</option>
                 <option value="limit">{{ t('限定乐器组（硬约束）') }}</option>
                 <option value="probe">{{ t('自动探测并锁定（音色稳定）') }}</option>
+                <option value="probe_segments">{{ t('自动探测（分段，实验）') }}</option>
               </select>
             </label>
           </div>
           <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe'" class="tr-slider-hint" data-guide="probe-lock">
             {{ t('转录前先用专用音频标签模型（AudioSet 小模型）识别主乐器组，再作为硬约束；只留主要乐器、减少长尾误判（不占主模型推理）') }}
           </div>
-          <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe'" class="tr-switch" data-guide="probe-segments">
-            <label><span><b>{{ t('分段探测乐器组（实验）') }}</b><small>{{ t('按 30/60 秒分段，每段用专用音频标签模型识别乐器组再硬约束；全局与相邻段并集，减少大编制漏乐器（置信度不足时不锁定）') }}</small></span><input type="checkbox" v-model="msProbeSegments"></label>
-          </div>
-          <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe' && msProbeSegments" class="tr-slider">
+          <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe_segments'" class="tr-slider">
             <label>{{ t('探测段长') }}<b>{{ msProbeSegSec }}s</b></label>
             <NumSlider v-model="msProbeSegSec" :min="20" :max="120" :step="10" unit="s" :aria-label="t('探测段长')" />
           </div>
