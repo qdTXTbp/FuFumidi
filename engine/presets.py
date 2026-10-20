@@ -83,6 +83,7 @@ def _migrate_legacy_once():
 #: 切模型时前端查这张表套用默认预设；用户在界面上指定过就写进 model_preset（见 set_model_preset）。
 MODEL_DEFAULT_PRESET = {
     "basic":             "Basic Pitch · 最优",
+    "yourmt3":            "YourMT3+ · 最优",
     "muscriptor_small":  "MuScriptor · 最优",
     "muscriptor_medium": "MuScriptor · 最优",
     "muscriptor_large":  "MuScriptor · 最优",
@@ -160,6 +161,7 @@ def _builtin_presets():
            ("onset_threshold", "frame_threshold", "minimum_note_length", "midi_tempo")}
     return {
         "Basic Pitch · 最优": {"mode": "universal", "params": dict(basic)},
+        "YourMT3+ · 最优": {"mode": "universal", "params": {**basic, "model": "yourmt3", "segment_sec": 0}},
         "MuScriptor · 最优": {
             "mode": "universal",
             "params": {

@@ -71,6 +71,24 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       downloadable: true,
       runtime: 'piano',
     },
+    // YourMT3+（YPTF+Single）：运行时依赖 + 源码 + 361MB 权重，单包下载；不随安装包分发
+    yourmt3: {
+      id: 'yourmt3',
+      name: 'YourMT3+',
+      note: '通用多乐器转录 · YPTF+Single · 运行时+权重约 433 MB · CPU/GPU 均可',
+      kind: 'transcribe',
+      arch: 'YourMT3+ (YPTF.Single)',
+      use: '通用多乐器转录：YourMT3+ YPTF+Single，强于 Basic Pitch；含独立 Python 运行时，CPU 可跑',
+      dest: 'yourmt3',
+      url: 'https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/yourmt3-v1/yourmt3-runtime-20261020.zip',
+      unpack: true,
+      unpackMarker: 'amt/logs/2024/ptf_all_cross_rebal5_mirst_xk2_edr005_attend_c_full_plus_b100/checkpoints/model.ckpt',
+      sha256: '82054845789bf380317cd3ab77dedc6622ee969e58216d7b8289691ae8011c46',
+      size: 453848674,
+      minSize: 300000000,
+      downloadable: true,
+      runtime: 'yourmt3',
+    },
     // 通用多乐器转录（Kyutai MuScriptor，默认不随 Release 分发，需到资源中心下载）
     // 注意：MuScriptor 权重经 monologue82/Models 仓库分卷分发（gh.jasonzeng.dev 加速 + 多镜像回退，
     // 25MB part 并行下载 → 合并 → SHA256 校验），无需 HuggingFace 授权。

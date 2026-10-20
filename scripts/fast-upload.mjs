@@ -113,7 +113,7 @@ async function ensureRelease() {
   if (r.ok) return markLatest(r.body);
   r = await api(`/${repo}/-/releases`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tag_name: tag, name: title || tag, draft: false, prerelease: isPre, target_commitish: 'master',
+    body: JSON.stringify({ tag_name: tag, name: title || tag, draft: false, prerelease: isPre, target_commitish: opt('branch') || 'master',
       make_latest: !isPre ? 'true' : 'false',
       body: notes && existsSync(notes) ? readFileSync(notes, 'utf8') : '' }),
   });
