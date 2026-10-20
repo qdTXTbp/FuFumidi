@@ -100,7 +100,7 @@ def test_quality_policy_highest_quality_and_stable():
     assert ms["precision"] == "fp32"
     assert ms["prelude_forcing"] is True            # 跨块延音：把默认行为写成显式值
     assert ms["max_note_hold"] == 0                 # 不截断：僵尸音由音频证据收尾（见 test_muscriptor_sustain_evidence）
-    assert ms["muscriptor_instruments"] == "none"   # 不硬禁乐器组
+    assert "muscriptor_instruments" not in ms     # 乐器组锁定入口已移除，默认不干预
     assert b["钢琴 · 最优"]["params"]["include_pedal"] is True
     assert b["分离 · 最优"]["params"]["include_drums"] is True
     assert b["分离 · 最优"]["params"]["stem_format"] == "wav"

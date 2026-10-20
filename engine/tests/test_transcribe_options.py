@@ -13,14 +13,11 @@ def test_builtin_segment_sec_values():
     b = P._builtin_presets()
     assert b["Basic Pitch · 最优"]["params"]["segment_sec"] == 0
     assert b["MuScriptor · 最优"]["params"]["segment_sec"] == 5
-    assert b["MuScriptor · 最优"]["params"].get("timbre_stabilize") is True
-    st = b["MuScriptor · 音色稳定"]["params"]
-    assert st["segment_sec"] == 5
-    assert st["muscriptor_instruments"] == "probe"
-    assert st["timbre_stabilize"] is True
-    # A/B 后固化：MuScriptor 三规格默认指向音色稳定
+    assert "timbre_stabilize" not in b["MuScriptor · 最优"]["params"]
+    assert "MuScriptor · 音色稳定" not in b
+    # 乐器组锁定/音色稳定入口已移除，MuScriptor 默认回到「最优」
     for key in ("muscriptor_small", "muscriptor_medium", "muscriptor_large"):
-        assert P.MODEL_DEFAULT_PRESET[key] == "MuScriptor · 音色稳定"
+        assert P.MODEL_DEFAULT_PRESET[key] == "MuScriptor · 最优"
     assert b["钢琴 · 最优"]["params"]["segment_sec"] == 10
     assert b["Aria-AMT · 最优"]["params"]["segment_sec"] == 30
     assert b["Transkun · 最优"]["params"]["segment_sec"] == 16

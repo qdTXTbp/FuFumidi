@@ -83,12 +83,9 @@ def _migrate_legacy_once():
 #: 切模型时前端查这张表套用默认预设；用户在界面上指定过就写进 model_preset（见 set_model_preset）。
 MODEL_DEFAULT_PRESET = {
     "basic":             "Basic Pitch · 最优",
-    # A/B（2026-10-18，合成双音色 + 钢琴 fixture）后固化：
-    # 「音色稳定」在双音色素材上音色切换 5→0、F1 0.4914→0.7692、峰值显存不变，
-    # 钢琴素材上 F1/显存持平（多约 0.2–0.4s 预分析）。见 docs/plans/2026-10-18-muscriptor-preset-ab.md
-    "muscriptor_small":  "MuScriptor · 音色稳定",
-    "muscriptor_medium": "MuScriptor · 音色稳定",
-    "muscriptor_large":  "MuScriptor · 音色稳定",
+    "muscriptor_small":  "MuScriptor · 最优",
+    "muscriptor_medium": "MuScriptor · 最优",
+    "muscriptor_large":  "MuScriptor · 最优",
     "piano_pt":          "钢琴 · 最优",
     "aria":              "Aria-AMT · 最优",
     "transkun":          "Transkun · 最优",
@@ -142,7 +139,6 @@ def _builtin_presets():
         "minimum_note_length": 128.0,
         "melodia": True,              # 主旋律强化开（关掉 = 界面的「低音增强」）
         "min_freq": 0, "max_freq": 0,  # 0 = 不限制音高范围
-        "merge_overlap": True, "vel_norm": True,   # 合并同音高重叠 / 力度归一化
         "beat_grid": True,            # 节拍网格检测：装了 beat_this 就开
         "tempo": 0,                   # 0 = 引擎默认 120（自动 BPM 优先）
         "perf": "quality",
@@ -168,35 +164,13 @@ def _builtin_presets():
             "params": {
                 **basic,
                 "model": "muscriptor", "model_size": "medium",
-                "muscriptor_instruments": "none",   # 不干预乐器组判定
                 "temperature": 1.0, "cfg_coef": 1.0, "beam_size": 1,
                 "prelude_forcing": True,
                 "precision": "fp32",
                 "max_note_hold": 0,       # ★ 不截断：僵尸音改由**音频证据**收尾（见 engine_muscriptor 的 _make_pitch_evidence）
                 # ★ 静音分段默认关（用户 2026-10-14 定）：在完全空白静音处切段、逐段转录后
                 #   合并成一份 MIDI，用长音频的静音换时间。开启后接缝处上下文变少，所以不默认开。
-                "segment_silence": "off",
                 # MuScriptor 训练/推理块长 5s；固定训练值最不容易在块边界换音色
-                "segment_sec": 5,
-                # 音色稳定后处理：短命孤立乐器轨并入邻近主导轨（减少跨块换音色）
-                "timbre_stabilize": True,
-            },
-        },
-        # 「音色稳定」：MuScriptor 专门针对用户反馈的「前后音色变化」。
-        # 固定训练块长 5s + 跨块延音缝合 + 预分析锁定主乐器组 + 短命孤立轨后处理。
-        # 不改变默认绑定，先用 A/B 结果决定是否成为该模型的默认（见 docs/...-ab-report）。
-        "MuScriptor · 音色稳定": {
-            "mode": "universal",
-            "params": {
-                **basic,
-                "model": "muscriptor", "model_size": "medium",
-                "muscriptor_instruments": "probe",   # 转录前 instrument_probe 探测并硬约束
-                "temperature": 1.0, "cfg_coef": 1.0, "beam_size": 1,
-                "prelude_forcing": True,
-                "timbre_stabilize": True,
-                "precision": "fp32",
-                "max_note_hold": 0,
-                "segment_silence": "off",
                 "segment_sec": 5,
             },
         },

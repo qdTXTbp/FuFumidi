@@ -79,8 +79,6 @@ const maxFreq = ref(0);                  // 最高音高 Hz（仅 basic，0 = �
 const minFreq = ref(0);                  // 最低音高 Hz（仅 basic，0 = 不限制）：滤掉低频隆隆声/次声
                                          // ★ 2026-10-14：从「低音增强」里独立出来。用户决定**显式控件优先** ——
                                          //   勾「低音增强」只设 no_melodia（不再顺带把 min_freq 钉成 40）。
-const mergeOverlap = ref(true);          // 合并同音高重叠音符（默认开；关掉 = 引擎收 no_merge）
-const velNorm = ref(true);               // 力度归一化（默认开；关掉 = 引擎收 no_velnorm）
 const exportTempo = ref(0);              // 导出 BPM（0 = 用引擎默认 120 / 自动 BPM 优先）
 // ④ 批 B：MuScriptor 生成参数。默认全部保持「不传」—— 不传时上游走贪婪解码，
 // 结果可复现；调了 temperature / cfg_coef 才自动开采样（采样关着时这两个值是空转）。
@@ -88,55 +86,10 @@ const msTemp = ref(1.0);                 // 采样温度（1.0 = 不传）
 const msCfg = ref(1.0);                  // 引导系数（1.0 = 不传）
 const msBeam = ref(1);                   // 束搜索宽度（1 = 不传）
 const msPrelude = ref(true);             // 跨块延音缝合（默认开；关掉才传 false＝不缝合）
-const msTimbre = ref(true);              // 音色稳定后处理（MuScriptor 默认开）：短命孤立乐器轨并入邻近主导轨
-/* 静音分段（长音频提速，**默认关** —— 用户 2026-10-14 定）：在完全空白静音处切段、
-   逐段转录、再合并成一份 MIDI。段与段之间本来就是静音，接缝处只是少一点上下文。
-   实测《原神》线上音乐会 2021（104 分钟）：−60 dBFS 下静音 439.5 s / 7.0%，可省约 7%；
-   静音多的素材（多曲目专辑、含掌声的现场、讲座）收益按比例更大。 */
-const msSegment = ref(false);            // 分段开关（默认关）
-const msSegmentMin = ref(2.0);           // 连续静音多久才值得切（秒）
 // ② 计算精度：默认 fp32（不传）—— bf16 改数值精度、属影响质量的开关，默认关。
 // 实测：CPU（Zen 5/AVX512-BF16）10 分钟素材待复测、15 秒素材 +43%；GPU 上 ≈0%；
 // 长素材（10 分钟/120 块）质量逐项相同，误差不累积。
 const msPrec = ref('fp32');
-// 乐器组约束（仅 MuScriptor）：MuScriptor 是**多乐器**模型，逐音符判定乐器组 —— 不给约束时
-// 它会在同一首歌里改判（实测《甩葱歌》：同一条旋律 24s→organ、33s→synth lead、43s→flutes、
-// 96s→voice），于是同一段旋律每隔几小节换一次音色。
-//   limit —— **硬约束**：只允许勾选的乐器组发声（引擎把其它组的 token 全部禁掉）
-//   none  —— 不干预，模型自由判定（默认）
-const msMode = ref('none');
-const msGroups = ref(['voice', 'drums']);          // 限定模式下允许的乐器组
-const msProbeSegSec = ref(60);                     // 分段探测段长（秒；仅 probe_segments 模式用）
-function toggleMsGroup(id) {
-  const i = msGroups.value.indexOf(id);
-  if (i >= 0) { if (msGroups.value.length > 1) msGroups.value.splice(i, 1); return; }  // 至少留一组
-  msGroups.value.push(id);
-}
-// MuScriptor 的全部乐器组（= 模型 tokenizer 的 MT3_FULL_PLUS_GROUP_NAMES，35 组）
-const MS_GROUPS = [
-  { id: 'voice', cn: '人声' }, { id: 'acoustic_piano', cn: '钢琴' }, { id: 'electric_piano', cn: '电钢琴' },
-  { id: 'acoustic_guitar', cn: '原声吉他' }, { id: 'clean_electric_guitar', cn: '清音电吉他' },
-  { id: 'distorted_electric_guitar', cn: '失真电吉他' }, { id: 'electric_bass', cn: '电贝斯' },
-  { id: 'acoustic_bass', cn: '原声贝斯' }, { id: 'string_ensemble', cn: '弦乐组' }, { id: 'violin', cn: '小提琴' },
-  { id: 'viola', cn: '中提琴' }, { id: 'cello', cn: '大提琴' }, { id: 'contrabass', cn: '低音提琴' },
-  { id: 'orchestral_harp', cn: '管弦竖琴' }, { id: 'flutes', cn: '长笛' }, { id: 'organ', cn: '风琴' },
-  { id: 'synth_lead', cn: '合成主音' }, { id: 'synth_pad', cn: '合成铺底' }, { id: 'synth_strings', cn: '合成弦乐' },
-  { id: 'brass_section', cn: '铜管组' }, { id: 'trumpet', cn: '小号' }, { id: 'trombone', cn: '长号' },
-  { id: 'tuba', cn: '大号' }, { id: 'french_horn', cn: '圆号' }, { id: 'soprano_and_alto_sax', cn: '萨克斯' },
-  { id: 'tenor_sax', cn: '次中音萨克斯' }, { id: 'baritone_sax', cn: '上低音萨克斯' }, { id: 'oboe', cn: '双簧管' },
-  { id: 'english_horn', cn: '英国管' }, { id: 'clarinet', cn: '单簧管' }, { id: 'bassoon', cn: '巴松管' },
-  { id: 'drums', cn: '鼓' }, { id: 'timpani', cn: '定音鼓' }, { id: 'chromatic_percussion', cn: '色彩打击乐' },
-  { id: 'orchestra_hit', cn: '管弦齐奏' },
-];
-/** 传给引擎的取值：'voice,drums'（手动硬约束）或 'none'（不限定）。
- *  'none' 必须显式送出去，不能靠"不发这个字段"表示不限定 —— 引擎的缺省语义是"不限制"，
- *  但历史上把"没给"当成过 auto，显式送值才不会再出歧义。 */
-const msInstrValue = computed(() => {
-  if (msMode.value === 'limit') return msGroups.value.join(',');
-  if (msMode.value === 'probe') return 'probe';
-  if (msMode.value === 'probe_segments') return 'probe_segments';
-  return 'none';
-});
 const busy = ref(false);
 const done = ref(false);
 const progress = ref(0);
@@ -589,10 +542,9 @@ const showSpeedGroup = computed(() => mode.value === 'universal' && umodel.value
 // 两边名字必须逐字一致，否则网页版「切模型自动套默认」找不到预设。
 const WEB_MODEL_DEFAULTS = () => ({
   basic: 'Basic Pitch · 最优',
-  // A/B 后固化：音色稳定（探测锁定 + 5s + 缝合 + 短命轨后处理）
-  muscriptor_small: 'MuScriptor · 音色稳定',
-  muscriptor_medium: 'MuScriptor · 音色稳定',
-  muscriptor_large: 'MuScriptor · 音色稳定',
+  muscriptor_small: 'MuScriptor · 最优',
+  muscriptor_medium: 'MuScriptor · 最优',
+  muscriptor_large: 'MuScriptor · 最优',
   piano_pt: '钢琴 · 最优',
   aria: 'Aria-AMT · 最优',
   transkun: 'Transkun · 最优',
@@ -605,7 +557,7 @@ const WEB_MODEL_DEFAULTS = () => ({
 const WEB_BUILTIN_PRESETS = () => {
   const basic = {
     model: 'basic', onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
-    melodia: true, min_freq: 0, max_freq: 0, merge_overlap: true, vel_norm: true,
+    melodia: true, min_freq: 0, max_freq: 0,
     beat_grid: true, tempo: 0, perf: 'quality',
     auto_bpm: false, denoise_mode: 'off', segment_sec: 0,
   };
@@ -617,13 +569,9 @@ const WEB_BUILTIN_PRESETS = () => {
   return [
     { name: 'Basic Pitch · 最优', mode: 'universal', params: { ...basic } },
     { name: 'MuScriptor · 最优', mode: 'universal', params: { ...basic,
-      model: 'muscriptor', model_size: 'medium', muscriptor_instruments: 'none',
+      model: 'muscriptor', model_size: 'medium',
       temperature: 1.0, cfg_coef: 1.0, beam_size: 1, prelude_forcing: true,
-      timbre_stabilize: true, precision: 'fp32', segment_sec: 5 } },
-    { name: 'MuScriptor · 音色稳定', mode: 'universal', params: { ...basic,
-      model: 'muscriptor', model_size: 'medium', muscriptor_instruments: 'probe',
-      temperature: 1.0, cfg_coef: 1.0, beam_size: 1, prelude_forcing: true,
-      timbre_stabilize: true, precision: 'fp32', segment_sec: 5 } },
+      precision: 'fp32', segment_sec: 5 } },
     { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt', segment_sec: 10 } },
     { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria', segment_sec: 30 } },
     { name: 'Transkun · 最优', mode: 'piano', params: { ...piano, model: 'transkun', segment_sec: 16 } },
@@ -1195,7 +1143,7 @@ function collectPresetParams() {
   const p = {
     perf: perf.value,
     auto_bpm: autoBpm.value,
-    merge_overlap: mergeOverlap.value, vel_norm: velNorm.value, tempo: iv(exportTempo.value),
+    tempo: iv(exportTempo.value),
     segment_sec: Math.max(0, iv(segmentSec.value)),
     denoise_mode: denoiseMode.value || 'off',
   };
@@ -1211,14 +1159,9 @@ function collectPresetParams() {
     if (umodel.value === 'basic') p.multiple_pitch_bends = pitchBends.value;
     if (umodel.value === 'muscriptor') Object.assign(p, {
       model_size: msSize.value,
-      muscriptor_instruments: msInstrValue.value,
       temperature: Number(msTemp.value), cfg_coef: Number(msCfg.value),
       beam_size: iv(msBeam.value), prelude_forcing: msPrelude.value,
-      timbre_stabilize: msTimbre.value,
-      probe_segment_sec: iv(msProbeSegSec.value),
       precision: msPrec.value,
-      segment_silence: msSegment.value ? 'auto' : 'off',
-      min_silence: iv(msSegmentMin.value),
     });
   } else if (mode.value === 'piano') {
     Object.assign(p, {
@@ -1270,14 +1213,12 @@ function applyPresetParams(p, opts) {
   // 电平统一恒定开启（见 collectParams 上方的说明）。
   // ★ 2026-10-15：这里原来还有一行 `if (has('normalize')) normalize.value = ...`，
   //   `normalize` 这个 ref 早已随降噪开关一起删掉 —— 运行时会抛 ReferenceError，
-  //   把本函数后半段（auto_bpm / tempo / 力度归一 / 节拍网格 / 弯音 / 旋律增强）全部吃掉。
+  //   把本函数后半段（auto_bpm / tempo / 节拍网格 / 弯音 / 旋律增强）全部吃掉。
   //   实测在「套用带 normalize 键的预设」时必然触发，故整行删除。
   // 预设未显式指定 auto_bpm 时保留当前值（默认开），避免把自动测速关掉
   if (has('auto_bpm')) autoBpm.value = !!pr.auto_bpm;
   if (has('stem_format') && ['wav', 'flac', 'mp3'].indexOf(pr.stem_format) >= 0) stemFormat.value = pr.stem_format;
   if (has('tempo')) exportTempo.value = Math.max(0, Math.round(numOr('tempo', 0)));
-  if (has('merge_overlap')) mergeOverlap.value = pr.merge_overlap !== false;
-  if (has('vel_norm')) velNorm.value = pr.vel_norm !== false;
   if (has('beat_grid')) beatGrid.value = !!pr.beat_grid;
   if (has('multiple_pitch_bends')) pitchBends.value = !!pr.multiple_pitch_bends;
   // 主旋律强化：新键 melodia，历史预设写 no_melodia（界面上的「低音增强」= 关掉 melodia）
@@ -1294,24 +1235,10 @@ function applyPresetParams(p, opts) {
   const hf = freq('max_freq', 'maximum_frequency');
   if (hf !== null) maxFreq.value = hf;
   // MuScriptor 生成参数
-  if (has('muscriptor_instruments') && typeof pr.muscriptor_instruments === 'string') {
-    const v = pr.muscriptor_instruments.trim();
-    if (!v || v === 'none') { msMode.value = 'none'; }
-    else if (v === 'probe' || v === 'auto') { msMode.value = 'probe'; }
-    else if (v === 'probe_segments' || v === 'segments') { msMode.value = 'probe_segments'; }
-    else {
-      const groups = v.split(',').map((s) => s.trim()).filter((g) => MS_GROUPS.some((x) => x.id === g));
-      if (groups.length) { msGroups.value = groups; msMode.value = 'limit'; }
-    }
-  }
   if (has('temperature')) msTemp.value = Math.max(0, numOr('temperature', 1.0));
   if (has('cfg_coef')) msCfg.value = Math.max(0, numOr('cfg_coef', 1.0));
   if (has('beam_size')) msBeam.value = Math.max(1, Math.round(numOr('beam_size', 1)));
   if (has('prelude_forcing')) msPrelude.value = pr.prelude_forcing !== false;
-  if (has('timbre_stabilize')) msTimbre.value = pr.timbre_stabilize !== false;
-  if (has('probe_segment_sec')) msProbeSegSec.value = clamp(Math.round(numOr('probe_segment_sec', 60)), 20, 120);
-  if (has('segment_silence')) msSegment.value = !!pr.segment_silence && pr.segment_silence !== 'off';
-  if (has('min_silence')) msSegmentMin.value = Number(pr.min_silence) || 2.0;
   if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
   // 识别片段长度（0 = 模型默认）；老预设没有这个键时保留当前值
   if (has('segment_sec')) segmentSec.value = clamp(Math.round(numOr('segment_sec', 0)), 0, 120);
@@ -1486,9 +1413,6 @@ function collectParams() {
       cfg.beat_grid = beatGrid.value;
       // 乐器组约束：'auto' / '人声,鼓' 这样的组名列表 / 空。
       // 注意这条链路有三跳（渲染端 → 主进程 worker 请求体 → 引擎），少任何一跳界面选了都不生效。
-      cfg.muscriptor_instruments = msInstrValue.value;
-      cfg.timbre_stabilize = !!msTimbre.value;
-      if (msMode.value === 'probe_segments') cfg.probe_segment_sec = Number(msProbeSegSec.value) || 60;
       // ★ 2026-10-14 更正：这段注释原先描述的是**已被移除**的批量推理行为
       //   （`bca0a55`「移除批量推理功能」）。现在：
       //   · `prelude_forcing` 是**独立开关**（见下面的 msPrelude），与性能档无关；
@@ -1512,17 +1436,12 @@ function collectParams() {
     if (umodel.value === 'basic' && pitchBends.value) cfg.multiple_pitch_bends = true;
     if (umodel.value === 'basic' && maxFreq.value > 0) cfg.max_freq = maxFreq.value;
     if (umodel.value === 'basic' && minFreq.value > 0) cfg.min_freq = minFreq.value;
-    if (!mergeOverlap.value) cfg.no_merge = true;
-    if (!velNorm.value) cfg.no_velnorm = true;
     if (umodel.value === 'muscriptor') {
       if (msTemp.value !== 1.0) cfg.temperature = msTemp.value;
       if (msCfg.value !== 1.0) cfg.cfg_coef = msCfg.value;
       if (msBeam.value > 1) cfg.beam_size = msBeam.value;
       // 开（默认）不传参数 = 引擎默认「缝合延音」；关掉才显式 false = 不缝合
       if (!msPrelude.value) cfg.prelude_forcing = false;
-      // 静音分段：显式传 off（与引擎默认一致，写出来是为了预设/日志里看得见）
-      cfg.segment_silence = msSegment.value ? 'auto' : 'off';
-      if (msSegment.value) cfg.min_silence = Number(msSegmentMin.value) || 2.0;
       if (msPrec.value && msPrec.value !== 'fp32') cfg.precision = msPrec.value;
     }
   }
@@ -2252,16 +2171,16 @@ onBeforeUnmount(() => {
             <NumSlider v-model="minNote" :min="10" :max="300" :step="1" />
             <!-- ★ 钢琴模型的碎音护栏（engine_pt._sane_min_note_ms）：10ms 等于关掉过滤器，
                  实测 30 秒样例 71 → 8037 个音符、3 分钟样例 47967 个 / 517 秒。 -->
-            <div v-if="mode === 'piano'" class="tr-slider-hint">{{ t('钢琴模型：低于 30ms 的碎音会被丢弃（引擎按 30ms 处理）') }}</div>
+
           </div>
           <div class="tr-slider" v-if="mode !== 'separate'" data-guide="segment-sec">
             <label>{{ t('识别片段长度') }}<b>{{ segmentSec > 0 ? segmentSec + 's' : t('模型默认') }} · {{ t('推荐') }}{{ SEG_RECOMMEND > 0 ? ' ' + SEG_RECOMMEND + 's' : ' ' + t('不分段') }}</b></label>
             <NumSlider v-model="segmentSec" :min="0" :max="60" :step="1" unit="s" />
-            <small>{{ t('一次喂给模型识别的音频长度（秒）；0 = 各模型默认。调长：上下文更完整但更慢/更占显存；调短：更省资源但接缝处可能丢音。') }}</small>
+
           </div>
           <div class="tr-switch" v-if="mode !== 'separate'" data-guide="memory-mode">
             <label>
-              <span><b>{{ t('显存策略') }}</b><small>{{ t('低显存模式会按空闲显存自动降低批大小/分块，避免 Windows 驱动静默借用系统内存（溢出后可能慢 5–10 倍）。「允许借用」能跑完但更慢；无法让内存达到显存速度。') }}</small></span>
+              <span><b>{{ t('显存策略') }}</b></span>
               <select class="select-input" :value="memoryMode" @change="setMemoryMode($event.target.value)" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
                 <option value="auto">{{ t('自动（默认）') }}</option>
                 <option value="low">{{ t('低显存模式（推荐）') }}</option>
@@ -2269,10 +2188,10 @@ onBeforeUnmount(() => {
               </select>
             </label>
           </div>
-          <div v-if="mode !== 'separate' && gpuDetail" class="tr-slider-hint" data-guide="gpu-detail">{{ gpuDetail }}</div>
+
           <div class="tr-switch" v-if="mode !== 'separate'" data-guide="denoise-mode">
             <label>
-              <span><b>{{ t('转录前降噪') }}</b><small>{{ t('默认关闭（实测降噪可能增加假音符）。轻降噪=谱减；强降噪=UVR-DeNoise 模型（需先下载），更慢但能压稳态噪声') }}</small></span>
+              <span><b>{{ t('转录前降噪') }}</b></span>
               <select class="select-input" v-model="denoiseMode" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
                 <option value="off">{{ t('关闭（默认）') }}</option>
                 <option value="light">{{ t('轻降噪（谱减）') }}</option>
@@ -2289,13 +2208,13 @@ onBeforeUnmount(() => {
             <NumSlider v-model="mergeGap" :min="0" :max="200" :step="1" />
           </div>
           <div class="tr-switch" v-if="mode === 'piano'">
-            <label><span><b>{{ t('包含踏板事件') }}</b><small>{{ t('还原延音踏板') }}</small></span><input type="checkbox" v-model="pedal"></label>
+            <label><span><b>{{ t('包含踏板事件') }}</b></span><input type="checkbox" v-model="pedal"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'basic'">
-            <label><span><b>{{ t('多条弯音曲线') }}</b><small>{{ t('同一音符可挂多条弯音（颤音 / 滑音），会落进导出的 MIDI。只对有滑音的人声 / 弦乐有用；钢琴、鼓这类只会多出大量无用事件') }}</small></span><input type="checkbox" v-model="pitchBends"></label>
+            <label><span><b>{{ t('多条弯音曲线') }}</b></span><input type="checkbox" v-model="pitchBends"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'basic'">
-            <label><span><b>{{ t('低音增强') }}</b><small>{{ t('弱化主旋律强化，保留贝斯 / 低音声部（旋律密集时更不易丢低音）') }}</small></span><input type="checkbox" v-model="bassBoost"></label>
+            <label><span><b>{{ t('低音增强') }}</b></span><input type="checkbox" v-model="bassBoost"></label>
           </div>
           <!-- WP1-5：分组标题按用户要求改为「质量组 / 速度组」，旧的按作用域分组作废 -->
           <!-- ④ 批 A：模型选项（引擎早就有，只是界面没入口） -->
@@ -2305,7 +2224,7 @@ onBeforeUnmount(() => {
                引擎侧 _apply_auto_bpm 会把整份 MIDI（含每个音符的 tick）一起换到测出来的
                速度上、绝对秒数不变 —— 所以隐藏不是「少给一个选项」，它们本来就是同一个值。 -->
           <div class="tr-switch" v-if="mode !== 'separate'">
-            <label><span><b>{{ t('自动检测 BPM') }}</b><small>{{ t('作为导出速度') }}</small></span><input type="checkbox" v-model="autoBpm"></label>
+            <label><span><b>{{ t('自动检测 BPM') }}</b></span><input type="checkbox" v-model="autoBpm"></label>
           </div>
           <div class="tr-slider" v-if="mode === 'universal' && !autoBpm">
             <label>{{ t('导出速度') }}<b>{{ exportTempo > 0 ? exportTempo + ' BPM' : t('默认 120 BPM') }}</b></label>
@@ -2318,76 +2237,31 @@ onBeforeUnmount(() => {
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'basic'">
             <label>{{ t('最低音高') }}<b>{{ minFreq > 0 ? minFreq + ' Hz' : t('不限制') }}</b></label>
             <NumSlider v-model="minFreq" :min="0" :max="2000" :step="5" />
-            <small>{{ t('滤掉低于此频率的成分（低频隆隆声/次声）。低音声部被吞时先试 40 Hz；0 = 不限制') }}</small>
-          </div>
-          <div class="tr-switch" v-if="mode === 'universal'">
-            <label><span><b>{{ t('合并重叠音符') }}</b><small>{{ t('合并同音高重叠音符；关闭后更贴近模型原始判定，但同一音高的重复触发会变多') }}</small></span><input type="checkbox" v-model="mergeOverlap"></label>
-          </div>
-          <div class="tr-switch" v-if="mode === 'universal'">
-            <label><span><b>{{ t('力度归一化') }}</b><small>{{ t('把力度拉齐到统一强度；关闭后保留模型给出的原始力度') }}</small></span><input type="checkbox" v-model="velNorm"></label>
+
           </div>
           <!-- WP1-5：同上；MuScriptor 的采样类参数留在质量组，束搜索/精度归速度组 -->
           <!-- ④ 批 B：MuScriptor 生成参数（都属「影响质量」，默认保持原行为） -->
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>{{ t('采样温度') }}<b>{{ msTemp.toFixed(1) }}</b></label>
             <NumSlider v-model="msTemp" :min="0.1" :max="2" :step="0.1" />
-            <small>{{ t('调高＝更随机、更有可能跳出重复；默认 1.0 走贪婪解码，结果可复现') }}</small>
+
           </div>
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>{{ t('引导系数') }}<b>{{ msCfg.toFixed(1) }}</b></label>
             <NumSlider v-model="msCfg" :min="1" :max="5" :step="0.1" />
-            <small>{{ t('调高＝更贴近提示但更容易重复；默认 1.0 = 关闭引导') }}</small>
+
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label><span><b>{{ t('跨块延音缝合') }}</b><small>{{ t('解码后把 5 秒分块边界两侧同音高、同音色的延音缝回一个长音：延音不断，而模型不再被强制拖着走 —— 从根上消除僵尸长音。关掉＝不缝合，边界处延音可能断（默认开）') }}</small></span><input type="checkbox" v-model="msPrelude"></label>
-          </div>
-          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'" data-guide="timbre-stabilize">
-            <label><span><b>{{ t('音色稳定后处理') }}</b><small>{{ t('把短命、孤立的乐器轨并入邻近主导轨，减少分块边界处「同一旋律换音色」；默认开，关掉则保留模型原始判定的所有乐器轨') }}</small></span><input type="checkbox" v-model="msTimbre"></label>
+            <label><span><b>{{ t('跨块延音缝合') }}</b></span><input type="checkbox" v-model="msPrelude"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label><span><b>{{ t('跳过静音分段（长音频加速）') }}</b><small>{{ t('在完全空白静音处切段，逐段转录后拼成一份 MIDI；默认关') }}</small></span><input type="checkbox" v-model="msSegment"></label>
-          </div>
-          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor' && msSegment">
-            <div class="ms-range-row"><NumSlider v-model="msSegmentMin" :min="1" :max="10" :step="0.5" unit="s" :aria-label="t('最短静音段')" /></div>
-            <small>{{ t('最短静音段') }}</small>
-          </div>
-          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label><span><b>{{ t('节拍网格检测') }}</b><small>{{ t('对齐音符时值；未下载或失败时自动跳过，不影响转录（装了模型默认开）') }}</small></span><input type="checkbox" v-model="beatGrid" @change="beatGridUserSet = true"></label>
-          </div>
-          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label>
-              <span>
-                <b>{{ t('乐器组') }}</b>
-                <small>{{ t('MuScriptor 逐段判定乐器，同一段旋律可能被写成好几种音色。不限定 = 模型自己决定用哪些乐器；限定乐器组 = 只允许勾选的组发声（模型侧硬约束）') }}</small>
-              </span>
-              <select v-model="msMode">
-                <option value="none">{{ t('不限定（模型自由判定）') }}</option>
-                <option value="limit">{{ t('限定乐器组（硬约束）') }}</option>
-                <option value="probe">{{ t('自动探测并锁定（音色稳定）') }}</option>
-                <option value="probe_segments">{{ t('自动探测（分段，实验）') }}</option>
-              </select>
-            </label>
-          </div>
-          <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe'" class="tr-slider-hint" data-guide="probe-lock">
-            {{ t('转录前先用专用音频标签模型（AudioSet 小模型）识别主乐器组，再作为硬约束；只留主要乐器、减少长尾误判（不占主模型推理）') }}
-          </div>
-          <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe_segments'" class="tr-slider">
-            <label>{{ t('探测段长') }}<b>{{ msProbeSegSec }}s</b></label>
-            <NumSlider v-model="msProbeSegSec" :min="20" :max="120" :step="10" unit="s" :aria-label="t('探测段长')" />
-          </div>
-          <div class="tr-switch" style="display:block" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'limit'">
-            <div style="display:flex;flex-wrap:wrap;gap:var(--sp-2);max-height:150px;overflow:auto;padding:2px 0">
-              <button v-for="g in MS_GROUPS" :key="g.id" type="button" class="fu-ctl tr-pill"
-                      :class="{ active: msGroups.includes(g.id) }" :title="g.id"
-                      @click="toggleMsGroup(g.id)">{{ t(g.cn) }}</button>
-            </div>
-            <small style="display:block;margin-top:6px">{{ t('已选 {n} 组：模型只会输出这些乐器（可多选，例如 人声 + 鼓）').replace('{n}', String(msGroups.length)) }}</small>
+            <label><span><b>{{ t('节拍网格检测') }}</b></span><input type="checkbox" v-model="beatGrid" @change="beatGridUserSet = true"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'separate'">
-            <label><span><b>{{ t('输出鼓组节奏轨') }}</b><small>{{ t('同时转录鼓点 / 打击乐节奏') }}</small></span><input type="checkbox" v-model="drums"></label>
+            <label><span><b>{{ t('输出鼓组节奏轨') }}</b></span><input type="checkbox" v-model="drums"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'separate'">
-            <label><span><b>{{ t('导出分离音频分轨') }}</b><small>{{ t('人声 / 贝斯 / 其它乐器 / 鼓') }}</small></span>
+            <label><span><b>{{ t('导出分离音频分轨') }}</b></span>
               <span style="display:flex;align-items:center;gap:var(--sp-2)"><input type="checkbox" v-model="stemExport">
               <select v-if="stemExport" class="select-input" v-model="stemFormat" style="width:74px;padding:2px 6px;font-size:var(--fs-xs)">
                 <option value="wav">WAV</option><option value="flac">FLAC</option><option value="m4a">M4A</option>
@@ -2398,10 +2272,10 @@ onBeforeUnmount(() => {
                结论是负面的（12 dB 素材假音符 1 → 14（谱减法）/ 39（去噪模型）；6 dB 素材 16 → 16 / 50），
                所以不在这里摆一个"看起来能救、实测反而更糟"的开关 —— 这是用户明确要防的那类选项。
                要降噪请走「音频处理」：那里能先听效果再决定要不要拿去转录。 -->
-          <div class="tr-slider-hint" style="margin-top:8px">{{ t('噪声大？转录前先去「音频处理」用去噪模型过一遍（能先试听）；实测在转录页做降噪不会减少噪声引起的假音符，反而可能更多。') }}</div>
-        <div class="tr-slider-hint">{{ t('模型没有配置也能用：首次选用时引擎会从权重本身推出结构，生成后跑一次前向校验（只生成一次，之后走缓存）。') }}</div>
+
+
           <!-- 电平统一：恒定开启，所以不再做成开关（做成开关就等于又造一个"可能没作用"的选项）。 -->
-          <div class="tr-slider-hint" style="margin-top:8px">{{ t('输入电平统一：送入引擎前恒定归一到 −16 dBFS（实测素材电平差 6 dB，音符数会从 69 变 249，所以不再交给开关）') }}</div>
+
 
           <!-- WP1-5：速度组。全表里只有这两项是为「省时间 / 省显存」存在的，
                其余都会改变识别或导出结果，所以都在上面的质量组里。
@@ -2411,13 +2285,13 @@ onBeforeUnmount(() => {
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>{{ t('束搜索宽度') }}<b>{{ msBeam }}</b></label>
             <NumSlider v-model="msBeam" :min="1" :max="5" :step="1" />
-            <small>{{ t('同时保留多条候选再挑最好；越大越慢，默认 1 = 关闭') }}</small>
+
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>
               <span>
                 <b>{{ t('计算精度') }}</b>
-                <small>{{ t('实测在 10 分钟 / 120 块的长素材上，bf16 与 fp32 耗时相同（CPU 569s vs 569s、显卡 119s vs 119s），输出逐项一致。所以它不是一个提速档 —— 保留仅为降低显存/内存占用。默认 fp32') }}</small>
+
               </span>
               <select v-model="msPrec">
                 <option value="fp32">{{ t('fp32（默认，最稳）') }}</option>
