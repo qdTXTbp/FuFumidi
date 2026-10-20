@@ -32,3 +32,19 @@ App 的 `resources/python` 只有 torch/torchaudio 等基础包，没有 lightni
   320K iterations；本机 12GB 单卡无法完成同等训练。
 - 已准备：conda ymt3 环境、AMT-challenge 代码、权重下载/数据脚本线索；
   下一步需要选择小数据集（如 MusicNet/Slakh 子集）做微调实验，或向作者申请权重。
+
+## 2026-10-20 晚更新：YourMT3 已进资源中心
+
+- 运行时+权重单包已上传 CNB：`FuFuCloud-mirror/Models` release `yourmt3-v1`，
+  asset `yourmt3-runtime-20261020.zip`，453,848,674 B，SHA-256 `82054845789BF380317CD3AB77DEDC6622EE969E58216D7B8289691AE8011C46`。
+- 资源中心条目 `yourmt3`；转录页通用模型新增 YourMT3+ 按钮。
+- 本地安装后 app 自带 Python 3.12 实测：可用，短用例推理约 0.8s（CPU），MIDI 7 音符。
+- 安装版已部署本次验收构建（版本仍 6.1.3，未上传发布）。
+
+## MIROS 最新进展
+
+- 官方 `main.py` 给出了 Google Drive 微调权重 ID（fine-tuned `last.ckpt`）与 MusicFM 预训练权重；
+  MusicFM 已下载（1.32 GB），MIROS 微调权重下载中。
+- 公开数据：HF `another-blue/YourMT3-dataset` 的 `rwc_pop_yourmt3_16k.tar.gz`（763 MB）已下载并解压。
+- 阻塞：MIROS 代码要求 transformers 4.48/flash-attn 与特定包结构，直接 import 报 `relative import beyond top-level`
+  以及 T5 StaticCache 兼容问题；尚未完成训练。
