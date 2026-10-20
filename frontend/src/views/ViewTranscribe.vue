@@ -86,6 +86,35 @@ const msTemp = ref(1.0);                 // 采样温度（1.0 = 不传）
 const msCfg = ref(1.0);                  // 引导系数（1.0 = 不传）
 const msBeam = ref(1);                   // 束搜索宽度（1 = 不传）
 const msPrelude = ref(true);             // 跨块延音缝合（默认开；关掉才传 false＝不缝合）
+// MuScriptor 乐器组：none=不限定（默认）；limit=手动硬约束；probe_segments=按段自动探测并约束
+const msMode = ref('none');
+const msGroups = ref(['voice', 'drums']);
+const msProbeSegSec = ref(60);
+function toggleMsGroup(id) {
+  const i = msGroups.value.indexOf(id);
+  if (i >= 0) { if (msGroups.value.length > 1) msGroups.value.splice(i, 1); return; }
+  msGroups.value.push(id);
+}
+const MS_GROUPS = [
+  { id: 'voice', cn: '人声' }, { id: 'acoustic_piano', cn: '钢琴' }, { id: 'electric_piano', cn: '电钢琴' },
+  { id: 'acoustic_guitar', cn: '原声吉他' }, { id: 'clean_electric_guitar', cn: '清音电吉他' },
+  { id: 'distorted_electric_guitar', cn: '失真电吉他' }, { id: 'electric_bass', cn: '电贝斯' },
+  { id: 'acoustic_bass', cn: '原声贝斯' }, { id: 'string_ensemble', cn: '弦乐组' }, { id: 'violin', cn: '小提琴' },
+  { id: 'viola', cn: '中提琴' }, { id: 'cello', cn: '大提琴' }, { id: 'contrabass', cn: '低音提琴' },
+  { id: 'orchestral_harp', cn: '管弦竖琴' }, { id: 'flutes', cn: '长笛' }, { id: 'organ', cn: '风琴' },
+  { id: 'synth_lead', cn: '合成主音' }, { id: 'synth_pad', cn: '合成铺底' }, { id: 'synth_strings', cn: '合成弦乐' },
+  { id: 'brass_section', cn: '铜管组' }, { id: 'trumpet', cn: '小号' }, { id: 'trombone', cn: '长号' },
+  { id: 'tuba', cn: '大号' }, { id: 'french_horn', cn: '圆号' }, { id: 'soprano_and_alto_sax', cn: '萨克斯' },
+  { id: 'tenor_sax', cn: '次中音萨克斯' }, { id: 'baritone_sax', cn: '上低音萨克斯' }, { id: 'oboe', cn: '双簧管' },
+  { id: 'english_horn', cn: '英国管' }, { id: 'clarinet', cn: '单簧管' }, { id: 'bassoon', cn: '巴松管' },
+  { id: 'drums', cn: '鼓' }, { id: 'timpani', cn: '定音鼓' }, { id: 'chromatic_percussion', cn: '色彩打击乐' },
+  { id: 'orchestra_hit', cn: '管弦齐奏' },
+];
+const msInstrValue = computed(() => {
+  if (msMode.value === 'limit') return msGroups.value.join(',');
+  if (msMode.value === 'probe_segments') return 'probe_segments';
+  return 'none';
+});
 // ② 计算精度：默认 fp32（不传）—— bf16 改数值精度、属影响质量的开关，默认关。
 // 实测：CPU（Zen 5/AVX512-BF16）10 分钟素材待复测、15 秒素材 +43%；GPU 上 ≈0%；
 // 长素材（10 分钟/120 块）质量逐项相同，误差不累积。
@@ -1159,6 +1188,8 @@ function collectPresetParams() {
     if (umodel.value === 'basic') p.multiple_pitch_bends = pitchBends.value;
     if (umodel.value === 'muscriptor') Object.assign(p, {
       model_size: msSize.value,
+      muscriptor_instruments: msInstrValue.value,
+      probe_segment_sec: iv(msProbeSegSec.value),
       temperature: Number(msTemp.value), cfg_coef: Number(msCfg.value),
       beam_size: iv(msBeam.value), prelude_forcing: msPrelude.value,
       precision: msPrec.value,
@@ -1239,6 +1270,16 @@ function applyPresetParams(p, opts) {
   if (has('cfg_coef')) msCfg.value = Math.max(0, numOr('cfg_coef', 1.0));
   if (has('beam_size')) msBeam.value = Math.max(1, Math.round(numOr('beam_size', 1)));
   if (has('prelude_forcing')) msPrelude.value = pr.prelude_forcing !== false;
+  if (has('muscriptor_instruments') && typeof pr.muscriptor_instruments === 'string') {
+    const v = pr.muscriptor_instruments.trim();
+    if (!v || v === 'none') msMode.value = 'none';
+    else if (v === 'probe_segments' || v === 'segments') msMode.value = 'probe_segments';
+    else {
+      const groups = v.split(',').map((s) => s.trim()).filter((g) => MS_GROUPS.some((x) => x.id === g));
+      if (groups.length) { msGroups.value = groups; msMode.value = 'limit'; }
+    }
+  }
+  if (has('probe_segment_sec')) msProbeSegSec.value = clamp(Math.round(numOr('probe_segment_sec', 60)), 20, 120);
   if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
   // 识别片段长度（0 = 模型默认）；老预设没有这个键时保留当前值
   if (has('segment_sec')) segmentSec.value = clamp(Math.round(numOr('segment_sec', 0)), 0, 120);
@@ -1411,6 +1452,8 @@ function collectParams() {
     if (umodel.value === 'muscriptor') {
       cfg.model_size = msSize.value;
       cfg.beat_grid = beatGrid.value;
+      cfg.muscriptor_instruments = msInstrValue.value;
+      if (msMode.value === 'probe_segments') cfg.probe_segment_sec = Number(msProbeSegSec.value) || 60;
       // 乐器组约束：'auto' / '人声,鼓' 这样的组名列表 / 空。
       // 注意这条链路有三跳（渲染端 → 主进程 worker 请求体 → 引擎），少任何一跳界面选了都不生效。
       // ★ 2026-10-14 更正：这段注释原先描述的是**已被移除**的批量推理行为
@@ -2256,6 +2299,27 @@ onBeforeUnmount(() => {
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label><span><b>{{ t('节拍网格检测') }}</b></span><input type="checkbox" v-model="beatGrid" @change="beatGridUserSet = true"></label>
+          </div>
+          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
+            <label>
+              <span><b>{{ t('乐器组') }}</b></span>
+              <select v-model="msMode" class="select-input" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
+                <option value="none">{{ t('不限定') }}</option>
+                <option value="limit">{{ t('限定乐器组') }}</option>
+                <option value="probe_segments">{{ t('自动探测（分段）') }}</option>
+              </select>
+            </label>
+          </div>
+          <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe_segments'" class="tr-slider">
+            <label>{{ t('探测段长') }}<b>{{ msProbeSegSec }}s</b></label>
+            <NumSlider v-model="msProbeSegSec" :min="20" :max="120" :step="10" unit="s" :aria-label="t('探测段长')" />
+          </div>
+          <div class="tr-switch" style="display:block" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'limit'">
+            <div style="display:flex;flex-wrap:wrap;gap:var(--sp-2);max-height:150px;overflow:auto;padding:2px 0">
+              <button v-for="g in MS_GROUPS" :key="g.id" type="button" class="fu-ctl tr-pill"
+                      :class="{ active: msGroups.includes(g.id) }" :title="g.id"
+                      @click="toggleMsGroup(g.id)">{{ t(g.cn) }}</button>
+            </div>
           </div>
           <div class="tr-switch" v-if="mode === 'separate'">
             <label><span><b>{{ t('输出鼓组节奏轨') }}</b></span><input type="checkbox" v-model="drums"></label>
