@@ -5821,6 +5821,7 @@ export const I18N_MAP = {
   '探测段长': 'Probe segment length',
   'Aria-AMT / Transkun / hFT 需先到资源中心安装对应模型': 'Aria-AMT / Transkun / hFT need the corresponding model installed from Resources',
   'YourMT3+ 需先到资源中心下载运行时+权重（约 400 MB）': 'YourMT3+ needs its runtime + weights (about 400 MB) from Resources',
+  'MIROS 需先到资源中心下载运行时+权重（约 6 GB）': 'MIROS needs its runtime + weights (about 6 GB) from Resources',
   '已删除的歌单': 'Deleted playlist',
   '驱动 ': 'Driver ',
   '共享显存回退：支持（驱动 ≥536.40；≥546.01 可按应用关闭）': 'Shared-memory fallback: supported (driver ≥536.40; ≥546.01 can disable it per app)',

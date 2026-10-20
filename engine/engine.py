@@ -25,6 +25,7 @@ UNIVERSAL_MODELS = {
     "basic":    ("Basic Pitch", "Release 内置兜底模型"),
     "muscriptor": ("MuScriptor", "Kyutai 多乐器转录 · 资源中心下载 · Small/Medium/Large"),
     "yourmt3":  ("YourMT3+", "YPTF+Single · 资源中心下载（运行时+权重）"),
+    "miros":    ("MIROS", "AMT Challenge 2025 冠军 · 资源中心下载（运行时+权重）"),
 }
 MUSCRIPTOR_SIZES = ["small", "medium", "large"]
 
@@ -90,7 +91,7 @@ def engine_available(mode):
     """该模式的引擎是否可用。"""
     if mode == "universal":
         # 任一子模型可用即可（basic 兜底 / muscriptor 可选）
-        return _basic_ok() or _muscriptor_ok() or _yourmt3_ok()
+        return _basic_ok() or _muscriptor_ok() or _yourmt3_ok() or _miros_ok()
     if mode == "piano":
         from engine_pt import available as _pt_ok
         if _pt_ok():
@@ -124,6 +125,14 @@ def _yourmt3_ok():
     try:
         import engine_yourmt3
         return engine_yourmt3.available()
+    except Exception:
+        return False
+
+
+def _miros_ok():
+    try:
+        import engine_miros
+        return engine_miros.available()
     except Exception:
         return False
 
@@ -329,6 +338,10 @@ def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
                 import engine_yourmt3
                 n = engine_yourmt3.transcribe_yourmt3(audio_path, output_midi, params=params,
                                                       log_cb=log_cb, num_threads=num_threads)
+            elif umodel == "miros":
+                import engine_miros
+                n = engine_miros.transcribe_miros(audio_path, output_midi, params=params,
+                                                  log_cb=log_cb, num_threads=num_threads)
             else:
                 import engine_basic   # 3.2.6 热修：auto-bpm 重构时误删，导致 universal 默认路径 NameError
                 native_bpm = True   # basic 内置节拍测速

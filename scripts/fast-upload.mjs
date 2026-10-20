@@ -18,7 +18,7 @@
  */
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync, createReadStream } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
 const argv = process.argv.slice(2);
@@ -142,7 +142,8 @@ async function putAsset(localPath, name, releaseId, attempt = 1) {
     if (!r.ok) throw new Error('取上传URL失败 ' + r.status);
     uploadUrl = r.body.upload_url; verifyUrl = r.body.verify_url;
   }
-  const body = readFileSync(localPath);
+  // >256MB 走流式，避免 5GB 资产整读进内存；小文件保持原路径
+  const body = size > 256 * 1024 * 1024 ? createReadStream(localPath) : readFileSync(localPath);
   const res = await fetch(uploadUrl, {
     method: channel === 'gh' ? 'POST' : 'PUT',
     headers: { ...(channel === 'gh' ? headers : {}), 'Content-Type': 'application/octet-stream', 'Content-Length': String(size) },

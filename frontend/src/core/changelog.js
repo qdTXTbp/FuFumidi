@@ -4,6 +4,13 @@
 import { cmpVersion } from './version.js';
 
 const CHANGELOG = {
+  // 6.1.4：hFT-Transformer/YourMT3+/MIROS 三个可选引擎进入资源中心（不随包分发）。
+  '6.1.4': [
+    '钢琴专用新增 hFT-Transformer 可选引擎（Sony ISMIR2023，MIT，约 22 MB，CPU 可跑）。',
+    '通用识别新增 YourMT3+（YPTF+Single）可选引擎：资源中心下载独立运行时+权重，CPU 可跑。',
+    '通用识别新增 MIROS 可选引擎（2025 AMT Challenge 冠军，MusicFM+YourMT3+ 架构）；资源中心下载运行时+权重。',
+    '资源中心模型包支持独立运行时/大体积分片下载，安装后自动出现在转录页模型选择。',
+  ],
   // 6.1.3：自动探测改用专用音频标签模型（AudioSet）+ 低置信度回退；空 MIDI 保护与图标自愈收口。
   '6.1.3': [
     '自动探测改用专用音频标签模型（AudioSet zipformer-small，26MB ONNX，CPU 推理）：不再拿主模型/大模型做 3×20s 预分析；置信度不足时回退 MuScriptor-small，保证音色稳定不会变成空操作。',

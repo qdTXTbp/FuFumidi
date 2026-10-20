@@ -71,6 +71,33 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       downloadable: true,
       runtime: 'piano',
     },
+    // MIROS（2025 AMT Challenge 冠军）：运行时依赖 + 源码 + MusicFM + 4.0GB 权重，单包下载；不随安装包分发
+    miros: {
+      id: 'miros',
+      name: 'MIROS',
+      note: '通用多乐器转录 · 2025 AMT Challenge 冠军 · 运行时+权重约 5.0 GB',
+      kind: 'transcribe',
+      arch: 'MIROS (MusicFM + YourMT3+)',
+      use: '通用多乐器转录：MIROS 冠军模型，MusicFM 编码器 + YourMT3+ 多通道解码；含独立 Python 运行时',
+      dest: 'miros',
+      type: 'parts',
+      parts: [
+        'https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/miros-v1/miros-runtime-20261021.z01',
+        'https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/miros-v1/miros-runtime-20261021.z02',
+        'https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/miros-v1/miros-runtime-20261021.z03',
+        'https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/miros-v1/miros-runtime-20261021.z04',
+        'https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/miros-v1/miros-runtime-20261021.z05',
+        'https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/miros-v1/miros-runtime-20261021.z06',
+      ],
+      partSizes: [943718400, 943718400, 943718400, 943718400, 943718400, 645912192],
+      unpack: true,
+      unpackMarker: 'site/transformers/__init__.py',
+      sha256: '6ee7a2d2b3181de7a9b26408a6a787ac4c81cc13d227872f7b02d7466487c844',
+      size: 5364504192,
+      minSize: 5000000000,
+      downloadable: true,
+      runtime: 'miros',
+    },
     // YourMT3+（YPTF+Single）：运行时依赖 + 源码 + 361MB 权重，单包下载；不随安装包分发
     yourmt3: {
       id: 'yourmt3',
@@ -995,6 +1022,58 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       const archive = destDir + '.oudep';   // 解包后删掉，不留双份
       try {
         fs.mkdirSync(destDir, { recursive: true });
+        if (spec.parts && spec.parts.length) {
+          // 分片包：CNB/GitHub 单资产上限 2GiB，下载后按顺序拼接再校验/解包
+          const partsDir = destDir + '.parts';
+          fs.mkdirSync(partsDir, { recursive: true });
+          const partPaths = [];
+          for (let i = 0; i < spec.parts.length; i++) {
+            const pp = path.join(partsDir, String(i).padStart(3, '0') + '.part');
+            partPaths.push(pp);
+            const expect = (spec.partSizes && spec.partSizes[i]) || 0;
+            if (fs.existsSync(pp) && (!expect || fs.statSync(pp).size === expect)) continue;
+            await FastDL.downloadFast({
+              urls: [spec.parts[i]],
+              dest: pp,
+              minSize: expect || 0,
+              headers: { 'user-agent': 'FuFumidi' },
+              isUserAbort: guardOf(id),
+              ctrl: uctrl,
+              expectSize: expect || 0,
+              label: (spec.name || id) + ' ' + (i + 1) + '/' + spec.parts.length,
+              onProgress: (p2) => {
+                if (!win || win.isDestroyed()) return;
+                win.webContents.send('model:progress', {
+                  id, received: p2.received || 0, total: p2.total || 0,
+                  percent: p2.percent || 0, done: !!p2.done, speed: p2.speed || 0,
+                  text: (spec.name || id) + ' 分片 ' + (i + 1) + '/' + spec.parts.length,
+                });
+              },
+            });
+          }
+          const outStream = fs.createWriteStream(archive);
+          for (const pp of partPaths) {
+            await new Promise((res, rej) => {
+              const rs = fs.createReadStream(pp);
+              rs.on('error', rej);
+              rs.on('end', res);
+              rs.pipe(outStream, { end: false });
+            });
+          }
+          await new Promise((res, rej) => outStream.end(err => err ? rej(err) : res()));
+          if (spec.sha256) {
+            const hash = await sha256File(archive);
+            if (String(hash).toLowerCase() !== String(spec.sha256).toLowerCase()) {
+              throw new Error('分片拼接后 SHA256 不匹配');
+            }
+          }
+          const zsafe = safeExtractAllTo(archive, destDir);
+          if (!zsafe.ok) throw new Error('压缩包安全校验未通过：' + zsafe.error);
+          try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) {}
+          try { fs.rmSync(archive, { force: true }); } catch (_) {}
+          sendP({ received: spec.size || 0, total: spec.size || 0, percent: 100, done: true });
+          return { ok: true, path: destDir, size: spec.size || 0 };
+        }
         const urls = mirrorUrls(spec);
         if (!urls.length) throw new Error('该模型没有可用的下载地址');
         FastDL.checkDiskSpace(archive, spec.size || spec.minSize || 0);

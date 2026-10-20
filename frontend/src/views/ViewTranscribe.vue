@@ -168,6 +168,7 @@ function currentModelLabel() {
   if (mode.value === 'universal') {
     if (umodel.value === 'muscriptor') return 'MuScriptor ' + msSize.value.toUpperCase();
     if (umodel.value === 'yourmt3') return 'YourMT3+';
+    if (umodel.value === 'miros') return 'MIROS';
     return 'Basic Pitch';
   }
   // piano
@@ -179,7 +180,8 @@ function currentModelInstalled() {
   const key = mode.value === 'separate' ? 'demucs_htdemucs'
     : mode.value === 'universal'
       ? (umodel.value === 'muscriptor' ? 'muscriptor_' + msSize.value
-        : umodel.value === 'yourmt3' ? 'yourmt3' : 'basic')
+        : umodel.value === 'yourmt3' ? 'yourmt3'
+          : umodel.value === 'miros' ? 'miros' : 'basic')
       : (pmodel.value === 'aria' ? 'aria_amt' : pmodel.value === 'piano_pt' ? 'piano_pt'
         : pmodel.value === 'hft' ? 'hft_transformer' : 'transkun');
   const st = modelInstalled(key);
@@ -580,6 +582,7 @@ const showSpeedGroup = computed(() => mode.value === 'universal' && umodel.value
 const WEB_MODEL_DEFAULTS = () => ({
   basic: 'Basic Pitch · 最优',
   yourmt3: 'YourMT3+ · 最优',
+  miros: 'MIROS · 最优',
   muscriptor_small: 'MuScriptor · 最优',
   muscriptor_medium: 'MuScriptor · 最优',
   muscriptor_large: 'MuScriptor · 最优',
@@ -609,6 +612,8 @@ const WEB_BUILTIN_PRESETS = () => {
     { name: 'Basic Pitch · 最优', mode: 'universal', params: { ...basic } },
     { name: 'YourMT3+ · 最优', mode: 'universal', params: { ...basic,
       model: 'yourmt3', segment_sec: 0 } },
+    { name: 'MIROS · 最优', mode: 'universal', params: { ...basic,
+      model: 'miros', segment_sec: 0 } },
     { name: 'MuScriptor · 最优', mode: 'universal', params: { ...basic,
       model: 'muscriptor', model_size: 'medium',
       temperature: 1.0, cfg_coef: 1.0, beam_size: 1, prelude_forcing: true,
@@ -661,7 +666,7 @@ function statusTxt(s) {
 }
 /* ---------------- 多队列 ---------------- */
 const MODEL_SHORT = () => ({
-  basic: 'Basic Pitch', yourmt3: 'YourMT3+', muscriptor_small: 'MuScriptor Small', muscriptor_medium: 'MuScriptor Medium',
+  basic: 'Basic Pitch', yourmt3: 'YourMT3+', miros: 'MIROS', muscriptor_small: 'MuScriptor Small', muscriptor_medium: 'MuScriptor Medium',
   muscriptor_large: 'MuScriptor Large', piano_pt: 'piano-transcription', aria: 'Aria-AMT',
   transkun: 'Transkun', hft: 'hFT-Transformer', separate: t('音频处理'),
 });
@@ -1123,6 +1128,7 @@ function currModelKey() {
   if (mode.value === 'universal') {
     if (umodel.value === 'muscriptor') return 'muscriptor_' + msSize.value;
     if (umodel.value === 'yourmt3') return 'yourmt3';
+    if (umodel.value === 'miros') return 'miros';
     return 'basic';
   }
   return pmodel.value;                                  // piano_pt | aria | transkun
@@ -1242,7 +1248,7 @@ function applyPresetParams(p, opts) {
   const num = (k) => parseFloat(pr[k]);
   const numOr = (k, d) => (isNaN(num(k)) ? d : num(k));
   if (!keep && has('model')) {
-    if (pr.model === 'basic' || pr.model === 'muscriptor' || pr.model === 'yourmt3') umodel.value = pr.model;
+    if (pr.model === 'basic' || pr.model === 'muscriptor' || pr.model === 'yourmt3' || pr.model === 'miros') umodel.value = pr.model;
     else if (['piano_pt', 'aria', 'transkun', 'hft'].indexOf(pr.model) >= 0) pmodel.value = pr.model;
   }
   if (!keep && has('model_size') && ['small', 'medium', 'large'].indexOf(pr.model_size) >= 0) msSize.value = pr.model_size;
@@ -2023,6 +2029,7 @@ onBeforeUnmount(() => {
           <button class="fu-ctl tr-pill" :class="{ active: umodel === 'basic' }" @click="umodel = 'basic'">{{ t('Basic Pitch · 内置兜底') }}<i v-if="modelInstalled('basic') !== null" class="fu-badge ms-badge" :class="modelInstalled('basic') ? 'ok' : 'miss'">{{ modelInstalled('basic') ? t('已下载') : t('未下载') }}</i></button>
           <button class="fu-ctl tr-pill" :class="{ active: umodel === 'muscriptor' }" @click="umodel = 'muscriptor'">MuScriptor<i v-if="currentModelInstalled() !== null" class="fu-badge ms-badge" :class="currentModelInstalled() ? 'ok' : 'miss'">{{ currentModelInstalled() ? t('已下载') : t('未下载') }}</i></button>
           <button class="fu-ctl tr-pill" :class="{ active: umodel === 'yourmt3' }" @click="umodel = 'yourmt3'">YourMT3+<i v-if="modelInstalled('yourmt3') !== null" class="fu-badge ms-badge" :class="modelInstalled('yourmt3') ? 'ok' : 'miss'">{{ modelInstalled('yourmt3') ? t('已下载') : t('未下载') }}</i></button>
+          <button class="fu-ctl tr-pill" :class="{ active: umodel === 'miros' }" @click="umodel = 'miros'">MIROS<i v-if="modelInstalled('miros') !== null" class="fu-badge ms-badge" :class="modelInstalled('miros') ? 'ok' : 'miss'">{{ modelInstalled('miros') ? t('已下载') : t('未下载') }}</i></button>
         </div>
         <div v-if="umodel === 'muscriptor'" class="fu-ctl tr-pills">
           <button class="fu-ctl tr-pill" :class="{ active: msSize === 'small' }" @click="msSize = 'small'">Small · 100M<i v-if="modelInstalled('muscriptor_small') !== null" class="fu-badge ms-badge" :class="modelInstalled('muscriptor_small') ? 'ok' : 'miss'">{{ modelInstalled('muscriptor_small') ? t('已下载') : t('未下载') }}</i></button>
@@ -2031,6 +2038,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="tr-perf-hint" v-if="umodel === 'muscriptor'">{{ t('未下载时请到资源中心 → 模型文件 按规格下载') }}</div>
         <div class="tr-perf-hint" v-if="umodel === 'yourmt3'">{{ t('YourMT3+ 需先到资源中心下载运行时+权重（约 400 MB）') }}</div>
+        <div class="tr-perf-hint" v-if="umodel === 'miros'">{{ t('MIROS 需先到资源中心下载运行时+权重（约 6 GB）') }}</div>
       </div>
 
       <!-- 钢琴子模型：piano-transcription / Aria-AMT / Transkun -->
