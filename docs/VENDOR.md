@@ -101,3 +101,12 @@ https://data.jsdelivr.com/v1/packages/npm/verovio@<版本>?structure=flat
 - 分层、契约、落点：`docs/FOUNDATION.md`。
 - 依赖声明的正确姿势（Python 侧）：`engine/requirements-bundle.txt` 的注释说明了哪些是显式声明、哪些曾是隐式依赖。
 
+
+
+## hFT-Transformer（vendored，MIT）
+
+- 用途：钢琴专用可选引擎（engine/engine_hft.py）。
+- 上游：https://github.com/sony/hFT-Transformer （MIT，Copyright (c) 2023 Sony Group Corporation）。
+- vendored 文件：`engine/hft_model.py`（模型定义，原 `model/model_spec2midi.py`）、`engine/hft_amt.py`（推理/特征/写 MIDI，原 `model/amt.py`）。
+- 权重不随包：资源中心 `hft_transformer` 下载 `checkpoint.zip`（20,540,269 B，SHA-256 `BB3C88758E4802E6B3881CCB6DC7927417FB43F76980DF3739AB2BBC418D70C5`），解包后 `checkpoint/MAESTRO-V3/model_016_003.pkl`。
+- 推理：CPU，模型 5.5M 参数；无踏板检测。
