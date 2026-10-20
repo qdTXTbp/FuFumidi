@@ -89,6 +89,7 @@ MODEL_DEFAULT_PRESET = {
     "piano_pt":          "钢琴 · 最优",
     "aria":              "Aria-AMT · 最优",
     "transkun":          "Transkun · 最优",
+    "hft":               "hFT-Transformer · 最优",
     "separate":          "分离 · 最优",
 }
 
@@ -177,6 +178,7 @@ def _builtin_presets():
         "钢琴 · 最优": {"mode": "piano", "params": {**piano, "model": "piano_pt", "segment_sec": 10}},
         "Aria-AMT · 最优": {"mode": "piano", "params": {**piano, "model": "aria", "segment_sec": 30}},
         "Transkun · 最优": {"mode": "piano", "params": {**piano, "model": "transkun", "segment_sec": 16}},
+        "hFT-Transformer · 最优": {"mode": "piano", "params": {**piano, "model": "hft", "segment_sec": 0}},
         "分离 · 最优": {
             "mode": "separate",
             "params": {

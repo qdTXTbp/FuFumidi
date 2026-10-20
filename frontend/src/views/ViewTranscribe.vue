@@ -24,7 +24,7 @@ const isDesktop = !!(bridge && bridge.convert);
 const mode = ref('universal');           // universal | piano | separate
 const umodel = ref('basic');             // 通用子模型：basic | muscriptor
 const msSize = ref('medium');            // MuScriptor 规格：small | medium | large
-const pmodel = ref('piano_pt');          // 钢琴子模型：piano_pt | aria | transkun
+const pmodel = ref('piano_pt');          // 钢琴子模型：piano_pt | aria | transkun | hft
 /* ★ Aria-AMT 需要 CUDA（2026-10-17 用户：「Aria-AMT 在转录页标注需要 CUDA」）。
    实测：没有 CUDA 时它直接抛 AssertionError: CUDA device not found，而界面只说「未下载」，
    用户会以为是模型没装。这里把"要不要 CUDA"和"当前有没有 CUDA"都摆到台面上。 */
@@ -61,6 +61,7 @@ const SEG_RECOMMEND = computed(() => {
   if (mode.value === 'universal') return umodel.value === 'basic' ? 0 : 5;
   if (pmodel.value === 'aria') return 30;
   if (pmodel.value === 'transkun') return 16;
+  if (pmodel.value === 'hft') return 0;
   return 10;
 });
 const bassBoost = ref(false);            // 低音增强（仅 basic 子模型）：关闭 melodia trick 以保留低音声部
@@ -166,6 +167,7 @@ function currentModelLabel() {
   if (mode.value === 'separate') return t('HTDemucs 人声分离');
   if (mode.value === 'universal') return umodel.value === 'muscriptor' ? ('MuScriptor ' + msSize.value.toUpperCase()) : 'Basic Pitch';
   // piano
+  if (pmodel.value === 'hft') return 'hFT-Transformer';
   if (pmodel.value === 'piano_pt') return 'piano-transcription';
   return pmodel.value === 'aria' ? 'Aria-AMT' : 'Transkun';
 }
@@ -173,7 +175,8 @@ function currentModelInstalled() {
   const key = mode.value === 'separate' ? 'demucs_htdemucs'
     : mode.value === 'universal'
       ? (umodel.value === 'muscriptor' ? 'muscriptor_' + msSize.value : 'basic')
-      : (pmodel.value === 'aria' ? 'aria_amt' : pmodel.value === 'piano_pt' ? 'piano_pt' : 'transkun');
+      : (pmodel.value === 'aria' ? 'aria_amt' : pmodel.value === 'piano_pt' ? 'piano_pt'
+        : pmodel.value === 'hft' ? 'hft_transformer' : 'transkun');
   const st = modelInstalled(key);
   return st; // true / false / null
 }
@@ -577,6 +580,7 @@ const WEB_MODEL_DEFAULTS = () => ({
   piano_pt: '钢琴 · 最优',
   aria: 'Aria-AMT · 最优',
   transkun: 'Transkun · 最优',
+  hft: 'hFT-Transformer · 最优',
   separate: '分离 · 最优',
 });
 
@@ -604,6 +608,7 @@ const WEB_BUILTIN_PRESETS = () => {
     { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt', segment_sec: 10 } },
     { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria', segment_sec: 30 } },
     { name: 'Transkun · 最优', mode: 'piano', params: { ...piano, model: 'transkun', segment_sec: 16 } },
+    { name: 'hFT-Transformer · 最优', mode: 'piano', params: { ...piano, model: 'hft', segment_sec: 0 } },
     { name: '分离 · 最优', mode: 'separate', params: {
       onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
       include_drums: true, stem_format: 'wav', perf: 'quality',
@@ -650,7 +655,7 @@ function statusTxt(s) {
 const MODEL_SHORT = () => ({
   basic: 'Basic Pitch', muscriptor_small: 'MuScriptor Small', muscriptor_medium: 'MuScriptor Medium',
   muscriptor_large: 'MuScriptor Large', piano_pt: 'piano-transcription', aria: 'Aria-AMT',
-  transkun: 'Transkun', separate: t('音频处理'),
+  transkun: 'Transkun', hft: 'hFT-Transformer', separate: t('音频处理'),
 });
 function currentQueue() { return queues.find((q) => q.id === activeQid.value) || queues[0] || null; }
 /* 每个队列的「转录产物加入哪个歌单」：
@@ -1226,7 +1231,7 @@ function applyPresetParams(p, opts) {
   const numOr = (k, d) => (isNaN(num(k)) ? d : num(k));
   if (!keep && has('model')) {
     if (pr.model === 'basic' || pr.model === 'muscriptor') umodel.value = pr.model;
-    else if (['piano_pt', 'aria', 'transkun'].indexOf(pr.model) >= 0) pmodel.value = pr.model;
+    else if (['piano_pt', 'aria', 'transkun', 'hft'].indexOf(pr.model) >= 0) pmodel.value = pr.model;
   }
   if (!keep && has('model_size') && ['small', 'medium', 'large'].indexOf(pr.model_size) >= 0) msSize.value = pr.model_size;
   // 性能档：用户手动选过就尊重用户的选择（自动套预设不改它）
@@ -2021,8 +2026,9 @@ onBeforeUnmount(() => {
           <button class="fu-ctl tr-pill" :class="{ active: pmodel === 'piano_pt' }" @click="pmodel = 'piano_pt'">{{ t('piano-transcription · 内置') }}<i v-if="modelInstalled('piano_pt') !== null" class="fu-badge ms-badge" :class="modelInstalled('piano_pt') ? 'ok' : 'miss'">{{ modelInstalled('piano_pt') ? t('已下载') : t('未下载') }}</i></button>
           <button class="fu-ctl tr-pill" :class="{ active: pmodel === 'aria' }" @click="pmodel = 'aria'">Aria-AMT<b class="tr-cuda" :title="t('Aria-AMT 需要 CUDA（NVIDIA 显卡 + CUDA 加速包）；没有 CUDA 时它无法转录')">{{ t('需 CUDA') }}</b><i v-if="modelInstalled('aria_amt') !== null" class="fu-badge ms-badge" :class="modelInstalled('aria_amt') ? 'ok' : 'miss'">{{ modelInstalled('aria_amt') ? t('已下载') : t('未下载') }}</i></button>
           <button class="fu-ctl tr-pill" :class="{ active: pmodel === 'transkun' }" @click="pmodel = 'transkun'">Transkun<i v-if="modelInstalled('transkun') !== null" class="fu-badge ms-badge" :class="modelInstalled('transkun') ? 'ok' : 'miss'">{{ modelInstalled('transkun') ? t('已下载') : t('未下载') }}</i></button>
+          <button class="fu-ctl tr-pill" :class="{ active: pmodel === 'hft' }" @click="pmodel = 'hft'">hFT-Transformer<i v-if="modelInstalled('hft_transformer') !== null" class="fu-badge ms-badge" :class="modelInstalled('hft_transformer') ? 'ok' : 'miss'">{{ modelInstalled('hft_transformer') ? t('已下载') : t('未下载') }}</i></button>
         </div>
-        <div class="tr-perf-hint" v-if="pmodel !== 'piano_pt'">{{ t('Aria-AMT / Transkun 需先到资源中心安装对应模型') }}</div>
+        <div class="tr-perf-hint" v-if="pmodel !== 'piano_pt'">{{ t('Aria-AMT / Transkun / hFT 需先到资源中心安装对应模型') }}</div>
         <div class="tr-perf-hint tr-warn" v-if="pmodel === 'aria' && !cudaReady">{{ t('当前没有可用的 CUDA（需 NVIDIA 显卡 + 已安装的 CUDA 加速包）。Aria-AMT 会报「CUDA device not found」——改用 piano-transcription 或 Transkun 可以正常转录。') }}</div>
       </div>
 

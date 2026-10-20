@@ -32,6 +32,7 @@ PIANO_MODELS = {
     "piano_pt": ("piano-transcription（ByteDance）", "内置模型"),
     "aria":     ("Aria-AMT（EleutherAI）", "资源中心下载"),
     "transkun": ("Transkun（Neural Semi-CRF）", "pip 安装含权重"),
+    "hft":      ("hFT-Transformer（Sony）", "资源中心下载 · 22 MB · CPU 可跑"),
 }
 
 # 各模式默认参数（GUI 滑块与 CLI 共用基准）
@@ -90,8 +91,16 @@ def engine_available(mode):
         # 任一子模型可用即可（basic 兜底 / muscriptor 可选）
         return _basic_ok() or _muscriptor_ok()
     if mode == "piano":
-        from engine_pt import available
-        return available()
+        from engine_pt import available as _pt_ok
+        if _pt_ok():
+            return True
+        for _m in ("aria", "transkun", "hft"):
+            try:
+                if piano_model_available(_m):
+                    return True
+            except Exception:
+                pass
+        return False
     if mode == "separate":
         # 音频处理（MSST 分离）为独立引擎，不参与音频→MIDI 转录
         try:
@@ -122,6 +131,12 @@ def piano_model_available(model):
         try:
             import engine_transkun
             return engine_transkun.available()
+        except Exception:
+            return False
+    if model == "hft":
+        try:
+            import engine_hft
+            return engine_hft.available()
         except Exception:
             return False
     # 默认 piano_pt
@@ -275,6 +290,10 @@ def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
                 import engine_transkun
                 n = engine_transkun.transcribe_transkun(audio_path, output_midi, params=params,
                                                         log_cb=log_cb, num_threads=num_threads)
+            elif pmodel == "hft":
+                import engine_hft
+                n = engine_hft.transcribe_hft(audio_path, output_midi, params=params,
+                                              log_cb=log_cb, num_threads=num_threads)
             else:
                 import engine_pt
                 params["perf_mode"] = perf_mode   # 性能档 → engine_pt 批量前向上限（自适应）

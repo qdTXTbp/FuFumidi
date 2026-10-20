@@ -53,6 +53,24 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       downloadable: true,
       runtime: 'piano',
     },
+    // hFT-Transformer（Sony ISMIR2023，MIT）：22 MB 权重，CPU 可跑；资源中心下载，不随安装包分发
+    hft_transformer: {
+      id: 'hft_transformer',
+      name: 'hFT-Transformer',
+      note: '钢琴转录 · Sony ISMIR2023 · 5.5M 参数 · 约 22 MB · CPU 可跑',
+      kind: 'transcribe',
+      arch: 'hFT-Transformer',
+      use: '钢琴专用：hFT 分层频时 Transformer，MAESTRO 权重；比 piano-transcription 更细的和弦/踏板，CPU 即可运行',
+      dest: 'hft_transformer',
+      url: 'https://github.com/sony/hFT-Transformer/releases/download/ismir2023/checkpoint.zip',
+      unpack: true,
+      unpackMarker: 'checkpoint/MAESTRO-V3/model_016_003.pkl',
+      sha256: 'bb3c88758e4802e6b3881ccb6dc7927417fb43f76980df3739ab2bbc418d70c5',
+      size: 20540269,
+      minSize: 18000000,
+      downloadable: true,
+      runtime: 'piano',
+    },
     // 通用多乐器转录（Kyutai MuScriptor，默认不随 Release 分发，需到资源中心下载）
     // 注意：MuScriptor 权重经 monologue82/Models 仓库分卷分发（gh.jasonzeng.dev 加速 + 多镜像回退，
     // 25MB part 并行下载 → 合并 → SHA256 校验），无需 HuggingFace 授权。
