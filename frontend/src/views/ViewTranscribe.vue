@@ -1702,7 +1702,33 @@ async function runBatch() {
     toast(t('转录失败'), 'warn');
   }
   if (cancelAll.value && !paused.value) logLine(t('已取消转录队列…'), true);
+  if (!cancelAll.value && (dN || eN)) playTranscribeDoneChime(eN > 0);
 }
+/** 转录完成后播放短提示音（Web Audio 合成，不依赖外部音频文件）。
+ *  成功两声上行、失败两声下行；只在批次结束且非取消时调用一次。 */
+function playTranscribeDoneChime(failed = false) {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    const t0 = ctx.currentTime;
+    const freqs = failed ? [392, 311] : [659.25, 880.0, 1318.5];
+    freqs.forEach((f, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = f;
+      const at = t0 + i * 0.11;
+      gain.gain.setValueAtTime(0.0001, at);
+      gain.gain.exponentialRampToValueAtTime(0.18, at + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.18);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(at); osc.stop(at + 0.2);
+    });
+    setTimeout(() => { try { ctx.close(); } catch (e) {} }, 900);
+  } catch (e) {}
+}
+
 async function startTranscribe() {
   if (busy.value) return;
   const chain = !!chainMode.value;
