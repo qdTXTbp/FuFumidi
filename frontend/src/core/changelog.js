@@ -4,6 +4,10 @@
 import { cmpVersion } from './version.js';
 
 const CHANGELOG = {
+  // 6.1.6：自动探测乐器组过滤非法组名（program_105 等），避免硬约束报 unknown instrument。
+  '6.1.6': [
+    '修复自动探测在分段乐器组里返回 program_105 等非法组名时，MuScriptor 硬约束直接报 unknown instrument 导致整首失败的问题；现在会过滤无效组名并记录日志。',
+  ],
   // 6.1.5：转录批次完成提示音。
   '6.1.5': [
     '转录批次完成时播放提示音：全部成功为三声上行，有失败为两声下行；取消转录不响。',

@@ -18,6 +18,38 @@ import pause_gate as _pause_gate_mod
 _MODEL_CACHE = {}
 
 
+
+# MuScriptor tokenizer 允许的 35 个乐器组；探测器偶尔会吐出 program_105 一类的
+# 原始 program 名，直接作为硬约束会把整个任务打挂，必须在这里过滤掉。
+_MUSCRIPTOR_GROUPS = frozenset((
+    "acoustic_piano", "electric_piano", "chromatic_percussion", "organ",
+    "acoustic_guitar", "clean_electric_guitar", "distorted_electric_guitar",
+    "acoustic_bass", "electric_bass", "violin", "viola", "cello", "contrabass",
+    "orchestral_harp", "timpani", "string_ensemble", "synth_strings", "voice",
+    "orchestra_hit", "trumpet", "trombone", "tuba", "french_horn", "brass_section",
+    "soprano_and_alto_sax", "tenor_sax", "baritone_sax", "oboe", "english_horn",
+    "bassoon", "clarinet", "flutes", "synth_lead", "synth_pad", "drums",
+))
+
+
+def _sanitize_groups(groups, log_cb=None, where=""):
+    out = []
+    bad = []
+    for g in groups or []:
+        g = str(g)
+        if g in _MUSCRIPTOR_GROUPS:
+            if g not in out:
+                out.append(g)
+        elif g not in bad:
+            bad.append(g)
+    if bad and log_cb:
+        try:
+            log_cb("忽略无效乐器组%s：%s" % (("（" + where + "）") if where else "", " / ".join(bad)))
+        except Exception:
+            pass
+    return out
+
+
 def _find_local_model(size):
     """从本地模型目录查找已下载的 MuScriptor 权重（资源中心下载后合并得到）。
 
@@ -1068,6 +1100,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         # （python instrument_probe.py 歌曲.flac --json，看模型会把这首歌判成哪些乐器）。
         import instrument_probe
         _mode, _groups = instrument_probe.parse_mode(params.get("muscriptor_instruments"))
+        _groups = _sanitize_groups(_groups, log_cb, "手动/预设")
         constrain = _groups if _mode == "limit" else None
         if _mode in ("probe", "probe_segments"):
             # 「音色稳定」预设：先探测主乐器组，再作为硬约束（减少长尾乐器与跨块改判）。
@@ -1179,6 +1212,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                                     _prs = _fpr.get("reason", "")
                                 except Exception as _e:  # noqa: BLE001
                                     _prs = "small兜底失败: %s" % str(_e)[:120]
+                            _pg = _sanitize_groups(_pg, log_cb, "分段 %d" % (_si + 1))
                             _per_groups.append(_pg)
                             _seg_src.append(_src)
                             _log(log_cb, "分段探测 %d/%d（%.0f–%.0fs，%s）：%s%s"
@@ -1201,6 +1235,8 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                         except Exception:
                             pass
                     _allowed, _keep = _segprobe.build_constraints(_per_groups, max_groups=12)
+                    _allowed = [_sanitize_groups(_g, log_cb, "段约束") for _g in _allowed]
+                    _keep = _sanitize_groups(_keep, log_cb, "稳定组")
                     # 某段仍空 → 沿用最近的已约束段，保证每段都有明确允许组。
                     for _i in range(len(_allowed)):
                         if _allowed[_i]:
@@ -1258,6 +1294,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                                     pass
                         _probe_secs = time.perf_counter() - _t_probe
                     if _groups:
+                        _groups = _sanitize_groups(_groups, log_cb, "整曲探测")
                         constrain = _groups
                         _log(log_cb, "预分析锁定乐器组（音色稳定，探测器=%s，%.1fs）：" % (_probe_label, _probe_secs)
                              + " / ".join(_groups) + "（%s）" % _prs)
