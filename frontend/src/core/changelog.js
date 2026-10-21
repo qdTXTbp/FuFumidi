@@ -4,6 +4,11 @@
 import { cmpVersion } from './version.js';
 
 const CHANGELOG = {
+  // 6.1.5：转录批次完成提示音。
+  '6.1.5': [
+    '转录批次完成时播放提示音：全部成功为三声上行，有失败为两声下行；取消转录不响。',
+    '提示音用 Web Audio 实时合成，不增加音频资源文件。',
+  ],
   // 6.1.4：hFT-Transformer/YourMT3+/MIROS 三个可选引擎进入资源中心（不随包分发）。
   '6.1.4': [
     '钢琴专用新增 hFT-Transformer 可选引擎（Sony ISMIR2023，MIT，约 22 MB，CPU 可跑）。',

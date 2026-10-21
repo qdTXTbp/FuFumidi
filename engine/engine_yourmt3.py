@@ -59,7 +59,33 @@ def _install_paths(rt):
         sys.modules["wandb"] = w
 
 
+def _ensure_checkpoint_paths(rt):
+    """资源包布局/引擎 config 的 save_dir 可能写成 logs 或 amt/logs；
+    只要实际 checkpoint 在 rt 下，就把两种期望路径都补齐，避免 No checkpoint found。"""
+    found = None
+    for root, _dirs, files in os.walk(rt):
+        if "model.ckpt" in files:
+            found = os.path.join(root, "model.ckpt")
+            break
+    if not found:
+        return
+    for rel in (_CKPT_REL, os.path.join("logs", "2024", _EXP, "checkpoints", "model.ckpt")):
+        dst = os.path.join(rt, rel)
+        if os.path.exists(dst):
+            continue
+        try:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            try:
+                os.link(found, dst)
+            except Exception:
+                import shutil
+                shutil.copy2(found, dst)
+        except Exception:
+            pass
+
+
 def _load_model(rt):
+    _ensure_checkpoint_paths(rt)
     import torch
     import torchaudio
     import soundfile as sf
