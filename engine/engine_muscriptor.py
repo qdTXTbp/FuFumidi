@@ -9,6 +9,7 @@ MuScriptor 通用多乐器转录引擎（Kyutai + Mirelo）
 """
 import os
 import time
+import re
 
 import pause_gate as _pause_gate_mod
 
@@ -32,16 +33,92 @@ _MUSCRIPTOR_GROUPS = frozenset((
 ))
 
 
+
+
+# GM program（0–127）→ MuScriptor 现有 35 组的近似映射表。
+# 目的：自动探测/兜底可能返回 program_105 这类未分组 GM token；硬约束接口
+# 不接受原始 program 名，但把这些 token 折叠到最近的合法组可以保留探测意图。
+# 注意这是**近似**映射：例如 104–107（Sitar/Banjo/Shamisen/Koto）→ acoustic_guitar，
+# 112–118（打击乐）→ chromatic_percussion；没有合理近似的 120–127 直接丢弃。
+_GM_PROGRAM_GROUPS = {}
+for _start, _end, _group in (
+    (0, 7, "acoustic_piano"),
+    (8, 15, "chromatic_percussion"),
+    (16, 23, "organ"),
+    (24, 25, "acoustic_guitar"),
+    (26, 28, "clean_electric_guitar"),
+    (29, 31, "distorted_electric_guitar"),
+    (32, 32, "acoustic_bass"),
+    (33, 39, "electric_bass"),
+    (40, 40, "violin"),
+    (41, 41, "viola"),
+    (42, 42, "cello"),
+    (43, 43, "contrabass"),
+    (44, 45, "string_ensemble"),
+    (46, 46, "orchestral_harp"),
+    (47, 47, "timpani"),
+    (48, 51, "string_ensemble"),
+    (52, 54, "voice"),
+    (55, 55, "orchestra_hit"),
+    (56, 56, "trumpet"),
+    (57, 57, "trombone"),
+    (58, 58, "tuba"),
+    (59, 59, "trumpet"),
+    (60, 60, "french_horn"),
+    (61, 63, "brass_section"),
+    (64, 65, "soprano_and_alto_sax"),
+    (66, 66, "tenor_sax"),
+    (67, 67, "baritone_sax"),
+    (68, 68, "oboe"),
+    (69, 69, "english_horn"),
+    (70, 70, "bassoon"),
+    (71, 71, "clarinet"),
+    (72, 79, "flutes"),
+    (80, 87, "synth_lead"),
+    (88, 95, "synth_pad"),
+    (96, 103, "synth_pad"),
+    (104, 107, "acoustic_guitar"),
+    (108, 108, "chromatic_percussion"),
+    (109, 109, "flutes"),
+    (110, 110, "violin"),
+    (111, 111, "oboe"),
+    (112, 118, "chromatic_percussion"),
+    (119, 119, "chromatic_percussion"),
+):
+    for _p in range(_start, _end + 1):
+        _GM_PROGRAM_GROUPS[_p] = _group
+
+
+def _map_program_group(name):
+    m = re.fullmatch(r"program_(\d+)", str(name))
+    if not m:
+        return None
+    return _GM_PROGRAM_GROUPS.get(int(m.group(1)))
+
+
 def _sanitize_groups(groups, log_cb=None, where=""):
     out = []
     bad = []
+    mapped = []
     for g in groups or []:
         g = str(g)
         if g in _MUSCRIPTOR_GROUPS:
             if g not in out:
                 out.append(g)
+            continue
+        target = _map_program_group(g)
+        if target in _MUSCRIPTOR_GROUPS:
+            if g not in mapped:
+                mapped.append(g + "→" + target)
+            if target not in out:
+                out.append(target)
         elif g not in bad:
             bad.append(g)
+    if mapped and log_cb:
+        try:
+            log_cb("映射近似乐器组%s：%s" % (("（" + where + "）") if where else "", " / ".join(mapped)))
+        except Exception:
+            pass
     if bad and log_cb:
         try:
             log_cb("忽略无效乐器组%s：%s" % (("（" + where + "）") if where else "", " / ".join(bad)))

@@ -4,6 +4,11 @@
 import { cmpVersion } from './version.js';
 
 const CHANGELOG = {
+  // 6.1.7：探测器返回的 program_* 按 GM 家族映射到 MuScriptor 现有乐器组。
+  '6.1.7': [
+    '自动探测遇到 program_105 等未分组 GM 音色时，不再直接丢弃，而是按 General MIDI 家族映射到现有乐器组（如 program_105 → acoustic_guitar）；无合理近似的仍过滤。',
+    '映射只使用 MuScriptor 已有 35 个组，不改变模型词表；日志会显示「映射近似乐器组」。',
+  ],
   // 6.1.6：自动探测乐器组过滤非法组名（program_105 等），避免硬约束报 unknown instrument。
   '6.1.6': [
     '修复自动探测在分段乐器组里返回 program_105 等非法组名时，MuScriptor 硬约束直接报 unknown instrument 导致整首失败的问题；现在会过滤无效组名并记录日志。',
