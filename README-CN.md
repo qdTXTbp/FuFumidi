@@ -16,9 +16,9 @@ FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编�
 
 应用基于 Electron 桌面壳 + Vue 3 + TypeScript 渲染层 + 内置 Python 转录运行时，并提供可选的原生 Rust 核心以加速曲库的批量操作。所有音频、模型权重与推理都在本地执行，转录与编辑全程不上传任何数据；只有在你自己开启云同步（可选）时，才会把歌单与 MIDI 曲目上传到你自己的云端账号。
 
-当前版本线：**6.1.5**（[发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.1.5)，正式版通道；测试版发布在 [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) 标签下）。
+当前版本线：**6.1.6**（[发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.1.6)，正式版通道；测试版发布在 [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) 标签下）。
 
-6.1.5 要点：**转录批次完成时播放提示音**——全部成功为三声上行，有失败为两声下行，取消不响。本版同时包含 6.1.4 的三个可选引擎：钢琴 **hFT-Transformer**、通用 **YourMT3+** 与 **MIROS**。三者都从资源中心按需下载，安装包保持精简；下载完成后全部本地离线运行。6.1.3 还带来专用 AudioSet 音频标签探测器与可靠回退、拒绝写空 MIDI 的零音符保护、Windows 文件关联图标自愈、同队列模型复用。完整列表见 [6.1.5 发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.1.5)。
+6.1.6 要点：自动探测会先过滤 `program_105` 等 MuScriptor 不接受的乐器组名，避免探测器结果把整首转录打成 `unknown instrument name(s)` 失败。6.1.5 加入了**转录批次完成提示音**——全部成功为三声上行，有失败为两声下行，取消不响。本版同时包含 6.1.4 的三个可选引擎：钢琴 **hFT-Transformer**、通用 **YourMT3+** 与 **MIROS**。三者都从资源中心按需下载，安装包保持精简；下载完成后全部本地离线运行。6.1.3 还带来专用 AudioSet 音频标签探测器与可靠回退、拒绝写空 MIDI 的零音符保护、Windows 文件关联图标自愈、同队列模型复用。完整列表见 [6.1.6 发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.1.6)。
 
 ### 核心能力
 
