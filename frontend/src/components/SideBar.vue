@@ -740,22 +740,10 @@ const showAuth = ref(false);
 
 <template>
   <aside class="sidebar" role="navigation" :aria-label="t('侧边导航')" @dragover.prevent="dragOver = true" @dragleave="dragOver = false" @drop.prevent="onDrop">
-    <div class="sidebar-brand">
-      <div class="brand-logo"><img :src="logoUrl" alt="FuFumidi" /></div>
-      <div>
-        <div class="brand-name">FuFumidi</div>
-        <div class="brand-sub">{{ t('播放 · 编辑 · 转录 · 乐谱') }}</div>
-      </div>
-    </div>
-
     <div class="sidebar-body">
-      <div style="display:flex;gap:var(--sp-2)">
-        <button class="btn sm" data-guide="sidebar-import" style="flex:1;min-width:0;justify-content:center" @click="onPick">
-          <Icon name="import" :size="14" /> {{ t('导入到曲库') }}
-        </button>
-        <button class="btn sm" style="flex:1;min-width:0;justify-content:center" @click="onPickFolder">
-          <Icon name="folder" :size="13" /> {{ t('导入文件夹') }}
-        </button>
+      <div class="side-actions">
+        <button class="icon-btn side-act" data-guide="sidebar-import" :title="t('导入到曲库')" :aria-label="t('导入到曲库')" @click="onPick"><Icon name="import" :size="16" /><span class="pl-sr">{{ t('导入到曲库') }}</span></button>
+        <button class="icon-btn side-act" :title="t('导入文件夹')" :aria-label="t('导入文件夹')" @click="onPickFolder"><Icon name="folder" :size="16" /></button>
       </div>
       <input ref="fileInput" id="midi-file-input" name="midi-file" type="file" accept=".mid,.midi,.kar,.rmi,.mp3,.wav,.flac,.m4a,.ogg,.aac,.opus" hidden multiple @change="onFileChange">
 
@@ -776,7 +764,7 @@ const showAuth = ref(false);
         <!-- 筛选：标签 / 流派 / 艺术家 / 专辑（与整理方式叠加） -->
         <span class="lib-filter">
           <button ref="filterBtn" class="chip-btn" :class="{ on: filterCount > 0 }" :title="t('按标签 / 流派 / 艺术家 / 专辑筛选')" @click="toggleFilter">
-            {{ t('筛选') }}<b v-if="filterCount" class="lib-filter-n">{{ filterCount }}</b>
+            <Icon name="filter" :size="14" /><b v-if="filterCount" class="lib-filter-n">{{ filterCount }}</b>
           </button>
           <button v-if="filterCount" class="chip-btn" :title="t('清除筛选')" @click="clearFilter">✕</button>
         </span>
@@ -799,7 +787,7 @@ const showAuth = ref(false);
 
       <!-- 歌单列表 -->
       <div class="pl-head" data-guide="sidebar-playlists">
-        <span class="nav-group-title" style="padding:var(--sp-2) var(--sp-3) var(--sp-1)">{{ t('MIDI 歌单') }}</span>
+        <span class="nav-group-title pl-title-icon" :title="t('MIDI 歌单')" :aria-label="t('MIDI 歌单')"><Icon name="list" :size="14" /></span>
         <div style="display:flex;gap:2px">
           <button class="icon-btn" style="width:24px;height:24px" :title="plCollapsed ? t('展开歌单') : t('折叠歌单')" :aria-label="plCollapsed ? t('展开歌单') : t('折叠歌单')" @click="plCollapsed = !plCollapsed">
             {{ plCollapsed ? '▸' : '▾' }}
@@ -809,7 +797,6 @@ const showAuth = ref(false);
           </button>
         </div>
       </div>
-      <div class="pl-hint muted small">{{ t('右键歌单可管理 · 按数字 1~9 快速切换歌单') }}</div>
       <div v-if="plCreating" class="pl-new">
         <input v-model="newPlName" class="text-input" style="flex:1;padding:var(--sp-1) var(--sp-2);font-size:var(--fs-sm)" :placeholder="t('歌单名')" @keydown.enter="onNewPlKey" @keydown.esc="onNewPlKey" autofocus />
         <button class="btn sm" style="padding:3px var(--sp-3)" @click="createPl()">{{ t('确定') }}</button>
@@ -817,21 +804,22 @@ const showAuth = ref(false);
 
       <template v-if="!plCollapsed">
       <div class="pl-grid" data-guide="sidebar-views">
-        <div class="pl-item" :class="{ on: isAllView }" @click="playlist.select('all')">
-          <Icon name="music" :size="13" /><span>{{ t('全部曲目') }}</span><em>{{ state.songs.length }}</em>
+        <div class="pl-item" :title="t('全部曲目')" :class="{ on: isAllView }" @click="playlist.select('all')">
+          <Icon name="music" :size="13" /><span class="pl-sr">{{ t('全部曲目') }}</span><em>{{ state.songs.length }}</em>
         </div>
-        <div class="pl-item" :class="{ on: isFavView }" @click="playlist.select('favorites')">
-          <Icon name="heart" :size="13" /><span>{{ t('收藏') }}</span><em>{{ playlist.favorites.length }}</em>
+        <div class="pl-item" :title="t('收藏')" :class="{ on: isFavView }" @click="playlist.select('favorites')">
+          <Icon name="heart" :size="13" /><span class="pl-sr">{{ t('收藏') }}</span><em>{{ playlist.favorites.length }}</em>
         </div>
-        <div class="pl-item" :class="{ on: playlist.activePlaylistId === 'recent' }" @click="playlist.select('recent')">
-          <Icon name="clock" :size="13" /><span>{{ t('最近播放') }}</span>
+        <div class="pl-item" :title="t('最近播放')" :class="{ on: playlist.activePlaylistId === 'recent' }" @click="playlist.select('recent')">
+          <Icon name="clock" :size="13" /><span class="pl-sr">{{ t('最近播放') }}</span>
         </div>
-        <div class="pl-item" :class="{ on: playlist.activePlaylistId === 'most' }" @click="playlist.select('most')">
-          <Icon name="zap" :size="13" /><span>{{ t('最常播放') }}</span>
+        <div class="pl-item" :title="t('最常播放')" :class="{ on: playlist.activePlaylistId === 'most' }" @click="playlist.select('most')">
+          <Icon name="zap" :size="13" /><span class="pl-sr">{{ t('最常播放') }}</span>
         </div>
       </div>
       <!-- 数字 1..9 = 切到第 N 个歌单（与 App.vue 的数字键处理一一对应，编号直接画在这里） -->
-      <div class="pl-item" v-for="(pl, plIdx) in playlist.playlists" :key="pl.id"
+      <div class="pl-playlist-scroll">
+      <div class="pl-item pl-playlist" v-for="(pl, plIdx) in playlist.playlists" :key="pl.id"
            :title="plIdx < 9 ? t('快捷键 ') + (plIdx + 1) : ''"
            :class="{ on: playlist.activePlaylistId === pl.id, dragging: plDragId === pl.id, dragTarget: plOverId === pl.id, dragable: canReorderPlaylists }"
            :draggable="canReorderPlaylists"
@@ -846,13 +834,15 @@ const showAuth = ref(false);
         <span v-if="plIdx < 9" class="pl-key">{{ plIdx + 1 }}</span>
         <Icon name="folder" :size="13" /><span class="pl-name" :title="pl.name">{{ pl.name }}</span><em>{{ pl.songIds.length }}</em>
       </div>
+      </div>
       </template>
 
+      <div class="sidebar-songs">
       <div class="nav-sep"></div>
 
       <!-- 歌曲列表（按当前歌单过滤） -->
-      <div v-if="!visibleSongs.length" class="muted small" style="padding:var(--sp-2) var(--sp-3);line-height:1.6">
-        {{ emptyHint }}
+      <div v-if="!visibleSongs.length" class="side-empty">
+        <Icon name="music" :size="14" /><span>{{ t('暂无曲目') }}</span>
       </div>
 
       <!-- 批量管理模式工具栏：入口统一到曲目右键「批量管理」（歌单内直接开 4.0.0 式管理子页面） -->
@@ -907,6 +897,7 @@ const showAuth = ref(false);
           </button>
         </div>
         </div>
+      </div>
       </div>
     </div>
 
@@ -1274,10 +1265,11 @@ body.resize-col .sidebar-resizer::after {
 
 /* 歌单右键菜单 */
 .pl-ctx-mask { position: fixed; inset: 0; z-index: var(--z-ctx); }
-.pl-ctx-menu { position: fixed; min-width: 160px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--r-md); box-shadow: var(--shadow-lg); padding: var(--sp-1); display: flex; flex-direction: column; gap: 2px; max-height: calc(100vh - 16px); overflow-y: auto; overscroll-behavior: contain; }
+.pl-ctx-menu { position: fixed; min-width: 176px; background: var(--surface); border: 1px solid color-mix(in srgb, var(--ornament) 32%, var(--hairline)); border-radius: var(--r-md); box-shadow: var(--shadow-lg); padding: var(--sp-1); backdrop-filter: var(--glass-blur); display: flex; flex-direction: column; gap: 2px; max-height: calc(100vh - 16px); overflow-y: auto; overscroll-behavior: contain; }
 .pl-ctx-item { text-align: left; border: none; background: transparent; color: var(--ink); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-sm); font-size: var(--fs-md); cursor: pointer; }
 .pl-ctx-item:hover { background: var(--surface-soft); }
-.pl-ctx-item.danger { color: var(--error); }
+.pl-ctx-item.danger { color: var(--t-err); }
+.pl-ctx-menu .ctx-sep { background: var(--hairline); }
 
 /* 批量管理子页面 */
 .bm-bar { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-1); flex-wrap: wrap; border-bottom: 1px solid var(--border); }
@@ -1342,4 +1334,59 @@ body.resize-col .sidebar-resizer::after {
 .ed-tag-x { display: inline-flex; align-items: center; border: none; background: none; color: inherit; cursor: pointer; padding: 0; }
 .ed-tag-input { flex: 1; min-width: 84px; border: none; background: none; outline: none; color: var(--ink); font-size: var(--fs-sm); }
 .ed-info-hint { margin: 0; color: var(--stone); font-size: var(--fs-xs); line-height: 1.5; }
+
+/* ── 侧栏拥挤治理（2026-10-22）──
+   顶部操作固定，歌单区独立滚动，歌曲列表占剩余高度；歌单多时只滚歌单，不把曲目列表顶走。 */
+.sidebar-body { overflow: hidden; min-height: 0; }
+.pl-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-1);
+  padding: 0 2px;
+  margin-bottom: 2px;
+}
+.pl-grid .pl-item {
+  padding: var(--sp-1) var(--sp-2);
+  gap: var(--sp-1);
+  font-size: var(--fs-xs);
+  border-radius: var(--r-sm);
+  min-width: 0;
+}
+.pl-grid .pl-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-grid .pl-item em { margin-left: 1px; flex: none; }
+.pl-playlist-scroll {
+  max-height: min(22vh, 176px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+  margin-bottom: var(--sp-1);
+  overscroll-behavior: contain;
+}
+.pl-playlist-scroll::-webkit-scrollbar { width: 5px; }
+.pl-playlist-scroll::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: var(--r-pill); }
+.pl-playlist { padding: 5px var(--sp-2); font-size: var(--fs-sm); }
+.pl-playlist .pl-key { width: 13px; line-height: 13px; font-size: 0.62em; }
+.pl-playlist em { font-size: var(--fs-xs); }
+.sidebar-songs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.sidebar-songs .song-list { flex: 1; min-height: 0; overflow-y: auto; }
+.sidebar-songs .nav-sep { flex: none; }
+
+/* 紧凑侧栏：无品牌区（logo 在左侧轨道）、图标化按钮、短标签 */
+.side-actions { display: flex; align-items: center; gap: var(--sp-1); }
+.side-act { width: 32px; height: 30px; border-radius: var(--r-sm); border: 1px solid var(--hairline); background: color-mix(in srgb, var(--surface) 60%, transparent); color: var(--text2); }
+.side-act:hover { color: var(--accent-sky); border-color: color-mix(in srgb, var(--accent-sky) 35%, var(--hairline)); }
+.side-empty { display: flex; align-items: center; justify-content: center; gap: var(--sp-1); padding: var(--sp-3); color: var(--text3); font-size: var(--fs-xs); }
+.pl-title-icon { display: inline-flex; align-items: center; padding: var(--sp-1) var(--sp-2); color: var(--text3); }
+.pl-grid .pl-item .pl-sr,
+.pl-sr {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
 </style>

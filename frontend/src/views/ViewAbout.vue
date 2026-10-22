@@ -14,12 +14,8 @@ function back() { try { app.setView('home'); } catch (e) { location.hash = '#/ho
 
 <template>
   <div class="page page-flat about-page">
-    <div class="page-head">
-      <div class="page-ic"><Icon name="info" :size="20" /></div>
-      <div class="grow">
-        <div class="page-title">{{ t('关于与许可') }}</div>
-        <div class="page-sub">{{ t('版本、内置音色库与第三方组件的许可证与来源') }}</div>
-      </div>
+    <div class="about-plainhead">
+      <div class="grow"><b>{{ t('关于与许可') }}</b><span>{{ t('版本、内置音色库与第三方组件的许可证与来源') }}</span></div>
       <button class="btn sm" @click="back">{{ t('返回') }}</button>
     </div>
 
@@ -53,6 +49,10 @@ function back() { try { app.setView('home'); } catch (e) { location.hash = '#/ho
 
 <style scoped>
 .about-page { display: flex; flex-direction: column; gap: var(--sp-2); overflow-y: auto; }
+.about-plainhead { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) 0 var(--sp-3); }
+.about-plainhead .grow { display: flex; flex-direction: column; gap: 2px; }
+.about-plainhead b { font-size: var(--fs-lg); color: var(--text); }
+.about-plainhead span { color: var(--text3); font-size: var(--fs-xs); }
 .about-card { padding: var(--sp-3); }
 .about-card h4 { display: flex; align-items: center; gap: var(--sp-2); margin: 0 0 var(--sp-2); }
 .about-row { display: flex; align-items: center; gap: var(--sp-3); }

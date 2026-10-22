@@ -26,6 +26,9 @@ const cv = ref(null);
 const state = ref(createArrangeState({}));
 const selected = ref('');
 const zoom = ref(0.12);      // 每 tick 像素
+const snap = ref(true);
+const arrCtx = ref(null);
+const HEADER_W = 160;
 const scrollX = ref(0);      // tick
 const rowH = 56;
 const RULER_H = 26;
@@ -124,7 +127,7 @@ function ensureCv() {
   if (!el || !w) return null;
   const W = w.clientWidth || 800;
   const rows = state.value.tracks.length;
-  const H = RULER_H + Math.max(120, rows * rowH + 20);
+  const H = Math.max(wrap.value ? wrap.value.clientHeight : 0, RULER_H + Math.max(160, rows * rowH + 48));
   const dpr = window.devicePixelRatio || 1;
   if (el.width !== Math.floor(W * dpr) || el.height !== Math.floor(H * dpr)) {
     el.width = Math.floor(W * dpr); el.height = Math.floor(H * dpr);
@@ -134,6 +137,12 @@ function ensureCv() {
 }
 function xOfTick(tick) { return (tick - scrollX.value) * zoom.value; }
 function tickOfX(x) { return scrollX.value + x / zoom.value; }
+function snapTick(tick) {
+  if (!snap.value) return Math.round(tick);
+  const beat = (song.value && song.value.tpb) || 480;
+  const step = Math.max(30, beat / 2); // 默认吸到八分音符
+  return Math.max(0, Math.round(tick / step) * step);
+}
 
 function draw() {
   const c = ensureCv();
@@ -188,33 +197,66 @@ function draw() {
     g.beginPath(); g.moveTo(0, y + 0.5); g.lineTo(W, y + 0.5); g.stroke();
     // 轨道名（左侧固定 96px 区域用半透明底遮住内容）
     g.fillStyle = themeColor('--surface', '#14161c');
-    g.fillRect(0, y, 96, rowH);
+    g.fillRect(0, y, HEADER_W, rowH);
     g.fillStyle = tr.mute ? muted : ink;
     g.font = '11px system-ui';
-    g.fillText(tr.name + (tr.mute ? ' (M)' : ''), 8, y + 16);
+    g.fillText('', 8, y + 16);
     for (const clip of state.value.clips.filter((c) => c.trackId === tr.id)) {
       const x0 = xOfTick(clip.startTick), x1 = xOfTick(clip.endTick);
       if (x1 < 0 || x0 > W) continue;
-      const left = Math.max(96, x0), right = Math.min(W, x1);
+      const left = Math.max(HEADER_W, x0), right = Math.min(W, x1);
       if (right <= left) continue;
       const sel = selected.value === clip.id;
-      const r = 6;
+      const r = 7;
+      const trackColor = themeColor('--accent-sky', '#69c8f0');
       g.beginPath();
-      g.moveTo(left + r, y + 8); g.arcTo(right, y + 8, right, y + rowH - 8, r);
-      g.arcTo(right, y + rowH - 8, left, y + rowH - 8, r);
-      g.arcTo(left, y + rowH - 8, left, y + 8, r);
-      g.arcTo(left, y + 8, right, y + 8, r);
+      g.moveTo(left + r, y + 7); g.arcTo(right, y + 7, right, y + rowH - 7, r);
+      g.arcTo(right, y + rowH - 7, left, y + rowH - 7, r);
+      g.arcTo(left, y + rowH - 7, left, y + 7, r);
+      g.arcTo(left, y + 7, right, y + 7, r);
       g.closePath();
-      g.fillStyle = sel ? 'rgba(91,141,239,.35)' : 'rgba(91,141,239,.18)';
-      g.fill();
-      g.strokeStyle = sel ? brand : 'rgba(91,141,239,.55)';
-      g.lineWidth = sel ? 2 : 1;
-      g.stroke(); g.lineWidth = 1;
-      g.fillStyle = ink;
-      g.font = '11px system-ui';
-      g.fillText(clip.name || clip.id, left + 8, y + 22);
+      const grad = g.createLinearGradient(0, y + 7, 0, y + rowH - 7);
+      grad.addColorStop(0, sel ? 'rgba(105,200,240,.34)' : 'rgba(47,99,212,.24)');
+      grad.addColorStop(1, sel ? 'rgba(47,99,212,.28)' : 'rgba(47,99,212,.13)');
+      g.fillStyle = grad; g.fill();
+      g.strokeStyle = sel ? trackColor : 'rgba(105,200,240,.48)';
+      g.lineWidth = sel ? 2 : 1; g.stroke(); g.lineWidth = 1;
+      // 迷你 MIDI 音符预览：trackId tN 对应原曲第 N 条轨，按 clip 源区间裁剪
+      const srcTrack = s && s.tracks ? s.tracks[Number(String(clip.trackId).replace(/^t/, ''))] : null;
+      if (srcTrack && Array.isArray(srcTrack.notes) && srcTrack.notes.length) {
+        const srcStart = clip.offsetTick, srcEnd = clip.offsetTick + clipLen(clip);
+        const innerTop = y + 24, innerBot = y + rowH - 9;
+        g.save();
+        g.beginPath(); g.rect(left + 1, innerTop, Math.max(1, right - left - 2), innerBot - innerTop); g.clip();
+        for (const n of srcTrack.notes) {
+          if (n.end <= srcStart || n.start >= srcEnd) continue;
+          const nx = xOfTick(clip.startTick + (n.start - srcStart));
+          const nw = Math.max(1.5, (n.end - n.start) * zoom.value);
+          if (nx + nw < left || nx > right) continue;
+          const pitch = Math.max(0, Math.min(127, n.midi));
+          const ny = innerBot - ((pitch - 24) / 84) * Math.max(6, innerBot - innerTop);
+          g.fillStyle = sel ? 'rgba(190,232,255,.78)' : 'rgba(190,232,255,.40)';
+          g.fillRect(nx, ny, nw, Math.max(1.5, Math.min(4, (innerBot - innerTop) / 22)));
+        }
+        g.restore();
+      }
+      // 标题与边缘握把
+      g.fillStyle = ink; g.font = '11px system-ui'; g.textAlign = 'left';
+      g.fillText(clip.name || clip.id, left + 9, y + 15);
+      g.fillStyle = 'rgba(255,255,255,.45)';
+      g.fillRect(left + 2, y + 22, 2, rowH - 30);
     }
   });
+  // 空白轨道区：专业编辑器不会把时间线截在最后一条轨，下面保留可滚动的空轨网格
+  const tracksBottom = RULER_H + state.value.tracks.length * rowH;
+  if (tracksBottom < H) {
+    g.fillStyle = 'rgba(0,0,0,.06)';
+    g.fillRect(0, tracksBottom, W, H - tracksBottom);
+    g.strokeStyle = line;
+    for (let yy = tracksBottom + rowH; yy < H; yy += rowH) {
+      g.beginPath(); g.moveTo(0, yy + 0.5); g.lineTo(W, yy + 0.5); g.stroke();
+    }
+  }
   // regions + markers
   for (const rg of state.value.regions) {
     const x0 = xOfTick(rg.startTick), x1 = xOfTick(rg.endTick);
@@ -243,6 +285,8 @@ function draw() {
   if (px >= 0 && px <= W) {
     g.strokeStyle = accent; g.lineWidth = 1.5;
     g.beginPath(); g.moveTo(px, 0); g.lineTo(px, H); g.stroke(); g.lineWidth = 1;
+    g.fillStyle = accent;
+    g.beginPath(); g.moveTo(px - 5, 0); g.lineTo(px + 5, 0); g.lineTo(px, 8); g.closePath(); g.fill();
   }
 }
 
@@ -264,7 +308,7 @@ function hitClip(x, y) {
   for (let i = list.length - 1; i >= 0; i--) {
     const c = list[i];
     if (tick >= c.startTick && tick <= c.endTick) {
-      const edge = (xOfTick(c.startTick) > 90 && Math.abs(xOfTick(c.startTick) - x) <= 6) ? 'start'
+      const edge = (xOfTick(c.startTick) > HEADER_W && Math.abs(xOfTick(c.startTick) - x) <= 6) ? 'start'
         : (Math.abs(xOfTick(c.endTick) - x) <= 6 ? 'end' : '');
       return { clip: c, edge };
     }
@@ -286,7 +330,7 @@ function onDown(e) {
   }
   // 命中交给手势状态机判 intent（边缘 6px 内 = resize，空白 = marquee，中键 = pan）
   const hitInfo = hit && {
-    bounds: { left: Math.max(96, xOfTick(hit.clip.startTick)), right: xOfTick(hit.clip.endTick) },
+    bounds: { left: Math.max(HEADER_W, xOfTick(hit.clip.startTick)), right: xOfTick(hit.clip.endTick) },
     edge: hit.edge,
   };
   beginGesture(gs, { point: { x, y }, hit: hitInfo, button: e.button, tool: 'select' });
@@ -318,13 +362,13 @@ function onMove(e) {
   if (!dragCtx) { draw(); return; }
   const dTick = Math.round(gs.dx / zoom.value);
   if (dragCtx.edge === 'start') {
-    state.value = resizeClip(state.value, dragCtx.clipId, 'start', Math.max(0, dragCtx.origStart + dTick));
+    state.value = resizeClip(state.value, dragCtx.clipId, 'start', Math.max(0, snapTick(dragCtx.origStart + dTick)));
   } else if (dragCtx.edge === 'end') {
-    state.value = resizeClip(state.value, dragCtx.clipId, 'end', Math.max(1, dragCtx.origEnd + dTick));
+    state.value = resizeClip(state.value, dragCtx.clipId, 'end', Math.max(1, snapTick(dragCtx.origEnd + dTick)));
   } else {
     const row = Math.floor((y - RULER_H) / rowH);
     const tr = state.value.tracks[Math.max(0, Math.min(state.value.tracks.length - 1, row))];
-    const patch = { startTick: Math.max(0, dragCtx.origStart + dTick) };
+    const patch = { startTick: Math.max(0, snapTick(dragCtx.origStart + dTick)) };
     if (tr) patch.trackId = tr.id;
     state.value = moveClip(state.value, dragCtx.clipId, patch);
   }
@@ -366,10 +410,39 @@ function onDblClick(e) {
   if (!hit) return;
   const fr = focusRangeOfClip(hit.clip);
   const idx = Math.max(0, state.value.tracks.findIndex((tr) => tr.id === hit.clip.trackId));
-  try { window.__fufumidiArrangeFocus = { trackIndex: idx, fromTick: fr.fromTick, toTick: fr.toTick }; } catch (err) {}
+  try { window.__fufumidiArrangeFocus = { trackId: hit.clip.trackId, trackIndex: idx, fromTick: fr.fromTick, toTick: fr.toTick }; } catch (err) {}
   app.setView('edit');
 }
 
+/* ---- 专业编辑器交互：轨道 M/S、片段复制、右键菜单 ---- */
+function toggleTrackFlag(tr, key) {
+  pushHistory();
+  state.value = setTrackFlags(state.value, tr.id, { [key]: !tr[key] });
+  draw();
+}
+function duplicateSelected() {
+  const c = findClip(state.value, selected.value);
+  if (!c) return;
+  pushHistory();
+  const len = clipLen(c);
+  const id = 'clip-' + Date.now();
+  state.value = addClip(state.value, { ...c, id, startTick: c.endTick, endTick: c.endTick + len, offsetTick: c.offsetTick, name: (c.name || c.id) + ' copy' });
+  selected.value = id;
+  draw();
+}
+function onCtx(e) {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const hit = hitClip(e.clientX - rect.left, e.clientY - rect.top);
+  if (!hit) { arrCtx.value = null; return; }
+  selected.value = hit.clip.id;
+  arrCtx.value = { x: e.clientX, y: e.clientY, clipId: hit.clip.id };
+  draw();
+}
+function closeCtx() { arrCtx.value = null; }
+function ctxSplit() { splitAtPlayhead(); closeCtx(); }
+function ctxDup() { duplicateSelected(); closeCtx(); }
+function ctxDelete() { deleteSelected(); closeCtx(); }
+function ctxFocus() { const c = findClip(state.value, arrCtx.value && arrCtx.value.clipId); closeCtx(); if (c) { const fr = focusRangeOfClip(c); const idx = Math.max(0, state.value.tracks.findIndex(tr => tr.id === c.trackId)); try { window.__fufumidiArrangeFocus = { trackId: c.trackId, trackIndex: idx, fromTick: fr.fromTick, toTick: fr.toTick }; } catch (err) {} app.setView('edit'); } }
 /* ---- 工具条动作 ---- */
 function splitAtPlayhead() {
   if (!selected.value) return;
@@ -462,6 +535,8 @@ onBeforeUnmount(() => {
       <button class="btn sm" @click="setZoom(1.2)">{{ t('放大') }}</button>
       <button class="btn sm" @click="setZoom(1 / 1.2)">{{ t('缩小') }}</button>
       <button class="btn sm" @click="fitAll">{{ t('全览') }}</button>
+      <button class="btn sm" :class="{ on: snap }" @click="snap = !snap">{{ t('吸附') }}</button>
+      <button class="btn sm" :disabled="!selected" @click="duplicateSelected">{{ t('复制片段') }}</button>
       <button class="btn sm" :disabled="!selected" @click="splitAtPlayhead">{{ t('在播放头切分') }}</button>
       <button class="btn sm" :disabled="!selected" @click="toggleMute">{{ t('静音轨道') }}</button>
       <button class="btn sm" :disabled="!selected" @click="deleteSelected">{{ t('删除片段') }}</button>
@@ -473,8 +548,25 @@ onBeforeUnmount(() => {
     <div ref="wrap" class="arr-canvas-wrap card" data-guide="arrange-canvas">
       <canvas ref="cv" class="arr-canvas"
               @pointerdown="onDown" @pointermove="onMove" @pointerup="onUp" @pointercancel="onUp"
-              @dblclick="onDblClick" @wheel="onWheel" />
+              @dblclick="onDblClick" @wheel="onWheel" @contextmenu.prevent="onCtx" />
+      <div class="arr-heads">
+        <div v-for="(tr, ti) in state.tracks" :key="tr.id" class="arr-head" :style="{ top: (RULER_H + ti * rowH) + 'px', height: rowH + 'px' }">
+          <span class="arr-head-dot" :style="{ background: tr.color || 'var(--accent-sky)' }"></span>
+          <b :title="tr.name">{{ tr.name || ('轨道 ' + (ti + 1)) }}</b>
+          <button class="arr-ms" :class="{ on: tr.mute }" :title="t('静音')" @click.stop="toggleTrackFlag(tr, 'mute')">M</button>
+          <button class="arr-ms" :class="{ on: tr.solo }" :title="t('独奏')" @click.stop="toggleTrackFlag(tr, 'solo')">S</button>
+        </div>
+      </div>
       <div v-if="!song" class="arr-empty">{{ t('还没有载入曲目') }}</div>
+      <div class="arr-hints">{{ t('拖动片段移动 · 拖边缘裁剪 · 标尺拖拽框区间 · 双击聚焦编辑 · 右键更多操作') }}</div>
+    </div>
+    <div v-if="arrCtx" class="arr-ctx-mask" @click.self="closeCtx" @contextmenu.prevent="closeCtx">
+      <div class="arr-ctx" :style="{ left: arrCtx.x + 'px', top: arrCtx.y + 'px' }">
+        <button @click="ctxFocus"><Icon name="edit" :size="13" />{{ t('聚焦编辑') }}</button>
+        <button @click="ctxSplit"><Icon name="cut" :size="13" />{{ t('在播放头切分') }}</button>
+        <button @click="ctxDup"><Icon name="copy" :size="13" />{{ t('复制片段') }}</button>
+        <button class="danger" @click="ctxDelete"><Icon name="trash" :size="13" />{{ t('删除片段') }}</button>
+      </div>
     </div>
   </div>
 </template>
@@ -487,4 +579,18 @@ onBeforeUnmount(() => {
 .arr-canvas-wrap { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 0; }
 .arr-canvas { display: block; width: 100%; cursor: pointer; }
 .arr-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+
+.arr-heads { position: absolute; left: 0; top: 0; width: 160px; pointer-events: none; z-index: 3; }
+.arr-head { position: absolute; left: 0; width: 160px; display: flex; align-items: center; gap: var(--sp-1); padding: 0 var(--sp-2); box-sizing: border-box; background: color-mix(in srgb, var(--surface) 72%, transparent); border-right: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); color: var(--text2); font-size: var(--fs-xs); pointer-events: none; }
+.arr-head-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.arr-head b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--text); }
+.arr-ms { width: 21px; height: 18px; border: 1px solid var(--hairline); border-radius: var(--r-xs); background: transparent; color: var(--text3); font: 600 var(--fs-xs) var(--font-num); cursor: pointer; pointer-events: auto; }
+.arr-ms:hover { color: var(--text); border-color: var(--accent-sky); }
+.arr-ms.on { color: var(--canvas); background: var(--accent-sky); border-color: var(--accent-sky); }
+.arr-hints { position: absolute; left: 168px; right: 8px; bottom: 5px; z-index: 4; pointer-events: none; color: var(--text3); font-size: var(--fs-xs); opacity: .8; }
+.arr-ctx-mask { position: fixed; inset: 0; z-index: var(--z-ctx); }
+.arr-ctx { position: fixed; min-width: 168px; padding: var(--sp-1); border: 1px solid color-mix(in srgb, var(--ornament) 32%, var(--hairline)); border-radius: var(--r-md); background-color: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: var(--glass-blur); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 2px; }
+.arr-ctx button { display: flex; align-items: center; gap: var(--sp-2); border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); padding: var(--sp-2) var(--sp-3); font-size: var(--fs-sm); text-align: left; cursor: pointer; }
+.arr-ctx button:hover { background: color-mix(in srgb, var(--accent-sapphire) 14%, var(--surface)); }
+.arr-ctx button.danger { color: var(--t-err); }
 </style>

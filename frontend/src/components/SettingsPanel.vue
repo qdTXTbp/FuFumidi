@@ -24,6 +24,7 @@ import { pendingRow, markBest, mergeRow, formatLatency, formatSpeed } from '../c
 getAppVersion().then(v => { appVersion.value = v; });
 import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';
 import NumSlider from './NumSlider.vue';
+import SoundSettings from './SoundSettings.vue';
 /* 外观三件（字号 / 密度 / 全局缩放）的取值域与落点：与 App.vue 启动时用的是同一份 */
 import {
   applyDisplayPrefs, loadDisplayPrefs, saveFontSize, saveDensity, saveUiScale,
@@ -52,7 +53,7 @@ onMounted(() => cloud.init());
 onMounted(() => { void hkLoad(); window.addEventListener('keydown', hkOnKeydown, true); });
 
 const TABS = computed(() => [
-  { id: 'appearance', label: t('外观'), icon: 'palette' },
+  { id: 'sound', label: t('音效'), icon: 'volume' },
   { id: 'gpu', label: 'GPU', icon: 'zap' },
   { id: 'feature', label: t('功能'), icon: 'folder' },
   { id: 'keys', label: t('快捷键'), icon: 'kbd' },
@@ -60,12 +61,13 @@ const TABS = computed(() => [
   { id: 'update', label: t('更新'), icon: 'download' },
   { id: 'feedback', label: t('反馈'), icon: 'info' },
 ]);
-const tab = ref('appearance');
+const tab = ref('feature');
 
 /* P1-14 B4：设置搜索 —— 输入关键词 → 命中项；点结果切页签并滚到 data-setting 锚点 */
 const searchQuery = ref('');
 const searchHits = computed(() => (searchQuery.value.trim() ? searchSettings(searchQuery.value, 8) : []));
 let setFlashTimer = 0;
+function openAppearancePanel() { state.ui.settingsOpen = false; state.ui.appearanceOpen = true; }
 async function gotoSetting(e) {
   if (!e) return;
   searchQuery.value = '';
@@ -1205,6 +1207,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
       <div class="settings-head">
         <Icon name="gear" :size="17" />
         <span class="settings-title">{{ t('应用设置') }}</span>
+        <button class="btn sm ghost" :title="t('打开专门的外观页')" @click="openAppearancePanel"><Icon name="palette" :size="13" /> {{ t('外观') }}</button>
         <!-- P1-14 B4：设置搜索 -->
         <div class="settings-search">
           <Icon name="search" :size="13" />
@@ -1246,6 +1249,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
       </div>
 
       <div class="settings-body">
+        <div v-if="tab === 'sound'"><SoundSettings /></div>
         <!-- ============ 外观 ============ -->
         <div v-if="tab === 'appearance'">
           <div class="field-row" data-setting="theme">
@@ -1280,7 +1284,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <div class="fr-hint">{{ t('从壁纸库下载视频作为背景，或导入本地视频') }}</div>
             </div>
             <div class="fr-ctl">
-              <button class="btn sm" @click="state.ui.wallpaperOpen = true">🖼 {{ t('壁纸库') }}</button>
+              <button class="btn sm" @click="state.ui.wallpaperOpen = true">🖼 {{ t('壁纸库 / 导入') }}</button>
             </div>
           </div>
           <div class="field-row">

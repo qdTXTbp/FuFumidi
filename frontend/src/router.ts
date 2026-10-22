@@ -46,6 +46,14 @@ export const router = createRouter({
   scrollBehavior: () => ({ top: 0 }),
 });
 
+// 旧深链兼容：编辑/歌词归工作台，可视化/乐谱归音乐。
+router.beforeEach((to) => {
+  const tab = String(to.query.tab || '');
+  if (to.path === '/music' && ['edit', 'lyrics'].includes(tab)) return { path: '/views', query: { ...to.query } };
+  if (to.path === '/views' && ['viz', 'score'].includes(tab)) return { path: '/music', query: { ...to.query } };
+  return true;
+});
+
 /* ---------------- 空闲预取重视图（2026-10-17 性能）----------------
    路由是懒加载的，**首次点击**才下载并解析分包。安装版实测：
      「调教」首次进入 2586ms、同一会话再进 4ms —— 成本全在这一次（CDP 采样显示主线程 93% 空闲，

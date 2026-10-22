@@ -100,6 +100,32 @@ const editor = ref(null);
 const miniEl = ref(null);
 const miniWrap = ref(null);
 const advOpen = ref(false);
+const advPos = ref(null);
+const advDrag = ref(null);
+const advStyle = computed(() => advPos.value ? { left: advPos.value.x + 'px', top: advPos.value.y + 'px', right: 'auto' } : {});
+function startAdvDrag(e) {
+  if (e.button !== 0) return;
+  const panel = e.currentTarget && e.currentTarget.closest('.ed-adv');
+  if (!panel) return;
+  const r = panel.getBoundingClientRect();
+  advPos.value = { x: r.left, y: r.top };
+  advDrag.value = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+  e.preventDefault();
+  window.addEventListener('pointermove', onAdvDrag);
+  window.addEventListener('pointerup', endAdvDrag, { once: true });
+}
+function onAdvDrag(e) {
+  if (!advDrag.value) return;
+  const w = 540, h = Math.min(460, window.innerHeight - 40);
+  advPos.value = {
+    x: Math.max(8, Math.min(window.innerWidth - w - 8, e.clientX - advDrag.value.dx)),
+    y: Math.max(8, Math.min(window.innerHeight - h - 8, e.clientY - advDrag.value.dy)),
+  };
+}
+function endAdvDrag() {
+  advDrag.value = null;
+  window.removeEventListener('pointermove', onAdvDrag);
+}
 const recOpen = ref(false);   // P0-3b：录音面板
 // 三视图切换：钢琴卷帘 / 鼓组网格（乐谱为独立页面，见 setEditorView）
 const viewMode = ref('piano');
@@ -178,6 +204,7 @@ const bpmText = computed(() => {
   const s = song.value;
   return Math.round((s && s.initialBpm) || 120);
 });
+const visibleTracks = computed(() => { const s = song.value; if (!s) return []; return (s.tracks || []).map((tr, i) => ({ tr, i })).filter(({ tr, i }) => (tr.notes && tr.notes.length) || i === trackIndex.value); });
 const curTrackInfo = computed(() => {
   const s = song.value; if (!s) return null;
   return s.tracks[trackIndex.value] || null;
@@ -1867,7 +1894,7 @@ onMounted(() => {
   if (takeUnderlayHandoff()) return;
   if (ulPath.value) void setUnderlayFromUrl(ulPath.value, false);
 });
-onActivated(() => { takeUnderlayHandoff(); });
+onActivated(() => { takeUnderlayHandoff(); void applyArrangeFocusIntent(); });
 
 /* ---- 视频轨道嵌入（影视配乐对齐） ---- */
 const videoUrl = ref('');
@@ -2053,6 +2080,7 @@ onMounted(async () => {
 });
 onDeactivated(() => { void flushAutosave('deactivate'); });
 onBeforeUnmount(() => {
+  endAdvDrag();
   if (autoTimer) { clearInterval(autoTimer); autoTimer = 0; }
   if (videoSyncTimer) { clearInterval(videoSyncTimer); videoSyncTimer = 0; }
   window.removeEventListener('beforeunload', onEditBeforeUnload);
@@ -2162,6 +2190,7 @@ function onRecordTake(payload) {
 }
 
 watch(currentSong, () => {
+  if (window.__fufumidiArrangeFocus) return;
   const tracks = song.value?.tracks || [];
   const nonEmpty = tracks.findIndex(t => t.notes && t.notes.length);
   trackIndex.value = nonEmpty >= 0 ? nonEmpty : Math.min(trackIndex.value, Math.max(0, tracks.length - 1));
@@ -2182,20 +2211,35 @@ watch(trackIndex, () => {
   scheduleDraw();
 });
 
+/** 编排 → 编辑联动：定位轨道、跳到片段起点，并选中片段范围内的音符，打开即所见即所得。 */
+async function applyArrangeFocusIntent() {
+  try {
+    const focus = window.__fufumidiArrangeFocus;
+    const s = song.value;
+    if (!focus || !s || !s.tracks) return;
+    window.__fufumidiArrangeFocus = null;
+    let ti = focus.trackId != null ? s.tracks.findIndex((x) => x.id === focus.trackId) : -1;
+    if (ti < 0) ti = Math.max(0, Math.min(s.tracks.length - 1, Number(focus.trackIndex) || 0));
+    trackIndex.value = ti;
+    const from = Math.max(0, Number(focus.fromTick) || 0);
+    const to = Math.max(from + 1, Number(focus.toTick) || from + 1);
+    app.seekSec(s.baseSec(focus.fromTick || 0) / (app.tempo || 1));
+    await nextTick();
+    editor.value?.setViewTick?.(from);
+    const tr = s.tracks[ti];
+    const notes = tr ? tr.notes.filter((n) => n.start < to && n.end > from) : [];
+    if (notes.length && editor.value?.selectNotes) {
+      editor.value.selectNotes(notes);
+      editor.value.focusSelection?.();
+    }
+    editor.value?.draw?.();
+  } catch (e) {}
+}
 onMounted(async () => {
   window.addEventListener('keydown', onKey);
   syncCommandRegistry();   // C1：setup 结束后再求值 menuGroups（避开后段 ref 的 TDZ）
-  // P1-1b：编排时间线双击片段 → 定位到该轨道 + 原曲起点（focusRangeOfClip 写过来的意图）
-  try {
-    const focus = window.__fufumidiArrangeFocus;
-    if (focus && song.value) {
-      window.__fufumidiArrangeFocus = null;
-      if (focus.trackIndex >= 0 && focus.trackIndex < song.value.tracks.length) trackIndex.value = focus.trackIndex;
-      app.seekSec(song.value.baseSec(focus.fromTick || 0) / (app.tempo || 1));
-      await nextTick();
-      editor.value?.draw?.();
-    }
-  } catch (e) {}
+  // P1-1b：编排时间线双击片段 → 定位到该轨道 + 原曲起点 + 框选片段内音符
+  await applyArrangeFocusIntent();
   /* 调试桥（M3 起）：本项目的验收方式是「装好的应用 + CDP 驱动」，而生产包里拿不到
      组件实例（__vueParentComponent 只在 dev 有）。所以留一个显式开关：
      localStorage.fufumidi_debug = '1'（或 hash 里带 debug=1）时把画布 API 挂到 window。
@@ -2255,16 +2299,6 @@ onBeforeUnmount(() => {
 <template>
   <!-- 密度三档（M9）：工作区里早就存着 density，但一直没有消费它 —— 现在真的改变控件高度与留白 -->
   <div class="page edit-view" :class="'ed-density-' + (ws.layout.density || 'normal')">
-    <div class="page-head">
-      <div class="page-ic"><Icon name="edit" :size="20" /></div>
-      <div class="grow">
-        <div class="page-title">{{ t('编辑器') }}</div>
-        <div class="page-sub">{{ t('钢琴卷帘 · 画笔点击添加 · 拖拽移动 · 边缘拉伸') }}</div>
-      </div>
-      <button class="btn sm primary" @click="exportMidi"><Icon name="save" :size="13" />{{ t('导出 MIDI') }}</button>
-    </div>
-
-    <!-- P0-2 崩溃恢复提示条：草稿只写 temp/autosave，恢复时作为新曲目导入，不覆盖原文件 -->
     <div v-if="recoverInfo" class="card ed-recover-bar" data-guide="edit-recover">
       <Icon name="info" :size="14" />
       <span class="grow">
@@ -2287,6 +2321,7 @@ onBeforeUnmount(() => {
       <!-- 菜单条（M1）：把「更多」里那些低频动作搬到稳定的菜单位置。
            工作区预设放在同一行的右端（Ableton 的 Views 位置）：不占舞台高度，也不挤 page-head -->
       <div class="card ed-menubar-card">
+        <div class="ed-title"><Icon name="edit" :size="15" /><b>{{ t('编辑器') }}</b></div>
         <EditorMenuBar :groups="menuGroups" />
         <span class="mb-grow"></span>
         <div class="ed-presets" :title="t('工作区预设：一键切换面板布局（也能在「视图」菜单里切）')">
@@ -2294,6 +2329,7 @@ onBeforeUnmount(() => {
                   :title="t(p.hint)" @click="applyPreset(p.id)">{{ t(p.label) }}</button>
         </div>
         <button class="st-btn" :title="t('快捷键一览（?）')" @click="shortcutsOpen = true"><Icon name="info" :size="12" />{{ t('快捷键') }}</button>
+        <button class="btn sm primary" @click="exportMidi"><Icon name="save" :size="13" />{{ t('导出 MIDI') }}</button>
       </div>
 
       <!-- P0-3b 录音面板：挂在工具栏下方，不遮挡卷帘（打开时才占高度） -->
@@ -2365,7 +2401,11 @@ onBeforeUnmount(() => {
 
       <!-- 高级工具区（折叠，按用途分组） -->
       <Transition name="fade">
-      <div v-if="advOpen" class="card ed-adv">
+      <div v-if="advOpen" class="card ed-adv" :style="advStyle">
+        <div class="adv-drag" :title="t('拖动调整位置')" @pointerdown="startAdvDrag">
+          <span class="adv-grip">⠿</span><b>{{ t('高级工具') }}</b><span class="adv-grow"></span>
+          <button class="adv-close" :title="t('关闭')" @pointerdown.stop @click="advOpen = false"><Icon name="close" :size="13" /></button>
+        </div>
         <!-- 视图开关在「更多」里也放一份：主工具条在窄窗口会横向溢出，
              最右边的这几个开关会滑出可视区（实测 1585px 宽时「全屏」已看不见）。 -->
         <div class="adv-row">
@@ -2565,7 +2605,7 @@ onBeforeUnmount(() => {
           <div class="insp-sec">
             <div class="insp-h"><Icon name="music" :size="12" />{{ t('轨道') }}</div>
             <select class="select-input" v-model="trackIndex" style="width:100%">
-              <option v-for="(tr, i) in song.tracks" :key="i" :value="i">{{ tr.name }}{{ t('（') }}{{ state.tracks[i]?.noteCount ?? tr.notes.length }}{{ t('）') }}</option>
+              <option v-for="{ tr, i } in visibleTracks" :key="i" :value="i">{{ tr.name }}{{ t('（') }}{{ state.tracks[i]?.noteCount ?? tr.notes.length }}{{ t('）') }}</option>
             </select>
             <div class="insp-row"><span>{{ t('通道') }}</span><b>{{ (curTrackInfo?.ch ?? 0) + 1 }}</b></div>
             <div class="insp-row"><span>{{ t('音色') }}</span><b>{{ String(timbre).padStart(3, '0') }}</b></div>
@@ -2578,7 +2618,7 @@ onBeforeUnmount(() => {
               <button v-if="multiEditOn" class="link-btn" style="margin-left:auto" @click="clearEditTracks">{{ t('清除') }}</button>
             </div>
             <div class="et-list">
-              <label v-for="(tr, i) in song.tracks" :key="i" class="et-item" :class="{ cur: i === trackIndex }">
+              <label v-for="{ tr, i } in visibleTracks" :key="i" class="et-item" :class="{ cur: i === trackIndex }">
                 <input type="checkbox" :checked="i === trackIndex || editTracks.includes(i)" :disabled="i === trackIndex"
                        @change="toggleEditTrack(i)" />
                 <span class="et-name">{{ tr.name }}</span>
@@ -3514,11 +3554,11 @@ onBeforeUnmount(() => {
 
 /* 钢琴卷帘右键菜单 */
 .ctx-mask { position: fixed; inset: 0; z-index: var(--z-ctx); }
-.ctx-menu { position: fixed; min-width: 182px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--r-md); box-shadow: var(--shadow-lg); padding: 4px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; overscroll-behavior: contain; }
-.ctx-item { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); width: 100%; text-align: left; border: none; background: transparent; color: var(--ink); padding: 7px 10px; border-radius: var(--r-sm); font-size: var(--fs-md); cursor: pointer; }
-.ctx-item:hover, .ctx-item.on { background: var(--surface-soft); }
+.ctx-menu { position: fixed; min-width: 196px; background: var(--surface); border: 1px solid color-mix(in srgb, var(--ornament) 32%, var(--hairline)); border-radius: var(--r-md); box-shadow: var(--shadow-lg); padding: var(--sp-1); backdrop-filter: var(--glass-blur); display: flex; flex-direction: column; gap: 2px; overflow-y: auto; overscroll-behavior: contain; }
+.ctx-item { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); width: 100%; text-align: left; border: none; background: transparent; color: var(--text); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-sm); font-size: var(--fs-md); cursor: pointer; transition: background var(--dur-1); }
+.ctx-item:hover, .ctx-item.on { background: color-mix(in srgb, var(--accent-sapphire) 13%, var(--surface)); color: var(--text); }
 .ctx-item.danger { color: var(--error); }
-.ctx-k { color: var(--stone); font-size: var(--fs-xs); font-family: var(--mono); flex: none; }
+.ctx-k { color: var(--text3); font-size: var(--fs-xs); font-family: var(--font-num); flex: none; }
 .ctx-arrow { color: var(--stone); font-size: var(--fs-xs); line-height: 1; }
 .ctx-check { color: var(--accent); font-size: var(--fs-sm); }
 .ctx-sub-wrap { position: relative; }
@@ -3526,4 +3566,24 @@ onBeforeUnmount(() => {
    真实约 780，于是窗口下半部右键时底部几百像素落在窗口外、永远点不到。 */
 .ctx-menu.ctx-sub-fixed { position: fixed; z-index: calc(var(--z-ctx) + 1); min-width: 158px; max-height: 60vh; overflow-y: auto; }
 .ctx-sep { height: 1px; background: var(--hairline); margin: 3px 6px; }
+.ed-title { display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-3) 0 2px; margin-right: var(--sp-2); border-right: 1px solid var(--hairline); color: var(--accent-sky); flex: none; }
+.ed-title b { color: var(--text); font-size: var(--fs-sm); font-weight: 600; letter-spacing: .02em; }
+.ed-menubar-card { margin-bottom: 4px; border-radius: var(--r-md); }
+.ed-toolbar { margin-bottom: 6px; }
+/* 参考 Ableton / Bitwig 的 popover：高级工具面板靠右悬浮，不再横跨整个画布 */
+.ed-adv { left: auto; right: 0; width: min(920px, calc(100vw - 360px)); max-height: 64vh; overflow-y: auto; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1100px) { .ed-adv { width: calc(100vw - 40px); grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* 高级工具浮层：紧凑双列、可拖动，减少遮挡 */
+.ed-adv { position: fixed !important; left: auto; right: var(--sp-4); top: calc(var(--topbar-h) + 58px); width: min(540px, calc(100vw - 120px)) !important; max-height: 70vh; overflow-y: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); padding: var(--sp-2); }
+.adv-drag { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-2); border: 1px solid var(--hairline); border-radius: var(--r-sm); background: var(--surface-soft); color: var(--text2); cursor: grab; user-select: none; position: sticky; top: calc(var(--sp-2) * -1); z-index: 2; }
+.adv-drag:active { cursor: grabbing; }
+.adv-drag b { font-size: var(--fs-xs); font-weight: 600; color: var(--text); }
+.adv-grip { color: var(--accent-sky); letter-spacing: 2px; font-size: var(--fs-sm); }
+.adv-grow { flex: 1; }
+.adv-close { border: 0; background: transparent; color: var(--text3); cursor: pointer; padding: 0; display: grid; place-items: center; }
+.adv-close:hover { color: var(--text); }
+.ed-adv .adv-row { min-width: 0; padding: var(--sp-1) var(--sp-2); border: 1px solid var(--hairline); border-radius: var(--r-sm); background: color-mix(in srgb, var(--surface) 46%, transparent); gap: var(--sp-1) var(--sp-1); align-content: flex-start; }
+.ed-adv .adv-row > .et-label:first-child { flex: 0 0 100%; font-size: var(--fs-xs); margin-bottom: 0; }
+.ed-adv .adv-row .et-btn { height: 21px; min-height: 21px; padding: 0 6px; font-size: var(--fs-xs); }
+.ed-adv .adv-row .select-input, .ed-adv .adv-row .num-input { height: 21px; font-size: var(--fs-xs); }
 </style>

@@ -19,11 +19,11 @@ let audioUrl = '';
 /* hint = 悬停解释。用户复核里点名「调教 / 声部轨 / 曲库 / 对齐偏移」这类圈内术语没有解释 ——
    导航是最需要解释的一层（新用户第一眼看到的就是它）。 */
 export const VIEWS = [
-  { id: 'home', label: '首页', ic: 'home', hint: '总览与快捷入口' },
-  { id: 'music', label: '音乐', ic: 'music', hint: '曲库（导入的 MIDI 资料库）与播放' },
-  { id: 'views', label: '视图', ic: 'viz', hint: '同一份音乐的其它看法：乐谱 / 分析 / 可视化' },
-  { id: 'transcode', label: '转译', ic: 'convert', hint: '把别的东西变成 MIDI：转录 / 转换 / 变谱（识谱）' },
-  { id: 'resources', label: '资源中心', ic: 'box', hint: '模型、音色、识谱引擎、依赖与诊断' },
+  { id: 'home', label: '首页', ic: 'home', hint: '继续上次的工作、最近项目与系统状态' },
+  { id: 'music', label: '音乐', ic: 'music', hint: '曲库、歌单、播放、可视化与乐谱' },
+  { id: 'views', label: '工作台', ic: 'viz', hint: '当前曲目的编辑 / 歌词 / 分析 / 编排' },
+  { id: 'transcode', label: '创作', ic: 'convert', hint: '转录 / 转换 / 变谱 / 翻唱 / 调教' },
+  { id: 'resources', label: '资源', ic: 'box', hint: '模型、音色、声库、插件、识谱引擎与诊断' },
   // 调教：UTAU 与 DiffSinger 是同一条产品线的两种合成引擎（引擎是**轨道属性**），
   // 声库（做 / 装 / 管）与编辑器（选歌手 / 画音符 / 渲染）也是同一条工作流的两半，
   // 所以合成**一个**入口；页内在「编辑器 / 声库」两个页签之间切换（?tab=banks）。
@@ -38,8 +38,8 @@ export const VIEWS = [
 
 // 旧子视图 ID → 所属分组父视图，保留内部跳转（如“同步到乐谱”“打开播放”）
 export const OLD_VIEW_TO_PARENT: Record<string, string> = {
-  play: 'music', lyrics: 'music', edit: 'music',
-  viz: 'views', analyze: 'views', score: 'views',
+  play: 'music', viz: 'music', score: 'music',
+  edit: 'views', lyrics: 'views', analyze: 'views', arrange: 'views',
   transcribe: 'transcode', convert: 'transcode',
   // 合并前的三个独立视图 → 统一落到「调教」。
   // 老跳转（setView('utau'|'diffsinger'|'banks')）继续有效：调教页按 ?tab= 落到

@@ -4,8 +4,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { navHistory, readSession, writeSession, parseDeepLink } from './core/nav_history.js';
 import Icon from './components/Icon.vue';
 import SideBar from './components/SideBar.vue';
+import PrimaryRail from './components/PrimaryRail.vue';
 import TopBar from './components/TopBar.vue';
-import SongTabs from './components/SongTabs.vue';
 import { useTabsStore } from './stores/tabs';
 import PlayerBar from './components/PlayerBar.vue';
 import SettingsPanel from './components/SettingsPanel.vue';
@@ -13,6 +13,7 @@ import ThemeLibrary from './components/ThemeLibrary.vue';
 import WallpaperGallery from './components/WallpaperGallery.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import GuideOverlay from './components/GuideOverlay.vue';
+import AppearancePanel from './components/AppearancePanel.vue';
 import ChangeLogOverlay from './components/ChangeLogOverlay.vue';
 import TaskCenter from './components/TaskCenter.vue';
 import { ref, computed, reactive } from 'vue';
@@ -32,6 +33,7 @@ import { usePlaylistStore } from './stores/playlist';
 import { useSettingsStore } from './stores/settings';
 import { setLang, t, browserLang } from './core/i18n.js';
 import { applyDisplayPrefs as applyDisplayPrefsShared, loadDisplayPrefs } from './core/display.js';
+import { installSfxClicks } from './core/sfx.js';
 import { playbackPrefs, applyPlaybackSettings } from './core/playback_prefs.js';
 import { holdRate, isEditableTarget } from './core/transport_keys.js';
 import { getAppVersion, cmpVersion, getUpdateChannel } from './core/version.js';
@@ -61,6 +63,16 @@ try { if (window.fuBridge && window.fuBridge.e2e) window.__fufumidiNav = navHist
 const wpUrl = ref('');
 const wpEnabled = ref(false);
 const bgVideo = ref(null);
+const wpKind = ref('video');
+const wpFit = ref('cover');
+const wpDim = ref(18);
+const wpBlur = ref(0);
+const isVideoPath = (p) => /\.(mp4|webm|mov)(\?.*)?$/i.test(String(p || ''));
+const wallpaperStyle = computed(() => ({
+  objectFit: wpFit.value === 'contain' ? 'contain' : 'cover',
+  filter: wpBlur.value > 0 ? 'blur(' + wpBlur.value + 'px)' : 'none',
+}));
+const wallpaperScrimStyle = computed(() => ({ opacity: String(Math.max(0, Math.min(60, Number(wpDim.value) || 0)) / 60) }));
 // 动态壁纸无缝循环：原生 loop 在循环切换时有黑屏/卡顿，改为临近结尾提前 seek 到开头偏后位置（跳过首帧解码延迟与黑帧）
 function onBgTime() {
   const v = bgVideo.value;
@@ -99,12 +111,20 @@ async function loadWallpaper() {
     const s = await settingsStore.load();
     wpUrl.value = wpFileUrl(s.custom_wallpaper || '');
     wpEnabled.value = !!(s.wallpaper_enabled && s.custom_wallpaper);
+    wpKind.value = s.wallpaper_kind || (isVideoPath(s.custom_wallpaper) ? 'video' : 'image');
+    wpFit.value = s.wallpaper_fit || 'cover';
+    wpDim.value = Number.isFinite(Number(s.wallpaper_dim)) ? Number(s.wallpaper_dim) : 18;
+    wpBlur.value = Number.isFinite(Number(s.wallpaper_blur)) ? Number(s.wallpaper_blur) : 0;
   } catch (e) {}
 }
 watch(() => settingsStore.settings, () => {
   const s = settingsStore.settings;
   wpUrl.value = wpFileUrl(s.custom_wallpaper || '');
   wpEnabled.value = !!(s.wallpaper_enabled && s.custom_wallpaper);
+    wpKind.value = s.wallpaper_kind || (isVideoPath(s.custom_wallpaper) ? 'video' : 'image');
+    wpFit.value = s.wallpaper_fit || 'cover';
+    wpDim.value = Number.isFinite(Number(s.wallpaper_dim)) ? Number(s.wallpaper_dim) : 18;
+    wpBlur.value = Number.isFinite(Number(s.wallpaper_blur)) ? Number(s.wallpaper_blur) : 0;
   // 播放偏好（跳过空白 / 步长 / 长按倍数）：设置页一改就同步到播放器
   applyPlaybackSettings(s);
   app.applyPlaybackPrefs();
@@ -204,6 +224,9 @@ async function initGlobal() {
     ui_scale: dp.ui_scale || s.ui_scale,
   });
 
+  // 减少动态效果（外观抽屉持久化）：启动即同步
+  try { if (localStorage.getItem('fufumidi_reduce_motion') === '1') document.documentElement.classList.add('reduce-motion'); } catch (e) {}
+
   // 3) 完整性检验（后台静默，由设置面板警告条展示 + 一键修复）
   if (bridge && bridge.checkIntegrity) {
     bridge.checkIntegrity().then(r => {
@@ -213,13 +236,17 @@ async function initGlobal() {
 
   // 4) 新手引导：首次启动展示
   let guideDone = false;
+  let guideUiSeen = false;
   try { guideDone = !!localStorage.getItem('fufumidi_guide_done'); } catch (e) {}
-  if (!guideDone && !s.guide_done) state.ui.guideOpen = true;
+  try { guideUiSeen = !!localStorage.getItem('fufumidi_guide_ui4_seen'); } catch (e) {}
+  // UI 改版后的首次启动也弹一次新版引导；E2E 实例不弹，避免遮挡自动用例。
+  const guideE2E = !!(window.fuBridge && window.fuBridge.e2e);
+  if (!guideE2E && (!guideUiSeen || (!guideDone && !s.guide_done))) state.ui.guideOpen = true;
 
   // 5) 首次启动壁纸询问（仅一次，未设置壁纸时）
   if (!s.wallpaper_prompt_done && !s.custom_wallpaper) {
     setTimeout(() => {
-      if (!settingsStore.settings.custom_wallpaper && !state.ui.wallpaperOpen) wallpaperPromptOpen.value = true;
+      if (!settingsStore.settings.custom_wallpaper && !state.ui.wallpaperOpen && !state.ui.guideOpen) wallpaperPromptOpen.value = true;
     }, 1200);
   }
 
@@ -516,6 +543,7 @@ onMounted(() => setupGlobalHotkeys());
    用途：让交互回放能在**隔离数据根**里造一首最小 MIDI，从而进入编辑页/跑手势脚本，
    不依赖用户曲库。接口刻意做小：hasSong / importMidi / songCount。 */
 onMounted(() => {
+  try { installSfxClicks(); } catch (e) {}
   try {
     if (!window.fuBridge || !window.fuBridge.e2e) return;
     window.__fufumidiE2E = {
@@ -705,12 +733,15 @@ _endHold();
 </script>
 
 <template>
-  <video v-if="wpEnabled && wpUrl" :key="wpUrl" ref="bgVideo" class="app-wallpaper" :src="wpUrl" autoplay muted playsinline preload="auto" @timeupdate="onBgTime"></video>
+  <template v-if="wpEnabled && wpUrl">
+    <img v-if="wpKind === 'image'" :key="wpUrl" class="app-wallpaper" :src="wpUrl" alt="" :style="wallpaperStyle" />
+    <video v-else :key="wpUrl" ref="bgVideo" class="app-wallpaper" :src="wpUrl" autoplay muted playsinline preload="auto" :style="wallpaperStyle" @timeupdate="onBgTime"></video>
+  </template>
   <div class="app-shell" :style="{ '--sidebar-w': state.sidebarWidth + 'px' }" :class="{ 'side-collapsed': !state.sidebarOpen, 'no-player': !state.playerbarOpen, 'wallpaper-on': wpEnabled && wpUrl, resizing: state.sidebarResizing, immersive: state.ui.immersive }">
+    <PrimaryRail />
     <SideBar />
     <TopBar />
     <main class="app-main">
-      <SongTabs />
       <router-view v-slot="{ Component }">
         <Transition name="view" mode="out-in">
           <KeepAlive>
@@ -815,7 +846,8 @@ _endHold();
       <CommandPalette v-if="state.ui.paletteOpen" />
     </Transition>
     <Transition name="ov">
-      <GuideOverlay v-if="state.ui.guideOpen" />
+      <AppearancePanel v-if="state.ui.appearanceOpen" />
+    <GuideOverlay v-if="state.ui.guideOpen" />
     </Transition>
     <Transition name="ov">
       <ChangeLogOverlay v-if="state.ui.changelogOpen" />

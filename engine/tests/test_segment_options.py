@@ -33,7 +33,9 @@ def test_piano_segment_samples():
 
 def test_muscriptor_segment_sec():
     assert so.muscriptor_segment_sec(0) == 5.0
-    assert so.muscriptor_segment_sec(8) == 8.0
+    # MuScriptor 固定 5s：任何请求（包括 8s）都必须被忽略
+    assert so.muscriptor_segment_sec(8) == 5.0
+    assert so.muscriptor_segment_sec(30) == 5.0
 
 
 def test_aria_len_ms():

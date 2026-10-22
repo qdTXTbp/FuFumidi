@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { ensureAudio } from '../audio.js';
@@ -17,6 +17,11 @@ const state = app;
 const setView = (v) => app.setView(v);
 const selectSong = (id) => app.selectSong(id);
 const currentSong = computed(() => app.currentSong);
+const recentSongs = computed(() => (state.songs || []).slice(-6).reverse());
+const appVersion = ref('');
+const engineReady = computed(() => !!(bridge && bridge.convert));
+const currentTracks = computed(() => (currentSong.value && currentSong.value.song ? currentSong.value.song.tracks.length : 0));
+onMounted(async () => { try { appVersion.value = String(await getAppVersion() || '').replace(/^v/i, ''); } catch (e) {} });
 const importFiles = (items) => app.importFiles(items);
 const setTempo = (v) => app.setTempo(v);
 const setTrackVol = (i, v) => app.setTrackVol(i, v);
@@ -92,6 +97,26 @@ async function saveProject() {
     }
   } catch (e) { app.alertDialog({ msg: t('保存工程失败：') + (e.message || e) }); }
 }
+function continueWork() {
+  if (currentSong.value) setView('edit');
+  else setView('transcode');
+}
+async function pickMidi() {
+  if (!bridge || !bridge.pickFile || !bridge.readBinary) { app.alertDialog({ msg: t('请使用桌面版导入 MIDI') }); return; }
+  try {
+    const p = await bridge.pickFile({ filters: [{ name: t('MIDI'), extensions: ['mid', 'midi'] }], multi: true });
+    if (!p) return;
+    const paths = Array.isArray(p) ? p : [p];
+    const items = [];
+    for (const fp of paths) {
+      try {
+        const bytes = await bridge.readBinary(fp);
+        items.push({ name: String(fp).replace(/^.*[\\/]/, ''), bytes });
+      } catch (e) {}
+    }
+    if (items.length) app.importWithPicker(items);
+  } catch (e) { app.alertDialog({ msg: t('导入失败：') + (e.message || e) }); }
+}
 async function openProject() {
   if (!bridge || !bridge.pickFile || !bridge.readBinary) { app.alertDialog({ msg: t('请使用桌面版打开工程') }); return; }
   try {
@@ -122,63 +147,161 @@ async function openProject() {
 </script>
 
 <template>
-  <div class="page">
-    <div class="page-head">
-      <div class="page-ic"><Icon name="home" :size="20" /></div>
+  <div class="page home-view">
+    <div class="home-head">
       <div>
-        <div class="page-title">{{ t('首页工作区') }}</div>
-        <div class="page-sub">{{ t('快速开始 · 最近曲目 · 播放状态') }}</div>
+        <div class="brand-eyebrow">{{ t('WORKSPACE') }}</div>
+        <h1 class="home-title">{{ currentSong ? t('继续上次的工作') : t('开始你的下一首') }}</h1>
+        <p class="home-sub">{{ currentSong ? t('继续编辑、转录或导出。') : t('导入 MIDI 或音频，本地完成其余工作。') }}</p>
       </div>
-      <!-- 立绘：靠右、不参与点击（pointer-events: none），窄窗口自动隐藏 -->
-      <img class="home-mascot" :src="mascotUrl" alt="" aria-hidden="true" />
+      <div class="home-head-actions">
+        <button class="btn ghost" @click="openProject"><Icon name="folder" :size="14" />{{ t('打开工程') }}</button>
+        <button class="btn primary" @click="pickMidi"><Icon name="import" :size="14" />{{ t('导入 MIDI') }}</button>
+      </div>
     </div>
 
-    <div class="grid grid-3">
-      <button class="home-card" v-for="q in QUICK" :key="q.title" :data-guide="'quick-' + q.view" @click="go(q.view)">
-        <span class="hc-ic"><Icon :name="q.ic" :size="18" /></span>
-        <div><b>{{ t(q.title) }}</b><small>{{ t(q.sub) }}{{ q.soon ? t(' · 即将上线') : '' }}</small></div>
-      </button>
-      <button class="home-card" data-guide="quick-settings" @click="state.ui.settingsOpen = true">
-        <span class="hc-ic"><Icon name="gear" :size="18" /></span>
-        <div><b>{{ t('应用设置') }}</b><small>{{ t('主题 · 引擎 · 快捷键 · 插件') }}</small></div>
-      </button>
-      <button class="home-card" @click="openUpdate">
-        <span class="hc-ic"><Icon name="import" :size="18" /></span>
-        <div><b>{{ t('检查更新') }}</b><small>{{ t('GitHub 新版本 · 国内镜像') }}</small></div>
-      </button>
-      <button class="home-card" data-guide="quick-guide" @click="openGuide">
-        <span class="hc-ic"><Icon name="info" :size="18" /></span>
-        <div><b>{{ t('新手引导') }}</b><small>{{ t('全功能实操 · 快捷键 · 帮助') }}</small></div>
-      </button>
-      <button class="home-card" @click="openProject">
-        <span class="hc-ic"><Icon name="folder" :size="18" /></span>
-        <div><b>{{ t('打开工程') }}</b><small>{{ t('载入 .fufu') }}</small></div>
-      </button>
-      <!-- 问题反馈入口：用户要求「在首页工作区提供入口，方便用户反馈问题」。
-           直接跳到设置里的「调试工具 · 全局体检」，不用用户自己去翻。 -->
-      <button class="home-card" @click="openHealth">
-        <span class="hc-ic"><Icon name="info" :size="18" /></span>
-        <div><b>{{ t('遇到问题？') }}</b><small>{{ t('一键体检 · 反馈到 GitHub') }}</small></div>
-      </button>
-      <button class="home-card" @click="saveProject" :disabled="!currentSong">
-        <span class="hc-ic"><Icon name="save" :size="18" /></span>
-        <div><b>{{ t('保存工程') }}</b><small>.fufu</small></div>
-      </button>
-    </div>
+    <div class="home-top">
+      <section class="card home-hero brand-frame">
+        <template v-if="currentSong">
+          <div class="home-hero-top">
+            <div class="home-cover"><Icon name="music" :size="26" /></div>
+            <div class="home-hero-copy">
+              <h2 class="home-hero-title">{{ currentSong.song ? currentSong.song.name : currentSong.name }}</h2>
+              <div class="home-meta">
+                <span>{{ currentTracks }} {{ t('轨') }}</span>
+                <span v-if="currentSong.song && currentSong.song.totalSec">{{ fmtTime(currentSong.song.totalSec) }}</span>
+                <span>{{ t('本地工程') }}</span>
+              </div>
+            </div>
+            <button class="btn ghost sm" @click="setView('music')">{{ t('在曲库中查看') }}</button>
+          </div>
+          <div class="home-wave" aria-hidden="true"><i v-for="n in 48" :key="n" :style="{ height: (10 + ((n * 37) % 30)) + 'px' }"></i></div>
+          <div class="home-hero-actions">
+            <button class="btn primary" @click="continueWork"><Icon name="edit" :size="14" />{{ t('继续编辑') }}</button>
+            <button class="btn ghost" @click="setView('transcode')"><Icon name="transcribe" :size="14" />{{ t('继续转录') }}</button>
+            <span class="home-status-inline"><i></i>{{ state.playing ? t('正在播放') : t('已就绪') }}</span>
+          </div>
+        </template>
+        <template v-else>
+          <div class="home-empty">
+            <div class="home-empty-ic"><Icon name="import" :size="26" /></div>
+            <div>
+              <h2 class="home-hero-title">{{ t('拖入 MIDI 或音频开始') }}</h2>
+              <p>{{ t('也可从曲库导入，或直接转录。') }}</p>
+              <div class="home-hero-actions">
+                <button class="btn primary" @click="pickMidi"><Icon name="import" :size="14" />{{ t('导入 MIDI') }}</button>
+                <button class="btn ghost" @click="setView('transcode')">{{ t('音频转 MIDI') }}</button>
+              </div>
+            </div>
+          </div>
+        </template>
+      </section>
 
-    <div class="home-section">
-      <div class="home-sec-head"><Icon name="clock" :size="14" />{{ t('最近曲目') }}</div>
-      <div v-if="!state.songs.length" class="card muted small" style="text-align:center;padding:26px">
-        {{ t('还没有导入曲目 —— 点击左侧「导入 MIDI」开始。') }}
-      </div>
-      <div class="card" style="padding:6px" v-else>
-        <div class="song-item" v-for="(s, i) in [...state.songs].reverse().slice(0, 8)" :key="s.id"
-             :class="{ active: s.id === state.currentId }" @click="selectSong(s.id)">
-          <span class="si-num">{{ i + 1 }}</span>
-          <div class="si-name"><b>{{ s.name }}</b><small>{{ s.song ? s.song.tracks.length : (s.meta.tracks || 0) }} {{ t(' 轨') }}<template v-if="s.song?.totalSec || s.meta?.dur"> · {{ fmtTime(s.song ? s.song.totalSec : s.meta.dur) }}</template></small></div>
-          <span class="tag" v-if="s.id === state.currentId && state.playing">{{ t('播放中') }}</span>
+      <section class="card home-status">
+        <div class="home-status-head"><span>{{ t('系统就绪') }}</span><span class="tag ok">{{ t('可用') }}</span></div>
+        <div class="home-status-row"><span class="dot" :class="{ warn: !engineReady }"></span><span>{{ t('本地引擎') }}</span><b>{{ engineReady ? t('桌面版') : t('仅浏览器') }}</b></div>
+        <div class="home-status-row"><span class="dot"></span><span>{{ t('曲库') }}</span><b>{{ state.songs.length }} {{ t('首') }}</b></div>
+        <div class="home-status-row"><span class="dot"></span><span>{{ t('运行模式') }}</span><b>{{ t('离线') }}</b></div>
+        <div class="home-status-sep"></div>
+        <div class="home-status-row muted"><span>{{ t('版本') }}</span><b>v{{ appVersion || '—' }}</b></div>
+        <div class="home-status-actions">
+          <button class="btn ghost sm" @click="openHealth"><Icon name="info" :size="13" />{{ t('体检') }}</button>
+          <button class="btn ghost sm" @click="state.ui.settingsOpen = true"><Icon name="gear" :size="13" />{{ t('设置') }}</button>
         </div>
-      </div>
+      </section>
     </div>
+
+    <div class="home-actions">
+      <button class="card home-action" @click="setView('transcode')">
+        <span class="home-action-ic"><Icon name="transcribe" :size="18" /></span>
+        <span><b>{{ t('音频转 MIDI') }}</b><small>{{ t('本地转录 · 队列') }}</small></span>
+        <Icon name="arrow" :size="14" />
+      </button>
+      <button class="card home-action" @click="setView('views')">
+        <span class="home-action-ic"><Icon name="viz" :size="18" /></span>
+        <span><b>{{ t('打开工作台') }}</b><small>{{ t('乐谱 · 分析 · 编排') }}</small></span>
+        <Icon name="arrow" :size="14" />
+      </button>
+      <button class="card home-action" @click="state.ui.appearanceOpen = true">
+        <span class="home-action-ic"><Icon name="wallpaper" :size="18" /></span>
+        <span><b>{{ t('外观与壁纸') }}</b><small>{{ t('主题 · 壁纸') }}</small></span>
+        <Icon name="arrow" :size="14" />
+      </button>
+    </div>
+
+    <section class="card home-recent">
+      <div class="home-recent-head">
+        <h3>{{ t('最近项目') }}</h3>
+        <button class="btn ghost sm" @click="setView('music')">{{ t('查看全部') }}</button>
+      </div>
+      <div v-if="!recentSongs.length" class="home-recent-empty">{{ t('暂无曲目，导入一首开始。') }}</div>
+      <div v-else class="home-recent-list">
+        <button v-for="s in recentSongs" :key="s.id" class="home-recent-row" :class="{ active: s.id === state.currentId }" @click="selectSong(s.id)">
+          <span class="home-recent-thumb"><Icon name="music" :size="14" /></span>
+          <span class="home-recent-name"><b>{{ s.name }}</b><small>{{ s.song ? s.song.tracks.length : (s.meta.tracks || 0) }} {{ t('轨') }}<template v-if="s.song?.totalSec"> · {{ fmtTime(s.song.totalSec) }}</template></small></span>
+          <span class="tag" v-if="s.id === state.currentId">{{ t('当前') }}</span>
+          <Icon name="arrow" :size="13" />
+        </button>
+      </div>
+    </section>
   </div>
 </template>
+
+<style scoped>
+.home-view { max-width: 1280px; }
+.home-head { display: flex; align-items: flex-end; gap: var(--sp-4); margin-bottom: 20px; }
+.home-title { font-size: var(--fs-2xl); line-height: 1.15; margin: 7px 0 0; }
+.home-sub { margin: 8px 0 0; color: var(--text3); font-size: var(--fs-sm); }
+.home-head-actions { margin-left: auto; display: flex; gap: var(--sp-2); }
+.home-top { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(260px, .72fr); gap: var(--sp-3); }
+.home-hero { padding: 22px; overflow: hidden; background: linear-gradient(120deg, color-mix(in srgb, var(--accent-sapphire) 15%, transparent), color-mix(in srgb, var(--accent-sea) 8%, transparent) 55%, var(--surface)); }
+.home-hero-top { display: flex; align-items: flex-start; gap: var(--sp-3); }
+.home-cover { width: 66px; height: 66px; border-radius: var(--r-md); display: grid; place-items: center; background: linear-gradient(145deg, color-mix(in srgb, var(--accent-sapphire) 28%, var(--surface)), var(--surface-soft)); color: var(--accent-sky); border: 1px solid color-mix(in srgb, var(--ornament) 35%, var(--hairline)); flex: none; }
+.home-hero-copy { min-width: 0; }
+.home-hero-title { margin: 2px 0 0; font-size: var(--fs-xl); line-height: 1.25; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.home-meta { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: 9px; color: var(--text3); font-family: var(--font-num); font-size: var(--fs-xs); }
+.home-meta span { border: 1px solid var(--hairline); border-radius: var(--r-sm); padding: 2px 6px; }
+.home-hero-actions { display: flex; align-items: center; gap: var(--sp-2); margin-top: 17px; }
+.home-hero-actions .btn { min-height: 32px; }
+.home-status-inline { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); color: var(--text3); font-size: var(--fs-xs); }
+.home-status-inline i { width: 6px; height: 6px; border-radius: 50%; background: var(--t-ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--t-ok) 12%, transparent); }
+.home-wave { display: flex; align-items: center; gap: var(--sp-1); height: 48px; margin: 19px 0 2px; opacity: .9; }
+.home-wave i { display: block; width: 3px; border-radius: var(--r-sm); background: linear-gradient(180deg, var(--accent-sky), var(--accent-sapphire)); opacity: .8; }
+.home-empty { display: flex; align-items: center; gap: var(--sp-2); min-height: 154px; }
+.home-empty-ic { width: 54px; height: 54px; border-radius: var(--r-lg); display: grid; place-items: center; background: color-mix(in srgb, var(--accent-sapphire) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent-sky) 25%, var(--hairline)); color: var(--accent-sky); flex: none; }
+.home-empty h2 { margin: 0; }
+.home-empty p { margin: 7px 0 0; color: var(--text3); font-size: var(--fs-sm); line-height: 1.6; }
+.home-empty .home-hero-actions { margin-top: 14px; }
+.home-status { padding: 17px; display: flex; flex-direction: column; }
+.home-status-head { display: flex; align-items: center; justify-content: space-between; font-size: var(--fs-md); font-weight: 600; margin-bottom: 8px; }
+.home-status-row { display: flex; align-items: center; gap: var(--sp-2); min-height: 28px; color: var(--text2); font-size: var(--fs-sm); }
+.home-status-row b { margin-left: auto; color: var(--text3); font-family: var(--font-num); font-size: var(--fs-xs); font-weight: 400; }
+.home-status-row .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--t-ok); flex: none; }
+.home-status-row .dot.warn { background: var(--t-warn); }
+.home-status-row.muted { color: var(--text3); }
+.home-status-sep { height: 1px; background: var(--hairline); margin: 9px 0; }
+.home-status-actions { display: flex; gap: var(--sp-2); margin-top: 12px; }
+.home-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-3); margin-top: 14px; }
+.home-action { display: flex; align-items: center; gap: var(--sp-3); padding: 14px; text-align: left; transition: border-color var(--dur-1), background var(--dur-1); }
+.home-action:hover { border-color: color-mix(in srgb, var(--accent-sky) 40%, var(--hairline)); background: color-mix(in srgb, var(--accent-sapphire) 4%, var(--surface)); }
+.home-action > svg { margin-left: auto; color: var(--text3); flex: none; }
+.home-action-ic { width: 32px; height: 32px; border-radius: var(--r-md); display: grid; place-items: center; background: color-mix(in srgb, var(--accent-sapphire) 11%, var(--surface-soft)); color: var(--accent-sky); flex: none; }
+.home-action b { display: block; font-size: var(--fs-md); font-weight: 600; color: var(--text); }
+.home-action small { display: block; margin-top: 3px; color: var(--text3); font-size: var(--fs-xs); }
+.home-recent { margin-top: 14px; padding: 0; overflow: hidden; }
+.home-recent-head { display: flex; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--hairline); }
+.home-recent-head h3 { margin: 0; font-size: var(--fs-md); }
+.home-recent-head .btn { margin-left: auto; }
+.home-recent-list { display: flex; flex-direction: column; }
+.home-recent-row { display: flex; align-items: center; gap: var(--sp-3); padding: 11px 18px; border-bottom: 1px solid var(--hairline); text-align: left; background: transparent; color: var(--text2); }
+.home-recent-row:last-child { border-bottom: 0; }
+.home-recent-row:hover, .home-recent-row.active { background: color-mix(in srgb, var(--accent-sapphire) 5%, var(--surface)); }
+.home-recent-thumb { width: 30px; height: 30px; border-radius: var(--r-sm); background: var(--surface-soft); color: var(--accent-sky); display: grid; place-items: center; flex: none; }
+.home-recent-name { min-width: 0; flex: 1; }
+.home-recent-name b { display: block; color: var(--text); font-size: var(--fs-sm); font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.home-recent-name small { display: block; margin-top: 2px; color: var(--text3); font-family: var(--font-num); font-size: var(--fs-xs); }
+.home-recent-row > svg { color: var(--text3); flex: none; }
+.home-recent-empty { padding: 28px; text-align: center; color: var(--text3); font-size: var(--fs-sm); }
+@media (max-width: 1100px) { .home-top { grid-template-columns: 1fr; } .home-head { align-items: flex-start; flex-direction: column; } .home-head-actions { margin-left: 0; } }
+@media (max-width: 760px) { .home-actions { grid-template-columns: 1fr; } .home-hero-title { font-size: var(--fs-lg); } }
+</style>

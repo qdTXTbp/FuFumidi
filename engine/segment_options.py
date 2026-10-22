@@ -48,9 +48,13 @@ def piano_segment_samples(segment_sec, sample_rate=16000) -> Optional[int]:
 
 
 def muscriptor_segment_sec(segment_sec, default=5.0) -> float:
-    """MuScriptor 内部块长（秒）；未设置返回模型默认 5.0。"""
-    sec = normalize_segment_sec(segment_sec)
-    return sec if sec else float(default)
+    """MuScriptor 内部块长（秒）；固定返回 5.0。
+
+    MuScriptor 的 checkpoint 按 5 秒块训练；改成 30 秒等值会让模型进入
+    训练分布外，输出极少量、持续整块的长音（实测 29 个音符、中位 28.8s）。
+    因此这里忽略用户设置，始终返回模型训练块长。
+    """
+    return float(default)
 
 
 def aria_len_ms(segment_sec) -> Optional[int]:
