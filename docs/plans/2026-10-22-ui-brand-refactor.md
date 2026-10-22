@@ -544,3 +544,11 @@ wallpaper_motion?: 'auto'|'pause'
 - 页面标题贴片全部移除；转换双列等高齐平；唱歌页黑色底条移除；壁纸暗色遮罩/暗角移除；输入控件统一 UI 字体；
 - 编辑器高级工具浮层紧凑双列、可拖动、限制视口；
 - 回归 UI 546 / E2E 29 全绿。
+
+### 13.19 6.2.0 发布（2026-10-23）
+
+- 版本 6.2.0；安装包 `release/FuFumidi Setup 6.2.0.exe`（728,758,535 B）、增量更新包 `release/update/FuFumidi.Install.6.2.0.exe`（152,909,857 B）。
+- 更新包 Ed25519 签名 `update-manifest.json`，SHA256 与本地一致；`latest.yml` version 6.2.0。
+- 页面级“底片”背景全部移除：`.group-page/.page/.sing-page/...` 透明且无 backdrop-filter；顶栏单标签按内容宽度，不再拉满；所有 page-head 隐藏。
+- UI 546 / E2E 29 全绿；安装版已部署并验证版本 v6.2.0、页面背景透明、无 scrim、可见 page-head=0。
+- 已上传 GitHub Release 与 CNB Release（latest），归档 `E:\Midi\安装包\FuFumidi\6.2.0`；源码 commit `107a00c`、tag `v6.2.0` 推送 CNB。
