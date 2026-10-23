@@ -18,7 +18,7 @@ The application is packaged as a classic Electron desktop app with a modern Vue 
 
 Current release line: **6.2.0** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.2.0), stable channel; test builds are published under the [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) tag).
 
-What's new in 6.1.6: the auto-probe now filters invalid instrument-group names (for example `program_105`) before they reach MuScriptor, so a probe result can no longer abort a whole transcription with `unknown instrument name(s)`. 6.1.5 added **a short completion chime when a transcription batch finishes** (three ascending notes on full success, two descending notes if any file failed; cancelled batches stay silent). This release also includes the 6.1.4 optional engines: **hFT-Transformer** for piano, and **YourMT3+** and **MIROS** for general transcription. All three are installed from the resource centre on demand, so the installer stays lean; once downloaded they run fully offline. 6.1.3 brought a dedicated AudioSet audio-tagger probe with a faithful fallback, a zero-note guard that refuses to write empty MIDI, automatic repair of the bundled Windows file association icon, and per-queue model reuse. See the [release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.1.7) for the full list.
+What's new in 6.2.0: the whole shell has been rebuilt around the FuFumidi brand — a five-entry left rail, song tabs in the top bar, a unified appearance drawer (themes, accent colour, static/dynamic wallpaper library, font size, density, UI scale, language and reduced motion), a chapter-based onboarding guide, and one consolidated wallpaper library with online search, direct-URL download and linked external folders. Navigation is regrouped: **Music** now holds playback, visualization and score; **Workspace** holds edit, lyrics, analysis and arrangement. The editor gained a compact draggable advanced-tools panel, and arrangement double-click now focuses the exact track by ID. All page-title stickers, black bars and wallpaper scrim/vignette overlays were removed. See the [release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.2.0) for details.
 
 ### What it does
 
@@ -54,20 +54,15 @@ The UI supports four interface languages: **Simplified Chinese / Traditional Chi
 
 A short map of the main views. Each view is reachable from the sidebar or via the command palette.
 
-| View | Purpose |
+| Area | What it holds |
 | --- | --- |
-| Home | Playlist, recent files, quick actions. |
-| Play | Transport, tempo, MIDI output device, mixer. |
-| Lyrics | LRC editor with encoding detection and batch replace. |
-| Edit | Piano-roll editor (see below). |
-| Visualize | Real-time waterfall, spectrum, scope, chord overlay. |
-| Analyze | Key, chord, density and statistical reports. |
-| Score | Verovio score view and PDF export. |
-| Transcribe | Audio to MIDI (see below). |
-| Convert | MIDI to audio and MIDI to video. |
-| DiffSinger | Optional AI singing synthesis: components download on demand after enabling; tune and render directly from library MIDI (see below). |
-| Resources | Model, soundfont and asset management. |
-| Settings | Appearance, engine, plugins, keyboard shortcuts, i18n. |
+| Home | Continue or start a project, recent items, system status, appearance shortcut. |
+| Music | Library/playlists, playback, visualization, score. |
+| Workspace | Piano-roll editing, lyrics, analysis, arrangement. |
+| Create | Transcription, conversion, score conversion, cover, singing/tuning. |
+| Resources | Models, soundfonts, storage, plugins and diagnostics. |
+| Appearance (drawer) | Themes, accent colour, wallpapers, font size, density, UI scale, language, reduced motion. |
+| Settings | Sound, GPU, features, shortcuts, cloud sync, updates and feedback. |
 
 ---
 
