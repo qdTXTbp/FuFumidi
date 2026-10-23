@@ -50,6 +50,8 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
         merge_gap_ms: '--merge-gap-ms',
         tempo: '--tempo',
         denoise_mode: '--denoise-mode',
+        // 识别片段长度：回退到命令行这条路径也要带，否则两条路径表现不一致
+        segment_sec: '--segment-sec',
       };
       for (const [k, flag] of Object.entries(map)) {
         if (cfg[k] !== undefined && cfg[k] !== null) args.push(flag, String(cfg[k]));

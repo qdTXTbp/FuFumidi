@@ -22,14 +22,22 @@ export default async function (app) {
   const hint = await app.eval('(() => { const e = document.querySelector(".tr-queues"); return e ? e.innerText : ""; })()');
   app.assert(hint.indexOf('本队列') >= 0, '队列摘要显示产物歌单');
 
-  const seg = await app.eval('(() => { const w = document.querySelector("[data-guide=segment-sec]"); const r = w && w.querySelector("input[type=range]"); return { has: !!w, hasRange: !!r, text: w ? w.innerText.slice(0, 160) : "" }; })()');
+  // ★ 识别片段长度：**默认不开启**（用户 2026-10-23「改成不强制开启分段识别，
+  //   允许用户手动切换」）。断言三件事：控件在、默认 0（模型默认）、能手动调。
+  const seg = await app.eval('(() => { const w = document.querySelector("[data-guide=segment-sec]"); const r = w && w.querySelector("input[type=range]"); return { has: !!w, hasRange: !!r, value: r ? r.value : "", text: w ? w.innerText.slice(0, 200) : "" }; })()');
   app.assert(seg.has && seg.hasRange, '有「识别片段长度」滑条控件：' + JSON.stringify(seg));
   app.assert(seg.text.indexOf('识别片段长度') >= 0 || seg.text.indexOf('Recognition segment length') >= 0, '控件标题正确：' + seg.text);
+  app.assert(Number(seg.value) === 0, '识别片段长度默认为 0（不开启）：' + seg.value);
+  app.assert(seg.text.indexOf('模型默认') >= 0 || seg.text.indexOf('Model default') >= 0, '默认档显示「模型默认」：' + seg.text.slice(0, 120));
 
+  // 手动调到 5s 应立即生效（这就是"允许用户手动切换"）
   await app.eval('(() => { const r = document.querySelector("[data-guide=segment-sec] input[type=range]"); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set; setter.call(r, "5"); r.dispatchEvent(new Event("input", { bubbles: true })); r.dispatchEvent(new Event("change", { bubbles: true })); return true; })()');
   await new Promise((r) => setTimeout(r, 300));
   const segText = await app.eval('(() => document.querySelector("[data-guide=segment-sec]").innerText)()');
-  app.assert(/5\s*s/.test(segText) || segText.indexOf('5s') >= 0, '片段长度滑条显示 5s：' + segText.slice(0, 120));
+  app.assert(/5\s*s/.test(segText) || segText.indexOf('5s') >= 0, '手动调后片段长度滑条显示 5s：' + segText.slice(0, 120));
+  // 调回 0 = 关闭（回到模型原生块长）
+  await app.eval('(() => { const r = document.querySelector("[data-guide=segment-sec] input[type=range]"); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set; setter.call(r, "0"); r.dispatchEvent(new Event("input", { bubbles: true })); r.dispatchEvent(new Event("change", { bubbles: true })); return true; })()');
+  await new Promise((r) => setTimeout(r, 200));
 
   // 降噪选项（默认「关闭」）与显存策略（默认「自动」）
   const denoise = await app.eval('(() => { const w=document.querySelector("[data-guide=denoise-mode]"); const s=w&&w.querySelector("select"); return { has: !!w, value: s?s.value:"", opts: s?[...s.options].map(o=>o.value):[] }; })()');
@@ -40,32 +48,27 @@ export default async function (app) {
   const chain = await app.eval('(() => { const c=document.querySelector("[data-guide=chain-queues] input"); return c ? c.checked : null; })()');
   app.assert(chain === false, '顺序转录默认关');
 
-  // ★ 2026-10-21：分块转录（识别片段长度/静音分段/分段探测）已整体移除。
-  // 断言反过来：内置预设与界面都不许再出现这些键/控件。
+  // ★ 2026-10-23：内置预设一律**不写**识别片段长度与其它分块键 —— 这就是
+  //   「不强制开启」的机器保证（6.1.x 给每个模型都写了值，切模型就自动套上）。
   const presRaw = await app.eval('window.fuBridge.presets.list().then(r => JSON.stringify(r)).catch(e => "ERR:" + e.message)');
   let pres = null;
   try { pres = JSON.parse(presRaw); } catch (e) {}
   if (pres && pres.presets) {
-    const DEAD = ['segment_sec', 'segment_silence', 'probe_segment_sec', 'silence_db',
-                  'min_silence', 'max_segment', 'segment_pad'];
+    const NO_WRITE = ['segment_sec', 'segment_silence', 'probe_segment_sec', 'silence_db',
+                      'min_silence', 'max_segment', 'segment_pad'];
     for (const n of Object.keys(pres.presets)) {
       const params = (pres.presets[n] && pres.presets[n].params) || {};
-      for (const k of DEAD) {
-        app.assert(!(k in params), '预设 ' + n + ' 仍含已移除的分块键 ' + k);
+      for (const k of NO_WRITE) {
+        app.assert(!(k in params), '预设 ' + n + ' 写了 ' + k + '（这会让它变成强制开启）');
       }
     }
     app.assert('Basic Pitch · 最优' in pres.presets, '内置预设仍齐全');
   } else {
     app.assert(false, 'presets.list 返回异常：' + String(presRaw).slice(0, 120));
   }
-  // 界面：识别片段长度滑条 / 分段探测档 / 探测段长滑条都必须不存在
-  const chunkUi = await app.eval('(() => JSON.stringify({'
-    + 'seg: !!document.querySelector("[data-guide=segment-sec]"),'
-    + 'opts: [...document.querySelectorAll("select option")].map(o => o.value).filter(v => v === "probe_segments"),'
-    + '}))');
-  const cui = JSON.parse(chunkUi);
-  app.assert(!cui.seg, '识别片段长度滑条已移除');
-  app.assert(cui.opts.length === 0, '自动探测（分段）档已移除');
+  // 分段探测档（probe_segments）必须仍然不存在（2026-10-21 移除后未恢复）
+  const probeOpts = await app.eval('(() => JSON.stringify([...document.querySelectorAll("select option")].map(o => o.value).filter(v => v === "probe_segments")))()');
+  app.assert(JSON.parse(probeOpts).length === 0, '自动探测（分段）档仍未恢复');
 
 
   // P2：驱动/共享显存检测 + 音色稳定开关 + 统一内存实验按钮
