@@ -15,6 +15,23 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  '资源中心 · 扩展能力': "Resource center · Extensions",
+  '从官方插件平台浏览并安装扩展；安装完成并重扫后立即启用。': "Browse and install extensions from the official plugin platform; rescan after installation to enable them.",
+  '平台上架': "On platform",
+  '当前通道': "Channel",
+  '用户目录/fufumidi/plugins/<插件名>/，内含 plugin.json 与入口脚本；开关立即生效。插件等同本地可信代码。': "<user folder>/fufumidi/plugins/<plugin>/, containing plugin.json and the entry script. Toggles take effect immediately. Plugins are trusted local code.",
+  '去插件中心': "Browse plugins",
+  '去插件中心挑一个，或把插件文件夹放进插件目录后点「重新扫描」。': "Pick one in the plugin store, or drop a plugin folder into the plugin directory and click Rescan.",
+  '插件目录': "Plugin directory",
+  '插件中心暂时不可用': "Plugin center is temporarily unavailable",
+  '切换测试通道，或稍后刷新重试。': "Switch to the beta channel, or refresh again later.",
+  '请确认包内清单与来源': "Review the package contents and source before installing.",
+  '暂无简介': "No description",
+  '暂无日志': "No logs yet",
+  '点击禁用': "Click to disable",
+  '点击启用': "Click to enable",
+  '第三方作者在这里上传、更新与维护插件；上架后就会出现在下方列表里。': "Third-party authors publish and maintain plugins here; once listed they appear below.",
+  '模型管理 · 音色工坊 · 资源管理 · 插件中心': "Models · Soundfonts · Resources · Plugins",
   '标签分组': "Tab group",
   '分组：': "Group: ",
   '给这个标签设置分组名；留空取消分组': "Set a group name for this tab; leave blank to ungroup",
