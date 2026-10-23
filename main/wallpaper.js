@@ -279,6 +279,123 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       return { ok: false, error: String((e && e.message) || e) };
     }
   });
+
+  // 在线静态壁纸：Wallhaven 公开 API；网络不可用时优雅回退到公开壁纸源
+  async function fetchJsonWithTimeout(url, timeoutMs = 10000) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await net.fetch(url, {
+        headers: { 'User-Agent': 'FuFumidi/6.2.1', Accept: 'application/json' },
+        signal: ctrl.signal,
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return await res.json();
+    } finally { clearTimeout(timer); }
+  }
+  async function bingWallpaperFallback() {
+    const j = await fetchJsonWithTimeout('https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=8&mkt=zh-CN', 8000);
+    const imgs = Array.isArray(j && j.images) ? j.images : [];
+    return imgs.map((img, i) => {
+      const base = String(img.urlbase || '');
+      const full = 'https://www.bing.com' + base + '_1920x1080.jpg';
+      const thumb = 'https://www.bing.com' + base + '_400x240.jpg';
+      const nameBase = String(img.hsh || ('bing-' + (i + 1)));
+      return { id: 'bing-' + nameBase, name: 'bing-' + nameBase + '.jpg', image: full, thumb, kind: 'image', source: 'Bing 每日壁纸', copyright: String(img.copyright || '') };
+    }).filter(x => x.image);
+  }
+  ipcMain.handle('wallpaper:searchWallhaven', async (_e, q, page) => {
+    const query = String(q || 'wallpaper').trim() || 'wallpaper';
+    const p = Math.max(1, Math.min(60, Number(page) || 1));
+    try {
+      const api = 'https://wallhaven.cc/api/v1/search?q=' + encodeURIComponent(query) + '&page=' + p + '&purity=100&categories=100&sorting=relevance&order=desc';
+      const j = await fetchJsonWithTimeout(api, 12000);
+      const data = Array.isArray(j && j.data) ? j.data : [];
+      if (!data.length) throw new Error('Wallhaven 未返回图片');
+      const list = data.map((it) => {
+        const ext = (path.extname(String(it.path || '')).toLowerCase() || '.jpg');
+        return { id: 'wh-' + it.id, name: 'wallhaven-' + it.id + ext, image: it.path, remote: it.path, thumb: (it.thumbs && (it.thumbs.large || it.thumbs.original || it.thumbs.small)) || it.path, kind: 'image', source: 'Wallhaven', resolution: it.resolution || '', category: it.category || '' };
+      }).filter(x => x.image);
+      const meta = (j && j.meta) || {};
+      return { ok: true, list, page: Number(meta.current_page) || p, last: Number(meta.last_page) || p, source: 'Wallhaven' };
+    } catch (e) {
+      try {
+        const list = await bingWallpaperFallback();
+        if (list.length) return { ok: true, list, page: 1, last: 1, source: 'Bing 每日壁纸', warning: String((e && e.message) || e) };
+      } catch (e2) {}
+      return { ok: false, error: '在线壁纸搜索失败：' + String((e && e.message) || e) };
+    }
+  });
+
+  // 直链下载：图片直接落盘，视频走统一高速下载器；按 content-type/扩展名判断静态/动态
+  ipcMain.handle('wallpaper:downloadUrl', async (_e, url, name) => {
+    try {
+      const src = String(url || '');
+      if (!/^https?:\/\//i.test(src)) return { ok: false, error: '无效 URL' };
+      const dir = path.join(app.getPath('userData'), 'wallpapers');
+      f.mkdirSync(dir, { recursive: true });
+      let ct = '';
+      try {
+        const head = await net.fetch(src, { method: 'HEAD', headers: { 'User-Agent': 'FuFumidi' } });
+        ct = String(head.headers.get('content-type') || '').toLowerCase();
+      } catch (e) {}
+      const urlPath = (() => { try { return new URL(src).pathname; } catch (e) { return src; } })();
+      const extOfUrl = (path.extname(urlPath) || '').toLowerCase();
+      const imageExt = /\.(jpe?g|png|webp|avif|gif|bmp)$/i.test(extOfUrl);
+      const videoExt = /\.(mp4|webm|mov|mkv)$/i.test(extOfUrl);
+      const isImage = /^image\//i.test(ct) || imageExt;
+      const isVideo = /^video\//i.test(ct) || videoExt;
+      const safeBase = String(name || path.basename(urlPath) || 'wallpaper').replace(/[\\/:*?"<>|]/g, '_').replace(/\.(jpe?g|png|webp|avif|gif|bmp|mp4|webm|mov|mkv)$/i, '');
+      const stamp = Date.now().toString(36);
+      if (isImage || (!isVideo && !isImage)) {
+        const res = await net.fetch(src, { headers: { 'User-Agent': 'FuFumidi' } });
+        if (!res.ok) return { ok: false, error: '下载失败：HTTP ' + res.status };
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (!buf.length) return { ok: false, error: '下载文件为空' };
+        const ext = extOfUrl && imageExt ? extOfUrl : (ct.includes('png') ? '.png' : ct.includes('webp') ? '.webp' : ct.includes('gif') ? '.gif' : '.jpg');
+        const dest = path.join(dir, safeBase + '-' + stamp + ext);
+        f.writeFileSync(dest, buf);
+        return { ok: true, path: dest, name: path.basename(dest), kind: 'image', size: buf.length };
+      }
+      const ext = extOfUrl && videoExt ? extOfUrl : '.mp4';
+      const dest = path.join(dir, safeBase + '-' + stamp + ext);
+      const r = await FastDL.downloadFast({ urls: [src], dest, minSize: 64 * 1024, headers: { 'user-agent': 'FuFumidi' }, label: safeBase });
+      if (!r || !r.size) return { ok: false, error: '视频下载失败' };
+      try { f.writeFileSync(dest + '.ok', '1', 'utf8'); } catch (e) {}
+      return { ok: true, path: dest, name: path.basename(dest), kind: 'video', size: r.size };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
+
+  // 外部文件夹壁纸：只登记路径、不复制文件；递归扫描常见图片/视频格式
+  ipcMain.handle('wallpaper:scanFolder', async (_e, dir) => {
+    try {
+      const root = String(dir || '');
+      if (!root || !f.existsSync(root) || !f.statSync(root).isDirectory()) return { ok: false, error: '文件夹不存在' };
+      const imageExt = new Set(['.jpg', '.jpeg', '.png', '.webp', '.avif', '.gif', '.bmp']);
+      const videoExt = new Set(['.mp4', '.webm', '.mov', '.mkv']);
+      const out = [];
+      const walk = (d, depth) => {
+        if (out.length >= 600 || depth > 3) return;
+        let items = [];
+        try { items = f.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+        for (const it of items) {
+          if (out.length >= 600 || it.name.startsWith('.')) continue;
+          const full = path.join(d, it.name);
+          if (it.isDirectory()) { walk(full, depth + 1); continue; }
+          if (!it.isFile()) continue;
+          const ext = path.extname(it.name).toLowerCase();
+          const kind = imageExt.has(ext) ? 'image' : videoExt.has(ext) ? 'video' : '';
+          if (!kind) continue;
+          let size = 0; try { size = f.statSync(full).size; } catch (e) {}
+          if (size <= 0) continue;
+          out.push({ path: full, name: it.name, kind, size });
+        }
+      };
+      walk(root, 0);
+      out.sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+      return { ok: true, list: out };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
 }
 
 module.exports = { registerWallpaperIpc };

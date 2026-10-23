@@ -15,6 +15,9 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  '创作': "Create",
+  '歌声合成': "Singing synthesis",
+  '选歌手、画音符、填词，渲染成人声。': "Pick a singer, draw notes and lyrics, then render a human vocal.",
   '隐藏到侧边': "Hide to side",
   '导入': "Import",
   '工作台': "Workspace",
