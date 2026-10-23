@@ -748,26 +748,6 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="score-view">
-    <header class="score-head">
-      <div class="score-emblem"><Icon name="score" :size="22" /></div>
-      <div class="score-head-copy">
-        <div class="score-kicker">{{ t('工作台') }} · {{ t('乐谱') }}</div>
-        <div class="score-title-row">
-          <h1>{{ t('乐谱') }}</h1>
-          <span class="score-mode-badge">{{ modeLabel }}</span>
-          <span v-if="song" class="score-badge-soft">{{ tracks.length }} {{ t('轨') }}</span>
-        </div>
-        <p>{{ status || defStatus }}</p>
-      </div>
-      <div class="score-head-actions">
-        <button class="btn sm primary" @click="previewScore" :disabled="!isStaffLike || previewBusy" :title="t('分页预览')">
-          <Icon name="eye" :size="14" />{{ previewBusy ? t('生成中…') : t('预览') }}
-        </button>
-        <button class="btn sm" @click="exportPdf" :disabled="!isStaffLike" :title="t('导出 PDF（打印当前页面）')">
-          <Icon name="save" :size="14" />{{ t('导出') }} PDF
-        </button>
-      </div>
-    </header>
 
     <div class="score-toolbar">
       <div class="score-field score-track">
@@ -792,6 +772,13 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="score-actions">
+        <button class="btn sm primary" @click="previewScore" :disabled="!isStaffLike || previewBusy" :title="t('分页预览')">
+          <Icon name="eye" :size="14" />{{ previewBusy ? t('生成中…') : t('预览') }}
+        </button>
+        <button class="btn sm" @click="exportPdf" :disabled="!isStaffLike" :title="t('导出 PDF（打印当前页面）')">
+          <Icon name="save" :size="14" />{{ t('导出') }} PDF
+        </button>
+        <span class="score-sep"></span>
         <button class="btn sm" :class="{ active: follow }" @click="follow = !follow" :title="t('跟随播放')">
           <Icon name="play2" :size="14" />{{ t('跟随播放') }}
         </button>
