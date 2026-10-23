@@ -15,6 +15,13 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  '当前环境不支持组件安装': "This environment does not support component installation",
+  '缺失组件已全部安装': "All missing components installed",
+  '这些组件直接在变谱页下载，装在数据根的 omr 目录，不需要打开资源中心。没装也能用内置识谱，只是精度低一档、读不出乐器名与速度记号。': "These components can be downloaded right here and are stored in the omr folder under the data root; no need to open Resources. Built-in OMR still works without them, with lower accuracy and without instrument/tempo text.",
+  '正在下载：': "Downloading: ",
+  '组件下载失败：': "Component download failed: ",
+  '组件已安装': "Component installed",
+  '一键安装缺失组件': "Install missing components",
   '没有可预览的乐谱页': "No score pages to preview",
   '上一页': "Previous",
   '下一页': "Next",
