@@ -5,6 +5,7 @@
 const DS = require('./download-source');
 
 const path = require('path');
+const crypto = require('crypto');
 const fs = require('fs');
 
 const Paths = require('./paths');
@@ -124,21 +125,50 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
     : cnbWallpaperUrl(name));
   const thumbCacheDir = Paths.cacheDir('wallpaper-thumbs');
   try { f.mkdirSync(thumbCacheDir, { recursive: true }); } catch (e) {}
+  async function ensureFolderThumb(videoPath) {
+    try {
+      const st = f.statSync(videoPath);
+      const key = crypto.createHash('sha1').update(String(videoPath) + '|' + st.size + '|' + st.mtimeMs).digest('hex').slice(0, 20);
+      const thumbPath = path.join(thumbCacheDir, key + '.jpg');
+      if (f.existsSync(thumbPath) && f.statSync(thumbPath).size > 0) return thumbPath;
+      if (!runEngineInline) return '';
+      const args = ['-y', '-hide_banner', '-loglevel', 'error', '-ss', '0.5', '-i', videoPath, '-frames:v', '1', '-vf', 'scale=320:-2', '-q:v', '4', thumbPath];
+      const code =
+        'import json, subprocess\n' +
+        'import imageio_ffmpeg\n' +
+        'ff = imageio_ffmpeg.get_ffmpeg_exe()\n' +
+        'r = subprocess.run([ff] + ' + JSON.stringify(args) + ', capture_output=True)\n' +
+        "print(json.dumps({'ok': r.returncode == 0, 'err': (r.stderr or b'').decode('utf-8', 'replace')[-300:]}))";
+      const rr = await runEngineInline(code);
+      const d = parsePyJson ? parsePyJson(rr.out) : null;
+      if (d && d.ok && f.existsSync(thumbPath) && f.statSync(thumbPath).size > 0) return thumbPath;
+    } catch (e) {}
+    return '';
+  }
   // 远程壁纸目录缓存：5 分钟内直接复用 GitHub API 结果
   async function fetchRemoteList() {
     const cacheFile = path.join(thumbCacheDir, 'wallpaper-list.json');
+    let stale = null;
     try {
       if (f.existsSync(cacheFile)) {
         const age = Date.now() - f.statSync(cacheFile).mtimeMs;
         if (age < 5 * 60 * 1000) {
           const cached = JSON.parse(f.readFileSync(cacheFile, 'utf8'));
+          if (cached && Array.isArray(cached.vids) && Array.isArray(cached.thumbs)) stale = cached;
           if (cached && Array.isArray(cached.vids) && Array.isArray(cached.thumbs)) return cached;
         }
       }
     } catch (e) {}
-    const res = await net.fetch(`https://api.github.com/repos/${WALLPAPER_REPO}/contents/${WALLPAPER_DIR}`, {
-      headers: { 'User-Agent': 'FuFumidi', Accept: 'application/vnd.github+json' },
-    });
+    let res;
+    try { res = await Promise.race([
+      net.fetch(`https://api.github.com/repos/${WALLPAPER_REPO}/contents/${WALLPAPER_DIR}`, {
+        headers: { 'User-Agent': 'FuFumidi', Accept: 'application/vnd.github+json' },
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('壁纸列表请求超时')), 5000)),
+    ]); } catch (err) {
+      if (stale) return stale;
+      throw err;
+    }
     if (!res.ok) throw new Error('GitHub API ' + res.status);
     const items = await res.json();
     const vids = items.filter(x => x.type === 'file' && /\.(mp4|webm|mov)$/i.test(x.name));
@@ -180,7 +210,13 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       const seen = new Set(list.map(r => r.name.replace(/\.(mp4|webm|mov)$/i, '').toLowerCase()));
       const extra = locals.filter(l => !seen.has(l.name.replace(/\.(mp4|webm|mov)$/i, '').toLowerCase()));
       return { ok: true, list: list.concat(extra) };
-    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+    } catch (e) {
+      try {
+        const locals = await listLocalWallpapers();
+        if (locals.length) return { ok: true, list: locals, offline: true, error: String((e && e.message) || e) };
+      } catch (err) {}
+      return { ok: false, error: String((e && e.message) || e) };
+    }
   });
 
   // 删除本地壁纸：移除视频与对应缩略图

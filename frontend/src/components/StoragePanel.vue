@@ -7,8 +7,12 @@ import { useAppStore } from '../stores/app';
 
 const app = useAppStore();
 const bridge = window.fuBridge;
-const loading = ref(false);
-const report = ref(null);
+const CACHE_KEY = 'fufumidi_storage_report_v1';
+const rawCache = (() => { try { return JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); } catch (e) { return null; } })();
+const cacheFresh = !!(rawCache && rawCache.at && Date.now() - Number(rawCache.at) < 5 * 60 * 1000 && rawCache.report);
+const cached = rawCache && rawCache.report ? rawCache.report : rawCache;
+const loading = ref(!cached);
+const report = ref(cached || null);
 const includeAssets = ref(false);
 const lastResult = ref(null);
 const totalText = computed(() => {
@@ -30,8 +34,11 @@ function kindLabel(kind) {
 }
 async function refresh() {
   if (!bridge || !bridge.storage) return;
-  loading.value = true;
-  try { report.value = await bridge.storage.report(); } catch (e) { report.value = null; }
+  if (!report.value) loading.value = true;
+  try {
+    report.value = await bridge.storage.report();
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), report: report.value })); } catch (e) {}
+  } catch (e) { if (!report.value) report.value = null; }
   loading.value = false;
 }
 async function cleanup() {
@@ -53,7 +60,7 @@ async function cleanup() {
   }
   loading.value = false;
 }
-onMounted(refresh);
+onMounted(() => { if (!cacheFresh) refresh(); });
 </script>
 
 <template>
