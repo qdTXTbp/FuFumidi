@@ -5,6 +5,9 @@ Sony ISMIR2023 hFT-Transformer，MIT License。权重 22 MB，CPU 可跑。
 模型代码见 hft_model.py（vendored）；推理封装见 hft_amt.py。
 
 权重目录约定：<FUFUMIDI_MODELS_DIR>/hft_transformer/checkpoint/MAESTRO-V3/model_016_003.pkl
+运行时/权重一律不随安装包分发，由 main/models.js 的统一安装通道下载；
+运行时相关的公共能力（路径、torchaudio 补丁、设备、线程、暂停闸门）见
+transcribe_runtime.py —— 本文件只留 hFT 自己的推理逻辑。
 """
 import os
 import sys
@@ -12,12 +15,16 @@ import time
 import pickle
 import types
 
+import transcribe_runtime as TR
+
+_RUNTIME = "hft_transformer"
 _MODEL_REL = os.path.join("hft_transformer", "checkpoint", "MAESTRO-V3", "model_016_003.pkl")
 _AMT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def _find_model():
-    models_dir = os.environ.get("FUFUMIDI_MODELS_DIR", "") or ""
+def find_model():
+    """定位 hFT 权重（资源中心解包后的固定相对路径）。"""
+    models_dir = TR.models_dir()
     if not models_dir:
         return None
     p = os.path.join(models_dir, _MODEL_REL)
@@ -32,7 +39,7 @@ def available():
         import pretty_midi  # noqa: F401
     except Exception:
         return False
-    return _find_model() is not None
+    return find_model() is not None
 
 
 def _load_model(model_path):
@@ -80,18 +87,19 @@ def _sf_load(path, **kwargs):
 def transcribe_hft(audio_path, output_midi, params=None, log_cb=None, num_threads=None):
     import torch
     import torchaudio
-    import pretty_midi
+    import pretty_midi  # noqa: F401
     import audio_io
 
     params = params or {}
+    # 统一运行时层：线程上限 + torchaudio 补丁 + 暂停闸门
+    threads = TR.limit_threads(num_threads)
+    TR.patch_torchaudio_soundfile()
+    TR.install_pause(log_cb)
     if log_cb:
-        log_cb("hFT-Transformer：5.5M 参数，CPU 推理（MIT License）")
-    try:
-        torch.set_num_threads(max(1, min(8, int(num_threads or os.cpu_count() or 4))))
-    except Exception:
-        pass
+        log_cb("hFT-Transformer：5.5M 参数，CPU 推理（MIT License）"
+               + ("，线程 %d" % threads if threads else ""))
 
-    model_path = _find_model()
+    model_path = find_model()
     if not model_path:
         raise RuntimeError(
             "未找到 hFT-Transformer 权重。请到「资源中心 → 转录模型」下载 hFT-Transformer（约 22 MB）。"
@@ -108,16 +116,16 @@ def transcribe_hft(audio_path, output_midi, params=None, log_cb=None, num_thread
     }
 
     tmp_wav = None
+    t_all = time.perf_counter()
     try:
-        t0 = time.perf_counter()
         tmp_wav = audio_io.decode_to_wav(audio_path, 16000)
         if log_cb:
             log_cb("hFT：音频解码完成（16 kHz 单声道）")
         amt = hft_amt.AMT(config, None)       # 先只建空对象
         amt.model = _load_model(model_path)   # 权重加载（CPU 映射）
         amt.device = "cpu"
-        # hFT 的 wav2feature 用 torchaudio.load；打包版 torch>=2.9 需要 torchcodec，
-        # 这里统一换成 soundfile，避免引入 FFmpeg 共享库依赖。
+        # hFT 的 wav2feature 用 torchaudio.load；补丁已在上面统一装好，
+        # 这里再兜一次（补丁是幂等的，重复装无副作用）。
         _orig_load = torchaudio.load
         torchaudio.load = _sf_load
         try:
@@ -155,4 +163,5 @@ def transcribe_hft(audio_path, output_midi, params=None, log_cb=None, num_thread
                 audio_io.remove_temp(tmp_wav)
             except Exception:
                 pass
-
+        TR.release_gpu()
+        TR.log_timing(log_cb, "hFT-Transformer 总计", t_all)

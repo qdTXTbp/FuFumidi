@@ -158,20 +158,11 @@ def _resolve_params(args, mode):
     if getattr(args, "denoise_mode", None): p["denoise_mode"] = str(args.denoise_mode)
     if getattr(args, "normalize", False): p["normalize"] = True
     if getattr(args, "auto_bpm", False): p["auto_bpm"] = True
-    # 识别片段长度（所有转录模型共用）：0/空 = 各模型默认
-    _sg = getattr(args, "segment_sec", None)
-    if _sg is not None:
-        try:
-            if float(_sg) > 0:
-                p["segment_sec"] = float(_sg)
-        except (TypeError, ValueError):
-            pass
     # 显存策略（auto / low / allow）：由主进程传，引擎按模型降批或保持
     _mm = getattr(args, "memory_mode", None)
     if _mm in ("auto", "low", "allow"):
         p["memory_mode"] = str(_mm)
     if getattr(args, "timbre_stabilize", False): p["timbre_stabilize"] = True
-    if getattr(args, "probe_segment_sec", None): p["probe_segment_sec"] = args.probe_segment_sec
     if getattr(args, "no_merge", False): p["merge_overlap"] = False
     if getattr(args, "no_velnorm", False): p["normalize_vel"] = False
     # 子模型选择：universal → basic / muscriptor；piano → piano_pt / aria / transkun
@@ -192,17 +183,6 @@ def _resolve_params(args, mode):
     # 这里显式取出，命令行与 worker 两条路径才都能覆盖它。
     _mh = getattr(args, "max_note_hold", None)
     if _mh is not None: p["max_note_hold"] = float(_mh)
-    # ⑤ 静音分段（仅 muscriptor 用到，默认 off）：这里显式取出，命令行与 worker 两条路径
-    #    才都能覆盖它（同上面几条的坑：只在 worker 的 Namespace 里加是不够的）。
-    _ss = getattr(args, "segment_silence", None)
-    if _ss: p["segment_silence"] = str(_ss).lower()
-    for _k in ("silence_db", "min_silence", "max_segment", "segment_pad"):
-        _v = getattr(args, _k, None)
-        if _v is not None:
-            try:
-                p[_k] = float(_v)
-            except (TypeError, ValueError):
-                pass
     # ① 回放台（仅 muscriptor 用到，开发/诊断用，界面不暴露）：
     #   --dump-tokens   真实转录时把 token 流顺手落盘（JSONL，几 MB）
     #   --replay-tokens 从落盘流重跑解码器（不加载模型、不用 GPU）
@@ -470,14 +450,10 @@ def build_parser():
     g.add_argument("--no-velnorm", action="store_true", help="关闭力度归一化")
 
     g = parser.add_argument_group("通用/分离（basic-pitch）参数")
-    g.add_argument("--segment-sec", dest="segment_sec", type=float, default=None,
-                   help="识别片段长度（秒，所有转录模型）：0/不传 = 各模型默认")
     g.add_argument("--memory-mode", dest="memory_mode", choices=["auto", "low", "allow"], default=None,
                    help="显存策略：low=低显存自动降批（推荐）/ allow=允许驱动借用系统内存 / auto=默认")
     g.add_argument("--timbre-stabilize", action="store_true",
                    help="MuScriptor 音色稳定后处理：把短命孤立乐器轨并入邻近主导轨（默认关；界面预设默认开）")
-    g.add_argument("--probe-segment-sec", type=float, default=None,
-                   help="分段探测的段长（秒，20–120；默认 60）")
     g.add_argument("--min-note-length", type=float, default=None,
                    help="最短音符时长(ms)（默认 128）")
     g.add_argument("--min-freq", "--minimum-frequency", dest="minimum_frequency",
@@ -487,19 +463,6 @@ def build_parser():
     g.add_argument("--no-melodia", action="store_true", help="关闭旋律增强")
     g.add_argument("--beat-grid", action="store_true",
                    help="[muscriptor] 加载 Beat This! 权重做节拍网格检测（未下载/失败时自动跳过）")
-    # 静音分段（长音频提速）：默认 off。auto = 时长 ≥5 分钟且预计省 ≥3% 才启用。
-    # 见 engine/segmenter.py —— 只在"完全空白静音"（默认 −60 dBFS）上切，切在静音中点。
-    g.add_argument("--segment-silence", dest="segment_silence", default="off",
-                   choices=["off", "auto", "on"],
-                   help="[muscriptor] 静音分段转录（长音频提速）：off=关(默认) / auto=划算才开 / on=强制")
-    g.add_argument("--silence-db", dest="silence_db", type=float, default=None,
-                   help="[muscriptor] 判定\"完全空白静音\"的帧 RMS 阈值（默认 0.001 ≈ −60 dBFS）")
-    g.add_argument("--min-silence", dest="min_silence", type=float, default=None,
-                   help="[muscriptor] 连续静音多久才值得切（秒，默认 2.0）")
-    g.add_argument("--max-segment", dest="max_segment", type=float, default=None,
-                   help="[muscriptor] 单段最长秒数（默认 600，超了在最安静处再切）")
-    g.add_argument("--segment-pad", dest="segment_pad", type=float, default=None,
-                   help="[muscriptor] 每段前后多带的上下文秒数（默认 1.0）")
     g.add_argument("--muscriptor-instruments", dest="muscriptor_instruments", default=None,
                    help="[muscriptor] 乐器组硬约束：逗号分隔的组名（voice / acoustic_piano /"
                         " clean_electric_guitar / synth_lead / flutes / organ / drums …，"
@@ -608,15 +571,8 @@ def cmd_worker():
                 max_note_hold=req.get('max_note_hold'),
                 # ⑤ 静音分段（漏一项界面勾了也到不了引擎）
                 # 识别片段长度：漏这一项时界面滑条调了也到不了引擎
-                segment_sec=req.get('segment_sec'),
                 memory_mode=req.get('memory_mode'),
                 timbre_stabilize=bool(req.get('timbre_stabilize')),
-                probe_segment_sec=req.get('probe_segment_sec'),
-                segment_silence=req.get('segment_silence'),
-                silence_db=req.get('silence_db'),
-                min_silence=req.get('min_silence'),
-                max_segment=req.get('max_segment'),
-                segment_pad=req.get('segment_pad'),
                 # ④ 批 B：MuScriptor 生成参数（漏一项界面调了也不生效 —— 同上面几条的坑）
                 temperature=req.get('temperature'),
                 cfg_coef=req.get('cfg_coef'),

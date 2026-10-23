@@ -179,19 +179,19 @@ def main(argv=None):
             raise SystemExit("找不到钢琴 quality fixture：%s" % wav)
     else:
         wav, ref = synth_material(a.out_dir, a.seconds)
+    # ★ 2026-10-21：「识别片段长度」/静音分段/分段探测（分块转录）已全部移除，
+    #   基准一律用上游默认块长 + 整曲一次推理。
     base = {
-        "model_size": a.model_size, "perf_mode": "quality", "segment_sec": 5.0,
+        "model_size": a.model_size, "perf_mode": "quality",
         "prelude_forcing": True, "muscriptor_instruments": "none",
         "temperature": 1.0, "cfg_coef": 1.0, "beam_size": 1,
-        "precision": "fp32", "segment_silence": "off", "max_note_hold": 0,
+        "precision": "fp32", "max_note_hold": 0,
         "timbre_stabilize": False,
     }
     configs = [
         ("optimal", {"muscriptor_instruments": "none", "timbre_stabilize": False}),
         ("probe_only", {"muscriptor_instruments": "probe", "timbre_stabilize": False}),
         ("stable", {"muscriptor_instruments": "probe", "timbre_stabilize": True}),
-        ("segprobe", {"muscriptor_instruments": "probe_segments", "timbre_stabilize": True,
-                      "probe_segment_sec": 30}),
     ]
     rows = []
     for name, params in configs:

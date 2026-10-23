@@ -40,25 +40,32 @@ export default async function (app) {
   const chain = await app.eval('(() => { const c=document.querySelector("[data-guide=chain-queues] input"); return c ? c.checked : null; })()');
   app.assert(chain === false, '顺序转录默认关');
 
-  // 内置预设里的各模型推荐片段长度（engine/presets.py → desktop presets.list）
+  // ★ 2026-10-21：分块转录（识别片段长度/静音分段/分段探测）已整体移除。
+  // 断言反过来：内置预设与界面都不许再出现这些键/控件。
   const presRaw = await app.eval('window.fuBridge.presets.list().then(r => JSON.stringify(r)).catch(e => "ERR:" + e.message)');
   let pres = null;
   try { pres = JSON.parse(presRaw); } catch (e) {}
   if (pres && pres.presets) {
-    const seg = (n) => (pres.presets[n] && pres.presets[n].params || {}).segment_sec;
-    app.assert(seg('Basic Pitch · 最优') === 0, 'Basic Pitch 预设片段=0：' + seg('Basic Pitch · 最优'));
-    app.assert(seg('MuScriptor · 最优') === 5, 'MuScriptor 预设片段=5s：' + seg('MuScriptor · 最优'));
-    app.assert(seg('钢琴 · 最优') === 10, '钢琴预设片段=10s：' + seg('钢琴 · 最优'));
-    app.assert(seg('Aria-AMT · 最优') === 30, 'Aria 预设片段=30s：' + seg('Aria-AMT · 最优'));
-    app.assert(seg('Transkun · 最优') === 16, 'Transkun 预设片段=16s：' + seg('Transkun · 最优'));
+    const DEAD = ['segment_sec', 'segment_silence', 'probe_segment_sec', 'silence_db',
+                  'min_silence', 'max_segment', 'segment_pad'];
+    for (const n of Object.keys(pres.presets)) {
+      const params = (pres.presets[n] && pres.presets[n].params) || {};
+      for (const k of DEAD) {
+        app.assert(!(k in params), '预设 ' + n + ' 仍含已移除的分块键 ' + k);
+      }
+    }
+    app.assert('Basic Pitch · 最优' in pres.presets, '内置预设仍齐全');
   } else {
     app.assert(false, 'presets.list 返回异常：' + String(presRaw).slice(0, 120));
   }
-  // 切到 MuScriptor 应自动套内置预设 → 滑条显示推荐 5s
-  await app.eval("(() => { const b=[...document.querySelectorAll('.tr-pills button')].find(x=>(x.innerText||'').indexOf('MuScriptor')>=0); if (b) b.click(); return !!b; })()");
-  await new Promise((r) => setTimeout(r, 500));
-  const segMu = await app.eval('(() => document.querySelector("[data-guide=segment-sec]").innerText)()');
-  app.assert(/5\s*s/.test(segMu) || segMu.indexOf('5s') >= 0, '切 MuScriptor 后片段长度自动为 5s：' + segMu.slice(0, 140));
+  // 界面：识别片段长度滑条 / 分段探测档 / 探测段长滑条都必须不存在
+  const chunkUi = await app.eval('(() => JSON.stringify({'
+    + 'seg: !!document.querySelector("[data-guide=segment-sec]"),'
+    + 'opts: [...document.querySelectorAll("select option")].map(o => o.value).filter(v => v === "probe_segments"),'
+    + '}))');
+  const cui = JSON.parse(chunkUi);
+  app.assert(!cui.seg, '识别片段长度滑条已移除');
+  app.assert(cui.opts.length === 0, '自动探测（分段）档已移除');
 
 
   // P2：驱动/共享显存检测 + 音色稳定开关 + 统一内存实验按钮
