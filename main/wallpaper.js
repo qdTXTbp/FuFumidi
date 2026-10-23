@@ -5,6 +5,7 @@
 const DS = require('./download-source');
 
 const path = require('path');
+const crypto = require('crypto');
 const fs = require('fs');
 
 const Paths = require('./paths');
@@ -124,6 +125,26 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
     : cnbWallpaperUrl(name));
   const thumbCacheDir = Paths.cacheDir('wallpaper-thumbs');
   try { f.mkdirSync(thumbCacheDir, { recursive: true }); } catch (e) {}
+  async function ensureFolderThumb(videoPath) {
+    try {
+      const st = f.statSync(videoPath);
+      const key = crypto.createHash('sha1').update(String(videoPath) + '|' + st.size + '|' + st.mtimeMs).digest('hex').slice(0, 20);
+      const thumbPath = path.join(thumbCacheDir, key + '.jpg');
+      if (f.existsSync(thumbPath) && f.statSync(thumbPath).size > 0) return thumbPath;
+      if (!runEngineInline) return '';
+      const args = ['-y', '-hide_banner', '-loglevel', 'error', '-ss', '0.5', '-i', videoPath, '-frames:v', '1', '-vf', 'scale=320:-2', '-q:v', '4', thumbPath];
+      const code =
+        'import json, subprocess\n' +
+        'import imageio_ffmpeg\n' +
+        'ff = imageio_ffmpeg.get_ffmpeg_exe()\n' +
+        'r = subprocess.run([ff] + ' + JSON.stringify(args) + ', capture_output=True)\n' +
+        "print(json.dumps({'ok': r.returncode == 0, 'err': (r.stderr or b'').decode('utf-8', 'replace')[-300:]}))";
+      const rr = await runEngineInline(code);
+      const d = parsePyJson ? parsePyJson(rr.out) : null;
+      if (d && d.ok && f.existsSync(thumbPath) && f.statSync(thumbPath).size > 0) return thumbPath;
+    } catch (e) {}
+    return '';
+  }
   // 远程壁纸目录缓存：5 分钟内直接复用 GitHub API 结果
   async function fetchRemoteList() {
     const cacheFile = path.join(thumbCacheDir, 'wallpaper-list.json');
@@ -393,6 +414,13 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       };
       walk(root, 0);
       out.sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+      let thumbBudget = 40;
+      for (const it of out) {
+        if (it.kind !== 'video' || thumbBudget <= 0) continue;
+        thumbBudget -= 1;
+        const th = await ensureFolderThumb(it.path);
+        if (th) it.thumb = th;
+      }
       return { ok: true, list: out };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });

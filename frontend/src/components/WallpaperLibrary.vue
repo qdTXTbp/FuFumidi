@@ -33,7 +33,7 @@ function thumbOf(x) { return x.thumb || (x.image ? fileUrl(x.image) : ''); }
 const allItems = computed(() => {
   const local = [
     ...repo.value.filter(x => x.local).map(x => ({ ...x, kind: kindOf(x), local: true, _src: 'repo' })),
-    ...folderFiles.value.map(x => ({ ...x, local: true, _src: 'folder', thumb: x.kind === 'image' ? fileUrl(x.path) : '' })),
+    ...folderFiles.value.map(x => ({ ...x, local: true, _src: 'folder', thumb: x.kind === 'image' ? fileUrl(x.path) : (x.thumb ? fileUrl(x.thumb) : '') })),
   ];
   const remote = repo.value.filter(x => !x.local && x.video).map(x => ({ ...x, kind: 'video', local: false, _src: 'repo' }));
   const on = online.value.map(x => ({ ...x, local: false, _src: 'online' }));
