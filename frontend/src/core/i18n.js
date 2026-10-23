@@ -15,6 +15,10 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  '隐藏到侧边': "Hide to side",
+  '导入': "Import",
+  '工作台': "Workspace",
+  '简谱字号': "Numbered notation size",
   '资源中心 · 扩展能力': "Resource center · Extensions",
   '从官方插件平台浏览并安装扩展；安装完成并重扫后立即启用。': "Browse and install extensions from the official plugin platform; rescan after installation to enable them.",
   '平台上架': "On platform",

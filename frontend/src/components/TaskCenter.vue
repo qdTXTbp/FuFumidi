@@ -15,6 +15,61 @@ const filter = ref('all');
 const expandedId = ref('');
 const hidden = ref([]);
 const now = ref(Date.now());
+const fabEl = ref(null);
+const BALL_KEY = 'fufumidi_task_ball_v1';
+const LEFT_LIMIT = 72;
+const _ball = (() => { try { const j = JSON.parse(localStorage.getItem(BALL_KEY) || 'null'); return j && typeof j === 'object' ? j : null; } catch (e) { return null; } })();
+const pos = ref({ x: Number(_ball?.x) || (window.innerWidth - 48), y: Number(_ball?.y) || (window.innerHeight - 100) });
+const hiddenSide = ref(_ball?.side === 'left' || _ball?.side === 'right' ? _ball.side : '');
+const dragging = ref(false);
+const moved = ref(false);
+let suppressClick = false;
+let dragStart = null;
+function clampBall(x, y) {
+  const w = window.innerWidth, h = window.innerHeight;
+  return { x: Math.max(LEFT_LIMIT, Math.min(w - 44, Number(x) || LEFT_LIMIT)), y: Math.max(8, Math.min(h - 80, Number(y) || 8)) };
+}
+function saveBall() { try { localStorage.setItem(BALL_KEY, JSON.stringify({ x: pos.value.x, y: pos.value.y, side: hiddenSide.value })); } catch (e) {} }
+function defaultBall() { pos.value = clampBall(window.innerWidth - 48, window.innerHeight - 100); }
+function startBallDrag(e) {
+  if (e.button != null && e.button !== 0) return;
+  dragStart = { x: e.clientX, y: e.clientY, left: pos.value.x, top: pos.value.y };
+  dragging.value = true;
+  moved.value = false;
+  try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch (err) {}
+  e.preventDefault();
+}
+function moveBall(e) {
+  if (!dragging.value || !dragStart) return;
+  const dx = e.clientX - dragStart.x, dy = e.clientY - dragStart.y;
+  if (Math.abs(dx) + Math.abs(dy) > 3) moved.value = true;
+  pos.value = clampBall(dragStart.left + dx, dragStart.top + dy);
+}
+function endBallDrag() {
+  if (!dragging.value) return;
+  dragging.value = false;
+  if (!moved.value) { toggleOpen(); return; }
+  if (pos.value.x <= LEFT_LIMIT + 10) hideBall('left');
+  else if (pos.value.x > window.innerWidth - 78) hideBall('right');
+  else { hiddenSide.value = ''; saveBall(); }
+}
+function cancelBallDrag() { dragging.value = false; dragStart = null; }
+function hideToCurrentSide() { hideBall(pos.value.x < window.innerWidth / 2 ? 'left' : 'right'); }
+function hideBall(side) {
+  hiddenSide.value = side;
+  open.value = false;
+  pos.value = side === 'left' ? clampBall(LEFT_LIMIT, pos.value.y) : clampBall(window.innerWidth - 48, pos.value.y);
+  saveBall();
+}
+function restoreBall() {
+  const side = hiddenSide.value;
+  hiddenSide.value = '';
+  pos.value = clampBall(side === 'left' ? LEFT_LIMIT : window.innerWidth - 48, pos.value.y);
+  saveBall();
+}
+const ballStyle = computed(() => ({ left: pos.value.x + 'px', top: pos.value.y + 'px' }));
+const edgeStyle = computed(() => ({ top: Math.max(70, Math.min(window.innerHeight - 110, pos.value.y)) + 'px' }));
+const panelClass = computed(() => ({ 'align-left': pos.value.x < 380, 'below': pos.value.y < 180 }));
 
 const list = computed(() => tasksStore.tasks.filter((x) => !hidden.value.includes(x.id)));
 const running = computed(() => list.value.filter((x) => x.status === 'running'));
@@ -27,6 +82,7 @@ const KIND_ICON = { transcribe: 'transcribe', convert: 'convert', render: 'play2
 
 let off = null;
 let timer = 0;
+let resizeOff = null;
 const prev = new Map();
 onMounted(async () => {
   await tasksStore.refresh();
@@ -34,9 +90,13 @@ onMounted(async () => {
     const tasks = window.fuBridge && window.fuBridge.tasks;
     if (tasks && tasks.onUpdate && !off) off = tasks.onUpdate((ev) => tasksStore.applyEvent(ev));
   } catch (e) {}
+  if (!_ball) defaultBall();
+  const onResize = () => { pos.value = clampBall(pos.value.x, pos.value.y); };
+  window.addEventListener('resize', onResize);
+  resizeOff = onResize;
   timer = setInterval(() => { now.value = Date.now(); }, 1000);
 });
-onBeforeUnmount(() => { try { if (off) off(); } catch (e) {} off = null; clearInterval(timer); });
+onBeforeUnmount(() => { try { if (off) off(); } catch (e) {} off = null; clearInterval(timer); if (resizeOff) window.removeEventListener('resize', resizeOff); resizeOff = null; });
 
 // 外部取消/结束后自动切到“全部”，否则已完成任务在“进行中”页签里看不到。
 watch(activeCount, (n, old) => {
@@ -55,6 +115,7 @@ watch(() => list.value.map((x) => x.id + ':' + x.status).join('|'), () => {
 });
 
 async function toggleOpen() {
+  if (suppressClick) return;
   open.value = !open.value;
   if (open.value) await tasksStore.refresh();
 }
@@ -76,18 +137,25 @@ function iconOf(k) { return KIND_ICON[k] || 'task'; }
 </script>
 
 <template>
-  <div class="task-center" data-guide="task-center">
-    <button class="tc-fab" :class="{ on: activeCount > 0 }" data-guide="task-center-btn" :title="t('任务中心')" :aria-label="t('任务中心')" :aria-expanded="open" @click="toggleOpen">
+  <div class="task-center" data-guide="task-center" :style="hiddenSide ? {} : ballStyle">
+    <button v-if="!hiddenSide" ref="fabEl" class="tc-fab" :class="{ on: activeCount > 0, dragging }" data-guide="task-center-btn" :title="t('任务中心')" :aria-label="t('任务中心')" :aria-expanded="open" @pointerdown="startBallDrag" @pointermove="moveBall" @pointerup="endBallDrag" @pointercancel="cancelBallDrag" @keydown.enter.prevent="toggleOpen" @keydown.space.prevent="toggleOpen">
       <Icon name="task" :size="15" />
       <span v-if="activeCount" class="tc-badge">{{ activeCount }}</span>
     </button>
+    <button v-else class="tc-edge" :class="hiddenSide" :style="edgeStyle" :title="t('任务中心')" :aria-label="t('任务中心')" @click="restoreBall">
+      <Icon name="task" :size="14" />
+      <span v-if="activeCount" class="tc-edge-badge">{{ activeCount }}</span>
+    </button>
+
     <Transition name="fade">
-      <div v-if="open" class="tc-panel card" role="dialog" :aria-label="t('任务中心')">
+      <div v-if="open && !hiddenSide" class="tc-panel card" :class="panelClass" role="dialog" :aria-label="t('任务中心')">
         <div class="tc-head">
+          <span class="tc-head-ic"><Icon name="task" :size="15" /></span>
           <b>{{ t('任务中心') }}</b>
           <span class="tc-count">{{ running.length }} {{ t('进行中') }}</span>
           <span class="tc-grow"></span>
-          <button class="btn sm ghost" v-if="finished.length" @click="dismissFinished">{{ t('收起完成') }}</button>
+          <button v-if="finished.length" class="btn sm ghost" @click="dismissFinished">{{ t('收起完成') }}</button>
+          <button class="icon-btn" :title="t('隐藏到侧边')" :aria-label="t('隐藏到侧边')" @click="hideToCurrentSide"><Icon name="chevron" :size="14" /></button>
           <button class="icon-btn" :title="t('关闭')" :aria-label="t('关闭')" @click="open = false"><Icon name="close" :size="14" /></button>
         </div>
         <div class="tc-tabs" role="tablist">
@@ -125,12 +193,23 @@ function iconOf(k) { return KIND_ICON[k] || 'task'; }
 </template>
 
 <style scoped>
-.task-center { position: fixed; right: var(--sp-3); bottom: 64px; z-index: 60; }
-.tc-fab { position: relative; display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: var(--r-pill); border: 1px solid var(--hairline); background: var(--surface); color: var(--text2); cursor: pointer; box-shadow: var(--shadow-sm); }
-.tc-fab.on { border-color: color-mix(in srgb, var(--accent-sky) 40%, var(--hairline)); color: var(--accent-sky); }
+/* ===== 6.2.0 悬浮球：可拖动 / 贴边隐藏 ===== */
+.task-center { position: fixed; z-index: 60; }
+.tc-fab { position: relative; display: flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: var(--r-pill); border: 1px solid color-mix(in srgb, var(--accent-sky) 22%, var(--hairline)); background: color-mix(in srgb, var(--surface) 88%, transparent); color: var(--text2); cursor: grab; touch-action: none; user-select: none; box-shadow: 0 8px 22px rgba(0,0,0,.22); backdrop-filter: blur(10px); transition: border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out); }
+.tc-fab:hover { color: var(--accent-sky); border-color: color-mix(in srgb, var(--accent-sky) 42%, var(--hairline)); }
+.tc-fab:active, .tc-fab.dragging { cursor: grabbing; box-shadow: 0 12px 30px rgba(0,0,0,.3); }
+.tc-fab.on { color: var(--accent-sky); border-color: color-mix(in srgb, var(--accent-sky) 46%, var(--hairline)); }
 .tc-badge { position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px; padding: 0 var(--sp-1); border-radius: var(--r-sm); background: var(--accent-sapphire); color: var(--on-sapphire); font-size: var(--fs-xs); line-height: 16px; text-align: center; }
+.tc-edge { position: fixed; z-index: 60; width: 26px; height: 52px; display: flex; align-items: center; justify-content: center; border: 0; background: color-mix(in srgb, var(--surface) 82%, transparent); color: var(--text2); cursor: pointer; box-shadow: 0 8px 22px rgba(0,0,0,.16); backdrop-filter: blur(10px); }
+.tc-edge.left { left: 64px; border-radius: 0 var(--r-lg) var(--r-lg) 0; border-right: 1px solid var(--hairline); }
+.tc-edge.right { right: 0; border-radius: var(--r-lg) 0 0 var(--r-lg); border-left: 1px solid var(--hairline); }
+.tc-edge:hover { color: var(--accent-sky); }
+.tc-edge-badge { position: absolute; top: 4px; right: 2px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: var(--r-sm); background: var(--accent-sapphire); color: var(--on-sapphire); font-size: 10px; line-height: 14px; }
 .tc-panel { position: absolute; right: 0; bottom: 46px; width: 380px; max-height: 60vh; overflow-y: auto; padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2); box-shadow: var(--shadow-lg); }
+.tc-panel.align-left { right: auto; left: 0; }
+.tc-panel.below { bottom: auto; top: 46px; }
 .tc-head { display: flex; align-items: center; gap: var(--sp-2); }
+.tc-head-ic { color: var(--accent-sky); display: grid; place-items: center; }
 .tc-count { color: var(--text3); font-size: var(--fs-xs); font-family: var(--font-num); }
 .tc-grow { flex: 1; }
 .tc-tabs { display: flex; gap: var(--sp-1); border-bottom: 1px solid var(--hairline); padding-bottom: var(--sp-1); }
