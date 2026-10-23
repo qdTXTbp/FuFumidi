@@ -583,14 +583,26 @@ async function exportMusicXML() {
 /* ---------------- PDF 导出（IPC printToPDF） ---------------- */
 async function exportPdf() {
   const b = window.fuBridge;
-  if (!b || !b.exportScorePdf) { toast(t('当前环境不支持 PDF 导出'), 'warn'); return; }
+  if (!isStaffLike.value) { toast(t('请先切换到五线谱或总谱模式'), 'warn'); return; }
+  const svgs = scoreEl.value ? Array.from(scoreEl.value.querySelectorAll('svg')) : [];
+  if (!svgs.length) { toast(t('请先渲染乐谱'), 'warn'); return; }
+  exporting.value = true;
   try {
-    const r = await b.exportScorePdf();
+    const base = (song.value ? song.value.name : 'score').replace(/\.[^.]+$/, '');
+    const pages = [];
+    for (const svg of svgs) {
+      const w = svg.clientWidth || svg.getBoundingClientRect().width || parseFloat(svg.getAttribute('width')) || 986;
+      const tileH = Math.max(240, Math.round(w * 1.414));
+      pages.push(...await rasterizeSvg(svg, 2, tileH));
+    }
+    if (!pages.length) { toast(t('没有可导出的乐谱'), 'warn'); return; }
+    if (!b || !b.exportScorePdfPages) { toast(t('当前环境不支持 PDF 导出'), 'warn'); return; }
+    const r = await b.exportScorePdfPages({ name: base, pages });
     if (r && r.ok) toast(t('已导出乐谱 PDF：') + r.path, 'ok');
-    else if (r && !r.canceled) toast(t('PDF 导出失败'), 'warn');
+    else if (r && !r.canceled) toast(t('PDF 导出失败：') + ((r && r.error) || ''), 'warn');
   } catch (e) {
     toast(t('PDF 导出失败：') + String(e.message || e), 'warn');
-  }
+  } finally { exporting.value = false; }
 }
 
 /* ---------------- 乐谱分屏（点击音符定位） ---------------- */
