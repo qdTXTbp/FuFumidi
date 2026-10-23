@@ -149,6 +149,30 @@ function deleteModel(m) {
   bridge.modelDelete(m.id).then(() => { refresh(); toast(t('已删除'), 'ok'); }).catch(() => toast(t('删除失败'), 'warn'));
 }
 
+/* ---------------- 运行时包（2026-10-21 统一下载/管理通道） ----------------
+ * hFT-Transformer / YourMT3+ / MIROS 都是「解包型」条目：主进程
+ * main/models.js 的 installUnpackEntry 统一处理（下载 → 校验 → 解包 →
+ * unpackMarker 验收 → 清理临时产物），界面这里只负责把形态说清楚。 */
+const RUNTIME_BUNDLE_IDS = ['hft_transformer', 'yourmt3', 'miros'];
+function isRuntimeBundle(m) {
+  return !!m && (RUNTIME_BUNDLE_IDS.indexOf(m.id) >= 0 || !!m.unpack);
+}
+/** 分卷描述：有 partSizes 按实际大小算，没有再只报片数（不再硬编码 25MB）。 */
+function partsText(m) {
+  const n = Number(m && m.parts) || 0;
+  if (!n) return '';
+  const sizes = (m && m.partSizes) || [];
+  if (sizes.length === n) {
+    const each = sizes[0];
+    // 末片通常小一截，均片大小时给范围
+    const min = Math.min.apply(null, sizes);
+    const max = Math.max.apply(null, sizes);
+    const one = human(min);
+    return n + ' × ~' + one + (max !== min ? '（合计 ' + human(sizes.reduce((a, b) => a + b, 0)) + '）' : '');
+  }
+  return String(n);
+}
+
 /* ---------------- 下载详情抽屉（下载进度通知已移到全局顶部） ---------------- */
 function closeDetail() {
   detail.value = null;
@@ -289,7 +313,11 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
               <div class="meta-row"><span class="meta-k">{{ t('分类') }}</span><span>{{ kindLabel(detail.kind) }}</span></div>
               <div class="meta-row"><span class="meta-k">{{ t('大小') }}</span><span>{{ human(detail.size) }}</span></div>
               <div v-if="detail.repo" class="meta-row"><span class="meta-k">{{ t('来源') }}</span><span class="mono">{{ detail.repo }}</span></div>
-              <div v-if="detail.parts" class="meta-row"><span class="meta-k">{{ t('分卷') }}</span><span>{{ detail.parts }} × 25MB</span></div>
+              <!-- ★ 2026-10-21：分卷大小不再硬编码 25MB —— MIROS 的分片是 ~900MB/片，
+                   写死会让用户以为下 6×25MB。有 partSizes 就按实际算，没有再只报片数。 -->
+              <div v-if="detail.parts" class="meta-row"><span class="meta-k">{{ t('分卷') }}</span><span>{{ partsText(detail) }}</span></div>
+              <!-- 运行时包（hFT / YourMT3+ / MIROS）：解包型条目，下的是「运行时 + 权重」一整套 -->
+              <div v-if="isRuntimeBundle(detail)" class="meta-row"><span class="meta-k">{{ t('类型') }}</span><span>{{ t('运行时包（含依赖 + 权重，解包后即用）') }}</span></div>
             </div>
             <p class="vm-note">{{ detail.note }}</p>
 

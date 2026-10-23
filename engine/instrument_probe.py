@@ -107,13 +107,15 @@ def parse_mode(raw):
         return ("none", [])
     if len(groups) == 1 and groups[0].lower() in ("none", "off", "free", "-"):
         return ("none", [])
-    # 'probe'：整曲探测后硬约束；
-    # 'probe_segments'：按 30/60s 分段探测、逐段硬约束（实验）。
-    # 旧值 'auto'/'smart' 兼容为整曲 probe。
-    if len(groups) == 1 and groups[0].lower() in ("probe", "auto", "smart"):
+    # 'auto'/'smart' 是已退役的档（见 docstring）：按"不限定"处理，
+    # 绝不能把它们当组名送给 forbidden_token_ids（会报非法乐器）。
+    if len(groups) == 1 and groups[0].lower() in ("auto", "smart"):
+        return ("none", [])
+    # 'probe'：整曲探测后硬约束（引擎/CLI 能力，界面不暴露这一档）。
+    # ★ 2026-10-21：'probe_segments' / 'segments'（分段探测）已移除 —— 它本身就是又一次
+    #   分块，A/B 见 docs/plans/2026-10-20-segment-probe-ab.md；旧值按整曲探测兼容。
+    if len(groups) == 1 and groups[0].lower() in ("probe", "probe_segments", "segments"):
         return ("probe", [])
-    if len(groups) == 1 and groups[0].lower() in ("probe_segments", "segments"):
-        return ("probe_segments", [])
     return ("limit", groups)
 
 

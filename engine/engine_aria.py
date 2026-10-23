@@ -102,15 +102,8 @@ def transcribe_aria(audio_path, output_midi, params=None, log_cb=None,
         # 设备为本机 GPU 不可用时，用环境变量强制子进程看不见显卡 ——
         # aria-amt 的 CLI 没有设备开关，这是唯一可靠的「只用 CPU」手段。
         env = dict(os.environ)
-        # 识别片段长度（秒 → 毫秒）；不设置时包装器不改常量
-        try:
-            import segment_options as _so
-            _ms = _so.aria_len_ms(params.get("segment_sec"))
-            if _ms:
-                env["FUFUMIDI_ARIA_SEGMENT_MS"] = str(int(_ms))
-                _log(log_cb, "Aria-AMT 识别片段长度：%.1fs" % (float(_ms) / 1000.0))
-        except Exception:
-            pass
+        # ★ 2026-10-21：「识别片段长度」已移除（分块转录，块间质量参差不齐）；
+        #   Aria-AMT 一律用上游默认片段长度（包装器不再改 LEN_MS 常量）。
         if not device.startswith("cuda"):
             env["CUDA_VISIBLE_DEVICES"] = ""
             env["FUFUMIDI_FORCE_CPU"] = "1"

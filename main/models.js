@@ -424,6 +424,12 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       } else if (m.type === 'link') {
         // 外部门户：没有本地落点，永远显示「未安装」，卡片上给「打开来源」
         exists = false; size = 0;
+      } else if (m.unpack) {
+        // ★ 解包型（hFT / YourMT3+ / MIROS / hnsep）：统一按 unpackMarker 判「装没装好」。
+        //   以前这里和普通条目混用 `dirSize >= minSize` —— 半截解包、错版结构都算「已安装」，
+        //   用户一点开始才在引擎里报「未找到运行时」（这种不一致不报错，最难查）。
+        const st = unpackEntryState(m, dest);
+        exists = st.exists; size = st.size;
       } else {
         exists = dirSize >= m.minSize; size = dirSize;
       }
@@ -480,13 +486,10 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       if (MODEL_REGISTRY[id]) p = path.join(modelsDir(), MODEL_REGISTRY[id].dest);
       else if (_msstRegistry[id]) p = path.join(modelsDir(), _msstRegistry[id].dest);
       if (!p || !fs.existsSync(p)) return { ok: false, error: 'not found' };
-      // 目录型（MuScriptor/Aria 分卷或整仓）按目录递归删除；单文件直接删
-      const st = fs.statSync(p);
-      if (st.isDirectory()) fs.rmSync(p, { recursive: true, force: true });
-      else fs.unlinkSync(p);
-      // 一并清理可能存在的临时内容
-      try { fs.rmSync(p + '.tmp', { recursive: true, force: true }); } catch (_) {}
-      try { fs.rmSync(p + '.part', { recursive: true, force: true }); } catch (_) {}
+      // ★ 统一走 removeModelArtifacts：dest 之外连 `.oudep`（压缩包，MIROS 一个 5 GB）、
+      //   `.parts`（分片目录）、`.tmp` / `.part`（半成品）一起清。
+      //   以前失败一次下载就留几个 GB，而模型清单仍显示「未安装」，用户手动删目录也清不掉。
+      removeModelArtifacts(p);
       return { ok: true };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
@@ -954,6 +957,166 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     return { ok: true, path: destDir, size: finalSize };
   }
 
+  /* ==================================================================
+   * 可选引擎「运行时包」的统一安装通道（2026-10-21）
+   * ==================================================================
+   * 背景：hFT-Transformer / YourMT3+ / MIROS（以及 hnsep）都是「下一个压缩包、
+   * 解开才算装好」的形态，此前每条目在 model:download 里各写一遍：
+   *   · 分片分支（MIROS）解包后**不校验 unpackMarker** —— 包结构不对也报成功；
+   *   · 失败时分片目录 `.parts` 与压缩包 `.oudep` 不清理，一次失败留几个 GB；
+   *   · 进度事件字段不统一（有的带 segmented / speed，有的不带）。
+   * 这里收敛成**一个**函数，四条条目全走它。契约：
+   *   dest 是目录；压缩包与分片都是临时的；装好的唯一判据是 unpackMarker。
+   * ================================================================== */
+
+  /** 删除一个模型条目在磁盘上的全部痕迹（dest + 各类临时产物）。 */
+  function removeModelArtifacts(p) {
+    const st = (() => { try { return fs.statSync(p); } catch (e) { return null; } })();
+    if (st && st.isDirectory()) fs.rmSync(p, { recursive: true, force: true });
+    else if (st) fs.unlinkSync(p);
+    // ★ 一并清掉临时产物：`.oudep`（压缩包，MIROS 一个就是 5 GB）、`.parts`（分片目录）、
+    //   `.tmp` / `.part`（半成品）。以前只删 `.tmp`/`.part`，失败一次就留几个 GB 且
+    //   模型清单仍显示「未安装」，用户手动删目录也清不掉。
+    for (const suffix of ['.oudep', '.parts', '.tmp', '.part']) {
+      try { fs.rmSync(p + suffix, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  /** 解包型条目「装没装好」的统一判据：marker 在 → 装好；否则看目录体积兜底。 */
+  function unpackEntryState(m, dest) {
+    if (m.unpackMarker && fs.existsSync(path.join(dest, m.unpackMarker))) {
+      const size = (() => { try { let s = 0; const walk = (q) => { const st = fs.statSync(q); if (st.isFile()) s += st.size; else for (const f of fs.readdirSync(q)) { if (f === '.parts') continue; walk(path.join(q, f)); } }; walk(dest); return s; } catch (e) { return 0; } })();
+      return { exists: true, size };
+    }
+    // 没有 marker 的老条目退回到体积判据（保持旧行为）
+    const size = (() => { try { let s = 0; const walk = (q) => { const st = fs.statSync(q); if (st.isFile()) s += st.size; else for (const f of fs.readdirSync(q)) { if (f === '.parts') continue; walk(path.join(q, f)); } }; walk(dest); return s; } catch (e) { return 0; } })();
+    return { exists: size >= (m.minSize || 0), size };
+  }
+
+  /**
+   * 安装一个「解包型」条目。支持两种来源：
+   *   spec.parts  —— 分片包（CNB/GitHub 单资产上限 2 GiB，按序拼接后校验/解包）
+   *   spec.url    —— 单文件（mirrorUrls 负责叠加 gh 镜像与 CNB 镜像）
+   * 两条来源共用同一套：磁盘预检 → 下载 → 体积/SHA256 校验 → 安全解包 →
+   * **marker 验收** → 清理临时产物。任何一步失败都把临时产物清干净再抛。
+   */
+  async function installUnpackEntry(spec, win, ctrl) {
+    const destDir = path.join(modelsDir(), spec.dest);
+    const marker = spec.unpackMarker ? path.join(destDir, spec.unpackMarker) : '';
+    const send = (p) => { if (win && !win.isDestroyed()) win.webContents.send('model:progress', Object.assign({ id: spec.id }, p)); };
+    const label = spec.name || spec.id;
+    if (marker && fs.existsSync(marker)) {
+      send({ percent: 100, done: true, text: label + ' 已就绪' });
+      return { ok: true, path: destDir, existed: true };
+    }
+    _modelCancels.delete(spec.id); _modelPause.delete(spec.id);
+    _modelAborts.set(spec.id, ctrl);
+    fs.mkdirSync(destDir, { recursive: true });
+    const archive = destDir + '.oudep';   // 解包后删掉，不留双份
+    const partsDir = destDir + '.parts';
+    try {
+      if (spec.parts && spec.parts.length) {
+        // ---- 分片包：逐片下载 → 按序拼接 → 校验 → 解包 ----
+        fs.mkdirSync(partsDir, { recursive: true });
+        const partPaths = [];
+        let received = 0;
+        for (let i = 0; i < spec.parts.length; i++) {
+          const pp = path.join(partsDir, String(i).padStart(3, '0') + '.part');
+          partPaths.push(pp);
+          const expect = (spec.partSizes && spec.partSizes[i]) || 0;
+          if (fs.existsSync(pp) && (!expect || fs.statSync(pp).size === expect)) { received += expect; continue; }
+          send({ received, total: spec.size || 0, percent: received && spec.size ? Math.round(received / spec.size * 100) : 0, done: false, text: label + ' 分片 ' + (i + 1) + '/' + spec.parts.length });
+          await FastDL.downloadFast({
+            urls: [spec.parts[i]],
+            dest: pp,
+            minSize: expect || 0,
+            headers: { 'user-agent': 'FuFumidi' },
+            isUserAbort: guardOf(spec.id),
+            ctrl,
+            expectSize: expect || 0,
+            label: label + ' ' + (i + 1) + '/' + spec.parts.length,
+            onProgress: (p2) => {
+              if (!win || win.isDestroyed()) return;
+              const total = spec.size || 0;
+              const got = received + (p2.received || 0);
+              send({
+                id: spec.id, received: got, total,
+                percent: total ? Math.min(99, Math.round(got / total * 100)) : (p2.percent || 0),
+                done: false, speed: p2.speed || 0,
+                text: label + ' 分片 ' + (i + 1) + '/' + spec.parts.length,
+              });
+            },
+          });
+          received += expect || fs.statSync(pp).size;
+        }
+        send({ received, total: spec.size || received, percent: 99, done: false, text: label + ' 合并分片…' });
+        const outStream = fs.createWriteStream(archive);
+        for (const pp of partPaths) {
+          await new Promise((res, rej) => {
+            const rs = fs.createReadStream(pp);
+            rs.on('error', rej);
+            rs.on('end', res);
+            rs.pipe(outStream, { end: false });
+          });
+        }
+        await new Promise((res, rej) => outStream.end(err => err ? rej(err) : res()));
+        if (spec.sha256) {
+          const hash = await sha256File(archive);
+          if (String(hash).toLowerCase() !== String(spec.sha256).toLowerCase()) {
+            throw new Error('SHA256 校验失败：' + String(hash).slice(0, 16) + '…（期望 ' + String(spec.sha256).slice(0, 16) + '…）。文件已丢弃，请重试或换下载源。');
+          }
+        }
+      } else {
+        // ---- 单文件：mirrorUrls 叠加镜像，FastDL 负责测速/分段/续传/看门狗 ----
+        const urls = mirrorUrls(spec);
+        if (!urls.length) throw new Error('该模型没有可用的下载地址');
+        FastDL.checkDiskSpace(archive, spec.size || spec.minSize || 0);
+        await FastDL.downloadFast({
+          urls,
+          dest: archive,
+          minSize: spec.minSize,
+          headers: { 'user-agent': 'FuFumidi' },
+          isUserAbort: guardOf(spec.id),
+          ctrl,
+          expectSize: spec.size || 0,
+          label,
+          onProgress: (p) => {
+            if (!win || win.isDestroyed()) return;
+            send({
+              id: spec.id, received: p.received || 0, total: p.total || spec.size || 0,
+              percent: p.percent || 0, done: false, speed: p.speed || 0,
+              segmented: p.segmented || 1, text: p.text || '',
+            });
+          },
+        });
+        if (spec.sha256) {
+          const hash = await sha256File(archive);
+          if (hash !== spec.sha256) {
+            throw new Error('SHA256 校验失败：' + hash + '（文件已丢弃，请重试或换源）');
+          }
+        }
+      }
+      send({ received: spec.size || 0, total: spec.size || 0, percent: 99, done: false, text: label + ' 解压…' });
+      const zsafe = safeExtractAllTo(archive, destDir);
+      if (!zsafe.ok) throw new Error('压缩包安全校验未通过：' + zsafe.error);
+      // ★ marker 验收（分片分支以前漏了这一步：包结构不对也报"安装成功"）
+      if (marker && !fs.existsSync(marker)) {
+        throw new Error('解包后没找到 ' + spec.unpackMarker + '（包结构不对，请重试或换源）');
+      }
+      const finalSize = (() => { try { let s = 0; const walk = (q) => { const st = fs.statSync(q); if (st.isFile()) s += st.size; else for (const f of fs.readdirSync(q)) walk(path.join(q, f)); }; walk(destDir); return s; } catch (e) { return spec.size || 0; } })();
+      if (finalSize < (spec.minSize || 0)) {
+        throw new Error('解包后体积不足：' + finalSize + '/' + spec.minSize + ' bytes');
+      }
+      send({ received: finalSize, total: finalSize, percent: 100, done: true, speed: 0, text: label + ' 就绪' });
+      return { ok: true, path: destDir, size: finalSize, unpacked: true };
+    } finally {
+      // 成功与失败都清临时产物：压缩包不留双份，分片目录不留几个 GB
+      try { fs.rmSync(archive, { force: true }); } catch (_) {}
+      try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) {}
+      try { FastDL.cleanSegments(archive); } catch (_) {}
+    }
+  }
+
   ipcMain.handle('model:download', async (evt, id, channel) => {
     const spec = MODEL_REGISTRY[id] || _msstRegistry[id];
     if (!spec || !spec.downloadable) return { ok: false, error: 'unknown model: ' + id };
@@ -1007,110 +1170,14 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         _modelCancels.delete(id); _modelPause.delete(id); _activeDownloads.delete(id);
       }
     }
-    // ---- 解包型（.oudep：下下来是压缩包，要解开才算装好）----
-    //    与单文件分支的区别：dest 是**目录**，压缩包是临时的，装好的判据是 unpackMarker。
+    // ---- 解包型（运行时包：下下来是压缩包，解开 + marker 验收才算装好）----
+    //    统一走 installUnpackEntry：hFT-Transformer / YourMT3+ / MIROS / hnsep 全用它。
+    //    与单文件分支的区别：dest 是**目录**，压缩包与分片都是临时的。
     if (spec.unpack) {
-      const destDir = path.join(modelsDir(), spec.dest);
-      const marker = path.join(destDir, spec.unpackMarker || '');
-      if (spec.unpackMarker && fs.existsSync(marker)) {
-        _activeDownloads.delete(id);
-        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, percent: 100, done: true });
-        return { ok: true, path: destDir, existed: true };
-      }
       _modelCancels.delete(id); _modelPause.delete(id);
       const uctrl = new AbortController(); _modelAborts.set(id, uctrl);
-      const archive = destDir + '.oudep';   // 解包后删掉，不留双份
       try {
-        fs.mkdirSync(destDir, { recursive: true });
-        if (spec.parts && spec.parts.length) {
-          // 分片包：CNB/GitHub 单资产上限 2GiB，下载后按顺序拼接再校验/解包
-          const partsDir = destDir + '.parts';
-          fs.mkdirSync(partsDir, { recursive: true });
-          const partPaths = [];
-          for (let i = 0; i < spec.parts.length; i++) {
-            const pp = path.join(partsDir, String(i).padStart(3, '0') + '.part');
-            partPaths.push(pp);
-            const expect = (spec.partSizes && spec.partSizes[i]) || 0;
-            if (fs.existsSync(pp) && (!expect || fs.statSync(pp).size === expect)) continue;
-            await FastDL.downloadFast({
-              urls: [spec.parts[i]],
-              dest: pp,
-              minSize: expect || 0,
-              headers: { 'user-agent': 'FuFumidi' },
-              isUserAbort: guardOf(id),
-              ctrl: uctrl,
-              expectSize: expect || 0,
-              label: (spec.name || id) + ' ' + (i + 1) + '/' + spec.parts.length,
-              onProgress: (p2) => {
-                if (!win || win.isDestroyed()) return;
-                win.webContents.send('model:progress', {
-                  id, received: p2.received || 0, total: p2.total || 0,
-                  percent: p2.percent || 0, done: !!p2.done, speed: p2.speed || 0,
-                  text: (spec.name || id) + ' 分片 ' + (i + 1) + '/' + spec.parts.length,
-                });
-              },
-            });
-          }
-          const outStream = fs.createWriteStream(archive);
-          for (const pp of partPaths) {
-            await new Promise((res, rej) => {
-              const rs = fs.createReadStream(pp);
-              rs.on('error', rej);
-              rs.on('end', res);
-              rs.pipe(outStream, { end: false });
-            });
-          }
-          await new Promise((res, rej) => outStream.end(err => err ? rej(err) : res()));
-          if (spec.sha256) {
-            const hash = await sha256File(archive);
-            if (String(hash).toLowerCase() !== String(spec.sha256).toLowerCase()) {
-              throw new Error('分片拼接后 SHA256 不匹配');
-            }
-          }
-          const zsafe = safeExtractAllTo(archive, destDir);
-          if (!zsafe.ok) throw new Error('压缩包安全校验未通过：' + zsafe.error);
-          try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) {}
-          try { fs.rmSync(archive, { force: true }); } catch (_) {}
-          sendP({ received: spec.size || 0, total: spec.size || 0, percent: 100, done: true });
-          return { ok: true, path: destDir, size: spec.size || 0 };
-        }
-        const urls = mirrorUrls(spec);
-        if (!urls.length) throw new Error('该模型没有可用的下载地址');
-        FastDL.checkDiskSpace(archive, spec.size || spec.minSize || 0);
-        const r = await FastDL.downloadFast({
-          urls,
-          dest: archive,
-          minSize: spec.minSize,
-          headers: { 'user-agent': 'FuFumidi' },
-          isUserAbort: guardOf(id),
-          ctrl: uctrl,
-          expectSize: spec.size || 0,
-          label: spec.name || id,
-          onProgress: (p) => {
-            if (!win || win.isDestroyed()) return;
-            win.webContents.send('model:progress', {
-              id, received: p.received || 0, total: p.total || spec.size || 0,
-              percent: p.percent || 0, done: !!p.done, speed: p.speed || 0,
-              segmented: p.segmented || 1, text: p.text || '',
-            });
-          },
-        });
-        if (spec.sha256) {
-          const hash = await sha256File(archive);
-          if (hash !== spec.sha256) {
-            try { fs.rmSync(archive, { force: true }); } catch (_) {}
-            try { FastDL.cleanSegments(archive); } catch (_) {}
-            throw new Error('SHA256 校验失败：' + hash + '（文件已丢弃，请重试或换源）');
-          }
-        }
-        extractLocalArchive(archive, destDir);
-        try { fs.rmSync(archive, { force: true }); } catch (_) {}
-        try { FastDL.cleanSegments(archive); } catch (_) {}
-        if (spec.unpackMarker && !fs.existsSync(marker)) {
-          throw new Error('解包后没找到 ' + spec.unpackMarker + '（包结构不对，请重试或换源）');
-        }
-        if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, received: r.size, total: r.size, percent: 100, done: true, speed: 0 });
-        return { ok: true, path: destDir, size: r.size, unpacked: true };
+        return await installUnpackEntry(spec, win, uctrl);
       } catch (e) {
         const rawMsg = String((e && e.message) || e);
         const paused = _modelPause.has(id);
@@ -1118,11 +1185,12 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         const msg = (e && e.cancelled) || /aborted/i.test(rawMsg)
           ? (paused ? '已暂停（断点已保留，继续时会接着下）' : '下载中断（断点已保留，可稍后重试续传）')
           : rawMsg;
-        console.log('[model] 解包型下载失败：' + rawMsg);
+        console.log('[model] 运行时包安装失败：' + rawMsg);
         if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id, error: msg, canceled, paused });
         return { ok: false, error: msg, canceled, paused };
       } finally {
-        _modelCancels.delete(id); _modelAborts.delete(id); _modelPause.delete(id); _activeDownloads.delete(id);
+        _modelAborts.delete(id);
+        _modelCancels.delete(id); _modelPause.delete(id); _activeDownloads.delete(id);
       }
     }
 

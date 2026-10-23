@@ -40,10 +40,10 @@ void (async () => {
 })();
 const perf = ref('quality');             // quality | balanced | fast
 const perfHint = ref('');
-/* 识别片段长度（秒）：每种模型一次喂给模型识别的音频长度。
-   0 = 跟随模型默认（各模型默认不同：basic-pitch 内置窗约 2s、MuScriptor 5s、
-   piano-transcription 10s、Aria-AMT 30s、Transkun 由模型配置决定）。 */
-const segmentSec = ref(0);
+/* ★ 2026-10-21：「识别片段长度」（分块转录）已整体移除 —— 实测按固定长度切片再合并，
+   块与块之间质量参差不齐（边界重复音/换音色/延音被切断）。现在所有模型一律用
+   **模型原生块长**、整曲一次喂入；模型内部固有的取窗（basic-pitch 2s 帧、
+   MuScriptor 5s 块等）属于架构，不是可调功能。 */
 /* 转录前降噪：默认 off（保持旧输出完全一致）。选项来自引擎 audio_chain：
    off / light（谱减）/ strong（UVR-DeNoise 模型，需资源中心下载）。
    2026-10-15 实测降噪在部分素材会增加噪声引起的假音符，所以默认关、并写明代价。 */
@@ -56,14 +56,6 @@ function setMemoryMode(v) {
   memoryMode.value = ['auto', 'low', 'allow'].includes(v) ? v : 'auto';
   try { localStorage.setItem('fufumidi_memory_mode', memoryMode.value); } catch (e) {}
 }
-/** 各模型推荐片段长度（= 训练块长；见各引擎源码/配置） */
-const SEG_RECOMMEND = computed(() => {
-  if (mode.value === 'universal') return umodel.value === 'basic' ? 0 : 5;
-  if (pmodel.value === 'aria') return 30;
-  if (pmodel.value === 'transkun') return 16;
-  if (pmodel.value === 'hft') return 0;
-  return 10;
-});
 const bassBoost = ref(false);            // 低音增强（仅 basic 子模型）：关闭 melodia trick 以保留低音声部
 // 多条弯音曲线（仅 basic 子模型）：basic-pitch 唯一没转发的用户可见参数。
 // 开了以后同一音符可以挂多条弯音（颤音/滑音），**会真的落进导出的 MIDI**。
@@ -87,10 +79,12 @@ const msTemp = ref(1.0);                 // 采样温度（1.0 = 不传）
 const msCfg = ref(1.0);                  // 引导系数（1.0 = 不传）
 const msBeam = ref(1);                   // 束搜索宽度（1 = 不传）
 const msPrelude = ref(true);             // 跨块延音缝合（默认开；关掉才传 false＝不缝合）
-// MuScriptor 乐器组：none=不限定（默认）；limit=手动硬约束；probe_segments=按段自动探测并约束
+// MuScriptor 乐器组：none=不限定（默认）；limit=手动硬约束
+// ★ 2026-10-21：「自动探测（分段）」档已移除 —— 分段探测本身又是一次分块，
+//   A/B 见 docs/plans/2026-10-20-segment-probe-ab.md（音色切换 4 次、边界重复音 1 个、
+//   耗时 +3.6s，F1 还低于全局探测）。
 const msMode = ref('none');
 const msGroups = ref(['voice', 'drums']);
-const msProbeSegSec = ref(60);
 function toggleMsGroup(id) {
   const i = msGroups.value.indexOf(id);
   if (i >= 0) { if (msGroups.value.length > 1) msGroups.value.splice(i, 1); return; }
@@ -113,7 +107,6 @@ const MS_GROUPS = [
 ];
 const msInstrValue = computed(() => {
   if (msMode.value === 'limit') return msGroups.value.join(',');
-  if (msMode.value === 'probe_segments') return 'probe_segments';
   return 'none';
 });
 // ② 计算精度：默认 fp32（不传）—— bf16 改数值精度、属影响质量的开关，默认关。
@@ -601,27 +594,27 @@ const WEB_BUILTIN_PRESETS = () => {
     model: 'basic', onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
     melodia: true, min_freq: 0, max_freq: 0,
     beat_grid: true, tempo: 0, perf: 'quality',
-    auto_bpm: false, denoise_mode: 'off', segment_sec: 0,
+    auto_bpm: false, denoise_mode: 'off',
   };
   const piano = {
     onset_threshold: 0.3, frame_threshold: 0.1, min_note_ms: 60, merge_gap_ms: 30,
     include_pedal: true, perf: 'quality',
-    auto_bpm: false, denoise_mode: 'off', segment_sec: 10,
+    auto_bpm: false, denoise_mode: 'off',
   };
   return [
     { name: 'Basic Pitch · 最优', mode: 'universal', params: { ...basic } },
     { name: 'YourMT3+ · 最优', mode: 'universal', params: { ...basic,
-      model: 'yourmt3', segment_sec: 0 } },
+      model: 'yourmt3' } },
     { name: 'MIROS · 最优', mode: 'universal', params: { ...basic,
-      model: 'miros', segment_sec: 0 } },
+      model: 'miros' } },
     { name: 'MuScriptor · 最优', mode: 'universal', params: { ...basic,
       model: 'muscriptor', model_size: 'medium',
       temperature: 1.0, cfg_coef: 1.0, beam_size: 1, prelude_forcing: true,
-      precision: 'fp32', segment_sec: 5 } },
-    { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt', segment_sec: 10 } },
-    { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria', segment_sec: 30 } },
-    { name: 'Transkun · 最优', mode: 'piano', params: { ...piano, model: 'transkun', segment_sec: 16 } },
-    { name: 'hFT-Transformer · 最优', mode: 'piano', params: { ...piano, model: 'hft', segment_sec: 0 } },
+      precision: 'fp32' } },
+    { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt' } },
+    { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria' } },
+    { name: 'Transkun · 最优', mode: 'piano', params: { ...piano, model: 'transkun' } },
+    { name: 'hFT-Transformer · 最优', mode: 'piano', params: { ...piano, model: 'hft' } },
     { name: '分离 · 最优', mode: 'separate', params: {
       onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
       include_drums: true, stem_format: 'wav', perf: 'quality',
@@ -1196,7 +1189,6 @@ function collectPresetParams() {
     perf: perf.value,
     auto_bpm: autoBpm.value,
     tempo: iv(exportTempo.value),
-    segment_sec: Math.max(0, iv(segmentSec.value)),
     denoise_mode: denoiseMode.value || 'off',
   };
   if (mode.value === 'universal') {
@@ -1212,7 +1204,6 @@ function collectPresetParams() {
     if (umodel.value === 'muscriptor') Object.assign(p, {
       model_size: msSize.value,
       muscriptor_instruments: msInstrValue.value,
-      probe_segment_sec: iv(msProbeSegSec.value),
       temperature: Number(msTemp.value), cfg_coef: Number(msCfg.value),
       beam_size: iv(msBeam.value), prelude_forcing: msPrelude.value,
       precision: msPrec.value,
@@ -1296,16 +1287,12 @@ function applyPresetParams(p, opts) {
   if (has('muscriptor_instruments') && typeof pr.muscriptor_instruments === 'string') {
     const v = pr.muscriptor_instruments.trim();
     if (!v || v === 'none') msMode.value = 'none';
-    else if (v === 'probe_segments' || v === 'segments') msMode.value = 'probe_segments';
     else {
       const groups = v.split(',').map((s) => s.trim()).filter((g) => MS_GROUPS.some((x) => x.id === g));
       if (groups.length) { msGroups.value = groups; msMode.value = 'limit'; }
     }
   }
-  if (has('probe_segment_sec')) msProbeSegSec.value = clamp(Math.round(numOr('probe_segment_sec', 60)), 20, 120);
   if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
-  // 识别片段长度（0 = 模型默认）；老预设没有这个键时保留当前值
-  if (has('segment_sec')) segmentSec.value = clamp(Math.round(numOr('segment_sec', 0)), 0, 120);
   // 降噪档位：只认引擎支持的三个值；老预设没有这个键时保持当前值（默认 off）
   if (has('denoise_mode') && ['off', 'light', 'strong'].indexOf(String(pr.denoise_mode)) >= 0) {
     denoiseMode.value = String(pr.denoise_mode);
@@ -1476,8 +1463,7 @@ function collectParams() {
       cfg.model_size = msSize.value;
       cfg.beat_grid = beatGrid.value;
       cfg.muscriptor_instruments = msInstrValue.value;
-      if (msMode.value === 'probe_segments') cfg.probe_segment_sec = Number(msProbeSegSec.value) || 60;
-      // 乐器组约束：'auto' / '人声,鼓' 这样的组名列表 / 空。
+      // 乐器组约束：'none' / '人声,鼓' 这样的组名列表。
       // 注意这条链路有三跳（渲染端 → 主进程 worker 请求体 → 引擎），少任何一跳界面选了都不生效。
       // ★ 2026-10-14 更正：这段注释原先描述的是**已被移除**的批量推理行为
       //   （`bca0a55`「移除批量推理功能」）。现在：
@@ -1511,8 +1497,6 @@ function collectParams() {
       if (msPrec.value && msPrec.value !== 'fp32') cfg.precision = msPrec.value;
     }
   }
-  // 识别片段长度：0 = 各模型默认，不传；>0 时所有转录模型共用同一个键（引擎按模型映射）
-  if (mode.value !== 'separate' && Number(segmentSec.value) > 0) cfg.segment_sec = Number(segmentSec.value);
   // 转录前降噪（默认 off = 旧行为；只有显式选择才发送）
   if (mode.value !== 'separate' && denoiseMode.value && denoiseMode.value !== 'off') cfg.denoise_mode = denoiseMode.value;
   if (mode.value !== 'separate' && memoryMode.value) cfg.memory_mode = memoryMode.value;
@@ -2270,11 +2254,6 @@ onBeforeUnmount(() => {
                  实测 30 秒样例 71 → 8037 个音符、3 分钟样例 47967 个 / 517 秒。 -->
 
           </div>
-          <div class="tr-slider" v-if="mode !== 'separate'" data-guide="segment-sec">
-            <label>{{ t('识别片段长度') }}<b>{{ segmentSec > 0 ? segmentSec + 's' : t('模型默认') }} · {{ t('推荐') }}{{ SEG_RECOMMEND > 0 ? ' ' + SEG_RECOMMEND + 's' : ' ' + t('不分段') }}</b></label>
-            <NumSlider v-model="segmentSec" :min="0" :max="60" :step="1" unit="s" />
-
-          </div>
           <div class="tr-switch" v-if="mode !== 'separate'" data-guide="memory-mode">
             <label>
               <span><b>{{ t('显存策略') }}</b></span>
@@ -2360,13 +2339,8 @@ onBeforeUnmount(() => {
               <select v-model="msMode" class="select-input" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
                 <option value="none">{{ t('不限定') }}</option>
                 <option value="limit">{{ t('限定乐器组') }}</option>
-                <option value="probe_segments">{{ t('自动探测（分段）') }}</option>
               </select>
             </label>
-          </div>
-          <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe_segments'" class="tr-slider">
-            <label>{{ t('探测段长') }}<b>{{ msProbeSegSec }}s</b></label>
-            <NumSlider v-model="msProbeSegSec" :min="20" :max="120" :step="10" unit="s" :aria-label="t('探测段长')" />
           </div>
           <div class="tr-switch" style="display:block" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'limit'">
             <div style="display:flex;flex-wrap:wrap;gap:var(--sp-2);max-height:150px;overflow:auto;padding:2px 0">
