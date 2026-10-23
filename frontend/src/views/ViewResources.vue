@@ -10,14 +10,15 @@ import Icon from '../components/Icon.vue';
 import ViewModels from './ViewModels.vue';
 import ViewSoundfonts from './ViewSoundfonts.vue';
 import StoragePanel from '../components/StoragePanel.vue';
+import PluginCenter from './PluginCenter.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
 import { t } from '../core/i18n.js';
 
 const route = useRoute();
 const router = useRouter();
-const rcTabs = ['model', 'soundfonts', 'resources', 'storage'];
-const rcTab = ref(rcTabs.includes(String(route.query.tab || '')) ? String(route.query.tab) : 'model'); // 'model' | 'soundfonts' | 'resources'
+const rcTabs = ['model', 'soundfonts', 'resources', 'storage', 'plugins'];
+const rcTab = ref(rcTabs.includes(String(route.query.tab || '')) ? String(route.query.tab) : 'model'); // 'model' | 'soundfonts' | 'resources' | 'storage' | 'plugins'
 function selectRc(id) {
   rcTab.value = id;
   router.replace({ query: { ...route.query, tab: id } });
@@ -605,7 +606,7 @@ onBeforeUnmount(() => {
       <div class="page-ic"><Icon name="box" :size="20" /></div>
       <div class="grow">
         <div class="page-title">{{ t('资源中心') }}</div>
-        <div class="page-sub">{{ t('模型管理 · 音色工坊 · 资源管理') }}</div>
+        <div class="page-sub">{{ t('模型管理 · 音色工坊 · 资源管理 · 插件中心') }}</div>
       </div>
     </div>
 
@@ -614,6 +615,7 @@ onBeforeUnmount(() => {
       <button class="rc-tab" :class="{ on: rcTab === 'soundfonts' }" @click="selectRc('soundfonts')">{{ t('音色工坊') }}</button>
       <button class="rc-tab" :class="{ on: rcTab === 'resources' }" @click="selectRc('resources')">{{ t('资源管理') }}</button>
       <button class="rc-tab" :class="{ on: rcTab === 'storage' }" @click="selectRc('storage')" data-guide="rc-storage-tab">{{ t('存储治理') }}</button>
+      <button class="rc-tab" :class="{ on: rcTab === 'plugins' }" @click="selectRc('plugins')" data-guide="rc-plugins-tab"><Icon name="extension" :size="14" /> {{ t('插件中心') }}</button>
     </div>
 
     <Transition name="group-tab" mode="out-in">
@@ -667,6 +669,10 @@ onBeforeUnmount(() => {
 
     <template v-else-if="rcTab === 'storage'">
       <StoragePanel />
+    </template>
+
+    <template v-else-if="rcTab === 'plugins'">
+      <PluginCenter />
     </template>
 
     <template v-else>
@@ -949,7 +955,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .rc-tabs { display: flex; gap: var(--sp-2); margin-bottom: 14px; flex-wrap: wrap; }
-.rc-tab { border: 1px solid var(--hairline); background: var(--canvas); color: var(--steel); padding: 7px 14px; border-radius: var(--r-pill); font-size: var(--fs-md); cursor: pointer; transition: background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out), opacity var(--motion-fast) var(--ease-out); white-space: nowrap; }
+.rc-tab { display: inline-flex; align-items: center; gap: var(--sp-1); border: 1px solid var(--hairline); background: var(--canvas); color: var(--steel); padding: 7px 14px; border-radius: var(--r-pill); font-size: var(--fs-md); cursor: pointer; transition: background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out), opacity var(--motion-fast) var(--ease-out); white-space: nowrap; }
 .rc-tab:hover { background: var(--surface-soft); color: var(--ink); }
 .rc-tab.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--ink); font-weight: 600; }
 /* 标签页内容容器：统一去掉末个子卡片的悬挂外边距，避免底部出现多余空白 */
