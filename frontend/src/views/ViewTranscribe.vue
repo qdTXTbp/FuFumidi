@@ -2473,47 +2473,6 @@ onBeforeUnmount(() => {
         </Transition>
     </aside>
 
-    <!-- 智能修正 -->
-    <div v-if="mode !== 'separate'" class="card tr-card" style="border-top:1px dashed var(--border)">
-      <div class="fb-label" style="font-weight:700">{{ t('智能修正') }}</div>
-      <div class="fb-hint">{{ t('对齐起音 · 还原力度 · 声部平衡 · 清理杂音') }}</div>
-      <div class="tr-rf-row">
-        <span class="muted small" style="min-width:44px">{{ t('原音频') }}</span>
-        <button class="btn sm" @click="pickRfAudio"><Icon name="music" :size="13" /> {{ t('选择音频') }}</button>
-        <span class="muted small rf-path">{{ rf.audio ? rf.audio.replace(/^.*[\\/]/, '') : '—' }}</span>
-      </div>
-      <div class="tr-rf-row">
-        <span class="muted small" style="min-width:44px">{{ t('原 MIDI') }}</span>
-        <button class="btn sm" @click="pickRfMidi"><Icon name="kbd" :size="13" /> {{ t('选择 MIDI') }}</button>
-        <span class="muted small rf-path">{{ rf.midi ? rf.midi.replace(/^.*[\\/]/, '') : '—' }}</span>
-      </div>
-      <div class="fb-label">{{ t('修正模式') }}</div>
-      <div class="fu-ctl tr-pills">
-        <button class="fu-ctl tr-pill" :class="{ active: rf.mode === 'auto' }" @click="rf.mode = 'auto'">{{ t('自动') }}</button>
-        <button class="fu-ctl tr-pill" :class="{ active: rf.mode === 'piano' }" @click="rf.mode = 'piano'">{{ t('钢琴') }}</button>
-        <button class="fu-ctl tr-pill" :class="{ active: rf.mode === 'vocal' }" @click="rf.mode = 'vocal'">{{ t('人声') }}</button>
-      </div>
-      <div class="tr-switch" style="margin-top:8px">
-        <label><span><b>{{ t('声部平衡') }}</b><small>{{ t('抬主奏/人声 · 压配乐') }}</small></span><input type="checkbox" v-model="rf.stem"></label>
-      </div>
-      <button class="btn primary big" style="width:100%;justify-content:center;margin-top:12px" @click="startRefine" :disabled="rf.busy || !rf.midi || !rf.audio">
-        <Icon name="spark" :size="15" />{{ rf.busy ? t('修正中…') : t('开始智能修正') }}
-      </button>
-      <div v-if="rf.busy || rf.info" class="tr-progress">
-        <div class="pfill" :style="{ transform: 'scaleX(' + (((rf.busy ? 60 : 100)) / 100) + ')' }"></div><span>{{ rf.busy ? '…' : t('完成') }}</span>
-      </div>
-      <div v-if="rf.info" class="tr-done">
-        <button class="btn sm" @click="openRefineResult"><Icon name="play2" :size="13" /> {{ t('打开修正结果') }}</button>
-        <span class="muted small">{{ rf.info }}</span>
-      </div>
-      <div v-if="rf.logs.length" class="tr-log">
-        <div class="tr-log-head"><span class="log-title">{{ t('修正日志') }}</span><span class="log-count">{{ rf.logs.length }}{{ t(' 行') }}</span><span style="flex:1"></span><button class="icon-btn" @click="rf.logs = []"><Icon name="trash" :size="13" /></button></div>
-        <div class="tr-log-scroll">
-          <div v-for="(l, i) in rf.logs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div>
-        </div>
-      </div>
-    </div>
-
     <!-- 预设管理 -->
     <Transition name="ov">
       <div v-if="presetMgrOpen" class="preset-mgr-overlay" @click.self="presetMgrOpen = false">
@@ -2544,7 +2503,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.tr-view { max-width: 900px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
+.tr-view { overflow-x: hidden; max-width: 900px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
 .warn-tag { color: var(--amber); border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.1); }
 .tr-drop-card { padding: 16px; display: flex; flex-direction: column; gap: var(--sp-3); }
 .tr-drop { display: flex; align-items: center; gap: var(--sp-4); padding: 22px; border: 1.5px dashed var(--border-strong); border-radius: var(--r-lg); background: var(--canvas); cursor: pointer; transition: border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out), transform var(--motion-base) var(--ease-out), box-shadow var(--motion-base) var(--ease-out); }
@@ -2750,31 +2709,49 @@ onBeforeUnmount(() => {
 @media (max-width: 760px) { .tr-runbar-hint { display: none; } .tr-runbar { position: static; } }
 
 @media (min-width: 1200px) {
+  /* 宽屏也不强行三栏：左侧队列常驻，右侧主流程单列（引擎 → 高级参数 → 运行）。
+     参数面板需要足够的横向空间，用户不必在窄栏里操作。 */
   .tr-view {
     display: grid;
-    grid-template-columns: minmax(230px, 270px) minmax(360px, 1fr) minmax(250px, 290px);
+    grid-template-columns: minmax(360px, 400px) minmax(0, 1fr);
+    grid-template-rows: auto;
     gap: var(--sp-3);
     align-items: start;
-    max-width: 1400px;
+    max-width: 1500px;
+    padding-left: var(--sp-4);
+    padding-right: var(--sp-4);
   }
-  .tr-view > .page-head { grid-column: 1 / -1; grid-row: 1; margin-bottom: 0; }
   .tr-view > .tr-drop-card {
     grid-column: 1;
-    grid-row: 2;
+    grid-row: 1;
+    margin-top: 0;
     position: sticky;
     top: var(--sp-3);
     max-height: calc(100vh - var(--topbar-h) - var(--playerbar-h) - var(--sp-6));
     overflow-y: auto;
   }
-  .tr-view > .tr-card { grid-column: 2; grid-row: auto; margin-top: 0; }
-  .tr-view > .tr-run-panel {
-    grid-column: 3;
-    grid-row: 2;
-    position: sticky;
-    top: calc(var(--topbar-h) + var(--sp-2));
+  .tr-view > .tr-card {
+    grid-column: 2;
+    grid-row: auto;
     margin-top: 0;
-    max-height: calc(100vh - var(--topbar-h) - var(--playerbar-h) - var(--sp-6));
-    overflow-y: auto;
+    min-width: 0;
   }
+  .tr-view > .tr-engine { grid-column: 2; grid-row: 1; }
+  .tr-view > .tr-run-panel {
+    grid-column: 2;
+    grid-row: 2;
+    position: static;
+    margin-top: 0;
+    max-height: none;
+    overflow: visible;
+    overflow-x: clip;
+    min-width: 0;
+  }
+  .tr-batch-item { padding: 8px 10px; min-height: 38px; }
+  .tr-batch-item .tb-name { min-width: 0; }
+  .tr-batch-item .tb-bar { width: 64px; }
+  .tr-view > .tr-run-panel * { min-width: 0; }
+  .tr-view > .tr-run-panel .btn { max-width: 100%; white-space: normal; }
 }
+.tr-run-panel { position: static; margin-top: 0; }
 </style>

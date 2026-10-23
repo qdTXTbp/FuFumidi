@@ -410,7 +410,7 @@ function onDblClick(e) {
   if (!hit) return;
   const fr = focusRangeOfClip(hit.clip);
   const idx = Math.max(0, state.value.tracks.findIndex((tr) => tr.id === hit.clip.trackId));
-  try { window.__fufumidiArrangeFocus = { trackId: hit.clip.trackId, trackIndex: idx, fromTick: fr.fromTick, toTick: fr.toTick }; } catch (err) {}
+  try { window.__fufumidiArrangeFocus = { trackId: hit.clip.trackId, trackName: (state.value.tracks[idx] || {}).name || '', trackIndex: idx, fromTick: fr.fromTick, toTick: fr.toTick }; } catch (err) {}
   app.setView('edit');
 }
 
@@ -442,7 +442,7 @@ function closeCtx() { arrCtx.value = null; }
 function ctxSplit() { splitAtPlayhead(); closeCtx(); }
 function ctxDup() { duplicateSelected(); closeCtx(); }
 function ctxDelete() { deleteSelected(); closeCtx(); }
-function ctxFocus() { const c = findClip(state.value, arrCtx.value && arrCtx.value.clipId); closeCtx(); if (c) { const fr = focusRangeOfClip(c); const idx = Math.max(0, state.value.tracks.findIndex(tr => tr.id === c.trackId)); try { window.__fufumidiArrangeFocus = { trackId: c.trackId, trackIndex: idx, fromTick: fr.fromTick, toTick: fr.toTick }; } catch (err) {} app.setView('edit'); } }
+function ctxFocus() { const c = findClip(state.value, arrCtx.value && arrCtx.value.clipId); closeCtx(); if (c) { const fr = focusRangeOfClip(c); const idx = Math.max(0, state.value.tracks.findIndex(tr => tr.id === c.trackId)); try { window.__fufumidiArrangeFocus = { trackId: c.trackId, trackName: (state.value.tracks[idx] || {}).name || '', trackIndex: idx, fromTick: fr.fromTick, toTick: fr.toTick }; } catch (err) {} app.setView('edit'); } }
 /* ---- 工具条动作 ---- */
 function splitAtPlayhead() {
   if (!selected.value) return;

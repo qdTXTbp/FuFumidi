@@ -94,6 +94,7 @@ watch([frameSnapOn, videoFps, videoOffsetSec], () => {
   } catch (e) {}
 });
 const trackIndex = ref(0);
+let focusLockUntil = 0;
 const timbre = ref(0);
 const zoomPct = ref(100);
 const editor = ref(null);
@@ -2190,7 +2191,7 @@ function onRecordTake(payload) {
 }
 
 watch(currentSong, () => {
-  if (window.__fufumidiArrangeFocus) return;
+  if (window.__fufumidiArrangeFocus || Date.now() < focusLockUntil) return;
   const tracks = song.value?.tracks || [];
   const nonEmpty = tracks.findIndex(t => t.notes && t.notes.length);
   trackIndex.value = nonEmpty >= 0 ? nonEmpty : Math.min(trackIndex.value, Math.max(0, tracks.length - 1));
@@ -2217,9 +2218,11 @@ async function applyArrangeFocusIntent() {
     const focus = window.__fufumidiArrangeFocus;
     const s = song.value;
     if (!focus || !s || !s.tracks) return;
-    window.__fufumidiArrangeFocus = null;
-    let ti = focus.trackId != null ? s.tracks.findIndex((x) => x.id === focus.trackId) : -1;
+    focusLockUntil = Date.now() + 1800;
+    let ti = focus.trackId != null ? s.tracks.findIndex((x) => String(x.id) === String(focus.trackId)) : -1;
+    if (ti < 0 && focus.trackName) ti = s.tracks.findIndex((x) => String(x.name || '') === String(focus.trackName));
     if (ti < 0) ti = Math.max(0, Math.min(s.tracks.length - 1, Number(focus.trackIndex) || 0));
+    editTracks.value = [];
     trackIndex.value = ti;
     const from = Math.max(0, Number(focus.fromTick) || 0);
     const to = Math.max(from + 1, Number(focus.toTick) || from + 1);
@@ -2233,6 +2236,8 @@ async function applyArrangeFocusIntent() {
       editor.value.focusSelection?.();
     }
     editor.value?.draw?.();
+    window.__fufumidiArrangeFocus = null;
+    focusLockUntil = Date.now() + 1800;
   } catch (e) {}
 }
 onMounted(async () => {

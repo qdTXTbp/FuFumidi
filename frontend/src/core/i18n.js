@@ -15,6 +15,13 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  '标签分组': "Tab group",
+  '分组：': "Group: ",
+  '给这个标签设置分组名；留空取消分组': "Set a group name for this tab; leave blank to ungroup",
+  '关闭标签': "Close tab",
+  '关闭其他标签': "Close other tabs",
+  '取消分组': "Remove from group",
+  '设置分组': "Set group",
   '高级工具': "Advanced tools",
   '拖动调整位置': "Drag to reposition",
   '本地 / 文件夹': "Local / folders",

@@ -359,3 +359,37 @@ html.reduce-motion video.app-wallpaper { display: none; }
   min-width: 0 !important;
   max-width: min(320px, 60vw) !important;
 }
+
+/* 顶栏曲目标签：Edge 式内容宽度，标签+新建按钮紧挨着，不再把整条顶栏平均拉开 */
+.topbar-tabs-slot .song-tabs {
+  width: auto !important;
+  max-width: 100%;
+  justify-content: flex-start;
+}
+.topbar-tabs-slot .song-tabs .st-scroll {
+  flex: 0 1 auto !important;
+  max-width: calc(100% - 56px);
+  justify-content: flex-start;
+}
+.topbar-tabs-slot .song-tabs .song-tab {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: 240px !important;
+}
+.topbar-tabs-slot .song-tabs .st-name { max-width: 190px; }
+
+.topbar-tabs-slot .song-tabs .st-scroll { justify-content: flex-start !important; width: auto !important; flex: 0 0 auto !important; max-width: calc(100% - 32px); }
+
+/* 顶栏标签占满剩余空间：最后一个标签的关闭按钮不能被裁掉 */
+.topbar-tabs-slot .song-tabs {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+.topbar-tabs-slot .song-tabs .st-scroll {
+  flex: 1 1 auto !important;
+  width: auto !important;
+  max-width: none !important;
+  padding-right: 4px;
+  justify-content: flex-start;
+}
