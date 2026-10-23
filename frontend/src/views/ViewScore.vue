@@ -459,10 +459,20 @@ function dataUrlToBytes(dataUrl) {
   const b64 = String(dataUrl).split(',')[1] || '';
   return Array.from(atob(b64), c => c.charCodeAt(0));
 }
+/** 真正的谱面页 SVG：过滤 Verovio 里隐藏/装饰性的小 SVG（否则会生成 20×29 的空白页）。 */
+function scorePageSvgs() {
+  if (!scoreEl.value) return [];
+  return Array.from(scoreEl.value.querySelectorAll('svg')).filter((svg) => {
+    const w = svg.clientWidth || svg.getBoundingClientRect().width || parseFloat(svg.getAttribute('width')) || 0;
+    const h = svg.clientHeight || svg.getBoundingClientRect().height || parseFloat(svg.getAttribute('height')) || 0;
+    return w > 100 && h > 100;
+  });
+}
+
 async function rasterizeSvg(svg, scale, tileH) {
-  const w = svg.clientWidth || svg.getBoundingClientRect().width || parseFloat(svg.getAttribute('width')) || 986;
-  const h = svg.clientHeight || svg.getBoundingClientRect().height || parseFloat(svg.getAttribute('height')) || 600;
-  if (!w || !h) return [];
+  const displayW = svg.clientWidth || svg.getBoundingClientRect().width || parseFloat(svg.getAttribute('width')) || 986;
+  const displayH = svg.clientHeight || svg.getBoundingClientRect().height || parseFloat(svg.getAttribute('height')) || 600;
+  if (!displayW || !displayH) return [];
   // 导出必须是白底黑谱：应用主题是深色，直接把 SVG 画到 canvas 上会得到黑谱 + 深底。
   const clone = svg.cloneNode(true);
   clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
@@ -474,22 +484,29 @@ async function rasterizeSvg(svg, scale, tileH) {
   const img = new Image();
   await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
   URL.revokeObjectURL(url);
+  // 关键：按图片的**自然像素**裁切，不能按 SVG 在页面上的 CSS 宽度裁。
+  // 之前用 clientWidth 作为源宽度，遇到缩放后的 SVG 会只截走左侧一条，预览/PDF 就是一条细线。
+  const natW = img.naturalWidth || Math.round(displayW * 2);
+  const natH = img.naturalHeight || Math.round(displayH * 2);
+  const ratio = natW / Math.max(1, displayW);
+  const tile = Math.max(1, Math.round(Math.min(natH, tileH * ratio)));
   const out = [];
   let off = 0;
-  while (off < h) {
-    const th = Math.min(tileH, h - off);
+  while (off < natH) {
+    const th = Math.min(tile, natH - off);
     const cv = document.createElement('canvas');
-    cv.width = Math.max(1, Math.round(w * scale));
+    cv.width = Math.max(1, Math.round(natW * scale));
     cv.height = Math.max(1, Math.round(th * scale));
     const g = cv.getContext('2d');
     g.setTransform(scale, 0, 0, scale, 0, 0);
-    g.fillStyle = '#ffffff'; g.fillRect(0, 0, w, th);
-    g.drawImage(img, 0, off, w, th, 0, 0, w, th);
+    g.fillStyle = '#ffffff'; g.fillRect(0, 0, natW, th);
+    g.drawImage(img, 0, off, natW, th, 0, 0, natW, th);
     out.push(cv.toDataURL('image/png'));
     off += th;
   }
   return out;
 }
+
 /** 判断一页是否真的有墨迹：纯白页（SVG 末尾空白）不进入预览/PDF。 */
 async function pageHasInk(dataUrl) {
   try {
@@ -603,7 +620,7 @@ async function exportMusicXML() {
 async function exportPdf() {
   const b = window.fuBridge;
   if (!isStaffLike.value) { toast(t('请先切换到五线谱或总谱模式'), 'warn'); return; }
-  const svgs = scoreEl.value ? Array.from(scoreEl.value.querySelectorAll('svg')) : [];
+  const svgs = scoreEl.value ? scorePageSvgs() : [];
   if (!svgs.length) { toast(t('请先渲染乐谱'), 'warn'); return; }
   exporting.value = true;
   try {
@@ -653,7 +670,7 @@ function openScoreSplit() {
 /* ---------------- 分页预览（SVG 栅格化为 PNG 图集弹窗） ---------------- */
 async function previewScore() {
   if (!isStaffLike.value) { toast(t('请先切换到五线谱或总谱模式'), 'warn'); return; }
-  const svgs = scoreEl.value ? Array.from(scoreEl.value.querySelectorAll('svg')) : [];
+  const svgs = scoreEl.value ? scorePageSvgs() : [];
   if (!svgs.length) { toast(t('请先渲染五线谱'), 'warn'); return; }
   previewOpen.value = true;
   previewBusy.value = true;
