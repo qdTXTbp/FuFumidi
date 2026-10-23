@@ -16,7 +16,7 @@ FuFumidi is a fully offline desktop workstation for MIDI. It targets musicians, 
 
 The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally; transcription and editing never upload anything. Only when you opt in to cloud sync does your playlist and MIDI library get uploaded to your own cloud account.
 
-Current release line: **6.1.7** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.1.7), stable channel; test builds are published under the [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) tag).
+Current release line: **6.2.0** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.2.0), stable channel; test builds are published under the [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) tag).
 
 What's new in 6.1.6: the auto-probe now filters invalid instrument-group names (for example `program_105`) before they reach MuScriptor, so a probe result can no longer abort a whole transcription with `unknown instrument name(s)`. 6.1.5 added **a short completion chime when a transcription batch finishes** (three ascending notes on full success, two descending notes if any file failed; cancelled batches stay silent). This release also includes the 6.1.4 optional engines: **hFT-Transformer** for piano, and **YourMT3+** and **MIROS** for general transcription. All three are installed from the resource centre on demand, so the installer stays lean; once downloaded they run fully offline. 6.1.3 brought a dedicated AudioSet audio-tagger probe with a faithful fallback, a zero-note guard that refuses to write empty MIDI, automatic repair of the bundled Windows file association icon, and per-queue model reuse. See the [release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.1.7) for the full list.
 
@@ -34,7 +34,7 @@ What's new in 6.1.6: the auto-probe now filters invalid instrument-group names (
 
 - 100% offline after installation. The Python runtime, core transcription models and Demucs vocal-separation weights ship inside the full installer; optional transcription engines (`YourMT3+`, `MIROS`, `hFT-Transformer`) are one-click downloads from the resource centre.
 - Vue 3 + TypeScript + Vite renderer, rebuilt from the original monolithic renderer.
-- 11 hash-routed views, in-app i18n, 10 built-in themes plus image-based custom theme generation, `Ctrl+K` command palette, onboarding guide, theme library and dynamic wallpaper gallery.
+- Five primary areas (Home / Music / Workspace / Create / Resources), hash-routed sub-tabs, four interface languages, 12 built-in themes, custom accent and image themes, `Ctrl+K` command palette, 6-chapter onboarding guide, and a unified static + motion wallpaper library.
 - Plugin sandbox that runs third-party code inside its own worker.
 - Integrity check and one-click repair for the bundled runtime.
 - Optional native Rust core (`rust-core/`) accelerates batch, CPU-heavy library operations.
@@ -42,7 +42,7 @@ What's new in 6.1.6: the auto-probe now filters invalid instrument-group names (
 
 ### i18n contribution rule
 
-The UI supports three interface languages: **Simplified Chinese / Traditional Chinese / English**.
+The UI supports four interface languages: **Simplified Chinese / Traditional Chinese / English / Japanese**.
 
 - Every new UI string MUST include an English translation in `frontend/src/core/i18n.js` (`I18N_MAP`); missing English = incomplete.
 - Traditional Chinese is auto-derived from the Simplified source via `frontend/src/core/zhHant.js` (no manual per-string translation needed; add to its `PHRASE` map only when a term needs a Traditional-Chinese wording difference).

@@ -16,7 +16,7 @@ FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编�
 
 应用基于 Electron 桌面壳 + Vue 3 + TypeScript 渲染层 + 内置 Python 转录运行时，并提供可选的原生 Rust 核心以加速曲库的批量操作。所有音频、模型权重与推理都在本地执行，转录与编辑全程不上传任何数据；只有在你自己开启云同步（可选）时，才会把歌单与 MIDI 曲目上传到你自己的云端账号。
 
-当前版本线：**6.1.7**（[发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.1.7)，正式版通道；测试版发布在 [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) 标签下）。
+当前版本线：**6.2.0**（[发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.2.0)，正式版通道；测试版发布在 [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) 标签下）。
 
 6.1.7 要点：自动探测现在会把 `program_105` 等未分组 GM 音色按 General MIDI 家族映射到 MuScriptor 现有乐器组（如 `program_105` → `acoustic_guitar`），不再直接丢弃；6.1.6 的过滤仍作为最后防线，避免整首转录报 `unknown instrument name(s)`。6.1.5 加入了**转录批次完成提示音**——全部成功为三声上行，有失败为两声下行，取消不响。本版同时包含 6.1.4 的三个可选引擎：钢琴 **hFT-Transformer**、通用 **YourMT3+** 与 **MIROS**。三者都从资源中心按需下载，安装包保持精简；下载完成后全部本地离线运行。6.1.3 还带来专用 AudioSet 音频标签探测器与可靠回退、拒绝写空 MIDI 的零音符保护、Windows 文件关联图标自愈、同队列模型复用。完整列表见 [6.1.7 发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.1.7)。
 
@@ -34,7 +34,7 @@ FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编�
 
 - 安装后 100% 离线。完整安装包内附带 Python 运行时、核心转录模型与 Demucs 人声分离权重；可选转录引擎（`YourMT3+`、`MIROS`、`hFT-Transformer`）在资源中心一键下载。
 - 从原始单文件渲染层重构为 Vue 3 + TypeScript + Vite 现代前端。
-- 11 个哈希路由视图，应用内 i18n，10 套内置主题 + 图片提取主色自定义主题，`Ctrl+K` 命令面板，新手引导，主题库，动态壁纸画廊。
+- 五个一级区域（首页 / 音乐 / 工作台 / 创作 / 资源）、哈希路由子页签、四种界面语言、12 套内置主题、自定义强调色与图片主题、`Ctrl+K` 命令面板、6 章新手引导，以及统一静态 + 动态壁纸库。
 - 插件沙箱，第三方代码在独立 worker 中运行。
 - 完整性检验与一键修复。
 - 可选原生 Rust 核心（`rust-core/`）加速批量、CPU 密集的曲库操作。
@@ -42,7 +42,7 @@ FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编�
 
 ### 多语言（i18n）开发守则
 
-项目面向多种人群，界面文案固定支持三种语言：**简体中文 / 繁体中文 / English**。
+项目面向多种人群，界面文案固定支持四种语言：**简体中文 / 繁体中文 / English / 日本語**。
 
 - **新增界面文案必须同时补齐英文**：在 `frontend/src/core/i18n.js` 的 `I18N_MAP` 里给出英文翻译，缺英文即视为该功能未完成。
 - **繁体中文由自动转换覆盖**：简体源文案经 `frontend/src/core/zhHant.js` 自动转为繁体，无需逐条手写；仅当需要「用词而非造字」的差异时，在其 `PHRASE` 表补充。
