@@ -158,6 +158,15 @@ def _resolve_params(args, mode):
     if getattr(args, "denoise_mode", None): p["denoise_mode"] = str(args.denoise_mode)
     if getattr(args, "normalize", False): p["normalize"] = True
     if getattr(args, "auto_bpm", False): p["auto_bpm"] = True
+    # 识别片段长度（所有转录模型共用）：**默认不开启**（用户 2026-10-23）。
+    # 0/空/不传 = 各模型原生块长，与"没有这个选项"时行为一致；>0 才进 params。
+    _sg = getattr(args, "segment_sec", None)
+    if _sg is not None:
+        try:
+            if float(_sg) > 0:
+                p["segment_sec"] = float(_sg)
+        except (TypeError, ValueError):
+            pass
     # 显存策略（auto / low / allow）：由主进程传，引擎按模型降批或保持
     _mm = getattr(args, "memory_mode", None)
     if _mm in ("auto", "low", "allow"):
@@ -450,6 +459,8 @@ def build_parser():
     g.add_argument("--no-velnorm", action="store_true", help="关闭力度归一化")
 
     g = parser.add_argument_group("通用/分离（basic-pitch）参数")
+    g.add_argument("--segment-sec", dest="segment_sec", type=float, default=None,
+                   help="识别片段长度（秒，所有转录模型）：0/不传 = 各模型原生块长（默认，不开启）")
     g.add_argument("--memory-mode", dest="memory_mode", choices=["auto", "low", "allow"], default=None,
                    help="显存策略：low=低显存自动降批（推荐）/ allow=允许驱动借用系统内存 / auto=默认")
     g.add_argument("--timbre-stabilize", action="store_true",
@@ -571,6 +582,7 @@ def cmd_worker():
                 max_note_hold=req.get('max_note_hold'),
                 # ⑤ 静音分段（漏一项界面勾了也到不了引擎）
                 # 识别片段长度：漏这一项时界面滑条调了也到不了引擎
+                segment_sec=req.get('segment_sec'),
                 memory_mode=req.get('memory_mode'),
                 timbre_stabilize=bool(req.get('timbre_stabilize')),
                 # ④ 批 B：MuScriptor 生成参数（漏一项界面调了也不生效 —— 同上面几条的坑）
