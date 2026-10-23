@@ -79,7 +79,15 @@
   --t-ok: #3ecf8e;
   --t-warn: #ffb340;
   --t-err: #ff6b6b;
-  --t-info: #5ac8fa;
+  --t-info: #69c8f0;
+  /* 品牌三色（theme.js 会在启动后以实际主题覆盖） */
+  --accent-sea: #2f7fa8;
+  --accent-sky: #69c8f0;
+  --accent-sapphire: #2f63d4;
+  --accent-sapphire-bright: #3d74e8;
+  --on-sapphire: #ffffff;
+  --ornament: #d2b679;
+  --wallpaper-scrim: rgba(6,19,31,.26);
   /* 七元素数据色：可视化、轨道、图表共用同一套（不做彩虹装饰，只做语义） */
   --data-1: #ff5530; --data-2: #ffb340; --data-3: #ffe066; --data-4: #3ecf8e;
   --data-5: #5ac8fa; --data-6: #7c6cff; --data-7: #ea5ec1;

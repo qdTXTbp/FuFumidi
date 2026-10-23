@@ -7,6 +7,7 @@ import { useAppStore } from '../stores/app';
 import { usePlaylistStore } from '../stores/playlist';
 import { clamp, esc, fmtTime } from '../core/util.js';
 import { t } from '../core/i18n.js';
+import { playDoneChime } from '../core/sfx.js';
 import NumSlider from '../components/NumSlider.vue';
 
 const app = useAppStore();
@@ -40,10 +41,10 @@ void (async () => {
 })();
 const perf = ref('quality');             // quality | balanced | fast
 const perfHint = ref('');
-/* 识别片段长度（秒）：每种模型一次喂给模型识别的音频长度。
-   0 = 跟随模型默认（各模型默认不同：basic-pitch 内置窗约 2s、MuScriptor 5s、
-   piano-transcription 10s、Aria-AMT 30s、Transkun 由模型配置决定）。 */
-const segmentSec = ref(0);
+/* ★ 2026-10-21：「识别片段长度」（分块转录）已整体移除 —— 实测按固定长度切片再合并，
+   块与块之间质量参差不齐（边界重复音/换音色/延音被切断）。现在所有模型一律用
+   **模型原生块长**、整曲一次喂入；模型内部固有的取窗（basic-pitch 2s 帧、
+   MuScriptor 5s 块等）属于架构，不是可调功能。 */
 /* 转录前降噪：默认 off（保持旧输出完全一致）。选项来自引擎 audio_chain：
    off / light（谱减）/ strong（UVR-DeNoise 模型，需资源中心下载）。
    2026-10-15 实测降噪在部分素材会增加噪声引起的假音符，所以默认关、并写明代价。 */
@@ -56,14 +57,6 @@ function setMemoryMode(v) {
   memoryMode.value = ['auto', 'low', 'allow'].includes(v) ? v : 'auto';
   try { localStorage.setItem('fufumidi_memory_mode', memoryMode.value); } catch (e) {}
 }
-/** 各模型推荐片段长度（= 训练块长；见各引擎源码/配置） */
-const SEG_RECOMMEND = computed(() => {
-  if (mode.value === 'universal') return umodel.value === 'basic' ? 0 : 5;
-  if (pmodel.value === 'aria') return 30;
-  if (pmodel.value === 'transkun') return 16;
-  if (pmodel.value === 'hft') return 0;
-  return 10;
-});
 const bassBoost = ref(false);            // 低音增强（仅 basic 子模型）：关闭 melodia trick 以保留低音声部
 // 多条弯音曲线（仅 basic 子模型）：basic-pitch 唯一没转发的用户可见参数。
 // 开了以后同一音符可以挂多条弯音（颤音/滑音），**会真的落进导出的 MIDI**。
@@ -87,10 +80,12 @@ const msTemp = ref(1.0);                 // 采样温度（1.0 = 不传）
 const msCfg = ref(1.0);                  // 引导系数（1.0 = 不传）
 const msBeam = ref(1);                   // 束搜索宽度（1 = 不传）
 const msPrelude = ref(true);             // 跨块延音缝合（默认开；关掉才传 false＝不缝合）
-// MuScriptor 乐器组：none=不限定（默认）；limit=手动硬约束；probe_segments=按段自动探测并约束
+// MuScriptor 乐器组：none=不限定（默认）；limit=手动硬约束
+// ★ 2026-10-21：「自动探测（分段）」档已移除 —— 分段探测本身又是一次分块，
+//   A/B 见 docs/plans/2026-10-20-segment-probe-ab.md（音色切换 4 次、边界重复音 1 个、
+//   耗时 +3.6s，F1 还低于全局探测）。
 const msMode = ref('none');
 const msGroups = ref(['voice', 'drums']);
-const msProbeSegSec = ref(60);
 function toggleMsGroup(id) {
   const i = msGroups.value.indexOf(id);
   if (i >= 0) { if (msGroups.value.length > 1) msGroups.value.splice(i, 1); return; }
@@ -113,7 +108,6 @@ const MS_GROUPS = [
 ];
 const msInstrValue = computed(() => {
   if (msMode.value === 'limit') return msGroups.value.join(',');
-  if (msMode.value === 'probe_segments') return 'probe_segments';
   return 'none';
 });
 // ② 计算精度：默认 fp32（不传）—— bf16 改数值精度、属影响质量的开关，默认关。
@@ -601,27 +595,27 @@ const WEB_BUILTIN_PRESETS = () => {
     model: 'basic', onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
     melodia: true, min_freq: 0, max_freq: 0,
     beat_grid: true, tempo: 0, perf: 'quality',
-    auto_bpm: false, denoise_mode: 'off', segment_sec: 0,
+    auto_bpm: false, denoise_mode: 'off',
   };
   const piano = {
     onset_threshold: 0.3, frame_threshold: 0.1, min_note_ms: 60, merge_gap_ms: 30,
     include_pedal: true, perf: 'quality',
-    auto_bpm: false, denoise_mode: 'off', segment_sec: 10,
+    auto_bpm: false, denoise_mode: 'off',
   };
   return [
     { name: 'Basic Pitch · 最优', mode: 'universal', params: { ...basic } },
     { name: 'YourMT3+ · 最优', mode: 'universal', params: { ...basic,
-      model: 'yourmt3', segment_sec: 0 } },
+      model: 'yourmt3' } },
     { name: 'MIROS · 最优', mode: 'universal', params: { ...basic,
-      model: 'miros', segment_sec: 0 } },
+      model: 'miros' } },
     { name: 'MuScriptor · 最优', mode: 'universal', params: { ...basic,
       model: 'muscriptor', model_size: 'medium',
       temperature: 1.0, cfg_coef: 1.0, beam_size: 1, prelude_forcing: true,
-      precision: 'fp32', segment_sec: 5 } },
-    { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt', segment_sec: 10 } },
-    { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria', segment_sec: 30 } },
-    { name: 'Transkun · 最优', mode: 'piano', params: { ...piano, model: 'transkun', segment_sec: 16 } },
-    { name: 'hFT-Transformer · 最优', mode: 'piano', params: { ...piano, model: 'hft', segment_sec: 0 } },
+      precision: 'fp32' } },
+    { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt' } },
+    { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria' } },
+    { name: 'Transkun · 最优', mode: 'piano', params: { ...piano, model: 'transkun' } },
+    { name: 'hFT-Transformer · 最优', mode: 'piano', params: { ...piano, model: 'hft' } },
     { name: '分离 · 最优', mode: 'separate', params: {
       onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
       include_drums: true, stem_format: 'wav', perf: 'quality',
@@ -1196,7 +1190,6 @@ function collectPresetParams() {
     perf: perf.value,
     auto_bpm: autoBpm.value,
     tempo: iv(exportTempo.value),
-    segment_sec: Math.max(0, iv(segmentSec.value)),
     denoise_mode: denoiseMode.value || 'off',
   };
   if (mode.value === 'universal') {
@@ -1212,7 +1205,6 @@ function collectPresetParams() {
     if (umodel.value === 'muscriptor') Object.assign(p, {
       model_size: msSize.value,
       muscriptor_instruments: msInstrValue.value,
-      probe_segment_sec: iv(msProbeSegSec.value),
       temperature: Number(msTemp.value), cfg_coef: Number(msCfg.value),
       beam_size: iv(msBeam.value), prelude_forcing: msPrelude.value,
       precision: msPrec.value,
@@ -1296,16 +1288,12 @@ function applyPresetParams(p, opts) {
   if (has('muscriptor_instruments') && typeof pr.muscriptor_instruments === 'string') {
     const v = pr.muscriptor_instruments.trim();
     if (!v || v === 'none') msMode.value = 'none';
-    else if (v === 'probe_segments' || v === 'segments') msMode.value = 'probe_segments';
     else {
       const groups = v.split(',').map((s) => s.trim()).filter((g) => MS_GROUPS.some((x) => x.id === g));
       if (groups.length) { msGroups.value = groups; msMode.value = 'limit'; }
     }
   }
-  if (has('probe_segment_sec')) msProbeSegSec.value = clamp(Math.round(numOr('probe_segment_sec', 60)), 20, 120);
   if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
-  // 识别片段长度（0 = 模型默认）；老预设没有这个键时保留当前值
-  if (has('segment_sec')) segmentSec.value = clamp(Math.round(numOr('segment_sec', 0)), 0, 120);
   // 降噪档位：只认引擎支持的三个值；老预设没有这个键时保持当前值（默认 off）
   if (has('denoise_mode') && ['off', 'light', 'strong'].indexOf(String(pr.denoise_mode)) >= 0) {
     denoiseMode.value = String(pr.denoise_mode);
@@ -1476,8 +1464,7 @@ function collectParams() {
       cfg.model_size = msSize.value;
       cfg.beat_grid = beatGrid.value;
       cfg.muscriptor_instruments = msInstrValue.value;
-      if (msMode.value === 'probe_segments') cfg.probe_segment_sec = Number(msProbeSegSec.value) || 60;
-      // 乐器组约束：'auto' / '人声,鼓' 这样的组名列表 / 空。
+      // 乐器组约束：'none' / '人声,鼓' 这样的组名列表。
       // 注意这条链路有三跳（渲染端 → 主进程 worker 请求体 → 引擎），少任何一跳界面选了都不生效。
       // ★ 2026-10-14 更正：这段注释原先描述的是**已被移除**的批量推理行为
       //   （`bca0a55`「移除批量推理功能」）。现在：
@@ -1511,8 +1498,6 @@ function collectParams() {
       if (msPrec.value && msPrec.value !== 'fp32') cfg.precision = msPrec.value;
     }
   }
-  // 识别片段长度：0 = 各模型默认，不传；>0 时所有转录模型共用同一个键（引擎按模型映射）
-  if (mode.value !== 'separate' && Number(segmentSec.value) > 0) cfg.segment_sec = Number(segmentSec.value);
   // 转录前降噪（默认 off = 旧行为；只有显式选择才发送）
   if (mode.value !== 'separate' && denoiseMode.value && denoiseMode.value !== 'off') cfg.denoise_mode = denoiseMode.value;
   if (mode.value !== 'separate' && memoryMode.value) cfg.memory_mode = memoryMode.value;
@@ -1702,33 +1687,8 @@ async function runBatch() {
     toast(t('转录失败'), 'warn');
   }
   if (cancelAll.value && !paused.value) logLine(t('已取消转录队列…'), true);
-  if (!cancelAll.value && (dN || eN)) playTranscribeDoneChime(eN > 0);
+  if (!cancelAll.value && (dN || eN)) playDoneChime(eN > 0);
 }
-/** 转录完成后播放短提示音（Web Audio 合成，不依赖外部音频文件）。
- *  成功两声上行、失败两声下行；只在批次结束且非取消时调用一次。 */
-function playTranscribeDoneChime(failed = false) {
-  try {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return;
-    const ctx = new AC();
-    const t0 = ctx.currentTime;
-    const freqs = failed ? [392, 311] : [659.25, 880.0, 1318.5];
-    freqs.forEach((f, i) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = f;
-      const at = t0 + i * 0.11;
-      gain.gain.setValueAtTime(0.0001, at);
-      gain.gain.exponentialRampToValueAtTime(0.18, at + 0.015);
-      gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.18);
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.start(at); osc.stop(at + 0.2);
-    });
-    setTimeout(() => { try { ctx.close(); } catch (e) {} }, 900);
-  } catch (e) {}
-}
-
 async function startTranscribe() {
   if (busy.value) return;
   const chain = !!chainMode.value;
@@ -1937,6 +1897,7 @@ onBeforeUnmount(() => {
         <div class="page-sub">{{ t('音频转 MIDI · 本地 Python 引擎 · 离线完成') }}</div>
       </div>
       <span v-if="gpuInfo" class="tag accent">{{ gpuInfo }}</span>
+      <span v-if="gpuDetail" class="tag" data-guide="gpu-detail" :title="gpuDetail">{{ gpuDetail }}</span>
       <button class="btn sm ghost" @click="state.ui.settingsTab = 'gpu'; state.ui.settingsOpen = true">{{ t('GPU 加速') }}</button>
       <span class="tag" :class="isDesktop ? '' : 'warn-tag'">{{ isDesktop ? t('桌面引擎就绪') : t('请使用桌面版') }}</span>
     </div>
@@ -2270,11 +2231,6 @@ onBeforeUnmount(() => {
                  实测 30 秒样例 71 → 8037 个音符、3 分钟样例 47967 个 / 517 秒。 -->
 
           </div>
-          <div class="tr-slider" v-if="mode !== 'separate'" data-guide="segment-sec">
-            <label>{{ t('识别片段长度') }}<b>{{ segmentSec > 0 ? segmentSec + 's' : t('模型默认') }} · {{ t('推荐') }}{{ SEG_RECOMMEND > 0 ? ' ' + SEG_RECOMMEND + 's' : ' ' + t('不分段') }}</b></label>
-            <NumSlider v-model="segmentSec" :min="0" :max="60" :step="1" unit="s" />
-
-          </div>
           <div class="tr-switch" v-if="mode !== 'separate'" data-guide="memory-mode">
             <label>
               <span><b>{{ t('显存策略') }}</b></span>
@@ -2360,13 +2316,8 @@ onBeforeUnmount(() => {
               <select v-model="msMode" class="select-input" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
                 <option value="none">{{ t('不限定') }}</option>
                 <option value="limit">{{ t('限定乐器组') }}</option>
-                <option value="probe_segments">{{ t('自动探测（分段）') }}</option>
               </select>
             </label>
-          </div>
-          <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe_segments'" class="tr-slider">
-            <label>{{ t('探测段长') }}<b>{{ msProbeSegSec }}s</b></label>
-            <NumSlider v-model="msProbeSegSec" :min="20" :max="120" :step="10" unit="s" :aria-label="t('探测段长')" />
           </div>
           <div class="tr-switch" style="display:block" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'limit'">
             <div style="display:flex;flex-wrap:wrap;gap:var(--sp-2);max-height:150px;overflow:auto;padding:2px 0">
@@ -2439,101 +2390,62 @@ onBeforeUnmount(() => {
 
       <!-- 任务模板已移除（2026-10-14）："记住一套设置"改由**队列**承担 ——
            每个队列自带模型与参数，切队列即切设置（用户要求）。 -->
-      <div v-if="mode !== 'separate'">
 
-      <!-- 摘要 + 开始 -->
-      <div v-if="queue.some(i => i.status === 'pending' || i.status === 'error')" class="tr-sum">
-        {{ t('即将转录：') }}<b>{{ queue.find(i => i.status === 'pending' || i.status === 'error')?.name || '—' }}</b> · {{ t('引擎：') }}<b>{{ MODE_NAMES()[mode] }}</b> · {{ t('预计耗时：') }}<b>{{ sumTime || '—' }}</b>
-      </div>
-      <div class="tr-par" style="display:flex;align-items:center;gap:var(--sp-2);margin-top:12px">
-        <span style="font-size:var(--fs-md);color:var(--steel)">{{ t('并行数') }}</span>
-        <select style="background:var(--surface);color:var(--ink);border:1px solid var(--hairline);border-radius:var(--r-md);padding:4px 8px;font-size:var(--fs-md)" :value="parallelN" @change="setParallel(parseInt($event.target.value, 10) || 1)">
-          <option v-for="n in 4" :key="n" :value="n">{{ n }}</option>
-        </select>
-        <span style="font-size:var(--fs-sm);color:var(--stone)">{{ t('多文件同时转录；GPU 模型建议保持 1') }}</span>
-      </div>
-      <button class="btn primary big" style="width:100%;justify-content:center;margin-top:14px" data-guide="start-transcribe" @click="startTranscribe" :disabled="busy || !isDesktop || !queue.length">
-        <Icon name="transcribe" :size="16" />{{ busy ? t('转录中…') : t('开始转录') }}
-      </button>
-      <div v-if="busy || paused" class="row" style="gap:var(--sp-2);margin-top:8px">
-        <button v-if="busy && !paused" class="btn ghost" style="flex:1;justify-content:center" @click="pauseBatch"><Icon name="pause" :size="14" /> {{ t('暂停') }}</button>
-        <button v-else class="btn" style="flex:1;justify-content:center" @click="resumeBatch"><Icon name="play" :size="14" /> {{ t('继续') }}</button>
-        <button v-if="busy" class="btn ghost" style="flex:1;justify-content:center" @click="cancelTranscribe"><Icon name="stop" :size="14" /> {{ t('取消转录') }}</button>
-      </div>
-
-      <Transition name="fade">
-      <div v-if="busy || done" class="tr-progress">
-        <div class="pfill" :style="{ transform: 'scaleX(' + ((progress) / 100) + ')' }"></div><span>{{ progress }}%</span>
-      </div>
-      </Transition>
-      <div v-if="stage" class="tr-stage muted small">{{ stage }}</div>
-      <Transition name="fade">
-      <div v-if="done" class="tr-done">
-        <button class="btn sm" @click="setView('play')"><Icon name="play2" :size="13" /> {{ t('打开播放') }}</button>
-        <button class="btn sm ghost" @click="openOutput"><Icon name="folder" :size="13" /> {{ t('打开输出文件夹') }}</button>
-        <span class="muted small">{{ doneInfo }}</span>
-      </div>
-      </Transition>
-
-      <!-- 运行日志 -->
-      <Transition name="fade">
-      <div v-if="logs.length" class="tr-log">
-        <div class="tr-log-head">
-          <span class="log-title">{{ t('运行日志') }}</span><span class="log-count">{{ logs.length }}{{ t(' 行') }}</span>
-          <span style="flex:1"></span>
-          <button class="icon-btn" :title="t('清空')" @click="clearLog"><Icon name="trash" :size="13" /></button>
-          <button class="icon-btn" :title="t('展开/收起')" @click="logExpanded = !logExpanded"><Icon name="chevron" :size="13" /></button>
-        </div>
-        <div class="tr-log-scroll" :class="{ collapsed: !logExpanded }">
-          <div v-for="(l, i) in logs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div>
-        </div>
-      </div>
-      </Transition>
-      </div>
       </div>
       </Transition>
     </div>
 
-    <!-- 智能修正 -->
-    <div v-if="mode !== 'separate'" class="card tr-card" style="border-top:1px dashed var(--border)">
-      <div class="fb-label" style="font-weight:700">{{ t('智能修正') }}</div>
-      <div class="fb-hint">{{ t('对齐起音 · 还原力度 · 声部平衡 · 清理杂音') }}</div>
-      <div class="tr-rf-row">
-        <span class="muted small" style="min-width:44px">{{ t('原音频') }}</span>
-        <button class="btn sm" @click="pickRfAudio"><Icon name="music" :size="13" /> {{ t('选择音频') }}</button>
-        <span class="muted small rf-path">{{ rf.audio ? rf.audio.replace(/^.*[\\/]/, '') : '—' }}</span>
-      </div>
-      <div class="tr-rf-row">
-        <span class="muted small" style="min-width:44px">{{ t('原 MIDI') }}</span>
-        <button class="btn sm" @click="pickRfMidi"><Icon name="kbd" :size="13" /> {{ t('选择 MIDI') }}</button>
-        <span class="muted small rf-path">{{ rf.midi ? rf.midi.replace(/^.*[\\/]/, '') : '—' }}</span>
-      </div>
-      <div class="fb-label">{{ t('修正模式') }}</div>
-      <div class="fu-ctl tr-pills">
-        <button class="fu-ctl tr-pill" :class="{ active: rf.mode === 'auto' }" @click="rf.mode = 'auto'">{{ t('自动') }}</button>
-        <button class="fu-ctl tr-pill" :class="{ active: rf.mode === 'piano' }" @click="rf.mode = 'piano'">{{ t('钢琴') }}</button>
-        <button class="fu-ctl tr-pill" :class="{ active: rf.mode === 'vocal' }" @click="rf.mode = 'vocal'">{{ t('人声') }}</button>
-      </div>
-      <div class="tr-switch" style="margin-top:8px">
-        <label><span><b>{{ t('声部平衡') }}</b><small>{{ t('抬主奏/人声 · 压配乐') }}</small></span><input type="checkbox" v-model="rf.stem"></label>
-      </div>
-      <button class="btn primary big" style="width:100%;justify-content:center;margin-top:12px" @click="startRefine" :disabled="rf.busy || !rf.midi || !rf.audio">
-        <Icon name="spark" :size="15" />{{ rf.busy ? t('修正中…') : t('开始智能修正') }}
-      </button>
-      <div v-if="rf.busy || rf.info" class="tr-progress">
-        <div class="pfill" :style="{ transform: 'scaleX(' + (((rf.busy ? 60 : 100)) / 100) + ')' }"></div><span>{{ rf.busy ? '…' : t('完成') }}</span>
-      </div>
-      <div v-if="rf.info" class="tr-done">
-        <button class="btn sm" @click="openRefineResult"><Icon name="play2" :size="13" /> {{ t('打开修正结果') }}</button>
-        <span class="muted small">{{ rf.info }}</span>
-      </div>
-      <div v-if="rf.logs.length" class="tr-log">
-        <div class="tr-log-head"><span class="log-title">{{ t('修正日志') }}</span><span class="log-count">{{ rf.logs.length }}{{ t(' 行') }}</span><span style="flex:1"></span><button class="icon-btn" @click="rf.logs = []"><Icon name="trash" :size="13" /></button></div>
-        <div class="tr-log-scroll">
-          <div v-for="(l, i) in rf.logs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div>
+    <aside v-if="mode !== 'separate'" class="card tr-card tr-run-panel">
+  <div class="fb-label">{{ t('运行') }}</div>
+  <!-- 摘要 + 开始 -->
+        <div v-if="queue.some(i => i.status === 'pending' || i.status === 'error')" class="tr-sum">
+          {{ t('即将转录：') }}<b>{{ queue.find(i => i.status === 'pending' || i.status === 'error')?.name || '—' }}</b> · {{ t('引擎：') }}<b>{{ MODE_NAMES()[mode] }}</b> · {{ t('预计耗时：') }}<b>{{ sumTime || '—' }}</b>
         </div>
-      </div>
-    </div>
+        <div class="tr-par" style="display:flex;align-items:center;gap:var(--sp-2);margin-top:12px">
+          <span style="font-size:var(--fs-md);color:var(--steel)">{{ t('并行数') }}</span>
+          <select style="background:var(--surface);color:var(--ink);border:1px solid var(--hairline);border-radius:var(--r-md);padding:4px 8px;font-size:var(--fs-md)" :value="parallelN" @change="setParallel(parseInt($event.target.value, 10) || 1)">
+            <option v-for="n in 4" :key="n" :value="n">{{ n }}</option>
+          </select>
+          <span style="font-size:var(--fs-sm);color:var(--stone)">{{ t('多文件同时转录；GPU 模型建议保持 1') }}</span>
+        </div>
+        <button class="btn primary big" style="width:100%;justify-content:center;margin-top:14px" data-guide="start-transcribe" @click="startTranscribe" :disabled="busy || !isDesktop || !queue.length">
+          <Icon name="transcribe" :size="16" />{{ busy ? t('转录中…') : t('开始转录') }}
+        </button>
+        <div v-if="busy || paused" class="row" style="gap:var(--sp-2);margin-top:8px">
+          <button v-if="busy && !paused" class="btn ghost" style="flex:1;justify-content:center" @click="pauseBatch"><Icon name="pause" :size="14" /> {{ t('暂停') }}</button>
+          <button v-else class="btn" style="flex:1;justify-content:center" @click="resumeBatch"><Icon name="play" :size="14" /> {{ t('继续') }}</button>
+          <button v-if="busy" class="btn ghost" style="flex:1;justify-content:center" @click="cancelTranscribe"><Icon name="stop" :size="14" /> {{ t('取消转录') }}</button>
+        </div>
+  
+        <Transition name="fade">
+        <div v-if="busy || done" class="tr-progress">
+          <div class="pfill" :style="{ transform: 'scaleX(' + ((progress) / 100) + ')' }"></div><span>{{ progress }}%</span>
+        </div>
+        </Transition>
+        <div v-if="stage" class="tr-stage muted small">{{ stage }}</div>
+        <Transition name="fade">
+        <div v-if="done" class="tr-done">
+          <button class="btn sm" @click="setView('play')"><Icon name="play2" :size="13" /> {{ t('打开播放') }}</button>
+          <button class="btn sm ghost" @click="openOutput"><Icon name="folder" :size="13" /> {{ t('打开输出文件夹') }}</button>
+          <span class="muted small">{{ doneInfo }}</span>
+        </div>
+        </Transition>
+  
+        <!-- 运行日志 -->
+        <Transition name="fade">
+        <div v-if="logs.length" class="tr-log">
+          <div class="tr-log-head">
+            <span class="log-title">{{ t('运行日志') }}</span><span class="log-count">{{ logs.length }}{{ t(' 行') }}</span>
+            <span style="flex:1"></span>
+            <button class="icon-btn" :title="t('清空')" @click="clearLog"><Icon name="trash" :size="13" /></button>
+            <button class="icon-btn" :title="t('展开/收起')" @click="logExpanded = !logExpanded"><Icon name="chevron" :size="13" /></button>
+          </div>
+          <div class="tr-log-scroll" :class="{ collapsed: !logExpanded }">
+            <div v-for="(l, i) in logs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div>
+          </div>
+        </div>
+        </Transition>
+    </aside>
 
     <!-- 预设管理 -->
     <Transition name="ov">
@@ -2565,7 +2477,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.tr-view { max-width: 900px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
+.tr-view { overflow-x: hidden; max-width: 900px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
 .warn-tag { color: var(--amber); border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.1); }
 .tr-drop-card { padding: 16px; display: flex; flex-direction: column; gap: var(--sp-3); }
 .tr-drop { display: flex; align-items: center; gap: var(--sp-4); padding: 22px; border: 1.5px dashed var(--border-strong); border-radius: var(--r-lg); background: var(--canvas); cursor: pointer; transition: border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out), transform var(--motion-base) var(--ease-out), box-shadow var(--motion-base) var(--ease-out); }
@@ -2580,7 +2492,7 @@ onBeforeUnmount(() => {
 .fb-label { font-size: var(--fs-md); font-weight: 600; color: var(--ink); }
 .fb-hint { font-size: var(--fs-xs); color: var(--stone); margin-top: 1px; }
 .tr-batch-ctls { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
-.tr-batch-list { border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--canvas); overflow: hidden; }
+.tr-batch-list { border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--canvas); overflow-y: auto; overflow-x: hidden; max-height: min(48vh, 420px); scrollbar-width: thin; scrollbar-gutter: stable; }
 .tr-batch-item { display: flex; align-items: center; gap: var(--sp-2); padding: 6px 10px; border-bottom: 1px solid var(--hairline-soft); font-size: var(--fs-sm); }
 .tr-batch-item:last-child { border-bottom: none; }
 .tb-name { flex: 1; min-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
@@ -2758,4 +2670,62 @@ onBeforeUnmount(() => {
   font-size: var(--fs-xs); font-weight: 600; color: var(--t-warn);
   border: 1px solid color-mix(in srgb, var(--t-warn) 45%, var(--line)); background: color-mix(in srgb, var(--t-warn) 12%, transparent); }
 .tr-perf-hint.tr-warn { color: var(--t-warn); }
+
+/* 品牌化布局：宽屏下把“素材/队列”和“引擎/参数”分成两栏，窄屏保持单列。
+   只改视觉位置，不改任何 v-if / 事件 / 数据流；窄窗口或小屏回原顺序。 */
+
+.tr-runbar { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-3); position: sticky; top: var(--sp-2); z-index: 25; backdrop-filter: var(--glass-blur); background: color-mix(in srgb, var(--surface) 92%, transparent); }
+.tr-runbar-main { display: flex; align-items: baseline; gap: var(--sp-2); min-width: 0; }
+.tr-runbar-main b { font-size: var(--fs-sm); color: var(--text); }
+.tr-runbar-main span { font-size: var(--fs-xs); color: var(--text3); font-family: var(--font-num); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tr-runbar .btn { margin-left: auto; }
+.tr-runbar-hint { font-size: var(--fs-xs); color: var(--text3); }
+@media (max-width: 760px) { .tr-runbar-hint { display: none; } .tr-runbar { position: static; } }
+
+@media (min-width: 1200px) {
+  /* 宽屏也不强行三栏：左侧队列常驻，右侧主流程单列（引擎 → 高级参数 → 运行）。
+     参数面板需要足够的横向空间，用户不必在窄栏里操作。 */
+  .tr-view {
+    display: grid;
+    grid-template-columns: minmax(360px, 400px) minmax(0, 1fr);
+    grid-template-rows: auto;
+    gap: var(--sp-3);
+    align-items: start;
+    max-width: 1500px;
+    padding-left: var(--sp-4);
+    padding-right: var(--sp-4);
+  }
+  .tr-view > .tr-drop-card {
+    grid-column: 1;
+    grid-row: 1;
+    margin-top: 0;
+    position: sticky;
+    top: 0;
+    max-height: calc(100vh - var(--topbar-h) - var(--playerbar-h) - var(--sp-6));
+    overflow-y: auto;
+  }
+  .tr-view > .tr-card {
+    grid-column: 2;
+    grid-row: auto;
+    margin-top: 0;
+    min-width: 0;
+  }
+  .tr-view > .tr-engine { grid-column: 2; grid-row: 1; }
+  .tr-view > .tr-run-panel {
+    grid-column: 2;
+    grid-row: 2;
+    position: static;
+    margin-top: 0;
+    max-height: none;
+    overflow: visible;
+    overflow-x: clip;
+    min-width: 0;
+  }
+  .tr-batch-item { padding: 8px 10px; min-height: 38px; }
+  .tr-batch-item .tb-name { min-width: 0; }
+  .tr-batch-item .tb-bar { width: 64px; }
+  .tr-view > .tr-run-panel * { min-width: 0; }
+  .tr-view > .tr-run-panel .btn { max-width: 100%; white-space: normal; }
+}
+.tr-run-panel { position: static; margin-top: 0; }
 </style>

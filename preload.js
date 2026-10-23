@@ -366,6 +366,9 @@ contextBridge.exposeInMainWorld('fuBridge', {
       return () => ipcRenderer.removeListener('wallpaper:downloadProgress', listener);
     },
     removeLocal: (name) => ipcRenderer.invoke('wallpaper:removeLocal', name),
+    searchWallhaven: (q, page) => ipcRenderer.invoke('wallpaper:searchWallhaven', q, page),
+    downloadUrl: (url, name) => ipcRenderer.invoke('wallpaper:downloadUrl', url, name),
+    scanFolder: (dir) => ipcRenderer.invoke('wallpaper:scanFolder', dir),
   },
   // 可选 Rust 核心
   rustStatus: () => ipcRenderer.invoke('rust:status'),

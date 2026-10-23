@@ -146,8 +146,8 @@ def _builtin_presets():
         "tempo": 0,                   # 0 = 引擎默认 120（自动 BPM 优先）
         "perf": "quality",
         "denoise_mode": "off", "auto_bpm": False,
-        # 识别片段长度：Basic Pitch 模型输入固定 2s 窗，外层再切只会增加接缝 → 0 = 不切
-        "segment_sec": 0,
+        # ★ 2026-10-21：「识别片段长度」已移除 —— 分块转录实测块间质量参差不齐。
+        #   所有模型一律用各自的原生块长（= 训练块长），预设里不再有这个键。
     }
     piano = {
         "onset_threshold": 0.3, "frame_threshold": 0.1,
@@ -155,15 +155,13 @@ def _builtin_presets():
         "include_pedal": True,        # 踏板：钢琴转录的必需信息，绝不默认丢
         "perf": "quality",
         "denoise_mode": "off", "auto_bpm": False,
-        # piano-transcription 训练块长 10s（config.py segment_seconds=10）
-        "segment_sec": 10,
     }
     sep = {k: v for k, v in s.items() if k in
            ("onset_threshold", "frame_threshold", "minimum_note_length", "midi_tempo")}
     return {
         "Basic Pitch · 最优": {"mode": "universal", "params": dict(basic)},
-        "YourMT3+ · 最优": {"mode": "universal", "params": {**basic, "model": "yourmt3", "segment_sec": 0}},
-        "MIROS · 最优": {"mode": "universal", "params": {**basic, "model": "miros", "segment_sec": 0}},
+        "YourMT3+ · 最优": {"mode": "universal", "params": {**basic, "model": "yourmt3"}},
+        "MIROS · 最优": {"mode": "universal", "params": {**basic, "model": "miros"}},
         "MuScriptor · 最优": {
             "mode": "universal",
             "params": {
@@ -173,16 +171,14 @@ def _builtin_presets():
                 "prelude_forcing": True,
                 "precision": "fp32",
                 "max_note_hold": 0,       # ★ 不截断：僵尸音改由**音频证据**收尾（见 engine_muscriptor 的 _make_pitch_evidence）
-                # ★ 静音分段默认关（用户 2026-10-14 定）：在完全空白静音处切段、逐段转录后
-                #   合并成一份 MIDI，用长音频的静音换时间。开启后接缝处上下文变少，所以不默认开。
-                # MuScriptor 训练/推理块长 5s；固定训练值最不容易在块边界换音色
-                "segment_sec": 5,
+                # ★ 2026-10-21：静音分段与「识别片段长度」均已移除（分块转录，块间质量参差）。
+                #   MuScriptor 一律用上游训练/推理块长 5s；跨块延音由 _stitch_chunk_boundaries 缝合。
             },
         },
-        "钢琴 · 最优": {"mode": "piano", "params": {**piano, "model": "piano_pt", "segment_sec": 10}},
-        "Aria-AMT · 最优": {"mode": "piano", "params": {**piano, "model": "aria", "segment_sec": 30}},
-        "Transkun · 最优": {"mode": "piano", "params": {**piano, "model": "transkun", "segment_sec": 16}},
-        "hFT-Transformer · 最优": {"mode": "piano", "params": {**piano, "model": "hft", "segment_sec": 0}},
+        "钢琴 · 最优": {"mode": "piano", "params": {**piano, "model": "piano_pt"}},
+        "Aria-AMT · 最优": {"mode": "piano", "params": {**piano, "model": "aria"}},
+        "Transkun · 最优": {"mode": "piano", "params": {**piano, "model": "transkun"}},
+        "hFT-Transformer · 最优": {"mode": "piano", "params": {**piano, "model": "hft"}},
         "分离 · 最优": {
             "mode": "separate",
             "params": {

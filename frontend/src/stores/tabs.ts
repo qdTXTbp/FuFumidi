@@ -86,6 +86,17 @@ export const useTabsStore = defineStore('songTabs', () => {
     persist();
   }
 
+  /** 拖拽重排标签；不改变当前激活项 */
+  function move(from: number, to: number) {
+    const i = Math.max(0, Math.min(tabs.value.length - 1, Number(from)));
+    const j = Math.max(0, Math.min(tabs.value.length - 1, Number(to)));
+    if (i === j || i < 0 || j < 0) return;
+    const [item] = tabs.value.splice(i, 1);
+    if (!item) return;
+    tabs.value.splice(j, 0, item);
+    persist();
+  }
+
   /** 启动时与曲库对齐：清掉已不在曲库里的标签；返回被清掉的 id */
   function hydrate(availableIds: Array<string | number> = []) {
     const ok = new Set((availableIds || []).map(String));
@@ -98,5 +109,5 @@ export const useTabsStore = defineStore('songTabs', () => {
 
   function clear() { tabs.value = []; activeId.value = ''; persist(); }
 
-  return { tabs, activeId, open, activate, close, closeOthers, hydrate, clear, maxTabs: MAX_TABS };
+  return { tabs, activeId, open, activate, close, closeOthers, move, hydrate, clear, maxTabs: MAX_TABS };
 });

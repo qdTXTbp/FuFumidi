@@ -16,7 +16,8 @@ export const SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
 
 /** 视图 → 允许的页签（与 ViewViews/ViewResources 的 rcTabs 对应；多一个也别崩） */
 export const VIEW_TABS = {
-  views: ['viz', 'analyze', 'score', 'arrange'],
+  music: ['play', 'viz', 'score'],
+  views: ['edit', 'lyrics', 'analyze', 'arrange'],
   resources: ['model', 'soundfonts', 'resources', 'storage'],
   singer: ['editor', 'banks'],
   transcode: ['transcribe', 'convert'],

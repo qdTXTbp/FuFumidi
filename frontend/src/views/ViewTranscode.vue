@@ -6,6 +6,8 @@ import ViewTranscribe from './ViewTranscribe.vue';
 import ViewConvert from './ViewConvert.vue';
 // 第三个入口：谱面 → MIDI（与「转录」「转换」并列）
 import ViewScoreConvert from './ViewScoreConvert.vue';
+import ViewCover from './ViewCover.vue';
+import ViewSing from './ViewSing.vue';
 import { t } from '../core/i18n.js';
 const route = useRoute();
 const router = useRouter();
@@ -15,8 +17,10 @@ const tabs = [
   // 「变谱」= 乐谱（MusicXML/MXL）→ MIDI；放在这里是因为用户对这一页的心智是
   // 「把别的东西变成 MIDI」。
   { id: 'score', label: t('变谱'), ic: 'score' },
+  { id: 'cover', label: t('翻唱'), ic: 'mic' },
+  { id: 'singer', label: t('调教'), ic: 'utau' },
 ];
-const comps = { transcribe: ViewTranscribe, convert: ViewConvert, score: ViewScoreConvert };
+const comps = { transcribe: ViewTranscribe, convert: ViewConvert, score: ViewScoreConvert, cover: ViewCover, singer: ViewSing };
 const validTab = (id) => tabs.some(x => x.id === id);
 const tab = ref(validTab(String(route.query.tab || '')) ? String(route.query.tab) : tabs[0].id);
 const cur = computed(() => comps[tab.value]);
@@ -32,7 +36,7 @@ watch(() => route.query.tab, (v) => {
 <template>
   <div class="group-page">
     <div class="group-tabs">
-      <button v-for="x in tabs" :key="x.id" class="gp-tab" :class="{ on: tab === x.id }" @click="select(x.id)">
+      <button v-for="x in tabs" :key="x.id" class="gp-tab" :class="{ on: tab === x.id }" :data-view="x.id" @click="select(x.id)">
         <Icon :name="x.ic" :size="14" /> {{ t(x.label) }}
       </button>
     </div>

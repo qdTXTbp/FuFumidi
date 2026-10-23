@@ -2180,6 +2180,18 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 
 <template>
   <div class="sing-page">
+    <header class="sing-head">
+      <div class="sing-head-emblem"><Icon name="mic" :size="22" /></div>
+      <div class="sing-head-copy">
+        <div class="sing-kicker">{{ t('创作') }} · {{ t('调教') }}</div>
+        <div class="sing-title-row"><h1>{{ t('调教') }}</h1><span class="sing-badge">{{ t('歌声合成') }}</span></div>
+        <p>{{ t('选歌手、画音符、填词，渲染成人声。') }}</p>
+      </div>
+      <div class="sing-head-actions">
+        <button class="btn sm" @click="openProject"><Icon name="folder" :size="13" />{{ t('打开工程') }}</button>
+        <button class="btn sm primary" @click="importMidi"><Icon name="import" :size="13" />{{ t('导入') }} MIDI</button>
+      </div>
+    </header>
     <!-- ==================== 页签：编辑器 / 声库 ====================
          两页合并后入口只有一个（顶栏「调教」），这里切工作台的两半。
          用 v-show 保留编辑器状态（卷帘滚动位置、选中音符）；声库面板按需挂载，进页即拉列表。 -->
@@ -3218,7 +3230,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
              background: var(--canvas); }
 .sing-nav { display: flex; align-items: center; gap: var(--sp-2); padding: 8px 14px; flex: none;
             border-bottom: 1px solid var(--border); background: var(--canvas); }
-.sing-nav .sp { flex: 1; }
+.sing-nav .sp { display: none; }
 .sn-tab { display: inline-flex; align-items: center; gap: var(--sp-2); padding: 6px 13px; cursor: pointer;
           border: 1px solid var(--border); border-radius: var(--r-pill); background: var(--surface);
           color: var(--steel); font-size: var(--fs-md); }
@@ -3306,7 +3318,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .trk-item.on { border-color: var(--brand); background: var(--brand-soft); }
 .trk-row1 { display: flex; align-items: center; gap: var(--sp-1); margin-bottom: 4px; }
 .trk-row2 { display: flex; align-items: center; gap: var(--sp-2); margin-top: 4px; }
-.trk-item .nm { flex: 1; min-width: 0; }
+.trk-item .nm { flex: 1; min-width: 0; font-family: var(--font-ui); font-size: var(--fs-sm); }
 .trk-item .pth { width: 100%; min-width: 0; font-size: var(--fs-sm); height: 24px; }
 .trk-item .pth { width: 100%; font-size: var(--fs-xs); }
 .trk-item .eng { font-size: var(--fs-xs); padding: 1px 3px; border-radius: var(--r-sm);
@@ -3602,4 +3614,29 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .pr-ad, .eng, .pth, .lang, .ck, .dev, .tr-track, .pr-tool, .pr-hint-btn, .curves-toggle, .rs-track, .select-input { min-height: 28px; }
 /* 缩放子树（钢琴卷帘预览）里的元素：视觉尺寸 = 布局尺寸 × scale，
    这里按布局尺寸给下限（28px 已达标），视觉小于 28 是刻意的缩放效果，不作为命中目标。 */
+
+/* ===== 6.2.1 调教页页头与工作台外壳 ===== */
+.sing-page { background: transparent; gap: 10px; padding: 12px 14px 10px; }
+.sing-head { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border: 1px solid var(--hairline); border-radius: var(--r-lg); background: linear-gradient(120deg, color-mix(in srgb, var(--accent-sapphire) 16%, var(--surface)), color-mix(in srgb, var(--accent-sky) 5%, var(--surface)) 58%, var(--surface)); box-shadow: var(--shadow-sm); flex: none; }
+.sing-head-emblem { width: 44px; height: 44px; flex: none; border-radius: 14px; display: grid; place-items: center; color: var(--accent-sky); background: color-mix(in srgb, var(--accent-sky) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent-sky) 24%, transparent); }
+.sing-head-copy { min-width: 0; flex: 1; }
+.sing-kicker { font-size: var(--fs-xs); letter-spacing: .16em; color: var(--accent-sky); }
+.sing-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sing-title-row h1 { margin: 0; font-size: var(--fs-xl); line-height: 1.2; color: var(--text); }
+.sing-badge { padding: 1px 8px; border-radius: var(--r-pill); border: 1px solid color-mix(in srgb, var(--accent-sky) 30%, transparent); color: var(--accent-sky); background: color-mix(in srgb, var(--accent-sky) 8%, transparent); font-size: var(--fs-xs); }
+.sing-head-copy p { margin: 3px 0 0; color: var(--text2); font-size: var(--fs-sm); }
+.sing-head-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.sing-nav { display: flex; align-items: center; gap: 4px; padding: 5px; border: 1px solid var(--hairline); border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface) 70%, transparent); flex: none; border-bottom: 1px solid var(--hairline); }
+.sn-tab { border: 0; border-radius: var(--r-md); background: transparent; padding: 8px 13px; gap: 6px; color: var(--text2); }
+.sn-tab i { opacity: .65; }
+.sn-tab:hover { background: color-mix(in srgb, var(--accent-sky) 8%, transparent); border: 0; color: var(--text); }
+.sn-tab.on { background: color-mix(in srgb, var(--accent-sapphire) 22%, var(--surface)); border: 0; color: var(--text); }
+.sing-empty { margin: 0; border-color: color-mix(in srgb, var(--accent-sky) 22%, var(--hairline)); border-radius: var(--r-md); background: color-mix(in srgb, var(--accent-sky) 6%, var(--surface)); padding: 10px 14px; }
+.sing-empty .se-main > .muted { color: var(--text3); }
+.sing { border: 1px solid var(--hairline); border-radius: var(--r-lg); overflow: hidden; background: color-mix(in srgb, var(--surface) 58%, transparent); }
+.trk { border-right-color: var(--hairline); background: color-mix(in srgb, var(--canvas) 46%, transparent); }
+.trk-head { border-bottom-color: var(--hairline); }
+.sing-banks, .sing-maker { border: 1px solid var(--hairline); border-radius: var(--r-lg); overflow: hidden; background: color-mix(in srgb, var(--surface) 58%, transparent); }
+@media (max-width: 900px) { .sing-head { flex-wrap: wrap; } .sing-head-actions { margin-left: 0; } .sing-nav { flex-wrap: wrap; } }
+
 </style>

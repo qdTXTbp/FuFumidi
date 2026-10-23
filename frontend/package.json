@@ -1,7 +1,7 @@
 {
   "name": "fufumidi-frontend",
   "private": true,
-  "version": "6.1.7",
+  "version": "6.2.2",
   "type": "module",
   "scripts": {
     "dev": "vite",

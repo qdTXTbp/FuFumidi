@@ -43,7 +43,8 @@ const jaText = fs.readFileSync(JA, 'utf8');
 const keys = [...extractKeys(guideCode)];
 
 test('引导里能静态提取到文案（守卫本身有效）', () => {
-  assert.ok(keys.length > 100, `只提取到 ${keys.length} 条，正则可能失效`);
+  // v4 改成章节式（6 章 19 步），文案仍是 70+ 条；阈值随结构下调，但仍守住高密度守卫
+  assert.ok(keys.length > 60, `只提取到 ${keys.length} 条，正则可能失效`);
 });
 
 test('引导文案全部有英文条目', () => {
