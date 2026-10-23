@@ -463,8 +463,11 @@ function dataUrlToBytes(dataUrl) {
 function scorePageSvgs() {
   if (!scoreEl.value) return [];
   return Array.from(scoreEl.value.querySelectorAll('svg')).filter((svg) => {
-    const w = svg.clientWidth || svg.getBoundingClientRect().width || parseFloat(svg.getAttribute('width')) || 0;
-    const h = svg.clientHeight || svg.getBoundingClientRect().height || parseFloat(svg.getAttribute('height')) || 0;
+    // Verovio 在顶层 SVG 里还嵌了一个 definition-scale 的 SVG；它 clientWidth=0，
+    // 但 getBoundingClientRect() 仍然有尺寸，之前的回退逻辑会把它当成一页，生成 27×38 的纸条。
+    if (svg.parentElement && svg.parentElement.closest('svg')) return false;
+    const w = svg.clientWidth || parseFloat(svg.getAttribute('width')) || 0;
+    const h = svg.clientHeight || parseFloat(svg.getAttribute('height')) || 0;
     return w > 100 && h > 100;
   });
 }
@@ -487,6 +490,7 @@ async function rasterizeSvg(svg, scale, tileH) {
   // 按图片自然像素裁切；不能按 SVG 的 CSS 宽度裁，否则只会截到左侧一条。
   const natW = img.naturalWidth || Math.round(displayW * 2);
   const natH = img.naturalHeight || Math.round(displayH * 2);
+  if (natW < 100 || natH < 100) return [];
   const ratioX = natW / Math.max(1, displayW);
   const ratioY = natH / Math.max(1, displayH);
   // 分页优先在「系统」边界断开，不把一行五线谱从中间切到两页。
