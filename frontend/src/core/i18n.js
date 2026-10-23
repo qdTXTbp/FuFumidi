@@ -15,6 +15,9 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  '没有可预览的乐谱页': "No score pages to preview",
+  '上一页': "Previous",
+  '下一页': "Next",
   '当前壁纸库的应用目标是音符瀑布背景；选择图片 / 动态壁纸只会改变瀑布画面，不影响整窗壁纸。': "The wallpaper library currently targets the waterfall background; choosing an image or motion wallpaper changes only the waterfall, not the app-wide wallpaper.",
   '当前壁纸库的应用目标是整窗壁纸；选择图片 / 动态壁纸只会改变工具背景。': "The wallpaper library currently targets the app-wide wallpaper; choosing an image or motion wallpaper changes only the app background.",
   '请先切换到五线谱或总谱模式': "Switch to staff or full-score mode first",
