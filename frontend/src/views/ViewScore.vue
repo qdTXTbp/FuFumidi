@@ -18,6 +18,7 @@ import { songToAbc, jianpuData, tabData, detectSf, ABC_KEY_NAMES } from '../core
 import { songToMusicXMLTrack, songToMusicXML, buildFullScore } from '../core/musicxml_out.js';
 
 const mode = ref('staff');       // staff | score(总谱) | jianpu | guitar | bass
+const modeLabel = computed(() => ({ staff: t('五线谱'), score: t('总谱'), jianpu: t('简谱'), guitar: t('吉他六线谱'), bass: t('贝斯四线谱') }[mode.value] || ''));
 // 总谱模式与单轨五线谱共用同一个 Verovio 容器与刻版流程，差别只在喂哪份 MusicXML：
 //   staff → songToMusicXMLTrack(当前轨)；score → buildFullScore(全曲所有声部，带谱表括号)
 const isStaffLike = computed(() => mode.value === 'staff' || mode.value === 'score');
@@ -747,73 +748,78 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="score-view">
-    <div class="score-toolbar">
-      <span class="tb-label">{{ t('乐谱轨道') }}</span>
-      <span class="trk-sel">
-        <span class="trk-dot" :style="{ background: (selTrack ? (TRACK_COLORS[trackSel % TRACK_COLORS.length]) : 'var(--stone)') }"></span>
-        <select class="select-input" :value="trackSel" @change="trackSel = $event.target.value" :disabled="!tracks.length || mode === 'score'" :title="mode === 'score' ? t('总谱模式显示全部声部') : ''">
-          <option v-for="(tr, i) in tracks" :key="i" :value="i">{{ tr.name || (t('音轨 ') + (i + 1)) }}</option>
-        </select>
-      </span>
-      <span class="sep"></span>
-
-      <select class="select-input" :value="mode" @change="mode = $event.target.value; changeMode()" :title="mode === 'score' ? t('总谱：所有声部同屏，可导出总谱 MusicXML / PNG / PDF') : ''">
-        <option value="staff">{{ t('五线谱') }}</option>
-        <option value="score">{{ t('总谱') }}</option>
-        <option value="jianpu">{{ t('简谱') }}</option>
-        <option value="guitar">{{ t('吉他六线谱') }}</option>
-        <option value="bass">{{ t('贝斯四线谱') }}</option>
-      </select>
-      <select v-if="mode === 'jianpu'" class="select-input" :value="fontSz" @change="fontSz = parseInt($event.target.value, 10) || 22" style="width:78px">
-        <option :value="18">{{ t('简谱小') }}</option>
-        <option :value="22">{{ t('简谱中') }}</option>
-        <option :value="28">{{ t('简谱大') }}</option>
-      </select>
-
-      <span class="sep"></span>
-
-      <button class="btn sm" :class="{ active: follow }" @click="follow = !follow" :title="t('跟随播放')">
-        <Icon name="play2" :size="14" />{{ t('跟随播放') }}
-      </button>
-      <button class="btn sm" @click="showOpts = !showOpts" :title="t('显示选项')">
-        <Icon name="eye" :size="14" />{{ t('显示') }}
-      </button>
-      <Transition name="pop">
-      <div v-if="showOpts" class="score-pop" @mouseleave="showOpts = false">
-        <label><input type="checkbox" v-model="opts.simple" @change="changeMode()" />{{ t('简化记谱') }}</label>
-        <label><input type="checkbox" v-model="opts.grid" @change="changeMode()" />{{ t('四分音符网格') }}</label>
-        <label><input type="checkbox" v-model="opts.beam" @change="changeMode()" />{{ t('自动连线') }}</label>
-        <label><input type="checkbox" v-model="opts.multi" @change="changeMode()" />{{ t('多轨显示') }}</label>
+    <header class="score-head">
+      <div class="score-emblem"><Icon name="score" :size="22" /></div>
+      <div class="score-head-copy">
+        <div class="score-kicker">{{ t('工作台') }} · {{ t('乐谱') }}</div>
+        <div class="score-title-row">
+          <h1>{{ t('乐谱') }}</h1>
+          <span class="score-mode-badge">{{ modeLabel }}</span>
+          <span v-if="song" class="score-badge-soft">{{ tracks.length }} {{ t('轨') }}</span>
+        </div>
+        <p>{{ status || defStatus }}</p>
       </div>
-      </Transition>
+      <div class="score-head-actions">
+        <button class="btn sm primary" @click="previewScore" :disabled="!isStaffLike || previewBusy" :title="t('分页预览')">
+          <Icon name="eye" :size="14" />{{ previewBusy ? t('生成中…') : t('预览') }}
+        </button>
+        <button class="btn sm" @click="exportPdf" :disabled="!isStaffLike" :title="t('导出 PDF（打印当前页面）')">
+          <Icon name="save" :size="14" />{{ t('导出') }} PDF
+        </button>
+      </div>
+    </header>
 
-      <span class="sep"></span>
-      <button class="btn sm" @click="importMusicXML" :disabled="midiBusy" :title="t('导入 MusicXML 文件')">
-        <Icon name="import" :size="14" />{{ t('MusicXML') }}
-      </button>
-      <button class="btn sm" @click="exportMusicXML" :disabled="!song" :title="t('导出 MusicXML（整份总谱，每个声部一条 part）')">
-        <Icon name="save" :size="14" />{{ t('导出 XML') }}
-      </button>
-      <button class="btn sm" @click="previewScore" :disabled="!isStaffLike || previewBusy" :title="t('分页预览')">
-        <Icon name="eye" :size="14" />{{ t('预览') }}
-      </button>
-      <button class="btn sm" @click="exportStaffPng" :disabled="!isStaffLike || exporting" :title="mode === 'score' ? t('导出总谱 PNG') : ''">
-        <Icon name="save" :size="14" />{{ t('PNG') }}
-      </button>
-      <button class="btn sm" @click="exportPdf" :disabled="!isStaffLike" :title="t('导出 PDF（打印当前页面）')">
-        <Icon name="save" :size="14" />{{ t('PDF') }}
-      </button>
-      <button class="btn sm" @click="openScoreSplit" :disabled="!isStaffLike || !song" :title="t('分屏查看乐谱并点击定位')">
-        <Icon name="viz" :size="14" />{{ t('分屏') }}
-      </button>
+    <div class="score-toolbar">
+      <div class="score-field score-track">
+        <span class="score-label">{{ t('乐谱轨道') }}</span>
+        <span class="trk-sel">
+          <span class="trk-dot" :style="{ background: (selTrack ? (TRACK_COLORS[trackSel % TRACK_COLORS.length]) : 'var(--stone)') }"></span>
+          <select class="select-input" :value="trackSel" @change="trackSel = $event.target.value" :disabled="!tracks.length || mode === 'score'" :title="mode === 'score' ? t('总谱模式显示全部声部') : ''">
+            <option v-for="(tr, i) in tracks" :key="i" :value="i">{{ tr.name || (t('音轨 ') + (i + 1)) }}</option>
+          </select>
+        </span>
+      </div>
 
-      <span style="flex:1"></span>
-      <span class="tb-status">
-        <span class="pulse" :class="{ on: state.playing }"></span>
-        <span>{{ status || defStatus }}</span>
-      </span>
+      <div class="score-modes" role="tablist" :aria-label="t('乐谱')">
+        <button v-for="m in ['staff','score','jianpu','guitar','bass']" :key="m" class="score-mode" :class="{ on: mode === m }" @click="mode = m; changeMode()">
+          {{ { staff: t('五线谱'), score: t('总谱'), jianpu: t('简谱'), guitar: t('吉他六线谱'), bass: t('贝斯四线谱') }[m] }}
+        </button>
+        <select v-if="mode === 'jianpu'" class="select-input score-fontsize" :value="fontSz" @change="fontSz = parseInt($event.target.value, 10) || 22" :title="t('简谱字号')">
+          <option :value="18">{{ t('简谱小') }}</option>
+          <option :value="22">{{ t('简谱中') }}</option>
+          <option :value="28">{{ t('简谱大') }}</option>
+        </select>
+      </div>
 
-      <span class="sep"></span>
+      <div class="score-actions">
+        <button class="btn sm" :class="{ active: follow }" @click="follow = !follow" :title="t('跟随播放')">
+          <Icon name="play2" :size="14" />{{ t('跟随播放') }}
+        </button>
+        <div class="score-pop-wrap">
+          <button class="btn sm" @click="showOpts = !showOpts" :title="t('显示选项')">
+            <Icon name="eye" :size="14" />{{ t('显示') }}
+          </button>
+          <Transition name="pop">
+            <div v-if="showOpts" class="score-pop" @mouseleave="showOpts = false">
+              <label><input type="checkbox" v-model="opts.simple" @change="changeMode()" />{{ t('简化记谱') }}</label>
+              <label><input type="checkbox" v-model="opts.grid" @change="changeMode()" />{{ t('四分音符网格') }}</label>
+              <label><input type="checkbox" v-model="opts.beam" @change="changeMode()" />{{ t('自动连线') }}</label>
+              <label><input type="checkbox" v-model="opts.multi" @change="changeMode()" />{{ t('多轨显示') }}</label>
+            </div>
+          </Transition>
+        </div>
+        <span class="score-sep"></span>
+        <button class="btn sm" @click="importMusicXML" :disabled="midiBusy" :title="t('导入 MusicXML 文件')"><Icon name="import" :size="14" />{{ t('导入') }}</button>
+        <button class="btn sm" @click="exportMusicXML" :disabled="!song" :title="t('导出 MusicXML（整份总谱，每个声部一条 part）')"><Icon name="save" :size="14" />{{ t('XML') }}</button>
+        <button class="btn sm" @click="exportStaffPng" :disabled="!isStaffLike || exporting" :title="mode === 'score' ? t('导出总谱 PNG') : ''"><Icon name="save" :size="14" />{{ t('PNG') }}</button>
+        <button class="btn sm" @click="openScoreSplit" :disabled="!isStaffLike || !song" :title="t('分屏查看乐谱并点击定位')"><Icon name="viz" :size="14" />{{ t('分屏') }}</button>
+      </div>
+    </div>
+
+    <div class="score-subbar">
+      <span class="score-live"><span class="pulse" :class="{ on: state.playing }"></span><span>{{ status || defStatus }}</span></span>
+      <span class="score-spacer"></span>
+      <span class="score-zoom-label">{{ t('缩放') }}</span>
       <div class="zoom-fab">
         <button class="icon-btn" @click="setZoom(zoom - 0.1)" :title="t('缩小')"><Icon name="minus" :size="14" /></button>
         <span class="zf-pct">{{ Math.round(zoom * 100) }}%</span>
@@ -822,9 +828,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="score-scroll" ref="scrollEl">
-      <!-- 五线谱：abcjs 渲染容器 -->
       <div ref="scoreEl" id="abcScore" v-show="isStaffLike" @click="onScoreClick"></div>
-      <!-- 简谱 -->
       <div v-if="mode === 'jianpu'">
         <div v-for="b in jianpuBlocks" :key="b.ti" class="score-block">
           <div class="score-block-name">{{ b.name }}</div>
@@ -840,7 +844,6 @@ onBeforeUnmount(() => {
           </template>
         </div>
       </div>
-      <!-- 吉他 / 贝斯 TAB -->
       <div v-if="mode === 'guitar' || mode === 'bass'">
         <div v-for="b in tabBlocks" :key="b.ti" class="score-block">
           <div class="score-block-name">{{ b.name }}</div>
@@ -862,7 +865,6 @@ onBeforeUnmount(() => {
       <span class="lg-item"><span class="dot" style="background:var(--accent)"></span>{{ t('升降号自动按调号判定') }}</span>
     </div>
 
-    <!-- 乐谱分页预览弹窗 -->
     <Transition name="ov">
       <div v-if="previewOpen" class="pv-overlay" @click.self="previewOpen = false">
       <div class="pv-card">
@@ -883,7 +885,6 @@ onBeforeUnmount(() => {
       </div>
     </Transition>
 
-    <!-- 乐谱分屏预览弹窗 -->
     <Transition name="ov">
       <div v-if="splitOpen" class="pv-overlay" @click.self="splitOpen = false">
       <div class="pv-card">
@@ -995,4 +996,52 @@ onBeforeUnmount(() => {
 .pv-page img { width: 100%; display: block; background: var(--canvas); }
 .split-body { flex: 1; overflow: auto; padding: 14px 16px; }
 .split-body svg { max-width: 100%; display: block; margin: 0 auto; background: var(--canvas); }
+
+/* ===== 6.2.0 乐谱页重排：页头 / 模式 / 动作 / 谱面 ===== */
+.score-view { display: flex; flex-direction: column; height: 100%; gap: 12px; padding: 12px 16px 10px; background: transparent; min-height: 0; }
+.score-head { display: flex; align-items: center; gap: 14px; padding: 15px 18px; border: 1px solid var(--hairline); border-radius: var(--r-lg); background: linear-gradient(120deg, color-mix(in srgb, var(--accent-sapphire) 15%, var(--surface)), color-mix(in srgb, var(--accent-sky) 5%, var(--surface)) 58%, var(--surface)); box-shadow: var(--shadow-sm); flex: none; }
+.score-emblem { width: 46px; height: 46px; flex: none; border-radius: 14px; display: grid; place-items: center; color: var(--accent-sky); background: color-mix(in srgb, var(--accent-sky) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent-sky) 24%, transparent); }
+.score-head-copy { min-width: 0; flex: 1; }
+.score-kicker { font-size: var(--fs-xs); letter-spacing: .16em; color: var(--accent-sky); margin-bottom: 1px; }
+.score-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.score-title-row h1 { margin: 0; font-size: var(--fs-xl); line-height: 1.2; color: var(--text); }
+.score-mode-badge { padding: 1px 8px; border-radius: var(--r-pill); border: 1px solid color-mix(in srgb, var(--accent-sky) 30%, transparent); color: var(--accent-sky); background: color-mix(in srgb, var(--accent-sky) 8%, transparent); font-size: var(--fs-xs); }
+.score-badge-soft { padding: 1px 8px; border-radius: var(--r-pill); border: 1px solid var(--hairline); color: var(--text3); font-size: var(--fs-xs); }
+.score-head-copy p { margin: 3px 0 0; color: var(--text2); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.score-head-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.score-toolbar { position: relative; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--hairline); border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface) 72%, transparent); flex: none; }
+.score-field { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.score-label { font-size: var(--fs-xs); color: var(--text3); white-space: nowrap; }
+.score-track .select-input { min-width: 150px; max-width: 220px; }
+.score-modes { display: flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--hairline); border-radius: var(--r-pill); background: color-mix(in srgb, var(--canvas) 45%, transparent); }
+.score-mode { border: 0; background: transparent; color: var(--text2); padding: 5px 10px; border-radius: var(--r-pill); font-size: var(--fs-sm); cursor: pointer; white-space: nowrap; }
+.score-mode:hover { color: var(--text); background: color-mix(in srgb, var(--accent-sky) 8%, transparent); }
+.score-mode.on { color: var(--text); background: color-mix(in srgb, var(--accent-sapphire) 24%, var(--surface)); font-weight: 600; }
+.score-fontsize { height: 28px; margin-left: 4px; width: 88px; }
+.score-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.score-pop-wrap { position: relative; }
+.score-sep { width: 1px; height: 20px; background: var(--hairline); margin: 0 2px; }
+.score-subbar { display: flex; align-items: center; gap: 10px; padding: 0 4px; flex: none; min-height: 28px; }
+.score-live { display: inline-flex; align-items: center; gap: 7px; min-width: 0; color: var(--text2); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.score-live .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--text3); flex: none; }
+.score-live .pulse.on { background: var(--success-text); animation: pulse 1.4s var(--ease-in-out) infinite; }
+.score-spacer { flex: 1; }
+.score-zoom-label { font-size: var(--fs-xs); color: var(--text3); }
+.zoom-fab { display: inline-flex; align-items: center; gap: 1px; padding: 2px; border: 1px solid var(--hairline); border-radius: var(--r-pill); background: color-mix(in srgb, var(--surface) 65%, transparent); }
+.zf-pct { min-width: 42px; text-align: center; color: var(--text2); font-family: var(--font-num); font-size: var(--fs-xs); }
+.score-scroll { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 14px 18px 24px; border: 1px solid var(--hairline); border-radius: var(--r-lg); background: color-mix(in srgb, var(--canvas) 58%, transparent); scrollbar-gutter: stable; }
+.score-scroll #abcScore { max-width: 100%; }
+.score-legend { display: flex; gap: var(--sp-4); flex-wrap: wrap; align-items: center; padding: 8px 12px; border: 1px solid var(--hairline); border-radius: var(--r-md); background: color-mix(in srgb, var(--surface) 52%, transparent); font-size: var(--fs-xs); color: var(--text3); flex: none; }
+.score-legend .lg-item { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.score-legend .dot { width: 7px; height: 7px; border-radius: 50%; }
+.score-pop { right: 0; top: calc(100% + 6px); min-width: 160px; }
+.score-pop-wrap .score-pop { position: absolute; }
+.btn.sm.active { border-color: color-mix(in srgb, var(--accent-sky) 38%, var(--hairline)); color: var(--accent-sky); background: color-mix(in srgb, var(--accent-sky) 8%, transparent); }
+@media (max-width: 1050px) {
+  .score-head { align-items: flex-start; }
+  .score-head-actions { flex-wrap: wrap; }
+  .score-actions { margin-left: 0; }
+  .score-track .select-input { max-width: 160px; }
+}
+
 </style>
