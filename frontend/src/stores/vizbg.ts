@@ -186,6 +186,15 @@ export const useVizBgStore = defineStore('vizbg', () => {
     }
   }
 
+  /** 把某张静态图片设为**音符瀑布背景**（本地路径或 file 地址） */
+  async function setImagePath(p: string) {
+    bg.path = String(p || '').trim();
+    bg.mode = 'image';
+    save();
+    if (!bg.path) { image = null; return false; }
+    return await ensureImage();
+  }
+
   /** 把某张动态壁纸设为**音符瀑布背景**（本地路径或 https 地址都行） */
   async function setWall(p: string) {
     bg.wallPath = String(p || '').trim();
@@ -361,6 +370,6 @@ export const useVizBgStore = defineStore('vizbg', () => {
            userThemes, themeName, vizTheme, setVizTheme, themeList, applyTheme, saveTheme, deleteTheme,
            ssaa, setSsaa,
            save, drawOpts, fxOpts, setFx, setFxAny, resetFx, imageEl,
-           wallReady, wallActive, wallName, setWall, clearWall, setWallActive, wallFileUrl,
+           wallReady, wallActive, wallName, setWall, setImagePath, clearWall, setWallActive, wallFileUrl,
            setMode, setColor, setBlur, setDim, ensureImage, pickImage, init };
 });
