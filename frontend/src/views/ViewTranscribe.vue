@@ -2518,7 +2518,7 @@ onBeforeUnmount(() => {
 .fb-label { font-size: var(--fs-md); font-weight: 600; color: var(--ink); }
 .fb-hint { font-size: var(--fs-xs); color: var(--stone); margin-top: 1px; }
 .tr-batch-ctls { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
-.tr-batch-list { border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--canvas); overflow: hidden; }
+.tr-batch-list { border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--canvas); overflow-y: auto; overflow-x: hidden; max-height: min(48vh, 420px); scrollbar-width: thin; scrollbar-gutter: stable; }
 .tr-batch-item { display: flex; align-items: center; gap: var(--sp-2); padding: 6px 10px; border-bottom: 1px solid var(--hairline-soft); font-size: var(--fs-sm); }
 .tr-batch-item:last-child { border-bottom: none; }
 .tb-name { flex: 1; min-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
