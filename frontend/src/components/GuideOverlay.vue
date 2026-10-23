@@ -1,5 +1,5 @@
 <script setup>
-// 新手引导 v4：章节式学习（19 步 / 6 章），首次打开自动出现；完成进度持久化。
+// 新手引导 v5：章节式学习（31 步 / 6 章），首次打开自动出现；完成进度持久化。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
@@ -19,54 +19,64 @@ const doneChapters = ref(loadDone());
 
 const CHAPTERS = computed(() => [
   {
-    id: 'start', icon: 'home', title: t('第一章 · 入门'), desc: t('左侧轨道、顶栏、打开中的曲目与首页。'),
+    id: 'start', icon: 'home', title: t('第一章 · 入门'), desc: t('五项左轨、顶栏标签、首页入口与外观抽屉。'),
     steps: [
-      { title: t('欢迎使用 FuFumidi'), desc: t('一处完成播放、转录、编辑与导出。这不是功能清单，跟着走一遍就知道每块在哪。'), selector: '', route: '#/home' },
-      { title: t('左侧轨道：五个入口'), desc: t('首页 / 曲库 / 工作台 / 创作 / 资源。底部还有命令面板、外观、帮助、设置、侧栏和播放栏开关。'), selector: '.primary-rail', route: '#/home' },
-      { title: t('顶栏与曲目标签'), desc: t('后退 / 前进；中间是打开中的曲目，可切换、关闭、拖动排序；页面二级页签在内容区。'), selector: '.topbar', route: '#/home' },
-      { title: t('首页：继续或开始'), desc: t('继续上次工程；拖入 MIDI / 音频，或从曲库导入。'), selector: '.home-view', route: '#/home' },
+      { title: t('欢迎使用 FuFumidi'), desc: t('一处完成播放、转录、编辑与导出。跟着走一遍，知道每块在哪里。'), selector: '', route: '#/home' },
+      { title: t('左侧轨道：五个入口'), desc: t('首页 / 音乐 / 工作台 / 创作 / 资源。底部是命令面板、外观、帮助、设置、侧栏与播放栏开关。'), selector: '.primary-rail', route: '#/home' },
+      { title: t('顶栏与曲目标签'), desc: t('后退 / 前进；中间是打开中的曲目，可切换、关闭、拖动排序；超过 6 个自动折叠，右键可分组。'), selector: '.topbar', route: '#/home' },
+      { title: t('首页：继续或开始'), desc: t('继续上次工程；右上角小立绘旁边是当前曲目卡片，右侧是系统状态与最近项目。'), selector: '.home-view', route: '#/home' },
+      { title: t('外观与帮助'), desc: t('左侧底部的调色板打开外观抽屉；问号随时重开本引导，F1 也可以。'), selector: '.primary-rail [title="外观"]', route: '#/home' },
     ],
   },
   {
-    id: 'library', icon: 'music', title: t('第二章 · 曲库'), desc: t('导入、搜索、整理、歌单、曲目操作与批量管理。'),
+    id: 'library', icon: 'music', title: t('第二章 · 音乐与曲库'), desc: t('导入、歌单、曲目操作、演奏、可视化与乐谱。'),
     steps: [
       { title: t('曲库：导入与整理'), desc: t('图标导入；搜索、整理方式、筛选都在左侧。'), selector: '.sidebar-body', route: '#/home' },
-      { title: t('歌单与快捷视图'), desc: t('歌单独立滚动；右键重命名 / 删除，拖动排序；全部 / 收藏 / 最近 / 最常用图标切换。'), selector: '[data-guide=\'sidebar-playlists\']', route: '#/home' },
+      { title: t('歌单与快捷视图'), desc: t('歌单独立滚动；右键重命名 / 删除，拖动排序；全部 / 收藏 / 最近 / 最常用切换。'), selector: '[data-guide=\'sidebar-playlists\']', route: '#/home' },
       { title: t('曲目：点击与右键'), desc: t('单击选中、双击播放、右键管理；拖动排序，批量管理可多选。'), selector: '.song-list', route: '#/home' },
+      { title: t('音乐：演奏 / 可视化 / 乐谱'), desc: t('音乐区分成三页：演奏看播放与混音，可视化看瀑布与频谱，乐谱看五线谱 / 总谱 / 简谱 / 六线谱。'), selector: '.pb-main', route: '#/music?tab=play' },
+      { title: t('乐谱：工具栏与分屏'), desc: t('乐谱页不再有页头贴片：轨道、模式、预览 / PDF / 跟随播放 / 导入 / XML / PNG / 分屏都在工具栏；谱面可缩放。'), selector: '.score-toolbar', route: '#/music?tab=score' },
     ],
   },
   {
-    id: 'playedit', icon: 'play2', title: t('第三章 · 播放与编辑'), desc: t('播放栏、混音台、音效、钢琴卷帘、检查器和批量编辑。'),
+    id: 'playedit', icon: 'edit', title: t('第三章 · 编辑与工作台'), desc: t('钢琴卷帘、检查器、歌词、分析、编排与聚焦联动。'),
     steps: [
-      { title: t('播放栏'), desc: t('播放 / 暂停、拖动进度、循环、速度、音量、节拍器、书签和睡眠定时；空格键播放。'), selector: '.pb-main', route: '#/music?tab=play' },
-      { title: t('混音台与音效'), desc: t('每轨 S / M、音量、声像；点音色名换音色；均衡器、低音增强与空间声在音效面板。'), selector: '[data-guide=\'pb-mixer\']', route: '#/music?tab=play' },
+      { title: t('工作台：四个页签'), desc: t('编辑 / 歌词 / 分析 / 编排。演奏与可视化在「音乐」，不要在这里找。'), selector: '.gp-tab', route: '#/views?tab=edit' },
       { title: t('编辑器：工具与画布'), desc: t('选择 / 画笔 / 橡皮 / 静音 / 录音 / 步进；拖动移动音符，拖边缘改长度；滚轮缩放平移。'), selector: '[data-guide=\'edit-canvas\']', route: '#/views?tab=edit' },
-      { title: t('检查器与批量编辑'), desc: t('检查器改音高 / 力度 / 起点 / 长度；选区可移调、八度、力度渐变与量化；「更多」里有列表、逻辑、宏、CC 泳道。'), selector: '.insp-tabs', route: '#/views?tab=edit' },
-    ],
-  },
-  {
-    id: 'workspace', icon: 'viz', title: t('第四章 · 工作台'), desc: t('乐谱、分析、可视化、编排，以及编排与编辑的联动。'),
-    steps: [
-      { title: t('乐谱 · 分析 · 可视化'), desc: t('五线谱预览与导出；调性 / 音高 / 力度 / 密度 / 错音；瀑布流、频谱、波形与和弦。'), selector: '.page', route: '#/music?tab=viz' },
+      { title: t('检查器与高级工具'), desc: t('检查器改音高 / 力度 / 起点 / 长度；「更多」展开可拖动的高级工具浮层，里面有量化、移调、逻辑、宏与 CC 泳道。'), selector: '.ed-insp', route: '#/views?tab=edit' },
+      { title: t('歌词：对齐与批量处理'), desc: t('导入 LRC、逐字拆分、拖时间轴对齐、批量替换，然后导出字幕或写回音符。'), selector: '.lyr-toolbar', route: '#/views?tab=lyrics' },
+      { title: t('分析：调性、和弦与密度'), desc: t('一首歌的调性、和弦、音高 / 力度 / 密度报告；用统计结果判断改写方向。'), selector: '.page', route: '#/views?tab=analyze' },
       { title: t('编排：时间线与片段'), desc: t('轨道 M / S、吸附、复制、右键菜单、标记与区间；片段内会画 MIDI 音符缩略。'), selector: '[data-guide=\'arrange-canvas\']', route: '#/views?tab=arrange' },
-      { title: t('编排 ↔ 编辑联动'), desc: t('双击编排片段会跳到编辑器，自动定位轨道并选中片段范围内的音符。'), selector: '[data-guide=\'arrange-canvas\']', route: '#/views?tab=arrange' },
+      { title: t('编排 ↔ 编辑联动'), desc: t('双击编排片段会跳到编辑器，按轨道 ID / 名称定位，并选中片段范围内的音符。'), selector: '[data-guide=\'arrange-canvas\']', route: '#/views?tab=arrange' },
     ],
   },
   {
-    id: 'create', icon: 'convert', title: t('第五章 · 创作'), desc: t('转录、转换、翻唱、调教，创作相关都在这一页。'),
+    id: 'create', icon: 'convert', title: t('第四章 · 创作'), desc: t('转录、转换、变谱、翻唱、调教都在创作区。'),
     steps: [
-      { title: t('转录：三栏工作区'), desc: t('左队列、中模型、右运行；开始、进度、日志与取消都在右栏。'), selector: '.tr-view', route: '#/transcode?tab=transcribe' },
+      { title: t('创作页签'), desc: t('转录 / 转换 / 变谱 / 翻唱 / 调教。先想清楚是「音频转谱」还是「谱转音频」，再选页签。'), selector: '.gp-tab', route: '#/transcode?tab=transcribe' },
+      { title: t('转录：两栏工作区'), desc: t('左侧队列、右侧引擎与参数；不再三栏硬塞。'), selector: '.tr-view', route: '#/transcode?tab=transcribe' },
+      { title: t('转录：队列与运行'), desc: t('队列独立滚动；选模型、性能档和高级参数后，右侧「运行」开始。运行中切页不会打断队列。'), selector: '.tr-drop-card', route: '#/transcode?tab=transcribe' },
       { title: t('转换：音频与视频并排'), desc: t('左边音频导出（格式 / 响度 / 分轨），右边视频导出（比例 / 帧率 / 质量）。'), selector: '.conv-duo', route: '#/transcode?tab=convert' },
-      { title: t('翻唱与调教'), desc: t('翻唱：选歌 → 分离 → RVC 变声 → 混音；调教：选歌手、填词、画音高与参数、渲染。'), selector: '.cv-wrap', route: '#/transcode?tab=cover' },
+      { title: t('翻唱：分离到混音'), desc: t('选歌 → 人声分离（可选）→ RVC 变声 → 混音导出；先确认模型与音色。'), selector: '.cv-wrap', route: '#/transcode?tab=cover' },
+      { title: t('调教：选歌手与画音符'), desc: t('创作 · 调教页头集中打开工程 / 导入 MIDI；编辑器、声库、声库制作三段工作流，画完音符再渲染。'), selector: '.sing-page', route: '#/transcode?tab=singer' },
     ],
   },
   {
-    id: 'resources', icon: 'box', title: t('第六章 · 资源与设置'), desc: t('模型 / 声库 / 音色 / 插件、外观与音效、设置与任务中心。'),
+    id: 'resources', icon: 'box', title: t('第五章 · 资源与扩展'), desc: t('模型、插件、音色与存储，四件事都在资源中心。'),
     steps: [
-      { title: t('资源中心'), desc: t('模型管理分转录 / 人声分离 / 修复·VR / 调教；调教下再分调教模型 / DiffSinger / UTAU / RVC。'), selector: '.vm-page', route: '#/resources?tab=models' },
-      { title: t('音色工坊与存储'), desc: t('选择播放音色库（SF2 / 内置合成器），管理资源与清理存储。'), selector: '.sf-card', route: '#/resources?tab=soundfonts' },
-      { title: t('外观与音效'), desc: t('主题 / 深浅模式 / 普通或动态壁纸 / 暗度 / 模糊 / 减弱动态；音效按分类调音量。'), selector: '[data-guide=\'topbar-wallpaper\']', route: '#/home' },
-      { title: t('设置、任务与快捷键'), desc: t('设置改 GPU / 功能 / 快捷键 / 更新；任务中心看长任务；F1 随时打开本引导。'), selector: '[data-guide=\'topbar-settings\']', route: '#/home' },
+      { title: t('模型管理'), desc: t('模型管理分转录 / 人声分离 / 修复·VR / 调教；调教下再分调教模型 / DiffSinger / UTAU / RVC。'), selector: '.vm-page', route: '#/resources?tab=models' },
+      { title: t('插件中心'), desc: t('资源 → 插件中心：官方商店、已安装开关、插件日志与安装确认；插件目录可一键打开。'), selector: '.pc', route: '#/resources?tab=plugins' },
+      { title: t('音色工坊'), desc: t('选择播放音色库（SF2 / 内置合成器），试听后一键应用；下载与导入也在这里。'), selector: '.sf-card', route: '#/resources?tab=soundfonts' },
+      { title: t('存储治理'), desc: t('查看各分类占用与文件数；可重建缓存可清理，资产需显式勾选，曲库永远不动。'), selector: '.storage-panel', route: '#/resources?tab=storage' },
+    ],
+  },
+  {
+    id: 'appearance', icon: 'palette', title: t('第六章 · 外观与效率'), desc: t('主题、壁纸、任务中心小球、设置与快捷键。'),
+    steps: [
+      { title: t('外观抽屉'), desc: t('主题 / 深浅 / 强调色 / 字号 / 密度 / 缩放 / 语言 / 减弱动态，全部集中在左侧调色板打开的抽屉里。'), selector: '.wlib', route: '#/home', onEnter: () => { state.ui.appearanceOpen = true; } },
+      { title: t('统一壁纸库'), desc: t('动态仓库 / 在线静态 / 本地文件夹三类；静态动态同网格，支持直链下载，外链文件夹只登记路径不复制。'), selector: '.wlib', route: '#/home', onEnter: () => { state.ui.appearanceOpen = true; } },
+      { title: t('任务中心小球'), desc: t('右下角任务图标可拖动；拖到左右边缘自动收成侧边条，点击恢复，面板里也能隐藏到侧边。'), selector: '.task-center', route: '#/home' },
+      { title: t('设置、音效与快捷键'), desc: t('设置里改 GPU / 功能 / 快捷键 / 更新；音效默认全 100%，可分类调音量；F1 随时重开本引导。'), selector: '[data-guide=\'topbar-settings\']', route: '#/home' },
     ],
   },
 ]);
