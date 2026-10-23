@@ -484,25 +484,45 @@ async function rasterizeSvg(svg, scale, tileH) {
   const img = new Image();
   await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
   URL.revokeObjectURL(url);
-  // 关键：按图片的**自然像素**裁切，不能按 SVG 在页面上的 CSS 宽度裁。
-  // 之前用 clientWidth 作为源宽度，遇到缩放后的 SVG 会只截走左侧一条，预览/PDF 就是一条细线。
+  // 按图片自然像素裁切；不能按 SVG 的 CSS 宽度裁，否则只会截到左侧一条。
   const natW = img.naturalWidth || Math.round(displayW * 2);
   const natH = img.naturalHeight || Math.round(displayH * 2);
-  const ratio = natW / Math.max(1, displayW);
-  const tile = Math.max(1, Math.round(Math.min(natH, tileH * ratio)));
+  const ratioX = natW / Math.max(1, displayW);
+  const ratioY = natH / Math.max(1, displayH);
+  // 分页优先在「系统」边界断开，不把一行五线谱从中间切到两页。
+  const sr = svg.getBoundingClientRect();
+  const systems = Array.from(svg.querySelectorAll('g.system')).map((g) => {
+    const r = g.getBoundingClientRect();
+    return { top: r.top - sr.top, bottom: r.bottom - sr.top };
+  }).filter((x) => Number.isFinite(x.top) && Number.isFinite(x.bottom) && x.bottom > x.top);
+  const groups = [];
+  if (systems.length > 1 && tileH < displayH) {
+    const target = Math.max(240, tileH);
+    let i = 0;
+    while (i < systems.length) {
+      const start = Math.max(0, systems[i].top - 8);
+      let end = systems[i].bottom;
+      let j = i;
+      while (j + 1 < systems.length && systems[j + 1].bottom - start <= target) { j++; end = systems[j].bottom; }
+      if (end - start > target) end = start + target;
+      groups.push({ start, end: Math.min(displayH, end + 8) });
+      i = j + 1;
+    }
+  } else {
+    groups.push({ start: 0, end: displayH });
+  }
   const out = [];
-  let off = 0;
-  while (off < natH) {
-    const th = Math.min(tile, natH - off);
+  for (const group of groups) {
+    const sy = Math.max(0, group.start * ratioY);
+    const sh = Math.max(1, (group.end - group.start) * ratioY);
     const cv = document.createElement('canvas');
     cv.width = Math.max(1, Math.round(natW * scale));
-    cv.height = Math.max(1, Math.round(th * scale));
+    cv.height = Math.max(1, Math.round(sh * scale));
     const g = cv.getContext('2d');
     g.setTransform(scale, 0, 0, scale, 0, 0);
-    g.fillStyle = '#ffffff'; g.fillRect(0, 0, natW, th);
-    g.drawImage(img, 0, off, natW, th, 0, 0, natW, th);
+    g.fillStyle = '#ffffff'; g.fillRect(0, 0, natW, sh);
+    g.drawImage(img, 0, sy, natW, sh, 0, 0, natW, sh);
     out.push(cv.toDataURL('image/png'));
-    off += th;
   }
   return out;
 }
