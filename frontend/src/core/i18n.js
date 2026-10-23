@@ -15,6 +15,13 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  '当前壁纸库的应用目标是音符瀑布背景；选择图片 / 动态壁纸只会改变瀑布画面，不影响整窗壁纸。': "The wallpaper library currently targets the waterfall background; choosing an image or motion wallpaper changes only the waterfall, not the app-wide wallpaper.",
+  '当前壁纸库的应用目标是整窗壁纸；选择图片 / 动态壁纸只会改变工具背景。': "The wallpaper library currently targets the app-wide wallpaper; choosing an image or motion wallpaper changes only the app background.",
+  '请先切换到五线谱或总谱模式': "Switch to staff or full-score mode first",
+  '请先渲染乐谱': "Render the score first",
+  '应用目标': "Apply to",
+  '在「壁纸」区把应用目标切到「音符瀑布背景」，即可从这个壁纸库直接挑选。': "In Wallpaper above, switch Apply to Waterfall background to pick directly from this library.",
+  '整窗壁纸': "App wallpaper",
   '从壁纸库选择': "Choose from wallpaper library",
   '还没有选择动态壁纸': "No motion wallpaper selected",
   '这里只控制音符瀑布的画面背景；整窗壁纸仍由上方「壁纸」控制。': "This controls only the waterfall background; the app-wide wallpaper is still controlled by Wallpaper above.",
