@@ -48,7 +48,13 @@ function moveBall(e) {
 function endBallDrag() {
   if (!dragging.value) return;
   dragging.value = false;
-  if (!moved.value) { toggleOpen(); return; }
+  if (!moved.value) {
+    toggleOpen();
+    // 鼠标真实点击会继续派发 click；先压住它，避免 pointerup + click 各开一次。
+    suppressClick = true;
+    setTimeout(() => { suppressClick = false; }, 0);
+    return;
+  }
   if (pos.value.x <= LEFT_LIMIT + 10) hideBall('left');
   else if (pos.value.x > window.innerWidth - 78) hideBall('right');
   else { hiddenSide.value = ''; saveBall(); }
@@ -120,6 +126,11 @@ async function toggleOpen() {
   open.value = !open.value;
   if (open.value) await tasksStore.refresh();
 }
+function onFabClick() {
+  if (suppressClick) return;
+  void toggleOpen();
+}
+
 async function doCancel(it) {
   const r = await tasksStore.cancel(it.id);
   filter.value = 'all';
@@ -139,7 +150,7 @@ function iconOf(k) { return KIND_ICON[k] || 'task'; }
 
 <template>
   <div class="task-center" data-guide="task-center" :style="hiddenSide ? {} : ballStyle">
-    <button v-if="!hiddenSide" ref="fabEl" class="tc-fab" :class="{ on: activeCount > 0, dragging }" data-guide="task-center-btn" :title="t('任务中心')" :aria-label="t('任务中心')" :aria-expanded="open" @pointerdown="startBallDrag" @pointermove="moveBall" @pointerup="endBallDrag" @pointercancel="cancelBallDrag" @keydown.enter.prevent="toggleOpen" @keydown.space.prevent="toggleOpen">
+    <button v-if="!hiddenSide" ref="fabEl" class="tc-fab" :class="{ on: activeCount > 0, dragging }" data-guide="task-center-btn" :title="t('任务中心')" :aria-label="t('任务中心')" :aria-expanded="open" @pointerdown="startBallDrag" @pointermove="moveBall" @pointerup="endBallDrag" @click="onFabClick" @pointercancel="cancelBallDrag" @keydown.enter.prevent="toggleOpen" @keydown.space.prevent="toggleOpen">
       <Icon name="task" :size="15" />
       <span v-if="activeCount" class="tc-badge">{{ activeCount }}</span>
     </button>

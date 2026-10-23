@@ -46,7 +46,6 @@ const state = app;
 const playlistStore = usePlaylistStore();
 const tabsStore = useTabsStore();
 const settingsStore = useSettingsStore();
-const wallpaperPromptOpen = ref(false);
 const route = useRoute();
 const router = useRouter();
 // P1-14 B3：启动时先同步抓一次会话（避免首帧路由 watcher 写入把上次会话覆盖掉）
@@ -243,13 +242,6 @@ async function initGlobal() {
   const guideE2E = !!(window.fuBridge && window.fuBridge.e2e);
   if (!guideE2E && (!guideUiSeen || (!guideDone && !s.guide_done))) state.ui.guideOpen = true;
 
-  // 5) 首次启动壁纸询问（仅一次，未设置壁纸时）
-  if (!s.wallpaper_prompt_done && !s.custom_wallpaper) {
-    setTimeout(() => {
-      if (!settingsStore.settings.custom_wallpaper && !state.ui.wallpaperOpen && !state.ui.guideOpen) wallpaperPromptOpen.value = true;
-    }, 1200);
-  }
-
   // 6) 更新完成后首次启动：展示更新日志（对比上次记录的版本号）
   checkChangeLog();
 
@@ -332,16 +324,6 @@ async function startupUpdateCheck() {
         }).catch(() => {});
       });
   }, 2500);
-}
-
-function goDownloadWallpaper() {
-  wallpaperPromptOpen.value = false;
-  state.ui.wallpaperOpen = true;
-  settingsStore.save({ wallpaper_prompt_done: true }).catch(() => {});
-}
-function dismissWallpaperPrompt() {
-  wallpaperPromptOpen.value = false;
-  settingsStore.save({ wallpaper_prompt_done: true }).catch(() => {});
 }
 
 // 全局 Web 弹窗（confirm/alert/prompt）提交/取消
@@ -819,19 +801,7 @@ _endHold();
     </Transition>
 
     <!-- 全局系统功能浮层 -->
-    <Transition name="ov">
-      <div v-if="wallpaperPromptOpen" class="overlay" role="dialog" aria-modal="true" :aria-label="t('发现动态壁纸')" @click.self="dismissWallpaperPrompt">
-        <div class="overlay-card wp-prompt">
-          <div class="wp-prompt-ic"><Icon name="wallpaper" :size="30" /></div>
-          <b class="wp-prompt-title">{{ t('发现动态壁纸') }}</b>
-          <p class="wp-prompt-desc">{{ t('首次使用：是否从 GitHub 下载一张壁纸？下载后可在顶栏按钮切换，需要更多可再次从壁纸库选择或自行导入。') }}</p>
-          <div class="wp-prompt-actions">
-            <button class="btn primary" @click="goDownloadWallpaper">{{ t('去下载壁纸') }}</button>
-            <button class="btn ghost" @click="dismissWallpaperPrompt">{{ t('暂不') }}</button>
-          </div>
-        </div>
-      </div>
-    </Transition>
+
 
     <Transition name="ov">
       <SettingsPanel v-if="state.ui.settingsOpen" />

@@ -155,10 +155,6 @@ async function installAllMissing() {
   } finally { omrBusy.value = false; omrText.value = ''; }
 }
 
-async function refreshOmrComponents() {
-  await refreshOmr();
-  await loadOcrLangs();
-}
 
 /** 识别模型 = 后端（Audiveris / 内置）+ 内置后端的模式。
  *  图片与 PDF 才有模型可选；MusicXML / MIDI 是直通或精确解析，不经过识谱。 */

@@ -45,6 +45,16 @@ const status = ref('');
 const scoreEl = ref(null);
 const scrollEl = ref(null);
 const showOpts = ref(false);
+const showBtn = ref(null);
+const showPopPos = ref({ top: 0, right: 0 });
+function toggleShowOpts(e) {
+  const el = (e && e.currentTarget) || showBtn.value;
+  if (!showOpts.value && el) {
+    const r = el.getBoundingClientRect();
+    showPopPos.value = { top: Math.round(r.bottom + 6), right: Math.max(8, Math.round(window.innerWidth - r.right)) };
+  }
+  showOpts.value = !showOpts.value;
+}
 const exporting = ref(false);
 const midiBusy = ref(false);
 const previewOpen = ref(false);
@@ -357,10 +367,27 @@ function doRender() {
 
 function changeMode() {
   lastStaffKey = '';
-  // 进入总谱：默认缩小到看得见整行（用户随后仍可自由缩放）
+  if (renderRaf) { try { cancelAnimationFrame(renderRaf); } catch (e) {} renderRaf = 0; }
   if (mode.value === 'score') zoom.value = fitZoomForScore();
   scheduleRender();
 }
+
+function setOpt(key, value) {
+  opts[key] = !!value;
+  // 网格是纯 CSS class，立即生效，不必等 Verovio 重刻。
+  if (key === 'grid' && scoreEl.value) scoreEl.value.classList.toggle('fu-grid', !!value);
+  lastStaffKey = '';
+  if (renderRaf) { try { cancelAnimationFrame(renderRaf); } catch (e) {} renderRaf = 0; }
+  scheduleRender();
+}
+function onOutsidePointer(e) {
+  if (!showOpts.value) return;
+  const target = e.target;
+  if (target && target.closest && (target.closest('.score-pop-fixed') || target.closest('.show-opts-btn'))) return;
+  showOpts.value = false;
+}
+
+
 function changeTrack() { lastStaffKey = ''; scheduleRender(); }
 function setZoom(v) {
   zoom.value = clamp(parseFloat(v) || 1, 0.3, 1.8);
@@ -813,7 +840,8 @@ onMounted(() => {
   if (scrollEl.value) resizeObserver.observe(scrollEl.value);
   _scoreRO = { dropRO, observe: () => { try { resizeObserver.observe(scrollEl.value); } catch (e) {} } };
 });
-onBeforeUnmount(() => {
+onMounted(() => document.addEventListener('pointerdown', onOutsidePointer));
+onBeforeUnmount(() => { document.removeEventListener('pointerdown', onOutsidePointer);
   clearTimeout(activationTimer);
   cancelAnimationFrame(followRaf);
   if (renderRaf) cancelAnimationFrame(renderRaf);
@@ -859,17 +887,19 @@ onBeforeUnmount(() => {
           <Icon name="play2" :size="14" />{{ t('跟随播放') }}
         </button>
         <div class="score-pop-wrap">
-          <button class="btn sm" @click="showOpts = !showOpts" :title="t('显示选项')">
+          <button ref="showBtn" class="btn sm show-opts-btn" @click="toggleShowOpts" :title="t('显示选项')">
             <Icon name="eye" :size="14" />{{ t('显示') }}
           </button>
-          <Transition name="pop">
-            <div v-if="showOpts" class="score-pop" @mouseleave="showOpts = false">
-              <label><input type="checkbox" v-model="opts.simple" @change="changeMode()" />{{ t('简化记谱') }}</label>
-              <label><input type="checkbox" v-model="opts.grid" @change="changeMode()" />{{ t('四分音符网格') }}</label>
-              <label><input type="checkbox" v-model="opts.beam" @change="changeMode()" />{{ t('自动连线') }}</label>
-              <label><input type="checkbox" v-model="opts.multi" @change="changeMode()" />{{ t('多轨显示') }}</label>
-            </div>
-          </Transition>
+          <Teleport to="body">
+            <Transition name="pop">
+              <div v-if="showOpts" class="score-pop score-pop-fixed" :style="{ top: showPopPos.top + 'px', right: showPopPos.right + 'px' }" @mouseleave="showOpts = false">
+                <label><input type="checkbox" v-model="opts.simple" @change="setOpt('simple', $event.target.checked)" />{{ t('简化记谱') }}</label>
+                <label><input type="checkbox" v-model="opts.grid" @change="setOpt('grid', $event.target.checked)" />{{ t('四分音符网格') }}</label>
+                <label><input type="checkbox" v-model="opts.beam" @change="setOpt('beam', $event.target.checked)" />{{ t('自动连线') }}</label>
+                <label><input type="checkbox" v-model="opts.multi" @change="setOpt('multi', $event.target.checked)" />{{ t('多轨显示') }}</label>
+              </div>
+            </Transition>
+          </Teleport>
         </div>
         <span class="score-sep"></span>
         <button class="btn sm" @click="importMusicXML" :disabled="midiBusy" :title="t('导入 MusicXML 文件')"><Icon name="import" :size="14" />{{ t('导入') }}</button>
@@ -1134,4 +1164,5 @@ onBeforeUnmount(() => {
 .pv-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .pv-thumb span { position: absolute; right: 3px; bottom: 3px; min-width: 16px; height: 16px; line-height: 16px; border-radius: var(--r-sm); background: color-mix(in srgb, var(--canvas) 72%, transparent); color: var(--text2); font: var(--fs-xs) var(--font-num); text-align: center; }
 
+.score-pop.score-pop-fixed { position: fixed; z-index: 300; top: auto; right: auto; min-width: 180px; }
 </style>
