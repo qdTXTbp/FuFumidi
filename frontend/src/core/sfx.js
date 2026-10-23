@@ -7,37 +7,50 @@ import { reactive } from 'vue';
 export const SFX_KEY = 'fufumidi_sfx_v1';
 
 export const SFX_CATEGORIES = [
-  { id: 'ui', defaultVolume: 0.12, defaultEnabled: true },
-  { id: 'task', defaultVolume: 0.55, defaultEnabled: true },
-  { id: 'chime', defaultVolume: 0.65, defaultEnabled: true },
+  { id: 'ui', defaultVolume: 1, defaultEnabled: true },
+  { id: 'task', defaultVolume: 1, defaultEnabled: true },
+  { id: 'chime', defaultVolume: 1, defaultEnabled: true },
 ];
 
 export const SFX_SCHEMES = {
   light:  { master: 0.35, ui: 0.08, task: 0.35, chime: 0.45, style: 'soft' },
-  standard:{ master: 0.55, ui: 0.12, task: 0.55, chime: 0.65, style: 'bright' },
+  standard:{ master: 1, ui: 1, task: 1, chime: 1, style: 'bright' },
   immersive:{ master: 0.75, ui: 0.18, task: 0.70, chime: 0.80, style: 'bright' },
 };
 
 function defaults() {
   return {
+    v: 2,
     enabled: true,
-    master: 0.55,
+    master: 1,
     scheme: 'standard',
     chimeStyle: 'bright',
     categories: {
-      ui: { enabled: true, volume: 0.12 },
-      task: { enabled: true, volume: 0.55 },
-      chime: { enabled: true, volume: 0.65 },
+      ui: { enabled: true, volume: 1 },
+      task: { enabled: true, volume: 1 },
+      chime: { enabled: true, volume: 1 },
     },
   };
 }
 
 function clamp(n, min, max) { return Math.max(min, Math.min(max, Number(n) || 0)); }
 
+function isLegacyDefault(src) {
+  const cats = src.categories || {};
+  const vol = (id) => (cats[id] && cats[id].volume != null ? Number(cats[id].volume) : NaN);
+  return !src.v && src.scheme === 'standard' &&
+    Math.abs(Number(src.master) - 0.55) < 0.001 &&
+    Math.abs(vol('ui') - 0.12) < 0.001 &&
+    Math.abs(vol('task') - 0.55) < 0.001 &&
+    Math.abs(vol('chime') - 0.65) < 0.001;
+}
+
 function normalize(raw) {
   const d = defaults();
   const src = raw && typeof raw === 'object' ? raw : {};
+  if (isLegacyDefault(src)) return d;
   const out = d;
+  out.v = 2;
   out.enabled = src.enabled !== false;
   out.master = clamp(src.master != null ? src.master : d.master, 0, 1);
   out.scheme = ['light', 'standard', 'immersive', 'custom'].includes(src.scheme) ? src.scheme : d.scheme;
