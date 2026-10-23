@@ -1,0 +1,395 @@
+/* ============================================================
+   FuFumidi 品牌层（v2 视觉验证落地）
+   只做“皮肤”：不改变布局、路由、IPC、引擎参数。
+   颜色全部引用 theme.js / tokens.css 的语义 token，禁止新增字面色值。
+   ============================================================ */
+
+/* 字体角色：中文正文用 Sans；Display 只用于英文/数字标题 */
+body { font-family: var(--font-ui); }
+.page-title, .home-title, .home-hero-title {
+  font-family: var(--font-display), var(--font-ui);
+  letter-spacing: .01em;
+  font-weight: 500;
+}
+.fu-mono, .hud-time { font-family: var(--font-num); }
+
+/* 深海舞台：主区域保持极淡径向光，不改变透明度语义 */
+.app-main {
+  background:
+    radial-gradient(1100px 620px at 78% -10%, color-mix(in srgb, var(--accent-sapphire) 10%, transparent), transparent 62%),
+    radial-gradient(800px 520px at -8% 105%, color-mix(in srgb, var(--accent-sea) 8%, transparent), transparent 60%),
+    var(--canvas);
+}
+.sidebar, .topbar {
+  background: color-mix(in srgb, var(--canvas) 94%, var(--surface));
+}
+.sidebar { border-right-color: var(--hairline); }
+.topbar { border-bottom-color: var(--hairline); }
+
+/* 导航：选中用蓝宝石，指示线用天蓝 */
+.tab.active {
+  background: color-mix(in srgb, var(--accent-sapphire) 17%, var(--surface)) !important;
+  color: var(--ink) !important;
+  box-shadow: inset 0 -2px 0 var(--accent-sky);
+}
+.tab:hover { background: color-mix(in srgb, var(--accent-sky) 8%, var(--surface)); }
+.nav-item.active, .side-item.on {
+  box-shadow: inset 2px 0 0 var(--accent-sapphire);
+}
+
+/* 卡片：细线 + 极轻抬升，不做大面积玻璃 */
+.card {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, transparent), var(--surface));
+  border-color: var(--hairline);
+}
+.card-title .dot, .brand-dot { background: var(--accent-sapphire); }
+
+/* 主操作：蓝宝石；hover 提亮，焦点用天蓝 */
+.btn.primary {
+  background: linear-gradient(180deg, var(--accent-sapphire-bright), var(--accent-sapphire));
+  border-color: var(--accent-sapphire);
+  color: var(--on-sapphire);
+}
+.btn.primary:hover {
+  background: linear-gradient(180deg, var(--accent-sky), var(--accent-sapphire-bright));
+  border-color: var(--accent-sky);
+  color: var(--on-sapphire);
+  filter: none;
+}
+.btn.primary:disabled { background: var(--surface-soft); color: var(--muted); border-style: dashed; }
+:focus-visible { outline-color: var(--accent-sky); }
+
+/* 品牌装饰：只用于关键容器，四角金线不进入普通列表 */
+.brand-frame { position: relative; }
+.brand-frame::after {
+  content: ""; position: absolute; left: 9px; right: 9px; bottom: 9px; height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--ornament) 55%, transparent), transparent);
+  pointer-events: none;
+}
+.brand-frame::before {
+  content: ""; position: absolute; left: 9px; top: 9px; width: 17px; height: 17px;
+  border-left: 1px solid color-mix(in srgb, var(--ornament) 62%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--ornament) 62%, transparent);
+  border-radius: var(--r-sm) 0 0 0; pointer-events: none;
+}
+.brand-eyebrow {
+  font-family: var(--font-num); font-size: var(--fs-xs); letter-spacing: .14em;
+  text-transform: uppercase; color: var(--accent-sky);
+}
+.brand-eyebrow::before { content: "✦"; margin-right: 7px; color: var(--ornament); }
+
+/* 右上任务/状态：沿用蓝色系，不引入第二套语义 */
+.task-pill, .tag.accent {
+  border-color: color-mix(in srgb, var(--accent-sky) 34%, transparent);
+  background: color-mix(in srgb, var(--accent-sapphire) 10%, transparent);
+  color: var(--accent-sky);
+}
+
+/* 子页面页签 / 二级菜单：统一到品牌蓝，禁用各页自造强调色 */
+.group-tabs {
+  background: color-mix(in srgb, var(--canvas) 88%, var(--surface));
+  border-bottom-color: var(--hairline);
+}
+.gp-tab {
+  border-color: var(--hairline);
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+  color: var(--text3);
+}
+.gp-tab:hover { background: color-mix(in srgb, var(--accent-sky) 8%, var(--surface)); color: var(--text); }
+.gp-tab.on {
+  border-color: color-mix(in srgb, var(--accent-sky) 45%, var(--hairline));
+  background: color-mix(in srgb, var(--accent-sapphire) 13%, var(--surface));
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent-sky);
+}
+
+/* 设置 / 浮层面板：不再用会透出下层文字的玻璃底，保证二级页面可读 */
+.overlay-card.settings-card { background: var(--surface); }
+.settings-tabs { background: color-mix(in srgb, var(--surface) 86%, var(--canvas)); }
+
+/* ── 玻璃材质（2026-10-22 用户定）──
+   参考用户给的首页 hero：卡面保持蓝黑，但能透出壁纸的色块与轮廓。
+   只给“面”类元素加玻璃；列表行/输入框仍保持实底，避免密密麻麻的模糊层。 */
+.card,
+.home-hero,
+.home-status,
+.home-action,
+.home-recent,
+.tc-panel,
+.settings-card,
+.overlay-card,
+.res-card,
+.panel-card {
+  background-color: color-mix(in srgb, var(--surface) 57%, transparent) !important;
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border-color: color-mix(in srgb, var(--ornament) 32%, var(--hairline)) !important;
+}
+.card {
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 7%, transparent), var(--sh-1);
+}
+.topbar,
+.sidebar,
+.playerbar {
+  background-color: color-mix(in srgb, var(--canvas) 66%, transparent) !important;
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border-color: color-mix(in srgb, var(--ornament) 16%, var(--hairline));
+}
+/* 浮层菜单也使用同一材质，但提高不透明度保证选项可读 */
+.menu-pop,
+.pl-ctx-menu,
+.ctx-menu,
+.pb-pop,
+.lib-filter-pop {
+  background-color: color-mix(in srgb, var(--surface) 80%, transparent) !important;
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+/* 首页 hero 的蓝色渐变保留，但降低不透明度让壁纸纹理透出来 */
+.home-hero {
+  background-image: linear-gradient(120deg,
+    color-mix(in srgb, var(--accent-sapphire) 18%, transparent),
+    color-mix(in srgb, var(--accent-sea) 10%, transparent) 55%,
+    transparent) !important;
+}
+/* 顶栏：与验证稿一致，只保留面包屑 + 搜索 + 右侧动作，不再放一级导航 */
+.topbar { gap: var(--sp-2); }
+.topbar-crumbs { display: inline-flex; align-items: center; gap: var(--sp-2); min-width: 0; margin-left: var(--sp-2); font-size: var(--fs-sm); color: var(--text3); white-space: nowrap; }
+.topbar-crumbs span { color: var(--text3); letter-spacing: .04em; }
+.topbar-crumbs i { color: var(--hairline); font-style: normal; }
+.topbar-crumbs b { color: var(--text); font-weight: 600; letter-spacing: .02em; }
+.topbar-search { display: inline-flex; align-items: center; gap: var(--sp-2); height: 28px; min-width: 180px; max-width: 300px; padding: 0 var(--sp-2); margin-left: var(--sp-3); border: 1px solid var(--hairline); border-radius: var(--r-pill); background: color-mix(in srgb, var(--surface) 58%, transparent); color: var(--text3); font-size: var(--fs-xs); cursor: pointer; text-align: left; }
+.topbar-search:hover { border-color: color-mix(in srgb, var(--accent-sky) 35%, var(--hairline)); color: var(--text2); }
+.topbar-search span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar-search kbd { flex: none; border: 1px solid var(--hairline); border-radius: var(--r-xs); padding: 0 4px; color: var(--text3); font: var(--fs-xs) var(--font-num); }
+@media (max-width: 1100px) { .topbar-search { display: none; } }
+@media (max-width: 900px) { .topbar-crumbs { display: none; } }
+
+/* 曲目行：提高整行点击命中与悬停反馈，侧栏窄也不挤 */
+.song-item { min-height: 46px; padding: var(--sp-2); border-radius: var(--r-md); }
+.song-item:hover { background: color-mix(in srgb, var(--accent-sapphire) 10%, var(--surface)); border-color: color-mix(in srgb, var(--accent-sky) 24%, var(--hairline)); }
+.song-item.active { border-color: color-mix(in srgb, var(--accent-sky) 55%, var(--hairline)); }
+
+/* 减少动态效果：外观抽屉可切换；图片壁纸保留，视频壁纸隐藏，动画/过渡近乎瞬时 */
+html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after {
+  animation-duration: .001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: .001ms !important;
+  scroll-behavior: auto !important;
+}
+html.reduce-motion video.app-wallpaper { display: none; }
+
+/* 二级页签：从散装描边胶囊改成居中分段控件 */
+.group-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  width: max-content;
+  max-width: calc(100% - var(--page-pad-x) * 2);
+  margin: var(--sp-2) auto var(--sp-3);
+  padding: 3px;
+  gap: 2px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--surface) 58%, transparent);
+  backdrop-filter: var(--glass-blur);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.group-tabs::-webkit-scrollbar { display: none; }
+.gp-tab {
+  flex: none;
+  border: 0;
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  gap: var(--sp-1);
+}
+.gp-tab:hover { background: color-mix(in srgb, var(--accent-sky) 8%, transparent); color: var(--text2); }
+.gp-tab.on {
+  border: 0;
+  background: color-mix(in srgb, var(--accent-sapphire) 20%, var(--surface));
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-sky) 30%, transparent), var(--sh-1);
+}
+.hidden-nav-marker { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+
+/* 全界面玻璃：子页面容器、资源/模型/音色/谱面/分析/翻唱/调教面板都透出壁纸 */
+/* 去掉页面级“底片”：页面容器本身透明，只有卡片有玻璃；滚动时不会出现一条比内容短的暗色/模糊垫层 */
+.group-page, .page, .sing-page, .lib-page, .vm-page, .cv-wrap {
+  background-color: transparent !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+.conv-info-bar, .tr-runbar, .tr-drop-card, .tr-card,
+.res-sec, .viz-card, .sf-card, .vm-card, .pv-card, .az-card, .stat-card,
+.sing-page .trk-list, .sing-page .ph-panel, .sing-page .auto-grid,
+.cv-wrap .card, .page-flat .card {
+  background-color: color-mix(in srgb, var(--surface) 55%, transparent) !important;
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border-color: color-mix(in srgb, var(--ornament) 32%, var(--hairline)) !important;
+}
+.conv-info-bar { border-color: color-mix(in srgb, var(--ornament) 24%, var(--hairline)) !important; }
+.card {
+  background-image: linear-gradient(180deg, color-mix(in srgb, var(--text) 4%, transparent), transparent 42%);
+}
+.overlay-card.settings-card { background-color: color-mix(in srgb, var(--surface) 74%, transparent) !important; }
+
+/* 页面头：去掉蓝色方块“贴片”，改成克制的玻璃条 + 线性图标 + 金色分隔 */
+.page-head {
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0;
+  margin-bottom: var(--sp-4);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.page-head .page-ic {
+  width: auto !important;
+  height: auto !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  color: var(--accent-sky);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.page-head .page-ic svg { width: 24px; height: 24px; }
+.page-head > .page-ic + div {
+  padding-left: 0;
+  border-left: 0;
+  min-width: 0;
+}
+.page-head .page-title {
+  font-size: var(--fs-xl) !important;
+  font-weight: 600 !important;
+  letter-spacing: -.02em;
+  line-height: 1.2;
+}
+.page-head .page-sub {
+  margin-top: 3px;
+  color: var(--text3) !important;
+  font-size: var(--fs-xs) !important;
+  letter-spacing: .01em;
+}
+.page-head-sm { padding: var(--sp-2) var(--sp-3); }
+.page-head-sm .page-title { font-size: var(--fs-lg) !important; }
+
+/* 顶栏中段：二级页签放在这里（不再占内容首行） */
+.topbar { position: relative; }
+.topbar-tabs-slot { display: flex; align-items: center; flex: 1; min-width: 0; margin-left: var(--sp-2); z-index: 2; }
+.topbar-tabs-slot + .topbar-spacer { display: none; }
+.topbar-tabs-slot .group-tabs {
+  position: static;
+  margin: 0 !important;
+  margin: 0;
+  padding: 2px;
+  background: color-mix(in srgb, var(--surface) 52%, transparent);
+  max-width: min(60vw, 640px);
+  border-color: color-mix(in srgb, var(--ornament) 20%, var(--hairline));
+}
+.topbar-tabs-slot .gp-tab { padding: var(--sp-1) var(--sp-3); font-size: var(--fs-xs); }
+.topbar-tabs-slot .gp-tab.on { background: color-mix(in srgb, var(--accent-sapphire) 24%, var(--surface)); }
+
+@media (max-width: 1000px) { .topbar-tabs-slot { display: none; } }
+
+/* 顶栏中间：多标签页（打开中的曲目），不是页面功能页签 */
+.topbar-tabs-slot .song-tabs {
+  width: 100%;
+  min-height: 0;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  gap: 2px;
+}
+.topbar-tabs-slot .st-scroll { gap: 2px; }
+.topbar-tabs-slot .song-tab { flex: 1 1 0; min-width: 90px; max-width: 300px; padding: 2px var(--sp-2); border-radius: var(--r-pill); }
+.topbar-tabs-slot .song-tab.on { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-sky) 30%, transparent); border-color: transparent; }
+.topbar-tabs-slot .st-tool { width: 22px; height: 22px; }
+
+/* 页头“贴片”彻底移除：不允许任何子页面再给 .page-head 加底/边框/阴影/玻璃 */
+.page-head, .page-head-sm {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+}
+.page-head .page-ic, .page-head-sm .page-ic {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  width: auto !important;
+  height: auto !important;
+  color: var(--accent-sky);
+}
+.page-head > .page-ic + div, .page-head-sm > .page-ic + div {
+  border-left: 0 !important;
+  padding-left: 0 !important;
+}
+
+/* 顶栏曲目标签：均分整条可用宽度（子组件 scoped 规则用 !important 压过） */
+.topbar-tabs-slot .song-tabs { width: 100% !important; }
+.topbar-tabs-slot .song-tabs .st-scroll { justify-content: space-between; }
+.topbar-tabs-slot .song-tabs .song-tab { flex: 1 1 0 !important; min-width: 90px !important; max-width: none !important; }
+
+/* 页面标题贴片已彻底退出界面：页面上下文由分组页签/内容本身承担，不要再渲染大标题条 */
+.page-head, .page-head-sm { display: none !important; }
+
+.topbar-tabs-slot .song-tabs .song-tab:only-child { flex: 0 1 320px !important; }
+
+/* 单个曲目标签按内容宽度，不要拉满整条顶栏 */
+.topbar-tabs-slot .song-tabs .st-scroll:has(.song-tab:only-child) { flex: 0 1 auto; }
+.topbar-tabs-slot .song-tabs .song-tab:only-child {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: min(320px, 60vw) !important;
+}
+
+/* 顶栏曲目标签：Edge 式内容宽度，标签+新建按钮紧挨着，不再把整条顶栏平均拉开 */
+.topbar-tabs-slot .song-tabs {
+  width: auto !important;
+  max-width: 100%;
+  justify-content: flex-start;
+}
+.topbar-tabs-slot .song-tabs .st-scroll {
+  flex: 0 1 auto !important;
+  max-width: calc(100% - 56px);
+  justify-content: flex-start;
+}
+.topbar-tabs-slot .song-tabs .song-tab {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: 240px !important;
+}
+.topbar-tabs-slot .song-tabs .st-name { max-width: 190px; }
+
+.topbar-tabs-slot .song-tabs .st-scroll { justify-content: flex-start !important; width: auto !important; flex: 0 0 auto !important; max-width: calc(100% - 32px); }
+
+/* 顶栏标签占满剩余空间：最后一个标签的关闭按钮不能被裁掉 */
+.topbar-tabs-slot .song-tabs {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+.topbar-tabs-slot .song-tabs .st-scroll {
+  flex: 1 1 auto !important;
+  width: auto !important;
+  max-width: none !important;
+  padding-right: 4px;
+  justify-content: flex-start;
+}

@@ -13,6 +13,8 @@ import './styles/typography.css';
 // ★ 控件契约层最后加载：它定义 9 类控件的形状（.fu-ctl/.fu-field/.fu-chip…），
 //   视图里只保留语义偏差。详见 docs/DESIGN.md 第 3.5 节。
 import './styles/controls.css';
+// 品牌层：只做皮肤，不改变布局与业务逻辑
+import './styles/brand.css';
 
 /* 主题：深色主导（设计语言决定），浅色可选。
    ★ 必须走应用自己的键：theme.js 用 'fufumidi_theme' 存**主题 ID**、'fufumidi_mode' 存明暗模式。

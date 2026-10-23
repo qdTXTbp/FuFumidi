@@ -34,19 +34,23 @@ const TABS = computed(() => [
 ]);
 /** 调教下面的二级分类。id **不是** kind —— 声库那两类各走自己的目录组件。 */
 const TUNING_SUBS = computed(() => [
+  { id: 'models', label: t('调教模型'), ic: 'box' },
   { id: 'ds', label: t('声库 · DiffSinger'), ic: 'spark' },
   { id: 'utau', label: t('声库 · UTAU'), ic: 'mic' },
-  // 翻唱模型（RVC）：用户导入的角色权重 —— 应用不内置也不代下载（CC-BY-NC-4.0）。
-  // 落点 <模型目录>/rvc/，翻唱页的音色下拉就读这里；GPT-SoVITS 音色已随路线调整删除。
   { id: 'rvc', label: t('RVC 模型'), ic: 'mic' },
-  { id: 'models', label: t('调教模型'), ic: 'box' },
 ]);
+const TUNING_INFO = computed(() => ({
+  models: { title: t('调教模型'), desc: t('歌声合成所需的基础模型与运行时。') },
+  ds: { title: t('DiffSinger 声库'), desc: t('下载声库后，在调教页直接选歌手。') },
+  utau: { title: t('UTAU 声库'), desc: t('开源声库，一键安装到本地。') },
+  rvc: { title: t('RVC 模型'), desc: t('翻唱用的角色音色；应用不内置、不代下载。') },
+}));
 /** 二级分类里哪一个是卡片网格（其余是独立目录组件 / 独立面板，没有 kind） */
 const SUB_KIND = { models: 'tuning' };
 // 深链：?m=<页签或二级 id> 直接落到某个分类（翻唱页「去导入模型」带 ?m=rvc 过来）
 const route = useRoute();
 const curTab = ref('transcribe');
-const curSub = ref('ds');
+const curSub = ref('models');
 const deepLink = String(route.query.m || '');
 if (deepLink === 'rvc') { curTab.value = 'tuning'; curSub.value = 'rvc'; }
 else if (['ds', 'utau', 'models'].includes(deepLink)) { curTab.value = 'tuning'; curSub.value = deepLink; }
@@ -239,6 +243,14 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
       <span>{{ t('下载后请到「资源管理」补全依赖（否则模型可能无法使用）；下载慢可在设置页切换下载源') }}</span>
     </div>
 
+    <div v-if="curTab === 'tuning'" class="vm-tuning-shell">
+      <div class="vm-tuning-head">
+        <span class="vm-tuning-ic"><Icon :name="(TUNING_SUBS.find(x => x.id === curSub) || {}).ic || 'box'" :size="18" /></span>
+        <div class="vm-tuning-copy"><b>{{ TUNING_INFO[curSub] ? TUNING_INFO[curSub].title : t('调教') }}</b><small>{{ TUNING_INFO[curSub] ? TUNING_INFO[curSub].desc : '' }}</small></div>
+        <span class="vm-grow"></span>
+        <button class="btn sm ghost" @click="refresh">{{ t('刷新') }}</button>
+      </div>
+      <div class="vm-tuning-body">
     <!-- DiffSinger 声库目录（独立板块，非模型卡片的 kind 分组） -->
     <DiffSingerCatalog v-if="showDs" />
 
@@ -256,10 +268,12 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
     <ModelCatalog v-else-if="isTuningGrid" :items="tabbedList" :prog="prog" group-key="arch" :kind="metaKind"
                   icon="box"
                   :title="t('调教模型')"
-                  note="t('调教（歌声合成）用到的模型。Worldline v11 的谐波分离模型就在这里下载。')"
+                  :note="t('调教（歌声合成）用到的模型。Worldline v11 的谐波分离模型就在这里下载。')"
                   :empty-text="t('没有符合条件的调教模型')"
                   @download="startDownload" @remove="deleteModel"
                   @cancel="(it) => cancelDownload(it.id)" @openExternal="openExternal" />
+      </div>
+    </div>
 
     <!-- 卡片网格（转录 / 分离 / 修复·VR 沿用） -->
     <Transition v-else-if="showGrid" name="vmfade" mode="out-in">
@@ -457,4 +471,126 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 .dr-enter-from, .dr-leave-to { opacity: 0; }
 .dr-enter-active .vm-drawer, .dr-leave-active .vm-drawer { transition: transform var(--motion-slow) var(--ease-out); }
 .dr-enter-from .vm-drawer, .dr-leave-to .vm-drawer { transform: translateX(100%); }
+
+/* 调教页统一壳：四个子页面共用同一顶部信息条与内容起点 */
+.vm-tuning-shell { display: flex; flex-direction: column; gap: var(--sp-3); }
+.vm-tuning-head { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border: 1px solid color-mix(in srgb, var(--ornament) 22%, var(--hairline)); border-radius: var(--r-md); background: color-mix(in srgb, var(--surface) 42%, transparent); backdrop-filter: var(--glass-blur); }
+.vm-tuning-ic { width: 34px; height: 34px; border-radius: var(--r-sm); display: grid; place-items: center; color: var(--accent-sky); background: color-mix(in srgb, var(--accent-sapphire) 14%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent-sky) 22%, var(--hairline)); flex: none; }
+.vm-tuning-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.vm-tuning-copy b { font-size: var(--fs-md); color: var(--text); }
+.vm-tuning-copy small { font-size: var(--fs-xs); color: var(--text3); }
+.vm-grow { flex: 1; }
+.vm-tuning-body { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+.vm-tuning-body :deep(.ds-bar), .vm-tuning-body :deep(.vb-bar), .vm-tuning-body :deep(.sm-bar), .vm-tuning-body :deep(.mc-bar) {
+  border-radius: var(--r-md);
+  border: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--surface) 52%, transparent);
+  padding: var(--sp-2) var(--sp-3);
+}
+.vm-tuning-body :deep(.ds-work-head), .vm-tuning-body :deep(.vb-work-head) {
+  margin-top: 0;
+}
+
+/* 调教四个子页统一：顶部来源说明由 vm-tuning-head 负责，内部来源标题不再重复 */
+.vm-tuning-body :deep(.ds-src), .vm-tuning-body :deep(.vb-src) {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  min-height: 0;
+  justify-content: flex-end;
+}
+.vm-tuning-body :deep(.ds-src-txt), .vm-tuning-body :deep(.vb-src-txt), .vm-tuning-body :deep(.mc-src),
+.vm-tuning-body :deep(.ds-src-ic), .vm-tuning-body :deep(.vb-src-ic), .vm-tuning-body :deep(.mc-src-ic) {
+  display: none;
+}
+.vm-tuning-body :deep(.ds-bar), .vm-tuning-body :deep(.vb-bar), .vm-tuning-body :deep(.mc-bar) {
+  border-radius: var(--r-md);
+  border: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--surface) 52%, transparent);
+  padding: var(--sp-2) var(--sp-3);
+  margin-top: var(--sp-1);
+}
+/* 调教页视觉收敛（2026-10-23）：去掉“贴片”式标题条，页签改成两段紧凑分段控件 */
+.vm-tuning-head {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  padding: 0 !important;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-1);
+}
+.vm-tuning-ic {
+  width: auto;
+  height: auto;
+  border: 0;
+  background: transparent;
+  color: var(--accent-sky);
+}
+.vm-tuning-copy b { font-size: var(--fs-lg); }
+.vm-tuning-copy small { font-size: var(--fs-xs); }
+
+.vm-tabs {
+  display: flex;
+  gap: 2px;
+  width: max-content;
+  max-width: 100%;
+  padding: 2px;
+  margin-bottom: var(--sp-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--surface) 54%, transparent);
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.vm-tabs::-webkit-scrollbar { display: none; }
+.vm-tab {
+  border: 0;
+  background: transparent;
+  border-radius: var(--r-pill);
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  flex: none;
+}
+.vm-tab:hover { background: color-mix(in srgb, var(--accent-sky) 8%, transparent); }
+.vm-tab.active {
+  border: 0;
+  background: color-mix(in srgb, var(--accent-sapphire) 22%, var(--surface));
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-sky) 28%, transparent);
+}
+.vm-tab.active .tb-ic { background: transparent; color: var(--accent-sky); }
+.vm-tab .tb-ic { background: transparent; width: auto; height: auto; }
+.vm-tab .tb-cnt { background: color-mix(in srgb, var(--surface) 60%, transparent); }
+
+.vm-subtabs {
+  display: flex;
+  gap: 2px;
+  width: max-content;
+  max-width: 100%;
+  padding: 2px;
+  margin: 0 0 var(--sp-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--surface) 42%, transparent);
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.vm-subtabs::-webkit-scrollbar { display: none; }
+.vm-subtab {
+  border: 0;
+  background: transparent;
+  border-radius: var(--r-pill);
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-sm);
+  flex: none;
+}
+.vm-subtab.active {
+  background: color-mix(in srgb, var(--accent-sky) 14%, var(--surface));
+  border: 0;
+  color: var(--text);
+}
 </style>

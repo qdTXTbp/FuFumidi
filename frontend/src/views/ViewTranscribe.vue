@@ -7,6 +7,7 @@ import { useAppStore } from '../stores/app';
 import { usePlaylistStore } from '../stores/playlist';
 import { clamp, esc, fmtTime } from '../core/util.js';
 import { t } from '../core/i18n.js';
+import { playDoneChime } from '../core/sfx.js';
 import NumSlider from '../components/NumSlider.vue';
 
 const app = useAppStore();
@@ -1686,33 +1687,8 @@ async function runBatch() {
     toast(t('转录失败'), 'warn');
   }
   if (cancelAll.value && !paused.value) logLine(t('已取消转录队列…'), true);
-  if (!cancelAll.value && (dN || eN)) playTranscribeDoneChime(eN > 0);
+  if (!cancelAll.value && (dN || eN)) playDoneChime(eN > 0);
 }
-/** 转录完成后播放短提示音（Web Audio 合成，不依赖外部音频文件）。
- *  成功两声上行、失败两声下行；只在批次结束且非取消时调用一次。 */
-function playTranscribeDoneChime(failed = false) {
-  try {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return;
-    const ctx = new AC();
-    const t0 = ctx.currentTime;
-    const freqs = failed ? [392, 311] : [659.25, 880.0, 1318.5];
-    freqs.forEach((f, i) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = f;
-      const at = t0 + i * 0.11;
-      gain.gain.setValueAtTime(0.0001, at);
-      gain.gain.exponentialRampToValueAtTime(0.18, at + 0.015);
-      gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.18);
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.start(at); osc.stop(at + 0.2);
-    });
-    setTimeout(() => { try { ctx.close(); } catch (e) {} }, 900);
-  } catch (e) {}
-}
-
 async function startTranscribe() {
   if (busy.value) return;
   const chain = !!chainMode.value;
@@ -1921,6 +1897,7 @@ onBeforeUnmount(() => {
         <div class="page-sub">{{ t('音频转 MIDI · 本地 Python 引擎 · 离线完成') }}</div>
       </div>
       <span v-if="gpuInfo" class="tag accent">{{ gpuInfo }}</span>
+      <span v-if="gpuDetail" class="tag" data-guide="gpu-detail" :title="gpuDetail">{{ gpuDetail }}</span>
       <button class="btn sm ghost" @click="state.ui.settingsTab = 'gpu'; state.ui.settingsOpen = true">{{ t('GPU 加速') }}</button>
       <span class="tag" :class="isDesktop ? '' : 'warn-tag'">{{ isDesktop ? t('桌面引擎就绪') : t('请使用桌面版') }}</span>
     </div>
@@ -2413,101 +2390,62 @@ onBeforeUnmount(() => {
 
       <!-- 任务模板已移除（2026-10-14）："记住一套设置"改由**队列**承担 ——
            每个队列自带模型与参数，切队列即切设置（用户要求）。 -->
-      <div v-if="mode !== 'separate'">
 
-      <!-- 摘要 + 开始 -->
-      <div v-if="queue.some(i => i.status === 'pending' || i.status === 'error')" class="tr-sum">
-        {{ t('即将转录：') }}<b>{{ queue.find(i => i.status === 'pending' || i.status === 'error')?.name || '—' }}</b> · {{ t('引擎：') }}<b>{{ MODE_NAMES()[mode] }}</b> · {{ t('预计耗时：') }}<b>{{ sumTime || '—' }}</b>
-      </div>
-      <div class="tr-par" style="display:flex;align-items:center;gap:var(--sp-2);margin-top:12px">
-        <span style="font-size:var(--fs-md);color:var(--steel)">{{ t('并行数') }}</span>
-        <select style="background:var(--surface);color:var(--ink);border:1px solid var(--hairline);border-radius:var(--r-md);padding:4px 8px;font-size:var(--fs-md)" :value="parallelN" @change="setParallel(parseInt($event.target.value, 10) || 1)">
-          <option v-for="n in 4" :key="n" :value="n">{{ n }}</option>
-        </select>
-        <span style="font-size:var(--fs-sm);color:var(--stone)">{{ t('多文件同时转录；GPU 模型建议保持 1') }}</span>
-      </div>
-      <button class="btn primary big" style="width:100%;justify-content:center;margin-top:14px" data-guide="start-transcribe" @click="startTranscribe" :disabled="busy || !isDesktop || !queue.length">
-        <Icon name="transcribe" :size="16" />{{ busy ? t('转录中…') : t('开始转录') }}
-      </button>
-      <div v-if="busy || paused" class="row" style="gap:var(--sp-2);margin-top:8px">
-        <button v-if="busy && !paused" class="btn ghost" style="flex:1;justify-content:center" @click="pauseBatch"><Icon name="pause" :size="14" /> {{ t('暂停') }}</button>
-        <button v-else class="btn" style="flex:1;justify-content:center" @click="resumeBatch"><Icon name="play" :size="14" /> {{ t('继续') }}</button>
-        <button v-if="busy" class="btn ghost" style="flex:1;justify-content:center" @click="cancelTranscribe"><Icon name="stop" :size="14" /> {{ t('取消转录') }}</button>
-      </div>
-
-      <Transition name="fade">
-      <div v-if="busy || done" class="tr-progress">
-        <div class="pfill" :style="{ transform: 'scaleX(' + ((progress) / 100) + ')' }"></div><span>{{ progress }}%</span>
-      </div>
-      </Transition>
-      <div v-if="stage" class="tr-stage muted small">{{ stage }}</div>
-      <Transition name="fade">
-      <div v-if="done" class="tr-done">
-        <button class="btn sm" @click="setView('play')"><Icon name="play2" :size="13" /> {{ t('打开播放') }}</button>
-        <button class="btn sm ghost" @click="openOutput"><Icon name="folder" :size="13" /> {{ t('打开输出文件夹') }}</button>
-        <span class="muted small">{{ doneInfo }}</span>
-      </div>
-      </Transition>
-
-      <!-- 运行日志 -->
-      <Transition name="fade">
-      <div v-if="logs.length" class="tr-log">
-        <div class="tr-log-head">
-          <span class="log-title">{{ t('运行日志') }}</span><span class="log-count">{{ logs.length }}{{ t(' 行') }}</span>
-          <span style="flex:1"></span>
-          <button class="icon-btn" :title="t('清空')" @click="clearLog"><Icon name="trash" :size="13" /></button>
-          <button class="icon-btn" :title="t('展开/收起')" @click="logExpanded = !logExpanded"><Icon name="chevron" :size="13" /></button>
-        </div>
-        <div class="tr-log-scroll" :class="{ collapsed: !logExpanded }">
-          <div v-for="(l, i) in logs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div>
-        </div>
-      </div>
-      </Transition>
-      </div>
       </div>
       </Transition>
     </div>
 
-    <!-- 智能修正 -->
-    <div v-if="mode !== 'separate'" class="card tr-card" style="border-top:1px dashed var(--border)">
-      <div class="fb-label" style="font-weight:700">{{ t('智能修正') }}</div>
-      <div class="fb-hint">{{ t('对齐起音 · 还原力度 · 声部平衡 · 清理杂音') }}</div>
-      <div class="tr-rf-row">
-        <span class="muted small" style="min-width:44px">{{ t('原音频') }}</span>
-        <button class="btn sm" @click="pickRfAudio"><Icon name="music" :size="13" /> {{ t('选择音频') }}</button>
-        <span class="muted small rf-path">{{ rf.audio ? rf.audio.replace(/^.*[\\/]/, '') : '—' }}</span>
-      </div>
-      <div class="tr-rf-row">
-        <span class="muted small" style="min-width:44px">{{ t('原 MIDI') }}</span>
-        <button class="btn sm" @click="pickRfMidi"><Icon name="kbd" :size="13" /> {{ t('选择 MIDI') }}</button>
-        <span class="muted small rf-path">{{ rf.midi ? rf.midi.replace(/^.*[\\/]/, '') : '—' }}</span>
-      </div>
-      <div class="fb-label">{{ t('修正模式') }}</div>
-      <div class="fu-ctl tr-pills">
-        <button class="fu-ctl tr-pill" :class="{ active: rf.mode === 'auto' }" @click="rf.mode = 'auto'">{{ t('自动') }}</button>
-        <button class="fu-ctl tr-pill" :class="{ active: rf.mode === 'piano' }" @click="rf.mode = 'piano'">{{ t('钢琴') }}</button>
-        <button class="fu-ctl tr-pill" :class="{ active: rf.mode === 'vocal' }" @click="rf.mode = 'vocal'">{{ t('人声') }}</button>
-      </div>
-      <div class="tr-switch" style="margin-top:8px">
-        <label><span><b>{{ t('声部平衡') }}</b><small>{{ t('抬主奏/人声 · 压配乐') }}</small></span><input type="checkbox" v-model="rf.stem"></label>
-      </div>
-      <button class="btn primary big" style="width:100%;justify-content:center;margin-top:12px" @click="startRefine" :disabled="rf.busy || !rf.midi || !rf.audio">
-        <Icon name="spark" :size="15" />{{ rf.busy ? t('修正中…') : t('开始智能修正') }}
-      </button>
-      <div v-if="rf.busy || rf.info" class="tr-progress">
-        <div class="pfill" :style="{ transform: 'scaleX(' + (((rf.busy ? 60 : 100)) / 100) + ')' }"></div><span>{{ rf.busy ? '…' : t('完成') }}</span>
-      </div>
-      <div v-if="rf.info" class="tr-done">
-        <button class="btn sm" @click="openRefineResult"><Icon name="play2" :size="13" /> {{ t('打开修正结果') }}</button>
-        <span class="muted small">{{ rf.info }}</span>
-      </div>
-      <div v-if="rf.logs.length" class="tr-log">
-        <div class="tr-log-head"><span class="log-title">{{ t('修正日志') }}</span><span class="log-count">{{ rf.logs.length }}{{ t(' 行') }}</span><span style="flex:1"></span><button class="icon-btn" @click="rf.logs = []"><Icon name="trash" :size="13" /></button></div>
-        <div class="tr-log-scroll">
-          <div v-for="(l, i) in rf.logs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div>
+    <aside v-if="mode !== 'separate'" class="card tr-card tr-run-panel">
+  <div class="fb-label">{{ t('运行') }}</div>
+  <!-- 摘要 + 开始 -->
+        <div v-if="queue.some(i => i.status === 'pending' || i.status === 'error')" class="tr-sum">
+          {{ t('即将转录：') }}<b>{{ queue.find(i => i.status === 'pending' || i.status === 'error')?.name || '—' }}</b> · {{ t('引擎：') }}<b>{{ MODE_NAMES()[mode] }}</b> · {{ t('预计耗时：') }}<b>{{ sumTime || '—' }}</b>
         </div>
-      </div>
-    </div>
+        <div class="tr-par" style="display:flex;align-items:center;gap:var(--sp-2);margin-top:12px">
+          <span style="font-size:var(--fs-md);color:var(--steel)">{{ t('并行数') }}</span>
+          <select style="background:var(--surface);color:var(--ink);border:1px solid var(--hairline);border-radius:var(--r-md);padding:4px 8px;font-size:var(--fs-md)" :value="parallelN" @change="setParallel(parseInt($event.target.value, 10) || 1)">
+            <option v-for="n in 4" :key="n" :value="n">{{ n }}</option>
+          </select>
+          <span style="font-size:var(--fs-sm);color:var(--stone)">{{ t('多文件同时转录；GPU 模型建议保持 1') }}</span>
+        </div>
+        <button class="btn primary big" style="width:100%;justify-content:center;margin-top:14px" data-guide="start-transcribe" @click="startTranscribe" :disabled="busy || !isDesktop || !queue.length">
+          <Icon name="transcribe" :size="16" />{{ busy ? t('转录中…') : t('开始转录') }}
+        </button>
+        <div v-if="busy || paused" class="row" style="gap:var(--sp-2);margin-top:8px">
+          <button v-if="busy && !paused" class="btn ghost" style="flex:1;justify-content:center" @click="pauseBatch"><Icon name="pause" :size="14" /> {{ t('暂停') }}</button>
+          <button v-else class="btn" style="flex:1;justify-content:center" @click="resumeBatch"><Icon name="play" :size="14" /> {{ t('继续') }}</button>
+          <button v-if="busy" class="btn ghost" style="flex:1;justify-content:center" @click="cancelTranscribe"><Icon name="stop" :size="14" /> {{ t('取消转录') }}</button>
+        </div>
+  
+        <Transition name="fade">
+        <div v-if="busy || done" class="tr-progress">
+          <div class="pfill" :style="{ transform: 'scaleX(' + ((progress) / 100) + ')' }"></div><span>{{ progress }}%</span>
+        </div>
+        </Transition>
+        <div v-if="stage" class="tr-stage muted small">{{ stage }}</div>
+        <Transition name="fade">
+        <div v-if="done" class="tr-done">
+          <button class="btn sm" @click="setView('play')"><Icon name="play2" :size="13" /> {{ t('打开播放') }}</button>
+          <button class="btn sm ghost" @click="openOutput"><Icon name="folder" :size="13" /> {{ t('打开输出文件夹') }}</button>
+          <span class="muted small">{{ doneInfo }}</span>
+        </div>
+        </Transition>
+  
+        <!-- 运行日志 -->
+        <Transition name="fade">
+        <div v-if="logs.length" class="tr-log">
+          <div class="tr-log-head">
+            <span class="log-title">{{ t('运行日志') }}</span><span class="log-count">{{ logs.length }}{{ t(' 行') }}</span>
+            <span style="flex:1"></span>
+            <button class="icon-btn" :title="t('清空')" @click="clearLog"><Icon name="trash" :size="13" /></button>
+            <button class="icon-btn" :title="t('展开/收起')" @click="logExpanded = !logExpanded"><Icon name="chevron" :size="13" /></button>
+          </div>
+          <div class="tr-log-scroll" :class="{ collapsed: !logExpanded }">
+            <div v-for="(l, i) in logs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div>
+          </div>
+        </div>
+        </Transition>
+    </aside>
 
     <!-- 预设管理 -->
     <Transition name="ov">
@@ -2539,7 +2477,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.tr-view { max-width: 900px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
+.tr-view { overflow-x: hidden; max-width: 900px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
 .warn-tag { color: var(--amber); border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.1); }
 .tr-drop-card { padding: 16px; display: flex; flex-direction: column; gap: var(--sp-3); }
 .tr-drop { display: flex; align-items: center; gap: var(--sp-4); padding: 22px; border: 1.5px dashed var(--border-strong); border-radius: var(--r-lg); background: var(--canvas); cursor: pointer; transition: border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out), transform var(--motion-base) var(--ease-out), box-shadow var(--motion-base) var(--ease-out); }
@@ -2554,7 +2492,7 @@ onBeforeUnmount(() => {
 .fb-label { font-size: var(--fs-md); font-weight: 600; color: var(--ink); }
 .fb-hint { font-size: var(--fs-xs); color: var(--stone); margin-top: 1px; }
 .tr-batch-ctls { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
-.tr-batch-list { border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--canvas); overflow: hidden; }
+.tr-batch-list { border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--canvas); overflow-y: auto; overflow-x: hidden; max-height: min(48vh, 420px); scrollbar-width: thin; scrollbar-gutter: stable; }
 .tr-batch-item { display: flex; align-items: center; gap: var(--sp-2); padding: 6px 10px; border-bottom: 1px solid var(--hairline-soft); font-size: var(--fs-sm); }
 .tr-batch-item:last-child { border-bottom: none; }
 .tb-name { flex: 1; min-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
@@ -2732,4 +2670,62 @@ onBeforeUnmount(() => {
   font-size: var(--fs-xs); font-weight: 600; color: var(--t-warn);
   border: 1px solid color-mix(in srgb, var(--t-warn) 45%, var(--line)); background: color-mix(in srgb, var(--t-warn) 12%, transparent); }
 .tr-perf-hint.tr-warn { color: var(--t-warn); }
+
+/* 品牌化布局：宽屏下把“素材/队列”和“引擎/参数”分成两栏，窄屏保持单列。
+   只改视觉位置，不改任何 v-if / 事件 / 数据流；窄窗口或小屏回原顺序。 */
+
+.tr-runbar { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-3); position: sticky; top: var(--sp-2); z-index: 25; backdrop-filter: var(--glass-blur); background: color-mix(in srgb, var(--surface) 92%, transparent); }
+.tr-runbar-main { display: flex; align-items: baseline; gap: var(--sp-2); min-width: 0; }
+.tr-runbar-main b { font-size: var(--fs-sm); color: var(--text); }
+.tr-runbar-main span { font-size: var(--fs-xs); color: var(--text3); font-family: var(--font-num); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tr-runbar .btn { margin-left: auto; }
+.tr-runbar-hint { font-size: var(--fs-xs); color: var(--text3); }
+@media (max-width: 760px) { .tr-runbar-hint { display: none; } .tr-runbar { position: static; } }
+
+@media (min-width: 1200px) {
+  /* 宽屏也不强行三栏：左侧队列常驻，右侧主流程单列（引擎 → 高级参数 → 运行）。
+     参数面板需要足够的横向空间，用户不必在窄栏里操作。 */
+  .tr-view {
+    display: grid;
+    grid-template-columns: minmax(360px, 400px) minmax(0, 1fr);
+    grid-template-rows: auto;
+    gap: var(--sp-3);
+    align-items: start;
+    max-width: 1500px;
+    padding-left: var(--sp-4);
+    padding-right: var(--sp-4);
+  }
+  .tr-view > .tr-drop-card {
+    grid-column: 1;
+    grid-row: 1;
+    margin-top: 0;
+    position: sticky;
+    top: 0;
+    max-height: calc(100vh - var(--topbar-h) - var(--playerbar-h) - var(--sp-6));
+    overflow-y: auto;
+  }
+  .tr-view > .tr-card {
+    grid-column: 2;
+    grid-row: auto;
+    margin-top: 0;
+    min-width: 0;
+  }
+  .tr-view > .tr-engine { grid-column: 2; grid-row: 1; }
+  .tr-view > .tr-run-panel {
+    grid-column: 2;
+    grid-row: 2;
+    position: static;
+    margin-top: 0;
+    max-height: none;
+    overflow: visible;
+    overflow-x: clip;
+    min-width: 0;
+  }
+  .tr-batch-item { padding: 8px 10px; min-height: 38px; }
+  .tr-batch-item .tb-name { min-width: 0; }
+  .tr-batch-item .tb-bar { width: 64px; }
+  .tr-view > .tr-run-panel * { min-width: 0; }
+  .tr-view > .tr-run-panel .btn { max-width: 100%; white-space: normal; }
+}
+.tr-run-panel { position: static; margin-top: 0; }
 </style>

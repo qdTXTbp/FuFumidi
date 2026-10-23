@@ -987,6 +987,8 @@ async function renderVideo() {
       <span class="conv-song">{{ song ? song.name : t('未加载曲目') }}</span>
     </div>
 
+    <div class="conv-duo">
+    <div class="conv-col">
     <div class="card conv-form">
       <div class="form-grid">
         <div class="field-row">
@@ -1079,6 +1081,8 @@ async function renderVideo() {
       </Transition>
     </div>
 
+    </div>
+    <div class="conv-col">
     <!-- ==================== 视频 / 可视化导出 ==================== -->
     <div class="card conv-form ve-card">
       <div class="ve-head">
@@ -1206,12 +1210,14 @@ async function renderVideo() {
         <button v-if="VE.veBusy" class="btn sm danger" @click="VE.veCancel = true">{{ t('取消导出') }}</button>
       </Transition>
     </div>
+    </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.convert-view { max-width: 820px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
-.conv-info-bar { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--r-md); padding: 8px 14px; margin-bottom: 12px; font-size: var(--fs-md); color: var(--steel); }
+.convert-view { max-width: 1280px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
+.conv-info-bar { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; background: color-mix(in srgb, var(--surface) 42%, transparent); border: 1px solid var(--hairline); border-radius: var(--r-md); padding: 8px 14px; margin-bottom: 12px; font-size: var(--fs-md); color: var(--steel); }
 .conv-song { color: var(--stone); }
 .conv-form { display: flex; flex-direction: column; gap: var(--sp-4); }
 .form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--sp-4) var(--sp-5); }
@@ -1244,7 +1250,7 @@ async function renderVideo() {
 /* 转换页进度/完成提示显隐过渡 */
 .cv-enter-active, .cv-leave-active { transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-spring); }
 .cv-enter-from, .cv-leave-to { opacity: 0; transform: translateY(6px); }
-.ve-card { margin-top: 18px; padding: 18px; }
+.ve-card { margin-top: 0; padding: 18px; }
 .ve-head { display: flex; flex-direction: column; gap: var(--sp-1); }
 .ve-head b { font-size: var(--fs-lg); color: var(--ink); }
 .ve-preview-wrap { position: relative; width: 100%; background: var(--surface-soft); border: 1px solid var(--hairline); border-radius: var(--r-md); overflow: hidden; }
@@ -1261,4 +1267,10 @@ async function renderVideo() {
 .ve-opts label { display: inline-flex; align-items: center; gap: var(--sp-1); cursor: pointer; }
 .ve-opts input[type=checkbox] { accent-color: var(--ink); }
 .num-input { width: 100%; padding: 6px 8px; font-size: var(--fs-sm); background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--r-md); color: var(--ink); outline: none; box-sizing: border-box; }
+
+/* 转换页双栏：音频导出 / 视频导出并排，窄屏回退单栏 */
+.conv-duo { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--sp-3); align-items: stretch; }
+.conv-col { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-3); height: 100%; }
+.conv-col > .conv-form { flex: 1; }
+@media (max-width: 980px) { .conv-duo { grid-template-columns: 1fr; } }
 </style>
