@@ -50,6 +50,7 @@ const midiBusy = ref(false);
 const previewOpen = ref(false);
 const previewBusy = ref(false);
 const previewPages = ref([]);
+const previewIdx = ref(0);
 const splitOpen = ref(false);
 const splitContent = ref(null);
 
@@ -489,6 +490,24 @@ async function rasterizeSvg(svg, scale, tileH) {
   }
   return out;
 }
+/** 判断一页是否真的有墨迹：纯白页（SVG 末尾空白）不进入预览/PDF。 */
+async function pageHasInk(dataUrl) {
+  try {
+    const img = new Image();
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = dataUrl; });
+    const cv = document.createElement('canvas');
+    cv.width = 96; cv.height = 136;
+    const g = cv.getContext('2d', { willReadFrequently: true });
+    g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+    g.drawImage(img, 0, 0, cv.width, cv.height);
+    const d = g.getImageData(0, 0, cv.width, cv.height).data;
+    for (let k = 0; k < d.length; k += 4) {
+      if (d[k] < 225 || d[k + 1] < 225 || d[k + 2] < 225) return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
 async function exportStaffPng() {
   const el = scoreEl.value;
   if (!el) return;
@@ -595,9 +614,11 @@ async function exportPdf() {
       const tileH = Math.max(240, Math.round(w * 1.414));
       pages.push(...await rasterizeSvg(svg, 2, tileH));
     }
-    if (!pages.length) { toast(t('没有可导出的乐谱'), 'warn'); return; }
+    const inkPages = [];
+    for (const page of pages) { if (page && await pageHasInk(page)) inkPages.push(page); }
+    if (!inkPages.length) { toast(t('没有可导出的乐谱'), 'warn'); return; }
     if (!b || !b.exportScorePdfPages) { toast(t('当前环境不支持 PDF 导出'), 'warn'); return; }
-    const r = await b.exportScorePdfPages({ name: base, pages });
+    const r = await b.exportScorePdfPages({ name: base, pages: inkPages });
     if (r && r.ok) toast(t('已导出乐谱 PDF：') + r.path, 'ok');
     else if (r && !r.canceled) toast(t('PDF 导出失败：') + ((r && r.error) || ''), 'warn');
   } catch (e) {
@@ -631,41 +652,36 @@ function openScoreSplit() {
 
 /* ---------------- 分页预览（SVG 栅格化为 PNG 图集弹窗） ---------------- */
 async function previewScore() {
-  if (mode.value !== 'staff') { toast(t('请先切换至五线谱模式'), 'warn'); return; }
+  if (!isStaffLike.value) { toast(t('请先切换到五线谱或总谱模式'), 'warn'); return; }
   const svgs = scoreEl.value ? Array.from(scoreEl.value.querySelectorAll('svg')) : [];
   if (!svgs.length) { toast(t('请先渲染五线谱'), 'warn'); return; }
   previewOpen.value = true;
   previewBusy.value = true;
   previewPages.value = [];
+  previewIdx.value = 0;
   try {
-    const scale = 1.5, tileH = 9000;
     const pages = [];
     for (const svg of svgs) {
       const w = svg.clientWidth || svg.getBoundingClientRect().width || parseFloat(svg.getAttribute('width')) || 986;
       const h = svg.clientHeight || svg.getBoundingClientRect().height || parseFloat(svg.getAttribute('height')) || 600;
       if (!w || !h) continue;
-      const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml' }));
-      const img = new Image();
-      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
-      URL.revokeObjectURL(url);
-      let off = 0;
-      while (off < h) {
-        const th = Math.min(tileH, h - off);
-        const cv = document.createElement('canvas');
-        cv.width = Math.max(1, Math.round(w * scale)); cv.height = Math.max(1, Math.round(th * scale));
-        const g = cv.getContext('2d');
-        g.setTransform(scale, 0, 0, scale, 0, 0);
-        g.fillStyle = cssVar('--canvas', '#ffffff'); g.fillRect(0, 0, w, th);
-        g.drawImage(img, 0, off, w, th, 0, 0, w, th);
-        pages.push(cv.toDataURL('image/png'));
-        off += th;
-      }
+      // 按 A4 比例切页：白底黑谱，和 PDF 导出共用同一套 rasterizeSvg。
+      const tileH = Math.max(240, Math.round(w * 1.414));
+      pages.push(...await rasterizeSvg(svg, 1.8, tileH));
     }
-    if (!pages.length) throw new Error('empty');
-    previewPages.value = pages;
+    const valid = [];
+    for (const page of pages) { if (page && await pageHasInk(page)) valid.push(page); }
+    if (!valid.length) throw new Error('empty');
+    previewPages.value = valid;
+    previewIdx.value = 0;
   } catch (e) {
     toast(t('预览失败：') + String(e.message || e), 'warn');
   } finally { previewBusy.value = false; }
+}
+
+function previewStep(d) {
+  if (!previewPages.value.length) return;
+  previewIdx.value = Math.max(0, Math.min(previewPages.value.length - 1, previewIdx.value + d));
 }
 
 /* ---------------- 点击定位播放头 ---------------- */
@@ -873,19 +889,28 @@ onBeforeUnmount(() => {
 
     <Transition name="ov">
       <div v-if="previewOpen" class="pv-overlay" @click.self="previewOpen = false">
-      <div class="pv-card">
+      <div class="pv-card pv-viewer-card">
         <div class="pv-head">
-          <b>{{ t('乐谱分页预览') }}</b>
-          <button class="icon-btn" @click="previewOpen = false" :title="t('关闭')"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
+          <div class="pv-title"><b>{{ t('乐谱分页预览') }}</b><small v-if="previewPages.length">{{ previewIdx + 1 }} / {{ previewPages.length }}</small></div>
+          <div class="pv-head-actions">
+            <button v-if="previewPages.length > 1" class="btn sm ghost" @click="previewStep(-1)" :disabled="previewIdx === 0">{{ t('上一页') }}</button>
+            <button v-if="previewPages.length > 1" class="btn sm ghost" @click="previewStep(1)" :disabled="previewIdx >= previewPages.length - 1">{{ t('下一页') }}</button>
+            <button class="icon-btn" @click="previewOpen = false" :title="t('关闭')"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
+          </div>
         </div>
         <div class="pv-body">
           <div v-if="previewBusy" class="score-empty">{{ t('正在生成预览…') }}</div>
-          <template v-else>
-            <div v-for="(p, i) in previewPages" :key="i" class="pv-page">
-              <div class="pv-page-name">{{ t('第 ') }}{{ i + 1 }}{{ t(' 页') }}</div>
-              <img :src="p" alt="score page" />
-            </div>
-          </template>
+          <div v-else-if="!previewPages.length" class="score-empty">{{ t('没有可预览的乐谱页') }}</div>
+          <div v-else class="pv-viewer">
+            <button class="pv-arrow" :disabled="previewIdx === 0" @click="previewStep(-1)" :title="t('上一页')"><Icon name="back" :size="18" /></button>
+            <div class="pv-paper"><img :src="previewPages[previewIdx]" alt="score page" /></div>
+            <button class="pv-arrow" :disabled="previewIdx >= previewPages.length - 1" @click="previewStep(1)" :title="t('下一页')"><Icon name="forward" :size="18" /></button>
+          </div>
+        </div>
+        <div v-if="previewPages.length > 1" class="pv-thumbs">
+          <button v-for="(p, i) in previewPages" :key="i" class="pv-thumb" :class="{ on: i === previewIdx }" @click="previewIdx = i">
+            <img :src="p" alt="" /><span>{{ i + 1 }}</span>
+          </button>
         </div>
       </div>
       </div>
@@ -1049,5 +1074,23 @@ onBeforeUnmount(() => {
   .score-actions { margin-left: 0; }
   .score-track .select-input { max-width: 160px; }
 }
+
+
+/* 乐谱分页预览：单页查看 + 缩略图条 */
+.pv-viewer-card { width: min(1080px, 96vw); max-height: 92vh; }
+.pv-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.pv-title small { color: var(--text3); font-family: var(--font-num); font-size: var(--fs-xs); }
+.pv-head-actions { display: flex; align-items: center; gap: 6px; }
+.pv-viewer { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 14px 8px; background: color-mix(in srgb, var(--canvas) 60%, transparent); border-radius: var(--r-md); }
+.pv-paper { flex: 1; min-width: 0; height: 100%; max-height: 66vh; display: flex; align-items: center; justify-content: center; overflow: auto; background: #fff; border-radius: var(--r-sm); box-shadow: 0 10px 30px rgba(0,0,0,.18); padding: 10px; }
+.pv-paper img { max-width: 100%; max-height: 64vh; width: auto; height: auto; object-fit: contain; display: block; }
+.pv-arrow { flex: none; width: 34px; height: 46px; border: 1px solid var(--hairline); border-radius: var(--r-md); background: color-mix(in srgb, var(--surface) 80%, transparent); color: var(--text2); display: grid; place-items: center; cursor: pointer; }
+.pv-arrow:hover:not(:disabled) { color: var(--accent-sky); border-color: color-mix(in srgb, var(--accent-sky) 35%, var(--hairline)); }
+.pv-arrow:disabled { opacity: .3; cursor: default; }
+.pv-thumbs { flex: none; display: flex; gap: 8px; overflow-x: auto; padding: 8px 2px 2px; }
+.pv-thumb { position: relative; width: 74px; height: 100px; flex: none; padding: 0; border: 1px solid var(--hairline); border-radius: var(--r-sm); overflow: hidden; background: #fff; cursor: pointer; opacity: .72; }
+.pv-thumb.on { border-color: var(--accent-sky); opacity: 1; box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-sky) 35%, transparent); }
+.pv-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pv-thumb span { position: absolute; right: 3px; bottom: 3px; min-width: 16px; height: 16px; line-height: 16px; border-radius: var(--r-sm); background: color-mix(in srgb, var(--canvas) 72%, transparent); color: var(--text2); font: var(--fs-xs) var(--font-num); text-align: center; }
 
 </style>
