@@ -923,7 +923,7 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
         <div v-for="c in omrComponents" :key="c.id" class="sc-cmp">
           <Icon :name="c.on ? 'check' : 'plus'" :size="11" :class="c.on ? 'sc-cmp-ok' : 'sc-cmp-no'" />
           <span class="sc-cmp-nm">{{ c.name }}<small class="sc-cmp-size">{{ c.size }}</small></span>
-          <button v-if="!c.on" class="btn sm" :disabled="omrBusy" @click="installComponent(c.id)"><Icon name="download" :size="11" /> {{ t('下载') }}</button>
+          <button class="btn sm ghost" :disabled="omrBusy" :title="c.on ? t('重新下载') : t('下载')" @click="installComponent(c.id)"><Icon name="download" :size="11" /> {{ t('下载') }}</button>
         </div>
         <div v-if="omrText" class="sc-cmp-progress">{{ omrText }}</div>
         <div class="sc-cmp-actions">
