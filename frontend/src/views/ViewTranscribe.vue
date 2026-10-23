@@ -2726,7 +2726,7 @@ onBeforeUnmount(() => {
     grid-row: 1;
     margin-top: 0;
     position: sticky;
-    top: var(--sp-3);
+    top: 0;
     max-height: calc(100vh - var(--topbar-h) - var(--playerbar-h) - var(--sp-6));
     overflow-y: auto;
   }
