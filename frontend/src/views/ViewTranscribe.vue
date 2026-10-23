@@ -42,14 +42,8 @@ void (async () => {
 const perf = ref('quality');             // quality | balanced | fast
 const perfHint = ref('');
 /* 识别片段长度（秒）：每种模型一次喂给模型识别的音频长度。
-   ★ 2026-10-23 重新定位为**可选、默认不开启**（用户「改成不强制开启分段识别，
-   允许用户手动切换」）：
-     · 0 = 模型默认 —— 用各模型的原生块长（= 训练块长），整曲一次推理。
-       这是默认值，也是 2026-10-21「取消分块转录」后的行为。
-     · >0 = 用户显式开启分段识别。实测按固定长度切片再合并会让**块与块之间
-       质量参差不齐**（接缝重复音、换音色、延音被切断），所以默认关、并写明代价。
-   ★ 预设一律不写这个键 —— 6.1.x 的预设给每个模型都写了值，切模型就自动套上，
-     那正是「强制开启」。这条由 engine/tests/test_transcribe_options.py 固化。 */
+   0 = 跟随模型默认（各模型默认不同：basic-pitch 内置窗约 2s、MuScriptor 5s、
+   piano-transcription 10s、Aria-AMT 30s、Transkun 由模型配置决定）。 */
 const segmentSec = ref(0);
 /* 转录前降噪：默认 off（保持旧输出完全一致）。选项来自引擎 audio_chain：
    off / light（谱减）/ strong（UVR-DeNoise 模型，需资源中心下载）。
@@ -63,8 +57,7 @@ function setMemoryMode(v) {
   memoryMode.value = ['auto', 'low', 'allow'].includes(v) ? v : 'auto';
   try { localStorage.setItem('fufumidi_memory_mode', memoryMode.value); } catch (e) {}
 }
-/** 各模型推荐片段长度（= 训练块长；见各引擎源码/配置）。
- *  只在用户显式开启分段识别时作为「推荐」标注显示，**不写进预设**。 */
+/** 各模型推荐片段长度（= 训练块长；见各引擎源码/配置） */
 const SEG_RECOMMEND = computed(() => {
   if (mode.value === 'universal') return umodel.value === 'basic' ? 0 : 5;
   if (pmodel.value === 'aria') return 30;
@@ -95,12 +88,10 @@ const msTemp = ref(1.0);                 // 采样温度（1.0 = 不传）
 const msCfg = ref(1.0);                  // 引导系数（1.0 = 不传）
 const msBeam = ref(1);                   // 束搜索宽度（1 = 不传）
 const msPrelude = ref(true);             // 跨块延音缝合（默认开；关掉才传 false＝不缝合）
-// MuScriptor 乐器组：none=不限定（默认）；limit=手动硬约束
-// ★ 2026-10-21：「自动探测（分段）」档已移除 —— 分段探测本身又是一次分块，
-//   A/B 见 docs/plans/2026-10-20-segment-probe-ab.md（音色切换 4 次、边界重复音 1 个、
-//   耗时 +3.6s，F1 还低于全局探测）。
+// MuScriptor 乐器组：none=不限定（默认）；limit=手动硬约束；probe_segments=按段自动探测并约束
 const msMode = ref('none');
 const msGroups = ref(['voice', 'drums']);
+const msProbeSegSec = ref(60);
 function toggleMsGroup(id) {
   const i = msGroups.value.indexOf(id);
   if (i >= 0) { if (msGroups.value.length > 1) msGroups.value.splice(i, 1); return; }
@@ -123,6 +114,7 @@ const MS_GROUPS = [
 ];
 const msInstrValue = computed(() => {
   if (msMode.value === 'limit') return msGroups.value.join(',');
+  if (msMode.value === 'probe_segments') return 'probe_segments';
   return 'none';
 });
 // ② 计算精度：默认 fp32（不传）—— bf16 改数值精度、属影响质量的开关，默认关。
@@ -605,36 +597,32 @@ const WEB_MODEL_DEFAULTS = () => ({
 // 网页版内置预设（与 engine/presets.py 的 _builtin_presets 一一对应；名字必须逐字一致）。
 // 无桥接时 loadPresets 用这份数据填充，避免「应用预设」因列表为空而失效。
 // 判据同引擎侧：最高质量 + 保证稳定性，不考虑速度性能（perf=quality / fp32 / 中性解码值）。
-// ★ 2026-10-23：这份表**一律不写 segment_sec**（识别片段长度）。用户明确「改成不强制
-//   开启分段识别，允许用户手动切换」—— 6.1.x 给每个模型都写了值（MuScriptor 5s /
-//   钢琴 10s / Aria 30s…），切模型就自动套上，那就是强制开启。现在默认 0 = 模型
-//   原生块长，要不要分段由用户在高级参数里自己决定。
 const WEB_BUILTIN_PRESETS = () => {
   const basic = {
     model: 'basic', onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
     melodia: true, min_freq: 0, max_freq: 0,
     beat_grid: true, tempo: 0, perf: 'quality',
-    auto_bpm: false, denoise_mode: 'off',
+    auto_bpm: false, denoise_mode: 'off', segment_sec: 0,
   };
   const piano = {
     onset_threshold: 0.3, frame_threshold: 0.1, min_note_ms: 60, merge_gap_ms: 30,
     include_pedal: true, perf: 'quality',
-    auto_bpm: false, denoise_mode: 'off',
+    auto_bpm: false, denoise_mode: 'off', segment_sec: 10,
   };
   return [
     { name: 'Basic Pitch · 最优', mode: 'universal', params: { ...basic } },
     { name: 'YourMT3+ · 最优', mode: 'universal', params: { ...basic,
-      model: 'yourmt3' } },
+      model: 'yourmt3', segment_sec: 0 } },
     { name: 'MIROS · 最优', mode: 'universal', params: { ...basic,
-      model: 'miros' } },
+      model: 'miros', segment_sec: 0 } },
     { name: 'MuScriptor · 最优', mode: 'universal', params: { ...basic,
       model: 'muscriptor', model_size: 'medium',
       temperature: 1.0, cfg_coef: 1.0, beam_size: 1, prelude_forcing: true,
-      precision: 'fp32' } },
-    { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt' } },
-    { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria' } },
-    { name: 'Transkun · 最优', mode: 'piano', params: { ...piano, model: 'transkun' } },
-    { name: 'hFT-Transformer · 最优', mode: 'piano', params: { ...piano, model: 'hft' } },
+      precision: 'fp32', segment_sec: 5 } },
+    { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt', segment_sec: 10 } },
+    { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria', segment_sec: 30 } },
+    { name: 'Transkun · 最优', mode: 'piano', params: { ...piano, model: 'transkun', segment_sec: 16 } },
+    { name: 'hFT-Transformer · 最优', mode: 'piano', params: { ...piano, model: 'hft', segment_sec: 0 } },
     { name: '分离 · 最优', mode: 'separate', params: {
       onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
       include_drums: true, stem_format: 'wav', perf: 'quality',
@@ -929,6 +917,42 @@ const sortedQueue = computed(() => {
    ★ 只在「默认顺序」下可拖：按名称/类型/时长是**显示层**排序，拖出来的顺序会立刻被排序覆盖，
      看着像没生效。非默认顺序时右下角给一句提示。 */
 const dragItemId = ref(0);
+const dragQueueId = ref(0);
+const queueDropId = ref(0);
+function qDragStart(q, e) {
+  if (running.value) return;
+  dragQueueId.value = q.id;
+  if (e && e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', String(q.id)); } catch (err) {}
+  }
+}
+function qDragOver(e, q) {
+  if (!dragQueueId.value || dragQueueId.value === q.id) return;
+  const r = e.currentTarget.getBoundingClientRect();
+  queueDropId.value = q.id;
+  e.currentTarget.classList.toggle('tr-q-drag-before', (e.clientY - r.top) < r.height / 2);
+  e.currentTarget.classList.toggle('tr-q-drag-after', (e.clientY - r.top) >= r.height / 2);
+}
+function qDragLeave(e) { e.currentTarget.classList.remove('tr-q-drag-before', 'tr-q-drag-after'); if (queueDropId.value) queueDropId.value = 0; }
+function qDragEnd() { dragQueueId.value = 0; queueDropId.value = 0; document.querySelectorAll('.tr-q-drag-before,.tr-q-drag-after').forEach((x) => x.classList.remove('tr-q-drag-before', 'tr-q-drag-after')); }
+function qDrop(e, target) {
+  e.stopPropagation();
+  const id = dragQueueId.value;
+  const r = e.currentTarget.getBoundingClientRect();
+  const before = (e.clientY - r.top) < r.height / 2;
+  qDragEnd();
+  if (!id || !target || id === target.id || running.value) return;
+  const from = queues.findIndex((q) => q.id === id);
+  if (from < 0) return;
+  const [moved] = queues.splice(from, 1);
+  let to = queues.findIndex((q) => q.id === target.id);
+  if (to < 0) to = queues.length;
+  if (!before) to += 1;
+  queues.splice(to, 0, moved);
+  persistQueues();
+  toast(t('队列顺序已更新'), 'ok');
+}
 function clearTrDragMarks() {
   document.querySelectorAll('.tr-batch-item').forEach(x => x.classList.remove('tr-drag-before', 'tr-drag-after'));
 }
@@ -1209,14 +1233,9 @@ function collectPresetParams() {
     perf: perf.value,
     auto_bpm: autoBpm.value,
     tempo: iv(exportTempo.value),
+    segment_sec: Math.max(0, iv(segmentSec.value)),
     denoise_mode: denoiseMode.value || 'off',
   };
-  // ★ 识别片段长度：**只有用户显式调离 0 才写进预设/请求**。0 = 不传 = 模型原生
-  //   块长。这样「保存预设」不会把分段识别悄悄固化进去（用户 2026-10-23：
-  //   改成不强制开启分段识别，允许用户手动切换）。
-  if (mode.value !== 'separate' && Number(segmentSec.value) > 0) {
-    p.segment_sec = Number(segmentSec.value);
-  }
   if (mode.value === 'universal') {
     Object.assign(p, {
       model: umodel.value,
@@ -1230,6 +1249,7 @@ function collectPresetParams() {
     if (umodel.value === 'muscriptor') Object.assign(p, {
       model_size: msSize.value,
       muscriptor_instruments: msInstrValue.value,
+      probe_segment_sec: iv(msProbeSegSec.value),
       temperature: Number(msTemp.value), cfg_coef: Number(msCfg.value),
       beam_size: iv(msBeam.value), prelude_forcing: msPrelude.value,
       precision: msPrec.value,
@@ -1313,14 +1333,15 @@ function applyPresetParams(p, opts) {
   if (has('muscriptor_instruments') && typeof pr.muscriptor_instruments === 'string') {
     const v = pr.muscriptor_instruments.trim();
     if (!v || v === 'none') msMode.value = 'none';
+    else if (v === 'probe_segments' || v === 'segments') msMode.value = 'probe_segments';
     else {
       const groups = v.split(',').map((s) => s.trim()).filter((g) => MS_GROUPS.some((x) => x.id === g));
       if (groups.length) { msGroups.value = groups; msMode.value = 'limit'; }
     }
   }
+  if (has('probe_segment_sec')) msProbeSegSec.value = clamp(Math.round(numOr('probe_segment_sec', 60)), 20, 120);
   if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
-  // 识别片段长度：0 = 模型默认（不开启）。老预设没有这个键时保留当前值；
-  //   带了就按它来（兼容 6.1.x 及更早写死了值的预设，用户可自己调回 0）。
+  // 识别片段长度（0 = 模型默认）；老预设没有这个键时保留当前值
   if (has('segment_sec')) segmentSec.value = clamp(Math.round(numOr('segment_sec', 0)), 0, 120);
   // 降噪档位：只认引擎支持的三个值；老预设没有这个键时保持当前值（默认 off）
   if (has('denoise_mode') && ['off', 'light', 'strong'].indexOf(String(pr.denoise_mode)) >= 0) {
@@ -1492,7 +1513,8 @@ function collectParams() {
       cfg.model_size = msSize.value;
       cfg.beat_grid = beatGrid.value;
       cfg.muscriptor_instruments = msInstrValue.value;
-      // 乐器组约束：'none' / '人声,鼓' 这样的组名列表。
+      if (msMode.value === 'probe_segments') cfg.probe_segment_sec = Number(msProbeSegSec.value) || 60;
+      // 乐器组约束：'auto' / '人声,鼓' 这样的组名列表 / 空。
       // 注意这条链路有三跳（渲染端 → 主进程 worker 请求体 → 引擎），少任何一跳界面选了都不生效。
       // ★ 2026-10-14 更正：这段注释原先描述的是**已被移除**的批量推理行为
       //   （`bca0a55`「移除批量推理功能」）。现在：
@@ -1526,11 +1548,10 @@ function collectParams() {
       if (msPrec.value && msPrec.value !== 'fp32') cfg.precision = msPrec.value;
     }
   }
+  // 识别片段长度：0 = 各模型默认，不传；>0 时所有转录模型共用同一个键（引擎按模型映射）
+  if (mode.value !== 'separate' && Number(segmentSec.value) > 0) cfg.segment_sec = Number(segmentSec.value);
   // 转录前降噪（默认 off = 旧行为；只有显式选择才发送）
   if (mode.value !== 'separate' && denoiseMode.value && denoiseMode.value !== 'off') cfg.denoise_mode = denoiseMode.value;
-  // ★ 识别片段长度：**只有用户显式调离 0 才发送**。0 = 不传 = 模型原生块长
-  //   （用户 2026-10-23：改成不强制开启分段识别，允许用户手动切换）。
-  if (mode.value !== 'separate' && Number(segmentSec.value) > 0) cfg.segment_sec = Number(segmentSec.value);
   if (mode.value !== 'separate' && memoryMode.value) cfg.memory_mode = memoryMode.value;
   if (mode.value === 'separate') {
     cfg.with_drums = drums.value;
@@ -1979,10 +2000,13 @@ onBeforeUnmount(() => {
       <div class="fb-hint" v-if="queue.length && sort !== 'default'" style="margin:-4px 0 6px">{{ t('拖动排序需切回「默认顺序」') }}</div>
       <!-- 多队列：切队列 = 切模型与参数（每个队列自带一份设置） -->
       <div v-if="queues.length" class="tr-queues">
-        <span class="fb-label" style="margin:0">{{ t('队列') }}</span>
-        <button v-for="q in queues" :key="q.id" class="fu-ctl fu-ctl--sm tr-pill" :class="{ active: q.id === activeQid }"
-                :title="t('切换到这个队列（模型与参数一起切）') + ' · ' + queueSummary(q)"
-                @click="switchQueue(q)">
+        <span class="fb-label" style="margin:0" :title="t('拖动队列可调整顺序转录顺序')">{{ t('队列') }}</span>
+        <button v-for="q in queues" :key="q.id" class="fu-ctl fu-ctl--sm tr-pill" :class="{ active: q.id === activeQid, dragging: dragQueueId === q.id }"
+                :draggable="!running"
+                :title="t('切换到这个队列（模型与参数一起切）；拖动可调整队列顺序') + ' · ' + queueSummary(q)"
+                @click="switchQueue(q)"
+                @dragstart="qDragStart(q, $event)" @dragover.prevent="qDragOver($event, q)"
+                @dragleave="qDragLeave($event)" @drop.stop.prevent="qDrop($event, q)" @dragend="qDragEnd()">
           {{ q.name }}<i v-if="q.id === runningQueueId" class="tr-q-run" :title="t('正在转录')">▶</i><i v-if="queueCount(q)" class="tr-q-n">{{ queueCount(q) }}</i>
         </button>
         <button class="btn sm ghost" @click="addQueue"><Icon name="plus" :size="13" />{{ t('新建队列') }}</button>
@@ -2003,6 +2027,7 @@ onBeforeUnmount(() => {
         </label>
         <span class="fb-hint" v-if="currentQueue()">{{ t('本队列：') }}{{ queueSummary(currentQueue()) }} · {{ targetName(queueTarget(currentQueue())) }}</span>
       </div>
+      <div v-if="queue.length" class="fb-hint" style="margin:0 0 4px">{{ sort === 'default' ? t('按住左侧 ⋮⋮ 拖动即可调整转录顺序') : t('拖动排序需切回「默认顺序」') }}</div>
       <div v-if="queue.length" class="tr-batch-list">
         <div class="tr-batch-item" v-for="it in sortedQueue" :key="it.id"
              :draggable="sort === 'default'" :class="{ dragging: dragItemId === it.id }"
@@ -2262,14 +2287,10 @@ onBeforeUnmount(() => {
                  实测 30 秒样例 71 → 8037 个音符、3 分钟样例 47967 个 / 517 秒。 -->
 
           </div>
-          <!-- ★ 识别片段长度：**默认 0 = 不开启**（用户 2026-10-23「改成不强制开启
-               分段识别，允许用户手动切换」）。调离 0 才按固定长度切片识别再合并，
-               实测块与块之间质量参差不齐（接缝重复音 / 换音色 / 延音被切断），
-               所以默认关并写明代价；0 时各模型用原生训练块长、整曲一次推理。 -->
           <div class="tr-slider" v-if="mode !== 'separate'" data-guide="segment-sec">
-            <label>{{ t('识别片段长度') }}<b>{{ segmentSec > 0 ? segmentSec + 's' : t('模型默认（不开启）') }}{{ segmentSec > 0 && SEG_RECOMMEND > 0 ? ' · ' + t('推荐') + ' ' + SEG_RECOMMEND + 's' : '' }}</b></label>
-            <NumSlider v-model="segmentSec" :min="0" :max="60" :step="1" unit="s" :aria-label="t('识别片段长度')" />
-            <small v-if="segmentSec > 0" style="color:var(--t-warn)">{{ t('分段识别可能让块与块之间质量参差不齐（接缝重复音 / 换音色 / 延音被切断）；0 = 用模型原生块长，效果最稳。') }}</small>
+            <label>{{ t('识别片段长度') }}<b>{{ segmentSec > 0 ? segmentSec + 's' : t('模型默认') }} · {{ t('推荐') }}{{ SEG_RECOMMEND > 0 ? ' ' + SEG_RECOMMEND + 's' : ' ' + t('不分段') }}</b></label>
+            <NumSlider v-model="segmentSec" :min="0" :max="60" :step="1" unit="s" />
+
           </div>
           <div class="tr-switch" v-if="mode !== 'separate'" data-guide="memory-mode">
             <label>
@@ -2356,8 +2377,13 @@ onBeforeUnmount(() => {
               <select v-model="msMode" class="select-input" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
                 <option value="none">{{ t('不限定') }}</option>
                 <option value="limit">{{ t('限定乐器组') }}</option>
+                <option value="probe_segments">{{ t('自动探测（分段）') }}</option>
               </select>
             </label>
+          </div>
+          <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe_segments'" class="tr-slider">
+            <label>{{ t('探测段长') }}<b>{{ msProbeSegSec }}s</b></label>
+            <NumSlider v-model="msProbeSegSec" :min="20" :max="120" :step="10" unit="s" :aria-label="t('探测段长')" />
           </div>
           <div class="tr-switch" style="display:block" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'limit'">
             <div style="display:flex;flex-wrap:wrap;gap:var(--sp-2);max-height:150px;overflow:auto;padding:2px 0">
@@ -2768,4 +2794,8 @@ onBeforeUnmount(() => {
   .tr-view > .tr-run-panel .btn { max-width: 100%; white-space: normal; }
 }
 .tr-run-panel { position: static; margin-top: 0; }
+.tr-pill[draggable="true"] { cursor: grab; }
+.tr-pill.dragging { opacity: .55; }
+.tr-pill.tr-q-drag-before { box-shadow: inset 3px 0 0 var(--brand-blue); }
+.tr-pill.tr-q-drag-after { box-shadow: inset -3px 0 0 var(--brand-blue); }
 </style>
