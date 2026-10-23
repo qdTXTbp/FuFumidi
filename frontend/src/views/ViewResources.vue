@@ -611,10 +611,10 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="rc-tabs">
-      <button class="rc-tab" :class="{ on: rcTab === 'model' }" @click="selectRc('model')">{{ t('模型管理') }}</button>
-      <button class="rc-tab" :class="{ on: rcTab === 'soundfonts' }" @click="selectRc('soundfonts')">{{ t('音色工坊') }}</button>
-      <button class="rc-tab" :class="{ on: rcTab === 'resources' }" @click="selectRc('resources')">{{ t('资源管理') }}</button>
-      <button class="rc-tab" :class="{ on: rcTab === 'storage' }" @click="selectRc('storage')" data-guide="rc-storage-tab">{{ t('存储治理') }}</button>
+      <button class="rc-tab" :class="{ on: rcTab === 'model' }" @click="selectRc('model')"><Icon name="box" :size="14" /> {{ t('模型管理') }}</button>
+      <button class="rc-tab" :class="{ on: rcTab === 'soundfonts' }" @click="selectRc('soundfonts')"><Icon name="music" :size="14" /> {{ t('音色工坊') }}</button>
+      <button class="rc-tab" :class="{ on: rcTab === 'resources' }" @click="selectRc('resources')"><Icon name="zap" :size="14" /> {{ t('资源管理') }}</button>
+      <button class="rc-tab" :class="{ on: rcTab === 'storage' }" @click="selectRc('storage')" data-guide="rc-storage-tab"><Icon name="layers" :size="14" /> {{ t('存储治理') }}</button>
       <button class="rc-tab" :class="{ on: rcTab === 'plugins' }" @click="selectRc('plugins')" data-guide="rc-plugins-tab"><Icon name="extension" :size="14" /> {{ t('插件中心') }}</button>
     </div>
 
@@ -1013,4 +1013,13 @@ onBeforeUnmount(() => {
 .omr-lang-nm { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .omr-lang-ok { color: var(--success-text); }
 .res-sec[data-guide="res-omr"] .fr-hint { word-break: break-all; }
+
+/* ===== 资源页页签统一：分段控件 + 全部带图标，与工作台页签同构 ===== */
+.rc-tabs { display: inline-flex; align-items: center; gap: 2px; padding: 4px; border: 1px solid var(--hairline); border-radius: var(--r-pill); background: color-mix(in srgb, var(--surface) 60%, transparent); margin-bottom: 14px; flex-wrap: wrap; }
+.rc-tabs .rc-tab { display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; border-radius: var(--r-pill); background: transparent; color: var(--text2); padding: 7px 13px; font-size: var(--fs-sm); line-height: 1.4; white-space: nowrap; cursor: pointer; transition: background-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
+.rc-tabs .rc-tab:hover { background: color-mix(in srgb, var(--accent-sky) 8%, transparent); color: var(--text); }
+.rc-tabs .rc-tab.on { background: color-mix(in srgb, var(--accent-sapphire) 24%, var(--surface)); border-color: color-mix(in srgb, var(--accent-sky) 30%, transparent); color: var(--text); font-weight: 600; }
+.rc-tabs .rc-tab svg { opacity: .85; }
+@media (max-width: 900px) { .rc-tabs { display: flex; width: max-content; max-width: 100%; overflow-x: auto; } }
+
 </style>
